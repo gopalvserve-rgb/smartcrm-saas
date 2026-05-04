@@ -65,8 +65,31 @@ app.use(require('cookie-parser')());
 
 // ---- Static assets --------------------------------------------
 // Public landing site lives at /saas/* and is served at the root URL.
-app.use('/saas', express.static(path.join(__dirname, 'public', 'saas')));
-app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'saas', 'index.html')));
+//
+// Cache strategy:
+//   - HTML files always get no-cache so a deploy shows up immediately
+//     when the user revisits.
+//   - JS / CSS get a short max-age (60s) — index.html references them
+//     with a ?v=… cache buster, so a deploy that bumps the buster
+//     invalidates them anyway. Without this, browsers kept happily
+//     serving the old admin.js for hours after a deploy and the new
+//     /admin/#/errors view rendered as "Unknown view".
+const _staticOpts = {
+  setHeaders: (res, filePath) => {
+    if (/\.html?$/i.test(filePath)) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    } else if (/\.(js|css)$/i.test(filePath)) {
+      res.setHeader('Cache-Control', 'public, max-age=60, must-revalidate');
+    }
+  }
+};
+app.use('/saas', express.static(path.join(__dirname, 'public', 'saas'), _staticOpts));
+app.get('/', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.sendFile(path.join(__dirname, 'public', 'saas', 'index.html'));
+});
 
 // Diagnostic — admin-only smoke test that the Railway egress can
 // actually reach a host:port. Helps debug Gmail SMTP timeouts.

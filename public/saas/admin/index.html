@@ -4,10 +4,18 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>SmartCRM SaaS — Admin</title>
-  <link rel="stylesheet" href="/saas/admin/admin.css" />
+  <!-- Cache-bust on every deploy: bump ?v=… below alongside any
+       admin.js / admin.css change so browsers + CDN edges fetch the
+       new file instead of serving a stale copy. (Why this exists: a
+       user reported #/errors as "Unknown view" right after we shipped
+       it because the browser kept the previous admin.js cached.) -->
+  <link rel="stylesheet" href="/saas/admin/admin.css?v=2026-05-04-1" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
 </head>
 <body>
   <div id="app">Loading…</div>
-  <script src="/saas/admin/admin.js"></script>
+  <script src="/saas/admin/admin.js?v=2026-05-04-1"></script>
 </body>
 </html>
