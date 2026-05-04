@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: lead-crm
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node db/migrate.js && node db/seed.js && node server.js
+    healthCheckPath: /config.json
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DB_SSL
+        value: "1"
+      - key: JWT_SECRET
+        generateValue: true
+      # Add DATABASE_URL manually (from Neon/Supabase/etc.)
