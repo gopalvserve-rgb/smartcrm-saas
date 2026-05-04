@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#6366f1" />
+  <title>Lead CRM</title>
+  <!-- Asset URLs are RELATIVE so they resolve to /t/<slug>/<asset>
+       when the page is served at /t/<slug>/. attachTenant strips the
+       prefix and the express.static handler in server.js serves
+       the file from public/tenant/. The trailing slash is enforced
+       by a redirect in server.js so these always resolve correctly. -->
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><text y=%2224%22 font-size=%2226%22>🎯</text></svg>" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
+  <script>
+    // ---- Tenant-aware fetch shim --------------------------------------
+    // The original Celeste SPA POSTs to absolute /api etc. In the SaaS
+    // deployment every tenant lives under /t/<slug>/, so we rewrite all
+    // outbound /api and /hook URLs to the tenant-scoped equivalents.
+    // Done as a fetch monkey-patch so we don't have to chase down every
+    // hardcoded path inside the 13k-line app.js.
+    (function () {
+      var m = location.pathname.match(/^\/t\/([a-z0-9-]+)/i);
+      if (!m) return;            // running outside a tenant (e.g. dev)
+      var prefix = '/t/' + m[1];
+      window.TENANT_SLUG = m[1];
+      window.API_URL  = prefix + '/api';
+      window.HOOK_URL = prefix + '/hook';
+      var origFetch = window.fetch;
+      window.fetch = function (url, init) {
+        if (typeof url === 'string') {
+          if (url === '/api' || url === '/api/' || url.indexOf('/api/') === 0) url = prefix + url;
+          else if (url.indexOf('/hook/') === 0) url = prefix + url;
+        }
+        return origFetch.call(this, url, init);
+      };
+    })();
+
+    // ---- SSO auto-login + bootstrap loader --------------------------
+    // When /admin → "Login as tenant" is clicked the new window opens
+    //   /t/<slug>/?ssl=<jwt>
+    // This block:
+    //   1. Exchanges the ssl token for a regular tenant JWT (api_auth_ssoLogin)
+    //   2. Strips ?ssl= from the URL bar so it isn't kept in history
+    //   3. THEN loads app.js so the boot code reads the freshly-written
+    //      token from localStorage. (Static <script src="/app.js" defer>
+    //      would race against the async exchange and the user would land
+    //      on the login screen instead of being signed in.)
+    (async function bootstrap() {
+      try {
+        var p = new URLSearchParams(location.search);
+        var ssl = p.get('ssl');
+        if (ssl && window.TENANT_SLUG) {
+          try {
+            var r = await fetch('/api', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                fn: 'api_auth_ssoLogin',
+                args: ['', { ssl: ssl, slug: window.TENANT_SLUG }]
+              })
+            });
+            var j = await r.json();
+            if (!r.ok || j.error) throw new Error(j.error || 'sso failed');
+            var u = j.result || {};
+            try { localStorage.setItem('crm_token', u.token); } catch (_) {}
+            try { localStorage.setItem('crm_user', JSON.stringify(u.user)); } catch (_) {}
+          } catch (e) { console.warn('[sso] login failed:', e && e.message); }
+          try {
+            var url = new URL(location.href);
+            url.searchParams.delete('ssl');
+            history.replaceState(null, '', url.pathname + url.search + url.hash);
+          } catch (_) {}
+        }
+      } finally {
+        // Now load the SPA. Static <script defer> was removed below
+        // so this is the ONLY path that boots the app. Relative URLs
+        // so they resolve to /t/<slug>/app.js when the page is
+        // /t/<slug>/.
+        var s = document.createElement('script');
+        s.src = 'app.js';
+        document.body.appendChild(s);
+        var c = document.createElement('script');
+        c.src = 'caller-id-native.js';
+        document.body.appendChild(c);
+      }
+    })();
+
+    // Service worker registration is intentionally disabled on tenant
+    // pages for now — SW scope handling under /t/<slug>/ needs a
+    // separate per-tenant manifest + scope, which we'll wire up in a
+    // follow-up. The CRM works fine without offline; only push +
+    // offline shell are deferred.
+  </script>
+</head>
+<body>
+  <div id="app"></div>
+
+  <!-- Login screen -->
+  <template id="tpl-login">
+    <div class="login-screen">
+      <div class="login-card">
+        <div class="login-brand">
+          <img class="login-logo" data-bind="logo_url" alt="" />
+          <h1 data-bind="company_name">Lead CRM</h1>
+        </div>
+        <form id="login-form">
+          <label>Email</label>
+          <input type="email" name="email" autocomplete="username" required />
+          <label>Password</label>
+          <input type="password" name="password" autocomplete="current-password" required />
+          <button type="submit" class="btn primary block">Sign in</button>
+          <p id="login-err" class="error"></p>
+        </form>
+      </div>
+    </div>
+  </template>
+
+  <!-- Shell: top bar + sidebar + content -->
+  <template id="tpl-shell">
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <img data-bind="logo_url" class="sidebar-logo" alt="" />
+          <span data-bind="company_name">Lead CRM</span>
+        </div>
+        <nav id="nav"></nav>
+        <div class="sidebar-footer">
+          <div class="me">
+            <span class="avatar" data-bind="initials"></span>
+            <div>
+              <div class="name" data-bind="user_name"></div>
+              <div class="role" data-bind="user_role"></div>
+            </div>
+          </div>
+          <button class="btn ghost block" id="btn-logout">Logout</button>
+        </div>
+      </aside>
+      <main class="main">
+        <header class="topbar">
+          <h2 id="page-title">Dashboard</h2>
+          <div class="topbar-right">
+            <button class="btn ghost" id="btn-getapp" title="Install / Download the app">
+              <span>📱</span>
+              <span class="topbar-getapp-text">Get app</span>
+            </button>
+            <button class="btn ghost" id="btn-notif">
+              <span>🔔</span><span class="badge" id="notif-count" hidden>0</span>
+            </button>
+          </div>
+        </header>
+        <section id="view"></section>
+      </main>
+    </div>
+  </template>
+
+  <!-- /app.js + /caller-id-native.js are loaded by the bootstrap()
+       block in <head> so they run AFTER the optional ?ssl=… magic-link
+       exchange writes a fresh token to localStorage. Static <script>
+       tags here would race against that exchange. -->
+</body>
+</html>

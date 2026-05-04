@@ -3,8 +3,25 @@
 //   getAll(table), findById(table, id), findOneBy(table, field, value),
 //   findBy(table, field, value), insert(table, row), update(table, id, patch),
 //   removeRow(table, id), nowIso()
+//
+// MULTI-TENANT NOTE: in the SaaS deployment we run with one Postgres
+// cluster but a separate database per tenant (tenant_<slug>). The route
+// files don't know about tenants — they just call query() / getAll() /
+// insert() etc. To make each request hit the correct tenant DB without
+// rewriting every route, we use Node's AsyncLocalStorage:
+//
+//   server.js wraps each tenant request in tenantStorage.run({ pool })
+//   below, so any query() call running inside that async chain transparently
+//   uses the per-tenant pg.Pool. Outside that chain (single-tenant
+//   deployments, control-plane scripts, boot-time migrations) we fall
+//   back to the global pool keyed by DATABASE_URL.
 
 const { Pool, types } = require('pg');
+const { AsyncLocalStorage } = require('async_hooks');
+
+// Exported so server.js can call tenantStorage.run({ pool }, fn) to
+// scope the next async chain to a specific tenant pool.
+const tenantStorage = new AsyncLocalStorage();
 
 // IMPORTANT — return date/time columns as ISO strings, not Date objects.
 //
@@ -461,8 +478,26 @@ function _deserialize(table, row) {
   return row;
 }
 
+/**
+ * Pick the right pg.Pool for this call:
+ *   - if we're inside tenantStorage.run({ pool }), use that pool
+ *     (i.e. we're handling a /t/<slug>/api request)
+ *   - otherwise fall back to the global pool keyed by DATABASE_URL
+ *     (control plane scripts, migrations, single-tenant standalone)
+ *
+ * Returning the right pool here is the single hinge that makes every
+ * route file in /routes/* automatically multi-tenant without any
+ * per-route refactor.
+ */
+function _activePool() {
+  const store = tenantStorage.getStore();
+  if (store && store.pool) return store.pool;
+  return pool;
+}
+
 async function query(sql, params) {
-  const client = await pool.connect();
+  const p = _activePool();
+  const client = await p.connect();
   try {
     const res = await client.query(sql, params);
     return res;
@@ -555,5 +590,9 @@ module.exports = {
   getAll, findById, findOneBy, findBy,
   insert, update, removeRow,
   getConfig, setConfig, nowIso,
-  SCHEMA
+  SCHEMA,
+  // Multi-tenant: server.js wraps each /t/<slug>/api request in
+  // tenantStorage.run({ pool }, fn) so _activePool() picks up the
+  // tenant-scoped pg.Pool instead of the default DATABASE_URL one.
+  tenantStorage
 };

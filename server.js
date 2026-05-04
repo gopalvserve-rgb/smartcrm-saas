@@ -24,6 +24,8 @@ const bodyParser = require('body-parser');
 
 const control = require('./control/db');
 const { attachTenant } = require('./utils/tenantResolver');
+const tenantDb = require('./db/pg');
+const tenantApi = require('./routes/saas/tenantApi');
 
 // ---- SaaS modules (control plane) -----------------------------
 const superAdmin = require('./routes/saas/superAdminAuth');
@@ -212,14 +214,25 @@ app.get(/^\/admin\/?(.*)$/, (_req, res) => {
 // otherwise the route's regex sees the already-rewritten URL and
 // never matches.
 //
-// Tenant placeholder — Phase 2 (mounting the full per-tenant CRM
-// under /t/<slug>/...) is still pending. Until then, /t/<slug>/...
-// serves a minimal no-JS welcome page that explains what's happening
-// and how the operator can act. Critically: NO <script>, NO fetch,
-// NO JSON parsing — so this page can never produce a "JSON parse"
-// error on the user's screen.
+// Trailing-slash redirect: tenant pages must be served at /t/<slug>/
+// (with the slash) so the relative <link href="styles.css"> etc. in
+// index.html resolve to /t/<slug>/styles.css. Without this, a user
+// hitting /t/<slug> would see a broken page (relative URLs would
+// resolve against /t/, not /t/<slug>/).
+app.get(/^\/t\/[a-z0-9-]+$/, (req, res) => {
+  res.redirect(301, req.originalUrl + '/');
+});
+
+// Tenant "not found" placeholder — only serves when the slug doesn't
+// resolve to an active tenant row. For valid tenants we fall through
+// to the static-asset + SPA-shell handlers further down, which serve
+// public/tenant/index.html (the actual CRM UI).
+//
+// Why this runs BEFORE attachTenant: attachTenant rewrites req.url
+// to strip the /t/<slug> prefix, which would make the regex below
+// stop matching. We need the un-rewritten URL to detect tenant
+// requests at this stage.
 app.get(/^\/t\/[a-z0-9-]+\/?$/, async (req, res, next) => {
-  // Manually resolve tenant since attachTenant runs after this route
   const m = /^\/t\/([a-z0-9-]+)\/?$/.exec(req.path);
   if (!m) return next();
   const slug = m[1].toLowerCase();
@@ -228,26 +241,66 @@ app.get(/^\/t\/[a-z0-9-]+\/?$/, async (req, res, next) => {
     const tp = require('./utils/tenantPool');
     tenant = await tp.findActiveTenant(slug);
   } catch (_) {}
-  return _renderTenantPlaceholder(req, res, slug, tenant);
-});
-
-// Anything else under /t/<slug>/... that isn't an API call: fall
-// back to the same placeholder (so deep-links like /t/acme/leads
-// don't 404 with HTML). Tenant API calls (/t/<slug>/api/...) are
-// handled by the JSON 404 below after attachTenant rewrites them.
-app.get(/^\/t\/[a-z0-9-]+\/(?!api(\/|$)).*/, async (req, res, next) => {
-  const m = /^\/t\/([a-z0-9-]+)\//.exec(req.path);
-  if (!m) return next();
-  const slug = m[1].toLowerCase();
-  let tenant = null;
-  try {
-    const tp = require('./utils/tenantPool');
-    tenant = await tp.findActiveTenant(slug);
-  } catch (_) {}
+  // Tenant exists → let attachTenant + the SPA handler take over.
+  // (The "?ssl=…" magic-link case also flows through here — the SPA
+  // shell exchanges the token for a real JWT during boot.)
+  if (tenant && tenant.status !== 'deleted' && tenant.status !== 'suspended') return next();
   return _renderTenantPlaceholder(req, res, slug, tenant);
 });
 
 app.use(attachTenant);
+
+// ---- Per-tenant DB injection ---------------------------------------
+// After attachTenant runs, req.tenant + req.tenantPool are populated
+// for any /t/<slug>/... request. Wrap the rest of the chain in
+// AsyncLocalStorage.run so any /routes/* handler that calls
+// db.query() / db.getAll() / etc. transparently uses the right
+// per-tenant pg.Pool. Without this, the route files would silently
+// hit the control DB (DATABASE_URL) and either crash or — worse —
+// read/write the wrong tenant's data.
+app.use((req, _res, next) => {
+  if (!req.tenantPool) return next();
+  tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug }, next);
+});
+
+// ---- Tenant API dispatcher ----------------------------------------
+// The tenant SPA POSTs to /t/<slug>/api with body { fn, args }.
+// attachTenant has already rewritten req.url to /api, so the route
+// matches here. The dispatcher loads every /routes/<name>.js and maps
+// api_* exports to handlers. See routes/saas/tenantApi.js for details.
+app.post('/api', (req, res, next) => {
+  // Must have a resolved tenant — otherwise this isn't a tenant call
+  // and we just 404 with JSON to avoid the "<!DOCTYPE" parse crash.
+  if (!req.tenant) {
+    return res.status(404).json({ error: 'Workspace not found: ' + (req.tenantSlug || '') });
+  }
+  if (req.tenant.status === 'suspended') {
+    return res.status(403).json({ error: 'This workspace has been suspended. Contact support.' });
+  }
+  if (req.tenant.status === 'deleted' || req.tenant.status === 'pending_payment') {
+    return res.status(404).json({ error: 'This workspace is not active.' });
+  }
+  return tenantApi.expressHandler(req, res, next);
+});
+
+// ---- Tenant SPA shell ---------------------------------------------
+// Serve the per-tenant CRM SPA. After attachTenant rewrites
+// /t/<slug>/ to /, GET / lands here when there's a tenant on the
+// request. Plain /<no-tenant> requests still go to the SaaS landing
+// (handled by the earlier app.get('/') registration above).
+app.get('/', (req, res, next) => {
+  if (!req.tenant) return next();          // no tenant → fall through to landing/static
+  res.sendFile(path.join(__dirname, 'public', 'tenant', 'index.html'));
+});
+
+// Serve tenant static assets (app.js, styles.css, sw.js, manifests,
+// icons) under any path inside the tenant scope. The tenant SPA
+// references these as /app.js, /styles.css, etc., which after
+// attachTenant rewrites becomes /app.js — served from public/tenant.
+app.use((req, res, next) => {
+  if (!req.tenant) return next();
+  return express.static(path.join(__dirname, 'public', 'tenant'), _staticOpts)(req, res, next);
+});
 
 // IMPORTANT — keep the static handler scoped to /saas so it can ONLY
 // serve assets from public/saas (the landing site + admin SPA). The
