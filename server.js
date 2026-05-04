@@ -34,13 +34,14 @@ const invoices = require('./routes/saas/invoices');
 const settings = require('./routes/saas/saasSettings');
 const announcements = require('./routes/saas/announcements');
 const customReqs = require('./routes/saas/customRequirements');
+const webhookLogs = require('./routes/saas/webhookLogs');
 const cashfreeWebhook = require('./routes/saas/cashfreeWebhook');
 
 // Combine every SaaS api_* into one dispatch map
 const SAAS_API = {};
 [
   superAdmin, packages, signup, tenants, invoices, settings,
-  announcements, customReqs
+  announcements, customReqs, webhookLogs
 ].forEach(mod => {
   Object.keys(mod).forEach(k => {
     if (typeof mod[k] === 'function' && k.startsWith('api_saas_')) SAAS_API[k] = mod[k];

@@ -252,3 +252,35 @@ CREATE TABLE IF NOT EXISTS signups (
 CREATE INDEX IF NOT EXISTS idx_signups_email ON signups(email);
 CREATE INDEX IF NOT EXISTS idx_signups_order ON signups(cashfree_order_id);
 CREATE INDEX IF NOT EXISTS idx_signups_status ON signups(status);
+
+-- ============================================================
+-- Cashfree webhook logs — dedicated audit trail for /hook/cashfree
+-- ============================================================
+-- Every inbound webhook hit (success, failed, refund, abandoned,
+-- whatever) gets one row here so admin can see exactly what came in,
+-- when, with what amount, and what the server did with it. Separate
+-- from the generic audit_log because finance support staff often need
+-- to look up a specific payment without combing through everything.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS cashfree_webhook_logs (
+  id              SERIAL PRIMARY KEY,
+  webhook_type    TEXT,                    -- PAYMENT_SUCCESS_WEBHOOK | PAYMENT_FAILED_WEBHOOK | REFUND_STATUS_WEBHOOK | …
+  entity_type     TEXT,                    -- payment | refund | order
+  status          TEXT,                    -- SUCCESS | FAILED | PENDING | USER_DROPPED | …
+  amount_inr      NUMERIC(10,2),
+  order_id        TEXT,                    -- Cashfree order_id (matches our SCO-… orders)
+  cf_payment_id   TEXT,                    -- Cashfree's internal payment id
+  payment_method  TEXT,                    -- UPI | NETBANKING | CARD | WALLET | …
+  customer_email  TEXT,
+  customer_phone  TEXT,
+  raw_payload     JSONB,                   -- the full body, for debugging
+  signature_ok    INTEGER,                 -- 1=verified, 0=failed verify, -1=skipped (verification disabled)
+  processed       INTEGER,                 -- 1=we acted on it, 0=ignored / no matching signup
+  result_message  TEXT,                    -- "tenant provisioned" / "duplicate" / error message
+  signup_id       INTEGER,                 -- if matched, which signup row
+  tenant_id       INTEGER,                 -- if a tenant was provisioned, which one
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_cf_webhook_order   ON cashfree_webhook_logs(order_id);
+CREATE INDEX IF NOT EXISTS idx_cf_webhook_status  ON cashfree_webhook_logs(status);
+CREATE INDEX IF NOT EXISTS idx_cf_webhook_created ON cashfree_webhook_logs(created_at DESC);

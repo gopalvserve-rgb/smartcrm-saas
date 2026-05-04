@@ -69,6 +69,7 @@ const NAV = [
   { id: 'tenants',       label: '🏢 Tenants' },
   { id: 'packages',      label: '📦 Packages' },
   { id: 'invoices',      label: '🧾 Invoices' },
+  { id: 'webhooks',      label: '📡 Webhook Logs' },
   { id: 'announcements', label: '📣 Updates' },
   { id: 'requirements',  label: '🛠 Custom Requirements' },
   { id: 'admins',        label: '👥 Super Assistants' },
@@ -273,6 +274,117 @@ VIEWS.invoices = async (view) => {
   );
   view.appendChild(h('div', { class: 'card', style: { padding: 0 } }, tbl));
 };
+
+VIEWS.webhooks = async (view) => {
+  view.appendChild(h('div', { class: 'toolbar' },
+    h('h1', {}, 'Cashfree Webhook Logs'),
+    h('div', {},
+      h('select', { id: 'wh-status', style: { marginRight: '.5rem' }, onchange: () => navigate('webhooks') },
+        h('option', { value: '' }, 'All statuses'),
+        h('option', { value: 'SUCCESS' }, 'SUCCESS'),
+        h('option', { value: 'FAILED' }, 'FAILED'),
+        h('option', { value: 'PENDING' }, 'PENDING'),
+        h('option', { value: 'USER_DROPPED' }, 'USER_DROPPED'),
+        h('option', { value: 'CANCELLED' }, 'CANCELLED')
+      ),
+      h('select', { id: 'wh-entity', onchange: () => navigate('webhooks') },
+        h('option', { value: '' }, 'All entities'),
+        h('option', { value: 'payment' }, 'payment'),
+        h('option', { value: 'refund' }, 'refund'),
+        h('option', { value: 'order' }, 'order')
+      )
+    )
+  ));
+  let list;
+  try {
+    const filters = {};
+    const sStatus = document.getElementById('wh-status'); if (sStatus && sStatus.value) filters.status = sStatus.value;
+    const sEntity = document.getElementById('wh-entity'); if (sEntity && sEntity.value) filters.entity_type = sEntity.value;
+    list = await api('api_saas_webhookLogs_list', filters);
+  } catch (e) { view.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+  if (!list.length) { view.appendChild(h('div', { class: 'empty' }, 'No webhooks received yet.')); return; }
+  const tbl = h('table', {},
+    h('thead', {}, h('tr', {},
+      h('th', {}, 'When'),
+      h('th', {}, 'Type'),
+      h('th', {}, 'Entity'),
+      h('th', {}, 'Status'),
+      h('th', {}, 'Amount'),
+      h('th', {}, 'Method'),
+      h('th', {}, 'Order ID'),
+      h('th', {}, 'Result'),
+      h('th', {}, '')
+    )),
+    h('tbody', {}, ...list.map(w => h('tr', {},
+      h('td', { class: 'muted', style: { whiteSpace: 'nowrap' } }, fmtDateTime(w.created_at)),
+      h('td', { style: { fontSize: '.78rem' } }, w.webhook_type || '—'),
+      h('td', {}, w.entity_type || '—'),
+      h('td', {}, h('span', { class: 'tag ' + _whStatusClass(w.status) }, w.status || '—')),
+      h('td', {}, w.amount_inr ? fmtRupees(w.amount_inr) : '—'),
+      h('td', { class: 'muted' }, w.payment_method || '—'),
+      h('td', { class: 'muted', style: { fontFamily: 'monospace', fontSize: '.78rem' } }, w.order_id || '—'),
+      h('td', { class: 'muted', style: { fontSize: '.78rem', maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, w.result_message || '—'),
+      h('td', { style: { textAlign: 'right' } }, h('button', { class: 'btn ghost xs', onclick: () => openWebhookDetail(w.id) }, 'View'))
+    )))
+  );
+  view.appendChild(h('div', { class: 'card', style: { padding: 0, overflowX: 'auto' } }, tbl));
+};
+
+function _whStatusClass(s) {
+  const u = String(s || '').toUpperCase();
+  if (u === 'SUCCESS' || u === 'PAID') return 'ok';
+  if (u === 'FAILED') return 'err';
+  return 'warn';
+}
+
+function fmtDateTime(s) {
+  if (!s) return '';
+  const d = new Date(s);
+  return d.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+async function openWebhookDetail(id) {
+  let row;
+  try { row = await api('api_saas_webhookLogs_get', id); }
+  catch (e) { toast(e.message, 'err'); return; }
+  if (!row) return;
+  const m = h('div', { class: 'modal-bd', onclick: ev => { if (ev.target.classList.contains('modal-bd')) m.remove(); } });
+  const card = h('div', { class: 'modal', style: { maxWidth: '720px' } });
+  card.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, 'Webhook detail · ' + (row.webhook_type || 'unknown')),
+    h('button', { class: 'x', onclick: () => m.remove() }, '✕')
+  ));
+  const body = h('div', { class: 'modal-body' });
+  body.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '.5rem 1rem', marginBottom: '1rem' } },
+    _kv('Status', row.status),
+    _kv('Entity', row.entity_type),
+    _kv('Amount', row.amount_inr ? fmtRupees(row.amount_inr) : '—'),
+    _kv('Method', row.payment_method || '—'),
+    _kv('Order ID', row.order_id || '—'),
+    _kv('CF Payment ID', row.cf_payment_id || '—'),
+    _kv('Customer email', row.customer_email || '—'),
+    _kv('Customer phone', row.customer_phone || '—'),
+    _kv('Processed', row.processed === 1 ? '✅ yes' : '— no'),
+    _kv('Received at', fmtDateTime(row.created_at)),
+    _kv('Result', row.result_message || '—'),
+    _kv('Tenant ID', row.tenant_id || '—')
+  ));
+  body.appendChild(h('h4', { style: { margin: '1rem 0 .5rem' } }, 'Raw payload'));
+  const pre = h('pre', { style: { background: '#0f172a', color: '#e2e8f0', padding: '1rem', borderRadius: '6px', overflow: 'auto', maxHeight: '320px', fontSize: '.78rem' } });
+  try { pre.textContent = JSON.stringify(typeof row.raw_payload === 'string' ? JSON.parse(row.raw_payload) : row.raw_payload, null, 2); }
+  catch (_) { pre.textContent = String(row.raw_payload || ''); }
+  body.appendChild(pre);
+  card.appendChild(body);
+  m.appendChild(card);
+  document.body.appendChild(m);
+}
+
+function _kv(label, value) {
+  return h('div', {},
+    h('div', { class: 'muted', style: { fontSize: '.72rem', textTransform: 'uppercase', letterSpacing: '.04em' } }, label),
+    h('div', { style: { fontSize: '.92rem', fontWeight: '500', wordBreak: 'break-all' } }, String(value == null ? '' : value))
+  );
+}
 
 VIEWS.announcements = async (view) => {
   view.appendChild(h('div', { class: 'toolbar' },

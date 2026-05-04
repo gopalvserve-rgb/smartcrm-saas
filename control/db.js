@@ -54,6 +54,18 @@ async function getAll(table, where, params) {
 }
 
 /**
+ * Tables whose columns we trust the caller to supply. The control
+ * plane is small enough that we don't need a per-table whitelist —
+ * insert() / update() will silently allow any column the caller
+ * passes, but Postgres itself rejects unknown columns at the SQL
+ * layer, so a typo throws cleanly. Listed here for grep discoverability:
+ *
+ *   super_admins, packages, tenants, invoices, payments, saas_settings,
+ *   platform_announcements, custom_requirements, audit_log, signups,
+ *   cashfree_webhook_logs
+ */
+
+/**
  * Generic insert. Returns the inserted row's id.
  *   await insert('packages', { name: '...', base_price_inr: 999 })
  */
