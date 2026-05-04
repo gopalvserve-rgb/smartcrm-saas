@@ -70,7 +70,8 @@
     <div>© 2026 SmartCRM Solution · <a href="mailto:support@smartcrmsolution.com">support@smartcrmsolution.com</a></div>
   </footer>
 
-  <script src="https://sdk.cashfree.com/js/v3/cashfree.js"></script>
+  <script src="https://sdk.cashfree.com/js/v3/cashfree.js" crossorigin="anonymous"
+          onerror="console.warn('Cashfree SDK failed to load — payment will be unavailable. Possibly blocked by an ad blocker.')"></script>
   <script src="/saas/landing.js"></script>
 </body>
 </html>

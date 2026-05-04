@@ -101,7 +101,8 @@ window.closeSignup = closeSignup;
 async function submitSignup(ev) {
   ev.preventDefault();
   const btn = $('#signup-btn');
-  btn.disabled = true; btn.textContent = 'Creating order…';
+  const setBtn = (txt, dis) => { btn.textContent = txt; btn.disabled = !!dis; };
+  setBtn('Creating order…', true);
   const form = ev.target;
   const payload = {
     name:   form.name.value.trim(),
@@ -111,25 +112,96 @@ async function submitSignup(ev) {
     desired_slug: form.desired_slug.value.trim().toLowerCase(),
     package_id: currentPkg.id
   };
+
+  let r;
   try {
-    const r = await api('api_saas_signup_create', payload);
-    if (r.free) {
-      // Free plan provisioned directly
-      window.location = r.login_url || ('/t/' + r.slug);
-      return;
+    r = await api('api_saas_signup_create', payload);
+  } catch (e) {
+    setBtn('Continue to payment →', false);
+    alert('Could not create order: ' + (e.message || e));
+    return;
+  }
+
+  // Free / ₹0 plan — provisioned directly
+  if (r.free) {
+    setBtn('✓ Created — redirecting…', true);
+    window.location = r.login_url || ('/t/' + r.slug);
+    return;
+  }
+
+  if (!r.payment_session_id) {
+    setBtn('Continue to payment →', false);
+    alert('Server returned no payment session. Please try again or contact support.');
+    return;
+  }
+
+  setBtn('Opening payment…', true);
+
+  // Wait briefly for the Cashfree SDK to load if it's still in flight.
+  // The SDK script tag is in the <head> but can be slow on cold mobile
+  // networks; we poll up to 5 seconds before giving up.
+  const waitForCashfree = async () => {
+    for (let i = 0; i < 50; i++) {
+      if (typeof window.Cashfree === 'function') return true;
+      await new Promise(r => setTimeout(r, 100));
     }
-    // Launch Cashfree Hosted Checkout
+    return typeof window.Cashfree === 'function';
+  };
+  const ready = await waitForCashfree();
+  if (!ready) {
+    setBtn('Continue to payment →', false);
+    alert('Payment SDK failed to load. This is usually caused by an ad blocker or restrictive network. Please disable your ad blocker for this site or try a different browser.');
+    return;
+  }
+
+  try {
     const cf = window.Cashfree({ mode: 'production' });
-    cf.checkout({
+    const result = cf.checkout({
       paymentSessionId: r.payment_session_id,
       redirectTarget: '_self'
     });
+    // SDK v3 returns a Promise; older fire-and-forget variants don't.
+    if (result && typeof result.then === 'function') {
+      const out = await result;
+      if (out && out.error) {
+        setBtn('Continue to payment →', false);
+        alert('Payment error: ' + (out.error.message || JSON.stringify(out.error)));
+        return;
+      }
+      // result.redirect = true means the SDK is taking us off-page
+    }
+    // If we're still here after 8s the SDK likely silently failed —
+    // surface that to the user instead of leaving them stuck.
+    setTimeout(() => {
+      if (document.visibilityState === 'visible' && location.pathname === '/') {
+        setBtn('Continue to payment →', false);
+        const dbg = h('div', { class: 'muted', style: { fontSize: '.8rem', marginTop: '.5rem' } },
+          'Order ' + r.order_id + ' was created but the payment window did not open. Save your order ID — you can complete payment from /signup/return?order_id=' + r.order_id + ' once the issue is resolved.'
+        );
+        $('#signup-form').appendChild(dbg);
+      }
+    }, 8000);
   } catch (e) {
-    btn.disabled = false; btn.textContent = 'Continue to payment →';
-    alert('Could not create order: ' + e.message);
+    console.error('[signup] Cashfree SDK threw:', e);
+    setBtn('Continue to payment →', false);
+    alert('Could not open payment window: ' + (e.message || e) + '\n\nYour order ID is ' + r.order_id + ' — keep it for support.');
   }
 }
 window.submitSignup = submitSignup;
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  if (attrs) for (const [k, v] of Object.entries(attrs)) {
+    if (v == null || v === false) continue;
+    if (k === 'class') el.className = v;
+    else if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
+    else el.setAttribute(k, v);
+  }
+  kids.flat(Infinity).forEach(k => {
+    if (k == null || k === false) return;
+    el.appendChild(k instanceof Node ? k : document.createTextNode(String(k)));
+  });
+  return el;
+}
 
 // Boot
 loadBranding();
