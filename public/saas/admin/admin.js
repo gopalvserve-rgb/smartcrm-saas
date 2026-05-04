@@ -15,7 +15,15 @@ const h = (tag, attrs, ...kids) => {
     else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2).toLowerCase(), v);
     else el.setAttribute(k, v);
   }
-  kids.flat().forEach(k => { if (k != null && k !== false) el.appendChild(typeof k === 'string' ? document.createTextNode(k) : k); });
+  // Children can be: Node, string, number, null/false (skipped), or arrays.
+  // Coerce primitives to text nodes so callers don't have to String()
+  // every count/amount they pass in (the previous version threw
+  // "parameter 1 is not of type Node" on numeric children).
+  kids.flat(Infinity).forEach(k => {
+    if (k == null || k === false) return;
+    if (k instanceof Node) { el.appendChild(k); return; }
+    el.appendChild(document.createTextNode(String(k)));
+  });
   return el;
 };
 const $ = sel => document.querySelector(sel);
