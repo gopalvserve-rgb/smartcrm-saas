@@ -461,8 +461,26 @@ async function api_fb_oauth_url(token, baseUrl) {
   if (me.role !== 'admin') throw new Error('Admin only');
   const { app_id } = await _appCreds();
   if (!app_id) throw new Error('Set Facebook Application ID first.');
-  const stateToken = jwt.sign({ uid: me.id, t: 'fb_oauth' }, JWT_SECRET, { expiresIn: '10m' });
-  // Use the configured BASE_URL or the URL the frontend told us.
+
+  // SaaS multi-tenant: embed the tenant slug in the state JWT so the
+  // /fb/auth/callback handler (mounted at root because Facebook only
+  // allows one OAuth redirect URI per app) can route the result back
+  // to the correct tenant DB. AsyncLocalStorage carries the slug on
+  // every tenant API call. In single-tenant deployments the store
+  // is empty and slug stays undefined — harmless.
+  let slug;
+  try { slug = (db.tenantStorage && db.tenantStorage.getStore() || {}).slug; } catch (_) {}
+  const stateToken = jwt.sign(
+    Object.assign({ uid: me.id, t: 'fb_oauth' }, slug ? { slug } : {}),
+    JWT_SECRET,
+    { expiresIn: '10m' }
+  );
+
+  // Redirect URI must match what's registered in the Facebook app's
+  // Valid OAuth Redirect URIs list. In the SaaS deployment this is
+  // ALWAYS the platform root (no tenant prefix) because Facebook
+  // does exact-match URI checking. The slug from `state` is what
+  // routes the result to the right tenant on our side.
   const cfgBase = await db.getConfig('BASE_URL', '');
   const origin = (cfgBase || baseUrl || '').replace(/\/+$/, '');
   if (!origin) throw new Error('BASE_URL not configured. Set it in Admin → Company Settings.');
@@ -489,9 +507,15 @@ async function expressOAuthCallback(req, res) {
   const code = (req.query.code || '').toString();
   const stateRaw = (req.query.state || '').toString();
   const errMsg = (req.query.error_description || req.query.error || '').toString();
-  // We always end on the admin Facebook tab, with a flash param the SPA
-  // can show as a toast.
-  const adminUrl = '/#/admin/fb';
+  // SaaS multi-tenant: the state JWT carries the tenant slug so the
+  // redirect lands inside the right workspace. Single-tenant
+  // deployments don't set slug, so we just go to the root admin tab.
+  let slugForRedirect = '';
+  try {
+    const peek = jwt.decode(stateRaw);
+    if (peek && peek.slug) slugForRedirect = '/t/' + encodeURIComponent(peek.slug);
+  } catch (_) {}
+  const adminUrl = slugForRedirect + '/#/admin/fb';
   function done(flash) { return res.redirect(adminUrl + (flash ? '?fb=' + encodeURIComponent(flash) : '')); }
 
   try {

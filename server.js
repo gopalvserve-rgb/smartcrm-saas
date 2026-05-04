@@ -123,6 +123,251 @@ app.get('/api/saas/debug/tcp', async (req, res) => {
 // the landing page can still report their own browser errors.
 app.post('/api/saas/log-error', errorLogs.expressClientErrorEndpoint);
 
+// ---- Tenant-scoped Meta/WhatsApp webhooks + FB OAuth callback -----
+//
+// Facebook only allows ONE OAuth redirect URI per app and ONE webhook
+// callback URL per webhook subscription, so all tenants share the same
+// platform-wide URLs:
+//
+//   OAuth callback URL (Valid OAuth Redirect URIs in the Facebook app):
+//     https://crm.smartcrmsolution.com/fb/auth/callback
+//
+//   Lead Ads webhook URL (Webhooks → Page → leadgen):
+//     https://crm.smartcrmsolution.com/hook/meta
+//
+//   WhatsApp Cloud API webhook URL:
+//     https://crm.smartcrmsolution.com/hook/whatsapp
+//     https://crm.smartcrmsolution.com/hook/whatsapp_webhook
+//
+// Tenant routing inside each handler:
+//   - OAuth callback: state JWT carries the tenant slug (set by
+//     api_fb_oauth_url when minted). We verify, look up the tenant,
+//     and run the existing per-tenant handler inside tenantStorage.
+//   - Lead Ads webhook: payload contains page_id; we walk every active
+//     tenant DB to find which one owns it, then process the leadgen
+//     event inside that tenant's pool. (For 1000+ tenants we'd swap
+//     this for a control-plane page_id → tenant_id lookup table; for
+//     the MVP this is fast enough.)
+//   - WhatsApp webhook: payload contains phone_number_id; same lookup.
+const fbRoute = require('./routes/fb');
+const webhooksRoute = require('./routes/webhooks');
+const whatsbotRoute = require('./routes/whatsbot');
+const tenantPoolMod = require('./utils/tenantPool');
+const controlDb = require('./control/db');
+const jwtLib = require('jsonwebtoken');
+
+/**
+ * Resolve a tenant by slug, build a per-tenant scope, and run `handler`
+ * inside tenantStorage.run() so any db.query() call inside the handler
+ * goes to that tenant's DB.
+ */
+async function _runAsTenant(slug, req, res, handler) {
+  if (!slug) return res.status(400).json({ error: 'tenant slug missing' });
+  let t;
+  try { t = await tenantPoolMod.findActiveTenant(slug); }
+  catch (e) {
+    errorLogs.logError({ source: 'webhook', severity: 'error', message: 'tenant lookup failed: ' + e.message, stack: e.stack }).catch(() => {});
+    return res.status(500).json({ error: 'tenant lookup failed' });
+  }
+  if (!t) return res.status(404).json({ error: 'tenant not found: ' + slug });
+  if (t.status === 'suspended' || t.status === 'deleted') {
+    return res.status(403).json({ error: 'tenant ' + slug + ' is ' + t.status });
+  }
+  const pool = tenantPoolMod.poolFor(t);
+  if (!pool) return res.status(500).json({ error: 'tenant pool unavailable' });
+  // Stash on req so handlers that look at req.tenant still work.
+  req.tenant = t;
+  req.tenantSlug = slug;
+  return tenantDb.tenantStorage.run({ pool, tenant: t, slug }, () => handler(req, res));
+}
+
+/**
+ * For inbound webhooks where the payload (not state) tells us which
+ * tenant — find the tenant whose DB has the matching record. Walks the
+ * active tenants, opens each pool briefly, runs the lookup query.
+ *
+ * `lookupSql` should be a SELECT 1 / SELECT id query that returns at
+ * least one row when the tenant owns the record. params bind into it.
+ */
+async function _findTenantByLookup(lookupSql, params) {
+  const r = await controlDb.query(
+    `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 200`
+  );
+  for (const row of r.rows) {
+    let t;
+    try { t = await tenantPoolMod.findActiveTenant(row.slug); } catch (_) { continue; }
+    if (!t) continue;
+    const pool = tenantPoolMod.poolFor(t);
+    if (!pool) continue;
+    try {
+      const hit = await pool.query(lookupSql, params);
+      if (hit.rowCount > 0) return t;
+    } catch (_) { /* table missing or other — skip */ }
+  }
+  return null;
+}
+
+const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
+
+// ---- Facebook OAuth callback (one URL for all tenants) ----------
+app.get('/fb/auth/callback', async (req, res) => {
+  const stateRaw = (req.query.state || '').toString();
+  // Decode state (no verify) to get slug for routing — the inner
+  // expressOAuthCallback will do full jwt.verify with secret.
+  let slug;
+  try {
+    const peek = jwtLib.decode(stateRaw);
+    if (peek && peek.slug) slug = peek.slug;
+  } catch (_) {}
+  if (!slug) {
+    // Single-tenant deployment fallback: run the original handler
+    // directly. The slug-aware redirect logic in fb.js falls back to
+    // / when no slug, so it still works.
+    return fbRoute.expressOAuthCallback(req, res);
+  }
+  return _runAsTenant(slug, req, res, fbRoute.expressOAuthCallback);
+});
+
+// ---- Meta Lead Ads webhook (one URL for all tenants) ------------
+//
+// FB calls these in two flavours:
+//   GET  with hub.mode=subscribe&hub.verify_token=…&hub.challenge=… → echo challenge
+//   POST with leadgen events
+//
+// VERIFY: tenants share the same verify token (or admin can set
+// META_VERIFY_TOKEN per tenant; we accept the platform default if
+// any active tenant matches).
+app.get('/hook/meta', async (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = String(req.query['hub.verify_token'] || '');
+  const challenge = String(req.query['hub.challenge'] || '');
+  if (mode !== 'subscribe' || !token) return res.status(400).send('Bad verify');
+  // Accept if ANY tenant has this verify token configured. This is
+  // the same trust model FB uses — they only ever ask once at hook
+  // setup, and the challenge response is symmetric.
+  const r = await controlDb.query(
+    `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 200`
+  );
+  for (const row of r.rows) {
+    let t; try { t = await tenantPoolMod.findActiveTenant(row.slug); } catch (_) { continue; }
+    if (!t) continue;
+    const pool = tenantPoolMod.poolFor(t);
+    if (!pool) continue;
+    try {
+      const hit = await pool.query(`SELECT value FROM config WHERE key = 'META_VERIFY_TOKEN' LIMIT 1`);
+      const cfgToken = hit.rows[0] && hit.rows[0].value;
+      if (cfgToken && cfgToken === token) return res.type('text/plain').send(challenge);
+    } catch (_) { /* table missing */ }
+  }
+  // Platform-wide fallback (env var)
+  if (process.env.META_VERIFY_TOKEN && process.env.META_VERIFY_TOKEN === token) {
+    return res.type('text/plain').send(challenge);
+  }
+  return res.status(403).send('Verify token mismatch');
+});
+
+app.post('/hook/meta', async (req, res) => {
+  // Extract page_id from the Meta payload to find which tenant owns it.
+  const body = req.body || {};
+  const entry = (body.entry && body.entry[0]) || {};
+  const pageId = String(entry.id || (entry.changes && entry.changes[0] && entry.changes[0].value && entry.changes[0].value.page_id) || '');
+  if (!pageId) {
+    // Acknowledge so FB doesn't retry, but log so admin can diagnose.
+    errorLogs.logError({
+      source: 'webhook', severity: 'warn',
+      message: '/hook/meta payload missing page_id',
+      context: { body }
+    }).catch(() => {});
+    return res.sendStatus(200);
+  }
+  const t = await _findTenantByLookup(
+    `SELECT 1 FROM config WHERE key = 'META_PAGES' AND value LIKE $1 LIMIT 1`,
+    ['%' + pageId + '%']
+  );
+  if (!t) {
+    errorLogs.logError({
+      source: 'webhook', severity: 'warn',
+      message: '/hook/meta page_id ' + pageId + ' has no owning tenant',
+      context: { pageId }
+    }).catch(() => {});
+    return res.sendStatus(200); // ack so FB stops retrying
+  }
+  return _runAsTenant(t.slug, req, res, webhooksRoute.metaEvent);
+});
+
+// ---- WhatsApp webhooks (Meta Cloud API) -------------------------
+app.get('/hook/whatsapp', async (req, res) => {
+  // Same verify-token-against-any-tenant pattern as /hook/meta.
+  const token = String(req.query['hub.verify_token'] || '');
+  const challenge = String(req.query['hub.challenge'] || '');
+  if (!token) return res.status(400).send('Bad verify');
+  const r = await controlDb.query(
+    `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 200`
+  );
+  for (const row of r.rows) {
+    let t; try { t = await tenantPoolMod.findActiveTenant(row.slug); } catch (_) { continue; }
+    if (!t) continue;
+    const pool = tenantPoolMod.poolFor(t);
+    if (!pool) continue;
+    try {
+      const hit = await pool.query(`SELECT value FROM config WHERE key IN ('WA_VERIFY_TOKEN','WHATSAPP_VERIFY_TOKEN') LIMIT 1`);
+      const cfg = hit.rows[0] && hit.rows[0].value;
+      if (cfg && cfg === token) return res.type('text/plain').send(challenge);
+    } catch (_) {}
+  }
+  return res.status(403).send('Verify token mismatch');
+});
+
+app.post('/hook/whatsapp', async (req, res) => {
+  const body = req.body || {};
+  const entry = (body.entry && body.entry[0]) || {};
+  const change = (entry.changes && entry.changes[0]) || {};
+  const phoneId = String(change.value && change.value.metadata && change.value.metadata.phone_number_id || '');
+  if (!phoneId) return res.sendStatus(200);
+  const t = await _findTenantByLookup(
+    `SELECT 1 FROM config WHERE key IN ('WA_PHONE_NUMBER_ID','WHATSAPP_PHONE_NUMBER_ID') AND value = $1 LIMIT 1`,
+    [phoneId]
+  );
+  if (!t) return res.sendStatus(200);
+  return _runAsTenant(t.slug, req, res, webhooksRoute.whatsappEvent);
+});
+
+// /hook/whatsapp_webhook is the WhatsBot module's own endpoint —
+// same routing logic, different handler.
+app.get('/hook/whatsapp_webhook', async (req, res) => {
+  const token = String(req.query['hub.verify_token'] || '');
+  const challenge = String(req.query['hub.challenge'] || '');
+  const r = await controlDb.query(
+    `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 200`
+  );
+  for (const row of r.rows) {
+    let t; try { t = await tenantPoolMod.findActiveTenant(row.slug); } catch (_) { continue; }
+    if (!t) continue;
+    const pool = tenantPoolMod.poolFor(t);
+    if (!pool) continue;
+    try {
+      const hit = await pool.query(`SELECT value FROM config WHERE key IN ('WA_VERIFY_TOKEN','WHATSAPP_VERIFY_TOKEN') LIMIT 1`);
+      const cfg = hit.rows[0] && hit.rows[0].value;
+      if (cfg && cfg === token) return res.type('text/plain').send(challenge);
+    } catch (_) {}
+  }
+  return res.status(403).send('Verify token mismatch');
+});
+
+app.post('/hook/whatsapp_webhook', async (req, res) => {
+  const body = req.body || {};
+  const entry = (body.entry && body.entry[0]) || {};
+  const change = (entry.changes && entry.changes[0]) || {};
+  const phoneId = String(change.value && change.value.metadata && change.value.metadata.phone_number_id || '');
+  if (!phoneId) return res.sendStatus(200);
+  const t = await _findTenantByLookup(
+    `SELECT 1 FROM config WHERE key IN ('WA_PHONE_NUMBER_ID','WHATSAPP_PHONE_NUMBER_ID') AND value = $1 LIMIT 1`,
+    [phoneId]
+  );
+  if (!t) return res.sendStatus(200);
+  return _runAsTenant(t.slug, req, res, whatsbotRoute.expressEvent);
+});
+
 // Public brand JSON (used by the landing page)
 app.get('/api/saas/brand', async (_req, res) => {
   try {
