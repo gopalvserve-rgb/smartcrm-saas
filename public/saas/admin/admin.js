@@ -527,7 +527,12 @@ VIEWS.settings = async (view) => {
   catch (e) { view.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
   const groups = {};
   list.forEach(s => { (groups[s.group] = groups[s.group] || []).push(s); });
-  const titles = { payments: '💳 Payments', email: '✉️ Email', lifecycle: '🔄 Lifecycle', brand: '🎨 Brand' };
+  const titles = {
+    payments:  '💳 Payments',
+    email:     '✉️ Email',
+    lifecycle: '🔄 Lifecycle',
+    brand:     '🎨 Brand'
+  };
   const form = h('form', { onsubmit: async ev => {
     ev.preventDefault();
     const fd = new FormData(form);
@@ -535,25 +540,57 @@ VIEWS.settings = async (view) => {
     try { await api('api_saas_settings_save', payload); toast('Saved'); navigate('settings'); }
     catch (e) { toast(e.message, 'err'); }
   } });
+
   Object.entries(groups).forEach(([g, items]) => {
     const card = h('div', { class: 'card' }, h('h2', {}, titles[g] || g));
     items.forEach(s => {
-      card.appendChild(h('div', { class: 'field' },
-        h('label', {}, s.label + (s.is_set ? ' ✓' : '')),
-        h('input', {
-          name: s.key,
-          value: s.mask ? '' : (s.value || ''),
-          placeholder: s.mask ? (s.is_set ? '••• (set — leave blank to keep)' : 'Not set') : ''
-        })
-      ));
+      const labelEl = h('label', {}, s.label + (s.is_set ? ' ✓' : ''));
+      let inputEl;
+      const baseProps = { name: s.key };
+      if (s.kind === 'select' && Array.isArray(s.options)) {
+        inputEl = h('select', baseProps,
+          ...s.options.map(opt => h('option', { value: opt, selected: s.value === opt ? true : null }, opt))
+        );
+      } else if (s.kind === 'textarea') {
+        inputEl = h('textarea', Object.assign({}, baseProps, { rows: 3 }), s.value || '');
+      } else if (s.kind === 'number') {
+        inputEl = h('input', Object.assign({}, baseProps, {
+          type: 'number',
+          value: s.value || '',
+          placeholder: s.mask ? (s.is_set ? '••• (set — leave blank to keep)' : '') : ''
+        }));
+      } else if (s.mask) {
+        inputEl = h('input', Object.assign({}, baseProps, {
+          type: 'password',
+          value: '',
+          placeholder: s.is_set ? '••• (set — leave blank to keep)' : 'Not set'
+        }));
+      } else {
+        inputEl = h('input', Object.assign({}, baseProps, { value: s.value || '' }));
+      }
+      const field = h('div', { class: 'field' }, labelEl, inputEl);
+      if (s.hint) {
+        field.appendChild(h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } }, s.hint));
+      }
+      card.appendChild(field);
     });
+
+    // Email card gets a "Send test email" button right inside it for fast iteration
+    if (g === 'email') {
+      card.appendChild(h('div', { style: { marginTop: '.75rem', paddingTop: '.75rem', borderTop: '1px solid #e2e8f0' } },
+        h('button', {
+          class: 'btn ghost', type: 'button',
+          onclick: async () => {
+            try { const r = await api('api_saas_settings_testEmail', {}); toast('Test email sent to ' + r.sent_to); }
+            catch (e) { toast(e.message, 'err'); }
+          }
+        }, '✉️ Send test email to me')
+      ));
+    }
     form.appendChild(card);
   });
-  form.appendChild(h('button', { class: 'btn', type: 'submit', style: { marginTop: '1rem' } }, 'Save settings'));
-  form.appendChild(h('button', { class: 'btn ghost', type: 'button', style: { marginLeft: '.5rem' }, onclick: async () => {
-    try { const r = await api('api_saas_settings_testEmail', {}); toast('Test email sent to ' + r.sent_to); }
-    catch (e) { toast(e.message, 'err'); }
-  } }, 'Send test email'));
+
+  form.appendChild(h('button', { class: 'btn', type: 'submit', style: { marginTop: '1rem' } }, '💾 Save settings'));
   view.appendChild(form);
 };
 

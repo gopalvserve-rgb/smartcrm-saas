@@ -67,8 +67,17 @@ const DEFAULT_SETTINGS = {
   PLATFORM_HERO_SUBHEAD: 'Capture leads from Facebook, IndiaMart, Google Ads & your website. Auto-dial, AI call summaries, WhatsApp at scale, and follow-up reminders that never let a deal slip — all in one place.',
   PLATFORM_PRIMARY_COLOR: '#10b981',
   SUPPORT_EMAIL: 'support@smartcrmsolution.com',
-  MAIL_PROVIDER: 'gmail',
-  CASHFREE_MODE: process.env.CASHFREE_MODE || 'PROD'
+  CASHFREE_MODE: process.env.CASHFREE_MODE || 'PROD',
+  // Email — Gmail SMTP, supplied by platform owner
+  MAIL_PROTOCOL: 'SMTP',
+  MAIL_ENCRYPTION: 'TLS',
+  SMTP_HOST: 'smtp.gmail.com',
+  SMTP_PORT: '587',
+  MAIL_FROM_EMAIL: 'sales@smartcrmsolution.com',
+  MAIL_FROM_NAME: 'SmartCRM',
+  SMTP_USERNAME: 'sales@smartcrmsolution.com',
+  SMTP_PASSWORD: 'REDACTED-ROTATED',
+  MAIL_CHARSET: 'utf-8'
 };
 
 module.exports = async function seedOnce() {
