@@ -267,12 +267,18 @@ app.get('/hook/meta', async (req, res) => {
 });
 
 app.post('/hook/meta', async (req, res) => {
-  // Extract page_id from the Meta payload to find which tenant owns it.
+  // Fast path: when the forwarder dispatches to /t/<slug>/hook/meta
+  // attachTenant has already populated req.tenant — no lookup needed.
+  if (req.tenant) {
+    return webhooksRoute.metaEvent(req, res);
+  }
+  // Slow path: bare /hook/meta hit (Meta calling our root URL directly,
+  // no slug in URL). Walk active tenants and find the one whose stored
+  // META_PAGES list includes the page_id from the payload.
   const body = req.body || {};
   const entry = (body.entry && body.entry[0]) || {};
   const pageId = String(entry.id || (entry.changes && entry.changes[0] && entry.changes[0].value && entry.changes[0].value.page_id) || '');
   if (!pageId) {
-    // Acknowledge so FB doesn't retry, but log so admin can diagnose.
     errorLogs.logError({
       source: 'webhook', severity: 'warn',
       message: '/hook/meta payload missing page_id',
@@ -290,7 +296,7 @@ app.post('/hook/meta', async (req, res) => {
       message: '/hook/meta page_id ' + pageId + ' has no owning tenant',
       context: { pageId }
     }).catch(() => {});
-    return res.sendStatus(200); // ack so FB stops retrying
+    return res.sendStatus(200);
   }
   return _runAsTenant(t.slug, req, res, webhooksRoute.metaEvent);
 });
@@ -319,6 +325,9 @@ app.get('/hook/whatsapp', async (req, res) => {
 });
 
 app.post('/hook/whatsapp', async (req, res) => {
+  // Fast path — forwarder dispatched to /t/<slug>/hook/whatsapp.
+  if (req.tenant) return webhooksRoute.whatsappEvent(req, res);
+  // Slow path — bare /hook/whatsapp; look up by phone_number_id.
   const body = req.body || {};
   const entry = (body.entry && body.entry[0]) || {};
   const change = (entry.changes && entry.changes[0]) || {};
@@ -337,6 +346,17 @@ app.post('/hook/whatsapp', async (req, res) => {
 app.get('/hook/whatsapp_webhook', async (req, res) => {
   const token = String(req.query['hub.verify_token'] || '');
   const challenge = String(req.query['hub.challenge'] || '');
+  // Fast path — verify GET to /t/<slug>/hook/whatsapp_webhook with
+  // tenant already resolved. Just check this tenant's stored token.
+  if (req.tenant && req.tenantPool) {
+    try {
+      const hit = await req.tenantPool.query(`SELECT value FROM config WHERE key IN ('WA_VERIFY_TOKEN','WHATSAPP_VERIFY_TOKEN') LIMIT 1`);
+      const cfg = hit.rows[0] && hit.rows[0].value;
+      if (cfg && cfg === token) return res.type('text/plain').send(challenge);
+    } catch (_) {}
+    return res.status(403).send('Verify token mismatch');
+  }
+  // Slow path — direct hit on bare /hook/whatsapp_webhook, walk all tenants.
   const r = await controlDb.query(
     `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 200`
   );
@@ -355,6 +375,12 @@ app.get('/hook/whatsapp_webhook', async (req, res) => {
 });
 
 app.post('/hook/whatsapp_webhook', async (req, res) => {
+  // Fast path — forwarder dispatched to /t/<slug>/hook/whatsapp_webhook.
+  // This is the canonical path each tenant registers when they connect
+  // via Embedded Sign-In (whatsbot.js _registerWithCentralForwarder),
+  // so this branch handles the common case zero-lookup.
+  if (req.tenant) return whatsbotRoute.expressEvent(req, res);
+  // Slow path — direct hit on bare /hook/whatsapp_webhook.
   const body = req.body || {};
   const entry = (body.entry && body.entry[0]) || {};
   const change = (entry.changes && entry.changes[0]) || {};

@@ -227,12 +227,28 @@ async function api_wb_emb_signin(token, code, phoneNumberId, wabaId) {
   // this, the admin would have to manually add a row to wa_connections.json
   // every time a client connected. Best-effort: failure is logged but
   // doesn't break the connect flow.
+  //
+  // SaaS multi-tenant: each tenant lives at /t/<slug>/, so the webhook
+  // URL we register with the forwarder must include that slug. The
+  // tenant slug is carried through the request via db.tenantStorage
+  // (AsyncLocalStorage), set by the tenantStorage.run() middleware in
+  // server.js. In single-tenant deployments the store is empty, slug
+  // stays undefined, and the URL falls back to the bare platform base
+  // — original Celeste/Stockbox behaviour, no breaking change.
   let registerOk = false; let registerErr = '';
   try {
+    let slug;
+    try { slug = (db.tenantStorage && db.tenantStorage.getStore() || {}).slug; } catch (_) {}
+    const platformBase = (
+      process.env.PUBLIC_BASE_URL ||
+      process.env.BASE_URL ||
+      ''
+    ).replace(/\/+$/, '');
+    const baseUrl = slug ? (platformBase + '/t/' + slug) : platformBase;
     const r = await _registerWithCentralForwarder({
       phoneNumberId, wabaId,
       tenantName: (await db.getConfig('COMPANY_NAME', '')) || 'Lead CRM',
-      baseUrl: (process.env.BASE_URL || '').replace(/\/+$/, '') || ''
+      baseUrl
     });
     registerOk = r.ok; registerErr = r.error || '';
   } catch (e) { registerErr = e.message; }
