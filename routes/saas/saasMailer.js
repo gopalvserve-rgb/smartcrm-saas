@@ -91,13 +91,22 @@ async function _getCfg() {
 
 async function _getTransporter() {
   const c = await _getCfg();
+  // Strip whitespace from password — Gmail's UI shows the App Password
+  // with spaces ("mbfl bngn szfi kcgg") and users sometimes paste it in
+  // that form. Nodemailer would then 535 "username and password not
+  // accepted". Trim defensively before building the transporter.
+  if (typeof c.pass === 'string') c.pass = c.pass.replace(/\s+/g, '');
   const key = JSON.stringify({ host: c.host, port: c.port, user: c.user, secure: c.secure });
   if (_transporter && _key === key) return { transporter: _transporter, cfg: c };
   _transporter = nodemailer.createTransport({
     host: c.host,
     port: c.port,
     secure: c.secure,
-    auth: { user: c.user, pass: c.pass }
+    auth: { user: c.user, pass: c.pass },
+    connectionTimeout: 30000,    // 30s for cold TLS handshake to Gmail
+    greetingTimeout:   15000,
+    socketTimeout:     30000,
+    pool: false
   });
   _key = key;
   return { transporter: _transporter, cfg: c };
