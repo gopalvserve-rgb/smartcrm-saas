@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>SmartCRM — The CRM your sales team will actually use</title>
   <meta name="description" content="Capture leads, auto-dial, AI call summaries, WhatsApp at scale, and follow-up reminders that never let a deal slip — all in one place." />
-  <link rel="stylesheet" href="/saas/landing.css?v=2026-05-04-1" />
+  <link rel="stylesheet" href="/saas/landing.css?v=2026-05-04-2" />
 </head>
 <body>
   <header class="topbar">
@@ -57,7 +57,12 @@
         <label>Workspace URL
           <div class="slug-input">
             <span class="prefix" id="slug-prefix">crm.smartcrmsolution.com/t/</span>
-            <input name="desired_slug" required pattern="[a-z][a-z0-9-]{2,29}" placeholder="acme" />
+            <!-- Pattern: must start with a letter, then letters/digits/dash.
+                 Dash is escaped (and the unambiguous "[-a-z0-9]" form
+                 also works) so Firefox parsing this pattern under the
+                 unicode-sets `v` flag doesn't reject it with
+                 "character class escape cannot be used in class range". -->
+            <input name="desired_slug" required pattern="[a-z][-a-z0-9]{2,29}" placeholder="acme" />
           </div>
         </label>
         <button type="submit" class="btn-primary block" id="signup-btn">Continue to payment →</button>
@@ -72,6 +77,6 @@
 
   <script src="https://sdk.cashfree.com/js/v3/cashfree.js" crossorigin="anonymous"
           onerror="console.warn('Cashfree SDK failed to load — payment will be unavailable. Possibly blocked by an ad blocker.')"></script>
-  <script src="/saas/landing.js?v=2026-05-04-1"></script>
+  <script src="/saas/landing.js?v=2026-05-04-2"></script>
 </body>
 </html>

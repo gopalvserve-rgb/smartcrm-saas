@@ -9,6 +9,7 @@
  */
 const control = require('../../control/db');
 const tenantPool = require('../../utils/tenantPool');
+const provisioning = require('./provisioning');
 const { requireSuperAdmin, requireFullAdmin } = require('./superAdminAuth');
 
 async function api_saas_tenants_list(token, filters) {
@@ -114,9 +115,123 @@ async function api_saas_tenants_setModules(token, payload) {
   return { ok: true };
 }
 
+/**
+ * Manual tenant create — admin-side flow that bypasses Cashfree.
+ *
+ * Use cases:
+ *   - You sold a deal offline and want to provision the workspace
+ *     without sending the customer through the Cashfree payment page.
+ *   - You're testing signup → tenant flow and don't want a live charge.
+ *   - You're migrating a customer from another billing system.
+ *
+ * The flow reuses the same provisionFromSignup() pipeline used by the
+ * Cashfree webhook (CREATE DATABASE, run schema, seed admin user, etc.)
+ * by first creating a "pending" signup row, then immediately
+ * provisioning it. The first invoice is created and — when
+ * mark_paid=true — flipped to paid so the tenant lands in 'active'
+ * straight away instead of 'pending_payment'.
+ *
+ * Required payload:
+ *   { name, email, mobile, org_name, desired_slug, package_id }
+ * Optional:
+ *   { mark_paid: true,    // pretend payment already went through
+ *     skip_email: false,  // don't email the welcome credentials
+ *     notes: '…' }
+ */
+async function api_saas_tenants_createManual(token, payload) {
+  const me = await requireFullAdmin(token);
+  const p = payload || {};
+
+  // ---- Validation -----------------------------------------------
+  const name = String(p.name || '').trim();
+  const email = String(p.email || '').trim().toLowerCase();
+  const mobile = String(p.mobile || '').trim();
+  const orgName = String(p.org_name || '').trim();
+  const slug = String(p.desired_slug || '').trim().toLowerCase();
+  const packageId = Number(p.package_id);
+
+  if (!name)              throw new Error('Name is required');
+  if (!email || !/^\S+@\S+\.\S+$/.test(email)) throw new Error('Valid email is required');
+  if (!mobile || !/^\+?\d{8,15}$/.test(mobile.replace(/\s/g, ''))) throw new Error('Valid mobile is required');
+  if (!orgName)           throw new Error('Organisation name is required');
+  if (!/^[a-z][-a-z0-9]{2,29}$/.test(slug)) {
+    throw new Error('Slug must start with a letter and only contain letters, digits, dashes (3–30 chars)');
+  }
+  if (!packageId)         throw new Error('Pick a package');
+
+  const pkg = await control.findById('packages', packageId);
+  if (!pkg) throw new Error('Package not found');
+
+  // Reject duplicate slug up front so we don't create a half-baked
+  // signup row that fails downstream.
+  const existingTenant = await control.findOneBy('tenants', 'slug', slug);
+  if (existingTenant) throw new Error('Workspace URL "' + slug + '" is already taken');
+
+  // ---- 1. Create a synthetic signup row -------------------------
+  const signupId = await control.insert('signups', {
+    name, email, mobile, org_name: orgName,
+    package_id: packageId, desired_slug: slug,
+    status: 'pending',
+    metadata: JSON.stringify({
+      manual_create: true,
+      created_by: me.email,
+      created_by_id: me.id,
+      mark_paid: p.mark_paid !== false,   // default true for manual create
+      notes: p.notes || null
+    })
+  });
+
+  // ---- 2. Provision -------------------------------------------
+  // Reuse the same pipeline used by the Cashfree webhook so the schema,
+  // first-admin seed, invoice generation etc. all match what a paying
+  // customer would get.
+  let prov;
+  try {
+    prov = await provisioning.provisionFromSignup(signupId);
+  } catch (e) {
+    // Don't leave a half-state signup row behind on failure.
+    try { await control.update('signups', signupId, { status: 'abandoned', metadata: JSON.stringify({ error: e.message }) }); } catch (_) {}
+    throw new Error('Provisioning failed: ' + e.message);
+  }
+
+  // ---- 3. Mark the auto-generated first invoice paid ----------
+  // (Free plans are already 'paid'; for paid plans we do it here so
+  // the tenant immediately lands in 'active' state with no dangling
+  // pending invoice from a fictional Cashfree payment.)
+  if (p.mark_paid !== false) {
+    try {
+      await control.query(
+        `UPDATE invoices SET status = 'paid', paid_at = NOW()
+          WHERE tenant_id = $1 AND status = 'pending'`,
+        [prov.tenant_id]
+      );
+    } catch (_) {}
+  }
+
+  // ---- 4. Audit trail -----------------------------------------
+  await control.insert('audit_log', {
+    actor_type: 'super_admin', actor_id: me.id, actor_email: me.email,
+    tenant_id: prov.tenant_id, event: 'tenant.created_manually',
+    detail: JSON.stringify({
+      slug: prov.slug, package: pkg.name, mark_paid: p.mark_paid !== false
+    })
+  });
+
+  return {
+    ok: true,
+    tenant_id: prov.tenant_id,
+    slug: prov.slug,
+    login_url: prov.login_url,
+    email: prov.email,
+    password: prov.password,            // surface to admin so they can hand it off
+    invoice_id: prov.invoice_id
+  };
+}
+
 module.exports = {
   api_saas_tenants_list,
   api_saas_tenants_get,
+  api_saas_tenants_createManual,
   api_saas_tenants_changePackage,
   api_saas_tenants_suspend,
   api_saas_tenants_restore,

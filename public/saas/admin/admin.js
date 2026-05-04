@@ -277,11 +277,17 @@ function editPackage(p) {
 }
 
 VIEWS.tenants = async (view) => {
-  view.appendChild(h('h1', {}, 'Tenants'));
+  view.appendChild(h('div', { class: 'toolbar' },
+    h('h1', {}, 'Tenants'),
+    h('button', { class: 'btn primary', onclick: () => openCreateTenant() }, '+ Create tenant')
+  ));
   let list;
   try { list = await api('api_saas_tenants_list', {}); }
   catch (e) { view.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
-  if (!list.length) { view.appendChild(h('div', { class: 'empty' }, 'No tenants yet. Once someone signs up + pays, they appear here.')); return; }
+  if (!list.length) {
+    view.appendChild(h('div', { class: 'empty' }, 'No tenants yet. Click "+ Create tenant" to add one manually, or wait for a paid signup to come through Cashfree.'));
+    return;
+  }
   const tbl = h('table', {},
     h('thead', {}, h('tr', {},
       h('th', {}, 'Org'), h('th', {}, 'Slug'), h('th', {}, 'Email'),
@@ -303,6 +309,137 @@ VIEWS.tenants = async (view) => {
   );
   view.appendChild(h('div', { class: 'card', style: { padding: 0 } }, tbl));
 };
+
+async function openCreateTenant() {
+  // Need the package list so the operator can pick a plan.
+  let pkgs = [];
+  try { pkgs = await api('api_saas_packages_list'); }
+  catch (e) { toast(e.message, 'err'); return; }
+  if (!pkgs.length) { toast('Add a package first (Packages tab) before creating a tenant.', 'err'); return; }
+
+  const m = h('div', { class: 'modal-bd', onclick: ev => { if (ev.target.classList.contains('modal-bd')) m.remove(); } });
+  const card = h('div', { class: 'modal', style: { maxWidth: '560px' } });
+  card.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, '+ Create tenant manually'),
+    h('button', { class: 'x', onclick: () => m.remove() }, '✕')
+  ));
+  const body = h('div', { class: 'modal-body' });
+  body.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem', marginTop: 0 } },
+    'Provisions a workspace immediately — no Cashfree payment needed. ',
+    'The customer gets a welcome email with login URL + temporary password.'));
+
+  const form = h('form', { onsubmit: ev => { ev.preventDefault(); _submitCreateTenant(form, pkgs, m); } });
+
+  const field = (label, input) => h('div', { class: 'field', style: { marginBottom: '.6rem' } },
+    h('label', { style: { display: 'block', fontSize: '.78rem', marginBottom: '.2rem', color: '#475569' } }, label),
+    input
+  );
+
+  form.appendChild(field('Contact name *',
+    h('input', { name: 'name', required: 'required', placeholder: 'Priya Sharma', style: { width: '100%' } })));
+  form.appendChild(field('Email *',
+    h('input', { name: 'email', type: 'email', required: 'required', placeholder: 'priya@acme.com', style: { width: '100%' } })));
+  form.appendChild(field('Mobile *',
+    h('input', { name: 'mobile', required: 'required', placeholder: '9876543210', style: { width: '100%' }, pattern: '\\+?\\d{8,15}' })));
+  form.appendChild(field('Organisation *',
+    h('input', { name: 'org_name', required: 'required', placeholder: 'ACME Realty', style: { width: '100%' } })));
+  form.appendChild(field('Workspace URL slug *',
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: '.25rem' } },
+      h('span', { class: 'muted', style: { fontSize: '.85rem' } }, '/t/'),
+      // Pattern uses [-a-z0-9] (dash at start) so Firefox v-mode regex
+      // doesn't reject it, same fix we applied to the public landing.
+      h('input', { name: 'desired_slug', required: 'required', placeholder: 'acme',
+        pattern: '[a-z][-a-z0-9]{2,29}',
+        style: { flex: 1 } })
+    )));
+  const pkgSel = h('select', { name: 'package_id', required: 'required', style: { width: '100%' } },
+    h('option', { value: '' }, '— pick a plan —'),
+    ...pkgs.map(p => h('option', { value: p.id }, p.name + ' · ₹' + Number(p.base_price_inr || 0).toLocaleString('en-IN')))
+  );
+  form.appendChild(field('Package *', pkgSel));
+  form.appendChild(field('Notes (internal)',
+    h('textarea', { name: 'notes', rows: 2, placeholder: 'e.g. paid offline by bank transfer ref XXX', style: { width: '100%' } })));
+
+  // mark_paid checkbox — defaults true since the operator is creating
+  // this manually for a customer who's already paid (or is on trial).
+  const markPaidWrap = h('label', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', margin: '.4rem 0', fontSize: '.85rem' } },
+    h('input', { type: 'checkbox', name: 'mark_paid', checked: 'checked' }),
+    h('span', {}, 'Mark first invoice as paid (tenant lands in active state)')
+  );
+  form.appendChild(markPaidWrap);
+
+  const btnRow = h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: '.5rem', marginTop: '1rem' } },
+    h('button', { type: 'button', class: 'btn ghost', onclick: () => m.remove() }, 'Cancel'),
+    h('button', { type: 'submit', class: 'btn primary', id: 'create-tenant-btn' }, 'Create tenant')
+  );
+  form.appendChild(btnRow);
+  body.appendChild(form);
+  card.appendChild(body);
+  m.appendChild(card);
+  document.body.appendChild(m);
+  setTimeout(() => form.querySelector('input[name=name]').focus(), 50);
+}
+
+async function _submitCreateTenant(form, pkgs, modal) {
+  const btn = form.querySelector('#create-tenant-btn');
+  const setBtn = (txt, dis) => { btn.textContent = txt; btn.disabled = !!dis; };
+  setBtn('Creating…', true);
+  const fd = new FormData(form);
+  const payload = {
+    name:         (fd.get('name') || '').toString().trim(),
+    email:        (fd.get('email') || '').toString().trim(),
+    mobile:       (fd.get('mobile') || '').toString().trim(),
+    org_name:     (fd.get('org_name') || '').toString().trim(),
+    desired_slug: (fd.get('desired_slug') || '').toString().trim().toLowerCase(),
+    package_id:   Number(fd.get('package_id')) || 0,
+    notes:        (fd.get('notes') || '').toString().trim() || null,
+    mark_paid:    fd.get('mark_paid') === 'on'
+  };
+  try {
+    const r = await api('api_saas_tenants_createManual', payload);
+    modal.remove();
+    // Success modal — show generated credentials so the admin can copy
+    // them out before they navigate away.
+    showCreateTenantSuccess(r);
+    // Refresh the list
+    navigate('tenants');
+  } catch (e) {
+    setBtn('Create tenant', false);
+    toast(e.message, 'err');
+  }
+}
+
+function showCreateTenantSuccess(r) {
+  const m = h('div', { class: 'modal-bd', onclick: ev => { if (ev.target.classList.contains('modal-bd')) m.remove(); } });
+  const card = h('div', { class: 'modal', style: { maxWidth: '520px' } });
+  card.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, '✅ Tenant created'),
+    h('button', { class: 'x', onclick: () => m.remove() }, '✕')
+  ));
+  const body = h('div', { class: 'modal-body' });
+  body.appendChild(h('p', {}, 'A welcome email with these credentials has been sent. Copy them now — the password will not be shown again.'));
+  const credBox = (lbl, val) => h('div', { style: { background: '#f1f5f9', padding: '.6rem .8rem', borderRadius: '6px', margin: '.5rem 0' } },
+    h('div', { class: 'muted', style: { fontSize: '.72rem', textTransform: 'uppercase', letterSpacing: '.04em' } }, lbl),
+    h('div', { style: { fontFamily: 'monospace', fontSize: '.95rem', wordBreak: 'break-all' } }, val)
+  );
+  body.appendChild(credBox('Login URL', r.login_url));
+  body.appendChild(credBox('Email', r.email));
+  body.appendChild(credBox('Temporary password', r.password));
+  body.appendChild(h('button', {
+    class: 'btn primary', style: { marginTop: '.5rem' },
+    onclick: () => {
+      try {
+        navigator.clipboard.writeText(
+          'Login: ' + r.login_url + '\nEmail: ' + r.email + '\nPassword: ' + r.password
+        );
+        toast('Copied');
+      } catch (_) { toast('Copy failed', 'err'); }
+    }
+  }, '📋 Copy all'));
+  card.appendChild(body);
+  m.appendChild(card);
+  document.body.appendChild(m);
+}
 
 VIEWS.invoices = async (view) => {
   view.appendChild(h('h1', {}, 'Invoices'));
