@@ -152,17 +152,14 @@ const PORT = Number(process.env.PORT || 3000);
 async function boot() {
   console.log('[boot] migrating control plane…');
   await control.migrate();
-  // First-boot seed: if no super-admin exists yet, run the seed script.
-  // This makes the app self-bootstrapping — admin can deploy once and
-  // log in immediately, no manual `npm run seed:control` step needed.
+  // First-boot seed + per-boot settings backfill. seed-once is fully
+  // idempotent — it inserts the super-admin only if none exists, every
+  // package only if the row is missing by name, and every default
+  // setting only if that key isn't already in saas_settings. Running it
+  // every boot is safe and means new platform-default settings (e.g.
+  // SMTP defaults added in a later release) auto-apply on next deploy.
   try {
-    const r = await control.query(`SELECT COUNT(*)::int AS c FROM super_admins`);
-    if (r.rows[0].c === 0) {
-      console.log('[boot] no super_admin yet — running first-time seed…');
-      // require() the seed module synchronously runs the seed and exits;
-      // we want it inline so the process keeps running. Inline copy:
-      await require('./control/seed-once')();
-    }
+    await require('./control/seed-once')();
   } catch (e) {
     console.warn('[boot] auto-seed skipped:', e.message);
   }
