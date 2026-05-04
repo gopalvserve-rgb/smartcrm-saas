@@ -151,6 +151,20 @@ const PORT = Number(process.env.PORT || 3000);
 async function boot() {
   console.log('[boot] migrating control plane…');
   await control.migrate();
+  // First-boot seed: if no super-admin exists yet, run the seed script.
+  // This makes the app self-bootstrapping — admin can deploy once and
+  // log in immediately, no manual `npm run seed:control` step needed.
+  try {
+    const r = await control.query(`SELECT COUNT(*)::int AS c FROM super_admins`);
+    if (r.rows[0].c === 0) {
+      console.log('[boot] no super_admin yet — running first-time seed…');
+      // require() the seed module synchronously runs the seed and exits;
+      // we want it inline so the process keeps running. Inline copy:
+      await require('./control/seed-once')();
+    }
+  } catch (e) {
+    console.warn('[boot] auto-seed skipped:', e.message);
+  }
   app.listen(PORT, () => console.log('[boot] SmartCRM SaaS listening on :' + PORT));
 }
 boot().catch(e => { console.error('[boot] failed:', e); process.exit(1); });
