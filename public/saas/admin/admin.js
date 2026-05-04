@@ -300,7 +300,17 @@ VIEWS.tenants = async (view) => {
       h('td', {}, t.package_name || '—'),
       h('td', {}, h('span', { class: 'tag ' + (t.status === 'active' ? 'ok' : t.status === 'pending_delete' ? 'err' : 'warn') }, t.status)),
       h('td', { class: 'muted' }, fmtDate(t.current_period_end)),
-      h('td', { style: { textAlign: 'right' } },
+      h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } },
+        // Open the tenant workspace in a new window with a short-lived
+        // sudo token. Disabled for non-active tenants — there's no
+        // working session to drop into. Audit-logged on every click.
+        (t.status === 'active' || t.status === 'trial' || t.status === 'pending_delete')
+          ? h('button', {
+              class: 'btn xs', style: { marginRight: '.3rem' },
+              title: 'Open this workspace in a new window, signed in as the tenant admin (5-min magic link, audit-logged)',
+              onclick: () => loginAsTenant(t)
+            }, '🔓 Login as ↗')
+          : null,
         t.status === 'active'
           ? h('button', { class: 'btn ghost xs', onclick: async () => { await api('api_saas_tenants_suspend', t.id); navigate('tenants'); } }, 'Suspend')
           : h('button', { class: 'btn ghost xs', onclick: async () => { await api('api_saas_tenants_restore', t.id); navigate('tenants'); } }, 'Restore')
@@ -309,6 +319,36 @@ VIEWS.tenants = async (view) => {
   );
   view.appendChild(h('div', { class: 'card', style: { padding: 0 } }, tbl));
 };
+
+/**
+ * Open the tenant workspace in a new window with a short-lived
+ * super-admin sudo token. Pop the new tab IMMEDIATELY (synchronously
+ * inside the click handler) so popup blockers don't kick in, then
+ * navigate it to the magic-link URL once the API call returns.
+ */
+async function loginAsTenant(t) {
+  // Open a placeholder window inside the click — browsers only allow
+  // window.open without prompting if it's a direct user gesture.
+  const w = window.open('about:blank', '_blank');
+  if (!w) {
+    toast('Pop-up was blocked — allow pop-ups for this site and try again.', 'err');
+    return;
+  }
+  try {
+    w.document.write(`<!doctype html><meta charset=utf-8><title>Opening ${t.org_name || t.slug}…</title>
+<style>body{font-family:system-ui,sans-serif;color:#475569;margin:6rem auto;max-width:420px;text-align:center}</style>
+<h2>🔓 Opening ${t.org_name || t.slug}…</h2>
+<p>Minting a 5-minute sudo token, hold on…</p>`);
+  } catch (_) {}
+  try {
+    const r = await api('api_saas_tenants_loginAs', t.id);
+    w.location = r.url;
+    toast('Opened ' + (t.org_name || t.slug) + ' in a new window');
+  } catch (e) {
+    try { w.close(); } catch (_) {}
+    toast('Login as failed: ' + e.message, 'err');
+  }
+}
 
 async function openCreateTenant() {
   // Need the package list so the operator can pick a plan.

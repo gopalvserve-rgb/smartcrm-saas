@@ -265,6 +265,19 @@ app.use(attachTenant);
 // parse error on the user's screen.
 function _renderTenantPlaceholder(req, res, slug, tenant) {
   const safe = (s) => String(s == null ? '' : s).replace(/[<>&"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  // Decode an admin-minted "Login as tenant" token (?ssl=…) if present
+  // so we can show the operator who they're impersonating. The token
+  // itself is short-lived (5 min) and signed with JWT_SECRET; here we
+  // only verify it for display — Phase 2's tenant auth layer will be
+  // the actual consumer.
+  let ssl = null;
+  if (req.query && req.query.ssl) {
+    try {
+      const jwt = require('jsonwebtoken');
+      const payload = jwt.verify(String(req.query.ssl), process.env.JWT_SECRET || 'change-me-in-production');
+      if (payload && payload.ssl && payload.slug === slug) ssl = payload;
+    } catch (_) { /* expired or tampered — ignore, show normal page */ }
+  }
   if (!tenant) {
     return res.status(404).type('html').send(`<!doctype html><meta charset="utf-8"/>
 <title>Workspace not found · SmartCRM</title>
@@ -290,6 +303,13 @@ h2{font-size:1.05rem;margin:0 0 .6rem;color:#0f766e}
 .row{display:flex;flex-wrap:wrap;gap:.5rem .9rem;margin:.4rem 0}
 .lbl{color:#64748b;font-size:.82rem;text-transform:uppercase;letter-spacing:.04em;margin-right:.3rem}
 a{color:#4338ca;font-weight:500}</style>
+${ssl ? `<div class="card" style="background:#dbeafe;border-color:#60a5fa;color:#1e3a8a">
+  <h2 style="color:#1e40af">🔓 Logged in as tenant (admin sudo)</h2>
+  <p>You opened this workspace from the admin panel. The tenant CRM SPA isn't mounted yet, so this is the welcome placeholder — but the magic-link token is valid and Phase 2's tenant auth layer will consume it automatically.</p>
+  <div class="row"><span class="lbl">Acting as</span> <code>${safe(ssl.as_email)}</code></div>
+  <div class="row"><span class="lbl">Sudo by</span> <code>${safe(ssl.sa_email)}</code></div>
+  <div class="row"><span class="lbl">Token expires</span> ${new Date(ssl.exp * 1000).toISOString().replace('T', ' ').slice(0, 19)} UTC</div>
+</div>` : ''}
 <h1>👋 Welcome to ${safe(t.org_name)}</h1>
 <p>Your SmartCRM workspace is registered.</p>
 <div class="card">

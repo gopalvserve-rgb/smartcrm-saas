@@ -7,10 +7,13 @@
  *   - Manage extra/blocked modules per tenant
  *   - Hard-delete (only after pending_delete window has elapsed)
  */
+const jwt = require('jsonwebtoken');
 const control = require('../../control/db');
 const tenantPool = require('../../utils/tenantPool');
 const provisioning = require('./provisioning');
 const { requireSuperAdmin, requireFullAdmin } = require('./superAdminAuth');
+
+const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
 
 async function api_saas_tenants_list(token, filters) {
   await requireSuperAdmin(token);
@@ -228,6 +231,68 @@ async function api_saas_tenants_createManual(token, payload) {
   };
 }
 
+/**
+ * Admin "Login as tenant" — mints a short-lived magic-link URL that
+ * the operator can open in a new window to land inside the tenant
+ * workspace as that tenant's primary admin.
+ *
+ * For Phase 1 the tenant CRM SPA isn't mounted yet, so the link
+ * still resolves to the /t/<slug>/ placeholder; the placeholder is
+ * smart enough to recognise the `?ssl=…` (super-sudo-login) token
+ * and surface that context to the operator. When Phase 2 mounts
+ * the real tenant CRM, the same token will be consumed by the
+ * tenant auth layer to skip the password screen entirely.
+ *
+ * Token design:
+ *   Signed JWT, ttl = 5 min, payload = {
+ *     ssl: true,            // marker so tenant auth knows this is sudo
+ *     tenant_id, slug,      // which workspace
+ *     as_email,             // tenant user we're logging in as (defaults to contact_email)
+ *     sa_id, sa_email,      // who minted it (recorded in audit_log)
+ *     iat, exp              // standard
+ *   }
+ *
+ * Every call writes an audit_log row tagged tenant.login_as so the
+ * platform can trace every impersonation later.
+ */
+async function api_saas_tenants_loginAs(token, tenantId, asEmail) {
+  const me = await requireSuperAdmin(token);
+  const t = await control.findById('tenants', tenantId);
+  if (!t) throw new Error('Tenant not found');
+  if (t.status === 'deleted')   throw new Error('Tenant is deleted');
+  if (t.status === 'suspended') throw new Error('Tenant is suspended — restore it first');
+
+  const targetEmail = String(asEmail || t.contact_email || '').trim().toLowerCase();
+  if (!targetEmail) throw new Error('Tenant has no contact email — pass asEmail explicitly');
+
+  // 5-minute magic link is long enough to copy/paste into another
+  // window but short enough that a leaked token can't be reused
+  // hours later. Operator can always click the button again.
+  const ssl = jwt.sign(
+    {
+      ssl: true,
+      tenant_id: t.id,
+      slug: t.slug,
+      as_email: targetEmail,
+      sa_id: me.id,
+      sa_email: me.email
+    },
+    JWT_SECRET,
+    { expiresIn: '5m' }
+  );
+
+  const baseUrl = (process.env.PUBLIC_BASE_URL || 'https://crm.smartcrmsolution.com').replace(/\/+$/, '');
+  const url = `${baseUrl}/t/${encodeURIComponent(t.slug)}/?ssl=${encodeURIComponent(ssl)}`;
+
+  await control.insert('audit_log', {
+    actor_type: 'super_admin', actor_id: me.id, actor_email: me.email,
+    tenant_id: t.id, event: 'tenant.login_as',
+    detail: JSON.stringify({ slug: t.slug, as_email: targetEmail, expires_in_s: 300 })
+  });
+
+  return { ok: true, url, slug: t.slug, as_email: targetEmail, expires_in_s: 300 };
+}
+
 module.exports = {
   api_saas_tenants_list,
   api_saas_tenants_get,
@@ -236,5 +301,6 @@ module.exports = {
   api_saas_tenants_suspend,
   api_saas_tenants_restore,
   api_saas_tenants_pendingDelete,
-  api_saas_tenants_setModules
+  api_saas_tenants_setModules,
+  api_saas_tenants_loginAs
 };
