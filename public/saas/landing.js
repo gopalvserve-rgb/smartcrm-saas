@@ -10,6 +10,63 @@
  */
 const $ = sel => document.querySelector(sel);
 
+/**
+ * Send a client error to the platform error log. Best-effort —
+ * silently swallows transport failures so a logging failure never
+ * cascades into a second visible error for the user. Throttled
+ * client-side so a runaway loop can't DOS our own /log-error
+ * endpoint.
+ */
+let _lastErrLogAt = 0;
+async function logClientError(payload) {
+  const now = Date.now();
+  if (now - _lastErrLogAt < 1000) return;        // 1 / sec max
+  _lastErrLogAt = now;
+  try {
+    await fetch('/api/saas/log-error', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // keepalive lets the request finish even if the page is
+      // navigating away (e.g. when the error is from a button that
+      // immediately redirects).
+      keepalive: true,
+      body: JSON.stringify(Object.assign({
+        url: location.href,
+        ua: navigator.userAgent,
+        source: 'landing',
+        ts_iso: new Date().toISOString()
+      }, payload || {}))
+    });
+  } catch (_) { /* swallow */ }
+}
+window.logClientError = logClientError;
+
+// Catch absolutely anything that bubbles up — uncaught throws and
+// rejected promises both get logged with stack/file/line. The user
+// asked us to capture every error in our project; this is the net.
+window.addEventListener('error', ev => {
+  try {
+    logClientError({
+      message: (ev.error && ev.error.message) || ev.message || 'window.error',
+      stack:   (ev.error && ev.error.stack)   || null,
+      file:    ev.filename || null,
+      line:    ev.lineno   || null,
+      col:     ev.colno    || null,
+      severity: 'error'
+    });
+  } catch (_) {}
+});
+window.addEventListener('unhandledrejection', ev => {
+  try {
+    const reason = ev.reason || {};
+    logClientError({
+      message: (reason && reason.message) || String(reason) || 'unhandledrejection',
+      stack:   (reason && reason.stack)   || null,
+      severity: 'error'
+    });
+  } catch (_) {}
+});
+
 async function api(fn, args) {
   const r = await fetch('/api/saas', {
     method: 'POST',
@@ -102,6 +159,23 @@ async function submitSignup(ev) {
   ev.preventDefault();
   const btn = $('#signup-btn');
   const setBtn = (txt, dis) => { btn.textContent = txt; btn.disabled = !!dis; };
+  // Guard: if the user somehow reached the form without a selected
+  // plan (refreshed mid-flow, multiple tabs, racing click handlers),
+  // currentPkg will be null. Instead of a cryptic null-deref, close
+  // the modal gracefully and ask them to re-pick a plan. We also log
+  // it so it shows up in the platform error log.
+  if (!currentPkg || !currentPkg.id) {
+    setBtn('Continue to payment →', false);
+    alert('Please pick a plan before continuing. Closing this dialog — tap "Get started" on the plan you want.');
+    closeSignup();
+    try {
+      logClientError({
+        message: 'submitSignup invoked with no selected package',
+        source: 'landing'
+      });
+    } catch (_) {}
+    return;
+  }
   setBtn('Creating order…', true);
   const form = ev.target;
   const payload = {

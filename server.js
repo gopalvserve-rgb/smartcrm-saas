@@ -36,12 +36,13 @@ const announcements = require('./routes/saas/announcements');
 const customReqs = require('./routes/saas/customRequirements');
 const webhookLogs = require('./routes/saas/webhookLogs');
 const cashfreeWebhook = require('./routes/saas/cashfreeWebhook');
+const errorLogs = require('./routes/saas/errorLogs');
 
 // Combine every SaaS api_* into one dispatch map
 const SAAS_API = {};
 [
   superAdmin, packages, signup, tenants, invoices, settings,
-  announcements, customReqs, webhookLogs
+  announcements, customReqs, webhookLogs, errorLogs
 ].forEach(mod => {
   Object.keys(mod).forEach(k => {
     if (typeof mod[k] === 'function' && k.startsWith('api_saas_')) SAAS_API[k] = mod[k];
@@ -91,6 +92,12 @@ app.get('/api/saas/debug/tcp', async (req, res) => {
   sock.connect(port, host);
 });
 
+// Public client-error sink. Frontend window.error / unhandledrejection
+// handlers POST here — body is treated as untrusted, capped + redacted
+// inside errorLogs.logError(). No auth so anonymous visitors hitting
+// the landing page can still report their own browser errors.
+app.post('/api/saas/log-error', errorLogs.expressClientErrorEndpoint);
+
 // Public brand JSON (used by the landing page)
 app.get('/api/saas/brand', async (_req, res) => {
   try {
@@ -120,6 +127,23 @@ app.post('/api/saas', async (req, res) => {
     res.json({ ok: true, result });
   } catch (e) {
     console.error('[saas-api]', fn, e.message);
+    // Persist to the error log so the admin Errors page surfaces it.
+    // Auth/validation errors (anything that throws a clean 400-class
+    // message like "Invalid credentials") aren't actually bugs, so we
+    // tag them severity='warn' to keep the queue clean.
+    const looksLikeUserError = /not signed in|invalid|forbidden|required|already|email|password/i
+      .test(String(e.message || ''));
+    errorLogs.logError({
+      source: 'server',
+      severity: looksLikeUserError ? 'warn' : 'error',
+      message: '[saas-api] ' + fn + ': ' + (e.message || e),
+      stack:   e.stack,
+      url:     req.originalUrl,
+      method:  req.method,
+      status_code: 400,
+      ua:      req.get('user-agent'),
+      context: { fn }
+    }).catch(() => {});
     res.status(400).json({ error: e.message });
   }
 });
@@ -136,6 +160,17 @@ app.get('/signup/return', async (req, res) => {
     if (r.provisioned) return res.redirect('/t/' + r.slug + '?welcome=1');
     return res.redirect('/?pending=' + orderId);
   } catch (e) {
+    // Persist so the platform admin sees stuck signups even though
+    // the customer just gets a flash-error in the URL.
+    errorLogs.logError({
+      source: 'signup',
+      severity: 'error',
+      message: '[signup/return] order ' + orderId + ': ' + (e.message || e),
+      stack:   e.stack,
+      url:     req.originalUrl,
+      method:  'GET',
+      context: { order_id: orderId }
+    }).catch(() => {});
     return res.redirect('/?error=' + encodeURIComponent(e.message));
   }
 });
@@ -170,6 +205,33 @@ code{background:#fff;padding:.2rem .4rem;border-radius:4px}</style>
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
+
+// ---- Global error middleware (must be LAST) -------------------
+// Anything a route handler throws or rejects ends up here. Logs to
+// the error_logs table + returns 500 to the caller. The user asked
+// us to capture every error in our project — this is the catch-all.
+app.use(errorLogs.expressErrorMiddleware);
+
+// Process-level safety net — node will keep running after these,
+// so as long as we record them we can resolve them later.
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
+  errorLogs.logError({
+    source: 'process',
+    severity: 'fatal',
+    message: (reason && reason.message) || String(reason),
+    stack:   reason && reason.stack
+  }).catch(() => {});
+});
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err);
+  errorLogs.logError({
+    source: 'process',
+    severity: 'fatal',
+    message: err && err.message ? err.message : String(err),
+    stack:   err && err.stack
+  }).catch(() => {});
+});
 
 // ---- Boot -----------------------------------------------------
 const PORT = Number(process.env.PORT || 3000);

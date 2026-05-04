@@ -284,3 +284,43 @@ CREATE TABLE IF NOT EXISTS cashfree_webhook_logs (
 CREATE INDEX IF NOT EXISTS idx_cf_webhook_order   ON cashfree_webhook_logs(order_id);
 CREATE INDEX IF NOT EXISTS idx_cf_webhook_status  ON cashfree_webhook_logs(status);
 CREATE INDEX IF NOT EXISTS idx_cf_webhook_created ON cashfree_webhook_logs(created_at DESC);
+
+-- ============================================================
+-- error_logs — central error sink for the whole SaaS
+-- ============================================================
+-- Anything that throws or rejects on the server (Express middleware)
+-- and any uncaught error/promise rejection on the client (window.error
+-- + window.unhandledrejection handlers) lands here. Admin reads this
+-- table on /admin → Errors and marks rows resolved when fixed.
+--
+-- A short hash of (source + first line of stack) is computed at insert
+-- time so we can dedupe — if the same error fires 1000 times, we
+-- bump occurrences instead of creating 1000 rows.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS error_logs (
+  id              SERIAL PRIMARY KEY,
+  source          TEXT NOT NULL,                 -- 'server' | 'client' | 'webhook' | 'cron' | 'signup' …
+  severity        TEXT NOT NULL DEFAULT 'error', -- 'error' | 'warn' | 'fatal'
+  message         TEXT NOT NULL,
+  stack           TEXT,
+  url             TEXT,                          -- request URL (server) or page URL (client)
+  method          TEXT,                          -- HTTP method (server only)
+  status_code     INTEGER,                       -- HTTP status (server only)
+  ua              TEXT,                          -- user agent (client only)
+  user_id         INTEGER,                       -- super-admin id if known
+  user_email      TEXT,
+  tenant_slug     TEXT,                          -- /t/<slug> if applicable
+  fingerprint     TEXT,                          -- hash for dedupe (source + first stack line)
+  occurrences     INTEGER NOT NULL DEFAULT 1,
+  first_seen_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_seen_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  resolved        INTEGER NOT NULL DEFAULT 0,    -- 1 = admin clicked "Mark resolved"
+  resolved_at     TIMESTAMPTZ,
+  resolved_by     INTEGER,                       -- super_admin id
+  resolution_note TEXT,
+  context         JSONB                          -- request body, headers, anything extra
+);
+CREATE INDEX IF NOT EXISTS idx_error_logs_resolved  ON error_logs(resolved);
+CREATE INDEX IF NOT EXISTS idx_error_logs_source    ON error_logs(source);
+CREATE INDEX IF NOT EXISTS idx_error_logs_lastseen  ON error_logs(last_seen_at DESC);
+CREATE INDEX IF NOT EXISTS idx_error_logs_fingerprint ON error_logs(fingerprint);

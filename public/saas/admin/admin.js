@@ -28,6 +28,52 @@ const h = (tag, attrs, ...kids) => {
 };
 const $ = sel => document.querySelector(sel);
 
+/**
+ * Best-effort client-error reporter — same shape as the landing page
+ * version, so admin-side bugs (e.g. a broken view handler) also land
+ * in the platform Errors page. Throttled at 1 request / second so a
+ * runaway loop can't DOS our own /log-error endpoint.
+ */
+let _lastErrLogAt = 0;
+async function logClientError(payload) {
+  const now = Date.now();
+  if (now - _lastErrLogAt < 1000) return;
+  _lastErrLogAt = now;
+  try {
+    await fetch('/api/saas/log-error', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      keepalive: true,
+      body: JSON.stringify(Object.assign({
+        url: location.href,
+        ua: navigator.userAgent,
+        source: 'admin-spa',
+        ts_iso: new Date().toISOString()
+      }, payload || {}))
+    });
+  } catch (_) {}
+}
+window.addEventListener('error', ev => {
+  try {
+    logClientError({
+      message: (ev.error && ev.error.message) || ev.message || 'window.error',
+      stack:   (ev.error && ev.error.stack)   || null,
+      file:    ev.filename || null,
+      line:    ev.lineno   || null,
+      col:     ev.colno    || null
+    });
+  } catch (_) {}
+});
+window.addEventListener('unhandledrejection', ev => {
+  try {
+    const reason = ev.reason || {};
+    logClientError({
+      message: (reason && reason.message) || String(reason) || 'unhandledrejection',
+      stack:   (reason && reason.stack)   || null
+    });
+  } catch (_) {}
+});
+
 async function api(fn, args) {
   const r = await fetch('/api/saas', {
     method: 'POST',
@@ -78,6 +124,7 @@ const NAV = [
   { id: 'packages',      label: '📦 Packages' },
   { id: 'invoices',      label: '🧾 Invoices' },
   { id: 'webhooks',      label: '📡 Webhook Logs' },
+  { id: 'errors',        label: '🐞 Errors' },
   { id: 'announcements', label: '📣 Updates' },
   { id: 'requirements',  label: '🛠 Custom Requirements' },
   { id: 'admins',        label: '👥 Super Assistants' },
@@ -343,6 +390,208 @@ function _whStatusClass(s) {
   if (u === 'SUCCESS' || u === 'PAID') return 'ok';
   if (u === 'FAILED') return 'err';
   return 'warn';
+}
+
+// ---------- Errors ---------------------------------------------
+// Central error log — every server throw, every uncaught client
+// error/promise rejection, every webhook-side problem ends up here.
+// Admin reads the list, clicks into a row to see stack/url/context,
+// then marks it resolved (or resolves all of a fingerprint at once).
+VIEWS.errors = async (view) => {
+  view.appendChild(h('div', { class: 'toolbar' },
+    h('h1', {}, 'Errors'),
+    h('div', {},
+      h('select', { id: 'err-resolved', style: { marginRight: '.5rem' }, onchange: () => navigate('errors') },
+        h('option', { value: '0' }, 'Open only'),
+        h('option', { value: '1' }, 'Resolved only'),
+        h('option', { value: 'all' }, 'All')
+      ),
+      h('select', { id: 'err-source', style: { marginRight: '.5rem' }, onchange: () => navigate('errors') },
+        h('option', { value: '' }, 'Any source'),
+        h('option', { value: 'server' }, 'server'),
+        h('option', { value: 'client' }, 'client'),
+        h('option', { value: 'process' }, 'process'),
+        h('option', { value: 'signup' }, 'signup'),
+        h('option', { value: 'webhook' }, 'webhook')
+      ),
+      h('select', { id: 'err-severity', style: { marginRight: '.5rem' }, onchange: () => navigate('errors') },
+        h('option', { value: '' }, 'Any severity'),
+        h('option', { value: 'error' }, 'error'),
+        h('option', { value: 'warn' }, 'warn'),
+        h('option', { value: 'fatal' }, 'fatal')
+      ),
+      h('input', { id: 'err-q', placeholder: 'Search…', style: { marginRight: '.5rem' },
+        onkeydown: ev => { if (ev.key === 'Enter') navigate('errors'); } }),
+      h('button', { class: 'btn ghost', onclick: () => navigate('errors') }, '🔎'),
+      h('button', { class: 'btn ghost danger', style: { marginLeft: '.5rem' }, onclick: async () => {
+        if (!confirm('Delete every resolved error row? This cannot be undone.')) return;
+        try {
+          const r = await api('api_saas_errorLogs_purgeResolved');
+          toast('Purged ' + r.deleted + ' resolved rows');
+          navigate('errors');
+        } catch (e) { toast(e.message, 'err'); }
+      } }, '🗑 Purge resolved')
+    )
+  ));
+
+  let res;
+  try {
+    const filters = {
+      resolved: (document.getElementById('err-resolved') || {}).value || '0',
+      source:   (document.getElementById('err-source')   || {}).value || undefined,
+      severity: (document.getElementById('err-severity') || {}).value || undefined,
+      q:        (document.getElementById('err-q')        || {}).value || undefined
+    };
+    res = await api('api_saas_errorLogs_list', filters);
+  } catch (e) { view.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+
+  // Header chips — quick overview before the operator dives in
+  const c = res.counts || {};
+  view.appendChild(h('div', { style: { display: 'flex', gap: '.6rem', flexWrap: 'wrap', marginBottom: '.75rem' } },
+    h('span', { class: 'tag ' + (Number(c.open_count) > 0 ? 'err' : 'ok') }, '🛑 Open: ' + (c.open_count || 0)),
+    h('span', { class: 'tag warn' }, '🕒 Last 24h: ' + (c.open_24h || 0)),
+    h('span', { class: 'tag ok' }, '✅ Resolved: ' + (c.resolved_count || 0))
+  ));
+
+  const rows = res.rows || [];
+  if (!rows.length) {
+    view.appendChild(h('div', { class: 'empty' }, '🎉 No errors match your filter.'));
+    return;
+  }
+
+  const tbl = h('table', {},
+    h('thead', {}, h('tr', {},
+      h('th', {}, 'Last seen'),
+      h('th', {}, 'Source'),
+      h('th', {}, 'Sev'),
+      h('th', {}, 'Message'),
+      h('th', {}, 'URL'),
+      h('th', { style: { textAlign: 'right' } }, '×'),
+      h('th', {}, '')
+    )),
+    h('tbody', {}, ...rows.map(r => h('tr', { class: Number(r.resolved) === 1 ? 'row-resolved' : '' },
+      h('td', { class: 'muted', style: { whiteSpace: 'nowrap' } }, fmtDateTime(r.last_seen_at)),
+      h('td', { style: { fontSize: '.78rem' } }, r.source || '—'),
+      h('td', {}, h('span', { class: 'tag ' + _errSeverityClass(r.severity) }, r.severity || 'error')),
+      h('td', { style: { maxWidth: '420px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: r.message }, r.message || '—'),
+      h('td', { class: 'muted', style: { fontSize: '.78rem', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: r.url || '' }, r.url || '—'),
+      h('td', { style: { textAlign: 'right', fontWeight: '600' } }, Number(r.occurrences) > 1 ? ('×' + r.occurrences) : ''),
+      h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } },
+        h('button', { class: 'btn ghost xs', onclick: () => openErrorDetail(r.id) }, 'View'),
+        Number(r.resolved) === 1
+          ? h('button', { class: 'btn ghost xs', style: { marginLeft: '.25rem' }, onclick: async () => {
+              try { await api('api_saas_errorLogs_reopen', r.id); toast('Reopened'); navigate('errors'); }
+              catch (e) { toast(e.message, 'err'); }
+            } }, '↺ Reopen')
+          : h('button', { class: 'btn xs', style: { marginLeft: '.25rem' }, onclick: async () => {
+              const note = prompt('Resolution note (optional):', '');
+              if (note === null) return; // user cancelled
+              try { await api('api_saas_errorLogs_resolve', r.id, note); toast('Marked resolved'); navigate('errors'); }
+              catch (e) { toast(e.message, 'err'); }
+            } }, '✓ Resolve')
+      )
+    )))
+  );
+  view.appendChild(h('div', { class: 'card', style: { padding: 0, overflowX: 'auto' } }, tbl));
+
+  // Restore filter selections after re-render
+  setTimeout(() => {
+    const elR = document.getElementById('err-resolved');
+    if (elR) elR.value = (APP._lastErrFilter && APP._lastErrFilter.resolved) || '0';
+    const elS = document.getElementById('err-source');
+    if (elS) elS.value = (APP._lastErrFilter && APP._lastErrFilter.source) || '';
+    const elSev = document.getElementById('err-severity');
+    if (elSev) elSev.value = (APP._lastErrFilter && APP._lastErrFilter.severity) || '';
+    const elQ = document.getElementById('err-q');
+    if (elQ) elQ.value = (APP._lastErrFilter && APP._lastErrFilter.q) || '';
+  }, 0);
+};
+
+function _errSeverityClass(s) {
+  const u = String(s || '').toLowerCase();
+  if (u === 'fatal') return 'err';
+  if (u === 'warn')  return 'warn';
+  return 'err';
+}
+
+async function openErrorDetail(id) {
+  let row;
+  try { row = await api('api_saas_errorLogs_get', id); }
+  catch (e) { toast(e.message, 'err'); return; }
+  if (!row) return;
+  const m = h('div', { class: 'modal-bd', onclick: ev => { if (ev.target.classList.contains('modal-bd')) m.remove(); } });
+  const card = h('div', { class: 'modal', style: { maxWidth: '780px' } });
+  card.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, '🐞 Error detail · ' + (row.source || 'unknown')),
+    h('button', { class: 'x', onclick: () => m.remove() }, '✕')
+  ));
+  const body = h('div', { class: 'modal-body' });
+  body.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '.5rem 1rem', marginBottom: '1rem' } },
+    _kv('Severity',   row.severity || 'error'),
+    _kv('Source',     row.source || '—'),
+    _kv('Occurrences', row.occurrences || 1),
+    _kv('First seen', fmtDateTime(row.first_seen_at)),
+    _kv('Last seen',  fmtDateTime(row.last_seen_at)),
+    _kv('URL',        row.url || '—'),
+    _kv('Method',     row.method || '—'),
+    _kv('HTTP code',  row.status_code || '—'),
+    _kv('Tenant',     row.tenant_slug || '—'),
+    _kv('User',       row.user_email || '—'),
+    _kv('Resolved',   Number(row.resolved) === 1 ? '✅ ' + fmtDateTime(row.resolved_at) : '— open')
+  ));
+  body.appendChild(h('h4', { style: { margin: '1rem 0 .25rem' } }, 'Message'));
+  body.appendChild(h('pre', { style: { background: '#fee2e2', color: '#7f1d1d', padding: '.75rem', borderRadius: '6px', whiteSpace: 'pre-wrap', fontSize: '.85rem' } }, row.message || ''));
+  if (row.stack) {
+    body.appendChild(h('h4', { style: { margin: '1rem 0 .25rem' } }, 'Stack'));
+    const pre = h('pre', { style: { background: '#0f172a', color: '#e2e8f0', padding: '1rem', borderRadius: '6px', overflow: 'auto', maxHeight: '300px', fontSize: '.75rem' } });
+    pre.textContent = row.stack;
+    body.appendChild(pre);
+  }
+  if (row.context) {
+    body.appendChild(h('h4', { style: { margin: '1rem 0 .25rem' } }, 'Context'));
+    const pre = h('pre', { style: { background: '#0f172a', color: '#e2e8f0', padding: '1rem', borderRadius: '6px', overflow: 'auto', maxHeight: '220px', fontSize: '.75rem' } });
+    try { pre.textContent = JSON.stringify(typeof row.context === 'string' ? JSON.parse(row.context) : row.context, null, 2); }
+    catch (_) { pre.textContent = String(row.context); }
+    body.appendChild(pre);
+  }
+  if (row.resolution_note) {
+    body.appendChild(h('h4', { style: { margin: '1rem 0 .25rem' } }, 'Resolution note'));
+    body.appendChild(h('pre', { style: { background: '#dcfce7', color: '#14532d', padding: '.75rem', borderRadius: '6px', whiteSpace: 'pre-wrap', fontSize: '.85rem' } }, row.resolution_note));
+  }
+  // Action buttons in the modal foot
+  const foot = h('div', { class: 'modal-foot', style: { display: 'flex', gap: '.5rem', justifyContent: 'flex-end' } });
+  if (Number(row.resolved) === 1) {
+    foot.appendChild(h('button', { class: 'btn ghost', onclick: async () => {
+      try { await api('api_saas_errorLogs_reopen', row.id); toast('Reopened'); m.remove(); navigate('errors'); }
+      catch (e) { toast(e.message, 'err'); }
+    } }, '↺ Reopen'));
+  } else {
+    foot.appendChild(h('button', { class: 'btn primary', onclick: async () => {
+      const note = prompt('Resolution note (optional):', '');
+      if (note === null) return;
+      try { await api('api_saas_errorLogs_resolve', row.id, note); toast('Marked resolved'); m.remove(); navigate('errors'); }
+      catch (e) { toast(e.message, 'err'); }
+    } }, '✓ Mark resolved'));
+  }
+  if (row.fingerprint) {
+    foot.appendChild(h('button', { class: 'btn ghost', onclick: async () => {
+      if (!confirm('Mark every OPEN error with the same fingerprint as resolved?')) return;
+      try {
+        const r = await api('api_saas_errorLogs_resolveAll', { fingerprint: row.fingerprint });
+        toast('Resolved ' + r.marked + ' rows');
+        m.remove(); navigate('errors');
+      } catch (e) { toast(e.message, 'err'); }
+    } }, '✓ Resolve all of this kind'));
+  }
+  foot.appendChild(h('button', { class: 'btn ghost danger', onclick: async () => {
+    if (!confirm('Permanently delete this error row?')) return;
+    try { await api('api_saas_errorLogs_delete', row.id); toast('Deleted'); m.remove(); navigate('errors'); }
+    catch (e) { toast(e.message, 'err'); }
+  } }, '🗑 Delete'));
+  card.appendChild(body);
+  card.appendChild(foot);
+  m.appendChild(card);
+  document.body.appendChild(m);
 }
 
 function fmtDateTime(s) {
