@@ -77,6 +77,7 @@ tr:hover { background: var(--bg); }
 .toast.err { background: var(--err); }
 
 .modal-bd { position: fixed; inset: 0; background: rgba(15,23,42,.5); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 1rem; }
+.modal-bd[hidden] { display: none !important; }       /* respect HTML hidden attr */
 .modal { background: #fff; border-radius: 12px; padding: 1.5rem; max-width: 600px; width: 100%; max-height: 90vh; overflow-y: auto; }
 .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
 .modal h3 { margin: 0; }

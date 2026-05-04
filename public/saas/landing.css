@@ -99,6 +99,14 @@ a:hover { text-decoration: underline; }
   position: fixed; inset: 0; background: rgba(15,23,42,.6); z-index: 100;
   display: flex; align-items: center; justify-content: center; padding: 1rem;
 }
+/* Honour the HTML `hidden` attribute. `.modal-bd { display: flex }`
+   above ties on specificity with `[hidden] { display: none }` from the
+   user-agent stylesheet but wins by source order, which made the
+   signup modal show up on every page load — and submitSignup then
+   crashed with "currentPkg is null" because no plan had been picked.
+   This rule has higher specificity (0,2,0 vs 0,1,0) so it always
+   beats the base `.modal-bd` rule. */
+.modal-bd[hidden] { display: none !important; }
 .modal {
   background: #fff; border-radius: 14px; padding: 2rem; max-width: 480px; width: 100%;
   position: relative; box-shadow: 0 20px 50px rgba(15,23,42,.25);
