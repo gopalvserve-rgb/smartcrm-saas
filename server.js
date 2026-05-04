@@ -204,30 +204,121 @@ app.get(/^\/admin\/?(.*)$/, (_req, res) => {
 });
 
 // ---- Tenant routing -------------------------------------------
-app.use(attachTenant);
-
-// Tenant SPA shell — Phase 1 placeholder. The full tenant CRM (built
-// from the original server.tenant.js + public/app.js) will be wired
-// up in Phase 2 once per-tenant DB injection is in place.
-app.get(/^\/t\/[a-z0-9-]+\/?(.*)$/, async (req, res) => {
-  if (!req.tenant) {
-    return res.status(404).send(`<h1>Workspace not found</h1><p>The workspace "<code>${(req.tenantSlug || '').replace(/[<>&]/g, '')}</code>" doesn't exist or has been removed.</p><p><a href="/">← Back to home</a></p>`);
-  }
-  const t = req.tenant;
-  res.send(`<!doctype html><meta charset="utf-8"/>
-<title>${t.org_name} — SmartCRM</title>
-<style>body{font-family:system-ui,sans-serif;max-width:560px;margin:5rem auto;padding:0 1rem;color:#0f172a}
-.card{background:#ecfdf5;border:1px solid #6ee7b7;padding:1.5rem;border-radius:12px}
-code{background:#fff;padding:.2rem .4rem;border-radius:4px}</style>
-<h1>👋 Welcome to ${t.org_name}</h1>
-<div class="card">
-  <p><b>Workspace:</b> <code>/t/${t.slug}</code> · <b>Plan:</b> ${t.package_id ? 'pkg #' + t.package_id : '—'} · <b>Status:</b> ${t.status}</p>
-  <p>The tenant CRM SPA loads here in Phase 2 (full Celeste/Stockbox UI under a per-tenant DB connection). Phase 1 ships signup → payment → provisioning, which is what got you to this page.</p>
-  <p>Login email: <code>${t.contact_email}</code></p>
-</div>`);
+//
+// IMPORTANT note on order: attachTenant REWRITES req.url to strip
+// the /t/<slug> prefix so downstream routes can stay slug-unaware.
+// That means any route we want to match against the original
+// /t/<slug>/... URL has to be registered BEFORE attachTenant runs,
+// otherwise the route's regex sees the already-rewritten URL and
+// never matches.
+//
+// Tenant placeholder — Phase 2 (mounting the full per-tenant CRM
+// under /t/<slug>/...) is still pending. Until then, /t/<slug>/...
+// serves a minimal no-JS welcome page that explains what's happening
+// and how the operator can act. Critically: NO <script>, NO fetch,
+// NO JSON parsing — so this page can never produce a "JSON parse"
+// error on the user's screen.
+app.get(/^\/t\/[a-z0-9-]+\/?$/, async (req, res, next) => {
+  // Manually resolve tenant since attachTenant runs after this route
+  const m = /^\/t\/([a-z0-9-]+)\/?$/.exec(req.path);
+  if (!m) return next();
+  const slug = m[1].toLowerCase();
+  let tenant = null;
+  try {
+    const tp = require('./utils/tenantPool');
+    tenant = await tp.findActiveTenant(slug);
+  } catch (_) {}
+  return _renderTenantPlaceholder(req, res, slug, tenant);
 });
 
-app.use(express.static(path.join(__dirname, 'public')));
+// Anything else under /t/<slug>/... that isn't an API call: fall
+// back to the same placeholder (so deep-links like /t/acme/leads
+// don't 404 with HTML). Tenant API calls (/t/<slug>/api/...) are
+// handled by the JSON 404 below after attachTenant rewrites them.
+app.get(/^\/t\/[a-z0-9-]+\/(?!api(\/|$)).*/, async (req, res, next) => {
+  const m = /^\/t\/([a-z0-9-]+)\//.exec(req.path);
+  if (!m) return next();
+  const slug = m[1].toLowerCase();
+  let tenant = null;
+  try {
+    const tp = require('./utils/tenantPool');
+    tenant = await tp.findActiveTenant(slug);
+  } catch (_) {}
+  return _renderTenantPlaceholder(req, res, slug, tenant);
+});
+
+app.use(attachTenant);
+
+// IMPORTANT — keep the static handler scoped to /saas so it can ONLY
+// serve assets from public/saas (the landing site + admin SPA). The
+// previous setup mounted public/ at the root, which silently served
+// the legacy Celeste SPA (public/index.html + public/app.js) when a
+// tenant URL got rewritten. The tenant CRM then tried to fetch /api
+// endpoints that don't exist on this server, got HTML 404 responses
+// back, and crashed clients with "Unexpected token '<', '<!DOCTYPE'…
+// is not valid JSON". The legacy files have now been removed from the
+// repo, but we also keep the static handler narrow so the bug can't
+// silently come back.
+
+// Renders the tenant welcome / "not found" page. Pure HTML, no JS,
+// no fetch — by design, so this surface can never produce a JSON
+// parse error on the user's screen.
+function _renderTenantPlaceholder(req, res, slug, tenant) {
+  const safe = (s) => String(s == null ? '' : s).replace(/[<>&"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  if (!tenant) {
+    return res.status(404).type('html').send(`<!doctype html><meta charset="utf-8"/>
+<title>Workspace not found · SmartCRM</title>
+<style>body{font-family:system-ui,sans-serif;max-width:560px;margin:5rem auto;padding:0 1rem;color:#0f172a}
+.card{background:#fef2f2;border:1px solid #fecaca;padding:1.5rem;border-radius:12px}
+code{background:#fff;padding:.2rem .4rem;border-radius:4px}
+a{color:#4338ca}</style>
+<h1>🤔 Workspace not found</h1>
+<div class="card">
+  <p>The workspace <code>${safe(slug)}</code> doesn't exist or has been removed.</p>
+</div>
+<p><a href="/">← Back to SmartCRM home</a></p>`);
+  }
+  const t = tenant;
+  res.type('html').send(`<!doctype html><meta charset="utf-8"/>
+<title>${safe(t.org_name)} — SmartCRM</title>
+<style>body{font-family:system-ui,sans-serif;max-width:640px;margin:4rem auto;padding:0 1.25rem;color:#0f172a;line-height:1.55}
+.card{background:#ecfdf5;border:1px solid #6ee7b7;padding:1.5rem;border-radius:12px;margin:1.5rem 0}
+.warn{background:#fef9c3;border-color:#facc15}
+code{background:#fff;padding:.18rem .45rem;border-radius:4px;font-size:.92em}
+h1{font-size:1.6rem;margin:0 0 .5rem}
+h2{font-size:1.05rem;margin:0 0 .6rem;color:#0f766e}
+.row{display:flex;flex-wrap:wrap;gap:.5rem .9rem;margin:.4rem 0}
+.lbl{color:#64748b;font-size:.82rem;text-transform:uppercase;letter-spacing:.04em;margin-right:.3rem}
+a{color:#4338ca;font-weight:500}</style>
+<h1>👋 Welcome to ${safe(t.org_name)}</h1>
+<p>Your SmartCRM workspace is registered.</p>
+<div class="card">
+  <h2>Workspace details</h2>
+  <div class="row"><span class="lbl">URL</span> <code>/t/${safe(t.slug)}</code></div>
+  <div class="row"><span class="lbl">Plan</span> ${t.package_id ? 'package #' + t.package_id : 'free'}</div>
+  <div class="row"><span class="lbl">Status</span> <code>${safe(t.status)}</code></div>
+  <div class="row"><span class="lbl">Login email</span> <code>${safe(t.contact_email)}</code></div>
+</div>
+<div class="card warn">
+  <h2>Tenant CRM is still being wired up</h2>
+  <p>The full SmartCRM workspace UI (leads, calls, WhatsApp, reports) is in the next deployment phase — the per-tenant DB has been provisioned, but the SPA isn't mounted under <code>/t/&lt;slug&gt;</code> yet.</p>
+  <p>If you're the platform admin you can manage this tenant from the <a href="/admin/#/tenants">SmartCRM admin panel</a>.</p>
+</div>
+<p style="color:#94a3b8;font-size:.85rem;margin-top:2rem">Need help? Email <a href="mailto:support@smartcrmsolution.com">support@smartcrmsolution.com</a></p>`);
+}
+
+// JSON-safe 404 for any unmatched API path under either /api or
+// /t/<slug>/api. Anything that calls fetch() expecting JSON now gets
+// clean JSON back even if the function name is wrong / the route
+// doesn't exist — preventing the "Unexpected token '<', '<!DOCTYPE'…"
+// crash that the legacy public/app.js was hitting earlier.
+app.all(/^\/api(\/.*)?$/, (req, res) => {
+  res.status(404).json({ error: 'Not found: ' + req.method + ' ' + req.originalUrl });
+});
+
+// Static assets live ONLY under /saas (mounted earlier above). No
+// catch-all express.static here — see comment block at the top of
+// this section for the rationale.
 
 // ---- Global error middleware (must be LAST) -------------------
 // Anything a route handler throws or rejects ends up here. Logs to
