@@ -220,7 +220,15 @@ app.get(/^\/admin\/?(.*)$/, (_req, res) => {
 // hitting /t/<slug> would see a broken page (relative URLs would
 // resolve against /t/, not /t/<slug>/).
 app.get(/^\/t\/[a-z0-9-]+$/, (req, res) => {
-  res.redirect(301, req.originalUrl + '/');
+  // Insert the slash BEFORE the query string. Naively appending '/'
+  // to req.originalUrl breaks magic-link URLs like
+  //   /t/acme?ssl=eyJ…
+  // by producing /t/acme?ssl=eyJ…/ which corrupts the JWT value.
+  const qIdx = req.originalUrl.indexOf('?');
+  const target = qIdx === -1
+    ? req.originalUrl + '/'
+    : req.originalUrl.slice(0, qIdx) + '/' + req.originalUrl.slice(qIdx);
+  res.redirect(301, target);
 });
 
 // Tenant "not found" placeholder — only serves when the slug doesn't
