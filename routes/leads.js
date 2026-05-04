@@ -12,27 +12,68 @@ function _parseExtra(lead) {
 }
 
 async function _lookups() {
-  const [usersArr, statusesArr, productsArr] = await Promise.all([
-    db.getAll('users'), db.getAll('statuses'), db.getAll('products')
+  const [usersArr, statusesArr, productsArr, tatRows] = await Promise.all([
+    db.getAll('users'),
+    db.getAll('statuses'),
+    db.getAll('products'),
+    // tat_thresholds may not exist on very old installs — degrade gracefully
+    db.getAll('tat_thresholds').catch(() => [])
   ]);
   const usersById = {}, statusesById = {}, productsById = {};
   usersArr.forEach(u => { usersById[Number(u.id)] = u; });
   statusesArr.forEach(s => { statusesById[Number(s.id)] = s; });
   productsArr.forEach(p => { productsById[Number(p.id)] = p; });
-  return { usersById, statusesById, productsById };
+  // Per-status TAT threshold (minutes). Only active rows count — admin
+  // can flip is_active=0 in Settings → TAT to suspend tracking on a stage
+  // without losing the configured value.
+  const tatByStatusId = {};
+  (tatRows || []).forEach(t => {
+    if (Number(t.is_active) === 1) {
+      tatByStatusId[Number(t.status_id)] = Number(t.threshold_minutes);
+    }
+  });
+  // Final stages (Won/Lost/etc.) are exempt from violation highlighting —
+  // a lead sitting in a closed-out stage shouldn't keep flashing red.
+  const finalStatusIds = new Set(
+    statusesArr.filter(s => Number(s.is_final) === 1).map(s => Number(s.id))
+  );
+  return { usersById, statusesById, productsById, tatByStatusId, finalStatusIds };
 }
 
-function _hydrate(l, usersById, statusesById, productsById) {
+function _hydrate(l, usersById, statusesById, productsById, tatByStatusId, finalStatusIds) {
   const u = usersById[Number(l.assigned_to)];
   const s = statusesById[Number(l.status_id)];
   const p = productsById[Number(l.product_id)];
-  return Object.assign({}, l, {
+  const out = Object.assign({}, l, {
     assigned_name: u ? u.name : '',
     status_name: s ? s.name : '',
     status_color: s ? s.color : '#6b7280',
     product_name: p ? p.name : '',
     extra: _parseExtra(l)
   });
+  // TAT-violation flag: lead has been in its current status longer than
+  // the configured threshold (without progressing). Computed on hydrate
+  // so the Leads grid + New-leads tab can highlight breached rows
+  // without an extra round-trip. Final stages are exempt.
+  out.tat_violation = false;
+  out.tat_threshold_minutes = null;
+  out.tat_minutes_over = null;
+  if (tatByStatusId && finalStatusIds) {
+    const sid = Number(l.status_id) || 0;
+    const limit = tatByStatusId[sid];
+    if (limit && !finalStatusIds.has(sid)) {
+      const enteredAt = l.last_status_change_at || l.created_at;
+      if (enteredAt) {
+        const ageMin = (Date.now() - new Date(enteredAt).getTime()) / 60_000;
+        out.tat_threshold_minutes = limit;
+        if (ageMin >= limit) {
+          out.tat_violation = true;
+          out.tat_minutes_over = Math.max(0, Math.round(ageMin - limit));
+        }
+      }
+    }
+  }
+  return out;
 }
 
 function _isVisible(me, visible, lead) {
@@ -194,13 +235,21 @@ async function _junkStatusId() {
  *
  * Pass an empty/falsy raw to fall back to the default "New" status.
  */
+/**
+ * Parse a date string from a CSV cell into ISO. Accepts ISO 8601,
+ * "YYYY-MM-DD HH:MM", "DD/MM/YYYY", and several common variants.
+ * Returns the original input if it's already a Date or if parsing
+ * fails (so the DB layer can decide). Returns "" for blank.
+ */
 function _parseDate(raw) {
   if (raw == null || raw === '') return '';
   if (raw instanceof Date && !isNaN(raw)) return raw.toISOString();
   const s = String(raw).trim();
   if (!s) return '';
+  // Already ISO-ish
   let d = new Date(s);
   if (!isNaN(d)) return d.toISOString();
+  // DD/MM/YYYY or DD-MM-YYYY
   const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
   if (m) {
     const [, dd, mm, yyyy, hh, mi, ss] = m;
@@ -208,6 +257,8 @@ function _parseDate(raw) {
     d = new Date(`${year}-${mm.padStart(2,'0')}-${dd.padStart(2,'0')}T${(hh||'00').padStart(2,'0')}:${mi||'00'}:${ss||'00'}`);
     if (!isNaN(d)) return d.toISOString();
   }
+  // Last resort — return input so the DB rejects it loudly rather than
+  // silently corrupting the row.
   return s;
 }
 
@@ -248,7 +299,7 @@ async function _resolveProductIdByName(raw) {
 async function api_leads_list(token, filters) {
   const me = await authUser(token);
   const visible = await getVisibleUserIds(me);
-  const { usersById, statusesById, productsById } = await _lookups();
+  const { usersById, statusesById, productsById, tatByStatusId, finalStatusIds } = await _lookups();
   filters = filters || {};
   let rows = (await db.getAll('leads')).filter(l => _isVisible(me, visible, l));
 
@@ -290,7 +341,28 @@ async function api_leads_list(token, filters) {
   if (filters.duplicate === 'only')        rows = rows.filter(l => Number(l.is_duplicate) === 1);
   else if (filters.duplicate === 'unique') rows = rows.filter(l => Number(l.is_duplicate) !== 1);
 
-  rows.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+  // Sort:
+  //   created_desc (default) — newest created leads first
+  //   created_asc           — oldest created leads first
+  //   updated_desc          — most recently touched leads first
+  //   updated_asc           — least recently touched leads first
+  // Falls back to created_at if updated_at is null/missing on a row,
+  // so freshly imported leads still sort sensibly.
+  const sort = String(filters.sort || 'created_desc').toLowerCase();
+  const _key = (l) => {
+    if (sort.startsWith('updated')) {
+      return String(l.updated_at || l.last_status_change_at || l.created_at || '');
+    }
+    return String(l.created_at || '');
+  };
+  const _dir = sort.endsWith('_asc') ? 1 : -1;
+  rows.sort((a, b) => {
+    const av = _key(a), bv = _key(b);
+    if (av < bv) return -1 * _dir;
+    if (av > bv) return  1 * _dir;
+    // Stable tiebreaker on id so paging stays deterministic
+    return (Number(a.id) - Number(b.id)) * _dir;
+  });
   const total = rows.length;
   const statusCount = {};
   rows.forEach(l => { const sid = Number(l.status_id) || 0; statusCount[sid] = (statusCount[sid] || 0) + 1; });
@@ -308,7 +380,7 @@ async function api_leads_list(token, filters) {
   });
 
   const hydrated = rows.map(l => {
-    const h = _hydrate(l, usersById, statusesById, productsById);
+    const h = _hydrate(l, usersById, statusesById, productsById, tatByStatusId, finalStatusIds);
     const r = remarksByLead[Number(l.id)];
     h.recent_remark = r ? r.remark : '';
     h.recent_remark_at = r ? r.created_at : '';
@@ -333,8 +405,8 @@ async function api_leads_get(token, id) {
   if (!lead) throw new Error('Not found');
   if (!_isVisible(me, visible, lead)) throw new Error('Forbidden');
 
-  const { usersById, statusesById, productsById } = await _lookups();
-  const hydrated = _hydrate(lead, usersById, statusesById, productsById);
+  const { usersById, statusesById, productsById, tatByStatusId, finalStatusIds } = await _lookups();
+  const hydrated = _hydrate(lead, usersById, statusesById, productsById, tatByStatusId, finalStatusIds);
 
   const remarks = (await db.getAll('remarks'))
     .filter(r => Number(r.lead_id) === Number(id))
@@ -357,7 +429,10 @@ async function api_leads_get(token, id) {
 async function api_leads_create(token, payload) {
   const me = await authUser(token);
   const p = Object.assign({}, payload || {});
-  // CSV-friendly aliasing for migration timestamp columns.
+  // CSV-friendly aliasing — accept common header spellings for the
+  // migration timestamp columns. Lookup is case-insensitive across the
+  // raw payload keys; the first match wins. Empty values are ignored
+  // so a blank cell falls back to the default ("now").
   if (!p.created_at) {
     for (const k of Object.keys(p)) {
       if (/^(lead_?)?created[_\s]?(at|date|on)$/i.test(k.replace(/[^a-z_]/gi, ''))) {
@@ -521,6 +596,9 @@ async function api_leads_create(token, payload) {
     utm_term:       p.utm_term || '',
     utm_content:    p.utm_content || '',
     next_followup_at: p.next_followup_at || '',
+    // Migration support — admins can override last_status_change_at when
+    // importing leads from another CRM so TAT calculations reflect the
+    // source system. Non-admins (or empty values) get "now".
     last_status_change_at: (me.role === 'admin' && p.last_status_change_at)
       ? _parseDate(p.last_status_change_at)
       : db.nowIso(),
@@ -553,9 +631,14 @@ async function api_leads_create(token, payload) {
     base.last_status_change_at = db.nowIso();
   }
 
+  // Block a rep from scheduling two follow-ups at the same minute.
+  if (base.next_followup_at) {
+    await _assertFollowupSlotFree(me, base.assigned_to || me.id, base.next_followup_at, null);
+  }
+
   // Migration: admins can backdate created_at when importing from
-  // another CRM. The DB column has DEFAULT NOW() so non-admins are
-  // unaffected.
+  // another CRM. The DB column has DEFAULT NOW(), so leaving the key
+  // off the insert keeps that behaviour for everyone else.
   if (me.role === 'admin' && p.created_at) {
     const parsed = _parseDate(p.created_at);
     if (parsed) base.created_at = parsed;
@@ -659,6 +742,47 @@ async function api_leads_create(token, payload) {
       }
     } catch (e) { console.warn('[push] lead_assigned failed:', e.message); }
 
+    // ---- Auto-dial: send a "📞 Tap to call" push to the assignee in
+    // addition to the generic "new lead assigned" notification above.
+    // Tapping the notification opens /#/dial?phone=… on the APK which
+    // auto-fires tel: and launches the dialer with the number pre-filled.
+    //
+    // Gating: ALL of the following must be true to send the push —
+    //   - LEAD_AUTODIAL_ON tenant config is '1' (admin global toggle)
+    //   - Lead has an assignee, a phone, and isn't auto-junk
+    //   - Assignee is NOT an admin (admins don't work the pipeline)
+    //   - Assignee's users.autodial_on column is 1 (per-user opt-in)
+    try {
+      const autodialOn = await db.getConfig('LEAD_AUTODIAL_ON', '1');
+      if (String(autodialOn) === '1' && resolvedAssignee && base.phone && !_autoJunk) {
+        const assignee = await db.findById('users', resolvedAssignee);
+        const skipAdmin = assignee && String(assignee.role || '').toLowerCase() === 'admin';
+        const userOptIn = !assignee || Number(assignee.autodial_on != null ? assignee.autodial_on : 1) === 1;
+        if (!skipAdmin && userOptIn) {
+          const push = require('./push');
+          let digits = String(base.phone).replace(/\D/g, '');
+          if (digits.length === 10 && /^[6-9]/.test(digits)) digits = '91' + digits;
+          const dial = '+' + digits;
+          await push.sendPushToUser(resolvedAssignee, {
+            title: '📞 Auto-dial: ' + (base.name || 'New lead'),
+            body:  base.phone + (base.source ? '\n' + base.source : '') + '\nTap to call now',
+            url:   '/#/dial?phone=' + encodeURIComponent(dial) + '&lead=' + id,
+            tag:   'autodial-' + id,
+            sticky: false
+          });
+          // Log a call_events row so the recording-sync pipeline (if used)
+          // has a reference point to match against. Mirrors api_call_via_mobile.
+          try {
+            await db.insert('call_events', {
+              lead_id: id, user_id: resolvedAssignee, phone: base.phone,
+              direction: 'out', event: 'autodial_requested', duration_s: 0,
+              recording_id: null, created_at: db.nowIso()
+            });
+          } catch (_) {}
+        }
+      }
+    } catch (e) { console.warn('[push] autodial failed:', e.message); }
+
     // ---- TAT — log the lead-created action and the initial stage entry ----
     try {
       const tat = require('./tat');
@@ -751,6 +875,15 @@ async function api_leads_update(token, id, patch) {
   const assigneeChanged = patch.assigned_to && Number(patch.assigned_to) !== Number(lead.assigned_to);
   if (statusChanged) allowed.last_status_change_at = db.nowIso();
 
+  // Block a rep from scheduling two follow-ups at the same minute. Run
+  // BEFORE the lead update so a clash leaves the row untouched.
+  if ('next_followup_at' in patch && patch.next_followup_at) {
+    // The follow-up belongs to whoever currently owns the lead — either
+    // the new assignee from this same patch or the existing owner.
+    const ownerId = patch.assigned_to || lead.assigned_to || me.id;
+    await _assertFollowupSlotFree(me, ownerId, patch.next_followup_at, id);
+  }
+
   await db.update('leads', id, allowed);
 
   // Sync next_followup_at → followups table so reminder/notification views find it
@@ -810,6 +943,49 @@ async function api_leads_update(token, id, patch) {
   return { ok: true };
 }
 
+/**
+ * Guard against a single rep double-booking the same minute on two
+ * different leads. Throws a friendly error naming the conflicting lead
+ * so the rep can re-pick a slot.
+ *
+ * Compares via UTC milliseconds floored to the minute, so a timezone
+ * difference between the candidate and an existing row can't sneak
+ * past the check. Admins are exempt — they often shift schedules
+ * around on behalf of their team and this rule would block legitimate
+ * bulk operations.
+ *
+ * Same lead being rescheduled = no clash (excludeLeadId).
+ * Done / completed follow-ups don't count (is_done=1).
+ * Empty or invalid due_at = no check.
+ */
+async function _assertFollowupSlotFree(me, userId, dueAt, excludeLeadId) {
+  if (!dueAt || me.role === 'admin') return;
+  const candidateMs = new Date(dueAt).getTime();
+  if (!isFinite(candidateMs)) return;
+  const minuteKey = Math.floor(candidateMs / 60000);
+  const all = await db.getAll('followups');
+  const conflict = all.find(f =>
+    Number(f.user_id) === Number(userId) &&
+    Number(f.is_done) !== 1 &&
+    Number(f.lead_id) !== Number(excludeLeadId || 0) &&
+    f.due_at &&
+    Math.floor(new Date(f.due_at).getTime() / 60000) === minuteKey
+  );
+  if (!conflict) return;
+  // Hydrate the conflicting lead's name + the human-readable time so the
+  // toast tells the rep exactly what's already on their calendar.
+  const otherLead = await db.findById('leads', conflict.lead_id).catch(() => null);
+  const niceTime = new Date(conflict.due_at).toLocaleString('en-IN', {
+    weekday: 'short', day: '2-digit', month: 'short',
+    hour: '2-digit', minute: '2-digit'
+  });
+  const otherName = otherLead?.name || ('lead #' + conflict.lead_id);
+  throw new Error(
+    'Follow-up clash: you already have "' + otherName + '" scheduled at ' +
+    niceTime + '. Pick a different time.'
+  );
+}
+
 // Sync helper — creates or updates a followup row when the lead's next_followup_at changes
 async function _syncFollowup(leadId, userId, dueAt, note) {
   const existing = (await db.getAll('followups')).filter(f =>
@@ -840,6 +1016,14 @@ async function api_leads_addRemark(token, leadId, payload) {
   // Was the status changed by this remark? If so, capture the prior status_id
   const lead = await db.findById('leads', leadId);
   const priorStatus = lead ? Number(lead.status_id) : null;
+  // Block a rep from scheduling two follow-ups at the same minute via
+  // the addRemark shortcut. Run BEFORE persisting the remark so a
+  // clash leaves nothing on the lead.
+  if (p.next_followup_at) {
+    const ownerId = lead?.assigned_to || me.id;
+    await _assertFollowupSlotFree(me, ownerId, p.next_followup_at, leadId);
+  }
+
   await db.insert('remarks', {
     lead_id: leadId, user_id: me.id,
     remark: p.remark, status_id: p.status_id || ''
@@ -872,7 +1056,7 @@ async function api_leads_addRemark(token, leadId, payload) {
 async function api_leads_pipeline(token) {
   const me = await authUser(token);
   const visible = await getVisibleUserIds(me);
-  const { usersById, statusesById, productsById } = await _lookups();
+  const { usersById, statusesById, productsById, tatByStatusId, finalStatusIds } = await _lookups();
   const statuses = (await db.getAll('statuses')).sort((a, b) => Number(a.sort_order) - Number(b.sort_order));
   const leads = (await db.getAll('leads')).filter(l => _isVisible(me, visible, l));
   return statuses.map(s => {
@@ -880,7 +1064,7 @@ async function api_leads_pipeline(token) {
       .filter(l => Number(l.status_id) === Number(s.id))
       .sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)))
       .slice(0, 100)
-      .map(l => _hydrate(l, usersById, statusesById, productsById));
+      .map(l => _hydrate(l, usersById, statusesById, productsById, tatByStatusId, finalStatusIds));
     return Object.assign({}, s, { leads: cols });
   });
 }
@@ -1158,12 +1342,12 @@ async function api_leads_duplicateHistory(token, leadId) {
     if (email && email === le) return true;
     return false;
   });
-  const { usersById, statusesById, productsById } = await _lookups();
+  const { usersById, statusesById, productsById, tatByStatusId, finalStatusIds } = await _lookups();
   const remarks = await db.getAll('remarks');
   return all
     .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
     .map(l => {
-      const h = _hydrate(l, usersById, statusesById, productsById);
+      const h = _hydrate(l, usersById, statusesById, productsById, tatByStatusId, finalStatusIds);
       h.remarks = remarks
         .filter(r => Number(r.lead_id) === Number(l.id))
         .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
@@ -1190,7 +1374,12 @@ async function api_leads_duplicateAndReassign(token, leadId, newAssigneeId) {
   const newUser = await db.findById('users', newAssigneeId);
   if (!newUser) throw new Error('Target user not found');
 
-  const newStatusId = await _newStatusId();
+  // Manual duplicate-and-reassign always lands the new row in "Pending"
+  // (auto-created if missing) — same convention the auto-dedup path
+  // uses. Reasoning: the new assignee should review the lead before it
+  // re-enters the live pipeline; "New" / inheriting the original's
+  // status would let the new row jump stages without their input.
+  const newStatusId = await _pendingStatusId();
   const now = db.nowIso();
   // Fresh lead — only contact info + attribution carry over. We deliberately
   // DO NOT copy: notes (free-form history), extra_json (stale custom-field

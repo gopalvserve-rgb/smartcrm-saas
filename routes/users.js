@@ -18,7 +18,8 @@ async function api_users_list(token) {
       is_active: u.is_active, created_at: u.created_at,
       daily_lead_cap:   Number(u.daily_lead_cap)   || 0,
       monthly_lead_cap: Number(u.monthly_lead_cap) || 0,
-      calendly_url: u.calendly_url || ''
+      calendly_url: u.calendly_url || '',
+      autodial_on: Number(u.autodial_on != null ? u.autodial_on : 1) ? 1 : 0
     }));
 }
 
@@ -79,9 +80,13 @@ async function api_users_update(token, id, patch) {
    'reference_1_name', 'reference_1_phone', 'reference_1_relation',
    'reference_2_name', 'reference_2_phone', 'reference_2_relation',
    // Scheduling
-   'calendly_url'
+   'calendly_url',
+   // Auto-dial preference (each rep can opt in/out for themselves)
+   'autodial_on'
   ].forEach(k => {
-    if (k in p) allowed[k] = p[k];
+    if (k in p) {
+      allowed[k] = (k === 'autodial_on') ? (p[k] ? 1 : 0) : p[k];
+    }
   });
   // Email — needs uniqueness check against other users (case-insensitive)
   if ('email' in p) {
@@ -110,8 +115,10 @@ async function api_users_update(token, id, patch) {
 async function api_users_updateSelf(token, patch) {
   const me = await authUser(token);
   const allowed = {};
-  ['name', 'phone', 'photo_url', 'calendly_url'].forEach(k => {
-    if (k in patch) allowed[k] = patch[k];
+  ['name', 'phone', 'photo_url', 'calendly_url', 'autodial_on'].forEach(k => {
+    if (k in patch) {
+      allowed[k] = (k === 'autodial_on') ? (patch[k] ? 1 : 0) : patch[k];
+    }
   });
   await db.update('users', me.id, allowed);
   return { ok: true };
@@ -237,6 +244,10 @@ async function api_users_delete(token, id) {
   return { ok: true, id: Number(target.id), reassigned_to: me.id };
 }
 
+/**
+ * Get the current user's Calendly webhook URL. Generates a token
+ * lazily on first call so existing users don't need a migration.
+ */
 async function api_users_calendlyWebhook(token) {
   const me = await authUser(token);
   let t = me.calendly_webhook_token;
@@ -248,6 +259,10 @@ async function api_users_calendlyWebhook(token) {
   return { token: t };
 }
 
+/**
+ * Generate a fresh Calendly webhook token for the current user.
+ * Use this if the existing one was leaked or compromised.
+ */
 async function api_users_regenerateCalendlyWebhook(token) {
   const me = await authUser(token);
   const crypto = require('crypto');

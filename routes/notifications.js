@@ -1,19 +1,40 @@
 const db = require('../db/pg');
 const { authUser, getVisibleUserIds } = require('../utils/auth');
 
+// Follow-up lists (Overdue / Due today / Upcoming) only show leads whose
+// current status is in this whitelist. Anything else (Lost, Won, Booked,
+// Junk, etc.) is hidden so reps see only the live pipeline that needs
+// follow-up effort. Match is case/space/punctuation-insensitive.
+const FOLLOWUP_ALLOWED_STATUSES = [
+  'Follow Up',
+  'Visit Done',
+  'Visit Schedule',
+  'Re-visit',
+  'Not Pick'
+];
+const _normStatus = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+const FOLLOWUP_ALLOWED_NORM = new Set(FOLLOWUP_ALLOWED_STATUSES.map(_normStatus));
+
 async function api_notifications_mine(token) {
   const me = await authUser(token);
   const visible = await getVisibleUserIds(me);
   const todayStr = new Date().toISOString().slice(0, 10);
   const now = new Date().toISOString();
 
-  const [allFollowups, allLeads, allUsers] = await Promise.all([
-    db.getAll('followups'), db.getAll('leads'), db.getAll('users')
+  const [allFollowups, allLeads, allUsers, allStatuses] = await Promise.all([
+    db.getAll('followups'), db.getAll('leads'), db.getAll('users'), db.getAll('statuses')
   ]);
   const leadsById = {};
   allLeads.forEach(l => { leadsById[Number(l.id)] = l; });
   const usersById = {};
   allUsers.forEach(u => { usersById[Number(u.id)] = u; });
+  const statusById = {};
+  allStatuses.forEach(s => { statusById[Number(s.id)] = s; });
+  const _isAllowedLeadStatus = (lead) => {
+    if (!lead) return false;
+    const s = statusById[Number(lead.status_id)];
+    return FOLLOWUP_ALLOWED_NORM.has(_normStatus(s ? s.name : ''));
+  };
 
   // Build a map of (lead_id -> open followup) so we don't double-count when the lead
   // also has a next_followup_at that matches its open followup row.
@@ -36,6 +57,8 @@ async function api_notifications_mine(token) {
     const lead = leadsById[Number(f.lead_id)];
     const isForMe = Number(f.user_id) === Number(me.id);
     if (!isForMe && !isMine(lead)) return;
+    // Only show follow-ups whose current lead status is in the allowed list.
+    if (!_isAllowedLeadStatus(lead)) return;
     items.push({
       id: f.id, lead_id: f.lead_id, due_at: f.due_at, note: f.note || '',
       lead_name: lead?.name || '', lead_phone: lead?.phone || '',
@@ -48,6 +71,7 @@ async function api_notifications_mine(token) {
     if (!l.next_followup_at) return;
     if (followupByLead[Number(l.id)]) return;
     if (!isMine(l) && Number(l.assigned_to) !== Number(me.id)) return;
+    if (!_isAllowedLeadStatus(l)) return;
     items.push({
       id: null, lead_id: l.id, due_at: l.next_followup_at, note: '',
       lead_name: l.name || '', lead_phone: l.phone || '',

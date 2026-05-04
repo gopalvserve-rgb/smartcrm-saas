@@ -19,12 +19,23 @@ const CONFIG_KEYS = [
   'DUPLICATE_POLICY', 'DUPLICATE_WINDOW_HOURS', 'DUPLICATE_MATCH_FIELDS', 'DEFAULT_LEAD_COLUMNS',
   'EMAIL_NOTIFY_ENABLED', 'SMTP_HOST', 'SMTP_PORT', 'SMTP_SECURE', 'SMTP_USER', 'SMTP_PASSWORD',
   'EMAIL_NOTIFY_FROM', 'EMAIL_NOTIFY_SUBJECT_PREFIX', 'FOLLOWUP_REMIND_MIN',
+  // SMTP (new)
+  'SMTP_FROM', 'SMTP_ENCRYPTION', 'EMAIL_CHARSET', 'EMAIL_BCC', 'EMAIL_SIGNATURE', 'EMAIL_SUPPORT_TEXT', 'BASE_URL',
+  // Per-event notification toggles
+  'NOTIFY_NEW_LEAD', 'NOTIFY_LEAD_ASSIGNED', 'NOTIFY_NEW_DEVICE_LOGIN',
+  'NOTIFY_MORNING_FOLLOWUPS', 'NOTIFY_DAY_END',
+  // Auto-dial: when a new lead is created, push a "📞 Tap to call" notification
+  // to the assignee's mobile in addition to the standard "lead assigned" alert.
+  'LEAD_AUTODIAL_ON',
+  // AI call summary / transcription master switch. '1' (default) = on,
+  // '0' = paused (worker won't process new recordings + UI hides the
+  // AI panel). Useful for tenants that don't want to spend on Gemini
+  // or have privacy concerns.
+  'AI_TRANSCRIPTION_ENABLED',
   'SHOW_LEADS_HEADER',
   // CSV of NAV item IDs the admin has hidden in the sidebar for this tenant.
-  'HIDDEN_NAV_IDS',
-  // AI call summary / transcription master switch. '1' (default) = on,
-  // '0' = paused. Per-tenant setting.
-  'AI_TRANSCRIPTION_ENABLED'
+  // E.g. "newleads,overdue,upcoming,whatsbot" hides those four entries.
+  'HIDDEN_NAV_IDS'
 ];
 
 const SENSITIVE_KEYS = ['META_APP_SECRET', 'META_PAGE_ACCESS_TOKEN', 'WHATSAPP_ACCESS_TOKEN', 'SMTP_PASSWORD'];
@@ -117,6 +128,74 @@ async function api_admin_clearLogo(token) {
   return { ok: true };
 }
 
+/* ---------- Email templates + test send ---------- */
+async function api_admin_emailTemplatesList(token) {
+  const me = await authUser(token);
+  if (me.role !== 'admin') throw new Error('Admin only');
+  const mailer = require('../utils/mailer');
+  const events = mailer.SUPPORTED_EVENTS;
+  const rows = await db.getAll('email_templates').catch(() => []);
+  // Ensure every supported event has a row (auto-seed on demand)
+  for (const ev of events) {
+    if (!rows.find(r => r.event_type === ev.id)) {
+      const id = await db.insert('email_templates', {
+        event_type: ev.id, name: ev.label,
+        subject: ev.default_subject, body_html: ev.default_body,
+        is_active: 1, updated_at: db.nowIso()
+      });
+      rows.push({ id, event_type: ev.id, name: ev.label,
+        subject: ev.default_subject, body_html: ev.default_body, is_active: 1 });
+    }
+  }
+  // Return ordered + decorated with metadata
+  return events.map(ev => {
+    const row = rows.find(r => r.event_type === ev.id) || {};
+    return {
+      ...ev,
+      id: row.id, subject: row.subject, body_html: row.body_html,
+      is_active: row.is_active, updated_at: row.updated_at
+    };
+  });
+}
+
+async function api_admin_emailTemplateSave(token, payload) {
+  const me = await authUser(token);
+  if (me.role !== 'admin') throw new Error('Admin only');
+  const p = payload || {};
+  if (!p.event_type) throw new Error('event_type required');
+  const existing = await db.findOneBy('email_templates', 'event_type', p.event_type).catch(() => null);
+  const row = {
+    event_type: p.event_type,
+    name: p.name || p.event_type,
+    subject: p.subject || '',
+    body_html: p.body_html || '',
+    is_active: p.is_active != null ? (p.is_active ? 1 : 0) : 1,
+    updated_at: db.nowIso()
+  };
+  if (existing) { await db.update('email_templates', existing.id, row); return { ok: true, id: existing.id }; }
+  const id = await db.insert('email_templates', row);
+  return { ok: true, id };
+}
+
+async function api_admin_emailTestSend(token, payload) {
+  const me = await authUser(token);
+  if (me.role !== 'admin') throw new Error('Admin only');
+  const to = (payload && payload.to) || me.email;
+  if (!to) throw new Error('Recipient email required');
+  const mailer = require('../utils/mailer');
+  await mailer.testSmtp(to);
+  return { ok: true, sent_to: to };
+}
+
+async function api_admin_emailTriggerCron(token, which) {
+  const me = await authUser(token);
+  if (me.role !== 'admin') throw new Error('Admin only');
+  const mailer = require('../utils/mailer');
+  if (which === 'morning') return await mailer.sendMorningFollowups();
+  if (which === 'day_end') return await mailer.sendDayEndReport();
+  throw new Error('Unknown cron: ' + which);
+}
+
 async function api_admin_urls(token) {
   const me = await authUser(token);
   if (me.role !== 'admin') throw new Error('Admin only');
@@ -172,12 +251,85 @@ async function api_admin_testWhatsApp(token) {
   } catch (e) { return { ok: false, error: e.message }; }
 }
 
+/**
+ * api_admin_wipeHrData — one-shot data deletion for HR-side categories.
+ * Lets the admin wipe Leaves / Tasks / Attendance / Salary data when they
+ * want a clean slate (e.g. starting a new fiscal year, decommissioning a
+ * test environment, GDPR right-to-erasure, etc.) without needing direct
+ * database access.
+ *
+ * Args:
+ *   - categories: subset of ['leaves','tasks','attendance','salary']
+ *   - confirm:    must equal 'WIPE-NOW' (typed by the admin in the UI)
+ *
+ * Returns:  { ok: true, deleted: { leaves: N, tasks: N, ... } }
+ *
+ * Behaviour notes:
+ *   - DELETE statements run inside a single transaction so a failure
+ *     anywhere rolls everything back.
+ *   - When 'attendance' is selected, location_pings is wiped first
+ *     (FK references attendance.id ON DELETE CASCADE — but we delete
+ *     explicitly so the result count is reported transparently).
+ *   - Lead data, user accounts, leads/customers, etc. are NEVER touched
+ *     by this endpoint. Only the four HR categories.
+ */
+async function api_admin_wipeHrData(token, categories, confirm) {
+  const me = await authUser(token);
+  if (me.role !== 'admin') throw new Error('Admin only');
+  if (String(confirm || '').trim() !== 'WIPE-NOW') {
+    throw new Error('Confirmation phrase must be exactly: WIPE-NOW');
+  }
+  const cats = Array.isArray(categories) ? categories : [];
+  const allowed = new Set(['leaves', 'tasks', 'attendance', 'salary']);
+  const picked = cats.filter(c => allowed.has(String(c).toLowerCase()));
+  if (!picked.length) throw new Error('Pick at least one category to wipe');
+
+  const deleted = {};
+  // Run inside a transaction so partial failures don't leave half-wiped
+  // state. db.query already uses a pooled client; for transactionality
+  // we acquire one client and run BEGIN / COMMIT manually.
+  const client = await db.pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const cat of picked) {
+      if (cat === 'attendance') {
+        // location_pings has a FK to attendance(id). Delete it first so
+        // the count we report is accurate; the CASCADE would handle it
+        // but explicit DELETE makes the audit trail clearer.
+        const lp = await client.query('DELETE FROM location_pings');
+        deleted.location_pings = lp.rowCount || 0;
+        const at = await client.query('DELETE FROM attendance');
+        deleted.attendance = at.rowCount || 0;
+      } else if (cat === 'leaves') {
+        const r = await client.query('DELETE FROM leaves');
+        deleted.leaves = r.rowCount || 0;
+      } else if (cat === 'tasks') {
+        const r = await client.query('DELETE FROM tasks');
+        deleted.tasks = r.rowCount || 0;
+      } else if (cat === 'salary') {
+        const r = await client.query('DELETE FROM salaries');
+        deleted.salaries = r.rowCount || 0;
+      }
+    }
+    await client.query('COMMIT');
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    throw new Error('Wipe failed: ' + e.message);
+  } finally {
+    client.release();
+  }
+  return { ok: true, deleted };
+}
+
 module.exports = {
   api_company_info,
   api_admin_getConfig, api_admin_config,
   api_admin_setConfig, api_admin_saveConfig,
   api_admin_regenerateApiKey,
   api_admin_uploadLogo, api_admin_clearLogo,
+  api_admin_emailTemplatesList, api_admin_emailTemplateSave,
+  api_admin_emailTestSend, api_admin_emailTriggerCron,
   api_admin_urls,
-  api_admin_testMeta, api_admin_subscribeMetaLeadgen, api_admin_testWhatsApp
+  api_admin_testMeta, api_admin_subscribeMetaLeadgen, api_admin_testWhatsApp,
+  api_admin_wipeHrData
 };

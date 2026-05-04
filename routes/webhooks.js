@@ -416,6 +416,27 @@ async function _createLeadFromWebhook(lead) {
 }
 
 // -------------------- Calendly inbound webhook --------------------
+/**
+ * POST /hook/calendly/:token
+ *
+ * Calendly POSTs here when an invitee creates or cancels a meeting.
+ * The :token in the URL identifies the rep — each user has a unique
+ * users.calendly_webhook_token they paste into Calendly's webhook
+ * config (Integrations → Webhooks → Add).
+ *
+ * On invitee.created: find a matching lead by email/phone (preferring
+ * one assigned to this rep), then create a follow-up at the booked
+ * start_time and add a remark "📅 Meeting confirmed for ...".
+ * If no lead matches, auto-create one with source=Calendly so the
+ * booking isn't lost.
+ *
+ * On invitee.canceled: mark the most recent open follow-up done and
+ * log a cancellation remark.
+ *
+ * Always returns 200 unless the URL token is missing/wrong, so
+ * Calendly doesn't keep retrying on benign data issues. Errors are
+ * logged for admin triage.
+ */
 async function calendlyEvent(req, res) {
   try {
     const token = String(req.params.token || '').trim();
@@ -428,6 +449,7 @@ async function calendlyEvent(req, res) {
     const kind = ev.event || (ev.payload && ev.payload.event) || '';
     const p = ev.payload || ev;
 
+    // Calendly's body shape varies a bit by plan / API version. Be defensive.
     const inviteeEmail = String(p.email || (p.invitee && p.invitee.email) || '').trim().toLowerCase();
     const inviteeName  = String(p.name  || (p.invitee && p.invitee.name)  || '').trim();
     const qa = Array.isArray(p.questions_and_answers)
@@ -463,18 +485,22 @@ async function calendlyEvent(req, res) {
           name: inviteeName || inviteeEmail || 'Calendly booking',
           phone: inviteePhone || '',
           email: inviteeEmail || '',
-          source: 'Calendly', source_ref: 'webhook',
-          status_id: _newStatusId, assigned_to: rep.id,
+          source: 'Calendly',
+          source_ref: 'webhook',
+          status_id: _newStatusId,
+          assigned_to: rep.id,
           notes: 'Auto-created from Calendly booking · ' + eventName,
           created_by: rep.id,
-          created_at: db.nowIso(), updated_at: db.nowIso(),
+          created_at: db.nowIso(),
+          updated_at: db.nowIso(),
           last_status_change_at: db.nowIso(),
           next_followup_at: startTime || null
         });
         lead = await db.findOneBy('leads', 'id', newLeadId);
       } else if (startTime) {
         await db.update('leads', lead.id, {
-          next_followup_at: startTime, updated_at: db.nowIso()
+          next_followup_at: startTime,
+          updated_at: db.nowIso()
         });
       }
       if (startTime && lead) {

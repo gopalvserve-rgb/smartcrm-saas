@@ -394,6 +394,8 @@ async function api_recording_aiSummary(token, recId) {
   if (!r) throw new Error('Recording not found');
   if (!r.ai_processed_at) return { status: 'pending' };
   if (r.ai_error) {
+    // Still surface rating fields even when AI failed/disabled, so the
+    // manual-rating UI works regardless of AI status.
     return {
       status: 'failed',
       error: r.ai_error,
@@ -429,6 +431,9 @@ async function api_recording_aiSummary(token, recId) {
 
 /**
  * Manually rate a call recording (1-5 stars).
+ * Anyone with auth can rate their own calls; managers/admins can rate
+ * anyone's. Saves rating, rating_by (current user), rating_notes,
+ * rated_at. Pass rating: null to clear an existing rating.
  */
 async function api_recording_rate(token, recId, rating, notes) {
   const me = await authUser(token);
@@ -447,6 +452,10 @@ async function api_recording_rate(token, recId, rating, notes) {
   return { ok: true, recording_id: id, rating: rating == null ? null : Number(rating) };
 }
 
+/**
+ * Admin / rep can trigger re-processing — clears the AI fields and
+ * the worker will pick the row up on the next tick.
+ */
 async function api_recording_aiReprocess(token, recId) {
   const me = await authUser(token);
   const id = Number(recId);
@@ -459,6 +468,7 @@ async function api_recording_aiReprocess(token, recId) {
       WHERE id = $1`,
     [id]
   );
+  // Kick the worker immediately rather than waiting for the next tick.
   try {
     const { processRecording } = require('../utils/aiCallSummary');
     setImmediate(() => processRecording(id).catch(e => console.warn('[ai-summary] reprocess failed:', e.message)));
@@ -466,6 +476,10 @@ async function api_recording_aiReprocess(token, recId) {
   return { ok: true, reprocessing: true, recording_id: id };
 }
 
+/**
+ * Apply the AI's suggested status to the lead and optionally schedule
+ * a follow-up at the suggested date. One-click "do what the AI said".
+ */
 async function api_recording_applySuggestion(token, recId, opts) {
   const me = await authUser(token);
   opts = opts || {};
@@ -478,8 +492,10 @@ async function api_recording_applySuggestion(token, recId, opts) {
   const r = rows[0];
   if (!r) throw new Error('Recording not found');
   if (!r.lead_id) throw new Error('Recording has no lead — cannot apply suggestion');
+
   const lead = await db.findById('leads', r.lead_id);
   if (!lead) throw new Error('Lead not found');
+
   const updates = {};
   if (opts.applyStatus !== false && r.suggested_status_id && Number(r.suggested_status_id) !== Number(lead.status_id)) {
     updates.status_id = r.suggested_status_id;
@@ -488,18 +504,22 @@ async function api_recording_applySuggestion(token, recId, opts) {
   if (Object.keys(updates).length > 0) {
     await db.update('leads', lead.id, Object.assign(updates, { updated_at: db.nowIso() }));
   }
+
+  // Schedule follow-up if requested + AI gave a time
   let followup_id = null;
   if (opts.applyFollowup !== false && r.next_followup_days != null) {
     const due = new Date(Date.now() + Number(r.next_followup_days) * 86400000);
     due.setHours(11, 0, 0, 0);
     const ins = await db.insert('followups', {
-      lead_id: lead.id, user_id: lead.assigned_to || me.id,
+      lead_id: lead.id,
+      user_id: lead.assigned_to || me.id,
       due_at: due.toISOString(),
       note: 'AI-suggested follow-up: ' + (r.summary || '').slice(0, 200),
       is_done: 0
     }).catch(() => null);
     followup_id = ins ? ins.id : null;
   }
+
   return { ok: true, status_changed: !!updates.status_id, followup_id };
 }
 
@@ -568,9 +588,10 @@ module.exports = {
   api_call_history,
   api_my_recordings,
   api_recordings_delete,
-  _findLeadByPhone,
   api_recording_aiSummary,
   api_recording_aiReprocess,
   api_recording_applySuggestion,
+  api_recording_rate,
+  _findLeadByPhone,
   api_recording_recentInsights
 };

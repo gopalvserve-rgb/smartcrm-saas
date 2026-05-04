@@ -231,7 +231,7 @@ async function api_wb_emb_signin(token, code, phoneNumberId, wabaId) {
   try {
     const r = await _registerWithCentralForwarder({
       phoneNumberId, wabaId,
-      tenantName: (await db.getConfig('COMPANY_NAME', '')) || 'Stockbox CRM',
+      tenantName: (await db.getConfig('COMPANY_NAME', '')) || 'Lead CRM',
       baseUrl: (process.env.BASE_URL || '').replace(/\/+$/, '') || ''
     });
     registerOk = r.ok; registerErr = r.error || '';
@@ -660,8 +660,41 @@ async function _sendText({ to, text, replyTo, leadId, userId }, cfg) {
   return { status: r.status, body: r.body, wa_message_id: waMsgId, error: errorText };
 }
 
+async function _sendMedia({ to, mediaType, mediaUrl, caption, leadId, userId }, cfg) {
+  const c = cfg || await _cfg();
+  const body = {
+    messaging_product: 'whatsapp',
+    to: _normalizePhone(to, c.defaultCC),
+    type: mediaType,
+    [mediaType]: { link: mediaUrl, caption: caption || undefined }
+  };
+  const r = await _graphPost(`${c.phoneId}/messages`, body, c);
+  const waMsgId = r.body?.messages?.[0]?.id || null;
+  const errorText = r.body?.error?.message || null;
+  try {
+    await db.query(
+      `INSERT INTO whatsapp_messages (lead_id, user_id, direction, from_number, to_number, body, wa_message_id, status, message_type, media_url, error_text)
+       VALUES ($1, $2, 'out', $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [leadId || null, userId || null, c.phoneId, body.to, caption || '', waMsgId, r.body?.error ? 'failed' : 'sent', mediaType, mediaUrl, errorText]
+    );
+    if (leadId) {
+      try {
+        require('./tat').logAction(leadId, 'whatsapp_out', userId || null, {
+          preview: caption || '[' + mediaType + ']',
+          error: errorText || null, type: mediaType
+        });
+      } catch (_) {}
+    }
+  } catch (_) {}
+  return { status: r.status, body: r.body, wa_message_id: waMsgId, error: errorText };
+}
+
 /**
- * Send media by WhatsApp media_id (obtained from /api/wa/upload).
+ * Send media by WhatsApp media_id (obtained from /api/wa/upload). Cleaner
+ * than the link= variant because it doesn't require us to expose the file
+ * publicly. The local mediaUrl (our /api/wa/attachment/:id endpoint) is
+ * still saved into whatsapp_messages.media_url so the chat thread can
+ * render the preview locally.
  */
 async function _sendMediaById({ to, mediaType, mediaId, filename, caption, leadId, userId, mediaUrl }, cfg) {
   const c = cfg || await _cfg();
@@ -698,7 +731,11 @@ async function _sendMediaById({ to, mediaType, mediaId, filename, caption, leadI
 }
 
 /**
- * Upload a buffer to the WhatsApp Media API and return { id, mime_type }.
+ * Upload a file to the WhatsApp Media API. Returns { id, mime_type } where
+ * `id` is the WhatsApp media_id usable in subsequent /messages calls for
+ * up to 30 days. Throws on Graph API errors.
+ *
+ * Args: buffer (Buffer), mimeType (e.g. 'image/jpeg'), filename, cfg
  */
 async function _uploadMediaToWhatsApp(buffer, mimeType, filename, cfg) {
   const c = cfg || await _cfg();
@@ -717,6 +754,39 @@ async function _uploadMediaToWhatsApp(buffer, mimeType, filename, cfg) {
   return { id: j.id, mime_type: mimeType };
 }
 
+// ---------- Live Chat ---------------------------------------------
+
+/**
+ * If a chat just got assigned to user `newOwnerId`, mirror that on the
+ * matching lead so reports / kanban / dashboards all line up with who's
+ * actually handling the conversation. No-op if no lead is linked to
+ * the phone, or if the lead is already owned by the same user.
+ *
+ * Called from every code path that changes a chat owner:
+ *   - api_wb_chat_assign   (admin / manager picks an agent)
+ *   - api_wb_chat_send     (auto-claim on send by a non-admin)
+ *   - _autoAssignChat      (inbound auto-routing rule)
+ */
+async function _mirrorLeadOwner(phoneDigits, newOwnerId, actorId) {
+  if (!phoneDigits || !newOwnerId) return;
+  const lead = await _findLeadByPhoneDigits(phoneDigits);
+  if (!lead) return;
+  if (Number(lead.assigned_to) === Number(newOwnerId)) return;
+  try {
+    await db.update('leads', lead.id, { assigned_to: Number(newOwnerId) });
+    try {
+      require('./tat').logAction(lead.id, 'reassigned', actorId || null, {
+        from: lead.assigned_to, to: Number(newOwnerId),
+        reason: 'wa_chat_assignment'
+      });
+    } catch (_) {}
+  } catch (_) {}
+}
+
+/**
+ * Find the lead linked to a phone number, by exact digits match against
+ * leads.phone OR leads.whatsapp. Returns null if no lead found.
+ */
 async function _findLeadByPhoneDigits(digits) {
   if (!digits) return null;
   try {
@@ -733,6 +803,13 @@ async function _findLeadByPhoneDigits(digits) {
 //  Auto-assignment rules (round-robin / least-busy / lead-owner / manual)
 // =====================================================================
 
+/**
+ * Read the current auto-assign settings. Stored in admin_config so they
+ * persist without a schema migration.
+ *   mode  — 'lead_owner' | 'round_robin' | 'least_busy' | 'manual'
+ *   pool  — CSV of user IDs eligible for round-robin / least-busy
+ *   rrIdx — last assigned index (round-robin state)
+ */
 async function _autoAssignSettings() {
   const [mode, poolCsv, rrIdx] = await Promise.all([
     db.getConfig('WA_AUTO_ASSIGN_MODE',     'lead_owner'),
@@ -746,18 +823,33 @@ async function _autoAssignSettings() {
   };
 }
 
+/**
+ * Pick the next agent for a new inbound chat, based on the active rule.
+ * Returns a userId or null. Never throws.
+ */
 async function _pickAutoAssignee(phone, leadId, leadAssignedTo) {
   try {
     const s = await _autoAssignSettings();
+
+    // 'manual' — admin will assign by hand
     if (s.mode === 'manual') return null;
+
+    // 'lead_owner' — natural owner from the linked lead, falls back to null
     if (s.mode === 'lead_owner') return Number(leadAssignedTo) || null;
+
     if (!s.pool.length) return Number(leadAssignedTo) || null;
+
+    // 'round_robin' — pick s.pool[rrIdx % len], then advance the counter
     if (s.mode === 'round_robin') {
       const idx = ((s.rrIdx % s.pool.length) + s.pool.length) % s.pool.length;
       const pick = s.pool[idx];
-      try { await db.setConfig('WA_AUTO_ASSIGN_RR_INDEX', String(s.rrIdx + 1)); } catch (_) {}
+      try {
+        await db.setConfig('WA_AUTO_ASSIGN_RR_INDEX', String(s.rrIdx + 1));
+      } catch (_) {}
       return Number(pick) || null;
     }
+
+    // 'least_busy' — agent in pool with fewest active (open) chats today
     if (s.mode === 'least_busy') {
       try {
         const r = await db.query(
@@ -777,13 +869,20 @@ async function _pickAutoAssignee(phone, leadId, leadAssignedTo) {
         return Number(bestUid) || null;
       } catch (_) { return Number(leadAssignedTo) || null; }
     }
+
     return Number(leadAssignedTo) || null;
   } catch (_) { return null; }
 }
 
+/**
+ * Apply the auto-assign rule for a brand-new chat (no explicit
+ * assignment yet). Persists the result into wa_chat_assignments +
+ * wa_chat_assignment_log so the chat list shows the agent immediately.
+ */
 async function _autoAssignChat(phone, leadId, leadAssignedTo) {
   const phoneDigits = String(phone || '').replace(/\D/g, '');
   if (!phoneDigits) return null;
+  // Don't override an existing explicit assignment
   try {
     const r = await db.query(
       `SELECT assigned_to FROM wa_chat_assignments WHERE phone = $1 LIMIT 1`,
@@ -804,9 +903,16 @@ async function _autoAssignChat(phone, leadId, leadAssignedTo) {
       phone: phoneDigits, assigned_to: pick, assigned_by: null, note: 'auto'
     });
   } catch (_) {}
+  // Mirror onto the lead so the rest of the CRM (kanban, reports,
+  // dashboards) follows who's actually owning the conversation.
+  await _mirrorLeadOwner(phoneDigits, pick, null);
   return pick;
 }
 
+/**
+ * Admin-only API: read the current auto-assign settings + the user roster
+ * so the settings UI can populate the multi-select.
+ */
 async function api_wb_assign_settings_get(token) {
   const me = await authUser(token);
   if (me.role !== 'admin') throw new Error('Admin only');
@@ -816,6 +922,10 @@ async function api_wb_assign_settings_get(token) {
   return { mode: s.mode, pool: s.pool, users };
 }
 
+/**
+ * Admin-only API: save the auto-assign settings.
+ *   payload: { mode, pool: [userId, ...] }
+ */
 async function api_wb_assign_settings_save(token, payload) {
   const me = await authUser(token);
   if (me.role !== 'admin') throw new Error('Admin only');
@@ -825,10 +935,18 @@ async function api_wb_assign_settings_save(token, payload) {
   const pool = Array.isArray(p.pool) ? p.pool.map(Number).filter(n => Number.isFinite(n) && n > 0) : [];
   await db.setConfig('WA_AUTO_ASSIGN_MODE', p.mode);
   await db.setConfig('WA_AUTO_ASSIGN_POOL', pool.join(','));
+  // Reset round-robin counter when the pool changes so we don't skip names.
   await db.setConfig('WA_AUTO_ASSIGN_RR_INDEX', '0');
   return { ok: true, mode: p.mode, pool };
 }
 
+/**
+ * Resolve the agent currently handling a conversation. Priority:
+ *   1. Explicit row in wa_chat_assignments (set via api_wb_chat_assign,
+ *      à la WATI / Interakt's "assign to agent")
+ *   2. Lead's assigned_to (the natural owner)
+ *   3. null — orphan thread, only admins can see
+ */
 async function _resolveChatOwner(phoneDigits, lead) {
   try {
     const r = await db.query(
@@ -840,6 +958,11 @@ async function _resolveChatOwner(phoneDigits, lead) {
   return Number(lead?.assigned_to) || null;
 }
 
+/**
+ * Build a map of { phone -> { assigned_to, assigned_at } } for a list of
+ * phone numbers. Used by api_wb_chat_threads to hydrate the thread list
+ * with the current assigned agent in one round-trip.
+ */
 async function _chatAssignmentsByPhone(phones) {
   if (!phones || !phones.length) return {};
   try {
@@ -854,6 +977,12 @@ async function _chatAssignmentsByPhone(phones) {
   } catch (_) { return {}; }
 }
 
+/**
+ * Privacy gate for the live-chat module. Admins can see every conversation
+ * on the API number. Everyone else can only see conversations whose
+ * resolved owner is in their visibility tree. Threads with NO owner are
+ * admin-only — non-admins shouldn't see "stranger" inbound messages.
+ */
 async function _canSeeThread(me, visibleSet, ownerId) {
   if (me.role === 'admin') return true;
   const owner = Number(ownerId);
@@ -861,45 +990,16 @@ async function _canSeeThread(me, visibleSet, ownerId) {
   return visibleSet.has(owner);
 }
 
-async function _sendMedia({ to, mediaType, mediaUrl, caption, leadId, userId }, cfg) {
-  const c = cfg || await _cfg();
-  const body = {
-    messaging_product: 'whatsapp',
-    to: _normalizePhone(to, c.defaultCC),
-    type: mediaType,
-    [mediaType]: { link: mediaUrl, caption: caption || undefined }
-  };
-  const r = await _graphPost(`${c.phoneId}/messages`, body, c);
-  const waMsgId = r.body?.messages?.[0]?.id || null;
-  const errorText = r.body?.error?.message || null;
-  try {
-    await db.query(
-      `INSERT INTO whatsapp_messages (lead_id, user_id, direction, from_number, to_number, body, wa_message_id, status, message_type, media_url, error_text)
-       VALUES ($1, $2, 'out', $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [leadId || null, userId || null, c.phoneId, body.to, caption || '', waMsgId, r.body?.error ? 'failed' : 'sent', mediaType, mediaUrl, errorText]
-    );
-    if (leadId) {
-      try {
-        require('./tat').logAction(leadId, 'whatsapp_out', userId || null, {
-          preview: caption || '[' + mediaType + ']',
-          error: errorText || null, type: mediaType
-        });
-      } catch (_) {}
-    }
-  } catch (_) {}
-  return { status: r.status, body: r.body, wa_message_id: waMsgId, error: errorText };
-}
-
-// ---------- Live Chat ---------------------------------------------
-
 /**
  * Conversation list — group whatsapp_messages by the OTHER party's number.
  * Returns one row per contact with last message preview, lead_id link,
- * and unread count.
+ * and unread count. Filtered by what the caller is allowed to see.
  */
 async function api_wb_chat_threads(token) {
   const me = await authUser(token);
   const visible = new Set((await getVisibleUserIds(me)).map(Number));
+
+  // Pull last 1000 messages, group by counterpart
   const { rows } = await db.query(
     `SELECT id, lead_id, direction, from_number, to_number, body, message_type, status, read_at, created_at
        FROM whatsapp_messages
@@ -924,6 +1024,8 @@ async function api_wb_chat_threads(token) {
     if (m.direction === 'in' && !m.read_at) t.unread++;
     if (!t.lead_id && m.lead_id) t.lead_id = m.lead_id;
   });
+
+  // Hydrate with lead name + assignee, then drop threads the user can't see.
   const leadIds = [...new Set([...threads.values()].map(t => t.lead_id).filter(Boolean))];
   let leadById = {};
   if (leadIds.length) {
@@ -969,6 +1071,7 @@ async function api_wb_chat_messages(token, phone) {
   // from the WhatsApp icon on the leads list). The threads-LIST is the
   // strict surface that hides other agents' work; once you have the
   // phone, you're allowed to see the history.
+
   const { rows } = await db.query(
     `SELECT id, direction, body, message_type, media_url, status, reply_to,
             created_at, read_at, delivered_at, error_text, template_name
@@ -978,6 +1081,7 @@ async function api_wb_chat_messages(token, phone) {
        LIMIT 500`,
     [p]
   );
+  // Mark inbound messages as read
   try {
     await db.query(
       `UPDATE whatsapp_messages SET read_at = NOW() WHERE direction = 'in' AND from_number = $1 AND read_at IS NULL`,
@@ -993,6 +1097,8 @@ async function api_wb_chat_send(token, payload) {
   if (!p.phone) throw new Error('phone required');
   if (!p.text && !p.media_url && !p.media_id) throw new Error('Empty message');
   const cfg = await _cfg();
+
+  // Resolve lead_id from phone.
   let leadId = p.lead_id || null;
   const ph = String(p.phone).replace(/\D/g, '');
   const lead = await _findLeadByPhoneDigits(ph);
@@ -1025,9 +1131,13 @@ async function api_wb_chat_send(token, payload) {
         phone: ph, assigned_to: me.id, assigned_by: me.id, note: 'auto-claim on send'
       });
     } catch (_) {}
+    // Mirror onto the lead so kanban/reports follow the new owner
+    await _mirrorLeadOwner(ph, me.id, me.id);
   }
+
   let r;
   if (p.media_id) {
+    // Media uploaded via /api/wa/upload — send by WA media_id.
     r = await _sendMediaById({
       to: p.phone, mediaType: p.media_type || 'image', mediaId: p.media_id,
       filename: p.filename || undefined, caption: p.text, leadId, userId: me.id,
@@ -1045,23 +1155,37 @@ async function api_wb_chat_send(token, payload) {
 
 /**
  * Assign a chat thread to a specific agent (à la WATI / Interakt).
+ * Admins, managers, and team_leaders can change the assignment. Reps
+ * can only assign chats to themselves (claim a chat). Writes the
+ * current assignment to wa_chat_assignments and appends an audit row
+ * to wa_chat_assignment_log.
+ *
  * Args: (token, { phone, user_id, note? })
+ *   - user_id may be null/0 to UNASSIGN (chat falls back to lead.assigned_to)
  */
 async function api_wb_chat_assign(token, payload) {
   const me = await authUser(token);
   const p = payload || {};
   const phone = String(p.phone || '').replace(/\D/g, '');
   if (!phone) throw new Error('phone required');
+
   let newOwner = p.user_id == null || p.user_id === '' ? null : Number(p.user_id);
   if (newOwner !== null && !Number.isFinite(newOwner)) throw new Error('Invalid user_id');
+
+  // Permissions
   const isPriv = (me.role === 'admin' || me.role === 'manager' || me.role === 'team_leader');
-  if (!isPriv && newOwner !== Number(me.id)) {
-    throw new Error('Only admins / managers / team-leaders can assign chats to other agents');
+  if (!isPriv) {
+    // Non-priv users may only claim a chat for themselves.
+    if (newOwner !== Number(me.id)) {
+      throw new Error('Only admins / managers / team-leaders can assign chats to other agents');
+    }
   }
   if (newOwner !== null) {
     const u = await db.findById('users', newOwner);
     if (!u) throw new Error('User not found');
   }
+
+  // Upsert
   await db.query(
     `INSERT INTO wa_chat_assignments (phone, assigned_to, assigned_by, assigned_at, note)
      VALUES ($1, $2, $3, NOW(), $4)
@@ -1075,9 +1199,17 @@ async function api_wb_chat_assign(token, payload) {
   await db.insert('wa_chat_assignment_log', {
     phone, assigned_to: newOwner, assigned_by: me.id, note: p.note || null
   });
+  // Mirror onto the lead — when admin/manager assigns a chat to a rep,
+  // the lead also belongs to that rep without needing a rule.
+  if (newOwner) await _mirrorLeadOwner(phone, newOwner, me.id);
   return { ok: true, phone, assigned_to: newOwner };
 }
 
+/**
+ * Return the assignment history for a phone number (newest first).
+ * Used by the chat header to show who currently owns the chat plus
+ * a small "↻ Reassigned 3 times" trail.
+ */
 async function api_wb_chat_assignments_list(token, phone) {
   await authUser(token);
   const p = String(phone || '').replace(/\D/g, '');
@@ -1386,8 +1518,12 @@ async function api_wb_activity_clear(token) {
 }
 
 /**
- * Hourly trim — drop wa_activity_log rows older than 24 h.
- * Stops the table from bloating; 24 h is plenty for troubleshooting.
+ * Background trim: drop wa_activity_log rows older than 24 h.
+ * Called every 60 min by a setInterval in server.js. The table grows
+ * fast (every Meta delivery / read receipt / inbound message + every
+ * outbound send all log here), so without this it bloats and slows
+ * the Activity Log render. 24 h of recent data is plenty for
+ * troubleshooting; longer history was never useful in practice.
  */
 async function trimActivityLog() {
   try {
@@ -1519,16 +1655,19 @@ async function expressEvent(req, res) {
     // top-level `object` field. We accept any of:
     //   { object: 'whatsapp_business_account', entry: [...] }
     //   { entry: [...] }
-    //   { payload: { object: ..., entry: [...] } }
-    //   { data: { entry: [...] } }
-    //   "<json string>"   (text/plain body)
+    //   { payload: { object: ..., entry: [...] } }   // wrapped
+    //   { data: { entry: [...] } }                    // wrapped
+    //   "<json string>"                              // text/plain body
     let body = req.body || {};
     if (typeof body === 'string') {
       try { body = JSON.parse(body); } catch (_) { body = {}; }
     }
+    // Unwrap one common nesting level
     if (!body.entry && body.payload && body.payload.entry) body = body.payload;
     if (!body.entry && body.data && body.data.entry) body = body.data;
 
+    // Always log the raw inbound payload so the user can review every webhook
+    // hit, regardless of whether we end up acting on it.
     try {
       await _logActivity({
         category: 'webhook_in', name: body.object || 'forwarded',
@@ -1538,8 +1677,9 @@ async function expressEvent(req, res) {
       });
     } catch (_) {}
 
-    // Process anything with the right SHAPE (entry[].changes[].value)
-    // — object is no longer a hard gate so forwarders can strip it.
+    // Process any payload that has the right SHAPE (entry[].changes[].value
+    // with messages or statuses). object is no longer a hard gate — your
+    // forwarder may strip it. The shape itself is unique to WA Cloud API.
     if (!Array.isArray(body.entry)) return;
     for (const entry of body.entry || []) {
       for (const change of entry.changes || []) {
@@ -1667,7 +1807,8 @@ async function _handleInbound(m, value) {
     }
   } catch (e) { console.warn('[wb] save inbound failed:', e.message); }
 
-  // Auto-assign via the active rule (lead_owner / round_robin / least_busy / manual)
+  // Auto-assign the chat if no explicit assignment exists yet — applies
+  // the active rule (lead_owner / round_robin / least_busy / manual).
   try {
     let leadAssignedTo = null;
     if (leadId) {
@@ -1749,9 +1890,6 @@ module.exports = {
   // Worker + scheduled tasks
   startCampaignWorker,
   trimActivityLog,
-  // Internal — exposed so other modules (e.g. customers.js) can fire
-  // a templated WhatsApp without redoing the cfg / merge / log dance.
-  _sendTemplate, _renderMerge,
   // Helpers exported for the file-upload Express route in server.js
   _cfg, _uploadMediaToWhatsApp, _findLeadByPhoneDigits, _canSeeThread,
   getVisibleUserIds

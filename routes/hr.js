@@ -536,7 +536,17 @@ async function api_salary_report(token, month) {
   return { month, rows: hydrated, totals };
 }
 
-/** Generate an HTML payslip for a single salary record. Returns a blob-ready HTML. */
+/** Generate an HTML payslip for a single salary record. Returns a blob-ready HTML.
+ *
+ *  Layout matches the Celeste Abode reference template:
+ *    - Centered company logo + name with a gold underline
+ *    - Title row: "Salary Slip" + month-year label
+ *    - 5-row × 4-col employee details grid (ID, Bank, DOJ, Designation, PAN
+ *      on the left; Name, A/C No., LOP, STD, Worked on the right)
+ *    - Earnings + Deductions table with Actual + Earned columns
+ *    - Gross Earnings, Gross Deductions, Net Salary footer rows
+ *    - "computer generated payslip" footer line
+ */
 async function api_salary_payslip(token, salaryId) {
   const me = await authUser(token);
   const s = await db.findById('salaries', salaryId);
@@ -545,50 +555,192 @@ async function api_salary_payslip(token, salaryId) {
   const u = await db.findById('users', s.user_id);
   const bank = await db.findOneBy('bank_details', 'user_id', s.user_id);
   const company = (await db.getConfig('COMPANY_NAME', process.env.COMPANY_NAME)) || 'Lead CRM';
-  const maskedAcc = bank?.account_number ? '****' + String(bank.account_number).slice(-4) : '';
-  const fmt = n => '₹ ' + Number(n || 0).toFixed(2);
-  const [year, mm] = String(s.month).split('-');
-  const monthLabel = new Date(Number(year), Number(mm) - 1, 1).toLocaleString('en-US', { month: 'long', year: 'numeric' });
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Payslip — ${u?.name || ''} — ${s.month}</title>
-<style>body{font-family:-apple-system,Segoe UI,sans-serif;max-width:720px;margin:2rem auto;padding:1rem;color:#0f172a}
-h1{margin:0 0 .2rem;color:#6366f1}
-h2{font-size:1rem;color:#475569;font-weight:600;margin:0 0 1.2rem}
-table{width:100%;border-collapse:collapse;margin:1rem 0}
-th,td{text-align:left;padding:.5rem .75rem;border-bottom:1px solid #e2e8f0}
-.right{text-align:right}
-.totals td{font-weight:700;background:#f1f5f9}
-.note{color:#64748b;font-size:.85rem;margin-top:1rem}
-@media print{body{margin:0}}
-</style></head><body>
-<h1>${company}</h1>
-<h2>Payslip — ${monthLabel}</h2>
-<table>
-  <tr><th>Employee</th><td>${u?.name || ''}</td><th>Role</th><td>${u?.role || ''}</td></tr>
-  <tr><th>Department</th><td>${u?.department || '—'}</td><th>Designation</th><td>${u?.designation || '—'}</td></tr>
-  <tr><th>Month</th><td>${s.month}</td><th>Generated</th><td>${new Date().toLocaleDateString()}</td></tr>
-  ${bank ? `<tr><th>Bank</th><td>${bank.bank_name || '—'}</td><th>A/c</th><td>${maskedAcc}</td></tr>` : ''}
-</table>
-<table>
-  <thead><tr><th>Earnings</th><th class="right">Amount</th><th>Deductions</th><th class="right">Amount</th></tr></thead>
-  <tbody>
-    <tr>
-      <td>Base salary</td><td class="right">${fmt(s.base)}</td>
-      <td>Total deductions</td><td class="right">${fmt(s.deductions)}</td>
+  const logoUrl = (await db.getConfig('COMPANY_LOGO_URL', '')) || '';
+
+  // Period parsing: month is stored as 'YYYY-MM'
+  const [yearStr, mmStr] = String(s.month || '').split('-');
+  const year  = Number(yearStr) || new Date().getFullYear();
+  const month = Number(mmStr) || (new Date().getMonth() + 1);
+  const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const monthShort = MONTH_SHORT[month - 1];
+  const yyShort    = String(year).slice(-2);
+  // "Feb ~ Mar' 26" style header — show current → next month for the slip period
+  const nextMonthShort = MONTH_SHORT[month % 12];
+  const periodLabel = `${monthShort} ~ ${nextMonthShort}' ${yyShort}`;
+
+  // Standard / worked / LOP days. We don't store LOP separately, so:
+  //   - STD = days in the salary month (calendar days, capped at 30 for
+  //     consistency with Indian payroll convention)
+  //   - LOP = parsed out of salary.notes if it contains "LOP: N" or "LOP=N"
+  //     pattern; otherwise 0
+  //   - Worked = STD - LOP (clamped ≥ 0)
+  const calendarDays = new Date(year, month, 0).getDate();
+  const stdDays = calendarDays;
+  let lopDays = 0;
+  const lopMatch = String(s.notes || '').match(/LOP[:= ]+(\d+)/i);
+  if (lopMatch) lopDays = Math.max(0, Math.min(stdDays, Number(lopMatch[1]) || 0));
+  const workedDays = Math.max(0, stdDays - lopDays);
+
+  // Earned = Actual × (worked/std) — what the employee actually earned
+  // after accounting for unpaid leave. Stored numbers in `salaries` table
+  // are the FULL monthly amounts (Actual); we compute Earned on the fly.
+  const earnedFactor = stdDays ? (workedDays / stdDays) : 1;
+  const baseActual   = Number(s.base || 0);
+  const allowActual  = Number(s.allowances || 0);
+  // Allowance split — convention: 50% HRA, 50% Special. If you ever need
+  // exact figures, store them in the notes as "HRA: x, Special: y" and we
+  // can parse here.
+  const hraActual    = allowActual / 2;
+  const specActual   = allowActual / 2;
+  const baseEarned   = baseActual  * earnedFactor;
+  const hraEarned    = hraActual   * earnedFactor;
+  const specEarned   = specActual  * earnedFactor;
+  const grossActual  = baseActual + allowActual;
+  const grossEarned  = baseEarned + hraEarned + specEarned;
+  const totalDeduct  = Number(s.deductions || 0);
+  const netSalary    = Math.max(0, grossEarned - totalDeduct);
+
+  // Employee ID — combine joining year+month with zero-padded user id.
+  // Falls back to "EMP" + padded id when no joining date is set.
+  let empId;
+  if (u?.joining_date) {
+    const dj = new Date(u.joining_date);
+    if (!isNaN(dj)) {
+      const jy = String(dj.getFullYear()).slice(-2);
+      const jm = String(dj.getMonth() + 1).padStart(2, '0');
+      empId = `${jy}${jm}${String(u.id).padStart(3, '0')}`;
+    } else { empId = 'EMP' + String(u?.id || 0).padStart(4, '0'); }
+  } else { empId = 'EMP' + String(u?.id || 0).padStart(4, '0'); }
+
+  // DOJ formatted as "25-Feb-26"
+  let dojLabel = '—';
+  if (u?.joining_date) {
+    const dj = new Date(u.joining_date);
+    if (!isNaN(dj)) {
+      const dd = String(dj.getDate()).padStart(2, '0');
+      const mm2 = MONTH_SHORT[dj.getMonth()];
+      const yy2 = String(dj.getFullYear()).slice(-2);
+      dojLabel = `${dd}-${mm2}-${yy2}`;
+    }
+  }
+
+  const fmt = n => Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const esc = (str) => String(str == null ? '' : str)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  const html = `<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Payslip — ${esc(u?.name || '')} — ${esc(s.month)}</title>
+<style>
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif;max-width:780px;margin:2rem auto;padding:1.5rem;color:#0f172a;background:#fff}
+  .header{text-align:center;margin-bottom:1.5rem}
+  .header img{max-width:90px;max-height:90px;display:block;margin:0 auto .4rem}
+  .header h1{font-size:1.15rem;margin:.2rem 0 0;font-weight:600;letter-spacing:.02em}
+  .header .rule{height:3px;background:linear-gradient(90deg,transparent 0,#0f172a 8%,#0f172a 35%,#c89b4b 50%,#0f172a 65%,#0f172a 92%,transparent 100%);margin:.75rem auto 0;max-width:780px;border-radius:1px}
+  table{width:100%;border-collapse:collapse;font-size:.88rem}
+  th,td{border:1px solid #1f2937;padding:.45rem .65rem;vertical-align:middle}
+  .title-row td,.title-row th{text-align:center;font-weight:600}
+  .label{font-weight:600;background:#fff}
+  .col-head{font-weight:600;text-align:center;background:#fff}
+  .right{text-align:right}
+  .gross{font-weight:700}
+  .net td{font-weight:700;text-align:right}
+  .net td.lbl{text-align:right;padding-right:.65rem}
+  .net td.amt{text-align:right;width:9rem}
+  .footer{margin-top:1.25rem;text-align:center;color:#475569;font-size:.82rem}
+  @media print{body{margin:0;padding:1rem;max-width:none}.no-print{display:none}}
+</style>
+</head><body>
+  <div class="header">
+    ${logoUrl ? `<img src="${esc(logoUrl)}" alt="${esc(company)}" />` : ''}
+    <h1>${esc(company.toUpperCase())}</h1>
+    <div class="rule"></div>
+  </div>
+
+  <table>
+    <tr class="title-row">
+      <td colspan="3" style="font-weight:600">Salary Slip</td>
+      <td style="font-weight:600;text-align:center">${esc(periodLabel)}</td>
     </tr>
     <tr>
-      <td>Allowances</td><td class="right">${fmt(s.allowances)}</td>
-      <td></td><td></td>
+      <td class="label" style="width:18%">Employee ID</td>
+      <td style="width:32%">${esc(empId)}</td>
+      <td class="label" style="width:18%">Employee Name</td>
+      <td style="width:32%">${esc(u?.name || '')}</td>
     </tr>
-    <tr class="totals">
-      <td>Gross pay</td><td class="right">${fmt(Number(s.base) + Number(s.allowances))}</td>
-      <td>Net pay</td><td class="right">${fmt(s.net_pay)}</td>
+    <tr>
+      <td class="label">Bank</td>
+      <td>${esc(bank?.bank_name || '—')}</td>
+      <td class="label">Bank A/C No.</td>
+      <td>${esc(bank?.account_number || '—')}</td>
     </tr>
-  </tbody>
-</table>
-${s.notes ? `<p class="note"><b>Notes:</b> ${s.notes}</p>` : ''}
-<p class="note">This is a system-generated payslip.</p>
+    <tr>
+      <td class="label">Date of Joining</td>
+      <td>${esc(dojLabel)}</td>
+      <td class="label">LOP Days</td>
+      <td>${lopDays}</td>
+    </tr>
+    <tr>
+      <td class="label">Designation</td>
+      <td>${esc(u?.designation || '—')}</td>
+      <td class="label">STD Days</td>
+      <td>${stdDays}</td>
+    </tr>
+    <tr>
+      <td class="label">PAN No.</td>
+      <td>${esc(u?.pan_number || '—')}</td>
+      <td class="label">Worked Days</td>
+      <td>${workedDays}</td>
+    </tr>
+  </table>
+
+  <table style="margin-top:.65rem">
+    <tr>
+      <th class="col-head">Earnings</th>
+      <th class="col-head">Actual</th>
+      <th class="col-head">Earned</th>
+      <th class="col-head">Deductions</th>
+      <th class="col-head">Amount (Rs.)</th>
+    </tr>
+    <tr>
+      <td>BASIC SALARY</td>
+      <td class="right">${fmt(baseActual)}</td>
+      <td class="right">${fmt(baseEarned)}</td>
+      <td>Professional Tax</td>
+      <td class="right">${fmt(totalDeduct)}</td>
+    </tr>
+    <tr>
+      <td>House Rent Allowances</td>
+      <td class="right">${fmt(hraActual)}</td>
+      <td class="right">${fmt(hraEarned)}</td>
+      <td></td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>Special Allowances</td>
+      <td class="right">${fmt(specActual)}</td>
+      <td class="right">${fmt(specEarned)}</td>
+      <td></td>
+      <td></td>
+    </tr>
+    <tr class="gross">
+      <td>Gross Earnings</td>
+      <td class="right">${fmt(grossActual)}</td>
+      <td class="right">${fmt(grossEarned)}</td>
+      <td>Gross Deductions</td>
+      <td class="right">${fmt(totalDeduct)}</td>
+    </tr>
+    <tr class="net">
+      <td colspan="3" style="border:1px solid transparent"></td>
+      <td class="lbl">Net Salary</td>
+      <td class="amt">${fmt(netSalary)}</td>
+    </tr>
+  </table>
+
+  <p class="footer">**This is computer generated payslip &amp; does required signature and stamp</p>
 </body></html>`;
-  return { html, filename: `payslip-${u?.name || 'user'}-${s.month}.html` };
+  return { html, filename: `payslip-${(u?.name || 'user').replace(/\s+/g, '_')}-${s.month}.html` };
 }
 
 // ---- Bank Details ---------------------------------------------------
