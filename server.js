@@ -67,6 +67,30 @@ app.use(require('cookie-parser')());
 app.use('/saas', express.static(path.join(__dirname, 'public', 'saas')));
 app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'saas', 'index.html')));
 
+// Diagnostic — admin-only smoke test that the Railway egress can
+// actually reach a host:port. Helps debug Gmail SMTP timeouts.
+app.get('/api/saas/debug/tcp', async (req, res) => {
+  const token = (req.headers['x-auth-token'] || req.query.token || '').toString();
+  try { await superAdmin.requireFullAdmin(token); }
+  catch (e) { return res.status(401).json({ error: e.message }); }
+  const host = String(req.query.host || 'smtp.gmail.com');
+  const port = Number(req.query.port || 587);
+  const net = require('net');
+  const start = Date.now();
+  const sock = new net.Socket();
+  let done = false;
+  const finish = (ok, msg) => {
+    if (done) return; done = true;
+    sock.destroy();
+    res.json({ ok, host, port, ms: Date.now() - start, msg });
+  };
+  sock.setTimeout(10000);
+  sock.once('connect', () => finish(true, 'connected'));
+  sock.once('timeout', () => finish(false, 'timeout'));
+  sock.once('error', e => finish(false, e.code + ': ' + e.message));
+  sock.connect(port, host);
+});
+
 // Public brand JSON (used by the landing page)
 app.get('/api/saas/brand', async (_req, res) => {
   try {

@@ -98,15 +98,26 @@ async function _getTransporter() {
   if (typeof c.pass === 'string') c.pass = c.pass.replace(/\s+/g, '');
   const key = JSON.stringify({ host: c.host, port: c.port, user: c.user, secure: c.secure });
   if (_transporter && _key === key) return { transporter: _transporter, cfg: c };
-  _transporter = nodemailer.createTransport({
+  // For smtp.gmail.com use the nodemailer "gmail" service preset which
+  // picks the right host/port/TLS combination automatically — works
+  // around an issue where Railway's egress can stall on direct
+  // smtp.gmail.com:587 connections but works on the service-routed
+  // alternative endpoints.
+  const isGmail = /smtp\.gmail\.com/i.test(c.host);
+  _transporter = nodemailer.createTransport(isGmail ? {
+    service: 'gmail',
+    auth: { user: c.user, pass: c.pass },
+    connectionTimeout: 30000,
+    greetingTimeout:   15000,
+    socketTimeout:     30000
+  } : {
     host: c.host,
     port: c.port,
     secure: c.secure,
     auth: { user: c.user, pass: c.pass },
-    connectionTimeout: 30000,    // 30s for cold TLS handshake to Gmail
+    connectionTimeout: 30000,
     greetingTimeout:   15000,
-    socketTimeout:     30000,
-    pool: false
+    socketTimeout:     30000
   });
   _key = key;
   return { transporter: _transporter, cfg: c };
