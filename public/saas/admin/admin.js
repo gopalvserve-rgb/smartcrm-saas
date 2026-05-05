@@ -212,6 +212,41 @@ function editPackage(p) {
     h('h3', {}, p.id ? 'Edit package' : 'New package'),
     h('button', { class: 'x', onclick: () => m.remove() }, '✕')
   ));
+  // Helper: read a packages.quotas object (or {}), pull the friendly
+  // limit-only fields out for the form, then merge them back on save.
+  // Keeps any future / extra metric the admin set via JSON elsewhere
+  // intact.
+  const _existingQuotas = (() => {
+    let q = p.quotas;
+    if (typeof q === 'string') { try { q = JSON.parse(q); } catch (_) { q = {}; } }
+    return q || {};
+  })();
+  function _quotaInitial(metric) {
+    const m = _existingQuotas[metric];
+    if (!m) return '';                                   // unset → empty (treated as unlimited)
+    if (Number(m.limit) === -1) return '';               // explicit unlimited
+    return String(m.limit != null ? m.limit : '');
+  }
+  function _buildQuotasFromForm(fd) {
+    // Default periods: users one_time (a seat), leads + WA per_month.
+    const out = Object.assign({}, _existingQuotas);
+    const apply = (metric, period) => {
+      const raw = String(fd.get('quota_' + metric) || '').trim();
+      if (raw === '') {
+        // Empty / unspecified → mark as unlimited (-1) so admins can
+        // explicitly carve OUT a previously-limited package.
+        out[metric] = { limit: -1, period };
+      } else {
+        const n = Number(raw);
+        if (Number.isFinite(n) && n >= 0) out[metric] = { limit: n, period };
+      }
+    };
+    apply('users',         'one_time');
+    apply('leads',         'per_month');
+    apply('whatsapp_send', 'per_month');
+    return out;
+  }
+
   const form = h('form', { onsubmit: async ev => {
     ev.preventDefault();
     const fd = new FormData(form);
@@ -224,6 +259,13 @@ function editPackage(p) {
     payload.is_most_popular  = fd.get('is_most_popular') ? 1 : 0;
     payload.is_private       = fd.get('is_private') ? 1 : 0;
     payload.is_default       = fd.get('is_default') ? 1 : 0;
+    // Build quotas object from the three friendly inputs. Drop the
+    // raw quota_* form fields so they don't end up as columns on the
+    // packages row.
+    payload.quotas = _buildQuotasFromForm(fd);
+    delete payload.quota_users;
+    delete payload.quota_leads;
+    delete payload.quota_whatsapp_send;
     try {
       await api('api_saas_packages_save', payload);
       toast('Saved'); m.remove(); navigate('packages');
@@ -250,8 +292,27 @@ function editPackage(p) {
       h('input', { name: 'modules', value: p.modules || '' })),
     h('div', { class: 'field' }, h('label', {}, 'Hidden tabs (CSV)'),
       h('input', { name: 'hidden_tabs', value: p.hidden_tabs || '' })),
-    h('div', { class: 'field' }, h('label', {}, 'Quotas (JSON, e.g. {"users":{"limit":5,"extra_inr":50}})'),
-      h('textarea', { name: 'quotas', rows: 3 }, typeof p.quotas === 'string' ? p.quotas : JSON.stringify(p.quotas || {}, null, 2))),
+    // ---- Plan limits / quotas ------------------------------------
+    // Three friendly numeric inputs. Leave any blank to mean
+    // "unlimited" (saved as limit=-1 internally). Internally these
+    // map to packages.quotas JSONB which the tenant API dispatcher
+    // checks before every relevant call (utils/quota.js).
+    h('div', { class: 'field', style: { borderTop: '1px solid #e5e7eb', paddingTop: '1rem', marginTop: '.5rem' } },
+      h('label', { style: { fontWeight: '600', fontSize: '.95rem' } }, '📊 Plan limits'),
+      h('p', { class: 'muted', style: { fontSize: '.82rem', margin: '.25rem 0 .75rem' } },
+        'Caps each tenant on this plan can\'t exceed. Leave blank for unlimited. Enforced live — calls that would push a tenant over the cap return HTTP 402 Plan limit reached.')
+    ),
+    h('div', { class: 'row' },
+      h('div', { class: 'field' }, h('label', {}, 'Total users'),
+        h('input', { name: 'quota_users', type: 'number', min: '0', step: '1', placeholder: 'Unlimited', value: _quotaInitial('users') }),
+        h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.2rem' } }, 'Active users in the workspace.')),
+      h('div', { class: 'field' }, h('label', {}, 'Leads / month'),
+        h('input', { name: 'quota_leads', type: 'number', min: '0', step: '1', placeholder: 'Unlimited', value: _quotaInitial('leads') }),
+        h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.2rem' } }, 'New leads created in the current calendar month — counter resets on the 1st.')),
+      h('div', { class: 'field' }, h('label', {}, 'WhatsApp sends / month'),
+        h('input', { name: 'quota_whatsapp_send', type: 'number', min: '0', step: '1', placeholder: 'Unlimited', value: _quotaInitial('whatsapp_send') }),
+        h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.2rem' } }, 'Outbound WhatsApp messages — chats + bulk campaigns combined. Resets monthly.'))
+    ),
     h('div', { class: 'row' },
       h('label', { style: { display: 'flex', gap: '.5rem', alignItems: 'center' } },
         h('input', { type: 'checkbox', name: 'is_enabled', checked: p.is_enabled !== 0 ? true : null, style: { width: 'auto' } }),

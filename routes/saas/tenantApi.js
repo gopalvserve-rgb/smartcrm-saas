@@ -28,6 +28,58 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 
 const db = require('../../db/pg');
+const quota = require('../../utils/quota');
+
+/**
+ * Map of fn-names that consume a quota slot. The `metric` is the key
+ * inside packages.quotas (see utils/quota.js). The `count` callback
+ * computes how many slots this specific call would consume — most
+ * are 1, but bulk operations (CSV upload, bulk-WA) need to look at
+ * the args to size the request properly.
+ *
+ * Listed explicitly rather than guessed-by-pattern so a typo or a
+ * new endpoint doesn't accidentally bypass enforcement.
+ */
+const QUOTA_GATES = {
+  // Each user-create burns one seat
+  api_users_save: { metric: 'users', count: (args) => {
+    // api_users_save(token, user) — only count NEW users (no id)
+    const u = args && args[1];
+    return (u && !u.id) ? 1 : 0;
+  } },
+  // Each lead-create burns one slot. Bulk uploads count as N.
+  api_leads_create: { metric: 'leads', count: () => 1 },
+  api_leads_bulkCreate: { metric: 'leads', count: (args) => {
+    // api_leads_bulkCreate(token, rows, assign) → rows is the array
+    const rows = args && args[1];
+    return Array.isArray(rows) ? rows.length : 1;
+  } },
+  // Each outbound WA send burns one slot (1-to-1 chat send).
+  api_wb_chat_send: { metric: 'whatsapp_send', count: () => 1 },
+  // Bulk WhatsApp campaign — count by recipient list size if we can
+  // get it, otherwise fall back to 1 (the campaign queue itself will
+  // re-check per-message via api_wb_chat_send).
+  api_wb_campaigns_send: { metric: 'whatsapp_send', count: (args) => {
+    const p = args && args[1];
+    if (p && Array.isArray(p.recipients)) return p.recipients.length;
+    if (p && Number(p.recipients_total) > 0) return Number(p.recipients_total);
+    return 1;
+  } }
+};
+
+/**
+ * Run the quota gate for an incoming dispatcher call. No-ops when
+ * there's no tenant on the request (single-tenant deployments) or
+ * when this fn isn't gated.
+ */
+async function _checkQuotaForCall(req, fn, args) {
+  if (!req || !req.tenant) return;
+  const gate = QUOTA_GATES[fn];
+  if (!gate) return;
+  const inc = Math.max(0, Number(gate.count(args)) || 0);
+  if (inc <= 0) return;             // e.g. user UPDATE with id present — no new seat
+  await quota.requireQuota(req.tenant, gate.metric, inc);
+}
 
 // All the route files that make up the tenant CRM. Listed explicitly
 // rather than auto-loaded so a typo or stray file doesn't accidentally
@@ -78,6 +130,25 @@ for (const name of ROUTE_FILES) {
 // swapped.
 const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
 const TENANT_TOKEN_TTL = '30d';
+
+/**
+ * Tenant-side quota report. The SPA can call this to render
+ * "Plan usage" cards (Settings → Plan) without rebuilding the
+ * counters. Returns null per-metric when there's no quota set
+ * for the package (i.e. unlimited).
+ */
+async function api_quota_report(_token /*, ignored */) {
+  const store = (db.tenantStorage && db.tenantStorage.getStore()) || {};
+  const tenant = store.tenant;
+  if (!tenant) return { metrics: {}, package_id: null };
+  const out = {};
+  for (const metric of quota.METRICS) {
+    try { out[metric] = await quota.getUsage(tenant, metric); }
+    catch (_) { out[metric] = null; }
+  }
+  return { metrics: out, package_id: tenant.package_id };
+}
+API.api_quota_report = api_quota_report;
 
 async function api_auth_ssoLogin(_token, payload) {
   const ssl = String((payload && payload.ssl) || '').trim();
@@ -147,12 +218,23 @@ async function expressHandler(req, res) {
     return res.status(404).json({ error: 'Unknown function: ' + fn });
   }
   try {
+    // Quota gate: rejects plan-limit-exceeded calls BEFORE the handler
+    // runs so we never write a half-row that puts the tenant over.
+    // Throws with .quotaExceeded = true → caught below and returned
+    // as HTTP 402 so the SPA can render a "Upgrade plan" prompt.
+    await _checkQuotaForCall(req, fn, args || []);
     const result = await API[fn](...(args || []));
     res.json({ ok: true, result });
   } catch (e) {
     // Mirror the control-plane error shape so the SPA's unified api()
     // helper can keep its current parsing logic.
     const msg = e && e.message ? e.message : String(e);
+    if (e && e.quotaExceeded) {
+      return res.status(402).json({
+        error: msg, quota_exceeded: true,
+        metric: e.metric || null, usage: e.usage || null
+      });
+    }
     res.status(400).json({ error: msg });
   }
 }
