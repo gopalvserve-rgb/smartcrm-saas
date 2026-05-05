@@ -51,6 +51,34 @@ async function _cfg() {
 }
 
 /**
+ * Resolve the status_id to use when auto-creating a lead from an
+ * inbound WhatsApp message. Resolution order (first match wins):
+ *
+ *   1. cfg.defaultStatus → must point to a row that still exists in
+ *      the statuses table. If admin deleted / renamed the row that
+ *      WB_DEFAULT_STATUS_ID was pointing at, we fall through to step 2
+ *      instead of saving a dangling FK.
+ *   2. Status named exactly "New" (case-insensitive). Same canonical
+ *      fallback that /hook/website (website / ad-form / lead-source
+ *      webhooks) already uses, so WhatsApp inbound matches everywhere
+ *      else in the CRM — both filter bucket AND status colour.
+ *   3. The first status by sort_order — last-resort.
+ *   4. null. Lead still saves; rep can pick a status manually.
+ */
+async function _resolveDefaultStatusId(cfg) {
+  const statuses = await db.getAll('statuses');
+  if (cfg && cfg.defaultStatus) {
+    const wanted = Number(cfg.defaultStatus);
+    if (wanted && statuses.some(s => Number(s.id) === wanted)) return wanted;
+  }
+  const byName = statuses.find(s => /^new$/i.test(String(s.name || '').trim()));
+  if (byName) return Number(byName.id);
+  const sorted = statuses.slice().sort((a, b) => (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0));
+  if (sorted.length) return Number(sorted[0].id);
+  return null;
+}
+
+/**
  * Normalise a phone number to E.164-without-plus, the format Meta requires.
  *
  * Inputs we typically see:
@@ -1794,10 +1822,14 @@ async function _handleInbound(m, value) {
     else if (cfg.autoLeadOn) {
       // Create a fresh lead for this inbound contact
       const profileName = (value?.contacts || []).find(c => c.wa_id === m.from)?.profile?.name || from;
+      // Resolve via _resolveDefaultStatusId so a missing / dangling
+      // WB_DEFAULT_STATUS_ID falls through to the canonical "New"
+      // status — fixes leads landing under a phantom filter with the
+      // wrong colour because the FK was unset.
       const newId = await db.insert('leads', {
         name: profileName, phone: from, whatsapp: from,
         source: cfg.autoLeadSource || 'WhatsApp',
-        status_id: cfg.defaultStatus || null,
+        status_id: await _resolveDefaultStatusId(cfg),
         assigned_to: cfg.defaultUser || null,
         created_at: db.nowIso(), updated_at: db.nowIso()
       });
