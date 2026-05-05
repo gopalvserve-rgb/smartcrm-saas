@@ -175,7 +175,15 @@ function _extractApiKey(req) {
 
 async function websiteHook(req, res) {
   const key = _extractApiKey(req);
-  if (!process.env.WEBSITE_API_KEY || key !== process.env.WEBSITE_API_KEY) {
+  // Resolve from DB first, fall back to env. Admin UI saves to db.config
+  // (Admin → Website API → Regenerate). process.env only persists for
+  // the lifetime of the current process — on every Railway restart the
+  // env-only check would reject every webhook until an admin re-saved
+  // the key. Match the pattern integrations.js's leadSourceWebhook
+  // already uses.
+  const expected = (await db.getConfig('WEBSITE_API_KEY', '').catch(() => '')) ||
+                   process.env.WEBSITE_API_KEY || '';
+  if (!expected || key !== expected) {
     return res.status(401).json({ error: 'Invalid API key' });
   }
   try {
@@ -276,7 +284,15 @@ async function websiteHook(req, res) {
 
 async function otherHook(req, res) {
   const key = _extractApiKey(req);
-  if (!process.env.WEBSITE_API_KEY || key !== process.env.WEBSITE_API_KEY) {
+  // Resolve from DB first, fall back to env. Admin UI saves to db.config
+  // (Admin → Website API → Regenerate). process.env only persists for
+  // the lifetime of the current process — on every Railway restart the
+  // env-only check would reject every webhook until an admin re-saved
+  // the key. Match the pattern integrations.js's leadSourceWebhook
+  // already uses.
+  const expected = (await db.getConfig('WEBSITE_API_KEY', '').catch(() => '')) ||
+                   process.env.WEBSITE_API_KEY || '';
+  if (!expected || key !== expected) {
     return res.status(401).json({ error: 'Invalid API key' });
   }
   try {
