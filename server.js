@@ -562,6 +562,102 @@ app.post('/api', (req, res, next) => {
   return tenantApi.expressHandler(req, res, next);
 });
 
+// ---- /api/sample.csv (tenant-scoped CSV download) -----------------
+// The tenant SPA's bulk-upload page links to /api/sample.csv expecting
+// a real CSV. Without an explicit handler here the request falls
+// through to the JSON-404 catch-all below, which returned
+//   {"error":"Not found: GET /api/sample.csv"}
+// — and the browser saved that JSON as the "sample sheet". Mount the
+// same handler the original Celeste server uses, but only inside a
+// tenant scope so the custom-field columns come from THIS tenant's DB.
+function _csvCell(v) {
+  const s = v == null ? '' : String(v);
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+app.get('/api/sample.csv', async (req, res, next) => {
+  if (!req.tenant) return next();   // root-level call → fall through to JSON 404
+
+  // Pull custom fields so the template includes every cf_<key> column
+  // currently defined in this tenant's DB. Runs inside tenantStorage,
+  // so tenantDb.getAll() picks up the right pool automatically.
+  let customFields = [];
+  try {
+    customFields = (await tenantDb.getAll('custom_fields'))
+      .filter(c => Number(c.is_active) !== 0 && c.key)
+      .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
+  } catch (_) { /* fresh tenant with no custom fields — ok */ }
+
+  const baseCols = [
+    // 1. Contact
+    'name', 'phone', 'alt_phone', 'whatsapp', 'email',
+    // 2. Routing — status / source / product accepted by NAME, assigned_to by email-or-name-or-id
+    'status', 'source', 'source_ref', 'product', 'assigned_to',
+    // 3. Address
+    'address', 'city', 'state', 'pincode', 'country', 'company',
+    // 4. Qualification
+    'value', 'currency', 'qualified', 'tags',
+    // 5. Activity
+    'next_followup_at', 'notes',
+    // 6. Migration timestamps — admins-only override; blank = "now"
+    'created_at', 'last_status_change_at',
+    // 7. Marketing attribution (Google Ads / UTM)
+    'gclid', 'gad_campaignid',
+    'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content'
+  ];
+  const cfCols = customFields.map(c => 'cf_' + c.key);
+  const headers = [...baseCols, ...cfCols];
+
+  const sampleRow = (overrides = {}) => {
+    const row = {
+      name: '', phone: '', alt_phone: '', whatsapp: '', email: '',
+      status: '', source: '', source_ref: '', product: '', assigned_to: '',
+      address: '', city: '', state: '', pincode: '', country: '', company: '',
+      value: '', currency: '', qualified: '', tags: '',
+      next_followup_at: '', notes: '',
+      created_at: '', last_status_change_at: '',
+      gclid: '', gad_campaignid: '',
+      utm_source: '', utm_medium: '', utm_campaign: '', utm_term: '', utm_content: ''
+    };
+    customFields.forEach(c => { row['cf_' + c.key] = ''; });
+    return Object.assign(row, overrides);
+  };
+
+  const rows = [
+    sampleRow({
+      name: 'John Doe', phone: '+919876543210', whatsapp: '+919876543210',
+      email: 'john@example.com',
+      status: 'New', source: 'Website', product: 'Basic Plan',
+      assigned_to: 'sales1@yourcompany.com',
+      address: '12 MG Road', city: 'Mumbai', state: 'MH',
+      pincode: '400001', country: 'India', company: 'Acme Corp',
+      value: '50000', currency: 'INR', qualified: '1',
+      tags: 'hot,vip',
+      next_followup_at: '2026-05-01 10:00',
+      created_at: '2025-12-15 09:30',
+      last_status_change_at: '2026-04-22 11:45',
+      notes: 'Demo requested — interested in premium tier'
+    }),
+    sampleRow({
+      name: 'Jane Smith', phone: '+919876543211', email: 'jane@example.com',
+      status: 'Contacted', source: 'Facebook Lead Ad',
+      assigned_to: 'Rajesh Kumar',
+      city: 'Delhi', tags: 'vip',
+      utm_source: 'facebook', utm_medium: 'paid_social',
+      utm_campaign: 'spring_2026'
+    }),
+    sampleRow({
+      name: 'Alex Kumar', phone: '+917777777777',
+      source: 'WhatsApp', city: 'Bangalore'
+    })
+  ];
+
+  const lines = [
+    headers.join(','),
+    ...rows.map(r => headers.map(h => _csvCell(r[h])).join(','))
+  ];
+  res.type('text/csv').attachment('lead-crm-sample.csv').send(lines.join('\n'));
+});
+
 // ---- Tenant SPA shell ---------------------------------------------
 // Serve the per-tenant CRM SPA. After attachTenant rewrites
 // /t/<slug>/ to /, GET / lands here when there's a tenant on the
