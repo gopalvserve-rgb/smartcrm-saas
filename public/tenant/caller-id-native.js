@@ -157,6 +157,22 @@
   });
 
   // ---- 4. Start listening once the user is logged in -----------
+  //
+  // Boot flow design notes:
+  //
+  //  • CallerId.start() resolves with { ok, listening } — even on a
+  //    permission *denial* the Promise still resolves, with ok:false.
+  //    The previous code only handled .catch(), so a denied permission
+  //    silently triggered the SUCCESS toast which is confusing.
+  //
+  //  • The CRM works fine without Caller ID. A permission denial is
+  //    NOT a hard failure and shouldn't look like one. Earlier we
+  //    shipped a big orange "Caller ID failed — open Settings → …"
+  //    toast that made users think the whole app had crashed.
+  //    Replacing with a softer, dismissable one-time banner.
+  //
+  //  • `crm_callerid_nag_v1` in localStorage = permanent dismissal.
+  //
   function tryStart() {
     if (!_token()) {
       // Not logged in yet — wait for it
@@ -164,16 +180,64 @@
       return;
     }
     CallerId.start().then(r => {
-      console.log('[caller-id] started', r);
-      if (typeof toast === 'function') {
-        toast('📞 Caller ID active — incoming calls will auto-log');
+      console.log('[caller-id] start result', r);
+      if (r && r.ok === false) {
+        _showCallerIdNudgeOnce();
+        return;
+      }
+      if (!sessionStorage.getItem('crm_callerid_announced_v1')) {
+        try { sessionStorage.setItem('crm_callerid_announced_v1', '1'); } catch (_) {}
+        if (typeof toast === 'function') {
+          toast('📞 Caller ID active — incoming calls will auto-log');
+        }
       }
     }).catch(e => {
       console.warn('[caller-id] start failed', e);
-      if (typeof toast === 'function') {
-        toast('Caller ID failed — open Settings → Apps → Lead CRM → Permissions and grant Phone, Notifications, Storage', 'warn');
-      }
+      _showCallerIdNudgeOnce();
     });
+  }
+
+  function _showCallerIdNudgeOnce() {
+    try {
+      if (localStorage.getItem('crm_callerid_nag_v1') === '1') return;
+    } catch (_) {}
+    if (document.querySelector('.crm-callerid-nudge')) return;
+    const host = document.body || document.documentElement;
+    if (!host) return;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'crm-callerid-nudge';
+    wrap.style.cssText = 'position:fixed;left:12px;right:12px;bottom:84px;z-index:9998;background:#1e293b;color:#f1f5f9;border:1px solid #334155;border-left:4px solid #6366f1;border-radius:10px;padding:.85rem 1rem;box-shadow:0 8px 24px rgba(0,0,0,.35);font-size:.88rem;line-height:1.45;display:flex;flex-direction:column;gap:.65rem;';
+    wrap.innerHTML =
+      '<div style="font-weight:600;color:#f8fafc">📞 Optional: enable Caller ID</div>' +
+      '<div style="color:#cbd5e1">Grant <b>Phone</b>, <b>Notifications</b>, and <b>Audio</b> permissions to see lead details when a customer calls. The CRM works fine either way — this only powers the popup card on incoming calls.</div>' +
+      '<div style="display:flex;gap:.5rem;flex-wrap:wrap;justify-content:flex-end">' +
+      '  <button class="cid-skip" style="background:transparent;color:#94a3b8;border:0;padding:.4rem .75rem;font:inherit;cursor:pointer">Don\'t show again</button>' +
+      '  <button class="cid-later" style="background:#334155;color:#f1f5f9;border:0;padding:.4rem .9rem;border-radius:6px;font:inherit;cursor:pointer">Later</button>' +
+      '  <button class="cid-open" style="background:#6366f1;color:#fff;border:0;padding:.4rem .9rem;border-radius:6px;font:inherit;cursor:pointer;font-weight:600">Open Settings</button>' +
+      '</div>';
+    host.appendChild(wrap);
+
+    function _gone() { try { wrap.remove(); } catch (_) {} }
+    wrap.querySelector('.cid-later').onclick = _gone;
+    wrap.querySelector('.cid-skip').onclick = function () {
+      try { localStorage.setItem('crm_callerid_nag_v1', '1'); } catch (_) {}
+      _gone();
+    };
+    wrap.querySelector('.cid-open').onclick = function () {
+      try {
+        // Each tenant's APK has its own package id, so we ask Capacitor
+        // for the running app's id at runtime instead of hardcoding.
+        const App = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
+        if (App && typeof App.getInfo === 'function' && typeof App.openUrl === 'function') {
+          App.getInfo().then(info => {
+            const pkg = (info && info.id) || '';
+            if (pkg) App.openUrl({ url: 'package:' + pkg }).catch(() => {});
+          }).catch(() => {});
+        }
+      } catch (_) {}
+      _gone();
+    };
   }
   tryStart();
 
