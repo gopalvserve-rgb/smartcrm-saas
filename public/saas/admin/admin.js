@@ -1107,21 +1107,46 @@ VIEWS.settings = async (view) => {
 };
 
 // ---------- Router ---------------------------------------------
+//
+// Render guard: VIEW fns are async, so two route() calls can race —
+// each will `view.innerHTML = ''` early, then their awaited
+// appendChild()s land sequentially and the view gets rendered twice.
+// (This is exactly why the Tenants list was showing duplicated.)
+//
+// We tag every render with a monotonically increasing token. The view
+// fn awaits its data, then checks the token before appending — if a
+// newer route() has started in the meantime, the old one bails.
+let _routeToken = 0;
+
 async function route() {
   if (!APP.token) return renderLogin();
   if (!APP.user) {
     try { APP.user = await api('api_saas_admin_me'); }
     catch (_) { APP.token = ''; localStorage.removeItem('saas_admin_token'); return renderLogin(); }
   }
+  const myToken = ++_routeToken;
   if (!$('#nav')) renderShell();
   const id = (location.hash.match(/^#\/([a-z]+)/) || [])[1] || 'dashboard';
   document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('active', a.dataset.view === id));
   const view = $('#view'); view.innerHTML = '';
   const fn = VIEWS[id];
   if (!fn) { view.appendChild(h('div', { class: 'empty' }, 'Unknown view')); return; }
-  try { await fn(view); } catch (e) { view.appendChild(h('div', { class: 'error-box' }, e.message)); }
+  try {
+    await fn(view);
+    // If a newer route() has fired while we were awaiting data, our
+    // appendChild()s landed in the now-stale view — wipe them.
+    if (myToken !== _routeToken) view.innerHTML = '';
+  } catch (e) {
+    if (myToken === _routeToken) {
+      view.appendChild(h('div', { class: 'error-box' }, e.message));
+    }
+  }
 }
 
+// Only ONE initial trigger. The script tag lives at the end of <body>,
+// so when this code runs the DOM is already parsed — there's no need
+// for a separate DOMContentLoaded listener (that listener used to fire
+// AFTER the immediate route() call, racing with it and rendering every
+// view twice).
 window.addEventListener('hashchange', route);
-window.addEventListener('DOMContentLoaded', route);
 route();
