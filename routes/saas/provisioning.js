@@ -17,6 +17,7 @@ const bcrypt = require('bcryptjs');
 const { Pool } = require('pg');
 const control = require('../../control/db');
 const mailer = require('./saasMailer');
+const { seedTenantKnowledgeBase } = require('./kbSeed');
 
 function _adminPasswordFromEmail(email) {
   // Stable but unique-per-account starting password. The tenant admin
@@ -82,12 +83,25 @@ async function _seedTenantAdmin(dbName, signup) {
   try {
     const password = _adminPasswordFromEmail(signup.email);
     const hash = bcrypt.hashSync(password, 10);
-    await tPool.query(
+    const ins = await tPool.query(
       `INSERT INTO users (name, email, password_hash, role, is_active, created_at)
        VALUES ($1, $2, $3, 'admin', 1, NOW())
-       ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash`,
+       ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash
+       RETURNING id`,
       [signup.name, signup.email, hash]
     );
+    const adminUserId = ins.rows && ins.rows[0] ? Number(ins.rows[0].id) : 1;
+
+    // Seed the knowledge base with starter how-to articles. Best-effort
+    // — a seed failure shouldn't block provisioning, the operator can
+    // always re-run from /admin → "Re-seed help articles" later.
+    try {
+      const n = await seedTenantKnowledgeBase(tPool, { adminUserId });
+      console.log('[provisioning] seeded ' + n + ' KB articles for ' + dbName);
+    } catch (e) {
+      console.warn('[provisioning] KB seed failed for ' + dbName + ':', e.message);
+    }
+
     return password;
   } finally {
     try { await tPool.end(); } catch (_) {}

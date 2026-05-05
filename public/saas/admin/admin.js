@@ -206,7 +206,7 @@ VIEWS.packages = async (view) => {
 };
 
 function editPackage(p) {
-  const m = h('div', { class: 'modal-bd', onclick: ev => { if (ev.target.classList.contains('modal-bd')) m.remove(); } });
+  const m = h('div', { class: 'modal-bd' });   // Backdrop click does NOT close — must use X. Prevents accidental discards.
   const card = h('div', { class: 'modal' });
   card.appendChild(h('div', { class: 'modal-head' },
     h('h3', {}, p.id ? 'Edit package' : 'New package'),
@@ -372,6 +372,23 @@ VIEWS.tenants = async (view) => {
               onclick: () => loginAsTenant(t)
             }, '🔓 Login as ↗')
           : null,
+        // Re-seed help articles: refreshes the system-seeded knowledge-base
+        // entries (those tagged `system-seed`). Tenant admins keep any
+        // articles they've authored themselves. Useful when we ship new
+        // default articles and want to roll them out to existing tenants.
+        (t.status === 'active' || t.status === 'trial' || t.status === 'pending_delete')
+          ? h('button', {
+              class: 'btn ghost xs', style: { marginRight: '.3rem' },
+              title: 'Re-seed default help articles in this tenant\'s Knowledge tab. Admin-authored articles are preserved.',
+              onclick: async () => {
+                if (!confirm('Re-seed default help articles for ' + (t.org_name || t.slug) + '?\n\nThis replaces the system-seeded articles only — anything the tenant\'s admin has added will be left alone.')) return;
+                try {
+                  const r = await api('api_saas_tenants_reseedKb', t.id);
+                  toast('Re-seeded ' + r.articles + ' articles for ' + (t.org_name || t.slug));
+                } catch (e) { toast('Re-seed failed: ' + e.message, 'err'); }
+              }
+            }, '📚 Re-seed help')
+          : null,
         t.status === 'active'
           ? h('button', { class: 'btn ghost xs', onclick: async () => { await api('api_saas_tenants_suspend', t.id); navigate('tenants'); } }, 'Suspend')
           : h('button', { class: 'btn ghost xs', onclick: async () => { await api('api_saas_tenants_restore', t.id); navigate('tenants'); } }, 'Restore')
@@ -418,7 +435,7 @@ async function openCreateTenant() {
   catch (e) { toast(e.message, 'err'); return; }
   if (!pkgs.length) { toast('Add a package first (Packages tab) before creating a tenant.', 'err'); return; }
 
-  const m = h('div', { class: 'modal-bd', onclick: ev => { if (ev.target.classList.contains('modal-bd')) m.remove(); } });
+  const m = h('div', { class: 'modal-bd' });   // Backdrop click does NOT close — must use X. Prevents accidental discards.
   const card = h('div', { class: 'modal', style: { maxWidth: '560px' } });
   card.appendChild(h('div', { class: 'modal-head' },
     h('h3', {}, '+ Create tenant manually'),
@@ -511,7 +528,7 @@ async function _submitCreateTenant(form, pkgs, modal) {
 }
 
 function showCreateTenantSuccess(r) {
-  const m = h('div', { class: 'modal-bd', onclick: ev => { if (ev.target.classList.contains('modal-bd')) m.remove(); } });
+  const m = h('div', { class: 'modal-bd' });   // Backdrop click does NOT close — must use X. Prevents accidental discards.
   const card = h('div', { class: 'modal', style: { maxWidth: '520px' } });
   card.appendChild(h('div', { class: 'modal-head' },
     h('h3', {}, '✅ Tenant created'),
@@ -757,7 +774,7 @@ async function openErrorDetail(id) {
   try { row = await api('api_saas_errorLogs_get', id); }
   catch (e) { toast(e.message, 'err'); return; }
   if (!row) return;
-  const m = h('div', { class: 'modal-bd', onclick: ev => { if (ev.target.classList.contains('modal-bd')) m.remove(); } });
+  const m = h('div', { class: 'modal-bd' });   // Backdrop click does NOT close — must use X. Prevents accidental discards.
   const card = h('div', { class: 'modal', style: { maxWidth: '780px' } });
   card.appendChild(h('div', { class: 'modal-head' },
     h('h3', {}, '🐞 Error detail · ' + (row.source || 'unknown')),
@@ -843,7 +860,7 @@ async function openWebhookDetail(id) {
   try { row = await api('api_saas_webhookLogs_get', id); }
   catch (e) { toast(e.message, 'err'); return; }
   if (!row) return;
-  const m = h('div', { class: 'modal-bd', onclick: ev => { if (ev.target.classList.contains('modal-bd')) m.remove(); } });
+  const m = h('div', { class: 'modal-bd' });   // Backdrop click does NOT close — must use X. Prevents accidental discards.
   const card = h('div', { class: 'modal', style: { maxWidth: '720px' } });
   card.appendChild(h('div', { class: 'modal-head' },
     h('h3', {}, 'Webhook detail · ' + (row.webhook_type || 'unknown')),
@@ -909,7 +926,7 @@ VIEWS.announcements = async (view) => {
 };
 
 function editAnnouncement(a) {
-  const m = h('div', { class: 'modal-bd', onclick: ev => { if (ev.target.classList.contains('modal-bd')) m.remove(); } });
+  const m = h('div', { class: 'modal-bd' });   // Backdrop click does NOT close — must use X. Prevents accidental discards.
   const card = h('div', { class: 'modal' });
   card.appendChild(h('div', { class: 'modal-head' },
     h('h3', {}, a.id ? 'Edit update' : 'New update'),
@@ -984,7 +1001,7 @@ VIEWS.admins = async (view) => {
 };
 
 function editAdmin(a) {
-  const m = h('div', { class: 'modal-bd', onclick: ev => { if (ev.target.classList.contains('modal-bd')) m.remove(); } });
+  const m = h('div', { class: 'modal-bd' });   // Backdrop click does NOT close — must use X. Prevents accidental discards.
   const card = h('div', { class: 'modal' });
   card.appendChild(h('div', { class: 'modal-head' },
     h('h3', {}, a.id ? 'Edit admin' : 'New admin'),

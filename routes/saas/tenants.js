@@ -12,6 +12,7 @@ const control = require('../../control/db');
 const tenantPool = require('../../utils/tenantPool');
 const provisioning = require('./provisioning');
 const { requireSuperAdmin, requireFullAdmin } = require('./superAdminAuth');
+const { seedTenantKnowledgeBase } = require('./kbSeed');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
 
@@ -293,6 +294,33 @@ async function api_saas_tenants_loginAs(token, tenantId, asEmail) {
   return { ok: true, url, slug: t.slug, as_email: targetEmail, expires_in_s: 300 };
 }
 
+/**
+ * Re-seed the help-articles knowledge base for an existing tenant.
+ * Idempotent: drops only rows tagged 'system-seed' and re-inserts the
+ * canonical set, leaving any admin-authored entries untouched.
+ *
+ * Useful for tenants provisioned before the KB seed shipped, or when we
+ * update the default articles and want to roll them out without forcing
+ * a re-provision.
+ */
+async function api_saas_tenants_reseedKb(token, tenantId) {
+  await requireSuperAdmin(token);
+  const t = await control.findById('tenants', tenantId);
+  if (!t) throw new Error('Tenant not found');
+  if (t.status === 'deleted') throw new Error('Tenant is deleted');
+
+  const pool = tenantPool.poolFor(t);
+  if (!pool) throw new Error('Could not connect to tenant DB');
+  const n = await seedTenantKnowledgeBase(pool, { adminUserId: 1 });
+
+  await control.insert('audit_log', {
+    actor_type: 'super_admin', tenant_id: t.id, event: 'tenant.kb_reseeded',
+    detail: JSON.stringify({ slug: t.slug, articles: n })
+  });
+
+  return { ok: true, articles: n };
+}
+
 module.exports = {
   api_saas_tenants_list,
   api_saas_tenants_get,
@@ -302,5 +330,6 @@ module.exports = {
   api_saas_tenants_restore,
   api_saas_tenants_pendingDelete,
   api_saas_tenants_setModules,
-  api_saas_tenants_loginAs
+  api_saas_tenants_loginAs,
+  api_saas_tenants_reseedKb
 };

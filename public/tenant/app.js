@@ -125,6 +125,12 @@ async function apiRaw(fn, ...args) {
       // call-recordings folder, prompt them with a clear modal so they
       // don't have to discover it via the Dialer tab.
       setTimeout(() => firstRunRecordingPrompt().catch(() => {}), 2500);
+      // First-run product tour — only shown the very first time a user
+      // signs in (flagged in localStorage). Walks them through the
+      // sidebar so they know where Leads / WhatsBot / Reports / etc.
+      // live before they go hunting. See maybeShowFirstRunTour() near
+      // the bottom of this file.
+      setTimeout(() => maybeShowFirstRunTour().catch(() => {}), 1800);
       // If user is already checked in today (came back to app later in
       // the day), resume the 30-min location-ping loop so the trail
       // continues from where the previous session left off.
@@ -4556,6 +4562,11 @@ VIEWS.knowledge = async (view) => {
 
   const toolbar = h('div', { class: 'toolbar', style: { marginBottom: '.75rem' } },
     searchInput,
+    h('button', {
+      class: 'btn ghost',
+      title: 'Replay the welcome walkthrough',
+      onclick: () => { try { localStorage.removeItem('crm_tour_seen_v1'); } catch (_) {} maybeShowFirstRunTour(true); }
+    }, '🎬 Re-watch tour'),
     isAdmin ? h('button', { class: 'btn primary', onclick: () => openKbEditModal(null, refresh) }, '+ Add entry') : null
   );
   right.appendChild(toolbar);
@@ -14186,3 +14197,299 @@ async function showNotifs() {
   );
   document.body.appendChild(modal);
 }
+
+// ===========================================================================
+// First-run product tour
+// ===========================================================================
+//
+// Walks a new tenant user through the sidebar so they understand the layout
+// instead of poking around blindly. Triggered once per browser (flagged in
+// localStorage as `crm_tour_seen_v1`). Users can re-trigger it any time
+// from the Knowledge tab via the "Re-watch product tour" button.
+//
+// Architecture notes:
+//   - One spotlight overlay (semi-transparent backdrop) + one floating
+//     tooltip card. We move the same elements from step to step rather
+//     than re-rendering, which keeps the UX smooth.
+//   - Each step targets a `[data-view="<id>"]` sidebar anchor (or a static
+//     query-selector for things outside the nav like the topbar).
+//   - Before highlighting a nav item we auto-expand its parent group
+//     (`.nav-group.collapsed`) so the user can actually see the link.
+//   - On mobile the sidebar is hidden — we fall back to a simpler "next /
+//     done" walkthrough centered on screen so the tour still adds value.
+//
+// To force-show during development:
+//   localStorage.removeItem('crm_tour_seen_v1'); maybeShowFirstRunTour(true);
+//
+async function maybeShowFirstRunTour(forceShow) {
+  try {
+    if (!forceShow && localStorage.getItem('crm_tour_seen_v1') === '1') return;
+  } catch (_) { /* localStorage disabled — show anyway */ }
+  // Don't fire while another modal is up — feels chaotic.
+  if (document.querySelector('.modal-backdrop, .modal-bd, .crm-tour-overlay')) {
+    return;
+  }
+  // Don't fire on the login screen — only after sign-in (CRM.user is set
+  // when the SPA has booted into the authenticated shell).
+  if (!window.CRM || !CRM.user || !CRM.user.id) return;
+
+  // Tour steps. Order = the journey we want a new user to take.
+  // `selector` is queried fresh each step so a step can also re-target
+  // (e.g. expanding a nav-group changes layout but the anchor still
+  // exists). `placement` is a hint; we clamp to viewport edges in
+  // _positionTooltip().
+  const isAdmin = CRM.user.role === 'admin' || CRM.user.role === 'manager';
+  const steps = [
+    {
+      selector: '#nav, .sidebar',
+      title: '👋 Welcome to your CRM',
+      body: 'Quick 60-second tour so you know where everything lives. Skip any time — you can replay this from <b>Knowledge → Re-watch tour</b>.',
+      placement: 'right'
+    },
+    {
+      selector: '[data-view="leads"]',
+      title: '🎯 Leads',
+      body: 'Your master lead list. Filter by status, source, owner, date — call, WhatsApp, edit or convert from here.',
+      placement: 'right'
+    },
+    {
+      selector: '[data-view="kanban"]',
+      title: '🗂️ Kanban',
+      body: 'Visual pipeline — drag a lead between status columns to update it. Great for daily standups.',
+      placement: 'right'
+    },
+    {
+      selector: '[data-view="followups"]',
+      title: '🔔 Follow-ups',
+      body: 'See every follow-up due today, overdue, or coming up. Mandatory follow-up dates keep nothing slipping through the cracks.',
+      placement: 'right'
+    },
+    {
+      selector: '[data-view="dialer"]',
+      title: '📞 Dialer',
+      body: 'Click-to-call leads in queue, see live talk-time, auto-attach call recordings (Android app), and get AI summaries.',
+      placement: 'right'
+    },
+    {
+      selector: '[data-view="whatsbot"]',
+      title: '💬 WhatsBot',
+      body: 'Reply to WhatsApp chats, send templates, run bulk campaigns, build chatbot flows. Connect your number from Settings → WhatsApp.',
+      placement: 'right'
+    },
+    {
+      selector: '[data-view="reports"]',
+      title: '📉 Reports',
+      body: 'Caller-wise performance, conversion funnel, TAT violations, monthly target tracking — exportable to Excel and CSV.',
+      placement: 'right',
+      adminOnly: true
+    },
+    {
+      selector: '[data-view="knowledge"]',
+      title: '📚 Knowledge base',
+      body: 'Scripts, FAQs, pricing, brochures — anything your team needs while on a call. Admin can add articles from here.',
+      placement: 'right'
+    },
+    {
+      selector: '[data-view="admin"]',
+      title: '⚙️ Settings',
+      body: 'Connect WhatsApp / Facebook Lead Ads, configure statuses, sources, products, custom fields, automation rules, webhooks, integrations.',
+      placement: 'right',
+      adminOnly: true
+    },
+    {
+      selector: '#btn-notif',
+      title: '🔔 Notifications',
+      body: 'New lead assignments, follow-up reminders, team chat pings — all surface here. Click to mark all read.',
+      placement: 'bottom'
+    },
+    {
+      selector: '.topbar-chip[href="#/newleads"]',
+      title: '✨ Quick chips',
+      body: 'Jump straight to today\'s new leads, overdue follow-ups, or what\'s due today — always one click away from the topbar.',
+      placement: 'bottom'
+    },
+    {
+      selector: null,
+      title: '🚀 You\'re all set',
+      body: 'Your account has admin access — you can invite teammates from <b>Users → Add user</b>. Need help? Open <b>Knowledge</b> or contact support. Have a great quarter!',
+      placement: 'center'
+    }
+  ].filter(s => !s.adminOnly || isAdmin);
+
+  let stepIdx = 0;
+
+  // Build overlay + tooltip once; we reposition them per step.
+  const overlay = h('div', { class: 'crm-tour-overlay' });
+  const spotlight = h('div', { class: 'crm-tour-spotlight' });
+  const tooltip = h('div', { class: 'crm-tour-tooltip', role: 'dialog', 'aria-live': 'polite' });
+  overlay.appendChild(spotlight);
+  overlay.appendChild(tooltip);
+
+  // Inject CSS once — keeps this self-contained, no admin.css edits needed.
+  if (!document.getElementById('crm-tour-styles')) {
+    const style = document.createElement('style');
+    style.id = 'crm-tour-styles';
+    style.textContent = `
+      .crm-tour-overlay { position: fixed; inset: 0; z-index: 9999; pointer-events: none; }
+      .crm-tour-overlay::before { content: ''; position: absolute; inset: 0; background: rgba(8,10,18,.62); pointer-events: auto; }
+      .crm-tour-spotlight { position: absolute; border-radius: 12px; box-shadow: 0 0 0 9999px rgba(8,10,18,.62), 0 0 0 3px #6366f1, 0 6px 28px rgba(99,102,241,.55); transition: all .28s cubic-bezier(.2,.7,.2,1.2); pointer-events: none; }
+      .crm-tour-spotlight.center { display: none; }
+      .crm-tour-tooltip { position: absolute; max-width: 360px; min-width: 280px; background: #fff; color: #0f172a; border-radius: 14px; padding: 1rem 1.1rem .9rem; box-shadow: 0 18px 50px rgba(8,10,18,.45), 0 2px 6px rgba(8,10,18,.18); pointer-events: auto; z-index: 1; border: 1px solid #e2e8f0; transition: all .25s ease; }
+      .crm-tour-tooltip h4 { margin: 0 0 .35rem; font-size: 1rem; font-weight: 700; color: #0f172a; line-height: 1.25; }
+      .crm-tour-tooltip p { margin: 0 0 .85rem; font-size: .88rem; line-height: 1.45; color: #334155; }
+      .crm-tour-tooltip .crm-tour-progress { font-size: .72rem; color: #64748b; margin-bottom: .35rem; letter-spacing: .03em; text-transform: uppercase; }
+      .crm-tour-tooltip .crm-tour-actions { display: flex; gap: .5rem; align-items: center; justify-content: space-between; }
+      .crm-tour-tooltip .crm-tour-actions .left, .crm-tour-tooltip .crm-tour-actions .right { display: flex; gap: .4rem; }
+      .crm-tour-tooltip button { font: inherit; padding: .42rem .85rem; border-radius: 8px; border: 1px solid transparent; cursor: pointer; font-weight: 600; font-size: .82rem; }
+      .crm-tour-tooltip .btn-skip { background: transparent; color: #64748b; }
+      .crm-tour-tooltip .btn-skip:hover { color: #0f172a; }
+      .crm-tour-tooltip .btn-prev { background: #f1f5f9; color: #334155; border-color: #e2e8f0; }
+      .crm-tour-tooltip .btn-prev:hover { background: #e2e8f0; }
+      .crm-tour-tooltip .btn-next { background: #6366f1; color: #fff; }
+      .crm-tour-tooltip .btn-next:hover { background: #4f46e5; }
+      .crm-tour-tooltip.center { left: 50% !important; top: 50% !important; transform: translate(-50%, -50%); max-width: 420px; text-align: center; }
+      .crm-tour-tooltip.center h4 { font-size: 1.15rem; }
+      @media (prefers-color-scheme: dark) {
+        .crm-tour-tooltip { background: #1e293b; color: #f1f5f9; border-color: #334155; }
+        .crm-tour-tooltip h4 { color: #f8fafc; }
+        .crm-tour-tooltip p { color: #cbd5e1; }
+        .crm-tour-tooltip .btn-prev { background: #334155; color: #f1f5f9; border-color: #475569; }
+        .crm-tour-tooltip .btn-prev:hover { background: #475569; }
+        .crm-tour-tooltip .btn-skip { color: #94a3b8; }
+        .crm-tour-tooltip .btn-skip:hover { color: #f8fafc; }
+      }
+      @media (max-width: 640px) {
+        .crm-tour-tooltip { max-width: calc(100vw - 28px); left: 14px !important; right: 14px !important; min-width: 0; }
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function _markSeen() {
+    try { localStorage.setItem('crm_tour_seen_v1', '1'); } catch (_) {}
+  }
+  function _end() {
+    _markSeen();
+    overlay.remove();
+    document.removeEventListener('keydown', _onKey);
+    window.removeEventListener('resize', _reposition);
+    window.removeEventListener('scroll', _reposition, true);
+  }
+  function _onKey(ev) {
+    if (ev.key === 'Escape') _end();
+    else if (ev.key === 'ArrowRight' || ev.key === 'Enter') _next();
+    else if (ev.key === 'ArrowLeft') _prev();
+  }
+  function _prev() { if (stepIdx > 0) { stepIdx--; _render(); } }
+  function _next() {
+    if (stepIdx >= steps.length - 1) { _end(); return; }
+    stepIdx++; _render();
+  }
+  function _expandParentGroup(el) {
+    // If the target lives inside a collapsed `.nav-group`, expand it so
+    // the user can see what we're pointing at. Mobile sidebar is a
+    // separate render — bail out gracefully if not found.
+    if (!el) return;
+    const grp = el.closest && el.closest('.nav-group.collapsed');
+    if (grp) {
+      grp.classList.remove('collapsed');
+    }
+  }
+  function _positionTooltip(targetRect, placement) {
+    // Reset any prior absolute classes
+    tooltip.classList.remove('center');
+    spotlight.classList.remove('center');
+    if (!targetRect || placement === 'center') {
+      tooltip.classList.add('center');
+      spotlight.classList.add('center');
+      return;
+    }
+    const pad = 14;
+    const tw = tooltip.offsetWidth || 320;
+    const th = tooltip.offsetHeight || 160;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let top, left;
+    if (placement === 'right') {
+      left = targetRect.right + pad;
+      top = targetRect.top + targetRect.height / 2 - th / 2;
+    } else if (placement === 'left') {
+      left = targetRect.left - tw - pad;
+      top = targetRect.top + targetRect.height / 2 - th / 2;
+    } else if (placement === 'top') {
+      left = targetRect.left + targetRect.width / 2 - tw / 2;
+      top = targetRect.top - th - pad;
+    } else { // bottom
+      left = targetRect.left + targetRect.width / 2 - tw / 2;
+      top = targetRect.bottom + pad;
+    }
+    // Clamp to viewport
+    left = Math.max(8, Math.min(vw - tw - 8, left));
+    top  = Math.max(8, Math.min(vh - th - 8, top));
+    // If clamped left → fall back to bottom placement (better than off-screen)
+    if (placement === 'right' && left + tw > vw - 8) {
+      left = targetRect.left + targetRect.width / 2 - tw / 2;
+      top  = targetRect.bottom + pad;
+      left = Math.max(8, Math.min(vw - tw - 8, left));
+    }
+    tooltip.style.left = left + 'px';
+    tooltip.style.top  = top  + 'px';
+  }
+  function _positionSpotlight(targetRect) {
+    if (!targetRect) { spotlight.classList.add('center'); return; }
+    const pad = 6;
+    spotlight.style.left   = (targetRect.left - pad) + 'px';
+    spotlight.style.top    = (targetRect.top  - pad) + 'px';
+    spotlight.style.width  = (targetRect.width  + pad * 2) + 'px';
+    spotlight.style.height = (targetRect.height + pad * 2) + 'px';
+  }
+  function _reposition() {
+    const step = steps[stepIdx];
+    if (!step) return;
+    const target = step.selector ? document.querySelector(step.selector) : null;
+    if (target) {
+      _expandParentGroup(target);
+      // Wait one frame so layout shifts (group expand) settle before measure.
+      requestAnimationFrame(() => {
+        const r = target.getBoundingClientRect();
+        _positionSpotlight(r);
+        _positionTooltip(r, step.placement);
+      });
+    } else {
+      _positionSpotlight(null);
+      _positionTooltip(null, 'center');
+    }
+  }
+  function _render() {
+    const step = steps[stepIdx];
+    const isLast = stepIdx === steps.length - 1;
+    const isFirst = stepIdx === 0;
+    tooltip.innerHTML = '';
+    tooltip.appendChild(h('div', { class: 'crm-tour-progress' }, 'Step ' + (stepIdx + 1) + ' of ' + steps.length));
+    tooltip.appendChild(h('h4', {}, step.title));
+    const p = h('p', {}); p.innerHTML = step.body; tooltip.appendChild(p);
+
+    const skipBtn = h('button', { class: 'btn-skip', onclick: _end, type: 'button' }, 'Skip tour');
+    const prevBtn = h('button', { class: 'btn-prev', onclick: _prev, type: 'button', disabled: isFirst ? 'disabled' : null }, '← Back');
+    const nextBtn = h('button', { class: 'btn-next', onclick: _next, type: 'button' }, isLast ? 'Got it 🎉' : 'Next →');
+    tooltip.appendChild(h('div', { class: 'crm-tour-actions' },
+      h('div', { class: 'left' }, skipBtn),
+      h('div', { class: 'right' }, isFirst ? null : prevBtn, nextBtn)
+    ));
+
+    _reposition();
+  }
+
+  document.body.appendChild(overlay);
+  document.addEventListener('keydown', _onKey);
+  window.addEventListener('resize', _reposition);
+  window.addEventListener('scroll', _reposition, true);
+  _render();
+}
+
+// Manual / debug hook — re-trigger the tour from the Knowledge tab or
+// from the console: `restartProductTour()`.
+window.restartProductTour = function () {
+  try { localStorage.removeItem('crm_tour_seen_v1'); } catch (_) {}
+  return maybeShowFirstRunTour(true);
+};
