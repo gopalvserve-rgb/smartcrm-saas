@@ -80,12 +80,21 @@
         // so this is the ONLY path that boots the app. Relative URLs
         // so they resolve to /t/<slug>/app.js when the page is
         // /t/<slug>/.
-        var s = document.createElement('script');
-        s.src = 'app.js';
-        document.body.appendChild(s);
-        var c = document.createElement('script');
-        c.src = 'caller-id-native.js';
-        document.body.appendChild(c);
+        //
+        // CAREFUL: this <script> is in <head>, so when the no-ssl
+        // path runs synchronously document.body doesn't exist yet
+        // and appendChild throws "Cannot read properties of null".
+        // Wait for DOMContentLoaded before injecting scripts.
+        function injectSpaScripts() {
+          var s = document.createElement('script');
+          s.src = 'app.js';
+          document.body.appendChild(s);
+          var c = document.createElement('script');
+          c.src = 'caller-id-native.js';
+          document.body.appendChild(c);
+        }
+        if (document.body) injectSpaScripts();
+        else document.addEventListener('DOMContentLoaded', injectSpaScripts, { once: true });
       }
     })();
 
