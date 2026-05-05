@@ -9117,6 +9117,7 @@ VIEWS.admin = async (view) => {
     { id: 'whatsapp',     label: 'WhatsApp' },
     { id: 'sources',      label: 'Sources' },
     { id: 'statuses',     label: 'Statuses' },
+    { id: 'customproducts', label: '📦 Custom Products' },
     { id: 'customfields', label: 'Custom Fields' },
     { id: 'tags',         label: 'Tags' },
     { id: 'tat',          label: '⏱️ TAT' },
@@ -9151,6 +9152,7 @@ async function showAdminTab(id) {
     if (id === 'whatsapp') body.replaceChildren(await adminWhatsapp());
     if (id === 'sources')  body.replaceChildren(await adminSources());
     if (id === 'statuses') body.replaceChildren(await adminStatuses());
+    if (id === 'customproducts') body.replaceChildren(await adminCustomProducts());
     if (id === 'customfields') body.replaceChildren(await adminCustomFields());
     if (id === 'tags')     body.replaceChildren(await adminTags());
     if (id === 'tat')      body.replaceChildren(await adminTat());
@@ -10737,6 +10739,143 @@ async function adminTat() {
     ))
   ));
   return wrap;
+}
+
+/**
+ * Custom Products admin — focused, friendlier wrapper around the
+ * generic Custom Fields module. Surface for admins who just want a
+ * "create a custom product entry" workflow without juggling the full
+ * field-type / sort-order / show-in-list grid.
+ *
+ * What it actually does:
+ *   - Stores entries in the same `custom_fields` table that powers
+ *     the regular Custom Fields tab.
+ *   - Auto-prefixes the column key with `product_` so these rows
+ *     don't collide with other custom fields and so the rep sees
+ *     them grouped together at the bottom of the lead form.
+ *   - Type is constrained to two options the admin actually asks
+ *     about: Text or Dropdown. Other types (date, number, etc.)
+ *     stay available on the full Custom Fields tab.
+ *   - Sets show_in_list=1 by default so the new product column
+ *     immediately appears in the Leads grid.
+ *
+ * If the admin wants the full power, the existing "Custom Fields"
+ * tab is still right there next to it.
+ */
+async function adminCustomProducts() {
+  const allFields = await api('api_customFields_list');
+  const products = allFields.filter(f => String(f.key || '').startsWith('product_'));
+
+  const card = h('div', { class: 'card' });
+  card.appendChild(h('h4', { style: { margin: '0 0 .35rem' } }, '📦 Custom Products'));
+  card.appendChild(h('p', { class: 'muted', style: { margin: '0 0 1rem', fontSize: '.88rem' } },
+    'Create custom product entries that appear on every lead form. Pick "Text" for a free-form input (e.g. Insurance amount, Property size) or "Dropdown" for a fixed list of choices the rep picks from (e.g. Vehicle type: Car / Bike / SUV). Each entry is saved on the lead and shows up as a column in the Leads grid.'));
+
+  card.appendChild(h('table', { class: 'mini-table' },
+    h('thead', {}, h('tr', {},
+      h('th', {}, 'Name'), h('th', {}, 'Type'), h('th', {}, 'Options'),
+      h('th', {}, 'Required'), h('th', {})
+    )),
+    h('tbody', {}, ...(products.length === 0
+      ? [h('tr', {}, h('td', { colspan: 5, class: 'muted', style: { textAlign: 'center', padding: '1rem' } },
+          'No custom products yet — add one below.'))]
+      : products.map(f => h('tr', {},
+          h('td', {}, h('b', {}, f.label), h('div', { class: 'muted', style: { fontSize: '.78rem' } }, h('code', {}, f.key))),
+          h('td', {}, f.field_type === 'select' ? '📋 Dropdown' : '✏️ Text'),
+          h('td', { class: 'muted', style: { fontSize: '.85rem' } },
+            Array.isArray(f.options) ? f.options.join(', ') : (f.options || '—')),
+          h('td', {}, f.is_required ? '✓' : '—'),
+          h('td', { style: { whiteSpace: 'nowrap' } },
+            h('button', { class: 'btn sm', onclick: () => editCustomField(f) }, '✏️ Edit'),
+            h('button', { class: 'btn sm danger', style: { marginLeft: '.3rem' },
+              onclick: async () => {
+                if (!await confirmDialog(`Delete custom product "${f.label}"?`)) return;
+                try { await api('api_customFields_delete', f.id); toast('Deleted'); await warmCache(); showAdminTab('customproducts'); }
+                catch (e) { toast(e.message, 'err'); }
+              }
+            }, '🗑️')
+          )
+    )))
+  )));
+
+  card.appendChild(h('h5', { style: { marginTop: '1.5rem' } }, '+ New custom product'));
+
+  const labelInput = h('input', { name: 'label', required: 'required', placeholder: 'e.g. Insurance Type, Property Size, Loan Amount' });
+  const typeRadios = h('div', { class: 'cf-type-radios', style: { display: 'flex', gap: '1rem', marginTop: '.4rem' } },
+    h('label', { class: 'cb', style: { display: 'flex', alignItems: 'center', gap: '.4rem' } },
+      h('input', { type: 'radio', name: 'cp_type', value: 'text', checked: 'checked' }),
+      h('span', {}, '✏️ Text — rep types a value')),
+    h('label', { class: 'cb', style: { display: 'flex', alignItems: 'center', gap: '.4rem' } },
+      h('input', { type: 'radio', name: 'cp_type', value: 'select' }),
+      h('span', {}, '📋 Dropdown — rep picks from a list'))
+  );
+  const optsTextarea = h('textarea', {
+    name: 'options', rows: '4',
+    placeholder: 'One option per line, e.g.\nResidential\nCommercial\nIndustrial'
+  });
+  const optsRow = h('div', { class: 'f-row full', style: { display: 'none', marginTop: '.5rem' } },
+    h('label', {}, 'Options *'), optsTextarea,
+    h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } },
+      'One option per line. The rep will pick from these on the lead form.'));
+  typeRadios.querySelectorAll('input[type=radio]').forEach(r => {
+    r.addEventListener('change', () => {
+      optsRow.style.display = (r.checked && r.value === 'select') ? '' : 'none';
+    });
+  });
+
+  const requiredCb = h('label', { class: 'cb', style: { display: 'flex', alignItems: 'center', gap: '.4rem', marginTop: '.5rem' } },
+    h('input', { type: 'checkbox', name: 'is_required' }),
+    h('span', {}, 'Required field (rep must fill before saving — admins are exempt)'));
+
+  const form = h('form', {
+    class: 'form-grid',
+    onsubmit: async ev => {
+      ev.preventDefault();
+      const label = String(labelInput.value || '').trim();
+      if (!label) { toast('Name is required', 'err'); labelInput.focus(); return; }
+      const fieldType = ev.target.querySelector('input[name=cp_type]:checked').value;
+      let baseKey = 'product_' + label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40);
+      if (!baseKey || baseKey === 'product_') baseKey = 'product_' + Date.now().toString(36);
+      let key = baseKey;
+      let n = 2;
+      while (allFields.some(f => f.key === key)) { key = baseKey + '_' + n; n++; }
+
+      const needsOpts = fieldType === 'select';
+      const optsRaw = String(optsTextarea.value || '');
+      const options = needsOpts
+        ? optsRaw.split(/[\n,|]/).map(s => s.trim()).filter(Boolean)
+        : [];
+      if (needsOpts && options.length === 0) {
+        toast('Add at least one dropdown option', 'err');
+        optsTextarea.focus();
+        return;
+      }
+
+      try {
+        await api('api_customFields_save', {
+          key, label, field_type: fieldType,
+          options: options.join('|'),
+          is_required: ev.target.querySelector('input[name=is_required]').checked ? 1 : 0,
+          show_in_list: 1,
+          sort_order: 100
+        });
+        toast('Custom product added');
+        await warmCache();
+        showAdminTab('customproducts');
+      } catch (e) { toast(e.message, 'err'); }
+    }
+  },
+    h('div', { class: 'f-row full' }, h('label', {}, 'Name *'), labelInput,
+      h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } },
+        'Shown to reps as the field label on the lead form.')),
+    h('div', { class: 'f-row full' }, h('label', {}, 'Type *'), typeRadios),
+    optsRow,
+    h('div', { class: 'f-row full' }, requiredCb),
+    h('div', { class: 'f-row full actions' },
+      h('button', { type: 'submit', class: 'btn primary' }, 'Add custom product'))
+  );
+  card.appendChild(form);
+  return card;
 }
 
 async function adminCustomFields() {
