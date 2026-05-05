@@ -6872,13 +6872,18 @@ async function wbChat() {
   let lastThreadsFingerprint = '';
 
   function _threadFingerprint(threads) {
-    return threads.map(t => `${t.phone}|${t.last_at}|${t.unread}|${t.assigned_to || 0}|${agentFilterId || ''}`).join(';');
+    return threads.map(t => `${t.phone}|${t.last_at}|${t.unread}|${t.assigned_to || 0}|${agentFilterId || ''}|${searchQuery || ''}`).join(';');
   }
   // Admin / manager filter — when non-null, threads are limited to chats
   // assigned to that user. Persisted on `wbChat`'s closure so the filter
   // survives auto-polling redraws.
   let agentFilterId = '';
   let chatUsers = [];     // populated once per render
+  // Free-text search across the chat list — matches name, phone, or
+  // the last message preview, case-insensitively. Persists across
+  // polling re-renders because it's bundled into _threadFingerprint
+  // above (so a query change forces a redraw).
+  let searchQuery = '';
   function _msgFingerprint(msgs) {
     return msgs.map(m => `${m.id}|${m.status || ''}|${m.read_at || ''}|${m.delivered_at || ''}`).join(';');
   }
@@ -6889,9 +6894,20 @@ async function wbChat() {
     catch (_) { threads = []; }
 
     // Apply admin / manager agent filter if set
-    const filtered = agentFilterId
+    let filtered = agentFilterId
       ? threads.filter(t => Number(t.assigned_to) === Number(agentFilterId))
       : threads;
+
+    // Apply free-text search across name / phone / last-message / agent
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase().trim();
+      filtered = filtered.filter(t => {
+        return String(t.lead_name || '').toLowerCase().includes(q)
+            || String(t.phone || '').toLowerCase().includes(q)
+            || String(t.last_message || '').toLowerCase().includes(q)
+            || String(t.assigned_name || '').toLowerCase().includes(q);
+      });
+    }
 
     const fp = _threadFingerprint(filtered);
     if (fp === lastThreadsFingerprint) return; // No change — preserve scroll
@@ -6905,9 +6921,45 @@ async function wbChat() {
 
     left.innerHTML = '';
     left.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '.5rem' } },
-      h('h4', { style: { margin: 0 } }, '💭 Chats (' + filtered.length + ')'),
+      h('h4', { style: { margin: 0 } }, '💭 Chats (' + filtered.length + (searchQuery ? ' / ' + threads.length : '') + ')'),
       h('button', { class: 'btn sm ghost', title: 'Refresh now', onclick: () => { lastThreadsFingerprint = ''; renderThreadList(); if (openPhone) renderActiveThread(true); } }, '↻')
     ));
+
+    // ---- Search box (above the agent filter) ----
+    // Debounced 200ms so each keystroke doesn't burn a re-render. The
+    // input is re-mounted on every render but we restore focus + caret
+    // position so typing feels smooth.
+    const searchInput = h('input', {
+      type: 'search', placeholder: '🔍 Search chats by name, phone, message…',
+      value: searchQuery,
+      style: { width: '100%', marginBottom: '.5rem', padding: '.45rem .6rem', borderRadius: '6px', border: '1px solid var(--border, #d1d5db)' }
+    });
+    let _searchTimer = null;
+    searchInput.addEventListener('input', () => {
+      clearTimeout(_searchTimer);
+      _searchTimer = setTimeout(() => {
+        searchQuery = searchInput.value;
+        lastThreadsFingerprint = '';
+        renderThreadList();
+      }, 200);
+    });
+    // ESC clears the search
+    searchInput.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape' && searchQuery) {
+        ev.preventDefault();
+        searchInput.value = '';
+        searchQuery = '';
+        lastThreadsFingerprint = '';
+        renderThreadList();
+      }
+    });
+    left.appendChild(searchInput);
+    if (document.activeElement && document.activeElement.tagName === 'INPUT' && document.activeElement.type === 'search') {
+      setTimeout(() => {
+        searchInput.focus();
+        try { searchInput.setSelectionRange(searchInput.value.length, searchInput.value.length); } catch (_) {}
+      }, 0);
+    }
 
     // Agent filter — admins/managers/TLs only
     const canFilter = (CRM.user.role === 'admin' || CRM.user.role === 'manager' || CRM.user.role === 'team_leader');
