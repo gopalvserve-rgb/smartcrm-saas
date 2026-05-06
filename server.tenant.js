@@ -73,6 +73,11 @@ Object.values(routes).forEach(module => {
 
 const app = express();
 app.use(bodyParser.json({ limit: '10mb' }));
+// Accept form-encoded bodies on /hook/website + /hook/other so HTML
+// contact forms (and tools like Zapier) can post directly without
+// JSON.stringify. `extended:true` enables nested arrays / objects via
+// the `qs` library — same as Express's default `urlencoded` parser.
+app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
 // Forwarders / Postman default-raw send bodies as text/plain. The
 // webhook handler attempts JSON.parse on string bodies.
 app.use(bodyParser.text({ type: ['text/plain', 'application/octet-stream'], limit: '10mb' }));
@@ -354,6 +359,38 @@ function _csvCell(v) {
   const s = v == null ? '' : String(v);
   return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
+
+// ---------------------------------------------------------------
+// SpreadsheetML 2003 helper — see server.js for rationale.
+// ---------------------------------------------------------------
+function _xlsCell(v) {
+  const s = v == null ? '' : String(v);
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+function _buildSampleXls(headers, rows) {
+  const headerRow = '<Row>' +
+    headers.map(h => `<Cell ss:StyleID="hdr"><Data ss:Type="String">${_xlsCell(h)}</Data></Cell>`).join('') +
+    '</Row>';
+  const dataRows = rows.map(r =>
+    '<Row>' +
+    headers.map(h => `<Cell><Data ss:Type="String">${_xlsCell(r[h])}</Data></Cell>`).join('') +
+    '</Row>'
+  ).join('');
+  return `<?xml version="1.0"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+          xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"
+          xmlns:o="urn:schemas-microsoft-com:office:office"
+          xmlns:x="urn:schemas-microsoft-com:office:excel">
+  <Styles><Style ss:ID="hdr"><Font ss:Bold="1"/></Style></Styles>
+  <Worksheet ss:Name="Leads"><Table>${headerRow}${dataRows}</Table></Worksheet>
+</Workbook>`;
+}
+
 app.get('/api/sample.csv', async (req, res) => {
   // Pull custom fields so the template includes every cf_<key> column
   // currently defined in this deployment.
@@ -436,6 +473,49 @@ app.get('/api/sample.csv', async (req, res) => {
     ...rows.map(r => headers.map(h => _csvCell(r[h])).join(','))
   ];
   res.type('text/csv').attachment('lead-crm-sample.csv').send(lines.join('\n'));
+});
+
+// ---- /api/sample.xls (real Excel-format sample) -------------------
+// Same template the CSV uses, but emitted as SpreadsheetML 2003 so
+// Excel opens it as a true spreadsheet.
+app.get('/api/sample.xls', async (req, res) => {
+  let customFields = [];
+  try {
+    customFields = (await db.getAll('custom_fields'))
+      .filter(c => Number(c.is_active) !== 0 && c.key)
+      .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
+  } catch (_) {}
+
+  const baseCols = [
+    'name', 'phone', 'alt_phone', 'whatsapp', 'email',
+    'status', 'source', 'source_ref', 'product', 'assigned_to',
+    'address', 'city', 'state', 'pincode', 'country', 'company',
+    'value', 'currency', 'qualified', 'tags',
+    'next_followup_at', 'notes',
+    'created_at', 'last_status_change_at',
+    'gclid', 'gad_campaignid',
+    'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content'
+  ];
+  const cfCols = customFields.map(c => 'cf_' + c.key);
+  const headers = [...baseCols, ...cfCols];
+
+  const rows = [
+    {
+      name: 'Acme Corp', phone: '9876543210', email: 'sales@acme.example',
+      status: 'New', source: 'Website', product: 'Premium plan',
+      city: 'Mumbai', country: 'India', value: '50000', currency: 'INR',
+      qualified: '1', tags: 'enterprise,priority',
+      notes: 'Sample row — replace with real data'
+    },
+    {
+      name: 'Jane Doe', phone: '9123456789', email: 'jane@example.com',
+      status: 'Contacted', source: 'WhatsApp', city: 'Bangalore'
+    }
+  ];
+
+  res.type('application/vnd.ms-excel')
+     .attachment('lead-crm-sample.xls')
+     .send(_buildSampleXls(headers, rows));
 });
 
 // Config for the frontend (non-secret; used to pre-populate CRM.webAppUrl etc.).
