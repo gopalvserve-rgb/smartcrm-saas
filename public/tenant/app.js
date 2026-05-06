@@ -54,6 +54,31 @@ async function api(fn, ...args) {
     if (!silent) _bumpApiLoader(-1);
   }
 }
+
+// ----- Sample-template URL helpers ---------------------------------
+// In single-tenant deploys (lead-crm-node) this is just '/api/sample.xls'.
+// In smartcrm-saas the page lives at /t/<slug>/ and the fetch monkey-
+// patch in index.html only intercepts xhr `fetch()` calls — it does
+// NOT rewrite plain <a href> clicks. Without prefixing manually the
+// download falls through to the JSON-404 catch-all and the user gets
+// `sample.json` containing `{"error":"Not found: GET /api/sample.csv"}`
+// instead of the spreadsheet.
+function _sampleUrl(ext /* 'csv' | 'xls' */) {
+  const base = '/api/sample.' + (ext === 'xls' ? 'xls' : 'csv');
+  if (typeof window !== 'undefined' && window.TENANT_SLUG) {
+    return '/t/' + window.TENANT_SLUG + base;
+  }
+  return base;
+}
+function _attachSampleLink(el, ext) {
+  if (!el) return;
+  el.href = _sampleUrl(ext);
+  el.addEventListener('click', (ev) => {
+    ev.preventDefault();
+    window.location.href = _sampleUrl(ext);
+  });
+}
+
 async function apiRaw(fn, ...args) {
   const res = await fetch('/api', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2303,7 +2328,13 @@ function openBulkUpload() {
       fileInput,
       fileInfo,
       filePreview,
-      h('p', { style: { marginTop: '1rem' } }, h('a', { href: '/api/sample.csv', download: '' }, '⬇️ Download sample CSV')),
+      h('p', { style: { marginTop: '1rem' } },
+        // Two download options — Excel-friendly XLS first, plain CSV second.
+        // _attachSampleLink rewrites href + click to the tenant-scoped URL.
+        (() => { const a = h('a', { href: '#', download: '' }, '⬇️ Download sample (Excel)'); _attachSampleLink(a, 'xls'); return a; })(),
+        ' · ',
+        (() => { const a = h('a', { href: '#', download: '' }, 'CSV'); _attachSampleLink(a, 'csv'); return a; })()
+      ),
       h('h4', { style: { marginTop: '1.5rem' } }, 'Step 2: how should these leads be assigned?'),
       modePicker,
       singleBody, rrBody, percentBody, csvBody,
@@ -10091,7 +10122,11 @@ async function adminApi() {
     h('p', { class: 'muted' }, 'Includes JS, PHP, Python, WordPress, HTML form examples + how to send tags/labels.'),
     h('h5', {}, 'Sample CSV for bulk upload'),
     h('p', { class: 'muted' }, 'Download the template, fill in your leads, then use Leads → ⬆️ Upload to import.'),
-    h('a', { class: 'btn primary', href: '/api/sample.csv', download: 'lead-crm-sample.csv' }, '⬇️ Download sample CSV')
+    (() => {
+      const a = h('a', { class: 'btn primary', href: '#', download: 'lead-crm-sample.xls' }, '⬇️ Download sample (Excel)');
+      _attachSampleLink(a, 'xls');
+      return a;
+    })()
   ));
   return card;
 }
