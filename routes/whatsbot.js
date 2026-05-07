@@ -1847,10 +1847,21 @@ async function _handleInbound(m, value) {
     mediaId = m[m.type]?.id || null;
   }
 
-  // Look up or auto-create the lead
+  // Look up or auto-create the lead.
+  // Match on full digits (e.g. 917827878780) OR last-10 digits so a lead
+  // saved as 7827878780 (no country code) still links to the same person.
   let leadId = null;
   try {
-    const ld = await db.query(`SELECT id FROM leads WHERE regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') = $1 OR regexp_replace(COALESCE(whatsapp, ''), '\\D', '', 'g') = $1 LIMIT 1`, [from]);
+    const last10 = from.length > 10 ? from.slice(-10) : from;
+    const ld = await db.query(
+      `SELECT id FROM leads
+        WHERE regexp_replace(COALESCE(phone,    ''), '\\D', '', 'g') = $1
+           OR regexp_replace(COALESCE(whatsapp, ''), '\\D', '', 'g') = $1
+           OR regexp_replace(COALESCE(phone,    ''), '\\D', '', 'g') = $2
+           OR regexp_replace(COALESCE(whatsapp, ''), '\\D', '', 'g') = $2
+        LIMIT 1`,
+      [from, last10]
+    );
     if (ld.rows.length) leadId = ld.rows[0].id;
     else if (cfg.autoLeadOn) {
       // Create a fresh lead for this inbound contact
