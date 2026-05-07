@@ -1004,3 +1004,29 @@ CREATE TABLE IF NOT EXISTS wa_chat_assignment_log (
   created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_wa_chat_log_phone ON wa_chat_assignment_log(phone);
+
+-- Pull Leads audit log
+CREATE TABLE IF NOT EXISTS lead_pull_log (
+  id          SERIAL PRIMARY KEY,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  lead_id     INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+  pulled_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  is_first    INTEGER NOT NULL DEFAULT 0,
+  source      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_lead_pull_log_user ON lead_pull_log(user_id, pulled_at DESC);
+CREATE INDEX IF NOT EXISTS idx_lead_pull_log_lead ON lead_pull_log(lead_id);
+
+-- Per-tenant custom roles
+CREATE TABLE IF NOT EXISTS roles (
+  id              SERIAL PRIMARY KEY,
+  key             TEXT UNIQUE NOT NULL,
+  label           TEXT NOT NULL,
+  hierarchy_level INTEGER NOT NULL DEFAULT 3,
+  is_system       INTEGER NOT NULL DEFAULT 0,
+  is_active       INTEGER NOT NULL DEFAULT 1,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_roles_key    ON roles(key);
+CREATE INDEX IF NOT EXISTS idx_roles_active ON roles(is_active);
+

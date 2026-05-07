@@ -150,6 +150,10 @@ const SCHEMA = {
     columns: ['name', 'color', 'sort_order', 'is_final'],
     json: []
   },
+  roles: {
+    columns: ['key', 'label', 'hierarchy_level', 'is_system', 'is_active', 'created_at'],
+    json: []
+  },
   sources: {
     columns: ['name', 'is_active'],
     json: []
