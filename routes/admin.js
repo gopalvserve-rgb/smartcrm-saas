@@ -35,7 +35,10 @@ const CONFIG_KEYS = [
   'SHOW_LEADS_HEADER',
   // CSV of NAV item IDs the admin has hidden in the sidebar for this tenant.
   // E.g. "newleads,overdue,upcoming,whatsbot" hides those four entries.
-  'HIDDEN_NAV_IDS'
+  'HIDDEN_NAV_IDS',
+  // Pull Leads + WhatsApp shortcut config
+  'LEAD_PULL_ENABLED', 'LEAD_PULL_INITIAL_COUNT', 'LEAD_PULL_SUBSEQUENT_COUNT', 'LEAD_PULL_ENABLED_ROLES', 'LEAD_PULL_ORDER',
+  'COMPANY_WHATSAPP', 'COMPANY_PHONE'
 ];
 
 const SENSITIVE_KEYS = ['META_APP_SECRET', 'META_PAGE_ACCESS_TOKEN', 'WHATSAPP_ACCESS_TOKEN', 'SMTP_PASSWORD'];

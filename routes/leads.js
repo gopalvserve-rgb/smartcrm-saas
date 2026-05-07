@@ -1495,6 +1495,64 @@ async function api_whatsapp_send(token, payload) {
   return { ok: true, status, wa_message_id: waId };
 }
 
+
+// ===== Pull Leads — non-admin self-claim =====
+const PULL_DEFAULTS = { LEAD_PULL_ENABLED: '1', LEAD_PULL_INITIAL_COUNT: '20', LEAD_PULL_SUBSEQUENT_COUNT: '5', LEAD_PULL_ENABLED_ROLES: 'sales,team_leader,manager', LEAD_PULL_ORDER: 'oldest' };
+function _tenantPool() { try { const s = db.tenantStorage && db.tenantStorage.getStore(); if (s && s.pool) return s.pool; } catch(_){} return db.pool; }
+async function _pullCfg() {
+  const out = {};
+  for (const k of Object.keys(PULL_DEFAULTS)) { const v = await db.getConfig(k, PULL_DEFAULTS[k]); out[k] = (v == null || v === '') ? PULL_DEFAULTS[k] : v; }
+  out.LEAD_PULL_INITIAL_COUNT    = Math.max(0, parseInt(out.LEAD_PULL_INITIAL_COUNT, 10) || 0);
+  out.LEAD_PULL_SUBSEQUENT_COUNT = Math.max(0, parseInt(out.LEAD_PULL_SUBSEQUENT_COUNT, 10) || 0);
+  out.LEAD_PULL_ENABLED_ROLES    = String(out.LEAD_PULL_ENABLED_ROLES).split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+  out.LEAD_PULL_ORDER            = (String(out.LEAD_PULL_ORDER).toLowerCase() === 'newest') ? 'newest' : 'oldest';
+  out.LEAD_PULL_ENABLED          = String(out.LEAD_PULL_ENABLED) === '1';
+  return out;
+}
+async function _assignedToday(userId) { const r = await db.query(`SELECT COUNT(*)::int AS n FROM leads WHERE assigned_to=$1 AND updated_at >= date_trunc('day', NOW())`, [Number(userId)]); return Number(r.rows[0]?.n || 0); }
+async function _hasPulled(userId) { const r = await db.query(`SELECT 1 FROM lead_pull_log WHERE user_id=$1 LIMIT 1`, [Number(userId)]); return r.rowCount > 0; }
+function _canPull(role, enabledRoles) { if (role === 'admin') return false; return enabledRoles.includes(String(role || '').toLowerCase()); }
+
+async function api_leads_pullInfo(token) {
+  const me = await authUser(token);
+  const cfg = await _pullCfg();
+  const allowed = cfg.LEAD_PULL_ENABLED && _canPull(me.role, cfg.LEAD_PULL_ENABLED_ROLES);
+  const isFirst = !(await _hasPulled(me.id));
+  let target = isFirst ? cfg.LEAD_PULL_INITIAL_COUNT : cfg.LEAD_PULL_SUBSEQUENT_COUNT;
+  const dailyCap = Number(me.daily_lead_cap || 0);
+  let dailyRemaining = null;
+  if (dailyCap > 0) { const usedToday = await _assignedToday(me.id); dailyRemaining = Math.max(0, dailyCap - usedToday); target = Math.min(target, dailyRemaining); }
+  const cand = await db.query(`SELECT COUNT(*)::int AS n FROM leads l LEFT JOIN lead_pull_log p ON p.lead_id=l.id AND p.user_id=$1 WHERE p.id IS NULL AND (l.assigned_to IS NULL OR l.assigned_to=$1)`, [Number(me.id)]);
+  return { allowed, enabled: cfg.LEAD_PULL_ENABLED, is_first_pull: isFirst, target_count: target, initial_count: cfg.LEAD_PULL_INITIAL_COUNT, subsequent_count: cfg.LEAD_PULL_SUBSEQUENT_COUNT, available_count: Number(cand.rows[0]?.n || 0), daily_cap: dailyCap || null, daily_remaining: dailyRemaining, order: cfg.LEAD_PULL_ORDER, role: me.role };
+}
+
+async function api_leads_pull(token) {
+  const me = await authUser(token);
+  const cfg = await _pullCfg();
+  if (!cfg.LEAD_PULL_ENABLED) throw new Error('Lead pull is disabled by admin');
+  if (!_canPull(me.role, cfg.LEAD_PULL_ENABLED_ROLES)) throw new Error('Your role is not allowed to pull leads');
+  const isFirst = !(await _hasPulled(me.id));
+  let target = isFirst ? cfg.LEAD_PULL_INITIAL_COUNT : cfg.LEAD_PULL_SUBSEQUENT_COUNT;
+  const dailyCap = Number(me.daily_lead_cap || 0);
+  if (dailyCap > 0) { const usedToday = await _assignedToday(me.id); const remaining = Math.max(0, dailyCap - usedToday); target = Math.min(target, remaining); if (target <= 0) throw new Error(`Daily lead cap reached (${dailyCap})`); }
+  if (target <= 0) return { ok: true, pulled_count: 0, lead_ids: [], is_first_pull: isFirst, target_count: 0 };
+  const order = cfg.LEAD_PULL_ORDER === 'newest' ? 'DESC' : 'ASC';
+  const client = await _tenantPool().connect();
+  const claimed = [];
+  try {
+    await client.query('BEGIN');
+    const sel = await client.query(`SELECT l.id, l.assigned_to FROM leads l LEFT JOIN lead_pull_log p ON p.lead_id=l.id AND p.user_id=$1 LEFT JOIN statuses s ON s.id=l.status_id WHERE p.id IS NULL AND (l.assigned_to IS NULL OR l.assigned_to=$1) AND COALESCE(s.is_final,0)=0 AND COALESCE(l.is_duplicate,0)=0 ORDER BY l.created_at ${order}, l.id ${order} LIMIT $2 FOR UPDATE OF l SKIP LOCKED`, [Number(me.id), Number(target)]);
+    for (const row of sel.rows) {
+      const leadId = Number(row.id); const wasFree = row.assigned_to == null;
+      if (wasFree) await client.query(`UPDATE leads SET assigned_to=$1, updated_at=NOW() WHERE id=$2`, [Number(me.id), leadId]);
+      await client.query(`INSERT INTO lead_pull_log (user_id, lead_id, is_first, source, pulled_at) VALUES ($1,$2,$3,$4,NOW())`, [Number(me.id), leadId, isFirst ? 1 : 0, wasFree ? 'free' : 'pre_assigned']);
+      claimed.push(leadId);
+    }
+    await client.query('COMMIT');
+  } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
+  return { ok: true, pulled_count: claimed.length, lead_ids: claimed, is_first_pull: isFirst, target_count: target };
+}
+
 module.exports = {
   api_leads_list, api_leads_statusCounts, api_leads_get, api_leads_create, api_leads_update,
   api_leads_addRemark, api_leads_pipeline, api_myFollowups, api_followup_done,
@@ -1502,4 +1560,6 @@ module.exports = {
   api_leads_deleteAllDuplicates, api_leads_duplicateAndReassign,
   api_leads_cleanupJunk,
   api_whatsapp_send
+,
+  api_leads_pull, api_leads_pullInfo
 };
