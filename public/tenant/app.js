@@ -1090,7 +1090,9 @@ VIEWS.leads = async (view) => {
     searchInput,
     wireFilter(selectOpts('f-status', [{ id: '', name: 'Any status' }, ...statuses], CRM.prefs.filters.status_id)),
     wireFilter(selectOpts('f-source', [{ id: '', name: 'Any source' }, ...sources.map(s => ({ id: s.name, name: s.name }))], CRM.prefs.filters.source)),
-    wireFilter(selectOpts('f-assigned', [{ id: '', name: 'Any assignee' }, ...users], CRM.prefs.filters.assigned_to)),
+    (CRM.user && CRM.user.role === 'admin')
+      ? wireFilter(selectOpts('f-assigned', [{ id: '', name: 'Any assignee' }, ...users], CRM.prefs.filters.assigned_to))
+      : null,
     wireFilter(selectOpts('f-followup', [{ id: '', name: 'All follow-ups' }, { id: 'today', name: 'Due today' }, { id: 'overdue', name: 'Overdue' }], CRM.prefs.filters.followup)),
     wireFilter(selectOpts('f-qualified', [
       { id: '',  name: 'Any qualified' },
@@ -1128,9 +1130,23 @@ VIEWS.leads = async (view) => {
           catch (e) { toast(e.message, 'err'); }
         } }, '🧹 Junk cleanup')
       : null,
+    (CRM.user && CRM.user.role !== 'admin')
+      ? h('button', { class: 'btn pullleads', id: 'btn-pull-leads', title: 'Pull free leads from the pool', onclick: () => pullLeadsClick() }, '⬇ Pull Leads')
+      : null,
     h('button', { class: 'btn primary', onclick: () => openLeadModal() }, '+ New Lead')
   );
   view.appendChild(toolbar);
+  if (CRM.user && CRM.user.role !== 'admin') {
+    api('api_leads_pullInfo').then(info => {
+      const btn = document.getElementById('btn-pull-leads');
+      if (!btn || !info) return;
+      if (!info.allowed) { btn.style.display = 'none'; return; }
+      const n = Number(info.target_count) || 0; const avail = Number(info.available_count) || 0;
+      btn.textContent = n > 0 ? `⬇ Pull ${Math.min(n, avail)} leads` : (avail === 0 ? '⬇ No free leads' : '⬇ Pull Leads');
+      if (n === 0 || avail === 0) btn.disabled = true;
+      btn.title = info.is_first_pull ? `First pull: claim up to ${info.initial_count} free leads` : `Each pull claims up to ${info.subsequent_count} free leads.`;
+    }).catch(() => {});
+  }
 
   view.appendChild(h('div', { class: 'bulk-bar', id: 'bulk-bar', hidden: true },
     h('span', { id: 'bulk-count', class: 'bulk-count' }, '0 selected'),
@@ -1455,7 +1471,7 @@ function renderLeadsTable(rows) {
         await api('api_leads_update', Number(sel.dataset.leadStatus), { status_id: Number(sel.value) });
         toast('Status updated');
         const opt = CRM.cache.statuses.find(s => Number(s.id) === Number(sel.value));
-        if (opt) sel.style.background = opt.color;
+        if (opt) sel.style.setProperty('--status-color', opt.color);
         loadLeads();
       } catch (e) { toast(e.message, 'err'); }
     })
@@ -1778,7 +1794,7 @@ function renderCell(col, l, statuses) {
       const sel = h('select', {
         class: 'status-pill',
         'data-lead-status': l.id,
-        style: { background: l.status_color || '#6b7280' },
+        style: { '--status-color': l.status_color || '#6b7280' },
         onclick: ev => ev.stopPropagation()
       });
       statuses.forEach(s => sel.appendChild(h('option', {
@@ -9201,6 +9217,16 @@ async function downloadReportBuilderExcel() {
 }
 
 /* ---------------- Admin ---------------- */
+async function pullLeadsClick() {
+  let info; try { info = await api('api_leads_pullInfo'); } catch (e) { toast(e.message || 'Pull leads not available', 'err'); return; }
+  if (!info || !info.allowed) { toast('Pull leads is disabled or not allowed for your role', 'warn'); return; }
+  const target = Math.min(Number(info.target_count) || 0, Number(info.available_count) || 0);
+  if (target <= 0) { if ((info.daily_remaining ?? null) === 0) toast(`Daily lead cap reached (${info.daily_cap}). Try again tomorrow.`, 'warn'); else toast('No free leads available right now', 'warn'); return; }
+  const ok = await confirmDialog(`Claim up to ${target} free leads?\n\nThey'll be assigned to you and appear in your leads list.`);
+  if (!ok) return;
+  try { const r = await api('api_leads_pull'); if (!r || r.pulled_count === 0) toast('No leads were available to pull', 'warn'); else toast(`✅ Pulled ${r.pulled_count} lead${r.pulled_count === 1 ? '' : 's'}`, 'ok'); if (typeof loadLeads === 'function') loadLeads({ page: 1 }); } catch (e) { toast(e.message || 'Failed to pull leads', 'err'); }
+}
+
 VIEWS.admin = async (view) => {
   view.innerHTML = '';
   const tabs = [
@@ -9224,6 +9250,8 @@ VIEWS.admin = async (view) => {
     { id: 'menu',         label: '🧭 Menu visibility' },
     { id: 'projstages',   label: '🚚 Project stages' },
     { id: 'integrations', label: '🔌 Integrations' },
+    { id: 'roles',        label: '📛 Roles' },
+    { id: 'pullleads',    label: '📥 Lead Pull' },
     { id: 'dangerzone',   label: '🛑 Danger zone' }
   ];
   const nav = h('div', { class: 'subtabs' },
@@ -9259,8 +9287,93 @@ async function showAdminTab(id) {
     if (id === 'menu')     body.replaceChildren(await adminMenuVisibility());
     if (id === 'projstages') body.replaceChildren(await adminProjectStages());
     if (id === 'integrations') body.replaceChildren(await adminIntegrations());
+    if (id === 'roles')     body.replaceChildren(await adminRoles());
+    if (id === 'pullleads') body.replaceChildren(await adminPullLeads());
     if (id === 'dangerzone') body.replaceChildren(await adminDangerZone());
   } catch (e) { body.innerHTML = `<div class="error-box">${esc(e.message)}</div>`; }
+}
+
+async function _rolesForSelect() {
+  if (CRM.cache._rolesForSelect) return CRM.cache._rolesForSelect;
+  let list = [];
+  try { const rows = await api('api_roles_list'); list = (rows||[]).map(r => ({ value: r.key, label: r.label })); } catch(_){}
+  if (!list.length) list = [{value:'admin',label:'Admin'},{value:'manager',label:'Manager'},{value:'team_leader',label:'Team Leader'},{value:'sales',label:'Sales'}];
+  CRM.cache._rolesForSelect = list; return list;
+}
+
+async function adminRoles() {
+  const roles = await api('api_roles_list');
+  const wrap = h('div', {});
+  const keyInput = h('input', { placeholder: 'Key (e.g. senior_sales)', style: { flex: '1' } });
+  const labelInput = h('input', { placeholder: 'Display label', style: { flex: '1' } });
+  const lvlInput = h('select', {},
+    h('option', { value: '0' }, '0 — admin'),
+    h('option', { value: '1' }, '1 — manager'),
+    h('option', { value: '2' }, '2 — team leader'),
+    h('option', { value: '3', selected: 'selected' }, '3 — sales')
+  );
+  wrap.appendChild(h('div', { class: 'card' },
+    h('h3', {}, 'Add a new role'),
+    h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', marginTop: '.5rem', flexWrap: 'wrap' } },
+      keyInput, labelInput, lvlInput,
+      h('button', { class: 'btn primary', onclick: async () => {
+        try { await api('api_roles_save', { key: keyInput.value, label: labelInput.value, hierarchy_level: parseInt(lvlInput.value, 10) || 3 });
+          CRM.cache._rolesForSelect = null; toast('Role added'); showAdminTab('roles');
+        } catch (e) { toast(e.message, 'err'); }
+      } }, '+ Add role'))
+  ));
+  const list = h('div', { class: 'card' }, h('h3', {}, 'Existing roles (' + roles.length + ')'));
+  list.appendChild(h('div', { class: 'table-wrap' }, h('table', {},
+    h('thead', {}, h('tr', {}, h('th', {}, 'Key'), h('th', {}, 'Label'), h('th', {}, 'Level'), h('th', {}, 'System?'), h('th', { style: { textAlign: 'right' } }, 'Actions'))),
+    h('tbody', {}, ...roles.map(r => {
+      const labelEdit = h('input', { value: r.label, style: { width: '160px' } });
+      const lvlEdit = h('input', { type: 'number', min: '0', max: '99', value: String(r.hierarchy_level), style: { width: '60px' } });
+      return h('tr', {},
+        h('td', {}, h('code', {}, r.key)), h('td', {}, labelEdit), h('td', {}, lvlEdit),
+        h('td', {}, Number(r.is_system) === 1 ? '✓' : ''),
+        h('td', { style: { textAlign: 'right' } },
+          h('button', { class: 'btn sm', onclick: async () => {
+            try { await api('api_roles_save', { id: r.id, key: r.key, label: labelEdit.value, hierarchy_level: parseInt(lvlEdit.value, 10) || 3 }); CRM.cache._rolesForSelect = null; toast('Saved'); }
+            catch (e) { toast(e.message, 'err'); }
+          } }, '💾 Save'),
+          ' ',
+          Number(r.is_system) === 1 ? null : h('button', { class: 'btn sm danger', onclick: async () => {
+            if (!confirm('Delete role "' + r.label + '"?')) return;
+            try { await api('api_roles_delete', r.id); CRM.cache._rolesForSelect = null; toast('Deleted'); showAdminTab('roles'); }
+            catch (e) { toast(e.message, 'err'); }
+          } }, '🗑 Delete'));
+    }))
+  )));
+  wrap.appendChild(list); return wrap;
+}
+
+async function adminPullLeads() {
+  const cfg = await api('api_admin_getConfig');
+  const root = h('div', { class: 'admin-section' });
+  root.appendChild(h('h3', {}, '📥 Lead Pull'));
+  const allRoles = (await _rolesForSelect()).filter(r => r.value !== 'admin');
+  const enabledRoles = String(cfg.LEAD_PULL_ENABLED_ROLES || 'sales,team_leader,manager').split(',').map(s => s.trim()).filter(Boolean);
+  const form = h('div', { class: 'form-grid' });
+  const enabled = h('input', { type: 'checkbox' }); enabled.checked = String(cfg.LEAD_PULL_ENABLED ?? '1') === '1';
+  form.appendChild(h('label', {}, enabled, ' Pull Leads enabled'));
+  const initial = h('input', { type: 'number', min: '0', max: '500', value: String(cfg.LEAD_PULL_INITIAL_COUNT || '20') });
+  form.appendChild(h('label', {}, 'Initial pull count: ', initial));
+  const subseq = h('input', { type: 'number', min: '0', max: '500', value: String(cfg.LEAD_PULL_SUBSEQUENT_COUNT || '5') });
+  form.appendChild(h('label', {}, 'Subsequent pull count: ', subseq));
+  const roleBox = h('div', {});
+  allRoles.forEach(r => { const cb = h('input', { type: 'checkbox', value: r.value }); cb.checked = enabledRoles.includes(r.value); roleBox.appendChild(h('label', { class: 'inline' }, cb, ' ' + r.label)); });
+  form.appendChild(h('label', {}, 'Allowed roles: ', roleBox));
+  const order = h('select', {}, h('option', { value: 'oldest' }, 'Oldest first'), h('option', { value: 'newest' }, 'Newest first'));
+  order.value = String(cfg.LEAD_PULL_ORDER || 'oldest');
+  form.appendChild(h('label', {}, 'Pull order: ', order));
+  root.appendChild(form);
+  root.appendChild(h('button', { class: 'btn primary', onclick: async () => {
+    const checkedRoles = Array.from(roleBox.querySelectorAll('input[type=checkbox]')).filter(c => c.checked).map(c => c.value);
+    try { await api('api_admin_setConfig', { LEAD_PULL_ENABLED: enabled.checked ? '1' : '0', LEAD_PULL_INITIAL_COUNT: String(parseInt(initial.value,10)||0), LEAD_PULL_SUBSEQUENT_COUNT: String(parseInt(subseq.value,10)||0), LEAD_PULL_ENABLED_ROLES: checkedRoles.join(','), LEAD_PULL_ORDER: order.value === 'newest' ? 'newest' : 'oldest' });
+      toast('Lead Pull settings saved', 'ok');
+    } catch (e) { toast(e.message, 'err'); }
+  } }, 'Save'));
+  return root;
 }
 
 /**
@@ -10781,7 +10894,10 @@ async function adminTags() {
       h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Color'), h('th', {}, 'Preview'), h('th', { style: { textAlign: 'right' } }, 'Actions'))),
       h('tbody', {}, ...tags.map(t => h('tr', {},
         h('td', {}, t.name),
-        h('td', {}, h('code', {}, t.color)),
+        h('td', {},
+          h('span', { class: 'color-swatch', style: { background: t.color || '#6366f1' }, title: t.color || '' }),
+          h('code', { style: { marginLeft: '6px' } }, t.color || '—')
+        ),
         h('td', {}, h('span', { class: 'tag', style: { background: t.color, color: '#fff' } }, t.name)),
         h('td', { style: { textAlign: 'right' } },
           h('button', { class: 'btn sm', onclick: async () => {
@@ -11220,7 +11336,8 @@ function openRuleModal(existing) {
 }
 async function adminPermissions() {
   const { catalog, matrix } = await api('api_permissions_get');
-  const roles = ['admin', 'manager', 'team_leader', 'sales'];
+  const _rs = await _rolesForSelect();
+  const roles = _rs.map(r => r.value);
   const card = h('div', { class: 'card' },
     h('h4', {}, '🔐 Role permissions'),
     h('p', { class: 'muted' }, 'For scoped permissions (view/edit/delete leads), pick a scope: Self, Team, or Global. Admin always has full access.')
@@ -11384,7 +11501,7 @@ async function openUserModal(u) {
         field('name', 'Name *', u.name, { required: true }),
         field('email', 'Login email *', u.email, { required: true, type: 'email' }),
         field('phone', 'Mobile / Contact number', u.phone),
-        selectField('role', 'Role', u.role, ['admin', 'manager', 'team_leader', 'sales']),
+        selectField('role', 'Role', u.role, await _rolesForSelect()),
         selectField('parent_id', 'Reports To', u.parent_id || '', [{ value: '', label: '— None —' }, ...parents.filter(p => p.id !== u.id).map(p => ({ value: p.id, label: p.name }))]),
         !u.id ? field('password', 'Password *', '', { type: 'password', required: true }) : null,
 
@@ -14485,3 +14602,6 @@ window.restartProductTour = function () {
   try { localStorage.removeItem('crm_tour_seen_v1'); } catch (_) {}
   return maybeShowFirstRunTour(true);
 };
+
+async function _initWhatsappTopbar() { const btn = document.getElementById('btn-whatsapp'); if (!btn || btn.dataset.bound) return; btn.dataset.bound = '1'; let phone = ''; try { if (CRM.user && CRM.user.role === 'admin') { const cfg = await api('api_admin_getConfig').catch(() => ({})); phone = String(cfg.COMPANY_WHATSAPP || cfg.COMPANY_PHONE || CRM.user.phone || '').trim(); } else if (CRM.user) phone = String(CRM.user.phone || '').trim(); } catch (_) {} const cleaned = phone.replace(/[^\d+]/g, '').replace(/^\+/, ''); btn.title = cleaned ? 'Open WhatsApp (' + phone + ')' : 'Open WhatsApp Web'; btn.addEventListener('click', () => { window.open(cleaned ? 'https://wa.me/' + cleaned : 'https://web.whatsapp.com/', '_blank', 'noopener'); }); }
+document.addEventListener('DOMContentLoaded', () => { let ticks = 0; const t = setInterval(() => { if (typeof CRM !== 'undefined' && CRM.user) { _initWhatsappTopbar(); clearInterval(t); } else if (++ticks > 60) clearInterval(t); }, 500); });
