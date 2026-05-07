@@ -70,4 +70,28 @@ async function api_tags_delete(token, id) {
   return { ok: true };
 }
 
+/**
+ * api_tags_update — edit an existing tag's name and/or colour.
+  * Admin only. Delegates to api_tags_save with the id field set.
+   */
+async function api_tags_update(token, id, payload) {
+    const me = await authUser(token);
+    if (me.role !== 'admin') throw new Error('Only admins can manage tags');
+    if (!id) throw new Error('Tag id required');
+    const p = payload || {};
+    const existing = (await db.getAll('tag_library')).find(r => String(r.id) === String(id));
+    if (!existing) throw new Error('Tag not found');
+    const name  = String(p.name  || existing.name).trim();
+    const color = String(p.color || existing.color || '#6366f1').trim();
+    if (!name) throw new Error('Tag name required');
+    // Case-insensitive duplicate check against other tags
+    const conflict = (await db.getAll('tag_library')).find(r =>
+          String(r.name).toLowerCase() === name.toLowerCase() && String(r.id) !== String(id)
+        );
+    if (conflict) throw new Error(`Tag "${name}" already exists`);
+    await db.update('tag_library', id, { name, color });
+    return { ok: true };
+}
+
 module.exports = { api_tags_list, api_tags_save, api_tags_delete };
+module.exports = { api_tags_list, api_tags_save, api_tags_update, api_tags_delete };
