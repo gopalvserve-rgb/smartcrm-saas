@@ -10899,8 +10899,9 @@ async function adminTags() {
           h('code', { style: { marginLeft: '6px' } }, t.color || '—')
         ),
         h('td', {}, h('span', { class: 'tag', style: { background: t.color, color: '#fff' } }, t.name)),
-        h('td', { style: { textAlign: 'right' } },
-          h('button', { class: 'btn sm', onclick: async () => {
+h('td', { style: { display: 'flex', gap: '.5rem', justifyContent: 'flex-end' } },
+                        h('button', { class: 'btn sm', onclick: () => openTagEditModal(t, () => { CRM.cache.tagLibrary = null; showAdminTab('tags'); }) }, '✏️ Edit'),
+  h('button', { class: 'btn sm', onclick: async () => {
             if (!confirm(`Delete tag "${t.name}"? Existing leads tagged with this name will keep showing it but new leads cannot pick it.`)) return;
             try {
               await api('api_tags_delete', t.id);
@@ -10915,6 +10916,45 @@ async function adminTags() {
   }
   wrap.appendChild(list);
   return wrap;
+}
+function openTagEditModal(t, onSaved) {
+    const nameInput  = h('input', { value: t.name, placeholder: 'Tag name', style: { flex: '1' } });
+    const colorPick  = h('input', { type: 'color', value: t.color || '#6366f1', style: { width: '50px' } });
+    const previewTag = h('span', { class: 'tag', style: { background: t.color || '#6366f1', color: '#fff', marginLeft: '.5rem' } }, t.name);
+    colorPick.addEventListener('input', () => { previewTag.style.background = colorPick.value; });
+    nameInput.addEventListener('input', () => { previewTag.textContent = nameInput.value || '...'; });
+    const modal = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) modal.remove(); } });
+    modal.appendChild(h('div', { class: 'modal' },
+                            h('div', { class: 'modal-head' },
+                                    h('h3', {}, 'Edit tag'),
+                                    h('button', { class: 'btn icon', onclick: () => modal.remove() }, 'x')
+                                  ),
+                            h('div', { class: 'form-grid' },
+                                    h('div', { class: 'f-row full' }, h('label', {}, 'Tag name'), nameInput),
+                                    h('div', { class: 'f-row full' },
+                                              h('label', {}, 'Colour'),
+                                              h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem' } },
+                                                          colorPick,
+                                                          h('span', { class: 'muted', style: { fontSize: '.8rem' } }, 'Preview:'),
+                                                          previewTag
+                                                        )
+                                            )
+                                  ),
+                            h('div', { class: 'actions' },
+                                    h('button', { class: 'btn', onclick: () => modal.remove() }, 'Cancel'),
+                                    h('button', { class: 'btn primary', onclick: async () => {
+                                              const name = String(nameInput.value || '').trim();
+                                              if (!name) { toast('Tag name required', 'err'); return; }
+                                              try {
+                                                          await api('api_tags_update', t.id, { name, color: colorPick.value });
+                                                          toast('Tag updated');
+                                                          modal.remove();
+                                                          onSaved && onSaved();
+                                              } catch (e) { toast(e.message, 'err'); }
+                                    } }, 'Save changes')
+                                  )
+                          ));
+    document.body.appendChild(modal);
 }
 
 /**
