@@ -11,7 +11,7 @@
  *     AsyncLocalStorage to pick the right per-tenant pg.Pool. The
  *     server.js attachTenantApiContext middleware wraps the request
  *     in tenantStorage.run({ pool }) so any DB call from inside a
- *     handler hits tenant_<slug>, not the control DB.
+ *     handler hits tenant_<slug>, not the control DB.h
  *   - we expose a small SSO-login exchange: when the magic link from
  *     /admin → "Login as tenant" arrives with ?ssl=<jwt>, the SPA hits
  *     api_auth_ssoLogin which verifies the token, finds (or creates)
@@ -29,6 +29,11 @@ const bcrypt = require('bcryptjs');
 
 const db = require('../../db/pg');
 const quota = require('../../utils/quota');
+// Optional platform error logging — writes to the control DB so the
+// super-admin /admin/#/errors view picks them up. Absent in single-
+// tenant deployments — gracefully skipped.
+let errorLogs;
+try { errorLogs = require('./errorLogs'); } catch (_) {}
 
 /**
  * Map of fn-names that consume a quota slot. The `metric` is the key
@@ -93,7 +98,7 @@ const ROUTE_FILES = [
   'knowledgeBase', 'announcements', 'chat',
   'savedFilters', 'customers', 'targets',
   'inventory', 'projectStages', 'personalWaTemplates',
-  'integrations'
+  'integrations', 'roles'
 ];
 
 const API = {};
@@ -215,6 +220,16 @@ API.api_auth_ssoLogin = api_auth_ssoLogin;
 async function expressHandler(req, res) {
   const { fn, args } = req.body || {};
   if (!fn || !API[fn]) {
+        const slug = (req.tenant && req.tenant.slug) || req.tenantSlug || 'unknown';
+        console.warn(`[tenantApi] Unknown function: ${fn} (tenant: ${slug})`);
+        if (errorLogs) {
+                errorLogs.logError({
+                          source: 'tenant-api', severity: 'error',
+                          message: `Unknown function: ${fn}`,
+                          url: req.originalUrl, method: req.method, status_code: 404,
+                          ua: req.get('user-agent'), context: { fn, tenant: slug }
+                }).catch(() => {});
+        }
     return res.status(404).json({ error: 'Unknown function: ' + fn });
   }
   try {
@@ -235,6 +250,18 @@ async function expressHandler(req, res) {
         metric: e.metric || null, usage: e.usage || null
       });
     }
+        // Log genuine server errors to the admin panel (not quota/auth noise).
+        const isUserError = /not signed in|invalid.*token|expired|forbidden|required|already/i.test(msg);
+        if (!isUserError && errorLogs) {
+                const slug = (req.tenant && req.tenant.slug) || req.tenantSlug || 'unknown';
+                errorLogs.logError({
+                          source: 'tenant-api', severity: 'error',
+                          message: `[tenant-api] ${fn}: ${msg}`,
+                          stack: e.stack, url: req.originalUrl, method: req.method,
+                          status_code: 400, ua: req.get('user-agent'),
+                          context: { fn, tenant: slug }
+                }).catch(() => {});
+        }
     res.status(400).json({ error: msg });
   }
 }
