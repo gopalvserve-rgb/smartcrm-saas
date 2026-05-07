@@ -1009,6 +1009,30 @@ app.get('/api/sample.xls', async (req, res, next) => {
      .send(_buildSampleXls(headers, rows));
 });
 
+// ---- APK download (tenant-scoped) ------------------------------------
+// GET /LeadCRM.apk is triggered by the WhatsBot "Download LeadCRM.apk"
+// button in the Connect Account dialog.  After attachTenant rewrites
+// /t/<slug>/LeadCRM.apk → /LeadCRM.apk the request lands here.
+//
+// Set APK_DOWNLOAD_URL in Railway environment variables to a direct-
+// download link (Google Drive, S3, Cloudflare R2, etc.) and the button
+// works immediately.  Fallback: place LeadCRM.apk in public/ (Git LFS).
+app.get('/LeadCRM.apk', (req, res) => {
+  const cdnUrl = process.env.APK_DOWNLOAD_URL;
+  if (cdnUrl) return res.redirect(302, cdnUrl);
+  const filePath = path.join(__dirname, 'public', 'LeadCRM.apk');
+  res.download(filePath, 'LeadCRM.apk', (err) => {
+    if (err && !res.headersSent) {
+      res.status(503).type('html').send(
+        '<h2>APK not available</h2>' +
+        '<p>Set the <code>APK_DOWNLOAD_URL</code> environment variable in Railway ' +
+        'to a direct-download link (Google Drive, S3, Cloudflare R2, etc.) so ' +
+        'the <em>Download LeadCRM.apk</em> button on the WhatsBot page works.</p>'
+      );
+    }
+  });
+});
+
 // ---- Tenant SPA shell ---------------------------------------------
 // Serve the per-tenant CRM SPA. After attachTenant rewrites
 // /t/<slug>/ to /, GET / lands here when there's a tenant on the
