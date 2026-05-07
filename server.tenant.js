@@ -45,6 +45,7 @@ const routes = {
   automations: require('./routes/automations'),
   whatsapp:    require('./routes/whatsapp'),
   permissions: require('./routes/permissions'),
+  roles:       require('./routes/roles'),
   recordings:  require('./routes/recordings'),
   push:        require('./routes/push'),
   knowledge:   require('./routes/knowledgeBase'),
