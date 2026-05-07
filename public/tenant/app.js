@@ -1072,6 +1072,45 @@ VIEWS.dashboard = async (view) => {
   );
   grid.appendChild(srcCard);
 
+  // Project delivery progress
+  try {
+    const projBoard = await api('api_projectStages_board').catch(() => null);
+    if (projBoard && projBoard.stages && projBoard.stages.length && projBoard.board) {
+      const totalInDelivery = projBoard.board.reduce((n, col) => n + col.leads.length, 0);
+      if (totalInDelivery > 0) {
+        const COLORS = ['#3b82f6','#10b981','#f59e0b','#8b5cf6','#ef4444','#06b6d4','#ec4899'];
+        const projCard = h('div', { class: 'card card-wide' },
+          h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.75rem' } },
+            h('h3', { style: { margin: 0 } }, '\u{1F69A} Project delivery progress'),
+            h('a', { href: '#/projects', class: 'btn sm ghost' }, 'View board \u2192')
+          )
+        );
+        const barRow = h('div', { style: { display: 'flex', height: '14px', borderRadius: '8px', overflow: 'hidden', marginBottom: '.75rem', gap: '2px' } });
+        projBoard.board.forEach((col, i) => {
+          if (!col.leads.length) return;
+          const color = col.stage.color || COLORS[i % COLORS.length];
+          barRow.appendChild(h('div', { title: col.stage.name + ': ' + col.leads.length, style: { flex: col.leads.length, background: color, minWidth: '4px' } }));
+        });
+        projCard.appendChild(barRow);
+        const stageGrid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '.5rem' } });
+        projBoard.board.forEach((col, i) => {
+          const color = col.stage.color || COLORS[i % COLORS.length];
+          const stalledCount = col.leads.filter(l => l.stalled).length;
+          stageGrid.appendChild(h('div', { class: 'card clickable', style: { padding: '.55rem .75rem', borderLeft: '4px solid ' + color, cursor: 'pointer' }, onclick: () => { location.hash = '#/projects'; } },
+            h('div', { style: { fontWeight: 600, fontSize: '.85rem', marginBottom: '.2rem' } }, col.stage.name),
+            h('div', { style: { display: 'flex', gap: '.4rem', alignItems: 'center' } },
+              h('span', { style: { fontWeight: 700, fontSize: '1.1rem', color } }, col.leads.length),
+              h('span', { class: 'muted', style: { fontSize: '.78rem' } }, col.leads.length === 1 ? 'lead' : 'leads'),
+              stalledCount ? h('span', { class: 'tag', style: { background: '#fef2f2', color: '#991b1b', marginLeft: 'auto' } }, '\u26a0 ' + stalledCount + ' stalled') : null
+            )
+          ));
+        });
+        projCard.appendChild(stageGrid);
+        grid.appendChild(projCard);
+      }
+    }
+  } catch (_) {}
+
   setTimeout(() => {
     const statusData = (summary.by_status || []).filter(x => x.c > 0);
     // User asked for the dashboard "Leads by status" to be a bar chart with
@@ -1889,7 +1928,12 @@ function renderCell(col, l, statuses) {
     case 'assigned': return h('td', {}, l.assigned_name || '—');
     case 'tags': {
       const tags = String(l.tags || '').split(',').map(s => s.trim()).filter(Boolean);
-      return h('td', {}, ...tags.map(t => h('span', { class: 'tag' }, t)));
+      const tagLib = CRM.cache.tagLibrary || [];
+      return h('td', {}, ...tags.map(name => {
+        const tagObj = tagLib.find(t => t.name === name);
+        const bg = (tagObj && tagObj.color) ? tagObj.color : '#6366f1';
+        return h('span', { class: 'tag', style: { background: bg, color: '#fff' } }, name);
+      }));
     }
     case 'followup': {
       const due = l.next_followup_at ? new Date(l.next_followup_at) : null;
