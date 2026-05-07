@@ -1794,9 +1794,9 @@ function renderCell(col, l, statuses) {
       const sel = h('select', {
         class: 'status-pill',
         'data-lead-status': l.id,
-        style: { '--status-color': l.status_color || '#6b7280' },
         onclick: ev => ev.stopPropagation()
       });
+            sel.style.setProperty('--status-color', l.status_color || '#6b7280');
       statuses.forEach(s => sel.appendChild(h('option', {
         value: s.id, selected: Number(s.id) === Number(l.status_id) ? 'selected' : null
       }, s.name)));
