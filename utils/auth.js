@@ -67,8 +67,23 @@ async function getVisibleUserIds(me) {
     const kids = byParent.get(Number(id)) || [];
     kids.forEach(k => { result.add(k); collect(k, depth - 1); });
   }
-  if (me.role === 'manager') collect(me.id, 10);
-  if (me.role === 'team_leader') collect(me.id, 2);
+  if (me.role === 'manager')      { collect(me.id, 10); return [...result]; }
+  if (me.role === 'team_leader')  { collect(me.id, 2);  return [...result]; }
+
+  // ----- Custom (non-system) role: look up hierarchy_level from the
+  // roles table. 0 = admin-equivalent, 1+ = depth of subtree to expose.
+  // Anything not in the table defaults to "self only" (sales-like) so
+  // we fail closed when an unknown role string lands on a user. -----
+  try {
+    const r = await db.findOneBy('roles', 'key', me.role).catch(() => null);
+    const lvl = r ? Number(r.hierarchy_level) : null;
+    if (lvl === 0) return all.map(u => Number(u.id));      // admin-equivalent
+    if (lvl != null && lvl > 0) {
+      const depth = lvl === 1 ? 10 : (lvl === 2 ? 2 : 0);
+      collect(me.id, depth);
+      return [...result];
+    }
+  } catch (_) { /* fall through to self-only */ }
   return [...result];
 }
 
