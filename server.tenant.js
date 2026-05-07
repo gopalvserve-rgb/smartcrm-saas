@@ -58,7 +58,8 @@ const routes = {
   projectStages: require('./routes/projectStages'),
   personalWa:    require('./routes/personalWaTemplates'),
   integrations:  require('./routes/integrations'),
-  aiUsage:       require('./utils/aiUsage')
+  aiUsage:       require('./utils/aiUsage'),
+  roles:         require('./routes/roles')
 };
 const webhooks = require('./routes/webhooks');
 
