@@ -1030,3 +1030,11 @@ CREATE TABLE IF NOT EXISTS roles (
 CREATE INDEX IF NOT EXISTS idx_roles_key    ON roles(key);
 CREATE INDEX IF NOT EXISTS idx_roles_active ON roles(is_active);
 
+-- ---- v20: drop legacy tax columns (unused by the CRM) --------
+-- These were added manually to some tenant DBs and are not part
+-- of the schema. IF NOT EXISTS / IF EXISTS makes this idempotent
+-- so it is safe to re-run on any tenant (new or old).
+ALTER TABLE leads          DROP COLUMN IF EXISTS tax;
+ALTER TABLE customer_sales DROP COLUMN IF EXISTS tax;
+ALTER TABLE products       DROP COLUMN IF EXISTS tax;
+ALTER TABLE customers      DROP COLUMN IF EXISTS tax;
