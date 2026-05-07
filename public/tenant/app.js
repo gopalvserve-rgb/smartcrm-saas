@@ -9341,7 +9341,7 @@ async function adminRoles() {
             if (!confirm('Delete role "' + r.label + '"?')) return;
             try { await api('api_roles_delete', r.id); CRM.cache._rolesForSelect = null; toast('Deleted'); showAdminTab('roles'); }
             catch (e) { toast(e.message, 'err'); }
-          } }, '🗑 Delete'));
+          } }, '🗑 Delete')));
     }))
   )));
   wrap.appendChild(list); return wrap;
