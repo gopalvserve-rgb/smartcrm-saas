@@ -87,13 +87,20 @@ small.muted { color: var(--muted); font-size: .78rem; margin-top: .25rem; displa
   margin-left: 2px; font-weight: 600;
 }
 .status-pill {
+  /* Inline status editor in the leads list. White background with the
+     status colour rendered as a 5px coloured left-border. */
   display: inline-flex; align-items: center;
-  padding: 2px 8px; border: none; border-radius: 999px;
-  color: #fff; font-size: .75rem; font-weight: 500; cursor: pointer;
-  max-width: 140px;
+  padding: 2px 10px; border-radius: 6px;
+  background: #fff !important;
+  color: var(--text);
+  border: 1px solid var(--border, #e5e7eb);
+  border-left: 5px solid var(--status-color, #6b7280);
+  font-size: .75rem; font-weight: 500; cursor: pointer;
+  max-width: 160px;
   -webkit-appearance: none; appearance: none;
 }
-.status-pill option { color: var(--text); }
+.status-pill:focus, .status-pill:hover { background: #fff !important; }
+.status-pill option { color: var(--text); background: #fff; }
 .status-chip {
   display: inline-flex; align-items: center; gap: .35rem;
   padding: 2px 8px; background: #fff;
@@ -2454,3 +2461,9 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
 .insight-actions { font-size: 13px; color: #475569; padding: 6px 0; }
 .insight-actions-title { font-weight: 600; color: #4338ca; }
 .insight-suggest { font-size: 13px; color: #1e40af; background: #dbeafe; padding: 6px 10px; border-radius: 6px; margin-top: 6px; }
+
+.color-swatch {
+  display: inline-block; width: 16px; height: 16px;
+  border-radius: 4px; border: 1px solid var(--border, #e5e7eb);
+  vertical-align: middle;
+}
