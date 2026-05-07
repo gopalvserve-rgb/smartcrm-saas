@@ -288,6 +288,10 @@ async function api_wb_emb_signin(token, code, phoneNumberId, wabaId) {
     response: { subscribed: subscribeOk, templatesSynced, subscribeErr, templateErr, registerOk, registerErr }
   });
 
+  if (!registerOk) {
+    console.warn('[wb] Central forwarder registration FAILED for phone', phoneNumberId,
+      '— set FORWARDER_REGISTER_URL, FORWARDER_REGISTER_SECRET, BASE_URL in Railway env. Error:', registerErr);
+  }
   return {
     ok: true,
     waba_id: String(wabaId),
@@ -297,7 +301,11 @@ async function api_wb_emb_signin(token, code, phoneNumberId, wabaId) {
     templates_synced: templatesSynced,
     template_error: templateErr,
     forwarder_registered: registerOk,
-    forwarder_error: registerErr
+    forwarder_error: registerErr,
+    forwarder_warning: !registerOk
+      ? ('Forwarder not registered: ' + (registerErr || 'unknown') +
+         '. Set FORWARDER_REGISTER_URL + FORWARDER_REGISTER_SECRET + BASE_URL in Railway env vars.')
+      : null
   };
 }
 
@@ -1709,6 +1717,31 @@ async function expressEvent(req, res) {
     // Unwrap one common nesting level
     if (!body.entry && body.payload && body.payload.entry) body = body.payload;
     if (!body.entry && body.data && body.data.entry) body = body.data;
+
+    // Guard: validate this payload is meant for THIS tenant's phone number.
+    // The central forwarder (whatsbot_webhook_all.php) routes by phone_number_id
+    // but a misconfiguration could send a payload to the wrong tenant.
+    // Drop it before touching the DB — prevents cross-tenant message leakage.
+    const _incomingPhoneId = String(
+      (body.entry && body.entry[0] && body.entry[0].changes &&
+       body.entry[0].changes[0] && body.entry[0].changes[0].value &&
+       body.entry[0].changes[0].value.metadata &&
+       body.entry[0].changes[0].value.metadata.phone_number_id) || ''
+    );
+    if (_incomingPhoneId) {
+      try {
+        const _myCfg = await _cfg();
+        if (_myCfg.phoneId && _incomingPhoneId !== String(_myCfg.phoneId)) {
+          await _logActivity({
+            category: 'webhook_in', name: 'phone_id_mismatch',
+            response_code: 200,
+            request: { incoming_phone_id: _incomingPhoneId, configured_phone_id: _myCfg.phoneId },
+            response: { skipped: true, reason: 'phone_number_id mismatch — payload not for this tenant' }
+          });
+          return; // Drop silently — not for this tenant
+        }
+      } catch (_) {} // If _cfg() fails, allow processing to continue
+    }
 
     // Always log the raw inbound payload so the user can review every webhook
     // hit, regardless of whether we end up acting on it.
