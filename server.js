@@ -1,15 +1,15 @@
 /**
- * SmartCRM SaaS — single-process multi-tenant server.
+ * SmartCRM SaaS â single-process multi-tenant server.
  *
  * URL surface:
- *   GET  /                           → public landing + pricing
- *   POST /api/saas                   → public + super-admin SaaS dispatcher
- *   GET  /api/saas/brand             → public brand JSON for the landing page
- *   GET  /signup/return              → Cashfree return URL (verifies + redirects to /t/<slug>)
- *   POST /hook/cashfree              → Cashfree webhook (raw-body required for HMAC verify)
- *   GET  /admin/                     → super-admin SPA shell (calls /api/saas)
- *   GET  /t/<slug>                   → tenant CRM SPA shell
- *   POST /t/<slug>/api               → tenant API dispatcher (per-tenant DB)
+ *   GET  /                           â public landing + pricing
+ *   POST /api/saas                   â public + super-admin SaaS dispatcher
+ *   GET  /api/saas/brand             â public brand JSON for the landing page
+ *   GET  /signup/return              â Cashfree return URL (verifies + redirects to /t/<slug>)
+ *   POST /hook/cashfree              â Cashfree webhook (raw-body required for HMAC verify)
+ *   GET  /admin/                     â super-admin SPA shell (calls /api/saas)
+ *   GET  /t/<slug>                   â tenant CRM SPA shell
+ *   POST /t/<slug>/api               â tenant API dispatcher (per-tenant DB)
  *
  * The tenant resolver middleware sets req.tenant + req.tenantPool when a
  * /t/<slug>/... path is hit, so downstream tenant routes look identical
@@ -75,8 +75,8 @@ app.use(require('cookie-parser')());
 // Cache strategy:
 //   - HTML files always get no-cache so a deploy shows up immediately
 //     when the user revisits.
-//   - JS / CSS get a short max-age (60s) — index.html references them
-//     with a ?v=… cache buster, so a deploy that bumps the buster
+//   - JS / CSS get a short max-age (60s) â index.html references them
+//     with a ?v=â¦ cache buster, so a deploy that bumps the buster
 //     invalidates them anyway. Without this, browsers kept happily
 //     serving the old admin.js for hours after a deploy and the new
 //     /admin/#/errors view rendered as "Unknown view".
@@ -97,7 +97,7 @@ app.get('/', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'saas', 'index.html'));
 });
 
-// Diagnostic — admin-only smoke test that the Railway egress can
+// Diagnostic â admin-only smoke test that the Railway egress can
 // actually reach a host:port. Helps debug Gmail SMTP timeouts.
 app.get('/api/saas/debug/tcp', async (req, res) => {
   const token = (req.headers['x-auth-token'] || req.query.token || '').toString();
@@ -122,7 +122,7 @@ app.get('/api/saas/debug/tcp', async (req, res) => {
 });
 
 // Public client-error sink. Frontend window.error / unhandledrejection
-// handlers POST here — body is treated as untrusted, capped + redacted
+// handlers POST here â body is treated as untrusted, capped + redacted
 // inside errorLogs.logError(). No auth so anonymous visitors hitting
 // the landing page can still report their own browser errors.
 app.post('/api/saas/log-error', errorLogs.expressClientErrorEndpoint);
@@ -136,7 +136,7 @@ app.post('/api/saas/log-error', errorLogs.expressClientErrorEndpoint);
 //   OAuth callback URL (Valid OAuth Redirect URIs in the Facebook app):
 //     https://crm.smartcrmsolution.com/fb/auth/callback
 //
-//   Lead Ads webhook URL (Webhooks → Page → leadgen):
+//   Lead Ads webhook URL (Webhooks â Page â leadgen):
 //     https://crm.smartcrmsolution.com/hook/meta
 //
 //   WhatsApp Cloud API webhook URL:
@@ -150,7 +150,7 @@ app.post('/api/saas/log-error', errorLogs.expressClientErrorEndpoint);
 //   - Lead Ads webhook: payload contains page_id; we walk every active
 //     tenant DB to find which one owns it, then process the leadgen
 //     event inside that tenant's pool. (For 1000+ tenants we'd swap
-//     this for a control-plane page_id → tenant_id lookup table; for
+//     this for a control-plane page_id â tenant_id lookup table; for
 //     the MVP this is fast enough.)
 //   - WhatsApp webhook: payload contains phone_number_id; same lookup.
 const fbRoute = require('./routes/fb');
@@ -187,7 +187,7 @@ async function _runAsTenant(slug, req, res, handler) {
 
 /**
  * For inbound webhooks where the payload (not state) tells us which
- * tenant — find the tenant whose DB has the matching record. Walks the
+ * tenant â find the tenant whose DB has the matching record. Walks the
  * active tenants, opens each pool briefly, runs the lookup query.
  *
  * `lookupSql` should be a SELECT 1 / SELECT id query that returns at
@@ -206,7 +206,7 @@ async function _findTenantByLookup(lookupSql, params) {
     try {
       const hit = await pool.query(lookupSql, params);
       if (hit.rowCount > 0) return t;
-    } catch (_) { /* table missing or other — skip */ }
+    } catch (_) { /* table missing or other â skip */ }
   }
   return null;
 }
@@ -216,7 +216,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
 // ---- Facebook OAuth callback (one URL for all tenants) ----------
 app.get('/fb/auth/callback', async (req, res) => {
   const stateRaw = (req.query.state || '').toString();
-  // Decode state (no verify) to get slug for routing — the inner
+  // Decode state (no verify) to get slug for routing â the inner
   // expressOAuthCallback will do full jwt.verify with secret.
   let slug;
   try {
@@ -235,7 +235,7 @@ app.get('/fb/auth/callback', async (req, res) => {
 // ---- Meta Lead Ads webhook (one URL for all tenants) ------------
 //
 // FB calls these in two flavours:
-//   GET  with hub.mode=subscribe&hub.verify_token=…&hub.challenge=… → echo challenge
+//   GET  with hub.mode=subscribe&hub.verify_token=â¦&hub.challenge=â¦ â echo challenge
 //   POST with leadgen events
 //
 // VERIFY: tenants share the same verify token (or admin can set
@@ -247,7 +247,7 @@ app.get('/hook/meta', async (req, res) => {
   const challenge = String(req.query['hub.challenge'] || '');
   if (mode !== 'subscribe' || !token) return res.status(400).send('Bad verify');
   // Accept if ANY tenant has this verify token configured. This is
-  // the same trust model FB uses — they only ever ask once at hook
+  // the same trust model FB uses â they only ever ask once at hook
   // setup, and the challenge response is symmetric.
   const r = await controlDb.query(
     `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 200`
@@ -272,7 +272,7 @@ app.get('/hook/meta', async (req, res) => {
 
 app.post('/hook/meta', async (req, res) => {
   // Fast path: when the forwarder dispatches to /t/<slug>/hook/meta
-  // attachTenant has already populated req.tenant — no lookup needed.
+  // attachTenant has already populated req.tenant â no lookup needed.
   if (req.tenant) {
     return webhooksRoute.metaEvent(req, res);
   }
@@ -329,9 +329,9 @@ app.get('/hook/whatsapp', async (req, res) => {
 });
 
 app.post('/hook/whatsapp', async (req, res) => {
-  // Fast path — forwarder dispatched to /t/<slug>/hook/whatsapp.
+  // Fast path â forwarder dispatched to /t/<slug>/hook/whatsapp.
   if (req.tenant) return webhooksRoute.whatsappEvent(req, res);
-  // Slow path — bare /hook/whatsapp; look up by phone_number_id.
+  // Slow path â bare /hook/whatsapp; look up by phone_number_id.
   const body = req.body || {};
   const entry = (body.entry && body.entry[0]) || {};
   const change = (entry.changes && entry.changes[0]) || {};
@@ -345,12 +345,12 @@ app.post('/hook/whatsapp', async (req, res) => {
   return _runAsTenant(t.slug, req, res, webhooksRoute.whatsappEvent);
 });
 
-// /hook/whatsapp_webhook is the WhatsBot module's own endpoint —
+// /hook/whatsapp_webhook is the WhatsBot module's own endpoint â
 // same routing logic, different handler.
 app.get('/hook/whatsapp_webhook', async (req, res) => {
   const token = String(req.query['hub.verify_token'] || '');
   const challenge = String(req.query['hub.challenge'] || '');
-  // Fast path — verify GET to /t/<slug>/hook/whatsapp_webhook with
+  // Fast path â verify GET to /t/<slug>/hook/whatsapp_webhook with
   // tenant already resolved. Just check this tenant's stored token.
   if (req.tenant && req.tenantPool) {
     try {
@@ -360,7 +360,7 @@ app.get('/hook/whatsapp_webhook', async (req, res) => {
     } catch (_) {}
     return res.status(403).send('Verify token mismatch');
   }
-  // Slow path — direct hit on bare /hook/whatsapp_webhook, walk all tenants.
+  // Slow path â direct hit on bare /hook/whatsapp_webhook, walk all tenants.
   const r = await controlDb.query(
     `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 200`
   );
@@ -379,12 +379,12 @@ app.get('/hook/whatsapp_webhook', async (req, res) => {
 });
 
 app.post('/hook/whatsapp_webhook', async (req, res) => {
-  // Fast path — forwarder dispatched to /t/<slug>/hook/whatsapp_webhook.
+  // Fast path â forwarder dispatched to /t/<slug>/hook/whatsapp_webhook.
   // This is the canonical path each tenant registers when they connect
   // via Embedded Sign-In (whatsbot.js _registerWithCentralForwarder),
   // so this branch handles the common case zero-lookup.
   if (req.tenant) return whatsbotRoute.expressEvent(req, res);
-  // Slow path — direct hit on bare /hook/whatsapp_webhook.
+  // Slow path â direct hit on bare /hook/whatsapp_webhook.
   const body = req.body || {};
   const entry = (body.entry && body.entry[0]) || {};
   const change = (entry.changes && entry.changes[0]) || {};
@@ -397,6 +397,262 @@ app.post('/hook/whatsapp_webhook', async (req, res) => {
   if (!t) return res.sendStatus(200);
   return _runAsTenant(t.slug, req, res, whatsbotRoute.expressEvent);
 });
+
+// ââ Website & generic webhook â API-key authenticated ââââââââââââââââââââââ
+// Any HTML contact form or external tool (Zapier, Make, n8n, â¦) can POST to
+// /hook/website using either:
+//   â¢ application/json          { api_key, name, email, â¦ }
+//   â¢ application/x-www-form-urlencoded  (standard HTML form)
+//   â¢ x-api-key / Authorization: Bearer  header
+//
+// The matching tenant is found by looking up WEBSITE_API_KEY in each
+// tenant's config table â so every tenant can have their own key.
+
+function _extractHookKey(req) {
+  const xkey = req.header('x-api-key');
+  if (xkey) return String(xkey).trim();
+  const auth = req.header('authorization') || '';
+  const bearer = /^bearer\s+(.+)$/i.exec(auth);
+  if (bearer) return String(bearer[1]).trim();
+  if (req.body && req.body.api_key) return String(req.body.api_key).trim();
+  if (req.query && req.query.api_key) return String(req.query.api_key).trim();
+  return '';
+}
+
+async function _runHookAsTenant(req, res, handler) {
+  // Fast path â request already resolved to a tenant (via /t/<slug>/â¦)
+  if (req.tenant) return _runAsTenant(req.tenantSlug, req, res, handler);
+
+  // Slow path â bare /hook/website hit, identify tenant by API key
+  const key = _extractHookKey(req);
+  if (!key) return res.status(401).json({ error: 'Missing API key' });
+
+  const t = await _findTenantByLookup(
+    `SELECT 1 FROM config WHERE key = 'WEBSITE_API_KEY' AND value = $1 LIMIT 1`,
+    [key]
+  ).catch(() => null);
+
+  if (!t) return res.status(401).json({ error: 'Invalid API key' });
+  return _runAsTenant(t.slug, req, res, handler);
+}
+
+app.post('/hook/website', (req, res) => _runHookAsTenant(req, res, webhooksRoute.websiteHook));
+app.post('/hook/other',   (req, res) => _runHookAsTenant(req, res, webhooksRoute.otherHook));
+
+// ââ Public API documentation page ââââââââââââââââââââââââââââââââââââââââââ
+app.get('/api-docs', (req, res) => {
+  const host = req.protocol + '://' + req.get('host');
+  res.type('html').send(_apiDocsHtml(host));
+});
+
+function _apiDocsHtml(host) {
+  const safe = s => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>SmartCRM API Documentation</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;line-height:1.6}
+  .header{background:linear-gradient(135deg,#1e293b,#0f172a);padding:2rem;border-bottom:1px solid #1e293b}
+  .header h1{color:#10b981;font-size:1.8rem;margin-bottom:.25rem}
+  .header p{color:#94a3b8}
+  .container{max-width:900px;margin:0 auto;padding:2rem}
+  h2{color:#10b981;font-size:1.2rem;margin:2rem 0 1rem;padding-bottom:.5rem;border-bottom:1px solid #1e293b}
+  h3{color:#38bdf8;font-size:1rem;margin:1.5rem 0 .5rem}
+  .endpoint{background:#1e293b;border:1px solid #334155;border-radius:.5rem;padding:1.5rem;margin-bottom:1.5rem}
+  .method{display:inline-block;padding:.2rem .6rem;border-radius:.25rem;font-size:.8rem;font-weight:700;margin-right:.5rem}
+  .post{background:#065f46;color:#6ee7b7}
+  .get{background:#1e40af;color:#93c5fd}
+  .url{font-family:monospace;color:#f8fafc;font-size:.95rem}
+  .badge{display:inline-block;padding:.15rem .5rem;border-radius:.25rem;font-size:.75rem;margin-left:.5rem}
+  .badge-auth{background:#7c3aed;color:#ddd6fe}
+  .badge-public{background:#334155;color:#94a3b8}
+  table{width:100%;border-collapse:collapse;margin:.5rem 0}
+  th{text-align:left;padding:.5rem;background:#0f172a;color:#94a3b8;font-size:.8rem;border-bottom:1px solid #334155}
+  td{padding:.5rem;border-bottom:1px solid #1e293b;font-size:.85rem;vertical-align:top}
+  td:first-child{font-family:monospace;color:#fbbf24;white-space:nowrap}
+  td:last-child{color:#94a3b8}
+  pre{background:#0f172a;border:1px solid #334155;border-radius:.375rem;padding:1rem;overflow-x:auto;font-size:.82rem;margin:.75rem 0}
+  code{font-family:'Fira Code',monospace;color:#86efac}
+  .tab-bar{display:flex;gap:.5rem;margin-bottom:-.5rem}
+  .tab{padding:.4rem 1rem;border-radius:.375rem .375rem 0 0;cursor:pointer;font-size:.8rem;border:1px solid #334155;border-bottom:none;background:#0f172a;color:#94a3b8}
+  .tab.active{background:#1e293b;color:#e2e8f0}
+  .tab-pane{display:none}.tab-pane.active{display:block}
+  .response{background:#042f2e;border:1px solid #065f46;border-radius:.375rem;padding:1rem;margin:.75rem 0}
+  .copy-btn{float:right;padding:.2rem .6rem;background:#334155;color:#94a3b8;border:none;border-radius:.25rem;cursor:pointer;font-size:.75rem}
+  .copy-btn:hover{background:#475569;color:#e2e8f0}
+  .note{background:#1c1917;border-left:3px solid #f59e0b;padding:.75rem 1rem;border-radius:0 .375rem .375rem 0;font-size:.85rem;color:#d97706;margin:.75rem 0}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="container" style="padding-top:0;padding-bottom:0">
+    <h1>SmartCRM API</h1>
+    <p>Webhook &amp; integration endpoints for your SmartCRM workspace</p>
+    <p style="color:#475569;font-size:.85rem;margin-top:.5rem">Base URL: <code style="color:#38bdf8">${safe(host)}</code></p>
+  </div>
+</div>
+<div class="container">
+
+<h2>Authentication</h2>
+<p style="color:#94a3b8;margin-bottom:1rem">All webhook endpoints require your workspace <strong style="color:#fbbf24">API key</strong>. Find it in your CRM under <strong>Settings â Integrations â Website API Key</strong>.</p>
+<p style="color:#94a3b8">Pass the key using <strong>any one</strong> of these methods:</p>
+<table>
+  <tr><th>Method</th><th>Example</th></tr>
+  <tr><td>Header</td><td><code>X-API-Key: your_key_here</code></td></tr>
+  <tr><td>Bearer token</td><td><code>Authorization: Bearer your_key_here</code></td></tr>
+  <tr><td>Body field</td><td><code>api_key=your_key_here</code></td></tr>
+  <tr><td>Query string</td><td><code>?api_key=your_key_here</code></td></tr>
+</table>
+
+<h2>Endpoints</h2>
+
+<!-- POST /hook/website -->
+<div class="endpoint">
+  <div style="margin-bottom:.75rem">
+    <span class="method post">POST</span>
+    <span class="url">/hook/website</span>
+    <span class="badge badge-auth">API Key required</span>
+  </div>
+  <p style="color:#94a3b8;margin-bottom:1rem">Accepts a lead submission from your website contact form. Creates or updates a lead in your SmartCRM workspace.</p>
+
+  <h3>Request fields</h3>
+  <table>
+    <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+    <tr><td>name</td><td>string</td><td>Contact's full name</td></tr>
+    <tr><td>email</td><td>string</td><td>Contact's email address</td></tr>
+    <tr><td>phone</td><td>string</td><td>Phone number (optional)</td></tr>
+    <tr><td>message</td><td>string</td><td>Message or notes (optional)</td></tr>
+    <tr><td>source</td><td>string</td><td>Lead source label (optional)</td></tr>
+    <tr><td>api_key</td><td>string</td><td>Your API key (if not sent via header)</td></tr>
+  </table>
+
+  <h3>Examples</h3>
+
+  <div class="tab-bar">
+    <div class="tab active" onclick="showTab(this,'wb-json')">JSON</div>
+    <div class="tab" onclick="showTab(this,'wb-form')">HTML Form / URL-encoded</div>
+    <div class="tab" onclick="showTab(this,'wb-html')">HTML &lt;form&gt; tag</div>
+  </div>
+
+  <div id="wb-json" class="tab-pane active">
+    <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code>curl -X POST ${safe(host)}/hook/website \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your_key_here" \
+  -d '{
+    "name":    "Priya Sharma",
+    "email":   "priya@example.com",
+    "phone":   "+91 98765 43210",
+    "message": "Interested in the enterprise plan",
+    "source":  "website"
+  }'</code></pre>
+  </div>
+
+  <div id="wb-form" class="tab-pane">
+    <div class="note">â Supported â you can POST standard HTML form data directly to this endpoint. No JSON.stringify needed.</div>
+    <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code>curl -X POST ${safe(host)}/hook/website \
+  -H "X-API-Key: your_key_here" \
+  --data-urlencode "name=Priya Sharma" \
+  --data-urlencode "email=priya@example.com" \
+  --data-urlencode "phone=+91 98765 43210" \
+  --data-urlencode "message=Interested in the enterprise plan" \
+  --data-urlencode "source=website"</code></pre>
+    <p style="color:#94a3b8;font-size:.85rem;margin-top:.5rem">Or with <code>-d</code> (URL-encoded string):</p>
+    <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code>curl -X POST ${safe(host)}/hook/website \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "api_key=your_key_here&amp;name=Priya+Sharma&amp;email=priya%40example.com&amp;phone=%2B91+98765+43210&amp;message=Interested+in+enterprise"</code></pre>
+  </div>
+
+  <div id="wb-html" class="tab-pane">
+    <div class="note">Embed this on your website. The API key is in the hidden field â keep it server-side in production.</div>
+    <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code>&lt;form method="POST" action="${safe(host)}/hook/website"&gt;
+  &lt;input type="hidden" name="api_key" value="your_key_here"&gt;
+  &lt;input type="text"   name="name"    placeholder="Your name"&gt;
+  &lt;input type="email"  name="email"   placeholder="Email"&gt;
+  &lt;input type="tel"    name="phone"   placeholder="Phone"&gt;
+  &lt;textarea            name="message" placeholder="Message"&gt;&lt;/textarea&gt;
+  &lt;button type="submit"&gt;Send&lt;/button&gt;
+&lt;/form&gt;</code></pre>
+  </div>
+
+  <h3>Success response</h3>
+  <div class="response"><code>{ "ok": true, "result": { "id": 42, "name": "Priya Sharma" } }</code></div>
+
+  <h3>Error responses</h3>
+  <table>
+    <tr><th>Status</th><th>Error</th><th>Cause</th></tr>
+    <tr><td>401</td><td>Missing API key</td><td>No key provided</td></tr>
+    <tr><td>401</td><td>Invalid API key</td><td>Key not found in any tenant</td></tr>
+    <tr><td>400</td><td>email required</td><td>email field missing</td></tr>
+  </table>
+</div>
+
+<!-- POST /hook/other -->
+<div class="endpoint">
+  <div style="margin-bottom:.75rem">
+    <span class="method post">POST</span>
+    <span class="url">/hook/other</span>
+    <span class="badge badge-auth">API Key required</span>
+  </div>
+  <p style="color:#94a3b8;margin-bottom:1rem">Generic webhook endpoint. Accepts any payload and passes it to your CRM for custom processing.</p>
+
+  <h3>Examples</h3>
+  <div class="tab-bar">
+    <div class="tab active" onclick="showTab(this,'ot-json')">JSON</div>
+    <div class="tab" onclick="showTab(this,'ot-form')">URL-encoded</div>
+  </div>
+  <div id="ot-json" class="tab-pane active">
+    <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code>curl -X POST ${safe(host)}/hook/other \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your_key_here" \
+  -d '{ "event": "form_submit", "data": { "page": "/contact" } }'</code></pre>
+  </div>
+  <div id="ot-form" class="tab-pane">
+    <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code>curl -X POST ${safe(host)}/hook/other \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "api_key=your_key_here&amp;event=form_submit&amp;page=%2Fcontact"</code></pre>
+  </div>
+</div>
+
+<!-- GET /api-docs -->
+<div class="endpoint">
+  <div style="margin-bottom:.75rem">
+    <span class="method get">GET</span>
+    <span class="url">/api-docs</span>
+    <span class="badge badge-public">Public</span>
+  </div>
+  <p style="color:#94a3b8">Returns this documentation page.</p>
+</div>
+
+</div><!-- /container -->
+<script>
+function showTab(btn, id) {
+  const bar = btn.closest('.tab-bar');
+  bar.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  // Find all sibling tab-panes (next siblings until next tab-bar or endpoint end)
+  let el = bar.nextElementSibling;
+  while (el && el.classList.contains('tab-pane')) {
+    el.classList.remove('active');
+    el = el.nextElementSibling;
+  }
+  document.getElementById(id).classList.add('active');
+}
+function copyPre(btn) {
+  const code = btn.parentElement.querySelector('code').innerText;
+  navigator.clipboard.writeText(code).then(() => {
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = 'Copy', 1500);
+  });
+}
+</script>
+</body>
+</html>`;
+}
+
 
 // Public brand JSON (used by the landing page)
 app.get('/api/saas/brand', async (_req, res) => {
@@ -497,8 +753,8 @@ app.get(/^\/admin\/?(.*)$/, (_req, res) => {
 app.get(/^\/t\/[a-z0-9-]+$/, (req, res) => {
   // Insert the slash BEFORE the query string. Naively appending '/'
   // to req.originalUrl breaks magic-link URLs like
-  //   /t/acme?ssl=eyJ…
-  // by producing /t/acme?ssl=eyJ…/ which corrupts the JWT value.
+  //   /t/acme?ssl=eyJâ¦
+  // by producing /t/acme?ssl=eyJâ¦/ which corrupts the JWT value.
   const qIdx = req.originalUrl.indexOf('?');
   const target = qIdx === -1
     ? req.originalUrl + '/'
@@ -506,7 +762,7 @@ app.get(/^\/t\/[a-z0-9-]+$/, (req, res) => {
   res.redirect(301, target);
 });
 
-// Tenant "not found" placeholder — only serves when the slug doesn't
+// Tenant "not found" placeholder â only serves when the slug doesn't
 // resolve to an active tenant row. For valid tenants we fall through
 // to the static-asset + SPA-shell handlers further down, which serve
 // public/tenant/index.html (the actual CRM UI).
@@ -524,8 +780,8 @@ app.get(/^\/t\/[a-z0-9-]+\/?$/, async (req, res, next) => {
     const tp = require('./utils/tenantPool');
     tenant = await tp.findActiveTenant(slug);
   } catch (_) {}
-  // Tenant exists → let attachTenant + the SPA handler take over.
-  // (The "?ssl=…" magic-link case also flows through here — the SPA
+  // Tenant exists â let attachTenant + the SPA handler take over.
+  // (The "?ssl=â¦" magic-link case also flows through here â the SPA
   // shell exchanges the token for a real JWT during boot.)
   if (tenant && tenant.status !== 'deleted' && tenant.status !== 'suspended') return next();
   return _renderTenantPlaceholder(req, res, slug, tenant);
@@ -539,7 +795,7 @@ app.use(attachTenant);
 // AsyncLocalStorage.run so any /routes/* handler that calls
 // db.query() / db.getAll() / etc. transparently uses the right
 // per-tenant pg.Pool. Without this, the route files would silently
-// hit the control DB (DATABASE_URL) and either crash or — worse —
+// hit the control DB (DATABASE_URL) and either crash or â worse â
 // read/write the wrong tenant's data.
 app.use((req, _res, next) => {
   if (!req.tenantPool) return next();
@@ -552,7 +808,7 @@ app.use((req, _res, next) => {
 // matches here. The dispatcher loads every /routes/<name>.js and maps
 // api_* exports to handlers. See routes/saas/tenantApi.js for details.
 app.post('/api', (req, res, next) => {
-  // Must have a resolved tenant — otherwise this isn't a tenant call
+  // Must have a resolved tenant â otherwise this isn't a tenant call
   // and we just 404 with JSON to avoid the "<!DOCTYPE" parse crash.
   if (!req.tenant) {
     return res.status(404).json({ error: 'Workspace not found: ' + (req.tenantSlug || '') });
@@ -571,7 +827,7 @@ app.post('/api', (req, res, next) => {
 // a real CSV. Without an explicit handler here the request falls
 // through to the JSON-404 catch-all below, which returned
 //   {"error":"Not found: GET /api/sample.csv"}
-// — and the browser saved that JSON as the "sample sheet". Mount the
+// â and the browser saved that JSON as the "sample sheet". Mount the
 // same handler the original Celeste server uses, but only inside a
 // tenant scope so the custom-field columns come from THIS tenant's DB.
 function _csvCell(v) {
@@ -580,7 +836,7 @@ function _csvCell(v) {
 }
 
 // ---------------------------------------------------------------
-// SpreadsheetML 2003 helper — generates a single XML file Excel
+// SpreadsheetML 2003 helper â generates a single XML file Excel
 // (and Numbers / LibreOffice) recognises as a real workbook. We use
 // this instead of pulling in the `xlsx` npm dep because:
 //   1. No new package = nothing to npm-install on existing deploys
@@ -625,7 +881,7 @@ function _buildSampleXls(headers, rows) {
 }
 
 app.get('/api/sample.csv', async (req, res, next) => {
-  if (!req.tenant) return next();   // root-level call → fall through to JSON 404
+  if (!req.tenant) return next();   // root-level call â fall through to JSON 404
 
   // Pull custom fields so the template includes every cf_<key> column
   // currently defined in this tenant's DB. Runs inside tenantStorage,
@@ -635,12 +891,12 @@ app.get('/api/sample.csv', async (req, res, next) => {
     customFields = (await tenantDb.getAll('custom_fields'))
       .filter(c => Number(c.is_active) !== 0 && c.key)
       .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
-  } catch (_) { /* fresh tenant with no custom fields — ok */ }
+  } catch (_) { /* fresh tenant with no custom fields â ok */ }
 
   const baseCols = [
     // 1. Contact
     'name', 'phone', 'alt_phone', 'whatsapp', 'email',
-    // 2. Routing — status / source / product accepted by NAME, assigned_to by email-or-name-or-id
+    // 2. Routing â status / source / product accepted by NAME, assigned_to by email-or-name-or-id
     'status', 'source', 'source_ref', 'product', 'assigned_to',
     // 3. Address
     'address', 'city', 'state', 'pincode', 'country', 'company',
@@ -648,7 +904,7 @@ app.get('/api/sample.csv', async (req, res, next) => {
     'value', 'currency', 'qualified', 'tags',
     // 5. Activity
     'next_followup_at', 'notes',
-    // 6. Migration timestamps — admins-only override; blank = "now"
+    // 6. Migration timestamps â admins-only override; blank = "now"
     'created_at', 'last_status_change_at',
     // 7. Marketing attribution (Google Ads / UTM)
     'gclid', 'gad_campaignid',
@@ -685,7 +941,7 @@ app.get('/api/sample.csv', async (req, res, next) => {
       next_followup_at: '2026-05-01 10:00',
       created_at: '2025-12-15 09:30',
       last_status_change_at: '2026-04-22 11:45',
-      notes: 'Demo requested — interested in premium tier'
+      notes: 'Demo requested â interested in premium tier'
     }),
     sampleRow({
       name: 'Jane Smith', phone: '+919876543211', email: 'jane@example.com',
@@ -710,7 +966,7 @@ app.get('/api/sample.csv', async (req, res, next) => {
 
 // ---- /api/sample.xls (real Excel-format sample) -------------------
 // Same template the CSV uses, but emitted as SpreadsheetML 2003 so
-// Excel opens it as a true spreadsheet — no "import as text" step.
+// Excel opens it as a true spreadsheet â so "import as text" step.
 // Tenant-scoped, identical fall-through pattern to the CSV handler.
 app.get('/api/sample.xls', async (req, res, next) => {
   if (!req.tenant) return next();
@@ -740,7 +996,7 @@ app.get('/api/sample.xls', async (req, res, next) => {
       status: 'New', source: 'Website', product: 'Premium plan',
       city: 'Mumbai', country: 'India', value: '50000', currency: 'INR',
       qualified: '1', tags: 'enterprise,priority',
-      notes: 'Sample row — replace with real data'
+      notes: 'Sample row â replace with real data'
     },
     {
       name: 'Jane Doe', phone: '9123456789', email: 'jane@example.com',
@@ -759,39 +1015,39 @@ app.get('/api/sample.xls', async (req, res, next) => {
 // request. Plain /<no-tenant> requests still go to the SaaS landing
 // (handled by the earlier app.get('/') registration above).
 app.get('/', (req, res, next) => {
-  if (!req.tenant) return next();          // no tenant → fall through to landing/static
+  if (!req.tenant) return next();          // no tenant â fall through to landing/static
   res.sendFile(path.join(__dirname, 'public', 'tenant', 'index.html'));
 });
 
 // Serve tenant static assets (app.js, styles.css, sw.js, manifests,
 // icons) under any path inside the tenant scope. The tenant SPA
 // references these as /app.js, /styles.css, etc., which after
-// attachTenant rewrites becomes /app.js — served from public/tenant.
+// attachTenant rewrites becomes /app.js â served from public/tenant.
 app.use((req, res, next) => {
   if (!req.tenant) return next();
   return express.static(path.join(__dirname, 'public', 'tenant'), _staticOpts)(req, res, next);
 });
 
-// IMPORTANT — keep the static handler scoped to /saas so it can ONLY
+// IMPORTANT â keep the static handler scoped to /saas so it can ONLY
 // serve assets from public/saas (the landing site + admin SPA). The
 // previous setup mounted public/ at the root, which silently served
 // the legacy Celeste SPA (public/index.html + public/app.js) when a
 // tenant URL got rewritten. The tenant CRM then tried to fetch /api
 // endpoints that don't exist on this server, got HTML 404 responses
-// back, and crashed clients with "Unexpected token '<', '<!DOCTYPE'…
+// back, and crashed clients with "Unexpected token '<', '<!DOCTYPE'â¦
 // is not valid JSON". The legacy files have now been removed from the
 // repo, but we also keep the static handler narrow so the bug can't
 // silently come back.
 
 // Renders the tenant welcome / "not found" page. Pure HTML, no JS,
-// no fetch — by design, so this surface can never produce a JSON
+// no fetch â by design, so this surface can never produce a JSON
 // parse error on the user's screen.
 function _renderTenantPlaceholder(req, res, slug, tenant) {
   const safe = (s) => String(s == null ? '' : s).replace(/[<>&"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
-  // Decode an admin-minted "Login as tenant" token (?ssl=…) if present
+  // Decode an admin-minted "Login as tenant" token (?ssl=â¦) if present
   // so we can show the operator who they're impersonating. The token
   // itself is short-lived (5 min) and signed with JWT_SECRET; here we
-  // only verify it for display — Phase 2's tenant auth layer will be
+  // only verify it for display â Phase 2's tenant auth layer will be
   // the actual consumer.
   let ssl = null;
   if (req.query && req.query.ssl) {
@@ -799,24 +1055,24 @@ function _renderTenantPlaceholder(req, res, slug, tenant) {
       const jwt = require('jsonwebtoken');
       const payload = jwt.verify(String(req.query.ssl), process.env.JWT_SECRET || 'change-me-in-production');
       if (payload && payload.ssl && payload.slug === slug) ssl = payload;
-    } catch (_) { /* expired or tampered — ignore, show normal page */ }
+    } catch (_) { /* expired or tampered â ignore, show normal page */ }
   }
   if (!tenant) {
     return res.status(404).type('html').send(`<!doctype html><meta charset="utf-8"/>
-<title>Workspace not found · SmartCRM</title>
+<title>Workspace not found Â· SmartCRM</title>
 <style>body{font-family:system-ui,sans-serif;max-width:560px;margin:5rem auto;padding:0 1rem;color:#0f172a}
 .card{background:#fef2f2;border:1px solid #fecaca;padding:1.5rem;border-radius:12px}
 code{background:#fff;padding:.2rem .4rem;border-radius:4px}
 a{color:#4338ca}</style>
-<h1>🤔 Workspace not found</h1>
+<h1>ð¤ Workspace not found</h1>
 <div class="card">
   <p>The workspace <code>${safe(slug)}</code> doesn't exist or has been removed.</p>
 </div>
-<p><a href="/">← Back to SmartCRM home</a></p>`);
+<p><a href="/">â Back to SmartCRM home</a></p>`);
   }
   const t = tenant;
   res.type('html').send(`<!doctype html><meta charset="utf-8"/>
-<title>${safe(t.org_name)} — SmartCRM</title>
+<title>${safe(t.org_name)} â SmartCRM</title>
 <style>body{font-family:system-ui,sans-serif;max-width:640px;margin:4rem auto;padding:0 1.25rem;color:#0f172a;line-height:1.55}
 .card{background:#ecfdf5;border:1px solid #6ee7b7;padding:1.5rem;border-radius:12px;margin:1.5rem 0}
 .warn{background:#fef9c3;border-color:#facc15}
@@ -827,13 +1083,13 @@ h2{font-size:1.05rem;margin:0 0 .6rem;color:#0f766e}
 .lbl{color:#64748b;font-size:.82rem;text-transform:uppercase;letter-spacing:.04em;margin-right:.3rem}
 a{color:#4338ca;font-weight:500}</style>
 ${ssl ? `<div class="card" style="background:#dbeafe;border-color:#60a5fa;color:#1e3a8a">
-  <h2 style="color:#1e40af">🔓 Logged in as tenant (admin sudo)</h2>
-  <p>You opened this workspace from the admin panel. The tenant CRM SPA isn't mounted yet, so this is the welcome placeholder — but the magic-link token is valid and Phase 2's tenant auth layer will consume it automatically.</p>
+  <h2 style="color:#1e40af">ð Logged in as tenant (admin sudo)</h2>
+  <p>You opened this workspace from the admin panel. The tenant CRM SPA isn't mounted yet, so this is the welcome placeholder â but the magic-link token is valid and Phase 2's tenant auth layer will consume it automatically.</p>
   <div class="row"><span class="lbl">Acting as</span> <code>${safe(ssl.as_email)}</code></div>
   <div class="row"><span class="lbl">Sudo by</span> <code>${safe(ssl.sa_email)}</code></div>
   <div class="row"><span class="lbl">Token expires</span> ${new Date(ssl.exp * 1000).toISOString().replace('T', ' ').slice(0, 19)} UTC</div>
 </div>` : ''}
-<h1>👋 Welcome to ${safe(t.org_name)}</h1>
+<h1>ð Welcome to ${safe(t.org_name)}</h1>
 <p>Your SmartCRM workspace is registered.</p>
 <div class="card">
   <h2>Workspace details</h2>
@@ -844,7 +1100,7 @@ ${ssl ? `<div class="card" style="background:#dbeafe;border-color:#60a5fa;color:
 </div>
 <div class="card warn">
   <h2>Tenant CRM is still being wired up</h2>
-  <p>The full SmartCRM workspace UI (leads, calls, WhatsApp, reports) is in the next deployment phase — the per-tenant DB has been provisioned, but the SPA isn't mounted under <code>/t/&lt;slug&gt;</code> yet.</p>
+  <p>The full SmartCRM workspace UI (leads, calls, WhatsApp, reports) is in the next deployment phase â the per-tenant DB has been provisioned, but the SPA isn't mounted under <code>/t/&lt;slug&gt;</code> yet.</p>
   <p>If you're the platform admin you can manage this tenant from the <a href="/admin/#/tenants">SmartCRM admin panel</a>.</p>
 </div>
 <p style="color:#94a3b8;font-size:.85rem;margin-top:2rem">Need help? Email <a href="mailto:support@smartcrmsolution.com">support@smartcrmsolution.com</a></p>`);
@@ -853,23 +1109,23 @@ ${ssl ? `<div class="card" style="background:#dbeafe;border-color:#60a5fa;color:
 // JSON-safe 404 for any unmatched API path under either /api or
 // /t/<slug>/api. Anything that calls fetch() expecting JSON now gets
 // clean JSON back even if the function name is wrong / the route
-// doesn't exist — preventing the "Unexpected token '<', '<!DOCTYPE'…"
+// doesn't exist â preventing the "Unexpected token '<', '<!DOCTYPE'â¦"
 // crash that the legacy public/app.js was hitting earlier.
 app.all(/^\/api(\/.*)?$/, (req, res) => {
   res.status(404).json({ error: 'Not found: ' + req.method + ' ' + req.originalUrl });
 });
 
 // Static assets live ONLY under /saas (mounted earlier above). No
-// catch-all express.static here — see comment block at the top of
+// catch-all express.static here â see comment block at the top of
 // this section for the rationale.
 
 // ---- Global error middleware (must be LAST) -------------------
 // Anything a route handler throws or rejects ends up here. Logs to
 // the error_logs table + returns 500 to the caller. The user asked
-// us to capture every error in our project — this is the catch-all.
+// us to capture every error in our project â this is the catch-all.
 app.use(errorLogs.expressErrorMiddleware);
 
-// Process-level safety net — node will keep running after these,
+// Process-level safety net â node will keep running after these,
 // so as long as we record them we can resolve them later.
 process.on('unhandledRejection', (reason) => {
   console.error('[unhandledRejection]', reason);
@@ -893,10 +1149,10 @@ process.on('uncaughtException', (err) => {
 // ---- Boot -----------------------------------------------------
 const PORT = Number(process.env.PORT || 3000);
 async function boot() {
-  console.log('[boot] migrating control plane…');
+  console.log('[boot] migrating control planeâ¦');
   await control.migrate();
   // First-boot seed + per-boot settings backfill. seed-once is fully
-  // idempotent — it inserts the super-admin only if none exists, every
+  // idempotent â it inserts the super-admin only if none exists, every
   // package only if the row is missing by name, and every default
   // setting only if that key isn't already in saas_settings. Running it
   // every boot is safe and means new platform-default settings (e.g.
