@@ -73,6 +73,9 @@ function _sampleUrl(ext /* 'csv' | 'xls' */) {
 function _attachSampleLink(el, ext) {
   if (!el) return;
   el.href = _sampleUrl(ext);
+  // Click handler is defensive — even if href somehow resets, we
+  // navigate to the resolved tenant URL. preventDefault to avoid
+  // double-navigation when both fire.
   el.addEventListener('click', (ev) => {
     ev.preventDefault();
     window.location.href = _sampleUrl(ext);
@@ -240,6 +243,72 @@ function fmtDate(s, opts) {
     }
     return d.toLocaleString();
   } catch (_) { return String(s); }
+}
+
+/* ---- adminRoles tab ---- */
+async function adminRoles() {
+  const roles = await api('api_roles_list');
+  const wrap = h('div', {});
+  const keyInput   = h('input', { placeholder: 'Key (e.g. senior_sales)', style: { flex: '1' } });
+  const labelInput = h('input', { placeholder: 'Display label (e.g. Senior Sales)', style: { flex: '1' } });
+  const lvlInput   = h('select', {},
+    h('option', { value: '0' }, '0 — admin (sees everyone)'),
+    h('option', { value: '1' }, '1 — manager (whole subtree)'),
+    h('option', { value: '2' }, '2 — team leader (2 levels)'),
+    h('option', { value: '3', selected: 'selected' }, '3 — sales (self only)')
+  );
+  wrap.appendChild(h('div', { class: 'card' },
+    h('h3', {}, 'Add a new role'),
+    h('p', { class: 'muted' }, 'New roles inherit no permissions by default. After adding, set them up in the Permissions tab.'),
+    h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', marginTop: '.5rem', flexWrap: 'wrap' } },
+      keyInput, labelInput, lvlInput,
+      h('button', { class: 'btn primary', onclick: async () => {
+        try {
+          await api('api_roles_save', {
+            key: keyInput.value, label: labelInput.value,
+            hierarchy_level: parseInt(lvlInput.value, 10) || 3
+          });
+          CRM.cache._rolesForSelect = null;
+          toast('Role added'); showAdminTab('roles');
+        } catch (e) { toast(e.message, 'err'); }
+      } }, '+ Add role'))
+  ));
+
+  const list = h('div', { class: 'card' }, h('h3', {}, 'Existing roles (' + roles.length + ')'));
+  list.appendChild(h('div', { class: 'table-wrap' }, h('table', {},
+    h('thead', {}, h('tr', {},
+      h('th', {}, 'Key'), h('th', {}, 'Label'), h('th', {}, 'Level'),
+      h('th', {}, 'System?'),
+      h('th', { style: { textAlign: 'right' } }, 'Actions'))),
+    h('tbody', {}, ...roles.map(r => {
+      const labelEdit = h('input', { value: r.label, style: { width: '160px' } });
+      const lvlEdit   = h('input', { type: 'number', min: '0', max: '99', value: String(r.hierarchy_level), style: { width: '60px' } });
+      return h('tr', {},
+        h('td', {}, h('code', {}, r.key)),
+        h('td', {}, labelEdit),
+        h('td', {}, lvlEdit),
+        h('td', {}, Number(r.is_system) === 1 ? '✓' : ''),
+        h('td', { style: { textAlign: 'right' } },
+          h('button', { class: 'btn sm', onclick: async () => {
+            try {
+              await api('api_roles_save', { id: r.id, key: r.key, label: labelEdit.value,
+                hierarchy_level: parseInt(lvlEdit.value, 10) || 3 });
+              CRM.cache._rolesForSelect = null;
+              toast('Saved');
+            } catch (e) { toast(e.message, 'err'); }
+          } }, '💾 Save'),
+          ' ',
+          Number(r.is_system) === 1 ? null
+            : h('button', { class: 'btn sm danger', onclick: async () => {
+                if (!confirm(`Delete role "${r.label}"?`)) return;
+                try { await api('api_roles_delete', r.id); CRM.cache._rolesForSelect = null; toast('Deleted'); showAdminTab('roles'); }
+                catch (e) { toast(e.message, 'err'); }
+              } }, '🗑 Delete')
+        ));
+    }))
+  )));
+  wrap.appendChild(list);
+  return wrap;
 }
 
 /**
@@ -1090,7 +1159,9 @@ VIEWS.leads = async (view) => {
     searchInput,
     wireFilter(selectOpts('f-status', [{ id: '', name: 'Any status' }, ...statuses], CRM.prefs.filters.status_id)),
     wireFilter(selectOpts('f-source', [{ id: '', name: 'Any source' }, ...sources.map(s => ({ id: s.name, name: s.name }))], CRM.prefs.filters.source)),
-    (CRM.user && CRM.user.role === 'admin')
+    // Assignee filter — hidden for sales users because their scope is fixed.
+    // Admins, managers, and team leaders can filter by assignee.
+    (CRM.user && ['admin', 'manager', 'team_leader'].includes(CRM.user.role))
       ? wireFilter(selectOpts('f-assigned', [{ id: '', name: 'Any assignee' }, ...users], CRM.prefs.filters.assigned_to))
       : null,
     wireFilter(selectOpts('f-followup', [{ id: '', name: 'All follow-ups' }, { id: 'today', name: 'Due today' }, { id: 'overdue', name: 'Overdue' }], CRM.prefs.filters.followup)),
@@ -1130,21 +1201,32 @@ VIEWS.leads = async (view) => {
           catch (e) { toast(e.message, 'err'); }
         } }, '🧹 Junk cleanup')
       : null,
+    // Pull Leads — non-admins (sales / team_leader / manager) can self-claim
+    // free leads from the pool. Admin sees the existing list directly.
     (CRM.user && CRM.user.role !== 'admin')
-      ? h('button', { class: 'btn pullleads', id: 'btn-pull-leads', title: 'Pull free leads from the pool', onclick: () => pullLeadsClick() }, '⬇ Pull Leads')
+      ? h('button', { class: 'btn pullleads', id: 'btn-pull-leads',
+            title: 'Pull free leads from the pool',
+            onclick: () => pullLeadsClick()
+          }, '⬇ Pull Leads')
       : null,
     h('button', { class: 'btn primary', onclick: () => openLeadModal() }, '+ New Lead')
   );
   view.appendChild(toolbar);
+
   if (CRM.user && CRM.user.role !== 'admin') {
     api('api_leads_pullInfo').then(info => {
       const btn = document.getElementById('btn-pull-leads');
       if (!btn || !info) return;
       if (!info.allowed) { btn.style.display = 'none'; return; }
-      const n = Number(info.target_count) || 0; const avail = Number(info.available_count) || 0;
-      btn.textContent = n > 0 ? `⬇ Pull ${Math.min(n, avail)} leads` : (avail === 0 ? '⬇ No free leads' : '⬇ Pull Leads');
+      const n = Number(info.target_count) || 0;
+      const avail = Number(info.available_count) || 0;
+      btn.textContent = n > 0
+        ? `⬇ Pull ${Math.min(n, avail)} leads`
+        : (avail === 0 ? '⬇ No free leads' : '⬇ Pull Leads');
       if (n === 0 || avail === 0) btn.disabled = true;
-      btn.title = info.is_first_pull ? `First pull: claim up to ${info.initial_count} free leads` : `Each pull claims up to ${info.subsequent_count} free leads.`;
+      btn.title = info.is_first_pull
+        ? `First pull: claim up to ${info.initial_count} free leads`
+        : `Each pull claims up to ${info.subsequent_count} free leads. ${avail} available.`;
     }).catch(() => {});
   }
 
@@ -1796,7 +1878,9 @@ function renderCell(col, l, statuses) {
         'data-lead-status': l.id,
         onclick: ev => ev.stopPropagation()
       });
-            sel.style.setProperty('--status-color', l.status_color || '#6b7280');
+      // CSS custom properties must be set via setProperty — Object.assign on
+      // CSSStyleDeclaration silently ignores '--*' keys in most browsers.
+      sel.style.setProperty('--status-color', l.status_color || '#6b7280');
       statuses.forEach(s => sel.appendChild(h('option', {
         value: s.id, selected: Number(s.id) === Number(l.status_id) ? 'selected' : null
       }, s.name)));
@@ -9217,16 +9301,6 @@ async function downloadReportBuilderExcel() {
 }
 
 /* ---------------- Admin ---------------- */
-async function pullLeadsClick() {
-  let info; try { info = await api('api_leads_pullInfo'); } catch (e) { toast(e.message || 'Pull leads not available', 'err'); return; }
-  if (!info || !info.allowed) { toast('Pull leads is disabled or not allowed for your role', 'warn'); return; }
-  const target = Math.min(Number(info.target_count) || 0, Number(info.available_count) || 0);
-  if (target <= 0) { if ((info.daily_remaining ?? null) === 0) toast(`Daily lead cap reached (${info.daily_cap}). Try again tomorrow.`, 'warn'); else toast('No free leads available right now', 'warn'); return; }
-  const ok = await confirmDialog(`Claim up to ${target} free leads?\n\nThey'll be assigned to you and appear in your leads list.`);
-  if (!ok) return;
-  try { const r = await api('api_leads_pull'); if (!r || r.pulled_count === 0) toast('No leads were available to pull', 'warn'); else toast(`✅ Pulled ${r.pulled_count} lead${r.pulled_count === 1 ? '' : 's'}`, 'ok'); if (typeof loadLeads === 'function') loadLeads({ page: 1 }); } catch (e) { toast(e.message || 'Failed to pull leads', 'err'); }
-}
-
 VIEWS.admin = async (view) => {
   view.innerHTML = '';
   const tabs = [
@@ -9293,86 +9367,69 @@ async function showAdminTab(id) {
   } catch (e) { body.innerHTML = `<div class="error-box">${esc(e.message)}</div>`; }
 }
 
-async function _rolesForSelect() {
-  if (CRM.cache._rolesForSelect) return CRM.cache._rolesForSelect;
-  let list = [];
-  try { const rows = await api('api_roles_list'); list = (rows||[]).map(r => ({ value: r.key, label: r.label })); } catch(_){}
-  if (!list.length) list = [{value:'admin',label:'Admin'},{value:'manager',label:'Manager'},{value:'team_leader',label:'Team Leader'},{value:'sales',label:'Sales'}];
-  CRM.cache._rolesForSelect = list; return list;
-}
-
-async function adminRoles() {
-  const roles = await api('api_roles_list');
-  const wrap = h('div', {});
-  const keyInput = h('input', { placeholder: 'Key (e.g. senior_sales)', style: { flex: '1' } });
-  const labelInput = h('input', { placeholder: 'Display label', style: { flex: '1' } });
-  const lvlInput = h('select', {},
-    h('option', { value: '0' }, '0 — admin'),
-    h('option', { value: '1' }, '1 — manager'),
-    h('option', { value: '2' }, '2 — team leader'),
-    h('option', { value: '3', selected: 'selected' }, '3 — sales')
-  );
-  wrap.appendChild(h('div', { class: 'card' },
-    h('h3', {}, 'Add a new role'),
-    h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', marginTop: '.5rem', flexWrap: 'wrap' } },
-      keyInput, labelInput, lvlInput,
-      h('button', { class: 'btn primary', onclick: async () => {
-        try { await api('api_roles_save', { key: keyInput.value, label: labelInput.value, hierarchy_level: parseInt(lvlInput.value, 10) || 3 });
-          CRM.cache._rolesForSelect = null; toast('Role added'); showAdminTab('roles');
-        } catch (e) { toast(e.message, 'err'); }
-      } }, '+ Add role'))
-  ));
-  const list = h('div', { class: 'card' }, h('h3', {}, 'Existing roles (' + roles.length + ')'));
-  list.appendChild(h('div', { class: 'table-wrap' }, h('table', {},
-    h('thead', {}, h('tr', {}, h('th', {}, 'Key'), h('th', {}, 'Label'), h('th', {}, 'Level'), h('th', {}, 'System?'), h('th', { style: { textAlign: 'right' } }, 'Actions'))),
-    h('tbody', {}, ...roles.map(r => {
-      const labelEdit = h('input', { value: r.label, style: { width: '160px' } });
-      const lvlEdit = h('input', { type: 'number', min: '0', max: '99', value: String(r.hierarchy_level), style: { width: '60px' } });
-      return h('tr', {},
-        h('td', {}, h('code', {}, r.key)), h('td', {}, labelEdit), h('td', {}, lvlEdit),
-        h('td', {}, Number(r.is_system) === 1 ? '✓' : ''),
-        h('td', { style: { textAlign: 'right' } },
-          h('button', { class: 'btn sm', onclick: async () => {
-            try { await api('api_roles_save', { id: r.id, key: r.key, label: labelEdit.value, hierarchy_level: parseInt(lvlEdit.value, 10) || 3 }); CRM.cache._rolesForSelect = null; toast('Saved'); }
-            catch (e) { toast(e.message, 'err'); }
-          } }, '💾 Save'),
-          ' ',
-          Number(r.is_system) === 1 ? null : h('button', { class: 'btn sm danger', onclick: async () => {
-            if (!confirm('Delete role "' + r.label + '"?')) return;
-            try { await api('api_roles_delete', r.id); CRM.cache._rolesForSelect = null; toast('Deleted'); showAdminTab('roles'); }
-            catch (e) { toast(e.message, 'err'); }
-          } }, '🗑 Delete')));
-    }))
-  )));
-  wrap.appendChild(list); return wrap;
-}
 
 async function adminPullLeads() {
   const cfg = await api('api_admin_getConfig');
   const root = h('div', { class: 'admin-section' });
   root.appendChild(h('h3', {}, '📥 Lead Pull'));
+  root.appendChild(h('p', { class: 'muted' },
+    'Lets non-admin users self-claim free leads (assigned_to IS NULL) from the pool. ' +
+    'Admin-pre-assigned leads count toward the same per-pull budget. ' +
+    'See docs/features/PULL-LEADS.md.'));
+
+  // We need the dynamic roles list for the role picker.
   const allRoles = (await _rolesForSelect()).filter(r => r.value !== 'admin');
-  const enabledRoles = String(cfg.LEAD_PULL_ENABLED_ROLES || 'sales,team_leader,manager').split(',').map(s => s.trim()).filter(Boolean);
+  const enabledRoles = String(cfg.LEAD_PULL_ENABLED_ROLES || 'sales,team_leader,manager')
+    .split(',').map(s => s.trim()).filter(Boolean);
+
   const form = h('div', { class: 'form-grid' });
-  const enabled = h('input', { type: 'checkbox' }); enabled.checked = String(cfg.LEAD_PULL_ENABLED ?? '1') === '1';
+  const enabled = h('input', { type: 'checkbox', id: 'lp-enabled' });
+  enabled.checked = String(cfg.LEAD_PULL_ENABLED ?? '1') === '1';
   form.appendChild(h('label', {}, enabled, ' Pull Leads enabled'));
-  const initial = h('input', { type: 'number', min: '0', max: '500', value: String(cfg.LEAD_PULL_INITIAL_COUNT || '20') });
-  form.appendChild(h('label', {}, 'Initial pull count: ', initial));
-  const subseq = h('input', { type: 'number', min: '0', max: '500', value: String(cfg.LEAD_PULL_SUBSEQUENT_COUNT || '5') });
-  form.appendChild(h('label', {}, 'Subsequent pull count: ', subseq));
-  const roleBox = h('div', {});
-  allRoles.forEach(r => { const cb = h('input', { type: 'checkbox', value: r.value }); cb.checked = enabledRoles.includes(r.value); roleBox.appendChild(h('label', { class: 'inline' }, cb, ' ' + r.label)); });
-  form.appendChild(h('label', {}, 'Allowed roles: ', roleBox));
-  const order = h('select', {}, h('option', { value: 'oldest' }, 'Oldest first'), h('option', { value: 'newest' }, 'Newest first'));
+
+  const initial = h('input', { type: 'number', id: 'lp-initial', min: '0', max: '500',
+    value: String(cfg.LEAD_PULL_INITIAL_COUNT || '20') });
+  form.appendChild(h('label', {}, 'Initial pull count (first time): ', initial,
+    h('div', { class: 'muted small' }, 'How many leads a user gets the very first time they pull.')));
+
+  const subseq = h('input', { type: 'number', id: 'lp-subseq', min: '0', max: '500',
+    value: String(cfg.LEAD_PULL_SUBSEQUENT_COUNT || '5') });
+  form.appendChild(h('label', {}, 'Subsequent pull count: ', subseq,
+    h('div', { class: 'muted small' }, 'How many leads each later pull claims.')));
+
+  const roleBox = h('div', { class: 'role-checks' });
+  allRoles.forEach(r => {
+    const cb = h('input', { type: 'checkbox', value: r.value, id: 'lp-role-' + r.value });
+    cb.checked = enabledRoles.includes(r.value);
+    roleBox.appendChild(h('label', { class: 'inline' }, cb, ' ' + r.label));
+  });
+  form.appendChild(h('label', {}, 'Allowed roles: ', roleBox,
+    h('div', { class: 'muted small' }, 'Admins can never use Pull. List comes from Settings → 📛 Roles.')));
+
+  const order = h('select', { id: 'lp-order' },
+    h('option', { value: 'oldest' }, 'Oldest first (FIFO)'),
+    h('option', { value: 'newest' }, 'Newest first (LIFO)')
+  );
   order.value = String(cfg.LEAD_PULL_ORDER || 'oldest');
-  form.appendChild(h('label', {}, 'Pull order: ', order));
+  form.appendChild(h('label', {}, 'Pull order: ', order,
+    h('div', { class: 'muted small' }, 'Oldest-first stops fresh leads from going stale.')));
+
   root.appendChild(form);
-  root.appendChild(h('button', { class: 'btn primary', onclick: async () => {
-    const checkedRoles = Array.from(roleBox.querySelectorAll('input[type=checkbox]')).filter(c => c.checked).map(c => c.value);
-    try { await api('api_admin_setConfig', { LEAD_PULL_ENABLED: enabled.checked ? '1' : '0', LEAD_PULL_INITIAL_COUNT: String(parseInt(initial.value,10)||0), LEAD_PULL_SUBSEQUENT_COUNT: String(parseInt(subseq.value,10)||0), LEAD_PULL_ENABLED_ROLES: checkedRoles.join(','), LEAD_PULL_ORDER: order.value === 'newest' ? 'newest' : 'oldest' });
-      toast('Lead Pull settings saved', 'ok');
-    } catch (e) { toast(e.message, 'err'); }
-  } }, 'Save'));
+
+  const save = h('button', { class: 'btn primary', onclick: async () => {
+    const checkedRoles = Array.from(roleBox.querySelectorAll('input[type=checkbox]'))
+      .filter(c => c.checked).map(c => c.value);
+    const patch = {
+      LEAD_PULL_ENABLED:           enabled.checked ? '1' : '0',
+      LEAD_PULL_INITIAL_COUNT:     String(Math.max(0, parseInt(initial.value, 10) || 0)),
+      LEAD_PULL_SUBSEQUENT_COUNT:  String(Math.max(0, parseInt(subseq.value, 10) || 0)),
+      LEAD_PULL_ENABLED_ROLES:     checkedRoles.join(','),
+      LEAD_PULL_ORDER:             order.value === 'newest' ? 'newest' : 'oldest'
+    };
+    try { await api('api_admin_setConfig', patch); toast('Lead Pull settings saved', 'ok'); }
+    catch (e) { toast(e.message, 'err'); }
+  } }, 'Save');
+  root.appendChild(h('div', { class: 'form-actions' }, save));
   return root;
 }
 
@@ -10199,8 +10256,22 @@ async function adminApi() {
     return `curl -X POST '${origin}/hook/website' \\\n  -H 'x-api-key: ${key || '<your-api-key>'}' \\\n  -H 'Content-Type: application/json' \\\n  -d '{"name":"John Doe","phone":"+911234567890","email":"john@example.com","source":"Website","notes":"Demo request"}'`;
   }
 
-  const keyEl = h('code', { id: 'admin-api-key' }, apiKey || '(not generated yet)');
+  function rebuildFormHtml(key) {
+    return `<form method="post" action="${origin}/hook/website">
+  <!-- Pass your API key as a hidden field (no custom headers needed) -->
+  <input type="hidden" name="api_key" value="${key || '<your-api-key>'}">
+  <input type="text"   name="name"   placeholder="Full name"    required>
+  <input type="tel"    name="phone"  placeholder="Phone number" required>
+  <input type="email"  name="email"  placeholder="Email">
+  <input type="hidden" name="source" value="Website">
+  <textarea name="notes" placeholder="Message"></textarea>
+  <button type="submit">Submit</button>
+</form>`;
+  }
+
+  const keyEl  = h('code', { id: 'admin-api-key' }, apiKey || '(not generated yet)');
   const curlEl = h('pre', { class: 'code-block', id: 'admin-curl' }, rebuildCurl(apiKey));
+  const formEl = h('pre', { class: 'code-block', id: 'admin-form-html' }, rebuildFormHtml(apiKey));
 
   async function regenerate() {
     if (!confirm('Generate a new API key? Anyone using the old key will stop working until you update them.')) return;
@@ -10208,6 +10279,7 @@ async function adminApi() {
       const r = await api('api_admin_regenerateApiKey');
       keyEl.textContent = r.key;
       curlEl.textContent = rebuildCurl(r.key);
+      formEl.textContent = rebuildFormHtml(r.key);
       toast('New API key generated');
     } catch (e) { toast(e.message, 'err'); }
   }
@@ -10227,8 +10299,11 @@ async function adminApi() {
     ),
     h('p', { class: 'muted' }, 'Keep this key secret. If it ever leaks, click Regenerate to invalidate the old one. You can also set it manually below.'),
     configForm(cfg, ['WEBSITE_API_KEY']),
-    h('h5', {}, 'Try it — cURL'),
+    h('h5', {}, 'Try it — cURL (JSON)'),
     curlEl,
+    h('h5', {}, 'HTML form (application/x-www-form-urlencoded)'),
+    h('p', { class: 'muted' }, 'You can POST directly from an HTML form — no JavaScript needed. Pass the API key as a hidden field named ', h('code', {}, 'api_key'), '. The endpoint accepts both JSON and form-encoded payloads automatically.'),
+    formEl,
     h('p', { style: { marginTop: '.75rem' } },
       h('a', { href: '/api-docs', target: '_blank', class: 'btn primary' }, '📖 View full API documentation →')
     ),
@@ -10894,14 +10969,19 @@ async function adminTags() {
       h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Color'), h('th', {}, 'Preview'), h('th', { style: { textAlign: 'right' } }, 'Actions'))),
       h('tbody', {}, ...tags.map(t => h('tr', {},
         h('td', {}, t.name),
+        // Show an actual coloured swatch beside the hex code so admins
+        // can scan the list at a glance instead of decoding hex values.
         h('td', {},
           h('span', { class: 'color-swatch', style: { background: t.color || '#6366f1' }, title: t.color || '' }),
           h('code', { style: { marginLeft: '6px' } }, t.color || '—')
         ),
         h('td', {}, h('span', { class: 'tag', style: { background: t.color, color: '#fff' } }, t.name)),
-h('td', { style: { display: 'flex', gap: '.5rem', justifyContent: 'flex-end' } },
-                        h('button', { class: 'btn sm', onclick: () => openTagEditModal(t, () => { CRM.cache.tagLibrary = null; showAdminTab('tags'); }) }, '✏️ Edit'),
-  h('button', { class: 'btn sm', onclick: async () => {
+        h('td', { style: { textAlign: 'right', display: 'flex', gap: '.35rem', justifyContent: 'flex-end' } },
+          h('button', { class: 'btn sm', onclick: () => openTagEditModal(t, () => {
+            CRM.cache.tagLibrary = null;
+            showAdminTab('tags');
+          }) }, '✏️ Edit'),
+          h('button', { class: 'btn sm', onclick: async () => {
             if (!confirm(`Delete tag "${t.name}"? Existing leads tagged with this name will keep showing it but new leads cannot pick it.`)) return;
             try {
               await api('api_tags_delete', t.id);
@@ -10917,6 +10997,11 @@ h('td', { style: { display: 'flex', gap: '.5rem', justifyContent: 'flex-end' } }
   wrap.appendChild(list);
   return wrap;
 }
+
+/**
+ * Modal to edit an existing tag's name and colour.
+ * Calls api_tags_update and invokes onSaved() after a successful save.
+ */
 function openTagEditModal(t, onSaved) {
     const nameInput  = h('input', { value: t.name, placeholder: 'Tag name', style: { flex: '1' } });
     const colorPick  = h('input', { type: 'color', value: t.color || '#6366f1', style: { width: '50px' } });
@@ -14643,5 +14728,58 @@ window.restartProductTour = function () {
   return maybeShowFirstRunTour(true);
 };
 
-async function _initWhatsappTopbar() { const btn = document.getElementById('btn-whatsapp'); if (!btn || btn.dataset.bound) return; btn.dataset.bound = '1'; let phone = ''; try { if (CRM.user && CRM.user.role === 'admin') { const cfg = await api('api_admin_getConfig').catch(() => ({})); phone = String(cfg.COMPANY_WHATSAPP || cfg.COMPANY_PHONE || CRM.user.phone || '').trim(); } else if (CRM.user) phone = String(CRM.user.phone || '').trim(); } catch (_) {} const cleaned = phone.replace(/[^\d+]/g, '').replace(/^\+/, ''); btn.title = cleaned ? 'Open WhatsApp (' + phone + ')' : 'Open WhatsApp Web'; btn.addEventListener('click', () => { window.open(cleaned ? 'https://wa.me/' + cleaned : 'https://web.whatsapp.com/', '_blank', 'noopener'); }); }
-document.addEventListener('DOMContentLoaded', () => { let ticks = 0; const t = setInterval(() => { if (typeof CRM !== 'undefined' && CRM.user) { _initWhatsappTopbar(); clearInterval(t); } else if (++ticks > 60) clearInterval(t); }, 500); });
+
+/* ---------------- WhatsApp topbar shortcut ----------------
+ * If admin: tooltip shows the company WhatsApp number (config:
+ *   COMPANY_WHATSAPP, falls back to admin user's phone).
+ * If non-admin: tooltip shows the logged-in user's own phone.
+ * Click: opens WhatsApp Web (https://web.whatsapp.com/) in a new tab.
+ * If we have a phone number, we deep-link to wa.me/<number> so the chat
+ * bar opens prefocused on that contact. Empty / unreachable phone =>
+ * plain web.whatsapp.com.
+ * --------------------------------------------------------- */
+async function _initWhatsappTopbar() {
+  const btn = document.getElementById('btn-whatsapp');
+  if (!btn || btn.dataset.bound) return;
+  btn.dataset.bound = '1';
+
+  // Resolve the phone number to show in the tooltip and (where possible)
+  // deep-link to. The fallback chain: admin → COMPANY_WHATSAPP / their own
+  // phone; user → their own phone.
+  let phone = '';
+  try {
+    if (CRM.user && CRM.user.role === 'admin') {
+      const cfg = await api('api_admin_getConfig').catch(() => ({}));
+      phone = String(cfg.COMPANY_WHATSAPP || cfg.COMPANY_PHONE || CRM.user.phone || '').trim();
+    } else if (CRM.user) {
+      phone = String(CRM.user.phone || '').trim();
+    }
+  } catch (_) {}
+
+  const cleaned = phone.replace(/[^\d+]/g, '').replace(/^\+/, '');
+  if (cleaned) {
+    btn.title = `Open WhatsApp (${phone})`;
+  } else {
+    btn.title = 'Open WhatsApp Web';
+  }
+
+  btn.addEventListener('click', () => {
+    const url = cleaned
+      ? `https://wa.me/${cleaned}`
+      : 'https://web.whatsapp.com/';
+    window.open(url, '_blank', 'noopener');
+  });
+}
+// Defer until CRM.user is hydrated by the shell
+document.addEventListener('DOMContentLoaded', () => {
+  // Poll briefly until login completes; bind on first appearance.
+  let ticks = 0;
+  const t = setInterval(() => {
+    if (typeof CRM !== 'undefined' && CRM.user) {
+      _initWhatsappTopbar();
+      clearInterval(t);
+    } else if (++ticks > 60) {
+      clearInterval(t); // give up after ~30s
+    }
+  }, 500);
+});
