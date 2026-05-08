@@ -1254,19 +1254,19 @@ VIEWS.settings = async (view) => {
   const aiKeyInput = h('input', {
     type: 'password', name: 'gemini_api_key', autocomplete: 'off',
     placeholder: aiCfg.key_set
-      ? ('Active: ' + (aiCfg.key_preview || '••••') + sourceTag + ' — leave blank to keep')
+      ? ('Active: ' + (aiCfg.key_preview || '\u2022\u2022\u2022\u2022') + sourceTag + ' \u2014 leave blank to keep')
       : 'Paste Gemini API key from Google AI Studio',
     style: { width: '100%' }
   });
   aiCard.appendChild(h('div', { class: 'field' },
-    h('label', {}, 'Gemini API key' + (aiCfg.key_set ? ' ✓' : '')),
+    h('label', {}, 'Gemini API key' + (aiCfg.key_set ? ' \u2713' : '')),
     aiKeyInput,
     h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } },
       aiCfg.key_source === 'env'
-        ? '✅ Using your existing GEMINI_API_KEY environment variable (same one the call-recording AI uses). Paste a key here to override it.'
+        ? '\u2705 Using your existing GEMINI_API_KEY environment variable (same one the call-recording AI uses). Paste a key here to override it.'
         : (aiCfg.key_source === 'database'
           ? 'Stored encrypted in control DB. Paste a new key to rotate.'
-          : 'Get a key at aistudio.google.com → API keys, OR set GEMINI_API_KEY in Railway env vars.'))
+          : 'Get a key at aistudio.google.com \u2192 API keys, OR set GEMINI_API_KEY in Railway env vars.'))
   ));
 
   const modelSel = h('select', { name: 'gemini_default_model' },
@@ -1391,4 +1391,20 @@ VIEWS.ai_costing = async (view) => {
         h('td', {}, '$' + (r.cost_usd || 0).toFixed(6)),
         h('td', {}, '₹' + (r.cost_inr_real || 0).toLocaleString('en-IN')),
         h('td', {}, '₹' + (r.cost_inr_billed || 0).toLocaleString('en-IN')),
-        h('td', {}
+        h('td', {}, '₹' + (r.margin_inr || 0).toLocaleString('en-IN')),
+        h('td', { class: 'muted' }, r.last_call_at ? new Date(r.last_call_at).toLocaleString() : '—')
+      )))
+    );
+    tableCard.appendChild(h('h2', { style: { marginTop: 0 } }, 'Per-tenant breakdown'));
+    tableCard.appendChild(tbl);
+  }
+
+  refreshBtn.addEventListener('click', reload);
+  fromInp.addEventListener('change', reload);
+  toInp.addEventListener('change', reload);
+  tenantInp.addEventListener('change', reload);
+  reload();
+};
+
+window.addEventListener('hashchange', route);
+route();
