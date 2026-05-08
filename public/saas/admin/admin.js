@@ -1406,5 +1406,35 @@ VIEWS.ai_costing = async (view) => {
   reload();
 };
 
+
+// ---------- Router ---------------------------------------------
+// Render guard: VIEW fns are async, so two route() calls can race.
+// Tag every render with a monotonically increasing token.
+let _routeToken = 0;
+
+async function route() {
+  if (!APP.token) return renderLogin();
+  if (!APP.user) {
+    try { APP.user = await api('api_saas_admin_me'); }
+    catch (_) { APP.token = ''; localStorage.removeItem('saas_admin_token'); return renderLogin(); }
+  }
+  const myToken = ++_routeToken;
+  if (!$('#nav')) renderShell();
+  // Allow underscores in view ids so 'ai_costing' resolves correctly.
+  const id = (location.hash.match(/^#\/([a-z_]+)/) || [])[1] || 'dashboard';
+  document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('active', a.dataset.view === id));
+  const view = $('#view'); view.innerHTML = '';
+  const fn = VIEWS[id];
+  if (!fn) { view.appendChild(h('div', { class: 'empty' }, 'Unknown view: ' + id)); return; }
+  try {
+    await fn(view);
+    if (myToken !== _routeToken) view.innerHTML = '';
+  } catch (e) {
+    if (myToken === _routeToken) {
+      view.appendChild(h('div', { class: 'error-box' }, e.message));
+    }
+  }
+}
+
 window.addEventListener('hashchange', route);
 route();
