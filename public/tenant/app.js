@@ -5993,14 +5993,33 @@ async function _aibotSettingsView() {
   ));
 
   // ---- safety / advanced ----
-  const idleMin = h('input', { type: 'number', value: s.resume_after_idle_minutes || 1440, min: 0, style: { width: '8rem' } });
+  // resume_after_idle_seconds is the new authoritative column (lets tenants
+  // pick fine-grained values like 10s or 30s for testing). Falls back to
+  // minutes \u00d7 60 for old rows pre-dating the column.
+  const idleSecStart = (s.resume_after_idle_seconds != null && Number(s.resume_after_idle_seconds) >= 0)
+    ? Number(s.resume_after_idle_seconds)
+    : Number(s.resume_after_idle_minutes || 1440) * 60;
+  const idleSec = h('input', { type: 'number', value: idleSecStart, min: 0, step: 1, style: { width: '8rem' } });
+  const idleQuick = h('select', { style: { marginLeft: '.4rem' } },
+    h('option', { value: '' }, 'Quick set\u2026'),
+    h('option', { value: '10' }, '10 sec'),
+    h('option', { value: '30' }, '30 sec'),
+    h('option', { value: '60' }, '1 min'),
+    h('option', { value: '300' }, '5 min'),
+    h('option', { value: '1800' }, '30 min'),
+    h('option', { value: '3600' }, '1 hour'),
+    h('option', { value: '86400' }, '24 hours'));
+  idleQuick.onchange = () => { if (idleQuick.value) { idleSec.value = idleQuick.value; idleQuick.value = ''; } };
   const maxReplies = h('input', { type: 'number', value: s.max_replies_per_thread || 0, min: 0, style: { width: '8rem' } });
   const useKb = h('input', { type: 'checkbox', checked: s.use_kb ? 'checked' : null });
   const kbCap = h('input', { type: 'number', value: s.kb_max_chars || 60000, min: 2000, max: 120000, step: 5000, style: { width: '8rem' } });
   const histCount = h('input', { type: 'number', value: s.history_messages != null ? s.history_messages : 8, min: 0, max: 40, style: { width: '8rem' } });
   wrap.appendChild(h('div', { class: 'card' },
     h('h3', { style: { marginTop: 0 } }, 'Safety & advanced'),
-    h('div', { class: 'field' }, h('label', {}, 'Resume after agent silence (minutes) — 0 = never auto-resume'), idleMin),
+    h('div', { class: 'field' },
+      h('label', {}, 'Resume after agent silence (seconds) — 0 = never auto-resume'),
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', flexWrap: 'wrap' } }, idleSec, idleQuick),
+      h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } }, 'How long after the last human-agent message before the bot may reply on this thread again. Use 10–20 sec for testing, 86400 (24h) for production.')),
     h('div', { class: 'field' }, h('label', {}, 'Max bot replies per conversation (0 = unlimited)'), maxReplies),
     h('div', { class: 'field' }, h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem' } }, useKb, h('span', {}, ' Use the knowledge base when answering'))),
     h('div', { class: 'field' }, h('label', {}, 'KB max chars per call (cap on prompt size)'), kbCap),
@@ -6022,7 +6041,7 @@ async function _aibotSettingsView() {
         start: startInp.value, end: endInp.value
       },
       trigger_keywords: trigKw.value, off_keywords: offKw.value, escalation_keywords: escKw.value,
-      resume_after_idle_minutes: Number(idleMin.value || 0),
+      resume_after_idle_seconds: Number(idleSec.value || 0),
       max_replies_per_thread: Number(maxReplies.value || 0),
       use_kb: useKb.checked,
       kb_max_chars: Number(kbCap.value || 60000),

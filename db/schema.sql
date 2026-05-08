@@ -1302,3 +1302,10 @@ CREATE TABLE IF NOT EXISTS ai_chat_log (
 CREATE INDEX IF NOT EXISTS idx_ai_chat_phone   ON ai_chat_log(phone, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ai_chat_status  ON ai_chat_log(status);
 CREATE INDEX IF NOT EXISTS idx_ai_chat_created ON ai_chat_log(created_at DESC);
+
+-- ai_bot_settings: switch idle window from minutes to seconds (2026-05-08)
+-- Lets tenants set 10s / 20s for fast testing of the resume rule.
+ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS resume_after_idle_seconds INTEGER NOT NULL DEFAULT 86400;
+UPDATE ai_bot_settings
+   SET resume_after_idle_seconds = COALESCE(resume_after_idle_minutes, 1440) * 60
+ WHERE resume_after_idle_seconds = 86400 AND resume_after_idle_minutes IS NOT NULL;

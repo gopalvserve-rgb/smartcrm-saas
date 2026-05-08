@@ -51,6 +51,7 @@ const _DEFAULT_SETTINGS = {
   off_keywords: '',
   active_phone_number_ids: [],
   resume_after_idle_minutes: 1440,
+  resume_after_idle_seconds: 86400,
   max_replies_per_thread: 0,
   escalation_keywords: '',
   model_override: null,
@@ -120,10 +121,10 @@ async function api_aibot_settings_save(token, payload) {
     `INSERT INTO ai_bot_settings
        (id, is_enabled, bot_name, business_name, language, system_prompt, welcome_message,
         reply_modes, business_hours, trigger_keywords, off_keywords, active_phone_number_ids,
-        resume_after_idle_minutes, max_replies_per_thread, escalation_keywords,
+        resume_after_idle_minutes, resume_after_idle_seconds, max_replies_per_thread, escalation_keywords,
         model_override, use_kb, kb_max_chars, history_messages, updated_at)
      VALUES (1, $1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11::jsonb,
-             $12, $13, $14, $15, $16, $17, $18, NOW())
+             $12, $13, $14, $15, $16, $17, $18, $19, NOW())
      ON CONFLICT (id) DO UPDATE SET
        is_enabled = EXCLUDED.is_enabled,
        bot_name = EXCLUDED.bot_name, business_name = EXCLUDED.business_name,
@@ -133,6 +134,7 @@ async function api_aibot_settings_save(token, payload) {
        trigger_keywords = EXCLUDED.trigger_keywords, off_keywords = EXCLUDED.off_keywords,
        active_phone_number_ids = EXCLUDED.active_phone_number_ids,
        resume_after_idle_minutes = EXCLUDED.resume_after_idle_minutes,
+       resume_after_idle_seconds = EXCLUDED.resume_after_idle_seconds,
        max_replies_per_thread = EXCLUDED.max_replies_per_thread,
        escalation_keywords = EXCLUDED.escalation_keywords,
        model_override = EXCLUDED.model_override,
@@ -152,6 +154,7 @@ async function api_aibot_settings_save(token, payload) {
       String(p.off_keywords || '').slice(0, 1000),
       JSON.stringify(phones),
       Math.max(0, Number(p.resume_after_idle_minutes || 1440)),
+      Math.max(0, Number(p.resume_after_idle_seconds || 86400)),
       Math.max(0, Number(p.max_replies_per_thread || 0)),
       String(p.escalation_keywords || '').slice(0, 1000),
       p.model_override ? String(p.model_override).slice(0, 80) : null,
@@ -424,15 +427,19 @@ async function _shouldSuppress(settings, phone, inboundText, inboundPhoneId, ten
   // Has a real (non-bot) agent replied to this thread recently?
   // ai_chat_log tracks bot replies separately, so we look for a row in
   // whatsapp_messages from a real user_id within the resume window.
-  const idleMin = Math.max(0, Number(settings.resume_after_idle_minutes || 1440));
-  if (idleMin > 0) {
+  // resume_after_idle_seconds takes precedence when set; falls back to
+  // resume_after_idle_minutes \u00d7 60 for backwards compat.
+  const idleSec = settings.resume_after_idle_seconds != null && Number(settings.resume_after_idle_seconds) >= 0
+    ? Math.max(0, Number(settings.resume_after_idle_seconds))
+    : Math.max(0, Number(settings.resume_after_idle_minutes || 1440)) * 60;
+  if (idleSec > 0) {
     const r = await db.query(
       `SELECT 1 FROM whatsapp_messages
         WHERE direction = 'out' AND user_id IS NOT NULL
           AND (to_number = $1 OR from_number = $1)
-          AND created_at > NOW() - ($2 || ' minutes')::interval
+          AND created_at > NOW() - ($2 || ' seconds')::interval
         LIMIT 1`,
-      [phone, String(idleMin)]
+      [phone, String(idleSec)]
     );
     if (r.rows.length) return 'human agent recently active';
   }
