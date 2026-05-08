@@ -1,15 +1,15 @@
 /**
- * SmartCRM SaaS â single-process multi-tenant server.
+ * SmartCRM SaaS Ã¢ÂÂ single-process multi-tenant server.
  *
  * URL surface:
- *   GET  /                           â public landing + pricing
- *   POST /api/saas                   â public + super-admin SaaS dispatcher
- *   GET  /api/saas/brand             â public brand JSON for the landing page
- *   GET  /signup/return              â Cashfree return URL (verifies + redirects to /t/<slug>)
- *   POST /hook/cashfree              â Cashfree webhook (raw-body required for HMAC verify)
- *   GET  /admin/                     â super-admin SPA shell (calls /api/saas)
- *   GET  /t/<slug>                   â tenant CRM SPA shell
- *   POST /t/<slug>/api               â tenant API dispatcher (per-tenant DB)
+ *   GET  /                           Ã¢ÂÂ public landing + pricing
+ *   POST /api/saas                   Ã¢ÂÂ public + super-admin SaaS dispatcher
+ *   GET  /api/saas/brand             Ã¢ÂÂ public brand JSON for the landing page
+ *   GET  /signup/return              Ã¢ÂÂ Cashfree return URL (verifies + redirects to /t/<slug>)
+ *   POST /hook/cashfree              Ã¢ÂÂ Cashfree webhook (raw-body required for HMAC verify)
+ *   GET  /admin/                     Ã¢ÂÂ super-admin SPA shell (calls /api/saas)
+ *   GET  /t/<slug>                   Ã¢ÂÂ tenant CRM SPA shell
+ *   POST /t/<slug>/api               Ã¢ÂÂ tenant API dispatcher (per-tenant DB)
  *
  * The tenant resolver middleware sets req.tenant + req.tenantPool when a
  * /t/<slug>/... path is hit, so downstream tenant routes look identical
@@ -75,8 +75,8 @@ app.use(require('cookie-parser')());
 // Cache strategy:
 //   - HTML files always get no-cache so a deploy shows up immediately
 //     when the user revisits.
-//   - JS / CSS get a short max-age (60s) â index.html references them
-//     with a ?v=â¦ cache buster, so a deploy that bumps the buster
+//   - JS / CSS get a short max-age (60s) Ã¢ÂÂ index.html references them
+//     with a ?v=Ã¢ÂÂ¦ cache buster, so a deploy that bumps the buster
 //     invalidates them anyway. Without this, browsers kept happily
 //     serving the old admin.js for hours after a deploy and the new
 //     /admin/#/errors view rendered as "Unknown view".
@@ -97,7 +97,7 @@ app.get('/', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'saas', 'index.html'));
 });
 
-// Diagnostic â admin-only smoke test that the Railway egress can
+// Diagnostic Ã¢ÂÂ admin-only smoke test that the Railway egress can
 // actually reach a host:port. Helps debug Gmail SMTP timeouts.
 app.get('/api/saas/debug/tcp', async (req, res) => {
   const token = (req.headers['x-auth-token'] || req.query.token || '').toString();
@@ -122,7 +122,7 @@ app.get('/api/saas/debug/tcp', async (req, res) => {
 });
 
 // Public client-error sink. Frontend window.error / unhandledrejection
-// handlers POST here â body is treated as untrusted, capped + redacted
+// handlers POST here Ã¢ÂÂ body is treated as untrusted, capped + redacted
 // inside errorLogs.logError(). No auth so anonymous visitors hitting
 // the landing page can still report their own browser errors.
 app.post('/api/saas/log-error', errorLogs.expressClientErrorEndpoint);
@@ -136,7 +136,7 @@ app.post('/api/saas/log-error', errorLogs.expressClientErrorEndpoint);
 //   OAuth callback URL (Valid OAuth Redirect URIs in the Facebook app):
 //     https://crm.smartcrmsolution.com/fb/auth/callback
 //
-//   Lead Ads webhook URL (Webhooks â Page â leadgen):
+//   Lead Ads webhook URL (Webhooks Ã¢ÂÂ Page Ã¢ÂÂ leadgen):
 //     https://crm.smartcrmsolution.com/hook/meta
 //
 //   WhatsApp Cloud API webhook URL:
@@ -150,13 +150,13 @@ app.post('/api/saas/log-error', errorLogs.expressClientErrorEndpoint);
 //   - Lead Ads webhook: payload contains page_id; we walk every active
 //     tenant DB to find which one owns it, then process the leadgen
 //     event inside that tenant's pool. (For 1000+ tenants we'd swap
-//     this for a control-plane page_id â tenant_id lookup table; for
+//     this for a control-plane page_id Ã¢ÂÂ tenant_id lookup table; for
 //     the MVP this is fast enough.)
 //   - WhatsApp webhook: payload contains phone_number_id; same lookup.
 const fbRoute = require('./routes/fb');
 const webhooksRoute = require('./routes/webhooks');
-const integrations  = require('./routes/integrations');
 const whatsbotRoute = require('./routes/whatsbot');
+const integrations = require('./routes/integrations');
 const tenantPoolMod = require('./utils/tenantPool');
 const controlDb = require('./control/db');
 const jwtLib = require('jsonwebtoken');
@@ -188,7 +188,7 @@ async function _runAsTenant(slug, req, res, handler) {
 
 /**
  * For inbound webhooks where the payload (not state) tells us which
- * tenant â find the tenant whose DB has the matching record. Walks the
+ * tenant Ã¢ÂÂ find the tenant whose DB has the matching record. Walks the
  * active tenants, opens each pool briefly, runs the lookup query.
  *
  * `lookupSql` should be a SELECT 1 / SELECT id query that returns at
@@ -207,7 +207,7 @@ async function _findTenantByLookup(lookupSql, params) {
     try {
       const hit = await pool.query(lookupSql, params);
       if (hit.rowCount > 0) return t;
-    } catch (_) { /* table missing or other â skip */ }
+    } catch (_) { /* table missing or other Ã¢ÂÂ skip */ }
   }
   return null;
 }
@@ -217,7 +217,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
 // ---- Facebook OAuth callback (one URL for all tenants) ----------
 app.get('/fb/auth/callback', async (req, res) => {
   const stateRaw = (req.query.state || '').toString();
-  // Decode state (no verify) to get slug for routing â the inner
+  // Decode state (no verify) to get slug for routing Ã¢ÂÂ the inner
   // expressOAuthCallback will do full jwt.verify with secret.
   let slug;
   try {
@@ -236,7 +236,7 @@ app.get('/fb/auth/callback', async (req, res) => {
 // ---- Meta Lead Ads webhook (one URL for all tenants) ------------
 //
 // FB calls these in two flavours:
-//   GET  with hub.mode=subscribe&hub.verify_token}â¦&hub.challenge=â¦ â echo challenge
+//   GET  with hub.mode=subscribe&hub.verify_token=Ã¢ÂÂ¦&hub.challenge=Ã¢ÂÂ¦ Ã¢ÂÂ echo challenge
 //   POST with leadgen events
 //
 // VERIFY: tenants share the same verify token (or admin can set
@@ -248,7 +248,7 @@ app.get('/hook/meta', async (req, res) => {
   const challenge = String(req.query['hub.challenge'] || '');
   if (mode !== 'subscribe' || !token) return res.status(400).send('Bad verify');
   // Accept if ANY tenant has this verify token configured. This is
-  // the same trust model FB uses â they only ever ask once at hook
+  // the same trust model FB uses Ã¢ÂÂ they only ever ask once at hook
   // setup, and the challenge response is symmetric.
   const r = await controlDb.query(
     `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 200`
@@ -273,7 +273,7 @@ app.get('/hook/meta', async (req, res) => {
 
 app.post('/hook/meta', async (req, res) => {
   // Fast path: when the forwarder dispatches to /t/<slug>/hook/meta
-  // attachTenant has already populated req.tenant â no lookup needed.
+  // attachTenant has already populated req.tenant Ã¢ÂÂ no lookup needed.
   if (req.tenant) {
     return webhooksRoute.metaEvent(req, res);
   }
@@ -330,9 +330,9 @@ app.get('/hook/whatsapp', async (req, res) => {
 });
 
 app.post('/hook/whatsapp', async (req, res) => {
-  // Fast path â forwarder dispatched to /t/<slug>/hook/whatsapp.
+  // Fast path Ã¢ÂÂ forwarder dispatched to /t/<slug>/hook/whatsapp.
   if (req.tenant) return webhooksRoute.whatsappEvent(req, res);
-  // Slow path â bare /hook/whatsapp; look up by phone_number_id.
+  // Slow path Ã¢ÂÂ bare /hook/whatsapp; look up by phone_number_id.
   const body = req.body || {};
   const entry = (body.entry && body.entry[0]) || {};
   const change = (entry.changes && entry.changes[0]) || {};
@@ -346,12 +346,12 @@ app.post('/hook/whatsapp', async (req, res) => {
   return _runAsTenant(t.slug, req, res, webhooksRoute.whatsappEvent);
 });
 
-// /hook/whatsapp_webhook is the WhatsBot module's own endpoint â
+// /hook/whatsapp_webhook is the WhatsBot module's own endpoint Ã¢ÂÂ
 // same routing logic, different handler.
 app.get('/hook/whatsapp_webhook', async (req, res) => {
   const token = String(req.query['hub.verify_token'] || '');
   const challenge = String(req.query['hub.challenge'] || '');
-  // Fast path â verify GET to /t/<slug>/hook/whatsapp_webhook with
+  // Fast path Ã¢ÂÂ verify GET to /t/<slug>/hook/whatsapp_webhook with
   // tenant already resolved. Just check this tenant's stored token.
   if (req.tenant && req.tenantPool) {
     try {
@@ -361,7 +361,7 @@ app.get('/hook/whatsapp_webhook', async (req, res) => {
     } catch (_) {}
     return res.status(403).send('Verify token mismatch');
   }
-  // Slow path â direct hit on bare /hook/whatsapp_webhook, walk all tenants.
+  // Slow path Ã¢ÂÂ direct hit on bare /hook/whatsapp_webhook, walk all tenants.
   const r = await controlDb.query(
     `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 200`
   );
@@ -380,12 +380,12 @@ app.get('/hook/whatsapp_webhook', async (req, res) => {
 });
 
 app.post('/hook/whatsapp_webhook', async (req, res) => {
-  // Fast path â forwarder dispatched to /t/<slug>/hook/whatsapp_webhook.
+  // Fast path Ã¢ÂÂ forwarder dispatched to /t/<slug>/hook/whatsapp_webhook.
   // This is the canonical path each tenant registers when they connect
   // via Embedded Sign-In (whatsbot.js _registerWithCentralForwarder),
   // so this branch handles the common case zero-lookup.
   if (req.tenant) return whatsbotRoute.expressEvent(req, res);
-  // Slow path â direct hit on bare /hook/whatsapp_webhook.
+  // Slow path Ã¢ÂÂ direct hit on bare /hook/whatsapp_webhook.
   const body = req.body || {};
   const entry = (body.entry && body.entry[0]) || {};
   const change = (entry.changes && entry.changes[0]) || {};
@@ -399,19 +399,16 @@ app.post('/hook/whatsapp_webhook', async (req, res) => {
   return _runAsTenant(t.slug, req, res, whatsbotRoute.expressEvent);
 });
 
-// ---- Website / Other lead-intake webhooks (platform-wide) --------------
+// Ã¢ÂÂÃ¢ÂÂ Website & generic webhook Ã¢ÂÂ API-key authenticated Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
+// Any HTML contact form or external tool (Zapier, Make, n8n, Ã¢ÂÂ¦) can POST to
+// /hook/website using either:
+//   Ã¢ÂÂ¢ application/json          { api_key, name, email, Ã¢ÂÂ¦ }
+//   Ã¢ÂÂ¢ application/x-www-form-urlencoded  (standard HTML form)
+//   Ã¢ÂÂ¢ x-api-key / Authorization: Bearer  header
 //
-// POST /hook/website and POST /hook/other allow third-party forms and tools
-// (Zapier, Pabbly, landing pages, WordPress CF7, etc.) to create leads
-// without knowing the /t/<slug> prefix.  The x-api-key (or
-// Authorization: Bearer / body.api_key / ?api_key) is unique per tenant,
-// so we use it to identify the owning tenant, then run the real handler
-// inside that tenant's AsyncLocalStorage context.
-//
-// Fast path: the request was already routed via /t/<slug>/hook/website,
-// attachTenant has rewritten req.url â /hook/website and set req.tenant.
-// Slow path: bare /hook/website hit â extract the key, walk active
-// tenants, find the one whose WEBSITE_API_KEY matches.
+// The matching tenant is found by looking up WEBSITE_API_KEY in each
+// tenant's config table Ã¢ÂÂ so every tenant can have their own key.
+
 function _extractHookKey(req) {
   const xkey = req.header('x-api-key');
   if (xkey) return String(xkey).trim();
@@ -424,17 +421,18 @@ function _extractHookKey(req) {
 }
 
 async function _runHookAsTenant(req, res, handler) {
-  // Fast path â attachTenant already resolved the tenant.
-  if (req.tenant) {
-    return _runAsTenant(req.tenantSlug, req, res, handler);
-  }
-  // Slow path â find tenant by WEBSITE_API_KEY.
+  // Fast path Ã¢ÂÂ request already resolved to a tenant (via /t/<slug>/Ã¢ÂÂ¦)
+  if (req.tenant) return _runAsTenant(req.tenantSlug, req, res, handler);
+
+  // Slow path Ã¢ÂÂ bare /hook/website hit, identify tenant by API key
   const key = _extractHookKey(req);
   if (!key) return res.status(401).json({ error: 'Missing API key' });
+
   const t = await _findTenantByLookup(
     `SELECT 1 FROM config WHERE key = 'WEBSITE_API_KEY' AND value = $1 LIMIT 1`,
     [key]
   ).catch(() => null);
+
   if (!t) return res.status(401).json({ error: 'Invalid API key' });
   return _runAsTenant(t.slug, req, res, handler);
 }
@@ -442,40 +440,220 @@ async function _runHookAsTenant(req, res, handler) {
 app.post('/hook/website', (req, res) => _runHookAsTenant(req, res, webhooksRoute.websiteHook));
 app.post('/hook/other',   (req, res) => _runHookAsTenant(req, res, webhooksRoute.otherHook));
 
-// ---- Lead-source webhooks (18 platforms) ------------------------------
-// POST /hook/leadsource/:source/:key
-//   source = indiamart | magicbricks | justdial | tradeindia | 99acres |
-//            housing | nobroker | exportersindia | sulekha | googleads |
-//            wordpress | cf7 | wpforms | gravityforms | googleforms |
-//            pabbly | zapier | make | leadsquared | zoho | hubspot |
-//            salesforce | generic
-//   key    = WEBSITE_API_KEY (tenant-specific)
-// Tenant is resolved by the API key; the handler runs in tenant DB context.
-app.post('/hook/leadsource/:source/:key', (req, res) => {
-  // _extractHookKey looks at headers/body/query â inject path param too
-  if (!req.body) req.body = {};
-  if (!req.body.api_key) req.body.api_key = req.params.key;
-  return _runHookAsTenant(req, res, integrations.leadSourceWebhook);
-});
-
-// Sheet push webhook (Google Apps Script â CRM, token-based, no tenant slug needed)
-app.post('/hook/sheet/:token', (req, res) => {
-  if (!req.body) req.body = {};
-  if (!req.body.api_key) req.body.api_key = req.params.token;
-  return _runHookAsTenant(req, res, integrations.sheetPushWebhook);
-});
-
-// ---- Public API documentation page ------------------------------------
-//
-// Accessible at https://crm.smartcrmsolution.com/api-docs (no tenant
-// context required) and also at /t/<slug>/api-docs via rewrite.
-// Shows both JSON and application/x-www-form-urlencoded examples so
-// third-party form tools that can only send urlencoded bodies can
-// integrate without any backend proxy.
+// Ã¢ÂÂÃ¢ÂÂ Public API documentation page Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 app.get('/api-docs', (req, res) => {
   const host = req.protocol + '://' + req.get('host');
   res.type('html').send(_apiDocsHtml(host));
 });
+
+function _apiDocsHtml(host) {
+  const safe = s => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>SmartCRM API Documentation</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;line-height:1.6}
+  .header{background:linear-gradient(135deg,#1e293b,#0f172a);padding:2rem;border-bottom:1px solid #1e293b}
+  .header h1{color:#10b981;font-size:1.8rem;margin-bottom:.25rem}
+  .header p{color:#94a3b8}
+  .container{max-width:900px;margin:0 auto;padding:2rem}
+  h2{color:#10b981;font-size:1.2rem;margin:2rem 0 1rem;padding-bottom:.5rem;border-bottom:1px solid #1e293b}
+  h3{color:#38bdf8;font-size:1rem;margin:1.5rem 0 .5rem}
+  .endpoint{background:#1e293b;border:1px solid #334155;border-radius:.5rem;padding:1.5rem;margin-bottom:1.5rem}
+  .method{display:inline-block;padding:.2rem .6rem;border-radius:.25rem;font-size:.8rem;font-weight:700;margin-right:.5rem}
+  .post{background:#065f46;color:#6ee7b7}
+  .get{background:#1e40af;color:#93c5fd}
+  .url{font-family:monospace;color:#f8fafc;font-size:.95rem}
+  .badge{display:inline-block;padding:.15rem .5rem;border-radius:.25rem;font-size:.75rem;margin-left:.5rem}
+  .badge-auth{background:#7c3aed;color:#ddd6fe}
+  .badge-public{background:#334155;color:#94a3b8}
+  table{width:100%;border-collapse:collapse;margin:.5rem 0}
+  th{text-align:left;padding:.5rem;background:#0f172a;color:#94a3b8;font-size:.8rem;border-bottom:1px solid #334155}
+  td{padding:.5rem;border-bottom:1px solid #1e293b;font-size:.85rem;vertical-align:top}
+  td:first-child{font-family:monospace;color:#fbbf24;white-space:nowrap}
+  td:last-child{color:#94a3b8}
+  pre{background:#0f172a;border:1px solid #334155;border-radius:.375rem;padding:1rem;overflow-x:auto;font-size:.82rem;margin:.75rem 0}
+  code{font-family:'Fira Code',monospace;color:#86efac}
+  .tab-bar{display:flex;gap:.5rem;margin-bottom:-.5rem}
+  .tab{padding:.4rem 1rem;border-radius:.375rem .375rem 0 0;cursor:pointer;font-size:.8rem;border:1px solid #334155;border-bottom:none;background:#0f172a;color:#94a3b8}
+  .tab.active{background:#1e293b;color:#e2e8f0}
+  .tab-pane{display:none}.tab-pane.active{display:block}
+  .response{background:#042f2e;border:1px solid #065f46;border-radius:.375rem;padding:1rem;margin:.75rem 0}
+  .copy-btn{float:right;padding:.2rem .6rem;background:#334155;color:#94a3b8;border:none;border-radius:.25rem;cursor:pointer;font-size:.75rem}
+  .copy-btn:hover{background:#475569;color:#e2e8f0}
+  .note{background:#1c1917;border-left:3px solid #f59e0b;padding:.75rem 1rem;border-radius:0 .375rem .375rem 0;font-size:.85rem;color:#d97706;margin:.75rem 0}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="container" style="padding-top:0;padding-bottom:0">
+    <h1>SmartCRM API</h1>
+    <p>Webhook &amp; integration endpoints for your SmartCRM workspace</p>
+    <p style="color:#475569;font-size:.85rem;margin-top:.5rem">Base URL: <code style="color:#38bdf8">${safe(host)}</code></p>
+  </div>
+</div>
+<div class="container">
+
+<h2>Authentication</h2>
+<p style="color:#94a3b8;margin-bottom:1rem">All webhook endpoints require your workspace <strong style="color:#fbbf24">API key</strong>. Find it in your CRM under <strong>Settings Ã¢ÂÂ Integrations Ã¢ÂÂ Website API Key</strong>.</p>
+<p style="color:#94a3b8">Pass the key using <strong>any one</strong> of these methods:</p>
+<table>
+  <tr><th>Method</th><th>Example</th></tr>
+  <tr><td>Header</td><td><code>X-API-Key: your_key_here</code></td></tr>
+  <tr><td>Bearer token</td><td><code>Authorization: Bearer your_key_here</code></td></tr>
+  <tr><td>Body field</td><td><code>api_key=your_key_here</code></td></tr>
+  <tr><td>Query string</td><td><code>?api_key=your_key_here</code></td></tr>
+</table>
+
+<h2>Endpoints</h2>
+
+<!-- POST /hook/website -->
+<div class="endpoint">
+  <div style="margin-bottom:.75rem">
+    <span class="method post">POST</span>
+    <span class="url">/hook/website</span>
+    <span class="badge badge-auth">API Key required</span>
+  </div>
+  <p style="color:#94a3b8;margin-bottom:1rem">Accepts a lead submission from your website contact form. Creates or updates a lead in your SmartCRM workspace.</p>
+
+  <h3>Request fields</h3>
+  <table>
+    <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+    <tr><td>name</td><td>string</td><td>Contact's full name</td></tr>
+    <tr><td>email</td><td>string</td><td>Contact's email address</td></tr>
+    <tr><td>phone</td><td>string</td><td>Phone number (optional)</td></tr>
+    <tr><td>message</td><td>string</td><td>Message or notes (optional)</td></tr>
+    <tr><td>source</td><td>string</td><td>Lead source label (optional)</td></tr>
+    <tr><td>api_key</td><td>string</td><td>Your API key (if not sent via header)</td></tr>
+  </table>
+
+  <h3>Examples</h3>
+
+  <div class="tab-bar">
+    <div class="tab active" onclick="showTab(this,'wb-json')">JSON</div>
+    <div class="tab" onclick="showTab(this,'wb-form')">HTML Form / URL-encoded</div>
+    <div class="tab" onclick="showTab(this,'wb-html')">HTML &lt;form&gt; tag</div>
+  </div>
+
+  <div id="wb-json" class="tab-pane active">
+    <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code>curl -X POST ${safe(host)}/hook/website \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your_key_here" \
+  -d '{
+    "name":    "Priya Sharma",
+    "email":   "priya@example.com",
+    "phone":   "+91 98765 43210",
+    "message": "Interested in the enterprise plan",
+    "source":  "website"
+  }'</code></pre>
+  </div>
+
+  <div id="wb-form" class="tab-pane">
+    <div class="note">Ã¢ÂÂ Supported Ã¢ÂÂ you can POST standard HTML form data directly to this endpoint. No JSON.stringify needed.</div>
+    <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code>curl -X POST ${safe(host)}/hook/website \
+  -H "X-API-Key: your_key_here" \
+  --data-urlencode "name=Priya Sharma" \
+  --data-urlencode "email=priya@example.com" \
+  --data-urlencode "phone=+91 98765 43210" \
+  --data-urlencode "message=Interested in the enterprise plan" \
+  --data-urlencode "source=website"</code></pre>
+    <p style="color:#94a3b8;font-size:.85rem;margin-top:.5rem">Or with <code>-d</code> (URL-encoded string):</p>
+    <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code>curl -X POST ${safe(host)}/hook/website \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "api_key=your_key_here&amp;name=Priya+Sharma&amp;email=priya%40example.com&amp;phone=%2B91+98765+43210&amp;message=Interested+in+enterprise"</code></pre>
+  </div>
+
+  <div id="wb-html" class="tab-pane">
+    <div class="note">Embed this on your website. The API key is in the hidden field Ã¢ÂÂ keep it server-side in production.</div>
+    <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code>&lt;form method="POST" action="${safe(host)}/hook/website"&gt;
+  &lt;input type="hidden" name="api_key" value="your_key_here"&gt;
+  &lt;input type="text"   name="name"    placeholder="Your name"&gt;
+  &lt;input type="email"  name="email"   placeholder="Email"&gt;
+  &lt;input type="tel"    name="phone"   placeholder="Phone"&gt;
+  &lt;textarea            name="message" placeholder="Message"&gt;&lt;/textarea&gt;
+  &lt;button type="submit"&gt;Send&lt;/button&gt;
+&lt;/form&gt;</code></pre>
+  </div>
+
+  <h3>Success response</h3>
+  <div class="response"><code>{ "ok": true, "result": { "id": 42, "name": "Priya Sharma" } }</code></div>
+
+  <h3>Error responses</h3>
+  <table>
+    <tr><th>Status</th><th>Error</th><th>Cause</th></tr>
+    <tr><td>401</td><td>Missing API key</td><td>No key provided</td></tr>
+    <tr><td>401</td><td>Invalid API key</td><td>Key not found in any tenant</td></tr>
+    <tr><td>400</td><td>email required</td><td>email field missing</td></tr>
+  </table>
+</div>
+
+<!-- POST /hook/other -->
+<div class="endpoint">
+  <div style="margin-bottom:.75rem">
+    <span class="method post">POST</span>
+    <span class="url">/hook/other</span>
+    <span class="badge badge-auth">API Key required</span>
+  </div>
+  <p style="color:#94a3b8;margin-bottom:1rem">Generic webhook endpoint. Accepts any payload and passes it to your CRM for custom processing.</p>
+
+  <h3>Examples</h3>
+  <div class="tab-bar">
+    <div class="tab active" onclick="showTab(this,'ot-json')">JSON</div>
+    <div class="tab" onclick="showTab(this,'ot-form')">URL-encoded</div>
+  </div>
+  <div id="ot-json" class="tab-pane active">
+    <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code>curl -X POST ${safe(host)}/hook/other \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your_key_here" \
+  -d '{ "event": "form_submit", "data": { "page": "/contact" } }'</code></pre>
+  </div>
+  <div id="ot-form" class="tab-pane">
+    <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code>curl -X POST ${safe(host)}/hook/other \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "api_key=your_key_here&amp;event=form_submit&amp;page=%2Fcontact"</code></pre>
+  </div>
+</div>
+
+<!-- GET /api-docs -->
+<div class="endpoint">
+  <div style="margin-bottom:.75rem">
+    <span class="method get">GET</span>
+    <span class="url">/api-docs</span>
+    <span class="badge badge-public">Public</span>
+  </div>
+  <p style="color:#94a3b8">Returns this documentation page.</p>
+</div>
+
+</div><!-- /container -->
+<script>
+function showTab(btn, id) {
+  const bar = btn.closest('.tab-bar');
+  bar.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  // Find all sibling tab-panes (next siblings until next tab-bar or endpoint end)
+  let el = bar.nextElementSibling;
+  while (el && el.classList.contains('tab-pane')) {
+    el.classList.remove('active');
+    el = el.nextElementSibling;
+  }
+  document.getElementById(id).classList.add('active');
+}
+function copyPre(btn) {
+  const code = btn.parentElement.querySelector('code').innerText;
+  navigator.clipboard.writeText(code).then(() => {
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = 'Copy', 1500);
+  });
+}
+</script>
+</body>
+</html>`;
+}
+
 
 // Public brand JSON (used by the landing page)
 app.get('/api/saas/brand', async (_req, res) => {
@@ -576,8 +754,8 @@ app.get(/^\/admin\/?(.*)$/, (_req, res) => {
 app.get(/^\/t\/[a-z0-9-]+$/, (req, res) => {
   // Insert the slash BEFORE the query string. Naively appending '/'
   // to req.originalUrl breaks magic-link URLs like
-  //   /t/acme?ssl=eyJâ¦
-  // by producing /t/acme?ssl=eyJâ¦/ which corrupts the JWT value.
+  //   /t/acme?ssl=eyJÃ¢ÂÂ¦
+  // by producing /t/acme?ssl=eyJÃ¢ÂÂ¦/ which corrupts the JWT value.
   const qIdx = req.originalUrl.indexOf('?');
   const target = qIdx === -1
     ? req.originalUrl + '/'
@@ -585,10 +763,10 @@ app.get(/^\/t\/[a-z0-9-]+$/, (req, res) => {
   res.redirect(301, target);
 });
 
-// Tenant "not found" placeholder â gonly serves when the slug doesn't
+// Tenant "not found" placeholder Ã¢ÂÂ only serves when the slug doesn't
 // resolve to an active tenant row. For valid tenants we fall through
 // to the static-asset + SPA-shell handlers further down, which serve
-// public/tenant/index.html (the actual CRM UI)
+// public/tenant/index.html (the actual CRM UI).
 //
 // Why this runs BEFORE attachTenant: attachTenant rewrites req.url
 // to strip the /t/<slug> prefix, which would make the regex below
@@ -603,8 +781,8 @@ app.get(/^\/t\/[a-z0-9-]+\/?$/, async (req, res, next) => {
     const tp = require('./utils/tenantPool');
     tenant = await tp.findActiveTenant(slug);
   } catch (_) {}
-  // Tenant exists â let attachTenant + the SPA handler take over.
-  // (The "?ssl=â¦" magic-link case also flows through here â the SPA
+  // Tenant exists Ã¢ÂÂ let attachTenant + the SPA handler take over.
+  // (The "?ssl=Ã¢ÂÂ¦" magic-link case also flows through here Ã¢ÂÂ the SPA
   // shell exchanges the token for a real JWT during boot.)
   if (tenant && tenant.status !== 'deleted' && tenant.status !== 'suspended') return next();
   return _renderTenantPlaceholder(req, res, slug, tenant);
@@ -618,7 +796,7 @@ app.use(attachTenant);
 // AsyncLocalStorage.run so any /routes/* handler that calls
 // db.query() / db.getAll() / etc. transparently uses the right
 // per-tenant pg.Pool. Without this, the route files would silently
-// hit the control DB (DATABASE_URL) and either crash or â worse â
+// hit the control DB (DATABASE_URL) and either crash or Ã¢ÂÂ worse Ã¢ÂÂ
 // read/write the wrong tenant's data.
 app.use((req, _res, next) => {
   if (!req.tenantPool) return next();
@@ -631,7 +809,7 @@ app.use((req, _res, next) => {
 // matches here. The dispatcher loads every /routes/<name>.js and maps
 // api_* exports to handlers. See routes/saas/tenantApi.js for details.
 app.post('/api', (req, res, next) => {
-  // Must have a resolved tenant â otherwise this isn't a tenant call
+  // Must have a resolved tenant Ã¢ÂÂ otherwise this isn't a tenant call
   // and we just 404 with JSON to avoid the "<!DOCTYPE" parse crash.
   if (!req.tenant) {
     return res.status(404).json({ error: 'Workspace not found: ' + (req.tenantSlug || '') });
@@ -650,7 +828,7 @@ app.post('/api', (req, res, next) => {
 // a real CSV. Without an explicit handler here the request falls
 // through to the JSON-404 catch-all below, which returned
 //   {"error":"Not found: GET /api/sample.csv"}
-// â and the browser saved that JSON as the "sample sheet". Mount the
+// Ã¢ÂÂ and the browser saved that JSON as the "sample sheet". Mount the
 // same handler the original Celeste server uses, but only inside a
 // tenant scope so the custom-field columns come from THIS tenant's DB.
 function _csvCell(v) {
@@ -659,7 +837,7 @@ function _csvCell(v) {
 }
 
 // ---------------------------------------------------------------
-// SpreadsheetML 2003 helper â generates a single XML file Excel
+// SpreadsheetML 2003 helper Ã¢ÂÂ generates a single XML file Excel
 // (and Numbers / LibreOffice) recognises as a real workbook. We use
 // this instead of pulling in the `xlsx` npm dep because:
 //   1. No new package = nothing to npm-install on existing deploys
@@ -670,7 +848,6 @@ function _csvCell(v) {
 // ---------------------------------------------------------------
 function _xlsCell(v) {
   const s = v == null ? '' : String(v);
-  // SpreadsheetML uses XML-escaped strings inside <Data ss:Type="String">.
   return s
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -705,7 +882,7 @@ function _buildSampleXls(headers, rows) {
 }
 
 app.get('/api/sample.csv', async (req, res, next) => {
-  if (!req.tenant) return next();   // root-level call â fall through to JSON 404
+  if (!req.tenant) return next();   // root-level call Ã¢ÂÂ fall through to JSON 404
 
   // Pull custom fields so the template includes every cf_<key> column
   // currently defined in this tenant's DB. Runs inside tenantStorage,
@@ -715,12 +892,12 @@ app.get('/api/sample.csv', async (req, res, next) => {
     customFields = (await tenantDb.getAll('custom_fields'))
       .filter(c => Number(c.is_active) !== 0 && c.key)
       .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
-  } catch (_) { /* fresh tenant with no custom fields â ok */ }
+  } catch (_) { /* fresh tenant with no custom fields Ã¢ÂÂ ok */ }
 
   const baseCols = [
     // 1. Contact
     'name', 'phone', 'alt_phone', 'whatsapp', 'email',
-    // 2. Routing â status / source / product accepted by NAME, assigned_to by email-or-name-or-id
+    // 2. Routing Ã¢ÂÂ status / source / product accepted by NAME, assigned_to by email-or-name-or-id
     'status', 'source', 'source_ref', 'product', 'assigned_to',
     // 3. Address
     'address', 'city', 'state', 'pincode', 'country', 'company',
@@ -728,7 +905,7 @@ app.get('/api/sample.csv', async (req, res, next) => {
     'value', 'currency', 'qualified', 'tags',
     // 5. Activity
     'next_followup_at', 'notes',
-    // 6. Migration timestamps â admins-only override; blank = "now"
+    // 6. Migration timestamps Ã¢ÂÂ admins-only override; blank = "now"
     'created_at', 'last_status_change_at',
     // 7. Marketing attribution (Google Ads / UTM)
     'gclid', 'gad_campaignid',
@@ -765,7 +942,7 @@ app.get('/api/sample.csv', async (req, res, next) => {
       next_followup_at: '2026-05-01 10:00',
       created_at: '2025-12-15 09:30',
       last_status_change_at: '2026-04-22 11:45',
-      notes: 'Demo requested â interested in premium tier'
+      notes: 'Demo requested Ã¢ÂÂ interested in premium tier'
     }),
     sampleRow({
       name: 'Jane Smith', phone: '+919876543211', email: 'jane@example.com',
@@ -790,7 +967,7 @@ app.get('/api/sample.csv', async (req, res, next) => {
 
 // ---- /api/sample.xls (real Excel-format sample) -------------------
 // Same template the CSV uses, but emitted as SpreadsheetML 2003 so
-// Excel opens it as a true spreadsheet â ino "import as text" step.
+// Excel opens it as a true spreadsheet Ã¢ÂÂ so "import as text" step.
 // Tenant-scoped, identical fall-through pattern to the CSV handler.
 app.get('/api/sample.xls', async (req, res, next) => {
   if (!req.tenant) return next();
@@ -820,7 +997,7 @@ app.get('/api/sample.xls', async (req, res, next) => {
       status: 'New', source: 'Website', product: 'Premium plan',
       city: 'Mumbai', country: 'India', value: '50000', currency: 'INR',
       qualified: '1', tags: 'enterprise,priority',
-      notes: 'Sample row â replace with real data'
+      notes: 'Sample row Ã¢ÂÂ replace with real data'
     },
     {
       name: 'Jane Doe', phone: '9123456789', email: 'jane@example.com',
@@ -833,62 +1010,202 @@ app.get('/api/sample.xls', async (req, res, next) => {
      .send(_buildSampleXls(headers, rows));
 });
 
-// ---- Tenant SPA whell ---------------------------------------------
+// ---- APK download (tenant-scoped) ------------------------------------
+// GET /LeadCRM.apk is triggered by the WhatsBot "Download LeadCRM.apk"
+// button in the Connect Account dialog.  After attachTenant rewrites
+// /t/<slug>/LeadCRM.apk â /LeadCRM.apk the request lands here.
+//
+// Set APK_DOWNLOAD_URL in Railway environment variables to a direct-
+// download link (Google Drive, S3, Cloudflare R2, etc.) and the button
+// works immediately.  Fallback: place LeadCRM.apk in public/ (Git LFS).
+app.get('/LeadCRM.apk', (req, res) => {
+  const cdnUrl = process.env.APK_DOWNLOAD_URL;
+  if (cdnUrl) return res.redirect(302, cdnUrl);
+  const filePath = path.join(__dirname, 'public', 'LeadCRM.apk');
+  res.download(filePath, 'LeadCRM.apk', (err) => {
+    if (err && !res.headersSent) {
+      res.status(503).type('html').send(
+        '<h2>APK not available</h2>' +
+        '<p>Set the <code>APK_DOWNLOAD_URL</code> environment variable in Railway ' +
+        'to a direct-download link (Google Drive, S3, Cloudflare R2, etc.) so ' +
+        'the <em>Download LeadCRM.apk</em> button on the WhatsBot page works.</p>'
+      );
+    }
+  });
+});
+
+// ---- Tenant SPA shell ---------------------------------------------
 // Serve the per-tenant CRM SPA. After attachTenant rewrites
 // /t/<slug>/ to /, GET / lands here when there's a tenant on the
 // request. Plain /<no-tenant> requests still go to the SaaS landing
 // (handled by the earlier app.get('/') registration above).
 app.get('/', (req, res, next) => {
-  if (!req.tenant) return next();          // no tenant â fall through to landing/static
+  if (!req.tenant) return next();          // no tenant Ã¢ÂÂ fall through to landing/static
   res.sendFile(path.join(__dirname, 'public', 'tenant', 'index.html'));
 });
 
 // Serve tenant static assets (app.js, styles.css, sw.js, manifests,
 // icons) under any path inside the tenant scope. The tenant SPA
 // references these as /app.js, /styles.css, etc., which after
-// attachTenant rewrites becomes /app.js â served from public/tenant.
+// attachTenant rewrites becomes /app.js Ã¢ÂÂ served from public/tenant.
 app.use((req, res, next) => {
   if (!req.tenant) return next();
   return express.static(path.join(__dirname, 'public', 'tenant'), _staticOpts)(req, res, next);
 });
 
-// IMPORTANT â keep the static handler scoped to /saas so it can ONLY
+// IMPORTANT Ã¢ÂÂ keep the static handler scoped to /saas so it can ONLY
 // serve assets from public/saas (the landing site + admin SPA). The
 // previous setup mounted public/ at the root, which silently served
 // the legacy Celeste SPA (public/index.html + public/app.js) when a
 // tenant URL got rewritten. The tenant CRM then tried to fetch /api
 // endpoints that don't exist on this server, got HTML 404 responses
-// back, and crashed clients with "Unexpected token '<', '<!DOCTYPE'â¦
+// back, and crashed clients with "Unexpected token '<', '<!DOCTYPE'Ã¢ÂÂ¦
 // is not valid JSON". The legacy files have now been removed from the
 // repo, but we also keep the static handler narrow so the bug can't
 // silently come back.
 
 // Renders the tenant welcome / "not found" page. Pure HTML, no JS,
-// no fetch â by design, so this surface can never produce a JSON
+// no fetch Ã¢ÂÂ by design, so this surface can never produce a JSON
 // parse error on the user's screen.
 function _renderTenantPlaceholder(req, res, slug, tenant) {
   const safe = (s) => String(s == null ? '' : s).replace(/[<>&"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
-  // Decode an admin-minted "Login as tenant" token (?ssl=â¦) if present
+  // Decode an admin-minted "Login as tenant" token (?ssl=Ã¢ÂÂ¦) if present
   // so we can show the operator who they're impersonating. The token
   // itself is short-lived (5 min) and signed with JWT_SECRET; here we
-  // only verify it for display â Phase 2's tenant auth layer will be
+  // only verify it for display Ã¢ÂÂ Phase 2's tenant auth layer will be
   // the actual consumer.
   let ssl = null;
   if (req.query && req.query.ssl) {
     try {
-      const jwP = require('jsonwebtoken');
+      const jwt = require('jsonwebtoken');
       const payload = jwt.verify(String(req.query.ssl), process.env.JWT_SECRET || 'change-me-in-production');
       if (payload && payload.ssl && payload.slug === slug) ssl = payload;
-    } catch (_) { /* expired or tampered â ignore, show normal page */ }
+    } catch (_) { /* expired or tampered Ã¢ÂÂ ignore, show normal page */ }
   }
   if (!tenant) {
     return res.status(404).type('html').send(`<!doctype html><meta charset="utf-8"/>
-<title>Workspace not found Â· SmartCRM</title>
-<style>body{font-family:system-ui,sans-serif;max-width:560px;margin:5rem autm;padding:0 1rem;color:#0f172a}
+<title>Workspace not found ÃÂ· SmartCRM</title>
+<style>body{font-family:system-ui,sans-serif;max-width:560px;margin:5rem auto;padding:0 1rem;color:#0f172a}
 .card{background:#fef2f2;border:1px solid #fecaca;padding:1.5rem;border-radius:12px}
-code¶&6¶w&÷VæC¢6ffc·FFæs¢ã'&VÒãG&VÓ¶&÷&FW"×&FW3£GÐ¦¶6öÆ÷#¢3C336ÓÂ÷7GÆSà£Æï	úIBv÷&·76Ræ÷Bf÷VæCÂöà£ÆFb6Æ73Ò&6&B#à¢ÇåFRv÷&·76RÆ6öFSâG·6fR6ÇVrÓÂö6öFSâFöW6âwBW7B÷"2&VVâ&VÖ÷fVBãÂ÷à£ÂöFcà£ÇãÆ&VcÒ"ò#î(i&6²Fò6Ö'D5$ÒöÖSÂöãÂ÷æ°¢Ð¢6öç7BBÒFVæçC°¢&W2çGRvFÖÂrç6VæBÂFö7GRFÖÃãÆÖWF6'6WCÒ'WFbÓ"óà£ÇFFÆSâG·6fRBæ÷&uöæÖRÒ(	B6Ö'D5$ÓÂ÷FFÆSà£Ç7GÆSæ&öG¶föçBÖfÖÇ§77FVÒ×VÇ6ç2×6W&c¶Ö×vGF£cC¶Ö&vã£G&VÒWFó·FFæs£ã#W&VÓ¶6öÆ÷#¢3cs&¶ÆæRÖVvC£ãSWÐ¢æ6&G¶&6¶w&÷VæC¢6V6fFcS¶&÷&FW#£6öÆB3fVSv#s·FFæs£ãW&VÓ¶&÷&FW"×&FW3£'¶Ö&vã£ãW&VÒÐ¢çv&ç¶&6¶w&÷VæC¢6fVc33¶&÷&FW"Ö6öÆ÷#¢6f63WÐ¦6öFW¶&6¶w&÷VæC¢6ffc·FFæs¢ã&VÒãCW&VÓ¶&÷&FW"×&FW3£G¶föçB×6¦S¢ã&V×Ð¦¶föçB×6¦S£ãg&VÓ¶Ö&vã£ãW&V×Ð¦'¶föçB×6¦S£ãW&VÓ¶Ö&vã£ãg&VÓ¶6öÆ÷#¢3cscfWÐ¢ç&÷w¶F7Æ¦fÆW¶fÆW×w&§w&¶v¢ãW&VÒã&VÓ¶Ö&vã¢ãG&VÒÐ¢æÆ&Ç¶6öÆ÷#¢3cCsC#¶föçB×6¦S¢ã'&VÓ·FWB×G&ç6f÷&Ó§WW&66S¶ÆWGFW"×76æs¢ãFVÓ¶Ö&vâ×&vC¢ã7&V×Ð¦¶6öÆ÷#¢3C336¶föçB×vVvC£SÓÂ÷7GÆSà¢G·76ÂòÆFb6Æ73Ò&6&B"7GÆSÒ&&6¶w&÷VæC¢6F&VfS¶&÷&FW"Ö6öÆ÷#¢3cVf¶6öÆ÷#¢3S6#à¢Æ"7GÆSÒ&6öÆ÷#¢3SCb#ï	ùI2ÆövvVBâ2FVæçBFÖâ7VFòÂö#à¢Çå÷R÷VæVBF2v÷&·76Rg&öÒFRFÖâæVÂâFRFVæçB5$Ò56âwBÖ÷VçFVBWBÂ6òF22FRvVÆ6öÖRÆ6VöÆFW"(	B'WBFRÖv2ÖÆæ²Fö¶Vâ2fÆBæB6R"w2FVæçBWFÆW"vÆÂ6öç7VÖRBWFöÖF6ÆÇãÂ÷à¢ÆFb6Æ73Ò'&÷r#ãÇ7â6Æ73Ò&Æ&Â#ä7Fær3Â÷7ãâÆ6öFSâG·6fR76Âæ5öVÖÂÓÂö6öFSãÂöFcà¢ÆFb6Æ73Ò'&÷r#ãÇ7â6Æ73Ò&Æ&Â#å7VFò'Â÷7ãâÆ6öFSâG·6fR76Âç6öVÖÂÓÂö6öFSãÂöFcà¢ÆFb6Æ73Ò'&÷r#ãÇ7â6Æ73Ò&Æ&Â#åFö¶VâW&W3Â÷7ãâG¶æWrFFR76ÂæW¢çFô4õ7G&ærç&WÆ6RuBrÂrrç6Æ6RÂÒUD3ÂöFcà£ÂöFcæ¢rwÐ£Æï	ù²vVÆ6öÖRFòG·6fRBæ÷&uöæÖRÓÂöà£Çå÷W"6Ö'D5$Òv÷&·76R2&Vv7FW&VBãÂ÷à£ÆFb6Æ73Ò&6&B#à¢Æ#åv÷&·76RFWFÇ3Âö#à¢ÆFb6Æ73Ò'&÷r#ãÇ7â6Æ73Ò&Æ&Â#åU$ÃÂ÷7ãâÆ6öFSâ÷BòG·6fRBç6ÇVrÓÂö6öFSãÂöFcà¢ÆFb6Æ73Ò'&÷r#ãÇ7â6Æ73Ò&Æ&Â#åÆãÂ÷7ãâG·Bç6¶vUöBòw6¶vR2r²Bç6¶vUöB¢vg&VRwÓÂöFcà¢ÆFb6Æ73Ò'&÷r#ãÇ7â6Æ73Ò&Æ&Â#å7FGW3Â÷7ãâÆ6öFSâG·6fRBç7FGW2ÓÂö6öFSãÂöFcà¢ÆFb6Æ73Ò'&÷r#ãÇ7â6Æ73Ò&Æ&Â#äÆövâVÖÃÂ÷7ãâÆ6öFSâG·6fRBæ6öçF7EöVÖÂÓÂö6öFSãÂöFcà£ÂöFcà£ÆFb6Æ73Ò&6&Bv&â#à¢Æ#åFVæçB5$Ò27FÆÂ&Værv&VBWÂö#à¢ÇåFRgVÆÂ6Ö'D5$Òv÷&·76RTÆVG2Â6ÆÇ2ÂvG4Â&W÷'G22âFRæWBFWÆ÷ÖVçB6R(	BFRW"×FVæçBD"2&VVâ&÷f6öæVBÂ'WBFR56âwBÖ÷VçFVBVæFW"Æ6öFSâ÷BòfÇC·6ÇVrfwC³Âö6öFSâWBãÂ÷à¢Çäb÷Rw&RFRÆFf÷&ÒFÖâ÷R6âÖævRF2FVæçBg&öÒFRÆ&VcÒ"öFÖâò2÷FVæçG2#å6Ö'D5$ÒFÖâæVÃÂöâãÂ÷à£ÂöFcà£Ç7GÆSÒ&6öÆ÷#¢3F6#¶föçB×6¦S¢ãW&VÓ¶Ö&vâ×F÷£'&VÒ#äæVVBVÇòVÖÂÆ&VcÒ&ÖÇFó§7W÷'D6Ö'F7&×6öÇWFöâæ6öÒ#ç7W÷'D6Ö'F7&×6öÇWFöâæ6öÓÂöãÂ÷æ°§Ð ¢òò¥4ôâ×6fRCBf÷"çVæÖF6VBFVæFW"VFW"ö÷ ¢òò÷BóÇ6ÇVsâöâçFærFB6ÆÇ2fWF6WV7Fær¥4ôâæ÷rvWG0¢òò6ÆVâ¥4ôâ&6²WfVâbFRgVæ7FöâæÖR2w&öæròFR&÷WFP¢òòFöW6âwBW7B(	B&WfVçFærFR%VæWV7FVBFö¶VâsÂrÂsÂDô5ERrà¢òò7&6FBFRÆVv7V&Æ2öæ§2v2GFærV&ÆW"à¦æÆÂõåÂöÂòâ¢òBòÂ&WÂ&W2Óâ°¢&W2ç7FGW2CBæ§6öâ²W'&÷#¢tæ÷Bf÷VæC¢r²&WæÖWFöB²rr²&Wæ÷&væÅW&ÂÒ°§Ò° ¢òò7FF276WG2ÆfRôäÅVæFW"÷62Ö÷VçFVBV&ÆW"&÷fRâæð¢òò6F6ÖÆÂW&W72ç7FF2W&R(	B6VR6öÖÖVçB&Æö6²BFRF÷ö`¢òòF26V7Föâf÷"FR&FöæÆRà ¢òòÒÒÒÒ&6¶w&÷VæBöÆÆW'2vöövÆR6VWB7æ2²æFfRVÆÂçFVw&Föç2ÒÒÒÒÒÐ¢òò'Vç2WfW'RÖâ7&÷72ÆÂ7FfRFVæçG2âV6çFVw&Föâw2÷và¢òòöÆÅöçFW'fÅöÖâ6öçG&öÇ27GVÂVÆÂg&WVVæ7²FRRÖÖâF6²0¢òò§W7BFR÷WFW"6V6²6FVæ6Rà ¦7æ2gVæ7Föâ÷'VäÆÅFVæçEöÆÆW'2°¢ÆWB&÷w3°¢G'°¢&÷w2ÒvB6öçG&öÄF"çVW'¢4TÄT5B6ÇVre$ôÒFVæçG2tU$R7FGW2âv7FfRrÂwG&ÂrÂw7EöGVRrõ$DU"%B42ÄÔBS ¢°¢Ò6F6R°¢6öç6öÆRæW'&÷"u·öÆÆW%Ò6öçG&öÄF"VW'fÆVC¢rÂRæÖW76vR°¢&WGW&ã°¢Ð¢f÷"6öç7B&÷röb&÷w2ç&÷w2ÇÂµÒ°¢ÆWBC°¢G'²BÒvBFVæçEööÄÖöBæfæD7FfUFVæçB&÷rç6ÇVr²Ò6F6ò²6öçFçVS²Ð¢bB6öçFçVS°¢6öç7BööÂÒFVæçEööÄÖöBçööÄf÷"B°¢bööÂ6öçFçVS°¢FVæçDF"çFVæçE7F÷&vRç'Vâ²ööÂÂFVæçC¢BÂ6ÇVs¢&÷rç6ÇVrÒÂ7æ2Óâ°¢G'²vBçFVw&Föç2ç'VäGVU6VWE7æ72²Ð¢6F6R²6öç6öÆRæW'&÷"u·6VWEöÆÆW%ÒrÂ&÷rç6ÇVrÂRæÖW76vR²Ð¢G'²vBçFVw&Föç2ç'VäGVTæFfUVÆÇ2²Ð¢6F6R²6öç6öÆRæW'&÷"u¶æFfUöÆÆW%ÒrÂ&÷rç6ÇVrÂRæÖW76vR²Ð¢Ò°¢Ð§Ð ¢òòf'7B'Vâ32gFW"&ö÷BvfW2D"6öææV7Föç2FÖRFò6WGFÆRÀ¢òòFVâWfW'RÖâFW&VgFW"à§6WEFÖV÷WBÓâ°¢÷'VäÆÅFVæçEöÆÆW'2æ6F6RÓâ6öç6öÆRæW'&÷"u·öÆÆW%ÒæB'Vã¢rÂRæÖW76vR°¢6WDçFW'fÂÓâ°¢÷'VäÆÅFVæçEöÆÆW'2æ6F6RÓâ6öç6öÆRæW'&÷"u·öÆÆW%ÒF6³¢rÂRæÖW76vR°¢ÒÂR¢c¢°§ÒÂ3¢° ¢òòÒÒÒÒvÆö&ÂW'&÷"ÖFFÆWv&R×W7B&RÄ5BÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÐ¢òòçFær&÷WFRæFÆW"F&÷w2÷"fV¦V7G2VæG2WW&RâÆöw2Fð¢òòFRW'&÷%öÆöw2F&ÆR²&WGW&ç2SFòFR6ÆÆW"âFRW6W"6¶V@¢òòW2Fò6GW&RWfW'W'&÷"â÷W"&ö¦V7B(	BF22FR6F6ÖÆÂà¦çW6RW'&÷$Æöw2æW&W74W'&÷$ÖFFÆWv&R° ¢òò&ö6W72ÖÆWfVÂ6fWGæWB(	BæöBvÆÂ¶VW'VææærgFW"FW6RÀ¢òò6ò2Æöær2vR&V6÷&BFVÒvR6â&W6öÇfRFVÒÆFW"à§&ö6W72æöâwVææFÆVE&V¦V7FöârÂ&V6öâÓâ°¢6öç6öÆRæW'&÷"u·VææFÆVE&V¦V7FöåÒrÂ&V6öâ°¢W'&÷$Æöw2æÆötW'&÷"°¢6÷W&6S¢w&ö6W72rÀ¢6WfW&G¢vfFÂrÀ¢ÖW76vS¢&V6öâbb&V6öâæÖW76vRÇÂ7G&ær&V6öâÀ¢7F6³¢&V6öâbb&V6öâç7F6°¢Òæ6F6Óâ·Ò°§Ò°§&ö6W72æöâwVæ6VvDW6WFöârÂW'"Óâ°¢6öç6öÆRæW'&÷"u·Væ6VvDW6WFöåÒrÂW'"°¢W'&÷$Æöw2æÆötW'&÷"°¢6÷W&6S¢w&ö6W72rÀ¢6WfW&G¢vfFÂrÀ¢ÖW76vS¢W'"bbW'"æÖW76vRòW'"æÖW76vR¢7G&ærW'"À¢7F6³¢W'"bbW'"ç7F6°¢Òæ6F6Óâ·Ò°§Ò° ¢òòÒÒÒÒFö72DÔÂvVæW&F÷"ÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÐ¦gVæ7FöâöFö74FÖÂ÷7B°¢6öç7BVæGöçBÒ÷7B²rööö²÷vV'6FRs°¢&WGW&âÂFö7GRFÖÃãÆFÖÂÆæsÒ&Vâ#ãÆVCà£ÆÖWF6'6WCÒ'WFbÓ"óà£ÆÖWFæÖSÒ'fWw÷'B"6öçFVçCÒ'vGFÖFWf6R×vGFÆæFÂ×66ÆSÓ"óà£ÇFFÆSäÆVB5$Ò(	BFö7VÖVçFFöãÂ÷FFÆSà£Ç7GÆSà¢§&ö÷B²ÒÖ&s¢3cs&²ÒÖ6&C¢6ffc²Ò×6ögC¢6cff3²Ò×FWC¢3cs&²ÒÖ×WFVC¢3cCsC#²ÒÖ'&æC¢3c3cfc²ÒÖ'&æC#¢6V3C²ÒÖ6öFS¢3cs&²ÒÖ6öFWFWC¢6Vc6f3²ÒÖ&÷&FW#¢6SVSvV#²Ð¢¢²&÷×6¦æs¢&÷&FW"Ö&÷²Ð¢&öG²Ö&vã£²föçBÖfÖÇ¢ÖÆR×77FVÒÅ6VvöRTÅ&ö&÷FòÇ6ç2×6W&c²&6¶w&÷VæC¢6c6cFcc²6öÆ÷#§f"Ò×FWB²ÆæRÖVvC£ãc²Ð¢VFW"²&6¶w&÷VæC¦ÆæV"Öw&FVçB3VFVrÇf"ÒÖ'&æBÂ3#V6cbÇf"ÒÖ'&æC"²6öÆ÷#¢6ffc²FFæs£"ãW&VÒãW&VÒ'&VÓ²Ð¢VFW"²Ö&vã£ã3W&VÓ²föçB×6¦S£ã&VÓ²Ð¢VFW"²Ö&vã£²÷6G¢ã²Ð¢Öâ²Ö×vGF£#²Ö&vã¢ÓãW&VÒWFò7&VÓ²FFæs£&VÓ²Ð¢æ6&B²&6¶w&÷VæC§f"ÒÖ6&B²&÷&FW"×&FW3£G²FFæs£ãW&VÒãsW&VÓ²Ö&vâÖ&÷GFöÓ£ã&VÓ²&÷×6F÷s£GG&v&RÃ#2ÃC"Âã²Ð¢"²Ö&vã£ãW&VÓ²föçB×6¦S£ã#W&VÓ²&÷&FW"ÖÆVgC£G6öÆBf"ÒÖ'&æB²FFærÖÆVgC¢ãw&VÓ²Ð¢2²Ö&vã£ãG&VÒãW&VÓ²föçB×6¦S£ãW&VÓ²6öÆ÷#§f"Ò×FWB²Ð¢6öFRÂ&R²föçBÖfÖÇ¢%4bÖöæò"ÄÖVæÆòÄÖöæ6òÄ6öç6öÆ2ÆÖöæ÷76S²Ð¢&R²&6¶w&÷VæC§f"ÒÖ6öFR²6öÆ÷#§f"ÒÖ6öFWFWB²FFæs£&VÒã&VÓ²&÷&FW"×&FW3£²÷fW&fÆ÷r×¦WFó²föçB×6¦S¢ã7&VÓ²ÆæRÖVvC£ãS²Ð¢&Ræ²²6öÆ÷#¢3vFC6f3²Ð¢&Rç2²6öÆ÷#¢6f6C3FC²Ð¢&Ræ2²6öÆ÷#¢3F6#²föçB×7GÆS¦FÆ3²Ð¢F&ÆR²vGF£S²&÷&FW"Ö6öÆÆ6S¦6öÆÆ6S²Ö&vã¢ãW&VÒ&VÓ²föçB×6¦S¢ã'&VÓ²Ð¢FÂFB²FWBÖÆvã¦ÆVgC²FFæs¢ãSW&VÒãg&VÓ²&÷&FW"Ö&÷GFöÓ£6öÆBf"ÒÖ&÷&FW"²fW'F6ÂÖÆvã§F÷²Ð¢F²&6¶w&÷VæC§f"Ò×6ögB²föçB×vVvC£c²föçB×6¦S¢ã'&VÓ²FWB×G&ç6f÷&Ó§WW&66S²ÆWGFW"×76æs¢ãVVÓ²6öÆ÷#§f"ÒÖ×WFVB²Ð¢FBæfVÆB6öFR²&6¶w&÷VæC§f"Ò×6ögB²FFæs£'g²&÷&FW"×&FW3£G²6öÆ÷#§f"ÒÖ'&æB²föçB×vVvC£c²Ð¢ç&W²6öÆ÷#¢6F3#c#c²föçB×vVvC£c²Ð¢çÆÂ²F7Æ¦æÆæRÖ&Æö6³²FFæs£'²&÷&FW"×&FW3£²föçB×6¦S¢ãs'&VÓ²föçB×vVvC£c²fW'F6ÂÖÆvã¦ÖFFÆS²Ð¢çÆÂ×÷7B²&6¶w&÷VæC¢3#²6öÆ÷#¢6ffc²Ð¢çW&Â²&6¶w&÷VæC§f"Ò×6ögB²FFæs¢ãcW&VÒãW&VÓ²&÷&FW"×&FW3£²föçBÖfÖÇ¦Ööæ÷76S²föçB×6¦S¢ãW&VÓ²v÷&BÖ'&V³¦'&V²ÖÆÃ²F7Æ¦fÆW²v¢ãW&VÓ²ÆvâÖFV×3¦6VçFW#²Ð¢æ6÷Ö'Fâ²&6¶w&÷VæC§f"ÒÖ'&æB²6öÆ÷#¢6ffc²&÷&FW#¦æöæS²FFæs¢ã3W&VÒãsW&VÓ²&÷&FW"×&FW3£g²7W'6÷#§öçFW#²föçB×6¦S¢ã&VÓ²Ð¢æ6÷Ö'Fã¦7FfR²G&ç6f÷&Ó§66ÆRãR²Ð¢VÂ²FFærÖÆVgC£ãG&VÓ²Ð¢Æ²Ö&vâÖ&÷GFöÓ¢ã7&VÓ²Ð¢çF'2²F7Æ¦fÆW²v¢ãG&VÓ²&÷&FW"Ö&÷GFöÓ£'6öÆBf"ÒÖ&÷&FW"²Ö&vâÖ&÷GFöÓ£²fÆW×w&§w&²Ð¢çF"²FFæs¢ãcW&VÒ&VÓ²7W'6÷#§öçFW#²&÷&FW#¦æöæS²&6¶w&÷VæC§G&ç7&VçC²6öÆ÷#§f"ÒÖ×WFVB²föçB×vVvC£S²föçB×6¦S¢ã&VÓ²&÷&FW"Ö&÷GFöÓ£'6öÆBG&ç7&VçC²Ö&vâÖ&÷GFöÓ¢Ó'²Ð¢çF"æ7FfR²6öÆ÷#§f"ÒÖ'&æB²&÷&FW"Ö&÷GFöÒÖ6öÆ÷#§f"ÒÖ'&æB²Ð¢çF"Ö&öG²F7Æ¦æöæS²Ð¢çF"Ö&öGæ7FfR²F7Æ¦&Æö6³²Ð¢ææbÖ&6²²F7Æ¦æÆæRÖ&Æö6³²6öÆ÷#¢6ffc²FWBÖFV6÷&Föã¦æöæS²÷6G¢ãS²Ö&vâÖ&÷GFöÓ¢ãW&VÓ²föçB×6¦S¢ãW&VÓ²Ð¢ææbÖ&6³¦÷fW"²÷6G£²Ð¢æÆW'B²&6¶w&÷VæC¢6fVc63s²&÷&FW"ÖÆVgC£G6öÆB6cSS#²FFæs¢ãsW&VÒ&VÓ²&÷&FW"×&FW3£g²Ö&vã£&VÒ²föçB×6¦S¢ã&VÓ²Ð¢æ&FvR²F7Æ¦æÆæRÖ&Æö6³²&6¶w&÷VæC¢6V6fFcS²6öÆ÷#¢3cVcCc²&÷&FW#£6öÆB3fVSv#s²FFæs£'²&÷&FW"×&FW3£G²föçB×6¦S¢ã&VÓ²föçB×vVvC£c²Ö&vâÖÆVgC¢ãG&VÓ²Ð£Â÷7GÆSà£ÂöVCãÆ&öGà£ÆVFW#à¢Æ6Æ73Ò&æbÖ&6²"&VcÒ"ò#î(i&6²Fò5$ÓÂöà¢Æï	ù9¢ÆVB5$Ò(	BFö7VÖVçFFöãÂöà¢Çå6VæBÆVG2g&öÒ÷W"vV'6FRÂÆæFærvRÂBÆFf÷&Ò÷"çWFW&æÂ77FVÒçFòFR5$ÒãÂ÷à£ÂöVFW#à£ÆÖãà £ÆFb6Æ73Ò&6&B#à¢Æ#ãâVæGöçCÂö#à¢ÇãÇ7â6Æ73Ò'ÆÂÆÂ×÷7B#åõ5CÂ÷7ãâ6VæBÆVG2Fó£Â÷à¢ÆFb6Æ73Ò'W&Â#à¢Æ6öFRCÒ&VæGöçB#âG¶VæGöçGÓÂö6öFSà¢Æ'WGFöâ6Æ73Ò&6÷Ö'Fâ"öæ6Æ6³Ò&6÷FWBrG¶VæGöçGÒrÂF2#ä6÷Âö'WGFöãà¢ÂöFcà¢Ç7GÆSÒ&Ö&vâ×F÷£&VÒ#ä66WG2&÷FÆ6öFSæÆ6Föâö§6öãÂö6öFSâæBÆ6öFSæÆ6Föâ÷×wwrÖf÷&Ò×W&ÆVæ6öFVCÂö6öFSâ&öFW2(	B6VæBv6WfW"2V6W"g&öÒ÷W"7F6²ãÂ÷à£ÂöFcà £ÆFb6Æ73Ò&6&B#à¢Æ#ã"âWFVçF6FöãÂö#à¢ÇäÆÂ&WVW7G2×W7Bæ6ÇVFR÷W"¶WâçöbFW6RÆö6Föç2266WFVC£Â÷à¢ÇF&ÆSà¢ÇFVCãÇG#ãÇFäÖWFöCÂ÷FãÇFäW×ÆSÂ÷FãÂ÷G#ãÂ÷FVCà¢ÇF&öGà¢ÇG#ãÇFCãÆ6öFSçÖÖ¶WÂö6öFSâVFW"Ç7â7GÆSÒ&6öÆ÷#¢3#¶föçB×vVvC£c#î)R&VfW'&VCÂ÷7ããÂ÷FCãÇFCãÆ6öFSçÖÖ¶W¢ÆVF7&Õ÷(
-cÂö6öFSãÂ÷FCãÂ÷G#à¢ÇG#ãÇFCãÆ6öFSäWF÷&¦Föã¢&V&W#Âö6öFSâVFW#Â÷FCãÇFCãÆ6öFSäWF÷&¦Föã¢&V&W"ÆVF7&Õ÷(
-cÂö6öFSãÂ÷FCãÂ÷G#à¢ÇG#ãÇFCãÆ6öFSæö¶WÂö6öFSâ&öGfVÆCÂ÷FCãÇFCãÆ6öFSæö¶WÖÆVF7&Õ÷(
-cÂö6öFSâf÷&Ò÷7BÂ÷FCãÂ÷G#à¢ÇG#ãÇFCãÆ6öFSãöö¶WÓÂö6öFSâVW'&ÓÂ÷FCãÇFCãÆ6öFSâG¶VæGöçGÓöö¶WÖÆVF7&Õ÷(
-cÂö6öFSãÂ÷FCãÂ÷G#à¢Â÷F&öGà¢Â÷F&ÆSà¢ÇävWB÷W"¶Wg&öÒ5$Ò(i"6WGFæw2(i"F"â6Æ6²Æ#ï	ùHB&VvVæW&FSÂö#âbBWfW"ÆV·2ãÂ÷à¢ÆFb6Æ73Ò&ÆW'B#î)ªûò¶VW÷W"¶W6V7&WBâFöâwBWBBâ6ÆVçB×6FR¦f67&B÷"V&Æ2vDV"&WòâW6R6W'fW"×6FR&÷b÷W"f÷&Ò2öâ7FF26FRãÂöFcà£ÂöFcà £ÆFb6Æ73Ò&6&B#à¢Æ#ã2â&WVW7B&öGÂö#à¢Çå6VæBVFW"¥4ôâ&öG÷"U$ÂÖVæ6öFVBf÷&ÒfVÆG2ÆÂ÷FöæÂW6WBÆ6öFSææÖSÂö6öFSâ²BÆV7BöæRöbÆ6öFSçöæSÂö6öFSâóÆ6öFSæVÖÃÂö6öFSâ£Â÷à¢ÇF&ÆSà¢ÇFVCãÇG#ãÇFäfVÆCÂ÷FãÇFåGSÂ÷FãÇFäFW67&FöãÂ÷FãÂ÷G#ãÂ÷FVCà¢ÇF&öGà¢ÇG#ãÇFB6Æ73Ò&fVÆB#ãÆ6öFSææÖSÂö6öFSâÇ7â6Æ73Ò'&W#â£Â÷7ããÂ÷FCãÇFCç7G&æsÂ÷FCãÇFCäÆVBw2gVÆÂæÖSÂ÷FCãÂ÷G#à¢ÇG#ãÇFB6Æ73Ò&fVÆB#ãÆ6öFSçöæSÂö6öFSãÂ÷FCãÇFCç7G&æsÂ÷FCãÇFCåöæRvF6÷VçG'6öFRÂRærâÆ6öFSâ³scSC3#Âö6öFSââÆ3¢Æ6öFSæÖö&ÆSÂö6öFSãÂ÷FCãÂ÷G#à¢ÇG#ãÇFB6Æ73Ò&fVÆB#ãÆ6öFSçvG6Âö6öFSãÂ÷FCãÇFCç7G&æsÂ÷FCãÇFCåvG4çVÖ&W"âfÆÇ2&6²FòÆ6öFSçöæSÂö6öFSâböÖGFVBãÂ÷FCãÂ÷G#à¢ÇG#ãÇFB6Æ73Ò&fVÆB#ãÆ6öFSæVÖÃÂö6öFSãÂ÷FCãÇFCç7G&æsÂ÷FCãÇFCäVÖÂFG&W73Â÷FCãÂ÷G#à¢ÇG#ãÇFB6Æ73Ò&fVÆB#ãÆ6öFSç6÷W&6SÂö6öFSãÂ÷FCãÇFCç7G&æsÂ÷FCãÇFCåvW&RFRÆVB6ÖRg&öÒâFVfVÇC¢Æ6öFSåvV'6FSÂö6öFSãÂ÷FCãÂ÷G#à¢ÇG#ãÇFB6Æ73Ò&fVÆB#ãÆ6öFSç&öGV7CÂö6öFSãÂ÷FCãÇFCç7G&æsÂ÷FCãÇFCå&öGV7B÷"ÆâFWw&RçFW&W7FVBãÂ÷FCãÂ÷G#à¢ÇG#ãÇFB6Æ73Ò&fVÆB#ãÆ6öFSææ÷FW3Âö6öFSãÂ÷FCãÇFCç7G&æsÂ÷FCãÇFCäg&VRÖf÷&Òæ÷FW2âÆ3¢Æ6öFSæÖW76vSÂö6öFSãÂ÷FCãÂ÷G#à¢ÇG#ãÇFB6Æ73Ò&fVÆB#ãÆ6öFSçFw3Âö6öFSãÂ÷FCãÇFCç7G&æsÂ÷FCãÇFCä6öÖÖ×6W&FVBÆ&VÇ3¢Æ6öFSâ&÷BÇf#Âö6öFSââÆ3¢Æ6öFSæÆ&VÇ3Âö6öFSãÂ÷FCãÂ÷G#à¢ÇG#ãÇFB6Æ73Ò&fVÆB#ãÆ6öFSæ6ö×çÂö6öFSãÂ÷FCãÇFCç7G&æsÂ÷FCãÇFCä6ö×çæÖSÂ÷FCãÂ÷G#à¢ÇG#ãÇFB6Æ73Ò&fVÆB#ãÆ6öFSæ6GÂö6öFSãÂ÷FCãÇFCç7G&æsÂ÷FCãÇFCä6GÂ÷FCãÂ÷G#à¢ÇG#ãÇFB6Æ73Ò&fVÆB#ãÆ6öFSçWFÕ÷6÷W&6SÂö6öFSâòÆ6öFSçWFÕöÖVFVÓÂö6öFSâòÆ6öFSçWFÕö6×vãÂö6öFSâòÆ6öFSçWFÕ÷FW&ÓÂö6öFSâòÆ6öFSçWFÕö6öçFVçCÂö6öFSãÂ÷FCãÇFCç7G&æsÂ÷FCãÇFCåUDÒGG&'WFöâ&ÖWFW'3Â÷FCãÂ÷G#à¢ÇG#ãÇFB6Æ73Ò&fVÆB#ãÆ6öFSæv6ÆCÂö6öFSãÂ÷FCãÇFCç7G&æsÂ÷FCãÇFCävöövÆR6Æ6²CÂ÷FCãÂ÷G#à¢ÇG#ãÇFB6Æ73Ò&fVÆB#ãÆ6öFSæÆæFæu÷vSÂö6öFSãÂ÷FCãÇFCç7G&æsÂ÷FCãÇFCåU$ÂFRÆVB7V&ÖGFVBg&öÓÂ÷FCãÂ÷G#à¢ÇG#ãÇFB6Æ73Ò&fVÆB#ãÆ6öFSæÖWFÂö6öFSãÂ÷FCãÇFCæö&¦V7B¥4ôâöæÇÂ÷FCãÇFCäçFFFöæÂ7G'V7GW&VBFFÂ÷FCãÂ÷G#à¢Â÷F&öGà¢Â÷F&ÆSà£ÂöFcà £ÆFb6Æ73Ò&6&B#à¢Æ#ãBâ6öFR6×ÆW3Âö#à¢ÆFb6Æ73Ò'F'2#à¢Æ'WGFöâ6Æ73Ò'F"7FfR"FF×F#Ò&7W&ÂÖ§6öâ#æ5U$Â¥4ôâÂö'WGFöãà¢Æ'WGFöâ6Æ73Ò'F""FF×F#Ò&7W&ÂÖf÷&Ò#æ5U$ÂU$ÂÖVæ6öFVBÇ7â6Æ73Ò&&FvR#ääUsÂ÷7ããÂö'WGFöãà¢Æ'WGFöâ6Æ73Ò'F""FF×F#Ò&§2#ä¦f67&CÂö'WGFöãà¢Æ'WGFöâ6Æ73Ò'F""FF×F#Ò&§6öf÷&Ò#äDÔÂf÷&ÓÂö'WGFöãà¢Æ'WGFöâ6Æ73Ò'F""FF×F#Ò'#åÂö'WGFöãà¢Æ'WGFöâ6Æ73Ò'F""FF×F#Ò'Föâ#åFöãÂö'WGFöãà¢Æ'WGFöâ6Æ73Ò'F""FF×F#Ò'w#åv÷&E&W73Âö'WGFöãà¢ÂöFcà ¢ÆFb6Æ73Ò'F"Ö&öG7FfR"FF×F#Ò&7W&ÂÖ§6öâ#à£Ç&SãÇ7â6Æ73Ò&2#â2¥4ôâ&öG(	BÖ÷7B6öÖÖöâf÷"6W'fW"×Fò×6W'fW#Â÷7ãà¦7W&ÂÕõ5BÇ7â6Æ73Ò'2#ârG¶VæGöçGÒsÂ÷7ãâÅÀ¢ÔÇ7â6Æ73Ò'2#âwÖÖ¶W¢õU%ôô´UsÂ÷7ãâÅÀ¢ÔÇ7â6Æ73Ò'2#ât6öçFVçBÕGS¢Æ6Föâö§6öâsÂ÷7ãâÅÀ¢ÖBÇ7â6Æ73Ò'2#âw°¢&æÖR#¢%&¦W6·VÖ""À¢'öæR#¢"³scSC3#"À¢&VÖÂ#¢'&¦W6W×ÆRæ6öÒ"À¢'6÷W&6R#¢%vV'6FR6öçF7Bf÷&Ò"À¢&æ÷FW2#¢%vçG2FVÖò"À¢'Fw2#¢&÷BÆFVÖò×&WVW7FVB"À¢'WFÕ÷6÷W&6R#¢&vöövÆR"À¢'WFÕö6×vâ#¢'7VÖÖW"×6ÆR ¢ÒsÂ÷7ããÂ÷&Sà¢ÂöFcà ¢ÆFb6Æ73Ò'F"Ö&öG"FF×F#Ò&7W&ÂÖf÷&Ò#à£Ç&SãÇ7â6Æ73Ò&2#â2Æ6Föâ÷×wwrÖf÷&Ò×W&ÆVæ6öFVB(	Bv÷&·2vFDÔÂf÷&×2ÃÂ÷7ãà£Ç7â6Æ73Ò&2#â2¦W"Â&&ÇÂÖ¶RÂãâ$EE&WVW7B"æöFW2ÂWF2ãÂ÷7ãà¦7W&ÂÕõ5BÇ7â6Æ73Ò'2#ârG¶VæGöçGÒsÂ÷7ãâÅÀ¢ÔÇ7â6Æ73Ò'2#âwÖÖ¶W¢õU%ôô´UsÂ÷7ãâÅÀ¢ÒÖFF×W&ÆVæ6öFRÇ7â6Æ73Ò'2#âvæÖSÕ&¦W6·VÖ"sÂ÷7ãâÅÀ¢ÒÖFF×W&ÆVæ6öFRÇ7â6Æ73Ò'2#âwöæSÒ³scSC3#sÂ÷7ãâÅÀ¢ÒÖFF×W&ÆVæ6öFRÇ7â6Æ73Ò'2#âvVÖÃ×&¦W6W×ÆRæ6öÒsÂ÷7ãâÅÀ¢ÒÖFF×W&ÆVæ6öFRÇ7â6Æ73Ò'2#âw6÷W&6SÕvV'6FR6öçF7Bf÷&ÒsÂ÷7ãâÅÀ¢ÒÖFF×W&ÆVæ6öFRÇ7â6Æ73Ò'2#âvæ÷FW3ÕvçG2FVÖòsÂ÷7ãâÅÀ¢ÒÖFF×W&ÆVæ6öFRÇ7â6Æ73Ò'2#âwFw3Ö÷BÆFVÖò×&WVW7FVBsÂ÷7ãâÅÀ¢ÒÖFF×W&ÆVæ6öFRÇ7â6Æ73Ò'2#âwWFÕ÷6÷W&6SÖvöövÆRsÂ÷7ãâÅÀ¢ÒÖFF×W&ÆVæ6öFRÇ7â6Æ73Ò'2#âwWFÕö6×vã×7VÖÖW"×6ÆRsÂ÷7ãà £Ç7â6Æ73Ò&2#â2÷"vFÖB÷R×W7BW&6VçBÖVæ6öFRÖçVÆÇ£Â÷7ãà¦7W&ÂÕõ5BÇ7â6Æ73Ò'2#ârG¶VæGöçGÒsÂ÷7ãâÅÀ¢ÔÇ7â6Æ73Ò'2#âwÖÖ¶W¢õU%ôô´UsÂ÷7ãâÅÀ¢ÔÇ7â6Æ73Ò'2#ât6öçFVçBÕGS¢Æ6Föâ÷×wwrÖf÷&Ò×W&ÆVæ6öFVBsÂ÷7ãâÅÀ¢ÖBÇ7â6Æ73Ò'2#âvæÖSÕ&¦W6´·VÖ"f×·öæSÒS$#scSC3#f×¶VÖÃ×&¦W6SCW×ÆRæ6öÒf×·6÷W&6SÕvV'6FRf×·Fw3Ö÷BS$6FVÖòsÂ÷7ããÂ÷&Sà¢ÂöFcà ¢ÆFb6Æ73Ò'F"Ö&öG"FF×F#Ò&§2#à£Ç&SãÇ7â6Æ73Ò&2#âòòæöFRæ§2òæWBæ§2(	B¥4ôâ&öG6W'fW"×6FRöæÇÂæWfW"W÷6R¶Wâ'&÷w6W"Â÷7ãà£Ç7â6Æ73Ò&²#æ6öç7CÂ÷7ãâ&W7öç6RÒÇ7â6Æ73Ò&²#ævCÂ÷7ãâfWF6Ç7â6Æ73Ò'2#ârG¶VæGöçGÒsÂ÷7ãâÂ°¢ÖWFöC¢Ç7â6Æ73Ò'2#âuõ5BsÂ÷7ãâÀ¢VFW'3¢°¢Ç7â6Æ73Ò'2#âwÖÖ¶WsÂ÷7ãã¢&ö6W72æVçbäÄTD5$Õôô´UÀ¢Ç7â6Æ73Ò'2#ât6öçFVçBÕGRsÂ÷7ãã¢Ç7â6Æ73Ò'2#âvÆ6Föâö§6öâsÂ÷7ãà¢ÒÀ¢&öG¢¥4ôâç7G&ævg°¢æÖS¢Ç7â6Æ73Ò'2#âu&¦W6·VÖ"sÂ÷7ãâÂöæS¢Ç7â6Æ73Ò'2#âr³scSC3#sÂ÷7ãâÀ¢VÖÃ¢Ç7â6Æ73Ò'2#âw&¦W6W×ÆRæ6öÒsÂ÷7ãâÂ6÷W&6S¢Ç7â6Æ73Ò'2#âuvV'6FRsÂ÷7ãâÀ¢Fw3¢Ç7â6Æ73Ò'2#âv÷BÆFVÖò×&WVW7FVBsÂ÷7ãâÂæ÷FW3¢Ç7â6Æ73Ò'2#âuvçG2FVÖòsÂ÷7ãà¢Ò§Ò°£Ç7â6Æ73Ò&²#æ6öç7CÂ÷7ãâFFÒÇ7â6Æ73Ò&²#ævCÂ÷7ãâ&W7öç6Ræ§6öâ°¦6öç6öÆRæÆörFF²Ç7â6Æ73Ò&2#âòò²ö³¢G'VRÂÆVEöC¢#3BÂ76væVE÷Fó¢RÓÂ÷7ããÂ÷&Sà¢ÂöFcà ¢ÆFb6Æ73Ò'F"Ö&öG"FF×F#Ò&§2Öf÷&Ò#à£Ç&SâfÇC³Ç7â6Æ73Ò&²#æf÷&ÓÂ÷7ãâCÓÇ7â6Æ73Ò'2#â&ÆVBÖf÷&Ò#Â÷7ãâfwC°¢fÇC³Ç7â6Æ73Ò&²#æçWCÂ÷7ãâæÖSÓÇ7â6Æ73Ò'2#â&æÖR#Â÷7ãâ&WV&VBòfwC°¢fÇC³Ç7â6Æ73Ò&²#æçWCÂ÷7ãâæÖSÓÇ7â6Æ73Ò'2#â'öæR#Â÷7ãâ&WV&VBòfwC°¢fÇC³Ç7â6Æ73Ò&²#æçWCÂ÷7ãâæÖSÓÇ7â6Æ73Ò'2#â&VÖÂ#Â÷7ãâòfwC°¢fÇC³Ç7â6Æ73Ò&²#çFWF&VÂ÷7ãâæÖSÓÇ7â6Æ73Ò'2#â&ÖW76vR#Â÷7ãâfwC²fÇC²÷FWF&VfwC°¢fÇC³Ç7â6Æ73Ò&²#æ'WGFöãÂ÷7ãâfwCµ7V&ÖBfÇC²ö'WGFöâfwC°¢fÇC²óÇ7â6Æ73Ò&²#æf÷&ÓÂ÷7ãâfwC°¢fÇC³Ç7â6Æ73Ò&²#ç67&CÂ÷7ãâfwC°¦Fö7VÖVçBævWDVÆVÖVçD'BÇ7â6Æ73Ò'2#âvÆVBÖf÷&ÒsÂ÷7ãâæFDWfVçDÆ7FVæW"Ç7â6Æ73Ò'2#âw7V&ÖBsÂ÷7ãâÂÇ7â6Æ73Ò&²#æ7æ3Â÷7ãâRÒfwC²°¢Rç&WfVçDFVfVÇB°¢Ç7â6Æ73Ò&²#æ6öç7CÂ÷7ãâFFÒö&¦V7Bæg&öÔVçG&W2Ç7â6Æ73Ò&²#ææWsÂ÷7ãâf÷&ÔFFRçF&vWB°¢FFç6÷W&6RÒÇ7â6Æ73Ò'2#âtÆæFærvRsÂ÷7ãã°¢Ç7â6Æ73Ò&²#æ6öç7CÂ÷7ãâ"ÒÇ7â6Æ73Ò&²#ævCÂ÷7ãâfWF6Ç7â6Æ73Ò'2#âuõU%ô$4´TäEõ$õõU$ÂsÂ÷7ãâÂ²Ç7â6Æ73Ò&2#âòò(i&÷WFRF&÷Vv÷W"&6¶VæCÂ÷7ãà¢ÖWFöC¢Ç7â6Æ73Ò'2#âuõ5BsÂ÷7ãâÀ¢VFW'3¢²Ç7â6Æ73Ò'2#ât6öçFVçBÕGRsÂ÷7ãã¢Ç7â6Æ73Ò'2#âvÆ6Föâö§6öâsÂ÷7ãâÒÀ¢&öG¢¥4ôâç7G&ævgFF¢Ò°¢ÆW'B"æö²òÇ7â6Æ73Ò'2#âuFæ·2(	BvRvÆÂ&V6÷WBsÂ÷7ãâ¢Ç7â6Æ73Ò'2#âu6öÖWFærvVçBw&öærsÂ÷7ãâ°§Ò°¢fÇC²óÇ7â6Æ73Ò&²#ç67&CÂ÷7ãâfwC³Â÷&Sà¢ÆFb6Æ73Ò&ÆW'B#î)ªûòæWfW"WB÷W"¶Wâ'&÷w6W"¥2â&÷WFRf÷&Ò7V&Ö76öç2F&÷Vv&6¶VæBVæGöçBFBFG2FR¶WãÂöFcà¢ÂöFcà ¢ÆFb6Æ73Ò'F"Ö&öG"FF×F#Ò'#à£Ç&SâfÇC³óÇ7â6Æ73Ò&²#çÂ÷7ãà£Ç7â6Æ73Ò&2#âòò¥4ôâ&öGÂ÷7ãà¢FFFÒ²væÖRrÒfwC²u&¦W6·VÖ"rÂwöæRrÒfwC²r³scSC3#rÀ¢vVÖÂrÒfwC²w&¦W6W×ÆRæ6öÒrÂwFw2rÒfwC²v÷BÆFVÖòuÓ°¢F6Ò7W&ÅöæBÇ7â6Æ73Ò'2#ârG¶VæGöçGÒsÂ÷7ãâ°¦7W&Å÷6WF÷Eö'&F6Â°¢5U$ÄõEõõ5BÒfwC²Ç7â6Æ73Ò&²#çG'VSÂ÷7ãâÂ5U$ÄõEõ$UEU$åE$å4dU"ÒfwC²Ç7â6Æ73Ò&²#çG'VSÂ÷7ãâÀ¢5U$ÄõEôEETDU"ÒfwC²²wÖÖ¶W¢râvWFVçbtÄTD5$Õôô´UrÀ¢t6öçFVçBÕGS¢Æ6Föâö§6öâuÒÀ¢5U$ÄõEõõ5DdTÄE2ÒfwC²§6öåöVæ6öFRFFFÀ¥Ò°¢G&W7VÇBÒ§6öåöFV6öFR7W&ÅöWV2F6ÂÇ7â6Æ73Ò&²#çG'VSÂ÷7ãâ°¦7W&Åö6Æ÷6RF6° £Ç7â6Æ73Ò&2#âòòU$ÂÖVæ6öFVB&öGÇFW&æFfR(	Bv÷&·2vFçf÷&ÒÂ÷7ãà¦7W&Å÷6WF÷Eö'&F6"Ò7W&ÅöæBÇ7â6Æ73Ò'2#ârG¶VæGöçGÒsÂ÷7ãâÂ°¢5U$ÄõEõõ5BÒfwC²Ç7â6Æ73Ò&²#çG'VSÂ÷7ãâÂ5U$ÄõEõ$UEU$åE$å4dU"ÒfwC²Ç7â6Æ73Ò&²#çG'VSÂ÷7ãâÀ¢5U$ÄõEôEETDU"ÒfwC²²wÖÖ¶W¢râvWFVçbtÄTD5$Õôô´UrÒÀ¢5U$ÄõEõõ5DdTÄE2ÒfwC²GGö'VÆE÷VW'FFFÂÇ7â6Æ73Ò&2#âòò6VæG22W&ÆVæ6öFVCÂ÷7ãà¥Ò°¢G&W7VÇC"Ò§6öåöFV6öFR7W&ÅöWV2F6"ÂÇ7â6Æ73Ò&²#çG'VSÂ÷7ãâ³Â÷&Sà¢ÂöFcà ¢ÆFb6Æ73Ò'F"Ö&öG"FF×F#Ò'Föâ#à£Ç&SãÇ7â6Æ73Ò&²#æ×÷'CÂ÷7ãâ&WVW7G2Â÷0¤TDU%2Ò³Ç7â6Æ73Ò'2#â'ÖÖ¶W#Â÷7ãã¢÷2æVçf&öå³Ç7â6Æ73Ò'2#â$ÄTD5$Õôô´U#Â÷7ãå×Ð§ÆöBÒ³Ç7â6Æ73Ò'2#â&æÖR#Â÷7ãã¢Ç7â6Æ73Ò'2#â%&¦W6·VÖ"#Â÷7ãâÂÇ7â6Æ73Ò'2#â'öæR#Â÷7ãã¢Ç7â6Æ73Ò'2#â"³scSC3##Â÷7ãâÀ¢Ç7â6Æ73Ò'2#â&VÖÂ#Â÷7ãã¢Ç7â6Æ73Ò'2#â'&¦W6W×ÆRæ6öÒ#Â÷7ãâÂÇ7â6Æ73Ò'2#â'Fw2#Â÷7ãã¢Ç7â6Æ73Ò'2#â&÷BÆFVÖò#Â÷7ãçÐ £Ç7â6Æ73Ò&2#â2¥4ôãÂ÷7ãà§"Ò&WVW7G2ç÷7BÇ7â6Æ73Ò'2#â"G¶VæGöçGÒ#Â÷7ãâÂVFW'3ÔTDU%2Â§6öã×ÆöBÂFÖV÷WCÓ £Ç7â6Æ73Ò&2#â2U$ÂÖVæ6öFVB6ÖR&W7VÇB(	BW6VgVÂf÷"¦W"vV&öö·2òfÆ6²f÷&ÒæFÆW'2Â÷7ãà§"Ò&WVW7G2ç÷7BÇ7â6Æ73Ò'2#â"G¶VæGöçGÒ#Â÷7ãâÂVFW'3ÔTDU%2ÂFF×ÆöBÂFÖV÷WCÓ £Ç7â6Æ73Ò&²#ç&çCÂ÷7ãâ"æ§6öâÂ÷&Sà¢ÂöFcà¢ÆFb6Æ73Ò'F"Ö&öG"FF×F#Ò'w#à£Ç&SãÇ7â6Æ73Ò&2#âòòFBFògVæ7Föç2ç(	B6VæG2WfW'6öçF7Bf÷&Òr7V&Ö76öâFò5$ÓÂ÷7ãà¦FEö7FöâÇ7â6Æ73Ò'2#âww6cuöÖÅ÷6VçBsÂ÷7ãâÂÇ7â6Æ73Ò&²#ægVæ7FöãÂ÷7ãâFf÷&Ò°¢G7V"Òu4cuõ7V&Ö76öã£¦vWEöç7Fæ6R°¢Ç7â6Æ73Ò&²#æcÂ÷7ãâG7V"Ç7â6Æ73Ò&²#ç&WGW&ãÂ÷7ãã°¢FBÒG7V"ÓævWE÷÷7FVEöFF°¢w÷&VÖ÷FU÷÷7BÇ7â6Æ73Ò'2#ârG¶VæGöçGÒsÂ÷7ãâÂ°¢Ç7â6Æ73Ò'2#âvVFW'2sÂ÷7ãâÒfwC²³Ç7â6Æ73Ò'2#âwÖÖ¶WsÂ÷7ãâÒfwC²Ç7â6Æ73Ò'2#âuõU%õtT%4DUôô´UsÂ÷7ãâÀ¢Ç7â6Æ73Ò'2#ât6öçFVçBÕGRsÂ÷7ãâÒfwC²Ç7â6Æ73Ò'2#âvÆ6Föâö§6öâsÂ÷7ãåÒÀ¢Ç7â6Æ73Ò'2#âv&öGsÂ÷7ãâÒfwC²wö§6öåöVæ6öFR°¢Ç7â6Æ73Ò'2#âvæÖRsÂ÷7ãâÒfwC²FE³Ç7â6Æ73Ò'2#âw÷W"ÖæÖRsÂ÷7ãåÒóòÇ7â6Æ73Ò'2#ârsÂ÷7ãâÀ¢Ç7â6Æ73Ò'2#âvVÖÂsÂ÷7ãâÒfwC²FE³Ç7â6Æ73Ò'2#âw÷W"ÖVÖÂsÂ÷7ãåÒóòÇ7â6Æ73Ò'2#ârsÂ÷7ãâÀ¢Ç7â6Æ73Ò'2#âwöæRsÂ÷7ãâÒfwC²FE³Ç7â6Æ73Ò'2#âw÷W"×öæRsÂ÷7ãåÒóòÇ7â6Æ73Ò'2#ârsÂ÷7ãâÀ¢Ç7â6Æ73Ò'2#âvæ÷FW2sÂ÷7ãâÒfwC²FE³Ç7â6Æ73Ò'2#âw÷W"ÖÖW76vRsÂ÷7ãåÒóòÇ7â6Æ73Ò'2#ârsÂ÷7ãâÀ¢ÒÀ¢Ç7â6Æ73Ò'2#âwFÖV÷WBsÂ÷7ãâÒfwC²À¢Ò°§Ò³Â÷&Sà¢ÂöFcà £ÂöFcãÂÒÒòæ6&B6öFR6×ÆW2ÒÓà £ÆFb6Æ73Ò&6&B#à¢Æ#ãRâÆfRFW7CÂö#à¢ÇåW6RFRf÷&Ò&VÆ÷rFò6VæBFW7BÆVBF&V7FÇFòF2v÷&·76RâFRÆVBvÆÂV"ÖÖVFFVÇâ÷W"5$ÒãÂ÷à¢Æf÷&ÒCÒ'FW7Df÷&Ò"7GÆSÒ&F7Æ¦w&C¶v¢ãsW&VÓ¶Ö×vGF£C#à¢ÆçWBæÖSÒ&æÖR"Æ6VöÆFW#Ò$gVÆÂæÖR"&WV&VB7GÆSÒ'FFæs¢ãSW&VÒãsW&VÓ¶&÷&FW#£6öÆBf"ÒÖ&÷&FW"¶&÷&FW"×&FW3£¶föçB×6¦S£&VÒ"óà¢ÆçWBæÖSÒ'öæR"Æ6VöÆFW#Ò%öæRçVÖ&W""7GÆSÒ'FFæs¢ãSW&VÒãsW&VÓ¶&÷&FW#£6öÆBf"ÒÖ&÷&FW"¶&÷&FW"×&FW3£¶föçB×6¦S£&VÒ"óà¢ÆçWBæÖSÒ&VÖÂ"Æ6VöÆFW#Ò$VÖÂFG&W72"7GÆSÒ'FFæs¢ãSW&VÒãsW&VÓ¶&÷&FW#£6öÆBf"ÒÖ&÷&FW"¶&÷&FW"×&FW3£¶föçB×6¦S£&VÒ"óà¢ÆçWBæÖSÒ&æ÷FW2"Æ6VöÆFW#Ò$æ÷FW2÷FöæÂ"7GÆSÒ'FFæs¢ãSW&VÒãsW&VÓ¶&÷&FW#£6öÆBf"ÒÖ&÷&FW"¶&÷&FW"×&FW3£¶föçB×6¦S£&VÒ"óà¢Æ'WGFöâGSÒ'7V&ÖB"7GÆSÒ&&6¶w&÷VæC§f"ÒÖ'&æB¶6öÆ÷#¢6ffc¶&÷&FW#¦æöæS·FFæs¢ãcW&VÒã'&VÓ¶&÷&FW"×&FW3£¶föçB×6¦S£&VÓ¶7W'6÷#§öçFW#¶föçB×vVvC£c#å6VæBFW7BÆVCÂö'WGFöãà¢ÆFbCÒ'FW7E&W7VÇB"7GÆSÒ&F7Æ¦æöæS·FFæs¢ãcW&VÓ¶&÷&FW"×&FW3£¶föçB×6¦S¢ã'&VÒ#ãÂöFcà¢Âöf÷&Óà£ÂöFcà £ÂöÖãà£Ç67&Cà¢òòF"7vF6W ¦Fö7VÖVçBçVW'6VÆV7F÷$ÆÂrçF'2ræf÷$V6F'2Óâ°¢F'2çVW'6VÆV7F÷$ÆÂrçF"ræf÷$V6'FâÓâ°¢'FâæFDWfVçDÆ7FVæW"v6Æ6²rÂÓâ°¢6öç7B¶WÒ'FâæFF6WBçF#°¢6öç7B6&BÒ'Fâæ6Æ÷6W7Bræ6&Br°¢6&BçVW'6VÆV7F÷$ÆÂrçF"ræf÷$V6BÓâBæ6Æ74Æ7BçFövvÆRv7FfRrÂBæFF6WBçF"ÓÓÒ¶W°¢6&BçVW'6VÆV7F÷$ÆÂrçF"Ö&öGræf÷$V6"Óâ"æ6Æ74Æ7BçFövvÆRv7FfRrÂ"æFF6WBçF"ÓÓÒ¶W°¢Ò°¢Ò°§Ò°¢òò6÷VÇW ¦gVæ7Föâ6÷FWBFWBÂ'Fâ°¢æfvF÷"æ6Æ&ö&Bçw&FUFWBFWBçFVâÓâ°¢6öç7B÷&rÒ'FâçFWD6öçFVçC°¢'FâçFWD6öçFVçBÒt6÷VBs°¢6WEFÖV÷WBÓâ'FâçFWD6öçFVçBÒ÷&rÂS°¢Ò°§Ð¢òòÆfRFW7Bf÷&Ð¦Fö7VÖVçBævWDVÆVÖVçD'BwFW7Df÷&ÒræFDWfVçDÆ7FVæW"w7V&ÖBrÂ7æ2RÓâ°¢Rç&WfVçDFVfVÇB°¢6öç7BfBÒæWrf÷&ÔFFRçF&vWB°¢6öç7B&öGÒ·Ó°¢fBæf÷$V6bÂ²Óâ²bb&öG¶µÒÒc²Ò°¢6öç7B&W2ÒFö7VÖVçBævWDVÆVÖVçD'BwFW7E&W7VÇBr°¢&W2ç7GÆRæF7ÆÒv&Æö6²s°¢&W2ç7GÆRæ&6¶w&÷VæBÒr6fVc32s°¢&W2çFWD6öçFVçBÒu6VæFæ~(
-bs°¢G'°¢6öç7B"ÒvBfWF6rG¶VæGöçGÒrÂ°¢ÖWFöC¢uõ5BrÀ¢VFW'3¢²t6öçFVçBÕGRs¢vÆ6Föâö§6öârÒÀ¢&öG¢¥4ôâç7G&ævg&öGÀ¢Ò°¢6öç7B§6öâÒvB"æ§6öâ°¢b§6öâæö²°¢&W2ç7GÆRæ&6¶w&÷VæBÒr6V6fFcRs²&W2ç7GÆRæ6öÆ÷"Òr3cVcCbs°¢&W2çFWD6öçFVçBÒ~)É2ÆVB7&VFVB6V6²÷W"5$ÒF6&ö&Bâs°¢ÒVÇ6R°¢&W2ç7GÆRæ&6¶w&÷VæBÒr6fVc&c"s²&W2ç7GÆRæ6öÆ÷"Òr3#"s°¢&W2çFWD6öçFVçBÒ~)Érr²§6öâæW'&÷"ÇÂuVæ¶æ÷vâW'&÷"r°¢Ð¢Ò6F6W'"°¢&W2ç7GÆRæ&6¶w&÷VæBÒr6fVc&c"s²&W2ç7GÆRæ6öÆ÷"Òr3#"s°¢&W2çFWD6öçFVçBÒ~)Ér&WVW7BfÆVC¢r²W'"æÖW76vS°¢Ð§Ò°£Â÷67&Cà£Âö&öGãÂöFÖÃæ°§Ð ¢òòÒÒÒÒ&ö÷BbÆ7FVâÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÒÐ¦6öç7Bõ%BÒçVÖ&W"&ö6W72æVçbåõ%BÇÂ3°¦6öç7Bõ5BÒ&ö6W72æVçbäõ5BÇÂsãããs° ¢7æ2Óâ°¢6öç6öÆRæÆör¶&ö÷EÒ6Ö'D5$Ò627F'FæröâG´õ5GÓ¢Gµõ%GÒæöFRG·&ö6W72çfW'6öçÒ°¢6öç6öÆRæÆör¶&ö÷EÒDD$4UõU$Â6WC¢G²&ö6W72æVçbäDD$4UõU$ÇÖ°¢6öç6öÆRæÆör¶&ö÷EÒ4ôåE$ôÅôDD$4UõU$Â6WC¢G²&ö6W72æVçbä4ôåE$ôÅôDD$4UõU$ÇÖ°¢6öç6öÆRæÆör¶&ö÷EÒ¥uEõ4T5$UB6WC¢G²&ö6W72æVçbä¥uEõ4T5$UGÖ°¢æÆ7FVâõ%BÂõ5BÂÓâ°¢6öç6öÆRæÆörsÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÒr°¢6öç6öÆRæÆör6Ö'D5$Ò62'Vææær(i"GG¢òòG´õ5GÓ¢Gµõ%GÖ°¢6öç6öÆRæÆörsÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÒr°¢Ò°§Ò° 
+code{background:#fff;padding:.2rem .4rem;border-radius:4px}
+a{color:#4338ca}</style>
+<h1>Ã°ÂÂ¤Â Workspace not found</h1>
+<div class="card">
+  <p>The workspace <code>${safe(slug)}</code> doesn't exist or has been removed.</p>
+</div>
+<p><a href="/">Ã¢ÂÂ Back to SmartCRM home</a></p>`);
+  }
+  const t = tenant;
+  res.type('html').send(`<!doctype html><meta charset="utf-8"/>
+<title>${safe(t.org_name)} Ã¢ÂÂ SmartCRM</title>
+<style>body{font-family:system-ui,sans-serif;max-width:640px;margin:4rem auto;padding:0 1.25rem;color:#0f172a;line-height:1.55}
+.card{background:#ecfdf5;border:1px solid #6ee7b7;padding:1.5rem;border-radius:12px;margin:1.5rem 0}
+.warn{background:#fef9c3;border-color:#facc15}
+code{background:#fff;padding:.18rem .45rem;border-radius:4px;font-size:.92em}
+h1{font-size:1.6rem;margin:0 0 .5rem}
+h2{font-size:1.05rem;margin:0 0 .6rem;color:#0f766e}
+.row{display:flex;flex-wrap:wrap;gap:.5rem .9rem;margin:.4rem 0}
+.lbl{color:#64748b;font-size:.82rem;text-transform:uppercase;letter-spacing:.04em;margin-right:.3rem}
+a{color:#4338ca;font-weight:500}</style>
+${ssl ? `<div class="card" style="background:#dbeafe;border-color:#60a5fa;color:#1e3a8a">
+  <h2 style="color:#1e40af">Ã°ÂÂÂ Logged in as tenant (admin sudo)</h2>
+  <p>You opened this workspace from the admin panel. The tenant CRM SPA isn't mounted yet, so this is the welcome placeholder Ã¢ÂÂ but the magic-link token is valid and Phase 2's tenant auth layer will consume it automatically.</p>
+  <div class="row"><span class="lbl">Acting as</span> <code>${safe(ssl.as_email)}</code></div>
+  <div class="row"><span class="lbl">Sudo by</span> <code>${safe(ssl.sa_email)}</code></div>
+  <div class="row"><span class="lbl">Token expires</span> ${new Date(ssl.exp * 1000).toISOString().replace('T', ' ').slice(0, 19)} UTC</div>
+</div>` : ''}
+<h1>Ã°ÂÂÂ Welcome to ${safe(t.org_name)}</h1>
+<p>Your SmartCRM workspace is registered.</p>
+<div class="card">
+  <h2>Workspace details</h2>
+  <div class="row"><span class="lbl">URL</span> <code>/t/${safe(t.slug)}</code></div>
+  <div class="row"><span class="lbl">Plan</span> ${t.package_id ? 'package #' + t.package_id : 'free'}</div>
+  <div class="row"><span class="lbl">Status</span> <code>${safe(t.status)}</code></div>
+  <div class="row"><span class="lbl">Login email</span> <code>${safe(t.contact_email)}</code></div>
+</div>
+<div class="card warn">
+  <h2>Tenant CRM is still being wired up</h2>
+  <p>The full SmartCRM workspace UI (leads, calls, WhatsApp, reports) is in the next deployment phase Ã¢ÂÂ the per-tenant DB has been provisioned, but the SPA isn't mounted under <code>/t/&lt;slug&gt;</code> yet.</p>
+  <p>If you're the platform admin you can manage this tenant from the <a href="/admin/#/tenants">SmartCRM admin panel</a>.</p>
+</div>
+<p style="color:#94a3b8;font-size:.85rem;margin-top:2rem">Need help? Email <a href="mailto:support@smartcrmsolution.com">support@smartcrmsolution.com</a></p>`);
+}
+
+// JSON-safe 404 for any unmatched API path under either /api or
+// /t/<slug>/api. Anything that calls fetch() expecting JSON now gets
+// clean JSON back even if the function name is wrong / the route
+// doesn't exist Ã¢ÂÂ preventing the "Unexpected token '<', '<!DOCTYPE'Ã¢ÂÂ¦"
+// crash that the legacy public/app.js was hitting earlier.
+app.all(/^\/api(\/.*)?$/, (req, res) => {
+  res.status(404).json({ error: 'Not found: ' + req.method + ' ' + req.originalUrl });
+});
+
+// Static assets live ONLY under /saas (mounted earlier above). No
+// catch-all express.static here Ã¢ÂÂ see comment block at the top of
+// this section for the rationale.
+
+// ---- Global error middleware (must be LAST) -------------------
+// Anything a route handler throws or rejects ends up here. Logs to
+// the error_logs table + returns 500 to the caller. The user asked
+// us to capture every error in our project Ã¢ÂÂ this is the catch-all.
+app.use(errorLogs.expressErrorMiddleware);
+
+// Process-level safety net Ã¢ÂÂ node will keep running after these,
+// so as long as we record them we can resolve them later.
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
+  errorLogs.logError({
+    source: 'process',
+    severity: 'fatal',
+    message: (reason && reason.message) || String(reason),
+    stack:   reason && reason.stack
+  }).catch(() => {});
+});
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err);
+  errorLogs.logError({
+    source: 'process',
+    severity: 'fatal',
+    message: err && err.message ? err.message : String(err),
+    stack:   err && err.stack
+  }).catch(() => {});
+});
+
+// ---- Boot -----------------------------------------------------
+const PORT = Number(process.env.PORT || 3000);
+async function boot() {
+  console.log('[boot] migrating control planeÃ¢ÂÂ¦');
+  await control.migrate();
+  // First-boot seed + per-boot settings backfill. seed-once is fully
+  // idempotent Ã¢ÂÂ it inserts the super-admin only if none exists, every
+  // package only if the row is missing by name, and every default
+  // setting only if that key isn't already in saas_settings. Running it
+  // every boot is safe and means new platform-default settings (e.g.
+  // SMTP defaults added in a later release) auto-apply on next deploy.
+  try {
+    await require('./control/seed-once')();
+  } catch (e) {
+    console.warn('[boot] auto-seed skipped:', e.message);
+  }
+
+// ── Lead-source & Google Sheet webhook endpoints ────────────────────────────
+app.post('/hook/leadsource/:source/:key', (req, res, next) => {
+  req.body.api_key = req.params.key;
+  req.body._hookSource = req.params.source;
+  _runHookAsTenant(req, res, next, 'api_integrations_leadSourceHook');
+});
+
+app.post('/hook/sheet/:token', (req, res, next) => {
+  req.body.api_key = req.params.token;
+  _runHookAsTenant(req, res, next, 'api_integrations_sheetHook');
+});
+
+// Background: run sheet syncs and native pulls every 5 minutes
+setInterval(() => {
+  try { integrations.runDueSheetSyncs(); } catch(e) { console.error('[bg] sheet sync error:', e.message); }
+  try { integrations.runDueNativePulls(); } catch(e) { console.error('[bg] native pull error:', e.message); }
+}, 5 * 60 * 1000);
+
+  app.listen(PORT, () => console.log('[boot] SmartCRM SaaS listening on :' + PORT));
+}
+boot().catch(e => { console.error('[boot] failed:', e); process.exit(1); });
