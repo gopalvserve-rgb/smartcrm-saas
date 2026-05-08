@@ -38,6 +38,25 @@
 
 const db = require('../db/pg');
 
+async function _fireCampaignEvent(eventName, leadId, campaignId, agentId) {
+  // Centralised firing of the campaign.* automation events. Best-effort —
+  // a fire failure should never break the lead-create / lead-update path
+  // that's calling us.
+  try {
+    const lead = (await db.query('SELECT * FROM leads WHERE id = $1', [leadId])).rows[0];
+    if (!lead) return;
+    const camp = campaignId
+      ? (await db.query('SELECT * FROM campaigns WHERE id = $1', [campaignId])).rows[0]
+      : null;
+    const agent = agentId
+      ? (await db.query('SELECT id, name, email, role FROM users WHERE id = $1', [agentId])).rows[0]
+      : null;
+    require('./automations').fire(eventName, { lead, campaign: camp, agent });
+  } catch (e) {
+    console.warn('[campaigns] fire ' + eventName + ' failed:', e.message);
+  }
+}
+
 /**
  * Pick the next agent_id for a campaign, or null if mode is on_demand /
  * conditional / there are no active agents. Mutates rr_position when
@@ -57,8 +76,16 @@ async function pickAgentForCampaign(campaignId) {
   if (!c.rows.length) return { agent_id: null, mode: null, reason: 'campaign-inactive' };
   const mode = c.rows[0].distribution_mode;
 
-  if (mode === 'on_demand' || mode === 'conditional') {
+  if (mode === 'on_demand') {
     return { agent_id: null, mode, reason: mode };
+  }
+
+  // Conditional mode is handled fully inside its own branch below
+  // because it needs the LEAD payload to evaluate rules. Callers that
+  // don't pass a lead get an on_demand-style "no pick" result so the
+  // lead still lands in the campaign without a wrong agent assigned.
+  if (mode === 'conditional') {
+    return { agent_id: null, mode, reason: 'conditional-needs-lead' };
   }
 
   // Pull active members + their current open-lead counts in this campaign.
@@ -159,12 +186,18 @@ async function assignLeadToCampaign(leadId, campaignId, opts = {}) {
   }
 
   const cid = Number(campaignId);
-  const pick = await pickAgentForCampaign(cid);
+  // Need the lead row first so we can evaluate conditional rules against it.
+  const leadRow = (await db.query('SELECT * FROM leads WHERE id = $1', [lid])).rows[0];
+  if (!leadRow) throw new Error('Lead not found: ' + lid);
+  // Cheap mode probe so we only run pickAgentForCampaignWithLead when needed.
+  const camp = await db.query('SELECT distribution_mode FROM campaigns WHERE id = $1', [cid]);
+  const mode = camp.rows[0] && camp.rows[0].distribution_mode;
+  const pick = mode === 'conditional'
+    ? await pickAgentForCampaignWithLead(cid, leadRow)
+    : await pickAgentForCampaign(cid);
 
-  // Read the lead's current assigned_to so we know whether to overwrite.
-  const cur = await db.query('SELECT assigned_to FROM leads WHERE id = $1', [lid]);
-  if (!cur.rows.length) throw new Error('Lead not found: ' + lid);
-  const currentAssignee = cur.rows[0].assigned_to == null ? null : Number(cur.rows[0].assigned_to);
+  // Use the leadRow we already fetched to compute respect-existing logic.
+  const currentAssignee = leadRow.assigned_to == null ? null : Number(leadRow.assigned_to);
 
   const respectExisting = !!opts.respectExistingAssignee;
 
@@ -175,6 +208,7 @@ async function assignLeadToCampaign(leadId, campaignId, opts = {}) {
       `UPDATE leads SET campaign_id = $1 WHERE id = $2`,
       [cid, lid]
     );
+    if (Number(leadRow.campaign_id || 0) !== cid) await _fireCampaignEvent('campaign.lead_added', lid, cid, null);
     return { ...pick, campaign_id: cid };
   }
 
@@ -183,6 +217,7 @@ async function assignLeadToCampaign(leadId, campaignId, opts = {}) {
       `UPDATE leads SET campaign_id = $1 WHERE id = $2`,
       [cid, lid]
     );
+    if (Number(leadRow.campaign_id || 0) !== cid) await _fireCampaignEvent('campaign.lead_added', lid, cid, null);
     return { agent_id: currentAssignee, mode: pick.mode, reason: 'kept-existing-assignee', campaign_id: cid };
   }
 
@@ -196,7 +231,140 @@ async function assignLeadToCampaign(leadId, campaignId, opts = {}) {
       WHERE id = $3`,
     [cid, pick.agent_id, lid]
   );
+  if (Number(leadRow.campaign_id || 0) !== cid) await _fireCampaignEvent('campaign.lead_added', lid, cid, pick.agent_id);
+  if (Number(leadRow.assigned_to || 0) !== Number(pick.agent_id)) await _fireCampaignEvent('campaign.lead_assigned', lid, cid, pick.agent_id);
   return { ...pick, campaign_id: cid };
 }
 
-module.exports = { pickAgentForCampaign, assignLeadToCampaign };
+
+/**
+ * Compare a lead's field value to a rule's expected value, with a
+ * small operator vocabulary. Designed to feel like the auto-assign
+ * Rules tab so admins don't have to learn a new DSL.
+ *
+ * Supported operators (case-insensitive on string lhs):
+ *   eq | equals | ''       → exact match (strings: case-insensitive)
+ *   in                     → expected is an array; lhs ∈ expected
+ *   contains               → string lhs includes the expected substring
+ *   starts_with            → string lhs starts with expected
+ *   not_eq | not_equals    → negation of eq
+ */
+function _matchOp(lhs, op, expected) {
+  const lhsStr = lhs == null ? '' : String(lhs).trim().toLowerCase();
+  const expArr = Array.isArray(expected) ? expected.map(e => String(e).trim().toLowerCase()) : null;
+  const expStr = expected == null ? '' : String(expected).trim().toLowerCase();
+  switch ((op || 'eq').toLowerCase()) {
+    case 'in':          return expArr ? expArr.includes(lhsStr) : false;
+    case 'contains':    return expStr && lhsStr.includes(expStr);
+    case 'starts_with': return expStr && lhsStr.startsWith(expStr);
+    case 'not_eq':
+    case 'not_equals':  return lhsStr !== expStr;
+    case 'eq':
+    case 'equals':
+    case '':
+    default:            return lhsStr === expStr;
+  }
+}
+
+/**
+ * Read the value of a 'field' name on the lead, looking through both
+ * the columns in the leads table and the parsed extra_json bag. Custom
+ * fields are addressed as 'cf_<key>' so admins can reference them in
+ * conditional rules using the same key they typed when defining the
+ * field.
+ */
+function _readLeadField(lead, fieldName) {
+  if (!lead || !fieldName) return null;
+  const f = String(fieldName);
+  if (f.startsWith('cf_')) {
+    let extra = lead.extra;
+    if (!extra) {
+      try { extra = lead.extra_json ? (typeof lead.extra_json === 'string' ? JSON.parse(lead.extra_json) : lead.extra_json) : {}; }
+      catch (_) { extra = {}; }
+    }
+    return extra ? extra[f.slice(3)] : null;
+  }
+  return lead[f] != null ? lead[f] : null;
+}
+
+/**
+ * Conditional distribution. For each rule (in order), if every
+ * `if.<field>` clause matches the lead, return the first valid
+ * `then.user_id` that's still an active member of the campaign.
+ *
+ * Rule shape stored in campaigns.conditional_rules JSONB:
+ *   [
+ *     { "if": { "source": "Website", "city": "Mumbai" },
+ *       "then": { "user_id": 12 } },
+ *     { "if": { "source": { "op": "in", "value": ["Facebook", "Instagram"] } },
+ *       "then": { "user_id": 13 } }
+ *   ]
+ *
+ * If no rule matches, falls back to round_robin among active agents
+ * so the lead still gets routed somewhere instead of vanishing.
+ */
+async function pickAgentForCampaignWithLead(campaignId, lead) {
+  const cid = Number(campaignId);
+  if (!cid) throw new Error('campaignId is required');
+
+  const c = await db.query(
+    `SELECT id, distribution_mode, conditional_rules
+       FROM campaigns WHERE id = $1 AND is_active = 1`,
+    [cid]
+  );
+  if (!c.rows.length) return { agent_id: null, mode: null, reason: 'campaign-inactive' };
+  const camp = c.rows[0];
+  if (camp.distribution_mode !== 'conditional') {
+    // Defer to the regular picker so callers can use this single entry
+    // point regardless of mode.
+    return pickAgentForCampaign(cid);
+  }
+
+  let rules = camp.conditional_rules;
+  if (typeof rules === 'string') { try { rules = JSON.parse(rules); } catch (_) { rules = []; } }
+  if (!Array.isArray(rules)) rules = [];
+
+  // Pre-fetch active agent set so we can validate rule.then.user_id
+  // and also fall back to round_robin if no rule matches.
+  const ag = await db.query(
+    `SELECT user_id, rr_position FROM campaign_agents
+      WHERE campaign_id = $1 AND is_active = 1`,
+    [cid]
+  );
+  const activeAgentIds = new Set(ag.rows.map(r => Number(r.user_id)));
+  const agentsArr = ag.rows;
+
+  for (const rule of rules) {
+    if (!rule || typeof rule !== 'object') continue;
+    const ifBlock   = rule.if   || rule.when || {};
+    const thenBlock = rule.then || rule.action || {};
+    const ok = Object.entries(ifBlock).every(([field, cond]) => {
+      const lhs = _readLeadField(lead, field);
+      if (cond && typeof cond === 'object' && !Array.isArray(cond)) {
+        return _matchOp(lhs, cond.op, cond.value);
+      }
+      return _matchOp(lhs, 'eq', cond);
+    });
+    if (!ok) continue;
+    const targetUserId = Number(thenBlock.user_id);
+    if (!targetUserId) continue;
+    if (!activeAgentIds.has(targetUserId)) continue;   // user is no longer on the campaign
+    return { agent_id: targetUserId, mode: 'conditional', reason: 'rule-matched', rule };
+  }
+
+  // No rule matched — fall back to round_robin within active agents.
+  if (!agentsArr.length) return { agent_id: null, mode: 'conditional', reason: 'no-active-agents' };
+  agentsArr.sort((a, b) =>
+    (Number(a.rr_position) - Number(b.rr_position)) ||
+    (Number(a.user_id)     - Number(b.user_id))
+  );
+  const pick = agentsArr[0];
+  await db.query(
+    `UPDATE campaign_agents SET rr_position = rr_position + 1
+      WHERE campaign_id = $1 AND user_id = $2`,
+    [cid, pick.user_id]
+  );
+  return { agent_id: Number(pick.user_id), mode: 'conditional', reason: 'fallback-round-robin' };
+}
+
+module.exports = { pickAgentForCampaign, pickAgentForCampaignWithLead, assignLeadToCampaign };

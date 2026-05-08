@@ -9701,6 +9701,109 @@ async function openCampaignEditModal(camp, onSaved) {
     h('span', {}, ' minutes are updated')
   ));
 
+  // Conditional rules editor — only visible when distribution_mode='conditional'.
+  // Each rule is { if: { <field>: <expected> | { op, value } }, then: { user_id } }.
+  body.appendChild(h('label', { style: { marginTop: '.6rem' } }, 'Conditional rules'));
+  const rulesNote = h('div', { class: 'muted', style: { fontSize: '.85rem', marginBottom: '.4rem' } },
+    'Only used when Distribution mode = Conditional. The first rule that matches a lead wins; if none match, the lead is round-robined among active agents.');
+  body.appendChild(rulesNote);
+  const rulesWrap = h('div', { id: 'rules-wrap', style: { display: 'grid', gap: '.4rem' } });
+  let currentRules = (() => {
+    if (!camp || camp.conditional_rules == null) return [];
+    if (Array.isArray(camp.conditional_rules)) return camp.conditional_rules;
+    if (typeof camp.conditional_rules === 'string') {
+      try { return JSON.parse(camp.conditional_rules) || []; } catch (_) { return []; }
+    }
+    return [];
+  })();
+  function renderRules() {
+    rulesWrap.replaceChildren();
+    const fieldOpts = [
+      { value: 'source',       label: 'Source' },
+      { value: 'city',         label: 'City' },
+      { value: 'state',        label: 'State' },
+      { value: 'product_id',   label: 'Product' },
+      { value: 'tags',         label: 'Tags' },
+      { value: 'utm_source',   label: 'UTM source' },
+      { value: 'utm_campaign', label: 'UTM campaign' }
+    ];
+    const opOpts = [
+      { value: 'eq',          label: 'equals' },
+      { value: 'not_eq',      label: 'is not' },
+      { value: 'in',          label: 'is one of (comma-sep)' },
+      { value: 'contains',    label: 'contains' },
+      { value: 'starts_with', label: 'starts with' }
+    ];
+    currentRules.forEach((rule, idx) => {
+      const ifBlock = rule.if || {};
+      const firstField = Object.keys(ifBlock)[0] || 'source';
+      const cond = ifBlock[firstField];
+      const isObj = cond && typeof cond === 'object' && !Array.isArray(cond);
+      const op    = isObj ? (cond.op || 'eq') : (Array.isArray(cond) ? 'in' : 'eq');
+      const value = isObj ? cond.value : (Array.isArray(cond) ? cond.join(', ') : (cond == null ? '' : String(cond)));
+      const targetUserId = (rule.then && rule.then.user_id) ? Number(rule.then.user_id) : '';
+
+      const fieldSel = h('select', { style: { minWidth: '120px' } },
+        ...fieldOpts.map(f => h('option', { value: f.value, selected: f.value === firstField ? '' : null }, f.label)));
+      const opSel = h('select', { style: { minWidth: '120px' } },
+        ...opOpts.map(o => h('option', { value: o.value, selected: o.value === op ? '' : null }, o.label)));
+      const valI  = h('input', { type: 'text', value: Array.isArray(value) ? value.join(', ') : value, placeholder: 'Value', style: { minWidth: '120px', flex: 1 } });
+      const userSel = h('select', { style: { minWidth: '160px' } },
+        h('option', { value: '' }, '— Pick agent —'),
+        ...(activeUsers || []).map(u => h('option', { value: String(u.id), selected: Number(u.id) === Number(targetUserId) ? '' : null }, `${u.name} · ${u.role}`)));
+      const removeBtn = h('button', { type: 'button', class: 'btn sm danger',
+        onclick: () => { currentRules.splice(idx, 1); renderRules(); } }, '🗑');
+
+      // Persist edits inline so the form submit reads from currentRules
+      const sync = () => {
+        const f  = fieldSel.value;
+        const o  = opSel.value;
+        const v  = valI.value;
+        const condOut = o === 'in'
+          ? { op: 'in', value: v.split(',').map(s => s.trim()).filter(Boolean) }
+          : (o === 'eq' ? v : { op: o, value: v });
+        currentRules[idx] = {
+          if:   { [f]: condOut },
+          then: { user_id: userSel.value ? Number(userSel.value) : null }
+        };
+      };
+      [fieldSel, opSel, valI, userSel].forEach(el => el.addEventListener('change', sync));
+      valI.addEventListener('input', sync);
+
+      const row = h('div', {
+        style: { display: 'flex', gap: '.35rem', flexWrap: 'wrap', alignItems: 'center',
+                 border: '1px solid #e2e8f0', borderRadius: '8px', padding: '.45rem' } },
+        h('span', { class: 'muted', style: { fontSize: '.78rem' } }, 'If '),
+        fieldSel, opSel, valI,
+        h('span', { class: 'muted', style: { fontSize: '.78rem' } }, ' → assign to '),
+        userSel,
+        removeBtn
+      );
+      rulesWrap.appendChild(row);
+    });
+    if (!currentRules.length) {
+      rulesWrap.appendChild(h('div', { class: 'muted', style: { fontSize: '.85rem' } },
+        'No rules yet — click "Add rule" to create one.'));
+    }
+  }
+  const addRuleBtn = h('button', { type: 'button', class: 'btn sm', style: { width: 'fit-content' },
+    onclick: () => { currentRules.push({ if: { source: '' }, then: { user_id: null } }); renderRules(); }
+  }, '+ Add rule');
+  body.appendChild(rulesWrap);
+  body.appendChild(addRuleBtn);
+  renderRules();
+
+  // Toggle visibility of the rules section based on selected mode
+  function refreshRulesVisibility() {
+    const sel = modeRadios.find(r => r.checked);
+    const isCond = sel && sel.value === 'conditional';
+    rulesNote.style.display = isCond ? '' : 'none';
+    rulesWrap.style.display = isCond ? 'grid' : 'none';
+    addRuleBtn.style.display = isCond ? '' : 'none';
+  }
+  modeRadios.forEach(r => r.addEventListener('change', refreshRulesVisibility));
+  refreshRulesVisibility();
+
   // Removed user action
   body.appendChild(h('label', { style: { marginTop: '.6rem' } }, 'When an agent is removed from this campaign'));
   const ruWrap = h('div', { style: { display: 'grid', gap: '.4rem' } });
@@ -9742,6 +9845,7 @@ async function openCampaignEditModal(camp, onSaved) {
           pull_require_old_updated: requireOld.checked,
           pull_old_threshold_minutes: Number(oldThreshold.value || 60),
           removed_user_action: removedAction,
+          conditional_rules: mode === 'conditional' ? currentRules : null,
           agents
         };
         if (!payload.name) { toast('Name is required', 'err'); return; }
@@ -10776,10 +10880,13 @@ function openAutomationModal(existing) {
       h('form', { id: 'auto-form', class: 'form-grid' },
         field('name', 'Name *', a.name, { required: true }),
         selectField('event', 'When (event) *', a.event, [
-          { value: 'lead_created',   label: 'Lead created' },
-          { value: 'status_changed', label: 'Status changed' },
-          { value: 'lead_assigned',  label: 'Lead assigned' },
-          { value: 'followup_due',   label: 'Follow-up due' }
+          { value: 'lead_created',           label: 'Lead created' },
+          { value: 'status_changed',         label: 'Status changed' },
+          { value: 'lead_assigned',          label: 'Lead assigned' },
+          { value: 'followup_due',           label: 'Follow-up due' },
+          { value: 'campaign.lead_added',    label: '🎯 Campaign · lead added' },
+          { value: 'campaign.lead_assigned', label: '🎯 Campaign · lead assigned to agent' },
+          { value: 'campaign.status_changed',label: '🎯 Campaign · lead status changed' }
         ]),
         selectField('channel', 'Channel *', a.channel, [
           { value: 'email',    label: 'Email (SMTP)' },

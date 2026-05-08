@@ -19,6 +19,7 @@
 
 const db = require('../db/pg');
 const { authUser } = require('../utils/auth');
+const { applyRemovalPolicy } = require('../utils/campaignRemoval');
 
 const VALID_MODES   = ['on_demand', 'equal', 'round_robin', 'percentage', 'conditional'];
 const VALID_REMOVED = ['pool', 'hidden', 'manager'];
@@ -202,11 +203,21 @@ async function api_campaigns_save(token, payload) {
   // Replace the agent list. If we move to incremental edits later we
   // can diff & apply removed_user_action; for Phase 1, full replace
   // is the simplest correct behaviour.
+  let _removedAgentIds = [];
+  let _removalSummary = null;
   if (isUpdate) {
-    // Mark previously-removed-now-not-in-list agents according to the
-    // campaign's removed_user_action. For Phase 1 we only set their
-    // campaign_agents row to inactive — the lead-side action runs in
-    // a follow-up phase to keep this commit reviewable.
+    // Capture which agents got removed from the live list so we can
+    // apply the campaign's removed_user_action AFTER we deactivate
+    // their campaign_agents rows.
+    const stillIn = new Set(agents.map(a => Number(a.user_id)));
+    const before = await db.query(
+      `SELECT user_id FROM campaign_agents
+        WHERE campaign_id = $1 AND is_active = 1`,
+      [campaignId]
+    );
+    _removedAgentIds = before.rows
+      .map(r => Number(r.user_id))
+      .filter(uid => !stillIn.has(uid));
     await db.query(
       `UPDATE campaign_agents SET is_active = 0
         WHERE campaign_id = $1
@@ -225,7 +236,29 @@ async function api_campaigns_save(token, payload) {
     );
   }
 
-  return api_campaigns_get(token, campaignId);
+  // Phase 3: apply removed_user_action to every lead the dropped agents
+  // were owning inside this campaign. Best-effort — a removal failure
+  // shouldn't roll back the agent-list update we just committed.
+  if (_removedAgentIds.length) {
+    try {
+      _removalSummary = await applyRemovalPolicy(campaignId, _removedAgentIds);
+    } catch (e) {
+      console.warn('[campaigns] removal policy failed:', e.message);
+      _removalSummary = { action: null, affected: 0, error: e.message };
+    }
+  }
+
+  const fresh = await api_campaigns_get(token, campaignId);
+  if (_removalSummary) fresh._removal = _removalSummary;
+  return fresh;
+}
+
+// Convenience: explicit "rebalance now" trigger for when an admin
+// changes a lead's campaign_id outside the agent-edit flow. Reuses
+// the same removal policy infrastructure so the behaviour is identical.
+async function api_campaigns_applyRemoval(token, campaignId, userIds) {
+  await _requireAdmin(token);
+  return applyRemovalPolicy(Number(campaignId), Array.isArray(userIds) ? userIds : []);
 }
 
 // ----------------------------------------------------------------
@@ -267,4 +300,5 @@ module.exports = {
   api_campaigns_save,
   api_campaigns_pause,
   api_campaigns_delete,
+  api_campaigns_applyRemoval,
 };

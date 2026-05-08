@@ -304,6 +304,17 @@ async function api_leads_list(token, filters) {
   filters = filters || {};
   let rows = (await db.getAll('leads')).filter(l => _isVisible(me, visible, l));
 
+  // Phase 3: hide leads where is_hidden=1 (campaigns "removed user keeps
+  // hidden" policy). Admins can opt-in by passing filters.show_hidden='1';
+  // non-admins never see hidden leads.
+  const showHidden = me.role === 'admin' && (filters.show_hidden === '1' || filters.show_hidden === 'only');
+  const hiddenOnly = me.role === 'admin' && filters.show_hidden === 'only';
+  if (hiddenOnly) {
+    rows = rows.filter(l => Number(l.is_hidden) === 1);
+  } else if (!showHidden) {
+    rows = rows.filter(l => Number(l.is_hidden || 0) !== 1);
+  }
+
   if (filters.status_id)   rows = rows.filter(l => Number(l.status_id) === Number(filters.status_id));
   if (filters.source)      rows = rows.filter(l => l.source === filters.source);
   if (filters.product_id)  rows = rows.filter(l => Number(l.product_id) === Number(filters.product_id));
@@ -393,7 +404,9 @@ async function api_leads_list(token, filters) {
 async function api_leads_statusCounts(token) {
   const me = await authUser(token);
   const visible = await getVisibleUserIds(me);
-  const rows = (await db.getAll('leads')).filter(l => _isVisible(me, visible, l));
+  let rows = (await db.getAll('leads')).filter(l => _isVisible(me, visible, l));
+  // Don't include hidden leads in the dashboard status pills.
+  rows = rows.filter(l => Number(l.is_hidden || 0) !== 1);
   const out = {};
   rows.forEach(l => { const k = Number(l.status_id) || 0; out[k] = (out[k] || 0) + 1; });
   return out;
@@ -405,6 +418,7 @@ async function api_leads_get(token, id) {
   const lead = await db.findById('leads', id);
   if (!lead) throw new Error('Not found');
   if (!_isVisible(me, visible, lead)) throw new Error('Forbidden');
+  if (Number(lead.is_hidden || 0) === 1 && me.role !== 'admin') throw new Error('Forbidden');
 
   const { usersById, statusesById, productsById, tatByStatusId, finalStatusIds } = await _lookups();
   const hydrated = _hydrate(lead, usersById, statusesById, productsById, tatByStatusId, finalStatusIds);
@@ -939,6 +953,17 @@ async function api_leads_update(token, id, patch) {
     });
     // Fire automations
     try { require('../utils/automations').fire('status_changed', { lead: Object.assign({}, lead, allowed), user: me, new_status: s }); } catch (_) {}
+    if (lead.campaign_id) {
+      try {
+        const campRow = (await db.query('SELECT * FROM campaigns WHERE id = $1', [lead.campaign_id])).rows[0];
+        require('../utils/automations').fire('campaign.status_changed', {
+          lead:        Object.assign({}, lead, allowed),
+          user:        me,
+          new_status:  s,
+          campaign:    campRow || null
+        });
+      } catch (_) {}
+    }
     // TAT — write stage log + close any open violation for this lead
     try { await require('./tat').logStageChange(id, lead.status_id, patch.status_id, me.id); } catch (_) {}
     // Stamp last_status_change_at so the TAT worker knows when this lead entered the new stage
@@ -1552,17 +1577,144 @@ async function _assignedToday(userId) { const r = await db.query(`SELECT COUNT(*
 async function _hasPulled(userId) { const r = await db.query(`SELECT 1 FROM lead_pull_log WHERE user_id=$1 LIMIT 1`, [Number(userId)]); return r.rowCount > 0; }
 function _canPull(role, enabledRoles) { if (role === 'admin') return false; return enabledRoles.includes(String(role || '').toLowerCase()); }
 
+async function _userActiveCampaignsForPull(userId) {
+  // Returns the campaigns this user is an active agent in, restricted to
+  // on_demand mode (other modes auto-assign at lead-create time and don't
+  // surface a "pull" action). Returns an empty array if the user belongs
+  // to no campaigns — caller falls back to the legacy global-pool behaviour.
+  const r = await db.query(
+    `SELECT c.id, c.name, c.pull_batch_size, c.pull_initial_count,
+            c.pull_require_old_updated, c.pull_old_threshold_minutes
+       FROM campaign_agents ca
+       JOIN campaigns c ON c.id = ca.campaign_id
+      WHERE ca.user_id = $1
+        AND ca.is_active = 1
+        AND c.is_active  = 1
+        AND c.distribution_mode = 'on_demand'`,
+    [Number(userId)]
+  );
+  return r.rows;
+}
+
+async function _stalePulledLeadInCampaign(userId, campaignId, thresholdMinutes) {
+  // Returns { id, name } of the user's oldest previously-pulled lead in
+  // this campaign whose status hasn't changed AND has no remark in the
+  // last `thresholdMinutes`. Returns null if all are fresh.
+  const r = await db.query(
+    `SELECT l.id, l.name
+       FROM lead_pull_log p
+       JOIN leads l ON l.id = p.lead_id
+       JOIN statuses s ON s.id = l.status_id
+      WHERE p.user_id    = $1
+        AND l.campaign_id = $2
+        AND COALESCE(s.is_final, 0) = 0
+        AND p.pulled_at < NOW() - ($3::int * INTERVAL '1 minute')
+        AND COALESCE(l.last_status_change_at, l.created_at)
+              < NOW() - ($3::int * INTERVAL '1 minute')
+        AND NOT EXISTS (
+          SELECT 1 FROM remarks r
+           WHERE r.lead_id = l.id
+             AND r.user_id = $1
+             AND r.created_at >= NOW() - ($3::int * INTERVAL '1 minute')
+        )
+      ORDER BY p.pulled_at ASC
+      LIMIT 1`,
+    [Number(userId), Number(campaignId), Number(thresholdMinutes)]
+  );
+  return r.rows[0] || null;
+}
+
 async function api_leads_pullInfo(token) {
   const me = await authUser(token);
   const cfg = await _pullCfg();
+  const userCampaigns = await _userActiveCampaignsForPull(me.id);
+  const inCampaigns = userCampaigns.length > 0;
   const allowed = cfg.LEAD_PULL_ENABLED && _canPull(me.role, cfg.LEAD_PULL_ENABLED_ROLES);
   const isFirst = !(await _hasPulled(me.id));
-  let target = isFirst ? cfg.LEAD_PULL_INITIAL_COUNT : cfg.LEAD_PULL_SUBSEQUENT_COUNT;
+
+  // Per-campaign batch size wins over the global config when the user is
+  // a member of exactly one campaign. With multiple campaigns we fall back
+  // to the global config because the SPA currently does a single Pull
+  // call rather than per-campaign Pulls — Phase 4 can add a picker.
+  let target;
+  if (inCampaigns && userCampaigns.length === 1) {
+    target = isFirst ? userCampaigns[0].pull_initial_count : userCampaigns[0].pull_batch_size;
+  } else {
+    target = isFirst ? cfg.LEAD_PULL_INITIAL_COUNT : cfg.LEAD_PULL_SUBSEQUENT_COUNT;
+  }
+
   const dailyCap = Number(me.daily_lead_cap || 0);
   let dailyRemaining = null;
-  if (dailyCap > 0) { const usedToday = await _assignedToday(me.id); dailyRemaining = Math.max(0, dailyCap - usedToday); target = Math.min(target, dailyRemaining); }
-  const cand = await db.query(`SELECT COUNT(*)::int AS n FROM leads l LEFT JOIN lead_pull_log p ON p.lead_id=l.id AND p.user_id=$1 WHERE p.id IS NULL AND (l.assigned_to IS NULL OR l.assigned_to=$1)`, [Number(me.id)]);
-  return { allowed, enabled: cfg.LEAD_PULL_ENABLED, is_first_pull: isFirst, target_count: target, initial_count: cfg.LEAD_PULL_INITIAL_COUNT, subsequent_count: cfg.LEAD_PULL_SUBSEQUENT_COUNT, available_count: Number(cand.rows[0]?.n || 0), daily_cap: dailyCap || null, daily_remaining: dailyRemaining, order: cfg.LEAD_PULL_ORDER, role: me.role };
+  if (dailyCap > 0) {
+    const usedToday = await _assignedToday(me.id);
+    dailyRemaining = Math.max(0, dailyCap - usedToday);
+    target = Math.min(target, dailyRemaining);
+  }
+
+  // Available count: in campaigns mode count only leads belonging to the
+  // user's campaigns; in legacy mode use the original global query.
+  let availableCount = 0;
+  if (inCampaigns) {
+    const cids = userCampaigns.map(c => c.id);
+    const cand = await db.query(
+      `SELECT COUNT(*)::int AS n
+         FROM leads l
+         LEFT JOIN lead_pull_log p ON p.lead_id = l.id AND p.user_id = $1
+         LEFT JOIN statuses s     ON s.id = l.status_id
+        WHERE p.id IS NULL
+          AND (l.assigned_to IS NULL OR l.assigned_to = $1)
+          AND COALESCE(s.is_final, 0) = 0
+          AND COALESCE(l.is_duplicate, 0) = 0
+          AND COALESCE(l.is_hidden, 0) = 0
+          AND l.campaign_id = ANY($2::int[])`,
+      [Number(me.id), cids]
+    );
+    availableCount = Number(cand.rows[0]?.n || 0);
+  } else {
+    const cand = await db.query(
+      `SELECT COUNT(*)::int AS n
+         FROM leads l
+         LEFT JOIN lead_pull_log p ON p.lead_id = l.id AND p.user_id = $1
+        WHERE p.id IS NULL
+          AND (l.assigned_to IS NULL OR l.assigned_to = $1)
+          AND COALESCE(l.is_hidden, 0) = 0`,
+      [Number(me.id)]
+    );
+    availableCount = Number(cand.rows[0]?.n || 0);
+  }
+
+  // Surface the require-old-updated block reason in pullInfo so the SPA
+  // can disable the button + show why before the user clicks.
+  let blockedByOldUpdated = null;
+  for (const c of userCampaigns) {
+    if (Number(c.pull_require_old_updated) !== 1) continue;
+    const stale = await _stalePulledLeadInCampaign(me.id, c.id, c.pull_old_threshold_minutes);
+    if (stale) {
+      blockedByOldUpdated = {
+        campaign_id: c.id, campaign_name: c.name,
+        stale_lead_id: stale.id, stale_lead_name: stale.name,
+        threshold_minutes: c.pull_old_threshold_minutes
+      };
+      break;
+    }
+  }
+
+  return {
+    allowed,
+    enabled: cfg.LEAD_PULL_ENABLED,
+    is_first_pull: isFirst,
+    target_count: target,
+    initial_count: cfg.LEAD_PULL_INITIAL_COUNT,
+    subsequent_count: cfg.LEAD_PULL_SUBSEQUENT_COUNT,
+    available_count: availableCount,
+    daily_cap: dailyCap || null,
+    daily_remaining: dailyRemaining,
+    order: cfg.LEAD_PULL_ORDER,
+    role: me.role,
+    in_campaigns: inCampaigns,
+    user_campaigns: userCampaigns.map(c => ({ id: c.id, name: c.name })),
+    blocked_by_old_updated: blockedByOldUpdated
+  };
 }
 
 async function api_leads_pull(token) {
@@ -1570,21 +1722,92 @@ async function api_leads_pull(token) {
   const cfg = await _pullCfg();
   if (!cfg.LEAD_PULL_ENABLED) throw new Error('Lead pull is disabled by admin');
   if (!_canPull(me.role, cfg.LEAD_PULL_ENABLED_ROLES)) throw new Error('Your role is not allowed to pull leads');
+
+  const userCampaigns = await _userActiveCampaignsForPull(me.id);
+  const inCampaigns = userCampaigns.length > 0;
   const isFirst = !(await _hasPulled(me.id));
-  let target = isFirst ? cfg.LEAD_PULL_INITIAL_COUNT : cfg.LEAD_PULL_SUBSEQUENT_COUNT;
+
+  // Phase 3: enforce pull_require_old_updated per-campaign before granting
+  // a new batch. The block names a specific stale lead so the rep knows
+  // exactly which one needs an update before they can pull more.
+  for (const c of userCampaigns) {
+    if (Number(c.pull_require_old_updated) !== 1) continue;
+    const stale = await _stalePulledLeadInCampaign(me.id, c.id, c.pull_old_threshold_minutes);
+    if (stale) {
+      throw new Error(
+        `Campaign "${c.name}" requires you to update older leads first. ` +
+        `Lead #${stale.id} (${stale.name || 'unnamed'}) hasn't had a status change ` +
+        `or remark in over ${c.pull_old_threshold_minutes} minutes — touch it before pulling more.`
+      );
+    }
+  }
+
+  let target;
+  if (inCampaigns && userCampaigns.length === 1) {
+    target = isFirst ? userCampaigns[0].pull_initial_count : userCampaigns[0].pull_batch_size;
+  } else {
+    target = isFirst ? cfg.LEAD_PULL_INITIAL_COUNT : cfg.LEAD_PULL_SUBSEQUENT_COUNT;
+  }
+
   const dailyCap = Number(me.daily_lead_cap || 0);
-  if (dailyCap > 0) { const usedToday = await _assignedToday(me.id); const remaining = Math.max(0, dailyCap - usedToday); target = Math.min(target, remaining); if (target <= 0) throw new Error(`Daily lead cap reached (${dailyCap})`); }
+  if (dailyCap > 0) {
+    const usedToday = await _assignedToday(me.id);
+    const remaining = Math.max(0, dailyCap - usedToday);
+    target = Math.min(target, remaining);
+    if (target <= 0) throw new Error(`Daily lead cap reached (${dailyCap})`);
+  }
   if (target <= 0) return { ok: true, pulled_count: 0, lead_ids: [], is_first_pull: isFirst, target_count: 0 };
+
   const order = cfg.LEAD_PULL_ORDER === 'newest' ? 'DESC' : 'ASC';
   const client = await _tenantPool().connect();
   const claimed = [];
   try {
     await client.query('BEGIN');
-    const sel = await client.query(`SELECT l.id, l.assigned_to FROM leads l LEFT JOIN lead_pull_log p ON p.lead_id=l.id AND p.user_id=$1 LEFT JOIN statuses s ON s.id=l.status_id WHERE p.id IS NULL AND (l.assigned_to IS NULL OR l.assigned_to=$1) AND COALESCE(s.is_final,0)=0 AND COALESCE(l.is_duplicate,0)=0 ORDER BY l.created_at ${order}, l.id ${order} LIMIT $2 FOR UPDATE OF l SKIP LOCKED`, [Number(me.id), Number(target)]);
+    let sel;
+    if (inCampaigns) {
+      const cids = userCampaigns.map(c => c.id);
+      sel = await client.query(
+        `SELECT l.id, l.assigned_to
+           FROM leads l
+           LEFT JOIN lead_pull_log p ON p.lead_id = l.id AND p.user_id = $1
+           LEFT JOIN statuses s     ON s.id = l.status_id
+          WHERE p.id IS NULL
+            AND (l.assigned_to IS NULL OR l.assigned_to = $1)
+            AND COALESCE(s.is_final, 0) = 0
+            AND COALESCE(l.is_duplicate, 0) = 0
+            AND COALESCE(l.is_hidden, 0) = 0
+            AND l.campaign_id = ANY($2::int[])
+          ORDER BY l.created_at ${order}, l.id ${order}
+          LIMIT $3 FOR UPDATE OF l SKIP LOCKED`,
+        [Number(me.id), cids, Number(target)]
+      );
+    } else {
+      sel = await client.query(
+        `SELECT l.id, l.assigned_to
+           FROM leads l
+           LEFT JOIN lead_pull_log p ON p.lead_id = l.id AND p.user_id = $1
+           LEFT JOIN statuses s     ON s.id = l.status_id
+          WHERE p.id IS NULL
+            AND (l.assigned_to IS NULL OR l.assigned_to = $1)
+            AND COALESCE(s.is_final, 0) = 0
+            AND COALESCE(l.is_duplicate, 0) = 0
+            AND COALESCE(l.is_hidden, 0) = 0
+          ORDER BY l.created_at ${order}, l.id ${order}
+          LIMIT $2 FOR UPDATE OF l SKIP LOCKED`,
+        [Number(me.id), Number(target)]
+      );
+    }
     for (const row of sel.rows) {
-      const leadId = Number(row.id); const wasFree = row.assigned_to == null;
-      if (wasFree) await client.query(`UPDATE leads SET assigned_to=$1, updated_at=NOW() WHERE id=$2`, [Number(me.id), leadId]);
-      await client.query(`INSERT INTO lead_pull_log (user_id, lead_id, is_first, source, pulled_at) VALUES ($1,$2,$3,$4,NOW())`, [Number(me.id), leadId, isFirst ? 1 : 0, wasFree ? 'free' : 'pre_assigned']);
+      const leadId = Number(row.id);
+      const wasFree = row.assigned_to == null;
+      if (wasFree) {
+        await client.query(`UPDATE leads SET assigned_to=$1, updated_at=NOW() WHERE id=$2`, [Number(me.id), leadId]);
+      }
+      await client.query(
+        `INSERT INTO lead_pull_log (user_id, lead_id, is_first, source, pulled_at)
+         VALUES ($1, $2, $3, $4, NOW())`,
+        [Number(me.id), leadId, isFirst ? 1 : 0, wasFree ? 'free' : 'pre_assigned']
+      );
       claimed.push(leadId);
     }
     await client.query('COMMIT');
