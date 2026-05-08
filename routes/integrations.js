@@ -696,15 +696,296 @@ async function leadSourceWebhook(req, res) {
   }
 }
 
+// ============================================================
+// Native pull-mode integrations (IndiaMART, JustDial)
+// ============================================================
+
+/**
+ * IndiaMART CRM API - pull leads using GLID + API key.
+ * Endpoint: https://mapi.indiamart.com/wservce/crm/crmListing/v2/
+ * Returns up to 100 leads per call (sorted newest-first).
+ */
+async function _pullIndiaMARTLeads(cfg) {
+  const { glid, api_key } = cfg.config_json || {};
+  if (!glid || !api_key) throw new Error('IndiaMART: GLID and API key are required');
+
+  const url = `https://mapi.indiamart.com/wservce/crm/crmListing/v2/?glusr_crm_key=${encodeURIComponent(api_key)}&glusr_crm_glid=${encodeURIComponent(glid)}&start_time=&end_time=&start=1&end=100`;
+
+  const resp = await fetch(url, { timeout: 15000 });
+  if (!resp.ok) throw new Error(`IndiaMART API HTTP ${resp.status}`);
+
+  const json = await resp.json();
+
+  // IndiaMART returns { STATUS: 'true'|'false', RESPONSE: [...] }
+  if (!json || (json.STATUS && String(json.STATUS).toLowerCase() === 'false')) {
+    throw new Error(json.MESSAGE || 'IndiaMART API returned failure status');
+  }
+
+  const rows = Array.isArray(json.RESPONSE) ? json.RESPONSE : [];
+
+  return rows.map(r => ({
+    source:      'indiamart',
+    source_ref:  String(r.UNIQUE_QUERY_ID || r.unique_query_id || ''),
+    name:        [r.SENDER_NAME, r.SENDER_COMPANY].filter(Boolean).join(' - ') || 'IndiaMART Lead',
+    email:       r.SENDER_EMAIL  || r.sender_email  || '',
+    phone:       r.SENDER_MOBILE || r.sender_mobile || r.SENDER_PHONE || '',
+    message:     r.QUERY_MESSAGE || r.query_message || '',
+    address:     [r.SENDER_CITY, r.SENDER_STATE, r.SENDER_COUNTRY].filter(Boolean).join(', '),
+    product:     r.SUBJECT       || r.subject       || '',
+    raw:         r,
+  }));
+}
+
+/**
+ * JustDial Lead Pull API - HMAC-SHA1 signed request.
+ * Endpoint: https://api.justdial.com/api/v1/leads
+ */
+async function _pullJustDialLeads(cfg) {
+  const { api_key, secret } = cfg.config_json || {};
+  if (!api_key || !secret) throw new Error('JustDial: api_key and secret are required');
+
+  const ts  = Math.floor(Date.now() / 1000);
+  const sig = crypto
+    .createHmac('sha1', String(secret))
+    .update(String(api_key) + String(ts))
+    .digest('base64');
+
+  const url = `https://api.justdial.com/api/v1/leads?api_key=${encodeURIComponent(api_key)}&timestamp=${ts}&signature=${encodeURIComponent(sig)}&limit=100`;
+
+  const resp = await fetch(url, { timeout: 15000 });
+  if (!resp.ok) throw new Error(`JustDial API HTTP ${resp.status}`);
+
+  const json = await resp.json();
+
+  if (!json || json.status === 'error') {
+    throw new Error(json.message || 'JustDial API returned error');
+  }
+
+  const rows = Array.isArray(json.leads) ? json.leads
+             : Array.isArray(json.data)  ? json.data
+             : [];
+
+  return rows.map(r => ({
+    source:      'justdial',
+    source_ref:  String(r.id || r.lead_id || r.contact_id || ''),
+    name:        r.name || r.contact_name || 'JustDial Lead',
+    email:       r.email || '',
+    phone:       r.mobile || r.phone || r.contact_mobile || '',
+    message:     r.requirement || r.message || r.query || '',
+    address:     [r.city, r.area].filter(Boolean).join(', '),
+    product:     r.category || r.service || '',
+    raw:         r,
+  }));
+}
+
+/**
+ * Run a native pull for a single integration config.
+ * Deduplicates by source_ref (preferred) or phone digits, then calls
+ * _internalCreateLead for each new lead.
+ */
+async function _runNativePull(cfg, adminUserId) {
+  let pulled;
+  if (cfg.source === 'indiamart') {
+    pulled = await _pullIndiaMARTLeads(cfg);
+  } else if (cfg.source === 'justdial') {
+    pulled = await _pullJustDialLeads(cfg);
+  } else {
+    throw new Error(`Unknown pull source: ${cfg.source}`);
+  }
+
+  if (!pulled || !pulled.length) return 0;
+
+  // Load existing source_refs + phones for dedup
+  const existingLeads = await db.getAll('leads');
+  const existingRefs  = new Set(
+    existingLeads.filter(l => l.source_ref).map(l => String(l.source_ref))
+  );
+  const existingPhones = new Set(
+    existingLeads
+      .filter(l => l.phone)
+      .map(l => String(l.phone).replace(/\D/g, '').slice(-10))
+  );
+
+  let created = 0;
+  for (const lead of pulled) {
+    // Skip if already imported by source_ref
+    if (lead.source_ref && existingRefs.has(lead.source_ref)) continue;
+
+    // Skip by phone digits as fallback
+    const phoneDigits = String(lead.phone || '').replace(/\D/g, '').slice(-10);
+    if (phoneDigits && existingPhones.has(phoneDigits)) continue;
+
+    try {
+      await _internalCreateLead({
+        name:       lead.name,
+        email:      lead.email,
+        phone:      lead.phone,
+        source:     lead.source,
+        source_ref: lead.source_ref,
+        message:    lead.message,
+        address:    lead.address,
+        product:    lead.product,
+        status:     'new',
+      }, adminUserId);
+
+      if (lead.source_ref) existingRefs.add(lead.source_ref);
+      if (phoneDigits)     existingPhones.add(phoneDigits);
+      created++;
+    } catch (e) {
+      console.warn(`[nativePull] Failed to create lead (${lead.source}):`, e.message);
+    }
+  }
+
+  return created;
+}
+
+/**
+ * Called by the background poller every 5 min.
+ * Checks each active pull-mode config to see if its interval has elapsed.
+ */
+async function runDueNativePulls() {
+  let configs;
+  try {
+    configs = await db.getAll('integration_configs');
+  } catch (_) {
+    // Table not yet migrated — silently skip
+    return;
+  }
+
+  const due = configs.filter(c =>
+    Number(c.is_active) &&
+    c.poll_mode === 'pull' &&
+    (!c.last_synced_at ||
+      Date.now() - new Date(c.last_synced_at).getTime() >= (c.poll_interval_min || 15) * 60 * 1000)
+  );
+
+  for (const cfg of due) {
+    try {
+      const users    = await db.getAll('users');
+      const adminUsr = users.find(u => u.role === 'admin' && Number(u.is_active)) || users[0];
+      const count    = await _runNativePull(cfg, adminUsr && adminUsr.id);
+      await db.update('integration_configs', cfg.id, {
+        last_synced_at:    new Date().toISOString(),
+        last_synced_count: count,
+        last_error:        null,
+        updated_at:        new Date().toISOString(),
+      });
+    } catch (e) {
+      console.error(`[nativePull] ${cfg.source}:`, e.message);
+      try {
+        await db.update('integration_configs', cfg.id, {
+          last_error: e.message,
+          updated_at: new Date().toISOString(),
+        });
+      } catch (_) {}
+    }
+  }
+}
+
+// ============================================================
+// API handlers — integration_configs CRUD
+// ============================================================
+
+async function api_integration_list(token) {
+  await authUser(token);
+  try {
+    const rows = await db.getAll('integration_configs');
+    return rows;
+  } catch (_) {
+    // Table not yet migrated
+    return [];
+  }
+}
+
+async function api_integration_save(token, payload) {
+  const user = await authUser(token, 'admin');
+  const { source, label, config_json, is_active, poll_mode, poll_interval_min } = payload || {};
+  if (!source) throw new Error('source is required');
+  if (!label)  throw new Error('label is required');
+
+  let existing;
+  try {
+    const rows = await db.getAll('integration_configs');
+    existing = rows.find(r => r.source === source);
+  } catch (_) { existing = null; }
+
+  const now = new Date().toISOString();
+
+  if (existing) {
+    await db.update('integration_configs', existing.id, {
+      label,
+      config_json:      config_json || {},
+      is_active:        is_active !== undefined ? Number(is_active) : existing.is_active,
+      poll_mode:        poll_mode        || existing.poll_mode,
+      poll_interval_min: poll_interval_min != null ? Number(poll_interval_min) : existing.poll_interval_min,
+      updated_at:       now,
+    });
+    return { saved: true, id: existing.id };
+  } else {
+    const id = await db.insert('integration_configs', {
+      source,
+      label,
+      config_json:       config_json || {},
+      is_active:         is_active !== undefined ? Number(is_active) : 1,
+      poll_mode:         poll_mode || 'push',
+      poll_interval_min: poll_interval_min != null ? Number(poll_interval_min) : 15,
+      created_by:        user.id,
+      created_at:        now,
+      updated_at:        now,
+    });
+    return { saved: true, id };
+  }
+}
+
+async function api_integration_delete(token, id) {
+  await authUser(token, 'admin');
+  if (!id) throw new Error('id is required');
+  await db.delete('integration_configs', id);
+  return { deleted: true };
+}
+
+async function api_integration_syncNow(token, id) {
+  await authUser(token, 'admin');
+  if (!id) throw new Error('id is required');
+
+  let cfg;
+  try {
+    const rows = await db.getAll('integration_configs');
+    cfg = rows.find(r => Number(r.id) === Number(id));
+  } catch (_) {}
+
+  if (!cfg) throw new Error('Integration config not found');
+  if (cfg.poll_mode !== 'pull') throw new Error('This integration is push-mode only — no manual sync needed');
+
+  const users    = await db.getAll('users');
+  const adminUsr = users.find(u => u.role === 'admin' && Number(u.is_active)) || users[0];
+  const count    = await _runNativePull(cfg, adminUsr && adminUsr.id);
+
+  const now = new Date().toISOString();
+  await db.update('integration_configs', cfg.id, {
+    last_synced_at:    now,
+    last_synced_count: count,
+    last_error:        null,
+    updated_at:        now,
+  });
+
+  return { synced: true, created: count };
+}
+
 module.exports = {
-  // JSON-RPC API
+  // Sheet sync
+  runDueSheetSyncs,
   api_sheetSync_list,
   api_sheetSync_save,
   api_sheetSync_delete,
   api_sheetSync_runNow,
-  // Express handlers
+  // Webhook endpoints
   leadSourceWebhook,
   sheetPushWebhook,
-  // Background poller
-  runDueSheetSyncs
+  // Native pull integrations
+  runDueNativePulls,
+  api_integration_list,
+  api_integration_save,
+  api_integration_delete,
+  api_integration_syncNow,
 };
