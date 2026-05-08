@@ -59,15 +59,13 @@ async function api_saas_ai_settings_get(token) {
   );
   const row = r.rows[0] || {};
   const realKey = decryptString(row.gemini_api_key_enc);
-  // Env-var fallback so the WhatsApp AI Bot uses the same key that the
-  // existing call-transcription path already uses (process.env.GEMINI_API_KEY).
-  // The UI shows this so the super-admin doesn't have to paste twice.
+  // Env-var fallback — same key the call-recording AI uses.
   const envKey = (process.env.GEMINI_API_KEY || '').trim();
   const effectiveKey = realKey || envKey;
   const keySource = realKey ? 'database' : (envKey ? 'env' : null);
   return {
     key_set:                 !!effectiveKey,
-    key_source:              keySource,                      // 'database' | 'env' | null
+    key_source:              keySource,
     key_preview:             maskKey(effectiveKey),
     db_key_set:              !!realKey,
     env_key_set:             !!envKey,
@@ -77,8 +75,6 @@ async function api_saas_ai_settings_get(token) {
     price_output_usd_per_m:  Number(row.price_output_usd_per_m || 0.30),
     exchange_rate_inr:       Number(row.exchange_rate_inr || 84),
     markup_pct:              Number(row.markup_pct || 30),
-    // is_active reflects only the DB flag. The Gemini client treats env-key
-    // as auto-enabled UNLESS db is_active is explicitly 0 with a stored key.
     is_active:               Number(row.is_active || 0) === 1 || (!realKey && !!envKey),
     db_is_active:            Number(row.is_active || 0) === 1,
     updated_at:              row.updated_at || null,
@@ -131,4 +127,28 @@ async function api_saas_ai_settings_save(token, payload) {
  */
 async function api_saas_ai_settings_test(token) {
   await requireSuperAdmin(token);
-  const r = await control.query(`SELECT gemini_api_key_e
+  const r = await control.query(`SELECT gemini_api_key_enc FROM ai_settings WHERE id = 1`);
+  let apiKey = decryptString(r.rows[0]?.gemini_api_key_enc);
+  let source = apiKey ? 'database' : null;
+  if (!apiKey && process.env.GEMINI_API_KEY) {
+    apiKey = String(process.env.GEMINI_API_KEY).trim();
+    source = 'env';
+  }
+  if (!apiKey) return { ok: false, error: 'No Gemini API key configured (paste one or set GEMINI_API_KEY env var).' };
+  try {
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models?key=' + encodeURIComponent(apiKey);
+    const resp = await fetch(url, { method: 'GET' });
+    const j = await resp.json();
+    if (!resp.ok) return { ok: false, error: j?.error?.message || ('HTTP ' + resp.status) };
+    const count = Array.isArray(j.models) ? j.models.length : 0;
+    return { ok: true, models_visible: count, sample_model: j.models?.[0]?.name || null, key_source: source };
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) };
+  }
+}
+
+module.exports = {
+  api_saas_ai_settings_get,
+  api_saas_ai_settings_save,
+  api_saas_ai_settings_test,
+};
