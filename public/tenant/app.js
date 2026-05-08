@@ -242,6 +242,32 @@ async function _rolesForSelect() {
   return list;
 }
 
+
+// Lazy-load the connected WhatsApp phones list — used by every "Send
+// from" picker in the SPA. Caches on CRM.cache.waPhones so the chat
+// composer / initiate-chat modal don't refetch on every render.
+async function _loadWaPhones() {
+  if (CRM.cache.waPhones) return CRM.cache.waPhones;
+  try { CRM.cache.waPhones = await api('api_wa_phones_listAll'); }
+  catch (_) { CRM.cache.waPhones = []; }
+  return CRM.cache.waPhones || [];
+}
+
+// Builds a <select> element listing every active phone, with
+// 'Use default' as the first option. Returns the element. The caller
+// reads picker.value to get the phone_number_id (or '' for default).
+function _phonePickerSelect(opts) {
+  opts = opts || {};
+  const sel = h('select', { class: 'wa-phone-picker', style: opts.style || { fontSize: '.85rem' } },
+    h('option', { value: '' }, opts.defaultLabel || '— Use default phone —'));
+  (opts.phones || []).filter(p => Number(p.is_active) === 1).forEach(p => {
+    const lbl = (Number(p.is_default) === 1 ? '⭐ ' : '') +
+                (p.display_phone_number || p.phone_number_id) +
+                (p.label ? ' (' + p.label + ')' : '');
+    sel.appendChild(h('option', { value: p.phone_number_id }, lbl));
+  });
+  return sel;
+}
 /* ---------------- utility ---------------- */
 const $ = (sel, ctx) => (ctx || document).querySelector(sel);
 const $$ = (sel, ctx) => [...(ctx || document).querySelectorAll(sel)];
@@ -5829,6 +5855,9 @@ VIEWS.dial = async (view) => {
 };
 
 VIEWS.whatsbot = async (view) => {
+  // Pre-warm the wa_phones cache so chat composer + initiate-chat
+  // modal can render their 'Send from' picker without an extra wait.
+  _loadWaPhones().catch(() => {});
   view.innerHTML = '';
   const tabs = [
     { id: 'connect',   label: '🔗 Connect Account' },
@@ -6984,10 +7013,14 @@ async function openInitiateChatModal(lead) {
   cols.appendChild(previewCol);
   body.appendChild(cols);
 
-  // Footer
+  // Footer — Phase 2 multi-WhatsApp: 'Send from' picker.
+  const _initPhones = await _loadWaPhones();
+  const initPicker = _phonePickerSelect({ phones: _initPhones });
   const sendBtn = h('button', { class: 'btn primary', disabled: 'disabled' }, 'Send');
   body.appendChild(h('div', { class: 'actions' },
     h('button', { class: 'btn', onclick: () => m.remove() }, 'Close'),
+    h('span', { class: 'muted', style: { fontSize: '.78rem' } }, 'From:'),
+    initPicker,
     sendBtn
   ));
   m.appendChild(body);
@@ -7072,7 +7105,8 @@ async function openInitiateChatModal(lead) {
         phone,
         template_name: currentTpl.name,
         template_language: currentTpl.language,
-        variables
+        variables,
+        from_phone_number_id: initPicker.value || undefined
       });
       toast('Sent — view delivery status in WhatsBot → Chat');
       m.remove();
@@ -7320,6 +7354,13 @@ function buildWaCompose(phone, onSent) {
 
   const previewSlot = h('div', { class: 'wb-compose-preview', hidden: 'hidden' });
   const input = h('textarea', { rows: 2, placeholder: 'Type a message — Enter to send, Shift+Enter for newline' });
+  // Phase 2 multi-WhatsApp: per-message 'Send from' picker on the
+  // chat composer. Reads from CRM.cache.waPhones (pre-warmed by the
+  // chat tab when it loads); the picker is inline above the textarea.
+  const composerPicker = _phonePickerSelect({
+    phones: (CRM.cache && CRM.cache.waPhones) || [],
+    style: { fontSize: '.78rem', marginRight: '.4rem' }
+  });
   const fileInput = h('input', { type: 'file', style: { display: 'none' }, accept: 'image/*,application/pdf,video/mp4,video/3gp,audio/aac,audio/mp4,audio/mpeg,audio/amr,audio/ogg,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv' });
 
   const renderPreview = () => {
@@ -7343,6 +7384,7 @@ function buildWaCompose(phone, onSent) {
     input.disabled = true;
     try {
       const payload = { phone, text };
+      if (composerPicker.value) payload.from_phone_number_id = composerPicker.value;
       if (pending) {
         payload.media_id = pending.wa_media_id;
         payload.media_type = waMediaTypeFor(pending.mime_type);

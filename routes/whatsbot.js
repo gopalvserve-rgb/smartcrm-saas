@@ -51,6 +51,36 @@ async function _cfg() {
 }
 
 /**
+ * Like _cfg() but for a SPECIFIC phone_number_id. Looks up the row in
+ * wa_phones and returns its access_token + business_account_id, with
+ * the rest of the cfg values (autoLead, defaults) coming from config.
+ *
+ * If fromPhoneNumberId is empty / null / unknown / inactive, falls
+ * back to the legacy _cfg() — i.e. the default phone — so callers
+ * can pass it through unchecked when the user hasn't picked one.
+ */
+async function _cfgForPhone(fromPhoneNumberId) {
+  const base = await _cfg();
+  const id = String(fromPhoneNumberId || '').trim();
+  if (!id) return base;
+  try {
+    const r = await db.query(
+      `SELECT phone_number_id, business_account_id, access_token
+         FROM wa_phones WHERE phone_number_id = $1 AND is_active = 1`,
+      [id]
+    );
+    if (!r.rows.length) return base;   // row missing — fall back gracefully
+    return Object.assign({}, base, {
+      wabaId:  r.rows[0].business_account_id || base.wabaId,
+      token:   r.rows[0].access_token,
+      phoneId: r.rows[0].phone_number_id
+    });
+  } catch (_) {
+    return base;   // wa_phones missing on un-migrated tenants
+  }
+}
+
+/**
  * Resolve the status_id to use when auto-creating a lead from an
  * inbound WhatsApp message. Resolution order (first match wins):
  *
@@ -664,7 +694,10 @@ function safeJson(s) { try { return JSON.parse(s); } catch (_) { return []; } }
 
 // ---------- Send a single template (used by chat + bots + campaigns) ----
 
-async function _sendTemplate({ to, templateName, language, variables, imageUrl, leadId, userId }, cfg) {
+async function _sendTemplate({ to, templateName, language, variables, imageUrl, leadId, userId, fromPhoneNumberId }, cfg) {
+  // If a specific from-phone is requested, swap cfg in-place so the
+  // _graphPost call below uses that phone's token + phone_number_id.
+  if (fromPhoneNumberId) cfg = await _cfgForPhone(fromPhoneNumberId);
   const c = cfg || await _cfg();
   // Components: BODY variables + optional HEADER image
   const components = [];
@@ -1190,11 +1223,15 @@ async function api_wb_chat_messages(token, phone) {
 }
 
 async function api_wb_chat_send(token, payload) {
+  // Multi-phone (Phase 2): payload.from_phone_number_id wins over the
+  // default. The API is otherwise unchanged for callers that don't
+  // pass it.
+  const __fromPhoneId = payload && payload.from_phone_number_id;
   const me = await authUser(token);
   const p = payload || {};
   if (!p.phone) throw new Error('phone required');
   if (!p.text && !p.media_url && !p.media_id) throw new Error('Empty message');
-  const cfg = await _cfg();
+  const cfg = await _cfgForPhone(__fromPhoneId);
 
   // Resolve lead_id from phone.
   let leadId = p.lead_id || null;
@@ -1339,6 +1376,8 @@ async function api_wb_chat_assignments_list(token, phone) {
  * Args: (token, { lead_id?, phone, template_name, template_language?, variables?, image_url? })
  */
 async function api_wb_initiate_chat(token, payload) {
+  // Multi-phone (Phase 2)
+  const __fromPhoneId = payload && payload.from_phone_number_id;
   const me = await authUser(token);
   const p = payload || {};
   if (!p.phone)         throw new Error('phone required');
