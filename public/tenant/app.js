@@ -1411,13 +1411,16 @@ VIEWS.leads = async (view) => {
 
   // Custom field filter row — one input per active custom field. Hidden
   // by default behind a "🧩 Custom fields" toggle so the toolbar stays
-  // compact for tenants with no custom fields and admins who don't need them.
+  // compact. The toggle ALWAYS renders so admins can find it from the
+  // leads page even on tenants where no custom fields are defined yet
+  // (clicking it then shows a hint pointing to Settings → Custom Fields).
   const cfList = (CRM.cache.customFields || []).filter(c => Number(c.is_active) !== 0 && c.key);
+  const cfRow = h('div', { class: 'toolbar', id: 'cf-filter-row',
+    style: { gap: '.4rem', flexWrap: 'wrap',
+             display: (CRM.prefs.filters.cf && cfList.length ? 'flex' : 'none'),
+             background: '#f8fafc', padding: '.5rem .6rem', borderRadius: '8px', marginTop: '.4rem' } },
+    h('span', { class: 'muted', style: { fontSize: '.8rem' } }, '🧩 Custom fields:'));
   if (cfList.length) {
-    const cfRow = h('div', { class: 'toolbar', id: 'cf-filter-row',
-      style: { gap: '.4rem', flexWrap: 'wrap', display: (CRM.prefs.filters.cf ? 'flex' : 'none'),
-               background: '#f8fafc', padding: '.5rem .6rem', borderRadius: '8px', marginTop: '.4rem' } },
-      h('span', { class: 'muted', style: { fontSize: '.8rem' } }, '🧩 Custom fields:'));
     cfList.forEach(cf => {
       const cur = (CRM.prefs.filters.cf && CRM.prefs.filters.cf[cf.key]) || '';
       const inp = h('input', { 'data-cf-key': cf.key, placeholder: cf.label || cf.key, value: cur,
@@ -1434,14 +1437,21 @@ VIEWS.leads = async (view) => {
         localStorage.setItem('crm_filters', JSON.stringify(CRM.prefs.filters));
         CRM._leadsPage = 1; loadLeads({ page: 1 });
       } }, 'Clear cf'));
-    // Toggle button — appended to main toolbar so admins can open the cf row on demand
-    toolbar.appendChild(h('button', { class: 'btn ghost',
-      title: 'Toggle custom-field filters',
-      onclick: () => {
-        cfRow.style.display = cfRow.style.display === 'none' ? 'flex' : 'none';
-      } }, '🧩'));
-    view.appendChild(cfRow);
+  } else {
+    cfRow.appendChild(h('span', { class: 'muted', style: { fontSize: '.8rem' } },
+      'No custom fields defined for this workspace yet. '));
+    cfRow.appendChild(h('a', { href: '#/admin', class: 'btn sm',
+      onclick: () => setTimeout(() => showAdminTab && showAdminTab('customfields'), 100) },
+      'Add custom field →'));
   }
+  // Always-present toggle. Label includes the word "Filter" so it's
+  // discoverable even when no custom fields exist yet.
+  toolbar.appendChild(h('button', { class: 'btn ghost',
+    title: 'Filter by custom fields',
+    onclick: () => {
+      cfRow.style.display = cfRow.style.display === 'none' ? 'flex' : 'none';
+    } }, '🧩 CF'));
+  view.appendChild(cfRow);
 
   view.appendChild(h('div', { class: 'bulk-bar', id: 'bulk-bar', hidden: true },
     h('span', { id: 'bulk-count', class: 'bulk-count' }, '0 selected'),
