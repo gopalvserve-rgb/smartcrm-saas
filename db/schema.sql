@@ -468,6 +468,15 @@ CREATE INDEX IF NOT EXISTS idx_wa_msg_phone ON whatsapp_messages(from_number, to
 ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS error_text TEXT;
 ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS template_name TEXT;
 
+-- ---- Multi-WhatsApp Phase 3 (2026-05-08) ----------------------------
+-- Tag every row with which of OUR connected phones it belongs to so the
+-- chat-threads list can filter by inbox + auto-route inbound replies
+-- back via the same number the customer originally messaged. NULL
+-- (legacy data pre-migration) falls back to the tenant default.
+ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS phone_number_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_wa_messages_phone_id
+  ON whatsapp_messages(phone_number_id, created_at DESC);
+
 -- ---- v13: Google Ads / UTM attribution as first-class columns ------
 -- The webhook handler already stores these in meta_json, but as columns
 -- they're filterable / reportable / displayable in the leads list.
