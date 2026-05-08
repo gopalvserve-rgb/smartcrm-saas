@@ -692,6 +692,188 @@ async function api_wb_templates_list(token) {
 }
 function safeJson(s) { try { return JSON.parse(s); } catch (_) { return []; } }
 
+// ---------- Template CREATE (submit to Meta for approval) ---------------
+//
+// The tenant SPA's "+ Create template" modal calls this. We assemble the
+// components array per Meta's spec, POST to /{waba_id}/message_templates,
+// and persist the new row in wa_templates with whatever status Meta
+// returns (almost always PENDING — Meta reviews most templates within
+// minutes for marketing/utility, instantly for authentication).
+async function api_wb_templates_create(token, payload) {
+  const me = await authUser(token);
+  if (me.role !== 'admin' && me.role !== 'manager') {
+    throw new Error('Only admins / managers can create templates');
+  }
+  const p = payload || {};
+  const name = String(p.name || '').toLowerCase().trim();
+  if (!/^[a-z0-9_]{1,512}$/.test(name)) {
+    throw new Error('Template name must be lowercase letters, digits, and underscores only (e.g. order_confirmation).');
+  }
+  const category = String(p.category || 'UTILITY').toUpperCase();
+  if (!['MARKETING', 'UTILITY', 'AUTHENTICATION'].includes(category)) {
+    throw new Error('category must be MARKETING, UTILITY or AUTHENTICATION');
+  }
+  const language = String(p.language || 'en_US').trim();
+  if (!language) throw new Error('language required (e.g. en_US, en, hi)');
+
+  const cfg = await _cfg();
+  if (!cfg.wabaId || !cfg.token) {
+    throw new Error('WhatsApp not configured. Settings \u2192 WhatsBot \u2192 Connect Account first.');
+  }
+
+  const components = _buildTemplateComponents(p);
+  if (!components.find(c => c.type === 'BODY')) {
+    throw new Error('Template must have a BODY component with non-empty text.');
+  }
+
+  const meta = await _graphPost(`${cfg.wabaId}/message_templates`, {
+    name, category, language, components,
+  }, cfg);
+
+  await _logActivity({
+    category: 'template_create', name,
+    response_code: meta.status,
+    request: { name, category, language, components },
+    response: meta.body
+  });
+
+  if (meta.body && meta.body.error) {
+    throw new Error('Meta rejected template: ' + (meta.body.error.error_user_msg || meta.body.error.message));
+  }
+
+  const id = meta.body && meta.body.id || null;
+  const status = (meta.body && meta.body.status) || 'PENDING';
+  const bodyComp = components.find(c => c.type === 'BODY') || {};
+  const bodyText = bodyComp.text || '';
+  const params = (bodyText.match(/\{\{\d+\}\}/g) || []).length;
+  const headerType = (components.find(c => c.type === 'HEADER') || {}).format || null;
+  const hasBtn = !!components.find(c => c.type === 'BUTTONS');
+  try {
+    await db.query(
+      `INSERT INTO wa_templates (name, language, status, category, body_text, components_json,
+                                  body_params, header_type, has_buttons, refreshed_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, NOW())
+       ON CONFLICT (name, language) DO UPDATE
+       SET status = EXCLUDED.status, category = EXCLUDED.category,
+           body_text = EXCLUDED.body_text, components_json = EXCLUDED.components_json,
+           body_params = EXCLUDED.body_params, header_type = EXCLUDED.header_type,
+           has_buttons = EXCLUDED.has_buttons, refreshed_at = NOW()`,
+      [name, language, status, category, bodyText, JSON.stringify(components),
+       params, headerType, hasBtn ? 1 : 0]
+    );
+  } catch (e) {
+    await _logActivity({ category: 'template_create', response_code: 0,
+      request: { name }, response: { db_error: e.message } });
+  }
+
+  return {
+    ok: true, id, name, language, status,
+    message_template_id: id,
+    review_eta: 'Meta usually reviews within a few minutes. Click "Sync from Meta" to refresh status.'
+  };
+}
+
+function _buildTemplateComponents(p) {
+  const out = [];
+  // HEADER
+  if (p.header && p.header.format && String(p.header.format).toUpperCase() !== 'NONE') {
+    const fmt = String(p.header.format).toUpperCase();
+    if (fmt === 'TEXT') {
+      const text = String(p.header.text || '').trim();
+      if (!text) throw new Error('Header (text) cannot be empty.');
+      const placeholders = (text.match(/\{\{\d+\}\}/g) || []).length;
+      const sample = Array.isArray(p.header.sample) ? p.header.sample : [];
+      if (placeholders > 0 && sample.length !== placeholders) {
+        throw new Error('Header has ' + placeholders + ' placeholder(s) but ' + sample.length + ' sample value(s) provided.');
+      }
+      const comp = { type: 'HEADER', format: 'TEXT', text };
+      if (placeholders > 0) comp.example = { header_text: sample.map(String) };
+      out.push(comp);
+    } else if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(fmt)) {
+      const url = String(p.header.sample_url || '').trim();
+      if (!url) throw new Error('A sample ' + fmt.toLowerCase() + ' URL is required for media headers.');
+      out.push({ type: 'HEADER', format: fmt, example: { header_handle: [url] } });
+    }
+  }
+  // BODY
+  if (p.body && String(p.body.text || '').trim()) {
+    const text = String(p.body.text).trim();
+    const placeholders = (text.match(/\{\{\d+\}\}/g) || []).length;
+    const comp = { type: 'BODY', text };
+    if (placeholders > 0) {
+      const sample = Array.isArray(p.body.sample) ? p.body.sample : [];
+      let example;
+      if (sample.length && Array.isArray(sample[0])) {
+        example = sample.map(row => row.map(String));
+      } else {
+        example = [sample.map(String)];
+      }
+      if (example[0].length !== placeholders) {
+        throw new Error('Body has ' + placeholders + ' placeholder(s) but ' + example[0].length + ' sample value(s) provided.');
+      }
+      comp.example = { body_text: example };
+    }
+    out.push(comp);
+  }
+  // FOOTER
+  if (p.footer && String(p.footer.text || '').trim()) {
+    out.push({ type: 'FOOTER', text: String(p.footer.text).trim().slice(0, 60) });
+  }
+  // BUTTONS
+  if (Array.isArray(p.buttons) && p.buttons.length) {
+    if (p.buttons.length > 10) throw new Error('Max 10 buttons per template (Meta limit).');
+    const buttons = p.buttons.map(b => {
+      const type = String(b.type || 'QUICK_REPLY').toUpperCase();
+      const text = String(b.text || '').trim().slice(0, 25);
+      if (!text) throw new Error('Each button needs a non-empty text.');
+      if (type === 'QUICK_REPLY') return { type: 'QUICK_REPLY', text };
+      if (type === 'URL') {
+        const url = String(b.url || '').trim();
+        if (!/^https?:\/\//.test(url)) throw new Error('URL button needs a valid http(s) URL.');
+        const placeholders = (url.match(/\{\{\d+\}\}/g) || []).length;
+        const o = { type: 'URL', text, url };
+        if (placeholders > 0) {
+          const sample = Array.isArray(b.sample) ? b.sample : [];
+          if (sample.length !== placeholders) {
+            throw new Error('URL button "' + text + '" has ' + placeholders + ' placeholder(s) but ' + sample.length + ' sample(s).');
+          }
+          o.example = sample.map(String);
+        }
+        return o;
+      }
+      if (type === 'PHONE_NUMBER') {
+        const phone = String(b.phone_number || '').trim();
+        if (!phone) throw new Error('Phone-number button needs a phone_number.');
+        return { type: 'PHONE_NUMBER', text, phone_number: phone };
+      }
+      throw new Error('Unsupported button type: ' + type);
+    });
+    out.push({ type: 'BUTTONS', buttons });
+  }
+  return out;
+}
+
+async function api_wb_templates_delete(token, payload) {
+  const me = await authUser(token);
+  if (me.role !== 'admin' && me.role !== 'manager') {
+    throw new Error('Only admins / managers can delete templates');
+  }
+  const p = payload || {};
+  const name = String(p.name || '').toLowerCase().trim();
+  if (!name) throw new Error('name required');
+  const cfg = await _cfg();
+  if (!cfg.wabaId || !cfg.token) throw new Error('WhatsApp not configured');
+  let path = `${cfg.wabaId}/message_templates?name=${encodeURIComponent(name)}`;
+  if (p.hsm_id) path += `&hsm_id=${encodeURIComponent(p.hsm_id)}`;
+  const r = await fetch(`${GRAPH}/${path}&access_token=${encodeURIComponent(cfg.token)}`, { method: 'DELETE' });
+  const j = await r.json().catch(() => ({}));
+  await _logActivity({ category: 'template_delete', name, response_code: r.status, request: { name, hsm_id: p.hsm_id || null }, response: j });
+  if (!r.ok || (j && j.error)) throw new Error((j && j.error && j.error.message) || 'Delete failed');
+  await db.query('DELETE FROM wa_templates WHERE name = $1' + (p.language ? ' AND language = $2' : ''),
+                 p.language ? [name, p.language] : [name]);
+  return { ok: true };
+}
+
 // ---------- Send a single template (used by chat + bots + campaigns) ----
 
 async function _sendTemplate({ to, templateName, language, variables, imageUrl, leadId, userId, fromPhoneNumberId }, cfg) {
@@ -2255,7 +2437,7 @@ module.exports = {
   api_wb_phones_list, api_wb_phones_set_current, api_wb_phone_check,
   api_wb_webhook_status, api_wb_webhook_subscribe,
   // Templates
-  api_wb_templates_sync, api_wb_templates_list,
+  api_wb_templates_sync, api_wb_templates_list, api_wb_templates_create, api_wb_templates_delete,
   // Chat
   api_wb_chat_threads, api_wb_chat_messages, api_wb_chat_send, api_wb_initiate_chat,
   api_wb_chat_assign, api_wb_chat_assignments_list,

@@ -7042,24 +7042,27 @@ async function wbTemplates() {
   // can only consume APPROVED templates. We expose a one-click jump-off
   // to Meta's Template Manager so admins don't have to hunt for the URL.
   wrap.appendChild(h('div', { class: 'toolbar' },
-    h('h3', { style: { margin: 0, flex: 1 } }, '📋 Templates (' + list.length + ')'),
+    h('h3', { style: { margin: 0, flex: 1 } }, '\ud83d\udccb Templates (' + list.length + ')'),
+    h('button', { class: 'btn primary', onclick: () => openCreateTemplateModal() }, '+ Create template'),
     h('a', {
       class: 'btn',
       href: 'https://business.facebook.com/wa/manage/message-templates/',
-      target: '_blank', rel: 'noopener',
-      title: 'Open Meta Business — create / edit / submit WhatsApp templates'
-    }, '🛠 Template Management ↗'),
-    h('button', { class: 'btn primary', style: { marginLeft: '.4rem' }, onclick: async () => {
+      target: '_blank', rel: 'noopener', style: { marginLeft: '.4rem' },
+      title: 'Open Meta Business \u2014 manage templates directly in Meta'
+    }, '\ud83d\udee0 Open Meta \u2197'),
+    h('button', { class: 'btn ghost', style: { marginLeft: '.4rem' }, onclick: async () => {
       try { const r = await api('api_wb_templates_sync'); toast('Synced ' + r.count + ' templates'); showWbTab('templates'); }
       catch (e) { toast(e.message, 'err'); }
-    } }, '🔄 Sync from Meta')
+    } }, '\ud83d\udd04 Sync from Meta')
   ));
   wrap.appendChild(h('p', { class: 'muted', style: { fontSize: '.82rem', margin: '0 0 .75rem' } },
-    'Need a new template, edits to an existing one, or to check approval status? Open ',
-    h('b', {}, 'Template Management'),
-    ' to manage them in Meta Business Manager, then come back and click ',
-    h('b', {}, 'Sync from Meta'),
-    ' to refresh this list.'
+    'Click ',
+    h('b', {}, '+ Create template'),
+    ' to author a new template right here \u2014 we\'ll submit it to Meta for approval automatically. New templates land as ',
+    h('b', {}, 'PENDING'),
+    '; click ',
+    h('b', {}, '\ud83d\udd04 Sync from Meta'),
+    ' a few minutes later to pull the latest review status.'
   ));
   if (!list.length) {
     wrap.appendChild(h('p', { class: 'muted' }, 'No templates yet. Click "Sync from Meta" to pull your approved templates.'));
@@ -7068,21 +7071,167 @@ async function wbTemplates() {
   wrap.appendChild(h('div', { class: 'table-wrap' }, h('table', { class: 'mini-table' },
     h('thead', {}, h('tr', {},
       h('th', {}, 'Name'), h('th', {}, 'Lang'), h('th', {}, 'Category'),
-      h('th', {}, 'Status'), h('th', {}, 'Body params'), h('th', {}, 'Body preview'))),
+      h('th', {}, 'Status'), h('th', {}, 'Body params'), h('th', {}, 'Body preview'), h('th', {}, ''))),
     h('tbody', {}, ...list.map(t => h('tr', {},
       h('td', {}, h('code', {}, t.name)),
       h('td', {}, t.language),
-      h('td', {}, t.category || '—'),
+      h('td', {}, t.category || '\u2014'),
       h('td', {},
         h('span', { class: t.status === 'APPROVED' ? 'tag' : 'tag err',
-          style: t.status === 'APPROVED' ? { background: '#10b981', color: '#fff' } : null
+          style: t.status === 'APPROVED' ? { background: '#10b981', color: '#fff' } : (t.status === 'PENDING' ? { background: '#f59e0b', color: '#fff' } : null)
         }, t.status)
       ),
       h('td', {}, t.body_params),
-      h('td', { style: { maxWidth: '420px' }, title: t.body_text || '' }, (t.body_text || '').slice(0, 100) + ((t.body_text || '').length > 100 ? '…' : ''))
+      h('td', { style: { maxWidth: '420px' }, title: t.body_text || '' }, (t.body_text || '').slice(0, 100) + ((t.body_text || '').length > 100 ? '\u2026' : '')),
+      h('td', {},
+        h('button', { class: 'btn sm ghost danger', title: 'Delete from Meta + here', onclick: async () => {
+          if (!await confirmDialog('Delete template "' + t.name + '"? It will be removed from Meta as well.')) return;
+          try { await api('api_wb_templates_delete', { name: t.name, language: t.language }); toast('Deleted'); showWbTab('templates'); }
+          catch (e) { toast(e.message, 'err'); }
+        } }, '\ud83d\uddd1')
+      )
     )))
   )));
   return wrap;
+}
+
+// ============================================================
+// Create Template modal — author a template + submit to Meta
+// ============================================================
+function openCreateTemplateModal() {
+  const m = h('div', { class: 'modal-bd' });
+  const card = h('div', { class: 'modal-card', style: { maxWidth: '720px' } });
+  m.appendChild(card);
+
+  card.appendChild(h('h3', { style: { marginTop: 0 } }, '\ud83d\udccb Create WhatsApp Template'));
+  card.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+    'After submission, Meta typically reviews the template within a few minutes. Use ',
+    h('code', {}, '{{1}}, {{2}}'),
+    ' for placeholders in body / header / URL buttons \u2014 each placeholder needs a sample value below.'));
+
+  // ---- Basics ----
+  const nameInp = h('input', { type: 'text', placeholder: 'order_confirmation (lowercase, underscores only)', style: { width: '100%' } });
+  const catSel = h('select', { style: { width: '100%' } },
+    h('option', { value: 'UTILITY' }, 'UTILITY \u2014 transactional (order updates, OTPs that aren\'t auth)'),
+    h('option', { value: 'MARKETING' }, 'MARKETING \u2014 promos, offers'),
+    h('option', { value: 'AUTHENTICATION' }, 'AUTHENTICATION \u2014 OTP / verification codes'));
+  const langSel = h('select', { style: { width: '100%' } },
+    ...['en_US', 'en', 'en_GB', 'hi', 'mr', 'gu', 'ta', 'te', 'bn', 'pa', 'ml', 'kn']
+      .map(l => h('option', { value: l, selected: l === 'en_US' ? 'selected' : null }, l)));
+  card.appendChild(h('div', { class: 'field' }, h('label', {}, 'Template name'), nameInp,
+    h('div', { class: 'muted', style: { fontSize: '.78rem' } }, 'Lowercase + underscores only \u2014 e.g. order_confirmation, appointment_reminder.')));
+  card.appendChild(h('div', { class: 'field' }, h('label', {}, 'Category'), catSel));
+  card.appendChild(h('div', { class: 'field' }, h('label', {}, 'Language'), langSel));
+
+  // ---- Header ----
+  const hdrFmt = h('select', { style: { width: '100%' } },
+    h('option', { value: 'NONE', selected: 'selected' }, 'No header'),
+    h('option', { value: 'TEXT' }, 'Text header'),
+    h('option', { value: 'IMAGE' }, 'Image header'),
+    h('option', { value: 'VIDEO' }, 'Video header'),
+    h('option', { value: 'DOCUMENT' }, 'Document header'));
+  const hdrText = h('input', { type: 'text', placeholder: 'Header text \u2014 max 60 chars, can have one {{1}}', style: { width: '100%' }, hidden: 'hidden' });
+  const hdrSample = h('input', { type: 'text', placeholder: 'Sample value for {{1}} (only if header has placeholder)', style: { width: '100%' }, hidden: 'hidden' });
+  const hdrUrl = h('input', { type: 'url', placeholder: 'Public sample image/video/doc URL', style: { width: '100%' }, hidden: 'hidden' });
+  function syncHeader() {
+    hdrText.hidden = hdrFmt.value !== 'TEXT';
+    hdrSample.hidden = hdrFmt.value !== 'TEXT';
+    hdrUrl.hidden = !['IMAGE', 'VIDEO', 'DOCUMENT'].includes(hdrFmt.value);
+  }
+  hdrFmt.addEventListener('change', syncHeader);
+  card.appendChild(h('div', { class: 'field' }, h('label', {}, 'Header'), hdrFmt, hdrText, hdrSample, hdrUrl));
+
+  // ---- Body ----
+  const bodyArea = h('textarea', { rows: 4, placeholder: 'Hi {{1}}, your order #{{2}} is on the way!', style: { width: '100%' } });
+  const bodySamples = h('input', { type: 'text', placeholder: 'Sample values, comma-separated. e.g. John, 12345', style: { width: '100%' } });
+  card.appendChild(h('div', { class: 'field' }, h('label', {}, 'Body (required)'), bodyArea, bodySamples,
+    h('div', { class: 'muted', style: { fontSize: '.78rem' } }, 'Use {{1}}, {{2}} for variables. Sample values must match the count of placeholders.')));
+
+  // ---- Footer ----
+  const footerInp = h('input', { type: 'text', placeholder: 'Optional footer (max 60 chars). e.g. Reply STOP to opt out.', style: { width: '100%' }, maxlength: 60 });
+  card.appendChild(h('div', { class: 'field' }, h('label', {}, 'Footer (optional)'), footerInp));
+
+  // ---- Buttons ----
+  const buttonsWrap = h('div', { class: 'field' });
+  buttonsWrap.appendChild(h('label', {}, 'Buttons (optional, max 10)'));
+  const btnRows = h('div', {});
+  buttonsWrap.appendChild(btnRows);
+  function addButtonRow(seed) {
+    const seedB = seed || { type: 'QUICK_REPLY', text: '' };
+    const row = h('div', { style: { display: 'flex', gap: '.4rem', alignItems: 'center', marginTop: '.3rem', flexWrap: 'wrap' } });
+    const typeSel = h('select', {},
+      h('option', { value: 'QUICK_REPLY', selected: seedB.type === 'QUICK_REPLY' ? 'selected' : null }, 'Quick reply'),
+      h('option', { value: 'URL', selected: seedB.type === 'URL' ? 'selected' : null }, 'URL'),
+      h('option', { value: 'PHONE_NUMBER', selected: seedB.type === 'PHONE_NUMBER' ? 'selected' : null }, 'Phone'));
+    const textInp = h('input', { type: 'text', placeholder: 'Button text', value: seedB.text || '', style: { flex: '1', minWidth: '8rem' } });
+    const urlInp = h('input', { type: 'url', placeholder: 'https://example.com/{{1}}', value: seedB.url || '', style: { flex: '1.5', minWidth: '12rem' } });
+    const phoneInp = h('input', { type: 'tel', placeholder: '+919876543210', value: seedB.phone_number || '', style: { flex: '1', minWidth: '8rem' } });
+    const sampleInp = h('input', { type: 'text', placeholder: 'Sample value (if URL has placeholder)', value: '', style: { flex: '1', minWidth: '8rem' } });
+    const rmBtn = h('button', { class: 'btn sm ghost danger', type: 'button', onclick: () => row.remove() }, '\u2715');
+    function syncBtnRow() {
+      urlInp.hidden = typeSel.value !== 'URL';
+      phoneInp.hidden = typeSel.value !== 'PHONE_NUMBER';
+      sampleInp.hidden = typeSel.value !== 'URL';
+    }
+    typeSel.addEventListener('change', syncBtnRow);
+    syncBtnRow();
+    row.appendChild(typeSel); row.appendChild(textInp);
+    row.appendChild(urlInp); row.appendChild(phoneInp); row.appendChild(sampleInp);
+    row.appendChild(rmBtn);
+    btnRows.appendChild(row);
+    return { row, typeSel, textInp, urlInp, phoneInp, sampleInp };
+  }
+  const addBtn = h('button', { class: 'btn sm ghost', type: 'button', onclick: () => addButtonRow(), style: { marginTop: '.4rem' } }, '+ Add button');
+  buttonsWrap.appendChild(addBtn);
+  card.appendChild(buttonsWrap);
+
+  // ---- Actions ----
+  const submitBtn = h('button', { class: 'btn primary' }, 'Submit to Meta');
+  submitBtn.onclick = async () => {
+    submitBtn.disabled = true; submitBtn.textContent = 'Submitting\u2026';
+    const buttons = [...btnRows.children].map(row => {
+      const inputs = row.querySelectorAll('select, input');
+      const type = inputs[0].value;
+      const text = inputs[1].value;
+      if (type === 'QUICK_REPLY') return { type, text };
+      if (type === 'URL') {
+        const url = inputs[2].value;
+        const sampleStr = inputs[4].value.trim();
+        const sample = sampleStr ? sampleStr.split(',').map(s => s.trim()) : [];
+        return sample.length ? { type, text, url, sample } : { type, text, url };
+      }
+      if (type === 'PHONE_NUMBER') return { type, text, phone_number: inputs[3].value };
+      return null;
+    }).filter(Boolean);
+    const headerSample = hdrSample.value.trim();
+    const header = (hdrFmt.value === 'NONE') ? null
+      : (hdrFmt.value === 'TEXT')
+        ? { format: 'TEXT', text: hdrText.value, sample: headerSample ? [headerSample] : [] }
+        : { format: hdrFmt.value, sample_url: hdrUrl.value };
+    const bodySampleStr = bodySamples.value.trim();
+    const body = {
+      text: bodyArea.value,
+      sample: bodySampleStr ? bodySampleStr.split(',').map(s => s.trim()) : []
+    };
+    try {
+      const r = await api('api_wb_templates_create', {
+        name: nameInp.value, category: catSel.value, language: langSel.value,
+        header, body, footer: { text: footerInp.value }, buttons
+      });
+      toast('Submitted to Meta \u2014 status: ' + (r.status || 'PENDING'), 'ok');
+      m.remove();
+      showWbTab('templates');
+    } catch (e) {
+      toast(e.message, 'err');
+      submitBtn.disabled = false; submitBtn.textContent = 'Submit to Meta';
+    }
+  };
+
+  card.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', marginTop: '1rem', justifyContent: 'flex-end' } },
+    h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Cancel'),
+    submitBtn
+  ));
+  document.body.appendChild(m);
 }
 
 // ---------- Message Bot ----------
