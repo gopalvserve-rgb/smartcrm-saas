@@ -10486,7 +10486,7 @@ VIEWS.admin = async (view) => {
 };
 
 async function showAdminTab(id) {
-  $$('.subtab').forEach(b => b.classList.toggle('active', b.dataset.tab === id));
+  $$('.subtab,.admin-settings-item').forEach(b => b.classList.toggle('active', b.dataset.tab === id));
   const body = $('#admin-body');
   body.innerHTML = '<div class="loading">Loading…</div>';
   try {
