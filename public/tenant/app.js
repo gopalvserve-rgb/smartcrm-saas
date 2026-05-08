@@ -391,7 +391,7 @@ function renderLogin() {
     const f = ev.target;
     $('#login-err').textContent = '';
     try {
-      const r = await apiRaw('api_login', f.email.value, f.password.value);
+      const r = await apiRaw('api_login', '', f.email.value, f.password.value);
       // 2FA path — server returned a challenge token instead of a session.
       // Swap the form for an OTP entry step. The user's challenge expires
       // in 5 minutes; api_login_otp_verify exchanges it for the real token.
