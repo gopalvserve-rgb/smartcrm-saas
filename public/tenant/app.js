@@ -1301,6 +1301,7 @@ VIEWS.leads = async (view) => {
     h('button', { class: 'btn sm', onclick: bulkStatusPrompt }, '🏷️ Status'),
     h('button', { class: 'btn sm', onclick: bulkAddTagPrompt }, '🏁 Add tag'),
     h('button', { class: 'btn sm', onclick: bulkWhatsAppPrompt }, '💬 WhatsApp'),
+    h('button', { class: 'btn sm', onclick: bulkCampaignPrompt }, '🎯 Campaign'),
     h('button', { class: 'btn sm danger', onclick: bulkDelete }, '🗑️ Delete'),
     h('button', { class: 'btn sm ghost', onclick: () => clearSelection() }, 'Clear')
   ));
@@ -2014,6 +2015,37 @@ async function bulkAssignPrompt() {
   ));
   document.body.appendChild(modal);
 }
+async function bulkCampaignPrompt() {
+  const ids = selectedIds(); if (!ids.length) return;
+  if (!CRM.cache.campaigns) {
+    try { CRM.cache.campaigns = await api('api_campaigns_list'); } catch (_) { CRM.cache.campaigns = []; }
+  }
+  const list = (CRM.cache.campaigns || []).filter(c => Number(c.is_active) === 1);
+  if (!list.length) { toast('No active campaigns. Create one in Settings → 🎯 Campaigns first.', 'err'); return; }
+  const sel = h('select', { id: 'bulk-camp' },
+    h('option', { value: '' }, '— Detach (no campaign) —'),
+    ...list.map(c => h('option', { value: c.id }, `${c.name} · ${c.distribution_mode}`)));
+  const modal = h('div', { class: 'modal-backdrop' }, h('div', { class: 'modal' },
+    h('h3', {}, `Assign ${ids.length} leads to a campaign`),
+    h('p', { class: 'muted', style: { marginTop: 0 } },
+      "The campaign's distribution mode picks the agent for each lead. " +
+      'Picking "Detach" clears campaign_id without changing the assignee.'),
+    h('label', {}, 'Campaign'),
+    sel,
+    h('div', { class: 'actions' },
+      h('button', { class: 'btn', onclick: () => modal.remove() }, 'Cancel'),
+      h('button', { class: 'btn primary', onclick: async () => {
+        try {
+          const cid = $('#bulk-camp').value === '' ? null : Number($('#bulk-camp').value);
+          const r = await api('api_leads_assignToCampaign', ids, cid);
+          toast(`${r.ok}/${r.processed} routed`);
+          modal.remove(); clearSelection(); loadLeads();
+        } catch (e) { toast(e.message, 'err'); }
+      } }, 'Apply')
+    )
+  ));
+  document.body.appendChild(modal);
+}
 async function bulkStatusPrompt() {
   const ids = selectedIds(); if (!ids.length) return;
   const statuses = CRM.cache.statuses;
@@ -2679,6 +2711,10 @@ async function openLeadModal(id) {
     try { CRM.cache.tagLibrary = await api('api_tags_list'); } catch (_) { CRM.cache.tagLibrary = []; }
   }
   const tagLibrary = CRM.cache.tagLibrary || [];
+  if (!CRM.cache.campaigns) {
+    try { CRM.cache.campaigns = await api('api_campaigns_list'); } catch (_) { CRM.cache.campaigns = []; }
+  }
+  const campaigns = (CRM.cache.campaigns || []).filter(c => Number(c.is_active) === 1);
   const isAdmin = CRM.user.role === 'admin';
   let lead = { name: '', phone: '', email: '', whatsapp: '', source: '', status_id: statuses[0]?.id, assigned_to: CRM.user.id, notes: '', tags: '', next_followup_at: '', qualified: 0 };
   let remarks = [];
@@ -2727,6 +2763,8 @@ async function openLeadModal(id) {
     selectField('product_id', 'Product', lead.product_id, [{ value: '', label: '—' }, ...products.map(p => ({ value: p.id, label: p.name }))]),
     selectField('status_id', 'Status', lead.status_id, statuses.map(s => ({ value: s.id, label: s.name })), { id: 'lead-status' }),
     selectField('assigned_to', 'Assigned To', lead.assigned_to, users.map(u => ({ value: u.id, label: u.name }))),
+    selectField('campaign_id', '🎯 Campaign', lead.campaign_id || '',
+      [{ value: '', label: '— None —' }].concat(campaigns.map(c => ({ value: c.id, label: c.name })))),
     tagsInput(lead.tags, tagLibrary, isAdmin),
     field('next_followup_at', 'Next follow-up', isoToLocalDtInput(lead.next_followup_at), { type: 'datetime-local', id: 'lead-fu' }),
     field('city', 'City', lead.city),
@@ -9708,6 +9746,7 @@ async function openCampaignEditModal(camp, onSaved) {
         };
         if (!payload.name) { toast('Name is required', 'err'); return; }
         await api('api_campaigns_save', payload);
+        if (CRM.cache) CRM.cache.campaigns = null;
         toast('Saved');
         m.remove();
         if (typeof onSaved === 'function') onSaved();

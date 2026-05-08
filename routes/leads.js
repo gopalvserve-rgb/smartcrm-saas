@@ -1,5 +1,6 @@
 const db = require('../db/pg');
 const { authUser, getVisibleUserIds } = require('../utils/auth');
+const { assignLeadToCampaign } = require('../utils/campaignAssigner');
 
 function _parseExtra(lead) {
   if (!lead) return {};
@@ -795,7 +796,27 @@ async function api_leads_create(token, payload) {
     } catch (e) { console.warn('[tat] create-log failed:', e.message); }
   });
 
-  return { id, duplicate: dup.duplicate, matched_id: dup.matched_id };
+  // ---- Phase 2: campaign distribution -----------------------------
+  // If the payload supplied a campaign_id, route the new lead through
+  // the campaign's distribution engine. assignLeadToCampaign:
+  //   - sets leads.campaign_id
+  //   - picks an agent per the campaign's distribution_mode
+  //   - leaves assigned_to alone for on_demand / conditional modes
+  //   - respects an explicit assigned_to coming from the payload
+  //     (admin manually picked a rep — we don't override that)
+  // Best-effort: a campaign-routing failure shouldn't roll back the
+  // already-committed lead row; we just log + continue.
+  let _campaignAssign = null;
+  if (p.campaign_id) {
+    try {
+      _campaignAssign = await assignLeadToCampaign(Number(id), Number(p.campaign_id), {
+        respectExistingAssignee: !!base.assigned_to,
+        actor: me
+      });
+    } catch (e) { console.warn('[campaigns] assign on create failed:', e.message); }
+  }
+
+  return { id, duplicate: dup.duplicate, matched_id: dup.matched_id, campaign: _campaignAssign };
 }
 
 // Fields that originate from the customer / campaign and must never be edited
@@ -846,7 +867,7 @@ async function api_leads_update(token, id, patch) {
   ['name', 'email', 'phone', 'whatsapp', 'product_id', 'status_id', 'assigned_to',
    'city', 'state', 'pincode', 'country', 'company', 'address',
    'notes', 'next_followup_at', 'tags', 'source', 'source_ref',
-   'value', 'currency', 'qualified',
+   'value', 'currency', 'qualified', 'campaign_id', 'is_hidden',
    // Inventory match inputs (used by api_inventory_match)
    'budget_max', 'requirement_type', 'requirement_notes',
    // Attribution / Google Ads columns
@@ -885,6 +906,24 @@ async function api_leads_update(token, id, patch) {
   }
 
   await db.update('leads', id, allowed);
+
+  // ---- Phase 2: campaign distribution on edit ---------------------
+  // If the admin/manager changed campaign_id, route the lead through
+  // the new campaign's distribution engine. Skip if assigned_to was
+  // also explicitly set on the same patch — we treat that as the
+  // admin overriding distribution.
+  if ('campaign_id' in patch) {
+    const oldCid = lead.campaign_id == null ? null : Number(lead.campaign_id);
+    const newCid = patch.campaign_id == null || patch.campaign_id === '' ? null : Number(patch.campaign_id);
+    if (newCid !== oldCid) {
+      try {
+        await assignLeadToCampaign(id, newCid, {
+          respectExistingAssignee: 'assigned_to' in patch,
+          actor: me
+        });
+      } catch (e) { console.warn('[campaigns] assign on update failed:', e.message); }
+    }
+  }
 
   // Sync next_followup_at → followups table so reminder/notification views find it
   if ('next_followup_at' in patch) {
@@ -1553,6 +1592,35 @@ async function api_leads_pull(token) {
   return { ok: true, pulled_count: claimed.length, lead_ids: claimed, is_first_pull: isFirst, target_count: target };
 }
 
+// ---------------- Campaigns: explicit (re)assignment ----------------
+// SPA bulk action: pick N leads, then "Assign to campaign". Loops over
+// each lead and lets the campaign's distribution mode pick the agent.
+async function api_leads_assignToCampaign(token, leadIds, campaignId) {
+  const me = await authUser(token);
+  if (me.role !== 'admin' && me.role !== 'manager' && me.role !== 'team_leader') {
+    throw new Error('Manager+ only');
+  }
+  const ids = Array.isArray(leadIds) ? leadIds.map(Number).filter(Boolean) : [];
+  if (!ids.length) throw new Error('No leads selected');
+  const cid = campaignId == null ? null : Number(campaignId);
+
+  const visible = await getVisibleUserIds(me);
+  const results = [];
+  for (const id of ids) {
+    const lead = await db.findById('leads', id);
+    if (!lead) { results.push({ id, ok: false, error: 'not found' }); continue; }
+    if (!_isVisible(me, visible, lead)) { results.push({ id, ok: false, error: 'forbidden' }); continue; }
+    try {
+      const r = await assignLeadToCampaign(id, cid, { actor: me });
+      results.push({ id, ok: true, ...r });
+    } catch (e) {
+      results.push({ id, ok: false, error: e.message });
+    }
+  }
+  return { processed: results.length, ok: results.filter(r => r.ok).length, results };
+}
+
+
 module.exports = {
   api_leads_list, api_leads_statusCounts, api_leads_get, api_leads_create, api_leads_update,
   api_leads_addRemark, api_leads_pipeline, api_myFollowups, api_followup_done,
@@ -1561,5 +1629,6 @@ module.exports = {
   api_leads_cleanupJunk,
   api_whatsapp_send
 ,
-  api_leads_pull, api_leads_pullInfo
+  api_leads_pull, api_leads_pullInfo,
+  api_leads_assignToCampaign
 };
