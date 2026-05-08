@@ -42,7 +42,14 @@ const CONFIG_KEYS = [
   'SIDEBAR_NAV_GROUP_ORDER',
   // Pull Leads + WhatsApp shortcut config
   'LEAD_PULL_ENABLED', 'LEAD_PULL_INITIAL_COUNT', 'LEAD_PULL_SUBSEQUENT_COUNT', 'LEAD_PULL_ENABLED_ROLES', 'LEAD_PULL_ORDER',
-  'COMPANY_WHATSAPP', 'COMPANY_PHONE'
+  'COMPANY_WHATSAPP', 'COMPANY_PHONE',
+  // Call \u2192 lead auto-conversion (mobile-app callerId capture)
+  // '1' = create a lead from each call when no existing match; '0' = skip.
+  // CALLS_AUTOLEAD_STATUS_ID = id of the status to apply (falls back to 'New').
+  'CALLS_AUTOLEAD_INBOUND', 'CALLS_AUTOLEAD_OUTBOUND', 'CALLS_AUTOLEAD_STATUS_ID',
+  // Minimum seconds an answered inbound call must last before it creates a lead.
+  // 0 = create on every call (incl. missed). Default 5.
+  'CALLS_AUTOLEAD_MIN_SECONDS'
 ];
 
 const SENSITIVE_KEYS = ['META_APP_SECRET', 'META_PAGE_ACCESS_TOKEN', 'WHATSAPP_ACCESS_TOKEN', 'SMTP_PASSWORD'];

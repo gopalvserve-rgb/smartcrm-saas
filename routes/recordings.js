@@ -282,23 +282,53 @@ async function api_call_handleEnded(token, payload) {
   let createdLeadId = null;
   let createdFollowupId = null;
 
-  // Auto-create lead: answered inbound, ≥5s, no existing match
-  if (direction === 'in' && duration >= 5 && !lead) {
+  // ---- Auto-create-lead policy ----
+  // Driven by tenant config (Settings → Mobile app → Call → Lead conversion).
+  //   CALLS_AUTOLEAD_INBOUND   '1' / '0'  (default '1' — inbound creates leads)
+  //   CALLS_AUTOLEAD_OUTBOUND  '1' / '0'  (default '0' — outbound stays manual)
+  //   CALLS_AUTOLEAD_MIN_SECONDS  number  (default 5; 0 = create even for missed)
+  //   CALLS_AUTOLEAD_STATUS_ID  numeric id (defaults to the 'New' status)
+  // The mobile app sends direction = 'in' | 'out' | 'missed'. We treat
+  // 'missed' as inbound for the YES/NO setting so YES catches missed too.
+  const cfgIn   = await db.getConfig('CALLS_AUTOLEAD_INBOUND', '1');
+  const cfgOut  = await db.getConfig('CALLS_AUTOLEAD_OUTBOUND', '0');
+  const cfgMin  = Number(await db.getConfig('CALLS_AUTOLEAD_MIN_SECONDS', '5')) || 0;
+  const cfgStId = Number(await db.getConfig('CALLS_AUTOLEAD_STATUS_ID', '0')) || 0;
+
+  const isInbound  = direction === 'in' || direction === 'missed';
+  const isOutbound = direction === 'out' || direction === 'outgoing';
+  const passesMinDur = duration >= cfgMin || direction === 'missed';
+  const allow = !lead && passesMinDur && (
+    (isInbound  && String(cfgIn)  === '1') ||
+    (isOutbound && String(cfgOut) === '1')
+  );
+
+  if (allow) {
     try {
-      const _newStatusId = await (async () => {
-        const s = await db.findOneBy('statuses', 'name', 'New');
-        return s ? s.id : null;
-      })();
+      let statusId = null;
+      if (cfgStId) {
+        try {
+          const found = await db.findById('statuses', cfgStId);
+          if (found) statusId = found.id;
+        } catch (_) {}
+      }
+      if (!statusId) {
+        const newSt = await db.findOneBy('statuses', 'name', 'New');
+        statusId = newSt ? newSt.id : null;
+      }
       const phoneClean = String(p.phone).replace(/^'/, '').trim();
+      const sourceLabel = isInbound
+        ? (direction === 'missed' ? 'Missed Call' : 'Inbound Call')
+        : 'Outbound Call';
       createdLeadId = await db.insert('leads', {
-        name:        phoneClean,                  // placeholder, rep edits
+        name:        phoneClean,
         phone:       phoneClean,
         whatsapp:    phoneClean,
-        source:      'Inbound Call',
+        source:      sourceLabel,
         source_ref:  'auto-created from caller-id',
-        status_id:   _newStatusId,
+        status_id:   statusId,
         assigned_to: me.id,
-        notes:       'Auto-created from inbound call · ' +
+        notes:       'Auto-created from ' + sourceLabel.toLowerCase() + ' · ' +
                      Math.round(duration) + 's · ' +
                      new Date(p.started_at || Date.now()).toLocaleString('en-IN'),
         created_by:  me.id,
@@ -306,11 +336,11 @@ async function api_call_handleEnded(token, payload) {
         updated_at:  db.nowIso(),
         last_status_change_at: db.nowIso()
       });
-      // First remark for context
+      const icon = isInbound ? '📞' : '📲';
       await db.insert('remarks', {
         lead_id: createdLeadId, user_id: me.id,
-        remark: '📞 Inbound call · ' + Math.round(duration) + 's · auto-created lead',
-        status_id: _newStatusId
+        remark: icon + ' ' + sourceLabel + ' · ' + Math.round(duration) + 's · auto-created lead',
+        status_id: statusId
       });
     } catch (e) { console.warn('[caller-id] auto-create lead failed:', e.message); }
   }

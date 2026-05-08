@@ -12969,6 +12969,66 @@ async function adminRules() {
       h('span', {}, 'Process new call recordings with Gemini AI — disable to pause spending or for privacy-sensitive tenants')
     ));
     wrap.appendChild(aiCard);
+
+    // ---- Call → Lead conversion (mobile app caller-id) ----
+    const callIn  = String(cfg.CALLS_AUTOLEAD_INBOUND  == null ? '1' : cfg.CALLS_AUTOLEAD_INBOUND ) === '1';
+    const callOut = String(cfg.CALLS_AUTOLEAD_OUTBOUND == null ? '0' : cfg.CALLS_AUTOLEAD_OUTBOUND) === '1';
+    const callMin = Number(cfg.CALLS_AUTOLEAD_MIN_SECONDS || 5);
+    const callStId = String(cfg.CALLS_AUTOLEAD_STATUS_ID || '');
+    let _statuses = [];
+    try { _statuses = await api('api_statuses_list'); } catch (_) { _statuses = []; }
+    const callCard = h('div', { class: 'card', style: { marginBottom: '1rem' } });
+    callCard.appendChild(h('h4', { style: { marginTop: 0 } }, '📞 Call → Lead conversion (mobile app)'));
+    callCard.appendChild(h('p', { class: 'muted' },
+      'When a rep using the mobile app gets a call (or makes one) from a number that\'s ',
+      h('b', {}, 'not yet in the CRM'),
+      ', auto-create a lead with the chosen status. Inbound is ON by default; outbound is OFF (most outbound calls are to known leads already).'
+    ));
+
+    const inChk = h('input', { type: 'checkbox', checked: callIn ? 'checked' : null });
+    const outChk = h('input', { type: 'checkbox', checked: callOut ? 'checked' : null });
+    const minInp = h('input', { type: 'number', value: callMin, min: 0, step: 1, style: { width: '6rem' } });
+    const stSel = h('select', { style: { minWidth: '14rem' } },
+      h('option', { value: '' }, '— Default (New) —'),
+      ..._statuses.map(st => h('option', {
+        value: String(st.id),
+        selected: String(st.id) === callStId ? 'selected' : null
+      }, st.name))
+    );
+    callCard.appendChild(h('label', { class: 'toggle-row', style: { display: 'flex', alignItems: 'center', gap: '.5rem', marginBottom: '.4rem' } },
+      inChk, h('span', {}, 'Convert ', h('b', {}, 'incoming'), ' calls into leads (includes missed calls)')
+    ));
+    callCard.appendChild(h('label', { class: 'toggle-row', style: { display: 'flex', alignItems: 'center', gap: '.5rem', marginBottom: '.4rem' } },
+      outChk, h('span', {}, 'Convert ', h('b', {}, 'outgoing'), ' calls into leads')
+    ));
+    callCard.appendChild(h('div', { class: 'field', style: { marginTop: '.5rem' } },
+      h('label', {}, 'Default status for auto-created leads'),
+      stSel,
+      h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } },
+        'Pulled live from your statuses list. If left as "Default", we use the status named "New" (or the first status if no "New" exists).')
+    ));
+    callCard.appendChild(h('div', { class: 'field' },
+      h('label', {}, 'Minimum call duration to count (seconds)'),
+      minInp,
+      h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } },
+        '0 = create on every call (incl. missed). 5 = the rep must answer for at least 5 seconds before a lead is created — useful to avoid spam-dial leads.')
+    ));
+    const callSaveBtn = h('button', { class: 'btn primary', style: { marginTop: '.5rem' } }, '💾 Save call → lead settings');
+    callSaveBtn.onclick = async () => {
+      callSaveBtn.disabled = true;
+      try {
+        await api('api_admin_setConfig', {
+          CALLS_AUTOLEAD_INBOUND:      inChk.checked  ? '1' : '0',
+          CALLS_AUTOLEAD_OUTBOUND:     outChk.checked ? '1' : '0',
+          CALLS_AUTOLEAD_MIN_SECONDS:  String(Number(minInp.value || 0)),
+          CALLS_AUTOLEAD_STATUS_ID:    stSel.value || ''
+        });
+        toast('Call → Lead settings saved', 'ok');
+      } catch (e) { toast(e.message, 'err'); }
+      finally { callSaveBtn.disabled = false; }
+    };
+    callCard.appendChild(callSaveBtn);
+    wrap.appendChild(callCard);
   } catch (_) { /* config endpoint missing — older deploy, skip silently */ }
 
   const rules = await api('api_rules_list');
