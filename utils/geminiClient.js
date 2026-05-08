@@ -37,16 +37,26 @@ const SETTINGS_TTL_MS = 60 * 1000;
 /**
  * Load (and decrypt) the platform AI settings. Cached 60 s.
  *
+ * Key resolution order:
+ *   1. ai_settings.gemini_api_key_enc — set via super-admin Settings UI.
+ *      Decrypts via utils/aiCrypto.
+ *   2. process.env.GEMINI_API_KEY — same env var the existing call-
+ *      transcription path (utils/aiCallSummary.js) already uses, so
+ *      WhatsApp AI Bot can piggy-back on a Railway env without the
+ *      super-admin having to paste the key twice.
+ *
  * Returns null when:
- *   - the table is missing (control DB not migrated yet)
- *   - is_active = 0 (super-admin globally disabled)
- *   - no key has been pasted
+ *   - is_active = 0 in ai_settings (super-admin globally disabled), AND
+ *     GEMINI_API_KEY env is not set either.  (We treat env-key-only as
+ *     "auto-enabled" so existing deployments work out of the box —
+ *     setting is_active=0 explicitly via the UI overrides this.)
+ *   - no key resolved at all
  */
 async function loadSettings(force) {
   if (!force && _settingsCache && (Date.now() - _settingsCachedAt) < SETTINGS_TTL_MS) {
     return _settingsCache;
   }
-  let row;
+  let row = null;
   try {
     const r = await control.query(
       `SELECT gemini_api_key_enc, gemini_default_model, gemini_embedding_model,
@@ -54,21 +64,38 @@ async function loadSettings(force) {
               exchange_rate_inr, markup_pct, is_active
          FROM ai_settings WHERE id = 1`
     );
-    row = r.rows[0];
-  } catch (_) {
-    return null;
+    row = r.rows[0] || null;
+  } catch (_) { /* table missing — fall through to env-only mode */ }
+
+  // Resolve key
+  let apiKey = '';
+  let keySource = null;
+  if (row && row.gemini_api_key_enc) {
+    apiKey = decryptString(row.gemini_api_key_enc);
+    if (apiKey) keySource = 'control_db';
   }
-  if (!row || Number(row.is_active) !== 1) return null;
-  const apiKey = decryptString(row.gemini_api_key_enc);
+  if (!apiKey && process.env.GEMINI_API_KEY) {
+    apiKey = String(process.env.GEMINI_API_KEY).trim();
+    if (apiKey) keySource = 'env';
+  }
   if (!apiKey) return null;
+
+  // Resolve enabled flag.
+  //   - If admin EXPLICITLY set is_active = 0 in ai_settings → respect it.
+  //   - Otherwise (no row OR is_active = 1) → enabled.
+  const explicitlyDisabled = row && Number(row.is_active) === 0
+                              && row.gemini_api_key_enc; // only if a key was once saved
+  if (explicitlyDisabled) return null;
+
   _settingsCache = {
     apiKey,
-    defaultModel:        row.gemini_default_model || 'gemini-2.0-flash-lite',
-    embeddingModel:      row.gemini_embedding_model || 'text-embedding-004',
-    priceInputPerM:      Number(row.price_input_usd_per_m  || 0.075),
-    priceOutputPerM:     Number(row.price_output_usd_per_m || 0.30),
-    exchangeRateInr:     Number(row.exchange_rate_inr || 84),
-    markupPct:           Number(row.markup_pct || 30),
+    keySource,
+    defaultModel:        (row && row.gemini_default_model)   || 'gemini-2.0-flash-lite',
+    embeddingModel:      (row && row.gemini_embedding_model) || 'text-embedding-004',
+    priceInputPerM:      Number((row && row.price_input_usd_per_m)  || 0.075),
+    priceOutputPerM:     Number((row && row.price_output_usd_per_m) || 0.30),
+    exchangeRateInr:     Number((row && row.exchange_rate_inr) || 84),
+    markupPct:           Number((row && row.markup_pct) || 30),
   };
   _settingsCachedAt = Date.now();
   return _settingsCache;
@@ -192,37 +219,4 @@ async function generate(args) {
     cost_usd:        costs.cost_usd,
     cost_inr_real:   costs.cost_inr_real,
     cost_inr_billed: costs.cost_inr_billed,
-    finish_reason: finishReason,
-    error: null,
-    raw_status: resp.status
-  };
-}
-
-/**
- * Append a row to control.ai_usage_log. Always called after generate(),
- * even on failure (so super-admin sees the error rate). Failed calls
- * have error_text set + cost = 0 so they aren't billed.
- */
-async function logUsage({ tenant_slug, tenant_id, call_kind, phone, lead_id, wa_message_id, result }) {
-  try {
-    await control.query(
-      `INSERT INTO ai_usage_log
-         (tenant_id, tenant_slug, call_kind, model, input_tokens, output_tokens,
-          cost_usd, cost_inr_real, cost_inr_billed,
-          phone, lead_id, wa_message_id, error_text)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
-      [
-        tenant_id || null, tenant_slug, call_kind || 'reply',
-        result.model || '',
-        result.input_tokens || 0, result.output_tokens || 0,
-        result.cost_usd || 0, result.cost_inr_real || 0, result.cost_inr_billed || 0,
-        phone || null, lead_id || null, wa_message_id || null,
-        result.ok ? null : (result.error || 'failed').slice(0, 500)
-      ]
-    );
-  } catch (e) {
-    console.warn('[gemini] logUsage failed:', e.message);
-  }
-}
-
-module.exports = { loadSettings, invalidateCache, generate, logUsage, computeCost };
+   
