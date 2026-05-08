@@ -5916,6 +5916,67 @@ async function wbConnect() {
   );
   wrap.appendChild(header);
 
+  // ---- 📱 Connected numbers (multi-phone support, Phase 1) ----
+  let phones = [];
+  try { phones = await api('api_wa_phones_listAll'); } catch (_) { phones = []; }
+  if (phones.length) {
+    const phonesCard = h('div', { class: 'card', style: { marginBottom: '.8rem' } });
+    phonesCard.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.4rem' } },
+      h('h3', { style: { margin: 0 } }, '📱 Connected numbers (' + phones.length + ')'),
+      h('span', { class: 'muted', style: { fontSize: '.78rem' } }, 'Default phone marked ⭐')
+    ));
+    const tbl = h('table', { class: 'data-table' },
+      h('thead', {}, h('tr', {},
+        h('th', {}, ''),
+        h('th', {}, 'Phone'),
+        h('th', {}, 'Verified name'),
+        h('th', {}, 'Label'),
+        h('th', {}, 'WABA'),
+        h('th', {}, 'Status'),
+        h('th', { style: { textAlign: 'right' } }, '')
+      )),
+      h('tbody', {}, ...phones.map(ph => h('tr', {},
+        h('td', {}, Number(ph.is_default) === 1 ? '⭐' : ''),
+        h('td', {}, h('code', {}, ph.display_phone_number || ph.phone_number_id)),
+        h('td', {}, ph.verified_name || '—'),
+        h('td', {},
+          (() => {
+            const inp = h('input', { type: 'text', value: ph.label || '', placeholder: 'e.g. Sales line', style: { width: '140px' } });
+            let _t = null;
+            inp.addEventListener('input', () => { clearTimeout(_t); _t = setTimeout(async () => {
+              try { await api('api_wa_phones_save', { id: ph.id, label: inp.value }); } catch (e) { toast(e.message, 'err'); }
+            }, 600); });
+            return inp;
+          })()
+        ),
+        h('td', { class: 'muted', style: { fontSize: '.78rem' } }, ph.business_account_id || '—'),
+        h('td', {},
+          Number(ph.is_active) === 1
+            ? h('span', { class: 'badge ok' }, ph.status || 'active')
+            : h('span', { class: 'badge warn' }, 'inactive')
+        ),
+        h('td', { style: { textAlign: 'right' } },
+          Number(ph.is_default) !== 1
+            ? h('button', { class: 'btn sm', onclick: async () => {
+                try { await api('api_wa_phones_setDefault', ph.id); toast('Default updated'); showWbTab('connect'); }
+                catch (e) { toast(e.message, 'err'); }
+              } }, 'Set default')
+            : null,
+          ' ',
+          h('button', { class: 'btn sm danger', onclick: async () => {
+              if (!await confirmDialog('Disconnect this number?')) return;
+              try { await api('api_wa_phones_delete', ph.id); toast('Disconnected'); showWbTab('connect'); }
+              catch (e) { toast(e.message, 'err'); }
+            } }, '🗑')
+        )
+      )))
+    );
+    phonesCard.appendChild(tbl);
+    phonesCard.appendChild(h('p', { class: 'muted', style: { marginTop: '.5rem', fontSize: '.85rem' } },
+      'Each new number connected via Embedded Sign-In is appended here automatically. The default phone is the one used for sending unless an agent picks a different number on the chat composer.'));
+    wrap.appendChild(phonesCard);
+  }
+
   // ---- Connected status banner (always show if connected) ----
   if (isConnected) {
     wrap.appendChild(h('div', { class: 'card wb-conn-status' },

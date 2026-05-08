@@ -227,10 +227,56 @@ async function api_wb_emb_signin(token, code, phoneNumberId, wabaId) {
   }
   const accessToken = j.access_token;
 
-  // Persist
+  // Persist (legacy single-phone keys — kept in sync with the wa_phones
+  // default row for backwards compat).
   await db.setConfig('WHATSAPP_ACCESS_TOKEN', accessToken);
   await db.setConfig('WHATSAPP_BUSINESS_ACCOUNT_ID', String(wabaId));
   await db.setConfig('WHATSAPP_PHONE_NUMBER_ID', String(phoneNumberId));
+
+  // Phase 1 multi-phone: append a row to wa_phones. If this is the
+  // first row, mark it default. If it's a re-connect of an existing
+  // phone, just update the access_token + WABA. Best-effort: the
+  // table missing on un-migrated tenants must not break the flow.
+  try {
+    // Pull display_phone_number + verified_name from Meta so the row
+    // is useful in the UI without extra queries.
+    let displayPhone = '', verifiedName = '';
+    try {
+      const meta = await fetch(`${GRAPH}/${phoneNumberId}?fields=display_phone_number,verified_name,quality_rating,status,messaging_limit_tier`, {
+        headers: { Authorization: 'Bearer ' + accessToken }
+      });
+      const mj = await meta.json();
+      if (!mj.error) {
+        displayPhone  = mj.display_phone_number || '';
+        verifiedName  = mj.verified_name || '';
+      }
+    } catch (_) {}
+    const existing = await db.query('SELECT id, is_default FROM wa_phones WHERE phone_number_id = $1', [String(phoneNumberId)]);
+    const countRes = await db.query('SELECT COUNT(*)::int AS c FROM wa_phones');
+    const isFirst  = !Number(countRes.rows[0].c);
+    if (existing.rows.length) {
+      await db.query(
+        `UPDATE wa_phones SET
+           business_account_id = $1, access_token = $2,
+           display_phone_number = COALESCE(NULLIF($3,''), display_phone_number),
+           verified_name        = COALESCE(NULLIF($4,''), verified_name),
+           is_active = 1, last_seen_at = NOW(), updated_at = NOW()
+         WHERE phone_number_id = $5`,
+        [String(wabaId), accessToken, displayPhone, verifiedName, String(phoneNumberId)]
+      );
+    } else {
+      await db.query(
+        `INSERT INTO wa_phones
+            (phone_number_id, business_account_id, access_token,
+             display_phone_number, verified_name, is_default, is_active,
+             last_seen_at)
+         VALUES ($1, $2, $3, $4, $5, $6, 1, NOW())`,
+        [String(phoneNumberId), String(wabaId), accessToken, displayPhone, verifiedName, isFirst ? 1 : 0]
+      );
+    }
+  } catch (e) {
+    console.warn('[wa_phones] upsert failed:', e.message);
+  }
 
   // Subscribe the WABA to webhooks (so inbound messages reach our /hook)
   let subscribeOk = true; let subscribeErr = '';
@@ -1956,11 +2002,108 @@ async function _handleInbound(m, value) {
   } catch (e) { console.warn('[wb] bot dispatch failed:', e.message); }
 }
 
+
+// ----------------------------------------------------------------
+// Multi-phone CRUD (Phase 1 of "many WhatsApp numbers per tenant")
+// Reads from / writes to the wa_phones table. The legacy WHATSAPP_*
+// config keys continue to mirror the default row.
+// ----------------------------------------------------------------
+
+async function api_wa_phones_listAll(token) {
+  await authUser(token);
+  let rows;
+  try {
+    const r = await db.query(`
+      SELECT id, phone_number_id, business_account_id,
+             display_phone_number, verified_name, label,
+             quality_rating, status, messaging_limit_tier,
+             is_default, is_active, last_seen_at, created_at, updated_at
+        FROM wa_phones
+       ORDER BY is_default DESC, created_at ASC
+    `);
+    rows = r.rows;
+  } catch (e) {
+    // Table missing on un-migrated tenants — surface an empty list so
+    // the SPA shows a clean "no phones connected" rather than crashing.
+    return [];
+  }
+  return rows;
+}
+
+async function api_wa_phones_save(token, payload) {
+  const me = await authUser(token);
+  if (me.role !== 'admin') throw new Error('Admin only');
+  const p = payload || {};
+  const id = Number(p.id || 0);
+  if (!id) throw new Error('Phone id required');
+  // Only allow editing the human-friendly label + active flag through
+  // this endpoint. Everything else (token, WABA, phone_number_id) is
+  // mastered by the Embedded Sign-In flow so admins can't accidentally
+  // brick a connection by editing a token by hand.
+  const label    = p.label != null ? String(p.label).slice(0, 80) : null;
+  const isActive = p.is_active == null ? null : (p.is_active ? 1 : 0);
+  const sets = []; const vals = []; let i = 1;
+  if (label    != null) { sets.push(`label = $${i++}`);     vals.push(label); }
+  if (isActive != null) { sets.push(`is_active = $${i++}`); vals.push(isActive); }
+  if (!sets.length) return { ok: true };
+  vals.push(id);
+  await db.query(`UPDATE wa_phones SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $${i}`, vals);
+  return { ok: true };
+}
+
+async function api_wa_phones_setDefault(token, id) {
+  const me = await authUser(token);
+  if (me.role !== 'admin') throw new Error('Admin only');
+  const pid = Number(id);
+  if (!pid) throw new Error('Phone id required');
+  const target = await db.query('SELECT phone_number_id, business_account_id, access_token FROM wa_phones WHERE id = $1 AND is_active = 1', [pid]);
+  if (!target.rows.length) throw new Error('Phone not found or inactive');
+  await db.query('UPDATE wa_phones SET is_default = CASE WHEN id = $1 THEN 1 ELSE 0 END', [pid]);
+  // Mirror to the legacy config keys so the existing _cfg() helper +
+  // every Send-API call route through the new default phone without
+  // any code change elsewhere.
+  const t = target.rows[0];
+  await db.setConfig('WHATSAPP_PHONE_NUMBER_ID',     String(t.phone_number_id));
+  await db.setConfig('WHATSAPP_BUSINESS_ACCOUNT_ID', String(t.business_account_id || ''));
+  await db.setConfig('WHATSAPP_ACCESS_TOKEN',        String(t.access_token));
+  return { ok: true };
+}
+
+async function api_wa_phones_delete(token, id) {
+  const me = await authUser(token);
+  if (me.role !== 'admin') throw new Error('Admin only');
+  const pid = Number(id);
+  if (!pid) throw new Error('Phone id required');
+  const row = await db.query('SELECT phone_number_id, is_default FROM wa_phones WHERE id = $1', [pid]);
+  if (!row.rows.length) throw new Error('Phone not found');
+  await db.query('DELETE FROM wa_phones WHERE id = $1', [pid]);
+  // If we deleted the default, promote any other active phone to default.
+  if (Number(row.rows[0].is_default) === 1) {
+    const next = await db.query('SELECT id, phone_number_id, business_account_id, access_token FROM wa_phones WHERE is_active = 1 ORDER BY created_at ASC LIMIT 1');
+    if (next.rows.length) {
+      const t = next.rows[0];
+      await db.query('UPDATE wa_phones SET is_default = 1 WHERE id = $1', [t.id]);
+      await db.setConfig('WHATSAPP_PHONE_NUMBER_ID',     String(t.phone_number_id));
+      await db.setConfig('WHATSAPP_BUSINESS_ACCOUNT_ID', String(t.business_account_id || ''));
+      await db.setConfig('WHATSAPP_ACCESS_TOKEN',        String(t.access_token));
+    } else {
+      // No other phones — clear legacy keys so subsequent send calls
+      // fail loudly rather than using a deleted phone's token.
+      await db.setConfig('WHATSAPP_PHONE_NUMBER_ID',     '');
+      await db.setConfig('WHATSAPP_BUSINESS_ACCOUNT_ID', '');
+      await db.setConfig('WHATSAPP_ACCESS_TOKEN',        '');
+    }
+  }
+  return { ok: true };
+}
+
 module.exports = {
   // Settings
   api_wb_settings_get, api_wb_settings_save, api_wb_connect_verify, api_wb_disconnect,
   api_wb_emb_signin, api_wb_register_phone,
   api_wb_phones_list, api_wb_phones_set_current, api_wb_phone_check,
+  // Phase 1 multi-WhatsApp
+  api_wa_phones_listAll, api_wa_phones_save, api_wa_phones_setDefault, api_wa_phones_delete,
   api_wb_webhook_status, api_wb_webhook_subscribe,
   // Templates
   api_wb_templates_sync, api_wb_templates_list,
