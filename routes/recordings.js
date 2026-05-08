@@ -190,9 +190,19 @@ async function api_call_lookup(token, phone) {
 
   const lead = await _findLeadByPhone(phone);
   if (!lead) {
-    // Bonus context for the rep: was there a previous call/lead from this
-    // number that's been deleted, or a stale unassigned lead?
-    return { match: false, phone };
+    // No existing lead. Tell the mobile app whether the server WILL
+    // auto-create one when the recording lands, so the app can decide
+    // to upload instead of skipping. Reads the same CALLS_AUTOLEAD
+    // config the recording-upload handler uses.
+    let willAutoCreate = false;
+    try {
+      const cfgIn  = await db.getConfig('CALLS_AUTOLEAD_INBOUND',  '1');
+      const cfgOut = await db.getConfig('CALLS_AUTOLEAD_OUTBOUND', '0');
+      // We don't know the call direction at lookup time (this is fired on ring),
+      // so 'will auto-create' = either inbound OR outbound is enabled.
+      willAutoCreate = String(cfgIn) === '1' || String(cfgOut) === '1';
+    } catch (_) {}
+    return { match: false, phone, will_auto_create: willAutoCreate };
   }
 
   // Hydrate lead with status + assignee names + last few remarks

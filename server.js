@@ -801,14 +801,143 @@ app.get(/^\/t\/[a-z0-9-]+\/?$/, async (req, res, next) => {
 app.use(attachTenant);
 
 // ---- Public /q/:token quotation viewer (tenant-scoped) ----
-// Mounted AFTER attachTenant so /t/<slug>/q/<token> resolves to the
-// tenant pool. No auth required — the random token is the auth.
 app.get('/q/:token', (req, res, next) => {
   if (!req.tenant) return res.status(404).send('Tenant not found');
   const tenantDb = require('./db/pg');
   return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug }, () => {
     require('./routes/quotations').expressPublicQuote(req, res).catch(next);
   });
+});
+
+// ---- Mobile-app call-recording upload (tenant-scoped multipart) ----
+// Was missing from the SaaS server entirely — mobile app POSTs to
+// /t/<slug>/api/recordings would silently 404 and the 'Sync now' button
+// reported '0 synced'. Mount the same multipart handler used in
+// server.tenant.js, scoped through tenantStorage so db.query() picks
+// up the right tenant pool. Also auto-creates a lead if the recording's
+// phone doesn't match an existing lead (uses CALLS_AUTOLEAD_INBOUND /
+// CALLS_AUTOLEAD_OUTBOUND / CALLS_AUTOLEAD_STATUS_ID config keys).
+const _multer = require('multer');
+const _recUpload = _multer({
+  storage: _multer.memoryStorage(),
+  limits: { fileSize: 100 * 1024 * 1024 }
+});
+app.post('/api/recordings', _recUpload.single('audio'), (req, res, next) => {
+  if (!req.tenant) return res.status(404).json({ error: 'Tenant not found' });
+  const tenantDb = require('./db/pg');
+  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug },
+    async () => {
+      try {
+        const { authUser } = require('./utils/auth');
+        const recRoutes = require('./routes/recordings');
+        const db = tenantDb;
+        const token = (req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+        const me = await authUser(token);
+        if (!req.file) return res.status(400).json({ error: 'audio file required' });
+        const phone = String(req.body.phone || '').trim();
+        const direction = String(req.body.direction || 'out').toLowerCase();
+        let leadId = Number(req.body.lead_id) || null;
+        let autoCreated = false;
+        if (!leadId && phone) {
+          const lead = await recRoutes._findLeadByPhone(phone);
+          if (lead) leadId = lead.id;
+        }
+        // ---- Auto-create-lead policy ----
+        if (!leadId && phone) {
+          const cfgIn   = await db.getConfig('CALLS_AUTOLEAD_INBOUND', '1');
+          const cfgOut  = await db.getConfig('CALLS_AUTOLEAD_OUTBOUND', '0');
+          const cfgStId = Number(await db.getConfig('CALLS_AUTOLEAD_STATUS_ID', '0')) || 0;
+          const isIn  = direction === 'in' || direction === 'missed';
+          const isOut = direction === 'out' || direction === 'outgoing';
+          const allow = (isIn && String(cfgIn) === '1') || (isOut && String(cfgOut) === '1');
+          if (allow) {
+            try {
+              let statusId = null;
+              if (cfgStId) {
+                try { const found = await db.findById('statuses', cfgStId); if (found) statusId = found.id; } catch (_) {}
+              }
+              if (!statusId) {
+                const newSt = await db.findOneBy('statuses', 'name', 'New');
+                statusId = newSt ? newSt.id : null;
+              }
+              const sourceLabel = isIn
+                ? (direction === 'missed' ? 'Missed Call' : 'Inbound Call')
+                : 'Outbound Call';
+              leadId = await db.insert('leads', {
+                name:        phone,
+                phone:       phone,
+                whatsapp:    phone,
+                source:      sourceLabel,
+                source_ref:  'auto-created from call recording sync',
+                status_id:   statusId,
+                assigned_to: me.id,
+                notes:       'Auto-created from ' + sourceLabel.toLowerCase() + ' recording',
+                created_by:  me.id,
+                created_at:  db.nowIso(),
+                updated_at:  db.nowIso(),
+                last_status_change_at: db.nowIso()
+              });
+              autoCreated = true;
+              try {
+                await db.insert('remarks', {
+                  lead_id: leadId, user_id: me.id,
+                  remark: '🎙 Recording arrived from ' + sourceLabel.toLowerCase() + ' · auto-created lead',
+                  status_id: statusId
+                });
+              } catch (_) {}
+            } catch (e) { console.warn('[recordings] auto-create lead failed:', e.message); }
+          }
+        }
+        const id = await db.insert('lead_recordings', {
+          lead_id: leadId,
+          user_id: me.id,
+          phone,
+          direction,
+          duration_s: Number(req.body.duration_s) || 0,
+          device_path: String(req.body.device_path || ''),
+          mime_type: req.file.mimetype || 'audio/m4a',
+          size_bytes: req.file.size || 0,
+          audio_bytes: req.file.buffer,
+          started_at: req.body.started_at || db.nowIso(),
+          created_at: db.nowIso()
+        });
+        try {
+          await db.insert('call_events', {
+            lead_id: leadId, user_id: me.id, phone, direction,
+            event: 'recording_saved',
+            duration_s: Number(req.body.duration_s) || 0,
+            recording_id: id, created_at: db.nowIso()
+          });
+        } catch (_) {}
+        res.json({ ok: true, id, lead_id: leadId, auto_created: autoCreated });
+      } catch (e) {
+        console.error('[/api/recordings] tenant upload error:', e.message);
+        res.status(400).json({ error: e.message });
+      }
+    });
+});
+
+// ---- Stream uploaded audio bytes (token in query string) ----
+app.get('/api/recordings/:id/audio', (req, res, next) => {
+  if (!req.tenant) return res.status(404).json({ error: 'Tenant not found' });
+  const tenantDb = require('./db/pg');
+  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug },
+    async () => {
+      try {
+        const { authUser } = require('./utils/auth');
+        const token = req.query.token || req.headers['x-auth-token'] || '';
+        await authUser(token);
+        const r = await tenantDb.query(
+          `SELECT mime_type, audio_bytes, size_bytes FROM lead_recordings WHERE id = $1`,
+          [Number(req.params.id)]
+        );
+        const row = r.rows[0];
+        if (!row) return res.status(404).end();
+        res.setHeader('Content-Type', row.mime_type || 'audio/m4a');
+        if (row.size_bytes) res.setHeader('Content-Length', row.size_bytes);
+        res.end(row.audio_bytes);
+      } catch (e) { res.status(400).json({ error: e.message }); }
+    });
 });
 
 // ---- Per-tenant DB injection ---------------------------------------
