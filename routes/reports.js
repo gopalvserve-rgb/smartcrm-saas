@@ -761,4 +761,138 @@ async function api_reports_callRatingByUser(token, filters) {
 // AI usage report — call-recording transcription cost.
 //
 // The "AI usage" page under Calls in the tenant sidebar shows the
-// tenant's Gemini spend on call transcription / summarisa
+// tenant's Gemini spend on call transcription / summarisation. Each
+// row in lead_recordings carries the AI cost we incurred (input +
+// output tokens, USD, INR). We aggregate that over the current
+// month + all-time, plus a per-rep breakdown.
+// ============================================================
+
+function _monthBoundsIso() {
+  const now = new Date();
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const next  = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+  return { start: start.toISOString(), next: next.toISOString(), label: now.toLocaleString('en', { month: 'long', year: 'numeric' }) };
+}
+
+async function api_reports_aiUsage(token, _opts) {
+  await authUser(token);
+  const m = _monthBoundsIso();
+
+  const monthRes = await db.query(
+    `SELECT
+       COUNT(*) FILTER (WHERE ai_cost_inr IS NOT NULL)::int                         AS calls,
+       COALESCE(SUM(duration_s) FILTER (WHERE ai_cost_inr IS NOT NULL), 0)::int     AS audio_seconds,
+       COALESCE(SUM(ai_cost_inr), 0)                                                AS cost_inr_billable,
+       COALESCE(SUM(ai_cost_usd), 0)                                                AS cost_usd
+       FROM lead_recordings
+      WHERE created_at >= $1 AND created_at < $2`,
+    [m.start, m.next]
+  );
+  const monthRow = monthRes.rows[0] || {};
+
+  const allRes = await db.query(
+    `SELECT
+       COUNT(*) FILTER (WHERE ai_cost_inr IS NOT NULL)::int                         AS calls,
+       COALESCE(SUM(duration_s) FILTER (WHERE ai_cost_inr IS NOT NULL), 0)::int     AS audio_seconds,
+       COALESCE(SUM(ai_cost_inr), 0)                                                AS cost_inr_billable
+       FROM lead_recordings`
+  );
+  const allRow = allRes.rows[0] || {};
+
+  const byUserRes = await db.query(
+    `SELECT u.id, u.name AS user_name,
+            COUNT(r.*)::int                              AS calls,
+            COALESCE(SUM(r.duration_s), 0)::int          AS audio_seconds,
+            COALESCE(SUM(r.ai_cost_inr), 0)              AS cost_inr_billable
+       FROM lead_recordings r
+       LEFT JOIN users u ON u.id = r.user_id
+      WHERE r.created_at >= $1 AND r.created_at < $2 AND r.ai_cost_inr IS NOT NULL
+      GROUP BY u.id, u.name
+      ORDER BY cost_inr_billable DESC NULLS LAST
+      LIMIT 50`,
+    [m.start, m.next]
+  );
+
+  // Run-rate forecast: cost so far / day-of-month × days-in-month.
+  const now = new Date();
+  const dayOfMonth = now.getUTCDate();
+  const daysInMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).getUTCDate();
+  const forecast = (Number(monthRow.cost_inr_billable || 0) / Math.max(1, dayOfMonth)) * daysInMonth;
+
+  return {
+    month: m.label,
+    this_month: {
+      calls:             Number(monthRow.calls || 0),
+      audio_minutes:     Math.round(Number(monthRow.audio_seconds || 0) / 60),
+      cost_inr_billable: Number(Number(monthRow.cost_inr_billable || 0).toFixed(2)),
+      cost_usd:          Number(Number(monthRow.cost_usd || 0).toFixed(6)),
+    },
+    all_time: {
+      calls:             Number(allRow.calls || 0),
+      audio_minutes:     Math.round(Number(allRow.audio_seconds || 0) / 60),
+      cost_inr_billable: Number(Number(allRow.cost_inr_billable || 0).toFixed(2)),
+    },
+    forecast_monthly_inr: Number(forecast.toFixed(2)),
+    by_user: byUserRes.rows.map(r => ({
+      user_name:         r.user_name || '\u2014 Unassigned \u2014',
+      calls:             Number(r.calls || 0),
+      audio_minutes:     Math.round(Number(r.audio_seconds || 0) / 60),
+      cost_inr_billable: Number(Number(r.cost_inr_billable || 0).toFixed(2)),
+    })),
+  };
+}
+
+/**
+ * Cost estimator — projects what N minutes of AI call analysis will
+ * cost the tenant. Anchors per-minute rate on this month's actual
+ * usage when available; falls back to a sane default when there's no
+ * history yet.
+ */
+async function api_reports_aiCostEstimator(token, opts) {
+  await authUser(token);
+  const o = opts || {};
+  const minutes = Math.max(1, Number(o.minutes || 100));
+  const avgCallMinutes = Math.max(0.5, Number(o.avgCallMinutes || 5));
+
+  const m = _monthBoundsIso();
+  const r = await db.query(
+    `SELECT COALESCE(SUM(ai_cost_inr), 0)        AS cost_inr,
+            COALESCE(SUM(duration_s), 0)::int    AS audio_seconds
+       FROM lead_recordings
+      WHERE created_at >= $1 AND created_at < $2 AND ai_cost_inr IS NOT NULL`,
+    [m.start, m.next]
+  );
+  const row = r.rows[0] || {};
+  const minSoFar = Number(row.audio_seconds || 0) / 60;
+  const inrSoFar = Number(row.cost_inr || 0);
+  const perMinute = minSoFar > 1 ? (inrSoFar / minSoFar) : 0.40;
+  const perCall   = perMinute * avgCallMinutes;
+
+  const totalCost = perMinute * minutes;
+  const calls     = Math.round(minutes / avgCallMinutes);
+
+  const examples = [50, 100, 250, 500, 1000, 2500].map(n => ({
+    label: n + ' min',
+    cost_inr_billable: Number((perMinute * n).toFixed(2)),
+  }));
+
+  return {
+    minutes, calls, avg_call_minutes: avgCallMinutes,
+    per_minute_inr_billable: Number(perMinute.toFixed(4)),
+    per_call_inr_billable:   Number(perCall.toFixed(4)),
+    cost_inr_billable:       Number(totalCost.toFixed(2)),
+    examples,
+    derived_from: minSoFar > 1
+      ? ('Anchored on this month\'s actual ' + minSoFar.toFixed(0) + ' min @ \u20b9' + perMinute.toFixed(3) + '/min')
+      : 'Using default rate \u20b90.40/min \u2014 no usage history yet'
+  };
+}
+
+module.exports = {
+  api_reports_summary, api_reports_funnel, api_reports_daily,
+  api_reports_exportLeads, api_reports_groupBy,
+  api_reports_followupsByUser, api_reports_tatViolationsByUser,
+  api_reports_callRatingByUser,
+  api_reports_aiUsage, api_reports_aiCostEstimator,
+  api_calendar_events
+};
