@@ -9395,6 +9395,7 @@ VIEWS.admin = async (view) => {
     { id: 'projstages',   label: '🚚 Project stages' },
     { id: 'integrations', label: '🔌 Integrations' },
     { id: 'roles',        label: '📛 Roles' },
+    { id: 'campaigns',   label: '🎯 Campaigns' },
     { id: 'pullleads',    label: '📥 Lead Pull' },
     { id: 'dangerzone',   label: '🛑 Danger zone' }
   ];
@@ -9433,10 +9434,290 @@ async function showAdminTab(id) {
     if (id === 'integrations') body.replaceChildren(await adminIntegrations());
     if (id === 'roles')     body.replaceChildren(await adminRoles());
     if (id === 'pullleads') body.replaceChildren(await adminPullLeads());
+    if (id === 'campaigns') body.replaceChildren(await adminCampaigns());
     if (id === 'dangerzone') body.replaceChildren(await adminDangerZone());
   } catch (e) { body.innerHTML = `<div class="error-box">${esc(e.message)}</div>`; }
 }
 
+
+
+// ----------------------------------------------------------------
+// 🎯 Campaigns — admin UI for the campaigns + campaign_agents tables.
+// Phase 1: list / create / edit / pause / delete.
+// Distribution enforcement, automation hooks, and the conditional
+// rules editor land in Phases 2-4 (see migrations/2026_05_08_campaigns.sql
+// for the per-mode semantics).
+// ----------------------------------------------------------------
+const CAMPAIGN_MODES = [
+  { value: 'on_demand',   label: 'On Demand',
+    desc:  "Leads stay unassigned until an agent calls Pull. The system then assigns them in batches (size set below)." },
+  { value: 'equal',       label: 'Equal',
+    desc:  'New leads are distributed evenly across all agents so totals stay balanced over time.' },
+  { value: 'round_robin', label: 'Round Robin',
+    desc:  'Strict cursor — agent A, then B, then C, then back to A. Order is deterministic across server restarts.' },
+  { value: 'percentage',  label: 'Percentage',
+    desc:  'Each agent receives the percentage of new leads you set. The percentages must add up to 100.' },
+  { value: 'conditional', label: 'Conditional',
+    desc:  'Routes each lead by source / city / product / custom-field rules you define. (Editor lands in Phase 4.)' }
+];
+const CAMPAIGN_REMOVED_ACTIONS = [
+  { value: 'pool',    label: 'Return to unassigned pool',
+    desc:  "Their open leads go back into the pool to be redistributed by the campaign's mode." },
+  { value: 'hidden',  label: 'Keep hidden until reassigned',
+    desc:  'Their open leads stay assigned to that user but are hidden from every list until an admin reassigns them.' },
+  { value: 'manager', label: 'Reassign to campaign manager',
+    desc:  "Their open leads are handed to the manager set on the campaign." }
+];
+
+async function adminCampaigns() {
+  const root = h('div', { class: 'admin-section' });
+  root.appendChild(h('h3', {}, '🎯 Campaigns'));
+  root.appendChild(h('p', { class: 'muted' },
+    'Group leads under named campaigns and decide how each campaign distributes new leads to its agents. ' +
+    'Phase 1 = create / edit / pause. Distribution enforcement, automation hooks (WhatsApp / Email on lead events), ' +
+    'and conditional rules ship in follow-up phases.'
+  ));
+
+  let rows = [];
+  try { rows = await api('api_campaigns_list'); } catch (e) {
+    root.appendChild(h('div', { class: 'error-box' }, esc(e.message)));
+    return root;
+  }
+
+  root.appendChild(h('div', { class: 'row gap', style: { marginBottom: '.75rem' } },
+    h('button', { class: 'btn primary', onclick: () => openCampaignEditModal(null, () => showAdminTab('campaigns')) },
+      '+ Create campaign')
+  ));
+
+  if (!rows.length) {
+    root.appendChild(h('div', { class: 'muted' }, 'No campaigns yet.'));
+    return root;
+  }
+
+  const table = h('table', { class: 'data-table' });
+  table.appendChild(h('thead', {},
+    h('tr', {},
+      h('th', {}, 'Name'),
+      h('th', {}, 'Pipeline'),
+      h('th', {}, 'Manager'),
+      h('th', {}, 'Mode'),
+      h('th', {}, 'Agents'),
+      h('th', {}, 'Leads'),
+      h('th', {}, 'Status'),
+      h('th', {}, '')
+    )
+  ));
+  const tbody = h('tbody', {});
+  rows.forEach(r => {
+    const modeLabel = (CAMPAIGN_MODES.find(m => m.value === r.distribution_mode) || {}).label || r.distribution_mode;
+    tbody.appendChild(h('tr', {},
+      h('td', {}, h('strong', {}, esc(r.name))),
+      h('td', {}, esc(r.pipeline || '—')),
+      h('td', {}, esc(r.manager_name || '—')),
+      h('td', {}, modeLabel),
+      h('td', {}, String(r.agent_count || 0)),
+      h('td', {}, String(r.lead_count || 0)),
+      h('td', {},
+        Number(r.is_active) === 1
+          ? h('span', { class: 'badge ok' }, 'Active')
+          : h('span', { class: 'badge warn' }, 'Paused')
+      ),
+      h('td', { style: { textAlign: 'right' } },
+        h('button', { class: 'btn sm',
+          onclick: () => openCampaignEditModal(r, () => showAdminTab('campaigns')) }, '✎ Edit'),
+        ' ',
+        h('button', { class: 'btn sm',
+          onclick: async () => {
+            try {
+              await api('api_campaigns_pause', r.id, Number(r.is_active) === 1);
+              showAdminTab('campaigns');
+            } catch (e) { toast(e.message, 'err'); }
+          } }, Number(r.is_active) === 1 ? '⏸ Pause' : '▶ Resume'),
+        ' ',
+        h('button', { class: 'btn sm danger',
+          onclick: async () => {
+            if (!await confirmDialog(`Delete campaign "${r.name}"?`)) return;
+            try { await api('api_campaigns_delete', r.id); toast('Deleted'); showAdminTab('campaigns'); }
+            catch (e) { toast(e.message, 'err'); }
+          } }, '🗑')
+      )
+    ));
+  });
+  table.appendChild(tbody);
+  root.appendChild(table);
+  return root;
+}
+
+async function openCampaignEditModal(camp, onSaved) {
+  const isNew = !camp;
+  // Hydrate full record on edit so we have the agents list.
+  if (!isNew && (!camp.agents || !camp.agents.length)) {
+    try { camp = await api('api_campaigns_get', camp.id); } catch (e) { toast(e.message, 'err'); return; }
+  }
+  const users = (CRM.cache && CRM.cache.users) || (await api('api_users_list'));
+  const activeUsers = users.filter(u => Number(u.is_active) !== 0);
+
+  const m = h('div', { class: 'modal-backdrop',
+    onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const modal = h('div', { class: 'modal', style: { maxWidth: '640px' } });
+  modal.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, isNew ? 'Create campaign' : 'Edit campaign'),
+    h('button', { class: 'btn icon', onclick: () => m.remove() }, '✕')
+  ));
+  const body = h('div', { class: 'modal-body' });
+
+  // Name
+  const nameI = h('input', { type: 'text', value: camp ? (camp.name || '') : '',
+    placeholder: 'e.g., 11–12 Mar26 SR Imp School', style: { width: '100%' } });
+  body.appendChild(h('label', {}, 'Name'));
+  body.appendChild(nameI);
+
+  // Pipeline (free-form text — no pipelines table yet)
+  const pipeI = h('input', { type: 'text', value: camp ? (camp.pipeline || '') : '',
+    placeholder: 'Optional · e.g., Pre-Sales', style: { width: '100%' } });
+  body.appendChild(h('label', { style: { marginTop: '.6rem' } }, 'Pipeline'));
+  body.appendChild(pipeI);
+
+  // Manager
+  const managerS = h('select', { style: { width: '100%' } },
+    h('option', { value: '' }, '— Choose manager —'),
+    ...activeUsers.map(u => h('option', { value: String(u.id) },
+      `${u.name} · ${u.role}`))
+  );
+  if (camp && camp.manager_user_id) managerS.value = String(camp.manager_user_id);
+  body.appendChild(h('label', { style: { marginTop: '.6rem' } }, 'Who will manage this campaign?'));
+  body.appendChild(managerS);
+
+  // Agents (multi-select via checkboxes — easier on mobile than a multi-select)
+  body.appendChild(h('label', { style: { marginTop: '.6rem' } }, 'Agents on this campaign'));
+  const agentBox = h('div', {
+    style: { border: '1px solid #e2e8f0', borderRadius: '8px', padding: '.5rem',
+             maxHeight: '220px', overflowY: 'auto', display: 'grid',
+             gridTemplateColumns: '1fr', gap: '.25rem' }
+  });
+  const existingAgentIds = new Set((camp && camp.agents || []).filter(a => Number(a.is_active) === 1).map(a => Number(a.user_id)));
+  const existingAgentWeights = new Map((camp && camp.agents || []).map(a => [Number(a.user_id), Number(a.weight_pct || 100)]));
+  const agentRows = activeUsers.map(u => {
+    const cb = h('input', { type: 'checkbox', value: String(u.id) });
+    cb.checked = existingAgentIds.has(u.id);
+    const wInput = h('input', { type: 'number', min: '0', max: '100', step: '1',
+      value: String(existingAgentWeights.get(u.id) || 100),
+      style: { width: '70px', display: 'none' } });
+    const row = h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem' } },
+      cb, h('span', { style: { flex: 1 } }, `${u.name} · ${u.role}`), wInput, h('span', { style: { display: 'none', color: '#64748b' } }, '%'));
+    row.querySelectorAll('span')[1].style.display = 'none';   // % label hidden by default
+    row._cb = cb; row._w = wInput; row._userId = u.id;
+    agentBox.appendChild(row);
+    return row;
+  });
+
+  // Distribution mode
+  body.appendChild(h('label', { style: { marginTop: '.6rem' } }, 'Lead distribution'));
+  const modeWrap = h('div', { style: { display: 'grid', gap: '.4rem' } });
+  const modeRadios = CAMPAIGN_MODES.map(m => {
+    const radio = h('input', { type: 'radio', name: 'cmode', value: m.value });
+    radio.checked = (camp && camp.distribution_mode === m.value) || (!camp && m.value === 'on_demand');
+    const lab = h('label', {
+      style: { display: 'block', border: '1px solid #e2e8f0', borderRadius: '8px',
+               padding: '.55rem .7rem', cursor: 'pointer' }
+    },
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: '.4rem' } },
+        radio, h('strong', {}, m.label)),
+      h('div', { class: 'muted', style: { fontSize: '.85rem', marginLeft: '1.4rem', marginTop: '.15rem' } }, m.desc)
+    );
+    modeWrap.appendChild(lab);
+    return radio;
+  });
+  body.appendChild(modeWrap);
+
+  // Toggle weight inputs visibility based on selected mode
+  function refreshWeightVisibility() {
+    const sel = modeRadios.find(r => r.checked);
+    const isPct = sel && sel.value === 'percentage';
+    agentRows.forEach(r => {
+      r._w.style.display = isPct ? 'inline-block' : 'none';
+      r.querySelectorAll('span')[1].style.display = isPct ? 'inline' : 'none';
+    });
+  }
+  modeRadios.forEach(r => r.addEventListener('change', refreshWeightVisibility));
+  body.appendChild(agentBox);
+  // Re-call after agentBox is appended so weight inputs reflect initial mode
+  refreshWeightVisibility();
+
+  // Pull batch settings (only relevant for on_demand but always saved)
+  body.appendChild(h('label', { style: { marginTop: '.6rem' } }, 'Pull batch — leads given on each "Start Calling"'));
+  const pullBatch = h('input', { type: 'number', min: '1', max: '500',
+    value: String((camp && camp.pull_batch_size) || 10), style: { width: '120px' } });
+  body.appendChild(pullBatch);
+  body.appendChild(h('div', { class: 'muted', style: { fontSize: '.85rem', margin: '.2rem 0' } },
+    'Used by On Demand mode. Round Robin / Equal / Percentage modes ignore this and assign on lead create.'));
+
+  const requireOld = h('input', { type: 'checkbox' });
+  requireOld.checked = camp && Number(camp.pull_require_old_updated) === 1;
+  const oldThreshold = h('input', { type: 'number', min: '0', max: '43200',
+    value: String((camp && camp.pull_old_threshold_minutes) || 60), style: { width: '100px' } });
+  body.appendChild(h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', marginTop: '.5rem' } },
+    requireOld,
+    h('span', {}, 'Block pull until previously-pulled leads older than '),
+    oldThreshold,
+    h('span', {}, ' minutes are updated')
+  ));
+
+  // Removed user action
+  body.appendChild(h('label', { style: { marginTop: '.6rem' } }, 'When an agent is removed from this campaign'));
+  const ruWrap = h('div', { style: { display: 'grid', gap: '.4rem' } });
+  const ruRadios = CAMPAIGN_REMOVED_ACTIONS.map(a => {
+    const radio = h('input', { type: 'radio', name: 'cruact', value: a.value });
+    radio.checked = (camp && camp.removed_user_action === a.value) || (!camp && a.value === 'pool');
+    const lab = h('label', {
+      style: { display: 'block', border: '1px solid #e2e8f0', borderRadius: '8px',
+               padding: '.55rem .7rem', cursor: 'pointer' }
+    },
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: '.4rem' } },
+        radio, h('strong', {}, a.label)),
+      h('div', { class: 'muted', style: { fontSize: '.85rem', marginLeft: '1.4rem', marginTop: '.15rem' } }, a.desc)
+    );
+    ruWrap.appendChild(lab);
+    return radio;
+  });
+  body.appendChild(ruWrap);
+
+  modal.appendChild(body);
+  const foot = h('div', { class: 'modal-foot' },
+    h('button', { class: 'btn', onclick: () => m.remove() }, 'Cancel'),
+    h('button', { class: 'btn primary', onclick: async () => {
+      try {
+        const mode = (modeRadios.find(r => r.checked) || {}).value || 'on_demand';
+        const removedAction = (ruRadios.find(r => r.checked) || {}).value || 'pool';
+        const agents = agentRows.filter(r => r._cb.checked).map(r => ({
+          user_id:    r._userId,
+          weight_pct: Number(r._w.value || 100)
+        }));
+        const payload = {
+          id: camp ? camp.id : undefined,
+          name: nameI.value.trim(),
+          pipeline: pipeI.value.trim() || null,
+          manager_user_id: managerS.value ? Number(managerS.value) : null,
+          distribution_mode: mode,
+          pull_batch_size: Number(pullBatch.value || 10),
+          pull_initial_count: Number(pullBatch.value || 10),
+          pull_require_old_updated: requireOld.checked,
+          pull_old_threshold_minutes: Number(oldThreshold.value || 60),
+          removed_user_action: removedAction,
+          agents
+        };
+        if (!payload.name) { toast('Name is required', 'err'); return; }
+        await api('api_campaigns_save', payload);
+        toast('Saved');
+        m.remove();
+        if (typeof onSaved === 'function') onSaved();
+      } catch (e) { toast(e.message, 'err'); }
+    } }, 'Save')
+  );
+  modal.appendChild(foot);
+  m.appendChild(modal);
+  document.body.appendChild(m);
+}
 
 async function adminPullLeads() {
   const cfg = await api('api_admin_getConfig');

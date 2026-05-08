@@ -33,6 +33,7 @@ const ROUTE_FILES = [
   'admin',
   'announcements',
   'auth',
+  'campaigns',
   'automations',
   'chat',
   'customFields',
