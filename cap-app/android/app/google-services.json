@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "405853528441",
+    "project_id": "app-mobile-7f4c6",
+    "storage_bucket": "app-mobile-7f4c6.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:405853528441:android:fd636151fcc80cf79a8fa8",
+        "android_client_info": {
+          "package_name": "app.leadcrm.mobile"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBe9mDxGYAk4fmnIgpPjHwOH5I1waxANwY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

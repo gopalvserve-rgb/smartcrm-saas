@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Lead CRM</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIMainStoryboardFile</key>
+	<string>Main</string>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>armv7</string>
+	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<true/>
+
+	<!-- ============================================================
+	     Privacy permissions — every UsageDescription is REQUIRED for
+	     App Store review when the app references the corresponding
+	     framework. Wording must be in user-facing English; reviewers
+	     reject bare "for app function" text.
+	     ============================================================ -->
+	<key>NSContactsUsageDescription</key>
+	<string>Lead CRM uses your contacts so you can save phone numbers from your address book as new leads with one tap.</string>
+
+	<key>NSCameraUsageDescription</key>
+	<string>Lead CRM uses the camera to take a quick selfie when you check in for attendance, and to capture documents you want to attach to a lead.</string>
+
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Lead CRM lets you attach photos to leads from your gallery (e.g. business card scans, signed quotes).</string>
+
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Lead CRM saves marketing assets and reports back to your photo library when you tap Download.</string>
+
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Lead CRM records your location when you check in for attendance, and tags field-visit leads with their meeting location.</string>
+
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Lead CRM uses the microphone for in-app voice notes attached to a lead. (iOS does not allow recording phone calls.)</string>
+
+	<key>NSFaceIDUsageDescription</key>
+	<string>Lead CRM uses Face ID to keep your CRM session locked when the app is in the background.</string>
+
+	<key>NSUserNotificationsUsageDescription</key>
+	<string>Lead CRM sends a notification when a new lead arrives, when a follow-up is due, and when a teammate assigns you a lead.</string>
+
+	<!-- Allow tel:, mailto:, sms:, and WhatsApp deep links -->
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>tel</string>
+		<string>telprompt</string>
+		<string>sms</string>
+		<string>mailto</string>
+		<string>whatsapp</string>
+	</array>
+
+	<!-- Background fetch + remote notifications so new-lead polling works
+	     for a few minutes after the user backgrounds the app -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+		<string>remote-notification</string>
+	</array>
+
+	<!-- ATS — allow the Railway HTTPS host (HTTPS already required by default,
+	     this just future-proofs us if you ever need to talk to a non-TLS
+	     internal endpoint behind a tunnel) -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<false/>
+	</dict>
+
+	<!-- Status bar style — light content over our brand-colored topbar -->
+	<key>UIStatusBarStyle</key>
+	<string>UIStatusBarStyleLightContent</string>
+	<key>UIStatusBarHidden</key>
+	<false/>
+</dict>
+</plist>

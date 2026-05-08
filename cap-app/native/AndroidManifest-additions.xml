@@ -1,0 +1,33 @@
+<!--
+  Merge these into android/app/src/main/AndroidManifest.xml.
+
+  - The <uses-permission> lines go INSIDE <manifest> at the top, before <application>.
+  - The <receiver> + <activity> updates go INSIDE <application>.
+-->
+
+<!-- ===== Permissions (top-level inside <manifest>) ===== -->
+<uses-permission android:name="android.permission.READ_PHONE_STATE" />
+<uses-permission android:name="android.permission.READ_CALL_LOG" />
+<uses-permission android:name="android.permission.PROCESS_OUTGOING_CALLS"
+                 android:maxSdkVersion="28" />
+<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+                 android:maxSdkVersion="32" />
+<uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+<uses-permission android:name="android.permission.INTERNET" />
+
+<!-- ===== Inside <application> ===== -->
+
+<!--
+  PhoneStateReceiver registers itself dynamically from CallerIdPlugin.start().
+  We DO NOT declare it in the manifest — that would require special
+  Play Store review for "core functionality requires call state",
+  whereas dynamic registration only needs the standard sensitive-permission
+  declaration.
+-->
+
+<!--
+  The wrapped web app loads from your live URL. The MainActivity is the
+  Capacitor-generated one; we just need to register the plugin in
+  onCreate(). That happens in MainActivity.java, NOT in the manifest.
+-->

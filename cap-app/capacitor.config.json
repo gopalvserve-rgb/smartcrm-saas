@@ -1,0 +1,36 @@
+{
+  "appId": "app.leadcrm.mobile",
+  "appName": "Lead CRM",
+  "webDir": "www",
+  "server": {
+    "url": "https://crm.smartcrmsolution.com/app",
+    "cleartext": false,
+    "androidScheme": "https",
+    "iosScheme": "https",
+    "allowNavigation": [
+      "crm.smartcrmsolution.com",
+      "*.smartcrmsolution.com",
+      "tel:*",
+      "mailto:*",
+      "whatsapp:*"
+    ]
+  },
+  "android": {
+    "allowMixedContent": false,
+    "backgroundColor": "#0E1A14",
+    "webContentsDebuggingEnabled": false
+  },
+  "plugins": {
+    "CallerId": {
+      "enabled": true
+    }
+  },
+  "ios": {
+    "backgroundColor": "#0F172A",
+    "contentInset": "always",
+    "limitsNavigationsToAppBoundDomains": false,
+    "scrollEnabled": true,
+    "preferredContentMode": "mobile",
+    "scheme": "App"
+  }
+}

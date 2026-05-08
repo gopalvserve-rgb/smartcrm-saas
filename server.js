@@ -93,6 +93,10 @@ const _staticOpts = {
   }
 };
 app.use('/saas', express.static(path.join(__dirname, 'public', 'saas'), _staticOpts));
+app.get('/app', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.sendFile(path.join(__dirname, 'public', 'saas', 'app', 'index.html'));
+});
 app.get('/', (_req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.sendFile(path.join(__dirname, 'public', 'saas', 'index.html'));

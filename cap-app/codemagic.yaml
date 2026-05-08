@@ -1,0 +1,74 @@
+# Codemagic iOS build pipeline for Lead CRM
+# Lets you compile + sign + ship the iOS app to TestFlight WITHOUT a Mac.
+#
+# Setup once:
+#   1. https://codemagic.io → sign up with GitHub
+#   2. Add your repo → workflow: "ios-app-store"
+#   3. In codemagic.io → Teams → Integrations → Apple Developer Portal:
+#      paste your App Store Connect API key (issuer ID, key ID, .p8 file)
+#   4. Push this file to your repo. Click Start build. Done.
+#
+# Free tier: 500 build minutes/month — 1 iOS build ≈ 8-12 mins → ~50 builds/month free.
+
+workflows:
+  ios-app-store:
+    name: Lead CRM iOS — TestFlight
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    integrations:
+      app_store_connect: codemagic-app-store-key  # name you give your API key in Codemagic UI
+    environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: app.leadcrm.mobile
+      vars:
+        APP_STORE_APPLE_ID: 0000000000  # replace with your numeric Apple ID after creating the app entry
+        XCODE_WORKSPACE: "ios/App/App.xcworkspace"
+        XCODE_SCHEME: "App"
+      node: 20
+      xcode: 15.4
+      cocoapods: default
+    scripts:
+      - name: Install npm dependencies
+        script: |
+          cd cap-app
+          npm install
+      - name: Capacitor sync
+        script: |
+          cd cap-app
+          npx cap sync ios
+      - name: Pod install
+        script: |
+          cd cap-app/ios/App
+          pod install
+      - name: Set up code signing
+        script: |
+          keychain initialize
+          app-store-connect fetch-signing-files \
+            "$(xcode-project detect-bundle-id --target App)" \
+            --type IOS_APP_STORE \
+            --create
+          keychain add-certificates
+          xcode-project use-profiles
+      - name: Increment build number
+        script: |
+          cd cap-app/ios/App
+          LATEST_BUILD_NUMBER=$(app-store-connect get-latest-app-store-build-number "$APP_STORE_APPLE_ID" || echo 0)
+          agvtool new-version -all $(($LATEST_BUILD_NUMBER + 1))
+      - name: Build .ipa
+        script: |
+          cd cap-app
+          xcode-project build-ipa \
+            --workspace "ios/App/App.xcworkspace" \
+            --scheme "App"
+    artifacts:
+      - cap-app/build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.app
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+        beta_groups:
+          - Internal Testers
