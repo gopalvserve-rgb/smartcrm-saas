@@ -45,7 +45,6 @@ const routes = {
   automations: require('./routes/automations'),
   whatsapp:    require('./routes/whatsapp'),
   permissions: require('./routes/permissions'),
-  roles:       require('./routes/roles'),
   recordings:  require('./routes/recordings'),
   push:        require('./routes/push'),
   knowledge:   require('./routes/knowledgeBase'),
@@ -282,16 +281,38 @@ app.get('/api/docs', (req, res) => {
   });
 });
 
-// Direct download links for the signed APK + AAB
+// Direct download links for the signed APK + AAB.
+// Falls back to APK_DOWNLOAD_URL env var (set in Railway) when the file
+// isn't bundled in the container image (the common case for cloud deploys).
+const fs = require('fs');
 app.get('/LeadCRM.apk', (req, res) => {
-  res.setHeader('Content-Disposition', 'attachment; filename="LeadCRM.apk"');
-  res.setHeader('Content-Type', 'application/vnd.android.package-archive');
-  res.sendFile(path.join(__dirname, 'public', 'LeadCRM.apk'));
+  const localPath = path.join(__dirname, 'public', 'LeadCRM.apk');
+  if (fs.existsSync(localPath)) {
+    res.setHeader('Content-Disposition', 'attachment; filename="LeadCRM.apk"');
+    res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+    return res.sendFile(localPath, err => {
+      if (err && !res.headersSent) {
+        const ext = process.env.APK_DOWNLOAD_URL || '';
+        if (ext) return res.redirect(302, ext);
+        res.status(404).type('text').send('APK not available. Ask your admin to set APK_DOWNLOAD_URL on the server.');
+      }
+    });
+  }
+  const ext = process.env.APK_DOWNLOAD_URL || '';
+  if (ext) return res.redirect(302, ext);
+  res.status(404).type('html').send(`
+    <h2>APK not available</h2>
+    <p>The Android APK has not been uploaded to this server yet.</p>
+    <p>Please install the app as a <a href="/">PWA</a> instead, or ask your admin to set the <code>APK_DOWNLOAD_URL</code> environment variable on Railway.</p>
+  `);
 });
 app.get('/LeadCRM.aab', (req, res) => {
+  const localPath = path.join(__dirname, 'public', 'LeadCRM.aab');
   res.setHeader('Content-Disposition', 'attachment; filename="LeadCRM.aab"');
   res.setHeader('Content-Type', 'application/octet-stream');
-  res.sendFile(path.join(__dirname, 'public', 'LeadCRM.aab'));
+  res.sendFile(localPath, err => {
+    if (err && !res.headersSent) res.status(404).type('text').send('AAB not available.');
+  });
 });
 // Pretty "get the app" page
 app.get('/install', (req, res) => {
@@ -363,10 +384,18 @@ function _csvCell(v) {
 }
 
 // ---------------------------------------------------------------
-// SpreadsheetML 2003 helper — see server.js for rationale.
+// SpreadsheetML 2003 helper — generates a single XML file Excel
+// (and Numbers / LibreOffice) recognises as a real workbook. We use
+// this instead of pulling in the `xlsx` npm dep because:
+//   1. No new package = nothing to npm-install on existing deploys
+//   2. The output is trivially readable / diffable for debugging
+//   3. Excel opens it natively (no "import as text" prompt)
+// Returned as application/vnd.ms-excel with a .xls filename so the
+// browser respects the download attribute and Excel auto-associates.
 // ---------------------------------------------------------------
 function _xlsCell(v) {
   const s = v == null ? '' : String(v);
+  // SpreadsheetML uses XML-escaped strings inside <Data ss:Type="String">.
   return s
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -388,8 +417,15 @@ function _buildSampleXls(headers, rows) {
           xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"
           xmlns:o="urn:schemas-microsoft-com:office:office"
           xmlns:x="urn:schemas-microsoft-com:office:excel">
-  <Styles><Style ss:ID="hdr"><Font ss:Bold="1"/></Style></Styles>
-  <Worksheet ss:Name="Leads"><Table>${headerRow}${dataRows}</Table></Worksheet>
+  <Styles>
+    <Style ss:ID="hdr"><Font ss:Bold="1"/></Style>
+  </Styles>
+  <Worksheet ss:Name="Leads">
+    <Table>
+      ${headerRow}
+      ${dataRows}
+    </Table>
+  </Worksheet>
 </Workbook>`;
 }
 
@@ -533,6 +569,9 @@ app.get('/config.json', async (req, res) => {
     company_name:     cfg.COMPANY_NAME     || process.env.COMPANY_NAME     || 'Lead CRM',
     company_logo_url: cfg.COMPANY_LOGO_URL || process.env.COMPANY_LOGO_URL || '',
     hidden_nav_ids:   cfg.HIDDEN_NAV_IDS   || '',
+    apk_url: fs.existsSync(path.join(__dirname, 'public', 'LeadCRM.apk'))
+      ? '/LeadCRM.apk'
+      : (cfg.APK_DOWNLOAD_URL || process.env.APK_DOWNLOAD_URL || ''),
     base_url: (req.protocol + '://' + req.get('host'))
   });
 });
@@ -832,8 +871,8 @@ $data = [
     <span class="s">'tags'</span>     =&gt; <span class="s">'hot,demo-requested'</span>,   <span class="c">// or as JSON array</span>
     <span class="s">'notes'</span>    =&gt; <span class="s">'Wants a demo'</span>,
 ];
-$ch = curl_init(<span class="s">'${endpoint}'</span>);
-curl_setopt_array($ch, [
+$ch = curl_init(<span class="s">'$endpoint}'</span>);
+curl_setopt_array($ch, [
     CURLOPT_POST           =&gt; <span class="k">true</span>,
     CURLOPT_RETURNTRANSFER =&gt; <span class="k">true</span>,
     CURLOPT_HTTPHEADER     =&gt; [
