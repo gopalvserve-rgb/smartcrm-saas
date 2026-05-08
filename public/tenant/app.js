@@ -974,304 +974,447 @@ function navigateTo(id) {
 const VIEWS = {};
 
 /* ---------------- Dashboard ---------------- */
+/* ============================================================
+ * Custom Dashboard
+ * ============================================================
+ *  - Layout is per-user. Loaded from api_dashboard_get(); saved
+ *    via api_dashboard_save() when the user clicks "Done customising".
+ *  - Each entry is { id, type, size, title?, config? }.
+ *  - "type" maps into WIDGET_LIBRARY which holds a tiny renderer +
+ *    a default title. Add new widget types by adding rows there.
+ *  - Widget DATA comes from the existing api_reports_*, api_tat_*,
+ *    api_projectStages_*, api_notifications_* endpoints — we just
+ *    fetch each one once and route the result into render funcs.
+ * ============================================================ */
+
 VIEWS.dashboard = async (view) => {
   await ensureChartJs();
-  // Team follow-ups card — admin/manager/team_leader see how each rep is
-  // doing on overdue + due-today + TAT violations. Sales/employee don't
-  // (it's just their own numbers, already shown in the KPI cards above).
-  const showTeam = ['admin', 'manager', 'team_leader'].includes(CRM.user.role);
-  const [summary, due, teamFu, teamTat, funnelRows, tatReport] = await Promise.all([
-    api('api_reports_summary', {}),
-    api('api_notifications_mine'),
-    showTeam ? api('api_reports_followupsByUser').catch(() => [])      : Promise.resolve([]),
-    showTeam ? api('api_reports_tatViolationsByUser').catch(() => [])  : Promise.resolve([]),
-    api('api_reports_funnel', {}).catch(() => []),
-    api('api_tat_report', {}).catch(() => null)
-  ]);
   view.innerHTML = '';
+  CRM._dashEditMode = CRM._dashEditMode || false;
 
-  // 5 KPI cards — added "New today" so users can see today's fresh leads
-  // at a glance from the dashboard without having to filter the leads list.
-  view.append(
-    h('div', { class: 'cards' },
-      card('Total Leads',  summary.totals.total,      'accent', '🎯', '#/leads'),
-      card('New today',    due.counts.new_today || 0, 'accent', '✨', '#/leads?filter=new_today'),
-      card('Won',          summary.totals.won,        'ok',     '🏆', '#/leads?filter=won'),
-      card('Due today',    due.counts.due_today,      'warn',   '📅', '#/followups?tab=due'),
-      card('Overdue',      due.counts.overdue,        'err',    '⚠️', '#/followups?tab=overdue')
+  // Load the user's layout (or defaults). Falls back gracefully on
+  // tenant DBs that haven't received the user_dashboard migration.
+  let layoutResp;
+  try { layoutResp = await api('api_dashboard_get'); }
+  catch (e) { layoutResp = { widgets: DEFAULT_DASH_LAYOUT, is_default: true }; }
+  let widgets = (layoutResp.widgets || DEFAULT_DASH_LAYOUT).slice();
+
+  // Header bar with "✨ Customize" / "Done"
+  const head = h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '.6rem' } },
+    h('h2', { style: { margin: 0 } }, '🏠 Dashboard'),
+    h('div', { style: { display: 'flex', gap: '.4rem' } },
+      CRM._dashEditMode
+        ? h('button', { class: 'btn primary', onclick: async () => {
+            try {
+              await api('api_dashboard_save', { widgets });
+              toast('Saved');
+              CRM._dashEditMode = false;
+              VIEWS.dashboard(view);
+            } catch (e) { toast(e.message, 'err'); }
+          } }, '💾 Done customising')
+        : h('button', { class: 'btn', onclick: () => { CRM._dashEditMode = true; VIEWS.dashboard(view); } },
+            '✨ Customize'),
+      CRM._dashEditMode
+        ? h('button', { class: 'btn ghost', onclick: () => { CRM._dashEditMode = false; VIEWS.dashboard(view); } },
+            'Cancel')
+        : null,
+      CRM._dashEditMode
+        ? h('button', { class: 'btn ghost', onclick: async () => {
+            if (!await confirmDialog('Reset dashboard to default layout?')) return;
+            try { const r = await api('api_dashboard_reset'); widgets = r.widgets; toast('Reset'); CRM._dashEditMode = false; VIEWS.dashboard(view); }
+            catch (e) { toast(e.message, 'err'); }
+          } }, '🔄 Reset')
+        : null
     )
   );
+  view.appendChild(head);
 
-  // Two-column: upcoming follow-ups + pie chart
-  const grid = h('div', { class: 'dash-grid' });
+  // Pre-fetch the data each rendered widget will need. We fetch in
+  // parallel and then index by API name so widget renderers can pull
+  // their slice without further round-trips.
+  const usedTypes = new Set(widgets.map(w => w.type));
+  const fetchTasks = {};
+  if (['kpi_total_leads','kpi_won','kpi_qualified','chart_status','chart_source','chart_product','daily_volume'].some(t => usedTypes.has(t))) {
+    fetchTasks.summary = api('api_reports_summary', {}).catch(() => null);
+  }
+  if (['kpi_new_today','kpi_due_today','kpi_overdue','followups_panel'].some(t => usedTypes.has(t))) {
+    fetchTasks.notifs = api('api_notifications_mine').catch(() => null);
+  }
+  if (usedTypes.has('funnel_pipeline')) {
+    fetchTasks.funnel = api('api_reports_funnel', {}).catch(() => []);
+  }
+  if (usedTypes.has('tat_alerts')) {
+    fetchTasks.tat = api('api_tat_report', {}).catch(() => null);
+  }
+  if (usedTypes.has('project_stages')) {
+    fetchTasks.projects = api('api_projectStages_board').catch(() => null);
+  }
+  if (usedTypes.has('team_followups')) {
+    fetchTasks.teamFu = api('api_reports_followupsByUser').catch(() => []);
+  }
+  if (usedTypes.has('team_tat')) {
+    fetchTasks.teamTat = api('api_reports_tatViolationsByUser').catch(() => []);
+  }
+  if (usedTypes.has('daily_volume')) {
+    fetchTasks.daily = api('api_reports_daily', {}).catch(() => []);
+  }
+  const data = {};
+  await Promise.all(Object.entries(fetchTasks).map(async ([k, p]) => { data[k] = await p; }));
+
+  // Render the grid
+  const grid = h('div', { id: 'dash-grid', class: 'dash-grid' });
   view.appendChild(grid);
 
-  // Follow-ups card — three tabs in one box: Upcoming / Overdue / Due today.
-  // Renders the same row markup for each list so the user has a consistent
-  // glance at upcoming work no matter which tab they're on.
-  const fuCard = h('div', { class: 'card fu-tabs-card' });
-  const tabs = [
-    { key: 'upcoming',  label: 'Upcoming',  rows: due.upcoming || [] },
-    { key: 'overdue',   label: 'Overdue',   rows: due.overdue  || [] },
-    { key: 'due_today', label: 'Due today', rows: due.due_today || [] }
-  ];
-  const tabBar = h('div', { class: 'fu-tabbar' });
-  const tabBody = h('div', { class: 'fu-tabbody' });
-  function renderFuTab(activeKey) {
-    [...tabBar.children].forEach(btn => btn.classList.toggle('active', btn.dataset.key === activeKey));
-    const tab = tabs.find(t => t.key === activeKey);
-    tabBody.innerHTML = '';
-    if (!tab.rows.length) {
-      tabBody.appendChild(h('p', { class: 'muted', style: { padding: '.5rem' } },
-        activeKey === 'overdue' ? 'No overdue follow-ups. 🎉' :
-        activeKey === 'due_today' ? 'Nothing due today.' :
-        'No upcoming follow-ups.'));
+  widgets.forEach((w, idx) => {
+    const def = WIDGET_LIBRARY[w.type];
+    if (!def) {
+      grid.appendChild(h('div', { class: 'card' },
+        h('div', { class: 'muted' }, 'Unknown widget type: ' + w.type)));
       return;
     }
-    tabBody.appendChild(h('ul', { class: 'fu-dash-list' },
-      ...tab.rows.slice(0, 8).map(f => h('li', {},
-        h('div', { class: 'fu-name', onclick: () => openLeadModal(f.lead_id) }, f.lead_name || '—'),
-        h('div', { class: 'fu-phone muted' }, f.lead_phone || ''),
-        h('div', { class: 'fu-due ' + (new Date(f.due_at) < new Date() ? 'overdue' : '') }, fmtDate(f.due_at, 'relative'))
-      ))
-    ));
-    if (tab.rows.length > 8) {
-      tabBody.appendChild(h('div', { class: 'muted', style: { fontSize: '.8rem', textAlign: 'center', padding: '.4rem' } },
-        '+ ' + (tab.rows.length - 8) + ' more — see Follow-ups'));
-    }
-  }
-  tabs.forEach(t => tabBar.appendChild(
-    h('button', { class: 'fu-tab' + (t.key === 'upcoming' ? ' active' : ''), 'data-key': t.key,
-      onclick: () => renderFuTab(t.key) },
-      t.label, t.rows.length ? h('span', { class: 'fu-tab-count' }, t.rows.length) : null
-    )
-  ));
-  fuCard.appendChild(h('div', { class: 'fu-tabs-head' },
-    h('h3', { style: { margin: 0 } }, '⏰ Follow-ups'),
-    h('a', { href: '#/followups', class: 'btn sm ghost' }, 'See all →')
-  ));
-  fuCard.appendChild(tabBar);
-  fuCard.appendChild(tabBody);
-  renderFuTab('upcoming');
-  grid.appendChild(fuCard);
-
-  // Pie chart — leads by status
-  const pieCard = h('div', { class: 'card' },
-    h('h3', {}, '🎯 Leads by status'),
-    h('div', { class: 'chart-wrap' }, h('canvas', { id: 'dash-pie' }))
-  );
-  grid.appendChild(pieCard);
-
-  // 📈 Pipeline funnel — non-final statuses sorted by sort_order, sized
-  // by count. Mirrors the bigger Reports/Pipeline view so admins get
-  // the same shape on the dashboard.
-  if (Array.isArray(funnelRows) && funnelRows.length) {
-    const funnelOrdered = [...funnelRows]
-      .filter(s => Number(s.is_final) !== 1)
-      .sort((a, b) => (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0));
-    if (funnelOrdered.length) {
-      const totalLeads = funnelOrdered.reduce((n, s) => n + Number(s._c || s.count || 0), 0);
-      const topCount = Math.max(...funnelOrdered.map(s => Number(s._c || s.count || 0)), 1);
-      const funnelCard = h('div', { class: 'card card-wide' },
-        h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.6rem' } },
-          h('h3', { style: { margin: 0 } }, '📈 Pipeline funnel'),
-          h('a', { href: '#/reports', class: 'btn sm ghost' }, 'See full reports →')
+    const sizeClass = w.size === 'small' ? '' : (w.size === 'wide' ? 'card-wide' : '');
+    const card = h('div', { class: 'card ' + sizeClass });
+    if (CRM._dashEditMode) {
+      card.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px dashed #e2e8f0', padding: '.25rem .35rem .45rem', marginBottom: '.5rem' } },
+        h('span', { class: 'muted', style: { fontSize: '.78rem' } }, '🛠 ' + (w.title || def.title || w.type)),
+        h('div', { style: { display: 'flex', gap: '.2rem' } },
+          h('button', { class: 'btn sm ghost', title: 'Move up',
+            onclick: () => { if (idx > 0) { [widgets[idx-1], widgets[idx]] = [widgets[idx], widgets[idx-1]]; VIEWS.dashboard(view); } } }, '▲'),
+          h('button', { class: 'btn sm ghost', title: 'Move down',
+            onclick: () => { if (idx < widgets.length - 1) { [widgets[idx+1], widgets[idx]] = [widgets[idx], widgets[idx+1]]; VIEWS.dashboard(view); } } }, '▼'),
+          h('button', { class: 'btn sm ghost', title: 'Resize',
+            onclick: () => { w.size = w.size === 'wide' ? 'medium' : (w.size === 'medium' ? 'small' : 'wide'); VIEWS.dashboard(view); } }, '↔'),
+          h('button', { class: 'btn sm danger', title: 'Remove',
+            onclick: () => { widgets.splice(idx, 1); VIEWS.dashboard(view); } }, '🗑')
         )
-      );
-      const funnelEl = h('div', { class: 'funnel' });
-      funnelOrdered.forEach((s, i) => {
-        const c = Number(s._c || s.count || 0);
-        const pct = topCount ? (c / topCount) * 100 : 0;
-        const conv = totalLeads ? Math.round((c / totalLeads) * 100) : 0;
-        funnelEl.appendChild(h('div', { class: 'funnel-row' },
-          h('div', { class: 'funnel-label', style: { minWidth: '160px' } }, s.status || s.name || '—'),
-          h('div', { class: 'funnel-bar-wrap', style: { flex: 1, background: '#f1f5f9', borderRadius: '8px', height: '24px', position: 'relative' } },
-            h('div', { class: 'funnel-bar', style: { width: pct + '%', height: '100%', background: s.color || '#6366f1', borderRadius: '8px' } })
-          ),
-          h('div', { class: 'funnel-count', style: { minWidth: '90px', textAlign: 'right', fontWeight: 600 } }, String(c)),
+      ));
+    }
+    try { def.render(card, w.config || {}, data, w); }
+    catch (e) { card.appendChild(h('div', { class: 'error-box' }, 'Widget error: ' + e.message)); }
+    grid.appendChild(card);
+  });
+
+  if (CRM._dashEditMode) {
+    grid.appendChild(h('div', { class: 'card', style: { textAlign: 'center', border: '2px dashed #cbd5e1', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '120px' },
+      onclick: () => openAddWidgetModal((picked) => { widgets.push(picked); VIEWS.dashboard(view); }) },
+      h('div', { style: { color: '#6366f1', fontWeight: 600 } }, '+ Add widget')));
+  }
+};
+
+// Default layout used when the user hasn't customised yet.
+const DEFAULT_DASH_LAYOUT = [
+  { id: 'def-kpi-total',    type: 'kpi_total_leads',  size: 'small' },
+  { id: 'def-kpi-new',      type: 'kpi_new_today',    size: 'small' },
+  { id: 'def-kpi-won',      type: 'kpi_won',          size: 'small' },
+  { id: 'def-kpi-due',      type: 'kpi_due_today',    size: 'small' },
+  { id: 'def-kpi-overdue',  type: 'kpi_overdue',      size: 'small' },
+  { id: 'def-followups',    type: 'followups_panel',  size: 'medium' },
+  { id: 'def-status',       type: 'chart_status',     size: 'medium' },
+  { id: 'def-funnel',       type: 'funnel_pipeline',  size: 'wide'   },
+  { id: 'def-tat',          type: 'tat_alerts',       size: 'wide'   },
+  { id: 'def-projects',     type: 'project_stages',   size: 'wide'   },
+  { id: 'def-source',       type: 'chart_source',     size: 'wide'   }
+];
+
+// Lightweight KPI helper used by every kpi_* widget.
+function _renderKpi(card, label, value, klass, icon, href) {
+  card.classList.add('stat');
+  if (klass) card.classList.add(klass);
+  if (href) { card.classList.add('clickable'); card.style.cursor = 'pointer'; card.onclick = () => { location.hash = href; }; }
+  card.appendChild(h('div', { class: 'stat-icon' }, icon || ''));
+  card.appendChild(h('div', { class: 'stat-body' },
+    h('div', { class: 'stat-label' }, label),
+    h('div', { class: 'stat-value' }, value == null ? 0 : value)
+  ));
+}
+
+// The widget catalogue. Each entry is { title, group, render, defaults? }.
+// render() receives (card, config, data, widget). Use the existing API
+// responses bundled in `data` (data.summary, data.notifs, data.funnel,
+// data.tat, data.projects, data.teamFu, data.teamTat, data.daily).
+const WIDGET_LIBRARY = {
+  // ----- KPI tiles -----
+  kpi_total_leads: { title: 'KPI · Total leads', group: 'KPI',
+    render: (c, _cfg, d) => _renderKpi(c, 'Total leads', d.summary?.totals?.total ?? 0, 'accent', '🎯', '#/leads') },
+  kpi_new_today: { title: 'KPI · New today', group: 'KPI',
+    render: (c, _cfg, d) => _renderKpi(c, 'New today', d.notifs?.counts?.new_today ?? 0, 'accent', '✨', '#/leads?filter=new_today') },
+  kpi_won: { title: 'KPI · Won', group: 'KPI',
+    render: (c, _cfg, d) => _renderKpi(c, 'Won', d.summary?.totals?.won ?? 0, 'ok', '🏆', '#/leads?filter=won') },
+  kpi_qualified: { title: 'KPI · Qualified', group: 'KPI',
+    render: (c, _cfg, d) => _renderKpi(c, 'Qualified', d.summary?.totals?.qualified ?? 0, 'accent', '⭐', '#/leads?qualified=1') },
+  kpi_due_today: { title: 'KPI · Due today', group: 'KPI',
+    render: (c, _cfg, d) => _renderKpi(c, 'Due today', d.notifs?.counts?.due_today ?? 0, 'warn', '📅', '#/followups?tab=due') },
+  kpi_overdue: { title: 'KPI · Overdue', group: 'KPI',
+    render: (c, _cfg, d) => _renderKpi(c, 'Overdue', d.notifs?.counts?.overdue ?? 0, 'err', '⚠️', '#/followups?tab=overdue') },
+
+  // ----- Charts -----
+  chart_status: { title: 'Chart · Leads by status', group: 'Charts',
+    render: (c, _cfg, d, w) => {
+      c.appendChild(h('h3', {}, w.title || '🎯 Leads by status'));
+      const id = 'wc-' + w.id;
+      c.appendChild(h('div', { class: 'chart-wrap' }, h('canvas', { id })));
+      setTimeout(() => {
+        const rows = (d.summary?.by_status || []).filter(x => x.c > 0);
+        makeChart(id, 'bar', rows.map(x => x.status), rows.map(x => x.c), rows.map(x => x.color));
+      }, 50);
+    }
+  },
+  chart_source: { title: 'Chart · Leads by source', group: 'Charts',
+    render: (c, _cfg, d, w) => {
+      c.appendChild(h('h3', {}, w.title || 'Leads by source'));
+      const id = 'wc-' + w.id;
+      c.appendChild(h('div', { class: 'chart-wrap' }, h('canvas', { id })));
+      setTimeout(() => {
+        const rows = (d.summary?.by_source || []);
+        makeChart(id, 'bar', rows.map(x => x.source), rows.map(x => x.c));
+      }, 50);
+    }
+  },
+  chart_product: { title: 'Chart · Leads by product', group: 'Charts',
+    render: (c, _cfg, d, w) => {
+      c.appendChild(h('h3', {}, w.title || 'Leads by product'));
+      const id = 'wc-' + w.id;
+      c.appendChild(h('div', { class: 'chart-wrap' }, h('canvas', { id })));
+      setTimeout(() => {
+        const rows = (d.summary?.by_product || []);
+        makeChart(id, 'bar', rows.map(x => x.product), rows.map(x => x.c));
+      }, 50);
+    }
+  },
+  daily_volume: { title: 'Chart · Daily lead volume', group: 'Charts',
+    render: (c, _cfg, d, w) => {
+      c.appendChild(h('h3', {}, w.title || '📈 Daily lead volume'));
+      const id = 'wc-' + w.id;
+      c.appendChild(h('div', { class: 'chart-wrap' }, h('canvas', { id })));
+      setTimeout(() => {
+        const rows = (d.daily || []);
+        makeChart(id, 'line', rows.map(x => x.day), rows.map(x => x.c));
+      }, 50);
+    }
+  },
+
+  // ----- Big panels -----
+  funnel_pipeline: { title: 'Pipeline funnel', group: 'Pipeline',
+    render: (c, _cfg, d, w) => {
+      c.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.6rem' } },
+        h('h3', { style: { margin: 0 } }, w.title || '📈 Pipeline funnel'),
+        h('a', { href: '#/reports', class: 'btn sm ghost' }, 'Full report →')));
+      const rows = (d.funnel || []).filter(s => Number(s.is_final) !== 1)
+        .sort((a, b) => (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0));
+      if (!rows.length) { c.appendChild(h('p', { class: 'muted' }, 'No pipeline data yet.')); return; }
+      const total = rows.reduce((n, s) => n + Number(s._c || s.count || 0), 0);
+      const top = Math.max(...rows.map(s => Number(s._c || s.count || 0)), 1);
+      const fEl = h('div', { class: 'funnel' });
+      rows.forEach(s => {
+        const cnt = Number(s._c || s.count || 0);
+        const pct = top ? (cnt / top) * 100 : 0;
+        const conv = total ? Math.round((cnt / total) * 100) : 0;
+        fEl.appendChild(h('div', { class: 'funnel-row' },
+          h('div', { class: 'funnel-label', style: { minWidth: '160px' } }, s.status || '—'),
+          h('div', { style: { flex: 1, background: '#f1f5f9', borderRadius: '8px', height: '24px' } },
+            h('div', { style: { width: pct + '%', height: '100%', background: s.color || '#6366f1', borderRadius: '8px' } })),
+          h('div', { style: { minWidth: '80px', textAlign: 'right', fontWeight: 600 } }, String(cnt)),
           h('div', { class: 'muted', style: { minWidth: '50px', textAlign: 'right', fontSize: '.8rem' } }, conv + '%')
         ));
       });
-      funnelCard.appendChild(funnelEl);
-      grid.appendChild(funnelCard);
+      c.appendChild(fEl);
     }
-  }
-
-  // ⏱️ TAT report card — always visible. Shows L1/L2/L3 totals across
-  // the whole CRM plus a small "X statuses with TAT thresholds" caption
-  // so admins always see the SLA picture from the dashboard, not just
-  // when there's already a violation.
-  {
-    const tatTotals = (tatReport && tatReport.totals) || { l1: 0, l2: 0, l3: 0 };
-    const tatThresholdCount = (tatReport && (tatReport.thresholds_count || (tatReport.thresholds || []).length)) || 0;
-    const totalAlerts = Number(tatTotals.l1 || 0) + Number(tatTotals.l2 || 0) + Number(tatTotals.l3 || 0);
-    const tatCard = h('div', { class: 'card card-wide' },
-      h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.6rem' } },
-        h('h3', { style: { margin: 0 } }, '⏱️ TAT — Turnaround time alerts'),
-        h('a', { href: '#/tatreport', class: 'btn sm ghost' }, 'See full TAT report →')
-      )
-    );
-    if (!tatThresholdCount) {
-      tatCard.appendChild(h('p', { class: 'muted' },
-        'No TAT thresholds configured yet. Set them in Settings → ⏱️ TAT to start tracking how long leads sit in each status.'));
-    } else if (totalAlerts === 0) {
-      tatCard.appendChild(h('p', { class: 'muted' }, '🎉 No TAT violations right now.'));
-    } else {
-      const tatGrid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '.6rem' } },
-        h('div', { class: 'card', style: { padding: '.7rem', borderLeft: '4px solid #f59e0b' } },
-          h('div', { class: 'muted', style: { fontSize: '.75rem', textTransform: 'uppercase' } }, 'L1 — employee reminder'),
-          h('div', { style: { fontSize: '1.6rem', fontWeight: 700, marginTop: '.2rem' } }, String(tatTotals.l1 || 0))),
-        h('div', { class: 'card', style: { padding: '.7rem', borderLeft: '4px solid #ef4444' } },
-          h('div', { class: 'muted', style: { fontSize: '.75rem', textTransform: 'uppercase' } }, 'L2 — manager escalation'),
-          h('div', { style: { fontSize: '1.6rem', fontWeight: 700, marginTop: '.2rem' } }, String(tatTotals.l2 || 0))),
-        h('div', { class: 'card', style: { padding: '.7rem', borderLeft: '4px solid #991b1b' } },
-          h('div', { class: 'muted', style: { fontSize: '.75rem', textTransform: 'uppercase' } }, 'L3 — admin escalation'),
-          h('div', { style: { fontSize: '1.6rem', fontWeight: 700, marginTop: '.2rem' } }, String(tatTotals.l3 || 0)))
-      );
-      tatCard.appendChild(tatGrid);
+  },
+  tat_alerts: { title: 'TAT alerts (L1 / L2 / L3)', group: 'TAT',
+    render: (c, _cfg, d, w) => {
+      c.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.6rem' } },
+        h('h3', { style: { margin: 0 } }, w.title || '⏱️ TAT alerts'),
+        h('a', { href: '#/tatreport', class: 'btn sm ghost' }, 'Full TAT →')));
+      const tot = (d.tat && d.tat.totals) || { l1: 0, l2: 0, l3: 0 };
+      const tCount = (d.tat && (d.tat.thresholds_count || (d.tat.thresholds || []).length)) || 0;
+      const total = Number(tot.l1 || 0) + Number(tot.l2 || 0) + Number(tot.l3 || 0);
+      if (!tCount) { c.appendChild(h('p', { class: 'muted' }, 'No TAT thresholds configured. Set them in Settings → ⏱️ TAT.')); return; }
+      if (!total) { c.appendChild(h('p', { class: 'muted' }, '🎉 No TAT violations.')); return; }
+      const grid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '.6rem' } },
+        h('div', { style: { padding: '.6rem', borderLeft: '4px solid #f59e0b', background: '#fff7ed', borderRadius: '8px' } },
+          h('div', { class: 'muted', style: { fontSize: '.72rem', textTransform: 'uppercase' } }, 'L1'),
+          h('div', { style: { fontSize: '1.6rem', fontWeight: 700 } }, String(tot.l1 || 0))),
+        h('div', { style: { padding: '.6rem', borderLeft: '4px solid #ef4444', background: '#fef2f2', borderRadius: '8px' } },
+          h('div', { class: 'muted', style: { fontSize: '.72rem', textTransform: 'uppercase' } }, 'L2'),
+          h('div', { style: { fontSize: '1.6rem', fontWeight: 700 } }, String(tot.l2 || 0))),
+        h('div', { style: { padding: '.6rem', borderLeft: '4px solid #991b1b', background: '#fef2f2', borderRadius: '8px' } },
+          h('div', { class: 'muted', style: { fontSize: '.72rem', textTransform: 'uppercase' } }, 'L3'),
+          h('div', { style: { fontSize: '1.6rem', fontWeight: 700 } }, String(tot.l3 || 0))));
+      c.appendChild(grid);
     }
-    grid.appendChild(tatCard);
-  }
-
-  // Team follow-ups by caller — managers see who's drowning in overdue.
-  // Hidden for sales/employee since their own numbers are already in KPI tiles.
-  if (showTeam) {
-    const teamRows = teamFu || [];
-    const teamCard = h('div', { class: 'card card-wide' },
-      h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.5rem' } },
-        h('h3', { style: { margin: 0 } }, '👥 Follow-ups by caller'),
-        h('a', { href: '#/followups', class: 'btn sm ghost' }, 'See all →')
-      )
-    );
-    if (!teamRows.length) {
-      teamCard.appendChild(h('p', { class: 'muted' }, 'No team data available.'));
-    } else {
-      teamCard.appendChild(h('div', { class: 'table-wrap' }, h('table', { class: 'mini-table' },
-        h('thead', {}, h('tr', {},
-          h('th', {}, 'Caller'), h('th', {}, 'Role'),
-          h('th', { style: { textAlign: 'right' } }, '⚠️ Overdue'),
-          h('th', { style: { textAlign: 'right' } }, '📅 Due today'),
-          h('th', { style: { textAlign: 'right' } }, '⏰ Upcoming'),
-          h('th', { style: { textAlign: 'right' } }, 'Total open')
-        )),
-        h('tbody', {}, ...teamRows.map(r => h('tr', {},
-          h('td', {}, r.name || '—'),
-          h('td', { class: 'muted' }, r.role || ''),
-          h('td', { class: r.overdue > 0 ? 'cell-err' : 'muted', style: { textAlign: 'right', fontWeight: r.overdue > 0 ? 700 : 400 } }, r.overdue),
-          h('td', { class: r.due_today > 0 ? 'cell-warn' : 'muted', style: { textAlign: 'right', fontWeight: r.due_today > 0 ? 700 : 400 } }, r.due_today),
-          h('td', { class: 'muted', style: { textAlign: 'right' } }, r.upcoming),
-          h('td', { style: { textAlign: 'right', fontWeight: 600 } }, r.total_open)
-        )))
-      )));
-    }
-    grid.appendChild(teamCard);
-
-    // Team TAT violations by caller — same intent: who's accumulating
-    // escalations? Hidden if there are no open violations org-wide.
-    const tatRows = teamTat || [];
-    if (tatRows.length) {
-      const tatCard = h('div', { class: 'card card-wide' },
-        h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.5rem' } },
-          h('h3', { style: { margin: 0 } }, '🚨 TAT violations by caller'),
-          h('a', { href: '#/tatreport', class: 'btn sm ghost' }, 'See full TAT report →')
-        ),
-        h('div', { class: 'table-wrap' }, h('table', { class: 'mini-table' },
-          h('thead', {}, h('tr', {},
-            h('th', {}, 'Caller'), h('th', {}, 'Role'),
-            h('th', { style: { textAlign: 'right' }, title: 'L3 — escalated to admin' }, '🚨 L3'),
-            h('th', { style: { textAlign: 'right' }, title: 'L2 — escalated to manager' }, '⚠️ L2'),
-            h('th', { style: { textAlign: 'right' }, title: 'L1 — employee reminder' }, '⏱️ L1'),
-            h('th', { style: { textAlign: 'right' } }, 'Total open')
-          )),
-          h('tbody', {}, ...tatRows.map(r => h('tr', {},
-            h('td', {}, r.name || '—'),
-            h('td', { class: 'muted' }, r.role || ''),
-            h('td', { class: r.l3 > 0 ? 'cell-err' : 'muted', style: { textAlign: 'right', fontWeight: r.l3 > 0 ? 700 : 400 } }, r.l3),
-            h('td', { class: r.l2 > 0 ? 'cell-warn' : 'muted', style: { textAlign: 'right', fontWeight: r.l2 > 0 ? 700 : 400 } }, r.l2),
-            h('td', { class: 'muted', style: { textAlign: 'right' } }, r.l1),
-            h('td', { style: { textAlign: 'right', fontWeight: 600 } }, r.total)
-          )))
-        ))
-      );
-      grid.appendChild(tatCard);
-    }
-  }
-
-  // By source bar chart
-  const srcCard = h('div', { class: 'card card-wide' },
-    h('h3', {}, 'Leads by source'),
-    h('div', { class: 'chart-wrap' }, h('canvas', { id: 'dash-src' }))
-  );
-  grid.appendChild(srcCard);
-
-  // Project delivery progress — always renders, with empty state when
-  // no leads have entered any stage yet. Skipped silently if the
-  // tenant has zero project stages defined (ignore — admin has chosen
-  // not to use the project pipeline at all).
-  try {
-    const projBoard = await api('api_projectStages_board').catch(() => null);
-    if (projBoard && projBoard.stages && projBoard.stages.length && projBoard.board) {
-      const totalInDelivery = projBoard.board.reduce((n, col) => n + col.leads.length, 0);
-      if (totalInDelivery >= 0) {   // always render the card; show empty state when zero
-        const COLORS = ['#3b82f6','#10b981','#f59e0b','#8b5cf6','#ef4444','#06b6d4','#ec4899'];
-        const projCard = h('div', { class: 'card card-wide' },
-          h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.75rem' } },
-            h('h3', { style: { margin: 0 } }, '\u{1F69A} Project delivery progress'),
-            h('a', { href: '#/projects', class: 'btn sm ghost' }, 'View board \u2192')
-          )
-        );
-        const barRow = h('div', { style: { display: 'flex', height: '14px', borderRadius: '8px', overflow: 'hidden', marginBottom: '.75rem', gap: '2px' } });
-        projBoard.board.forEach((col, i) => {
-          if (!col.leads.length) return;
-          const color = col.stage.color || COLORS[i % COLORS.length];
-          barRow.appendChild(h('div', { title: col.stage.name + ': ' + col.leads.length, style: { flex: col.leads.length, background: color, minWidth: '4px' } }));
-        });
-        if (totalInDelivery === 0) {
-          projCard.appendChild(h('p', { class: 'muted', style: { marginTop: 0 } },
-            'No leads have entered any project stage yet. Move a lead into the project pipeline from its detail panel to start tracking delivery here.'));
-        } else {
-        projCard.appendChild(barRow);
-        const stageGrid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '.5rem' } });
-        projBoard.board.forEach((col, i) => {
-          const color = col.stage.color || COLORS[i % COLORS.length];
-          const stalledCount = col.leads.filter(l => l.stalled).length;
-          stageGrid.appendChild(h('div', { class: 'card clickable', style: { padding: '.55rem .75rem', borderLeft: '4px solid ' + color, cursor: 'pointer' }, onclick: () => { location.hash = '#/projects'; } },
-            h('div', { style: { fontWeight: 600, fontSize: '.85rem', marginBottom: '.2rem' } }, col.stage.name),
-            h('div', { style: { display: 'flex', gap: '.4rem', alignItems: 'center' } },
-              h('span', { style: { fontWeight: 700, fontSize: '1.1rem', color } }, col.leads.length),
-              h('span', { class: 'muted', style: { fontSize: '.78rem' } }, col.leads.length === 1 ? 'lead' : 'leads'),
-              stalledCount ? h('span', { class: 'tag', style: { background: '#fef2f2', color: '#991b1b', marginLeft: 'auto' } }, '\u26a0 ' + stalledCount + ' stalled') : null
-            )
-          ));
-        });
-        projCard.appendChild(stageGrid);
-        }
-        grid.appendChild(projCard);
+  },
+  project_stages: { title: 'Project delivery stages', group: 'Projects',
+    render: (c, _cfg, d, w) => {
+      c.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.6rem' } },
+        h('h3', { style: { margin: 0 } }, w.title || '🚚 Project stages'),
+        h('a', { href: '#/projects', class: 'btn sm ghost' }, 'View board →')));
+      const pb = d.projects;
+      if (!pb || !pb.stages || !pb.stages.length) {
+        c.appendChild(h('p', { class: 'muted' }, 'No project stages defined yet. Set them in Settings → 🚚 Project stages.'));
+        return;
       }
+      const board = pb.board || [];
+      const totalIn = board.reduce((n, col) => n + col.leads.length, 0);
+      if (!totalIn) { c.appendChild(h('p', { class: 'muted' }, 'No leads in any stage yet.')); return; }
+      const COLORS = ['#3b82f6','#10b981','#f59e0b','#8b5cf6','#ef4444','#06b6d4','#ec4899'];
+      const bar = h('div', { style: { display: 'flex', height: '14px', borderRadius: '8px', overflow: 'hidden', gap: '2px', marginBottom: '.7rem' } });
+      board.forEach((col, i) => {
+        if (!col.leads.length) return;
+        bar.appendChild(h('div', { title: col.stage.name + ': ' + col.leads.length,
+          style: { flex: col.leads.length, background: col.stage.color || COLORS[i % COLORS.length], minWidth: '4px' } }));
+      });
+      c.appendChild(bar);
+      const sg = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '.5rem' } });
+      board.forEach((col, i) => {
+        const color = col.stage.color || COLORS[i % COLORS.length];
+        sg.appendChild(h('div', { class: 'card clickable',
+          style: { padding: '.5rem .65rem', borderLeft: '4px solid ' + color, cursor: 'pointer' },
+          onclick: () => { location.hash = '#/projects'; } },
+          h('div', { style: { fontWeight: 600, fontSize: '.85rem' } }, col.stage.name),
+          h('div', { style: { fontWeight: 700, fontSize: '1.05rem', color } }, String(col.leads.length))));
+      });
+      c.appendChild(sg);
     }
-  } catch (_) {}
-
-  setTimeout(() => {
-    const statusData = (summary.by_status || []).filter(x => x.c > 0);
-    // User asked for the dashboard "Leads by status" to be a bar chart with
-    // visible numbers (not a pie). Bar chart with status colors and datalabels.
-    makeChart('dash-pie', 'bar', statusData.map(x => x.status), statusData.map(x => x.c), statusData.map(x => x.color));
-    const srcData = summary.by_source || [];
-    makeChart('dash-src', 'bar', srcData.map(x => x.source), srcData.map(x => x.c));
-  }, 50);
-
-  function card(label, val, klass, icon, href) {
-    const inner = h('div', { class: `card stat ${klass}` + (href ? ' clickable' : '') },
-      h('div', { class: 'stat-icon' }, icon || ''),
-      h('div', { class: 'stat-body' },
-        h('div', { class: 'stat-label' }, label),
-        h('div', { class: 'stat-value' }, val ?? 0)
-      )
-    );
-    if (href) inner.onclick = () => { location.hash = href; };
-    return inner;
+  },
+  followups_panel: { title: 'My follow-ups (Upcoming / Overdue / Due today)', group: 'Follow-ups',
+    render: (c, _cfg, d, w) => {
+      const due = d.notifs || { upcoming: [], overdue: [], due_today: [] };
+      c.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.4rem' } },
+        h('h3', { style: { margin: 0 } }, w.title || '⏰ Follow-ups'),
+        h('a', { href: '#/followups', class: 'btn sm ghost' }, 'See all →')));
+      const tabs = [
+        { key: 'upcoming',  label: 'Upcoming',  rows: due.upcoming || [] },
+        { key: 'overdue',   label: 'Overdue',   rows: due.overdue  || [] },
+        { key: 'due_today', label: 'Due today', rows: due.due_today || [] }
+      ];
+      const bar = h('div', { class: 'fu-tabbar' });
+      const body = h('div', { class: 'fu-tabbody' });
+      function show(k) {
+        [...bar.children].forEach(b => b.classList.toggle('active', b.dataset.key === k));
+        body.innerHTML = '';
+        const t = tabs.find(x => x.key === k);
+        if (!t.rows.length) { body.appendChild(h('p', { class: 'muted', style: { padding: '.5rem' } }, 'Nothing here.')); return; }
+        body.appendChild(h('ul', { class: 'fu-dash-list' },
+          ...t.rows.slice(0, 8).map(f => h('li', {},
+            h('div', { class: 'fu-name', onclick: () => openLeadModal(f.lead_id) }, f.lead_name || '—'),
+            h('div', { class: 'fu-phone muted' }, f.lead_phone || ''),
+            h('div', { class: 'fu-due ' + (new Date(f.due_at) < new Date() ? 'overdue' : '') }, fmtDate(f.due_at, 'relative'))
+          ))));
+      }
+      tabs.forEach(t => bar.appendChild(h('button', { class: 'fu-tab' + (t.key === 'upcoming' ? ' active' : ''),
+        'data-key': t.key, onclick: () => show(t.key) }, t.label, t.rows.length ? h('span', { class: 'fu-tab-count' }, t.rows.length) : null)));
+      c.appendChild(bar); c.appendChild(body); show('upcoming');
+    }
+  },
+  team_followups: { title: 'Team · Follow-ups by caller', group: 'Team',
+    render: (c, _cfg, d, w) => {
+      c.appendChild(h('h3', {}, w.title || '👥 Team follow-ups'));
+      const rows = d.teamFu || [];
+      if (!rows.length) { c.appendChild(h('p', { class: 'muted' }, 'No team data.')); return; }
+      c.appendChild(h('div', { class: 'table-wrap' }, h('table', { class: 'mini-table' },
+        h('thead', {}, h('tr', {}, h('th', {}, 'Caller'), h('th', {}, 'Role'),
+          h('th', { style: { textAlign: 'right' } }, 'Overdue'),
+          h('th', { style: { textAlign: 'right' } }, 'Due today'),
+          h('th', { style: { textAlign: 'right' } }, 'Upcoming'),
+          h('th', { style: { textAlign: 'right' } }, 'Open'))),
+        h('tbody', {}, ...rows.map(r => h('tr', {}, h('td', {}, r.name || '—'), h('td', { class: 'muted' }, r.role || ''),
+          h('td', { style: { textAlign: 'right', fontWeight: r.overdue > 0 ? 700 : 400, color: r.overdue > 0 ? '#dc2626' : '' } }, r.overdue),
+          h('td', { style: { textAlign: 'right', fontWeight: r.due_today > 0 ? 700 : 400 } }, r.due_today),
+          h('td', { style: { textAlign: 'right' } }, r.upcoming),
+          h('td', { style: { textAlign: 'right', fontWeight: 600 } }, r.total_open)))))));
+    }
+  },
+  team_tat: { title: 'Team · TAT violations by caller', group: 'Team',
+    render: (c, _cfg, d, w) => {
+      c.appendChild(h('h3', {}, w.title || '🚨 Team TAT violations'));
+      const rows = d.teamTat || [];
+      if (!rows.length) { c.appendChild(h('p', { class: 'muted' }, '🎉 No TAT violations across the team.')); return; }
+      c.appendChild(h('div', { class: 'table-wrap' }, h('table', { class: 'mini-table' },
+        h('thead', {}, h('tr', {}, h('th', {}, 'Caller'),
+          h('th', { style: { textAlign: 'right' } }, '🚨 L3'),
+          h('th', { style: { textAlign: 'right' } }, '⚠️ L2'),
+          h('th', { style: { textAlign: 'right' } }, '⏱️ L1'),
+          h('th', { style: { textAlign: 'right' } }, 'Total'))),
+        h('tbody', {}, ...rows.map(r => h('tr', {}, h('td', {}, r.name || '—'),
+          h('td', { style: { textAlign: 'right', fontWeight: r.l3 > 0 ? 700 : 400, color: r.l3 > 0 ? '#dc2626' : '' } }, r.l3),
+          h('td', { style: { textAlign: 'right', fontWeight: r.l2 > 0 ? 700 : 400 } }, r.l2),
+          h('td', { style: { textAlign: 'right' } }, r.l1),
+          h('td', { style: { textAlign: 'right', fontWeight: 600 } }, r.total)))))));
+    }
+  },
+  user_stats: { title: 'Specific user · Lead stats', group: 'User',
+    render: async (c, cfg, d, w) => {
+      const userId = cfg.user_id;
+      c.appendChild(h('h3', {}, w.title || '👤 User stats'));
+      if (!userId) { c.appendChild(h('p', { class: 'muted' }, 'Pick a user from the widget options (edit mode → ↔ → set user_id in JSON, or use the picker after Save).')); return; }
+      try {
+        const res = await api('api_reports_summary', { scope_user_id: userId });
+        const u = (CRM.cache.users || []).find(x => Number(x.id) === Number(userId));
+        const totals = res.totals || {};
+        c.appendChild(h('p', { class: 'muted', style: { marginTop: 0 } }, u ? `${u.name} · ${u.role}` : 'User #' + userId));
+        c.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '.5rem' } },
+          h('div', { style: { padding: '.5rem', background: '#f8fafc', borderRadius: '8px' } },
+            h('div', { class: 'muted', style: { fontSize: '.7rem', textTransform: 'uppercase' } }, 'Total leads'),
+            h('div', { style: { fontSize: '1.4rem', fontWeight: 700 } }, String(totals.total || 0))),
+          h('div', { style: { padding: '.5rem', background: '#f0fdf4', borderRadius: '8px' } },
+            h('div', { class: 'muted', style: { fontSize: '.7rem', textTransform: 'uppercase' } }, 'Won'),
+            h('div', { style: { fontSize: '1.4rem', fontWeight: 700, color: '#15803d' } }, String(totals.won || 0))),
+          h('div', { style: { padding: '.5rem', background: '#fefce8', borderRadius: '8px' } },
+            h('div', { class: 'muted', style: { fontSize: '.7rem', textTransform: 'uppercase' } }, 'Qualified'),
+            h('div', { style: { fontSize: '1.4rem', fontWeight: 700 } }, String(totals.qualified || 0)))));
+      } catch (e) { c.appendChild(h('div', { class: 'error-box' }, e.message)); }
+    }
   }
 };
+
+// "+ Add widget" picker modal — lists every WIDGET_LIBRARY entry grouped by `group`.
+async function openAddWidgetModal(onPicked) {
+  const groups = {};
+  Object.entries(WIDGET_LIBRARY).forEach(([type, def]) => {
+    const g = def.group || 'Other';
+    if (!groups[g]) groups[g] = [];
+    groups[g].push({ type, def });
+  });
+  const m = h('div', { class: 'modal-backdrop',
+    onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const modal = h('div', { class: 'modal modal-lg' });
+  modal.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, 'Add a widget'),
+    h('button', { class: 'btn icon', onclick: () => m.remove() }, '✕')));
+  const body = h('div', { class: 'modal-body' });
+  Object.entries(groups).forEach(([g, items]) => {
+    body.appendChild(h('h4', { style: { marginBottom: '.4rem', marginTop: '.6rem' } }, g));
+    const grid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '.5rem' } });
+    items.forEach(({ type, def }) => {
+      grid.appendChild(h('button', { class: 'btn',
+        style: { textAlign: 'left', padding: '.7rem .9rem' },
+        onclick: async () => {
+          const widget = { id: 'w-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7),
+                            type, size: 'medium', config: {} };
+          // user_stats needs a user_id — prompt inline.
+          if (type === 'user_stats') {
+            const users = CRM.cache.users || [];
+            const opts = users.map(u => `<option value="${u.id}">${esc(u.name)} — ${u.role}</option>`).join('');
+            const sel = document.createElement('select');
+            sel.innerHTML = '<option value="">— Pick user —</option>' + opts;
+            const wrap = h('div', { style: { display: 'flex', gap: '.4rem', marginTop: '.5rem' } }, sel,
+              h('button', { class: 'btn primary',
+                onclick: () => { if (sel.value) { widget.config.user_id = Number(sel.value); m.remove(); onPicked(widget); } } }, 'Add'));
+            body.appendChild(wrap);
+            return;
+          }
+          m.remove(); onPicked(widget);
+        } },
+        h('div', { style: { fontWeight: 600 } }, def.title || type),
+        h('div', { class: 'muted', style: { fontSize: '.8rem' } }, def.description || '')));
+    });
+    body.appendChild(grid);
+  });
+  modal.appendChild(body);
+  m.appendChild(modal);
+  document.body.appendChild(m);
+}
+
 
 /* ---------------- Leads ---------------- */
 const LEAD_COLUMNS = [

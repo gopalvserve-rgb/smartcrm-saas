@@ -38,6 +38,7 @@ const ROUTE_FILES = [
   'chat',
   'customFields',
   'customers',
+  'dashboard',
   'fb',
   'hr',
   'integrations',
