@@ -757,10 +757,8 @@ async function api_reports_callRatingByUser(token, filters) {
   }
 }
 
-module.exports = {
-  api_reports_summary, api_reports_funnel, api_reports_daily,
-  api_reports_exportLeads, api_reports_groupBy,
-  api_reports_followupsByUser, api_reports_tatViolationsByUser,
-  api_reports_callRatingByUser,
-  api_calendar_events
-};
+// ============================================================
+// AI usage report — call-recording transcription cost.
+//
+// The "AI usage" page under Calls in the tenant sidebar shows the
+// tenant's Gemini spend on call transcription / summarisa
