@@ -324,3 +324,45 @@ CREATE INDEX IF NOT EXISTS idx_error_logs_resolved  ON error_logs(resolved);
 CREATE INDEX IF NOT EXISTS idx_error_logs_source    ON error_logs(source);
 CREATE INDEX IF NOT EXISTS idx_error_logs_lastseen  ON error_logs(last_seen_at DESC);
 CREATE INDEX IF NOT EXISTS idx_error_logs_fingerprint ON error_logs(fingerprint);
+
+-- ============================================================
+-- AI Bot — control-plane tables (added 2026-05-08)
+-- ============================================================
+
+-- ---- ai_settings (singleton id=1) -------------------------------
+CREATE TABLE IF NOT EXISTS ai_settings (
+  id                    INTEGER PRIMARY KEY DEFAULT 1,
+  gemini_api_key_enc    TEXT,
+  gemini_default_model  TEXT NOT NULL DEFAULT 'gemini-2.0-flash-lite',
+  gemini_embedding_model TEXT NOT NULL DEFAULT 'text-embedding-004',
+  price_input_usd_per_m  DECIMAL(10,6) NOT NULL DEFAULT 0.075,
+  price_output_usd_per_m DECIMAL(10,6) NOT NULL DEFAULT 0.30,
+  exchange_rate_inr      DECIMAL(10,4) NOT NULL DEFAULT 84.0000,
+  markup_pct             DECIMAL(6,2)  NOT NULL DEFAULT 30.00,
+  is_active              INTEGER NOT NULL DEFAULT 0,
+  updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT ai_settings_singleton CHECK (id = 1)
+);
+INSERT INTO ai_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
+-- ---- ai_usage_log -----------------------------------------------
+CREATE TABLE IF NOT EXISTS ai_usage_log (
+  id                SERIAL PRIMARY KEY,
+  tenant_id         INTEGER REFERENCES tenants(id) ON DELETE SET NULL,
+  tenant_slug       TEXT NOT NULL,
+  call_kind         TEXT NOT NULL,
+  model             TEXT NOT NULL,
+  input_tokens      INTEGER NOT NULL DEFAULT 0,
+  output_tokens     INTEGER NOT NULL DEFAULT 0,
+  cost_usd          DECIMAL(12,8) NOT NULL DEFAULT 0,
+  cost_inr_real     DECIMAL(12,4) NOT NULL DEFAULT 0,
+  cost_inr_billed   DECIMAL(12,4) NOT NULL DEFAULT 0,
+  phone             TEXT,
+  lead_id           INTEGER,
+  wa_message_id     TEXT,
+  error_text        TEXT,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_ai_usage_tenant_day ON ai_usage_log(tenant_slug, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_usage_created    ON ai_usage_log(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_usage_kind       ON ai_usage_log(call_kind);

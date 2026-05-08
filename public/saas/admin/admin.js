@@ -126,6 +126,7 @@ const NAV = [
   { id: 'webhooks',      label: '📡 Webhook Logs' },
   { id: 'errors',        label: '🐞 Errors' },
   { id: 'crashes',       label: '🚨 Crashes' },
+  { id: 'ai_costing',    label: '🤖 AI Costing' },
   { id: 'announcements', label: '📣 Updates' },
   { id: 'requirements',  label: '🛠 Custom Requirements' },
   { id: 'admins',        label: '👥 Super Assistants' },
@@ -1231,49 +1232,166 @@ VIEWS.settings = async (view) => {
 
   form.appendChild(h('button', { class: 'btn', type: 'submit', style: { marginTop: '1rem' } }, '💾 Save settings'));
   view.appendChild(form);
+
+  // ============================================================
+  // AI / Gemini settings card — separate form because it uses its
+  // own backend (control.ai_settings) + has a "Test connection"
+  // button that should run independently of the main save.
+  // ============================================================
+  let aiCfg;
+  try { aiCfg = await api('api_saas_ai_settings_get'); }
+  catch (e) { view.appendChild(h('div', { class: 'error-box', style: { marginTop: '1rem' } }, '⚠️ AI settings not loaded: ' + e.message)); return; }
+
+  const aiCard = h('div', { class: 'card', style: { marginTop: '1.5rem' } },
+    h('h2', {}, '🤖 WhatsApp AI Bot — Gemini'),
+    h('p', { class: 'muted', style: { marginTop: 0, fontSize: '.85rem' } },
+      'Stored in the control DB, encrypted at rest. Tenants never see this key — they consume Gemini via your account and you bill them in INR with markup.')
+  );
+
+  const aiKeyInput = h('input', {
+    type: 'password', name: 'gemini_api_key', autocomplete: 'off',
+    placeholder: aiCfg.key_set ? ('Set: ' + (aiCfg.key_preview || '••••') + ' (leave blank to keep)') : 'Paste Gemini API key from Google AI Studio',
+    style: { width: '100%' }
+  });
+  aiCard.appendChild(h('div', { class: 'field' }, h('label', {}, 'Gemini API key' + (aiCfg.key_set ? ' ✓' : '')), aiKeyInput,
+    h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } }, 'Get one at aistudio.google.com → API keys.')));
+
+  const modelSel = h('select', { name: 'gemini_default_model' },
+    ...aiCfg.suggested_models.map(m => h('option', { value: m, selected: m === aiCfg.gemini_default_model ? 'selected' : null }, m)));
+  aiCard.appendChild(h('div', { class: 'field' }, h('label', {}, 'Default model'), modelSel,
+    h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } }, 'Used for every tenant unless they override on their AI Bot Settings page.')));
+
+  const priceInput  = h('input', { name: 'price_input_usd_per_m',  type: 'number', step: '0.0001', value: aiCfg.price_input_usd_per_m });
+  const priceOutput = h('input', { name: 'price_output_usd_per_m', type: 'number', step: '0.0001', value: aiCfg.price_output_usd_per_m });
+  const exch        = h('input', { name: 'exchange_rate_inr',      type: 'number', step: '0.01',   value: aiCfg.exchange_rate_inr });
+  const markup      = h('input', { name: 'markup_pct',             type: 'number', step: '0.01',   value: aiCfg.markup_pct });
+  aiCard.appendChild(h('div', { class: 'field' }, h('label', {}, 'Input price (USD per 1M tokens)'),  priceInput));
+  aiCard.appendChild(h('div', { class: 'field' }, h('label', {}, 'Output price (USD per 1M tokens)'), priceOutput));
+  aiCard.appendChild(h('div', { class: 'field' }, h('label', {}, 'Exchange rate (USD → INR)'),    exch));
+  aiCard.appendChild(h('div', { class: 'field' }, h('label', {}, 'Markup % (added on top of real INR cost)'), markup,
+    h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } }, 'Tenants see (real INR) × (1 + markup/100). 30 = 30% margin.')));
+
+  const activeChk = h('input', { name: 'is_active', type: 'checkbox', checked: aiCfg.is_active ? 'checked' : null });
+  aiCard.appendChild(h('div', { class: 'field' }, h('label', {}, activeChk, ' Globally enabled (tenants can use the bot)'),
+    h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } }, 'Master kill-switch. Tenants still need to flip ON their own bot in their AI Bot tab.')));
+
+  const aiActions = h('div', { style: { display: 'flex', gap: '.5rem', marginTop: '.75rem' } },
+    h('button', { class: 'btn', type: 'button', onclick: async () => {
+      const payload = {
+        gemini_api_key:         aiKeyInput.value,
+        gemini_default_model:   modelSel.value,
+        price_input_usd_per_m:  priceInput.value,
+        price_output_usd_per_m: priceOutput.value,
+        exchange_rate_inr:      exch.value,
+        markup_pct:             markup.value,
+        is_active:              activeChk.checked
+      };
+      try { await api('api_saas_ai_settings_save', payload); toast('AI settings saved'); navigate('settings'); }
+      catch (e) { toast(e.message, 'err'); }
+    } }, '💾 Save AI settings'),
+    h('button', { class: 'btn ghost', type: 'button', onclick: async () => {
+      try {
+        const r = await api('api_saas_ai_settings_test');
+        if (r.ok) toast('✅ Gemini key works — ' + r.models_visible + ' models visible');
+        else toast('❌ ' + (r.error || 'failed'), 'err');
+      } catch (e) { toast(e.message, 'err'); }
+    } }, '🔌 Test connection')
+  );
+  aiCard.appendChild(aiActions);
+  view.appendChild(aiCard);
 };
 
-// ---------- Router ---------------------------------------------
-//
-// Render guard: VIEW fns are async, so two route() calls can race —
-// each will `view.innerHTML = ''` early, then their awaited
-// appendChild()s land sequentially and the view gets rendered twice.
-// (This is exactly why the Tenants list was showing duplicated.)
-//
-// We tag every render with a monotonically increasing token. The view
-// fn awaits its data, then checks the token before appending — if a
-// newer route() has started in the meantime, the old one bails.
-let _routeToken = 0;
+// ============================================================
+// AI Costing — per-tenant breakdown of real $ cost vs marked-up ₹
+// ============================================================
+VIEWS.ai_costing = async (view) => {
+  view.appendChild(h('h1', {}, '🤖 AI Costing'));
 
-async function route() {
-  if (!APP.token) return renderLogin();
-  if (!APP.user) {
-    try { APP.user = await api('api_saas_admin_me'); }
-    catch (_) { APP.token = ''; localStorage.removeItem('saas_admin_token'); return renderLogin(); }
+  const today = new Date().toISOString().slice(0, 10);
+  const monthStart = today.slice(0, 8) + '01';
+  const fromInp   = h('input', { type: 'date', value: monthStart });
+  const toInp     = h('input', { type: 'date', value: today });
+  const tenantInp = h('input', { type: 'text', placeholder: 'Filter by tenant slug (blank = all)', style: { minWidth: '14rem' } });
+  const refreshBtn= h('button', { class: 'btn ghost' }, '↻ Refresh');
+  view.appendChild(h('div', { class: 'card', style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap', alignItems: 'center' } },
+    h('label', {}, 'From '), fromInp,
+    h('label', {}, ' To '),  toInp,
+    tenantInp, refreshBtn));
+
+  const totalsCard = h('div', { class: 'card' }, h('div', { class: 'muted' }, 'Loading…'));
+  const tableCard  = h('div', { class: 'card' });
+  view.appendChild(totalsCard);
+  view.appendChild(tableCard);
+
+  function kpi(label, value, hint) {
+    return h('div', { style: { padding: '.6rem .8rem', background: '#f1f5f9', borderRadius: '8px' } },
+      h('div', { class: 'muted', style: { fontSize: '.72rem', textTransform: 'uppercase', letterSpacing: '.04em' } }, label),
+      h('div', { style: { fontSize: '1.2rem', fontWeight: '700' } }, value),
+      hint ? h('div', { class: 'muted', style: { fontSize: '.72rem' } }, hint) : null
+    );
   }
-  const myToken = ++_routeToken;
-  if (!$('#nav')) renderShell();
-  const id = (location.hash.match(/^#\/([a-z]+)/) || [])[1] || 'dashboard';
-  document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('active', a.dataset.view === id));
-  const view = $('#view'); view.innerHTML = '';
-  const fn = VIEWS[id];
-  if (!fn) { view.appendChild(h('div', { class: 'empty' }, 'Unknown view')); return; }
-  try {
-    await fn(view);
-    // If a newer route() has fired while we were awaiting data, our
-    // appendChild()s landed in the now-stale view — wipe them.
-    if (myToken !== _routeToken) view.innerHTML = '';
-  } catch (e) {
-    if (myToken === _routeToken) {
-      view.appendChild(h('div', { class: 'error-box' }, e.message));
+
+  async function reload() {
+    totalsCard.innerHTML = ''; tableCard.innerHTML = '';
+    totalsCard.appendChild(h('div', { class: 'muted' }, 'Loading…'));
+    let data;
+    try {
+      data = await api('api_saas_ai_costing_summary', {
+        from: fromInp.value, to: toInp.value,
+        tenant_slug: tenantInp.value.trim() || null
+      });
+    } catch (e) {
+      totalsCard.innerHTML = '';
+      totalsCard.appendChild(h('div', { class: 'error-box' }, e.message));
+      return;
     }
-  }
-}
+    const t = data.totals;
+    totalsCard.innerHTML = '';
+    totalsCard.appendChild(h('h2', { style: { marginTop: 0 } }, 'Range: ' + data.range.from + ' → ' + data.range.to));
+    const kpis = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '.75rem' } });
+    kpis.appendChild(kpi('Tenants billed', t.tenants_billed));
+    kpis.appendChild(kpi('Calls', t.calls.toLocaleString('en-IN')));
+    kpis.appendChild(kpi('Tokens in / out', t.input_tokens.toLocaleString('en-IN') + ' / ' + t.output_tokens.toLocaleString('en-IN')));
+    kpis.appendChild(kpi('Real $ cost', '$' + t.cost_usd.toFixed(4)));
+    kpis.appendChild(kpi('Real ₹ cost', '₹' + t.cost_inr_real.toLocaleString('en-IN')));
+    kpis.appendChild(kpi('Billed to tenants ₹', '₹' + t.cost_inr_billed.toLocaleString('en-IN')));
+    kpis.appendChild(kpi('Your margin', '₹' + t.margin_inr.toLocaleString('en-IN'), (t.margin_pct == null ? '' : t.margin_pct + '%')));
+    if (t.failed_calls) kpis.appendChild(kpi('Failed (not billed)', t.failed_calls));
+    totalsCard.appendChild(kpis);
 
-// Only ONE initial trigger. The script tag lives at the end of <body>,
-// so when this code runs the DOM is already parsed — there's no need
-// for a separate DOMContentLoaded listener (that listener used to fire
-// AFTER the immediate route() call, racing with it and rendering every
-// view twice).
+    const rows = data.per_tenant.length ? data.per_tenant : [{ tenant_slug: '— no usage in range —', calls: 0, input_tokens: 0, output_tokens: 0 }];
+    const tbl = h('table', { class: 'data-table', style: { width: '100%' } },
+      h('thead', {}, h('tr', {},
+        h('th', {}, 'Tenant'),
+        h('th', {}, 'Calls'),
+        h('th', {}, 'Tokens'),
+        h('th', {}, 'Real $'),
+        h('th', {}, 'Real ₹'),
+        h('th', {}, 'Billed ₹'),
+        h('th', {}, 'Margin ₹'),
+        h('th', {}, 'Last call')
+      )),
+      h('tbody', {}, ...rows.map(r => h('tr', {},
+        h('td', {}, r.tenant_slug),
+        h('td', {}, (r.calls || 0).toLocaleString('en-IN')),
+        h('td', {}, ((r.input_tokens || 0) + (r.output_tokens || 0)).toLocaleString('en-IN')),
+        h('td', {}, '$' + (r.cost_usd || 0).toFixed(6)),
+        h('td', {}, '₹' + (r.cost_inr_real || 0).toLocaleString('en-IN')),
+        h('td', {}, '₹' + (r.cost_inr_billed || 0).toLocaleString('en-IN')),
+        h('td', {}, '₹' + (r.margin_inr || 0).toLocaleString('en-IN')),
+        h('td', { class: 'muted' }, r.last_call_at ? new Date(r.last_call_at).toLocaleString() : '—')
+      )))
+    );
+    tableCard.appendChild(h('h2', { style: { marginTop: 0 } }, 'Per-tenant breakdown'));
+    tableCard.appendChild(tbl);
+  }
+
+  refreshBtn.addEventListener('click', reload);
+  fromInp.addEventListener('change', reload);
+  toInp.addEventListener('change', reload);
+  tenantInp.addEventListener('change', reload);
+  reload();
+};
+
 window.addEventListener('hashchange', route);
 route();

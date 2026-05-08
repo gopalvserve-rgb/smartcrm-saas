@@ -704,6 +704,7 @@ const NAV_GROUPS = [
   ] },
   { label: 'Workspace', icon: '💬', items: [
     { id: 'whatsbot',  label: 'WhatsBot',  icon: '💬' },
+    { id: 'aibot',     label: 'AI Bot',    icon: '🤖', roles: ['admin', 'manager'] },
     { id: 'knowledge', label: 'Knowledge', icon: '📚' },
     { id: 'teamchat',  label: 'Team chat', icon: '👥', countKey: 'chat_unread' }
   ] },
@@ -5853,6 +5854,72 @@ VIEWS.dial = async (view) => {
     h('a', { class: 'btn ghost', style: { marginTop: '1.25rem', display: 'inline-block' }, href: '#/leads' }, '← Back to leads')
   ));
 };
+
+// ============================================================
+// 🤖 AI Bot — per-tenant WhatsApp AI assistant powered by Gemini.
+// Phase A1 ships the navigation + sub-tab shells. The actual bot
+// reply path, KB ingestion (PDF/DOCX/URL), trigger modes, and
+// per-tenant usage view are wired in Phase A2 onwards.
+// ============================================================
+VIEWS.aibot = async (view) => {
+  view.innerHTML = '';
+  const tabs = [
+    { id: 'settings', label: '⚙️ Bot Settings' },
+    { id: 'kb',       label: '📚 Knowledge Base' },
+    { id: 'activity', label: '📑 Bot Activity' },
+    { id: 'usage',    label: '💸 Usage & Cost' }
+  ];
+  const tabBar = h('div', { class: 'wb-tab-bar', role: 'tablist' });
+  const body   = h('div', { class: 'wb-tab-body' });
+  let active = 'settings';
+
+  function paint() {
+    tabBar.innerHTML = '';
+    tabs.forEach(t => {
+      tabBar.appendChild(h('button', {
+        class: 'wb-tab' + (t.id === active ? ' active' : ''),
+        onclick: () => { active = t.id; paint(); }
+      }, t.label));
+    });
+    body.innerHTML = '';
+    body.appendChild(_aibotPlaceholder(active));
+  }
+
+  view.appendChild(h('div', { class: 'view-head' },
+    h('h2', { style: { margin: 0 } }, '🤖 AI WhatsApp Bot'),
+    h('p', { class: 'muted', style: { margin: '.25rem 0 0', fontSize: '.9rem' } },
+      'Auto-reply to customer WhatsApp messages with a Gemini-powered assistant trained on YOUR business knowledge base.')
+  ));
+  view.appendChild(tabBar);
+  view.appendChild(body);
+  paint();
+};
+
+// Placeholder body for each AI Bot sub-tab in Phase A1. Real
+// implementations land in subsequent pushes; surfacing the structure
+// now lets the tenant see what's coming and gives admins a stable place
+// to bookmark.
+function _aibotPlaceholder(tabId) {
+  const card = h('div', { class: 'card' });
+  if (tabId === 'settings') {
+    card.appendChild(h('h3', {}, 'Bot Settings'));
+    card.appendChild(h('p', {}, 'Turn the bot on/off, set its persona, choose when it should reply (always / after-hours / keyword-triggered / manual approval), and configure handoff to a human agent.'));
+    card.appendChild(h('p', { class: 'muted' }, 'Status: scaffolding ready — full UI lands in Phase A2.'));
+  } else if (tabId === 'kb') {
+    card.appendChild(h('h3', {}, 'Knowledge Base'));
+    card.appendChild(h('p', {}, 'Train your bot by uploading PDFs / DOCX (price lists, brochures, FAQ docs) or by pasting your website URL. The bot answers customer questions strictly from this material.'));
+    card.appendChild(h('p', { class: 'muted' }, 'Status: storage ready — upload + URL crawl land in Phase A2.'));
+  } else if (tabId === 'activity') {
+    card.appendChild(h('h3', {}, 'Bot Activity'));
+    card.appendChild(h('p', {}, 'Every reply the bot sends, with the customer message, the model used, and the tokens consumed. Drill in to retract a reply or feed the example back into your KB.'));
+    card.appendChild(h('p', { class: 'muted' }, 'Status: log table ready — UI lands once the bot starts replying in Phase A2.'));
+  } else if (tabId === 'usage') {
+    card.appendChild(h('h3', {}, 'Usage & Cost'));
+    card.appendChild(h('p', {}, 'See how many conversations the bot handled this month and the running ₹ cost. Comes with a forecast calculator: tell us your expected volume and we’ll project monthly cost.'));
+    card.appendChild(h('p', { class: 'muted' }, 'Status: aggregation logic ready — INR-with-markup view lands in Phase A4.'));
+  }
+  return card;
+}
 
 VIEWS.whatsbot = async (view) => {
   // Pre-warm the wa_phones cache so chat composer + initiate-chat
@@ -15732,50 +15799,30 @@ async function maybeShowFirstRunTour(forceShow) {
     tooltip.appendChild(h('div', { class: 'crm-tour-progress' }, 'Step ' + (stepIdx + 1) + ' of ' + steps.length));
     tooltip.appendChild(h('h4', {}, step.title));
     const p = h('p', {}); p.innerHTML = step.body; tooltip.appendChild(p);
-
     const skipBtn = h('button', { class: 'btn-skip', onclick: _end, type: 'button' }, 'Skip tour');
     const prevBtn = h('button', { class: 'btn-prev', onclick: _prev, type: 'button', disabled: isFirst ? 'disabled' : null }, '← Back');
-    const nextBtn = h('button', { class: 'btn-next', onclick: _next, type: 'button' }, isLast ? 'Got it 🎉' : 'Next →');
+    const nextBtn = h('button', { class: 'btn-next', onclick: _next, type: 'button' }, isLast ? 'Got it' : 'Next →');
     tooltip.appendChild(h('div', { class: 'crm-tour-actions' },
       h('div', { class: 'left' }, skipBtn),
       h('div', { class: 'right' }, isFirst ? null : prevBtn, nextBtn)
     ));
-
     _reposition();
   }
-
   document.body.appendChild(overlay);
   document.addEventListener('keydown', _onKey);
   window.addEventListener('resize', _reposition);
   window.addEventListener('scroll', _reposition, true);
   _render();
 }
-
-// Manual / debug hook — re-trigger the tour from the Knowledge tab or
-// from the console: `restartProductTour()`.
 window.restartProductTour = function () {
   try { localStorage.removeItem('crm_tour_seen_v1'); } catch (_) {}
   return maybeShowFirstRunTour(true);
 };
 
-
-/* ---------------- WhatsApp topbar shortcut ----------------
- * If admin: tooltip shows the company WhatsApp number (config:
- *   COMPANY_WHATSAPP, falls back to admin user's phone).
- * If non-admin: tooltip shows the logged-in user's own phone.
- * Click: opens WhatsApp Web (https://web.whatsapp.com/) in a new tab.
- * If we have a phone number, we deep-link to wa.me/<number> so the chat
- * bar opens prefocused on that contact. Empty / unreachable phone =>
- * plain web.whatsapp.com.
- * --------------------------------------------------------- */
 async function _initWhatsappTopbar() {
   const btn = document.getElementById('btn-whatsapp');
   if (!btn || btn.dataset.bound) return;
   btn.dataset.bound = '1';
-
-  // Resolve the phone number to show in the tooltip and (where possible)
-  // deep-link to. The fallback chain: admin → COMPANY_WHATSAPP / their own
-  // phone; user → their own phone.
   let phone = '';
   try {
     if (CRM.user && CRM.user.role === 'admin') {
@@ -15785,32 +15832,21 @@ async function _initWhatsappTopbar() {
       phone = String(CRM.user.phone || '').trim();
     }
   } catch (_) {}
-
   const cleaned = phone.replace(/[^\d+]/g, '').replace(/^\+/, '');
-  if (cleaned) {
-    btn.title = `Open WhatsApp (${phone})`;
-  } else {
-    btn.title = 'Open WhatsApp Web';
-  }
-
+  btn.title = cleaned ? ('Open WhatsApp (' + phone + ')') : 'Open WhatsApp Web';
   btn.addEventListener('click', () => {
-    const url = cleaned
-      ? `https://wa.me/${cleaned}`
-      : 'https://web.whatsapp.com/';
+    const url = cleaned ? ('https://wa.me/' + cleaned) : 'https://web.whatsapp.com/';
     window.open(url, '_blank', 'noopener');
   });
 }
-// Defer until CRM.user is hydrated by the shell
 document.addEventListener('DOMContentLoaded', () => {
-  // Poll br
-  // Poll briefly until login completes; bind on first appearance.
   let ticks = 0;
   const t = setInterval(() => {
     if (typeof CRM !== 'undefined' && CRM.user) {
       _initWhatsappTopbar();
       clearInterval(t);
     } else if (++ticks > 60) {
-      clearInterval(t); // give up after ~30s
+      clearInterval(t);
     }
   }, 500);
 });

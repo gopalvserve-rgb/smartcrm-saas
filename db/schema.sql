@@ -1225,3 +1225,80 @@ CREATE TABLE IF NOT EXISTS wa_phones (
 );
 CREATE INDEX IF NOT EXISTS idx_wa_phones_default ON wa_phones(is_default) WHERE is_default = 1;
 CREATE INDEX IF NOT EXISTS idx_wa_phones_active  ON wa_phones(is_active)  WHERE is_active  = 1;
+
+-- ============================================================
+-- WhatsApp AI Bot — per-tenant tables (added 2026-05-08)
+-- ============================================================
+-- Each tenant has its own AI bot powered by Gemini (key managed
+-- centrally on the control plane — see control/schema.sql →
+-- ai_settings).  These tables hold the per-tenant config + KB +
+-- per-conversation log.  All idempotent, safe to re-apply.
+
+-- ---- ai_bot_settings (singleton row per tenant) -----------------
+CREATE TABLE IF NOT EXISTS ai_bot_settings (
+  id                          INTEGER PRIMARY KEY DEFAULT 1,
+  is_enabled                  INTEGER NOT NULL DEFAULT 0,
+  bot_name                    TEXT NOT NULL DEFAULT 'Assistant',
+  business_name               TEXT,
+  language                    TEXT NOT NULL DEFAULT 'en',
+  system_prompt               TEXT,
+  welcome_message             TEXT,
+  reply_modes                 JSONB NOT NULL DEFAULT '["always"]'::jsonb,
+  business_hours              JSONB NOT NULL DEFAULT '{"tz":"Asia/Kolkata","days":[1,2,3,4,5],"start":"09:00","end":"19:00"}'::jsonb,
+  trigger_keywords            TEXT,
+  off_keywords                TEXT,
+  active_phone_number_ids     JSONB DEFAULT '[]'::jsonb,
+  resume_after_idle_minutes   INTEGER NOT NULL DEFAULT 1440,
+  max_replies_per_thread      INTEGER NOT NULL DEFAULT 0,
+  escalation_keywords         TEXT,
+  model_override              TEXT,
+  use_kb                      INTEGER NOT NULL DEFAULT 1,
+  kb_max_chars                INTEGER NOT NULL DEFAULT 60000,
+  history_messages            INTEGER NOT NULL DEFAULT 8,
+  updated_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT ai_bot_settings_singleton CHECK (id = 1)
+);
+INSERT INTO ai_bot_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
+-- ---- ai_kb_documents --------------------------------------------
+CREATE TABLE IF NOT EXISTS ai_kb_documents (
+  id              SERIAL PRIMARY KEY,
+  source_type     TEXT NOT NULL DEFAULT 'text',
+  title           TEXT NOT NULL,
+  raw_text        TEXT NOT NULL,
+  source_url      TEXT,
+  file_path       TEXT,
+  file_size       INTEGER,
+  is_active       INTEGER NOT NULL DEFAULT 1,
+  ingest_status   TEXT NOT NULL DEFAULT 'ready',
+  ingest_error    TEXT,
+  char_count      INTEGER GENERATED ALWAYS AS (LENGTH(raw_text)) STORED,
+  created_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_ai_kb_active ON ai_kb_documents(is_active) WHERE is_active = 1;
+
+-- ---- ai_chat_log ------------------------------------------------
+CREATE TABLE IF NOT EXISTS ai_chat_log (
+  id                SERIAL PRIMARY KEY,
+  phone             TEXT NOT NULL,
+  lead_id           INTEGER,
+  inbound_msg_id    INTEGER REFERENCES whatsapp_messages(id) ON DELETE SET NULL,
+  outbound_msg_id   INTEGER REFERENCES whatsapp_messages(id) ON DELETE SET NULL,
+  draft_text        TEXT,
+  reply_text        TEXT,
+  model             TEXT,
+  mode_used         TEXT NOT NULL,
+  input_tokens      INTEGER NOT NULL DEFAULT 0,
+  output_tokens     INTEGER NOT NULL DEFAULT 0,
+  cost_inr_billed   DECIMAL(12,4) NOT NULL DEFAULT 0,
+  status            TEXT NOT NULL DEFAULT 'sent',
+  suppressed_reason TEXT,
+  error_text        TEXT,
+  phone_number_id   TEXT,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_ai_chat_phone   ON ai_chat_log(phone, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_chat_status  ON ai_chat_log(status);
+CREATE INDEX IF NOT EXISTS idx_ai_chat_created ON ai_chat_log(created_at DESC);
