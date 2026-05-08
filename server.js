@@ -828,6 +828,63 @@ app.post('/api', (req, res, next) => {
   return tenantApi.expressHandler(req, res, next);
 });
 
+// ---- Tenant-scoped webhook routes ---------------------------------
+// The bare /hook/* routes registered above (before attachTenant)
+// handle root URLs like /hook/whatsapp_webhook hit directly by Meta
+// or by the central PHP forwarder's slow-path fallback. Those bare
+// routes never see /t/<slug>/ URLs because attachTenant runs after
+// them and Express does not re-process routes after URL rewrites.
+//
+// These tenant-scoped registrations sit AFTER attachTenant + the
+// tenantStorage middleware, so when the central forwarder dispatches
+// to /t/<slug>/hook/whatsapp_webhook (the canonical URL each tenant
+// registers in wa_connections.json), attachTenant strips the prefix,
+// req.tenant is populated, and the handler runs inside the right
+// tenant's pg.Pool — fast path, zero DB lookup.
+//
+// We delegate to the same per-route handler modules the bare routes
+// use, so behaviour stays identical.
+app.get('/hook/whatsapp_webhook', async (req, res, next) => {
+  if (!req.tenant) return next();   // bare URL hit — let upstream 404 chain run
+  // Verify GET — check this tenant's stored verify token.
+  const token     = String(req.query['hub.verify_token'] || '');
+  const challenge = String(req.query['hub.challenge'] || '');
+  try {
+    const hit = await req.tenantPool.query(
+      `SELECT value FROM config WHERE key IN ('WA_VERIFY_TOKEN','WHATSAPP_VERIFY_TOKEN') LIMIT 1`
+    );
+    const cfg = hit.rows[0] && hit.rows[0].value;
+    if (cfg && cfg === token) return res.type('text/plain').send(challenge);
+  } catch (_) {}
+  return res.status(403).send('Verify token mismatch');
+});
+app.post('/hook/whatsapp_webhook', (req, res, next) => {
+  if (!req.tenant) return next();
+  return whatsbotRoute.expressEvent(req, res);
+});
+app.get('/hook/whatsapp', async (req, res, next) => {
+  if (!req.tenant) return next();
+  const token     = String(req.query['hub.verify_token'] || '');
+  const challenge = String(req.query['hub.challenge'] || '');
+  try {
+    const hit = await req.tenantPool.query(
+      `SELECT value FROM config WHERE key IN ('WA_VERIFY_TOKEN','WHATSAPP_VERIFY_TOKEN') LIMIT 1`
+    );
+    const cfg = hit.rows[0] && hit.rows[0].value;
+    if (cfg && cfg === token) return res.type('text/plain').send(challenge);
+  } catch (_) {}
+  return res.status(403).send('Verify token mismatch');
+});
+app.post('/hook/whatsapp', (req, res, next) => {
+  if (!req.tenant) return next();
+  return webhooksRoute.whatsappEvent(req, res);
+});
+app.post('/hook/meta', (req, res, next) => {
+  if (!req.tenant) return next();
+  return webhooksRoute.metaEvent(req, res);
+});
+
+
 // ---- /api/sample.csv (tenant-scoped CSV download) -----------------
 // The tenant SPA's bulk-upload page links to /api/sample.csv expecting
 // a real CSV. Without an explicit handler here the request falls
