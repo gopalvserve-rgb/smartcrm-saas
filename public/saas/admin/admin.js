@@ -391,6 +391,9 @@ VIEWS.tenants = async (view) => {
               }
             }, '📚 Re-seed help')
           : null,
+        h('button', { class: 'btn ghost xs', title: 'Toggle modules ON/OFF for this tenant',
+          onclick: () => openModulesModal(t)
+        }, '\ud83e\udde9 Modules'),
         t.status === 'active'
           ? h('button', { class: 'btn ghost xs', onclick: async () => { await api('api_saas_tenants_suspend', t.id); navigate('tenants'); } }, 'Suspend')
           : h('button', { class: 'btn ghost xs', onclick: async () => { await api('api_saas_tenants_restore', t.id); navigate('tenants'); } }, 'Restore')
@@ -1434,6 +1437,72 @@ async function route() {
       view.appendChild(h('div', { class: 'error-box' }, e.message));
     }
   }
+}
+
+
+/* ============================================================
+   Modules toggle modal — flip modules ON/OFF per tenant
+   ============================================================ */
+async function openModulesModal(t) {
+  const m = h('div', { class: 'modal-bd' });
+  const card = h('div', { class: 'modal-card', style: { maxWidth: '640px', maxHeight: '85vh', overflow: 'auto' } });
+  m.appendChild(card);
+  document.body.appendChild(m);
+
+  card.appendChild(h('h3', { style: { marginTop: 0 } }, '\ud83e\udde9 Modules \u2014 ' + (t.org_name || t.slug)));
+  card.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+    'Toggle modules on/off for this tenant. Changes apply on the tenant\'s next page load. Always-on modules (Core) cannot be disabled.'));
+
+  const body = h('div', {}, h('div', { class: 'muted' }, 'Loading\u2026'));
+  card.appendChild(body);
+  card.appendChild(h('div', { style: { marginTop: '1rem', textAlign: 'right' } },
+    h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Close')
+  ));
+
+  let data;
+  try { data = await api('api_saas_tenant_modules_get', t.id); }
+  catch (e) { body.innerHTML = ''; body.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+
+  body.innerHTML = '';
+  const active = new Set(data.active || []);
+  const checks = {};
+
+  data.catalog.forEach(mod => {
+    const isActive = active.has(mod.key);
+    const chk = h('input', {
+      type: 'checkbox',
+      checked: isActive ? 'checked' : null,
+      disabled: mod.always_on ? 'disabled' : null
+    });
+    checks[mod.key] = chk;
+    body.appendChild(h('label', {
+      style: { display: 'flex', alignItems: 'flex-start', gap: '.6rem',
+               padding: '.55rem .75rem', borderRadius: '8px',
+               background: '#f8fafc', marginBottom: '.4rem',
+               cursor: mod.always_on ? 'not-allowed' : 'pointer',
+               opacity: mod.always_on ? '.7' : '1' }
+    },
+      chk,
+      h('div', {},
+        h('div', { style: { fontWeight: '600' } }, mod.label + (mod.always_on ? ' \u2014 always on' : '')),
+        h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.15rem' } }, mod.description)
+      )
+    ));
+  });
+
+  const saveBtn = h('button', { class: 'btn primary', style: { marginTop: '.75rem' } }, '\ud83d\udcbe Save modules');
+  saveBtn.onclick = async () => {
+    saveBtn.disabled = true;
+    const keys = data.catalog
+      .filter(mod => checks[mod.key] && checks[mod.key].checked)
+      .map(mod => mod.key);
+    try {
+      const r = await api('api_saas_tenant_modules_set', t.id, keys);
+      toast('Modules updated for ' + (t.org_name || t.slug));
+      m.remove();
+    } catch (e) { toast(e.message, 'err'); saveBtn.disabled = false; }
+  };
+  body.appendChild(saveBtn);
 }
 
 window.addEventListener('hashchange', route);

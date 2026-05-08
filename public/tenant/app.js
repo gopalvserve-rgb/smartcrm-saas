@@ -206,17 +206,44 @@ function parseHashView() {
 }
 
 async function warmCache() {
-  const [statuses, sources, products, users, customFields, cfg] = await Promise.all([
+  const [statuses, sources, products, users, customFields, cfg, mods] = await Promise.all([
     api('api_statuses_list'),
     api('api_sources_list'),
     api('api_products_list'),
     api('api_users_list'),
     api('api_customFields_list').catch(() => []),
-    api('api_admin_getConfig').catch(() => ({}))
+    api('api_admin_getConfig').catch(() => ({})),
+    api('api_modules_active').catch(() => null)
   ]);
   CRM.cache = { statuses, sources, products, users, customFields };
   CRM.cache.config = cfg || {};
+  // Active modules — set of module keys the super-admin has enabled.
+  // null/undefined means every module is enabled (backwards-compatible).
+  CRM.cache.modules = (mods && Array.isArray(mods.active)) ? mods.active : null;
+  CRM.cache.module_catalog = (mods && Array.isArray(mods.catalog)) ? mods.catalog : null;
   applyTenantTheme(cfg || {});
+}
+
+// Helpers for module-aware filtering. Used by sidebar render + settings rail.
+function _isModuleActive(key) {
+  if (!CRM.cache.modules) return true;             // pre-load or single-tenant fallback
+  return CRM.cache.modules.includes(key);
+}
+function _moduleForNavId(navId) {
+  const cat = CRM.cache.module_catalog;
+  if (!cat) return null;
+  for (const m of cat) {
+    if ((m.nav_ids || []).includes(navId)) return m.key;
+  }
+  return null;
+}
+function _moduleForSettingsId(setId) {
+  const cat = CRM.cache.module_catalog;
+  if (!cat) return null;
+  for (const m of cat) {
+    if ((m.settings_ids || []).includes(setId)) return m.key;
+  }
+  return null;
 }
 
 /**
@@ -887,6 +914,8 @@ function renderShell() {
     if (item.roles && !item.roles.includes(CRM.user.role)) return;
     if (hiddenNavIds.includes(item.id)) return;
     if (item.id === 'teamchat' && CRM.access && CRM.access.can_chat === false) return;
+    const _modKey2 = (typeof _moduleForNavId === 'function') ? _moduleForNavId(item.id) : null;
+    if (_modKey2 && !_isModuleActive(_modKey2)) return;
     if (mobilePrimary.includes(item.id)) {
       const ma = h('a', { href: '#/' + item.id, 'data-view': item.id },
         h('span', { class: 'bn-ico' }, item.icon),

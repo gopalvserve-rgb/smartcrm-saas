@@ -68,6 +68,7 @@ const ROUTE_FILES = [
   'whatsbot',
   'aiBot',
   'quotations',
+  'modules',
 ];
 
 const API = {};

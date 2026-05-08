@@ -44,13 +44,15 @@ const applySchema = require('./routes/saas/applySchema');
 const crashReport = require('./routes/saas/crashReport');
 const aiSettings = require('./routes/saas/aiSettings');
 const aiCosting  = require('./routes/saas/aiCosting');
+const tenantModules = require('./routes/saas/tenantModules');
 
 // Combine every SaaS api_* into one dispatch map
 const SAAS_API = {};
 [
   superAdmin, packages, signup, tenants, invoices, settings,
   announcements, customReqs, webhookLogs, errorLogs, whatsbotBackfill, applySchema, crashReport,
-  aiSettings, aiCosting
+  aiSettings, aiCosting,
+  tenantModules
 ].forEach(mod => {
   Object.keys(mod).forEach(k => {
     if (typeof mod[k] === 'function' && k.startsWith('api_saas_')) SAAS_API[k] = mod[k];

@@ -366,3 +366,12 @@ CREATE TABLE IF NOT EXISTS ai_usage_log (
 CREATE INDEX IF NOT EXISTS idx_ai_usage_tenant_day ON ai_usage_log(tenant_slug, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ai_usage_created    ON ai_usage_log(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ai_usage_kind       ON ai_usage_log(call_kind);
+
+-- ============================================================
+-- Per-tenant module toggles (2026-05-09)
+-- ============================================================
+-- Each tenant can have any subset of platform modules turned on. When
+-- modules_json is NULL or '[]' = all modules enabled (sane default).
+-- Super-admin sets this from the Tenants page; the tenant SPA filters
+-- its sidebar + Settings rail to only show enabled modules.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS modules_json JSONB;
