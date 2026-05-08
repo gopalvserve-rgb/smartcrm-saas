@@ -1,0 +1,127 @@
+# Build a signed multi-tenant Lead CRM Android APK from smartcrm-saas on every push to main,
+# upload it as a workflow artifact, and copy it into public/LeadCRM.apk
+# so the in-app "📱 Get app" → Download APK button serves the latest.
+#
+# Required GitHub Secrets (Repo → Settings → Secrets and variables → Actions):
+#   ANDROID_KEYSTORE_BASE64    — base64 of celeste-build-secrets/android.keystore
+#                                 (run: base64 -w 0 android.keystore)
+#   ANDROID_KEYSTORE_PASSWORD  — keystore password (LeadCRM2026 by default)
+#   ANDROID_KEY_PASSWORD       — key password (same value)
+#
+# Trigger manually via Actions tab → "Build Android APK" → Run workflow,
+# or it fires automatically on every push to main.
+
+name: Build Android APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cap-app/**'
+# Don't trigger on public/** — only the cap-app wrapper changes need to rebuild the APK.
+      - '.github/workflows/build-android.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write       # Lets the job commit the rebuilt APK back
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Capacitor + plugins
+        working-directory: cap-app
+        run: npm install --no-audit --no-fund
+
+      - name: Capacitor sync (regen plugin registry)
+        working-directory: cap-app
+        run: npx cap sync android
+
+      - name: Decode signing keystore
+        run: |
+          mkdir -p cap-app/android/app
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > cap-app/android/app/release.keystore
+
+      - name: Configure release-signing.properties
+        run: |
+          # The committed build.gradle reads signing config from this file.
+          # Overwrite it with the CI-decoded keystore + secret passwords so
+          # the local sandbox path that's checked in does not leak into CI.
+          cat > cap-app/android/app/release-signing.properties <<EOF
+          storeFile=release.keystore
+          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyAlias=android
+          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          EOF
+
+      - name: Gradle assembleRelease (signed)
+        working-directory: cap-app/android
+        run: |
+          ./gradlew assembleRelease --no-daemon
+
+      - name: Locate APK
+        id: locate
+        run: |
+          APK=$(find cap-app/android/app/build/outputs/apk/release -name "*.apk" | head -1)
+          echo "apk_path=$APK" >> $GITHUB_OUTPUT
+          ls -la "$APK"
+
+      - name: Sign + zipalign (apksigner)
+        run: |
+          BUILD_TOOLS=$(ls -1 $ANDROID_SDK_ROOT/build-tools | sort -V | tail -1)
+          APKSIGNER=$ANDROID_SDK_ROOT/build-tools/$BUILD_TOOLS/apksigner
+          ZIPALIGN=$ANDROID_SDK_ROOT/build-tools/$BUILD_TOOLS/zipalign
+          IN="${{ steps.locate.outputs.apk_path }}"
+          # If the gradle-signed APK is unsigned variant, sign it explicitly
+          if [[ "$IN" == *"-unsigned.apk" ]]; then
+            $ZIPALIGN -p -v 4 "$IN" cap-app/android/app/build/outputs/apk/release/aligned.apk
+            $APKSIGNER sign \
+              --ks cap-app/android/app/release.keystore \
+              --ks-key-alias android \
+              --ks-pass pass:'${{ secrets.ANDROID_KEYSTORE_PASSWORD }}' \
+              --key-pass pass:'${{ secrets.ANDROID_KEY_PASSWORD }}' \
+              --out public/LeadCRM.apk \
+              cap-app/android/app/build/outputs/apk/release/aligned.apk
+          else
+            cp "$IN" public/LeadCRM.apk
+          fi
+          $APKSIGNER verify --print-certs public/LeadCRM.apk
+
+      - name: Upload APK artifact (downloadable from Actions tab)
+        uses: actions/upload-artifact@v4
+        with:
+          name: LeadCRM-apk
+          path: public/LeadCRM.apk
+          retention-days: 30
+
+      - name: Commit fresh APK back to repo
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Skip commit if the APK didn't change
+          git add public/LeadCRM.apk
+          if git diff --staged --quiet; then
+            echo "No APK change; skipping commit."
+            exit 0
+          fi
+          git commit -m "build(android): refresh LeadCRM.apk via CI [skip ci]"
+          git push
