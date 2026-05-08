@@ -125,6 +125,7 @@ const NAV = [
   { id: 'invoices',      label: '🧾 Invoices' },
   { id: 'webhooks',      label: '📡 Webhook Logs' },
   { id: 'errors',        label: '🐞 Errors' },
+  { id: 'crashes',       label: '🚨 Crashes' },
   { id: 'announcements', label: '📣 Updates' },
   { id: 'requirements',  label: '🛠 Custom Requirements' },
   { id: 'admins',        label: '👥 Super Assistants' },
@@ -897,6 +898,132 @@ function _kv(label, value) {
     h('div', { style: { fontSize: '.92rem', fontWeight: '500', wordBreak: 'break-all' } }, String(value == null ? '' : value))
   );
 }
+
+VIEWS.crashes = async (view) => {
+  // App-crash dashboard. Reads from the same control.error_logs table
+  // the Errors page uses, but pre-filters to severity in
+  // (fatal, error) and groups by fingerprint so we get a real
+  // "is the app crashing right now?" signal rather than an event firehose.
+
+  view.appendChild(h('h2', {}, '🚨 App Crash Report'));
+
+  // Controls strip
+  const hoursSel = h('select', { id: 'crash-hours', style: { marginRight: '.5rem' }, onchange: () => navigate('crashes') },
+    h('option', { value: '1' },   'Last 1 hour'),
+    h('option', { value: '24' },  'Last 24 hours'),
+    h('option', { value: '168' }, 'Last 7 days'),
+    h('option', { value: 'all' }, 'All time')
+  );
+  const sevSel = h('select', { id: 'crash-sev', style: { marginRight: '.5rem' }, onchange: () => navigate('crashes') },
+    h('option', { value: 'fatal_and_error' }, 'Fatal + 5xx errors'),
+    h('option', { value: 'fatal' },           'Fatal only (process crashes)'),
+    h('option', { value: 'error' },           '5xx errors only')
+  );
+  const params  = new URLSearchParams(location.hash.split('?')[1] || '');
+  hoursSel.value = params.get('hours') || '24';
+  sevSel.value   = params.get('sev')   || 'fatal_and_error';
+  view.appendChild(h('div', { class: 'toolbar', style: { marginBottom: '1rem' } },
+    hoursSel, sevSel,
+    h('button', { class: 'btn ghost', onclick: () => navigate('crashes') }, '↻ Refresh'),
+    h('span', { style: { flex: 1 } }),
+    h('button', { class: 'btn danger', onclick: async () => {
+      if (!confirm('Mark every crash (severity=fatal) as resolved?')) return;
+      try {
+        const r = await api('api_saas_errorLogs_resolveAll', { severity: 'fatal' });
+        toast(`Marked ${r.affected || 0} resolved`);
+        navigate('crashes');
+      } catch (e) { toast(e.message, 'err'); }
+    } }, 'Mark all crashes resolved')
+  ));
+
+  let res;
+  try {
+    res = await api('api_saas_crashReport_summary', {
+      hours:    hoursSel.value === 'all' ? 'all' : Number(hoursSel.value || 24),
+      severity: sevSel.value
+    });
+  } catch (e) {
+    view.appendChild(h('div', { class: 'error-box' }, 'Failed to load crash report: ' + e.message));
+    return;
+  }
+
+  // KPI cards
+  const minsAgoLabel = res.counts.last_crash_minutes_ago == null
+    ? '—'
+    : (res.counts.last_crash_minutes_ago < 60
+        ? res.counts.last_crash_minutes_ago + ' min ago'
+        : Math.round(res.counts.last_crash_minutes_ago / 60) + ' hr ago');
+  const kpiGrid = h('div', { class: 'kpi-grid', style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '.8rem', marginBottom: '1.4rem' } });
+  const kpi = (title, value, sub) => h('div', { class: 'card kpi', style: { padding: '1rem' } },
+    h('div', { class: 'muted', style: { fontSize: '.78rem', textTransform: 'uppercase', letterSpacing: '.05em' } }, title),
+    h('div', { style: { fontSize: '1.6rem', fontWeight: 700, marginTop: '.25rem' } }, String(value)),
+    sub ? h('div', { class: 'muted', style: { fontSize: '.8rem', marginTop: '.15rem' } }, sub) : null
+  );
+  kpiGrid.appendChild(kpi('Fatal in window',   res.counts.fatal_in_window,   'Process-level crashes'));
+  kpiGrid.appendChild(kpi('5xx errors',        res.counts.error_in_window,   'Server-side request errors'));
+  kpiGrid.appendChild(kpi('Unresolved total',  res.counts.unresolved_total,  'Across all time'));
+  kpiGrid.appendChild(kpi('Last crash',        minsAgoLabel,                  res.counts.last_crash_at ? new Date(res.counts.last_crash_at).toLocaleString() : 'No fatal events on record'));
+  view.appendChild(kpiGrid);
+
+  // Top crashes table (deduped by fingerprint)
+  view.appendChild(h('h3', { style: { marginTop: '1.5rem' } }, 'Top crashes — by occurrence count'));
+  if (!res.top.length) {
+    view.appendChild(h('div', { class: 'empty', style: { padding: '1rem 0', color: '#64748b' } }, '🎉 No crashes in this window.'));
+  } else {
+    const tbl = h('table', { class: 'data-table' },
+      h('thead', {}, h('tr', {},
+        h('th', {}, '#'),
+        h('th', {}, 'Severity'),
+        h('th', {}, 'Source'),
+        h('th', {}, 'Message'),
+        h('th', {}, 'First seen'),
+        h('th', {}, 'Last seen'),
+        h('th', { style: { textAlign: 'right' } }, 'Count')
+      )),
+      h('tbody', {}, ...res.top.map(t =>
+        h('tr', { style: { cursor: 'pointer' }, onclick: () => navigate('errors?id=' + t.id) },
+          h('td', {}, '#' + t.id),
+          h('td', {},
+            h('span', { class: 'badge ' + (t.severity === 'fatal' ? 'err' : 'warn') }, t.severity)),
+          h('td', {}, t.source || '—'),
+          h('td', { style: { maxWidth: '380px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+            t.message + (t.sample_stack_first_line ? '\n  ' + t.sample_stack_first_line : '')),
+          h('td', { class: 'muted', style: { fontSize: '.85rem' } }, new Date(t.first_seen_at).toLocaleString()),
+          h('td', { class: 'muted', style: { fontSize: '.85rem' } }, new Date(t.last_seen_at).toLocaleString()),
+          h('td', { style: { textAlign: 'right', fontWeight: 600 } }, String(t.occurrences))
+        )))
+    );
+    view.appendChild(tbl);
+  }
+
+  // Recent (raw, non-deduped)
+  view.appendChild(h('h3', { style: { marginTop: '1.5rem' } }, 'Recent — last 20 events'));
+  if (!res.recent.length) {
+    view.appendChild(h('div', { class: 'empty', style: { padding: '1rem 0', color: '#64748b' } }, 'Nothing recent.'));
+  } else {
+    const tbl2 = h('table', { class: 'data-table' },
+      h('thead', {}, h('tr', {},
+        h('th', {}, 'When'),
+        h('th', {}, 'Severity'),
+        h('th', {}, 'Source'),
+        h('th', {}, 'Tenant'),
+        h('th', {}, 'Status'),
+        h('th', {}, 'Message')
+      )),
+      h('tbody', {}, ...res.recent.map(r =>
+        h('tr', { style: { cursor: 'pointer' }, onclick: () => navigate('errors?id=' + r.id) },
+          h('td', { class: 'muted', style: { fontSize: '.85rem' } }, new Date(r.last_seen_at).toLocaleString()),
+          h('td', {},
+            h('span', { class: 'badge ' + (r.severity === 'fatal' ? 'err' : 'warn') }, r.severity)),
+          h('td', {}, r.source || '—'),
+          h('td', {}, r.tenant_slug || '—'),
+          h('td', {}, r.status_code != null ? String(r.status_code) : '—'),
+          h('td', { style: { maxWidth: '380px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, r.message)
+        )))
+    );
+    view.appendChild(tbl2);
+  }
+};
 
 VIEWS.announcements = async (view) => {
   view.appendChild(h('div', { class: 'toolbar' },
