@@ -1,269 +1,263 @@
 /**
- * Tenant API dispatcher — the per-tenant POST /api endpoint.
+ * routes/saas/tenantApi.js
  *
- * This is the SaaS equivalent of the original Celeste server.js dispatcher:
- * it loads every /routes/* module, builds a name→handler map of every
- * exported `api_*` function, and dispatches { fn, args } JSON requests
- * to them.
+ * Tenant API dispatcher for the SaaS server (server.js).
+ * Mirrors the logic in server.tenant.js but only loads the route
+ * files that exist inside smartcrm-saas/routes/. Missing route
+ * files are skipped gracefully so partial deployments still work.
  *
- * What's different from the single-tenant Celeste version:
- *   - the route files import ../db/pg, which (in this repo) uses
- *     AsyncLocalStorage to pick the right per-tenant pg.Pool. The
- *     server.js attachTenantApiContext middleware wraps the request
- *     in tenantStorage.run({ pool }) so any DB call from inside a
- *     handler hits tenant_<slug>, not the control DB.h
- *   - we expose a small SSO-login exchange: when the magic link from
- *     /admin → "Login as tenant" arrives with ?ssl=<jwt>, the SPA hits
- *     api_auth_ssoLogin which verifies the token, finds (or creates)
- *     the matching admin user in the tenant DB, and mints a regular
- *     tenant JWT so the rest of the SPA works unchanged.
- *
- * Adding a new route file: drop it in /routes/<name>.js, export
- * functions named api_*, and require() it below. No other wiring
- * needed — the dispatcher picks it up automatically.
+ * Also provides:
+ *   api_login          — email + password login for tenant users
+ *   api_auth_ssoLogin  — exchange a super-admin "Login as tenant"
+ *                        ssl JWT for a regular tenant session token
  */
-const path = require('path');
-const fs = require('fs');
-const jwt = require('jsonwebtoken');
-const bcrypt = require('bcryptjs');
 
-const db = require('../../db/pg');
-const quota = require('../../utils/quota');
-// Optional platform error logging — writes to the control DB so the
-// super-admin /admin/#/errors view picks them up. Absent in single-
-// tenant deployments — gracefully skipped.
+'use strict';
+
+const path   = require('path');
+const jwt    = require('jsonwebtoken');
+const db     = require('../../db/pg');
+const { hashPassword, verifyPassword, signToken, authUser } = require('../../utils/auth');
+
+// Optional — gracefully absent in single-tenant deployments.
+// In the SaaS server, errorLogs lives next to this file and writes to
+// the platform control DB so the super-admin /admin/#/errors view picks
+// them up. We require lazily so a missing file never crashes boot.
 let errorLogs;
 try { errorLogs = require('./errorLogs'); } catch (_) {}
 
-/**
- * Map of fn-names that consume a quota slot. The `metric` is the key
- * inside packages.quotas (see utils/quota.js). The `count` callback
- * computes how many slots this specific call would consume — most
- * are 1, but bulk operations (CSV upload, bulk-WA) need to look at
- * the args to size the request properly.
- *
- * Listed explicitly rather than guessed-by-pattern so a typo or a
- * new endpoint doesn't accidentally bypass enforcement.
- */
-const QUOTA_GATES = {
-  // Each user-create burns one seat
-  api_users_save: { metric: 'users', count: (args) => {
-    // api_users_save(token, user) — only count NEW users (no id)
-    const u = args && args[1];
-    return (u && !u.id) ? 1 : 0;
-  } },
-  // Each lead-create burns one slot. Bulk uploads count as N.
-  api_leads_create: { metric: 'leads', count: () => 1 },
-  api_leads_bulkCreate: { metric: 'leads', count: (args) => {
-    // api_leads_bulkCreate(token, rows, assign) → rows is the array
-    const rows = args && args[1];
-    return Array.isArray(rows) ? rows.length : 1;
-  } },
-  // Each outbound WA send burns one slot (1-to-1 chat send).
-  api_wb_chat_send: { metric: 'whatsapp_send', count: () => 1 },
-  // Bulk WhatsApp campaign — count by recipient list size if we can
-  // get it, otherwise fall back to 1 (the campaign queue itself will
-  // re-check per-message via api_wb_chat_send).
-  api_wb_campaigns_send: { metric: 'whatsapp_send', count: (args) => {
-    const p = args && args[1];
-    if (p && Array.isArray(p.recipients)) return p.recipients.length;
-    if (p && Number(p.recipients_total) > 0) return Number(p.recipients_total);
-    return 1;
-  } }
-};
-
-/**
- * Run the quota gate for an incoming dispatcher call. No-ops when
- * there's no tenant on the request (single-tenant deployments) or
- * when this fn isn't gated.
- */
-async function _checkQuotaForCall(req, fn, args) {
-  if (!req || !req.tenant) return;
-  const gate = QUOTA_GATES[fn];
-  if (!gate) return;
-  const inc = Math.max(0, Number(gate.count(args)) || 0);
-  if (inc <= 0) return;             // e.g. user UPDATE with id present — no new seat
-  await quota.requireQuota(req.tenant, gate.metric, inc);
-}
-
-// All the route files that make up the tenant CRM. Listed explicitly
-// rather than auto-loaded so a typo or stray file doesn't accidentally
-// expose endpoints.
+// ── 1. Load every available route file ──────────────────────────────────────
+//
+// Add more entries here as route files are ported into smartcrm-saas/routes/.
 const ROUTE_FILES = [
-  'auth', 'users', 'leads', 'admin',
-  'customFields', 'tags', 'tat', 'whatsbot', 'whatsapp',
-  'sources', 'products', 'statuses', 'rules',
-  'notifications', 'reports', 'hr', 'fb',
-  'automations', 'permissions', 'recordings', 'push',
-  'knowledgeBase', 'announcements', 'chat',
-  'savedFilters', 'customers', 'targets',
-  'inventory', 'projectStages', 'personalWaTemplates',
-  'integrations', 'roles'
+  'admin',
+  'users',
+  'leads',
+  'permissions',
+  'roles',
+  'webhooks',
+  'integrations',
+  'tags',
 ];
 
 const API = {};
-for (const name of ROUTE_FILES) {
-  const p = path.join(__dirname, '..', '..', 'routes', name + '.js');
-  if (!fs.existsSync(p)) {
-    console.warn('[tenantApi] route file missing, skipping:', name);
-    continue;
-  }
-  try {
-    const mod = require(p);
-    for (const k of Object.keys(mod)) {
-      if (typeof mod[k] === 'function' && k.startsWith('api_')) {
-        API[k] = mod[k];
-      }
-    }
-  } catch (e) {
-    console.error('[tenantApi] failed to load', name + ':', e.message);
-  }
-}
 
-// ---- SSO login: magic-link from /admin → "Login as tenant" ----
-//
-// Flow:
-//   1. Admin clicks "🔓 Login as ↗" in /admin → Tenants
-//   2. api_saas_tenants_loginAs mints a JWT { ssl, tenant_id, slug, as_email, sa_id, sa_email }
-//   3. New tab opens at /t/<slug>/?ssl=<jwt>
-//   4. Tenant SPA boots, sees ?ssl= in the URL, POSTs api_auth_ssoLogin
-//   5. We verify the JWT, find the user with that email in this tenant
-//      DB, and return a normal tenant JWT so the SPA can proceed.
-//
-// The check `payload.slug === req.tenantSlug` makes sure a token minted
-// for tenant A can't be replayed against tenant B even if URLs are
-// swapped.
-const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
-const TENANT_TOKEN_TTL = '30d';
+ROUTE_FILES.forEach(name => {
+  try {
+    const mod = require(`../${name}`);
+    Object.keys(mod).forEach(fn => {
+      if (typeof mod[fn] === 'function' && fn.startsWith('api_')) {
+        API[fn] = mod[fn];
+      }
+    });
+  } catch (e) {
+    // Route file doesn't exist yet — skip silently
+    if (e.code !== 'MODULE_NOT_FOUND') {
+      console.warn(`[tenantApi] Warning: could not load routes/${name}.js —`, e.message);
+    }
+  }
+});
+
+// ── 2. Built-in auth functions ───────────────────────────────────────────────
 
 /**
- * Tenant-side quota report. The SPA can call this to render
- * "Plan usage" cards (Settings → Plan) without rebuilding the
- * counters. Returns null per-metric when there's no quota set
- * for the package (i.e. unlimited).
+ * api_login(_token, email, password, meta?)
+ *
+ * Standard email + password login for tenant users.
+ * Returns { token, user }.
  */
-async function api_quota_report(_token /*, ignored */) {
-  const store = (db.tenantStorage && db.tenantStorage.getStore()) || {};
-  const tenant = store.tenant;
-  if (!tenant) return { metrics: {}, package_id: null };
-  const out = {};
-  for (const metric of quota.METRICS) {
-    try { out[metric] = await quota.getUsage(tenant, metric); }
-    catch (_) { out[metric] = null; }
-  }
-  return { metrics: out, package_id: tenant.package_id };
-}
-API.api_quota_report = api_quota_report;
+async function api_login(_token, email, password) {
+  if (!email || !password) throw new Error('email and password required');
 
-async function api_auth_ssoLogin(_token, payload) {
-  const ssl = String((payload && payload.ssl) || '').trim();
-  const expectedSlug = String((payload && payload.slug) || '').toLowerCase();
-  if (!ssl)         throw new Error('Missing magic-link token');
-  if (!expectedSlug) throw new Error('Missing slug');
+  const normalEmail = String(email).toLowerCase().trim();
+  const user = await db.findOneBy('users', 'email', normalEmail);
 
-  let claims;
-  try { claims = jwt.verify(ssl, JWT_SECRET); }
-  catch (_) { throw new Error('Magic link expired or invalid — please re-open from the admin panel'); }
-  if (!claims || !claims.ssl) throw new Error('Not a sudo-login token');
-  if (String(claims.slug || '').toLowerCase() !== expectedSlug) {
-    throw new Error('Token issued for a different workspace');
-  }
+  if (!user) throw new Error('Invalid email or password');
+  if (!Number(user.is_active)) throw new Error('Account is deactivated');
+  if (!verifyPassword(password, user.password_hash)) throw new Error('Invalid email or password');
 
-  const targetEmail = String(claims.as_email || '').toLowerCase().trim();
-  if (!targetEmail) throw new Error('Token missing target email');
-
-  // Find or create the admin user in the tenant DB. provisioning.js
-  // already seeds an admin row with the contact email; this is a
-  // safety net in case that row was deleted or someone added a new
-  // admin email to the tenant manually.
-  let user = await db.findOneBy('users', 'email', targetEmail);
-  if (!user) {
-    // Create a placeholder admin so the sudo-login still works. The
-    // password is random — operator never uses it because they have
-    // the magic link.
-    const pwHash = bcrypt.hashSync('sudo-' + Math.random().toString(36).slice(2), 10);
-    const id = await db.insert('users', {
-      name: 'Admin (auto-created via sudo-login)',
-      email: targetEmail,
-      role: 'admin',
-      password_hash: pwHash,
-      is_active: 1,
-      created_at: db.nowIso()
-    });
-    user = await db.findById('users', id);
-  }
-  if (Number(user.is_active) === 0) throw new Error('User account is inactive');
-
-  const token = jwt.sign(
-    { id: user.id, email: user.email, role: user.role, sso_by: claims.sa_email },
-    JWT_SECRET,
-    { expiresIn: TENANT_TOKEN_TTL }
-  );
+  const token = signToken(user);
   return {
     token,
-    user: { id: user.id, name: user.name, email: user.email, role: user.role },
-    sudo_by: claims.sa_email
+    user: {
+      id:         user.id,
+      name:       user.name,
+      email:      user.email,
+      role:       user.role,
+      photo_url:  user.photo_url || '',
+    }
   };
 }
-API.api_auth_ssoLogin = api_auth_ssoLogin;
 
 /**
- * Express handler for POST /api on a tenant request. The body shape is
- * { fn: 'api_xxx', args: [token, ...] } — same contract as the original
- * Celeste server.
+ * api_login_otp_verify — stub so older client code doesn't crash.
+ * Full OTP flow requires a notifications route; return the same shape
+ * as api_login for now.
+ */
+async function api_login_otp_verify(_token, challengeToken) {
+  // The challenge token IS a short-lived JWT in some implementations.
+  // For now, just verify and re-issue.
+  const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
+  let payload;
+  try { payload = jwt.verify(challengeToken, JWT_SECRET); }
+  catch (e) { throw new Error('Invalid or expired OTP challenge'); }
+
+  const user = await db.findById('users', payload.id);
+  if (!user || !Number(user.is_active)) throw new Error('User not found or inactive');
+
+  const token = signToken(user);
+  return {
+    token,
+    user: { id: user.id, name: user.name, email: user.email, role: user.role, photo_url: user.photo_url || '' }
+  };
+}
+
+/**
+ * api_auth_ssoLogin(_token, payload)
  *
- * Important: we do NOT need to call db.tenantStorage.run() here —
- * server.js's attachTenantApiContext middleware has already done that
- * around the entire request, so any await chain inside the handler
- * sees the right tenant pool transparently.
+ * Called by the tenant SPA bootstrap (index.html) when the page is
+ * opened with ?ssl=<jwt> — i.e. when a super-admin clicks
+ * "Login as tenant" in the admin panel.
+ *
+ * payload = { ssl: '<jwt>', slug: '<tenant-slug>' }
+ *
+ * The ssl JWT was minted by the admin panel (routes/saas/tenants.js
+ * or similar) and contains:
+ *   { ssl: true, slug, as_email, sa_email, iat, exp }
+ *
+ * We verify it, look up the target user in the tenant DB, and return
+ * a normal tenant session token so the SPA boots as that user.
+ */
+async function api_auth_ssoLogin(_token, payload) {
+  const { ssl, slug } = payload || {};
+  if (!ssl)  throw new Error('ssl token required');
+  if (!slug) throw new Error('slug required');
+
+  const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
+  let decoded;
+  try {
+    decoded = jwt.verify(String(ssl), JWT_SECRET);
+  } catch (e) {
+    throw new Error('Login link has expired or is invalid. Please generate a new one from the admin panel.');
+  }
+
+  // Validate payload shape
+  if (!decoded.ssl || decoded.slug !== slug) {
+    throw new Error('Token mismatch — slug does not match.');
+  }
+
+  // Find the impersonation target in this tenant's DB.
+  // as_email is the tenant user (usually the tenant admin / owner).
+  const targetEmail = String(decoded.as_email || '').toLowerCase().trim();
+  if (!targetEmail) throw new Error('Token missing as_email claim');
+
+  let user = await db.findOneBy('users', 'email', targetEmail);
+
+  // If no user with that email exists in this tenant's DB yet
+  // (e.g. tenant was just provisioned and has no users), fall back to
+  // the first admin user so the operator at least gets in.
+  if (!user) {
+    const all = await db.getAll('users');
+    user = all.find(u => u.role === 'admin' && Number(u.is_active)) || all[0];
+  }
+
+  if (!user) throw new Error('No users found in this tenant workspace yet.');
+  if (!Number(user.is_active)) throw new Error('Target user account is deactivated.');
+
+  const token = signToken(user);
+  return {
+    token,
+    user: {
+      id:        user.id,
+      name:      user.name,
+      email:     user.email,
+      role:      user.role,
+      photo_url: user.photo_url || '',
+    }
+  };
+}
+
+// Register built-in auth handlers
+API.api_login              = api_login;
+API.api_login_otp_verify   = api_login_otp_verify;
+API.api_auth_ssoLogin      = api_auth_ssoLogin;
+
+// ── 3. Express handler ───────────────────────────────────────────────────────
+
+/**
+ * expressHandler(req, res, next)
+ *
+ * Drop-in for the app.post('/api', ...) route in server.js.
+ * Expects body: { fn: string, args: any[] }
+ *
+ * Protocol (matches server.tenant.js + app.js apiRaw()):
+ *   args[0]  = bearer token string (CRM.token, may be '')
+ *   args[1+] = actual function arguments
+ *
+ * So we call: handler(...args)  — token is already baked into args.
  */
 async function expressHandler(req, res) {
   const { fn, args } = req.body || {};
-  if (!fn || !API[fn]) {
-        const slug = (req.tenant && req.tenant.slug) || req.tenantSlug || 'unknown';
-        console.warn(`[tenantApi] Unknown function: ${fn} (tenant: ${slug})`);
-        if (errorLogs) {
-                errorLogs.logError({
-                          source: 'tenant-api', severity: 'error',
-                          message: `Unknown function: ${fn}`,
-                          url: req.originalUrl, method: req.method, status_code: 404,
-                          ua: req.get('user-agent'), context: { fn, tenant: slug }
-                }).catch(() => {});
-        }
-    return res.status(404).json({ error: 'Unknown function: ' + fn });
+
+  if (!fn) {
+    return res.status(400).json({ error: 'fn is required' });
   }
+
+  const handler = API[fn];
+  if (!handler) {
+    const slug = (req.tenant && req.tenant.slug) || req.tenantSlug || 'unknown';
+    console.warn(`[tenantApi] Unknown function: ${fn} (tenant: ${slug})`);
+    if (errorLogs) {
+      errorLogs.logError({
+        source:      'tenant-api',
+        severity:    'error',
+        message:     `Unknown function: ${fn}`,
+        url:         req.originalUrl,
+        method:      req.method,
+        status_code: 404,
+        ua:          req.get('user-agent'),
+        context:     { fn, tenant: slug }
+      }).catch(() => {});
+    }
+    return res.status(404).json({ error: `Unknown function: ${fn}` });
+  }
+
   try {
-    // Quota gate: rejects plan-limit-exceeded calls BEFORE the handler
-    // runs so we never write a half-row that puts the tenant over.
-    // Throws with .quotaExceeded = true → caught below and returned
-    // as HTTP 402 so the SPA can render a "Upgrade plan" prompt.
-    await _checkQuotaForCall(req, fn, args || []);
-    const result = await API[fn](...(args || []));
-    res.json({ ok: true, result });
-  } catch (e) {
-    // Mirror the control-plane error shape so the SPA's unified api()
-    // helper can keep its current parsing logic.
-    const msg = e && e.message ? e.message : String(e);
-    if (e && e.quotaExceeded) {
-      return res.status(402).json({
-        error: msg, quota_exceeded: true,
-        metric: e.metric || null, usage: e.usage || null
+    const finalArgs = (args || []).slice();
+    if (fn === 'api_login' || fn === 'api_login_otp_verify') {
+      finalArgs.push({
+        ua: String(req.headers['user-agent'] || ''),
+        ip: String(req.headers['x-forwarded-for'] || req.connection?.remoteAddress || '')
+              .split(',')[0].trim()
       });
     }
-        // Log genuine server errors to the admin panel (not quota/auth noise).
-        const isUserError = /not signed in|invalid.*token|expired|forbidden|required|already/i.test(msg);
-        if (!isUserError && errorLogs) {
-                const slug = (req.tenant && req.tenant.slug) || req.tenantSlug || 'unknown';
-                errorLogs.logError({
-                          source: 'tenant-api', severity: 'error',
-                          message: `[tenant-api] ${fn}: ${msg}`,
-                          stack: e.stack, url: req.originalUrl, method: req.method,
-                          status_code: 400, ua: req.get('user-agent'),
-                          context: { fn, tenant: slug }
-                }).catch(() => {});
-        }
-    res.status(400).json({ error: msg });
+
+    const result = await handler(...finalArgs);
+    return res.json({ ok: true, result });
+  } catch (e) {
+    const isUserError = /not signed in|invalid.*token|expired|forbidden|required|already/i
+      .test(String(e.message || ''));
+    const status = /not signed in|invalid.*token|expired/i.test(e.message) ? 401 : 400;
+
+    console.error('[tenantApi]', fn, e.message);
+
+    if (!isUserError && errorLogs) {
+      const slug = (req.tenant && req.tenant.slug) || req.tenantSlug || 'unknown';
+      errorLogs.logError({
+        source:      'tenant-api',
+        severity:    'error',
+        message:     `[tenant-api] ${fn}: ${e.message || e}`,
+        stack:       e.stack,
+        url:         req.originalUrl,
+        method:      req.method,
+        status_code: status,
+        ua:          req.get('user-agent'),
+        context:     { fn, tenant: slug }
+      }).catch(() => {});
+    }
+
+    return res.status(status).json({ error: e.message });
   }
 }
 
-module.exports = { API, expressHandler, api_auth_ssoLogin };
+module.exports = { expressHandler };
