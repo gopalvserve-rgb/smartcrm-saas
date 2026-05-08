@@ -219,4 +219,37 @@ async function generate(args) {
     cost_usd:        costs.cost_usd,
     cost_inr_real:   costs.cost_inr_real,
     cost_inr_billed: costs.cost_inr_billed,
-   
+    finish_reason: finishReason,
+    error: null,
+    raw_status: resp.status
+  };
+}
+
+/**
+ * Append a row to control.ai_usage_log. Always called after generate(),
+ * even on failure (so super-admin sees the error rate). Failed calls
+ * have error_text set + cost = 0 so they aren't billed.
+ */
+async function logUsage({ tenant_slug, tenant_id, call_kind, phone, lead_id, wa_message_id, result }) {
+  try {
+    await control.query(
+      `INSERT INTO ai_usage_log
+         (tenant_id, tenant_slug, call_kind, model, input_tokens, output_tokens,
+          cost_usd, cost_inr_real, cost_inr_billed,
+          phone, lead_id, wa_message_id, error_text)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+      [
+        tenant_id || null, tenant_slug, call_kind || 'reply',
+        result.model || '',
+        result.input_tokens || 0, result.output_tokens || 0,
+        result.cost_usd || 0, result.cost_inr_real || 0, result.cost_inr_billed || 0,
+        phone || null, lead_id || null, wa_message_id || null,
+        result.ok ? null : (result.error || 'failed').slice(0, 500)
+      ]
+    );
+  } catch (e) {
+    console.warn('[gemini] logUsage failed:', e.message);
+  }
+}
+
+module.exports = { loadSettings, invalidateCache, generate, logUsage, computeCost };
