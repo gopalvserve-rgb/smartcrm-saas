@@ -203,6 +203,32 @@ async function warmCache() {
   CRM.cache = { statuses, sources, products, users, customFields };
 }
 
+/**
+ * Return the active role list as { value, label } pairs for <select>
+ * dropdowns in the admin tabs (Settings → Permissions, the User edit
+ * form, role-aware filters). Memoised in CRM.cache._rolesForSelect so
+ * we don't refetch on every render. The Roles tab invalidates the
+ * cache by setting CRM.cache._rolesForSelect = null after add/edit/
+ * delete (lines ~270-305) — see those handlers for the pattern.
+ *
+ * The previous build referenced this helper from three call sites
+ * (showAdminTab('permissions'), the User edit form, and the role-
+ * filter UI) but the function definition was missing, causing the
+ * Permissions tab to render "_rolesForSelect is not defined" instead
+ * of the role grid.
+ */
+async function _rolesForSelect() {
+  if (CRM.cache && CRM.cache._rolesForSelect) return CRM.cache._rolesForSelect;
+  let rows;
+  try { rows = await api('api_roles_list'); } catch (_) { rows = []; }
+  const list = (Array.isArray(rows) ? rows : []).map(r => ({
+    value: String(r.key || r.code || r.id || ''),
+    label: String(r.label || r.name || r.key || '')
+  }));
+  if (CRM.cache) CRM.cache._rolesForSelect = list;
+  return list;
+}
+
 /* ---------------- utility ---------------- */
 const $ = (sel, ctx) => (ctx || document).querySelector(sel);
 const $$ = (sel, ctx) => [...(ctx || document).querySelectorAll(sel)];
