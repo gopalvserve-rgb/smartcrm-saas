@@ -28,79 +28,28 @@ async function metaVerify(req, res) {
 }
 
 // -------------------- Meta events (POST) -------------------------
-
-/** Best-effort tenant identifier for log lines. Reads COMPANY_NAME from the
- *  current tenant DB context (set by _runAsTenant in server.js). Falls back
- *  to the pageId so logs are always meaningful even without a name. */
-async function _metaTenantLabel(fallback) {
-  try {
-    const name = await db.getConfig('COMPANY_NAME', '');
-    return name ? String(name).slice(0, 30) : (fallback || 'unknown');
-  } catch (_) {
-    return fallback || 'unknown';
-  }
-}
-
 async function metaEvent(req, res) {
   // Always 200 quickly so Meta doesn't retry.
   res.status(200).send('EVENT_RECEIVED');
   try {
     const body = req.body || {};
-    const entries = body.entry || [];
-
-    // Collect page IDs for the entry log line
-    const pageIds = [...new Set(
-      entries.flatMap(e => (e.changes || []).map(c => c.value && c.value.page_id).filter(Boolean))
-    )];
-    const tenant = await _metaTenantLabel(pageIds[0] || 'nopage');
-    console.log(`[meta][${tenant}] received ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}, page_ids=[${pageIds.join(',')}]`);
-
     await db.insert('webhook_log', { source: 'meta', payload: body, processed: 0 });
 
+    const entries = body.entry || [];
     for (const entry of entries) {
       for (const change of (entry.changes || [])) {
-        const field    = change.field || 'unknown';
-        const pageId   = (change.value && change.value.page_id) || entry.id || 'unknown';
-        console.log(`[meta][${tenant}] entry field=${field} page_id=${pageId}`);
         if (change.field !== 'leadgen') continue;
-
-        const leadgenId = change.value && change.value.leadgen_id;
-        const formId    = change.value && change.value.form_id;
-        console.log(`[meta][${tenant}] queueing leadgen_id=${leadgenId} page_id=${pageId} form_id=${formId}`);
-        if (!leadgenId) {
-          console.log(`[meta][${tenant}] skipping — no leadgen_id in payload`);
-          continue;
-        }
+        const leadgenId = change.value?.leadgen_id;
+        const pageId    = change.value?.page_id;
+        const formId    = change.value?.form_id;
+        if (!leadgenId) continue;
         try {
-          const result = await _processLeadgen(leadgenId, pageId, formId);
-          const summary = result.duplicate
-            ? `DUPLICATE of #${result.matched_id}${result.skipped ? ' (skipped)' : ''}`
-            : `lead_id=${result.id} assigned_to=${result.assigned_to || 'unassigned'}`;
-          console.log(`[meta][${tenant}] leadgen ${leadgenId} OK — ${summary}`);
-          await db.insert('webhook_log', {
-            source: 'meta',
-            payload: { leadgen_id: leadgenId, page_id: pageId, form_id: formId, result },
-            processed: 1
-          });
+          await _processLeadgen(leadgenId, pageId, formId);
         } catch (e) {
-          console.error(`[meta][${tenant}] leadgen ${leadgenId} FAILED: ${e.message}`);
-          // Surface in the admin error log so ops/admin can see failures without ssh-ing into Railway
-          try {
-            const el = require('./errorLogs');
-            if (typeof el.logError === 'function') {
-              await el.logError({
-                source: 'facebook',
-                severity: 'error',
-                message: 'FB leadgen processing failed: ' + e.message,
-                meta: { leadgen_id: leadgenId, page_id: pageId, form_id: formId }
-              });
-            }
-          } catch (_) { /* errorLogs unavailable, console is enough */ }
+          console.error('[meta] leadgen failed:', leadgenId, e.message);
           await db.insert('webhook_log', {
-            source: 'meta',
-            payload: { leadgen_id: leadgenId, page_id: pageId, error: e.message },
-            processed: 0,
-            error: e.message
+            source: 'meta', payload: { leadgen_id: leadgenId, error: e.message },
+            processed: 0, error: e.message
           });
         }
       }
@@ -111,47 +60,25 @@ async function metaEvent(req, res) {
 }
 
 async function _processLeadgen(leadgenId, pageId, formId) {
-  const tenant = await _metaTenantLabel(pageId);
-  console.log(`[meta][${tenant}] _processLeadgen start: leadgen=${leadgenId} page=${pageId} form=${formId}`);
-
   // Resolve page-specific access token + the configured default operator/source/status
   // for incoming Meta leads. Falls back to the legacy single-page token if the
   // multi-page config isn't set up yet (back-compat for old deployments).
   let ctx = { access_token: '', default_source: 'Facebook Lead Ad', default_user_id: null, default_status_id: null };
-  let tokenSource = 'none';
   try {
     const fb = require('./fb');
     if (typeof fb._pageContextForWebhook === 'function') {
-      const resolved = await fb._pageContextForWebhook(pageId);
-      if (resolved && resolved.access_token) {
-        ctx = resolved;
-        tokenSource = 'META_PAGES_config';
-      } else {
-        console.log(`[meta][${tenant}] _pageContextForWebhook returned no token for page ${pageId}`);
-        if (resolved) ctx = resolved; // keep other fields (source, status, etc.)
-      }
-    } else {
-      console.log(`[meta][${tenant}] fb._pageContextForWebhook not available — will try legacy token`);
+      ctx = await fb._pageContextForWebhook(pageId);
     }
-  } catch (fbErr) {
-    console.warn(`[meta][${tenant}] _pageContextForWebhook threw: ${fbErr.message}`);
-  }
-
+  } catch (_) { /* ignore — fall back below */ }
   let pageToken = ctx.access_token;
   if (!pageToken) {
     pageToken = await db.getConfig('META_PAGE_ACCESS_TOKEN', '');
-    if (pageToken) tokenSource = 'META_PAGE_ACCESS_TOKEN_legacy';
   }
-  console.log(`[meta][${tenant}] page=${pageId} token_source=${tokenSource} has_token=${!!pageToken}`);
-  if (!pageToken) {
-    throw new Error('No access token for page ' + pageId + ' — admin must connect Facebook and configure page access in Settings → Integrations.');
-  }
+  if (!pageToken) throw new Error('No access token for page ' + pageId + ' — admin must connect with Facebook and monitor this page.');
 
-  console.log(`[meta][${tenant}] fetching Graph API for leadgen ${leadgenId}`);
   const r = await fetch(`${GRAPH}/${leadgenId}?access_token=${pageToken}`);
   const j = await r.json();
-  console.log(`[meta][${tenant}] Graph response: status=${r.status} has_error=${!!j.error} field_count=$x(j.field_data || []).length}`);
-  if (j.error) throw new Error('Graph API: ' + j.error.message + ' (code ' + j.error.code + ')');
+  if (j.error) throw new Error('Graph: ' + j.error.message);
 
   const fieldData = j.field_data || [];
   const payload = {};
@@ -173,9 +100,7 @@ async function _processLeadgen(leadgenId, pageId, formId) {
   if (ctx.default_user_id) lead.assigned_to = ctx.default_user_id;
   if (ctx.default_status_id) lead.status_id = ctx.default_status_id;
 
-  console.log(`[meta][${tenant}] creating lead: name="${lead.name}" phone="${lead.phone}" email="${lead.email}" source="${lead.source}"`);
-  const result = await _createLeadFromWebhook(lead);
-  return result;
+  await _createLeadFromWebhook(lead);
 }
 
 // -------------------- WhatsApp verification ----------------------
@@ -551,4 +476,93 @@ async function calendlyEvent(req, res) {
     const inviteePhone = inviteePhoneRaw.replace(/\D/g, '');
 
     const sched = p.scheduled_event || p.event || {};
-    cons
+    const startTime = sched.start_time || p.start_time || p.start || null;
+    const eventName = sched.name || sched.event_type || 'Calendly meeting';
+
+    const leads = await db.getAll('leads');
+    const norm = (s) => String(s || '').replace(/\D/g, '');
+    let lead = null;
+    if (inviteeEmail) {
+      lead = leads.find(l => String(l.email || '').toLowerCase() === inviteeEmail && Number(l.assigned_to) === Number(rep.id))
+          || leads.find(l => String(l.email || '').toLowerCase() === inviteeEmail);
+    }
+    if (!lead && inviteePhone) {
+      lead = leads.find(l => norm(l.phone) === inviteePhone && Number(l.assigned_to) === Number(rep.id))
+          || leads.find(l => norm(l.phone).slice(-10) === inviteePhone.slice(-10) && norm(l.phone).length >= 10);
+    }
+
+    if (kind === 'invitee.created' || kind === 'invitee_created') {
+      if (!lead) {
+        const _newStatusId = await (async () => {
+          const s = await db.findOneBy('statuses', 'name', 'New');
+          return s ? s.id : null;
+        })();
+        const newLeadId = await db.insert('leads', {
+          name: inviteeName || inviteeEmail || 'Calendly booking',
+          phone: inviteePhone || '',
+          email: inviteeEmail || '',
+          source: 'Calendly',
+          source_ref: 'webhook',
+          status_id: _newStatusId,
+          assigned_to: rep.id,
+          notes: 'Auto-created from Calendly booking · ' + eventName,
+          created_by: rep.id,
+          created_at: db.nowIso(),
+          updated_at: db.nowIso(),
+          last_status_change_at: db.nowIso(),
+          next_followup_at: startTime || null
+        });
+        lead = await db.findOneBy('leads', 'id', newLeadId);
+      } else if (startTime) {
+        await db.update('leads', lead.id, {
+          next_followup_at: startTime,
+          updated_at: db.nowIso()
+        });
+      }
+      if (startTime && lead) {
+        await db.insert('followups', {
+          lead_id: lead.id, user_id: rep.id, due_at: startTime,
+          note: '📅 Calendly: ' + eventName + (inviteeName ? ' with ' + inviteeName : ''),
+          is_done: 0, created_at: db.nowIso()
+        });
+        await db.insert('remarks', {
+          lead_id: lead.id, user_id: rep.id,
+          remark: '📅 Meeting confirmed for ' + new Date(startTime).toLocaleString('en-IN') +
+                  ' · ' + eventName + ' · via Calendly',
+          status_id: ''
+        });
+      }
+      return res.json({ ok: true, lead_id: lead ? lead.id : null });
+    }
+
+    if (kind === 'invitee.canceled' || kind === 'invitee_canceled') {
+      if (!lead) return res.json({ ok: true, ignored: 'no matching lead' });
+      const fus = (await db.getAll('followups'))
+        .filter(f => Number(f.lead_id) === Number(lead.id) && Number(f.is_done) === 0)
+        .sort((a, b) => String(b.due_at).localeCompare(String(a.due_at)));
+      if (fus.length) {
+        await db.update('followups', fus[0].id, { is_done: 1, done_at: db.nowIso() });
+      }
+      await db.insert('remarks', {
+        lead_id: lead.id, user_id: rep.id,
+        remark: '❌ Calendly meeting canceled' +
+                (startTime ? ' (was scheduled for ' + new Date(startTime).toLocaleString('en-IN') + ')' : '') +
+                (p.cancellation && p.cancellation.reason ? ' · reason: ' + p.cancellation.reason : ''),
+        status_id: ''
+      });
+      return res.json({ ok: true, lead_id: lead.id, action: 'canceled' });
+    }
+
+    return res.json({ ok: true, ignored: 'unhandled event ' + kind });
+  } catch (e) {
+    console.error('[calendly] webhook error:', e.message);
+    return res.json({ ok: false, error: String(e.message || e) });
+  }
+}
+
+module.exports = {
+  metaVerify, metaEvent,
+  whatsappVerify, whatsappEvent,
+  websiteHook, otherHook,
+  calendlyEvent
+};
