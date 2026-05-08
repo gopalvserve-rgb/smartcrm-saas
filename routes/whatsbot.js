@@ -2459,5 +2459,6 @@ module.exports = {
   startCampaignWorker,
   trimActivityLog,
   // Helpers exported for the file-upload Express route in server.js
-  _uploadMediaToWhatsApp, _cfg
+  // and for routes/aiBot.js auto-reply path.
+  _uploadMediaToWhatsApp, _cfg, _cfgForPhone, _sendText
 };
