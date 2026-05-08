@@ -739,13 +739,14 @@ async function _sendTemplate({ to, templateName, language, variables, imageUrl, 
 
   try {
     await db.query(
-      `INSERT INTO whatsapp_messages (lead_id, user_id, direction, from_number, to_number, body, wa_message_id, status, message_type, template_name, error_text, media_url)
-       VALUES ($1, $2, 'out', $3, $4, $5, $6, $7, 'template', $8, $9, $10)`,
+      `INSERT INTO whatsapp_messages (lead_id, user_id, direction, from_number, to_number, body, wa_message_id, status, message_type, template_name, error_text, media_url, phone_number_id)
+       VALUES ($1, $2, 'out', $3, $4, $5, $6, $7, 'template', $8, $9, $10, $11)`,
       [
         leadId || null, userId || null,
         c.phoneId, body.to, preview, waMsgId,
         r.body?.error ? 'failed' : 'sent',
-        templateName, errorText, imageUrl || null
+        templateName, errorText, imageUrl || null,
+        c.phoneId || null
       ]
     );
     // Lead activity timeline log
@@ -774,10 +775,12 @@ async function _sendText({ to, text, replyTo, leadId, userId }, cfg) {
   const waMsgId = r.body?.messages?.[0]?.id || null;
   const errorText = r.body?.error?.message || null;
   try {
+    // phone_number_id (Phase 3 multi-WA): tag the row with which of our
+    // own numbers sent it, so the thread list can filter / route replies.
     await db.query(
-      `INSERT INTO whatsapp_messages (lead_id, user_id, direction, from_number, to_number, body, wa_message_id, status, message_type, reply_to, error_text)
-       VALUES ($1, $2, 'out', $3, $4, $5, $6, $7, 'text', $8, $9)`,
-      [leadId || null, userId || null, c.phoneId, body.to, text, waMsgId, r.body?.error ? 'failed' : 'sent', replyTo || null, errorText]
+      `INSERT INTO whatsapp_messages (lead_id, user_id, direction, from_number, to_number, body, wa_message_id, status, message_type, reply_to, error_text, phone_number_id)
+       VALUES ($1, $2, 'out', $3, $4, $5, $6, $7, 'text', $8, $9, $10)`,
+      [leadId || null, userId || null, c.phoneId, body.to, text, waMsgId, r.body?.error ? 'failed' : 'sent', replyTo || null, errorText, c.phoneId || null]
     );
     if (leadId) {
       try {
@@ -804,9 +807,9 @@ async function _sendMedia({ to, mediaType, mediaUrl, caption, leadId, userId }, 
   const errorText = r.body?.error?.message || null;
   try {
     await db.query(
-      `INSERT INTO whatsapp_messages (lead_id, user_id, direction, from_number, to_number, body, wa_message_id, status, message_type, media_url, error_text)
-       VALUES ($1, $2, 'out', $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [leadId || null, userId || null, c.phoneId, body.to, caption || '', waMsgId, r.body?.error ? 'failed' : 'sent', mediaType, mediaUrl, errorText]
+      `INSERT INTO whatsapp_messages (lead_id, user_id, direction, from_number, to_number, body, wa_message_id, status, message_type, media_url, error_text, phone_number_id)
+       VALUES ($1, $2, 'out', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      [leadId || null, userId || null, c.phoneId, body.to, caption || '', waMsgId, r.body?.error ? 'failed' : 'sent', mediaType, mediaUrl, errorText, c.phoneId || null]
     );
     if (leadId) {
       try {
@@ -845,9 +848,9 @@ async function _sendMediaById({ to, mediaType, mediaId, filename, caption, leadI
   const errorText = r.body?.error?.message || null;
   try {
     await db.query(
-      `INSERT INTO whatsapp_messages (lead_id, user_id, direction, from_number, to_number, body, wa_message_id, status, message_type, media_url, error_text)
-       VALUES ($1, $2, 'out', $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [leadId || null, userId || null, c.phoneId, body.to, caption || '', waMsgId, r.body?.error ? 'failed' : 'sent', mediaType, mediaUrl || null, errorText]
+      `INSERT INTO whatsapp_messages (lead_id, user_id, direction, from_number, to_number, body, wa_message_id, status, message_type, media_url, error_text, phone_number_id)
+       VALUES ($1, $2, 'out', $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      [leadId || null, userId || null, c.phoneId, body.to, caption || '', waMsgId, r.body?.error ? 'failed' : 'sent', mediaType, mediaUrl || null, errorText, c.phoneId || null]
     );
     if (leadId) {
       try {
@@ -1125,36 +1128,90 @@ async function _canSeeThread(me, visibleSet, ownerId) {
  * Conversation list — group whatsapp_messages by the OTHER party's number.
  * Returns one row per contact with last message preview, lead_id link,
  * and unread count. Filtered by what the caller is allowed to see.
+ *
+ * Phase 3 multi-WA additions:
+ *   - Each thread is tagged with `phone_number_id` (which of OUR connected
+ *     numbers the conversation belongs to). For inbound-active threads
+ *     this is the phone_number_id of the most recent inbound message —
+ *     so when the agent opens the thread, the composer's send-from
+ *     picker can default to the same number the customer messaged.
+ *   - Optional filter: opts.phone_number_id restricts the list to a
+ *     single phone (e.g. only the "Sales line" inbox).
+ *   - Returns `_unread_by_phone` as a sibling map so the SPA can paint
+ *     a per-phone unread badge in the inbox selector. Surfaced by
+ *     attaching it to the array as a non-enumerable-ish property: we
+ *     return { threads, unread_by_phone, all_unread } instead of a bare
+ *     array — the caller (SPA) handles both shapes for back-compat.
  */
-async function api_wb_chat_threads(token) {
+async function api_wb_chat_threads(token, opts) {
   const me = await authUser(token);
   const visible = new Set((await getVisibleUserIds(me)).map(Number));
+  const filterPhoneId = (opts && opts.phone_number_id && String(opts.phone_number_id) !== 'all')
+    ? String(opts.phone_number_id) : null;
 
-  // Pull last 1000 messages, group by counterpart
-  const { rows } = await db.query(
-    `SELECT id, lead_id, direction, from_number, to_number, body, message_type, status, read_at, created_at
-       FROM whatsapp_messages
-       ORDER BY created_at DESC
-       LIMIT 1000`
-  );
+  // Pull last 1000 messages, group by counterpart. We always select
+  // phone_number_id (added by 2026_05_08_wa_messages_phone_id.sql); on
+  // un-migrated tenants the column won't exist yet, so degrade gracefully.
+  let rows;
+  try {
+    const r = await db.query(
+      `SELECT id, lead_id, direction, from_number, to_number, body, message_type,
+              status, read_at, created_at, phone_number_id
+         FROM whatsapp_messages
+         ORDER BY created_at DESC
+         LIMIT 1000`
+    );
+    rows = r.rows;
+  } catch (e) {
+    const r = await db.query(
+      `SELECT id, lead_id, direction, from_number, to_number, body, message_type,
+              status, read_at, created_at
+         FROM whatsapp_messages
+         ORDER BY created_at DESC
+         LIMIT 1000`
+    );
+    rows = r.rows.map(x => ({ ...x, phone_number_id: null }));
+  }
+  // Default fallback for rows where phone_number_id is NULL (legacy
+  // pre-migration data) — assume the tenant default. Means historical
+  // threads bucket under the default phone in the new selector.
+  const cfg = await _cfg();
+  const defaultPhoneId = cfg.phoneId || null;
+
   const threads = new Map();
   rows.forEach(m => {
     const counter = m.direction === 'in' ? m.from_number : m.to_number;
     if (!counter) return;
     const k = String(counter);
+    const rowPhoneId = String(m.phone_number_id || defaultPhoneId || '');
     if (!threads.has(k)) {
       threads.set(k, {
         phone: k, lead_id: m.lead_id || null,
         last_message: m.body || '',
         last_message_type: m.message_type || 'text',
         last_at: m.created_at,
-        unread: 0
+        unread: 0,
+        // Most-recent inbound phone_number_id wins (auto-route replies);
+        // if no inbound exists yet we fall back to the most recent
+        // outbound phone_number_id below.
+        phone_number_id:        m.direction === 'in' ? rowPhoneId : null,
+        last_outbound_phone_id: m.direction === 'out' ? rowPhoneId : null
       });
     }
     const t = threads.get(k);
     if (m.direction === 'in' && !m.read_at) t.unread++;
     if (!t.lead_id && m.lead_id) t.lead_id = m.lead_id;
+    // First inbound row (rows are ordered DESC by created_at, so the
+    // first inbound we encounter IS the most recent one) sets the
+    // thread's phone_number_id. Outbound rows update the fallback.
+    if (m.direction === 'in' && !t.phone_number_id) t.phone_number_id = rowPhoneId;
+    if (m.direction === 'out' && !t.last_outbound_phone_id) t.last_outbound_phone_id = rowPhoneId;
   });
+  // Resolve final phone_number_id per thread (inbound > outbound > default)
+  for (const t of threads.values()) {
+    if (!t.phone_number_id) t.phone_number_id = t.last_outbound_phone_id || defaultPhoneId || null;
+    delete t.last_outbound_phone_id;
+  }
 
   // Hydrate with lead name + assignee, then drop threads the user can't see.
   const leadIds = [...new Set([...threads.values()].map(t => t.lead_id).filter(Boolean))];
@@ -1174,23 +1231,37 @@ async function api_wb_chat_threads(token) {
     const u = await db.query(`SELECT id, name FROM users WHERE id = ANY($1::int[])`, [userIds]);
     u.rows.forEach(x => { usersById[x.id] = x; });
   }
-  const out = [];
+  const visibleThreads = [];
+  const unreadByPhone = {}; // { phone_number_id: count } — across ALL phones, post-permissions
   for (const t of threads.values()) {
     const lead = t.lead_id ? leadById[t.lead_id] : null;
     const exp  = explicit[String(t.phone)];
     const ownerId = (exp && exp.assigned_to) ? Number(exp.assigned_to)
                   : (lead ? Number(lead.assigned_to) || null : null);
     if (!await _canSeeThread(me, visible, ownerId)) continue;
-    out.push({
+    const enriched = {
       ...t,
       lead_name: lead ? (lead.name || '') : '',
       assigned_to: ownerId,
       assigned_name: ownerId && usersById[ownerId] ? usersById[ownerId].name : '',
       assignment_explicit: !!(exp && exp.assigned_to)
-    });
+    };
+    // Tally unread BEFORE filtering so the badge reflects every inbox
+    // this user can see, not just the one they're currently viewing.
+    if (enriched.unread > 0 && enriched.phone_number_id) {
+      unreadByPhone[enriched.phone_number_id] = (unreadByPhone[enriched.phone_number_id] || 0) + enriched.unread;
+    }
+    if (filterPhoneId && enriched.phone_number_id !== filterPhoneId) continue;
+    visibleThreads.push(enriched);
   }
-  out.sort((a, b) => String(b.last_at).localeCompare(String(a.last_at)));
-  return out;
+  visibleThreads.sort((a, b) => String(b.last_at).localeCompare(String(a.last_at)));
+  // Back-compat: legacy SPA expects a bare array. New SPA reads .threads /
+  // .unread_by_phone. We return both shapes by attaching the metadata to
+  // the array — the array itself iterates as before, and the new fields
+  // are present as own properties for callers that ask for them.
+  visibleThreads.unread_by_phone = unreadByPhone;
+  visibleThreads.filter_phone_number_id = filterPhoneId;
+  return visibleThreads;
 }
 
 async function api_wb_chat_messages(token, phone) {
@@ -1815,12 +1886,30 @@ async function expressEvent(req, res) {
     );
     if (_incomingPhoneId) {
       try {
+        // Phase 3 multi-WA: a tenant may own MANY phone_number_ids (one
+        // per connected number).  Accept any of them; only drop the
+        // payload if none of the rows in wa_phones matches.  Falls back
+        // to the legacy single-phone check when wa_phones is empty /
+        // missing on un-migrated tenants.
         const _myCfg = await _cfg();
-        if (_myCfg.phoneId && _incomingPhoneId !== String(_myCfg.phoneId)) {
+        let _ownedIds = [];
+        try {
+          const r = await db.query(
+            `SELECT phone_number_id FROM wa_phones WHERE is_active = 1`
+          );
+          _ownedIds = r.rows.map(x => String(x.phone_number_id || ''));
+        } catch (_) { /* table missing on un-migrated tenants */ }
+        if (_myCfg.phoneId && !_ownedIds.includes(String(_myCfg.phoneId))) {
+          _ownedIds.push(String(_myCfg.phoneId));
+        }
+        const _accept = _ownedIds.length === 0
+          ? (!_myCfg.phoneId || _incomingPhoneId === String(_myCfg.phoneId))
+          : _ownedIds.includes(_incomingPhoneId);
+        if (!_accept) {
           await _logActivity({
             category: 'webhook_in', name: 'phone_id_mismatch',
             response_code: 200,
-            request: { incoming_phone_id: _incomingPhoneId, configured_phone_id: _myCfg.phoneId },
+            request: { incoming_phone_id: _incomingPhoneId, owned_phone_ids: _ownedIds },
             response: { skipped: true, reason: 'phone_number_id mismatch — payload not for this tenant' }
           });
           return; // Drop silently — not for this tenant
@@ -1910,6 +1999,11 @@ async function _handleInbound(m, value) {
   const cfg = await _cfg();
   const from = String(m.from || '').replace(/\D/g, '');
   const to = String(value?.metadata?.display_phone_number || cfg.phoneId || '');
+  // Phase 3 multi-WA: capture which of OUR numbers the customer messaged.
+  // Meta sends value.metadata.phone_number_id on every inbound payload —
+  // use it directly. Fall back to the tenant default for older / oddly-
+  // shaped payloads so we always have a non-NULL tag where possible.
+  const inboundPhoneId = String(value?.metadata?.phone_number_id || cfg.phoneId || '') || null;
   // Log the inbound message so admins see it in Activity Log
   try {
     await _logActivity({
@@ -1970,9 +2064,9 @@ async function _handleInbound(m, value) {
   // Save inbound row
   try {
     await db.query(
-      `INSERT INTO whatsapp_messages (lead_id, direction, from_number, to_number, body, wa_message_id, status, message_type, media_id)
-       VALUES ($1, 'in', $2, $3, $4, $5, 'received', $6, $7)`,
-      [leadId, from, to, text, m.id || null, mtype, mediaId]
+      `INSERT INTO whatsapp_messages (lead_id, direction, from_number, to_number, body, wa_message_id, status, message_type, media_id, phone_number_id)
+       VALUES ($1, 'in', $2, $3, $4, $5, 'received', $6, $7, $8)`,
+      [leadId, from, to, text, m.id || null, mtype, mediaId, inboundPhoneId]
     );
     if (leadId) {
       try {
@@ -2141,8 +2235,6 @@ module.exports = {
   api_wb_settings_get, api_wb_settings_save, api_wb_connect_verify, api_wb_disconnect,
   api_wb_emb_signin, api_wb_register_phone,
   api_wb_phones_list, api_wb_phones_set_current, api_wb_phone_check,
-  // Phase 1 multi-WhatsApp
-  api_wa_phones_listAll, api_wa_phones_save, api_wa_phones_setDefault, api_wa_phones_delete,
   api_wb_webhook_status, api_wb_webhook_subscribe,
   // Templates
   api_wb_templates_sync, api_wb_templates_list,
@@ -2159,12 +2251,13 @@ module.exports = {
   // Activity
   api_wb_activity_list, api_wb_activity_get, api_wb_activity_clear,
   api_wb_webhook_logs_text,
+  // Phase 1 multi-WhatsApp
+  api_wa_phones_listAll, api_wa_phones_save, api_wa_phones_setDefault, api_wa_phones_delete,
   // Express
   expressVerify, expressEvent,
   // Worker + scheduled tasks
   startCampaignWorker,
   trimActivityLog,
   // Helpers exported for the file-upload Express route in server.js
-  _cfg, _uploadMediaToWhatsApp, _findLeadByPhoneDigits, _canSeeThread,
-  getVisibleUserIds
+  _uploadMediaToWhatsApp, _cfg
 };

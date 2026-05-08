@@ -7348,7 +7348,8 @@ function buildAgentPicker(phone, threadMeta) {
  * Compose bar for a single chat thread — textarea + 📎 attach + send.
  * Calls onSent after every successful send so the parent can redraw.
  */
-function buildWaCompose(phone, onSent) {
+function buildWaCompose(phone, onSent, opts) {
+  opts = opts || {};
   const wrap = h('div', { class: 'wb-chat-compose' });
   let pending = null; // { id, wa_media_id, mime_type, filename, url }
 
@@ -7357,10 +7358,19 @@ function buildWaCompose(phone, onSent) {
   // Phase 2 multi-WhatsApp: per-message 'Send from' picker on the
   // chat composer. Reads from CRM.cache.waPhones (pre-warmed by the
   // chat tab when it loads); the picker is inline above the textarea.
+  // Phase 3: default the picker to opts.defaultPhoneId — i.e. the phone
+  // the customer last messaged on this thread — so replies auto-route
+  // back to the same number.
   const composerPicker = _phonePickerSelect({
     phones: (CRM.cache && CRM.cache.waPhones) || [],
     style: { fontSize: '.78rem', marginRight: '.4rem' }
   });
+  if (opts.defaultPhoneId) {
+    // Set after construction — a matching <option> has already been
+    // appended by _phonePickerSelect. If no option matches (e.g. the
+    // phone has been deleted) the value silently stays at '' = default.
+    try { composerPicker.value = String(opts.defaultPhoneId); } catch (_) {}
+  }
   const fileInput = h('input', { type: 'file', style: { display: 'none' }, accept: 'image/*,application/pdf,video/mp4,video/3gp,audio/aac,audio/mp4,audio/mpeg,audio/amr,audio/ogg,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv' });
 
   const renderPreview = () => {
@@ -7536,12 +7546,19 @@ async function wbChat() {
   let lastThreadsFingerprint = '';
 
   function _threadFingerprint(threads) {
-    return threads.map(t => `${t.phone}|${t.last_at}|${t.unread}|${t.assigned_to || 0}|${agentFilterId || ''}|${searchQuery || ''}`).join(';');
+    return threads.map(t => `${t.phone}|${t.last_at}|${t.unread}|${t.assigned_to || 0}|${t.phone_number_id || ''}|${agentFilterId || ''}|${searchQuery || ''}|${inboxPhoneId || ''}`).join(';');
   }
   // Admin / manager filter — when non-null, threads are limited to chats
   // assigned to that user. Persisted on `wbChat`'s closure so the filter
   // survives auto-polling redraws.
   let agentFilterId = '';
+  // Phase 3 multi-WA: per-phone inbox filter. '' / 'all' = every phone,
+  // a phone_number_id string narrows the list to that connected number.
+  // Persisted on the closure so polling redraws don't reset it. Restored
+  // from localStorage so the user's choice sticks across reloads.
+  let inboxPhoneId = '';
+  try { inboxPhoneId = localStorage.getItem('crm.wb.inboxPhoneId') || ''; } catch (_) {}
+  let unreadByPhone = {};      // phone_number_id -> count, refreshed every render
   let chatUsers = [];     // populated once per render
   // Free-text search across the chat list — matches name, phone, or
   // the last message preview, case-insensitively. Persists across
@@ -7554,8 +7571,17 @@ async function wbChat() {
 
   async function renderThreadList() {
     let threads;
-    try { threads = await api('api_wb_chat_threads'); }
+    try {
+      // Phase 3 multi-WA: server now accepts an optional phone_number_id
+      // filter. We pass it so the server returns only threads belonging to
+      // the selected inbox; the per-phone unread map (across ALL inboxes
+      // the user can see) comes back as `unread_by_phone` on the array.
+      threads = await api('api_wb_chat_threads', { phone_number_id: inboxPhoneId || 'all' });
+    }
     catch (_) { threads = []; }
+    // Capture per-phone unread map for the inbox-selector badges (server
+    // returns it across ALL phones the user can see, not filtered).
+    unreadByPhone = (threads && threads.unread_by_phone) || {};
 
     // Apply admin / manager agent filter if set
     let filtered = agentFilterId
@@ -7588,6 +7614,38 @@ async function wbChat() {
       h('h4', { style: { margin: 0 } }, '💭 Chats (' + filtered.length + (searchQuery ? ' / ' + threads.length : '') + ')'),
       h('button', { class: 'btn sm ghost', title: 'Refresh now', onclick: () => { lastThreadsFingerprint = ''; renderThreadList(); if (openPhone) renderActiveThread(true); } }, '↻')
     ));
+
+    // ---- Inbox (per-phone) selector — Phase 3 multi-WA ----
+    // Only renders when the tenant has more than one connected number.
+    // 'All inboxes' shows the merged feed; each other option filters to
+    // a single phone_number_id and shows its unread badge.
+    const _allPhones = ((CRM.cache && CRM.cache.waPhones) || []).filter(p => Number(p.is_active) === 1);
+    if (_allPhones.length > 1) {
+      const totalUnread = Object.values(unreadByPhone).reduce((a, b) => a + Number(b || 0), 0);
+      const inboxSel = h('select', {
+        class: 'wb-inbox-filter',
+        style: { width: '100%', marginBottom: '.5rem', fontWeight: '500' },
+        title: 'Filter by which of your WhatsApp numbers received the chat'
+      },
+        h('option', { value: '', selected: inboxPhoneId === '' ? 'selected' : null },
+          '📥 All inboxes' + (totalUnread ? '  •  ' + totalUnread + ' unread' : '')),
+        ..._allPhones.map(p => {
+          const u = Number(unreadByPhone[p.phone_number_id] || 0);
+          const lbl = (Number(p.is_default) === 1 ? '⭐ ' : '') +
+                      (p.display_phone_number || p.phone_number_id) +
+                      (p.label ? ' (' + p.label + ')' : '') +
+                      (u ? '  •  ' + u + ' unread' : '');
+          return h('option', { value: p.phone_number_id, selected: inboxPhoneId === p.phone_number_id ? 'selected' : null }, lbl);
+        })
+      );
+      inboxSel.onchange = () => {
+        inboxPhoneId = inboxSel.value;
+        try { localStorage.setItem('crm.wb.inboxPhoneId', inboxPhoneId); } catch (_) {}
+        lastThreadsFingerprint = '';
+        renderThreadList();
+      };
+      left.appendChild(inboxSel);
+    }
 
     // ---- Search box (above the agent filter) ----
     // Debounced 200ms so each keystroke doesn't burn a re-render. The
@@ -7732,7 +7790,11 @@ async function wbChat() {
     right.innerHTML = '';
     // Look up the thread row we have for this phone so we know who it's
     // currently assigned to. (Comes from the threads list we just fetched.)
-    const threadMeta = (await api('api_wb_chat_threads').catch(() => [])).find(t => t.phone === phone) || {};
+    // Always fetch the FULL set ('all') here regardless of which inbox the
+    // user is browsing — they may be opening a thread that lives in another
+    // inbox (e.g. via deep-link). We just need the row with phone_number_id
+    // for the composer auto-route default.
+    const threadMeta = (await api('api_wb_chat_threads', { phone_number_id: 'all' }).catch(() => [])).find(t => t.phone === phone) || {};
     const head = h('div', { class: 'wb-chat-head', style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '.5rem', flexWrap: 'wrap' } },
       h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem' } },
         h('button', { class: 'wb-chat-back', title: 'Back to list', onclick: backToList }, '← Back'),
@@ -7752,7 +7814,7 @@ async function wbChat() {
       renderActiveThread(true);
       lastThreadsFingerprint = '';
       renderThreadList();
-    }));
+    }, { defaultPhoneId: threadMeta.phone_number_id || null }));
 
     await renderActiveThread(true);
     // Refresh the list too — opening a thread marks inbound as read on the
@@ -15740,6 +15802,7 @@ async function _initWhatsappTopbar() {
 }
 // Defer until CRM.user is hydrated by the shell
 document.addEventListener('DOMContentLoaded', () => {
+  // Poll br
   // Poll briefly until login completes; bind on first appearance.
   let ticks = 0;
   const t = setInterval(() => {
