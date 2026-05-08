@@ -5873,7 +5873,7 @@ VIEWS.aibot = async (view) => {
   const body   = h('div', { class: 'wb-tab-body' });
   let active = 'settings';
 
-  function paint() {
+  async function paint() {
     tabBar.innerHTML = '';
     tabs.forEach(t => {
       tabBar.appendChild(h('button', {
@@ -5881,8 +5881,19 @@ VIEWS.aibot = async (view) => {
         onclick: () => { active = t.id; paint(); }
       }, t.label));
     });
-    body.innerHTML = '';
-    body.appendChild(_aibotPlaceholder(active));
+    body.innerHTML = '<div class="muted" style="padding:1rem">Loading…</div>';
+    try {
+      let node;
+      if      (active === 'settings') node = await _aibotSettingsView();
+      else if (active === 'kb')       node = await _aibotKbView();
+      else if (active === 'activity') node = await _aibotActivityView();
+      else if (active === 'usage')    node = await _aibotUsageView();
+      body.innerHTML = '';
+      body.appendChild(node);
+    } catch (e) {
+      body.innerHTML = '';
+      body.appendChild(h('div', { class: 'card', style: { color: '#dc2626' } }, '❌ ' + e.message));
+    }
   }
 
   view.appendChild(h('div', { class: 'view-head' },
@@ -5895,31 +5906,348 @@ VIEWS.aibot = async (view) => {
   paint();
 };
 
-// Placeholder body for each AI Bot sub-tab in Phase A1. Real
-// implementations land in subsequent pushes; surfacing the structure
-// now lets the tenant see what's coming and gives admins a stable place
-// to bookmark.
-function _aibotPlaceholder(tabId) {
-  const card = h('div', { class: 'card' });
-  if (tabId === 'settings') {
-    card.appendChild(h('h3', {}, 'Bot Settings'));
-    card.appendChild(h('p', {}, 'Turn the bot on/off, set its persona, choose when it should reply (always / after-hours / keyword-triggered / manual approval), and configure handoff to a human agent.'));
-    card.appendChild(h('p', { class: 'muted' }, 'Status: scaffolding ready — full UI lands in Phase A2.'));
-  } else if (tabId === 'kb') {
-    card.appendChild(h('h3', {}, 'Knowledge Base'));
-    card.appendChild(h('p', {}, 'Train your bot by uploading PDFs / DOCX (price lists, brochures, FAQ docs) or by pasting your website URL. The bot answers customer questions strictly from this material.'));
-    card.appendChild(h('p', { class: 'muted' }, 'Status: storage ready — upload + URL crawl land in Phase A2.'));
-  } else if (tabId === 'activity') {
-    card.appendChild(h('h3', {}, 'Bot Activity'));
-    card.appendChild(h('p', {}, 'Every reply the bot sends, with the customer message, the model used, and the tokens consumed. Drill in to retract a reply or feed the example back into your KB.'));
-    card.appendChild(h('p', { class: 'muted' }, 'Status: log table ready — UI lands once the bot starts replying in Phase A2.'));
-  } else if (tabId === 'usage') {
-    card.appendChild(h('h3', {}, 'Usage & Cost'));
-    card.appendChild(h('p', {}, 'See how many conversations the bot handled this month and the running ₹ cost. Comes with a forecast calculator: tell us your expected volume and we’ll project monthly cost.'));
-    card.appendChild(h('p', { class: 'muted' }, 'Status: aggregation logic ready — INR-with-markup view lands in Phase A4.'));
+// ============================================================
+// AI Bot — Settings sub-tab
+// ============================================================
+async function _aibotSettingsView() {
+  const data = await api('api_aibot_settings_get');
+  const s = data.settings;
+  const wrap = h('div', {});
+  if (!data.global.is_active) {
+    wrap.appendChild(h('div', { class: 'card', style: { background: '#fef3c7', borderLeft: '4px solid #f59e0b' } },
+      h('div', { style: { fontWeight: '600' } }, '⚠️ Platform AI is disabled'),
+      h('div', { class: 'muted', style: { fontSize: '.85rem' } },
+        'Your CRM administrator has not yet activated the AI service. Contact support to enable AI replies for your workspace.')
+    ));
   }
-  return card;
+
+  // ---- master toggle ----
+  const enableChk = h('input', { type: 'checkbox', checked: s.is_enabled ? 'checked' : null });
+  const masterCard = h('div', { class: 'card' },
+    h('h3', { style: { marginTop: 0 } }, 'Master switch'),
+    h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', fontSize: '1rem' } },
+      enableChk, h('b', {}, ' Enable AI auto-reply on WhatsApp')),
+    h('div', { class: 'muted', style: { fontSize: '.85rem', marginTop: '.4rem' } },
+      'When enabled, customer messages on WhatsApp will be answered by Gemini using your knowledge base. Replies pause automatically when one of your agents jumps in on a thread.')
+  );
+  wrap.appendChild(masterCard);
+
+  // ---- persona ----
+  const botName = h('input', { type: 'text', value: s.bot_name || 'Assistant', style: { width: '100%' } });
+  const bizName = h('input', { type: 'text', value: s.business_name || '', placeholder: 'e.g. Acme Realty Pvt Ltd', style: { width: '100%' } });
+  const lang = h('select', { style: { width: '100%' } },
+    ...['en', 'hi', 'en+hi', 'mr', 'gu', 'ta', 'te', 'bn'].map(o => h('option', { value: o, selected: s.language === o ? 'selected' : null }, o)));
+  const sysPrompt = h('textarea', { rows: 6, style: { width: '100%' }, placeholder: 'Optional: override the default persona. Leave blank for the standard "helpful WhatsApp assistant" prompt.' }, s.system_prompt || '');
+  wrap.appendChild(h('div', { class: 'card' },
+    h('h3', { style: { marginTop: 0 } }, 'Bot persona'),
+    h('div', { class: 'field' }, h('label', {}, 'Bot name (shown in welcome message)'), botName),
+    h('div', { class: 'field' }, h('label', {}, 'Business name'), bizName),
+    h('div', { class: 'field' }, h('label', {}, 'Reply language'), lang),
+    h('div', { class: 'field' }, h('label', {}, 'Custom system prompt (optional)'), sysPrompt)
+  ));
+
+  // ---- reply modes ----
+  const modeChks = {};
+  data.available_modes.forEach(m => {
+    modeChks[m.id] = h('input', { type: 'checkbox', checked: (s.reply_modes || []).includes(m.id) ? 'checked' : null });
+  });
+  const modeCard = h('div', { class: 'card' },
+    h('h3', { style: { marginTop: 0 } }, 'When should the bot reply?'),
+    h('p', { class: 'muted', style: { fontSize: '.85rem' } }, 'Pick any combination. The bot replies when at least one mode allows it. "Always reply" wins over the others.'),
+    ...data.available_modes.map(m => h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', padding: '.3rem 0' } },
+      modeChks[m.id], h('span', {}, m.label)
+    ))
+  );
+  wrap.appendChild(modeCard);
+
+  // ---- business hours ----
+  const bh = s.business_hours || { tz: 'Asia/Kolkata', days: [1,2,3,4,5], start: '09:00', end: '19:00' };
+  const startInp = h('input', { type: 'time', value: bh.start || '09:00' });
+  const endInp   = h('input', { type: 'time', value: bh.end || '19:00' });
+  const dayChks = [0,1,2,3,4,5,6].map(d => ({
+    el: h('input', { type: 'checkbox', checked: (bh.days || [1,2,3,4,5]).includes(d) ? 'checked' : null }),
+    d
+  }));
+  const dayLabels = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  wrap.appendChild(h('div', { class: 'card' },
+    h('h3', { style: { marginTop: 0 } }, 'Business hours (used by "After business hours" mode)'),
+    h('div', { style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap', alignItems: 'center', marginBottom: '.5rem' } },
+      h('label', {}, 'Start '), startInp,
+      h('label', {}, ' End '),  endInp,
+      h('span', { class: 'muted', style: { fontSize: '.8rem' } }, ' (' + (bh.tz || 'Asia/Kolkata') + ')')
+    ),
+    h('div', { style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap' } },
+      ...dayChks.map((c, i) => h('label', { style: { display: 'flex', alignItems: 'center', gap: '.25rem' } }, c.el, h('span', {}, dayLabels[i])))
+    )
+  ));
+
+  // ---- triggers + escalation ----
+  const trigKw = h('input', { type: 'text', value: s.trigger_keywords || '', placeholder: 'e.g. price, hours, menu', style: { width: '100%' } });
+  const offKw = h('input', { type: 'text', value: s.off_keywords || '', placeholder: 'e.g. agent, human, complaint, refund', style: { width: '100%' } });
+  const escKw = h('input', { type: 'text', value: s.escalation_keywords || '', placeholder: 'e.g. lawyer, refund, sue', style: { width: '100%' } });
+  wrap.appendChild(h('div', { class: 'card' },
+    h('h3', { style: { marginTop: 0 } }, 'Triggers & escalation'),
+    h('div', { class: 'field' }, h('label', {}, 'Trigger keywords (only used when "Only when keyword matches" mode is on)'), trigKw),
+    h('div', { class: 'field' }, h('label', {}, 'Off keywords — bot stops replying on this thread once a customer says any of these'), offKw),
+    h('div', { class: 'field' }, h('label', {}, 'Escalation keywords — flag for human review when bot\'s draft contains any'), escKw)
+  ));
+
+  // ---- safety / advanced ----
+  const idleMin = h('input', { type: 'number', value: s.resume_after_idle_minutes || 1440, min: 0, style: { width: '8rem' } });
+  const maxReplies = h('input', { type: 'number', value: s.max_replies_per_thread || 0, min: 0, style: { width: '8rem' } });
+  const useKb = h('input', { type: 'checkbox', checked: s.use_kb ? 'checked' : null });
+  const kbCap = h('input', { type: 'number', value: s.kb_max_chars || 60000, min: 2000, max: 120000, step: 5000, style: { width: '8rem' } });
+  const histCount = h('input', { type: 'number', value: s.history_messages != null ? s.history_messages : 8, min: 0, max: 40, style: { width: '8rem' } });
+  wrap.appendChild(h('div', { class: 'card' },
+    h('h3', { style: { marginTop: 0 } }, 'Safety & advanced'),
+    h('div', { class: 'field' }, h('label', {}, 'Resume after agent silence (minutes) — 0 = never auto-resume'), idleMin),
+    h('div', { class: 'field' }, h('label', {}, 'Max bot replies per conversation (0 = unlimited)'), maxReplies),
+    h('div', { class: 'field' }, h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem' } }, useKb, h('span', {}, ' Use the knowledge base when answering'))),
+    h('div', { class: 'field' }, h('label', {}, 'KB max chars per call (cap on prompt size)'), kbCap),
+    h('div', { class: 'field' }, h('label', {}, 'How many recent messages to feed as context'), histCount)
+  ));
+
+  // ---- save ----
+  const saveBtn = h('button', { class: 'btn primary', style: { padding: '.6rem 1.5rem' } }, '💾 Save bot settings');
+  saveBtn.onclick = async () => {
+    saveBtn.disabled = true;
+    const payload = {
+      is_enabled: enableChk.checked,
+      bot_name: botName.value, business_name: bizName.value, language: lang.value,
+      system_prompt: sysPrompt.value,
+      reply_modes: data.available_modes.filter(m => modeChks[m.id].checked).map(m => m.id),
+      business_hours: {
+        tz: bh.tz || 'Asia/Kolkata',
+        days: dayChks.filter(c => c.el.checked).map(c => c.d),
+        start: startInp.value, end: endInp.value
+      },
+      trigger_keywords: trigKw.value, off_keywords: offKw.value, escalation_keywords: escKw.value,
+      resume_after_idle_minutes: Number(idleMin.value || 0),
+      max_replies_per_thread: Number(maxReplies.value || 0),
+      use_kb: useKb.checked,
+      kb_max_chars: Number(kbCap.value || 60000),
+      history_messages: Number(histCount.value || 8)
+    };
+    try {
+      await api('api_aibot_settings_save', payload);
+      toast('Bot settings saved', 'ok');
+    } catch (e) {
+      toast(e.message, 'err');
+    } finally {
+      saveBtn.disabled = false;
+    }
+  };
+  wrap.appendChild(h('div', { style: { marginTop: '1rem', textAlign: 'right' } }, saveBtn));
+  return wrap;
 }
+
+// ============================================================
+// AI Bot — Knowledge Base sub-tab
+// ============================================================
+async function _aibotKbView() {
+  const wrap = h('div', {});
+  const card = h('div', { class: 'card' });
+  card.appendChild(h('h3', { style: { marginTop: 0 } }, 'Add to knowledge base'));
+  card.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+    'Anything you add here is fed into the bot\'s prompt at reply time. Keep entries focused — pricing, FAQs, services, hours. Avoid pasting your entire website; the bot reads better with curated context.'));
+
+  // Paste text
+  const titleInp = h('input', { type: 'text', placeholder: 'Title (e.g. "Service catalog")', style: { width: '100%', marginBottom: '.4rem' } });
+  const textArea = h('textarea', { rows: 6, placeholder: 'Paste plain text here…', style: { width: '100%' } });
+  const saveTextBtn = h('button', { class: 'btn primary', style: { marginTop: '.5rem' } }, '➕ Add as text doc');
+  saveTextBtn.onclick = async () => {
+    if (!textArea.value.trim()) return toast('Text is empty', 'err');
+    saveTextBtn.disabled = true;
+    try {
+      await api('api_aibot_kb_save_text', { title: titleInp.value || 'Untitled', raw_text: textArea.value });
+      titleInp.value = ''; textArea.value = '';
+      toast('Added', 'ok'); refreshList();
+    } catch (e) { toast(e.message, 'err'); }
+    finally { saveTextBtn.disabled = false; }
+  };
+  card.appendChild(h('div', { style: { borderTop: '1px solid #e5e7eb', paddingTop: '.75rem' } },
+    h('h4', {}, '📝 Paste plain text'),
+    titleInp, textArea, saveTextBtn));
+
+  // URL crawl
+  const urlInp = h('input', { type: 'url', placeholder: 'https://your-website.com/about', style: { width: '100%', marginBottom: '.4rem' } });
+  const crawlBtn = h('button', { class: 'btn primary', style: { marginTop: '.25rem' } }, '🌐 Crawl URL');
+  crawlBtn.onclick = async () => {
+    if (!/^https?:\/\//i.test(urlInp.value || '')) return toast('Enter a valid URL starting with http:// or https://', 'err');
+    crawlBtn.disabled = true; crawlBtn.textContent = 'Fetching…';
+    try {
+      const r = await api('api_aibot_kb_crawl_url', { url: urlInp.value });
+      urlInp.value = '';
+      toast('Added — ' + r.char_count + ' chars extracted', 'ok'); refreshList();
+    } catch (e) { toast(e.message, 'err'); }
+    finally { crawlBtn.disabled = false; crawlBtn.textContent = '🌐 Crawl URL'; }
+  };
+  card.appendChild(h('div', { style: { borderTop: '1px solid #e5e7eb', paddingTop: '.75rem', marginTop: '.75rem' } },
+    h('h4', {}, '🌐 Crawl a URL'),
+    h('p', { class: 'muted', style: { fontSize: '.8rem' } }, 'Best for static pages (About, Services, FAQ). JS-heavy SPAs may not extract well.'),
+    urlInp, crawlBtn));
+
+  card.appendChild(h('p', { class: 'muted', style: { marginTop: '.75rem', fontSize: '.78rem' } },
+    '📎 PDF / DOCX upload: coming in next push.'));
+  wrap.appendChild(card);
+
+  // KB list
+  const listCard = h('div', { class: 'card' });
+  wrap.appendChild(listCard);
+  async function refreshList() {
+    listCard.innerHTML = '';
+    let data;
+    try { data = await api('api_aibot_kb_list'); }
+    catch (e) { listCard.appendChild(h('div', { style: { color: '#dc2626' } }, e.message)); return; }
+    listCard.appendChild(h('h3', { style: { marginTop: 0 } }, 'Knowledge base (' + data.docs.length + ' docs · ' + (data.total_active_chars || 0).toLocaleString('en-IN') + ' active chars)'));
+    if (!data.docs.length) {
+      listCard.appendChild(h('p', { class: 'muted' }, 'No KB docs yet. Add one above to start training your bot.'));
+      return;
+    }
+    const tbl = h('table', { class: 'data-table', style: { width: '100%' } },
+      h('thead', {}, h('tr', {},
+        h('th', {}, 'Title'), h('th', {}, 'Source'), h('th', {}, 'Chars'), h('th', {}, 'Active'), h('th', {}, 'Added'), h('th', {}, '')
+      )),
+      h('tbody', {}, ...data.docs.map(d => h('tr', {},
+        h('td', {}, h('b', {}, d.title)),
+        h('td', {}, ({ text: '📝 Text', url: '🌐 URL', pdf: '📄 PDF', docx: '📄 DOCX' })[d.source_type] || d.source_type),
+        h('td', {}, (d.char_count || 0).toLocaleString('en-IN')),
+        h('td', {},
+          h('input', { type: 'checkbox', checked: d.is_active ? 'checked' : null,
+            onclick: async ev => { try { await api('api_aibot_kb_toggle', d.id, ev.target.checked); refreshList(); } catch (e) { toast(e.message, 'err'); } }
+          })
+        ),
+        h('td', { class: 'muted', style: { fontSize: '.78rem' } }, fmtDate(d.created_at, 'relative')),
+        h('td', {},
+          h('button', { class: 'btn xs danger', onclick: async () => {
+            if (!confirm('Delete "' + d.title + '"?')) return;
+            try { await api('api_aibot_kb_delete', d.id); refreshList(); toast('Deleted', 'ok'); }
+            catch (e) { toast(e.message, 'err'); }
+          } }, '🗑')
+        )
+      )))
+    );
+    listCard.appendChild(tbl);
+  }
+  refreshList();
+  return wrap;
+}
+
+// ============================================================
+// AI Bot — Activity sub-tab
+// ============================================================
+async function _aibotActivityView() {
+  const wrap = h('div', { class: 'card' });
+  wrap.appendChild(h('h3', { style: { marginTop: 0 } }, 'Recent bot activity'));
+  let rows;
+  try { rows = await api('api_aibot_chatlog_list', { limit: 50 }); }
+  catch (e) { wrap.appendChild(h('div', { style: { color: '#dc2626' } }, e.message)); return wrap; }
+  if (!rows.length) {
+    wrap.appendChild(h('p', { class: 'muted' }, 'No bot activity yet. Once you flip the bot on (Bot Settings → Master switch) and a customer messages, replies will appear here.'));
+    return wrap;
+  }
+  const tbl = h('table', { class: 'data-table', style: { width: '100%', fontSize: '.86rem' } },
+    h('thead', {}, h('tr', {},
+      h('th', {}, 'When'), h('th', {}, 'Lead/phone'), h('th', {}, 'Status'),
+      h('th', {}, 'Reply / draft / reason'), h('th', {}, 'Tokens'), h('th', {}, '₹'), h('th', {}, '')
+    )),
+    h('tbody', {}, ...rows.map(r => {
+      const statusClass = ({ sent: 'ok', draft: 'warn', suppressed: 'muted', failed: 'err' })[r.status] || '';
+      const text = r.reply_text || r.draft_text || r.suppressed_reason || r.error_text || '';
+      return h('tr', {},
+        h('td', { class: 'muted', style: { fontSize: '.78rem' } }, fmtDate(r.created_at, 'relative')),
+        h('td', {}, r.lead_name || r.phone),
+        h('td', { class: statusClass }, r.status),
+        h('td', { style: { maxWidth: '420px' } },
+          h('div', { style: { whiteSpace: 'pre-wrap', fontSize: '.84rem' } }, text)),
+        h('td', { class: 'muted' }, ((r.input_tokens || 0) + (r.output_tokens || 0)).toLocaleString('en-IN')),
+        h('td', {}, '₹' + Number(r.cost_inr_billed || 0).toFixed(3)),
+        h('td', {},
+          r.status === 'draft'
+            ? h('div', { style: { display: 'flex', gap: '.25rem' } },
+                h('button', { class: 'btn xs primary', onclick: async () => {
+                  try { await api('api_aibot_send_draft', r.id); toast('Sent', 'ok'); _aibotActivityViewRefresh(wrap); }
+                  catch (e) { toast(e.message, 'err'); }
+                } }, 'Send'),
+                h('button', { class: 'btn xs', onclick: async () => {
+                  try { await api('api_aibot_discard_draft', r.id); _aibotActivityViewRefresh(wrap); }
+                  catch (e) { toast(e.message, 'err'); }
+                } }, 'Discard'))
+            : null
+        )
+      );
+    }))
+  );
+  wrap.appendChild(tbl);
+  return wrap;
+}
+async function _aibotActivityViewRefresh(container) {
+  const fresh = await _aibotActivityView();
+  container.replaceWith(fresh);
+}
+
+// ============================================================
+// AI Bot — Usage sub-tab
+// ============================================================
+async function _aibotUsageView() {
+  const wrap = h('div', {});
+  let u;
+  try { u = await api('api_aibot_usage_summary', {}); }
+  catch (e) { wrap.appendChild(h('div', { class: 'card', style: { color: '#dc2626' } }, e.message)); return wrap; }
+
+  const kpis = h('div', { class: 'cards', style: { marginBottom: '1rem' } });
+  function kpi(label, value, sub, klass) {
+    return h('div', { class: 'card kpi ' + (klass || '') },
+      h('div', { class: 'kpi-label' }, label),
+      h('div', { class: 'kpi-value' }, value),
+      sub ? h('div', { class: 'kpi-sub muted' }, sub) : null);
+  }
+  kpis.appendChild(kpi('💸 ' + u.month_label, '₹' + u.this_month.cost_inr.toLocaleString('en-IN'), 'Total bot cost this month', 'accent'));
+  kpis.appendChild(kpi('💬 Replies sent', u.this_month.sent.toLocaleString('en-IN'), u.this_month.drafts ? (u.this_month.drafts + ' drafts pending') : 'Auto-sent', 'ok'));
+  kpis.appendChild(kpi('📈 Forecast', '₹' + u.forecast_inr.toLocaleString('en-IN'), 'Projected at current pace', 'warn'));
+  kpis.appendChild(kpi('🔢 All-time', '₹' + u.all_time.cost_inr.toLocaleString('en-IN'), u.all_time.sent + ' replies', 'accent'));
+  if (u.this_month.suppressed) kpis.appendChild(kpi('⏸ Suppressed', u.this_month.suppressed, 'Times bot held back (agent active, off-keyword, etc.)', 'muted'));
+  if (u.this_month.failed)     kpis.appendChild(kpi('⚠ Failed', u.this_month.failed, 'Gemini errors (not billed)', 'err'));
+  wrap.appendChild(kpis);
+
+  // Estimator
+  const repInp = h('input', { type: 'number', value: 500, min: 1, step: 50, style: { width: '8rem' } });
+  const out = h('div', { style: { marginTop: '.5rem' } });
+  const calcBtn = h('button', { class: 'btn primary' }, '🧮 Calculate');
+  calcBtn.onclick = async () => {
+    try {
+      const r = await api('api_aibot_estimator', { replies: Number(repInp.value || 500) });
+      out.innerHTML = '';
+      out.appendChild(h('div', { style: { fontSize: '1.1rem', fontWeight: '700' } },
+        '₹' + r.total_inr.toLocaleString('en-IN') + ' for ' + r.replies + ' bot replies'));
+      out.appendChild(h('div', { class: 'muted', style: { fontSize: '.82rem', marginTop: '.25rem' } },
+        'At ₹' + r.per_reply_inr.toFixed(3) + ' per reply · ' + r.derived_from));
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  wrap.appendChild(h('div', { class: 'card' },
+    h('h3', { style: { marginTop: 0 } }, '🧮 Cost forecast'),
+    h('p', { class: 'muted', style: { fontSize: '.85rem' } }, 'How much would N customer replies cost?'),
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem' } },
+      h('span', {}, 'Replies:'), repInp, calcBtn),
+    out
+  ));
+
+  // Tokens detail
+  wrap.appendChild(h('div', { class: 'card' },
+    h('h3', { style: { marginTop: 0 } }, '📊 This month — token detail'),
+    h('table', { class: 'mini-table' }, h('tbody', {},
+      h('tr', {}, h('td', { class: 'muted' }, 'Replies sent'), h('td', {}, u.this_month.sent.toLocaleString('en-IN'))),
+      h('tr', {}, h('td', { class: 'muted' }, 'Drafts (manual mode)'), h('td', {}, u.this_month.drafts.toLocaleString('en-IN'))),
+      h('tr', {}, h('td', { class: 'muted' }, 'Suppressed'), h('td', {}, u.this_month.suppressed.toLocaleString('en-IN'))),
+      h('tr', {}, h('td', { class: 'muted' }, 'Failed'), h('td', {}, u.this_month.failed.toLocaleString('en-IN'))),
+      h('tr', {}, h('td', { class: 'muted' }, 'Input tokens'), h('td', {}, u.this_month.input_tokens.toLocaleString('en-IN'))),
+      h('tr', {}, h('td', { class: 'muted' }, 'Output tokens'), h('td', {}, u.this_month.output_tokens.toLocaleString('en-IN'))),
+      h('tr', {}, h('td', { class: 'muted' }, h('b', {}, 'Total cost')), h('td', {}, h('b', { style: { color: '#10b981' } }, '₹' + u.this_month.cost_inr.toLocaleString('en-IN'))))
+    ))
+  ));
+  return wrap;
+}
+
 
 VIEWS.whatsbot = async (view) => {
   // Pre-warm the wa_phones cache so chat composer + initiate-chat

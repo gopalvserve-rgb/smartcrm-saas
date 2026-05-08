@@ -2089,6 +2089,24 @@ async function _handleInbound(m, value) {
     await _autoAssignChat(from, leadId, leadAssignedTo);
   } catch (e) { console.warn('[wb] auto-assign failed:', e.message); }
 
+  // ── Phase A2 multi-WA AI Bot ──────────────────────────────────
+  // Fire the AI auto-reply path. Wrapped in try/catch + fire-and-forget
+  // semantics so a Gemini outage NEVER blocks inbound webhook processing
+  // or downstream message-bot / template-bot dispatch. The AI bot has
+  // its own _shouldSuppress() that checks human-agent-recently-active,
+  // off-keywords, after-hours, etc — so it's safe to call here even
+  // if the tenant has the bot disabled (it's a fast no-op).
+  try {
+    const aiBot = require('./aiBot');
+    const _tStore = (db.tenantStorage && db.tenantStorage.getStore) ? db.tenantStorage.getStore() : null;
+    const tenantSlug = (_tStore && _tStore.slug) || '';
+    const tenantId   = (_tStore && _tStore.tenant && _tStore.tenant.id) || null;
+    aiBot.maybeReplyToInbound({
+      phone: from, leadId, inboundText: text, inboundPhoneId,
+      inboundMsgId: null, tenantSlug, tenantId
+    }).catch(e => console.warn('[ai-bot] reply failed:', e.message));
+  } catch (e) { console.warn('[ai-bot] dispatch failed:', e.message); }
+
   // Try matching a Message Bot or Template Bot by trigger
   try {
     const triggerLc = String(text || '').toLowerCase().trim();

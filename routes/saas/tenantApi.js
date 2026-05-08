@@ -66,6 +66,7 @@ const ROUTE_FILES = [
   'webhooks',
   'whatsapp',
   'whatsbot',
+  'aiBot',
 ];
 
 const API = {};
