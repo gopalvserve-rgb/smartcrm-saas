@@ -1,11 +1,11 @@
 /**
  * Lead-source integrations.
  *
- * 1. Google Sheet sync â admin pastes a sheet URL, the CRM polls
+ * 1. Google Sheet sync Ã¢ÂÂ admin pastes a sheet URL, the CRM polls
  *    its public CSV export every poll_interval_min and creates new
  *    leads from new rows.
  *
- * 2. Multi-source lead webhooks â `POST /hook/leadsource/:source/:key`
+ * 2. Multi-source lead webhooks Ã¢ÂÂ `POST /hook/leadsource/:source/:key`
  *    accepts each Indian aggregator's payload format and maps it
  *    to the CRM's lead shape. Supported: indiamart, magicbricks,
  *    justdial, tradeindia, 99acres, housing, nobroker, exportersindia,
@@ -65,7 +65,7 @@ async function _runSheetSync(integration) {
   }
   const url = `https://docs.google.com/spreadsheets/d/${integration.sheet_id}/export?format=csv&gid=${integration.sheet_gid || '0'}`;
   const res = await fetch(url, { redirect: 'follow', timeout: 20000 });
-  if (!res.ok) throw new Error('Sheet fetch failed: HTTP ' + res.status + ' (is the sheet shared as "Anyone with link â Viewer"?)');
+  if (!res.ok) throw new Error('Sheet fetch failed: HTTP ' + res.status + ' (is the sheet shared as "Anyone with link Ã¢ÂÂ Viewer"?)');
   const text = await res.text();
   const rows = _csvParse(text);
   if (rows.length < 2) return { imported: 0, skipped: 0, total: 0 };
@@ -286,7 +286,7 @@ function _adaptLeadSourcePayload(source, body) {
     return '';
   };
 
-  // ââ IndiaMART ââââââââââââââââââââââââââââââââââââââââââââââ
+  // Ã¢ÂÂÃ¢ÂÂ IndiaMART Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
   if (norm === 'indiamart') {
     const arr = Array.isArray(body.RESPONSE) ? body.RESPONSE
               : Array.isArray(body.response)  ? body.response
@@ -305,7 +305,7 @@ function _adaptLeadSourcePayload(source, body) {
     }));
   }
 
-  // ââ MagicBricks âââââââââââââââââââââââââââââââââââââââââââ
+  // Ã¢ÂÂÃ¢ÂÂ MagicBricks Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
   if (norm === 'magicbricks') {
     const r = body.Lead || body.lead || body;
     return [{
@@ -319,7 +319,7 @@ function _adaptLeadSourcePayload(source, body) {
     }];
   }
 
-  // ââ JustDial ââââââââââââââââââââââââââââââââââââââââââââââ
+  // Ã¢ÂÂÃ¢ÂÂ JustDial Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
   if (norm === 'justdial' || norm === 'jd') {
     const r = body.lead || body;
     const prefix = pick(r, ['prefix', 'salutation']);
@@ -335,21 +335,21 @@ function _adaptLeadSourcePayload(source, body) {
     }];
   }
 
-  // ââ TradeIndia ââââââââââââââââââââââââââââââââââââââââââââ
+  // Ã¢ÂÂÃ¢ÂÂ TradeIndia Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
   if (norm === 'tradeindia' || norm === 'ti') {
     return [{
       name:       pick(body, ['GLUSR_USR_FNAME', 'glusr_usr_fname', 'first_name', 'name']),
       phone:      pick(body, ['GLUSR_USR_PHONE', 'glusr_usr_phone', 'phone', 'mobile']),
-      email:      pich(body, ['GLUSR_USR_EMAIL', 'glusr_usr_email', 'email']),
+      email:      pick(body, ['GLUSR_USR_EMAIL', 'glusr_usr_email', 'email']),
       company:    pick(body, ['GLUSR_USR_COMPANY', 'glusr_usr_company', 'company']),
       city:       pick(body, ['GLUSR_USR_CITY', 'glusr_usr_city', 'city']),
-      notes:      pich(body, ['MESSAGE', 'message', 'enquiry']),
+      notes:      pick(body, ['MESSAGE', 'message', 'enquiry']),
       source:     'TradeIndia',
       source_ref: pick(body, ['QUERY_ID', 'query_id', 'enquiry_id', 'id'])
     }];
   }
 
-  // ââ 99acres âââââââââââââââââââââââââââââââââââââââââââââââ
+  // Ã¢ÂÂÃ¢ÂÂ 99acres Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
   if (norm === '99acres' || norm === 'acres') {
     const r = body.lead || body;
     return [{
@@ -363,7 +363,7 @@ function _adaptLeadSourcePayload(source, body) {
     }];
   }
 
-  // ââ Housing.com âââââââââââââââââââââââââââââââââââââââââââ
+  // Ã¢ÂÂÃ¢ÂÂ Housing.com Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
   if (norm === 'housing' || norm === 'housing.com') {
     const r = body.lead || body;
     return [{
@@ -377,7 +377,7 @@ function _adaptLeadSourcePayload(source, body) {
     }];
   }
 
-  // ââ NoBroker ââââââââââââââââââââââââââââââââââââââââââââââ
+  // Ã¢ÂÂÃ¢ÂÂ NoBroker Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
   if (norm === 'nobroker') {
     const r = body.lead || body;
     return [{
@@ -391,12 +391,12 @@ function _adaptLeadSourcePayload(source, body) {
     }];
   }
 
-  // ââ ExportersIndia ââââââââââââââââââââââââââââââââââââââââ
+  // Ã¢ÂÂÃ¢ÂÂ ExportersIndia Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
   if (norm === 'exportersindia' || norm === 'exporter') {
     return [{
       name:       pick(body, ['SENDER_NAME',    'sender_name',    'name']),
       phone:      pick(body, ['SENDER_MOBILE',  'sender_mobile',  'mobile', 'phone']),
-      email:      pich(body, ['SENDER_EMAIL',   'sender_email',   'email']),
+      email:      pick(body, ['SENDER_EMAIL',   'sender_email',   'email']),
       company:    pick(body, ['SENDER_COMPANY', 'sender_company', 'company']),
       city:       pick(body, ['SENDER_CITY',    'sender_city',    'city']),
       notes:      pick(body, ['QUERY_MESSAGE',  'query_message',  'message', 'SUBJECT']),
@@ -405,7 +405,7 @@ function _adaptLeadSourcePayload(source, body) {
     }];
   }
 
-  // ââ Sulekha âââââââââââââââââââââââââââââââââââââââââââââââ
+  // Ã¢ÂÂÃ¢ÂÂ Sulekha Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
   if (norm === 'sulekha') {
     const r = body.lead || body;
     return [{
@@ -419,7 +419,7 @@ function _adaptLeadSourcePayload(source, body) {
     }];
   }
 
-  // ââ Google Ads Lead Form Extensions âââââââââââââââââââââââ
+  // Ã¢ÂÂÃ¢ÂÂ Google Ads Lead Form Extensions Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
   // Payload: { google_key, campaign_id, adgroup_id, lead_id,
   //            user_column_data: [{column_name, string_value}] }
   if (norm === 'googleads' || norm === 'google_ads' || norm === 'google-ads') {
@@ -438,14 +438,14 @@ function _adaptLeadSourcePayload(source, body) {
       email:      pick(r, ['email', 'email_address']),
       city:       pick(r, ['city', 'location']),
       notes:      'Google Ads Lead Form' +
-                  (body.campaign_id ? ' Â· Campaign: ' + body.campaign_id : '') +
-                  (body.adgroup_id  ? ' Â· AdGroup: '  + body.adgroup_id  : ''),
+                  (body.campaign_id ? ' ÃÂ· Campaign: ' + body.campaign_id : '') +
+                  (body.adgroup_id  ? ' ÃÂ· AdGroup: '  + body.adgroup_id  : ''),
       source:     'Google Ads',
       source_ref: pick(body, ['lead_id', 'adgroup_id', 'campaign_id'])
     }];
   }
 
-  // ââ WordPress Forms (CF7 / WPForms / Gravity Forms) âââââââ
+  // Ã¢ÂÂÃ¢ÂÂ WordPress Forms (CF7 / WPForms / Gravity Forms) Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
   if (['wordpress', 'cf7', 'wpforms', 'gravityforms', 'gravity_forms'].includes(norm)) {
     const r = body.data || body.fields || body;
     const fname = pick(r, ['your-name', 'name', 'full_name', 'first_name', 'fullName', 'field_1', 'input_1']);
@@ -463,7 +463,7 @@ function _adaptLeadSourcePayload(source, body) {
     }];
   }
 
-  // ââ Google Forms (via Apps Script webhook) âââââââââââââââââ
+  // Ã¢ÂÂÃ¢ÂÂ Google Forms (via Apps Script webhook) Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
   // Apps Script maps form Q&A into a flat JSON object sent here.
   if (norm === 'googleforms' || norm === 'google_forms' || norm === 'google-forms') {
     const r = body.response || body;
@@ -478,7 +478,7 @@ function _adaptLeadSourcePayload(source, body) {
     }];
   }
 
-  // ââ Pabbly Connect ââââââââââââââââââââââââââââââââââââââââ
+  // Ã¢ÂÂÃ¢ÂÂ Pabbly Connect Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
   if (norm === 'pabbly') {
     const r = body.data || body;
     return [{
@@ -493,7 +493,7 @@ function _adaptLeadSourcePayload(source, body) {
     }];
   }
 
-  // ââ Zapier ââââââââââââââââââââââââââââââââââââââââââââââââ
+  // Ã¢ÂÂÃ¢ÂÂ Zapier Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
   if (norm === 'zapier') {
     const r = body.data || body;
     return [{
@@ -508,7 +508,7 @@ function _adaptLeadSourcePayload(source, body) {
     }];
   }
 
-  // ââ Make (Integromat) / n8n âââââââââââââââââââââââââââââââ
+  // Ã¢ÂÂÃ¢ÂÂ Make (Integromat) / n8n Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
   if (norm === 'make' || norm === 'integromat' || norm === 'n8n') {
     const r = body.data || body;
     const src = norm === 'n8n' ? 'n8n' : 'Make';
@@ -524,7 +524,7 @@ function _adaptLeadSourcePayload(source, body) {
     }];
   }
 
-  // ââ LeadSquared âââââââââââââââââââââââââââââââââââââââââââ
+  // Ã¢ÂÂÃ¢ÂÂ LeadSquared Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
   // Supports both flat format and { LeadPropertyList: [{Attribute, Value}] }
   if (norm === 'leadsquared' || norm === 'ls') {
     const attrs = {};
@@ -546,7 +546,7 @@ function _adaptLeadSourcePayload(source, body) {
     }];
   }
 
-  // ââ Zoho CRM ââââââââââââââââââââââââââââââââââââââââââââââ
+  // Ã¢ÂÂÃ¢ÂÂ Zoho CRM Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
   if (norm === 'zoho' || norm === 'zohocrm' || norm === 'zoho_crm') {
     const arr = Array.isArray(body.leads) ? body.leads
               : Array.isArray(body.data)  ? body.data
@@ -567,11 +567,11 @@ function _adaptLeadSourcePayload(source, body) {
     });
   }
 
-  // ââ HubSpot âââââââââââââââââââââââââââââââââââââââââââââââ
+  // Ã¢ÂÂÃ¢ÂÂ HubSpot Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
   // Supports event-array format and contact-properties format.
   if (norm === 'hubspot') {
     if (Array.isArray(body)) {
-      // Group events by objectId â reconstruct contact
+      // Group events by objectId Ã¢ÂÂ reconstruct contact
       const map = {};
       body.forEach(ev => {
         const id = String(ev.objectId || '');
@@ -604,11 +604,11 @@ function _adaptLeadSourcePayload(source, body) {
       city:       pick(r, ['city']),
       notes:      pick(r, ['message', 'notes', 'description', 'hs_lead_status']),
       source:     'HubSpot',
-      source_ref: pick(body, ['id', 'vid'])
+      source_ref: pich(body, ['id', 'vid'])
     }];
   }
 
-  // ââ Salesforce ââââââââââââââââââââââââââââââââââââââââââââ
+  // Ã¢ÂÂÃ¢ÂÂ Salesforce Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
   if (norm === 'salesforce' || norm === 'sfdc') {
     const r = body.Lead || body.lead || body;
     const fname = pick(r, ['FirstName', 'first_name']);
@@ -625,7 +625,7 @@ function _adaptLeadSourcePayload(source, body) {
     }];
   }
 
-  // ââ Generic fallback ââââââââââââââââââââââââââââââââââââââ
+  // Ã¢ÂÂÃ¢ÂÂ Generic fallback Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
   const r = body.lead || body;
   return [{
     name:       pick(r, ['name', 'full_name', 'customer_name', 'contact_name']),
@@ -648,7 +648,7 @@ function _adaptLeadSourcePayload(source, body) {
  *   googleads, wordpress, cf7, wpforms, oravityforms, googleforms,
  *   pabbly, zapier, make, leadsquared, zoho, hubspot, salesforce
  *
- * The <api-key> must match the WEBSITE_API_KEY set in Admin â Website API.
+ * The <api-key> must match the WEBSITE_API_KEY set in Admin Ã¢ÂÂ Website API.
  */
 async function leadSourceWebhook(req, res) {
   try {
