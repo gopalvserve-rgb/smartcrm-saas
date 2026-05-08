@@ -47,6 +47,11 @@ const CONFIG_KEYS = [
   // '1' = create a lead from each call when no existing match; '0' = skip.
   // CALLS_AUTOLEAD_STATUS_ID = id of the status to apply (falls back to 'New').
   'CALLS_AUTOLEAD_INBOUND', 'CALLS_AUTOLEAD_OUTBOUND', 'CALLS_AUTOLEAD_STATUS_ID',
+  // Tenant theme customisation. Hex colours; THEME_MODE = 'light' | 'dark' | 'auto'.
+  // BRAND_PRIMARY = main accent (buttons, links, active nav).
+  // BRAND_SIDEBAR = sidebar background. BRAND_TEXT = top/headings text.
+  'BRAND_PRIMARY_COLOR', 'BRAND_ACCENT_COLOR', 'BRAND_SIDEBAR_COLOR',
+  'BRAND_TEXT_COLOR', 'THEME_MODE',
   // Minimum seconds an answered inbound call must last before it creates a lead.
   // 0 = create on every call (incl. missed). Default 5.
   'CALLS_AUTOLEAD_MIN_SECONDS'

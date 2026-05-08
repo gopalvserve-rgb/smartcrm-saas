@@ -206,14 +206,41 @@ function parseHashView() {
 }
 
 async function warmCache() {
-  const [statuses, sources, products, users, customFields] = await Promise.all([
+  const [statuses, sources, products, users, customFields, cfg] = await Promise.all([
     api('api_statuses_list'),
     api('api_sources_list'),
     api('api_products_list'),
     api('api_users_list'),
-    api('api_customFields_list').catch(() => [])
+    api('api_customFields_list').catch(() => []),
+    api('api_admin_getConfig').catch(() => ({}))
   ]);
   CRM.cache = { statuses, sources, products, users, customFields };
+  CRM.cache.config = cfg || {};
+  applyTenantTheme(cfg || {});
+}
+
+/**
+ * Inject tenant-configured colours as CSS variables so every
+ * existing var(--brand) etc. usage picks them up automatically.
+ * Empty / missing keys keep the design-system defaults.
+ */
+function applyTenantTheme(cfg) {
+  try {
+    const root = document.documentElement;
+    const set = (k, v) => { if (v && /^#[0-9a-fA-F]{3,8}$/.test(String(v).trim())) root.style.setProperty(k, String(v).trim()); };
+    set('--brand',         cfg.BRAND_PRIMARY_COLOR);
+    set('--brand-dark',    cfg.BRAND_PRIMARY_COLOR);
+    set('--brand-accent',  cfg.BRAND_ACCENT_COLOR);
+    // Sidebar colour applies to BOTH the existing --sidebar-bg used by
+    // .sidebar rules AND a new --brand-sidebar var for any future use.
+    set('--sidebar-bg',    cfg.BRAND_SIDEBAR_COLOR);
+    set('--brand-sidebar', cfg.BRAND_SIDEBAR_COLOR);
+    set('--brand-text',    cfg.BRAND_TEXT_COLOR);
+    set('--text',          cfg.BRAND_TEXT_COLOR);
+    // Theme mode: 'light' | 'dark' | 'auto'.
+    const mode = String(cfg.THEME_MODE || 'auto').toLowerCase();
+    document.documentElement.setAttribute('data-theme', ['light','dark','auto'].includes(mode) ? mode : 'auto');
+  } catch (_) {}
 }
 
 /**
@@ -1614,13 +1641,20 @@ VIEWS.leads = async (view) => {
       onclick: () => setTimeout(() => showAdminTab && showAdminTab('customfields'), 100) },
       'Add custom field →'));
   }
-  // Always-present toggle. Label includes the word "Filter" so it's
-  // discoverable even when no custom fields exist yet.
-  toolbar.appendChild(h('button', { class: 'btn ghost',
-    title: 'Filter by custom fields',
+  // Always-present toggle. Primary-styled + uses 'Custom field filter'
+  // label so admins find it immediately. Auto-opens when any saved
+  // custom-field value is present.
+  const _cfHasSaved = !!(CRM.prefs.filters.cf && Object.values(CRM.prefs.filters.cf).some(v => String(v || '').trim()));
+  if (_cfHasSaved) cfRow.style.display = 'flex';
+  const cfBtn = h('button', { class: 'btn',
+    style: { background: '#eef2ff', color: '#4338ca', borderColor: '#c7d2fe' },
+    title: 'Filter leads by any custom field',
     onclick: () => {
       cfRow.style.display = cfRow.style.display === 'none' ? 'flex' : 'none';
-    } }, '🧩 CF'));
+      cfBtn.classList.toggle('active', cfRow.style.display === 'flex');
+    } }, '🧩 Custom field filter' + (_cfHasSaved ? ' \u2022' : ''));
+  if (_cfHasSaved) cfBtn.classList.add('active');
+  toolbar.appendChild(cfBtn);
   view.appendChild(cfRow);
 
   view.appendChild(h('div', { class: 'bulk-bar', id: 'bulk-bar', hidden: true },
@@ -11831,6 +11865,67 @@ async function adminCompany() {
     h('p', { class: 'muted' }, 'If you host your logo elsewhere (e.g. on a CDN), you can paste the URL here.'),
     configForm(cfg, ['COMPANY_LOGO_URL'])
   ));
+
+  // ---- 🎨 Theme card ----
+  const themeCard = h('div', { class: 'card', style: { marginTop: '1rem' } });
+  themeCard.appendChild(h('h4', { style: { marginTop: 0 } }, '\ud83c\udfa8 Theme'));
+  themeCard.appendChild(h('p', { class: 'muted' },
+    'Pick a colour scheme for your CRM. Changes apply immediately for everyone in this workspace.'));
+
+  function _hex(v, def) {
+    return /^#[0-9a-fA-F]{6}$/.test(String(v || '').trim()) ? v.trim() : def;
+  }
+  const primary  = h('input', { type: 'color', value: _hex(cfg.BRAND_PRIMARY_COLOR,  '#6366f1'), style: { width: '4rem', height: '2.5rem', verticalAlign: 'middle' } });
+  const accent   = h('input', { type: 'color', value: _hex(cfg.BRAND_ACCENT_COLOR,   '#10b981'), style: { width: '4rem', height: '2.5rem', verticalAlign: 'middle' } });
+  const sidebar  = h('input', { type: 'color', value: _hex(cfg.BRAND_SIDEBAR_COLOR,  '#1e293b'), style: { width: '4rem', height: '2.5rem', verticalAlign: 'middle' } });
+  const textCol  = h('input', { type: 'color', value: _hex(cfg.BRAND_TEXT_COLOR,     '#0f172a'), style: { width: '4rem', height: '2.5rem', verticalAlign: 'middle' } });
+  const modeSel  = h('select', { style: { padding: '.4rem .6rem' } },
+    h('option', { value: 'auto',  selected: (cfg.THEME_MODE || 'auto') === 'auto'  ? 'selected' : null }, 'Auto (follows OS)'),
+    h('option', { value: 'light', selected: cfg.THEME_MODE === 'light' ? 'selected' : null }, 'Light'),
+    h('option', { value: 'dark',  selected: cfg.THEME_MODE === 'dark'  ? 'selected' : null }, 'Dark'));
+
+  function row(label, ctrl, hint) {
+    return h('div', { class: 'field', style: { display: 'flex', alignItems: 'center', gap: '.75rem', flexWrap: 'wrap', margin: '.4rem 0' } },
+      h('label', { style: { width: '11rem', fontWeight: '500' } }, label),
+      ctrl,
+      hint ? h('span', { class: 'muted', style: { fontSize: '.78rem' } }, hint) : null);
+  }
+  themeCard.appendChild(row('Primary (buttons, links)', primary, '#6366f1 default'));
+  themeCard.appendChild(row('Accent / success', accent, '#10b981 default'));
+  themeCard.appendChild(row('Sidebar background', sidebar, '#1e293b default'));
+  themeCard.appendChild(row('Heading text', textCol, '#0f172a default'));
+  themeCard.appendChild(row('Theme mode', modeSel, 'Auto follows the OS\'s light/dark preference.'));
+
+  // Live preview as user picks colours
+  function preview() {
+    applyTenantTheme({
+      BRAND_PRIMARY_COLOR: primary.value,
+      BRAND_ACCENT_COLOR:  accent.value,
+      BRAND_SIDEBAR_COLOR: sidebar.value,
+      BRAND_TEXT_COLOR:    textCol.value,
+      THEME_MODE:          modeSel.value
+    });
+  }
+  [primary, accent, sidebar, textCol, modeSel].forEach(el => el.addEventListener('input', preview));
+
+  themeCard.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', marginTop: '.75rem' } },
+    h('button', { class: 'btn primary', onclick: async () => {
+      try {
+        await api('api_admin_setConfig', {
+          BRAND_PRIMARY_COLOR: primary.value, BRAND_ACCENT_COLOR: accent.value,
+          BRAND_SIDEBAR_COLOR: sidebar.value, BRAND_TEXT_COLOR: textCol.value,
+          THEME_MODE: modeSel.value
+        });
+        toast('Theme saved');
+      } catch (e) { toast(e.message, 'err'); }
+    } }, '\ud83d\udcbe Save theme'),
+    h('button', { class: 'btn ghost', onclick: () => {
+      primary.value = '#6366f1'; accent.value = '#10b981';
+      sidebar.value = '#1e293b'; textCol.value = '#0f172a';
+      modeSel.value = 'auto'; preview();
+    } }, '\u21bb Reset to defaults')
+  ));
+  wrap.appendChild(themeCard);
 
   return wrap;
 }
