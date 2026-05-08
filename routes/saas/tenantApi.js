@@ -67,6 +67,7 @@ const ROUTE_FILES = [
   'whatsapp',
   'whatsbot',
   'aiBot',
+  'quotations',
 ];
 
 const API = {};

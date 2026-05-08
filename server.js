@@ -800,6 +800,17 @@ app.get(/^\/t\/[a-z0-9-]+\/?$/, async (req, res, next) => {
 
 app.use(attachTenant);
 
+// ---- Public /q/:token quotation viewer (tenant-scoped) ----
+// Mounted AFTER attachTenant so /t/<slug>/q/<token> resolves to the
+// tenant pool. No auth required — the random token is the auth.
+app.get('/q/:token', (req, res, next) => {
+  if (!req.tenant) return res.status(404).send('Tenant not found');
+  const tenantDb = require('./db/pg');
+  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug }, () => {
+    require('./routes/quotations').expressPublicQuote(req, res).catch(next);
+  });
+});
+
 // ---- Per-tenant DB injection ---------------------------------------
 // After attachTenant runs, req.tenant + req.tenantPool are populated
 // for any /t/<slug>/... request. Wrap the rest of the chain in

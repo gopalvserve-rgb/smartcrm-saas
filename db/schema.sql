@@ -1309,3 +1309,67 @@ ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS resume_after_idle_seconds I
 UPDATE ai_bot_settings
    SET resume_after_idle_seconds = COALESCE(resume_after_idle_minutes, 1440) * 60
  WHERE resume_after_idle_seconds = 86400 AND resume_after_idle_minutes IS NOT NULL;
+
+-- ============================================================
+-- Quotations (2026-05-08)
+-- ============================================================
+-- Author quotations directly in the CRM, send to customer via email
+-- and/or WhatsApp, share a public link the customer can view in the
+-- browser. Each quotation has a header (number, dates, totals, terms)
+-- and N line items.
+--
+-- Public access: a per-quote 'public_token' (random string). The
+-- public viewer at /q/<token> renders an HTML page using the same
+-- styles — customer-print-to-PDF works without us shipping a PDF
+-- generator. Tokens are revocable; setting is_public = 0 hides the
+-- public page even if someone has the URL.
+
+CREATE TABLE IF NOT EXISTS quotations (
+  id              SERIAL PRIMARY KEY,
+  number          TEXT NOT NULL UNIQUE,         -- e.g. Q-2026-0001
+  lead_id         INTEGER REFERENCES leads(id) ON DELETE SET NULL,
+  customer_id     INTEGER,                       -- optional FK to customers if present
+  customer_name   TEXT NOT NULL,
+  customer_email  TEXT,
+  customer_phone  TEXT,
+  customer_address TEXT,
+  status          TEXT NOT NULL DEFAULT 'draft', -- draft | sent | accepted | rejected | expired
+  issue_date      DATE NOT NULL DEFAULT CURRENT_DATE,
+  valid_until     DATE,
+  currency        TEXT NOT NULL DEFAULT 'INR',
+  subtotal        NUMERIC(12,2) NOT NULL DEFAULT 0,
+  discount_pct    NUMERIC(5,2)  NOT NULL DEFAULT 0,
+  discount_amt    NUMERIC(12,2) NOT NULL DEFAULT 0,
+  tax_pct         NUMERIC(5,2)  NOT NULL DEFAULT 18,
+  tax_amt         NUMERIC(12,2) NOT NULL DEFAULT 0,
+  total           NUMERIC(12,2) NOT NULL DEFAULT 0,
+  notes           TEXT,
+  terms           TEXT,
+  public_token    TEXT UNIQUE,                   -- random; used by /q/<token>
+  is_public       INTEGER NOT NULL DEFAULT 1,
+  sent_at         TIMESTAMPTZ,
+  sent_via        TEXT,                          -- 'email' | 'whatsapp' | 'email+whatsapp'
+  accepted_at     TIMESTAMPTZ,
+  rejected_at     TIMESTAMPTZ,
+  created_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_quotations_lead     ON quotations(lead_id);
+CREATE INDEX IF NOT EXISTS idx_quotations_status   ON quotations(status);
+CREATE INDEX IF NOT EXISTS idx_quotations_token    ON quotations(public_token);
+CREATE INDEX IF NOT EXISTS idx_quotations_created  ON quotations(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS quotation_items (
+  id              SERIAL PRIMARY KEY,
+  quotation_id    INTEGER NOT NULL REFERENCES quotations(id) ON DELETE CASCADE,
+  position        INTEGER NOT NULL DEFAULT 0,
+  product_id      INTEGER,                       -- optional FK to products
+  description     TEXT NOT NULL,
+  quantity        NUMERIC(12,3) NOT NULL DEFAULT 1,
+  unit_price      NUMERIC(12,2) NOT NULL DEFAULT 0,
+  discount_pct    NUMERIC(5,2)  NOT NULL DEFAULT 0,
+  amount          NUMERIC(12,2) NOT NULL DEFAULT 0,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_qitems_quote ON quotation_items(quotation_id, position);

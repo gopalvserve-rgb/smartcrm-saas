@@ -730,10 +730,11 @@ const NAV_GROUPS = [
     { id: 'tatreport',     label: 'TAT report',      icon: '⏱️', roles: ['admin', 'manager', 'team_leader'] }
   ] },
   { label: 'Workspace', icon: '💬', items: [
-    { id: 'whatsbot',  label: 'WhatsBot',  icon: '💬' },
-    { id: 'aibot',     label: 'AI Bot',    icon: '🤖', roles: ['admin', 'manager'] },
-    { id: 'knowledge', label: 'Knowledge', icon: '📚' },
-    { id: 'teamchat',  label: 'Team chat', icon: '👥', countKey: 'chat_unread' }
+    { id: 'whatsbot',   label: 'WhatsBot',   icon: '💬' },
+    { id: 'aibot',      label: 'AI Bot',     icon: '🤖', roles: ['admin', 'manager'] },
+    { id: 'quotations', label: 'Quotations', icon: '📄' },
+    { id: 'knowledge',  label: 'Knowledge',  icon: '📚' },
+    { id: 'teamchat',   label: 'Team chat',  icon: '👥', countKey: 'chat_unread' }
   ] },
   { label: 'HR & Me', icon: '🕒', items: [
     { id: 'tasks',      label: 'Tasks',      icon: '✅' },
@@ -5888,6 +5889,248 @@ VIEWS.dial = async (view) => {
     h('a', { class: 'btn ghost', style: { marginTop: '1.25rem', display: 'inline-block' }, href: '#/leads' }, '← Back to leads')
   ));
 };
+
+// ============================================================
+// 📄 Quotations — author + send quotes via email + WhatsApp
+// ============================================================
+VIEWS.quotations = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('div', { class: 'view-head' },
+    h('h2', { style: { margin: 0 } }, '📄 Quotations'),
+    h('p', { class: 'muted', style: { margin: '.25rem 0 0', fontSize: '.9rem' } },
+      'Author professional quotations, send to customers via email or WhatsApp, and share a public link.')
+  ));
+
+  const toolbar = h('div', { class: 'toolbar', style: { display: 'flex', gap: '.5rem', marginBottom: '.75rem' } });
+  const newBtn = h('button', { class: 'btn primary', onclick: () => openQuotationModal() }, '+ New quotation');
+  const stSel = h('select', {},
+    h('option', { value: '' }, 'All statuses'),
+    h('option', { value: 'draft' }, 'Draft'),
+    h('option', { value: 'sent' }, 'Sent'),
+    h('option', { value: 'accepted' }, 'Accepted'),
+    h('option', { value: 'rejected' }, 'Rejected'),
+    h('option', { value: 'expired' }, 'Expired'));
+  const qInp = h('input', { type: 'search', placeholder: '🔍 Search number, customer…', style: { padding: '.4rem .6rem' } });
+  toolbar.appendChild(newBtn);
+  toolbar.appendChild(stSel);
+  toolbar.appendChild(qInp);
+  view.appendChild(toolbar);
+
+  const listCard = h('div', { class: 'card' });
+  view.appendChild(listCard);
+
+  async function reload() {
+    listCard.innerHTML = '<div class="muted">Loading…</div>';
+    let data;
+    try { data = await api('api_quotations_list', { status: stSel.value || null, q: qInp.value || null }); }
+    catch (e) { listCard.innerHTML = ''; listCard.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+    listCard.innerHTML = '';
+    if (!data.rows.length) {
+      listCard.appendChild(h('p', { class: 'muted' }, 'No quotations yet. Click + New quotation.'));
+      return;
+    }
+    const tbl = h('table', { class: 'data-table', style: { width: '100%' } },
+      h('thead', {}, h('tr', {},
+        h('th', {}, 'Number'), h('th', {}, 'Customer'), h('th', {}, 'Status'),
+        h('th', {}, 'Total'), h('th', {}, 'Issued'), h('th', {}, 'Sent'), h('th', {}, '')
+      )),
+      h('tbody', {}, ...data.rows.map(r => {
+        const stColor = { draft: '#94a3b8', sent: '#3b82f6', accepted: '#10b981', rejected: '#ef4444', expired: '#f59e0b' }[r.status] || '#64748b';
+        return h('tr', {},
+          h('td', {}, h('code', {}, r.number)),
+          h('td', {}, r.customer_name + (r.customer_email ? ' · ' + r.customer_email : '')),
+          h('td', {}, h('span', { style: { background: stColor, color: '#fff', padding: '.15rem .5rem', borderRadius: '4px', fontSize: '.78rem' } }, r.status)),
+          h('td', {}, '₹' + Number(r.total || 0).toLocaleString('en-IN')),
+          h('td', { class: 'muted' }, r.issue_date ? new Date(r.issue_date).toLocaleDateString('en-IN') : '—'),
+          h('td', { class: 'muted' }, r.sent_at ? fmtDate(r.sent_at, 'relative') : '—'),
+          h('td', {},
+            h('button', { class: 'btn xs', title: 'Edit', onclick: () => openQuotationModal(r.id) }, '✎'),
+            h('button', { class: 'btn xs ghost', title: 'View public link', onclick: async () => {
+              try { const u = await api('api_quotations_public_url', r.id); window.open(u.url, '_blank'); }
+              catch (e) { toast(e.message, 'err'); }
+            } }, '🔗'),
+            h('button', { class: 'btn xs ghost danger', title: 'Delete', onclick: async () => {
+              if (!confirm('Delete quotation ' + r.number + '?')) return;
+              try { await api('api_quotations_delete', r.id); toast('Deleted'); reload(); }
+              catch (e) { toast(e.message, 'err'); }
+            } }, '🗑')
+          )
+        );
+      }))
+    );
+    listCard.appendChild(tbl);
+  }
+  let _qt = null;
+  qInp.addEventListener('input', () => { clearTimeout(_qt); _qt = setTimeout(reload, 300); });
+  stSel.addEventListener('change', reload);
+  reload();
+};
+
+async function openQuotationModal(qid) {
+  const m = h('div', { class: 'modal-bd' });
+  const card = h('div', { class: 'modal-card', style: { maxWidth: '780px', maxHeight: '90vh', overflow: 'auto' } });
+  m.appendChild(card);
+  document.body.appendChild(m);
+
+  let existing = null;
+  if (qid) {
+    try { const r = await api('api_quotations_get', qid); existing = { ...(r.quotation || {}), items: r.items || [] }; }
+    catch (e) { card.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+  }
+  const q = existing || { items: [], currency: 'INR', tax_pct: 18, discount_pct: 0, issue_date: new Date().toISOString().slice(0, 10) };
+
+  card.appendChild(h('h3', { style: { marginTop: 0 } }, qid ? '✎ Edit quotation ' + (q.number || '') : '+ New quotation'));
+
+  const nameInp  = h('input', { type: 'text', value: q.customer_name || '', placeholder: 'Customer name *', style: { width: '100%' } });
+  const emailInp = h('input', { type: 'email', value: q.customer_email || '', placeholder: 'customer@example.com', style: { width: '100%' } });
+  const phoneInp = h('input', { type: 'tel', value: q.customer_phone || '', placeholder: '+91 98765 43210', style: { width: '100%' } });
+  const addrInp  = h('textarea', { rows: 2, placeholder: 'Customer billing address (optional)', style: { width: '100%' } }, q.customer_address || '');
+
+  card.appendChild(h('div', { class: 'field' }, h('label', {}, 'Customer name *'), nameInp));
+  card.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '.5rem' } },
+    h('div', { class: 'field' }, h('label', {}, 'Email'), emailInp),
+    h('div', { class: 'field' }, h('label', {}, 'Phone (WhatsApp)'), phoneInp)
+  ));
+  card.appendChild(h('div', { class: 'field' }, h('label', {}, 'Billing address'), addrInp));
+
+  const issueInp = h('input', { type: 'date', value: q.issue_date || '' });
+  const validInp = h('input', { type: 'date', value: q.valid_until || '' });
+  card.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '.5rem' } },
+    h('div', { class: 'field' }, h('label', {}, 'Issue date'), issueInp),
+    h('div', { class: 'field' }, h('label', {}, 'Valid until'), validInp)
+  ));
+
+  // ---- Items ----
+  card.appendChild(h('h4', { style: { marginBottom: '.25rem' } }, 'Line items'));
+  const itemsWrap = h('div', { style: { border: '1px solid #e2e8f0', borderRadius: '6px', padding: '.5rem' } });
+  const totalsLine = h('div', { style: { textAlign: 'right', marginTop: '.5rem', fontWeight: '700' } });
+  const discInp = h('input', { type: 'number', value: q.discount_pct || 0, step: '0.01', min: 0, max: 100, style: { width: '5rem' } });
+  const taxInp  = h('input', { type: 'number', value: q.tax_pct      || 18, step: '0.01', min: 0, max: 100, style: { width: '5rem' } });
+
+  function recompute() {
+    let subtotal = 0;
+    [...itemsWrap.querySelectorAll('.q-item')].forEach(row => {
+      const qty = Number(row.querySelector('[data-k=qty]').value || 0);
+      const price = Number(row.querySelector('[data-k=price]').value || 0);
+      const dp = Number(row.querySelector('[data-k=disc]').value || 0);
+      const gross = qty * price;
+      const line = gross - (gross * dp / 100);
+      row.querySelector('[data-k=amt]').textContent = '₹' + line.toFixed(2);
+      subtotal += line;
+    });
+    const dPct = Number(discInp.value || 0);
+    const tPct = Number(taxInp.value || 0);
+    const dAmt = subtotal * dPct / 100;
+    const taxable = subtotal - dAmt;
+    const tAmt = taxable * tPct / 100;
+    const total = taxable + tAmt;
+    totalsLine.innerHTML =
+      '<div>Subtotal: ₹' + subtotal.toFixed(2) + '</div>' +
+      (dPct > 0 ? '<div>Discount: -₹' + dAmt.toFixed(2) + '</div>' : '') +
+      (tPct > 0 ? '<div>Tax: ₹' + tAmt.toFixed(2) + '</div>' : '') +
+      '<div style="font-size:1.1rem;color:#6366f1">Total: ₹' + total.toFixed(2) + '</div>';
+  }
+
+  function addItem(seed) {
+    const it = seed || { description: '', quantity: 1, unit_price: 0, discount_pct: 0 };
+    const row = h('div', { class: 'q-item', style: { display: 'grid', gridTemplateColumns: '3fr .8fr 1fr .7fr 1fr 28px', gap: '.4rem', alignItems: 'center', marginBottom: '.3rem' } });
+    const desc = h('input', { type: 'text', placeholder: 'Description', value: it.description || '', style: { width: '100%' } });
+    const qty  = h('input', { 'data-k': 'qty',   type: 'number', value: it.quantity || 1, step: '0.001', min: 0 });
+    const pr   = h('input', { 'data-k': 'price', type: 'number', value: it.unit_price || 0, step: '0.01', min: 0 });
+    const dp   = h('input', { 'data-k': 'disc',  type: 'number', value: it.discount_pct || 0, step: '0.01', min: 0, max: 100 });
+    const amt  = h('div', { 'data-k': 'amt', style: { textAlign: 'right', fontFamily: 'monospace' } }, '₹0.00');
+    const del  = h('button', { class: 'btn xs ghost danger', type: 'button', onclick: () => { row.remove(); recompute(); } }, '✕');
+    [qty, pr, dp].forEach(el => el.addEventListener('input', recompute));
+    row._desc = desc; row._qty = qty; row._pr = pr; row._dp = dp;
+    row.appendChild(desc); row.appendChild(qty); row.appendChild(pr); row.appendChild(dp); row.appendChild(amt); row.appendChild(del);
+    itemsWrap.appendChild(row);
+    recompute();
+    return row;
+  }
+  // Header row
+  itemsWrap.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '3fr .8fr 1fr .7fr 1fr 28px', gap: '.4rem', fontSize: '.78rem', color: '#64748b', marginBottom: '.3rem' } },
+    h('div', {}, 'Description'), h('div', {}, 'Qty'), h('div', {}, 'Unit price'), h('div', {}, 'Disc %'),
+    h('div', { style: { textAlign: 'right' } }, 'Amount'), h('div', {})
+  ));
+  (q.items || []).forEach(it => addItem(it));
+  if (!q.items || !q.items.length) addItem();
+  itemsWrap.appendChild(h('button', { class: 'btn sm ghost', type: 'button', style: { marginTop: '.5rem' }, onclick: () => addItem() }, '+ Add line item'));
+  card.appendChild(itemsWrap);
+
+  card.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '.5rem', marginTop: '.5rem' } },
+    h('div', { class: 'field' }, h('label', {}, 'Discount %'), discInp),
+    h('div', { class: 'field' }, h('label', {}, 'Tax %'), taxInp)
+  ));
+  [discInp, taxInp].forEach(el => el.addEventListener('input', recompute));
+  card.appendChild(totalsLine);
+
+  const notesInp = h('textarea', { rows: 2, placeholder: 'Internal notes (visible to customer)', style: { width: '100%' } }, q.notes || '');
+  const termsInp = h('textarea', { rows: 3, placeholder: 'Terms & conditions (e.g. 50% advance, balance on delivery)', style: { width: '100%' } }, q.terms || '');
+  card.appendChild(h('div', { class: 'field' }, h('label', {}, 'Notes'), notesInp));
+  card.appendChild(h('div', { class: 'field' }, h('label', {}, 'Terms & conditions'), termsInp));
+
+  // ---- Save / Send ----
+  const saveBtn = h('button', { class: 'btn primary' }, '💾 Save');
+  const emailBtn = h('button', { class: 'btn', disabled: qid ? null : 'disabled' }, '📧 Send by email');
+  const waBtn = h('button', { class: 'btn', disabled: qid ? null : 'disabled' }, '💬 Send by WhatsApp');
+  const linkBtn = h('button', { class: 'btn ghost', disabled: qid ? null : 'disabled' }, '🔗 Public link');
+
+  let currentId = qid || null;
+  async function save() {
+    saveBtn.disabled = true;
+    const items = [...itemsWrap.querySelectorAll('.q-item')].map(row => ({
+      description: row._desc.value,
+      quantity: Number(row._qty.value || 0),
+      unit_price: Number(row._pr.value || 0),
+      discount_pct: Number(row._dp.value || 0)
+    })).filter(it => it.description);
+    try {
+      const r = await api('api_quotations_save', {
+        id: currentId,
+        customer_name: nameInp.value,
+        customer_email: emailInp.value,
+        customer_phone: phoneInp.value,
+        customer_address: addrInp.value,
+        issue_date: issueInp.value || null,
+        valid_until: validInp.value || null,
+        discount_pct: Number(discInp.value || 0),
+        tax_pct: Number(taxInp.value || 0),
+        notes: notesInp.value,
+        terms: termsInp.value,
+        items
+      });
+      currentId = r.quotation.id;
+      [emailBtn, waBtn, linkBtn].forEach(b => b.disabled = false);
+      toast('Saved');
+      return r.quotation;
+    } catch (e) { toast(e.message, 'err'); throw e; }
+    finally { saveBtn.disabled = false; }
+  }
+  saveBtn.onclick = () => save().catch(() => {});
+  emailBtn.onclick = async () => {
+    if (!emailInp.value) return toast('Add customer email first', 'err');
+    if (!currentId) await save();
+    try { const r = await api('api_quotations_send_email', currentId); toast('📧 Sent to ' + r.sent_to, 'ok'); }
+    catch (e) { toast(e.message, 'err'); }
+  };
+  waBtn.onclick = async () => {
+    if (!phoneInp.value) return toast('Add customer phone first', 'err');
+    if (!currentId) await save();
+    try { const r = await api('api_quotations_send_whatsapp', currentId); toast('💬 Sent to ' + r.sent_to, 'ok'); }
+    catch (e) { toast(e.message, 'err'); }
+  };
+  linkBtn.onclick = async () => {
+    if (!currentId) await save();
+    try { const u = await api('api_quotations_public_url', currentId); window.open(u.url, '_blank'); }
+    catch (e) { toast(e.message, 'err'); }
+  };
+
+  card.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', marginTop: '1rem', justifyContent: 'space-between', flexWrap: 'wrap' } },
+    h('div', { style: { display: 'flex', gap: '.4rem' } }, saveBtn, emailBtn, waBtn, linkBtn),
+    h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Close')
+  ));
+  recompute();
+}
 
 // ============================================================
 // 🤖 AI Bot — per-tenant WhatsApp AI assistant powered by Gemini.
