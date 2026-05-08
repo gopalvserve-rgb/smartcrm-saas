@@ -112,7 +112,57 @@ async function api_aibot_settings_save(token, payload) {
   const me = await authUser(token);
   if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
   const p = payload || {};
-  // Coerce reply_modes / business_hours / active_phone_number_ids to JSON.
+
+  // Partial upsert: build SET clause from only the keys the caller passed.
+  // Unspecified fields keep their current value (was a full-replace before,
+  // which made saving a single field reset everything else \u2014 a footgun
+  // that wiped business_name, system_prompt, etc. when callers forgot them).
+  const sets = [];
+  const vals = [];
+  let i = 1;
+  function addCol(col, sqlExpr, val) {
+    sets.push(col + ' = ' + sqlExpr.replace('$$', '$' + i));
+    vals.push(val);
+    i++;
+  }
+  if (p.is_enabled                != null) addCol('is_enabled',                '$$',          p.is_enabled ? 1 : 0);
+  if (p.bot_name                  != null) addCol('bot_name',                  '$$',          String(p.bot_name).slice(0, 80));
+  if (p.business_name             != null) addCol('business_name',             '$$',          String(p.business_name).slice(0, 200));
+  if (p.language                  != null) addCol('language',                  '$$',          String(p.language));
+  if (p.system_prompt             != null) addCol('system_prompt',             '$$',          String(p.system_prompt).slice(0, 8000));
+  if (p.welcome_message           != null) addCol('welcome_message',           '$$',          String(p.welcome_message).slice(0, 2000));
+  if (p.reply_modes               != null) addCol('reply_modes',               '$$::jsonb',   JSON.stringify(Array.isArray(p.reply_modes) ? p.reply_modes.map(String) : ['always']));
+  if (p.business_hours            != null) addCol('business_hours',            '$$::jsonb',   JSON.stringify(typeof p.business_hours === 'object' ? p.business_hours : _DEFAULT_SETTINGS.business_hours));
+  if (p.trigger_keywords          != null) addCol('trigger_keywords',          '$$',          String(p.trigger_keywords).slice(0, 1000));
+  if (p.off_keywords              != null) addCol('off_keywords',              '$$',          String(p.off_keywords).slice(0, 1000));
+  if (p.active_phone_number_ids   != null) addCol('active_phone_number_ids',   '$$::jsonb',   JSON.stringify(Array.isArray(p.active_phone_number_ids) ? p.active_phone_number_ids.map(String) : []));
+  if (p.resume_after_idle_minutes != null) addCol('resume_after_idle_minutes', '$$',          Math.max(0, Number(p.resume_after_idle_minutes)));
+  if (p.resume_after_idle_seconds != null) addCol('resume_after_idle_seconds', '$$',          Math.max(0, Number(p.resume_after_idle_seconds)));
+  if (p.max_replies_per_thread    != null) addCol('max_replies_per_thread',    '$$',          Math.max(0, Number(p.max_replies_per_thread)));
+  if (p.escalation_keywords       != null) addCol('escalation_keywords',       '$$',          String(p.escalation_keywords).slice(0, 1000));
+  if (p.model_override            !== undefined) addCol('model_override',      '$$',          p.model_override ? String(p.model_override).slice(0, 80) : null);
+  if (p.use_kb                    != null) addCol('use_kb',                    '$$',          p.use_kb ? 1 : 0);
+  if (p.kb_max_chars              != null) addCol('kb_max_chars',              '$$',          Math.max(2000, Math.min(120000, Number(p.kb_max_chars))));
+  if (p.history_messages          != null) addCol('history_messages',          '$$',          Math.max(0, Math.min(40, Number(p.history_messages))));
+
+  if (sets.length === 0) return await api_aibot_settings_get(token);
+
+  // Make sure the singleton row exists (id = 1) before we UPDATE.
+  await db.query(`INSERT INTO ai_bot_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
+  sets.push('updated_at = NOW()');
+  await db.query(`UPDATE ai_bot_settings SET ${sets.join(', ')} WHERE id = 1`, vals);
+  return await api_aibot_settings_get(token);
+}
+
+// ============================================================
+// LEGACY: original full-replace UPSERT, kept here for reference \u2014 do not call.
+// (Inlined above as partial upsert; this stub remains to avoid mass-renaming
+// callers that imported the symbol if any did.)
+// ============================================================
+async function _api_aibot_settings_save_LEGACY_FULL_REPLACE(token, payload) {
+  const me = await authUser(token);
+  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  const p = payload || {};
   const reply_modes = Array.isArray(p.reply_modes) ? p.reply_modes.map(String) : ['always'];
   const business_hours = (p.business_hours && typeof p.business_hours === 'object') ? p.business_hours : _DEFAULT_SETTINGS.business_hours;
   const phones = Array.isArray(p.active_phone_number_ids) ? p.active_phone_number_ids.map(String) : [];
