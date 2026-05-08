@@ -36,6 +36,10 @@ const CONFIG_KEYS = [
   // CSV of NAV item IDs the admin has hidden in the sidebar for this tenant.
   // E.g. "newleads,overdue,upcoming,whatsbot" hides those four entries.
   'HIDDEN_NAV_IDS',
+  // CSV of nav-group LABELS in the order the admin wants the sidebar
+  // to render. Groups not listed render after the listed ones in their
+  // hardcoded order. Empty = use hardcoded order.
+  'SIDEBAR_NAV_GROUP_ORDER',
   // Pull Leads + WhatsApp shortcut config
   'LEAD_PULL_ENABLED', 'LEAD_PULL_INITIAL_COUNT', 'LEAD_PULL_SUBSEQUENT_COUNT', 'LEAD_PULL_ENABLED_ROLES', 'LEAD_PULL_ORDER',
   'COMPANY_WHATSAPP', 'COMPANY_PHONE'
@@ -58,6 +62,19 @@ async function api_company_info(token) {
   if (token) { try { await authUser(token); } catch (_) {} }
   const cfg = await _getAllConfig();
   return { name: cfg.COMPANY_NAME || 'Lead CRM', logo_url: cfg.COMPANY_LOGO_URL || '' };
+}
+
+
+// Public layout config: nav order + hidden ids. Read on every SPA boot
+// so renderShell can sort NAV_GROUPS without an admin-only call.
+async function api_layout_get(_token) {
+  let order = '', hidden = '';
+  try { order  = await db.getConfig('SIDEBAR_NAV_GROUP_ORDER', '') || ''; } catch (_) {}
+  try { hidden = await db.getConfig('HIDDEN_NAV_IDS', '') || ''; } catch (_) {}
+  return {
+    sidebar_nav_group_order: String(order || '').split(',').map(s => s.trim()).filter(Boolean),
+    hidden_nav_ids:          String(hidden || '').split(',').map(s => s.trim()).filter(Boolean)
+  };
 }
 
 // Preferred name used by the frontend
@@ -326,7 +343,7 @@ async function api_admin_wipeHrData(token, categories, confirm) {
 
 module.exports = {
   api_company_info,
-  api_admin_getConfig, api_admin_config,
+  api_admin_getConfig, api_admin_config, api_layout_get,
   api_admin_setConfig, api_admin_saveConfig,
   api_admin_regenerateApiKey,
   api_admin_uploadLogo, api_admin_clearLogo,

@@ -98,6 +98,19 @@ async function apiRaw(fn, ...args) {
     const r = await fetch('/config.json');
     if (r.ok) CRM.config = Object.assign(CRM.config, await r.json());
   } catch (_) {}
+  // Layout config: sidebar group order + hidden ids — admin-tunable.
+  // Falls back to defaults if the api isn't loaded yet.
+  try {
+    const layout = await api('api_layout_get').catch(() => null);
+    if (layout) {
+      CRM.layout = {
+        sidebar_nav_group_order: Array.isArray(layout.sidebar_nav_group_order) ? layout.sidebar_nav_group_order : [],
+        hidden_nav_ids:          Array.isArray(layout.hidden_nav_ids)          ? layout.hidden_nav_ids          : []
+      };
+      // Hidden ids surface to the existing CRM.config.hidden_nav_ids reader
+      if (CRM.layout.hidden_nav_ids.length) CRM.config.hidden_nav_ids = CRM.layout.hidden_nav_ids.join(',');
+    }
+  } catch (_) {}
   document.title = CRM.config.company_name || 'Lead CRM';
 
   if (CRM.token) {
@@ -756,7 +769,27 @@ function renderShell() {
   const expanded = new Set((localStorage.getItem(expandedKey) || '').split(',').filter(Boolean));
   const _saveExpanded = () => localStorage.setItem(expandedKey, [...expanded].join(','));
 
-  NAV_GROUPS.forEach(group => {
+  // Apply admin-defined sidebar group order (Settings → Menu order).
+  // Groups whose label appears in the order list render in that order;
+  // any unlisted groups follow in their hardcoded order so adding new
+  // groups in a future release doesn't make them invisible.
+  let _orderedGroups = NAV_GROUPS.slice();
+  const orderList = (CRM.layout && CRM.layout.sidebar_nav_group_order) || [];
+  if (orderList.length) {
+    const head = [];
+    const tail = NAV_GROUPS.filter(g => g.label);
+    orderList.forEach(label => {
+      const found = tail.findIndex(g => g.label === label);
+      if (found >= 0) head.push(tail.splice(found, 1)[0]);
+    });
+    _orderedGroups = [
+      ...NAV_GROUPS.filter(g => !g.label),  // pinned (Dashboard) always stays at top
+      ...head,
+      ...tail
+    ];
+  }
+
+  _orderedGroups.forEach(group => {
     // Build the visible item anchors first so we can skip an empty group.
     const anchors = group.items.map(_navAnchor).filter(Boolean);
     if (!anchors.length) return;
@@ -947,11 +980,13 @@ VIEWS.dashboard = async (view) => {
   // doing on overdue + due-today + TAT violations. Sales/employee don't
   // (it's just their own numbers, already shown in the KPI cards above).
   const showTeam = ['admin', 'manager', 'team_leader'].includes(CRM.user.role);
-  const [summary, due, teamFu, teamTat] = await Promise.all([
+  const [summary, due, teamFu, teamTat, funnelRows, tatReport] = await Promise.all([
     api('api_reports_summary', {}),
     api('api_notifications_mine'),
     showTeam ? api('api_reports_followupsByUser').catch(() => [])      : Promise.resolve([]),
-    showTeam ? api('api_reports_tatViolationsByUser').catch(() => [])  : Promise.resolve([])
+    showTeam ? api('api_reports_tatViolationsByUser').catch(() => [])  : Promise.resolve([]),
+    api('api_reports_funnel', {}).catch(() => []),
+    api('api_tat_report', {}).catch(() => null)
   ]);
   view.innerHTML = '';
 
@@ -1027,6 +1062,77 @@ VIEWS.dashboard = async (view) => {
   );
   grid.appendChild(pieCard);
 
+  // 📈 Pipeline funnel — non-final statuses sorted by sort_order, sized
+  // by count. Mirrors the bigger Reports/Pipeline view so admins get
+  // the same shape on the dashboard.
+  if (Array.isArray(funnelRows) && funnelRows.length) {
+    const funnelOrdered = [...funnelRows]
+      .filter(s => Number(s.is_final) !== 1)
+      .sort((a, b) => (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0));
+    if (funnelOrdered.length) {
+      const totalLeads = funnelOrdered.reduce((n, s) => n + Number(s._c || s.count || 0), 0);
+      const topCount = Math.max(...funnelOrdered.map(s => Number(s._c || s.count || 0)), 1);
+      const funnelCard = h('div', { class: 'card card-wide' },
+        h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.6rem' } },
+          h('h3', { style: { margin: 0 } }, '📈 Pipeline funnel'),
+          h('a', { href: '#/reports', class: 'btn sm ghost' }, 'See full reports →')
+        )
+      );
+      const funnelEl = h('div', { class: 'funnel' });
+      funnelOrdered.forEach((s, i) => {
+        const c = Number(s._c || s.count || 0);
+        const pct = topCount ? (c / topCount) * 100 : 0;
+        const conv = totalLeads ? Math.round((c / totalLeads) * 100) : 0;
+        funnelEl.appendChild(h('div', { class: 'funnel-row' },
+          h('div', { class: 'funnel-label', style: { minWidth: '160px' } }, s.status || s.name || '—'),
+          h('div', { class: 'funnel-bar-wrap', style: { flex: 1, background: '#f1f5f9', borderRadius: '8px', height: '24px', position: 'relative' } },
+            h('div', { class: 'funnel-bar', style: { width: pct + '%', height: '100%', background: s.color || '#6366f1', borderRadius: '8px' } })
+          ),
+          h('div', { class: 'funnel-count', style: { minWidth: '90px', textAlign: 'right', fontWeight: 600 } }, String(c)),
+          h('div', { class: 'muted', style: { minWidth: '50px', textAlign: 'right', fontSize: '.8rem' } }, conv + '%')
+        ));
+      });
+      funnelCard.appendChild(funnelEl);
+      grid.appendChild(funnelCard);
+    }
+  }
+
+  // ⏱️ TAT report card — always visible. Shows L1/L2/L3 totals across
+  // the whole CRM plus a small "X statuses with TAT thresholds" caption
+  // so admins always see the SLA picture from the dashboard, not just
+  // when there's already a violation.
+  {
+    const tatTotals = (tatReport && tatReport.totals) || { l1: 0, l2: 0, l3: 0 };
+    const tatThresholdCount = (tatReport && (tatReport.thresholds_count || (tatReport.thresholds || []).length)) || 0;
+    const totalAlerts = Number(tatTotals.l1 || 0) + Number(tatTotals.l2 || 0) + Number(tatTotals.l3 || 0);
+    const tatCard = h('div', { class: 'card card-wide' },
+      h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.6rem' } },
+        h('h3', { style: { margin: 0 } }, '⏱️ TAT — Turnaround time alerts'),
+        h('a', { href: '#/tatreport', class: 'btn sm ghost' }, 'See full TAT report →')
+      )
+    );
+    if (!tatThresholdCount) {
+      tatCard.appendChild(h('p', { class: 'muted' },
+        'No TAT thresholds configured yet. Set them in Settings → ⏱️ TAT to start tracking how long leads sit in each status.'));
+    } else if (totalAlerts === 0) {
+      tatCard.appendChild(h('p', { class: 'muted' }, '🎉 No TAT violations right now.'));
+    } else {
+      const tatGrid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '.6rem' } },
+        h('div', { class: 'card', style: { padding: '.7rem', borderLeft: '4px solid #f59e0b' } },
+          h('div', { class: 'muted', style: { fontSize: '.75rem', textTransform: 'uppercase' } }, 'L1 — employee reminder'),
+          h('div', { style: { fontSize: '1.6rem', fontWeight: 700, marginTop: '.2rem' } }, String(tatTotals.l1 || 0))),
+        h('div', { class: 'card', style: { padding: '.7rem', borderLeft: '4px solid #ef4444' } },
+          h('div', { class: 'muted', style: { fontSize: '.75rem', textTransform: 'uppercase' } }, 'L2 — manager escalation'),
+          h('div', { style: { fontSize: '1.6rem', fontWeight: 700, marginTop: '.2rem' } }, String(tatTotals.l2 || 0))),
+        h('div', { class: 'card', style: { padding: '.7rem', borderLeft: '4px solid #991b1b' } },
+          h('div', { class: 'muted', style: { fontSize: '.75rem', textTransform: 'uppercase' } }, 'L3 — admin escalation'),
+          h('div', { style: { fontSize: '1.6rem', fontWeight: 700, marginTop: '.2rem' } }, String(tatTotals.l3 || 0)))
+      );
+      tatCard.appendChild(tatGrid);
+    }
+    grid.appendChild(tatCard);
+  }
+
   // Team follow-ups by caller — managers see who's drowning in overdue.
   // Hidden for sales/employee since their own numbers are already in KPI tiles.
   if (showTeam) {
@@ -1098,12 +1204,15 @@ VIEWS.dashboard = async (view) => {
   );
   grid.appendChild(srcCard);
 
-  // Project delivery progress
+  // Project delivery progress — always renders, with empty state when
+  // no leads have entered any stage yet. Skipped silently if the
+  // tenant has zero project stages defined (ignore — admin has chosen
+  // not to use the project pipeline at all).
   try {
     const projBoard = await api('api_projectStages_board').catch(() => null);
     if (projBoard && projBoard.stages && projBoard.stages.length && projBoard.board) {
       const totalInDelivery = projBoard.board.reduce((n, col) => n + col.leads.length, 0);
-      if (totalInDelivery > 0) {
+      if (totalInDelivery >= 0) {   // always render the card; show empty state when zero
         const COLORS = ['#3b82f6','#10b981','#f59e0b','#8b5cf6','#ef4444','#06b6d4','#ec4899'];
         const projCard = h('div', { class: 'card card-wide' },
           h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.75rem' } },
@@ -1117,6 +1226,10 @@ VIEWS.dashboard = async (view) => {
           const color = col.stage.color || COLORS[i % COLORS.length];
           barRow.appendChild(h('div', { title: col.stage.name + ': ' + col.leads.length, style: { flex: col.leads.length, background: color, minWidth: '4px' } }));
         });
+        if (totalInDelivery === 0) {
+          projCard.appendChild(h('p', { class: 'muted', style: { marginTop: 0 } },
+            'No leads have entered any project stage yet. Move a lead into the project pipeline from its detail panel to start tracking delivery here.'));
+        } else {
         projCard.appendChild(barRow);
         const stageGrid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '.5rem' } });
         projBoard.board.forEach((col, i) => {
@@ -1132,6 +1245,7 @@ VIEWS.dashboard = async (view) => {
           ));
         });
         projCard.appendChild(stageGrid);
+        }
         grid.appendChild(projCard);
       }
     }
@@ -1295,6 +1409,40 @@ VIEWS.leads = async (view) => {
     }).catch(() => {});
   }
 
+  // Custom field filter row — one input per active custom field. Hidden
+  // by default behind a "🧩 Custom fields" toggle so the toolbar stays
+  // compact for tenants with no custom fields and admins who don't need them.
+  const cfList = (CRM.cache.customFields || []).filter(c => Number(c.is_active) !== 0 && c.key);
+  if (cfList.length) {
+    const cfRow = h('div', { class: 'toolbar', id: 'cf-filter-row',
+      style: { gap: '.4rem', flexWrap: 'wrap', display: (CRM.prefs.filters.cf ? 'flex' : 'none'),
+               background: '#f8fafc', padding: '.5rem .6rem', borderRadius: '8px', marginTop: '.4rem' } },
+      h('span', { class: 'muted', style: { fontSize: '.8rem' } }, '🧩 Custom fields:'));
+    cfList.forEach(cf => {
+      const cur = (CRM.prefs.filters.cf && CRM.prefs.filters.cf[cf.key]) || '';
+      const inp = h('input', { 'data-cf-key': cf.key, placeholder: cf.label || cf.key, value: cur,
+        style: { width: '160px' } });
+      let _t = null;
+      inp.addEventListener('input', () => { clearTimeout(_t); _t = setTimeout(() => { CRM._leadsPage = 1; loadLeads({ page: 1 }); }, 350); });
+      inp.addEventListener('change', () => { CRM._leadsPage = 1; loadLeads({ page: 1 }); });
+      cfRow.appendChild(inp);
+    });
+    cfRow.appendChild(h('button', { class: 'btn sm ghost',
+      onclick: () => {
+        cfRow.querySelectorAll('input[data-cf-key]').forEach(i => { i.value = ''; });
+        delete CRM.prefs.filters.cf;
+        localStorage.setItem('crm_filters', JSON.stringify(CRM.prefs.filters));
+        CRM._leadsPage = 1; loadLeads({ page: 1 });
+      } }, 'Clear cf'));
+    // Toggle button — appended to main toolbar so admins can open the cf row on demand
+    toolbar.appendChild(h('button', { class: 'btn ghost',
+      title: 'Toggle custom-field filters',
+      onclick: () => {
+        cfRow.style.display = cfRow.style.display === 'none' ? 'flex' : 'none';
+      } }, '🧩'));
+    view.appendChild(cfRow);
+  }
+
   view.appendChild(h('div', { class: 'bulk-bar', id: 'bulk-bar', hidden: true },
     h('span', { id: 'bulk-count', class: 'bulk-count' }, '0 selected'),
     h('button', { class: 'btn sm', onclick: bulkAssignPrompt }, '👤 Assign'),
@@ -1437,6 +1585,16 @@ async function loadLeads(opts) {
     page,
     page_size:   pageSize
   };
+  // Custom-field filter values — collect from #cf-filter-row inputs
+  const cfInputs = document.querySelectorAll('#cf-filter-row input[data-cf-key]');
+  if (cfInputs.length) {
+    const cf = {};
+    cfInputs.forEach(i => {
+      const v = String(i.value || '').trim();
+      if (v) cf[i.dataset.cfKey] = v;
+    });
+    if (Object.keys(cf).length) filters.cf = cf;
+  }
   // Save user-visible filters only (not page/page_size — those are session state)
   const savedFilters = Object.assign({}, filters);
   delete savedFilters.page; delete savedFilters.page_size;
@@ -9430,6 +9588,7 @@ VIEWS.admin = async (view) => {
     { id: 'announce',     label: '📢 Announcements' },
     { id: 'chatperm',     label: '💬 Chat permissions' },
     { id: 'menu',         label: '🧭 Menu visibility' },
+    { id: 'menuorder',    label: '🧭 Menu order' },
     { id: 'projstages',   label: '🚚 Project stages' },
     { id: 'integrations', label: '🔌 Integrations' },
     { id: 'roles',        label: '📛 Roles' },
@@ -9468,6 +9627,7 @@ async function showAdminTab(id) {
     if (id === 'announce') body.replaceChildren(await adminAnnouncements());
     if (id === 'chatperm') body.replaceChildren(await adminChatPermissions());
     if (id === 'menu')     body.replaceChildren(await adminMenuVisibility());
+    if (id === 'menuorder') body.replaceChildren(await adminMenuOrder());
     if (id === 'projstages') body.replaceChildren(await adminProjectStages());
     if (id === 'integrations') body.replaceChildren(await adminIntegrations());
     if (id === 'roles')     body.replaceChildren(await adminRoles());
@@ -9860,6 +10020,61 @@ async function openCampaignEditModal(camp, onSaved) {
   modal.appendChild(foot);
   m.appendChild(modal);
   document.body.appendChild(m);
+}
+
+
+// ----------------------------------------------------------------
+// 🧭 Menu order — admin reorders the sidebar nav groups.
+// Persists as a CSV of group labels in config key SIDEBAR_NAV_GROUP_ORDER.
+// Reload the page after saving to see the new order applied.
+// ----------------------------------------------------------------
+async function adminMenuOrder() {
+  const root = h('div', { class: 'admin-section' });
+  root.appendChild(h('h3', {}, '🧭 Menu order'));
+  root.appendChild(h('p', { class: 'muted' },
+    'Drag — actually, click ▲▼ — to reorder the sidebar groups. The Dashboard pinned item always stays at the top. Reload after saving for the change to apply.'));
+
+  const cfg = await api('api_admin_getConfig');
+  // Source of truth for what groups EXIST is NAV_GROUPS itself; we only
+  // store the ordered list of labels.
+  const existingLabels = NAV_GROUPS.filter(g => g.label).map(g => g.label);
+  const savedOrder = String(cfg.SIDEBAR_NAV_GROUP_ORDER || '').split(',').map(s => s.trim()).filter(Boolean);
+  // Stitch saved order with any new groups that aren't in saved list
+  let order = savedOrder.filter(l => existingLabels.includes(l));
+  existingLabels.forEach(l => { if (!order.includes(l)) order.push(l); });
+
+  const list = h('div', { style: { display: 'grid', gap: '.4rem', maxWidth: '420px' } });
+  function renderList() {
+    list.replaceChildren();
+    order.forEach((label, idx) => {
+      const group = NAV_GROUPS.find(g => g.label === label);
+      list.appendChild(h('div', {
+        style: { display: 'flex', alignItems: 'center', gap: '.5rem',
+                 background: '#fff', border: '1px solid #e2e8f0',
+                 borderRadius: '8px', padding: '.55rem .75rem' } },
+        h('span', { style: { fontSize: '1.1rem' } }, group ? (group.icon || '') : ''),
+        h('span', { style: { flex: 1, fontWeight: 600 } }, label),
+        h('button', { class: 'btn sm ghost', onclick: () => { if (idx > 0) { [order[idx-1], order[idx]] = [order[idx], order[idx-1]]; renderList(); } } }, '▲'),
+        h('button', { class: 'btn sm ghost', onclick: () => { if (idx < order.length - 1) { [order[idx+1], order[idx]] = [order[idx], order[idx+1]]; renderList(); } } }, '▼')
+      ));
+    });
+  }
+  renderList();
+  root.appendChild(list);
+
+  root.appendChild(h('div', { style: { marginTop: '.8rem', display: 'flex', gap: '.5rem' } },
+    h('button', { class: 'btn primary',
+      onclick: async () => {
+        try {
+          await api('api_admin_setConfig', { SIDEBAR_NAV_GROUP_ORDER: order.join(',') });
+          toast('Saved — reload to see the new order');
+        } catch (e) { toast(e.message, 'err'); }
+      } }, '💾 Save order'),
+    h('button', { class: 'btn ghost',
+      onclick: () => { order = existingLabels.slice(); renderList(); } }, 'Reset to default')
+  ));
+
+  return root;
 }
 
 async function adminPullLeads() {

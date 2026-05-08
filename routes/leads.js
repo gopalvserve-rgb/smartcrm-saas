@@ -353,6 +353,23 @@ async function api_leads_list(token, filters) {
   if (filters.duplicate === 'only')        rows = rows.filter(l => Number(l.is_duplicate) === 1);
   else if (filters.duplicate === 'unique') rows = rows.filter(l => Number(l.is_duplicate) !== 1);
 
+  // Custom-field filter: filters.cf = { '<fieldKey>': '<substring>' }
+  // Match is case-insensitive substring against the parsed extra_json.
+  // Empty / missing field on the lead → no match (so the filter actually
+  // excludes leads that don't have a value, matching user expectation).
+  if (filters.cf && typeof filters.cf === 'object') {
+    const cfEntries = Object.entries(filters.cf)
+      .filter(([k, v]) => k && v != null && String(v).trim() !== '');
+    if (cfEntries.length) {
+      rows = rows.filter(l => {
+        const extra = _parseExtra(l) || {};
+        return cfEntries.every(([k, v]) =>
+          String(extra[k] || '').toLowerCase().includes(String(v).toLowerCase())
+        );
+      });
+    }
+  }
+
   // Sort:
   //   created_desc (default) — newest created leads first
   //   created_asc           — oldest created leads first
