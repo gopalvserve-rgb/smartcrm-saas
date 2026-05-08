@@ -147,8 +147,43 @@ async function api_saas_ai_settings_test(token) {
   }
 }
 
+
+/**
+ * List Gemini models that support generateContent on the current key.
+ * Useful when 'limit: 0' / 'not found' errors come back — the user can
+ * see exactly which models are usable on their billing project and pick
+ * one from the dropdown.
+ */
+async function api_saas_ai_models_available(token) {
+  await requireSuperAdmin(token);
+  const r = await control.query(`SELECT gemini_api_key_enc FROM ai_settings WHERE id = 1`);
+  let apiKey = decryptString(r.rows[0]?.gemini_api_key_enc);
+  if (!apiKey && process.env.GEMINI_API_KEY) apiKey = String(process.env.GEMINI_API_KEY).trim();
+  if (!apiKey) return { ok: false, error: 'No Gemini key configured.' };
+  try {
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models?key=' + encodeURIComponent(apiKey);
+    const resp = await fetch(url);
+    const j = await resp.json();
+    if (!resp.ok) return { ok: false, error: j?.error?.message || ('HTTP ' + resp.status) };
+    const all = Array.isArray(j.models) ? j.models : [];
+    const usable = all
+      .filter(m => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes('generateContent'))
+      .map(m => ({
+        name: String(m.name || '').replace(/^models\//, ''),
+        displayName: m.displayName,
+        description: m.description,
+        inputTokenLimit: m.inputTokenLimit,
+        outputTokenLimit: m.outputTokenLimit,
+      }));
+    return { ok: true, total_models: all.length, generate_content_models: usable };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
 module.exports = {
   api_saas_ai_settings_get,
   api_saas_ai_settings_save,
   api_saas_ai_settings_test,
+  api_saas_ai_models_available,
 };
