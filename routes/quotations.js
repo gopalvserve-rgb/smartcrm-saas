@@ -76,8 +76,75 @@ function _recomputeTotals(items, discount_pct, tax_pct) {
   return { subtotal, discount_amt: discAmt, tax_amt: taxAmt, total };
 }
 
+
+// Cache _ensureTables per-pool — each tenant has its own DB pool, so a
+// single boolean would mean only the first tenant gets tables created.
+const _ensuredPools = new WeakSet();
+async function _ensureTables() {
+  let pool = null;
+  try {
+    const store = db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore();
+    pool = store && store.pool;
+  } catch (_) {}
+  if (pool && _ensuredPools.has(pool)) return;
+  try {
+    await db.query(`CREATE TABLE IF NOT EXISTS quotations (
+      id              SERIAL PRIMARY KEY,
+      number          TEXT NOT NULL UNIQUE,
+      lead_id         INTEGER,
+      customer_id     INTEGER,
+      customer_name   TEXT NOT NULL,
+      customer_email  TEXT,
+      customer_phone  TEXT,
+      customer_address TEXT,
+      status          TEXT NOT NULL DEFAULT 'draft',
+      issue_date      DATE NOT NULL DEFAULT CURRENT_DATE,
+      valid_until     DATE,
+      currency        TEXT NOT NULL DEFAULT 'INR',
+      subtotal        NUMERIC(12,2) NOT NULL DEFAULT 0,
+      discount_pct    NUMERIC(5,2)  NOT NULL DEFAULT 0,
+      discount_amt    NUMERIC(12,2) NOT NULL DEFAULT 0,
+      tax_pct         NUMERIC(5,2)  NOT NULL DEFAULT 18,
+      tax_amt         NUMERIC(12,2) NOT NULL DEFAULT 0,
+      total           NUMERIC(12,2) NOT NULL DEFAULT 0,
+      notes           TEXT,
+      terms           TEXT,
+      public_token    TEXT UNIQUE,
+      is_public       INTEGER NOT NULL DEFAULT 1,
+      sent_at         TIMESTAMPTZ,
+      sent_via        TEXT,
+      accepted_at     TIMESTAMPTZ,
+      rejected_at     TIMESTAMPTZ,
+      created_by      INTEGER,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_quotations_lead    ON quotations(lead_id)`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_quotations_status  ON quotations(status)`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_quotations_token   ON quotations(public_token)`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_quotations_created ON quotations(created_at DESC)`);
+    await db.query(`CREATE TABLE IF NOT EXISTS quotation_items (
+      id              SERIAL PRIMARY KEY,
+      quotation_id    INTEGER NOT NULL REFERENCES quotations(id) ON DELETE CASCADE,
+      position        INTEGER NOT NULL DEFAULT 0,
+      product_id      INTEGER,
+      description     TEXT NOT NULL,
+      quantity        NUMERIC(12,3) NOT NULL DEFAULT 1,
+      unit_price      NUMERIC(12,2) NOT NULL DEFAULT 0,
+      discount_pct    NUMERIC(5,2)  NOT NULL DEFAULT 0,
+      amount          NUMERIC(12,2) NOT NULL DEFAULT 0,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_qitems_quote ON quotation_items(quotation_id, position)`);
+    if (pool) _ensuredPools.add(pool);
+  } catch (e) {
+    console.warn('[quotations] _ensureTables failed:', e.message);
+  }
+}
+
 async function api_quotations_list(token, opts) {
   await authUser(token);
+  await _ensureTables();
   const o = opts || {};
   const limit = Math.max(1, Math.min(500, Number(o.limit || 100)));
   const params = [];
@@ -102,6 +169,7 @@ async function api_quotations_list(token, opts) {
 
 async function api_quotations_get(token, id) {
   await authUser(token);
+  await _ensureTables();
   const qid = Number(id);
   const q = (await db.query(`SELECT * FROM quotations WHERE id = $1`, [qid])).rows[0];
   if (!q) throw new Error('Quotation not found');
@@ -113,6 +181,7 @@ async function api_quotations_get(token, id) {
 
 async function api_quotations_save(token, payload) {
   const me = await authUser(token);
+  await _ensureTables();
   const p = payload || {};
   const id = Number(p.id || 0);
   const items = Array.isArray(p.items) ? p.items.filter(x => x && x.description) : [];
@@ -204,6 +273,7 @@ async function api_quotations_save(token, payload) {
 
 async function api_quotations_delete(token, id) {
   const me = await authUser(token);
+  await _ensureTables();
   if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
   await db.query(`DELETE FROM quotations WHERE id = $1`, [Number(id)]);
   return { ok: true };
@@ -211,6 +281,7 @@ async function api_quotations_delete(token, id) {
 
 async function api_quotations_set_status(token, id, status) {
   await authUser(token);
+  await _ensureTables();
   const allowed = ['draft', 'sent', 'accepted', 'rejected', 'expired'];
   if (!allowed.includes(status)) throw new Error('Invalid status');
   const updates = ['status = $1', 'updated_at = NOW()'];
@@ -223,6 +294,7 @@ async function api_quotations_set_status(token, id, status) {
 
 async function api_quotations_public_url(token, id) {
   await authUser(token);
+  await _ensureTables();
   const r = await db.query(`SELECT public_token FROM quotations WHERE id = $1`, [Number(id)]);
   if (!r.rows.length) throw new Error('Quotation not found');
   const slug = (db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore())
@@ -333,6 +405,7 @@ function _esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
 
 async function api_quotations_send_email(token, id, opts) {
   const me = await authUser(token);
+  await _ensureTables();
   const o = opts || {};
   const r = await api_quotations_get(token, Number(id));
   const q = r.quotation;
@@ -352,6 +425,7 @@ async function api_quotations_send_email(token, id, opts) {
 
 async function api_quotations_send_whatsapp(token, id, opts) {
   await authUser(token);
+  await _ensureTables();
   const o = opts || {};
   const r = await api_quotations_get(token, Number(id));
   const q = r.quotation;
@@ -393,6 +467,7 @@ async function _loadBrand() {
  * server.tenant.js for single-tenant). No auth — public viewer.
  */
 async function expressPublicQuote(req, res) {
+  await _ensureTables();
   const tk = String(req.params.token || '').trim();
   if (!tk) return res.status(404).send('Not found');
   let row, items;
