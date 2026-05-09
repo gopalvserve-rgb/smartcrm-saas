@@ -6837,9 +6837,25 @@ async function wbConnect() {
   try { phones = await api('api_wa_phones_listAll'); } catch (_) { phones = []; }
   if (phones.length) {
     const phonesCard = h('div', { class: 'card', style: { marginBottom: '.8rem' } });
-    phonesCard.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.4rem' } },
+    phonesCard.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.4rem', gap: '.5rem', flexWrap: 'wrap' } },
       h('h3', { style: { margin: 0 } }, '📱 Connected numbers (' + phones.length + ')'),
-      h('span', { class: 'muted', style: { fontSize: '.78rem' } }, 'Default phone marked ⭐')
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem' } },
+        h('span', { class: 'muted', style: { fontSize: '.78rem' } }, 'Default ⭐'),
+        // Always-visible 'Add another' button. Uses Coexistence by
+        // default so the existing connection isn't disturbed and the
+        // new number can keep its WhatsApp Business mobile app active.
+        h('button', { class: 'btn primary sm', title: 'Add a 2nd / 3rd WhatsApp number using Coexistence flow',
+          onclick: () => {
+            if (!s.fb_app_id || !s.fb_config_id) {
+              return toast('Embedded Signin not configured (missing fb_app_id / fb_config_id). Tell support to enable it.', 'err');
+            }
+            // For 'add another', force coexistence mode — that's what
+            // Meta's flow needs to keep the existing WhatsApp Business
+            // mobile app active on the new number.
+            startEmbeddedSignup(s.fb_app_id, s.fb_config_id, { coexistence: true, addAnother: true });
+          }
+        }, '➕ Connect another number')
+      )
     ));
     const tbl = h('table', { class: 'data-table' },
       h('thead', {}, h('tr', {},
@@ -7440,14 +7456,25 @@ function openRegisterPhoneModal(phoneIdOverride) {
  */
 function startEmbeddedSignup(appId, configId, opts) {
   if (!appId || !configId) { toast('App ID + Config ID required', 'err'); return; }
-  // Hot path — SDK already preloaded by wbConnect(). Calling FB.login
+  // Hot path — SDK already preloaded by adminWhatsapp(). Calling FB.login
   // synchronously inside the click handler is critical or Chrome blocks
-  // the popup as a "non-user-initiated" window.open.
+  // the popup as a "non-user-initiated" window.open. If SDK isn't ready
+  // yet, kick off the load AND show a clear instruction. We can't auto-
+  // open the dialog from a setTimeout because Chrome treats that as
+  // non-user-initiated and blocks the popup.
   if (!(window.FB && typeof window.FB.login === 'function')) {
-    toast('Loading Facebook SDK… please click "Connect with Facebook" again in 2 seconds.', 'warn');
+    toast('Loading Facebook SDK — click the button again in 2 seconds.', 'warn');
     ensureFbSdkLoaded(appId).then(() => {
-      toast('Facebook SDK ready — click Connect with Facebook now.');
-    }).catch(e => toast(e.message, 'err'));
+      // Visual flash on the originating button so the user knows it's ready
+      try {
+        const btn = document.activeElement;
+        if (btn && btn.tagName === 'BUTTON') {
+          btn.style.boxShadow = '0 0 0 3px #10b981';
+          setTimeout(() => { btn.style.boxShadow = ''; }, 1500);
+        }
+      } catch (_) {}
+      toast('✅ Facebook SDK ready — click the button again to open the dialog.', 'ok');
+    }).catch(e => toast('Facebook SDK load failed: ' + e.message, 'err'));
     return;
   }
 
