@@ -252,4 +252,121 @@ async function logUsage({ tenant_slug, tenant_id, call_kind, phone, lead_id, wa_
   }
 }
 
-module.exports = { loadSettings, invalidateCache, generate, logUsage, computeCost };
+
+/**
+ * Generate WITH function-calling. Loop until the model returns plain
+ * text or hits maxTurns. Each loop, if Gemini wants to call a tool,
+ * we invoke `runTool(name, args)` and feed the result back as the next
+ * `functionResponse` in the conversation history.
+ *
+ * args:
+ *   system, history, prompt — like generate()
+ *   tools: [{ name, description, parameters }]  (Gemini schema)
+ *   runTool: async (name, args) => any  (caller-provided)
+ *   model:  override
+ *   maxTurns: 6
+ *
+ * Returns: { ok, text, model, input_tokens, output_tokens, cost_*,
+ *            tools_called: [{ name, args, result }], error }
+ */
+async function generateWithTools(args) {
+  const settings = await loadSettings();
+  if (!settings) {
+    return { ok: false, text: '', model: '', input_tokens: 0, output_tokens: 0,
+             cost_usd: 0, cost_inr_real: 0, cost_inr_billed: 0,
+             tools_called: [], error: 'AI is not configured.' };
+  }
+  const model = String(args.model || settings.defaultModel);
+  const url = `${GEMINI_BASE}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(settings.apiKey)}`;
+  const tools = (args.tools && args.tools.length)
+    ? [{ functionDeclarations: args.tools }]
+    : undefined;
+
+  // Build the running contents array.
+  const contents = [];
+  (args.history || []).forEach(h => {
+    if (!h || !h.text) return;
+    contents.push({ role: h.role === 'model' ? 'model' : 'user', parts: [{ text: String(h.text) }] });
+  });
+  contents.push({ role: 'user', parts: [{ text: String(args.prompt || '') }] });
+
+  let inTok = 0, outTok = 0;
+  const toolsCalled = [];
+  const maxTurns = Math.max(1, Math.min(10, Number(args.maxTurns || 6)));
+  let lastText = '';
+  let lastFinish = null;
+
+  for (let turn = 0; turn < maxTurns; turn++) {
+    const body = {
+      contents,
+      generationConfig: {
+        temperature:     args.temperature != null ? Number(args.temperature) : 0.3,
+        maxOutputTokens: Number(args.maxOutputTokens || 800),
+      }
+    };
+    if (args.system) body.systemInstruction = { role: 'system', parts: [{ text: String(args.system) }] };
+    if (tools) body.tools = tools;
+    let resp, json;
+    try {
+      resp = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      json = await resp.json();
+    } catch (e) {
+      return { ok: false, text: '', model, input_tokens: inTok, output_tokens: outTok,
+               cost_usd: 0, cost_inr_real: 0, cost_inr_billed: 0,
+               tools_called: toolsCalled, error: 'Gemini network error: ' + e.message };
+    }
+    if (!resp.ok || json.error) {
+      return { ok: false, text: '', model, input_tokens: inTok, output_tokens: outTok,
+               cost_usd: 0, cost_inr_real: 0, cost_inr_billed: 0,
+               tools_called: toolsCalled, error: (json && json.error && json.error.message) || ('HTTP ' + resp.status) };
+    }
+    const cand = (json.candidates || [])[0] || {};
+    lastFinish = cand.finishReason || null;
+    const usage = json.usageMetadata || {};
+    inTok  += Number(usage.promptTokenCount || 0);
+    outTok += Number(usage.candidatesTokenCount || 0);
+
+    const parts = (cand.content && cand.content.parts) || [];
+    // Collect any function calls Gemini wants to make in this turn.
+    const fnCalls = parts.filter(p => p.functionCall && p.functionCall.name).map(p => p.functionCall);
+    if (fnCalls.length) {
+      // Echo the model's call into history so subsequent turn sees it.
+      contents.push({ role: 'model', parts: parts.filter(p => p.functionCall) });
+      const fnResponses = [];
+      for (const fc of fnCalls) {
+        const name = String(fc.name);
+        const a = (fc.args && typeof fc.args === 'object') ? fc.args : {};
+        let result;
+        try {
+          result = await args.runTool(name, a);
+        } catch (e) {
+          result = { error: e.message };
+        }
+        toolsCalled.push({ name, args: a, result });
+        fnResponses.push({
+          functionResponse: { name, response: { content: result } }
+        });
+      }
+      contents.push({ role: 'user', parts: fnResponses });
+      continue;   // next turn — model will read tool results and decide
+    }
+
+    // No function calls — collect text.
+    lastText = parts.map(p => p.text || '').filter(Boolean).join('').trim();
+    break;
+  }
+
+  const costs = computeCost(inTok, outTok, settings);
+  return {
+    ok: true, text: lastText, model,
+    input_tokens: inTok, output_tokens: outTok,
+    cost_usd:        costs.cost_usd,
+    cost_inr_real:   costs.cost_inr_real,
+    cost_inr_billed: costs.cost_inr_billed,
+    tools_called: toolsCalled,
+    finish_reason: lastFinish,
+    error: null,
+  };
+}
+
+module.exports = { loadSettings, invalidateCache, generate, generateWithTools, logUsage, computeCost };

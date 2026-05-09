@@ -69,6 +69,7 @@ const ROUTE_FILES = [
   'aiBot',
   'quotations',
   'modules',
+  'crmCopilot',
 ];
 
 const API = {};

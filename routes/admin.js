@@ -52,6 +52,8 @@ const CONFIG_KEYS = [
   // BRAND_SIDEBAR = sidebar background. BRAND_TEXT = top/headings text.
   'BRAND_PRIMARY_COLOR', 'BRAND_ACCENT_COLOR', 'BRAND_SIDEBAR_COLOR',
   'BRAND_TEXT_COLOR', 'THEME_MODE',
+  // CRM Copilot — per-user/day question quota (default 50).
+  'COPILOT_DAILY_LIMIT_PER_USER',
   // Minimum seconds an answered inbound call must last before it creates a lead.
   // 0 = create on every call (incl. missed). Default 5.
   'CALLS_AUTOLEAD_MIN_SECONDS'
