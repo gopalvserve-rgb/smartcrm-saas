@@ -33,7 +33,11 @@ async function api_notifications_mine(token) {
   const _isAllowedLeadStatus = (lead) => {
     if (!lead) return false;
     const s = statusById[Number(lead.status_id)];
-    return FOLLOWUP_ALLOWED_NORM.has(_normStatus(s ? s.name : ''));
+    if (!s) return true; // No status row → don't hide. Better to show than to lose data.
+    // Primary rule: anything that's NOT a final status is eligible for follow-up.
+    // Final statuses (Won/Lost/Booked/Junk/Cancelled etc.) are excluded.
+    if (Number(s.is_final) === 1) return false;
+    return true;
   };
 
   // Build a map of (lead_id -> open followup) so we don't double-count when the lead
