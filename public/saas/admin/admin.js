@@ -350,7 +350,24 @@ VIEWS.tenants = async (view) => {
       class: 'btn ghost', style: { marginLeft: '.5rem' },
       title: 'Create or refresh the showcase demo tenant with sample data',
       onclick: () => openShowcaseDemoModal()
-    }, '🌟 Showcase demo')
+    }, '🌟 Showcase demo'),
+    h('button', {
+      class: 'btn ghost', style: { marginLeft: '.5rem' },
+      title: 'Re-apply db/schema.sql to every active tenant — fixes missing tables/columns added in later releases',
+      onclick: async () => {
+        if (!confirm('Re-apply schema.sql to ALL active tenants?\n\nThe schema is idempotent so this is safe — it just adds any missing tables / columns / indexes that newer releases added. Existing data is untouched.\n\nThis can take 30-90 seconds depending on tenant count.')) return;
+        toast('Migrating tenants...');
+        try {
+          const r = await api('api_saas_apply_schema_to_all_tenants');
+          const failedSlugs = (r.details || []).filter(d => !d.ok).map(d => d.slug + ' (' + (d.error || 'failed') + ')');
+          if (r.failed === 0) {
+            alert('✅ Migrated ' + r.ok + ' tenants successfully — no failures.');
+          } else {
+            alert('Migrated ' + r.ok + ' tenants. ' + r.failed + ' failed:\n\n' + failedSlugs.join('\n'));
+          }
+        } catch (e) { toast(e.message, 'err'); }
+      }
+    }, '🛠 Re-apply schema')
   ));
   let list;
   try { list = await api('api_saas_tenants_list', {}); }
