@@ -1419,15 +1419,18 @@ async function boot() {
   }
 
 // ── Lead-source & Google Sheet webhook endpoints ────────────────────────────
-app.post('/hook/leadsource/:source/:key', (req, res, next) => {
+app.post('/hook/leadsource/:source/:key', (req, res) => {
   req.body.api_key = req.params.key;
   req.body._hookSource = req.params.source;
-  _runHookAsTenant(req, res, next, 'api_integrations_leadSourceHook');
+  // Pass the actual handler function — earlier code passed `next` and
+  // a string, which made _runAsTenant try to invoke a string as a
+  // function and fall through to Express's default HTML 500 page.
+  _runHookAsTenant(req, res, integrations.leadSourceWebhook);
 });
 
-app.post('/hook/sheet/:token', (req, res, next) => {
+app.post('/hook/sheet/:token', (req, res) => {
   req.body.api_key = req.params.token;
-  _runHookAsTenant(req, res, next, 'api_integrations_sheetHook');
+  _runHookAsTenant(req, res, integrations.sheetPushWebhook);
 });
 
 // Background: run sheet syncs and native pulls every 5 minutes
