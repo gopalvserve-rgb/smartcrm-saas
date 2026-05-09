@@ -192,6 +192,74 @@ const TOOLS = [
   { name: 'list_sources',
     description: 'List all lead sources.',
     parameters: { type: 'object', properties: {} } },
+
+  // ---- DIMENSIONAL BREAKDOWNS (v3) ----------------------------
+  { name: 'leads_by_product',
+    description: "Lead counts + total value grouped by product. Use for 'leads by product', 'which product gets most leads', 'product-wise pipeline'.",
+    parameters: { type: 'object', properties: {
+      from: { type: 'string' }, to: { type: 'string' }
+    } } },
+  { name: 'leads_by_project_stage',
+    description: "Lead counts grouped by project stage (post-sale onboarding pipeline). Use for 'project stage wise data', 'where are leads in delivery'.",
+    parameters: { type: 'object', properties: {} } },
+  { name: 'leads_by_custom_field',
+    description: "Lead counts grouped by a custom field value. Use for 'leads by industry', 'leads by company size', 'breakdown by <custom field>'.",
+    parameters: { type: 'object', properties: {
+      field_key: { type: 'string', description: 'The custom_fields.key to group by (e.g. industry, company_size, budget_range)' },
+      from: { type: 'string' }, to: { type: 'string' }
+    }, required: ['field_key'] } },
+
+  // ---- PERFORMERS / TARGETS (v3) ------------------------------
+  { name: 'bottom_performers',
+    description: "Lowest-performing reps — use to identify NON-performers. Same metrics as top_performers (won, value, remarks).",
+    parameters: { type: 'object', properties: {
+      from: { type: 'string' }, to: { type: 'string' },
+      metric: { type: 'string' },
+      limit: { type: 'number' }
+    } } },
+  { name: 'monthly_target_status',
+    description: "Per-rep monthly target progress: target vs current vs shortfall. Use for 'monthly target', 'shortfall', 'how much remaining', 'target achievement'.",
+    parameters: { type: 'object', properties: {
+      month: { type: 'string', description: "YYYY-MM. Defaults to current month." },
+      assigned_to: { type: 'string', description: 'Optional rep name' }
+    } } },
+
+  // ---- CALLS / RECORDINGS (v3) --------------------------------
+  { name: 'call_ratings_breakdown',
+    description: "Call quality ratings grouped by rep. Use for 'who has best call ratings', 'rep with worst call quality', 'call rating per agent'.",
+    parameters: { type: 'object', properties: {
+      from: { type: 'string' }, to: { type: 'string' }
+    } } },
+  { name: 'call_insights_recent',
+    description: "Recent AI 'key insights' extracted from call recordings, plus action items + sentiment. Use for 'recent call insights', 'what did we learn from calls', 'AI takeaways'.",
+    parameters: { type: 'object', properties: {
+      limit: { type: 'number' }
+    } } },
+
+  // ---- WHATSAPP (v3) ------------------------------------------
+  { name: 'wa_unattended_chats',
+    description: "WhatsApp threads where the latest customer message has not been replied to by the agent. Use for 'unattended chats', 'pending whatsapp', 'who is waiting for a reply'.",
+    parameters: { type: 'object', properties: {
+      hours: { type: 'number', description: 'How many hours back to scan (default 48)' },
+      limit: { type: 'number' }
+    } } },
+  { name: 'wa_response_delays',
+    description: "Average and worst-case time between an inbound WhatsApp message and the next outbound reply, per rep. Use for 'WhatsApp response time', 'who is slow on WA'.",
+    parameters: { type: 'object', properties: {
+      from: { type: 'string' }, to: { type: 'string' }
+    } } },
+
+  // ---- ATTENDANCE / LOGIN (v3) --------------------------------
+  { name: 'attendance_today',
+    description: "Today's attendance: who is present, who is absent, and who came LATE (after the configured WORK_START time). Use for 'attendance today', 'who came late', 'who is absent today'.",
+    parameters: { type: 'object', properties: {} } },
+  { name: 'login_locations',
+    description: "Recent device logins per user — IP, user agent, last seen. Use for 'where did <name> log in from', 'login locations', 'unusual login'.",
+    parameters: { type: 'object', properties: {
+      user: { type: 'string', description: 'Optional user name to filter' },
+      limit: { type: 'number' }
+    } } },
+
 ];
 
 // ---- Helpers --------------------------------------------------------
@@ -718,6 +786,267 @@ async function _runTool(name, args, ctx) {
       return { rows };
     }
 
+
+    // ---- DIMENSIONAL (v3) -------------------------------------
+    case 'leads_by_product': {
+      const r = _resolveBounds(args);
+      const rows = (await db.query(
+        `SELECT COALESCE(p.name, l.product, 'Unspecified') AS product,
+                COUNT(*)::int AS leads,
+                SUM(CASE WHEN s.name = 'Won' THEN 1 ELSE 0 END)::int AS won,
+                COALESCE(SUM(l.value), 0)::numeric AS total_value
+           FROM leads l
+           LEFT JOIN products p ON p.id = l.product_id
+           LEFT JOIN statuses s ON s.id = l.status_id
+          WHERE l.created_at >= $1 AND l.created_at < $2
+          GROUP BY product
+          ORDER BY leads DESC`, [r.from, r.to]
+      )).rows;
+      return { rows, period: r };
+    }
+    case 'leads_by_project_stage': {
+      const rows = (await db.query(
+        `SELECT COALESCE(ps.name, 'No stage') AS stage, COUNT(l.*)::int AS leads
+           FROM leads l
+           LEFT JOIN project_stages ps ON ps.id = l.project_stage_id
+          GROUP BY ps.id, ps.name, ps.sort_order
+          ORDER BY ps.sort_order ASC NULLS LAST, leads DESC`
+      ).catch(() => ({ rows: [] }))).rows;
+      return { rows };
+    }
+    case 'leads_by_custom_field': {
+      const r = _resolveBounds(args);
+      const fieldKey = String(args.field_key || '').toLowerCase().trim();
+      if (!fieldKey) return { error: 'field_key is required' };
+      try {
+        const rows = (await db.query(
+          `SELECT COALESCE(l.meta_json->>$3, l.extra_json->>$3, 'Unspecified') AS value,
+                  COUNT(*)::int AS leads
+             FROM leads l
+            WHERE l.created_at >= $1 AND l.created_at < $2
+            GROUP BY value
+            ORDER BY leads DESC`, [r.from, r.to, fieldKey]
+        )).rows;
+        return { field_key: fieldKey, rows, period: r };
+      } catch (e) {
+        return { field_key: fieldKey, rows: [], error: e.message };
+      }
+    }
+
+    // ---- PERFORMERS / TARGETS (v3) ----------------------------
+    case 'bottom_performers': {
+      const r = _resolveBounds(args, { defaultDays: 30 });
+      const metric = String(args.metric || 'won').toLowerCase();
+      const limit = Math.max(1, Math.min(20, Number(args.limit || 5)));
+      let order = 'won ASC';
+      if (metric === 'value')   order = 'total_value ASC';
+      if (metric === 'remarks') order = 'remarks_count ASC';
+      const rows = (await db.query(
+        `SELECT u.id, u.name,
+                COUNT(l.*)::int AS total,
+                SUM(CASE WHEN s.name = 'Won' THEN 1 ELSE 0 END)::int AS won,
+                COALESCE(SUM(CASE WHEN s.name = 'Won' THEN l.value END), 0)::numeric AS total_value,
+                (SELECT COUNT(*)::int FROM remarks rm WHERE rm.user_id = u.id AND rm.created_at >= $1 AND rm.created_at < $2) AS remarks_count
+           FROM users u
+           LEFT JOIN leads l ON l.assigned_to = u.id AND l.created_at >= $1 AND l.created_at < $2
+           LEFT JOIN statuses s ON s.id = l.status_id
+          WHERE u.is_active = 1 AND u.role IN ('sales', 'team_leader')
+          GROUP BY u.id, u.name
+          ORDER BY ${order}
+          LIMIT $3`, [r.from, r.to, limit]
+      )).rows;
+      return { rows, metric, period: r };
+    }
+    case 'monthly_target_status': {
+      const month = String(args.month || (new Date()).toISOString().slice(0, 7));
+      const monthStart = new Date(month + '-01T00:00:00Z').toISOString();
+      const nextMonth = new Date(new Date(monthStart).setUTCMonth(new Date(monthStart).getUTCMonth() + 1)).toISOString();
+      const params = [month, monthStart, nextMonth];
+      let userClause = '';
+      if (args.assigned_to) {
+        const uid = await _resolveUserId(args.assigned_to);
+        if (uid) { params.push(uid); userClause = ` AND u.id = $${params.length}`; }
+      }
+      const rows = (await db.query(
+        `SELECT u.id, u.name,
+                COALESCE(mt.target_revenue, 0)::numeric AS target_revenue,
+                COALESCE(mt.target_leads,   0)::int     AS target_leads,
+                COALESCE(mt.target_sales,   0)::int     AS target_sales,
+                COALESCE(SUM(CASE WHEN s.name = 'Won' THEN l.value END), 0)::numeric AS current_revenue,
+                SUM(CASE WHEN l.created_at >= $2 AND l.created_at < $3 THEN 1 ELSE 0 END)::int AS current_leads,
+                SUM(CASE WHEN s.name = 'Won' AND l.created_at >= $2 AND l.created_at < $3 THEN 1 ELSE 0 END)::int AS current_sales
+           FROM users u
+           LEFT JOIN monthly_targets mt ON mt.user_id = u.id AND mt.month = $1
+           LEFT JOIN leads l ON l.assigned_to = u.id AND l.created_at >= $2 AND l.created_at < $3
+           LEFT JOIN statuses s ON s.id = l.status_id
+          WHERE u.is_active = 1${userClause}
+          GROUP BY u.id, u.name, mt.target_revenue, mt.target_leads, mt.target_sales
+          ORDER BY u.name ASC`, params
+      ).catch(() => ({ rows: [] }))).rows;
+      const enriched = rows.map(x => ({
+        ...x,
+        revenue_pct: x.target_revenue > 0 ? Math.round((x.current_revenue / x.target_revenue) * 1000) / 10 : null,
+        leads_pct:   x.target_leads > 0 ? Math.round((x.current_leads / x.target_leads) * 1000) / 10 : null,
+        sales_pct:   x.target_sales > 0 ? Math.round((x.current_sales / x.target_sales) * 1000) / 10 : null,
+        revenue_shortfall: Math.max(0, Number(x.target_revenue) - Number(x.current_revenue))
+      }));
+      return { month, rows: enriched };
+    }
+
+    // ---- CALLS / RECORDINGS (v3) ------------------------------
+    case 'call_ratings_breakdown': {
+      const r = _resolveBounds(args);
+      try {
+        const rows = (await db.query(
+          `SELECT u.id, u.name,
+                  COUNT(lr.*)::int AS total_calls,
+                  AVG(lr.rating)::numeric AS avg_rating,
+                  SUM(CASE WHEN lr.rating >= 4 THEN 1 ELSE 0 END)::int AS good_calls,
+                  SUM(CASE WHEN lr.rating <= 2 THEN 1 ELSE 0 END)::int AS poor_calls
+             FROM users u
+             LEFT JOIN lead_recordings lr ON lr.user_id = u.id AND lr.created_at >= $1 AND lr.created_at < $2
+            WHERE u.is_active = 1
+            GROUP BY u.id, u.name
+            HAVING COUNT(lr.*) > 0
+            ORDER BY avg_rating DESC NULLS LAST`, [r.from, r.to]
+        )).rows.map(x => ({
+          ...x,
+          avg_rating: x.avg_rating != null ? Math.round(Number(x.avg_rating) * 10) / 10 : null
+        }));
+        return { rows, period: r };
+      } catch (e) { return { rows: [], error: e.message, period: r }; }
+    }
+    case 'call_insights_recent': {
+      const limit = Math.max(1, Math.min(30, Number(args.limit || 10)));
+      try {
+        const rows = (await db.query(
+          `SELECT lr.id, lr.created_at, lr.duration_s, lr.sentiment, lr.rating,
+                  lr.key_insight, lr.action_items, lr.summary,
+                  l.name AS lead_name, u.name AS user_name
+             FROM lead_recordings lr
+             LEFT JOIN leads l ON l.id = lr.lead_id
+             LEFT JOIN users u ON u.id = lr.user_id
+            WHERE lr.key_insight IS NOT NULL AND lr.key_insight <> ''
+            ORDER BY lr.created_at DESC LIMIT $1`, [limit]
+        )).rows;
+        return { rows };
+      } catch (e) { return { rows: [], error: e.message }; }
+    }
+
+    // ---- WHATSAPP (v3) ----------------------------------------
+    case 'wa_unattended_chats': {
+      const hours = Math.max(1, Math.min(24*30, Number(args.hours || 48)));
+      const limit = Math.max(1, Math.min(50, Number(args.limit || 15)));
+      const since = new Date(Date.now() - hours * 3600 * 1000).toISOString();
+      try {
+        const rows = (await db.query(
+          `WITH last_msg AS (
+             SELECT DISTINCT ON (LEAST(from_number, to_number) || GREATEST(from_number, to_number))
+                    id, lead_id, from_number, to_number, body, direction, created_at,
+                    CASE WHEN direction = 'in' THEN from_number ELSE to_number END AS contact
+               FROM whatsapp_messages
+              WHERE created_at >= $1
+              ORDER BY LEAST(from_number, to_number) || GREATEST(from_number, to_number), created_at DESC
+           )
+           SELECT lm.contact AS phone, lm.body AS last_inbound_body, lm.created_at AS last_inbound_at,
+                  l.id AS lead_id, l.name AS lead_name,
+                  u.name AS assigned_user
+             FROM last_msg lm
+             LEFT JOIN leads l ON l.id = lm.lead_id
+             LEFT JOIN wa_chat_assignments a ON a.phone = lm.contact
+             LEFT JOIN users u ON u.id = a.assigned_to
+            WHERE lm.direction = 'in'
+            ORDER BY lm.created_at ASC
+            LIMIT $2`, [since, limit]
+        )).rows;
+        return { rows, hours_scanned: hours, count: rows.length };
+      } catch (e) { return { rows: [], error: e.message, hours_scanned: hours }; }
+    }
+    case 'wa_response_delays': {
+      const r = _resolveBounds(args, { defaultDays: 7 });
+      try {
+        const rows = (await db.query(
+          `WITH paired AS (
+             SELECT m_in.id AS in_id, m_in.from_number, m_in.created_at AS in_at,
+                    (SELECT m_out.created_at FROM whatsapp_messages m_out
+                       WHERE m_out.to_number = m_in.from_number
+                         AND m_out.direction = 'out'
+                         AND m_out.created_at > m_in.created_at
+                       ORDER BY m_out.created_at ASC LIMIT 1) AS reply_at,
+                    (SELECT a.assigned_to FROM wa_chat_assignments a WHERE a.phone = m_in.from_number) AS user_id
+               FROM whatsapp_messages m_in
+              WHERE m_in.direction = 'in'
+                AND m_in.created_at >= $1 AND m_in.created_at < $2
+           )
+           SELECT u.name AS rep_name,
+                  COUNT(*)::int AS total_msgs,
+                  AVG(EXTRACT(EPOCH FROM (reply_at - in_at)))::numeric AS avg_secs,
+                  MAX(EXTRACT(EPOCH FROM (reply_at - in_at)))::numeric AS worst_secs
+             FROM paired p LEFT JOIN users u ON u.id = p.user_id
+            WHERE reply_at IS NOT NULL
+            GROUP BY u.id, u.name
+            ORDER BY avg_secs DESC NULLS LAST
+            LIMIT 20`, [r.from, r.to]
+        )).rows.map(x => ({
+          rep_name: x.rep_name || '(unassigned)',
+          total_msgs: x.total_msgs,
+          avg_minutes: x.avg_secs != null ? Math.round(Number(x.avg_secs) / 6) / 10 : null,
+          worst_minutes: x.worst_secs != null ? Math.round(Number(x.worst_secs) / 6) / 10 : null
+        }));
+        return { rows, period: r };
+      } catch (e) { return { rows: [], error: e.message, period: r }; }
+    }
+
+    // ---- ATTENDANCE / LOGIN (v3) ------------------------------
+    case 'attendance_today': {
+      const t = _todayBounds();
+      let workStart = '09:30';
+      try { workStart = (await db.getConfig('WORK_START', '09:30')) || '09:30'; } catch (_) {}
+      try {
+        const rows = (await db.query(
+          `SELECT u.id, u.name, u.role, a.check_in, a.check_out, a.status
+             FROM users u
+             LEFT JOIN attendance a ON a.user_id = u.id AND a.date = CURRENT_DATE
+            WHERE u.is_active = 1
+            ORDER BY u.name ASC`
+        )).rows;
+        const present = rows.filter(r => r.check_in);
+        const absent  = rows.filter(r => !r.check_in);
+        const [hH, hM] = workStart.split(':').map(Number);
+        const late = present.filter(r => {
+          if (!r.check_in) return false;
+          const ci = new Date(r.check_in);
+          const local = new Date(ci.getTime() + 5.5 * 3600 * 1000);
+          return (local.getUTCHours() > hH) || (local.getUTCHours() === hH && local.getUTCMinutes() > hM);
+        });
+        return {
+          work_start: workStart,
+          counts: { present: present.length, absent: absent.length, late: late.length },
+          present, absent, late
+        };
+      } catch (e) { return { error: e.message, counts: {} }; }
+    }
+    case 'login_locations': {
+      const limit = Math.max(1, Math.min(50, Number(args.limit || 15)));
+      const params = [];
+      let where = '1=1';
+      if (args.user) {
+        const uid = await _resolveUserId(args.user);
+        if (uid) { params.push(uid); where += ` AND ud.user_id = $${params.length}`; }
+      }
+      params.push(limit);
+      try {
+        const rows = (await db.query(
+          `SELECT ud.user_id, u.name, ud.ip, ud.user_agent, ud.first_seen_at, ud.last_seen_at
+             FROM user_devices ud
+             LEFT JOIN users u ON u.id = ud.user_id
+            WHERE ${where}
+            ORDER BY ud.last_seen_at DESC LIMIT $${params.length}`, params
+        )).rows;
+        return { rows };
+      } catch (e) { return { rows: [], error: e.message }; }
+    }
+
     default:
       return { error: 'Unknown tool: ' + name };
   }
@@ -853,6 +1182,70 @@ function _formatToolFallback(toolsCalled, question) {
       const rows = r.rows || [];
       lines.push('📥 **Sources**:');
       rows.forEach(s => lines.push('• ' + s.name));
+    } else if (name === 'leads_by_product') {
+      const rows = r.rows || [];
+      lines.push('📦 **Leads by product**:');
+      rows.forEach(x => lines.push('• ' + x.product + ': ' + x.leads + ' leads, ' + x.won + ' won, ₹' + Number(x.total_value || 0).toLocaleString('en-IN')));
+    } else if (name === 'leads_by_project_stage') {
+      const rows = r.rows || [];
+      lines.push('🚚 **Leads by project stage**:');
+      rows.forEach(x => lines.push('• ' + x.stage + ': ' + x.leads + ' lead(s)'));
+    } else if (name === 'leads_by_custom_field') {
+      const rows = r.rows || [];
+      lines.push('🎛 **Leads by ' + (r.field_key || 'custom field') + '**:');
+      rows.forEach(x => lines.push('• ' + x.value + ': ' + x.leads));
+    } else if (name === 'bottom_performers') {
+      const rows = r.rows || [];
+      lines.push('🐢 **Bottom performers** (' + (r.metric || 'won') + '):');
+      rows.forEach(e => lines.push('• ' + (e.name || e.user_name) + ' — leads:' + (e.total || 0) + ' · won:' + (e.won || 0) + (e.total_value ? ' · ₹' + Number(e.total_value).toLocaleString('en-IN') : '')));
+    } else if (name === 'monthly_target_status') {
+      const rows = r.rows || [];
+      lines.push('🎯 **Monthly target — ' + r.month + '**:');
+      rows.forEach(t => {
+        const bits = [t.name];
+        if (t.target_revenue > 0) bits.push('₹ ' + Number(t.current_revenue).toLocaleString('en-IN') + ' / ' + Number(t.target_revenue).toLocaleString('en-IN') + ' (' + (t.revenue_pct ?? 0) + '%)');
+        if (t.target_sales > 0)   bits.push('sales: ' + t.current_sales + '/' + t.target_sales);
+        if (t.target_leads > 0)   bits.push('leads: ' + t.current_leads + '/' + t.target_leads);
+        if (t.revenue_shortfall > 0) bits.push('shortfall ₹' + Number(t.revenue_shortfall).toLocaleString('en-IN'));
+        lines.push('• ' + bits.join(' · '));
+      });
+    } else if (name === 'call_ratings_breakdown') {
+      const rows = r.rows || [];
+      lines.push('🎤 **Call ratings by rep**:');
+      rows.forEach(x => lines.push('• ' + x.name + ': avg ' + (x.avg_rating ?? '—') + '/5 across ' + x.total_calls + ' calls (👍 ' + x.good_calls + ' / 👎 ' + x.poor_calls + ')'));
+    } else if (name === 'call_insights_recent') {
+      const rows = r.rows || [];
+      lines.push('💡 **Recent call insights**:');
+      rows.slice(0, 10).forEach(c => {
+        lines.push('• ' + (c.lead_name || '(unknown lead)') + ' (' + (c.user_name || '') + ', ' + (c.sentiment || '—') + ', ' + (c.rating ? c.rating + '/5' : 'unrated') + ')');
+        if (c.key_insight) lines.push('  💡 ' + String(c.key_insight).slice(0, 200));
+      });
+    } else if (name === 'wa_unattended_chats') {
+      const rows = r.rows || [];
+      if (!rows.length) lines.push('✅ No unattended WhatsApp chats in the last ' + (r.hours_scanned || 48) + ' hours.');
+      else {
+        lines.push('💬 **Unattended WhatsApp chats** (' + rows.length + '):');
+        rows.forEach(c => lines.push('• ' + c.phone + ' (' + (c.lead_name || 'no lead') + ', assigned: ' + (c.assigned_user || 'unassigned') + ') — "' + String(c.last_inbound_body || '').slice(0, 80) + '"'));
+      }
+    } else if (name === 'wa_response_delays') {
+      const rows = r.rows || [];
+      lines.push('⏱ **WhatsApp response delays** (avg minutes):');
+      rows.forEach(x => lines.push('• ' + x.rep_name + ': ' + (x.avg_minutes ?? '—') + ' min avg, worst ' + (x.worst_minutes ?? '—') + ' min over ' + x.total_msgs + ' msgs'));
+    } else if (name === 'attendance_today') {
+      const c = r.counts || {};
+      lines.push('🕘 **Attendance today** — ✅ present: ' + (c.present ?? 0) + ', ❌ absent: ' + (c.absent ?? 0) + ', 🐢 late: ' + (c.late ?? 0) + ' (work start: ' + r.work_start + ')');
+      if (r.late && r.late.length) {
+        lines.push('Late arrivals:');
+        r.late.forEach(u => lines.push('• ' + u.name + ' — checked in at ' + new Date(u.check_in).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })));
+      }
+      if (r.absent && r.absent.length && r.absent.length < 10) {
+        lines.push('Absent:');
+        r.absent.forEach(u => lines.push('• ' + u.name));
+      }
+    } else if (name === 'login_locations') {
+      const rows = r.rows || [];
+      lines.push('🌐 **Recent logins**:');
+      rows.forEach(x => lines.push('• ' + x.name + ' from ' + (x.ip || 'unknown') + ' (last seen ' + new Date(x.last_seen_at).toLocaleString() + ')'));
     } else {
       try {
         const s = JSON.stringify(r, null, 2);
@@ -904,6 +1297,17 @@ PICKING THE RIGHT TOOL — examples:
 • "List all sales reps" → list_employees(role='sales')
 • "What products do we sell?" → list_products
 • "Recent activity" → recent_activity
+• "Leads by product" → leads_by_product
+• "Project stage wise data" → leads_by_project_stage
+• "Leads by industry" → leads_by_custom_field(field_key='industry')
+• "Identify non performers" / "weakest reps" → bottom_performers
+• "Monthly target status" / "shortfall" → monthly_target_status
+• "Call ratings by rep" → call_ratings_breakdown
+• "Recent call insights" → call_insights_recent
+• "Unattended WhatsApp chats" → wa_unattended_chats
+• "WhatsApp response time" / "who is slow on WA" → wa_response_delays
+• "Who came late today" / "attendance today" → attendance_today
+• "Where did <name> log in from" → login_locations(user='<name>')
 • "Calls today" → todays_calls
 • "Average call rating" → recordings_summary
 • "How many quotes sent" → quotation_summary
