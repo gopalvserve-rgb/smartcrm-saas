@@ -18326,3 +18326,23 @@ async function openSourceMappingModal(sourceId, sourceLabel) {
     status
   ));
 }
+
+// Push diagnostic — paste 'await window.checkPushDiag()' in the Chrome
+// devtools console (or chrome://inspect on the APK) to see exactly why
+// notifications aren't working.
+window.checkPushDiag = async function () {
+  try {
+    const r = await api('api_push_diag');
+    console.log('[push-diag]', r);
+    if (typeof toast === 'function') {
+      toast(r.hint + ' (FCM: ' + (r.fcm_initialized ? 'OK' : 'OFF')
+        + ' · Devices: ' + r.fcm_tokens_count + ')',
+        r.fcm_initialized && r.fcm_tokens_count > 0 ? 'ok' : 'warn');
+    }
+    return r;
+  } catch (e) {
+    console.error('[push-diag] failed:', e);
+    if (typeof toast === 'function') toast('Diag failed: ' + e.message, 'err');
+  }
+};
+

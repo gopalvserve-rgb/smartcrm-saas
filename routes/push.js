@@ -438,9 +438,44 @@ async function api_call_via_mobile(token, leadId, phone, leadName) {
   return { ok: true, push: r };
 }
 
+
+
+/**
+ * Diagnostic — admin-only. Returns everything we know about the push
+ * subsystem so the admin can see at a glance whether FCM is wired up.
+ */
+async function api_push_diag(token) {
+  const me = await authUser(token);
+  if (me.role !== 'admin') throw new Error('Admin only');
+  await _ensurePushSchema();
+  const fcmInitOk = !!(admin && _initFcm());
+  const fcmCreds = !!(process.env.FIREBASE_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_APPLICATION_CREDENTIALS);
+  const vapid = await ensureVapid();
+  const fcmCount = await db.query('SELECT COUNT(*)::int AS c FROM fcm_tokens').then(r => r.rows[0].c).catch(() => 0);
+  const psCount  = await db.query('SELECT COUNT(*)::int AS c FROM push_subscriptions').then(r => r.rows[0].c).catch(() => 0);
+  return {
+    firebase_admin_loaded: !!admin,
+    fcm_credentials_present: fcmCreds,
+    fcm_initialized:   fcmInitOk,
+    vapid_present:     !!vapid,
+    fcm_tokens_count:  fcmCount,
+    web_push_subs_count: psCount,
+    hint: !admin
+      ? 'firebase-admin npm package not installed on server'
+      : !fcmCreds
+        ? 'Set FIREBASE_SERVICE_ACCOUNT_JSON env var on Railway with the Firebase service account JSON'
+        : !fcmInitOk
+          ? 'firebase-admin failed to init — check the JSON contents are valid'
+          : fcmCount === 0
+            ? 'No devices registered yet — open the APK to trigger FCM registration'
+            : 'OK — push pipeline ready'
+  };
+}
+
 module.exports = {
   api_push_publicKey, api_push_subscribe, api_push_unsubscribe, api_push_test,
   api_fcm_register, api_fcm_unregister,
   api_call_via_mobile,
+  api_push_diag,
   sendPushToUser
 };
