@@ -1902,8 +1902,42 @@ async function api_leads_assignToCampaign(token, leadIds, campaignId) {
 }
 
 
+
+/**
+ * Lightweight lookup: every phone number tail (last 10 digits) for
+ * every lead the user can see. Used by the mobile call-recording
+ * sync to decide whether a recording's phone matches a lead — the
+ * regular api_leads_list is paginated / role-filtered which causes
+ * 'not in CRM' false negatives when a rep records a call to a lead
+ * they don't own.
+ *
+ * Privacy: returns ONLY the digit tails — no names, no emails. So
+ * even reps with restricted lead visibility can match recordings
+ * without exposing data they shouldn't see.
+ */
+async function api_leads_phoneBook(token) {
+  await authUser(token);
+  const r = await db.query(
+    `SELECT id,
+            regexp_replace(COALESCE(phone,    ''), '\D', '', 'g') AS p,
+            regexp_replace(COALESCE(whatsapp, ''), '\D', '', 'g') AS w,
+            regexp_replace(COALESCE(alt_phone,''), '\D', '', 'g') AS a
+       FROM leads`
+  );
+  // Build a Map: tail (last 10 digits) → lead id. Multiple tails per lead.
+  const out = [];
+  for (const row of r.rows) {
+    [row.p, row.w, row.a].forEach(d => {
+      if (d && d.length >= 7) {
+        out.push({ id: row.id, tail: d.slice(-10) });
+      }
+    });
+  }
+  return out;
+}
+
 module.exports = {
-  api_leads_list, api_leads_statusCounts, api_leads_get, api_leads_create, api_leads_update,
+  api_leads_list, api_leads_phoneBook, api_leads_statusCounts, api_leads_get, api_leads_create, api_leads_update,
   api_leads_addRemark, api_leads_pipeline, api_myFollowups, api_followup_done,
   api_leads_bulkUpdate, api_leads_bulkDelete, api_leads_bulkCreate, api_leads_duplicateHistory,
   api_leads_deleteAllDuplicates, api_leads_duplicateAndReassign,

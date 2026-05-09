@@ -15798,19 +15798,9 @@ function _fbDoLogin() {
  */
 function parseRecordingFilename(name, fallbackTimestamp) {
   const lower = name.toLowerCase();
-  // Phone — first run of 7-15 digits (optionally + prefix), preferring + form
-  let phone = '';
-  const plusMatch = name.match(/\+\d{8,15}/);
-  if (plusMatch) phone = plusMatch[0];
-  else {
-    const m = name.match(/(\d{7,15})/);
-    if (m) phone = m[1];
-  }
-  // Direction
-  let direction = 'out';
-  if (/(incoming|received|\bin[_\-\s]|inbound)/.test(lower)) direction = 'in';
-  else if (/(outgoing|outbound|\bout[_\-\s]|dialed|made)/.test(lower)) direction = 'out';
-  // Date — try YYYY-MM-DD HH:MM:SS or YYYYMMDD_HHMMSS variants
+
+  // ---- Date / time extraction (FIRST so we can strip them before
+  // looking for the phone) ----
   let startedAt = fallbackTimestamp || Date.now();
   const dt1 = name.match(/(\d{4})[\-_]?(\d{2})[\-_]?(\d{2})[\-_\sT]+(\d{2})[\-_:]?(\d{2})[\-_:]?(\d{2})/);
   if (dt1) {
@@ -15818,6 +15808,50 @@ function parseRecordingFilename(name, fallbackTimestamp) {
     const ts = new Date(`${y}-${mo}-${d}T${h}:${mi}:${s}`).getTime();
     if (!isNaN(ts)) startedAt = ts;
   }
+
+  // Strip well-known date / time / millisecond runs from the name
+  // before we hunt for the phone. Otherwise filenames like
+  // 'Call_recording_20240425_153012_9876543210.m4a' would extract
+  // '20240425' (the date) as the phone number — leaving the real
+  // phone unmatched.
+  let scrubbed = String(name)
+    // Full datetime: 20240425_153012, 20240425T153012, 20240425-153012
+    .replace(/\d{4}[-_]?\d{2}[-_]?\d{2}[-_T\s]?\d{2}[-_:]?\d{2}[-_:]?\d{2}/g, ' ')
+    // YYYY-MM-DD or YYYYMMDD alone
+    .replace(/\b\d{4}[-_]?\d{2}[-_]?\d{2}\b/g, ' ')
+    // DD-MM-YYYY / DD-MM-YY / DD/MM/YYYY
+    .replace(/\b\d{2}[-_/]\d{2}[-_/]\d{2,4}\b/g, ' ')
+    // HH-MM-SS / HHMMSS appearing after underscore/space
+    .replace(/\b\d{2}[-_:]\d{2}[-_:]\d{2}\b/g, ' ')
+    // Long unix-ish timestamps (10–13 digits), likely epoch seconds/ms
+    // — if they sit ALONE between separators (avoid stripping a real phone)
+    .replace(/[-_\s](\d{12,13})[-_\s]/g, ' ');
+
+  // ---- Phone — preference order ----
+  // 1. '+' prefixed international (most reliable)
+  // 2. 10-digit Indian phone (with optional 91 prefix)
+  // 3. 8-15 digit international fallback
+  let phone = '';
+  let plus = scrubbed.match(/\+\d[\d\s\-]{7,17}/);
+  if (plus) phone = plus[0].replace(/[\s\-]/g, '');
+
+  // 10-digit Indian phone, optionally preceded by 91 / +91 / 091
+  if (!phone) {
+    const indian = scrubbed.match(/(?:91|091|\+91)?[6-9]\d{9}/);
+    if (indian) phone = indian[0];
+  }
+
+  // Generic 8-15 digit fallback
+  if (!phone) {
+    const m = scrubbed.match(/\d{8,15}/);
+    if (m) phone = m[0];
+  }
+
+  // Direction
+  let direction = 'out';
+  if (/(incoming|received|inbound|in_call|\bin[_\-\s])/.test(lower)) direction = 'in';
+  else if (/(outgoing|outbound|out_call|dialed|made|\bout[_\-\s])/.test(lower)) direction = 'out';
+
   return { phone, direction, startedAt };
 }
 
@@ -15856,28 +15890,43 @@ async function syncRecordings(opts) {
     return;
   }
 
-  // Make sure we have leads loaded for matching
-  if (!CRM.cache.lastLeads || CRM.cache.lastLeads.length === 0) {
+  // Phone book — every lead's phone tails the user can ANY permission
+  // to see. Lightweight fetch (digits only) so we can match recordings
+  // even for leads outside the agent's normal lead-list view (e.g. an
+  // admin's lead they just received a call from).
+  let phoneBook = [];
+  try { phoneBook = await api('api_leads_phoneBook'); } catch (_) {}
+  // Fallback to the full lead list if the new endpoint isn't deployed yet
+  if (!phoneBook.length) {
     try {
       const r = await api('api_leads_list', {});
-      CRM.cache.lastLeads = (r.leads || r);
+      const leads = (r && r.leads) || r || [];
+      for (const l of leads) {
+        for (const fld of ['phone', 'whatsapp', 'alt_phone']) {
+          const d = String(l[fld] || '').replace(/\D/g, '');
+          if (d.length >= 7) phoneBook.push({ id: l.id, tail: d.slice(-10) });
+        }
+      }
     } catch (_) {}
   }
 
-  // Build a set of "last 7 digits" for every phone we know across leads —
-  // used to filter out personal/family calls.
-  const knownTails = new Set();
-  for (const l of CRM.cache.lastLeads || []) {
-    for (const fld of ['phone', 'whatsapp', 'alt_phone']) {
-      const d = String(l[fld] || '').replace(/\D/g, '');
-      if (d.length >= 7) knownTails.add(d.slice(-7));
-    }
+  // Build sets keyed by 10-digit tail AND 7-digit tail (covers
+  // numbers stored without the leading area code).
+  const knownTails  = new Set();
+  const tailToLead  = new Map();
+  const knownTails7 = new Set();
+  for (const r of phoneBook) {
+    if (!r.tail) continue;
+    knownTails.add(r.tail);
+    knownTails7.add(r.tail.slice(-7));
+    tailToLead.set(r.tail, r.id);
   }
   const includeUnmatched = !!opts.includeUnmatched
     || localStorage.getItem('rec_include_unmatched') === '1';
 
   const uploaded = JSON.parse(localStorage.getItem('rec_uploaded') || '{}');
   let success = 0, failed = 0, skipped = 0, skippedNoMatch = 0;
+  window._recSkipDiag = [];
 
   // Show progress in dialer view if visible
   const progress = $('#sync-progress');
@@ -15888,24 +15937,25 @@ async function syncRecordings(opts) {
     if (uploaded[f.uri]) { skipped++; continue; }
     const meta = parseRecordingFilename(f.name, f.modified);
     const digits = String(meta.phone || '').replace(/\D/g, '');
-    const tail = digits.slice(-7);
+    const tail10 = digits.slice(-10);
+    const tail7  = digits.slice(-7);
     // SKIP files whose phone number doesn't match a lead in your CRM
-    // (personal calls, family, courier, OTPs, etc.)
-    if (!includeUnmatched && (!tail || !knownTails.has(tail))) {
+    // (personal calls, family, courier, OTPs, etc.). Match against the
+    // 10-digit tail first (precise) then 7-digit (fuzzy fallback for
+    // numbers stored without area code).
+    const matched10 = digits && knownTails.has(tail10);
+    const matched7  = digits && knownTails7.has(tail7);
+    if (!includeUnmatched && !matched10 && !matched7) {
+      console.warn('[leadcrm] skipping recording - phone not in CRM:', f.name, 'parsed=', digits || '(none)');
       skippedNoMatch++;
+      // Track the first few skipped phones for diagnostic toast at end
+      window._recSkipDiag = window._recSkipDiag || [];
+      if (window._recSkipDiag.length < 3) window._recSkipDiag.push(digits || '?');
       continue;
     }
-    // Match the recording's phone number against every lead's
-    // phone/whatsapp/alt_phone — last 10 digits comparison so country-code
-    // variations (+91, 91, none) don't break the join.
-    const tail10 = digits.slice(-10);
-    const lead = digits ? (CRM.cache.lastLeads || []).find(l => {
-      for (const fld of ['phone', 'whatsapp', 'alt_phone']) {
-        const d = String(l[fld] || '').replace(/\D/g, '');
-        if (d && d.endsWith(tail10)) return true;
-      }
-      return false;
-    }) : null;
+    // Resolve to the matching lead id. Phone book gave us a tail→id map.
+    const matchedLeadId = digits ? (tailToLead.get(tail10) || null) : null;
+    const lead = matchedLeadId ? { id: matchedLeadId } : null;
     const leadId = lead ? String(lead.id) : '';
 
     // If the filename's phone number maps to a lead, that's all the
