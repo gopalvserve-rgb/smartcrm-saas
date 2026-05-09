@@ -6408,15 +6408,112 @@ async function _aibotSettingsView() {
   // ---- persona ----
   const botName = h('input', { type: 'text', value: s.bot_name || 'Assistant', style: { width: '100%' } });
   const bizName = h('input', { type: 'text', value: s.business_name || '', placeholder: 'e.g. Acme Realty Pvt Ltd', style: { width: '100%' } });
-  const lang = h('select', { style: { width: '100%' } },
-    ...['en', 'hi', 'en+hi', 'mr', 'gu', 'ta', 'te', 'bn'].map(o => h('option', { value: o, selected: s.language === o ? 'selected' : null }, o)));
-  const sysPrompt = h('textarea', { rows: 6, style: { width: '100%' }, placeholder: 'Optional: override the default persona. Leave blank for the standard "helpful WhatsApp assistant" prompt.' }, s.system_prompt || '');
+
+  // Multi-language: replace the single-select with checkboxes so the
+  // bot can be told 'reply in Hindi OR English OR Marathi'. Stored as
+  // a comma-joined string in `language` field for backward compat
+  // (existing 'en+hi' values still work).
+  const LANG_OPTIONS = [
+    { code: 'en', label: 'English' },
+    { code: 'hi', label: 'हिन्दी (Hindi)' },
+    { code: 'mr', label: 'मराठी (Marathi)' },
+    { code: 'gu', label: 'ગુજરાતી (Gujarati)' },
+    { code: 'ta', label: 'தமிழ் (Tamil)' },
+    { code: 'te', label: 'తెలుగు (Telugu)' },
+    { code: 'bn', label: 'বাংলা (Bengali)' },
+    { code: 'kn', label: 'ಕನ್ನಡ (Kannada)' },
+    { code: 'ml', label: 'മലയാളം (Malayalam)' },
+    { code: 'pa', label: 'ਪੰਜਾਬੀ (Punjabi)' },
+    { code: 'ur', label: 'اردو (Urdu)' },
+    { code: 'ar', label: 'العربية (Arabic)' }
+  ];
+  const currentLangs = String(s.language || 'en+hi')
+    .split(/[+,\s]/).map(x => x.trim()).filter(Boolean);
+  const langChks = {};
+  const langGrid = h('div', {
+    style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '.3rem', padding: '.5rem', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }
+  });
+  LANG_OPTIONS.forEach(o => {
+    langChks[o.code] = h('input', { type: 'checkbox', value: o.code });
+    if (currentLangs.includes(o.code)) langChks[o.code].checked = true;
+    langGrid.appendChild(h('label', {
+      style: { display: 'flex', alignItems: 'center', gap: '.4rem', padding: '.3rem .5rem', background: '#fff', borderRadius: '6px', border: '1px solid #e2e8f0', cursor: 'pointer', fontSize: '.85rem' }
+    }, langChks[o.code], h('span', {}, o.label)));
+  });
+
+  // Goal templates — each one fills the system_prompt with a tested
+  // template. Tenant can edit afterwards. {{BUSINESS_NAME}} placeholder
+  // is auto-replaced when applied.
+  const GOAL_TEMPLATES = {
+    'sales': {
+      label: '🛒 Sales — qualify and convert',
+      prompt: `You are a friendly sales assistant for {{BUSINESS_NAME}} on WhatsApp.\n\nGoal: convert customer enquiries into qualified leads.\n\nFlow:\n1. Greet warmly and acknowledge their interest.\n2. Ask 2-3 short questions to understand their need (budget, timeline, specific requirement).\n3. Briefly explain how {{BUSINESS_NAME}} can help based on the knowledge base.\n4. ALWAYS end with a call-to-action: ask for a meeting, demo, or price quote.\n5. If they ask something not in the KB, say so politely and offer to connect with a human agent.\n\nKeep replies under 50 words. Be warm, never pushy.`
+    },
+    'support': {
+      label: '🛠 Support — resolve issues fast',
+      prompt: `You are a customer support agent for {{BUSINESS_NAME}} on WhatsApp.\n\nGoal: resolve customer issues quickly using the knowledge base.\n\nFlow:\n1. Acknowledge their issue with empathy.\n2. Ask for ANY missing details (order ID, account email, error message).\n3. Provide step-by-step solution from the knowledge base.\n4. If you can't solve it, escalate: 'Let me connect you with our support team — they'll reach you in [X] minutes.'\n5. Confirm the issue is resolved before ending.\n\nKeep replies short and clear. Use bullet points for steps.`
+    },
+    'appointment': {
+      label: '📅 Appointment — book a meeting',
+      prompt: `You are an appointment-booking assistant for {{BUSINESS_NAME}} on WhatsApp.\n\nGoal: schedule a meeting / consultation / call with the customer.\n\nFlow:\n1. Greet and confirm what kind of appointment they want.\n2. Ask for their preferred date AND time slot (offer 2-3 options based on business hours).\n3. Ask for their name + the topic of discussion if not clear.\n4. Confirm: 'I've noted [DATE] at [TIME] for [TOPIC]. Our team will call you. Anything else?'\n5. Hand off to a human if they want to talk to someone immediately.\n\nNever over-promise specific slots — say 'we'll confirm shortly' if you're unsure.`
+    },
+    'site_visit': {
+      label: '🏠 Site visit — schedule a property tour',
+      prompt: `You are a property-visit scheduler for {{BUSINESS_NAME}} on WhatsApp.\n\nGoal: book a site visit for the customer to see properties in person.\n\nFlow:\n1. Confirm which property/area they want to visit (use KB for available properties).\n2. Ask for preferred visit date + time.\n3. Ask for their name + how many people will visit.\n4. Confirm: 'Site visit booked: [PROPERTY] on [DATE] at [TIME]. Our agent will meet you at the location. Address coming on confirmation.'\n5. Tell them an agent will call to confirm + share map within 1 hour.\n\nIf they ask about pricing or availability, share what's in the KB but say final pricing is confirmed at the site.`
+    },
+    'qualify': {
+      label: '🎯 Lead qualification — gather BANT',
+      prompt: `You are a lead qualification assistant for {{BUSINESS_NAME}} on WhatsApp.\n\nGoal: gather BANT (Budget, Authority, Need, Timeline) info before passing to sales.\n\nFlow:\n1. Greet warmly.\n2. Ask conversationally:\n   - What problem are they trying to solve? (Need)\n   - When are they planning to act? (Timeline)\n   - What's their budget range? (Budget)\n   - Are they the decision-maker or part of a team? (Authority)\n3. Don't ask all four at once — spread across 2-3 messages.\n4. End with: 'Thanks! Our [SPECIALIST] will reach you within [TIMEFRAME] with a tailored proposal.'\n\nNever push a sale. You're a qualifier, not a closer.`
+    },
+    'onboarding': {
+      label: '🎓 Onboarding — guide new customers',
+      prompt: `You are an onboarding assistant for {{BUSINESS_NAME}} on WhatsApp.\n\nGoal: help new customers set up and start using our product/service.\n\nFlow:\n1. Welcome them and ask which product/plan they bought.\n2. Walk through the next 3 steps from the knowledge base.\n3. Send relevant resource links (videos, guides) when applicable.\n4. Ask if they have any questions or need a setup call.\n5. Set the right expectations: 'Most customers are up and running in [X] minutes/days.'\n\nKeep it encouraging. New users feel overwhelmed — break things into small wins.`
+    },
+    'faq': {
+      label: '❓ FAQ — answer common questions',
+      prompt: `You are an FAQ assistant for {{BUSINESS_NAME}} on WhatsApp.\n\nGoal: answer customer questions accurately from the knowledge base.\n\nRules:\n1. Use ONLY the knowledge base provided. If the answer isn't there, say: 'I don't have that info — let me get someone from our team to help.'\n2. Reply in 1-3 short sentences. Don't pad.\n3. If the question has multiple parts, answer each clearly.\n4. Always offer to escalate if they want more detail.\n\nNever guess. Never make up product features, prices, or policies.`
+    }
+  };
+  // Detect which preset (if any) the current prompt matches
+  let _activeGoal = '';
+  Object.keys(GOAL_TEMPLATES).forEach(k => {
+    const tpl = GOAL_TEMPLATES[k].prompt.replace(/\{\{BUSINESS_NAME\}\}/g, s.business_name || '');
+    if ((s.system_prompt || '').slice(0, 200) === tpl.slice(0, 200)) _activeGoal = k;
+  });
+
+  const goalSel = h('select', { style: { width: '100%' } },
+    h('option', { value: '', selected: !_activeGoal ? '' : null }, '— Custom (write your own below) —'),
+    ...Object.entries(GOAL_TEMPLATES).map(([k, v]) =>
+      h('option', { value: k, selected: _activeGoal === k ? '' : null }, v.label))
+  );
+
+  const sysPrompt = h('textarea', { rows: 8, style: { width: '100%' }, placeholder: 'Optional: override the default persona. Leave blank for the standard "helpful WhatsApp assistant" prompt.' }, s.system_prompt || '');
+
+  goalSel.addEventListener('change', () => {
+    const k = goalSel.value;
+    if (!k) return;
+    const tpl = GOAL_TEMPLATES[k];
+    if (!tpl) return;
+    const filled = tpl.prompt.replace(/\{\{BUSINESS_NAME\}\}/g, bizName.value || 'this business');
+    if (sysPrompt.value && !confirm('Replace the current system prompt with the ' + tpl.label + ' template?')) return;
+    sysPrompt.value = filled;
+    toast('✅ Loaded ' + tpl.label + ' template — edit below to customise');
+  });
+
   wrap.appendChild(h('div', { class: 'card' },
-    h('h3', { style: { marginTop: 0 } }, 'Bot persona'),
+    h('h3', { style: { marginTop: 0 } }, 'Bot persona & goal'),
     h('div', { class: 'field' }, h('label', {}, 'Bot name (shown in welcome message)'), botName),
     h('div', { class: 'field' }, h('label', {}, 'Business name'), bizName),
-    h('div', { class: 'field' }, h('label', {}, 'Reply language'), lang),
-    h('div', { class: 'field' }, h('label', {}, 'Custom system prompt (optional)'), sysPrompt)
+    h('div', { class: 'field' },
+      h('label', {}, 'Reply languages (tick all that apply — bot will detect customer\'s language and reply in matching one)'),
+      langGrid),
+    h('div', { class: 'field' },
+      h('label', {}, '🎯 Bot goal — pick a preset and customise below'),
+      goalSel,
+      h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } },
+        'Picking a preset fills the system prompt with a tested template. Edit the prompt below to add your specific business rules, fees, common scenarios, etc.')
+    ),
+    h('div', { class: 'field' }, h('label', {}, 'System prompt (the bot\'s instructions)'), sysPrompt)
   ));
 
   // ---- reply modes ----
@@ -6505,7 +6602,8 @@ async function _aibotSettingsView() {
     saveBtn.disabled = true;
     const payload = {
       is_enabled: enableChk.checked,
-      bot_name: botName.value, business_name: bizName.value, language: lang.value,
+      bot_name: botName.value, business_name: bizName.value,
+      language: Object.keys(langChks).filter(k => langChks[k].checked).join('+') || 'en',
       system_prompt: sysPrompt.value,
       reply_modes: data.available_modes.filter(m => modeChks[m.id].checked).map(m => m.id),
       business_hours: {

@@ -543,11 +543,22 @@ function _isAfterHours(bh) {
 }
 
 async function _buildPrompt(settings, phone, leadId, inboundText) {
+  // Build language hint from the multi-lang setting (e.g. 'en+hi+mr')
+  const LANG_NAMES = { en: 'English', hi: 'Hindi', mr: 'Marathi', gu: 'Gujarati', ta: 'Tamil', te: 'Telugu', bn: 'Bengali', kn: 'Kannada', ml: 'Malayalam', pa: 'Punjabi', ur: 'Urdu', ar: 'Arabic' };
+  const langCodes = String(settings.language || 'en+hi').split(/[+,\s]/).map(x => x.trim()).filter(Boolean);
+  const langNames = langCodes.map(c => LANG_NAMES[c] || c);
+  const langInstr = langNames.length === 1
+    ? `Always reply in ${langNames[0]}.`
+    : `Detect the customer's language and reply in the SAME language. Acceptable languages: ${langNames.join(', ')}. If the customer writes in a language outside this list, default to ${langNames[0]}.`;
+
   const persona = String(settings.system_prompt || '').trim()
     || (`You are ${settings.bot_name || 'an assistant'} for ${settings.business_name || 'this business'}. ` +
         `Answer customer questions on WhatsApp, briefly and helpfully. ` +
         `Use ONLY the knowledge base below. If you don't know, say so politely and offer to connect with a human. ` +
-        `Reply in the customer's language. Keep responses under 60 words unless they explicitly ask for detail.`);
+        `Keep responses under 60 words unless they explicitly ask for detail.`);
+  // Append language instruction at the END so it always wins regardless of
+  // what the tenant put in their system_prompt.
+  const personaWithLang = persona + '\n\n' + langInstr;
 
   // KB
   let kb = '';
@@ -568,7 +579,7 @@ async function _buildPrompt(settings, phone, leadId, inboundText) {
     if (buf.trim()) kb = '\n\n=== KNOWLEDGE BASE ===' + buf + '\n=== END KNOWLEDGE BASE ===';
   }
 
-  const system = persona + kb;
+  const system = personaWithLang + kb;
 
   // History: last N inbound + outbound messages (chronological).
   const hCount = Math.max(0, Number(settings.history_messages || 8));
