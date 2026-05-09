@@ -15938,7 +15938,12 @@ async function syncRecordings(opts) {
   try { files = JSON.parse(filesJson || '[]'); } catch (e) { files = []; }
 
   if (files.length === 0) {
-    toast('No new recordings in the folder');
+    const watermarkAge = Math.round((Date.now() - sinceMs) / 60000);
+    const msg = opts.full
+      ? 'No recordings found in the folder. Check that the folder you picked actually has .m4a / .amr files.'
+      : 'No NEW recordings since ' + watermarkAge + ' min ago. Tap "⚡ Re-sync all" to scan every file in the folder.';
+    toast(msg, 'warn');
+    console.warn('[leadcrm] sync: 0 files | folder=' + folderName + ' | sinceMs=' + sinceMs + ' (' + new Date(sinceMs).toISOString() + ')');
     return;
   }
 
@@ -16029,7 +16034,30 @@ async function syncRecordings(opts) {
     // leads share a similar name.
     if (!matchedLeadId && meta.contact) {
       const k = _norm(meta.contact);
-      const candidates = nameToLead.get(k) || [];
+      // Try EXACT match first
+      let candidates = nameToLead.get(k) || [];
+      // Then SUBSTRING — name contains contact OR contact contains name
+      if (!candidates.length && k.length >= 3) {
+        for (const [nameKey, ids] of nameToLead.entries()) {
+          if (nameKey.length >= 3 && (nameKey.includes(k) || k.includes(nameKey))) {
+            candidates = candidates.concat(ids);
+          }
+        }
+      }
+      // Then PER-WORD: split contact on spaces, match leads whose name
+      // contains every word of the contact (handles 'John' matching
+      // 'John Doe' lead, or 'Lsc Cst' matching 'Lsc Cst Solutions').
+      if (!candidates.length) {
+        const words = String(meta.contact).toLowerCase().split(/\s+/).filter(w => w.length >= 2);
+        if (words.length) {
+          for (const [nameKey, ids] of nameToLead.entries()) {
+            const allWordsMatch = words.every(w => nameKey.includes(_norm(w)));
+            if (allWordsMatch) candidates = candidates.concat(ids);
+          }
+        }
+      }
+      // De-duplicate and disambiguate by last4 if multiple candidates
+      candidates = [...new Set(candidates)];
       if (candidates.length === 1) {
         matchedLeadId = candidates[0];
       } else if (candidates.length > 1 && meta.lastFour) {
@@ -16037,19 +16065,9 @@ async function syncRecordings(opts) {
         for (const cand of candidates) {
           if (last4Set.has(cand)) { matchedLeadId = cand; break; }
         }
-      } else if (!candidates.length) {
-        // Try a fuzzy contains match — slow but only runs when exact failed
-        for (const [nameKey, ids] of nameToLead.entries()) {
-          if (nameKey.includes(k) || k.includes(nameKey)) {
-            if (meta.lastFour) {
-              const last4Set = new Set(last4ToLead.get(meta.lastFour) || []);
-              const hit = ids.find(id => last4Set.has(id));
-              if (hit) { matchedLeadId = hit; break; }
-            } else if (ids.length === 1) {
-              matchedLeadId = ids[0]; break;
-            }
-          }
-        }
+        // Still no match — pick the first candidate. Better to attach the
+        // recording to a likely-correct lead than drop it entirely.
+        if (!matchedLeadId) matchedLeadId = candidates[0];
       }
     }
     // Last-4-digits-only match (no name): only safe if exactly ONE lead
@@ -16130,11 +16148,19 @@ async function syncRecordings(opts) {
   localStorage.setItem('rec_uploaded', JSON.stringify(uploaded));
   localStorage.setItem('rec_last_sync', String(Date.now()));
   const parts = [];
+  parts.push(`📂 ${files.length} found`);
   parts.push(`✅ ${success} synced`);
-  if (skipped) parts.push(`${skipped} already uploaded`);
-  if (skippedNoMatch) parts.push(`${skippedNoMatch} skipped (not in CRM)`);
-  if (failed) parts.push(`${failed} failed`);
-  toast(parts.join(' · '));
+  if (skipped) parts.push(`⏭ ${skipped} already done`);
+  if (skippedNoMatch) {
+    let msg = `❓ ${skippedNoMatch} not matched`;
+    if (window._recSkipDiag && window._recSkipDiag.length) {
+      msg += ' (e.g. ' + window._recSkipDiag.slice(0, 3).join(', ') + ')';
+    }
+    parts.push(msg);
+  }
+  if (failed) parts.push(`⚠ ${failed} failed`);
+  toast(parts.join(' · '), success > 0 ? 'ok' : 'warn');
+  console.log('[leadcrm] sync complete', { found: files.length, success, skipped, skippedNoMatch, failed, examples: window._recSkipDiag });
   if (typeof refreshDialerHistory === 'function') refreshDialerHistory();
 }
 
