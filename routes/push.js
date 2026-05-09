@@ -210,6 +210,11 @@ async function api_fcm_register(token, fcmToken, platform, ua) {
   if (!fcmToken || typeof fcmToken !== 'string' || fcmToken.length < 20) {
     throw new Error('Invalid FCM token');
   }
+  // Self-heal on tenants migrated before fcm_tokens was added — the
+  // ensure-schema helper creates the table on the current pool if it
+  // doesn't exist yet, so subscribe + register both work without a
+  // separate Re-apply schema step.
+  await _ensurePushSchema();
   await db.query(`
     INSERT INTO fcm_tokens (user_id, token, platform, ua)
     VALUES ($1, $2, $3, $4)

@@ -89,7 +89,19 @@ async function api_attendance_checkOut(token, lat, lng, deviceInfo, locationName
 }
 
 async function api_attendance_mine(token, from, to) {
-  const me = await authUser(token);
+  // Background pollers occasionally fire mid-bootstrap with an empty
+  // token. Returning [] keeps the rendering code happy and prevents
+  // the 'No token' error surface that historically tripped the SPA's
+  // auto-logout regex.
+  if (!token) return [];
+  let me;
+  try { me = await authUser(token); }
+  catch (e) {
+    // Don't kill the session on a transient/expired token check from
+    // a poller. The next real authed call will re-detect expiry and
+    // logout cleanly.
+    return [];
+  }
   let rows = (await db.getAll('attendance'))
     .filter(a => Number(a.user_id) === Number(me.id));
   if (from) rows = rows.filter(a => String(a.date).slice(0, 10) >= from);

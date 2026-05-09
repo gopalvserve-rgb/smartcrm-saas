@@ -35,8 +35,30 @@ const _SILENT_FNS = new Set([
   'api_notifications_mine', 'api_call_logEvent', 'api_company_info'
 ]);
 
+// Endpoints that are background pollers / non-critical reads. If
+// CRM.token is missing for any reason (login screen, SSO bootstrap,
+// race during view transition), we skip the call entirely. Hitting
+// /api without a token returns 'No token', and stale builds used to
+// match that against the logout regex and yank the user out — the
+// exact bug behind 'click Leads → instant logout'.
+const _POLL_OR_OPTIONAL_FNS = new Set([
+  'api_attendance_mine',
+  'api_notifications_mine',
+  'api_announcements_active',
+  'api_company_info',
+  'api_call_logEvent',
+  'api_fcm_register',
+  'api_push_subscribe',
+  'api_push_publicKey'
+]);
+
 async function api(fn, ...args) {
   const silent = _SILENT_FNS.has(fn);
+  // Skip pre-auth firing for background polls. Real user actions still
+  // try the call (and will surface a normal error if the token expired).
+  if (!CRM.token && _POLL_OR_OPTIONAL_FNS.has(fn)) {
+    return Array.isArray(args) && args.length === 0 ? [] : null;
+  }
   if (!silent) _bumpApiLoader(+1);
   try {
     const res = await fetch('/api', {
@@ -46,7 +68,16 @@ async function api(fn, ...args) {
     });
     const j = await res.json();
     if (!res.ok || j.error) {
-      if (j.error && /token|User inactive/i.test(j.error)) logout();
+      // Strict allow-list. Old regex matched any error containing the
+      // word 'token' which logged users out on transient/background
+      // failures (e.g. 'No token' when the client raced ahead of the
+      // login bootstrap, or SQL errors mentioning 'token' columns).
+      // Now we only logout on a real auth-expiry signal AND only when
+      // we actually sent a token — if CRM.token was empty when we
+      // fired, the failure was our own bug, not the server kicking us.
+      const msg = String(j.error || '');
+      const reallyExpired = /Invalid token|Bad token|Token expired|User inactive|Session expired|jwt expired|jwt malformed/i.test(msg);
+      if (reallyExpired && CRM.token) logout();
       throw new Error(j.error || 'API error');
     }
     return j.result;
