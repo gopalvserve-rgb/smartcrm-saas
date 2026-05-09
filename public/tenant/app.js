@@ -17055,3 +17055,291 @@ function _copilotMsg(role, text) {
     start();
   }
 })();
+
+// ============================================================
+// 📚 SmartCRM Showcase Tour — interactive in-app walkthrough
+// ============================================================
+// Runs automatically on first login of the showcase demo tenant
+// (config flag DEMO_TOUR_ENABLED=1) and can be re-launched any time
+// from a 📚 button placed under the ✨ Copilot FAB.
+//
+// Lightweight implementation — no shepherd/intro.js dependency:
+//   - One absolute-positioned spotlight (a div with a big box-shadow)
+//   - One tooltip card pinned next to the spotlight
+//   - Buttons: Back / Next / Skip
+//   - Steps describe { selector, hash, title, body, placement }
+//
+// Selectors fall back gracefully — if a target isn't on screen we
+// either auto-navigate via `hash` first or show a "centered" tooltip.
+
+const _SHOWCASE_TOUR_STEPS = [
+  {
+    hash: '#/dashboard',
+    title: '👋 Welcome to SmartCRM Showcase',
+    body: 'This is a demo workspace pre-loaded with sample leads, recordings, AI summaries, and quotations. Take this 90-second tour to see the highlights — you can re-open it any time from the 📚 button in the bottom-right.',
+    placement: 'center'
+  },
+  {
+    selector: '.sidebar nav a[href="#/leads"], .sidebar nav a[data-view="leads"]',
+    hash: '#/leads',
+    title: '🎯 Lead pipeline',
+    body: '30 sample leads spread across 7 statuses. Click any lead to see the full timeline — calls, notes, follow-ups, AI insights, and quotations.',
+    placement: 'right'
+  },
+  {
+    selector: 'table tbody tr:first-child, .lead-row:first-child',
+    title: '📞 Call recordings + AI insights',
+    body: 'Open a lead — every recording has a pre-baked AI summary, action items, sentiment, suggested next status, and a quality rating. We use Gemini to generate these in production.',
+    placement: 'right'
+  },
+  {
+    hash: '#/dashboard',
+    selector: '.sidebar nav a[href="#/reports"], .sidebar nav a[data-view="reports"]',
+    title: '📊 Reports & analytics',
+    body: 'Pipeline funnel, employee performance, source attribution, TAT violations — all derived from the same data, refreshed in real time.',
+    placement: 'right'
+  },
+  {
+    hash: '#/quotations',
+    selector: '.sidebar nav a[href="#/quotations"], .sidebar nav a[data-view="quotations"]',
+    title: '💰 Quotations',
+    body: '10 sample quotations in mixed states (draft/sent/accepted/rejected). Send via email or WhatsApp — customers can accept directly from a public URL.',
+    placement: 'right'
+  },
+  {
+    selector: '#copilot-fab',
+    title: '✨ CRM Copilot',
+    body: 'Ask any question about your CRM data — "How many fresh leads today?", "Who is out of TAT?", "Show me top 3 leads from Pune". Powered by Gemini function-calling.',
+    placement: 'left'
+  },
+  {
+    hash: '#/aibot',
+    selector: '.sidebar nav a[href="#/aibot"], .sidebar nav a[data-view="aibot"]',
+    title: '🤖 WhatsApp AI Bot',
+    body: 'Auto-replies to incoming WhatsApp messages using your Knowledge Base. Configurable: response delay, confidence threshold, fallback to human agent.',
+    placement: 'right'
+  },
+  {
+    hash: '#/admin',
+    selector: '.sidebar nav a[href="#/admin"], .sidebar nav a[data-view="admin"]',
+    title: '⚙️ Settings — fully customisable',
+    body: 'Theme colours, modules, custom fields, automations, integrations (Google Sheets, Meta WhatsApp, Facebook Lead Ads, Zapier webhooks)… all manageable from the admin panel.',
+    placement: 'right'
+  },
+  {
+    hash: '#/dashboard',
+    title: '🎉 You\'re all set',
+    body: 'That\'s the showcase! Click around freely — nothing you do here affects production. When you\'re ready to set up your own workspace, sign up for a real tenant from the website. Press the 📚 button anytime to retake this tour.',
+    placement: 'center'
+  }
+];
+
+let _tourState = null;
+
+function _showcaseTourEnabled() {
+  return CRM && CRM.cache && CRM.cache.config &&
+         (CRM.cache.config.DEMO_TOUR_ENABLED === '1' || CRM.cache.config.DEMO_TENANT === '1');
+}
+
+function _initShowcaseTour() {
+  if (!_showcaseTourEnabled()) return;
+  if (document.getElementById('tour-fab')) return;
+
+  // 📚 button — sits below the ✨ Copilot FAB
+  const fab = h('button', {
+    id: 'tour-fab',
+    title: '📚 Take the showcase tour',
+    style: {
+      position: 'fixed', bottom: '88px', right: '20px',
+      width: '52px', height: '52px', borderRadius: '50%',
+      border: 'none', cursor: 'pointer', zIndex: '9988',
+      background: 'linear-gradient(135deg, #f59e0b 0%, #ef4444 100%)',
+      color: '#fff', fontSize: '20px',
+      boxShadow: '0 6px 20px rgba(245,158,11,.45)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center'
+    }
+  }, '📚');
+  fab.onclick = () => startShowcaseTour();
+  document.body.appendChild(fab);
+
+  // Auto-launch on first login (only once per tenant, per browser)
+  try {
+    const seenKey = 'showcase_tour_seen_' + (window.TENANT_SLUG || 'unknown');
+    if (!localStorage.getItem(seenKey)) {
+      setTimeout(() => {
+        startShowcaseTour();
+        localStorage.setItem(seenKey, '1');
+      }, 1500);
+    }
+  } catch (_) {}
+}
+
+function startShowcaseTour() {
+  _stopShowcaseTour();
+  _tourState = { idx: 0, total: _SHOWCASE_TOUR_STEPS.length };
+  _renderTourStep();
+}
+
+function _stopShowcaseTour() {
+  document.getElementById('tour-overlay')?.remove();
+  document.getElementById('tour-spotlight')?.remove();
+  document.getElementById('tour-tooltip')?.remove();
+  _tourState = null;
+}
+
+async function _renderTourStep() {
+  if (!_tourState) return;
+  const step = _SHOWCASE_TOUR_STEPS[_tourState.idx];
+  if (!step) { _stopShowcaseTour(); return; }
+
+  // Navigate first if step targets a different view
+  if (step.hash && location.hash !== step.hash) {
+    location.hash = step.hash;
+    await new Promise(r => setTimeout(r, 600));
+  }
+
+  // Wipe previous step's overlay/tooltip
+  document.getElementById('tour-overlay')?.remove();
+  document.getElementById('tour-spotlight')?.remove();
+  document.getElementById('tour-tooltip')?.remove();
+
+  // Backdrop overlay (semi-transparent)
+  const overlay = h('div', {
+    id: 'tour-overlay',
+    style: {
+      position: 'fixed', inset: '0', background: 'rgba(15,23,42,.55)',
+      zIndex: '9994', pointerEvents: 'auto'
+    }
+  });
+  document.body.appendChild(overlay);
+
+  // Find target element if step has a selector
+  let target = null;
+  if (step.selector) {
+    const sels = step.selector.split(',').map(s => s.trim());
+    for (const s of sels) {
+      try { target = document.querySelector(s); if (target) break; } catch (_) {}
+    }
+  }
+
+  // Spotlight (cutout) — implemented as a transparent box with a huge
+  // dark box-shadow extending outward to dim everything else.
+  let pos = null;
+  if (target && step.placement !== 'center') {
+    const r = target.getBoundingClientRect();
+    pos = { top: r.top - 6, left: r.left - 6, width: r.width + 12, height: r.height + 12 };
+    const spot = h('div', {
+      id: 'tour-spotlight',
+      style: {
+        position: 'fixed',
+        top: pos.top + 'px', left: pos.left + 'px',
+        width: pos.width + 'px', height: pos.height + 'px',
+        borderRadius: '8px',
+        boxShadow: '0 0 0 9999px rgba(15,23,42,.55), 0 0 0 3px #6366f1',
+        zIndex: '9995', pointerEvents: 'none',
+        transition: 'all .25s ease'
+      }
+    });
+    document.body.appendChild(spot);
+    overlay.style.background = 'transparent';      // spotlight handles the dim
+    overlay.style.pointerEvents = 'none';
+  }
+
+  // Tooltip card
+  const idx = _tourState.idx;
+  const total = _tourState.total;
+  const card = h('div', {
+    id: 'tour-tooltip',
+    style: {
+      position: 'fixed',
+      width: '320px', maxWidth: 'calc(100vw - 40px)',
+      background: '#fff', borderRadius: '12px',
+      boxShadow: '0 14px 40px rgba(15,23,42,.4)',
+      zIndex: '9996',
+      padding: '1rem 1.1rem',
+      fontSize: '.9rem', lineHeight: '1.45',
+      color: '#0f172a',
+      border: '1px solid #e2e8f0'
+    }
+  });
+  card.appendChild(h('div', { style: { fontSize: '.7rem', color: '#64748b', marginBottom: '.3rem', textTransform: 'uppercase', letterSpacing: '.05em' } },
+    'Step ' + (idx + 1) + ' of ' + total));
+  card.appendChild(h('div', { style: { fontWeight: '700', fontSize: '1rem', marginBottom: '.4rem' } }, step.title));
+  card.appendChild(h('div', { style: { color: '#334155', marginBottom: '.85rem' } }, step.body));
+
+  const btnRow = h('div', { style: { display: 'flex', gap: '.4rem', justifyContent: 'space-between', alignItems: 'center' } });
+  btnRow.appendChild(h('button', {
+    style: { padding: '.35rem .7rem', borderRadius: '6px', border: 'none', background: 'transparent', color: '#64748b', cursor: 'pointer', fontSize: '.82rem' },
+    onclick: () => _stopShowcaseTour()
+  }, 'Skip tour'));
+  const navWrap = h('div', { style: { display: 'flex', gap: '.4rem' } });
+  if (idx > 0) {
+    navWrap.appendChild(h('button', {
+      style: { padding: '.4rem .8rem', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#fff', cursor: 'pointer', fontSize: '.85rem' },
+      onclick: () => { _tourState.idx -= 1; _renderTourStep(); }
+    }, '← Back'));
+  }
+  navWrap.appendChild(h('button', {
+    style: { padding: '.4rem .9rem', borderRadius: '6px', border: 'none', background: '#6366f1', color: '#fff', cursor: 'pointer', fontWeight: '600', fontSize: '.85rem' },
+    onclick: () => {
+      if (idx + 1 >= total) _stopShowcaseTour();
+      else { _tourState.idx += 1; _renderTourStep(); }
+    }
+  }, idx + 1 >= total ? 'Finish ✓' : 'Next →'));
+  btnRow.appendChild(navWrap);
+  card.appendChild(btnRow);
+  document.body.appendChild(card);
+
+  // Position the tooltip
+  const margin = 14;
+  if (!pos || step.placement === 'center') {
+    card.style.left = '50%'; card.style.top = '50%'; card.style.transform = 'translate(-50%, -50%)';
+  } else {
+    const cardW = 320, cardH = card.offsetHeight || 200;
+    let left, top;
+    const place = step.placement || 'right';
+    if (place === 'right') {
+      left = pos.left + pos.width + margin;
+      top  = pos.top;
+      if (left + cardW > window.innerWidth - 10) { // not enough room — fall back to left
+        left = pos.left - cardW - margin;
+      }
+    } else if (place === 'left') {
+      left = pos.left - cardW - margin;
+      top  = pos.top;
+      if (left < 10) { left = pos.left + pos.width + margin; }
+    } else if (place === 'top') {
+      left = pos.left + (pos.width - cardW) / 2;
+      top  = pos.top - cardH - margin;
+    } else { // bottom
+      left = pos.left + (pos.width - cardW) / 2;
+      top  = pos.top + pos.height + margin;
+    }
+    // Clamp inside viewport
+    left = Math.max(10, Math.min(left, window.innerWidth - cardW - 10));
+    top  = Math.max(10, Math.min(top,  window.innerHeight - cardH - 10));
+    card.style.left = left + 'px'; card.style.top = top + 'px';
+  }
+
+  // Allow ESC to skip
+  const onEsc = ev => { if (ev.key === 'Escape') { document.removeEventListener('keydown', onEsc); _stopShowcaseTour(); } };
+  document.addEventListener('keydown', onEsc, { once: true });
+}
+
+// Hook the tour init into the same boot path used for the Copilot FAB.
+(function bootShowcaseTour() {
+  function start() {
+    let n = 0;
+    const t = setInterval(() => {
+      if (typeof CRM !== 'undefined' && CRM.user && CRM.cache && CRM.cache.config) {
+        _initShowcaseTour();
+        clearInterval(t);
+      } else if (++n > 240) clearInterval(t);
+    }, 500);
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', start, { once: true });
+  } else {
+    start();
+  }
+})();

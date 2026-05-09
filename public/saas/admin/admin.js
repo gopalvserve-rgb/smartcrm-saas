@@ -342,7 +342,15 @@ function editPackage(p) {
 VIEWS.tenants = async (view) => {
   view.appendChild(h('div', { class: 'toolbar' },
     h('h1', {}, 'Tenants'),
-    h('button', { class: 'btn primary', onclick: () => openCreateTenant() }, '+ Create tenant')
+    h('button', { class: 'btn primary', onclick: () => openCreateTenant() }, '+ Create tenant'),
+    // 🌟 One-click showcase demo: creates (or refreshes) a 'showcase'
+    // tenant pre-loaded with leads, products, recordings (with fake AI),
+    // quotations, etc. so we can hand prospects a working URL.
+    h('button', {
+      class: 'btn ghost', style: { marginLeft: '.5rem' },
+      title: 'Create or refresh the showcase demo tenant with sample data',
+      onclick: () => openShowcaseDemoModal()
+    }, '🌟 Showcase demo')
   ));
   let list;
   try { list = await api('api_saas_tenants_list', {}); }
@@ -562,6 +570,89 @@ function showCreateTenantSuccess(r) {
   card.appendChild(body);
   m.appendChild(card);
   document.body.appendChild(m);
+}
+
+// ---------- 🌟 Showcase demo tenant ----------
+// One-click "create or refresh" the showcase demo. Calls
+// api_saas_demo_seed which provisions tenant 'showcase' (if missing)
+// and seeds it with users, products, leads, recordings (with fake
+// AI summaries / audits / ratings), quotations, etc.
+async function openShowcaseDemoModal() {
+  const m = h('div', { class: 'modal-bd' });
+  const card = h('div', { class: 'modal', style: { maxWidth: '560px' } });
+  card.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, '🌟 Showcase Demo'),
+    h('button', { class: 'x', onclick: () => m.remove() }, '✕')
+  ));
+  const body = h('div', { class: 'modal-body' });
+  body.appendChild(h('p', {},
+    'Creates (or refreshes) a fully-loaded demo tenant at ',
+    h('code', {}, '/t/showcase'),
+    '. The workspace is pre-populated with:'
+  ));
+  body.appendChild(h('ul', { style: { fontSize: '.88rem', color: '#475569', lineHeight: '1.6' } },
+    h('li', {}, '5 sales users + admin'),
+    h('li', {}, '6 products, 5 sources, 7 statuses'),
+    h('li', {}, '5 project stages, 8 tags, 4 custom fields'),
+    h('li', {}, '30 leads spread across the pipeline'),
+    h('li', {}, '10 call recordings with pre-baked AI summaries, action items, sentiment, ratings + audit notes'),
+    h('li', {}, '10 quotations (mixed states: draft / sent / accepted / rejected)'),
+    h('li', {}, 'Welcome announcement + brand theme + interactive in-app tour')
+  ));
+  body.appendChild(h('p', { class: 'muted', style: { fontSize: '.82rem' } },
+    'Re-running this resets all transactional data (leads, quotations, recordings) but preserves the workspace itself. Admin password is reset to the documented demo password each run.'
+  ));
+
+  const status = h('div', { id: 'demo-status', style: { padding: '.6rem', background: '#f8fafc', borderRadius: '6px', fontSize: '.85rem', minHeight: '2rem', display: 'none' } });
+  body.appendChild(status);
+
+  const result = h('div', { id: 'demo-result', style: { display: 'none', marginTop: '.6rem' } });
+  body.appendChild(result);
+
+  const runBtn = h('button', { class: 'btn primary', id: 'demo-run-btn', onclick: () => _runDemoSeed() }, '✨ Create / refresh demo');
+  const cancelBtn = h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Close');
+  body.appendChild(h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: '.5rem', marginTop: '1rem' } }, cancelBtn, runBtn));
+
+  card.appendChild(body);
+  m.appendChild(card);
+  document.body.appendChild(m);
+
+  async function _runDemoSeed() {
+    runBtn.disabled = true;
+    runBtn.textContent = '⏳ Working… (this can take 20-60 seconds)';
+    status.style.display = 'block';
+    status.textContent = 'Provisioning database, seeding leads, recordings, quotations…';
+    try {
+      const r = await api('api_saas_demo_seed', {});
+      status.style.background = '#dcfce7'; status.style.color = '#166534';
+      status.textContent = '✅ Done! ' + Object.entries(r.counts).map(([k, v]) => v + ' ' + k).join(', ');
+      result.style.display = 'block';
+      const credBox = (lbl, val) => h('div', { style: { background: '#f1f5f9', padding: '.6rem .8rem', borderRadius: '6px', margin: '.4rem 0' } },
+        h('div', { class: 'muted', style: { fontSize: '.72rem', textTransform: 'uppercase', letterSpacing: '.04em' } }, lbl),
+        h('div', { style: { fontFamily: 'monospace', fontSize: '.95rem', wordBreak: 'break-all' } }, val)
+      );
+      result.innerHTML = '';
+      result.appendChild(credBox('Login URL', r.url));
+      result.appendChild(credBox('Email',     r.email));
+      result.appendChild(credBox('Password',  r.password));
+      result.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', marginTop: '.5rem', flexWrap: 'wrap' } },
+        h('button', { class: 'btn primary', onclick: () => { window.open(r.url, '_blank'); } }, '🔓 Open demo workspace ↗'),
+        h('button', { class: 'btn ghost', onclick: () => {
+          try {
+            navigator.clipboard.writeText('URL: ' + r.url + '\nEmail: ' + r.email + '\nPassword: ' + r.password);
+            toast('Copied');
+          } catch (_) { toast('Copy failed', 'err'); }
+        } }, '📋 Copy creds')
+      ));
+      runBtn.textContent = '🔄 Re-run (refresh data)';
+      runBtn.disabled = false;
+    } catch (e) {
+      status.style.background = '#fee2e2'; status.style.color = '#991b1b';
+      status.textContent = '❌ ' + e.message;
+      runBtn.disabled = false;
+      runBtn.textContent = '✨ Create / refresh demo';
+    }
+  }
 }
 
 VIEWS.invoices = async (view) => {

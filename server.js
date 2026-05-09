@@ -45,6 +45,7 @@ const crashReport = require('./routes/saas/crashReport');
 const aiSettings = require('./routes/saas/aiSettings');
 const aiCosting  = require('./routes/saas/aiCosting');
 const tenantModules = require('./routes/saas/tenantModules');
+const demoTenant = require('./routes/saas/demoTenant');
 
 // Combine every SaaS api_* into one dispatch map
 const SAAS_API = {};
@@ -52,7 +53,7 @@ const SAAS_API = {};
   superAdmin, packages, signup, tenants, invoices, settings,
   announcements, customReqs, webhookLogs, errorLogs, whatsbotBackfill, applySchema, crashReport,
   aiSettings, aiCosting,
-  tenantModules
+  tenantModules, demoTenant
 ].forEach(mod => {
   Object.keys(mod).forEach(k => {
     if (typeof mod[k] === 'function' && k.startsWith('api_saas_')) SAAS_API[k] = mod[k];
@@ -1417,4 +1418,4 @@ setInterval(() => {
 
   app.listen(PORT, () => console.log('[boot] SmartCRM SaaS listening on :' + PORT));
 }
-boot().catch(e => { console.error('[boot] failed:', e); process.exit(1); });
+boot().ca
