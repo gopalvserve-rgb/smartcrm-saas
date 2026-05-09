@@ -1044,6 +1044,33 @@ async function api_leads_update(token, id, patch) {
   if (assigneeChanged) {
     try { require('../utils/automations').fire('lead_assigned', { lead: Object.assign({}, lead, allowed), user: me }); } catch (_) {}
     try { require('./tat').logAction(id, 'assigned', me.id, { from: lead.assigned_to, to: patch.assigned_to }); } catch (_) {}
+
+    // Reassign any WA chat thread tied to this lead's phone numbers so
+    // the new owner sees the conversation in their inbox. Without this,
+    // the chat stayed pinned to the previous agent's thread list.
+    try {
+      const newOwnerId = Number(patch.assigned_to);
+      const phones = [lead.phone, lead.whatsapp]
+        .map(p => String(p || '').replace(/\D/g, ''))
+        .filter(Boolean);
+      const variants = new Set();
+      phones.forEach(p => {
+        variants.add(p);
+        if (p.length > 10) variants.add(p.slice(-10));
+      });
+      for (const ph of variants) {
+        await db.query(
+          `INSERT INTO wa_chat_assignments (phone, assigned_to, assigned_by, assigned_at, note)
+           VALUES ($1, $2, $3, NOW(), $4)
+           ON CONFLICT (phone) DO UPDATE
+              SET assigned_to = EXCLUDED.assigned_to,
+                  assigned_by = EXCLUDED.assigned_by,
+                  assigned_at = EXCLUDED.assigned_at,
+                  note = EXCLUDED.note`,
+          [ph, newOwnerId, Number(me.id), 'Auto-reassigned with lead']
+        );
+      }
+    } catch (e) { console.warn('[leads] chat reassign skipped:', e.message); }
     // Direct push to the new assignee — same SMS-style banner the lead-create
     // flow uses. Fire-and-forget so we don't block the response.
     setImmediate(async () => {
