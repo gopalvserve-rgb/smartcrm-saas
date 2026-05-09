@@ -30,6 +30,7 @@
 const db = require('../db/pg');
 const { authUser } = require('../utils/auth');
 const gemini = require('../utils/geminiClient');
+const setupGuide = require('../utils/setupGuide');
 
 // ---- Per-pool schema bootstrap --------------------------------------
 const _ensuredPools = new WeakSet();
@@ -258,7 +259,14 @@ const TOOLS = [
     parameters: { type: 'object', properties: {
       user: { type: 'string', description: 'Optional user name to filter' },
       limit: { type: 'number' }
-    } } },
+    } } },,
+
+  // ---- PLATFORM HELP / SETUP GUIDE -------------------------------
+  { name: 'lookup_setup_guide',
+    description: "Look up step-by-step setup instructions from the SmartCRM Setup Guide. Use whenever the user asks 'how do I...', 'how to set up...', 'where do I configure...', 'is there a guide for...', or anything about Pabbly / Make / Zapier / Meta Lead Ads / Google Ads / WhatsApp / AI Bot / SMTP / push notifications / mobile app / custom fields / campaigns / TAT / auto-assign rules / permissions / Calendly / CSV import. Returns the matching guide section with steps + a deep-link URL the user can open.",
+    parameters: { type: 'object', properties: {
+      query: { type: 'string', description: 'The user setup question, eg. "set up Pabbly", "WhatsApp embedded sign in", "create a custom field"' }
+    }, required: ['query'] } }
 
 ];
 
@@ -317,6 +325,18 @@ async function _resolveUserId(name) {
 // ---- Tool dispatcher ------------------------------------------------
 async function _runTool(name, args, ctx) {
   switch (name) {
+    case 'lookup_setup_guide': {
+      const q = String((args && args.query) || '').trim();
+      if (!q) return { results: [], note: 'No query provided.' };
+      const hits = setupGuide.lookup(q, 3);
+      if (!hits.length) {
+        return { results: [], note: "No matching guide section. Tell the user that and offer to email support@smartcrmsolution.com or browse https://crm.smartcrmsolution.com/saas/help/" };
+      }
+      return {
+        results: hits.map(h => ({ section_id: h.id, title: h.title, url: h.url, content: h.body })),
+        note: 'Cite the section title and include the URL in the answer so the user can read the full guide.'
+      };
+    }
     // ---- LEADS ---------------------------------------------------
     case 'count_leads': {
       const r = _resolveBounds(args);
@@ -1317,6 +1337,20 @@ PICKING THE RIGHT TOOL — examples:
 • "What's on my plate today?" → my_tasks_today
 • "Report for last week" → report_summary(from=..., to=...)
 • "Performance of Priya Iyer" → employee_performance + filter by name in your summary
+
+PLATFORM HELP / SETUP QUESTIONS:
+For ANY question about how to set up, configure, install, or troubleshoot a feature - call lookup_setup_guide first. Examples:
+• "How do I set up Pabbly?" → lookup_setup_guide(query='Pabbly setup')
+• "How to connect WhatsApp" → lookup_setup_guide(query='WhatsApp Cloud API embedded sign in')
+• "How do I install the mobile app" → lookup_setup_guide(query='mobile app install APK')
+• "How do I add a custom field for budget" → lookup_setup_guide(query='custom field add')
+• "Push notifications not working" → lookup_setup_guide(query='push notifications troubleshoot')
+• "How do I configure SMTP for Gmail" → lookup_setup_guide(query='SMTP Gmail app password')
+• "How to import leads from Zoho" → lookup_setup_guide(query='CSV import Zoho')
+• "Set up auto assign" → lookup_setup_guide(query='auto-assign rules')
+• "How does TAT work" → lookup_setup_guide(query='TAT SLA')
+• "How to train the AI bot" → lookup_setup_guide(query='AI bot knowledge base train')
+After calling, synthesise a SHORT step-by-step answer using the returned content, AND end with the URL so the user can read the full guide.
 
 IMPORTANT RULES:
 1. ALWAYS use a tool — never make up names, counts, or amounts.
