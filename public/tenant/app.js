@@ -15269,25 +15269,27 @@ async function checkInOut(which) {
     catch (e) { toast(e.message, 'err'); }
   };
   if (!navigator.geolocation) {
-    toast('⚠ Geolocation not available on this device — checking in without location', 'warn');
-    return call(null, null);
+    toast('❌ Cannot mark attendance — this device does not support GPS / geolocation. Use a phone with GPS or speak to admin.', 'err');
+    return;   // HARD BLOCK — no fallback
   }
   if (typeof toast === 'function') toast('📍 Getting your location…', 'info');
   navigator.geolocation.getCurrentPosition(
     p => call(p.coords.latitude, p.coords.longitude),
     (err) => {
+      // HARD BLOCK — admin policy: no location, no attendance.
       const reason = err && err.code === err.PERMISSION_DENIED
-        ? 'Location permission denied — Settings → Apps → CRM → Permissions → Location → Allow'
+        ? 'Location permission DENIED.\n\nGo to Settings → Apps → CRM → Permissions → Location → Allow → reopen the app and try again.'
         : err && err.code === err.POSITION_UNAVAILABLE
-          ? 'Location unavailable (no GPS signal) — try going outside or near a window'
+          ? 'Location unavailable (no GPS signal).\n\nGo outside or near a window, wait 10 seconds, then try again.'
           : err && err.code === err.TIMEOUT
-            ? 'Location lookup timed out — check GPS is on'
+            ? 'Location lookup timed out.\n\nMake sure GPS is ON in your phone settings, then try again.'
             : 'Could not get location: ' + (err && err.message ? err.message : 'unknown');
-      toast('⚠ ' + reason + ' · checking in without location', 'warn');
-      console.warn('[attendance] geolocation failed:', err);
-      call(null, null);
+      // Show as a confirm-style alert so the user can't miss it. Also log
+      // for chrome://inspect debugging.
+      console.warn('[attendance] geolocation failed — check-in BLOCKED:', err);
+      alert('❌ Cannot mark attendance — location is required.\n\n' + reason);
     },
-    { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 }
+    { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
   );
 }
 
