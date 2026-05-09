@@ -137,7 +137,10 @@ async function ensureSchema() {
     console.warn('[push] could not ensure push tables:', e.message);
   }
 }
-ensureSchema();
+// Module-level schema bootstrap removed — on the SaaS server require()
+// happens before any tenant context exists, so ensureSchema() ran
+// against the wrong pool and never actually created the per-tenant
+// push_subscriptions table. Per-pool ensure-on-first-call below.
 ensureVapid().catch(e => console.warn('[push] vapid init failed:', e.message));
 _initFcm();
 
@@ -150,8 +153,21 @@ async function api_push_publicKey(token) {
   return { publicKey: v.publicKey };
 }
 
+const _pushEnsuredPools = new WeakSet();
+async function _ensurePushSchema() {
+  let pool = null;
+  try {
+    const store = db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore();
+    pool = store && store.pool;
+  } catch (_) {}
+  if (pool && _pushEnsuredPools.has(pool)) return;
+  await ensureSchema();
+  if (pool) _pushEnsuredPools.add(pool);
+}
+
 async function api_push_subscribe(token, subscription, ua) {
   const me = await authUser(token);
+  await _ensurePushSchema();
   if (!subscription || !subscription.endpoint || !subscription.keys) {
     throw new Error('Invalid subscription payload');
   }

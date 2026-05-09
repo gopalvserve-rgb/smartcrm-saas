@@ -108,8 +108,24 @@ async function api_aibot_settings_get(token) {
   };
 }
 
+const _aiBotEnsuredPools = new WeakSet();
+async function _ensureAiBotColumns() {
+  let pool = null;
+  try {
+    const store = db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore();
+    pool = store && store.pool;
+  } catch (_) {}
+  if (pool && _aiBotEnsuredPools.has(pool)) return;
+  try {
+    await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS resume_after_idle_seconds INTEGER NOT NULL DEFAULT 86400`);
+    await db.query(`UPDATE ai_bot_settings SET resume_after_idle_seconds = COALESCE(resume_after_idle_minutes, 1440) * 60 WHERE resume_after_idle_seconds = 86400 AND resume_after_idle_minutes IS NOT NULL`);
+    if (pool) _aiBotEnsuredPools.add(pool);
+  } catch (e) { /* table missing — _coerceSettings handles defaults */ }
+}
+
 async function api_aibot_settings_save(token, payload) {
   const me = await authUser(token);
+  await _ensureAiBotColumns();
   if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
   const p = payload || {};
 
