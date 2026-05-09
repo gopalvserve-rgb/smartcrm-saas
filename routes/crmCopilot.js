@@ -318,6 +318,79 @@ async function _todaysCount(userId) {
   } catch (_) { return 0; }
 }
 
+// ---- Tool-result -> text fallback ----------------------------------
+//
+// Called when Gemini ran a tool but returned no text (e.g. budget cut
+// off, empty candidate, or model only emitted a function-call on the
+// final turn). We turn the structured tool result into a readable
+// answer so the user sees the data they asked for instead of a
+// useless "(no answer)" bubble.
+function _formatToolFallback(toolsCalled, question) {
+  const lines = [];
+  for (const t of toolsCalled) {
+    const name = t.name;
+    const r = t.result || {};
+    if (r && r.error) {
+      lines.push('⚠ ' + name + ': ' + r.error);
+      continue;
+    }
+    if (name === 'count_leads') {
+      lines.push('📊 You have **' + Number(r.count || 0).toLocaleString('en-IN') + '** matching lead(s).');
+      if (r.period && r.period.from) lines.push('Period: ' + r.period.from + ' → ' + r.period.to);
+    } else if (name === 'pipeline_funnel') {
+      const stages = Array.isArray(r.stages) ? r.stages : [];
+      const total = stages.reduce((a, s) => a + Number(s.c || 0), 0);
+      lines.push('📊 **Pipeline funnel** (' + stages.length + ' statuses, ' + total.toLocaleString('en-IN') + ' leads total):');
+      for (const s of stages) lines.push('• ' + s.name + ': ' + Number(s.c || 0).toLocaleString('en-IN'));
+    } else if (name === 'list_leads') {
+      const rows = Array.isArray(r.leads) ? r.leads : Array.isArray(r) ? r : [];
+      if (!rows.length) { lines.push('No matching leads found.'); }
+      else {
+        lines.push('📋 Top ' + rows.length + ' lead(s):');
+        for (const l of rows.slice(0, 10)) {
+          const status = l.status_name || l.status || '';
+          const assignee = l.assignee_name || l.assigned_to_name || '';
+          const bits = [l.name || l.lead_name, l.company, status, assignee].filter(Boolean);
+          lines.push('• ' + bits.join(' — '));
+        }
+      }
+    } else if (name === 'employee_performance') {
+      const rows = Array.isArray(r.rows) ? r.rows : Array.isArray(r) ? r : [];
+      if (!rows.length) { lines.push('No performance data found for that period.'); }
+      else {
+        lines.push('👥 **Employee performance**:');
+        for (const e of rows) {
+          const bits = [e.user_name || e.name, 'leads:' + (e.leads || 0), 'won:' + (e.won || 0), 'remarks:' + (e.remarks || 0)].filter(Boolean);
+          lines.push('• ' + bits.join(' · '));
+        }
+      }
+    } else if (name === 'report_summary') {
+      const k = (r.kpis || r);
+      lines.push('📊 **Report summary**:');
+      Object.keys(k).forEach(key => {
+        if (typeof k[key] === 'object') return;
+        lines.push('• ' + key.replace(/_/g, ' ') + ': ' + k[key]);
+      });
+    } else if (name === 'my_tasks_today') {
+      const tasks = (r.tasks || []), fus = (r.followups || []);
+      lines.push('✅ **Today\u2019s plate**: ' + tasks.length + ' task(s), ' + fus.length + ' follow-up(s)');
+      tasks.slice(0, 5).forEach(t => lines.push('• Task: ' + (t.title || t.task || '(untitled)')));
+      fus.slice(0, 5).forEach(f => lines.push('• Follow-up #' + (f.lead_id || '?') + ': ' + (f.note || '')));
+    } else if (name === 'todays_calls') {
+      const c = r.counts || {};
+      lines.push('📞 **Today\u2019s calls** — ' + (Object.entries(c).map(([k, v]) => k + ': ' + v).join(' · ') || 'none yet'));
+    } else {
+      try {
+        const s = JSON.stringify(r, null, 2);
+        if (s.length < 1500) lines.push('```\n' + s + '\n```');
+        else lines.push('(Tool ' + name + ' returned ' + s.length + ' chars of data)');
+      } catch (_) { lines.push('(Tool ' + name + ' returned non-serialisable data)'); }
+    }
+  }
+  if (!lines.length) return '';
+  return lines.join('\n') + '\n\n_(Synthesised from tool data — Gemini\u2019s narrative response was empty.)_';
+}
+
 // ---- Public API -----------------------------------------------------
 async function api_copilot_ask(token, message, history) {
   const me = await authUser(token);
@@ -350,12 +423,21 @@ async function api_copilot_ask(token, message, history) {
     system, history: hist, prompt: text,
     tools: TOOLS,
     runTool: (name, args) => _runTool(name, args, ctx),
-    maxTurns: 6, maxOutputTokens: 800, temperature: 0.2,
+    maxTurns: 6, maxOutputTokens: 1500, temperature: 0.2,
   });
 
   // Persist the call regardless of success — counts toward the daily
   // quota (so a flood of failures still gets capped).
   let answer = result.text || '';
+
+  // Fallback: if Gemini returned no text but at least one tool ran
+  // successfully, synthesize a human-readable answer from the tool
+  // result so the user doesn't see "(no answer)" when the data is
+  // actually right there. This covers MAX_TOKENS, empty candidate,
+  // or model-only-emits-functioncall cases.
+  if (!answer && Array.isArray(result.tools_called) && result.tools_called.length) {
+    answer = _formatToolFallback(result.tools_called, text);
+  }
   try {
     await db.query(
       `INSERT INTO crm_copilot_log
