@@ -56,7 +56,7 @@ const _DEFAULT_SETTINGS = {
   escalation_keywords: '',
   model_override: null,
   use_kb: 1,
-  kb_max_chars: 60000,
+  kb_max_chars: 8000,
   history_messages: 8,
 };
 
@@ -225,7 +225,7 @@ async function _api_aibot_settings_save_LEGACY_FULL_REPLACE(token, payload) {
       String(p.escalation_keywords || '').slice(0, 1000),
       p.model_override ? String(p.model_override).slice(0, 80) : null,
       p.use_kb ? 1 : 0,
-      Math.max(2000, Math.min(120000, Number(p.kb_max_chars || 60000))),
+      Math.max(2000, Math.min(120000, Number(p.kb_max_chars || 8000))),
       Math.max(0, Math.min(40, Number(p.history_messages || 8))),
     ]
   );
@@ -552,7 +552,7 @@ async function _buildPrompt(settings, phone, leadId, inboundText) {
   // KB
   let kb = '';
   if (Number(settings.use_kb) === 1) {
-    const cap = Math.max(2000, Number(settings.kb_max_chars || 60000));
+    const cap = Math.max(2000, Number(settings.kb_max_chars || 8000));
     const r = await db.query(
       `SELECT title, raw_text FROM ai_kb_documents WHERE is_active = 1 ORDER BY id ASC`
     );

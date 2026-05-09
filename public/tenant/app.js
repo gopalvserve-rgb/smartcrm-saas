@@ -6485,7 +6485,7 @@ async function _aibotSettingsView() {
   idleQuick.onchange = () => { if (idleQuick.value) { idleSec.value = idleQuick.value; idleQuick.value = ''; } };
   const maxReplies = h('input', { type: 'number', value: s.max_replies_per_thread || 0, min: 0, style: { width: '8rem' } });
   const useKb = h('input', { type: 'checkbox', checked: s.use_kb ? 'checked' : null });
-  const kbCap = h('input', { type: 'number', value: s.kb_max_chars || 60000, min: 2000, max: 120000, step: 5000, style: { width: '8rem' } });
+  const kbCap = h('input', { type: 'number', value: s.kb_max_chars || 8000, min: 2000, max: 120000, step: 5000, style: { width: '8rem' } });
   const histCount = h('input', { type: 'number', value: s.history_messages != null ? s.history_messages : 8, min: 0, max: 40, style: { width: '8rem' } });
   wrap.appendChild(h('div', { class: 'card' },
     h('h3', { style: { marginTop: 0 } }, 'Safety & advanced'),
@@ -6517,7 +6517,7 @@ async function _aibotSettingsView() {
       resume_after_idle_seconds: Number(idleSec.value || 0),
       max_replies_per_thread: Number(maxReplies.value || 0),
       use_kb: useKb.checked,
-      kb_max_chars: Number(kbCap.value || 60000),
+      kb_max_chars: Number(kbCap.value || 8000),
       history_messages: Number(histCount.value || 8)
     };
     try {
@@ -6701,6 +6701,20 @@ async function _aibotUsageView() {
   if (u.this_month.suppressed) kpis.appendChild(kpi('⏸ Suppressed', u.this_month.suppressed, 'Times bot held back (agent active, off-keyword, etc.)', 'muted'));
   if (u.this_month.failed)     kpis.appendChild(kpi('⚠ Failed', u.this_month.failed, 'Gemini errors (not billed)', 'err'));
   wrap.appendChild(kpis);
+
+  // Cost-saving advice — visible right under the KPIs so admins
+  // can see what to do if the cost is high.
+  if (u.this_month.input_tokens && (u.this_month.input_tokens / Math.max(1, u.this_month.sent)) > 5000) {
+    wrap.appendChild(h('div', { class: 'card', style: { borderLeft: '4px solid #f59e0b', background: '#fffbeb' } },
+      h('h4', { style: { marginTop: 0, color: '#92400e' } }, '💡 Cost-saving tip'),
+      h('p', { class: 'muted', style: { margin: '.4rem 0' } },
+        'Each reply is sending ', h('b', {}, Math.round(u.this_month.input_tokens / Math.max(1, u.this_month.sent)).toLocaleString('en-IN')),
+        ' input tokens — most of that is your Knowledge Base being attached to every prompt.'),
+      h('p', { class: 'muted', style: { margin: '.4rem 0' } },
+        'Lower this in ', h('b', {}, 'AI Bot → Settings → "KB max chars per call"'),
+        '. Recommended: ', h('b', {}, '8,000'), ' (about 2,000 tokens). Drops cost by up to 80% with minimal answer-quality loss.'),
+    ));
+  }
 
   // Estimator
   const repInp = h('input', { type: 'number', value: 500, min: 1, step: 50, style: { width: '8rem' } });
