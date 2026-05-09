@@ -124,18 +124,29 @@ function _todayBounds() {
   return { from: startUtc.toISOString(), to: endUtc.toISOString() };
 }
 
-function _resolveBounds(args) {
+function _resolveBounds(args, opts) {
   const a = args || {};
+  const o = opts || {};
   if (a.from || a.to) {
     return {
       from: a.from ? new Date(a.from).toISOString() : new Date(0).toISOString(),
-      to:   a.to   ? new Date(new Date(a.to).getTime() + 24*3600*1000).toISOString() : new Date().toISOString()
+      to:   a.to   ? new Date(new Date(a.to).getTime() + 24*3600*1000).toISOString() : new Date().toISOString(),
+      explicit: true
     };
   }
-  // No bounds = last 30 days
+  // Default: ALL TIME so totals match the dashboard. Pass
+  // { defaultDays: 30 } to opt back into a recent window.
+  if (o.defaultDays) {
+    return {
+      from: new Date(Date.now() - o.defaultDays * 86400 * 1000).toISOString(),
+      to:   new Date().toISOString(),
+      explicit: false
+    };
+  }
   return {
-    from: new Date(Date.now() - 30 * 86400 * 1000).toISOString(),
-    to:   new Date().toISOString()
+    from: new Date(0).toISOString(),
+    to:   new Date(Date.now() + 86400 * 1000).toISOString(),
+    explicit: false
   };
 }
 
@@ -209,7 +220,7 @@ async function _runTool(name, args, ctx) {
       return { rows: q.rows, count_returned: q.rows.length };
     }
     case 'report_summary': {
-      const r = _resolveBounds(args);
+      const r = _resolveBounds(args, { defaultDays: 30 });
       const total = (await db.query(`SELECT COUNT(*)::int AS c FROM leads WHERE created_at >= $1 AND created_at < $2`, [r.from, r.to])).rows[0]?.c || 0;
       const byStatus = (await db.query(
         `SELECT s.name, COUNT(l.*)::int AS c FROM statuses s
@@ -227,7 +238,7 @@ async function _runTool(name, args, ctx) {
       return { total, won, lost, by_status: byStatus, by_source: bySource, period: r };
     }
     case 'employee_performance': {
-      const r = _resolveBounds(args);
+      const r = _resolveBounds(args, { defaultDays: 30 });
       const q = (await db.query(
         `SELECT u.id, u.name,
            COUNT(l.*)::int AS total,
@@ -408,8 +419,11 @@ async function api_copilot_ask(token, message, history) {
   const system = `You are the CRM data assistant for ${company}.
 - ONLY answer questions about leads, calls, tasks, follow-ups, employees, status, sources, pipeline, and reports for this CRM.
 - ALWAYS use the provided tools to fetch real data — never fabricate counts or names.
+- When the user asks for a TOTAL or "across the CRM" without specifying a time window, DO NOT pass from/to to the tools — leave them out so the tool returns ALL leads (not just last 30 days).
+- Only pass from/to when the user explicitly mentions a date range ("today", "this week", "last month", "in March", etc.).
 - If the user asks something off-topic (general world knowledge, code, etc.), politely refuse and remind them this is a CRM-only assistant.
 - Be concise. Format numerical answers as bullet lists when listing multiple items. Use "₹" for INR amounts.
+- After every tool call, ALWAYS produce a short natural-language summary of the result. Never end your turn silently.
 - Today's date is ${new Date().toISOString().slice(0, 10)} (UTC). The user is in IST.
 - Calling user: ${me.name} (role: ${me.role}).`;
 
@@ -437,6 +451,16 @@ async function api_copilot_ask(token, message, history) {
   // or model-only-emits-functioncall cases.
   if (!answer && Array.isArray(result.tools_called) && result.tools_called.length) {
     answer = _formatToolFallback(result.tools_called, text);
+  }
+
+  // Polite default if even the tool fallback came up empty.
+  if (!answer) {
+    answer = "I wasn\u2019t able to put together an answer for that one. Try asking me about your CRM data directly — for example:\n" +
+             "• How many leads do I have in total?\n" +
+             "• Show me 5 fresh leads\n" +
+             "• Which leads are out of TAT?\n" +
+             "• Employee performance this month\n" +
+             "• What\u2019s on my plate today?";
   }
   try {
     await db.query(

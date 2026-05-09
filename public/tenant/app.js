@@ -504,6 +504,16 @@ function logout() {
 /* ---------------- Login ---------------- */
 function renderLogin() {
   const app = $('#app');
+  // Demo tenants get their credentials pre-filled so visitors can just
+  // click Sign in. Detected via the slug — the showcase seeder always
+  // uses 'showcase'. Add more demo slugs to this list as needed.
+  const isDemoTenant = String(window.TENANT_SLUG || '').toLowerCase() === 'showcase';
+  const demoEmail    = isDemoTenant ? 'demo@smartcrm.in'   : '';
+  const demoPassword = isDemoTenant ? 'Showcase@123'       : '';
+  const demoBanner   = isDemoTenant
+    ? `<div style="margin:.75rem 0;padding:.6rem .8rem;background:#eef2ff;border:1px solid #c7d2fe;border-radius:8px;font-size:.82rem;color:#3730a3;text-align:left">
+         <b>👋 Demo workspace</b> — credentials are pre-filled. Just click <b>Sign in</b>.
+       </div>` : '';
   app.innerHTML = `
     <div class="login-screen">
       <div class="login-card">
@@ -512,12 +522,13 @@ function renderLogin() {
           <h1>${esc(CRM.config.company_name || 'Lead CRM')}</h1>
           <p class="muted">Sign in to continue</p>
         </div>
+        ${demoBanner}
         <form id="login-form">
           <label>Email</label>
-          <input type="email" name="email" autocomplete="username" required autofocus />
+          <input type="email" name="email" autocomplete="username" required ${isDemoTenant ? '' : 'autofocus'} value="${esc(demoEmail)}" />
           <label>Password</label>
-          <input type="password" name="password" autocomplete="current-password" required />
-          <button type="submit" class="btn primary block">Sign in</button>
+          <input type="password" name="password" autocomplete="current-password" required value="${esc(demoPassword)}" />
+          <button type="submit" class="btn primary block" ${isDemoTenant ? 'autofocus' : ''}>Sign in</button>
           <p id="login-err" class="error"></p>
         </form>
       </div>
