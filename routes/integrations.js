@@ -856,6 +856,54 @@ async function leadSourceWebhook(req, res) {
     } else {
       items = _adaptLeadSourcePayload(source, body);
     }
+
+    // Preserve custom fields from the original body across all adapters.
+    // Per-source adapters only project standard fields (name, phone, ...)
+    // so cf_<key> aliases and a custom_fields:{...} object would otherwise
+    // be lost before _internalCreateLead runs. Pull them out of the body
+    // (or each row of an array body, indexed) and stamp onto each item.
+    try {
+      const _bodyCustomFields = (b) => {
+        const out = {};
+        if (b && typeof b === 'object') {
+          // 1. flat cf_<key> aliases
+          Object.keys(b).forEach(k => {
+            if (k.startsWith('cf_') && b[k] != null && b[k] !== '') {
+              out[k.slice(3)] = b[k];
+            }
+          });
+          // 2. nested custom_fields object
+          if (b.custom_fields && typeof b.custom_fields === 'object') {
+            Object.keys(b.custom_fields).forEach(k => {
+              if (b.custom_fields[k] != null && b.custom_fields[k] !== '') {
+                out[k] = b.custom_fields[k];
+              }
+            });
+          }
+          // 3. cf nested under data wrapper (Make often wraps as data:{})
+          if (b.data && typeof b.data === 'object') {
+            const inner = _bodyCustomFields(b.data);
+            Object.assign(out, inner);
+          }
+        }
+        return out;
+      };
+      // For array-style bodies (IndiaMART RESPONSE[]), pair item[i] with row[i]
+      let rowsForIdx = null;
+      if (Array.isArray(body && body.RESPONSE)) rowsForIdx = body.RESPONSE;
+      else if (Array.isArray(body && body.response)) rowsForIdx = body.response;
+      else if (Array.isArray(body && body.leads)) rowsForIdx = body.leads;
+      else if (Array.isArray(body)) rowsForIdx = body;
+      const globalCfs = _bodyCustomFields(body);
+      items.forEach((item, i) => {
+        const rowCfs = rowsForIdx && rowsForIdx[i] ? _bodyCustomFields(rowsForIdx[i]) : {};
+        const merged = Object.assign({}, globalCfs, rowCfs);
+        if (Object.keys(merged).length) {
+          item.custom_fields = Object.assign({}, item.custom_fields || {}, merged);
+        }
+      });
+    } catch (e) { console.warn('[leadsource] cf passthrough failed:', e.message); }
+
     const owner = await db.getAll('users').then(us => us.find(u => u.role === 'admin'));
     if (!owner) return res.status(500).json({ error: 'No admin user to own leads' });
 
