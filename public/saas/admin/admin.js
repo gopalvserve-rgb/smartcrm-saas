@@ -1437,10 +1437,24 @@ VIEWS.ai_costing = async (view) => {
   const toInp     = h('input', { type: 'date', value: today });
   const tenantInp = h('input', { type: 'text', placeholder: 'Filter by tenant slug (blank = all)', style: { minWidth: '14rem' } });
   const refreshBtn= h('button', { class: 'btn ghost' }, '↻ Refresh');
+  const backfillBtn = h('button', { class: 'btn ghost', style: { marginLeft: '.5rem' },
+    title: 'Match orphan ai_usage_log rows (with empty tenant_slug) to the right tenant by phone + timestamp. Cleans up rows from before the multi-tenant scoping fix.' },
+    '🔧 Backfill orphans');
+  backfillBtn.onclick = async () => {
+    if (!confirm('Walk every orphan ai_usage_log row (no tenant_slug) and try to attribute it by matching phone + timestamp against each tenant\'s ai_chat_log. Idempotent — safe to re-run.')) return;
+    const orig = backfillBtn.textContent;
+    backfillBtn.textContent = '⏳ Working…'; backfillBtn.disabled = true;
+    try {
+      const r = await api('api_saas_backfill_aiusage_orphans');
+      alert('Done: ' + r.attributed + ' attributed, ' + r.unmatched + ' unmatched (of ' + r.total_orphans + ' orphans)\n\nBy tenant: ' + JSON.stringify(r.by_tenant, null, 2));
+      reload();
+    } catch (e) { alert('Backfill failed: ' + e.message); }
+    finally { backfillBtn.textContent = orig; backfillBtn.disabled = false; }
+  };
   view.appendChild(h('div', { class: 'card', style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap', alignItems: 'center' } },
     h('label', {}, 'From '), fromInp,
     h('label', {}, ' To '),  toInp,
-    tenantInp, refreshBtn));
+    tenantInp, refreshBtn, backfillBtn));
 
   const totalsCard = h('div', { class: 'card' }, h('div', { class: 'muted' }, 'Loading…'));
   const tableCard  = h('div', { class: 'card' });

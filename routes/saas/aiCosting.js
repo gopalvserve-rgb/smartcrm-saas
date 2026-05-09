@@ -66,7 +66,7 @@ async function api_saas_ai_costing_summary(token, opts) {
 
   const perTenant = await control.query(
     `SELECT
-        tenant_slug,
+        COALESCE(NULLIF(tenant_slug, ''), '(unattributed)') AS tenant_slug,
         COUNT(*)::int                                         AS calls,
         SUM(input_tokens)::int                                AS input_tokens,
         SUM(output_tokens)::int                               AS output_tokens,
