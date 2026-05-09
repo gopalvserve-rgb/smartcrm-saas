@@ -1366,58 +1366,6 @@ ${ssl ? `<div class="card" style="background:#dbeafe;border-color:#60a5fa;color:
 // clean JSON back even if the function name is wrong / the route
 // doesn't exist Ã¢ÂÂ preventing the "Unexpected token '<', '<!DOCTYPE'Ã¢ÂÂ¦"
 // crash that the legacy public/app.js was hitting earlier.
-app.all(/^\/api(\/.*)?$/, (req, res) => {
-  res.status(404).json({ error: 'Not found: ' + req.method + ' ' + req.originalUrl });
-});
-
-// Static assets live ONLY under /saas (mounted earlier above). No
-// catch-all express.static here Ã¢ÂÂ see comment block at the top of
-// this section for the rationale.
-
-// ---- Global error middleware (must be LAST) -------------------
-// Anything a route handler throws or rejects ends up here. Logs to
-// the error_logs table + returns 500 to the caller. The user asked
-// us to capture every error in our project Ã¢ÂÂ this is the catch-all.
-app.use(errorLogs.expressErrorMiddleware);
-
-// Process-level safety net Ã¢ÂÂ node will keep running after these,
-// so as long as we record them we can resolve them later.
-process.on('unhandledRejection', (reason) => {
-  console.error('[unhandledRejection]', reason);
-  errorLogs.logError({
-    source: 'process',
-    severity: 'fatal',
-    message: (reason && reason.message) || String(reason),
-    stack:   reason && reason.stack
-  }).catch(() => {});
-});
-process.on('uncaughtException', (err) => {
-  console.error('[uncaughtException]', err);
-  errorLogs.logError({
-    source: 'process',
-    severity: 'fatal',
-    message: err && err.message ? err.message : String(err),
-    stack:   err && err.stack
-  }).catch(() => {});
-});
-
-// ---- Boot -----------------------------------------------------
-const PORT = Number(process.env.PORT || 3000);
-async function boot() {
-  console.log('[boot] migrating control planeÃ¢ÂÂ¦');
-  await control.migrate();
-  // First-boot seed + per-boot settings backfill. seed-once is fully
-  // idempotent Ã¢ÂÂ it inserts the super-admin only if none exists, every
-  // package only if the row is missing by name, and every default
-  // setting only if that key isn't already in saas_settings. Running it
-  // every boot is safe and means new platform-default settings (e.g.
-  // SMTP defaults added in a later release) auto-apply on next deploy.
-  try {
-    await require('./control/seed-once')();
-  } catch (e) {
-    console.warn('[boot] auto-seed skipped:', e.message);
-  }
-
 // ---- WhatsApp chat: media upload + media proxy ----
 // /api/wa/upload  — multipart POST. Receives a file from the chat
 //                   composer, forwards it to Meta Graph as a media
@@ -1531,6 +1479,58 @@ app.get('/api/wa/media/:msgId', async (req, res) => {
       }
     });
 });
+
+app.all(/^\/api(\/.*)?$/, (req, res) => {
+  res.status(404).json({ error: 'Not found: ' + req.method + ' ' + req.originalUrl });
+});
+
+// Static assets live ONLY under /saas (mounted earlier above). No
+// catch-all express.static here Ã¢ÂÂ see comment block at the top of
+// this section for the rationale.
+
+// ---- Global error middleware (must be LAST) -------------------
+// Anything a route handler throws or rejects ends up here. Logs to
+// the error_logs table + returns 500 to the caller. The user asked
+// us to capture every error in our project Ã¢ÂÂ this is the catch-all.
+app.use(errorLogs.expressErrorMiddleware);
+
+// Process-level safety net Ã¢ÂÂ node will keep running after these,
+// so as long as we record them we can resolve them later.
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
+  errorLogs.logError({
+    source: 'process',
+    severity: 'fatal',
+    message: (reason && reason.message) || String(reason),
+    stack:   reason && reason.stack
+  }).catch(() => {});
+});
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err);
+  errorLogs.logError({
+    source: 'process',
+    severity: 'fatal',
+    message: err && err.message ? err.message : String(err),
+    stack:   err && err.stack
+  }).catch(() => {});
+});
+
+// ---- Boot -----------------------------------------------------
+const PORT = Number(process.env.PORT || 3000);
+async function boot() {
+  console.log('[boot] migrating control planeÃ¢ÂÂ¦');
+  await control.migrate();
+  // First-boot seed + per-boot settings backfill. seed-once is fully
+  // idempotent Ã¢ÂÂ it inserts the super-admin only if none exists, every
+  // package only if the row is missing by name, and every default
+  // setting only if that key isn't already in saas_settings. Running it
+  // every boot is safe and means new platform-default settings (e.g.
+  // SMTP defaults added in a later release) auto-apply on next deploy.
+  try {
+    await require('./control/seed-once')();
+  } catch (e) {
+    console.warn('[boot] auto-seed skipped:', e.message);
+  }
 
 // ── Lead-source & Google Sheet webhook endpoints ────────────────────────────
 app.post('/hook/leadsource/:source/:key', (req, res) => {
