@@ -1018,7 +1018,7 @@ function renderShell() {
  * for the Android APK if one is hosted in /public/.
  */
 function showGetApp() {
-  const apkHref = '/LeadCRM.apk';
+  const apkHref = (CRM.config && CRM.config.apk_url) ? CRM.config.apk_url : '';
   const ua = navigator.userAgent || '';
   const isAndroid = /android/i.test(ua);
   const isIOS = /iphone|ipad|ipod/i.test(ua);
@@ -1043,7 +1043,7 @@ function showGetApp() {
               h('li', {}, 'Open the new icon and allow notifications when prompted.')
             )
           ),
-          isAndroid || !isIOS ? h('div', { class: 'card' },
+          (isAndroid || !isIOS) && apkHref ? h('div', { class: 'card' },
             h('h4', { style: { margin: '0 0 .5rem' } }, '⬇️ Direct APK (Android)'),
             h('p', { class: 'muted', style: { marginTop: 0 } },
               'For Android only. You may have to allow "Install from unknown sources".'),
