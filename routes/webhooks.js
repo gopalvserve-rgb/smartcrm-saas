@@ -198,8 +198,16 @@ async function websiteHook(req, res) {
     // ---- Google Ads ValueTrack normalisation ----------------------
     // Landing pages like:  ?campaign={campaignid}&network={network}&keyword={keyword}&gclid={gclid}
     // map directly into our utm_* + source_ref + meta_json columns.
-    const campaignId   = b.campaign || b.campaign_id || b.campaignid || b.utm_campaign || '';
-    const campaignName = b.campaign_name || b.campaignname || '';
+    // Accept lots of aliases - different lead-source platforms (Pabbly, Make,
+    // Zapier, Meta Lead Ads, Google Ads) send the same fields under slightly
+    // different names. Anything unmatched gets silently dropped, which is
+    // exactly the bug we hit when Pabbly was mapping `campaign_name_new`.
+    const campaignId   = b.campaign_id || b.campaignid || b.campaignId
+                       || b.campaign_id_new || b.campaignIdNew
+                       || b.campaign || b.utm_campaign || '';
+    const campaignName = b.campaign_name || b.campaignname || b.campaignName
+                       || b.campaign_name_new || b.campaignNameNew
+                       || b.campaign_title || b.campaign_label || '';
     const network      = b.network || b.utm_medium || '';   // search | content | youtube | display
     const keyword      = b.keyword || b.utm_term || '';
     const gclid        = b.gclid || b.clickid || b.click_id || '';
@@ -242,6 +250,35 @@ async function websiteHook(req, res) {
       tags = tags ? tags + ',' + network : network;
     }
 
+    // ---- Custom fields: pull any registered custom-field value out of
+    // the inbound body and put it into extra_json. Lead form custom
+    // fields live in the `custom_fields` table keyed by `key`. The
+    // webhook accepts the value under three names:
+    //   1. `<key>`            (e.g. campaign_name_new)
+    //   2. `cf_<key>`         (alternative form, used by some integrations)
+    //   3. `extra.<key>`      (nested form, rare)
+    // Without this loop, custom-field values from Pabbly/Make/Zapier
+    // were silently dropped.
+    let extraJson = {};
+    try {
+      const customFields = (await db.getAll('custom_fields'))
+        .filter(f => Number(f.is_active) !== 0);
+      for (const f of customFields) {
+        const k = String(f.key || '').trim();
+        if (!k) continue;
+        let v = b[k];
+        if (v === undefined || v === null || v === '') v = b['cf_' + k];
+        if ((v === undefined || v === null || v === '') && b.extra && typeof b.extra === 'object') {
+          v = b.extra[k];
+        }
+        if (v !== undefined && v !== null && v !== '') {
+          extraJson[k] = (typeof v === 'object') ? v : String(v);
+        }
+      }
+    } catch (e) {
+      console.warn('[website] custom-field merge failed:', e.message);
+    }
+
     const lead = {
       name:      b.name || '',
       phone:     b.phone || b.mobile || '',
@@ -271,6 +308,7 @@ async function websiteHook(req, res) {
       utm_term:       keyword || '',
       utm_content:    b.utm_content || '',
       meta_json: Object.keys(adsMeta).length ? Object.assign({}, b.meta || {}, adsMeta) : (b.meta || null),
+      extra_json: Object.keys(extraJson).length ? extraJson : null,
       created_at: db.nowIso(),
       updated_at: db.nowIso()
     };
