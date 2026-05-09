@@ -150,6 +150,36 @@ async function _internalCreateLead(payload, asUserId) {
     updated_at: db.nowIso(),
     last_status_change_at: db.nowIso()
   };
+  // Honor auto-assign rules — only when payload didn't pin an assignee
+  // (explicit owner from Sheet Sync mapping wins). cf_<key> rules look
+  // into lead.extra_json / lead.custom_fields automatically.
+  try {
+    if (!payload.assigned_to) {
+      const { pickAssigneeFromRules } = require('../utils/assignmentRules');
+      // Surface custom fields on the lead so cf_<key> rules can match
+      // them from this code path too. payload.custom_fields and
+      // cf_<key> flat keys both supported.
+      const probe = Object.assign({}, lead);
+      if (payload.custom_fields && typeof payload.custom_fields === 'object') {
+        probe.custom_fields = payload.custom_fields;
+      }
+      Object.keys(payload || {}).forEach(k => {
+        if (k.startsWith('cf_')) probe[k] = payload[k];
+      });
+      const ruleAssignee = await pickAssigneeFromRules(probe);
+      if (ruleAssignee) lead.assigned_to = ruleAssignee;
+    }
+  } catch (e) { console.warn('[integrations] rule eval skipped:', e.message); }
+  // Persist custom_fields into extra_json so the matcher (and the rest
+  // of the CRM) can read them later.
+  try {
+    const extras = {};
+    if (payload.custom_fields && typeof payload.custom_fields === 'object') Object.assign(extras, payload.custom_fields);
+    Object.keys(payload || {}).forEach(k => {
+      if (k.startsWith('cf_')) extras[k.slice(3)] = payload[k];
+    });
+    if (Object.keys(extras).length) lead.extra_json = JSON.stringify(extras);
+  } catch (_) {}
   const id = await db.insert('leads', lead);
   return { id };
 }

@@ -342,41 +342,12 @@ async function _createLeadFromWebhook(lead) {
     if (newStatus) lead.status_id = newStatus.id;
   }
 
-  // 2. Apply assignment rules (first matching one by priority wins)
-  const rules = (await db.getAll('assignment_rules'))
-    .filter(r => Number(r.is_active) === 1)
-    .sort((a, b) => (Number(a.priority) || 0) - (Number(b.priority) || 0));
-  let assignedUserId = null;
-  for (const rule of rules) {
-    const fieldVal = String(lead[rule.field] || '').toLowerCase();
-    const ruleVal  = String(rule.value || '').toLowerCase();
-    let match = false;
-    switch (rule.operator) {
-      case 'equals':      match = fieldVal === ruleVal; break;
-      case 'contains':    match = fieldVal.includes(ruleVal); break;
-      case 'starts_with': match = fieldVal.startsWith(ruleVal); break;
-      case 'ends_with':   match = fieldVal.endsWith(ruleVal); break;
-      default: break;
-    }
-    if (match) {
-      const ids = String(rule.assigned_to || '').split(',').map(s => Number(s.trim())).filter(Boolean);
-      if (ids.length) {
-        // Round robin: pick the user with the fewest open leads today
-        const counts = {};
-        const today = new Date().toISOString().slice(0, 10);
-        const todays = (await db.getAll('leads'))
-          .filter(l => String(l.created_at).slice(0, 10) === today);
-        todays.forEach(l => {
-          const k = Number(l.assigned_to) || 0;
-          counts[k] = (counts[k] || 0) + 1;
-        });
-        ids.sort((a, b) => (counts[a] || 0) - (counts[b] || 0));
-        assignedUserId = ids[0];
-        break;
-      }
-    }
-  }
-  if (assignedUserId) lead.assigned_to = assignedUserId;
+  // 2. Apply assignment rules via shared matcher (handles cf_<key> fields)
+  try {
+    const { pickAssigneeFromRules } = require('../utils/assignmentRules');
+    const ruleAssignee = await pickAssigneeFromRules(lead);
+    if (ruleAssignee) lead.assigned_to = ruleAssignee;
+  } catch (e) { console.warn('[webhook] rule eval skipped:', e.message); }
 
   // 3. Duplicate check (within window). Always runs — we mark every dupe so
   // the "⚠️ Duplicates only" filter and the bulk-Dedupe button can see them.

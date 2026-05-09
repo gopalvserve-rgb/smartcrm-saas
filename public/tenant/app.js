@@ -13852,8 +13852,30 @@ function openRuleModal(existing) {
       h('div', { class: 'modal-head' }, h('h3', {}, r.id ? 'Edit rule' : 'New auto-assign rule'), h('button', { class: 'btn icon', onclick: () => modal.remove() }, '✕')),
       h('form', { class: 'form-grid', id: 'rule-form' },
         field('name', 'Rule name *', r.name, { required: true }),
-        selectField('field', 'Field', r.field, ['source', 'product', 'name', 'phone', 'email', 'city', 'notes', 'source_ref']),
-        selectField('operator', 'Operator', r.operator, ['equals', 'contains', 'starts_with', 'ends_with']),
+        // Field dropdown = standard lead fields + every active custom
+        // field (prefixed cf_<key>). The matcher on the server reads
+        // cf_<key> values from lead.extra_json so rules like
+        // 'cf_state contains Karnataka' work without schema changes.
+        (function () {
+          const stdFields = ['source', 'product', 'name', 'phone', 'email', 'city', 'state', 'pincode', 'country', 'company', 'notes', 'source_ref', 'tags', 'utm_source', 'utm_campaign'];
+          const cfList = (CRM.cache.customFields || []).filter(c => Number(c.is_active) !== 0 && c.key);
+          const opts = [...stdFields, ...cfList.map(cf => 'cf_' + cf.key)];
+          // Build a map for nicer display labels in the dropdown.
+          const labels = Object.fromEntries(cfList.map(cf => ['cf_' + cf.key, (cf.label || cf.key) + '  (custom)']));
+          // Render a custom <select> so we can label cf options.
+          const sel = h('select', { name: 'field', required: true });
+          opts.forEach(v => sel.appendChild(h('option', {
+            value: v, selected: r.field === v ? 'selected' : null
+          }, labels[v] || v)));
+          return h('div', { class: 'f-row' },
+            h('label', {}, 'Field'),
+            sel,
+            cfList.length ? h('div', { class: 'muted', style: { fontSize: '.72rem', marginTop: '.2rem' } },
+              cfList.length + ' custom field' + (cfList.length === 1 ? '' : 's') + ' available — they appear at the bottom of the list.'
+            ) : null
+          );
+        })(),
+        selectField('operator', 'Operator', r.operator, ['equals', 'contains', 'starts_with', 'ends_with', 'not_equals', 'is_empty', 'is_not_empty']),
         field('value', 'Value *', r.value, { required: true }),
         field('priority', 'Priority (lower = first)', r.priority || 100, { type: 'number' }),
         h('div', { class: 'f-row full' },

@@ -578,7 +578,30 @@ async function api_leads_create(token, payload) {
   // sees it on the dashboard and can route it manually.
   let _capWarning = null;
   const _adminBypass = me.role === 'admin' && p.cap_bypass === true;
-  let _proposedAssignee = resolvedAssignee || me.id;
+  // If the caller didn't pin an assignee explicitly, run the auto-assign
+  // rules. Custom-field rules (cf_<key>) read from extraObj in addition
+  // to standard lead fields.
+  let _ruleAssignee = null;
+  if (!resolvedAssignee) {
+    try {
+      const { pickAssigneeFromRules } = require('../utils/assignmentRules');
+      // Build a probe object the matcher can read against. Mirrors the
+      // shape api_leads_create is about to insert.
+      const probe = {
+        source: p.source || 'manual',
+        source_ref: p.source_ref || '',
+        product_id: resolvedProductId,
+        name: p.name, email: p.email || '', phone: cleanPhone,
+        city: p.city || '', state: p.state || '', pincode: p.pincode || '',
+        country: p.country || '', company: p.company || '',
+        notes: p.notes || '', tags: p.tags || '',
+        utm_source: p.utm_source || '', utm_campaign: p.utm_campaign || '',
+        custom_fields: extraObj || {}
+      };
+      _ruleAssignee = await pickAssigneeFromRules(probe);
+    } catch (e) { console.warn('[leads] rule eval skipped:', e.message); }
+  }
+  let _proposedAssignee = resolvedAssignee || _ruleAssignee || me.id;
   if (_proposedAssignee && !_adminBypass) {
     const capCheck = await _canAssignToUser(_proposedAssignee, false);
     if (!capCheck.ok) {
