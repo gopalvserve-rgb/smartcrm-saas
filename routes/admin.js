@@ -54,6 +54,9 @@ const CONFIG_KEYS = [
   'BRAND_TEXT_COLOR', 'THEME_MODE',
   // CRM Copilot — per-user/day question quota (default 50).
   'COPILOT_DAILY_LIMIT_PER_USER',
+  // Demo tenant flags — set by the showcase seeder. The SPA reads these
+  // to enable the in-app tour and the 📚 floating button.
+  'DEMO_TENANT', 'DEMO_TOUR_ENABLED',
   // Minimum seconds an answered inbound call must last before it creates a lead.
   // 0 = create on every call (incl. missed). Default 5.
   'CALLS_AUTOLEAD_MIN_SECONDS'
@@ -104,7 +107,11 @@ async function api_admin_brand(_token) {
     BRAND_TEXT_COLOR:     cfg.BRAND_TEXT_COLOR     || '',
     THEME_MODE:           cfg.THEME_MODE           || 'auto',
     COMPANY_NAME:         cfg.COMPANY_NAME         || '',
-    COMPANY_LOGO_URL:     cfg.COMPANY_LOGO_URL     || ''
+    COMPANY_LOGO_URL:     cfg.COMPANY_LOGO_URL     || '',
+    // Demo tenant flags — read by the SPA so the showcase tour shows up
+    // for every role (api_admin_getConfig rejects non-admin users).
+    DEMO_TENANT:          cfg.DEMO_TENANT          || '',
+    DEMO_TOUR_ENABLED:    cfg.DEMO_TOUR_ENABLED    || ''
   };
 }
 
