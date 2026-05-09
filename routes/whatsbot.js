@@ -2314,6 +2314,15 @@ async function _handleInbound(m, value) {
     const _tStore = (db.tenantStorage && db.tenantStorage.getStore) ? db.tenantStorage.getStore() : null;
     const tenantSlug = (_tStore && _tStore.slug) || '';
     const tenantId   = (_tStore && _tStore.tenant && _tStore.tenant.id) || null;
+    // Visibility - log every dispatch with slug so Railway logs reveal whether
+    // tenantStorage was even set when we got here. Empty slug -> AI usage will
+    // land as (unattributed) in the central log; we want to know when that
+    // happens so the routing layer can be fixed.
+    if (!tenantSlug) {
+      console.warn('[ai-bot] dispatching with EMPTY tenantSlug - tenantStorage missing in this code path? from=' + from + ' phoneId=' + inboundPhoneId);
+    } else {
+      console.log('[ai-bot] dispatch slug=' + tenantSlug + ' from=' + from + ' phoneId=' + inboundPhoneId);
+    }
     aiBot.maybeReplyToInbound({
       phone: from, leadId, inboundText: text, inboundPhoneId,
       inboundMsgId: null, tenantSlug, tenantId

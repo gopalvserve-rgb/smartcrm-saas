@@ -231,6 +231,35 @@ async function generate(args) {
  * have error_text set + cost = 0 so they aren't billed.
  */
 async function logUsage({ tenant_slug, tenant_id, call_kind, phone, lead_id, wa_message_id, result }) {
+  // Defensive slug capture - if the caller passed an empty slug (e.g. because
+  // they read it from tenantStorage too early, or were called from a path
+  // where tenantStorage wasn't set), try to recover the slug from the
+  // AsyncLocalStorage now (since logUsage tends to be called inside the
+  // same tenant-scoped Promise chain).
+  let slug = String(tenant_slug || '').trim();
+  let tid  = tenant_id;
+  if (!slug || !tid) {
+    try {
+      const dbMod = require('../db/pg');
+      const store = dbMod.tenantStorage && dbMod.tenantStorage.getStore && dbMod.tenantStorage.getStore();
+      if (store) {
+        if (!slug && store.slug) slug = String(store.slug);
+        if (!tid && store.tenant && store.tenant.id) tid = store.tenant.id;
+      }
+    } catch (_) {}
+  }
+  // Visibility: log every insertion attempt so Railway logs show whether
+  // a tenant's calls are reaching here. Spammy on purpose - turn down
+  // once we're sure logging is working.
+  console.log('[gemini.logUsage]',
+    'slug=' + (slug || '(empty)'),
+    'tid=' + (tid || '-'),
+    'kind=' + (call_kind || 'reply'),
+    'ok=' + (result && result.ok ? '1' : '0'),
+    'in=' + (result && result.input_tokens || 0),
+    'out=' + (result && result.output_tokens || 0)
+  );
+
   try {
     await control.query(
       `INSERT INTO ai_usage_log
@@ -239,7 +268,7 @@ async function logUsage({ tenant_slug, tenant_id, call_kind, phone, lead_id, wa_
           phone, lead_id, wa_message_id, error_text)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
       [
-        tenant_id || null, tenant_slug, call_kind || 'reply',
+        tid || null, slug, call_kind || 'reply',
         result.model || '',
         result.input_tokens || 0, result.output_tokens || 0,
         result.cost_usd || 0, result.cost_inr_real || 0, result.cost_inr_billed || 0,
@@ -248,7 +277,21 @@ async function logUsage({ tenant_slug, tenant_id, call_kind, phone, lead_id, wa_
       ]
     );
   } catch (e) {
-    console.warn('[gemini] logUsage failed:', e.message);
+    // Loud failure - if THIS is what's been silently eating learnimo's
+    // rows, it'll show up in Railway logs the next time the bot replies.
+    console.error('[gemini.logUsage] INSERT failed slug=' + slug + ' kind=' + (call_kind || '?') + ':', e.message);
+    // Best-effort secondary write to make the failure VISIBLE in the
+    // dashboard - drop a row marked with error_text so the super-admin
+    // can see the call existed at all. Most failures are schema drift
+    // (missing column after a recent migration) - this 'fallback row'
+    // shouldn't fail because it uses fewer columns.
+    try {
+      await control.query(
+        `INSERT INTO ai_usage_log (tenant_slug, call_kind, model, error_text)
+         VALUES ($1, $2, $3, $4)`,
+        [slug || '(unattributed)', call_kind || 'reply', '', 'logUsage_insert_failed: ' + e.message.slice(0, 300)]
+      );
+    } catch (_) { /* truly broken - give up */ }
   }
 }
 
