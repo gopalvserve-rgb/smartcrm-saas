@@ -88,7 +88,26 @@
         // Wait for DOMContentLoaded before injecting scripts.
         function injectSpaScripts() {
           var s = document.createElement('script');
-          s.src = 'app.js?v=2026-05-09-source-map"app"></div>
+          s.src = 'app.js?v=2026-05-09-source-map';
+          document.body.appendChild(s);
+          var c = document.createElement('script');
+          c.src = 'caller-id-native.js?v=2026-05-09-source-map';
+          document.body.appendChild(c);
+        }
+        if (document.body) injectSpaScripts();
+        else document.addEventListener('DOMContentLoaded', injectSpaScripts, { once: true });
+      }
+    })();
+
+    // Service worker registration is intentionally disabled on tenant
+    // pages for now — SW scope handling under /t/<slug>/ needs a
+    // separate per-tenant manifest + scope, which we'll wire up in a
+    // follow-up. The CRM works fine without offline; only push +
+    // offline shell are deferred.
+  </script>
+</head>
+<body>
+  <div id="app"></div>
 
   <!-- Login screen -->
   <template id="tpl-login">
