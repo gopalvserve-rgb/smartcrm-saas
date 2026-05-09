@@ -11613,7 +11613,7 @@ async function adminIntegrations() {
     ];
     const list = h('div', { class: 'card', style: { padding: '0' } });
     sources.forEach((s, idx) => {
-      const url = base + '/hook/leadsource/' + s.id + '/' + apiKey;
+      const url = location.origin + (window.HOOK_URL || '/hook') + '/leadsource/' + s.id + '/' + apiKey;
       list.appendChild(h('div', {
         style: { padding: '.75rem .9rem', borderTop: idx === 0 ? 'none' : '1px solid #f3f4f6', display: 'flex', flexWrap: 'wrap', gap: '.5rem', alignItems: 'center' }
       },
@@ -11642,7 +11642,7 @@ async function adminIntegrations() {
   // its own card with copyable URL, sample payload, step-by-step
   // setup instructions, and a one-click 'Send test lead' button.
   if (apiKey) {
-    const makeUrl = base + '/hook/leadsource/make/' + apiKey;
+    const makeUrl = location.origin + (window.HOOK_URL || '/hook') + '/leadsource/make/' + apiKey;
     const samplePayload = JSON.stringify({
       name: 'Riya Sharma',
       phone: '+91 9876543210',
