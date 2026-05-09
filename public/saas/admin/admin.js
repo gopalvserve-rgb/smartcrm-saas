@@ -1445,7 +1445,7 @@ async function route() {
    ============================================================ */
 async function openModulesModal(t) {
   const m = h('div', { class: 'modal-bd' });
-  const card = h('div', { class: 'modal-card', style: { maxWidth: '640px', maxHeight: '85vh', overflow: 'auto' } });
+  const card = h('div', { class: 'modal', style: { maxWidth: '640px', maxHeight: '85vh', overflow: 'auto' } });
   m.appendChild(card);
   document.body.appendChild(m);
 
