@@ -7020,7 +7020,7 @@ async function wbConnect() {
         href: '#', style: { fontSize: '.85rem', color: 'var(--text-muted, #64748b)' },
         onclick: ev => { ev.preventDefault();
           if (confirm('Connect a different WhatsApp Business account? Current connection will be replaced.')) {
-            startEmbeddedSignup(s.fb_app_id, s.fb_config_id);
+            startEmbeddedSignup(s.fb_app_id, s.fb_config_id, { coexistence: String(s.coexistence_mode || cfg.WHATSAPP_COEXISTENCE_MODE || '') === '1' });
           }
         }
       }, 'Connect a different WhatsApp account'));
@@ -7037,7 +7037,7 @@ async function wbConnect() {
       'Click the button below to link your WhatsApp Business Account. You\'ll be asked to log into Facebook, pick the business and phone number you want to use, and Meta will send everything back to us automatically — no API keys to copy or paste.'));
     introCard.appendChild(h('button', {
       class: 'btn-fb-meta',
-      onclick: () => startEmbeddedSignup(s.fb_app_id, s.fb_config_id)
+      onclick: () => startEmbeddedSignup(s.fb_app_id, s.fb_config_id, { coexistence: String(s.coexistence_mode || cfg.WHATSAPP_COEXISTENCE_MODE || '') === '1' })
     },
       h('span', { class: 'fb-icon' }, '🅵'),
       ' Connect with Facebook'
@@ -7388,7 +7388,7 @@ function openRegisterPhoneModal(phoneIdOverride) {
  * → POST those to /api → server exchanges the code for an access token and
  * persists everything. Page reloads to show the connected state.
  */
-function startEmbeddedSignup(appId, configId) {
+function startEmbeddedSignup(appId, configId, opts) {
   if (!appId || !configId) { toast('App ID + Config ID required', 'err'); return; }
   // Hot path — SDK already preloaded by wbConnect(). Calling FB.login
   // synchronously inside the click handler is critical or Chrome blocks
@@ -7469,9 +7469,13 @@ function startEmbeddedSignup(appId, configId) {
     response_type: 'code',
     override_default_response_type: true,
     extras: {
+      // When Coexistence is requested, Meta routes the dialog through the
+      // 'whatsapp_business_app_onboarding' flow that lets the user keep the
+      // same number on the WhatsApp Business mobile app while ALSO running
+      // it on the Cloud API. Standard signup uses no featureType (default).
       setup: {},
-      featureType: '',
-      sessionInfoVersion: '2'
+      featureType: (opts && opts.coexistence) ? 'whatsapp_business_app_onboarding' : '',
+      sessionInfoVersion: (opts && opts.coexistence) ? '3' : '2'
     }
   });
 }
@@ -13133,6 +13137,55 @@ async function adminFb() {
   return wrap;
 }
 async function adminWhatsapp() {
+  // Coexistence card — appended at the end of the WA admin tab. Defined
+  // as an inner helper so it can read the freshly-loaded settings.
+  function _renderCoexistenceCard(wrap, settings, cfg) {
+    const isOn = String((settings && settings.coexistence_mode) || (cfg && cfg.WHATSAPP_COEXISTENCE_MODE) || '') === '1';
+    const card = h('div', { class: 'card', style: { marginTop: '1rem', background: 'linear-gradient(135deg, #ecfdf5 0%, #f0fdfa 100%)', border: '1px solid #6ee7b7' } });
+    card.appendChild(h('h4', { style: { margin: '0 0 .5rem', color: '#065f46' } },
+      '🔄 Coexistence Mode (NEW from Meta)'));
+    card.appendChild(h('p', { style: { margin: '0 0 .6rem', fontSize: '.88rem' } },
+      'Run the SAME WhatsApp number on both the WhatsApp Business mobile app AND the Cloud API at the same time. ',
+      h('b', {}, 'No more choosing between mobile chat and automation.'),
+      ' Useful when you want your team to keep using their phones while the CRM handles automated replies, campaigns, and analytics.'));
+    card.appendChild(h('div', { style: { background: '#fff', borderRadius: '8px', padding: '.7rem .9rem', fontSize: '.85rem', marginBottom: '.6rem' } },
+      h('div', { style: { fontWeight: '600', marginBottom: '.3rem' } }, 'Prerequisites:'),
+      h('ol', { style: { margin: '0 0 0 1rem', padding: 0, lineHeight: '1.55' } },
+        h('li', {}, 'Your WhatsApp number must NOT be currently registered with another BSP / API. (If it is, that registration is taken over.)'),
+        h('li', {}, 'WhatsApp Business mobile app must be installed on at least one device using this number.'),
+        h('li', {}, 'In Meta Business Manager → WhatsApp Manager → Settings → ',
+          h('b', {}, 'Coexistence'),
+          ' must be enabled for the number BEFORE you click Connect with Facebook below.'),
+        h('li', {}, 'Free-form messaging from the API still requires a 24-hour customer-service window or an approved template — same Cloud API rules.')
+      )
+    ));
+    const toggleWrap = h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', padding: '.6rem .8rem', background: '#fff', borderRadius: '8px' } });
+    const chk = h('input', { type: 'checkbox', id: 'coexistence-chk', checked: isOn ? 'checked' : null });
+    const status = h('span', { style: { fontSize: '.85rem', color: '#64748b', marginLeft: '.5rem' } });
+    toggleWrap.appendChild(chk);
+    toggleWrap.appendChild(h('label', { for: 'coexistence-chk', style: { fontWeight: '500' } },
+      'Use Coexistence flow on next "Connect with Facebook"'));
+    toggleWrap.appendChild(h('button', { class: 'btn primary sm', onclick: async () => {
+      try {
+        await api('api_admin_setConfig', { WHATSAPP_COEXISTENCE_MODE: chk.checked ? '1' : '0' });
+        status.textContent = '✅ Saved'; status.style.color = '#16a34a';
+      } catch (e) { status.textContent = '❌ ' + e.message; status.style.color = '#dc2626'; }
+    } }, '💾 Save'));
+    toggleWrap.appendChild(status);
+    card.appendChild(toggleWrap);
+    card.appendChild(h('p', { class: 'muted', style: { fontSize: '.78rem', margin: '.6rem 0 0' } },
+      'Then click ', h('b', {}, 'Connect with Facebook'),
+      ' above. The dialog routes through Meta\'s coexistence flow (featureType = ',
+      h('code', {}, 'whatsapp_business_app_onboarding'),
+      ', sessionInfoVersion = 3) which keeps the mobile app active during signup.'));
+    card.appendChild(h('a', {
+      href: 'https://developers.facebook.com/docs/whatsapp/embedded-signup/coexistence',
+      target: '_blank', rel: 'noopener',
+      style: { fontSize: '.82rem', display: 'inline-block', marginTop: '.4rem' }
+    }, 'Meta Coexistence docs ↗'));
+    wrap.appendChild(card);
+  }
+
   const cfg = await api('api_admin_getConfig');
   const card = h('div', {});
   card.appendChild(configForm(cfg, ['WHATSAPP_PHONE_NUMBER_ID', 'WHATSAPP_BUSINESS_ACCOUNT_ID', 'WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_VERIFY_TOKEN']));
