@@ -531,8 +531,24 @@ function renderLogin() {
           <button type="submit" class="btn primary block" ${isDemoTenant ? 'autofocus' : ''}>Sign in</button>
           <p id="login-err" class="error"></p>
         </form>
+        <div style="text-align:center;margin-top:1rem;font-size:.85rem">
+          <span class="muted">Workspace: <b>${esc(window.TENANT_SLUG || '')}</b></span>
+          <button id="btn-switch-workspace" type="button"
+            style="display:block;width:100%;margin-top:.5rem;padding:.5rem;background:transparent;border:1px solid #cbd5e1;border-radius:8px;color:#475569;cursor:pointer;font-size:.85rem">
+            🔀 Switch to a different workspace
+          </button>
+        </div>
       </div>
     </div>`;
+  // Switch-workspace button — clears the saved slug (used by /app picker)
+  // and navigates to /app?stay=1 so the picker is shown instead of auto-redirecting.
+  const switchBtn = document.getElementById('btn-switch-workspace');
+  if (switchBtn) switchBtn.addEventListener('click', () => {
+    try { localStorage.removeItem('tenant_slug'); } catch (_) {}
+    try { localStorage.removeItem('crm_token'); } catch (_) {}
+    try { localStorage.removeItem('crm_user'); } catch (_) {}
+    location.href = '/app?stay=1';
+  });
   $('#login-form').addEventListener('submit', async ev => {
     ev.preventDefault();
     const f = ev.target;
