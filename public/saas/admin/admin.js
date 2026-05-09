@@ -1502,22 +1502,31 @@ VIEWS.ai_costing = async (view) => {
       h('thead', {}, h('tr', {},
         h('th', {}, 'Tenant'),
         h('th', {}, 'Calls'),
+        h('th', { title: 'Calls that errored — bad Gemini key, quota, etc. Tenant attempted to use AI but got nothing back.' }, 'Failed'),
         h('th', {}, 'Tokens'),
         h('th', {}, 'Real $'),
         h('th', {}, 'Real ₹'),
         h('th', {}, 'Billed ₹'),
         h('th', {}, 'Margin ₹'),
-        h('th', {}, 'Last call')
+        h('th', {}, 'Last call'),
+        h('th', { title: 'Most recent error message for this tenant in the range' }, 'Last error')
       )),
-      h('tbody', {}, ...rows.map(r => h('tr', {},
+      h('tbody', {}, ...rows.map(r => h('tr', {
+          style: (Number(r.calls || 0) === 0 && Number(r.failed_calls || 0) > 0)
+            ? { background: '#fff3f3' } : {}
+        },
         h('td', {}, r.tenant_slug),
         h('td', {}, (r.calls || 0).toLocaleString('en-IN')),
+        h('td', { style: { color: (r.failed_calls > 0 ? '#dc2626' : '#94a3b8'), fontWeight: r.failed_calls > 0 ? '600' : '400' } },
+          (r.failed_calls || 0).toLocaleString('en-IN')),
         h('td', {}, ((r.input_tokens || 0) + (r.output_tokens || 0)).toLocaleString('en-IN')),
         h('td', {}, '$' + (r.cost_usd || 0).toFixed(6)),
         h('td', {}, '₹' + (r.cost_inr_real || 0).toLocaleString('en-IN')),
         h('td', {}, '₹' + (r.cost_inr_billed || 0).toLocaleString('en-IN')),
         h('td', {}, '₹' + (r.margin_inr || 0).toLocaleString('en-IN')),
-        h('td', { class: 'muted' }, r.last_call_at ? new Date(r.last_call_at).toLocaleString() : '—')
+        h('td', { class: 'muted' }, r.last_call_at ? new Date(r.last_call_at).toLocaleString() : '—'),
+        h('td', { class: 'muted', style: { fontSize: '.78rem', maxWidth: '20rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: r.last_error || '' },
+          r.last_error ? r.last_error.slice(0, 60) + (r.last_error.length > 60 ? '…' : '') : '—')
       )))
     );
     tableCard.appendChild(h('h2', { style: { marginTop: 0 } }, 'Per-tenant breakdown'));

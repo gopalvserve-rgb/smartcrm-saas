@@ -64,24 +64,31 @@ async function api_saas_ai_costing_summary(token, opts) {
   let where = `created_at >= $1 AND created_at < $2 AND error_text IS NULL`;
   if (tenantFilter) { params.push(tenantFilter); where += ` AND tenant_slug = $${params.length}`; }
 
+  // Per-tenant aggregate. Counts BOTH successful (cost > 0, error_text IS NULL)
+  // and failed (error_text IS NOT NULL) calls, in two separate columns, so the
+  // dashboard reveals tenants that ARE calling Gemini but always erroring out
+  // (bad key, quota, etc.) - previously these tenants vanished entirely
+  // because the WHERE filter dropped any row with error_text.
   const perTenant = await control.query(
     `SELECT
         COALESCE(NULLIF(tenant_slug, ''), '(unattributed)') AS tenant_slug,
-        COUNT(*)::int                                         AS calls,
-        SUM(input_tokens)::int                                AS input_tokens,
-        SUM(output_tokens)::int                               AS output_tokens,
-        SUM(cost_usd)                                         AS cost_usd,
-        SUM(cost_inr_real)                                    AS cost_inr_real,
-        SUM(cost_inr_billed)                                  AS cost_inr_billed,
-        SUM(cost_inr_billed - cost_inr_real)                  AS margin_inr,
-        SUM(CASE WHEN call_kind = 'reply' THEN cost_inr_billed ELSE 0 END) AS billed_replies,
-        SUM(CASE WHEN call_kind = 'embed' THEN cost_inr_billed ELSE 0 END) AS billed_embed,
-        SUM(CASE WHEN call_kind <> 'reply' AND call_kind <> 'embed' THEN cost_inr_billed ELSE 0 END) AS billed_other,
-        MAX(created_at)                                       AS last_call_at
+        COUNT(*) FILTER (WHERE error_text IS NULL)::int       AS calls,
+        COUNT(*) FILTER (WHERE error_text IS NOT NULL)::int   AS failed_calls,
+        COALESCE(SUM(input_tokens) FILTER (WHERE error_text IS NULL), 0)::int    AS input_tokens,
+        COALESCE(SUM(output_tokens) FILTER (WHERE error_text IS NULL), 0)::int   AS output_tokens,
+        COALESCE(SUM(cost_usd) FILTER (WHERE error_text IS NULL), 0)             AS cost_usd,
+        COALESCE(SUM(cost_inr_real) FILTER (WHERE error_text IS NULL), 0)        AS cost_inr_real,
+        COALESCE(SUM(cost_inr_billed) FILTER (WHERE error_text IS NULL), 0)      AS cost_inr_billed,
+        COALESCE(SUM(cost_inr_billed - cost_inr_real) FILTER (WHERE error_text IS NULL), 0) AS margin_inr,
+        COALESCE(SUM(CASE WHEN call_kind = 'reply' THEN cost_inr_billed ELSE 0 END) FILTER (WHERE error_text IS NULL), 0) AS billed_replies,
+        COALESCE(SUM(CASE WHEN call_kind = 'embed' THEN cost_inr_billed ELSE 0 END) FILTER (WHERE error_text IS NULL), 0) AS billed_embed,
+        COALESCE(SUM(CASE WHEN call_kind <> 'reply' AND call_kind <> 'embed' THEN cost_inr_billed ELSE 0 END) FILTER (WHERE error_text IS NULL), 0) AS billed_other,
+        MAX(created_at)                                       AS last_call_at,
+        MAX(error_text) FILTER (WHERE error_text IS NOT NULL) AS last_error
        FROM ai_usage_log
-      WHERE ${where}
-      GROUP BY tenant_slug
-      ORDER BY cost_inr_billed DESC NULLS LAST`,
+      WHERE created_at >= $1 AND created_at < $2${tenantFilter ? ' AND tenant_slug = $3' : ''}
+      GROUP BY COALESCE(NULLIF(tenant_slug, ''), '(unattributed)')
+      ORDER BY cost_inr_billed DESC NULLS LAST, failed_calls DESC NULLS LAST`,
     params
   );
 
@@ -108,7 +115,8 @@ async function api_saas_ai_costing_summary(token, opts) {
   return {
     range: { from: r.fromDate, to: r.toDate },
     totals: {
-      tenants_billed:    perTenant.rows.length,
+      tenants_billed:    perTenant.rows.filter(x => Number(x.calls || 0) > 0).length,
+      tenants_with_failures: perTenant.rows.filter(x => Number(x.failed_calls || 0) > 0).length,
       calls:             totals.calls,
       input_tokens:      totals.input_tokens,
       output_tokens:     totals.output_tokens,
@@ -124,6 +132,7 @@ async function api_saas_ai_costing_summary(token, opts) {
     per_tenant: perTenant.rows.map(x => ({
       tenant_slug:       x.tenant_slug,
       calls:             Number(x.calls || 0),
+      failed_calls:      Number(x.failed_calls || 0),
       input_tokens:      Number(x.input_tokens || 0),
       output_tokens:     Number(x.output_tokens || 0),
       cost_usd:          Number(Number(x.cost_usd || 0).toFixed(6)),
@@ -134,6 +143,7 @@ async function api_saas_ai_costing_summary(token, opts) {
       billed_embed:      Number(Number(x.billed_embed || 0).toFixed(2)),
       billed_other:      Number(Number(x.billed_other || 0).toFixed(2)),
       last_call_at:      x.last_call_at,
+      last_error:        x.last_error || null,
     })),
   };
 }
