@@ -861,6 +861,24 @@ async function api_leads_create(token, payload) {
   // Best-effort: a campaign-routing failure shouldn't roll back the
   // already-committed lead row; we just log + continue.
   let _campaignAssign = null;
+  // If caller didn't pin a campaign explicitly, see if any active
+  // campaign's match_filter matches this lead — auto-attach if so.
+  if (!p.campaign_id) {
+    try {
+      const { findCampaignForLead } = require('../utils/campaignAssigner');
+      const probe = {
+        source: p.source || '', city: p.city || '', state: p.state || '',
+        pincode: p.pincode || '', country: p.country || '', company: p.company || '',
+        email: p.email || '', phone: cleanPhone, name: p.name || '',
+        notes: p.notes || '', tags: p.tags || '',
+        utm_source: p.utm_source || '', utm_campaign: p.utm_campaign || '',
+        product_id: resolvedProductId, status_id: _statusId,
+        custom_fields: extraObj || {}
+      };
+      const matched = await findCampaignForLead(probe);
+      if (matched && matched.id) p.campaign_id = matched.id;
+    } catch (e) { console.warn('[leads] campaign match lookup failed:', e.message); }
+  }
   if (p.campaign_id) {
     try {
       _campaignAssign = await assignLeadToCampaign(Number(id), Number(p.campaign_id), {

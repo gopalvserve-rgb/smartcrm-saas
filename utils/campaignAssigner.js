@@ -367,4 +367,50 @@ async function pickAgentForCampaignWithLead(campaignId, lead) {
   return { agent_id: Number(pick.user_id), mode: 'conditional', reason: 'fallback-round-robin' };
 }
 
-module.exports = { pickAgentForCampaign, pickAgentForCampaignWithLead, assignLeadToCampaign };
+
+/**
+ * Find the first active campaign whose match_filter matches a lead, in
+ * id-ascending order. Returns the campaign row, or null if no campaign
+ * has a match_filter that fits.
+ *
+ * Filter shape (per campaigns.match_filter): JSONB array of rule
+ * objects. All rules are AND-joined.
+ *
+ *   [ { field: 'source',   op: 'equals',   value: 'Make.com' },
+ *     { field: 'cf_state', op: 'contains', value: 'Karnataka' } ]
+ *
+ * cf_<key> fields look up the value in lead.extra_json or
+ * lead.custom_fields via the shared matcher in utils/assignmentRules.js.
+ */
+async function findCampaignForLead(lead) {
+  let rows;
+  try {
+    const q = await db.query(
+      `SELECT id, name, match_filter
+         FROM campaigns
+        WHERE is_active = 1
+          AND match_filter IS NOT NULL
+        ORDER BY id ASC`
+    );
+    rows = q.rows;
+  } catch (_) { return null; }
+  if (!rows || !rows.length) return null;
+  const { _matches, _readField } = require('./assignmentRules');
+  for (const camp of rows) {
+    let rules = camp.match_filter;
+    if (typeof rules === 'string') {
+      try { rules = JSON.parse(rules); } catch (_) { continue; }
+    }
+    if (!Array.isArray(rules) || !rules.length) continue;
+    let allMatch = true;
+    for (const r of rules) {
+      const fv = _readField(lead, r.field);
+      if (!_matches(r.op || r.operator, fv, r.value)) { allMatch = false; break; }
+    }
+    if (allMatch) return camp;
+  }
+  return null;
+}
+
+
+module.exports = { pickAgentForCampaign, pickAgentForCampaignWithLead, assignLeadToCampaign, findCampaignForLead };

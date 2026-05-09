@@ -22,6 +22,21 @@ const { authUser } = require('../utils/auth');
 const { applyRemovalPolicy } = require('../utils/campaignRemoval');
 
 const VALID_MODES   = ['on_demand', 'equal', 'round_robin', 'percentage', 'conditional'];
+// Idempotent: ensure the match_filter column exists. Pre-existing tenants
+// don't have it (it was added 2026-05-09); this runs on first save.
+let _matchFilterEnsured = false;
+async function _ensureMatchFilterColumn() {
+  if (_matchFilterEnsured) return;
+  try {
+    await db.query(`ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS match_filter JSONB`);
+    _matchFilterEnsured = true;
+  } catch (e) {
+    // Best-effort. If it fails, the save below will surface a clearer
+    // error than this would.
+    console.warn('[campaigns] match_filter column ensure failed:', e.message);
+  }
+}
+
 const VALID_REMOVED = ['pool', 'hidden', 'manager'];
 
 async function _requireAdmin(token) {
@@ -148,7 +163,16 @@ async function api_campaigns_save(token, payload) {
                               : (typeof p.conditional_rules === 'string'
                                   ? p.conditional_rules
                                   : JSON.stringify(p.conditional_rules));
+  // Lead-match filter: rules a lead must satisfy to auto-join this
+  // campaign. Stored as JSONB array of { field, op, value }.
+  const matchFilter       = p.match_filter == null
+                              ? null
+                              : (typeof p.match_filter === 'string'
+                                  ? p.match_filter
+                                  : JSON.stringify(p.match_filter));
   const isActive          = p.is_active == null ? 1 : (p.is_active ? 1 : 0);
+
+  await _ensureMatchFilterColumn();
 
   if (!name)                                 throw new Error('Campaign name required.');
   if (!VALID_MODES.includes(distributionMode))
@@ -177,11 +201,12 @@ async function api_campaigns_save(token, payload) {
          pull_batch_size=$5, pull_initial_count=$6,
          pull_require_old_updated=$7, pull_old_threshold_minutes=$8,
          removed_user_action=$9, conditional_rules=$10, is_active=$11,
+         match_filter=$13,
          updated_at=NOW()
        WHERE id=$12 RETURNING id`,
       [name, pipeline, managerUserId, distributionMode,
        pullBatch, pullInitial, pullRequireOld, pullThresholdMin,
-       removedAction, conditionalRules, isActive, campaignId]
+       removedAction, conditionalRules, isActive, campaignId, matchFilter]
     );
     if (!u.rows.length) throw new Error('Campaign not found for update.');
   } else {
@@ -190,12 +215,12 @@ async function api_campaigns_save(token, payload) {
          (name, pipeline, manager_user_id, distribution_mode,
           pull_batch_size, pull_initial_count,
           pull_require_old_updated, pull_old_threshold_minutes,
-          removed_user_action, conditional_rules, is_active)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+          removed_user_action, conditional_rules, is_active, match_filter)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
         RETURNING id`,
       [name, pipeline, managerUserId, distributionMode,
        pullBatch, pullInitial, pullRequireOld, pullThresholdMin,
-       removedAction, conditionalRules, isActive]
+       removedAction, conditionalRules, isActive, matchFilter]
     );
     campaignId = i.rows[0].id;
   }

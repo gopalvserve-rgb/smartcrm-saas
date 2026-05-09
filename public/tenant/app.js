@@ -11133,6 +11133,71 @@ async function openCampaignEditModal(camp, onSaved) {
   body.appendChild(h('label', { style: { marginTop: '.6rem' } }, 'Pipeline'));
   body.appendChild(pipeI);
 
+  // ─── Lead Match Filter ──────────────────────────────────────────
+  // Defines which leads auto-attach to this campaign when they're
+  // created (from Make / IndiaMART / manual entry / CSV / anywhere).
+  // All rules AND-joined. Field dropdown includes every active custom
+  // field as cf_<key>, so e.g. 'cf_state contains Karnataka' works.
+  body.appendChild(h('label', { style: { marginTop: '.6rem' } }, 'Lead match filter — leads that should auto-join this campaign'));
+  body.appendChild(h('div', { class: 'muted', style: { fontSize: '.85rem', marginBottom: '.4rem' } },
+    'When a lead matches ALL rules below, it auto-attaches to this campaign and the distribution mode (above) decides which agent gets it. Leave empty to skip auto-attach — leads must then be assigned manually or via campaign_id on lead create.'));
+  const matchWrap = h('div', { id: 'match-filter-wrap', style: { display: 'grid', gap: '.4rem' } });
+  let _matchRules = (() => {
+    if (!camp || camp.match_filter == null) return [];
+    if (Array.isArray(camp.match_filter)) return camp.match_filter;
+    if (typeof camp.match_filter === 'string') {
+      try { return JSON.parse(camp.match_filter) || []; } catch (_) { return []; }
+    }
+    return [];
+  })();
+  function _renderMatchRules() {
+    matchWrap.replaceChildren();
+    const stdFields = ['source', 'product', 'city', 'state', 'pincode', 'country', 'company', 'name', 'phone', 'email', 'notes', 'tags', 'source_ref', 'utm_source', 'utm_campaign'];
+    const cfList = (CRM.cache.customFields || []).filter(c => Number(c.is_active) !== 0 && c.key);
+    const fieldOpts = [
+      ...stdFields.map(v => ({ value: v, label: v })),
+      ...cfList.map(c => ({ value: 'cf_' + c.key, label: (c.label || c.key) + '  (custom)' }))
+    ];
+    const opOpts = [
+      { value: 'equals',       label: 'equals' },
+      { value: 'not_equals',   label: 'is not' },
+      { value: 'contains',     label: 'contains' },
+      { value: 'starts_with',  label: 'starts with' },
+      { value: 'ends_with',    label: 'ends with' },
+      { value: 'is_empty',     label: 'is empty' },
+      { value: 'is_not_empty', label: 'is not empty' }
+    ];
+    _matchRules.forEach((rule, idx) => {
+      const fSel = h('select', { style: { minWidth: '140px' } },
+        ...fieldOpts.map(o => h('option', { value: o.value, selected: o.value === rule.field ? '' : null }, o.label)));
+      const oSel = h('select', { style: { minWidth: '140px' } },
+        ...opOpts.map(o => h('option', { value: o.value, selected: o.value === (rule.op || rule.operator) ? '' : null }, o.label)));
+      const vInp = h('input', { type: 'text', value: rule.value || '', placeholder: 'Value',
+        style: { minWidth: '120px', flex: 1 } });
+      const rmBtn = h('button', { type: 'button', class: 'btn sm danger',
+        onclick: () => { _matchRules.splice(idx, 1); _renderMatchRules(); } }, '🗑');
+      const sync = () => {
+        _matchRules[idx] = { field: fSel.value, op: oSel.value, value: vInp.value };
+        // Hide value input for is_empty / is_not_empty operators
+        const opv = oSel.value;
+        vInp.style.display = (opv === 'is_empty' || opv === 'is_not_empty') ? 'none' : '';
+      };
+      [fSel, oSel, vInp].forEach(el => el.addEventListener('change', sync));
+      vInp.addEventListener('input', sync);
+      sync();
+      const row = h('div', { style: { display: 'flex', gap: '.3rem', alignItems: 'center', flexWrap: 'wrap' } },
+        idx > 0 ? h('span', { style: { fontSize: '.75rem', color: '#64748b', fontWeight: 600 } }, 'AND') : null,
+        fSel, oSel, vInp, rmBtn);
+      matchWrap.appendChild(row);
+    });
+    matchWrap.appendChild(h('button', {
+      type: 'button', class: 'btn sm', style: { justifySelf: 'start' },
+      onclick: () => { _matchRules.push({ field: 'source', op: 'equals', value: '' }); _renderMatchRules(); }
+    }, '+ Add rule'));
+  }
+  _renderMatchRules();
+  body.appendChild(matchWrap);
+
   // Manager
   const managerS = h('select', { style: { width: '100%' } },
     h('option', { value: '' }, '— Choose manager —'),
@@ -11363,6 +11428,14 @@ async function openCampaignEditModal(camp, onSaved) {
           pull_old_threshold_minutes: Number(oldThreshold.value || 60),
           removed_user_action: removedAction,
           conditional_rules: mode === 'conditional' ? currentRules : null,
+          // Lead match filter — only persist rules that have a field; for
+          // is_empty/is_not_empty operators, value is irrelevant.
+          match_filter: (_matchRules || []).filter(r =>
+            r && r.field && (
+              r.op === 'is_empty' || r.op === 'is_not_empty' ||
+              (r.value !== undefined && r.value !== '')
+            )
+          ),
           agents
         };
         if (!payload.name) { toast('Name is required', 'err'); return; }

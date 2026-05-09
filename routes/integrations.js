@@ -180,7 +180,32 @@ async function _internalCreateLead(payload, asUserId) {
     });
     if (Object.keys(extras).length) lead.extra_json = JSON.stringify(extras);
   } catch (_) {}
+  // Auto-attach to a matching campaign if none was pinned. Done BEFORE
+  // insert so lead.campaign_id lands in the row.
+  let _autoCampaignId = null;
+  try {
+    if (!payload.campaign_id) {
+      const { findCampaignForLead } = require('../utils/campaignAssigner');
+      const probe = Object.assign({}, lead);
+      if (payload.custom_fields) probe.custom_fields = payload.custom_fields;
+      const matched = await findCampaignForLead(probe);
+      if (matched && matched.id) {
+        lead.campaign_id = matched.id;
+        _autoCampaignId = matched.id;
+      }
+    } else {
+      lead.campaign_id = Number(payload.campaign_id);
+    }
+  } catch (e) { console.warn('[integrations] campaign match lookup failed:', e.message); }
   const id = await db.insert('leads', lead);
+  // If we auto-attached, run the distribution engine so the campaign's
+  // assigned agent (round-robin / equal / etc.) gets the lead.
+  if (_autoCampaignId) {
+    try {
+      const { assignLeadToCampaign } = require('../utils/campaignAssigner');
+      await assignLeadToCampaign(id, _autoCampaignId, { skipAutomations: false });
+    } catch (e) { console.warn('[integrations] campaign assigner skipped:', e.message); }
+  }
   return { id };
 }
 
