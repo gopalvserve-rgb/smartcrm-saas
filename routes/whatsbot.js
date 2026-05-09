@@ -1458,7 +1458,8 @@ async function api_wb_chat_messages(token, phone) {
 
   const { rows } = await db.query(
     `SELECT id, direction, body, message_type, media_url, media_id, status, reply_to,
-            created_at, read_at, delivered_at, error_text, template_name
+            created_at, read_at, delivered_at, error_text, template_name,
+            phone_number_id
        FROM whatsapp_messages
        WHERE from_number = $1 OR to_number = $1
        ORDER BY created_at ASC

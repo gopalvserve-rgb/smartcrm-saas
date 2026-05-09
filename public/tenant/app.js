@@ -8897,6 +8897,29 @@ async function wbChat() {
       // For media messages, show an inline preview / download chip on top
       // of the caption (msg.body holds the caption when it's a media msg).
       const mediaNode = renderWaMessageMedia(msg);
+      // Multi-WA: small badge showing which connected number this msg
+      // arrived on (or was sent from). Helps agents juggling 2+ inboxes.
+      let _phoneBadge = null;
+      try {
+        const allPhones = (CRM.cache && CRM.cache.waPhones) || [];
+        if (msg.phone_number_id && allPhones.length > 1) {
+          const meta = allPhones.find(p => String(p.phone_number_id) === String(msg.phone_number_id));
+          if (meta) {
+            const label = meta.label
+              || meta.display_phone_number
+              || ('… ' + String(meta.phone_number_id).slice(-4));
+            _phoneBadge = h('span', {
+              class: 'wb-msg-phone-badge',
+              title: 'Received on ' + (meta.display_phone_number || meta.phone_number_id),
+              style: {
+                fontSize: '.65rem', padding: '1px 6px', marginLeft: '.4rem',
+                borderRadius: '999px', background: '#e0e7ff', color: '#3730a3',
+                fontWeight: 600
+              }
+            }, msg.direction === 'in' ? '↘ ' + label : '↗ ' + label);
+          }
+        }
+      } catch (_) {}
       log.appendChild(h('div', { class: 'wb-msg ' + (msg.direction === 'in' ? 'in' : 'out') + (isFailed ? ' failed' : '') },
         mediaNode,
         h('div', { class: 'wb-msg-body' }, msg.body || (mediaNode ? '' : '[' + (msg.message_type || '') + ']')),
@@ -8908,7 +8931,8 @@ async function wbChat() {
           fmtDate(msg.created_at, 'relative'),
           msg.direction === 'out'
             ? h('span', { class: 'wb-tick ' + (isFailed ? 'failed' : tickClass), title: isFailed ? (msg.error_text || 'failed') : tickClass }, ' · ' + tickGlyph)
-            : null
+            : null,
+          _phoneBadge
         )
       ));
     });
