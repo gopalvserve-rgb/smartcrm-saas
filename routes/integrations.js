@@ -277,6 +277,152 @@ async function api_sheetSync_runNow(token, id) {
  *   integromat, n8n, leadsquared, zoho, zohocrm, hubspot,
  *   salesforce, sfdc, generic
  */
+
+// ============================================================
+// Per-tenant lead-source field mapping
+// ============================================================
+// The operator can override the hardcoded _adaptLeadSourcePayload
+// defaults by saving a row in lead_source_mapping(source, mapping).
+// If a key in the incoming payload appears in the saved mapping, we
+// use the configured CRM field; otherwise we fall back to the default
+// mapper above. This lets each tenant deal with vendor variations
+// (custom IndiaMART form fields, white-labelled ad partners, etc.)
+// without code changes.
+
+// Known incoming-key catalog per source — used by the SPA mapping UI
+// to suggest fields the operator can map. Order matters; first key in
+// each list is what the default mapper picks first.
+const KNOWN_KEYS_BY_SOURCE = {
+  indiamart:     ['SENDER_NAME', 'SENDER_MOBILE', 'SENDER_EMAIL', 'SENDER_COMPANY', 'SENDER_CITY', 'SENDER_STATE', 'SENDER_ADDRESS', 'QUERY_MESSAGE', 'QUERY_PRODUCT_NAME', 'UNIQUE_QUERY_ID', 'SUBJECT'],
+  magicbricks:   ['contact_person', 'mobile', 'email', 'city', 'message', 'remarks', 'requirement', 'lead_id', 'leadId', 'projectName', 'budget'],
+  justdial:      ['prefix', 'name', 'mobile', 'email', 'city', 'category', 'service', 'enquiry', 'leadid', 'area'],
+  tradeindia:    ['GLUSR_USR_FNAME', 'GLUSR_USR_PHONE', 'GLUSR_USR_EMAIL', 'GLUSR_USR_COMPANY', 'GLUSR_USR_CITY', 'MESSAGE', 'QUERY_ID', 'GLUSR_USR_INTRESTED_PRODUCTS'],
+  '99acres':     ['name', 'mobile', 'email', 'city', 'message', 'lead_id', 'projectName', 'budget'],
+  housing:       ['name', 'phone', 'email', 'city', 'message', 'project', 'budget', 'lead_id'],
+  nobroker:      ['name', 'phone', 'email', 'city', 'message', 'lead_id', 'project'],
+  exportersindia:['contact_person', 'mobile', 'email', 'company', 'city', 'message', 'product_required', 'enquiry_id'],
+  sulekha:       ['customer_name', 'mobile', 'email', 'city', 'service', 'message', 'lead_id'],
+  googleads:     ['user_column_data', 'lead_id', 'campaign_id', 'form_id'],
+  wordpress:     ['name', 'first_name', 'last_name', 'email', 'phone', 'message', 'subject', 'company'],
+  googleforms:   ['name', 'phone', 'email', 'message', 'company', 'city'],
+  pabbly:        ['name', 'phone', 'email', 'company', 'city', 'message', 'source'],
+  zapier:        ['name', 'phone', 'email', 'company', 'city', 'message', 'source'],
+  make:          ['name', 'full_name', 'contact_name', 'phone', 'mobile', 'email', 'company', 'organization', 'city', 'message', 'enquiry', 'source', 'source_ref'],
+  generic:       ['name', 'phone', 'email', 'company', 'city', 'state', 'address', 'message', 'source', 'source_ref', 'product', 'value']
+};
+
+// Known target CRM fields — used by the mapping UI dropdown.
+const CRM_FIELDS = ['name','phone','email','company','city','state','address','source','source_ref','notes','product','value','tags'];
+
+async function _ensureLeadSourceMappingTable() {
+  try {
+    await db.query(`CREATE TABLE IF NOT EXISTS lead_source_mapping (
+      source        TEXT PRIMARY KEY,
+      mapping       JSONB NOT NULL DEFAULT '{}'::jsonb,
+      last_payload  JSONB,
+      last_seen_at  TIMESTAMPTZ,
+      updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  } catch (_) {}
+}
+
+async function _loadCustomMapping(source) {
+  try {
+    const r = await db.query(`SELECT mapping FROM lead_source_mapping WHERE source = $1`, [String(source).toLowerCase()]);
+    if (r.rows[0] && r.rows[0].mapping) {
+      const m = typeof r.rows[0].mapping === 'string' ? JSON.parse(r.rows[0].mapping) : r.rows[0].mapping;
+      return m || null;
+    }
+  } catch (_) {}
+  return null;
+}
+
+async function _saveLastPayload(source, payload) {
+  try {
+    await _ensureLeadSourceMappingTable();
+    await db.query(
+      `INSERT INTO lead_source_mapping (source, last_payload, last_seen_at)
+       VALUES ($1, $2::jsonb, NOW())
+       ON CONFLICT (source) DO UPDATE SET last_payload = EXCLUDED.last_payload, last_seen_at = NOW()`,
+      [String(source).toLowerCase(), JSON.stringify(payload).slice(0, 60000)]
+    );
+  } catch (_) {}
+}
+
+// Apply the custom mapping. Returns null if no custom mapping exists
+// (caller falls back to _adaptLeadSourcePayload).
+function _applyCustomMapping(payload, mapping) {
+  // Flatten nested {data:{...}}, {RESPONSE:[...]}, {Lead:{...}} wrappers
+  // so the mapping keys are top-level.
+  const items = Array.isArray(payload.RESPONSE) ? payload.RESPONSE
+              : Array.isArray(payload.response) ? payload.response
+              : Array.isArray(payload.Lead)     ? payload.Lead
+              : Array.isArray(payload.leads)    ? payload.leads
+              : payload.data    ? [payload.data]
+              : payload.lead    ? [payload.lead]
+              : payload.Lead    ? [payload.Lead]
+              : [payload];
+  return items.map(row => {
+    const out = {};
+    Object.keys(mapping).forEach(srcKey => {
+      const target = mapping[srcKey];
+      if (!target || row[srcKey] == null || row[srcKey] === '') return;
+      if (target.startsWith('cf_')) {
+        if (!out.extra_json) out.extra_json = {};
+        out.extra_json[target] = String(row[srcKey]);
+      } else {
+        // If multiple source keys map to same target, append.
+        if (out[target] && target === 'name') out[target] += ' ' + String(row[srcKey]);
+        else out[target] = String(row[srcKey]);
+      }
+    });
+    return out;
+  });
+}
+
+// Public APIs —————————————————————————————————————————————————
+
+async function api_integrations_mapping_get(token, source) {
+  const me = await authUser(token);
+  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  await _ensureLeadSourceMappingTable();
+  const norm = String(source || '').toLowerCase();
+  let row = null;
+  try {
+    const r = await db.query(`SELECT mapping, last_payload, last_seen_at FROM lead_source_mapping WHERE source = $1`, [norm]);
+    row = r.rows[0] || null;
+  } catch (_) {}
+  return {
+    source: norm,
+    mapping: row ? (typeof row.mapping === 'string' ? JSON.parse(row.mapping) : row.mapping) : {},
+    last_payload: row ? row.last_payload : null,
+    last_seen_at: row ? row.last_seen_at : null,
+    known_keys: KNOWN_KEYS_BY_SOURCE[norm] || KNOWN_KEYS_BY_SOURCE.generic,
+    crm_fields: CRM_FIELDS
+  };
+}
+
+async function api_integrations_mapping_save(token, source, mapping) {
+  const me = await authUser(token);
+  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  await _ensureLeadSourceMappingTable();
+  const norm = String(source || '').toLowerCase();
+  if (!norm) throw new Error('source required');
+  const map = (mapping && typeof mapping === 'object') ? mapping : {};
+  // Strip empty entries
+  const clean = {};
+  Object.keys(map).forEach(k => {
+    if (k && map[k]) clean[String(k)] = String(map[k]);
+  });
+  await db.query(
+    `INSERT INTO lead_source_mapping (source, mapping, updated_at)
+     VALUES ($1, $2::jsonb, NOW())
+     ON CONFLICT (source) DO UPDATE SET mapping = EXCLUDED.mapping, updated_at = NOW()`,
+    [norm, JSON.stringify(clean)]
+  );
+  return { ok: true, source: norm, mapping: clean };
+}
+
 function _adaptLeadSourcePayload(source, body) {
   const norm = String(source || '').toLowerCase().trim();
   const pick = (obj, keys) => {
@@ -665,7 +811,21 @@ async function leadSourceWebhook(req, res) {
       await db.insert('webhook_log', { source, payload: body, processed: 0, error: '' });
     } catch (_) {}
 
-    const items = _adaptLeadSourcePayload(source, body);
+    // Save the latest payload for the mapping UI (best-effort)
+    try { await _saveLastPayload(source, body); } catch (_) {}
+    // Apply tenant's custom mapping if one exists, fall back to defaults
+    let items;
+    const customMap = await _loadCustomMapping(source);
+    if (customMap && Object.keys(customMap).length) {
+      items = _applyCustomMapping(body, customMap);
+      // Keep source label from the default mapper for nice display
+      const defaults = _adaptLeadSourcePayload(source, body);
+      items.forEach((item, i) => {
+        if (!item.source && defaults[i] && defaults[i].source) item.source = defaults[i].source;
+      });
+    } else {
+      items = _adaptLeadSourcePayload(source, body);
+    }
     const owner = await db.getAll('users').then(us => us.find(u => u.role === 'admin'));
     if (!owner) return res.status(500).json({ error: 'No admin user to own leads' });
 
@@ -1033,6 +1193,8 @@ async function api_integrations_csvImport(token, payload) {
 }
 
 module.exports = {
+  api_integrations_mapping_get,
+  api_integrations_mapping_save,
   api_integrations_csvImport,
   // Sheet sync
   runDueSheetSyncs,

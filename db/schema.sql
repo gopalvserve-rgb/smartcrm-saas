@@ -1373,3 +1373,28 @@ CREATE TABLE IF NOT EXISTS quotation_items (
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_qitems_quote ON quotation_items(quotation_id, position);
+
+
+-- ============================================================
+-- Lead-source field mapping (2026-05-09)
+-- ============================================================
+-- Per-source override table. The default _adaptLeadSourcePayload
+-- mappers in routes/integrations.js are still applied as a fallback,
+-- but if a row exists here for a given source, its mapping takes
+-- precedence.
+--
+-- mapping JSONB format: { "<incoming_key>": "<crm_field>", ... }
+--   <crm_field> can be: name | phone | email | company | city | state |
+--                       address | source | source_ref | notes | product |
+--                       value | tags | cf_<custom_key>
+--
+-- last_payload JSONB stores the most recent received payload so the
+-- mapping UI can show real keys the operator can drag-and-map.
+
+CREATE TABLE IF NOT EXISTS lead_source_mapping (
+  source        TEXT PRIMARY KEY,
+  mapping       JSONB NOT NULL DEFAULT '{}'::jsonb,
+  last_payload  JSONB,
+  last_seen_at  TIMESTAMPTZ,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

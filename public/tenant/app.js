@@ -11575,7 +11575,10 @@ async function adminIntegrations() {
         h('button', { class: 'btn sm', onclick: ev => {
           const inp = ev.target.parentNode.querySelector('input');
           navigator.clipboard.writeText(inp.value).then(() => toast('Copied'), () => { inp.select(); document.execCommand('copy'); toast('Copied'); });
-        } }, '📋 Copy')
+        } }, '📋 Copy'),
+        h('button', { class: 'btn sm', style: { marginLeft: '.3rem' }, title: 'Map incoming JSON keys to CRM fields',
+          onclick: () => openSourceMappingModal(s.id, s.label)
+        }, '🗺 Map fields')
       ));
     });
     wrap.appendChild(list);
