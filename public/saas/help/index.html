@@ -273,6 +273,82 @@ table.kv td code { white-space: nowrap; }
   .brand-tagline { display: none; }
   table.kv td:first-child { width: 130px; }
 }
+
+/* Mock screenshot blocks (inline SVG previews of the actual UI) */
+.mock {
+  margin: .85rem 0; padding: 0; border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm); overflow: hidden; background: #fff;
+  box-shadow: var(--shadow);
+}
+.mock-bar {
+  display: flex; align-items: center; gap: .35rem;
+  padding: .5rem .75rem; background: #f1f5f9; border-bottom: 1px solid var(--border);
+  font-size: .78rem; color: var(--text-soft);
+}
+.mock-bar .dot { width: 10px; height: 10px; border-radius: 50%; }
+.mock-bar .dot.r { background: #ef4444; }
+.mock-bar .dot.y { background: #f59e0b; }
+.mock-bar .dot.g { background: #10b981; }
+.mock-bar .url { background: #fff; padding: 2px 8px; border-radius: 4px; flex: 1; font-family: "SF Mono", Menlo, Consolas, monospace; font-size: .73rem; color: #0f172a; border: 1px solid var(--border); margin-left: .35rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mock-body { padding: 0; background: #fff; }
+.mock-body svg { display: block; width: 100%; height: auto; }
+.mock-caption { padding: .5rem .85rem; font-size: .78rem; color: var(--text-muted); background: #fafbfc; border-top: 1px solid var(--border); }
+
+/* Sample payload presentation */
+.example-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: .75rem;
+  margin: .75rem 0;
+}
+.example-grid > div { background: var(--surface-soft); border-radius: var(--radius-sm); padding: .65rem .85rem; border: 1px solid var(--border); }
+.example-grid > div h4 { margin: 0 0 .35rem; font-size: .82rem; color: var(--text-soft); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.example-grid pre { margin: 0; font-size: .76rem; padding: .55rem .7rem; }
+@media (max-width: 720px) { .example-grid { grid-template-columns: 1fr; } }
+
+/* Visual flow diagram */
+.flow {
+  display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
+  margin: .75rem 0; padding: 1rem; background: var(--surface-soft);
+  border-radius: var(--radius-sm); border: 1px solid var(--border);
+}
+.flow-step {
+  flex: 1; min-width: 100px; text-align: center;
+  background: #fff; padding: .65rem .55rem;
+  border-radius: var(--radius-sm); border: 1px solid var(--border);
+  font-size: .82rem; box-shadow: var(--shadow);
+}
+.flow-step strong { display: block; font-size: .78rem; color: var(--text); }
+.flow-step span { color: var(--text-muted); font-size: .72rem; }
+.flow-arrow { color: var(--brand); font-size: 1.3rem; line-height: 1; }
+@media (max-width: 720px) {
+  .flow { flex-direction: column; }
+  .flow-step { width: 100%; }
+  .flow-arrow { transform: rotate(90deg); }
+}
+
+/* Common-mistake / what-success-looks-like callouts */
+.success-box {
+  background: var(--success-soft); border-left: 4px solid var(--success);
+  padding: .75rem 1rem; border-radius: var(--radius-sm); margin: .75rem 0;
+  font-size: .9rem;
+}
+.success-box strong { color: #065f46; }
+.gotcha-box {
+  background: var(--warn-soft); border-left: 4px solid var(--warn);
+  padding: .75rem 1rem; border-radius: var(--radius-sm); margin: .75rem 0;
+  font-size: .9rem;
+}
+.gotcha-box strong { color: #92400e; }
+.gotcha-box ul { margin: .35rem 0 0; padding-left: 1.25rem; }
+
+/* Inline keyboard / button hint */
+.kbd {
+  display: inline-block;
+  background: #fff; border: 1px solid var(--border-strong);
+  border-bottom-width: 2px; border-radius: 4px;
+  padding: 1px 6px; font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: .8rem; color: var(--text);
+}
+
 @media (prefers-color-scheme: dark) {
   /* Keep light theme for readability - guides are easier to read in light mode */
 }
@@ -427,27 +503,104 @@ table.kv td code { white-space: nowrap; }
 </ol>
 </article>
 
-<article class="section" id="custom-fields" data-keywords="custom field extra additional metadata budget property requirement attribute pabbly">
+<article class="section" id="custom-fields" data-keywords="custom field extra additional metadata budget property requirement attribute pabbly key label value type">
 <h2><span class="num">05</span>➕ Custom fields</h2>
-<p class="lede">Track anything specific to your business — budget, requirement, property type, course interested in.</p>
+<p class="lede">Track anything specific to your business — budget, requirement, property type, course interested in, etc. Webhooks pick them up automatically.</p>
+
+<h3>Step-by-step</h3>
 <ol class="steps">
-<li><strong>Open Settings → Custom Fields.</strong></li>
-<li><strong>Click "Add field".</strong> Fill in:
+<li><strong>Settings → Custom Fields → Add field.</strong></li>
+<li><strong>Fill the form.</strong>
 <table class="kv">
 <tr><td>Key</td><td><code>campaign_name_new</code> — internal identifier, lowercase, no spaces. <strong>This is what webhooks send.</strong></td></tr>
 <tr><td>Label</td><td><em>Campaign Name</em> — what users see on the lead form.</td></tr>
 <tr><td>Type</td><td>Text / Number / Date / Dropdown / Multi-select</td></tr>
-<tr><td>Options</td><td>(Dropdown only) one option per line</td></tr>
+<tr><td>Options</td><td>(Dropdown only) one option per line, eg. <code>Hot</code>, <code>Warm</code>, <code>Cold</code></td></tr>
 <tr><td>Show in list</td><td>Tick to make it a column on the lead grid</td></tr>
 <tr><td>Required</td><td>Tick to enforce on the lead form</td></tr>
 </table>
 </li>
-<li><strong>Webhooks pick it up automatically.</strong> Once a custom field exists, <code>/hook/website</code> reads <code>b[&lt;key&gt;]</code> on the inbound payload and stores it on the lead. Pabbly / Make / Zapier mappings just need the <em>key</em> (eg. <code>campaign_name_new</code>) — not the label.</li>
-<li><strong>Filter / report on it.</strong> Lead list → <em>Filter</em> dropdown shows your custom fields. Reports → <em>Group by</em> includes them too.</li>
+<li><strong>Save.</strong> The field is now live — visible on every lead's form, available as a webhook target, and listed in filter dropdowns.</li>
 </ol>
-<div class="callout callout-warn">
-<span class="callout-icon">⚠️</span>
-<div>Avoid renaming a key after data is saved — old rows still reference the old key. If you must rename, contact support so we can re-key your existing data.</div>
+
+<div class="mock">
+  <div class="mock-bar"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div><div class="url">crm.smartcrmsolution.com/t/&lt;slug&gt;/#/admin · Custom Fields</div></div>
+  <div class="mock-body">
+    <svg viewBox="0 0 720 280" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, sans-serif">
+      <rect width="720" height="280" fill="#fff"/>
+      <text x="20" y="30" font-size="14" font-weight="600" fill="#0f172a">Add Custom Field</text>
+      <text x="20" y="56" font-size="11" fill="#64748b">Key</text>
+      <rect x="20" y="60" width="320" height="28" rx="4" fill="#f1f5f9" stroke="#cbd5e1"/>
+      <text x="32" y="79" font-size="12" fill="#0f172a" font-family="Menlo, monospace">campaign_name_new</text>
+      <text x="20" y="106" font-size="11" fill="#64748b">Label</text>
+      <rect x="20" y="110" width="320" height="28" rx="4" fill="#fff" stroke="#cbd5e1"/>
+      <text x="32" y="129" font-size="12" fill="#0f172a">Campaign Name</text>
+      <text x="20" y="156" font-size="11" fill="#64748b">Type</text>
+      <rect x="20" y="160" width="160" height="28" rx="4" fill="#fff" stroke="#cbd5e1"/>
+      <text x="32" y="179" font-size="12" fill="#0f172a">Text ▾</text>
+      <rect x="20" y="200" width="14" height="14" rx="2" fill="#6366f1"/>
+      <path d="M22 207 L26 211 L32 204" stroke="#fff" stroke-width="2" fill="none"/>
+      <text x="42" y="212" font-size="12" fill="#0f172a">Show in list</text>
+      <rect x="160" y="200" width="14" height="14" rx="2" fill="#fff" stroke="#cbd5e1"/>
+      <text x="182" y="212" font-size="12" fill="#0f172a">Required</text>
+      <rect x="20" y="240" width="100" height="32" rx="6" fill="#6366f1"/>
+      <text x="50" y="261" font-size="13" fill="#fff" font-weight="600">Save</text>
+      <rect x="380" y="50" width="320" height="200" rx="6" fill="#eef2ff" stroke="#6366f1" stroke-dasharray="4 3"/>
+      <text x="395" y="74" font-size="12" fill="#4f46e5" font-weight="600">📡 Pabbly / Make / Zapier maps to:</text>
+      <rect x="395" y="86" width="290" height="22" rx="3" fill="#fff" stroke="#cbd5e1"/>
+      <text x="403" y="101" font-size="11" font-family="Menlo, monospace" fill="#0f172a">"campaign_name_new": "Nh-24 Villa –April 2026"</text>
+      <text x="395" y="130" font-size="11" fill="#475569">SmartCRM auto-reads this on every</text>
+      <text x="395" y="146" font-size="11" fill="#475569">/hook/website POST and stores into</text>
+      <text x="395" y="162" font-size="11" font-family="Menlo, monospace" fill="#0f172a">extra_json["campaign_name_new"]</text>
+      <text x="395" y="200" font-size="11" fill="#16a34a">✓ Visible on lead form</text>
+      <text x="395" y="218" font-size="11" fill="#16a34a">✓ Filterable in lead list</text>
+      <text x="395" y="236" font-size="11" fill="#16a34a">✓ Available in reports group-by</text>
+    </svg>
+  </div>
+  <div class="mock-caption">The Key value (left) is exactly what your webhook sender uses (right). Match them character-for-character.</div>
+</div>
+
+<h3>Sending the value via webhook</h3>
+<p>SmartCRM looks for the field in three places (in this order):</p>
+<div class="example-grid">
+<div>
+<h4>1. Top level (most common)</h4>
+<pre><code>{
+  "name": "Manu",
+  "phone": "9971...",
+  "campaign_name_new": "Nh-24 Villa"
+}</code></pre>
+</div>
+<div>
+<h4>2. cf_ prefix</h4>
+<pre><code>{
+  "name": "Manu",
+  "phone": "9971...",
+  "cf_campaign_name_new": "Nh-24 Villa"
+}</code></pre>
+</div>
+</div>
+<p>Or nested under <code>extra</code>:</p>
+<pre><code>{
+  "name": "Manu",
+  "phone": "9971...",
+  "extra": {
+    "campaign_name_new": "Nh-24 Villa",
+    "budget_band": "50L–1Cr"
+  }
+}</code></pre>
+
+<div class="success-box">
+<strong>✅ Success looks like:</strong> open the new lead → scroll to the Custom Fields section → see <em>Campaign Name = Nh-24 Villa</em>. If <em>Show in list</em> is on, it also appears as a column in the leads grid.
+</div>
+
+<div class="gotcha-box">
+<strong>⚠️ Watch out for:</strong>
+<ul>
+<li><strong>Renaming a Key after data exists.</strong> Old rows still reference the old key — they'll appear blank under the new name. If you must rename, contact support to re-key.</li>
+<li><strong>Spaces or capitals in Key.</strong> Use <code>budget_band</code> not <code>Budget Band</code> or <code>budgetBand</code>. Webhooks send the literal key.</li>
+<li><strong>Field added but webhook still drops the value.</strong> Verify the field's <em>Active</em> flag is on (Settings → Custom Fields → toggle column).</li>
+</ul>
 </div>
 </article>
 
@@ -591,38 +744,209 @@ You should get <code>{"ok":true,"id":123}</code>.
 </article>
 
 <article class="section" id="pabbly" data-keywords="pabbly connect zapier integromat workflow facebook instagram form lead ads automation">
-<h2><span class="num">13</span>🔗 Pabbly Connect</h2>
-<p class="lede">Bridge Meta Lead Ads, Instagram, Google Forms, JustDial, IndiaMart and 800+ other sources into SmartCRM.</p>
+<h2><span class="num">13</span>🔗 Pabbly Connect — full walkthrough</h2>
+<p class="lede">Bridge Meta Lead Ads, Instagram, Google Forms, JustDial, IndiaMart and 800+ other sources into SmartCRM. End-to-end recipe.</p>
+
+<div class="flow">
+  <div class="flow-step"><strong>Trigger</strong><span>Meta / Forms / etc.</span></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-step"><strong>Pabbly</strong><span>API by Pabbly</span></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-step"><strong>SmartCRM</strong><span>/hook/website</span></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-step"><strong>Lead row</strong><span>+ auto-assign</span></div>
+</div>
+
+<h3>Step-by-step</h3>
 <ol class="steps">
-<li><strong>Set up the trigger.</strong> Eg. Facebook Lead Ads → choose your page → choose your form.</li>
-<li><strong>Add an "Action — API by Pabbly" step.</strong></li>
-<li><strong>Method:</strong> <code>POST</code>.<br>
-<strong>URL:</strong>
+<li><strong>Set up the trigger.</strong>
+<p>Eg. <em>Facebook Lead Ads</em> as the trigger, pick your page, pick your form. Click <em>Save and Send Test Request</em> — Pabbly will ask you to fire a test lead from Facebook's test tool.</p></li>
+
+<li><strong>Add an "Action — API by Pabbly" step.</strong>
+<p>It's the second-from-the-top action. Don't pick "HTTP" — "API by Pabbly" has the field-mapping UI you'll need.</p>
+<div class="mock">
+  <div class="mock-bar"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div><div class="url">connect.pabbly.com</div></div>
+  <div class="mock-body">
+    <svg viewBox="0 0 720 220" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, sans-serif">
+      <rect width="720" height="220" fill="#ffffff"/>
+      <rect x="20" y="20" width="240" height="180" rx="8" fill="#f1f5f9" stroke="#cbd5e1"/>
+      <text x="40" y="48" font-size="13" fill="#0f172a" font-weight="600">Step 1 — Trigger</text>
+      <rect x="40" y="62" width="200" height="34" rx="6" fill="#1877f2"/>
+      <text x="56" y="83" font-size="13" fill="#fff" font-weight="500">Facebook Lead Ads</text>
+      <text x="40" y="120" font-size="11" fill="#475569">Page: Your Business</text>
+      <text x="40" y="138" font-size="11" fill="#475569">Form: Nh-24 Villa Inquiry</text>
+      <text x="40" y="170" font-size="11" fill="#16a34a">✓ Test data received</text>
+      <line x1="270" y1="110" x2="290" y2="110" stroke="#94a3b8" stroke-width="2"/>
+      <polygon points="290,105 300,110 290,115" fill="#94a3b8"/>
+      <rect x="310" y="20" width="380" height="180" rx="8" fill="#eef2ff" stroke="#6366f1" stroke-width="2"/>
+      <text x="330" y="48" font-size="13" fill="#0f172a" font-weight="600">Step 2 — Action: API by Pabbly</text>
+      <rect x="330" y="62" width="120" height="26" rx="4" fill="#fff" stroke="#cbd5e1"/>
+      <text x="345" y="80" font-size="11" fill="#475569">Method</text>
+      <rect x="455" y="62" width="60" height="26" rx="4" fill="#6366f1"/>
+      <text x="470" y="80" font-size="11" fill="#fff" font-weight="600">POST</text>
+      <text x="330" y="110" font-size="11" fill="#64748b">Endpoint URL</text>
+      <rect x="330" y="115" width="340" height="26" rx="4" fill="#fff" stroke="#cbd5e1"/>
+      <text x="338" y="132" font-size="10" fill="#0f172a" font-family="Menlo, monospace">crm.smartcrmsolution.com/t/&lt;slug&gt;/hook/website</text>
+      <text x="330" y="160" font-size="11" fill="#64748b">Headers</text>
+      <rect x="330" y="165" width="340" height="22" rx="4" fill="#fff" stroke="#cbd5e1"/>
+      <text x="338" y="180" font-size="10" fill="#0f172a" font-family="Menlo, monospace">x-api-key: ••••••• &nbsp; Content-Type: application/json</text>
+    </svg>
+  </div>
+  <div class="mock-caption">What the Pabbly action card looks like once configured.</div>
+</div>
+</li>
+
+<li><strong>Set the URL.</strong>
+<p>Method: <code>POST</code>. Endpoint URL:</p>
 <div class="copy-row"><span class="copy-content">https://crm.smartcrmsolution.com/t/&lt;your-slug&gt;/hook/website</span><button class="copy-btn">Copy</button></div>
-</li>
-<li><strong>Headers.</strong>
+<p>Replace <code>&lt;your-slug&gt;</code> with your workspace name (eg. <code>vserve</code>, <code>learnimo</code>).</p></li>
+
+<li><strong>Add the auth header.</strong>
+<p>Click <em>Add a Header</em>. Two rows:</p>
 <table class="kv">
-<tr><td><code>x-api-key</code></td><td>Your Website API key (Settings → Website API)</td></tr>
-<tr><td><code>Content-Type</code></td><td><code>application/json</code></td></tr>
+<tr><td>x-api-key</td><td>Your Website API key from <em>SmartCRM → Settings → Website API</em>. <strong>Tip:</strong> click <em>Regenerate</em> to be sure you're using a fresh one.</td></tr>
+<tr><td>Content-Type</td><td><code>application/json</code></td></tr>
 </table>
 </li>
-<li><strong>Body type:</strong> <em>Raw</em> → JSON. Map the fields:
+
+<li><strong>Body type → "Raw" → JSON.</strong>
+<p>Pabbly's payload editor accepts a JSON template. Map each field by clicking inside the value side of a row, then dragging the matching token from the trigger column on the right.</p>
+<div class="mock">
+  <div class="mock-bar"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div><div class="url">Pabbly · Field mapping</div></div>
+  <div class="mock-body">
+    <svg viewBox="0 0 720 290" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, sans-serif">
+      <rect width="720" height="290" fill="#ffffff"/>
+      <text x="20" y="30" font-size="13" font-weight="600" fill="#0f172a">Body — Raw JSON</text>
+      <rect x="20" y="40" width="440" height="230" rx="6" fill="#0f172a"/>
+      <text x="36" y="62" font-size="11" font-family="Menlo, monospace" fill="#94a3b8">{</text>
+      <text x="50" y="80" font-size="11" font-family="Menlo, monospace" fill="#a5b4fc">"name":</text>
+      <text x="115" y="80" font-size="11" font-family="Menlo, monospace" fill="#fff">"</text>
+      <rect x="120" y="69" width="118" height="14" rx="2" fill="#6366f1" opacity=".25"/>
+      <text x="124" y="80" font-size="11" font-family="Menlo, monospace" fill="#a5b4fc">{Res2 Name}</text>
+      <text x="240" y="80" font-size="11" font-family="Menlo, monospace" fill="#fff">",</text>
+      <text x="50" y="98" font-size="11" font-family="Menlo, monospace" fill="#a5b4fc">"phone":</text>
+      <rect x="120" y="87" width="170" height="14" rx="2" fill="#6366f1" opacity=".25"/>
+      <text x="124" y="98" font-size="11" font-family="Menlo, monospace" fill="#a5b4fc">{Res2 Work Phone}</text>
+      <text x="50" y="116" font-size="11" font-family="Menlo, monospace" fill="#a5b4fc">"source":</text>
+      <text x="120" y="116" font-size="11" font-family="Menlo, monospace" fill="#fff">"Meta",</text>
+      <text x="50" y="134" font-size="11" font-family="Menlo, monospace" fill="#a5b4fc">"campaign_name_new":</text>
+      <rect x="194" y="123" width="200" height="14" rx="2" fill="#16a34a" opacity=".25"/>
+      <text x="198" y="134" font-size="11" font-family="Menlo, monospace" fill="#86efac">{Res1 Campaign Name}</text>
+      <text x="50" y="152" font-size="11" font-family="Menlo, monospace" fill="#a5b4fc">"campaign_id":</text>
+      <rect x="155" y="141" width="170" height="14" rx="2" fill="#16a34a" opacity=".25"/>
+      <text x="159" y="152" font-size="11" font-family="Menlo, monospace" fill="#86efac">{Res1 Campaign Id}</text>
+      <text x="36" y="170" font-size="11" font-family="Menlo, monospace" fill="#94a3b8">}</text>
+      <rect x="480" y="40" width="220" height="230" rx="6" fill="#f1f5f9" stroke="#cbd5e1"/>
+      <text x="495" y="60" font-size="12" font-weight="600" fill="#0f172a">Trigger response (right pane)</text>
+      <rect x="495" y="72" width="190" height="20" rx="3" fill="#fff" stroke="#cbd5e1"/>
+      <text x="503" y="86" font-size="10" fill="#475569">📋 Res2 Name : Manu</text>
+      <rect x="495" y="96" width="190" height="20" rx="3" fill="#fff" stroke="#cbd5e1"/>
+      <text x="503" y="110" font-size="10" fill="#475569">📋 Res2 Work Phone : 99714…</text>
+      <rect x="495" y="120" width="190" height="20" rx="3" fill="#fff" stroke="#cbd5e1"/>
+      <text x="503" y="134" font-size="10" fill="#475569">📋 Res1 Campaign Name : Nh-24…</text>
+      <rect x="495" y="144" width="190" height="20" rx="3" fill="#fff" stroke="#cbd5e1"/>
+      <text x="503" y="158" font-size="10" fill="#475569">📋 Res1 Campaign Id : 12024…</text>
+      <text x="495" y="195" font-size="10" fill="#dc2626">⚠ Drag the value chip,</text>
+      <text x="495" y="210" font-size="10" fill="#dc2626">not the labelled one.</text>
+    </svg>
+  </div>
+  <div class="mock-caption">Body editor on the left, draggable trigger response chips on the right. Drag inside the quotes.</div>
+</div>
+</li>
+
+<li><strong>Map every field by exact key name.</strong>
 <table class="kv">
-<tr><td><code>name</code></td><td>Drag the lead's name field</td></tr>
-<tr><td><code>phone</code></td><td>Drag the phone field</td></tr>
-<tr><td><code>email</code></td><td>Drag the email field</td></tr>
-<tr><td><code>source</code></td><td><code>"Meta"</code> (or whatever channel)</td></tr>
-<tr><td><code>campaign_name</code></td><td>Drag the campaign-name field <strong>value chip only</strong> — don't drag the labelled chip with "Res1 Campaign Name :" prefix.</td></tr>
-<tr><td><code>campaign_id</code></td><td>Drag the campaign-ID field</td></tr>
-<tr><td>Custom fields</td><td>Use the exact <em>key</em> from Settings → Custom Fields, eg. <code>campaign_name_new</code>.</td></tr>
+<tr><td><code>name</code></td><td>Lead's name <span class="tag tag-required">Required</span></td></tr>
+<tr><td><code>phone</code></td><td>Mobile (with country code) <span class="tag tag-required">Required</span></td></tr>
+<tr><td><code>email</code></td><td>Email <span class="tag tag-optional">Optional</span></td></tr>
+<tr><td><code>source</code></td><td>Channel name. Use a literal string (eg. <code>"Meta"</code>) — don't drag a chip here.</td></tr>
+<tr><td><code>product</code></td><td>Product / package name <span class="tag tag-optional">Optional</span></td></tr>
+<tr><td><code>notes</code></td><td>Free text — useful for question-answer responses</td></tr>
+<tr><td><code>campaign_name</code> / <code>campaign_id</code></td><td>Built-in attribution. Aliases accepted.</td></tr>
+<tr><td>Custom field <code>key</code></td><td>Use the exact <em>Key</em> from <em>SmartCRM → Settings → Custom Fields</em> (eg. <code>campaign_name_new</code>, <code>budget_band</code>, <code>requirement_type</code>).</td></tr>
 </table>
 </li>
-<li><strong>Test send.</strong> Pabbly's <em>Send Test Request</em> button. Confirm you get <code>{"ok":true,"id":...}</code>. The lead should appear in SmartCRM within seconds.</li>
-<li><strong>Save and turn on the workflow.</strong></li>
+
+<li><strong>Send a test request.</strong>
+<p>Click <em>Send Test Request</em> in Pabbly. You should see this response:</p>
+<div class="example-grid">
+  <div>
+    <h4>✅ Success looks like</h4>
+    <pre><code>{
+  "ok": true,
+  "id": 1247
+}</code></pre>
+  </div>
+  <div>
+    <h4>❌ Common failures</h4>
+    <pre><code>// 401 — wrong API key
+{"error":"Invalid API key"}
+
+// 200 but blank lead
+// = field name mismatch
+// (check Recent inbound)</code></pre>
+  </div>
+</div>
+</li>
+
+<li><strong>Verify in SmartCRM.</strong>
+<p>Open <em>Leads</em>. The test lead appears at the top, status <em>New</em>. Click it — the custom-field tab should show <em>Campaign Name = Nh-24 Villa</em>, <em>Campaign Id = 120243…</em>.</p></li>
+
+<li><strong>Save the workflow → toggle ON.</strong>
+<p>Pabbly only fires when the workflow is enabled. Confirm the green toggle in the top right of the Pabbly editor.</p></li>
 </ol>
+
+<h3>What the inbound webhook looks like</h3>
+<div class="example-grid">
+<div>
+<h4>📤 Pabbly sends</h4>
+<pre><code>POST /t/learnimo/hook/website
+x-api-key: ••••••••
+Content-Type: application/json
+
+{
+  "name": "Manu",
+  "phone": "9971414871",
+  "source": "Meta",
+  "campaign_name_new": "Nh-24 Villa –April 2026",
+  "campaign_id": "120243319876200411",
+  "notes": "Visit within_15_days"
+}</code></pre>
+</div>
+<div>
+<h4>📥 SmartCRM responds</h4>
+<pre><code>200 OK
+{
+  "ok": true,
+  "id": 1247
+}
+
+// Lead created with:
+// - Source = Meta
+// - extra_json.campaign_name_new
+//   = "Nh-24 Villa –April 2026"
+// - tags include campaign name
+// - auto-assigned per rules</code></pre>
+</div>
+</div>
+
+<div class="success-box">
+<strong>✅ Success looks like:</strong> the lead appears in <em>Leads</em> within 2–3 seconds of the test fire. <em>Settings → Website API → Recent inbound</em> shows a row with <em>processed = 1</em> and the body keys you mapped.
+</div>
+
+<div class="gotcha-box">
+<strong>⚠️ Common mistakes (and how to spot them):</strong>
+<ul>
+<li><strong>Lead arrives but a field is empty.</strong> You dragged the labelled chip in Pabbly (the one that shows <em>"1. Res1 Campaign Name : Nh-24 Villa"</em>) instead of the bare value chip. Re-drag using the inner value tag.</li>
+<li><strong>401 Invalid API key.</strong> Either the key is wrong, or the header name has a typo. Header MUST be <code>x-api-key</code> (lowercase, hyphen). <em>Settings → Website API → Recent inbound</em> shows a redacted prefix of whatever Pabbly actually sent.</li>
+<li><strong>Lead created but custom field missing.</strong> The custom field doesn't exist in SmartCRM yet. Add it at <em>Settings → Custom Fields</em> with the same <em>Key</em> Pabbly is sending — eg. <code>campaign_name_new</code>.</li>
+<li><strong>"campaign_Name" vs "campaign_name".</strong> Keys are case-sensitive. SmartCRM accepts a generous list of aliases for the campaign-name field, but custom-field keys must match exactly.</li>
+</ul>
+</div>
+
 <div class="callout callout-info">
 <span class="callout-icon">💡</span>
-<div>If a custom field shows as empty in the lead, check Settings → <strong>Website API → Recent inbound</strong> — the raw body tells you exactly what Pabbly sent. Most problems are field name typos (<code>campaign_Name</code> vs <code>campaign_name</code>).</div>
+<div>The Recent inbound table at <em>SmartCRM → Settings → Website API</em> logs the last 50 hits with status, redacted key prefix, and body keys. Best debug tool when something looks wrong.</div>
 </div>
 </article>
 
@@ -777,28 +1101,140 @@ Subscribe to <em>invitee.created</em>.
 </ol>
 </article>
 
-<article class="section" id="ai-bot" data-keywords="ai bot whatsapp gemini auto reply chatbot artificial intelligence smart response">
-<h2><span class="num">24</span>🤖 AI WhatsApp Bot</h2>
-<p class="lede">Auto-reply to inbound WhatsApp messages with a Gemini-powered assistant trained on your business knowledge.</p>
+<article class="section" id="ai-bot" data-keywords="ai bot whatsapp gemini auto reply chatbot artificial intelligence smart response training kb knowledge gemini api">
+<h2><span class="num">24</span>🤖 AI WhatsApp Bot — full setup</h2>
+<p class="lede">Auto-reply to inbound WhatsApp messages with a Gemini-powered assistant trained on your business. From zero to first auto-reply in 10 minutes.</p>
+
+<div class="flow">
+  <div class="flow-step"><strong>WhatsApp inbound</strong><span>customer message</span></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-step"><strong>Build prompt</strong><span>persona + KB + history</span></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-step"><strong>Gemini</strong><span>generates reply</span></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-step"><strong>Send / draft</strong><span>per mode</span></div>
+</div>
+
+<h3>Step-by-step</h3>
 <ol class="steps">
-<li><strong>Sidebar → AI Bot → Bot Settings.</strong></li>
+<li><strong>Sidebar → AI Bot → Bot Settings.</strong> First time you open it, you'll see a setup card.</li>
+
 <li><strong>Enable the bot.</strong> Tick <em>Enabled</em>.</li>
-<li><strong>Pick a goal template.</strong> Sales / Support / Site visit / Appointment booking / Custom. Each pre-fills a system prompt tailored for that goal.</li>
+
+<li><strong>Pick a goal template.</strong>
+<table class="kv">
+<tr><td>Sales</td><td>Friendly, qualifies budget + timeline, books a call/visit. Best for inbound enquiries on Meta / Google ads.</td></tr>
+<tr><td>Support</td><td>Helpful, acknowledges issues, confirms ticket creation, escalates to human when stuck.</td></tr>
+<tr><td>Site visit</td><td>Real-estate / education / service businesses. Asks date + time, confirms appointment.</td></tr>
+<tr><td>Appointment booking</td><td>Doctors, clinics, salons. Asks slot, confirms booking, sends reminder.</td></tr>
+<tr><td>Custom</td><td>Write your own system prompt. Full control, more work.</td></tr>
+</table>
+Each template pre-fills the <em>System Prompt</em> field — you can edit further before saving.</li>
+
 <li><strong>Pick reply mode.</strong>
 <table class="kv">
-<tr><td><code>always</code></td><td>Auto-send replies. Best for first-touch + FAQs.</td></tr>
-<tr><td><code>manual</code></td><td>Generate a draft and queue it for your agent to review/send. Best for complex sales.</td></tr>
-<tr><td><code>after-hours</code></td><td>Only auto-reply outside business hours.</td></tr>
+<tr><td><code>always</code></td><td>Auto-send every reply. Best for first-touch + FAQs.</td></tr>
+<tr><td><code>manual</code></td><td>Generate a draft, queue for the agent to review/send. Best for complex sales.</td></tr>
+<tr><td><code>after-hours</code></td><td>Auto-reply outside business hours, manual mode during work hours.</td></tr>
 </table>
 </li>
-<li><strong>Pick language.</strong> The bot replies in the language you pick — English, Hindi, Hinglish, Marathi, Tamil, Telugu, Bengali, Kannada, etc. The model auto-detects too if you leave it on <em>Auto</em>.</li>
-<li><strong>Set "Resume after idle".</strong> If a human agent has replied recently, the bot stays quiet to avoid duelling responses. Default 2 minutes — bump up if your agents take longer to read incoming messages.</li>
-<li><strong>(Optional) Off-keywords.</strong> Eg. <code>human, agent, talk to, stop bot</code>. The bot pauses on threads where these appear.</li>
-<li><strong>Save.</strong> The bot is now live on every inbound that doesn't match a Message Bot or Template Bot trigger.</li>
+
+<li><strong>Pick language.</strong> English / Hindi / Hinglish / Marathi / Tamil / Telugu / Bengali / Kannada / others. Or <em>Auto-detect</em> — the model matches the customer's language.</li>
+
+<li><strong>Set "Resume after idle".</strong> If a human agent has replied recently, the bot stays quiet. Default 120 seconds — bump up if your agents take longer to read incoming messages.</li>
+
+<li><strong>(Optional) Off-keywords.</strong> Eg. <code>human, agent, talk to, stop bot, real person</code>. The bot pauses on threads where these appear.</li>
+
+<li><strong>Save → enabled live.</strong> The bot now answers every inbound that doesn't match a Message Bot or Template Bot trigger.</li>
 </ol>
+
+<div class="mock">
+  <div class="mock-bar"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div><div class="url">crm.smartcrmsolution.com/t/&lt;slug&gt;/#/aibot · Bot Settings</div></div>
+  <div class="mock-body">
+    <svg viewBox="0 0 720 360" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, sans-serif">
+      <rect width="720" height="360" fill="#fff"/>
+      <text x="20" y="30" font-size="15" font-weight="600" fill="#0f172a">🤖 AI WhatsApp Bot</text>
+      <rect x="20" y="44" width="60" height="20" rx="10" fill="#10b981"/>
+      <text x="36" y="58" font-size="11" fill="#fff" font-weight="600">ENABLED</text>
+      <rect x="20" y="80" width="680" height="60" rx="6" fill="#f8fafc" stroke="#e2e8f0"/>
+      <text x="36" y="103" font-size="12" fill="#475569">Goal template</text>
+      <rect x="36" y="110" width="120" height="22" rx="11" fill="#6366f1"/>
+      <text x="60" y="125" font-size="11" fill="#fff" font-weight="600">Sales (real estate)</text>
+      <rect x="170" y="110" width="80" height="22" rx="11" fill="#fff" stroke="#cbd5e1"/>
+      <text x="190" y="125" font-size="11" fill="#475569">Support</text>
+      <rect x="262" y="110" width="100" height="22" rx="11" fill="#fff" stroke="#cbd5e1"/>
+      <text x="282" y="125" font-size="11" fill="#475569">Site visit</text>
+      <rect x="20" y="150" width="335" height="80" rx="6" fill="#f8fafc" stroke="#e2e8f0"/>
+      <text x="36" y="172" font-size="12" fill="#475569">Reply mode</text>
+      <rect x="36" y="180" width="80" height="22" rx="11" fill="#6366f1"/>
+      <text x="55" y="195" font-size="11" fill="#fff" font-weight="600">always</text>
+      <rect x="124" y="180" width="80" height="22" rx="11" fill="#fff" stroke="#cbd5e1"/>
+      <text x="146" y="195" font-size="11" fill="#475569">manual</text>
+      <rect x="212" y="180" width="100" height="22" rx="11" fill="#fff" stroke="#cbd5e1"/>
+      <text x="232" y="195" font-size="11" fill="#475569">after-hours</text>
+      <text x="36" y="220" font-size="11" fill="#94a3b8">Auto-send every reply.</text>
+      <rect x="365" y="150" width="335" height="80" rx="6" fill="#f8fafc" stroke="#e2e8f0"/>
+      <text x="381" y="172" font-size="12" fill="#475569">Reply language</text>
+      <rect x="381" y="180" width="160" height="26" rx="4" fill="#fff" stroke="#cbd5e1"/>
+      <text x="395" y="198" font-size="12" fill="#0f172a">Auto-detect ▾</text>
+      <text x="381" y="222" font-size="11" fill="#94a3b8">Reads the customer's language.</text>
+      <rect x="20" y="245" width="335" height="60" rx="6" fill="#f8fafc" stroke="#e2e8f0"/>
+      <text x="36" y="267" font-size="12" fill="#475569">Resume after idle</text>
+      <rect x="36" y="275" width="80" height="24" rx="4" fill="#fff" stroke="#cbd5e1"/>
+      <text x="58" y="292" font-size="12" fill="#0f172a" font-family="Menlo, monospace">120</text>
+      <text x="124" y="292" font-size="11" fill="#94a3b8">seconds after last human msg</text>
+      <rect x="365" y="245" width="335" height="60" rx="6" fill="#f8fafc" stroke="#e2e8f0"/>
+      <text x="381" y="267" font-size="12" fill="#475569">Off-keywords (any of these → bot pauses)</text>
+      <rect x="381" y="275" width="305" height="24" rx="4" fill="#fff" stroke="#cbd5e1"/>
+      <text x="395" y="292" font-size="11" fill="#0f172a" font-family="Menlo, monospace">human, agent, stop bot</text>
+      <rect x="20" y="320" width="100" height="32" rx="6" fill="#6366f1"/>
+      <text x="46" y="341" font-size="13" fill="#fff" font-weight="600">Save</text>
+    </svg>
+  </div>
+  <div class="mock-caption">Bot Settings tab — every option visible at a glance.</div>
+</div>
+
+<h3>What a typical bot conversation looks like</h3>
+<div class="example-grid">
+<div>
+<h4>📥 Customer says</h4>
+<pre><code>Hi, I saw your Nh-24 villa
+ad. What's the starting
+price and is amenities like
+swimming pool included?</code></pre>
+</div>
+<div>
+<h4>🤖 Bot replies (Sales template)</h4>
+<pre><code>Hi! Thanks for reaching
+out about Nh-24 Villas.
+Starting price is ₹85L
+for 2BHK. Yes — pool,
+clubhouse and gym are
+all included.
+
+Can I share a brochure
++ schedule a site visit?
+What's your preferred date?</code></pre>
+</div>
+</div>
+
+<div class="success-box">
+<strong>✅ Success looks like:</strong> AI Bot → <em>Bot Activity</em> tab shows replies appearing within 1–3 seconds of each inbound. The customer's WhatsApp shows the bot's reply with the green tick.
+</div>
+
+<div class="gotcha-box">
+<strong>⚠️ Common bot mishaps:</strong>
+<ul>
+<li><strong>Bot replies but the answers are vague / generic.</strong> Add facts to the <a href="#ai-kb">Knowledge Base</a> — pricing, hours, services, FAQs. The bot can only know what you've told it.</li>
+<li><strong>Bot replies too aggressively while the agent is also typing.</strong> Bump <em>Resume after idle</em> from 120s to 300s.</li>
+<li><strong>Cost is too high.</strong> Check AI Bot → <em>Usage &amp; Cost</em> — if input tokens are above ~10,000 per call, your KB is too large. Set <em>KB max chars per call</em> to 8,000 (~2,000 tokens). Drops cost up to 80%.</li>
+<li><strong>Bot keeps answering "I don't know".</strong> Either KB is empty or off-keywords are triggering. Check Bot Activity — the suppressed reasons column tells you what filtered each call.</li>
+</ul>
+</div>
+
 <div class="callout callout-info">
 <span class="callout-icon">💡</span>
-<div>Watch live activity at AI Bot → <strong>Bot Activity</strong>. Every inbound + reply (or suppression reason) is logged.</div>
+<div>Watch live activity at <em>AI Bot → Bot Activity</em>. Every inbound + reply (or suppression reason) is logged with model used, tokens, cost, and timestamp.</div>
 </div>
 </article>
 

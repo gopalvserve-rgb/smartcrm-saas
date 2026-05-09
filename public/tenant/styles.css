@@ -237,6 +237,8 @@ small.muted { color: var(--muted); font-size: .78rem; margin-top: .25rem; displa
 .topbar-right { display: flex; gap: .5rem; align-items: center; }
 #btn-getapp .topbar-getapp-text { margin-left: .35rem; }
 @media (max-width: 600px) { #btn-getapp .topbar-getapp-text { display: none; } }
+#btn-help .topbar-help-text { margin-left: .35rem; }
+@media (max-width: 600px) { #btn-help .topbar-help-text { display: none; } }
 .topbar-chip { display: inline-flex; align-items: center; gap: .35rem; padding: .35rem .6rem; border-radius: 999px; text-decoration: none; }
 .topbar-chip .topbar-chip-label { font-weight: 500; }
 .topbar-chip .nav-count { background: var(--brand, #2563eb); color: #fff; border-radius: 999px; padding: 1px 7px; font-size: .7rem; font-weight: 600; min-width: 18px; text-align: center; }

@@ -888,6 +888,7 @@ function renderShell() {
             <a class="btn ghost topbar-chip" href="#/duetoday" title="Follow-ups due today"><span>📅</span><span class="topbar-chip-label">Due today</span><span class="nav-count" data-count-key="due_today" hidden>0</span></a>
             <a class="btn ghost topbar-chip" href="#/upcoming" title="Upcoming follow-ups"><span>⏰</span><span class="topbar-chip-label">Upcoming</span><span class="nav-count" data-count-key="upcoming" hidden>0</span></a>
             <button class="btn ghost" id="btn-getapp" title="Install / Download the app"><span>📱</span><span class="topbar-getapp-text">Get app</span></button>
+            <a class="btn ghost" id="btn-help" href="https://crm.smartcrmsolution.com/saas/help/" target="_blank" rel="noopener" title="Setup guide — Pabbly, WhatsApp, AI Bot, etc."><span>📘</span><span class="topbar-help-text">Help</span></a>
             <a class="btn ghost" id="btn-wa-notif" href="#/chat" title="WhatsApp inbox" style="position:relative;text-decoration:none">💬<span class="badge" id="wa-notif-count" hidden style="background:#16a34a">0</span></a>
             <button class="btn ghost" id="btn-notif" title="Notifications">🔔<span class="badge" id="notif-count" hidden>0</span></button>
           </div>
