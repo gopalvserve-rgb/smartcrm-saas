@@ -46,6 +46,7 @@ const aiSettings = require('./routes/saas/aiSettings');
 const aiCosting  = require('./routes/saas/aiCosting');
 const tenantModules = require('./routes/saas/tenantModules');
 const demoTenant = require('./routes/saas/demoTenant');
+const aiUsageIngest = require('./routes/saas/aiUsageIngest');
 
 // Combine every SaaS api_* into one dispatch map
 const SAAS_API = {};
@@ -77,6 +78,13 @@ app.use(bodyParser.json({ limit: '4mb' }));
 // JSON.stringify.
 app.use(bodyParser.urlencoded({ extended: true, limit: '4mb' }));
 app.use(require('cookie-parser')());
+
+// ---- Cross-deployment AI usage ingest (Stockbox/Celeste -> here) ----
+// Other CRM clones POST every Gemini call result here so the AI Costing
+// dashboard aggregates spend across all deployments under our key.
+// Auth via Bearer header against AI_USAGE_INGEST_TOKEN env. Endpoint
+// is a no-op (503) until that env var is set.
+app.post('/ai-usage/ingest', aiUsageIngest.expressIngest);
 
 // ---- Static assets --------------------------------------------
 // Public landing site lives at /saas/* and is served at the root URL.
@@ -1418,4 +1426,4 @@ setInterval(() => {
 
   app.listen(PORT, () => console.log('[boot] SmartCRM SaaS listening on :' + PORT));
 }
-boot().ca
+boot().catch(e => { console.error('[boot] failed:', e); process.exit(1); });
