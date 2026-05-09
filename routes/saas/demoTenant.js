@@ -272,11 +272,29 @@ async function _findOrCreateDemoTenant(operatorId, operatorEmail) {
   if (existing) return existing;
 
   // Pick a default package — prefer one flagged is_default=1, else first.
-  const pkgs = await control.query(
+  // If none exists at all, auto-create a free "Demo" package so the
+  // operator doesn't have to bootstrap one manually before clicking
+  // the showcase button.
+  let pkgs = await control.query(
     `SELECT id FROM packages WHERE is_enabled = 1 ORDER BY is_default DESC, id ASC LIMIT 1`
   );
   if (!pkgs.rows.length) {
-    throw new Error('No package available — create at least one package in Super Admin → Packages first.');
+    console.log('[demo-seed] no package found — auto-creating free Demo package');
+    await control.insert('packages', {
+      name: 'Demo (auto-created)',
+      description: 'Auto-created by Showcase demo seeder. Hidden from public pricing.',
+      base_price_inr: 0, trial_days: 0,
+      recurring_period: 'month', recurring_period_count: 1,
+      is_lifetime: 1, tax_percent: 0,
+      allowed_payment_modes: 'manual',
+      is_enabled: 1, is_default: 0, is_private: 1, is_most_popular: 0,
+      modules: 'leads,calls,catalog,reports,whatsbot,aibot,quotations,campaigns,knowledge,teamchat,hr,integrations,core',
+      show_modules_on_card: 0, show_limits_on_card: 0
+    });
+    pkgs = await control.query(
+      `SELECT id FROM packages WHERE is_enabled = 1 ORDER BY is_default DESC, id ASC LIMIT 1`
+    );
+    if (!pkgs.rows.length) throw new Error('Failed to auto-create demo package.');
   }
   const packageId = pkgs.rows[0].id;
 
