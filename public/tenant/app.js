@@ -888,6 +888,7 @@ function renderShell() {
             <a class="btn ghost topbar-chip" href="#/duetoday" title="Follow-ups due today"><span>📅</span><span class="topbar-chip-label">Due today</span><span class="nav-count" data-count-key="due_today" hidden>0</span></a>
             <a class="btn ghost topbar-chip" href="#/upcoming" title="Upcoming follow-ups"><span>⏰</span><span class="topbar-chip-label">Upcoming</span><span class="nav-count" data-count-key="upcoming" hidden>0</span></a>
             <button class="btn ghost" id="btn-getapp" title="Install / Download the app"><span>📱</span><span class="topbar-getapp-text">Get app</span></button>
+            <a class="btn ghost" id="btn-wa-notif" href="#/chat" title="WhatsApp inbox" style="position:relative;text-decoration:none">💬<span class="badge" id="wa-notif-count" hidden style="background:#16a34a">0</span></a>
             <button class="btn ghost" id="btn-notif" title="Notifications">🔔<span class="badge" id="notif-count" hidden>0</span></button>
           </div>
         </header>
@@ -8304,7 +8305,15 @@ function waFriendlyError(err) {
 function renderWaMessageMedia(msg) {
   const t = String(msg.message_type || '').toLowerCase();
   if (!t || t === 'text') return null;
-  const url = msg.media_url || '';
+  // Inbound messages have a Meta media_id but no media_url. Build a
+  // proxy URL the SPA fetch shim can route to /t/<slug>/api/wa/media/<id>
+  // — that endpoint resolves the media_id to fresh Meta bytes per request.
+  // Token is appended as a query param so <img src> can authenticate
+  // without needing a header.
+  let url = msg.media_url || '';
+  if (!url && msg.media_id && msg.id && CRM.token) {
+    url = '/api/wa/media/' + msg.id + '?token=' + encodeURIComponent(CRM.token);
+  }
   if (t === 'image') {
     if (!url) return h('div', { class: 'wb-msg-media muted' }, '🖼 [image]');
     return h('a', { href: url, target: '_blank', rel: 'noopener', class: 'wb-msg-image' },
@@ -8320,9 +8329,12 @@ function renderWaMessageMedia(msg) {
     return h('audio', { class: 'wb-msg-audio', controls: true, preload: 'none', src: url });
   }
   if (t === 'document') {
-    return h('a', { href: url || '#', target: '_blank', rel: 'noopener', class: 'wb-msg-doc' },
+    return h('a', { href: url || '#', target: '_blank', rel: 'noopener',
+      download: (msg.body && msg.body.length < 80) ? msg.body : 'document',
+      class: 'wb-msg-doc' },
       h('span', { class: 'wb-msg-doc-icon' }, '📄'),
-      h('span', { class: 'wb-msg-doc-name' }, msg.body || 'Document')
+      h('span', { class: 'wb-msg-doc-name' }, msg.body || 'Document'),
+      h('span', { class: 'wb-msg-doc-dl' }, ' ⬇')
     );
   }
   return h('div', { class: 'wb-msg-media muted' }, '[' + t + ']');
@@ -8585,12 +8597,17 @@ async function wbChat() {
   let lastThreadsFingerprint = '';
 
   function _threadFingerprint(threads) {
-    return threads.map(t => `${t.phone}|${t.last_at}|${t.unread}|${t.assigned_to || 0}|${t.phone_number_id || ''}|${agentFilterId || ''}|${searchQuery || ''}|${inboxPhoneId || ''}`).join(';');
+    return threads.map(t => `${t.phone}|${t.last_at}|${t.unread}|${t.assigned_to || 0}|${t.phone_number_id || ''}|${agentFilterId || ''}|${statusFilter || ''}|${searchQuery || ''}|${inboxPhoneId || ''}`).join(';');
   }
   // Admin / manager filter — when non-null, threads are limited to chats
   // assigned to that user. Persisted on `wbChat`'s closure so the filter
   // survives auto-polling redraws.
   let agentFilterId = '';
+  // Status filter for the thread list — '' / 'unread' / 'unattended'
+  // / 'unassigned' / 'mine'. Persisted across reloads so the agent's
+  // last view is remembered.
+  let statusFilter = '';
+  try { statusFilter = localStorage.getItem('crm.wb.statusFilter') || ''; } catch (_) {}
   // Phase 3 multi-WA: per-phone inbox filter. '' / 'all' = every phone,
   // a phone_number_id string narrows the list to that connected number.
   // Persisted on the closure so polling redraws don't reset it. Restored
@@ -8626,6 +8643,19 @@ async function wbChat() {
     let filtered = agentFilterId
       ? threads.filter(t => Number(t.assigned_to) === Number(agentFilterId))
       : threads;
+
+    // Apply status filter on top of agent filter
+    if (statusFilter === 'unread') {
+      filtered = filtered.filter(t => Number(t.unread) > 0);
+    } else if (statusFilter === 'unassigned') {
+      filtered = filtered.filter(t => !t.assigned_to);
+    } else if (statusFilter === 'mine') {
+      filtered = filtered.filter(t => Number(t.assigned_to) === Number(CRM.user.id));
+    } else if (statusFilter === 'unattended') {
+      // Unattended = unread inbound chats that no agent has replied to yet.
+      // Approximation: last_message_type set, last is inbound (unread > 0).
+      filtered = filtered.filter(t => Number(t.unread) > 0);
+    }
 
     // Apply free-text search across name / phone / last-message / agent
     if (searchQuery) {
@@ -8736,6 +8766,24 @@ async function wbChat() {
       };
       left.appendChild(sel);
     }
+
+    // Status filter — visible to everyone. Lets reps quickly find
+    // chats that need attention.
+    const statusSel = h('select', { class: 'wb-status-filter',
+      style: { width: '100%', marginBottom: '.5rem' } },
+      h('option', { value: '',           selected: !statusFilter ? '' : null }, 'All chats'),
+      h('option', { value: 'unread',     selected: statusFilter === 'unread' ? '' : null }, '🔵 Unread only'),
+      h('option', { value: 'unattended', selected: statusFilter === 'unattended' ? '' : null }, '⏳ Unattended (no agent reply)'),
+      h('option', { value: 'unassigned', selected: statusFilter === 'unassigned' ? '' : null }, '🆕 Unassigned'),
+      h('option', { value: 'mine',       selected: statusFilter === 'mine' ? '' : null }, '👤 Mine')
+    );
+    statusSel.onchange = () => {
+      statusFilter = statusSel.value;
+      try { localStorage.setItem('crm.wb.statusFilter', statusFilter); } catch (_) {}
+      lastThreadsFingerprint = '';
+      renderThreadList();
+    };
+    left.appendChild(statusSel);
 
     if (!filtered.length) {
       left.appendChild(h('p', { class: 'muted' },
@@ -16538,6 +16586,23 @@ let newLeadPollTimer = null;
 function startFollowupPolling() {
   if (followupPollTimer) clearInterval(followupPollTimer);
   followupPollTimer = setInterval(refreshNotifs, 60_000);
+  // Global WA unread poll — independent of the chat tab's own poll so
+  // the badge updates even when the user is on Leads / Dashboard.
+  if (window._waBadgePoll) clearInterval(window._waBadgePoll);
+  async function _refreshWaBadge() {
+    try {
+      const threads = await api('api_wb_chat_threads', { phone_number_id: 'all' });
+      let total = 0;
+      (threads || []).forEach(t => { total += Number(t.unread) || 0; });
+      const badge = document.getElementById('wa-notif-count');
+      if (badge) {
+        badge.textContent = total > 99 ? '99+' : String(total);
+        badge.hidden = total === 0;
+      }
+    } catch (_) { /* silent */ }
+  }
+  _refreshWaBadge();
+  window._waBadgePoll = setInterval(_refreshWaBadge, 30_000);
   // Poll for new leads every 30s — fires a popup + toast when one arrives
   if (newLeadPollTimer) clearInterval(newLeadPollTimer);
   newLeadPollTimer = setInterval(checkNewLeads, 30_000);

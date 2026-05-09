@@ -1457,7 +1457,7 @@ async function api_wb_chat_messages(token, phone) {
   // phone, you're allowed to see the history.
 
   const { rows } = await db.query(
-    `SELECT id, direction, body, message_type, media_url, status, reply_to,
+    `SELECT id, direction, body, message_type, media_url, media_id, status, reply_to,
             created_at, read_at, delivered_at, error_text, template_name
        FROM whatsapp_messages
        WHERE from_number = $1 OR to_number = $1

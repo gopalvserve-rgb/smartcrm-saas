@@ -1418,6 +1418,120 @@ async function boot() {
     console.warn('[boot] auto-seed skipped:', e.message);
   }
 
+// ---- WhatsApp chat: media upload + media proxy ----
+// /api/wa/upload  — multipart POST. Receives a file from the chat
+//                   composer, forwards it to Meta Graph as a media
+//                   asset, returns { wa_media_id, mime_type, filename }
+//                   so the SPA can include media_id when sending.
+// /api/wa/media/:msgId — GET. Streams the Meta-hosted inbound media
+//                   bytes back to the browser. Solves the 'inbound
+//                   image won't display' issue: the webhook only
+//                   stores Meta's media_id; this endpoint resolves
+//                   it to a fresh download URL per request and
+//                   proxies the bytes through.
+const _waUpload = _multer({
+  storage: _multer.memoryStorage(),
+  limits: { fileSize: 100 * 1024 * 1024 }   // 100 MB ceiling
+});
+app.post('/api/wa/upload', _waUpload.single('file'), (req, res) => {
+  if (!req.tenant) return res.status(404).json({ error: 'Tenant not found' });
+  const tenantDb = require('./db/pg');
+  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug },
+    async () => {
+      try {
+        const { authUser } = require('./utils/auth');
+        const token = (req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+        await authUser(token);
+        if (!req.file) return res.status(400).json({ error: 'file required (multipart field "file")' });
+
+        // Tenant WhatsApp creds. Falls back to default phone — Phase 2
+        // multi-WA per-message phone selection happens in api_wb_chat_send,
+        // not here at upload time. The same media_id works on any phone
+        // belonging to the same WABA.
+        const cfg = await require('./routes/whatsbot')._cfg();
+        if (!cfg.token || !cfg.phoneId) {
+          return res.status(400).json({ error: 'WhatsApp not configured (missing token or phone_number_id)' });
+        }
+
+        const fd = new FormData();
+        fd.append('messaging_product', 'whatsapp');
+        fd.append('type', req.file.mimetype || 'application/octet-stream');
+        // Node 18+ Blob — fileFromBlob keeps the filename
+        const blob = new Blob([req.file.buffer], { type: req.file.mimetype || 'application/octet-stream' });
+        fd.append('file', blob, req.file.originalname || 'upload.bin');
+
+        const r = await fetch('https://graph.facebook.com/v19.0/' + cfg.phoneId + '/media', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + cfg.token },
+          body: fd
+        });
+        const j = await r.json();
+        if (!r.ok || j.error) {
+          const msg = (j.error && (j.error.message || j.error.error_user_msg)) || ('upload failed (HTTP ' + r.status + ')');
+          return res.status(500).json({ error: 'Meta upload failed: ' + msg });
+        }
+        return res.json({
+          wa_media_id: j.id,
+          mime_type:   req.file.mimetype || '',
+          filename:    req.file.originalname || '',
+          // Local preview URL — not durable, just for the composer's
+          // optimistic rendering before send.
+          url: 'data:' + (req.file.mimetype || 'application/octet-stream') + ';base64,' +
+                req.file.buffer.toString('base64')
+        });
+      } catch (e) {
+        console.error('[/api/wa/upload] error:', e && e.message);
+        return res.status(500).json({ error: e && e.message || 'upload failed' });
+      }
+    });
+});
+
+app.get('/api/wa/media/:msgId', async (req, res) => {
+  if (!req.tenant) return res.status(404).json({ error: 'Tenant not found' });
+  const tenantDb = require('./db/pg');
+  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug },
+    async () => {
+      try {
+        const { authUser } = require('./utils/auth');
+        const token = (req.headers['x-auth-token'] || req.headers.authorization
+                    || (req.query && req.query.token) || '').replace(/^Bearer\s+/i, '');
+        await authUser(token);
+        const msgId = Number(req.params.msgId);
+        if (!msgId) return res.status(400).json({ error: 'msgId required' });
+
+        const r = await tenantDb.query(
+          `SELECT id, media_id, message_type FROM whatsapp_messages WHERE id = $1`, [msgId]);
+        if (!r.rows.length) return res.status(404).json({ error: 'message not found' });
+        const row = r.rows[0];
+        if (!row.media_id) return res.status(404).json({ error: 'no media on this message' });
+
+        const cfg = await require('./routes/whatsbot')._cfg();
+        if (!cfg.token) return res.status(400).json({ error: 'WhatsApp token not configured' });
+
+        // Step 1: resolve media_id → temporary URL + mime_type
+        const meta = await fetch(
+          'https://graph.facebook.com/v19.0/' + encodeURIComponent(row.media_id),
+          { headers: { Authorization: 'Bearer ' + cfg.token } });
+        const metaJson = await meta.json();
+        if (!meta.ok || !metaJson.url) {
+          return res.status(502).json({ error: 'Meta media lookup failed: ' + (metaJson.error?.message || meta.status) });
+        }
+
+        // Step 2: stream bytes from the temp URL
+        const bin = await fetch(metaJson.url, { headers: { Authorization: 'Bearer ' + cfg.token } });
+        if (!bin.ok) return res.status(502).json({ error: 'media fetch HTTP ' + bin.status });
+        res.setHeader('Content-Type', metaJson.mime_type || bin.headers.get('content-type') || 'application/octet-stream');
+        res.setHeader('Cache-Control', 'private, max-age=300');
+        if (metaJson.file_size) res.setHeader('Content-Length', metaJson.file_size);
+        const buf = Buffer.from(await bin.arrayBuffer());
+        return res.end(buf);
+      } catch (e) {
+        console.error('[/api/wa/media] error:', e && e.message);
+        return res.status(500).json({ error: e && e.message || 'media proxy failed' });
+      }
+    });
+});
+
 // ── Lead-source & Google Sheet webhook endpoints ────────────────────────────
 app.post('/hook/leadsource/:source/:key', (req, res) => {
   req.body.api_key = req.params.key;
