@@ -1016,7 +1016,14 @@ app.get('/hook/whatsapp_webhook', async (req, res, next) => {
 });
 app.post('/hook/whatsapp_webhook', (req, res, next) => {
   if (!req.tenant) return next();
-  return whatsbotRoute.expressEvent(req, res);
+  // CRITICAL: scope the handler in tenantStorage.run so _handleInbound's
+  // db.tenantStorage.getStore() returns this tenant's slug. Without it,
+  // tenantSlug ends up '' → ai_usage_log rows have empty slug →
+  // super-admin AI Costing filter sees zero rows for the tenant.
+  const tenantDb = require('./db/pg');
+  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug },
+    () => whatsbotRoute.expressEvent(req, res)
+  );
 });
 app.get('/hook/whatsapp', async (req, res, next) => {
   if (!req.tenant) return next();
@@ -1033,11 +1040,17 @@ app.get('/hook/whatsapp', async (req, res, next) => {
 });
 app.post('/hook/whatsapp', (req, res, next) => {
   if (!req.tenant) return next();
-  return webhooksRoute.whatsappEvent(req, res);
+  const tenantDb = require('./db/pg');
+  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug },
+    () => webhooksRoute.whatsappEvent(req, res)
+  );
 });
 app.post('/hook/meta', (req, res, next) => {
   if (!req.tenant) return next();
-  return webhooksRoute.metaEvent(req, res);
+  const tenantDb = require('./db/pg');
+  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug },
+    () => webhooksRoute.metaEvent(req, res)
+  );
 });
 
 
