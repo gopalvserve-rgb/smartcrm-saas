@@ -11165,41 +11165,102 @@ async function downloadReportBuilderExcel() {
   XLSX.writeFile(wb, 'report-by-' + dim.replace(/[^a-z0-9]+/gi, '-') + '_' + stamp + '.xlsx');
 }
 
-/* ---------------- Admin ---------------- */
+/* ---------------- Admin ----------------
+   Two-column layout (left rail with grouped sections + search,
+   right pane with the active sub-tab body). All ~25 settings
+   visible without horizontal scrolling. CSS lives in styles.css
+   under .admin-settings-* (admin-settings-shell etc.). */
 VIEWS.admin = async (view) => {
   view.innerHTML = '';
-  const tabs = [
-    { id: 'company',      label: 'Company' },
-    { id: 'api',          label: 'Website API' },
-    { id: 'automations',  label: 'Automations' },
-    { id: 'fb',           label: 'Facebook' },
-    { id: 'whatsapp',     label: 'WhatsApp' },
-    { id: 'sources',      label: 'Sources' },
-    { id: 'statuses',     label: 'Statuses' },
-    { id: 'products',     label: '📦 Products' },
-    { id: 'customfields', label: 'Custom Fields' },
-    { id: 'tags',         label: 'Tags' },
-    { id: 'tat',          label: '⏱️ TAT' },
-    { id: 'rules',        label: 'Auto-assign Rules' },
-    { id: 'permissions',  label: '🔐 Permissions' },
-    { id: 'duplicates',   label: 'Duplicates' },
-    { id: 'smtp',         label: 'SMTP' },
-    { id: 'announce',     label: '📢 Announcements' },
-    { id: 'chatperm',     label: '💬 Chat permissions' },
-    { id: 'menu',         label: '🧭 Menu visibility' },
-    { id: 'menuorder',    label: '🧭 Menu order' },
-    { id: 'projstages',   label: '🚚 Project stages' },
-    { id: 'integrations', label: '🔌 Integrations' },
-    { id: 'roles',        label: '📛 Roles' },
-    { id: 'campaigns',   label: '🎯 Campaigns' },
-    { id: 'pullleads',    label: '📥 Lead Pull' },
-    { id: 'dangerzone',   label: '🛑 Danger zone' }
+  // Each group is { title, items:[{id,label}] }. Order = render order in the rail.
+  const groups = [
+    { title: 'General', items: [
+      { id: 'company',      label: '🏢 Company' },
+      { id: 'permissions',  label: '🔐 Permissions' },
+      { id: 'roles',        label: '📛 Roles' },
+      { id: 'smtp',         label: '✉️ SMTP' },
+    ]},
+    { title: 'Leads', items: [
+      { id: 'sources',      label: '🔍 Sources' },
+      { id: 'statuses',     label: '🟢 Statuses' },
+      { id: 'customfields', label: '➕ Custom Fields' },
+      { id: 'tags',         label: '🏷 Tags' },
+      { id: 'products',     label: '📦 Products' },
+      { id: 'projstages',   label: '🚚 Project stages' },
+      { id: 'duplicates',   label: '👥 Duplicates' },
+    ]},
+    { title: 'Routing', items: [
+      { id: 'rules',        label: '⚖️ Auto-assign Rules' },
+      { id: 'campaigns',    label: '🎯 Campaigns' },
+      { id: 'pullleads',    label: '📥 Lead Pull' },
+    ]},
+    { title: 'Channels', items: [
+      { id: 'whatsapp',     label: '💬 WhatsApp' },
+      { id: 'fb',           label: '🌍 Facebook' },
+      { id: 'api',          label: '🔌 Website API' },
+      { id: 'integrations', label: '🧩 Integrations' },
+      { id: 'chatperm',     label: '💬 Chat permissions' },
+    ]},
+    { title: 'Automation', items: [
+      { id: 'automations',  label: '⚡ Automations' },
+      { id: 'tat',          label: '⏱️ TAT' },
+    ]},
+    { title: 'Appearance', items: [
+      { id: 'announce',     label: '📢 Announcements' },
+      { id: 'menu',         label: '🧭 Menu visibility' },
+      { id: 'menuorder',    label: '🧭 Menu order' },
+    ]},
+    { title: 'Danger', items: [
+      { id: 'dangerzone',   label: '🛑 Danger zone' },
+    ]},
   ];
-  const nav = h('div', { class: 'subtabs' },
-    ...tabs.map(t => h('button', { class: 'subtab', 'data-tab': t.id, onclick: () => showAdminTab(t.id) }, t.label))
+
+  const search = h('input', {
+    type: 'search', class: 'admin-settings-search',
+    placeholder: 'Search settings…', autocomplete: 'off'
+  });
+
+  const railGroups = groups.map(g => {
+    const itemEls = g.items.map(t =>
+      h('button', {
+        class: 'admin-settings-item',
+        'data-tab': t.id,
+        'data-label': t.label.toLowerCase(),
+        onclick: () => showAdminTab(t.id)
+      }, t.label)
+    );
+    return {
+      el: h('div', { class: 'admin-settings-group' },
+        h('div', { class: 'admin-settings-group-title' }, g.title),
+        ...itemEls
+      ),
+      items: itemEls
+    };
+  });
+
+  const rail = h('div', { class: 'admin-settings-rail' },
+    search,
+    ...railGroups.map(g => g.el)
   );
-  view.appendChild(nav);
-  view.appendChild(h('div', { id: 'admin-body' }));
+  const body = h('div', { class: 'admin-settings-body card', id: 'admin-body' });
+  const shell = h('div', { class: 'admin-settings-shell' }, rail, body);
+  view.appendChild(shell);
+
+  // Live filter — hide items that don't match. Hide a group entirely
+  // if every item inside is hidden.
+  search.addEventListener('input', () => {
+    const q = search.value.trim().toLowerCase();
+    railGroups.forEach(g => {
+      let visible = 0;
+      g.items.forEach(it => {
+        const m = !q || it.dataset.label.includes(q);
+        it.style.display = m ? '' : 'none';
+        if (m) visible++;
+      });
+      g.el.style.display = visible ? '' : 'none';
+    });
+  });
+
   showAdminTab('company');
 };
 
