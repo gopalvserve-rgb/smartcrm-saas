@@ -1553,6 +1553,40 @@ setInterval(() => {
   try { integrations.runDueNativePulls(); } catch(e) { console.error('[bg] native pull error:', e.message); }
 }, 5 * 60 * 1000);
 
+// ── Background: per-tenant follow-up reminder runner ────────────────────
+// utils/reminders.js was wired into server.tenant.js but never called from
+// the multi-tenant SaaS server, so smartcrm-saas tenants got NO follow-up
+// reminders at all. Walk every active tenant once a minute and run the
+// reminder pass inside that tenant's storage scope so push notifications
+// fire for due/upcoming follow-ups.
+async function _runReminderForAllTenants() {
+  let rows = [];
+  try {
+    const r = await controlDb.query(
+      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500`
+    );
+    rows = r.rows;
+  } catch (e) { console.warn('[reminders] tenant list failed:', e.message); return; }
+  const reminders = require('./utils/reminders');
+  for (const row of rows) {
+    let t; try { t = await tenantPoolMod.findActiveTenant(row.slug); } catch (_) { continue; }
+    if (!t) continue;
+    const pool = tenantPoolMod.poolFor(t);
+    if (!pool) continue;
+    try {
+      await tenantDb.tenantStorage.run({ pool, tenant: t, slug: row.slug },
+        () => reminders._runOnce()
+      );
+    } catch (e) { console.warn(`[reminders] ${row.slug} tick failed:`, e.message); }
+  }
+}
+setInterval(() => {
+  _runReminderForAllTenants().catch(e => console.error('[reminders] cycle failed:', e.message));
+}, Number(process.env.REMINDER_INTERVAL_MS || 60_000));
+// Initial run after boot settles
+setTimeout(() => _runReminderForAllTenants().catch(() => {}), 15_000);
+console.log('[reminders] SaaS-aware follow-up scheduler started');
+
   app.listen(PORT, () => console.log('[boot] SmartCRM SaaS listening on :' + PORT));
 }
 boot().catch(e => { console.error('[boot] failed:', e); process.exit(1); });

@@ -145,4 +145,4 @@ function start() {
   setTimeout(() => _runOnce().catch(() => {}), 10_000);
 }
 
-module.exports = { start };
+module.exports = { start, _runOnce };

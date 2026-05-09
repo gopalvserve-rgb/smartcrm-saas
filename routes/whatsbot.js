@@ -2262,6 +2262,7 @@ async function _handleInbound(m, value) {
 
   // Auto-assign the chat if no explicit assignment exists yet — applies
   // the active rule (lead_owner / round_robin / least_busy / manual).
+  let _wbInboundOwnerId = null;
   try {
     let leadAssignedTo = null;
     if (leadId) {
@@ -2269,7 +2270,36 @@ async function _handleInbound(m, value) {
       leadAssignedTo = ld ? ld.assigned_to : null;
     }
     await _autoAssignChat(from, leadId, leadAssignedTo);
+    // Resolve the agent who now owns this chat so we can ping them.
+    const exp = await _chatAssignmentsByPhone([from]);
+    if (exp[from] && exp[from].assigned_to) {
+      _wbInboundOwnerId = Number(exp[from].assigned_to);
+    } else if (leadAssignedTo) {
+      _wbInboundOwnerId = Number(leadAssignedTo);
+    }
   } catch (e) { console.warn('[wb] auto-assign failed:', e.message); }
+
+  // Push notification — fire to whoever owns this chat. Best-effort.
+  // For media messages, show a generic body (we don't have caption text
+  // unless the user added one). For text messages show the first 140
+  // chars of the message body.
+  try {
+    if (_wbInboundOwnerId) {
+      const push = require('./push');
+      const previewBody = (mtype === 'text')
+        ? (text || '').slice(0, 140)
+        : ('📎 ' + mtype.charAt(0).toUpperCase() + mtype.slice(1)
+            + (text ? ' · ' + text.slice(0, 100) : ''));
+      const ld2 = leadId ? await db.findById('leads', leadId) : null;
+      const senderLabel = (ld2 && ld2.name) ? ld2.name : ('+' + from);
+      await push.sendPushToUser(_wbInboundOwnerId, {
+        title: '💬 ' + senderLabel,
+        body:  previewBody || '(no preview)',
+        url:   leadId ? ('/#/leads/' + leadId) : ('/#/chat?phone=' + from),
+        tag:   'wa-' + from
+      });
+    }
+  } catch (e) { console.warn('[wb] inbound push send skipped:', e.message); }
 
   // ── Phase A2 multi-WA AI Bot ──────────────────────────────────
   // Fire the AI auto-reply path. Wrapped in try/catch + fire-and-forget
