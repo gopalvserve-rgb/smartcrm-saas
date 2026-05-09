@@ -1302,16 +1302,28 @@ function _renderTenantPlaceholder(req, res, slug, tenant) {
   }
   if (!tenant) {
     return res.status(404).type('html').send(`<!doctype html><meta charset="utf-8"/>
-<title>Workspace not found ÃÂ· SmartCRM</title>
-<style>body{font-family:system-ui,sans-serif;max-width:560px;margin:5rem auto;padding:0 1rem;color:#0f172a}
-.card{background:#fef2f2;border:1px solid #fecaca;padding:1.5rem;border-radius:12px}
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<title>Workspace not found - SmartCRM</title>
+<style>body{font-family:system-ui,sans-serif;max-width:560px;margin:3rem auto;padding:0 1rem;color:#0f172a}
+.card{background:#fef2f2;border:1px solid #fecaca;padding:1.5rem;border-radius:12px;margin-bottom:1rem}
 code{background:#fff;padding:.2rem .4rem;border-radius:4px}
-a{color:#4338ca}</style>
-<h1>Ã°ÂÂ¤Â Workspace not found</h1>
+a{color:#4338ca;text-decoration:none}
+.btn{display:block;width:100%;padding:.85rem 1rem;border-radius:10px;border:none;cursor:pointer;font-size:1rem;font-weight:600;margin:.5rem 0;text-align:center}
+.btn-primary{background:#6366f1;color:#fff}
+.btn-ghost{background:#fff;color:#475569;border:1px solid #cbd5e1}</style>
+<h1>Workspace not found</h1>
 <div class="card">
   <p>The workspace <code>${safe(slug)}</code> doesn't exist or has been removed.</p>
 </div>
-<p><a href="/">Ã¢ÂÂ Back to SmartCRM home</a></p>`);
+<p style="color:#475569;margin-bottom:.4rem">Pick a different workspace, or go to the home page:</p>
+<a href="/app?stay=1" class="btn btn-primary">Choose a different workspace</a>
+<a href="/" class="btn btn-ghost">Back to SmartCRM home</a>
+<script>
+  // Clear the saved slug so the picker doesn't auto-redirect right back here.
+  try { localStorage.removeItem('tenant_slug'); } catch (e) {}
+  try { localStorage.removeItem('crm_token'); } catch (e) {}
+  try { localStorage.removeItem('crm_user'); } catch (e) {}
+</script>`);
   }
   const t = tenant;
   res.type('html').send(`<!doctype html><meta charset="utf-8"/>
