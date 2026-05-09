@@ -15799,52 +15799,104 @@ function _fbDoLogin() {
 function parseRecordingFilename(name, fallbackTimestamp) {
   const lower = name.toLowerCase();
 
-  // ---- Date / time extraction (FIRST so we can strip them before
-  // looking for the phone) ----
+  // ---- Date / time extraction ----
   let startedAt = fallbackTimestamp || Date.now();
-  const dt1 = name.match(/(\d{4})[\-_]?(\d{2})[\-_]?(\d{2})[\-_\sT]+(\d{2})[\-_:]?(\d{2})[\-_:]?(\d{2})/);
+  // Try Samsung YYMMDD_HHMMSS first (most common pattern in 2024+)
+  const dt2 = name.match(/\b(\d{2})(\d{2})(\d{2})[_\-\s](\d{2})(\d{2})(\d{2})\b/);
+  // Try YYYYMMDD_HHMMSS (Pixel / Samsung older firmware)
+  const dt1 = name.match(/\b(\d{4})(\d{2})(\d{2})[_\-\sT](\d{2})(\d{2})(\d{2})\b/);
+  // Try ISO-ish YYYY-MM-DD HH-MM-SS
+  const dt3 = name.match(/\b(\d{4})-(\d{2})-(\d{2})[\s_T]+(\d{2})[-:]?(\d{2})[-:]?(\d{2})\b/);
   if (dt1) {
     const [, y, mo, d, h, mi, s] = dt1;
     const ts = new Date(`${y}-${mo}-${d}T${h}:${mi}:${s}`).getTime();
     if (!isNaN(ts)) startedAt = ts;
+  } else if (dt3) {
+    const [, y, mo, d, h, mi, s] = dt3;
+    const ts = new Date(`${y}-${mo}-${d}T${h}:${mi}:${s}`).getTime();
+    if (!isNaN(ts)) startedAt = ts;
+  } else if (dt2) {
+    const [, yy, mo, d, h, mi, s] = dt2;
+    const y = (Number(yy) <= 79 ? '20' : '19') + yy;
+    const ts = new Date(`${y}-${mo}-${d}T${h}:${mi}:${s}`).getTime();
+    if (!isNaN(ts)) startedAt = ts;
   }
 
-  // Strip well-known date / time / millisecond runs from the name
-  // before we hunt for the phone. Otherwise filenames like
-  // 'Call_recording_20240425_153012_9876543210.m4a' would extract
-  // '20240425' (the date) as the phone number — leaving the real
-  // phone unmatched.
+  // ---- Strip date/time patterns BEFORE phone extraction ----
+  // CRITICAL: keep these strictly anchored with \b on BOTH ends so
+  // they can't bleed into adjacent phone digits. Earlier loose
+  // patterns ate parts of 10-digit phones when the date sat next to
+  // them ('8467033343_260509_155032' had its first 4 digits eaten).
   let scrubbed = String(name)
-    // Full datetime: 20240425_153012, 20240425T153012, 20240425-153012
-    .replace(/\d{4}[-_]?\d{2}[-_]?\d{2}[-_T\s]?\d{2}[-_:]?\d{2}[-_:]?\d{2}/g, ' ')
-    // YYYY-MM-DD or YYYYMMDD alone
-    .replace(/\b\d{4}[-_]?\d{2}[-_]?\d{2}\b/g, ' ')
-    // DD-MM-YYYY / DD-MM-YY / DD/MM/YYYY
+    // Samsung YYMMDD_HHMMSS — must be flanked by non-digit (or string
+    // end). Avoids eating phone digits when phone is adjacent.
+    .replace(/(^|[^\d])(\d{6})[_\-\s](\d{6})(?=$|[^\d])/g, '$1 ')
+    // YYYYMMDD_HHMMSS — same boundary treatment
+    .replace(/(^|[^\d])(\d{8})[_\-\sT](\d{6})(?=$|[^\d])/g, '$1 ')
+    // YYYY-MM-DD HH-MM-SS — strict
+    .replace(/\b\d{4}-\d{2}-\d{2}[_\sT]+\d{2}[-:]\d{2}[-:]\d{2}\b/g, ' ')
+    // YYYY-MM-DD alone — strict
+    .replace(/\b\d{4}-\d{2}-\d{2}\b/g, ' ')
+    // YYYYMMDD alone (8 digits with word boundaries) — only safe when
+    // boundary-isolated. Won't eat into a 10-digit phone.
+    .replace(/\b\d{8}\b/g, ' ')
+    // DD-MM-YYYY / DD/MM/YYYY — strict
     .replace(/\b\d{2}[-_/]\d{2}[-_/]\d{2,4}\b/g, ' ')
-    // HH-MM-SS / HHMMSS appearing after underscore/space
-    .replace(/\b\d{2}[-_:]\d{2}[-_:]\d{2}\b/g, ' ')
-    // Long unix-ish timestamps (10–13 digits), likely epoch seconds/ms
-    // — if they sit ALONE between separators (avoid stripping a real phone)
-    .replace(/[-_\s](\d{12,13})[-_\s]/g, ' ');
+    // HH-MM-SS — strict (don't eat 10-digit phones)
+    .replace(/\b\d{2}[-:_]\d{2}[-:_]\d{2}\b/g, ' ');
 
   // ---- Phone — preference order ----
-  // 1. '+' prefixed international (most reliable)
-  // 2. 10-digit Indian phone (with optional 91 prefix)
-  // 3. 8-15 digit international fallback
   let phone = '';
   let plus = scrubbed.match(/\+\d[\d\s\-]{7,17}/);
   if (plus) phone = plus[0].replace(/[\s\-]/g, '');
-
-  // 10-digit Indian phone, optionally preceded by 91 / +91 / 091
   if (!phone) {
     const indian = scrubbed.match(/(?:91|091|\+91)?[6-9]\d{9}/);
     if (indian) phone = indian[0];
   }
-
-  // Generic 8-15 digit fallback
   if (!phone) {
-    const m = scrubbed.match(/\d{8,15}/);
+    const m = scrubbed.match(/\d{10,15}/);
     if (m) phone = m[0];
+  }
+  // Last-resort: any 8+ digit run (international short numbers)
+  if (!phone) {
+    const m = scrubbed.match(/\d{8,9}/);
+    if (m) phone = m[0];
+  }
+
+  // ---- Contact name + last-4 hint extraction ----
+  // Samsung filenames look like:
+  //   'Call recording Lsc Cst -6525_260509_154640.m4a'
+  //   'Call recording John Doe_260509_154640.m4a'
+  // Strip 'Call recording' prefix, the date trailer, the file ext,
+  // then the rest is the contact name (possibly with a -<last4> tail).
+  let contact = '';
+  let lastFour = '';
+  // CRITICAL: use [_\-\s] explicit separator anchors instead of \b
+  // because regex \b doesn't match between '_' and a digit (both are
+  // word chars). Without this fix the 'Lsc Cst -6525_260509_154640'
+  // trailer wouldn't strip and the contact came out as
+  // 'Lsc Cst 6525 260509 154640'.
+  let stripped = name
+    .replace(/\.[a-z0-9]{2,5}$/i, '')                   // ext
+    .replace(/^call[\s_-]*recording[\s_-]*/i, '')
+    .replace(/^voice[\s_-]*call[\s_-]*/i, '')
+    .replace(/[_\-\s]\d{6}[_\-\s]\d{6}(?=$|[^\d])/g, '')   // Samsung trailing YYMMDD_HHMMSS
+    .replace(/[_\-\s]\d{8}[_\-\sT]\d{6}(?=$|[^\d])/g, '')  // YYYYMMDD_HHMMSS
+    .replace(/[_\-\s]\d{4}-\d{2}-\d{2}[_\sT]+\d{2}[-:]\d{2}[-:]\d{2}(?=$|[^\d])/g, '') // ISO
+    .replace(/[_\-\s]\d{2}[-/]\d{2}[-/]\d{2,4}(?=$|[^\d])/g, '')  // DD-MM-YYYY trailers
+    .replace(/[_\-\s]\d{8,15}(?=$|[^\d])/g, '')       // generic trailing 8+ digit run
+    .trim();
+  // Now extract a -<last4> hint if present
+  const lastFourMatch = stripped.match(/-\s*(\d{3,5})\b/);
+  if (lastFourMatch) {
+    lastFour = lastFourMatch[1].slice(-4);
+    stripped = stripped.replace(lastFourMatch[0], '').trim();
+  }
+  // Anything left that's mostly letters → contact name
+  // Only set it if the stripped string contains alphabetic characters
+  // (otherwise it's residual digits we don't want as a 'name').
+  if (/[a-z]/i.test(stripped)) {
+    contact = stripped.replace(/[_\-]+/g, ' ').replace(/\s+/g, ' ').trim();
   }
 
   // Direction
@@ -15852,7 +15904,7 @@ function parseRecordingFilename(name, fallbackTimestamp) {
   if (/(incoming|received|inbound|in_call|\bin[_\-\s])/.test(lower)) direction = 'in';
   else if (/(outgoing|outbound|out_call|dialed|made|\bout[_\-\s])/.test(lower)) direction = 'out';
 
-  return { phone, direction, startedAt };
+  return { phone, contact, lastFour, direction, startedAt };
 }
 
 /**
@@ -15910,16 +15962,37 @@ async function syncRecordings(opts) {
     } catch (_) {}
   }
 
-  // Build sets keyed by 10-digit tail AND 7-digit tail (covers
-  // numbers stored without the leading area code).
+  // Build lookup indices:
+  //   knownTails  → 10-digit tails for full-phone match
+  //   knownTails7 → 7-digit tails (fallback for numbers w/o area code)
+  //   last4ToLead → last 4 digits → array of lead ids (Samsung saved-
+  //                  contact filenames carry only last 4)
+  //   nameToLead  → normalized name → array of lead ids
   const knownTails  = new Set();
   const tailToLead  = new Map();
   const knownTails7 = new Set();
+  const last4ToLead = new Map();
+  const nameToLead  = new Map();
+  function _norm(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ''); }
   for (const r of phoneBook) {
-    if (!r.tail) continue;
-    knownTails.add(r.tail);
-    knownTails7.add(r.tail.slice(-7));
-    tailToLead.set(r.tail, r.id);
+    if (r.tail) {
+      knownTails.add(r.tail);
+      knownTails7.add(r.tail.slice(-7));
+      tailToLead.set(r.tail, r.id);
+    }
+    if (r.last4) {
+      const arr = last4ToLead.get(r.last4) || [];
+      arr.push(r.id);
+      last4ToLead.set(r.last4, arr);
+    }
+    if (r.name) {
+      const k = _norm(r.name);
+      if (k) {
+        const arr = nameToLead.get(k) || [];
+        arr.push(r.id);
+        nameToLead.set(k, arr);
+      }
+    }
   }
   const includeUnmatched = !!opts.includeUnmatched
     || localStorage.getItem('rec_include_unmatched') === '1';
@@ -15939,22 +16012,65 @@ async function syncRecordings(opts) {
     const digits = String(meta.phone || '').replace(/\D/g, '');
     const tail10 = digits.slice(-10);
     const tail7  = digits.slice(-7);
-    // SKIP files whose phone number doesn't match a lead in your CRM
-    // (personal calls, family, courier, OTPs, etc.). Match against the
-    // 10-digit tail first (precise) then 7-digit (fuzzy fallback for
-    // numbers stored without area code).
-    const matched10 = digits && knownTails.has(tail10);
-    const matched7  = digits && knownTails7.has(tail7);
-    if (!includeUnmatched && !matched10 && !matched7) {
-      console.warn('[leadcrm] skipping recording - phone not in CRM:', f.name, 'parsed=', digits || '(none)');
+
+    // Try matches in order of confidence.
+    let matchedLeadId = null;
+    if (digits && knownTails.has(tail10)) {
+      matchedLeadId = tailToLead.get(tail10) || null;
+    } else if (digits && knownTails7.has(tail7)) {
+      // Find the first lead whose 10-digit tail ends with our 7-digit tail
+      for (const [t, lid] of tailToLead.entries()) {
+        if (t.slice(-7) === tail7) { matchedLeadId = lid; break; }
+      }
+    }
+    // Samsung 'saved contact' filenames: no full phone, only contact
+    // name (and sometimes last-4 digits). Match by normalized name —
+    // if last-4 hint is present, use it to disambiguate when multiple
+    // leads share a similar name.
+    if (!matchedLeadId && meta.contact) {
+      const k = _norm(meta.contact);
+      const candidates = nameToLead.get(k) || [];
+      if (candidates.length === 1) {
+        matchedLeadId = candidates[0];
+      } else if (candidates.length > 1 && meta.lastFour) {
+        const last4Set = new Set(last4ToLead.get(meta.lastFour) || []);
+        for (const cand of candidates) {
+          if (last4Set.has(cand)) { matchedLeadId = cand; break; }
+        }
+      } else if (!candidates.length) {
+        // Try a fuzzy contains match — slow but only runs when exact failed
+        for (const [nameKey, ids] of nameToLead.entries()) {
+          if (nameKey.includes(k) || k.includes(nameKey)) {
+            if (meta.lastFour) {
+              const last4Set = new Set(last4ToLead.get(meta.lastFour) || []);
+              const hit = ids.find(id => last4Set.has(id));
+              if (hit) { matchedLeadId = hit; break; }
+            } else if (ids.length === 1) {
+              matchedLeadId = ids[0]; break;
+            }
+          }
+        }
+      }
+    }
+    // Last-4-digits-only match (no name): only safe if exactly ONE lead
+    // has those last 4 digits.
+    if (!matchedLeadId && !meta.contact && meta.lastFour) {
+      const ids = last4ToLead.get(meta.lastFour) || [];
+      if (ids.length === 1) matchedLeadId = ids[0];
+    }
+
+    if (!includeUnmatched && !matchedLeadId) {
+      console.warn('[leadcrm] skip recording - no lead match:', f.name,
+        'parsed.phone=', digits || '-', 'contact=', meta.contact || '-',
+        'last4=', meta.lastFour || '-');
       skippedNoMatch++;
-      // Track the first few skipped phones for diagnostic toast at end
       window._recSkipDiag = window._recSkipDiag || [];
-      if (window._recSkipDiag.length < 3) window._recSkipDiag.push(digits || '?');
+      if (window._recSkipDiag.length < 3) {
+        window._recSkipDiag.push((digits || meta.contact || '?') + (meta.lastFour ? ('/-' + meta.lastFour) : ''));
+      }
       continue;
     }
-    // Resolve to the matching lead id. Phone book gave us a tail→id map.
-    const matchedLeadId = digits ? (tailToLead.get(tail10) || null) : null;
+    // matchedLeadId already resolved above (covers phone, last4, name).
     const lead = matchedLeadId ? { id: matchedLeadId } : null;
     const leadId = lead ? String(lead.id) : '';
 

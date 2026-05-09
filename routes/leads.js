@@ -1918,18 +1918,27 @@ async function api_leads_assignToCampaign(token, leadIds, campaignId) {
 async function api_leads_phoneBook(token) {
   await authUser(token);
   const r = await db.query(
-    `SELECT id,
+    `SELECT id, COALESCE(name, '') AS name,
             regexp_replace(COALESCE(phone,    ''), '\D', '', 'g') AS p,
             regexp_replace(COALESCE(whatsapp, ''), '\D', '', 'g') AS w,
             regexp_replace(COALESCE(alt_phone,''), '\D', '', 'g') AS a
        FROM leads`
   );
-  // Build a Map: tail (last 10 digits) → lead id. Multiple tails per lead.
+  // Returns { id, tail (last10), last4, name } per phone source. Used by
+  // the recording-sync to match files by phone, last-4 digits, or
+  // contact name (Samsung filenames sometimes include only the saved
+  // contact name + last 4 digits — e.g. 'Call recording Lsc Cst -6525_…').
   const out = [];
   for (const row of r.rows) {
+    const nameLower = String(row.name || '').toLowerCase().trim();
     [row.p, row.w, row.a].forEach(d => {
       if (d && d.length >= 7) {
-        out.push({ id: row.id, tail: d.slice(-10) });
+        out.push({
+          id: row.id,
+          tail: d.slice(-10),
+          last4: d.slice(-4),
+          name: nameLower
+        });
       }
     });
   }
