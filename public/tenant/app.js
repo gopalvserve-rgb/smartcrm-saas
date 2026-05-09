@@ -11536,13 +11536,27 @@ async function adminIntegrations() {
     wrap.appendChild(h('p', { class: 'muted' },
       'Paste these URLs into each vendor\'s lead-notification settings. The CRM auto-maps their field names to lead columns.'));
     const sources = [
-      { id: 'indiamart',   label: 'IndiaMART',     guide: 'IndiaMART Seller dashboard → Lead Manager → CRM Integration → paste URL' },
-      { id: 'magicbricks', label: 'MagicBricks',   guide: 'MagicBricks Builder/Agent dashboard → Lead Settings → API/Webhook → paste URL' },
-      { id: 'justdial',    label: 'JustDial',      guide: 'JustDial business dashboard → Lead Push API → Webhook URL → paste URL' },
-      { id: 'tradeindia',  label: 'TradeIndia',    guide: 'TradeIndia Seller panel → Lead Manager → External CRM → paste URL' },
-      { id: '99acres',     label: '99acres',       guide: '99acres dashboard → Lead Settings → Webhook → paste URL' },
-      { id: 'housing',     label: 'Housing.com',   guide: 'Housing.com builder/agent dashboard → Integrations → paste URL' },
-      { id: 'generic',     label: 'Custom / generic', guide: 'For any other source — vendor sends JSON with name/phone/email keys' }
+      // ---- Indian classifieds & lead vendors ----
+      { id: 'indiamart',     label: '🛒 IndiaMART',         guide: 'IndiaMART Seller dashboard → Lead Manager → CRM Integration → paste URL' },
+      { id: 'justdial',      label: '📞 JustDial',          guide: 'JustDial business dashboard → Lead Push API → Webhook URL → paste URL' },
+      { id: 'tradeindia',    label: '🏭 TradeIndia',        guide: 'TradeIndia Seller panel → Lead Manager → External CRM → paste URL' },
+      { id: 'exportersindia',label: '🌍 ExportersIndia',    guide: 'ExportersIndia Seller dashboard → Lead Settings → Webhook → paste URL' },
+      { id: 'sulekha',       label: '🔧 Sulekha',           guide: 'Sulekha Pro account → Lead Manager → External CRM → paste URL' },
+      // ---- Real estate portals ----
+      { id: '99acres',       label: '🏘 99acres',           guide: '99acres dashboard → Lead Settings → Webhook → paste URL' },
+      { id: 'magicbricks',   label: '🧱 MagicBricks',       guide: 'MagicBricks Builder/Agent dashboard → Lead Settings → API/Webhook → paste URL' },
+      { id: 'housing',       label: '🏠 Housing.com',       guide: 'Housing.com builder/agent dashboard → Integrations → paste URL' },
+      { id: 'nobroker',      label: '🏢 NoBroker',          guide: 'NoBroker Builder dashboard → Lead Settings → External Integration → paste URL' },
+      // ---- Forms & landing-page builders ----
+      { id: 'wordpress',     label: '📝 WordPress (Contact Form 7 / WPForms / Gravity)', guide: 'In WordPress, install WP Webhooks (or use Pabbly/Zapier) → set destination URL = below' },
+      { id: 'googleforms',   label: '📋 Google Forms',      guide: 'In Google Forms → Apps Script → onSubmit → fetch(URL, {method:\'POST\', body: JSON.stringify(...)})' },
+      { id: 'googleads',     label: '📣 Google Ads Lead Form', guide: 'Google Ads → Audiences & Tools → Lead Form Webhook → paste URL + your secret key' },
+      // ---- Generic automation hubs ----
+      { id: 'pabbly',        label: '🔁 Pabbly Connect',    guide: 'Pabbly → New Workflow → Action → Webhook → method POST → URL = below' },
+      { id: 'zapier',        label: '⚡ Zapier',            guide: 'Zapier → Action → Webhooks by Zapier → POST → URL = below' },
+      { id: 'make',          label: '🛠 Make (Integromat) / n8n', guide: 'Make → HTTP module → Make a request → POST → URL = below' },
+      // ---- Catch-all ----
+      { id: 'generic',       label: '🔌 Custom / generic JSON', guide: 'For any other source — vendor sends JSON with name/phone/email keys' }
     ];
     const list = h('div', { class: 'card', style: { padding: '0' } });
     sources.forEach((s, idx) => {
@@ -11606,6 +11620,100 @@ async function adminIntegrations() {
   wrap.appendChild(h('div', { class: 'actions', style: { marginTop: '.75rem' } },
     h('button', { class: 'btn primary', onclick: () => openSheetSyncEditModal(null, () => showAdminTab('integrations')) }, '+ Connect Google Sheet')
   ));
+
+
+  // --- Section 2b: CSV import from another CRM -----------------------
+  wrap.appendChild(h('h4', { style: { margin: '1.5rem 0 .5rem' } }, '📥 Import from another CRM'));
+  wrap.appendChild(h('p', { class: 'muted' },
+    'Migrating from LeadSquared / Zoho CRM / HubSpot / Salesforce? Export your leads to CSV from the source CRM, then upload it here. We auto-map common columns to lead fields.'));
+  const importCard = h('div', { class: 'card' });
+  const sourceSel = h('select', {},
+    h('option', { value: 'leadsquared' }, 'LeadSquared'),
+    h('option', { value: 'zoho' },        'Zoho CRM'),
+    h('option', { value: 'hubspot' },     'HubSpot'),
+    h('option', { value: 'salesforce' },  'Salesforce'),
+    h('option', { value: 'generic' },     'Generic / Other')
+  );
+  const fileInp = h('input', { type: 'file', accept: '.csv,.xlsx,text/csv' });
+  const previewArea = h('pre', { style: { background: '#f8fafc', padding: '.5rem', borderRadius: '6px', fontSize: '.78rem', maxHeight: '180px', overflow: 'auto', display: 'none' } });
+  const status = h('div', { style: { fontSize: '.85rem', marginTop: '.4rem' } });
+  importCard.appendChild(h('div', { style: { display: 'flex', flexDirection: 'column', gap: '.5rem' } },
+    h('label', { style: { fontWeight: '500', fontSize: '.85rem' } }, 'Source CRM'),
+    sourceSel,
+    h('label', { style: { fontWeight: '500', fontSize: '.85rem', marginTop: '.4rem' } }, 'CSV file (max 10 MB)'),
+    fileInp,
+    previewArea,
+    h('div', { style: { display: 'flex', gap: '.4rem', marginTop: '.5rem' } },
+      h('button', { class: 'btn', onclick: async () => {
+        const f = fileInp.files[0]; if (!f) { status.textContent = '⚠ Pick a CSV first'; return; }
+        try {
+          const text = await f.text();
+          const lines = text.split(/\r?\n/).filter(Boolean);
+          const headers = (lines[0] || '').split(',').map(s => s.trim().replace(/^"|"$/g, ''));
+          const sampleRows = lines.slice(1, 4).map(l => l.split(',').map(s => s.trim().replace(/^"|"$/g, '')));
+          const mapping = _autoMapColumns(headers, sourceSel.value);
+          previewArea.style.display = 'block';
+          previewArea.textContent =
+            'Detected ' + (lines.length - 1) + ' rows.\n' +
+            'Auto-mapping (source col → CRM field):\n' +
+            Object.keys(mapping).map(h => '  • ' + h + ' → ' + mapping[h]).join('\n') +
+            '\n\nFirst 3 rows preview:\n' +
+            sampleRows.map(r => '  ' + r.slice(0, 6).join(' | ')).join('\n');
+          status.textContent = '✓ Preview generated. Click Import to commit.';
+          // Stash for the Import button
+          importCard._pendingImport = { headers, sampleRows: sampleRows, mapping, csvText: text, source: sourceSel.value };
+        } catch (e) { status.textContent = '❌ ' + e.message; }
+      } }, '🔍 Preview'),
+      h('button', { class: 'btn primary', onclick: async () => {
+        if (!importCard._pendingImport) { status.textContent = '⚠ Click Preview first'; return; }
+        const p = importCard._pendingImport;
+        status.textContent = '⏳ Importing… (this may take 30-60 seconds for large files)';
+        try {
+          const r = await api('api_integrations_csvImport', {
+            source: p.source, csv: p.csvText, mapping: p.mapping
+          });
+          status.textContent = '✅ Imported ' + r.created + ' leads, ' + (r.skipped || 0) + ' skipped (duplicates).';
+          previewArea.style.display = 'none';
+          fileInp.value = '';
+          importCard._pendingImport = null;
+        } catch (e) { status.textContent = '❌ ' + e.message; }
+      } }, '📥 Import')
+    ),
+    status
+  ));
+  wrap.appendChild(importCard);
+
+  // Helper: auto-map CSV columns to CRM fields based on common naming
+  // conventions across LeadSquared / Zoho / HubSpot / Salesforce.
+  // (Not a global helper — kept inline so this section is self-contained.)
+  function _autoMapColumns(headers, sourceCrm) {
+    const norm = h => String(h || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const aliases = {
+      // CRM field    : list of aliases (normalised) to match
+      name:       ['firstname', 'name', 'fullname', 'leadname', 'first', 'firstnamemc'],
+      lastname:   ['lastname', 'last', 'surname', 'lastnamemc'],
+      phone:      ['phone', 'mobile', 'phonenumber', 'mobileno', 'mobilenumber', 'mobilenumbermc', 'workphone', 'cellphone'],
+      email:      ['email', 'emailaddress', 'emailid', 'workmail'],
+      company:    ['company', 'companyname', 'organization', 'org', 'account', 'accountname'],
+      city:       ['city', 'town', 'mailingcity'],
+      state:      ['state', 'province', 'mailingstate'],
+      source:     ['source', 'leadsource', 'origin'],
+      product:    ['product', 'requirement', 'interestedin', 'service'],
+      value:      ['value', 'dealsize', 'amount', 'budget', 'leadvalue'],
+      notes:      ['notes', 'description', 'remarks', 'comments', 'message']
+    };
+    const map = {};
+    headers.forEach(h => {
+      const n = norm(h);
+      if (!n) return;
+      for (const field of Object.keys(aliases)) {
+        if (aliases[field].some(a => n.includes(a))) { map[h] = field; return; }
+      }
+      // Fallback: keep as a custom field key
+      if (!map[h]) map[h] = 'cf_' + n.slice(0, 32);
+    });
+    return map;
+  }
 
   // --- Section 3: Gmail Apps Script (no native OAuth — show wizard) ---
   wrap.appendChild(h('h4', { style: { margin: '1.5rem 0 .5rem' } }, '✉ Gmail → CRM (via Apps Script)'));

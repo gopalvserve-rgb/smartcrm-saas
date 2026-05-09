@@ -972,7 +972,68 @@ async function api_integration_syncNow(token, id) {
   return { synced: true, created: count };
 }
 
+
+/**
+ * api_integrations_csvImport(token, payload)
+ *
+ * Bulk-import leads from a CSV exported from another CRM. Caller
+ * supplies the column mapping (source-header -> CRM-field). Each row
+ * is run through the same de-dup + assignment pipeline as a manual
+ * lead create. Custom fields are stored verbatim in extra_json.
+ *
+ * payload = {
+ *   source:  'leadsquared' | 'zoho' | 'hubspot' | 'salesforce' | 'generic',
+ *   csv:     string (raw CSV text),
+ *   mapping: { 'CSV column header': 'crm_field_name' | 'cf_<custom_key>' }
+ * }
+ */
+async function api_integrations_csvImport(token, payload) {
+  const me = await authUser(token);
+  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  const p = payload || {};
+  const csv = String(p.csv || '');
+  const mapping = p.mapping || {};
+  const source = String(p.source || 'generic');
+  if (!csv) throw new Error('CSV is empty');
+
+  const rows = _csvParse(csv);
+  if (!rows.length) return { ok: true, created: 0, skipped: 0 };
+  const headers = Object.keys(rows[0]);
+  // headers must overlap with mapping keys; warn if mapping is empty
+  if (!Object.keys(mapping).length) throw new Error('Mapping is empty');
+
+  let created = 0, skipped = 0;
+  for (const row of rows) {
+    const lead = { extra_json: {} };
+    for (const h of headers) {
+      const target = mapping[h];
+      const v = row[h];
+      if (!target || v == null || v === '') continue;
+      if (target.startsWith('cf_')) {
+        lead.extra_json[target] = String(v);
+      } else if (target === 'name' && lead.name) {
+        // Compose "First Last" if both columns map to name/lastname
+        lead.name = lead.name + ' ' + String(v);
+      } else if (target === 'lastname') {
+        lead.name = (lead.name || '') + (lead.name ? ' ' : '') + String(v);
+      } else {
+        lead[target] = String(v);
+      }
+    }
+    if (!lead.name && !lead.phone) { skipped++; continue; }
+    if (!lead.source) lead.source = source.charAt(0).toUpperCase() + source.slice(1);
+    try {
+      await _internalCreateLead(lead, me.id);
+      created++;
+    } catch (e) {
+      skipped++;
+    }
+  }
+  return { ok: true, created, skipped, source };
+}
+
 module.exports = {
+  api_integrations_csvImport,
   // Sheet sync
   runDueSheetSyncs,
   api_sheetSync_list,
