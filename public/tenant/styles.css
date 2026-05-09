@@ -2600,3 +2600,13 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
     right: 14px !important;
   }
 }
+
+
+/* ==========================================================
+   When the user has dragged the FAB, their position wins over
+   the responsive mobile default (≤780px override above).
+   ========================================================== */
+#copilot-fab[data-positioned="user"] {
+  bottom: auto !important;
+  right: auto !important;
+}

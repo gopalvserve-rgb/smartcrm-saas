@@ -17391,24 +17391,216 @@ function _initCrmCopilot() {
   // ---- Floating button ----
   const fab = h('button', {
     id: 'copilot-fab',
-    title: 'Ask CRM \u2014 Gemini-powered data assistant',
+    title: 'Ask CRM \u2014 drag to reposition, tap to open',
     style: {
       position: 'fixed', bottom: '20px', right: '20px',
       width: '56px', height: '56px', borderRadius: '50%',
-      border: 'none', cursor: 'pointer', zIndex: '9990',
+      border: 'none', cursor: 'grab', zIndex: '9990',
       background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
       color: '#fff', fontSize: '22px',
       boxShadow: '0 6px 20px rgba(99,102,241,.45)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center'
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      touchAction: 'none', userSelect: 'none'
     }
   }, '\u2728');
   document.body.appendChild(fab);
 
+  // ---------- Restore saved position ----------
+  // Position is stored as { left, top } in pixels relative to viewport.
+  // We snap to the nearest edge on drop, so the position is always valid
+  // even after a window resize.
+  function _applySavedPos() {
+    try {
+      const raw = localStorage.getItem('crm.copilotFab.pos');
+      if (!raw) return;
+      const p = JSON.parse(raw);
+      const W = window.innerWidth, H = window.innerHeight;
+      // Position is stored as {leftPct, topPct} so it scales with viewport.
+      const leftPx = Math.max(8, Math.min(W - 60, Math.round((p.leftPct || 0) * W)));
+      const topPx  = Math.max(8, Math.min(H - 60, Math.round((p.topPct  || 0) * H)));
+      fab.style.left   = leftPx + 'px';
+      fab.style.top    = topPx  + 'px';
+      fab.style.right  = 'auto';
+      fab.style.bottom = 'auto';
+      fab.dataset.positioned = 'user';   // overrides the mobile media query
+    } catch (_) {}
+  }
+  _applySavedPos();
+
+  // Re-apply on viewport changes so the FAB stays inside the screen.
+  window.addEventListener('resize', _applySavedPos);
+  window.addEventListener('orientationchange', _applySavedPos);
+
+  // ---------- Drag handlers ----------
   let drawer = null;
-  fab.onclick = () => {
+  let dragState = null;        // { startX, startY, originLeft, originTop, moved, longPressTimer, pointerId }
+  const DRAG_THRESHOLD = 6;    // px — anything less is treated as a click
+  const LONG_PRESS_MS  = 700;
+
+  function _startDrag(clientX, clientY, pointerId) {
+    const rect = fab.getBoundingClientRect();
+    dragState = {
+      startX: clientX, startY: clientY,
+      originLeft: rect.left, originTop: rect.top,
+      moved: false,
+      pointerId,
+      longPressTimer: setTimeout(() => {
+        // Long-press without movement → show reset menu
+        if (dragState && !dragState.moved) {
+          _showResetMenu();
+        }
+      }, LONG_PRESS_MS)
+    };
+    fab.style.cursor = 'grabbing';
+    fab.style.transition = 'none';
+  }
+
+  function _moveDrag(clientX, clientY) {
+    if (!dragState) return;
+    const dx = clientX - dragState.startX;
+    const dy = clientY - dragState.startY;
+    if (!dragState.moved && Math.hypot(dx, dy) > DRAG_THRESHOLD) {
+      dragState.moved = true;
+      clearTimeout(dragState.longPressTimer);
+    }
+    if (!dragState.moved) return;
+    const W = window.innerWidth, H = window.innerHeight;
+    const nextLeft = Math.max(4, Math.min(W - 60, dragState.originLeft + dx));
+    const nextTop  = Math.max(4, Math.min(H - 60, dragState.originTop  + dy));
+    fab.style.left   = nextLeft + 'px';
+    fab.style.top    = nextTop  + 'px';
+    fab.style.right  = 'auto';
+    fab.style.bottom = 'auto';
+    fab.dataset.positioned = 'user';
+    // Keep an open drawer attached to the FAB while dragging
+    if (drawer) _positionDrawer(drawer);
+  }
+
+  function _endDrag(clientX, clientY) {
+    if (!dragState) return;
+    clearTimeout(dragState.longPressTimer);
+    fab.style.cursor = 'grab';
+    fab.style.transition = '';
+    if (dragState.moved) {
+      // Snap to the nearest left/right edge so the FAB always sits flush.
+      const rect = fab.getBoundingClientRect();
+      const W = window.innerWidth, H = window.innerHeight;
+      const distLeft  = rect.left;
+      const distRight = W - rect.right;
+      const snapLeft  = (distLeft <= distRight) ? 12 : (W - rect.width - 12);
+      // Vertical: clamp so the FAB stays at least 12px above the bottom
+      // safe area. We DON'T snap vertically — user controls Y precisely.
+      const snapTop   = Math.max(12, Math.min(H - rect.height - 12, rect.top));
+      fab.style.transition = 'left .18s ease-out, top .18s ease-out';
+      fab.style.left = snapLeft + 'px';
+      fab.style.top  = snapTop  + 'px';
+      // Persist as percentages so it survives resize.
+      try {
+        localStorage.setItem('crm.copilotFab.pos', JSON.stringify({
+          leftPct: snapLeft / W,
+          topPct:  snapTop  / H
+        }));
+      } catch (_) {}
+      if (drawer) {
+        // Re-position the drawer to match new FAB location after snap
+        setTimeout(() => _positionDrawer(drawer), 200);
+      }
+      dragState = null;
+      return;
+    }
+    // Treated as a click — toggle drawer
+    dragState = null;
     if (drawer) { drawer.remove(); drawer = null; return; }
     drawer = _renderCopilotDrawer();
-  };
+    _positionDrawer(drawer);
+  }
+
+  function _positionDrawer(d) {
+    if (!d) return;
+    const r = fab.getBoundingClientRect();
+    const W = window.innerWidth, H = window.innerHeight;
+    // Drawer is fixed-size; keep it on-screen relative to FAB.
+    const drawerW = Math.min(380, W - 24);
+    const drawerH = Math.min(580, H - 100);
+    // Prefer to open ABOVE the FAB if there's room, else below.
+    const openAbove = (r.top > drawerH + 20) || (r.bottom + drawerH > H);
+    let topPx, leftPx;
+    if (openAbove) topPx = Math.max(12, r.top - drawerH - 10);
+    else           topPx = Math.min(H - drawerH - 12, r.bottom + 10);
+    // Horizontal: align right edge to FAB if FAB is right-half, else left.
+    if (r.left + r.width / 2 > W / 2) {
+      leftPx = Math.max(12, r.right - drawerW);
+    } else {
+      leftPx = Math.min(W - drawerW - 12, r.left);
+    }
+    d.style.left   = leftPx + 'px';
+    d.style.top    = topPx  + 'px';
+    d.style.right  = 'auto';
+    d.style.bottom = 'auto';
+    d.style.width  = drawerW + 'px';
+    d.style.height = drawerH + 'px';
+    d.style.maxWidth = '';
+  }
+
+  function _showResetMenu() {
+    const existing = document.getElementById('copilot-fab-menu');
+    if (existing) { existing.remove(); return; }
+    const r = fab.getBoundingClientRect();
+    const menu = h('div', {
+      id: 'copilot-fab-menu',
+      style: {
+        position: 'fixed',
+        left: Math.max(12, r.left - 60) + 'px',
+        top:  Math.max(12, r.top - 50) + 'px',
+        background: '#fff', border: '1px solid #e2e8f0',
+        borderRadius: '10px', boxShadow: '0 8px 24px rgba(15,23,42,.18)',
+        padding: '.4rem', zIndex: '9991', minWidth: '180px',
+        display: 'flex', flexDirection: 'column', gap: '.2rem'
+      }
+    });
+    menu.appendChild(h('button', {
+      class: 'btn ghost', style: { textAlign: 'left', justifyContent: 'flex-start' },
+      onclick: () => {
+        try { localStorage.removeItem('crm.copilotFab.pos'); } catch (_) {}
+        delete fab.dataset.positioned;
+        fab.style.left = ''; fab.style.top = '';
+        fab.style.right = '20px'; fab.style.bottom = '20px';
+        menu.remove();
+        toast('FAB position reset');
+      }
+    }, '↩ Reset to default position'));
+    document.body.appendChild(menu);
+    // Auto-close on outside tap
+    setTimeout(() => {
+      document.addEventListener('pointerdown', function _close(ev) {
+        if (!menu.contains(ev.target) && ev.target !== fab) {
+          menu.remove();
+          document.removeEventListener('pointerdown', _close);
+        }
+      });
+    }, 0);
+  }
+
+  // Attach pointer events — covers mouse, touch, and stylus uniformly.
+  fab.addEventListener('pointerdown', ev => {
+    if (ev.button !== undefined && ev.button !== 0) return; // left button only
+    fab.setPointerCapture && fab.setPointerCapture(ev.pointerId);
+    _startDrag(ev.clientX, ev.clientY, ev.pointerId);
+  });
+  fab.addEventListener('pointermove', ev => {
+    if (!dragState || ev.pointerId !== dragState.pointerId) return;
+    _moveDrag(ev.clientX, ev.clientY);
+  });
+  fab.addEventListener('pointerup', ev => {
+    if (!dragState || ev.pointerId !== dragState.pointerId) return;
+    fab.releasePointerCapture && fab.releasePointerCapture(ev.pointerId);
+    _endDrag(ev.clientX, ev.clientY);
+  });
+  fab.addEventListener('pointercancel', () => {
+    if (dragState) { clearTimeout(dragState.longPressTimer); dragState = null; fab.style.cursor = 'grab'; }
+  });
+  // Right-click on desktop also opens the reset menu
+  fab.addEventListener('contextmenu', ev => { ev.preventDefault(); _showResetMenu(); });
 }
 
 function _renderCopilotDrawer() {
