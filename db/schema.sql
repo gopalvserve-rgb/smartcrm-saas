@@ -1398,3 +1398,21 @@ CREATE TABLE IF NOT EXISTS lead_source_mapping (
   last_seen_at  TIMESTAMPTZ,
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+
+-- ============================================================
+-- One-time data migration (2026-05-09)
+-- Lower AI Bot kb_max_chars from the old 60000 default to 8000
+-- for tenants who never explicitly customised it. Cuts input
+-- token cost ~85% with negligible answer-quality loss.
+-- Idempotent: only matches rows still at the old default.
+-- ============================================================
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'ai_bot_settings') THEN
+    UPDATE ai_bot_settings
+       SET kb_max_chars = 8000,
+           updated_at   = NOW()
+     WHERE kb_max_chars = 60000;
+  END IF;
+END $$;

@@ -69,4 +69,60 @@ async function api_saas_apply_schema_to_all_tenants(token) {
   return { ok, failed, details };
 }
 
-module.exports = { api_saas_apply_schema_to_all_tenants };
+
+
+/**
+ * One-time migration — drop kb_max_chars from 60000 (old default) to
+ * 8000 for every tenant whose ai_bot_settings still has that value.
+ * Doesn't touch tenants who explicitly chose any other value.
+ *
+ * Cuts AI Bot input token costs by ~85% for tenants using the old
+ * default. Safe to re-run — the WHERE clause filters out rows already
+ * migrated.
+ */
+async function api_saas_lower_aibot_kb_cap(token) {
+  await requireSuperAdmin(token);
+
+  const tenants = await control.query(
+    `SELECT id, slug FROM tenants
+      WHERE status IN ('active','trial','past_due')
+      ORDER BY id ASC`
+  );
+
+  const details = [];
+  let updated = 0, skipped = 0, failed = 0;
+  for (const row of tenants.rows) {
+    const slug = row.slug;
+    let t;
+    try { t = await tenantPool.findActiveTenant(slug); } catch (_) { t = null; }
+    if (!t) { failed++; details.push({ slug, ok: false, error: 'tenant pool unavailable' }); continue; }
+    const pool = tenantPool.poolFor(t);
+    if (!pool) { failed++; details.push({ slug, ok: false, error: 'tenant pool unavailable' }); continue; }
+    try {
+      const r = await pool.query(
+        `UPDATE ai_bot_settings SET kb_max_chars = 8000, updated_at = NOW()
+          WHERE kb_max_chars = 60000
+        RETURNING id`
+      );
+      if (r.rowCount > 0) {
+        updated++;
+        details.push({ slug, ok: true, action: 'lowered to 8000' });
+      } else {
+        skipped++;
+        details.push({ slug, ok: true, action: 'already custom or table missing' });
+      }
+    } catch (e) {
+      // Table missing on un-migrated tenants is OK — silently skip
+      if (/relation .* does not exist/i.test(e.message || '')) {
+        skipped++;
+        details.push({ slug, ok: true, action: 'ai_bot_settings not yet migrated' });
+      } else {
+        failed++;
+        details.push({ slug, ok: false, error: (e.message || '').slice(0, 400) });
+      }
+    }
+  }
+  return { updated, skipped, failed, details };
+}
+
+module.exports = { api_saas_apply_schema_to_all_tenants, api_saas_lower_aibot_kb_cap };
