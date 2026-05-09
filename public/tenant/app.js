@@ -13210,6 +13210,8 @@ async function adminWhatsapp() {
     h('button', { class: 'btn', onclick: async () => { const r = await api('api_admin_testWhatsApp'); toast(r.ok ? 'Verified: ' + r.phone.verified_name : (r.error || 'Failed'), r.ok ? 'ok' : 'err'); } }, 'Test WhatsApp'),
     h('p', { class: 'muted' }, 'Webhook URL: ', h('code', {}, location.origin + '/hook/whatsapp'))
   ));
+  // Append the Coexistence Mode card defined at the top of this function.
+  try { _renderCoexistenceCard(card, {}, cfg || {}); } catch (_) {}
   return card;
 }
 async function adminSources() {
