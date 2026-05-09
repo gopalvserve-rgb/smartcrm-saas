@@ -11581,6 +11581,85 @@ async function adminIntegrations() {
     wrap.appendChild(list);
   }
 
+  // --- Section 1b: Make.com / Integromat featured card ---
+  // Make is the most-asked automation hub for lead routing — give it
+  // its own card with copyable URL, sample payload, step-by-step
+  // setup instructions, and a one-click 'Send test lead' button.
+  if (apiKey) {
+    const makeUrl = base + '/hook/leadsource/make/' + apiKey;
+    const samplePayload = JSON.stringify({
+      name: 'Riya Sharma',
+      phone: '+91 9876543210',
+      email: 'riya@example.com',
+      company: 'Acme Realty',
+      city: 'Mumbai',
+      message: 'Interested in your premium plan',
+      source: 'Make.com',
+      source_ref: 'make-bundle-' + Date.now()
+    }, null, 2);
+    const makeCard = h('div', { class: 'card', style: { marginTop: '1rem', background: 'linear-gradient(135deg, #ede9fe 0%, #f5f3ff 100%)', border: '1px solid #c4b5fd' } });
+    makeCard.appendChild(h('h4', { style: { margin: '0 0 .5rem', color: '#5b21b6' } },
+      '🛠 Make.com — featured integration'));
+    makeCard.appendChild(h('p', { class: 'muted', style: { margin: '0 0 .75rem' } },
+      'Sync leads from any source into this CRM via Make (Integromat) or n8n. The CRM auto-maps Make\'s standard JSON fields — no transformation module needed.'));
+
+    const urlRow = h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', marginBottom: '.6rem' } },
+      h('input', { type: 'text', readonly: 'readonly', value: makeUrl,
+        style: { flex: 1, fontFamily: 'monospace', fontSize: '.78rem' } }),
+      h('button', { class: 'btn sm', onclick: ev => {
+        const inp = ev.target.parentNode.querySelector('input');
+        navigator.clipboard.writeText(inp.value).then(() => toast('Webhook URL copied'), () => { inp.select(); document.execCommand('copy'); toast('Copied'); });
+      } }, '📋 Copy URL')
+    );
+    makeCard.appendChild(urlRow);
+
+    const stepsBox = h('div', { style: { background: '#fff', borderRadius: '8px', padding: '.75rem .9rem', fontSize: '.85rem' } });
+    stepsBox.appendChild(h('div', { style: { fontWeight: '600', marginBottom: '.4rem' } }, 'Setup in Make (3 minutes):'));
+    stepsBox.appendChild(h('ol', { style: { margin: '0 0 .4rem 1rem', padding: 0, lineHeight: '1.5' } },
+      h('li', {}, 'In Make, create or open a scenario and add an ', h('b', {}, 'HTTP'), ' → ', h('b', {}, 'Make a request'), ' module after your trigger.'),
+      h('li', {}, 'Set ', h('b', {}, 'URL'), ' = the URL above (Copy it).'),
+      h('li', {}, 'Set ', h('b', {}, 'Method'), ' = ', h('code', {}, 'POST'), ' and ', h('b', {}, 'Body type'), ' = ', h('code', {}, 'Raw'), ' / ', h('code', {}, 'JSON (application/json)'), '.'),
+      h('li', {}, 'Map your trigger\'s fields into the JSON body using these key names:')
+    ));
+    stepsBox.appendChild(h('pre', { style: { background: '#0f172a', color: '#e2e8f0', padding: '.6rem .8rem', borderRadius: '6px', fontSize: '.78rem', margin: '.4rem 0', overflowX: 'auto' } }, samplePayload));
+    stepsBox.appendChild(h('p', { class: 'muted', style: { fontSize: '.78rem', margin: '.3rem 0' } },
+      'Aliases also accepted: ', h('code', {}, 'full_name'), ', ', h('code', {}, 'contact_name'), ', ', h('code', {}, 'mobile'), ', ', h('code', {}, 'phone_number'), ', ', h('code', {}, 'email_address'), ', ', h('code', {}, 'organization'), ', ', h('code', {}, 'enquiry'), '.'));
+    stepsBox.appendChild(h('p', { class: 'muted', style: { fontSize: '.78rem', margin: '.3rem 0' } },
+      'You can wrap the payload as ', h('code', {}, '{ "data": { ... } }'), ' or send it flat — both work.'));
+    makeCard.appendChild(stepsBox);
+
+    const testStatus = h('div', { style: { fontSize: '.85rem', marginTop: '.6rem' } });
+    makeCard.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', marginTop: '.6rem' } },
+      h('button', { class: 'btn primary', onclick: async () => {
+        testStatus.textContent = '⏳ Sending a sample lead through the webhook…';
+        try {
+          const r = await fetch(makeUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: samplePayload
+          });
+          const j = await r.json().catch(() => ({}));
+          if (r.ok) {
+            testStatus.textContent = '✅ Test lead created — check your Leads list (look for "Riya Sharma" with source "Make.com").';
+            testStatus.style.color = '#16a34a';
+          } else {
+            testStatus.textContent = '❌ ' + (j.error || ('HTTP ' + r.status));
+            testStatus.style.color = '#dc2626';
+          }
+        } catch (e) {
+          testStatus.textContent = '❌ ' + e.message;
+          testStatus.style.color = '#dc2626';
+        }
+      } }, '🚀 Send test lead'),
+      h('a', {
+        href: 'https://www.make.com/en/help/tools/http', target: '_blank', rel: 'noopener',
+        class: 'btn ghost'
+      }, 'Make HTTP module docs ↗'),
+      testStatus
+    ));
+    wrap.appendChild(makeCard);
+  }
+
   // --- Section 2: Google Sheet sync ---
   wrap.appendChild(h('h4', { style: { margin: '1.5rem 0 .5rem' } }, '📊 Google Sheet sync'));
   wrap.appendChild(h('p', { class: 'muted' },
