@@ -6849,12 +6849,25 @@ async function wbConnect() {
             if (!s.fb_app_id || !s.fb_config_id) {
               return toast('Embedded Signin not configured (missing fb_app_id / fb_config_id). Tell support to enable it.', 'err');
             }
-            // For 'add another', force coexistence mode — that's what
-            // Meta's flow needs to keep the existing WhatsApp Business
-            // mobile app active on the new number.
             startEmbeddedSignup(s.fb_app_id, s.fb_config_id, { coexistence: true, addAnother: true });
           }
-        }, '➕ Connect another number')
+        }, '➕ Connect another number'),
+        h('button', { class: 'btn sm', title: 'Pull every phone Meta sees on your WABA into the connected-numbers table — useful when a Coexistence number was added but didn\'t auto-appear here',
+          onclick: async ev => {
+            const btn = ev.currentTarget;
+            const orig = btn.textContent;
+            btn.textContent = '⏳ Syncing…';
+            btn.disabled = true;
+            try {
+              const r = await api('api_wa_phones_syncFromMeta');
+              toast('✅ Meta sync: ' + r.added + ' added, ' + r.updated + ' updated (' + r.total + ' total)', 'ok');
+              showWbTab('connect');
+            } catch (e) {
+              toast('Sync failed: ' + e.message, 'err');
+              btn.textContent = orig; btn.disabled = false;
+            }
+          }
+        }, '🔄 Sync from Meta')
       )
     ));
     const tbl = h('table', { class: 'data-table' },
@@ -7481,15 +7494,24 @@ function startEmbeddedSignup(appId, configId, opts) {
   let phoneNumberId = '';
   let wabaId = '';
   // PostMessage listener — Meta sends phone_number_id + waba_id during the
-  // dialog when the user clicks "Finish". Without this, we get the OAuth
-  // code but don't know which assets they picked.
+  // dialog. Standard signup uses 'FINISH' event; Coexistence (v3) may use
+  // FINISH_ONLY_WABA, FINISH_WITH_PHONE_NUMBER, etc. — we accept any event
+  // that carries either id and capture the latest.
   const sessionInfoListener = (event) => {
     if (event.origin !== 'https://www.facebook.com') return;
     try {
       const data = (typeof event.data === 'string') ? JSON.parse(event.data) : event.data;
-      if (data && data.type === 'WA_EMBEDDED_SIGNUP' && data.event === 'FINISH') {
-        phoneNumberId = data.data?.phone_number_id || '';
-        wabaId       = data.data?.waba_id || '';
+      // Verbose diagnostic — look in console for [emb-signup] entries to
+      // see exactly what Meta sent. Critical when a Coexistence flow
+      // doesn't auto-populate the wa_phones table.
+      try { console.log('[emb-signup] Meta msg:', JSON.stringify(data)); } catch (_) {}
+      if (data && data.type === 'WA_EMBEDDED_SIGNUP') {
+        // Try all known shapes — Meta has shipped at least 3 variants over time.
+        const inner = data.data || data.session_info || {};
+        const pid = inner.phone_number_id || inner.phone_id || data.phone_number_id || '';
+        const wid = inner.waba_id || inner.business_id || inner.business_account_id || data.waba_id || '';
+        if (pid) phoneNumberId = String(pid);
+        if (wid) wabaId       = String(wid);
       }
     } catch (_) { /* not JSON, ignore */ }
   };
@@ -7524,8 +7546,17 @@ function startEmbeddedSignup(appId, configId, opts) {
       return;
     }
     if (!phoneNumberId || !wabaId) {
-      toast('Did not receive WABA / phone number from the dialog. Check the Config ID has WhatsApp Business Platform asset selection enabled.', 'err');
-      return;
+      // Coexistence flows sometimes finish without sending the
+      // phone_number_id postMessage (Meta is still provisioning). If we
+      // have the OAuth code we can complete the WABA connection AND ask
+      // the user to click 🔄 Sync from Meta in 1–2 min. Better than
+      // silently dropping the connection.
+      if (wabaId && !phoneNumberId) {
+        toast('Connected to WABA — phone provisioning may take a few minutes. After it finishes, click 🔄 Sync from Meta.', 'warn');
+      } else {
+        toast('Did not receive WABA / phone number from the dialog. Check console for [emb-signup] log entries to see what Meta sent.', 'err');
+        return;
+      }
     }
     (async () => {
       try {

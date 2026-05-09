@@ -2460,11 +2460,103 @@ async function api_wa_phones_delete(token, id) {
   return { ok: true };
 }
 
+
+
+/**
+ * Sync wa_phones table from Meta. Walks every phone on the connected
+ * WABA, upserts into wa_phones. Used when Embedded Signup completed on
+ * Meta side but didn't post the final phone_number_id to our SPA (e.g.
+ * Coexistence flow), so the wa_phones table is missing rows.
+ *
+ * Idempotent — re-running is safe and only inserts rows that don't
+ * already exist.
+ */
+async function api_wa_phones_syncFromMeta(token) {
+  const me = await authUser(token);
+  if (me.role !== 'admin') throw new Error('Admin only');
+  const cfg = await _cfg();
+  if (!cfg.token || !cfg.wabaId) {
+    throw new Error('Connect WhatsApp first — no WABA configured.');
+  }
+  const r = await _graphGet(
+    `${cfg.wabaId}/phone_numbers?fields=id,display_phone_number,verified_name,quality_rating,status,messaging_limit_tier,platform_type`,
+    cfg
+  );
+  if (r.body && r.body.error) {
+    throw new Error('Meta API error: ' + r.body.error.message);
+  }
+  const phones = r.body.data || [];
+  let added = 0, updated = 0;
+  for (const p of phones) {
+    const existing = await db.query(
+      'SELECT id FROM wa_phones WHERE phone_number_id = $1',
+      [String(p.id)]
+    );
+    if (existing.rows.length) {
+      await db.query(
+        `UPDATE wa_phones SET
+           business_account_id = $1,
+           display_phone_number = COALESCE(NULLIF($2, ''), display_phone_number),
+           verified_name        = COALESCE(NULLIF($3, ''), verified_name),
+           quality_rating       = $4,
+           status               = $5,
+           messaging_limit_tier = $6,
+           is_active            = 1,
+           last_seen_at         = NOW(),
+           updated_at           = NOW()
+         WHERE phone_number_id = $7`,
+        [
+          String(cfg.wabaId),
+          p.display_phone_number || '',
+          p.verified_name || '',
+          p.quality_rating || null,
+          p.status || null,
+          p.messaging_limit_tier || null,
+          String(p.id)
+        ]
+      );
+      updated++;
+    } else {
+      // First row → make it the default. Subsequent rows are not default.
+      const cnt = await db.query('SELECT COUNT(*)::int AS c FROM wa_phones');
+      const isFirst = !Number(cnt.rows[0].c);
+      // Use the same access_token as the existing default phone (Coexistence
+      // numbers share the WABA's token).
+      const tokenRow = await db.query(
+        'SELECT access_token FROM wa_phones ORDER BY is_default DESC, id ASC LIMIT 1'
+      );
+      const accessToken = (tokenRow.rows[0] && tokenRow.rows[0].access_token) || cfg.token;
+      await db.query(
+        `INSERT INTO wa_phones
+            (phone_number_id, business_account_id, access_token,
+             display_phone_number, verified_name,
+             quality_rating, status, messaging_limit_tier,
+             is_default, is_active, last_seen_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, NOW())`,
+        [
+          String(p.id),
+          String(cfg.wabaId),
+          accessToken,
+          p.display_phone_number || '',
+          p.verified_name || '',
+          p.quality_rating || null,
+          p.status || null,
+          p.messaging_limit_tier || null,
+          isFirst ? 1 : 0
+        ]
+      );
+      added++;
+    }
+  }
+  return { ok: true, total: phones.length, added, updated, phones };
+}
+
 module.exports = {
   // Settings
   api_wb_settings_get, api_wb_settings_save, api_wb_connect_verify, api_wb_disconnect,
   api_wb_emb_signin, api_wb_register_phone,
   api_wb_phones_list, api_wb_phones_set_current, api_wb_phone_check,
+  api_wa_phones_syncFromMeta,
   api_wb_webhook_status, api_wb_webhook_subscribe,
   // Templates
   api_wb_templates_sync, api_wb_templates_list, api_wb_templates_create, api_wb_templates_delete,
