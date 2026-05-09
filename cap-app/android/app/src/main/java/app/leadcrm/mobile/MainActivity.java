@@ -18,6 +18,8 @@ import android.provider.OpenableColumns;
 import android.util.Log;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
+import android.webkit.WebChromeClient;
+import android.webkit.GeolocationPermissions;
 
 import androidx.annotation.NonNull;
 import androidx.core.app.ActivityCompat;
@@ -55,6 +57,22 @@ public class MainActivity extends BridgeActivity {
         registerCallReceiver();
         getBridge().getWebView().addJavascriptInterface(new LeadCRMBridge(), "LeadCRMNative");
         handleSharedIntent(getIntent());
+
+        // Allow WebView to use navigator.geolocation. Without this the SPA's
+        // getCurrentPosition() in checkInOut() is silently denied and
+        // attendance check-in saves with no lat/lng.
+        try {
+            WebView wv = getBridge().getWebView();
+            wv.getSettings().setGeolocationEnabled(true);
+            wv.setWebChromeClient(new WebChromeClient() {
+                @Override
+                public void onGeolocationPermissionsShowPrompt(String origin, GeolocationPermissions.Callback callback) {
+                    callback.invoke(origin, true, true);
+                }
+            });
+        } catch (Exception e) {
+            Log.w(TAG, "WebChromeClient install failed: " + e.getMessage());
+        }
     }
 
     @Override
@@ -85,7 +103,9 @@ public class MainActivity extends BridgeActivity {
                 Manifest.permission.READ_PHONE_STATE,
                 Manifest.permission.CALL_PHONE,
                 Manifest.permission.READ_CONTACTS,
-                Manifest.permission.POST_NOTIFICATIONS
+                Manifest.permission.POST_NOTIFICATIONS,
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION
         };
         boolean need = false;
         for (String p : perms) {
