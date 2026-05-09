@@ -3151,7 +3151,13 @@ async function openLeadModal(id) {
       }, '💬 My WhatsApp') : null,
       _digits ? h('button', { type: 'button', class: 'btn sm wa-cloud-btn', onclick: () => openInitiateChatModal(lead) }, '🟢 WA Template') : null,
       _digits ? h('button', { type: 'button', class: 'btn sm', onclick: () => sendCalendlyLink(lead) }, '📅 Send Calendly') : null,
-      lead.email ? h('a', { class: 'btn sm', href: 'mailto:' + lead.email }, '✉ Email') : null
+      lead.email ? h('a', { class: 'btn sm', href: 'mailto:' + lead.email }, '✉ Email') : null,
+      h('button', {
+        type: 'button', class: 'btn sm',
+        title: 'Create a quotation pre-filled with this lead\'s details',
+        style: { background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' },
+        onclick: () => { modal.remove(); openQuotationModal(null, lead); }
+      }, '\ud83d\udcc4 Quote')
     ));
   }
 
@@ -3198,6 +3204,51 @@ async function openLeadModal(id) {
   });
 
   body.appendChild(form);
+
+  // ---- Quotations panel for this lead ----
+  if (id) {
+    const quotesCard = h('div', { class: 'card', style: { marginTop: '.75rem' } });
+    quotesCard.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '.4rem' } },
+      h('h4', { style: { margin: 0 } }, '\ud83d\udcc4 Quotations'),
+      h('button', { class: 'btn sm primary', type: 'button', onclick: () => { modal.remove(); openQuotationModal(null, lead); } }, '+ New')
+    ));
+    const quotesList = h('div', { class: 'muted', style: { fontSize: '.85rem' } }, 'Loading\u2026');
+    quotesCard.appendChild(quotesList);
+    body.appendChild(quotesCard);
+    api('api_quotations_list', { lead_id: id }).then(d => {
+      quotesList.innerHTML = '';
+      const rows = (d && d.rows) || [];
+      if (!rows.length) {
+        quotesList.appendChild(h('div', { class: 'muted', style: { fontSize: '.85rem' } }, 'No quotations sent yet for this lead.'));
+        return;
+      }
+      const tbl = h('table', { style: { width: '100%', fontSize: '.85rem' } },
+        h('thead', {}, h('tr', {},
+          h('th', { style: { textAlign: 'left' } }, 'Number'),
+          h('th', { style: { textAlign: 'left' } }, 'Status'),
+          h('th', { style: { textAlign: 'right' } }, 'Total'),
+          h('th', { style: { textAlign: 'left' } }, 'Sent'),
+          h('th', {}, '')
+        )),
+        h('tbody', {}, ...rows.map(r => {
+          const stColor = { draft: '#94a3b8', sent: '#3b82f6', accepted: '#10b981', rejected: '#ef4444', expired: '#f59e0b' }[r.status] || '#64748b';
+          return h('tr', {},
+            h('td', {}, h('code', {}, r.number)),
+            h('td', {}, h('span', { style: { background: stColor, color: '#fff', padding: '.1rem .4rem', borderRadius: '4px', fontSize: '.76rem' } }, r.status)),
+            h('td', { style: { textAlign: 'right' } }, '\u20b9' + Number(r.total || 0).toLocaleString('en-IN')),
+            h('td', { class: 'muted', style: { fontSize: '.78rem' } }, r.sent_at ? fmtDate(r.sent_at, 'relative') : '\u2014'),
+            h('td', { style: { textAlign: 'right' } },
+              h('button', { class: 'btn xs', type: 'button', onclick: () => { modal.remove(); openQuotationModal(r.id); } }, 'Open')
+            )
+          );
+        }))
+      );
+      quotesList.appendChild(tbl);
+    }).catch(e => {
+      quotesList.innerHTML = '';
+      quotesList.appendChild(h('div', { class: 'muted', style: { fontSize: '.85rem' } }, 'Could not load quotations: ' + e.message));
+    });
+  }
 
   // Customer / campaign-supplied fields are read-only for non-admins on
   // existing leads. Reps can update status/notes/follow-up/etc. but cannot
@@ -5995,9 +6046,9 @@ VIEWS.quotations = async (view) => {
   reload();
 };
 
-async function openQuotationModal(qid) {
-  const m = h('div', { class: 'modal-bd' });
-  const card = h('div', { class: 'modal-card', style: { maxWidth: '780px', maxHeight: '90vh', overflow: 'auto' } });
+async function openQuotationModal(qid, prefillLead) {
+  const m = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const card = h('div', { class: 'modal', style: { maxWidth: '780px', maxHeight: '90vh', overflow: 'auto' } });
   m.appendChild(card);
   document.body.appendChild(m);
 
@@ -6006,7 +6057,17 @@ async function openQuotationModal(qid) {
     try { const r = await api('api_quotations_get', qid); existing = { ...(r.quotation || {}), items: r.items || [] }; }
     catch (e) { card.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
   }
-  const q = existing || { items: [], currency: 'INR', tax_pct: 18, discount_pct: 0, issue_date: new Date().toISOString().slice(0, 10) };
+  // If invoked from a lead detail, pre-fill customer fields + lead_id.
+  const seed = prefillLead ? {
+    items: [], currency: 'INR', tax_pct: 18, discount_pct: 0,
+    issue_date: new Date().toISOString().slice(0, 10),
+    lead_id: prefillLead.id,
+    customer_name:    prefillLead.name || '',
+    customer_email:   prefillLead.email || '',
+    customer_phone:   prefillLead.phone || prefillLead.whatsapp || '',
+    customer_address: prefillLead.address || prefillLead.location || ''
+  } : { items: [], currency: 'INR', tax_pct: 18, discount_pct: 0, issue_date: new Date().toISOString().slice(0, 10) };
+  const q = existing || seed;
 
   card.appendChild(h('h3', { style: { marginTop: 0 } }, qid ? '✎ Edit quotation ' + (q.number || '') : '+ New quotation'));
 
@@ -6060,10 +6121,35 @@ async function openQuotationModal(qid) {
       '<div style="font-size:1.1rem;color:#6366f1">Total: ₹' + total.toFixed(2) + '</div>';
   }
 
+  // Build a product dropdown — typing or picking auto-fills description
+  // + unit_price + product_id. Free-text description still works too.
+  function _productSelect(seed) {
+    const products = (CRM.cache && CRM.cache.products) || [];
+    const sel = h('select', { style: { width: '100%' } },
+      h('option', { value: '' }, '\u2014 Pick a product (optional) \u2014'),
+      ...products.map(p => h('option', {
+        value: String(p.id),
+        'data-price': String(p.price || p.unit_price || 0),
+        'data-name':  String(p.name || ''),
+        selected: seed && Number(seed.product_id) === Number(p.id) ? 'selected' : null
+      }, (p.name || ('Product #' + p.id)) + (p.price ? '  \u2014 \u20b9' + Number(p.price).toLocaleString('en-IN') : '')))
+    );
+    return sel;
+  }
   function addItem(seed) {
     const it = seed || { description: '', quantity: 1, unit_price: 0, discount_pct: 0 };
-    const row = h('div', { class: 'q-item', style: { display: 'grid', gridTemplateColumns: '3fr .8fr 1fr .7fr 1fr 28px', gap: '.4rem', alignItems: 'center', marginBottom: '.3rem' } });
+    const row = h('div', { class: 'q-item', style: { display: 'grid', gridTemplateColumns: '1.2fr 2fr .7fr .9fr .6fr 1fr 28px', gap: '.4rem', alignItems: 'center', marginBottom: '.3rem' } });
+    const prodSel = _productSelect(it);
     const desc = h('input', { type: 'text', placeholder: 'Description', value: it.description || '', style: { width: '100%' } });
+    prodSel.onchange = () => {
+      const opt = prodSel.options[prodSel.selectedIndex];
+      if (!opt || !opt.value) return;
+      const name = opt.getAttribute('data-name') || '';
+      const price = Number(opt.getAttribute('data-price') || 0);
+      if (name && !desc.value.trim()) desc.value = name;
+      if (price && Number(pr.value || 0) === 0) pr.value = String(price);
+      recompute();
+    };
     const qty  = h('input', { 'data-k': 'qty',   type: 'number', value: it.quantity || 1, step: '0.001', min: 0 });
     const pr   = h('input', { 'data-k': 'price', type: 'number', value: it.unit_price || 0, step: '0.01', min: 0 });
     const dp   = h('input', { 'data-k': 'disc',  type: 'number', value: it.discount_pct || 0, step: '0.01', min: 0, max: 100 });
@@ -6071,14 +6157,15 @@ async function openQuotationModal(qid) {
     const del  = h('button', { class: 'btn xs ghost danger', type: 'button', onclick: () => { row.remove(); recompute(); } }, '✕');
     [qty, pr, dp].forEach(el => el.addEventListener('input', recompute));
     row._desc = desc; row._qty = qty; row._pr = pr; row._dp = dp;
-    row.appendChild(desc); row.appendChild(qty); row.appendChild(pr); row.appendChild(dp); row.appendChild(amt); row.appendChild(del);
+    row._prodSel = prodSel;
+    row.appendChild(prodSel); row.appendChild(desc); row.appendChild(qty); row.appendChild(pr); row.appendChild(dp); row.appendChild(amt); row.appendChild(del);
     itemsWrap.appendChild(row);
     recompute();
     return row;
   }
   // Header row
-  itemsWrap.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '3fr .8fr 1fr .7fr 1fr 28px', gap: '.4rem', fontSize: '.78rem', color: '#64748b', marginBottom: '.3rem' } },
-    h('div', {}, 'Description'), h('div', {}, 'Qty'), h('div', {}, 'Unit price'), h('div', {}, 'Disc %'),
+  itemsWrap.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '1.2fr 2fr .7fr .9fr .6fr 1fr 28px', gap: '.4rem', fontSize: '.78rem', color: '#64748b', marginBottom: '.3rem' } },
+    h('div', {}, 'Product'), h('div', {}, 'Description'), h('div', {}, 'Qty'), h('div', {}, 'Unit price'), h('div', {}, 'Disc %'),
     h('div', { style: { textAlign: 'right' } }, 'Amount'), h('div', {})
   ));
   (q.items || []).forEach(it => addItem(it));
@@ -6111,11 +6198,13 @@ async function openQuotationModal(qid) {
       description: row._desc.value,
       quantity: Number(row._qty.value || 0),
       unit_price: Number(row._pr.value || 0),
-      discount_pct: Number(row._dp.value || 0)
+      discount_pct: Number(row._dp.value || 0),
+      product_id: row._prodSel && row._prodSel.value ? Number(row._prodSel.value) : null
     })).filter(it => it.description);
     try {
       const r = await api('api_quotations_save', {
         id: currentId,
+        lead_id: q.lead_id || null,
         customer_name: nameInp.value,
         customer_email: emailInp.value,
         customer_phone: phoneInp.value,
@@ -7424,8 +7513,8 @@ async function wbTemplates() {
 // Create Template modal — author a template + submit to Meta
 // ============================================================
 function openCreateTemplateModal() {
-  const m = h('div', { class: 'modal-bd' });
-  const card = h('div', { class: 'modal-card', style: { maxWidth: '720px' } });
+  const m = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const card = h('div', { class: 'modal', style: { maxWidth: '720px' } });
   m.appendChild(card);
 
   card.appendChild(h('h3', { style: { marginTop: 0 } }, '\ud83d\udccb Create WhatsApp Template'));
