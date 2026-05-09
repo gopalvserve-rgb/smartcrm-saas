@@ -75,7 +75,37 @@ async function _getAllConfig() {
 async function api_company_info(token) {
   if (token) { try { await authUser(token); } catch (_) {} }
   const cfg = await _getAllConfig();
-  return { name: cfg.COMPANY_NAME || 'Lead CRM', logo_url: cfg.COMPANY_LOGO_URL || '' };
+  return {
+    name: cfg.COMPANY_NAME || 'Lead CRM',
+    logo_url: cfg.COMPANY_LOGO_URL || '',
+    // Brand theme colours — exposed publicly so the login screen + the
+    // SPA's pre-warmCache initial render can theme correctly even before
+    // the user authenticates as admin. Non-admin users also get themed
+    // via this endpoint because api_admin_getConfig is admin-gated.
+    brand: {
+      primary:  cfg.BRAND_PRIMARY_COLOR  || '',
+      accent:   cfg.BRAND_ACCENT_COLOR   || '',
+      sidebar:  cfg.BRAND_SIDEBAR_COLOR  || '',
+      text:     cfg.BRAND_TEXT_COLOR     || '',
+      mode:     cfg.THEME_MODE           || 'auto'
+    }
+  };
+}
+
+// Public theme-only endpoint — returns just the brand colours, no auth.
+// Used by the SPA's warmCache fallback so non-admin users still get the
+// themed UI even though api_admin_getConfig rejects them.
+async function api_admin_brand(_token) {
+  const cfg = await _getAllConfig();
+  return {
+    BRAND_PRIMARY_COLOR:  cfg.BRAND_PRIMARY_COLOR  || '',
+    BRAND_ACCENT_COLOR:   cfg.BRAND_ACCENT_COLOR   || '',
+    BRAND_SIDEBAR_COLOR:  cfg.BRAND_SIDEBAR_COLOR  || '',
+    BRAND_TEXT_COLOR:     cfg.BRAND_TEXT_COLOR     || '',
+    THEME_MODE:           cfg.THEME_MODE           || 'auto',
+    COMPANY_NAME:         cfg.COMPANY_NAME         || '',
+    COMPANY_LOGO_URL:     cfg.COMPANY_LOGO_URL     || ''
+  };
 }
 
 
@@ -357,6 +387,7 @@ async function api_admin_wipeHrData(token, categories, confirm) {
 
 module.exports = {
   api_company_info,
+  api_admin_brand,
   api_admin_getConfig, api_admin_config, api_layout_get,
   api_admin_setConfig, api_admin_saveConfig,
   api_admin_regenerateApiKey,
@@ -367,3 +398,4 @@ module.exports = {
   api_admin_testMeta, api_admin_subscribeMetaLeadgen, api_admin_testWhatsApp,
   api_admin_wipeHrData
 };
+      

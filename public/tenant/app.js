@@ -98,6 +98,14 @@ async function apiRaw(fn, ...args) {
     const r = await fetch('/config.json');
     if (r.ok) CRM.config = Object.assign(CRM.config, await r.json());
   } catch (_) {}
+  // Apply tenant theme as EARLY as possible — before login screen renders
+  // and before warmCache. Public api_admin_brand returns brand colours
+  // without auth so even unauthenticated users on the login page see the
+  // tenant's brand. Best-effort; quietly no-ops if endpoint isn't ready.
+  try {
+    const brand = await api('api_admin_brand').catch(() => null);
+    if (brand && typeof applyTenantTheme === 'function') applyTenantTheme(brand);
+  } catch (_) {}
   // Layout config: sidebar group order + hidden ids — admin-tunable.
   // Falls back to defaults if the api isn't loaded yet.
   try {
@@ -206,22 +214,31 @@ function parseHashView() {
 }
 
 async function warmCache() {
-  const [statuses, sources, products, users, customFields, cfg, mods] = await Promise.all([
+  const [statuses, sources, products, users, customFields, cfg, mods, brand] = await Promise.all([
     api('api_statuses_list'),
     api('api_sources_list'),
     api('api_products_list'),
     api('api_users_list'),
     api('api_customFields_list').catch(() => []),
     api('api_admin_getConfig').catch(() => ({})),
-    api('api_modules_active').catch(() => null)
+    api('api_modules_active').catch(() => null),
+    // Public brand endpoint — works for non-admins too. We merge it under
+    // any admin-config we already have so themes apply for every user role.
+    api('api_admin_brand').catch(() => ({}))
   ]);
   CRM.cache = { statuses, sources, products, users, customFields };
-  CRM.cache.config = cfg || {};
+  // Merge: admin cfg wins for keys it has, but for non-admin users (where
+  // api_admin_getConfig returned {}) we fall back to brand so colours apply.
+  const mergedCfg = Object.assign({}, brand || {}, cfg || {});
+  // Re-apply brand keys explicitly so an empty admin value never blanks out a real brand value.
+  ['BRAND_PRIMARY_COLOR','BRAND_ACCENT_COLOR','BRAND_SIDEBAR_COLOR','BRAND_TEXT_COLOR','THEME_MODE','COMPANY_NAME','COMPANY_LOGO_URL']
+    .forEach(k => { if (!mergedCfg[k] && brand && brand[k]) mergedCfg[k] = brand[k]; });
+  CRM.cache.config = mergedCfg;
   // Active modules — set of module keys the super-admin has enabled.
   // null/undefined means every module is enabled (backwards-compatible).
   CRM.cache.modules = (mods && Array.isArray(mods.active)) ? mods.active : null;
   CRM.cache.module_catalog = (mods && Array.isArray(mods.catalog)) ? mods.catalog : null;
-  applyTenantTheme(cfg || {});
+  applyTenantTheme(mergedCfg);
 }
 
 // Helpers for module-aware filtering. Used by sidebar render + settings rail.
@@ -12272,11 +12289,16 @@ async function adminCompany() {
   themeCard.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', marginTop: '.75rem' } },
     h('button', { class: 'btn primary', onclick: async () => {
       try {
-        await api('api_admin_setConfig', {
+        const patch = {
           BRAND_PRIMARY_COLOR: primary.value, BRAND_ACCENT_COLOR: accent.value,
           BRAND_SIDEBAR_COLOR: sidebar.value, BRAND_TEXT_COLOR: textCol.value,
           THEME_MODE: modeSel.value
-        });
+        };
+        await api('api_admin_setConfig', patch);
+        // Mirror into the in-memory cache so subsequent renders see the new
+        // values without a reload, and re-apply CSS vars immediately.
+        if (CRM.cache && CRM.cache.config) Object.assign(CRM.cache.config, patch);
+        applyTenantTheme(patch);
         toast('Theme saved');
       } catch (e) { toast(e.message, 'err'); }
     } }, '\ud83d\udcbe Save theme'),
@@ -16976,7 +16998,7 @@ function _renderCopilotDrawer() {
       const q2 = document.getElementById('copilot-quota');
       if (q2) q2.textContent = (r.daily_used || 0) + ' / ' + (r.daily_limit || 50) + ' questions used today';
     } catch (e) {
-      thinking.querySelector('.copilot-text').textContent = '\u26a0 ' + e.message;
+      thinking.querySelector('.copilot-text').textContent = '⚠ ' + e.message;
       thinking.classList.remove('copilot-thinking');
     } finally {
       sendBtn.disabled = false;
@@ -17015,11 +17037,21 @@ function _copilotMsg(role, text) {
 }
 
 // Boot the FAB on every page load. Polls until CRM.user is hydrated.
-document.addEventListener('DOMContentLoaded', () => {
-  let n = 0;
-  const t = setInterval(() => {
-    if (typeof CRM !== 'undefined' && CRM.user) { _initCrmCopilot(); clearInterval(t); }
-    else if (++n > 60) clearInterval(t);
-  }, 500);
-});
-
+// IMPORTANT: app.js is injected by the bootstrap loader in <head>, which
+// often runs AFTER DOMContentLoaded has already fired. So a plain
+// addEventListener('DOMContentLoaded', ...) never runs. Check readyState
+// and start the poller immediately if the document is already parsed.
+(function bootCopilot() {
+  function start() {
+    let n = 0;
+    const t = setInterval(() => {
+      if (typeof CRM !== 'undefined' && CRM.user) { _initCrmCopilot(); clearInterval(t); }
+      else if (++n > 120) clearInterval(t);
+    }, 500);
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', start, { once: true });
+  } else {
+    start();
+  }
+})();
