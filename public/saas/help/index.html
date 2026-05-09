@@ -1,0 +1,1090 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Setup Guide — SmartCRM</title>
+<meta name="description" content="Step-by-step setup guide for SmartCRM integrations: Pabbly, Meta Lead Ads, Google Ads, WhatsApp, AI Bot, SMTP, push notifications, and more.">
+<link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='80' font-size='80'>📘</text></svg>">
+<style>
+:root {
+  --bg: #f8fafc;
+  --surface: #ffffff;
+  --surface-soft: #f1f5f9;
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --text: #0f172a;
+  --text-soft: #64748b;
+  --text-muted: #94a3b8;
+  --brand: #6366f1;
+  --brand-soft: #eef2ff;
+  --brand-strong: #4f46e5;
+  --accent: #8b5cf6;
+  --success: #10b981;
+  --success-soft: #ecfdf5;
+  --warn: #f59e0b;
+  --warn-soft: #fef3c7;
+  --danger: #ef4444;
+  --danger-soft: #fee2e2;
+  --shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 1px 3px rgba(15, 23, 42, .06);
+  --shadow-md: 0 4px 6px rgba(15, 23, 42, .05), 0 10px 15px rgba(15, 23, 42, .06);
+  --radius: 12px;
+  --radius-sm: 8px;
+  --gradient: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #ec4899 100%);
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0; background: var(--bg); color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  font-size: 15px; line-height: 1.55; -webkit-font-smoothing: antialiased;
+}
+a { color: var(--brand-strong); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, pre { font-family: "SF Mono", Menlo, Consolas, monospace; }
+
+/* ---------- Top bar ---------- */
+.topbar {
+  position: sticky; top: 0; z-index: 50;
+  background: rgba(255,255,255,.92);
+  backdrop-filter: saturate(160%) blur(8px);
+  border-bottom: 1px solid var(--border);
+}
+.topbar-inner {
+  max-width: 1200px; margin: 0 auto;
+  padding: .85rem 1.25rem;
+  display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+}
+.brand {
+  font-weight: 700; font-size: 1.05rem; letter-spacing: -.01em;
+  display: flex; align-items: center; gap: .5rem;
+}
+.brand-dot { width: 28px; height: 28px; border-radius: 8px; background: var(--gradient); display: flex; align-items: center; justify-content: center; color: #fff; font-size: .9rem; }
+.search-wrap {
+  flex: 1; min-width: 220px;
+  position: relative;
+}
+.search {
+  width: 100%; padding: .65rem .95rem .65rem 2.4rem;
+  border-radius: var(--radius-sm); border: 1px solid var(--border-strong);
+  font-size: .95rem; background: #fff; color: var(--text);
+  outline: none; transition: border-color .12s, box-shadow .12s;
+}
+.search:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(99, 102, 241, .15); }
+.search-icon {
+  position: absolute; left: .8rem; top: 50%; transform: translateY(-50%);
+  color: var(--text-muted); pointer-events: none;
+}
+.search-shortcut {
+  position: absolute; right: .55rem; top: 50%; transform: translateY(-50%);
+  font-size: .72rem; color: var(--text-muted);
+  border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px;
+  background: var(--surface-soft);
+}
+.topbar-link {
+  color: var(--text-soft); font-size: .88rem; font-weight: 500;
+  padding: .35rem .65rem; border-radius: 6px;
+}
+.topbar-link:hover { background: var(--surface-soft); color: var(--text); text-decoration: none; }
+
+/* ---------- Hero ---------- */
+.hero {
+  max-width: 1200px; margin: 0 auto;
+  padding: 2.6rem 1.25rem 1.5rem;
+}
+.hero h1 {
+  font-size: 2rem; font-weight: 700; letter-spacing: -.02em;
+  margin: 0 0 .5rem; line-height: 1.15;
+}
+.hero p {
+  color: var(--text-soft); font-size: 1.05rem; margin: 0; max-width: 64ch;
+}
+.hero .pills { margin-top: 1.1rem; display: flex; flex-wrap: wrap; gap: .4rem; }
+.pill {
+  background: var(--surface); border: 1px solid var(--border);
+  color: var(--text-soft); font-size: .82rem; font-weight: 500;
+  padding: .35rem .7rem; border-radius: 999px; cursor: pointer;
+  transition: all .12s;
+}
+.pill:hover { background: var(--brand-soft); border-color: var(--brand); color: var(--brand-strong); }
+
+/* ---------- Layout ---------- */
+.layout {
+  max-width: 1200px; margin: 0 auto;
+  padding: 1rem 1.25rem 4rem;
+  display: grid; grid-template-columns: 220px 1fr; gap: 2rem;
+  align-items: start;
+}
+.toc {
+  position: sticky; top: 80px;
+  font-size: .87rem;
+  max-height: calc(100vh - 100px); overflow-y: auto;
+  padding-right: .25rem;
+}
+.toc-title {
+  font-size: .7rem; text-transform: uppercase; letter-spacing: .06em;
+  font-weight: 600; color: var(--text-muted);
+  padding: .5rem .25rem .25rem;
+}
+.toc a {
+  display: block; padding: .35rem .55rem;
+  color: var(--text-soft); border-radius: 6px;
+  border-left: 2px solid transparent;
+  text-decoration: none; font-weight: 500;
+}
+.toc a:hover { color: var(--text); background: var(--surface-soft); }
+.toc a.active { color: var(--brand-strong); background: var(--brand-soft); border-left-color: var(--brand); }
+
+.content { min-width: 0; }
+
+/* ---------- Cards ---------- */
+.section {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 1.5rem;
+  margin-bottom: 1.25rem; box-shadow: var(--shadow);
+}
+.section h2 {
+  font-size: 1.4rem; margin: 0 0 .35rem; letter-spacing: -.01em;
+  display: flex; align-items: center; gap: .55rem;
+}
+.section h2 .num {
+  font-size: .8rem; font-weight: 600;
+  background: var(--brand-soft); color: var(--brand-strong);
+  padding: 2px 8px; border-radius: 999px;
+}
+.section .lede {
+  color: var(--text-soft); font-size: .96rem; margin: 0 0 1.25rem;
+}
+.section h3 {
+  font-size: 1.05rem; margin: 1.5rem 0 .5rem; font-weight: 600;
+}
+
+/* Step lists */
+.steps { list-style: none; padding: 0; margin: 0; counter-reset: step; }
+.steps li {
+  counter-increment: step;
+  position: relative;
+  padding: .85rem 0 .85rem 2.6rem;
+  border-bottom: 1px dashed var(--border);
+}
+.steps li:last-child { border-bottom: none; }
+.steps li::before {
+  content: counter(step);
+  position: absolute; left: 0; top: .85rem;
+  width: 28px; height: 28px; border-radius: 50%;
+  background: var(--gradient); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: .82rem;
+}
+.steps li > strong:first-child {
+  display: block; margin-bottom: .15rem; font-size: 1rem;
+}
+.steps p { margin: .35rem 0; color: var(--text-soft); }
+.steps small { color: var(--text-muted); display: block; margin-top: .15rem; }
+
+/* Code blocks */
+pre, .code {
+  background: #0f172a; color: #e2e8f0;
+  padding: .9rem 1.1rem; border-radius: var(--radius-sm);
+  overflow-x: auto; font-size: .82rem;
+  margin: .5rem 0;
+}
+pre code { background: transparent; color: inherit; padding: 0; font-size: .82rem; }
+:not(pre) > code {
+  background: var(--surface-soft); color: var(--brand-strong);
+  padding: 1px 6px; border-radius: 4px; font-size: .85rem;
+}
+.copy-row {
+  display: flex; align-items: center; gap: .5rem;
+  background: #0f172a; color: #e2e8f0;
+  padding: .55rem .65rem .55rem 1rem; border-radius: var(--radius-sm);
+  margin: .35rem 0; font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: .82rem; word-break: break-all;
+}
+.copy-row .copy-content { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.copy-btn {
+  background: rgba(255,255,255,.1); color: #fff;
+  border: 1px solid rgba(255,255,255,.2);
+  padding: .25rem .55rem; border-radius: 5px;
+  font-size: .72rem; cursor: pointer; flex-shrink: 0;
+  transition: all .12s; font-family: inherit;
+}
+.copy-btn:hover { background: rgba(255,255,255,.2); }
+.copy-btn.copied { background: var(--success); border-color: var(--success); }
+
+/* Callouts */
+.callout {
+  display: flex; gap: .65rem; align-items: flex-start;
+  padding: .75rem .9rem; border-radius: var(--radius-sm);
+  margin: .75rem 0; font-size: .9rem;
+  border: 1px solid transparent;
+}
+.callout-icon { font-size: 1.05rem; flex-shrink: 0; line-height: 1.4; }
+.callout-info { background: #eff6ff; border-color: #bfdbfe; color: #1e40af; }
+.callout-warn { background: var(--warn-soft); border-color: #fcd34d; color: #92400e; }
+.callout-danger { background: var(--danger-soft); border-color: #fca5a5; color: #991b1b; }
+.callout-success { background: var(--success-soft); border-color: #6ee7b7; color: #065f46; }
+.callout strong { font-weight: 700; }
+
+/* Tables */
+table.kv {
+  width: 100%; border-collapse: collapse;
+  margin: .6rem 0; font-size: .9rem;
+}
+table.kv td {
+  padding: .55rem .75rem; border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+table.kv tr:last-child td { border-bottom: none; }
+table.kv td:first-child {
+  width: 200px; color: var(--text-soft); font-weight: 500;
+}
+table.kv td code { white-space: nowrap; }
+
+/* Tags */
+.tag {
+  display: inline-block; font-size: .72rem; font-weight: 600;
+  padding: 1px 8px; border-radius: 4px; vertical-align: middle;
+  margin-right: .35rem; text-transform: uppercase; letter-spacing: .04em;
+}
+.tag-required { background: var(--danger-soft); color: #991b1b; }
+.tag-optional { background: var(--surface-soft); color: var(--text-soft); }
+.tag-recommended { background: var(--success-soft); color: #065f46; }
+.tag-beta { background: var(--warn-soft); color: #92400e; }
+
+/* Search-no-result */
+.no-results {
+  text-align: center; padding: 3rem 1rem; color: var(--text-muted);
+}
+.no-results h3 { color: var(--text-soft); margin: 0 0 .35rem; }
+
+/* Hidden by search */
+.hide { display: none !important; }
+
+/* Mobile */
+@media (max-width: 780px) {
+  .layout { grid-template-columns: 1fr; gap: 1rem; padding: .8rem 1rem 3rem; }
+  .toc { display: none; }
+  .hero { padding: 1.6rem 1rem .8rem; }
+  .hero h1 { font-size: 1.5rem; }
+  .hero p { font-size: .95rem; }
+  .section { padding: 1.1rem; }
+  .section h2 { font-size: 1.15rem; }
+  .topbar-inner { padding: .65rem 1rem; }
+  .brand-tagline { display: none; }
+  table.kv td:first-child { width: 130px; }
+}
+@media (prefers-color-scheme: dark) {
+  /* Keep light theme for readability - guides are easier to read in light mode */
+}
+</style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <div class="brand-dot">📘</div>
+      <span>SmartCRM Setup Guide</span>
+    </div>
+    <div class="search-wrap">
+      <span class="search-icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+      </span>
+      <input id="searchInput" type="search" class="search" placeholder="Search guides — try 'WhatsApp', 'Pabbly', 'AI Bot', 'SMTP'…" autocomplete="off" autofocus>
+      <span class="search-shortcut">/ to focus</span>
+    </div>
+    <a class="topbar-link" href="https://crm.smartcrmsolution.com/" target="_blank">Open CRM →</a>
+  </div>
+</div>
+
+<!-- Hero -->
+<div class="hero">
+  <h1>Set up SmartCRM, step by step.</h1>
+  <p>Every integration explained — from connecting WhatsApp to wiring up Pabbly to enabling the AI Bot. Search above, or jump in below.</p>
+  <div class="pills">
+    <button class="pill" data-q="webhook">Webhooks</button>
+    <button class="pill" data-q="whatsapp">WhatsApp</button>
+    <button class="pill" data-q="ai bot">AI Bot</button>
+    <button class="pill" data-q="meta">Meta Lead Ads</button>
+    <button class="pill" data-q="pabbly">Pabbly</button>
+    <button class="pill" data-q="google">Google Ads</button>
+    <button class="pill" data-q="smtp">SMTP / Email</button>
+    <button class="pill" data-q="push">Mobile push</button>
+    <button class="pill" data-q="custom field">Custom fields</button>
+    <button class="pill" data-q="campaign">Campaigns</button>
+    <button class="pill" data-q="auto-assign">Auto-assign</button>
+  </div>
+</div>
+
+<div class="layout">
+
+<!-- TOC -->
+<aside class="toc">
+  <div class="toc-title">On this page</div>
+  <a href="#first-login">First login</a>
+  <a href="#users-roles">Users &amp; roles</a>
+  <a href="#statuses">Statuses</a>
+  <a href="#sources-tags">Sources &amp; tags</a>
+  <a href="#custom-fields">Custom fields</a>
+  <a href="#products">Products</a>
+  <a href="#auto-assign">Auto-assign rules</a>
+  <a href="#campaigns">Campaigns</a>
+  <a href="#tat">TAT (response SLA)</a>
+  <a href="#project-stages">Project stages</a>
+  <a href="#duplicates">Duplicate handling</a>
+  <a href="#website-api">Website API webhook</a>
+  <a href="#pabbly">Pabbly Connect</a>
+  <a href="#make">Make.com</a>
+  <a href="#zapier">Zapier &amp; n8n</a>
+  <a href="#meta-leadads">Meta (Facebook) Lead Ads</a>
+  <a href="#google-ads">Google Ads ValueTrack</a>
+  <a href="#csv-import">CSV import (Zoho/Salesforce/etc.)</a>
+  <a href="#calendly">Calendly</a>
+  <a href="#whatsapp">WhatsApp Cloud API</a>
+  <a href="#whatsapp-coexistence">WhatsApp Coexistence</a>
+  <a href="#whatsapp-multi">Multiple WhatsApp numbers</a>
+  <a href="#whatsapp-templates">WhatsApp templates</a>
+  <a href="#ai-bot">AI WhatsApp Bot</a>
+  <a href="#ai-kb">AI Knowledge Base</a>
+  <a href="#crm-copilot">CRM Copilot (✨ Ask CRM)</a>
+  <a href="#smtp">Email / SMTP</a>
+  <a href="#push">Mobile push notifications</a>
+  <a href="#mobile-app">Mobile app install</a>
+  <a href="#calls">Call recordings sync</a>
+  <a href="#theme">Theme &amp; branding</a>
+  <a href="#permissions">Permissions</a>
+  <a href="#troubleshoot">Troubleshooting</a>
+</aside>
+
+<main class="content" id="content">
+
+<!-- Section template:
+  <article class="section" id="ID" data-keywords="..."> ... </article>
+-->
+
+<article class="section" id="first-login" data-keywords="login signup first time onboarding workspace tenant subdomain admin">
+<h2><span class="num">01</span>🚀 First login</h2>
+<p class="lede">From zero to your first lead in under five minutes.</p>
+<ol class="steps">
+<li><strong>Open your workspace URL.</strong>
+<p>Visit <code>https://crm.smartcrmsolution.com/t/&lt;your-slug&gt;/</code> — replace <code>&lt;your-slug&gt;</code> with the workspace name you signed up with (eg. <code>vserve</code>). Bookmark it.</p></li>
+<li><strong>Log in with the admin email.</strong>
+<p>Use the email + password you set during signup. If you forgot the password, click "Forgot password?" on the login screen.</p></li>
+<li><strong>Set your company branding.</strong>
+<p>Settings → <strong>Company</strong>. Upload your logo, set the company name, and pick a brand colour. These show on the login screen, the sidebar, the topbar, and the Android app icon area.</p></li>
+<li><strong>Add your team.</strong>
+<p>People → <strong>Users → Add user</strong>. Enter their email, set a role, optionally set a daily/monthly lead cap. They'll get an invite email.</p></li>
+<li><strong>Customise statuses for your pipeline.</strong>
+<p>Settings → <strong>Statuses</strong>. Add the stages you actually use (eg. <em>New, Contacted, Qualified, Quote Sent, Won, Lost</em>) and pick colours for each.</p></li>
+</ol>
+<div class="callout callout-success">
+<span class="callout-icon">✅</span>
+<div><strong>Done with the basics?</strong> Next decide where leads come from — webhook (most flexible), Meta Lead Ads, Google Ads, CSV import, or all of them.</div>
+</div>
+</article>
+
+<article class="section" id="users-roles" data-keywords="user team employee role permission admin manager agent salesperson invite">
+<h2><span class="num">02</span>👥 Users &amp; roles</h2>
+<p class="lede">Add team members and pick what they can see and do.</p>
+<ol class="steps">
+<li><strong>Add a user.</strong>
+<p>People → <strong>Users → Add user</strong>. Fill name, email, phone, role.</p></li>
+<li><strong>Pick the right role.</strong>
+<table class="kv">
+<tr><td><code>admin</code></td><td>Full access. Can manage settings, billing, integrations.</td></tr>
+<tr><td><code>manager</code></td><td>Can see all leads, assign to anyone, but can't edit settings.</td></tr>
+<tr><td><code>agent</code></td><td>Sees only leads assigned to them.</td></tr>
+</table>
+<p>Custom roles? Settings → <strong>Roles</strong> lets you build your own combinations.</p></li>
+<li><strong>Set lead caps (optional).</strong>
+<p>Each user can have a <em>Daily lead cap</em> and <em>Monthly lead cap</em>. The auto-assigner respects these — agents who hit their cap stop receiving new leads until midnight / month-rollover.</p></li>
+<li><strong>Activate or deactivate.</strong>
+<p>To pause a user, toggle their <em>Active</em> flag off. Their leads stay visible to managers; they can no longer log in.</p></li>
+</ol>
+</article>
+
+<article class="section" id="statuses" data-keywords="status pipeline stage color new contacted qualified won lost junk">
+<h2><span class="num">03</span>🟢 Statuses</h2>
+<p class="lede">The funnel stages every lead moves through.</p>
+<ol class="steps">
+<li><strong>Open Settings → Statuses.</strong></li>
+<li><strong>Add a status.</strong> Click <em>Add status</em>, give it a name (eg. <code>Site Visit Booked</code>), pick a colour, and set a sort order. Lower numbers appear higher in the list.</li>
+<li><strong>Mark final statuses.</strong> Tick <em>Is final</em> for terminal stages like <code>Won</code>, <code>Lost</code>, <code>Junk</code>. Final statuses are excluded from "Open leads" counts and dashboard funnels.</li>
+<li><strong>Default status for new leads.</strong> The system uses <code>New</code> by default. If you delete or rename it, set the new default in Settings → <strong>Statuses → Default for new leads</strong>.</li>
+</ol>
+<div class="callout callout-info">
+<span class="callout-icon">💡</span>
+<div>Status colours are used everywhere — kanban, dashboard pie charts, lead list pills, even the WhatsApp chat header. Pick semantic colours (green = good, red = lost, yellow = waiting).</div>
+</div>
+</article>
+
+<article class="section" id="sources-tags" data-keywords="source tag label channel where leads from utm">
+<h2><span class="num">04</span>🔍 Sources &amp; tags</h2>
+<p class="lede">Track <em>where</em> leads come from (Source) and add free-form labels (Tags).</p>
+<ol class="steps">
+<li><strong>Add sources.</strong> Settings → <strong>Sources</strong>. Examples: <code>Website</code>, <code>Meta Ads</code>, <code>Google Ads</code>, <code>Walk-in</code>, <code>Referral</code>, <code>Trade Show 2026</code>.</li>
+<li><strong>Sources are auto-created from webhooks.</strong> When a lead arrives via <code>/hook/website</code> with <code>source=Foobar</code>, a Source row called <em>Foobar</em> is created automatically the first time it's seen.</li>
+<li><strong>Tags are free-form.</strong> Type any label on a lead — <em>VIP</em>, <em>callback-tomorrow</em>, <em>quote-sent-v2</em>. Comma-separated. Good for ad-hoc segmentation.</li>
+</ol>
+</article>
+
+<article class="section" id="custom-fields" data-keywords="custom field extra additional metadata budget property requirement attribute pabbly">
+<h2><span class="num">05</span>➕ Custom fields</h2>
+<p class="lede">Track anything specific to your business — budget, requirement, property type, course interested in.</p>
+<ol class="steps">
+<li><strong>Open Settings → Custom Fields.</strong></li>
+<li><strong>Click "Add field".</strong> Fill in:
+<table class="kv">
+<tr><td>Key</td><td><code>campaign_name_new</code> — internal identifier, lowercase, no spaces. <strong>This is what webhooks send.</strong></td></tr>
+<tr><td>Label</td><td><em>Campaign Name</em> — what users see on the lead form.</td></tr>
+<tr><td>Type</td><td>Text / Number / Date / Dropdown / Multi-select</td></tr>
+<tr><td>Options</td><td>(Dropdown only) one option per line</td></tr>
+<tr><td>Show in list</td><td>Tick to make it a column on the lead grid</td></tr>
+<tr><td>Required</td><td>Tick to enforce on the lead form</td></tr>
+</table>
+</li>
+<li><strong>Webhooks pick it up automatically.</strong> Once a custom field exists, <code>/hook/website</code> reads <code>b[&lt;key&gt;]</code> on the inbound payload and stores it on the lead. Pabbly / Make / Zapier mappings just need the <em>key</em> (eg. <code>campaign_name_new</code>) — not the label.</li>
+<li><strong>Filter / report on it.</strong> Lead list → <em>Filter</em> dropdown shows your custom fields. Reports → <em>Group by</em> includes them too.</li>
+</ol>
+<div class="callout callout-warn">
+<span class="callout-icon">⚠️</span>
+<div>Avoid renaming a key after data is saved — old rows still reference the old key. If you must rename, contact support so we can re-key your existing data.</div>
+</div>
+</article>
+
+<article class="section" id="products" data-keywords="product catalog inventory item sku catalog price">
+<h2><span class="num">06</span>📦 Products</h2>
+<p class="lede">A catalogue of what you sell. Used by Quotations and on the lead form.</p>
+<ol class="steps">
+<li><strong>Settings → Products → Add product.</strong> Name, description, price, active flag.</li>
+<li><strong>Pick a product on a lead.</strong> Lead form → <em>Product</em> dropdown searches your catalogue.</li>
+<li><strong>Use in Quotations.</strong> Quotations module pulls from this list — the product picker shows price, your team can override per-quote.</li>
+</ol>
+</article>
+
+<article class="section" id="auto-assign" data-keywords="auto assign rule routing distribution round robin agent">
+<h2><span class="num">07</span>⚖️ Auto-assign rules</h2>
+<p class="lede">When a lead arrives, send it to the right person automatically.</p>
+<ol class="steps">
+<li><strong>Settings → Auto-assign Rules → Add rule.</strong></li>
+<li><strong>Define the match.</strong>
+<table class="kv">
+<tr><td>Field</td><td>Source / City / Product / Phone area / Custom field (<code>cf:&lt;key&gt;</code>)</td></tr>
+<tr><td>Operator</td><td>equals / contains / starts with / ends with</td></tr>
+<tr><td>Value</td><td>The literal value to match</td></tr>
+<tr><td>Assigned to</td><td>One or more users (round-robin among them)</td></tr>
+<tr><td>Priority</td><td>Lower = higher priority. First matching rule wins.</td></tr>
+</table>
+</li>
+<li><strong>Round-robin within the rule.</strong> When multiple users are assigned to one rule, the system picks the user with the fewest open leads <em>today</em> — keeping load even.</li>
+<li><strong>Lead cap fallback.</strong> If the chosen user has hit their daily/monthly cap, the rule skips to the next user.</li>
+<li><strong>Disabling a rule.</strong> Untick <em>Active</em> on the rule row.</li>
+</ol>
+<div class="callout callout-info">
+<span class="callout-icon">💡</span>
+<div>For more sophisticated routing — quotas, percentages, conditional logic — use <a href="#campaigns">Campaigns</a> instead. Auto-assign rules are the simple "if-this-then-that" path.</div>
+</div>
+</article>
+
+<article class="section" id="campaigns" data-keywords="campaign distribution mode equal round robin percentage conditional pull">
+<h2><span class="num">08</span>🎯 Campaigns</h2>
+<p class="lede">Group leads by ad campaign or source, route them across agents using one of five modes.</p>
+<ol class="steps">
+<li><strong>Settings → Campaigns → Add campaign.</strong></li>
+<li><strong>Pick a distribution mode.</strong>
+<table class="kv">
+<tr><td><code>On Demand</code></td><td>Leads stay unassigned until an agent calls Pull. Pulls happen in batches you size below.</td></tr>
+<tr><td><code>Equal</code></td><td>New leads spread evenly across all agents over time.</td></tr>
+<tr><td><code>Round Robin</code></td><td>Strict cursor — A, then B, then C, then back to A. Order is deterministic across server restarts.</td></tr>
+<tr><td><code>Percentage</code></td><td>Each agent gets a fixed % of new leads. Must add up to 100%.</td></tr>
+<tr><td><code>Conditional</code></td><td>Routes by Source / Status / Custom-field rules you define inside the campaign.</td></tr>
+</table>
+</li>
+<li><strong>Choose lead-filter rules.</strong> Inside the campaign modal, decide which incoming leads belong to it — eg. <em>source = Meta Ads</em> AND <em>cf:campaign_name_new contains "Nh-24"</em>. Leads matching join the campaign automatically.</li>
+<li><strong>Add agents.</strong> Pick the users in this campaign. For Percentage mode, set each user's % directly.</li>
+<li><strong>Removed-user action.</strong> When an agent leaves the campaign, decide what happens to their leads: <em>reassign within campaign</em>, <em>unassign</em>, or <em>leave with the agent</em>.</li>
+<li><strong>Pause / resume.</strong> Toggle the <em>Active</em> switch. Paused campaigns don't accept new leads but keep existing assignments.</li>
+</ol>
+</article>
+
+<article class="section" id="tat" data-keywords="tat sla response time alert escalation slow follow up overdue">
+<h2><span class="num">09</span>⏱️ TAT (response SLA)</h2>
+<p class="lede">Alert when a lead sits untouched too long.</p>
+<ol class="steps">
+<li><strong>Settings → TAT.</strong></li>
+<li><strong>Set the SLA.</strong> "First response within X minutes/hours of lead creation". Eg. 30 minutes for hot Meta Lead Ads.</li>
+<li><strong>Set escalation.</strong> If the agent doesn't respond in time, optionally re-assign to a manager OR push a notification to the team.</li>
+<li><strong>Watch the TAT report.</strong> Reports → <em>TAT Report</em> shows breaches by user, by stage, and by source. Excel download available.</li>
+</ol>
+</article>
+
+<article class="section" id="project-stages" data-keywords="project stage pipeline construction milestone fulfillment delivery handoff">
+<h2><span class="num">10</span>🚚 Project stages</h2>
+<p class="lede">For service / project businesses — track delivery progress separately from the sales pipeline.</p>
+<ol class="steps">
+<li><strong>Settings → Project Stages → Add stage.</strong> Examples: <em>Site Survey</em>, <em>Design</em>, <em>Procurement</em>, <em>Installation</em>, <em>Handover</em>.</li>
+<li><strong>Set expected days.</strong> The dashboard flags any project sitting in a stage longer than expected.</li>
+<li><strong>Assign a default role per stage.</strong> Eg. <em>Procurement</em> stage auto-assigns to a Procurement Manager.</li>
+<li><strong>Move leads through stages.</strong> Lead detail page → <em>Project Stage</em> dropdown.</li>
+</ol>
+</article>
+
+<article class="section" id="duplicates" data-keywords="duplicate dedupe phone email same lead twice">
+<h2><span class="num">11</span>👥 Duplicate handling</h2>
+<p class="lede">What happens when the same phone or email comes in twice.</p>
+<ol class="steps">
+<li><strong>Settings → Duplicates.</strong></li>
+<li><strong>Pick a policy.</strong>
+<table class="kv">
+<tr><td><code>allow</code></td><td>Create both, but flag the new one as "duplicate of #X" (default).</td></tr>
+<tr><td><code>reject</code></td><td>Refuse the second submission entirely.</td></tr>
+<tr><td><code>assign_same_user</code></td><td>Create the lead, but assign it to whoever owns the original.</td></tr>
+<tr><td><code>skip_assignment</code></td><td>Create unassigned (manager will triage).</td></tr>
+</table>
+</li>
+<li><strong>Set the window.</strong> "Treat as duplicate if same phone arrives within X hours" — default 24h.</li>
+<li><strong>See duplicates.</strong> Lead list → <em>Filter</em> → "⚠️ Duplicates only" or use the bulk Dedupe button.</li>
+</ol>
+</article>
+
+<article class="section" id="website-api" data-keywords="webhook website api endpoint http post form contact integration api key">
+<h2><span class="num">12</span>🔌 Website API webhook</h2>
+<p class="lede">The most flexible way to push leads in — your website, your forms, any tool that can POST JSON.</p>
+<ol class="steps">
+<li><strong>Get your API key.</strong> Settings → <strong>Website API</strong> → click <em>Regenerate</em> if you don't see one yet. Copy the key.</li>
+<li><strong>POST a lead.</strong> Send a JSON body to:
+<div class="copy-row"><span class="copy-content">https://crm.smartcrmsolution.com/t/&lt;your-slug&gt;/hook/website</span><button class="copy-btn">Copy</button></div>
+With either header <code>x-api-key: &lt;your-key&gt;</code> or <code>Authorization: Bearer &lt;your-key&gt;</code>.</li>
+<li><strong>Required fields.</strong>
+<table class="kv">
+<tr><td><code>name</code></td><td><span class="tag tag-required">Required</span> Lead's name</td></tr>
+<tr><td><code>phone</code></td><td><span class="tag tag-required">Required</span> Mobile number (with country code)</td></tr>
+<tr><td><code>email</code></td><td><span class="tag tag-optional">Optional</span></td></tr>
+<tr><td><code>source</code></td><td><span class="tag tag-recommended">Recommended</span> Eg. <em>Website</em>, <em>Meta Ads</em></td></tr>
+<tr><td><code>product</code></td><td><span class="tag tag-optional">Optional</span></td></tr>
+<tr><td><code>notes</code></td><td><span class="tag tag-optional">Optional</span> Free text</td></tr>
+<tr><td><code>tags</code></td><td><span class="tag tag-optional">Optional</span> Comma-separated string or JSON array</td></tr>
+<tr><td><code>city, state, country, pincode, company, address</code></td><td><span class="tag tag-optional">Optional</span></td></tr>
+<tr><td><code>campaign_name</code> / <code>campaign_id</code></td><td><span class="tag tag-optional">Optional</span> Aliases accepted: <code>campaign_name_new</code>, <code>campaignName</code>, <code>campaign_title</code> etc.</td></tr>
+<tr><td>Any custom field <code>key</code></td><td><span class="tag tag-optional">Optional</span> The system reads every active custom field and writes matches into <code>extra_json</code>. Send the value at <code>b[&lt;key&gt;]</code>, <code>b[cf_&lt;key&gt;]</code>, or <code>b.extra[&lt;key&gt;]</code>.</td></tr>
+</table>
+</li>
+<li><strong>Test it.</strong>
+<pre><code>curl -X POST https://crm.smartcrmsolution.com/t/&lt;slug&gt;/hook/website \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: &lt;your-key&gt;" \
+  -d '{
+    "name": "Test Lead",
+    "phone": "9876543210",
+    "email": "test@example.com",
+    "source": "Website",
+    "product": "Demo",
+    "notes": "Came from contact form"
+  }'</code></pre>
+You should get <code>{"ok":true,"id":123}</code>.
+</li>
+<li><strong>Watch live activity.</strong> Settings → <strong>Website API → Recent inbound</strong> shows the last 50 webhook hits with raw body and any errors. Use this to debug bad mappings.</li>
+</ol>
+<div class="callout callout-warn">
+<span class="callout-icon">⚠️</span>
+<div>Phones with fewer than 10 digits are auto-flagged as <em>Junk</em> instead of being rejected, so they're visible without polluting the active pipeline.</div>
+</div>
+</article>
+
+<article class="section" id="pabbly" data-keywords="pabbly connect zapier integromat workflow facebook instagram form lead ads automation">
+<h2><span class="num">13</span>🔗 Pabbly Connect</h2>
+<p class="lede">Bridge Meta Lead Ads, Instagram, Google Forms, JustDial, IndiaMart and 800+ other sources into SmartCRM.</p>
+<ol class="steps">
+<li><strong>Set up the trigger.</strong> Eg. Facebook Lead Ads → choose your page → choose your form.</li>
+<li><strong>Add an "Action — API by Pabbly" step.</strong></li>
+<li><strong>Method:</strong> <code>POST</code>.<br>
+<strong>URL:</strong>
+<div class="copy-row"><span class="copy-content">https://crm.smartcrmsolution.com/t/&lt;your-slug&gt;/hook/website</span><button class="copy-btn">Copy</button></div>
+</li>
+<li><strong>Headers.</strong>
+<table class="kv">
+<tr><td><code>x-api-key</code></td><td>Your Website API key (Settings → Website API)</td></tr>
+<tr><td><code>Content-Type</code></td><td><code>application/json</code></td></tr>
+</table>
+</li>
+<li><strong>Body type:</strong> <em>Raw</em> → JSON. Map the fields:
+<table class="kv">
+<tr><td><code>name</code></td><td>Drag the lead's name field</td></tr>
+<tr><td><code>phone</code></td><td>Drag the phone field</td></tr>
+<tr><td><code>email</code></td><td>Drag the email field</td></tr>
+<tr><td><code>source</code></td><td><code>"Meta"</code> (or whatever channel)</td></tr>
+<tr><td><code>campaign_name</code></td><td>Drag the campaign-name field <strong>value chip only</strong> — don't drag the labelled chip with "Res1 Campaign Name :" prefix.</td></tr>
+<tr><td><code>campaign_id</code></td><td>Drag the campaign-ID field</td></tr>
+<tr><td>Custom fields</td><td>Use the exact <em>key</em> from Settings → Custom Fields, eg. <code>campaign_name_new</code>.</td></tr>
+</table>
+</li>
+<li><strong>Test send.</strong> Pabbly's <em>Send Test Request</em> button. Confirm you get <code>{"ok":true,"id":...}</code>. The lead should appear in SmartCRM within seconds.</li>
+<li><strong>Save and turn on the workflow.</strong></li>
+</ol>
+<div class="callout callout-info">
+<span class="callout-icon">💡</span>
+<div>If a custom field shows as empty in the lead, check Settings → <strong>Website API → Recent inbound</strong> — the raw body tells you exactly what Pabbly sent. Most problems are field name typos (<code>campaign_Name</code> vs <code>campaign_name</code>).</div>
+</div>
+</article>
+
+<article class="section" id="make" data-keywords="make integromat scenario automation low code workflow webhook">
+<h2><span class="num">14</span>🧩 Make.com</h2>
+<p class="lede">Same idea as Pabbly — Make.com (formerly Integromat) sends leads via the Website API.</p>
+<ol class="steps">
+<li><strong>Build a scenario.</strong> Trigger from Facebook / Typeform / a Sheet / wherever.</li>
+<li><strong>Add an "HTTP — Make a request" module.</strong></li>
+<li><strong>Method:</strong> <code>POST</code>. <strong>URL:</strong> the same <code>/t/&lt;slug&gt;/hook/website</code>.</li>
+<li><strong>Headers:</strong> <code>x-api-key: &lt;your-key&gt;</code>, <code>Content-Type: application/json</code>.</li>
+<li><strong>Body type:</strong> <em>Raw</em> → <em>JSON (application/json)</em>. Build the JSON payload using the field mapper.</li>
+<li><strong>Run once</strong> with a sample input to verify, then turn the scenario on.</li>
+</ol>
+<div class="callout callout-info">
+<span class="callout-icon">💡</span>
+<div>SmartCRM has a dedicated <strong>Make.com card</strong> on Settings → <strong>Integrations</strong> — it shows a sample payload and a Test-send button so you can verify the connection without leaving the CRM.</div>
+</div>
+</article>
+
+<article class="section" id="zapier" data-keywords="zapier n8n workflow automation http webhook generic">
+<h2><span class="num">15</span>⚡ Zapier &amp; n8n</h2>
+<p class="lede">Same recipe again — POST JSON to the Website API webhook.</p>
+<ol class="steps">
+<li><strong>Zapier:</strong> Add a "Webhooks by Zapier — POST" action. URL = <code>/t/&lt;slug&gt;/hook/website</code>. Add headers + JSON body. Map the fields. Done.</li>
+<li><strong>n8n:</strong> Use the "HTTP Request" node. Method POST, URL same, Authentication = Header Auth (<code>x-api-key</code>), Body JSON, map fields.</li>
+<li><strong>For high volume:</strong> Use Pabbly's per-execution pricing for predictable cost. Make/n8n charge by operations, Zapier by tasks.</li>
+</ol>
+</article>
+
+<article class="section" id="meta-leadads" data-keywords="facebook meta lead ads instagram lead form direct webhook fb">
+<h2><span class="num">16</span>📘 Meta (Facebook) Lead Ads</h2>
+<p class="lede">Two ways to wire it up — direct (Facebook → SmartCRM) or via Pabbly. Direct is faster but has less flexibility.</p>
+<h3>Option A — Direct via Facebook OAuth (recommended for one or two pages)</h3>
+<ol class="steps">
+<li><strong>Settings → Facebook → Connect Facebook account.</strong> A Facebook OAuth popup opens.</li>
+<li><strong>Approve permissions.</strong> SmartCRM needs <code>leads_retrieval</code> + <code>pages_manage_metadata</code>.</li>
+<li><strong>Pick the Page(s).</strong> Tick the pages whose leads you want to receive.</li>
+<li><strong>Pick the Form(s).</strong> Tick the lead-gen forms inside each page.</li>
+<li><strong>Webhook auto-subscribes.</strong> SmartCRM registers our central webhook with Meta automatically — no need to copy URLs into Meta's Developer console.</li>
+<li><strong>Test it.</strong> Use Meta's "Lead Ads Testing" tool inside Facebook Business Suite to fire a test lead. It should appear in SmartCRM within a few seconds.</li>
+</ol>
+<h3>Option B — Pabbly bridge (when direct doesn't work, eg. agency-managed pages)</h3>
+<p>Use the <a href="#pabbly">Pabbly Connect</a> recipe above with Facebook Lead Ads as trigger.</p>
+</article>
+
+<article class="section" id="google-ads" data-keywords="google ads valuetrack utm gclid campaign keyword network search adwords">
+<h2><span class="num">17</span>🟡 Google Ads ValueTrack</h2>
+<p class="lede">Capture <code>{campaignid}</code>, <code>{keyword}</code>, <code>{gclid}</code> and friends straight off the landing page.</p>
+<ol class="steps">
+<li><strong>On your landing page,</strong> add ValueTrack params to the form action URL or read them off <code>window.location.search</code>:
+<pre><code>?campaign={campaignid}&campaign_name={campaignname}&network={network}&keyword={keyword}&gclid={gclid}&adgroupid={adgroupid}&matchtype={matchtype}&device={device}</code></pre>
+</li>
+<li><strong>Submit them with the lead.</strong> Include the params in your POST body to <code>/hook/website</code> (alongside <code>name</code>/<code>phone</code>/<code>email</code>).</li>
+<li><strong>What gets stored.</strong> SmartCRM normalises Google Ads params into both first-class columns AND <code>meta_json</code> — so any reports already built on either keep working:
+<table class="kv">
+<tr><td><code>gclid</code></td><td>First-class column. Use it to upload offline conversions back to Google Ads.</td></tr>
+<tr><td><code>gad_campaignid</code></td><td>First-class column.</td></tr>
+<tr><td><code>utm_*</code></td><td>UTM source/medium/campaign/term/content all populated.</td></tr>
+<tr><td>Source</td><td>Auto-set to <code>Google Ads</code> when <code>gclid</code> or <code>campaign</code> is present (unless you pass <code>source</code> explicitly).</td></tr>
+<tr><td>Tags</td><td>Campaign name + network are auto-added as tags.</td></tr>
+</table>
+</li>
+<li><strong>Reports.</strong> Reports → <em>Group by</em> → <em>UTM campaign</em> shows leads + conversions per Google Ads campaign.</li>
+</ol>
+</article>
+
+<article class="section" id="csv-import" data-keywords="csv import upload leadsquared zoho hubspot salesforce migrate spreadsheet excel">
+<h2><span class="num">18</span>📥 CSV import (LeadSquared, Zoho, HubSpot, Salesforce)</h2>
+<p class="lede">Migrating from another CRM? The Import wizard knows the column names.</p>
+<ol class="steps">
+<li><strong>Export from your old CRM.</strong> CSV format. UTF-8 encoded. Make sure phone numbers aren't in scientific notation (Excel does this — open in Google Sheets or use plain Numbers/text format).</li>
+<li><strong>Settings → Integrations → Import → Upload CSV.</strong></li>
+<li><strong>Pick your source platform.</strong> LeadSquared / Zoho / HubSpot / Salesforce / Generic. The wizard auto-detects column names for the first four.</li>
+<li><strong>Map any unmapped columns.</strong> The wizard shows a side-by-side: their column → SmartCRM field. Custom fields are pre-listed so you can map directly into them.</li>
+<li><strong>Preview the first 5 rows.</strong> Make sure phones look right, statuses match (the wizard maps them to your existing statuses or asks you to create new ones), no <code>NaN</code> or shifted columns.</li>
+<li><strong>Import.</strong> The job runs in the background. You'll see a counter as rows land. Duplicates respect your <a href="#duplicates">duplicate policy</a>.</li>
+</ol>
+</article>
+
+<article class="section" id="calendly" data-keywords="calendly booking meeting calendar invite scheduled appointment">
+<h2><span class="num">19</span>📅 Calendly</h2>
+<p class="lede">Auto-create a lead (or update an existing one) when someone books a meeting.</p>
+<ol class="steps">
+<li><strong>Get your per-user webhook token.</strong> Settings → <em>Users</em> → click your name → copy the Calendly webhook token.</li>
+<li><strong>In Calendly, set up a webhook.</strong> Account → Integrations → Webhooks → Create. URL:
+<div class="copy-row"><span class="copy-content">https://crm.smartcrmsolution.com/hook/calendly/&lt;your-token&gt;</span><button class="copy-btn">Copy</button></div>
+Subscribe to <em>invitee.created</em>.
+</li>
+<li><strong>Match logic.</strong> When a Calendly booking arrives, SmartCRM matches by phone and email. If a lead exists, it updates <code>next_followup_at</code> to the booking time. If not, it creates a new lead assigned to you.</li>
+</ol>
+</article>
+
+<article class="section" id="whatsapp" data-keywords="whatsapp cloud api meta business connect facebook embedded sign in number phone">
+<h2><span class="num">20</span>💬 WhatsApp Cloud API</h2>
+<p class="lede">Send + receive WhatsApp messages from inside SmartCRM. Two paths: Embedded Sign-In (recommended) or manual setup.</p>
+<h3>Path A — Embedded Sign-In (5 minutes, no Meta dev console)</h3>
+<ol class="steps">
+<li><strong>Settings → WhatsApp → "Connect WhatsApp Business".</strong></li>
+<li><strong>Sign in with Facebook.</strong> Use the FB account that owns your business.</li>
+<li><strong>Create or pick a WhatsApp Business Account (WABA).</strong> Pick one if you have it; create if not.</li>
+<li><strong>Pick a phone number.</strong> Either a new number Meta provisions for you, or an existing landline/business mobile (you'll get an OTP to verify).</li>
+<li><strong>SmartCRM auto-registers the webhook with Meta + persists the access token.</strong> No copying URLs into Meta's Dev Console.</li>
+<li><strong>Send a test message.</strong> WhatsApp tab → pick a contact → type → Send. You should see the message arrive on the destination phone within seconds.</li>
+</ol>
+<h3>Path B — Manual setup (only if Embedded Sign-In doesn't work for you)</h3>
+<ol class="steps">
+<li><strong>In Meta Developer Console,</strong> create a WhatsApp Business app. Get <code>Phone Number ID</code>, <code>WhatsApp Business Account ID</code>, and a permanent <code>Access Token</code>.</li>
+<li><strong>Set the webhook URL</strong> to <code>https://crm.smartcrmsolution.com/t/&lt;your-slug&gt;/hook/whatsapp_webhook</code>. Subscribe to <em>messages</em>.</li>
+<li><strong>Set the verify token</strong> to anything you choose, then paste the same value into SmartCRM Settings → WhatsApp → Verify token.</li>
+<li><strong>Paste the access token + phone number ID</strong> into SmartCRM Settings → WhatsApp.</li>
+<li><strong>Save and verify.</strong> Send yourself a test message.</li>
+</ol>
+</article>
+
+<article class="section" id="whatsapp-coexistence" data-keywords="coexistence whatsapp app phone existing ongoing keep mobile shared">
+<h2><span class="num">21</span>🤝 WhatsApp Coexistence mode</h2>
+<p class="lede">Keep using the WhatsApp Business app on your phone <em>and</em> the SmartCRM web inbox on the same number — at the same time.</p>
+<ol class="steps">
+<li><strong>During Embedded Sign-In,</strong> tick the <em>Coexistence mode</em> option in the SmartCRM dialog before authorising.</li>
+<li><strong>Approve in Facebook.</strong> Meta shows a different consent screen — read the differences (you can no longer block users from the app, group chats are read-only via API, etc.).</li>
+<li><strong>Now both surfaces are live.</strong> Reply from the phone? It shows up in SmartCRM's chat thread. Reply from SmartCRM? It pops up on the phone. Push notifications continue working on the phone.</li>
+</ol>
+<div class="callout callout-warn">
+<span class="callout-icon">⚠️</span>
+<div>Coexistence has trade-offs vs full Cloud API: no template messages outside 24-hour customer service window, no broadcast lists, group messaging is API-read-only. Switch off Coexistence later if your needs grow.</div>
+</div>
+</article>
+
+<article class="section" id="whatsapp-multi" data-keywords="multi whatsapp number multiple accounts per phone connected switch sender">
+<h2><span class="num">22</span>📱 Multiple WhatsApp numbers</h2>
+<p class="lede">Connect more than one WhatsApp number — eg. one for sales, one for support.</p>
+<ol class="steps">
+<li><strong>Settings → WhatsApp → Connected numbers.</strong></li>
+<li><strong>Click "Connect another number".</strong> Same Embedded Sign-In flow as the first number; pick a different phone.</li>
+<li><strong>Pick the default sender per agent (optional).</strong> Settings → Users → click an agent → <em>Default WhatsApp sender</em>. Otherwise the system uses whichever number was the inbound number for that thread.</li>
+<li><strong>Send-from picker.</strong> When composing a new outbound (no existing thread), the chat compose box now shows a dropdown — pick which connected number to send from.</li>
+<li><strong>Per-number filter on the inbox.</strong> The chat thread list has a per-phone filter at the top — handy when you want to see only support-line conversations.</li>
+</ol>
+</article>
+
+<article class="section" id="whatsapp-templates" data-keywords="whatsapp template message broadcast bulk approval meta utility marketing">
+<h2><span class="num">23</span>📨 WhatsApp templates</h2>
+<p class="lede">Pre-approved messages you can send <em>outside</em> the 24-hour customer service window.</p>
+<ol class="steps">
+<li><strong>Settings → WhatsApp → Templates → Create template.</strong></li>
+<li><strong>Pick category:</strong> Marketing / Utility / Authentication. Categories have different cost and approval rules.</li>
+<li><strong>Pick language.</strong> One language per template.</li>
+<li><strong>Compose.</strong> Header (optional), body, footer (optional), buttons (optional). Use <code>{{1}}</code>, <code>{{2}}</code> etc. for variables — these get filled in at send time.</li>
+<li><strong>Submit.</strong> Meta reviews approve in 0–24h. You'll see status update from <em>PENDING</em> → <em>APPROVED</em> on the Templates tab.</li>
+<li><strong>Use it.</strong> Either from the chat compose box ("Send template") or via the WhatsApp Campaign builder (bulk-send to a lead segment).</li>
+</ol>
+</article>
+
+<article class="section" id="ai-bot" data-keywords="ai bot whatsapp gemini auto reply chatbot artificial intelligence smart response">
+<h2><span class="num">24</span>🤖 AI WhatsApp Bot</h2>
+<p class="lede">Auto-reply to inbound WhatsApp messages with a Gemini-powered assistant trained on your business knowledge.</p>
+<ol class="steps">
+<li><strong>Sidebar → AI Bot → Bot Settings.</strong></li>
+<li><strong>Enable the bot.</strong> Tick <em>Enabled</em>.</li>
+<li><strong>Pick a goal template.</strong> Sales / Support / Site visit / Appointment booking / Custom. Each pre-fills a system prompt tailored for that goal.</li>
+<li><strong>Pick reply mode.</strong>
+<table class="kv">
+<tr><td><code>always</code></td><td>Auto-send replies. Best for first-touch + FAQs.</td></tr>
+<tr><td><code>manual</code></td><td>Generate a draft and queue it for your agent to review/send. Best for complex sales.</td></tr>
+<tr><td><code>after-hours</code></td><td>Only auto-reply outside business hours.</td></tr>
+</table>
+</li>
+<li><strong>Pick language.</strong> The bot replies in the language you pick — English, Hindi, Hinglish, Marathi, Tamil, Telugu, Bengali, Kannada, etc. The model auto-detects too if you leave it on <em>Auto</em>.</li>
+<li><strong>Set "Resume after idle".</strong> If a human agent has replied recently, the bot stays quiet to avoid duelling responses. Default 2 minutes — bump up if your agents take longer to read incoming messages.</li>
+<li><strong>(Optional) Off-keywords.</strong> Eg. <code>human, agent, talk to, stop bot</code>. The bot pauses on threads where these appear.</li>
+<li><strong>Save.</strong> The bot is now live on every inbound that doesn't match a Message Bot or Template Bot trigger.</li>
+</ol>
+<div class="callout callout-info">
+<span class="callout-icon">💡</span>
+<div>Watch live activity at AI Bot → <strong>Bot Activity</strong>. Every inbound + reply (or suppression reason) is logged.</div>
+</div>
+</article>
+
+<article class="section" id="ai-kb" data-keywords="ai bot knowledge base kb document upload pdf training facts urls crawl">
+<h2><span class="num">25</span>📚 AI Knowledge Base</h2>
+<p class="lede">Train the AI Bot on YOUR business — pricing, hours, services, FAQs, anything.</p>
+<ol class="steps">
+<li><strong>AI Bot → Knowledge Base → Add document.</strong></li>
+<li><strong>Three ways to add knowledge:</strong>
+<table class="kv">
+<tr><td>Paste text</td><td>Best for FAQs, short policies, lists. Up to 200,000 chars per document.</td></tr>
+<tr><td>Crawl a URL</td><td>Paste a public URL — the system fetches and extracts text. Good for product pages, terms, return policies.</td></tr>
+<tr><td>Upload a file <span class="tag tag-beta">Beta</span></td><td>PDF / DOCX / TXT. Text gets extracted and stored.</td></tr>
+</table>
+</li>
+<li><strong>Toggle individual documents on/off.</strong> A doc can be in the KB but inactive — useful for seasonal info.</li>
+<li><strong>Watch the per-call cost.</strong> AI Bot → <em>Usage &amp; Cost</em>. The KB is appended to every prompt, so big KBs = high cost. Recommended <em>KB max chars per call</em> = <strong>8,000</strong> (about 2,000 tokens). Drops cost by up to 80% with minimal answer-quality loss.</li>
+</ol>
+<div class="callout callout-warn">
+<span class="callout-icon">⚠️</span>
+<div>Don't dump your entire website into the KB. The bot answers better with curated, well-structured content. Quality &gt; quantity.</div>
+</div>
+</article>
+
+<article class="section" id="crm-copilot" data-keywords="copilot ask crm gemini chat tools natural language query reports analyst">
+<h2><span class="num">26</span>✨ CRM Copilot (Ask CRM)</h2>
+<p class="lede">Type plain-English questions about your CRM data — get answers + charts.</p>
+<ol class="steps">
+<li><strong>Click the floating ✨ button</strong> (bottom-right of any page). Drag it anywhere; it remembers position.</li>
+<li><strong>Ask anything.</strong> Examples:
+<ul style="margin: .35rem 0 .35rem 1.1rem; padding: 0;">
+<li><em>"How many leads from Meta Ads last month?"</em></li>
+<li><em>"Show me the pipeline funnel for vserve."</em></li>
+<li><em>"Who are my top 5 agents by conversion this quarter?"</em></li>
+<li><em>"Why is TAT slipping?"</em></li>
+<li><em>"Show me leads stuck in Qualified for more than 7 days."</em></li>
+</ul>
+</li>
+<li><strong>Tools the Copilot has access to.</strong> Pipeline funnel, lead counts/searches, conversion rates, TAT analysis, employee stats, recordings, quotations — 33 tools total.</li>
+<li><strong>Daily limit.</strong> Each user has a per-day Copilot quota (configurable per package). When you hit it, the next call shows a "limit reached" notice.</li>
+</ol>
+</article>
+
+<article class="section" id="smtp" data-keywords="smtp email gmail outgoing host port password reset notification proposal quote send">
+<h2><span class="num">27</span>✉️ Email / SMTP</h2>
+<p class="lede">For password resets, lead notifications, sending quotes from inside the CRM.</p>
+<ol class="steps">
+<li><strong>Settings → SMTP.</strong></li>
+<li><strong>For Gmail:</strong>
+<table class="kv">
+<tr><td>Host</td><td><code>smtp.gmail.com</code></td></tr>
+<tr><td>Port</td><td><code>587</code></td></tr>
+<tr><td>Encryption</td><td><code>STARTTLS</code></td></tr>
+<tr><td>Username</td><td>Your full Gmail address</td></tr>
+<tr><td>Password</td><td><strong>App password</strong> — NOT your normal Gmail password. Get one at <a href="https://myaccount.google.com/apppasswords" target="_blank">myaccount.google.com/apppasswords</a> (requires 2FA on your Google account).</td></tr>
+<tr><td>From name</td><td>Your business name</td></tr>
+</table>
+</li>
+<li><strong>For Outlook 365:</strong>
+<table class="kv">
+<tr><td>Host</td><td><code>smtp.office365.com</code></td></tr>
+<tr><td>Port</td><td><code>587</code></td></tr>
+<tr><td>Encryption</td><td><code>STARTTLS</code></td></tr>
+<tr><td>Password</td><td>App password (set up via Microsoft 365 admin → Security → MFA app passwords)</td></tr>
+</table>
+</li>
+<li><strong>For SendGrid / Mailgun / Brevo / etc.:</strong> Use the SMTP credentials from the provider's dashboard. They typically work without app-password gymnastics.</li>
+<li><strong>Send a test email.</strong> Click <em>Test SMTP</em> at the bottom of the form. Address yourself; check inbox.</li>
+</ol>
+</article>
+
+<article class="section" id="push" data-keywords="push notification firebase fcm android apk mobile alert ringtone background">
+<h2><span class="num">28</span>🔔 Mobile push notifications</h2>
+<p class="lede">Banner + sound + vibration on the phone <em>even when the app is closed.</em></p>
+<ol class="steps">
+<li><strong>Install the SmartCRM Android app.</strong> Settings → Get app → scan the QR or tap the link to download the APK. Install it (<em>Install from unknown sources</em> — first time only).</li>
+<li><strong>Log in.</strong> Same email + password as the web. The app silently registers an FCM token in the background.</li>
+<li><strong>Allow notifications.</strong> First launch: Android shows a permission prompt. Tap <em>Allow</em>.</li>
+<li><strong>Test it.</strong> On the web, ask a manager to assign you a new lead — within 1–2 seconds your phone should buzz with a banner.</li>
+<li><strong>What triggers a push:</strong>
+<ul style="margin: .35rem 0 .35rem 1.1rem; padding: 0;">
+<li>New lead assigned to you</li>
+<li>Follow-up reminder is due</li>
+<li>TAT breach</li>
+<li>WhatsApp inbound on a thread you own</li>
+<li>Tap-to-call request from desktop ("Call from phone")</li>
+</ul>
+</li>
+</ol>
+<div class="callout callout-info">
+<span class="callout-icon">💡</span>
+<div>Web push (browser desktop notifications) also works on Chrome/Edge. The first time you log in on the web, the browser asks for notification permission — say <em>Allow</em>.</div>
+</div>
+</article>
+
+<article class="section" id="mobile-app" data-keywords="mobile app android apk install download ios update app distribution release">
+<h2><span class="num">29</span>📲 Mobile app install</h2>
+<p class="lede">Native Android wrapper — full CRM, with caller-ID, in-call recording sync, push notifications, and "tap-to-call from phone".</p>
+<ol class="steps">
+<li><strong>Settings → Get app → tap "Download APK"</strong> (or scan the QR code from your phone).</li>
+<li><strong>Allow "Install from unknown sources"</strong> for your browser, just for this install.</li>
+<li><strong>Open the APK and tap Install.</strong></li>
+<li><strong>Open the app, log in.</strong></li>
+<li><strong>Grant the permissions the app asks for.</strong>
+<table class="kv">
+<tr><td>Phone &amp; Calls</td><td>For caller-ID overlay + auto-create-lead-on-incoming-call.</td></tr>
+<tr><td>Notifications</td><td>For push.</td></tr>
+<tr><td>Storage / Files</td><td>For attachment view + recording sync.</td></tr>
+<tr><td>Location</td><td><strong>Required</strong> — attendance check-in is blocked without GPS.</td></tr>
+<tr><td>Microphone</td><td>Optional. For calls placed from the app.</td></tr>
+</table>
+</li>
+</ol>
+<p>iOS is on the roadmap. For now, iPhone users get a great PWA experience — just open the workspace URL in Safari and tap <em>Share → Add to Home Screen</em>.</p>
+</article>
+
+<article class="section" id="calls" data-keywords="call recording sync upload phone audio recording mp3 transcription samsung">
+<h2><span class="num">30</span>📞 Call recordings sync</h2>
+<p class="lede">Phone recordings show up against the matching lead automatically.</p>
+<ol class="steps">
+<li><strong>Turn on call recording on your phone.</strong> Each phone OEM does it slightly differently — Samsung's auto-record, Pixel's per-call toggle, etc.</li>
+<li><strong>Open the SmartCRM Android app at least once a day.</strong> The app syncs recordings in the background — when you open it, fresh recordings get uploaded.</li>
+<li><strong>What gets matched:</strong>
+<ul style="margin: .35rem 0 .35rem 1.1rem; padding: 0;">
+<li>Recording filenames with phone numbers — matched to lead by phone (with country-code-tolerant fuzzy match).</li>
+<li>Samsung-style <code>YYMMDD_HHMMSS_&lt;contact-name&gt;.m4a</code> — matches the contact name to a lead.</li>
+<li>Recordings without a number in the filename — matched by call-event timestamp ± 90 seconds against your <em>dialled / received</em> log.</li>
+</ul>
+</li>
+<li><strong>"1 skipped not in CRM" message.</strong> Recordings whose phone has never appeared as a lead get skipped (intentional — we don't want random recordings junking up the leads). To capture these, enable <em>Auto-create lead from unmatched calls</em> in Settings → Phone.</li>
+</ol>
+</article>
+
+<article class="section" id="theme" data-keywords="theme color brand customize logo dark mode appearance ui">
+<h2><span class="num">31</span>🎨 Theme &amp; branding</h2>
+<p class="lede">Make SmartCRM look like yours.</p>
+<ol class="steps">
+<li><strong>Settings → Company.</strong> Upload logo (PNG with transparent background works best, max 1 MB). Set the company name.</li>
+<li><strong>Pick brand colour.</strong> A single colour drives the active state, links, buttons, and the Android app icon background. Use your hex value or pick from the swatch.</li>
+<li><strong>Theme mode.</strong> Light / Dark / Auto (follows the user's OS).</li>
+<li><strong>Custom email signature.</strong> Settings → SMTP → <em>Default signature</em>. Used in transactional emails and quote emails.</li>
+</ol>
+</article>
+
+<article class="section" id="permissions" data-keywords="permission rbac role access restrict view module hide chat module">
+<h2><span class="num">32</span>🔐 Permissions</h2>
+<p class="lede">Control who can do what at the action level.</p>
+<ol class="steps">
+<li><strong>Settings → Permissions.</strong></li>
+<li><strong>Per-role permission matrix.</strong> Tick or untick individual capabilities for each role:
+<ul style="margin: .35rem 0 .35rem 1.1rem; padding: 0;">
+<li>Edit lead, Delete lead, Reassign lead, Bulk actions</li>
+<li>View other agents' leads</li>
+<li>Send WhatsApp, Send templates, Send broadcasts</li>
+<li>Edit settings, Manage users, See billing</li>
+<li>Access reports, Export data</li>
+</ul>
+</li>
+<li><strong>Chat permissions (per-role).</strong> Settings → <em>Chat permissions</em>. Decide whether agents can see <strong>each other's WhatsApp threads</strong>, or only their own.</li>
+<li><strong>Module visibility (per-role).</strong> Settings → <em>Menu visibility</em>. Hide entire features (eg. Reports, Quotations) from a role to declutter their UI.</li>
+</ol>
+</article>
+
+<article class="section" id="troubleshoot" data-keywords="troubleshoot debug help support fix problem error not working broken">
+<h2><span class="num">99</span>🛠️ Troubleshooting</h2>
+<p class="lede">Common issues and where to look.</p>
+<table class="kv">
+<tr><td><strong>Webhook returns 401</strong></td><td>API key wrong. Settings → Website API → click <em>Regenerate</em> and update on the sender side. Inbound table at the bottom of that page logs every rejected hit with a redacted prefix of the key it received.</td></tr>
+<tr><td><strong>Lead created but a custom field is empty</strong></td><td>Either (a) the field hasn't been registered in Settings → Custom Fields, or (b) the sender used the <em>label</em> name not the <em>key</em>. The Recent inbound table shows the raw body — check the keys.</td></tr>
+<tr><td><strong>WhatsApp not sending</strong></td><td>Check Settings → WhatsApp → access token + phone-number ID still valid (Embedded Sign-In tokens occasionally expire if the FB user revokes consent). Reconnect to refresh.</td></tr>
+<tr><td><strong>AI Bot not replying</strong></td><td>Three checks: (1) Bot Settings → Enabled. (2) Bot Activity tab will show <em>suppressed</em> reasons (off-keywords, after-hours, human-active). (3) Settings → SMTP / Gemini key — under super-admin, confirm the global Gemini key is active.</td></tr>
+<tr><td><strong>Push notifications not arriving on phone</strong></td><td>Reinstall the APK. New install registers a fresh FCM token. Old tokens auto-evict from our DB after a delivery failure, but the OS keeps them cached — a clean install fixes 95% of cases.</td></tr>
+<tr><td><strong>Attendance check-in fails with location error</strong></td><td>Phone Settings → Apps → SmartCRM → Permissions → Location → Allow → reopen the app. (Yes, this is required — we won't let employees fake their location by skipping GPS.)</td></tr>
+<tr><td><strong>Pabbly mapping shows the right value but lead arrives empty</strong></td><td>You probably dragged the labelled chip ("1. Res1 Campaign Name : value") instead of just the value chip. Re-drag in Pabbly using the inner value tag.</td></tr>
+<tr><td><strong>Need help we haven't covered?</strong></td><td>Email <a href="mailto:support@smartcrmsolution.com">support@smartcrmsolution.com</a> with your workspace slug + a short description.</td></tr>
+</table>
+</article>
+
+<div id="noResults" class="no-results hide">
+  <h3>No matches.</h3>
+  <p>Try a broader keyword — <em>"whatsapp"</em>, <em>"webhook"</em>, <em>"email"</em>.</p>
+</div>
+
+</main>
+</div>
+
+<script>
+(function () {
+  const search = document.getElementById('searchInput');
+  const sections = Array.from(document.querySelectorAll('article.section'));
+  const noResults = document.getElementById('noResults');
+  const tocLinks = Array.from(document.querySelectorAll('.toc a'));
+
+  // Build a search index per section: title text + keywords + body text
+  const index = sections.map(s => {
+    const id = s.id;
+    const kw = (s.dataset.keywords || '').toLowerCase();
+    const txt = (s.textContent || '').toLowerCase();
+    return { el: s, id, hay: kw + ' ' + txt };
+  });
+
+  function applyFilter(q) {
+    q = q.trim().toLowerCase();
+    if (!q) {
+      sections.forEach(s => s.classList.remove('hide'));
+      noResults.classList.add('hide');
+      tocLinks.forEach(a => a.classList.remove('hide'));
+      return;
+    }
+    const tokens = q.split(/\s+/).filter(Boolean);
+    let visible = 0;
+    const visibleIds = new Set();
+    index.forEach(({ el, id, hay }) => {
+      const m = tokens.every(t => hay.includes(t));
+      el.classList.toggle('hide', !m);
+      if (m) { visible++; visibleIds.add(id); }
+    });
+    tocLinks.forEach(a => {
+      const id = (a.getAttribute('href') || '').slice(1);
+      a.classList.toggle('hide', visibleIds.size > 0 && !visibleIds.has(id));
+    });
+    noResults.classList.toggle('hide', visible > 0);
+  }
+
+  search.addEventListener('input', () => applyFilter(search.value));
+
+  // Pill click → fill search + filter
+  document.querySelectorAll('.pill').forEach(p => {
+    p.addEventListener('click', () => {
+      search.value = p.dataset.q || p.textContent;
+      applyFilter(search.value);
+      search.focus();
+      // Smooth scroll to first match
+      const first = sections.find(s => !s.classList.contains('hide'));
+      if (first) first.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
+
+  // "/" focuses search
+  document.addEventListener('keydown', e => {
+    if (e.key === '/' && document.activeElement !== search && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault(); search.focus(); search.select();
+    } else if (e.key === 'Escape' && document.activeElement === search) {
+      search.blur(); search.value = ''; applyFilter('');
+    }
+  });
+
+  // Copy buttons
+  document.querySelectorAll('.copy-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const text = btn.parentElement.querySelector('.copy-content')?.textContent || '';
+      try {
+        await navigator.clipboard.writeText(text.trim());
+        const old = btn.textContent;
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => { btn.textContent = old; btn.classList.remove('copied'); }, 1500);
+      } catch (e) { btn.textContent = 'Failed'; }
+    });
+  });
+
+  // Active TOC highlighting (intersection observer)
+  const tocMap = {};
+  tocLinks.forEach(a => { tocMap[(a.getAttribute('href') || '').slice(1)] = a; });
+  const obs = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        tocLinks.forEach(a => a.classList.remove('active'));
+        const link = tocMap[e.target.id];
+        if (link) link.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-30% 0px -60% 0px' });
+  sections.forEach(s => obs.observe(s));
+
+  // Read ?q= from URL if present
+  const params = new URLSearchParams(location.search);
+  const initial = params.get('q');
+  if (initial) {
+    search.value = initial;
+    applyFilter(initial);
+  }
+})();
+</script>
+
+</body>
+</html>
