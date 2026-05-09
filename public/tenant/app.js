@@ -531,19 +531,21 @@ function renderLogin() {
           <button type="submit" class="btn primary block" ${isDemoTenant ? 'autofocus' : ''}>Sign in</button>
           <p id="login-err" class="error"></p>
         </form>
-        <div style="text-align:center;margin-top:1rem;font-size:.85rem">
-          <span class="muted">Workspace: <b>${esc(window.TENANT_SLUG || '')}</b></span>
-          <button id="btn-switch-workspace" type="button"
-            style="display:block;width:100%;margin-top:.5rem;padding:.5rem;background:transparent;border:1px solid #cbd5e1;border-radius:8px;color:#475569;cursor:pointer;font-size:.85rem">
-            🔀 Switch to a different workspace
-          </button>
+        <div style="text-align:center;margin-top:1.5rem;font-size:.78rem;color:#94a3b8">
+          Workspace: <b style="color:#64748b">${esc(window.TENANT_SLUG || '')}</b>
+          <span style="margin:0 .35rem">·</span>
+          <a href="#" id="btn-switch-workspace"
+            style="color:#94a3b8;text-decoration:underline;font-size:.78rem">switch</a>
         </div>
       </div>
     </div>`;
-  // Switch-workspace button — clears the saved slug (used by /app picker)
-  // and navigates to /app?stay=1 so the picker is shown instead of auto-redirecting.
+  // Switch-workspace link — confirms first because it clears the
+  // session token and redirects to the workspace picker. Was getting
+  // tapped accidentally on phones because the button was too prominent.
   const switchBtn = document.getElementById('btn-switch-workspace');
-  if (switchBtn) switchBtn.addEventListener('click', () => {
+  if (switchBtn) switchBtn.addEventListener('click', (ev) => {
+    ev.preventDefault();
+    if (!confirm('Switch to a different workspace?\n\nThis signs you out of "' + (window.TENANT_SLUG || '') + '" and takes you to the workspace picker.')) return;
     try { localStorage.removeItem('tenant_slug'); } catch (_) {}
     try { localStorage.removeItem('crm_token'); } catch (_) {}
     try { localStorage.removeItem('crm_user'); } catch (_) {}
