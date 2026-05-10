@@ -6948,9 +6948,15 @@ async function wbConnect() {
   wrap.appendChild(header);
 
   // ---- 📱 Connected numbers (multi-phone support, Phase 1) ----
+  // Card is ALWAYS rendered when WA is connected, even if wa_phones is
+  // empty — otherwise the 'Connect another' / 'Sync from Meta' actions
+  // would be hidden and the user couldn't recover from the case where
+  // their initial Coexistence connect didn't write a row to wa_phones
+  // (e.g. on vserve). The empty-state row inside the table tells them
+  // exactly which button to press.
   let phones = [];
   try { phones = await api('api_wa_phones_listAll'); } catch (_) { phones = []; }
-  if (phones.length) {
+  if (phones.length || isConnected) {
     const phonesCard = h('div', { class: 'card', style: { marginBottom: '.8rem' } });
     phonesCard.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.4rem', gap: '.5rem', flexWrap: 'wrap' } },
       h('h3', { style: { margin: 0 } }, '📱 Connected numbers (' + phones.length + ')'),
@@ -6995,7 +7001,7 @@ async function wbConnect() {
         h('th', {}, 'Status'),
         h('th', { style: { textAlign: 'right' } }, '')
       )),
-      h('tbody', {}, ...phones.map(ph => h('tr', {},
+      h('tbody', {}, ...(phones.length ? phones : []).map(ph => h('tr', {},
         h('td', {}, Number(ph.is_default) === 1 ? '⭐' : ''),
         h('td', {}, h('code', {}, ph.display_phone_number || ph.phone_number_id)),
         h('td', {}, ph.verified_name || '—'),
@@ -7034,6 +7040,21 @@ async function wbConnect() {
     phonesCard.appendChild(tbl);
     phonesCard.appendChild(h('p', { class: 'muted', style: { marginTop: '.5rem', fontSize: '.85rem' } },
       'Each new number connected via Embedded Sign-In is appended here automatically. The default phone is the one used for sending unless an agent picks a different number on the chat composer.'));
+
+    // Empty-state hint - shown when WA is connected but wa_phones is empty.
+    // Almost always means the initial Coexistence connect skipped the row;
+    // 'Sync from Meta' will pull every number Meta knows about into our table.
+    if (!phones.length) {
+      phonesCard.appendChild(h('div', { style: { marginTop: '.6rem', padding: '.75rem .9rem', background: '#fef3c7', border: '1px solid #f59e0b', borderRadius: '8px', fontSize: '.88rem', color: '#92400e' } },
+        h('strong', {}, '⚠️ No phones in the connected-numbers table yet.'),
+        h('div', { style: { marginTop: '.25rem' } },
+          'Even though WhatsApp is connected (', h('code', {}, s.phone_number_id || '?'), '), no row was added to our wa_phones table — usually because the initial Coexistence sign-in didn\'t persist it. Click ',
+          h('strong', {}, '🔄 Sync from Meta'),
+          ' above to pull in every number Meta knows about for your WABA, or click ',
+          h('strong', {}, '➕ Connect another number'),
+          ' to add a new one.')
+      ));
+    }
     wrap.appendChild(phonesCard);
   }
 
