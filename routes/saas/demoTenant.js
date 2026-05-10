@@ -471,6 +471,14 @@ async function _ensureShowcaseSchema(pool) {
        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
      )`
   ];
+  // Backfill: strip leading + from phone columns so historical seeded rows
+  // match what api_wb_chat_messages queries by (digits-only).
+  const fixups = [
+    `UPDATE whatsapp_messages SET from_number = REGEXP_REPLACE(from_number, '[^0-9]', '', 'g') WHERE from_number ~ '[+ ]'`,
+    `UPDATE whatsapp_messages SET to_number   = REGEXP_REPLACE(to_number,   '[^0-9]', '', 'g') WHERE to_number   ~ '[+ ]'`,
+    `UPDATE ai_chat_log       SET phone       = REGEXP_REPLACE(phone,       '[^0-9]', '', 'g') WHERE phone       ~ '[+ ]'`
+  ];
+  for (const sql of fixups) { try { await pool.query(sql); } catch (_) {} }
   const out = { ran: 0, failed: [] };
   for (const sql of stmts) {
     try { await pool.query(sql); out.ran++; }
@@ -856,7 +864,9 @@ async function _wipeAndSeed(pool, adminUserId) {
     const lead = _convoLeads[i];
     const s = _SCRIPTS[i];
     // Normalize phone — strip everything except digits + (optional leading +).
-    let phone = String(lead.phone || '').replace(/\s+/g, '').replace(/[^0-9+]/g, '');
+    // api_wb_chat_messages queries by digits-only (strips +) — store digits-only
+    // here so when the prospect clicks into a thread the strict equality match works.
+    let phone = String(lead.phone || '').replace(/\D/g, '');
     if (!phone) continue;
     const baseTs = Date.now() - (i + 1) * 1800 * 1000; // staggered 30 min apart
     let stepTs = baseTs;
