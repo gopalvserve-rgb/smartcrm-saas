@@ -14014,19 +14014,41 @@ async function adminBotFlows() {
     const paletteEl = h('div', { style: { width: '220px', borderRight: '1px solid var(--border)', padding: '.6rem', background: '#fff', overflowY: 'auto' } });
     paletteEl.appendChild(h('div', { style: { fontSize: '.7rem', textTransform: 'uppercase', letterSpacing: '.04em', color: 'var(--text-soft)', fontWeight: 600, padding: '.25rem .25rem .5rem' } }, 'Available components'));
     PALETTE.forEach(p => {
-      const item = h('div', { draggable: true, class: 'flow-palette-item', style: { padding: '.5rem .65rem', borderRadius: '8px', border: '1px solid var(--border)', marginBottom: '.4rem', cursor: 'grab', background: '#fff', display: 'flex', alignItems: 'center', gap: '.5rem', userSelect: 'none' } },
+      const item = h('div', { class: 'flow-palette-item', style: { padding: '.5rem .65rem', borderRadius: '8px', border: '1px solid var(--border)', marginBottom: '.4rem', cursor: 'pointer', background: '#fff', display: 'flex', alignItems: 'center', gap: '.5rem', userSelect: 'none' } },
         h('span', { style: { fontSize: '1.05rem' } }, p.icon),
         h('div', { style: { flex: 1 } },
           h('div', { style: { fontSize: '.85rem', fontWeight: 600 } }, p.title),
           h('div', { class: 'muted', style: { fontSize: '.72rem' } }, p.hint)
-        )
+        ),
+        h('span', { class: 'muted', style: { fontSize: '.72rem' } }, '+ ')
       );
+      // Set draggable as a real DOM property — the boolean attribute is
+      // unreliable across browsers when set via h() helpers.
+      item.setAttribute('draggable', 'true');
       item.addEventListener('dragstart', (e) => {
-        // Use text/plain - the universally-supported MIME for drag-drop.
-        // Custom MIMEs like 'flow/type' are silently ignored on Chrome,
-        // which made the drop event never fire.
-        e.dataTransfer.setData('text/plain', 'flow:' + p.type);
-        e.dataTransfer.effectAllowed = 'copy';
+        if (e.dataTransfer) {
+          e.dataTransfer.setData('text/plain', 'flow:' + p.type);
+          e.dataTransfer.effectAllowed = 'copy';
+        }
+      });
+      // Click-to-add fallback. Drag-drop is fiddly on touch devices and
+      // some Chrome configurations; clicking always works. New node lands
+      // at a tidy auto-layout slot on the canvas.
+      item.addEventListener('click', (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const slot = flow.nodes.length;
+        const newNode = {
+          id: nextId(), type: p.type, body: '',
+          x: 60 + (slot % 4) * 260,
+          y: 60 + Math.floor(slot / 4) * 200
+        };
+        if (['message','image','audio','video','document','ask'].includes(p.type)) newNode.buttons = [];
+        flow.nodes.push(newNode);
+        if (!flow.start_node_id) flow.start_node_id = newNode.id;
+        rebuildCanvas();
+        // Auto-open the editor for the freshly-added node so the user
+        // can fill in body/buttons immediately.
+        setTimeout(() => editNode(newNode), 50);
       });
       paletteEl.appendChild(item);
     });
@@ -14363,7 +14385,16 @@ async function adminBotFlows() {
 
     // ---- Drop handling on canvas (drop palette item) ----
     canvas.addEventListener('dragenter', (e) => { e.preventDefault(); });
-    canvas.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+    canvas.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+      canvas.style.background = 'radial-gradient(circle, #a5b4fc 1px, transparent 1px) 0 0/16px 16px, #eef2ff';
+    });
+    canvas.addEventListener('dragleave', (e) => {
+      // Only reset when leaving the canvas itself, not entering child nodes
+      if (e.target === canvas) canvas.style.background = 'radial-gradient(circle, #d1d5db 1px, transparent 1px) 0 0/16px 16px, #fafbfc';
+    });
+    // Stop the inner SVG from stealing the drop event.
     canvas.addEventListener('drop', (e) => {
       e.preventDefault();
       const raw = e.dataTransfer.getData('text/plain') || '';
