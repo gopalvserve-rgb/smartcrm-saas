@@ -7768,8 +7768,47 @@ async function _aibotKbView() {
     h('p', { class: 'muted', style: { fontSize: '.8rem' } }, 'Best for static pages (About, Services, FAQ). JS-heavy SPAs may not extract well.'),
     urlInp, crawlBtn));
 
-  card.appendChild(h('p', { class: 'muted', style: { marginTop: '.75rem', fontSize: '.78rem' } },
-    '📎 PDF / DOCX upload: coming in next push.'));
+  // ---- File attachment uploader (May 2026) ----
+  // Lets users upload brochures / company profiles / PPTs etc. and tag them
+  // with trigger keywords. When a customer says one of those keywords, the
+  // bot sends the file via WhatsApp media.
+  const attachWrap = h('div', { style: { borderTop: '1px solid #e5e7eb', paddingTop: '.75rem', marginTop: '.75rem' } });
+  attachWrap.appendChild(h('h4', {}, '📎 Upload an attachment (brochure, PPT, profile)'));
+  attachWrap.appendChild(h('p', { class: 'muted', style: { fontSize: '.8rem' } },
+    'When a customer asks for one of the trigger keywords below, the bot will send this file via WhatsApp. Max 16 MB per file. PDF, PPT, DOCX, images, video and audio supported.'));
+  const attachFile  = h('input', { type: 'file', accept: '.pdf,.ppt,.pptx,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.webp,.mp4,.mp3,.m4a,.ogg,.wav', style: { width: '100%' } });
+  const attachTitle = h('input', { type: 'text', placeholder: 'Display title (e.g. "Company brochure")', style: { width: '100%', marginTop: '.4rem' } });
+  const attachKw    = h('input', { type: 'text', placeholder: 'Trigger keywords (comma-separated): brochure, catalog, profile', style: { width: '100%', marginTop: '.4rem' } });
+  const attachBtn   = h('button', { class: 'btn primary', style: { marginTop: '.4rem' } }, '📤 Upload attachment');
+  attachBtn.onclick = async () => {
+    const f = attachFile.files && attachFile.files[0];
+    if (!f) return toast('Pick a file first', 'err');
+    if (f.size > 16 * 1024 * 1024) return toast('File too large (16 MB max)', 'err');
+    attachBtn.disabled = true; attachBtn.textContent = 'Uploading…';
+    try {
+      const buf = await f.arrayBuffer();
+      // Convert to base64 in chunks (avoid call-stack overflow on large files)
+      let bin = ''; const bytes = new Uint8Array(buf);
+      const chunk = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunk) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+      const b64 = btoa(bin);
+      await api('api_aibot_kb_save_attachment', {
+        title: attachTitle.value || f.name,
+        file_name: f.name,
+        mime_type: f.type || 'application/octet-stream',
+        file_base64: b64,
+        trigger_keywords: attachKw.value || ''
+      });
+      attachFile.value = ''; attachTitle.value = ''; attachKw.value = '';
+      toast('Attachment saved', 'ok'); refreshList();
+    } catch (e) { toast(e.message, 'err'); }
+    finally { attachBtn.disabled = false; attachBtn.textContent = '📤 Upload attachment'; }
+  };
+  attachWrap.appendChild(attachFile);
+  attachWrap.appendChild(attachTitle);
+  attachWrap.appendChild(attachKw);
+  attachWrap.appendChild(attachBtn);
+  card.appendChild(attachWrap);
   wrap.appendChild(card);
 
   // KB list
@@ -7794,14 +7833,16 @@ async function _aibotKbView() {
         h('th', {}, 'Title'),
         h('th', {}, 'Source'),
         h('th', { title: 'Which bot uses this doc. Global = every bot. Pick a number to scope to that number\'s bot only.' }, 'Used by'),
-        h('th', {}, 'Chars'),
+        h('th', { title: 'Attachable: bot will SEND this file when inbound matches the trigger keywords' }, '📎 Attachable + triggers'),
+        h('th', {}, 'Chars / Size'),
         h('th', {}, 'Active'),
         h('th', {}, 'Added'),
         h('th', {}, '')
       )),
       h('tbody', {}, ...data.docs.map(d => h('tr', {},
         h('td', {}, h('b', {}, d.title)),
-        h('td', {}, ({ text: '📝 Text', url: '🌐 URL', pdf: '📄 PDF', docx: '📄 DOCX' })[d.source_type] || d.source_type),
+        h('td', {}, ({ text: '📝 Text', url: '🌐 URL', pdf: '📄 PDF', docx: '📄 DOCX', attachment: '📎 Attachment' })[d.source_type] || d.source_type,
+          d.file_name ? h('div', { class: 'muted', style: { fontSize: '.72rem' } }, d.file_name) : null),
         h('td', {}, (() => {
           const sel = h('select', { style: { fontSize: '.82rem', padding: '.2rem .35rem' } });
           const optGlobal = h('option', { value: '__global__', selected: !d.phone_number_id ? 'selected' : null }, '🏠 Global (all bots)');
@@ -7817,7 +7858,24 @@ async function _aibotKbView() {
           };
           return sel;
         })()),
-        h('td', {}, (d.char_count || 0).toLocaleString('en-IN')),
+        h('td', {}, d.source_type === 'attachment' || Number(d.is_attachable) === 1
+          ? (() => {
+              const onChk = h('input', { type: 'checkbox', checked: Number(d.is_attachable) === 1 ? 'checked' : null });
+              const kwInp = h('input', { type: 'text', value: d.trigger_keywords || '', placeholder: 'brochure, catalog', style: { width: '180px', fontSize: '.78rem', padding: '.2rem .35rem', marginLeft: '.4rem' } });
+              const save = async () => {
+                try { await api('api_aibot_kb_set_attachment_meta', d.id, { is_attachable: onChk.checked ? 1 : 0, trigger_keywords: kwInp.value }); toast('Saved', 'ok'); }
+                catch (e) { toast(e.message, 'err'); }
+              };
+              onChk.onchange = save;
+              kwInp.onblur = save;
+              return h('div', { style: { display: 'flex', alignItems: 'center', gap: '.3rem' } },
+                h('label', { style: { display: 'flex', alignItems: 'center', gap: '.25rem', fontSize: '.78rem' } }, onChk, h('span', {}, 'On')),
+                kwInp);
+            })()
+          : h('span', { class: 'muted', style: { fontSize: '.78rem' } }, '—')),
+        h('td', {}, d.source_type === 'attachment'
+          ? ((d.file_size_bytes || 0) / 1024).toFixed(0) + ' KB'
+          : (d.char_count || 0).toLocaleString('en-IN')),
         h('td', {},
           h('input', { type: 'checkbox', checked: d.is_active ? 'checked' : null,
             onclick: async ev => { try { await api('api_aibot_kb_toggle', d.id, ev.target.checked); refreshList(); } catch (e) { toast(e.message, 'err'); } }

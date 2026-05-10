@@ -189,6 +189,16 @@ async function _ensureAiBotColumns() {
     )`);
     await db.query(`CREATE INDEX IF NOT EXISTS idx_ai_reengage_log_due ON ai_reengage_log(status, scheduled_for) WHERE status = 'scheduled'`);
     await db.query(`CREATE INDEX IF NOT EXISTS idx_ai_reengage_log_phone ON ai_reengage_log(phone)`);
+    // KB file attachments (May 2026): brochure, company profile, PPTs etc.
+    // Bot sends these via WhatsApp media when the customer's inbound text
+    // matches the doc's trigger_keywords (comma-separated).
+    await db.query(`ALTER TABLE ai_kb_documents ADD COLUMN IF NOT EXISTS file_data BYTEA`);
+    await db.query(`ALTER TABLE ai_kb_documents ADD COLUMN IF NOT EXISTS file_mime_type TEXT`);
+    await db.query(`ALTER TABLE ai_kb_documents ADD COLUMN IF NOT EXISTS file_name TEXT`);
+    await db.query(`ALTER TABLE ai_kb_documents ADD COLUMN IF NOT EXISTS file_size_bytes INTEGER`);
+    await db.query(`ALTER TABLE ai_kb_documents ADD COLUMN IF NOT EXISTS is_attachable INTEGER NOT NULL DEFAULT 0`);
+    await db.query(`ALTER TABLE ai_kb_documents ADD COLUMN IF NOT EXISTS trigger_keywords TEXT`);
+    await db.query(`ALTER TABLE ai_kb_documents ADD COLUMN IF NOT EXISTS sent_count INTEGER NOT NULL DEFAULT 0`);
     if (pool) _aiBotEnsuredPools.add(pool);
   } catch (e) { /* table missing — _coerceSettings handles defaults */ }
 }
@@ -413,14 +423,14 @@ async function api_aibot_kb_list(token, phoneNumberId) {
   if (!phId) {
     r = await db.query(
       `SELECT id, source_type, title, char_count, source_url, file_path, file_size,
-              phone_number_id, is_active, ingest_status, ingest_error, created_at, updated_at
+              phone_number_id, is_active, ingest_status, ingest_error, created_at, updated_at, file_name, file_mime_type, file_size_bytes, is_attachable, trigger_keywords, sent_count
          FROM ai_kb_documents
          ORDER BY is_active DESC, created_at DESC`
     );
   } else if (phId === '__global__' || phId === 'default') {
     r = await db.query(
       `SELECT id, source_type, title, char_count, source_url, file_path, file_size,
-              phone_number_id, is_active, ingest_status, ingest_error, created_at, updated_at
+              phone_number_id, is_active, ingest_status, ingest_error, created_at, updated_at, file_name, file_mime_type, file_size_bytes, is_attachable, trigger_keywords, sent_count
          FROM ai_kb_documents
          WHERE phone_number_id IS NULL
          ORDER BY is_active DESC, created_at DESC`
@@ -428,7 +438,7 @@ async function api_aibot_kb_list(token, phoneNumberId) {
   } else {
     r = await db.query(
       `SELECT id, source_type, title, char_count, source_url, file_path, file_size,
-              phone_number_id, is_active, ingest_status, ingest_error, created_at, updated_at
+              phone_number_id, is_active, ingest_status, ingest_error, created_at, updated_at, file_name, file_mime_type, file_size_bytes, is_attachable, trigger_keywords, sent_count
          FROM ai_kb_documents
          WHERE phone_number_id IS NULL OR phone_number_id = $1
          ORDER BY is_active DESC, created_at DESC`,
@@ -775,12 +785,14 @@ async function _buildPrompt(settings, phone, leadId, inboundText) {
       ? await db.query(
           `SELECT title, raw_text FROM ai_kb_documents
             WHERE is_active = 1 AND (phone_number_id IS NULL OR phone_number_id = ANY($1::text[]))
+              AND source_type <> 'attachment'
             ORDER BY id ASC`,
           [allBotPhIds]
         )
       : await db.query(
           `SELECT title, raw_text FROM ai_kb_documents
             WHERE is_active = 1 AND phone_number_id IS NULL
+              AND source_type <> 'attachment'
             ORDER BY id ASC`
         );
     let buf = '';
@@ -962,6 +974,12 @@ async function maybeReplyToInbound({ phone, leadId, inboundText, inboundPhoneId,
     );
     // Schedule re-engagement ping if the bot is configured for it.
     try { await _scheduleReengage({ settings, phone, leadId, inboundPhoneId }); } catch (_) {}
+    // After the text reply, check if the inbound matches any attachable KB doc
+    // (brochure / company profile / PPT) and send them as media attachments.
+    try {
+      const matches = await _findAttachmentMatches(inboundText, settings);
+      if (matches && matches.length) await _sendAttachmentMatches({ matches, phone, leadId, inboundPhoneId });
+    } catch (_) {}
 
   } catch (e) {
     try {
@@ -1129,11 +1147,155 @@ async function _reengageTick() {
   }
 }
 
+// ============================================================
+// KB attachments (May 2026)
+// ============================================================
+// Customers often ask for a brochure / company profile / PPT — let users
+// upload those files to the KB and tag them with trigger keywords. When
+// an inbound matches a keyword, the bot sends the file via WhatsApp media
+// alongside its text reply.
+// ============================================================
+
+const _MAX_KB_ATTACHMENT_BYTES = 16 * 1024 * 1024; // 16 MB — Meta document limit
+
+/** Save a base64-encoded attachment to the KB. */
+async function api_aibot_kb_save_attachment(token, payload) {
+  const me = await authUser(token);
+  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  await _ensureAiBotColumns();
+  const p = payload || {};
+  const title = String(p.title || p.file_name || 'Attachment').slice(0, 200);
+  const fileName = String(p.file_name || 'attachment').slice(0, 200);
+  const mimeType = String(p.mime_type || 'application/octet-stream').slice(0, 120);
+  const triggerKw = String(p.trigger_keywords || '').slice(0, 500);
+  const phoneNumberId = p.phone_number_id ? String(p.phone_number_id) : null;
+  const b64 = String(p.file_base64 || '');
+  if (!b64) throw new Error('file_base64 is required');
+  const buf = Buffer.from(b64, 'base64');
+  if (buf.length === 0) throw new Error('Could not decode file_base64');
+  if (buf.length > _MAX_KB_ATTACHMENT_BYTES) throw new Error('File exceeds 16 MB limit (WhatsApp media cap)');
+
+  const r = await db.query(
+    `INSERT INTO ai_kb_documents
+       (source_type, title, raw_text, file_data, file_mime_type, file_name, file_size_bytes,
+        is_attachable, trigger_keywords, phone_number_id, is_active, ingest_status, created_by)
+     VALUES ('attachment', $1, '', $2, $3, $4, $5, 1, $6, $7, 1, 'ready', $8)
+     RETURNING id`,
+    [title, buf, mimeType, fileName, buf.length, triggerKw, phoneNumberId, me.id || null]
+  );
+  return { ok: true, id: r.rows[0].id, size: buf.length, mime_type: mimeType };
+}
+
+/** Update attachable metadata on an existing KB row (toggle is_attachable / change keywords). */
+async function api_aibot_kb_set_attachment_meta(token, id, payload) {
+  const me = await authUser(token);
+  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  await _ensureAiBotColumns();
+  const p = payload || {};
+  const sets = []; const vals = []; let i = 1;
+  if (p.is_attachable    != null) { sets.push('is_attachable = $' + (i++));    vals.push(p.is_attachable ? 1 : 0); }
+  if (p.trigger_keywords != null) { sets.push('trigger_keywords = $' + (i++)); vals.push(String(p.trigger_keywords).slice(0, 500)); }
+  if (p.title            != null) { sets.push('title = $' + (i++));            vals.push(String(p.title).slice(0, 200)); }
+  if (!sets.length) return { ok: true };
+  vals.push(Number(id));
+  await db.query(`UPDATE ai_kb_documents SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $${i}`, vals);
+  return { ok: true };
+}
+
+/** Find attachments to send for a given inbound text. Returns up to 2 matches. */
+async function _findAttachmentMatches(inboundText, settings) {
+  if (!inboundText || !String(inboundText).trim()) return [];
+  await _ensureAiBotColumns();
+  const cfgPhId = settings && settings.phone_number_id ? String(settings.phone_number_id) : null;
+  const addlPhIds = settings && Array.isArray(settings.additional_phone_ids) ? settings.additional_phone_ids.map(String) : [];
+  const allBotPhIds = (cfgPhId ? [cfgPhId] : []).concat(addlPhIds);
+  let r;
+  try {
+    r = allBotPhIds.length
+      ? await db.query(
+          `SELECT id, title, file_name, file_mime_type, file_size_bytes, trigger_keywords
+             FROM ai_kb_documents
+            WHERE is_active = 1 AND is_attachable = 1
+              AND (phone_number_id IS NULL OR phone_number_id = ANY($1::text[]))
+            ORDER BY id ASC`,
+          [allBotPhIds]
+        )
+      : await db.query(
+          `SELECT id, title, file_name, file_mime_type, file_size_bytes, trigger_keywords
+             FROM ai_kb_documents
+            WHERE is_active = 1 AND is_attachable = 1 AND phone_number_id IS NULL
+            ORDER BY id ASC`
+        );
+  } catch (_) { return []; }
+  const text = String(inboundText).toLowerCase();
+  const hits = [];
+  for (const row of r.rows) {
+    const kws = String(row.trigger_keywords || '').toLowerCase().split(/[,;\n]/).map(s => s.trim()).filter(Boolean);
+    if (!kws.length) continue;
+    if (kws.some(kw => text.includes(kw))) hits.push(row);
+    if (hits.length >= 2) break;
+  }
+  return hits;
+}
+
+/** Send the matched attachment(s) via WhatsApp using whatsbot helpers. */
+async function _sendAttachmentMatches({ matches, phone, leadId, inboundPhoneId }) {
+  if (!matches || !matches.length) return 0;
+  const wb = _wb();
+  const cfg = inboundPhoneId ? await wb._cfgForPhone(inboundPhoneId).catch(() => wb._cfg()) : await wb._cfg();
+  if (!cfg || !cfg.token || !cfg.phoneId) return 0;
+  let sent = 0;
+  for (const m of matches) {
+    try {
+      // Pull the binary
+      const r = await db.query(`SELECT file_data, file_name, file_mime_type FROM ai_kb_documents WHERE id = $1`, [m.id]);
+      const row = r.rows[0];
+      if (!row || !row.file_data) continue;
+      const buf = Buffer.isBuffer(row.file_data) ? row.file_data : Buffer.from(row.file_data);
+      // Upload to WhatsApp Graph media to get a media_id, then send as a document.
+      const media = await wb._uploadMediaToWhatsApp(buf, row.file_mime_type || 'application/octet-stream', row.file_name || 'attachment', cfg);
+      if (!media || !media.id) continue;
+      // Map mime type to WhatsApp media kind. PDFs / docs / PPTs go through 'document';
+      // images via 'image'; videos via 'video'; audio via 'audio'.
+      const mt = String(row.file_mime_type || '').toLowerCase();
+      const mediaKind = mt.startsWith('image/') ? 'image'
+        : mt.startsWith('video/') ? 'video'
+        : mt.startsWith('audio/') ? 'audio'
+        : 'document';
+      const payload = {
+        messaging_product: 'whatsapp',
+        to: String(phone),
+        type: mediaKind,
+        [mediaKind]: { id: media.id }
+      };
+      // Document type also accepts a filename hint on WhatsApp.
+      if (mediaKind === 'document') payload.document.filename = row.file_name || 'attachment';
+      const sendRes = await wb._graphPost(`${cfg.phoneId}/messages`, payload, cfg).catch(e => ({ error: e.message }));
+      // Persist as an outbound row so the chat shows it.
+      try {
+        await db.query(
+          `INSERT INTO whatsapp_messages (direction, from_number, to_number, body, message_type, phone_number_id, wa_message_id, media_id, media_filename, created_at)
+           VALUES ('out', $1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
+          [String(cfg.phoneId), String(phone), '[' + (row.file_name || 'attachment') + ']', mediaKind,
+           inboundPhoneId || null, (sendRes && sendRes.body && sendRes.body.messages && sendRes.body.messages[0] && sendRes.body.messages[0].id) || null,
+           media.id, row.file_name || null]
+        );
+      } catch (_) {}
+      await db.query(`UPDATE ai_kb_documents SET sent_count = COALESCE(sent_count, 0) + 1 WHERE id = $1`, [m.id]);
+      sent++;
+    } catch (e) {
+      console.warn('[ai-bot] send attachment failed:', e.message);
+    }
+  }
+  return sent;
+}
+
 module.exports = {
   // Public tenant API (auto-exposed via tenantApi.js loader)
   api_aibot_settings_get, api_aibot_settings_save,
   api_aibot_settings_listAll, api_aibot_settings_delete,
   api_aibot_kb_list, api_aibot_kb_save_text, api_aibot_kb_delete, api_aibot_kb_toggle, api_aibot_kb_crawl_url, api_aibot_kb_set_phone, api_aibot_kb_assign_bulk,
+  api_aibot_kb_save_attachment, api_aibot_kb_set_attachment_meta,
   api_aibot_chatlog_list, api_aibot_usage_summary, api_aibot_estimator,
   api_aibot_send_draft, api_aibot_discard_draft,
   // Internal — called from whatsbot.js + server.tenant.js upload route
