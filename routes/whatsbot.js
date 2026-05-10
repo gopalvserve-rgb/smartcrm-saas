@@ -2363,6 +2363,13 @@ async function _handleInbound(m, value) {
       phone: from, leadId, inboundText: text, inboundPhoneId,
       inboundMsgId: null, tenantSlug, tenantId
     }).catch(e => console.warn('[ai-bot] reply failed:', e.message));
+    // Heat detection runs independently — fires even if the bot is off,
+    // because we want admins/agents alerted to hot leads regardless.
+    if (aiBot.classifyAndAlertOnInbound) {
+      aiBot.classifyAndAlertOnInbound({
+        phone: from, leadId, inboundText: text, inboundPhoneId, tenantSlug
+      }).catch(e => console.warn('[heat] classify failed:', e.message));
+    }
   } catch (e) { console.warn('[ai-bot] dispatch failed:', e.message); }
 
   // Try matching a Message Bot or Template Bot by trigger

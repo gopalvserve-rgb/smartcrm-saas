@@ -199,6 +199,15 @@ async function _ensureAiBotColumns() {
     await db.query(`ALTER TABLE ai_kb_documents ADD COLUMN IF NOT EXISTS is_attachable INTEGER NOT NULL DEFAULT 0`);
     await db.query(`ALTER TABLE ai_kb_documents ADD COLUMN IF NOT EXISTS trigger_keywords TEXT`);
     await db.query(`ALTER TABLE ai_kb_documents ADD COLUMN IF NOT EXISTS sent_count INTEGER NOT NULL DEFAULT 0`);
+    // Hot-lead heat scoring (May 2026): every WhatsApp inbound is classified
+    // for buying-intent signals; high-heat triggers a push notification to
+    // the assigned agent + admin and a chip on the lead row.
+    try { await db.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS heat_score INTEGER`); } catch (_) {}
+    try { await db.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS heat_label TEXT`); } catch (_) {}
+    try { await db.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS heat_signal TEXT`); } catch (_) {}
+    try { await db.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS heat_action_required TEXT`); } catch (_) {}
+    try { await db.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS heat_updated_at TIMESTAMPTZ`); } catch (_) {}
+    try { await db.query(`CREATE INDEX IF NOT EXISTS idx_leads_heat_label ON leads(heat_label) WHERE heat_label IS NOT NULL`); } catch (_) {}
     if (pool) _aiBotEnsuredPools.add(pool);
   } catch (e) { /* table missing — _coerceSettings handles defaults */ }
 }
@@ -1290,6 +1299,133 @@ async function _sendAttachmentMatches({ matches, phone, leadId, inboundPhoneId }
   return sent;
 }
 
+// ============================================================
+// Hot-lead heat detection (May 2026)
+// ============================================================
+// Every WhatsApp inbound is scanned for buying-intent signals (price ask,
+// callback request, "interested", "ready to buy"). On a heat upgrade the
+// lead's heat_label / heat_score / heat_signal columns are updated and a
+// push notification fires to the assigned agent + admin.
+// ============================================================
+
+// Keyword buckets — each contributes a signal weight + a category we expose
+// to the agent in the action_required field.
+const _HEAT_BUCKETS = [
+  { weight: 35, action: 'send_quote', signal: 'asked about price',
+    kws: ['price', 'pricing', 'cost', 'rate', 'rates', 'fee', 'fees', 'how much', 'kitna', 'quote', 'quotation', 'budget'] },
+  { weight: 30, action: 'callback', signal: 'wants a callback',
+    kws: ['call me', 'callback', 'call back', 'ring me', 'phone me', 'speak now', 'speak today', 'baat karni hai', 'phone karo', 'call karo', 'call kar', 'call kr'] },
+  { weight: 35, action: 'send_quote', signal: 'ready to buy',
+    kws: ['ready to buy', 'want to buy', 'interested', 'go ahead', 'lets proceed', "let's proceed", 'proceed with', 'sign up', 'sign me up', 'kharidna hai', 'lena hai', 'finalize', 'finalise', 'confirm order', 'place order'] },
+  { weight: 25, action: 'send_brochure', signal: 'asked for details',
+    kws: ['send details', 'share details', 'send brochure', 'send catalog', 'send catalogue', 'company profile', 'more info', 'tell me more', 'product details'] },
+  { weight: 25, action: 'book_meeting', signal: 'wants a meeting',
+    kws: ['schedule meeting', 'book meeting', 'book a call', 'demo', 'demonstration', 'appointment', 'site visit', 'visit office'] },
+  { weight: 20, action: 'urgent_followup', signal: 'urgency expressed',
+    kws: ['urgent', 'asap', 'today only', 'right now', 'jaldi', 'turant'] }
+];
+
+const _HEAT_NEGATIVES = ['not interested', 'dont call', "don't call", 'stop messaging', 'remove me', 'unsubscribe', 'spam', 'block', 'gaali', 'mat karo'];
+
+function _classifyHeatHeuristic(text) {
+  const t = String(text || '').toLowerCase();
+  if (!t.trim()) return { score: 0, label: null, signal: '', action: 'none' };
+  for (const neg of _HEAT_NEGATIVES) {
+    if (t.includes(neg)) return { score: -50, label: 'cold', signal: 'said "' + neg + '"', action: 'remove_or_pause' };
+  }
+  let score = 0;
+  const matches = [];
+  const actions = new Set();
+  for (const b of _HEAT_BUCKETS) {
+    for (const kw of b.kws) {
+      if (t.includes(kw)) {
+        score += b.weight;
+        matches.push(b.signal);
+        actions.add(b.action);
+        break; // count each bucket only once
+      }
+    }
+  }
+  // Question-mark + at least one signal = small bonus
+  if (matches.length && t.includes('?')) score += 5;
+  if (score === 0) return { score: 0, label: null, signal: '', action: 'none' };
+  let label = 'warm';
+  if (score >= 60) label = 'on_fire';
+  else if (score >= 40) label = 'very_hot';
+  else if (score >= 25) label = 'hot';
+  else if (score >= 10) label = 'warm';
+  return { score: Math.min(100, score), label, signal: matches.slice(0, 2).join(' + '), action: Array.from(actions)[0] || 'followup' };
+}
+
+const _HEAT_RANK = { cold: 0, warm: 1, hot: 2, very_hot: 3, on_fire: 4 };
+
+/**
+ * Public entry point — called from whatsbot._handleInbound on every inbound.
+ * Updates the lead's heat columns and pushes a notification on upgrade.
+ */
+async function classifyAndAlertOnInbound({ phone, leadId, inboundText, inboundPhoneId, tenantSlug }) {
+  if (!leadId || !inboundText) return;
+  await _ensureAiBotColumns();
+  const cls = _classifyHeatHeuristic(inboundText);
+  if (!cls.label) return; // nothing meaningful detected
+
+  // Read the current heat (if any) so we can compare and only alert on UPGRADES.
+  let prev = null;
+  try {
+    const r = await db.query(`SELECT heat_label, heat_score, assigned_to, name FROM leads WHERE id = $1 LIMIT 1`, [leadId]);
+    prev = r.rows[0];
+  } catch (_) { return; }
+  if (!prev) return;
+
+  const newRank = _HEAT_RANK[cls.label] || 0;
+  const oldRank = _HEAT_RANK[prev.heat_label || 'cold'] || 0;
+  const oldScore = Number(prev.heat_score || 0);
+
+  // Persist whichever is higher — heat is sticky once assigned, only goes UP
+  // until an explicit cooldown (a "not interested" inbound resets to cold).
+  let nextLabel = prev.heat_label || cls.label;
+  let nextScore = oldScore;
+  let upgraded = false;
+  if (cls.label === 'cold') { // explicit negative — overwrite to cold
+    nextLabel = 'cold'; nextScore = 0;
+  } else if (newRank > oldRank || cls.score > oldScore) {
+    nextLabel = cls.label; nextScore = cls.score; upgraded = true;
+  }
+  try {
+    await db.query(
+      `UPDATE leads SET heat_score = $1, heat_label = $2, heat_signal = $3, heat_action_required = $4, heat_updated_at = NOW() WHERE id = $5`,
+      [nextScore, nextLabel, cls.signal.slice(0, 200), cls.action.slice(0, 50), leadId]
+    );
+  } catch (e) { console.warn('[heat] update failed:', e.message); return; }
+  if (!upgraded) return; // only push on actual upgrades
+
+  // Push notification to the assigned agent + admins.
+  try {
+    const push = require('./push');
+    const recipients = new Set();
+    if (prev.assigned_to) recipients.add(Number(prev.assigned_to));
+    try {
+      const adm = await db.query(`SELECT id FROM users WHERE role IN ('admin','manager') AND is_active = 1`);
+      adm.rows.forEach(u => recipients.add(Number(u.id)));
+    } catch (_) {}
+    const heatEmoji = cls.label === 'on_fire' ? '🔥🔥🔥' : cls.label === 'very_hot' ? '🔥🔥' : cls.label === 'hot' ? '🔥' : '✨';
+    const actionLbl = ({
+      callback: 'wants a callback',
+      send_quote: 'asking about price',
+      send_brochure: 'asking for details',
+      book_meeting: 'wants to meet',
+      urgent_followup: 'urgent — act now',
+      followup: 'positive signal'
+    })[cls.action] || 'positive signal';
+    const title = heatEmoji + ' ' + (cls.label === 'on_fire' ? 'ON FIRE' : cls.label.toUpperCase().replace('_', ' ')) + ' — ' + (prev.name || phone);
+    const body  = actionLbl + (cls.signal ? ' (' + cls.signal + ')' : '');
+    const url   = '/#/leads/' + leadId;
+    for (const uid of recipients) {
+      push.sendPushToUser(uid, { title, body, url, tag: 'heat-' + leadId, sticky: true }).catch(e => console.warn('[heat] push failed:', e.message));
+    }
+  } catch (e) { console.warn('[heat] push pipeline error:', e.message); }
+}
+
 module.exports = {
   // Public tenant API (auto-exposed via tenantApi.js loader)
   api_aibot_settings_get, api_aibot_settings_save,
@@ -1300,6 +1436,7 @@ module.exports = {
   api_aibot_send_draft, api_aibot_discard_draft,
   // Internal — called from whatsbot.js + server.tenant.js upload route
   maybeReplyToInbound,
+  classifyAndAlertOnInbound,
   _saveKBFromUpload,
   // Re-engagement worker — invoked from server.js cross-tenant cron
   _reengageTick,

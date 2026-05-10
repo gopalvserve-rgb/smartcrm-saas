@@ -1678,6 +1678,22 @@ VIEWS.leads = async (view) => {
           }
         })
       : null,
+    (function(){
+      const heatBtn = h('button', { class: 'btn ghost', id: 'f-heat-btn', title: 'Filter to hot/very hot/on fire leads' });
+      function refreshHeatBtn() {
+        const v = CRM.prefs.filters.heat_only ? '🔥 Hot leads only' : '🔥 Hot leads';
+        heatBtn.textContent = v;
+        heatBtn.style.background = CRM.prefs.filters.heat_only ? '#fee2e2' : '';
+        heatBtn.style.color      = CRM.prefs.filters.heat_only ? '#991b1b' : '';
+      }
+      heatBtn.onclick = () => {
+        CRM.prefs.filters.heat_only = !CRM.prefs.filters.heat_only;
+        refreshHeatBtn();
+        CRM._leadsPage = 1; loadLeads({ page: 1 });
+      };
+      refreshHeatBtn();
+      return heatBtn;
+    })(),
     wireFilter(selectOpts('f-followup', [{ id: '', name: 'All follow-ups' }, { id: 'today', name: 'Due today' }, { id: 'overdue', name: 'Overdue' }], CRM.prefs.filters.followup)),
     wireFilter(selectOpts('f-qualified', [
       { id: '',  name: 'Any qualified' },
@@ -1967,6 +1983,10 @@ async function loadLeads(opts) {
     try {
       const _rb = window._leadsRuleBtn && window._leadsRuleBtn.getRules ? window._leadsRuleBtn.getRules() : [];
       if (_rb && _rb.length && Array.isArray(res.leads)) res.leads = res.leads.filter(r => _applyClientRules(r, _rb));
+      if (CRM.prefs.filters.heat_only && Array.isArray(res.leads)) {
+        const hot = new Set(['hot','very_hot','on_fire']);
+        res.leads = res.leads.filter(r => hot.has(String(r.heat_label || '')));
+      }
     } catch (_) {}
     CRM.cache.lastLeads = res.leads;
     CRM.cache.lastStatusCounts = res.status_count;
@@ -2400,6 +2420,34 @@ function tatOverLabel(l) {
   if (m < 60 * 24)       return Math.round(m / 60) + 'h over';
   return Math.round(m / (60 * 24)) + 'd over';
 }
+
+// ============================================================
+// Heat chip — visual badge on a lead row when AI has flagged
+// buying intent on a recent inbound. Colours scale up with heat.
+// ============================================================
+function renderHeatChip(l) {
+  if (!l || !l.heat_label) return null;
+  const map = {
+    cold:     { emoji: '❄️', bg: '#dbeafe', fg: '#1e40af', label: 'Cold' },
+    warm:     { emoji: '✨', bg: '#fef3c7', fg: '#92400e', label: 'Warm' },
+    hot:      { emoji: '🔥', bg: '#fed7aa', fg: '#9a3412', label: 'Hot' },
+    very_hot: { emoji: '🔥🔥', bg: '#fecaca', fg: '#991b1b', label: 'Very hot' },
+    on_fire:  { emoji: '🔥🔥🔥', bg: '#fca5a5', fg: '#7f1d1d', label: 'ON FIRE' }
+  };
+  const m = map[l.heat_label] || map.warm;
+  const action = l.heat_action_required ? ' · ' + l.heat_action_required.replace(/_/g, ' ') : '';
+  return h('span', {
+    class: 'heat-pill heat-' + l.heat_label,
+    style: {
+      display: 'inline-flex', alignItems: 'center', gap: '.2rem',
+      padding: '1px 7px', borderRadius: '999px',
+      background: m.bg, color: m.fg, fontWeight: 700, fontSize: '.7rem',
+      marginLeft: '.35rem'
+    },
+    title: 'Heat ' + (l.heat_score || 0) + '/100 — ' + (l.heat_signal || m.label) + action
+  }, m.emoji + ' ' + m.label);
+}
+
 function tatViolationTitle(l) {
   const limit = Number(l && l.tat_threshold_minutes) || 0;
   const status = (l && l.status_name) || 'this stage';
@@ -2415,6 +2463,7 @@ function renderCell(col, l, statuses) {
     case 'name': {
       return h('td', { class: 'cell-name' },
         h('a', { href: '#', onclick: ev => { ev.preventDefault(); openLeadModal(l.id); } }, l.name || '—'),
+        renderHeatChip(l),
         l.is_duplicate ? h('span', { class: 'dup-pill', title: 'Duplicate — click to see past leads', onclick: ev => { ev.stopPropagation(); ev.preventDefault(); openDuplicateHistory(l.id); } }, 'DUP') : null,
         l.tat_violation ? h('span', { class: 'tat-pill', title: tatViolationTitle(l) }, '⚠ TAT ', tatOverLabel(l)) : null
       );
