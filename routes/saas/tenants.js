@@ -374,7 +374,14 @@ async function api_saas_tenants_resetUserPassword(token, payload) {
   }
   if (!user) throw new Error('No matching user found in tenant DB');
 
-  await pool.query(`UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2`, [hash, user.id]);
+  // Defensive: some older tenant DBs don't have an updated_at column on users.
+  try {
+    await pool.query(`UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2`, [hash, user.id]);
+  } catch (e) {
+    if (/updated_at/.test(String(e.message))) {
+      await pool.query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [hash, user.id]);
+    } else { throw e; }
+  }
 
   // Log to control audit_log (no plaintext stored — only the fact of reset).
   await control.insert('audit_log', {
