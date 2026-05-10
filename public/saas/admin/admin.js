@@ -399,6 +399,16 @@ VIEWS.tenants = async (view) => {
               onclick: () => loginAsTenant(t)
             }, '🔓 Login as ↗')
           : null,
+        // Reset the tenant admin password — generates a fresh password,
+        // updates the user row in the tenant DB, and shows the plaintext
+        // ONCE so the super-admin can copy + share with the tenant.
+        (t.status === 'active' || t.status === 'trial' || t.status === 'pending_delete')
+          ? h('button', {
+              class: 'btn xs', style: { marginRight: '.3rem', background: '#fef3c7', borderColor: '#f59e0b', color: '#92400e' },
+              title: 'Reset the password for this tenant admin user. New password is shown ONCE.',
+              onclick: () => resetTenantAdminPassword(t)
+            }, '🔑 Reset password')
+          : null,
         // Re-seed help articles: refreshes the system-seeded knowledge-base
         // entries (those tagged `system-seed`). Tenant admins keep any
         // articles they've authored themselves. Useful when we ship new
@@ -434,6 +444,42 @@ VIEWS.tenants = async (view) => {
  * inside the click handler) so popup blockers don't kick in, then
  * navigate it to the magic-link URL once the API call returns.
  */
+async function resetTenantAdminPassword(t) {
+  const email = prompt('Reset password for which user email? (leave blank for tenant contact email "' + (t.contact_email || 'unknown') + '")', '');
+  if (email === null) return;
+  const targetEmail = (email || t.contact_email || '').trim();
+  if (!targetEmail) { toast('No contact email on tenant — pass email explicitly', 'err'); return; }
+  if (!confirm('Reset password for ' + targetEmail + ' on "' + (t.org_name || t.slug) + '"? A new random password will be generated and shown to you ONCE.')) return;
+  try {
+    const r = await api('api_saas_tenants_resetUserPassword', { tenantId: t.id, email: targetEmail });
+    if (!r.ok) { toast('Reset failed', 'err'); return; }
+    // Show the new password in a modal so it can be copied. Display ONCE — closing dismisses it.
+    const dlg = document.createElement('div');
+    dlg.className = 'modal-backdrop';
+    dlg.innerHTML = '';
+    const inner = document.createElement('div');
+    inner.className = 'modal';
+    inner.style.maxWidth = '520px';
+    inner.innerHTML = ''
+      + '<div class="modal-head"><h3>🔑 Password reset</h3></div>'
+      + '<p>Workspace: <b>' + (t.slug || '') + '</b></p>'
+      + '<p>User: <b>' + (r.user.name || '') + '</b> &middot; ' + (r.user.email || '') + ' &middot; ' + (r.user.role || '') + '</p>'
+      + '<div style="font-family:ui-monospace,Menlo,monospace; font-size:1.1rem; padding:.7rem; background:#fef3c7; border:1px solid #f59e0b; border-radius:8px; text-align:center; letter-spacing:.05em" id="pw-display">' + r.new_password + '</div>'
+      + '<p class="muted" style="font-size:.85rem; margin-top:.6rem">' + (r.note || '') + '</p>'
+      + '<div class="actions" style="display:flex; gap:.4rem; justify-content:flex-end; margin-top:.8rem">'
+      + '<button id="pw-copy" class="btn small">📋 Copy password</button>'
+      + '<button id="pw-close" class="btn small primary">Done</button>'
+      + '</div>';
+    dlg.appendChild(inner);
+    document.body.appendChild(dlg);
+    inner.querySelector('#pw-copy').onclick = async () => {
+      try { await navigator.clipboard.writeText(r.new_password); toast('Copied to clipboard', 'ok'); }
+      catch (_) { toast('Copy failed — select and copy manually', 'err'); }
+    };
+    inner.querySelector('#pw-close').onclick = () => dlg.remove();
+  } catch (e) { toast('Reset failed: ' + e.message, 'err'); }
+}
+
 async function loginAsTenant(t) {
   // Open a placeholder window inside the click — browsers only allow
   // window.open without prompting if it's a direct user gesture.

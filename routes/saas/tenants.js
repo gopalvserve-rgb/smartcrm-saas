@@ -10,6 +10,8 @@
 const jwt = require('jsonwebtoken');
 const control = require('../../control/db');
 const tenantPool = require('../../utils/tenantPool');
+let _bcrypt; try { _bcrypt = require('bcryptjs'); } catch (_) { try { _bcrypt = require('bcrypt'); } catch (_) { _bcrypt = null; } }
+const _crypto = require('crypto');
 const provisioning = require('./provisioning');
 const { requireSuperAdmin, requireFullAdmin } = require('./superAdminAuth');
 const { seedTenantKnowledgeBase } = require('./kbSeed');
@@ -321,6 +323,75 @@ async function api_saas_tenants_reseedKb(token, tenantId) {
   return { ok: true, articles: n };
 }
 
+/**
+ * Reset a tenant user's password to a freshly-generated one. Returns the
+ * plaintext password to the super-admin caller for ONE-TIME display so they
+ * can share it with the tenant. The password_hash column is updated using
+ * the same bcrypt strength (cost 10) that the rest of the auth path uses.
+ *
+ * payload:
+ *   tenantId (number, required)
+ *   email    (string, optional — defaults to the tenant's contact_email)
+ *   newPassword (string, optional — when omitted, generates a 12-char
+ *               random password from a URL-safe alphabet)
+ */
+async function api_saas_tenants_resetUserPassword(token, payload) {
+  const me = await requireSuperAdmin(token);
+  const p = payload || {};
+  const tenantId = Number(p.tenantId || p.tenant_id);
+  const t = await control.findById('tenants', tenantId);
+  if (!t) throw new Error('Tenant not found');
+  if (t.status === 'deleted')   throw new Error('Tenant is deleted');
+  if (t.status === 'suspended') throw new Error('Tenant is suspended — restore first');
+  if (!_bcrypt) throw new Error('bcrypt library not installed on the server');
+
+  const targetEmail = String(p.email || t.contact_email || '').trim().toLowerCase();
+  if (!targetEmail) throw new Error('Email required (no contact_email on tenant)');
+
+  // Generate a 12-char password from a friendly alphabet (no 0/O/1/l confusion).
+  function _gen() {
+    const alpha = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+    const buf = _crypto.randomBytes(12);
+    let out = '';
+    for (let i = 0; i < 12; i++) out += alpha[buf[i] % alpha.length];
+    return out;
+  }
+  const newPassword = String(p.newPassword || '').trim() || _gen();
+  if (newPassword.length < 8) throw new Error('Password must be at least 8 chars');
+  const hash = _bcrypt.hashSync(newPassword, 10);
+
+  const pool = tenantPool.poolFor(t);
+  if (!pool) throw new Error('Could not connect to tenant DB');
+
+  // Find the user. Prefer exact email match. If no row, fallback to the
+  // first admin/manager (so a super-admin can recover access even when
+  // the contact_email row was deleted by mistake).
+  let r = await pool.query(`SELECT id, name, email, role FROM users WHERE LOWER(email) = $1 LIMIT 1`, [targetEmail]);
+  let user = r.rows[0];
+  if (!user) {
+    r = await pool.query(`SELECT id, name, email, role FROM users WHERE role = 'admin' ORDER BY id ASC LIMIT 1`);
+    user = r.rows[0];
+  }
+  if (!user) throw new Error('No matching user found in tenant DB');
+
+  await pool.query(`UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2`, [hash, user.id]);
+
+  // Log to control audit_log (no plaintext stored — only the fact of reset).
+  await control.insert('audit_log', {
+    actor_type: 'super_admin', actor_id: me.id, actor_email: me.email,
+    tenant_id: t.id, event: 'tenant.user_password_reset',
+    detail: JSON.stringify({ slug: t.slug, target_user_id: user.id, target_email: user.email })
+  });
+
+  return {
+    ok: true,
+    slug: t.slug,
+    user: { id: user.id, name: user.name, email: user.email, role: user.role },
+    new_password: newPassword,
+    note: 'Save this password now — it is shown ONCE. The tenant user can change it after logging in via Account → Change password.'
+  };
+}
+
 module.exports = {
   api_saas_tenants_list,
   api_saas_tenants_get,
@@ -331,5 +402,6 @@ module.exports = {
   api_saas_tenants_pendingDelete,
   api_saas_tenants_setModules,
   api_saas_tenants_loginAs,
-  api_saas_tenants_reseedKb
+  api_saas_tenants_reseedKb,
+  api_saas_tenants_resetUserPassword
 };
