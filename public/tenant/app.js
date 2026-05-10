@@ -19122,9 +19122,17 @@ function _initFloatingChat() {
         return;
       }
       body.innerHTML = '';
+      let _phMap = window._phoneIdToDisplay || {};
+      if (Object.keys(_phMap).length === 0) {
+        try {
+          const phs = await api('api_wa_phones_listAll');
+          phs.forEach(p => { _phMap[String(p.phone_number_id || '')] = p.display_phone_number || p.label || ''; });
+          window._phoneIdToDisplay = _phMap;
+        } catch (_) {}
+      }
       threads.slice(0, 30).forEach(t => {
         const row = document.createElement('div');
-        const unread = Number(t.unread_count) || 0;
+        const unread = Number(t.unread || t.unread_count || 0);
         row.style.cssText = `
           padding: .65rem .85rem; border-bottom: 1px solid #e2e8f0;
           cursor: pointer; display: flex; gap: .55rem;
@@ -19133,13 +19141,15 @@ function _initFloatingChat() {
         row.onmouseenter = () => row.style.background = '#f1f5f9';
         row.onmouseleave = () => row.style.background = unread > 0 ? '#fef3c7' : '#fff';
         const lastTs = t.last_at ? new Date(t.last_at).toLocaleString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '';
-        const preview = (t.last_body || '').slice(0, 60);
+        const preview = (t.last_message || t.last_body || '').slice(0, 60);
+        const ourNum = _phMap[String(t.phone_number_id || '')] || '';
         row.innerHTML = `
           <div style="flex: 1; min-width: 0;">
             <div style="display: flex; gap: .35rem; align-items: baseline;">
               <strong style="font-size: .9rem; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${esc(t.lead_name || t.phone)}</strong>
               <span style="font-size: .7rem; color: #94a3b8; flex-shrink: 0;">${esc(lastTs)}</span>
             </div>
+            ${ourNum ? `<div style="font-size: .68rem; color: #6366f1; margin-top: 1px;">on ${esc(ourNum)}</div>` : ''}
             <div style="font-size: .8rem; color: #64748b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${esc(preview)}</div>
           </div>
           ${unread > 0 ? `<span style="background: #ef4444; color: #fff; font-size: .7rem; font-weight: 700; padding: 1px 7px; border-radius: 999px; align-self: center;">${unread}</span>` : ''}
@@ -19159,15 +19169,70 @@ function _initFloatingChat() {
     body.innerHTML = `
       <div style="padding: .55rem .85rem; background: #f1f5f9; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; gap: .5rem;">
         <button id="chat-back-btn" style="background: transparent; border: none; cursor: pointer; font-size: 1rem;">\u2190</button>
-        <strong style="flex: 1; font-size: .9rem;">${esc(thread.lead_name || thread.phone)}</strong>
+        <div style="flex: 1; min-width: 0;">
+          <div style="font-size: .9rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${esc(thread.lead_name || thread.phone)}</div>
+          ${(window._phoneIdToDisplay && window._phoneIdToDisplay[String(thread.phone_number_id || '')]) ? `<div style="font-size: .7rem; color: #6366f1;">on ${esc(window._phoneIdToDisplay[String(thread.phone_number_id || '')])}</div>` : ''}
+        </div>
         <a href="#/whatsbot/chat" style="font-size: .78rem; color: #6366f1;">Open full</a>
       </div>
       <div id="chat-thread-msgs" style="flex: 1; overflow-y: auto; padding: .65rem; background: #efeae2; min-height: 280px;"></div>
-      <div style="padding: .5rem; background: #fff; border-top: 1px solid #e2e8f0; display: flex; gap: .35rem;">
+      <div id="chat-thread-preview" style="padding: .35rem .55rem; display: none; background: #f8fafc; border-top: 1px solid #e2e8f0; font-size: .8rem;"></div>
+      <div style="padding: .5rem; background: #fff; border-top: 1px solid #e2e8f0; display: flex; gap: .35rem; align-items: center;">
+        <button id="chat-thread-attach" title="Attach photo / file" style="background: transparent; border: 1px solid #cbd5e1; cursor: pointer; padding: .4rem .55rem; border-radius: 18px; font-size: 1rem;">📎</button>
+        <input id="chat-thread-file" type="file" hidden accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt">
         <input id="chat-thread-input" type="text" placeholder="Type a reply..." style="flex: 1; padding: .55rem .65rem; border: 1px solid #cbd5e1; border-radius: 18px; outline: none;">
         <button id="chat-thread-send" style="background: #25d366; color: #fff; border: none; padding: .55rem 1rem; border-radius: 18px; cursor: pointer; font-weight: 600;">Send</button>
       </div>
     `;
+    let _pending = null;
+    const fileInput = document.getElementById('chat-thread-file');
+    const attachBtn = document.getElementById('chat-thread-attach');
+    const previewSlot = document.getElementById('chat-thread-preview');
+    function renderPreview() {
+      previewSlot.innerHTML = '';
+      if (!_pending) { previewSlot.style.display = 'none'; return; }
+      previewSlot.style.display = 'block';
+      const isImg = (_pending.mime_type || '').startsWith('image/');
+      const node = document.createElement('div');
+      node.style.cssText = 'display: flex; align-items: center; gap: .4rem;';
+      if (isImg && _pending.url) {
+        node.innerHTML = '<img src="' + esc(_pending.url) + '" style="width: 38px; height: 38px; object-fit: cover; border-radius: 4px;"><span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">' + esc(_pending.filename || 'image') + '</span>';
+      } else {
+        node.innerHTML = '<span>📄</span><span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">' + esc(_pending.filename || 'file') + '</span>';
+      }
+      const xBtn = document.createElement('button');
+      xBtn.textContent = 'x';
+      xBtn.style.cssText = 'background: transparent; border: none; cursor: pointer; font-size: 1.1rem; color: #64748b;';
+      xBtn.onclick = () => { _pending = null; fileInput.value = ''; renderPreview(); };
+      node.appendChild(xBtn);
+      previewSlot.appendChild(node);
+    }
+    attachBtn.onclick = () => fileInput.click();
+    fileInput.addEventListener('change', async () => {
+      const f = fileInput.files && fileInput.files[0];
+      if (!f) return;
+      if (f.size > 25 * 1024 * 1024) {
+        toast('File too large (max 25 MB)', 'err'); fileInput.value = ''; return;
+      }
+      previewSlot.style.display = 'block';
+      previewSlot.innerHTML = '<span class="muted">Uploading ' + esc(f.name) + '...</span>';
+      try {
+        const fd = new FormData();
+        fd.append('file', f);
+        const r = await fetch('/api/wa/upload', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + (CRM.token || '') },
+          body: fd
+        });
+        const j = await r.json();
+        if (!r.ok || j.error) throw new Error(j.error || ('upload failed (' + r.status + ')'));
+        _pending = j;
+        renderPreview();
+      } catch (e) {
+        _pending = null; fileInput.value = ''; previewSlot.style.display = 'none';
+        toast('Upload failed: ' + e.message, 'err');
+      }
+    });
     body.style.padding = '0';
     body.style.display = 'flex';
     body.style.flexDirection = 'column';
@@ -19176,14 +19241,25 @@ function _initFloatingChat() {
     const send = document.getElementById('chat-thread-send');
     send.onclick = async () => {
       const t = inp.value.trim();
-      if (!t) return;
-      send.disabled = true;
+      if (!t && !_pending) return;
+      send.disabled = true; const _orig = send.textContent; send.textContent = 'Sending...';
       try {
-        await api('api_wb_send', { phone: thread.phone, text: t, leadId: thread.lead_id || null });
-        inp.value = '';
+        const payload = {
+          phone: thread.phone, text: t,
+          lead_id: thread.lead_id || null,
+          from_phone_number_id: thread.phone_number_id || null
+        };
+        if (_pending) {
+          payload.media_id = _pending.wa_media_id;
+          payload.media_type = (typeof waMediaTypeFor === 'function') ? waMediaTypeFor(_pending.mime_type) : 'document';
+          payload.media_url = _pending.url;
+          payload.filename = _pending.filename || undefined;
+        }
+        await api('api_wb_chat_send', payload);
+        inp.value = ''; _pending = null; if (fileInput) fileInput.value = ''; renderPreview();
         await loadMsgs();
-      } catch (e) { toast(e.message, 'err'); }
-      send.disabled = false;
+      } catch (e) { toast('Send failed: ' + e.message, 'err'); }
+      send.disabled = false; send.textContent = _orig;
     };
     inp.addEventListener('keydown', e => { if (e.key === 'Enter') send.click(); });
     await loadMsgs();
