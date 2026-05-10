@@ -70,6 +70,7 @@ const ROUTE_FILES = [
   'quotations',
   'modules',
   'crmCopilot',
+  'waBotFlows',
 ];
 
 const API = {};
