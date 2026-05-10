@@ -147,6 +147,18 @@ async function _canAssignToUser(userId, forceBypass) {
   if (!userId) return { ok: true };
   const user = await db.findById('users', userId).catch(() => null);
   if (!user) return { ok: true };
+  // Hard skip: user is explicitly paused for incoming lead routing.
+  // This is independent of is_active (which gates login). Setting
+  // paused_for_leads = TRUE makes auto-assign rules + every campaign
+  // distribution mode skip this user. Existing leads stay where they are.
+  if (user.paused_for_leads === true || Number(user.paused_for_leads) === 1) {
+    return { ok: false, reason: 'user is paused for incoming leads', paused: true };
+  }
+  // is_active = 0 gates login but we ALSO want auto-routing to avoid
+  // deactivated users — otherwise leads pile up on people who have left.
+  if (user.is_active != null && Number(user.is_active) === 0) {
+    return { ok: false, reason: 'user is deactivated', deactivated: true };
+  }
   const dailyCap = Number(user.daily_lead_cap) || 0;
   const monthlyCap = Number(user.monthly_lead_cap) || 0;
   if (dailyCap <= 0 && monthlyCap <= 0) return { ok: true };

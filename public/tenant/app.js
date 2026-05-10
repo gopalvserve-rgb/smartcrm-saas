@@ -14742,8 +14742,12 @@ VIEWS.users = async (view) => {
     ),
     h('div', { class: 'table-wrap' }, h('table', {},
       h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Email'), h('th', {}, 'Role'), h('th', {}, 'Reports To'), h('th', {}, 'Department'), h('th', {}))),
-      h('tbody', {}, ...users.map(u => h('tr', {},
-        h('td', {}, u.name), h('td', {}, u.email), h('td', {}, u.role),
+      h('tbody', {}, ...users.map(u => h('tr', { style: u.paused_for_leads ? { background: '#fffbeb' } : {} },
+        h('td', {},
+          u.name,
+          u.paused_for_leads ? h('span', { style: { marginLeft: '.4rem', fontSize: '.7rem', background: '#f59e0b', color: '#fff', padding: '1px 7px', borderRadius: '999px', fontWeight: 600, verticalAlign: 'middle' }, title: 'Lead routing paused — no future auto-assignments' }, '⏸️ PAUSED') : null
+        ),
+        h('td', {}, u.email), h('td', {}, u.role),
         h('td', {}, u.parent_name || '—'), h('td', {}, u.department || ''),
         h('td', { style: { whiteSpace: 'nowrap' } },
           h('button', { class: 'btn sm', onclick: () => openUserModal(u), title: 'Edit' }, '✎'),
@@ -14817,6 +14821,19 @@ async function openUserModal(u) {
             'Limits how many leads auto-assignment (round-robin / website webhook / assignment rules) can route to this rep. Manual admin assignment bypasses. Set to 0 for no cap.')),
         field('daily_lead_cap',   'Daily cap (leads/day)',    u.daily_lead_cap   || 0, { type: 'number', min: 0 }),
         field('monthly_lead_cap', 'Monthly cap (leads/month)', u.monthly_lead_cap || 0, { type: 'number', min: 0 }),
+
+        // PAUSE INCOMING LEADS — independent of is_active. Setting this
+        // makes auto-assign rules + every campaign mode + WA inbound
+        // routing skip the user. Existing leads stay put; un-pausing
+        // resumes routing for *future* leads only.
+        h('div', { class: 'f-row full', style: { background: u.paused_for_leads ? '#fef3c7' : '#f1f5f9', border: '1px solid ' + (u.paused_for_leads ? '#f59e0b' : '#e2e8f0'), borderRadius: '8px', padding: '.65rem .85rem', margin: '.5rem 0' } },
+          h('label', { style: { display: 'flex', alignItems: 'center', gap: '.55rem', cursor: 'pointer', margin: 0 } },
+            h('input', { type: 'checkbox', name: 'paused_for_leads', checked: !!u.paused_for_leads, value: '1', style: { width: '18px', height: '18px' } }),
+            h('span', {},
+              h('strong', {}, u.paused_for_leads ? '⏸️ Paused — no future leads will be routed here' : '▶️ Receiving leads normally'),
+              h('div', { class: 'muted', style: { fontSize: '.8rem', marginTop: '.15rem' } },
+                'Pauses auto-assign rules, all campaign distribution modes (round-robin, equal, percentage, conditional, on-demand pull), and WhatsApp inbound auto-routing for THIS user. Existing leads stay assigned. Un-tick to resume.')
+          ))),
 
         // Scheduling — when set, "📅 Send meeting link" buttons on
         // leads/customers prefill WhatsApp with this URL so prospects
@@ -14940,6 +14957,7 @@ async function openUserModal(u) {
             reference_2_relation:    fd.get('reference_2_relation')    || '',
             daily_lead_cap:          Number(fd.get('daily_lead_cap'))   || 0,
             monthly_lead_cap:        Number(fd.get('monthly_lead_cap')) || 0,
+            paused_for_leads:        fd.get('paused_for_leads') ? true : false,
             calendly_url:            fd.get('calendly_url')            || '',
             autodial_on:             fd.get('autodial_on') ? 1 : 0
           };

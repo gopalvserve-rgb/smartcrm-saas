@@ -73,8 +73,19 @@ async function pickAssigneeFromRules(lead) {
   for (const rule of rules) {
     const fv = _readField(lead, rule.field);
     if (!_matches(rule.operator, fv, rule.value)) continue;
-    const ids = String(rule.assigned_to || '')
+    let ids = String(rule.assigned_to || '')
       .split(',').map(s => Number(s.trim())).filter(Boolean);
+    if (!ids.length) continue;
+    // Filter out users who are paused or deactivated. If the rule's only
+    // candidate is paused, fall through to the next rule.
+    try {
+      const allUsers = await db.getAll('users');
+      const eligible = new Set(allUsers.filter(u =>
+        Number(u.is_active != null ? u.is_active : 1) === 1 &&
+        u.paused_for_leads !== true && Number(u.paused_for_leads) !== 1
+      ).map(u => Number(u.id)));
+      ids = ids.filter(id => eligible.has(Number(id)));
+    } catch (_) {}
     if (!ids.length) continue;
     if (ids.length === 1) return ids[0];
     // Round robin: fewest leads created today wins

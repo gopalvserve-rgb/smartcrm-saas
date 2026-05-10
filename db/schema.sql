@@ -507,6 +507,14 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS reference_2_name      TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS reference_2_phone     TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS reference_2_relation  TEXT;
 
+-- Pause incoming leads for this user. Independent of is_active (which
+-- gates login). When paused_for_leads = TRUE, every future-lead routing
+-- decision skips the user: auto-assign rules, campaign distribution
+-- (round_robin / equal / percentage / conditional / on_demand pull),
+-- WhatsApp inbound auto-routing, bulk-assign loops. Existing leads stay
+-- with the user; un-pausing simply resumes future routing.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS paused_for_leads BOOLEAN NOT NULL DEFAULT FALSE;
+
 -- Cached approved templates from Meta (refreshed periodically)
 CREATE TABLE IF NOT EXISTS wa_templates (
   id              SERIAL PRIMARY KEY,

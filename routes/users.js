@@ -19,7 +19,8 @@ async function api_users_list(token) {
       daily_lead_cap:   Number(u.daily_lead_cap)   || 0,
       monthly_lead_cap: Number(u.monthly_lead_cap) || 0,
       calendly_url: u.calendly_url || '',
-      autodial_on: Number(u.autodial_on != null ? u.autodial_on : 1) ? 1 : 0
+      autodial_on: Number(u.autodial_on != null ? u.autodial_on : 1) ? 1 : 0,
+      paused_for_leads: !!u.paused_for_leads
     }));
 }
 
@@ -60,6 +61,7 @@ async function api_users_create(token, payload) {
     reference_2_relation:    p.reference_2_relation    || '',
     daily_lead_cap:          Math.max(0, Number(p.daily_lead_cap)   || 0),
     monthly_lead_cap:        Math.max(0, Number(p.monthly_lead_cap) || 0),
+    paused_for_leads:        p.paused_for_leads === true || Number(p.paused_for_leads) === 1,
     is_active: 1
   });
   return { id };
@@ -106,6 +108,7 @@ async function api_users_update(token, id, patch) {
     // their own caps).
     if ('daily_lead_cap' in p)   allowed.daily_lead_cap   = Math.max(0, Number(p.daily_lead_cap)   || 0);
     if ('monthly_lead_cap' in p) allowed.monthly_lead_cap = Math.max(0, Number(p.monthly_lead_cap) || 0);
+    if ('paused_for_leads' in p) allowed.paused_for_leads = (p.paused_for_leads === true || Number(p.paused_for_leads) === 1);
   }
   if (p.password) allowed.password_hash = hashPassword(p.password);
   await db.update('users', id, allowed);

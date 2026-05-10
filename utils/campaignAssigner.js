@@ -97,8 +97,11 @@ async function pickAgentForCampaign(campaignId) {
                           AND l.assigned_to = ca.user_id
                           AND COALESCE(l.is_hidden, 0) = 0), 0) AS open_count
        FROM campaign_agents ca
+       JOIN users u ON u.id = ca.user_id
       WHERE ca.campaign_id = $1
-        AND ca.is_active   = 1`,
+        AND ca.is_active   = 1
+        AND COALESCE(u.is_active, 1) = 1
+        AND COALESCE(u.paused_for_leads, FALSE) = FALSE`,
     [cid]
   );
   const agents = r.rows;
@@ -327,8 +330,9 @@ async function pickAgentForCampaignWithLead(campaignId, lead) {
   // Pre-fetch active agent set so we can validate rule.then.user_id
   // and also fall back to round_robin if no rule matches.
   const ag = await db.query(
-    `SELECT user_id, rr_position FROM campaign_agents
-      WHERE campaign_id = $1 AND is_active = 1`,
+    `SELECT user_id, rr_position FROM campaign_agents ca
+       JOIN users u ON u.id = ca.user_id
+      WHERE ca.campaign_id = $1 AND ca.is_active = 1 AND COALESCE(u.is_active, 1) = 1 AND COALESCE(u.paused_for_leads, FALSE) = FALSE`,
     [cid]
   );
   const activeAgentIds = new Set(ag.rows.map(r => Number(r.user_id)));

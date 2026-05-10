@@ -93,7 +93,8 @@ const SCHEMA = {
               'is_active', 'created_at',
               'totp_secret', 'totp_enabled', 'totp_verified_at',
               'daily_lead_cap', 'monthly_lead_cap',
-              'calendly_url', 'calendly_webhook_token'],
+              'calendly_url', 'calendly_webhook_token',
+              'paused_for_leads'],
     json: []
   },
   leads: {
