@@ -1616,6 +1616,131 @@ async function api_aibot_heat_test_alert(token) {
   };
 }
 
+/**
+ * Heat diagnostics — returns the last N leads where heat fired, plus the
+ * notification rows we created for them, plus the most recent inbound
+ * messages so we can see WHAT triggered the score.
+ *
+ * Lets a tenant admin debug "why didn't I get an alert" without DB shell
+ * access.
+ */
+async function api_aibot_heat_diagnostics(token, opts) {
+  const me = await authUser(token);
+  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  await _ensureAiBotColumns();
+  const limit = Math.max(1, Math.min(50, Number((opts && opts.limit) || 20)));
+
+  // Last leads with a heat signal, regardless of whether a notification row exists.
+  let leads = [];
+  try {
+    const r = await db.query(
+      `SELECT id, name, phone, status_id, assigned_to,
+              heat_score, heat_label, heat_signal, heat_action_required, heat_updated_at
+         FROM leads
+        WHERE heat_label IS NOT NULL
+        ORDER BY heat_updated_at DESC NULLS LAST
+        LIMIT $1`, [limit]);
+    leads = r.rows;
+  } catch (e) {
+    return { error: 'leads heat columns missing — make sure the migration has run: ' + e.message, leads: [] };
+  }
+
+  // For each lead, gather the most recent heat_alert notifications (across users).
+  // Also count unread vs read so we can tell whether the recipient saw it.
+  const notifByLead = new Map();
+  try {
+    const r = await db.query(
+      `SELECT id, user_id, title, body, link, is_read, created_at
+         FROM notifications
+        WHERE type = 'heat_alert'
+          AND created_at > NOW() - INTERVAL '7 days'
+        ORDER BY created_at DESC
+        LIMIT 500`);
+    for (const n of r.rows) {
+      // The link is '/#/leads/<id>' — extract the lead id back out.
+      const m = String(n.link || '').match(/leads\/(\d+)/);
+      if (!m) continue;
+      const lid = Number(m[1]);
+      if (!notifByLead.has(lid)) notifByLead.set(lid, []);
+      notifByLead.get(lid).push(n);
+    }
+  } catch (_) {}
+
+  // Last inbound text per lead — gives the agent the exact phrase that triggered.
+  const lastInbound = new Map();
+  try {
+    if (leads.length) {
+      const phones = leads.map(l => String(l.phone || '')).filter(Boolean);
+      if (phones.length) {
+        const r = await db.query(
+          `SELECT DISTINCT ON (from_number) from_number, body, created_at
+             FROM whatsapp_messages
+            WHERE direction = 'in' AND from_number = ANY($1::text[])
+            ORDER BY from_number, created_at DESC`, [phones]);
+        r.rows.forEach(row => lastInbound.set(String(row.from_number), { body: row.body, created_at: row.created_at }));
+      }
+    }
+  } catch (_) {}
+
+  // Resolve user names for the assigned_to + the notification recipients.
+  const userIds = new Set();
+  leads.forEach(l => { if (l.assigned_to) userIds.add(Number(l.assigned_to)); });
+  notifByLead.forEach(arr => arr.forEach(n => { if (n.user_id) userIds.add(Number(n.user_id)); }));
+  const userById = new Map();
+  if (userIds.size) {
+    try {
+      const r = await db.query(`SELECT id, name FROM users WHERE id = ANY($1::int[])`, [Array.from(userIds)]);
+      r.rows.forEach(u => userById.set(Number(u.id), u.name));
+    } catch (_) {}
+  }
+
+  // Count push subscriptions (web + FCM) per user — surfaces whether the
+  // assigned agent / recipients can actually receive a mobile push.
+  const subCounts = new Map();
+  try {
+    const w = await db.query(`SELECT user_id, COUNT(*)::int AS n FROM push_subscriptions GROUP BY user_id`);
+    w.rows.forEach(r => subCounts.set(Number(r.user_id), { web: Number(r.n), fcm: 0 }));
+  } catch (_) {}
+  try {
+    const f = await db.query(`SELECT user_id, COUNT(*)::int AS n FROM fcm_tokens GROUP BY user_id`);
+    f.rows.forEach(r => {
+      const cur = subCounts.get(Number(r.user_id)) || { web: 0, fcm: 0 };
+      cur.fcm = Number(r.n);
+      subCounts.set(Number(r.user_id), cur);
+    });
+  } catch (_) {}
+
+  return {
+    leads: leads.map(l => {
+      const notifs = notifByLead.get(Number(l.id)) || [];
+      return {
+        id: l.id,
+        name: l.name,
+        phone: l.phone,
+        assigned_to: l.assigned_to,
+        assigned_name: userById.get(Number(l.assigned_to)) || null,
+        heat_score: l.heat_score,
+        heat_label: l.heat_label,
+        heat_signal: l.heat_signal,
+        heat_action_required: l.heat_action_required,
+        heat_updated_at: l.heat_updated_at,
+        last_inbound: lastInbound.get(String(l.phone || '')) || null,
+        notifications: notifs.map(n => ({
+          id: n.id, user_id: n.user_id,
+          user_name: userById.get(Number(n.user_id)) || ('User #' + n.user_id),
+          title: n.title, body: n.body, is_read: Number(n.is_read) === 1,
+          created_at: n.created_at,
+          subs: subCounts.get(Number(n.user_id)) || { web: 0, fcm: 0 }
+        }))
+      };
+    }),
+    summary: {
+      leads_with_heat: leads.length,
+      total_alerts_7d: Array.from(notifByLead.values()).reduce((s, a) => s + a.length, 0)
+    }
+  };
+}
+
 module.exports = {
   // Public tenant API (auto-exposed via tenantApi.js loader)
   api_aibot_settings_get, api_aibot_settings_save,
@@ -1623,6 +1748,7 @@ module.exports = {
   api_aibot_kb_list, api_aibot_kb_save_text, api_aibot_kb_delete, api_aibot_kb_toggle, api_aibot_kb_crawl_url, api_aibot_kb_set_phone, api_aibot_kb_assign_bulk,
   api_aibot_kb_save_attachment, api_aibot_kb_set_attachment_meta,
   api_aibot_heat_test_alert,
+  api_aibot_heat_diagnostics,
   api_aibot_chatlog_list, api_aibot_usage_summary, api_aibot_estimator,
   api_aibot_send_draft, api_aibot_discard_draft,
   // Internal — called from whatsbot.js + server.tenant.js upload route

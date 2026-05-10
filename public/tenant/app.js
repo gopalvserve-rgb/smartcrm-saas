@@ -2425,6 +2425,81 @@ function tatOverLabel(l) {
 // Heat chip — visual badge on a lead row when AI has flagged
 // buying intent on a recent inbound. Colours scale up with heat.
 // ============================================================
+async function openHeatTraceModal() {
+  const modal = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) modal.remove(); } });
+  const dlg = h('div', { class: 'modal', style: { maxWidth: '900px', maxHeight: '85vh', overflow: 'auto' } });
+  dlg.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, '🔥 Heat trace — last 20 leads'),
+    h('button', { class: 'btn icon', onclick: () => modal.remove() }, '✕')
+  ));
+  const body = h('div', {}, h('div', { class: 'loading' }, 'Loading\u2026'));
+  dlg.appendChild(body);
+  modal.appendChild(dlg);
+  document.body.appendChild(modal);
+  let data;
+  try { data = await api('api_aibot_heat_diagnostics', { limit: 20 }); }
+  catch (e) { body.innerHTML = ''; body.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+  body.innerHTML = '';
+  if (data.error) { body.appendChild(h('div', { class: 'error-box' }, data.error)); return; }
+  body.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+    data.summary.leads_with_heat + ' leads have a heat label \u00b7 ' +
+    data.summary.total_alerts_7d + ' alert notifications written in the last 7 days. ' +
+    'Each row shows: heat label, the inbound that triggered it, and whether a notification row was created for the right user.'));
+  if (!data.leads.length) {
+    body.appendChild(h('p', { class: 'muted' }, 'No leads have heat tags yet. Send a high-intent WhatsApp inbound to one of your numbers and reload this trace.'));
+    return;
+  }
+  data.leads.forEach(l => {
+    const labelMap = {
+      cold:     { emoji: '\u2744\ufe0f', bg: '#dbeafe', fg: '#1e40af' },
+      warm:     { emoji: '\u2728', bg: '#fef3c7', fg: '#92400e' },
+      hot:      { emoji: '\ud83d\udd25', bg: '#fed7aa', fg: '#9a3412' },
+      very_hot: { emoji: '\ud83d\udd25\ud83d\udd25', bg: '#fecaca', fg: '#991b1b' },
+      on_fire:  { emoji: '\ud83d\udd25\ud83d\udd25\ud83d\udd25', bg: '#fca5a5', fg: '#7f1d1d' }
+    };
+    const m = labelMap[l.heat_label] || labelMap.warm;
+    const card = h('div', { class: 'card', style: { borderLeft: '4px solid ' + m.fg, marginBottom: '.5rem' } });
+    card.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '.5rem' } },
+      h('div', {},
+        h('b', {}, l.name || l.phone || ('Lead #' + l.id)),
+        h('span', { style: { padding: '1px 7px', borderRadius: '999px', background: m.bg, color: m.fg, fontWeight: 700, fontSize: '.7rem', marginLeft: '.4rem' } },
+          m.emoji + ' ' + l.heat_label + ' (' + (l.heat_score || 0) + ')'),
+        h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.2rem' } },
+          'signal: ' + (l.heat_signal || '—') + '   \u00b7   action: ' + (l.heat_action_required || '—') + '   \u00b7   updated: ' + fmtDate(l.heat_updated_at, 'relative') + '   \u00b7   assigned: ' + (l.assigned_name || 'unassigned'))
+      ),
+      h('button', { class: 'btn small', onclick: () => { modal.remove(); openLeadModal(l.id); } }, 'Open lead')
+    ));
+    if (l.last_inbound) {
+      card.appendChild(h('div', { style: { marginTop: '.5rem', padding: '.4rem .55rem', background: '#f8fafc', borderRadius: '6px', fontSize: '.82rem' } },
+        h('b', {}, '📥 Last inbound: '),
+        h('span', {}, String(l.last_inbound.body || '').slice(0, 200)),
+        h('span', { class: 'muted', style: { marginLeft: '.4rem', fontSize: '.74rem' } }, fmtDate(l.last_inbound.created_at, 'relative'))));
+    }
+    if (l.notifications.length === 0) {
+      card.appendChild(h('div', { style: { marginTop: '.5rem', padding: '.4rem .55rem', background: '#fef3c7', border: '1px solid #fbbf24', borderRadius: '6px', fontSize: '.82rem' } },
+        '\u26a0\ufe0f No notification row found for this heat upgrade. Causes: heat level fell below the configured notify-levels, OR no recipients matched (lead unassigned + no admins active).'));
+    } else {
+      const notifBox = h('div', { style: { marginTop: '.5rem' } });
+      l.notifications.forEach(n => {
+        const subStr = (n.subs.web || n.subs.fcm)
+          ? ('🌐 ' + (n.subs.web || 0) + ' web · 📱 ' + (n.subs.fcm || 0) + ' mobile')
+          : '⚠️ no push subscriptions registered';
+        const rowBg = n.is_read ? '#f1f5f9' : '#dcfce7';
+        notifBox.appendChild(h('div', { style: { padding: '.35rem .55rem', background: rowBg, border: '1px solid ' + (n.is_read ? '#cbd5e1' : '#86efac'), borderRadius: '6px', fontSize: '.8rem', marginBottom: '.25rem' } },
+          h('b', {}, '🔔 ' + (n.user_name || ('User #' + n.user_id))),
+          ' \u00b7 ',
+          n.is_read ? h('span', { class: 'muted' }, 'read') : h('span', { style: { color: '#166534', fontWeight: 700 } }, 'UNREAD'),
+          ' \u00b7 ',
+          h('span', { class: 'muted', style: { fontSize: '.74rem' } }, fmtDate(n.created_at, 'relative')),
+          ' \u00b7 ',
+          h('span', { class: 'muted', style: { fontSize: '.74rem' } }, subStr)
+        ));
+      });
+      card.appendChild(notifBox);
+    }
+    body.appendChild(card);
+  });
+}
 function renderHeatChip(l) {
   if (!l || !l.heat_label) return null;
   const map = {
@@ -7805,7 +7880,8 @@ async function _aibotSettingsView(currentPhId) {
 
   wrap.appendChild(h('div', { class: 'card', style: { borderLeft: '4px solid #ef4444' } },
     h('h3', { style: { marginTop: 0 } }, '🔥 Hot lead alerts'),
-    h('div', { style: { display: 'flex', justifyContent: 'flex-end', marginTop: '-1.6rem', marginBottom: '.4rem' } },
+    h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: '.4rem', marginTop: '-1.6rem', marginBottom: '.4rem' } },
+      h('button', { type: 'button', class: 'btn small ghost', onclick: async () => { try { await openHeatTraceModal(); } catch (e) { toast(e.message, 'err'); } } }, '🔥 Heat trace'),
       h('button', { type: 'button', class: 'btn small ghost', onclick: async (ev) => {
         const btn = ev.currentTarget;
         btn.disabled = true; const _orig = btn.textContent;
