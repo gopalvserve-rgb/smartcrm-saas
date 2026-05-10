@@ -131,9 +131,47 @@ app.post('/api/recordings', upload.single('audio'), async (req, res) => {
     const me = await authUser(token);
     if (!req.file) return res.status(400).json({ error: 'audio file required' });
 
-    const phone = (req.body.phone || '').toString();
+    let phone = (req.body.phone || '').toString().trim();
+    const filename = (req.body.filename || req.file.originalname || '').toString();
+    const startedAt = req.body.started_at ? new Date(req.body.started_at) : new Date();
+    const lastFourHint = (req.body.lastfour_hint || '').toString().slice(0, 6);
+    const contactHint  = (req.body.contact_hint  || '').toString().slice(0, 80);
     let leadId = Number(req.body.lead_id) || null;
-    if (!leadId) {
+
+    // Server-side filename parser fallback — if the cap-app couldn't supply a phone
+    // (app was killed during the call, or filename has only a contact name) we try
+    // to extract one from the filename ourselves before falling back to timestamp
+    // matching against recent call_events.
+    if (!phone && filename) {
+      const m = filename.match(/(?:91|\+91|091)?[6-9]\d{9}/) || filename.match(/\d{10,15}/);
+      if (m) phone = m[0];
+    }
+
+    // Timestamp + last-4 fallback: when phone is unknown, find a recent call_event
+    // (within ±5 min of started_at) on this user. If lastfour_hint matches the tail
+    // of the call_event's phone, that's the one. Otherwise pick the closest in time.
+    if (!phone || !leadId) {
+      try {
+        const ev = await db.query(
+          `SELECT id, phone, lead_id, created_at FROM call_events
+             WHERE user_id = $1
+               AND created_at BETWEEN $2 AND $3
+             ORDER BY created_at DESC LIMIT 20`,
+          [me.id, new Date(startedAt.getTime() - 5*60*1000), new Date(startedAt.getTime() + 5*60*1000)]
+        );
+        let pick = null;
+        if (lastFourHint && /^\d{3,5}$/.test(lastFourHint)) {
+          pick = ev.rows.find(r => String(r.phone || '').endsWith(lastFourHint));
+        }
+        if (!pick) pick = ev.rows[0]; // closest in time
+        if (pick) {
+          if (!phone) phone = pick.phone || '';
+          if (!leadId && pick.lead_id) leadId = pick.lead_id;
+        }
+      } catch (e) { console.warn('[/api/recordings] call_event lookup failed:', e.message); }
+    }
+
+    if (!leadId && phone) {
       const lead = await _findLeadByPhone(phone);
       if (lead) leadId = lead.id;
     }

@@ -845,10 +845,42 @@ app.post('/api/recordings', _recUpload.single('audio'), (req, res, next) => {
         const token = (req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
         const me = await authUser(token);
         if (!req.file) return res.status(400).json({ error: 'audio file required' });
-        const phone = String(req.body.phone || '').trim();
+        let phone = String(req.body.phone || '').trim();
         const direction = String(req.body.direction || 'out').toLowerCase();
+        const filename = String(req.body.filename || (req.file && req.file.originalname) || '');
+        const startedAt = req.body.started_at ? new Date(req.body.started_at) : new Date();
+        const lastFourHint = String(req.body.lastfour_hint || '').slice(0, 6);
         let leadId = Number(req.body.lead_id) || null;
         let autoCreated = false;
+        // Filename fallback: if cap-app couldn't supply a phone, try to dig one out
+        // of the filename. Useful when the OEM file landed but PhoneStateReceiver missed.
+        if (!phone && filename) {
+          const m = filename.match(/(?:91|\+91|091)?[6-9]\d{9}/) || filename.match(/\d{10,15}/);
+          if (m) phone = m[0];
+        }
+        // Timestamp + last-4 fallback: when phone is still unknown, find a recent
+        // call_event (within +/- 5 min of started_at) on this user. lastfour_hint matches
+        // tail of phone if filename only had a contact name + last-4 (Samsung style).
+        if (!phone || !leadId) {
+          try {
+            const ev = await db.query(
+              `SELECT id, phone, lead_id, created_at FROM call_events
+                 WHERE user_id = $1
+                   AND created_at BETWEEN $2 AND $3
+                 ORDER BY created_at DESC LIMIT 20`,
+              [me.id, new Date(startedAt.getTime() - 5*60*1000), new Date(startedAt.getTime() + 5*60*1000)]
+            );
+            let pick = null;
+            if (lastFourHint && /^\d{3,5}$/.test(lastFourHint)) {
+              pick = ev.rows.find(r => String(r.phone || '').endsWith(lastFourHint));
+            }
+            if (!pick) pick = ev.rows[0];
+            if (pick) {
+              if (!phone) phone = pick.phone || '';
+              if (!leadId && pick.lead_id) leadId = pick.lead_id;
+            }
+          } catch (e) { console.warn('[/api/recordings] call_event lookup failed:', e.message); }
+        }
         if (!leadId && phone) {
           const lead = await recRoutes._findLeadByPhone(phone);
           if (lead) leadId = lead.id;

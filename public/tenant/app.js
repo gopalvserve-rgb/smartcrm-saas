@@ -18300,12 +18300,14 @@ function parseRecordingFilename(name, fallbackTimestamp) {
 
   // ---- Date / time extraction ----
   let startedAt = fallbackTimestamp || Date.now();
-  // Try Samsung YYMMDD_HHMMSS first (most common pattern in 2024+)
-  const dt2 = name.match(/\b(\d{2})(\d{2})(\d{2})[_\-\s](\d{2})(\d{2})(\d{2})\b/);
-  // Try YYYYMMDD_HHMMSS (Pixel / Samsung older firmware)
-  const dt1 = name.match(/\b(\d{4})(\d{2})(\d{2})[_\-\sT](\d{2})(\d{2})(\d{2})\b/);
-  // Try ISO-ish YYYY-MM-DD HH-MM-SS
-  const dt3 = name.match(/\b(\d{4})-(\d{2})-(\d{2})[\s_T]+(\d{2})[-:]?(\d{2})[-:]?(\d{2})\b/);
+  // Try YYYYMMDD_HHMMSS first (Pixel / older Samsung — 14 digits is unambiguous)
+  // and only fall back to YYMMDD_HHMMSS (12 digits) if that doesn't match. Use
+  // (^|[^0-9]) / (?=$|[^0-9]) instead of \b — \b doesn't fire between '_'
+  // and a digit (both are word chars), so the natural Samsung separator '_'
+  // breaks the regex.
+  const dt1 = name.match(/(?:^|[^0-9])(\d{4})(\d{2})(\d{2})[_\-\sT](\d{2})(\d{2})(\d{2})(?=$|[^0-9])/);
+  const dt2 = name.match(/(?:^|[^0-9])(\d{2})(\d{2})(\d{2})[_\-\s](\d{2})(\d{2})(\d{2})(?=$|[^0-9])/);
+  const dt3 = name.match(/(?:^|[^0-9])(\d{4})-(\d{2})-(\d{2})[\s_T]+(\d{2})[-:]?(\d{2})[-:]?(\d{2})(?=$|[^0-9])/);
   if (dt1) {
     const [, y, mo, d, h, mi, s] = dt1;
     const ts = new Date(`${y}-${mo}-${d}T${h}:${mi}:${s}`).getTime();
@@ -18405,6 +18407,9 @@ function parseRecordingFilename(name, fallbackTimestamp) {
 
   return { phone, contact, lastFour, direction, startedAt };
 }
+// Expose for the cap-app caller-id-native bridge.
+try { window.parseRecordingFilename = parseRecordingFilename; } catch (_) {}
+
 
 /**
  * Walk the user's selected recordings folder, find new files, look up the

@@ -127,11 +127,19 @@
   CallerId.addListener('recordingAvailable', async ({ path, name, ts }) => {
     console.log('[caller-id] recording available', path);
     if (typeof toast === 'function') toast('🎙 Recording detected: ' + name);
-    if (!lastCall) {
-      console.warn('[caller-id] recording with no recent call — skipping');
-      return;
-    }
-    // Read the file via Capacitor Filesystem and upload to /api/recordings
+    // Don't bail when lastCall is missing — still upload the file. The server
+    // will parse the filename and match by timestamp against recent call_events.
+    // This handles two real-world cases:
+    //   1. App was killed when the call happened (no PhoneStateReceiver fire)
+    //   2. Filename has just a contact name (no phone digits)
+    let parsed = null;
+    try {
+      if (typeof window.parseRecordingFilename === 'function') {
+        parsed = window.parseRecordingFilename(name, ts);
+      }
+    } catch (_) {}
+    const phone = (lastCall && lastCall.phone) || (parsed && parsed.phone) || '';
+    const startedAt = (lastCall && lastCall.startedAt) || (parsed && parsed.startedAt) || ts;
     try {
       const Filesystem = window.Capacitor.Plugins.Filesystem;
       if (!Filesystem) throw new Error('Filesystem plugin missing');
@@ -139,18 +147,27 @@
       const blob = _b64ToBlob(result.data, _mimeFor(name));
       const fd = new FormData();
       fd.append('audio', blob, name);
-      fd.append('phone', lastCall.phone || '');
-      fd.append('direction', 'in');
-      fd.append('duration_s', '0');           // server already has it from handleEnded
-      if (lastCall.leadId) fd.append('lead_id', String(lastCall.leadId));
+      fd.append('filename', name);              // server uses this to re-parse if needed
+      fd.append('phone', phone);
+      fd.append('direction', (lastCall && lastCall.direction) || 'in');
+      fd.append('duration_s', String((lastCall && lastCall.duration_s) || 0));
+      if (lastCall && lastCall.leadId) fd.append('lead_id', String(lastCall.leadId));
       fd.append('device_path', path);
-      fd.append('started_at', new Date(lastCall.startedAt || ts).toISOString());
-      await fetch('/api/recordings', {
+      fd.append('started_at', new Date(startedAt).toISOString());
+      // Hints from the filename — used by the server to fall back when phone is empty.
+      if (parsed && parsed.contact)  fd.append('contact_hint', parsed.contact);
+      if (parsed && parsed.lastFour) fd.append('lastfour_hint', parsed.lastFour);
+      const r = await fetch('/api/recordings', {
         method: 'POST',
         headers: { 'x-auth-token': _token() },
         body: fd
       });
-      if (typeof toast === 'function') toast('Call recording attached to lead');
+      const j = await r.json().catch(() => ({}));
+      if (typeof toast === 'function') {
+        if (j && j.ok && j.lead_id) toast('Call recording attached to lead #' + j.lead_id);
+        else if (j && j.ok)         toast('Recording uploaded — no lead matched yet');
+        else                         toast('Recording upload failed');
+      }
     } catch (e) {
       console.warn('[caller-id] upload recording failed', e);
     }
