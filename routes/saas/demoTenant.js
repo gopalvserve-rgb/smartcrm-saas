@@ -1036,6 +1036,21 @@ async function api_saas_demo_snapshot(token) {
   if (!tenant) return { ok: false, error: 'showcase tenant not found' };
   const pool = tenantPool.poolFor(tenant);
   if (!pool) return { ok: false, error: 'pool unavailable' };
+
+  // Auto-run the phone-format backfill on every snapshot call. Cheap UPDATE
+  // that only touches rows where the column actually has + or whitespace.
+  // Means the user can run "Show snapshot" without needing a full re-seed
+  // to fix historical seeded rows that had the + prefix.
+  const fixups = [];
+  for (const sql of [
+    `UPDATE whatsapp_messages SET from_number = REGEXP_REPLACE(from_number, '[^0-9]', '', 'g') WHERE from_number ~ '[+ ]'`,
+    `UPDATE whatsapp_messages SET to_number   = REGEXP_REPLACE(to_number,   '[^0-9]', '', 'g') WHERE to_number   ~ '[+ ]'`,
+    `UPDATE ai_chat_log       SET phone       = REGEXP_REPLACE(phone,       '[^0-9]', '', 'g') WHERE phone       ~ '[+ ]'`
+  ]) {
+    try { const r = await pool.query(sql); fixups.push({ sql: sql.slice(0, 80), rowCount: r.rowCount }); }
+    catch (e) { fixups.push({ sql: sql.slice(0, 80), error: e.message }); }
+  }
+
   const tables = [
     'users', 'leads', 'products', 'sources', 'statuses',
     'wa_phones', 'whatsapp_messages', 'wa_chat_assignments',
@@ -1046,35 +1061,61 @@ async function api_saas_demo_snapshot(token) {
   const counts = {};
   const errors = {};
   for (const t of tables) {
-    try {
-      const r = await pool.query(`SELECT COUNT(*)::int n FROM ${t}`);
-      counts[t] = r.rows[0].n;
-    } catch (e) { errors[t] = e.message; counts[t] = null; }
+    try { counts[t] = (await pool.query(`SELECT COUNT(*)::int n FROM ${t}`)).rows[0].n; }
+    catch (e) { errors[t] = e.message; counts[t] = null; }
   }
-  // Heat-tagged leads
+
   try {
     const r = await pool.query(`SELECT heat_label, COUNT(*)::int n FROM leads WHERE heat_label IS NOT NULL GROUP BY heat_label`);
     counts.leads_by_heat = r.rows.reduce((acc, x) => (acc[x.heat_label] = x.n, acc), {});
   } catch (e) { errors.leads_by_heat = e.message; }
-  // Last 3 wa_phones for quick visual confirm
+
   let phones = [];
-  try {
-    const r = await pool.query(`SELECT phone_number_id, display_phone_number, label, is_default, is_active FROM wa_phones ORDER BY created_at DESC LIMIT 5`);
-    phones = r.rows;
-  } catch (e) { errors.wa_phones_sample = e.message; }
-  // Last 5 whatsapp_messages with their phone_number_id + direction
+  try { phones = (await pool.query(`SELECT phone_number_id, display_phone_number, label, is_default, is_active FROM wa_phones ORDER BY created_at DESC LIMIT 5`)).rows; }
+  catch (e) { errors.wa_phones_sample = e.message; }
+
   let recentMsgs = [];
   try {
     const r = await pool.query(`SELECT id, lead_id, direction, from_number, to_number, body, phone_number_id, created_at FROM whatsapp_messages ORDER BY created_at DESC LIMIT 5`);
     recentMsgs = r.rows.map(m => ({ ...m, body: String(m.body || '').slice(0, 80) }));
   } catch (e) { errors.recent_messages_sample = e.message; }
+
+  // SIMULATION: pick the most recent inbound from_number, then run the EXACT
+  // query api_wb_chat_messages would run, and report the count + sample.
+  // If this is 0, the floating-chat empty pane bug is data-related.
+  // If it's > 0, the data is fine and the bug is in the SPA renderer.
+  let chatSim = null;
+  try {
+    const inb = await pool.query(`SELECT from_number FROM whatsapp_messages WHERE direction = 'in' ORDER BY created_at DESC LIMIT 1`);
+    if (inb.rows.length) {
+      const raw = inb.rows[0].from_number;
+      const digits = String(raw || '').replace(/[^0-9]/g, '');
+      const sim = await pool.query(
+        `SELECT COUNT(*)::int n FROM whatsapp_messages WHERE from_number = $1 OR to_number = $1`,
+        [digits]
+      );
+      const sample = await pool.query(
+        `SELECT id, direction, from_number, to_number, body, created_at FROM whatsapp_messages WHERE from_number = $1 OR to_number = $1 ORDER BY created_at ASC LIMIT 3`,
+        [digits]
+      );
+      chatSim = {
+        sample_thread_phone_raw: raw,
+        digits_only: digits,
+        api_wb_chat_messages_would_return: sim.rows[0].n,
+        first_3_messages: sample.rows.map(r => ({ ...r, body: String(r.body || '').slice(0, 60) }))
+      };
+    }
+  } catch (e) { chatSim = { error: e.message }; }
+
   return {
     ok: true,
     slug: tenant.slug,
     tenant_status: tenant.status,
+    backfill_applied: fixups,
     counts,
     sample_phones: phones,
     sample_recent_messages: recentMsgs,
+    chat_query_simulation: chatSim,
     errors
   };
 }
