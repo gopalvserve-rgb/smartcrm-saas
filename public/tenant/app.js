@@ -19177,6 +19177,10 @@ function _initFloatingChat() {
       </div>
       <div id="chat-thread-msgs" style="flex: 1; overflow-y: auto; padding: .65rem; background: #efeae2; min-height: 280px;"></div>
       <div id="chat-thread-preview" style="padding: .35rem .55rem; display: none; background: #f8fafc; border-top: 1px solid #e2e8f0; font-size: .8rem;"></div>
+      <div id="chat-thread-from-row" style="padding: .35rem .55rem; display: none; background: #fafbfc; border-top: 1px solid #e2e8f0; font-size: .78rem; align-items: center; gap: .4rem;">
+        <span style="color: #64748b;">Send from:</span>
+        <select id="chat-thread-from" style="flex: 1; padding: .25rem .35rem; border: 1px solid #cbd5e1; border-radius: 4px; font-size: .78rem; max-width: 220px;"></select>
+      </div>
       <div style="padding: .5rem; background: #fff; border-top: 1px solid #e2e8f0; display: flex; gap: .35rem; align-items: center;">
         <button id="chat-thread-attach" title="Attach photo / file" style="background: transparent; border: 1px solid #cbd5e1; cursor: pointer; padding: .4rem .55rem; border-radius: 18px; font-size: 1rem;">📎</button>
         <input id="chat-thread-file" type="file" hidden accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt">
@@ -19208,6 +19212,25 @@ function _initFloatingChat() {
       previewSlot.appendChild(node);
     }
     attachBtn.onclick = () => fileInput.click();
+    // Populate send-from picker with the cached connected-numbers map
+    const fromRow = document.getElementById('chat-thread-from-row');
+    const fromSel = document.getElementById('chat-thread-from');
+    const phMap = window._phoneIdToDisplay || {};
+    const phEntries = Object.entries(phMap);
+    if (phEntries.length > 1) {
+      fromRow.style.display = 'flex';
+      fromSel.innerHTML = '';
+      phEntries.forEach(([pid, disp]) => {
+        const opt = document.createElement('option');
+        opt.value = pid;
+        opt.textContent = disp + (pid === String(thread.phone_number_id || '') ? ' (incoming)' : '');
+        if (pid === String(thread.phone_number_id || '')) opt.selected = true;
+        fromSel.appendChild(opt);
+      });
+    } else if (phEntries.length === 1) {
+      // Single number — no need to pick, just hide the row
+      fromRow.style.display = 'none';
+    }
     fileInput.addEventListener('change', async () => {
       const f = fileInput.files && fileInput.files[0];
       if (!f) return;
@@ -19247,7 +19270,7 @@ function _initFloatingChat() {
         const payload = {
           phone: thread.phone, text: t,
           lead_id: thread.lead_id || null,
-          from_phone_number_id: thread.phone_number_id || null
+          from_phone_number_id: (fromSel && fromSel.value) || thread.phone_number_id || null
         };
         if (_pending) {
           payload.media_id = _pending.wa_media_id;
@@ -19270,7 +19293,7 @@ function _initFloatingChat() {
     const wrap = document.getElementById('chat-thread-msgs');
     if (!wrap) return;
     try {
-      const msgs = await api('api_wb_chat_messages', { phone: _activePhone, limit: 30 });
+      const msgs = await api('api_wb_chat_messages', _activePhone);
       wrap.innerHTML = '';
       msgs.forEach(m => {
         const isOut = m.direction === 'out';
