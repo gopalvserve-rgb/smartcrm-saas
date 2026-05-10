@@ -13983,7 +13983,10 @@ async function adminBotFlows() {
         )
       );
       item.addEventListener('dragstart', (e) => {
-        e.dataTransfer.setData('flow/type', p.type);
+        // Use text/plain - the universally-supported MIME for drag-drop.
+        // Custom MIMEs like 'flow/type' are silently ignored on Chrome,
+        // which made the drop event never fire.
+        e.dataTransfer.setData('text/plain', 'flow:' + p.type);
         e.dataTransfer.effectAllowed = 'copy';
       });
       paletteEl.appendChild(item);
@@ -14320,10 +14323,12 @@ async function adminBotFlows() {
     }
 
     // ---- Drop handling on canvas (drop palette item) ----
+    canvas.addEventListener('dragenter', (e) => { e.preventDefault(); });
     canvas.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
     canvas.addEventListener('drop', (e) => {
       e.preventDefault();
-      const t = e.dataTransfer.getData('flow/type');
+      const raw = e.dataTransfer.getData('text/plain') || '';
+      const t = raw.startsWith('flow:') ? raw.slice(5) : '';
       if (!t) return;
       const r = canvas.getBoundingClientRect();
       const x = e.clientX - r.left + canvas.scrollLeft;
@@ -18967,10 +18972,204 @@ function _copilotMsg(role, text) {
 // addEventListener('DOMContentLoaded', ...) never runs. Check readyState
 // and start the poller immediately if the document is already parsed.
 (function bootCopilot() {
+// =====================================================================
+// Floating WhatsApp chat dock
+// A small persistent FAB on the bottom-LEFT (Copilot is bottom-right)
+// that opens a slide-out panel with recent threads, unread counts, and
+// a tappable thread mini-view. Stays accessible on every page so the
+// team can read+reply to inbound messages without leaving Leads etc.
+// =====================================================================
+function _initFloatingChat() {
+  if (document.getElementById('chat-fab')) return;
+  if (typeof CRM === 'undefined' || !CRM.user) return;
+
+  // ---- Floating button ----
+  const fab = document.createElement('button');
+  fab.id = 'chat-fab';
+  fab.title = 'WhatsApp inbox - tap to open';
+  fab.style.cssText = `
+    position: fixed; bottom: 20px; left: 20px;
+    width: 56px; height: 56px; border-radius: 50%;
+    border: none; cursor: pointer; z-index: 9989;
+    background: linear-gradient(135deg, #25d366 0%, #128c7e 100%);
+    color: #fff; font-size: 26px;
+    box-shadow: 0 6px 20px rgba(37,211,102,.45);
+    display: flex; align-items: center; justify-content: center;
+  `;
+  fab.innerHTML = '\ud83d\udcac';
+  // Unread badge
+  const badge = document.createElement('span');
+  badge.id = 'chat-fab-badge';
+  badge.style.cssText = `
+    position: absolute; top: -4px; right: -4px;
+    background: #ef4444; color: #fff;
+    font-size: 11px; font-weight: 700;
+    padding: 2px 6px; border-radius: 999px;
+    min-width: 20px; text-align: center;
+    border: 2px solid #fff; display: none;
+  `;
+  fab.appendChild(badge);
+  document.body.appendChild(fab);
+
+  // ---- Drawer panel (initially hidden) ----
+  const drawer = document.createElement('div');
+  drawer.id = 'chat-drawer';
+  drawer.style.cssText = `
+    position: fixed; top: 0; right: -420px; width: min(420px, 100vw); height: 100vh;
+    background: #fff; box-shadow: -2px 0 20px rgba(15,23,42,.18);
+    z-index: 9990; transition: right .25s ease;
+    display: flex; flex-direction: column;
+  `;
+  drawer.innerHTML = `
+    <div style="padding: .85rem 1rem; background: linear-gradient(135deg, #25d366 0%, #128c7e 100%); color: #fff; display: flex; align-items: center; gap: .55rem;">
+      <span style="font-size: 1.3rem;">\ud83d\udcac</span>
+      <strong style="flex: 1;">WhatsApp Inbox</strong>
+      <a href="#/whatsbot/chat" style="color: #fff; text-decoration: none; font-size: .82rem; opacity: .85;" title="Open full chat view">\u21d7</a>
+      <button id="chat-drawer-close" style="background: transparent; border: none; color: #fff; font-size: 1.2rem; cursor: pointer; line-height: 1; padding: 0; margin-left: .35rem;">\u00d7</button>
+    </div>
+    <div id="chat-drawer-body" style="flex: 1; overflow-y: auto; background: #fafbfc;"></div>
+  `;
+  document.body.appendChild(drawer);
+  drawer.querySelector('#chat-drawer-close').onclick = () => closeDrawer();
+
+  let isOpen = false;
+  function openDrawer() { drawer.style.right = '0'; isOpen = true; renderThreads(); }
+  function closeDrawer() { drawer.style.right = '-420px'; isOpen = false; }
+  fab.onclick = () => { if (isOpen) closeDrawer(); else openDrawer(); };
+
+  // ---- Render thread list ----
+  let _activePhone = null;
+  let _activeThreadCache = null;
+  async function renderThreads() {
+    const body = drawer.querySelector('#chat-drawer-body');
+    if (_activePhone) return; // we're inside a thread - keep it
+    body.innerHTML = '<div style="padding: 1.5rem; text-align: center; color: #94a3b8;">Loading\u2026</div>';
+    try {
+      const threads = await api('api_wb_chat_threads', { phone_number_id: 'all' });
+      if (!threads.length) {
+        body.innerHTML = '<div style="padding: 1.5rem; text-align: center; color: #94a3b8;">No conversations yet.</div>';
+        return;
+      }
+      body.innerHTML = '';
+      threads.slice(0, 30).forEach(t => {
+        const row = document.createElement('div');
+        const unread = Number(t.unread_count) || 0;
+        row.style.cssText = `
+          padding: .65rem .85rem; border-bottom: 1px solid #e2e8f0;
+          cursor: pointer; display: flex; gap: .55rem;
+          background: ${unread > 0 ? '#fef3c7' : '#fff'};
+        `;
+        row.onmouseenter = () => row.style.background = '#f1f5f9';
+        row.onmouseleave = () => row.style.background = unread > 0 ? '#fef3c7' : '#fff';
+        const lastTs = t.last_at ? new Date(t.last_at).toLocaleString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '';
+        const preview = (t.last_body || '').slice(0, 60);
+        row.innerHTML = `
+          <div style="flex: 1; min-width: 0;">
+            <div style="display: flex; gap: .35rem; align-items: baseline;">
+              <strong style="font-size: .9rem; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${esc(t.lead_name || t.phone)}</strong>
+              <span style="font-size: .7rem; color: #94a3b8; flex-shrink: 0;">${esc(lastTs)}</span>
+            </div>
+            <div style="font-size: .8rem; color: #64748b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${esc(preview)}</div>
+          </div>
+          ${unread > 0 ? `<span style="background: #ef4444; color: #fff; font-size: .7rem; font-weight: 700; padding: 1px 7px; border-radius: 999px; align-self: center;">${unread}</span>` : ''}
+        `;
+        row.onclick = () => openThread(t);
+        body.appendChild(row);
+      });
+    } catch (e) {
+      body.innerHTML = '<div style="padding: 1.5rem; color: #dc2626;">Could not load: ' + esc(e.message) + '</div>';
+    }
+  }
+
+  async function openThread(thread) {
+    _activePhone = thread.phone;
+    _activeThreadCache = thread;
+    const body = drawer.querySelector('#chat-drawer-body');
+    body.innerHTML = `
+      <div style="padding: .55rem .85rem; background: #f1f5f9; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; gap: .5rem;">
+        <button id="chat-back-btn" style="background: transparent; border: none; cursor: pointer; font-size: 1rem;">\u2190</button>
+        <strong style="flex: 1; font-size: .9rem;">${esc(thread.lead_name || thread.phone)}</strong>
+        <a href="#/whatsbot/chat" style="font-size: .78rem; color: #6366f1;">Open full</a>
+      </div>
+      <div id="chat-thread-msgs" style="flex: 1; overflow-y: auto; padding: .65rem; background: #efeae2; min-height: 280px;"></div>
+      <div style="padding: .5rem; background: #fff; border-top: 1px solid #e2e8f0; display: flex; gap: .35rem;">
+        <input id="chat-thread-input" type="text" placeholder="Type a reply..." style="flex: 1; padding: .55rem .65rem; border: 1px solid #cbd5e1; border-radius: 18px; outline: none;">
+        <button id="chat-thread-send" style="background: #25d366; color: #fff; border: none; padding: .55rem 1rem; border-radius: 18px; cursor: pointer; font-weight: 600;">Send</button>
+      </div>
+    `;
+    body.style.padding = '0';
+    body.style.display = 'flex';
+    body.style.flexDirection = 'column';
+    document.getElementById('chat-back-btn').onclick = () => { _activePhone = null; body.style.display = ''; renderThreads(); };
+    const inp = document.getElementById('chat-thread-input');
+    const send = document.getElementById('chat-thread-send');
+    send.onclick = async () => {
+      const t = inp.value.trim();
+      if (!t) return;
+      send.disabled = true;
+      try {
+        await api('api_wb_send', { phone: thread.phone, text: t, leadId: thread.lead_id || null });
+        inp.value = '';
+        await loadMsgs();
+      } catch (e) { toast(e.message, 'err'); }
+      send.disabled = false;
+    };
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') send.click(); });
+    await loadMsgs();
+  }
+
+  async function loadMsgs() {
+    if (!_activePhone) return;
+    const wrap = document.getElementById('chat-thread-msgs');
+    if (!wrap) return;
+    try {
+      const msgs = await api('api_wb_chat_messages', { phone: _activePhone, limit: 30 });
+      wrap.innerHTML = '';
+      msgs.forEach(m => {
+        const isOut = m.direction === 'out';
+        const row = document.createElement('div');
+        row.style.cssText = `display: flex; justify-content: ${isOut ? 'flex-end' : 'flex-start'}; margin-bottom: .35rem;`;
+        const bubble = document.createElement('div');
+        bubble.style.cssText = `
+          max-width: 75%; padding: .4rem .65rem; border-radius: 8px;
+          background: ${isOut ? '#dcf8c6' : '#fff'};
+          font-size: .85rem; word-wrap: break-word; box-shadow: 0 1px 1px rgba(0,0,0,.06);
+        `;
+        bubble.textContent = m.body || ('[' + (m.message_type || 'media') + ']');
+        row.appendChild(bubble);
+        wrap.appendChild(row);
+      });
+      wrap.scrollTop = wrap.scrollHeight;
+    } catch (_) {}
+  }
+
+  // ---- Poll for unread counts every 8s ----
+  async function pollUnread() {
+    try {
+      const threads = await api('api_wb_chat_threads', { phone_number_id: 'all' });
+      const total = threads.reduce((acc, t) => acc + (Number(t.unread_count) || 0), 0);
+      if (total > 0) {
+        badge.textContent = total > 99 ? '99+' : String(total);
+        badge.style.display = '';
+      } else {
+        badge.style.display = 'none';
+      }
+      // If drawer is open + we're showing the thread list, refresh it
+      if (isOpen && !_activePhone) renderThreads();
+      // If we're inside a thread, refresh messages too
+      if (isOpen && _activePhone) loadMsgs();
+    } catch (_) {}
+  }
+  pollUnread();
+  setInterval(pollUnread, 8000);
+
+  // Allow other modules to control the dock
+  window._toggleChatDock = () => fab.click();
+}
   function start() {
     let n = 0;
     const t = setInterval(() => {
-      if (typeof CRM !== 'undefined' && CRM.user) { _initCrmCopilot(); clearInterval(t); }
+      if (typeof CRM !== 'undefined' && CRM.user) { _initCrmCopilot(); _initFloatingChat(); clearInterval(t); }
       else if (++n > 120) clearInterval(t);
     }, 500);
   }
