@@ -125,6 +125,12 @@ async function _ensureAiBotColumns() {
     // fallback for any phone without a specific config.
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS phone_number_id TEXT`);
     await db.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_bot_settings_phone ON ai_bot_settings(phone_number_id) WHERE phone_number_id IS NOT NULL`);
+    // KB scope: each doc can be GLOBAL (NULL = used by every bot, the
+    // safe default) or scoped to a specific phone_number_id (used only
+    // when that phone's bot replies). Lets a tenant with two
+    // businesses keep their KBs separate per number.
+    await db.query(`ALTER TABLE ai_kb_documents ADD COLUMN IF NOT EXISTS phone_number_id TEXT`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_ai_kb_documents_phone ON ai_kb_documents(phone_number_id)`);
     if (pool) _aiBotEnsuredPools.add(pool);
   } catch (e) { /* table missing — _coerceSettings handles defaults */ }
 }
@@ -242,14 +248,40 @@ async function _api_aibot_settings_save_LEGACY_FULL_REPLACE(token, payload) {
 // Knowledge base
 // ============================================================
 
-async function api_aibot_kb_list(token) {
+async function api_aibot_kb_list(token, phoneNumberId) {
   await authUser(token);
-  const r = await db.query(
-    `SELECT id, source_type, title, char_count, source_url, file_path, file_size,
-            is_active, ingest_status, ingest_error, created_at, updated_at
-       FROM ai_kb_documents
-       ORDER BY is_active DESC, created_at DESC`
-  );
+  await _ensureAiBotColumns();
+  // phoneNumberId can be:
+  //   undefined / null / '' / 'all'  -> return ALL docs (admin view)
+  //   '__global__' / 'default'       -> only global docs (NULL phone_number_id)
+  //   '<phone id>'                   -> docs scoped to that phone OR global
+  const phId = phoneNumberId && phoneNumberId !== 'all' ? String(phoneNumberId) : null;
+  let r;
+  if (!phId) {
+    r = await db.query(
+      `SELECT id, source_type, title, char_count, source_url, file_path, file_size,
+              phone_number_id, is_active, ingest_status, ingest_error, created_at, updated_at
+         FROM ai_kb_documents
+         ORDER BY is_active DESC, created_at DESC`
+    );
+  } else if (phId === '__global__' || phId === 'default') {
+    r = await db.query(
+      `SELECT id, source_type, title, char_count, source_url, file_path, file_size,
+              phone_number_id, is_active, ingest_status, ingest_error, created_at, updated_at
+         FROM ai_kb_documents
+         WHERE phone_number_id IS NULL
+         ORDER BY is_active DESC, created_at DESC`
+    );
+  } else {
+    r = await db.query(
+      `SELECT id, source_type, title, char_count, source_url, file_path, file_size,
+              phone_number_id, is_active, ingest_status, ingest_error, created_at, updated_at
+         FROM ai_kb_documents
+         WHERE phone_number_id IS NULL OR phone_number_id = $1
+         ORDER BY is_active DESC, created_at DESC`,
+      [phId]
+    );
+  }
   // Aggregate stats so the UI can warn about KB-too-big.
   const totalChars = r.rows.reduce((a, x) => a + (Number(x.char_count) || 0) * (Number(x.is_active) === 1 ? 1 : 0), 0);
   return { docs: r.rows, total_active_chars: totalChars };
@@ -286,6 +318,14 @@ async function api_aibot_kb_delete(token, id) {
   const me = await authUser(token);
   if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
   await db.query(`DELETE FROM ai_kb_documents WHERE id = $1`, [Number(id)]);
+  return { ok: true };
+}
+
+async function api_aibot_kb_set_phone(token, id, phoneNumberId) {
+  const me = await authUser(token);
+  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  const phId = phoneNumberId && phoneNumberId !== '__global__' && phoneNumberId !== 'default' ? String(phoneNumberId) : null;
+  await db.query(`UPDATE ai_kb_documents SET phone_number_id = $1, updated_at = NOW() WHERE id = $2`, [phId, Number(id)]);
   return { ok: true };
 }
 
@@ -570,9 +610,24 @@ async function _buildPrompt(settings, phone, leadId, inboundText) {
   let kb = '';
   if (Number(settings.use_kb) === 1) {
     const cap = Math.max(2000, Number(settings.kb_max_chars || 8000));
-    const r = await db.query(
-      `SELECT title, raw_text FROM ai_kb_documents WHERE is_active = 1 ORDER BY id ASC`
-    );
+    // settings has phone_number_id when this prompt is being built for a
+    // per-phone bot config. In that case, include only KB docs that are
+    // global (NULL phone) OR scoped to the same phone. For the default
+    // (NULL) bot, include only global docs - the per-phone scoped docs
+    // belong to other bots.
+    const cfgPhId = settings.phone_number_id ? String(settings.phone_number_id) : null;
+    const r = cfgPhId
+      ? await db.query(
+          `SELECT title, raw_text FROM ai_kb_documents
+            WHERE is_active = 1 AND (phone_number_id IS NULL OR phone_number_id = $1)
+            ORDER BY id ASC`,
+          [cfgPhId]
+        )
+      : await db.query(
+          `SELECT title, raw_text FROM ai_kb_documents
+            WHERE is_active = 1 AND phone_number_id IS NULL
+            ORDER BY id ASC`
+        );
     let buf = '';
     for (const d of r.rows) {
       const block = `\n\n## ${d.title}\n${d.raw_text}`;
@@ -764,7 +819,7 @@ async function api_aibot_discard_draft(token, draftId) {
 module.exports = {
   // Public tenant API (auto-exposed via tenantApi.js loader)
   api_aibot_settings_get, api_aibot_settings_save,
-  api_aibot_kb_list, api_aibot_kb_save_text, api_aibot_kb_delete, api_aibot_kb_toggle, api_aibot_kb_crawl_url,
+  api_aibot_kb_list, api_aibot_kb_save_text, api_aibot_kb_delete, api_aibot_kb_toggle, api_aibot_kb_crawl_url, api_aibot_kb_set_phone,
   api_aibot_chatlog_list, api_aibot_usage_summary, api_aibot_estimator,
   api_aibot_send_draft, api_aibot_discard_draft,
   // Internal — called from whatsbot.js + server.tenant.js upload route

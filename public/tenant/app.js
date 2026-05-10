@@ -6812,13 +6812,38 @@ async function _aibotKbView() {
       listCard.appendChild(h('p', { class: 'muted' }, 'No KB docs yet. Add one above to start training your bot.'));
       return;
     }
+    // Fetch connected phones once for the scope dropdown.
+    let _connectedPhones = [];
+    try { _connectedPhones = await api('api_wa_phones_listAll'); } catch (_) { _connectedPhones = []; }
+
     const tbl = h('table', { class: 'data-table', style: { width: '100%' } },
       h('thead', {}, h('tr', {},
-        h('th', {}, 'Title'), h('th', {}, 'Source'), h('th', {}, 'Chars'), h('th', {}, 'Active'), h('th', {}, 'Added'), h('th', {}, '')
+        h('th', {}, 'Title'),
+        h('th', {}, 'Source'),
+        h('th', { title: 'Which bot uses this doc. Global = every bot. Pick a number to scope to that number\'s bot only.' }, 'Used by'),
+        h('th', {}, 'Chars'),
+        h('th', {}, 'Active'),
+        h('th', {}, 'Added'),
+        h('th', {}, '')
       )),
       h('tbody', {}, ...data.docs.map(d => h('tr', {},
         h('td', {}, h('b', {}, d.title)),
         h('td', {}, ({ text: '📝 Text', url: '🌐 URL', pdf: '📄 PDF', docx: '📄 DOCX' })[d.source_type] || d.source_type),
+        h('td', {}, (() => {
+          const sel = h('select', { style: { fontSize: '.82rem', padding: '.2rem .35rem' } });
+          const optGlobal = h('option', { value: '__global__', selected: !d.phone_number_id ? 'selected' : null }, '🏠 Global (all bots)');
+          sel.appendChild(optGlobal);
+          _connectedPhones.forEach(ph => {
+            const phId = String(ph.phone_number_id || '');
+            sel.appendChild(h('option', { value: phId, selected: String(d.phone_number_id || '') === phId ? 'selected' : null },
+              '📱 ' + (ph.display_phone_number || phId) + (ph.label ? ' (' + ph.label + ')' : '')));
+          });
+          sel.onchange = async () => {
+            try { await api('api_aibot_kb_set_phone', d.id, sel.value); toast('Scope updated', 'ok'); refreshList(); }
+            catch (e) { toast(e.message, 'err'); }
+          };
+          return sel;
+        })()),
         h('td', {}, (d.char_count || 0).toLocaleString('en-IN')),
         h('td', {},
           h('input', { type: 'checkbox', checked: d.is_active ? 'checked' : null,

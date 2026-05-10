@@ -1484,3 +1484,13 @@ CREATE INDEX IF NOT EXISTS idx_wa_bot_flow_sessions_phone ON wa_bot_flow_session
 ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS phone_number_id TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_bot_settings_phone
   ON ai_bot_settings(phone_number_id) WHERE phone_number_id IS NOT NULL;
+
+
+-- ============================================================
+-- 2026-05-10: KB doc per-phone scoping
+-- NULL = global (every bot reads it). Specific phone_number_id =
+-- only that phone's bot reads it. Lets a tenant with multiple
+-- businesses keep their KBs separate per number.
+-- ============================================================
+ALTER TABLE ai_kb_documents ADD COLUMN IF NOT EXISTS phone_number_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_ai_kb_documents_phone ON ai_kb_documents(phone_number_id);
