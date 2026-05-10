@@ -327,10 +327,27 @@ async function api_leads_list(token, filters) {
     rows = rows.filter(l => Number(l.is_hidden || 0) !== 1);
   }
 
-  if (filters.status_id)   rows = rows.filter(l => Number(l.status_id) === Number(filters.status_id));
-  if (filters.source)      rows = rows.filter(l => l.source === filters.source);
+  // Multi-value filters - status_ids / sources / assigned_tos arrays
+  // win over single-value siblings. Empty array = no filter.
+  if (Array.isArray(filters.status_ids) && filters.status_ids.length) {
+    const set = new Set(filters.status_ids.map(x => Number(x)));
+    rows = rows.filter(l => set.has(Number(l.status_id)));
+  } else if (filters.status_id) {
+    rows = rows.filter(l => Number(l.status_id) === Number(filters.status_id));
+  }
+  if (Array.isArray(filters.sources) && filters.sources.length) {
+    const set = new Set(filters.sources.map(x => String(x)));
+    rows = rows.filter(l => set.has(String(l.source || '')));
+  } else if (filters.source) {
+    rows = rows.filter(l => l.source === filters.source);
+  }
   if (filters.product_id)  rows = rows.filter(l => Number(l.product_id) === Number(filters.product_id));
-  if (filters.assigned_to) rows = rows.filter(l => Number(l.assigned_to) === Number(filters.assigned_to));
+  if (Array.isArray(filters.assigned_tos) && filters.assigned_tos.length) {
+    const set = new Set(filters.assigned_tos.map(x => Number(x)));
+    rows = rows.filter(l => set.has(Number(l.assigned_to)));
+  } else if (filters.assigned_to) {
+    rows = rows.filter(l => Number(l.assigned_to) === Number(filters.assigned_to));
+  }
   // Qualified filter:
   //   '1' / 'only' → only leads marked qualified
   //   '0' / 'unqualified' → only leads NOT marked qualified

@@ -1642,12 +1642,41 @@ VIEWS.leads = async (view) => {
   searchInput.addEventListener('keydown', ev => { if (ev.key === 'Enter') applyFilters(); });
   const toolbar = h('div', { class: 'toolbar' },
     searchInput,
-    wireFilter(selectOpts('f-status', [{ id: '', name: 'Any status' }, ...statuses], CRM.prefs.filters.status_id)),
-    wireFilter(selectOpts('f-source', [{ id: '', name: 'Any source' }, ...sources.map(s => ({ id: s.name, name: s.name }))], CRM.prefs.filters.source)),
+    multiSelectDropdown({
+      id: 'f-status', label: 'Status',
+      options: statuses.map(s => ({ id: s.id, name: s.name })),
+      values: CRM.prefs.filters.status_ids || (CRM.prefs.filters.status_id ? [CRM.prefs.filters.status_id] : []),
+      allLabel: 'Any status',
+      onApply: (vals) => {
+        CRM.prefs.filters.status_ids = vals;
+        CRM.prefs.filters.status_id = vals.length === 1 ? vals[0] : '';
+        CRM._leadsPage = 1; loadLeads({ page: 1 });
+      }
+    }),
+    multiSelectDropdown({
+      id: 'f-source', label: 'Source',
+      options: sources.map(s => ({ id: s.name, name: s.name })),
+      values: CRM.prefs.filters.sources || (CRM.prefs.filters.source ? [CRM.prefs.filters.source] : []),
+      allLabel: 'Any source',
+      onApply: (vals) => {
+        CRM.prefs.filters.sources = vals;
+        CRM.prefs.filters.source = vals.length === 1 ? vals[0] : '';
+        CRM._leadsPage = 1; loadLeads({ page: 1 });
+      }
+    }),
     // Assignee filter — hidden for sales users because their scope is fixed.
-    // Admins, managers, and team leaders can filter by assignee.
     (CRM.user && ['admin', 'manager', 'team_leader'].includes(CRM.user.role))
-      ? wireFilter(selectOpts('f-assigned', [{ id: '', name: 'Any assignee' }, ...users], CRM.prefs.filters.assigned_to))
+      ? multiSelectDropdown({
+          id: 'f-assigned', label: 'Assigned',
+          options: users.map(u => ({ id: u.id, name: u.name })),
+          values: CRM.prefs.filters.assigned_tos || (CRM.prefs.filters.assigned_to ? [CRM.prefs.filters.assigned_to] : []),
+          allLabel: 'Any assignee',
+          onApply: (vals) => {
+            CRM.prefs.filters.assigned_tos = vals;
+            CRM.prefs.filters.assigned_to = vals.length === 1 ? vals[0] : '';
+            CRM._leadsPage = 1; loadLeads({ page: 1 });
+          }
+        })
       : null,
     wireFilter(selectOpts('f-followup', [{ id: '', name: 'All follow-ups' }, { id: 'today', name: 'Due today' }, { id: 'overdue', name: 'Overdue' }], CRM.prefs.filters.followup)),
     wireFilter(selectOpts('f-qualified', [
@@ -1896,11 +1925,19 @@ async function loadLeads(opts) {
   const pageSize = Number(localStorage.getItem('crm_page_size') || 25);
   const page = Number(opts.page || CRM._leadsPage || 1);
   CRM._leadsPage = page;
+  // Multi-select arrays come from CRM.prefs.filters; legacy single
+  // values still honoured for backwards-compat with saved filters.
+  const sids = (CRM.prefs.filters.status_ids && CRM.prefs.filters.status_ids.length) ? CRM.prefs.filters.status_ids : null;
+  const srcs = (CRM.prefs.filters.sources && CRM.prefs.filters.sources.length) ? CRM.prefs.filters.sources : null;
+  const ats  = (CRM.prefs.filters.assigned_tos && CRM.prefs.filters.assigned_tos.length) ? CRM.prefs.filters.assigned_tos : null;
   const filters = {
     q:           $('#f-q')?.value || undefined,
-    status_id:   $('#f-status')?.value || undefined,
-    source:      $('#f-source')?.value || undefined,
-    assigned_to: $('#f-assigned')?.value || undefined,
+    status_id:   sids ? (sids.length === 1 ? sids[0] : undefined) : (CRM.prefs.filters.status_id || undefined),
+    status_ids:  sids || undefined,
+    source:      srcs ? (srcs.length === 1 ? srcs[0] : undefined) : (CRM.prefs.filters.source || undefined),
+    sources:     srcs || undefined,
+    assigned_to: ats  ? (ats.length === 1 ? ats[0] : undefined)  : (CRM.prefs.filters.assigned_to || undefined),
+    assigned_tos: ats || undefined,
     followup:    $('#f-followup')?.value || undefined,
     qualified:   $('#f-qualified')?.value || undefined,
     duplicate:   $('#f-duplicate')?.value || undefined,
@@ -3684,6 +3721,126 @@ function selectOpts(id, items, value) {
   return h('select', { id },
     ...items.map(i => h('option', { value: i.id, selected: String(value) === String(i.id) ? 'selected' : null }, i.name))
   );
+}
+
+/**
+ * Multi-select dropdown with Select All / Deselect All / search.
+ * Drop-in friendly: returns a wrapper element that renders a button +
+ * popup with checkbox list. Empty selection = "All / no filter".
+ *
+ *   multiSelectDropdown({
+ *     id: 'f-status', label: 'Lead Status',
+ *     options: [{ id, name }, ...],
+ *     values: ['1', '3'],            // array of ids; empty/undefined = All
+ *     onApply: (newValues) => {...}  // fires when user clicks Apply
+ *   })
+ */
+function multiSelectDropdown({ id, label, options, values, onApply, allLabel }) {
+  values = (values || []).map(String);
+  options = options || [];
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position: relative; display: inline-block;';
+  if (id) wrap.id = id;
+  const btn = document.createElement('button');
+  btn.className = 'btn ghost';
+  btn.style.cssText = 'min-width: 8rem; text-align: left; display: inline-flex; align-items: center; gap: .35rem;';
+  function btnLabel() {
+    if (!values.length) return (allLabel || 'All');
+    if (values.length === 1) {
+      const m = options.find(o => String(o.id) === values[0]);
+      return m ? m.name : values[0];
+    }
+    return values.length + ' selected';
+  }
+  function refreshBtn() { btn.textContent = (label ? label + ': ' : '') + btnLabel(); btn.appendChild(document.createTextNode(' ▾')); }
+  refreshBtn();
+  wrap.appendChild(btn);
+
+  let panel = null;
+  function openPanel() {
+    if (panel) return;
+    panel = document.createElement('div');
+    panel.style.cssText = 'position: absolute; top: 100%; left: 0; min-width: 240px; max-width: 320px; max-height: 360px; overflow-y: auto; background: #fff; border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 12px rgba(15,23,42,.12); padding: .55rem; margin-top: .25rem; z-index: 1000;';
+    const search = document.createElement('input');
+    search.type = 'search'; search.placeholder = 'Search…';
+    search.style.cssText = 'width: 100%; padding: .35rem .55rem; border: 1px solid var(--border); border-radius: 6px; font-size: .82rem; margin-bottom: .4rem;';
+    panel.appendChild(search);
+    const actionRow = document.createElement('div');
+    actionRow.style.cssText = 'display: flex; gap: .35rem; margin-bottom: .4rem; padding-bottom: .35rem; border-bottom: 1px solid var(--border);';
+    const allBtn = document.createElement('button');
+    allBtn.textContent = 'Select All'; allBtn.className = 'btn small';
+    allBtn.style.cssText = 'flex: 1; padding: .25rem; font-size: .76rem;';
+    const noneBtn = document.createElement('button');
+    noneBtn.textContent = 'Deselect All'; noneBtn.className = 'btn small ghost';
+    noneBtn.style.cssText = 'flex: 1; padding: .25rem; font-size: .76rem;';
+    actionRow.appendChild(allBtn); actionRow.appendChild(noneBtn);
+    panel.appendChild(actionRow);
+    const list = document.createElement('div');
+    panel.appendChild(list);
+    function renderList() {
+      list.innerHTML = '';
+      const q = search.value.trim().toLowerCase();
+      options.forEach(o => {
+        if (q && !String(o.name).toLowerCase().includes(q)) return;
+        const row = document.createElement('label');
+        row.style.cssText = 'display: flex; align-items: center; gap: .5rem; padding: .3rem .35rem; border-radius: 4px; cursor: pointer; font-size: .85rem;';
+        row.onmouseenter = () => row.style.background = '#f1f5f9';
+        row.onmouseleave = () => row.style.background = '';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = values.includes(String(o.id));
+        cb.onchange = () => {
+          const v = String(o.id);
+          if (cb.checked) { if (!values.includes(v)) values.push(v); }
+          else { const i = values.indexOf(v); if (i >= 0) values.splice(i, 1); }
+        };
+        row.appendChild(cb);
+        const tx = document.createElement('span');
+        tx.textContent = o.name;
+        row.appendChild(tx);
+        list.appendChild(row);
+      });
+      if (!list.children.length) {
+        const empty = document.createElement('div');
+        empty.className = 'muted'; empty.style.padding = '.5rem'; empty.textContent = 'No matches';
+        list.appendChild(empty);
+      }
+    }
+    renderList();
+    search.addEventListener('input', renderList);
+    allBtn.onclick = (e) => { e.preventDefault(); values = options.map(o => String(o.id)); renderList(); };
+    noneBtn.onclick = (e) => { e.preventDefault(); values = []; renderList(); };
+
+    const footer = document.createElement('div');
+    footer.style.cssText = 'display: flex; gap: .35rem; margin-top: .4rem; padding-top: .35rem; border-top: 1px solid var(--border);';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Cancel'; cancelBtn.className = 'btn ghost small';
+    cancelBtn.style.cssText = 'flex: 1;';
+    const applyBtn = document.createElement('button');
+    applyBtn.textContent = 'Apply'; applyBtn.className = 'btn primary small';
+    applyBtn.style.cssText = 'flex: 1;';
+    footer.appendChild(cancelBtn); footer.appendChild(applyBtn);
+    panel.appendChild(footer);
+    cancelBtn.onclick = (e) => { e.preventDefault(); closePanel(); };
+    applyBtn.onclick = (e) => { e.preventDefault(); closePanel(); refreshBtn(); if (typeof onApply === 'function') onApply(values.slice()); };
+
+    wrap.appendChild(panel);
+    setTimeout(() => document.addEventListener('mousedown', outsideClick), 0);
+  }
+  function closePanel() {
+    if (panel && panel.parentNode) panel.parentNode.removeChild(panel);
+    panel = null;
+    document.removeEventListener('mousedown', outsideClick);
+  }
+  function outsideClick(e) {
+    if (!wrap.contains(e.target)) closePanel();
+  }
+  btn.addEventListener('click', (e) => { e.preventDefault(); panel ? closePanel() : openPanel(); });
+
+  // Expose programmatic API
+  wrap.getValues = () => values.slice();
+  wrap.setValues = (v) => { values = (v || []).map(String); refreshBtn(); };
+  return wrap;
 }
 function parseFieldOptions(raw) {
   // Lenient parser: accept pipe-, comma-, or newline-separated lists.
