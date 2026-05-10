@@ -575,6 +575,25 @@ async function openCreateTenant() {
   form.appendChild(btnRow);
   body.appendChild(form);
   card.appendChild(body);
+  // Snapshot button — query live counts on the showcase tenant DB.
+  const snapBtn = h('button', { class: 'btn ghost', style: { marginLeft: '.5rem' }, onclick: async () => {
+    snapBtn.disabled = true; snapBtn.textContent = '\u23f3 Querying\u2026';
+    try {
+      const r = await api('api_saas_demo_snapshot', {});
+      const dlg = document.createElement('div');
+      dlg.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:99999;display:flex;align-items:center;justify-content:center;';
+      const inner = document.createElement('div');
+      inner.style.cssText = 'background:#fff;border-radius:12px;max-width:720px;width:92%;max-height:85vh;overflow:auto;padding:1.2rem 1.4rem;font-family:-apple-system,Segoe UI,Roboto,sans-serif;';
+      inner.innerHTML = '<h3 style="margin:0 0 .4rem">\u{1f4ca} Showcase tenant snapshot</h3>' + '<p class="muted" style="font-size:.85rem; margin-bottom:.7rem">Live row counts on the showcase tenant database. Slug: <b>' + (r.slug || '') + '</b> &middot; status: ' + (r.tenant_status || '') + '</p>' + '<pre style="background:#0f172a;color:#e2e8f0;padding:.7rem;border-radius:6px;font-size:.78rem;max-height:60vh;overflow:auto;white-space:pre-wrap">' + JSON.stringify(r, null, 2) + '</pre>' + '<div style="display:flex;gap:.4rem;justify-content:flex-end;margin-top:.7rem">' + '<button id="snap-copy" style="padding:.5rem .9rem;border-radius:8px;border:1px solid #cbd5e1;background:#fff;cursor:pointer">\u{1f4cb} Copy JSON</button>' + '<button id="snap-close" style="padding:.5rem .9rem;border-radius:8px;border:none;background:#6366f1;color:#fff;cursor:pointer;font-weight:600">Close</button>' + '</div>';
+      dlg.appendChild(inner);
+      document.body.appendChild(dlg);
+      inner.querySelector('#snap-copy').onclick = () => { try { navigator.clipboard.writeText(JSON.stringify(r, null, 2)); toast('Copied'); } catch (_) {} };
+      inner.querySelector('#snap-close').onclick = () => dlg.remove();
+      dlg.onclick = (ev) => { if (ev.target === dlg) dlg.remove(); };
+    } catch (e) { toast('Snapshot failed: ' + e.message, 'err'); }
+    finally { snapBtn.disabled = false; snapBtn.textContent = '\u{1f50d} Show showcase snapshot'; }
+  }}, '\u{1f50d} Show showcase snapshot');
+  body.appendChild(snapBtn);
   m.appendChild(card);
   document.body.appendChild(m);
   setTimeout(() => form.querySelector('input[name=name]').focus(), 50);
@@ -715,6 +734,10 @@ async function openShowcaseDemoModal() {
       ));
       runBtn.textContent = '🔄 Re-run (refresh data)';
       runBtn.disabled = false;
+      const seedDump = h('pre', { style: { background: '#0f172a', color: '#e2e8f0', padding: '.7rem', borderRadius: '6px', fontSize: '.78rem', maxHeight: '320px', overflow: 'auto', whiteSpace: 'pre-wrap', marginTop: '.6rem' } },
+        JSON.stringify(r, null, 2));
+      result.appendChild(h('div', { style: { marginTop: '.5rem', fontWeight: 600 } }, '\u{1f4ca} Verification counts (seed response):'));
+      result.appendChild(seedDump);
     } catch (e) {
       status.style.background = '#fee2e2'; status.style.color = '#991b1b';
       status.textContent = '❌ ' + e.message;

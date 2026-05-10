@@ -1015,6 +1015,61 @@ async function api_saas_demo_seed(token /*, opts */) {
   };
 }
 
+/**
+ * Diagnostic snapshot — returns per-table row counts on the showcase tenant.
+ * Lets the super-admin verify whether the seed actually populated the DB
+ * without needing direct DB access.
+ */
+async function api_saas_demo_snapshot(token) {
+  const me = await requireSuperAdmin(token);
+  const tenant = await control.findOneBy('tenants', 'slug', DEMO_SLUG);
+  if (!tenant) return { ok: false, error: 'showcase tenant not found' };
+  const pool = tenantPool.poolFor(tenant);
+  if (!pool) return { ok: false, error: 'pool unavailable' };
+  const tables = [
+    'users', 'leads', 'products', 'sources', 'statuses',
+    'wa_phones', 'whatsapp_messages', 'wa_chat_assignments',
+    'ai_kb_documents', 'ai_chat_log', 'ai_reengage_log', 'ai_bot_settings',
+    'lead_recordings', 'remarks', 'followups', 'quotations',
+    'notifications'
+  ];
+  const counts = {};
+  const errors = {};
+  for (const t of tables) {
+    try {
+      const r = await pool.query(`SELECT COUNT(*)::int n FROM ${t}`);
+      counts[t] = r.rows[0].n;
+    } catch (e) { errors[t] = e.message; counts[t] = null; }
+  }
+  // Heat-tagged leads
+  try {
+    const r = await pool.query(`SELECT heat_label, COUNT(*)::int n FROM leads WHERE heat_label IS NOT NULL GROUP BY heat_label`);
+    counts.leads_by_heat = r.rows.reduce((acc, x) => (acc[x.heat_label] = x.n, acc), {});
+  } catch (e) { errors.leads_by_heat = e.message; }
+  // Last 3 wa_phones for quick visual confirm
+  let phones = [];
+  try {
+    const r = await pool.query(`SELECT phone_number_id, display_phone_number, label, is_default, is_active FROM wa_phones ORDER BY created_at DESC LIMIT 5`);
+    phones = r.rows;
+  } catch (e) { errors.wa_phones_sample = e.message; }
+  // Last 5 whatsapp_messages with their phone_number_id + direction
+  let recentMsgs = [];
+  try {
+    const r = await pool.query(`SELECT id, lead_id, direction, from_number, to_number, body, phone_number_id, created_at FROM whatsapp_messages ORDER BY created_at DESC LIMIT 5`);
+    recentMsgs = r.rows.map(m => ({ ...m, body: String(m.body || '').slice(0, 80) }));
+  } catch (e) { errors.recent_messages_sample = e.message; }
+  return {
+    ok: true,
+    slug: tenant.slug,
+    tenant_status: tenant.status,
+    counts,
+    sample_phones: phones,
+    sample_recent_messages: recentMsgs,
+    errors
+  };
+}
+
 module.exports = {
-  api_saas_demo_seed
+  api_saas_demo_seed,
+  api_saas_demo_snapshot
 };
