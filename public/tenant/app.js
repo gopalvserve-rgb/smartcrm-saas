@@ -6495,6 +6495,7 @@ async function openQuotationModal(qid, prefillLead) {
 VIEWS.aibot = async (view) => {
   view.innerHTML = '';
   const tabs = [
+    { id: 'bots',     label: '🤖 Bots' },
     { id: 'settings', label: '⚙️ Bot Settings' },
     { id: 'kb',       label: '📚 Knowledge Base' },
     { id: 'activity', label: '📑 Bot Activity' },
@@ -6502,7 +6503,10 @@ VIEWS.aibot = async (view) => {
   ];
   const tabBar = h('div', { class: 'wb-tab-bar', role: 'tablist' });
   const body   = h('div', { class: 'wb-tab-body' });
-  let active = 'settings';
+  // Default landing tab: the Bots overview. Caller can pre-select a different
+  // tab + a per-phone bot for editing via window._aibotInitialTab / _aibotActivePhId.
+  let active = window._aibotInitialTab || 'bots';
+  window._aibotInitialTab = null;
 
   async function paint() {
     tabBar.innerHTML = '';
@@ -6515,7 +6519,8 @@ VIEWS.aibot = async (view) => {
     body.innerHTML = '<div class="muted" style="padding:1rem">Loading…</div>';
     try {
       let node;
-      if      (active === 'settings') node = await _aibotSettingsView();
+      if      (active === 'bots')     node = await _aibotBotsListView();
+      else if (active === 'settings') node = await _aibotSettingsView(window._aibotActivePhId || null);
       else if (active === 'kb')       node = await _aibotKbView();
       else if (active === 'activity') node = await _aibotActivityView();
       else if (active === 'usage')    node = await _aibotUsageView();
@@ -6530,12 +6535,448 @@ VIEWS.aibot = async (view) => {
   view.appendChild(h('div', { class: 'view-head' },
     h('h2', { style: { margin: 0 } }, '🤖 AI WhatsApp Bot'),
     h('p', { class: 'muted', style: { margin: '.25rem 0 0', fontSize: '.9rem' } },
-      'Auto-reply to customer WhatsApp messages with a Gemini-powered assistant trained on YOUR business knowledge base.')
+      'Set up one or more bots — each with its own numbers + knowledge base + tone. Start on the Bots tab to see them all at a glance.')
   ));
   view.appendChild(tabBar);
   view.appendChild(body);
   paint();
 };
+
+// ============================================================
+// AI Bot — Bots list (the new default landing tab)
+// ============================================================
+// Each bot is one row in ai_bot_settings: the legacy id=1 row
+// (phone_number_id IS NULL) is the "Default fallback" bot, plus one
+// row per phone the tenant gave its own training. This view renders
+// each as a card showing: name + status toggle, numbers it serves,
+// knowledge base docs assigned, and shortcuts to edit the full
+// settings or delete.
+// ============================================================
+async function _aibotBotsListView() {
+  const wrap = h('div', {});
+
+  // ---- Top action bar ----
+  const head = h('div', {
+    class: 'card',
+    style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '.5rem', background: 'linear-gradient(135deg, #eef2ff 0%, #fdf4ff 100%)', border: '1px solid #c7d2fe' }
+  });
+  head.appendChild(h('div', {},
+    h('div', { style: { fontWeight: 700, fontSize: '1rem' } }, 'Your bots'),
+    h('div', { class: 'muted', style: { fontSize: '.82rem' } },
+      'Each bot has its own training (prompt, KB, languages) and is assigned to one or more WhatsApp numbers. Customers messaging a number get the bot configured for that number.')
+  ));
+  const newBtn = h('button', { class: 'btn primary' }, '➕ New Bot');
+  head.appendChild(newBtn);
+  wrap.appendChild(head);
+
+  // ---- Load: bots, phones, KB docs ----
+  let bots = [], phones = [], kbDocs = [];
+  try { bots = ((await api('api_aibot_settings_listAll')).configs) || []; } catch (e) { bots = []; }
+  try { phones = await api('api_wa_phones_listAll'); } catch (_) { phones = []; }
+  try { kbDocs = ((await api('api_aibot_kb_list')).docs) || []; } catch (_) { kbDocs = []; }
+  const phById = new Map();
+  phones.forEach(p => phById.set(String(p.phone_number_id || ''), p));
+
+  // Helper: given a bot row, return list of phone display strings it serves.
+  function botServesPhones(bot) {
+    const out = [];
+    if (bot.phone_number_id) {
+      const p = phById.get(String(bot.phone_number_id));
+      out.push({ id: String(bot.phone_number_id), label: p ? (p.display_phone_number || bot.phone_number_id) : bot.phone_number_id, ph: p });
+    }
+    (bot.additional_phone_ids || []).forEach(id => {
+      const p = phById.get(String(id));
+      out.push({ id: String(id), label: p ? (p.display_phone_number || id) : id, ph: p });
+    });
+    return out;
+  }
+
+  // Helper: which phones are not yet assigned to ANY bot (for + New Bot picker).
+  function unassignedPhones() {
+    const taken = new Set();
+    bots.forEach(b => {
+      if (b.phone_number_id) taken.add(String(b.phone_number_id));
+      (b.additional_phone_ids || []).forEach(x => taken.add(String(x)));
+    });
+    return phones.filter(p => !taken.has(String(p.phone_number_id || '')));
+  }
+
+  // Helper: filter KB docs scoped to this bot (or global if it's the default bot).
+  function botKbDocs(bot) {
+    if (!bot.phone_number_id) {
+      // Default-fallback bot owns all GLOBAL docs (NULL phone)
+      return kbDocs.filter(d => !d.phone_number_id);
+    }
+    // Per-phone bot owns docs scoped to its primary OR any of its additional phones
+    const myIds = new Set([String(bot.phone_number_id), ...(bot.additional_phone_ids || []).map(String)]);
+    return kbDocs.filter(d => d.phone_number_id && myIds.has(String(d.phone_number_id)));
+  }
+
+  // ---- Render each bot card ----
+  if (!bots.length) {
+    wrap.appendChild(h('div', { class: 'card', style: { background: '#fef3c7', border: '1px solid #f59e0b', textAlign: 'center', padding: '1.25rem' } },
+      h('div', { style: { fontSize: '1.1rem', fontWeight: 700 } }, 'No bots yet'),
+      h('div', { class: 'muted', style: { fontSize: '.9rem', marginTop: '.4rem' } },
+        'Click "New Bot" above to create your first WhatsApp AI bot. It will start with sensible defaults — you can fine-tune its prompt, knowledge base, and which numbers it replies on.')
+    ));
+  }
+
+  bots.forEach(bot => renderBotCard(bot));
+
+  function renderBotCard(bot) {
+    const isDefault = !bot.phone_number_id;
+    const card = h('div', { class: 'card', style: { borderLeft: '4px solid ' + (isDefault ? '#6366f1' : '#10b981') } });
+
+    // ---- Header: name + status ----
+    const header = h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '.5rem' } });
+    const nameLine = h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem' } },
+      h('span', { style: { fontSize: '1.5rem' } }, isDefault ? '🏠' : '📱'),
+      h('div', {},
+        h('div', { style: { fontWeight: 700, fontSize: '1.05rem' } },
+          bot.bot_label || (isDefault ? 'Default bot (fallback)' : (bot.bot_name || 'Bot')),
+          isDefault ? h('span', { style: { marginLeft: '.5rem', fontSize: '.7rem', background: '#e0e7ff', color: '#4338ca', padding: '2px 6px', borderRadius: '999px', fontWeight: 600 } }, 'DEFAULT') : null
+        ),
+        h('div', { class: 'muted', style: { fontSize: '.82rem' } },
+          isDefault
+            ? 'Replies on every number not assigned to another bot.'
+            : 'Replies only on the numbers below.')
+      )
+    );
+    const enabledChk = h('input', { type: 'checkbox', checked: Number(bot.is_enabled) === 1 ? 'checked' : null });
+    enabledChk.onchange = async () => {
+      try {
+        await api('api_aibot_settings_save', { phone_number_id: bot.phone_number_id || null, is_enabled: enabledChk.checked });
+        toast(enabledChk.checked ? 'Bot enabled' : 'Bot disabled', 'ok');
+      } catch (e) { toast(e.message, 'err'); enabledChk.checked = !enabledChk.checked; }
+    };
+    const statusLbl = h('label', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', fontSize: '.85rem' } },
+      enabledChk, h('span', {}, 'Enabled')
+    );
+    header.appendChild(nameLine);
+    header.appendChild(statusLbl);
+    card.appendChild(header);
+
+    // ---- Step 1: Numbers this bot replies on ----
+    const numbersBlock = h('div', { style: { marginTop: '.85rem', padding: '.6rem .75rem', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' } });
+    numbersBlock.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '.4rem' } },
+      h('div', { style: { fontWeight: 600, fontSize: '.9rem' } }, '📱 Numbers'),
+      isDefault
+        ? h('span', { class: 'muted', style: { fontSize: '.78rem' } }, 'Auto: every number not assigned elsewhere')
+        : h('button', { class: 'btn xs ghost', onclick: () => openNumbersPicker(bot) }, 'Manage numbers')
+    ));
+    const served = botServesPhones(bot);
+    const chips = h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '.35rem' } });
+    if (isDefault) {
+      // Show the phones NOT assigned to any other bot — those are what this bot will reply on.
+      const taken = new Set();
+      bots.forEach(b => {
+        if (b !== bot && b.phone_number_id) taken.add(String(b.phone_number_id));
+        if (b !== bot) (b.additional_phone_ids || []).forEach(x => taken.add(String(x)));
+      });
+      const fallbackPhones = phones.filter(p => !taken.has(String(p.phone_number_id || '')));
+      if (!fallbackPhones.length) {
+        chips.appendChild(h('span', { class: 'muted', style: { fontSize: '.82rem' } }, 'No numbers fall through to this bot — every connected number is assigned.'));
+      } else {
+        fallbackPhones.forEach(p => chips.appendChild(numberChip(p, false)));
+      }
+    } else if (!served.length) {
+      chips.appendChild(h('span', { class: 'muted', style: { fontSize: '.82rem' } }, 'No numbers assigned yet — click "Manage numbers".'));
+    } else {
+      served.forEach((s, idx) => chips.appendChild(numberChip(s.ph || { phone_number_id: s.id, display_phone_number: s.label }, idx === 0)));
+    }
+    numbersBlock.appendChild(chips);
+    card.appendChild(numbersBlock);
+
+    function numberChip(p, isPrimary) {
+      return h('span', {
+        style: { display: 'inline-flex', alignItems: 'center', gap: '.3rem', padding: '.25rem .55rem', background: '#fff', border: '1px solid #cbd5e1', borderRadius: '999px', fontSize: '.82rem' }
+      }, h('span', {}, '📞 ' + (p.display_phone_number || p.phone_number_id || '')),
+         isPrimary && !isDefault ? h('span', { style: { fontSize: '.66rem', background: '#dcfce7', color: '#166534', padding: '1px 5px', borderRadius: '4px', fontWeight: 600 } }, 'PRIMARY') : null);
+    }
+
+    // ---- Step 2: Knowledge base ----
+    const kbBlock = h('div', { style: { marginTop: '.6rem', padding: '.6rem .75rem', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' } });
+    const myDocs = botKbDocs(bot);
+    const globalDocsCount = kbDocs.filter(d => !d.phone_number_id).length;
+    kbBlock.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '.4rem' } },
+      h('div', { style: { fontWeight: 600, fontSize: '.9rem' } }, '📚 Knowledge base ',
+        h('span', { class: 'muted', style: { fontWeight: 400, fontSize: '.78rem' } }, '(' + myDocs.length + ' assigned' + (!isDefault && globalDocsCount ? ' + ' + globalDocsCount + ' global' : '') + ')')),
+      h('button', { class: 'btn xs ghost', onclick: () => openKbPicker(bot) }, 'Manage KB')
+    ));
+    const kbChips = h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '.3rem' } });
+    if (!myDocs.length) {
+      kbChips.appendChild(h('span', { class: 'muted', style: { fontSize: '.82rem' } },
+        isDefault ? 'No global docs yet — global docs are used by every bot.' : 'No docs assigned. Global docs (' + globalDocsCount + ') will still be used.'));
+    } else {
+      myDocs.slice(0, 8).forEach(d => kbChips.appendChild(h('span', {
+        style: { padding: '.2rem .5rem', background: '#fff', border: '1px solid #c7d2fe', borderRadius: '6px', fontSize: '.78rem' }
+      }, '📄 ' + (d.title || 'Untitled').slice(0, 40))));
+      if (myDocs.length > 8) kbChips.appendChild(h('span', { class: 'muted', style: { fontSize: '.78rem' } }, '+ ' + (myDocs.length - 8) + ' more'));
+    }
+    kbBlock.appendChild(kbChips);
+    card.appendChild(kbBlock);
+
+    // ---- Goal preview + tone ----
+    const goalLine = (bot.system_prompt || '').slice(0, 140);
+    if (goalLine) {
+      card.appendChild(h('div', { style: { marginTop: '.6rem', fontSize: '.82rem', color: '#475569', fontStyle: 'italic' } },
+        '🎯 ' + goalLine + (bot.system_prompt.length > 140 ? '…' : '')
+      ));
+    }
+
+    // ---- Footer actions ----
+    const footer = h('div', { style: { marginTop: '.85rem', display: 'flex', flexWrap: 'wrap', gap: '.4rem', borderTop: '1px solid #e2e8f0', paddingTop: '.6rem' } });
+    footer.appendChild(h('button', { class: 'btn small primary', onclick: () => editBot(bot) }, '✏️ Edit full settings'));
+    footer.appendChild(h('button', { class: 'btn small ghost', onclick: () => openKbPicker(bot) }, '📚 Manage KB'));
+    if (!isDefault) footer.appendChild(h('button', { class: 'btn small ghost', onclick: () => openNumbersPicker(bot) }, '📱 Manage numbers'));
+    footer.appendChild(h('div', { style: { flex: 1 } }));  // spacer
+    if (!isDefault) {
+      footer.appendChild(h('button', { class: 'btn small danger', onclick: () => deleteBot(bot) }, '🗑 Delete bot'));
+    }
+    card.appendChild(footer);
+
+    wrap.appendChild(card);
+  }
+
+  // ---- Action handlers ----
+  function editBot(bot) {
+    window._aibotActivePhId = bot.phone_number_id || null;
+    window._aibotInitialTab = 'settings';
+    VIEWS.aibot(document.getElementById('view'));
+  }
+
+  async function deleteBot(bot) {
+    if (!confirm('Delete this bot? Numbers it served will fall back to the Default bot. (KB docs scoped to this bot will become orphaned — re-assign them or they\'ll stop being used.)')) return;
+    try {
+      await api('api_aibot_settings_delete', bot.phone_number_id);
+      toast('Bot deleted', 'ok');
+      _aibotRefreshBots();
+    } catch (e) { toast(e.message, 'err'); }
+  }
+
+  function openNumbersPicker(bot) {
+    if (!bot.phone_number_id && bots.length === 1) {
+      return toast('The default bot serves every number with no specific bot.', 'err');
+    }
+    const taken = new Set();
+    bots.forEach(b => {
+      if (b.id !== bot.id) {
+        if (b.phone_number_id) taken.add(String(b.phone_number_id));
+        (b.additional_phone_ids || []).forEach(x => taken.add(String(x)));
+      }
+    });
+    const myPrimary = String(bot.phone_number_id || '');
+    const myAddl = new Set((bot.additional_phone_ids || []).map(String));
+
+    const modal = h('div', { class: 'modal-backdrop' });
+    const dlg = h('div', { class: 'modal', style: { maxWidth: '520px' } });
+    dlg.appendChild(h('h3', { style: { marginTop: 0 } }, '📱 Numbers for "' + (bot.bot_label || bot.bot_name || 'Bot') + '"'));
+    dlg.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem' } }, 'Tick every WhatsApp number that should be answered by this bot. The first ticked one becomes the primary — that\'s where new KB docs will be scoped by default.'));
+
+    const list = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '.35rem', maxHeight: '320px', overflowY: 'auto' } });
+    const chkMap = {};
+    phones.forEach(p => {
+      const id = String(p.phone_number_id || '');
+      if (!id) return;
+      const isTaken = taken.has(id);
+      const isMine = (id === myPrimary) || myAddl.has(id);
+      const chk = h('input', { type: 'checkbox', value: id, checked: isMine ? 'checked' : null, disabled: (isTaken && !isMine) ? 'disabled' : null });
+      chkMap[id] = chk;
+      list.appendChild(h('label', {
+        style: { display: 'flex', alignItems: 'center', gap: '.55rem', padding: '.4rem .55rem', background: isTaken && !isMine ? '#fee2e2' : '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px', opacity: isTaken && !isMine ? 0.55 : 1 }
+      }, chk,
+         h('div', { style: { flex: 1 } },
+           h('div', {}, h('strong', {}, p.display_phone_number || id)),
+           h('div', { class: 'muted', style: { fontSize: '.75rem' } }, p.verified_name || (p.label || ''),
+             isTaken && !isMine ? h('span', { style: { marginLeft: '.4rem', fontSize: '.7rem', background: '#fca5a5', color: '#7f1d1d', padding: '1px 5px', borderRadius: '4px', fontWeight: 600 } }, 'IN USE BY ANOTHER BOT') : null)
+         )
+      ));
+    });
+    dlg.appendChild(list);
+
+    const footer = h('div', { style: { display: 'flex', gap: '.4rem', justifyContent: 'flex-end', marginTop: '.85rem' } });
+    footer.appendChild(h('button', { class: 'btn ghost', onclick: () => modal.remove() }, 'Cancel'));
+    footer.appendChild(h('button', { class: 'btn primary', onclick: async () => {
+      const picked = Object.entries(chkMap).filter(([_id, c]) => c.checked).map(([id]) => id);
+      if (!picked.length) {
+        if (!confirm('No numbers selected. Save anyway? This bot will sit idle until you add a number.')) return;
+      }
+      const primary = picked[0] || null;
+      const additional = picked.slice(1);
+      try {
+        // Two-step: if primary changed, we need to write to the new phone_number_id.
+        // The backend's per-phone upsert clones the existing config when the phone_number_id is new.
+        await api('api_aibot_settings_save', { phone_number_id: primary, additional_phone_ids: additional });
+        // If the bot's primary changed, the OLD per-phone row still exists. Clean it up.
+        if (bot.phone_number_id && bot.phone_number_id !== primary) {
+          try { await api('api_aibot_settings_delete', bot.phone_number_id); } catch (_) {}
+        }
+        toast('Numbers updated', 'ok');
+        modal.remove();
+        _aibotRefreshBots();
+      } catch (e) { toast(e.message, 'err'); }
+    } }, 'Save numbers'));
+    dlg.appendChild(footer);
+    modal.appendChild(dlg);
+    document.body.appendChild(modal);
+  }
+
+  function openKbPicker(bot) {
+    const isDefault = !bot.phone_number_id;
+    const modal = h('div', { class: 'modal-backdrop' });
+    const dlg = h('div', { class: 'modal', style: { maxWidth: '640px' } });
+    dlg.appendChild(h('h3', { style: { marginTop: 0 } }, '📚 KB for "' + (bot.bot_label || bot.bot_name || 'Bot') + '"'));
+    dlg.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+      isDefault
+        ? 'Tick docs to make them GLOBAL (used by every bot). Untick to remove from global. To scope a doc to a specific bot, edit it from that bot.'
+        : 'Tick docs to assign them ONLY to this bot. Untick to make them global (used by every bot). The bot also gets every global doc automatically.'
+    ));
+
+    if (!kbDocs.length) {
+      dlg.appendChild(h('div', { class: 'muted', style: { padding: '1rem', textAlign: 'center' } },
+        'No KB docs yet. Add some on the Knowledge Base tab.',
+        h('button', { class: 'btn small ghost', style: { marginLeft: '.5rem' }, onclick: () => { modal.remove(); window._aibotInitialTab = 'kb'; VIEWS.aibot(document.getElementById('view')); }}, 'Go to Knowledge Base')
+      ));
+    } else {
+      const myIds = new Set([String(bot.phone_number_id || ''), ...(bot.additional_phone_ids || []).map(String)].filter(Boolean));
+      const list = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '.3rem', maxHeight: '380px', overflowY: 'auto' } });
+      const chkMap = {};
+      kbDocs.forEach(d => {
+        const docPh = String(d.phone_number_id || '');
+        const isMine = isDefault ? !docPh : myIds.has(docPh);
+        const ownedByOther = docPh && !isMine;
+        const chk = h('input', { type: 'checkbox', checked: isMine ? 'checked' : null, disabled: ownedByOther ? 'disabled' : null });
+        chkMap[d.id] = chk;
+        list.appendChild(h('label', {
+          style: { display: 'flex', alignItems: 'center', gap: '.55rem', padding: '.35rem .55rem', background: ownedByOther ? '#fef3c7' : '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px', opacity: ownedByOther ? 0.55 : 1 }
+        }, chk,
+           h('div', { style: { flex: 1 } },
+             h('div', {}, h('strong', {}, d.title)),
+             h('div', { class: 'muted', style: { fontSize: '.74rem' } },
+               (({ text: '📝 Text', url: '🌐 URL', pdf: '📄 PDF', docx: '📄 DOCX' })[d.source_type] || d.source_type),
+               '  ·  ', (d.char_count || 0).toLocaleString('en-IN'), ' chars',
+               ownedByOther ? h('span', { style: { marginLeft: '.4rem', fontSize: '.7rem', background: '#fde68a', color: '#92400e', padding: '1px 5px', borderRadius: '4px', fontWeight: 600 } }, 'OWNED BY ANOTHER BOT') : null)
+           )
+        ));
+      });
+      dlg.appendChild(list);
+    }
+
+    const footer = h('div', { style: { display: 'flex', gap: '.4rem', justifyContent: 'flex-end', marginTop: '.85rem' } });
+    footer.appendChild(h('button', { class: 'btn ghost', onclick: () => modal.remove() }, 'Cancel'));
+    if (kbDocs.length) {
+      footer.appendChild(h('button', { class: 'btn primary', onclick: async () => {
+        const myIds = new Set([String(bot.phone_number_id || ''), ...(bot.additional_phone_ids || []).map(String)].filter(Boolean));
+        const targetPhId = bot.phone_number_id || (bot.additional_phone_ids && bot.additional_phone_ids[0]) || null;
+        const toAssign = [];
+        const toGlobal = [];
+        kbDocs.forEach(d => {
+          const docPh = String(d.phone_number_id || '');
+          const isMineNow = isDefault ? !docPh : myIds.has(docPh);
+          const wantsMine = (() => {
+            const node = dlg.querySelector('input[type="checkbox"]:not([disabled])');
+            // Inline check via chkMap - rebuilt below
+            return null;
+          })();
+        });
+        // Re-walk via chkMap captured in closure
+        const all = dlg.querySelectorAll('input[type="checkbox"]:not([disabled])');
+        // We don't have direct access to chkMap here from this closure; rebuild from data attrs.
+        // Cleaner: iterate kbDocs and find matching chkMap by index.
+        const decisions = [];
+        kbDocs.forEach((d, idx) => {
+          const docPh = String(d.phone_number_id || '');
+          // Find this doc's checkbox in the list (skip disabled)
+        });
+        // Simpler: use the labels rendered earlier - inputs are in DOM order matching kbDocs
+        const chks = dlg.querySelectorAll('input[type="checkbox"]');
+        const chkArr = Array.from(chks);
+        let cIdx = 0;
+        kbDocs.forEach((d) => {
+          const c = chkArr[cIdx++];
+          if (!c) return;
+          const docPh = String(d.phone_number_id || '');
+          const ownedByOther = docPh && !(isDefault ? !docPh : myIds.has(docPh));
+          if (ownedByOther) return;
+          if (c.checked && !(isDefault ? !docPh : myIds.has(docPh))) {
+            // Newly checked → assign to this bot
+            toAssign.push(d.id);
+          } else if (!c.checked && (isDefault ? !docPh : myIds.has(docPh))) {
+            // Newly unchecked → unassign (move to global)
+            toGlobal.push(d.id);
+          }
+        });
+        try {
+          if (toAssign.length) await api('api_aibot_kb_assign_bulk', { doc_ids: toAssign, phone_number_id: isDefault ? null : targetPhId });
+          if (toGlobal.length) await api('api_aibot_kb_assign_bulk', { doc_ids: toGlobal, phone_number_id: null });
+          toast('KB updated (' + (toAssign.length + toGlobal.length) + ' changes)', 'ok');
+          modal.remove();
+          _aibotRefreshBots();
+        } catch (e) { toast(e.message, 'err'); }
+      }}, 'Save KB'));
+    }
+    dlg.appendChild(footer);
+    modal.appendChild(dlg);
+    document.body.appendChild(modal);
+  }
+
+  // ---- + New Bot wizard ----
+  newBtn.onclick = () => {
+    const free = unassignedPhones();
+    const modal = h('div', { class: 'modal-backdrop' });
+    const dlg = h('div', { class: 'modal', style: { maxWidth: '480px' } });
+    dlg.appendChild(h('h3', { style: { marginTop: 0 } }, '➕ Create a new bot'));
+    if (!phones.length) {
+      dlg.appendChild(h('div', { class: 'muted' }, 'No WhatsApp numbers connected yet. Connect a number on the WhatsApp page first.'));
+      dlg.appendChild(h('button', { class: 'btn ghost', onclick: () => modal.remove() }, 'Close'));
+      modal.appendChild(dlg);
+      document.body.appendChild(modal);
+      return;
+    }
+    if (!free.length) {
+      dlg.appendChild(h('div', { class: 'muted' }, 'Every connected number is already assigned to a bot. To create another bot, first remove a number from an existing bot (Manage numbers → untick it).'));
+      dlg.appendChild(h('div', { style: { display: 'flex', justifyContent: 'flex-end', marginTop: '.85rem' } },
+        h('button', { class: 'btn ghost', onclick: () => modal.remove() }, 'Close')));
+      modal.appendChild(dlg);
+      document.body.appendChild(modal);
+      return;
+    }
+    dlg.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem' } }, 'Step 1 — pick a name and the WhatsApp number this bot will reply on. You can add more numbers and customise its training afterwards.'));
+    const nameInp = h('input', { type: 'text', placeholder: 'e.g. Sales Bot', style: { width: '100%' } });
+    const phSel = h('select', { style: { width: '100%' } },
+      ...free.map(p => h('option', { value: String(p.phone_number_id) }, '📱 ' + (p.display_phone_number || p.phone_number_id) + (p.label ? ' (' + p.label + ')' : ''))));
+    dlg.appendChild(h('div', { class: 'field' }, h('label', {}, 'Bot name'), nameInp));
+    dlg.appendChild(h('div', { class: 'field' }, h('label', {}, 'Number to assign'), phSel));
+    const footer = h('div', { style: { display: 'flex', gap: '.4rem', justifyContent: 'flex-end', marginTop: '.85rem' } });
+    footer.appendChild(h('button', { class: 'btn ghost', onclick: () => modal.remove() }, 'Cancel'));
+    footer.appendChild(h('button', { class: 'btn primary', onclick: async () => {
+      if (!nameInp.value.trim()) return toast('Give the bot a name', 'err');
+      try {
+        await api('api_aibot_settings_save', {
+          phone_number_id: phSel.value,
+          bot_label: nameInp.value.trim(),
+          is_enabled: 1
+        });
+        toast('Bot created — opening editor', 'ok');
+        modal.remove();
+        window._aibotActivePhId = phSel.value;
+        window._aibotInitialTab = 'settings';
+        VIEWS.aibot(document.getElementById('view'));
+      } catch (e) { toast(e.message, 'err'); }
+    }}, 'Create bot'));
+    dlg.appendChild(footer);
+    modal.appendChild(dlg);
+    document.body.appendChild(modal);
+  };
+
+  return wrap;
+}
+
+// Helper: re-paint the Bots tab from any nested action.
+function _aibotRefreshBots() {
+  window._aibotInitialTab = 'bots';
+  VIEWS.aibot(document.getElementById('view'));
+}
 
 // ============================================================
 // AI Bot — Settings sub-tab
@@ -6546,16 +6987,9 @@ async function _aibotSettingsView(currentPhId) {
   const s = data.settings;
   const wrap = h('div', {});
 
-  // ---- Per-number config switcher ----
-  // Loads all connected numbers + the existing per-phone configs, then
-  // renders a horizontal pill picker. Each pill: 'Default (fallback)'
-  // OR a phone number. Click switches the form to that config.
-  const switcher = h('div', { class: 'card', style: { background: 'linear-gradient(135deg, #eef2ff 0%, #fdf4ff 100%)', border: '1px solid #c7d2fe', marginBottom: '.85rem' } });
-  switcher.appendChild(h('h4', { style: { margin: '0 0 .35rem' } }, '📱 Editing config for'));
-  switcher.appendChild(h('p', { class: 'muted', style: { fontSize: '.84rem', margin: '0 0 .55rem' } },
-    'Pick a number to give it its own bot training (system prompt, language, KB, off-keywords, etc.). The Default config is used as a fallback for any number without its own config.'));
-  const pills = h('div', { style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap', alignItems: 'center' } });
-  switcher.appendChild(pills);
+  // ---- Editing context header ----
+  // The Bots tab is the master list; this view is the deep editor for ONE bot.
+  // Header tells the user which bot they're editing + offers a back-link.
   let phones = [];
   let perPhoneConfigs = [];
   try { phones = await api('api_wa_phones_listAll'); } catch (_) { phones = []; }
@@ -6563,64 +6997,35 @@ async function _aibotSettingsView(currentPhId) {
   const configByPhId = new Map();
   perPhoneConfigs.forEach(c => { if (c.phone_number_id) configByPhId.set(String(c.phone_number_id), c); });
 
-  function renderPill(label, phId, isActive, hasConfig, isEnabled) {
-    const btn = h('button', {
-      class: 'btn small ' + (isActive ? 'primary' : 'ghost'),
-      style: {
-        whiteSpace: 'nowrap',
-        background: isActive ? 'var(--brand)' : (hasConfig ? '#fff' : '#f1f5f9'),
-        color: isActive ? '#fff' : (hasConfig ? '#0f172a' : '#64748b'),
-        border: '1px solid ' + (isActive ? 'var(--brand)' : (hasConfig ? '#cbd5e1' : '#e2e8f0')),
-        padding: '.35rem .75rem'
-      }
-    }, label, hasConfig ? h('span', { style: { marginLeft: '.35rem', fontSize: '.7rem', color: isActive ? '#fff' : (isEnabled ? '#10b981' : '#94a3b8') } }, isEnabled ? '●' : '○') : null);
-    btn.onclick = () => {
-      // Re-render the whole AI Bot view scoped to this config
-      VIEWS.aibot(document.getElementById('view'));
-      // Set the active sub-tab back to settings; pass the phId via a window-level var
-      window._aibotActivePhId = phId;
-      setTimeout(() => {
-        const settingsBody = document.getElementById('aibot-body');
-        if (settingsBody) {
-          settingsBody.innerHTML = '<div class="loading">Loading…</div>';
-          _aibotSettingsView(phId).then(v => settingsBody.replaceChildren(v));
-        }
-      }, 50);
-    };
-    return btn;
-  }
+  const _activePh = phIdParam ? phones.find(p => String(p.phone_number_id || '') === phIdParam) : null;
+  const _activeBot = phIdParam ? configByPhId.get(phIdParam) : (perPhoneConfigs.find(c => !c.phone_number_id) || null);
+  const _editLabel = phIdParam
+    ? ((_activeBot && _activeBot.bot_label) || (_activePh ? (_activePh.display_phone_number || phIdParam) : phIdParam))
+    : ((_activeBot && _activeBot.bot_label) || 'Default bot (fallback)');
 
-  // Default pill
-  const defaultActive = !phIdParam;
-  const defaultRow = perPhoneConfigs.find(c => !c.phone_number_id);
-  pills.appendChild(renderPill('🏠 Default (fallback)', null, defaultActive, true, defaultRow && Number(defaultRow.is_enabled) === 1));
-
-  // Per-phone pills
-  phones.forEach(ph => {
-    const id = String(ph.phone_number_id || '');
-    if (!id) return;
-    const has = configByPhId.has(id);
-    const isActive = phIdParam === id;
-    const cfg = configByPhId.get(id);
-    const label = (ph.display_phone_number || id) + (ph.label ? ' · ' + ph.label : '');
-    pills.appendChild(renderPill('📱 ' + label, id, isActive, has, cfg && Number(cfg.is_enabled) === 1));
-  });
+  const switcher = h('div', { class: 'card', style: { background: 'linear-gradient(135deg, #eef2ff 0%, #fdf4ff 100%)', border: '1px solid #c7d2fe', marginBottom: '.85rem', display: 'flex', alignItems: 'center', gap: '.6rem', flexWrap: 'wrap' } });
+  const _backBtn = h('button', { class: 'btn small ghost', onclick: () => { window._aibotInitialTab = 'bots'; window._aibotActivePhId = null; VIEWS.aibot(document.getElementById('view')); } }, '← Back to Bots');
+  switcher.appendChild(_backBtn);
+  switcher.appendChild(h('div', { style: { flex: 1 } },
+    h('div', { style: { fontWeight: 700, fontSize: '.95rem' } },
+      (phIdParam ? '📱 Editing: ' : '🏠 Editing: ') + _editLabel),
+    h('div', { class: 'muted', style: { fontSize: '.78rem' } },
+      phIdParam
+        ? ('This bot replies on ' + (_activePh ? _activePh.display_phone_number : phIdParam) + (_activeBot && _activeBot.additional_phone_ids && _activeBot.additional_phone_ids.length ? ' + ' + _activeBot.additional_phone_ids.length + ' more' : '') + '. To add/remove numbers, use "Manage numbers" on the bot card.')
+        : 'Default bot is used as a fallback when an inbound arrives on a number that has no specific bot configured.')
+  ));
+  // Bot label editor (inline)
+  const _labelInp = h('input', { type: 'text', placeholder: 'Bot name (label)', value: (_activeBot && _activeBot.bot_label) || '', style: { width: '180px', padding: '.3rem .5rem' } });
+  const _labelBtn = h('button', { class: 'btn xs primary', onclick: async () => {
+    try { await api('api_aibot_settings_save', { phone_number_id: phIdParam || null, bot_label: _labelInp.value }); toast('Label saved', 'ok'); }
+    catch (e) { toast(e.message, 'err'); }
+  } }, 'Save label');
+  switcher.appendChild(_labelInp);
+  switcher.appendChild(_labelBtn);
 
   wrap.appendChild(switcher);
 
-  // Banner showing what config we're editing
-  if (phIdParam) {
-    const ph = phones.find(p => String(p.phone_number_id || '') === phIdParam);
-    wrap.appendChild(h('div', { class: 'card', style: { background: '#fef3c7', border: '1px solid #f59e0b', marginBottom: '.85rem' } },
-      h('div', { style: { fontWeight: 600 } }, '✏️ You are editing the config for ' + (ph ? (ph.display_phone_number || phIdParam) : phIdParam)),
-      h('div', { class: 'muted', style: { fontSize: '.82rem' } }, 'Save will create or update this number\'s own config. Switch back to Default to edit the fallback.'),
-      h('button', { class: 'btn small ghost', style: { marginTop: '.4rem' }, onclick: async () => {
-        if (!confirm('Delete this number\'s config? It will fall back to the Default settings.')) return;
-        try { await api('api_aibot_settings_delete', phIdParam); toast('Deleted', 'ok'); window._aibotActivePhId = null; navigateTo('aibot'); }
-        catch (e) { toast(e.message, 'err'); }
-      }}, '🗑 Delete this number\'s config')
-    ));
-  }
+  // (Old amber editing-context banner removed — replaced by the header above.)
   if (!data.global.is_active) {
     wrap.appendChild(h('div', { class: 'card', style: { background: '#fef3c7', borderLeft: '4px solid #f59e0b' } },
       h('div', { style: { fontWeight: '600' } }, '⚠️ Platform AI is disabled'),

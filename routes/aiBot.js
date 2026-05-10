@@ -76,12 +76,28 @@ function _coerceSettings(row) {
   return out;
 }
 
-async function api_aibot_settings_get(token) {
+async function api_aibot_settings_get(token, phoneNumberId) {
   const me = await authUser(token);
+  await _ensureAiBotColumns();
+  const phId = phoneNumberId ? String(phoneNumberId) : null;
   let row;
   try {
-    const r = await db.query(`SELECT * FROM ai_bot_settings WHERE id = 1`);
-    row = r.rows[0];
+    if (phId) {
+      const r = await db.query(`SELECT * FROM ai_bot_settings WHERE phone_number_id = $1 LIMIT 1`, [phId]);
+      row = r.rows[0];
+      if (!row) {
+        const d = await db.query(`SELECT * FROM ai_bot_settings WHERE phone_number_id IS NULL ORDER BY id ASC LIMIT 1`);
+        row = d.rows[0];
+        if (row) row.phone_number_id = phId;
+      }
+    } else {
+      const r = await db.query(`SELECT * FROM ai_bot_settings WHERE phone_number_id IS NULL ORDER BY id ASC LIMIT 1`);
+      row = r.rows[0];
+      if (!row) {
+        const r2 = await db.query(`SELECT * FROM ai_bot_settings WHERE id = 1`);
+        row = r2.rows[0];
+      }
+    }
   } catch (_) { row = null; }
 
   // Pull global activation status (super-admin can globally disable)
@@ -94,8 +110,16 @@ async function api_aibot_settings_get(token) {
     }
   } catch (_) {}
 
+  const coerced = _coerceSettings(row);
+  if (row) {
+    coerced.phone_number_id      = row.phone_number_id || null;
+    coerced.bot_label            = row.bot_label || '';
+    let addl = row.additional_phone_ids;
+    if (typeof addl === 'string') { try { addl = JSON.parse(addl); } catch (_) { addl = []; } }
+    coerced.additional_phone_ids = Array.isArray(addl) ? addl.map(String) : [];
+  }
   return {
-    settings: _coerceSettings(row),
+    settings: coerced,
     is_admin: me.role === 'admin' || me.role === 'manager',
     global,
     available_modes: [
@@ -131,6 +155,10 @@ async function _ensureAiBotColumns() {
     // businesses keep their KBs separate per number.
     await db.query(`ALTER TABLE ai_kb_documents ADD COLUMN IF NOT EXISTS phone_number_id TEXT`);
     await db.query(`CREATE INDEX IF NOT EXISTS idx_ai_kb_documents_phone ON ai_kb_documents(phone_number_id)`);
+    // Bot-centric UX (May 2026): each ai_bot_settings row is a 'Bot' with
+    // a friendly label + array of additional phones it serves besides its primary.
+    await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS bot_label TEXT`);
+    await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS additional_phone_ids JSONB NOT NULL DEFAULT '[]'::jsonb`);
     if (pool) _aiBotEnsuredPools.add(pool);
   } catch (e) { /* table missing — _coerceSettings handles defaults */ }
 }
@@ -173,13 +201,97 @@ async function api_aibot_settings_save(token, payload) {
   if (p.kb_max_chars              != null) addCol('kb_max_chars',              '$$',          Math.max(2000, Math.min(120000, Number(p.kb_max_chars))));
   if (p.history_messages          != null) addCol('history_messages',          '$$',          Math.max(0, Math.min(40, Number(p.history_messages))));
 
-  if (sets.length === 0) return await api_aibot_settings_get(token);
+  // Phone-keyed upsert: one bot row per phone_number_id (NULL = legacy default).
+  const phId = (p.phone_number_id != null && String(p.phone_number_id).length > 0) ? String(p.phone_number_id) : null;
 
-  // Make sure the singleton row exists (id = 1) before we UPDATE.
-  await db.query(`INSERT INTO ai_bot_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
-  sets.push('updated_at = NOW()');
-  await db.query(`UPDATE ai_bot_settings SET ${sets.join(', ')} WHERE id = 1`, vals);
-  return await api_aibot_settings_get(token);
+  if (p.bot_label != null) addCol('bot_label', '$$', String(p.bot_label).slice(0, 120));
+  if (p.additional_phone_ids != null) addCol('additional_phone_ids', '$$::jsonb', JSON.stringify(Array.isArray(p.additional_phone_ids) ? p.additional_phone_ids.map(String) : []));
+
+  if (sets.length === 0) return await api_aibot_settings_get(token, phId);
+
+  if (phId) {
+    const exists = await db.query(`SELECT id FROM ai_bot_settings WHERE phone_number_id = $1 LIMIT 1`, [phId]);
+    if (exists.rows[0]) {
+      sets.push('updated_at = NOW()');
+      await db.query(`UPDATE ai_bot_settings SET ${sets.join(', ')} WHERE id = $${i}`, [...vals, exists.rows[0].id]);
+    } else {
+      // Seed a brand-new per-phone row by cloning the default row, then overlay caller's fields.
+      const def = await db.query(`SELECT * FROM ai_bot_settings WHERE phone_number_id IS NULL ORDER BY id ASC LIMIT 1`);
+      const seed = def.rows[0] || {};
+      const cloneCols = ['is_enabled','bot_name','business_name','language','system_prompt','welcome_message','reply_modes','business_hours','trigger_keywords','off_keywords','active_phone_number_ids','resume_after_idle_minutes','resume_after_idle_seconds','max_replies_per_thread','escalation_keywords','model_override','use_kb','kb_max_chars','history_messages'];
+      const insertCols = ['phone_number_id'];
+      const insertVals = [phId];
+      cloneCols.forEach(c => {
+        if (seed[c] !== undefined && seed[c] !== null) {
+          insertCols.push(c);
+          if (['reply_modes','business_hours','active_phone_number_ids'].includes(c)) {
+            insertVals.push(typeof seed[c] === 'string' ? seed[c] : JSON.stringify(seed[c]));
+          } else {
+            insertVals.push(seed[c]);
+          }
+        }
+      });
+      const placeholders = insertCols.map((col, idx) => {
+        if (['reply_modes','business_hours','active_phone_number_ids','additional_phone_ids'].includes(col)) return '$' + (idx + 1) + '::jsonb';
+        return '$' + (idx + 1);
+      });
+      await db.query(`INSERT INTO ai_bot_settings (${insertCols.join(', ')}) VALUES (${placeholders.join(', ')})`, insertVals);
+      if (sets.length > 0) {
+        sets.push('updated_at = NOW()');
+        await db.query(`UPDATE ai_bot_settings SET ${sets.join(', ')} WHERE phone_number_id = $${i}`, [...vals, phId]);
+      }
+    }
+  } else {
+    // Default-fallback bot: keyed by id = 1 (legacy compatibility).
+    await db.query(`INSERT INTO ai_bot_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
+    sets.push('updated_at = NOW()');
+    await db.query(`UPDATE ai_bot_settings SET ${sets.join(', ')} WHERE id = 1`, vals);
+  }
+  return await api_aibot_settings_get(token, phId);
+}
+
+// List every bot configured on this tenant: default-fallback row PLUS every per-phone bot row.
+async function api_aibot_settings_listAll(token) {
+  await authUser(token);
+  await _ensureAiBotColumns();
+  let rows = [];
+  try {
+    const r = await db.query(`SELECT * FROM ai_bot_settings ORDER BY (phone_number_id IS NULL) DESC, id ASC`);
+    rows = r.rows.map(row => {
+      const c = _coerceSettings(row);
+      c.phone_number_id      = row.phone_number_id || null;
+      c.bot_label            = row.bot_label || '';
+      c.id                   = row.id;
+      let addl = row.additional_phone_ids;
+      if (typeof addl === 'string') { try { addl = JSON.parse(addl); } catch (_) { addl = []; } }
+      c.additional_phone_ids = Array.isArray(addl) ? addl.map(String) : [];
+      return c;
+    });
+  } catch (_) { rows = []; }
+  return { configs: rows };
+}
+
+// Delete a per-phone bot row. Default-fallback row cannot be deleted.
+async function api_aibot_settings_delete(token, phoneNumberId) {
+  const me = await authUser(token);
+  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  await _ensureAiBotColumns();
+  const phId = phoneNumberId ? String(phoneNumberId) : null;
+  if (!phId) throw new Error('Cannot delete the default-fallback bot');
+  const r = await db.query(`DELETE FROM ai_bot_settings WHERE phone_number_id = $1`, [phId]);
+  return { ok: true, deleted: r.rowCount };
+}
+
+// Bulk-assign KB doc IDs to a bot (or to global if phone_number_id is empty).
+async function api_aibot_kb_assign_bulk(token, payload) {
+  const me = await authUser(token);
+  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  await _ensureAiBotColumns();
+  const ids = Array.isArray(payload && payload.doc_ids) ? payload.doc_ids.map(Number).filter(n => Number.isFinite(n) && n > 0) : [];
+  const phId = (payload && payload.phone_number_id) ? String(payload.phone_number_id) : null;
+  if (!ids.length) return { ok: true, updated: 0 };
+  await db.query(`UPDATE ai_kb_documents SET phone_number_id = $1, updated_at = NOW() WHERE id = ANY($2::int[])`, [phId, ids]);
+  return { ok: true, updated: ids.length };
 }
 
 // ============================================================
@@ -616,12 +728,14 @@ async function _buildPrompt(settings, phone, leadId, inboundText) {
     // (NULL) bot, include only global docs - the per-phone scoped docs
     // belong to other bots.
     const cfgPhId = settings.phone_number_id ? String(settings.phone_number_id) : null;
-    const r = cfgPhId
+    const addlPhIds = Array.isArray(settings.additional_phone_ids) ? settings.additional_phone_ids.map(String) : [];
+    const allBotPhIds = (cfgPhId ? [cfgPhId] : []).concat(addlPhIds);
+    const r = allBotPhIds.length
       ? await db.query(
           `SELECT title, raw_text FROM ai_kb_documents
-            WHERE is_active = 1 AND (phone_number_id IS NULL OR phone_number_id = $1)
+            WHERE is_active = 1 AND (phone_number_id IS NULL OR phone_number_id = ANY($1::text[]))
             ORDER BY id ASC`,
-          [cfgPhId]
+          [allBotPhIds]
         )
       : await db.query(
           `SELECT title, raw_text FROM ai_kb_documents
@@ -668,9 +782,33 @@ async function _buildPrompt(settings, phone, leadId, inboundText) {
  */
 async function maybeReplyToInbound({ phone, leadId, inboundText, inboundPhoneId, inboundMsgId, tenantSlug, tenantId }) {
   let settings;
+  let _settingsRow = null;
   try {
-    const s = await db.query(`SELECT * FROM ai_bot_settings WHERE id = 1`);
-    settings = _coerceSettings(s.rows[0]);
+    // Per-phone bot lookup: 1) phone_number_id match, 2) additional_phone_ids match, 3) default (NULL) row.
+    let r;
+    if (inboundPhoneId) {
+      r = await db.query(`SELECT * FROM ai_bot_settings WHERE phone_number_id = $1 LIMIT 1`, [String(inboundPhoneId)]);
+      if (!r.rows.length) {
+        try {
+          r = await db.query(`SELECT * FROM ai_bot_settings WHERE additional_phone_ids @> $1::jsonb LIMIT 1`, [JSON.stringify([String(inboundPhoneId)])]);
+        } catch (_) { r = { rows: [] }; }
+      }
+      if (!r.rows.length) {
+        r = await db.query(`SELECT * FROM ai_bot_settings WHERE phone_number_id IS NULL ORDER BY id ASC LIMIT 1`);
+      }
+    } else {
+      r = await db.query(`SELECT * FROM ai_bot_settings WHERE phone_number_id IS NULL ORDER BY id ASC LIMIT 1`);
+      if (!r.rows.length) r = await db.query(`SELECT * FROM ai_bot_settings WHERE id = 1`);
+    }
+    _settingsRow = r.rows[0];
+    settings = _coerceSettings(_settingsRow);
+    // Surface phone_number_id + additional_phone_ids onto coerced settings so _buildPrompt can scope KB.
+    if (_settingsRow) {
+      settings.phone_number_id = _settingsRow.phone_number_id || null;
+      let addl = _settingsRow.additional_phone_ids;
+      if (typeof addl === 'string') { try { addl = JSON.parse(addl); } catch (_) { addl = []; } }
+      settings.additional_phone_ids = Array.isArray(addl) ? addl.map(String) : [];
+    }
   } catch (_) { return; }   // table missing → tenant not migrated yet
   if (Number(settings.is_enabled) !== 1) return;
 
@@ -819,7 +957,8 @@ async function api_aibot_discard_draft(token, draftId) {
 module.exports = {
   // Public tenant API (auto-exposed via tenantApi.js loader)
   api_aibot_settings_get, api_aibot_settings_save,
-  api_aibot_kb_list, api_aibot_kb_save_text, api_aibot_kb_delete, api_aibot_kb_toggle, api_aibot_kb_crawl_url, api_aibot_kb_set_phone,
+  api_aibot_settings_listAll, api_aibot_settings_delete,
+  api_aibot_kb_list, api_aibot_kb_save_text, api_aibot_kb_delete, api_aibot_kb_toggle, api_aibot_kb_crawl_url, api_aibot_kb_set_phone, api_aibot_kb_assign_bulk,
   api_aibot_chatlog_list, api_aibot_usage_summary, api_aibot_estimator,
   api_aibot_send_draft, api_aibot_discard_draft,
   // Internal — called from whatsbot.js + server.tenant.js upload route
