@@ -7731,11 +7731,122 @@ async function _aibotSettingsView(currentPhId) {
         'Stops the bot from spamming a customer who keeps going silent. Once this many pings have been sent in 7 days, no more.'))
   ));
 
+  // ---- Hot lead alerts (May 2026) ----
+  // Tenant-configurable: client picks their own high-intent keywords, sets
+  // which heat levels fire a notification, and chooses recipients.
+  const heatEnabledChk = h('input', { type: 'checkbox', checked: Number(s.heat_enabled == null ? 1 : s.heat_enabled) === 1 ? 'checked' : null });
+  const heatLevels = ['warm', 'hot', 'very_hot', 'on_fire'];
+  const heatLevelLabels = { warm: '✨ Warm', hot: '🔥 Hot', very_hot: '🔥🔥 Very hot', on_fire: '🔥🔥🔥 On fire' };
+  const heatLevelChks = {};
+  const currentLevels = String(s.heat_notify_levels || 'hot,very_hot,on_fire').split(',').map(x => x.trim()).filter(Boolean);
+  const levelGrid = h('div', { style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap', padding: '.4rem', background: '#fef3c7', borderRadius: '6px', border: '1px solid #fde68a' } });
+  heatLevels.forEach(lv => {
+    heatLevelChks[lv] = h('input', { type: 'checkbox', checked: currentLevels.includes(lv) ? 'checked' : null });
+    levelGrid.appendChild(h('label', { style: { display: 'flex', alignItems: 'center', gap: '.3rem', padding: '.25rem .5rem', background: '#fff', borderRadius: '5px', border: '1px solid #fbbf24', cursor: 'pointer', fontSize: '.85rem' } },
+      heatLevelChks[lv], h('span', {}, heatLevelLabels[lv])));
+  });
+
+  // Recipients
+  const recipTokens = new Set(String(s.heat_notify_recipients || 'assigned,admins').split(',').map(x => x.trim()).filter(Boolean));
+  const recipAssignedChk = h('input', { type: 'checkbox', checked: recipTokens.has('assigned') ? 'checked' : null });
+  const recipAdminsChk   = h('input', { type: 'checkbox', checked: recipTokens.has('admins')   ? 'checked' : null });
+  const recipManagersChk = h('input', { type: 'checkbox', checked: recipTokens.has('managers') ? 'checked' : null });
+  const recipExtraInp    = h('input', { type: 'text', placeholder: 'extra user IDs (comma-separated, optional)', style: { width: '100%' },
+    value: Array.from(recipTokens).filter(t => /^\d+$/.test(t)).join(',') });
+
+  // Custom keyword editor — list of buckets, each with kws / weight / signal / action
+  const heatBuckets = Array.isArray(s.heat_keywords) ? s.heat_keywords.slice() : [];
+  const heatBucketsBox = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '.4rem' } });
+
+  function renderHeatBuckets() {
+    heatBucketsBox.innerHTML = '';
+    if (!heatBuckets.length) {
+      heatBucketsBox.appendChild(h('p', { class: 'muted', style: { fontSize: '.82rem', margin: 0 } },
+        'No custom keywords yet — defaults are still active. Add a row to add YOUR business-specific signals (e.g. "site visit" → very_hot).'));
+    }
+    heatBuckets.forEach((b, idx) => {
+      const row = h('div', { style: { display: 'grid', gridTemplateColumns: '2.4fr 1fr 1.2fr 1fr auto', gap: '.4rem', alignItems: 'center', padding: '.45rem .55rem', background: '#fff', borderRadius: '6px', border: '1px solid #fde68a' } });
+      const kwInp = h('input', { type: 'text', value: (b.kws || []).join(', '), placeholder: 'comma-separated keywords (e.g. "site visit, walk-in")', style: { width: '100%' } });
+      const weightInp = h('select', { style: { width: '100%' } });
+      [['Warm (10-24)', 15], ['Hot (25-39)', 30], ['Very hot (40-74)', 45], ['On fire (75+)', 80]].forEach(([lbl, w]) => {
+        const o = h('option', { value: w }, lbl);
+        weightInp.appendChild(o);
+      });
+      weightInp.value = String(b.weight || 30);
+      const signalInp = h('input', { type: 'text', value: b.signal || '', placeholder: 'short label (e.g. "asked about site visit")', style: { width: '100%' } });
+      const actionSel = h('select', { style: { width: '100%' } },
+        h('option', { value: 'send_quote',     selected: b.action === 'send_quote' ? 'selected' : null }, 'Send quote'),
+        h('option', { value: 'callback',       selected: b.action === 'callback' ? 'selected' : null }, 'Callback'),
+        h('option', { value: 'send_brochure',  selected: b.action === 'send_brochure' ? 'selected' : null }, 'Send brochure'),
+        h('option', { value: 'book_meeting',   selected: b.action === 'book_meeting' ? 'selected' : null }, 'Book meeting'),
+        h('option', { value: 'urgent_followup',selected: b.action === 'urgent_followup' ? 'selected' : null }, 'Urgent follow-up'),
+        h('option', { value: 'followup',       selected: !b.action ? 'selected' : null }, 'Generic follow-up'));
+      const removeBtn = h('button', { type: 'button', class: 'btn xs danger ghost', onclick: () => {
+        heatBuckets.splice(idx, 1); renderHeatBuckets();
+      } }, '✕');
+      kwInp.onblur     = () => { heatBuckets[idx].kws    = kwInp.value.split(',').map(s => s.trim()).filter(Boolean); };
+      weightInp.onchange = () => { heatBuckets[idx].weight = Number(weightInp.value); };
+      signalInp.onblur = () => { heatBuckets[idx].signal = signalInp.value; };
+      actionSel.onchange = () => { heatBuckets[idx].action = actionSel.value; };
+      row.appendChild(kwInp);
+      row.appendChild(weightInp);
+      row.appendChild(signalInp);
+      row.appendChild(actionSel);
+      row.appendChild(removeBtn);
+      heatBucketsBox.appendChild(row);
+    });
+  }
+  renderHeatBuckets();
+
+  const addBucketBtn = h('button', { type: 'button', class: 'btn small ghost', onclick: () => {
+    heatBuckets.push({ kws: [], weight: 30, signal: '', action: 'followup' });
+    renderHeatBuckets();
+  } }, '+ Add keyword group');
+
+  wrap.appendChild(h('div', { class: 'card', style: { borderLeft: '4px solid #ef4444' } },
+    h('h3', { style: { marginTop: 0 } }, '🔥 Hot lead alerts'),
+    h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+      'When a customer\'s WhatsApp message shows buying intent, the lead gets tagged hot and a push notification fires. Configure your own keywords + who gets notified below. Built-in defaults (price, demo, callback, comparison, etc.) are always active — your keywords add to them.'),
+    h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', fontSize: '.95rem' } },
+      heatEnabledChk, h('b', {}, ' Enable hot-lead detection + alerts')),
+    h('div', { class: 'field', style: { marginTop: '.7rem' } },
+      h('label', {}, 'Notify me when heat reaches'),
+      levelGrid),
+    h('div', { class: 'field' },
+      h('label', {}, 'Who gets the push notification?'),
+      h('div', { style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap', alignItems: 'center' } },
+        h('label', { style: { display: 'flex', alignItems: 'center', gap: '.3rem' } }, recipAssignedChk, h('span', {}, '👤 Assigned agent')),
+        h('label', { style: { display: 'flex', alignItems: 'center', gap: '.3rem' } }, recipAdminsChk,   h('span', {}, '🛡 Admins')),
+        h('label', { style: { display: 'flex', alignItems: 'center', gap: '.3rem' } }, recipManagersChk, h('span', {}, '👔 Managers'))
+      ),
+      h('div', { style: { marginTop: '.4rem' } }, recipExtraInp),
+      h('div', { class: 'muted', style: { fontSize: '.77rem' } },
+        'Extra user IDs in the box above also get notified (regardless of role).')),
+    h('div', { class: 'field' },
+      h('label', {}, 'Custom high-intent keywords'),
+      heatBucketsBox,
+      h('div', { style: { marginTop: '.4rem' } }, addBucketBtn),
+      h('div', { class: 'muted', style: { fontSize: '.77rem', marginTop: '.4rem' } },
+        'Each row: keywords (comma-separated) → weight (Warm/Hot/Very hot/On fire) → label shown to agent → suggested action. Single match on a "Very hot" or "On fire" weight goes straight to that level.'))
+  ));
+
   const saveBtn = h('button', { class: 'btn primary', style: { padding: '.6rem 1.5rem' } }, '💾 Save bot settings');
   saveBtn.onclick = async () => {
     saveBtn.disabled = true;
     const payload = {
       is_enabled: enableChk.checked,
+      heat_enabled: heatEnabledChk.checked ? 1 : 0,
+      heat_keywords: heatBuckets,
+      heat_notify_levels: heatLevels.filter(lv => heatLevelChks[lv].checked).join(','),
+      heat_notify_recipients: (function(){
+        const out = [];
+        if (recipAssignedChk.checked) out.push('assigned');
+        if (recipAdminsChk.checked)   out.push('admins');
+        if (recipManagersChk.checked) out.push('managers');
+        const extra = String(recipExtraInp.value || '').split(',').map(x => x.trim()).filter(x => /^\d+$/.test(x));
+        out.push(...extra);
+        return out.join(',');
+      })(),
       reengage_enabled: reengageChk.checked ? 1 : 0,
       reengage_after_minutes: Number(reengageMins.value || 60),
       reengage_message: reengageMsgInp.value,

@@ -62,6 +62,10 @@ const _DEFAULT_SETTINGS = {
   reengage_after_minutes: 60,
   reengage_message: 'Hi {{name}}, just checking — did you get a chance to look at our last message? Happy to help if you have any questions.',
   reengage_max_attempts: 1,
+  heat_enabled: 1,
+  heat_keywords: [],
+  heat_notify_levels: 'hot,very_hot,on_fire',
+  heat_notify_recipients: 'assigned,admins',
 };
 
 function _coerceSettings(row) {
@@ -70,7 +74,7 @@ function _coerceSettings(row) {
   Object.keys(out).forEach(k => { if (row[k] !== undefined && row[k] !== null) out[k] = row[k]; });
   // JSONB coercions — pg returns these as objects, but if a row was
   // saved by a path that stringified them, parse defensively.
-  for (const key of ['reply_modes', 'business_hours', 'active_phone_number_ids']) {
+  for (const key of ['reply_modes', 'business_hours', 'active_phone_number_ids', 'heat_keywords']) {
     if (typeof out[key] === 'string') {
       try { out[key] = JSON.parse(out[key]); } catch (_) { out[key] = _DEFAULT_SETTINGS[key]; }
     }
@@ -173,6 +177,12 @@ async function _ensureAiBotColumns() {
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS reengage_after_minutes INTEGER NOT NULL DEFAULT 60`);
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS reengage_message TEXT NOT NULL DEFAULT 'Hi {{name}}, just checking — did you get a chance to look at our last message? Happy to help if you have any questions.'`);
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS reengage_max_attempts INTEGER NOT NULL DEFAULT 1`);
+    // Tenant-configurable heat detection (May 2026): client can add their own
+    // high-intent keywords + choose which heat levels fire a notification.
+    await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS heat_keywords JSONB NOT NULL DEFAULT '[]'::jsonb`);
+    await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS heat_notify_levels TEXT NOT NULL DEFAULT 'hot,very_hot,on_fire'`);
+    await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS heat_notify_recipients TEXT NOT NULL DEFAULT 'assigned,admins'`);
+    await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS heat_enabled INTEGER NOT NULL DEFAULT 1`);
     await db.query(`CREATE TABLE IF NOT EXISTS ai_reengage_log (
       id SERIAL PRIMARY KEY,
       phone TEXT NOT NULL,
@@ -253,6 +263,10 @@ async function api_aibot_settings_save(token, payload) {
   if (p.reengage_after_minutes    != null) addCol('reengage_after_minutes',    '$$',          Math.max(5, Math.min(10080, Number(p.reengage_after_minutes))));
   if (p.reengage_message          != null) addCol('reengage_message',          '$$',          String(p.reengage_message).slice(0, 1000));
   if (p.reengage_max_attempts     != null) addCol('reengage_max_attempts',     '$$',          Math.max(1, Math.min(5, Number(p.reengage_max_attempts))));
+  if (p.heat_enabled              != null) addCol('heat_enabled',              '$$',          p.heat_enabled ? 1 : 0);
+  if (p.heat_keywords             != null) addCol('heat_keywords',             '$$::jsonb',   JSON.stringify(Array.isArray(p.heat_keywords) ? p.heat_keywords : []));
+  if (p.heat_notify_levels        != null) addCol('heat_notify_levels',        '$$',          String(p.heat_notify_levels).slice(0, 200));
+  if (p.heat_notify_recipients    != null) addCol('heat_notify_recipients',    '$$',          String(p.heat_notify_recipients).slice(0, 500));
 
   // Phone-keyed upsert: one bot row per phone_number_id (NULL = legacy default).
   const phId = (p.phone_number_id != null && String(p.phone_number_id).length > 0) ? String(p.phone_number_id) : null;
@@ -271,7 +285,7 @@ async function api_aibot_settings_save(token, payload) {
       // Seed a brand-new per-phone row by cloning the default row, then overlay caller's fields.
       const def = await db.query(`SELECT * FROM ai_bot_settings WHERE phone_number_id IS NULL ORDER BY id ASC LIMIT 1`);
       const seed = def.rows[0] || {};
-      const cloneCols = ['is_enabled','bot_name','business_name','language','system_prompt','welcome_message','reply_modes','business_hours','trigger_keywords','off_keywords','active_phone_number_ids','resume_after_idle_minutes','resume_after_idle_seconds','max_replies_per_thread','escalation_keywords','model_override','use_kb','kb_max_chars','history_messages','reengage_enabled','reengage_after_minutes','reengage_message','reengage_max_attempts'];
+      const cloneCols = ['is_enabled','bot_name','business_name','language','system_prompt','welcome_message','reply_modes','business_hours','trigger_keywords','off_keywords','active_phone_number_ids','resume_after_idle_minutes','resume_after_idle_seconds','max_replies_per_thread','escalation_keywords','model_override','use_kb','kb_max_chars','history_messages','reengage_enabled','reengage_after_minutes','reengage_message','reengage_max_attempts','heat_enabled','heat_keywords','heat_notify_levels','heat_notify_recipients'];
       const insertCols = ['phone_number_id'];
       const insertVals = [phId];
       cloneCols.forEach(c => {
@@ -1359,7 +1373,7 @@ const _HEAT_BUCKETS = [
 
 const _HEAT_NEGATIVES = ['not interested', 'dont call', "don't call", 'stop messaging', 'remove me', 'unsubscribe', 'spam', 'block', 'gaali', 'mat karo'];
 
-function _classifyHeatHeuristic(text) {
+function _classifyHeatHeuristic(text, extraBuckets) {
   const t = String(text || '').toLowerCase();
   if (!t.trim()) return { score: 0, label: null, signal: '', action: 'none' };
   for (const neg of _HEAT_NEGATIVES) {
@@ -1368,12 +1382,19 @@ function _classifyHeatHeuristic(text) {
   let score = 0;
   const matches = [];
   const actions = new Set();
-  for (const b of _HEAT_BUCKETS) {
+  // Tenant-defined buckets win first so a custom keyword's weight + signal
+  // labels show up cleanly. Then the built-in buckets cover anything the
+  // tenant didn't explicitly list.
+  const allBuckets = (Array.isArray(extraBuckets) ? extraBuckets : []).concat(_HEAT_BUCKETS);
+  for (const b of allBuckets) {
+    if (!b || !Array.isArray(b.kws)) continue;
+    const w = Math.max(5, Math.min(60, Number(b.weight) || 30));
     for (const kw of b.kws) {
-      if (t.includes(kw)) {
-        score += b.weight;
-        matches.push(b.signal);
-        actions.add(b.action);
+      const k = String(kw || '').toLowerCase().trim();
+      if (k && t.includes(k)) {
+        score += w;
+        matches.push(String(b.signal || k));
+        actions.add(String(b.action || 'followup'));
         break; // count each bucket only once
       }
     }
@@ -1394,13 +1415,14 @@ const _HEAT_RANK = { cold: 0, warm: 1, hot: 2, very_hot: 3, on_fire: 4 };
 /**
  * Public entry point — called from whatsbot._handleInbound on every inbound.
  * Updates the lead's heat columns and pushes a notification on upgrade.
+ *
+ * Heat detection is now tenant-configurable: each bot can add its own
+ * high-intent keywords (heat_keywords) and pick which heat levels trigger
+ * a notification (heat_notify_levels). Defaults to the built-in keyword
+ * set + push on hot/very_hot/on_fire to the assigned agent + admins.
  */
 async function classifyAndAlertOnInbound({ phone, leadId, inboundText, inboundPhoneId, tenantSlug }) {
   if (!leadId || !inboundText) return;
-  // Defensive: re-assert lead heat columns every call. Cheap (ALTER TABLE
-  // ADD COLUMN IF NOT EXISTS is a no-op once the column exists), but
-  // rescues tenants where the global _ensureAiBotColumns sweep silently
-  // failed mid-way during an earlier release.
   try {
     await db.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS heat_score INTEGER`);
     await db.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS heat_label TEXT`);
@@ -1408,7 +1430,32 @@ async function classifyAndAlertOnInbound({ phone, leadId, inboundText, inboundPh
     await db.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS heat_action_required TEXT`);
     await db.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS heat_updated_at TIMESTAMPTZ`);
   } catch (e) { console.warn('[heat] migrate leads failed:', e.message); }
-  const cls = _classifyHeatHeuristic(inboundText);
+  // Load the bot config that owns this phone — gives us the tenant's custom
+  // heat keywords + notify-level preferences.
+  let botCfg = null;
+  try {
+    let r;
+    if (inboundPhoneId) {
+      r = await db.query(`SELECT * FROM ai_bot_settings WHERE phone_number_id = $1 LIMIT 1`, [String(inboundPhoneId)]);
+      if (!r.rows.length) {
+        try { r = await db.query(`SELECT * FROM ai_bot_settings WHERE additional_phone_ids @> $1::jsonb LIMIT 1`, [JSON.stringify([String(inboundPhoneId)])]); } catch (_) { r = { rows: [] }; }
+      }
+    } else { r = { rows: [] }; }
+    if (!r.rows.length) r = await db.query(`SELECT * FROM ai_bot_settings WHERE phone_number_id IS NULL ORDER BY id ASC LIMIT 1`);
+    botCfg = r.rows[0] || null;
+  } catch (e) { console.warn('[heat] bot config lookup failed:', e.message); }
+  if (botCfg && Number(botCfg.heat_enabled || 1) === 0) {
+    console.log('[heat] disabled for this bot — skipping');
+    return;
+  }
+  // Custom keyword buckets — JSONB array of {kws, weight, signal, action}.
+  let customBuckets = [];
+  if (botCfg && botCfg.heat_keywords) {
+    let raw = botCfg.heat_keywords;
+    if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch (_) { raw = []; } }
+    if (Array.isArray(raw)) customBuckets = raw.filter(b => b && Array.isArray(b.kws) && b.kws.length);
+  }
+  const cls = _classifyHeatHeuristic(inboundText, customBuckets);
   console.log('[heat] inbound lead=' + leadId + ' phone=' + phone + ' score=' + cls.score + ' label=' + (cls.label || 'none') + ' signal=' + cls.signal + ' text=' + String(inboundText).slice(0, 80));
   if (!cls.label) return; // nothing meaningful detected
 
@@ -1446,23 +1493,40 @@ async function classifyAndAlertOnInbound({ phone, leadId, inboundText, inboundPh
   }
   console.log('[heat] UPGRADED lead ' + leadId + ' to ' + nextLabel + '/' + nextScore + ' (' + cls.signal + ')');
 
+  // Respect tenant-configured notify levels — only push if the NEW label is in the list.
+  const levels = String((botCfg && botCfg.heat_notify_levels) || 'hot,very_hot,on_fire').split(',').map(s => s.trim()).filter(Boolean);
+  if (levels.length && !levels.includes(nextLabel)) {
+    console.log('[heat] level ' + nextLabel + ' not in notify list ' + levels.join(',') + ' — skipping push');
+    return;
+  }
+
   // Push notification to the assigned agent + admins.
   try {
     const push = require('./push');
     const recipients = new Set();
-    if (prev.assigned_to) recipients.add(Number(prev.assigned_to));
-    try {
-      // Fall back through several common shapes of the users table:
-      // 'is_active = 1' (legacy int) OR 'is_active = TRUE' (bool) OR no column.
-      let adm;
+    const recipTokens = String((botCfg && botCfg.heat_notify_recipients) || 'assigned,admins').split(',').map(s => s.trim()).filter(Boolean);
+    const wantAssigned = recipTokens.includes('assigned');
+    const wantAdmins   = recipTokens.includes('admins');
+    const wantManagers = recipTokens.includes('managers');
+    if (wantAssigned && prev.assigned_to) recipients.add(Number(prev.assigned_to));
+    if (wantAdmins || wantManagers) {
+      const roles = [];
+      if (wantAdmins) roles.push("'admin'");
+      if (wantManagers) roles.push("'manager'");
+      const roleClause = '(' + roles.join(',') + ')';
       try {
-        adm = await db.query(`SELECT id FROM users WHERE role IN ('admin','manager') AND is_active = 1`);
-      } catch (_) {
-        try { adm = await db.query(`SELECT id FROM users WHERE role IN ('admin','manager') AND is_active = TRUE`); }
-        catch (_) { adm = await db.query(`SELECT id FROM users WHERE role IN ('admin','manager')`); }
-      }
-      adm.rows.forEach(u => recipients.add(Number(u.id)));
-    } catch (e) { console.warn('[heat] admin lookup failed:', e.message); }
+        let adm;
+        try {
+          adm = await db.query(`SELECT id FROM users WHERE role IN ${roleClause} AND is_active = 1`);
+        } catch (_) {
+          try { adm = await db.query(`SELECT id FROM users WHERE role IN ${roleClause} AND is_active = TRUE`); }
+          catch (_) { adm = await db.query(`SELECT id FROM users WHERE role IN ${roleClause}`); }
+        }
+        adm.rows.forEach(u => recipients.add(Number(u.id)));
+      } catch (e) { console.warn('[heat] admin/manager lookup failed:', e.message); }
+    }
+    // Also accept literal user IDs in the recipients list (e.g. 'assigned,5,12').
+    recipTokens.forEach(t => { if (/^\d+$/.test(t)) recipients.add(Number(t)); });
     if (!recipients.size) {
       console.warn('[heat] no recipients for lead ' + leadId + ' — push skipped (no assigned agent + no admins)');
     }
