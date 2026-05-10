@@ -440,38 +440,31 @@ async function _api_aibot_settings_save_LEGACY_FULL_REPLACE(token, payload) {
 async function api_aibot_kb_list(token, phoneNumberId) {
   await authUser(token);
   await _ensureAiBotColumns();
-  // phoneNumberId can be:
-  //   undefined / null / '' / 'all'  -> return ALL docs (admin view)
-  //   '__global__' / 'default'       -> only global docs (NULL phone_number_id)
-  //   '<phone id>'                   -> docs scoped to that phone OR global
   const phId = phoneNumberId && phoneNumberId !== 'all' ? String(phoneNumberId) : null;
-  let r;
-  if (!phId) {
-    r = await db.query(
-      `SELECT id, source_type, title, char_count, source_url, file_path, file_size,
-              phone_number_id, is_active, ingest_status, ingest_error, created_at, updated_at, file_name, file_mime_type, file_size_bytes, is_attachable, trigger_keywords, sent_count, additional_phone_ids
-         FROM ai_kb_documents
-         ORDER BY is_active DESC, created_at DESC`
-    );
-  } else if (phId === '__global__' || phId === 'default') {
-    r = await db.query(
-      `SELECT id, source_type, title, char_count, source_url, file_path, file_size,
-              phone_number_id, is_active, ingest_status, ingest_error, created_at, updated_at, file_name, file_mime_type, file_size_bytes, is_attachable, trigger_keywords, sent_count, additional_phone_ids
-         FROM ai_kb_documents
-         WHERE phone_number_id IS NULL
-         ORDER BY is_active DESC, created_at DESC`
-    );
-  } else {
-    r = await db.query(
-      `SELECT id, source_type, title, char_count, source_url, file_path, file_size,
-              phone_number_id, is_active, ingest_status, ingest_error, created_at, updated_at, file_name, file_mime_type, file_size_bytes, is_attachable, trigger_keywords, sent_count, additional_phone_ids
-         FROM ai_kb_documents
-         WHERE phone_number_id IS NULL OR phone_number_id = $1
-         ORDER BY is_active DESC, created_at DESC`,
-      [phId]
-    );
+  // Defensive: try the full column set first; if any column is missing on
+  // an older tenant DB, fall back to the original pre-attachment set so
+  // the LIST keeps working even when the migration hasn't fully landed.
+  const FULL_COLS = `id, source_type, title, char_count, source_url, file_path, file_size,
+              phone_number_id, is_active, ingest_status, ingest_error, created_at, updated_at,
+              file_name, file_mime_type, file_size_bytes, is_attachable, trigger_keywords,
+              sent_count, additional_phone_ids`;
+  const MIN_COLS = `id, source_type, title, char_count, source_url, file_path, file_size,
+              phone_number_id, is_active, ingest_status, ingest_error, created_at, updated_at`;
+  async function _runSelect(cols) {
+    if (!phId) {
+      return await db.query(`SELECT ${cols} FROM ai_kb_documents ORDER BY is_active DESC, created_at DESC`);
+    }
+    if (phId === '__global__' || phId === 'default') {
+      return await db.query(`SELECT ${cols} FROM ai_kb_documents WHERE phone_number_id IS NULL ORDER BY is_active DESC, created_at DESC`);
+    }
+    return await db.query(`SELECT ${cols} FROM ai_kb_documents WHERE phone_number_id IS NULL OR phone_number_id = $1 ORDER BY is_active DESC, created_at DESC`, [phId]);
   }
-  // Aggregate stats so the UI can warn about KB-too-big.
+  let r;
+  try { r = await _runSelect(FULL_COLS); }
+  catch (e) {
+    console.warn('[ai-bot] kb_list full column SELECT failed (' + e.message + '), retrying with minimal cols');
+    r = await _runSelect(MIN_COLS);
+  }
   const totalChars = r.rows.reduce((a, x) => a + (Number(x.char_count) || 0) * (Number(x.is_active) === 1 ? 1 : 0), 0);
   return { docs: r.rows, total_active_chars: totalChars };
 }
