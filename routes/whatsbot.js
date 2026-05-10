@@ -2302,6 +2302,24 @@ async function _handleInbound(m, value) {
     }
   } catch (e) { console.warn('[wb] inbound push send skipped:', e.message); }
 
+  // ── Bot Flow Runner ──────────────────────────────────────────
+  // If a flow session is active for this phone OR the inbound matches a
+  // flow trigger, the runner answers and we skip downstream bots
+  // (Message Bot, Template Bot, AI Bot). Flows take priority because
+  // they are explicitly configured by the admin and represent guided
+  // interactive conversations - we don't want the AI Bot stepping on a
+  // multi-step booking dialogue.
+  let _flowHandled = false;
+  try {
+    const waFlows = require('./waBotFlows');
+    _flowHandled = await waFlows.handleInbound({
+      phone: from, leadId, inboundText: text, inboundButtonId: m.interactive && (m.interactive.button_reply && m.interactive.button_reply.id) || null,
+      inboundPhoneId,
+      wb: module.exports
+    });
+  } catch (e) { console.warn('[waflow] runner failed:', e.message); }
+  if (_flowHandled) return;
+
   // ── Phase A2 multi-WA AI Bot ──────────────────────────────────
   // Fire the AI auto-reply path. Wrapped in try/catch + fire-and-forget
   // semantics so a Gemini outage NEVER blocks inbound webhook processing
@@ -2592,5 +2610,5 @@ module.exports = {
   trimActivityLog,
   // Helpers exported for the file-upload Express route in server.js
   // and for routes/aiBot.js auto-reply path.
-  _uploadMediaToWhatsApp, _cfg, _cfgForPhone, _sendText
+  _uploadMediaToWhatsApp, _cfg, _cfgForPhone, _sendText, _sendMedia, _graphPost
 };

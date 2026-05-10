@@ -11197,6 +11197,7 @@ VIEWS.admin = async (view) => {
     ]},
     { title: 'Channels', items: [
       { id: 'whatsapp',     label: '💬 WhatsApp' },
+      { id: 'botflows',     label: '🗺️ Bot Flows' },
       { id: 'fb',           label: '🌍 Facebook' },
       { id: 'api',          label: '🔌 Website API' },
       { id: 'integrations', label: '🧩 Integrations' },
@@ -11275,6 +11276,7 @@ async function showAdminTab(id) {
     if (id === 'automations') body.replaceChildren(await adminAutomations());
     if (id === 'fb')          body.replaceChildren(await adminFb());
     if (id === 'whatsapp') body.replaceChildren(await adminWhatsapp());
+    if (id === 'botflows') body.replaceChildren(await adminBotFlows());
     if (id === 'sources')  body.replaceChildren(await adminSources());
     if (id === 'statuses') body.replaceChildren(await adminStatuses());
     if (id === 'products') body.replaceChildren(await adminProducts());
@@ -13623,6 +13625,265 @@ async function adminWhatsapp() {
   // Append the Coexistence Mode card defined at the top of this function.
   try { _renderCoexistenceCard(card, {}, cfg || {}); } catch (_) {}
   return card;
+}
+
+// =====================================================================
+// 🗺️ Bot Flows — list-based flow builder (Phase 1)
+// Lets admins create trigger-driven, multi-step WhatsApp conversations
+// with quick-reply buttons + branching. The runtime engine lives in
+// routes/waBotFlows.js and runs BEFORE the AI Bot on every inbound.
+// =====================================================================
+async function adminBotFlows() {
+  const wrap = h('div', {});
+  wrap.appendChild(h('div', { class: 'card', style: { background: 'linear-gradient(135deg, #ecfeff 0%, #f0f9ff 100%)', border: '1px solid #67e8f9', marginBottom: '.85rem' } },
+    h('h3', { style: { margin: '0 0 .35rem' } }, '🗺️ WhatsApp Bot Flows'),
+    h('p', { class: 'muted', style: { margin: '0 0 .35rem' } },
+      'Build guided multi-step conversations with quick-reply buttons. Customer types a trigger word → flow takes over → asks questions, branches on the answer, ends with a handoff or update.'),
+    h('p', { class: 'muted', style: { margin: 0, fontSize: '.82rem' } },
+      'Flows take priority over the AI Bot — useful for booking, qualification, or menu navigation.')
+  ));
+
+  const listCard = h('div', { class: 'card' });
+  wrap.appendChild(listCard);
+
+  async function reload() {
+    listCard.innerHTML = '';
+    listCard.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.6rem' } },
+      h('h4', { style: { margin: 0 } }, 'Configured flows'),
+      h('button', { class: 'btn', onclick: () => openFlowModal(null) }, '➕ New flow')
+    ));
+    let flows = [];
+    try { flows = (await api('api_waflow_list')).flows || []; }
+    catch (e) {
+      listCard.appendChild(h('div', { class: 'error-box' }, e.message));
+      return;
+    }
+    if (!flows.length) {
+      listCard.appendChild(h('div', { class: 'muted', style: { padding: '1rem 0' } }, 'No flows yet. Click "New flow" to build one.'));
+      return;
+    }
+    const tbl = h('table', { class: 'data-table', style: { width: '100%' } },
+      h('thead', {}, h('tr', {},
+        h('th', {}, 'Name'),
+        h('th', {}, 'Trigger'),
+        h('th', {}, 'Match'),
+        h('th', {}, 'Nodes'),
+        h('th', {}, 'Active'),
+        h('th', {}, 'Actions')
+      )),
+      h('tbody', {}, ...flows.map(f => h('tr', {},
+        h('td', {}, h('strong', {}, f.name), h('div', { class: 'muted', style: { fontSize: '.78rem' } }, f.description || '')),
+        h('td', {}, f.trigger ? h('code', {}, f.trigger) : h('span', { class: 'muted' }, '— any —')),
+        h('td', {}, f.trigger_match || 'exact'),
+        h('td', {}, String(f.node_count || 0)),
+        h('td', {},
+          h('label', { class: 'switch' },
+            h('input', { type: 'checkbox', checked: Number(f.is_active) === 1, onchange: async (e) => {
+              try { await api('api_waflow_toggle', f.id, e.target.checked ? 1 : 0); }
+              catch (err) { toast(err.message, 'err'); e.target.checked = !e.target.checked; }
+            }}),
+            h('span', { class: 'slider' })
+          )
+        ),
+        h('td', {},
+          h('button', { class: 'btn ghost small', onclick: () => openFlowModal(f.id) }, 'Edit'),
+          h('button', { class: 'btn danger small', style: { marginLeft: '.35rem' }, onclick: async () => {
+            if (!confirm('Delete flow "' + f.name + '"? Any active sessions are dropped.')) return;
+            try { await api('api_waflow_delete', f.id); reload(); }
+            catch (err) { toast(err.message, 'err'); }
+          }}, 'Delete')
+        )
+      )))
+    );
+    listCard.appendChild(tbl);
+  }
+
+  async function openFlowModal(flowId) {
+    let flow = { name: '', description: '', trigger: '', trigger_match: 'exact', is_active: 0, priority: 100, nodes: [], start_node_id: '' };
+    if (flowId) {
+      try { flow = (await api('api_waflow_get', flowId)).flow; flow.nodes = flow.nodes || []; }
+      catch (e) { toast(e.message, 'err'); return; }
+    }
+    const modal = h('div', { class: 'modal-overlay' });
+    const dlg = h('div', { class: 'modal', style: { width: 'min(960px, 95vw)', maxHeight: '90vh', overflow: 'auto' } });
+
+    const nameInp = h('input', { type: 'text', value: flow.name || '', placeholder: 'Booking flow', style: { width: '100%' } });
+    const descInp = h('input', { type: 'text', value: flow.description || '', placeholder: 'Short description', style: { width: '100%' } });
+    const trigInp = h('input', { type: 'text', value: flow.trigger || '', placeholder: 'eg. hi, book, demo', style: { width: '100%' } });
+    const matchSel = h('select', {},
+      ...['exact', 'contains', 'startswith', 'regex'].map(o => h('option', { value: o, selected: (flow.trigger_match || 'exact') === o }, o))
+    );
+    const activeChk = h('input', { type: 'checkbox', checked: Number(flow.is_active) === 1 });
+    const startSel = h('select', {});
+
+    const nodesContainer = h('div', { class: 'card', style: { marginTop: '.85rem', background: '#fafbfc' } });
+
+    function refreshStartSel() {
+      startSel.innerHTML = '';
+      flow.nodes.forEach(n => startSel.appendChild(h('option', { value: n.id, selected: flow.start_node_id === n.id }, n.id + ' — ' + (n.type || '?'))));
+    }
+
+    function renderNodes() {
+      nodesContainer.innerHTML = '';
+      nodesContainer.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.5rem' } },
+        h('strong', {}, 'Steps (nodes)'),
+        h('button', { class: 'btn small', onclick: () => addNode() }, '➕ Add step')
+      ));
+      if (!flow.nodes.length) {
+        nodesContainer.appendChild(h('div', { class: 'muted', style: { padding: '.4rem 0' } }, 'No steps yet.'));
+        return;
+      }
+      flow.nodes.forEach((node, idx) => nodesContainer.appendChild(renderNodeCard(node, idx)));
+    }
+
+    function renderNodeCard(node, idx) {
+      const card = h('div', { style: { background: '#fff', border: '1px solid var(--border)', borderRadius: '8px', padding: '.7rem .85rem', marginBottom: '.5rem' } });
+      const idIn = h('input', { type: 'text', value: node.id, placeholder: 'n1', style: { width: '8rem' }, onchange: (e) => { node.id = e.target.value.trim(); refreshStartSel(); } });
+      const typeSel = h('select', {},
+        ...['message', 'image', 'ask', 'branch', 'save_field', 'handoff', 'end'].map(t =>
+          h('option', { value: t, selected: node.type === t }, t)
+        )
+      );
+      typeSel.onchange = () => { node.type = typeSel.value; renderNodes(); };
+      const bodyTa = h('textarea', { rows: 2, style: { width: '100%' }, placeholder: node.type === 'image' ? 'Caption (optional)' : 'Message body — supports {{var}} interpolation', onchange: (e) => node.body = e.target.value }, node.body || '');
+
+      card.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', marginBottom: '.45rem' } },
+        h('strong', {}, '#' + (idx + 1)),
+        h('label', { class: 'muted', style: { fontSize: '.78rem' } }, 'id'),
+        idIn,
+        h('label', { class: 'muted', style: { fontSize: '.78rem' } }, 'type'),
+        typeSel,
+        h('button', { class: 'btn danger small', style: { marginLeft: 'auto' }, onclick: () => { flow.nodes.splice(idx, 1); renderNodes(); refreshStartSel(); } }, '🗑 Remove')
+      ));
+      card.appendChild(bodyTa);
+
+      if (node.type === 'image') {
+        const urlIn = h('input', { type: 'text', placeholder: 'https://example.com/image.jpg', style: { width: '100%', marginTop: '.4rem' }, onchange: (e) => node.media_url = e.target.value }, );
+        urlIn.value = node.media_url || '';
+        card.appendChild(h('label', { class: 'muted', style: { fontSize: '.78rem' } }, 'Image URL'));
+        card.appendChild(urlIn);
+      }
+      if (node.type === 'ask') {
+        const varIn = h('input', { type: 'text', value: node.save_to_var || '', placeholder: 'eg. visit_date', style: { width: '14rem', marginTop: '.4rem' }, onchange: (e) => node.save_to_var = e.target.value });
+        card.appendChild(h('label', { class: 'muted', style: { fontSize: '.78rem' } }, 'Save reply to variable'));
+        card.appendChild(varIn);
+      }
+      if (node.type === 'save_field') {
+        card.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', marginTop: '.4rem' } },
+          h('label', { class: 'muted', style: { fontSize: '.78rem' } }, 'Lead field'),
+          h('input', { type: 'text', value: node.field_name || '', placeholder: 'eg. notes', style: { width: '12rem' }, onchange: (e) => node.field_name = e.target.value }),
+          h('label', { class: 'muted', style: { fontSize: '.78rem' } }, '← variable'),
+          h('input', { type: 'text', value: node.value_var || '', placeholder: 'eg. visit_date', style: { width: '12rem' }, onchange: (e) => node.value_var = e.target.value })
+        ));
+      }
+      if (node.type === 'branch') {
+        const branchVarIn = h('input', { type: 'text', value: node.branch_var || '', placeholder: 'eg. interest', style: { width: '14rem' }, onchange: (e) => node.branch_var = e.target.value });
+        card.appendChild(h('label', { class: 'muted', style: { fontSize: '.78rem' } }, 'Branch on variable'));
+        card.appendChild(branchVarIn);
+        node.branch_rules = node.branch_rules || [];
+        const rulesWrap = h('div', { style: { marginTop: '.45rem' } });
+        function renderRules() {
+          rulesWrap.innerHTML = '';
+          node.branch_rules.forEach((r, i) => {
+            const opSel = h('select', {}, ...['equals','contains','regex'].map(o => h('option', { value: o, selected: (r.op||'equals')===o }, o)));
+            opSel.onchange = () => r.op = opSel.value;
+            const valIn = h('input', { type: 'text', value: r.value || '', placeholder: 'value', style: { width: '8rem' }, onchange: (e) => r.value = e.target.value });
+            const tgtIn = h('input', { type: 'text', value: r.target_node_id || '', placeholder: 'target node id', style: { width: '8rem' }, onchange: (e) => r.target_node_id = e.target.value });
+            rulesWrap.appendChild(h('div', { style: { display: 'flex', gap: '.35rem', marginTop: '.3rem' } },
+              opSel, valIn, h('span', {}, '→'), tgtIn,
+              h('button', { class: 'btn ghost small', onclick: () => { node.branch_rules.splice(i, 1); renderRules(); }}, '✕')
+            ));
+          });
+          rulesWrap.appendChild(h('button', { class: 'btn ghost small', onclick: () => { node.branch_rules.push({ op: 'equals', value: '', target_node_id: '' }); renderRules(); }}, '➕ Rule'));
+        }
+        renderRules();
+        card.appendChild(rulesWrap);
+      }
+
+      // Buttons (for message/image/ask)
+      if (['message', 'image', 'ask'].includes(node.type)) {
+        node.buttons = node.buttons || [];
+        const btnsWrap = h('div', { style: { marginTop: '.5rem' } });
+        function renderBtns() {
+          btnsWrap.innerHTML = '';
+          btnsWrap.appendChild(h('div', { class: 'muted', style: { fontSize: '.78rem' } }, 'Quick-reply buttons (max 3)'));
+          (node.buttons || []).forEach((b, i) => {
+            const labIn = h('input', { type: 'text', value: b.label || '', placeholder: 'Button label', maxLength: 20, style: { width: '10rem' }, onchange: (e) => b.label = e.target.value });
+            const tgtIn = h('input', { type: 'text', value: b.next_node_id || '', placeholder: 'goes to node id', style: { width: '10rem' }, onchange: (e) => b.next_node_id = e.target.value });
+            btnsWrap.appendChild(h('div', { style: { display: 'flex', gap: '.35rem', marginTop: '.3rem', alignItems: 'center' } },
+              h('span', { class: 'muted' }, '#' + (i+1)),
+              labIn, h('span', {}, '→'), tgtIn,
+              h('button', { class: 'btn ghost small', onclick: () => { node.buttons.splice(i, 1); renderBtns(); }}, '✕')
+            ));
+          });
+          if ((node.buttons || []).length < 3) {
+            btnsWrap.appendChild(h('button', { class: 'btn ghost small', style: { marginTop: '.35rem' }, onclick: () => { node.buttons.push({ id: 'b' + (Date.now()%10000), label: '', next_node_id: '' }); renderBtns(); }}, '➕ Button'));
+          }
+        }
+        renderBtns();
+        card.appendChild(btnsWrap);
+      }
+
+      // Default next
+      if (node.type !== 'end' && node.type !== 'handoff') {
+        const dnIn = h('input', { type: 'text', value: node.default_next || '', placeholder: 'fall-through node id', style: { width: '14rem' }, onchange: (e) => node.default_next = e.target.value });
+        card.appendChild(h('div', { style: { marginTop: '.45rem' } },
+          h('label', { class: 'muted', style: { fontSize: '.78rem' } }, 'Default next (when no button matches)'),
+          h('br'), dnIn
+        ));
+      }
+      return card;
+    }
+
+    function addNode() {
+      const nextId = 'n' + (flow.nodes.length + 1);
+      flow.nodes.push({ id: nextId, type: 'message', body: '', buttons: [] });
+      if (!flow.start_node_id) flow.start_node_id = nextId;
+      renderNodes();
+      refreshStartSel();
+    }
+
+    dlg.appendChild(h('h3', {}, flowId ? 'Edit flow' : 'New flow'));
+    dlg.appendChild(h('label', {}, 'Name'));    dlg.appendChild(nameInp);
+    dlg.appendChild(h('label', {}, 'Description')); dlg.appendChild(descInp);
+    dlg.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 12rem 12rem', gap: '.6rem' } },
+      h('div', {}, h('label', {}, 'Trigger keyword'), trigInp),
+      h('div', {}, h('label', {}, 'Match'), matchSel),
+      h('div', {}, h('label', {}, 'Active'), h('div', {}, activeChk))
+    ));
+    dlg.appendChild(h('label', { style: { marginTop: '.6rem' } }, 'Start node'));
+    dlg.appendChild(startSel);
+    dlg.appendChild(nodesContainer);
+    refreshStartSel(); renderNodes();
+
+    const footer = h('div', { style: { marginTop: '.85rem', display: 'flex', gap: '.5rem', justifyContent: 'flex-end' } },
+      h('button', { class: 'btn ghost', onclick: () => modal.remove() }, 'Cancel'),
+      h('button', { class: 'btn primary', onclick: async () => {
+        const payload = {
+          id: flowId || undefined,
+          name: nameInp.value.trim(),
+          description: descInp.value.trim(),
+          trigger: trigInp.value.trim(),
+          trigger_match: matchSel.value,
+          is_active: activeChk.checked ? 1 : 0,
+          priority: 100,
+          nodes: flow.nodes,
+          start_node_id: startSel.value || (flow.nodes[0] && flow.nodes[0].id) || ''
+        };
+        try {
+          await api('api_waflow_save', payload);
+          toast(flowId ? 'Updated' : 'Created', 'ok');
+          modal.remove(); reload();
+        } catch (e) { toast(e.message, 'err'); }
+      }}, flowId ? 'Save changes' : 'Create flow')
+    );
+    dlg.appendChild(footer);
+    modal.appendChild(dlg);
+    document.body.appendChild(modal);
+  }
+
+  reload();
+  return wrap;
 }
 async function adminSources() {
   const sources = await api('api_sources_list');
