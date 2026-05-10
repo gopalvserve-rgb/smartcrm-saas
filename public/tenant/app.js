@@ -7806,12 +7806,51 @@ async function _aibotSettingsView(currentPhId) {
   wrap.appendChild(h('div', { class: 'card', style: { borderLeft: '4px solid #ef4444' } },
     h('h3', { style: { marginTop: 0 } }, '🔥 Hot lead alerts'),
     h('div', { style: { display: 'flex', justifyContent: 'flex-end', marginTop: '-1.6rem', marginBottom: '.4rem' } },
-      h('button', { type: 'button', class: 'btn small ghost', onclick: async () => {
+      h('button', { type: 'button', class: 'btn small ghost', onclick: async (ev) => {
+        const btn = ev.currentTarget;
+        btn.disabled = true; const _orig = btn.textContent;
+        async function tryFire() {
+          try {
+            const r = await api('api_aibot_heat_test_alert');
+            return r;
+          } catch (e) { return { ok: false, error: e.message }; }
+        }
         try {
-          const r = await api('api_aibot_heat_test_alert');
-          if (r.ok) toast(r.note || ('Sent to ' + r.delivered.sent + ' device(s)'), r.delivered.sent ? 'ok' : 'err');
-          else toast('Test failed: ' + (r.error || 'unknown'), 'err');
-        } catch (e) { toast(e.message, 'err'); }
+          // 1st attempt — if subscriptions already exist this just works.
+          btn.textContent = '⏳ Sending\u2026';
+          let r = await tryFire();
+          if (r.ok && r.delivered && r.delivered.sent > 0) {
+            toast(r.note, 'ok');
+            return;
+          }
+          // No subscriptions — try to register web push on this device, then retry.
+          if (typeof registerWebPush === 'function') {
+            btn.textContent = '⏳ Setting up notifications\u2026';
+            try { await registerWebPush(); } catch (e) {}
+            // Tiny delay so the browser commits the subscription before the retry hits the server.
+            await new Promise(res => setTimeout(res, 600));
+            btn.textContent = '⏳ Retrying\u2026';
+            r = await tryFire();
+            if (r.ok && r.delivered && r.delivered.sent > 0) {
+              toast('✅ Notifications enabled — sent to ' + r.delivered.sent + ' device(s).', 'ok');
+              return;
+            }
+          }
+          // Still nothing — give the user a precise instruction based on the browser state.
+          let why = r.error || (r.note || 'No subscriptions found.');
+          if (typeof Notification !== 'undefined') {
+            if (Notification.permission === 'denied') {
+              why = '🚫 You blocked notifications for this site. Open browser settings → site permissions → allow notifications, then reload and try again.';
+            } else if (Notification.permission === 'default') {
+              why = '🔔 Allow notifications when the browser asks. If you missed the prompt, reload the page and click the button again.';
+            } else if (Notification.permission === 'granted' && r.delivered && r.delivered.sent === 0) {
+              why = '✅ Permission granted but no push subscription registered. The test alert is saved to your in-app bell drawer — reload once and try again to register web push, or install the mobile APK for FCM delivery.';
+            }
+          }
+          toast(why, 'err');
+        } finally {
+          btn.disabled = false; btn.textContent = _orig;
+        }
       } }, '🔔 Send me a test alert')),
     h('p', { class: 'muted', style: { fontSize: '.85rem' } },
       'When a customer\'s WhatsApp message shows buying intent, the lead gets tagged hot and a push notification fires. Configure your own keywords + who gets notified below. Built-in defaults (price, demo, callback, comparison, etc.) are always active — your keywords add to them.'),
