@@ -6862,6 +6862,7 @@ VIEWS.whatsbot = async (view) => {
   const tabs = [
     { id: 'connect',   label: '🔗 Connect Account' },
     { id: 'templates', label: '📋 Templates' },
+    { id: 'flows',     label: '🗺️ Bot Flows' },
     { id: 'msgbots',   label: '💬 Message Bot' },
     { id: 'tplbots',   label: '🤖 Template Bot' },
     { id: 'campaigns', label: '📣 Campaigns' },
@@ -6893,6 +6894,7 @@ async function showWbTab(id) {
   try {
     if (id === 'connect')   body.replaceChildren(await wbConnect());
     if (id === 'templates') body.replaceChildren(await wbTemplates());
+    if (id === 'flows')     body.replaceChildren(await wbFlows());
     if (id === 'msgbots')   body.replaceChildren(await wbMessageBots());
     if (id === 'tplbots')   body.replaceChildren(await wbTemplateBots());
     if (id === 'campaigns') body.replaceChildren(await wbCampaigns());
@@ -11197,7 +11199,6 @@ VIEWS.admin = async (view) => {
     ]},
     { title: 'Channels', items: [
       { id: 'whatsapp',     label: '💬 WhatsApp' },
-      { id: 'botflows',     label: '🗺️ Bot Flows' },
       { id: 'fb',           label: '🌍 Facebook' },
       { id: 'api',          label: '🔌 Website API' },
       { id: 'integrations', label: '🧩 Integrations' },
@@ -11276,7 +11277,6 @@ async function showAdminTab(id) {
     if (id === 'automations') body.replaceChildren(await adminAutomations());
     if (id === 'fb')          body.replaceChildren(await adminFb());
     if (id === 'whatsapp') body.replaceChildren(await adminWhatsapp());
-    if (id === 'botflows') body.replaceChildren(await adminBotFlows());
     if (id === 'sources')  body.replaceChildren(await adminSources());
     if (id === 'statuses') body.replaceChildren(await adminStatuses());
     if (id === 'products') body.replaceChildren(await adminProducts());
@@ -13633,6 +13633,8 @@ async function adminWhatsapp() {
 // with quick-reply buttons + branching. The runtime engine lives in
 // routes/waBotFlows.js and runs BEFORE the AI Bot on every inbound.
 // =====================================================================
+async function wbFlows() { return await adminBotFlows(); }
+
 async function adminBotFlows() {
   const wrap = h('div', {});
   wrap.appendChild(h('div', { class: 'card', style: { background: 'linear-gradient(135deg, #ecfeff 0%, #f0f9ff 100%)', border: '1px solid #67e8f9', marginBottom: '.85rem' } },
@@ -13642,6 +13644,79 @@ async function adminBotFlows() {
     h('p', { class: 'muted', style: { margin: 0, fontSize: '.82rem' } },
       'Flows take priority over the AI Bot — useful for booking, qualification, or menu navigation.')
   ));
+
+  // ---- Templates library card ----
+  const tplsCard = h('div', { class: 'card', style: { marginBottom: '.85rem' } });
+  wrap.appendChild(tplsCard);
+  (async () => {
+    tplsCard.innerHTML = '';
+    tplsCard.appendChild(h('h4', { style: { margin: '0 0 .35rem' } }, '📚 Start from a template'));
+    tplsCard.appendChild(h('p', { class: 'muted', style: { margin: '0 0 .6rem', fontSize: '.84rem' } },
+      'Pick a pre-built flow. Creates a draft (disabled) you can edit — toggle Active when you\'re ready.'));
+    let tpls = [];
+    try { tpls = (await api('api_waflow_templates_list')).templates || []; }
+    catch (e) { tplsCard.appendChild(h('div', { class: 'muted' }, 'Templates unavailable: ' + e.message)); return; }
+    const grid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '.6rem' } });
+    tpls.forEach(t => {
+      const card = h('div', { style: { background: '#fff', border: '1px solid var(--border)', borderRadius: '8px', padding: '.7rem .8rem', cursor: 'pointer', transition: 'all .12s' } });
+      card.appendChild(h('div', { style: { fontWeight: '600', marginBottom: '.2rem', fontSize: '.92rem' } }, t.title));
+      card.appendChild(h('div', { class: 'muted', style: { fontSize: '.78rem', minHeight: '2.2em' } }, t.description));
+      card.appendChild(h('div', { class: 'muted', style: { fontSize: '.74rem', marginTop: '.35rem' } }, t.node_count + ' steps'));
+      const btn = h('button', { class: 'btn small', style: { marginTop: '.45rem' } }, '✨ Use this template');
+      btn.onclick = async () => {
+        try {
+          const r = await api('api_waflow_templates_create', t.key);
+          toast(r.message || 'Created', 'ok');
+          if (typeof reload === 'function') reload();
+          if (r.id) openFlowModal(r.id);
+        } catch (e) { toast(e.message, 'err'); }
+      };
+      card.appendChild(btn);
+      grid.appendChild(card);
+    });
+    tplsCard.appendChild(grid);
+  })().catch(() => {});
+
+  // ---- Analytics summary card ----
+  const anCard = h('div', { class: 'card', style: { marginBottom: '.85rem' } });
+  wrap.appendChild(anCard);
+  (async () => {
+    anCard.innerHTML = '<div class="muted">Loading analytics…</div>';
+    try {
+      const a = await api('api_waflow_analytics', { days: 30 });
+      anCard.innerHTML = '';
+      anCard.appendChild(h('h4', { style: { margin: '0 0 .35rem' } }, '📊 Last 30 days'));
+      if (!a.per_flow.length) {
+        anCard.appendChild(h('div', { class: 'muted' }, 'No flow sessions yet. Trigger a test conversation to see numbers here.'));
+        return;
+      }
+      const tbl = h('table', { class: 'data-table', style: { width: '100%', fontSize: '.88rem' } },
+        h('thead', {}, h('tr', {},
+          h('th', {}, 'Flow'),
+          h('th', {}, 'Sessions'),
+          h('th', {}, 'Completed'),
+          h('th', {}, 'Abandoned'),
+          h('th', {}, 'Completion %')
+        )),
+        h('tbody', {}, ...a.per_flow.map(f => h('tr', {},
+          h('td', {}, f.flow_name || ('flow #' + f.flow_id)),
+          h('td', {}, String(f.sessions)),
+          h('td', {}, String(f.completed)),
+          h('td', { style: { color: f.abandoned > 0 ? '#dc2626' : '#94a3b8' } }, String(f.abandoned)),
+          h('td', {}, h('strong', { style: { color: f.completion_pct >= 70 ? '#10b981' : f.completion_pct >= 40 ? '#f59e0b' : '#dc2626' } }, f.completion_pct + '%'))
+        )))
+      );
+      anCard.appendChild(tbl);
+      if (a.drop_off && a.drop_off.length) {
+        anCard.appendChild(h('div', { class: 'muted', style: { marginTop: '.6rem', fontSize: '.78rem' } },
+          'Top drop-off nodes (where in-flight sessions are stuck): ' +
+          a.drop_off.slice(0, 5).map(d => 'flow#' + d.flow_id + '/' + d.current_node_id + ' (' + d.stuck + ')').join(' · ')));
+      }
+    } catch (e) {
+      anCard.innerHTML = '';
+      anCard.appendChild(h('div', { class: 'muted' }, 'Analytics unavailable: ' + e.message));
+    }
+  })().catch(() => {});
 
   const listCard = h('div', { class: 'card' });
   wrap.appendChild(listCard);
