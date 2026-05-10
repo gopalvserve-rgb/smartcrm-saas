@@ -12088,21 +12088,43 @@ VIEWS.reportbuilder = async (view) => {
         h('input', { type: 'date', id: 'rb-from' }),
         h('span', { class: 'muted' }, 'to'),
         h('input', { type: 'date', id: 'rb-to' }),
-        selectOpts('rb-user', [{ id: '', name: 'All users' }, ...users]),
-        h('select', { id: 'rb-status' },
-          h('option', { value: '' }, 'Any status'),
-          ...statuses.map(s => h('option', { value: s.id }, s.name))
-        ),
-        h('select', { id: 'rb-product' },
-          h('option', { value: '' }, 'Any product'),
-          ...products.map(p => h('option', { value: p.id }, p.name))
-        ),
-        selectOpts('rb-source', [{ id: '', name: 'Any source' }, ...sources.map(s => ({ id: s.name, name: s.name }))]),
+        multiSelectDropdown({ id: 'rb-user', label: 'Users', allLabel: 'All users',
+          options: users.map(u => ({ id: String(u.id), name: u.name })),
+          values: (window._rbPicked && window._rbPicked.users) || [],
+          onApply: (v) => { window._rbPicked = window._rbPicked || {}; window._rbPicked.users = v; }
+        }),
+        multiSelectDropdown({ id: 'rb-status', label: 'Status', allLabel: 'Any status',
+          options: statuses.map(s => ({ id: String(s.id), name: s.name })),
+          values: (window._rbPicked && window._rbPicked.statuses) || [],
+          onApply: (v) => { window._rbPicked = window._rbPicked || {}; window._rbPicked.statuses = v; }
+        }),
+        multiSelectDropdown({ id: 'rb-product', label: 'Product', allLabel: 'Any product',
+          options: products.map(p => ({ id: String(p.id), name: p.name })),
+          values: (window._rbPicked && window._rbPicked.products) || [],
+          onApply: (v) => { window._rbPicked = window._rbPicked || {}; window._rbPicked.products = v; }
+        }),
+        multiSelectDropdown({ id: 'rb-source', label: 'Source', allLabel: 'Any source',
+          options: sources.map(s => ({ id: s.name, name: s.name })),
+          values: (window._rbPicked && window._rbPicked.sources) || [],
+          onApply: (v) => { window._rbPicked = window._rbPicked || {}; window._rbPicked.sources = v; }
+        }),
         h('select', { id: 'rb-qualified' },
           h('option', { value: '' }, 'Any qualified'),
           h('option', { value: '1' }, 'Qualified only'),
           h('option', { value: '0' }, 'Not qualified')
         ),
+        (function(){ const rb = ruleBuilderButton({ label: '+ Filter rule', storageKey: 'crm.reportbuilder.rules.v1',
+          fields: [
+            { id: 'name', label: 'Lead name', type: 'text' },
+            { id: 'phone', label: 'Phone', type: 'text' },
+            { id: 'email', label: 'Email', type: 'text' },
+            { id: 'company', label: 'Company', type: 'text' },
+            { id: 'tag', label: 'Tag', type: 'text' },
+            { id: 'city', label: 'City', type: 'text' },
+            { id: 'state', label: 'State', type: 'text' }
+          ], onChange: () => loadReportBuilder() });
+          rb.id = 'rb-rule-btn'; window._rbRuleBtn = rb; const hold = document.createElement('span'); hold.appendChild(rb); return hold;
+        })(),
         h('button', { class: 'btn primary', onclick: loadReportBuilder }, '🔎 Generate'),
         h('button', { class: 'btn', onclick: downloadReportBuilderExcel, title: 'Export breakdown + lead details to Excel' }, '📊 Export Excel'),
         h('button', { class: 'btn', onclick: downloadReportBuilderCsv, title: 'Export breakdown to CSV' }, '⬇️ CSV')
@@ -12129,14 +12151,26 @@ VIEWS.reportbuilder = async (view) => {
 };
 
 function _currentReportBuilderFilters() {
+  const picked = window._rbPicked || {};
+  const usersArr   = picked.users     || [];
+  const statusesArr= picked.statuses  || [];
+  const productsArr= picked.products  || [];
+  const sourcesArr = picked.sources   || [];
   return {
     from:        $('#rb-from')?.value || undefined,
     to:          $('#rb-to')?.value   || undefined,
-    scope_user_id: $('#rb-user')?.value   || undefined,
-    status_id:   $('#rb-status')?.value   || undefined,
-    product_id:  $('#rb-product')?.value  || undefined,
-    source:      $('#rb-source')?.value   || undefined,
-    qualified:   $('#rb-qualified')?.value || undefined
+    qualified:   $('#rb-qualified')?.value || undefined,
+    // Legacy single-value fields (first selected) for backwards compat.
+    scope_user_id: usersArr[0],
+    status_id:     statusesArr[0],
+    product_id:    productsArr[0],
+    source:        sourcesArr[0],
+    // Multi-select arrays — handlers can OR them together.
+    scope_user_ids: usersArr.length ? usersArr : undefined,
+    status_ids:     statusesArr.length ? statusesArr : undefined,
+    product_ids:    productsArr.length ? productsArr : undefined,
+    sources:        sourcesArr.length ? sourcesArr : undefined,
+    rules: (window._rbRuleBtn && window._rbRuleBtn.getRules) ? window._rbRuleBtn.getRules() : []
   };
 }
 
