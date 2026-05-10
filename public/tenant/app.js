@@ -8102,19 +8102,27 @@ async function _aibotKbView() {
         h('td', {}, ({ text: '📝 Text', url: '🌐 URL', pdf: '📄 PDF', docx: '📄 DOCX', attachment: '📎 Attachment' })[d.source_type] || d.source_type,
           d.file_name ? h('div', { class: 'muted', style: { fontSize: '.72rem' } }, d.file_name) : null),
         h('td', {}, (() => {
-          const sel = h('select', { style: { fontSize: '.82rem', padding: '.2rem .35rem' } });
-          const optGlobal = h('option', { value: '__global__', selected: !d.phone_number_id ? 'selected' : null }, '🏠 Global (all bots)');
-          sel.appendChild(optGlobal);
-          _connectedPhones.forEach(ph => {
-            const phId = String(ph.phone_number_id || '');
-            sel.appendChild(h('option', { value: phId, selected: String(d.phone_number_id || '') === phId ? 'selected' : null },
-              '📱 ' + (ph.display_phone_number || phId) + (ph.label ? ' (' + ph.label + ')' : '')));
+          // Multi-select: a doc can serve N phones at once. Empty = global (used by every bot).
+          // Returns the assigned phones via primary phone_number_id + additional_phone_ids[].
+          const assigned = [];
+          if (d.phone_number_id) assigned.push(String(d.phone_number_id));
+          let _addl = d.additional_phone_ids;
+          if (typeof _addl === 'string') { try { _addl = JSON.parse(_addl); } catch (_) { _addl = []; } }
+          if (Array.isArray(_addl)) _addl.forEach(x => { if (x && !assigned.includes(String(x))) assigned.push(String(x)); });
+          const opts = _connectedPhones.map(ph => ({
+            id: String(ph.phone_number_id || ''),
+            name: '📱 ' + (ph.display_phone_number || ph.phone_number_id) + (ph.label ? ' (' + ph.label + ')' : '')
+          }));
+          return multiSelectDropdown({
+            label: '',
+            allLabel: '🏠 Global (all bots)',
+            options: opts,
+            values: assigned,
+            onApply: async (picked) => {
+              try { await api('api_aibot_kb_set_phone', d.id, picked); toast('Scope updated', 'ok'); refreshList(); }
+              catch (e) { toast(e.message, 'err'); }
+            }
           });
-          sel.onchange = async () => {
-            try { await api('api_aibot_kb_set_phone', d.id, sel.value); toast('Scope updated', 'ok'); refreshList(); }
-            catch (e) { toast(e.message, 'err'); }
-          };
-          return sel;
         })()),
         h('td', {}, d.source_type === 'attachment' || Number(d.is_attachable) === 1
           ? (() => {

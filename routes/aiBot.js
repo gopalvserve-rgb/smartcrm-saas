@@ -163,6 +163,8 @@ async function _ensureAiBotColumns() {
     // businesses keep their KBs separate per number.
     await db.query(`ALTER TABLE ai_kb_documents ADD COLUMN IF NOT EXISTS phone_number_id TEXT`);
     await db.query(`CREATE INDEX IF NOT EXISTS idx_ai_kb_documents_phone ON ai_kb_documents(phone_number_id)`);
+    // Multi-phone KB scope (May 2026): a single KB doc can be assigned to N phones at once.
+    await db.query(`ALTER TABLE ai_kb_documents ADD COLUMN IF NOT EXISTS additional_phone_ids JSONB NOT NULL DEFAULT '[]'::jsonb`);
     // Bot-centric UX (May 2026): each ai_bot_settings row is a 'Bot' with
     // a friendly label + array of additional phones it serves besides its primary.
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS bot_label TEXT`);
@@ -288,10 +290,11 @@ async function api_aibot_settings_save(token, payload) {
       const cloneCols = ['is_enabled','bot_name','business_name','language','system_prompt','welcome_message','reply_modes','business_hours','trigger_keywords','off_keywords','active_phone_number_ids','resume_after_idle_minutes','resume_after_idle_seconds','max_replies_per_thread','escalation_keywords','model_override','use_kb','kb_max_chars','history_messages','reengage_enabled','reengage_after_minutes','reengage_message','reengage_max_attempts','heat_enabled','heat_keywords','heat_notify_levels','heat_notify_recipients'];
       const insertCols = ['phone_number_id'];
       const insertVals = [phId];
+      const _jsonbCols = ['reply_modes','business_hours','active_phone_number_ids','additional_phone_ids','heat_keywords'];
       cloneCols.forEach(c => {
         if (seed[c] !== undefined && seed[c] !== null) {
           insertCols.push(c);
-          if (['reply_modes','business_hours','active_phone_number_ids'].includes(c)) {
+          if (_jsonbCols.includes(c)) {
             insertVals.push(typeof seed[c] === 'string' ? seed[c] : JSON.stringify(seed[c]));
           } else {
             insertVals.push(seed[c]);
@@ -306,7 +309,7 @@ async function api_aibot_settings_save(token, payload) {
       insertCols.push('id');
       insertVals.push(nextId);
       const placeholders = insertCols.map((col, idx) => {
-        if (['reply_modes','business_hours','active_phone_number_ids','additional_phone_ids'].includes(col)) return '$' + (idx + 1) + '::jsonb';
+        if (_jsonbCols.includes(col) || col === 'additional_phone_ids') return '$' + (idx + 1) + '::jsonb';
         return '$' + (idx + 1);
       });
       await db.query(`INSERT INTO ai_bot_settings (${insertCols.join(', ')}) VALUES (${placeholders.join(', ')})`, insertVals);
@@ -446,14 +449,14 @@ async function api_aibot_kb_list(token, phoneNumberId) {
   if (!phId) {
     r = await db.query(
       `SELECT id, source_type, title, char_count, source_url, file_path, file_size,
-              phone_number_id, is_active, ingest_status, ingest_error, created_at, updated_at, file_name, file_mime_type, file_size_bytes, is_attachable, trigger_keywords, sent_count
+              phone_number_id, is_active, ingest_status, ingest_error, created_at, updated_at, file_name, file_mime_type, file_size_bytes, is_attachable, trigger_keywords, sent_count, additional_phone_ids
          FROM ai_kb_documents
          ORDER BY is_active DESC, created_at DESC`
     );
   } else if (phId === '__global__' || phId === 'default') {
     r = await db.query(
       `SELECT id, source_type, title, char_count, source_url, file_path, file_size,
-              phone_number_id, is_active, ingest_status, ingest_error, created_at, updated_at, file_name, file_mime_type, file_size_bytes, is_attachable, trigger_keywords, sent_count
+              phone_number_id, is_active, ingest_status, ingest_error, created_at, updated_at, file_name, file_mime_type, file_size_bytes, is_attachable, trigger_keywords, sent_count, additional_phone_ids
          FROM ai_kb_documents
          WHERE phone_number_id IS NULL
          ORDER BY is_active DESC, created_at DESC`
@@ -461,7 +464,7 @@ async function api_aibot_kb_list(token, phoneNumberId) {
   } else {
     r = await db.query(
       `SELECT id, source_type, title, char_count, source_url, file_path, file_size,
-              phone_number_id, is_active, ingest_status, ingest_error, created_at, updated_at, file_name, file_mime_type, file_size_bytes, is_attachable, trigger_keywords, sent_count
+              phone_number_id, is_active, ingest_status, ingest_error, created_at, updated_at, file_name, file_mime_type, file_size_bytes, is_attachable, trigger_keywords, sent_count, additional_phone_ids
          FROM ai_kb_documents
          WHERE phone_number_id IS NULL OR phone_number_id = $1
          ORDER BY is_active DESC, created_at DESC`,
@@ -510,9 +513,26 @@ async function api_aibot_kb_delete(token, id) {
 async function api_aibot_kb_set_phone(token, id, phoneNumberId) {
   const me = await authUser(token);
   if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
-  const phId = phoneNumberId && phoneNumberId !== '__global__' && phoneNumberId !== 'default' ? String(phoneNumberId) : null;
-  await db.query(`UPDATE ai_kb_documents SET phone_number_id = $1, updated_at = NOW() WHERE id = $2`, [phId, Number(id)]);
-  return { ok: true };
+  await _ensureAiBotColumns();
+  // Accepts: a single string ('__global__'/'default'/null/phoneId), OR an array of phone IDs.
+  // Array model: first element becomes primary phone_number_id, rest go into additional_phone_ids.
+  // Empty / 'global' => fully global (NULL primary, [] additional).
+  let primary = null;
+  let additional = [];
+  if (Array.isArray(phoneNumberId)) {
+    const arr = phoneNumberId.map(x => String(x || '').trim()).filter(x => x && x !== '__global__' && x !== 'default');
+    primary = arr[0] || null;
+    additional = arr.slice(1);
+  } else {
+    const v = phoneNumberId && phoneNumberId !== '__global__' && phoneNumberId !== 'default' ? String(phoneNumberId) : null;
+    primary = v;
+    additional = [];
+  }
+  await db.query(
+    `UPDATE ai_kb_documents SET phone_number_id = $1, additional_phone_ids = $2::jsonb, updated_at = NOW() WHERE id = $3`,
+    [primary, JSON.stringify(additional), Number(id)]
+  );
+  return { ok: true, primary, additional };
 }
 
 async function api_aibot_kb_toggle(token, id, isActive) {
@@ -834,8 +854,11 @@ async function _buildPrompt(settings, phone, leadId, inboundText) {
     const r = allBotPhIds.length
       ? await db.query(
           `SELECT title, raw_text FROM ai_kb_documents
-            WHERE is_active = 1 AND (phone_number_id IS NULL OR phone_number_id = ANY($1::text[]))
-              AND source_type <> 'attachment'
+            WHERE is_active = 1 AND source_type <> 'attachment' AND (
+              phone_number_id IS NULL
+              OR phone_number_id = ANY($1::text[])
+              OR additional_phone_ids ?| $1::text[]
+            )
             ORDER BY id ASC`,
           [allBotPhIds]
         )
