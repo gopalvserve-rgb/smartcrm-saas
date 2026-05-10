@@ -13795,188 +13795,457 @@ async function adminBotFlows() {
   }
 
   async function openFlowModal(flowId) {
+    // Visual canvas builder. Replaces the old list-based editor.
+    // Engine is unchanged - we serialise the canvas back into the same
+    // nodes-JSON shape (with x/y coords added so position is preserved
+    // across reloads).
     let flow = { name: '', description: '', trigger: '', trigger_match: 'exact', is_active: 0, priority: 100, nodes: [], start_node_id: '' };
     if (flowId) {
       try { flow = (await api('api_waflow_get', flowId)).flow; flow.nodes = flow.nodes || []; }
       catch (e) { toast(e.message, 'err'); return; }
     }
-    const modal = h('div', { class: 'modal-overlay' });
-    const dlg = h('div', { class: 'modal', style: { width: 'min(960px, 95vw)', maxHeight: '90vh', overflow: 'auto' } });
 
-    const nameInp = h('input', { type: 'text', value: flow.name || '', placeholder: 'Booking flow', style: { width: '100%' } });
-    const descInp = h('input', { type: 'text', value: flow.description || '', placeholder: 'Short description', style: { width: '100%' } });
-    const trigInp = h('input', { type: 'text', value: flow.trigger || '', placeholder: 'eg. hi, book, demo', style: { width: '100%' } });
+    // Component palette - what users can drag onto the canvas.
+    const PALETTE = [
+      { type: 'message',    icon: '💬', title: 'Text Message',  hint: 'Plain text, with up to 3 quick-reply buttons.' },
+      { type: 'image',      icon: '🖼️', title: 'Image Message', hint: 'Send an image (URL) with optional caption + buttons.' },
+      { type: 'audio',      icon: '🎵', title: 'Audio Message', hint: 'Send an audio file URL.' },
+      { type: 'video',      icon: '🎥', title: 'Video Message', hint: 'Send a video file URL.' },
+      { type: 'document',   icon: '📄', title: 'Document',      hint: 'Send a PDF / DOCX / etc.' },
+      { type: 'location',   icon: '📍', title: 'Location',      hint: 'Send a geo pin (lat/lng).' },
+      { type: 'cta',        icon: '🔗', title: 'CTA URL Button',hint: 'Single Call-to-Action with a URL button.' },
+      { type: 'ask',        icon: '❓',          title: 'Ask & Capture', hint: 'Ask a question, save reply into a variable.' },
+      { type: 'branch',     icon: '🔀', title: 'Branch',         hint: 'Route by a captured variable value.' },
+      { type: 'save_field', icon: '💾', title: 'Save to Lead',  hint: 'Write a variable into a lead column.' },
+      { type: 'ai_handoff', icon: '🤖', title: 'AI Personal Assistant', hint: 'Hand the rest of the chat to the AI Bot.' },
+      { type: 'handoff',    icon: '🙋', title: 'Human Handoff', hint: 'Silence bots and pass to a human agent.' },
+      { type: 'end',        icon: '🏁', title: 'End',            hint: 'Final message and close the session.' }
+    ];
+
+    // Ensure every node has x/y for canvas placement (legacy flows had none).
+    flow.nodes.forEach((n, i) => {
+      if (n.x == null) n.x = 80 + (i * 30) % 600;
+      if (n.y == null) n.y = 80 + Math.floor(i / 4) * 200;
+    });
+
+    const modal = h('div', { class: 'modal-overlay' });
+    const dlg = h('div', { class: 'modal', style: { width: 'min(1240px, 98vw)', height: 'min(92vh, 820px)', maxHeight: '92vh', overflow: 'hidden', display: 'flex', flexDirection: 'column', padding: 0 } });
+
+    // ---- Top bar with name / trigger / save ----
+    const nameInp = h('input', { type: 'text', value: flow.name || '', placeholder: 'Flow name', style: { width: '12rem' } });
+    const trigInp = h('input', { type: 'text', value: flow.trigger || '', placeholder: 'Trigger keyword', style: { width: '10rem' } });
     const matchSel = h('select', {},
-      ...['exact', 'contains', 'startswith', 'regex'].map(o => h('option', { value: o, selected: (flow.trigger_match || 'exact') === o }, o))
+      ...['exact','contains','startswith','regex'].map(o => h('option', { value: o, selected: (flow.trigger_match || 'exact') === o }, o))
     );
     const activeChk = h('input', { type: 'checkbox', checked: Number(flow.is_active) === 1 });
-    const startSel = h('select', {});
+    const topBar = h('div', { style: { padding: '.7rem .9rem', borderBottom: '1px solid var(--border)', background: '#fafbfc', display: 'flex', flexWrap: 'wrap', gap: '.55rem', alignItems: 'center' } },
+      h('strong', {}, flowId ? 'Edit flow' : 'New flow'),
+      h('label', { style: { fontSize: '.78rem', color: 'var(--text-soft)', marginLeft: '.5rem' } }, 'Name'), nameInp,
+      h('label', { style: { fontSize: '.78rem', color: 'var(--text-soft)' } }, 'Trigger'), trigInp,
+      matchSel,
+      h('label', { style: { fontSize: '.78rem', color: 'var(--text-soft)', display: 'inline-flex', alignItems: 'center', gap: '.3rem' } }, activeChk, 'Active'),
+      h('span', { style: { flex: 1 } }),
+      h('button', { class: 'btn ghost', onclick: () => modal.remove() }, 'Cancel'),
+      h('button', { class: 'btn primary', id: 'flow-save-btn' }, flowId ? 'Save' : 'Create')
+    );
+    dlg.appendChild(topBar);
 
-    const nodesContainer = h('div', { class: 'card', style: { marginTop: '.85rem', background: '#fafbfc' } });
+    // ---- Body: palette (left) + canvas (right) ----
+    const body = h('div', { style: { flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 } });
+    dlg.appendChild(body);
 
-    function refreshStartSel() {
-      startSel.innerHTML = '';
-      flow.nodes.forEach(n => startSel.appendChild(h('option', { value: n.id, selected: flow.start_node_id === n.id }, n.id + ' — ' + (n.type || '?'))));
-    }
-
-    function renderNodes() {
-      nodesContainer.innerHTML = '';
-      nodesContainer.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.5rem' } },
-        h('strong', {}, 'Steps (nodes)'),
-        h('button', { class: 'btn small', onclick: () => addNode() }, '➕ Add step')
-      ));
-      if (!flow.nodes.length) {
-        nodesContainer.appendChild(h('div', { class: 'muted', style: { padding: '.4rem 0' } }, 'No steps yet.'));
-        return;
-      }
-      flow.nodes.forEach((node, idx) => nodesContainer.appendChild(renderNodeCard(node, idx)));
-    }
-
-    function renderNodeCard(node, idx) {
-      const card = h('div', { style: { background: '#fff', border: '1px solid var(--border)', borderRadius: '8px', padding: '.7rem .85rem', marginBottom: '.5rem' } });
-      const idIn = h('input', { type: 'text', value: node.id, placeholder: 'n1', style: { width: '8rem' }, onchange: (e) => { node.id = e.target.value.trim(); refreshStartSel(); } });
-      const typeSel = h('select', {},
-        ...['message', 'image', 'ask', 'branch', 'save_field', 'handoff', 'end'].map(t =>
-          h('option', { value: t, selected: node.type === t }, t)
+    // Palette
+    const paletteEl = h('div', { style: { width: '220px', borderRight: '1px solid var(--border)', padding: '.6rem', background: '#fff', overflowY: 'auto' } });
+    paletteEl.appendChild(h('div', { style: { fontSize: '.7rem', textTransform: 'uppercase', letterSpacing: '.04em', color: 'var(--text-soft)', fontWeight: 600, padding: '.25rem .25rem .5rem' } }, 'Available components'));
+    PALETTE.forEach(p => {
+      const item = h('div', { draggable: true, class: 'flow-palette-item', style: { padding: '.5rem .65rem', borderRadius: '8px', border: '1px solid var(--border)', marginBottom: '.4rem', cursor: 'grab', background: '#fff', display: 'flex', alignItems: 'center', gap: '.5rem', userSelect: 'none' } },
+        h('span', { style: { fontSize: '1.05rem' } }, p.icon),
+        h('div', { style: { flex: 1 } },
+          h('div', { style: { fontSize: '.85rem', fontWeight: 600 } }, p.title),
+          h('div', { class: 'muted', style: { fontSize: '.72rem' } }, p.hint)
         )
       );
-      typeSel.onchange = () => { node.type = typeSel.value; renderNodes(); };
-      const bodyTa = h('textarea', { rows: 2, style: { width: '100%' }, placeholder: node.type === 'image' ? 'Caption (optional)' : 'Message body — supports {{var}} interpolation', onchange: (e) => node.body = e.target.value }, node.body || '');
+      item.addEventListener('dragstart', (e) => {
+        e.dataTransfer.setData('flow/type', p.type);
+        e.dataTransfer.effectAllowed = 'copy';
+      });
+      paletteEl.appendChild(item);
+    });
+    body.appendChild(paletteEl);
 
-      card.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', marginBottom: '.45rem' } },
-        h('strong', {}, '#' + (idx + 1)),
-        h('label', { class: 'muted', style: { fontSize: '.78rem' } }, 'id'),
-        idIn,
-        h('label', { class: 'muted', style: { fontSize: '.78rem' } }, 'type'),
-        typeSel,
-        h('button', { class: 'btn danger small', style: { marginLeft: 'auto' }, onclick: () => { flow.nodes.splice(idx, 1); renderNodes(); refreshStartSel(); } }, '🗑 Remove')
-      ));
-      card.appendChild(bodyTa);
+    // Canvas
+    const canvas = h('div', { class: 'flow-canvas', style: { flex: 1, position: 'relative', overflow: 'auto', background: 'radial-gradient(circle, #d1d5db 1px, transparent 1px) 0 0/16px 16px, #fafbfc' } });
+    body.appendChild(canvas);
 
-      if (node.type === 'image') {
-        const urlIn = h('input', { type: 'text', placeholder: 'https://example.com/image.jpg', style: { width: '100%', marginTop: '.4rem' }, onchange: (e) => node.media_url = e.target.value }, );
-        urlIn.value = node.media_url || '';
-        card.appendChild(h('label', { class: 'muted', style: { fontSize: '.78rem' } }, 'Image URL'));
-        card.appendChild(urlIn);
+    // SVG overlay for connection lines (sized large; will live on top of nodes' background)
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('style', 'position:absolute; left:0; top:0; width:100%; height:100%; pointer-events:none; min-width: 3000px; min-height: 2000px;');
+    svg.setAttribute('width', '3000');
+    svg.setAttribute('height', '2000');
+    canvas.appendChild(svg);
+
+    // State - DOM elements per node id
+    const nodeEls = new Map();
+
+    // ---- Render helpers ----
+    function nextId() {
+      let n = 1;
+      const used = new Set(flow.nodes.map(x => x.id));
+      while (used.has('n' + n)) n++;
+      return 'n' + n;
+    }
+
+    function nodeColor(t) {
+      return ({
+        message: '#6366f1', image: '#0ea5e9', audio: '#8b5cf6', video: '#ec4899',
+        document: '#0891b2', location: '#10b981', cta: '#f59e0b',
+        ask: '#3b82f6', branch: '#a855f7', save_field: '#14b8a6',
+        ai_handoff: '#7c3aed', handoff: '#dc2626', end: '#64748b'
+      })[t] || '#6366f1';
+    }
+    function nodeIcon(t) {
+      return (PALETTE.find(p => p.type === t) || {}).icon || '🔧';
+    }
+    function nodeTitle(t) {
+      return (PALETTE.find(p => p.type === t) || {}).title || t;
+    }
+
+    function renderNode(node) {
+      const el = h('div', {
+        class: 'flow-node', 'data-node-id': node.id,
+        style: {
+          position: 'absolute', left: node.x + 'px', top: node.y + 'px', width: '220px',
+          background: '#fff', border: '2px solid ' + nodeColor(node.type), borderRadius: '10px',
+          boxShadow: '0 2px 6px rgba(15,23,42,.08)', userSelect: 'none', zIndex: 10
+        }
+      });
+      // Header (drag handle + delete)
+      const header = h('div', { style: { padding: '.4rem .5rem', background: nodeColor(node.type), color: '#fff', borderRadius: '8px 8px 0 0', display: 'flex', gap: '.4rem', alignItems: 'center', cursor: 'move', fontSize: '.82rem', fontWeight: 600 } },
+        h('span', {}, nodeIcon(node.type)),
+        h('span', { style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, nodeTitle(node.type)),
+        (() => { const b = h('button', { style: { background: 'transparent', border: 'none', color: '#fff', cursor: 'pointer', fontSize: '1rem', padding: 0, lineHeight: 1 }, title: 'Delete' }, '🗑'); b.onclick = (ev) => { ev.stopPropagation(); flow.nodes = flow.nodes.filter(n => n.id !== node.id); rebuildCanvas(); }; return b; })()
+      );
+      el.appendChild(header);
+
+      // Body preview
+      const bodyText = (node.body || '').slice(0, 80) + ((node.body || '').length > 80 ? '…' : '');
+      const preview = h('div', { style: { padding: '.5rem .6rem', fontSize: '.78rem', color: 'var(--text)', minHeight: '2.2em', cursor: 'pointer' } });
+      if (bodyText) preview.appendChild(h('div', {}, bodyText));
+      else preview.appendChild(h('div', { class: 'muted' }, '(click to edit)'));
+      if (node.media_url) preview.appendChild(h('div', { class: 'muted', style: { fontSize: '.7rem', marginTop: '.2rem' } }, '🔗 ' + node.media_url.slice(0, 40)));
+      if (node.save_to_var) preview.appendChild(h('div', { class: 'muted', style: { fontSize: '.7rem', marginTop: '.2rem' } }, '→ {{' + node.save_to_var + '}}'));
+      preview.onclick = () => editNode(node);
+      el.appendChild(preview);
+
+      // Quick-reply buttons row
+      const buttons = Array.isArray(node.buttons) ? node.buttons : [];
+      buttons.forEach((b, i) => {
+        const row = h('div', {
+          'data-port-out': b.id || ('b' + i), 'data-button-idx': String(i),
+          style: { padding: '.3rem .55rem', borderTop: '1px solid var(--border)', fontSize: '.78rem', display: 'flex', alignItems: 'center', gap: '.3rem', position: 'relative' }
+        });
+        row.appendChild(h('span', { style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, '▸ ' + (b.label || '(unlabelled)')));
+        const dot = h('span', { class: 'flow-port flow-port-out', 'data-button-idx': String(i),
+          style: { width: '10px', height: '10px', borderRadius: '50%', background: nodeColor(node.type), border: '2px solid #fff', boxShadow: '0 0 0 1px ' + nodeColor(node.type), position: 'absolute', right: '-7px', top: '50%', transform: 'translateY(-50%)', cursor: 'crosshair' } });
+        row.appendChild(dot);
+        el.appendChild(row);
+      });
+      // Default-output port (rendered when there are no buttons OR for non-button types like ask/branch/save_field/etc)
+      if (!buttons.length && node.type !== 'end' && node.type !== 'handoff' && node.type !== 'ai_handoff') {
+        const out = h('div', { 'data-port-out': '__default', style: { position: 'absolute', right: '-8px', top: '50%', width: '14px', height: '14px', borderRadius: '50%', background: nodeColor(node.type), border: '2px solid #fff', boxShadow: '0 0 0 1px ' + nodeColor(node.type), cursor: 'crosshair', transform: 'translateY(-50%)' }, title: 'Drag to next node' });
+        el.appendChild(out);
       }
+      // Input port (left)
+      const inp = h('div', { class: 'flow-port flow-port-in', style: { position: 'absolute', left: '-8px', top: '24px', width: '14px', height: '14px', borderRadius: '50%', background: '#fff', border: '2px solid ' + nodeColor(node.type), cursor: 'crosshair' } });
+      el.appendChild(inp);
+
+      // Drag-to-move
+      let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
+      header.addEventListener('mousedown', (e) => {
+        if (e.target.tagName === 'BUTTON') return;
+        dragging = true; sx = e.clientX; sy = e.clientY; ox = node.x; oy = node.y;
+        e.preventDefault();
+      });
+      document.addEventListener('mousemove', (e) => {
+        if (!dragging) return;
+        node.x = Math.max(0, ox + (e.clientX - sx));
+        node.y = Math.max(0, oy + (e.clientY - sy));
+        el.style.left = node.x + 'px'; el.style.top = node.y + 'px';
+        drawConnections();
+      });
+      document.addEventListener('mouseup', () => { dragging = false; });
+
+      // Connection drag from an output port
+      el.querySelectorAll('.flow-port-out').forEach(port => {
+        port.addEventListener('mousedown', (e) => {
+          e.stopPropagation();
+          const fromBtnIdx = port.getAttribute('data-button-idx');
+          const isDefault = !fromBtnIdx;
+          startConnectionDrag(node, isDefault ? '__default' : Number(fromBtnIdx), port, e);
+        });
+      });
+      // Plain default-output port (when no buttons)
+      const defOut = el.querySelector('[data-port-out="__default"]');
+      if (defOut) defOut.addEventListener('mousedown', (e) => {
+        e.stopPropagation();
+        startConnectionDrag(node, '__default', defOut, e);
+      });
+
+      canvas.appendChild(el);
+      nodeEls.set(node.id, el);
+    }
+
+    let _ghostLine = null;
+    function startConnectionDrag(fromNode, fromKey, fromEl, e) {
+      const cRect = canvas.getBoundingClientRect();
+      const start = { x: e.clientX - cRect.left + canvas.scrollLeft, y: e.clientY - cRect.top + canvas.scrollTop };
+      _ghostLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      _ghostLine.setAttribute('stroke', '#6366f1');
+      _ghostLine.setAttribute('stroke-width', '2');
+      _ghostLine.setAttribute('stroke-dasharray', '4 3');
+      _ghostLine.setAttribute('fill', 'none');
+      svg.appendChild(_ghostLine);
+
+      function move(ev) {
+        const x2 = ev.clientX - cRect.left + canvas.scrollLeft;
+        const y2 = ev.clientY - cRect.top + canvas.scrollTop;
+        const dx = (x2 - start.x) * 0.5;
+        _ghostLine.setAttribute('d', `M ${start.x} ${start.y} C ${start.x + dx} ${start.y} ${x2 - dx} ${y2} ${x2} ${y2}`);
+      }
+      function up(ev) {
+        document.removeEventListener('mousemove', move);
+        document.removeEventListener('mouseup', up);
+        // Find the .flow-node under the cursor
+        const target = document.elementFromPoint(ev.clientX, ev.clientY);
+        const nEl = target && target.closest('.flow-node');
+        if (nEl) {
+          const targetId = nEl.getAttribute('data-node-id');
+          if (targetId && targetId !== fromNode.id) {
+            if (fromKey === '__default') {
+              fromNode.default_next = targetId;
+            } else {
+              fromNode.buttons = fromNode.buttons || [];
+              if (fromNode.buttons[fromKey]) fromNode.buttons[fromKey].next_node_id = targetId;
+            }
+          }
+        }
+        if (_ghostLine && _ghostLine.parentNode) _ghostLine.parentNode.removeChild(_ghostLine);
+        _ghostLine = null;
+        drawConnections();
+      }
+      document.addEventListener('mousemove', move);
+      document.addEventListener('mouseup', up);
+    }
+
+    function portCenter(el, sel) {
+      const r = canvas.getBoundingClientRect();
+      const p = el.querySelector(sel);
+      if (!p) return null;
+      const pr = p.getBoundingClientRect();
+      return { x: pr.left - r.left + canvas.scrollLeft + pr.width / 2, y: pr.top - r.top + canvas.scrollTop + pr.height / 2 };
+    }
+
+    function drawConnections() {
+      // Clear all paths except the ghost
+      Array.from(svg.querySelectorAll('path[data-conn]')).forEach(p => p.remove());
+      flow.nodes.forEach(n => {
+        const el = nodeEls.get(n.id);
+        if (!el) return;
+        const buttons = Array.isArray(n.buttons) ? n.buttons : [];
+        buttons.forEach((b, i) => {
+          if (!b.next_node_id) return;
+          const tgt = nodeEls.get(b.next_node_id);
+          if (!tgt) return;
+          const from = portCenter(el, `.flow-port-out[data-button-idx="${i}"]`);
+          const to = portCenter(tgt, '.flow-port-in');
+          if (!from || !to) return;
+          drawPath(from, to, nodeColor(n.type));
+        });
+        if (n.default_next) {
+          const tgt = nodeEls.get(n.default_next);
+          if (tgt) {
+            const from = portCenter(el, '[data-port-out="__default"]') || { x: parseInt(el.style.left) + 220, y: parseInt(el.style.top) + 24 };
+            const to = portCenter(tgt, '.flow-port-in');
+            if (to) drawPath(from, to, nodeColor(n.type));
+          }
+        }
+      });
+    }
+
+    function drawPath(from, to, color) {
+      const dx = (to.x - from.x) * 0.5;
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', `M ${from.x} ${from.y} C ${from.x + dx} ${from.y} ${to.x - dx} ${to.y} ${to.x} ${to.y}`);
+      path.setAttribute('stroke', color || '#94a3b8');
+      path.setAttribute('stroke-width', '2');
+      path.setAttribute('stroke-dasharray', '5 4');
+      path.setAttribute('fill', 'none');
+      path.setAttribute('data-conn', '1');
+      svg.appendChild(path);
+    }
+
+    function rebuildCanvas() {
+      Array.from(canvas.querySelectorAll('.flow-node')).forEach(n => n.remove());
+      nodeEls.clear();
+      flow.nodes.forEach(renderNode);
+      drawConnections();
+    }
+
+    // ---- Node property editor (inline modal-on-modal) ----
+    function editNode(node) {
+      const ov = h('div', { class: 'modal-overlay', style: { zIndex: 1100 } });
+      const m = h('div', { class: 'modal', style: { width: 'min(560px, 95vw)' } },
+        h('h3', {}, nodeIcon(node.type) + ' ' + nodeTitle(node.type) + '   '),
+        h('label', {}, 'Node ID'), h('input', { type: 'text', value: node.id, style: { width: '100%' }, onchange: (e) => {
+          const newId = e.target.value.trim();
+          if (newId && newId !== node.id) {
+            // update references in other nodes
+            const oldId = node.id;
+            flow.nodes.forEach(n => {
+              if (n.default_next === oldId) n.default_next = newId;
+              (n.buttons || []).forEach(b => { if (b.next_node_id === oldId) b.next_node_id = newId; });
+              if (n.branch_rules) n.branch_rules.forEach(r => { if (r.target_node_id === oldId) r.target_node_id = newId; });
+            });
+            if (flow.start_node_id === oldId) flow.start_node_id = newId;
+            node.id = newId;
+          }
+        }})
+      );
+      // Body for nearly all types
+      if (!['save_field','branch'].includes(node.type)) {
+        m.appendChild(h('label', {}, node.type === 'cta' ? 'Body text' : (['ask'].includes(node.type) ? 'Question' : 'Body')));
+        m.appendChild(h('textarea', { rows: 3, style: { width: '100%' }, onchange: (e) => node.body = e.target.value }, node.body || ''));
+      }
+      // Media URL for media types
+      if (['image','audio','video','document'].includes(node.type)) {
+        m.appendChild(h('label', {}, 'Media URL'));
+        m.appendChild(h('input', { type: 'text', value: node.media_url || '', style: { width: '100%' }, onchange: (e) => node.media_url = e.target.value, placeholder: 'https://example.com/file' }));
+      }
+      // Location
+      if (node.type === 'location') {
+        m.appendChild(h('label', {}, 'Latitude / Longitude'));
+        const latI = h('input', { type: 'number', step: 'any', value: node.latitude || '', style: { width: '48%' }, placeholder: '28.6139', onchange: (e) => node.latitude = e.target.value });
+        const lngI = h('input', { type: 'number', step: 'any', value: node.longitude || '', style: { width: '48%', marginLeft: '4%' }, placeholder: '77.2090', onchange: (e) => node.longitude = e.target.value });
+        m.appendChild(h('div', {}, latI, lngI));
+        m.appendChild(h('label', {}, 'Place name (optional)'));
+        m.appendChild(h('input', { type: 'text', value: node.location_name || '', style: { width: '100%' }, onchange: (e) => node.location_name = e.target.value }));
+      }
+      // CTA URL
+      if (node.type === 'cta') {
+        m.appendChild(h('label', {}, 'Button label (max 20 chars)'));
+        m.appendChild(h('input', { type: 'text', value: node.button_label || '', style: { width: '100%' }, maxLength: 20, onchange: (e) => node.button_label = e.target.value }));
+        m.appendChild(h('label', {}, 'URL'));
+        m.appendChild(h('input', { type: 'url', value: node.url || '', style: { width: '100%' }, placeholder: 'https://...', onchange: (e) => node.url = e.target.value }));
+      }
+      // Ask
       if (node.type === 'ask') {
-        const varIn = h('input', { type: 'text', value: node.save_to_var || '', placeholder: 'eg. visit_date', style: { width: '14rem', marginTop: '.4rem' }, onchange: (e) => node.save_to_var = e.target.value });
-        card.appendChild(h('label', { class: 'muted', style: { fontSize: '.78rem' } }, 'Save reply to variable'));
-        card.appendChild(varIn);
+        m.appendChild(h('label', {}, 'Save reply to variable'));
+        m.appendChild(h('input', { type: 'text', value: node.save_to_var || '', style: { width: '100%' }, placeholder: 'eg. visit_date', onchange: (e) => node.save_to_var = e.target.value }));
       }
+      // Save field
       if (node.type === 'save_field') {
-        card.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', marginTop: '.4rem' } },
-          h('label', { class: 'muted', style: { fontSize: '.78rem' } }, 'Lead field'),
-          h('input', { type: 'text', value: node.field_name || '', placeholder: 'eg. notes', style: { width: '12rem' }, onchange: (e) => node.field_name = e.target.value }),
-          h('label', { class: 'muted', style: { fontSize: '.78rem' } }, '← variable'),
-          h('input', { type: 'text', value: node.value_var || '', placeholder: 'eg. visit_date', style: { width: '12rem' }, onchange: (e) => node.value_var = e.target.value })
-        ));
+        m.appendChild(h('label', {}, 'Lead column to write into'));
+        m.appendChild(h('input', { type: 'text', value: node.field_name || '', style: { width: '100%' }, placeholder: 'eg. notes', onchange: (e) => node.field_name = e.target.value }));
+        m.appendChild(h('label', {}, 'From variable'));
+        m.appendChild(h('input', { type: 'text', value: node.value_var || '', style: { width: '100%' }, placeholder: 'eg. visit_date', onchange: (e) => node.value_var = e.target.value }));
       }
+      // Branch
       if (node.type === 'branch') {
-        const branchVarIn = h('input', { type: 'text', value: node.branch_var || '', placeholder: 'eg. interest', style: { width: '14rem' }, onchange: (e) => node.branch_var = e.target.value });
-        card.appendChild(h('label', { class: 'muted', style: { fontSize: '.78rem' } }, 'Branch on variable'));
-        card.appendChild(branchVarIn);
+        m.appendChild(h('label', {}, 'Variable name to branch on'));
+        m.appendChild(h('input', { type: 'text', value: node.branch_var || '', style: { width: '100%' }, onchange: (e) => node.branch_var = e.target.value }));
         node.branch_rules = node.branch_rules || [];
-        const rulesWrap = h('div', { style: { marginTop: '.45rem' } });
-        function renderRules() {
-          rulesWrap.innerHTML = '';
+        const rwrap = h('div', { style: { marginTop: '.5rem' } });
+        function rRules() {
+          rwrap.innerHTML = '';
+          rwrap.appendChild(h('div', { class: 'muted', style: { fontSize: '.78rem' } }, 'Routes (first matching wins). Use the corresponding output port to draw lines, or set a target node id manually here.'));
           node.branch_rules.forEach((r, i) => {
             const opSel = h('select', {}, ...['equals','contains','regex'].map(o => h('option', { value: o, selected: (r.op||'equals')===o }, o)));
             opSel.onchange = () => r.op = opSel.value;
-            const valIn = h('input', { type: 'text', value: r.value || '', placeholder: 'value', style: { width: '8rem' }, onchange: (e) => r.value = e.target.value });
-            const tgtIn = h('input', { type: 'text', value: r.target_node_id || '', placeholder: 'target node id', style: { width: '8rem' }, onchange: (e) => r.target_node_id = e.target.value });
-            rulesWrap.appendChild(h('div', { style: { display: 'flex', gap: '.35rem', marginTop: '.3rem' } },
-              opSel, valIn, h('span', {}, '→'), tgtIn,
-              h('button', { class: 'btn ghost small', onclick: () => { node.branch_rules.splice(i, 1); renderRules(); }}, '✕')
+            rwrap.appendChild(h('div', { style: { display: 'flex', gap: '.3rem', marginTop: '.3rem' } },
+              opSel,
+              h('input', { type: 'text', placeholder: 'value', value: r.value || '', style: { width: '7rem' }, onchange: (e) => r.value = e.target.value }),
+              h('span', {}, '→'),
+              h('input', { type: 'text', placeholder: 'target id', value: r.target_node_id || '', style: { width: '7rem' }, onchange: (e) => r.target_node_id = e.target.value }),
+              h('button', { class: 'btn ghost small', onclick: () => { node.branch_rules.splice(i, 1); rRules(); }}, '✕')
             ));
           });
-          rulesWrap.appendChild(h('button', { class: 'btn ghost small', onclick: () => { node.branch_rules.push({ op: 'equals', value: '', target_node_id: '' }); renderRules(); }}, '➕ Rule'));
+          rwrap.appendChild(h('button', { class: 'btn ghost small', style: { marginTop: '.3rem' }, onclick: () => { node.branch_rules.push({ op: 'equals', value: '', target_node_id: '' }); rRules(); }}, '➕ Rule'));
         }
-        renderRules();
-        card.appendChild(rulesWrap);
+        rRules();
+        m.appendChild(rwrap);
       }
-
-      // Buttons (for message/image/ask)
-      if (['message', 'image', 'ask'].includes(node.type)) {
+      // Buttons (message/image/audio/video/document/ask)
+      if (['message','image','audio','video','document','ask'].includes(node.type)) {
+        m.appendChild(h('label', {}, 'Quick-reply buttons (max 3)'));
         node.buttons = node.buttons || [];
-        const btnsWrap = h('div', { style: { marginTop: '.5rem' } });
-        function renderBtns() {
-          btnsWrap.innerHTML = '';
-          btnsWrap.appendChild(h('div', { class: 'muted', style: { fontSize: '.78rem' } }, 'Quick-reply buttons (max 3)'));
+        const bwrap = h('div', {});
+        function rBtns() {
+          bwrap.innerHTML = '';
           (node.buttons || []).forEach((b, i) => {
-            const labIn = h('input', { type: 'text', value: b.label || '', placeholder: 'Button label', maxLength: 20, style: { width: '10rem' }, onchange: (e) => b.label = e.target.value });
-            const tgtIn = h('input', { type: 'text', value: b.next_node_id || '', placeholder: 'goes to node id', style: { width: '10rem' }, onchange: (e) => b.next_node_id = e.target.value });
-            btnsWrap.appendChild(h('div', { style: { display: 'flex', gap: '.35rem', marginTop: '.3rem', alignItems: 'center' } },
+            bwrap.appendChild(h('div', { style: { display: 'flex', gap: '.3rem', marginTop: '.3rem' } },
               h('span', { class: 'muted' }, '#' + (i+1)),
-              labIn, h('span', {}, '→'), tgtIn,
-              h('button', { class: 'btn ghost small', onclick: () => { node.buttons.splice(i, 1); renderBtns(); }}, '✕')
+              h('input', { type: 'text', placeholder: 'Label', maxLength: 20, value: b.label || '', style: { width: '11rem' }, onchange: (e) => b.label = e.target.value }),
+              h('button', { class: 'btn ghost small', onclick: () => { node.buttons.splice(i, 1); rBtns(); }}, '✕')
             ));
           });
           if ((node.buttons || []).length < 3) {
-            btnsWrap.appendChild(h('button', { class: 'btn ghost small', style: { marginTop: '.35rem' }, onclick: () => { node.buttons.push({ id: 'b' + (Date.now()%10000), label: '', next_node_id: '' }); renderBtns(); }}, '➕ Button'));
+            bwrap.appendChild(h('button', { class: 'btn ghost small', style: { marginTop: '.3rem' }, onclick: () => { node.buttons.push({ id: 'b' + Date.now()%1e5, label: '' }); rBtns(); }}, '➕ Button'));
           }
         }
-        renderBtns();
-        card.appendChild(btnsWrap);
+        rBtns();
+        m.appendChild(bwrap);
       }
-
-      // Default next
-      if (node.type !== 'end' && node.type !== 'handoff') {
-        const dnIn = h('input', { type: 'text', value: node.default_next || '', placeholder: 'fall-through node id', style: { width: '14rem' }, onchange: (e) => node.default_next = e.target.value });
-        card.appendChild(h('div', { style: { marginTop: '.45rem' } },
-          h('label', { class: 'muted', style: { fontSize: '.78rem' } }, 'Default next (when no button matches)'),
-          h('br'), dnIn
-        ));
-      }
-      return card;
+      m.appendChild(h('div', { style: { marginTop: '.85rem', display: 'flex', gap: '.5rem', justifyContent: 'flex-end' } },
+        h('button', { class: 'btn primary', onclick: () => { ov.remove(); rebuildCanvas(); } }, 'Done')
+      ));
+      ov.appendChild(m);
+      document.body.appendChild(ov);
     }
 
-    function addNode() {
-      const nextId = 'n' + (flow.nodes.length + 1);
-      flow.nodes.push({ id: nextId, type: 'message', body: '', buttons: [] });
-      if (!flow.start_node_id) flow.start_node_id = nextId;
-      renderNodes();
-      refreshStartSel();
-    }
+    // ---- Drop handling on canvas (drop palette item) ----
+    canvas.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+    canvas.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const t = e.dataTransfer.getData('flow/type');
+      if (!t) return;
+      const r = canvas.getBoundingClientRect();
+      const x = e.clientX - r.left + canvas.scrollLeft;
+      const y = e.clientY - r.top + canvas.scrollTop;
+      const newNode = { id: nextId(), type: t, body: '', x: Math.max(0, x - 110), y: Math.max(0, y - 24) };
+      if (['message','image','audio','video','document','ask'].includes(t)) newNode.buttons = [];
+      flow.nodes.push(newNode);
+      if (!flow.start_node_id) flow.start_node_id = newNode.id;
+      rebuildCanvas();
+    });
 
-    dlg.appendChild(h('h3', {}, flowId ? 'Edit flow' : 'New flow'));
-    dlg.appendChild(h('label', {}, 'Name'));    dlg.appendChild(nameInp);
-    dlg.appendChild(h('label', {}, 'Description')); dlg.appendChild(descInp);
-    dlg.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 12rem 12rem', gap: '.6rem' } },
-      h('div', {}, h('label', {}, 'Trigger keyword'), trigInp),
-      h('div', {}, h('label', {}, 'Match'), matchSel),
-      h('div', {}, h('label', {}, 'Active'), h('div', {}, activeChk))
-    ));
-    dlg.appendChild(h('label', { style: { marginTop: '.6rem' } }, 'Start node'));
-    dlg.appendChild(startSel);
-    dlg.appendChild(nodesContainer);
-    refreshStartSel(); renderNodes();
+    // ---- Save ----
+    topBar.querySelector('#flow-save-btn').onclick = async () => {
+      // Strip x/y? Nope — keep them so the canvas reopens in place.
+      const payload = {
+        id: flowId || undefined,
+        name: nameInp.value.trim(),
+        description: flow.description || '',
+        trigger: trigInp.value.trim(),
+        trigger_match: matchSel.value,
+        is_active: activeChk.checked ? 1 : 0,
+        priority: 100,
+        nodes: flow.nodes,
+        start_node_id: flow.start_node_id || (flow.nodes[0] && flow.nodes[0].id) || ''
+      };
+      try {
+        await api('api_waflow_save', payload);
+        toast(flowId ? 'Updated' : 'Created', 'ok');
+        modal.remove(); reload();
+      } catch (e) { toast(e.message, 'err'); }
+    };
 
-    const footer = h('div', { style: { marginTop: '.85rem', display: 'flex', gap: '.5rem', justifyContent: 'flex-end' } },
-      h('button', { class: 'btn ghost', onclick: () => modal.remove() }, 'Cancel'),
-      h('button', { class: 'btn primary', onclick: async () => {
-        const payload = {
-          id: flowId || undefined,
-          name: nameInp.value.trim(),
-          description: descInp.value.trim(),
-          trigger: trigInp.value.trim(),
-          trigger_match: matchSel.value,
-          is_active: activeChk.checked ? 1 : 0,
-          priority: 100,
-          nodes: flow.nodes,
-          start_node_id: startSel.value || (flow.nodes[0] && flow.nodes[0].id) || ''
-        };
-        try {
-          await api('api_waflow_save', payload);
-          toast(flowId ? 'Updated' : 'Created', 'ok');
-          modal.remove(); reload();
-        } catch (e) { toast(e.message, 'err'); }
-      }}, flowId ? 'Save changes' : 'Create flow')
-    );
-    dlg.appendChild(footer);
     modal.appendChild(dlg);
     document.body.appendChild(modal);
+
+    // Initial render after a tick so the canvas has its real size
+    setTimeout(rebuildCanvas, 30);
   }
+
 
   reload();
   return wrap;

@@ -221,15 +221,18 @@ async function _executeNode(session, flow, node, ctx) {
 
   switch (node.type) {
     case 'message':
-    case 'image': {
+    case 'image':
+    case 'audio':
+    case 'video':
+    case 'document': {
       const body = text(node.body || '');
-      const mediaUrl = node.type === 'image' ? String(node.media_url || '').trim() : '';
+      const mediaUrl = ['image', 'audio', 'video', 'document'].includes(node.type) ? String(node.media_url || '').trim() : '';
       const buttons = Array.isArray(node.buttons) ? node.buttons.slice(0, 3) : [];
       if (mediaUrl) {
-        // Send as image with caption (no buttons on media — fall back to text+buttons after)
-        try { await wb._sendMedia({ to: session.phone, mediaType: 'image', mediaUrl, caption: body, leadId: session.lead_id }, cfg); } catch (e) { console.warn('[waflow] send image failed:', e.message); }
+        const mediaType = node.type;  // matches WhatsApp Cloud API: image|audio|video|document
+        try { await wb._sendMedia({ to: session.phone, mediaType, mediaUrl, caption: body, leadId: session.lead_id }, cfg); }
+        catch (e) { console.warn('[waflow] send ' + mediaType + ' failed:', e.message); }
         if (buttons.length) {
-          // Send a follow-up text with buttons
           await _sendInteractiveButtons(wb, cfg, session.phone, '👇 Pick one:', buttons, session.lead_id);
         }
       } else if (buttons.length) {
@@ -237,11 +240,77 @@ async function _executeNode(session, flow, node, ctx) {
       } else {
         try { await wb._sendText({ to: session.phone, text: body, leadId: session.lead_id }, cfg); } catch (e) { console.warn('[waflow] send text failed:', e.message); }
       }
-      // If buttons exist, wait for reply. Else auto-advance to default_next (or end).
       if (buttons.length) return { stop: true };
       if (node.default_next) {
         const next = _findNode(flow, node.default_next);
         if (next) return await _executeNode(session, flow, next, ctx);
+      }
+      return { stop: true, completed: true };
+    }
+    case 'location': {
+      const body = text(node.body || '');
+      const lat = parseFloat(node.latitude);
+      const lng = parseFloat(node.longitude);
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        const c = ctx.cfg || await wb._cfg();
+        const payload = {
+          messaging_product: 'whatsapp',
+          to: String(session.phone).replace(/\D/g, ''),
+          type: 'location',
+          location: { latitude: lat, longitude: lng,
+            name: String(node.location_name || '').slice(0, 200) || undefined,
+            address: String(node.location_address || '').slice(0, 200) || undefined }
+        };
+        try { await wb._graphPost(`${c.phoneId}/messages`, payload, c); }
+        catch (e) { console.warn('[waflow] location send failed:', e.message); }
+      }
+      if (body) {
+        try { await wb._sendText({ to: session.phone, text: body, leadId: session.lead_id }, ctx.cfg); } catch (_) {}
+      }
+      if (node.default_next) {
+        const next = _findNode(flow, node.default_next);
+        if (next) return await _executeNode(session, flow, next, ctx);
+      }
+      return { stop: true, completed: true };
+    }
+    case 'cta': {
+      // URL button (single Call-To-Action) using interactive cta_url
+      const body = text(node.body || '');
+      const url = String(node.url || '').trim();
+      const label = String(node.button_label || 'Open').slice(0, 20);
+      if (url) {
+        const c = ctx.cfg || await wb._cfg();
+        const payload = {
+          messaging_product: 'whatsapp',
+          to: String(session.phone).replace(/\D/g, ''),
+          type: 'interactive',
+          interactive: {
+            type: 'cta_url',
+            body: { text: body || 'Tap below:' },
+            action: { name: 'cta_url', parameters: { display_text: label, url } }
+          }
+        };
+        try { await wb._graphPost(`${c.phoneId}/messages`, payload, c); }
+        catch (e) {
+          console.warn('[waflow] cta send failed, falling back:', e.message);
+          try { await wb._sendText({ to: session.phone, text: (body ? body + '\n\n' : '') + label + ': ' + url, leadId: session.lead_id }, ctx.cfg); } catch (_) {}
+        }
+      } else if (body) {
+        try { await wb._sendText({ to: session.phone, text: body, leadId: session.lead_id }, ctx.cfg); } catch (_) {}
+      }
+      if (node.default_next) {
+        const next = _findNode(flow, node.default_next);
+        if (next) return await _executeNode(session, flow, next, ctx);
+      }
+      return { stop: true, completed: true };
+    }
+    case 'ai_handoff': {
+      // Hand the next inbound off to the AI Bot. We mark the session as
+      // completed so the runner exits — the inbound webhook's normal
+      // pipeline will dispatch the AI Bot since no flow session is active.
+      const body = text(node.body || '');
+      if (body) {
+        try { await wb._sendText({ to: session.phone, text: body, leadId: session.lead_id }, ctx.cfg); } catch (_) {}
       }
       return { stop: true, completed: true };
     }
