@@ -521,10 +521,37 @@ async function api_aibot_kb_crawl_url(token, payload) {
   const p = payload || {};
   const url = String(p.url || '').trim();
   if (!/^https?:\/\//i.test(url)) throw new Error('URL must start with http:// or https://');
+  // Many WordPress / nginx / Cloudflare sites block obvious bot UAs with 403.
+  // Use a realistic Chrome UA + the headers a normal browser sends. Falls back
+  // to a Googlebot UA if the first attempt fails — some sites whitelist Google.
+  const _UA_BROWSER = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+  const _UA_GOOGLEBOT = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)';
+  const _BASE_HEADERS = {
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Cache-Control': 'no-cache',
+    'Pragma': 'no-cache',
+    'Upgrade-Insecure-Requests': '1'
+  };
+  async function _crawlOnce(ua) {
+    const r = await fetch(url, {
+      method: 'GET',
+      headers: { ..._BASE_HEADERS, 'User-Agent': ua },
+      redirect: 'follow'
+    });
+    return r;
+  }
   let resp, html;
   try {
-    resp = await fetch(url, { method: 'GET', headers: { 'User-Agent': 'SmartCRM-AIBot/1.0' }, redirect: 'follow' });
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    resp = await _crawlOnce(_UA_BROWSER);
+    if (!resp.ok && (resp.status === 403 || resp.status === 401 || resp.status === 429)) {
+      // Some sites whitelist Googlebot — give that a shot.
+      resp = await _crawlOnce(_UA_GOOGLEBOT);
+    }
+    if (!resp.ok) {
+      throw new Error('Server returned HTTP ' + resp.status + ' (' + (resp.statusText || 'no reason') + '). The site may be blocking automated fetches; try saving the page text manually instead via Paste plain text.');
+    }
     html = await resp.text();
   } catch (e) {
     throw new Error('Could not fetch URL: ' + e.message);
