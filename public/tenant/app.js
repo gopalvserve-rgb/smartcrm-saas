@@ -7646,11 +7646,51 @@ async function _aibotSettingsView(currentPhId) {
   ));
 
   // ---- save ----
+  // ---- Auto re-engagement ----
+  // If the customer goes silent after the bot's last reply, the bot can send
+  // a soft follow-up ping like "Sir, did you get a chance to look at this?"
+  // Configurable per-bot (so different bots can have different cadences /
+  // tones / max attempts).
+  const reengageChk    = h('input', { type: 'checkbox', checked: Number(s.reengage_enabled) === 1 ? 'checked' : null });
+  const reengageMins   = h('input', { type: 'number', value: s.reengage_after_minutes || 60, min: 5, max: 10080, step: 5, style: { width: '7rem' } });
+  const reengageMsgInp = h('textarea', { rows: 3, style: { width: '100%' } }, s.reengage_message || 'Hi {{name}}, just checking — did you get a chance to look at our last message? Happy to help if you have any questions.');
+  const reengageMaxInp = h('input', { type: 'number', value: s.reengage_max_attempts || 1, min: 1, max: 5, style: { width: '5rem' } });
+  // Quick-set chips
+  const reengageQuick = h('div', { style: { display: 'flex', gap: '.3rem', flexWrap: 'wrap', marginTop: '.3rem' } });
+  [['10 min', 10], ['30 min', 30], ['1 hour', 60], ['3 hours', 180], ['1 day', 1440], ['3 days', 4320]].forEach(([lbl, mins]) => {
+    const b = h('button', { type: 'button', class: 'btn xs ghost', onclick: () => { reengageMins.value = mins; } }, lbl);
+    reengageQuick.appendChild(b);
+  });
+  wrap.appendChild(h('div', { class: 'card', style: { borderLeft: '4px solid #f59e0b' } },
+    h('h3', { style: { marginTop: 0 } }, '🔔 Auto re-engagement'),
+    h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+      'When a customer stops replying mid-conversation, the bot can send a soft check-in (like "Sir, did you get a chance to look at this?") after the silence threshold. The ping is automatically cancelled if the customer replies before the timer fires.'),
+    h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', fontSize: '.95rem' } },
+      reengageChk, h('b', {}, ' Enable auto re-engagement')),
+    h('div', { class: 'field', style: { marginTop: '.5rem' } },
+      h('label', {}, 'Send soft check-in after this much silence (minutes)'),
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', flexWrap: 'wrap' } }, reengageMins, h('span', { class: 'muted', style: { fontSize: '.78rem' } }, 'min')),
+      reengageQuick),
+    h('div', { class: 'field' },
+      h('label', {}, 'Message template ',
+        h('span', { class: 'muted', style: { fontWeight: 400, fontSize: '.78rem' } }, '— use {{name}} for the lead\'s name')),
+      reengageMsgInp),
+    h('div', { class: 'field' },
+      h('label', {}, 'Max re-engagement attempts per customer (per 7 days)'),
+      reengageMaxInp,
+      h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } },
+        'Stops the bot from spamming a customer who keeps going silent. Once this many pings have been sent in 7 days, no more.'))
+  ));
+
   const saveBtn = h('button', { class: 'btn primary', style: { padding: '.6rem 1.5rem' } }, '💾 Save bot settings');
   saveBtn.onclick = async () => {
     saveBtn.disabled = true;
     const payload = {
       is_enabled: enableChk.checked,
+      reengage_enabled: reengageChk.checked ? 1 : 0,
+      reengage_after_minutes: Number(reengageMins.value || 60),
+      reengage_message: reengageMsgInp.value,
+      reengage_max_attempts: Number(reengageMaxInp.value || 1),
       bot_name: botName.value, business_name: bizName.value,
       language: Object.keys(langChks).filter(k => langChks[k].checked).join('+') || 'en',
       system_prompt: sysPrompt.value,

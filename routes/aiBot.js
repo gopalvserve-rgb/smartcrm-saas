@@ -58,6 +58,10 @@ const _DEFAULT_SETTINGS = {
   use_kb: 1,
   kb_max_chars: 8000,
   history_messages: 8,
+  reengage_enabled: 0,
+  reengage_after_minutes: 60,
+  reengage_message: 'Hi {{name}}, just checking — did you get a chance to look at our last message? Happy to help if you have any questions.',
+  reengage_max_attempts: 1,
 };
 
 function _coerceSettings(row) {
@@ -159,6 +163,32 @@ async function _ensureAiBotColumns() {
     // a friendly label + array of additional phones it serves besides its primary.
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS bot_label TEXT`);
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS additional_phone_ids JSONB NOT NULL DEFAULT '[]'::jsonb`);
+    // The legacy schema has CONSTRAINT ai_bot_settings_singleton CHECK (id = 1)
+    // which forbids per-phone rows. Drop it so multi-bot tenants work.
+    try { await db.query(`ALTER TABLE ai_bot_settings DROP CONSTRAINT IF EXISTS ai_bot_settings_singleton`); } catch (_) {}
+    try { await db.query(`ALTER TABLE ai_bot_settings ALTER COLUMN id DROP DEFAULT`); } catch (_) {}
+    // Auto re-engagement (May 2026): bot can send a soft check-in if customer goes silent
+    // for N minutes after the bot's last reply. Configured per bot.
+    await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS reengage_enabled INTEGER NOT NULL DEFAULT 0`);
+    await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS reengage_after_minutes INTEGER NOT NULL DEFAULT 60`);
+    await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS reengage_message TEXT NOT NULL DEFAULT 'Hi {{name}}, just checking — did you get a chance to look at our last message? Happy to help if you have any questions.'`);
+    await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS reengage_max_attempts INTEGER NOT NULL DEFAULT 1`);
+    await db.query(`CREATE TABLE IF NOT EXISTS ai_reengage_log (
+      id SERIAL PRIMARY KEY,
+      phone TEXT NOT NULL,
+      lead_id INTEGER,
+      phone_number_id TEXT,
+      last_outbound_at TIMESTAMPTZ NOT NULL,
+      scheduled_for TIMESTAMPTZ NOT NULL,
+      attempt_no INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL DEFAULT 'scheduled',
+      sent_message TEXT,
+      sent_at TIMESTAMPTZ,
+      cancelled_reason TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_ai_reengage_log_due ON ai_reengage_log(status, scheduled_for) WHERE status = 'scheduled'`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_ai_reengage_log_phone ON ai_reengage_log(phone)`);
     if (pool) _aiBotEnsuredPools.add(pool);
   } catch (e) { /* table missing — _coerceSettings handles defaults */ }
 }
@@ -200,6 +230,10 @@ async function api_aibot_settings_save(token, payload) {
   if (p.use_kb                    != null) addCol('use_kb',                    '$$',          p.use_kb ? 1 : 0);
   if (p.kb_max_chars              != null) addCol('kb_max_chars',              '$$',          Math.max(2000, Math.min(120000, Number(p.kb_max_chars))));
   if (p.history_messages          != null) addCol('history_messages',          '$$',          Math.max(0, Math.min(40, Number(p.history_messages))));
+  if (p.reengage_enabled          != null) addCol('reengage_enabled',          '$$',          p.reengage_enabled ? 1 : 0);
+  if (p.reengage_after_minutes    != null) addCol('reengage_after_minutes',    '$$',          Math.max(5, Math.min(10080, Number(p.reengage_after_minutes))));
+  if (p.reengage_message          != null) addCol('reengage_message',          '$$',          String(p.reengage_message).slice(0, 1000));
+  if (p.reengage_max_attempts     != null) addCol('reengage_max_attempts',     '$$',          Math.max(1, Math.min(5, Number(p.reengage_max_attempts))));
 
   // Phone-keyed upsert: one bot row per phone_number_id (NULL = legacy default).
   const phId = (p.phone_number_id != null && String(p.phone_number_id).length > 0) ? String(p.phone_number_id) : null;
@@ -218,7 +252,7 @@ async function api_aibot_settings_save(token, payload) {
       // Seed a brand-new per-phone row by cloning the default row, then overlay caller's fields.
       const def = await db.query(`SELECT * FROM ai_bot_settings WHERE phone_number_id IS NULL ORDER BY id ASC LIMIT 1`);
       const seed = def.rows[0] || {};
-      const cloneCols = ['is_enabled','bot_name','business_name','language','system_prompt','welcome_message','reply_modes','business_hours','trigger_keywords','off_keywords','active_phone_number_ids','resume_after_idle_minutes','resume_after_idle_seconds','max_replies_per_thread','escalation_keywords','model_override','use_kb','kb_max_chars','history_messages'];
+      const cloneCols = ['is_enabled','bot_name','business_name','language','system_prompt','welcome_message','reply_modes','business_hours','trigger_keywords','off_keywords','active_phone_number_ids','resume_after_idle_minutes','resume_after_idle_seconds','max_replies_per_thread','escalation_keywords','model_override','use_kb','kb_max_chars','history_messages','reengage_enabled','reengage_after_minutes','reengage_message','reengage_max_attempts'];
       const insertCols = ['phone_number_id'];
       const insertVals = [phId];
       cloneCols.forEach(c => {
@@ -231,6 +265,13 @@ async function api_aibot_settings_save(token, payload) {
           }
         }
       });
+      // Schema has id INTEGER PRIMARY KEY DEFAULT 1 — without an explicit id, the
+      // INSERT inherits id=1 and collides with the default-fallback row. Compute
+      // the next free id explicitly.
+      const nextIdR = await db.query(`SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM ai_bot_settings`);
+      const nextId = Number(nextIdR.rows[0].next_id);
+      insertCols.push('id');
+      insertVals.push(nextId);
       const placeholders = insertCols.map((col, idx) => {
         if (['reply_modes','business_hours','active_phone_number_ids','additional_phone_ids'].includes(col)) return '$' + (idx + 1) + '::jsonb';
         return '$' + (idx + 1);
@@ -812,6 +853,9 @@ async function maybeReplyToInbound({ phone, leadId, inboundText, inboundPhoneId,
   } catch (_) { return; }   // table missing → tenant not migrated yet
   if (Number(settings.is_enabled) !== 1) return;
 
+  // Customer replied — cancel any pending re-engagement for this phone.
+  try { await _cancelReengageOnInbound(phone); } catch (_) {}
+
   // Per-number scoping: if active_phone_number_ids is non-empty, only
   // reply to inbounds that arrived on one of those phones. Empty list
   // (the default) means "reply on every connected number". This lets
@@ -916,6 +960,9 @@ async function maybeReplyToInbound({ phone, leadId, inboundText, inboundPhoneId,
       [phone, leadId || null, inboundMsgId || null, replyText, result.model, modes.join('+'),
        result.input_tokens, result.output_tokens, result.cost_inr_billed, inboundPhoneId || null]
     );
+    // Schedule re-engagement ping if the bot is configured for it.
+    try { await _scheduleReengage({ settings, phone, leadId, inboundPhoneId }); } catch (_) {}
+
   } catch (e) {
     try {
       await db.query(
@@ -954,6 +1001,134 @@ async function api_aibot_discard_draft(token, draftId) {
   return { ok: true, updated: r.rowCount };
 }
 
+
+// ============================================================
+// Auto re-engagement (May 2026)
+// ============================================================
+// When the bot SENDS a reply, schedule a soft re-engagement message
+// to fire after `reengage_after_minutes` of silence. If the customer
+// replies before that, _cancelReengage() blanks the row.
+// ============================================================
+async function _scheduleReengage({ settings, phone, leadId, inboundPhoneId }) {
+  if (!settings || Number(settings.reengage_enabled) !== 1) return;
+  const minutes = Math.max(5, Math.min(10080, Number(settings.reengage_after_minutes || 60)));
+  // Cancel any earlier scheduled rows for this phone so we only ever have one pending.
+  try {
+    await db.query(
+      `UPDATE ai_reengage_log SET status = 'superseded', cancelled_reason = 'newer reply scheduled' WHERE phone = $1 AND status = 'scheduled'`,
+      [String(phone)]
+    );
+  } catch (_) {}
+  try {
+    // Count how many re-engage attempts already happened for this phone in the last 7 days.
+    // Stops the bot from spamming a customer who keeps going silent.
+    const r = await db.query(
+      `SELECT COUNT(*)::int AS n FROM ai_reengage_log
+        WHERE phone = $1 AND status = 'sent' AND created_at > NOW() - INTERVAL '7 days'`,
+      [String(phone)]
+    );
+    const sentCount = Number(r.rows[0] && r.rows[0].n) || 0;
+    const maxAttempts = Math.max(1, Number(settings.reengage_max_attempts || 1));
+    if (sentCount >= maxAttempts) return; // already pinged the max number of times
+    await db.query(
+      `INSERT INTO ai_reengage_log (phone, lead_id, phone_number_id, last_outbound_at, scheduled_for, attempt_no)
+       VALUES ($1, $2, $3, NOW(), NOW() + ($4::int * INTERVAL '1 minute'), $5)`,
+      [String(phone), leadId || null, inboundPhoneId || null, minutes, sentCount + 1]
+    );
+  } catch (e) {
+    console.warn('[reengage] schedule failed:', e.message);
+  }
+}
+
+async function _cancelReengageOnInbound(phone) {
+  if (!phone) return;
+  try {
+    await db.query(
+      `UPDATE ai_reengage_log SET status = 'cancelled', cancelled_reason = 'customer replied' WHERE phone = $1 AND status = 'scheduled'`,
+      [String(phone)]
+    );
+  } catch (_) {}
+}
+
+/**
+ * Tick: scan due re-engagement rows for THIS tenant pool and send them.
+ * Called either from a per-tenant cron OR by the SaaS-wide cron in server.js.
+ */
+async function _reengageTick() {
+  let due = [];
+  try {
+    const r = await db.query(
+      `SELECT * FROM ai_reengage_log WHERE status = 'scheduled' AND scheduled_for <= NOW() ORDER BY id ASC LIMIT 50`
+    );
+    due = r.rows;
+  } catch (_) { return; }
+  if (!due.length) return;
+  const wb = _wb();
+  for (const row of due) {
+    try {
+      // Re-check: did the customer reply between scheduling and now?
+      const last = await db.query(
+        `SELECT direction, created_at FROM whatsapp_messages
+          WHERE (from_number = $1 OR to_number = $1)
+          ORDER BY created_at DESC LIMIT 1`,
+        [String(row.phone)]
+      );
+      const lastMsg = last.rows[0];
+      if (lastMsg && lastMsg.direction === 'in' && new Date(lastMsg.created_at) > new Date(row.last_outbound_at)) {
+        await db.query(`UPDATE ai_reengage_log SET status = 'cancelled', cancelled_reason = 'customer replied (verified at send-time)' WHERE id = $1`, [row.id]);
+        continue;
+      }
+      // Pull the bot config that owns this phone so we can render the message.
+      let cfgRow = null;
+      try {
+        const c = row.phone_number_id
+          ? (await db.query(`SELECT * FROM ai_bot_settings WHERE phone_number_id = $1 LIMIT 1`, [String(row.phone_number_id)])).rows[0]
+          : null;
+        cfgRow = c || (await db.query(`SELECT * FROM ai_bot_settings WHERE phone_number_id IS NULL ORDER BY id ASC LIMIT 1`)).rows[0];
+      } catch (_) {}
+      if (!cfgRow || Number(cfgRow.reengage_enabled) !== 1) {
+        await db.query(`UPDATE ai_reengage_log SET status = 'cancelled', cancelled_reason = 'bot disabled re-engagement' WHERE id = $1`, [row.id]);
+        continue;
+      }
+      // Render {{name}} from the lead row (if any)
+      let leadName = '';
+      if (row.lead_id) {
+        try {
+          const l = await db.query(`SELECT name FROM leads WHERE id = $1 LIMIT 1`, [row.lead_id]);
+          leadName = (l.rows[0] && l.rows[0].name) || '';
+        } catch (_) {}
+      }
+      const msg = String(cfgRow.reengage_message || '')
+        .replace(/\{\{\s*name\s*\}\}/g, leadName || 'there')
+        .trim() || 'Just checking in — let me know if you need any help.';
+      // Send via whatsbot using the bot's phone (or default).
+      const cfg = row.phone_number_id ? await wb._cfgForPhone(row.phone_number_id).catch(() => wb._cfg()) : await wb._cfg();
+      let sendResult = null;
+      try {
+        sendResult = await wb._sendText({ to: row.phone, text: msg }, cfg);
+      } catch (e) {
+        await db.query(`UPDATE ai_reengage_log SET status = 'failed', cancelled_reason = $2 WHERE id = $1`, [row.id, String(e.message).slice(0, 200)]);
+        continue;
+      }
+      await db.query(
+        `UPDATE ai_reengage_log SET status = 'sent', sent_message = $2, sent_at = NOW() WHERE id = $1`,
+        [row.id, msg.slice(0, 1000)]
+      );
+      // Persist as an outbound whatsapp_message row so the chat shows it.
+      try {
+        await db.query(
+          `INSERT INTO whatsapp_messages (direction, from_number, to_number, body, message_type, phone_number_id, wa_message_id, created_at)
+           VALUES ('out', $1, $2, $3, 'text', $4, $5, NOW())`,
+          [(cfg.phoneId || row.phone_number_id || '0'), String(row.phone), msg, row.phone_number_id || null, (sendResult && sendResult.wa_message_id) || null]
+        );
+      } catch (_) {}
+    } catch (e) {
+      console.warn('[reengage] row', row.id, 'failed:', e.message);
+      try { await db.query(`UPDATE ai_reengage_log SET status = 'failed', cancelled_reason = $2 WHERE id = $1`, [row.id, String(e.message).slice(0, 200)]); } catch (_) {}
+    }
+  }
+}
+
 module.exports = {
   // Public tenant API (auto-exposed via tenantApi.js loader)
   api_aibot_settings_get, api_aibot_settings_save,
@@ -964,4 +1139,6 @@ module.exports = {
   // Internal — called from whatsbot.js + server.tenant.js upload route
   maybeReplyToInbound,
   _saveKBFromUpload,
+  // Re-engagement worker — invoked from server.js cross-tenant cron
+  _reengageTick,
 };

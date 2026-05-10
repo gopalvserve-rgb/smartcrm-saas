@@ -1599,6 +1599,38 @@ setInterval(() => {
 // Initial run after boot settles
 setTimeout(() => _runReminderForAllTenants().catch(() => {}), 15_000);
 console.log('[reminders] SaaS-aware follow-up scheduler started');
+// ── Background: per-tenant AI re-engagement worker ───────────────────────
+// Walks every active tenant and sends scheduled soft-follow-up pings the
+// AI bot has queued (when a customer goes silent after a bot reply).
+async function _runReengageForAllTenants() {
+  let rows = [];
+  try {
+    const r = await controlDb.query(
+      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500`
+    );
+    rows = r.rows;
+  } catch (e) { console.warn('[reengage] tenant list failed:', e.message); return; }
+  let aiBot;
+  try { aiBot = require('./routes/aiBot'); } catch (e) { return; }
+  if (!aiBot._reengageTick) return;
+  for (const row of rows) {
+    let t; try { t = await tenantPoolMod.findActiveTenant(row.slug); } catch (_) { continue; }
+    if (!t) continue;
+    const pool = tenantPoolMod.poolFor(t);
+    if (!pool) continue;
+    try {
+      await tenantDb.tenantStorage.run({ pool, tenant: t, slug: row.slug },
+        () => aiBot._reengageTick()
+      );
+    } catch (e) { console.warn(`[reengage] ${row.slug} tick failed:`, e.message); }
+  }
+}
+setInterval(() => {
+  _runReengageForAllTenants().catch(e => console.error('[reengage] cycle failed:', e.message));
+}, Number(process.env.REENGAGE_INTERVAL_MS || 60_000));
+setTimeout(() => _runReengageForAllTenants().catch(() => {}), 30_000);
+console.log('[reengage] AI bot re-engagement worker started');
+
 
   app.listen(PORT, () => console.log('[boot] SmartCRM SaaS listening on :' + PORT));
 }
