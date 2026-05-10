@@ -221,6 +221,7 @@ async function _executeNode(session, flow, node, ctx) {
 
   switch (node.type) {
     case 'message':
+    case 'button':
     case 'image':
     case 'audio':
     case 'video':

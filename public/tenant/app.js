@@ -13969,7 +13969,8 @@ async function adminBotFlows() {
       { type: 'video',      icon: '🎥', title: 'Video Message', hint: 'Send a video file URL.' },
       { type: 'document',   icon: '📄', title: 'Document',      hint: 'Send a PDF / DOCX / etc.' },
       { type: 'location',   icon: '📍', title: 'Location',      hint: 'Send a geo pin (lat/lng).' },
-      { type: 'cta',        icon: '🔗', title: 'CTA URL Button',hint: 'Single Call-to-Action with a URL button.' },
+      { type: 'button',     icon: '🔘', title: 'Button Message', hint: 'Text reply buttons (up to 3) — no URL, customer just taps a label.' },
+      { type: 'cta',        icon: '🔗', title: 'CTA URL Button', hint: 'Single Call-to-Action with a URL button.' },
       { type: 'ask',        icon: '❓',          title: 'Ask & Capture', hint: 'Ask a question, save reply into a variable.' },
       { type: 'branch',     icon: '🔀', title: 'Branch',         hint: 'Route by a captured variable value.' },
       { type: 'save_field', icon: '💾', title: 'Save to Lead',  hint: 'Write a variable into a lead column.' },
@@ -14042,7 +14043,7 @@ async function adminBotFlows() {
           x: 60 + (slot % 4) * 260,
           y: 60 + Math.floor(slot / 4) * 200
         };
-        if (['message','image','audio','video','document','ask'].includes(p.type)) newNode.buttons = [];
+        if (['message','image','audio','video','document','ask','button'].includes(p.type)) newNode.buttons = [];
         flow.nodes.push(newNode);
         if (!flow.start_node_id) flow.start_node_id = newNode.id;
         rebuildCanvas();
@@ -14356,7 +14357,7 @@ async function adminBotFlows() {
         m.appendChild(rwrap);
       }
       // Buttons (message/image/audio/video/document/ask)
-      if (['message','image','audio','video','document','ask'].includes(node.type)) {
+      if (['message','image','audio','video','document','ask','button'].includes(node.type)) {
         m.appendChild(h('label', {}, 'Quick-reply buttons (max 3)'));
         node.buttons = node.buttons || [];
         const bwrap = h('div', {});
@@ -14404,7 +14405,7 @@ async function adminBotFlows() {
       const x = e.clientX - r.left + canvas.scrollLeft;
       const y = e.clientY - r.top + canvas.scrollTop;
       const newNode = { id: nextId(), type: t, body: '', x: Math.max(0, x - 110), y: Math.max(0, y - 24) };
-      if (['message','image','audio','video','document','ask'].includes(t)) newNode.buttons = [];
+      if (['message','image','audio','video','document','ask','button'].includes(t)) newNode.buttons = [];
       flow.nodes.push(newNode);
       if (!flow.start_node_id) flow.start_node_id = newNode.id;
       rebuildCanvas();
