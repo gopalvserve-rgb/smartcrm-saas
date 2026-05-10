@@ -1424,3 +1424,50 @@ BEGIN
      WHERE kb_max_chars = 60000;
   END IF;
 END $$;
+
+
+-- ============================================================
+-- 2026-05-10: AI Bot per-number scoping
+-- Empty list (default) = bot replies on every connected number.
+-- Non-empty list = bot only auto-replies when the inbound's
+-- phone_number_id is in the list.
+-- ============================================================
+ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS active_phone_number_ids JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+
+-- ============================================================
+-- 2026-05-10: WhatsApp Bot Flows (visual canvas builder)
+-- Each tenant can define multiple guided flows triggered by
+-- inbound keyword. Engine in routes/waBotFlows.js advances
+-- a session per (phone, flow) until the customer reaches an
+-- end / handoff / ai_handoff node.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS wa_bot_flows (
+  id            SERIAL PRIMARY KEY,
+  name          TEXT NOT NULL,
+  description   TEXT,
+  trigger       TEXT,
+  trigger_match TEXT NOT NULL DEFAULT 'exact',
+  is_active     INTEGER NOT NULL DEFAULT 0,
+  priority      INTEGER NOT NULL DEFAULT 100,
+  nodes         JSONB NOT NULL DEFAULT '[]'::jsonb,
+  start_node_id TEXT,
+  created_by    INTEGER,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS wa_bot_flow_sessions (
+  id              SERIAL PRIMARY KEY,
+  phone           TEXT NOT NULL,
+  phone_number_id TEXT,
+  flow_id         INTEGER NOT NULL REFERENCES wa_bot_flows(id) ON DELETE CASCADE,
+  current_node_id TEXT NOT NULL,
+  vars            JSONB NOT NULL DEFAULT '{}'::jsonb,
+  lead_id         INTEGER,
+  started_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  is_completed    INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (phone)
+);
+CREATE INDEX IF NOT EXISTS idx_wa_bot_flow_sessions_phone ON wa_bot_flow_sessions(phone);

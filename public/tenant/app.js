@@ -15070,14 +15070,55 @@ VIEWS.users = async (view) => {
       h('button', { class: 'btn primary', onclick: () => openUserModal() }, '+ New User')
     ),
     h('div', { class: 'table-wrap' }, h('table', {},
-      h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Email'), h('th', {}, 'Role'), h('th', {}, 'Reports To'), h('th', {}, 'Department'), h('th', {}))),
+      h('thead', {}, h('tr', {},
+        h('th', {}, 'Name'),
+        h('th', {}, 'Email'),
+        h('th', {}, 'Role'),
+        h('th', {}, 'Reports To'),
+        h('th', {}, 'Department'),
+        h('th', { title: 'Pause sends ZERO future leads to this user. Existing leads stay assigned. Click to toggle.' }, 'Lead routing'),
+        h('th', {})
+      )),
       h('tbody', {}, ...users.map(u => h('tr', { style: u.paused_for_leads ? { background: '#fffbeb' } : {} },
-        h('td', {},
-          u.name,
-          u.paused_for_leads ? h('span', { style: { marginLeft: '.4rem', fontSize: '.7rem', background: '#f59e0b', color: '#fff', padding: '1px 7px', borderRadius: '999px', fontWeight: 600, verticalAlign: 'middle' }, title: 'Lead routing paused — no future auto-assignments' }, '⏸️ PAUSED') : null
-        ),
+        h('td', {}, u.name),
         h('td', {}, u.email), h('td', {}, u.role),
         h('td', {}, u.parent_name || '—'), h('td', {}, u.department || ''),
+        // Inline pause/resume - admin/manager only.
+        h('td', {},
+          (() => {
+            if (!['admin','manager'].includes(me.role)) {
+              return u.paused_for_leads
+                ? h('span', { style: { fontSize: '.72rem', background: '#f59e0b', color: '#fff', padding: '1px 8px', borderRadius: '999px', fontWeight: 600 } }, '⏸️ PAUSED')
+                : h('span', { class: 'muted', style: { fontSize: '.78rem' } }, '▶️ Active');
+            }
+            const wrap = h('button', {
+              class: 'btn small ghost',
+              title: u.paused_for_leads ? 'Click to resume — future leads will start routing to this user' : 'Click to pause — no future leads will route to this user (existing leads stay)',
+              style: {
+                background: u.paused_for_leads ? '#fef3c7' : '#ecfdf5',
+                color: u.paused_for_leads ? '#92400e' : '#065f46',
+                border: '1px solid ' + (u.paused_for_leads ? '#f59e0b' : '#10b981'),
+                fontWeight: 600, padding: '.2rem .6rem', borderRadius: '999px', whiteSpace: 'nowrap'
+              }
+            }, u.paused_for_leads ? '⏸️ Paused' : '▶️ Receiving leads');
+            wrap.onclick = async (ev) => {
+              ev.stopPropagation();
+              const next = !u.paused_for_leads;
+              const verb = next ? 'PAUSE' : 'RESUME';
+              if (!confirm(verb + ' lead routing for ' + u.name + '?\n\n' + (next
+                ? 'No future leads will be auto-assigned to this user. Existing leads stay where they are.'
+                : 'Future leads will start routing to this user normally.'))) return;
+              wrap.disabled = true; wrap.textContent = '⏳';
+              try {
+                await api('api_users_save', { id: u.id, paused_for_leads: next });
+                u.paused_for_leads = next;
+                toast(verb === 'PAUSE' ? 'Paused' : 'Resumed', 'ok');
+                navigateTo('users');
+              } catch (e) { toast(e.message, 'err'); wrap.disabled = false; }
+            };
+            return wrap;
+          })()
+        ),
         h('td', { style: { whiteSpace: 'nowrap' } },
           h('button', { class: 'btn sm', onclick: () => openUserModal(u), title: 'Edit' }, '✎'),
           canReset ? h('button', {
