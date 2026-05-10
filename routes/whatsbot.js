@@ -237,13 +237,19 @@ async function api_wb_settings_save(token, payload) {
  *   4. Subscribes the WABA to webhook events so inbound messages start flowing.
  *   5. Syncs the approved templates so the user sees them immediately.
  */
-async function api_wb_emb_signin(token, code, phoneNumberId, wabaId) {
+async function api_wb_emb_signin(token, code, phoneNumberId, wabaId, opts) {
   const me = await authUser(token);
   if (me.role !== 'admin') throw new Error('Admin only');
   if (!code) throw new Error('Missing code from Facebook');
   if (!phoneNumberId || !wabaId) {
     throw new Error('Did not receive phone_number_id / waba_id from the dialog. Make sure your Login-for-Business config has WhatsApp asset selection enabled.');
   }
+  // 'addAnother' is set by the SPA when the user clicked '➕ Connect
+  // another number'. In that case the new number must be APPENDED to
+  // wa_phones; we MUST NOT overwrite the legacy single-phone config keys
+  // (WHATSAPP_PHONE_NUMBER_ID / WHATSAPP_ACCESS_TOKEN), otherwise the
+  // existing primary number is silently kicked out of the active config.
+  const isAddAnother = !!(opts && (opts.addAnother || opts.add_another));
   // Platform-managed FB credentials — same for every tenant.
   const appId = PLATFORM_FB_APP_ID;
   const appSecret = PLATFORM_FB_APP_SECRET;
@@ -259,9 +265,21 @@ async function api_wb_emb_signin(token, code, phoneNumberId, wabaId) {
 
   // Persist (legacy single-phone keys — kept in sync with the wa_phones
   // default row for backwards compat).
-  await db.setConfig('WHATSAPP_ACCESS_TOKEN', accessToken);
-  await db.setConfig('WHATSAPP_BUSINESS_ACCOUNT_ID', String(wabaId));
-  await db.setConfig('WHATSAPP_PHONE_NUMBER_ID', String(phoneNumberId));
+  // Skip the legacy overwrites when:
+  //   - the user clicked 'Connect another number' (isAddAnother)
+  //   - OR a primary phone is already configured for this tenant
+  // Either way, the new number is added to wa_phones below; the legacy
+  // keys keep pointing at the original primary so existing chat threads,
+  // outbound campaigns, and AI Bot replies don't get re-routed mid-flight.
+  const _existingPrimary = (await db.getConfig('WHATSAPP_PHONE_NUMBER_ID', '').catch(() => '')).trim();
+  const _shouldOverwritePrimary = !isAddAnother && !_existingPrimary;
+  if (_shouldOverwritePrimary) {
+    await db.setConfig('WHATSAPP_ACCESS_TOKEN', accessToken);
+    await db.setConfig('WHATSAPP_BUSINESS_ACCOUNT_ID', String(wabaId));
+    await db.setConfig('WHATSAPP_PHONE_NUMBER_ID', String(phoneNumberId));
+  } else {
+    console.log('[wb] embedded-signin: leaving primary intact (' + _existingPrimary + ') — appending ' + phoneNumberId + ' to wa_phones only');
+  }
 
   // Phase 1 multi-phone: append a row to wa_phones. If this is the
   // first row, mark it default. If it's a re-connect of an existing

@@ -7697,7 +7697,7 @@ function startEmbeddedSignup(appId, configId, opts) {
     (async () => {
       try {
         toast('Exchanging credentials with Meta…');
-        const r = await api('api_wb_emb_signin', code, phoneNumberId, wabaId);
+        const r = await api('api_wb_emb_signin', code, phoneNumberId, wabaId, { addAnother: !!(opts && opts.addAnother), coexistence: !!(opts && opts.coexistence) });
         let msg = `✅ Connected (WABA ${r.waba_id}, Phone ${r.phone_number_id})`;
         if (r.templates_synced > 0) msg += ` · ${r.templates_synced} templates synced`;
         if (!r.subscribed && r.subscribe_error) msg += ` · ⚠ webhook subscribe failed: ${r.subscribe_error}`;
