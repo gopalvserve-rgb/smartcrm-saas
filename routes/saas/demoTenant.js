@@ -595,145 +595,183 @@ async function _wipeAndSeed(pool, adminUserId) {
     }
   }
 
-  // ---- 11.5. WhatsApp demo data: connected number + sample conversations + bot replies
+  // ---- 11.5. WhatsApp demo data: 2 connected numbers + multiple conversations
   // Lets prospects see the WhatsApp tab populated, the AI Bot Activity / Hot leads /
   // Heat trace pages with content, and the lead detail panel showing chat history.
+  // wa_phones.access_token is NOT NULL so we MUST provide it (a dummy value is fine
+  // since this is a demo tenant — no real Meta calls are made from here).
+  let _phoneA = 'demo_phone_111222';
+  let _phoneB = 'demo_phone_333444';
   try {
-    // 1) Fake "connected" WhatsApp number — Cloud-API style, not actually wired to Meta.
-    const _waPhId = 'demo_phone_999888';
     await pool.query(
-      `INSERT INTO wa_phones (phone_number_id, display_phone_number, verified_name, label, is_default, created_at)
-       VALUES ($1, '+91 99988 77766', 'SmartCRM Demo', 'Sales Line', 1, NOW())
-       ON CONFLICT (phone_number_id) DO UPDATE SET label = EXCLUDED.label`,
-      [_waPhId]
-    ).catch(() => {});
+      `INSERT INTO wa_phones (phone_number_id, business_account_id, access_token, display_phone_number, verified_name, label, quality_rating, status, messaging_limit_tier, is_default, is_active, created_at)
+       VALUES ($1, 'demo_waba_1', 'DEMO_TOKEN_NOT_REAL', '+91 99988 77766', 'SmartCRM Demo', 'Sales Line', 'GREEN', 'CONNECTED', 'TIER_10K', 1, 1, NOW())
+       ON CONFLICT (phone_number_id) DO UPDATE SET label = EXCLUDED.label, is_active = 1`,
+      [_phoneA]
+    );
+    await pool.query(
+      `INSERT INTO wa_phones (phone_number_id, business_account_id, access_token, display_phone_number, verified_name, label, quality_rating, status, messaging_limit_tier, is_default, is_active, created_at)
+       VALUES ($1, 'demo_waba_1', 'DEMO_TOKEN_NOT_REAL', '+91 88877 66655', 'SmartCRM Demo', 'Support Line', 'GREEN', 'CONNECTED', 'TIER_1K', 0, 1, NOW())
+       ON CONFLICT (phone_number_id) DO UPDATE SET label = EXCLUDED.label, is_active = 1`,
+      [_phoneB]
+    );
+  } catch (e) { console.warn('[demo] wa_phones seed failed:', e.message); }
 
-    // 2) Sample KB doc (text only — no real attachment binary needed).
-    try {
-      await pool.query(
-        `INSERT INTO ai_kb_documents (source_type, title, raw_text, is_active, ingest_status, phone_number_id, created_by, created_at)
-         VALUES ('text', 'Pricing & plans (sample)',
-                 'Starter ₹4,999/mo for 5 users. Pro ₹9,999/mo for 25 users. Enterprise custom. All plans include WhatsApp Cloud API, AI bot, call recording sync, and 24x7 support.',
-                 1, 'ready', NULL, $1, NOW())`,
-        [adminUserId]
-      );
-      await pool.query(
-        `INSERT INTO ai_kb_documents (source_type, title, raw_text, is_active, ingest_status, phone_number_id, created_by, created_at)
-         VALUES ('text', 'Demo product overview',
-                 'SmartCRM is an AI-powered CRM with WhatsApp engagement, real-time lead heat scoring, multi-bot architecture, and integrated call recording. Built for India-first sales teams.',
-                 1, 'ready', NULL, $1, NOW())`,
-        [adminUserId]
-      );
-    } catch (_) {}
+  // KB docs (text only — no real binary attachment needed)
+  try {
+    await pool.query(
+      `INSERT INTO ai_kb_documents (source_type, title, raw_text, is_active, ingest_status, phone_number_id, created_by, created_at)
+       VALUES ('text', 'Pricing & plans', 'Starter ₹4,999/mo for 5 users. Pro ₹9,999/mo for 25 users. Enterprise custom. All plans include WhatsApp Cloud API, AI bot, call recording sync, and 24x7 support.', 1, 'ready', NULL, $1, NOW())`,
+      [adminUserId]
+    );
+    await pool.query(
+      `INSERT INTO ai_kb_documents (source_type, title, raw_text, is_active, ingest_status, phone_number_id, created_by, created_at)
+       VALUES ('text', 'Product overview', 'SmartCRM is an AI-powered CRM with WhatsApp engagement, real-time lead heat scoring, multi-bot architecture, and integrated call recording. Built for India-first sales teams.', 1, 'ready', NULL, $1, NOW())`,
+      [adminUserId]
+    );
+    await pool.query(
+      `INSERT INTO ai_kb_documents (source_type, title, raw_text, is_active, ingest_status, phone_number_id, created_by, created_at)
+       VALUES ('text', 'Support FAQ', 'Q: How do I sync call recordings on Samsung? A: Open the app -> Settings -> Recording sync -> tap Sync now. Make sure storage permission is granted in Android settings.', 1, 'ready', NULL, $1, NOW())`,
+      [adminUserId]
+    );
+  } catch (e) { console.warn('[demo] kb docs seed failed:', e.message); }
 
-    // 3) Pick 5 leads at random — give each a 6-8 message conversation.
-    const _convoLeads = leadIds.slice(0, 8);
-    const SCRIPTS = [
-      // Hot lead — price ask + ready-to-buy
-      [
-        { dir: 'in',  body: 'Hi, I saw your ad. What\'s the pricing for 10 users?' },
-        { dir: 'out', body: 'Hi! Thanks for reaching out 👋 For 10 users, the Pro plan at ₹9,999/mo fits. Includes AI bot, WhatsApp Cloud API, and call recording. Want a quick demo?', kind: 'bot' },
-        { dir: 'in',  body: 'Yes please share brochure also' },
-        { dir: 'out', body: 'Sharing the brochure now along with our pricing sheet. Would 4pm tomorrow work for the demo call?', kind: 'bot' },
-        { dir: 'in',  body: 'Perfect. Schedule it.' }
-      ],
-      // Very hot — ready to buy + callback
-      [
-        { dir: 'in',  body: 'Interested in your CRM. Can you call me?' },
-        { dir: 'out', body: 'Absolutely — what time works for a 15-minute call today?', kind: 'bot' },
-        { dir: 'in',  body: 'After 5pm. Also kitne ka hai monthly?' },
-        { dir: 'out', body: 'Plans start at ₹4,999/mo. Booking your callback for 5:30pm. Looking forward!', kind: 'bot' }
-      ],
-      // Comparison shopper
-      [
-        { dir: 'in',  body: 'How is this different from TeleCRM?' },
-        { dir: 'out', body: 'Great question! Three big differences: built-in AI WhatsApp bot with attachable KB, real-time hot-lead heat scoring on every inbound, and proper multi-tenant SaaS billing. Want a side-by-side comparison?', kind: 'bot' },
-        { dir: 'in',  body: 'Yes please' },
-        { dir: 'out', body: 'Sending the comparison deck. Any specific pain point you\'re trying to solve?', kind: 'bot' }
-      ],
-      // Demo request
-      [
-        { dir: 'in',  body: 'I want demo' },
-        { dir: 'out', body: 'Perfect! 🎬 Demo takes 20 mins. What time slot today/tomorrow works?', kind: 'bot' },
-        { dir: 'in',  body: 'Tomorrow 11am' },
-        { dir: 'out', body: 'Booked for 11am tomorrow. You\'ll get the meeting link 30 mins before. See you then!', kind: 'bot' }
-      ],
-      // Existing customer support thread
-      [
-        { dir: 'in',  body: 'Hi, my recordings are not syncing on Samsung phone' },
-        { dir: 'out', body: 'Sorry to hear that! Quick check: open SmartCRM app → Settings → Recording sync → tap "Sync now". Does it list any files?' },
-        { dir: 'in',  body: 'It says permission denied' },
-        { dir: 'out', body: 'Got it. Long-press the app icon → App info → Permissions → enable Storage. Then retry the sync. Let me know if it works.' },
-        { dir: 'in',  body: 'Working now! Thanks 🙏' }
-      ]
-    ];
+  // 8 sample conversations across the demo leads. Half on Sales line (_phoneA),
+  // half on Support line (_phoneB). Mix of intents so the prospect sees the full
+  // hot/warm/cold spread and the AI Bot Activity tab gets ~30+ replies logged.
+  const _convoLeads = leadIds.slice(0, 12);
+  const _SCRIPTS = [
+    // Sales — hot, asking price + brochure + demo
+    { phone: _phoneA, kind: 'hot', signal: 'asked about price + ready to buy', score: 85, msgs: [
+      { dir: 'in',  body: 'Hi, I saw your ad. What is the pricing for 10 users?' },
+      { dir: 'out', body: 'Hi! 👋 For 10 users the Pro plan at ₹9,999/mo fits well — includes AI bot, WhatsApp Cloud API, and call recording. Want a quick demo?', bot: true },
+      { dir: 'in',  body: 'Yes please share brochure also' },
+      { dir: 'out', body: 'Sharing the brochure + pricing sheet now. Would 4pm tomorrow work for the demo call?', bot: true },
+      { dir: 'in',  body: 'Perfect. Schedule it.' },
+      { dir: 'out', body: 'Booked for 4pm tomorrow. You will get the meeting link 30 mins before. Looking forward!', bot: true }
+    ]},
+    // Sales — very hot, callback + Hindi
+    { phone: _phoneA, kind: 'very_hot', signal: 'wants a callback', score: 75, msgs: [
+      { dir: 'in',  body: 'Interested in your CRM. Can you call me?' },
+      { dir: 'out', body: 'Absolutely — what time today works for a 15-minute call?', bot: true },
+      { dir: 'in',  body: 'After 5pm. Also kitne ka hai monthly?' },
+      { dir: 'out', body: 'Plans start at ₹4,999/mo. Booking your callback for 5:30pm. Looking forward!', bot: true },
+      { dir: 'in',  body: 'Done thanks 🙏' }
+    ]},
+    // Sales — comparison shopper
+    { phone: _phoneA, kind: 'hot', signal: 'asked for comparison', score: 35, msgs: [
+      { dir: 'in',  body: 'How is this different from TeleCRM?' },
+      { dir: 'out', body: 'Great question! Three big differences: built-in AI WhatsApp bot with attachable KB, real-time hot-lead heat scoring on every inbound, and proper multi-tenant SaaS billing. Want a side-by-side comparison deck?', bot: true },
+      { dir: 'in',  body: 'Yes please' },
+      { dir: 'out', body: 'Sending the comparison deck. Any specific pain point you are trying to solve?', bot: true },
+      { dir: 'in',  body: 'WhatsApp follow-ups are manual right now, want to automate' },
+      { dir: 'out', body: 'Perfect fit. Our re-engagement engine pings silent customers automatically with the message you configure. Happy to show this on a demo call.', bot: true }
+    ]},
+    // Sales — demo request
+    { phone: _phoneA, kind: 'very_hot', signal: 'wants a demo', score: 60, msgs: [
+      { dir: 'in',  body: 'I want demo' },
+      { dir: 'out', body: 'Perfect! 🎬 Demo takes 20 mins. What time slot today/tomorrow works?', bot: true },
+      { dir: 'in',  body: 'Tomorrow 11am' },
+      { dir: 'out', body: 'Booked for 11am tomorrow. You will get the meeting link 30 mins before. See you then!', bot: true }
+    ]},
+    // Sales — qualification (BANT)
+    { phone: _phoneA, kind: 'warm', signal: 'asking for product details', score: 20, msgs: [
+      { dir: 'in',  body: 'Tell me more about features' },
+      { dir: 'out', body: 'Sure! Top features: AI WhatsApp bot, hot-lead detection, call recording sync, multi-WhatsApp number support, and custom dashboards. What is your team size?', bot: true },
+      { dir: 'in',  body: '15 sales people' },
+      { dir: 'out', body: 'Great — Pro plan covers up to 25 users. Want me to send the brochure + book a 20-min demo?', bot: true }
+    ]},
+    // Support — Samsung recording (resolved)
+    { phone: _phoneB, kind: 'cold', signal: 'support resolved', score: 0, msgs: [
+      { dir: 'in',  body: 'Hi, my recordings are not syncing on Samsung phone' },
+      { dir: 'out', body: 'Sorry to hear that! Quick check: open SmartCRM app → Settings → Recording sync → tap Sync now. Does it list any files?', bot: true },
+      { dir: 'in',  body: 'It says permission denied' },
+      { dir: 'out', body: 'Got it. Long-press the app icon → App info → Permissions → enable Storage. Then retry the sync.', bot: true },
+      { dir: 'in',  body: 'Working now! Thanks 🙏' }
+    ]},
+    // Support — billing question
+    { phone: _phoneB, kind: 'warm', signal: 'asked about billing', score: 15, msgs: [
+      { dir: 'in',  body: 'Question on my last invoice' },
+      { dir: 'out', body: 'Happy to help! Can you share the invoice number or month? You can also see all invoices from CRM → Settings → Billing.', bot: true },
+      { dir: 'in',  body: 'INV-2026-0432' },
+      { dir: 'out', body: 'Pulling that up — I see ₹9,999 for the Pro plan + ₹450 for AI bot usage. Anything specific?', bot: true }
+    ]},
+    // Support — feature request
+    { phone: _phoneB, kind: 'warm', signal: 'feature request', score: 12, msgs: [
+      { dir: 'in',  body: 'Can the AI bot reply in Marathi too?' },
+      { dir: 'out', body: 'Yes! Open AI Bot → Bot Settings → Reply languages → tick मराठी (Marathi). The bot auto-detects the customer language and replies in matching script.', bot: true },
+      { dir: 'in',  body: 'Great, set that up. Thanks!' },
+      { dir: 'out', body: 'Done. Ping me if anything else.', bot: true }
+    ]}
+  ];
 
-    const heatLabels = ['very_hot', 'very_hot', 'hot', 'very_hot', 'cold'];
-    const heatScores = [85, 75, 35, 60, 0];
-    const heatSignals = ['asked about price + ready to buy', 'wants a callback', 'asked for comparison', 'wants a demo', 'said "not interested"'];
-
-    for (let i = 0; i < Math.min(_convoLeads.length, SCRIPTS.length); i++) {
-      const lead = _convoLeads[i];
-      const script = SCRIPTS[i];
-      const phone = String(lead.phone || '').replace(/[^\d+]/g, '');
-      const baseTs = Date.now() - (i + 1) * 3600 * 1000; // staggered over the last few hours
-      let stepTs = baseTs;
-      for (let j = 0; j < script.length; j++) {
-        const m = script[j];
-        stepTs += 90 * 1000; // 90s between messages
-        const ts = new Date(stepTs).toISOString();
+  let _waMsgsInserted = 0, _aiLogsInserted = 0;
+  for (let i = 0; i < Math.min(_convoLeads.length, _SCRIPTS.length); i++) {
+    const lead = _convoLeads[i];
+    const s = _SCRIPTS[i];
+    // Normalize phone — strip everything except digits + (optional leading +).
+    let phone = String(lead.phone || '').replace(/\s+/g, '').replace(/[^0-9+]/g, '');
+    if (!phone) continue;
+    const baseTs = Date.now() - (i + 1) * 1800 * 1000; // staggered 30 min apart
+    let stepTs = baseTs;
+    for (let j = 0; j < s.msgs.length; j++) {
+      const m = s.msgs[j];
+      stepTs += 90 * 1000;
+      const ts = new Date(stepTs).toISOString();
+      try {
         await pool.query(
           `INSERT INTO whatsapp_messages
              (lead_id, direction, from_number, to_number, body, message_type, status, phone_number_id, created_at)
            VALUES ($1, $2, $3, $4, $5, 'text', $6, $7, $8)`,
           [
             lead.id, m.dir,
-            m.dir === 'in' ? phone : _waPhId,
-            m.dir === 'in' ? _waPhId : phone,
+            m.dir === 'in' ? phone : s.phone,
+            m.dir === 'in' ? s.phone : phone,
             m.body,
             m.dir === 'in' ? 'received' : 'sent',
-            _waPhId,
+            s.phone,
             ts
           ]
-        ).catch(() => {});
+        );
+        _waMsgsInserted++;
+      } catch (e) { console.warn('[demo] wa msg insert failed:', e.message); }
 
-        // For 'bot' replies, also write an ai_chat_log row + a heat_alert notification on the upgrade.
-        if (m.kind === 'bot' && m.dir === 'out') {
+      if (m.bot && m.dir === 'out') {
+        try {
           await pool.query(
             `INSERT INTO ai_chat_log (phone, lead_id, reply_text, model, mode_used, status,
                                       input_tokens, output_tokens, cost_inr_billed, phone_number_id, created_at)
              VALUES ($1, $2, $3, 'gemini-2.0-flash-lite', 'always', 'sent', $4, $5, $6, $7, $8)`,
-            [phone, lead.id, m.body, 120 + Math.floor(Math.random() * 80), 50 + Math.floor(Math.random() * 60), 0.025, _waPhId, ts]
-          ).catch(() => {});
-        }
-      }
-
-      // Heat label on the lead
-      try {
-        await pool.query(
-          `UPDATE leads SET heat_score = $1, heat_label = $2, heat_signal = $3, heat_action_required = $4, heat_updated_at = NOW() WHERE id = $5`,
-          [heatScores[i], heatLabels[i], heatSignals[i],
-           heatLabels[i] === 'very_hot' ? 'send_quote' : (heatLabels[i] === 'hot' ? 'send_brochure' : 'followup'),
-           lead.id]
-        );
-      } catch (_) {}
-
-      // Notification row for hot/very_hot leads — so the bell drawer shows them
-      if (heatLabels[i] === 'hot' || heatLabels[i] === 'very_hot') {
-        const emoji = heatLabels[i] === 'very_hot' ? '🔥🔥' : '🔥';
-        try {
-          await pool.query(
-            `INSERT INTO notifications (user_id, type, title, body, link, is_read, created_at)
-             VALUES ($1, 'heat_alert', $2, $3, $4, 0, $5)`,
-            [adminUserId, emoji + ' ' + heatLabels[i].toUpperCase().replace('_', ' ') + ' — ' + lead.name,
-             heatSignals[i], '/#/leads/' + lead.id, new Date(stepTs).toISOString()]
+            [phone, lead.id, m.body, 120 + Math.floor(Math.random() * 80), 50 + Math.floor(Math.random() * 60), 0.025, s.phone, ts]
           );
-        } catch (_) {}
+          _aiLogsInserted++;
+        } catch (e) { console.warn('[demo] ai_chat_log insert failed:', e.message); }
       }
     }
-  } catch (e) {
-    console.warn('[demo] WhatsApp seed failed (non-fatal):', e.message);
+
+    // Heat label on the lead
+    const _heatAction = s.kind === 'very_hot' ? 'send_quote' : (s.kind === 'hot' ? 'send_brochure' : (s.kind === 'warm' ? 'followup' : 'remove_or_pause'));
+    try {
+      await pool.query(
+        `UPDATE leads SET heat_score = $1, heat_label = $2, heat_signal = $3, heat_action_required = $4, heat_updated_at = NOW() WHERE id = $5`,
+        [s.score, s.kind, s.signal, _heatAction, lead.id]
+      );
+    } catch (_) {}
+
+    // Notification for hot/very_hot — bell drawer + popup pattern
+    if (s.kind === 'hot' || s.kind === 'very_hot') {
+      const emoji = s.kind === 'very_hot' ? '🔥🔥' : '🔥';
+      try {
+        await pool.query(
+          `INSERT INTO notifications (user_id, type, title, body, link, is_read, created_at)
+           VALUES ($1, 'heat_alert', $2, $3, $4, 0, $5)`,
+          [adminUserId, emoji + ' ' + s.kind.toUpperCase().replace('_', ' ') + ' — ' + lead.name, s.signal, '/#/leads/' + lead.id, new Date(stepTs).toISOString()]
+        );
+      } catch (_) {}
+    }
   }
+  console.log('[demo] WhatsApp seed: ' + _waMsgsInserted + ' messages, ' + _aiLogsInserted + ' AI replies logged');
+
 
   // ---- 12. Welcome announcement
   await pool.query(
