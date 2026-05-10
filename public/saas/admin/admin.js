@@ -450,34 +450,40 @@ async function resetTenantAdminPassword(t) {
   const targetEmail = (email || t.contact_email || '').trim();
   if (!targetEmail) { toast('No contact email on tenant — pass email explicitly', 'err'); return; }
   if (!confirm('Reset password for ' + targetEmail + ' on "' + (t.org_name || t.slug) + '"? A new random password will be generated and shown to you ONCE.')) return;
+  let r;
   try {
-    const r = await api('api_saas_tenants_resetUserPassword', { tenantId: t.id, email: targetEmail });
-    if (!r.ok) { toast('Reset failed', 'err'); return; }
-    // Show the new password in a modal so it can be copied. Display ONCE — closing dismisses it.
-    const dlg = document.createElement('div');
-    dlg.className = 'modal-backdrop';
-    dlg.innerHTML = '';
-    const inner = document.createElement('div');
-    inner.className = 'modal';
-    inner.style.maxWidth = '520px';
-    inner.innerHTML = ''
-      + '<div class="modal-head"><h3>🔑 Password reset</h3></div>'
-      + '<p>Workspace: <b>' + (t.slug || '') + '</b></p>'
-      + '<p>User: <b>' + (r.user.name || '') + '</b> &middot; ' + (r.user.email || '') + ' &middot; ' + (r.user.role || '') + '</p>'
-      + '<div style="font-family:ui-monospace,Menlo,monospace; font-size:1.1rem; padding:.7rem; background:#fef3c7; border:1px solid #f59e0b; border-radius:8px; text-align:center; letter-spacing:.05em" id="pw-display">' + r.new_password + '</div>'
-      + '<p class="muted" style="font-size:.85rem; margin-top:.6rem">' + (r.note || '') + '</p>'
-      + '<div class="actions" style="display:flex; gap:.4rem; justify-content:flex-end; margin-top:.8rem">'
-      + '<button id="pw-copy" class="btn small">📋 Copy password</button>'
-      + '<button id="pw-close" class="btn small primary">Done</button>'
-      + '</div>';
-    dlg.appendChild(inner);
-    document.body.appendChild(dlg);
-    inner.querySelector('#pw-copy').onclick = async () => {
-      try { await navigator.clipboard.writeText(r.new_password); toast('Copied to clipboard', 'ok'); }
-      catch (_) { toast('Copy failed — select and copy manually', 'err'); }
-    };
-    inner.querySelector('#pw-close').onclick = () => dlg.remove();
-  } catch (e) { toast('Reset failed: ' + e.message, 'err'); }
+    r = await api('api_saas_tenants_resetUserPassword', { tenantId: t.id, email: targetEmail });
+  } catch (e) { toast('Reset failed: ' + e.message, 'err'); return; }
+  if (!r || !r.ok || !r.new_password) {
+    toast('Reset returned no password — server response: ' + JSON.stringify(r || {}).slice(0, 200), 'err');
+    return;
+  }
+  console.log('🔑 Password reset for', r.user, 'NEW PASSWORD:', r.new_password);
+
+  // Self-styled overlay — does NOT depend on admin.css. Renders even if the
+  // SPA's modal classes are missing or overridden.
+  const dlg = document.createElement('div');
+  dlg.style.cssText = 'position:fixed; inset:0; background:rgba(15,23,42,.55); display:flex; align-items:center; justify-content:center; z-index:99999;';
+  const inner = document.createElement('div');
+  inner.style.cssText = 'background:#fff; border-radius:12px; box-shadow:0 20px 50px rgba(0,0,0,.3); max-width:540px; width:92%; padding:1.2rem 1.4rem; font-family:-apple-system,Segoe UI,Roboto,sans-serif; color:#0f172a;';
+  inner.innerHTML = ''
+    + '<h2 style="margin:0 0 .4rem; color:#92400e">🔑 Password reset</h2>'
+    + '<p style="margin:0 0 .3rem"><b>Workspace:</b> ' + (t.slug || '') + '</p>'
+    + '<p style="margin:0 0 .8rem"><b>User:</b> ' + (r.user.name || '') + ' &middot; ' + (r.user.email || '') + ' &middot; ' + (r.user.role || '') + '</p>'
+    + '<div style="font-family:ui-monospace,Menlo,Consolas,monospace; font-size:1.4rem; font-weight:700; padding:1rem; background:#fef3c7; border:2px dashed #f59e0b; border-radius:10px; text-align:center; letter-spacing:.06em; user-select:all; color:#92400e" id="pw-display">' + r.new_password + '</div>'
+    + '<p style="font-size:.82rem; color:#64748b; margin-top:.7rem">' + (r.note || 'Save this password now — it is shown ONCE.') + '</p>'
+    + '<div style="display:flex; gap:.5rem; justify-content:flex-end; margin-top:.9rem">'
+    + '<button id="pw-copy" style="padding:.5rem .9rem; border-radius:8px; border:1px solid #cbd5e1; background:#fff; cursor:pointer; font-weight:600">📋 Copy password</button>'
+    + '<button id="pw-close" style="padding:.5rem .9rem; border-radius:8px; border:none; background:#6366f1; color:#fff; cursor:pointer; font-weight:600">Done</button>'
+    + '</div>';
+  dlg.appendChild(inner);
+  document.body.appendChild(dlg);
+  inner.querySelector('#pw-copy').onclick = async () => {
+    try { await navigator.clipboard.writeText(r.new_password); toast('Copied to clipboard', 'ok'); }
+    catch (_) { window.prompt('Copy this password manually:', r.new_password); }
+  };
+  inner.querySelector('#pw-close').onclick = () => dlg.remove();
+  dlg.onclick = (ev) => { if (ev.target === dlg) dlg.remove(); };
 }
 
 async function loginAsTenant(t) {
