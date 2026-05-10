@@ -19022,6 +19022,52 @@ function _initFloatingChat() {
     display: flex; align-items: center; justify-content: center;
   `;
   fab.innerHTML = '\ud83d\udcac';
+  fab.dataset.positioned = '';
+  // Restore saved position
+  try {
+    const raw = localStorage.getItem('crm.chatFab.pos');
+    if (raw) {
+      const pos = JSON.parse(raw);
+      const leftPx = Math.max(8, Math.min(window.innerWidth - 64, Math.round((pos.leftPct || 0) * window.innerWidth)));
+      const topPx  = Math.max(8, Math.min(window.innerHeight - 64, Math.round((pos.topPct  || 0) * window.innerHeight)));
+      fab.style.left = leftPx + 'px';
+      fab.style.top = topPx + 'px';
+      fab.style.right = 'auto';
+      fab.style.bottom = 'auto';
+      fab.dataset.positioned = 'user';
+    }
+  } catch (_) {}
+  // Drag handlers — mirror the Copilot FAB behaviour
+  let _dragStart = null, _dragMoved = false;
+  fab.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    _dragStart = { x: e.clientX, y: e.clientY, left: fab.offsetLeft, top: fab.offsetTop };
+    _dragMoved = false;
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!_dragStart) return;
+    const dx = e.clientX - _dragStart.x, dy = e.clientY - _dragStart.y;
+    if (!_dragMoved && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) _dragMoved = true;
+    if (_dragMoved) {
+      e.preventDefault();
+      fab.style.left = Math.max(4, Math.min(window.innerWidth - 60, _dragStart.left + dx)) + 'px';
+      fab.style.top  = Math.max(4, Math.min(window.innerHeight - 60, _dragStart.top + dy)) + 'px';
+      fab.style.right = 'auto'; fab.style.bottom = 'auto';
+      fab.dataset.positioned = 'user';
+    }
+  });
+  document.addEventListener('mouseup', () => {
+    if (!_dragStart) return;
+    const wasDrag = _dragMoved;
+    _dragStart = null;
+    if (wasDrag) {
+      try { localStorage.setItem('crm.chatFab.pos', JSON.stringify({ leftPct: fab.offsetLeft / window.innerWidth, topPct: fab.offsetTop / window.innerHeight })); } catch (_) {}
+      // Swallow the click that follows so we don't toggle the drawer
+      const swallow = (ev) => { ev.stopPropagation(); ev.preventDefault(); fab.removeEventListener('click', swallow, true); };
+      fab.addEventListener('click', swallow, true);
+    }
+  });
+
   // Unread badge
   const badge = document.createElement('span');
   badge.id = 'chat-fab-badge';
