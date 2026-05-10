@@ -475,7 +475,9 @@ async function api_aibot_kb_save_text(token, payload) {
   const p = payload || {};
   const id = Number(p.id || 0);
   const title = String(p.title || 'Untitled').slice(0, 200);
-  const text  = String(p.raw_text || '');
+  // Accept multiple key names for backwards-compat with older client SPAs
+  // (Celeste was sending 'text', saas was sending 'raw_text', etc.)
+  const text  = String(p.raw_text || p.text || p.body || '');
   if (!text.trim()) throw new Error('Text is empty');
   if (text.length > 200000) throw new Error('Text too large (max 200k chars per doc)');
 
