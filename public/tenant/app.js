@@ -13867,7 +13867,7 @@ async function adminBotFlows() {
       if (n.y == null) n.y = 80 + Math.floor(i / 4) * 200;
     });
 
-    const modal = h('div', { class: 'modal-overlay' });
+    const modal = h('div', { class: 'modal-backdrop' });
     const dlg = h('div', { class: 'modal', style: { width: 'min(1240px, 98vw)', height: 'min(92vh, 820px)', maxHeight: '92vh', overflow: 'hidden', display: 'flex', flexDirection: 'column', padding: 0 } });
 
     // ---- Top bar with name / trigger / save ----
@@ -14132,7 +14132,7 @@ async function adminBotFlows() {
 
     // ---- Node property editor (inline modal-on-modal) ----
     function editNode(node) {
-      const ov = h('div', { class: 'modal-overlay', style: { zIndex: 1100 } });
+      const ov = h('div', { class: 'modal-backdrop', style: { zIndex: 1100 } });
       const m = h('div', { class: 'modal', style: { width: 'min(560px, 95vw)' } },
         h('h3', {}, nodeIcon(node.type) + ' ' + nodeTitle(node.type) + '   '),
         h('label', {}, 'Node ID'), h('input', { type: 'text', value: node.id, style: { width: '100%' }, onchange: (e) => {
