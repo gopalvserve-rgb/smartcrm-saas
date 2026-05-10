@@ -338,7 +338,153 @@ async function _resetAdminPassword(pool) {
   return Number(ins.rows[0].id);
 }
 
+/**
+ * Bring the showcase tenant DB up to the latest schema BEFORE seeding.
+ * The showcase tenant was provisioned a long time ago and may be missing
+ * columns the seed depends on (heat_*, additional_phone_ids, etc.). Each
+ * ALTER TABLE ADD COLUMN IF NOT EXISTS is a no-op when the column exists,
+ * so this is safe to run on every seed invocation.
+ */
+async function _ensureShowcaseSchema(pool) {
+  const stmts = [
+    // wa_phones
+    `CREATE TABLE IF NOT EXISTS wa_phones (
+       id SERIAL PRIMARY KEY,
+       phone_number_id TEXT NOT NULL UNIQUE,
+       business_account_id TEXT,
+       access_token TEXT NOT NULL DEFAULT 'PLACEHOLDER',
+       display_phone_number TEXT,
+       verified_name TEXT,
+       label TEXT,
+       quality_rating TEXT,
+       status TEXT,
+       messaging_limit_tier TEXT,
+       is_default INTEGER NOT NULL DEFAULT 0,
+       is_active INTEGER NOT NULL DEFAULT 1,
+       last_seen_at TIMESTAMPTZ,
+       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+     )`,
+    `ALTER TABLE wa_phones ALTER COLUMN access_token DROP NOT NULL`,
+    // whatsapp_messages — add phone_number_id if missing
+    `CREATE TABLE IF NOT EXISTS whatsapp_messages (
+       id SERIAL PRIMARY KEY,
+       lead_id INTEGER,
+       direction TEXT,
+       from_number TEXT,
+       to_number TEXT,
+       body TEXT,
+       message_type TEXT,
+       status TEXT,
+       wa_message_id TEXT,
+       media_id TEXT,
+       media_filename TEXT,
+       phone_number_id TEXT,
+       read_at TIMESTAMPTZ,
+       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+     )`,
+    `ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS phone_number_id TEXT`,
+    `ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS media_id TEXT`,
+    `ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS media_filename TEXT`,
+    // ai_chat_log
+    `CREATE TABLE IF NOT EXISTS ai_chat_log (
+       id SERIAL PRIMARY KEY,
+       phone TEXT,
+       lead_id INTEGER,
+       inbound_msg_id TEXT,
+       reply_text TEXT,
+       draft_text TEXT,
+       model TEXT,
+       mode_used TEXT,
+       status TEXT,
+       suppressed_reason TEXT,
+       error_text TEXT,
+       input_tokens INTEGER,
+       output_tokens INTEGER,
+       cost_inr_billed NUMERIC,
+       phone_number_id TEXT,
+       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+     )`,
+    `ALTER TABLE ai_chat_log ADD COLUMN IF NOT EXISTS phone_number_id TEXT`,
+    // ai_kb_documents
+    `CREATE TABLE IF NOT EXISTS ai_kb_documents (
+       id SERIAL PRIMARY KEY,
+       source_type TEXT,
+       title TEXT,
+       raw_text TEXT,
+       char_count INTEGER GENERATED ALWAYS AS (LENGTH(COALESCE(raw_text,''))) STORED,
+       phone_number_id TEXT,
+       additional_phone_ids JSONB DEFAULT '[]'::jsonb,
+       is_active INTEGER NOT NULL DEFAULT 1,
+       ingest_status TEXT DEFAULT 'ready',
+       ingest_error TEXT,
+       created_by INTEGER,
+       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+     )`,
+    `ALTER TABLE ai_kb_documents ADD COLUMN IF NOT EXISTS additional_phone_ids JSONB NOT NULL DEFAULT '[]'::jsonb`,
+    `ALTER TABLE ai_kb_documents ADD COLUMN IF NOT EXISTS phone_number_id TEXT`,
+    `ALTER TABLE ai_kb_documents ADD COLUMN IF NOT EXISTS is_attachable INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE ai_kb_documents ADD COLUMN IF NOT EXISTS trigger_keywords TEXT`,
+    `ALTER TABLE ai_kb_documents ADD COLUMN IF NOT EXISTS file_data BYTEA`,
+    `ALTER TABLE ai_kb_documents ADD COLUMN IF NOT EXISTS file_mime_type TEXT`,
+    `ALTER TABLE ai_kb_documents ADD COLUMN IF NOT EXISTS file_name TEXT`,
+    `ALTER TABLE ai_kb_documents ADD COLUMN IF NOT EXISTS file_size_bytes INTEGER`,
+    `ALTER TABLE ai_kb_documents ADD COLUMN IF NOT EXISTS sent_count INTEGER NOT NULL DEFAULT 0`,
+    // leads — heat columns
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS heat_score INTEGER`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS heat_label TEXT`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS heat_signal TEXT`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS heat_action_required TEXT`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS heat_updated_at TIMESTAMPTZ`,
+    // notifications
+    `CREATE TABLE IF NOT EXISTS notifications (
+       id SERIAL PRIMARY KEY,
+       user_id INTEGER NOT NULL,
+       type TEXT,
+       title TEXT,
+       body TEXT,
+       link TEXT,
+       is_read INTEGER NOT NULL DEFAULT 0,
+       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+     )`,
+    // wa_chat_assignments
+    `CREATE TABLE IF NOT EXISTS wa_chat_assignments (
+       id SERIAL PRIMARY KEY,
+       phone TEXT NOT NULL UNIQUE,
+       assigned_to INTEGER,
+       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+     )`,
+    // ai_reengage_log
+    `CREATE TABLE IF NOT EXISTS ai_reengage_log (
+       id SERIAL PRIMARY KEY,
+       phone TEXT NOT NULL,
+       lead_id INTEGER,
+       phone_number_id TEXT,
+       last_outbound_at TIMESTAMPTZ NOT NULL,
+       scheduled_for TIMESTAMPTZ NOT NULL,
+       attempt_no INTEGER NOT NULL DEFAULT 1,
+       status TEXT NOT NULL DEFAULT 'scheduled',
+       sent_message TEXT,
+       sent_at TIMESTAMPTZ,
+       cancelled_reason TEXT,
+       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+     )`
+  ];
+  const out = { ran: 0, failed: [] };
+  for (const sql of stmts) {
+    try { await pool.query(sql); out.ran++; }
+    catch (e) { out.failed.push({ sql: sql.split('\n')[0].slice(0, 80), err: e.message }); }
+  }
+  return out;
+}
+
 async function _wipeAndSeed(pool, adminUserId) {
+  // ---- 0. Self-heal schema first — showcase tenant may be missing columns.
+  const _schemaResult = await _ensureShowcaseSchema(pool);
+  console.log('[demo] schema migrate ran=' + _schemaResult.ran + ' failed=' + _schemaResult.failed.length);
+  if (_schemaResult.failed.length) console.warn('[demo] schema failures:', JSON.stringify(_schemaResult.failed).slice(0, 500));
+
   // ---- 1. Wipe transactional data so re-running the seeder produces
   //         a clean dataset (preserves admin user, KB articles, config).
   const wipeOrder = [
@@ -801,6 +947,15 @@ async function _wipeAndSeed(pool, adminUserId) {
     );
   }
 
+  // Actual insert verification counts — pulled from the live tables so we
+  // know whether the seed truly populated rows or silently failed.
+  let _waPhonesCount = 0, _waMsgsCount = 0, _aiLogsCount = 0, _kbCount = 0, _heatCount = 0, _notifCount = 0;
+  try { _waPhonesCount = (await pool.query(`SELECT COUNT(*)::int n FROM wa_phones`)).rows[0].n; } catch (_) {}
+  try { _waMsgsCount   = (await pool.query(`SELECT COUNT(*)::int n FROM whatsapp_messages`)).rows[0].n; } catch (_) {}
+  try { _aiLogsCount   = (await pool.query(`SELECT COUNT(*)::int n FROM ai_chat_log`)).rows[0].n; } catch (_) {}
+  try { _kbCount       = (await pool.query(`SELECT COUNT(*)::int n FROM ai_kb_documents`)).rows[0].n; } catch (_) {}
+  try { _heatCount     = (await pool.query(`SELECT COUNT(*)::int n FROM leads WHERE heat_label IS NOT NULL`)).rows[0].n; } catch (_) {}
+  try { _notifCount    = (await pool.query(`SELECT COUNT(*)::int n FROM notifications WHERE type = 'heat_alert'`)).rows[0].n; } catch (_) {}
   return {
     counts: {
       users: userIds.length,
@@ -813,10 +968,13 @@ async function _wipeAndSeed(pool, adminUserId) {
       leads: leadIds.length,
       recordings: Math.min(10, leadIds.length),
       quotations: DEMO_QUOTES.length,
-      whatsapp_threads: 5,
-      whatsapp_messages: 22,
-      ai_replies: 12,
-      heat_alerts: 4
+      whatsapp_phones_in_db:    _waPhonesCount,
+      whatsapp_messages_in_db:  _waMsgsCount,
+      ai_chat_log_rows_in_db:   _aiLogsCount,
+      kb_docs_in_db:            _kbCount,
+      leads_with_heat_in_db:    _heatCount,
+      heat_alert_notifs_in_db:  _notifCount,
+      schema_migration: _schemaResult
     }
   };
 }
