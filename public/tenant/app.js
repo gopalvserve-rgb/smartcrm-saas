@@ -14012,15 +14012,15 @@ async function adminBotFlows() {
 
     // Palette
     const paletteEl = h('div', { style: { width: '220px', borderRight: '1px solid var(--border)', padding: '.6rem', background: '#fff', overflowY: 'auto' } });
-    paletteEl.appendChild(h('div', { style: { fontSize: '.7rem', textTransform: 'uppercase', letterSpacing: '.04em', color: 'var(--text-soft)', fontWeight: 600, padding: '.25rem .25rem .5rem' } }, 'Available components'));
+    paletteEl.appendChild(h('div', { style: { fontSize: '.7rem', textTransform: 'uppercase', letterSpacing: '.04em', color: 'var(--text-soft)', fontWeight: 600, padding: '.25rem .25rem .5rem' } }, 'Available components (' + PALETTE.length + ')'));
     PALETTE.forEach(p => {
-      const item = h('div', { class: 'flow-palette-item', style: { padding: '.5rem .65rem', borderRadius: '8px', border: '1px solid var(--border)', marginBottom: '.4rem', cursor: 'pointer', background: '#fff', display: 'flex', alignItems: 'center', gap: '.5rem', userSelect: 'none' } },
-        h('span', { style: { fontSize: '1.05rem' } }, p.icon),
-        h('div', { style: { flex: 1 } },
-          h('div', { style: { fontSize: '.85rem', fontWeight: 600 } }, p.title),
-          h('div', { class: 'muted', style: { fontSize: '.72rem' } }, p.hint)
+      const item = h('div', { class: 'flow-palette-item', style: { padding: '.32rem .5rem', borderRadius: '6px', border: '1px solid var(--border)', marginBottom: '.25rem', cursor: 'pointer', background: '#fff', display: 'flex', alignItems: 'center', gap: '.45rem', userSelect: 'none' } },
+        h('span', { style: { fontSize: '1rem', flexShrink: 0 } }, p.icon),
+        h('div', { style: { flex: 1, minWidth: 0 } },
+          h('div', { style: { fontSize: '.8rem', fontWeight: 600 } }, p.title),
+          h('div', { class: 'muted', style: { fontSize: '.66rem', lineHeight: '1.2' } }, p.hint)
         ),
-        h('span', { class: 'muted', style: { fontSize: '.72rem' } }, '+ ')
+        h('span', { style: { fontSize: '.85rem', color: 'var(--brand)', fontWeight: 700 } }, '+')
       );
       // Set draggable as a real DOM property — the boolean attribute is
       // unreliable across browsers when set via h() helpers.
