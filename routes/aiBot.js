@@ -1338,18 +1338,23 @@ async function _sendAttachmentMatches({ matches, phone, leadId, inboundPhoneId }
 // Keyword buckets — each contributes a signal weight + a category we expose
 // to the agent in the action_required field.
 const _HEAT_BUCKETS = [
-  { weight: 35, action: 'send_quote', signal: 'asked about price',
-    kws: ['price', 'pricing', 'cost', 'rate', 'rates', 'fee', 'fees', 'how much', 'kitna', 'quote', 'quotation', 'budget'] },
-  { weight: 30, action: 'callback', signal: 'wants a callback',
-    kws: ['call me', 'callback', 'call back', 'ring me', 'phone me', 'speak now', 'speak today', 'baat karni hai', 'phone karo', 'call karo', 'call kar', 'call kr'] },
-  { weight: 35, action: 'send_quote', signal: 'ready to buy',
-    kws: ['ready to buy', 'want to buy', 'interested', 'go ahead', 'lets proceed', "let's proceed", 'proceed with', 'sign up', 'sign me up', 'kharidna hai', 'lena hai', 'finalize', 'finalise', 'confirm order', 'place order'] },
-  { weight: 25, action: 'send_brochure', signal: 'asked for details',
-    kws: ['send details', 'share details', 'send brochure', 'send catalog', 'send catalogue', 'company profile', 'more info', 'tell me more', 'product details'] },
-  { weight: 25, action: 'book_meeting', signal: 'wants a meeting',
-    kws: ['schedule meeting', 'book meeting', 'book a call', 'demo', 'demonstration', 'appointment', 'site visit', 'visit office'] },
-  { weight: 20, action: 'urgent_followup', signal: 'urgency expressed',
-    kws: ['urgent', 'asap', 'today only', 'right now', 'jaldi', 'turant'] }
+  // Clear buying intent — single match should already push to very_hot.
+  { weight: 45, action: 'send_quote', signal: 'asked about price',
+    kws: ['price', 'pricing', 'cost', 'rate ', 'rates', 'fee', 'fees', 'how much', 'kitna', 'quote', 'quotation', 'budget', 'rs.', 'rupees', 'inr ', 'usd ', 'plan', 'tariff'] },
+  { weight: 45, action: 'send_quote', signal: 'ready to buy',
+    kws: ['ready to buy', 'want to buy', 'interested', 'go ahead', 'lets proceed', "let's proceed", 'proceed with', 'sign up', 'sign me up', 'kharidna hai', 'lena hai', 'finalize', 'finalise', 'confirm order', 'place order', 'count me in'] },
+  { weight: 45, action: 'book_meeting', signal: 'wants a demo',
+    kws: ['demo', 'want demo', 'demonstration', 'show me', 'walkthrough', 'walk through', 'free trial', 'trial', 'sample', 'preview', 'see it in action', 'demo karo', 'dikhao'] },
+  { weight: 40, action: 'callback', signal: 'wants a callback',
+    kws: ['call me', 'callback', 'call back', 'ring me', 'phone me', 'speak now', 'speak today', 'baat karni hai', 'phone karo', 'call karo', 'call kar', 'call kr', 'whatsapp call', 'video call'] },
+  { weight: 35, action: 'send_brochure', signal: 'asked for comparison',
+    kws: ['comparison', 'comparision', 'compare', 'comparing', 'vs ', ' vs.', 'difference', 'what makes you different', 'why you', 'better than'] },
+  { weight: 30, action: 'send_brochure', signal: 'asked for details',
+    kws: ['send details', 'share details', 'send brochure', 'send catalog', 'send catalogue', 'company profile', 'more info', 'tell me more', 'product details', 'features', 'more details', 'specifications', 'specs'] },
+  { weight: 30, action: 'book_meeting', signal: 'wants a meeting',
+    kws: ['schedule meeting', 'book meeting', 'book a call', 'appointment', 'site visit', 'visit office', 'meet up', 'meet you'] },
+  { weight: 25, action: 'urgent_followup', signal: 'urgency expressed',
+    kws: ['urgent', 'asap', 'today only', 'right now', 'jaldi', 'turant', 'right away', 'immediately'] }
 ];
 
 const _HEAT_NEGATIVES = ['not interested', 'dont call', "don't call", 'stop messaging', 'remove me', 'unsubscribe', 'spam', 'block', 'gaali', 'mat karo'];
@@ -1377,7 +1382,7 @@ function _classifyHeatHeuristic(text) {
   if (matches.length && t.includes('?')) score += 5;
   if (score === 0) return { score: 0, label: null, signal: '', action: 'none' };
   let label = 'warm';
-  if (score >= 60) label = 'on_fire';
+  if (score >= 75) label = 'on_fire';
   else if (score >= 40) label = 'very_hot';
   else if (score >= 25) label = 'hot';
   else if (score >= 10) label = 'warm';
@@ -1392,8 +1397,19 @@ const _HEAT_RANK = { cold: 0, warm: 1, hot: 2, very_hot: 3, on_fire: 4 };
  */
 async function classifyAndAlertOnInbound({ phone, leadId, inboundText, inboundPhoneId, tenantSlug }) {
   if (!leadId || !inboundText) return;
-  await _ensureAiBotColumns();
+  // Defensive: re-assert lead heat columns every call. Cheap (ALTER TABLE
+  // ADD COLUMN IF NOT EXISTS is a no-op once the column exists), but
+  // rescues tenants where the global _ensureAiBotColumns sweep silently
+  // failed mid-way during an earlier release.
+  try {
+    await db.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS heat_score INTEGER`);
+    await db.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS heat_label TEXT`);
+    await db.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS heat_signal TEXT`);
+    await db.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS heat_action_required TEXT`);
+    await db.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS heat_updated_at TIMESTAMPTZ`);
+  } catch (e) { console.warn('[heat] migrate leads failed:', e.message); }
   const cls = _classifyHeatHeuristic(inboundText);
+  console.log('[heat] inbound lead=' + leadId + ' phone=' + phone + ' score=' + cls.score + ' label=' + (cls.label || 'none') + ' signal=' + cls.signal + ' text=' + String(inboundText).slice(0, 80));
   if (!cls.label) return; // nothing meaningful detected
 
   // Read the current heat (if any) so we can compare and only alert on UPGRADES.
@@ -1424,7 +1440,11 @@ async function classifyAndAlertOnInbound({ phone, leadId, inboundText, inboundPh
       [nextScore, nextLabel, cls.signal.slice(0, 200), cls.action.slice(0, 50), leadId]
     );
   } catch (e) { console.warn('[heat] update failed:', e.message); return; }
-  if (!upgraded) return; // only push on actual upgrades
+  if (!upgraded) {
+    console.log('[heat] no upgrade for lead ' + leadId + ' (was ' + (prev.heat_label || 'none') + '/' + oldScore + ', new ' + cls.label + '/' + cls.score + ')');
+    return;
+  }
+  console.log('[heat] UPGRADED lead ' + leadId + ' to ' + nextLabel + '/' + nextScore + ' (' + cls.signal + ')');
 
   // Push notification to the assigned agent + admins.
   try {
@@ -1432,9 +1452,20 @@ async function classifyAndAlertOnInbound({ phone, leadId, inboundText, inboundPh
     const recipients = new Set();
     if (prev.assigned_to) recipients.add(Number(prev.assigned_to));
     try {
-      const adm = await db.query(`SELECT id FROM users WHERE role IN ('admin','manager') AND is_active = 1`);
+      // Fall back through several common shapes of the users table:
+      // 'is_active = 1' (legacy int) OR 'is_active = TRUE' (bool) OR no column.
+      let adm;
+      try {
+        adm = await db.query(`SELECT id FROM users WHERE role IN ('admin','manager') AND is_active = 1`);
+      } catch (_) {
+        try { adm = await db.query(`SELECT id FROM users WHERE role IN ('admin','manager') AND is_active = TRUE`); }
+        catch (_) { adm = await db.query(`SELECT id FROM users WHERE role IN ('admin','manager')`); }
+      }
       adm.rows.forEach(u => recipients.add(Number(u.id)));
-    } catch (_) {}
+    } catch (e) { console.warn('[heat] admin lookup failed:', e.message); }
+    if (!recipients.size) {
+      console.warn('[heat] no recipients for lead ' + leadId + ' — push skipped (no assigned agent + no admins)');
+    }
     const heatEmoji = cls.label === 'on_fire' ? '🔥🔥🔥' : cls.label === 'very_hot' ? '🔥🔥' : cls.label === 'hot' ? '🔥' : '✨';
     const actionLbl = ({
       callback: 'wants a callback',
@@ -1448,7 +1479,13 @@ async function classifyAndAlertOnInbound({ phone, leadId, inboundText, inboundPh
     const body  = actionLbl + (cls.signal ? ' (' + cls.signal + ')' : '');
     const url   = '/#/leads/' + leadId;
     for (const uid of recipients) {
-      push.sendPushToUser(uid, { title, body, url, tag: 'heat-' + leadId, sticky: true }).catch(e => console.warn('[heat] push failed:', e.message));
+      push.sendPushToUser(uid, {
+        title, body, url,
+        tag: 'heat-' + leadId,
+        sticky: true,
+        data: { type: 'heat_alert', lead_id: leadId, heat_label: cls.label, action: cls.action }
+      }).then(r => console.log('[heat] push to user ' + uid + ' for lead ' + leadId + ': sent=' + (r.sent || 0) + ' failed=' + (r.failed || 0)))
+        .catch(e => console.warn('[heat] push failed for user ' + uid + ':', e.message));
     }
   } catch (e) { console.warn('[heat] push pipeline error:', e.message); }
 }
