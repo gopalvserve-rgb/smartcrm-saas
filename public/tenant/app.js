@@ -6531,6 +6531,44 @@ async function _aibotSettingsView() {
   );
   wrap.appendChild(modeCard);
 
+  // ---- reply on which numbers? ----
+  // Fetch all connected numbers; render a multi-select. Empty selection
+  // = reply on every number (the default). Selected numbers ONLY -> bot
+  // skips inbounds on other numbers and logs them as suppressed in
+  // ai_chat_log so the activity tab shows what was filtered.
+  const phonesCard = h('div', { class: 'card' });
+  phonesCard.appendChild(h('h3', { style: { marginTop: 0 } }, '📱 Reply on which connected numbers?'));
+  phonesCard.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem', margin: '0 0 .55rem' } },
+    'Pick which WhatsApp numbers the bot should auto-reply on. Tick none to reply on ALL numbers (default). Useful when you want the bot only on a Sales line, not on Support.'));
+  const activeIdsInitial = new Set((s.active_phone_number_ids || []).map(String));
+  const phoneChkMap = {};
+  let connectedPhones = [];
+  try { connectedPhones = await api('api_wa_phones_listAll'); } catch (_) { connectedPhones = []; }
+  if (!connectedPhones.length) {
+    phonesCard.appendChild(h('div', { class: 'muted', style: { fontSize: '.85rem' } },
+      'No connected WhatsApp numbers found. Connect a number in WhatsApp → Connect Account first.'));
+  } else {
+    const list = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '.35rem' } });
+    connectedPhones.forEach(ph => {
+      const phId = String(ph.phone_number_id || '');
+      const chk = h('input', { type: 'checkbox', value: phId, checked: activeIdsInitial.has(phId) ? 'checked' : null });
+      phoneChkMap[phId] = chk;
+      list.appendChild(h('label', { style: { display: 'flex', alignItems: 'center', gap: '.55rem', padding: '.4rem .55rem', background: '#f8fafc', border: '1px solid var(--border)', borderRadius: '6px' } },
+        chk,
+        h('div', { style: { flex: 1 } },
+          h('div', {}, h('strong', {}, ph.display_phone_number || phId), Number(ph.is_default) === 1 ? h('span', { style: { marginLeft: '.4rem', fontSize: '.7rem', background: '#fef3c7', color: '#92400e', padding: '1px 6px', borderRadius: '999px', fontWeight: 600 } }, '⭐ DEFAULT') : null),
+          h('div', { class: 'muted', style: { fontSize: '.78rem' } }, ph.verified_name || (ph.label || ''), '  ·  id ', h('code', { style: { fontSize: '.72rem' } }, phId))
+        )
+      ));
+    });
+    phonesCard.appendChild(list);
+    phonesCard.appendChild(h('div', { style: { display: 'flex', gap: '.4rem', marginTop: '.45rem' } },
+      h('button', { class: 'btn ghost small', type: 'button', onclick: () => { Object.values(phoneChkMap).forEach(c => c.checked = true); }}, 'Select all'),
+      h('button', { class: 'btn ghost small', type: 'button', onclick: () => { Object.values(phoneChkMap).forEach(c => c.checked = false); }}, 'Clear (= reply on all)')
+    ));
+  }
+  wrap.appendChild(phonesCard);
+
   // ---- business hours ----
   const bh = s.business_hours || { tz: 'Asia/Kolkata', days: [1,2,3,4,5], start: '09:00', end: '19:00' };
   const startInp = h('input', { type: 'time', value: bh.start || '09:00' });
@@ -6607,6 +6645,7 @@ async function _aibotSettingsView() {
       language: Object.keys(langChks).filter(k => langChks[k].checked).join('+') || 'en',
       system_prompt: sysPrompt.value,
       reply_modes: data.available_modes.filter(m => modeChks[m.id].checked).map(m => m.id),
+      active_phone_number_ids: Object.entries(phoneChkMap).filter(([id, c]) => c.checked).map(([id]) => id),
       business_hours: {
         tz: bh.tz || 'Asia/Kolkata',
         days: dayChks.filter(c => c.el.checked).map(c => c.d),

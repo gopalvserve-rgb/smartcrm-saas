@@ -118,6 +118,7 @@ async function _ensureAiBotColumns() {
   if (pool && _aiBotEnsuredPools.has(pool)) return;
   try {
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS resume_after_idle_seconds INTEGER NOT NULL DEFAULT 86400`);
+    await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS active_phone_number_ids JSONB NOT NULL DEFAULT '[]'::jsonb`);
     await db.query(`UPDATE ai_bot_settings SET resume_after_idle_seconds = COALESCE(resume_after_idle_minutes, 1440) * 60 WHERE resume_after_idle_seconds = 86400 AND resume_after_idle_minutes IS NOT NULL`);
     if (pool) _aiBotEnsuredPools.add(pool);
   } catch (e) { /* table missing — _coerceSettings handles defaults */ }
@@ -612,6 +613,25 @@ async function maybeReplyToInbound({ phone, leadId, inboundText, inboundPhoneId,
     settings = _coerceSettings(s.rows[0]);
   } catch (_) { return; }   // table missing → tenant not migrated yet
   if (Number(settings.is_enabled) !== 1) return;
+
+  // Per-number scoping: if active_phone_number_ids is non-empty, only
+  // reply to inbounds that arrived on one of those phones. Empty list
+  // (the default) means "reply on every connected number". This lets
+  // tenants run the AI Bot only on Sales / only on Support / etc.
+  const activeIds = Array.isArray(settings.active_phone_number_ids) ? settings.active_phone_number_ids.map(String) : [];
+  if (activeIds.length > 0 && inboundPhoneId && !activeIds.includes(String(inboundPhoneId))) {
+    try {
+      await db.query(
+        `INSERT INTO ai_chat_log (phone, lead_id, inbound_msg_id, status, suppressed_reason, mode_used, phone_number_id)
+         VALUES ($1, $2, $3, 'suppressed', $4, $5, $6)`,
+        [phone, leadId || null, inboundMsgId || null,
+         'phone_number_id ' + inboundPhoneId + ' not in AI Bot active list',
+         (settings.reply_modes || []).join('+') || 'always', inboundPhoneId || null]
+      );
+    } catch (_) {}
+    return;
+  }
+
   if (!inboundText || !String(inboundText).trim()) return;  // skip media-only inbound
 
   const suppressReason = await _shouldSuppress(settings, phone, inboundText, inboundPhoneId, tenantSlug);
