@@ -8839,6 +8839,20 @@ function buildWaCompose(phone, onSent, opts) {
   const sendBtn   = h('button', { class: 'btn primary wb-send-btn', title: 'Send', onclick: send }, 'Send');
 
   wrap.appendChild(previewSlot);
+  // Multi-WA: when more than one connected number exists, show a 'Send from'
+  // pill above the compose so the agent can pick which OUR number this
+  // outbound goes from. Hidden when there's only one number (no UI clutter).
+  const _waPhonesNow = (CRM.cache && CRM.cache.waPhones) || [];
+  if (_waPhonesNow.length > 1) {
+    const fromRow = h('div', { class: 'wb-compose-from-row',
+      style: { padding: '.3rem .5rem', display: 'flex', alignItems: 'center', gap: '.4rem',
+               fontSize: '.78rem', color: 'var(--text-soft)', background: '#f8fafc',
+               borderTop: '1px solid var(--border)' } },
+      h('span', {}, '📤 Send from:'),
+      composerPicker
+    );
+    wrap.appendChild(fromRow);
+  }
   wrap.appendChild(h('div', { class: 'wb-compose-row' }, attachBtn, tplBtn, input, sendBtn, fileInput));
   return wrap;
 }
