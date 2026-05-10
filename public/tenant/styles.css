@@ -2185,8 +2185,26 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
    Fix #2: Toolbar dropdowns (Any status / source / assignee / followups)
    were ugly bare boxes — give them proper theming
    ============================================================ */
+/* Multi-select dropdowns inside the toolbar use real checkboxes — they
+   must NOT inherit the giant pill styling below. */
+.toolbar input[type="checkbox"],
+.toolbar input[type="radio"] {
+  -webkit-appearance: auto !important;
+  appearance: auto !important;
+  background: none !important;
+  border: 1px solid #94a3b8 !important;
+  border-radius: 3px !important;
+  width: 16px !important; height: 16px !important;
+  min-width: 16px !important;
+  padding: 0 !important;
+  cursor: pointer !important;
+  background-image: none !important;
+  flex: 0 0 auto !important;
+}
+.toolbar input[type="radio"] { border-radius: 50% !important; }
+
 .toolbar select,
-.toolbar input {
+.toolbar input:not([type="checkbox"]):not([type="radio"]) {
   background: #fff !important;
   border: 1.5px solid var(--border, #e5e7eb) !important;
   border-radius: 10px !important;
@@ -2204,9 +2222,9 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
   background-position: right .75rem center !important;
   padding-right: 2rem !important;
 }
-.toolbar input { background-image: none !important; padding-right: .75rem !important; }
+.toolbar input:not([type="checkbox"]):not([type="radio"]) { background-image: none !important; padding-right: .75rem !important; }
 .toolbar select:focus,
-.toolbar input:focus {
+.toolbar input:not([type="checkbox"]):not([type="radio"]):focus {
   outline: none;
   border-color: var(--brand, #6366f1) !important;
   box-shadow: 0 0 0 3px rgba(99, 102, 241, .12) !important;
@@ -2611,4 +2629,43 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
 #copilot-fab[data-positioned="user"] {
   bottom: auto !important;
   right: auto !important;
+}
+
+
+/* ============================================================
+   Multi-select dropdown panel — checkboxes always visible
+   (defends against any other global input rule)
+   ============================================================ */
+.ms-dropdown-panel input[type="checkbox"] {
+  -webkit-appearance: auto !important;
+  appearance: auto !important;
+  width: 16px !important; height: 16px !important; min-width: 16px !important;
+  border: 1px solid #94a3b8 !important; border-radius: 3px !important;
+  padding: 0 !important; margin: 0 !important;
+  background: #fff !important; background-image: none !important;
+  flex: 0 0 auto !important;
+  accent-color: var(--brand, #6366f1);
+}
+.ms-dropdown-panel label.ms-row {
+  display: flex; align-items: center; gap: .55rem;
+  padding: .35rem .45rem; border-radius: 5px; cursor: pointer;
+  font-size: .85rem; user-select: none;
+}
+.ms-dropdown-panel label.ms-row:hover { background: #eef2ff; }
+.ms-dropdown-panel label.ms-row.is-checked { background: #dbeafe; font-weight: 600; }
+.ms-dropdown-panel label.ms-row.is-checked input[type="checkbox"] { accent-color: var(--brand, #6366f1); }
+.ms-dropdown-button .ms-count {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--brand, #6366f1); color: #fff;
+  font-size: .7rem; font-weight: 700;
+  border-radius: 999px; padding: 1px 7px; min-width: 18px;
+  margin-left: .35rem;
+}
+.ms-dropdown-panel .ms-actions { display: flex; gap: .35rem; margin-bottom: .4rem; padding-bottom: .35rem; border-bottom: 1px solid var(--border, #e5e7eb); }
+.ms-dropdown-panel .ms-actions .btn { flex: 1; padding: .25rem .5rem; font-size: .76rem; }
+.ms-dropdown-panel .ms-search {
+  width: 100%; padding: .35rem .55rem;
+  border: 1px solid var(--border, #e5e7eb) !important; border-radius: 6px !important;
+  font-size: .82rem !important; margin-bottom: .4rem !important;
+  background-image: none !important;
 }
