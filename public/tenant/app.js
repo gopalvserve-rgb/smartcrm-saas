@@ -19297,15 +19297,61 @@ function _initFloatingChat() {
       wrap.innerHTML = '';
       msgs.forEach(m => {
         const isOut = m.direction === 'out';
+        const isFailed = m.status === 'failed' || !!m.error_text;
+        // Tick glyph based on delivery state — same logic as the main chat:
+        //   sent (only)        -> single grey ✓
+        //   delivered          -> double grey ✓✓
+        //   read               -> double blue ✓✓
+        //   failed             -> red ⚠
+        const tickGlyph = isFailed ? '⚠'
+                       : m.read_at      ? '✓✓'
+                       : m.delivered_at ? '✓✓'
+                       :                  '✓';
+        const tickColor = isFailed ? '#dc2626'
+                       : m.read_at      ? '#3b82f6'
+                       : m.delivered_at ? '#94a3b8'
+                       :                  '#94a3b8';
         const row = document.createElement('div');
-        row.style.cssText = `display: flex; justify-content: ${isOut ? 'flex-end' : 'flex-start'}; margin-bottom: .35rem;`;
+        row.style.cssText = 'display: flex; justify-content: ' + (isOut ? 'flex-end' : 'flex-start') + '; margin-bottom: .35rem;';
         const bubble = document.createElement('div');
-        bubble.style.cssText = `
-          max-width: 75%; padding: .4rem .65rem; border-radius: 8px;
-          background: ${isOut ? '#dcf8c6' : '#fff'};
-          font-size: .85rem; word-wrap: break-word; box-shadow: 0 1px 1px rgba(0,0,0,.06);
-        `;
-        bubble.textContent = m.body || ('[' + (m.message_type || 'media') + ']');
+        bubble.style.cssText = 'max-width: 75%; padding: .4rem .65rem; border-radius: 8px;'
+          + 'background: ' + (isOut ? '#dcf8c6' : '#fff') + ';'
+          + 'font-size: .85rem; word-wrap: break-word; box-shadow: 0 1px 1px rgba(0,0,0,.06);';
+        // Inline media preview when present
+        if (m.media_url || m.media_id) {
+          const isImage = m.message_type === 'image' || /^image\//.test(m.mime_type || '');
+          const mediaUrl = m.media_url || (m.id && CRM.token ? '/api/wa/media/' + m.id + '?t=' + encodeURIComponent(CRM.token) : '');
+          if (isImage && mediaUrl) {
+            const img = document.createElement('img');
+            img.src = mediaUrl;
+            img.style.cssText = 'max-width: 100%; max-height: 220px; border-radius: 4px; display: block; margin-bottom: .25rem; cursor: pointer;';
+            img.onclick = () => window.open(mediaUrl, '_blank');
+            bubble.appendChild(img);
+          } else if (mediaUrl) {
+            const a = document.createElement('a');
+            a.href = mediaUrl; a.target = '_blank';
+            a.textContent = '📄 ' + (m.filename || (m.message_type || 'file').toUpperCase());
+            a.style.cssText = 'color: #6366f1; text-decoration: none; font-size: .8rem; display: inline-block; padding: .25rem .35rem; background: #eef2ff; border-radius: 4px; margin-bottom: .25rem;';
+            bubble.appendChild(a);
+          }
+        }
+        if (m.body) {
+          const txt = document.createElement('div');
+          txt.textContent = m.body;
+          bubble.appendChild(txt);
+        } else if (!m.media_url && !m.media_id) {
+          const txt = document.createElement('div');
+          txt.textContent = '[' + (m.message_type || 'media') + ']';
+          txt.style.color = '#94a3b8';
+          bubble.appendChild(txt);
+        }
+        // Meta row: timestamp + tick (outbound only)
+        const meta = document.createElement('div');
+        const ts = m.created_at ? new Date(m.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '';
+        meta.style.cssText = 'font-size: .65rem; color: #94a3b8; text-align: right; margin-top: .15rem; display: flex; gap: .25rem; justify-content: flex-end; align-items: center;';
+        meta.innerHTML = '<span>' + esc(ts) + '</span>' +
+          (isOut ? '<span style="color: ' + tickColor + '; font-size: .8rem;" title="' + esc(isFailed ? (m.error_text || 'failed') : (m.read_at ? 'read' : m.delivered_at ? 'delivered' : 'sent')) + '">' + tickGlyph + '</span>' : '');
+        bubble.appendChild(meta);
         row.appendChild(bubble);
         wrap.appendChild(row);
       });
