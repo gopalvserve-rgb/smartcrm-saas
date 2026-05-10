@@ -1471,3 +1471,16 @@ CREATE TABLE IF NOT EXISTS wa_bot_flow_sessions (
   UNIQUE (phone)
 );
 CREATE INDEX IF NOT EXISTS idx_wa_bot_flow_sessions_phone ON wa_bot_flow_sessions(phone);
+
+
+-- ============================================================
+-- 2026-05-10: Per-number AI Bot configs
+-- One row per WhatsApp number that wants its own training. The
+-- legacy id=1 row keeps phone_number_id = NULL and acts as the
+-- fallback when an inbound arrives on a phone with no specific
+-- config. Partial unique index lets multiple per-phone rows
+-- coexist while preventing duplicates per phone.
+-- ============================================================
+ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS phone_number_id TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_bot_settings_phone
+  ON ai_bot_settings(phone_number_id) WHERE phone_number_id IS NOT NULL;

@@ -6383,10 +6383,87 @@ VIEWS.aibot = async (view) => {
 // ============================================================
 // AI Bot — Settings sub-tab
 // ============================================================
-async function _aibotSettingsView() {
-  const data = await api('api_aibot_settings_get');
+async function _aibotSettingsView(currentPhId) {
+  const phIdParam = currentPhId || null;
+  const data = await api('api_aibot_settings_get', phIdParam || null);
   const s = data.settings;
   const wrap = h('div', {});
+
+  // ---- Per-number config switcher ----
+  // Loads all connected numbers + the existing per-phone configs, then
+  // renders a horizontal pill picker. Each pill: 'Default (fallback)'
+  // OR a phone number. Click switches the form to that config.
+  const switcher = h('div', { class: 'card', style: { background: 'linear-gradient(135deg, #eef2ff 0%, #fdf4ff 100%)', border: '1px solid #c7d2fe', marginBottom: '.85rem' } });
+  switcher.appendChild(h('h4', { style: { margin: '0 0 .35rem' } }, '📱 Editing config for'));
+  switcher.appendChild(h('p', { class: 'muted', style: { fontSize: '.84rem', margin: '0 0 .55rem' } },
+    'Pick a number to give it its own bot training (system prompt, language, KB, off-keywords, etc.). The Default config is used as a fallback for any number without its own config.'));
+  const pills = h('div', { style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap', alignItems: 'center' } });
+  switcher.appendChild(pills);
+  let phones = [];
+  let perPhoneConfigs = [];
+  try { phones = await api('api_wa_phones_listAll'); } catch (_) { phones = []; }
+  try { perPhoneConfigs = ((await api('api_aibot_settings_listAll')).configs) || []; } catch (_) { perPhoneConfigs = []; }
+  const configByPhId = new Map();
+  perPhoneConfigs.forEach(c => { if (c.phone_number_id) configByPhId.set(String(c.phone_number_id), c); });
+
+  function renderPill(label, phId, isActive, hasConfig, isEnabled) {
+    const btn = h('button', {
+      class: 'btn small ' + (isActive ? 'primary' : 'ghost'),
+      style: {
+        whiteSpace: 'nowrap',
+        background: isActive ? 'var(--brand)' : (hasConfig ? '#fff' : '#f1f5f9'),
+        color: isActive ? '#fff' : (hasConfig ? '#0f172a' : '#64748b'),
+        border: '1px solid ' + (isActive ? 'var(--brand)' : (hasConfig ? '#cbd5e1' : '#e2e8f0')),
+        padding: '.35rem .75rem'
+      }
+    }, label, hasConfig ? h('span', { style: { marginLeft: '.35rem', fontSize: '.7rem', color: isActive ? '#fff' : (isEnabled ? '#10b981' : '#94a3b8') } }, isEnabled ? '●' : '○') : null);
+    btn.onclick = () => {
+      // Re-render the whole AI Bot view scoped to this config
+      VIEWS.aibot(document.getElementById('view'));
+      // Set the active sub-tab back to settings; pass the phId via a window-level var
+      window._aibotActivePhId = phId;
+      setTimeout(() => {
+        const settingsBody = document.getElementById('aibot-body');
+        if (settingsBody) {
+          settingsBody.innerHTML = '<div class="loading">Loading…</div>';
+          _aibotSettingsView(phId).then(v => settingsBody.replaceChildren(v));
+        }
+      }, 50);
+    };
+    return btn;
+  }
+
+  // Default pill
+  const defaultActive = !phIdParam;
+  const defaultRow = perPhoneConfigs.find(c => !c.phone_number_id);
+  pills.appendChild(renderPill('🏠 Default (fallback)', null, defaultActive, true, defaultRow && Number(defaultRow.is_enabled) === 1));
+
+  // Per-phone pills
+  phones.forEach(ph => {
+    const id = String(ph.phone_number_id || '');
+    if (!id) return;
+    const has = configByPhId.has(id);
+    const isActive = phIdParam === id;
+    const cfg = configByPhId.get(id);
+    const label = (ph.display_phone_number || id) + (ph.label ? ' · ' + ph.label : '');
+    pills.appendChild(renderPill('📱 ' + label, id, isActive, has, cfg && Number(cfg.is_enabled) === 1));
+  });
+
+  wrap.appendChild(switcher);
+
+  // Banner showing what config we're editing
+  if (phIdParam) {
+    const ph = phones.find(p => String(p.phone_number_id || '') === phIdParam);
+    wrap.appendChild(h('div', { class: 'card', style: { background: '#fef3c7', border: '1px solid #f59e0b', marginBottom: '.85rem' } },
+      h('div', { style: { fontWeight: 600 } }, '✏️ You are editing the config for ' + (ph ? (ph.display_phone_number || phIdParam) : phIdParam)),
+      h('div', { class: 'muted', style: { fontSize: '.82rem' } }, 'Save will create or update this number\'s own config. Switch back to Default to edit the fallback.'),
+      h('button', { class: 'btn small ghost', style: { marginTop: '.4rem' }, onclick: async () => {
+        if (!confirm('Delete this number\'s config? It will fall back to the Default settings.')) return;
+        try { await api('api_aibot_settings_delete', phIdParam); toast('Deleted', 'ok'); window._aibotActivePhId = null; navigateTo('aibot'); }
+        catch (e) { toast(e.message, 'err'); }
+      }}, '🗑 Delete this number\'s config')
+    ));
+  }
   if (!data.global.is_active) {
     wrap.appendChild(h('div', { class: 'card', style: { background: '#fef3c7', borderLeft: '4px solid #f59e0b' } },
       h('div', { style: { fontWeight: '600' } }, '⚠️ Platform AI is disabled'),
@@ -6659,6 +6736,7 @@ async function _aibotSettingsView() {
       history_messages: Number(histCount.value || 8)
     };
     try {
+      payload.phone_number_id = phIdParam || null;
       await api('api_aibot_settings_save', payload);
       toast('Bot settings saved', 'ok');
     } catch (e) {

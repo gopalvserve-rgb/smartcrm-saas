@@ -120,6 +120,11 @@ async function _ensureAiBotColumns() {
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS resume_after_idle_seconds INTEGER NOT NULL DEFAULT 86400`);
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS active_phone_number_ids JSONB NOT NULL DEFAULT '[]'::jsonb`);
     await db.query(`UPDATE ai_bot_settings SET resume_after_idle_seconds = COALESCE(resume_after_idle_minutes, 1440) * 60 WHERE resume_after_idle_seconds = 86400 AND resume_after_idle_minutes IS NOT NULL`);
+    // Per-number bot configs: a row per phone gets its own training; the
+    // legacy id=1 row keeps phone_number_id IS NULL and acts as the
+    // fallback for any phone without a specific config.
+    await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS phone_number_id TEXT`);
+    await db.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_bot_settings_phone ON ai_bot_settings(phone_number_id) WHERE phone_number_id IS NOT NULL`);
     if (pool) _aiBotEnsuredPools.add(pool);
   } catch (e) { /* table missing — _coerceSettings handles defaults */ }
 }
