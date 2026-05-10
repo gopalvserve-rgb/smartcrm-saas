@@ -1527,6 +1527,21 @@ async function classifyAndAlertOnInbound({ phone, leadId, inboundText, inboundPh
     }
     // Also accept literal user IDs in the recipients list (e.g. 'assigned,5,12').
     recipTokens.forEach(t => { if (/^\d+$/.test(t)) recipients.add(Number(t)); });
+    // Fallback: if NO recipients were resolved (lead unassigned + no admin
+    // matched), broadcast the alert to every active user so somebody acts.
+    if (!recipients.size) {
+      try {
+        let r;
+        try { r = await db.query(`SELECT id FROM users WHERE is_active = 1 LIMIT 50`); }
+        catch (_) {
+          try { r = await db.query(`SELECT id FROM users WHERE is_active = TRUE LIMIT 50`); }
+          catch (_) { r = await db.query(`SELECT id FROM users LIMIT 50`); }
+        }
+        r.rows.forEach(u => recipients.add(Number(u.id)));
+        console.warn('[heat] no configured recipients found — broadcasting to ' + recipients.size + ' active users');
+      } catch (e) { console.warn('[heat] broadcast fallback failed:', e.message); }
+    }
+    console.log('[heat] recipients for lead ' + leadId + ':', Array.from(recipients).join(','));
     if (!recipients.size) {
       console.warn('[heat] no recipients for lead ' + leadId + ' — push skipped (no assigned agent + no admins)');
     }
@@ -1543,6 +1558,18 @@ async function classifyAndAlertOnInbound({ phone, leadId, inboundText, inboundPh
     const body  = actionLbl + (cls.signal ? ' (' + cls.signal + ')' : '');
     const url   = '/#/leads/' + leadId;
     for (const uid of recipients) {
+      // Durable in-app notification row — agent sees it on the bell drawer
+      // even if web-push / FCM delivery fails (e.g. no subscription yet).
+      try {
+        await db.insert('notifications', {
+          user_id: uid,
+          type: 'heat_alert',
+          title: title.slice(0, 200),
+          body: body.slice(0, 500),
+          link: url,
+          is_read: 0
+        });
+      } catch (e) { console.warn('[heat] notification row insert failed for user ' + uid + ':', e.message); }
       push.sendPushToUser(uid, {
         title, body, url,
         tag: 'heat-' + leadId,
@@ -1554,12 +1581,48 @@ async function classifyAndAlertOnInbound({ phone, leadId, inboundText, inboundPh
   } catch (e) { console.warn('[heat] push pipeline error:', e.message); }
 }
 
+/**
+ * Self-test: lets a tenant admin fire a sample heat alert to themselves
+ * to verify push notifications are wired up correctly. Useful when the
+ * admin can't tell whether their FCM/web-push registration is working.
+ */
+async function api_aibot_heat_test_alert(token) {
+  const me = await authUser(token);
+  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  // Persist an in-app notification + push the same payload the real
+  // heat-detection pipeline uses, so behaviour matches end-to-end.
+  const title = '🔥🔥 Very hot — test lead';
+  const body  = 'Sample heat alert — verifying push delivery to your device.';
+  const url   = '/#/leads';
+  let pushResult = { sent: 0, failed: 0 };
+  try {
+    await db.insert('notifications', { user_id: me.id, type: 'heat_alert', title, body, link: url, is_read: 0 });
+  } catch (_) {}
+  try {
+    const push = require('./push');
+    pushResult = await push.sendPushToUser(me.id, {
+      title, body, url, tag: 'heat-test-' + me.id, sticky: true,
+      data: { type: 'heat_alert', test: 1 }
+    });
+  } catch (e) { return { ok: false, error: e.message, push: pushResult }; }
+  return {
+    ok: true,
+    delivered: { sent: pushResult.sent || 0, failed: pushResult.failed || 0 },
+    web: pushResult.web || null,
+    fcm: pushResult.fcm || null,
+    note: pushResult.sent === 0
+      ? 'No subscriptions found — enable browser push (allow notifications) on this device, or install the mobile APK and sign in.'
+      : 'Sent to ' + pushResult.sent + ' device(s).'
+  };
+}
+
 module.exports = {
   // Public tenant API (auto-exposed via tenantApi.js loader)
   api_aibot_settings_get, api_aibot_settings_save,
   api_aibot_settings_listAll, api_aibot_settings_delete,
   api_aibot_kb_list, api_aibot_kb_save_text, api_aibot_kb_delete, api_aibot_kb_toggle, api_aibot_kb_crawl_url, api_aibot_kb_set_phone, api_aibot_kb_assign_bulk,
   api_aibot_kb_save_attachment, api_aibot_kb_set_attachment_meta,
+  api_aibot_heat_test_alert,
   api_aibot_chatlog_list, api_aibot_usage_summary, api_aibot_estimator,
   api_aibot_send_draft, api_aibot_discard_draft,
   // Internal — called from whatsbot.js + server.tenant.js upload route

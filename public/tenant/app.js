@@ -7805,6 +7805,14 @@ async function _aibotSettingsView(currentPhId) {
 
   wrap.appendChild(h('div', { class: 'card', style: { borderLeft: '4px solid #ef4444' } },
     h('h3', { style: { marginTop: 0 } }, '🔥 Hot lead alerts'),
+    h('div', { style: { display: 'flex', justifyContent: 'flex-end', marginTop: '-1.6rem', marginBottom: '.4rem' } },
+      h('button', { type: 'button', class: 'btn small ghost', onclick: async () => {
+        try {
+          const r = await api('api_aibot_heat_test_alert');
+          if (r.ok) toast(r.note || ('Sent to ' + r.delivered.sent + ' device(s)'), r.delivered.sent ? 'ok' : 'err');
+          else toast('Test failed: ' + (r.error || 'unknown'), 'err');
+        } catch (e) { toast(e.message, 'err'); }
+      } }, '🔔 Send me a test alert')),
     h('p', { class: 'muted', style: { fontSize: '.85rem' } },
       'When a customer\'s WhatsApp message shows buying intent, the lead gets tagged hot and a push notification fires. Configure your own keywords + who gets notified below. Built-in defaults (price, demo, callback, comparison, etc.) are always active — your keywords add to them.'),
     h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', fontSize: '.95rem' } },
