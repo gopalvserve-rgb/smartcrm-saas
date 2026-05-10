@@ -7809,48 +7809,23 @@ async function _aibotSettingsView(currentPhId) {
       h('button', { type: 'button', class: 'btn small ghost', onclick: async (ev) => {
         const btn = ev.currentTarget;
         btn.disabled = true; const _orig = btn.textContent;
-        async function tryFire() {
-          try {
-            const r = await api('api_aibot_heat_test_alert');
-            return r;
-          } catch (e) { return { ok: false, error: e.message }; }
-        }
         try {
-          // 1st attempt — if subscriptions already exist this just works.
           btn.textContent = '⏳ Sending\u2026';
-          let r = await tryFire();
-          if (r.ok && r.delivered && r.delivered.sent > 0) {
-            toast(r.note, 'ok');
+          const r = await api('api_aibot_heat_test_alert');
+          if (!r.ok) {
+            toast('Test failed: ' + (r.error || 'unknown'), 'err');
             return;
           }
-          // No subscriptions — try to register web push on this device, then retry.
-          if (typeof registerWebPush === 'function') {
-            btn.textContent = '⏳ Setting up notifications\u2026';
-            try { await registerWebPush(); } catch (e) {}
-            // Tiny delay so the browser commits the subscription before the retry hits the server.
-            await new Promise(res => setTimeout(res, 600));
-            btn.textContent = '⏳ Retrying\u2026';
-            r = await tryFire();
-            if (r.ok && r.delivered && r.delivered.sent > 0) {
-              toast('✅ Notifications enabled — sent to ' + r.delivered.sent + ' device(s).', 'ok');
-              return;
-            }
+          // Trigger the in-app popup immediately by re-polling notifications.
+          if (typeof refreshNotifs === 'function') { try { await refreshNotifs(); } catch (_) {} }
+          const fcm = (r.fcm && r.fcm.sent) || 0;
+          if (fcm > 0) {
+            toast('✅ Test sent — bell drawer + ' + fcm + ' mobile device(s).', 'ok');
+          } else {
+            toast('✅ Test sent — check the bell icon (top-right) and the popup that just appeared. Install the mobile APK to also receive lock-screen alerts.', 'ok');
           }
-          // Still nothing — give the user a precise instruction based on the browser state.
-          let why = r.error || (r.note || 'No subscriptions found.');
-          if (typeof Notification !== 'undefined') {
-            if (Notification.permission === 'denied') {
-              why = '🚫 You blocked notifications for this site. Open browser settings → site permissions → allow notifications, then reload and try again.';
-            } else if (Notification.permission === 'default') {
-              why = '🔔 Allow notifications when the browser asks. If you missed the prompt, reload the page and click the button again.';
-            } else if (Notification.permission === 'granted' && r.delivered && r.delivered.sent === 0) {
-              why = '✅ Permission granted but no push subscription registered. The test alert is saved to your in-app bell drawer — reload once and try again to register web push, or install the mobile APK for FCM delivery.';
-            }
-          }
-          toast(why, 'err');
-        } finally {
-          btn.disabled = false; btn.textContent = _orig;
-        }
+        } catch (e) { toast(e.message, 'err'); }
+        finally { btn.disabled = false; btn.textContent = _orig; }
       } }, '🔔 Send me a test alert')),
     h('p', { class: 'muted', style: { fontSize: '.85rem' } },
       'When a customer\'s WhatsApp message shows buying intent, the lead gets tagged hot and a push notification fires. Configure your own keywords + who gets notified below. Built-in defaults (price, demo, callback, comparison, etc.) are always active — your keywords add to them.'),
@@ -19608,6 +19583,9 @@ async function refreshNotifs() {
       el.hidden = c === 0;
     });
     if ((d.counts.due_today || 0) + (d.counts.overdue || 0) > 0) popupFollowupDue(d);
+    // Heat alerts come through unread_notifications with type='heat_alert'.
+    // Show a modal popup once per fresh alert (deduped by notification id).
+    try { popupHeatAlert(d); } catch (e) { console.warn('[heat] popup failed:', e.message); }
   } catch (_) {}
 }
 
@@ -19617,6 +19595,48 @@ async function refreshNotifs() {
 const _firedFollowupIds = new Set();
 let _popupShown = false;
 
+// Track heat alerts already shown in this session so we pop each once.
+const _firedHeatAlertIds = new Set();
+let _heatPopupOpen = false;
+function popupHeatAlert(d) {
+  const all = (d.unread_notifications || []).filter(n => String(n.type || '') === 'heat_alert');
+  const fresh = all.filter(n => {
+    const k = 'h:' + (n.id || (n.title + '|' + n.created_at));
+    if (_firedHeatAlertIds.has(k)) return false;
+    _firedHeatAlertIds.add(k);
+    return true;
+  });
+  if (!fresh.length) return;
+  if (_heatPopupOpen) return;
+  _heatPopupOpen = true;
+  // Use the same modal style as the follow-up popup so it feels native.
+  const items = fresh.slice(0, 5);
+  const close = () => { modal.remove(); _heatPopupOpen = false; };
+  const modal = h('div', { class: 'modal-backdrop popup-followup' },
+    h('div', { class: 'modal', style: { borderTop: '4px solid #ef4444' } },
+      h('div', { class: 'modal-head' },
+        h('h3', { style: { color: '#991b1b' } }, '🔥 Hot lead alert'),
+        h('button', { class: 'btn icon', onclick: close }, '✕')
+      ),
+      h('ul', { class: 'followup-list' }, ...items.map(n => h('li', {},
+        h('b', {}, n.title || 'Hot lead'),
+        h('div', { class: 'muted', style: { marginTop: '.25rem' } }, n.body || ''),
+        h('div', { class: 'actions', style: { marginTop: '.4rem' } },
+          n.link ? h('button', { class: 'btn sm primary', onclick: () => { close(); location.hash = n.link; } }, '👁 Open lead') : null
+        )
+      ))),
+      h('div', { class: 'actions' },
+        h('button', { class: 'btn', onclick: close }, 'Later'),
+        h('button', { class: 'btn primary', onclick: async () => {
+          // Mark these notifications read so they don't re-pop.
+          for (const n of items) { try { if (n.id) await api('api_notifications_read', n.id); } catch (_) {} }
+          close();
+        } }, 'Got it')
+      )
+    )
+  );
+  document.body.appendChild(modal);
+}
 function popupFollowupDue(d) {
   // Filter the urgent items down to ones we have NOT yet shown a popup for.
   // Use the followup id when available, otherwise lead_id+due_at as a stable key.
