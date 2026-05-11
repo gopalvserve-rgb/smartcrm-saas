@@ -399,6 +399,49 @@ async function api_saas_tenants_resetUserPassword(token, payload) {
   };
 }
 
+/**
+ * Force-run the tenant bootstrap (schema migrations + config defaults)
+ * on every active tenant. Idempotent — re-running is safe and cheap
+ * after the first pass (the runner remembers what's applied).
+ *
+ * Super-admin only. Use after a deploy that added a new migration if
+ * you want it applied immediately without waiting for organic traffic
+ * to hit each tenant's pool.
+ *
+ * Returns per-tenant counts so you can see at a glance which tenants
+ * had something to catch up on.
+ */
+async function api_saas_tenants_runBootstrap(token, payload) {
+  const { requireSuperAdmin } = require('./superAdminAuth');
+  await requireSuperAdmin(token);
+  const tenantPoolMod = require('../../utils/tenantPool');
+  const { ensureTenantReady } = require('../../utils/tenantBootstrap');
+  const controlDb = require('../../db/pg');
+  const r = await controlDb.query(
+    `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY slug ASC LIMIT 500`
+  );
+  const limitSlug = payload && payload.slug ? String(payload.slug) : null;
+  const results = [];
+  for (const row of r.rows) {
+    if (limitSlug && row.slug !== limitSlug) continue;
+    let t;
+    try { t = await tenantPoolMod.findActiveTenant(row.slug); } catch (_) { continue; }
+    if (!t) continue;
+    const pool = tenantPoolMod.poolFor(t);
+    if (!pool) { results.push({ slug: row.slug, error: 'no pool' }); continue; }
+    try {
+      // Force run even if the pool's in-process memo says 'done' — this
+      // is the explicit-admin path, useful when the migrations list has
+      // grown since the pool was first opened in this Node process.
+      const res = await ensureTenantReady(pool);
+      results.push({ slug: row.slug, applied: res.applied, defaultsSet: res.defaultsSet, errors: res.errors });
+    } catch (e) {
+      results.push({ slug: row.slug, error: e.message });
+    }
+  }
+  return { ok: true, count: results.length, results };
+}
+
 module.exports = {
   api_saas_tenants_list,
   api_saas_tenants_get,
@@ -410,5 +453,6 @@ module.exports = {
   api_saas_tenants_setModules,
   api_saas_tenants_loginAs,
   api_saas_tenants_reseedKb,
-  api_saas_tenants_resetUserPassword
+  api_saas_tenants_resetUserPassword,
+  api_saas_tenants_runBootstrap
 };

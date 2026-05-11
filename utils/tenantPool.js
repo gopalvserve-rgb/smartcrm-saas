@@ -47,6 +47,23 @@ function poolFor(tenant) {
   });
   p.on('error', err => console.error('[tenant-db]', tenant.slug, 'pool error:', err.message));
   _pools.set(tenant.db_name, p);
+
+  // Centralised tenant bootstrap — runs all accumulated schema deltas
+  // + seeds default config keys. Fire-and-forget so we don't block the
+  // first request that triggered pool creation. The runner is
+  // idempotent and remembers which migrations have run via the
+  // _tenant_migrations table, so the cost on subsequent boots is
+  // basically zero. This is the single durable answer to 'how will
+  // future tenants avoid missing-column / missing-default bugs?'.
+  setImmediate(() => {
+    try {
+      const { ensureTenantReady } = require('./tenantBootstrap');
+      ensureTenantReady(p).catch(e => console.warn('[tenant-bootstrap]', tenant.slug, 'async fail:', e && e.message));
+    } catch (e) {
+      console.warn('[tenant-bootstrap]', tenant.slug, 'load fail:', e && e.message);
+    }
+  });
+
   return p;
 }
 
