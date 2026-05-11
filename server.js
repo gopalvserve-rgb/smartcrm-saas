@@ -1119,15 +1119,54 @@ app.get('/api/recordings/:id/audio', async (req, res, next) => {
         const token = req.query.token || req.headers['x-auth-token'] || '';
         await authUser(token);
         const r = await tenantDb.query(
-          `SELECT mime_type, audio_bytes, size_bytes FROM lead_recordings WHERE id = $1`,
+          `SELECT mime_type, audio_bytes FROM lead_recordings WHERE id = $1`,
           [Number(req.params.id)]
         );
         const row = r.rows[0];
-        if (!row) return res.status(404).end();
-        res.setHeader('Content-Type', row.mime_type || 'audio/m4a');
-        if (row.size_bytes) res.setHeader('Content-Length', row.size_bytes);
-        res.end(row.audio_bytes);
-      } catch (e) { res.status(400).json({ error: e.message }); }
+        if (!row) return res.status(404).json({ error: 'recording not found' });
+        // Buffer.from is a no-op when audio_bytes already IS a Buffer (pg
+        // returns bytea as Buffer); it normalises if some driver path
+        // returned a base64 string instead.
+        let buf = row.audio_bytes;
+        if (!buf) return res.status(410).json({ error: 'recording has no audio bytes (zero-byte upload — re-sync after the dialer finishes writing)' });
+        if (!Buffer.isBuffer(buf)) buf = Buffer.from(buf);
+        const total = buf.length;
+        if (total === 0) return res.status(410).json({ error: 'recording has zero bytes' });
+        // Normalise MIME: 'audio/m4a' → 'audio/mp4' for broader decoder
+        // support (Chrome / Android WebView). Keep other types as-is.
+        let mime = row.mime_type || 'audio/mp4';
+        if (mime === 'audio/m4a' || /\.m4a$/i.test(String(req.params.id))) mime = 'audio/mp4';
+        // Range request handling — <audio> issues these when the user
+        // scrubs the seek bar. Without proper 206 support some browsers
+        // refuse to play. Single-range only (the common case).
+        const range = req.headers.range;
+        if (range) {
+          const m = /^bytes=(\d*)-(\d*)$/.exec(range);
+          if (m) {
+            let start = m[1] ? Number(m[1]) : 0;
+            let end   = m[2] ? Number(m[2]) : total - 1;
+            if (Number.isNaN(start) || start < 0) start = 0;
+            if (Number.isNaN(end) || end >= total) end = total - 1;
+            if (start > end) { res.status(416).setHeader('Content-Range', 'bytes */' + total); return res.end(); }
+            const chunk = buf.slice(start, end + 1);
+            res.status(206);
+            res.setHeader('Content-Type', mime);
+            res.setHeader('Accept-Ranges', 'bytes');
+            res.setHeader('Content-Length', chunk.length);
+            res.setHeader('Content-Range', 'bytes ' + start + '-' + end + '/' + total);
+            res.setHeader('Cache-Control', 'private, max-age=60');
+            return res.end(chunk);
+          }
+        }
+        res.setHeader('Content-Type', mime);
+        res.setHeader('Accept-Ranges', 'bytes');
+        res.setHeader('Content-Length', total);
+        res.setHeader('Cache-Control', 'private, max-age=60');
+        return res.end(buf);
+      } catch (e) {
+        console.error('[/api/recordings/:id/audio] stream error:', e && e.stack || e);
+        return res.status(500).json({ error: e && e.message ? e.message : String(e) });
+      }
     });
 });
 
