@@ -18613,9 +18613,23 @@ async function syncRecordings(opts) {
   const progress = $('#sync-progress');
   if (progress) progress.textContent = `0 / ${files.length}`;
 
+  // Track files we've seen but were too small (likely the OEM dialer
+  // hadn't finished flushing audio bytes yet). Counted separately so
+  // the user understands the next sync will retry them.
+  let skippedEmpty = 0;
   for (let i = 0; i < files.length; i++) {
     const f = files[i];
     if (uploaded[f.uri]) { skipped++; continue; }
+    // Guard against unflushed / in-progress recordings: Samsung creates
+    // the .m4a file at call start and writes audio incrementally. If
+    // sync runs before the dialer finishes flushing, size is 0 / tiny
+    // and we'd upload an empty file. Anything under 4 KB is essentially
+    // just an empty M4A container — skip and let the next sync grab it.
+    if ((Number(f.size) || 0) < 4096) {
+      skippedEmpty++;
+      console.warn('[leadcrm] skip recording — still being written:', f.name, 'size=', f.size, 'bytes');
+      continue; // DON'T mark as uploaded so next sync retries
+    }
     const meta = parseRecordingFilename(f.name, f.modified);
     const digits = String(meta.phone || '').replace(/\D/g, '');
     const tail10 = digits.slice(-10);
@@ -18769,6 +18783,7 @@ async function syncRecordings(opts) {
   parts.push(`📂 ${files.length} found`);
   parts.push(`✅ ${success} synced`);
   if (skipped) parts.push(`⏭ ${skipped} already done`);
+  if (skippedEmpty) parts.push(`⏳ ${skippedEmpty} still recording — will retry`);
   if (skippedNoMatch) {
     let msg = `❓ ${skippedNoMatch} not matched`;
     if (window._recSkipDiag && window._recSkipDiag.length) {

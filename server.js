@@ -875,6 +875,19 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
         const token = (req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
         const me = await authUser(token);
         if (!req.file) return res.status(400).json({ error: 'audio file required' });
+        // Guard against the empty/partial recording race: OEM dialers
+        // (Samsung especially) create the .m4a file at call start and
+        // write audio bytes incrementally as the call progresses. If the
+        // mobile sync fires before the dialer flushes the buffer to disk,
+        // we get a zero-byte / sub-1KB file. Saving that into
+        // lead_recordings produces a row that can't be played back.
+        const _gotBytes = req.file.size || (req.file.buffer && req.file.buffer.length) || 0;
+        if (_gotBytes < 4096) {
+          return res.status(400).json({
+            error: 'recording still being written by dialer (' + _gotBytes + ' bytes) — retry after a few seconds',
+            still_writing: true
+          });
+        }
         let phone = String(req.body.phone || '').trim();
         const direction = String(req.body.direction || 'out').toLowerCase();
         const filename = String(req.body.filename || (req.file && req.file.originalname) || '');
