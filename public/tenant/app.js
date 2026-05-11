@@ -4652,10 +4652,26 @@ function renderRecordingItem(r) {
   const dur = Number(r.duration_s) || 0;
   const mm = Math.floor(dur / 60), ss = (dur % 60).toString().padStart(2, '0');
   const dirIcon = r.direction === 'in' ? '📲' : r.direction === 'missed' ? '⚠️' : '📞';
+  const _audioUrl = '/api/recordings/' + r.id + '/audio?token=' + encodeURIComponent(CRM.token || '');
   const audio = h('audio', {
     controls: true,
     preload: 'none',
-    src: '/api/recordings/' + r.id + '/audio?token=' + encodeURIComponent(CRM.token || '')
+    src: _audioUrl
+  });
+  // Surface playback failures. Browsers normally just show a broken
+  // control with zero feedback; this fetches the URL via XHR to read
+  // the HTTP status and tells the user why.
+  audio.addEventListener('error', async () => {
+    try {
+      const r2 = await fetch(_audioUrl);
+      const txt = await r2.text().catch(() => '');
+      const msg = '🎧 Playback failed: HTTP ' + r2.status + (txt ? ' — ' + txt.slice(0, 120) : '');
+      console.warn('[leadcrm] audio error', r.id, msg);
+      if (typeof toast === 'function') toast(msg, 'err');
+    } catch (e) {
+      console.warn('[leadcrm] audio error (no detail)', r.id, e);
+      if (typeof toast === 'function') toast('🎧 Playback failed — see console', 'err');
+    }
   });
   const aiBlock = h('div', { class: 'rec-ai-block' });
   // Lazy-load the AI summary on first paint. Polls every 10s while pending.

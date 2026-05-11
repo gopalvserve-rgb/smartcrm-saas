@@ -991,6 +991,42 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
 });
 
 // ---- Stream uploaded audio bytes (token in query string) ----
+// Diagnostic — returns metadata about a stored recording (mime, size in
+// the row, actual length of the audio_bytes column as Postgres sees it,
+// and a sha256 prefix of the first 16 bytes). Useful when playback fails
+// to determine whether the upload landed correctly or the bytes are
+// corrupt / empty. Tenant-resolves from token just like /audio.
+app.get('/api/recordings/:id/info', async (req, res, next) => {
+  const tenantDb = require('./db/pg');
+  if (!req.tenant) {
+    try {
+      const jwt = require('jsonwebtoken');
+      const _JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
+      const raw = (req.query.token || req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+      if (!raw) return res.status(401).json({ error: 'No auth token' });
+      let decoded; try { decoded = jwt.verify(raw, _JWT_SECRET); } catch (e) { return res.status(401).json({ error: 'Invalid token' }); }
+      const uid = Number(decoded && decoded.id);
+      const t = await _findTenantByLookup(
+        'SELECT 1 FROM users WHERE id = $1 AND COALESCE(is_active, 1) = 1 LIMIT 1', [uid]
+      );
+      if (!t) return res.status(404).json({ error: 'No active tenant' });
+      const pool = tenantPoolMod.poolFor(t);
+      req.tenant = t; req.tenantPool = pool; req.tenantSlug = t.slug;
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  }
+  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug },
+    async () => {
+      try {
+        const r = await tenantDb.query(
+          `SELECT id, lead_id, mime_type, size_bytes, duration_s, OCTET_LENGTH(audio_bytes) AS real_bytes, encode(substring(audio_bytes from 1 for 16), 'hex') AS head_hex, created_at FROM lead_recordings WHERE id = $1`,
+          [Number(req.params.id)]
+        );
+        if (!r.rows.length) return res.status(404).json({ error: 'not found' });
+        res.json({ tenant: req.tenantSlug, row: r.rows[0] });
+      } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+});
+
 app.get('/api/recordings/:id/audio', async (req, res, next) => {
   // Tenant-agnostic playback: <audio src> bypasses the fetch monkey-patch
   // so the URL hits bare /api/recordings/:id/audio without /t/<slug>/.
