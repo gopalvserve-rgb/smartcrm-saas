@@ -1659,8 +1659,22 @@ VIEWS.leads = async (view) => {
   const searchInput = h('input', { id: 'f-q', placeholder: 'Search name / phone / email…', class: 'flex', value: CRM.prefs.filters.q || '' });
   searchInput.addEventListener('input', debouncedSearch);
   searchInput.addEventListener('keydown', ev => { if (ev.key === 'Enter') applyFilters(); });
+  // Date-range filter — filters.from / filters.to are honoured by
+  // api_leads_list (compared against the created_at date prefix), so
+  // these two inputs are all we need on the SPA side.
+  const fromInput = h('input', { id: 'f-from', type: 'date', value: CRM.prefs.filters.from || '', title: 'Filter: created on or after this date', style: { width: '140px' } });
+  const toInput   = h('input', { id: 'f-to',   type: 'date', value: CRM.prefs.filters.to   || '', title: 'Filter: created on or before this date', style: { width: '140px' } });
+  fromInput.addEventListener('change', applyFilters);
+  toInput.addEventListener('change', applyFilters);
+  const dateWrap = h('div', { class: 'date-range', title: 'Filter by lead-created date range', style: { display: 'inline-flex', alignItems: 'center', gap: '.25rem' } },
+    h('span', { class: 'muted', style: { fontSize: '.78rem' } }, '📅 From'),
+    fromInput,
+    h('span', { class: 'muted', style: { fontSize: '.78rem' } }, 'To'),
+    toInput
+  );
   const toolbar = h('div', { class: 'toolbar' },
     searchInput,
+    dateWrap,
     multiSelectDropdown({
       id: 'f-status', label: 'Status',
       options: statuses.map(s => ({ id: s.id, name: s.name })),
@@ -1980,18 +1994,25 @@ async function loadLeads(opts) {
   const sids = (CRM.prefs.filters.status_ids && CRM.prefs.filters.status_ids.length) ? CRM.prefs.filters.status_ids : null;
   const srcs = (CRM.prefs.filters.sources && CRM.prefs.filters.sources.length) ? CRM.prefs.filters.sources : null;
   const ats  = (CRM.prefs.filters.assigned_tos && CRM.prefs.filters.assigned_tos.length) ? CRM.prefs.filters.assigned_tos : null;
+  // Tag multi-select — read from the persisted prefs (no #f-tags input
+  // since multiSelectDropdown stores its state internally; the dropdown's
+  // onApply already mutates CRM.prefs.filters.tags).
+  const tags = (CRM.prefs.filters.tags && CRM.prefs.filters.tags.length) ? CRM.prefs.filters.tags : null;
   const filters = {
     q:           $('#f-q')?.value || undefined,
     status_id:   sids ? (sids.length === 1 ? sids[0] : undefined) : (CRM.prefs.filters.status_id || undefined),
     status_ids:  sids || undefined,
     source:      srcs ? (srcs.length === 1 ? srcs[0] : undefined) : (CRM.prefs.filters.source || undefined),
     sources:     srcs || undefined,
+    tags:        tags || undefined,
     assigned_to: ats  ? (ats.length === 1 ? ats[0] : undefined)  : (CRM.prefs.filters.assigned_to || undefined),
     assigned_tos: ats || undefined,
     followup:    $('#f-followup')?.value || undefined,
     qualified:   $('#f-qualified')?.value || undefined,
     duplicate:   $('#f-duplicate')?.value || undefined,
     sort:        $('#f-sort')?.value || undefined,
+    from:        $('#f-from')?.value || undefined,
+    to:          $('#f-to')?.value || undefined,
     page,
     page_size:   pageSize
   };
