@@ -18716,6 +18716,9 @@ async function syncRecordings(opts) {
         // bake the slug into baseUrl ourselves.
         const _slug = (typeof window !== 'undefined' && window.TENANT_SLUG) ? window.TENANT_SLUG : '';
         const _baseUrl = location.origin + (_slug ? ('/t/' + _slug) : '');
+        console.log('[leadcrm] upload →', _baseUrl + '/api/recordings', 'slug=' + (_slug || '(none)'), 'leadId=' + leadId + ' phone=' + meta.phone);
+        // Stash the URL we're about to POST to so the failure toast can show it.
+        window._recLastUploadUrl = _baseUrl + '/api/recordings';
         LeadCRMNative.uploadRecordingByUri(
           f.uri, _baseUrl, CRM.token || '',
           meta.phone || '', meta.direction || 'out',
@@ -18737,7 +18740,8 @@ async function syncRecordings(opts) {
       window._recFailDetails = window._recFailDetails || [];
       if (window._recFailDetails.length < 3) {
         const trimmed = String(ok.detail || 'unknown').slice(0, 120);
-        window._recFailDetails.push(trimmed);
+        const slugTag = (typeof window !== 'undefined' && window.TENANT_SLUG) ? ('[/t/' + window.TENANT_SLUG + ']') : '[no slug]';
+        window._recFailDetails.push(slugTag + ' ' + trimmed);
       }
     }
     if (progress) progress.textContent = `${i + 1} / ${files.length}`;
