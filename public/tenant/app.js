@@ -8414,9 +8414,8 @@ async function wbConnect() {
   // their initial Coexistence connect didn't write a row to wa_phones
   // (e.g. on vserve). The empty-state row inside the table tells them
   // exactly which button to press.
-  let phones = [], waUsers = [];
+  let phones = [];
   try { phones = await api('api_wa_phones_listAll'); } catch (_) { phones = []; }
-  try { waUsers = await api('api_users_list'); } catch (_) { waUsers = []; }
   if (phones.length || isConnected) {
     const phonesCard = h('div', { class: 'card', style: { marginBottom: '.8rem' } });
     phonesCard.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.4rem', gap: '.5rem', flexWrap: 'wrap' } },
@@ -8458,7 +8457,6 @@ async function wbConnect() {
         h('th', {}, 'Phone'),
         h('th', {}, 'Verified name'),
         h('th', {}, 'Label'),
-        h('th', { title: 'New WhatsApp leads landing on this number will be assigned to this agent. Leave blank to use the tenant-wide default.' }, 'Assign new leads to'),
         h('th', {}, 'WABA'),
         h('th', {}, 'Status'),
         h('th', { style: { textAlign: 'right' } }, '')
@@ -8475,28 +8473,6 @@ async function wbConnect() {
               try { await api('api_wa_phones_save', { id: ph.id, label: inp.value }); } catch (e) { toast(e.message, 'err'); }
             }, 600); });
             return inp;
-          })()
-        ),
-        h('td', {},
-          (() => {
-            // Per-phone default lead owner. New WA leads arriving on
-            // this number get assigned to the picked agent automatically;
-            // blank = fall through to the tenant-wide default.
-            const sel = h('select', { style: { minWidth: '160px' } },
-              h('option', { value: '' }, '— Tenant default —'),
-              ...(Array.isArray(waUsers) ? waUsers : []).map(u =>
-                h('option', { value: String(u.id), selected: String(u.id) === String(ph.default_owner_user_id || '') ? 'selected' : null },
-                  (u.name || u.email || ('User #' + u.id)) + (u.role ? ' (' + u.role + ')' : '')
-                )
-              )
-            );
-            sel.onchange = async () => {
-              try {
-                await api('api_wa_phones_save', { id: ph.id, default_owner_user_id: sel.value || null });
-                toast('Lead owner saved for ' + (ph.display_phone_number || 'this number'), 'ok');
-              } catch (e) { toast(e.message, 'err'); }
-            };
-            return sel;
           })()
         ),
         h('td', { class: 'muted', style: { fontSize: '.78rem' } }, ph.business_account_id || '—'),
@@ -10724,6 +10700,59 @@ async function wbAssignSettings() {
     finally { saveBtn.disabled = false; }
   };
   wrap.appendChild(h('div', { style: { marginTop: '1rem' } }, saveBtn));
+
+  // ---- Per-WhatsApp-number lead routing ----
+  // When the tenant has multiple WA numbers connected, admins want
+  // different default owners per phone (Sales line → Rahul, Support
+  // line → Priya). This sits below the global rules above and acts
+  // as a per-phone override — applied BEFORE the global rules when
+  // an inbound auto-creates a new lead.
+  let _phonesForRouting = [];
+  let _usersForRouting = [];
+  try { _phonesForRouting = await api('api_wa_phones_listAll'); } catch (_) { _phonesForRouting = []; }
+  try { _usersForRouting  = await api('api_users_list'); }       catch (_) { _usersForRouting  = []; }
+  if (_phonesForRouting.length) {
+    const routingCard = h('div', { class: 'card', style: { marginTop: '1.25rem' } });
+    routingCard.appendChild(h('h3', { style: { marginTop: 0 } }, '📞 Per-WhatsApp-number routing'));
+    routingCard.appendChild(h('p', { class: 'muted' },
+      'When a brand-new lead arrives via a specific connected WhatsApp number, send it to a specific agent. ',
+      'Leave any row blank to fall back to the global rule above.'
+    ));
+    const routeTbl = h('table', { class: 'data-table' },
+      h('thead', {}, h('tr', {},
+        h('th', {}, 'Number'),
+        h('th', {}, 'Label'),
+        h('th', {}, 'Assign new leads to')
+      )),
+      h('tbody', {}, ..._phonesForRouting.map(ph => h('tr', {},
+        h('td', {}, h('code', {}, ph.display_phone_number || ph.phone_number_id),
+          Number(ph.is_default) === 1 ? h('span', { class: 'muted', style: { marginLeft: '.4rem' } }, '⭐ default') : null),
+        h('td', { class: 'muted' }, ph.label || '—'),
+        h('td', {},
+          (() => {
+            const sel = h('select', { style: { minWidth: '180px' } },
+              h('option', { value: '' }, '— Use global rule —'),
+              ...(_usersForRouting || []).map(u =>
+                h('option', { value: String(u.id),
+                  selected: String(u.id) === String(ph.default_owner_user_id || '') ? 'selected' : null },
+                  (u.name || u.email || ('User #' + u.id)) + (u.role ? ' (' + u.role + ')' : '')
+                )
+              )
+            );
+            sel.onchange = async () => {
+              try {
+                await api('api_wa_phones_save', { id: ph.id, default_owner_user_id: sel.value || null });
+                toast('Saved owner for ' + (ph.display_phone_number || 'this number'), 'ok');
+              } catch (e) { toast(e.message, 'err'); }
+            };
+            return sel;
+          })()
+        )
+      )))
+    );
+    routingCard.appendChild(routeTbl);
+    wrap.appendChild(routingCard);
+  }
 
   // Help text
   wrap.appendChild(h('details', { style: { marginTop: '1.25rem' } },
