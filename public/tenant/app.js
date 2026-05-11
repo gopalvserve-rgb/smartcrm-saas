@@ -20536,17 +20536,23 @@ function _initFloatingChat() {
       fab.dataset.positioned = 'user';
     }
   } catch (_) {}
-  // Drag handlers — mirror the Copilot FAB behaviour
-  let _dragStart = null, _dragMoved = false;
-  fab.addEventListener('mousedown', (e) => {
-    if (e.button !== 0) return;
+  // Drag handlers — pointer events so the FAB drags on TOUCH (mobile)
+  // as well as mouse. Plain mousemove/mouseup don't fire reliably on
+  // touchscreens, which is why this FAB used to be stuck on phones.
+  // Mirrors the Copilot FAB drag pattern.
+  let _dragStart = null, _dragMoved = false, _dragPid = null;
+  const DRAG_THRESH = 5;
+  fab.addEventListener('pointerdown', (e) => {
+    if (e.button !== undefined && e.button !== 0) return; // left button / primary touch only
     _dragStart = { x: e.clientX, y: e.clientY, left: fab.offsetLeft, top: fab.offsetTop };
     _dragMoved = false;
+    _dragPid = e.pointerId;
+    try { fab.setPointerCapture && fab.setPointerCapture(e.pointerId); } catch (_) {}
   });
-  document.addEventListener('mousemove', (e) => {
-    if (!_dragStart) return;
+  fab.addEventListener('pointermove', (e) => {
+    if (!_dragStart || e.pointerId !== _dragPid) return;
     const dx = e.clientX - _dragStart.x, dy = e.clientY - _dragStart.y;
-    if (!_dragMoved && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) _dragMoved = true;
+    if (!_dragMoved && (Math.abs(dx) > DRAG_THRESH || Math.abs(dy) > DRAG_THRESH)) _dragMoved = true;
     if (_dragMoved) {
       e.preventDefault();
       fab.style.left = Math.max(4, Math.min(window.innerWidth - 60, _dragStart.left + dx)) + 'px';
@@ -20555,17 +20561,39 @@ function _initFloatingChat() {
       fab.dataset.positioned = 'user';
     }
   });
-  document.addEventListener('mouseup', () => {
+  function _endChatDrag(e) {
     if (!_dragStart) return;
+    if (e && _dragPid != null && e.pointerId !== _dragPid) return;
     const wasDrag = _dragMoved;
+    try { _dragPid != null && fab.releasePointerCapture && fab.releasePointerCapture(_dragPid); } catch (_) {}
     _dragStart = null;
+    _dragPid = null;
     if (wasDrag) {
-      try { localStorage.setItem('crm.chatFab.pos', JSON.stringify({ leftPct: fab.offsetLeft / window.innerWidth, topPct: fab.offsetTop / window.innerHeight })); } catch (_) {}
+      // Snap to nearest left/right edge so the FAB sits flush
+      const rect = fab.getBoundingClientRect();
+      const W = window.innerWidth, H = window.innerHeight;
+      const snapLeft = (rect.left <= W - rect.right) ? 12 : (W - rect.width - 12);
+      const snapTop  = Math.max(12, Math.min(H - rect.height - 12, rect.top));
+      fab.style.transition = 'left .18s ease-out, top .18s ease-out';
+      fab.style.left = snapLeft + 'px';
+      fab.style.top  = snapTop  + 'px';
+      setTimeout(() => { fab.style.transition = ''; }, 220);
+      try {
+        localStorage.setItem('crm.chatFab.pos', JSON.stringify({
+          leftPct: snapLeft / W,
+          topPct:  snapTop  / H
+        }));
+      } catch (_) {}
       // Swallow the click that follows so we don't toggle the drawer
       const swallow = (ev) => { ev.stopPropagation(); ev.preventDefault(); fab.removeEventListener('click', swallow, true); };
       fab.addEventListener('click', swallow, true);
     }
-  });
+  }
+  fab.addEventListener('pointerup', _endChatDrag);
+  fab.addEventListener('pointercancel', _endChatDrag);
+  // Suppress browser default touch behaviours (scroll/zoom) when starting
+  // a drag on the FAB itself
+  fab.style.touchAction = 'none';
 
   // Unread badge
   const badge = document.createElement('span');
