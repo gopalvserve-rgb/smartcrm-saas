@@ -820,6 +820,46 @@ app.get('/q/:token', (req, res, next) => {
   });
 });
 
+// ---- Tenant config snapshot (sidebar brand + apk url + base url) -----
+// The SaaS server didn't expose /config.json at all, so the SPA's fetch
+// of /t/<slug>/config.json silently failed and CRM.config stayed on its
+// 'Lead CRM' / '' defaults — sidebar showed the placeholder name + the
+// 🎯 dot instead of the tenant's actual logo and company name.
+// Tenant-resolved automatically via the existing attachTenant middleware.
+app.get('/config.json', async (req, res) => {
+  // Outside a tenant: harmless empty defaults so /config.json on the
+  // bare host (workspace picker) doesn't 404.
+  if (!req.tenant) {
+    return res.json({
+      company_name:     'Lead CRM',
+      company_logo_url: '',
+      hidden_nav_ids:   '',
+      apk_url:          '/LeadCRM.apk',
+      base_url:         req.protocol + '://' + req.get('host')
+    });
+  }
+  const tenantDb = require('./db/pg');
+  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug },
+    async () => {
+      let cfg = {};
+      try {
+        const rows = await tenantDb.getAll('config');
+        rows.forEach(r => { cfg[r.key] = r.value; });
+      } catch (_) { /* config table missing for brand-new tenant — fall through */ }
+      const fs = require('fs');
+      const path = require('path');
+      res.json({
+        company_name:     cfg.COMPANY_NAME     || req.tenant.name || 'Lead CRM',
+        company_logo_url: cfg.COMPANY_LOGO_URL || cfg.BRAND_LOGO_URL || '',
+        hidden_nav_ids:   cfg.HIDDEN_NAV_IDS   || '',
+        apk_url: fs.existsSync(path.join(__dirname, 'public', 'LeadCRM.apk'))
+          ? '/LeadCRM.apk'
+          : (cfg.APK_DOWNLOAD_URL || ''),
+        base_url:         req.protocol + '://' + req.get('host')
+      });
+    });
+});
+
 // ---- Mobile-app call-recording upload (tenant-scoped multipart) ----
 // Was missing from the SaaS server entirely — mobile app POSTs to
 // /t/<slug>/api/recordings would silently 404 and the 'Sync now' button
