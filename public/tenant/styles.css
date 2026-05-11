@@ -89,15 +89,23 @@ small.muted { color: var(--muted); font-size: .78rem; margin-top: .25rem; displa
 .status-pill {
   /* Full coloured background using the status colour — immediately
      obvious at a glance. White text for contrast on any colour. */
-  display: inline-flex; align-items: center;
-  padding: 3px 10px; border-radius: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 3px 12px; border-radius: 6px;
   background: var(--status-color, #6b7280) !important;
   color: #fff !important;
   border: none;
   font-size: .75rem; font-weight: 600; cursor: pointer;
+  /* Floor + ceiling on width so pills look uniform across rows even
+     when status names are very short ('New', 'Con') or longer
+     ('In Progress', 'Site Visit Scheduled'). Browsers size a <select>
+     to fit only the currently-selected option, so without min-width
+     short statuses produce a tiny pill that looks broken next to its
+     neighbours. */
+  min-width: 92px;
   max-width: 170px;
   -webkit-appearance: none; appearance: none;
   box-shadow: 0 1px 3px rgba(0,0,0,.18);
+  text-align: center;
 }
 .status-pill:focus, .status-pill:hover { filter: brightness(1.1); }
 .status-pill option { color: #222; background: #fff; font-weight: 400; }
