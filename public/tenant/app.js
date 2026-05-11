@@ -18591,6 +18591,7 @@ async function syncRecordings(opts) {
   const uploaded = JSON.parse(localStorage.getItem('rec_uploaded') || '{}');
   let success = 0, failed = 0, skipped = 0, skippedNoMatch = 0;
   window._recSkipDiag = [];
+  window._recFailDetails = [];
 
   // Show progress in dialer view if visible
   const progress = $('#sync-progress');
@@ -18709,8 +18710,14 @@ async function syncRecordings(opts) {
         resolve({ success, detail });
       };
       try {
+        // Tenant-aware base URL: /api/recordings is mounted under /t/<slug>/
+        // so the bare origin (no slug) returns 404 "Tenant not found".
+        // Native fetch bypasses the SPA's fetch monkey-patch, so we have to
+        // bake the slug into baseUrl ourselves.
+        const _slug = (typeof window !== 'undefined' && window.TENANT_SLUG) ? window.TENANT_SLUG : '';
+        const _baseUrl = location.origin + (_slug ? ('/t/' + _slug) : '');
         LeadCRMNative.uploadRecordingByUri(
-          f.uri, location.origin, CRM.token || '',
+          f.uri, _baseUrl, CRM.token || '',
           meta.phone || '', meta.direction || 'out',
           durationGuess, leadId,
           new Date(meta.startedAt).toISOString(), f.name, cbName
@@ -18727,6 +18734,11 @@ async function syncRecordings(opts) {
     } else {
       failed++;
       console.warn('[leadcrm] upload failed:', f.name, ok.detail);
+      window._recFailDetails = window._recFailDetails || [];
+      if (window._recFailDetails.length < 3) {
+        const trimmed = String(ok.detail || 'unknown').slice(0, 120);
+        window._recFailDetails.push(trimmed);
+      }
     }
     if (progress) progress.textContent = `${i + 1} / ${files.length}`;
   }
@@ -18744,7 +18756,13 @@ async function syncRecordings(opts) {
     }
     parts.push(msg);
   }
-  if (failed) parts.push(`⚠ ${failed} failed`);
+  if (failed) {
+    let msg = `⚠ ${failed} failed`;
+    if (window._recFailDetails && window._recFailDetails.length) {
+      msg += ' — ' + window._recFailDetails.slice(0, 1).join('; ');
+    }
+    parts.push(msg);
+  }
   toast(parts.join(' · '), success > 0 ? 'ok' : 'warn');
   console.log('[leadcrm] sync complete', { found: files.length, success, skipped, skippedNoMatch, failed, examples: window._recSkipDiag });
   if (typeof refreshDialerHistory === 'function') refreshDialerHistory();
