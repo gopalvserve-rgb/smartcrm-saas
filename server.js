@@ -991,9 +991,38 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
 });
 
 // ---- Stream uploaded audio bytes (token in query string) ----
-app.get('/api/recordings/:id/audio', (req, res, next) => {
-  if (!req.tenant) return res.status(404).json({ error: 'Tenant not found' });
+app.get('/api/recordings/:id/audio', async (req, res, next) => {
+  // Tenant-agnostic playback: <audio src> bypasses the fetch monkey-patch
+  // so the URL hits bare /api/recordings/:id/audio without /t/<slug>/.
+  // Resolve the tenant from the auth token (same approach as the POST
+  // upload handler) so the player works for every tenant.
   const tenantDb = require('./db/pg');
+  if (!req.tenant) {
+    try {
+      const jwt = require('jsonwebtoken');
+      const _JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
+      const raw = (req.query.token || req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+      if (!raw) return res.status(401).json({ error: 'No auth token' });
+      let decoded;
+      try { decoded = jwt.verify(raw, _JWT_SECRET); }
+      catch (e) { return res.status(401).json({ error: 'Invalid or expired token' }); }
+      const uid = Number(decoded && decoded.id);
+      if (!uid) return res.status(401).json({ error: 'Token has no user id' });
+      const t = await _findTenantByLookup(
+        'SELECT 1 FROM users WHERE id = $1 AND COALESCE(is_active, 1) = 1 LIMIT 1',
+        [uid]
+      );
+      if (!t) return res.status(404).json({ error: 'No active tenant for this user' });
+      const pool = tenantPoolMod.poolFor(t);
+      if (!pool) return res.status(500).json({ error: 'tenant pool unavailable' });
+      req.tenant = t;
+      req.tenantPool = pool;
+      req.tenantSlug = t.slug;
+    } catch (e) {
+      console.error('[/api/recordings/:id/audio] tenant-from-token failed:', e.message);
+      return res.status(500).json({ error: 'tenant resolution failed: ' + e.message });
+    }
+  }
   return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug },
     async () => {
       try {
