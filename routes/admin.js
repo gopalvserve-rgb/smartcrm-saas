@@ -65,13 +65,27 @@ const CONFIG_KEYS = [
 
 const SENSITIVE_KEYS = ['META_APP_SECRET', 'META_PAGE_ACCESS_TOKEN', 'WHATSAPP_ACCESS_TOKEN', 'SMTP_PASSWORD'];
 
+// Keys that default to a non-empty value when no DB row and no env var exists.
+// New tenants get sensible behaviour out of the box without an admin touching anything.
+const CONFIG_DEFAULTS = {
+  WHATSAPP_COEXISTENCE_MODE: '1'  // Coexistence ON by default — clients keep using the WA Business mobile app while the CRM also uses the Cloud API
+};
+
 async function _getAllConfig() {
   const rows = await db.getAll('config').catch(() => []);
   const fromDb = {};
   rows.forEach(r => { fromDb[r.key] = r.value; });
   const out = {};
   CONFIG_KEYS.forEach(k => {
-    out[k] = fromDb[k] != null ? fromDb[k] : (process.env[k] || '');
+    if (fromDb[k] != null && String(fromDb[k]) !== '') {
+      out[k] = fromDb[k];
+    } else if (process.env[k] != null && String(process.env[k]) !== '') {
+      out[k] = process.env[k];
+    } else if (Object.prototype.hasOwnProperty.call(CONFIG_DEFAULTS, k)) {
+      out[k] = CONFIG_DEFAULTS[k];
+    } else {
+      out[k] = '';
+    }
   });
   return out;
 }

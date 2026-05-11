@@ -205,7 +205,12 @@ async function api_wb_settings_get(token) {
     fb_app_id: PLATFORM_FB_APP_ID,
     fb_app_secret_set: true,
     fb_config_id: PLATFORM_FB_CONFIG_ID,
-    fb_platform_managed: true
+    fb_platform_managed: true,
+    // Coexistence Mode (Meta's flow that keeps the WhatsApp Business mobile
+    // app working while the Cloud API also runs on the same number) — ON
+    // by default for every tenant. Admin can disable per-tenant by writing
+    // WHATSAPP_COEXISTENCE_MODE = '0' to the config table.
+    coexistence_mode: await db.getConfig('WHATSAPP_COEXISTENCE_MODE', '1')
   };
 }
 
