@@ -1614,6 +1614,11 @@ const LEAD_COLUMNS = [
 VIEWS.leads = async (view) => {
   if (!CRM.cache.statuses) await warmCache();
   const { statuses, sources, users } = CRM.cache;
+  // Fetch (or refresh) the distinct-tag list every time the Leads view
+  // renders. Cheap (one extra round-trip) and keeps the Tag dropdown
+  // current as users add new tags inline.
+  try { CRM.cache.tags = await api('api_leads_distinctTags'); }
+  catch (_) { CRM.cache.tags = CRM.cache.tags || []; }
 
   view.innerHTML = '';
 
@@ -1675,6 +1680,20 @@ VIEWS.leads = async (view) => {
       onApply: (vals) => {
         CRM.prefs.filters.sources = vals;
         CRM.prefs.filters.source = vals.length === 1 ? vals[0] : '';
+        CRM._leadsPage = 1; loadLeads({ page: 1 });
+      }
+    }),
+    // Tag filter — multi-select sourced from api_leads_distinctTags.
+    // leads.tags is a free-form CSV column so the dropdown shows every
+    // unique tag in use; selecting one or more filters to leads whose
+    // tag column contains ANY of the picked tags.
+    multiSelectDropdown({
+      id: 'f-tags', label: 'Tag',
+      options: (CRM.cache.tags && Array.isArray(CRM.cache.tags)) ? CRM.cache.tags : [],
+      values: CRM.prefs.filters.tags || [],
+      allLabel: 'Any tag',
+      onApply: (vals) => {
+        CRM.prefs.filters.tags = vals;
         CRM._leadsPage = 1; loadLeads({ page: 1 });
       }
     }),

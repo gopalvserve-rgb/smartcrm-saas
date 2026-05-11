@@ -341,6 +341,17 @@ async function api_leads_list(token, filters) {
   } else if (filters.source) {
     rows = rows.filter(l => l.source === filters.source);
   }
+  // Tags filter — leads.tags is a free-form CSV string. Match if the
+  // lead's tags column contains ANY of the requested tags (case-insens.
+  // substring). Empty array = no filter.
+  if (Array.isArray(filters.tags) && filters.tags.length) {
+    const wanted = filters.tags.map(t => String(t || '').toLowerCase().trim()).filter(Boolean);
+    rows = rows.filter(l => {
+      const lt = String(l.tags || '').toLowerCase();
+      if (!lt) return false;
+      return wanted.some(w => lt.includes(w));
+    });
+  }
   if (filters.product_id)  rows = rows.filter(l => Number(l.product_id) === Number(filters.product_id));
   if (Array.isArray(filters.assigned_tos) && filters.assigned_tos.length) {
     const set = new Set(filters.assigned_tos.map(x => Number(x)));
@@ -2001,8 +2012,31 @@ async function api_leads_phoneBook(token) {
   return out;
 }
 
+/**
+ * Returns the distinct list of tags used across all leads visible to
+ * the caller. leads.tags is a free-form CSV string column; we split on
+ * commas, trim, dedupe (case-insensitive) and return sorted ascending
+ * for use as multi-select options in the Leads filter bar.
+ */
+async function api_leads_distinctTags(token) {
+  const me = await authUser(token);
+  const visible = await getVisibleUserIds(me);
+  const rows = (await db.getAll('leads')).filter(l => _isVisible(me, visible, l));
+  const set = new Map(); // lowercase → display
+  for (const l of rows) {
+    const raw = String(l.tags || '');
+    if (!raw) continue;
+    for (const t of raw.split(/[,;|]/).map(s => s.trim()).filter(Boolean)) {
+      const k = t.toLowerCase();
+      if (!set.has(k)) set.set(k, t);
+    }
+  }
+  const out = [...set.values()].sort((a, b) => a.localeCompare(b));
+  return out.map(name => ({ id: name, name }));
+}
+
 module.exports = {
-  api_leads_list, api_leads_phoneBook, api_leads_statusCounts, api_leads_get, api_leads_create, api_leads_update,
+  api_leads_list, api_leads_distinctTags, api_leads_phoneBook, api_leads_statusCounts, api_leads_get, api_leads_create, api_leads_update,
   api_leads_addRemark, api_leads_pipeline, api_myFollowups, api_followup_done,
   api_leads_bulkUpdate, api_leads_bulkDelete, api_leads_bulkCreate, api_leads_duplicateHistory,
   api_leads_deleteAllDuplicates, api_leads_duplicateAndReassign,
