@@ -8414,8 +8414,9 @@ async function wbConnect() {
   // their initial Coexistence connect didn't write a row to wa_phones
   // (e.g. on vserve). The empty-state row inside the table tells them
   // exactly which button to press.
-  let phones = [];
+  let phones = [], waUsers = [];
   try { phones = await api('api_wa_phones_listAll'); } catch (_) { phones = []; }
+  try { waUsers = await api('api_users_list'); } catch (_) { waUsers = []; }
   if (phones.length || isConnected) {
     const phonesCard = h('div', { class: 'card', style: { marginBottom: '.8rem' } });
     phonesCard.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.4rem', gap: '.5rem', flexWrap: 'wrap' } },
@@ -8457,6 +8458,7 @@ async function wbConnect() {
         h('th', {}, 'Phone'),
         h('th', {}, 'Verified name'),
         h('th', {}, 'Label'),
+        h('th', { title: 'New WhatsApp leads landing on this number will be assigned to this agent. Leave blank to use the tenant-wide default.' }, 'Assign new leads to'),
         h('th', {}, 'WABA'),
         h('th', {}, 'Status'),
         h('th', { style: { textAlign: 'right' } }, '')
@@ -8473,6 +8475,28 @@ async function wbConnect() {
               try { await api('api_wa_phones_save', { id: ph.id, label: inp.value }); } catch (e) { toast(e.message, 'err'); }
             }, 600); });
             return inp;
+          })()
+        ),
+        h('td', {},
+          (() => {
+            // Per-phone default lead owner. New WA leads arriving on
+            // this number get assigned to the picked agent automatically;
+            // blank = fall through to the tenant-wide default.
+            const sel = h('select', { style: { minWidth: '160px' } },
+              h('option', { value: '' }, '— Tenant default —'),
+              ...(Array.isArray(waUsers) ? waUsers : []).map(u =>
+                h('option', { value: String(u.id), selected: String(u.id) === String(ph.default_owner_user_id || '') ? 'selected' : null },
+                  (u.name || u.email || ('User #' + u.id)) + (u.role ? ' (' + u.role + ')' : '')
+                )
+              )
+            );
+            sel.onchange = async () => {
+              try {
+                await api('api_wa_phones_save', { id: ph.id, default_owner_user_id: sel.value || null });
+                toast('Lead owner saved for ' + (ph.display_phone_number || 'this number'), 'ok');
+              } catch (e) { toast(e.message, 'err'); }
+            };
+            return sel;
           })()
         ),
         h('td', { class: 'muted', style: { fontSize: '.78rem' } }, ph.business_account_id || '—'),

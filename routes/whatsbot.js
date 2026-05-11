@@ -2246,6 +2246,23 @@ async function _handleInbound(m, value) {
     else if (cfg.autoLeadOn) {
       // Create a fresh lead for this inbound contact
       const profileName = (value?.contacts || []).find(c => c.wa_id === m.from)?.profile?.name || from;
+      // Per-WhatsApp-number lead owner (May 2026): if the admin set a
+      // default_owner_user_id on the wa_phones row that received the
+      // inbound, route THIS lead to that user. Falls back to the
+      // tenant-wide cfg.defaultUser when the per-phone field is empty
+      // or the lookup fails (older tenants without the column).
+      let perPhoneOwner = null;
+      if (inboundPhoneId) {
+        try {
+          const phRow = await db.query(
+            `SELECT default_owner_user_id FROM wa_phones WHERE phone_number_id = $1 LIMIT 1`,
+            [String(inboundPhoneId)]
+          );
+          if (phRow.rows.length && phRow.rows[0].default_owner_user_id != null) {
+            perPhoneOwner = Number(phRow.rows[0].default_owner_user_id);
+          }
+        } catch (_) {}
+      }
       // Resolve via _resolveDefaultStatusId so a missing / dangling
       // WB_DEFAULT_STATUS_ID falls through to the canonical "New"
       // status — fixes leads landing under a phantom filter with the
@@ -2254,7 +2271,7 @@ async function _handleInbound(m, value) {
         name: profileName, phone: from, whatsapp: from,
         source: cfg.autoLeadSource || 'WhatsApp',
         status_id: await _resolveDefaultStatusId(cfg),
-        assigned_to: cfg.defaultUser || null,
+        assigned_to: perPhoneOwner || cfg.defaultUser || null,
         created_at: db.nowIso(), updated_at: db.nowIso()
       });
       leadId = newId;
@@ -2425,15 +2442,25 @@ async function _handleInbound(m, value) {
 // config keys continue to mirror the default row.
 // ----------------------------------------------------------------
 
+async function _ensureWaPhonesColumns() {
+  // Self-healing migrations for the wa_phones table. Idempotent
+  // ALTERs so older tenants get new columns without manual migration.
+  try {
+    await db.query(`ALTER TABLE wa_phones ADD COLUMN IF NOT EXISTS default_owner_user_id INTEGER`);
+  } catch (_) {}
+}
+
 async function api_wa_phones_listAll(token) {
   await authUser(token);
+  await _ensureWaPhonesColumns();
   let rows;
   try {
     const r = await db.query(`
       SELECT id, phone_number_id, business_account_id,
              display_phone_number, verified_name, label,
              quality_rating, status, messaging_limit_tier,
-             is_default, is_active, last_seen_at, created_at, updated_at
+             is_default, is_active, default_owner_user_id,
+             last_seen_at, created_at, updated_at
         FROM wa_phones
        ORDER BY is_default DESC, created_at ASC
     `);
@@ -2449,18 +2476,27 @@ async function api_wa_phones_listAll(token) {
 async function api_wa_phones_save(token, payload) {
   const me = await authUser(token);
   if (me.role !== 'admin') throw new Error('Admin only');
+  await _ensureWaPhonesColumns();
   const p = payload || {};
   const id = Number(p.id || 0);
   if (!id) throw new Error('Phone id required');
-  // Only allow editing the human-friendly label + active flag through
-  // this endpoint. Everything else (token, WABA, phone_number_id) is
-  // mastered by the Embedded Sign-In flow so admins can't accidentally
-  // brick a connection by editing a token by hand.
+  // Only allow editing the human-friendly label, active flag, and the
+  // per-phone default lead-owner. Everything else (token, WABA,
+  // phone_number_id) is mastered by the Embedded Sign-In flow so admins
+  // can't accidentally brick a connection by editing a token by hand.
   const label    = p.label != null ? String(p.label).slice(0, 80) : null;
   const isActive = p.is_active == null ? null : (p.is_active ? 1 : 0);
+  // default_owner_user_id: integer or null. Pass 0 / '' / null to clear
+  // the per-phone owner and fall through to the tenant-wide default.
+  let defaultOwner;
+  if (Object.prototype.hasOwnProperty.call(p, 'default_owner_user_id')) {
+    const v = p.default_owner_user_id;
+    defaultOwner = (v == null || v === '' || Number(v) === 0) ? null : Number(v);
+  }
   const sets = []; const vals = []; let i = 1;
-  if (label    != null) { sets.push(`label = $${i++}`);     vals.push(label); }
-  if (isActive != null) { sets.push(`is_active = $${i++}`); vals.push(isActive); }
+  if (label         != null)      { sets.push(`label = $${i++}`);                  vals.push(label); }
+  if (isActive      != null)      { sets.push(`is_active = $${i++}`);              vals.push(isActive); }
+  if (defaultOwner !== undefined) { sets.push(`default_owner_user_id = $${i++}`);  vals.push(defaultOwner); }
   if (!sets.length) return { ok: true };
   vals.push(id);
   await db.query(`UPDATE wa_phones SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $${i}`, vals);
