@@ -207,32 +207,68 @@
       console.log('[caller-id] start result', r);
       if (r && r.ok === false) {
         _showCallerIdNudgeOnce();
-        return;
-      }
-      if (!sessionStorage.getItem('crm_callerid_announced_v1')) {
-        try { sessionStorage.setItem('crm_callerid_announced_v1', '1'); } catch (_) {}
-        if (typeof toast === 'function') {
-          toast('📞 Caller ID active — incoming calls will auto-log');
+      } else {
+        if (!sessionStorage.getItem('crm_callerid_announced_v1')) {
+          try { sessionStorage.setItem('crm_callerid_announced_v1', '1'); } catch (_) {}
+          if (typeof toast === 'function') {
+            toast('📞 Caller ID active — incoming calls will auto-log');
+          }
         }
       }
-      // Critical: on Android 11+ the OEM call-recording folder lives in scoped
-      // storage. READ_EXTERNAL_STORAGE alone CANNOT see it. We need
-      // MANAGE_EXTERNAL_STORAGE ("All files access") which is a special-purpose
-      // setting the user must grant from a system Settings screen. Check + nudge.
-      if (CallerId && typeof CallerId.hasAllFilesAccess === 'function') {
-        CallerId.hasAllFilesAccess().then(res => {
-          if (res && res.granted) return;
-          _showAllFilesAccessNudge();
-        }).catch(() => {});
-      }
+      // Always check All-files-access whether or not start() succeeded.
+      // start() can fail for unrelated reasons (mic / call-log perms) yet
+      // file access is needed for OEM recording sync — they're independent.
+      _checkAllFilesAccess();
     }).catch(e => {
       console.warn('[caller-id] start failed', e);
       _showCallerIdNudgeOnce();
+      // Even if CallerId.start() throws, still check + prompt for files access
+      _checkAllFilesAccess();
+    });
+  }
+
+  // Check whether All-files-access is granted and, if not, surface the
+  // prompt. On the FIRST APK install (per device) we open the system
+  // Settings screen directly so the user can't miss it. After that they
+  // see the regular yellow nudge banner (no auto-redirect) so they're
+  // not yanked out of the app every boot.
+  function _checkAllFilesAccess() {
+    if (!CallerId || typeof CallerId.hasAllFilesAccess !== 'function') return;
+    CallerId.hasAllFilesAccess().then(res => {
+      console.log('[caller-id] hasAllFilesAccess →', res);
+      if (res && res.granted) {
+        try { localStorage.setItem('crm_allfiles_granted_v2', '1'); } catch (_) {}
+        return;
+      }
+      // Auto-open Settings the FIRST time this install lands here (so the
+      // user never even has a chance to miss the prompt). Tracked by a
+      // device-local flag separate from the dismissal flag so granting
+      // doesn't get blocked by a stale 'don't show again' choice.
+      const autoOpenedKey = 'crm_allfiles_auto_opened_v2';
+      let alreadyAutoOpened = false;
+      try { alreadyAutoOpened = localStorage.getItem(autoOpenedKey) === '1'; } catch (_) {}
+      if (!alreadyAutoOpened && typeof CallerId.requestAllFilesAccess === 'function') {
+        try { localStorage.setItem(autoOpenedKey, '1'); } catch (_) {}
+        // Toast first so the user knows WHY they're seeing the Settings screen
+        if (typeof toast === 'function') {
+          toast('📁 Grant "All files access" so we can sync your call recordings');
+        }
+        setTimeout(() => {
+          try { CallerId.requestAllFilesAccess().catch(() => {}); } catch (_) {}
+          // Then show the nudge as a fallback (in case Settings didn't open)
+          setTimeout(() => _showAllFilesAccessNudge(), 500);
+        }, 1200);
+      } else {
+        _showAllFilesAccessNudge();
+      }
+    }).catch(e => {
+      console.warn('[caller-id] hasAllFilesAccess failed', e);
+      _showAllFilesAccessNudge();
     });
   }
 
   function _showAllFilesAccessNudge() {
-    try { if (localStorage.getItem('crm_allfiles_nag_v1') === '1') return; } catch (_) {}
+    try { if (localStorage.getItem('crm_allfiles_nag_v2') === '1') return; } catch (_) {}
     if (document.querySelector('.crm-allfiles-nudge')) return;
     const host = document.body || document.documentElement;
     if (!host) return;
@@ -251,7 +287,7 @@
     function _gone() { try { wrap.remove(); } catch (_) {} }
     wrap.querySelector('.af-later').onclick = _gone;
     wrap.querySelector('.af-skip').onclick = function () {
-      try { localStorage.setItem('crm_allfiles_nag_v1', '1'); } catch (_) {}
+      try { localStorage.setItem('crm_allfiles_nag_v2', '1'); } catch (_) {}
       _gone();
     };
     wrap.querySelector('.af-open').onclick = function () {

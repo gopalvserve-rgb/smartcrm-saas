@@ -1,3 +1,4 @@
+// build-stamp: 2026-05-11 v1.2 — APK refresh to ship MANAGE_EXTERNAL_STORAGE + auto-prompt flow
 package app.leadcrm.mobile
 
 import android.Manifest
