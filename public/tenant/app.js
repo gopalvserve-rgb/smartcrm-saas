@@ -7767,6 +7767,7 @@ async function _aibotSettingsView(currentPhId) {
     h('option', { value: '3600' }, '1 hour'),
     h('option', { value: '86400' }, '24 hours'));
   idleQuick.onchange = () => { if (idleQuick.value) { idleSec.value = idleQuick.value; idleQuick.value = ''; } };
+  const pauseHumanChk = h('input', { type: 'checkbox', checked: Number(s.pause_after_human_handoff) === 1 ? 'checked' : null });
   const maxReplies = h('input', { type: 'number', value: s.max_replies_per_thread || 0, min: 0, style: { width: '8rem' } });
   const useKb = h('input', { type: 'checkbox', checked: s.use_kb ? 'checked' : null });
   const kbCap = h('input', { type: 'number', value: s.kb_max_chars || 8000, min: 2000, max: 120000, step: 5000, style: { width: '8rem' } });
@@ -7774,9 +7775,14 @@ async function _aibotSettingsView(currentPhId) {
   wrap.appendChild(h('div', { class: 'card' },
     h('h3', { style: { marginTop: 0 } }, 'Safety & advanced'),
     h('div', { class: 'field' },
-      h('label', {}, 'Resume after agent silence (seconds) — 0 = never auto-resume'),
+      h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem' } },
+        pauseHumanChk,
+        h('span', {}, ' Stop bot permanently once a human agent replies in a thread')),
+      h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } }, 'When ON: the moment any agent (you or a teammate) sends a message in a chat, the bot stops replying on that thread for good — no auto-resume after silence. Use this if the bot should hand off cleanly without ever speaking over your team.')),
+    h('div', { class: 'field' },
+      h('label', {}, 'Otherwise, resume after agent silence (seconds) — 0 = never auto-resume'),
       h('div', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', flexWrap: 'wrap' } }, idleSec, idleQuick),
-      h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } }, 'How long after the last human-agent message before the bot may reply on this thread again. Use 10–20 sec for testing, 86400 (24h) for production.')),
+      h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } }, 'Only used when the toggle above is OFF. How long after the last human-agent message before the bot may reply on this thread again. Use 10–20 sec for testing, 86400 (24h) for production.')),
     h('div', { class: 'field' }, h('label', {}, 'Max bot replies per conversation (0 = unlimited)'), maxReplies),
     h('div', { class: 'field' }, h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem' } }, useKb, h('span', {}, ' Use the knowledge base when answering'))),
     h('div', { class: 'field' }, h('label', {}, 'KB max chars per call (cap on prompt size)'), kbCap),
@@ -7975,6 +7981,7 @@ async function _aibotSettingsView(currentPhId) {
       },
       trigger_keywords: trigKw.value, off_keywords: offKw.value, escalation_keywords: escKw.value,
       resume_after_idle_seconds: Number(idleSec.value || 0),
+      pause_after_human_handoff: pauseHumanChk.checked,
       max_replies_per_thread: Number(maxReplies.value || 0),
       use_kb: useKb.checked,
       kb_max_chars: Number(kbCap.value || 8000),

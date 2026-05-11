@@ -63,6 +63,7 @@ const _DEFAULT_SETTINGS = {
   reengage_message: 'Hi {{name}}, just checking — did you get a chance to look at our last message? Happy to help if you have any questions.',
   reengage_max_attempts: 1,
   heat_enabled: 1,
+  pause_after_human_handoff: 0,
   heat_keywords: [],
   heat_notify_levels: 'hot,very_hot,on_fire',
   heat_notify_recipients: 'assigned,admins',
@@ -185,6 +186,11 @@ async function _ensureAiBotColumns() {
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS heat_notify_levels TEXT NOT NULL DEFAULT 'hot,very_hot,on_fire'`);
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS heat_notify_recipients TEXT NOT NULL DEFAULT 'assigned,admins'`);
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS heat_enabled INTEGER NOT NULL DEFAULT 1`);
+    // Human handoff sticky-mute (May 2026): when 1, once any human agent
+    // replies in the thread, the bot stays muted on that thread indefinitely
+    // (NOT just for resume_after_idle_seconds). Default OFF so existing
+    // tenants keep the previous auto-resume behaviour.
+    await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS pause_after_human_handoff INTEGER NOT NULL DEFAULT 0`);
     await db.query(`CREATE TABLE IF NOT EXISTS ai_reengage_log (
       id SERIAL PRIMARY KEY,
       phone TEXT NOT NULL,
@@ -266,6 +272,7 @@ async function api_aibot_settings_save(token, payload) {
   if (p.reengage_message          != null) addCol('reengage_message',          '$$',          String(p.reengage_message).slice(0, 1000));
   if (p.reengage_max_attempts     != null) addCol('reengage_max_attempts',     '$$',          Math.max(1, Math.min(5, Number(p.reengage_max_attempts))));
   if (p.heat_enabled              != null) addCol('heat_enabled',              '$$',          p.heat_enabled ? 1 : 0);
+  if (p.pause_after_human_handoff != null) addCol('pause_after_human_handoff','$$',          p.pause_after_human_handoff ? 1 : 0);
   if (p.heat_keywords             != null) addCol('heat_keywords',             '$$::jsonb',   JSON.stringify(Array.isArray(p.heat_keywords) ? p.heat_keywords : []));
   if (p.heat_notify_levels        != null) addCol('heat_notify_levels',        '$$',          String(p.heat_notify_levels).slice(0, 200));
   if (p.heat_notify_recipients    != null) addCol('heat_notify_recipients',    '$$',          String(p.heat_notify_recipients).slice(0, 500));
@@ -287,7 +294,7 @@ async function api_aibot_settings_save(token, payload) {
       // Seed a brand-new per-phone row by cloning the default row, then overlay caller's fields.
       const def = await db.query(`SELECT * FROM ai_bot_settings WHERE phone_number_id IS NULL ORDER BY id ASC LIMIT 1`);
       const seed = def.rows[0] || {};
-      const cloneCols = ['is_enabled','bot_name','business_name','language','system_prompt','welcome_message','reply_modes','business_hours','trigger_keywords','off_keywords','active_phone_number_ids','resume_after_idle_minutes','resume_after_idle_seconds','max_replies_per_thread','escalation_keywords','model_override','use_kb','kb_max_chars','history_messages','reengage_enabled','reengage_after_minutes','reengage_message','reengage_max_attempts','heat_enabled','heat_keywords','heat_notify_levels','heat_notify_recipients'];
+      const cloneCols = ['is_enabled','bot_name','business_name','language','system_prompt','welcome_message','reply_modes','business_hours','trigger_keywords','off_keywords','active_phone_number_ids','resume_after_idle_minutes','resume_after_idle_seconds','max_replies_per_thread','escalation_keywords','model_override','use_kb','kb_max_chars','history_messages','reengage_enabled','reengage_after_minutes','reengage_message','reengage_max_attempts','heat_enabled','heat_keywords','heat_notify_levels','heat_notify_recipients','pause_after_human_handoff'];
       const insertCols = ['phone_number_id'];
       const insertVals = [phId];
       const _jsonbCols = ['reply_modes','business_hours','active_phone_number_ids','additional_phone_ids','heat_keywords'];
@@ -769,6 +776,22 @@ async function _shouldSuppress(settings, phone, inboundText, inboundPhoneId, ten
   // whatsapp_messages from a real user_id within the resume window.
   // resume_after_idle_seconds takes precedence when set; falls back to
   // resume_after_idle_minutes \u00d7 60 for backwards compat.
+  // Two flavours of human-handoff suppression:
+  //  (a) sticky mute — pause_after_human_handoff = 1. Once ANY human agent
+  //      has ever replied on this thread, the bot stays muted indefinitely.
+  //  (b) idle-resume — within the last resume_after_idle_seconds window.
+  // (a) takes precedence so the user can turn the bot fully off when
+  //     a human agent picks up a thread.
+  if (Number(settings.pause_after_human_handoff) === 1) {
+    const r = await db.query(
+      `SELECT 1 FROM whatsapp_messages
+        WHERE direction = 'out' AND user_id IS NOT NULL
+          AND (to_number = $1 OR from_number = $1)
+        LIMIT 1`,
+      [phone]
+    );
+    if (r.rows.length) return 'human agent has taken over this thread';
+  }
   const idleSec = settings.resume_after_idle_seconds != null && Number(settings.resume_after_idle_seconds) >= 0
     ? Math.max(0, Number(settings.resume_after_idle_seconds))
     : Math.max(0, Number(settings.resume_after_idle_minutes || 1440)) * 60;
