@@ -173,6 +173,13 @@
     }
   });
 
+  // Native sends this event when beginListening starts but
+  // MANAGE_EXTERNAL_STORAGE isn't granted — surface the nudge.
+  CallerId.addListener('needsAllFilesAccess', () => {
+    console.log('[caller-id] needsAllFilesAccess fired');
+    _showAllFilesAccessNudge();
+  });
+
   // ---- 4. Start listening once the user is logged in -----------
   //
   // Boot flow design notes:
@@ -208,13 +215,56 @@
           toast('📞 Caller ID active — incoming calls will auto-log');
         }
       }
+      // Critical: on Android 11+ the OEM call-recording folder lives in scoped
+      // storage. READ_EXTERNAL_STORAGE alone CANNOT see it. We need
+      // MANAGE_EXTERNAL_STORAGE ("All files access") which is a special-purpose
+      // setting the user must grant from a system Settings screen. Check + nudge.
+      if (CallerId && typeof CallerId.hasAllFilesAccess === 'function') {
+        CallerId.hasAllFilesAccess().then(res => {
+          if (res && res.granted) return;
+          _showAllFilesAccessNudge();
+        }).catch(() => {});
+      }
     }).catch(e => {
       console.warn('[caller-id] start failed', e);
       _showCallerIdNudgeOnce();
     });
   }
 
-  function _showCallerIdNudgeOnce() {
+  function _showAllFilesAccessNudge() {
+    try { if (localStorage.getItem('crm_allfiles_nag_v1') === '1') return; } catch (_) {}
+    if (document.querySelector('.crm-allfiles-nudge')) return;
+    const host = document.body || document.documentElement;
+    if (!host) return;
+    const wrap = document.createElement('div');
+    wrap.className = 'crm-allfiles-nudge';
+    wrap.style.cssText = 'position:fixed;left:12px;right:12px;bottom:84px;z-index:9998;background:#1e293b;color:#f1f5f9;border:1px solid #334155;border-left:4px solid #f59e0b;border-radius:10px;padding:.85rem 1rem;box-shadow:0 8px 24px rgba(0,0,0,.35);font-size:.88rem;line-height:1.45;display:flex;flex-direction:column;gap:.65rem;';
+    wrap.innerHTML =
+      '<div style="font-weight:600;color:#f8fafc">🎙 Enable Call Recording Sync</div>' +
+      '<div style="color:#cbd5e1">On Android 11+ your phone hides the OEM dialer\'s recording folder from other apps. To auto-attach call recordings to leads, grant <b>All files access</b> in the next screen.</div>' +
+      '<div style="display:flex;gap:.5rem;flex-wrap:wrap;justify-content:flex-end">' +
+      '  <button class="af-skip" style="background:transparent;color:#94a3b8;border:0;padding:.4rem .75rem;font:inherit;cursor:pointer">Don\'t show again</button>' +
+      '  <button class="af-later" style="background:#334155;color:#f1f5f9;border:0;padding:.4rem .9rem;border-radius:6px;font:inherit;cursor:pointer">Later</button>' +
+      '  <button class="af-open" style="background:#f59e0b;color:#000;border:0;padding:.4rem .9rem;border-radius:6px;font:inherit;cursor:pointer;font-weight:600">Grant access</button>' +
+      '</div>';
+    host.appendChild(wrap);
+    function _gone() { try { wrap.remove(); } catch (_) {} }
+    wrap.querySelector('.af-later').onclick = _gone;
+    wrap.querySelector('.af-skip').onclick = function () {
+      try { localStorage.setItem('crm_allfiles_nag_v1', '1'); } catch (_) {}
+      _gone();
+    };
+    wrap.querySelector('.af-open').onclick = function () {
+      try {
+        if (CallerId && typeof CallerId.requestAllFilesAccess === 'function') {
+          CallerId.requestAllFilesAccess().catch(() => {});
+        }
+      } catch (_) {}
+      _gone();
+    };
+  }
+
+    function _showCallerIdNudgeOnce() {
     try {
       if (localStorage.getItem('crm_callerid_nag_v1') === '1') return;
     } catch (_) {}

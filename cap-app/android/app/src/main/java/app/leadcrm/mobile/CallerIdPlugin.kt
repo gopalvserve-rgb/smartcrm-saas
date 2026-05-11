@@ -10,6 +10,9 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
+import android.provider.Settings
+import android.net.Uri
 import android.telephony.TelephonyManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -120,7 +123,56 @@ class CallerIdPlugin : Plugin() {
         call.resolve(ret)
     }
 
-    @com.getcapacitor.annotation.PermissionCallback
+    /**
+     * Returns whether the user has granted MANAGE_EXTERNAL_STORAGE
+     * ("All files access"). Required on Android 11+ to read OEM call-
+     * recording folders (Samsung Recordings/Call, Xiaomi MIUI/..., etc.)
+     * because they live in scoped storage owned by the stock dialer.
+     */
+    @PluginMethod
+    fun hasAllFilesAccess(call: PluginCall) {
+        val granted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+            Environment.isExternalStorageManager()
+        else
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        val ret = JSObject(); ret.put("granted", granted); call.resolve(ret)
+    }
+
+    /**
+     * Opens the system Settings screen where the user can toggle
+     * "All files access" for our app. Required because MANAGE_EXTERNAL_STORAGE
+     * cannot be granted via the normal runtime permission dialog — it's a
+     * special-purpose setting users must enable manually.
+     */
+    @PluginMethod
+    fun requestAllFilesAccess(call: PluginCall) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            // Pre-Android 11: use the normal runtime permission flow.
+            val ret = JSObject(); ret.put("ok", true); ret.put("opened_settings", false); call.resolve(ret); return
+        }
+        if (Environment.isExternalStorageManager()) {
+            val ret = JSObject(); ret.put("ok", true); ret.put("already_granted", true); call.resolve(ret); return
+        }
+        try {
+            val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+            intent.data = Uri.parse("package:" + context.packageName)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            // Fallback to the global all-files-access screen if the per-app one isn't available.
+            try {
+                val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(intent)
+            } catch (e2: Exception) {
+                call.reject("Could not open settings: " + e2.message)
+                return
+            }
+        }
+        val ret = JSObject(); ret.put("ok", true); ret.put("opened_settings", true); call.resolve(ret)
+    }
+
+        @com.getcapacitor.annotation.PermissionCallback
     private fun permissionCallback(call: PluginCall) {
         val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
         if (granted) beginListening()
@@ -181,6 +233,20 @@ class CallerIdPlugin : Plugin() {
         receiver = r
         // Start watching the recordings folder so freshly-finished call
         // recordings auto-upload to the CRM with the matching lead_id.
+        // On Android 11+ this needs MANAGE_EXTERNAL_STORAGE ("All files access")
+        // because OEM dialer folders are in scoped storage. We start it
+        // optimistically; if the grant isn't there, the observer's exists()
+        // check will silently return null and we emit a needsAllFilesAccess
+        // event so the JS layer can render a "tap to enable" banner.
+        val hasAccess = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+            Environment.isExternalStorageManager()
+        else
+            true
+        if (!hasAccess) {
+            val data = JSObject()
+            data.put("reason", "MANAGE_EXTERNAL_STORAGE not granted")
+            notifyListeners("needsAllFilesAccess", data)
+        }
         recordingObserver = RecordingObserver.startIfPossible(context)
     }
 
