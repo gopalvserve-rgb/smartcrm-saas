@@ -4782,19 +4782,40 @@ function renderRecordingItem(r) {
     preload: 'none',
     src: _audioUrl
   });
-  // Surface playback failures. Browsers normally just show a broken
-  // control with zero feedback; this fetches the URL via XHR to read
-  // the HTTP status and tells the user why.
+  // Download fallback — always available, just below the player. Critical
+  // for recordings the browser can't decode (AMR-in-3GP from Samsung
+  // dialer especially) — the user can save the file and play it locally
+  // in any media player that handles AMR.
+  const _dlLink = h('a', {
+    href: _audioUrl,
+    download: 'recording-' + r.id + '.m4a',
+    style: { fontSize: '.75rem', color: '#64748b', marginLeft: '.5rem', textDecoration: 'underline' },
+    title: 'Download the original recording file'
+  }, '⬇ Download');
+  // Surface playback failures with a smart message. The audio endpoint
+  // sets X-Audio-Browser-Playable: 0 for codecs the browser can't decode
+  // natively (AMR-in-3GP etc.) — when we see that we don't blame 'broken
+  // server' and instead point at the download link.
   audio.addEventListener('error', async () => {
     try {
       const r2 = await fetch(_audioUrl);
-      const txt = await r2.text().catch(() => '');
-      const msg = '🎧 Playback failed: HTTP ' + r2.status + (txt ? ' — ' + txt.slice(0, 120) : '');
-      console.warn('[leadcrm] audio error', r.id, msg);
-      if (typeof toast === 'function') toast(msg, 'err');
+      const playable = r2.headers.get('X-Audio-Browser-Playable');
+      const mime     = r2.headers.get('X-Audio-Detected-Mime') || '';
+      let msg;
+      if (playable === '0') {
+        msg = '🎧 Your phone recorded this call in ' + (mime || 'AMR/3GP') + ' format — Chrome and the in-app player can\'t decode it. Click ⬇ Download to play it in any external media player.';
+      } else {
+        const txt = await r2.text().catch(() => '');
+        msg = '🎧 Playback failed: HTTP ' + r2.status + (txt && txt.length < 200 ? ' — ' + txt.slice(0, 120) : '');
+      }
+      console.warn('[leadcrm] audio error', r.id, 'playable=' + playable + ' mime=' + mime);
+      if (typeof toast === 'function') toast(msg, playable === '0' ? 'warn' : 'err');
+      // Visually nudge the user toward the download link.
+      _dlLink.style.color = '#dc2626';
+      _dlLink.style.fontWeight = '600';
     } catch (e) {
       console.warn('[leadcrm] audio error (no detail)', r.id, e);
-      if (typeof toast === 'function') toast('🎧 Playback failed — see console', 'err');
+      if (typeof toast === 'function') toast('🎧 Playback failed — try ⬇ Download', 'err');
     }
   });
   const aiBlock = h('div', { class: 'rec-ai-block' });
@@ -4804,7 +4825,8 @@ function renderRecordingItem(r) {
     h('div', { class: 'rec-meta' },
       h('span', { class: 'rec-dir' }, dirIcon),
       h('b', {}, r.lead_name || r.phone || '—'),
-      h('span', { class: 'muted' }, ' · ' + fmtDate(r.created_at, 'relative') + ' · ' + mm + ':' + ss)
+      h('span', { class: 'muted' }, ' · ' + fmtDate(r.created_at, 'relative') + ' · ' + mm + ':' + ss),
+      _dlLink
     ),
     audio,
     aiBlock

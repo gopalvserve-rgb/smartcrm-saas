@@ -1132,10 +1132,52 @@ app.get('/api/recordings/:id/audio', async (req, res, next) => {
         if (!Buffer.isBuffer(buf)) buf = Buffer.from(buf);
         const total = buf.length;
         if (total === 0) return res.status(410).json({ error: 'recording has zero bytes' });
-        // Normalise MIME: 'audio/m4a' → 'audio/mp4' for broader decoder
-        // support (Chrome / Android WebView). Keep other types as-is.
+        // Sniff the actual container from the first 16 bytes — Samsung's
+        // OEM call recorder often writes a 3GP container (with AMR codec
+        // inside) but the upload pipeline tagged it as 'audio/m4a' because
+        // of the filename or the multipart MIME guess. Browsers refuse to
+        // decode AMR, so sending the wrong Content-Type silently breaks
+        // playback. Sniffing gives us the truth.
+        //
+        // ISO Base Media File Format header layout:
+        //   [4 bytes: box size][4 bytes: 'ftyp'][4 bytes: major brand]…
+        // Common major brands:
+        //   'M4A '  → AAC-in-MP4 (plays everywhere)         → audio/mp4
+        //   'mp42'  → MP4 v2 (plays everywhere)             → audio/mp4
+        //   'isom'  → MP4 base (plays everywhere)           → audio/mp4
+        //   '3gp4'  → 3GPP r4 (usually AMR audio — NO browser decoder)
+        //   '3gp5'  → 3GPP r5 (same)
+        //   '3gp6'  → 3GPP r6 (same)
         let mime = row.mime_type || 'audio/mp4';
-        if (mime === 'audio/m4a' || /\.m4a$/i.test(String(req.params.id))) mime = 'audio/mp4';
+        let codec_playable = true;
+        if (total >= 16) {
+          const ftypMarker = buf.slice(4, 8).toString('ascii');
+          const brand      = buf.slice(8, 12).toString('ascii').trim();
+          if (ftypMarker === 'ftyp') {
+            if (brand === 'M4A' || brand === 'mp42' || brand === 'isom' || brand === 'iso2' || brand === 'mp41') {
+              mime = 'audio/mp4';
+            } else if (brand.indexOf('3gp') === 0 || brand === '3gpp' || brand === '3g2a') {
+              mime = 'audio/3gpp';
+              codec_playable = false;  // AMR-in-3GP — browser won't decode
+            }
+          } else if (buf.slice(0, 4).toString('ascii') === '#!AM') {
+            // '#!AMR\n' standalone AMR file
+            mime = 'audio/amr';
+            codec_playable = false;
+          } else if (buf[0] === 0xFF && (buf[1] & 0xE0) === 0xE0) {
+            // MPEG audio frame sync — could be MP3
+            mime = 'audio/mpeg';
+          } else if (buf.slice(0, 4).toString('ascii') === 'RIFF') {
+            mime = 'audio/wav';
+          } else if (buf.slice(0, 4).toString('ascii') === 'OggS') {
+            mime = 'audio/ogg';
+          }
+        }
+        // Tell the SPA whether this is a codec the browser is likely
+        // to decode. The audio element's onerror will check this and
+        // surface a download-fallback message if false.
+        res.setHeader('X-Audio-Browser-Playable', codec_playable ? '1' : '0');
+        res.setHeader('X-Audio-Detected-Mime', mime);
         // Range request handling — <audio> issues these when the user
         // scrubs the seek bar. Without proper 206 support some browsers
         // refuse to play. Single-range only (the common case).
