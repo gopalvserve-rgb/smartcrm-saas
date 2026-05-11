@@ -101,6 +101,20 @@ function _sampleUrl(ext /* 'csv' | 'xls' */) {
   }
   return base;
 }
+
+// ----- Tenant-aware /api/wa/media URL ------------------------------
+// <img src> / <a href> bypass the fetch monkey-patch, so they need
+// the /t/<slug>/ prefix baked in manually. Inbound chat images were
+// rendering broken because we built '/api/wa/media/<id>' which 404s.
+function _waMediaUrl(msgId, token) {
+  if (!msgId) return '';
+  const base = '/api/wa/media/' + msgId + (token ? '?token=' + encodeURIComponent(token) : '');
+  if (typeof window !== 'undefined' && window.TENANT_SLUG) {
+    return '/t/' + window.TENANT_SLUG + base;
+  }
+  return base;
+}
+
 function _attachSampleLink(el, ext) {
   if (!el) return;
   el.href = _sampleUrl(ext);
@@ -9945,7 +9959,7 @@ function renderWaMessageMedia(msg) {
   // without needing a header.
   let url = msg.media_url || '';
   if (!url && msg.media_id && msg.id && CRM.token) {
-    url = '/api/wa/media/' + msg.id + '?token=' + encodeURIComponent(CRM.token);
+    url = _waMediaUrl(msg.id, CRM.token);
   }
   if (t === 'image') {
     if (!url) return h('div', { class: 'wb-msg-media muted' }, '🖼 [image]');
@@ -20798,7 +20812,7 @@ function _initFloatingChat() {
         // Inline media preview when present
         if (m.media_url || m.media_id) {
           const isImage = m.message_type === 'image' || /^image\//.test(m.mime_type || '');
-          const mediaUrl = m.media_url || (m.id && CRM.token ? '/api/wa/media/' + m.id + '?t=' + encodeURIComponent(CRM.token) : '');
+          const mediaUrl = m.media_url || (m.id && CRM.token ? _waMediaUrl(m.id, CRM.token) : '');
           if (isImage && mediaUrl) {
             const img = document.createElement('img');
             img.src = mediaUrl;
