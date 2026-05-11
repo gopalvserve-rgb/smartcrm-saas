@@ -8852,10 +8852,33 @@ async function wbConnect() {
       'Click the button below to link your WhatsApp Business Account. You\'ll be asked to log into Facebook, pick the business and phone number you want to use, and Meta will send everything back to us automatically — no API keys to copy or paste.'));
     introCard.appendChild(h('button', {
       class: 'btn-fb-meta',
-      onclick: () => startEmbeddedSignup(s.fb_app_id, s.fb_config_id, { coexistence: String(s.coexistence_mode || cfg.WHATSAPP_COEXISTENCE_MODE || '') === '1' })
+      onclick: () => {
+        try {
+          console.log('[wb-connect] click → fb_app_id=' + (s && s.fb_app_id) + ' fb_config_id=' + (s && s.fb_config_id) + ' coexistence=' + (s && s.coexistence_mode) + ' FBready=' + !!(window.FB && window.FB.login));
+          if (!s || !s.fb_app_id || !s.fb_config_id) {
+            toast('Embedded Login is not available — platform Facebook config is missing. Falling back to server-side OAuth…', 'warn');
+            connectFacebookServerFlow();
+            return;
+          }
+          startEmbeddedSignup(s.fb_app_id, s.fb_config_id, { coexistence: String(s.coexistence_mode || cfg.WHATSAPP_COEXISTENCE_MODE || '') === '1' });
+        } catch (e) {
+          console.error('[wb-connect] click error:', e);
+          toast('Could not start embedded login: ' + (e && e.message ? e.message : String(e)) + ' — trying server OAuth fallback.', 'err');
+          try { connectFacebookServerFlow(); } catch (_) {}
+        }
+      }
     },
       h('span', { class: 'fb-icon' }, '🅵'),
       ' Connect with Facebook'
+    ));
+    // Fallback link — if the embedded popup is blocked or doesn't open
+    // (ad-blockers, popup blockers, restrictive enterprise browsers),
+    // the user can use the server-side OAuth flow which is just a
+    // full-page redirect (no popup involved).
+    introCard.appendChild(h('p', { style: { marginTop: '.6rem', marginBottom: 0, fontSize: '.85rem' } },
+      h('a', { href: '#', style: { color: '#1d4ed8' },
+        onclick: ev => { ev.preventDefault(); connectFacebookServerFlow(); }
+      }, 'Or use the server-side login (no popup) →')
     ));
     introCard.appendChild(h('p', { class: 'muted', style: { fontSize: '.78rem', marginTop: '1rem', marginBottom: 0 } },
       '🔒 You stay in control — Meta only shares the WABA and phone number you select.'));
