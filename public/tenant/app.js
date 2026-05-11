@@ -1849,6 +1849,7 @@ VIEWS.leads = async (view) => {
     h('button', { class: 'btn sm', onclick: bulkAssignPrompt }, '👤 Assign'),
     h('button', { class: 'btn sm', onclick: bulkStatusPrompt }, '🏷️ Status'),
     h('button', { class: 'btn sm', onclick: bulkAddTagPrompt }, '🏁 Add tag'),
+    h('button', { class: 'btn sm', onclick: bulkCustomFieldPrompt, title: 'Set a custom-field value on every selected lead' }, '🧩 Field'),
     h('button', { class: 'btn sm', onclick: bulkWhatsAppPrompt }, '💬 WhatsApp'),
     h('button', { class: 'btn sm', onclick: bulkCampaignPrompt }, '🎯 Campaign'),
     h('button', { class: 'btn sm danger', onclick: bulkDelete }, '🗑️ Delete'),
@@ -2861,6 +2862,89 @@ async function bulkAddTagPrompt() {
     try { await api('api_leads_update', l.id, { tags: existing.join(', ') }); } catch (_) {}
   }
   toast('Tag added'); clearSelection(); loadLeads();
+}
+
+/**
+ * Bulk-set a custom field's value on every selected lead.
+ * - Dropdown of active custom fields (key + label from CRM.cache.customFields)
+ * - Value input adapts to the field's `type`:
+ *     select  → <select> with the configured options
+ *     date    → <input type="date">
+ *     number  → <input type="number">
+ *     boolean → checkbox (Yes / No)
+ *     other   → free-form text
+ * - Empty value clears the field for every selected lead (sets extra_json[key] = '').
+ * Backend merges into each lead's existing extra_json so other CF values are preserved.
+ */
+async function bulkCustomFieldPrompt() {
+  const ids = selectedIds(); if (!ids.length) return;
+  const cfList = (CRM.cache.customFields || []).filter(c => Number(c.is_active) !== 0 && c.key);
+  if (!cfList.length) {
+    return toast('No custom fields defined yet. Add one in Settings → Custom fields.', 'warn');
+  }
+
+  const fieldSel = h('select', { id: 'bulk-cf-field', style: { minWidth: '200px' } },
+    ...cfList.map(c => h('option', { value: c.key }, c.label || c.key))
+  );
+  const valueWrap = h('div', { id: 'bulk-cf-value-wrap', style: { marginTop: '.4rem' } });
+
+  function renderValueInput() {
+    const cf = cfList.find(c => c.key === fieldSel.value);
+    valueWrap.innerHTML = '';
+    if (!cf) return;
+    const t = String(cf.type || 'text').toLowerCase();
+    let el;
+    if (t === 'select' || t === 'dropdown') {
+      const opts = String(cf.options || '').split(/[,;|\n]/).map(s => s.trim()).filter(Boolean);
+      el = h('select', { id: 'bulk-cf-value', style: { minWidth: '220px' } },
+        h('option', { value: '' }, '— Clear / no value —'),
+        ...opts.map(o => h('option', { value: o }, o))
+      );
+    } else if (t === 'date') {
+      el = h('input', { id: 'bulk-cf-value', type: 'date', style: { minWidth: '180px' } });
+    } else if (t === 'number') {
+      el = h('input', { id: 'bulk-cf-value', type: 'number', style: { minWidth: '180px' } });
+    } else if (t === 'boolean' || t === 'checkbox' || t === 'bool') {
+      el = h('select', { id: 'bulk-cf-value', style: { minWidth: '180px' } },
+        h('option', { value: '' }, '— No change / clear —'),
+        h('option', { value: '1' }, 'Yes'),
+        h('option', { value: '0' }, 'No')
+      );
+    } else {
+      el = h('input', { id: 'bulk-cf-value', type: 'text', placeholder: 'New value (leave blank to clear)', style: { minWidth: '260px' } });
+    }
+    valueWrap.appendChild(h('label', { style: { display: 'block', marginTop: '.5rem' } }, 'Value'));
+    valueWrap.appendChild(el);
+    valueWrap.appendChild(h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } },
+      'Leaving the value blank clears the field on every selected lead. Other custom-field values are preserved.'));
+  }
+  fieldSel.onchange = renderValueInput;
+
+  const modal = h('div', { class: 'modal-backdrop' }, h('div', { class: 'modal' },
+    h('h3', {}, '🧩 Set custom field on ' + ids.length + ' leads'),
+    h('label', { style: { display: 'block' } }, 'Field'),
+    fieldSel,
+    valueWrap,
+    h('div', { class: 'actions', style: { marginTop: '.85rem' } },
+      h('button', { class: 'btn', onclick: () => modal.remove() }, 'Cancel'),
+      h('button', { class: 'btn primary', onclick: async (ev) => {
+        const btn = ev.currentTarget; btn.disabled = true;
+        try {
+          const key = fieldSel.value;
+          const valEl = document.getElementById('bulk-cf-value');
+          const val = valEl ? valEl.value : '';
+          await api('api_leads_bulkUpdate', ids, { extra: { [key]: val } });
+          toast('✅ Updated ' + ids.length + ' leads');
+          modal.remove(); clearSelection(); loadLeads();
+        } catch (e) {
+          btn.disabled = false;
+          toast(e.message, 'err');
+        }
+      } }, 'Apply')
+    )
+  ));
+  document.body.appendChild(modal);
+  renderValueInput();
 }
 async function bulkDelete() {
   const ids = selectedIds(); if (!ids.length) return;

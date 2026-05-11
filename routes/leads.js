@@ -1285,6 +1285,12 @@ async function api_leads_bulkUpdate(token, leadIds, patch) {
   const allowed = {};
   ['assigned_to', 'status_id', 'source', 'product_id'].forEach(k => { if (k in patch) allowed[k] = patch[k]; });
   if (patch.status_id) allowed.last_status_change_at = db.nowIso();
+  // Per-lead extra_json merge: bulk custom-field edit. patch.extra is an
+  // object whose keys map to CF keys. We can't put it in `allowed` (which
+  // is applied identically to every lead) because we need to MERGE with
+  // each lead's existing extra_json — not overwrite. Done inside the
+  // per-lead loop below.
+  const extraPatch = (patch.extra && typeof patch.extra === 'object') ? patch.extra : null;
   // Track per-assignee bulk pushes — one summary push per recipient instead of
   // 200 spammy banners if you reassign 200 leads.
   const reassignedPerUser = {}; // userId -> [leadName, leadName, ...]
@@ -1294,7 +1300,14 @@ async function api_leads_bulkUpdate(token, leadIds, patch) {
   for (const id of (leadIds || [])) {
     const lead = await db.findById('leads', id); if (!lead) continue;
     const wasAssignedTo = Number(lead.assigned_to) || 0;
-    await db.update('leads', id, allowed);
+    let perLeadAllowed = allowed;
+    if (extraPatch) {
+      const curr = _parseExtra(lead);
+      perLeadAllowed = Object.assign({}, allowed, {
+        extra_json: JSON.stringify(Object.assign({}, curr, extraPatch))
+      });
+    }
+    await db.update('leads', id, perLeadAllowed);
     if (patch.status_id && Number(patch.status_id) !== Number(lead.status_id)) {
       const s = await db.findById('statuses', patch.status_id);
       await db.insert('remarks', { lead_id: id, user_id: me.id, remark: 'Status changed to ' + (s ? s.name : '') + ' (bulk)', status_id: patch.status_id });
