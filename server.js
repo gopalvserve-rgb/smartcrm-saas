@@ -833,9 +833,39 @@ const _recUpload = _multer({
   storage: _multer.memoryStorage(),
   limits: { fileSize: 100 * 1024 * 1024 }
 });
-app.post('/api/recordings', _recUpload.single('audio'), (req, res, next) => {
-  if (!req.tenant) return res.status(404).json({ error: 'Tenant not found' });
+app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) => {
+  // Tenant-agnostic upload: if the request didn't come through /t/<slug>/
+  // (e.g. the native APK posts directly to /api/recordings), resolve the
+  // tenant from the auth token. The JWT only carries user.id — we walk
+  // active tenants and find the one whose users table has that id. This
+  // makes the endpoint work for EVERY tenant with zero URL coupling.
   const tenantDb = require('./db/pg');
+  if (!req.tenant) {
+    try {
+      const jwt = require('jsonwebtoken');
+      const _JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
+      const raw = (req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+      if (!raw) return res.status(401).json({ error: 'No auth token' });
+      let decoded;
+      try { decoded = jwt.verify(raw, _JWT_SECRET); }
+      catch (e) { return res.status(401).json({ error: 'Invalid or expired token' }); }
+      const uid = Number(decoded && decoded.id);
+      if (!uid) return res.status(401).json({ error: 'Token has no user id' });
+      const t = await _findTenantByLookup(
+        'SELECT 1 FROM users WHERE id = $1 AND COALESCE(is_active, 1) = 1 LIMIT 1',
+        [uid]
+      );
+      if (!t) return res.status(404).json({ error: 'No active tenant found for this user' });
+      const pool = tenantPoolMod.poolFor(t);
+      if (!pool) return res.status(500).json({ error: 'tenant pool unavailable' });
+      req.tenant = t;
+      req.tenantPool = pool;
+      req.tenantSlug = t.slug;
+    } catch (e) {
+      console.error('[/api/recordings] tenant-from-token failed:', e.message);
+      return res.status(500).json({ error: 'tenant resolution failed: ' + e.message });
+    }
+  }
   return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug },
     async () => {
       try {
