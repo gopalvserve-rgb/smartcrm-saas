@@ -160,7 +160,7 @@ const SCHEMA = {
     json: []
   },
   products: {
-    columns: ['name', 'description', 'price', 'is_active'],
+    columns: ['name', 'description', 'price', 'is_active', 'gst_pct', 'image_url'],
     json: []
   },
   custom_fields: {

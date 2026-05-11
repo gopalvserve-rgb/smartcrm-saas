@@ -16258,18 +16258,38 @@ async function adminProducts() {
 
   const tbl = h("table", { class: "mini-table" },
     h("thead", {}, h("tr", {},
+      h("th", {}, "Image"),
       h("th", {}, "Name"),
       h("th", {}, "Description"),
-      h("th", { style: { width: "110px", textAlign: "right" } }, "Price (₹)"),
+      h("th", { style: { width: "100px", textAlign: "right" } }, "Price (₹)"),
+      h("th", { style: { width: "80px", textAlign: "right" } }, "GST %"),
       h("th", { style: { width: "170px" } }, "")
     )),
     h("tbody", {}, ...(products.length === 0
-      ? [h("tr", {}, h("td", { colspan: 4, class: "muted", style: { textAlign: "center", padding: "1rem" } },
+      ? [h("tr", {}, h("td", { colspan: 6, class: "muted", style: { textAlign: "center", padding: "1rem" } },
           "No products yet — add your first product below."))]
       : products.map(p => h("tr", {},
+          h("td", { style: { width: "70px" } },
+            (() => {
+              const wrap = h("div", { style: { display: "flex", flexDirection: "column", gap: ".2rem" } });
+              const previewImg = h("img", {
+                src: p.image_url || "",
+                alt: "",
+                style: { width: "48px", height: "48px", objectFit: "cover", borderRadius: "4px", border: "1px solid #e2e8f0", display: p.image_url ? "block" : "none" }
+              });
+              const urlInp = h("input", { type: "text", placeholder: "Image URL", value: p.image_url || "", "data-id": p.id, "data-field": "image_url", style: { width: "100%", fontSize: ".75rem" } });
+              urlInp.addEventListener("input", () => {
+                previewImg.src = urlInp.value;
+                previewImg.style.display = urlInp.value ? "block" : "none";
+              });
+              wrap.appendChild(previewImg); wrap.appendChild(urlInp);
+              return wrap;
+            })()
+          ),
           h("td", {}, h("input", { value: p.name, "data-id": p.id, "data-field": "name", style: { width: "100%" } })),
           h("td", {}, h("input", { value: p.description || "", "data-id": p.id, "data-field": "description", placeholder: "Optional description", style: { width: "100%" } })),
           h("td", { style: { textAlign: "right" } }, h("input", { type: "number", min: "0", step: "0.01", value: Number(p.price) || 0, "data-id": p.id, "data-field": "price", style: { width: "100%", textAlign: "right" } })),
+          h("td", { style: { textAlign: "right" } }, h("input", { type: "number", min: "0", max: "100", step: "0.01", value: Number(p.gst_pct) || 0, "data-id": p.id, "data-field": "gst_pct", title: "GST percentage applied when this product is added to a quotation", style: { width: "100%", textAlign: "right" } })),
           h("td", { style: { whiteSpace: "nowrap" } },
             h("button", { class: "btn sm primary", title: "Save changes to this row",
               onclick: async () => {
@@ -16305,7 +16325,9 @@ async function adminProducts() {
         await api("api_products_save", {
           name,
           description: String(f.d.value || ""),
-          price: Number(f.p.value) || 0
+          price: Number(f.p.value) || 0,
+          gst_pct: Number(f.g.value) || 0,
+          image_url: String(f.img.value || "").trim() || null
         });
         toast("Product added");
         await warmCache();
@@ -16315,7 +16337,9 @@ async function adminProducts() {
   },
     h("input", { name: "n", placeholder: "Product name (e.g. Premium Plan, 2 BHK Flat)", required: true, style: { flex: "1 1 220px" } }),
     h("input", { name: "d", placeholder: "Description (optional)", style: { flex: "2 1 280px" } }),
-    h("input", { name: "p", type: "number", min: "0", step: "0.01", placeholder: "Price (₹)", value: "0", style: { width: "130px" } }),
+    h("input", { name: "p", type: "number", min: "0", step: "0.01", placeholder: "Price (₹)", value: "0", style: { width: "120px" } }),
+    h("input", { name: "g", type: "number", min: "0", max: "100", step: "0.01", placeholder: "GST %", value: "0", title: "GST percentage — auto-applied to quotation lines using this product", style: { width: "90px" } }),
+    h("input", { name: "img", placeholder: "Image URL (optional) — shown on quotations", style: { flex: "1 1 240px" } }),
     h("button", { type: "submit", class: "btn primary" }, "+ Add product")
   ));
   return card;

@@ -58,20 +58,44 @@ async function _nextNumber() {
 }
 
 function _recomputeTotals(items, discount_pct, tax_pct) {
+  // Per-line GST: if any line carries its own gst_pct (set when adding a
+  // product with GST configured), tax is the sum of per-line GST.
+  // Otherwise fall back to the quotation-level tax_pct for backwards compat.
   let subtotal = 0;
-  (items || []).forEach(it => {
-    const qty = Number(it.quantity || 0);
+  let perLineTax = 0;
+  let anyLineHasGst = false;
+  for (const it of (items || [])) {
+    const qty   = Number(it.quantity   || 0);
     const price = Number(it.unit_price || 0);
-    const lineDisc = Number(it.discount_pct || 0);
-    const gross = qty * price;
-    const line = gross - (gross * lineDisc / 100);
-    it.amount = Number(line.toFixed(2));
+    const disc  = Number(it.discount_pct || 0);
+    let line = qty * price;
+    line = line - (line * disc / 100);
+    line = Number(line.toFixed(2));
+    it.amount = line;
     subtotal += line;
-  });
+    const lineGst = Number(it.gst_pct || 0);
+    if (lineGst > 0) {
+      anyLineHasGst = true;
+      const tax = Number((line * lineGst / 100).toFixed(2));
+      it.tax_amt = tax;
+      perLineTax += tax;
+    } else {
+      it.tax_amt = 0;
+    }
+  }
   subtotal = Number(subtotal.toFixed(2));
   const discAmt = Number((subtotal * Number(discount_pct || 0) / 100).toFixed(2));
   const taxable = subtotal - discAmt;
-  const taxAmt = Number((taxable * Number(tax_pct || 0) / 100).toFixed(2));
+  let taxAmt;
+  if (anyLineHasGst) {
+    // Re-apply line-level GST after the global discount has reduced each
+    // line proportionally. Simple approach: scale perLineTax by
+    // (taxable / subtotal). Keeps things consistent when discount > 0.
+    const factor = subtotal > 0 ? (taxable / subtotal) : 1;
+    taxAmt = Number((perLineTax * factor).toFixed(2));
+  } else {
+    taxAmt = Number((taxable * Number(tax_pct || 0) / 100).toFixed(2));
+  }
   const total = Number((taxable + taxAmt).toFixed(2));
   return { subtotal, discount_amt: discAmt, tax_amt: taxAmt, total };
 }
@@ -136,6 +160,10 @@ async function _ensureTables() {
       created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
     await db.query(`CREATE INDEX IF NOT EXISTS idx_qitems_quote ON quotation_items(quotation_id, position)`);
+    // Self-healing migration — per-line GST + product image (May 2026)
+    await db.query(`ALTER TABLE quotation_items ADD COLUMN IF NOT EXISTS gst_pct NUMERIC(5,2) NOT NULL DEFAULT 0`);
+    await db.query(`ALTER TABLE quotation_items ADD COLUMN IF NOT EXISTS product_image_url TEXT`);
+    await db.query(`ALTER TABLE quotation_items ADD COLUMN IF NOT EXISTS tax_amt NUMERIC(12,2) NOT NULL DEFAULT 0`);
     if (pool) _ensuredPools.add(pool);
   } catch (e) {
     console.warn('[quotations] _ensureTables failed:', e.message);
@@ -260,12 +288,26 @@ async function api_quotations_save(token, payload) {
   const newId = ins.rows[0].id;
   let pos = 1;
   for (const it of items) {
+    // Auto-fill gst_pct + image from the product row if not supplied
+    let lineGst = Number(it.gst_pct || 0);
+    let lineImg = it.product_image_url || null;
+    if (it.product_id && (!lineGst || !lineImg)) {
+      try {
+        const pRow = await db.query('SELECT gst_pct, image_url FROM products WHERE id = $1', [Number(it.product_id)]);
+        if (pRow.rows.length) {
+          if (!lineGst) lineGst = Number(pRow.rows[0].gst_pct || 0);
+          if (!lineImg) lineImg = pRow.rows[0].image_url || null;
+        }
+      } catch (_) {}
+    }
+    const lineTax = Number(((Number(it.amount || 0)) * lineGst / 100).toFixed(2));
     await db.query(
-      `INSERT INTO quotation_items (quotation_id, position, product_id, description, quantity, unit_price, discount_pct, amount)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      `INSERT INTO quotation_items (quotation_id, position, product_id, description, quantity, unit_price, discount_pct, amount, gst_pct, tax_amt, product_image_url)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
       [newId, pos++, it.product_id || null, String(it.description).slice(0, 500),
        Number(it.quantity || 0), Number(it.unit_price || 0),
-       Number(it.discount_pct || 0), Number(it.amount || 0)]
+       Number(it.discount_pct || 0), Number(it.amount || 0),
+       lineGst, lineTax, lineImg]
     );
   }
   return await api_quotations_get(token, newId);
@@ -319,15 +361,24 @@ async function _renderHtml(quotation, items, brandConfig) {
   const primary = (brandConfig && brandConfig.BRAND_PRIMARY_COLOR) || '#6366f1';
   const validUntil = q.valid_until ? new Date(q.valid_until).toLocaleDateString('en-IN') : '';
   const issue = q.issue_date ? new Date(q.issue_date).toLocaleDateString('en-IN') : '';
-  const itemsHtml = items.map(it => `
+  const itemsHtml = items.map(it => {
+    const img = it.product_image_url
+      ? `<img src="${_esc(it.product_image_url)}" alt="" style="width:44px;height:44px;object-fit:cover;border-radius:4px;border:1px solid #e2e8f0;vertical-align:middle;margin-right:8px"/>`
+      : '';
+    const gstCell = Number(it.gst_pct || 0) > 0
+      ? `<td style="text-align:right">${Number(it.gst_pct)}%</td>`
+      : `<td style="text-align:right">—</td>`;
+    return `
     <tr>
-      <td>${_esc(it.description)}</td>
+      <td>${img}<span style="vertical-align:middle">${_esc(it.description)}</span></td>
       <td style="text-align:right">${Number(it.quantity || 0)}</td>
       <td style="text-align:right">${fmt(it.unit_price)}</td>
       <td style="text-align:right">${Number(it.discount_pct || 0)}%</td>
+      ${gstCell}
       <td style="text-align:right">${fmt(it.amount)}</td>
     </tr>
-  `).join('');
+  `;
+  }).join('');
   return `<!doctype html>
 <html><head>
 <meta charset="utf-8"/>
@@ -384,9 +435,10 @@ async function _renderHtml(quotation, items, brandConfig) {
       <th style="text-align:right">Qty</th>
       <th style="text-align:right">Unit price</th>
       <th style="text-align:right">Disc</th>
+      <th style="text-align:right">GST</th>
       <th style="text-align:right">Amount</th>
     </tr></thead>
-    <tbody>${itemsHtml || '<tr><td colspan="5" style="text-align:center;color:#94a3b8">No line items</td></tr>'}</tbody>
+    <tbody>${itemsHtml || '<tr><td colspan="6" style="text-align:center;color:#94a3b8">No line items</td></tr>'}</tbody>
   </table>
   <div class="totals">
     <div><span>Subtotal</span><span>${fmt(q.subtotal)}</span></div>
