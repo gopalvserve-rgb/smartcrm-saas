@@ -5416,7 +5416,7 @@ function renderHistoryItem(r) {
 function renderRecordingsList() {
   const wrap = h('div', { class: 'dialer-history' });
   // Toolbar at the top: Refresh + Reset all (admin only).
-  const toolbar = h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', padding: '.5rem .25rem', borderBottom: '1px solid #e5e7eb', marginBottom: '.5rem' } });
+  const toolbar = h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '.5rem', alignItems: 'center', padding: '.5rem .25rem', borderBottom: '1px solid #e5e7eb', marginBottom: '.5rem' } });
   const refreshBtn = h('button', { class: 'btn sm', onclick: () => {
     const body = _dialerState && _dialerState.view && _dialerState.view.querySelector('.dialer-body');
     if (body) { body.innerHTML = ''; body.appendChild(renderRecordingsList()); }
@@ -5467,8 +5467,13 @@ function renderRecordingsList() {
       }
     }, '🔗 Relink orphans');
     toolbar.appendChild(relinkBtn);
-    toolbar.appendChild(h('span', { class: 'muted', style: { fontSize: '.78rem' } },
-      'Reset wipes everything · Relink re-matches recordings with empty lead_id to existing leads by phone.'));
+    // Description sits in its OWN full-width row below the buttons so it
+    // wraps naturally and doesn't get squeezed into a narrow column on
+    // mobile. flex: '1 1 100%' forces a line break in the flex container.
+    toolbar.appendChild(h('span', {
+      class: 'muted',
+      style: { fontSize: '.78rem', flex: '1 1 100%', marginTop: '.15rem', lineHeight: '1.3' }
+    }, 'Reset wipes everything · Relink re-matches recordings with empty lead_id to existing leads by phone.'));
   }
   wrap.appendChild(toolbar);
 
