@@ -21057,18 +21057,21 @@ function _renderCopilotDrawer() {
   // populates the input + sends — uses the existing send() pipeline so
   // history + thinking-state + quota all behave identically.
   const PRESETS = [
-    { emoji: '\u2728', label: 'New leads today',     q: 'How many new leads came in today? Show me the list.' },
-    { emoji: '\uD83D\uDD25', label: 'Hot leads',    q: 'Show me all hot leads (AI heat score) sorted by most recent.' },
-    { emoji: '\u23F0', label: 'Overdue follow-ups', q: 'Which leads have overdue follow-ups? Sort by oldest first.' },
-    { emoji: '\uD83D\uDCC5', label: 'Today\'s calls', q: 'List today\'s calls — incoming, outgoing, missed.' },
+    { emoji: '\u2B50', label: 'Today\'s highlights',   q: 'Give me today\'s important highlights — new leads, hot leads, deals closed, missed calls, and anything that needs my attention right now.' },
+    { emoji: '\u23F0', label: 'Today\'s due follow-ups', q: 'Which follow-ups are due today (including any overdue ones)? Sort by oldest first and show the assigned employee.' },
+    { emoji: '\u260E\uFE0F', label: 'Missed calls',     q: 'Show today\'s missed calls with the lead name and the rep they\'re assigned to.' },
+    { emoji: '\uD83D\uDC65', label: 'Team performance', q: 'Team performance this month — leads handled, calls made, conversions, and revenue per employee. Rank from best to worst.' },
+    { emoji: '\u26A0\uFE0F', label: 'TAT violators',    q: 'Which employees have TAT violations? Show the count of breached leads per rep and the worst offenders.' },
+    { emoji: '\u2728', label: 'New leads today',        q: 'How many new leads came in today? Show me the list.' },
+    { emoji: '\uD83D\uDD25', label: 'Hot leads',        q: 'Show me all hot leads (AI heat score) sorted by most recent.' },
+    { emoji: '\uD83D\uDCC5', label: 'Today\'s calls',  q: 'List today\'s calls — incoming, outgoing, missed.' },
     { emoji: '\uD83D\uDCDE', label: 'Unattended chats', q: 'Show WhatsApp chats with unread messages waiting on us.' },
-    { emoji: '\uD83C\uDFAF', label: 'My pipeline', q: 'Show my pipeline by status with lead counts and total value.' },
+    { emoji: '\uD83C\uDFAF', label: 'My pipeline',     q: 'Show my pipeline by status with lead counts and total value.' },
     { emoji: '\uD83D\uDCB0', label: 'This month\'s revenue', q: 'How much revenue have we closed this month? Break it down by sales rep.' },
     { emoji: '\uD83D\uDCC8', label: 'Conversion rate', q: 'What\'s my conversion rate this month vs last month?' },
-    { emoji: '\uD83C\uDFC6', label: 'Top performer', q: 'Who\'s the top sales rep this month by closed deals?' },
-    { emoji: '\u26A0\uFE0F', label: 'Stuck deals',  q: 'Which deals have been in the same status for more than 7 days?' },
-    { emoji: '\uD83D\uDD0D', label: 'No activity 7d', q: 'Show leads with no remark, call, or message in the last 7 days.' },
-    { emoji: '\uD83D\uDCCB', label: 'My tasks',     q: 'What\'s on my plate today? List my pending tasks and follow-ups.' }
+    { emoji: '\uD83C\uDFC6', label: 'Top performer',   q: 'Who\'s the top sales rep this month by closed deals?' },
+    { emoji: '\u26A0\uFE0F', label: 'Stuck deals',     q: 'Which deals have been in the same status for more than 7 days?' },
+    { emoji: '\uD83D\uDD0D', label: 'No activity 7d',  q: 'Show leads with no remark, call, or message in the last 7 days.' }
   ];
   const presetsRow = h('div', {
     id: 'copilot-presets',
