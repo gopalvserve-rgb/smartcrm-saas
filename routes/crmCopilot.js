@@ -81,6 +81,14 @@ const TOOLS = [
       tat_breached: { type: 'boolean', description: 'Only return leads whose TAT is breached' },
       limit: { type: 'number', description: 'Default 5; max 20' }
     } } },
+  { name: 'list_hot_leads',
+    description: "List leads sorted by AI heat score (highest first). Use for 'show hot leads', 'who's most likely to convert', 'hottest prospects'. Returns leads with heat_score and heat_label (warm/hot/very_hot/on_fire).",
+    parameters: { type: 'object', properties: {
+      min_score: { type: 'number', description: 'Minimum heat_score (default 1 — i.e., any lead with a heat signal)' },
+      level: { type: 'string', description: 'Filter by heat_label: warm, hot, very_hot, or on_fire' },
+      assigned_to: { type: 'string' },
+      limit: { type: 'number', description: 'Default 10; max 25' }
+    } } },
   { name: 'search_leads',
     description: "Free-text search across leads by name, phone, email, or company. Use for 'find lead Rahul', 'search Bright Solutions', 'lookup 9876543210'.",
     parameters: { type: 'object', properties: {
@@ -380,6 +388,44 @@ async function _runTool(name, args, ctx) {
           LIMIT $${params.length}`,
         params
       );
+      return { rows: q.rows, count_returned: q.rows.length };
+    }
+    case 'list_hot_leads': {
+      const limit = Math.max(1, Math.min(25, Number(args.limit || 10)));
+      const params = [];
+      let where = `(l.heat_score IS NOT NULL AND l.heat_score > 0)`;
+      const minScore = Number(args.min_score || 1);
+      if (Number.isFinite(minScore) && minScore > 0) {
+        params.push(minScore); where += ` AND l.heat_score >= $${params.length}`;
+      }
+      if (args.level) {
+        params.push(String(args.level).toLowerCase());
+        where += ` AND LOWER(l.heat_label) = $${params.length}`;
+      }
+      if (args.assigned_to) {
+        const uid = await _resolveUserId(args.assigned_to);
+        if (uid) { params.push(uid); where += ` AND l.assigned_to = $${params.length}`; }
+      }
+      params.push(limit);
+      let q;
+      try {
+        q = await db.query(
+          `SELECT l.id, l.name, l.phone, l.email, l.source, l.value, l.heat_score, l.heat_label,
+                  l.heat_signal, l.created_at,
+                  s.name AS status_name, u.name AS assignee_name
+             FROM leads l
+             LEFT JOIN statuses s ON s.id = l.status_id
+             LEFT JOIN users u   ON u.id = l.assigned_to
+            WHERE ${where}
+            ORDER BY l.heat_score DESC, l.created_at DESC
+            LIMIT $${params.length}`,
+          params
+        );
+      } catch (e) {
+        // heat_* columns might not exist on un-migrated tenants
+        return { rows: [], count_returned: 0,
+                 note: 'AI heat detection not migrated on this tenant yet — open Settings → AI Bot to enable.' };
+      }
       return { rows: q.rows, count_returned: q.rows.length };
     }
     case 'search_leads': {

@@ -177,25 +177,61 @@ async function generate(args) {
   }
 
   let resp, json;
-  try {
-    resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-    json = await resp.json();
-  } catch (e) {
-    return { ok: false, text: '', model, input_tokens: 0, output_tokens: 0,
+  // Retry-with-backoff for transient errors (503/429). Same logic as
+  // generateWithTools — Gemini flash models hiccup at peak, 2-3 retries
+  // with exponential delay usually wins, then fall back to sibling model.
+  let triedFallback = false;
+  let currentModel = model;
+  let currentUrl = url;
+  const MAX_RETRIES = 3;
+  let attempt = 0;
+  let ok = false;
+  while (!ok) {
+    try {
+      resp = await fetch(currentUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      json = await resp.json();
+    } catch (e) {
+      return { ok: false, text: '', model: currentModel, input_tokens: 0, output_tokens: 0,
+               cost_usd: 0, cost_inr_real: 0, cost_inr_billed: 0,
+               finish_reason: null, error: 'Gemini network error: ' + e.message, raw_status: null };
+    }
+    const errMsg = (json && json.error && json.error.message) || '';
+    const isOverloaded = resp.status === 503 || resp.status === 429
+                      || /UNAVAILABLE|RESOURCE_EXHAUSTED|overloaded|high demand|rate.{0,5}limit/i.test(errMsg);
+    if (resp.ok && !json.error) { ok = true; break; }
+    if (isOverloaded && attempt < MAX_RETRIES) {
+      attempt++;
+      const delay = (Math.pow(2, attempt) * 400) + Math.floor(Math.random() * 400);
+      console.warn('[gemini] ' + resp.status + ' on ' + currentModel + ', retry ' + attempt + '/' + MAX_RETRIES + ' in ' + delay + 'ms');
+      await new Promise(r => setTimeout(r, delay));
+      continue;
+    }
+    if (isOverloaded && !triedFallback) {
+      const fallbackModel = currentModel.includes('flash-lite') ? 'gemini-2.0-flash'
+                          : currentModel.includes('flash')      ? 'gemini-2.0-flash-lite'
+                          : null;
+      if (fallbackModel) {
+        triedFallback = true;
+        currentModel = fallbackModel;
+        currentUrl = `${GEMINI_BASE}/models/${encodeURIComponent(fallbackModel)}:generateContent?key=${encodeURIComponent(settings.apiKey)}`;
+        attempt = 0;
+        console.warn('[gemini] retries exhausted on ' + model + ' — fallback to ' + fallbackModel);
+        continue;
+      }
+    }
+    const userMsg = isOverloaded
+      ? 'AI is busy right now (Gemini high-demand). Please try again in a moment.'
+      : (errMsg || ('HTTP ' + resp.status));
+    return { ok: false, text: '', model: currentModel, input_tokens: 0, output_tokens: 0,
              cost_usd: 0, cost_inr_real: 0, cost_inr_billed: 0,
-             finish_reason: null, error: 'Gemini network error: ' + e.message, raw_status: null };
+             finish_reason: null, error: userMsg, raw_status: resp.status };
   }
-  if (!resp.ok || json.error) {
-    return { ok: false, text: '', model, input_tokens: 0, output_tokens: 0,
-             cost_usd: 0, cost_inr_real: 0, cost_inr_billed: 0,
-             finish_reason: null,
-             error: (json && json.error && json.error.message) || ('HTTP ' + resp.status),
-             raw_status: resp.status };
-  }
+  // currentModel may have been swapped if we fell back — reflect in returned record
+  if (currentModel !== model) model = currentModel;
 
   // Extract reply text
   let text = '';
@@ -349,19 +385,60 @@ async function generateWithTools(args) {
     };
     if (args.system) body.systemInstruction = { role: 'system', parts: [{ text: String(args.system) }] };
     if (tools) body.tools = tools;
+    // Retry-with-backoff for transient errors (503 UNAVAILABLE, 429 RESOURCE_EXHAUSTED).
+    // Gemini's flash models occasionally return 'currently experiencing high demand'
+    // for a few seconds at peak. Three retries with exponential delay + jitter
+    // typically converts 90%+ of these into successes. After all retries
+    // exhausted, attempt ONE fallback to a more available sibling model
+    // (flash-lite if we were on flash) before giving up.
     let resp, json;
-    try {
-      resp = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      json = await resp.json();
-    } catch (e) {
-      return { ok: false, text: '', model, input_tokens: inTok, output_tokens: outTok,
+    let triedFallback = false;
+    let currentModel = model;
+    let currentUrl = url;
+    const MAX_RETRIES = 3;
+    let attempt = 0;
+    let retryLoopOk = false;
+    while (!retryLoopOk) {
+      try {
+        resp = await fetch(currentUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        json = await resp.json();
+      } catch (e) {
+        return { ok: false, text: '', model: currentModel, input_tokens: inTok, output_tokens: outTok,
+                 cost_usd: 0, cost_inr_real: 0, cost_inr_billed: 0,
+                 tools_called: toolsCalled, error: 'Gemini network error: ' + e.message };
+      }
+      const errMsg = (json && json.error && json.error.message) || '';
+      const isOverloaded = resp.status === 503 || resp.status === 429
+                        || /UNAVAILABLE|RESOURCE_EXHAUSTED|overloaded|high demand|rate.{0,5}limit/i.test(errMsg);
+      if (resp.ok && !json.error) { retryLoopOk = true; break; }
+      if (isOverloaded && attempt < MAX_RETRIES) {
+        attempt++;
+        const delay = (Math.pow(2, attempt) * 400) + Math.floor(Math.random() * 400);   // 800ms, 1.6s, 3.2s + 0-400ms jitter
+        console.warn('[gemini] ' + resp.status + ' on ' + currentModel + ', retry ' + attempt + '/' + MAX_RETRIES + ' in ' + delay + 'ms — ' + errMsg.slice(0, 100));
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+      // Retries exhausted on a transient error → fallback to a sibling model once.
+      if (isOverloaded && !triedFallback) {
+        const fallbackModel = currentModel.includes('flash-lite') ? 'gemini-2.0-flash'
+                            : currentModel.includes('flash')      ? 'gemini-2.0-flash-lite'
+                            : null;
+        if (fallbackModel) {
+          triedFallback = true;
+          currentModel = fallbackModel;
+          currentUrl = `${GEMINI_BASE}/models/${encodeURIComponent(fallbackModel)}:generateContent?key=${encodeURIComponent(settings.apiKey)}`;
+          attempt = 0;
+          console.warn('[gemini] all retries exhausted on ' + model + ' — falling back to ' + fallbackModel);
+          continue;
+        }
+      }
+      // Non-retriable error, or fallback also failed.
+      const userMsg = isOverloaded
+        ? 'AI is busy right now (Gemini high-demand). Please try again in a moment.'
+        : (errMsg || ('HTTP ' + resp.status));
+      return { ok: false, text: '', model: currentModel, input_tokens: inTok, output_tokens: outTok,
                cost_usd: 0, cost_inr_real: 0, cost_inr_billed: 0,
-               tools_called: toolsCalled, error: 'Gemini network error: ' + e.message };
-    }
-    if (!resp.ok || json.error) {
-      return { ok: false, text: '', model, input_tokens: inTok, output_tokens: outTok,
-               cost_usd: 0, cost_inr_real: 0, cost_inr_billed: 0,
-               tools_called: toolsCalled, error: (json && json.error && json.error.message) || ('HTTP ' + resp.status) };
+               tools_called: toolsCalled, error: userMsg };
     }
     const cand = (json.candidates || [])[0] || {};
     lastFinish = cand.finishReason || null;
