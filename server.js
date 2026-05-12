@@ -1081,6 +1081,76 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
     });
 });
 
+// Admin diag: run ffmpeg -i on the stored bytes and report whether
+// ffmpeg itself can decode them. Returns the head hex of the first 1KB
+// so support can inspect the file format without downloading megabytes.
+app.get('/api/recordings/:id/verify', async (req, res) => {
+  const tenantDb = require('./db/pg');
+  const jwt = require('jsonwebtoken');
+  const _JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
+  try {
+    if (!req.tenant) {
+      const raw = (req.query.token || req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+      if (!raw) return res.status(401).json({ error: 'No auth token' });
+      let decoded; try { decoded = jwt.verify(raw, _JWT_SECRET); } catch (_) { return res.status(401).json({ error: 'Bad token' }); }
+      const uid = Number(decoded && decoded.id);
+      const t = await _findTenantByLookup('SELECT 1 FROM users WHERE id=$1 AND COALESCE(is_active,1)=1 LIMIT 1', [uid]);
+      if (!t) return res.status(404).json({ error: 'No tenant' });
+      req.tenant = t; req.tenantPool = tenantPoolMod.poolFor(t); req.tenantSlug = t.slug;
+    }
+    return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug }, async () => {
+      const r = await tenantDb.query('SELECT mime_type, audio_bytes FROM lead_recordings WHERE id=$1', [Number(req.params.id)]);
+      if (!r.rows[0]) return res.status(404).json({ error: 'not found' });
+      let buf = r.rows[0].audio_bytes;
+      if (!Buffer.isBuffer(buf)) buf = buf ? Buffer.from(buf) : null;
+      if (!buf || buf.length === 0) return res.json({ ok: false, reason: 'no bytes stored', mime_type: r.rows[0].mime_type });
+
+      const fs = require('fs'), os = require('os'), path = require('path');
+      const cp = require('child_process');
+      const tx = require('./utils/audioTranscode');
+      const bin = (tx.getFfmpegBinary && tx.getFfmpegBinary()) || 'ffmpeg';
+      const tmp = path.join(os.tmpdir(), 'verify-' + Date.now());
+      try {
+        fs.writeFileSync(tmp, buf);
+        // 'ffmpeg -i' on its own probes the file and exits — stderr has the
+        // codec/container info or the decode error.
+        let decoded = false;
+        let stderr = '';
+        let durSec = 0;
+        try {
+          // -t 0.1 reads 100ms of audio and dumps to /dev/null — proves
+          // the bitstream is actually decodable, not just structurally OK
+          const out = cp.execFileSync(bin, ['-v', 'error', '-i', tmp, '-t', '0.1', '-f', 'null', '-'], { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] });
+          decoded = true;
+        } catch (e) {
+          stderr = (e.stderr || e.message || '').toString().slice(-1500);
+        }
+        // Also run ffprobe-style query for duration
+        try {
+          const probeOut = cp.execFileSync(bin, ['-v', 'error', '-i', tmp], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] });
+          stderr = stderr || probeOut;
+        } catch (e) {
+          // ffmpeg exits non-zero on -i with no output — stderr has the info
+          stderr = stderr || (e.stderr || '').toString().slice(-1500);
+          const m = /Duration: ([0-9:.]+)/.exec(stderr);
+          if (m) durSec = parseFloat(m[1].split(':').reduce((a, b) => a * 60 + parseFloat(b), 0));
+        }
+        const head = buf.slice(0, 1024).toString('hex');
+        res.json({
+          ok: decoded,
+          bytes: buf.length,
+          stored_mime: r.rows[0].mime_type,
+          ffmpeg_binary: bin,
+          decode_ok: decoded,
+          ffmpeg_stderr: stderr,
+          duration_s: durSec,
+          head_hex_1024: head
+        });
+      } finally { try { fs.unlinkSync(tmp); } catch (_) {} }
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ---- Stream uploaded audio bytes (token in query string) ----
 // Diagnostic — returns metadata about a stored recording (mime, size in
 // the row, actual length of the audio_bytes column as Postgres sees it,
@@ -1309,7 +1379,11 @@ app.get('/api/recordings/:id/audio', async (req, res, next) => {
         // instant, and stream the MP3 in this response.
         try {
           const _tx = require('./utils/audioTranscode');
-          if (_tx.needsTranscode(buf)) {
+          // ?force=1 bypasses the needsTranscode gate so admin can force
+          // a fresh transcode even on a file that's already in MP4/AAC.
+          // Useful when the cached output itself is corrupt for some reason.
+          const _force = String(req.query.force || '') === '1';
+          if (_force || _tx.needsTranscode(buf)) {
             console.log('[/audio] lazy transcoding row ' + req.params.id + ' (' + total + ' bytes)');
             const _diag = require('./utils/recordingDiag');
             const _t0 = Date.now();

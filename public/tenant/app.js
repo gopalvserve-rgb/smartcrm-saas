@@ -4845,6 +4845,76 @@ function renderRecordingItem(r) {
       } catch (e) { toast('Inspect error: ' + e.message, 'err'); }
     }
   }, '🔍 Inspect');
+  // 🌐 Open the raw /audio URL in a new tab — uses Chrome's native player
+  // to confirm whether the bytes themselves are playable. If this works
+  // but the embedded player doesn't, the issue is in our audio element.
+  // If even this fails, the bytes are broken (or codec genuinely
+  // unsupported).
+  const _testTabBtn = h('a', {
+    class: 'btn sm',
+    href: _audioUrl,
+    target: '_blank',
+    rel: 'noopener',
+    style: { fontSize: '.74rem', marginLeft: '.5rem', padding: '2px 6px', textDecoration: 'none' },
+    title: 'Open the audio URL in a new tab — uses Chrome\'s built-in audio player'
+  }, '🌐 Test in tab');
+
+  // 🔄 Force the server to re-run the transcode regardless of the file's
+  // current format. Useful when the cached output is itself broken.
+  const _forceBtn = h('button', {
+    class: 'btn sm',
+    style: { fontSize: '.74rem', marginLeft: '.5rem', padding: '2px 6px', background: '#fef3c7', color: '#92400e' },
+    title: 'Force fresh ffmpeg transcode on the stored bytes',
+    onclick: async () => {
+      _forceBtn.textContent = 'Working…'; _forceBtn.disabled = true;
+      try {
+        const url = '/api/recordings/' + r.id + '/audio?force=1&token=' + encodeURIComponent(CRM.token || '');
+        const resp = await fetch(url);
+        if (resp.ok) {
+          toast('Re-transcoded ' + resp.headers.get('X-Audio-Detected-Mime') + ' (' + Math.round(Number(resp.headers.get('Content-Length') || 0)/1024) + ' KB). Try ▶ again.', 'ok');
+          audio.src = _audioUrl + '&t=' + Date.now();
+          audio.load();
+        } else {
+          const t = await resp.text().catch(() => '');
+          toast('Force-transcode failed: HTTP ' + resp.status + ' ' + t.slice(0, 80), 'err');
+        }
+      } catch (e) { toast('Force-transcode error: ' + e.message, 'err'); }
+      _forceBtn.textContent = '🔄 Force'; _forceBtn.disabled = false;
+    }
+  }, '🔄 Force');
+
+  // 🔬 Run ffmpeg -i on the stored bytes to see whether the server itself
+  // can decode them. Shows duration, ffmpeg stderr, and first 1KB hex.
+  const _verifyBtn = h('button', {
+    class: 'btn sm',
+    style: { fontSize: '.74rem', marginLeft: '.5rem', padding: '2px 6px' },
+    title: 'Run ffmpeg -i on the stored bytes to check if they\'re decodable',
+    onclick: async () => {
+      _verifyBtn.textContent = 'Verifying…'; _verifyBtn.disabled = true;
+      try {
+        const url = '/api/recordings/' + r.id + '/verify?token=' + encodeURIComponent(CRM.token || '');
+        const resp = await fetch(url);
+        const j = await resp.json();
+        const msg = [
+          'Recording #' + r.id,
+          'Stored MIME: ' + (j.stored_mime || '(none)'),
+          'Bytes: ' + (j.bytes || 0),
+          'ffmpeg binary: ' + (j.ffmpeg_binary || ''),
+          'Decoded OK: ' + (j.decode_ok ? '✅ YES' : '❌ NO'),
+          'Duration: ' + (j.duration_s || 0) + 's',
+          '',
+          'ffmpeg output:',
+          (j.ffmpeg_stderr || '(empty)').slice(0, 800),
+          '',
+          'First 1KB head (hex):',
+          (j.head_hex_1024 || '').slice(0, 256) + '…'
+        ].join('\n');
+        alert(msg);
+      } catch (e) { toast('Verify error: ' + e.message, 'err'); }
+      _verifyBtn.textContent = '🔬 Verify'; _verifyBtn.disabled = false;
+    }
+  }, '🔬 Verify');
+
 
   // Surface playback failures with a smart message. The audio endpoint
   // sets X-Audio-Browser-Playable: 0 for codecs the browser can't decode
@@ -4951,7 +5021,10 @@ function renderRecordingItem(r) {
       h('b', {}, r.lead_name || r.phone || '—'),
       h('span', { class: 'muted' }, ' · ' + fmtDate(r.created_at, 'relative') + ' · ' + mm + ':' + ss),
       _dlLink,
-      _inspectBtn
+      _inspectBtn,
+      _testTabBtn,
+      _forceBtn,
+      _verifyBtn
     ),
     audio,
     aiBlock
