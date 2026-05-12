@@ -908,32 +908,75 @@ async function _sendTemplate({ to, templateName, language, variables, imageUrl, 
   // ── Language safety net ─────────────────────────────────────────────
   // Meta returns #132001 ('Template name does not exist in the translation')
   // when the language code on the send doesn't match an APPROVED language
-  // for the template. This used to fail an entire campaign silently. Look
-  // up the approved languages for templateName from wa_templates and pick
-  // the best match: exact code → same base language (en, hi, etc.) → first
-  // approved language. Only override the caller's value when it's clearly
-  // wrong (no exact match exists).
-  try {
+  // for the template. Look up wa_templates first, then if the cache is
+  // empty/stale for this template, fetch THIS template from Meta on demand
+  // and upsert the rows. Finally pick the best APPROVED language.
+  async function _pickLanguage(name, requested) {
     const tplRows = await db.query(
       `SELECT language, status FROM wa_templates WHERE name = $1`,
-      [templateName]
+      [name]
     );
-    const all = tplRows.rows || [];
+    const all = (tplRows.rows || []);
+    return all;
+  }
+  async function _refreshFromMeta(name) {
+    try {
+      const r = await _graphGet(c.wabaId + '/message_templates?limit=50&name=' + encodeURIComponent(name) + '&fields=name,language,status,category,components', c);
+      const list = (r.body && r.body.data) || [];
+      for (const t of list) {
+        const bodyText = (t.components || []).find(x => x.type === 'BODY')?.text || '';
+        const params   = (bodyText.match(/\{\{\d+\}\}/g) || []).length;
+        const headerType = (t.components || []).find(x => x.type === 'HEADER')?.format || null;
+        const hasBtn   = !!(t.components || []).find(x => x.type === 'BUTTONS');
+        try {
+          await db.query(
+            `INSERT INTO wa_templates (name, language, status, category, body_text, components_json, body_params, header_type, has_buttons, refreshed_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, NOW())
+             ON CONFLICT (name, language) DO UPDATE
+             SET status = EXCLUDED.status, body_text = EXCLUDED.body_text,
+                 components_json = EXCLUDED.components_json, body_params = EXCLUDED.body_params,
+                 header_type = EXCLUDED.header_type, has_buttons = EXCLUDED.has_buttons,
+                 refreshed_at = NOW()`,
+            [t.name, t.language, t.status, t.category, bodyText, JSON.stringify(t.components || []), params, headerType, hasBtn ? 1 : 0]
+          );
+        } catch (_) {}
+      }
+      return list.length;
+    } catch (_) { return 0; }
+  }
+
+  try {
+    let all = await _pickLanguage(templateName, language);
+    // If we have no rows for this template, fetch from Meta and retry once.
+    if (!all.length && c.wabaId && c.token) {
+      const got = await _refreshFromMeta(templateName);
+      if (got > 0) all = await _pickLanguage(templateName, language);
+    }
     const approved = all.filter(r => String(r.status || '').toUpperCase() === 'APPROVED');
-    const pool = approved.length ? approved : all;
-    if (pool.length) {
+    if (all.length && !approved.length) {
+      // Template exists on Meta but no language is APPROVED yet.
+      const statuses = all.map(r => r.language + '=' + r.status).join(', ');
+      return {
+        status: 400,
+        body: { error: { code: 132001, message: '#132001 — Template "' + templateName + '" has no APPROVED translation yet. Current status: ' + statuses + '. Wait for Meta approval or create a new translation.' } },
+        wa_message_id: null
+      };
+    }
+    if (approved.length) {
       const requested = String(language || 'en_US').toLowerCase();
       const reqBase   = requested.split(/[_-]/)[0];
-      const exact = pool.find(r => String(r.language).toLowerCase() === requested);
-      const sameBase = !exact && pool.find(r => String(r.language).toLowerCase().split(/[_-]/)[0] === reqBase);
+      const exact = approved.find(r => String(r.language).toLowerCase() === requested);
+      const sameBase = !exact && approved.find(r => String(r.language).toLowerCase().split(/[_-]/)[0] === reqBase);
       if (!exact) {
-        const fallback = sameBase || pool[0];
+        const fallback = sameBase || approved[0];
         console.warn('[wb] template-language fallback: requested=' + requested +
                      ' → using=' + fallback.language + ' (template=' + templateName + ')');
         language = fallback.language;
       }
     }
-  } catch (e) { /* if the lookup fails, send with the caller's value */ }
+    // If we still have nothing (Meta hasn't heard of this template at all),
+    // let the send go through — Meta's own error will be more specific.
+  } catch (e) { /* lookup failed entirely — proceed with caller's value */ }
 
   // Components: BODY variables + optional HEADER image
   const components = [];
