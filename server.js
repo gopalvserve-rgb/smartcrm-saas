@@ -928,6 +928,26 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
             still_writing: true
           });
         }
+        // Transcode at upload time if the codec isn't browser-playable.
+        // Samsung 3GP/AMR → MP3 here so playback later is just bytea →
+        // <audio>, no transcode round-trip per play.
+        try {
+          const _tx = require('./utils/audioTranscode');
+          if (_tx.needsTranscode(req.file.buffer)) {
+            console.log('[/api/recordings] transcoding AMR/3GP → MP3 (' + _gotBytes + ' bytes)');
+            const mp3 = await _tx.transcodeToMp3(req.file.buffer);
+            if (mp3 && mp3.length > 0) {
+              req.file.buffer = mp3;
+              req.file.size   = mp3.length;
+              req.file.mimetype = 'audio/mpeg';
+              console.log('[/api/recordings] transcode OK → ' + mp3.length + ' bytes MP3');
+            } else {
+              console.warn('[/api/recordings] transcode returned empty — storing original; browsers may not play');
+            }
+          }
+        } catch (e) {
+          console.warn('[/api/recordings] transcode failed (storing original):', e.message);
+        }
         let phone = String(req.body.phone || '').trim();
         const direction = String(req.body.direction || 'out').toLowerCase();
         const filename = String(req.body.filename || (req.file && req.file.originalname) || '');
@@ -1148,9 +1168,35 @@ app.get('/api/recordings/:id/audio', async (req, res, next) => {
         //   '3gp4'  → 3GPP r4 (usually AMR audio — NO browser decoder)
         //   '3gp5'  → 3GPP r5 (same)
         //   '3gp6'  → 3GPP r6 (same)
+        // Lazy transcode for rows uploaded BEFORE the upload-side
+        // transcoder shipped. If we sniff a 3GP/AMR file, transcode now,
+        // write the MP3 back into the row so subsequent plays are
+        // instant, and stream the MP3 in this response.
+        try {
+          const _tx = require('./utils/audioTranscode');
+          if (_tx.needsTranscode(buf)) {
+            console.log('[/audio] lazy transcoding row ' + req.params.id + ' (' + total + ' bytes)');
+            const mp3 = await _tx.transcodeToMp3(buf);
+            if (mp3 && mp3.length > 0) {
+              buf = mp3;
+              try {
+                await tenantDb.query(
+                  'UPDATE lead_recordings SET audio_bytes = $1, size_bytes = $2, mime_type = $3 WHERE id = $4',
+                  [mp3, mp3.length, 'audio/mpeg', Number(req.params.id)]
+                );
+              } catch (e) { console.warn('[/audio] cache write failed:', e.message); }
+              row.mime_type = 'audio/mpeg';
+              console.log('[/audio] lazy transcode OK row ' + req.params.id + ' → ' + mp3.length + ' bytes MP3');
+            }
+          }
+        } catch (e) {
+          console.warn('[/audio] lazy transcode skipped:', e.message);
+        }
+        // Recompute total against the (possibly transcoded) buffer
+        const _newTotal = buf.length;
         let mime = row.mime_type || 'audio/mp4';
         let codec_playable = true;
-        if (total >= 16) {
+        if (_newTotal >= 16) {
           const ftypMarker = buf.slice(4, 8).toString('ascii');
           const brand      = buf.slice(8, 12).toString('ascii').trim();
           if (ftypMarker === 'ftyp') {
@@ -1178,31 +1224,29 @@ app.get('/api/recordings/:id/audio', async (req, res, next) => {
         // surface a download-fallback message if false.
         res.setHeader('X-Audio-Browser-Playable', codec_playable ? '1' : '0');
         res.setHeader('X-Audio-Detected-Mime', mime);
-        // Range request handling — <audio> issues these when the user
-        // scrubs the seek bar. Without proper 206 support some browsers
-        // refuse to play. Single-range only (the common case).
+        const _finalTotal = buf.length;
         const range = req.headers.range;
         if (range) {
           const m = /^bytes=(\d*)-(\d*)$/.exec(range);
           if (m) {
             let start = m[1] ? Number(m[1]) : 0;
-            let end   = m[2] ? Number(m[2]) : total - 1;
+            let end   = m[2] ? Number(m[2]) : _finalTotal - 1;
             if (Number.isNaN(start) || start < 0) start = 0;
-            if (Number.isNaN(end) || end >= total) end = total - 1;
-            if (start > end) { res.status(416).setHeader('Content-Range', 'bytes */' + total); return res.end(); }
+            if (Number.isNaN(end) || end >= _finalTotal) end = _finalTotal - 1;
+            if (start > end) { res.status(416).setHeader('Content-Range', 'bytes */' + _finalTotal); return res.end(); }
             const chunk = buf.slice(start, end + 1);
             res.status(206);
             res.setHeader('Content-Type', mime);
             res.setHeader('Accept-Ranges', 'bytes');
             res.setHeader('Content-Length', chunk.length);
-            res.setHeader('Content-Range', 'bytes ' + start + '-' + end + '/' + total);
+            res.setHeader('Content-Range', 'bytes ' + start + '-' + end + '/' + _finalTotal);
             res.setHeader('Cache-Control', 'private, max-age=60');
             return res.end(chunk);
           }
         }
         res.setHeader('Content-Type', mime);
         res.setHeader('Accept-Ranges', 'bytes');
-        res.setHeader('Content-Length', total);
+        res.setHeader('Content-Length', _finalTotal);
         res.setHeader('Cache-Control', 'private, max-age=60');
         return res.end(buf);
       } catch (e) {

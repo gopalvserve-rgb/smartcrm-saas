@@ -1,7 +1,7 @@
 {
   "name": "smartcrm-saas",
   "version": "0.1.0",
-  "description": "SmartCRM SaaS — multi-tenant CRM platform. One process, one Postgres cluster, one DB per tenant. Cashfree billing.",
+  "description": "SmartCRM SaaS \u2014 multi-tenant CRM platform. One process, one Postgres cluster, one DB per tenant. Cashfree billing.",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {
@@ -26,7 +26,8 @@
     "node-fetch": "^2.7.0",
     "nodemailer": "^6.9.13",
     "pg": "^8.11.5",
-    "web-push": "^3.6.7"
+    "web-push": "^3.6.7",
+    "fluent-ffmpeg": "^2.1.3"
   },
   "devDependencies": {
     "nodemon": "^3.1.0"

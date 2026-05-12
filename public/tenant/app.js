@@ -4788,7 +4788,7 @@ function renderRecordingItem(r) {
   // in any media player that handles AMR.
   const _dlLink = h('a', {
     href: _audioUrl,
-    download: 'recording-' + r.id + '.m4a',
+    download: 'recording-' + r.id + '.mp3',
     style: { fontSize: '.75rem', color: '#64748b', marginLeft: '.5rem', textDecoration: 'underline' },
     title: 'Download the original recording file'
   }, '⬇ Download');
