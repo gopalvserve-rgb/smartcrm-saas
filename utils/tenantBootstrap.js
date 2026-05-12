@@ -137,6 +137,28 @@ const SCHEMA_MIGRATIONS = [
     CREATE INDEX IF NOT EXISTS idx_webhook_logs_created ON webhook_logs(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_webhook_logs_path    ON webhook_logs(path);
   ` },
+  // Recording transcode diagnostic log — captures every transcode attempt
+  // (upload-time, lazy on-play, manual /retranscode) so admins can see
+  // exactly why playback fails for any specific recording.
+  { name: '2026_05_recording_diag_log', sql: `
+    CREATE TABLE IF NOT EXISTS recording_diag_log (
+      id            SERIAL PRIMARY KEY,
+      recording_id  INTEGER,
+      action        TEXT NOT NULL,
+      result        TEXT NOT NULL,
+      ffmpeg_binary TEXT,
+      ffmpeg_version TEXT,
+      bytes_in      INTEGER,
+      bytes_out     INTEGER,
+      mime_in       TEXT,
+      mime_out      TEXT,
+      error_message TEXT,
+      duration_ms   INTEGER,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_rec_diag_created ON recording_diag_log(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_rec_diag_rec_id  ON recording_diag_log(recording_id);
+  ` },
   { name: '2026_05_fcm_tokens_table', sql: `
     CREATE TABLE IF NOT EXISTS fcm_tokens (
       id          SERIAL PRIMARY KEY,

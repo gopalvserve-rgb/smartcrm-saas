@@ -1152,8 +1152,13 @@ app.get('/api/recordings/:id/retranscode', async (req, res) => {
       const fromBytes = buf.length;
       const tx = require('./utils/audioTranscode');
       const mp3 = await tx.transcodeToMp3(buf);
-      if (!mp3) return res.status(500).json({ error: 'transcode returned null — check /api/recordings/ffmpeg-status', from_bytes: fromBytes });
+      const _diag = require('./utils/recordingDiag');
+      if (!mp3) {
+        _diag.log({ recording_id: Number(req.params.id), action: 'manual_retranscode', result: 'fail', bytes_in: fromBytes, error_message: 'transcode returned null (binary missing or ffmpeg threw)' });
+        return res.status(500).json({ error: 'transcode returned null — check /api/recordings/ffmpeg-status', from_bytes: fromBytes });
+      }
       await tenantDb.query('UPDATE lead_recordings SET audio_bytes=$1, size_bytes=$2, mime_type=$3 WHERE id=$4', [mp3, mp3.length, 'audio/mpeg', Number(req.params.id)]);
+      _diag.log({ recording_id: Number(req.params.id), action: 'manual_retranscode', result: 'ok', bytes_in: fromBytes, bytes_out: mp3.length, mime_in: 'audio/3gpp', mime_out: 'audio/mpeg' });
       return res.json({ ok: true, from_bytes: fromBytes, to_bytes: mp3.length, mime: 'audio/mpeg' });
     });
   } catch (e) {
@@ -1238,6 +1243,8 @@ app.get('/api/recordings/:id/audio', async (req, res, next) => {
           const _tx = require('./utils/audioTranscode');
           if (_tx.needsTranscode(buf)) {
             console.log('[/audio] lazy transcoding row ' + req.params.id + ' (' + total + ' bytes)');
+            const _diag = require('./utils/recordingDiag');
+            const _t0 = Date.now();
             const mp3 = await _tx.transcodeToMp3(buf);
             if (mp3 && mp3.length > 0) {
               buf = mp3;
@@ -1249,6 +1256,9 @@ app.get('/api/recordings/:id/audio', async (req, res, next) => {
               } catch (e) { console.warn('[/audio] cache write failed:', e.message); }
               row.mime_type = 'audio/mpeg';
               console.log('[/audio] lazy transcode OK row ' + req.params.id + ' → ' + mp3.length + ' bytes MP3');
+              _diag.log({ recording_id: Number(req.params.id), action: 'lazy_on_play', result: 'ok', bytes_in: total, bytes_out: mp3.length, mime_in: 'audio/3gpp', mime_out: 'audio/mpeg', duration_ms: Date.now() - _t0 });
+            } else {
+              _diag.log({ recording_id: Number(req.params.id), action: 'lazy_on_play', result: 'fail', bytes_in: total, mime_in: 'audio/3gpp', error_message: 'transcode returned null/empty (ffmpeg binary missing or threw)', duration_ms: Date.now() - _t0 });
             }
           }
         } catch (e) {

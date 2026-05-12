@@ -13071,6 +13071,7 @@ VIEWS.admin = async (view) => {
       { id: 'api',          label: '🔌 Website API' },
       { id: 'integrations', label: '🧩 Integrations' },
       { id: 'whlogs',       label: '📡 Webhook logs' },
+      { id: 'recdiag',      label: '🎧 Recording diagnostics' },
       { id: 'chatperm',     label: '💬 Chat permissions' },
     ]},
     { title: 'Automation', items: [
@@ -13163,6 +13164,7 @@ async function showAdminTab(id) {
     if (id === 'projstages') body.replaceChildren(await adminProjectStages());
     if (id === 'integrations') body.replaceChildren(await adminIntegrations());
     if (id === 'whlogs')      body.replaceChildren(await adminWebhookLogs());
+    if (id === 'recdiag')     body.replaceChildren(await adminRecordingDiag());
     if (id === 'roles')     body.replaceChildren(await adminRoles());
     if (id === 'pullleads') body.replaceChildren(await adminPullLeads());
     if (id === 'campaigns') body.replaceChildren(await adminCampaigns());
@@ -13835,6 +13837,101 @@ async function adminDangerZone() {
  * Per-tenant: each tenant's webhook_logs table is queried via the existing
  * tenantStorage pool, so admins only see their own tenant's events.
  */
+
+async function adminRecordingDiag() {
+  const wrap = h('div', {});
+  const toolbar = h('div', { class: 'toolbar', style: { display: 'flex', gap: '.5rem', alignItems: 'center', flexWrap: 'wrap' } });
+  const recIdInput = h('input', { type: 'number', placeholder: 'Filter by recording ID (optional)', style: { width: '260px' } });
+  const refreshBtn = h('button', { class: 'btn' }, '⟳ Refresh');
+  const ffStatusBtn = h('button', { class: 'btn' }, '🔧 Check ffmpeg');
+  toolbar.appendChild(h('strong', {}, '🎧 Recording transcode diagnostics'));
+  toolbar.appendChild(recIdInput);
+  toolbar.appendChild(refreshBtn);
+  toolbar.appendChild(ffStatusBtn);
+  toolbar.appendChild(h('span', { class: 'muted', style: { fontSize: '.8rem' } },
+    'Every transcode attempt (upload, on-play, manual). Newest first.'));
+  wrap.appendChild(toolbar);
+
+  const ffStatus = h('div', {});
+  wrap.appendChild(ffStatus);
+  ffStatusBtn.onclick = async () => {
+    ffStatus.innerHTML = '<div class="muted">Checking…</div>';
+    try {
+      const resp = await fetch('/api/recordings/ffmpeg-status');
+      const j = await resp.json();
+      const ok = !!j.ok;
+      ffStatus.innerHTML = '';
+      ffStatus.appendChild(h('div', { class: 'card', style: { background: ok ? '#dcfce7' : '#fee2e2', color: ok ? '#166534' : '#991b1b', padding: '.6rem .9rem', borderRadius: '6px', margin: '.5rem 0' } },
+        h('div', {}, (ok ? '✅' : '❌') + ' ffmpeg ' + (ok ? 'is working' : 'NOT available')),
+        h('div', { style: { fontSize: '.78rem', marginTop: '.3rem' } }, 'binary: ' + (j.binary || '(none)')),
+        h('div', { style: { fontSize: '.78rem' } }, 'version: ' + (j.version || '(unknown)'))
+      ));
+    } catch (e) {
+      ffStatus.innerHTML = '<div class="error-box">' + esc(e.message) + '</div>';
+    }
+  };
+
+  const tableHost = h('div', {});
+  wrap.appendChild(tableHost);
+
+  async function load() {
+    tableHost.innerHTML = '<div class="loading">Loading…</div>';
+    let res;
+    try {
+      const opts = {};
+      if (recIdInput.value) opts.recording_id = Number(recIdInput.value);
+      opts.limit = 200;
+      res = await api('api_admin_recordingDiag_list', opts);
+    } catch (e) {
+      tableHost.innerHTML = '<div class="error-box">' + esc(e.message) + '</div>';
+      return;
+    }
+    const rows = (res && res.rows) || [];
+    if (!rows.length) {
+      tableHost.innerHTML = '';
+      tableHost.appendChild(h('div', { class: 'card muted' },
+        (res && res.note) || 'No diagnostics yet — play any recording to generate one.'));
+      return;
+    }
+    const tbl = h('table', { class: 'tbl' });
+    tbl.appendChild(h('thead', {}, h('tr', {},
+      h('th', {}, 'When'),
+      h('th', {}, 'Rec #'),
+      h('th', {}, 'Action'),
+      h('th', {}, 'Result'),
+      h('th', {}, 'In'),
+      h('th', {}, 'Out'),
+      h('th', {}, 'Duration'),
+      h('th', {}, 'ffmpeg'),
+      h('th', {}, 'Error')
+    )));
+    const body = h('tbody', {});
+    rows.forEach(r => {
+      const ok = r.result === 'ok';
+      const badge = h('span', { style: { padding: '2px 6px', borderRadius: '4px', fontWeight: 600, fontSize: '.78rem', background: ok ? '#dcfce7' : '#fee2e2', color: ok ? '#166534' : '#991b1b' } }, r.result || '?');
+      body.appendChild(h('tr', {},
+        h('td', { class: 'muted', style: { whiteSpace: 'nowrap' } }, fmtDate(r.created_at, 'relative')),
+        h('td', {}, String(r.recording_id || '–')),
+        h('td', {}, h('code', { style: { fontSize: '.78rem' } }, r.action || '')),
+        h('td', {}, badge),
+        h('td', { class: 'muted' }, r.bytes_in != null ? Math.round(r.bytes_in / 1024) + ' KB' : ''),
+        h('td', { class: 'muted' }, r.bytes_out != null ? Math.round(r.bytes_out / 1024) + ' KB' : ''),
+        h('td', { class: 'muted' }, r.duration_ms != null ? r.duration_ms + ' ms' : ''),
+        h('td', { class: 'muted', style: { fontSize: '.74rem', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: (r.ffmpeg_binary || '') + ' — ' + (r.ffmpeg_version || '') }, r.ffmpeg_binary ? r.ffmpeg_binary.split('/').pop() : '(none)'),
+        h('td', { class: 'muted', style: { fontSize: '.74rem', maxWidth: '320px', color: '#991b1b' } }, r.error_message || '')
+      ));
+    });
+    tbl.appendChild(body);
+    tableHost.innerHTML = '';
+    tableHost.appendChild(tbl);
+  }
+
+  refreshBtn.onclick = load;
+  recIdInput.onkeydown = (e) => { if (e.key === 'Enter') load(); };
+  load();
+  return wrap;
+}
+
 async function adminWebhookLogs() {
   const wrap = h('div', { class: 'admin-section' });
   wrap.appendChild(h('h4', {}, '📡 Webhook logs'));
