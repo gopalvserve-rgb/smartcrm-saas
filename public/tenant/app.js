@@ -4814,6 +4814,38 @@ function renderRecordingItem(r) {
     style: { fontSize: '.75rem', color: '#64748b', marginLeft: '.5rem', textDecoration: 'underline' },
     title: 'Download the original recording file'
   }, '⬇ Download');
+  // 🔍 Inspect — shows recording metadata + helps diagnose 'File wasn't
+  // available on site' (real_bytes=0 means upload was empty) or wrong MIME.
+  const _inspectBtn = h('button', {
+    class: 'btn sm',
+    style: { fontSize: '.74rem', marginLeft: '.5rem', padding: '2px 6px' },
+    title: 'Show server-side recording metadata',
+    onclick: async () => {
+      try {
+        const resp = await fetch('/api/recordings/' + r.id + '/info?token=' + encodeURIComponent(CRM.token || ''));
+        const j = await resp.json();
+        if (!resp.ok) {
+          toast('Inspect failed: HTTP ' + resp.status + ' — ' + (j.error || ''), 'err');
+          return;
+        }
+        const row = j.row || {};
+        const hasBytes = Number(row.real_bytes || 0) > 0;
+        const msg = [
+          'Recording #' + (row.id || r.id),
+          'MIME: ' + (row.mime_type || '(none)'),
+          'Stored size: ' + (row.size_bytes || 0) + ' bytes',
+          'Actual bytes in DB: ' + (row.real_bytes || 0),
+          'Duration: ' + (row.duration_s || 0) + 's',
+          'Head hex: ' + (row.head_hex || '(empty)'),
+          'Created: ' + (row.created_at || ''),
+          '',
+          hasBytes ? '✅ Audio bytes present.' : '❌ NO AUDIO BYTES in DB — original upload was empty. Re-sync from phone.'
+        ].join('\n');
+        alert(msg);
+      } catch (e) { toast('Inspect error: ' + e.message, 'err'); }
+    }
+  }, '🔍 Inspect');
+
   // Surface playback failures with a smart message. The audio endpoint
   // sets X-Audio-Browser-Playable: 0 for codecs the browser can't decode
   // natively (AMR-in-3GP etc.) — when we see that we don't blame 'broken
@@ -4854,6 +4886,15 @@ function renderRecordingItem(r) {
       let msg;
       if (playable === '0') {
         msg = '🎧 Your phone recorded this call in ' + (mime || 'AMR/3GP') + ' format — Chrome and the in-app player can\'t decode it. Click ⬇ Download to play it in any external media player.';
+      } else if (r2.status === 410) {
+        // 410 Gone — server says the recording row exists but audio_bytes
+        // is NULL/empty. The upload was zero-byte. Click 🔍 Inspect to
+        // see real_bytes; re-sync from the phone if you want to recover.
+        msg = '🎧 Recording #' + r.id + ' has no audio bytes on the server (empty upload). Click 🔍 Inspect to confirm, then re-sync from your phone.';
+      } else if (r2.status === 404) {
+        msg = '🎧 Recording #' + r.id + ' not found on the server. It may have been deleted.';
+      } else if (r2.status === 401) {
+        msg = '🎧 Session expired — please log out and back in.';
       } else {
         const txt = await r2.text().catch(() => '');
         msg = '🎧 Playback failed: HTTP ' + r2.status + (txt && txt.length < 200 ? ' — ' + txt.slice(0, 120) : '');
@@ -4876,7 +4917,8 @@ function renderRecordingItem(r) {
       h('span', { class: 'rec-dir' }, dirIcon),
       h('b', {}, r.lead_name || r.phone || '—'),
       h('span', { class: 'muted' }, ' · ' + fmtDate(r.created_at, 'relative') + ' · ' + mm + ':' + ss),
-      _dlLink
+      _dlLink,
+      _inspectBtn
     ),
     audio,
     aiBlock
