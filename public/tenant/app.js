@@ -19056,7 +19056,7 @@ async function syncRecordings(opts) {
   if (files.length === 0) {
     const watermarkAge = Math.round((Date.now() - sinceMs) / 60000);
     const msg = opts.full
-      ? 'No recordings found in the folder. Check that the folder you picked actually has .m4a / .amr files.'
+      ? 'No recordings found in the folder. Check that the folder you picked actually has .m4a / .amr / .mp3 / .wav / .ogg / .flac files.'
       : 'No NEW recordings since ' + watermarkAge + ' min ago. Tap "⚡ Re-sync all" to scan every file in the folder.';
     toast(msg, 'warn');
     console.warn('[leadcrm] sync: 0 files | folder=' + folderName + ' | sinceMs=' + sinceMs + ' (' + new Date(sinceMs).toISOString() + ')');

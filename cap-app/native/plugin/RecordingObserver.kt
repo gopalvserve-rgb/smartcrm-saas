@@ -91,10 +91,14 @@ object RecordingObserver {
     }
 
     private fun isAudioFile(name: String): Boolean {
+        // Different phone brands record in different containers. Cover all
+        // the common ones — server side handles the MIME mapping per ext.
         val lower = name.lowercase()
-        return lower.endsWith(".m4a") || lower.endsWith(".mp3") ||
-               lower.endsWith(".amr") || lower.endsWith(".3gp") ||
-               lower.endsWith(".wav") || lower.endsWith(".aac") ||
-               lower.endsWith(".ogg")
+        return lower.endsWith(".m4a")  || lower.endsWith(".mp3")  ||
+               lower.endsWith(".amr")  || lower.endsWith(".3gp")  ||
+               lower.endsWith(".wav")  || lower.endsWith(".aac")  ||
+               lower.endsWith(".ogg")  || lower.endsWith(".flac") ||
+               lower.endsWith(".opus") || lower.endsWith(".oga")  ||
+               lower.endsWith(".mp4")  || lower.endsWith(".3gpp")
     }
 }

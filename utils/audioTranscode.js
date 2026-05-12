@@ -99,6 +99,69 @@ function needsTranscode(buf) {
   }
   // Standalone AMR file ('#!AMR\n' for NB, '#!AMR-WB\n' for WB)
   if (buf.slice(0, 4).toString('ascii') === '#!AM') return true;
+  // FLAC magic 'fLaC' — Chrome plays FLAC but Safari/iOS doesn't, so we
+  // transcode for cross-browser compatibility.
+  if (buf.slice(0, 4).toString('ascii') === 'fLaC') return true;
+  return false;
+}
+
+/**
+ * Map filename extension + magic bytes to a Content-Type the browser
+ * understands. Covers every format the APK file-scanner accepts:
+ *   .mp3 .wav .ogg .flac .m4a .amr .aac .3gp .opus
+ *
+ * Magic-byte sniffing wins over filename when both are available — the
+ * file may have been renamed, but the bytes never lie.
+ */
+function guessAudioMime(filename, buf) {
+  // Try magic bytes first (most reliable)
+  if (buf && buf.length >= 12) {
+    const head4 = buf.slice(0, 4).toString('ascii');
+    const ftyp  = buf.slice(4, 8).toString('ascii');
+    if (ftyp === 'ftyp') {
+      const brand = buf.slice(8, 12).toString('ascii').trim();
+      if (brand === 'M4A'  || brand === 'mp42' || brand === 'mp41'
+       || brand === 'isom' || brand === 'iso2') return 'audio/mp4';
+      if (brand.indexOf('3gp') === 0 || brand === '3gpp' || brand === '3g2a') return 'audio/3gpp';
+    }
+    if (head4 === '#!AM')  return 'audio/amr';     // AMR-NB or AMR-WB
+    if (head4 === 'RIFF')  return 'audio/wav';
+    if (head4 === 'OggS')  return 'audio/ogg';
+    if (head4 === 'fLaC')  return 'audio/flac';
+    if (head4 === 'ID3\x03' || head4 === 'ID3\x04' || head4.startsWith('ID3')) return 'audio/mpeg';
+    if (buf[0] === 0xFF && (buf[1] & 0xE0) === 0xE0) return 'audio/mpeg';  // MPEG sync
+  }
+  // Fall back to filename extension
+  const lower = String(filename || '').toLowerCase();
+  const ext = lower.split('.').pop();
+  switch (ext) {
+    case 'mp3':  return 'audio/mpeg';
+    case 'wav':  return 'audio/wav';
+    case 'ogg':
+    case 'oga':  return 'audio/ogg';
+    case 'opus': return 'audio/opus';
+    case 'flac': return 'audio/flac';
+    case 'm4a':
+    case 'mp4':
+    case 'aac':  return 'audio/mp4';
+    case 'amr':  return 'audio/amr';
+    case '3gp':
+    case '3gpp': return 'audio/3gpp';
+    default:     return 'application/octet-stream';
+  }
+}
+
+/**
+ * Is this MIME type playable directly in a browser (no transcode)?
+ * Used to set X-Audio-Browser-Playable on the response.
+ */
+function isBrowserPlayable(mime) {
+  const m = String(mime || '').toLowerCase();
+  // mp3/mp4 (AAC)/wav/ogg/opus play in every modern browser
+  if (m === 'audio/mpeg' || m === 'audio/mp4' || m === 'audio/wav'
+   || m === 'audio/ogg' || m === 'audio/opus') return true;
+  // FLAC plays on Chrome/Firefox but NOT Safari/iOS — treat as needs-transcode
+  // AMR/3GPP never play in any browser
   return false;
 }
 
@@ -174,4 +237,4 @@ async function transcodeToMp3(buf) {
   }
 }
 
-module.exports = { needsTranscode, transcodeToMp3, getFfmpegBinary };
+module.exports = { needsTranscode, transcodeToMp3, getFfmpegBinary, guessAudioMime, isBrowserPlayable };

@@ -1041,6 +1041,17 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
             } catch (e) { console.warn('[recordings] auto-create lead failed:', e.message); }
           }
         }
+        // Robust MIME — different phones write different formats. Sniff
+        // the magic bytes first; fall back to the filename extension; only
+        // trust the multipart Content-Type when both above are unavailable.
+        const _tx0 = require('./utils/audioTranscode');
+        const _detectedMime = _tx0.guessAudioMime(
+          req.file.originalname || req.body.device_path || '',
+          req.file.buffer
+        );
+        const _finalMime = (_detectedMime && _detectedMime !== 'application/octet-stream')
+          ? _detectedMime
+          : (req.file.mimetype || 'audio/mp4');
         const id = await db.insert('lead_recordings', {
           lead_id: leadId,
           user_id: me.id,
@@ -1048,7 +1059,7 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
           direction,
           duration_s: Number(req.body.duration_s) || 0,
           device_path: String(req.body.device_path || ''),
-          mime_type: req.file.mimetype || 'audio/m4a',
+          mime_type: _finalMime,
           size_bytes: req.file.size || 0,
           audio_bytes: req.file.buffer,
           started_at: req.body.started_at || db.nowIso(),
@@ -1265,32 +1276,13 @@ app.get('/api/recordings/:id/audio', async (req, res, next) => {
           console.warn('[/audio] lazy transcode skipped:', e.message);
         }
         // Recompute total against the (possibly transcoded) buffer
-        const _newTotal = buf.length;
-        let mime = row.mime_type || 'audio/mp4';
-        let codec_playable = true;
-        if (_newTotal >= 16) {
-          const ftypMarker = buf.slice(4, 8).toString('ascii');
-          const brand      = buf.slice(8, 12).toString('ascii').trim();
-          if (ftypMarker === 'ftyp') {
-            if (brand === 'M4A' || brand === 'mp42' || brand === 'isom' || brand === 'iso2' || brand === 'mp41') {
-              mime = 'audio/mp4';
-            } else if (brand.indexOf('3gp') === 0 || brand === '3gpp' || brand === '3g2a') {
-              mime = 'audio/3gpp';
-              codec_playable = false;  // AMR-in-3GP — browser won't decode
-            }
-          } else if (buf.slice(0, 4).toString('ascii') === '#!AM') {
-            // '#!AMR\n' standalone AMR file
-            mime = 'audio/amr';
-            codec_playable = false;
-          } else if (buf[0] === 0xFF && (buf[1] & 0xE0) === 0xE0) {
-            // MPEG audio frame sync — could be MP3
-            mime = 'audio/mpeg';
-          } else if (buf.slice(0, 4).toString('ascii') === 'RIFF') {
-            mime = 'audio/wav';
-          } else if (buf.slice(0, 4).toString('ascii') === 'OggS') {
-            mime = 'audio/ogg';
-          }
-        }
+        // Sniff via guessAudioMime — covers .mp3/.wav/.ogg/.flac/.m4a/.amr
+        // plus opus and 3gpp variants. Returns 'application/octet-stream'
+        // only when neither magic bytes nor extension are recognised.
+        const _tx0b = require('./utils/audioTranscode');
+        let mime = _tx0b.guessAudioMime(null, buf);
+        if (mime === 'application/octet-stream') mime = row.mime_type || 'audio/mp4';
+        const codec_playable = _tx0b.isBrowserPlayable(mime);
         // Tell the SPA whether this is a codec the browser is likely
         // to decode. The audio element's onerror will check this and
         // surface a download-fallback message if false.
