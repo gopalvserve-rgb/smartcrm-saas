@@ -79,8 +79,6 @@ async function _getAllConfig() {
   CONFIG_KEYS.forEach(k => {
     if (fromDb[k] != null && String(fromDb[k]) !== '') {
       out[k] = fromDb[k];
-    } else if (process.env[k] != null && String(process.env[k]) !== '') {
-      out[k] = process.env[k];
     } else if (Object.prototype.hasOwnProperty.call(CONFIG_DEFAULTS, k)) {
       out[k] = CONFIG_DEFAULTS[k];
     } else {
@@ -171,7 +169,6 @@ async function api_admin_setConfig(token, keyOrPatch, maybeValue) {
     // Ignore redacted placeholder (user didn't actually change the value)
     if (SENSITIVE_KEYS.includes(k) && String(v).startsWith('••')) continue;
     await db.setConfig(k, v || '');
-    process.env[k] = String(v || '');  // keep in-process mirror in sync
     saved.push(k);
   }
   return { ok: true, saved };

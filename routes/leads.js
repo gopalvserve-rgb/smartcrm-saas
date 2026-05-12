@@ -85,10 +85,19 @@ function _isVisible(me, visible, lead) {
 
 // Duplicate detection
 async function _findDuplicate(payload) {
-  const policy = process.env.DUPLICATE_POLICY || 'allow';
+  // Read duplicate-detection config from the CURRENT tenant's DB. process.env
+  // is shared across the entire Node process so reading from it produced
+  // cross-tenant bleed: whichever tenant called api_admin_setConfig LAST
+  // had their value mirrored into process.env and silently applied to
+  // every other tenant. db.getConfig() is per-tenant via tenantStorage.
+  //
+  // Default policy is now 'flag' (mark duplicates with is_duplicate=1 but
+  // don't block the insert) — matches the dedupe UI which expects a
+  // visible warning, not silent rejection.
+  const policy = (await db.getConfig('DUPLICATE_POLICY', 'flag')) || 'flag';
   if (policy === 'allow') return null;
-  const hours = Number(process.env.DUPLICATE_WINDOW_HOURS) || 24;
-  const fields = String(process.env.DUPLICATE_MATCH_FIELDS || 'phone,email')
+  const hours = Number(await db.getConfig('DUPLICATE_WINDOW_HOURS', '720')) || 720;
+  const fields = String(await db.getConfig('DUPLICATE_MATCH_FIELDS', 'phone,email'))
     .split(',').map(s => s.trim()).filter(Boolean);
   if (!hours || !fields.length) return null;
 
@@ -117,7 +126,7 @@ async function _findDuplicate(payload) {
 async function _applyDuplicatePolicy(payload, fallbackUserId) {
   const match = await _findDuplicate(payload);
   if (!match) return { payload, duplicate: false, matched_id: null };
-  const policy = process.env.DUPLICATE_POLICY || 'allow';
+  const policy = (await db.getConfig('DUPLICATE_POLICY', 'flag')) || 'flag';
   const out = Object.assign({}, payload);
   if (policy === 'reject') {
     const err = new Error('DUPLICATE: matched existing lead id ' + match.id);
@@ -2048,6 +2057,59 @@ async function api_leads_distinctTags(token) {
   return out.map(name => ({ id: name, name }));
 }
 
+/**
+ * Rescan EVERY lead in the tenant for duplicates and flag them.
+ * For each phone-normalized group of >= 2 leads, the OLDEST gets
+ * is_duplicate=0 (original), the rest get is_duplicate=1 with
+ * duplicate_of pointing at the original. Returns counts so the user
+ * can see what changed.
+ *
+ * Admin/manager only. Run after the cross-tenant leak fix (where
+ * existing tenants had DUPLICATE_POLICY='allow' silently applied
+ * during normal saves so no rows ever got flagged).
+ */
+async function api_leads_rescanDuplicates(token) {
+  const me = await authUser(token);
+  if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin/manager only');
+  const all = await db.getAll('leads');
+  // Group by digit-only phone tail (last 10), skipping leads with no phone.
+  const groups = new Map(); // tail → [leads sorted by created_at ASC]
+  for (const l of all) {
+    const digits = String(l.phone || l.whatsapp || '').replace(/\D/g, '');
+    if (digits.length < 7) continue;
+    const tail = digits.slice(-10);
+    if (!groups.has(tail)) groups.set(tail, []);
+    groups.get(tail).push(l);
+  }
+  let flagged = 0;
+  let unflagged = 0;
+  for (const arr of groups.values()) {
+    if (arr.length < 2) {
+      // Single lead with that phone — should NOT be marked duplicate
+      const lone = arr[0];
+      if (lone && Number(lone.is_duplicate) === 1) {
+        await db.update('leads', lone.id, { is_duplicate: 0, duplicate_of: '' });
+        unflagged++;
+      }
+      continue;
+    }
+    arr.sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
+    const original = arr[0];
+    // Clear duplicate flag on the original if it was set
+    if (Number(original.is_duplicate) === 1) {
+      await db.update('leads', original.id, { is_duplicate: 0, duplicate_of: '' });
+      unflagged++;
+    }
+    for (let i = 1; i < arr.length; i++) {
+      const dup = arr[i];
+      if (Number(dup.is_duplicate) === 1 && Number(dup.duplicate_of) === Number(original.id)) continue; // already correct
+      await db.update('leads', dup.id, { is_duplicate: 1, duplicate_of: original.id });
+      flagged++;
+    }
+  }
+  return { ok: true, flagged, unflagged, total_groups_with_dups: [...groups.values()].filter(a => a.length > 1).length };
+}
+
 module.exports = {
   api_leads_list, api_leads_distinctTags, api_leads_phoneBook, api_leads_statusCounts, api_leads_get, api_leads_create, api_leads_update,
   api_leads_addRemark, api_leads_pipeline, api_myFollowups, api_followup_done,
@@ -2057,5 +2119,6 @@ module.exports = {
   api_whatsapp_send
 ,
   api_leads_pull, api_leads_pullInfo,
-  api_leads_assignToCampaign
+  api_leads_assignToCampaign,
+  api_leads_rescanDuplicates
 };

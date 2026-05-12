@@ -1778,6 +1778,16 @@ VIEWS.leads = async (view) => {
           catch (e) { toast(e.message, 'err'); }
         } }, '🧹 Junk cleanup')
       : null,
+    (CRM.user && (CRM.user.role === 'admin' || CRM.user.role === 'manager'))
+      ? h('button', { class: 'btn ghost', title: 'Re-scan every lead and flag duplicates by phone (groups of 2+ same-phone leads → oldest stays as original, rest marked DUP)', onclick: async () => {
+          if (!await confirmDialog('Re-scan all leads and flag duplicates by phone? Groups of leads sharing a phone get the oldest kept as the original; the rest are marked DUP. Safe to run multiple times.')) return;
+          try {
+            const r = await api('api_leads_rescanDuplicates');
+            toast(`✅ Flagged ${r.flagged} duplicates · cleared ${r.unflagged} stale flags · ${r.total_groups_with_dups} groups`);
+            loadLeads();
+          } catch (e) { toast(e.message, 'err'); }
+        } }, '🔍 Re-scan duplicates')
+      : null,
     // Pull Leads — non-admins (sales / team_leader / manager) can self-claim
     // free leads from the pool. Admin sees the existing list directly.
     (CRM.user && CRM.user.role !== 'admin')
