@@ -2673,6 +2673,7 @@ module.exports = {
   expressVerify, expressEvent,
   // Worker + scheduled tasks
   startCampaignWorker,
+  _campaignTick,  // exported for the SaaS per-tenant scheduler
   trimActivityLog,
   // Helpers exported for the file-upload Express route in server.js
   // and for routes/aiBot.js auto-reply path.
