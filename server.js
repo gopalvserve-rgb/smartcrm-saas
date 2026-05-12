@@ -1348,7 +1348,25 @@ app.get('/api/recordings/:id/audio', async (req, res, next) => {
           [Number(req.params.id)]
         );
         const row = r.rows[0];
-        if (!row) return res.status(404).json({ error: 'recording not found' });
+        if (!row) {
+          // Diagnostic: include WHICH tenant resolved and any recording IDs
+          // present in that tenant — so a 404 surface tells the admin
+          // whether the tenant resolution picked the wrong DB.
+          let visibleIds = [];
+          try {
+            const v = await tenantDb.query(
+              'SELECT id FROM lead_recordings ORDER BY id DESC LIMIT 5'
+            );
+            visibleIds = v.rows.map(x => x.id);
+          } catch (_) {}
+          return res.status(404).json({
+            error: 'recording not found',
+            requested_id: Number(req.params.id),
+            tenant_resolved: req.tenantSlug || null,
+            recent_recording_ids: visibleIds,
+            hint: 'If tenant_resolved is wrong, log out + back in. If recent_recording_ids is empty, no recordings have synced for this tenant.'
+          });
+        }
         // Buffer.from is a no-op when audio_bytes already IS a Buffer (pg
         // returns bytea as Buffer); it normalises if some driver path
         // returned a base64 string instead.

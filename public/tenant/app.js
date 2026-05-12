@@ -4798,7 +4798,13 @@ function renderRecordingItem(r) {
   const dur = Number(r.duration_s) || 0;
   const mm = Math.floor(dur / 60), ss = (dur % 60).toString().padStart(2, '0');
   const dirIcon = r.direction === 'in' ? '📲' : r.direction === 'missed' ? '⚠️' : '📞';
-  const _audioUrl = '/api/recordings/' + r.id + '/audio?token=' + encodeURIComponent(CRM.token || '');
+  // Prefix /t/<slug>/ so attachTenant middleware runs FIRST and locks
+  // the request to the tenant the user is currently viewing. The
+  // token-only fallback in the audio handler can pick the wrong tenant
+  // when the same user_id exists in multiple tenants' users tables,
+  // which would 404 the recording lookup. Belt + suspenders.
+  const _tslug = (typeof window !== 'undefined' && window.TENANT_SLUG) ? window.TENANT_SLUG : '';
+  const _audioUrl = (_tslug ? '/t/' + _tslug : '') + '/api/recordings/' + r.id + '/audio?token=' + encodeURIComponent(CRM.token || '');
   const audio = h('audio', {
     controls: true,
     preload: 'none',
@@ -5575,7 +5581,7 @@ function renderHistoryItem(r) {
     item.appendChild(h('audio', {
       controls: true, preload: 'none',
       class: 'hist-audio',
-      src: '/api/recordings/' + recId + '/audio?token=' + encodeURIComponent(CRM.token || '')
+      src: ((typeof window !== 'undefined' && window.TENANT_SLUG) ? '/t/' + window.TENANT_SLUG : '') + '/api/recordings/' + recId + '/audio?token=' + encodeURIComponent(CRM.token || '')
     }));
   }
   return item;
