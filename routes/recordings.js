@@ -8,19 +8,40 @@
 const db = require('../db/pg');
 const { authUser, getVisibleUserIds } = require('../utils/auth');
 
-/** Find a lead by matching the last 10 digits of the phone. */
+/**
+ * Find a lead by matching the last N digits of the phone.
+ *
+ * Default match is last 10 digits (covers Indian mobiles with or without
+ * country code +91/91/0). Falls back to shorter tails for the rare case
+ * the recorded phone is shorter than 10 digits (landlines, test data).
+ *
+ * Compares against phone, whatsapp, AND alt_phone columns, all
+ * with all non-digit characters stripped on both sides.
+ */
 async function _findLeadByPhone(phone) {
   const digits = String(phone || '').replace(/\D/g, '');
   if (!digits) return null;
-  const tail = digits.slice(-10);
-  const { rows } = await db.query(
-    `SELECT * FROM leads WHERE regexp_replace(phone, '[^0-9]', '', 'g') LIKE $1
-       OR regexp_replace(whatsapp, '[^0-9]', '', 'g') LIKE $1
-       OR regexp_replace(alt_phone, '[^0-9]', '', 'g') LIKE $1
-     LIMIT 1`,
-    ['%' + tail]
-  );
-  return rows[0] || null;
+  // Try tails of decreasing length so we find a match for short test
+  // numbers too (8 / 9 digits) without losing precision on real ones.
+  const candidates = [];
+  if (digits.length >= 10) candidates.push(digits.slice(-10));
+  if (digits.length >= 9)  candidates.push(digits.slice(-9));
+  if (digits.length >= 8)  candidates.push(digits.slice(-8));
+  if (!candidates.length)  candidates.push(digits);
+  for (const tail of candidates) {
+    const { rows } = await db.query(
+      `SELECT * FROM leads
+        WHERE regexp_replace(COALESCE(phone, ''),     '[^0-9]', '', 'g') LIKE $1
+           OR regexp_replace(COALESCE(whatsapp, ''),  '[^0-9]', '', 'g') LIKE $1
+           OR regexp_replace(COALESCE(alt_phone, ''), '[^0-9]', '', 'g') LIKE $1
+        ORDER BY (regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g') LIKE $1) DESC,
+                 id DESC
+        LIMIT 1`,
+      ['%' + tail]
+    );
+    if (rows[0]) return rows[0];
+  }
+  return null;
 }
 
 /**
@@ -127,13 +148,53 @@ async function api_recordings_delete(token, recId) {
 async function api_recordings_resetAll(token) {
   const me = await authUser(token);
   if (me.role !== 'admin') throw new Error('Admin only');
+  // Wipe recording rows AND call_event rows that referenced them. Without
+  // this second DELETE, the Call History tab still shows entries with
+  // broken/404 audio players (the call_event still has recording_id).
   const r = await db.query('DELETE FROM lead_recordings');
+  // Also kill the call_events that pointed at recordings — keep the
+  // pure-event rows (calls that never had a recording) untouched.
+  let events = 0;
+  try {
+    const e = await db.query("DELETE FROM call_events WHERE event = 'recording_saved' OR recording_id IS NOT NULL");
+    events = (e && e.rowCount) || 0;
+  } catch (_) { /* table shape varies — best effort */ }
   let diag = 0;
   try {
     const d = await db.query('DELETE FROM recording_diag_log');
     diag = (d && d.rowCount) || 0;
   } catch (_) { /* table may not exist */ }
-  return { ok: true, deleted: (r && r.rowCount) || 0, diag_cleared: diag };
+  return {
+    ok: true,
+    deleted: (r && r.rowCount) || 0,
+    call_events_cleared: events,
+    diag_cleared: diag
+  };
+}
+
+/**
+ * Relink orphan recordings to leads by phone. Walks every row where
+ * lead_id IS NULL and tries _findLeadByPhone() again. Useful when a
+ * recording was uploaded BEFORE the matching lead existed, or when the
+ * phone-match logic was previously broken.
+ */
+async function api_recordings_relinkOrphans(token) {
+  const me = await authUser(token);
+  if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin/manager only');
+  const orphans = await db.query(
+    'SELECT id, phone FROM lead_recordings WHERE (lead_id IS NULL OR lead_id = 0) AND phone IS NOT NULL AND phone != \'\''
+  );
+  let linked = 0;
+  for (const r of orphans.rows) {
+    try {
+      const lead = await _findLeadByPhone(r.phone);
+      if (lead && lead.id) {
+        await db.query('UPDATE lead_recordings SET lead_id = $1 WHERE id = $2', [lead.id, r.id]);
+        linked++;
+      }
+    } catch (_) {}
+  }
+  return { ok: true, scanned: orphans.rows.length, linked };
 }
 
 /**
@@ -656,7 +717,7 @@ module.exports = {
   api_leads_recordings,
   api_call_history,
   api_my_recordings,
-  api_recordings_delete, api_recordings_resetAll,
+  api_recordings_delete, api_recordings_resetAll, api_recordings_relinkOrphans,
   api_recording_aiSummary,
   api_recording_aiReprocess,
   api_recording_applySuggestion,

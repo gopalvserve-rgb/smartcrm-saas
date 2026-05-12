@@ -756,6 +756,24 @@ async function api_leads_create(token, payload) {
 
   const id = await db.insert('leads', base);
 
+  // Backfill: link any existing orphan recordings (lead_id is null) that
+  // were uploaded BEFORE this lead was created. Match by last-10-digit
+  // phone — same logic recordings.js uses on upload. Best-effort, never
+  // blocks lead creation.
+  try {
+    const digits = String(cleanPhone || '').replace(/\D/g, '');
+    const tail = digits.length >= 10 ? digits.slice(-10) : digits;
+    if (tail) {
+      await db.query(
+        `UPDATE lead_recordings
+            SET lead_id = $1
+          WHERE (lead_id IS NULL OR lead_id = 0)
+            AND regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g') LIKE $2`,
+        [id, '%' + tail]
+      );
+    }
+  } catch (e) { /* never block lead creation on this */ }
+
   // If we deflected an auto-assignment due to a cap, record the trail
   // so admins reviewing the unassigned queue know why the lead is here.
   if (_capWarning) {

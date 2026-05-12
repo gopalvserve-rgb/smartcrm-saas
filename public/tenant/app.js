@@ -5429,19 +5429,46 @@ function renderRecordingsList() {
       style: { background: '#fef2f2', color: '#991b1b', borderColor: '#fca5a5' },
       title: 'Permanently delete every recording in this tenant',
       onclick: async () => {
-        if (!await confirmDialog('🛑 Delete EVERY recording in this tenant?\n\nThis cannot be undone. AI summaries and call-event links are kept, but the audio files and the recording rows will be permanently removed.')) return;
+        if (!await confirmDialog('🛑 Delete EVERY recording in this tenant?\n\nThis also clears the call-history entries that referenced those recordings. Lead-event log and AI summaries are kept. Cannot be undone.')) return;
         try {
           const r = await api('api_recordings_resetAll');
-          toast('Reset complete — ' + r.deleted + ' recording(s) deleted', 'ok');
-          // Re-render the list (will show empty state)
+          const msg = 'Reset complete — ' + r.deleted + ' recording(s) deleted'
+                    + (r.call_events_cleared ? ', ' + r.call_events_cleared + ' call-history entries cleared' : '')
+                    + (r.diag_cleared ? ', ' + r.diag_cleared + ' diagnostic rows cleared' : '');
+          toast(msg, 'ok');
+          // Re-render the list — guaranteed to hit the right host since
+          // renderRecordingsList() returns the entire wrap (toolbar + list).
           const body = _dialerState && _dialerState.view && _dialerState.view.querySelector('.dialer-body');
           if (body) { body.innerHTML = ''; body.appendChild(renderRecordingsList()); }
+          // Also refresh the call-history tab in case it's the active view
+          // so it doesn't show stale entries with 404 audio players.
+          if (typeof refreshDialerHistory === 'function') refreshDialerHistory();
         } catch (e) { toast('Reset failed: ' + e.message, 'err'); }
       }
     }, '🛑 Reset all');
     toolbar.appendChild(resetBtn);
+    // Relink orphans — runs a one-shot pass that re-matches every recording
+    // whose lead_id is NULL against leads (by last-10-digit phone match).
+    // Useful when an APK uploaded a recording BEFORE the matching lead was
+    // created — without this they'd stay orphaned forever.
+    const relinkBtn = h('button', {
+      class: 'btn sm',
+      style: { background: '#dbeafe', color: '#1e40af', borderColor: '#93c5fd' },
+      title: 'Find recordings with no lead and try to match them to existing leads by phone',
+      onclick: async () => {
+        relinkBtn.textContent = 'Relinking…'; relinkBtn.disabled = true;
+        try {
+          const r = await api('api_recordings_relinkOrphans');
+          toast('Relink: ' + r.scanned + ' scanned, ' + r.linked + ' linked to leads', 'ok');
+          const body = _dialerState && _dialerState.view && _dialerState.view.querySelector('.dialer-body');
+          if (body) { body.innerHTML = ''; body.appendChild(renderRecordingsList()); }
+        } catch (e) { toast('Relink failed: ' + e.message, 'err'); }
+        relinkBtn.textContent = '🔗 Relink orphans'; relinkBtn.disabled = false;
+      }
+    }, '🔗 Relink orphans');
+    toolbar.appendChild(relinkBtn);
     toolbar.appendChild(h('span', { class: 'muted', style: { fontSize: '.78rem' } },
-      'Wipes every recording in the tenant. Use to start fresh after testing.'));
+      'Reset wipes everything · Relink re-matches recordings with empty lead_id to existing leads by phone.'));
   }
   wrap.appendChild(toolbar);
 
