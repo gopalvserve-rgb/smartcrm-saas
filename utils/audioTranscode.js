@@ -96,12 +96,24 @@ function needsTranscode(buf) {
     const brand = buf.slice(8, 12).toString('ascii').trim();
     // 3gp4 / 3gp5 / 3gpp / 3g2a — usually AMR-NB or AMR-WB inside
     if (brand.indexOf('3gp') === 0 || brand === '3gpp' || brand === '3g2a') return true;
+    // M4A / mp42 / isom — already our target format, nothing to do
+    return false;
   }
   // Standalone AMR file ('#!AMR\n' for NB, '#!AMR-WB\n' for WB)
   if (buf.slice(0, 4).toString('ascii') === '#!AM') return true;
-  // FLAC magic 'fLaC' — Chrome plays FLAC but Safari/iOS doesn't, so we
-  // transcode for cross-browser compatibility.
+  // FLAC magic 'fLaC' — Safari/iOS can't decode FLAC, transcode it.
   if (buf.slice(0, 4).toString('ascii') === 'fLaC') return true;
+  // Ogg Vorbis — Safari can't, transcode it
+  if (buf.slice(0, 4).toString('ascii') === 'OggS') return true;
+  // WAV — fine in browser, but huge. Transcode to AAC to save space.
+  if (buf.slice(0, 4).toString('ascii') === 'RIFF') return true;
+  // MP3 (any) — we used to produce MP3 here but switched to MP4/AAC.
+  // ANY non-MP4 file should be transcoded so the entire tenant ends up
+  // on a single, browser-friendly container. This auto-fixes the old
+  // 22kHz MPEG-2 MP3s that previous deploys cached — first play on
+  // each will trigger an automatic re-transcode to AAC/m4a.
+  if (buf.slice(0, 3).toString('ascii') === 'ID3') return true;
+  if (buf[0] === 0xFF && (buf[1] & 0xE0) === 0xE0) return true;
   return false;
 }
 
@@ -205,26 +217,27 @@ async function transcodeToMp3(buf) {
         const timer = setTimeout(() => finish(reject)(new Error('ffmpeg timed out after 30s')), 30_000);
         let _stderr = '';
       _ffmpeg(inPath)
-          .audioCodec('libmp3lame')
+          .audioCodec('aac')          // AAC in MP4 container = m4a.
+                                       // Android WebView has had built-in
+                                       // AAC decode since Android 1.0;
+                                       // it's the safest browser/mobile
+                                       // audio target by a wide margin.
+                                       // MP3 (even MPEG-1) failed to play
+                                       // in WebView even when /audio
+                                       // served bytes correctly.
           .audioBitrate('64k')
-          .audioFrequency(44100)  // MPEG-1 sampling rate — universally
-                                  // decoded by Android WebView and every
-                                  // browser. 22050 produced MPEG-2 audio
-                                  // which WebView refused to play even
-                                  // though /audio served HTTP 200.
+          .audioFrequency(44100)
           .audioChannels(1)
           .outputOptions([
-            '-write_xing', '1',      // VBR Info/Xing header so HTML5
-                                     // audio can parse duration upfront
-                                     // without scanning the full file
-            '-id3v2_version', '4',   // standard tags
-            '-compression_level', '2'
+            '-movflags', '+faststart'  // moov atom up front so the
+                                       // browser can start playback
+                                       // without downloading the entire
+                                       // file first
           ])
-          .format('mp3')
+          .format('mp4')               // ffmpeg's name; produces .m4a
           .on('stderr', line => { _stderr += line + '\n'; })
           .on('error', (err) => {
             clearTimeout(timer);
-            // attach stderr so the caller can see WHY ffmpeg failed
             err._stderr = _stderr.slice(-1500);
             finish(reject)(err);
           })
@@ -237,11 +250,17 @@ async function transcodeToMp3(buf) {
         console.warn('[audio-transcode] output too small (' + (out ? out.length : 0) + ' bytes), discarding');
         return null;
       }
-      const head = out.slice(0, 3);
-      const looksMp3 = (head[0] === 0x49 && head[1] === 0x44 && head[2] === 0x33)  // 'ID3'
-                    || (head[0] === 0xFF && (head[1] & 0xE0) === 0xE0);             // MPEG sync
-      if (!looksMp3) {
-        console.warn('[audio-transcode] output header doesn\'t look like MP3, discarding');
+      // Now producing MP4/m4a: bytes 4-8 should be 'ftyp' and the major
+      // brand at 8-12 starts with 'mp4' or 'M4A' or 'isom' / 'iso2'.
+      const ftypMarker = out.slice(4, 8).toString('ascii');
+      const brand      = out.slice(8, 12).toString('ascii').trim();
+      const looksMp4 = ftypMarker === 'ftyp' && (
+        brand === 'M4A' || brand === 'mp42' || brand === 'mp41'
+     || brand === 'isom' || brand === 'iso2' || brand === 'iso5'
+     || brand === 'dash'
+      );
+      if (!looksMp4) {
+        console.warn('[audio-transcode] output header is not MP4 (ftyp=' + ftypMarker + ' brand=' + brand + '), discarding');
         return null;
       }
       return out;
