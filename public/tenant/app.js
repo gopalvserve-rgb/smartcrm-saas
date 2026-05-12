@@ -21061,6 +21061,7 @@ function _renderCopilotDrawer() {
     { emoji: '\u23F0', label: 'Today\'s due follow-ups', q: 'Which follow-ups are due today (including any overdue ones)? Sort by oldest first and show the assigned employee.' },
     { emoji: '\u260E\uFE0F', label: 'Missed calls',     q: 'Show today\'s missed calls with the lead name and the rep they\'re assigned to.' },
     { emoji: '\uD83D\uDC65', label: 'Team performance', q: 'Team performance this month — leads handled, calls made, conversions, and revenue per employee. Rank from best to worst.' },
+    { emoji: '📊', label: 'Employee × status', q: 'Show me lead status breakdown for each employee — how many leads each sales rep has in New, In Progress, Won, Lost and every other status.' },
     { emoji: '\u26A0\uFE0F', label: 'TAT violators',    q: 'Which employees have TAT violations? Show the count of breached leads per rep and the worst offenders.' },
     { emoji: '\u2728', label: 'New leads today',        q: 'How many new leads came in today? Show me the list.' },
     { emoji: '\uD83D\uDD25', label: 'Hot leads',        q: 'Show me all hot leads (AI heat score) sorted by most recent.' },

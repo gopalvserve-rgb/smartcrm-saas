@@ -136,6 +136,13 @@ const TOOLS = [
     parameters: { type: 'object', properties: {
       from: { type: 'string' }, to: { type: 'string' }
     } } },
+  { name: 'leads_status_by_employee',
+    description: "Lead-status breakdown per employee — returns a matrix of how many leads each sales rep has in each status (New, In Progress, Won, Lost, etc.). Use for 'employee-wise lead status', 'status breakdown by sales rep', 'who has how many leads in each stage'. Defaults to ALL TIME if no dates given.",
+    parameters: { type: 'object', properties: {
+      from: { type: 'string', description: 'YYYY-MM-DD start date (optional — all time if omitted)' },
+      to:   { type: 'string', description: 'YYYY-MM-DD end date' },
+      assigned_to: { type: 'string', description: 'Optional: filter to one employee name' }
+    } } },
   { name: 'top_performers',
     description: "Top N sales reps ranked by won leads, lead value, or remarks count. Use for 'best performer this month', 'top 3 reps'.",
     parameters: { type: 'object', properties: {
@@ -627,6 +634,35 @@ async function _runTool(name, args, ctx) {
          ORDER BY total DESC`, [r.from, r.to]
       )).rows;
       return { rows: q, period: r };
+    }
+    case 'leads_status_by_employee': {
+      // Returns rows of { employee, status, count }. The LLM can format this
+      // as a per-employee bullet list or a table.
+      const r = _resolveBounds(args || {});
+      const params = [];
+      let where = '1=1';
+      // Only constrain by date if user explicitly asked
+      if (args && (args.from || args.to)) {
+        params.push(r.from, r.to);
+        where = `l.created_at >= $1 AND l.created_at < $2`;
+      }
+      if (args && args.assigned_to) {
+        const uid = await _resolveUserId(args.assigned_to);
+        if (uid) { params.push(uid); where += ` AND l.assigned_to = $${params.length}`; }
+      }
+      const q = await db.query(
+        `SELECT COALESCE(u.name, '(unassigned)') AS employee,
+                COALESCE(s.name, '(no status)') AS status,
+                COUNT(*)::int AS count
+           FROM leads l
+           LEFT JOIN users u    ON u.id = l.assigned_to
+           LEFT JOIN statuses s ON s.id = l.status_id
+          WHERE ${where}
+          GROUP BY employee, status
+          ORDER BY employee ASC, count DESC`,
+        params
+      );
+      return { rows: q.rows, count_returned: q.rows.length, period: (args && (args.from || args.to)) ? r : 'all-time' };
     }
     case 'top_performers': {
       const r = _resolveBounds(args, { defaultDays: 30 });
