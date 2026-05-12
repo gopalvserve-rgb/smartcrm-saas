@@ -21052,6 +21052,55 @@ function _renderCopilotDrawer() {
     if (q) q.textContent = (r.today || 0) + ' / ' + (r.daily_limit || 50) + ' questions used today';
   }).catch(() => {});
 
+  // ── Preset quick-action chips ─────────────────────────────────
+  // One-click queries so clients don't have to type. Each chip just
+  // populates the input + sends — uses the existing send() pipeline so
+  // history + thinking-state + quota all behave identically.
+  const PRESETS = [
+    { emoji: '\u2728', label: 'New leads today',     q: 'How many new leads came in today? Show me the list.' },
+    { emoji: '\uD83D\uDD25', label: 'Hot leads',    q: 'Show me all hot leads (AI heat score) sorted by most recent.' },
+    { emoji: '\u23F0', label: 'Overdue follow-ups', q: 'Which leads have overdue follow-ups? Sort by oldest first.' },
+    { emoji: '\uD83D\uDCC5', label: 'Today\'s calls', q: 'List today\'s calls — incoming, outgoing, missed.' },
+    { emoji: '\uD83D\uDCDE', label: 'Unattended chats', q: 'Show WhatsApp chats with unread messages waiting on us.' },
+    { emoji: '\uD83C\uDFAF', label: 'My pipeline', q: 'Show my pipeline by status with lead counts and total value.' },
+    { emoji: '\uD83D\uDCB0', label: 'This month\'s revenue', q: 'How much revenue have we closed this month? Break it down by sales rep.' },
+    { emoji: '\uD83D\uDCC8', label: 'Conversion rate', q: 'What\'s my conversion rate this month vs last month?' },
+    { emoji: '\uD83C\uDFC6', label: 'Top performer', q: 'Who\'s the top sales rep this month by closed deals?' },
+    { emoji: '\u26A0\uFE0F', label: 'Stuck deals',  q: 'Which deals have been in the same status for more than 7 days?' },
+    { emoji: '\uD83D\uDD0D', label: 'No activity 7d', q: 'Show leads with no remark, call, or message in the last 7 days.' },
+    { emoji: '\uD83D\uDCCB', label: 'My tasks',     q: 'What\'s on my plate today? List my pending tasks and follow-ups.' }
+  ];
+  const presetsRow = h('div', {
+    id: 'copilot-presets',
+    style: {
+      padding: '.5rem .55rem .4rem', borderTop: '1px solid #e2e8f0',
+      background: '#fafafa',
+      display: 'flex', flexWrap: 'wrap', gap: '.35rem',
+      maxHeight: '120px', overflowY: 'auto'
+    }
+  });
+  PRESETS.forEach(p => {
+    const btn = h('button', {
+      class: 'copilot-preset',
+      title: p.q,
+      style: {
+        background: '#fff', border: '1px solid #e2e8f0', borderRadius: '20px',
+        padding: '.3rem .65rem', fontSize: '.75rem', cursor: 'pointer',
+        color: '#475569', whiteSpace: 'nowrap', lineHeight: '1.2',
+        transition: 'background .1s, border-color .1s'
+      },
+      onmouseover: function() { this.style.background = '#eef2ff'; this.style.borderColor = '#a5b4fc'; },
+      onmouseout:  function() { this.style.background = '#fff';    this.style.borderColor = '#e2e8f0'; },
+      onclick: () => {
+        inp.value = p.q;
+        // Fire send() — defined below in this same closure
+        if (typeof send === 'function') send();
+      }
+    }, p.emoji + ' ' + p.label);
+    presetsRow.appendChild(btn);
+  });
+  d.appendChild(presetsRow);
+
   const inputRow = h('div', { style: { display: 'flex', gap: '.4rem', padding: '.5rem .5rem .65rem', borderTop: '1px solid #e2e8f0', background: '#fff' } });
   const inp = h('textarea', {
     rows: 1, placeholder: 'Type your question\u2026 (Enter to send, Shift+Enter for newline)',
