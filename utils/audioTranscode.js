@@ -28,20 +28,57 @@ let _ffmpegBinary = null;  // resolved path to the ffmpeg binary
 try { _ffmpeg = require('fluent-ffmpeg'); }
 catch (_) { _ffmpeg = null; }
 
-// Resolve ffmpeg binary path: prefer system ffmpeg (Nixpacks/Alpine apk),
-// fall back to ffmpeg-static (bundled in node_modules). Either guarantees
-// the transcode works regardless of how the host is provisioned.
+// Resolve ffmpeg binary path. Try every source so this NEVER breaks on
+// a fresh deploy: (1) ffmpeg-static (npm, precompiled binary), (2)
+// @ffmpeg-installer/ffmpeg (alternative npm package), (3) system ffmpeg
+// on PATH (apk add ffmpeg in Docker / nixpacks ffmpeg-full on Railway).
+// Each require() is wrapped — missing/broken packages don't crash boot.
 if (_ffmpeg) {
+  // Try (1) ffmpeg-static
   try {
-    // ffmpeg-static exports the absolute path to a precompiled binary
     const _static = require('ffmpeg-static');
     if (_static && typeof _static === 'string') {
-      _ffmpegBinary = _static;
-      _ffmpeg.setFfmpegPath(_static);
-      console.log('[audio-transcode] using ffmpeg-static at', _static);
+      const fs = require('fs');
+      if (fs.existsSync(_static)) {
+        _ffmpegBinary = _static;
+        _ffmpeg.setFfmpegPath(_static);
+        console.log('[audio-transcode] using ffmpeg-static at', _static);
+      } else {
+        console.warn('[audio-transcode] ffmpeg-static path missing:', _static);
+      }
     }
   } catch (e) {
-    console.warn('[audio-transcode] ffmpeg-static not installed:', e.message);
+    console.warn('[audio-transcode] ffmpeg-static unavailable:', e.message);
+  }
+  // Try (2) @ffmpeg-installer/ffmpeg
+  if (!_ffmpegBinary) {
+    try {
+      const _alt = require('@ffmpeg-installer/ffmpeg');
+      if (_alt && _alt.path) {
+        const fs = require('fs');
+        if (fs.existsSync(_alt.path)) {
+          _ffmpegBinary = _alt.path;
+          _ffmpeg.setFfmpegPath(_alt.path);
+          console.log('[audio-transcode] using @ffmpeg-installer/ffmpeg at', _alt.path);
+        }
+      }
+    } catch (e) { /* expected if not installed */ }
+  }
+  // Try (3) system ffmpeg on PATH — works on Railway nixpacks (ffmpeg-full)
+  // and Docker Alpine (apk add ffmpeg).
+  if (!_ffmpegBinary) {
+    try {
+      const cp = require('child_process');
+      const out = cp.execSync('command -v ffmpeg || which ffmpeg', { encoding: 'utf8', timeout: 3000 }).trim();
+      if (out) {
+        _ffmpegBinary = out;
+        _ffmpeg.setFfmpegPath(out);
+        console.log('[audio-transcode] using system ffmpeg at', out);
+      }
+    } catch (e) { /* ffmpeg not on PATH */ }
+  }
+  if (!_ffmpegBinary) {
+    console.warn('[audio-transcode] no ffmpeg binary found — 3GP/AMR recordings will not transcode');
   }
 }
 

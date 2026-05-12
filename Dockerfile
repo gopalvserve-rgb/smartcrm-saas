@@ -7,7 +7,8 @@ WORKDIR /app
 RUN apk add --no-cache ffmpeg
 
 COPY package*.json ./
-RUN npm install --omit=dev
+# --no-fund/--no-audit silences noise; optional deps can fail without aborting
+RUN npm install --omit=dev --no-fund --no-audit --include=optional || npm install --omit=dev --no-fund --no-audit
 
 COPY . .
 
