@@ -2685,7 +2685,19 @@ function renderCell(col, l, statuses) {
       h('button', { class: 'btn icon', title: 'Add remark', onclick: ev => { ev.stopPropagation(); openRemarkInline(l.id); } }, '💬+')
     );
     case 'city':    return h('td', {}, l.city || '');
-    case 'created': return h('td', { class: 'muted' }, fmtDate(l.created_at, 'short'));
+    case 'created': {
+      // Two-line cell: date on top, time below in muted/smaller. Keeps the
+      // column compact while surfacing the time the lead came in — useful
+      // for triaging when multiple leads land on the same day.
+      const _d = l.created_at ? new Date(l.created_at) : null;
+      if (!_d || isNaN(_d.getTime())) return h('td', { class: 'muted' }, '');
+      const _dateStr = _d.toLocaleDateString();
+      const _timeStr = _d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      return h('td', { class: 'muted', style: { whiteSpace: 'nowrap' } },
+        h('div', {}, _dateStr),
+        h('div', { style: { fontSize: '.74rem', opacity: '.75' } }, _timeStr)
+      );
+    }
     default:        return h('td', {}, '');
   }
 }
