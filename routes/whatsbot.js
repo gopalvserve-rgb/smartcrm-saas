@@ -904,6 +904,37 @@ async function _sendTemplate({ to, templateName, language, variables, imageUrl, 
   // _graphPost call below uses that phone's token + phone_number_id.
   if (fromPhoneNumberId) cfg = await _cfgForPhone(fromPhoneNumberId);
   const c = cfg || await _cfg();
+
+  // ── Language safety net ─────────────────────────────────────────────
+  // Meta returns #132001 ('Template name does not exist in the translation')
+  // when the language code on the send doesn't match an APPROVED language
+  // for the template. This used to fail an entire campaign silently. Look
+  // up the approved languages for templateName from wa_templates and pick
+  // the best match: exact code → same base language (en, hi, etc.) → first
+  // approved language. Only override the caller's value when it's clearly
+  // wrong (no exact match exists).
+  try {
+    const tplRows = await db.query(
+      `SELECT language, status FROM wa_templates WHERE name = $1`,
+      [templateName]
+    );
+    const all = tplRows.rows || [];
+    const approved = all.filter(r => String(r.status || '').toUpperCase() === 'APPROVED');
+    const pool = approved.length ? approved : all;
+    if (pool.length) {
+      const requested = String(language || 'en_US').toLowerCase();
+      const reqBase   = requested.split(/[_-]/)[0];
+      const exact = pool.find(r => String(r.language).toLowerCase() === requested);
+      const sameBase = !exact && pool.find(r => String(r.language).toLowerCase().split(/[_-]/)[0] === reqBase);
+      if (!exact) {
+        const fallback = sameBase || pool[0];
+        console.warn('[wb] template-language fallback: requested=' + requested +
+                     ' → using=' + fallback.language + ' (template=' + templateName + ')');
+        language = fallback.language;
+      }
+    }
+  } catch (e) { /* if the lookup fails, send with the caller's value */ }
+
   // Components: BODY variables + optional HEADER image
   const components = [];
   if (imageUrl) {
@@ -1748,6 +1779,21 @@ async function api_wb_template_bots_delete(token, id) {
 
 // ---------- Campaigns ---------------------------------------------
 
+
+// List APPROVED languages for a given template. Lets the SPA's campaign
+// modal show only languages the template can actually be sent in.
+async function api_wb_templates_languages(token, name) {
+  await authUser(token);
+  const tpl = String(name || '').trim();
+  if (!tpl) return [];
+  const { rows } = await db.query(
+    `SELECT language, status, category, body_text
+       FROM wa_templates WHERE name = $1
+       ORDER BY (status = 'APPROVED') DESC, language ASC`, [tpl]
+  );
+  return rows;
+}
+
 async function api_wb_campaigns_list(token) {
   await authUser(token);
   const rows = await db.getAll('wa_campaigns');
@@ -1998,7 +2044,11 @@ async function _campaignTick() {
           variables: renderedVars, imageUrl: camp.image_url || null
         }, cfg);
         if (r.body?.error) {
-          await db.update('wa_campaign_targets', t.id, { status: 'failed', error: r.body.error.message, sent_at: db.nowIso() });
+          let errMsg = r.body.error.message || 'unknown';
+          if (String(r.body.error.code) === '132001' || errMsg.includes('translation')) {
+            errMsg = '#132001 — Template "' + camp.template_name + '" is not approved in language "' + camp.template_language + '". Check WhatsApp Manager → Message Templates and pick a language with status=APPROVED.';
+          }
+          await db.update('wa_campaign_targets', t.id, { status: 'failed', error: errMsg, sent_at: db.nowIso() });
           await db.update('wa_campaigns', camp.id, { recipients_failed: Number(camp.recipients_failed || 0) + 1 });
           camp.recipients_failed = Number(camp.recipients_failed || 0) + 1;
         } else {
@@ -2662,6 +2712,7 @@ module.exports = {
   api_wb_message_bots_list, api_wb_message_bots_save, api_wb_message_bots_delete,
   api_wb_template_bots_list, api_wb_template_bots_save, api_wb_template_bots_delete,
   // Campaigns
+  api_wb_templates_languages,
   api_wb_campaigns_list, api_wb_campaigns_create, api_wb_campaigns_send_now,
   api_wb_campaigns_pause, api_wb_campaigns_targets,
   // Activity
