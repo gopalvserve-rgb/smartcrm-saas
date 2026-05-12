@@ -5019,7 +5019,7 @@ function renderRecordingItem(r) {
     h('div', { class: 'rec-meta' },
       h('span', { class: 'rec-dir' }, dirIcon),
       h('b', {}, r.lead_name || r.phone || '—'),
-      h('span', { class: 'muted' }, ' · ' + fmtDate(r.created_at, 'relative') + ' · ' + mm + ':' + ss),
+      h('span', { class: 'muted' }, ' · ' + (r.rep_name ? r.rep_name + ' · ' : '') + fmtDate(r.created_at, 'relative') + ' · ' + mm + ':' + ss),
       _dlLink,
       _inspectBtn,
       _testTabBtn,

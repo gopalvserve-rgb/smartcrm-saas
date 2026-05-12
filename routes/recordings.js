@@ -6,7 +6,7 @@
  * use move to S3/R2.
  */
 const db = require('../db/pg');
-const { authUser } = require('../utils/auth');
+const { authUser, getVisibleUserIds } = require('../utils/auth');
 
 /** Find a lead by matching the last 10 digits of the phone. */
 async function _findLeadByPhone(phone) {
@@ -83,15 +83,27 @@ async function api_call_history(token, limit) {
 async function api_my_recordings(token, limit) {
   const me = await authUser(token);
   const lim = Math.min(Number(limit) || 100, 500);
+  // Visibility rules — same pattern the rest of the app uses:
+  //   admin/manager/team_leader → recordings of every user they can see
+  //   sales/employee           → only their own
+  // This means an admin logging in on desktop sees the whole team's
+  // recordings (which is what they need for performance review),
+  // while individual reps still see only their own.
+  const visible = await getVisibleUserIds(me);
+  const ids = (visible && visible.length) ? visible : [me.id];
+  const placeholders = ids.map((_, i) => '$' + (i + 1)).join(',');
   const { rows } = await db.query(
     `SELECT r.id, r.lead_id, r.phone, r.direction, r.duration_s,
-            r.mime_type, r.size_bytes, r.created_at, l.name AS lead_name
+            r.mime_type, r.size_bytes, r.created_at, r.user_id,
+            l.name AS lead_name,
+            u.name AS rep_name
        FROM lead_recordings r
        LEFT JOIN leads l ON l.id = r.lead_id
-      WHERE r.user_id = $1
+       LEFT JOIN users u ON u.id = r.user_id
+      WHERE r.user_id IN (${placeholders})
       ORDER BY r.created_at DESC
-      LIMIT $2`,
-    [me.id, lim]
+      LIMIT $${ids.length + 1}`,
+    [...ids, lim]
   );
   return rows;
 }
