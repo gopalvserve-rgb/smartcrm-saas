@@ -1006,38 +1006,31 @@ async function _sendTemplate({ to, templateName, language, variables, imageUrl, 
     } catch (_) { return 0; }
   }
 
+  // Best-effort language hint from local cache. NON-destructive: we use
+  // the cache only to OFFER a better language if the caller's pick has
+  // no exact APPROVED match. We never reject a send pre-flight — the
+  // cache can lie (stale status) and blocking sends based on stale data
+  // is worse than letting Meta itself decide. The retry-once-on-132001
+  // logic AFTER the Graph POST handles the case where Meta rejects.
   try {
-    let all = await _pickLanguage(templateName, language);
-    // If we have no rows for this template, fetch from Meta and retry once.
-    if (!all.length && c.wabaId && c.token) {
-      const got = await _refreshFromMeta(templateName);
-      if (got > 0) all = await _pickLanguage(templateName, language);
-    }
+    const all = await _pickLanguage(templateName, language);
     const approved = all.filter(r => String(r.status || '').toUpperCase() === 'APPROVED');
-    if (all.length && !approved.length) {
-      // Template exists on Meta but no language is APPROVED yet.
-      const statuses = all.map(r => r.language + '=' + r.status).join(', ');
-      return {
-        status: 400,
-        body: { error: { code: 132001, message: '#132001 — Template "' + templateName + '" has no APPROVED translation yet. Current status: ' + statuses + '. Wait for Meta approval or create a new translation.' } },
-        wa_message_id: null
-      };
-    }
     if (approved.length) {
       const requested = String(language || 'en_US').toLowerCase();
       const reqBase   = requested.split(/[_-]/)[0];
-      const exact = approved.find(r => String(r.language).toLowerCase() === requested);
-      const sameBase = !exact && approved.find(r => String(r.language).toLowerCase().split(/[_-]/)[0] === reqBase);
+      const exact     = approved.find(r => String(r.language).toLowerCase() === requested);
       if (!exact) {
+        const sameBase = approved.find(r => String(r.language).toLowerCase().split(/[_-]/)[0] === reqBase);
         const fallback = sameBase || approved[0];
-        console.warn('[wb] template-language fallback: requested=' + requested +
-                     ' → using=' + fallback.language + ' (template=' + templateName + ')');
+        console.warn('[wb] template-language hint: requested=' + requested +
+                     ' → trying=' + fallback.language + ' (template=' + templateName + ')');
         language = fallback.language;
       }
     }
-    // If we still have nothing (Meta hasn't heard of this template at all),
-    // let the send go through — Meta's own error will be more specific.
-  } catch (e) { /* lookup failed entirely — proceed with caller's value */ }
+    // If the cache has nothing approved (or is empty), we DON'T touch
+    // the caller's language. Meta gets the call as-is; the retry path
+    // below auto-refreshes + swaps language if Meta says 132001.
+  } catch (_) { /* lookup failed — proceed with caller's value */ }
 
   // Components: BODY variables + optional HEADER image
   const components = [];
