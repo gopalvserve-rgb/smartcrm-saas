@@ -66,29 +66,54 @@ async function _verifyFfmpeg() {
  * not catastrophic if a process crashes mid-transcode.
  */
 async function transcodeToMp3(buf) {
-  const ok = await _verifyFfmpeg();
-  if (!ok) return null;
-  const uid = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
-  const inPath  = path.join(os.tmpdir(), 'rec-in-'  + uid);
-  const outPath = path.join(os.tmpdir(), 'rec-out-' + uid + '.mp3');
-  await fs.promises.writeFile(inPath, buf);
+  // Wrap EVERYTHING in try/catch — return null on any failure so the
+  // caller can fall back to serving the original bytes. Never throws.
   try {
-    await new Promise((resolve, reject) => {
-      _ffmpeg(inPath)
-        .audioCodec('libmp3lame')
-        .audioBitrate('64k')
-        .audioFrequency(22050)
-        .audioChannels(1)            // mono — calls are mono anyway
-        .format('mp3')
-        .on('error', reject)
-        .on('end', resolve)
-        .save(outPath);
-    });
-    const out = await fs.promises.readFile(outPath);
-    return out;
-  } finally {
-    fs.promises.unlink(inPath).catch(() => {});
-    fs.promises.unlink(outPath).catch(() => {});
+    const ok = await _verifyFfmpeg();
+    if (!ok) {
+      console.warn('[audio-transcode] ffmpeg not available — cannot transcode');
+      return null;
+    }
+    const uid = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+    const inPath  = path.join(os.tmpdir(), 'rec-in-'  + uid);
+    const outPath = path.join(os.tmpdir(), 'rec-out-' + uid + '.mp3');
+    try {
+      await fs.promises.writeFile(inPath, buf);
+      await new Promise((resolve, reject) => {
+        let settled = false;
+        const finish = (fn) => (arg) => { if (!settled) { settled = true; fn(arg); } };
+        const timer = setTimeout(() => finish(reject)(new Error('ffmpeg timed out after 30s')), 30_000);
+        _ffmpeg(inPath)
+          .audioCodec('libmp3lame')
+          .audioBitrate('64k')
+          .audioFrequency(22050)
+          .audioChannels(1)
+          .format('mp3')
+          .on('error', (err) => { clearTimeout(timer); finish(reject)(err); })
+          .on('end',   () => { clearTimeout(timer); finish(resolve)(); })
+          .save(outPath);
+      });
+      // Sanity check: MP3 starts with 'ID3' or an MPEG frame header (0xFF 0xFn)
+      const out = await fs.promises.readFile(outPath);
+      if (!out || out.length < 256) {
+        console.warn('[audio-transcode] output too small (' + (out ? out.length : 0) + ' bytes), discarding');
+        return null;
+      }
+      const head = out.slice(0, 3);
+      const looksMp3 = (head[0] === 0x49 && head[1] === 0x44 && head[2] === 0x33)  // 'ID3'
+                    || (head[0] === 0xFF && (head[1] & 0xE0) === 0xE0);             // MPEG sync
+      if (!looksMp3) {
+        console.warn('[audio-transcode] output header doesn\'t look like MP3, discarding');
+        return null;
+      }
+      return out;
+    } finally {
+      fs.promises.unlink(inPath).catch(() => {});
+      fs.promises.unlink(outPath).catch(() => {});
+    }
+  } catch (e) {
+    console.warn('[audio-transcode] failed (returning null):', e && e.message);
+    return null;
   }
 }
 

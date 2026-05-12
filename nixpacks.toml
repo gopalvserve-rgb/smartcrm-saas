@@ -1,0 +1,14 @@
+# Tell Railway's Nixpacks builder to bundle ffmpeg into the final image.
+# We use ffmpeg to transcode AMR/3GP call recordings (what Samsung's
+# stock dialer writes) into MP3 (which every browser plays). Without
+# ffmpeg present at runtime, the lazy-transcode in /api/recordings/:id/audio
+# falls back to serving the original bytes — the in-app player can't play
+# them, but the ⬇ Download link in the UI still works.
+#
+# The Dockerfile in this repo is the fallback for non-Railway deploys.
+
+[phases.setup]
+nixPkgs = ['nodejs_20', 'ffmpeg-full']
+
+[start]
+cmd = "node server.js"
