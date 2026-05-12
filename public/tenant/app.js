@@ -4851,9 +4851,67 @@ function renderRecordingItem(r) {
   // natively (AMR-in-3GP etc.) — when we see that we don't blame 'broken
   // server' and instead point at the download link.
   audio.addEventListener('error', async () => {
-    // Add a 🔄 Re-transcode button next to the player on first error.
-    // One click forces the server to convert the stored 3GP/AMR to MP3.
-    if (!audio._retxBtn) {
+    // Auto-diagnose: fetch /audio (to get status) AND /info (to see DB row).
+    // Build a comprehensive popup so the admin sees EXACTLY what's wrong.
+    let audioResp, audioStatus = '?', audioBody = '', mime = '', playable = '';
+    try {
+      audioResp = await fetch(_audioUrl);
+      audioStatus = audioResp.status;
+      playable = audioResp.headers.get('X-Audio-Browser-Playable') || '';
+      mime = audioResp.headers.get('X-Audio-Detected-Mime') || audioResp.headers.get('Content-Type') || '';
+      if (!audioResp.ok) audioBody = (await audioResp.text().catch(() => '')).slice(0, 400);
+    } catch (e) { audioStatus = 'NETWORK_FAIL: ' + e.message; }
+
+    let infoRow = null, infoErr = '';
+    try {
+      const _ir = await fetch('/api/recordings/' + r.id + '/info?token=' + encodeURIComponent(CRM.token || ''));
+      const _ij = await _ir.json();
+      if (_ir.ok) infoRow = _ij.row;
+      else infoErr = 'HTTP ' + _ir.status + ' — ' + (_ij.error || '');
+    } catch (e) { infoErr = e.message; }
+
+    // Make a short toast + a clickable Details button that opens a popup
+    let shortMsg;
+    if (audioStatus === 410) {
+      shortMsg = '🎧 Recording has NO bytes in DB. Re-sync from phone.';
+    } else if (audioStatus === 404) {
+      shortMsg = '🎧 Recording not found on server.';
+    } else if (audioStatus === 401) {
+      shortMsg = '🎧 Session expired — log out and back in.';
+    } else if (playable === '0') {
+      shortMsg = '🎧 ' + mime + ' format — browser can\'t decode. Click 🔄 Re-transcode.';
+    } else {
+      shortMsg = '🎧 Playback failed: HTTP ' + audioStatus + (audioBody ? ' — ' + audioBody.slice(0, 80) : '');
+    }
+    if (typeof toast === 'function') toast(shortMsg, 'err');
+    console.warn('[leadcrm] audio fail rec=' + r.id + ' status=' + audioStatus + ' mime=' + mime + ' playable=' + playable, infoRow);
+
+    // Render an expanded diagnostic block right under the player so the
+    // info doesn't disappear when the toast fades.
+    if (audio._diagBlock) audio._diagBlock.remove();
+    const diag = h('div', { style: { background: '#fef3c7', color: '#92400e', padding: '.6rem .8rem', borderRadius: '6px', margin: '.4rem 0', fontSize: '.78rem', whiteSpace: 'pre-wrap', fontFamily: 'monospace' } },
+      '🔍 Diagnostic for recording #' + r.id + '\n' +
+      '────────────────────────────────\n' +
+      '/audio HTTP status:  ' + audioStatus + '\n' +
+      '/audio MIME header:  ' + (mime || '(none)') + '\n' +
+      '/audio playable:     ' + (playable || '(no header)') + '\n' +
+      (audioBody ? '/audio body:         ' + audioBody.slice(0, 200) + '\n' : '') +
+      '\nDatabase row:\n' +
+      (infoRow ? (
+        '  mime_type:   ' + (infoRow.mime_type || '(null)') + '\n' +
+        '  size_bytes:  ' + (infoRow.size_bytes || 0) + '\n' +
+        '  real_bytes:  ' + (infoRow.real_bytes || 0) + (Number(infoRow.real_bytes||0) === 0 ? ' ← THIS IS THE PROBLEM (no audio stored)' : '') + '\n' +
+        '  duration_s:  ' + (infoRow.duration_s || 0) + '\n' +
+        '  head_hex:    ' + (infoRow.head_hex || '(empty)') + '\n' +
+        '  created_at:  ' + (infoRow.created_at || '')
+      ) : '  (info fetch failed: ' + infoErr + ')')
+    );
+    audio._diagBlock = diag;
+    audio.parentElement && audio.parentElement.appendChild(diag);
+
+    // Yellow 🔄 Re-transcode button (only useful when bytes exist but
+    // codec isn't playable — i.e. 3gp/amr/flac).
+    if (!audio._retxBtn && infoRow && Number(infoRow.real_bytes || 0) > 0 && playable === '0') {
       const btn = h('button', {
         class: 'btn sm',
         style: { marginLeft: '.5rem', background: '#fef3c7', color: '#92400e', borderColor: '#fcd34d' },
@@ -4868,6 +4926,7 @@ function renderRecordingItem(r) {
               toast('Converted to MP3 (' + Math.round(j.to_bytes/1024) + ' KB). Try ▶ again.', 'ok');
               audio.src = _audioUrl + '&t=' + Date.now();  // bust cache
               audio.load();
+              if (audio._diagBlock) audio._diagBlock.remove();
             } else {
               toast('Convert failed: ' + (j.error || resp.status), 'err');
             }
@@ -4879,35 +4938,9 @@ function renderRecordingItem(r) {
       audio.parentElement && audio.parentElement.appendChild(btn);
     }
 
-    try {
-      const r2 = await fetch(_audioUrl);
-      const playable = r2.headers.get('X-Audio-Browser-Playable');
-      const mime     = r2.headers.get('X-Audio-Detected-Mime') || '';
-      let msg;
-      if (playable === '0') {
-        msg = '🎧 Your phone recorded this call in ' + (mime || 'AMR/3GP') + ' format — Chrome and the in-app player can\'t decode it. Click ⬇ Download to play it in any external media player.';
-      } else if (r2.status === 410) {
-        // 410 Gone — server says the recording row exists but audio_bytes
-        // is NULL/empty. The upload was zero-byte. Click 🔍 Inspect to
-        // see real_bytes; re-sync from the phone if you want to recover.
-        msg = '🎧 Recording #' + r.id + ' has no audio bytes on the server (empty upload). Click 🔍 Inspect to confirm, then re-sync from your phone.';
-      } else if (r2.status === 404) {
-        msg = '🎧 Recording #' + r.id + ' not found on the server. It may have been deleted.';
-      } else if (r2.status === 401) {
-        msg = '🎧 Session expired — please log out and back in.';
-      } else {
-        const txt = await r2.text().catch(() => '');
-        msg = '🎧 Playback failed: HTTP ' + r2.status + (txt && txt.length < 200 ? ' — ' + txt.slice(0, 120) : '');
-      }
-      console.warn('[leadcrm] audio error', r.id, 'playable=' + playable + ' mime=' + mime);
-      if (typeof toast === 'function') toast(msg, playable === '0' ? 'warn' : 'err');
-      // Visually nudge the user toward the download link.
-      _dlLink.style.color = '#dc2626';
-      _dlLink.style.fontWeight = '600';
-    } catch (e) {
-      console.warn('[leadcrm] audio error (no detail)', r.id, e);
-      if (typeof toast === 'function') toast('🎧 Playback failed — try ⬇ Download', 'err');
-    }
+    // Visually nudge the user toward the download link.
+    _dlLink.style.color = '#dc2626';
+    _dlLink.style.fontWeight = '600';
   });
   const aiBlock = h('div', { class: 'rec-ai-block' });
   // Lazy-load the AI summary on first paint. Polls every 10s while pending.
