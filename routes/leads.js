@@ -528,7 +528,13 @@ async function api_leads_create(token, payload) {
       }
     }
   }
-  if (!p.name) throw new Error('name required');
+  // Auto-derive name from phone/email if missing — admins routinely
+  // upload CSVs (IndiaMART/JustDial exports) where only phone is known.
+  if (!p.name || !String(p.name).trim()) {
+    const phoneAlias = p.phone || p.mobile || p.contact || p.whatsapp || p.mobile_number || p.contact_number || '';
+    const emailLocal = String(p.email || '').split('@')[0] || '';
+    p.name = String(phoneAlias).trim() || emailLocal.trim() || 'Unnamed lead';
+  }
 
   // Mobile number is required — leads without a contact phone are essentially
   // un-followable, so reject them at the API layer (covers both manual lead
@@ -637,7 +643,7 @@ async function api_leads_create(token, payload) {
       // Build a probe object the matcher can read against. Mirrors the
       // shape api_leads_create is about to insert.
       const probe = {
-        source: p.source || 'manual',
+        source: (String(p.source ?? p.lead_source ?? p.leadsource ?? p.origin ?? p.source_type ?? p.source_name ?? p.channel ?? p.referrer ?? p.utm_source ?? '').trim() || 'manual'),
         source_ref: p.source_ref || '',
         product_id: resolvedProductId,
         name: p.name, email: p.email || '', phone: cleanPhone,
@@ -669,7 +675,7 @@ async function api_leads_create(token, payload) {
     phone: cleanPhone,
     alt_phone: String(p.alt_phone || '').trim().replace(/^'/, ''),
     whatsapp: cleanWA,
-    source: p.source || 'manual',
+    source: (String(p.source ?? p.lead_source ?? p.leadsource ?? p.origin ?? p.source_type ?? p.source_name ?? p.channel ?? p.referrer ?? p.utm_source ?? '').trim() || 'manual'),
     source_ref: p.source_ref || '',
     product_id: resolvedProductId,
     status_id: _statusId,
@@ -1519,7 +1525,12 @@ async function api_leads_bulkCreate(token, rows, assign) {
     else if (assignment.mode === 'round_robin' || assignment.mode === 'percent') r.assigned_to = '';
 
     try {
-      if (!r.name) { results.skipped++; results.errors.push({ row: i + 1, error: 'missing name' }); continue; }
+      // Auto-fill name when missing — vendor exports often skip it.
+      if (!r.name || !String(r.name).trim()) {
+        const phoneAlias = r.phone || r.mobile || r.whatsapp || r.contact || r.contact_number || r.mobile_number || '';
+        const emailLocal = String(r.email || '').split('@')[0] || '';
+        r.name = String(phoneAlias).trim() || emailLocal.trim() || 'Unnamed lead';
+      }
       const out = await api_leads_create(token, r);
       if (planned) inBatchAssigned[planned] = (inBatchAssigned[planned] || 0) + 1;
       results.created++;
