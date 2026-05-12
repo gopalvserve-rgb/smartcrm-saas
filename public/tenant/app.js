@@ -11893,7 +11893,7 @@ VIEWS.callinsights = async (view) => {
     h('p', { class: 'muted' }, 'Each call recording is automatically transcribed + summarised by AI. Click any lead below to see the full transcript.')
   ));
   view.appendChild(h('div', { class: 'toolbar' },
-    h('span', {}, 'Filter:'), sentSel, userSel, tatRuleBtn,
+    h('span', {}, 'Filter:'), sentSel, userSel,  // (was a stray tatRuleBtn copy-paste — that lives in the TAT view only)
     h('button', { class: 'btn primary', onclick: load }, '🔎 Apply')
   ));
   view.appendChild(feedDiv);
