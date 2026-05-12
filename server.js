@@ -1107,6 +1107,61 @@ app.get('/api/recordings/:id/info', async (req, res, next) => {
     });
 });
 
+// Admin diagnostic: confirm ffmpeg is available and working. Returns the
+// resolved binary path + version + a smoke-test transcode of a tiny AMR
+// blob. If this fails, browser playback for 3GP/AMR recordings won't work.
+app.get('/api/recordings/ffmpeg-status', async (req, res) => {
+  try {
+    const tx = require('./utils/audioTranscode');
+    const cp = require('child_process');
+    const bin = tx.getFfmpegBinary && tx.getFfmpegBinary();
+    let version = null;
+    try {
+      version = cp.execFileSync(bin || 'ffmpeg', ['-version'], { encoding: 'utf8', timeout: 5000 }).split('\n')[0];
+    } catch (e) {
+      version = 'ffmpeg binary not runnable: ' + e.message;
+    }
+    res.json({ ok: !!bin, binary: bin || '(not resolved)', version });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Admin: force a recording to re-transcode now. Replaces the stored
+// bytes with MP3 so the in-app player works. Pass the auth token in
+// ?token=. Returns { ok, from_bytes, to_bytes, mime } or an error.
+app.get('/api/recordings/:id/retranscode', async (req, res) => {
+  const tenantDb = require('./db/pg');
+  const jwt = require('jsonwebtoken');
+  const _JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
+  try {
+    if (!req.tenant) {
+      const raw = (req.query.token || req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+      if (!raw) return res.status(401).json({ error: 'No auth token' });
+      let decoded; try { decoded = jwt.verify(raw, _JWT_SECRET); } catch (_) { return res.status(401).json({ error: 'Bad token' }); }
+      const uid = Number(decoded && decoded.id);
+      const t = await _findTenantByLookup('SELECT 1 FROM users WHERE id=$1 AND COALESCE(is_active,1)=1 LIMIT 1', [uid]);
+      if (!t) return res.status(404).json({ error: 'No tenant' });
+      req.tenant = t; req.tenantPool = tenantPoolMod.poolFor(t); req.tenantSlug = t.slug;
+    }
+    return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug }, async () => {
+      const r = await tenantDb.query('SELECT audio_bytes FROM lead_recordings WHERE id=$1', [Number(req.params.id)]);
+      if (!r.rows[0]) return res.status(404).json({ error: 'recording not found' });
+      let buf = r.rows[0].audio_bytes;
+      if (!Buffer.isBuffer(buf)) buf = Buffer.from(buf);
+      const fromBytes = buf.length;
+      const tx = require('./utils/audioTranscode');
+      const mp3 = await tx.transcodeToMp3(buf);
+      if (!mp3) return res.status(500).json({ error: 'transcode returned null — check /api/recordings/ffmpeg-status', from_bytes: fromBytes });
+      await tenantDb.query('UPDATE lead_recordings SET audio_bytes=$1, size_bytes=$2, mime_type=$3 WHERE id=$4', [mp3, mp3.length, 'audio/mpeg', Number(req.params.id)]);
+      return res.json({ ok: true, from_bytes: fromBytes, to_bytes: mp3.length, mime: 'audio/mpeg' });
+    });
+  } catch (e) {
+    console.error('[retranscode]', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/recordings/:id/audio', async (req, res, next) => {
   // Tenant-agnostic playback: <audio src> bypasses the fetch monkey-patch
   // so the URL hits bare /api/recordings/:id/audio without /t/<slug>/.

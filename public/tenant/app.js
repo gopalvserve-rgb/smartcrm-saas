@@ -4819,6 +4819,34 @@ function renderRecordingItem(r) {
   // natively (AMR-in-3GP etc.) — when we see that we don't blame 'broken
   // server' and instead point at the download link.
   audio.addEventListener('error', async () => {
+    // Add a 🔄 Re-transcode button next to the player on first error.
+    // One click forces the server to convert the stored 3GP/AMR to MP3.
+    if (!audio._retxBtn) {
+      const btn = h('button', {
+        class: 'btn sm',
+        style: { marginLeft: '.5rem', background: '#fef3c7', color: '#92400e', borderColor: '#fcd34d' },
+        title: 'Force server to convert this recording to MP3 so the player works',
+        onclick: async () => {
+          btn.textContent = 'Converting…'; btn.disabled = true;
+          try {
+            const url = '/api/recordings/' + r.id + '/retranscode?token=' + encodeURIComponent(CRM.token || '');
+            const resp = await fetch(url);
+            const j = await resp.json().catch(() => ({}));
+            if (j.ok) {
+              toast('Converted to MP3 (' + Math.round(j.to_bytes/1024) + ' KB). Try ▶ again.', 'ok');
+              audio.src = _audioUrl + '&t=' + Date.now();  // bust cache
+              audio.load();
+            } else {
+              toast('Convert failed: ' + (j.error || resp.status), 'err');
+            }
+          } catch (e) { toast('Convert failed: ' + e.message, 'err'); }
+          btn.disabled = false;
+        }
+      }, '🔄 Re-transcode');
+      audio._retxBtn = btn;
+      audio.parentElement && audio.parentElement.appendChild(btn);
+    }
+
     try {
       const r2 = await fetch(_audioUrl);
       const playable = r2.headers.get('X-Audio-Browser-Playable');

@@ -24,8 +24,28 @@ const path = require('path');
 
 let _ffmpegAvailable = null;  // tri-state: null=unknown, true/false=tested
 let _ffmpeg;
+let _ffmpegBinary = null;  // resolved path to the ffmpeg binary
 try { _ffmpeg = require('fluent-ffmpeg'); }
 catch (_) { _ffmpeg = null; }
+
+// Resolve ffmpeg binary path: prefer system ffmpeg (Nixpacks/Alpine apk),
+// fall back to ffmpeg-static (bundled in node_modules). Either guarantees
+// the transcode works regardless of how the host is provisioned.
+if (_ffmpeg) {
+  try {
+    // ffmpeg-static exports the absolute path to a precompiled binary
+    const _static = require('ffmpeg-static');
+    if (_static && typeof _static === 'string') {
+      _ffmpegBinary = _static;
+      _ffmpeg.setFfmpegPath(_static);
+      console.log('[audio-transcode] using ffmpeg-static at', _static);
+    }
+  } catch (e) {
+    console.warn('[audio-transcode] ffmpeg-static not installed:', e.message);
+  }
+}
+
+function getFfmpegBinary() { return _ffmpegBinary; }
 
 /**
  * Heuristic from the first 16 bytes — returns true when the browser is
@@ -117,4 +137,4 @@ async function transcodeToMp3(buf) {
   }
 }
 
-module.exports = { needsTranscode, transcodeToMp3 };
+module.exports = { needsTranscode, transcodeToMp3, getFfmpegBinary };
