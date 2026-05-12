@@ -118,6 +118,25 @@ const SCHEMA_MIGRATIONS = [
     );
     CREATE INDEX IF NOT EXISTS idx_push_subs_user ON push_subscriptions(user_id);
   ` },
+  // Webhook event log — captures every /hook/* inbound for admin debugging.
+  { name: '2026_05_webhook_logs_table', sql: `
+    CREATE TABLE IF NOT EXISTS webhook_logs (
+      id            SERIAL PRIMARY KEY,
+      path          TEXT NOT NULL,
+      method        TEXT NOT NULL,
+      source_ip     TEXT,
+      user_agent    TEXT,
+      headers_json  TEXT,
+      query_json    TEXT,
+      body_text     TEXT,
+      response_code INTEGER,
+      response_text TEXT,
+      duration_ms   INTEGER,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_webhook_logs_created ON webhook_logs(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_webhook_logs_path    ON webhook_logs(path);
+  ` },
   { name: '2026_05_fcm_tokens_table', sql: `
     CREATE TABLE IF NOT EXISTS fcm_tokens (
       id          SERIAL PRIMARY KEY,

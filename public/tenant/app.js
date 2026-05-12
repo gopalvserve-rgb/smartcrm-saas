@@ -13042,6 +13042,7 @@ VIEWS.admin = async (view) => {
       { id: 'fb',           label: '🌍 Facebook' },
       { id: 'api',          label: '🔌 Website API' },
       { id: 'integrations', label: '🧩 Integrations' },
+      { id: 'whlogs',       label: '📡 Webhook logs' },
       { id: 'chatperm',     label: '💬 Chat permissions' },
     ]},
     { title: 'Automation', items: [
@@ -13133,6 +13134,7 @@ async function showAdminTab(id) {
     if (id === 'menuorder') body.replaceChildren(await adminMenuOrder());
     if (id === 'projstages') body.replaceChildren(await adminProjectStages());
     if (id === 'integrations') body.replaceChildren(await adminIntegrations());
+    if (id === 'whlogs')      body.replaceChildren(await adminWebhookLogs());
     if (id === 'roles')     body.replaceChildren(await adminRoles());
     if (id === 'pullleads') body.replaceChildren(await adminPullLeads());
     if (id === 'campaigns') body.replaceChildren(await adminCampaigns());
@@ -13793,6 +13795,129 @@ async function adminDangerZone() {
  *     MagicBricks, JustDial, TradeIndia, 99acres, Housing).
  *  2. Google Sheet sync — manage connected sheets.
  */
+/**
+ * 📡 Webhook logs — admin view of every inbound /hook/* request.
+ *
+ * Shows the most recent webhook hits (website / Pabbly / Make.com / Meta /
+ * lead-source vendors) with timestamp, source IP, HTTP status, and an
+ * inline preview of the body. Click a row to expand the full payload +
+ * response so admins can verify field mappings against what was actually
+ * delivered.
+ *
+ * Per-tenant: each tenant's webhook_logs table is queried via the existing
+ * tenantStorage pool, so admins only see their own tenant's events.
+ */
+async function adminWebhookLogs() {
+  const wrap = h('div', { class: 'admin-section' });
+  wrap.appendChild(h('h4', {}, '📡 Webhook logs'));
+  wrap.appendChild(h('p', { class: 'muted' },
+    'Every external POST/GET on /hook/* (website forms, Pabbly, Make.com, Meta, lead-source vendors) is captured here. Click any row to view the full payload + the response we sent back. Useful for verifying field mappings or chasing "the website said it sent the lead but it never arrived" tickets. Keeps the most recent 2000 events; older rows auto-prune.'));
+
+  // Toolbar — path filter + refresh
+  const pathFilter = h('input', { type: 'search', placeholder: 'Filter by path (e.g. /hook/website)', style: { minWidth: '260px' } });
+  const refreshBtn = h('button', { class: 'btn primary sm' }, '🔄 Refresh');
+  const status = h('span', { class: 'muted', style: { marginLeft: '.6rem' } }, '');
+  wrap.appendChild(h('div', { class: 'toolbar', style: { marginBottom: '.6rem' } },
+    pathFilter, refreshBtn, status
+  ));
+
+  const tableHost = h('div', {});
+  wrap.appendChild(tableHost);
+
+  async function load() {
+    status.textContent = 'Loading…';
+    tableHost.innerHTML = '';
+    let resp;
+    try { resp = await api('api_admin_webhookLogs_list', { path: pathFilter.value || undefined, limit: 200 }); }
+    catch (e) { status.textContent = ''; tableHost.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+    const rows = (resp && resp.rows) || [];
+    status.textContent = rows.length + ' event' + (rows.length === 1 ? '' : 's');
+    if (!rows.length) {
+      tableHost.appendChild(h('p', { class: 'muted', style: { padding: '1rem' } },
+        (resp && resp.note) || 'No webhook events yet. Once an inbound hit lands on /hook/* it will show up here.'));
+      return;
+    }
+    const tbl = h('table', { class: 'mini-table' },
+      h('thead', {}, h('tr', {},
+        h('th', {}, 'When'),
+        h('th', {}, 'Method'),
+        h('th', {}, 'Path'),
+        h('th', { style: { textAlign: 'right' } }, 'Status'),
+        h('th', { style: { textAlign: 'right' } }, 'Duration'),
+        h('th', {}, 'Source IP'),
+        h('th', {}, 'Body preview')
+      )),
+      h('tbody', {}, ...rows.map(r => {
+        const tr = h('tr', { style: { cursor: 'pointer' } });
+        tr.appendChild(h('td', { class: 'muted', style: { fontSize: '.8rem', whiteSpace: 'nowrap' } },
+          new Date(r.created_at).toLocaleString()));
+        tr.appendChild(h('td', {}, h('code', {}, r.method)));
+        tr.appendChild(h('td', { style: { fontFamily: 'ui-monospace, monospace', fontSize: '.8rem' } }, r.path));
+        const okBadge = r.response_code >= 200 && r.response_code < 300 ? 'ok' : (r.response_code >= 400 ? 'err' : 'warn');
+        tr.appendChild(h('td', { style: { textAlign: 'right' } }, h('span', { class: 'badge ' + okBadge }, String(r.response_code || '?'))));
+        tr.appendChild(h('td', { class: 'muted', style: { textAlign: 'right', fontSize: '.8rem' } }, (r.duration_ms || 0) + ' ms'));
+        tr.appendChild(h('td', { class: 'muted', style: { fontSize: '.78rem' } }, r.source_ip || '—'));
+        tr.appendChild(h('td', { style: { maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'ui-monospace, monospace', fontSize: '.78rem', color: '#475569' } },
+          (r.body_preview || '').slice(0, 180)));
+        tr.onclick = () => _openWebhookLogDetails(r);
+        return tr;
+      }))
+    );
+    tableHost.appendChild(h('div', { class: 'table-wrap' }, tbl));
+  }
+
+  refreshBtn.onclick = load;
+  pathFilter.addEventListener('change', load);
+  pathFilter.addEventListener('keydown', ev => { if (ev.key === 'Enter') load(); });
+  load();
+
+  return wrap;
+}
+
+function _openWebhookLogDetails(row) {
+  const modal = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) modal.remove(); } });
+  const card = h('div', { class: 'modal modal-lg', style: { maxWidth: '900px', maxHeight: '85vh' } });
+  card.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, '📡 ' + (row.method || 'POST') + ' ' + row.path),
+    h('button', { class: 'btn icon', onclick: () => modal.remove() }, '✕')
+  ));
+  const body = h('div', { class: 'modal-body', style: { overflowY: 'auto', maxHeight: '70vh' } });
+  body.appendChild(h('p', { class: 'muted', style: { marginTop: 0 } },
+    new Date(row.created_at).toLocaleString() + ' · ' + (row.source_ip || 'no source IP') + ' · HTTP ' + (row.response_code || '?') + ' in ' + (row.duration_ms || 0) + 'ms'));
+
+  // Fetch full details (body + response + headers)
+  body.appendChild(h('p', {}, h('em', { class: 'muted' }, 'Loading full payload…')));
+  api('api_admin_webhookLogs_get', row.id).then(full => {
+    if (!full) { body.innerHTML = '<p class="error-box">Not found</p>'; return; }
+    body.innerHTML = '';
+    body.appendChild(h('p', { class: 'muted', style: { marginTop: 0 } },
+      new Date(full.created_at).toLocaleString() + ' · ' + (full.source_ip || 'no source IP') + ' · HTTP ' + (full.response_code || '?') + ' in ' + (full.duration_ms || 0) + 'ms'));
+
+    function preBlock(title, content) {
+      if (!content) return h('div', {});
+      let pretty = String(content);
+      try { pretty = JSON.stringify(JSON.parse(content), null, 2); } catch (_) {}
+      const wrap = h('div', { style: { marginBottom: '.85rem' } });
+      wrap.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.3rem' } },
+        h('strong', {}, title),
+        h('button', { class: 'btn ghost sm', onclick: () => { navigator.clipboard.writeText(pretty); toast('Copied'); } }, '📋 Copy')
+      ));
+      wrap.appendChild(h('pre', { style: { background: '#f8fafc', padding: '.6rem .8rem', borderRadius: '6px', overflow: 'auto', fontSize: '.8rem', maxHeight: '300px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' } }, pretty));
+      return wrap;
+    }
+
+    if (full.query_json && full.query_json !== '{}') body.appendChild(preBlock('Query params', full.query_json));
+    body.appendChild(preBlock('Request body', full.body_text || '(empty)'));
+    body.appendChild(preBlock('Response body', full.response_text || '(empty)'));
+    body.appendChild(preBlock('Request headers (secrets redacted)', full.headers_json || '(none)'));
+    if (full.user_agent) body.appendChild(h('p', { class: 'muted', style: { fontSize: '.78rem' } }, 'User-Agent: ' + full.user_agent));
+  }).catch(e => { body.innerHTML = '<p class="error-box">' + (e && e.message ? e.message : String(e)) + '</p>'; });
+
+  card.appendChild(body);
+  modal.appendChild(card);
+  document.body.appendChild(modal);
+}
+
 async function adminIntegrations() {
   const cfg = await api('api_admin_getConfig').catch(() => ({}));
   const apiKey = cfg.WEBSITE_API_KEY || '';

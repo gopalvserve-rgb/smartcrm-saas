@@ -67,6 +67,13 @@ app.set('trust proxy', 1);
 // ---- Cashfree webhook: needs raw body for HMAC verify ---------
 // Mounted BEFORE bodyParser.json so the webhook receives the raw bytes
 // Cashfree signed against; everything else uses parsed JSON.
+// ---- Webhook event logger -----------------------------------------
+// Captures every external hit on /hook/* (website, leadsource, meta,
+// whatsapp, etc.) with timestamp + payload + response. Per-tenant
+// table (utils/webhookLogger creates webhook_logs on first insert).
+// Admins can view via 'Settings → Webhook logs' in the SPA.
+const _webhookLogger = require('./utils/webhookLogger');
+app.use('/hook', _webhookLogger.middleware());
 app.post('/hook/cashfree',
   bodyParser.raw({ type: '*/*', limit: '1mb' }),
   cashfreeWebhook.expressWebhook

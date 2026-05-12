@@ -404,9 +404,17 @@ async function api_admin_wipeHrData(token, categories, confirm) {
   return { ok: true, deleted };
 }
 
+// ---- Webhook event log viewer (admin) ----
+// Thin wrappers around utils/webhookLogger so the tenant API dispatcher
+// can route 'api_admin_webhookLogs_list' to the real implementation.
+const _whl = require('../utils/webhookLogger');
+async function api_admin_webhookLogs_list(token, opts) { return _whl.api_admin_webhookLogs_list(token, opts); }
+async function api_admin_webhookLogs_get(token, id)    { return _whl.api_admin_webhookLogs_get(token, id); }
+
 module.exports = {
   api_company_info,
   api_admin_brand,
+  api_admin_webhookLogs_list, api_admin_webhookLogs_get,
   api_admin_getConfig, api_admin_config, api_layout_get,
   api_admin_setConfig, api_admin_saveConfig,
   api_admin_regenerateApiKey,
