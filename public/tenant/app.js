@@ -9449,7 +9449,23 @@ async function wbTemplates() {
       title: 'Open Meta Business \u2014 manage templates directly in Meta'
     }, '\ud83d\udee0 Open Meta \u2197'),
     h('button', { class: 'btn ghost', style: { marginLeft: '.4rem' }, onclick: async () => {
-      try { const r = await api('api_wb_templates_sync'); toast('Synced ' + r.count + ' templates'); showWbTab('templates'); }
+      try {
+        const r = await api('api_wb_templates_sync');
+        // Per-WABA breakdown so the user can see EXACTLY which connected
+        // number returned templates, and which one errored.
+        const lines = ['🔄 Sync complete'];
+        lines.push('Found ' + r.count + ' templates · upserted ' + (r.upserted || 0) + ' rows');
+        if (r.wabas && r.wabas.length) {
+          r.wabas.forEach(w => {
+            if (w.error) lines.push('❌ ' + w.label + ' (' + w.waba_id + '): ' + w.error);
+            else        lines.push('✅ ' + w.label + ' (' + w.waba_id + '): ' + w.count + ' templates');
+          });
+        }
+        if (r.note) lines.push('ℹ️ ' + r.note);
+        // Use alert so the multi-line breakdown is readable; toast is too brief.
+        alert(lines.join('\n'));
+        showWbTab('templates');
+      }
       catch (e) { toast(e.message, 'err'); }
     } }, '\ud83d\udd04 Sync from Meta')
   ));

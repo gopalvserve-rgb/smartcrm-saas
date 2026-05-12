@@ -668,36 +668,97 @@ async function api_wb_register_phone(token, pin, phoneIdOverride) {
 /** Pull approved templates from Meta and cache locally. */
 async function api_wb_templates_sync(token) {
   await authUser(token);
-  const cfg = await _cfg();
-  if (!cfg.wabaId || !cfg.token) throw new Error('WhatsApp not configured');
-  const r = await _graphGet(`${cfg.wabaId}/message_templates?limit=100&fields=name,language,status,category,components`, cfg);
-  if (r.body && r.body.error) {
-    await _logActivity({ category: 'template_sync', response_code: r.status, request: { url: 'message_templates' }, response: r.body });
-    throw new Error(r.body.error.message);
+  const baseCfg = await _cfg();
+  if (!baseCfg.token && !baseCfg.wabaId) throw new Error('WhatsApp not configured — connect an account first');
+
+  // Build the set of WABAs to sync from: every active row in wa_phones
+  // PLUS the legacy primary WABA from config (de-duped). This way tenants
+  // with multiple connected numbers (Coexistence + Cloud, or two Cloud
+  // numbers under different WABAs) get templates from all of them.
+  const wabas = new Map();  // wabaId → { token, label }
+  if (baseCfg.wabaId && baseCfg.token) {
+    wabas.set(baseCfg.wabaId, { token: baseCfg.token, label: 'primary' });
   }
-  const list = r.body.data || [];
-  // Replace the cache atomically
-  await db.query('DELETE FROM wa_templates');
-  for (const t of list) {
-    const bodyText = (t.components || []).find(c => c.type === 'BODY')?.text || '';
-    const params = (bodyText.match(/\{\{\d+\}\}/g) || []).length;
-    const headerType = (t.components || []).find(c => c.type === 'HEADER')?.format || null;
-    const hasBtn = !!(t.components || []).find(c => c.type === 'BUTTONS');
+  try {
+    const phones = await db.query(
+      `SELECT phone_number_id, business_account_id, access_token, display_phone_number
+         FROM wa_phones WHERE is_active = 1`
+    );
+    for (const row of phones.rows) {
+      if (row.business_account_id && row.access_token && !wabas.has(row.business_account_id)) {
+        wabas.set(row.business_account_id, {
+          token: row.access_token,
+          label: row.display_phone_number || row.phone_number_id || 'wa_phones'
+        });
+      }
+    }
+  } catch (_) { /* wa_phones may not exist on un-migrated tenants */ }
+
+  if (!wabas.size) throw new Error('No connected WhatsApp Business Account ID — Settings → WhatsApp → Connect Account first.');
+
+  // Fetch each WABA's templates. Collect results + errors in parallel so a
+  // single bad token doesn't block the others. NEVER delete the existing
+  // cache — upsert keeps any cache rows from WABAs that errored on this
+  // sync so we don't lose template data temporarily.
+  const perWaba = [];
+  let totalUpserted = 0;
+  for (const [wabaId, info] of wabas.entries()) {
+    const cfg = Object.assign({}, baseCfg, { wabaId, token: info.token });
+    let templates = [];
+    let err = null;
     try {
-      await db.query(
-        `INSERT INTO wa_templates (name, language, status, category, body_text, components_json, body_params, header_type, has_buttons, refreshed_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, NOW())
-         ON CONFLICT (name, language) DO UPDATE
-         SET status = EXCLUDED.status, category = EXCLUDED.category,
-             body_text = EXCLUDED.body_text, components_json = EXCLUDED.components_json,
-             body_params = EXCLUDED.body_params, header_type = EXCLUDED.header_type,
-             has_buttons = EXCLUDED.has_buttons, refreshed_at = NOW()`,
-        [t.name, t.language, t.status, t.category, bodyText, JSON.stringify(t.components || []), params, headerType, hasBtn ? 1 : 0]
-      );
-    } catch (_) {}
+      const r = await _graphGet(`${wabaId}/message_templates?limit=200&fields=name,language,status,category,components`, cfg);
+      if (r.body && r.body.error) {
+        err = r.body.error.message || JSON.stringify(r.body.error);
+      } else {
+        templates = (r.body && r.body.data) || [];
+      }
+    } catch (e) { err = e.message; }
+    if (err) {
+      await _logActivity({ category: 'template_sync', name: info.label,
+        response_code: 0, request: { waba: wabaId }, response: { error: err } });
+      perWaba.push({ waba_id: wabaId, label: info.label, count: 0, error: err });
+      continue;
+    }
+    for (const t of templates) {
+      const bodyText = (t.components || []).find(c => c.type === 'BODY')?.text || '';
+      const params = (bodyText.match(/\{\{\d+\}\}/g) || []).length;
+      const headerType = (t.components || []).find(c => c.type === 'HEADER')?.format || null;
+      const hasBtn = !!(t.components || []).find(c => c.type === 'BUTTONS');
+      try {
+        await db.query(
+          `INSERT INTO wa_templates (name, language, status, category, body_text, components_json, body_params, header_type, has_buttons, refreshed_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, NOW())
+           ON CONFLICT (name, language) DO UPDATE
+           SET status = EXCLUDED.status, category = EXCLUDED.category,
+               body_text = EXCLUDED.body_text, components_json = EXCLUDED.components_json,
+               body_params = EXCLUDED.body_params, header_type = EXCLUDED.header_type,
+               has_buttons = EXCLUDED.has_buttons, refreshed_at = NOW()`,
+          [t.name, t.language, t.status, t.category, bodyText, JSON.stringify(t.components || []), params, headerType, hasBtn ? 1 : 0]
+        );
+        totalUpserted++;
+      } catch (_) {}
+    }
+    await _logActivity({ category: 'template_sync', name: info.label,
+      response_code: 200, request: { waba: wabaId }, response: { count: templates.length } });
+    perWaba.push({ waba_id: wabaId, label: info.label, count: templates.length });
   }
-  await _logActivity({ category: 'template_sync', response_code: 200, request: { url: 'message_templates' }, response: { count: list.length } });
-  return { ok: true, count: list.length };
+
+  // Optional: trim wa_templates rows that no longer exist on ANY WABA.
+  // Skipped intentionally — preserving rows is safer than wiping silently,
+  // and the user can manually delete templates from WhatsApp Manager if
+  // they want them gone from the cache.
+
+  const totalFound = perWaba.reduce((s, x) => s + (x.count || 0), 0);
+  return {
+    ok: true,
+    count: totalFound,
+    upserted: totalUpserted,
+    wabas: perWaba,
+    note: totalFound === 0
+      ? 'No templates found on any connected WABA. Either no templates exist in WhatsApp Manager yet, or the access token doesn\'t have message_templates permission.'
+      : null
+  };
 }
 
 async function api_wb_templates_list(token) {
