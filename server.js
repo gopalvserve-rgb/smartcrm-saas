@@ -2154,45 +2154,6 @@ setInterval(() => {
 setTimeout(() => _runReengageForAllTenants().catch(() => {}), 30_000);
 console.log('[reengage] AI bot re-engagement worker started');
 
-// ── Background: per-tenant WhatsApp bulk-campaign worker ──────────────
-// startCampaignWorker() in routes/whatsbot.js is only wired in
-// server.tenant.js (single-tenant). On the SaaS multi-tenant server,
-// campaigns were stalling at partial send because nothing kept ticking
-// after the initial setImmediate fired. Walk every active tenant every
-// 30s and run one tick inside that tenant's storage scope.
-async function _runCampaignTickForAllTenants() {
-  let rows = [];
-  try {
-    const r = await controlDb.query(
-      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500`
-    );
-    rows = r.rows;
-  } catch (e) { console.warn('[wb-campaign] tenant list failed:', e.message); return; }
-  let wb;
-  try { wb = require('./routes/whatsbot'); } catch (_) { return; }
-  if (!wb._campaignTick) return;
-  for (const row of rows) {
-    let t; try { t = await tenantPoolMod.findActiveTenant(row.slug); } catch (_) { continue; }
-    if (!t) continue;
-    const pool = tenantPoolMod.poolFor(t);
-    if (!pool) continue;
-    try {
-      await tenantDb.tenantStorage.run({ pool, tenant: t, slug: row.slug },
-        () => wb._campaignTick()
-      );
-    } catch (e) { console.warn(`[wb-campaign] ${row.slug} tick failed:`, e.message); }
-  }
-}
-setInterval(() => {
-  _runCampaignTickForAllTenants().catch(e => console.error('[wb-campaign] cycle failed:', e.message));
-}, Number(process.env.WB_CAMPAIGN_TICK_MS || 30_000));
-// Initial pass once the boot settles (kicks any campaigns that were
-// stuck mid-send from a previous deploy).
-setTimeout(() => _runCampaignTickForAllTenants().catch(() => {}), 20_000);
-console.log('[wb-campaign] SaaS-aware bulk-campaign worker started');
-
-
-
   app.listen(PORT, () => console.log('[boot] SmartCRM SaaS listening on :' + PORT));
 }
 boot().catch(e => { console.error('[boot] failed:', e); process.exit(1); });

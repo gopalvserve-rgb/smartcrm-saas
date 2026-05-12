@@ -668,97 +668,36 @@ async function api_wb_register_phone(token, pin, phoneIdOverride) {
 /** Pull approved templates from Meta and cache locally. */
 async function api_wb_templates_sync(token) {
   await authUser(token);
-  const baseCfg = await _cfg();
-  if (!baseCfg.token && !baseCfg.wabaId) throw new Error('WhatsApp not configured — connect an account first');
-
-  // Build the set of WABAs to sync from: every active row in wa_phones
-  // PLUS the legacy primary WABA from config (de-duped). This way tenants
-  // with multiple connected numbers (Coexistence + Cloud, or two Cloud
-  // numbers under different WABAs) get templates from all of them.
-  const wabas = new Map();  // wabaId → { token, label }
-  if (baseCfg.wabaId && baseCfg.token) {
-    wabas.set(baseCfg.wabaId, { token: baseCfg.token, label: 'primary' });
+  const cfg = await _cfg();
+  if (!cfg.wabaId || !cfg.token) throw new Error('WhatsApp not configured');
+  const r = await _graphGet(`${cfg.wabaId}/message_templates?limit=100&fields=name,language,status,category,components`, cfg);
+  if (r.body && r.body.error) {
+    await _logActivity({ category: 'template_sync', response_code: r.status, request: { url: 'message_templates' }, response: r.body });
+    throw new Error(r.body.error.message);
   }
-  try {
-    const phones = await db.query(
-      `SELECT phone_number_id, business_account_id, access_token, display_phone_number
-         FROM wa_phones WHERE is_active = 1`
-    );
-    for (const row of phones.rows) {
-      if (row.business_account_id && row.access_token && !wabas.has(row.business_account_id)) {
-        wabas.set(row.business_account_id, {
-          token: row.access_token,
-          label: row.display_phone_number || row.phone_number_id || 'wa_phones'
-        });
-      }
-    }
-  } catch (_) { /* wa_phones may not exist on un-migrated tenants */ }
-
-  if (!wabas.size) throw new Error('No connected WhatsApp Business Account ID — Settings → WhatsApp → Connect Account first.');
-
-  // Fetch each WABA's templates. Collect results + errors in parallel so a
-  // single bad token doesn't block the others. NEVER delete the existing
-  // cache — upsert keeps any cache rows from WABAs that errored on this
-  // sync so we don't lose template data temporarily.
-  const perWaba = [];
-  let totalUpserted = 0;
-  for (const [wabaId, info] of wabas.entries()) {
-    const cfg = Object.assign({}, baseCfg, { wabaId, token: info.token });
-    let templates = [];
-    let err = null;
+  const list = r.body.data || [];
+  // Replace the cache atomically
+  await db.query('DELETE FROM wa_templates');
+  for (const t of list) {
+    const bodyText = (t.components || []).find(c => c.type === 'BODY')?.text || '';
+    const params = (bodyText.match(/\{\{\d+\}\}/g) || []).length;
+    const headerType = (t.components || []).find(c => c.type === 'HEADER')?.format || null;
+    const hasBtn = !!(t.components || []).find(c => c.type === 'BUTTONS');
     try {
-      const r = await _graphGet(`${wabaId}/message_templates?limit=200&fields=name,language,status,category,components`, cfg);
-      if (r.body && r.body.error) {
-        err = r.body.error.message || JSON.stringify(r.body.error);
-      } else {
-        templates = (r.body && r.body.data) || [];
-      }
-    } catch (e) { err = e.message; }
-    if (err) {
-      await _logActivity({ category: 'template_sync', name: info.label,
-        response_code: 0, request: { waba: wabaId }, response: { error: err } });
-      perWaba.push({ waba_id: wabaId, label: info.label, count: 0, error: err });
-      continue;
-    }
-    for (const t of templates) {
-      const bodyText = (t.components || []).find(c => c.type === 'BODY')?.text || '';
-      const params = (bodyText.match(/\{\{\d+\}\}/g) || []).length;
-      const headerType = (t.components || []).find(c => c.type === 'HEADER')?.format || null;
-      const hasBtn = !!(t.components || []).find(c => c.type === 'BUTTONS');
-      try {
-        await db.query(
-          `INSERT INTO wa_templates (name, language, status, category, body_text, components_json, body_params, header_type, has_buttons, refreshed_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, NOW())
-           ON CONFLICT (name, language) DO UPDATE
-           SET status = EXCLUDED.status, category = EXCLUDED.category,
-               body_text = EXCLUDED.body_text, components_json = EXCLUDED.components_json,
-               body_params = EXCLUDED.body_params, header_type = EXCLUDED.header_type,
-               has_buttons = EXCLUDED.has_buttons, refreshed_at = NOW()`,
-          [t.name, t.language, t.status, t.category, bodyText, JSON.stringify(t.components || []), params, headerType, hasBtn ? 1 : 0]
-        );
-        totalUpserted++;
-      } catch (_) {}
-    }
-    await _logActivity({ category: 'template_sync', name: info.label,
-      response_code: 200, request: { waba: wabaId }, response: { count: templates.length } });
-    perWaba.push({ waba_id: wabaId, label: info.label, count: templates.length });
+      await db.query(
+        `INSERT INTO wa_templates (name, language, status, category, body_text, components_json, body_params, header_type, has_buttons, refreshed_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, NOW())
+         ON CONFLICT (name, language) DO UPDATE
+         SET status = EXCLUDED.status, category = EXCLUDED.category,
+             body_text = EXCLUDED.body_text, components_json = EXCLUDED.components_json,
+             body_params = EXCLUDED.body_params, header_type = EXCLUDED.header_type,
+             has_buttons = EXCLUDED.has_buttons, refreshed_at = NOW()`,
+        [t.name, t.language, t.status, t.category, bodyText, JSON.stringify(t.components || []), params, headerType, hasBtn ? 1 : 0]
+      );
+    } catch (_) {}
   }
-
-  // Optional: trim wa_templates rows that no longer exist on ANY WABA.
-  // Skipped intentionally — preserving rows is safer than wiping silently,
-  // and the user can manually delete templates from WhatsApp Manager if
-  // they want them gone from the cache.
-
-  const totalFound = perWaba.reduce((s, x) => s + (x.count || 0), 0);
-  return {
-    ok: true,
-    count: totalFound,
-    upserted: totalUpserted,
-    wabas: perWaba,
-    note: totalFound === 0
-      ? 'No templates found on any connected WABA. Either no templates exist in WhatsApp Manager yet, or the access token doesn\'t have message_templates permission.'
-      : null
-  };
+  await _logActivity({ category: 'template_sync', response_code: 200, request: { url: 'message_templates' }, response: { count: list.length } });
+  return { ok: true, count: list.length };
 }
 
 async function api_wb_templates_list(token) {
@@ -965,73 +904,6 @@ async function _sendTemplate({ to, templateName, language, variables, imageUrl, 
   // _graphPost call below uses that phone's token + phone_number_id.
   if (fromPhoneNumberId) cfg = await _cfgForPhone(fromPhoneNumberId);
   const c = cfg || await _cfg();
-
-  // ── Language safety net ─────────────────────────────────────────────
-  // Meta returns #132001 ('Template name does not exist in the translation')
-  // when the language code on the send doesn't match an APPROVED language
-  // for the template. Look up wa_templates first, then if the cache is
-  // empty/stale for this template, fetch THIS template from Meta on demand
-  // and upsert the rows. Finally pick the best APPROVED language.
-  async function _pickLanguage(name, requested) {
-    const tplRows = await db.query(
-      `SELECT language, status FROM wa_templates WHERE name = $1`,
-      [name]
-    );
-    const all = (tplRows.rows || []);
-    return all;
-  }
-  async function _refreshFromMeta(name) {
-    try {
-      const r = await _graphGet(c.wabaId + '/message_templates?limit=50&name=' + encodeURIComponent(name) + '&fields=name,language,status,category,components', c);
-      const list = (r.body && r.body.data) || [];
-      for (const t of list) {
-        const bodyText = (t.components || []).find(x => x.type === 'BODY')?.text || '';
-        const params   = (bodyText.match(/\{\{\d+\}\}/g) || []).length;
-        const headerType = (t.components || []).find(x => x.type === 'HEADER')?.format || null;
-        const hasBtn   = !!(t.components || []).find(x => x.type === 'BUTTONS');
-        try {
-          await db.query(
-            `INSERT INTO wa_templates (name, language, status, category, body_text, components_json, body_params, header_type, has_buttons, refreshed_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, NOW())
-             ON CONFLICT (name, language) DO UPDATE
-             SET status = EXCLUDED.status, body_text = EXCLUDED.body_text,
-                 components_json = EXCLUDED.components_json, body_params = EXCLUDED.body_params,
-                 header_type = EXCLUDED.header_type, has_buttons = EXCLUDED.has_buttons,
-                 refreshed_at = NOW()`,
-            [t.name, t.language, t.status, t.category, bodyText, JSON.stringify(t.components || []), params, headerType, hasBtn ? 1 : 0]
-          );
-        } catch (_) {}
-      }
-      return list.length;
-    } catch (_) { return 0; }
-  }
-
-  // Best-effort language hint from local cache. NON-destructive: we use
-  // the cache only to OFFER a better language if the caller's pick has
-  // no exact APPROVED match. We never reject a send pre-flight — the
-  // cache can lie (stale status) and blocking sends based on stale data
-  // is worse than letting Meta itself decide. The retry-once-on-132001
-  // logic AFTER the Graph POST handles the case where Meta rejects.
-  try {
-    const all = await _pickLanguage(templateName, language);
-    const approved = all.filter(r => String(r.status || '').toUpperCase() === 'APPROVED');
-    if (approved.length) {
-      const requested = String(language || 'en_US').toLowerCase();
-      const reqBase   = requested.split(/[_-]/)[0];
-      const exact     = approved.find(r => String(r.language).toLowerCase() === requested);
-      if (!exact) {
-        const sameBase = approved.find(r => String(r.language).toLowerCase().split(/[_-]/)[0] === reqBase);
-        const fallback = sameBase || approved[0];
-        console.warn('[wb] template-language hint: requested=' + requested +
-                     ' → trying=' + fallback.language + ' (template=' + templateName + ')');
-        language = fallback.language;
-      }
-    }
-    // If the cache has nothing approved (or is empty), we DON'T touch
-    // the caller's language. Meta gets the call as-is; the retry path
-    // below auto-refreshes + swaps language if Meta says 132001.
-  } catch (_) { /* lookup failed — proceed with caller's value */ }
-
   // Components: BODY variables + optional HEADER image
   const components = [];
   if (imageUrl) {
@@ -1053,41 +925,7 @@ async function _sendTemplate({ to, templateName, language, variables, imageUrl, 
       components
     }
   };
-  let r = await _graphPost(`${c.phoneId}/messages`, body, c);
-
-  // Retry-once-on-132001: if Meta returns 'Template name does not exist
-  // in the translation', our wa_templates cache is stale. Refresh THIS
-  // template fresh from Meta, re-pick the best language, and retry once.
-  if (r.body && r.body.error && String(r.body.error.code) === '132001') {
-    try {
-      const fresh = await _refreshFromMeta(templateName);
-      if (fresh > 0) {
-        const all2 = await _pickLanguage(templateName, language);
-        const approved2 = all2.filter(x => String(x.status || '').toUpperCase() === 'APPROVED');
-        if (approved2.length) {
-          const reqLower = String(language || 'en_US').toLowerCase();
-          const reqBase  = reqLower.split(/[_-]/)[0];
-          const exact   = approved2.find(x => String(x.language).toLowerCase() === reqLower);
-          const sameBase = !exact && approved2.find(x => String(x.language).toLowerCase().split(/[_-]/)[0] === reqBase);
-          const chosen = exact || sameBase || approved2[0];
-          if (chosen && chosen.language !== language) {
-            console.warn('[wb] 132001 retry: ' + language + ' rejected, retrying with ' + chosen.language + ' (template=' + templateName + ')');
-            body.template.language.code = chosen.language;
-            r = await _graphPost(`${c.phoneId}/messages`, body, c);
-          }
-        } else {
-          // Refresh confirmed no APPROVED translation exists. Replace
-          // Meta's vague 132001 with our actionable error message.
-          const statuses = all2.map(x => x.language + '=' + x.status).join(', ');
-          r = {
-            status: 400,
-            body: { error: { code: 132001, message: '#132001 — Template "' + templateName + '" has no APPROVED translation. Languages in WhatsApp Manager: ' + (statuses || '(none)') + '. Approve or create a translation first.' } }
-          };
-        }
-      }
-    } catch (e) { /* keep the original 132001 if refresh+retry itself fails */ }
-  }
-
+  const r = await _graphPost(`${c.phoneId}/messages`, body, c);
   const waMsgId = r.body?.messages?.[0]?.id || null;
   const errorText = r.body?.error?.message || null;
 
@@ -1910,21 +1748,6 @@ async function api_wb_template_bots_delete(token, id) {
 
 // ---------- Campaigns ---------------------------------------------
 
-
-// List APPROVED languages for a given template. Lets the SPA's campaign
-// modal show only languages the template can actually be sent in.
-async function api_wb_templates_languages(token, name) {
-  await authUser(token);
-  const tpl = String(name || '').trim();
-  if (!tpl) return [];
-  const { rows } = await db.query(
-    `SELECT language, status, category, body_text
-       FROM wa_templates WHERE name = $1
-       ORDER BY (status = 'APPROVED') DESC, language ASC`, [tpl]
-  );
-  return rows;
-}
-
 async function api_wb_campaigns_list(token) {
   await authUser(token);
   const rows = await db.getAll('wa_campaigns');
@@ -2175,11 +1998,7 @@ async function _campaignTick() {
           variables: renderedVars, imageUrl: camp.image_url || null
         }, cfg);
         if (r.body?.error) {
-          let errMsg = r.body.error.message || 'unknown';
-          if (String(r.body.error.code) === '132001' || errMsg.includes('translation')) {
-            errMsg = '#132001 — Template "' + camp.template_name + '" is not approved in language "' + camp.template_language + '". Check WhatsApp Manager → Message Templates and pick a language with status=APPROVED.';
-          }
-          await db.update('wa_campaign_targets', t.id, { status: 'failed', error: errMsg, sent_at: db.nowIso() });
+          await db.update('wa_campaign_targets', t.id, { status: 'failed', error: r.body.error.message, sent_at: db.nowIso() });
           await db.update('wa_campaigns', camp.id, { recipients_failed: Number(camp.recipients_failed || 0) + 1 });
           camp.recipients_failed = Number(camp.recipients_failed || 0) + 1;
         } else {
@@ -2843,7 +2662,6 @@ module.exports = {
   api_wb_message_bots_list, api_wb_message_bots_save, api_wb_message_bots_delete,
   api_wb_template_bots_list, api_wb_template_bots_save, api_wb_template_bots_delete,
   // Campaigns
-  api_wb_templates_languages,
   api_wb_campaigns_list, api_wb_campaigns_create, api_wb_campaigns_send_now,
   api_wb_campaigns_pause, api_wb_campaigns_targets,
   // Activity
@@ -2855,7 +2673,6 @@ module.exports = {
   expressVerify, expressEvent,
   // Worker + scheduled tasks
   startCampaignWorker,
-  _campaignTick,  // exported for the SaaS per-tenant scheduler
   trimActivityLog,
   // Helpers exported for the file-upload Express route in server.js
   // and for routes/aiBot.js auto-reply path.
