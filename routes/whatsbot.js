@@ -1060,7 +1060,41 @@ async function _sendTemplate({ to, templateName, language, variables, imageUrl, 
       components
     }
   };
-  const r = await _graphPost(`${c.phoneId}/messages`, body, c);
+  let r = await _graphPost(`${c.phoneId}/messages`, body, c);
+
+  // Retry-once-on-132001: if Meta returns 'Template name does not exist
+  // in the translation', our wa_templates cache is stale. Refresh THIS
+  // template fresh from Meta, re-pick the best language, and retry once.
+  if (r.body && r.body.error && String(r.body.error.code) === '132001') {
+    try {
+      const fresh = await _refreshFromMeta(templateName);
+      if (fresh > 0) {
+        const all2 = await _pickLanguage(templateName, language);
+        const approved2 = all2.filter(x => String(x.status || '').toUpperCase() === 'APPROVED');
+        if (approved2.length) {
+          const reqLower = String(language || 'en_US').toLowerCase();
+          const reqBase  = reqLower.split(/[_-]/)[0];
+          const exact   = approved2.find(x => String(x.language).toLowerCase() === reqLower);
+          const sameBase = !exact && approved2.find(x => String(x.language).toLowerCase().split(/[_-]/)[0] === reqBase);
+          const chosen = exact || sameBase || approved2[0];
+          if (chosen && chosen.language !== language) {
+            console.warn('[wb] 132001 retry: ' + language + ' rejected, retrying with ' + chosen.language + ' (template=' + templateName + ')');
+            body.template.language.code = chosen.language;
+            r = await _graphPost(`${c.phoneId}/messages`, body, c);
+          }
+        } else {
+          // Refresh confirmed no APPROVED translation exists. Replace
+          // Meta's vague 132001 with our actionable error message.
+          const statuses = all2.map(x => x.language + '=' + x.status).join(', ');
+          r = {
+            status: 400,
+            body: { error: { code: 132001, message: '#132001 — Template "' + templateName + '" has no APPROVED translation. Languages in WhatsApp Manager: ' + (statuses || '(none)') + '. Approve or create a translation first.' } }
+          };
+        }
+      }
+    } catch (e) { /* keep the original 132001 if refresh+retry itself fails */ }
+  }
+
   const waMsgId = r.body?.messages?.[0]?.id || null;
   const errorText = r.body?.error?.message || null;
 
