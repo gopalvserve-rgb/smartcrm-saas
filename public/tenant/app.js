@@ -14974,7 +14974,10 @@ async function adminApi() {
       h('a', { href: '/api-docs', target: '_blank', class: 'btn primary' }, '📖 View full API documentation →')
     ),
     h('p', { class: 'muted' }, 'Includes JS, PHP, Python, WordPress, HTML form examples + how to send tags/labels.'),
-    h('h5', {}, 'Sample CSV for bulk upload'),
+    h('h5', {}, '📡 Incoming webhook activity'),
+    h('p', { class: 'muted' }, 'See every request that hit /hook/* — payload, response, status, source IP, and timestamp. Use this to debug what an external system actually sent so you can correct any field mappings.'),
+    h('button', { class: 'btn primary', onclick: () => showAdminTab('whlogs') }, '📡 View incoming webhook logs →'),
+    h('h5', { style: { marginTop: '1rem' } }, 'Sample CSV for bulk upload'),
     h('p', { class: 'muted' }, 'Download the template, fill in your leads, then use Leads → ⬆️ Upload to import.'),
     (() => {
       const a = h('a', { class: 'btn primary', href: '#', download: 'lead-crm-sample.xls' }, '⬇️ Download sample (Excel)');
