@@ -120,6 +120,23 @@ async function api_recordings_delete(token, recId) {
 }
 
 /**
+ * Bulk-delete every recording in the tenant. Admin only. Returns the
+ * number of rows removed. Also clears the diagnostic log so the new
+ * empty state isn't polluted by old failure rows.
+ */
+async function api_recordings_resetAll(token) {
+  const me = await authUser(token);
+  if (me.role !== 'admin') throw new Error('Admin only');
+  const r = await db.query('DELETE FROM lead_recordings');
+  let diag = 0;
+  try {
+    const d = await db.query('DELETE FROM recording_diag_log');
+    diag = (d && d.rowCount) || 0;
+  } catch (_) { /* table may not exist */ }
+  return { ok: true, deleted: (r && r.rowCount) || 0, diag_cleared: diag };
+}
+
+/**
  * Was there a CRM-tracked call event for the given phone within the last
  * N minutes? Used by the recording sync to filter out files that aren't
  * tied to a real CRM call. Without this gate, the sync would happily
@@ -639,7 +656,7 @@ module.exports = {
   api_leads_recordings,
   api_call_history,
   api_my_recordings,
-  api_recordings_delete,
+  api_recordings_delete, api_recordings_resetAll,
   api_recording_aiSummary,
   api_recording_aiReprocess,
   api_recording_applySuggestion,

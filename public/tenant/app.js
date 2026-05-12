@@ -4820,203 +4820,33 @@ function renderRecordingItem(r) {
     style: { fontSize: '.75rem', color: '#64748b', marginLeft: '.5rem', textDecoration: 'underline' },
     title: 'Download the original recording file'
   }, '⬇ Download');
-  // 🔍 Inspect — shows recording metadata + helps diagnose 'File wasn't
-  // available on site' (real_bytes=0 means upload was empty) or wrong MIME.
-  const _inspectBtn = h('button', {
-    class: 'btn sm',
-    style: { fontSize: '.74rem', marginLeft: '.5rem', padding: '2px 6px' },
-    title: 'Show server-side recording metadata',
-    onclick: async () => {
-      try {
-        const resp = await fetch('/api/recordings/' + r.id + '/info?token=' + encodeURIComponent(CRM.token || ''));
-        const j = await resp.json();
-        if (!resp.ok) {
-          toast('Inspect failed: HTTP ' + resp.status + ' — ' + (j.error || ''), 'err');
-          return;
-        }
-        const row = j.row || {};
-        const hasBytes = Number(row.real_bytes || 0) > 0;
-        const msg = [
-          'Recording #' + (row.id || r.id),
-          'MIME: ' + (row.mime_type || '(none)'),
-          'Stored size: ' + (row.size_bytes || 0) + ' bytes',
-          'Actual bytes in DB: ' + (row.real_bytes || 0),
-          'Duration: ' + (row.duration_s || 0) + 's',
-          'Head hex: ' + (row.head_hex || '(empty)'),
-          'Created: ' + (row.created_at || ''),
-          '',
-          hasBytes ? '✅ Audio bytes present.' : '❌ NO AUDIO BYTES in DB — original upload was empty. Re-sync from phone.'
-        ].join('\n');
-        alert(msg);
-      } catch (e) { toast('Inspect error: ' + e.message, 'err'); }
-    }
-  }, '🔍 Inspect');
-  // 🌐 Open the raw /audio URL in a new tab — uses Chrome's native player
-  // to confirm whether the bytes themselves are playable. If this works
-  // but the embedded player doesn't, the issue is in our audio element.
-  // If even this fails, the bytes are broken (or codec genuinely
-  // unsupported).
-  const _testTabBtn = h('a', {
-    class: 'btn sm',
-    href: _audioUrl,
-    target: '_blank',
-    rel: 'noopener',
-    style: { fontSize: '.74rem', marginLeft: '.5rem', padding: '2px 6px', textDecoration: 'none' },
-    title: 'Open the audio URL in a new tab — uses Chrome\'s built-in audio player'
-  }, '🌐 Test in tab');
-
-  // 🔄 Force the server to re-run the transcode regardless of the file's
-  // current format. Useful when the cached output is itself broken.
-  const _forceBtn = h('button', {
-    class: 'btn sm',
-    style: { fontSize: '.74rem', marginLeft: '.5rem', padding: '2px 6px', background: '#fef3c7', color: '#92400e' },
-    title: 'Force fresh ffmpeg transcode on the stored bytes',
-    onclick: async () => {
-      _forceBtn.textContent = 'Working…'; _forceBtn.disabled = true;
-      try {
-        const url = '/api/recordings/' + r.id + '/audio?force=1&token=' + encodeURIComponent(CRM.token || '');
-        const resp = await fetch(url);
-        if (resp.ok) {
-          toast('Re-transcoded ' + resp.headers.get('X-Audio-Detected-Mime') + ' (' + Math.round(Number(resp.headers.get('Content-Length') || 0)/1024) + ' KB). Try ▶ again.', 'ok');
-          audio.src = _audioUrl + '&t=' + Date.now();
-          audio.load();
-        } else {
-          const t = await resp.text().catch(() => '');
-          toast('Force-transcode failed: HTTP ' + resp.status + ' ' + t.slice(0, 80), 'err');
-        }
-      } catch (e) { toast('Force-transcode error: ' + e.message, 'err'); }
-      _forceBtn.textContent = '🔄 Force'; _forceBtn.disabled = false;
-    }
-  }, '🔄 Force');
-
-  // 🔬 Run ffmpeg -i on the stored bytes to see whether the server itself
-  // can decode them. Shows duration, ffmpeg stderr, and first 1KB hex.
-  const _verifyBtn = h('button', {
-    class: 'btn sm',
-    style: { fontSize: '.74rem', marginLeft: '.5rem', padding: '2px 6px' },
-    title: 'Run ffmpeg -i on the stored bytes to check if they\'re decodable',
-    onclick: async () => {
-      _verifyBtn.textContent = 'Verifying…'; _verifyBtn.disabled = true;
-      try {
-        const url = '/api/recordings/' + r.id + '/verify?token=' + encodeURIComponent(CRM.token || '');
-        const resp = await fetch(url);
-        const j = await resp.json();
-        const msg = [
-          'Recording #' + r.id,
-          'Stored MIME: ' + (j.stored_mime || '(none)'),
-          'Bytes: ' + (j.bytes || 0),
-          'ffmpeg binary: ' + (j.ffmpeg_binary || ''),
-          'Decoded OK: ' + (j.decode_ok ? '✅ YES' : '❌ NO'),
-          'Duration: ' + (j.duration_s || 0) + 's',
-          '',
-          'ffmpeg output:',
-          (j.ffmpeg_stderr || '(empty)').slice(0, 800),
-          '',
-          'First 1KB head (hex):',
-          (j.head_hex_1024 || '').slice(0, 256) + '…'
-        ].join('\n');
-        alert(msg);
-      } catch (e) { toast('Verify error: ' + e.message, 'err'); }
-      _verifyBtn.textContent = '🔬 Verify'; _verifyBtn.disabled = false;
-    }
-  }, '🔬 Verify');
-
-
-  // Surface playback failures with a smart message. The audio endpoint
-  // sets X-Audio-Browser-Playable: 0 for codecs the browser can't decode
-  // natively (AMR-in-3GP etc.) — when we see that we don't blame 'broken
-  // server' and instead point at the download link.
+  // When this audio starts playing, pause every OTHER recording on the
+  // page. Without this, two recordings can play simultaneously and the
+  // admin can't tell which is which.
+  audio.addEventListener('play', () => {
+    document.querySelectorAll('audio').forEach(other => {
+      if (other !== audio && !other.paused) {
+        try { other.pause(); } catch (_) {}
+      }
+    });
+  });
   audio.addEventListener('error', async () => {
-    // Auto-diagnose: fetch /audio (to get status) AND /info (to see DB row).
-    // Build a comprehensive popup so the admin sees EXACTLY what's wrong.
-    let audioResp, audioStatus = '?', audioBody = '', mime = '', playable = '';
+    // Slim error feedback — full diagnostics removed now that playback
+    // works. If something does fail, show a short toast and turn the
+    // download link red so the user knows to try downloading instead.
     try {
-      audioResp = await fetch(_audioUrl);
-      audioStatus = audioResp.status;
-      playable = audioResp.headers.get('X-Audio-Browser-Playable') || '';
-      mime = audioResp.headers.get('X-Audio-Detected-Mime') || audioResp.headers.get('Content-Type') || '';
-      if (!audioResp.ok) audioBody = (await audioResp.text().catch(() => '')).slice(0, 400);
-    } catch (e) { audioStatus = 'NETWORK_FAIL: ' + e.message; }
-
-    let infoRow = null, infoErr = '';
-    try {
-      const _ir = await fetch('/api/recordings/' + r.id + '/info?token=' + encodeURIComponent(CRM.token || ''));
-      const _ij = await _ir.json();
-      if (_ir.ok) infoRow = _ij.row;
-      else infoErr = 'HTTP ' + _ir.status + ' — ' + (_ij.error || '');
-    } catch (e) { infoErr = e.message; }
-
-    // Make a short toast + a clickable Details button that opens a popup
-    let shortMsg;
-    if (audioStatus === 410) {
-      shortMsg = '🎧 Recording has NO bytes in DB. Re-sync from phone.';
-    } else if (audioStatus === 404) {
-      shortMsg = '🎧 Recording not found on server.';
-    } else if (audioStatus === 401) {
-      shortMsg = '🎧 Session expired — log out and back in.';
-    } else if (playable === '0') {
-      shortMsg = '🎧 ' + mime + ' format — browser can\'t decode. Click 🔄 Re-transcode.';
-    } else {
-      shortMsg = '🎧 Playback failed: HTTP ' + audioStatus + (audioBody ? ' — ' + audioBody.slice(0, 80) : '');
+      const r2 = await fetch(_audioUrl);
+      let msg;
+      if (r2.status === 410)      msg = '🎧 Recording has no audio bytes — re-sync from phone.';
+      else if (r2.status === 404) msg = '🎧 Recording not found.';
+      else if (r2.status === 401) msg = '🎧 Session expired — log out and back in.';
+      else                        msg = '🎧 Playback failed (HTTP ' + r2.status + ') — try ⬇ Download.';
+      if (typeof toast === 'function') toast(msg, 'err');
+      _dlLink.style.color = '#dc2626';
+      _dlLink.style.fontWeight = '600';
+    } catch (e) {
+      if (typeof toast === 'function') toast('🎧 Playback failed — try ⬇ Download', 'err');
     }
-    if (typeof toast === 'function') toast(shortMsg, 'err');
-    console.warn('[leadcrm] audio fail rec=' + r.id + ' status=' + audioStatus + ' mime=' + mime + ' playable=' + playable, infoRow);
-
-    // Render an expanded diagnostic block right under the player so the
-    // info doesn't disappear when the toast fades.
-    if (audio._diagBlock) audio._diagBlock.remove();
-    const diag = h('div', { style: { background: '#fef3c7', color: '#92400e', padding: '.6rem .8rem', borderRadius: '6px', margin: '.4rem 0', fontSize: '.78rem', whiteSpace: 'pre-wrap', fontFamily: 'monospace' } },
-      '🔍 Diagnostic for recording #' + r.id + '\n' +
-      '────────────────────────────────\n' +
-      '/audio HTTP status:  ' + audioStatus + '\n' +
-      '/audio MIME header:  ' + (mime || '(none)') + '\n' +
-      '/audio playable:     ' + (playable || '(no header)') + '\n' +
-      (audioBody ? '/audio body:         ' + audioBody.slice(0, 200) + '\n' : '') +
-      '\nDatabase row:\n' +
-      (infoRow ? (
-        '  mime_type:   ' + (infoRow.mime_type || '(null)') + '\n' +
-        '  size_bytes:  ' + (infoRow.size_bytes || 0) + '\n' +
-        '  real_bytes:  ' + (infoRow.real_bytes || 0) + (Number(infoRow.real_bytes||0) === 0 ? ' ← THIS IS THE PROBLEM (no audio stored)' : '') + '\n' +
-        '  duration_s:  ' + (infoRow.duration_s || 0) + '\n' +
-        '  head_hex:    ' + (infoRow.head_hex || '(empty)') + '\n' +
-        '  created_at:  ' + (infoRow.created_at || '')
-      ) : '  (info fetch failed: ' + infoErr + ')')
-    );
-    audio._diagBlock = diag;
-    audio.parentElement && audio.parentElement.appendChild(diag);
-
-    // Yellow 🔄 Re-transcode button (only useful when bytes exist but
-    // codec isn't playable — i.e. 3gp/amr/flac).
-    if (!audio._retxBtn && infoRow && Number(infoRow.real_bytes || 0) > 0 && playable === '0') {
-      const btn = h('button', {
-        class: 'btn sm',
-        style: { marginLeft: '.5rem', background: '#fef3c7', color: '#92400e', borderColor: '#fcd34d' },
-        title: 'Force server to convert this recording to MP3 so the player works',
-        onclick: async () => {
-          btn.textContent = 'Converting…'; btn.disabled = true;
-          try {
-            const url = '/api/recordings/' + r.id + '/retranscode?token=' + encodeURIComponent(CRM.token || '');
-            const resp = await fetch(url);
-            const j = await resp.json().catch(() => ({}));
-            if (j.ok) {
-              toast('Converted to MP3 (' + Math.round(j.to_bytes/1024) + ' KB). Try ▶ again.', 'ok');
-              audio.src = _audioUrl + '&t=' + Date.now();  // bust cache
-              audio.load();
-              if (audio._diagBlock) audio._diagBlock.remove();
-            } else {
-              toast('Convert failed: ' + (j.error || resp.status), 'err');
-            }
-          } catch (e) { toast('Convert failed: ' + e.message, 'err'); }
-          btn.disabled = false;
-        }
-      }, '🔄 Re-transcode');
-      audio._retxBtn = btn;
-      audio.parentElement && audio.parentElement.appendChild(btn);
-    }
-
-    // Visually nudge the user toward the download link.
-    _dlLink.style.color = '#dc2626';
-    _dlLink.style.fontWeight = '600';
   });
   const aiBlock = h('div', { class: 'rec-ai-block' });
   // Lazy-load the AI summary on first paint. Polls every 10s while pending.
@@ -5026,11 +4856,7 @@ function renderRecordingItem(r) {
       h('span', { class: 'rec-dir' }, dirIcon),
       h('b', {}, r.lead_name || r.phone || '—'),
       h('span', { class: 'muted' }, ' · ' + (r.rep_name ? r.rep_name + ' · ' : '') + fmtDate(r.created_at, 'relative') + ' · ' + mm + ':' + ss),
-      _dlLink,
-      _inspectBtn,
-      _testTabBtn,
-      _forceBtn,
-      _verifyBtn
+      _dlLink
     ),
     audio,
     aiBlock
@@ -5588,17 +5414,50 @@ function renderHistoryItem(r) {
 }
 
 function renderRecordingsList() {
-  const wrap = h('div', { class: 'dialer-history' }, h('div', { class: 'muted' }, 'Loading recordings…'));
+  const wrap = h('div', { class: 'dialer-history' });
+  // Toolbar at the top: Refresh + Reset all (admin only).
+  const toolbar = h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', padding: '.5rem .25rem', borderBottom: '1px solid #e5e7eb', marginBottom: '.5rem' } });
+  const refreshBtn = h('button', { class: 'btn sm', onclick: () => {
+    const body = _dialerState && _dialerState.view && _dialerState.view.querySelector('.dialer-body');
+    if (body) { body.innerHTML = ''; body.appendChild(renderRecordingsList()); }
+  } }, '⟳ Refresh');
+  toolbar.appendChild(refreshBtn);
+  // Reset button — admin only. Wipes every recording in the tenant.
+  if (CRM.user && CRM.user.role === 'admin') {
+    const resetBtn = h('button', {
+      class: 'btn sm danger',
+      style: { background: '#fef2f2', color: '#991b1b', borderColor: '#fca5a5' },
+      title: 'Permanently delete every recording in this tenant',
+      onclick: async () => {
+        if (!await confirmDialog('🛑 Delete EVERY recording in this tenant?\n\nThis cannot be undone. AI summaries and call-event links are kept, but the audio files and the recording rows will be permanently removed.')) return;
+        try {
+          const r = await api('api_recordings_resetAll');
+          toast('Reset complete — ' + r.deleted + ' recording(s) deleted', 'ok');
+          // Re-render the list (will show empty state)
+          const body = _dialerState && _dialerState.view && _dialerState.view.querySelector('.dialer-body');
+          if (body) { body.innerHTML = ''; body.appendChild(renderRecordingsList()); }
+        } catch (e) { toast('Reset failed: ' + e.message, 'err'); }
+      }
+    }, '🛑 Reset all');
+    toolbar.appendChild(resetBtn);
+    toolbar.appendChild(h('span', { class: 'muted', style: { fontSize: '.78rem' } },
+      'Wipes every recording in the tenant. Use to start fresh after testing.'));
+  }
+  wrap.appendChild(toolbar);
+
+  const listHost = h('div', {}, h('div', { class: 'muted' }, 'Loading recordings…'));
+  wrap.appendChild(listHost);
+
   api('api_my_recordings', 200).then(rows => {
-    wrap.innerHTML = '';
+    listHost.innerHTML = '';
     if (!rows || rows.length === 0) {
-      wrap.appendChild(h('div', { class: 'muted', style: { padding: '2rem', textAlign: 'center' } }, 'No recordings yet.'));
+      listHost.appendChild(h('div', { class: 'muted', style: { padding: '2rem', textAlign: 'center' } }, 'No recordings yet.'));
       return;
     }
-    rows.forEach(r => wrap.appendChild(renderRecordingItem(r)));
+    rows.forEach(r => listHost.appendChild(renderRecordingItem(r)));
   }).catch(e => {
-    wrap.innerHTML = '';
-    wrap.appendChild(h('div', { class: 'muted' }, 'Could not load: ' + e.message));
+    listHost.innerHTML = '';
+    listHost.appendChild(h('div', { class: 'muted' }, 'Could not load: ' + e.message));
   });
   return wrap;
 }
