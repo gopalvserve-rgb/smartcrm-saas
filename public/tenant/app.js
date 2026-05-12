@@ -13875,47 +13875,51 @@ async function adminWebhookLogs() {
 }
 
 function _openWebhookLogDetails(row) {
-  const modal = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) modal.remove(); } });
-  const card = h('div', { class: 'modal modal-lg', style: { maxWidth: '900px', maxHeight: '85vh' } });
-  card.appendChild(h('div', { class: 'modal-head' },
-    h('h3', {}, '📡 ' + (row.method || 'POST') + ' ' + row.path),
-    h('button', { class: 'btn icon', onclick: () => modal.remove() }, '✕')
+  // Use the same modal-backdrop / modal pattern used everywhere else on
+  // this app (confirmDialog, recording details, bot flow modals etc.).
+  // Earlier this used a non-existent .modal-overlay class, which made the
+  // detail view invisible. Click on the dark backdrop closes the modal.
+  const backdrop = h('div', { class: 'modal-backdrop', onclick: (ev) => { if (ev.target === backdrop) backdrop.remove(); } });
+  const modal = h('div', { class: 'modal modal-lg' });
+  const closeBtn = h('button', { class: 'btn sm', onclick: () => backdrop.remove() }, '\u2715');
+  modal.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, '\uD83D\uDCE1 ' + (row.method || '') + ' ' + (row.path || '')),
+    closeBtn
   ));
-  const body = h('div', { class: 'modal-body', style: { overflowY: 'auto', maxHeight: '70vh' } });
-  body.appendChild(h('p', { class: 'muted', style: { marginTop: 0 } },
-    new Date(row.created_at).toLocaleString() + ' · ' + (row.source_ip || 'no source IP') + ' · HTTP ' + (row.response_code || '?') + ' in ' + (row.duration_ms || 0) + 'ms'));
+  modal.appendChild(h('div', { class: 'muted', style: { fontSize: '.82rem', marginBottom: '.5rem' } },
+    fmtDate(row.created_at) + ' \u00B7 status ' + (row.response_code || '\u2013') + ' \u00B7 ' + (row.duration_ms || 0) + ' ms \u00B7 from ' + (row.source_ip || 'unknown')));
+  const loadingDiv = h('div', { class: 'loading' }, 'Loading\u2026');
+  modal.appendChild(loadingDiv);
+  backdrop.appendChild(modal);
+  document.body.appendChild(backdrop);
 
-  // Fetch full details (body + response + headers)
-  body.appendChild(h('p', {}, h('em', { class: 'muted' }, 'Loading full payload…')));
   api('api_admin_webhookLogs_get', row.id).then(full => {
-    if (!full) { body.innerHTML = '<p class="error-box">Not found</p>'; return; }
-    body.innerHTML = '';
-    body.appendChild(h('p', { class: 'muted', style: { marginTop: 0 } },
-      new Date(full.created_at).toLocaleString() + ' · ' + (full.source_ip || 'no source IP') + ' · HTTP ' + (full.response_code || '?') + ' in ' + (full.duration_ms || 0) + 'ms'));
-
-    function preBlock(title, content) {
-      if (!content) return h('div', {});
-      let pretty = String(content);
-      try { pretty = JSON.stringify(JSON.parse(content), null, 2); } catch (_) {}
-      const wrap = h('div', { style: { marginBottom: '.85rem' } });
-      wrap.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.3rem' } },
-        h('strong', {}, title),
-        h('button', { class: 'btn ghost sm', onclick: () => { navigator.clipboard.writeText(pretty); toast('Copied'); } }, '📋 Copy')
-      ));
-      wrap.appendChild(h('pre', { style: { background: '#f8fafc', padding: '.6rem .8rem', borderRadius: '6px', overflow: 'auto', fontSize: '.8rem', maxHeight: '300px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' } }, pretty));
+    if (!full) { loadingDiv.textContent = 'Not found'; return; }
+    loadingDiv.remove();
+    const section = (title, content) => {
+      const wrap = h('div', { style: { marginTop: '1rem' } });
+      const head = h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+        h('b', {}, title),
+        h('button', { class: 'btn sm', onclick: () => { navigator.clipboard.writeText(content || ''); toast('Copied'); } }, 'Copy')
+      );
+      const pre = h('pre', { style: { background: '#0f172a', color: '#e2e8f0', padding: '.7rem', borderRadius: '6px', overflow: 'auto', maxHeight: '300px', fontSize: '.78rem', whiteSpace: 'pre-wrap', wordBreak: 'break-all' } }, content || '(empty)');
+      wrap.appendChild(head);
+      wrap.appendChild(pre);
       return wrap;
+    };
+    const tryPretty = (txt) => {
+      if (!txt) return '';
+      try { return JSON.stringify(JSON.parse(txt), null, 2); } catch (_) { return String(txt); }
+    };
+    modal.appendChild(section('Request body', tryPretty(full.body_text)));
+    modal.appendChild(section('Response body', tryPretty(full.response_text)));
+    if (full.query_json && full.query_json !== '{}') {
+      modal.appendChild(section('Query params', tryPretty(full.query_json)));
     }
-
-    if (full.query_json && full.query_json !== '{}') body.appendChild(preBlock('Query params', full.query_json));
-    body.appendChild(preBlock('Request body', full.body_text || '(empty)'));
-    body.appendChild(preBlock('Response body', full.response_text || '(empty)'));
-    body.appendChild(preBlock('Request headers (secrets redacted)', full.headers_json || '(none)'));
-    if (full.user_agent) body.appendChild(h('p', { class: 'muted', style: { fontSize: '.78rem' } }, 'User-Agent: ' + full.user_agent));
-  }).catch(e => { body.innerHTML = '<p class="error-box">' + (e && e.message ? e.message : String(e)) + '</p>'; });
-
-  card.appendChild(body);
-  modal.appendChild(card);
-  document.body.appendChild(modal);
+    modal.appendChild(section('Headers (auth redacted)', tryPretty(full.headers_json)));
+    modal.appendChild(h('div', { class: 'muted', style: { marginTop: '.5rem', fontSize: '.74rem' } },
+      'User-Agent: ' + (full.user_agent || '')));
+  }).catch(e => { loadingDiv.textContent = 'Error: ' + e.message; });
 }
 
 async function adminIntegrations() {
