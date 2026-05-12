@@ -13923,6 +13923,22 @@ async function adminRecordingDiag() {
   toolbar.appendChild(recIdInput);
   toolbar.appendChild(refreshBtn);
   toolbar.appendChild(ffStatusBtn);
+  const bulkBtn = h('button', { class: 'btn primary' }, '🔁 Re-transcode all');
+  bulkBtn.onclick = async () => {
+    if (!confirm('Re-transcode every recording in this tenant?\nThis runs ffmpeg on each one (up to 500). Takes a few minutes.')) return;
+    bulkBtn.disabled = true; bulkBtn.textContent = 'Working… (may take minutes)';
+    try {
+      const url = '/api/recordings/retranscode-all?token=' + encodeURIComponent(CRM.token || '');
+      const resp = await fetch(url);
+      const j = await resp.json();
+      if (j.ok) {
+        toast('Done: ' + j.done + ' converted, ' + j.skipped + ' skipped, ' + j.failed + ' failed', 'ok');
+        load();
+      } else { toast('Bulk re-transcode failed: ' + (j.error || resp.status), 'err'); }
+    } catch (e) { toast('Bulk re-transcode error: ' + e.message, 'err'); }
+    bulkBtn.disabled = false; bulkBtn.textContent = '🔁 Re-transcode all';
+  };
+  toolbar.appendChild(bulkBtn);
   toolbar.appendChild(h('span', { class: 'muted', style: { fontSize: '.8rem' } },
     'Every transcode attempt (upload, on-play, manual). Newest first.'));
   wrap.appendChild(toolbar);

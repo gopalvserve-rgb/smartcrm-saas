@@ -1138,6 +1138,63 @@ app.get('/api/recordings/ffmpeg-status', async (req, res) => {
   }
 });
 
+// Admin: bulk re-transcode every recording that needs it. Useful when
+// we change the transcode settings (e.g. bump sample rate) — one call
+// fixes every old recording in the tenant. Streams JSON-per-line progress.
+app.get('/api/recordings/retranscode-all', async (req, res) => {
+  const tenantDb = require('./db/pg');
+  const jwt = require('jsonwebtoken');
+  const _JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
+  try {
+    if (!req.tenant) {
+      const raw = (req.query.token || req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+      if (!raw) return res.status(401).json({ error: 'No auth token' });
+      let decoded; try { decoded = jwt.verify(raw, _JWT_SECRET); } catch (_) { return res.status(401).json({ error: 'Bad token' }); }
+      const uid = Number(decoded && decoded.id);
+      const t = await _findTenantByLookup('SELECT 1 FROM users WHERE id=$1 AND COALESCE(is_active,1)=1 LIMIT 1', [uid]);
+      if (!t) return res.status(404).json({ error: 'No tenant' });
+      req.tenant = t; req.tenantPool = tenantPoolMod.poolFor(t); req.tenantSlug = t.slug;
+    }
+    return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug }, async () => {
+      const tx = require('./utils/audioTranscode');
+      const diag = require('./utils/recordingDiag');
+      // Pick every recording. The transcoder's needsTranscode() filter
+      // skips those already in a browser-playable container (saves time).
+      const rows = (await tenantDb.query('SELECT id, OCTET_LENGTH(audio_bytes) AS sz FROM lead_recordings ORDER BY id DESC LIMIT 500')).rows;
+      let done = 0, skip = 0, fail = 0;
+      const errors = [];
+      for (const r of rows) {
+        if (!r.sz || r.sz < 100) { skip++; continue; }
+        const got = await tenantDb.query('SELECT audio_bytes FROM lead_recordings WHERE id=$1', [r.id]);
+        let buf = got.rows[0] && got.rows[0].audio_bytes;
+        if (!Buffer.isBuffer(buf)) buf = buf ? Buffer.from(buf) : null;
+        if (!buf || buf.length === 0) { skip++; continue; }
+        // Always run the transcode — even if the file is already MP3, the
+        // new settings (44.1kHz + Xing) make it WebView-compatible.
+        const t0 = Date.now();
+        try {
+          const mp3 = await tx.transcodeToMp3(buf);
+          if (mp3 && mp3.length > 0) {
+            await tenantDb.query('UPDATE lead_recordings SET audio_bytes=$1, size_bytes=$2, mime_type=$3 WHERE id=$4', [mp3, mp3.length, 'audio/mpeg', r.id]);
+            diag.log({ recording_id: r.id, action: 'bulk_retranscode', result: 'ok', bytes_in: buf.length, bytes_out: mp3.length, mime_out: 'audio/mpeg', duration_ms: Date.now() - t0 });
+            done++;
+          } else {
+            fail++; errors.push({ id: r.id, error: 'transcode returned null' });
+            diag.log({ recording_id: r.id, action: 'bulk_retranscode', result: 'fail', bytes_in: buf.length, error_message: 'null/empty', duration_ms: Date.now() - t0 });
+          }
+        } catch (e) {
+          fail++; errors.push({ id: r.id, error: e.message });
+          diag.log({ recording_id: r.id, action: 'bulk_retranscode', result: 'fail', bytes_in: buf.length, error_message: e.message + (e._stderr ? ' | stderr: ' + e._stderr.slice(-300) : ''), duration_ms: Date.now() - t0 });
+        }
+      }
+      return res.json({ ok: true, scanned: rows.length, done, skipped: skip, failed: fail, errors: errors.slice(0, 20) });
+    });
+  } catch (e) {
+    console.error('[bulk-retranscode]', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Admin: force a recording to re-transcode now. Replaces the stored
 // bytes with MP3 so the in-app player works. Pass the auth token in
 // ?token=. Returns { ok, from_bytes, to_bytes, mime } or an error.

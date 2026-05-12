@@ -203,13 +203,31 @@ async function transcodeToMp3(buf) {
         let settled = false;
         const finish = (fn) => (arg) => { if (!settled) { settled = true; fn(arg); } };
         const timer = setTimeout(() => finish(reject)(new Error('ffmpeg timed out after 30s')), 30_000);
-        _ffmpeg(inPath)
+        let _stderr = '';
+      _ffmpeg(inPath)
           .audioCodec('libmp3lame')
           .audioBitrate('64k')
-          .audioFrequency(22050)
+          .audioFrequency(44100)  // MPEG-1 sampling rate — universally
+                                  // decoded by Android WebView and every
+                                  // browser. 22050 produced MPEG-2 audio
+                                  // which WebView refused to play even
+                                  // though /audio served HTTP 200.
           .audioChannels(1)
+          .outputOptions([
+            '-write_xing', '1',      // VBR Info/Xing header so HTML5
+                                     // audio can parse duration upfront
+                                     // without scanning the full file
+            '-id3v2_version', '4',   // standard tags
+            '-compression_level', '2'
+          ])
           .format('mp3')
-          .on('error', (err) => { clearTimeout(timer); finish(reject)(err); })
+          .on('stderr', line => { _stderr += line + '\n'; })
+          .on('error', (err) => {
+            clearTimeout(timer);
+            // attach stderr so the caller can see WHY ffmpeg failed
+            err._stderr = _stderr.slice(-1500);
+            finish(reject)(err);
+          })
           .on('end',   () => { clearTimeout(timer); finish(resolve)(); })
           .save(outPath);
       });
