@@ -92,6 +92,8 @@ app.use(require('cookie-parser')());
 // Auth via Bearer header against AI_USAGE_INGEST_TOKEN env. Endpoint
 // is a no-op (503) until that env var is set.
 app.post('/ai-usage/ingest', aiUsageIngest.expressIngest);
+const aiProxy = require('./routes/saas/aiProxy');
+app.post('/ai/proxy/generate', aiProxy.expressGenerate);
 
 // ---- Static assets --------------------------------------------
 // Public landing site lives at /saas/* and is served at the root URL.
