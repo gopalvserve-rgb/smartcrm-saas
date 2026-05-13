@@ -2154,6 +2154,44 @@ setInterval(() => {
 setTimeout(() => _runReengageForAllTenants().catch(() => {}), 30_000);
 console.log('[reengage] AI bot re-engagement worker started');
 
+// ── Background: per-tenant AI Call Summary worker ──────────────────────
+// aiCallSummary.startWorker() is only wired in server.tenant.js. Without
+// this, SaaS-tenant recordings never get auto-processed by Gemini — they
+// stay at ai_processed_at = NULL until a user clicks the manual ↻ Retry
+// button. Walk every active tenant once a minute and run _tick() inside
+// that tenant's storage scope so the existing 'WHERE ai_processed_at IS
+// NULL LIMIT 5' query runs against per-tenant DB pools.
+async function _runAiCallSummaryForAllTenants() {
+  let rows = [];
+  try {
+    const r = await controlDb.query(
+      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500`
+    );
+    rows = r.rows;
+  } catch (e) { console.warn('[ai-summary] tenant list failed:', e.message); return; }
+  let aiSummary;
+  try { aiSummary = require('./utils/aiCallSummary'); } catch (_) { return; }
+  if (!aiSummary._tick) return;
+  for (const row of rows) {
+    let t; try { t = await tenantPoolMod.findActiveTenant(row.slug); } catch (_) { continue; }
+    if (!t) continue;
+    const pool = tenantPoolMod.poolFor(t);
+    if (!pool) continue;
+    try {
+      await tenantDb.tenantStorage.run({ pool, tenant: t, slug: row.slug },
+        () => aiSummary._tick()
+      );
+    } catch (e) { console.warn(`[ai-summary] ${row.slug} tick failed:`, e.message); }
+  }
+}
+setInterval(() => {
+  _runAiCallSummaryForAllTenants().catch(e => console.error('[ai-summary] cycle failed:', e.message));
+}, Number(process.env.AI_CALL_SUMMARY_INTERVAL_MS || 60_000));
+// Initial pass 45s after boot to let the AI key + DB pools warm up.
+setTimeout(() => _runAiCallSummaryForAllTenants().catch(() => {}), 45_000);
+console.log('[ai-summary] SaaS-aware Gemini call-summary worker started');
+
+
   app.listen(PORT, () => console.log('[boot] SmartCRM SaaS listening on :' + PORT));
 }
 boot().catch(e => { console.error('[boot] failed:', e); process.exit(1); });

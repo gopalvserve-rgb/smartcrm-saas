@@ -357,4 +357,4 @@ function startWorker() {
   console.log('[ai-summary] worker started — Gemini', _key() ? 'configured' : (demo.on ? 'demo-mock' : 'NOT configured'));
 }
 
-module.exports = { processRecording, startWorker, GEMINI_MODEL };
+module.exports = { processRecording, startWorker, _tick, GEMINI_MODEL };
