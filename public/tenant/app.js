@@ -21697,26 +21697,90 @@ function _renderCopilotDrawer() {
       maxHeight: '120px', overflowY: 'auto'
     }
   });
-  PRESETS.forEach(p => {
-    const btn = h('button', {
-      class: 'copilot-preset',
-      title: p.q,
-      style: {
-        background: '#fff', border: '1px solid #e2e8f0', borderRadius: '20px',
-        padding: '.3rem .65rem', fontSize: '.75rem', cursor: 'pointer',
-        color: '#475569', whiteSpace: 'nowrap', lineHeight: '1.2',
-        transition: 'background .1s, border-color .1s'
-      },
-      onmouseover: function() { this.style.background = '#eef2ff'; this.style.borderColor = '#a5b4fc'; },
-      onmouseout:  function() { this.style.background = '#fff';    this.style.borderColor = '#e2e8f0'; },
-      onclick: () => {
-        inp.value = p.q;
-        // Fire send() — defined below in this same closure
-        if (typeof send === 'function') send();
+  // Per-user customisable shortcuts. Stored in localStorage so each
+  // user can keep their own list. Key namespaced by user-id when
+  // available so multiple users on the same browser don't collide.
+  const ckey = '_copilotCustomShortcuts_' + ((CRM && CRM.user && CRM.user.id) ? CRM.user.id : 'anon');
+  function _loadCustomShortcuts() {
+    try { return JSON.parse(localStorage.getItem(ckey) || '[]'); } catch (_) { return []; }
+  }
+  function _saveCustomShortcuts(arr) {
+    try { localStorage.setItem(ckey, JSON.stringify(arr.slice(0, 30))); } catch (_) {}
+  }
+  function _addCustomShortcutPrompt() {
+    const list = _loadCustomShortcuts();
+    const label = prompt('Shortcut label (e.g. "My hot leads"):');
+    if (!label || !label.trim()) return;
+    const emoji = prompt('Pick an emoji or 1-2 chars (e.g. ⚡):', '\u2728') || '\u2728';
+    const q = prompt('What should Copilot do when you tap it? (full prompt)\n\nExample:\nShow leads where status is "Quote sent" and not updated in 3 days.');
+    if (!q || !q.trim()) return;
+    list.push({ emoji: emoji.trim().slice(0, 4), label: label.trim().slice(0, 40), q: q.trim(), custom: true });
+    _saveCustomShortcuts(list);
+    _renderAllChips();
+  }
+  function _removeCustomShortcut(idx) {
+    const list = _loadCustomShortcuts();
+    list.splice(idx, 1);
+    _saveCustomShortcuts(list);
+    _renderAllChips();
+  }
+
+  function _renderAllChips() {
+    presetsRow.innerHTML = '';
+    const mkChip = (p, opts) => {
+      const wrap = h('span', { style: { position: 'relative', display: 'inline-flex' } });
+      const btn = h('button', {
+        class: 'copilot-preset',
+        title: p.q,
+        style: {
+          background: opts && opts.custom ? '#fef3c7' : '#fff',
+          border: '1px solid ' + (opts && opts.custom ? '#facc15' : '#e2e8f0'),
+          borderRadius: '20px',
+          padding: '.3rem ' + (opts && opts.custom ? '1.5rem .3rem .65rem' : '.65rem'),
+          fontSize: '.75rem', cursor: 'pointer',
+          color: '#475569', whiteSpace: 'nowrap', lineHeight: '1.2',
+          transition: 'background .1s, border-color .1s'
+        },
+        onmouseover: function() { this.style.background = (opts && opts.custom) ? '#fde68a' : '#eef2ff'; this.style.borderColor = (opts && opts.custom) ? '#eab308' : '#a5b4fc'; },
+        onmouseout:  function() { this.style.background = (opts && opts.custom) ? '#fef3c7' : '#fff';    this.style.borderColor = (opts && opts.custom) ? '#facc15' : '#e2e8f0'; },
+        onclick: () => {
+          inp.value = p.q;
+          if (typeof send === 'function') send();
+        }
+      }, p.emoji + ' ' + p.label);
+      wrap.appendChild(btn);
+      if (opts && opts.custom) {
+        const x = h('button', {
+          title: 'Remove shortcut',
+          style: {
+            position: 'absolute', top: '2px', right: '4px',
+            background: 'transparent', border: 'none', cursor: 'pointer',
+            color: '#92400e', fontSize: '.85rem', lineHeight: 1, padding: 0
+          },
+          onclick: (ev) => {
+            ev.stopPropagation();
+            if (confirm('Remove shortcut "' + p.label + '"?')) _removeCustomShortcut(opts.idx);
+          }
+        }, '\u00D7');
+        wrap.appendChild(x);
       }
-    }, p.emoji + ' ' + p.label);
-    presetsRow.appendChild(btn);
-  });
+      presetsRow.appendChild(wrap);
+    };
+    PRESETS.forEach(p => mkChip(p, { custom: false }));
+    const customs = _loadCustomShortcuts();
+    customs.forEach((p, idx) => mkChip(p, { custom: true, idx }));
+    // "+ Add shortcut" button at the end
+    const add = h('button', {
+      style: {
+        background: '#eef2ff', border: '1px dashed #6366f1', borderRadius: '20px',
+        padding: '.3rem .65rem', fontSize: '.75rem', cursor: 'pointer',
+        color: '#4338ca', whiteSpace: 'nowrap', lineHeight: '1.2', fontWeight: 600
+      },
+      onclick: _addCustomShortcutPrompt
+    }, '+ Add shortcut');
+    presetsRow.appendChild(add);
+  }
+  _renderAllChips();
   d.appendChild(presetsRow);
 
   const inputRow = h('div', { style: { display: 'flex', gap: '.4rem', padding: '.5rem .5rem .65rem', borderTop: '1px solid #e2e8f0', background: '#fff' } });
