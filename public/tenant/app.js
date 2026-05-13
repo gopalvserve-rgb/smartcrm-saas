@@ -10963,7 +10963,25 @@ async function wbChat() {
       } catch (_) {}
       log.appendChild(h('div', { class: 'wb-msg ' + (msg.direction === 'in' ? 'in' : 'out') + (isFailed ? ' failed' : '') },
         mediaNode,
-        h('div', { class: 'wb-msg-body' }, msg.body || (mediaNode ? '' : '[' + (msg.message_type || '') + ']')),
+        h('div', { class: 'wb-msg-body' }, (function() {
+          // Friendly fallback for already-saved messages with empty body
+          // (old inbound rows where the type was 'unsupported' / 'sticker'
+          // / 'reaction' etc. before the parser learned them).
+          if (msg.body && String(msg.body).trim()) return msg.body;
+          if (mediaNode) return '';
+          const t = String(msg.message_type || '').toLowerCase();
+          const labels = {
+            sticker:     '\uD83C\uDFAD Sticker',
+            reaction:    '\uD83D\uDC4D Reaction',
+            location:    '\uD83D\uDCCD Location',
+            contacts:    '\uD83D\uDCC7 Contact card',
+            order:       '\uD83D\uDED2 Order',
+            system:      '\u2139\uFE0F System message',
+            unsupported: '\uD83D\uDCAC Unsupported message type',
+            unknown:     '\uD83D\uDCAC Unknown message type'
+          };
+          return labels[t] || ('\uD83D\uDCAC ' + (t.charAt(0).toUpperCase() + t.slice(1) || 'Message'));
+        })()),
         isFailed
           ? h('div', { class: 'wb-msg-error', title: msg.error_text || 'Send failed' },
               waFriendlyError(msg.error_text))
