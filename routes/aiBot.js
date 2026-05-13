@@ -67,6 +67,9 @@ const _DEFAULT_SETTINGS = {
   heat_keywords: [],
   heat_notify_levels: 'hot,very_hot,on_fire',
   heat_notify_recipients: 'assigned,admins',
+  quick_reply_buttons: [],
+  quick_reply_trigger: 'always',
+  quick_reply_keywords: '',
 };
 
 function _coerceSettings(row) {
@@ -75,7 +78,7 @@ function _coerceSettings(row) {
   Object.keys(out).forEach(k => { if (row[k] !== undefined && row[k] !== null) out[k] = row[k]; });
   // JSONB coercions — pg returns these as objects, but if a row was
   // saved by a path that stringified them, parse defensively.
-  for (const key of ['reply_modes', 'business_hours', 'active_phone_number_ids', 'heat_keywords']) {
+  for (const key of ['reply_modes', 'business_hours', 'active_phone_number_ids', 'heat_keywords', 'quick_reply_buttons']) {
     if (typeof out[key] === 'string') {
       try { out[key] = JSON.parse(out[key]); } catch (_) { out[key] = _DEFAULT_SETTINGS[key]; }
     }
