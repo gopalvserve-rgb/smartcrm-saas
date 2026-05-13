@@ -124,4 +124,18 @@ jobs:
             exit 0
           fi
           git commit -m "build(android): refresh LeadCRM.apk via CI [skip ci]"
-          git push
+          # Race-condition guard: if main moved while we were building, rebase
+          # our APK commit on top of the new head and retry. Three retries
+          # because back-to-back source pushes are common.
+          for attempt in 1 2 3 4; do
+            if git push; then
+              echo "✅ APK commit pushed on attempt $attempt"
+              break
+            fi
+            echo "⚠ push rejected — fetching + rebasing (attempt $attempt)"
+            git pull --rebase origin main || true
+            if [ $attempt -eq 4 ]; then
+              echo "❌ Still failing after 4 attempts — giving up. APK artifact is still in Actions."
+              exit 0
+            fi
+          done
