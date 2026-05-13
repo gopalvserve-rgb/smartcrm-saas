@@ -854,7 +854,8 @@ const NAV_GROUPS = [
     { id: 'dialer',       label: 'Dialer',        icon: '📞' },
     { id: 'callinsights', label: 'Call insights', icon: '🎙' },
     { id: 'callratings',  label: 'Call ratings',  icon: '⭐', roles: ['admin', 'manager', 'team_leader'] },
-    { id: 'aiusage',      label: 'AI usage',      icon: '🤖', roles: ['admin', 'manager'] }
+    { id: 'aiusage',      label: 'AI usage',      icon: '🤖', roles: ['admin', 'manager'] },
+    { id: 'callactivity', label: 'Call activity', icon: '📞', roles: ['admin', 'manager', 'team_leader'] }
   ] },
   { label: 'Catalog', icon: '📦', items: [
     { id: 'inventory',  label: 'Inventory', icon: '📦' },
@@ -1253,6 +1254,9 @@ VIEWS.dashboard = async (view) => {
   if (usedTypes.has('daily_volume')) {
     fetchTasks.daily = api('api_reports_daily', {}).catch(() => []);
   }
+  if (usedTypes.has('call_activity_summary') || usedTypes.has('call_activity_topusers')) {
+    fetchTasks.callActivity = api('api_reports_callActivity', {}).catch(() => null);
+  }
   const data = {};
   await Promise.all(Object.entries(fetchTasks).map(async ([k, p]) => { data[k] = await p; }));
 
@@ -1341,6 +1345,56 @@ const WIDGET_LIBRARY = {
     render: (c, _cfg, d) => _renderKpi(c, 'Due today', d.notifs?.counts?.due_today ?? 0, 'warn', '📅', '#/followups?tab=due') },
   kpi_overdue: { title: 'KPI · Overdue', group: 'KPI',
     render: (c, _cfg, d) => _renderKpi(c, 'Overdue', d.notifs?.counts?.overdue ?? 0, 'err', '⚠️', '#/followups?tab=overdue') },
+  // ----- Call Activity -----
+  call_activity_summary: { title: 'Call Activity · Summary', group: 'Calls',
+    render: (c, _cfg, d, w) => {
+      c.appendChild(h('h3', {}, w.title || '\uD83D\uDCDE Call activity (last 30 days)'));
+      c.appendChild(h('div', { class: 'muted', style: { fontSize: '.85rem', marginBottom: '.4rem' } }, 'Tap to open full report'));
+      const body = h('div', { id: 'wcact-' + w.id, style: { cursor: 'pointer' } });
+      body.onclick = () => { location.hash = '#/callactivity'; };
+      c.appendChild(body);
+      const s = d.callActivity?.summary || null;
+      if (!s) {
+        body.appendChild(h('div', { class: 'muted' }, 'Loading…'));
+        return;
+      }
+      const fmt = (n) => Number(n) || 0;
+      const human = (sec) => {
+        sec = Number(sec) || 0;
+        const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), ss = sec%60;
+        return h ? (h+'h '+m+'m') : (m ? (m+'m '+ss+'s') : (ss+'s'));
+      };
+      const grid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: '.5rem' } });
+      const tile = (label, val, color) => h('div', { style: { padding: '.5rem .6rem', border: '1px solid #e2e8f0', borderRadius: '8px' } },
+        h('div', { class: 'muted', style: { fontSize: '.72rem' } }, label),
+        h('div', { style: { fontSize: '1.3rem', fontWeight: 700, color: color || '' } }, String(val))
+      );
+      grid.appendChild(tile('Total calls', fmt(s.total_calls)));
+      grid.appendChild(tile('Talk time',  human(s.total_talk_s)));
+      grid.appendChild(tile('Incoming',   fmt(s.incoming), '#2563eb'));
+      grid.appendChild(tile('Outgoing',   fmt(s.outgoing), '#10b981'));
+      grid.appendChild(tile('Missed',     fmt(s.missed),   '#ef4444'));
+      grid.appendChild(tile('Avg / call', human(s.avg_talk_s)));
+      body.appendChild(grid);
+    }
+  },
+  call_activity_topusers: { title: 'Call Activity · Top performers', group: 'Calls',
+    render: (c, _cfg, d, w) => {
+      c.appendChild(h('h3', {}, w.title || '\uD83C\uDFC6 Top callers (30d)'));
+      const top = (d.callActivity?.topUsers || []).slice(0, 5);
+      if (!top.length) { c.appendChild(h('div', { class: 'muted' }, 'No call data yet.')); return; }
+      const human = (sec) => { sec = Number(sec) || 0; const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60); return h ? (h+'h '+m+'m') : (m+'m'); };
+      const ol = h('ol', { style: { padding: '0 0 0 1.2rem', margin: 0 } });
+      top.forEach(u => {
+        ol.appendChild(h('li', { style: { margin: '.3rem 0' } },
+          h('strong', {}, u.user_name || '—'),
+          h('span', { class: 'muted' }, ' · ' + (u.total_calls || 0) + ' calls · ' + human(u.talk_s))
+        ));
+      });
+      c.appendChild(ol);
+    }
+  },
+
 
   // ----- Charts -----
   chart_status: { title: 'Chart · Leads by status', group: 'Charts',
@@ -11747,6 +11801,229 @@ async function openSetTargetModal(month, userId, onDone) {
  * Shows actual cost (vendor) and billable cost (with markup).
  * Plus a cost estimator that converts X minutes → ₹.
  */
+/**
+ * Call activity report — calls/talk-time/missed/idle/gap broken
+ * down by user and manager with top + bottom performers.
+ * Renders KPI cards + per-user table + per-manager rollup + a
+ * daily trend chart. Filter by date + optional user picker.
+ */
+VIEWS.callactivity = async (view) => {
+  await ensureChartJs();
+  view.innerHTML = '';
+  const { users = [] } = CRM.cache;
+
+  // Default range: last 30 days
+  const today = new Date();
+  const from30 = new Date(today.getTime() - 30 * 86400 * 1000);
+  const isoDate = d => d.toISOString().slice(0, 10);
+
+  const toolbar = h('div', { class: 'toolbar' },
+    h('input', { type: 'date', id: 'ca-from', value: isoDate(from30) }),
+    h('span', {}, 'to'),
+    h('input', { type: 'date', id: 'ca-to',   value: isoDate(today) }),
+    h('select', { id: 'ca-user' },
+      h('option', { value: '' }, 'All users'),
+      ...users.map(u => h('option', { value: String(u.id) }, u.name))
+    ),
+    h('button', { class: 'btn primary', onclick: () => loadCallActivity() }, '🔎 Apply'),
+    h('button', { class: 'btn', onclick: () => downloadCallActivityCsv() }, '⬇️ CSV')
+  );
+  view.appendChild(toolbar);
+
+  view.appendChild(h('div', { id: 'ca-cards', class: 'cards' }));
+  view.appendChild(h('div', { class: 'chart-grid' },
+    h('div', { class: 'card card-wide' },
+      h('h3', {}, 'Daily call activity'),
+      h('div', { class: 'chart-wrap' }, h('canvas', { id: 'ca-chart' }))
+    ),
+    h('div', { class: 'card' },
+      h('h3', {}, '🏆 Top performers'),
+      h('div', { id: 'ca-top' })
+    ),
+    h('div', { class: 'card' },
+      h('h3', {}, '🐢 Needs improvement'),
+      h('div', { id: 'ca-bottom' })
+    ),
+  ));
+  view.appendChild(h('div', { class: 'card' },
+    h('h3', {}, 'By user'),
+    h('div', { id: 'ca-byuser', style: { overflowX: 'auto' } })
+  ));
+  view.appendChild(h('div', { class: 'card' },
+    h('h3', {}, 'By manager'),
+    h('div', { id: 'ca-bymgr', style: { overflowX: 'auto' } })
+  ));
+
+  await loadCallActivity();
+};
+
+function _caSecsToHuman(s) {
+  s = Number(s) || 0;
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  if (h) return h + 'h ' + m + 'm';
+  if (m) return m + 'm ' + sec + 's';
+  return sec + 's';
+}
+
+window._caData = null;
+
+async function loadCallActivity() {
+  const from = $('#ca-from')?.value;
+  const to   = $('#ca-to')?.value;
+  const userId = $('#ca-user')?.value;
+  const filters = {};
+  if (from)   filters.from = from + 'T00:00:00';
+  if (to)     filters.to   = to   + 'T23:59:59';
+  if (userId) filters.userId = Number(userId);
+
+  const cards = $('#ca-cards');
+  if (cards) cards.innerHTML = '<div class="loading">Loading…</div>';
+
+  try {
+    const r = await api('api_reports_callActivity', filters);
+    window._caData = r;
+    _renderCallActivity(r);
+  } catch (e) {
+    if (cards) cards.innerHTML = '<div class="error-box">' + esc(e.message) + '</div>';
+  }
+}
+
+function _renderCallActivity(r) {
+  const s = r.summary || {};
+  const cards = $('#ca-cards');
+  if (cards) {
+    cards.innerHTML = '';
+    const mk = (label, val, sub) => {
+      const c = h('div', { class: 'card kpi' },
+        h('div', { class: 'kpi-label' }, label),
+        h('div', { class: 'kpi-val' }, val)
+      );
+      if (sub) c.appendChild(h('div', { class: 'kpi-sub' }, sub));
+      return c;
+    };
+    cards.appendChild(mk('📞 Total calls',   s.total_calls || 0));
+    cards.appendChild(mk('📥 Incoming',      s.incoming || 0));
+    cards.appendChild(mk('📤 Outgoing',      s.outgoing || 0));
+    cards.appendChild(mk('❌ Missed',        s.missed || 0));
+    cards.appendChild(mk('🗣️ Total talk',    _caSecsToHuman(s.total_talk_s), 'sum of recorded durations'));
+    cards.appendChild(mk('⏱️ Avg call',       _caSecsToHuman(s.avg_talk_s), 'mean of non-zero calls'));
+    cards.appendChild(mk('👥 Active users',  s.total_users || 0));
+    cards.appendChild(mk('💤 Idle time',     _caSecsToHuman(s.idle_s), 'work hrs − talk time'));
+  }
+
+  // By-user table
+  const u = $('#ca-byuser');
+  if (u) {
+    const rows = r.byUser || [];
+    if (!rows.length) {
+      u.innerHTML = '<div class="muted">No calls in this window.</div>';
+    } else {
+      u.innerHTML = '';
+      const t = h('table', { class: 'table' });
+      t.innerHTML = '<thead><tr>' +
+        '<th>Rep</th><th>Manager</th>' +
+        '<th>Total</th><th>In</th><th>Out</th><th>Missed</th>' +
+        '<th>Talk</th><th>Avg call</th><th>Avg gap</th><th>Last call</th>' +
+        '</tr></thead><tbody>' +
+        rows.map(r => '<tr>' +
+          '<td>' + esc(r.user_name || '—') + '<div class="muted" style="font-size:.75rem">' + esc(r.role || '') + '</div></td>' +
+          '<td>' + esc(r.manager_name || '—') + '</td>' +
+          '<td>' + (r.total_calls || 0) + '</td>' +
+          '<td>' + (r.in_calls || 0) + '</td>' +
+          '<td>' + (r.out_calls || 0) + '</td>' +
+          '<td>' + (r.missed_calls || 0) + '</td>' +
+          '<td>' + _caSecsToHuman(r.talk_s) + '</td>' +
+          '<td>' + _caSecsToHuman(r.avg_talk_s) + '</td>' +
+          '<td>' + _caSecsToHuman(r.avg_gap_s) + '</td>' +
+          '<td>' + (r.last_call_at ? new Date(r.last_call_at).toLocaleString('en-IN') : '—') + '</td>' +
+          '</tr>').join('') +
+        '</tbody>';
+      u.appendChild(t);
+    }
+  }
+
+  // By-manager table
+  const m = $('#ca-bymgr');
+  if (m) {
+    const rows = r.byManager || [];
+    if (!rows.length) {
+      m.innerHTML = '<div class="muted">No data.</div>';
+    } else {
+      m.innerHTML = '';
+      const t = h('table', { class: 'table' });
+      t.innerHTML = '<thead><tr><th>Manager</th><th>Team size</th><th>Total calls</th><th>In</th><th>Out</th><th>Missed</th><th>Talk</th><th>Avg call</th></tr></thead><tbody>' +
+        rows.map(r => '<tr>' +
+          '<td>' + esc(r.manager_name) + '</td>' +
+          '<td>' + (r.team_size || 0) + '</td>' +
+          '<td>' + (r.total_calls || 0) + '</td>' +
+          '<td>' + (r.in || 0) + '</td>' +
+          '<td>' + (r.out || 0) + '</td>' +
+          '<td>' + (r.missed || 0) + '</td>' +
+          '<td>' + _caSecsToHuman(r.talk_s) + '</td>' +
+          '<td>' + _caSecsToHuman(r.avg_talk_s) + '</td>' +
+          '</tr>').join('') +
+        '</tbody>';
+      m.appendChild(t);
+    }
+  }
+
+  // Top / bottom performers
+  const top = $('#ca-top');
+  const bot = $('#ca-bottom');
+  const mkList = (arr) => {
+    if (!arr || !arr.length) return '<div class="muted">No data.</div>';
+    return '<ol style="padding-left:1.2rem;margin:0">' + arr.map(u =>
+      '<li><strong>' + esc(u.user_name) + '</strong> — ' +
+      (u.total_calls || 0) + ' calls · ' + _caSecsToHuman(u.talk_s) +
+      '</li>').join('') + '</ol>';
+  };
+  if (top) top.innerHTML = mkList(r.topUsers);
+  if (bot) bot.innerHTML = mkList(r.bottomUsers);
+
+  // Daily trend chart
+  const canvas = $('#ca-chart');
+  if (canvas && window.Chart) {
+    const labels = (r.dailySeries || []).map(d => String(d.day).slice(0, 10));
+    const dataIn  = (r.dailySeries || []).map(d => d.in_count || 0);
+    const dataOut = (r.dailySeries || []).map(d => d.out_count || 0);
+    const dataMs  = (r.dailySeries || []).map(d => d.missed   || 0);
+    if (window._caChart) try { window._caChart.destroy(); } catch (_) {}
+    window._caChart = new Chart(canvas, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [
+          { label: 'Incoming', data: dataIn,  backgroundColor: '#4285F4' },
+          { label: 'Outgoing', data: dataOut, backgroundColor: '#34A853' },
+          { label: 'Missed',   data: dataMs,  backgroundColor: '#EA4335' }
+        ]
+      },
+      options: { responsive: true, maintainAspectRatio: false,
+        scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true } } }
+    });
+  }
+}
+
+function downloadCallActivityCsv() {
+  const r = window._caData;
+  if (!r) return toast('Apply a filter first', 'err');
+  const rows = [['user_name', 'role', 'manager', 'total', 'in', 'out', 'missed', 'talk_seconds', 'avg_call_s', 'avg_gap_s', 'last_call_at']];
+  (r.byUser || []).forEach(u => {
+    rows.push([
+      u.user_name || '', u.role || '', u.manager_name || '',
+      u.total_calls || 0, u.in_calls || 0, u.out_calls || 0, u.missed_calls || 0,
+      u.talk_s || 0, u.avg_talk_s || 0, u.avg_gap_s || 0,
+      u.last_call_at || ''
+    ]);
+  });
+  const csv = rows.map(r => r.map(c => '"' + String(c).replace(/"/g, '""') + '"').join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'call-activity-' + Date.now() + '.csv';
+  a.click();
+}
+
 /**
  * Call Insights — showcase view of AI call analysis.
  * Scrollable feed of every recent call with AI summary, action items,

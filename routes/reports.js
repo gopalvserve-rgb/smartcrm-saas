@@ -888,11 +888,256 @@ async function api_reports_aiCostEstimator(token, opts) {
   };
 }
 
+
+// ============================================================
+// Call Activity report — Dashboard + Reports section
+//
+// Aggregates from BOTH call_events (every ringing/missed/ended event)
+// and lead_recordings (the actual recorded calls — these carry accurate
+// duration_s). Logic:
+//
+//   * One "call" = one row in call_events bucketed per (user, phone,
+//     5-minute window). This dedupes the ringing+ended pair.
+//   * Direction is the strongest signal from that bucket (in > out > missed).
+//   * Talk-time uses the linked recording's duration if available,
+//     else falls back to the call_event's duration_s.
+//   * Missed = a bucket whose direction is 'missed' OR whose only event
+//     was an 'incoming_ringing' that never transitioned to call_ended.
+//
+// Output:
+//   {
+//     summary: { total_calls, incoming, outgoing, missed, total_talk_s,
+//                avg_talk_s, total_gap_s, idle_s, total_users },
+//     byUser:    [{user_id, user_name, role, parent_id, total_calls, in, out, missed,
+//                  talk_s, avg_talk_s, avg_gap_s, last_call_at}],
+//     byManager: [{manager_id, manager_name, team_size, total_calls, talk_s, avg_talk_s}],
+//     topUsers:    [...top 5 by talk_s],
+//     bottomUsers: [...bottom 5 by talk_s among users with >0 calls],
+//     dailySeries: [{day, total, in, out, missed, talk_s}]
+//   }
+// ============================================================
+async function api_reports_callActivity(token, filters) {
+  const me = await authUser(token);
+  filters = filters || {};
+  // Default window: last 30 days
+  const to   = filters.to   ? new Date(filters.to)   : new Date();
+  const from = filters.from ? new Date(filters.from) : new Date(Date.now() - 30 * 86400 * 1000);
+  const fromIso = from.toISOString();
+  const toIso   = to.toISOString();
+
+  // Visibility scope — admin/super_admin see all; managers see self+team; reps see self.
+  let userScopeSql = '';
+  const params = [fromIso, toIso];
+  let p = 3;
+  if (me.role === 'sales' || me.role === 'employee') {
+    userScopeSql = ` AND user_id = $${p++}`;
+    params.push(me.id);
+  } else if (me.role === 'team_leader' || me.role === 'manager') {
+    userScopeSql = ` AND (user_id = $${p} OR user_id IN (SELECT id FROM users WHERE parent_id = $${p}))`;
+    params.push(me.id); p++;
+  }
+  // Optional explicit user filter
+  if (filters.userId) {
+    userScopeSql += ` AND user_id = $${p++}`;
+    params.push(Number(filters.userId));
+  }
+
+  // Build the unified "calls" CTE. We bucket within a 5-min window to
+  // dedupe ringing+ended pairs into one logical call.
+  const callsCte = `
+    WITH base_events AS (
+      SELECT
+        ce.id,
+        ce.user_id,
+        ce.phone,
+        ce.direction,
+        ce.event,
+        ce.duration_s    AS evt_duration,
+        ce.recording_id,
+        ce.created_at,
+        lr.duration_s    AS rec_duration
+      FROM call_events ce
+      LEFT JOIN lead_recordings lr ON lr.id = ce.recording_id
+      WHERE ce.created_at >= $1 AND ce.created_at <= $2
+            ${userScopeSql.replace(/user_id/g, 'ce.user_id')}
+    ),
+    bucketed AS (
+      SELECT
+        user_id,
+        phone,
+        date_trunc('minute', created_at) -
+          ((EXTRACT(MINUTE FROM created_at)::int % 5) * INTERVAL '1 minute') AS bucket,
+        -- Direction precedence: missed > out > in (so a missed call from a
+        -- known number that ALSO has an outbound earlier doesn't get
+        -- mis-attributed). 'unknown' last.
+        (ARRAY_AGG(direction ORDER BY
+          CASE direction
+            WHEN 'missed' THEN 1
+            WHEN 'out'    THEN 2
+            WHEN 'in'     THEN 3
+            ELSE 9
+          END
+        ))[1] AS direction,
+        -- Talk time per call: max of recording duration (accurate) or
+        -- event-reported duration; 0 means missed/no-answer.
+        GREATEST(
+          COALESCE(MAX(rec_duration), 0),
+          COALESCE(MAX(evt_duration), 0)
+        )::int AS duration_s,
+        MIN(created_at) AS started_at,
+        BOOL_OR(event = 'call_ended' OR recording_id IS NOT NULL) AS connected
+      FROM base_events
+      GROUP BY user_id, phone, bucket
+    ),
+    calls AS (
+      SELECT
+        user_id,
+        phone,
+        bucket,
+        started_at,
+        duration_s,
+        -- A call is "missed" if it never transitioned to call_ended /
+        -- no recording was attached, regardless of how the row's
+        -- direction column is labelled.
+        CASE
+          WHEN NOT connected AND direction = 'in' THEN 'missed'
+          WHEN direction = 'missed'                THEN 'missed'
+          ELSE COALESCE(direction, 'unknown')
+        END AS direction
+      FROM bucketed
+    )
+  `;
+
+  // --- Summary ---
+  const summarySql = callsCte + `
+    SELECT
+      COUNT(*)::int                                        AS total_calls,
+      COUNT(*) FILTER (WHERE direction = 'in')::int        AS incoming,
+      COUNT(*) FILTER (WHERE direction = 'out')::int       AS outgoing,
+      COUNT(*) FILTER (WHERE direction = 'missed')::int    AS missed,
+      COALESCE(SUM(duration_s), 0)::int                    AS total_talk_s,
+      ROUND(COALESCE(AVG(NULLIF(duration_s, 0))::numeric, 0), 0)::int AS avg_talk_s,
+      COUNT(DISTINCT user_id)::int                          AS total_users
+    FROM calls
+  `;
+  const summaryRes = await db.query(summarySql, params);
+  const summary = summaryRes.rows[0] || {};
+
+  // --- byUser: per-rep breakdown with gap/idle calculations ---
+  const byUserSql = callsCte + `,
+    user_calls AS (
+      SELECT
+        user_id,
+        direction,
+        duration_s,
+        started_at,
+        LAG(started_at) OVER (PARTITION BY user_id ORDER BY started_at) AS prev_started_at,
+        LAG(duration_s) OVER (PARTITION BY user_id ORDER BY started_at) AS prev_duration_s
+      FROM calls
+    ),
+    user_with_gaps AS (
+      SELECT
+        user_id, direction, duration_s, started_at,
+        -- Gap = seconds between end of previous call and start of this one.
+        -- Cap at 1 hour so a lunch break doesn't dominate the average.
+        CASE
+          WHEN prev_started_at IS NULL THEN NULL
+          ELSE LEAST(
+            3600,
+            GREATEST(0,
+              EXTRACT(EPOCH FROM (started_at - prev_started_at))::int - COALESCE(prev_duration_s, 0)
+            )
+          )
+        END AS gap_s
+      FROM user_calls
+    )
+    SELECT
+      uwg.user_id,
+      u.name AS user_name,
+      u.role,
+      u.parent_id,
+      mgr.name AS manager_name,
+      COUNT(*)::int                                          AS total_calls,
+      COUNT(*) FILTER (WHERE direction='in')::int            AS in_calls,
+      COUNT(*) FILTER (WHERE direction='out')::int           AS out_calls,
+      COUNT(*) FILTER (WHERE direction='missed')::int        AS missed_calls,
+      COALESCE(SUM(duration_s), 0)::int                      AS talk_s,
+      ROUND(COALESCE(AVG(NULLIF(duration_s, 0))::numeric, 0), 0)::int AS avg_talk_s,
+      ROUND(COALESCE(AVG(gap_s)::numeric, 0), 0)::int        AS avg_gap_s,
+      MAX(started_at)                                        AS last_call_at
+    FROM user_with_gaps uwg
+    LEFT JOIN users u   ON u.id = uwg.user_id
+    LEFT JOIN users mgr ON mgr.id = u.parent_id
+    GROUP BY uwg.user_id, u.name, u.role, u.parent_id, mgr.name
+    ORDER BY talk_s DESC, total_calls DESC
+  `;
+  const byUserRes = await db.query(byUserSql, params);
+  const byUser = byUserRes.rows;
+
+  // --- byManager: team rollup ---
+  const byManager = (() => {
+    const map = new Map();
+    byUser.forEach(u => {
+      const mid = u.parent_id || 0;
+      const mname = u.manager_name || (u.role === 'team_leader' || u.role === 'manager' ? u.user_name : '— No manager —');
+      if (!map.has(mid)) map.set(mid, { manager_id: mid, manager_name: mname, team_size: 0, total_calls: 0, in: 0, out: 0, missed: 0, talk_s: 0 });
+      const m = map.get(mid);
+      m.team_size    += 1;
+      m.total_calls  += u.total_calls;
+      m.in           += u.in_calls;
+      m.out          += u.out_calls;
+      m.missed       += u.missed_calls;
+      m.talk_s       += u.talk_s;
+    });
+    return Array.from(map.values())
+      .map(m => ({ ...m, avg_talk_s: m.total_calls ? Math.round(m.talk_s / m.total_calls) : 0 }))
+      .sort((a, b) => b.talk_s - a.talk_s);
+  })();
+
+  // --- Top / Bottom performers ---
+  const ranked = byUser.filter(u => u.total_calls > 0);
+  const topUsers    = ranked.slice(0, 5);
+  const bottomUsers = ranked.slice(-5).reverse();
+
+  // --- Daily series for trend chart ---
+  const dailySql = callsCte + `
+    SELECT
+      date_trunc('day', started_at)::date AS day,
+      COUNT(*)::int                                          AS total,
+      COUNT(*) FILTER (WHERE direction='in')::int            AS in_count,
+      COUNT(*) FILTER (WHERE direction='out')::int           AS out_count,
+      COUNT(*) FILTER (WHERE direction='missed')::int        AS missed,
+      COALESCE(SUM(duration_s), 0)::int                      AS talk_s
+    FROM calls
+    GROUP BY day
+    ORDER BY day
+  `;
+  const dailyRes = await db.query(dailySql, params);
+  const dailySeries = dailyRes.rows;
+
+  // Idle time = (window duration in working seconds) - talk_s - gap_s totals.
+  // Simple approximation: 8-hour workday per active rep in the window.
+  const days = Math.max(1, Math.ceil((to - from) / 86400000));
+  const reps = ranked.length || 1;
+  const workSeconds = days * 8 * 3600 * reps;
+  const idle_s = Math.max(0, workSeconds - (summary.total_talk_s || 0));
+
+  return {
+    range: { from: fromIso, to: toIso, days },
+    summary: { ...summary, idle_s, total_gap_s: byUser.reduce((a,u) => a + (u.avg_gap_s * u.total_calls), 0) },
+    byUser,
+    byManager,
+    topUsers,
+    bottomUsers,
+    dailySeries
+  };
+}
+
 module.exports = {
   api_reports_summary, api_reports_funnel, api_reports_daily,
   api_reports_exportLeads, api_reports_groupBy,
   api_reports_followupsByUser, api_reports_tatViolationsByUser,
-  api_reports_callRatingByUser,
+  api_reports_callRatingByUser, api_reports_callActivity,
   api_reports_aiUsage, api_reports_aiCostEstimator,
   api_calendar_events
 };
