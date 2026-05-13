@@ -8073,6 +8073,32 @@ async function _aibotSettingsView(currentPhId) {
     h('div', { class: 'field' }, h('label', {}, 'System prompt (the bot\'s instructions)'), sysPrompt)
   ));
 
+  // ---- quick reply buttons (static, max 3, titles <=20 chars) ----
+  // When configured, the bot's outgoing reply is sent as a WhatsApp
+  // interactive message with these buttons attached. Customers tap a button
+  // to reply with that text — no typing needed.
+  let qrSeed = [];
+  try {
+    const raw = s.quick_reply_buttons;
+    qrSeed = typeof raw === 'string' ? JSON.parse(raw || '[]') : (Array.isArray(raw) ? raw : []);
+  } catch (_) { qrSeed = []; }
+  while (qrSeed.length < 3) qrSeed.push({ title: '' });
+  const qrInputs = qrSeed.slice(0, 3).map((b, i) => h('input', {
+    type: 'text',
+    maxlength: 20,
+    placeholder: i === 0 ? 'e.g. Yes, send details' : (i === 1 ? 'e.g. Call me' : 'e.g. Not interested'),
+    value: String((b && b.title) || '')
+  }));
+  const qrCard = h('div', { class: 'card' },
+    h('h3', { style: { marginTop: 0 } }, '💬 Quick reply buttons'),
+    h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+      'Up to 3 tap-to-reply buttons attached to every bot message. Titles max 20 characters. Leave blank to disable. Customers tap a button and WhatsApp sends that exact text back as their reply — perfect for "Yes / No / Call me" style answers.'),
+    h('div', { class: 'field' }, h('label', {}, 'Button 1 title'), qrInputs[0]),
+    h('div', { class: 'field' }, h('label', {}, 'Button 2 title'), qrInputs[1]),
+    h('div', { class: 'field' }, h('label', {}, 'Button 3 title'), qrInputs[2])
+  );
+  wrap.appendChild(qrCard);
+
   // ---- reply modes ----
   const modeChks = {};
   data.available_modes.forEach(m => {
@@ -8393,7 +8419,10 @@ async function _aibotSettingsView(currentPhId) {
       max_replies_per_thread: Number(maxReplies.value || 0),
       use_kb: useKb.checked,
       kb_max_chars: Number(kbCap.value || 8000),
-      history_messages: Number(histCount.value || 8)
+      history_messages: Number(histCount.value || 8),
+      quick_reply_buttons: qrInputs
+        .map(inp => ({ title: String(inp.value || '').slice(0, 20).trim() }))
+        .filter(b => b.title)
     };
     try {
       payload.phone_number_id = phIdParam || null;

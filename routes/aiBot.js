@@ -191,6 +191,9 @@ async function _ensureAiBotColumns() {
     // (NOT just for resume_after_idle_seconds). Default OFF so existing
     // tenants keep the previous auto-resume behaviour.
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS pause_after_human_handoff INTEGER NOT NULL DEFAULT 0`);
+    // Quick-reply buttons (May 2026): array of up to 3 {id, title} objects.
+    // When set, EVERY bot reply goes as an interactive message with these buttons attached.
+    await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS quick_reply_buttons JSONB NOT NULL DEFAULT '[]'::jsonb`);
     await db.query(`CREATE TABLE IF NOT EXISTS ai_reengage_log (
       id SERIAL PRIMARY KEY,
       phone TEXT NOT NULL,
@@ -276,6 +279,15 @@ async function api_aibot_settings_save(token, payload) {
   if (p.heat_keywords             != null) addCol('heat_keywords',             '$$::jsonb',   JSON.stringify(Array.isArray(p.heat_keywords) ? p.heat_keywords : []));
   if (p.heat_notify_levels        != null) addCol('heat_notify_levels',        '$$',          String(p.heat_notify_levels).slice(0, 200));
   if (p.heat_notify_recipients    != null) addCol('heat_notify_recipients',    '$$',          String(p.heat_notify_recipients).slice(0, 500));
+  // Quick-reply buttons: array of {id?, title} — max 3, titles <=20 chars
+  if (p.quick_reply_buttons       != null) {
+    const arr = Array.isArray(p.quick_reply_buttons) ? p.quick_reply_buttons : [];
+    const sanitised = arr.slice(0, 3).map((b, idx) => ({
+      id:    String((b && (b.id || b.title)) || ('btn_' + (idx + 1))).slice(0, 256),
+      title: String((b && b.title) || '').slice(0, 20).trim()
+    })).filter(b => b.title);
+    addCol('quick_reply_buttons', '$$::jsonb', JSON.stringify(sanitised));
+  }
 
   // Phone-keyed upsert: one bot row per phone_number_id (NULL = legacy default).
   const phId = (p.phone_number_id != null && String(p.phone_number_id).length > 0) ? String(p.phone_number_id) : null;
@@ -1051,11 +1063,26 @@ async function maybeReplyToInbound({ phone, leadId, inboundText, inboundPhoneId,
     return;
   }
 
-  // Send via WhatsApp
+  // Send via WhatsApp — if quick-reply buttons are configured on this
+  // bot, send as interactive button message instead of plain text.
+  // 1024-char body cap + max 3 buttons enforced inside the helper.
   try {
     const wb = _wb();
     const cfg = inboundPhoneId ? await wb._cfgForPhone(inboundPhoneId).catch(() => wb._cfg()) : await wb._cfg();
-    const send = await wb._sendText({ to: phone, text: replyText, leadId: leadId || null, userId: null }, cfg);
+    let buttons = [];
+    try {
+      const raw = settings.quick_reply_buttons;
+      buttons = typeof raw === 'string' ? JSON.parse(raw || '[]') : (Array.isArray(raw) ? raw : []);
+    } catch (_) { buttons = []; }
+    let send;
+    if (Array.isArray(buttons) && buttons.length && replyText && replyText.length <= 1024) {
+      send = await wb._sendInteractiveButtons({
+        to: phone, text: replyText, buttons,
+        leadId: leadId || null, userId: null
+      }, cfg);
+    } else {
+      send = await wb._sendText({ to: phone, text: replyText, leadId: leadId || null, userId: null }, cfg);
+    }
     const outboundId = send.wa_message_id || null;
     await db.query(
       `INSERT INTO ai_chat_log (phone, lead_id, inbound_msg_id, reply_text, model, mode_used, status, input_tokens, output_tokens, cost_inr_billed, phone_number_id)
