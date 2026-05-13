@@ -1254,7 +1254,7 @@ VIEWS.dashboard = async (view) => {
   if (usedTypes.has('daily_volume')) {
     fetchTasks.daily = api('api_reports_daily', {}).catch(() => []);
   }
-  if (usedTypes.has('call_activity_summary') || usedTypes.has('call_activity_topusers')) {
+  if (usedTypes.has('call_activity_summary') || usedTypes.has('call_activity_topusers') || usedTypes.has('call_activity_recent')) {
     fetchTasks.callActivity = api('api_reports_callActivity', {}).catch(() => null);
   }
   const data = {};
@@ -1376,6 +1376,37 @@ const WIDGET_LIBRARY = {
       grid.appendChild(tile('Missed',     fmt(s.missed),   '#ef4444'));
       grid.appendChild(tile('Avg / call', human(s.avg_talk_s)));
       body.appendChild(grid);
+    }
+  },
+  call_activity_recent: { title: 'Call Activity · Recent calls', group: 'Calls',
+    render: (c, _cfg, d, w) => {
+      c.appendChild(h('h3', {}, w.title || '\uD83D\uDCDE Recent calls'));
+      const rows = (d.callActivity?.recentCalls || []).slice(0, 10);
+      if (!rows.length) { c.appendChild(h('div', { class: 'muted' }, 'No calls yet.')); return; }
+      const dirIcon = (r) => {
+        if (r.direction === 'missed' || (r.direction === 'in' && !r.recording_id && r.event === 'incoming_ringing')) return '\u274C';
+        if (r.direction === 'in')  return '\uD83D\uDCF2';
+        if (r.direction === 'out') return '\uD83D\uDCDE';
+        return '\uD83D\uDCDE';
+      };
+      const fmtDur = (s) => { s = Number(s) || 0; if (!s) return ''; const m = Math.floor(s/60), ss = String(s%60).padStart(2,'0'); return ' · ' + m + ':' + ss; };
+      const list = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '.25rem' } });
+      rows.forEach(r => {
+        const dur = Number(r.rec_duration || r.duration_s) || 0;
+        const row = h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', padding: '.35rem .3rem', borderBottom: '1px solid #f1f5f9', cursor: r.lead_id ? 'pointer' : 'default' } },
+          h('span', { style: { fontSize: '1.1rem' } }, dirIcon(r)),
+          h('div', { style: { flex: 1, minWidth: 0 } },
+            h('div', { style: { fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, r.lead_name || r.phone || '—'),
+            h('div', { class: 'muted', style: { fontSize: '.72rem' } }, (r.rep_name ? r.rep_name + ' · ' : '') + new Date(r.created_at).toLocaleString('en-IN') + fmtDur(dur))
+          )
+        );
+        if (r.lead_id) row.onclick = () => openLeadModal(r.lead_id);
+        list.appendChild(row);
+      });
+      c.appendChild(list);
+      c.appendChild(h('div', { style: { textAlign: 'center', marginTop: '.4rem' } },
+        h('a', { href: '#/callactivity', style: { fontSize: '.85rem' } }, 'See all \u2192')
+      ));
     }
   },
   call_activity_topusers: { title: 'Call Activity · Top performers', group: 'Calls',
@@ -11853,6 +11884,13 @@ VIEWS.callactivity = async (view) => {
     h('h3', {}, 'By manager'),
     h('div', { id: 'ca-bymgr', style: { overflowX: 'auto' } })
   ));
+  view.appendChild(h('div', { class: 'card' },
+    h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.4rem' } },
+      h('h3', { style: { margin: 0 } }, '\uD83D\uDCDE Recent calls'),
+      h('span', { class: 'muted', style: { fontSize: '.8rem' } }, 'last 200 events in selected window')
+    ),
+    h('div', { id: 'ca-recent', style: { overflowX: 'auto' } })
+  ));
 
   await loadCallActivity();
 };
@@ -12002,6 +12040,47 @@ function _renderCallActivity(r) {
         scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true } } }
     });
   }
+  // Recent calls table
+  _caRenderRecent(r.recentCalls || []);
+}
+
+
+function _caRenderRecent(rows) {
+  const el = document.getElementById('ca-recent');
+  if (!el) return;
+  if (!rows || !rows.length) { el.innerHTML = '<div class="muted">No calls in this window.</div>'; return; }
+  const dirIcon = (r) => {
+    if (r.direction === 'missed' || (r.direction === 'in' && !r.recording_id && r.event === 'incoming_ringing')) return '\u274C';
+    if (r.direction === 'in')  return '\uD83D\uDCF2';
+    if (r.direction === 'out') return '\uD83D\uDCDE';
+    return '\uD83D\uDCDE';
+  };
+  const fmtDur = (s) => { s = Number(s) || 0; if (!s) return '—'; const m = Math.floor(s/60), ss = String(s%60).padStart(2,'0'); return m + ':' + ss; };
+  const t = h('table', { class: 'table' });
+  t.innerHTML = '<thead><tr>' +
+    '<th></th><th>Name / Phone</th><th>Rep</th><th>Direction</th><th>Duration</th><th>When</th><th></th>' +
+    '</tr></thead><tbody>' +
+    rows.map(r => {
+      const dur = Number(r.rec_duration || r.duration_s) || 0;
+      const when = new Date(r.created_at).toLocaleString('en-IN');
+      const direction = (r.direction === 'missed' || (r.direction === 'in' && !r.recording_id && r.event === 'incoming_ringing'))
+        ? 'Missed' : (r.direction === 'in' ? 'Incoming' : (r.direction === 'out' ? 'Outgoing' : (r.direction || '')));
+      return '<tr>' +
+        '<td style="font-size:1.2rem">' + dirIcon(r) + '</td>' +
+        '<td><strong>' + esc(r.lead_name || r.phone || '—') + '</strong>' +
+          (r.lead_name && r.phone ? '<div class="muted" style="font-size:.75rem">' + esc(r.phone) + '</div>' : '') +
+        '</td>' +
+        '<td>' + esc(r.rep_name || '—') + '</td>' +
+        '<td>' + direction + '</td>' +
+        '<td>' + fmtDur(dur) + '</td>' +
+        '<td>' + when + '</td>' +
+        '<td>' +
+          (r.lead_id ? '<button class="btn sm" onclick="openLeadModal(' + r.lead_id + ')">Open lead</button>' : '') +
+        '</td>' +
+        '</tr>';
+    }).join('') + '</tbody>';
+  el.innerHTML = '';
+  el.appendChild(t);
 }
 
 function downloadCallActivityCsv() {

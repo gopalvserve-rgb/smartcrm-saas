@@ -1122,14 +1122,37 @@ async function api_reports_callActivity(token, filters) {
   const workSeconds = days * 8 * 3600 * reps;
   const idle_s = Math.max(0, workSeconds - (summary.total_talk_s || 0));
 
-  return {
+
+  // --- Recent calls feed (like mobile dialer history) ---
+  // Latest 200 events with linked lead name + recording id. Role
+  // visibility already baked into params via userScopeSql.
+  const recentSql = `
+    SELECT ce.id, ce.lead_id, ce.user_id, ce.phone, ce.direction, ce.event,
+           ce.duration_s, ce.recording_id, ce.created_at,
+           l.name AS lead_name,
+           u.name AS rep_name,
+           r.duration_s AS rec_duration
+      FROM call_events ce
+      LEFT JOIN leads l ON l.id = ce.lead_id
+      LEFT JOIN users u ON u.id = ce.user_id
+      LEFT JOIN lead_recordings r ON r.id = ce.recording_id
+     WHERE ce.created_at >= $1 AND ce.created_at <= $2
+           ${userScopeSql.replace(/user_id/g, 'ce.user_id')}
+     ORDER BY ce.created_at DESC
+     LIMIT 200
+  `;
+  const recentRes = await db.query(recentSql, params);
+  const recentCalls = recentRes.rows;
+
+    return {
     range: { from: fromIso, to: toIso, days },
     summary: { ...summary, idle_s, total_gap_s: byUser.reduce((a,u) => a + (u.avg_gap_s * u.total_calls), 0) },
     byUser,
     byManager,
     topUsers,
     bottomUsers,
-    dailySeries
+    dailySeries,
+    recentCalls
   };
 }
 
