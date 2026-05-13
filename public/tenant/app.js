@@ -8110,6 +8110,10 @@ async function _aibotSettingsView(currentPhId) {
   qrTriggerSel.addEventListener('change', _qrKwToggle);
   setTimeout(_qrKwToggle, 0);
 
+  const qrFilterChk = h('input', {
+    type: 'checkbox',
+    checked: Number(s.quick_reply_filter_tapped == null ? 1 : s.quick_reply_filter_tapped) === 1 ? 'checked' : null
+  });
   const qrCard = h('div', { class: 'card' },
     h('h3', { style: { marginTop: 0 } }, '💬 Quick reply buttons'),
     h('p', { class: 'muted', style: { fontSize: '.85rem' } },
@@ -8118,7 +8122,13 @@ async function _aibotSettingsView(currentPhId) {
     h('div', { class: 'field' }, h('label', {}, 'Button 2 title'), qrInputs[1]),
     h('div', { class: 'field' }, h('label', {}, 'Button 3 title'), qrInputs[2]),
     h('div', { class: 'field' }, h('label', {}, '⚡ When should buttons attach?'), qrTriggerSel),
-    qrKwField
+    qrKwField,
+    h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', padding: '.5rem 0' } },
+      qrFilterChk,
+      h('span', {}, 'Auto-hide buttons the customer has already tapped (recommended)')
+    ),
+    h('div', { class: 'muted', style: { fontSize: '.78rem' } },
+      'Example: if the customer already tapped "Demo", the bot won\'t show that button again — only the remaining options. If all 3 buttons have been tapped, the bot sends plain text.')
   );
   wrap.appendChild(qrCard);
 
@@ -8447,7 +8457,8 @@ async function _aibotSettingsView(currentPhId) {
         .map(inp => ({ title: String(inp.value || '').slice(0, 20).trim() }))
         .filter(b => b.title),
       quick_reply_trigger: qrTriggerSel.value,
-      quick_reply_keywords: qrKeywordsInp.value
+      quick_reply_keywords: qrKeywordsInp.value,
+      quick_reply_filter_tapped: qrFilterChk.checked ? 1 : 0
     };
     try {
       payload.phone_number_id = phIdParam || null;

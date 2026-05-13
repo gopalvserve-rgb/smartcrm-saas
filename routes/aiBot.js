@@ -70,6 +70,7 @@ const _DEFAULT_SETTINGS = {
   quick_reply_buttons: [],
   quick_reply_trigger: 'always',
   quick_reply_keywords: '',
+  quick_reply_filter_tapped: 1,
 };
 
 function _coerceSettings(row) {
@@ -202,6 +203,7 @@ async function _ensureAiBotColumns() {
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS quick_reply_buttons JSONB NOT NULL DEFAULT '[]'::jsonb`);
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS quick_reply_trigger TEXT NOT NULL DEFAULT 'always'`);
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS quick_reply_keywords TEXT NOT NULL DEFAULT ''`);
+    await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS quick_reply_filter_tapped INTEGER NOT NULL DEFAULT 1`);
     await db.query(`CREATE TABLE IF NOT EXISTS ai_reengage_log (
       id SERIAL PRIMARY KEY,
       phone TEXT NOT NULL,
@@ -303,6 +305,9 @@ async function api_aibot_settings_save(token, payload) {
   }
   if (p.quick_reply_keywords      != null) {
     addCol('quick_reply_keywords', '$$', String(p.quick_reply_keywords || '').slice(0, 500));
+  }
+  if (p.quick_reply_filter_tapped != null) {
+    addCol('quick_reply_filter_tapped', '$$', p.quick_reply_filter_tapped ? 1 : 0);
   }
 
   // Phone-keyed upsert: one bot row per phone_number_id (NULL = legacy default).
@@ -1092,6 +1097,25 @@ async function maybeReplyToInbound({ phone, leadId, inboundText, inboundPhoneId,
     } catch (_) { buttons = []; }
 
     // Evaluate trigger condition: should we attach buttons to THIS reply?
+    // Filter out buttons the customer has already tapped in this thread
+    // (so the bot doesn't keep offering choices the customer already made).
+    // Match is case-insensitive exact match against past inbound message bodies.
+    if (Array.isArray(buttons) && buttons.length && Number(settings.quick_reply_filter_tapped || 0) === 1) {
+      try {
+        const titles = buttons.map(b => String((b && b.title) || '').trim().toLowerCase()).filter(t => t);
+        if (titles.length) {
+          const pr = await db.query(
+            `SELECT DISTINCT LOWER(TRIM(body)) AS t FROM whatsapp_messages
+             WHERE from_number = $1 AND direction = 'in' AND body IS NOT NULL
+             ORDER BY 1`,
+            [phone]
+          );
+          const taps = new Set(pr.rows.map(r => r.t));
+          buttons = buttons.filter(b => !taps.has(String((b && b.title) || '').trim().toLowerCase()));
+        }
+      } catch (_) { /* on error keep all buttons */ }
+    }
+
     let attachButtons = Array.isArray(buttons) && buttons.length > 0;
     if (attachButtons) {
       const trigger = String(settings.quick_reply_trigger || 'always').toLowerCase();
