@@ -318,6 +318,31 @@ async function _resolveProductIdByName(raw) {
   return Number(newId);
 }
 
+
+// Resolve the lead's source from a CSV/Excel/webhook row. Tries the
+// standard aliases first, then falls back to ANY key whose name contains
+// 'source' (catches non-standard headers like 'source_of_lead',
+// 'lead_source_name', etc.) so non-standard sheets don't all silently
+// default to 'manual'. Excludes source_ref / source_ip / utm_* which
+// are unrelated metadata.
+function _resolveCsvSource(p) {
+  let v = p.source ?? p.lead_source ?? p.leadsource ?? p.origin
+        ?? p.source_type ?? p.source_name ?? p.channel ?? p.referrer
+        ?? p.utm_source ?? '';
+  if (v && String(v).trim()) return String(v).trim();
+  for (const k of Object.keys(p || {})) {
+    const nk = String(k).toLowerCase();
+    if (!nk.includes('source')) continue;
+    if (nk === 'source_ref' || nk === 'source_ip' || nk.startsWith('utm_')) continue;
+    const val = String(p[k] || '').trim();
+    if (val) {
+      try { console.log('[lead-import] detected source from non-standard column:', k, '→', val); } catch (_) {}
+      return val;
+    }
+  }
+  return '';
+}
+
 async function api_leads_list(token, filters) {
   const me = await authUser(token);
   const visible = await getVisibleUserIds(me);
@@ -643,7 +668,7 @@ async function api_leads_create(token, payload) {
       // Build a probe object the matcher can read against. Mirrors the
       // shape api_leads_create is about to insert.
       const probe = {
-        source: (String(p.source ?? p.lead_source ?? p.leadsource ?? p.origin ?? p.source_type ?? p.source_name ?? p.channel ?? p.referrer ?? p.utm_source ?? '').trim() || 'manual'),
+        source: (_resolveCsvSource(p) || 'manual'),
         source_ref: p.source_ref || '',
         product_id: resolvedProductId,
         name: p.name, email: p.email || '', phone: cleanPhone,
@@ -675,7 +700,7 @@ async function api_leads_create(token, payload) {
     phone: cleanPhone,
     alt_phone: String(p.alt_phone || '').trim().replace(/^'/, ''),
     whatsapp: cleanWA,
-    source: (String(p.source ?? p.lead_source ?? p.leadsource ?? p.origin ?? p.source_type ?? p.source_name ?? p.channel ?? p.referrer ?? p.utm_source ?? '').trim() || 'manual'),
+    source: (_resolveCsvSource(p) || 'manual'),
     source_ref: p.source_ref || '',
     product_id: resolvedProductId,
     status_id: _statusId,
