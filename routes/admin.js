@@ -422,7 +422,7 @@ async function api_admin_recordingDiag_list(token, opts) { return _rdiag.api_adm
 module.exports = {
   api_company_info,
   api_admin_brand,
-  api_admin_webhookLogs_list, api_admin_webhookLogs_get,
+  api_admin_webhookLogs_list, api_admin_webhookLogs_get, api_admin_webhookLogs_backfillSources,
   api_admin_recordingDiag_list,
   api_admin_getConfig, api_admin_config, api_layout_get,
   api_admin_setConfig, api_admin_saveConfig,

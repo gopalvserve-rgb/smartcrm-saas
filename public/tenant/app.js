@@ -14645,9 +14645,40 @@ async function adminWebhookLogs() {
   // Toolbar — path filter + refresh
   const pathFilter = h('input', { type: 'search', placeholder: 'Filter by path (e.g. /hook/website)', style: { minWidth: '260px' } });
   const refreshBtn = h('button', { class: 'btn primary sm' }, '🔄 Refresh');
+  // Backfill button — see comment in stockbox patch.
+  const backfillBtn = h('button', { class: 'btn sm',
+    title: 'Re-apply the new source resolver to leads created in the last 30 days. Only updates leads whose current source is a generic default (Website/manual/empty).',
+    onclick: async () => {
+      backfillBtn.disabled = true;
+      backfillBtn.textContent = 'Scanning\u2026';
+      try {
+        const dry = await api('api_admin_webhookLogs_backfillSources', { daysBack: 30, dryRun: true });
+        if (!dry || dry.proposed === 0) {
+          alert('No leads need updating in the last 30 days. ' + (dry ? '(' + dry.logs_scanned + ' logs scanned)' : ''));
+          return;
+        }
+        const sampleTxt = (dry.sample || []).slice(0, 10).map(s =>
+          '\u2022 ' + (s.name || s.phone) + '  \u2192  source: "' + (s.old || '\u2014') + '"  \u21D2  "' + s.new + '"'
+        ).join('\n');
+        const ok = confirm(
+          'Found ' + dry.proposed + ' lead(s) to update (scanned ' + dry.logs_scanned + ' webhook logs).\n\n' +
+          'Sample:\n' + sampleTxt + '\n\nProceed with the update?'
+        );
+        if (!ok) return;
+        backfillBtn.textContent = 'Updating\u2026';
+        const live = await api('api_admin_webhookLogs_backfillSources', { daysBack: 30, dryRun: false });
+        alert('\u2705 Updated ' + live.leads_updated + ' lead(s).');
+      } catch (e) {
+        alert('Backfill failed: ' + e.message);
+      } finally {
+        backfillBtn.disabled = false;
+        backfillBtn.textContent = '\uD83D\uDD01 Backfill source from logs';
+      }
+    }
+  }, '\uD83D\uDD01 Backfill source from logs');
   const status = h('span', { class: 'muted', style: { marginLeft: '.6rem' } }, '');
   wrap.appendChild(h('div', { class: 'toolbar', style: { marginBottom: '.6rem' } },
-    pathFilter, refreshBtn, status
+    pathFilter, refreshBtn, backfillBtn, status
   ));
 
   const tableHost = h('div', {});

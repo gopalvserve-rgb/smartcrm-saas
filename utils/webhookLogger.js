@@ -167,4 +167,115 @@ async function api_admin_webhookLogs_get(token, id) {
   return r.rows[0] || null;
 }
 
-module.exports = { middleware, api_admin_webhookLogs_list, api_admin_webhookLogs_get };
+
+/**
+ * Walk recent webhook_logs and (re-)apply the source resolver to each
+ * payload. If the resulting source is more specific than what currently
+ * sits on the lead (i.e. lead.source is 'Website', 'manual', 'unknown',
+ * empty, or null), update the lead. Matches log → lead by phone within
+ * ±15 minutes of the log timestamp.
+ *
+ * opts.daysBack defaults to 30. opts.dryRun returns the proposed
+ * updates without writing.
+ */
+async function api_admin_webhookLogs_backfillSources(token, opts) {
+  const { authUser } = require('./auth');
+  const me = await authUser(token);
+  if (me.role !== 'admin' && me.role !== 'manager') {
+    throw new Error('Admin / manager only');
+  }
+  const db = require('../db/pg');
+  const days = Math.max(1, Math.min(180, Number((opts && opts.daysBack) || 30)));
+  const dryRun = !!(opts && opts.dryRun);
+  const GENERIC = new Set(['', 'website', 'manual', 'unknown', 'web', 'web_form']);
+
+  // Pull logs from /hook/* in the window. Newest first so we apply the
+  // most-recent payload per phone.
+  const { rows } = await db.query(
+    `SELECT id, path, body_text, response_code, created_at
+       FROM webhook_logs
+      WHERE created_at >= NOW() - ($1::int || ' days')::interval
+        AND path ILIKE '/hook/%'
+        AND response_code BETWEEN 200 AND 299
+      ORDER BY created_at DESC`,
+    [days]
+  );
+
+  // Resolver — mirrors the new websiteHook logic.
+  function resolveSource(b) {
+    if (!b || typeof b !== 'object') return '';
+    const named = b.source || b.lead_source || b.leadsource || b.origin
+               || b.source_type || b.source_name || b.channel || b.referrer;
+    if (named && String(named).trim()) return String(named).trim();
+    if (b.gclid || b.campaign_id || b.campaignid || b.campaignId) return 'Google Ads';
+    if (b.utm_source && String(b.utm_source).trim()) return String(b.utm_source).trim();
+    // Catch-all: any key containing 'source' (except metadata)
+    for (const k of Object.keys(b)) {
+      const nk = String(k).toLowerCase();
+      if (!nk.includes('source')) continue;
+      if (nk === 'source_ref' || nk === 'source_ip' || nk.startsWith('utm_')) continue;
+      const v = String(b[k] || '').trim();
+      if (v) return v;
+    }
+    return '';
+  }
+
+  function cleanDigits(s) {
+    return String(s || '').replace(/\D/g, '').slice(-10);
+  }
+
+  const updates = [];
+  const seenPhones = new Set(); // first-touch (most recent) wins
+  for (const log of rows) {
+    let body;
+    try { body = JSON.parse(log.body_text || '{}'); } catch (_) { continue; }
+    const newSrc = resolveSource(body);
+    if (!newSrc) continue;
+    const phone = cleanDigits(body.phone || body.mobile || body.contact || body.whatsapp);
+    if (!phone) continue;
+    if (seenPhones.has(phone)) continue;
+    seenPhones.add(phone);
+
+    // Find the lead created around this log
+    const lookup = await db.query(
+      `SELECT id, name, phone, source, created_at FROM leads
+        WHERE regexp_replace(phone, '[^0-9]', '', 'g') LIKE $1
+          AND created_at BETWEEN ($2::timestamptz - INTERVAL '15 minutes')
+                             AND ($2::timestamptz + INTERVAL '15 minutes')
+        ORDER BY created_at DESC LIMIT 1`,
+      ['%' + phone, log.created_at]
+    );
+    const lead = lookup.rows[0];
+    if (!lead) continue;
+
+    const curr = String(lead.source || '').trim().toLowerCase();
+    if (!GENERIC.has(curr) && curr === newSrc.toLowerCase()) continue; // already correct
+    if (!GENERIC.has(curr) && curr !== newSrc.toLowerCase()) {
+      // Lead has an explicit source already — don't overwrite a real value.
+      continue;
+    }
+    updates.push({
+      lead_id: lead.id, name: lead.name, phone: lead.phone,
+      old: lead.source, new: newSrc, log_id: log.id, when: log.created_at
+    });
+  }
+
+  if (!dryRun) {
+    for (const u of updates) {
+      try {
+        await db.query('UPDATE leads SET source = $1 WHERE id = $2', [u.new, u.lead_id]);
+      } catch (_) {}
+    }
+  }
+
+  return {
+    days_back: days,
+    logs_scanned: rows.length,
+    leads_updated: dryRun ? 0 : updates.length,
+    proposed: dryRun ? updates.length : 0,
+    sample: updates.slice(0, 25),
+    dry_run: dryRun
+  };
+}
+
+module.exports = { middleware, api_admin_webhookLogs_list, api_admin_webhookLogs_get, api_admin_webhookLogs_backfillSources };
