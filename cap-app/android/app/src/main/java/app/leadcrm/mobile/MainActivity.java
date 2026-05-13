@@ -293,6 +293,26 @@ public class MainActivity extends BridgeActivity {
         }
 
         /**
+         * Save the API base URL + auth token so PhoneStateReceiver can
+         * POST call events directly to /api/call_event_native, even if
+         * the WebView is paused or the app is killed. JS calls this on
+         * every login + on every app boot from the persisted token.
+         */
+        @JavascriptInterface
+        public void saveCallEventCreds(String apiBase, String token) {
+            try {
+                SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+                prefs.edit()
+                        .putString("api_base", apiBase == null ? "" : apiBase)
+                        .putString("auth_token", token == null ? "" : token)
+                        .apply();
+                Log.d(TAG, "saveCallEventCreds: base=" + apiBase + " tokenLen=" + (token == null ? 0 : token.length()));
+            } catch (Exception e) {
+                Log.e(TAG, "saveCallEventCreds failed: " + e.getMessage());
+            }
+        }
+
+        /**
          * Persist the phone + leadId of the call the user just initiated through
          * the app. Used both as context for syncCallRecording and as a filter
          * source for "only my calls" mode.

@@ -1081,6 +1081,45 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
     });
 });
 
+// ---- Native call-event ingest (no WebView dependency) -----------
+// PhoneStateReceiver in the Android APK POSTs here every time the
+// phone rings or a call ends. Tenant resolved from the stored auth
+// token so the receiver doesn't need to know the tenant slug — it
+// just needs a token saved at login. This is the resilient path
+// that fires even when the WebView is paused or the app is killed.
+app.post('/api/call_event_native', require('express').json({ limit: '64kb' }), async (req, res) => {
+  const tenantDb = require('./db/pg');
+  const jwt = require('jsonwebtoken');
+  const _JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
+  try {
+    const raw = (req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    if (!raw) return res.status(401).json({ error: 'No auth token' });
+    let decoded; try { decoded = jwt.verify(raw, _JWT_SECRET); } catch (_) { return res.status(401).json({ error: 'Bad token' }); }
+    const uid = Number(decoded && decoded.id);
+    if (!uid) return res.status(401).json({ error: 'Token has no user id' });
+    const t = await _findTenantByLookup('SELECT 1 FROM users WHERE id=$1 AND COALESCE(is_active,1)=1 LIMIT 1', [uid]);
+    if (!t) return res.status(404).json({ error: 'No active tenant for user' });
+    const pool = tenantPoolMod.poolFor(t);
+    if (!pool) return res.status(500).json({ error: 'tenant pool unavailable' });
+    return tenantDb.tenantStorage.run({ pool, tenant: t, slug: t.slug }, async () => {
+      const recRoutes = require('./routes/recordings');
+      const result = await recRoutes.api_call_logEvent(raw, {
+        phone: req.body && req.body.phone,
+        direction: req.body && req.body.direction,
+        event: req.body && req.body.event,
+        duration_s: req.body && req.body.duration_s,
+        missed: req.body && req.body.missed
+      });
+      console.log('[/api/call_event_native]', t.slug, 'phone=', req.body && req.body.phone,
+                  'event=', req.body && req.body.event, '→ lead_id=', result && result.lead_id);
+      res.json(result);
+    });
+  } catch (e) {
+    console.error('[/api/call_event_native] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Admin diag: run ffmpeg -i on the stored bytes and report whether
 // ffmpeg itself can decode them. Returns the head hex of the first 1KB
 // so support can inspect the file format without downloading megabytes.

@@ -15,6 +15,22 @@ const CRM = {
   }
 };
 
+// Save the auth token + API base into Android SharedPreferences so the
+// native PhoneStateReceiver can POST call events directly to
+// /api/call_event_native without depending on the WebView being alive.
+// Safe no-op on web.
+function _syncNativeCallEventCreds() {
+  try {
+    if (!window.LeadCRMNative || typeof LeadCRMNative.saveCallEventCreds !== 'function') return;
+    const tok = CRM.token || localStorage.getItem('crm_token') || '';
+    // Strip /t/<slug>/ — the native POST goes to top-level /api/call_event_native
+    // which resolves the tenant from the token itself.
+    const base = (CRM.config && CRM.config.base_url) ||
+                 location.origin;
+    LeadCRMNative.saveCallEventCreds(base, tok);
+  } catch (_) {}
+}
+
 /* ---------------- API helper ---------------- */
 // Global "in-flight" counter — drives the top loading bar.
 let _apiInFlight = 0;
@@ -611,6 +627,7 @@ function renderLogin() {
       }
       CRM.token = r.token; CRM.user = r.user;
       localStorage.setItem('crm_token', r.token);
+      _syncNativeCallEventCreds();
       location.reload();
     } catch (e) { $('#login-err').textContent = e.message; }
   });
@@ -804,6 +821,7 @@ function showOtpStep(challengeToken, who) {
       const r = await apiRaw('api_login_otp_verify', challengeToken, otp);
       CRM.token = r.token; CRM.user = r.user;
       localStorage.setItem('crm_token', r.token);
+      _syncNativeCallEventCreds();
       location.reload();
     } catch (e) { document.getElementById('login-err').textContent = e.message; }
   });
@@ -21005,10 +21023,15 @@ async function _initWhatsappTopbar() {
   });
 }
 document.addEventListener('DOMContentLoaded', () => {
+  // Push the auth token + apiBase into Android SharedPreferences so the
+  // native PhoneStateReceiver can POST call events to /api/call_event_native
+  // even when the WebView is paused or the app is killed.
+  try { _syncNativeCallEventCreds(); } catch (_) {}
   let ticks = 0;
   const t = setInterval(() => {
     if (typeof CRM !== 'undefined' && CRM.user) {
       _initWhatsappTopbar();
+      try { _syncNativeCallEventCreds(); } catch (_) {}
       clearInterval(t);
     } else if (++ticks > 60) {
       clearInterval(t);

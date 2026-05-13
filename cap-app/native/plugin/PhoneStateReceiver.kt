@@ -5,37 +5,44 @@ import android.content.Context
 import android.content.Intent
 import android.telephony.TelephonyManager
 import android.util.Log
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 
 /**
- * Catches the phone-state changes Android broadcasts to all eligible
- * receivers. Forwards them to JS via TWO paths so the bridge is
- * resilient:
+ * Three-path call-event bridge so the chain doesn't break in any
+ * device/app state:
  *
- *   1. CallerIdPlugin.instance?.emitRinging(...)   (Capacitor event —
- *      fires ONLY if a JS layer registered CallerId.addListener)
- *   2. ctx.sendBroadcast("app.leadcrm.mobile.CALL_EVENT")   (custom
- *      intent — MainActivity has a BroadcastReceiver for this and
- *      directly calls window.onLeadCRMCallEvent in the WebView)
+ *   1. CallerIdPlugin.instance?.emitRinging(...)  (Capacitor event —
+ *      fires ONLY if JS calls CallerId.addListener)
+ *   2. ctx.sendBroadcast("…CALL_EVENT")          (intra-app intent —
+ *      MainActivity's receiver pushes into the WebView via
+ *      evaluateJavascript("window.onLeadCRMCallEvent(…)"))
+ *   3. HTTP POST to ${apiBase}/api/call_event_native with the saved
+ *      auth token                                  (no WebView/JS
+ *      dependency — works even if the app is fully killed)
  *
- * Path #2 is the one the SPA actually consumes today — it has
- * `window.onLeadCRMCallEvent = async (event, number) => { ... }` but
- * no Capacitor listener. Before 2026-05-13 only Path #1 was wired, so
- * the JS handler was never invoked and `api_call_logEvent` never ran.
+ * Path 3 is what the SPA's `api_call_logEvent` does, but bypasses the
+ * round-trip through the WebView. The server endpoint resolves the
+ * tenant from the token and runs the same logic, so an incoming call
+ * lands in CRM in well under a second regardless of app state.
  *
- * State machine:
- *   IDLE → RINGING        : an inbound call started     → event=incoming_ringing
- *   RINGING → OFFHOOK     : the rep answered            → (no event)
- *   RINGING → IDLE        : the rep didn't answer       → event=call_ended (missed)
- *   OFFHOOK → IDLE        : the call ended              → event=call_ended
- *   IDLE → OFFHOOK        : an outbound dial started    → (no number in this
- *                                                          broadcast)
- *   NEW_OUTGOING_CALL     : captures dialled number     → cached as lastNumber
+ * SharedPreferences keys (set by JS on login / app boot):
+ *   "api_base"     — e.g. "https://crm.example.com" (NO trailing slash, NO /t/<slug>)
+ *   "auth_token"   — the JWT
+ *
+ * If either key is missing the HTTP path is a silent no-op; paths 1
+ * and 2 still try to fire so the previous WebView-bridge fix still
+ * works for foregrounded apps with a fresh login.
  */
 class PhoneStateReceiver : BroadcastReceiver() {
 
     companion object {
         private const val TAG = "PhoneStateReceiver"
         private const val ACTION_CALL_EVENT = "app.leadcrm.mobile.CALL_EVENT"
+        private const val PREFS = "leadcrm"
+        private const val KEY_API_BASE = "api_base"
+        private const val KEY_TOKEN    = "auth_token"
         private var lastState: String = TelephonyManager.EXTRA_STATE_IDLE
         private var lastNumber: String = ""
         private var ringStartMs: Long = 0
@@ -63,34 +70,31 @@ class PhoneStateReceiver : BroadcastReceiver() {
                 lastNumber = number
                 if (number.isNotEmpty()) {
                     Log.i(TAG, "RINGING from $number → fire incoming_ringing")
-                    // Path 1 — Capacitor event (if any listener)
-                    try { CallerIdPlugin.instance?.emitRinging(number) } catch (e: Throwable) {
-                        Log.w(TAG, "emitRinging failed: ${e.message}")
-                    }
-                    // Path 2 — Broadcast for MainActivity → WebView bridge
-                    sendCallEvent(ctx, "incoming_ringing", number)
+                    safeCapacitor { CallerIdPlugin.instance?.emitRinging(number) }
+                    sendCallEvent(ctx, "incoming_ringing", number, missed = false, durationSec = 0)
+                    postNativeAsync(ctx, "incoming_ringing", number, direction = "in", missed = false, durationSec = 0)
                 }
             }
             TelephonyManager.EXTRA_STATE_OFFHOOK -> {
                 offhookStartMs = now
-                // No emit — JS already saw incoming_ringing; duration
-                // surfaces on the IDLE transition below.
             }
             TelephonyManager.EXTRA_STATE_IDLE -> {
                 if (lastState == TelephonyManager.EXTRA_STATE_RINGING) {
                     // RINGING → IDLE without OFFHOOK = missed call
                     Log.i(TAG, "MISSED call from $lastNumber → fire call_ended (missed)")
-                    try { CallerIdPlugin.instance?.emitEnded(lastNumber, 0, missed = true) } catch (e: Throwable) {
-                        Log.w(TAG, "emitEnded(missed) failed: ${e.message}")
-                    }
+                    safeCapacitor { CallerIdPlugin.instance?.emitEnded(lastNumber, 0, missed = true) }
                     sendCallEvent(ctx, "call_ended", lastNumber, missed = true, durationSec = 0)
+                    postNativeAsync(ctx, "call_ended", lastNumber, direction = "missed", missed = true, durationSec = 0)
                 } else if (lastState == TelephonyManager.EXTRA_STATE_OFFHOOK) {
                     val dur = (now - offhookStartMs) / 1000
                     Log.i(TAG, "ENDED call with $lastNumber after ${dur}s → fire call_ended")
-                    try { CallerIdPlugin.instance?.emitEnded(lastNumber, dur, missed = false) } catch (e: Throwable) {
-                        Log.w(TAG, "emitEnded failed: ${e.message}")
-                    }
+                    safeCapacitor { CallerIdPlugin.instance?.emitEnded(lastNumber, dur, missed = false) }
                     sendCallEvent(ctx, "call_ended", lastNumber, missed = false, durationSec = dur)
+                    // direction unknown at this layer — outbound calls flow through here too.
+                    // Fall back to 'in' for inbound completed (we know last RINGING happened
+                    // because OFFHOOK can only come after RINGING for inbound) — but to be
+                    // safe leave as null so the server's default kicks in.
+                    postNativeAsync(ctx, "call_ended", lastNumber, direction = "in", missed = false, durationSec = dur)
                 }
                 ringStartMs = 0
                 offhookStartMs = 0
@@ -99,20 +103,17 @@ class PhoneStateReceiver : BroadcastReceiver() {
         lastState = state
     }
 
-    /**
-     * Fire the internal broadcast that MainActivity catches and
-     * forwards into the WebView's window.onLeadCRMCallEvent(...).
-     *
-     * setPackage() restricts delivery to our own app — required on
-     * Android 14+ for non-exported broadcasts. RECEIVER_NOT_EXPORTED
-     * is also enforced on MainActivity's filter for API 33+.
-     */
+    private fun safeCapacitor(block: () -> Unit) {
+        try { block() } catch (e: Throwable) { Log.w(TAG, "capacitor emit failed: ${e.message}") }
+    }
+
+    /** Fire intra-app broadcast → MainActivity → window.onLeadCRMCallEvent */
     private fun sendCallEvent(
         ctx: Context,
         event: String,
         number: String,
-        missed: Boolean = false,
-        durationSec: Long = 0
+        missed: Boolean,
+        durationSec: Long
     ) {
         try {
             val i = Intent(ACTION_CALL_EVENT).apply {
@@ -127,5 +128,60 @@ class PhoneStateReceiver : BroadcastReceiver() {
         } catch (e: Throwable) {
             Log.e(TAG, "sendCallEvent failed: ${e.message}")
         }
+    }
+
+    /**
+     * Path 3 — fire-and-forget HTTP POST. Read creds from
+     * SharedPreferences (MainActivity.saveCallEventCreds() writes
+     * them on app boot) and POST {phone, direction, event, ...} to
+     * /api/call_event_native. The server resolves the tenant from
+     * the token and persists exactly like api_call_logEvent.
+     */
+    private fun postNativeAsync(
+        ctx: Context,
+        event: String,
+        number: String,
+        direction: String,
+        missed: Boolean,
+        durationSec: Long
+    ) {
+        val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val base = prefs.getString(KEY_API_BASE, null)?.trimEnd('/')
+        val tok  = prefs.getString(KEY_TOKEN, null)
+        if (base.isNullOrEmpty() || tok.isNullOrEmpty()) {
+            Log.w(TAG, "postNativeAsync skipped — no creds (base=${base != null}, tok=${tok != null})")
+            return
+        }
+        // Network I/O off the main thread. Use a plain Thread — no
+        // need for a queue, this fires a handful of times per call.
+        Thread {
+            try {
+                val url = URL("$base/api/call_event_native")
+                val conn = (url.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = 5000
+                    readTimeout = 8000
+                    doInput = true
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json")
+                    setRequestProperty("x-auth-token", tok)
+                    setRequestProperty("Accept", "application/json")
+                }
+                val body = JSONObject().apply {
+                    put("phone", number)
+                    put("direction", direction)
+                    put("event", event)
+                    put("missed", missed)
+                    put("duration_s", durationSec)
+                }.toString()
+                conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                val code = conn.responseCode
+                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+                val resp = stream?.bufferedReader()?.use { it.readText() } ?: ""
+                Log.i(TAG, "POST /api/call_event_native → $code | $resp")
+            } catch (e: Throwable) {
+                Log.e(TAG, "postNativeAsync failed: ${e.message}")
+            }
+        }.start()
     }
 }
