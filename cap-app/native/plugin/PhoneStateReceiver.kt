@@ -179,9 +179,108 @@ class PhoneStateReceiver : BroadcastReceiver() {
                 val stream = if (code in 200..299) conn.inputStream else conn.errorStream
                 val resp = stream?.bufferedReader()?.use { it.readText() } ?: ""
                 Log.i(TAG, "POST /api/call_event_native → $code | $resp")
+
+                // On a successful RINGING call, parse the lead context out of
+                // the response and fire a HEADS-UP notification so the rep
+                // sees the lead name + last note while their phone is still
+                // ringing. Notifications draw OVER the native dialer screen,
+                // unlike the WebView's in-app overlay.
+                if (event == "incoming_ringing" && code in 200..299 && resp.isNotEmpty()) {
+                    try {
+                        val root = JSONObject(resp)
+                        val lookup = root.optJSONObject("lookup")
+                        if (lookup != null && lookup.optBoolean("match", false)) {
+                            buildRichNotification(ctx, number, lookup)
+                        }
+                    } catch (e: Throwable) {
+                        Log.w(TAG, "rich notif parse failed: ${e.message}")
+                    }
+                }
             } catch (e: Throwable) {
                 Log.e(TAG, "postNativeAsync failed: ${e.message}")
             }
         }.start()
+    }
+
+    /**
+     * Build a rich Android notification with the lead's name, status,
+     * last call date and the last remark — pulled from the lookup
+     * sub-object of /api/call_event_native's response. Android shows
+     * this as a heads-up banner over whatever's on screen, including
+     * the native dialer.
+     */
+    private fun buildRichNotification(ctx: Context, phone: String, lookup: JSONObject) {
+        try {
+            val name = lookup.optString("name", "").ifEmpty { phone }
+            val kind = lookup.optString("kind", "lead")
+            val status = lookup.optString("status", "")
+            val ownerName = lookup.optString("assigned_name", "")
+            val value = lookup.optLong("value", 0L)
+            val lifetimeValue = lookup.optLong("lifetime_value", 0L)
+            val lastCallAt = lookup.optString("last_call_at", "")
+            val lastCallDurationS = lookup.optLong("last_call_duration_s", 0L)
+            val nextFollowupAt = lookup.optString("next_followup_at", "")
+
+            val title = if (kind == "customer") {
+                "📞 " + name + (if (status.isNotEmpty()) " · " + status else "")
+            } else {
+                "📞 " + name + (if (status.isNotEmpty()) " · " + status else "")
+            }
+
+            val lines = mutableListOf<String>()
+            lines.add(phone)
+            if (ownerName.isNotEmpty()) lines.add("Owner: $ownerName")
+            if (kind == "customer") {
+                if (lifetimeValue > 0L) lines.add("LTV: ₹" + lifetimeValue)
+            } else {
+                if (value > 0L) lines.add("Value: ₹" + value)
+            }
+            if (lastCallAt.isNotEmpty()) {
+                val mins = if (lastCallDurationS > 0) " (" + (lastCallDurationS / 60) + "m " + (lastCallDurationS % 60) + "s)" else ""
+                // Show just the date portion — full ISO is too long
+                val dateOnly = lastCallAt.substring(0, kotlin.math.min(10, lastCallAt.length))
+                lines.add("Last call: $dateOnly$mins")
+            }
+            if (nextFollowupAt.isNotEmpty()) {
+                val dateOnly = nextFollowupAt.substring(0, kotlin.math.min(10, nextFollowupAt.length))
+                lines.add("Next FU: $dateOnly")
+            }
+
+            // Last remark — the headline detail the rep needs RIGHT NOW
+            val lastRemark = lookup.optJSONObject("last_remark")
+            if (lastRemark != null) {
+                val txt = lastRemark.optString("remark", "")
+                if (txt.isNotEmpty()) {
+                    lines.add("")
+                    lines.add("📝 Last note:")
+                    lines.add(txt.take(220))
+                }
+            } else {
+                // Fall back to recent_remarks if no last_remark
+                val recent = lookup.optJSONArray("recent_remarks")
+                if (recent != null && recent.length() > 0) {
+                    lines.add("")
+                    lines.add("Recent notes:")
+                    for (i in 0 until kotlin.math.min(2, recent.length())) {
+                        val r = recent.optJSONObject(i)
+                        val txt = r?.optString("remark", "") ?: ""
+                        if (txt.isNotEmpty()) lines.add("• " + txt.take(140))
+                    }
+                }
+            }
+
+            val body = lines.joinToString("
+")
+            val deeplink = lookup.optString("url", "/")
+
+            // Hand off to the existing NotificationHelper. Run on main
+            // thread because NotificationManagerCompat would prefer it.
+            android.os.Handler(ctx.mainLooper).post {
+                try { NotificationHelper.showRich(ctx, title, body, deeplink) }
+                catch (e: Throwable) { Log.e(TAG, "showRich failed: ${e.message}") }
+            }
+        } catch (e: Throwable) {
+            Log.e(TAG, "buildRichNotification failed: ${e.message}")
+        }
     }
 }

@@ -1110,8 +1110,19 @@ app.post('/api/call_event_native', require('express').json({ limit: '64kb' }), a
         duration_s: req.body && req.body.duration_s,
         missed: req.body && req.body.missed
       });
+      // Enrich the response with the rich-notification payload so the
+      // native PhoneStateReceiver can render a heads-up notification
+      // RIGHT NOW — Android shows it on top of the dialer screen, which
+      // means the rep sees the previous remark + last call date even
+      // before they pick up. Cheaper than another round-trip.
+      let lookup = null;
+      try {
+        lookup = await recRoutes.api_call_lookup(raw, req.body && req.body.phone);
+      } catch (_) {}
+      result.lookup = lookup || null;
       console.log('[/api/call_event_native]', t.slug, 'phone=', req.body && req.body.phone,
-                  'event=', req.body && req.body.event, '→ lead_id=', result && result.lead_id);
+                  'event=', req.body && req.body.event, '→ lead_id=', result && result.lead_id,
+                  '· lookup=', lookup && lookup.match ? (lookup.name || 'matched') : 'unmatched');
       res.json(result);
     });
   } catch (e) {
