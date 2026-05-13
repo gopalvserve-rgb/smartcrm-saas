@@ -269,8 +269,7 @@ class PhoneStateReceiver : BroadcastReceiver() {
                 }
             }
 
-            val body = lines.joinToString("
-")
+            val body = lines.joinToString("\n")
             val deeplink = lookup.optString("url", "/")
 
             // Hand off to the existing NotificationHelper. Run on main
