@@ -48,6 +48,10 @@ const CONFIG_KEYS = [
   // '1' = create a lead from each call when no existing match; '0' = skip.
   // CALLS_AUTOLEAD_STATUS_ID = id of the status to apply (falls back to 'New').
   'CALLS_AUTOLEAD_INBOUND', 'CALLS_AUTOLEAD_OUTBOUND', 'CALLS_AUTOLEAD_STATUS_ID',
+  // Auto vs Manual mode for call-to-lead creation. 'auto' (default) creates
+  // the lead the moment the phone rings. 'manual' just logs the call_event
+  // — admin reviews + bulk-converts later from Settings → Pending calls.
+  'CALLS_AUTOLEAD_MODE',
   // Tenant theme customisation. Hex colours; THEME_MODE = 'light' | 'dark' | 'auto'.
   // BRAND_PRIMARY = main accent (buttons, links, active nav).
   // BRAND_SIDEBAR = sidebar background. BRAND_TEXT = top/headings text.

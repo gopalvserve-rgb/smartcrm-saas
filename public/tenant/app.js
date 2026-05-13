@@ -13142,6 +13142,7 @@ VIEWS.admin = async (view) => {
       { id: 'integrations', label: '🧩 Integrations' },
       { id: 'whlogs',       label: '📡 Webhook logs' },
       { id: 'recdiag',      label: '🎧 Recording diagnostics' },
+      { id: 'pendingcalls', label: '📞 Pending calls' },
       { id: 'chatperm',     label: '💬 Chat permissions' },
     ]},
     { title: 'Automation', items: [
@@ -13235,6 +13236,7 @@ async function showAdminTab(id) {
     if (id === 'integrations') body.replaceChildren(await adminIntegrations());
     if (id === 'whlogs')      body.replaceChildren(await adminWebhookLogs());
     if (id === 'recdiag')     body.replaceChildren(await adminRecordingDiag());
+    if (id === 'pendingcalls') body.replaceChildren(await adminPendingCalls());
     if (id === 'roles')     body.replaceChildren(await adminRoles());
     if (id === 'pullleads') body.replaceChildren(await adminPullLeads());
     if (id === 'campaigns') body.replaceChildren(await adminCampaigns());
@@ -13907,6 +13909,153 @@ async function adminDangerZone() {
  * Per-tenant: each tenant's webhook_logs table is queried via the existing
  * tenantStorage pool, so admins only see their own tenant's events.
  */
+
+async function adminPendingCalls() {
+  // Manual-mode dashboard: lists every call_event with no linked lead so
+  // admin can review + bulk-convert. Also surfaces the Auto/Manual toggle
+  // so the admin can switch modes here without going to Settings.
+  const wrap = h('div', {});
+
+  // ── Mode-toggle card ─────────────────────────────────────────────
+  const modeCard = h('div', { class: 'card' });
+  modeCard.appendChild(h('h4', {}, '\uD83D\uDD27 Call-to-lead mode'));
+  modeCard.appendChild(h('p', { class: 'muted' },
+    'Auto — every incoming/missed call from an unknown number instantly creates a lead. ',
+    'Manual — calls are logged but you decide which ones become leads (bulk-convert below).'));
+  const modeRow = h('div', { style: { display: 'flex', gap: '.8rem', flexWrap: 'wrap' } });
+  let currentMode = 'auto';
+  try {
+    const cfg = await api('api_admin_getConfig');
+    currentMode = String(cfg.CALLS_AUTOLEAD_MODE || 'auto').toLowerCase();
+  } catch (_) {}
+  function makeRadio(val, label, desc) {
+    const id = 'autolead-mode-' + val;
+    const input = h('input', { type: 'radio', name: 'autolead-mode', id, value: val, checked: currentMode === val ? 'checked' : null });
+    input.onchange = async () => {
+      try {
+        await api('api_admin_saveConfig', { CALLS_AUTOLEAD_MODE: val });
+        toast('Switched to ' + val.toUpperCase() + ' mode', 'ok');
+        currentMode = val;
+      } catch (e) { toast('Save failed: ' + e.message, 'err'); }
+    };
+    return h('label', { for: id, style: { display: 'flex', gap: '.4rem', alignItems: 'flex-start', maxWidth: '300px', padding: '.5rem .7rem', border: '1px solid #e2e8f0', borderRadius: '8px', cursor: 'pointer' } },
+      input,
+      h('div', {}, h('b', {}, label), h('div', { class: 'muted', style: { fontSize: '.78rem' } }, desc))
+    );
+  }
+  modeRow.appendChild(makeRadio('auto',   '\u2728 Auto',  'New numbers become leads instantly.'));
+  modeRow.appendChild(makeRadio('manual', '\uD83C\uDFAF Manual', 'Review + pick which calls to convert.'));
+  modeCard.appendChild(modeRow);
+  wrap.appendChild(modeCard);
+
+  // ── Pending calls list ─────────────────────────────────────────────
+  const listCard = h('div', { class: 'card' });
+  listCard.appendChild(h('h4', {}, '\u23F3 Pending calls — no lead yet'));
+  const toolbar = h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '.5rem', alignItems: 'center', marginBottom: '.5rem' } });
+  const daysSel = h('select', {},
+    h('option', { value: 7 },  'Last 7 days'),
+    h('option', { value: 30, selected: 'selected' }, 'Last 30 days'),
+    h('option', { value: 90 }, 'Last 90 days')
+  );
+  const refreshBtn = h('button', { class: 'btn sm' }, '\u27F3 Refresh');
+  const convertBtn = h('button', { class: 'btn primary sm', disabled: 'disabled' }, '\uD83D\uDCDE Convert selected to leads');
+  const selectAllBox = h('input', { type: 'checkbox' });
+  toolbar.appendChild(h('label', {}, selectAllBox, ' Select all'));
+  toolbar.appendChild(daysSel);
+  toolbar.appendChild(refreshBtn);
+  toolbar.appendChild(convertBtn);
+  listCard.appendChild(toolbar);
+
+  const listHost = h('div', {}, h('div', { class: 'muted' }, 'Loading\u2026'));
+  listCard.appendChild(listHost);
+  wrap.appendChild(listCard);
+
+  let _rows = [];
+  let _selected = new Set();
+
+  function updateConvertBtn() {
+    convertBtn.disabled = _selected.size ? null : 'disabled';
+    convertBtn.textContent = _selected.size
+      ? '\uD83D\uDCDE Convert ' + _selected.size + ' to lead' + (_selected.size === 1 ? '' : 's')
+      : '\uD83D\uDCDE Convert selected to leads';
+  }
+
+  async function load() {
+    listHost.innerHTML = '<div class="muted">Loading\u2026</div>';
+    _selected = new Set();
+    selectAllBox.checked = false;
+    updateConvertBtn();
+    try {
+      _rows = await api('api_call_events_pending', { days: Number(daysSel.value) || 30, limit: 200 });
+    } catch (e) {
+      listHost.innerHTML = '<div class="error-box">' + esc(e.message) + '</div>';
+      return;
+    }
+    if (!_rows.length) {
+      listHost.innerHTML = '';
+      listHost.appendChild(h('div', { class: 'muted', style: { padding: '1rem' } },
+        '\u2728 No pending calls. Every recent call is already attached to a lead.'));
+      return;
+    }
+    const tbl = h('table', { class: 'tbl' });
+    tbl.appendChild(h('thead', {}, h('tr', {},
+      h('th', {}, ''),
+      h('th', {}, 'When'),
+      h('th', {}, 'Direction'),
+      h('th', {}, 'Phone'),
+      h('th', {}, 'Rep'),
+      h('th', {}, 'Duration')
+    )));
+    const body = h('tbody', {});
+    const dirIcon = { in: '\uD83D\uDCE5', out: '\uD83D\uDCE4', missed: '\u2757', outgoing: '\uD83D\uDCE4' };
+    _rows.forEach(r => {
+      const cb = h('input', { type: 'checkbox', value: r.id });
+      cb.onchange = () => {
+        if (cb.checked) _selected.add(r.id); else _selected.delete(r.id);
+        updateConvertBtn();
+      };
+      const tr = h('tr', {},
+        h('td', {}, cb),
+        h('td', { class: 'muted', style: { whiteSpace: 'nowrap' } }, fmtDate(r.created_at, 'relative')),
+        h('td', {}, (dirIcon[r.direction] || '\uD83D\uDCDE') + ' ' + (r.direction || '')),
+        h('td', { style: { fontFamily: 'monospace' } }, r.phone || ''),
+        h('td', {}, r.rep_name || '\u2014'),
+        h('td', { class: 'muted' }, r.duration_s ? r.duration_s + 's' : '')
+      );
+      body.appendChild(tr);
+    });
+    tbl.appendChild(body);
+    listHost.innerHTML = '';
+    listHost.appendChild(tbl);
+  }
+
+  selectAllBox.onchange = () => {
+    _selected = new Set();
+    listHost.querySelectorAll('input[type=checkbox][value]').forEach(cb => {
+      cb.checked = selectAllBox.checked;
+      if (cb.checked) _selected.add(Number(cb.value));
+    });
+    updateConvertBtn();
+  };
+  refreshBtn.onclick = load;
+  daysSel.onchange = load;
+  convertBtn.onclick = async () => {
+    if (!_selected.size) return;
+    if (!confirm('Convert ' + _selected.size + ' selected call(s) to leads?\n\nDuplicates (same number) are merged into one lead.')) return;
+    convertBtn.disabled = 'disabled'; convertBtn.textContent = 'Converting\u2026';
+    try {
+      const r = await api('api_call_events_convertToLeads', [..._selected]);
+      const msg = r.leads_created + ' lead(s) created'
+                + (r.skipped ? ', ' + r.skipped + ' skipped (already linked)' : '');
+      toast(msg, 'ok');
+      await load();
+    } catch (e) { toast('Convert failed: ' + e.message, 'err'); }
+    updateConvertBtn();
+  };
+  load();
+
+  return wrap;
+}
 
 async function adminRecordingDiag() {
   const wrap = h('div', {});

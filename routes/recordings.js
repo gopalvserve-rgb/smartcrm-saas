@@ -69,12 +69,19 @@ async function api_call_logEvent(token, payload) {
   let autoCreatedNow = false;
   if (!lead && p.phone) {
     try {
+      // CALLS_AUTOLEAD_MODE = 'auto' (default) → create immediately
+      //                       'manual' → log call_event only; admin reviews
+      //                                    + bulk-converts from the UI.
+      const cfgMode = String(await db.getConfig('CALLS_AUTOLEAD_MODE', 'auto') || 'auto').toLowerCase();
       const cfgIn  = await db.getConfig('CALLS_AUTOLEAD_INBOUND',  '1');
       const cfgOut = await db.getConfig('CALLS_AUTOLEAD_OUTBOUND', '0');
       const isInbound  = direction === 'in' || direction === 'missed';
       const isOutbound = direction === 'out' || direction === 'outgoing';
-      const allow = (isInbound  && String(cfgIn)  === '1') ||
-                    (isOutbound && String(cfgOut) === '1');
+      const allowedByDirection = (isInbound  && String(cfgIn)  === '1') ||
+                                 (isOutbound && String(cfgOut) === '1');
+      // In manual mode, never auto-create — but DO still log the
+      // call_event below so the admin's 'Pending calls' UI lists it.
+      const allow = cfgMode === 'auto' && allowedByDirection;
       if (allow) {
         const cfgStId = Number(await db.getConfig('CALLS_AUTOLEAD_STATUS_ID', '0')) || 0;
         let statusId = null;
@@ -127,6 +134,146 @@ async function api_call_logEvent(token, payload) {
     created_at: db.nowIso()
   });
   return { ok: true, lead_id: lead ? lead.id : null, auto_created: autoCreatedNow };
+}
+
+/**
+ * List call_events without a linked lead (lead_id IS NULL).
+ * Used by Manual mode — admin reviews + bulk-converts.
+ * Honours role visibility (admin/manager sees team, others see own).
+ */
+async function api_call_events_pending(token, opts) {
+  const me = await authUser(token);
+  const visible = await getVisibleUserIds(me);
+  const ids = (visible && visible.length) ? visible : [me.id];
+  const placeholders = ids.map((_, i) => '$' + (i + 1)).join(',');
+  const limit = Math.max(1, Math.min(500, Number((opts && opts.limit) || 100)));
+  const days  = Math.max(1, Math.min(90, Number((opts && opts.days)  || 30)));
+  const params = [...ids, days, limit];
+  const { rows } = await db.query(
+    `SELECT ce.id, ce.user_id, ce.phone, ce.direction, ce.event,
+            ce.duration_s, ce.created_at,
+            u.name AS rep_name
+       FROM call_events ce
+       LEFT JOIN users u ON u.id = ce.user_id
+      WHERE ce.lead_id IS NULL
+        AND ce.user_id IN (${placeholders})
+        AND ce.created_at >= NOW() - ($${ids.length + 1}::int || ' days')::interval
+        AND COALESCE(ce.phone, '') <> ''
+      ORDER BY ce.created_at DESC
+      LIMIT $${ids.length + 2}`,
+    params
+  );
+  return rows;
+}
+
+/**
+ * Bulk-convert a list of pending call_events to leads. One lead per
+ * UNIQUE phone (so two missed calls from the same number share one
+ * lead). Returns the per-row outcome so the SPA can render a summary.
+ */
+async function api_call_events_convertToLeads(token, callEventIds) {
+  const me = await authUser(token);
+  const visible = await getVisibleUserIds(me);
+  const idsArr = Array.isArray(callEventIds) ? callEventIds.map(Number).filter(Boolean) : [];
+  if (!idsArr.length) return { ok: false, error: 'no ids supplied' };
+
+  // Pull the events the user has visibility on.
+  const allowedUserIds = (visible && visible.length) ? visible : [me.id];
+  const userPlaceholders = allowedUserIds.map((_, i) => '$' + (i + 2)).join(',');
+  const { rows: events } = await db.query(
+    `SELECT id, user_id, phone, direction, duration_s, created_at
+       FROM call_events
+      WHERE id = ANY($1::int[])
+        AND user_id IN (${userPlaceholders})
+        AND lead_id IS NULL
+        AND COALESCE(phone, '') <> ''`,
+    [idsArr, ...allowedUserIds]
+  );
+
+  // Resolve default new-lead status once.
+  const cfgStId = Number(await db.getConfig('CALLS_AUTOLEAD_STATUS_ID', '0')) || 0;
+  let defaultStatusId = null;
+  if (cfgStId) {
+    try { const f = await db.findById('statuses', cfgStId); if (f) defaultStatusId = f.id; } catch (_) {}
+  }
+  if (!defaultStatusId) {
+    const newSt = await db.findOneBy('statuses', 'name', 'New');
+    defaultStatusId = newSt ? newSt.id : null;
+  }
+
+  // Group events by phone so we create ONE lead per unique number.
+  const byPhone = new Map();
+  for (const e of events) {
+    const tail = String(e.phone || '').replace(/\D/g, '').slice(-10);
+    if (!tail) continue;
+    if (!byPhone.has(tail)) byPhone.set(tail, []);
+    byPhone.get(tail).push(e);
+  }
+
+  const created = [];
+  const skipped = [];
+  for (const [tail, group] of byPhone.entries()) {
+    // Skip if a lead already exists for that phone (race-safe).
+    const existing = await _findLeadByPhone(tail);
+    if (existing) {
+      // Link the events to the existing lead so they don't show as
+      // pending anymore.
+      const ids = group.map(g => g.id);
+      try {
+        await db.query('UPDATE call_events SET lead_id = $1 WHERE id = ANY($2::int[])', [existing.id, ids]);
+      } catch (_) {}
+      skipped.push({ phone: group[0].phone, reason: 'already a lead', existing_lead_id: existing.id, events: ids });
+      continue;
+    }
+    try {
+      const first = group[0];
+      const phoneClean = String(first.phone).replace(/^'/, '').trim();
+      const dir = first.direction || 'in';
+      const sourceLabel = (dir === 'missed') ? 'Missed Call'
+                       : (dir === 'in')     ? 'Inbound Call'
+                       : 'Outbound Call';
+      const newLeadId = await db.insert('leads', {
+        name:        phoneClean,
+        phone:       phoneClean,
+        whatsapp:    phoneClean,
+        source:      sourceLabel,
+        source_ref:  'auto-created from manual call-event convert',
+        status_id:   defaultStatusId,
+        assigned_to: first.user_id || me.id,
+        notes:       'Auto-created from ' + group.length + ' call event(s) on ' +
+                     new Date(first.created_at).toLocaleString('en-IN'),
+        created_by:  me.id,
+        created_at:  db.nowIso(),
+        updated_at:  db.nowIso(),
+        last_status_change_at: db.nowIso()
+      });
+      try {
+        await db.insert('remarks', {
+          lead_id: newLeadId, user_id: me.id,
+          remark: '\uD83D\uDCDE Bulk-converted ' + group.length + ' \u00D7 ' + sourceLabel.toLowerCase(),
+          status_id: defaultStatusId
+        });
+      } catch (_) {}
+      // Link all events in the group to the new lead.
+      const evIds = group.map(g => g.id);
+      try {
+        await db.query('UPDATE call_events SET lead_id = $1 WHERE id = ANY($2::int[])', [newLeadId, evIds]);
+      } catch (_) {}
+      created.push({ phone: phoneClean, lead_id: newLeadId, events: evIds, source: sourceLabel });
+    } catch (e) {
+      skipped.push({ phone: group[0].phone, reason: e.message, events: group.map(g => g.id) });
+    }
+  }
+
+  return {
+    ok: true,
+    requested: idsArr.length,
+    matched_events: events.length,
+    leads_created: created.length,
+    skipped: skipped.length,
+    created,
+    skipped_detail: skipped
+  };
 }
 
 /** List recordings for a lead (newest first). Returns metadata only, not bytes. */
@@ -773,7 +920,7 @@ async function api_recording_recentInsights(token, opts) {
 }
 
 module.exports = {
-  api_call_logEvent,
+  api_call_logEvent, api_call_events_pending, api_call_events_convertToLeads,
   api_call_hasRecentEvent,
   api_call_lookup,
   api_call_handleEnded,
