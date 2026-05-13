@@ -1311,6 +1311,9 @@ const DEFAULT_DASH_LAYOUT = [
   { id: 'def-status',       type: 'chart_status',     size: 'medium' },
   { id: 'def-funnel',       type: 'funnel_pipeline',  size: 'wide'   },
   { id: 'def-tat',          type: 'tat_alerts',       size: 'wide'   },
+  { id: 'def-call-sum',     type: 'call_activity_summary', size: 'medium' },
+  { id: 'def-call-top',     type: 'call_activity_topusers', size: 'medium' },
+  { id: 'def-call-rec',     type: 'call_activity_recent', size: 'wide'   },
   { id: 'def-projects',     type: 'project_stages',   size: 'wide'   },
   { id: 'def-source',       type: 'chart_source',     size: 'wide'   }
 ];
@@ -12050,17 +12053,24 @@ function _caRenderRecent(rows) {
   if (!el) return;
   if (!rows || !rows.length) { el.innerHTML = '<div class="muted">No calls in this window.</div>'; return; }
   window._caSelectedIds = window._caSelectedIds || new Set();
-  // Toolbar
-  const tb = h('div', { id: 'ca-recent-toolbar', style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap', alignItems: 'center', padding: '.4rem 0', borderBottom: '1px solid #e5e7eb', marginBottom: '.4rem' } },
-    h('button', { class: 'btn sm', onclick: () => { window._caSelectedIds = new Set(rows.filter(r => !r.lead_id).map(r => r.id)); _caRenderRecent(rows); } }, 'Select all unlinked'),
-    h('button', { class: 'btn sm ghost', onclick: () => { window._caSelectedIds = new Set(); _caRenderRecent(rows); } }, 'Clear selection'),
-    h('button', { class: 'btn sm primary', onclick: () => _caBulkConvert(rows) },
-      '\u2795 Add ' + window._caSelectedIds.size + ' as leads')
+  // Toolbar — bulk-convert affordance, ALWAYS visible so users
+  // discover it. Button is disabled until they tick at least one row.
+  const unlinkedCount = rows.filter(r => !r.lead_id).length;
+  const tb = h('div', { id: 'ca-recent-toolbar', style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap', alignItems: 'center', padding: '.5rem .35rem', background: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: '8px', marginBottom: '.5rem' } },
+    h('span', { style: { fontWeight: 600, fontSize: '.85rem', marginRight: '.4rem' } },
+      'Bulk actions:'),
+    h('span', { class: 'muted', style: { fontSize: '.78rem' } },
+      unlinkedCount + ' unlinked call(s) below'),
+    h('span', { style: { flex: 1 } }),
+    h('button', { class: 'btn sm', onclick: () => { window._caSelectedIds = new Set(rows.filter(r => !r.lead_id).map(r => r.id)); _caRenderRecent(rows); } }, '\u2611\uFE0F Select all unlinked'),
+    h('button', { class: 'btn sm ghost', onclick: () => { window._caSelectedIds = new Set(); _caRenderRecent(rows); } }, 'Clear'),
+    (function(){
+      const b = h('button', { class: 'btn sm primary', onclick: () => _caBulkConvert(rows) },
+        '\u2795 Add ' + window._caSelectedIds.size + ' as lead' + (window._caSelectedIds.size === 1 ? '' : 's'));
+      if (!window._caSelectedIds.size) { b.disabled = true; b.style.opacity = '0.55'; b.style.cursor = 'not-allowed'; }
+      return b;
+    })()
   );
-  // Hide bulk button when nothing selected
-  if (!window._caSelectedIds.size) {
-    tb.lastChild.style.display = 'none';
-  }
   el.innerHTML = '';
   el.appendChild(tb);
   const dirIcon = (r) => {
@@ -12105,8 +12115,11 @@ function _caRenderRecent(rows) {
       // Just update the count label without re-rendering the whole table
       const btn = document.querySelector('#ca-recent-toolbar button.btn.sm.primary');
       if (btn) {
-        btn.textContent = '\u2795 Add ' + window._caSelectedIds.size + ' as leads';
-        btn.style.display = window._caSelectedIds.size ? '' : 'none';
+        const n = window._caSelectedIds.size;
+        btn.textContent = '\u2795 Add ' + n + ' as lead' + (n === 1 ? '' : 's');
+        btn.disabled = n === 0;
+        btn.style.opacity = n === 0 ? '0.55' : '1';
+        btn.style.cursor  = n === 0 ? 'not-allowed' : 'pointer';
       }
     });
   });
