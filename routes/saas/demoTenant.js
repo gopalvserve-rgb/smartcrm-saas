@@ -497,7 +497,7 @@ async function _wipeAndSeed(pool, adminUserId) {
   //         a clean dataset (preserves admin user, KB articles, config).
   const wipeOrder = [
     'quotation_items', 'quotations',
-    'lead_recordings', 'remarks', 'followups', 'lead_actions',
+    'lead_recordings', 'call_events', 'remarks', 'followups', 'lead_actions',
     'lead_stage_log', 'tat_violations',
     'whatsapp_messages', 'wa_phones', 'wa_chat_assignments',
     'ai_chat_log', 'ai_kb_documents', 'ai_reengage_log', 'notifications',
@@ -650,45 +650,70 @@ async function _wipeAndSeed(pool, adminUserId) {
     }
   }
 
-  // ---- 10. Recordings with FAKE AI summaries / audits / ratings
-  // Pick the first 10 leads, attach one recording each.
-  const audioPlaceholder = Buffer.from('demo'); // tiny non-empty placeholder
-  for (let i = 0; i < Math.min(10, leadIds.length); i++) {
+  // ---- 10. Recordings with FAKE AI summaries / audits / ratings + call_events
+  // 3-second silent AAC/m4a so the audio control on the dialer page
+  // shows a real timeline / play button on the demo. ~1.9 KB per row.
+  const _SILENT_M4A_B64 = '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';
+  const audioBytes = Buffer.from(_SILENT_M4A_B64, 'base64');
+
+  // Seed up to 30 recordings spread across the first 30 leads with a
+  // realistic mix of inbound, outbound and missed calls.
+  const RECORDING_COUNT = Math.min(30, leadIds.length);
+  for (let i = 0; i < RECORDING_COUNT; i++) {
     const l = leadIds[i];
     const t = DEMO_TRANSCRIPTS[i % DEMO_TRANSCRIPTS.length];
-    const dir = i % 3 === 0 ? 'in' : 'out';
-    const dur = _randInt(45, 380);
-    const startedDaysAgo = _randInt(0, 14);
+    // every 5th is missed, every 3rd inbound, rest outbound
+    const isMissed = (i % 5 === 4);
+    const dir = isMissed ? 'missed' : (i % 3 === 0 ? 'in' : 'out');
+    const dur = isMissed ? 0 : _randInt(45, 380);
+    const startedDaysAgo = _randInt(0, 21);
+    const startedAt = _daysAgo(startedDaysAgo);
 
-    // Map "mixed/positive/negative/neutral" sentiment to suggested status
     let suggestedStatusId = null;
-    if (t.sentiment === 'positive')      suggestedStatusId = statusIds['Qualified'];
-    else if (t.sentiment === 'negative') suggestedStatusId = statusIds['Lost'];
+    if (t.sentiment === 'positive')        suggestedStatusId = statusIds['Qualified'];
+    else if (t.sentiment === 'negative')   suggestedStatusId = statusIds['Lost'];
     else if (l.status === 'Proposal Sent') suggestedStatusId = statusIds['Negotiation'];
 
-    await pool.query(
-      `INSERT INTO lead_recordings
-        (lead_id, user_id, phone, direction, duration_s, device_path, mime_type, size_bytes, audio_bytes,
-         started_at, created_at,
-         transcript, summary, action_items, sentiment, suggested_status_id, next_followup_days, key_insight,
-         ai_processed_at, ai_provider,
-         rating, rating_by, rating_notes, rated_at, ai_suggested_rating)
-       VALUES
-        ($1, $2, $3, $4, $5, $6, 'audio/m4a', $7, $8,
-         $9, $9,
-         $10, $11, $12, $13, $14, $15, $16,
-         $9, 'gemini-2.5-flash-lite (demo)',
-         $17, $2, $18, $9, $19)`,
-      [
-        l.id, l.assignee, l.phone, dir, dur,
-        '/storage/recordings/demo_' + i + '.m4a',
-        audioPlaceholder.length, audioPlaceholder,
-        _daysAgo(startedDaysAgo),
-        t.transcript, t.summary, t.action_items, t.sentiment,
-        suggestedStatusId, t.next_followup_days, t.key_insight,
-        t.rating, t.rating_notes, t.ai_suggested_rating
-      ]
-    );
+    let recordingId = null;
+    if (!isMissed) {
+      const r = await pool.query(
+        `INSERT INTO lead_recordings
+          (lead_id, user_id, phone, direction, duration_s, device_path, mime_type, size_bytes, audio_bytes,
+           started_at, created_at,
+           transcript, summary, action_items, sentiment, suggested_status_id, next_followup_days, key_insight,
+           ai_processed_at, ai_provider,
+           rating, rating_by, rating_notes, rated_at, ai_suggested_rating)
+         VALUES
+          ($1, $2, $3, $4, $5, $6, 'audio/mp4', $7, $8,
+           $9, $9,
+           $10, $11, $12, $13, $14, $15, $16,
+           $9, 'gemini-2.5-flash-lite (demo)',
+           $17, $2, $18, $9, $19)
+         RETURNING id`,
+        [
+          l.id, l.assignee, l.phone, dir, dur,
+          '/storage/recordings/demo_' + i + '.m4a',
+          audioBytes.length, audioBytes,
+          startedAt,
+          t.transcript, t.summary, t.action_items, t.sentiment,
+          suggestedStatusId, t.next_followup_days, t.key_insight,
+          t.rating, t.rating_notes, t.ai_suggested_rating
+        ]
+      );
+      recordingId = Number(r.rows[0].id);
+    }
+
+    // Always log a call_event so each call shows up in the Call
+    // Activity report + dialer history feed + /api/call_history.
+    try {
+      const evtName = isMissed ? 'call_ended' : 'recording_saved';
+      await pool.query(
+        `INSERT INTO call_events
+          (lead_id, user_id, phone, direction, event, duration_s, recording_id, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [l.id, l.assignee, l.phone, dir, evtName, dur, recordingId, startedAt]
+      );
+    } catch (_) { /* very old tenants may lack call_events */ }
   }
 
   // ---- 11. Quotations (10)
@@ -976,7 +1001,7 @@ async function _wipeAndSeed(pool, adminUserId) {
       tags: DEMO_TAGS.length,
       custom_fields: DEMO_CUSTOM_FIELDS.length,
       leads: leadIds.length,
-      recordings: Math.min(10, leadIds.length),
+      recordings: Math.min(30, leadIds.length),
       quotations: DEMO_QUOTES.length,
       whatsapp_phones_in_db:    _waPhonesCount,
       whatsapp_messages_in_db:  _waMsgsCount,
