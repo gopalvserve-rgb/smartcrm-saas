@@ -62,6 +62,31 @@ object RecordingObserver {
         watchedPath = null
     }
 
+    /**
+     * One-shot scan of the watched folder: returns absolute paths of audio
+     * files modified within the last maxAgeMs milliseconds, newest first.
+     * Used by the JS post-call rescan logic to catch recordings that landed
+     * after the WebView was killed by Android (FileObserver fires to a dead
+     * listener in that case; this scan recovers them when JS comes back).
+     */
+    fun scanRecent(ctx: Context, maxAgeMs: Long): List<String> {
+        val dir = resolveDir()
+        if (dir == null || !dir.isDirectory) return emptyList()
+        val cutoff = System.currentTimeMillis() - maxAgeMs
+        return dir.listFiles { f ->
+            f.isFile && isAudioFile(f.name) && f.lastModified() >= cutoff
+        }?.sortedByDescending { it.lastModified() }
+         ?.map { it.absolutePath }
+         ?: emptyList()
+    }
+
+    /** Resolve the watched folder even if startIfPossible hasn't run yet. */
+    fun resolveDir(): File? {
+        val external = Environment.getExternalStorageDirectory()
+        return candidatePaths.map { File(external, it) }
+            .firstOrNull { it.exists() && it.isDirectory }
+    }
+
     private fun createObserver(dir: File): FileObserver {
         val mask = FileObserver.CLOSE_WRITE or FileObserver.MOVED_TO
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {

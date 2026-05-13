@@ -121,17 +121,38 @@
     } catch (e) {
       console.warn('[caller-id] handleEnded failed', e);
     }
+    // Auto-sync rescan — catch the recording even if the FileObserver
+    // event fired while the WebView was suspended. We try several delays
+    // because OEM dialers flush at very different times (Pixel: ~1s,
+    // Samsung: 5–10s, MIUI: 15–30s, some Vivos: 60s+).
+    [3000, 10000, 30000, 60000, 120000].forEach(d => {
+      setTimeout(() => _rescanAndUploadRecent(180000), d);
+    });
   });
 
-  // ---- 3. New call recording detected on disk -------------------
-  CallerId.addListener('recordingAvailable', async ({ path, name, ts }) => {
-    console.log('[caller-id] recording available', path);
-    if (typeof toast === 'function') toast('🎙 Recording detected: ' + name);
-    // Don't bail when lastCall is missing — still upload the file. The server
-    // will parse the filename and match by timestamp against recent call_events.
-    // This handles two real-world cases:
-    //   1. App was killed when the call happened (no PhoneStateReceiver fire)
-    //   2. Filename has just a contact name (no phone digits)
+  // Track which file paths we've already uploaded so the post-call rescan
+  // doesn't double-submit the same file. Persisted to localStorage so it
+  // survives WebView reloads and app restarts.
+  const _uploadedKey = 'crm_uploaded_recordings_v1';
+  const _loadUploaded = () => {
+    try { return new Set(JSON.parse(localStorage.getItem(_uploadedKey) || '[]')); }
+    catch (_) { return new Set(); }
+  };
+  const _saveUploaded = (set) => {
+    try {
+      // Keep the most recent 500 paths to avoid unbounded growth
+      const arr = Array.from(set).slice(-500);
+      localStorage.setItem(_uploadedKey, JSON.stringify(arr));
+    } catch (_) {}
+  };
+  const _uploadedPaths = _loadUploaded();
+
+  // Single source of truth for "upload one recording file to /api/recordings".
+  // Used by the file-event listener AND by the post-call rescan loop.
+  async function _uploadRecording({ path, name, ts }) {
+    if (!path || _uploadedPaths.has(path)) return false;
+    _uploadedPaths.add(path);
+    _saveUploaded(_uploadedPaths);
     let parsed = null;
     try {
       if (typeof window.parseRecordingFilename === 'function') {
@@ -139,7 +160,7 @@
       }
     } catch (_) {}
     const phone = (lastCall && lastCall.phone) || (parsed && parsed.phone) || '';
-    const startedAt = (lastCall && lastCall.startedAt) || (parsed && parsed.startedAt) || ts;
+    const startedAt = (lastCall && lastCall.startedAt) || (parsed && parsed.startedAt) || ts || Date.now();
     try {
       const Filesystem = window.Capacitor.Plugins.Filesystem;
       if (!Filesystem) throw new Error('Filesystem plugin missing');
@@ -147,14 +168,13 @@
       const blob = _b64ToBlob(result.data, _mimeFor(name));
       const fd = new FormData();
       fd.append('audio', blob, name);
-      fd.append('filename', name);              // server uses this to re-parse if needed
+      fd.append('filename', name);
       fd.append('phone', phone);
       fd.append('direction', (lastCall && lastCall.direction) || 'in');
       fd.append('duration_s', String((lastCall && lastCall.duration_s) || 0));
       if (lastCall && lastCall.leadId) fd.append('lead_id', String(lastCall.leadId));
       fd.append('device_path', path);
       fd.append('started_at', new Date(startedAt).toISOString());
-      // Hints from the filename — used by the server to fall back when phone is empty.
       if (parsed && parsed.contact)  fd.append('contact_hint', parsed.contact);
       if (parsed && parsed.lastFour) fd.append('lastfour_hint', parsed.lastFour);
       const r = await fetch('/api/recordings', {
@@ -162,15 +182,44 @@
         headers: { 'x-auth-token': _token() },
         body: fd
       });
-      const j = await r.json().catch(() => ({}));
-      if (typeof toast === 'function') {
-        if (j && j.ok && j.lead_id) toast('Call recording attached to lead #' + j.lead_id);
-        else if (j && j.ok)         toast('Recording uploaded — no lead matched yet');
-        else                         toast('Recording upload failed');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      if (typeof toast === 'function') toast('🎙 Recording auto-synced');
+      return true;
+    } catch (e) {
+      console.warn('[caller-id] upload recording failed', path, e);
+      // Remove from uploaded set so the next rescan retries it
+      _uploadedPaths.delete(path);
+      _saveUploaded(_uploadedPaths);
+      return false;
+    }
+  }
+
+  // Scan the folder for audio files modified in the last `maxAgeMs` ms
+  // and upload anything we haven't uploaded yet. Called repeatedly after
+  // every callEnded so we catch slow OEM dialer flushes (Xiaomi/Samsung
+  // sometimes take 30–60s) and recover files that landed while the
+  // WebView was dead.
+  async function _rescanAndUploadRecent(maxAgeMs) {
+    try {
+      const res = await CallerId.scanRecentRecordings({ maxAgeMs: String(maxAgeMs || 300000) });
+      const files = (res && res.files) || [];
+      for (const path of files) {
+        if (_uploadedPaths.has(path)) continue;
+        const name = path.split('/').pop();
+        await _uploadRecording({ path, name, ts: Date.now() });
       }
     } catch (e) {
-      console.warn('[caller-id] upload recording failed', e);
+      console.warn('[caller-id] rescan failed', e);
     }
+  }
+  // Expose for the manual Sync button (so it just calls the same path)
+  window.crmRescanRecordings = _rescanAndUploadRecent;
+
+  // ---- 3. New call recording detected on disk -------------------
+  CallerId.addListener('recordingAvailable', async ({ path, name, ts }) => {
+    console.log('[caller-id] recording available', path);
+    if (typeof toast === 'function') toast('🎙 Recording detected: ' + name);
+    await _uploadRecording({ path, name, ts: ts || Date.now() });
   });
 
   // Native sends this event when beginListening starts but
@@ -365,4 +414,20 @@
     if (lc.endsWith('.ogg')) return 'audio/ogg';
     return 'application/octet-stream';
   }
+
+
+  // ---- 5. Boot-time backfill scan -------------------------------
+  // When the app boots after being killed, FileObserver events that
+  // fired during sleep are lost. Scan the folder for any audio files
+  // modified in the last 24h that we haven't uploaded yet, and queue
+  // them now. Runs once, 8 seconds after boot (after CallerId.start
+  // resolves and the listening permission settled).
+  setTimeout(() => {
+    try {
+      if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.CallerId) {
+        _rescanAndUploadRecent(24 * 60 * 60 * 1000);
+      }
+    } catch (_) {}
+  }, 8000);
+
 })();

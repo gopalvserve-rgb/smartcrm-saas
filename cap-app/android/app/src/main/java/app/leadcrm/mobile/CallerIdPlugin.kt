@@ -16,6 +16,7 @@ import android.provider.Settings
 import android.telephony.TelephonyManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
@@ -129,6 +130,24 @@ class CallerIdPlugin : Plugin() {
      * recording folders (Samsung Recordings/Call, Xiaomi MIUI/..., etc.)
      * because they live in scoped storage owned by the stock dialer.
      */
+    /**
+     * Scan the watched call-recordings folder for audio files modified in
+     * the last maxAgeMs milliseconds. Returns an array of absolute paths
+     * newest-first so JS can compare against its uploaded-paths set and
+     * upload anything new. Used by the post-call auto-sync rescan flow.
+     */
+    @PluginMethod
+    fun scanRecentRecordings(call: PluginCall) {
+        val maxAge = call.getString("maxAgeMs")?.toLongOrNull() ?: 300_000L
+        val files = RecordingObserver.scanRecent(context, maxAge)
+        val arr = JSArray()
+        files.forEach { arr.put(it) }
+        val ret = JSObject()
+        ret.put("files", arr)
+        ret.put("count", files.size)
+        call.resolve(ret)
+    }
+
     @PluginMethod
     fun hasAllFilesAccess(call: PluginCall) {
         val granted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
