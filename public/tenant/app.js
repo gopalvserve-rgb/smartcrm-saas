@@ -859,7 +859,7 @@ const NAV_GROUPS = [
   ] },
   { label: 'Catalog', icon: '📦', items: [
     { id: 'inventory',  label: 'Inventory', icon: '📦' },
-    { id: 'projects',   label: 'Projects',  icon: '🚚' }
+    { id: 'projects',   label: 'Sale Closure',  icon: '🚚' }
   ] },
   { label: 'Reports', icon: '📉', items: [
     { id: 'reports',       label: 'Reports',         icon: '📉', roles: ['admin', 'manager', 'team_leader'] },
@@ -1546,14 +1546,14 @@ const WIDGET_LIBRARY = {
       c.appendChild(grid);
     }
   },
-  project_stages: { title: 'Project delivery stages', group: 'Projects',
+  project_stages: { title: 'Sale Final Closure Stages', group: 'Sale Closure',
     render: (c, _cfg, d, w) => {
       c.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.6rem' } },
-        h('h3', { style: { margin: 0 } }, w.title || '🚚 Project stages'),
+        h('h3', { style: { margin: 0 } }, w.title || '🚚 Sale Final Closure Stages'),
         h('a', { href: '#/projects', class: 'btn sm ghost' }, 'View board →')));
       const pb = d.projects;
       if (!pb || !pb.stages || !pb.stages.length) {
-        c.appendChild(h('p', { class: 'muted' }, 'No project stages defined yet. Set them in Settings → 🚚 Project stages.'));
+        c.appendChild(h('p', { class: 'muted' }, 'No closure stages defined yet. Set them in Settings → 🚚 Sale Final Closure Stages.'));
         return;
       }
       const board = pb.board || [];
@@ -4630,7 +4630,7 @@ function customFieldInput(cf, val) {
 function projectStageBlock(leadId, lead) {
   const wrap = h('div', { class: 'card', style: { marginTop: '1rem', padding: '1rem' } },
     h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', marginBottom: '.5rem' } },
-      h('h4', { style: { margin: 0, flex: 1 } }, '🚚 Post-sale delivery'),
+      h('h4', { style: { margin: 0, flex: 1 } }, '🚚 Sale Final Closure'),
       h('span', { class: 'muted', style: { fontSize: '.78rem' } }, 'Stage tracker for what happens after the sale')
     ),
     h('div', { class: 'muted' }, 'Loading…')
@@ -4641,7 +4641,7 @@ function projectStageBlock(leadId, lead) {
       const body = wrap.lastChild;
       if (!stages.length) {
         body.replaceWith(h('p', { class: 'muted', style: { margin: 0 } },
-          'No stages defined yet. Admin can set them up under Settings → 🚚 Project stages.'));
+          'No stages defined yet. Admin can set them up under Settings → 🚚 Sale Final Closure Stages.'));
         return;
       }
       const currentId = Number(lead.project_stage_id) || 0;
@@ -11516,11 +11516,11 @@ function openInventoryEditModal(r, onSaved) {
   document.body.appendChild(modal);
 }
 
-/* ---------------- Projects (post-sale stage board) ---------------- */
+/* ---------------- Sale Final Closure (post-sale stage board) ---------------- */
 VIEWS.projects = async (view) => {
   view.innerHTML = '';
   view.appendChild(h('div', { class: 'card', style: { padding: '1rem', display: 'flex', alignItems: 'center', gap: '.75rem', flexWrap: 'wrap', marginBottom: '1rem' } },
-    h('h3', { style: { margin: 0, flex: 1 } }, '🚚 Projects in delivery'),
+    h('h3', { style: { margin: 0, flex: 1 } }, '🚚 Sale Final Closure pipeline'),
     h('span', { class: 'muted', style: { fontSize: '.85rem' } },
       'Every lead that has entered the post-sale stage tracker, grouped by stage. Stalled cards are flagged.'),
     ['admin'].includes(CRM.user.role)
@@ -11542,7 +11542,7 @@ VIEWS.projects = async (view) => {
   if (!board.stages.length) {
     listEl.innerHTML = '';
     listEl.appendChild(h('p', { class: 'muted' },
-      'No stages defined yet. Admin: head to Settings → 🚚 Project stages to create your delivery workflow.'));
+      'No stages defined yet. Admin: head to Settings → 🚚 Sale Final Closure Stages to create your closure workflow.'));
     return;
   }
 
@@ -11550,7 +11550,7 @@ VIEWS.projects = async (view) => {
   if (!totalLeads) {
     listEl.innerHTML = '';
     listEl.appendChild(h('p', { class: 'muted' },
-      'No leads are in delivery yet. Open a won/closed lead → "🚚 Post-sale delivery" → Start delivery tracker.'));
+      'No leads are in final closure yet. Open a won/closed lead → "🚚 Sale Final Closure" → Start closure tracker.'));
     return;
   }
 
@@ -13596,7 +13596,7 @@ VIEWS.admin = async (view) => {
       { id: 'customfields', label: '➕ Custom Fields' },
       { id: 'tags',         label: '🏷 Tags' },
       { id: 'products',     label: '📦 Products' },
-      { id: 'projstages',   label: '🚚 Project stages' },
+      { id: 'projstages',   label: '🚚 Sale Final Closure Stages' },
       { id: 'duplicates',   label: '👥 Duplicates' },
     ]},
     { title: 'Routing', items: [
@@ -15247,7 +15247,7 @@ function pushNewRowsToCRM() {
 }
 
 /**
- * Admin → Project stages tab. Lists every stage in sort order with edit /
+ * Admin → Sale Final Closure Stages tab. Lists every stage in sort order with edit /
  * delete actions, plus a "+ New stage" button. Stages are the post-sale
  * delivery workflow (Token → Agreement → Loan → ... → Possession).
  * Reps advance leads through these stages from the lead detail modal.
@@ -15255,7 +15255,7 @@ function pushNewRowsToCRM() {
 async function adminProjectStages() {
   const stages = await api('api_projectStages_list');
   const wrap = h('div', {});
-  wrap.appendChild(h('h4', { style: { margin: '0 0 .5rem' } }, '🚚 Post-sale project stages'));
+  wrap.appendChild(h('h4', { style: { margin: '0 0 .5rem' } }, '🚚 Sale Final Closure Stages'));
   wrap.appendChild(h('p', { class: 'muted' },
     'Define the delivery workflow your team follows after a sale. Reps advance each lead through these stages from the lead detail page; every transition logs a remark on the lead.'));
   const list = h('div', { class: 'card', style: { padding: '.5rem 0' } });

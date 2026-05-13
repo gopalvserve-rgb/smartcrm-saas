@@ -216,7 +216,7 @@ const TOOLS = [
       from: { type: 'string' }, to: { type: 'string' }
     } } },
   { name: 'leads_by_project_stage',
-    description: "Lead counts grouped by project stage (post-sale onboarding pipeline). Use for 'project stage wise data', 'where are leads in delivery'.",
+    description: "Lead counts grouped by Sale Final Closure Stage (post-sale closure pipeline). Use for 'sale closure stage wise data', 'where are leads in final closure', 'closure stage breakdown', and legacy phrasing 'project stages'.",
     parameters: { type: 'object', properties: {} } },
   { name: 'leads_by_custom_field',
     description: "Lead counts grouped by a custom field value. Use for 'leads by industry', 'leads by company size', 'breakdown by <custom field>'.",
@@ -1290,7 +1290,7 @@ function _formatToolFallback(toolsCalled, question) {
       rows.forEach(x => lines.push('• ' + x.product + ': ' + x.leads + ' leads, ' + x.won + ' won, ₹' + Number(x.total_value || 0).toLocaleString('en-IN')));
     } else if (name === 'leads_by_project_stage') {
       const rows = r.rows || [];
-      lines.push('🚚 **Leads by project stage**:');
+      lines.push('🚚 **Leads by Sale Final Closure Stage**:');
       rows.forEach(x => lines.push('• ' + x.stage + ': ' + x.leads + ' lead(s)'));
     } else if (name === 'leads_by_custom_field') {
       const rows = r.rows || [];
@@ -1380,7 +1380,7 @@ Your job: answer the user's question by calling ONE OR MORE of the provided tool
 DATA AVAILABLE TO YOU:
 • Leads — full pipeline (name, phone, email, company, source, status, assignee, value, custom fields, follow-ups, remarks, recordings, TAT violations).
 • Users / employees — name, role, designation, department.
-• Statuses, sources, products, project stages, tags, custom fields.
+• Statuses, sources, products, Sale Final Closure Stages (a.k.a. project stages — internal id), tags, custom fields.
 • Quotations — draft/sent/accepted/rejected with totals.
 • Recordings — call recordings with AI summaries, sentiment, ratings, action items.
 • Activity log — status changes, remarks, follow-ups.
