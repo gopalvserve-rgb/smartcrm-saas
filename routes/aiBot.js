@@ -192,8 +192,13 @@ async function _ensureAiBotColumns() {
     // tenants keep the previous auto-resume behaviour.
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS pause_after_human_handoff INTEGER NOT NULL DEFAULT 0`);
     // Quick-reply buttons (May 2026): array of up to 3 {id, title} objects.
-    // When set, EVERY bot reply goes as an interactive message with these buttons attached.
+    // quick_reply_trigger controls WHEN the buttons attach to outgoing replies:
+    //   'always'      — every bot reply (default)
+    //   'first_only'  — only the bot's first reply in a thread (no prior outbound)
+    //   'keywords'    — only when the customer's last inbound matches quick_reply_keywords
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS quick_reply_buttons JSONB NOT NULL DEFAULT '[]'::jsonb`);
+    await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS quick_reply_trigger TEXT NOT NULL DEFAULT 'always'`);
+    await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS quick_reply_keywords TEXT NOT NULL DEFAULT ''`);
     await db.query(`CREATE TABLE IF NOT EXISTS ai_reengage_log (
       id SERIAL PRIMARY KEY,
       phone TEXT NOT NULL,
@@ -287,6 +292,14 @@ async function api_aibot_settings_save(token, payload) {
       title: String((b && b.title) || '').slice(0, 20).trim()
     })).filter(b => b.title);
     addCol('quick_reply_buttons', '$$::jsonb', JSON.stringify(sanitised));
+  }
+  if (p.quick_reply_trigger       != null) {
+    const allowed = ['always', 'first_only', 'keywords'];
+    const t = String(p.quick_reply_trigger || 'always').toLowerCase();
+    addCol('quick_reply_trigger', '$$', allowed.includes(t) ? t : 'always');
+  }
+  if (p.quick_reply_keywords      != null) {
+    addCol('quick_reply_keywords', '$$', String(p.quick_reply_keywords || '').slice(0, 500));
   }
 
   // Phone-keyed upsert: one bot row per phone_number_id (NULL = legacy default).
@@ -1074,8 +1087,32 @@ async function maybeReplyToInbound({ phone, leadId, inboundText, inboundPhoneId,
       const raw = settings.quick_reply_buttons;
       buttons = typeof raw === 'string' ? JSON.parse(raw || '[]') : (Array.isArray(raw) ? raw : []);
     } catch (_) { buttons = []; }
+
+    // Evaluate trigger condition: should we attach buttons to THIS reply?
+    let attachButtons = Array.isArray(buttons) && buttons.length > 0;
+    if (attachButtons) {
+      const trigger = String(settings.quick_reply_trigger || 'always').toLowerCase();
+      if (trigger === 'first_only') {
+        // Attach only if bot has not sent any prior outbound to this phone
+        try {
+          const prior = await db.query(
+            `SELECT 1 FROM whatsapp_messages WHERE to_number = $1 AND direction = 'out' LIMIT 1`,
+            [phone]
+          );
+          if (prior.rows.length > 0) attachButtons = false;
+        } catch (_) { /* on error, fall through and attach */ }
+      } else if (trigger === 'keywords') {
+        // Attach only if the customer's inbound text contains one of the keywords
+        const kwRaw = String(settings.quick_reply_keywords || '');
+        const kws = kwRaw.split(/[,\n]/).map(k => k.trim().toLowerCase()).filter(k => k);
+        const inboundLower = String(inboundText || '').toLowerCase();
+        if (!kws.length || !kws.some(k => inboundLower.includes(k))) attachButtons = false;
+      }
+      // 'always' or unknown → keep attachButtons true
+    }
+
     let send;
-    if (Array.isArray(buttons) && buttons.length && replyText && replyText.length <= 1024) {
+    if (attachButtons && replyText && replyText.length <= 1024) {
       send = await wb._sendInteractiveButtons({
         to: phone, text: replyText, buttons,
         leadId: leadId || null, userId: null

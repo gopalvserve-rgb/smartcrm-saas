@@ -8089,13 +8089,36 @@ async function _aibotSettingsView(currentPhId) {
     placeholder: i === 0 ? 'e.g. Yes, send details' : (i === 1 ? 'e.g. Call me' : 'e.g. Not interested'),
     value: String((b && b.title) || '')
   }));
+  const qrTriggerSel = h('select', {},
+    h('option', { value: 'always',     selected: (s.quick_reply_trigger || 'always') === 'always'     ? 'selected' : null }, 'Every bot reply (default)'),
+    h('option', { value: 'first_only', selected: (s.quick_reply_trigger || 'always') === 'first_only' ? 'selected' : null }, 'Only on bot\'s first reply in a thread'),
+    h('option', { value: 'keywords',   selected: (s.quick_reply_trigger || 'always') === 'keywords'   ? 'selected' : null }, 'Only when customer message contains keywords')
+  );
+  const qrKeywordsInp = h('input', {
+    type: 'text',
+    placeholder: 'e.g. price, cost, fees, plan, demo',
+    value: String(s.quick_reply_keywords || '')
+  });
+  const qrKwField = h('div', { class: 'field' },
+    h('label', {}, 'Trigger keywords (comma-separated)'),
+    qrKeywordsInp,
+    h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } },
+      'Buttons attach only when the customer\'s last incoming message contains any of these words. Case-insensitive substring match.')
+  );
+  // Show/hide keyword field based on trigger selection
+  const _qrKwToggle = () => { qrKwField.style.display = (qrTriggerSel.value === 'keywords') ? '' : 'none'; };
+  qrTriggerSel.addEventListener('change', _qrKwToggle);
+  setTimeout(_qrKwToggle, 0);
+
   const qrCard = h('div', { class: 'card' },
     h('h3', { style: { marginTop: 0 } }, '💬 Quick reply buttons'),
     h('p', { class: 'muted', style: { fontSize: '.85rem' } },
-      'Up to 3 tap-to-reply buttons attached to every bot message. Titles max 20 characters. Leave blank to disable. Customers tap a button and WhatsApp sends that exact text back as their reply — perfect for "Yes / No / Call me" style answers.'),
+      'Up to 3 tap-to-reply buttons attached to bot messages. Titles max 20 characters. Leave all blank to disable. Customers tap a button and WhatsApp sends that exact text back as their reply — perfect for "Yes / No / Call me" style answers.'),
     h('div', { class: 'field' }, h('label', {}, 'Button 1 title'), qrInputs[0]),
     h('div', { class: 'field' }, h('label', {}, 'Button 2 title'), qrInputs[1]),
-    h('div', { class: 'field' }, h('label', {}, 'Button 3 title'), qrInputs[2])
+    h('div', { class: 'field' }, h('label', {}, 'Button 3 title'), qrInputs[2]),
+    h('div', { class: 'field' }, h('label', {}, '⚡ When should buttons attach?'), qrTriggerSel),
+    qrKwField
   );
   wrap.appendChild(qrCard);
 
@@ -8422,7 +8445,9 @@ async function _aibotSettingsView(currentPhId) {
       history_messages: Number(histCount.value || 8),
       quick_reply_buttons: qrInputs
         .map(inp => ({ title: String(inp.value || '').slice(0, 20).trim() }))
-        .filter(b => b.title)
+        .filter(b => b.title),
+      quick_reply_trigger: qrTriggerSel.value,
+      quick_reply_keywords: qrKeywordsInp.value
     };
     try {
       payload.phone_number_id = phIdParam || null;
