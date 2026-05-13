@@ -63,7 +63,18 @@ function _estimateCost(promptTokens, candidateTokens) {
 let fetch = global.fetch;
 if (!fetch) { try { fetch = require('node-fetch'); } catch (_) {} }
 
-function _key() {
+// Resolve the Gemini API key the SAME way AI Bot does — via
+// utils/geminiClient.loadSettings(). That reads from:
+//   1. ai_settings.gemini_api_key_enc (encrypted, set in super-admin Settings UI)
+//   2. Falls back to process.env.GEMINI_API_KEY
+// Without this, super-admin set the key in the UI for AI Bot and call
+// summary still saw 'not configured' because it only read the env var.
+const _gemini = require('./geminiClient');
+async function _key() {
+  try {
+    const settings = await _gemini.loadSettings();
+    if (settings && settings.apiKey) return settings.apiKey;
+  } catch (_) {}
   return process.env.GEMINI_API_KEY || '';
 }
 
@@ -139,8 +150,8 @@ Lead context:
  * action items + sentiment + suggest next status, all in one shot.
  */
 async function _callGemini(audioBytes, mimeType, meta) {
-  const key = _key();
-  if (!key) throw new Error('GEMINI_API_KEY not set');
+  const key = await _key();
+  if (!key) throw new Error('GEMINI_API_KEY not configured. Set it in super-admin Settings → AI or via GEMINI_API_KEY env var.');
 
   const inline = audioBytes.length < 20 * 1024 * 1024;
   let parts;
@@ -272,7 +283,7 @@ async function processRecording(id) {
     return { ok: true, demo: true, id };
   }
 
-  if (!_key()) throw new Error('GEMINI_API_KEY not configured');
+  if (!(await _key())) throw new Error('GEMINI_API_KEY not configured. Set it in super-admin Settings → AI or via GEMINI_API_KEY env var.');
   if (!rec.audio_bytes || rec.audio_bytes.length === 0) {
     throw new Error('Recording has no audio bytes');
   }
@@ -322,7 +333,7 @@ let _processing = false;
 
 async function _tick() {
   if (_processing) return;
-  if (!_key() && !demo.on) return; // No key + not demo — nothing to do
+  if (!(await _key()) && !demo.on) return; // No key + not demo — nothing to do
   _processing = true;
   try {
     const { rows } = await db.query(
@@ -354,7 +365,12 @@ function startWorker() {
   // First tick after 30s (let server settle), then every 60s
   setTimeout(_tick, 30_000);
   _workerTimer = setInterval(_tick, 60_000);
-  console.log('[ai-summary] worker started — Gemini', _key() ? 'configured' : (demo.on ? 'demo-mock' : 'NOT configured'));
+  // Fire-and-forget probe to log key resolution at boot.
+  _key().then(k => {
+    console.log('[ai-summary] worker started — Gemini', k ? 'configured' : (demo.on ? 'demo-mock' : 'NOT configured'));
+  }).catch(() => {
+    console.log('[ai-summary] worker started — Gemini key resolution failed');
+  });
 }
 
 module.exports = { processRecording, startWorker, _tick, GEMINI_MODEL };
