@@ -52,18 +52,81 @@ async function _findLeadByPhone(phone) {
 async function api_call_logEvent(token, payload) {
   const me = await authUser(token);
   const p = payload || {};
-  const lead = await _findLeadByPhone(p.phone);
+  let lead = await _findLeadByPhone(p.phone);
+  const direction = p.direction || (p.event === 'incoming_ringing' ? 'in' : 'out');
+
+  // ---- Auto-create-lead the MOMENT a call rings ----
+  // Driven by the same tenant config the recording-upload handler uses,
+  // so the policy stays consistent:
+  //   CALLS_AUTOLEAD_INBOUND   '1' / '0'  (default '1')
+  //   CALLS_AUTOLEAD_OUTBOUND  '1' / '0'  (default '0')
+  //   CALLS_AUTOLEAD_STATUS_ID numeric id (defaults to 'New' status)
+  // Previously this only ran on recording upload — minutes after the call
+  // ends. Doing it on RING means the lead is in the CRM immediately, so
+  // (a) WhatsApp messages on the same number land on the right lead,
+  // (b) the rep can open the lead from notification before the call ends,
+  // (c) bot/AI hooks for new leads fire in real time.
+  let autoCreatedNow = false;
+  if (!lead && p.phone) {
+    try {
+      const cfgIn  = await db.getConfig('CALLS_AUTOLEAD_INBOUND',  '1');
+      const cfgOut = await db.getConfig('CALLS_AUTOLEAD_OUTBOUND', '0');
+      const isInbound  = direction === 'in' || direction === 'missed';
+      const isOutbound = direction === 'out' || direction === 'outgoing';
+      const allow = (isInbound  && String(cfgIn)  === '1') ||
+                    (isOutbound && String(cfgOut) === '1');
+      if (allow) {
+        const cfgStId = Number(await db.getConfig('CALLS_AUTOLEAD_STATUS_ID', '0')) || 0;
+        let statusId = null;
+        if (cfgStId) {
+          try { const f = await db.findById('statuses', cfgStId); if (f) statusId = f.id; } catch (_) {}
+        }
+        if (!statusId) {
+          const newSt = await db.findOneBy('statuses', 'name', 'New');
+          statusId = newSt ? newSt.id : null;
+        }
+        const phoneClean = String(p.phone).replace(/^'/, '').trim();
+        const sourceLabel = isInbound ? 'Inbound Call' : 'Outbound Call';
+        const newLeadId = await db.insert('leads', {
+          name:        phoneClean,
+          phone:       phoneClean,
+          whatsapp:    phoneClean,
+          source:      sourceLabel,
+          source_ref:  'auto-created on call ring',
+          status_id:   statusId,
+          assigned_to: me.id,
+          notes:       'Auto-created from ' + sourceLabel.toLowerCase() + ' at ' +
+                       new Date().toLocaleString('en-IN'),
+          created_by:  me.id,
+          created_at:  db.nowIso(),
+          updated_at:  db.nowIso(),
+          last_status_change_at: db.nowIso()
+        });
+        try {
+          await db.insert('remarks', {
+            lead_id: newLeadId, user_id: me.id,
+            remark: '\uD83D\uDCDE ' + sourceLabel + ' \u00B7 auto-created on call ring',
+            status_id: statusId
+          });
+        } catch (_) {}
+        lead = { id: newLeadId };
+        autoCreatedNow = true;
+        console.log('[call-event] auto-created lead', newLeadId, 'for', phoneClean, 'on', direction);
+      }
+    } catch (e) { console.warn('[call-event] auto-create failed:', e.message); }
+  }
+
   await db.insert('call_events', {
     lead_id: lead ? lead.id : null,
     user_id: me.id,
     phone: p.phone || '',
-    direction: p.direction || (p.event === 'incoming_ringing' ? 'in' : 'out'),
+    direction,
     event: p.event || 'unknown',
     duration_s: Number(p.duration_s) || 0,
     recording_id: p.recording_id || null,
     created_at: db.nowIso()
   });
-  return { ok: true, lead_id: lead ? lead.id : null };
+  return { ok: true, lead_id: lead ? lead.id : null, auto_created: autoCreatedNow };
 }
 
 /** List recordings for a lead (newest first). Returns metadata only, not bytes. */

@@ -19562,7 +19562,7 @@ function resetRecordingFolder() {
 }
 
 // When the native PhoneStateReceiver fires a call event, it calls this function.
-window.onLeadCRMCallEvent = function (event, number) {
+window.onLeadCRMCallEvent = async function (event, number) {
   try {
     console.log('[leadcrm] native call event:', event, number);
     if (!CRM.user) return;
@@ -19576,14 +19576,33 @@ window.onLeadCRMCallEvent = function (event, number) {
     );
     const lead = matchByNumber || ctxLead;
 
-    // Log every call into the timeline (best-effort)
+    // Log every call into the timeline. The server now auto-creates the
+    // lead on this same call if CALLS_AUTOLEAD_INBOUND is on (default).
+    // We pass the response into a state var so the rest of this handler
+    // knows the lead was already saved and can skip the manual prompt.
+    let _serverLeadId = null, _serverAutoCreated = false;
     if (digits) {
       const direction = (event === 'incoming_ringing') ? 'in' : 'out';
-      api('api_call_logEvent', { phone: number, direction, event }).catch(() => {});
+      try {
+        const r = await api('api_call_logEvent', { phone: number, direction, event });
+        if (r && r.lead_id) _serverLeadId = r.lead_id;
+        if (r && r.auto_created) _serverAutoCreated = true;
+      } catch (_) { /* best effort, never block UI */ }
     }
 
     if (event === 'incoming_ringing' && !matchByNumber && digits) {
-      promptSaveAsLead(number);
+      if (_serverAutoCreated && _serverLeadId) {
+        // Server already created the lead — show a non-blocking toast
+        // with a tap-to-open shortcut. No 'Save as lead?' prompt.
+        if (typeof toast === 'function') {
+          toast('\uD83D\uDCDE Incoming call from new number \u2014 lead auto-created. Tap to open.', 'ok');
+        }
+      } else {
+        // Auto-lead is off (admin disabled CALLS_AUTOLEAD_INBOUND) or
+        // call_logEvent failed. Fall back to the original prompt so the
+        // rep can still save manually.
+        promptSaveAsLead(number);
+      }
     } else if (event === 'call_ended') {
       // Native broadcast fired — try to resume from the localStorage stash
       // (works even if WebView was destroyed). _resumePendingCall is idempotent.
