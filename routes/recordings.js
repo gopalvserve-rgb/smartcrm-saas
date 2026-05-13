@@ -548,6 +548,32 @@ async function api_call_lookup(token, phone) {
   // Hydrate lead with status + assignee names + last few remarks
   const status = lead.status_id ? await db.findById('statuses', lead.status_id).catch(() => null) : null;
   const owner  = lead.assigned_to ? await db.findById('users', lead.assigned_to).catch(() => null) : null;
+  // Last call timing — pulled from call_events (covers missed/no-recording too)
+  let lastCallAt = null, lastCallDur = null, lastCallDirection = null;
+  try {
+    const { rows } = await db.query(
+      `SELECT created_at, duration_s, direction FROM call_events
+        WHERE lead_id = $1 ORDER BY created_at DESC LIMIT 1`,
+      [lead.id]
+    );
+    if (rows[0]) {
+      lastCallAt = rows[0].created_at;
+      lastCallDur = rows[0].duration_s;
+      lastCallDirection = rows[0].direction;
+    }
+  } catch (_) {}
+  // Last remark/note for the headline
+  let lastRemark = null;
+  try {
+    const { rows } = await db.query(
+      `SELECT remark, created_at FROM remarks WHERE lead_id = $1
+        ORDER BY created_at DESC LIMIT 1`,
+      [lead.id]
+    );
+    if (rows[0]) {
+      lastRemark = { remark: rows[0].remark, created_at: rows[0].created_at };
+    }
+  } catch (_) {}
   return {
     match: true,
     kind: 'lead',
@@ -565,6 +591,10 @@ async function api_call_lookup(token, phone) {
     tags: lead.tags || '',
     is_mine: Number(lead.assigned_to) === Number(me.id),
     recent_remarks: await _recentLeadRemarks(lead.id, 3),
+    last_call_at: lastCallAt,
+    last_call_duration_s: lastCallDur,
+    last_call_direction: lastCallDirection,
+    last_remark: lastRemark,
     url: '/#/leads?id=' + lead.id
   };
 }

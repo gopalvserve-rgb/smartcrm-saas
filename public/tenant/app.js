@@ -12049,6 +12049,20 @@ function _caRenderRecent(rows) {
   const el = document.getElementById('ca-recent');
   if (!el) return;
   if (!rows || !rows.length) { el.innerHTML = '<div class="muted">No calls in this window.</div>'; return; }
+  window._caSelectedIds = window._caSelectedIds || new Set();
+  // Toolbar
+  const tb = h('div', { id: 'ca-recent-toolbar', style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap', alignItems: 'center', padding: '.4rem 0', borderBottom: '1px solid #e5e7eb', marginBottom: '.4rem' } },
+    h('button', { class: 'btn sm', onclick: () => { window._caSelectedIds = new Set(rows.filter(r => !r.lead_id).map(r => r.id)); _caRenderRecent(rows); } }, 'Select all unlinked'),
+    h('button', { class: 'btn sm ghost', onclick: () => { window._caSelectedIds = new Set(); _caRenderRecent(rows); } }, 'Clear selection'),
+    h('button', { class: 'btn sm primary', onclick: () => _caBulkConvert(rows) },
+      '\u2795 Add ' + window._caSelectedIds.size + ' as leads')
+  );
+  // Hide bulk button when nothing selected
+  if (!window._caSelectedIds.size) {
+    tb.lastChild.style.display = 'none';
+  }
+  el.innerHTML = '';
+  el.appendChild(tb);
   const dirIcon = (r) => {
     if (r.direction === 'missed' || (r.direction === 'in' && !r.recording_id && r.event === 'incoming_ringing')) return '\u274C';
     if (r.direction === 'in')  return '\uD83D\uDCF2';
@@ -12058,14 +12072,17 @@ function _caRenderRecent(rows) {
   const fmtDur = (s) => { s = Number(s) || 0; if (!s) return '—'; const m = Math.floor(s/60), ss = String(s%60).padStart(2,'0'); return m + ':' + ss; };
   const t = h('table', { class: 'table' });
   t.innerHTML = '<thead><tr>' +
-    '<th></th><th>Name / Phone</th><th>Rep</th><th>Direction</th><th>Duration</th><th>When</th><th></th>' +
+    '<th style="width:24px"></th><th></th><th>Name / Phone</th><th>Rep</th><th>Direction</th><th>Duration</th><th>When</th><th></th>' +
     '</tr></thead><tbody>' +
     rows.map(r => {
       const dur = Number(r.rec_duration || r.duration_s) || 0;
       const when = new Date(r.created_at).toLocaleString('en-IN');
       const direction = (r.direction === 'missed' || (r.direction === 'in' && !r.recording_id && r.event === 'incoming_ringing'))
         ? 'Missed' : (r.direction === 'in' ? 'Incoming' : (r.direction === 'out' ? 'Outgoing' : (r.direction || '')));
+      const canSelect = !r.lead_id;
+      const checked = window._caSelectedIds && window._caSelectedIds.has(r.id);
       return '<tr>' +
+        '<td>' + (canSelect ? '<input type="checkbox" data-ce-id="' + r.id + '" ' + (checked ? 'checked' : '') + ' />' : '') + '</td>' +
         '<td style="font-size:1.2rem">' + dirIcon(r) + '</td>' +
         '<td><strong>' + esc(r.lead_name || r.phone || '—') + '</strong>' +
           (r.lead_name && r.phone ? '<div class="muted" style="font-size:.75rem">' + esc(r.phone) + '</div>' : '') +
@@ -12079,9 +12096,39 @@ function _caRenderRecent(rows) {
         '</td>' +
         '</tr>';
     }).join('') + '</tbody>';
-  el.innerHTML = '';
   el.appendChild(t);
+  t.querySelectorAll('input[type=checkbox][data-ce-id]').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const id = Number(cb.getAttribute('data-ce-id'));
+      if (cb.checked) window._caSelectedIds.add(id);
+      else window._caSelectedIds.delete(id);
+      // Just update the count label without re-rendering the whole table
+      const btn = document.querySelector('#ca-recent-toolbar button.btn.sm.primary');
+      if (btn) {
+        btn.textContent = '\u2795 Add ' + window._caSelectedIds.size + ' as leads';
+        btn.style.display = window._caSelectedIds.size ? '' : 'none';
+      }
+    });
+  });
 }
+
+async function _caBulkConvert(allRows) {
+  const ids = Array.from(window._caSelectedIds || []);
+  if (!ids.length) return toast('Select at least one call first', 'err');
+  if (!confirm('Convert ' + ids.length + ' call(s) into leads?')) return;
+  try {
+    const r = await api('api_call_events_convertToLeads', ids);
+    const ok = (r && (r.created || 0)) || 0;
+    const skipped = (r && (r.skipped || 0)) || 0;
+    toast('Created ' + ok + ' lead' + (ok === 1 ? '' : 's') + (skipped ? ' \u00B7 ' + skipped + ' skipped' : ''), 'ok');
+    window._caSelectedIds = new Set();
+    // Reload the Call Activity data
+    if (typeof loadCallActivity === 'function') loadCallActivity();
+  } catch (e) {
+    toast(e.message, 'err');
+  }
+}
+
 
 function downloadCallActivityCsv() {
   const r = window._caData;
@@ -12603,12 +12650,13 @@ async function loadReports() {
   // date-filtered — "overdue" / "due today" / "open violation" are NOW
   // concepts, not historical. So they ignore the date range filter and
   // always show live counts for every visible rep.
-  const [summary, funnel, daily, teamFu, teamTat] = await Promise.all([
+  const [summary, funnel, daily, teamFu, teamTat, callActivityKpi] = await Promise.all([
     api('api_reports_summary', filters),
     api('api_reports_funnel',  filters),
     api('api_reports_daily',   filters),
     api('api_reports_followupsByUser').catch(() => []),
-    api('api_reports_tatViolationsByUser').catch(() => [])
+    api('api_reports_tatViolationsByUser').catch(() => []),
+    api('api_reports_callActivity', { from: filters.from, to: filters.to }).catch(() => null)
   ]);
 
   $('#rep-cards').innerHTML = '';
@@ -12617,6 +12665,20 @@ async function loadReports() {
       h('div', { class: 'stat-body' }, h('div', { class: 'stat-label' }, label), h('div', { class: 'stat-value' }, val || 0))
     ));
   });
+  // Call activity KPIs — same window as the filter — added 2026-05-13
+  if (callActivityKpi && callActivityKpi.summary) {
+    const s = callActivityKpi.summary;
+    const humanS = (sec) => { sec = Number(sec) || 0; const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60); return h ? (h + 'h ' + m + 'm') : (m + 'm'); };
+    const tile = (label, val, klass) => $('#rep-cards').appendChild(h('div', { class: `card stat ${klass||''}` },
+      h('div', { class: 'stat-body' }, h('div', { class: 'stat-label' }, label), h('div', { class: 'stat-value' }, String(val)))
+    ));
+    tile('\uD83D\uDCDE Calls', s.total_calls || 0, 'accent');
+    tile('\uD83D\uDCF2 Incoming', s.incoming || 0);
+    tile('\uD83D\uDCDE Outgoing', s.outgoing || 0);
+    tile('\u274C Missed', s.missed || 0, 'err');
+    tile('\uD83D\uDDE3\uFE0F Talk time', humanS(s.total_talk_s));
+    tile('\u23F1\uFE0F Avg call', humanS(s.avg_talk_s));
+  }
 
   // "By status" is now a bar chart with visible numbers — easier to read and
   // compare than a doughnut, especially with many statuses.
@@ -20121,6 +20183,15 @@ window.onLeadCRMCallEvent = async function (event, number) {
       } catch (_) { /* best effort, never block UI */ }
     }
 
+    // Whenever the phone rings, show the rich caller-ID overlay with
+    // last call date + last note + status etc. Non-blocking — fires
+    // even if a popup also follows for new numbers.
+    if (event === 'incoming_ringing' && digits) {
+      api('api_call_lookup', number).then(m => {
+        if (m && m.match) showCallerIdOverlay(m, number);
+      }).catch(() => {});
+    }
+
     if (event === 'incoming_ringing' && !matchByNumber && digits) {
       // Server may have just auto-created the lead (auto_created=true)
       // OR the native HTTP path raced us and created it first (in which
@@ -20282,6 +20353,106 @@ window.onLeadCRMSharedLead = function (text) {
     document.body.appendChild(modal);
   }, 300);
 };
+
+
+/**
+ * Caller-ID overlay — full-screen card shown on the WebView the
+ * moment an incoming call rings for a number we recognise. Shows
+ * the lead's name, status, owner, last call date, last note + a
+ * shortcut to open the lead. Auto-dismisses after 25 seconds.
+ */
+function showCallerIdOverlay(m, phoneNumber) {
+  try {
+    const old = document.getElementById('callerid-overlay');
+    if (old) old.remove();
+    const wrap = h('div', {
+      id: 'callerid-overlay',
+      style: {
+        position: 'fixed', inset: '0', zIndex: 99999,
+        background: 'rgba(15,23,42,0.55)',
+        display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
+        padding: '14vh 1rem 1rem'
+      }
+    });
+    const card = h('div', {
+      style: {
+        background: '#fff', borderRadius: '16px', maxWidth: '420px', width: '100%',
+        boxShadow: '0 22px 60px rgba(0,0,0,.25)', overflow: 'hidden'
+      }
+    });
+    const dot = m.status_color || '#6366f1';
+    const isCustomer = m.kind === 'customer';
+    card.appendChild(h('div', {
+      style: { padding: '.9rem 1rem', borderBottom: '1px solid #e2e8f0',
+        background: 'linear-gradient(135deg,#eef2ff,#fff)' }
+    },
+      h('div', { style: { fontSize: '.72rem', color: '#475569', fontWeight: 600, letterSpacing: '.04em' } },
+        '\uD83D\uDCDE INCOMING CALL'),
+      h('div', { style: { fontSize: '1.35rem', fontWeight: 700, marginTop: '.2rem' } }, m.name || phoneNumber || 'Caller'),
+      h('div', { style: { fontSize: '.78rem', color: '#64748b' } }, phoneNumber + (m.email ? ' \u00B7 ' + m.email : ''))
+    ));
+    const body = h('div', { style: { padding: '.8rem 1rem' } });
+    const row = (label, val, opts) => {
+      if (val === null || val === undefined || val === '') return null;
+      return h('div', { style: { display: 'flex', justifyContent: 'space-between', padding: '.25rem 0', borderBottom: '1px dashed #e5e7eb', fontSize: '.85rem' } },
+        h('span', { style: { color: '#64748b' } }, label),
+        h('span', { style: { fontWeight: 600, color: opts && opts.color ? opts.color : '#0f172a', textAlign: 'right' } }, String(val))
+      );
+    };
+    if (m.status) {
+      body.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', padding: '.25rem 0' } },
+        h('span', { style: { width: '8px', height: '8px', borderRadius: '50%', background: dot, display: 'inline-block' } }),
+        h('span', { style: { fontSize: '.85rem', fontWeight: 600 } }, m.status),
+        m.qualified ? h('span', { style: { fontSize: '.85rem', color: '#f59e0b' } }, ' \u2B50 Qualified') : null,
+        isCustomer ? h('span', { style: { fontSize: '.7rem', background: '#dcfce7', color: '#166534', padding: '.1rem .4rem', borderRadius: '8px', marginLeft: 'auto' } }, 'CUSTOMER') : null
+      ));
+    }
+    [
+      row('Owner', m.assigned_name || ''),
+      m.value ? row('Lead value', '\u20B9' + Number(m.value).toLocaleString('en-IN')) : null,
+      isCustomer && m.lifetime_value ? row('LTV', '\u20B9' + Number(m.lifetime_value).toLocaleString('en-IN')) : null,
+      isCustomer && m.total_purchases ? row('Purchases', m.total_purchases) : null,
+      isCustomer && m.next_renewal_at ? row('Renews', String(m.next_renewal_at).slice(0, 10)) : null,
+      m.next_followup_at ? row('Next follow-up', new Date(m.next_followup_at).toLocaleString('en-IN'), { color: '#dc2626' }) : null,
+      m.last_call_at ? row('Last call', new Date(m.last_call_at).toLocaleString('en-IN') + (m.last_call_duration_s ? ' (' + Math.floor(m.last_call_duration_s/60) + 'm ' + (m.last_call_duration_s%60) + 's)' : '')) : null,
+      m.tags ? row('Tags', m.tags) : null
+    ].forEach(x => { if (x) body.appendChild(x); });
+    if (m.last_remark && m.last_remark.remark) {
+      body.appendChild(h('div', { style: { marginTop: '.6rem', padding: '.55rem .65rem', background: '#fef3c7', borderLeft: '3px solid #f59e0b', borderRadius: '6px' } },
+        h('div', { style: { fontSize: '.7rem', color: '#92400e', fontWeight: 700, marginBottom: '.15rem' } },
+          '\uD83D\uDCDD LAST NOTE \u00B7 ' + new Date(m.last_remark.created_at).toLocaleDateString('en-IN')),
+        h('div', { style: { fontSize: '.85rem', color: '#1f2937', lineHeight: '1.35' } }, m.last_remark.remark)
+      ));
+    }
+    if (m.recent_remarks && m.recent_remarks.length) {
+      const stack = h('div', { style: { marginTop: '.55rem' } });
+      stack.appendChild(h('div', { style: { fontSize: '.72rem', color: '#475569', fontWeight: 700, marginBottom: '.2rem' } }, 'RECENT NOTES'));
+      m.recent_remarks.slice(0, 3).forEach(r => {
+        stack.appendChild(h('div', { style: { fontSize: '.82rem', padding: '.3rem .5rem', background: '#f8fafc', borderRadius: '6px', marginBottom: '.2rem', lineHeight: '1.3' } },
+          '\u2022 ' + String(r.remark || '').slice(0, 140)));
+      });
+      body.appendChild(stack);
+    }
+    card.appendChild(body);
+    const foot = h('div', { style: { display: 'flex', gap: '.5rem', padding: '.7rem 1rem', borderTop: '1px solid #e2e8f0', background: '#f8fafc' } });
+    foot.appendChild(h('button', { class: 'btn primary', style: { flex: 1, padding: '.55rem' },
+      onclick: () => {
+        wrap.remove();
+        if (m.kind === 'customer') { location.hash = '#/customers/' + m.id; }
+        else if (m.id) { try { openLeadModal(m.id); } catch (_) { location.hash = '#/leads?id=' + m.id; } }
+      }
+    }, '\uD83D\uDCC2 Open ' + (m.kind === 'customer' ? 'customer' : 'lead')));
+    foot.appendChild(h('button', { class: 'btn ghost', style: { padding: '.55rem .9rem' },
+      onclick: () => wrap.remove()
+    }, 'Dismiss'));
+    card.appendChild(foot);
+
+    wrap.appendChild(card);
+    wrap.addEventListener('click', (ev) => { if (ev.target === wrap) wrap.remove(); });
+    document.body.appendChild(wrap);
+    setTimeout(() => { try { wrap.remove(); } catch (_) {} }, 25000);
+  } catch (e) { console.warn('[callerid-overlay] failed:', e); }
+}
 
 function promptSaveAsLead(number) {
   const modal = h('div', { class: 'modal-backdrop' }, h('div', { class: 'modal' },
