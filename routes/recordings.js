@@ -53,7 +53,47 @@ async function api_call_logEvent(token, payload) {
   const me = await authUser(token);
   const p = payload || {};
   let lead = await _findLeadByPhone(p.phone);
-  const direction = p.direction || (p.event === 'incoming_ringing' ? 'in' : 'out');
+
+  // Direction inference. The mobile WebView bridge can't tell us
+  // whether a 'call_ended' was inbound or outbound (the native
+  // broadcast doesn't carry direction). So:
+  //   * explicit direction param wins
+  //   * 'incoming_ringing' is obviously inbound
+  //   * 'call_ended' / 'incoming_missed' → look at the last call_event
+  //     for this phone in the past 5 min. If we saw RINGING from this
+  //     number then this is an INBOUND call ending. Else default 'out'.
+  let direction = p.direction;
+  if (!direction) {
+    if (p.event === 'incoming_ringing') direction = 'in';
+    else if (p.phone) {
+      try {
+        const tail = String(p.phone).replace(/\D/g, '').slice(-10);
+        const { rows } = await db.query(
+          `SELECT direction, event FROM call_events
+            WHERE created_at >= NOW() - INTERVAL '5 minutes'
+              AND phone LIKE $1
+              AND direction IN ('in','missed','out')
+            ORDER BY created_at DESC LIMIT 1`,
+          ['%' + tail]
+        );
+        if (rows[0]) {
+          direction = (rows[0].direction === 'in' || rows[0].direction === 'missed') ? 'in' : 'out';
+        } else {
+          direction = 'out';
+        }
+      } catch (e) {
+        direction = 'out';
+      }
+    } else {
+      direction = 'out';
+    }
+  }
+  // Missed-call detection — if the call_ended event came in but no
+  // OFFHOOK happened (caller never picked up), the native side passes
+  // missed=true and direction='missed'. Honour that.
+  if (p.missed === true || p.missed === 'true' || String(p.missed) === '1') {
+    direction = 'missed';
+  }
 
   // ---- Auto-create-lead the MOMENT a call rings ----
   // Driven by the same tenant config the recording-upload handler uses,

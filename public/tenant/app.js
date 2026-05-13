@@ -20105,7 +20105,15 @@ window.onLeadCRMCallEvent = async function (event, number) {
     // knows the lead was already saved and can skip the manual prompt.
     let _serverLeadId = null, _serverAutoCreated = false;
     if (digits) {
-      const direction = (event === 'incoming_ringing') ? 'in' : 'out';
+      // Don't hardcode the direction — for 'incoming_ringing' it's
+      // obviously 'in', but for 'call_ended' we DON'T know whether
+      // this was inbound or outbound from the JS layer (the native
+      // broadcast doesn't carry it). Let the server infer the
+      // direction from the most-recent prior event on this phone.
+      // Hardcoding 'out' was the bug that prevented INBOUND completed
+      // calls + MISSED calls from auto-creating leads even though
+      // CALLS_AUTOLEAD_INBOUND was on.
+      const direction = (event === 'incoming_ringing') ? 'in' : undefined;
       try {
         const r = await api('api_call_logEvent', { phone: number, direction, event });
         if (r && r.lead_id) _serverLeadId = r.lead_id;
@@ -20114,24 +20122,31 @@ window.onLeadCRMCallEvent = async function (event, number) {
     }
 
     if (event === 'incoming_ringing' && !matchByNumber && digits) {
-      if (_serverAutoCreated && _serverLeadId) {
-        // Server already created the lead — show a non-blocking toast
-        // with a tap-to-open shortcut. No 'Save as lead?' prompt.
+      // Server may have just auto-created the lead (auto_created=true)
+      // OR the native HTTP path raced us and created it first (in which
+      // case THIS call returns auto_created=false but lead_id IS set
+      // because the second pass finds the now-existing lead). Either
+      // way, if a lead_id came back we're done — no popup.
+      if (_serverLeadId) {
         if (typeof toast === 'function') {
-          toast('\uD83D\uDCDE Incoming call from new number \u2014 lead auto-created. Tap to open.', 'ok');
+          toast(_serverAutoCreated
+            ? '\uD83D\uDCDE Incoming call from new number \u2014 lead auto-created. Tap to open.'
+            : '\uD83D\uDCDE Incoming call \u2014 lead linked.', 'ok');
         }
       } else {
-        // Auto-lead is off (admin disabled CALLS_AUTOLEAD_INBOUND) or
-        // call_logEvent failed. Fall back to the original prompt so the
-        // rep can still save manually.
+        // Server didn't create (mode=manual or INBOUND=0) and no lead
+        // exists for this number. Fall back to the manual prompt.
         promptSaveAsLead(number);
       }
     } else if (event === 'call_ended') {
       // Native broadcast fired — try to resume from the localStorage stash
       // (works even if WebView was destroyed). _resumePendingCall is idempotent.
       _resumePendingCall('call_ended_native');
-      if (!matchByNumber && digits) {
-        // No lead match anywhere — offer to save as new lead
+      // Only popup if the server didn't already handle it. If the
+      // native HTTP path created the lead on RINGING, _serverLeadId is
+      // set and we don't need to ask again. Same for missed-call
+      // auto-create (which goes through the inbound config).
+      if (!matchByNumber && digits && !_serverLeadId) {
         setTimeout(() => {
           if (!document.querySelector('.after-call-modal')) promptSaveAsLead(number);
         }, 1200);
