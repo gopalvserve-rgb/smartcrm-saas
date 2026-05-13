@@ -220,7 +220,20 @@ async function websiteHook(req, res) {
 
     // If we received Google Ads params, force source = "Google Ads" so it shows
     // up cleanly in reports/segmentation. Manual b.source overrides.
-    const source = b.source || (gclid || campaignId ? 'Google Ads' : 'Website');
+    // Source resolution priority:
+    //   1. explicit b.source (or aliases) wins
+    //   2. gclid/campaignId → 'Google Ads' (paid Google traffic)
+    //   3. utm_source / lead_source / origin / channel — if any inbound
+    //      attribution column has a value, use it (this is the path that
+    //      catches app-google-play, app-app-store, facebook, instagram,
+    //      organic, etc. — all the per-row sources webhooks send)
+    //   4. fallback to 'Website' (generic web form)
+    const _hookSrcAlias = b.source || b.lead_source || b.leadsource || b.origin
+                       || b.source_type || b.source_name || b.channel || b.referrer || '';
+    const source = String(_hookSrcAlias || '').trim()
+                   || (gclid || campaignId ? 'Google Ads' : '')
+                   || String(utmSource || '').trim()
+                   || 'Website';
 
     // Build meta_json — keep every Google Ads param + UTM aliases + landing URL
     const adsMeta = {};
