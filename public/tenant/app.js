@@ -20183,13 +20183,24 @@ window.onLeadCRMCallEvent = async function (event, number) {
       } catch (_) { /* best effort, never block UI */ }
     }
 
-    // Whenever the phone rings, show the rich caller-ID overlay with
-    // last call date + last note + status etc. Non-blocking — fires
-    // even if a popup also follows for new numbers.
+    // Whenever the phone rings, show the caller-ID overlay. For
+    // known callers we render the full rich card (lead info, last
+    // note, last call date). For unknown numbers we render a slim
+    // 'New caller' card so the rep at least sees something on screen.
+    // Toast as a fallback diagnostic so even if rendering fails the
+    // user can confirm the bridge is alive.
     if (event === 'incoming_ringing' && digits) {
+      if (typeof toast === 'function') toast('\uD83D\uDCDE Incoming: ' + number);
       api('api_call_lookup', number).then(m => {
-        if (m && m.match) showCallerIdOverlay(m, number);
-      }).catch(() => {});
+        if (m && m.match) {
+          showCallerIdOverlay(m, number);
+        } else {
+          showCallerIdOverlay({ match: false, kind: 'unknown', name: 'New caller', phone: number }, number);
+        }
+      }).catch(err => {
+        console.warn('[caller-id lookup failed]', err);
+        showCallerIdOverlay({ match: false, kind: 'unknown', name: 'Incoming call', phone: number }, number);
+      });
     }
 
     if (event === 'incoming_ringing' && !matchByNumber && digits) {
@@ -20361,6 +20372,25 @@ window.onLeadCRMSharedLead = function (text) {
  * the lead's name, status, owner, last call date, last note + a
  * shortcut to open the lead. Auto-dismisses after 25 seconds.
  */
+
+// Diagnostic — call from devtools to verify the overlay renders.
+window.testCallerIdOverlay = function () {
+  showCallerIdOverlay({
+    match: true, kind: 'lead', id: 0,
+    name: 'Test Caller', phone: '9876543210', email: 'test@example.com',
+    status: 'Hot \u00B7 In progress', status_color: '#f59e0b',
+    assigned_name: 'You', value: 250000, qualified: true,
+    last_call_at: new Date(Date.now() - 86400000 * 3).toISOString(),
+    last_call_duration_s: 195,
+    last_call_direction: 'in',
+    last_remark: { remark: 'Wants demo on Monday. Decision-maker confirmed. Budget approved.', created_at: new Date(Date.now() - 86400000 * 2).toISOString() },
+    recent_remarks: [
+      { remark: 'Asked for quotation.' },
+      { remark: 'Initial call, interested in enterprise plan.' }
+    ],
+    tags: 'hot, vip'
+  }, '+91 98765 43210');
+};
 function showCallerIdOverlay(m, phoneNumber) {
   try {
     const old = document.getElementById('callerid-overlay');
