@@ -71,6 +71,7 @@ const ROUTE_FILES = [
   'modules',
   'crmCopilot',
   'waBotFlows',
+  'qrForms',
 ];
 
 const API = {};

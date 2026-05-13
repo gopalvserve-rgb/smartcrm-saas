@@ -13609,6 +13609,7 @@ VIEWS.admin = async (view) => {
       { id: 'fb',           label: '🌍 Facebook' },
       { id: 'api',          label: '🔌 Website API' },
       { id: 'integrations', label: '🧩 Integrations' },
+      { id: 'qrforms',      label: '📲 QR Lead Forms' },
       { id: 'whlogs',       label: '📡 Webhook logs' },
       { id: 'recdiag',      label: '🎧 Recording diagnostics' },
       { id: 'pendingcalls', label: '📞 Pending calls' },
@@ -13703,6 +13704,7 @@ async function showAdminTab(id) {
     if (id === 'menuorder') body.replaceChildren(await adminMenuOrder());
     if (id === 'projstages') body.replaceChildren(await adminProjectStages());
     if (id === 'integrations') body.replaceChildren(await adminIntegrations());
+    if (id === 'qrforms')     body.replaceChildren(await adminQrForms());
     if (id === 'whlogs')      body.replaceChildren(await adminWebhookLogs());
     if (id === 'recdiag')     body.replaceChildren(await adminRecordingDiag());
     if (id === 'pendingcalls') body.replaceChildren(await adminPendingCalls());
@@ -22981,4 +22983,160 @@ window.checkPushDiag = async function () {
     if (typeof toast === 'function') toast('Diag failed: ' + e.message, 'err');
   }
 };
+
+
+/* ---------------- 📲 QR Lead Forms admin tab ---------------- */
+async function adminQrForms() {
+  const wrap = h('div', {});
+  wrap.appendChild(h('h3', {}, '📲 QR Lead Forms'));
+  wrap.appendChild(h('p', { class: 'muted' },
+    'Create branded public forms with a QR code. Print or share the QR on business cards, event posters, or WhatsApp — anyone who scans it lands on a mobile-friendly form, and submissions arrive as leads in CRM tagged with this form’s source label.'));
+
+  const list = h('div', {});
+  const reload = async () => {
+    list.innerHTML = '<div class="loading">Loading…</div>';
+    try {
+      const rows = await api('api_qrForms_list');
+      list.innerHTML = '';
+      if (!rows.length) {
+        list.appendChild(h('p', { class: 'muted' }, 'No QR forms yet. Click "+ New form" to create one.'));
+        return;
+      }
+      const base = (CRM.config && CRM.config.base_url) || location.origin;
+      const tslug = (window.TENANT_SLUG || '').toLowerCase();
+      const tbl = h('table', { class: 'mini-table', style: { width: '100%' } });
+      tbl.innerHTML = '<thead><tr><th>Name</th><th>Public URL</th><th>Source label</th><th>Submissions</th><th>Status</th><th></th></tr></thead>';
+      const tb = h('tbody', {});
+      rows.forEach(r => {
+        const url = base + '/t/' + tslug + '/form/' + r.slug;
+        const tr = h('tr', {},
+          h('td', {}, h('b', {}, r.name)),
+          h('td', { style: { fontSize: '.75rem' } },
+            h('a', { href: url, target: '_blank', rel: 'noopener' }, url)
+          ),
+          h('td', {}, r.source || ''),
+          h('td', { style: { textAlign: 'center' } }, String(r.submissions || 0)),
+          h('td', {},
+            r.is_active ? h('span', { style: { color: '#16a34a' } }, '● Active')
+                        : h('span', { class: 'muted' }, 'Inactive')
+          ),
+          h('td', {},
+            h('button', { class: 'btn sm', onclick: () => openQrFormModal(r, reload) }, 'Edit'),
+            ' ',
+            h('button', { class: 'btn sm', onclick: () => openQrPreviewModal(r, url) }, '📲 QR'),
+            ' ',
+            h('button', { class: 'btn sm danger', onclick: async () => {
+              if (!await confirmDialog('Delete this form? Existing leads keep their source attribution.')) return;
+              try { await api('api_qrForms_delete', r.id); toast('Deleted'); reload(); }
+              catch (e) { toast(e.message, 'err'); }
+            } }, '🗑')
+          )
+        );
+        tb.appendChild(tr);
+      });
+      tbl.appendChild(tb);
+      list.appendChild(tbl);
+    } catch (e) {
+      list.innerHTML = '<div class="error-box">' + esc(e.message) + '</div>';
+    }
+  };
+  wrap.appendChild(h('button', { class: 'btn primary', style: { margin: '.5rem 0' }, onclick: () => openQrFormModal(null, reload) }, '+ New form'));
+  wrap.appendChild(list);
+  reload();
+  return wrap;
+}
+
+function openQrFormModal(form, onSaved) {
+  const isNew = !form;
+  const f = form || { name: '', title: 'Tell us about yourself', subtitle: "We'll get in touch shortly.",
+                       fields_json: '["name","phone","email"]', source: '', thank_you_text: "Thanks! We'll be in touch shortly.",
+                       is_active: 1 };
+  const fields = (typeof f.fields_json === 'string' ? JSON.parse(f.fields_json) : f.fields_json) || ['name','phone','email'];
+  const slug = h('input', { type: 'text', value: f.slug || '', placeholder: 'auto-generated from name', style: { width: '100%' } });
+  const name = h('input', { type: 'text', value: f.name || '', placeholder: 'e.g. Trade Show 2026', style: { width: '100%' } });
+  const title = h('input', { type: 'text', value: f.title || '', style: { width: '100%' } });
+  const subtitle = h('input', { type: 'text', value: f.subtitle || '', style: { width: '100%' } });
+  const source = h('input', { type: 'text', value: f.source || '', placeholder: 'e.g. Trade Show Mumbai 2026', style: { width: '100%' } });
+  const thanks = h('input', { type: 'text', value: f.thank_you_text || '', style: { width: '100%' } });
+  const isActive = h('input', { type: 'checkbox', checked: Number(f.is_active) !== 0 ? 'checked' : null });
+  const fieldChecks = {};
+  ['name','phone','email','company','city','message'].forEach(fld => {
+    fieldChecks[fld] = h('input', { type: 'checkbox', value: fld, checked: fields.includes(fld) ? 'checked' : null, disabled: fld === 'phone' ? 'disabled' : null });
+  });
+  const modal = h('div', { class: 'modal-backdrop', onclick: (e) => { if (e.target === modal) modal.remove(); } },
+    h('div', { class: 'modal modal-lg' },
+      h('div', { class: 'modal-head' },
+        h('h3', {}, (isNew ? '+ New' : 'Edit') + ' QR form'),
+        h('button', { class: 'btn icon', onclick: () => modal.remove() }, '✕')
+      ),
+      h('div', { class: 'modal-body' },
+        h('label', {}, 'Form name (internal)', name),
+        h('label', {}, 'URL slug', slug),
+        h('label', {}, 'Heading (shown on form)', title),
+        h('label', {}, 'Sub-heading', subtitle),
+        h('label', {}, 'Source label (saved on every lead)', source),
+        h('label', {}, 'Thank-you message', thanks),
+        h('div', { style: { marginTop: '.6rem' } },
+          h('div', { style: { fontWeight: 600, marginBottom: '.3rem' } }, 'Fields to show:'),
+          ...['name','phone','email','company','city','message'].map(fld =>
+            h('label', { style: { display: 'inline-block', marginRight: '1rem' } },
+              fieldChecks[fld], ' ' + fld + (fld === 'phone' ? ' (required)' : '')
+            )
+          )
+        ),
+        h('label', { style: { marginTop: '.6rem', display: 'block' } }, isActive, ' Active (uncheck to disable the form)')
+      ),
+      h('div', { class: 'modal-foot' },
+        h('button', { class: 'btn', onclick: () => modal.remove() }, 'Cancel'),
+        h('button', { class: 'btn primary', onclick: async () => {
+          if (!name.value.trim()) return toast('Form name required', 'err');
+          const checkedFields = Object.keys(fieldChecks).filter(k => fieldChecks[k].checked);
+          if (!checkedFields.includes('phone')) checkedFields.push('phone');
+          try {
+            await api('api_qrForms_save', {
+              id: f.id || 0,
+              name: name.value.trim(),
+              slug: slug.value.trim(),
+              title: title.value.trim(),
+              subtitle: subtitle.value.trim(),
+              fields: checkedFields,
+              source: source.value.trim() || ('QR — ' + name.value.trim()),
+              thank_you_text: thanks.value.trim(),
+              is_active: isActive.checked ? 1 : 0
+            });
+            toast('Saved');
+            modal.remove();
+            if (onSaved) onSaved();
+          } catch (e) { toast(e.message, 'err'); }
+        } }, 'Save')
+      )
+    )
+  );
+  document.body.appendChild(modal);
+}
+
+function openQrPreviewModal(form, url) {
+  // QR via Google Chart API (no external lib needed; SVG fallback if blocked)
+  const qrSrc = 'https://api.qrserver.com/v1/create-qr-code/?size=320x320&data=' + encodeURIComponent(url);
+  const modal = h('div', { class: 'modal-backdrop', onclick: (e) => { if (e.target === modal) modal.remove(); } },
+    h('div', { class: 'modal' },
+      h('div', { class: 'modal-head' },
+        h('h3', {}, '📲 QR — ' + form.name),
+        h('button', { class: 'btn icon', onclick: () => modal.remove() }, '✕')
+      ),
+      h('div', { class: 'modal-body', style: { textAlign: 'center' } },
+        h('img', { src: qrSrc, alt: 'QR', style: { maxWidth: '320px', width: '100%', height: 'auto', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '8px', background: '#fff' } }),
+        h('div', { class: 'muted', style: { marginTop: '.5rem', wordBreak: 'break-all', fontSize: '.8rem' } }, url),
+        h('div', { style: { marginTop: '1rem' } },
+          h('button', { class: 'btn sm', onclick: () => { navigator.clipboard.writeText(url); toast('URL copied'); } }, '📋 Copy URL'),
+          ' ',
+          h('a', { class: 'btn sm', href: qrSrc, download: form.slug + '-qr.png', target: '_blank', rel: 'noopener' }, '⬇ Download PNG'),
+          ' ',
+          h('a', { class: 'btn sm', href: url, target: '_blank', rel: 'noopener' }, '🌐 Open form')
+        )
+      )
+    )
+  );
+  document.body.appendChild(modal);
+}
 
