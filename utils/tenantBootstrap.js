@@ -119,7 +119,13 @@ const SCHEMA_MIGRATIONS = [
     CREATE INDEX IF NOT EXISTS idx_push_subs_user ON push_subscriptions(user_id);
   ` },
   // Webhook event log — captures every /hook/* inbound for admin debugging.
-  { name: '2026_05_webhook_logs_table', sql: `
+  { name: '2026_05_users_ai_audit_enabled', sql: `
+    -- Per-user toggle for auto AI call-summary processing. ON by default
+    -- so existing tenants keep their current behaviour. Admin can flip
+    -- to 0 for any user to skip auto-audit (manual button still works).
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_audit_enabled INTEGER NOT NULL DEFAULT 1;
+  ` },
+    { name: '2026_05_webhook_logs_table', sql: `
     CREATE TABLE IF NOT EXISTS webhook_logs (
       id            SERIAL PRIMARY KEY,
       path          TEXT NOT NULL,

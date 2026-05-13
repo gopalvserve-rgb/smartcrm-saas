@@ -336,12 +336,21 @@ async function _tick() {
   if (!(await _key()) && !demo.on) return; // No key + not demo — nothing to do
   _processing = true;
   try {
+    // Join on users so we can skip recordings whose owner has the
+    // per-user 'ai_audit_enabled' toggle turned off. Admin sets this
+    // on Settings → Users → toggle. ai_audit_enabled defaults to 1 so
+    // existing behaviour is preserved; only explicit-OFF skips.
+    // COALESCE handles the case where the user row is missing or the
+    // column hasn't been migrated yet on an old tenant.
     const { rows } = await db.query(
-      `SELECT id FROM lead_recordings
-       WHERE ai_processed_at IS NULL
-         AND (ai_error IS NULL OR ai_error = '')
-       ORDER BY created_at ASC
-       LIMIT 5`
+      `SELECT r.id
+         FROM lead_recordings r
+         LEFT JOIN users u ON u.id = r.user_id
+        WHERE r.ai_processed_at IS NULL
+          AND (r.ai_error IS NULL OR r.ai_error = '')
+          AND COALESCE(u.ai_audit_enabled, 1) = 1
+        ORDER BY r.created_at ASC
+        LIMIT 5`
     );
     for (const r of rows) {
       try {

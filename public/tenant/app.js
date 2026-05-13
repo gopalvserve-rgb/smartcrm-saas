@@ -4820,6 +4820,30 @@ function renderRecordingItem(r) {
     style: { fontSize: '.75rem', color: '#64748b', marginLeft: '.5rem', textDecoration: 'underline' },
     title: 'Download the original recording file'
   }, '⬇ Download');
+  // 🤖 AI Audit this call — manual on-demand processing. Always visible
+  // so admins can force a fresh Gemini call even when ai_processed_at
+  // is already set. Useful when the user wants the AI to re-listen
+  // after the rep added context, or to bypass the per-user toggle.
+  const _auditBtn = h('button', {
+    class: 'btn sm',
+    style: { marginLeft: '.5rem', background: '#eef2ff', color: '#4338ca', borderColor: '#a5b4fc', fontSize: '.75rem', padding: '2px 8px' },
+    title: 'Force Gemini to (re-)transcribe + summarise this call now',
+    onclick: async () => {
+      _auditBtn.disabled = true;
+      _auditBtn.textContent = '🤖 Auditing…';
+      try {
+        await api('api_recording_aiReprocess', r.id);
+        toast('AI audit started — refreshing in a few seconds', 'ok');
+        // Re-load the AI block so the polling loop picks up the new state
+        if (aiBlock) {
+          aiBlock.innerHTML = '<div class="ai-pending">🤖 Re-auditing…</div>';
+          setTimeout(() => loadRecordingAI(r.id, aiBlock, 0), 4000);
+        }
+      } catch (e) { toast('Audit failed: ' + e.message, 'err'); }
+      _auditBtn.disabled = false;
+      _auditBtn.textContent = '🤖 AI Audit';
+    }
+  }, '🤖 AI Audit');
   // When this audio starts playing, pause every OTHER recording on the
   // page. Without this, two recordings can play simultaneously and the
   // admin can't tell which is which.
@@ -4856,7 +4880,8 @@ function renderRecordingItem(r) {
       h('span', { class: 'rec-dir' }, dirIcon),
       h('b', {}, r.lead_name || r.phone || '—'),
       h('span', { class: 'muted' }, ' · ' + (r.rep_name ? r.rep_name + ' · ' : '') + fmtDate(r.created_at, 'relative') + ' · ' + mm + ':' + ss),
-      _dlLink
+      _dlLink,
+      _auditBtn
     ),
     audio,
     aiBlock
@@ -17236,6 +17261,7 @@ VIEWS.users = async (view) => {
         h('th', {}, 'Reports To'),
         h('th', {}, 'Department'),
         h('th', { title: 'Pause sends ZERO future leads to this user. Existing leads stay assigned. Click to toggle.' }, 'Lead routing'),
+        h('th', { title: 'When OFF, the AI Call Audit worker SKIPS this user\'s recordings during the automatic 60s tick. Manual 🤖 AI Audit button on each recording still works.' }, 'AI audit'),
         h('th', {})
       )),
       h('tbody', {}, ...users.map(u => h('tr', { style: u.paused_for_leads ? { background: '#fffbeb' } : {} },
@@ -17276,6 +17302,42 @@ VIEWS.users = async (view) => {
               } catch (e) { toast(e.message, 'err'); wrap.disabled = false; }
             };
             return wrap;
+          })()
+        ),
+        // AI audit on/off toggle — admin/manager only. Default ON.
+        h('td', {},
+          (() => {
+            const isOn = Number(u.ai_audit_enabled != null ? u.ai_audit_enabled : 1) === 1;
+            if (!['admin','manager'].includes(me.role)) {
+              return h('span', {
+                class: 'muted',
+                style: { fontSize: '.78rem' }
+              }, isOn ? '🤖 ON' : '⛔ OFF');
+            }
+            const btn = h('button', {
+              class: 'btn small ghost',
+              title: isOn
+                ? 'AI auto-audits this user\'s recordings (60s tick). Click to disable.'
+                : 'AI auto-audit is OFF for this user. Manual 🤖 AI Audit button still works. Click to enable.',
+              style: {
+                background: isOn ? '#eef2ff' : '#f1f5f9',
+                color:      isOn ? '#4338ca' : '#475569',
+                border:     '1px solid ' + (isOn ? '#a5b4fc' : '#cbd5e1'),
+                fontWeight: 600, padding: '.2rem .6rem', borderRadius: '999px', whiteSpace: 'nowrap'
+              }
+            }, isOn ? '🤖 ON' : '⛔ OFF');
+            btn.onclick = async (ev) => {
+              ev.stopPropagation();
+              const next = !isOn;
+              btn.disabled = true; btn.textContent = '⏳';
+              try {
+                await api('api_users_setAiAudit', u.id, next);
+                u.ai_audit_enabled = next ? 1 : 0;
+                toast(next ? 'AI audit enabled for ' + u.name : 'AI audit disabled for ' + u.name, 'ok');
+                navigateTo('users');
+              } catch (e) { toast(e.message, 'err'); btn.disabled = false; btn.textContent = isOn ? '🤖 ON' : '⛔ OFF'; }
+            };
+            return btn;
           })()
         ),
         h('td', { style: { whiteSpace: 'nowrap' } },

@@ -20,7 +20,8 @@ async function api_users_list(token) {
       monthly_lead_cap: Number(u.monthly_lead_cap) || 0,
       calendly_url: u.calendly_url || '',
       autodial_on: Number(u.autodial_on != null ? u.autodial_on : 1) ? 1 : 0,
-      paused_for_leads: !!u.paused_for_leads
+      paused_for_leads: !!u.paused_for_leads,
+      ai_audit_enabled: Number(u.ai_audit_enabled != null ? u.ai_audit_enabled : 1) ? 1 : 0
     }));
 }
 
@@ -274,8 +275,27 @@ async function api_users_regenerateCalendlyWebhook(token) {
   return { token: t };
 }
 
+
+/**
+ * Toggle the per-user AI call-audit setting. When OFF, the SaaS-aware
+ * AI Call Summary worker SKIPS that user's recordings during its 60s
+ * tick — but the manual 'AI Audit this call' button on each recording
+ * still works (admin override).
+ */
+async function api_users_setAiAudit(token, userId, enabled) {
+  const me = await authUser(token);
+  if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin or Manager only');
+  const id = Number(userId);
+  if (!id) throw new Error('userId required');
+  // Defensive: ensure the column exists (covers tenants whose bootstrap
+  // hasn't run for some reason).
+  try { await db.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_audit_enabled INTEGER NOT NULL DEFAULT 1'); } catch (_) {}
+  await db.query('UPDATE users SET ai_audit_enabled = $1 WHERE id = $2', [enabled ? 1 : 0, id]);
+  return { ok: true, user_id: id, ai_audit_enabled: enabled ? 1 : 0 };
+}
+
 module.exports = {
-  api_users_list, api_users_create, api_users_update,
+  api_users_list, api_users_create, api_users_update, api_users_setAiAudit,
   api_users_updateSelf, api_users_save, api_users_resetPassword,
   api_users_delete,
   api_users_calendlyWebhook, api_users_regenerateCalendlyWebhook
