@@ -1195,6 +1195,26 @@ VIEWS.dashboard = async (view) => {
   catch (e) { layoutResp = { widgets: DEFAULT_DASH_LAYOUT, is_default: true }; }
   let widgets = (layoutResp.widgets || DEFAULT_DASH_LAYOUT).slice();
 
+  // ONE-TIME auto-add of call-activity widgets for users whose saved
+  // layout pre-dates the call widgets. We tag the user in localStorage
+  // so we never re-inject (lets them remove widgets if they want).
+  try {
+    const injKey = '_callWidgetsAutoInjected_' + ((CRM.user && CRM.user.id) || 'anon');
+    if (!localStorage.getItem(injKey)) {
+      const has = (t) => widgets.some(w => w.type === t);
+      const additions = [];
+      if (!has('call_activity_summary')) additions.push({ id: 'auto-call-sum-' + Date.now(), type: 'call_activity_summary', size: 'medium' });
+      if (!has('call_activity_topusers')) additions.push({ id: 'auto-call-top-' + Date.now(), type: 'call_activity_topusers', size: 'medium' });
+      if (!has('call_activity_recent')) additions.push({ id: 'auto-call-rec-' + Date.now(), type: 'call_activity_recent', size: 'wide' });
+      if (additions.length) {
+        widgets = widgets.concat(additions);
+        // Persist so the auto-add sticks across reloads
+        try { await api('api_dashboard_save', { widgets }); } catch (_) {}
+      }
+      localStorage.setItem(injKey, '1');
+    }
+  } catch (_) {}
+
   // Header bar with "✨ Customize" / "Done"
   const head = h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '.6rem' } },
     h('h2', { style: { margin: 0 } }, '🏠 Dashboard'),
