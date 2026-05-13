@@ -414,6 +414,7 @@ async function api_admin_wipeHrData(token, categories, confirm) {
 const _whl = require('../utils/webhookLogger');
 async function api_admin_webhookLogs_list(token, opts) { return _whl.api_admin_webhookLogs_list(token, opts); }
 async function api_admin_webhookLogs_get(token, id)    { return _whl.api_admin_webhookLogs_get(token, id); }
+async function api_admin_webhookLogs_backfillSources(token, opts) { return _whl.api_admin_webhookLogs_backfillSources(token, opts); }
 
 // Recording transcode diagnostic log (admin)
 const _rdiag = require('../utils/recordingDiag');
