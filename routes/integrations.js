@@ -360,14 +360,15 @@ const KNOWN_KEYS_BY_SOURCE = {
   googleads:     ['user_column_data', 'lead_id', 'campaign_id', 'form_id'],
   wordpress:     ['name', 'first_name', 'last_name', 'email', 'phone', 'message', 'subject', 'company'],
   googleforms:   ['name', 'phone', 'email', 'message', 'company', 'city'],
-  pabbly:        ['name', 'phone', 'email', 'company', 'city', 'message', 'source'],
-  zapier:        ['name', 'phone', 'email', 'company', 'city', 'message', 'source'],
-  make:          ['name', 'full_name', 'contact_name', 'phone', 'mobile', 'email', 'company', 'organization', 'city', 'message', 'enquiry', 'source', 'source_ref'],
-  generic:       ['name', 'phone', 'email', 'company', 'city', 'state', 'address', 'message', 'source', 'source_ref', 'product', 'value']
+  pabbly:        ['name', 'phone', 'email', 'company', 'city', 'message', 'source', 'utm_source', 'utm_medium', 'utm_campaign', 'gclid'],
+  zapier:        ['name', 'phone', 'email', 'company', 'city', 'message', 'source', 'utm_source', 'utm_medium', 'utm_campaign', 'gclid'],
+  make:          ['name', 'full_name', 'contact_name', 'phone', 'mobile', 'email', 'company', 'organization', 'city', 'message', 'enquiry', 'source', 'source_ref', 'utm_source', 'utm_medium', 'utm_campaign', 'gclid'],
+  website:       ['name', 'phone', 'email', 'company', 'city', 'state', 'address', 'message', 'source', 'source_ref', 'product', 'value', 'tags', 'campaign_name_new', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'gclid', 'gad_campaignid'],
+  generic:       ['name', 'phone', 'email', 'company', 'city', 'state', 'address', 'message', 'source', 'source_ref', 'product', 'value', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'gclid', 'gad_campaignid']
 };
 
 // Known target CRM fields — used by the mapping UI dropdown.
-const CRM_FIELDS = ['name','phone','email','company','city','state','address','source','source_ref','notes','product','value','tags'];
+const CRM_FIELDS = ['name','phone','email','company','city','state','address','source','source_ref','notes','product','value','tags','utm_source','utm_medium','utm_campaign','utm_term','utm_content','gclid','gad_campaignid'];
 
 async function _ensureLeadSourceMappingTable() {
   try {
