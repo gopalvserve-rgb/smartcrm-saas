@@ -380,6 +380,7 @@ button[type=submit]:disabled { opacity: .55; cursor: progress; }
       <input type="hidden" name="utm_term"     value="${_esc(prefill.utm_term || '')}">
       <input type="hidden" name="utm_content"  value="${_esc(prefill.utm_content || '')}">
       <input type="hidden" name="gclid"        value="${_esc(prefill.gclid || '')}">
+      <input type="hidden" name="_lp"          value="${_esc(prefill.lp || '')}">
       <button type="submit" id="sb">Submit</button>
     </form>
     <div id="ok" class="ok" style="display:none">${_esc(form.success_message || 'Thank you!')}</div>
@@ -513,6 +514,17 @@ async function expressSubmitForm(req, res) {
        req.body.utm_term || null, req.body.utm_content || null, req.body.gclid || null, leadId]
     );
     await db.query(`UPDATE forms SET submission_count = submission_count + 1 WHERE id = $1`, [form.id]);
+
+    // Phase-2: landing-page conversion attribution. The page builder appends
+    // ?lp=<page_slug> to the iframe URL when embedding this form. The form
+    // page passes it through as a hidden field on submit so we can bump
+    // landing_pages.conversion_count for the page that drove the lead.
+    try {
+      const lpSlug = String((req.body && req.body._lp) || req.query.lp || '').trim();
+      if (lpSlug) {
+        await db.query(`UPDATE landing_pages SET conversion_count = conversion_count + 1 WHERE slug = $1`, [lpSlug]);
+      }
+    } catch (_) {}
 
     // Fire automations + nurture auto-enroll
     if (leadId) {

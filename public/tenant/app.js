@@ -22971,6 +22971,7 @@ async function adminPages() {
 
   wrap.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', marginBottom: '1rem' } },
     h('h3', { style: { margin: 0, flex: 1 } }, '🌐 Landing Pages'),
+    h('button', { class: 'btn', onclick: () => openPageTemplatePicker(() => showAdminTab('pages')) }, '📋 Use template'),
     h('button', { class: 'btn primary', onclick: () => openPageEditor(null, forms, () => showAdminTab('pages')) }, '+ New page')
   ));
 
@@ -22995,6 +22996,7 @@ async function adminPages() {
             (p.section_count || 0) + ' sections · ' + p.view_count + ' views · ' + p.conversion_count + ' conversions')
         ),
         h('a', { class: 'btn sm ghost', href: publicUrl, target: '_blank' }, '↗ View'),
+        h('button', { class: 'btn sm', onclick: () => openPagePreview(publicUrl, p.name) }, '👁 Preview'),
         h('button', { class: 'btn sm', onclick: () => { navigator.clipboard.writeText(publicUrl); toast('URL copied'); } }, '📋 URL'),
         h('button', { class: 'btn sm', onclick: () => openPageEditor(p.id, forms, () => showAdminTab('pages')) }, '✎ Edit'),
         h('button', { class: 'btn sm', onclick: async () => { try { await api('api_pages_clone', p.id); toast('Cloned'); showAdminTab('pages'); } catch (e) { toast(e.message, 'err'); } } }, '⎘ Clone'),
@@ -23242,6 +23244,78 @@ async function openPageEditor(id, forms, onClose) {
         h('div', { style: { marginTop: '.5rem' } }, addBox)
       ),
       h('div', { class: 'modal-footer' }, saveBtn)
+    )
+  );
+  document.body.appendChild(modal);
+}
+
+
+
+// ─────────────────────────────────────────────────────────────────────
+// Landing Page — Phase 2: template picker + live preview modal
+// ─────────────────────────────────────────────────────────────────────
+async function openPageTemplatePicker(onClose) {
+  const templates = await api('api_pages_templates').catch(() => []);
+  const modal = h('div', { class: 'modal-wrap' },
+    h('div', { class: 'modal lg' },
+      h('div', { class: 'modal-header' },
+        h('h3', {}, '📋 Pick an industry template'),
+        h('button', { class: 'modal-close', onclick: () => modal.remove() }, '×')
+      ),
+      h('div', { class: 'modal-body' },
+        h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+          'Each template ships with a complete page — hero, features, embedded form, testimonials, etc. — pre-written for that industry. Pick one, customise the headline + colors, embed your form, publish.'),
+        h('div', { class: 'lp-tpl-grid' },
+          ...templates.map(t => h('div', { class: 'card', style: { padding: '1rem', cursor: 'pointer', borderLeft: '4px solid ' + (t.theme_color || '#4f46e5') }, onclick: async () => {
+            const nm = prompt('Name this new page:', t.name);
+            if (!nm) return;
+            try {
+              await api('api_pages_createFromTemplate', { template_id: t.id, name: nm });
+              toast('Page created from template (inactive — review + publish)', 'ok');
+              modal.remove();
+              if (onClose) onClose();
+            } catch (e) { toast(e.message, 'err'); }
+          } },
+            h('div', { style: { fontWeight: 600, fontSize: '1rem' } }, t.name),
+            h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } }, t.industry + ' · ' + t.section_count + ' sections'),
+            h('p', { style: { fontSize: '.85rem', marginTop: '.5rem', marginBottom: 0 } }, t.description)
+          ))
+        )
+      )
+    )
+  );
+  document.body.appendChild(modal);
+}
+
+function openPagePreview(url, name) {
+  const sizes = [
+    { label: '📱 Mobile (375)', w: 375 },
+    { label: '📱 Mobile L (414)', w: 414 },
+    { label: '📋 Tablet (768)', w: 768 },
+    { label: '💻 Desktop', w: 1100 }
+  ];
+  let currentW = 1100;
+  const frameWrap = h('div', { style: { padding: '1rem', background: '#0f172a', display: 'flex', justifyContent: 'center', alignItems: 'flex-start', minHeight: '60vh' } });
+  const frame = h('iframe', { src: url, style: { width: '1100px', maxWidth: '100%', height: '70vh', border: 'none', background: '#fff', borderRadius: '4px' } });
+  frameWrap.appendChild(frame);
+  function setW(w) {
+    currentW = w;
+    frame.style.width = w + 'px';
+    bar.querySelectorAll('button').forEach(b => b.classList.toggle('primary', Number(b.dataset.w) === w));
+  }
+  const bar = h('div', { style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap', padding: '.5rem 1rem', background: '#1e293b' } },
+    ...sizes.map(s => h('button', { class: 'btn sm', 'data-w': s.w, onclick: () => setW(s.w) }, s.label))
+  );
+  setTimeout(() => setW(1100), 0);
+  const modal = h('div', { class: 'modal-wrap' },
+    h('div', { class: 'modal', style: { maxWidth: '95vw', width: '95vw' } },
+      h('div', { class: 'modal-header' },
+        h('h3', {}, '👁 Preview · ' + (name || '')),
+        h('a', { class: 'btn sm', href: url, target: '_blank', style: { marginLeft: 'auto', marginRight: '.5rem' } }, '↗ Open in tab'),
+        h('button', { class: 'modal-close', onclick: () => modal.remove() }, '×')
+      ),
+      bar,
+      frameWrap
     )
   );
   document.body.appendChild(modal);

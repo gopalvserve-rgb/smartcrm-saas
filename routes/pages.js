@@ -202,7 +202,8 @@ function _renderSection(s, ctx) {
   if (t === 'form') {
     const slug = String(s.form_slug || '').trim();
     if (!slug) return '';
-    const formUrl = (ctx.tenantSlug ? '/t/' + ctx.tenantSlug : '') + '/f/' + slug;
+    const lpParam = ctx.pageSlug ? '?lp=' + encodeURIComponent(ctx.pageSlug) : '';
+    const formUrl = (ctx.tenantSlug ? '/t/' + ctx.tenantSlug : '') + '/f/' + slug + lpParam;
     return `<section class="lp-form" id="contact"><div class="lp-container">
       ${s.heading ? `<h2>${_esc(s.heading)}</h2>` : ''}
       ${s.subheading ? `<p class="lp-sub">${_esc(s.subheading)}</p>` : ''}
@@ -282,7 +283,7 @@ async function expressRenderPage(req, res) {
 
     let sections;
     try { sections = Array.isArray(page.sections) ? page.sections : JSON.parse(page.sections || '[]'); } catch (_) { sections = []; }
-    const ctx = { tenantSlug: req.tenantSlug || (req.tenant && req.tenant.slug) || '' };
+    const ctx = { tenantSlug: req.tenantSlug || (req.tenant && req.tenant.slug) || '', pageSlug: slug };
     const body = sections.map(s => _renderSection(s, ctx)).join('\n');
     const themeColor = page.theme_color || '#4f46e5';
     const themeBg    = page.theme_bg || '#ffffff';
@@ -353,7 +354,36 @@ ${body}
   }
 }
 
+
+async function api_pages_templates(token) {
+  await authUser(token);
+  const { TEMPLATES } = require('../utils/pageTemplates');
+  return TEMPLATES.map(t => ({
+    id: t.id, name: t.name, industry: t.industry,
+    description: t.description, theme_color: t.theme_color,
+    section_count: (t.sections || []).length
+  }));
+}
+
+async function api_pages_createFromTemplate(token, payload) {
+  const me = await authUser(token);
+  if (!['admin','manager'].includes(me.role)) throw new Error('Admin/manager only');
+  const p = payload || {};
+  const { TEMPLATES } = require('../utils/pageTemplates');
+  const tpl = TEMPLATES.find(t => t.id === String(p.template_id || ''));
+  if (!tpl) throw new Error('Template not found');
+  return api_pages_save(token, {
+    name: p.name || tpl.name,
+    description: tpl.description,
+    is_active: 0,
+    theme_color: tpl.theme_color || '#4f46e5',
+    theme_bg: '#ffffff',
+    sections: tpl.sections || []
+  });
+}
+
 module.exports = {
   api_pages_list, api_pages_get, api_pages_save, api_pages_delete, api_pages_clone,
+  api_pages_templates, api_pages_createFromTemplate,
   expressRenderPage, _ensureSchema
 };
