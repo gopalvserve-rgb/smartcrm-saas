@@ -1063,7 +1063,7 @@ function showGetApp() {
         h('h3', {}, '📱 Get the CRM on your phone'),
         h('button', { class: 'btn icon', onclick: () => m.remove() }, '✕')
       ),
-      h('div', { class: 'modal-body' },
+      h('div', { class: 'modal-body-wrap', style: { padding: '.25rem 0' } },
         h('p', { class: 'muted', style: { marginTop: 0 } },
           'Install the CRM on your phone so you get push notifications even when the browser is closed.'),
         h('div', { class: 'cards', style: { gap: '.75rem' } },
@@ -1684,7 +1684,7 @@ async function openAddWidgetModal(onPicked) {
   modal.appendChild(h('div', { class: 'modal-head' },
     h('h3', {}, 'Add a widget'),
     h('button', { class: 'btn icon', onclick: () => m.remove() }, '✕')));
-  const body = h('div', { class: 'modal-body' });
+  const body = h('div', { class: 'modal-body-wrap', style: { padding: '.25rem 0' } });
   Object.entries(groups).forEach(([g, items]) => {
     body.appendChild(h('h4', { style: { marginBottom: '.4rem', marginTop: '.6rem' } }, g));
     const grid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '.5rem' } });
@@ -2933,17 +2933,17 @@ async function bulkNurturePrompt() {
   const active = seqs.filter(s => Number(s.is_active));
   if (!active.length) return toast('No active sequences. Create one in Settings → 🌱 Nurture Sequences first.', 'err');
   const sel = h('select', {}, ...active.map(s => h('option', { value: s.id }, s.name + ' (' + s.step_count + ' steps)')));
-  const modal = h('div', { class: 'modal-wrap' },
+  const modal = h('div', { class: 'modal-backdrop' },
     h('div', { class: 'modal' },
-      h('div', { class: 'modal-header' },
+      h('div', { class: 'modal-head' },
         h('h3', {}, '🌱 Enroll ' + ids.length + ' lead' + (ids.length === 1 ? '' : 's') + ' in sequence'),
-        h('button', { class: 'modal-close', onclick: () => modal.remove() }, '×')
+        h('button', { class: 'btn ghost', onclick: () => modal.remove() }, '×')
       ),
-      h('div', { class: 'modal-body' },
+      h('div', { class: 'modal-body-wrap', style: { padding: '.25rem 0' } },
         h('p', { class: 'muted', style: { fontSize: '.85rem' } }, 'Pick a nurture sequence. Each selected lead will be enrolled (leads already enrolled in this sequence are skipped).'),
         h('div', { class: 'field' }, h('label', {}, 'Sequence'), sel)
       ),
-      h('div', { class: 'modal-footer' },
+      h('div', { class: 'actions' },
         h('button', { class: 'btn primary', onclick: async () => {
           try {
             const r = await api('api_nurture_enroll', { sequence_id: Number(sel.value), lead_ids: ids });
@@ -6711,7 +6711,7 @@ async function openKbViewModal(id) {
         h('h3', {}, entry.is_pinned ? '📌 ' : '', entry.title),
         h('button', { class: 'btn icon', onclick: () => m.remove() }, '✕')
       ),
-      h('div', { class: 'modal-body' },
+      h('div', { class: 'modal-body-wrap', style: { padding: '.25rem 0' } },
         h('div', { class: 'kb-meta-row' },
           h('span', { class: 'kb-cat-tag' }, cat.icon + ' ' + cat.label),
           entry.product_name ? h('span', { class: 'kb-cat-tag', style: { background: '#ddd6fe', color: '#5b21b6' } }, '📦 ' + entry.product_name) : null,
@@ -10932,7 +10932,7 @@ async function openWaTemplatePicker(phone, onSent) {
       h('button', { class: 'btn icon', onclick: () => m.remove() }, '✕')
     )
   );
-  const body = h('div', { class: 'modal-body' });
+  const body = h('div', { class: 'modal-body-wrap', style: { padding: '.25rem 0' } });
   body.appendChild(h('p', { class: 'muted' }, 'Pre-approved templates can be sent any time — even outside the 24-hour reply window.'));
   const listEl = h('div', { class: 'wb-tpl-list' });
   body.appendChild(listEl);
@@ -13866,7 +13866,7 @@ async function _drillReportBuilder(leadIds) {
         h('h3', {}, 'Leads in this bucket'),
         h('button', { class: 'btn icon', onclick: () => m.remove() }, '✕')
       ),
-      h('div', { class: 'modal-body' },
+      h('div', { class: 'modal-body-wrap', style: { padding: '.25rem 0' } },
         h('p', { class: 'muted' }, leadIds.length + ' lead' + (leadIds.length === 1 ? '' : 's') + ' in this bucket' +
           (leadIds.length > 200 ? ' (showing first 200)' : '')),
         h('div', { class: 'table-wrap', style: { maxHeight: '50vh', overflowY: 'auto' } },
@@ -14248,7 +14248,7 @@ async function openCampaignEditModal(camp, onSaved) {
     h('h3', {}, isNew ? 'Create campaign' : 'Edit campaign'),
     h('button', { class: 'btn icon', onclick: () => m.remove() }, '✕')
   ));
-  const body = h('div', { class: 'modal-body' });
+  const body = h('div', { class: 'modal-body-wrap', style: { padding: '.25rem 0' } });
 
   // Name
   const nameI = h('input', { type: 'text', value: camp ? (camp.name || '') : '',
@@ -19295,7 +19295,7 @@ function _pickWorkMode() {
           h('h3', {}, '🕘 Where are you working from?'),
           h('button', { class: 'btn icon', onclick: () => finish(null) }, '✕')
         ),
-        h('div', { class: 'modal-body' },
+        h('div', { class: 'modal-body-wrap', style: { padding: '.25rem 0' } },
           opt('office',  '🏢', 'Office',          'In the office today.'),
           opt('home',    '🏠', 'Work from home',  'Working remotely.'),
           opt('on_site', '📍', 'On-site / Field', 'Customer visit, project site, etc.')
@@ -20508,7 +20508,7 @@ async function firstRunRecordingPrompt(forceShow) {
           modal.remove();
         }, title: 'Maybe later' }, '✕')
       ),
-      h('div', { class: 'modal-body' },
+      h('div', { class: 'modal-body-wrap', style: { padding: '.25rem 0' } },
         h('p', {},
           'Pick the folder where your phone saves call recordings. From this point on, any call you make to a CRM lead will be automatically attached to that lead — so you can replay it later from the lead\'s page.'
         ),
@@ -22749,13 +22749,13 @@ async function openNurtureEditor(id, statuses, templates, onClose) {
     } catch (e) { toast(e.message, 'err'); }
   } }, '💾 Save');
 
-  const modal = h('div', { class: 'modal-wrap' },
-    h('div', { class: 'modal lg' },
-      h('div', { class: 'modal-header' },
+  const modal = h('div', { class: 'modal-backdrop' },
+    h('div', { class: 'modal modal-lg' },
+      h('div', { class: 'modal-head' },
         h('h3', {}, id ? '✎ Edit sequence' : '+ New sequence'),
-        h('button', { class: 'modal-close', onclick: () => modal.remove() }, '×')
+        h('button', { class: 'btn ghost', onclick: () => modal.remove() }, '×')
       ),
-      h('div', { class: 'modal-body' },
+      h('div', { class: 'modal-body-wrap', style: { padding: '.25rem 0' } },
         h('div', { class: 'field' }, h('label', {}, 'Sequence name'), nameInp),
         h('div', { class: 'field' }, h('label', {}, 'Description'), descInp),
         h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', padding: '.4rem 0' } },
@@ -22796,7 +22796,7 @@ async function openNurtureEditor(id, statuses, templates, onClose) {
         stepsContainer,
         addStepBtn
       ),
-      h('div', { class: 'modal-footer' }, saveBtn)
+      h('div', { class: 'actions' }, saveBtn)
     )
   );
   document.body.appendChild(modal);
@@ -22804,13 +22804,13 @@ async function openNurtureEditor(id, statuses, templates, onClose) {
 
 async function openNurtureActivity() {
   const runs = await api('api_nurture_recent_runs', { limit: 100 }).catch(() => []);
-  const modal = h('div', { class: 'modal-wrap' },
-    h('div', { class: 'modal lg' },
-      h('div', { class: 'modal-header' },
+  const modal = h('div', { class: 'modal-backdrop' },
+    h('div', { class: 'modal modal-lg' },
+      h('div', { class: 'modal-head' },
         h('h3', {}, '📋 Recent nurture runs'),
-        h('button', { class: 'modal-close', onclick: () => modal.remove() }, '×')
+        h('button', { class: 'btn ghost', onclick: () => modal.remove() }, '×')
       ),
-      h('div', { class: 'modal-body' },
+      h('div', { class: 'modal-body-wrap', style: { padding: '.25rem 0' } },
         runs.length ? h('table', { class: 'tbl' },
           h('thead', {}, h('tr', {},
             h('th', {}, 'When'), h('th', {}, 'Sequence'), h('th', {}, 'Step'),
@@ -22877,13 +22877,13 @@ async function openLeadSequencesModal(leadId, leadName) {
       )
     : h('div', { class: 'muted', style: { padding: '1rem', textAlign: 'center' } }, 'Not enrolled in any sequence.');
 
-  const modal = h('div', { class: 'modal-wrap' },
+  const modal = h('div', { class: 'modal-backdrop' },
     h('div', { class: 'modal' },
-      h('div', { class: 'modal-header' },
+      h('div', { class: 'modal-head' },
         h('h3', {}, '🌱 ' + (leadName || ('Lead #' + leadId)) + ' — Sequences'),
-        h('button', { class: 'modal-close', onclick: () => modal.remove() }, '×')
+        h('button', { class: 'btn ghost', onclick: () => modal.remove() }, '×')
       ),
-      h('div', { class: 'modal-body' },
+      h('div', { class: 'modal-body-wrap', style: { padding: '.25rem 0' } },
         active.length ? h('div', { class: 'field', style: { display: 'flex', gap: '.5rem', alignItems: 'flex-end' } },
           h('div', { style: { flex: 1 } }, h('label', {}, 'Enroll in another sequence'), enrollSel),
           enrollBtn
@@ -23084,13 +23084,13 @@ async function openFormEditor(id, statuses, users, campaigns, onClose) {
     catch (e) { toast(e.message, 'err'); }
   } }, '💾 Save');
 
-  const modal = h('div', { class: 'modal-wrap' },
-    h('div', { class: 'modal lg' },
-      h('div', { class: 'modal-header' },
+  const modal = h('div', { class: 'modal-backdrop' },
+    h('div', { class: 'modal modal-lg' },
+      h('div', { class: 'modal-head' },
         h('h3', {}, id ? '✎ Edit form' : '+ New form'),
-        h('button', { class: 'modal-close', onclick: () => modal.remove() }, '×')
+        h('button', { class: 'btn ghost', onclick: () => modal.remove() }, '×')
       ),
-      h('div', { class: 'modal-body' },
+      h('div', { class: 'modal-body-wrap', style: { padding: '.25rem 0' } },
         h('div', { class: 'field' }, h('label', {}, 'Form name'), nameInp),
         h('div', { class: 'field' }, h('label', {}, 'Description (shown above form)'), descInp),
         h('div', { style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap' } },
@@ -23113,7 +23113,7 @@ async function openFormEditor(id, statuses, users, campaigns, onClose) {
         fieldsList,
         addBtn
       ),
-      h('div', { class: 'modal-footer' }, saveBtn)
+      h('div', { class: 'actions' }, saveBtn)
     )
   );
   document.body.appendChild(modal);
@@ -23121,13 +23121,13 @@ async function openFormEditor(id, statuses, users, campaigns, onClose) {
 
 async function openFormSubmissions(form) {
   const subs = await api('api_forms_submissions', form.id, 200).catch(() => []);
-  const modal = h('div', { class: 'modal-wrap' },
-    h('div', { class: 'modal lg' },
-      h('div', { class: 'modal-header' },
+  const modal = h('div', { class: 'modal-backdrop' },
+    h('div', { class: 'modal modal-lg' },
+      h('div', { class: 'modal-head' },
         h('h3', {}, '📨 ' + form.name + ' — ' + subs.length + ' submission' + (subs.length === 1 ? '' : 's')),
-        h('button', { class: 'modal-close', onclick: () => modal.remove() }, '×')
+        h('button', { class: 'btn ghost', onclick: () => modal.remove() }, '×')
       ),
-      h('div', { class: 'modal-body' },
+      h('div', { class: 'modal-body-wrap', style: { padding: '.25rem 0' } },
         subs.length ? h('table', { class: 'tbl' },
           h('thead', {}, h('tr', {}, h('th', {}, 'When'), h('th', {}, 'Lead'), h('th', {}, 'Source'), h('th', {}, 'Payload'))),
           h('tbody', {},
@@ -23404,13 +23404,13 @@ async function openPageEditor(id, forms, onClose) {
     catch (e) { toast(e.message, 'err'); }
   } }, '💾 Save');
 
-  const modal = h('div', { class: 'modal-wrap' },
-    h('div', { class: 'modal lg' },
-      h('div', { class: 'modal-header' },
+  const modal = h('div', { class: 'modal-backdrop' },
+    h('div', { class: 'modal modal-lg' },
+      h('div', { class: 'modal-head' },
         h('h3', {}, id ? '✎ Edit page' : '+ New page'),
-        h('button', { class: 'modal-close', onclick: () => modal.remove() }, '×')
+        h('button', { class: 'btn ghost', onclick: () => modal.remove() }, '×')
       ),
-      h('div', { class: 'modal-body' },
+      h('div', { class: 'modal-body-wrap', style: { padding: '.25rem 0' } },
         h('div', { style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap' } },
           h('div', { style: { flex: 2, minWidth: '200px' } }, h('label', {}, 'Page name'), nameInp),
           h('div', { style: { flex: 1, minWidth: '180px' } }, h('label', {}, 'URL slug'), slugInp)
@@ -23431,7 +23431,7 @@ async function openPageEditor(id, forms, onClose) {
         sectionsList,
         h('div', { style: { marginTop: '.5rem' } }, addBox)
       ),
-      h('div', { class: 'modal-footer' }, saveBtn)
+      h('div', { class: 'actions' }, saveBtn)
     )
   );
   document.body.appendChild(modal);
@@ -23444,13 +23444,13 @@ async function openPageEditor(id, forms, onClose) {
 // ─────────────────────────────────────────────────────────────────────
 async function openPageTemplatePicker(onClose) {
   const templates = await api('api_pages_templates').catch(() => []);
-  const modal = h('div', { class: 'modal-wrap' },
-    h('div', { class: 'modal lg' },
-      h('div', { class: 'modal-header' },
+  const modal = h('div', { class: 'modal-backdrop' },
+    h('div', { class: 'modal modal-lg' },
+      h('div', { class: 'modal-head' },
         h('h3', {}, '📋 Pick an industry template'),
-        h('button', { class: 'modal-close', onclick: () => modal.remove() }, '×')
+        h('button', { class: 'btn ghost', onclick: () => modal.remove() }, '×')
       ),
-      h('div', { class: 'modal-body' },
+      h('div', { class: 'modal-body-wrap', style: { padding: '.25rem 0' } },
         h('p', { class: 'muted', style: { fontSize: '.85rem' } },
           'Each template ships with a complete page — hero, features, embedded form, testimonials, etc. — pre-written for that industry. Pick one, customise the headline + colors, embed your form, publish.'),
         h('div', { class: 'lp-tpl-grid' },
@@ -23495,12 +23495,12 @@ function openPagePreview(url, name) {
     ...sizes.map(s => h('button', { class: 'btn sm', 'data-w': s.w, onclick: () => setW(s.w) }, s.label))
   );
   setTimeout(() => setW(1100), 0);
-  const modal = h('div', { class: 'modal-wrap' },
+  const modal = h('div', { class: 'modal-backdrop' },
     h('div', { class: 'modal', style: { maxWidth: '95vw', width: '95vw' } },
-      h('div', { class: 'modal-header' },
+      h('div', { class: 'modal-head' },
         h('h3', {}, '👁 Preview · ' + (name || '')),
         h('a', { class: 'btn sm', href: url, target: '_blank', style: { marginLeft: 'auto', marginRight: '.5rem' } }, '↗ Open in tab'),
-        h('button', { class: 'modal-close', onclick: () => modal.remove() }, '×')
+        h('button', { class: 'btn ghost', onclick: () => modal.remove() }, '×')
       ),
       bar,
       frameWrap
@@ -23650,7 +23650,7 @@ async function openWaWidgetEditor(widgetId, onSaved) {
     return h('div', { class: 'field' }, ...kids);
   }
 
-  const modal = h('div', { class: 'modal-wrap' });
+  const modal = h('div', { class: 'modal-backdrop' });
   const saveBtn = h('button', { class: 'btn primary', onclick: async () => {
     const payload = {
       id: widget.id || 0,
@@ -23681,12 +23681,12 @@ async function openWaWidgetEditor(widgetId, onSaved) {
     } catch (e) { toast(e.message, 'err'); }
   } }, '💾 Save');
 
-  modal.appendChild(h('div', { class: 'modal lg' },
-    h('div', { class: 'modal-header' },
+  modal.appendChild(h('div', { class: 'modal modal-lg' },
+    h('div', { class: 'modal-head' },
       h('h3', {}, widgetId ? '✎ Edit WhatsApp Widget' : '+ New WhatsApp Widget'),
-      h('button', { class: 'modal-close', onclick: () => modal.remove() }, '×')
+      h('button', { class: 'btn ghost', onclick: () => modal.remove() }, '×')
     ),
-    h('div', { class: 'modal-body' },
+    h('div', { class: 'modal-body-wrap', style: { padding: '.25rem 0' } },
       fld('Internal name *', nameInput, 'Just for your reference (e.g. "Main site", "Pricing page")'),
       fld('WhatsApp number *', phoneInput, 'Country code + number, digits only (e.g. 919876543210)'),
       fld('Pre-filled message', msgInput, 'Pre-typed in WhatsApp when the visitor opens chat'),
@@ -23713,7 +23713,7 @@ async function openWaWidgetEditor(widgetId, onSaved) {
         h('div', { style: { flex: 1, minWidth: '160px' } }, fld('Default status', statusSelect))
       )
     ),
-    h('div', { class: 'modal-footer' },
+    h('div', { class: 'actions' },
       h('button', { class: 'btn', onclick: () => modal.remove() }, 'Cancel'),
       saveBtn
     )
@@ -23733,13 +23733,13 @@ async function openWaWidgetSnippet(widgetId) {
   const code = (r && r.snippet) || '';
   const ta = h('textarea', { rows: 3, style: { width: '100%', fontFamily: 'Menlo,Consolas,monospace', fontSize: '13px', padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' } });
   ta.value = code;
-  const modal = h('div', { class: 'modal-wrap' });
-  modal.appendChild(h('div', { class: 'modal lg' },
-    h('div', { class: 'modal-header' },
+  const modal = h('div', { class: 'modal-backdrop' });
+  modal.appendChild(h('div', { class: 'modal modal-lg' },
+    h('div', { class: 'modal-head' },
       h('h3', {}, '📋 Embed Snippet — ' + ((r && r.widget && r.widget.name) || '')),
-      h('button', { class: 'modal-close', onclick: () => modal.remove() }, '×')
+      h('button', { class: 'btn ghost', onclick: () => modal.remove() }, '×')
     ),
-    h('div', { class: 'modal-body' },
+    h('div', { class: 'modal-body-wrap', style: { padding: '.25rem 0' } },
       h('p', { style: { margin: '0 0 8px' } }, 'Paste this snippet just before the </body> tag of your website. It loads asynchronously and adds the floating WhatsApp button on every page.'),
       ta,
       h('div', { style: { marginTop: '10px', fontSize: '.85em', color: '#64748b' } },
@@ -23750,7 +23750,7 @@ async function openWaWidgetSnippet(widgetId) {
         '✓ Update settings in this CRM and the live widget refreshes automatically (within 5 minutes)'
       )
     ),
-    h('div', { class: 'modal-footer' },
+    h('div', { class: 'actions' },
       h('button', { class: 'btn', onclick: () => modal.remove() }, 'Close'),
       h('button', { class: 'btn primary', onclick: () => {
         ta.select();
@@ -24536,7 +24536,7 @@ async function openSourceMappingModal(sourceId, sourceLabel) {
     h('h3', {}, '🗺 Field mapping — ' + sourceLabel),
     h('button', { class: 'x', onclick: () => m.remove() }, '✕')
   ));
-  const body = h('div', { class: 'modal-body' });
+  const body = h('div', { class: 'modal-body-wrap', style: { padding: '.25rem 0' } });
   body.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem', marginTop: 0 } },
     'Pick which CRM field each incoming JSON key should populate. Saved mapping wins over the built-in defaults. Leave a row blank to use the default.'));
   const loading = h('div', { class: 'muted' }, 'Loading saved mapping…');
@@ -24737,7 +24737,7 @@ function openQrFormModal(form, onSaved) {
         h('h3', {}, (isNew ? '+ New' : 'Edit') + ' QR form'),
         h('button', { class: 'btn icon', onclick: () => modal.remove() }, '✕')
       ),
-      h('div', { class: 'modal-body' },
+      h('div', { class: 'modal-body-wrap', style: { padding: '.25rem 0' } },
         h('label', {}, 'Form name (internal)', name),
         h('label', {}, 'URL slug', slug),
         h('label', {}, 'Heading (shown on form)', title),
@@ -24792,7 +24792,7 @@ function openQrPreviewModal(form, url) {
         h('h3', {}, '📲 QR — ' + form.name),
         h('button', { class: 'btn icon', onclick: () => modal.remove() }, '✕')
       ),
-      h('div', { class: 'modal-body', style: { textAlign: 'center' } },
+      h('div', { class: 'modal-body-wrap', style: { padding: '.25rem 0' }, style: { textAlign: 'center' } },
         h('img', { src: qrSrc, alt: 'QR', style: { maxWidth: '320px', width: '100%', height: 'auto', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '8px', background: '#fff' } }),
         h('div', { class: 'muted', style: { marginTop: '.5rem', wordBreak: 'break-all', fontSize: '.8rem' } }, url),
         h('div', { style: { marginTop: '1rem' } },
