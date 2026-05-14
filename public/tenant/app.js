@@ -11104,6 +11104,66 @@ async function wbChat() {
     right.innerHTML = h('div', { class: 'muted', style: { padding: '2rem', textAlign: 'center' } }, '← Pick a contact').outerHTML;
   }
 
+
+  // Helper: builds a status <select> for the WhatsApp chat header that
+  // lets the user change the linked lead's status without leaving the
+  // conversation. Returns the wrapping element. If the thread has no
+  // linked lead (very rare — only un-saved leads), returns null.
+  async function buildChatStatusPicker(leadId, opts) {
+    if (!leadId) return null;
+    opts = opts || {};
+    try {
+      // Fetch the lead + statuses in parallel
+      const [lead, statuses] = await Promise.all([
+        api('api_leads_get', leadId).catch(() => null),
+        api('api_statuses_list').catch(() => [])
+      ]);
+      if (!lead || !Array.isArray(statuses) || !statuses.length) return null;
+      const currentId = Number(lead.status_id || 0);
+      const sel = document.createElement('select');
+      sel.style.cssText = (opts.compact
+        ? 'padding: .2rem .35rem; font-size: .72rem; border: 1px solid #cbd5e1; border-radius: 4px; max-width: 130px;'
+        : 'padding: .3rem .45rem; font-size: .8rem; border: 1px solid #cbd5e1; border-radius: 6px; max-width: 200px;');
+      sel.title = 'Change lead status';
+      statuses
+        .slice()
+        .sort((a, b) => (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0))
+        .forEach(s => {
+          const o = document.createElement('option');
+          o.value = String(s.id);
+          o.textContent = s.name;
+          if (Number(s.id) === currentId) o.selected = true;
+          sel.appendChild(o);
+        });
+      sel.onchange = async () => {
+        const newId = Number(sel.value);
+        if (!newId || newId === currentId) return;
+        const prev = currentId;
+        sel.disabled = true;
+        try {
+          await api('api_leads_save', { id: leadId, status_id: newId });
+          if (typeof toast === 'function') toast('Status updated', 'ok');
+          if (typeof opts.onChange === 'function') opts.onChange(newId);
+        } catch (e) {
+          if (typeof toast === 'function') toast('Status update failed: ' + e.message, 'err');
+          // Revert UI on failure
+          sel.value = String(prev);
+        }
+        sel.disabled = false;
+      };
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'display: flex; align-items: center; gap: .3rem;';
+      const label = document.createElement('span');
+      label.textContent = opts.compact ? '' : 'Status:';
+      label.style.cssText = 'font-size: .75rem; color: #64748b;';
+      if (!opts.compact) wrap.appendChild(label);
+      wrap.appendChild(sel);
+      return wrap;
+    } catch (_) {
+      return null;
+    }
+  }
+
   async function openThread(phone) {
     openPhone = phone;
     openFingerprint = ''; // Force a render
@@ -11125,10 +11185,19 @@ async function wbChat() {
         h('b', {}, threadMeta.lead_name || phone),
         threadMeta.lead_name ? h('span', { class: 'muted', style: { fontSize: '.78rem' } }, phone) : null
       ),
+      h('div', { class: 'wb-chat-status-slot', style: { display: 'flex', alignItems: 'center' } }),
       buildAgentPicker(phone, threadMeta),
       h('button', { class: 'btn sm ghost', title: 'Refresh this thread', onclick: () => renderActiveThread(true) }, '↻')
     );
     right.appendChild(head);
+    // Async-populate the status picker (needs to fetch lead + statuses)
+    (async () => {
+      if (!threadMeta.lead_id) return;
+      const picker = await buildChatStatusPicker(threadMeta.lead_id);
+      if (!picker) return;
+      const slot = head.querySelector('.wb-chat-status-slot');
+      if (slot) slot.appendChild(picker);
+    })();
     const log = h('div', { class: 'wb-chat-log' });
     log.innerHTML = '<div class="loading">Loading…</div>';
     right.appendChild(log);
@@ -22455,12 +22524,13 @@ function _initFloatingChat() {
     _activeThreadCache = thread;
     const body = drawer.querySelector('#chat-drawer-body');
     body.innerHTML = `
-      <div style="padding: .55rem .85rem; background: #f1f5f9; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; gap: .5rem;">
+      <div style="padding: .55rem .85rem; background: #f1f5f9; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; gap: .4rem;">
         <button id="chat-back-btn" style="background: transparent; border: none; cursor: pointer; font-size: 1rem;">\u2190</button>
         <div style="flex: 1; min-width: 0;">
           <div style="font-size: .9rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${esc(thread.lead_name || thread.phone)}</div>
           ${(window._phoneIdToDisplay && window._phoneIdToDisplay[String(thread.phone_number_id || '')]) ? `<div style="font-size: .7rem; color: #6366f1;">on ${esc(window._phoneIdToDisplay[String(thread.phone_number_id || '')])}</div>` : ''}
         </div>
+        <div id="chat-dock-status-slot" style="display: flex; align-items: center;"></div>
         <a href="#/whatsbot/chat" style="font-size: .78rem; color: #6366f1;">Open full</a>
       </div>
       <div id="chat-thread-msgs" style="flex: 1; overflow-y: auto; padding: .65rem; background: #efeae2; min-height: 280px;"></div>
@@ -22572,6 +22642,47 @@ function _initFloatingChat() {
       } catch (e) { toast('Send failed: ' + e.message, 'err'); }
       send.disabled = false; send.textContent = _orig;
     };
+    // Async-populate the status picker for the floating chat dock header
+    (async () => {
+      try {
+        if (!thread.lead_id) return;
+        // Inline status picker (the WhatsApp module's buildChatStatusPicker
+        // lives in a closure we can't access — re-implement compactly here)
+        const [lead, statuses] = await Promise.all([
+          api('api_leads_get', thread.lead_id).catch(() => null),
+          api('api_statuses_list').catch(() => [])
+        ]);
+        if (!lead || !Array.isArray(statuses) || !statuses.length) return;
+        const currentId = Number(lead.status_id || 0);
+        const sel = document.createElement('select');
+        sel.style.cssText = 'padding: .2rem .35rem; font-size: .72rem; border: 1px solid #cbd5e1; border-radius: 4px; max-width: 130px;';
+        sel.title = 'Change lead status';
+        statuses.slice()
+          .sort((a, b) => (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0))
+          .forEach(s => {
+            const o = document.createElement('option');
+            o.value = String(s.id);
+            o.textContent = s.name;
+            if (Number(s.id) === currentId) o.selected = true;
+            sel.appendChild(o);
+          });
+        sel.onchange = async () => {
+          const newId = Number(sel.value);
+          if (!newId || newId === currentId) return;
+          sel.disabled = true;
+          try {
+            await api('api_leads_save', { id: thread.lead_id, status_id: newId });
+            if (typeof toast === 'function') toast('Status updated', 'ok');
+          } catch (e) {
+            if (typeof toast === 'function') toast('Status update failed: ' + e.message, 'err');
+            sel.value = String(currentId);
+          }
+          sel.disabled = false;
+        };
+        const slot = drawer.querySelector('#chat-dock-status-slot');
+        if (slot) slot.appendChild(sel);
+      } catch (_) {}
+    })();
     inp.addEventListener('keydown', e => { if (e.key === 'Enter') send.click(); });
     await loadMsgs();
   }
