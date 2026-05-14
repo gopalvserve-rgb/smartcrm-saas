@@ -840,6 +840,7 @@ const NAV_GROUPS = [
   ] },
   { label: 'Sales', icon: '💼', items: [
     { id: 'leads',      label: 'Leads',          icon: '🎯' },
+    { id: 'campaigns',  label: 'Campaigns',      icon: '📣', roles: ['admin','manager'] },
     { id: 'pipeline',   label: 'Pipeline',       icon: '📈' },
     { id: 'kanban',     label: 'Kanban',         icon: '🗂️' },
     { id: 'followups',  label: 'Follow-ups',     icon: '🔔' },
@@ -14153,7 +14154,8 @@ const CAMPAIGN_REMOVED_ACTIONS = [
     desc:  "Their open leads are handed to the manager set on the campaign." }
 ];
 
-async function adminCampaigns() {
+async function adminCampaigns(reload) {
+  if (typeof reload !== 'function') reload = () => reload();
   const root = h('div', { class: 'admin-section' });
   root.appendChild(h('h3', {}, '🎯 Campaigns'));
   root.appendChild(h('p', { class: 'muted' },
@@ -14169,7 +14171,7 @@ async function adminCampaigns() {
   }
 
   root.appendChild(h('div', { class: 'row gap', style: { marginBottom: '.75rem' } },
-    h('button', { class: 'btn primary', onclick: () => openCampaignEditModal(null, () => showAdminTab('campaigns')) },
+    h('button', { class: 'btn primary', onclick: () => openCampaignEditModal(null, () => reload()) },
       '+ Create campaign')
   ));
 
@@ -14208,20 +14210,20 @@ async function adminCampaigns() {
       ),
       h('td', { style: { textAlign: 'right' } },
         h('button', { class: 'btn sm',
-          onclick: () => openCampaignEditModal(r, () => showAdminTab('campaigns')) }, '✎ Edit'),
+          onclick: () => openCampaignEditModal(r, () => reload()) }, '✎ Edit'),
         ' ',
         h('button', { class: 'btn sm',
           onclick: async () => {
             try {
               await api('api_campaigns_pause', r.id, Number(r.is_active) === 1);
-              showAdminTab('campaigns');
+              reload();
             } catch (e) { toast(e.message, 'err'); }
           } }, Number(r.is_active) === 1 ? '⏸ Pause' : '▶ Resume'),
         ' ',
         h('button', { class: 'btn sm danger',
           onclick: async () => {
             if (!await confirmDialog(`Delete campaign "${r.name}"?`)) return;
-            try { await api('api_campaigns_delete', r.id); toast('Deleted'); showAdminTab('campaigns'); }
+            try { await api('api_campaigns_delete', r.id); toast('Deleted'); reload(); }
             catch (e) { toast(e.message, 'err'); }
           } }, '🗑')
       )
@@ -23766,6 +23768,22 @@ async function openWaWidgetSnippet(widgetId) {
 // ──────────────────────────────────────────────────────────────────
 // End WhatsApp Chat Widget admin
 // ──────────────────────────────────────────────────────────────────
+
+
+// ─────────────────────────────────────────────────────────────────────
+// VIEWS.campaigns — main-sidebar Campaigns view (Sales group)
+// Reuses the same adminCampaigns() body that powers Settings → Campaigns,
+// but uses navigateTo('campaigns') as the reload callback so CRUD ops
+// stay on the main view instead of jumping into Settings.
+// ─────────────────────────────────────────────────────────────────────
+VIEWS.campaigns = async (view) => {
+  if (typeof adminCampaigns !== 'function') {
+    view.replaceChildren(h('div', { class: 'error-box' }, 'Campaigns module not loaded — please refresh.'));
+    return;
+  }
+  view.replaceChildren(await adminCampaigns(() => navigateTo('campaigns')));
+};
+
 
 (function bootCopilot() {
 
