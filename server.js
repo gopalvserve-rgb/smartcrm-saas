@@ -847,6 +847,24 @@ app.post('/form/:formSlug/submit', (req, res, next) => {
   });
 });
 
+// ---- Public Form Builder forms (tenant-scoped) ----
+// GET  /t/<slug>/f/<form-slug>          — branded HTML form (responsive)
+// POST /t/<slug>/f/<form-slug>/submit   — JSON submit → creates lead
+app.get('/f/:formSlug', (req, res, next) => {
+  if (!req.tenant) return res.status(404).send('Tenant not found');
+  const tenantDb = require('./db/pg');
+  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug }, () => {
+    require('./routes/forms').expressRenderForm(req, res).catch(next);
+  });
+});
+app.post('/f/:formSlug/submit', (req, res, next) => {
+  if (!req.tenant) return res.status(404).json({ error: 'Tenant not found' });
+  const tenantDb = require('./db/pg');
+  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug }, () => {
+    require('./routes/forms').expressSubmitForm(req, res).catch(next);
+  });
+});
+
 // ---- Tenant config snapshot (sidebar brand + apk url + base url) -----
 // The SaaS server didn't expose /config.json at all, so the SPA's fetch
 // of /t/<slug>/config.json silently failed and CRM.config stayed on its

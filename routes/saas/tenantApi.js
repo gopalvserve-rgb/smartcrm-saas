@@ -72,6 +72,7 @@ const ROUTE_FILES = [
   'crmCopilot',
   'waBotFlows',
   'qrForms',
+  'forms',
   'nurture',
 ];
 

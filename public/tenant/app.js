@@ -13828,6 +13828,7 @@ VIEWS.admin = async (view) => {
       { id: 'api',          label: '🔌 Website API' },
       { id: 'integrations', label: '🧩 Integrations' },
       { id: 'qrforms',      label: '📲 QR Lead Forms' },
+      { id: 'forms',        label: '📝 Forms' },
       { id: 'whlogs',       label: '📡 Webhook logs' },
       { id: 'recdiag',      label: '🎧 Recording diagnostics' },
       { id: 'pendingcalls', label: '📞 Pending calls' },
@@ -13923,6 +13924,7 @@ async function showAdminTab(id) {
     if (id === 'menu')     body.replaceChildren(await adminMenuVisibility());
     if (id === 'menuorder') body.replaceChildren(await adminMenuOrder());
     if (id === 'projstages') body.replaceChildren(await adminProjectStages());
+    if (id === 'forms')      body.replaceChildren(await adminForms());
     if (id === 'integrations') body.replaceChildren(await adminIntegrations());
     if (id === 'qrforms')     body.replaceChildren(await adminQrForms());
     if (id === 'whlogs')      body.replaceChildren(await adminWebhookLogs());
@@ -22704,6 +22706,254 @@ async function openLeadSequencesModal(leadId, leadName) {
   document.body.appendChild(modal);
 }
 window.openLeadSequencesModal = openLeadSequencesModal;
+
+
+
+// ─────────────────────────────────────────────────────────────────────
+// Form Builder — Settings tab
+// ─────────────────────────────────────────────────────────────────────
+async function adminForms() {
+  const wrap = h('div', {});
+  const [forms, statuses, users, campaigns] = await Promise.all([
+    api('api_forms_list').catch(() => []),
+    api('api_statuses_list').catch(() => []),
+    api('api_users_list').catch(() => []),
+    api('api_campaigns_list').catch(() => [])
+  ]);
+
+  wrap.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', marginBottom: '1rem' } },
+    h('h3', { style: { margin: 0, flex: 1 } }, '📝 Forms'),
+    h('button', { class: 'btn primary', onclick: () => openFormEditor(null, statuses, users, campaigns, () => showAdminTab('forms')) }, '+ New form')
+  ));
+
+  wrap.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+    'Build branded forms that capture leads from your website, landing pages, or embed code. Each form has a unique public URL and can auto-create a lead in CRM on every submission.'));
+
+  if (!forms.length) {
+    wrap.appendChild(h('div', { class: 'card muted', style: { textAlign: 'center', padding: '2rem' } }, 'No forms yet. Click "+ New form" to create your first.'));
+    return wrap;
+  }
+
+  const slug = CRM.user && CRM.user.tenant_slug ? CRM.user.tenant_slug : '';
+  const base = window.location.origin + (slug ? '/t/' + slug : '');
+  forms.forEach(f => {
+    const publicUrl = base + '/f/' + f.slug;
+    const card = h('div', { class: 'card', style: { marginBottom: '.75rem' } },
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', flexWrap: 'wrap' } },
+        h('div', { style: { flex: 1, minWidth: '200px' } },
+          h('div', { style: { fontSize: '1rem', fontWeight: 600 } }, f.name,
+            h('span', { class: 'tag', style: { marginLeft: '.5rem', background: Number(f.is_active) ? '#16a34a' : '#94a3b8', color: '#fff', fontSize: '.7rem' } }, Number(f.is_active) ? 'Active' : 'Inactive')),
+          h('div', { class: 'muted', style: { fontSize: '.78rem' } },
+            f.field_count + ' fields · ' + f.view_count + ' views · ' + f.submission_count + ' submissions')
+        ),
+        h('a', { class: 'btn sm ghost', href: publicUrl, target: '_blank' }, '↗ View'),
+        h('button', { class: 'btn sm', onclick: () => { navigator.clipboard.writeText(publicUrl); toast('URL copied'); } }, '📋 URL'),
+        h('button', { class: 'btn sm', onclick: () => openFormSubmissions(f) }, '📨 Submissions'),
+        h('button', { class: 'btn sm', onclick: () => openFormEditor(f.id, statuses, users, campaigns, () => showAdminTab('forms')) }, '✎ Edit'),
+        h('button', { class: 'btn sm', onclick: async () => { try { await api('api_forms_clone', f.id); toast('Cloned'); showAdminTab('forms'); } catch (e) { toast(e.message, 'err'); } } }, '⎘ Clone'),
+        h('button', { class: 'btn sm danger', onclick: async () => {
+          if (!confirm('Delete form "' + f.name + '"? All submissions will be removed too.')) return;
+          try { await api('api_forms_delete', f.id); toast('Deleted'); showAdminTab('forms'); } catch (e) { toast(e.message, 'err'); }
+        } }, '🗑')
+      ),
+      h('div', { class: 'muted', style: { fontSize: '.72rem', marginTop: '.4rem', fontFamily: 'monospace' } }, publicUrl)
+    );
+    wrap.appendChild(card);
+  });
+  return wrap;
+}
+
+const _FORM_FIELD_TYPES = [
+  { v: 'text', l: 'Single line text' },
+  { v: 'email', l: 'Email' },
+  { v: 'phone', l: 'Phone' },
+  { v: 'number', l: 'Number' },
+  { v: 'textarea', l: 'Long text' },
+  { v: 'dropdown', l: 'Dropdown' },
+  { v: 'checkbox', l: 'Checkbox' },
+  { v: 'radio', l: 'Radio buttons' },
+  { v: 'date', l: 'Date' },
+  { v: 'consent', l: 'Consent checkbox' },
+  { v: 'hidden', l: 'Hidden (URL param)' }
+];
+const _LEAD_FIELD_MAP_OPTS = [
+  { v: '', l: '(none — save as custom field)' },
+  { v: 'name', l: 'Lead name' },
+  { v: 'phone', l: 'Phone' },
+  { v: 'whatsapp', l: 'WhatsApp' },
+  { v: 'email', l: 'Email' },
+  { v: 'city', l: 'City' },
+  { v: 'company', l: 'Company' },
+  { v: 'address', l: 'Address' },
+  { v: 'notes', l: 'Notes' }
+];
+
+async function openFormEditor(id, statuses, users, campaigns, onClose) {
+  let form = { is_active: 1, auto_create_lead: 1, theme_color: '#4f46e5', success_message: 'Thank you! We will be in touch shortly.', lead_default_source: 'Form', fields: [
+    { field_type: 'text', field_key: 'name', label: 'Your name', is_required: 1, lead_field_map: 'name' },
+    { field_type: 'phone', field_key: 'phone', label: 'Phone', is_required: 1, lead_field_map: 'phone' },
+    { field_type: 'email', field_key: 'email', label: 'Email', is_required: 0, lead_field_map: 'email' }
+  ]};
+  if (id) { try { form = await api('api_forms_get', id); } catch (e) { toast(e.message, 'err'); return; } }
+
+  const nameInp = h('input', { type: 'text', value: form.name || '' });
+  const descInp = h('textarea', { rows: 2 }); descInp.value = form.description || '';
+  const activeChk = h('input', { type: 'checkbox', checked: Number(form.is_active) ? 'checked' : null });
+  const colorInp = h('input', { type: 'color', value: form.theme_color || '#4f46e5' });
+  const successInp = h('textarea', { rows: 2 }); successInp.value = form.success_message || '';
+  const redirectInp = h('input', { type: 'text', placeholder: 'Optional: https://example.com/thanks', value: form.redirect_url || '' });
+  const autoLeadChk = h('input', { type: 'checkbox', checked: Number(form.auto_create_lead) ? 'checked' : null });
+  const sourceInp = h('input', { type: 'text', placeholder: 'e.g. Website Form', value: form.lead_default_source || 'Form' });
+  const statusSel = h('select', {},
+    h('option', { value: '' }, '— Default —'),
+    ...statuses.map(s => h('option', { value: s.id, selected: Number(form.lead_default_status_id) === Number(s.id) ? 'selected' : null }, s.name))
+  );
+  const assignSel = h('select', {},
+    h('option', { value: '' }, '— Unassigned —'),
+    ...(users || []).map(u => h('option', { value: u.id, selected: Number(form.lead_default_assigned_to) === Number(u.id) ? 'selected' : null }, u.name))
+  );
+  const campaignSel = h('select', {},
+    h('option', { value: '' }, '— None —'),
+    ...(campaigns || []).map(c => h('option', { value: c.id, selected: Number(form.lead_default_campaign_id) === Number(c.id) ? 'selected' : null }, c.name))
+  );
+
+  const fieldsList = h('div', {});
+  function renderFields() {
+    fieldsList.innerHTML = '';
+    (form.fields || []).forEach((f, idx) => {
+      const typeSel = h('select', {}, ..._FORM_FIELD_TYPES.map(t => h('option', { value: t.v, selected: f.field_type === t.v ? 'selected' : null }, t.l)));
+      const labelInp = h('input', { type: 'text', placeholder: 'Label shown to user', value: f.label || '' });
+      const keyInp = h('input', { type: 'text', placeholder: 'field_key (no spaces)', value: f.field_key || '' });
+      const phInp = h('input', { type: 'text', placeholder: 'Placeholder', value: f.placeholder || '' });
+      const reqChk = h('input', { type: 'checkbox', checked: Number(f.is_required) ? 'checked' : null });
+      const mapSel = h('select', {}, ..._LEAD_FIELD_MAP_OPTS.map(o => h('option', { value: o.v, selected: f.lead_field_map === o.v ? 'selected' : null }, o.l)));
+      const optsTa = h('textarea', { rows: 2, placeholder: 'One option per line (only for dropdown/radio)' });
+      try {
+        const arr = Array.isArray(f.options_json) ? f.options_json : (typeof f.options_json === 'string' ? JSON.parse(f.options_json || '[]') : (f.options || []));
+        optsTa.value = (arr || []).map(o => typeof o === 'string' ? o : o.label || o.value || '').join('\n');
+      } catch (_) {}
+
+      function rerenderOptsRow() {
+        optsRow.style.display = (typeSel.value === 'dropdown' || typeSel.value === 'radio') ? '' : 'none';
+      }
+      typeSel.addEventListener('change', () => { f.field_type = typeSel.value; rerenderOptsRow(); });
+      labelInp.addEventListener('input', () => { f.label = labelInp.value; });
+      keyInp.addEventListener('input', () => { f.field_key = keyInp.value; });
+      phInp.addEventListener('input', () => { f.placeholder = phInp.value; });
+      reqChk.addEventListener('change', () => { f.is_required = reqChk.checked ? 1 : 0; });
+      mapSel.addEventListener('change', () => { f.lead_field_map = mapSel.value; });
+      optsTa.addEventListener('input', () => {
+        f.options = String(optsTa.value || '').split(/\n/).map(s => s.trim()).filter(Boolean).map(s => ({ value: s, label: s }));
+      });
+
+      const optsRow = h('div', { class: 'field' }, h('label', {}, 'Options'), optsTa);
+      const row = h('div', { class: 'card', style: { marginBottom: '.5rem', padding: '.6rem' } },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', marginBottom: '.4rem' } },
+          h('b', { style: { flex: 1 } }, 'Field ' + (idx + 1)),
+          h('button', { class: 'btn sm', onclick: () => { if (idx > 0) { const t = form.fields[idx-1]; form.fields[idx-1] = f; form.fields[idx] = t; renderFields(); } } }, '↑'),
+          h('button', { class: 'btn sm', onclick: () => { if (idx < form.fields.length - 1) { const t = form.fields[idx+1]; form.fields[idx+1] = f; form.fields[idx] = t; renderFields(); } } }, '↓'),
+          h('button', { class: 'btn sm danger', onclick: () => { form.fields.splice(idx, 1); renderFields(); } }, '🗑')
+        ),
+        h('div', { style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap' } },
+          h('div', { style: { flex: 1, minWidth: '160px' } }, h('label', {}, 'Type'), typeSel),
+          h('div', { style: { flex: 1, minWidth: '160px' } }, h('label', {}, 'Label'), labelInp),
+          h('div', { style: { flex: 1, minWidth: '160px' } }, h('label', {}, 'Key'), keyInp)
+        ),
+        h('div', { style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap', marginTop: '.4rem' } },
+          h('div', { style: { flex: 1, minWidth: '160px' } }, h('label', {}, 'Placeholder'), phInp),
+          h('div', { style: { flex: 1, minWidth: '160px' } }, h('label', {}, 'Maps to lead field'), mapSel),
+          h('label', { style: { display: 'flex', alignItems: 'center', gap: '.3rem' } }, reqChk, h('span', {}, 'Required'))
+        ),
+        optsRow
+      );
+      rerenderOptsRow();
+      fieldsList.appendChild(row);
+    });
+  }
+  renderFields();
+
+  const addBtn = h('button', { class: 'btn', onclick: () => {
+    form.fields = form.fields || [];
+    form.fields.push({ field_type: 'text', field_key: 'field_' + (form.fields.length + 1), label: 'New field', is_required: 0 });
+    renderFields();
+  } }, '+ Add field');
+
+  const saveBtn = h('button', { class: 'btn primary', onclick: async () => {
+    const payload = {
+      id: id || null, name: nameInp.value.trim(), description: descInp.value,
+      is_active: activeChk.checked ? 1 : 0, theme_color: colorInp.value,
+      success_message: successInp.value, redirect_url: redirectInp.value,
+      auto_create_lead: autoLeadChk.checked ? 1 : 0,
+      lead_default_source: sourceInp.value,
+      lead_default_status_id: Number(statusSel.value) || null,
+      lead_default_assigned_to: Number(assignSel.value) || null,
+      lead_default_campaign_id: Number(campaignSel.value) || null,
+      fields: form.fields
+    };
+    try { await api('api_forms_save', payload); toast('Saved', 'ok'); modal.remove(); if (onClose) onClose(); }
+    catch (e) { toast(e.message, 'err'); }
+  } }, '💾 Save');
+
+  const modal = h('div', { class: 'modal-wrap' },
+    h('div', { class: 'modal lg' },
+      h('div', { class: 'modal-header' },
+        h('h3', {}, id ? '✎ Edit form' : '+ New form'),
+        h('button', { class: 'modal-close', onclick: () => modal.remove() }, '×')
+      ),
+      h('div', { class: 'modal-body' },
+        h('div', { class: 'field' }, h('label', {}, 'Form name'), nameInp),
+        h('div', { class: 'field' }, h('label', {}, 'Description (shown above form)'), descInp),
+        h('div', { style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap' } },
+          h('label', { style: { display: 'flex', alignItems: 'center', gap: '.3rem' } }, activeChk, h('span', {}, 'Active')),
+          h('div', {}, h('label', {}, 'Theme color'), colorInp)
+        ),
+        h('div', { class: 'field' }, h('label', {}, 'Success message'), successInp),
+        h('div', { class: 'field' }, h('label', {}, 'Redirect URL after submit (optional)'), redirectInp),
+        h('hr'),
+        h('h4', {}, 'Lead settings'),
+        h('label', { style: { display: 'flex', alignItems: 'center', gap: '.3rem' } }, autoLeadChk, h('span', {}, 'Auto-create lead on submit')),
+        h('div', { style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap', marginTop: '.4rem' } },
+          h('div', { style: { flex: 1, minWidth: '160px' } }, h('label', {}, 'Lead source'), sourceInp),
+          h('div', { style: { flex: 1, minWidth: '160px' } }, h('label', {}, 'Default status'), statusSel),
+          h('div', { style: { flex: 1, minWidth: '160px' } }, h('label', {}, 'Default assignee'), assignSel),
+          h('div', { style: { flex: 1, minWidth: '160px' } }, h('label', {}, 'Default campaign'), campaignSel)
+        ),
+        h('hr'),
+        h('h4', {}, 'Fields'),
+        fieldsList,
+        addBtn
+      ),
+      h('div', { class: 'modal-footer' }, saveBtn)
+    )
+  );
+  document.body.appendChild(modal);
+}
+
+async function openFormSubmissions(form) {
+  const subs = await api('api_forms_submissions', form.id, 200).catch(() => []);
+  const modal = h('div', { class: 'modal-wrap' },
+    h('div', { class: 'modal lg' },
+      h('div', { class: 'modal-header' },
+        h('h3', {}, '📨 ' + form.name + ' — ' + subs.length + ' submission' + (subs.length === 1 ? '' : 's')),
+        h('button', { class: 'modal-close', onclick: () => modal.remove() }, '×')
+      ),
+      h('div', { class: 'modal-body' },
+        subs.length ? h('table', { class: 'tbl' },
+          h('thead', {}, h('tr', {}, h('th', {}, 'When'), h('th', {}, 'Lead'), h('th', {}, 'Source'), h('th', {}, 'Payload'))),
+          h('tbody', {},
+            ...subs.map(s => h('tr', {},
+              h('td', {}, fmtDate(s.created_at, 'relative')),
+              h('td', {}, s.lead_id ? (s.lead_name || '#' + s.lead_id) + (s.lead_phone ? ' (' + s.lead_phone + ')' : '') : '—'),
+              h('td', { style: { fontSize: '.75rem' } }, s.utm_source || s.referrer || ''),
+              h('td', { style: { fontSize: '.72rem', fontFamily: 'monospace' } }, JSON.stringify(s.payload || {}))
+            ))
+          )
+        ) : h('div', { class: 'muted', style: { textAlign: 'center', padding: '2rem' } }, 'No submissions yet.')
+      )
+    )
+  );
+  document.body.appendChild(modal);
+}
 
 // =====================================================================
 // Floating WhatsApp chat dock
