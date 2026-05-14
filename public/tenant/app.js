@@ -2809,7 +2809,8 @@ function renderCell(col, l, statuses) {
     case 'last_change': return h('td', { class: 'muted' }, l.last_status_change_at ? fmtDate(l.last_status_change_at, 'relative') : '');
     case 'remark': return h('td', { class: 'cell-remark' },
       h('span', { class: 'remark-text', title: l.recent_remark || '' }, (l.recent_remark || '').slice(0, 60)),
-      h('button', { class: 'btn icon', title: 'Add remark', onclick: ev => { ev.stopPropagation(); openRemarkInline(l.id); } }, '💬+')
+      h('button', { class: 'btn icon', title: 'Add remark', onclick: ev => { ev.stopPropagation(); openRemarkInline(l.id); } }, '💬+'),
+      h('button', { class: 'btn icon', title: 'Nurture sequences', onclick: ev => { ev.stopPropagation(); openLeadSequencesModal(l.id, l.name); } }, '🌱')
     );
     case 'city':    return h('td', {}, l.city || '');
     case 'created': {
@@ -22426,6 +22427,25 @@ async function openNurtureEditor(id, statuses, templates, onClose) {
     h('option', { value: '' }, '— None —'),
     ...statuses.map(s => h('option', { value: s.id, selected: Number(seq.exit_on_status_id) === Number(s.id) ? 'selected' : null }, s.name))
   );
+  // Auto-enrollment trigger fields (Phase 2)
+  const triggerCreateChk = h('input', { type: 'checkbox', checked: Number(seq.trigger_on_create) ? 'checked' : null });
+  const triggerStatusSel = h('select', {},
+    h('option', { value: '' }, '— None —'),
+    ...statuses.map(s => h('option', { value: s.id, selected: Number(seq.trigger_on_status_id) === Number(s.id) ? 'selected' : null }, s.name))
+  );
+  const triggerSourcesInp = h('input', { type: 'text', placeholder: 'Facebook, Website, IndiaMART', value: String(seq.trigger_filter_sources || '') });
+  const _campaignsForTrigger = (window._cachedCampaigns || (await api('api_campaigns_list').catch(() => []))) || [];
+  window._cachedCampaigns = _campaignsForTrigger;
+  const triggerCampaignSel = h('select', {},
+    h('option', { value: '' }, '— Any —'),
+    ..._campaignsForTrigger.map(c => h('option', { value: c.id, selected: Number(seq.trigger_filter_campaign_id) === Number(c.id) ? 'selected' : null }, c.name))
+  );
+  const _productsForTrigger = (window._cachedProducts || (await api('api_products_list').catch(() => []))) || [];
+  window._cachedProducts = _productsForTrigger;
+  const triggerProductSel = h('select', {},
+    h('option', { value: '' }, '— Any —'),
+    ..._productsForTrigger.map(p => h('option', { value: p.id, selected: Number(seq.trigger_filter_product_id) === Number(p.id) ? 'selected' : null }, p.name))
+  );
 
   // Steps editor — table with add/remove
   const stepsContainer = h('div', { id: 'nurture-steps-list' });
@@ -22512,6 +22532,11 @@ async function openNurtureEditor(id, statuses, templates, onClose) {
       exit_on_reply: exitReplyChk.checked ? 1 : 0,
       pause_on_reply_hours: Number(pauseHoursInp.value) || 24,
       exit_on_status_id: Number(exitStatusSel.value) || null,
+      trigger_on_create: triggerCreateChk.checked ? 1 : 0,
+      trigger_on_status_id: Number(triggerStatusSel.value) || null,
+      trigger_filter_sources: triggerSourcesInp.value,
+      trigger_filter_campaign_id: Number(triggerCampaignSel.value) || null,
+      trigger_filter_product_id: Number(triggerProductSel.value) || null,
       steps: seq.steps
     };
     try {
@@ -22537,6 +22562,21 @@ async function openNurtureEditor(id, statuses, templates, onClose) {
           exitReplyChk, h('span', {}, 'Pause when customer replies (resume after silence)')),
         h('div', { class: 'field' }, h('label', {}, 'Pause window (hours)'), pauseHoursInp),
         h('div', { class: 'field' }, h('label', {}, 'Exit when status changes to'), exitStatusSel),
+        h('hr'),
+        h('h4', { style: { marginTop: '.5rem' } }, '⚡ Auto-enrollment triggers'),
+        h('p', { class: 'muted', style: { fontSize: '.8rem' } }, 'When configured, leads matching the filters below are automatically enrolled. Otherwise leave all unchecked and enroll manually from the Leads page.'),
+        h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', padding: '.3rem 0' } },
+          triggerCreateChk, h('span', {}, 'Enroll every new lead')),
+        h('div', { class: 'field' }, h('label', {}, 'Or enroll when status changes to'), triggerStatusSel),
+        h('h4', { style: { marginTop: '.75rem', fontSize: '.85rem' } }, 'Filters (all optional, all must match)'),
+        h('div', { class: 'field' },
+          h('label', {}, 'Only leads from these sources (comma-separated)'),
+          triggerSourcesInp,
+          h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '.2rem' } },
+            'e.g.: Facebook, IndiaMART, Website — leave blank to allow any source')
+        ),
+        h('div', { class: 'field' }, h('label', {}, 'Only this campaign'), triggerCampaignSel),
+        h('div', { class: 'field' }, h('label', {}, 'Only this product'), triggerProductSel),
         h('hr'),
         h('h4', { style: { marginTop: '.5rem' } }, 'Steps (in order)'),
         stepsContainer,
@@ -22579,6 +22619,69 @@ async function openNurtureActivity() {
   );
   document.body.appendChild(modal);
 }
+
+
+// ─────────────────────────────────────────────────────────────────────
+// Per-lead Sequences viewer — opens from the Lead modal (Phase 2)
+// ─────────────────────────────────────────────────────────────────────
+async function openLeadSequencesModal(leadId, leadName) {
+  const [enrollments, sequences] = await Promise.all([
+    api('api_nurture_lead_enrollments', leadId).catch(() => []),
+    api('api_nurture_list').catch(() => [])
+  ]);
+  const active = sequences.filter(s => Number(s.is_active));
+
+  const enrollSel = h('select', {}, ...active.map(s => h('option', { value: s.id }, s.name)));
+  const enrollBtn = h('button', { class: 'btn primary sm', onclick: async () => {
+    try {
+      await api('api_nurture_enroll', { sequence_id: Number(enrollSel.value), lead_ids: [leadId] });
+      toast('Enrolled', 'ok');
+      modal.remove();
+      openLeadSequencesModal(leadId, leadName);
+    } catch (e) { toast(e.message, 'err'); }
+  } }, '+ Enroll');
+
+  const list = enrollments.length
+    ? h('table', { class: 'tbl' },
+        h('thead', {}, h('tr', {},
+          h('th', {}, 'Sequence'), h('th', {}, 'Status'),
+          h('th', {}, 'Progress'), h('th', {}, 'Started'), h('th', {}, '')
+        )),
+        h('tbody', {},
+          ...enrollments.map(e => h('tr', {},
+            h('td', {}, e.sequence_name),
+            h('td', {}, h('span', { class: 'tag', style: { background: e.status === 'active' ? '#16a34a' : e.status === 'paused' ? '#f59e0b' : e.status === 'completed' ? '#3b82f6' : '#94a3b8', color: '#fff' } }, e.status)),
+            h('td', {}, (e.sent_step || 0) + '/' + (e.total_steps || 0) + ' steps'),
+            h('td', {}, fmtDate(e.started_at, 'relative')),
+            h('td', {}, (e.status === 'active' || e.status === 'paused') ? h('button', { class: 'btn sm danger', onclick: async () => {
+              if (!confirm('Unenroll from ' + e.sequence_name + '?')) return;
+              try { await api('api_nurture_unenroll', { enrollment_id: e.id }); toast('Unenrolled', 'ok'); modal.remove(); openLeadSequencesModal(leadId, leadName); }
+              catch (err) { toast(err.message, 'err'); }
+            } }, 'Unenroll') : null)
+          ))
+        )
+      )
+    : h('div', { class: 'muted', style: { padding: '1rem', textAlign: 'center' } }, 'Not enrolled in any sequence.');
+
+  const modal = h('div', { class: 'modal-wrap' },
+    h('div', { class: 'modal' },
+      h('div', { class: 'modal-header' },
+        h('h3', {}, '🌱 ' + (leadName || ('Lead #' + leadId)) + ' — Sequences'),
+        h('button', { class: 'modal-close', onclick: () => modal.remove() }, '×')
+      ),
+      h('div', { class: 'modal-body' },
+        active.length ? h('div', { class: 'field', style: { display: 'flex', gap: '.5rem', alignItems: 'flex-end' } },
+          h('div', { style: { flex: 1 } }, h('label', {}, 'Enroll in another sequence'), enrollSel),
+          enrollBtn
+        ) : null,
+        h('h4', { style: { marginTop: '1rem', fontSize: '.9rem' } }, 'Active + past enrollments'),
+        list
+      )
+    )
+  );
+  document.body.appendChild(modal);
+}
+window.openLeadSequencesModal = openLeadSequencesModal;
 
 // =====================================================================
 // Floating WhatsApp chat dock

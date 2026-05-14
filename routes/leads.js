@@ -845,6 +845,7 @@ async function api_leads_create(token, payload) {
     await _syncFollowup(id, base.assigned_to || me.id, base.next_followup_at, '');
   }
   try { require('../utils/automations').fire('lead_created', { lead: Object.assign({ id }, base), user: me }); } catch (_) {}
+  try { require('./nurture')._tryAutoEnroll('lead_created', { lead: Object.assign({ id }, base), user: me }); } catch (_) {}
 
   // ---- Email notifications (fire-and-forget) ----
   setImmediate(async () => {
@@ -1109,6 +1110,7 @@ async function api_leads_update(token, id, patch) {
     });
     // Fire automations
     try { require('../utils/automations').fire('status_changed', { lead: Object.assign({}, lead, allowed), user: me, new_status: s }); } catch (_) {}
+    try { require('./nurture')._tryAutoEnroll('status_changed', { lead: Object.assign({}, lead, allowed), user: me }); } catch (_) {}
     if (lead.campaign_id) {
       try {
         const campRow = (await db.query('SELECT * FROM campaigns WHERE id = $1', [lead.campaign_id])).rows[0];

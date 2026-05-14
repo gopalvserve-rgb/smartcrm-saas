@@ -39,6 +39,11 @@ async function _ensureSchema() {
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`);
+  await db.query(`ALTER TABLE nurture_sequences ADD COLUMN IF NOT EXISTS trigger_on_create INTEGER NOT NULL DEFAULT 0`);
+  await db.query(`ALTER TABLE nurture_sequences ADD COLUMN IF NOT EXISTS trigger_on_status_id INTEGER`);
+  await db.query(`ALTER TABLE nurture_sequences ADD COLUMN IF NOT EXISTS trigger_filter_sources TEXT NOT NULL DEFAULT ''`);
+  await db.query(`ALTER TABLE nurture_sequences ADD COLUMN IF NOT EXISTS trigger_filter_campaign_id INTEGER`);
+  await db.query(`ALTER TABLE nurture_sequences ADD COLUMN IF NOT EXISTS trigger_filter_product_id INTEGER`);
 
   await db.query(`CREATE TABLE IF NOT EXISTS nurture_steps (
     id SERIAL PRIMARY KEY,
@@ -133,21 +138,37 @@ async function api_nurture_save(token, payload) {
   let id = seqId;
   if (!id) {
     const ins = await db.query(
-      `INSERT INTO nurture_sequences (name, description, is_active, exit_on_reply, exit_on_status_id, pause_on_reply_hours, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+      `INSERT INTO nurture_sequences
+         (name, description, is_active, exit_on_reply, exit_on_status_id, pause_on_reply_hours,
+          trigger_on_create, trigger_on_status_id, trigger_filter_sources,
+          trigger_filter_campaign_id, trigger_filter_product_id, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
       [name, String(p.description || ''), p.is_active ? 1 : 0,
        p.exit_on_reply ? 1 : 0, p.exit_on_status_id || null,
        Math.max(1, Math.min(168, Number(p.pause_on_reply_hours || 24))),
+       p.trigger_on_create ? 1 : 0,
+       p.trigger_on_status_id || null,
+       String(p.trigger_filter_sources || '').slice(0, 500),
+       p.trigger_filter_campaign_id || null,
+       p.trigger_filter_product_id || null,
        me.id]
     );
     id = ins.rows[0].id;
   } else {
     await db.query(
       `UPDATE nurture_sequences SET name=$2, description=$3, is_active=$4, exit_on_reply=$5,
-              exit_on_status_id=$6, pause_on_reply_hours=$7, updated_at=NOW() WHERE id=$1`,
+              exit_on_status_id=$6, pause_on_reply_hours=$7,
+              trigger_on_create=$8, trigger_on_status_id=$9, trigger_filter_sources=$10,
+              trigger_filter_campaign_id=$11, trigger_filter_product_id=$12,
+              updated_at=NOW() WHERE id=$1`,
       [id, name, String(p.description || ''), p.is_active ? 1 : 0,
        p.exit_on_reply ? 1 : 0, p.exit_on_status_id || null,
-       Math.max(1, Math.min(168, Number(p.pause_on_reply_hours || 24)))]
+       Math.max(1, Math.min(168, Number(p.pause_on_reply_hours || 24))),
+       p.trigger_on_create ? 1 : 0,
+       p.trigger_on_status_id || null,
+       String(p.trigger_filter_sources || '').slice(0, 500),
+       p.trigger_filter_campaign_id || null,
+       p.trigger_filter_product_id || null]
     );
   }
 
@@ -312,9 +333,78 @@ async function api_nurture_recent_runs(token, opts) {
   return r.rows;
 }
 
+
+// ──────────────────────────────────────────────────────────────────
+// Auto-enrollment — called from routes/leads.js on create + status change
+// ──────────────────────────────────────────────────────────────────
+async function _tryAutoEnroll(event, ctx) {
+  try {
+    await _ensureSchema();
+    const lead = ctx && ctx.lead;
+    if (!lead || !lead.id) return;
+
+    // Find candidate sequences for this event
+    let sql, params;
+    if (event === 'lead_created') {
+      sql = `SELECT * FROM nurture_sequences WHERE is_active = 1 AND trigger_on_create = 1`;
+      params = [];
+    } else if (event === 'status_changed') {
+      sql = `SELECT * FROM nurture_sequences WHERE is_active = 1 AND trigger_on_status_id = $1`;
+      params = [Number(lead.status_id) || 0];
+    } else { return; }
+
+    const candidates = (await db.query(sql, params)).rows;
+    if (!candidates.length) return;
+
+    for (const seq of candidates) {
+      // Apply filters — source, campaign_id, product_id
+      const sources = String(seq.trigger_filter_sources || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+      if (sources.length) {
+        const leadSrc = String(lead.source || '').trim().toLowerCase();
+        if (!sources.includes(leadSrc)) continue;
+      }
+      if (Number(seq.trigger_filter_campaign_id) && Number(lead.campaign_id) !== Number(seq.trigger_filter_campaign_id)) continue;
+      if (Number(seq.trigger_filter_product_id) && Number(lead.product_id) !== Number(seq.trigger_filter_product_id)) continue;
+
+      // Skip if already enrolled (active or paused)
+      const existing = await db.query(
+        `SELECT 1 FROM nurture_enrollments WHERE sequence_id = $1 AND lead_id = $2 AND status IN ('active','paused')`,
+        [seq.id, lead.id]
+      );
+      if (existing.rows.length) continue;
+
+      // Load steps + enroll inline
+      const steps = (await db.query(
+        `SELECT * FROM nurture_steps WHERE sequence_id = $1 ORDER BY step_no ASC`, [seq.id]
+      )).rows;
+      if (!steps.length) continue;
+
+      const now = new Date();
+      const ins = await db.query(
+        `INSERT INTO nurture_enrollments (sequence_id, lead_id, started_at, current_step, status, enrolled_by)
+         VALUES ($1, $2, $3, 0, 'active', $4) RETURNING id`,
+        [seq.id, lead.id, now.toISOString(), (ctx.user && ctx.user.id) || null]
+      );
+      const enrollId = ins.rows[0].id;
+      for (const step of steps) {
+        const due = new Date(now.getTime() + (Number(step.delay_days) * 86400 + Number(step.delay_hours) * 3600) * 1000);
+        await db.query(
+          `INSERT INTO nurture_step_runs (enrollment_id, sequence_id, step_no, lead_id, channel, scheduled_for, status)
+           VALUES ($1, $2, $3, $4, $5, $6, 'pending')`,
+          [enrollId, seq.id, step.step_no, lead.id, step.channel, due.toISOString()]
+        );
+      }
+      console.log('[nurture] auto-enrolled lead', lead.id, 'into seq', seq.id, 'via', event);
+    }
+  } catch (e) {
+    console.warn('[nurture] auto-enroll failed:', e.message);
+  }
+}
+
 module.exports = {
   api_nurture_list, api_nurture_get, api_nurture_save, api_nurture_delete,
   api_nurture_enroll, api_nurture_unenroll,
   api_nurture_lead_enrollments, api_nurture_recent_runs,
-  _ensureSchema
+  _ensureSchema,
+  _tryAutoEnroll
 };
