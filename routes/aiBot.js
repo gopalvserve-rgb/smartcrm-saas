@@ -71,6 +71,8 @@ const _DEFAULT_SETTINGS = {
   quick_reply_trigger: 'always',
   quick_reply_keywords: '',
   quick_reply_filter_tapped: 1,
+  quick_reply_mode: 'static',
+  quick_reply_pool: '',
 };
 
 function _coerceSettings(row) {
@@ -204,6 +206,8 @@ async function _ensureAiBotColumns() {
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS quick_reply_trigger TEXT NOT NULL DEFAULT 'always'`);
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS quick_reply_keywords TEXT NOT NULL DEFAULT ''`);
     await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS quick_reply_filter_tapped INTEGER NOT NULL DEFAULT 1`);
+    await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS quick_reply_mode TEXT NOT NULL DEFAULT 'static'`);
+    await db.query(`ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS quick_reply_pool TEXT NOT NULL DEFAULT ''`);
     await db.query(`CREATE TABLE IF NOT EXISTS ai_reengage_log (
       id SERIAL PRIMARY KEY,
       phone TEXT NOT NULL,
@@ -308,6 +312,14 @@ async function api_aibot_settings_save(token, payload) {
   }
   if (p.quick_reply_filter_tapped != null) {
     addCol('quick_reply_filter_tapped', '$$', p.quick_reply_filter_tapped ? 1 : 0);
+  }
+  if (p.quick_reply_mode          != null) {
+    const allowed = ['static', 'dynamic'];
+    const m = String(p.quick_reply_mode || 'static').toLowerCase();
+    addCol('quick_reply_mode', '$$', allowed.includes(m) ? m : 'static');
+  }
+  if (p.quick_reply_pool          != null) {
+    addCol('quick_reply_pool', '$$', String(p.quick_reply_pool || '').slice(0, 2000));
   }
 
   // Phone-keyed upsert: one bot row per phone_number_id (NULL = legacy default).
@@ -1028,7 +1040,21 @@ async function maybeReplyToInbound({ phone, leadId, inboundText, inboundPhoneId,
   const modes = Array.isArray(settings.reply_modes) ? settings.reply_modes : ['always'];
   const isManual = modes.includes('manual') && !modes.includes('always');
 
-  const { system, history, prompt } = await _buildPrompt(settings, phone, leadId, inboundText);
+  let { system, history, prompt } = await _buildPrompt(settings, phone, leadId, inboundText);
+
+  // Dynamic quick-reply mode: ask the model to also choose 0-3 buttons
+  // from a pool, based on what the customer just said. We append the pool
+  // to the system prompt with a strict output format the model emits at
+  // the end of its reply, then parse it out before sending.
+  const _qrMode = String(settings.quick_reply_mode || 'static').toLowerCase();
+  let _qrPool = [];
+  if (_qrMode === 'dynamic') {
+    const raw = String(settings.quick_reply_pool || '');
+    _qrPool = raw.split(/[\n,]/).map(s => s.trim()).filter(s => s && s.length <= 20).slice(0, 15);
+    if (_qrPool.length) {
+      system = (system || '') + `\n\nQUICK-REPLY BUTTONS:\nYou can attach up to 3 tap-to-reply buttons to your message. Pick the most relevant options from this list based on what the customer asked:\n${_qrPool.map(o => '- ' + o).join('\n')}\n\nFormat your response EXACTLY like this:\n[Your reply text]\n[QR: option1 | option2 | option3]\n\nOnly pick buttons that genuinely make sense for THIS specific message. If no buttons are useful, write [QR: none] at the end. Maximum 3 buttons. Use EXACT spelling from the list above.`;
+    }
+  }
 
   const result = await gemini.generate({
     system, history, prompt,
@@ -1058,7 +1084,27 @@ async function maybeReplyToInbound({ phone, leadId, inboundText, inboundPhoneId,
     return;
   }
 
-  const replyText = (result.text || '').trim();
+  let replyText = (result.text || '').trim();
+
+  // Dynamic mode: parse out the [QR: a | b | c] tag from the bot's reply
+  // and convert it to the buttons array, then strip the tag from the
+  // customer-facing text.
+  let _qrDynamicButtons = null;
+  if (_qrMode === 'dynamic') {
+    const m = replyText.match(/\[QR:\s*([^\]]*?)\s*\]\s*$/i);
+    if (m) {
+      replyText = replyText.slice(0, m.index).trim();
+      const raw = String(m[1] || '').trim();
+      if (raw && raw.toLowerCase() !== 'none') {
+        _qrDynamicButtons = raw.split('|').map(s => s.trim())
+          .filter(s => s && s.length <= 20)
+          .slice(0, 3)
+          .map(title => ({ title }));
+      } else {
+        _qrDynamicButtons = [];  // explicit "none" — send plain text
+      }
+    }
+  }
   if (!replyText) {
     try {
       await db.query(
@@ -1091,10 +1137,15 @@ async function maybeReplyToInbound({ phone, leadId, inboundText, inboundPhoneId,
     const wb = _wb();
     const cfg = inboundPhoneId ? await wb._cfgForPhone(inboundPhoneId).catch(() => wb._cfg()) : await wb._cfg();
     let buttons = [];
-    try {
-      const raw = settings.quick_reply_buttons;
-      buttons = typeof raw === 'string' ? JSON.parse(raw || '[]') : (Array.isArray(raw) ? raw : []);
-    } catch (_) { buttons = []; }
+    if (Array.isArray(_qrDynamicButtons)) {
+      // Dynamic mode took priority — model picked these
+      buttons = _qrDynamicButtons;
+    } else {
+      try {
+        const raw = settings.quick_reply_buttons;
+        buttons = typeof raw === 'string' ? JSON.parse(raw || '[]') : (Array.isArray(raw) ? raw : []);
+      } catch (_) { buttons = []; }
+    }
 
     // Evaluate trigger condition: should we attach buttons to THIS reply?
     // Filter out buttons the customer has already tapped in this thread

@@ -8114,21 +8114,50 @@ async function _aibotSettingsView(currentPhId) {
     type: 'checkbox',
     checked: Number(s.quick_reply_filter_tapped == null ? 1 : s.quick_reply_filter_tapped) === 1 ? 'checked' : null
   });
+  const qrModeSel = h('select', {},
+    h('option', { value: 'static',  selected: (s.quick_reply_mode || 'static') === 'static'  ? 'selected' : null }, 'Static — always send the same 3 buttons'),
+    h('option', { value: 'dynamic', selected: (s.quick_reply_mode || 'static') === 'dynamic' ? 'selected' : null }, '🧠 Dynamic — AI picks best 1-3 from a pool (like a human)')
+  );
+  const qrPoolTa = h('textarea', {
+    rows: 8,
+    placeholder: 'One option per line, max 20 chars each. The bot will pick up to 3 most relevant based on customer message.\n\nExamples:\nBook a demo\nGet pricing\nCall me back\nSend brochure\nNot interested\nMore info\nBook a meeting\nSend sample',
+    style: { width: '100%', minHeight: '140px', fontFamily: 'inherit', fontSize: '.9rem', padding: '.5rem' }
+  });
+  qrPoolTa.value = String(s.quick_reply_pool || '');
+
+  // Show/hide blocks based on mode
+  const _qrStaticBlock = h('div', {},
+    h('div', { class: 'field' }, h('label', {}, 'Button 1 title'), qrInputs[0]),
+    h('div', { class: 'field' }, h('label', {}, 'Button 2 title'), qrInputs[1]),
+    h('div', { class: 'field' }, h('label', {}, 'Button 3 title'), qrInputs[2])
+  );
+  const _qrDynamicBlock = h('div', { class: 'field' },
+    h('label', {}, '🧠 Button pool (AI picks the best 1-3 per message)'),
+    qrPoolTa,
+    h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } },
+      'List every option the AI is allowed to offer. For each inbound message, the bot reads what the customer said and chooses the 1-3 most relevant from this list — like a human agent would. Example: customer asks "how much?" → bot picks "Get pricing" + "Book a demo". Customer asks "is this for retail?" → bot picks "Yes, retail" + "No, only B2B" + "Tell me more".')
+  );
+  const _toggleQrBlocks = () => {
+    const isDyn = qrModeSel.value === 'dynamic';
+    _qrStaticBlock.style.display = isDyn ? 'none' : '';
+    _qrDynamicBlock.style.display = isDyn ? '' : 'none';
+  };
+  qrModeSel.addEventListener('change', _toggleQrBlocks);
+  setTimeout(_toggleQrBlocks, 0);
+
   const qrCard = h('div', { class: 'card' },
     h('h3', { style: { marginTop: 0 } }, '💬 Quick reply buttons'),
     h('p', { class: 'muted', style: { fontSize: '.85rem' } },
-      'Up to 3 tap-to-reply buttons attached to bot messages. Titles max 20 characters. Leave all blank to disable. Customers tap a button and WhatsApp sends that exact text back as their reply — perfect for "Yes / No / Call me" style answers.'),
-    h('div', { class: 'field' }, h('label', {}, 'Button 1 title'), qrInputs[0]),
-    h('div', { class: 'field' }, h('label', {}, 'Button 2 title'), qrInputs[1]),
-    h('div', { class: 'field' }, h('label', {}, 'Button 3 title'), qrInputs[2]),
+      'Up to 3 tap-to-reply buttons attached to bot messages. Choose Static (same 3 every time) or Dynamic (AI picks contextually like a human agent).'),
+    h('div', { class: 'field' }, h('label', {}, 'Mode'), qrModeSel),
+    _qrStaticBlock,
+    _qrDynamicBlock,
     h('div', { class: 'field' }, h('label', {}, '⚡ When should buttons attach?'), qrTriggerSel),
     qrKwField,
     h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', padding: '.5rem 0' } },
       qrFilterChk,
-      h('span', {}, 'Auto-hide buttons the customer has already tapped (recommended)')
-    ),
-    h('div', { class: 'muted', style: { fontSize: '.78rem' } },
-      'Example: if the customer already tapped "Demo", the bot won\'t show that button again — only the remaining options. If all 3 buttons have been tapped, the bot sends plain text.')
+      h('span', {}, 'Auto-hide buttons the customer has already tapped (Static mode only)')
+    )
   );
   wrap.appendChild(qrCard);
 
@@ -8458,7 +8487,9 @@ async function _aibotSettingsView(currentPhId) {
         .filter(b => b.title),
       quick_reply_trigger: qrTriggerSel.value,
       quick_reply_keywords: qrKeywordsInp.value,
-      quick_reply_filter_tapped: qrFilterChk.checked ? 1 : 0
+      quick_reply_filter_tapped: qrFilterChk.checked ? 1 : 0,
+      quick_reply_mode: qrModeSel.value,
+      quick_reply_pool: qrPoolTa.value
     };
     try {
       payload.phone_number_id = phIdParam || null;
