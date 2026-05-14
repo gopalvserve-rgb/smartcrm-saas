@@ -73,6 +73,7 @@ const ROUTE_FILES = [
   'waBotFlows',
   'qrForms',
   'forms',
+  'pages',
   'nurture',
 ];
 

@@ -13829,6 +13829,7 @@ VIEWS.admin = async (view) => {
       { id: 'integrations', label: '🧩 Integrations' },
       { id: 'qrforms',      label: '📲 QR Lead Forms' },
       { id: 'forms',        label: '📝 Forms' },
+      { id: 'pages',        label: '🌐 Landing Pages' },
       { id: 'whlogs',       label: '📡 Webhook logs' },
       { id: 'recdiag',      label: '🎧 Recording diagnostics' },
       { id: 'pendingcalls', label: '📞 Pending calls' },
@@ -13925,6 +13926,7 @@ async function showAdminTab(id) {
     if (id === 'menuorder') body.replaceChildren(await adminMenuOrder());
     if (id === 'projstages') body.replaceChildren(await adminProjectStages());
     if (id === 'forms')      body.replaceChildren(await adminForms());
+    if (id === 'pages')      body.replaceChildren(await adminPages());
     if (id === 'integrations') body.replaceChildren(await adminIntegrations());
     if (id === 'qrforms')     body.replaceChildren(await adminQrForms());
     if (id === 'whlogs')      body.replaceChildren(await adminWebhookLogs());
@@ -22950,6 +22952,296 @@ async function openFormSubmissions(form) {
           )
         ) : h('div', { class: 'muted', style: { textAlign: 'center', padding: '2rem' } }, 'No submissions yet.')
       )
+    )
+  );
+  document.body.appendChild(modal);
+}
+
+
+
+// ─────────────────────────────────────────────────────────────────────
+// Landing Page Builder — Settings tab
+// ─────────────────────────────────────────────────────────────────────
+async function adminPages() {
+  const wrap = h('div', {});
+  const [pages, forms] = await Promise.all([
+    api('api_pages_list').catch(() => []),
+    api('api_forms_list').catch(() => [])
+  ]);
+
+  wrap.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', marginBottom: '1rem' } },
+    h('h3', { style: { margin: 0, flex: 1 } }, '🌐 Landing Pages'),
+    h('button', { class: 'btn primary', onclick: () => openPageEditor(null, forms, () => showAdminTab('pages')) }, '+ New page')
+  ));
+
+  wrap.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+    'Build branded landing pages with sections — hero, features, embedded form, CTA, testimonials, FAQ, pricing, contact. Each page has a unique public URL and tracks views + form conversions.'));
+
+  if (!pages.length) {
+    wrap.appendChild(h('div', { class: 'card muted', style: { textAlign: 'center', padding: '2rem' } }, 'No pages yet. Click "+ New page" to create your first landing page.'));
+    return wrap;
+  }
+
+  const slug = CRM.user && CRM.user.tenant_slug ? CRM.user.tenant_slug : '';
+  const base = window.location.origin + (slug ? '/t/' + slug : '');
+  pages.forEach(p => {
+    const publicUrl = base + '/p/' + p.slug;
+    const card = h('div', { class: 'card', style: { marginBottom: '.75rem' } },
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', flexWrap: 'wrap' } },
+        h('div', { style: { flex: 1, minWidth: '200px' } },
+          h('div', { style: { fontSize: '1rem', fontWeight: 600 } }, p.name,
+            h('span', { class: 'tag', style: { marginLeft: '.5rem', background: Number(p.is_active) ? '#16a34a' : '#94a3b8', color: '#fff', fontSize: '.7rem' } }, Number(p.is_active) ? 'Active' : 'Inactive')),
+          h('div', { class: 'muted', style: { fontSize: '.78rem' } },
+            (p.section_count || 0) + ' sections · ' + p.view_count + ' views · ' + p.conversion_count + ' conversions')
+        ),
+        h('a', { class: 'btn sm ghost', href: publicUrl, target: '_blank' }, '↗ View'),
+        h('button', { class: 'btn sm', onclick: () => { navigator.clipboard.writeText(publicUrl); toast('URL copied'); } }, '📋 URL'),
+        h('button', { class: 'btn sm', onclick: () => openPageEditor(p.id, forms, () => showAdminTab('pages')) }, '✎ Edit'),
+        h('button', { class: 'btn sm', onclick: async () => { try { await api('api_pages_clone', p.id); toast('Cloned'); showAdminTab('pages'); } catch (e) { toast(e.message, 'err'); } } }, '⎘ Clone'),
+        h('button', { class: 'btn sm danger', onclick: async () => {
+          if (!confirm('Delete page "' + p.name + '"?')) return;
+          try { await api('api_pages_delete', p.id); toast('Deleted'); showAdminTab('pages'); } catch (e) { toast(e.message, 'err'); }
+        } }, '🗑')
+      ),
+      h('div', { class: 'muted', style: { fontSize: '.72rem', marginTop: '.4rem', fontFamily: 'monospace' } }, publicUrl)
+    );
+    wrap.appendChild(card);
+  });
+  return wrap;
+}
+
+const _PAGE_SECTION_TYPES = [
+  { v: 'hero', l: '🦸 Hero (big banner)' },
+  { v: 'features', l: '⭐ Features (3-column grid)' },
+  { v: 'text', l: '📝 Text block' },
+  { v: 'image', l: '🖼 Image' },
+  { v: 'form', l: '📝 Embedded form' },
+  { v: 'testimonials', l: '💬 Testimonials' },
+  { v: 'faq', l: '❓ FAQ' },
+  { v: 'cta', l: '🎯 Call to action' },
+  { v: 'pricing', l: '💰 Pricing' },
+  { v: 'contact', l: '📧 Contact info' },
+  { v: 'footer', l: '🦶 Footer' }
+];
+
+async function openPageEditor(id, forms, onClose) {
+  let page = { is_active: 1, theme_color: '#4f46e5', theme_bg: '#ffffff', sections: [] };
+  if (id) { try { page = await api('api_pages_get', id); } catch (e) { toast(e.message, 'err'); return; } }
+  if (!Array.isArray(page.sections)) {
+    try { page.sections = JSON.parse(page.sections || '[]'); } catch (_) { page.sections = []; }
+  }
+
+  const nameInp = h('input', { type: 'text', value: page.name || '' });
+  const descInp = h('input', { type: 'text', value: page.description || '' });
+  const slugInp = h('input', { type: 'text', value: page.slug || '', placeholder: 'auto-generated from name' });
+  const activeChk = h('input', { type: 'checkbox', checked: Number(page.is_active) ? 'checked' : null });
+  const colorInp = h('input', { type: 'color', value: page.theme_color || '#4f46e5' });
+  const bgInp = h('input', { type: 'color', value: page.theme_bg || '#ffffff' });
+  const seoTitleInp = h('input', { type: 'text', value: page.seo_title || '' });
+  const seoDescInp = h('textarea', { rows: 2 }); seoDescInp.value = page.seo_description || '';
+  const ogImgInp = h('input', { type: 'text', value: page.og_image || '', placeholder: 'https://...' });
+
+  const sectionsList = h('div', {});
+  function renderSections() {
+    sectionsList.innerHTML = '';
+    (page.sections || []).forEach((s, idx) => {
+      const typeSel = h('select', {}, ..._PAGE_SECTION_TYPES.map(t => h('option', { value: t.v, selected: s.type === t.v ? 'selected' : null }, t.l)));
+      typeSel.addEventListener('change', () => { s.type = typeSel.value; renderSections(); });
+
+      // Build section-specific fields
+      const fields = h('div', {});
+      function rerenderFields() {
+        fields.innerHTML = '';
+        const f = (lbl, inp) => fields.appendChild(h('div', { class: 'field' }, h('label', {}, lbl), inp));
+
+        if (s.type === 'hero') {
+          const e = h('input', { type: 'text', value: s.eyebrow || '' });
+          const h1 = h('input', { type: 'text', value: s.heading || '' });
+          const sub = h('textarea', { rows: 2 }); sub.value = s.subheading || '';
+          const cta = h('input', { type: 'text', value: s.cta_label || '' });
+          const ctaUrl = h('input', { type: 'text', value: s.cta_url || '' });
+          const img = h('input', { type: 'text', value: s.image_url || '', placeholder: 'https://...' });
+          e.oninput = () => s.eyebrow = e.value; h1.oninput = () => s.heading = h1.value;
+          sub.oninput = () => s.subheading = sub.value; cta.oninput = () => s.cta_label = cta.value;
+          ctaUrl.oninput = () => s.cta_url = ctaUrl.value; img.oninput = () => s.image_url = img.value;
+          f('Eyebrow text (small)', e); f('Heading', h1); f('Subheading', sub);
+          f('CTA button label', cta); f('CTA URL', ctaUrl); f('Hero image URL', img);
+        }
+        else if (s.type === 'features' || s.type === 'testimonials' || s.type === 'faq' || s.type === 'pricing') {
+          const head = h('input', { type: 'text', value: s.heading || '' });
+          head.oninput = () => s.heading = head.value;
+          f('Section heading', head);
+          if (!Array.isArray(s.items)) s.items = [];
+          const itemsBox = h('div', {});
+          function renderItems() {
+            itemsBox.innerHTML = '';
+            s.items.forEach((it, ii) => {
+              const itRow = h('div', { class: 'card', style: { marginBottom: '.4rem', padding: '.5rem' } });
+              const rm = () => { s.items.splice(ii, 1); renderItems(); };
+              if (s.type === 'features') {
+                const ic = h('input', { type: 'text', placeholder: 'Icon (emoji or text)', value: it.icon || '' });
+                const t = h('input', { type: 'text', placeholder: 'Title', value: it.title || '' });
+                const b = h('textarea', { rows: 2, placeholder: 'Body' }); b.value = it.body || '';
+                ic.oninput = () => it.icon = ic.value; t.oninput = () => it.title = t.value; b.oninput = () => it.body = b.value;
+                itRow.appendChild(h('div', { style: { display: 'flex', gap: '.3rem' } }, ic, t,
+                  h('button', { class: 'btn sm danger', onclick: rm }, '🗑')));
+                itRow.appendChild(b);
+              } else if (s.type === 'testimonials') {
+                const q = h('textarea', { rows: 2, placeholder: 'Quote' }); q.value = it.quote || '';
+                const a = h('input', { type: 'text', placeholder: 'Author', value: it.author || '' });
+                const r = h('input', { type: 'text', placeholder: 'Role/Company', value: it.role || '' });
+                q.oninput = () => it.quote = q.value; a.oninput = () => it.author = a.value; r.oninput = () => it.role = r.value;
+                itRow.appendChild(q); itRow.appendChild(h('div', { style: { display: 'flex', gap: '.3rem' } }, a, r,
+                  h('button', { class: 'btn sm danger', onclick: rm }, '🗑')));
+              } else if (s.type === 'faq') {
+                const q = h('input', { type: 'text', placeholder: 'Question', value: it.q || '' });
+                const a = h('textarea', { rows: 2, placeholder: 'Answer' }); a.value = it.a || '';
+                q.oninput = () => it.q = q.value; a.oninput = () => it.a = a.value;
+                itRow.appendChild(h('div', { style: { display: 'flex', gap: '.3rem' } }, q,
+                  h('button', { class: 'btn sm danger', onclick: rm }, '🗑')));
+                itRow.appendChild(a);
+              } else if (s.type === 'pricing') {
+                const n = h('input', { type: 'text', placeholder: 'Plan name', value: it.name || '' });
+                const p = h('input', { type: 'text', placeholder: 'Price (e.g. $29/mo)', value: it.price || '' });
+                const feats = h('textarea', { rows: 3, placeholder: 'One feature per line' });
+                feats.value = (it.features || []).join('\n');
+                const cta = h('input', { type: 'text', placeholder: 'CTA label', value: it.cta_label || '' });
+                const ctaUrl = h('input', { type: 'text', placeholder: 'CTA URL', value: it.cta_url || '' });
+                const fc = h('input', { type: 'checkbox', checked: it.featured ? 'checked' : null });
+                n.oninput = () => it.name = n.value; p.oninput = () => it.price = p.value;
+                feats.oninput = () => it.features = feats.value.split('\n').map(x => x.trim()).filter(Boolean);
+                cta.oninput = () => it.cta_label = cta.value; ctaUrl.oninput = () => it.cta_url = ctaUrl.value;
+                fc.onchange = () => it.featured = fc.checked;
+                itRow.appendChild(h('div', { style: { display: 'flex', gap: '.3rem' } }, n, p,
+                  h('label', { style: { display: 'flex', alignItems: 'center', gap: '.3rem' } }, fc, h('span', {}, 'Featured')),
+                  h('button', { class: 'btn sm danger', onclick: rm }, '🗑')));
+                itRow.appendChild(feats);
+                itRow.appendChild(h('div', { style: { display: 'flex', gap: '.3rem' } }, cta, ctaUrl));
+              }
+              itemsBox.appendChild(itRow);
+            });
+          }
+          renderItems();
+          fields.appendChild(itemsBox);
+          fields.appendChild(h('button', { class: 'btn sm', onclick: () => { s.items.push({}); renderItems(); } }, '+ Add item'));
+        }
+        else if (s.type === 'text') {
+          const head = h('input', { type: 'text', value: s.heading || '' });
+          const body = h('textarea', { rows: 5 }); body.value = s.body || '';
+          head.oninput = () => s.heading = head.value; body.oninput = () => s.body = body.value;
+          f('Heading', head); f('Body text', body);
+        }
+        else if (s.type === 'image') {
+          const url = h('input', { type: 'text', value: s.image_url || '' });
+          const cap = h('input', { type: 'text', value: s.caption || '' });
+          url.oninput = () => s.image_url = url.value; cap.oninput = () => s.caption = cap.value;
+          f('Image URL', url); f('Caption (optional)', cap);
+        }
+        else if (s.type === 'form') {
+          const head = h('input', { type: 'text', value: s.heading || '' });
+          const sub = h('input', { type: 'text', value: s.subheading || '' });
+          const formSel = h('select', {},
+            h('option', { value: '' }, '— Pick form —'),
+            ...forms.map(fo => h('option', { value: fo.slug, selected: s.form_slug === fo.slug ? 'selected' : null }, fo.name))
+          );
+          head.oninput = () => s.heading = head.value; sub.oninput = () => s.subheading = sub.value;
+          formSel.onchange = () => s.form_slug = formSel.value;
+          f('Heading', head); f('Subheading', sub); f('Form to embed', formSel);
+          if (!forms.length) fields.appendChild(h('p', { class: 'muted', style: { fontSize: '.78rem' } }, 'No forms yet — go to Settings → Forms first.'));
+        }
+        else if (s.type === 'cta') {
+          const head = h('input', { type: 'text', value: s.heading || '' });
+          const sub = h('input', { type: 'text', value: s.subheading || '' });
+          const cta = h('input', { type: 'text', value: s.cta_label || '' });
+          const ctaUrl = h('input', { type: 'text', value: s.cta_url || '' });
+          head.oninput = () => s.heading = head.value; sub.oninput = () => s.subheading = sub.value;
+          cta.oninput = () => s.cta_label = cta.value; ctaUrl.oninput = () => s.cta_url = ctaUrl.value;
+          f('Heading', head); f('Subheading', sub); f('CTA label', cta); f('CTA URL', ctaUrl);
+        }
+        else if (s.type === 'contact') {
+          const head = h('input', { type: 'text', value: s.heading || '' });
+          const em = h('input', { type: 'email', value: s.email || '' });
+          const ph = h('input', { type: 'tel', value: s.phone || '' });
+          const ad = h('textarea', { rows: 2 }); ad.value = s.address || '';
+          head.oninput = () => s.heading = head.value; em.oninput = () => s.email = em.value;
+          ph.oninput = () => s.phone = ph.value; ad.oninput = () => s.address = ad.value;
+          f('Heading', head); f('Email', em); f('Phone', ph); f('Address', ad);
+        }
+        else if (s.type === 'footer') {
+          const t = h('input', { type: 'text', value: s.text || '' });
+          t.oninput = () => s.text = t.value;
+          f('Footer text', t);
+        }
+      }
+      rerenderFields();
+
+      const row = h('div', { class: 'card', style: { marginBottom: '.6rem', padding: '.75rem' } },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', marginBottom: '.5rem' } },
+          h('b', { style: { flex: 1 } }, '§ Section ' + (idx + 1)),
+          h('button', { class: 'btn sm', onclick: () => { if (idx > 0) { const t = page.sections[idx-1]; page.sections[idx-1] = s; page.sections[idx] = t; renderSections(); } } }, '↑'),
+          h('button', { class: 'btn sm', onclick: () => { if (idx < page.sections.length - 1) { const t = page.sections[idx+1]; page.sections[idx+1] = s; page.sections[idx] = t; renderSections(); } } }, '↓'),
+          h('button', { class: 'btn sm danger', onclick: () => { page.sections.splice(idx, 1); renderSections(); } }, '🗑')
+        ),
+        h('div', { class: 'field' }, h('label', {}, 'Type'), typeSel),
+        fields
+      );
+      sectionsList.appendChild(row);
+    });
+  }
+  renderSections();
+
+  const addBox = h('select', { onchange: ev => {
+    if (!ev.target.value) return;
+    page.sections = page.sections || [];
+    page.sections.push({ type: ev.target.value });
+    ev.target.value = '';
+    renderSections();
+  } },
+    h('option', { value: '' }, '+ Add section…'),
+    ..._PAGE_SECTION_TYPES.map(t => h('option', { value: t.v }, t.l))
+  );
+
+  const saveBtn = h('button', { class: 'btn primary', onclick: async () => {
+    const payload = {
+      id: id || null, name: nameInp.value.trim(), description: descInp.value,
+      slug: slugInp.value.trim(),
+      is_active: activeChk.checked ? 1 : 0,
+      theme_color: colorInp.value, theme_bg: bgInp.value,
+      seo_title: seoTitleInp.value, seo_description: seoDescInp.value,
+      og_image: ogImgInp.value, sections: page.sections
+    };
+    try { await api('api_pages_save', payload); toast('Saved', 'ok'); modal.remove(); if (onClose) onClose(); }
+    catch (e) { toast(e.message, 'err'); }
+  } }, '💾 Save');
+
+  const modal = h('div', { class: 'modal-wrap' },
+    h('div', { class: 'modal lg' },
+      h('div', { class: 'modal-header' },
+        h('h3', {}, id ? '✎ Edit page' : '+ New page'),
+        h('button', { class: 'modal-close', onclick: () => modal.remove() }, '×')
+      ),
+      h('div', { class: 'modal-body' },
+        h('div', { style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap' } },
+          h('div', { style: { flex: 2, minWidth: '200px' } }, h('label', {}, 'Page name'), nameInp),
+          h('div', { style: { flex: 1, minWidth: '180px' } }, h('label', {}, 'URL slug'), slugInp)
+        ),
+        h('div', { class: 'field' }, h('label', {}, 'Description (internal)'), descInp),
+        h('div', { style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap', alignItems: 'flex-end' } },
+          h('label', { style: { display: 'flex', alignItems: 'center', gap: '.3rem' } }, activeChk, h('span', {}, 'Active')),
+          h('div', {}, h('label', {}, 'Theme color'), colorInp),
+          h('div', {}, h('label', {}, 'Background'), bgInp)
+        ),
+        h('hr'),
+        h('h4', {}, 'SEO'),
+        h('div', { class: 'field' }, h('label', {}, 'SEO title'), seoTitleInp),
+        h('div', { class: 'field' }, h('label', {}, 'SEO description'), seoDescInp),
+        h('div', { class: 'field' }, h('label', {}, 'OG image URL'), ogImgInp),
+        h('hr'),
+        h('h4', {}, 'Sections (top → bottom order)'),
+        sectionsList,
+        h('div', { style: { marginTop: '.5rem' } }, addBox)
+      ),
+      h('div', { class: 'modal-footer' }, saveBtn)
     )
   );
   document.body.appendChild(modal);
