@@ -14012,6 +14012,7 @@ VIEWS.admin = async (view) => {
       { id: 'qrforms',      label: '📲 QR Lead Forms' },
       { id: 'forms',        label: '📝 Forms' },
       { id: 'pages',        label: '🌐 Landing Pages' },
+      { id: 'wawidget',     label: '💚 WhatsApp Chat Widget' },
       { id: 'whlogs',       label: '📡 Webhook logs' },
       { id: 'recdiag',      label: '🎧 Recording diagnostics' },
       { id: 'pendingcalls', label: '📞 Pending calls' },
@@ -14109,6 +14110,7 @@ async function showAdminTab(id) {
     if (id === 'projstages') body.replaceChildren(await adminProjectStages());
     if (id === 'forms')      body.replaceChildren(await adminForms());
     if (id === 'pages')      body.replaceChildren(await adminPages());
+    if (id === 'wawidget')   body.replaceChildren(await adminWaWidget());
     if (id === 'integrations') body.replaceChildren(await adminIntegrations());
     if (id === 'qrforms')     body.replaceChildren(await adminQrForms());
     if (id === 'whlogs')      body.replaceChildren(await adminWebhookLogs());
@@ -23520,7 +23522,8 @@ function openPagePreview(url, name) {
     'adminCompany', 'adminApi', 'showAdminTab',
     'adminNurture', 'openNurtureEditor', 'openLeadSequencesModal',
     'adminForms', 'openFormEditor', 'openFormSubmissions',
-    'adminPages', 'openPageEditor', 'openPageTemplatePicker', 'openPagePreview'
+    'adminPages', 'openPageEditor', 'openPageTemplatePicker', 'openPagePreview',
+    'adminWaWidget', 'openWaWidgetEditor'
   ];
   try {
     const missing = required.filter(n => typeof globalThis[n] !== 'function');
@@ -23538,6 +23541,206 @@ function openPagePreview(url, name) {
 //           of the SPA live OUTSIDE this IIFE and won't see helpers nested
 //           inside it. Pattern: nest helpers ABOVE this line. See commit
 //           b7598b6 for the bug this prevents.
+
+// ──────────────────────────────────────────────────────────────────
+// Settings → 💚 WhatsApp Chat Widget (embeddable site snippet)
+// ──────────────────────────────────────────────────────────────────
+async function adminWaWidget() {
+  const wrap = h('div', { class: 'wa-widget-admin' });
+  wrap.appendChild(h('div', { class: 'mod-h2' }, [
+    h('h3', {}, '💚 WhatsApp Chat Widget'),
+    h('div', { class: 'muted', style: 'font-size:.85em;' }, 'Generate a copy-paste snippet that drops a floating WhatsApp chat button on any external website. Visitors click it → opens wa.me with your pre-filled message.'),
+    h('button', { class: 'btn primary', style: 'margin-top:8px;', onclick: () => openWaWidgetEditor(null, () => showAdminTab('wawidget')) }, '+ New widget')
+  ]));
+
+  let widgets = [];
+  try { const r = await api('api_waWidget_list'); widgets = r.widgets || []; }
+  catch (e) { wrap.appendChild(h('div', { class: 'err' }, 'Failed to load widgets: ' + e.message)); return wrap; }
+
+  if (!widgets.length) {
+    wrap.appendChild(h('div', { class: 'empty', style: 'padding:16px;color:#64748b;' }, 'No widgets yet. Click "+ New widget" to create one.'));
+    return wrap;
+  }
+
+  const tbl = h('table', { class: 'mini-table' },
+    h('thead', {}, h('tr', {},
+      h('th', {}, 'Name'),
+      h('th', {}, 'Phone'),
+      h('th', {}, 'Position'),
+      h('th', {}, 'Views'),
+      h('th', {}, 'Clicks'),
+      h('th', {}, 'Status'),
+      h('th', {}, '')
+    )),
+    h('tbody', {},
+      widgets.map(w => h('tr', {},
+        h('td', {}, w.name || '—'),
+        h('td', {}, w.phone || '—'),
+        h('td', {}, w.position || 'bottom-right'),
+        h('td', {}, String(w.view_count || 0)),
+        h('td', {}, String(w.click_count || 0)),
+        h('td', {}, Number(w.is_active) ? '🟢 Active' : '⚪ Disabled'),
+        h('td', { style: 'white-space:nowrap;' }, [
+          h('button', { class: 'btn sm', onclick: () => openWaWidgetEditor(w.id, () => showAdminTab('wawidget')) }, '✎ Edit'),
+          ' ',
+          h('button', { class: 'btn sm', onclick: () => openWaWidgetSnippet(w.id) }, '📋 Snippet'),
+          ' ',
+          h('button', { class: 'btn sm', onclick: async () => {
+            try { await api('api_waWidget_clone', w.id); toast('Cloned'); showAdminTab('wawidget'); }
+            catch (e) { toast(e.message, 'err'); }
+          } }, '⎘ Clone'),
+          ' ',
+          h('button', { class: 'btn sm danger', onclick: async () => {
+            if (!confirm('Delete this widget? The snippet on your site will stop working.')) return;
+            try { await api('api_waWidget_delete', w.id); toast('Deleted'); showAdminTab('wawidget'); }
+            catch (e) { toast(e.message, 'err'); }
+          } }, '🗑')
+        ])
+      ))
+    )
+  );
+  wrap.appendChild(tbl);
+  return wrap;
+}
+
+async function openWaWidgetEditor(widgetId, onSaved) {
+  let widget = {
+    id: 0, name: 'My Site Chat', slug: '', is_active: 1,
+    phone: '', prefilled_message: "Hi, I'd like to know more.",
+    theme_color: '#25D366', position: 'bottom-right',
+    greeting_text: 'Hi there! 👋 How can we help you today?',
+    greeting_delay_ms: 2500, agent_name: 'Customer Care',
+    agent_subtitle: 'Typically replies within minutes',
+    agent_avatar_url: '', show_avatar: 1, track_clicks: 0,
+    lead_default_source: 'Website Widget', lead_default_status_id: ''
+  };
+  let statuses = [];
+  try { statuses = await api('api_statuses_list') || []; } catch (_) {}
+  if (widgetId) {
+    try { const r = await api('api_waWidget_get', widgetId); widget = Object.assign(widget, r.widget); }
+    catch (e) { toast('Load failed: ' + e.message, 'err'); return; }
+  }
+
+  const phoneInput     = h('input', { type: 'tel', placeholder: 'e.g. 919876543210 (with country code, no +)', value: widget.phone || '' });
+  const nameInput      = h('input', { type: 'text', value: widget.name || '' });
+  const msgInput       = h('textarea', { rows: 2 }, widget.prefilled_message || '');
+  const colorInput     = h('input', { type: 'color', value: widget.theme_color || '#25D366' });
+  const positionSelect = h('select', {},
+    ['bottom-right', 'bottom-left', 'top-right', 'top-left'].map(p =>
+      h('option', { value: p, selected: widget.position === p ? 'selected' : null }, p)
+    )
+  );
+  const greetInput     = h('input', { type: 'text', value: widget.greeting_text || '' });
+  const greetDelay     = h('input', { type: 'number', min: '0', max: '60000', step: '500', value: widget.greeting_delay_ms || 2500 });
+  const agentInput     = h('input', { type: 'text', value: widget.agent_name || '' });
+  const subInput       = h('input', { type: 'text', value: widget.agent_subtitle || '' });
+  const avatarInput    = h('input', { type: 'url', placeholder: 'https://… (optional)', value: widget.agent_avatar_url || '' });
+  const showAvCheck    = h('input', { type: 'checkbox', ...(Number(widget.show_avatar) ? { checked: 'checked' } : {}) });
+  const activeCheck    = h('input', { type: 'checkbox', ...(Number(widget.is_active) ? { checked: 'checked' } : {}) });
+  const trackCheck     = h('input', { type: 'checkbox', ...(Number(widget.track_clicks) ? { checked: 'checked' } : {}) });
+  const sourceInput    = h('input', { type: 'text', value: widget.lead_default_source || 'Website Widget' });
+  const statusSelect   = h('select', {},
+    [h('option', { value: '' }, '— Default —')].concat(
+      (statuses || []).map(st => h('option', { value: st.id, selected: String(widget.lead_default_status_id || '') == String(st.id) ? 'selected' : null }, st.name))
+    )
+  );
+
+  function row(lbl, ctrl, hint) {
+    const r = h('div', { class: 'mod-row' },
+      h('label', {}, lbl),
+      ctrl
+    );
+    if (hint) r.appendChild(h('div', { class: 'mod-hint', style: 'font-size:.78em;color:#94a3b8;' }, hint));
+    return r;
+  }
+
+  const body = h('div', { class: 'mod-body', style: 'max-height:70vh;overflow:auto;' });
+  body.appendChild(row('Internal name *', nameInput, 'Just for your reference (e.g. "Main site", "Pricing page")'));
+  body.appendChild(row('WhatsApp number *', phoneInput, 'Country code + number, digits only (e.g. 919876543210)'));
+  body.appendChild(row('Pre-filled message', msgInput, 'What gets pre-typed in WhatsApp when the visitor opens chat'));
+  body.appendChild(row('Theme color', colorInput));
+  body.appendChild(row('Button position', positionSelect));
+  body.appendChild(row('Greeting bubble text', greetInput, 'Shows after the delay — leave empty to disable'));
+  body.appendChild(row('Greeting delay (ms)', greetDelay, '0 = show instantly, 2500 = after 2.5s'));
+  body.appendChild(row('Agent name', agentInput));
+  body.appendChild(row('Agent subtitle', subInput, 'e.g. "Replies within minutes"'));
+  body.appendChild(row('Agent avatar URL', avatarInput, 'Optional — falls back to first letter'));
+  body.appendChild(row('Show avatar', showAvCheck));
+  body.appendChild(row('Widget active', activeCheck));
+  body.appendChild(row('Capture clicks as leads', trackCheck, 'When ON, every click creates a "Website Widget" lead so you can follow up'));
+  body.appendChild(row('Lead source name', sourceInput));
+  body.appendChild(row('Default status (for captured leads)', statusSelect));
+
+  const modal = openModal((widgetId ? 'Edit' : 'Create') + ' WhatsApp Widget', body, [
+    h('button', { class: 'btn', onclick: () => closeModal(modal) }, 'Cancel'),
+    h('button', { class: 'btn primary', onclick: async () => {
+      const payload = {
+        id: widget.id || 0,
+        name: nameInput.value.trim() || 'WhatsApp Widget',
+        slug: widget.slug || '',
+        is_active: activeCheck.checked ? 1 : 0,
+        phone: phoneInput.value.replace(/\D+/g, ''),
+        prefilled_message: msgInput.value,
+        theme_color: colorInput.value || '#25D366',
+        position: positionSelect.value,
+        greeting_text: greetInput.value,
+        greeting_delay_ms: Number(greetDelay.value) || 2500,
+        agent_name: agentInput.value,
+        agent_subtitle: subInput.value,
+        agent_avatar_url: avatarInput.value,
+        show_avatar: showAvCheck.checked ? 1 : 0,
+        track_clicks: trackCheck.checked ? 1 : 0,
+        lead_default_source: sourceInput.value || 'Website Widget',
+        lead_default_status_id: statusSelect.value || null
+      };
+      if (!payload.phone) { toast('WhatsApp number is required', 'err'); return; }
+      try {
+        const r = await api('api_waWidget_save', payload);
+        toast('Saved');
+        closeModal(modal);
+        if (onSaved) onSaved();
+        if (!widgetId && r && r.widget) setTimeout(() => openWaWidgetSnippet(r.widget.id), 250);
+      } catch (e) { toast(e.message, 'err'); }
+    } }, 'Save')
+  ]);
+}
+
+async function openWaWidgetSnippet(widgetId) {
+  let r;
+  try {
+    r = await api('api_waWidget_snippet', {
+      id: widgetId,
+      tenant_slug: (CRM && CRM.tenantSlug) || '',
+      base_url: location.origin
+    });
+  } catch (e) { toast(e.message, 'err'); return; }
+  const code = r.snippet || '';
+  const ta = h('textarea', { rows: 3, style: 'width:100%;font-family:Menlo,Consolas,monospace;font-size:13px;padding:10px;border-radius:8px;border:1px solid #cbd5e1;' }, code);
+  const body = h('div', { class: 'mod-body' });
+  body.appendChild(h('p', { style: 'margin:0 0 8px;' }, 'Paste this snippet just before the </body> tag of your website. It loads asynchronously and adds the floating WhatsApp button to every page.'));
+  body.appendChild(ta);
+  body.appendChild(h('div', { style: 'margin-top:10px;font-size:.85em;color:#64748b;' }, [
+    '✓ Works on any website (WordPress, Shopify, Wix, custom HTML)',
+    h('br'),
+    '✓ Loads asynchronously — no impact on page speed',
+    h('br'),
+    '✓ Update settings in this CRM and the live widget refreshes automatically (within 5 minutes)'
+  ]));
+  const copyBtn = h('button', { class: 'btn primary', onclick: () => {
+    ta.select();
+    try { navigator.clipboard.writeText(code); toast('Copied! Paste into your site before </body>'); }
+    catch (_) { document.execCommand('copy'); toast('Copied'); }
+  } }, '📋 Copy snippet');
+  const modal = openModal('Embed Snippet — ' + (r.widget && r.widget.name || ''), body, [
+    h('button', { class: 'btn', onclick: () => closeModal(modal) }, 'Close'),
+    copyBtn
+  ]);
+  setTimeout(() => ta.select(), 60);
+}
+// ──────────────────────────────────────────────────────────────────
+// End WhatsApp Chat Widget admin
+// ──────────────────────────────────────────────────────────────────
+
 (function bootCopilot() {
 
 // =====================================================================

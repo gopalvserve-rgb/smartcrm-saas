@@ -75,6 +75,7 @@ const ROUTE_FILES = [
   'forms',
   'pages',
   'nurture',
+  'waWidget',
 ];
 
 const API = {};
