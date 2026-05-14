@@ -2002,6 +2002,7 @@ VIEWS.leads = async (view) => {
     h('button', { class: 'btn sm', onclick: bulkCustomFieldPrompt, title: 'Set a custom-field value on every selected lead' }, '🧩 Field'),
     h('button', { class: 'btn sm', onclick: bulkWhatsAppPrompt }, '💬 WhatsApp'),
     h('button', { class: 'btn sm', onclick: bulkCampaignPrompt }, '🎯 Campaign'),
+    h('button', { class: 'btn sm', onclick: bulkNurturePrompt, title: 'Enroll selected leads in a nurture sequence' }, '🌱 Nurture'),
     h('button', { class: 'btn sm danger', onclick: bulkDelete }, '🗑️ Delete'),
     h('button', { class: 'btn sm ghost', onclick: () => clearSelection() }, 'Clear')
   ));
@@ -2923,6 +2924,39 @@ async function bulkStatusPrompt() {
  * Variables support per-lead merge tokens via @{name}, @{firstname},
  * @{phone}, @{email}, @{source} — same renderer the rest of WhatsBot uses.
  */
+
+async function bulkNurturePrompt() {
+  const ids = [...(CRM._selected || [])].filter(Boolean);
+  if (!ids.length) return toast('Select leads first', 'err');
+  const seqs = await api('api_nurture_list').catch(() => []);
+  const active = seqs.filter(s => Number(s.is_active));
+  if (!active.length) return toast('No active sequences. Create one in Settings → 🌱 Nurture Sequences first.', 'err');
+  const sel = h('select', {}, ...active.map(s => h('option', { value: s.id }, s.name + ' (' + s.step_count + ' steps)')));
+  const modal = h('div', { class: 'modal-wrap' },
+    h('div', { class: 'modal' },
+      h('div', { class: 'modal-header' },
+        h('h3', {}, '🌱 Enroll ' + ids.length + ' lead' + (ids.length === 1 ? '' : 's') + ' in sequence'),
+        h('button', { class: 'modal-close', onclick: () => modal.remove() }, '×')
+      ),
+      h('div', { class: 'modal-body' },
+        h('p', { class: 'muted', style: { fontSize: '.85rem' } }, 'Pick a nurture sequence. Each selected lead will be enrolled (leads already enrolled in this sequence are skipped).'),
+        h('div', { class: 'field' }, h('label', {}, 'Sequence'), sel)
+      ),
+      h('div', { class: 'modal-footer' },
+        h('button', { class: 'btn primary', onclick: async () => {
+          try {
+            const r = await api('api_nurture_enroll', { sequence_id: Number(sel.value), lead_ids: ids });
+            toast('Enrolled ' + r.enrolled + ' lead' + (r.enrolled === 1 ? '' : 's') + (r.skipped ? ' · skipped ' + r.skipped + ' already enrolled' : ''), 'ok');
+            modal.remove();
+            clearSelection();
+          } catch (e) { toast(e.message, 'err'); }
+        } }, 'Enroll')
+      )
+    )
+  );
+  document.body.appendChild(modal);
+}
+
 async function bulkWhatsAppPrompt() {
   const ids = selectedIds(); if (!ids.length) return;
   const templates = await api('api_wb_templates_list').catch(() => []);
@@ -13800,6 +13834,7 @@ VIEWS.admin = async (view) => {
     ]},
     { title: 'Automation', items: [
       { id: 'automations',  label: '⚡ Automations' },
+      { id: 'nurture',      label: '🌱 Nurture Sequences' },
       { id: 'tat',          label: '⏱️ TAT' },
     ]},
     { title: 'Appearance', items: [
@@ -13869,6 +13904,7 @@ async function showAdminTab(id) {
     if (id === 'company')     body.replaceChildren(await adminCompany());
     if (id === 'api')         body.replaceChildren(await adminApi());
     if (id === 'automations') body.replaceChildren(await adminAutomations());
+    if (id === 'nurture')     body.replaceChildren(await adminNurture());
     if (id === 'fb')          body.replaceChildren(await adminFb());
     if (id === 'whatsapp') body.replaceChildren(await adminWhatsapp());
     if (id === 'sources')  body.replaceChildren(await adminSources());
@@ -22326,6 +22362,224 @@ function _copilotMsg(role, text) {
 // addEventListener('DOMContentLoaded', ...) never runs. Check readyState
 // and start the poller immediately if the document is already parsed.
 (function bootCopilot() {
+
+
+// ─────────────────────────────────────────────────────────────────────
+// Lead Nurturing — Settings tab
+// ─────────────────────────────────────────────────────────────────────
+async function adminNurture() {
+  const wrap = h('div', {});
+  const [seqs, statuses, templates] = await Promise.all([
+    api('api_nurture_list').catch(() => []),
+    api('api_statuses_list').catch(() => []),
+    api('api_wb_templates_list').catch(() => [])
+  ]);
+
+  const header = h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', flexWrap: 'wrap', marginBottom: '1rem' } },
+    h('h3', { style: { margin: 0, flex: 1 } }, '🌱 Nurture Sequences'),
+    h('button', { class: 'btn primary', onclick: () => openNurtureEditor(null, statuses, templates, () => showAdminTab('nurture')) }, '+ New sequence'),
+    h('button', { class: 'btn ghost sm', onclick: () => openNurtureActivity() }, '📋 Recent activity')
+  );
+  wrap.appendChild(header);
+
+  wrap.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+    'Build drip sequences that send WhatsApp templates, emails, and AI Bot messages to leads on a schedule. Enroll leads manually from the Leads page (bulk-select → 🌱 Enroll in sequence). Each sequence auto-pauses when a customer replies and exits when their status changes to the terminal status you pick.'));
+
+  if (!seqs.length) {
+    wrap.appendChild(h('div', { class: 'card muted', style: { textAlign: 'center', padding: '2rem' } },
+      'No sequences yet. Click "+ New sequence" to create your first nurture drip.'));
+    return wrap;
+  }
+
+  seqs.forEach(s => {
+    const card = h('div', { class: 'card', style: { marginBottom: '.75rem', display: 'flex', alignItems: 'center', gap: '.75rem' } },
+      h('div', { style: { flex: 1 } },
+        h('div', { style: { fontSize: '1rem', fontWeight: 600 } }, s.name,
+          h('span', { class: 'tag', style: { marginLeft: '.5rem', background: Number(s.is_active) ? '#16a34a' : '#94a3b8', color: '#fff', fontSize: '.7rem' } }, Number(s.is_active) ? 'Active' : 'Inactive')),
+        h('div', { class: 'muted', style: { fontSize: '.8rem', marginTop: '.2rem' } },
+          s.step_count + ' step' + (s.step_count === 1 ? '' : 's') + ' · ' + s.active_count + ' active enrollment' + (s.active_count === 1 ? '' : 's')),
+        s.description ? h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } }, s.description) : null
+      ),
+      h('button', { class: 'btn sm', onclick: () => openNurtureEditor(s.id, statuses, templates, () => showAdminTab('nurture')) }, '✎ Edit'),
+      h('button', { class: 'btn sm danger', onclick: async () => {
+        if (!confirm('Delete sequence "' + s.name + '"?')) return;
+        try { await api('api_nurture_delete', s.id); toast('Deleted'); showAdminTab('nurture'); }
+        catch (e) { toast(e.message, 'err'); }
+      } }, '🗑')
+    );
+    wrap.appendChild(card);
+  });
+  return wrap;
+}
+
+async function openNurtureEditor(id, statuses, templates, onClose) {
+  let seq = { is_active: 1, exit_on_reply: 1, pause_on_reply_hours: 24, steps: [] };
+  if (id) try { seq = await api('api_nurture_get', id); } catch (e) { toast(e.message, 'err'); return; }
+
+  const nameInp = h('input', { type: 'text', placeholder: 'e.g. Demo follow-up drip', value: seq.name || '' });
+  const descInp = h('textarea', { rows: 2, placeholder: 'Optional — what does this sequence do?' });
+  descInp.value = seq.description || '';
+  const activeChk = h('input', { type: 'checkbox', checked: Number(seq.is_active) ? 'checked' : null });
+  const exitReplyChk = h('input', { type: 'checkbox', checked: Number(seq.exit_on_reply) ? 'checked' : null });
+  const pauseHoursInp = h('input', { type: 'number', min: '1', max: '168', value: String(seq.pause_on_reply_hours || 24), style: { width: '6em' } });
+  const exitStatusSel = h('select', {},
+    h('option', { value: '' }, '— None —'),
+    ...statuses.map(s => h('option', { value: s.id, selected: Number(seq.exit_on_status_id) === Number(s.id) ? 'selected' : null }, s.name))
+  );
+
+  // Steps editor — table with add/remove
+  const stepsContainer = h('div', { id: 'nurture-steps-list' });
+
+  function renderSteps() {
+    stepsContainer.innerHTML = '';
+    (seq.steps || []).forEach((step, idx) => {
+      const dayInp = h('input', { type: 'number', min: '0', max: '365', value: String(step.delay_days || 0), style: { width: '4em' } });
+      const hourInp = h('input', { type: 'number', min: '0', max: '23', value: String(step.delay_hours || 0), style: { width: '4em' } });
+      const channelSel = h('select', {},
+        h('option', { value: 'wa_template', selected: step.channel === 'wa_template' ? 'selected' : null }, 'WhatsApp template'),
+        h('option', { value: 'email',       selected: step.channel === 'email'       ? 'selected' : null }, 'Email'),
+        h('option', { value: 'ai_bot',      selected: step.channel === 'ai_bot'      ? 'selected' : null }, 'AI Bot message')
+      );
+      const tplSel = h('select', {},
+        h('option', { value: '' }, '— Pick template —'),
+        ...templates.map(t => h('option', { value: t.name + '|' + (t.language || 'en_US'), selected: (step.template_name + '|' + step.template_lang) === (t.name + '|' + (t.language || 'en_US')) ? 'selected' : null }, t.name + ' (' + (t.language || 'en_US') + ')'))
+      );
+      const subjInp = h('input', { type: 'text', placeholder: 'Email subject (supports {{name}}, {{firstname}})', value: step.email_subject || '' });
+      const bodyTa = h('textarea', { rows: 3, placeholder: 'Body — use {{name}}, {{firstname}}, {{phone}}, {{email}} merge fields' });
+      bodyTa.value = step.email_body || step.body_text || step.ai_prompt || '';
+
+      const channelSpecific = h('div', { class: 'field' });
+      function rerenderChannel() {
+        channelSpecific.innerHTML = '';
+        if (channelSel.value === 'wa_template') {
+          channelSpecific.appendChild(h('label', {}, 'WhatsApp template'));
+          channelSpecific.appendChild(tplSel);
+        } else if (channelSel.value === 'email') {
+          channelSpecific.appendChild(h('label', {}, 'Email subject'));
+          channelSpecific.appendChild(subjInp);
+          channelSpecific.appendChild(h('label', { style: { marginTop: '.5rem' } }, 'Email body'));
+          channelSpecific.appendChild(bodyTa);
+        } else {
+          channelSpecific.appendChild(h('label', {}, 'AI Bot message text'));
+          channelSpecific.appendChild(bodyTa);
+        }
+      }
+      channelSel.addEventListener('change', () => { step.channel = channelSel.value; rerenderChannel(); });
+      rerenderChannel();
+
+      const row = h('div', { class: 'card', style: { marginBottom: '.5rem', padding: '.75rem' } },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', marginBottom: '.5rem' } },
+          h('b', { style: { flex: 1 } }, 'Step ' + (idx + 1)),
+          h('button', { class: 'btn sm danger', onclick: () => { seq.steps.splice(idx, 1); renderSteps(); } }, '🗑 Remove')
+        ),
+        h('div', { style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap', marginBottom: '.5rem' } },
+          h('div', {}, h('label', {}, 'After'), h('div', { style: { display: 'flex', alignItems: 'center', gap: '.25rem' } },
+            dayInp, h('span', {}, 'days'), hourInp, h('span', {}, 'hours')
+          )),
+          h('div', { style: { flex: 1 } }, h('label', {}, 'Channel'), channelSel)
+        ),
+        channelSpecific
+      );
+      // Wire input mutations back to the step object so save grabs latest values
+      dayInp.addEventListener('input', () => { step.delay_days = Number(dayInp.value) || 0; });
+      hourInp.addEventListener('input', () => { step.delay_hours = Number(hourInp.value) || 0; });
+      tplSel.addEventListener('change', () => {
+        const [n, l] = tplSel.value.split('|');
+        step.template_name = n; step.template_lang = l;
+      });
+      subjInp.addEventListener('input', () => { step.email_subject = subjInp.value; });
+      bodyTa.addEventListener('input', () => {
+        if (channelSel.value === 'email') step.email_body = bodyTa.value;
+        else step.body_text = bodyTa.value;
+      });
+      stepsContainer.appendChild(row);
+    });
+  }
+  renderSteps();
+
+  const addStepBtn = h('button', { class: 'btn', onclick: () => {
+    seq.steps = seq.steps || [];
+    seq.steps.push({ delay_days: 1, delay_hours: 0, channel: 'wa_template', template_lang: 'en_US' });
+    renderSteps();
+  } }, '+ Add step');
+
+  const saveBtn = h('button', { class: 'btn primary', onclick: async () => {
+    const payload = {
+      id: id || null,
+      name: nameInp.value.trim(),
+      description: descInp.value,
+      is_active: activeChk.checked ? 1 : 0,
+      exit_on_reply: exitReplyChk.checked ? 1 : 0,
+      pause_on_reply_hours: Number(pauseHoursInp.value) || 24,
+      exit_on_status_id: Number(exitStatusSel.value) || null,
+      steps: seq.steps
+    };
+    try {
+      await api('api_nurture_save', payload);
+      toast('Sequence saved', 'ok');
+      modal.remove();
+      if (onClose) onClose();
+    } catch (e) { toast(e.message, 'err'); }
+  } }, '💾 Save');
+
+  const modal = h('div', { class: 'modal-wrap' },
+    h('div', { class: 'modal lg' },
+      h('div', { class: 'modal-header' },
+        h('h3', {}, id ? '✎ Edit sequence' : '+ New sequence'),
+        h('button', { class: 'modal-close', onclick: () => modal.remove() }, '×')
+      ),
+      h('div', { class: 'modal-body' },
+        h('div', { class: 'field' }, h('label', {}, 'Sequence name'), nameInp),
+        h('div', { class: 'field' }, h('label', {}, 'Description'), descInp),
+        h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', padding: '.4rem 0' } },
+          activeChk, h('span', {}, 'Active (only active sequences can have new enrollments)')),
+        h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', padding: '.4rem 0' } },
+          exitReplyChk, h('span', {}, 'Pause when customer replies (resume after silence)')),
+        h('div', { class: 'field' }, h('label', {}, 'Pause window (hours)'), pauseHoursInp),
+        h('div', { class: 'field' }, h('label', {}, 'Exit when status changes to'), exitStatusSel),
+        h('hr'),
+        h('h4', { style: { marginTop: '.5rem' } }, 'Steps (in order)'),
+        stepsContainer,
+        addStepBtn
+      ),
+      h('div', { class: 'modal-footer' }, saveBtn)
+    )
+  );
+  document.body.appendChild(modal);
+}
+
+async function openNurtureActivity() {
+  const runs = await api('api_nurture_recent_runs', { limit: 100 }).catch(() => []);
+  const modal = h('div', { class: 'modal-wrap' },
+    h('div', { class: 'modal lg' },
+      h('div', { class: 'modal-header' },
+        h('h3', {}, '📋 Recent nurture runs'),
+        h('button', { class: 'modal-close', onclick: () => modal.remove() }, '×')
+      ),
+      h('div', { class: 'modal-body' },
+        runs.length ? h('table', { class: 'tbl' },
+          h('thead', {}, h('tr', {},
+            h('th', {}, 'When'), h('th', {}, 'Sequence'), h('th', {}, 'Step'),
+            h('th', {}, 'Lead'), h('th', {}, 'Channel'), h('th', {}, 'Status'), h('th', {}, 'Error')
+          )),
+          h('tbody', {},
+            ...runs.map(r => h('tr', {},
+              h('td', {}, fmtDate(r.sent_at || r.scheduled_for, 'relative')),
+              h('td', {}, r.sequence_name || ''),
+              h('td', {}, '#' + r.step_no),
+              h('td', {}, (r.lead_name || '') + ' (' + (r.lead_phone || '') + ')'),
+              h('td', {}, r.channel),
+              h('td', {}, h('span', { class: 'tag', style: { background: r.status === 'sent' ? '#16a34a' : r.status === 'failed' ? '#dc2626' : '#94a3b8', color: '#fff' } }, r.status)),
+              h('td', { style: { fontSize: '.75rem', color: '#dc2626' } }, r.error_text || '')
+            ))
+          )
+        ) : h('div', { class: 'muted' }, 'No recent runs.')
+      )
+    )
+  );
+  document.body.appendChild(modal);
+}
+
 // =====================================================================
 // Floating WhatsApp chat dock
 // A small persistent FAB on the bottom-LEFT (Copilot is bottom-right)

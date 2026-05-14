@@ -2224,6 +2224,39 @@ setInterval(() => {
 setTimeout(() => _runReengageForAllTenants().catch(() => {}), 30_000);
 console.log('[reengage] AI bot re-engagement worker started');
 
+// ── Background: per-tenant Nurture sequence worker ──────────────────────
+// Picks up nurture_step_runs that are due and dispatches them via the
+// channel-appropriate send path (WA template / email / AI bot). Exit
+// conditions (customer reply, status change) are evaluated per step.
+async function _runNurtureForAllTenants() {
+  let rows = [];
+  try {
+    const r = await controlDb.query(
+      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500`
+    );
+    rows = r.rows;
+  } catch (e) { console.warn('[nurture] tenant list failed:', e.message); return; }
+  let nurtureWorker;
+  try { nurtureWorker = require('./utils/nurtureWorker'); } catch (e) { return; }
+  if (!nurtureWorker.tick) return;
+  for (const row of rows) {
+    let t; try { t = await tenantPoolMod.findActiveTenant(row.slug); } catch (_) { continue; }
+    if (!t) continue;
+    const pool = tenantPoolMod.poolFor(t);
+    if (!pool) continue;
+    try {
+      await tenantDb.tenantStorage.run({ pool, tenant: t, slug: row.slug },
+        () => nurtureWorker.tick()
+      );
+    } catch (e) { console.warn(`[nurture] ${row.slug} tick failed:`, e.message); }
+  }
+}
+setInterval(() => {
+  _runNurtureForAllTenants().catch(e => console.error('[nurture] cycle failed:', e.message));
+}, Number(process.env.NURTURE_INTERVAL_MS || 5 * 60_000));
+setTimeout(() => _runNurtureForAllTenants().catch(() => {}), 45_000);
+console.log('[nurture] sequence worker started');
+
 // ── Background: per-tenant AI Call Summary worker ──────────────────────
 // aiCallSummary.startWorker() is only wired in server.tenant.js. Without
 // this, SaaS-tenant recordings never get auto-processed by Gemini — they
