@@ -23349,11 +23349,13 @@ function openPagePreview(url, name) {
   } catch (_) {}
 })();
 
-(function bootCopilot() { … })() IIFE — anything inside
-//    becomes scoped to bootCopilot. showAdminTab + the rest of the SPA live
-//    OUTSIDE this IIFE and won't see helpers nested inside it.
-//    Pattern: nest helpers ABOVE this line, then reference them from inside
-//    bootCopilot if needed. See commit b7598b6 for the bug this prevents.
+// CRITICAL: Do NOT insert new top-level Settings tabs, admin helpers, or
+//           any function that needs to be globally callable BELOW this line.
+//           This file ends with a (function bootCopilot()) IIFE. Anything
+//           inside becomes scoped to bootCopilot. showAdminTab and the rest
+//           of the SPA live OUTSIDE this IIFE and won't see helpers nested
+//           inside it. Pattern: nest helpers ABOVE this line. See commit
+//           b7598b6 for the bug this prevents.
 (function bootCopilot() {
 
 // =====================================================================
