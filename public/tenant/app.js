@@ -3203,6 +3203,132 @@ function exportCSV() {
   a.click();
   URL.revokeObjectURL(a.href);
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Bulk-upload field mapping — added 2026-05-14
+// Each uploaded column gets a target lead-field selector + an
+// "unmapped behavior" dropdown decides what happens to columns the
+// user leaves unmapped (skip / custom field / append to notes).
+// ─────────────────────────────────────────────────────────────────────
+const BULK_MAP_TARGETS = [
+  { v: '__skip',           l: '— Skip this column —' },
+  { v: '__custom',         l: '★ Save as custom field (column name = key)' },
+  { v: 'name',             l: 'Name' },
+  { v: 'phone',            l: 'Phone' },
+  { v: 'alt_phone',        l: 'Alt phone' },
+  { v: 'whatsapp',         l: 'WhatsApp' },
+  { v: 'email',            l: 'Email' },
+  { v: 'source',           l: 'Source' },
+  { v: 'source_ref',       l: 'Source reference' },
+  { v: 'company',          l: 'Company' },
+  { v: 'address',          l: 'Address' },
+  { v: 'city',             l: 'City' },
+  { v: 'state',            l: 'State' },
+  { v: 'pincode',          l: 'Pincode' },
+  { v: 'country',          l: 'Country' },
+  { v: 'value',            l: 'Value (₹)' },
+  { v: 'currency',         l: 'Currency' },
+  { v: 'qualified',        l: 'Qualified flag' },
+  { v: 'status',           l: 'Status (by name)' },
+  { v: 'product',          l: 'Product (by name)' },
+  { v: 'assigned_to',      l: 'Assigned-to (user email/name)' },
+  { v: 'tags',             l: 'Tags' },
+  { v: 'notes',            l: 'Notes' },
+  { v: 'next_followup_at', l: 'Next follow-up date' },
+  { v: 'created_at',       l: 'Created date' },
+  { v: 'gclid',            l: 'GCLID' },
+  { v: 'gad_campaignid',   l: 'Google Ads campaign ID' },
+  { v: 'utm_source',       l: 'UTM source' },
+  { v: 'utm_medium',       l: 'UTM medium' },
+  { v: 'utm_campaign',     l: 'UTM campaign' },
+  { v: 'utm_term',         l: 'UTM term' },
+  { v: 'utm_content',      l: 'UTM content' }
+];
+
+// Auto-suggest a target for a source column based on common header aliases.
+function _bulkSuggestTarget(col) {
+  const c = String(col || '').toLowerCase().replace(/[\s\-_]+/g, '');
+  const exact = {
+    name:'name', fullname:'name', leadname:'name', customername:'name', contactname:'name', clientname:'name',
+    phone:'phone', mobile:'phone', phoneno:'phone', mobileno:'phone', contactnumber:'phone', mobilenumber:'phone', phonenumber:'phone',
+    altphone:'alt_phone', alternatephone:'alt_phone', secondaryphone:'alt_phone', altmobile:'alt_phone', altcontact:'alt_phone',
+    whatsapp:'whatsapp', whatsappnumber:'whatsapp', wa:'whatsapp',
+    email:'email', emailaddress:'email', emailid:'email',
+    source:'source', leadsource:'source',
+    sourceref:'source_ref', referrer:'source_ref',
+    company:'company', organization:'company', org:'company', firm:'company', companyname:'company',
+    address:'address', addr:'address', fulladdress:'address',
+    city:'city', town:'city',
+    state:'state', province:'state',
+    pincode:'pincode', pin:'pincode', zipcode:'pincode', zip:'pincode', postalcode:'pincode',
+    country:'country',
+    value:'value', amount:'value', dealvalue:'value', budget:'value', dealamount:'value',
+    currency:'currency',
+    qualified:'qualified', isqualified:'qualified',
+    status:'status', leadstatus:'status',
+    product:'product', interest:'product', productinterest:'product',
+    assignedto:'assigned_to', assigneduser:'assigned_to', owner:'assigned_to', salesrep:'assigned_to', salesperson:'assigned_to', rep:'assigned_to', agent:'assigned_to', user:'assigned_to',
+    tags:'tags', labels:'tags',
+    notes:'notes', remarks:'notes', comments:'notes', description:'notes',
+    nextfollowup:'next_followup_at', nextfollowupat:'next_followup_at', followupdate:'next_followup_at', followup:'next_followup_at',
+    createdat:'created_at', created:'created_at', createdon:'created_at',
+    gclid:'gclid',
+    gadcampaignid:'gad_campaignid',
+    utmsource:'utm_source', utmmedium:'utm_medium', utmcampaign:'utm_campaign', utmterm:'utm_term', utmcontent:'utm_content'
+  };
+  if (exact[c]) return exact[c];
+  // If the column already matches a lead column name verbatim, use it
+  if (BULK_MAP_TARGETS.some(t => t.v === c)) return c;
+  return '__skip';
+}
+
+// Apply the mapping to transform parsed rows into rows shaped for bulkCreate.
+// `mapping` = { sourceCol: targetField }, `unmappedBehavior` = 'skip' | 'custom' | 'notes'
+function _bulkApplyMapping(rows, mapping, unmappedBehavior, headers) {
+  const out = [];
+  for (const r of rows) {
+    const newRow = {};
+    const cfBag = {};
+    const notesBits = [];
+    for (const col of headers) {
+      const target = mapping[col] || '__skip';
+      const v = r[col];
+      if (target === '__skip') continue;
+      if (target === '__custom') {
+        // Use the source column (normalised) as custom-field key
+        const key = String(col || '').toLowerCase().replace(/[\s\-]+/g, '_').replace(/[^a-z0-9_]/g, '');
+        if (key && v != null && String(v).trim() !== '') cfBag[key] = String(v);
+        continue;
+      }
+      // Mapped to a real lead field
+      newRow[target] = v;
+    }
+    // Handle unmapped behavior for any column whose mapping is __skip but
+    // user picked something other than skip globally.
+    if (unmappedBehavior !== 'skip') {
+      for (const col of headers) {
+        if (mapping[col] && mapping[col] !== '__skip') continue;
+        const v = r[col];
+        if (v == null || String(v).trim() === '') continue;
+        if (unmappedBehavior === 'custom') {
+          const key = String(col || '').toLowerCase().replace(/[\s\-]+/g, '_').replace(/[^a-z0-9_]/g, '');
+          if (key) cfBag[key] = String(v);
+        } else if (unmappedBehavior === 'notes') {
+          notesBits.push(String(col) + ': ' + String(v));
+        }
+      }
+    }
+    if (Object.keys(cfBag).length) newRow.extra = Object.assign({}, newRow.extra || {}, cfBag);
+    if (notesBits.length) {
+      const prefix = newRow.notes ? String(newRow.notes) + '\n\n' : '';
+      newRow.notes = prefix + notesBits.join(' | ');
+    }
+    out.push(newRow);
+  }
+  return out;
+}
+
+
 function openBulkUpload() {
   // Include admin too, since admin may want to assign to themselves
   const users = (CRM.cache.users || []).filter(u => Number(u.is_active ?? 1) === 1);
@@ -3210,6 +3336,51 @@ function openBulkUpload() {
 
   let parsedRows = [];
   let assignMode = 'csv';
+  // Field-mapping state — populated after file parse
+  let columnMapping = {};            // { sourceCol -> targetField }
+  let unmappedBehavior = 'skip';     // 'skip' | 'custom' | 'notes'
+  let sourceHeaders = [];
+  const mappingBox = h('div', { class: 'card', id: 'bulk-mapping', hidden: true, style: { marginTop: '1rem', padding: '.75rem', background: '#f8fafc', borderRadius: '8px' } });
+  const unmappedBox = h('div', { class: 'card', id: 'bulk-unmapped', hidden: true, style: { marginTop: '.5rem', padding: '.75rem', background: '#fefce8', borderRadius: '8px', borderLeft: '3px solid #f59e0b' } });
+
+  function renderMappingUI() {
+    mappingBox.innerHTML = ''; unmappedBox.innerHTML = '';
+    if (!sourceHeaders.length) { mappingBox.hidden = true; unmappedBox.hidden = true; return; }
+    mappingBox.hidden = false; unmappedBox.hidden = false;
+    mappingBox.appendChild(h('h4', { style: { margin: '0 0 .5rem', fontSize: '.95rem' } }, '🔗 Step 2: map your columns to lead fields'));
+    mappingBox.appendChild(h('p', { class: 'muted', style: { fontSize: '.78rem', marginTop: 0 } }, 'Pick what each uploaded column should become on each lead. We auto-suggested based on column names — review and override below.'));
+    const tbl = h('table', { class: 'mini-table', style: { width: '100%', fontSize: '.82rem' } });
+    const thead = h('thead', {}, h('tr', {},
+      h('th', { style: { textAlign: 'left' } }, 'Source column'),
+      h('th', { style: { textAlign: 'left' } }, 'Sample value'),
+      h('th', { style: { textAlign: 'left' } }, 'Maps to')
+    ));
+    const tbody = h('tbody', {});
+    sourceHeaders.forEach(col => {
+      const sample = (parsedRows[0] && parsedRows[0][col]) || (parsedRows[1] && parsedRows[1][col]) || '';
+      const sel = h('select', { style: { width: '100%', padding: '.25rem' } },
+        ...BULK_MAP_TARGETS.map(t => h('option', { value: t.v, selected: (columnMapping[col] || '__skip') === t.v ? 'selected' : null }, t.l))
+      );
+      sel.addEventListener('change', () => { columnMapping[col] = sel.value; });
+      tbody.appendChild(h('tr', {},
+        h('td', {}, h('b', {}, col)),
+        h('td', { style: { color: '#64748b', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, String(sample).slice(0, 60)),
+        h('td', {}, sel)
+      ));
+    });
+    tbl.append(thead, tbody);
+    mappingBox.appendChild(tbl);
+
+    unmappedBox.appendChild(h('h4', { style: { margin: '0 0 .35rem', fontSize: '.9rem' } }, '⚙ What to do with columns left as "Skip"?'));
+    const skipR = h('input', { type: 'radio', name: 'unmappedBehavior', value: 'skip',   checked: unmappedBehavior === 'skip'   ? 'checked' : null });
+    const cfR   = h('input', { type: 'radio', name: 'unmappedBehavior', value: 'custom', checked: unmappedBehavior === 'custom' ? 'checked' : null });
+    const ntR   = h('input', { type: 'radio', name: 'unmappedBehavior', value: 'notes',  checked: unmappedBehavior === 'notes'  ? 'checked' : null });
+    [skipR, cfR, ntR].forEach(r => r.addEventListener('change', () => { unmappedBehavior = document.querySelector('input[name=unmappedBehavior]:checked').value; }));
+    unmappedBox.appendChild(h('label', { style: { display: 'block', padding: '.2rem 0', fontSize: '.85rem' } }, skipR, h('span', { style: { marginLeft: '.4rem' } }, ' Skip them — discard data in unmapped columns (default)')));
+    unmappedBox.appendChild(h('label', { style: { display: 'block', padding: '.2rem 0', fontSize: '.85rem' } }, cfR,   h('span', { style: { marginLeft: '.4rem' } }, ' Save as custom fields — every unmapped column becomes a cf_<col> field on the lead')));
+    unmappedBox.appendChild(h('label', { style: { display: 'block', padding: '.2rem 0', fontSize: '.85rem' } }, ntR,   h('span', { style: { marginLeft: '.4rem' } }, ' Combine into Notes — concatenate "col: value" pairs into the lead notes field')));
+  }
+
 
   // -------- Modal layout --------
   const fileInput = h('input', {
@@ -3376,6 +3547,7 @@ function openBulkUpload() {
     parsedRows = [];
     filePreview.hidden = true;
     filePreview.innerHTML = '';
+    sourceHeaders = []; columnMapping = {}; renderMappingUI();
     const f = e.target.files[0];
     if (!f) { fileInfo.textContent = 'No file selected.'; previewAssignment(); return; }
     fileInfo.textContent = '⏳ Parsing ' + f.name + '…';
@@ -3384,6 +3556,12 @@ function openBulkUpload() {
       const cols = parsedRows.length ? Object.keys(parsedRows[0]) : [];
       const sample = parsedRows.slice(0, 3);
       fileInfo.textContent = `✅ ${f.name} — ${parsedRows.length} rows · ${cols.length} columns`;
+
+      // Build mapping UI
+      sourceHeaders = cols;
+      columnMapping = {};
+      cols.forEach(c => { columnMapping[c] = _bulkSuggestTarget(c); });
+      renderMappingUI();
 
       // -------- Sanity warnings --------
       const warnings = [];
@@ -3472,7 +3650,9 @@ function openBulkUpload() {
     importBtn.disabled = 'disabled';
     importBtn.textContent = 'Importing…';
     try {
-      const r = await api('api_leads_bulkCreate', parsedRows, assign);
+      // Transform rows according to the column-mapping picked above
+      const mapped = _bulkApplyMapping(parsedRows, columnMapping, unmappedBehavior, sourceHeaders);
+      const r = await api('api_leads_bulkCreate', mapped, assign);
       const lines = [`✅ Imported ${r.created} of ${parsedRows.length}`];
       if (r.duplicate) lines.push(`${r.duplicate} duplicates`);
       if (r.skipped) lines.push(`${r.skipped} skipped`);
@@ -3498,6 +3678,8 @@ function openBulkUpload() {
       fileInput,
       fileInfo,
       filePreview,
+      mappingBox,
+      unmappedBox,
       h('p', { style: { marginTop: '1rem' } },
         // Two download options — Excel-friendly XLS first, plain CSV second.
         // _attachSampleLink rewrites href + click to the tenant-scoped URL.
