@@ -816,6 +816,24 @@ async function _shouldSuppress(settings, phone, inboundText, inboundPhoneId, ten
     if (!_isAfterHours(settings.business_hours)) return 'inside business hours';
   }
 
+  // ALWAYS-ON GUARD: if any human agent replied in the last 30 minutes,
+  // assume they're still actively handling this thread and silence the
+  // bot. This runs regardless of pause_after_human_handoff /
+  // resume_after_idle_seconds settings so the bot never steps on a live
+  // human conversation. Window is intentionally short — within 30 min of
+  // the last agent reply is a strong signal someone's at the keyboard.
+  try {
+    const r = await db.query(
+      `SELECT 1 FROM whatsapp_messages
+        WHERE direction = 'out' AND user_id IS NOT NULL
+          AND (to_number = $1 OR from_number = $1)
+          AND created_at > NOW() - INTERVAL '30 minutes'
+        LIMIT 1`,
+      [phone]
+    );
+    if (r.rows.length) return 'human actively chatting (last 30 min)';
+  } catch (_) { /* if the table query errors, fall through to other checks */ }
+
   // Has a real (non-bot) agent replied to this thread recently?
   // ai_chat_log tracks bot replies separately, so we look for a row in
   // whatsapp_messages from a real user_id within the resume window.
