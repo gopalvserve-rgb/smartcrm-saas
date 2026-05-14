@@ -18,6 +18,7 @@
 'use strict';
 
 const db = require('../db/pg');
+const { authUser } = require('../utils/auth');
 
 const POSITIONS = ['bottom-right', 'bottom-left', 'top-right', 'top-left'];
 
@@ -80,7 +81,8 @@ function _jsEsc(s) {
 // ──────────────────────────────────────────────────────────────────
 // CRUD APIs (tenant-side, called from SPA)
 // ──────────────────────────────────────────────────────────────────
-async function api_waWidget_list(_p, _u) {
+async function api_waWidget_list(token) {
+  await authUser(token);
   await _ensureSchema();
   const r = await db.query(`
     SELECT id, slug, name, is_active, phone, prefilled_message, theme_color, position,
@@ -91,18 +93,21 @@ async function api_waWidget_list(_p, _u) {
   return { ok: true, widgets: r.rows };
 }
 
-async function api_waWidget_get(p, _u) {
+async function api_waWidget_get(token, id) {
+  await authUser(token);
   await _ensureSchema();
-  const id = Number(p && p.id || 0);
+  id = Number(id || 0);
   const r = await db.query(`SELECT * FROM wa_widgets WHERE id = $1`, [id]);
   if (!r.rows[0]) throw new Error('Widget not found');
   return { ok: true, widget: r.rows[0] };
 }
 
-async function api_waWidget_save(p, u) {
+async function api_waWidget_save(token, payload) {
+  const me = await authUser(token);
+  if (!['admin','manager'].includes(me.role)) throw new Error('Admin/manager only');
   await _ensureSchema();
-  if (!u || !u.id) throw new Error('Not authenticated');
-  const id = Number(p && p.id || 0);
+  const p = payload || {};
+  const id = Number(p.id || 0);
 
   const base = {
     name:              String(p.name || '').trim() || 'WhatsApp Widget',
@@ -159,22 +164,24 @@ async function api_waWidget_save(p, u) {
   return { ok: true, widget: out };
 }
 
-async function api_waWidget_delete(p, u) {
+async function api_waWidget_delete(token, id) {
+  const me = await authUser(token);
+  if (!['admin','manager'].includes(me.role)) throw new Error('Admin/manager only');
   await _ensureSchema();
-  if (!u || !u.id) throw new Error('Not authenticated');
-  const id = Number(p && p.id || 0);
+  id = Number(id || 0);
   await db.query(`DELETE FROM wa_widgets WHERE id = $1`, [id]);
   return { ok: true };
 }
 
-async function api_waWidget_clone(p, u) {
+async function api_waWidget_clone(token, id) {
+  const me = await authUser(token);
+  if (!['admin','manager'].includes(me.role)) throw new Error('Admin/manager only');
   await _ensureSchema();
-  if (!u || !u.id) throw new Error('Not authenticated');
-  const id = Number(p && p.id || 0);
+  id = Number(id || 0);
   const src = (await db.query(`SELECT * FROM wa_widgets WHERE id = $1`, [id])).rows[0];
   if (!src) throw new Error('Widget not found');
   const copy = Object.assign({}, src, { id: 0, name: src.name + ' (copy)', slug: src.slug + '-copy' });
-  return api_waWidget_save(copy, u);
+  return api_waWidget_save(token, copy);
 }
 
 function _buildSnippet(baseUrl, tenantSlug, slug) {
@@ -184,9 +191,11 @@ function _buildSnippet(baseUrl, tenantSlug, slug) {
   return `<!-- SmartCRM WhatsApp Chat Widget -->\n<script src="${src}" async></script>`;
 }
 
-async function api_waWidget_snippet(p, _u) {
+async function api_waWidget_snippet(token, payload) {
+  await authUser(token);
   await _ensureSchema();
-  const id = Number(p && p.id || 0);
+  const p = payload || {};
+  const id = Number(p.id || 0);
   const r = await db.query(`SELECT slug, name FROM wa_widgets WHERE id = $1`, [id]);
   if (!r.rows[0]) throw new Error('Widget not found');
   const baseUrl = String(p.base_url || process.env.PUBLIC_BASE_URL || '').trim();
