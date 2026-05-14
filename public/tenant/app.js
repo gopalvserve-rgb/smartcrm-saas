@@ -22366,7 +22366,11 @@ function _copilotMsg(role, text) {
 // often runs AFTER DOMContentLoaded has already fired. So a plain
 // addEventListener('DOMContentLoaded', ...) never runs. Check readyState
 // and start the poller immediately if the document is already parsed.
-(function bootCopilot() {
+
+// =====================================================================
+// Top-level helpers (Nurture, Forms, Landing Pages) — must live OUTSIDE
+// the bootCopilot IIFE so showAdminTab can call them.
+// =====================================================================
 
 
 // ─────────────────────────────────────────────────────────────────────
@@ -23320,6 +23324,8 @@ function openPagePreview(url, name) {
   );
   document.body.appendChild(modal);
 }
+
+(function bootCopilot() {
 
 // =====================================================================
 // Floating WhatsApp chat dock
