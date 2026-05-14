@@ -1139,6 +1139,16 @@ async function api_leads_update(token, id, patch) {
   }
   if ('tags' in patch && String(patch.tags || '') !== String(lead.tags || '')) {
     try { require('./tat').logAction(id, 'tags_updated', me.id, { tags: patch.tags || '' }); } catch (_) {}
+    // Fire nurture auto-enroll for each newly-added tag
+    try {
+      const prev = String(lead.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+      const now  = String(patch.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+      const added = now.filter(t => !prev.includes(t));
+      const fullLead = Object.assign({}, lead, allowed, { tags: patch.tags });
+      for (const t of added) {
+        require('./nurture')._tryAutoEnroll('tag_added', { lead: fullLead, user: me, added_tag: t });
+      }
+    } catch (_) {}
   }
 
   if (assigneeChanged) {

@@ -68,6 +68,18 @@ async function _runOneStep(run) {
     return;
   }
 
+  // Per-step skip condition — if step.skip_if_status_id matches the lead's
+  // current status, skip this step (mark as 'skipped') and move on without
+  // exiting the enrollment. Useful for conditional drips: "Don't send the
+  // 'still thinking?' message if status is already Demo Done".
+  if (Number(step.skip_if_status_id) && Number(lead.status_id) === Number(step.skip_if_status_id)) {
+    await db.query(
+      `UPDATE nurture_step_runs SET status='skipped', sent_at=NOW(), error_text = 'skip_if_status_id matched' WHERE id = $1`,
+      [runId]
+    );
+    return;
+  }
+
   // Pause on recent customer reply
   if (Number(seq.exit_on_reply) === 1) {
     const pauseHours = Math.max(1, Number(seq.pause_on_reply_hours) || 24);

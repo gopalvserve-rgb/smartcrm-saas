@@ -22446,6 +22446,8 @@ async function openNurtureEditor(id, statuses, templates, onClose) {
     h('option', { value: '' }, '— Any —'),
     ..._productsForTrigger.map(p => h('option', { value: p.id, selected: Number(seq.trigger_filter_product_id) === Number(p.id) ? 'selected' : null }, p.name))
   );
+  const triggerTagInp = h('input', { type: 'text', placeholder: 'e.g. interested, hot', value: String(seq.trigger_on_tag || '') });
+  const triggerFilterTagsInp = h('input', { type: 'text', placeholder: 'e.g. premium, vip — only leads with one of these tags', value: String(seq.trigger_filter_tags || '') });
 
   // Steps editor — table with add/remove
   const stepsContainer = h('div', { id: 'nurture-steps-list' });
@@ -22460,6 +22462,11 @@ async function openNurtureEditor(id, statuses, templates, onClose) {
         h('option', { value: 'email',       selected: step.channel === 'email'       ? 'selected' : null }, 'Email'),
         h('option', { value: 'ai_bot',      selected: step.channel === 'ai_bot'      ? 'selected' : null }, 'AI Bot message')
       );
+      const skipSel = h('select', {},
+        h('option', { value: '' }, '— Always send —'),
+        ...statuses.map(s => h('option', { value: s.id, selected: Number(step.skip_if_status_id) === Number(s.id) ? 'selected' : null }, 'Skip if status = ' + s.name))
+      );
+      skipSel.addEventListener('change', () => { step.skip_if_status_id = Number(skipSel.value) || null; });
       const tplSel = h('select', {},
         h('option', { value: '' }, '— Pick template —'),
         ...templates.map(t => h('option', { value: t.name + '|' + (t.language || 'en_US'), selected: (step.template_name + '|' + step.template_lang) === (t.name + '|' + (t.language || 'en_US')) ? 'selected' : null }, t.name + ' (' + (t.language || 'en_US') + ')'))
@@ -22496,7 +22503,8 @@ async function openNurtureEditor(id, statuses, templates, onClose) {
           h('div', {}, h('label', {}, 'After'), h('div', { style: { display: 'flex', alignItems: 'center', gap: '.25rem' } },
             dayInp, h('span', {}, 'days'), hourInp, h('span', {}, 'hours')
           )),
-          h('div', { style: { flex: 1 } }, h('label', {}, 'Channel'), channelSel)
+          h('div', { style: { flex: 1 } }, h('label', {}, 'Channel'), channelSel),
+          h('div', { style: { flex: 1 } }, h('label', {}, 'Skip condition'), skipSel)
         ),
         channelSpecific
       );
@@ -22537,6 +22545,8 @@ async function openNurtureEditor(id, statuses, templates, onClose) {
       trigger_filter_sources: triggerSourcesInp.value,
       trigger_filter_campaign_id: Number(triggerCampaignSel.value) || null,
       trigger_filter_product_id: Number(triggerProductSel.value) || null,
+      trigger_on_tag: triggerTagInp.value.trim(),
+      trigger_filter_tags: triggerFilterTagsInp.value.trim(),
       steps: seq.steps
     };
     try {
@@ -22568,6 +22578,12 @@ async function openNurtureEditor(id, statuses, templates, onClose) {
         h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', padding: '.3rem 0' } },
           triggerCreateChk, h('span', {}, 'Enroll every new lead')),
         h('div', { class: 'field' }, h('label', {}, 'Or enroll when status changes to'), triggerStatusSel),
+        h('div', { class: 'field' },
+          h('label', {}, 'Or enroll when this tag is added'),
+          triggerTagInp,
+          h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '.2rem' } },
+            'Single tag, case-insensitive. Fires when an agent adds this tag to a lead. Leave blank to disable.')
+        ),
         h('h4', { style: { marginTop: '.75rem', fontSize: '.85rem' } }, 'Filters (all optional, all must match)'),
         h('div', { class: 'field' },
           h('label', {}, 'Only leads from these sources (comma-separated)'),
@@ -22577,6 +22593,12 @@ async function openNurtureEditor(id, statuses, templates, onClose) {
         ),
         h('div', { class: 'field' }, h('label', {}, 'Only this campaign'), triggerCampaignSel),
         h('div', { class: 'field' }, h('label', {}, 'Only this product'), triggerProductSel),
+        h('div', { class: 'field' },
+          h('label', {}, 'Only leads with one of these tags (comma-separated)'),
+          triggerFilterTagsInp,
+          h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '.2rem' } },
+            'e.g.: premium, vip — at least one tag must match. Leave blank to allow any.')
+        ),
         h('hr'),
         h('h4', { style: { marginTop: '.5rem' } }, 'Steps (in order)'),
         stepsContainer,

@@ -44,6 +44,9 @@ async function _ensureSchema() {
   await db.query(`ALTER TABLE nurture_sequences ADD COLUMN IF NOT EXISTS trigger_filter_sources TEXT NOT NULL DEFAULT ''`);
   await db.query(`ALTER TABLE nurture_sequences ADD COLUMN IF NOT EXISTS trigger_filter_campaign_id INTEGER`);
   await db.query(`ALTER TABLE nurture_sequences ADD COLUMN IF NOT EXISTS trigger_filter_product_id INTEGER`);
+  await db.query(`ALTER TABLE nurture_sequences ADD COLUMN IF NOT EXISTS trigger_on_tag TEXT NOT NULL DEFAULT ''`);
+  await db.query(`ALTER TABLE nurture_sequences ADD COLUMN IF NOT EXISTS trigger_filter_tags TEXT NOT NULL DEFAULT ''`);
+  await db.query(`ALTER TABLE nurture_steps ADD COLUMN IF NOT EXISTS skip_if_status_id INTEGER`);
 
   await db.query(`CREATE TABLE IF NOT EXISTS nurture_steps (
     id SERIAL PRIMARY KEY,
@@ -141,8 +144,9 @@ async function api_nurture_save(token, payload) {
       `INSERT INTO nurture_sequences
          (name, description, is_active, exit_on_reply, exit_on_status_id, pause_on_reply_hours,
           trigger_on_create, trigger_on_status_id, trigger_filter_sources,
-          trigger_filter_campaign_id, trigger_filter_product_id, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
+          trigger_filter_campaign_id, trigger_filter_product_id,
+          trigger_on_tag, trigger_filter_tags, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id`,
       [name, String(p.description || ''), p.is_active ? 1 : 0,
        p.exit_on_reply ? 1 : 0, p.exit_on_status_id || null,
        Math.max(1, Math.min(168, Number(p.pause_on_reply_hours || 24))),
@@ -151,6 +155,8 @@ async function api_nurture_save(token, payload) {
        String(p.trigger_filter_sources || '').slice(0, 500),
        p.trigger_filter_campaign_id || null,
        p.trigger_filter_product_id || null,
+       String(p.trigger_on_tag || '').slice(0, 200),
+       String(p.trigger_filter_tags || '').slice(0, 500),
        me.id]
     );
     id = ins.rows[0].id;
@@ -160,6 +166,7 @@ async function api_nurture_save(token, payload) {
               exit_on_status_id=$6, pause_on_reply_hours=$7,
               trigger_on_create=$8, trigger_on_status_id=$9, trigger_filter_sources=$10,
               trigger_filter_campaign_id=$11, trigger_filter_product_id=$12,
+              trigger_on_tag=$13, trigger_filter_tags=$14,
               updated_at=NOW() WHERE id=$1`,
       [id, name, String(p.description || ''), p.is_active ? 1 : 0,
        p.exit_on_reply ? 1 : 0, p.exit_on_status_id || null,
@@ -168,7 +175,9 @@ async function api_nurture_save(token, payload) {
        p.trigger_on_status_id || null,
        String(p.trigger_filter_sources || '').slice(0, 500),
        p.trigger_filter_campaign_id || null,
-       p.trigger_filter_product_id || null]
+       p.trigger_filter_product_id || null,
+       String(p.trigger_on_tag || '').slice(0, 200),
+       String(p.trigger_filter_tags || '').slice(0, 500)]
     );
   }
 
@@ -183,8 +192,8 @@ async function api_nurture_save(token, payload) {
       `INSERT INTO nurture_steps
          (sequence_id, step_no, delay_days, delay_hours, channel,
           template_name, template_lang, template_variables,
-          email_subject, email_body, ai_prompt, body_text)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12)`,
+          email_subject, email_body, ai_prompt, body_text, skip_if_status_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, $13)`,
       [id, i + 1,
        Math.max(0, Math.min(365, Number(s.delay_days) || 0)),
        Math.max(0, Math.min(23, Number(s.delay_hours) || 0)),
@@ -195,7 +204,8 @@ async function api_nurture_save(token, payload) {
        String(s.email_subject || '').slice(0, 300) || null,
        String(s.email_body || '').slice(0, 8000) || null,
        String(s.ai_prompt || '').slice(0, 2000) || null,
-       String(s.body_text || '').slice(0, 2000) || null]
+       String(s.body_text || '').slice(0, 2000) || null,
+       s.skip_if_status_id || null]
     );
   }
   return { ok: true, id };
@@ -351,6 +361,10 @@ async function _tryAutoEnroll(event, ctx) {
     } else if (event === 'status_changed') {
       sql = `SELECT * FROM nurture_sequences WHERE is_active = 1 AND trigger_on_status_id = $1`;
       params = [Number(lead.status_id) || 0];
+    } else if (event === 'tag_added') {
+      const tagsLower = String(ctx.added_tag || '').toLowerCase();
+      sql = `SELECT * FROM nurture_sequences WHERE is_active = 1 AND LOWER(trigger_on_tag) = $1 AND trigger_on_tag <> ''`;
+      params = [tagsLower];
     } else { return; }
 
     const candidates = (await db.query(sql, params)).rows;
@@ -365,6 +379,12 @@ async function _tryAutoEnroll(event, ctx) {
       }
       if (Number(seq.trigger_filter_campaign_id) && Number(lead.campaign_id) !== Number(seq.trigger_filter_campaign_id)) continue;
       if (Number(seq.trigger_filter_product_id) && Number(lead.product_id) !== Number(seq.trigger_filter_product_id)) continue;
+      // Tag filter — any of the lead's tags must overlap with the configured filter list
+      const tagFilter = String(seq.trigger_filter_tags || '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+      if (tagFilter.length) {
+        const leadTags = String(lead.tags || '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+        if (!leadTags.some(t => tagFilter.includes(t))) continue;
+      }
 
       // Skip if already enrolled (active or paused)
       const existing = await db.query(
