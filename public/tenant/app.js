@@ -24501,33 +24501,88 @@ VIEWS.edufees = async (view) => {
 // Education pack: Create-enrollment + Mark-paid modals
 // ─────────────────────────────────────────────────────────────────────
 async function openCreateEnrollmentModal(lead, onSaved) {
-  let plans = [];
-  try { plans = await api('api_edu_feePlans_list'); }
-  catch (e) {
+  let plans = [], courses = [], courseExtras = {};
+  try {
+    plans = await api('api_edu_feePlans_list');
+    courses = await api('api_products_list').catch(() => []);
+    try {
+      const raw = await api('api_admin_getConfig', 'edu_course_extras').catch(() => null);
+      courseExtras = (raw && raw.value) ? JSON.parse(raw.value) : {};
+    } catch (_) {}
+  } catch (e) {
     if (/not active/i.test(String(e.message || ''))) {
       toast('Education pack is not installed. Go to Settings → Industry Packs.', 'warn');
     } else { toast(e.message, 'err'); }
     return;
   }
   const active = (plans || []).filter(p => Number(p.is_active));
-  if (!active.length) { toast('No active fee plans. Add one from Fee Collection → Fee plan templates.', 'warn'); return; }
+  if (!active.length && !courses.length) { toast('Add a Course first (📚 Courses sidebar) — or a Fee plan template.', 'warn'); return; }
 
+  // Course dropdown — pulled from the products/courses catalog
+  const courseSel = h('select', { style:{ width:'100%' } },
+    h('option', { value: '' }, courses.length ? '— Pick course —' : '— No courses yet — go to 📚 Courses to add —'),
+    ...courses.map(c => h('option', {
+      value: c.id,
+      'data-name': c.name,
+      'data-price': c.price || 0
+    }, c.name + ' · ₹' + Number(c.price || 0).toLocaleString('en-IN')))
+  );
+
+  // Fee plan dropdown
   const planSel = h('select', { style: { width: '100%' } },
-    ...active.map(p => h('option', { value: p.id, 'data-amt': p.total_amount },
+    h('option', { value: '' }, '— Pick fee plan (or auto from course EMI) —'),
+    ...active.map(p => h('option', { value: p.id, 'data-amt': p.total_amount, 'data-n': p.num_installments },
       p.name + ' · ₹' + Number(p.total_amount).toLocaleString('en-IN') + ' · ' + p.num_installments + 'x'))
   );
-  const totalInput = h('input', { type: 'number', step: '0.01', value: active[0].total_amount });
-  planSel.addEventListener('change', () => {
-    const opt = planSel.options[planSel.selectedIndex];
-    totalInput.value = opt && opt.dataset.amt || '';
+
+  const totalInput    = h('input', { type: 'number', step: '0.01', value: '', placeholder:'Auto-fills from course price' });
+
+  // Discount controls — toggle between ₹ amount and %
+  const discAmt  = h('input', { type:'number', step:'0.01', value:'0', style:{ width:'100%' } });
+  const discType = h('select', { style:{ width:'100%' } },
+    h('option', { value: 'amount' }, '₹ Amount'),
+    h('option', { value: 'percent' }, '% Percent')
+  );
+  const discReason = h('input', { type:'text', placeholder:'Discount reason (e.g. Sibling, Early-bird, Scholarship)', style:{ width:'100%' } });
+  const finalAmtEl = h('div', { style:{ marginTop:'.4rem', padding:'.5rem .7rem', background:'#dcfce7', borderRadius:'6px', fontWeight:600 } }, 'Final payable: ₹0');
+
+  function _recalc() {
+    const courseOpt = courseSel.options[courseSel.selectedIndex];
+    const planOpt   = planSel.options[planSel.selectedIndex];
+    const ex = courseOpt && courseOpt.value ? (courseExtras[String(courseOpt.value)] || {}) : {};
+    // Base total: explicit override > plan > course EMI total > course price
+    let base = Number(totalInput.value || 0);
+    if (!base && planOpt && planOpt.dataset.amt) base = Number(planOpt.dataset.amt);
+    if (!base && ex.token && ex.emi && ex.count) base = Number(ex.token) + Number(ex.emi) * Number(ex.count);
+    if (!base && courseOpt && courseOpt.dataset.price) base = Number(courseOpt.dataset.price);
+
+    const d = Number(discAmt.value || 0);
+    const discountValue = discType.value === 'percent' ? (base * d / 100) : d;
+    const final = Math.max(0, Math.round((base - discountValue) * 100) / 100);
+    const txt = 'Base ₹' + base.toLocaleString('en-IN') +
+                (discountValue > 0 ? ' − Discount ₹' + discountValue.toLocaleString('en-IN') + (discType.value === 'percent' ? ' (' + d + '%)' : '') : '') +
+                ' = ₹' + final.toLocaleString('en-IN');
+    finalAmtEl.textContent = 'Final payable: ' + txt;
+    finalAmtEl.style.background = discountValue > 0 ? '#fef3c7' : '#dcfce7';
+    return { base, discountValue, final };
+  }
+
+  courseSel.addEventListener('change', () => {
+    const opt = courseSel.options[courseSel.selectedIndex];
+    if (opt && opt.dataset.price) totalInput.value = opt.dataset.price;
+    _recalc();
   });
-  const courseInput = h('input', { type: 'text', placeholder: 'e.g. JEE Advanced 2027', value: lead.course_name || '' });
-  const batchInput  = h('input', { type: 'text', placeholder: 'e.g. Morning batch · 8 AM', value: lead.batch_name || '' });
+  planSel.addEventListener('change', _recalc);
+  totalInput.addEventListener('input', _recalc);
+  discAmt.addEventListener('input', _recalc);
+  discType.addEventListener('change', _recalc);
+
+  const batchInput  = h('input', { type: 'text', placeholder: 'e.g. Morning batch · 8 AM', value: lead.batch_name || '', style:{ width:'100%' } });
   const startInput  = h('input', { type: 'date', value: new Date().toISOString().slice(0, 10) });
 
   const m = h('div', { class: 'modal-backdrop',
     onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
-  const modal = h('div', { class: 'modal' });
+  const modal = h('div', { class: 'modal modal-lg' });
   modal.appendChild(h('div', { class: 'modal-head' },
     h('h3', {}, '🎓 Create enrollment'),
     h('button', { class: 'btn ghost', onclick: () => m.remove() }, '✕')
@@ -24541,9 +24596,16 @@ async function openCreateEnrollmentModal(lead, onSaved) {
     if (hint) r.appendChild(h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '.15rem' } }, hint));
     return r;
   }
-  body.appendChild(row('Fee plan', planSel, 'Auto-generates installment schedule on save'));
-  body.appendChild(row('Total amount (₹)', totalInput, 'Override the plan default if needed'));
-  body.appendChild(row('Course', courseInput));
+  body.appendChild(row('📚 Course', courseSel, 'Pick from catalog — auto-fills total price + EMI defaults'));
+  body.appendChild(row('Fee plan (optional)', planSel, 'Pick a saved fee plan, or leave blank if course has its own EMI defaults'));
+  body.appendChild(row('Total amount (₹)', totalInput, 'Override if needed'));
+  // Discount row
+  const discRow = h('div', { style:{ marginBottom:'.6rem', padding:'.5rem .7rem', background:'#fef9c3', borderRadius:'6px', border:'1px solid #fde68a' } });
+  discRow.appendChild(h('label', { style:{ display:'block', fontWeight:600, fontSize:'.85rem', marginBottom:'.3rem' } }, '💸 Discount (optional)'));
+  discRow.appendChild(h('div', { style:{ display:'grid', gridTemplateColumns:'120px 1fr', gap:'.4rem' } }, discType, discAmt));
+  discRow.appendChild(h('div', { style:{ marginTop:'.3rem' } }, discReason));
+  discRow.appendChild(finalAmtEl);
+  body.appendChild(discRow);
   body.appendChild(row('Batch', batchInput));
   body.appendChild(row('Start date', startInput, 'First installment is due on this date'));
   modal.appendChild(body);
@@ -24551,15 +24613,45 @@ async function openCreateEnrollmentModal(lead, onSaved) {
     h('button', { class: 'btn', onclick: () => m.remove() }, 'Cancel'),
     h('button', { class: 'btn primary', onclick: async () => {
       try {
+        const calc = _recalc();
+        const courseOpt = courseSel.options[courseSel.selectedIndex];
+        const courseName = (courseOpt && courseOpt.dataset.name) || lead.course_name || '';
+
+        // Pick fee plan: explicit > derive from course EMI defaults > first active plan
+        let planId = Number(planSel.value) || 0;
+        if (!planId && active.length) planId = active[0].id;
+        if (!planId) { toast('Pick a fee plan or add one', 'err'); return; }
+
         await api('api_edu_enrollment_create', {
           lead_id: lead.id,
-          fee_plan_id: Number(planSel.value),
-          total_amount: Number(totalInput.value) || 0,
-          course_name: courseInput.value.trim(),
+          fee_plan_id: planId,
+          total_amount: calc.final,  // Use the discounted final amount
+          course_name: courseName,
           batch_name: batchInput.value.trim(),
-          start_date: startInput.value
+          start_date: startInput.value,
+          // Send discount as metadata via custom field on the lead (best-effort)
+          _discount: {
+            amount: calc.discountValue,
+            type: discType.value,
+            value_raw: Number(discAmt.value) || 0,
+            reason: discReason.value || ''
+          }
         });
-        toast('Enrolled — installment schedule created', 'ok');
+
+        // Persist the discount to the lead's notes so it's visible later
+        if (calc.discountValue > 0 && lead.id) {
+          try {
+            await api('api_leads_addRemark', lead.id, {
+              note: '💸 Enrollment discount applied: ' + discType.value + ' ' + (Number(discAmt.value)||0) +
+                    (discType.value === 'percent' ? '%' : ' ₹') +
+                    ' = ₹' + calc.discountValue.toLocaleString('en-IN') +
+                    (discReason.value ? ' · Reason: ' + discReason.value : '') +
+                    ' · Base ₹' + calc.base.toLocaleString('en-IN') + ' → Final ₹' + calc.final.toLocaleString('en-IN')
+            });
+          } catch (_) {}
+        }
+
+        toast('Enrolled — schedule created for ₹' + calc.final.toLocaleString('en-IN'), 'ok');
         m.remove();
         if (onSaved) onSaved();
       } catch (e) { toast(e.message, 'err'); }
@@ -24567,6 +24659,7 @@ async function openCreateEnrollmentModal(lead, onSaved) {
   ));
   m.appendChild(modal);
   document.body.appendChild(m);
+  setTimeout(_recalc, 50);
 }
 
 async function openMarkPaidModal(installment, onSaved) {
