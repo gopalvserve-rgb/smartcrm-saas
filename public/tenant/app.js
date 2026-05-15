@@ -3910,6 +3910,36 @@ async function openLeadModal(id) {
     ));
   }
 
+  // Multi-phone widget — backed by lead.extra.extra_phones JSON array.
+  // Renders rows of { phone, label } with + Add and 🗑 buttons. Saved
+  // along with the lead via the top-level extra_phones key (server folds
+  // into extra_json). _findLeadByPhone() reads this back for matching.
+  const _existingExtraPhones = ((lead.extra && Array.isArray(lead.extra.extra_phones)) ? lead.extra.extra_phones
+                              : (Array.isArray(lead.extra_phones) ? lead.extra_phones : []));
+  const extraPhonesWrap = h('div', { class: 'field-full', 'data-extra-phones': '1', style: { gridColumn: '1 / -1' } });
+  function renderExtraPhones() {
+    extraPhonesWrap.replaceChildren();
+    extraPhonesWrap.appendChild(h('label', { style: { fontWeight: 600, marginBottom: '.25rem', display: 'block' } }, '📞 Additional phone numbers'));
+    const rows = h('div', { class: 'extra-phones-rows', style: { display: 'flex', flexDirection: 'column', gap: '.35rem' } });
+    function addRow(rec) {
+      const rec0 = rec || { phone: '', label: '' };
+      const phI = h('input', { type: 'tel', placeholder: '+91 9876543210', value: rec0.phone || '', style: { flex: '2', minWidth: '12em' } });
+      const lblI = h('input', { type: 'text', placeholder: 'Label (e.g. Husband, Office)', value: rec0.label || '', style: { flex: '1', minWidth: '8em' } });
+      const del = h('button', { type: 'button', class: 'btn sm danger', title: 'Remove', onclick: () => { row.remove(); } }, '🗑');
+      const row = h('div', { class: 'extra-phone-row', 'data-extra-phone-row': '1', style: { display: 'flex', gap: '.4rem', alignItems: 'center' } }, phI, lblI, del);
+      rows.appendChild(row);
+    }
+    (_existingExtraPhones || []).forEach(r => addRow(r));
+    extraPhonesWrap.appendChild(rows);
+    extraPhonesWrap.appendChild(h('button', {
+      type: 'button', class: 'btn sm', style: { marginTop: '.4rem' },
+      onclick: () => addRow({})
+    }, '+ Add another number'));
+    extraPhonesWrap.appendChild(h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.2rem' } },
+      'Calls and WhatsApp from any of these numbers will match this lead.'));
+  }
+  renderExtraPhones();
+
   const form = h('form', { id: 'lead-form', class: 'form-grid' });
   form.append(
     field('name', 'Name *', lead.name, { required: true }),
@@ -3952,6 +3982,9 @@ async function openLeadModal(id) {
     form.appendChild(customFieldInput(cf, extra[cf.key]));
   });
 
+    // Append extra-phones widget AT THE END of the form so it spans width and
+  // doesn't crowd the address fields.
+  try { form.appendChild(extraPhonesWrap); } catch (_) {}
   body.appendChild(form);
 
   // ---- Quotations panel for this lead ----
@@ -4124,6 +4157,20 @@ async function openLeadModal(id) {
       budget_max:        Number(fd.get('budget_max')) || null,
       requirement_type:  fd.get('requirement_type') || '',
       requirement_notes: fd.get('requirement_notes') || '',
+      // Multi-phone widget — collect rows added via "+ Add another number"
+      extra_phones: (() => {
+        try {
+          const rows = extraPhonesWrap.querySelectorAll('.extra-phone-row');
+          const list = [];
+          rows.forEach(r => {
+            const inps = r.querySelectorAll('input');
+            const ph = (inps[0] && inps[0].value || '').trim();
+            const lb = (inps[1] && inps[1].value || '').trim();
+            if (ph) list.push({ phone: ph, label: lb });
+          });
+          return list;
+        } catch (_) { return []; }
+      })(),
       extra
     };
     try {

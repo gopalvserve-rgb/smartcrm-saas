@@ -29,7 +29,8 @@ async function _findLeadByPhone(phone) {
   if (digits.length >= 8)  candidates.push(digits.slice(-8));
   if (!candidates.length)  candidates.push(digits);
   for (const tail of candidates) {
-    const { rows } = await db.query(
+    // Primary columns
+    let { rows } = await db.query(
       `SELECT * FROM leads
         WHERE regexp_replace(COALESCE(phone, ''),     '[^0-9]', '', 'g') LIKE $1
            OR regexp_replace(COALESCE(whatsapp, ''),  '[^0-9]', '', 'g') LIKE $1
@@ -40,6 +41,24 @@ async function _findLeadByPhone(phone) {
       ['%' + tail]
     );
     if (rows[0]) return rows[0];
+    // Fallback — match against extra_phones array stored as JSON in extra_json.
+    // Strips non-digits from every element so we tolerate whatever the user pasted.
+    try {
+      const r2 = await db.query(
+        `SELECT * FROM leads
+           WHERE extra_json IS NOT NULL
+             AND extra_json::text ~ '"extra_phones"'
+             AND EXISTS (
+               SELECT 1 FROM jsonb_array_elements_text(
+                 COALESCE((extra_json::jsonb)->'extra_phones', '[]'::jsonb)
+               ) AS ep
+               WHERE regexp_replace(ep, '[^0-9]', '', 'g') LIKE $1
+             )
+           ORDER BY id DESC LIMIT 1`,
+        ['%' + tail]
+      );
+      if (r2.rows && r2.rows[0]) return r2.rows[0];
+    } catch (_) { /* older tenants may have extra_json as TEXT — best-effort */ }
   }
   return null;
 }

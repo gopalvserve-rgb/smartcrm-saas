@@ -643,6 +643,31 @@ async function api_leads_create(token, payload) {
       extraObj[key.slice(3)] = String(p[key]);
     }
   }
+  // Multiple-phone support — clients pass extra_phones as either an array
+  // of { phone, label } objects or a flat array of strings. Normalize, strip
+  // empties, and persist into extra_json. _findLeadByPhone() in
+  // routes/recordings.js reads this back for call-to-lead matching.
+  if (p.extra_phones !== undefined) {
+    let raw = p.extra_phones;
+    if (typeof raw === 'string') {
+      try { raw = JSON.parse(raw); } catch (_) { raw = []; }
+    }
+    if (Array.isArray(raw)) {
+      const list = [];
+      for (const item of raw) {
+        if (!item) continue;
+        if (typeof item === 'string') {
+          const ph = item.trim();
+          if (ph) list.push({ phone: ph, label: '' });
+        } else if (typeof item === 'object') {
+          const ph = String(item.phone || '').trim();
+          if (ph) list.push({ phone: ph, label: String(item.label || '').slice(0, 40) });
+        }
+      }
+      if (list.length) extraObj.extra_phones = list;
+      else delete extraObj.extra_phones;
+    }
+  }
   // Coerce numeric `value` cleanly — strip "₹", commas, spaces.
   const cleanValue = (() => {
     const raw = String(p.value ?? '').trim().replace(/[₹$,\s]/g, '');
@@ -1057,6 +1082,30 @@ async function api_leads_update(token, id, patch) {
       allowed.qualified_by = nowQualified ? me.id : null;
       try { require('./tat').logAction(id, nowQualified ? 'qualified' : 'unqualified', me.id, {}); } catch (_) {}
     }
+  }
+
+  // Multiple-phone support — when the SPA sends extra_phones at top
+  // level, fold it into the extra_json merge so the existing custom-field
+  // path persists it. _findLeadByPhone() reads this back for matching.
+  if (patch.extra_phones !== undefined) {
+    let raw = patch.extra_phones;
+    if (typeof raw === 'string') {
+      try { raw = JSON.parse(raw); } catch (_) { raw = []; }
+    }
+    const list = [];
+    if (Array.isArray(raw)) {
+      for (const item of raw) {
+        if (!item) continue;
+        if (typeof item === 'string') {
+          const ph = item.trim();
+          if (ph) list.push({ phone: ph, label: '' });
+        } else if (typeof item === 'object') {
+          const ph = String(item.phone || '').trim();
+          if (ph) list.push({ phone: ph, label: String(item.label || '').slice(0, 40) });
+        }
+      }
+    }
+    patch.extra = Object.assign({}, patch.extra || {}, { extra_phones: list });
   }
 
   if (patch.extra && typeof patch.extra === 'object') {
