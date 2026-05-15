@@ -711,8 +711,52 @@ async function openShowcaseDemoModal() {
   body.appendChild(result);
 
   const runBtn = h('button', { class: 'btn primary', id: 'demo-run-btn', onclick: () => _runDemoSeed() }, '✨ Create / refresh demo');
+  const eduBtn = h('button', { class: 'btn', style: { background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' }, onclick: () => _runIndustrySeed('education') }, '🎓 Seed Education demo');
+  const reBtn  = h('button', { class: 'btn', style: { background: '#dbeafe', color: '#1e40af', borderColor: '#bfdbfe' }, onclick: () => _runIndustrySeed('realestate') }, '🏢 Seed Real Estate demo');
   const cancelBtn = h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Close');
-  body.appendChild(h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: '.5rem', marginTop: '1rem' } }, cancelBtn, runBtn));
+  body.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: '.5rem', marginTop: '1rem', flexWrap: 'wrap' } },
+    h('div', { style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap' } }, eduBtn, reBtn),
+    h('div', { style: { display: 'flex', gap: '.5rem' } }, cancelBtn, runBtn)
+  ));
+
+  async function _runIndustrySeed(pack) {
+    const btn = pack === 'education' ? eduBtn : reBtn;
+    const label = pack === 'education' ? '🎓 Education' : '🏢 Real Estate';
+    btn.disabled = true; btn.textContent = '⏳ Seeding ' + label + '…';
+    status.style.display = 'block';
+    status.style.background = '#e0f2fe'; status.style.color = '#075985';
+    status.textContent = 'Installing ' + label + ' pack and loading rich demo data on the showcase tenant…';
+    try {
+      const fn = pack === 'education' ? 'api_saas_demo_seedEducationPack' : 'api_saas_demo_seedRealEstatePack';
+      const r = await api(fn, {});
+      status.style.background = '#dcfce7'; status.style.color = '#166534';
+      status.textContent = '✅ ' + label + ' demo ready! ' + Object.entries(r.counts || {}).map(([k,v]) => v + ' ' + k).join(', ');
+      result.style.display = 'block';
+      result.innerHTML = '';
+      const credBox = (lbl, val) => h('div', { style: { background: '#f1f5f9', padding: '.6rem .8rem', borderRadius: '6px', margin: '.4rem 0' } },
+        h('div', { class: 'muted', style: { fontSize: '.72rem', textTransform: 'uppercase' } }, lbl),
+        h('div', { style: { fontFamily: 'monospace', fontSize: '.95rem', wordBreak: 'break-all' } }, val)
+      );
+      result.appendChild(h('h4', { style:{ margin:'0 0 .4rem 0' } }, label + ' showcase URLs'));
+      Object.entries(r.showcase_links || {}).forEach(([k, v]) => result.appendChild(credBox(k.replace(/_/g,' '), v)));
+      result.appendChild(credBox('Login email',    r.email));
+      result.appendChild(credBox('Login password', r.password));
+      result.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', marginTop: '.6rem', flexWrap: 'wrap' } },
+        h('button', { class: 'btn primary', onclick: () => window.open(r.url, '_blank') }, '🔓 Open ' + label + ' demo ↗'),
+        h('button', { class: 'btn ghost', onclick: () => {
+          try { navigator.clipboard.writeText(label + ' demo:\nURL: ' + r.url + '\nEmail: ' + r.email + '\nPassword: ' + r.password); toast('Copied'); }
+          catch (_) { toast('Copy failed', 'err'); }
+        } }, '📋 Copy share text')
+      ));
+      btn.textContent = '🔄 Re-seed ' + label;
+      btn.disabled = false;
+    } catch (e) {
+      status.style.background = '#fee2e2'; status.style.color = '#991b1b';
+      status.textContent = '❌ ' + e.message;
+      btn.disabled = false;
+      btn.textContent = label === '🎓 Education' ? '🎓 Seed Education demo' : '🏢 Seed Real Estate demo';
+    }
+  }
 
   card.appendChild(body);
   m.appendChild(card);

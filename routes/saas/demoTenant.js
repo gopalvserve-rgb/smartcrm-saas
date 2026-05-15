@@ -1145,7 +1145,317 @@ async function api_saas_demo_snapshot(token) {
   };
 }
 
+
+
+// ═════════════════════════════════════════════════════════════════
+// Industry pack showcase seeders
+// ═════════════════════════════════════════════════════════════════
+// Each one:
+//   1. Ensures the showcase tenant exists (re-uses _findOrCreateDemoTenant)
+//   2. Installs the industry pack into that tenant
+//   3. Seeds rich, realistic demo data on top of the generic showcase
+//   4. Returns the same login URL/credentials so sales can hand-off
+//
+// Calls run inside tenantStorage.run() so framework's installer + our
+// own queries land in the showcase tenant DB (not control DB).
+
+const db = require('../../db/pg');
+
+async function _runInShowcase(pool, fn) {
+  return db.tenantStorage.run({ pool, slug: DEMO_SLUG }, fn);
+}
+
+async function _seedEducationDemoData(pool, adminUserId) {
+  // Install the pack (idempotent — seeds 3 fee plans, 4 custom fields,
+  // 7 statuses if not already there).
+  await _runInShowcase(pool, async () => {
+    const fw = require('../packs/_framework');
+    require('../packs/education'); // ensure registered
+    await fw.installPack('education', { userId: adminUserId });
+  });
+
+  // Pull plan IDs we just seeded
+  const plansR = await pool.query(`SELECT id, total_amount, num_installments, interval_days FROM edu_fee_plans ORDER BY id`);
+  const plans = plansR.rows || [];
+  if (!plans.length) throw new Error('Education pack: no fee plans found after install');
+
+  // Pick 10 existing leads and create enrollments on each. Use existing
+  // showcase leads so the lead-modal shows the 🎓 panel for known names.
+  const leadsR = await pool.query(`SELECT id, name FROM leads ORDER BY id ASC LIMIT 10`);
+  const leads = leadsR.rows || [];
+  const courses = ['JEE Advanced 2027', 'NEET 2026', 'CAT Prep', 'Class 11 Foundation', 'Class 12 Crash', 'IELTS Premium', 'GMAT Online'];
+  const batches = ['Morning · 8 AM', 'Afternoon · 2 PM', 'Evening · 6 PM', 'Weekend Only'];
+
+  let enrolled = 0, installmentRows = 0, payments = 0;
+  for (let i = 0; i < leads.length; i++) {
+    const lead = leads[i];
+    const plan = plans[i % plans.length];
+    const course = courses[i % courses.length];
+    const batch  = batches[i % batches.length];
+    // Spread start dates across the last 12 months so installments fall
+    // before AND after today — gives a realistic forecast + defaulters view.
+    const startDate = new Date();
+    startDate.setMonth(startDate.getMonth() - (i % 12));
+    const startIso = startDate.toISOString().slice(0, 10);
+
+    const eR = await pool.query(
+      `INSERT INTO edu_enrollments (lead_id, fee_plan_id, plan_snapshot, course_name, batch_name, start_date, total_amount, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'active') RETURNING id`,
+      [lead.id, plan.id, JSON.stringify(plan), course, batch, startIso, plan.total_amount]
+    );
+    const enrollmentId = eR.rows[0].id;
+    enrolled++;
+
+    // Generate installments
+    const n = Number(plan.num_installments || 1);
+    const interval = Number(plan.interval_days || 30);
+    const per = Math.round((Number(plan.total_amount) / n) * 100) / 100;
+    for (let s = 0; s < n; s++) {
+      const due = new Date(startDate.getTime());
+      due.setDate(due.getDate() + (interval * s));
+      const dueIso = due.toISOString().slice(0, 10);
+      const isPaid  = due < new Date() && Math.random() < 0.75;
+      const isPartial = !isPaid && due < new Date() && Math.random() < 0.15;
+      const paidAmt = isPaid ? per : (isPartial ? Math.round(per * 0.5 * 100) / 100 : 0);
+      const status  = isPaid ? 'paid' : (isPartial ? 'partial' : 'pending');
+
+      const iR = await pool.query(
+        `INSERT INTO edu_installments (enrollment_id, seq, due_date, amount, paid_amount, status, paid_at)
+         VALUES ($1, $2, $3, $4, $5, $6, ${isPaid ? 'NOW()' : 'NULL'}) RETURNING id`,
+        [enrollmentId, s + 1, dueIso, per, paidAmt, status]
+      );
+      installmentRows++;
+      if (paidAmt > 0) {
+        await pool.query(
+          `INSERT INTO edu_payments (installment_id, enrollment_id, amount, method, reference, received_by)
+           VALUES ($1, $2, $3, 'upi', 'DEMO-TXN-' || $1, $4)`,
+          [iR.rows[0].id, enrollmentId, paidAmt, adminUserId]
+        );
+        payments++;
+      }
+    }
+  }
+
+  return { enrolled, installments: installmentRows, payments };
+}
+
+async function _seedRealEstateDemoData(pool, adminUserId) {
+  await _runInShowcase(pool, async () => {
+    const fw = require('../packs/_framework');
+    require('../packs/realestate'); // ensure registered
+    await fw.installPack('realestate', { userId: adminUserId });
+  });
+
+  // The installer already seeds Sample Heights with 12 units + 2 partners.
+  // Add a second project for variety, more channel partners, and 6 bookings
+  // with varied demand-letter progression so the demo lights up everywhere.
+
+  // 2nd project — Skyline Towers · Tower B (5 floors × 4 units = 20 units)
+  let proj2Id = null;
+  const existing2 = await pool.query(`SELECT id FROM re_projects WHERE name='Skyline Towers' LIMIT 1`);
+  if (existing2.rows.length) {
+    proj2Id = existing2.rows[0].id;
+  } else {
+    const p2 = await pool.query(
+      `INSERT INTO re_projects (name, location, tower_code, total_floors, units_per_floor)
+       VALUES ('Skyline Towers', 'Sector 17', 'B', 5, 4) RETURNING id`
+    );
+    proj2Id = p2.rows[0].id;
+    for (let f = 1; f <= 5; f++) {
+      for (let u = 1; u <= 4; u++) {
+        const unitNo = `B-${f}0${u}`;
+        const type = u <= 2 ? '3BHK' : '4BHK';
+        const carpet = u <= 2 ? 1280 : 1650;
+        const price  = u <= 2 ? 9500000 : 13500000;
+        await pool.query(
+          `INSERT INTO re_units (project_id, unit_no, floor, type, carpet_sqft, price) VALUES ($1,$2,$3,$4,$5,$6)`,
+          [proj2Id, unitNo, f, type, carpet, price]
+        );
+      }
+    }
+  }
+
+  // 2 more channel partners
+  for (const pData of [
+    { name: 'PropTiger',  pct: 1.5 },
+    { name: '99acres Pro', pct: 2.5 }
+  ]) {
+    const have = await pool.query(`SELECT 1 FROM re_channel_partners WHERE name=$1`, [pData.name]);
+    if (!have.rows.length) {
+      await pool.query(
+        `INSERT INTO re_channel_partners (name, commission_pct) VALUES ($1, $2)`,
+        [pData.name, pData.pct]
+      );
+    }
+  }
+
+  // Pull resources for booking generation
+  const unitsR = await pool.query(`SELECT id, project_id, price FROM re_units WHERE status='available' ORDER BY id ASC LIMIT 8`);
+  const partnersR = await pool.query(`SELECT id, commission_pct FROM re_channel_partners ORDER BY id ASC`);
+  const leadsR = await pool.query(`SELECT id, name FROM leads ORDER BY id ASC LIMIT 8 OFFSET 10`); // different from edu leads
+  const buyers = ['Rajesh Kumar', 'Anita Sharma', 'Vikram Patel', 'Meera Singh', 'Arjun Reddy', 'Priya Iyer', 'Sanjay Gupta', 'Neha Kapoor'];
+
+  const MILESTONES = [
+    { code: 'token',        label: 'Token',        pct: 1,  offset_days:  0 },
+    { code: 'agreement',    label: 'Agreement',    pct: 9,  offset_days: 30 },
+    { code: 'excavation',   label: 'Excavation',   pct: 30, offset_days: 90 },
+    { code: 'slab',         label: 'Slab',         pct: 30, offset_days: 180 },
+    { code: 'registration', label: 'Registration', pct: 30, offset_days: 365 }
+  ];
+
+  let bookings = 0, demands = 0, demandPayments = 0, commissionRows = 0;
+  for (let i = 0; i < Math.min(unitsR.rows.length, leadsR.rows.length); i++) {
+    const unit = unitsR.rows[i];
+    const lead = leadsR.rows[i];
+    const partner = partnersR.rows[i % partnersR.rows.length];
+    const buyerName = buyers[i % buyers.length];
+
+    // Booking date: spread across last 10 months for varied progression
+    const bookingDate = new Date();
+    bookingDate.setMonth(bookingDate.getMonth() - (i + 1));
+    const bookingIso = bookingDate.toISOString().slice(0, 10);
+
+    const total = Number(unit.price);
+    const cpPct = partner ? Number(partner.commission_pct) : 0;
+
+    const bR = await pool.query(
+      `INSERT INTO re_bookings (lead_id, unit_id, project_id, buyer_name, total_price, booking_date, channel_partner_id, commission_pct, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'booked') RETURNING id`,
+      [lead.id, unit.id, unit.project_id, buyerName, total, bookingIso, partner ? partner.id : null, cpPct || null]
+    );
+    const bookingId = bR.rows[0].id;
+    bookings++;
+
+    await pool.query(`UPDATE re_units SET status='booked' WHERE id=$1`, [unit.id]);
+
+    // Generate demands, mark earlier milestones paid based on age of booking
+    const startMs = bookingDate.getTime();
+    for (let m = 0; m < MILESTONES.length; m++) {
+      const ms = MILESTONES[m];
+      const due = new Date(startMs);
+      due.setDate(due.getDate() + ms.offset_days);
+      const dueIso = due.toISOString().slice(0,10);
+      const amt = Math.round(total * (ms.pct / 100) * 100) / 100;
+
+      // Pay milestones whose due date is past today (with some randomness on slab/registration)
+      const isPast = due < new Date();
+      const shouldPay = isPast && (ms.code !== 'registration' || Math.random() < 0.3);
+      const status = shouldPay ? 'paid' : 'pending';
+      const paid = shouldPay ? amt : 0;
+
+      const dR = await pool.query(
+        `INSERT INTO re_demands (booking_id, seq, code, label, due_date, amount, paid_amount, status, paid_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, ${shouldPay ? 'NOW()' : 'NULL'}) RETURNING id`,
+        [bookingId, m+1, ms.code, ms.label, dueIso, amt, paid, status]
+      );
+      demands++;
+      if (shouldPay) {
+        await pool.query(
+          `INSERT INTO re_payments (demand_id, booking_id, amount, method, reference, received_by)
+           VALUES ($1, $2, $3, 'bank', 'NEFT-DEMO-' || $1, $4)`,
+          [dR.rows[0].id, bookingId, amt, adminUserId]
+        );
+        demandPayments++;
+      }
+    }
+
+    // Commission accrual
+    if (partner && cpPct > 0) {
+      const commissionAmt = Math.round(total * (cpPct / 100) * 100) / 100;
+      // Half the bookings have commission fully paid out
+      const cpPaid = Math.random() < 0.5 ? commissionAmt : 0;
+      const cpStatus = cpPaid >= commissionAmt ? 'paid' : 'pending';
+      await pool.query(
+        `INSERT INTO re_commission_ledger (booking_id, partner_id, amount_due, amount_paid, status, paid_at)
+         VALUES ($1, $2, $3, $4, $5, ${cpPaid > 0 ? 'NOW()' : 'NULL'})`,
+        [bookingId, partner.id, commissionAmt, cpPaid, cpStatus]
+      );
+      commissionRows++;
+    }
+  }
+
+  return { bookings, demands, demand_payments: demandPayments, commission_rows: commissionRows };
+}
+
+/**
+ * api_saas_demo_seedEducationPack — install Education pack + rich demo data
+ * on the showcase tenant. Idempotent — running it twice is safe (existing
+ * enrollments/installments stay; new ones get added only on a fresh wipe).
+ */
+async function api_saas_demo_seedEducationPack(token) {
+  const me = await requireSuperAdmin(token);
+  const tenant = await _findOrCreateDemoTenant(me.id, me.email);
+  const pool = tenantPool.poolFor(tenant);
+  if (!pool) throw new Error('Could not connect to demo tenant DB');
+
+  const adminUserId = await _resetAdminPassword(pool);
+  const summary = await _seedEducationDemoData(pool, adminUserId);
+
+  const baseUrl = (process.env.PUBLIC_BASE_URL || 'https://crm.smartcrmsolution.com').replace(/\/+$/, '');
+  const url = `${baseUrl}/t/${tenant.slug}/#/edufees`;
+
+  await control.insert('audit_log', {
+    actor_type: 'super_admin', actor_id: me.id, actor_email: me.email,
+    tenant_id: tenant.id, event: 'tenant.demo_seeded_education',
+    detail: JSON.stringify(summary)
+  });
+
+  return {
+    ok: true,
+    slug: tenant.slug,
+    url,
+    email: DEMO_EMAIL,
+    password: DEMO_PASSWORD,
+    pack: 'education',
+    counts: summary,
+    showcase_links: {
+      fee_collection: `${baseUrl}/t/${tenant.slug}/#/edufees`,
+      leads:          `${baseUrl}/t/${tenant.slug}/#/leads`,
+      settings_packs: `${baseUrl}/t/${tenant.slug}/#/admin`
+    }
+  };
+}
+
+/**
+ * api_saas_demo_seedRealEstatePack — install Real Estate pack + rich demo data.
+ */
+async function api_saas_demo_seedRealEstatePack(token) {
+  const me = await requireSuperAdmin(token);
+  const tenant = await _findOrCreateDemoTenant(me.id, me.email);
+  const pool = tenantPool.poolFor(tenant);
+  if (!pool) throw new Error('Could not connect to demo tenant DB');
+
+  const adminUserId = await _resetAdminPassword(pool);
+  const summary = await _seedRealEstateDemoData(pool, adminUserId);
+
+  const baseUrl = (process.env.PUBLIC_BASE_URL || 'https://crm.smartcrmsolution.com').replace(/\/+$/, '');
+  const url = `${baseUrl}/t/${tenant.slug}/#/reinventory`;
+
+  await control.insert('audit_log', {
+    actor_type: 'super_admin', actor_id: me.id, actor_email: me.email,
+    tenant_id: tenant.id, event: 'tenant.demo_seeded_realestate',
+    detail: JSON.stringify(summary)
+  });
+
+  return {
+    ok: true,
+    slug: tenant.slug,
+    url,
+    email: DEMO_EMAIL,
+    password: DEMO_PASSWORD,
+    pack: 'realestate',
+    counts: summary,
+    showcase_links: {
+      inventory:    `${baseUrl}/t/${tenant.slug}/#/reinventory`,
+      commissions:  `${baseUrl}/t/${tenant.slug}/#/recommissions`,
+      leads:        `${baseUrl}/t/${tenant.slug}/#/leads`
+    }
+  };
+}
+
 module.exports = {
   api_saas_demo_seed,
-  api_saas_demo_snapshot
+  api_saas_demo_snapshot,
+  api_saas_demo_seedEducationPack,
+  api_saas_demo_seedRealEstatePack
 };
