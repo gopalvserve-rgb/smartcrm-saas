@@ -428,6 +428,332 @@ async function api_re_summary(token) {
   };
 }
 
+
+// ═════════════════════════════════════════════════════════════════
+// Phase 2 — PDF demands, manual reminders, commission payable, cancel booking
+// ═════════════════════════════════════════════════════════════════
+
+/**
+ * api_re_demand_renderHtml — returns a printable HTML demand letter.
+ * The SPA opens this in a new window so the user can "Print → Save as PDF".
+ * This avoids a server-side PDF dependency (puppeteer / pdfkit) — keeps the
+ * pack lightweight and Railway-friendly.
+ */
+async function api_re_demand_renderHtml(token, demandId) {
+  await authUser(token);
+  await _requireRealEstate();
+  await _ensureSchema();
+  if (!demandId) throw new Error('demandId required');
+
+  const dR = await db.query(`
+    SELECT d.*, b.lead_id, b.buyer_name, b.total_price, b.booking_date,
+           u.unit_no, u.floor, u.type AS unit_type, u.carpet_sqft, u.price AS unit_price,
+           pr.name AS project_name, pr.location AS project_location, pr.tower_code
+      FROM re_demands d
+      LEFT JOIN re_bookings b ON b.id = d.booking_id
+      LEFT JOIN re_units u    ON u.id = b.unit_id
+      LEFT JOIN re_projects pr ON pr.id = b.project_id
+     WHERE d.id = $1
+  `, [Number(demandId)]);
+  const row = dR.rows && dR.rows[0];
+  if (!row) throw new Error('Demand not found');
+
+  // Pull tenant company info if available (best-effort).
+  let companyName = 'Your Company', companyAddress = '', companyPhone = '', companyEmail = '';
+  try {
+    const c = await db.query(`SELECT key, value FROM config WHERE key = ANY($1::text[])`,
+      [['company_name','company_address','company_phone','company_email']]);
+    const m = {};
+    (c.rows || []).forEach(r => { m[r.key] = r.value; });
+    companyName    = m.company_name    || companyName;
+    companyAddress = m.company_address || '';
+    companyPhone   = m.company_phone   || '';
+    companyEmail   = m.company_email   || '';
+  } catch (_) {}
+
+  // Lead contact (buyer) — fall back to buyer_name on the booking
+  let buyerEmail = '', buyerPhone = '';
+  if (row.lead_id) {
+    try {
+      const l = await db.query(`SELECT name, email, phone FROM leads WHERE id=$1`, [row.lead_id]);
+      const lead = l.rows && l.rows[0];
+      if (lead) {
+        buyerEmail = lead.email || '';
+        buyerPhone = lead.phone || '';
+      }
+    } catch (_) {}
+  }
+
+  const inr = n => '₹' + Number(n || 0).toLocaleString('en-IN');
+  const dueDate = row.due_date ? String(row.due_date).slice(0,10) : '—';
+  const balance = Number(row.amount) - Number(row.paid_amount || 0);
+
+  const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>Demand Letter — ${row.label || row.code} · ${row.unit_no || ''}</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; max-width: 760px; margin: 24px auto; padding: 24px; color: #111; }
+  .head { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #0ea5e9; padding-bottom: 16px; margin-bottom: 24px; }
+  .head h1 { margin: 0 0 4px 0; font-size: 20px; }
+  .head .muted { color: #555; font-size: 12px; }
+  h2 { color: #0c4a6e; font-size: 16px; margin: 24px 0 8px; }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0 16px; }
+  td.l { color: #555; padding: 6px 12px 6px 0; vertical-align: top; width: 40%; }
+  td.v { font-weight: 600; padding: 6px 0; }
+  .total { background: #f0f9ff; border-left: 4px solid #0ea5e9; padding: 12px 16px; margin: 16px 0; }
+  .total .amt { font-size: 24px; font-weight: 700; color: #0c4a6e; }
+  .footer { margin-top: 40px; font-size: 12px; color: #555; border-top: 1px solid #ddd; padding-top: 16px; }
+  .stamp { margin-top: 32px; font-size: 12px; color: #999; }
+  @media print { body { margin: 0; } .noprint { display: none; } }
+  .noprint { position: fixed; top: 12px; right: 12px; background: #0ea5e9; color: white; padding: 8px 16px; border-radius: 6px; cursor: pointer; border: 0; font-weight: 600; }
+</style>
+</head><body>
+<button class="noprint" onclick="window.print()">🖨️ Print / Save as PDF</button>
+
+<div class="head">
+  <div>
+    <h1>${companyName}</h1>
+    <div class="muted">${companyAddress || ''}</div>
+    <div class="muted">${companyPhone ? '📞 ' + companyPhone : ''}${companyEmail ? '  ·  ' + companyEmail : ''}</div>
+  </div>
+  <div style="text-align:right">
+    <div style="font-size:20px;font-weight:700;color:#0ea5e9">DEMAND LETTER</div>
+    <div class="muted">Ref #RE-${row.booking_id}-${String(row.seq).padStart(2,'0')}</div>
+    <div class="muted">Date: ${new Date().toISOString().slice(0,10)}</div>
+  </div>
+</div>
+
+<h2>Buyer details</h2>
+<table>
+  <tr><td class="l">Name</td><td class="v">${row.buyer_name || (row.lead_id ? 'Lead #' + row.lead_id : '—')}</td></tr>
+  ${buyerPhone ? `<tr><td class="l">Phone</td><td class="v">${buyerPhone}</td></tr>` : ''}
+  ${buyerEmail ? `<tr><td class="l">Email</td><td class="v">${buyerEmail}</td></tr>` : ''}
+</table>
+
+<h2>Unit details</h2>
+<table>
+  <tr><td class="l">Project</td><td class="v">${row.project_name || ''}${row.tower_code ? ' · Tower ' + row.tower_code : ''}</td></tr>
+  <tr><td class="l">Unit</td><td class="v">${row.unit_no || ''}${row.unit_type ? ' · ' + row.unit_type : ''}${row.carpet_sqft ? ' · ' + row.carpet_sqft + ' sqft' : ''}</td></tr>
+  <tr><td class="l">Total agreement value</td><td class="v">${inr(row.total_price)}</td></tr>
+  <tr><td class="l">Booking date</td><td class="v">${row.booking_date ? String(row.booking_date).slice(0,10) : '—'}</td></tr>
+</table>
+
+<h2>This demand</h2>
+<table>
+  <tr><td class="l">Milestone</td><td class="v">${row.label || row.code} (#${row.seq})</td></tr>
+  <tr><td class="l">Demand amount</td><td class="v">${inr(row.amount)}</td></tr>
+  <tr><td class="l">Already paid</td><td class="v">${inr(row.paid_amount)}</td></tr>
+  <tr><td class="l">Due date</td><td class="v">${dueDate}</td></tr>
+</table>
+
+<div class="total">
+  <div style="font-size:12px;color:#555">Balance payable</div>
+  <div class="amt">${inr(balance)}</div>
+</div>
+
+<div class="footer">
+  <p>Kindly remit the above amount on or before the due date. Please mention the reference number above on the payment instrument.</p>
+  <p>For any clarification, contact us at ${companyPhone || companyEmail || 'the address above'}.</p>
+</div>
+
+<div class="stamp">
+  Generated by ${companyName} CRM · ${new Date().toISOString().slice(0,16).replace('T',' ')} UTC
+</div>
+</body></html>`;
+
+  return { html, demand: row };
+}
+
+/**
+ * api_re_demand_sendReminder — manual "Send reminder now" for a demand letter.
+ * Tries WhatsApp first via whatsbot._sendFreeform, falls back to email via utils/mailer.
+ * Always best-effort; surfaces a structured result so the SPA can toast.
+ */
+async function api_re_demand_sendReminder(token, payload) {
+  await authUser(token);
+  await _requireRealEstate();
+  await _ensureSchema();
+  const p = payload || {};
+  if (!p.id) throw new Error('id required');
+
+  const dR = await db.query(`
+    SELECT d.*, b.lead_id, b.buyer_name, b.total_price,
+           u.unit_no, pr.name AS project_name
+      FROM re_demands d
+      LEFT JOIN re_bookings b ON b.id = d.booking_id
+      LEFT JOIN re_units u    ON u.id = b.unit_id
+      LEFT JOIN re_projects pr ON pr.id = b.project_id
+     WHERE d.id = $1
+  `, [Number(p.id)]);
+  const row = dR.rows && dR.rows[0];
+  if (!row) throw new Error('Demand not found');
+  if (!row.lead_id) throw new Error('No lead linked to this booking');
+
+  const lead = await db.findById('leads', row.lead_id);
+  if (!lead) throw new Error('Lead not found');
+
+  const balance = Number(row.amount) - Number(row.paid_amount || 0);
+  const due = row.due_date ? String(row.due_date).slice(0, 10) : '—';
+  const msg = `Hi ${row.buyer_name || lead.name || ''}! This is a reminder for the "${row.label || row.code}" demand of ₹${Number(balance).toLocaleString('en-IN')} for unit ${row.unit_no || ''} (${row.project_name || ''}). Due date: ${due}. Kindly process the payment. Reply here if you have any questions.`;
+
+  const result = { wa: null, email: null };
+
+  // 1) WhatsApp (best-effort)
+  try {
+    const whatsbot = require('../whatsbot');
+    const phone = (lead.whatsapp || lead.phone || '').replace(/\D/g, '');
+    if (whatsbot && typeof whatsbot._sendFreeform === 'function' && phone) {
+      await whatsbot._sendFreeform(phone, msg);
+      result.wa = { ok: true, phone };
+    } else {
+      result.wa = { ok: false, reason: 'no phone or whatsbot unavailable' };
+    }
+  } catch (e) {
+    result.wa = { ok: false, reason: e.message };
+  }
+
+  // 2) Email (best-effort)
+  try {
+    const mailer = require('../../utils/mailer');
+    if (mailer && typeof mailer._sendRaw === 'function' && lead.email) {
+      await mailer._sendRaw({
+        to: lead.email,
+        subject: `Demand letter reminder — ${row.label || row.code} · ${row.unit_no || ''}`,
+        text: msg
+      });
+      result.email = { ok: true, to: lead.email };
+    } else {
+      result.email = { ok: false, reason: 'no email or mailer unavailable' };
+    }
+  } catch (e) {
+    result.email = { ok: false, reason: e.message };
+  }
+
+  return result;
+}
+
+/**
+ * api_re_booking_cancel — cancel a booking (admin/manager only).
+ * Frees the unit back to 'available', marks booking 'cancelled', reverses
+ * commission accrual on re_commission_ledger (if commission not yet paid).
+ * Demands are left in place for audit but flagged 'cancelled' status.
+ */
+async function api_re_booking_cancel(token, payload) {
+  const me = await authUser(token);
+  await _requireRealEstate();
+  await _ensureSchema();
+  if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin or manager role required to cancel bookings');
+
+  const p = payload || {};
+  if (!p.id) throw new Error('booking id required');
+
+  const bR = await db.query(`SELECT * FROM re_bookings WHERE id=$1`, [Number(p.id)]);
+  const booking = bR.rows && bR.rows[0];
+  if (!booking) throw new Error('Booking not found');
+  if (booking.status === 'cancelled') throw new Error('Booking already cancelled');
+  if (booking.status === 'registered') throw new Error('Cannot cancel a registered booking — refund flow required');
+
+  // Free unit back to available
+  await db.query(`UPDATE re_units SET status='available' WHERE id=$1`, [booking.unit_id]);
+  // Mark booking cancelled
+  await db.query(`UPDATE re_bookings SET status='cancelled' WHERE id=$1`, [booking.id]);
+  // Flag pending demands as cancelled (paid demands stay paid for audit)
+  await db.query(`UPDATE re_demands SET status='cancelled' WHERE booking_id=$1 AND status NOT IN ('paid','partial')`, [booking.id]);
+
+  // Reverse unpaid commission accrual
+  let reversedCommission = 0;
+  try {
+    const cR = await db.query(`SELECT id, amount_due, amount_paid FROM re_commission_ledger WHERE booking_id=$1 AND status<>'paid'`, [booking.id]);
+    for (const row of (cR.rows || [])) {
+      const remaining = Number(row.amount_due) - Number(row.amount_paid || 0);
+      reversedCommission += remaining;
+      await db.query(`UPDATE re_commission_ledger SET status='cancelled' WHERE id=$1`, [row.id]);
+    }
+  } catch (_) {}
+
+  return {
+    ok: true,
+    unit_freed: booking.unit_id,
+    booking_id: booking.id,
+    commission_reversed: reversedCommission,
+    reason: p.reason || ''
+  };
+}
+
+/**
+ * api_re_commission_list — channel partner payable view.
+ * Returns ledger rows grouped by partner with totals for the payable view.
+ */
+async function api_re_commission_list(token) {
+  await authUser(token);
+  await _requireRealEstate();
+  await _ensureSchema();
+  const r = await db.query(`
+    SELECT l.id, l.booking_id, l.amount_due, l.amount_paid, l.status, l.created_at, l.paid_at,
+           cp.id AS partner_id, cp.name AS partner_name, cp.phone AS partner_phone, cp.email AS partner_email,
+           b.buyer_name, b.total_price, b.booking_date,
+           u.unit_no, pr.name AS project_name
+      FROM re_commission_ledger l
+      LEFT JOIN re_channel_partners cp ON cp.id = l.partner_id
+      LEFT JOIN re_bookings b ON b.id = l.booking_id
+      LEFT JOIN re_units u    ON u.id = b.unit_id
+      LEFT JOIN re_projects pr ON pr.id = b.project_id
+     ORDER BY l.status ASC, l.created_at DESC
+  `);
+  const rows = r.rows || [];
+
+  // Group by partner for the summary header
+  const byPartner = {};
+  for (const row of rows) {
+    const pid = row.partner_id || 0;
+    if (!byPartner[pid]) byPartner[pid] = {
+      partner_id: pid, partner_name: row.partner_name || 'Unknown',
+      partner_phone: row.partner_phone || '', partner_email: row.partner_email || '',
+      total_due: 0, total_paid: 0, pending_rows: 0, paid_rows: 0
+    };
+    if (row.status !== 'cancelled') {
+      byPartner[pid].total_due  += Number(row.amount_due  || 0);
+      byPartner[pid].total_paid += Number(row.amount_paid || 0);
+      if (row.status === 'paid') byPartner[pid].paid_rows++;
+      else byPartner[pid].pending_rows++;
+    }
+  }
+  return {
+    rows,
+    by_partner: Object.values(byPartner)
+  };
+}
+
+/**
+ * api_re_commission_markPaid — record a commission payout to a partner.
+ */
+async function api_re_commission_markPaid(token, payload) {
+  await authUser(token);
+  await _requireRealEstate();
+  await _ensureSchema();
+  const p = payload || {};
+  if (!p.id) throw new Error('id required');
+
+  const cur = await db.query(`SELECT * FROM re_commission_ledger WHERE id=$1`, [Number(p.id)]);
+  const row = cur.rows && cur.rows[0];
+  if (!row) throw new Error('Commission ledger entry not found');
+  if (row.status === 'cancelled') throw new Error('This commission entry is cancelled — cannot mark paid');
+
+  const amt = Number(p.amount || row.amount_due);
+  const newPaid = Math.round((Number(row.amount_paid || 0) + amt) * 100) / 100;
+  const status = newPaid >= Number(row.amount_due) - 0.005 ? 'paid' : 'partial';
+
+  await db.query(
+    `UPDATE re_commission_ledger
+        SET amount_paid=$1, status=$2,
+            paid_at = CASE WHEN $2='paid' THEN NOW() ELSE paid_at END
+      WHERE id=$3`,
+    [newPaid, status, Number(p.id)]
+  );
+
+  return { ok: true, status, amount_paid: newPaid };
+}
+
 // ─────────────────────────────────────────────────────────────────
 // Installer — schema + seed
 // ─────────────────────────────────────────────────────────────────
@@ -541,9 +867,10 @@ module.exports = {
   install, uninstall,
   api_re_projects_list, api_re_projects_save,
   api_re_units_byProject, api_re_units_save, api_re_units_bulkCreate,
-  api_re_booking_create, api_re_booking_byLead,
-  api_re_demand_markPaid,
+  api_re_booking_create, api_re_booking_byLead, api_re_booking_cancel,
+  api_re_demand_markPaid, api_re_demand_renderHtml, api_re_demand_sendReminder,
   api_re_channelPartners_list, api_re_channelPartners_save,
+  api_re_commission_list, api_re_commission_markPaid,
   api_re_summary,
   _ensureSchema,
   DEFAULT_MILESTONES

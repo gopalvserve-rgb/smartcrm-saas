@@ -854,6 +854,8 @@ const NAV_GROUPS = [
   { label: 'Sales', icon: '💼', items: [
     { id: 'leads',      label: 'Leads',          icon: '🎯' },
     { id: 'edufees',    label: 'Fee Collection', icon: '💰', roles: ['admin','manager','team_leader'] },
+    { id: 'reinventory', label: 'Inventory Board', icon: '🏢', roles: ['admin','manager','team_leader'] },
+    { id: 'recommissions', label: 'Commissions', icon: '💸', roles: ['admin','manager'] },
     { id: 'campaigns',  label: 'Campaigns',      icon: '📣', roles: ['admin','manager'] },
     { id: 'pipeline',   label: 'Pipeline',       icon: '📈' },
     { id: 'kanban',     label: 'Kanban',         icon: '🗂️' },
@@ -25977,7 +25979,18 @@ function packRealEstateBookingBlock(leadId) {
                 ? h('span', { class:'badge', style:{ marginLeft:'.5rem', background:'#f0f9ff', padding:'2px 6px', borderRadius:'4px', fontSize:'.75em', color:'#0369a1' } }, '👥 ' + b.partner_name)
                 : null
             ),
-            h('div', { class:'muted', style:{ fontSize:'.85em' } }, 'Total ₹' + Number(b.total_price).toLocaleString('en-IN'))
+            h('div', { style:{ display:'flex', gap:'.5rem', alignItems:'baseline' } },
+              h('div', { class:'muted', style:{ fontSize:'.85em' } }, 'Total ₹' + Number(b.total_price).toLocaleString('en-IN')),
+              b.status !== 'cancelled' && b.status !== 'registered'
+                ? h('button', { class:'btn sm danger', title:'Cancel booking · frees the unit', onclick: () => cancelBooking(b, refresh) }, '❌ Cancel')
+                : null,
+              b.status === 'cancelled'
+                ? h('span', { style:{ background:'#fee2e2', color:'#991b1b', padding:'2px 6px', borderRadius:'4px', fontSize:'.7em' } }, 'CANCELLED')
+                : null,
+              b.status === 'registered'
+                ? h('span', { style:{ background:'#ddd6fe', color:'#5b21b6', padding:'2px 6px', borderRadius:'4px', fontSize:'.7em' } }, 'REGISTERED')
+                : null
+            )
           ),
           h('table', { class:'mini-table', style:{ marginTop:'.5rem', fontSize:'.85em' } },
             h('thead', {}, h('tr', {},
@@ -25999,9 +26012,18 @@ function packRealEstateBookingBlock(leadId) {
                   }
                 }, d.status)
               ),
-              h('td', {}, d.status !== 'paid'
-                ? h('button', { class:'btn sm primary', onclick: () => openMarkDemandPaidModal(d, refresh) }, 'Mark paid')
-                : null)
+              h('td', {},
+                h('div', { style:{ display:'flex', gap:'.25rem', flexWrap:'wrap' } },
+                  d.status !== 'paid' && d.status !== 'cancelled'
+                    ? h('button', { class:'btn sm primary', onclick: () => openMarkDemandPaidModal(d, refresh) }, 'Mark paid')
+                    : null,
+                  d.status !== 'cancelled'
+                    ? h('button', { class:'btn sm', title:'Print / Save as PDF', onclick: () => openDemandPdf(d.id) }, '📄')
+                    : null,
+                  d.status !== 'paid' && d.status !== 'cancelled'
+                    ? h('button', { class:'btn sm', title:'Send WhatsApp + email reminder', onclick: () => sendDemandReminder(d.id) }, '🔔')
+                    : null
+                ))
             )))
           )
         );
@@ -26047,3 +26069,163 @@ function packRealEstateBookingBlock(leadId) {
     return r;
   };
 })();
+
+
+// ═════════════════════════════════════════════════════════════════════
+// 🏢 Real Estate pack — Phase 2 helpers (PDF, reminder, cancel, commissions)
+// ═════════════════════════════════════════════════════════════════════
+
+async function openDemandPdf(demandId) {
+  try {
+    const r = await api('api_re_demand_renderHtml', demandId);
+    const w = window.open('', '_blank', 'width=820,height=900');
+    if (!w) { toast('Pop-up blocked. Allow pop-ups for this site.', 'err'); return; }
+    w.document.write(r.html || '');
+    w.document.close();
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function sendDemandReminder(demandId) {
+  if (!confirm('Send reminder for this demand letter via WhatsApp + email?')) return;
+  try {
+    const r = await api('api_re_demand_sendReminder', { id: demandId });
+    const parts = [];
+    if (r.wa && r.wa.ok)    parts.push('✓ WhatsApp');
+    if (r.wa && !r.wa.ok)   parts.push('✗ WhatsApp (' + (r.wa.reason || 'failed') + ')');
+    if (r.email && r.email.ok)  parts.push('✓ Email');
+    if (r.email && !r.email.ok) parts.push('✗ Email (' + (r.email.reason || 'failed') + ')');
+    toast(parts.join(' · ') || 'Done', (r.wa && r.wa.ok) || (r.email && r.email.ok) ? 'ok' : 'warn');
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function cancelBooking(b, onDone) {
+  const reason = prompt('Reason for cancelling this booking? (optional)\n\nNOTE: This frees the unit back to "available" and reverses any unpaid channel-partner commission. Paid demands stay on record.');
+  if (reason === null) return; // cancelled the dialog
+  try {
+    const r = await api('api_re_booking_cancel', { id: b.id, reason: reason || '' });
+    toast('Booking cancelled · unit freed' + (r.commission_reversed ? ' · ₹' + Number(r.commission_reversed).toLocaleString('en-IN') + ' commission reversed' : ''));
+    if (onDone) onDone();
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+VIEWS.recommissions = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('h2', {}, '💸 Channel Partner Commissions'));
+  view.appendChild(h('p', { class:'muted' }, 'Track and pay out broker / agency commissions accrued on Real Estate bookings.'));
+
+  let data;
+  try { data = await api('api_re_commission_list'); }
+  catch (e) {
+    if (/not active/i.test(String(e.message || ''))) {
+      view.appendChild(h('div', { class:'error-box' }, 'Real Estate pack is not installed. Go to Settings → 🧩 Industry Packs to enable.'));
+      return;
+    }
+    view.appendChild(h('div', { class:'error-box' }, e.message));
+    return;
+  }
+
+  const partners = data.by_partner || [];
+  const rows     = data.rows || [];
+
+  // Partner summary cards
+  if (partners.length) {
+    view.appendChild(h('h3', { style:{ marginTop:'1rem' } }, 'By partner'));
+    const grid = h('div', { style:{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(220px, 1fr))', gap:'.75rem', marginBottom:'1rem' } });
+    partners.forEach(p => {
+      const owed = Number(p.total_due) - Number(p.total_paid);
+      grid.appendChild(h('div', { class:'card', style:{ padding:'.9rem 1rem' } },
+        h('div', { style:{ display:'flex', justifyContent:'space-between', alignItems:'baseline' } },
+          h('strong', {}, p.partner_name),
+          owed > 0
+            ? h('span', { style:{ background:'#fee2e2', color:'#991b1b', padding:'2px 6px', borderRadius:'4px', fontSize:'.7em' } }, 'OWED')
+            : h('span', { style:{ background:'#dcfce7', color:'#166534', padding:'2px 6px', borderRadius:'4px', fontSize:'.7em' } }, 'CLEAR')
+        ),
+        p.partner_phone || p.partner_email ? h('div', { class:'muted', style:{ fontSize:'.8em', marginTop:'.2rem' } },
+          [p.partner_phone, p.partner_email].filter(Boolean).join(' · ')) : null,
+        h('div', { style:{ marginTop:'.5rem' } },
+          h('div', { class:'muted', style:{ fontSize:'.72em' } }, 'PAYABLE'),
+          h('div', { style:{ fontSize:'1.3rem', fontWeight:600, color: owed > 0 ? '#dc2626' : '#16a34a' } }, '₹' + Number(owed).toLocaleString('en-IN'))
+        ),
+        h('div', { class:'muted', style:{ fontSize:'.75em' } },
+          'Total accrued ₹' + Number(p.total_due).toLocaleString('en-IN') + ' · paid ₹' + Number(p.total_paid).toLocaleString('en-IN'))
+      ));
+    });
+    view.appendChild(grid);
+  }
+
+  // Ledger table
+  view.appendChild(h('h3', { style:{ marginTop:'1rem' } }, 'Ledger'));
+  if (!rows.length) {
+    view.appendChild(h('div', { class:'muted', style:{ padding:'1rem' } }, 'No commission entries yet. Bookings with a channel partner will appear here.'));
+    return;
+  }
+  const tbl = h('table', { class:'mini-table' },
+    h('thead', {}, h('tr', {},
+      h('th', {}, 'Partner'),
+      h('th', {}, 'Project / Unit'),
+      h('th', {}, 'Buyer'),
+      h('th', {}, 'Booking ₹'),
+      h('th', {}, 'Commission due'),
+      h('th', {}, 'Paid'),
+      h('th', {}, 'Balance'),
+      h('th', {}, 'Status'),
+      h('th', {}, '')
+    )),
+    h('tbody', {}, rows.map(r => {
+      const balance = Number(r.amount_due) - Number(r.amount_paid);
+      return h('tr', {},
+        h('td', {}, r.partner_name || '—'),
+        h('td', {}, (r.project_name || '—') + (r.unit_no ? ' · ' + r.unit_no : '')),
+        h('td', {}, r.buyer_name || (r.booking_id ? '#' + r.booking_id : '—')),
+        h('td', {}, '₹' + Number(r.total_price || 0).toLocaleString('en-IN')),
+        h('td', {}, '₹' + Number(r.amount_due).toLocaleString('en-IN')),
+        h('td', {}, '₹' + Number(r.amount_paid).toLocaleString('en-IN')),
+        h('td', { style:{ fontWeight:600, color: balance > 0 ? '#dc2626' : '#16a34a' } }, '₹' + Number(balance).toLocaleString('en-IN')),
+        h('td', {},
+          h('span', {
+            style:{
+              background: r.status === 'paid' ? '#dcfce7' : (r.status === 'partial' ? '#fef3c7' : (r.status === 'cancelled' ? '#f3f4f6' : '#fee2e2')),
+              color:      r.status === 'paid' ? '#166534' : (r.status === 'partial' ? '#92400e' : (r.status === 'cancelled' ? '#6b7280' : '#991b1b')),
+              padding:'2px 6px', borderRadius:'4px', fontSize:'.75em'
+            }
+          }, r.status)
+        ),
+        h('td', {}, r.status !== 'paid' && r.status !== 'cancelled'
+          ? h('button', { class:'btn sm primary', onclick: () => openMarkCommissionPaidModal(r, () => VIEWS.recommissions(view)) }, 'Pay')
+          : null)
+      );
+    }))
+  );
+  view.appendChild(tbl);
+};
+
+async function openMarkCommissionPaidModal(r, onDone) {
+  const m = h('div', { class:'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const modal = h('div', { class:'modal' });
+  modal.appendChild(h('div', { class:'modal-head' },
+    h('h3', {}, '💸 Pay commission — ' + (r.partner_name || '—')),
+    h('button', { class:'btn ghost', onclick: () => m.remove() }, '✕')
+  ));
+  const balance = Number(r.amount_due) - Number(r.amount_paid);
+  const fAmt = h('input', { type:'number', value: String(balance) });
+  modal.appendChild(h('div', { class:'modal-body' },
+    h('div', { class:'muted', style:{ marginBottom:'.5rem', fontSize:'.85em' } },
+      'Booking: ' + (r.project_name || '') + ' · ' + (r.unit_no || '') + ' · Buyer: ' + (r.buyer_name || '—')),
+    h('label', {}, 'Amount ₹ (balance: ₹' + balance.toLocaleString('en-IN') + ')', fAmt)
+  ));
+  modal.appendChild(h('div', { class:'actions' },
+    h('button', { class:'btn', onclick: () => m.remove() }, 'Cancel'),
+    h('button', { class:'btn primary', onclick: async () => {
+      try {
+        await api('api_re_commission_markPaid', { id: r.id, amount: Number(fAmt.value) });
+        toast('Commission marked paid');
+        m.remove();
+        if (onDone) onDone();
+      } catch (e) { toast(e.message, 'err'); }
+    } }, 'Save')
+  ));
+  m.appendChild(modal);
+  document.body.appendChild(m);
+}
+
+try { window.openDemandPdf = openDemandPdf; window.sendDemandReminder = sendDemandReminder; window.cancelBooking = cancelBooking; window.openMarkCommissionPaidModal = openMarkCommissionPaidModal; } catch (_) {}
