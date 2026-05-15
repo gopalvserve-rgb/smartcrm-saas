@@ -5590,6 +5590,9 @@ VIEWS.dialer = async (view) => {
 };
 
 function renderDialerSettings() {
+  // Auto-kick a silent recording sync when the user opens this view.
+  try { if (typeof _kickRecordingSyncSoon === 'function') _kickRecordingSyncSoon(2000); } catch (_) {}
+
   const wrap = h('div', { class: 'dialer-settings' });
   const isApp = !!(window.LeadCRMNative && typeof LeadCRMNative.getRecordingFolder === 'function');
   let folder = '';
@@ -5614,6 +5617,7 @@ function renderDialerSettings() {
           h('div', { class: 'actions' },
             h('button', { class: 'btn primary', onclick: () => syncRecordings() }, '🔄 Sync now'),
             h('button', { class: 'btn', onclick: () => syncRecordings({ full: true }) }, '⚡ Re-sync all'),
+            h('button', { class: 'btn', onclick: () => openRecordingSyncDebug() }, '🐞 Debug sync'),
             h('button', { class: 'btn ghost', onclick: () => { setupRecordingFolder(); } }, 'Change folder'),
             h('button', { class: 'btn ghost', onclick: () => { if (confirm('Forget folder + clear sync history?')) resetRecordingFolder(); } }, 'Reset')
           ),
@@ -20684,6 +20688,10 @@ function resetRecordingFolder() {
 
 // When the native PhoneStateReceiver fires a call event, it calls this function.
 window.onLeadCRMCallEvent = async function (event, number) {
+  // ANY call event = potential recording incoming. Kick a quick sweep
+  // 6s + 20s later so we catch both fast-flush and slow-flush dialers.
+  try { _kickRecordingSyncSoon(6000); setTimeout(() => _kickRecordingSyncSoon(0), 20000); } catch (_) {}
+
   try {
     console.log('[leadcrm] native call event:', event, number);
     if (!CRM.user) return;
@@ -23927,6 +23935,177 @@ VIEWS.campaigns = async (view) => {
   }
   view.replaceChildren(await adminCampaigns(() => navigateTo('campaigns')));
 };
+
+
+
+async function openRecordingSyncDebug() {
+  if (!window.LeadCRMNative || typeof LeadCRMNative.listRecordings !== 'function') {
+    toast('Debug only works in the Android app', 'warn');
+    return;
+  }
+  let folderName = '';
+  try { folderName = LeadCRMNative.getRecordingFolder() || ''; } catch (e) {}
+  if (!folderName) { toast('Pick a folder first', 'warn'); return; }
+
+  // Force a full scan + record debug rows without uploading.
+  // Cheat: call syncRecordings with full+includeUnmatched=true but intercept
+  // the upload native call so nothing is sent. Simpler: we just run the
+  // matching loop ourselves over the file list.
+  const filesJson = LeadCRMNative.listRecordings(0);
+  let files = [];
+  try { files = JSON.parse(filesJson || '[]'); } catch (e) { files = []; }
+
+  // Refresh leads cache so the indices are accurate.
+  try {
+    const r = await api('api_leads_list', {});
+    CRM.cache.lastLeads = (r.leads || r);
+  } catch (_) {}
+
+  function _norm(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ''); }
+  const knownTails = new Set(), knownTails7 = new Set(), tailToLead = new Map();
+  const last4ToLead = new Map(), nameToLead = new Map();
+  for (const l of CRM.cache.lastLeads || []) {
+    for (const fld of ['phone', 'whatsapp', 'alt_phone']) {
+      const d = String(l[fld] || '').replace(/\D/g, '');
+      if (d.length >= 7) {
+        const t10 = d.slice(-10);
+        knownTails.add(t10); knownTails7.add(d.slice(-7)); tailToLead.set(t10, l.id);
+        const t4 = d.slice(-4);
+        if (t4) { const a = last4ToLead.get(t4) || []; a.push(l.id); last4ToLead.set(t4, a); }
+      }
+    }
+    if (l.name) {
+      const k = _norm(l.name);
+      if (k) { const a = nameToLead.get(k) || []; a.push(l.id); nameToLead.set(k, a); }
+    }
+  }
+
+  const uploaded = JSON.parse(localStorage.getItem('rec_uploaded') || '{}');
+  const rows = [];
+  for (const f of files) {
+    const meta = parseRecordingFilename(f.name, f.modified);
+    const digits = String(meta.phone || '').replace(/\D/g, '');
+    const tail10 = digits.slice(-10);
+    const tail7  = digits.slice(-7);
+    let leadId = null, reason = 'no-match';
+    if (uploaded[f.uri]) { reason = 'already-uploaded'; leadId = '—'; }
+    else if ((Number(f.size) || 0) < 4096) reason = 'too-small (' + (f.size || 0) + 'B)';
+    else if (digits && knownTails.has(tail10))      { leadId = tailToLead.get(tail10); reason = 'tail10 ✓'; }
+    else if (digits && knownTails7.has(tail7))      {
+      for (const [t, lid] of tailToLead.entries()) {
+        if (t.slice(-7) === tail7) { leadId = lid; reason = 'tail7 ✓'; break; }
+      }
+    }
+    else if (meta.contact) {
+      const k = _norm(meta.contact);
+      const cand = nameToLead.get(k) || [];
+      if (cand.length === 1) { leadId = cand[0]; reason = 'contact-name ✓'; }
+      else if (cand.length > 1) { leadId = cand[0]; reason = 'contact-name (ambiguous '+cand.length+')'; }
+    }
+    else if (meta.lastFour) {
+      const ids = last4ToLead.get(meta.lastFour) || [];
+      if (ids.length === 1) { leadId = ids[0]; reason = 'last4 ✓'; }
+    }
+    rows.push({ f, meta, digits, leadId, reason });
+  }
+
+  // Render modal
+  const m = h('div', { class: 'modal-backdrop',
+    onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const modal = h('div', { class: 'modal modal-lg' });
+  modal.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, '🐞 Recording sync debug — ' + files.length + ' file' + (files.length === 1 ? '' : 's')),
+    h('button', { class: 'btn ghost', onclick: () => m.remove() }, '✕')
+  ));
+  const body = h('div', { style: { padding: '.5rem', maxHeight: '70vh', overflow: 'auto' } });
+  if (!files.length) {
+    body.appendChild(h('p', {}, 'No files in the folder. Make sure your dialer actually saves recordings to the picked path.'));
+  } else {
+    // Build id→name map so the table shows the actual lead name we
+    // matched, not just the numeric id or filename digits.
+    const _leadNameById = new Map();
+    (CRM.cache.lastLeads || []).forEach(l => { if (l && l.id) _leadNameById.set(Number(l.id), l.name || ('#' + l.id)); });
+    const tbl = h('table', { class: 'mini-table' },
+      h('thead', {}, h('tr', {},
+        h('th', {}, 'File'),
+        h('th', {}, 'Size'),
+        h('th', {}, 'Lead match'),
+        h('th', {}, 'Phone / Contact'),
+        h('th', {}, 'Match reason'),
+        h('th', {}, '')
+      )),
+      h('tbody', {},
+        rows.map(r => {
+          const linkedName = (r.leadId && r.leadId !== '—' && _leadNameById.get(Number(r.leadId))) || '';
+          const matched = !!(r.leadId && r.leadId !== '—' && linkedName);
+          // Lead match cell — show the actual lead name when we have one,
+          // otherwise an obvious red "Not in CRM" so the user knows the
+          // file would land via server-side timestamp lookup / auto-create.
+          const leadCell = matched
+            ? h('td', { style: { fontWeight: '600', color: '#16a34a' } }, '✓ ' + linkedName)
+            : h('td', { style: { fontWeight: '600', color: '#dc2626' } }, 'Not in CRM');
+          // Phone / Contact — prefer the matched lead's phone, fall back to
+          // filename digits, then contact name. Never show raw digits when a
+          // lead name exists (client asked: 'show contact name like Vaibhav,
+          // not parsed phone').
+          let phoneCellText = '—';
+          if (matched) {
+            const _l = (CRM.cache.lastLeads || []).find(x => Number(x.id) === Number(r.leadId));
+            phoneCellText = (_l && (_l.phone || _l.whatsapp)) || r.meta.phone || r.meta.contact || '—';
+          } else if (r.meta.phone) {
+            phoneCellText = r.meta.phone;
+          } else if (r.meta.contact) {
+            phoneCellText = r.meta.contact + (r.meta.lastFour ? (' -' + r.meta.lastFour) : '');
+          } else {
+            phoneCellText = 'Phone number not found';
+          }
+          return h('tr', {},
+          h('td', { style: { fontSize: '.78rem', wordBreak: 'break-all' } }, r.f.name),
+          h('td', {}, String(r.f.size || 0)),
+          leadCell,
+          h('td', { style: { fontSize: '.85rem' } }, phoneCellText),
+          h('td', { style: { fontWeight: matched ? '600' : 'normal', color: matched ? '#16a34a' : '#dc2626', fontSize: '.78rem' } }, r.reason),
+          h('td', {},
+            h('button', { class: 'btn sm', onclick: async () => {
+              // Force-upload this one file, ignoring all client-side filters
+              if (!confirm('Force-upload this file to the server (skip all client filters)?\n\n' + r.f.name)) return;
+              const bytesPerSec = /\.(mp3|wav)$/i.test(r.f.name) ? 16000 : /\.(amr|3gp)$/i.test(r.f.name) ? 8000 : 12000;
+              const durationGuess = Math.max(0, Math.round((Number(r.f.size) || 0) / bytesPerSec));
+              const ok = await new Promise(resolve => {
+                const cbName = '__recCB_' + Math.random().toString(36).slice(2, 10);
+                window[cbName] = (success, detail) => { delete window[cbName]; resolve({ success, detail }); };
+                try {
+                  LeadCRMNative.uploadRecordingByUri(
+                    r.f.uri, location.origin, CRM.token || '',
+                    r.meta.phone || '', r.meta.direction || 'out',
+                    durationGuess, r.leadId && r.leadId !== '—' ? String(r.leadId) : '',
+                    new Date(r.meta.startedAt).toISOString(), r.f.name, cbName
+                  );
+                } catch (e) { delete window[cbName]; resolve({ success: false, detail: e.message }); }
+              });
+              if (ok.success) {
+                toast('Force-uploaded ' + r.f.name, 'ok');
+                const u = JSON.parse(localStorage.getItem('rec_uploaded') || '{}');
+                u[r.f.uri] = Date.now(); localStorage.setItem('rec_uploaded', JSON.stringify(u));
+              } else {
+                toast('Force-upload failed: ' + (ok.detail || 'unknown'), 'err');
+              }
+            } }, '⬆ Force upload')
+          )
+        );
+        })
+      )
+    );
+    body.appendChild(tbl);
+    body.appendChild(h('p', { class: 'muted', style: { marginTop: '.75rem', fontSize: '.82rem' } },
+      'Green match-reason = file would upload on Sync now. Red = file would be skipped client-side. Use "⬆ Force upload" to bypass all client checks and let the server\'s recovery paths (filename re-parse, call-event lookup, auto-create lead) decide.'
+    ));
+  }
+  modal.appendChild(body);
+  m.appendChild(modal);
+  document.body.appendChild(m);
+}
+try { window.openRecordingSyncDebug = openRecordingSyncDebug; } catch (_) {}
 
 
 (function bootCopilot() {

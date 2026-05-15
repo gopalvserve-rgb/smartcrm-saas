@@ -2677,3 +2677,38 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
   font-size: .82rem !important; margin-bottom: .4rem !important;
   background-image: none !important;
 }
+
+
+/* ── Leads filter toolbar — mobile responsiveness ──────────────────── */
+.toolbar.toolbar-mobile-fix-marker { /* sentinel */ }
+@media (max-width: 640px) {
+  .toolbar { padding: .55rem; gap: .4rem; }
+  .toolbar input:not(.flex),
+  .toolbar select,
+  .toolbar .multi-select-dd,
+  .toolbar > .date-range {
+    min-width: 0 !important;
+    flex: 1 1 calc(50% - .4rem);
+    max-width: 100%;
+  }
+  .toolbar .flex { flex: 1 1 100%; min-width: 100%; }
+  .toolbar .date-range { flex-wrap: wrap; width: 100%; }
+  .toolbar .date-range input[type=date] { flex: 1; min-width: 0 !important; width: auto !important; }
+  .toolbar > button.btn {
+    padding: .45rem .55rem; min-width: 36px;
+    background: #f1f5f9; border: 1px solid #cbd5e1;
+    border-radius: 8px; font-size: .95rem;
+  }
+  .toolbar > button.btn.primary { flex: 1 1 100%; }
+  .toolbar > button.btn.ghost   { flex: 0 0 auto; }
+}
+@media (min-width: 641px) and (max-width: 960px) {
+  .toolbar input:not(.flex),
+  .toolbar select,
+  .toolbar .multi-select-dd {
+    min-width: 0 !important;
+    flex: 1 1 calc(33% - .5rem);
+    max-width: 100%;
+  }
+  .toolbar .flex { flex: 1 1 100%; min-width: 0; }
+}
