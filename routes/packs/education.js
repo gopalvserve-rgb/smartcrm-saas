@@ -495,37 +495,85 @@ async function api_edu_documents_verify(token, payload) {
 async function api_edu_students_list(token, filters) {
   await authUser(token);
   await _requireEducation();
-  await _ensureSchemaV3();
+  // ── Defensive schema migration ──
+  // Make doubly sure branch_id column + edu_branches table exist before
+  // the JOIN below, so tenants that installed Education before Phase 3
+  // don't see a "column branch_id does not exist" error.
+  try { await _ensureSchemaV3(); } catch (_) {}
+  try { await db.query(`ALTER TABLE edu_enrollments ADD COLUMN IF NOT EXISTS branch_id INTEGER`); } catch (_) {}
+  try { await db.query(`CREATE TABLE IF NOT EXISTS edu_branches (
+    id SERIAL PRIMARY KEY, name TEXT NOT NULL, code TEXT NOT NULL DEFAULT '',
+    address TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '',
+    manager_user_id INTEGER, is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`); } catch (_) {}
+
   const f = filters || {};
   const where = [];
   const params = [];
   if (f.branch_id) { where.push(`e.branch_id = $${params.length + 1}`); params.push(Number(f.branch_id)); }
-  if (f.search)    { where.push(`(LOWER(l.name) LIKE $${params.length + 1} OR LOWER(e.course_name) LIKE $${params.length + 1} OR LOWER(e.batch_name) LIKE $${params.length + 1})`); params.push('%' + String(f.search).toLowerCase() + '%'); }
+  if (f.search)    {
+    const k = '%' + String(f.search).toLowerCase() + '%';
+    where.push(`(LOWER(COALESCE(l.name,'')) LIKE $${params.length + 1} OR LOWER(COALESCE(e.course_name,'')) LIKE $${params.length + 1} OR LOWER(COALESCE(e.batch_name,'')) LIKE $${params.length + 1})`);
+    params.push(k);
+  }
   const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
-  const r = await db.query(`
-    SELECT e.id AS enrollment_id, e.lead_id, e.course_name, e.batch_name,
-           e.total_amount, e.start_date, e.status AS enrollment_status, e.branch_id,
-           b.name AS branch_name,
-           l.name AS student_name, l.phone, l.email,
-           COALESCE(SUM(i.amount), 0)                                AS billed,
-           COALESCE(SUM(i.paid_amount), 0)                            AS collected,
-           COALESCE(SUM(i.amount - i.paid_amount), 0)                 AS outstanding,
-           COALESCE(SUM(CASE WHEN i.due_date < CURRENT_DATE AND i.status<>'paid'
-                             THEN i.amount - i.paid_amount ELSE 0 END), 0) AS overdue,
-           MAX(p.received_at) AS last_payment_at,
-           COUNT(i.id)                                                AS installments_total,
-           COUNT(*) FILTER (WHERE i.status='paid')                    AS installments_paid
-      FROM edu_enrollments e
-      LEFT JOIN leads l         ON l.id = e.lead_id
-      LEFT JOIN edu_branches b  ON b.id = e.branch_id
-      LEFT JOIN edu_installments i ON i.enrollment_id = e.id
-      LEFT JOIN edu_payments p  ON p.enrollment_id = e.id
-      ${w}
-     GROUP BY e.id, l.name, l.phone, l.email, b.name
-     ORDER BY overdue DESC, e.id DESC
-     LIMIT 200
-  `, params);
-  return { students: r.rows };
+
+  // Try the rich query first; if any column is missing on a legacy install,
+  // fall back to a leaner query that still works.
+  try {
+    const r = await db.query(`
+      SELECT e.id AS enrollment_id, e.lead_id, e.course_name, e.batch_name,
+             e.total_amount, e.start_date, e.status AS enrollment_status, e.branch_id,
+             b.name AS branch_name,
+             l.name AS student_name, l.phone, l.email,
+             COALESCE(SUM(i.amount), 0)                                 AS billed,
+             COALESCE(SUM(i.paid_amount), 0)                             AS collected,
+             COALESCE(SUM(i.amount - i.paid_amount), 0)                  AS outstanding,
+             COALESCE(SUM(CASE WHEN i.due_date < CURRENT_DATE AND i.status<>'paid'
+                               THEN i.amount - i.paid_amount ELSE 0 END), 0) AS overdue,
+             MAX(p.received_at) AS last_payment_at,
+             COUNT(i.id)                                                 AS installments_total,
+             COUNT(*) FILTER (WHERE i.status='paid')                     AS installments_paid
+        FROM edu_enrollments e
+        LEFT JOIN leads l            ON l.id = e.lead_id
+        LEFT JOIN edu_branches b     ON b.id = e.branch_id
+        LEFT JOIN edu_installments i ON i.enrollment_id = e.id
+        LEFT JOIN edu_payments p     ON p.enrollment_id = e.id
+        ${w}
+       GROUP BY e.id, l.name, l.phone, l.email, b.name
+       ORDER BY overdue DESC, e.id DESC
+       LIMIT 200
+    `, params);
+    return { students: r.rows };
+  } catch (richErr) {
+    console.warn('[edu_students_list] rich query failed, falling back:', richErr.message);
+    try {
+      const r2 = await db.query(`
+        SELECT e.id AS enrollment_id, e.lead_id, e.course_name, e.batch_name,
+               e.total_amount, e.start_date, e.status AS enrollment_status,
+               NULL::int AS branch_id, NULL::text AS branch_name,
+               l.name AS student_name, l.phone, l.email,
+               COALESCE(SUM(i.amount), 0)                                 AS billed,
+               COALESCE(SUM(i.paid_amount), 0)                             AS collected,
+               COALESCE(SUM(i.amount - i.paid_amount), 0)                  AS outstanding,
+               COALESCE(SUM(CASE WHEN i.due_date < CURRENT_DATE AND i.status<>'paid'
+                                 THEN i.amount - i.paid_amount ELSE 0 END), 0) AS overdue,
+               NULL::timestamptz AS last_payment_at,
+               COUNT(i.id)                                                 AS installments_total,
+               COUNT(*) FILTER (WHERE i.status='paid')                     AS installments_paid
+          FROM edu_enrollments e
+          LEFT JOIN leads l            ON l.id = e.lead_id
+          LEFT JOIN edu_installments i ON i.enrollment_id = e.id
+         ${f.search ? `WHERE LOWER(COALESCE(l.name,'')) LIKE $1` : ''}
+         GROUP BY e.id, l.name, l.phone, l.email
+         ORDER BY e.id DESC LIMIT 200
+      `, f.search ? ['%' + String(f.search).toLowerCase() + '%'] : []);
+      return { students: r2.rows, _fallback: true };
+    } catch (fallbackErr) {
+      throw new Error('Students list failed: ' + fallbackErr.message);
+    }
+  }
 }
 
 // Override enrollment_create to accept branch_id (back-compat: still works without)
