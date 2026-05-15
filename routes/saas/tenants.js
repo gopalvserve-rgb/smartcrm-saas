@@ -168,6 +168,14 @@ async function api_saas_tenants_createManual(token, payload) {
   const pkg = await control.findById('packages', packageId);
   if (!pkg) throw new Error('Package not found');
 
+  // Optional industry pack — installed AFTER provisioning, inside the tenant
+  // DB scope. Empty string = Generic (no pack).
+  const industryPack = String(p.industry_pack || '').trim().toLowerCase();
+  const VALID_PACKS = ['', 'education', 'realestate'];
+  if (!VALID_PACKS.includes(industryPack)) {
+    throw new Error('Invalid industry pack — must be one of: education, realestate, or blank (Generic)');
+  }
+
   // Reject duplicate slug up front so we don't create a half-baked
   // signup row that fails downstream.
   const existingTenant = await control.findOneBy('tenants', 'slug', slug);
@@ -219,9 +227,34 @@ async function api_saas_tenants_createManual(token, payload) {
     actor_type: 'super_admin', actor_id: me.id, actor_email: me.email,
     tenant_id: prov.tenant_id, event: 'tenant.created_manually',
     detail: JSON.stringify({
-      slug: prov.slug, package: pkg.name, mark_paid: p.mark_paid !== false
+      slug: prov.slug, package: pkg.name, mark_paid: p.mark_paid !== false,
+      industry_pack: industryPack || 'generic'
     })
   });
+
+  // ---- 5. Optional: install an industry pack inside the new tenant ----
+  // Runs inside tenantStorage.run() so the framework's db.query() lands
+  // in the tenant DB, not the control DB.
+  let installedPack = null;
+  if (industryPack) {
+    try {
+      const tenantDb = require('../../db/pg');
+      const tenantPoolMod = require('../../utils/tenantPool');
+      const t = await tenantPoolMod.findActiveTenant(prov.slug);
+      const pool = t && tenantPoolMod.poolFor(t);
+      if (pool) {
+        await tenantDb.tenantStorage.run({ pool, tenant: t, slug: prov.slug }, async () => {
+          const fw = require('../packs/_framework');
+          const res = await fw.installPack(industryPack, { userId: me.id });
+          installedPack = res && res.pack_id;
+        });
+      }
+    } catch (e) {
+      // Pack install failure should NOT roll back the tenant — log and surface in response.
+      console.warn('[createManual] industry-pack install failed:', e.message);
+      installedPack = { error: e.message };
+    }
+  }
 
   return {
     ok: true,
@@ -230,7 +263,8 @@ async function api_saas_tenants_createManual(token, payload) {
     login_url: prov.login_url,
     email: prov.email,
     password: prov.password,            // surface to admin so they can hand it off
-    invoice_id: prov.invoice_id
+    invoice_id: prov.invoice_id,
+    industry_pack: installedPack
   };
 }
 

@@ -557,6 +557,18 @@ async function openCreateTenant() {
     ...pkgs.map(p => h('option', { value: p.id }, p.name + ' · ₹' + Number(p.base_price_inr || 0).toLocaleString('en-IN')))
   );
   form.appendChild(field('Package *', pkgSel));
+
+  // Industry pack — selects a vertical-specific bundle. 'Generic' (default)
+  // is the base CRM with no pack; picking a pack triggers its installer
+  // (extra tables, seed data, statuses, custom fields) immediately after
+  // the tenant is provisioned.
+  const packSel = h('select', { name: 'industry_pack', style: { width: '100%' } },
+    h('option', { value: '' }, '🧩 Generic CRM (no pack — base features only)'),
+    h('option', { value: 'education' },  '🎓 Education / Coaching — fees + installments + reminders'),
+    h('option', { value: 'realestate' }, '🏢 Real Estate — inventory + bookings + demand letters + commissions')
+  );
+  form.appendChild(field('Industry pack', packSel));
+
   form.appendChild(field('Notes (internal)',
     h('textarea', { name: 'notes', rows: 2, placeholder: 'e.g. paid offline by bank transfer ref XXX', style: { width: '100%' } })));
 
@@ -611,6 +623,7 @@ async function _submitCreateTenant(form, pkgs, modal) {
     org_name:     (fd.get('org_name') || '').toString().trim(),
     desired_slug: (fd.get('desired_slug') || '').toString().trim().toLowerCase(),
     package_id:   Number(fd.get('package_id')) || 0,
+    industry_pack: (fd.get('industry_pack') || '').toString().trim(),
     notes:        (fd.get('notes') || '').toString().trim() || null,
     mark_paid:    fd.get('mark_paid') === 'on'
   };
