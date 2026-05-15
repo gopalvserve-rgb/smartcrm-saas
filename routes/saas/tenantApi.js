@@ -184,6 +184,37 @@ async function api_auth_ssoLogin(_token, payload) {
     throw new Error('Token mismatch — slug does not match.');
   }
 
+  // ONE-TIME USE — record the JTI in control.consumed_sso_jti so this
+  // exact token cannot be exchanged for a second session. Protects
+  // against a super-admin accidentally pasting/sharing a magic link.
+  // The unique constraint is what makes this atomic: a concurrent
+  // second exchange will fail the INSERT.
+  const _control = require('../../db/pg');
+  const _jti = String(decoded.jti || (decoded.iat + ':' + decoded.exp + ':' + decoded.as_email));
+  try {
+    await _control.query(`CREATE TABLE IF NOT EXISTS consumed_sso_jti (
+      jti TEXT PRIMARY KEY,
+      consumed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      slug TEXT,
+      as_email TEXT
+    )`);
+  } catch (_) { /* may already exist */ }
+  try {
+    await _control.query(
+      `INSERT INTO consumed_sso_jti (jti, slug, as_email) VALUES ($1,$2,$3)`,
+      [_jti, slug, String(decoded.as_email || '')]
+    );
+  } catch (e) {
+    // Duplicate key = already consumed. Refuse and instruct user to
+    // get a fresh link from super-admin.
+    if (/duplicate|unique/i.test(String(e.message))) {
+      throw new Error('This login link has already been used. SSO links are one-time-use for security. Please generate a fresh one from the super-admin panel.');
+    }
+    // Other DB errors — log but allow login (don't lock everyone out
+    // if the control table has issues).
+    console.warn('[sso] jti tracking failed:', e.message);
+  }
+
   // Find the impersonation target in this tenant's DB.
   // as_email is the tenant user (usually the tenant admin / owner).
   const targetEmail = String(decoded.as_email || '').toLowerCase().trim();

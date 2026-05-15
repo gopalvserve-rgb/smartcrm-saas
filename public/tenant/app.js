@@ -593,6 +593,9 @@ function renderLogin() {
           <button type="submit" class="btn primary block" ${isDemoTenant ? 'autofocus' : ''}>Sign in</button>
           <p id="login-err" class="error"></p>
         </form>
+        <div style="text-align:center;margin-top:.75rem">
+          <a href="#" id="btn-forgot-password" style="color:#6366f1;font-size:.85rem;text-decoration:none">Forgot password?</a>
+        </div>
         <div style="text-align:center;margin-top:1.5rem;font-size:.78rem;color:#94a3b8">
           Workspace: <b style="color:#64748b">${esc(window.TENANT_SLUG || '')}</b>
           <span style="margin:0 .35rem">·</span>
@@ -604,6 +607,15 @@ function renderLogin() {
   // Switch-workspace link — confirms first because it clears the
   // session token and redirects to the workspace picker. Was getting
   // tapped accidentally on phones because the button was too prominent.
+  const forgotBtn = document.getElementById('btn-forgot-password');
+  if (forgotBtn) forgotBtn.addEventListener('click', (ev) => {
+    ev.preventDefault();
+    const email = prompt('Enter the email registered with your workspace:\n\nWe\'ll send you a link to reset your password.');
+    if (!email) return;
+    apiRaw('api_password_forgot', '', email.trim()).then(() => {
+      alert('If an account with that email exists, a password-reset link has been sent.\n\nCheck your inbox (and spam folder) — the link expires in 60 minutes.');
+    }).catch(e => alert('Could not send reset email: ' + e.message));
+  });
   const switchBtn = document.getElementById('btn-switch-workspace');
   if (switchBtn) switchBtn.addEventListener('click', (ev) => {
     ev.preventDefault();

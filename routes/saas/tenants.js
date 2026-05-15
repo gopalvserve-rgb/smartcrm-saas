@@ -271,9 +271,14 @@ async function api_saas_tenants_loginAs(token, tenantId, asEmail) {
   // 5-minute magic link is long enough to copy/paste into another
   // window but short enough that a leaked token can't be reused
   // hours later. Operator can always click the button again.
+  // Random JTI so each minted SSO token is identifiable and trackable
+  // for the one-time-use guard in tenantApi.js → api_auth_ssoLogin.
+  const _crypto = require('crypto');
+  const _jti = _crypto.randomBytes(16).toString('hex');
   const ssl = jwt.sign(
     {
       ssl: true,
+      jti: _jti,
       tenant_id: t.id,
       slug: t.slug,
       as_email: targetEmail,

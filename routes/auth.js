@@ -160,7 +160,115 @@ async function api_2fa_admin_reset(token, targetUserId) {
   return { ok: true };
 }
 
+
+/**
+ * Send a password-reset email. Returns ok:true even when no user matches
+ * (don't leak which emails are registered).
+ */
+async function api_password_forgot(_token, email) {
+  const normalized = String(email || '').toLowerCase().trim();
+  if (!normalized) throw new Error('Email required');
+
+  const user = await db.findOneBy('users', 'email', normalized);
+  if (!user || !Number(user.is_active)) {
+    // Silent success — don't leak which emails exist
+    return { ok: true };
+  }
+
+  // Generate a single-use reset token (60 min expiry).
+  const crypto = require('crypto');
+  const rawToken = crypto.randomBytes(32).toString('hex');
+  const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+  const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+
+  // Schema: idempotent — table is created if missing.
+  try {
+    await db.query(`CREATE TABLE IF NOT EXISTS password_resets (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      token_hash TEXT NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      consumed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_ip TEXT
+    )`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_password_resets_hash ON password_resets(token_hash)`);
+  } catch (e) { console.warn('[forgot] schema:', e.message); }
+
+  // Invalidate any pending resets for this user first.
+  try { await db.query(`UPDATE password_resets SET consumed_at = NOW() WHERE user_id = $1 AND consumed_at IS NULL`, [user.id]); } catch (_) {}
+
+  await db.insert('password_resets', {
+    user_id: user.id,
+    token_hash: tokenHash,
+    expires_at: expiresAt.toISOString()
+  });
+
+  // Build reset URL — read tenant slug from the AsyncLocalStorage if
+  // available (multi-tenant), else use bare host.
+  let tenantSlug = '';
+  try {
+    const tdb = require('../db/pg');
+    if (typeof tdb.tenantStorage === 'object') {
+      const store = tdb.tenantStorage.getStore && tdb.tenantStorage.getStore();
+      if (store && store.slug) tenantSlug = store.slug;
+    }
+  } catch (_) {}
+  const baseUrl = (process.env.PUBLIC_BASE_URL || 'https://crm.smartcrmsolution.com').replace(/\/+$/, '');
+  const resetPath = tenantSlug ? `/t/${tenantSlug}/reset-password.html?token=${rawToken}` : `/reset-password.html?token=${rawToken}`;
+  const resetUrl = baseUrl + resetPath;
+
+  // Send via super-admin global SMTP via utils/mailer.
+  try {
+    const mailer = require('../utils/mailer');
+    const brand = await db.getConfig('COMPANY_NAME', '').catch(() => '') || 'SmartCRM';
+    const html = `<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#1f2937">
+      <h2 style="color:#4f46e5;margin:0 0 16px">Reset your password</h2>
+      <p>Hi ${user.name || ''},</p>
+      <p>We received a request to reset the password for your ${brand} account (${user.email}). Click the button below to set a new password. This link expires in 60 minutes.</p>
+      <p style="text-align:center;margin:32px 0">
+        <a href="${resetUrl}" style="display:inline-block;background:#4f46e5;color:#fff;text-decoration:none;padding:12px 28px;border-radius:6px;font-weight:600">Reset password</a>
+      </p>
+      <p style="color:#6b7280;font-size:13px">Or paste this URL into your browser:<br><span style="word-break:break-all">${resetUrl}</span></p>
+      <p style="color:#6b7280;font-size:13px;margin-top:32px;padding-top:16px;border-top:1px solid #e5e7eb">If you didn't request this, you can safely ignore this email — your password won't change.</p>
+    </div>`;
+    await mailer._sendRaw(user.email, `Reset your ${brand} password`, html);
+  } catch (e) { console.warn('[forgot] email send failed:', e.message); }
+
+  return { ok: true };
+}
+
+/**
+ * Consume a reset token. Sets the new password atomically.
+ */
+async function api_password_reset(_token, rawToken, newPassword) {
+  if (!rawToken) throw new Error('Reset token required');
+  if (!newPassword || String(newPassword).length < 6) throw new Error('Password must be at least 6 characters');
+
+  const crypto = require('crypto');
+  const tokenHash = crypto.createHash('sha256').update(String(rawToken)).digest('hex');
+
+  const r = await db.query(
+    `SELECT * FROM password_resets
+       WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > NOW()
+       ORDER BY id DESC LIMIT 1`,
+    [tokenHash]
+  );
+  const row = r.rows[0];
+  if (!row) throw new Error('This reset link is invalid, has been used, or has expired. Please request a fresh one.');
+
+  const user = await db.findById('users', row.user_id);
+  if (!user) throw new Error('User account no longer exists');
+  if (!Number(user.is_active)) throw new Error('Account is deactivated');
+
+  await db.update('users', user.id, { password_hash: hashPassword(newPassword) });
+  await db.query(`UPDATE password_resets SET consumed_at = NOW() WHERE id = $1`, [row.id]);
+
+  return { ok: true, email: user.email };
+}
+
 module.exports = {
   api_login, api_login_otp_verify, api_me, api_logout, api_changePassword,
+  api_password_forgot, api_password_reset,
   api_2fa_setup_start, api_2fa_setup_verify, api_2fa_disable, api_2fa_admin_reset
 };
