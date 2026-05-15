@@ -854,6 +854,7 @@ const NAV_GROUPS = [
   { label: 'Sales', icon: '💼', items: [
     { id: 'leads',      label: 'Leads',          icon: '🎯' },
     { id: 'edufees',    label: 'Fee Collection', icon: '💰', roles: ['admin','manager','team_leader'] },
+    { id: 'edustudents', label: '👥 Students', icon: '👥', roles: ['admin','manager','team_leader'] },
     { id: 'reinventory', label: 'Inventory Board', icon: '🏢', roles: ['admin','manager','team_leader'] },
     { id: 'recommissions', label: 'Commissions', icon: '💸', roles: ['admin','manager'] },
     { id: 'campaigns',  label: 'Campaigns',      icon: '📣', roles: ['admin','manager'] },
@@ -26229,3 +26230,302 @@ async function openMarkCommissionPaidModal(r, onDone) {
 }
 
 try { window.openDemandPdf = openDemandPdf; window.sendDemandReminder = sendDemandReminder; window.cancelBooking = cancelBooking; window.openMarkCommissionPaidModal = openMarkCommissionPaidModal; } catch (_) {}
+
+
+// ═════════════════════════════════════════════════════════════════════
+// 🎓 Education pack — Phase 3 (Branches, Student docs, Students view)
+// ═════════════════════════════════════════════════════════════════════
+
+VIEWS.edustudents = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('div', { style:{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'.75rem' } },
+    h('h2', { style:{ margin:0 } }, '👥 Students — Fee Collection View'),
+    h('div', { style:{ display:'flex', gap:'.4rem' } },
+      h('button', { class:'btn', onclick: () => openManageBranchesModal() }, '🏢 Manage Branches')
+    )
+  ));
+  view.appendChild(h('p', { class:'muted' }, 'Every enrolled student with payment status. Click a row to open the lead and update fees.'));
+
+  // Filters
+  const fSearch = h('input', { type:'text', placeholder:'Search student / course / batch…', style:{ flex:1, minWidth:'200px' } });
+  const fBranch = h('select', {}, h('option', { value:'' }, '— All branches —'));
+  const filterRow = h('div', { class:'card', style:{ padding:'.6rem .8rem', marginBottom:'.6rem', display:'flex', gap:'.5rem', flexWrap:'wrap', alignItems:'center' } },
+    fSearch, fBranch,
+    h('button', { class:'btn primary', onclick: () => render() }, 'Apply')
+  );
+  view.appendChild(filterRow);
+
+  // Load branches into the filter
+  try {
+    const bs = await api('api_edu_branches_list');
+    (bs || []).filter(b => Number(b.is_active)).forEach(b => fBranch.appendChild(h('option', { value: b.id }, b.name + (b.code ? ' (' + b.code + ')' : ''))));
+  } catch (_) {}
+
+  const body = h('div', {});
+  view.appendChild(body);
+
+  async function render() {
+    body.innerHTML = '<div class="muted" style="padding:1rem">Loading…</div>';
+    try {
+      const r = await api('api_edu_students_list', { search: fSearch.value || null, branch_id: fBranch.value ? Number(fBranch.value) : null });
+      const rows = r.students || [];
+      body.innerHTML = '';
+
+      if (!rows.length) {
+        body.appendChild(h('div', { class:'muted', style:{ padding:'2rem', textAlign:'center' } }, 'No enrollments match the filter. Enroll a student from any lead modal.'));
+        return;
+      }
+
+      const tbl = h('table', { class:'mini-table' },
+        h('thead', {}, h('tr', {},
+          h('th', {}, 'Student'),
+          h('th', {}, 'Course / Batch'),
+          h('th', {}, 'Branch'),
+          h('th', {}, 'Billed'),
+          h('th', {}, 'Collected'),
+          h('th', {}, 'Outstanding'),
+          h('th', {}, 'Overdue'),
+          h('th', {}, 'Last paid'),
+          h('th', {}, 'Status'),
+          h('th', {}, '')
+        )),
+        h('tbody', {},
+          ...rows.map(s => h('tr', { style: Number(s.overdue) > 0 ? { background:'#fef2f2' } : {} },
+            h('td', {},
+              h('div', { style:{ fontWeight:600 } }, s.student_name || '—'),
+              s.phone ? h('div', { class:'muted', style:{ fontSize:'.75em' } }, s.phone) : null
+            ),
+            h('td', {},
+              h('div', {}, s.course_name || '—'),
+              s.batch_name ? h('div', { class:'muted', style:{ fontSize:'.75em' } }, s.batch_name) : null
+            ),
+            h('td', {}, s.branch_name || h('span', { class:'muted' }, '—')),
+            h('td', {}, '₹' + Number(s.billed).toLocaleString('en-IN')),
+            h('td', { style:{ color:'#16a34a', fontWeight:600 } }, '₹' + Number(s.collected).toLocaleString('en-IN')),
+            h('td', {}, '₹' + Number(s.outstanding).toLocaleString('en-IN')),
+            h('td', { style:{ color: Number(s.overdue) > 0 ? '#dc2626' : '#64748b', fontWeight: Number(s.overdue) > 0 ? 600 : 400 } }, '₹' + Number(s.overdue).toLocaleString('en-IN')),
+            h('td', { class:'muted', style:{ fontSize:'.85em' } }, s.last_payment_at ? String(s.last_payment_at).slice(0,10) : '—'),
+            h('td', {},
+              Number(s.installments_paid) + '/' + Number(s.installments_total),
+              Number(s.overdue) > 0 ? h('span', { style:{ marginLeft:'.3rem', background:'#fee2e2', color:'#991b1b', padding:'1px 5px', borderRadius:'3px', fontSize:'.7em' } }, 'OVERDUE') : null
+            ),
+            h('td', {},
+              h('button', { class:'btn sm primary', onclick: () => openLeadModal(s.lead_id) }, '💰 Collect Fee')
+            )
+          ))
+        )
+      );
+      body.appendChild(tbl);
+    } catch (e) {
+      body.innerHTML = '';
+      if (/not active/i.test(String(e.message || ''))) {
+        body.appendChild(h('div', { class:'error-box' }, 'Education pack is not installed. Go to Settings → 🧩 Industry Packs to enable.'));
+      } else {
+        body.appendChild(h('div', { class:'error-box' }, e.message));
+      }
+    }
+  }
+  render();
+};
+
+async function openManageBranchesModal() {
+  const m = h('div', { class:'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const modal = h('div', { class:'modal modal-lg' });
+  modal.appendChild(h('div', { class:'modal-head' },
+    h('h3', {}, '🏢 Education branches'),
+    h('button', { class:'btn ghost', onclick: () => m.remove() }, '✕')
+  ));
+  const body = h('div', { class:'modal-body' });
+  modal.appendChild(body);
+
+  const refresh = async () => {
+    body.innerHTML = '<div class="muted">Loading…</div>';
+    try {
+      const list = await api('api_edu_branches_list');
+      body.innerHTML = '';
+      if (!list.length) body.appendChild(h('div', { class:'muted', style:{ padding:'.5rem 0' } }, 'No branches yet — add your first one below.'));
+      list.forEach(b => {
+        body.appendChild(h('div', { class:'card', style:{ padding:'.5rem .7rem', marginBottom:'.4rem', display:'flex', justifyContent:'space-between', alignItems:'center' } },
+          h('div', {},
+            h('strong', {}, b.name + (b.code ? ' · ' + b.code : '')),
+            b.address ? h('div', { class:'muted', style:{ fontSize:'.78em' } }, '📍 ' + b.address) : null,
+            b.phone   ? h('div', { class:'muted', style:{ fontSize:'.78em' } }, '📞 ' + b.phone) : null
+          ),
+          h('div', { style:{ display:'flex', gap:'.3rem' } },
+            h('button', { class:'btn sm', onclick: () => editBranch(b) }, 'Edit'),
+            Number(b.is_active)
+              ? h('button', { class:'btn sm', onclick: async () => { await api('api_edu_branches_save', Object.assign({}, b, { is_active: 0 })); refresh(); } }, 'Disable')
+              : h('button', { class:'btn sm primary', onclick: async () => { await api('api_edu_branches_save', Object.assign({}, b, { is_active: 1 })); refresh(); } }, 'Enable')
+          )
+        ));
+      });
+
+      const fName = h('input', { type:'text', placeholder:'Branch name (e.g. Andheri West)' });
+      const fCode = h('input', { type:'text', placeholder:'Short code (e.g. AND)' });
+      const fAddr = h('input', { type:'text', placeholder:'Address' });
+      const fPhone = h('input', { type:'text', placeholder:'Phone' });
+      body.appendChild(h('div', { style:{ marginTop:'.7rem', paddingTop:'.7rem', borderTop:'1px solid #e5e7eb' } },
+        h('h4', { style:{ margin:'0 0 .4rem' } }, '+ Add new branch'),
+        h('div', { style:{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'.4rem' } }, fName, fCode, fAddr, fPhone),
+        h('button', { class:'btn primary', style:{ marginTop:'.4rem' }, onclick: async () => {
+          if (!fName.value.trim()) { toast('Branch name required', 'err'); return; }
+          try {
+            await api('api_edu_branches_save', { name: fName.value.trim(), code: fCode.value, address: fAddr.value, phone: fPhone.value });
+            toast('Branch added');
+            refresh();
+          } catch (e) { toast(e.message, 'err'); }
+        } }, '+ Save branch')
+      ));
+    } catch (e) { body.innerHTML = ''; body.appendChild(h('div', { class:'error-box' }, e.message)); }
+  };
+
+  function editBranch(b) {
+    const fName = h('input', { type:'text', value: b.name });
+    const fCode = h('input', { type:'text', value: b.code || '' });
+    const fAddr = h('input', { type:'text', value: b.address || '' });
+    const fPhone = h('input', { type:'text', value: b.phone || '' });
+    const m2 = h('div', { class:'modal-backdrop' });
+    const card = h('div', { class:'modal' });
+    card.appendChild(h('div', { class:'modal-head' }, h('h3', {}, 'Edit branch'), h('button', { class:'btn ghost', onclick: () => m2.remove() }, '✕')));
+    card.appendChild(h('div', { class:'modal-body' },
+      h('label', {}, 'Name', fName),
+      h('label', {}, 'Code', fCode),
+      h('label', {}, 'Address', fAddr),
+      h('label', {}, 'Phone', fPhone)
+    ));
+    card.appendChild(h('div', { class:'actions' },
+      h('button', { class:'btn', onclick: () => m2.remove() }, 'Cancel'),
+      h('button', { class:'btn primary', onclick: async () => {
+        try {
+          await api('api_edu_branches_save', { id: b.id, name: fName.value.trim(), code: fCode.value, address: fAddr.value, phone: fPhone.value });
+          toast('Saved');
+          m2.remove();
+          refresh();
+        } catch (e) { toast(e.message, 'err'); }
+      } }, 'Save')
+    ));
+    m2.appendChild(card);
+    document.body.appendChild(m2);
+  }
+
+  m.appendChild(modal);
+  document.body.appendChild(m);
+  refresh();
+}
+
+// ───── Student document upload on Education lead-modal panel ─────
+// We monkey-patch openLeadModal so that AFTER the modal renders we append
+// a "📎 Student documents" block to the existing 🎓 Fees section when
+// Education pack is active.
+(function _wireEduDocsPanel() {
+  if (typeof openLeadModal !== 'function') return;
+  const _orig = openLeadModal;
+  window.openLeadModal = async function patchedOpenLeadModalForEduDocs(id) {
+    const out = await _orig.apply(this, arguments);
+    if (!id) return out;
+    setTimeout(async () => {
+      try {
+        // Only proceed if Education is active for this tenant
+        const installed = await api('api_packs_listInstalled').catch(() => []);
+        const eduActive = (installed || []).some(p => p.pack_id === 'education' && Number(p.is_active));
+        if (!eduActive) return;
+        const r = await api('api_edu_enrollment_byLead', id);
+        const enrolls = r || [];
+        if (!enrolls.length) return;
+        const body = document.querySelector('.modal-backdrop:last-of-type .modal');
+        if (!body || body.querySelector('.edu-docs-block')) return;
+
+        const wrap = h('div', { class:'pack-block edu-docs-block', style:{ marginTop:'1rem', borderTop:'1px solid #e5e7eb', paddingTop:'1rem' } },
+          h('h4', { style:{ margin:'0 0 .5rem' } }, '📎 Student documents')
+        );
+
+        for (const e of enrolls) {
+          const enrId = e.id || e.enrollment_id;
+          if (!enrId) continue;
+          const sub = h('div', { style:{ marginBottom:'.6rem', padding:'.5rem .7rem', background:'#f8fafc', borderRadius:'6px' } });
+          sub.appendChild(h('div', { style:{ fontWeight:600, fontSize:'.9em' } },
+            (e.course_name || 'Enrollment') + (e.batch_name ? ' · ' + e.batch_name : '')));
+          const listEl = h('div', {});
+          sub.appendChild(listEl);
+
+          // Upload row
+          const fType = h('select', {},
+            ...['Aadhar','Photo','Marksheet 10th','Marksheet 12th','PAN','Address Proof','Agreement','Other']
+              .map(t => h('option', { value: t.toLowerCase().replace(/\s+/g,'_') }, t))
+          );
+          const fLabel = h('input', { type:'text', placeholder:'Label (optional)', style:{ flex:1 } });
+          const fFile = h('input', { type:'file', accept:'image/*,application/pdf' });
+          sub.appendChild(h('div', { style:{ marginTop:'.4rem', display:'flex', gap:'.3rem', flexWrap:'wrap', alignItems:'center' } },
+            fType, fLabel, fFile,
+            h('button', { class:'btn sm primary', onclick: async () => {
+              if (!fFile.files[0]) { toast('Pick a file', 'err'); return; }
+              const file = fFile.files[0];
+              try {
+                // Try existing tenant upload endpoint /api/files/upload
+                const fd = new FormData();
+                fd.append('file', file);
+                let storageUrl = '';
+                try {
+                  const up = await fetch('/api/files/upload', { method:'POST', headers: { 'Authorization': 'Bearer ' + (CRM.token || '') }, body: fd });
+                  if (up.ok) {
+                    const j = await up.json();
+                    storageUrl = j.url || j.path || j.location || '';
+                  }
+                } catch (_) {}
+                // Fallback: data URL for very small files
+                if (!storageUrl && file.size < 200000) {
+                  storageUrl = await new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(file); });
+                }
+                if (!storageUrl) { toast('File upload not available — please configure file storage', 'err'); return; }
+                await api('api_edu_documents_register', {
+                  enrollment_id: enrId,
+                  doc_type: fType.value,
+                  label: fLabel.value || file.name,
+                  filename: file.name,
+                  mime_type: file.type,
+                  file_size: file.size,
+                  storage_url: storageUrl
+                });
+                toast('Document uploaded');
+                refreshDocs();
+              } catch (err) { toast(err.message, 'err'); }
+            } }, '📤 Upload')
+          ));
+
+          async function refreshDocs() {
+            try {
+              const docs = await api('api_edu_documents_byEnrollment', enrId);
+              listEl.innerHTML = '';
+              if (!docs.length) { listEl.appendChild(h('div', { class:'muted', style:{ fontSize:'.8em', padding:'.3rem 0' } }, 'No documents yet.')); return; }
+              docs.forEach(d => {
+                listEl.appendChild(h('div', { style:{ display:'flex', alignItems:'center', gap:'.4rem', padding:'.25rem 0', fontSize:'.85em', borderBottom:'1px dashed #e5e7eb' } },
+                  h('span', { style:{ background:'#e0e7ff', color:'#3730a3', padding:'1px 6px', borderRadius:'3px', fontSize:'.75em' } }, (d.doc_type || 'other').toUpperCase()),
+                  d.storage_url ? h('a', { href: d.storage_url, target:'_blank', style:{ flex:1 } }, d.label || d.filename) : h('span', { style:{ flex:1 } }, d.label || d.filename),
+                  Number(d.is_verified)
+                    ? h('span', { style:{ color:'#16a34a' }, title:'Verified' }, '✓')
+                    : h('button', { class:'btn xs', onclick: async () => { await api('api_edu_documents_verify', { id: d.id, is_verified: 1 }); refreshDocs(); } }, 'Verify'),
+                  h('button', { class:'btn xs danger', onclick: async () => { if (confirm('Delete this document?')) { await api('api_edu_documents_delete', d.id); refreshDocs(); } } }, '🗑')
+                ));
+              });
+            } catch (_) {}
+          }
+          refreshDocs();
+          wrap.appendChild(sub);
+        }
+
+        // Append after existing fees block if any
+        const feesBlock = body.querySelector('.fees-block') || body.querySelector('.pack-block');
+        if (feesBlock && feesBlock.parentNode) feesBlock.parentNode.insertBefore(wrap, feesBlock.nextSibling);
+        else {
+          const actions = body.querySelector('.actions');
+          if (actions) body.insertBefore(wrap, actions); else body.appendChild(wrap);
+        }
+      } catch (_) {}
+    }, 300);
+    return out;
+  };
+})();
+
+try {
+  window.openManageBranchesModal = openManageBranchesModal;
+} catch (_) {}

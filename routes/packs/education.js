@@ -280,6 +280,7 @@ async function api_edu_summary(token, opts) {
 // Pure seeding, never overwrites existing user data.
 // ─────────────────────────────────────────────────────────────────
 async function install(opts) {
+  await _ensureSchemaV3();
   await _ensureSchema();
 
   // 1. Seed sample fee plans (only if none exist)
@@ -349,6 +350,213 @@ async function uninstall(opts) {
   return { ok: true };
 }
 
+
+
+// ═════════════════════════════════════════════════════════════════
+// Phase 3 — Branches, Student documents, Student-centric view
+// ═════════════════════════════════════════════════════════════════
+
+/**
+ * Phase 3 schema — additive only. Called by each new API + by the
+ * installer. Idempotent.
+ */
+async function _ensureSchemaV3() {
+  await db.query(`CREATE TABLE IF NOT EXISTS edu_branches (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    code TEXT NOT NULL DEFAULT '',
+    address TEXT NOT NULL DEFAULT '',
+    phone TEXT NOT NULL DEFAULT '',
+    manager_user_id INTEGER,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+
+  // Add branch_id to existing enrollments table (defensive — checks for column)
+  try {
+    await db.query(`ALTER TABLE edu_enrollments ADD COLUMN IF NOT EXISTS branch_id INTEGER`);
+    await db.query(`CREATE INDEX IF NOT EXISTS edu_enrollments_branch_idx ON edu_enrollments(branch_id)`);
+  } catch (_) {}
+
+  await db.query(`CREATE TABLE IF NOT EXISTS edu_documents (
+    id SERIAL PRIMARY KEY,
+    enrollment_id INTEGER NOT NULL,
+    lead_id INTEGER,
+    doc_type TEXT NOT NULL DEFAULT 'other',
+    label TEXT NOT NULL DEFAULT '',
+    filename TEXT NOT NULL DEFAULT '',
+    mime_type TEXT NOT NULL DEFAULT '',
+    file_size INTEGER NOT NULL DEFAULT 0,
+    storage_url TEXT NOT NULL DEFAULT '',
+    uploaded_by INTEGER,
+    uploaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    is_verified INTEGER NOT NULL DEFAULT 0
+  )`);
+  await db.query(`CREATE INDEX IF NOT EXISTS edu_documents_enrollment_idx ON edu_documents(enrollment_id)`);
+}
+
+// ───── Branches ─────────────────────────────────────────────────
+async function api_edu_branches_list(token) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV3();
+  const r = await db.query(`SELECT * FROM edu_branches ORDER BY is_active DESC, name`);
+  return r.rows;
+}
+
+async function api_edu_branches_save(token, payload) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV3();
+  const p = payload || {};
+  if (!p.name) throw new Error('Branch name required');
+  if (p.id) {
+    await db.query(
+      `UPDATE edu_branches SET name=$1, code=$2, address=$3, phone=$4, manager_user_id=$5, is_active=$6 WHERE id=$7`,
+      [p.name, p.code || '', p.address || '', p.phone || '',
+       p.manager_user_id || null, p.is_active == null ? 1 : Number(!!p.is_active), p.id]
+    );
+    return { ok: true, id: p.id };
+  }
+  const r = await db.query(
+    `INSERT INTO edu_branches (name, code, address, phone, manager_user_id) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+    [p.name, p.code || '', p.address || '', p.phone || '', p.manager_user_id || null]
+  );
+  return { ok: true, id: r.rows[0].id };
+}
+
+// ───── Student documents ────────────────────────────────────────
+async function api_edu_documents_byEnrollment(token, enrollmentId) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV3();
+  if (!enrollmentId) throw new Error('enrollmentId required');
+  const r = await db.query(
+    `SELECT id, enrollment_id, lead_id, doc_type, label, filename, mime_type, file_size,
+            storage_url, uploaded_by, uploaded_at, is_verified
+       FROM edu_documents WHERE enrollment_id=$1 ORDER BY uploaded_at DESC`,
+    [Number(enrollmentId)]
+  );
+  return r.rows;
+}
+
+/**
+ * api_edu_documents_register — records a document metadata row.
+ * The actual file is uploaded by the SPA to /api/files/upload (existing
+ * tenant endpoint); this API just stores the resulting URL + metadata.
+ * Falls back to data URL if no file storage configured.
+ */
+async function api_edu_documents_register(token, payload) {
+  const me = await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV3();
+  const p = payload || {};
+  if (!p.enrollment_id) throw new Error('enrollment_id required');
+  if (!p.storage_url && !p.filename) throw new Error('storage_url or filename required');
+
+  // Pull lead_id from the enrollment so the doc shows up under the lead too
+  const eR = await db.query(`SELECT lead_id FROM edu_enrollments WHERE id=$1`, [Number(p.enrollment_id)]);
+  const leadId = eR.rows[0] && eR.rows[0].lead_id;
+
+  const r = await db.query(
+    `INSERT INTO edu_documents (enrollment_id, lead_id, doc_type, label, filename, mime_type, file_size, storage_url, uploaded_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+    [Number(p.enrollment_id), leadId || null,
+     p.doc_type || 'other', p.label || p.filename || '',
+     p.filename || '', p.mime_type || '', Number(p.file_size || 0),
+     p.storage_url || '', me.id]
+  );
+  return { ok: true, id: r.rows[0].id };
+}
+
+async function api_edu_documents_delete(token, id) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV3();
+  if (!id) throw new Error('id required');
+  await db.query(`DELETE FROM edu_documents WHERE id=$1`, [Number(id)]);
+  return { ok: true };
+}
+
+async function api_edu_documents_verify(token, payload) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV3();
+  const p = payload || {};
+  if (!p.id) throw new Error('id required');
+  await db.query(
+    `UPDATE edu_documents SET is_verified=$1 WHERE id=$2`,
+    [Number(p.is_verified ? 1 : 0), Number(p.id)]
+  );
+  return { ok: true };
+}
+
+// ───── Student-centric view — every enrolled student with payment status
+async function api_edu_students_list(token, filters) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV3();
+  const f = filters || {};
+  const where = [];
+  const params = [];
+  if (f.branch_id) { where.push(`e.branch_id = $${params.length + 1}`); params.push(Number(f.branch_id)); }
+  if (f.search)    { where.push(`(LOWER(l.name) LIKE $${params.length + 1} OR LOWER(e.course_name) LIKE $${params.length + 1} OR LOWER(e.batch_name) LIKE $${params.length + 1})`); params.push('%' + String(f.search).toLowerCase() + '%'); }
+  const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const r = await db.query(`
+    SELECT e.id AS enrollment_id, e.lead_id, e.course_name, e.batch_name,
+           e.total_amount, e.start_date, e.status AS enrollment_status, e.branch_id,
+           b.name AS branch_name,
+           l.name AS student_name, l.phone, l.email,
+           COALESCE(SUM(i.amount), 0)                                AS billed,
+           COALESCE(SUM(i.paid_amount), 0)                            AS collected,
+           COALESCE(SUM(i.amount - i.paid_amount), 0)                 AS outstanding,
+           COALESCE(SUM(CASE WHEN i.due_date < CURRENT_DATE AND i.status<>'paid'
+                             THEN i.amount - i.paid_amount ELSE 0 END), 0) AS overdue,
+           MAX(p.received_at) AS last_payment_at,
+           COUNT(i.id)                                                AS installments_total,
+           COUNT(*) FILTER (WHERE i.status='paid')                    AS installments_paid
+      FROM edu_enrollments e
+      LEFT JOIN leads l         ON l.id = e.lead_id
+      LEFT JOIN edu_branches b  ON b.id = e.branch_id
+      LEFT JOIN edu_installments i ON i.enrollment_id = e.id
+      LEFT JOIN edu_payments p  ON p.enrollment_id = e.id
+      ${w}
+     GROUP BY e.id, l.name, l.phone, l.email, b.name
+     ORDER BY overdue DESC, e.id DESC
+     LIMIT 200
+  `, params);
+  return { students: r.rows };
+}
+
+// Override enrollment_create to accept branch_id (back-compat: still works without)
+async function api_edu_enrollment_create_v2(token, payload) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureSchema();
+  await _ensureSchemaV3();
+  const p = payload || {};
+  if (!p.lead_id) throw new Error('lead_id required');
+  if (!p.fee_plan_id) throw new Error('fee_plan_id required');
+
+  const plan = (await db.query(`SELECT * FROM edu_fee_plans WHERE id=$1`, [Number(p.fee_plan_id)])).rows[0];
+  if (!plan) throw new Error('Fee plan not found');
+
+  const total = Number(p.total_amount || plan.total_amount || 0);
+  const start = p.start_date || new Date().toISOString().slice(0, 10);
+
+  const eR = await db.query(
+    `INSERT INTO edu_enrollments (lead_id, fee_plan_id, plan_snapshot, course_name, batch_name, start_date, total_amount, status, branch_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8) RETURNING id`,
+    [Number(p.lead_id), plan.id, JSON.stringify(plan),
+     p.course_name || '', p.batch_name || '', start, total,
+     p.branch_id ? Number(p.branch_id) : null]
+  );
+  const enrollmentId = eR.rows[0].id;
+  await _generateSchedule(enrollmentId, start, total, plan);
+  return { ok: true, enrollment_id: enrollmentId };
+}
+
+
 // ─────────────────────────────────────────────────────────────────
 // Register
 // ─────────────────────────────────────────────────────────────────
@@ -366,7 +574,8 @@ framework.register({
     'Education statuses + parent custom fields seeded'
   ],
   nav_items: [
-    { id: 'edufees', label: '💰 Fee Collection', icon: '💰' }
+    { id: 'edufees',     label: '💰 Fee Collection', icon: '💰' },
+    { id: 'edustudents', label: '👥 Students',       icon: '👥' }
   ],
   install,
   uninstall
@@ -378,5 +587,11 @@ module.exports = {
   api_edu_enrollment_create, api_edu_enrollment_byLead,
   api_edu_installment_markPaid,
   api_edu_summary,
-  _ensureSchema
+  // Phase 3:
+  api_edu_branches_list, api_edu_branches_save,
+  api_edu_documents_byEnrollment, api_edu_documents_register,
+  api_edu_documents_delete, api_edu_documents_verify,
+  api_edu_students_list,
+  api_edu_enrollment_create_v2,
+  _ensureSchema, _ensureSchemaV3
 };
