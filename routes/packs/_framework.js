@@ -123,3 +123,4 @@ module.exports = {
 // Auto-register all packs in this folder (each pack file calls .register())
 // Pack files self-register at load time, so requiring them is enough.
 try { require('./education'); } catch (e) { console.warn('[packs] education load:', e.message); }
+try { require('./realestate'); } catch (e) { console.warn('[packs] realestate load:', e.message); }

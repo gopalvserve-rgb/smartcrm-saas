@@ -77,6 +77,7 @@ const ROUTE_FILES = [
   'nurture',
   'waWidget',
   'packs/education',
+  'packs/realestate',
 ];
 
 const API = {};

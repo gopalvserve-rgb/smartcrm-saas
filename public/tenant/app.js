@@ -25658,3 +25658,392 @@ function openQrPreviewModal(form, url) {
   document.body.appendChild(modal);
 }
 
+
+
+// ═════════════════════════════════════════════════════════════════════
+// 🏢 Real Estate pack — Inventory Board view + lead-modal Booking panel
+// Appended 2026-05-15 · only active when 'realestate' pack installed.
+// ═════════════════════════════════════════════════════════════════════
+VIEWS.reinventory = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('div', { style: { display:'flex', alignItems:'center', justifyContent:'space-between', gap:'.5rem', marginBottom:'.75rem' } },
+    h('h2', { style:{ margin:0 } }, '🏢 Inventory Board'),
+    h('button', { class: 'btn primary', onclick: () => openCreateProjectModal() }, '+ New Project')
+  ));
+  view.appendChild(h('p', { class: 'muted' }, 'Real Estate pack: projects, units, bookings, demand letters, channel-partner commissions.'));
+
+  let summary = {}, projects = [];
+  try {
+    summary  = await api('api_re_summary');
+    projects = await api('api_re_projects_list');
+  } catch (e) {
+    if (/not active/i.test(String(e.message || ''))) {
+      view.appendChild(h('div', { class:'error-box' }, 'Real Estate pack is not installed. Go to Settings → 🧩 Industry Packs to enable.'));
+      return;
+    }
+    view.appendChild(h('div', { class:'error-box' }, e.message));
+    return;
+  }
+
+  const inv = summary.inventory || {};
+  const dem = summary.demands || {};
+  const com = summary.commission || {};
+  view.appendChild(h('div', { style:{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(150px, 1fr))', gap:'.6rem', marginBottom:'1rem' } },
+    h('div', { class:'card', style:{ padding:'.7rem .9rem' } },
+      h('div', { class:'muted', style:{ fontSize:'.7em' } }, 'AVAILABLE'),
+      h('div', { style:{ fontSize:'1.3rem', fontWeight:600, color:'#16a34a' } }, String(inv.available || 0))),
+    h('div', { class:'card', style:{ padding:'.7rem .9rem' } },
+      h('div', { class:'muted', style:{ fontSize:'.7em' } }, 'BLOCKED'),
+      h('div', { style:{ fontSize:'1.3rem', fontWeight:600, color:'#ea580c' } }, String(inv.blocked || 0))),
+    h('div', { class:'card', style:{ padding:'.7rem .9rem' } },
+      h('div', { class:'muted', style:{ fontSize:'.7em' } }, 'BOOKED'),
+      h('div', { style:{ fontSize:'1.3rem', fontWeight:600, color:'#dc2626' } }, String(inv.booked || 0))),
+    h('div', { class:'card', style:{ padding:'.7rem .9rem' } },
+      h('div', { class:'muted', style:{ fontSize:'.7em' } }, 'REGISTERED'),
+      h('div', { style:{ fontSize:'1.3rem', fontWeight:600, color:'#7c3aed' } }, String(inv.registered || 0))),
+    h('div', { class:'card', style:{ padding:'.7rem .9rem' } },
+      h('div', { class:'muted', style:{ fontSize:'.7em' } }, 'COLLECTED'),
+      h('div', { style:{ fontSize:'1.3rem', fontWeight:600 } }, '₹' + Number(dem.collected || 0).toLocaleString('en-IN'))),
+    h('div', { class:'card', style:{ padding:'.7rem .9rem' } },
+      h('div', { class:'muted', style:{ fontSize:'.7em' } }, 'OUTSTANDING'),
+      h('div', { style:{ fontSize:'1.3rem', fontWeight:600, color:'#ea580c' } }, '₹' + Number(dem.outstanding || 0).toLocaleString('en-IN'))),
+    h('div', { class:'card', style:{ padding:'.7rem .9rem' } },
+      h('div', { class:'muted', style:{ fontSize:'.7em' } }, 'OVERDUE'),
+      h('div', { style:{ fontSize:'1.3rem', fontWeight:600, color:'#dc2626' } }, '₹' + Number(dem.overdue || 0).toLocaleString('en-IN'))),
+    h('div', { class:'card', style:{ padding:'.7rem .9rem' } },
+      h('div', { class:'muted', style:{ fontSize:'.7em' } }, 'PARTNER COMMISSION DUE'),
+      h('div', { style:{ fontSize:'1.3rem', fontWeight:600, color:'#4f46e5' } }, '₹' + Number(com.commission_due || 0).toLocaleString('en-IN')))
+  ));
+
+  if (!projects.length) {
+    view.appendChild(h('div', { class:'muted', style:{ padding:'2rem', textAlign:'center' } },
+      'No projects yet. Click + New Project above. (Pack install seeds Sample Heights with 12 units.)'));
+    return;
+  }
+
+  for (const proj of projects) {
+    const wrap = h('div', { class:'card', style:{ marginBottom:'1rem', padding:'.8rem 1rem' } });
+    wrap.appendChild(h('div', { style:{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'.5rem' } },
+      h('h3', { style:{ margin:0 } }, proj.name + (proj.tower_code ? ' · Tower ' + proj.tower_code : '')),
+      h('button', { class:'btn sm', onclick: () => openBulkCreateUnitsModal(proj) }, '+ Bulk-create units')
+    ));
+    if (proj.location) wrap.appendChild(h('div', { class:'muted', style:{ marginBottom:'.5rem' } }, '📍 ' + proj.location));
+
+    let units = [];
+    try { units = await api('api_re_units_byProject', proj.id); } catch (_) {}
+
+    if (!units.length) {
+      wrap.appendChild(h('div', { class:'muted', style:{ padding:'1rem' } }, 'No units yet. Use Bulk-create above.'));
+    } else {
+      const grid = h('div', { style:{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(110px, 1fr))', gap:'.4rem' } });
+      units.forEach(u => {
+        const bg = u.status === 'available' ? '#dcfce7' :
+                   u.status === 'blocked'   ? '#fed7aa' :
+                   u.status === 'booked'    ? '#fecaca' :
+                   u.status === 'registered'? '#ddd6fe' : '#f3f4f6';
+        const fg = u.status === 'available' ? '#166534' :
+                   u.status === 'blocked'   ? '#9a3412' :
+                   u.status === 'booked'    ? '#991b1b' :
+                   u.status === 'registered'? '#5b21b6' : '#374151';
+        grid.appendChild(h('div', {
+          style:{ background:bg, color:fg, padding:'.5rem', borderRadius:'6px', textAlign:'center', border:'1px solid rgba(0,0,0,0.06)', fontSize:'.85em' },
+          title: (u.type || '') + ' · ' + (u.carpet_sqft || 0) + ' sqft · ₹' + Number(u.price).toLocaleString('en-IN')
+        },
+          h('div', { style:{ fontWeight:600 } }, u.unit_no),
+          h('div', { style:{ fontSize:'.75em', opacity:0.85 } }, u.type || ''),
+          h('div', { style:{ fontSize:'.7em', textTransform:'uppercase', marginTop:'.15rem', opacity:0.8 } }, u.status)
+        ));
+      });
+      wrap.appendChild(grid);
+    }
+    view.appendChild(wrap);
+  }
+};
+
+async function openCreateProjectModal(existing) {
+  const ex = existing || {};
+  const m = h('div', { class:'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const modal = h('div', { class:'modal' });
+  modal.appendChild(h('div', { class:'modal-head' },
+    h('h3', {}, ex.id ? 'Edit Project' : '🏢 New Project'),
+    h('button', { class:'btn ghost', onclick: () => m.remove() }, '✕')
+  ));
+  const fName = h('input', { type:'text', placeholder:'e.g. Sample Heights', value: ex.name || '' });
+  const fLoc  = h('input', { type:'text', placeholder:'Location', value: ex.location || '' });
+  const fTow  = h('input', { type:'text', placeholder:'Tower code (e.g. A)', value: ex.tower_code || '' });
+  const body = h('div', { class:'modal-body' },
+    h('label', {}, 'Name', fName),
+    h('label', {}, 'Location', fLoc),
+    h('label', {}, 'Tower code', fTow)
+  );
+  modal.appendChild(body);
+  modal.appendChild(h('div', { class:'actions' },
+    h('button', { class:'btn', onclick: () => m.remove() }, 'Cancel'),
+    h('button', { class:'btn primary', onclick: async () => {
+      if (!fName.value.trim()) { toast('Name required', 'err'); return; }
+      try {
+        await api('api_re_projects_save', { id: ex.id, name: fName.value.trim(), location: fLoc.value, tower_code: fTow.value });
+        toast('Saved');
+        m.remove();
+        const view = $('#view') || document.querySelector('.view');
+        if (view) VIEWS.reinventory(view);
+      } catch (e) { toast(e.message, 'err'); }
+    } }, 'Save')
+  ));
+  m.appendChild(modal);
+  document.body.appendChild(m);
+}
+
+async function openBulkCreateUnitsModal(proj) {
+  const m = h('div', { class:'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const modal = h('div', { class:'modal' });
+  modal.appendChild(h('div', { class:'modal-head' },
+    h('h3', {}, 'Bulk-create units — ' + proj.name),
+    h('button', { class:'btn ghost', onclick: () => m.remove() }, '✕')
+  ));
+  const fFloors = h('input', { type:'number', value:'5', min:'1' });
+  const fPer    = h('input', { type:'number', value:'4', min:'1' });
+  const fTower  = h('input', { type:'text', value: proj.tower_code || 'A' });
+  const fType   = h('input', { type:'text', value:'2BHK' });
+  const fCarpet = h('input', { type:'number', value:'850' });
+  const fPrice  = h('input', { type:'number', value:'5000000' });
+  modal.appendChild(h('div', { class:'modal-body' },
+    h('label', {}, 'Floors', fFloors),
+    h('label', {}, 'Units / floor', fPer),
+    h('label', {}, 'Tower code', fTower),
+    h('label', {}, 'Unit type', fType),
+    h('label', {}, 'Carpet sqft', fCarpet),
+    h('label', {}, 'Price (₹)', fPrice)
+  ));
+  modal.appendChild(h('div', { class:'actions' },
+    h('button', { class:'btn', onclick: () => m.remove() }, 'Cancel'),
+    h('button', { class:'btn primary', onclick: async () => {
+      try {
+        const r = await api('api_re_units_bulkCreate', {
+          project_id: proj.id,
+          floors: Number(fFloors.value),
+          units_per_floor: Number(fPer.value),
+          tower_code: fTower.value,
+          type: fType.value,
+          carpet_sqft: Number(fCarpet.value),
+          price: Number(fPrice.value)
+        });
+        toast('Created ' + r.created + ' units');
+        m.remove();
+        const view = $('#view') || document.querySelector('.view');
+        if (view) VIEWS.reinventory(view);
+      } catch (e) { toast(e.message, 'err'); }
+    } }, 'Create')
+  ));
+  m.appendChild(modal);
+  document.body.appendChild(m);
+}
+
+async function openCreateBookingModal(leadId, onDone) {
+  const m = h('div', { class:'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const modal = h('div', { class:'modal' });
+  modal.appendChild(h('div', { class:'modal-head' },
+    h('h3', {}, '🏢 New booking'),
+    h('button', { class:'btn ghost', onclick: () => m.remove() }, '✕')
+  ));
+
+  const fProject = h('select', {});
+  fProject.appendChild(h('option', { value:'' }, '— Choose project —'));
+  const fUnit = h('select', {});
+  fUnit.appendChild(h('option', { value:'' }, '— Choose unit —'));
+  const fBuyer = h('input', { type:'text', placeholder:'Buyer name' });
+  const fTotal = h('input', { type:'number', placeholder:'Auto-fills from unit price' });
+  const fDate = h('input', { type:'date', value: new Date().toISOString().slice(0,10) });
+  const fPartner = h('select', {});
+  fPartner.appendChild(h('option', { value:'' }, '— None / Direct —'));
+
+  modal.appendChild(h('div', { class:'modal-body' },
+    h('label', {}, 'Project', fProject),
+    h('label', {}, 'Unit', fUnit),
+    h('label', {}, 'Buyer name', fBuyer),
+    h('label', {}, 'Total price (₹)', fTotal),
+    h('label', {}, 'Booking date', fDate),
+    h('label', {}, 'Channel partner', fPartner)
+  ));
+  modal.appendChild(h('div', { class:'actions' },
+    h('button', { class:'btn', onclick: () => m.remove() }, 'Cancel'),
+    h('button', { class:'btn primary', onclick: async () => {
+      if (!fUnit.value) { toast('Pick a unit', 'err'); return; }
+      try {
+        const r = await api('api_re_booking_create', {
+          lead_id: leadId,
+          unit_id: Number(fUnit.value),
+          buyer_name: fBuyer.value || '',
+          total_price: fTotal.value ? Number(fTotal.value) : undefined,
+          booking_date: fDate.value,
+          channel_partner_id: fPartner.value ? Number(fPartner.value) : null
+        });
+        toast('Booking created · ' + r.demands + ' demand letters generated');
+        m.remove();
+        if (onDone) onDone();
+      } catch (e) { toast(e.message, 'err'); }
+    } }, 'Book unit')
+  ));
+  m.appendChild(modal);
+  document.body.appendChild(m);
+
+  try {
+    const projects = await api('api_re_projects_list');
+    (projects || []).forEach(p => fProject.appendChild(h('option', { value: p.id }, p.name)));
+  } catch (_) {}
+  try {
+    const partners = await api('api_re_channelPartners_list');
+    (partners || []).filter(p => Number(p.is_active)).forEach(p =>
+      fPartner.appendChild(h('option', { value: p.id }, p.name + ' (' + p.commission_pct + '%)')));
+  } catch (_) {}
+
+  fProject.addEventListener('change', async () => {
+    fUnit.innerHTML = '';
+    fUnit.appendChild(h('option', { value:'' }, '— Choose unit —'));
+    if (!fProject.value) return;
+    try {
+      const units = await api('api_re_units_byProject', Number(fProject.value));
+      (units || []).filter(u => u.status === 'available').forEach(u =>
+        fUnit.appendChild(h('option', { value: u.id }, u.unit_no + ' · ' + (u.type || '') + ' · ₹' + Number(u.price).toLocaleString('en-IN'))));
+    } catch (_) {}
+  });
+  fUnit.addEventListener('change', () => {
+    const sel = fUnit.selectedOptions[0];
+    if (sel && sel.text) {
+      const m2 = sel.text.match(/₹([\d,]+)/);
+      if (m2) fTotal.value = m2[1].replace(/,/g, '');
+    }
+  });
+}
+
+async function openMarkDemandPaidModal(d, onDone) {
+  const m = h('div', { class:'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const modal = h('div', { class:'modal' });
+  modal.appendChild(h('div', { class:'modal-head' },
+    h('h3', {}, 'Mark ' + (d.label || d.code) + ' paid'),
+    h('button', { class:'btn ghost', onclick: () => m.remove() }, '✕')
+  ));
+  const remaining = Number(d.amount) - Number(d.paid_amount);
+  const fAmt = h('input', { type:'number', value: String(remaining) });
+  const fMethod = h('select', {});
+  ['bank','cheque','cash','upi','card','manual'].forEach(x => fMethod.appendChild(h('option', { value:x }, x.toUpperCase())));
+  const fRef = h('input', { type:'text', placeholder:'Reference (txn id / cheque no)' });
+  modal.appendChild(h('div', { class:'modal-body' },
+    h('label', {}, 'Amount ₹ (remaining: ₹' + remaining.toLocaleString('en-IN') + ')', fAmt),
+    h('label', {}, 'Method', fMethod),
+    h('label', {}, 'Reference', fRef)
+  ));
+  modal.appendChild(h('div', { class:'actions' },
+    h('button', { class:'btn', onclick: () => m.remove() }, 'Cancel'),
+    h('button', { class:'btn primary', onclick: async () => {
+      try {
+        await api('api_re_demand_markPaid', { id: d.id, amount: Number(fAmt.value), method: fMethod.value, reference: fRef.value });
+        toast('Marked paid');
+        m.remove();
+        if (onDone) onDone();
+      } catch (e) { toast(e.message, 'err'); }
+    } }, 'Save')
+  ));
+  m.appendChild(modal);
+  document.body.appendChild(m);
+}
+
+// Auto-mounted into the lead modal after the recordings block (see hook below).
+function packRealEstateBookingBlock(leadId) {
+  const wrap = h('div', { class:'pack-block', style:{ marginTop:'1rem', borderTop:'1px solid #e5e7eb', paddingTop:'1rem' } },
+    h('h4', { style:{ margin:'0 0 .5rem 0' } }, '🏢 Booking & Demand Letters')
+  );
+  const inner = h('div', {}, h('div', { class:'muted' }, 'Loading…'));
+  wrap.appendChild(inner);
+
+  const refresh = () => {
+    api('api_re_booking_byLead', leadId).then(r => {
+      inner.innerHTML = '';
+      const bookings = (r && r.bookings) || [];
+      const demands  = (r && r.demands)  || [];
+      if (!bookings.length) {
+        inner.appendChild(h('div', { class:'muted', style:{ padding:'.5rem 0' } }, 'No booking yet.'));
+        inner.appendChild(h('button', { class:'btn primary sm', onclick: () => openCreateBookingModal(leadId, refresh) }, '+ New booking'));
+        return;
+      }
+      bookings.forEach(b => {
+        const demRows = demands.filter(d => d.booking_id === b.id);
+        const card = h('div', { class:'card', style:{ padding:'.75rem', marginBottom:'.5rem' } },
+          h('div', { style:{ display:'flex', justifyContent:'space-between', alignItems:'baseline' } },
+            h('div', {},
+              h('strong', {}, (b.project_name || '') + ' · ' + (b.unit_no || '')),
+              b.unit_type ? h('span', { class:'muted' }, ' · ' + b.unit_type) : null,
+              b.partner_name && b.partner_name !== 'Direct Sales'
+                ? h('span', { class:'badge', style:{ marginLeft:'.5rem', background:'#f0f9ff', padding:'2px 6px', borderRadius:'4px', fontSize:'.75em', color:'#0369a1' } }, '👥 ' + b.partner_name)
+                : null
+            ),
+            h('div', { class:'muted', style:{ fontSize:'.85em' } }, 'Total ₹' + Number(b.total_price).toLocaleString('en-IN'))
+          ),
+          h('table', { class:'mini-table', style:{ marginTop:'.5rem', fontSize:'.85em' } },
+            h('thead', {}, h('tr', {},
+              h('th', {}, '#'), h('th', {}, 'Milestone'), h('th', {}, 'Due'),
+              h('th', {}, 'Amount'), h('th', {}, 'Paid'), h('th', {}, 'Status'), h('th', {}, '')
+            )),
+            h('tbody', {}, demRows.map(d => h('tr', {},
+              h('td', {}, String(d.seq)),
+              h('td', {}, d.label || d.code),
+              h('td', {}, String(d.due_date || '-').slice(0,10)),
+              h('td', {}, '₹' + Number(d.amount).toLocaleString('en-IN')),
+              h('td', {}, '₹' + Number(d.paid_amount).toLocaleString('en-IN')),
+              h('td', {},
+                h('span', {
+                  style:{
+                    background: d.status === 'paid' ? '#dcfce7' : (d.status === 'partial' ? '#fef3c7' : '#fee2e2'),
+                    color:      d.status === 'paid' ? '#166534' : (d.status === 'partial' ? '#92400e' : '#991b1b'),
+                    padding:'2px 6px', borderRadius:'4px', fontSize:'.75em'
+                  }
+                }, d.status)
+              ),
+              h('td', {}, d.status !== 'paid'
+                ? h('button', { class:'btn sm primary', onclick: () => openMarkDemandPaidModal(d, refresh) }, 'Mark paid')
+                : null)
+            )))
+          )
+        );
+        inner.appendChild(card);
+      });
+    }).catch(e => {
+      inner.innerHTML = '';
+      if (/not active/i.test(String(e.message || ''))) return; // silently skip when pack off
+      inner.appendChild(h('div', { class:'muted' }, 'Could not load: ' + (e.message || e)));
+    });
+  };
+  refresh();
+  return wrap;
+}
+
+// Hook the booking panel into the lead modal — runs once on load.
+// We monkey-patch openLeadModal to inject the panel after render.
+(function _wireRealEstateLeadPanel() {
+  if (typeof openLeadModal !== 'function') return;
+  const _orig = openLeadModal;
+  window.openLeadModal = async function patchedOpenLeadModal(id) {
+    const r = await _orig.apply(this, arguments);
+    // After modal renders, find the modal body and append our panel if pack is active
+    if (id) {
+      setTimeout(async () => {
+        try {
+          // Quick check via API — if the call throws "not active", we skip
+          const installed = await api('api_packs_listInstalled').catch(() => []);
+          const active = (installed || []).some(p => p.pack_id === 'realestate' && Number(p.is_active));
+          if (!active) return;
+          const body = document.querySelector('.modal-backdrop:last-of-type .modal');
+          if (body && !body.querySelector('.pack-block.re-booking')) {
+            const panel = packRealEstateBookingBlock(id);
+            panel.classList.add('re-booking');
+            // Append before .actions (last row of buttons) if present, else just append
+            const actions = body.querySelector('.actions');
+            if (actions) body.insertBefore(panel, actions);
+            else body.appendChild(panel);
+          }
+        } catch (_) {}
+      }, 200);
+    }
+    return r;
+  };
+})();
