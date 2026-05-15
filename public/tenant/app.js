@@ -200,6 +200,7 @@ async function apiRaw(fn, ...args) {
       }
       navigateTo(parseHashView() || 'dashboard');
       startFollowupPolling();
+      startRecordingAutoSync();
       refreshNotifs();
       // Load + render any active announcement banners. Polls every 60s so a
       // freshly-posted admin announcement appears for already-logged-in users
@@ -21312,6 +21313,59 @@ function _urlBase64ToUint8(s) {
   const arr = new Uint8Array(raw.length);
   for (let i = 0; i < raw.length; ++i) arr[i] = raw.charCodeAt(i);
   return arr;
+}
+
+/* ---------------- Recording auto-sync ---------------- */
+// The cap-app's RecordingObserver (FileObserver) fires recordingAvailable
+// when a new .m4a lands — but Android suspends the WebView under battery
+// pressure, lock screen, or backgrounding, so that callback can fire to
+// a dead JS engine and the file just sits there until the user opens the
+// CRM and taps "Sync now". This safety net polls every 90s and on
+// visibility-change so files queue up automatically.
+//
+// Reuses syncRecordings() — the same code path as the manual Sync button
+// — so it benefits from every fix to the matcher (last-4, contact name,
+// timestamp + event lookup, force-upload to server recovery paths).
+let _recAutoSyncTimer = null;
+function startRecordingAutoSync() {
+  if (!window.LeadCRMNative || typeof LeadCRMNative.listRecordings !== 'function') {
+    // Browser / PWA — nothing to auto-sync from
+    return;
+  }
+  if (_recAutoSyncTimer) clearInterval(_recAutoSyncTimer);
+
+  async function _silentSync(opts) {
+    try {
+      // Suppress success toasts so background syncs aren't noisy. Errors
+      // still surface so the user knows when something's actually wrong.
+      const realToast = window.toast;
+      let suppressed = 0;
+      window.toast = function (msg, kind) {
+        if (kind === 'warn' || kind === 'err') return realToast(msg, kind);
+        if (typeof msg === 'string' && /✅\s*[1-9]/.test(msg)) suppressed++;
+      };
+      try { await syncRecordings(opts || {}); }
+      finally { window.toast = realToast; }
+      if (suppressed) console.log('[leadcrm] auto-sync: ' + suppressed + ' new recording(s)');
+    } catch (e) { console.warn('[leadcrm] auto-sync error', e); }
+  }
+
+  // Initial sweep ~8s after boot to catch anything that landed while the
+  // app was closed (e.g. dialer wrote a file last night).
+  setTimeout(() => _silentSync({}), 8000);
+
+  // Recurring sweep every 90s. Cheap — listRecordings() filters by mtime
+  // before any upload happens, and the upload step de-dupes by URI in
+  // localStorage so already-uploaded files are skipped instantly.
+  _recAutoSyncTimer = setInterval(() => _silentSync({}), 90_000);
+
+  // Resume-from-background sweep: when the user opens the app after a
+  // call, fire immediately. visibilitychange wins over interval timing.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      setTimeout(() => _silentSync({}), 1500);
+    }
+  });
 }
 
 /* ---------------- Notifications + follow-up popup ---------------- */
