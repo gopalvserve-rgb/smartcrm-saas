@@ -853,6 +853,7 @@ const NAV_GROUPS = [
   ] },
   { label: 'Sales', icon: '💼', items: [
     { id: 'leads',      label: 'Leads',          icon: '🎯' },
+    { id: 'edufees',    label: 'Fee Collection', icon: '💰', roles: ['admin','manager','team_leader'] },
     { id: 'campaigns',  label: 'Campaigns',      icon: '📣', roles: ['admin','manager'] },
     { id: 'pipeline',   label: 'Pipeline',       icon: '📈' },
     { id: 'kanban',     label: 'Kanban',         icon: '🗂️' },
@@ -14091,6 +14092,7 @@ VIEWS.admin = async (view) => {
       { id: 'forms',        label: '📝 Forms' },
       { id: 'pages',        label: '🌐 Landing Pages' },
       { id: 'wawidget',     label: '💚 WhatsApp Chat Widget' },
+      { id: 'packs',        label: '🧩 Industry Packs', roles: ['admin'] },
       { id: 'whlogs',       label: '📡 Webhook logs' },
       { id: 'recdiag',      label: '🎧 Recording diagnostics' },
       { id: 'pendingcalls', label: '📞 Pending calls' },
@@ -14189,6 +14191,7 @@ async function showAdminTab(id) {
     if (id === 'forms')      body.replaceChildren(await adminForms());
     if (id === 'pages')      body.replaceChildren(await adminPages());
     if (id === 'wawidget')   body.replaceChildren(await adminWaWidget());
+    if (id === 'packs')      body.replaceChildren(await adminPacks());
     if (id === 'integrations') body.replaceChildren(await adminIntegrations());
     if (id === 'qrforms')     body.replaceChildren(await adminQrForms());
     if (id === 'whlogs')      body.replaceChildren(await adminWebhookLogs());
@@ -24257,6 +24260,168 @@ async function openRecordingSyncDebug() {
   document.body.appendChild(m);
 }
 try { window.openRecordingSyncDebug = openRecordingSyncDebug; } catch (_) {}
+
+
+// ─────────────────────────────────────────────────────────────────────
+// Settings → 🧩 Industry Packs
+// ─────────────────────────────────────────────────────────────────────
+async function adminPacks() {
+  const wrap = h('div', {});
+  wrap.appendChild(h('div', { class: 'mod-h2' },
+    h('h3', {}, '🧩 Industry Packs'),
+    h('div', { class: 'muted', style: { fontSize: '.85em' } },
+      'Pre-built feature packs for specific industries. Install one to add industry-specific modules without disturbing your existing setup. Uninstall keeps your data — it just hides the menus.')
+  ));
+  let available = [], installed = [];
+  try {
+    [available, installed] = await Promise.all([
+      api('api_packs_listAvailable'),
+      api('api_packs_listInstalled')
+    ]);
+  } catch (e) {
+    wrap.appendChild(h('div', { class: 'error-box' }, 'Failed to load packs: ' + e.message));
+    return wrap;
+  }
+  const installedMap = new Map();
+  (installed || []).forEach(p => installedMap.set(p.pack_id, p));
+
+  if (!available.length) {
+    wrap.appendChild(h('div', { class: 'muted', style: { padding: '1rem', textAlign: 'center' } },
+      'No packs available yet.'));
+    return wrap;
+  }
+
+  available.forEach(pack => {
+    const inst = installedMap.get(pack.id);
+    const isActive = inst && Number(inst.is_active) === 1;
+    const card = h('div', { class: 'card', style: { marginBottom: '.75rem', padding: '1rem' } });
+    card.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.75rem', flexWrap: 'wrap' } },
+      h('h4', { style: { margin: 0, flex: 1 } },
+        pack.name + (isActive ? ' ' : ''),
+        isActive ? h('span', { class: 'badge ok', style: { marginLeft: '.5rem', background: '#16a34a', color: '#fff', padding: '.15rem .5rem', borderRadius: '4px', fontSize: '.7rem' } }, 'INSTALLED') : null
+      ),
+      isActive
+        ? h('button', { class: 'btn ghost', onclick: async () => {
+            if (!await confirmDialog('Uninstall ' + pack.name + '? Menus will be hidden; data stays.')) return;
+            try { await api('api_packs_uninstall', pack.id); toast('Uninstalled'); showAdminTab('packs'); }
+            catch (e) { toast(e.message, 'err'); }
+          } }, '🗑 Uninstall')
+        : h('button', { class: 'btn primary', onclick: async () => {
+            if (!await confirmDialog('Install ' + pack.name + '?\n\nThis will:\n- Create pack-specific tables (idempotent, no impact on existing data)\n- Seed sample fee plans / statuses / custom fields (only if missing)\n- Add new menu items to your sidebar\n\nYou can uninstall later — data is kept.')) return;
+            try { await api('api_packs_install', pack.id); toast('Installed!'); showAdminTab('packs'); setTimeout(() => location.reload(), 800); }
+            catch (e) { toast(e.message, 'err'); }
+          } }, '+ Install')
+    ));
+    card.appendChild(h('p', { class: 'muted', style: { margin: '.4rem 0' } }, pack.summary));
+    if (pack.features && pack.features.length) {
+      const ul = h('ul', { style: { margin: '.3rem 0 .3rem 1.2rem', fontSize: '.85em' } });
+      pack.features.forEach(f => ul.appendChild(h('li', {}, f)));
+      card.appendChild(ul);
+    }
+    if (isActive) {
+      card.appendChild(h('div', { class: 'muted', style: { fontSize: '.75em', marginTop: '.3rem' } },
+        'Version ' + (inst.version || '?') + ' · installed ' + (inst.installed_at ? new Date(inst.installed_at).toLocaleDateString() : '')));
+    }
+    wrap.appendChild(card);
+  });
+  return wrap;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// VIEWS.edufees — Education pack: Fee Collection page
+// ─────────────────────────────────────────────────────────────────────
+VIEWS.edufees = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('h2', {}, '💰 Fee Collection'));
+  view.appendChild(h('p', { class: 'muted' }, 'Education pack: fee plans, installment schedules, forecast, defaulters.'));
+
+  let data, plans;
+  try {
+    [data, plans] = await Promise.all([
+      api('api_edu_summary'),
+      api('api_edu_feePlans_list')
+    ]);
+  } catch (e) {
+    view.appendChild(h('div', { class: 'error-box' }, e.message));
+    return;
+  }
+
+  // KPIs
+  const totalOverdue = (data.defaulters || []).reduce((sum, d) => sum + (Number(d.amount) - Number(d.paid_amount) + Number(d.late_fee)), 0);
+  const totalForecast = (data.forecast || []).reduce((sum, f) => sum + Number(f.expected || 0), 0);
+  const kpiRow = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '.75rem', marginBottom: '1rem' } },
+    h('div', { class: 'card', style: { padding: '.8rem 1rem' } },
+      h('div', { class: 'muted', style: { fontSize: '.75em' } }, 'COLLECTED THIS FY'),
+      h('div', { style: { fontSize: '1.4rem', fontWeight: '600', color: '#16a34a' } }, '₹' + Number(data.collected_this_fy || 0).toLocaleString('en-IN'))),
+    h('div', { class: 'card', style: { padding: '.8rem 1rem' } },
+      h('div', { class: 'muted', style: { fontSize: '.75em' } }, 'EXPECTED (NEXT 12 MO)'),
+      h('div', { style: { fontSize: '1.4rem', fontWeight: '600', color: '#4f46e5' } }, '₹' + Number(totalForecast).toLocaleString('en-IN'))),
+    h('div', { class: 'card', style: { padding: '.8rem 1rem' } },
+      h('div', { class: 'muted', style: { fontSize: '.75em' } }, 'OVERDUE'),
+      h('div', { style: { fontSize: '1.4rem', fontWeight: '600', color: '#dc2626' } }, '₹' + Number(totalOverdue).toLocaleString('en-IN')))
+  );
+  view.appendChild(kpiRow);
+
+  // Forecast table
+  view.appendChild(h('h3', {}, '📅 Fee collection forecast'));
+  if (!data.forecast || !data.forecast.length) {
+    view.appendChild(h('div', { class: 'muted', style: { padding: '1rem' } }, 'No upcoming installments. Enroll students with a fee plan to see the forecast.'));
+  } else {
+    const tbl = h('table', { class: 'mini-table' },
+      h('thead', {}, h('tr', {}, h('th', {}, 'Month'), h('th', {}, 'Expected'), h('th', {}, 'Installments'))),
+      h('tbody', {}, data.forecast.map(f => h('tr', {},
+        h('td', {}, f.month),
+        h('td', {}, '₹' + Number(f.expected).toLocaleString('en-IN')),
+        h('td', {}, String(f.count))
+      ))));
+    view.appendChild(tbl);
+  }
+
+  // Defaulters
+  view.appendChild(h('h3', { style: { marginTop: '1.5rem' } }, '⚠ Defaulters (overdue installments)'));
+  if (!data.defaulters || !data.defaulters.length) {
+    view.appendChild(h('div', { class: 'muted ok-box', style: { padding: '1rem', background: '#ecfdf5', borderRadius: '8px' } }, '✅ No overdue installments. Great job!'));
+  } else {
+    const tbl = h('table', { class: 'mini-table' },
+      h('thead', {}, h('tr', {},
+        h('th', {}, 'Course / Batch'),
+        h('th', {}, 'Due'),
+        h('th', {}, 'Amount'),
+        h('th', {}, 'Days overdue'),
+        h('th', {}, '')
+      )),
+      h('tbody', {}, data.defaulters.map(d => h('tr', {},
+        h('td', {}, (d.course_name || '—') + (d.batch_name ? ' · ' + d.batch_name : '')),
+        h('td', {}, String(d.due_date).slice(0, 10)),
+        h('td', {}, '₹' + Number(Number(d.amount) - Number(d.paid_amount) + Number(d.late_fee)).toLocaleString('en-IN')),
+        h('td', { style: { color: '#dc2626', fontWeight: '600' } }, String(d.days_overdue || 0) + 'd'),
+        h('td', {}, h('button', { class: 'btn sm', onclick: () => openLeadModal(d.lead_id) }, 'Open lead'))
+      ))));
+    view.appendChild(tbl);
+  }
+
+  // Fee plans library
+  view.appendChild(h('h3', { style: { marginTop: '1.5rem' } }, '📋 Fee plan templates'));
+  if (!plans || !plans.length) {
+    view.appendChild(h('div', { class: 'muted' }, 'No fee plans yet. Sample plans are seeded on Education-pack install.'));
+  } else {
+    const tbl = h('table', { class: 'mini-table' },
+      h('thead', {}, h('tr', {},
+        h('th', {}, 'Name'), h('th', {}, 'Total'), h('th', {}, 'Mode'),
+        h('th', {}, 'Installments'), h('th', {}, 'Interval (days)'), h('th', {}, 'Late fee %'), h('th', {}, 'Status')
+      )),
+      h('tbody', {}, plans.map(p => h('tr', {},
+        h('td', {}, p.name),
+        h('td', {}, '₹' + Number(p.total_amount).toLocaleString('en-IN')),
+        h('td', {}, p.mode),
+        h('td', {}, String(p.num_installments)),
+        h('td', {}, String(p.interval_days)),
+        h('td', {}, String(p.late_fee_pct || 0) + '%'),
+        h('td', {}, Number(p.is_active) ? '🟢 Active' : '⚪ Inactive')
+      ))));
+    view.appendChild(tbl);
+  }
+};
 
 
 (function bootCopilot() {

@@ -76,6 +76,7 @@ const ROUTE_FILES = [
   'pages',
   'nurture',
   'waWidget',
+  'packs/education',
 ];
 
 const API = {};
@@ -328,5 +329,42 @@ async function expressHandler(req, res) {
     return res.status(status).json({ error: e.message });
   }
 }
+
+
+// ─────────────────────────────────────────────────────────────────
+// Industry Pack management — super-admin only.
+// listAvailable shows all packs in the registry.
+// listInstalled returns this tenant's active packs.
+// install/uninstall run inside the tenant's DB context (caller wraps
+// these in tenantStorage.run() per usual).
+// ─────────────────────────────────────────────────────────────────
+async function api_packs_listAvailable(_token) {
+  const fw = require('../packs/_framework');
+  return fw.listAvailablePacks();
+}
+async function api_packs_listInstalled(token) {
+  const { authUser } = require('../../utils/auth');
+  await authUser(token);
+  const fw = require('../packs/_framework');
+  return fw.listInstalledPacks();
+}
+async function api_packs_install(token, packId) {
+  const { authUser } = require('../../utils/auth');
+  const me = await authUser(token);
+  if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin only');
+  const fw = require('../packs/_framework');
+  return fw.installPack(String(packId || ''), { userId: me.id });
+}
+async function api_packs_uninstall(token, packId) {
+  const { authUser } = require('../../utils/auth');
+  const me = await authUser(token);
+  if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin only');
+  const fw = require('../packs/_framework');
+  return fw.uninstallPack(String(packId || ''), { userId: me.id });
+}
+API.api_packs_listAvailable = api_packs_listAvailable;
+API.api_packs_listInstalled = api_packs_listInstalled;
+API.api_packs_install       = api_packs_install;
+API.api_packs_uninstall     = api_packs_uninstall;
 
 module.exports = { expressHandler };
