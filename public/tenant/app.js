@@ -2354,6 +2354,7 @@ function renderLeadsTable(rows) {
     sel.addEventListener('change', async () => {
       try {
         await api('api_leads_update', Number(sel.dataset.leadStatus), { status_id: Number(sel.value) });
+        try { _kickRecordingSyncSoon(6000); } catch (_) {}
         toast('Status updated');
         const opt = CRM.cache.statuses.find(s => Number(s.id) === Number(sel.value));
         if (opt) sel.style.setProperty('--status-color', opt.color);
@@ -2584,6 +2585,10 @@ async function openAfterCallModal(lead) {
             if (Object.keys(patch).length) await api('api_leads_update', lead.id, patch);
             if (remark) await api('api_leads_addRemark', lead.id, { remark });
             toast('Updated');
+            // Post-call save → fire silent recording sweeps. Dialer may
+            // still be flushing audio bytes at this moment; we run two
+            // sweeps to catch quick-flush (~6s) and slow-flush (~20s) OEMs.
+            try { _kickRecordingSyncSoon(6000); setTimeout(() => _kickRecordingSyncSoon(0), 20000); } catch (_) {}
             modal.remove();
             // Clear the pending-call stash so we don't re-open this modal
             // on the next visibilitychange / nav.
@@ -4178,6 +4183,11 @@ async function openLeadModal(id) {
       if (id) await api('api_leads_update', id, payload);
       else    await api('api_leads_create', payload);
       toast(id ? 'Saved' : 'Created');
+      // Lead edit submit → kick a silent recording sweep. Reps usually
+      // open the lead to log an update right after a call, so this is
+      // the natural moment to pull any pending recording without
+      // forcing them to tap Sync now.
+      try { _kickRecordingSyncSoon(6000); setTimeout(() => _kickRecordingSyncSoon(0), 20000); } catch (_) {}
       modal.remove();
       loadLeads();
     } catch (e) { toast(e.message, 'err'); }
@@ -4316,6 +4326,7 @@ function openNextFollowupModal(row, onSuccess) {
           if (newStatusId) {
             try {
               await api('api_leads_update', row.lead_id, { status_id: newStatusId });
+              try { _kickRecordingSyncSoon(6000); } catch (_) {}
             } catch (e) {
               toast('Status update failed: ' + e.message, 'err');
               return;
@@ -6221,6 +6232,7 @@ VIEWS.kanban = async (view) => {
         const newStatusId = Number(col.dataset.statusId);
         try {
           await api('api_leads_update', leadId, { status_id: newStatusId });
+              try { _kickRecordingSyncSoon(6000); } catch (_) {}
           toast('Status updated');
           render();
         } catch (e) { toast(e.message, 'err'); }
@@ -21327,6 +21339,37 @@ function _urlBase64ToUint8(s) {
 // — so it benefits from every fix to the matcher (last-4, contact name,
 // timestamp + event lookup, force-upload to server recovery paths).
 let _recAutoSyncTimer = null;
+
+// Public helper: schedule an extra silent recording sync N seconds from now.
+// Used by post-call status/note save handlers — when the rep records their
+// after-call update we know a recording just landed (or is about to), so
+// kick a sweep without waiting for the 90s tick. De-dupes so rapid clicks
+// don't trigger N parallel syncs.
+let _recKickPending = null;
+function _kickRecordingSyncSoon(delayMs) {
+  if (!window.LeadCRMNative || typeof LeadCRMNative.listRecordings !== 'function') return;
+  if (typeof syncRecordings !== 'function') return;
+  if (_recKickPending) return;
+  _recKickPending = setTimeout(async () => {
+    _recKickPending = null;
+    try {
+      const realToast = window.toast;
+      let suppressed = 0;
+      window.toast = function (msg, kind) {
+        if (kind === 'warn' || kind === 'err') return realToast(msg, kind);
+        if (typeof msg === 'string' && /✅\s*[1-9]/.test(msg)) suppressed++;
+      };
+      try { await syncRecordings({}); }
+      finally { window.toast = realToast; }
+      if (suppressed) {
+        console.log('[leadcrm] post-update sync: ' + suppressed + ' new recording(s)');
+        if (typeof toast === 'function') toast('🎙 Recording linked');
+      }
+    } catch (e) { console.warn('[leadcrm] kick sync error', e); }
+  }, Math.max(0, delayMs || 6000));
+}
+try { window._kickRecordingSyncSoon = _kickRecordingSyncSoon; } catch (_) {}
+
 function startRecordingAutoSync() {
   if (!window.LeadCRMNative || typeof LeadCRMNative.listRecordings !== 'function') {
     // Browser / PWA — nothing to auto-sync from
