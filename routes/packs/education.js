@@ -557,6 +557,94 @@ async function api_edu_enrollment_create_v2(token, payload) {
 }
 
 
+
+/**
+ * api_edu_enrollment_createCustom — sale-closure API.
+ * Used when the rep is closing the sale and entering a CUSTOM schedule
+ * (token + variable installments with their own amounts + due dates).
+ *
+ * payload:
+ *   lead_id          : INT  (required)
+ *   course_name      : TEXT
+ *   batch_name       : TEXT
+ *   branch_id        : INT  (optional)
+ *   token_amount     : NUMERIC (required)
+ *   token_due_date   : DATE     (defaults to today)
+ *   token_paid       : 0|1      (defaults to 1 — at sale closure token is usually paid)
+ *   token_method     : TEXT     (cash/upi/bank/card/cheque — defaults to upi)
+ *   token_reference  : TEXT
+ *   installments     : [{ amount, due_date, label? }, …]
+ *
+ * Creates the enrollment, inserts each row into edu_installments. Token is
+ * stored as seq=0 with status='paid' (or 'pending'). Each subsequent
+ * installment is stored as seq=1..N with status='pending'.
+ *
+ * total_amount is computed as the sum of all rows so the Students view
+ * Billed/Collected/Outstanding columns stay correct.
+ */
+async function api_edu_enrollment_createCustom(token, payload) {
+  const me = await authUser(token);
+  await _requireEducation();
+  await _ensureSchema();
+  await _ensureSchemaV3();
+  const p = payload || {};
+  if (!p.lead_id) throw new Error('lead_id required');
+  if (!Number(p.token_amount)) throw new Error('Token amount required');
+  const installments = Array.isArray(p.installments) ? p.installments : [];
+
+  const tokenAmt = Number(p.token_amount);
+  const tokenDue = p.token_due_date || new Date().toISOString().slice(0, 10);
+  const tokenPaid = p.token_paid == null ? 1 : Number(!!p.token_paid);
+
+  const totalAmount = tokenAmt + installments.reduce((s, r) => s + Number(r.amount || 0), 0);
+
+  // 1) Insert enrollment
+  const eR = await db.query(
+    `INSERT INTO edu_enrollments (lead_id, fee_plan_id, plan_snapshot, course_name, batch_name, start_date, total_amount, status, branch_id)
+     VALUES ($1, NULL, $2, $3, $4, $5, $6, 'active', $7) RETURNING id`,
+    [Number(p.lead_id),
+     JSON.stringify({ mode: 'custom', token_amount: tokenAmt, installment_count: installments.length }),
+     p.course_name || '', p.batch_name || '',
+     tokenDue, totalAmount,
+     p.branch_id ? Number(p.branch_id) : null]
+  );
+  const enrollmentId = eR.rows[0].id;
+
+  // 2) Token row — seq=0, may already be paid
+  const tokR = await db.query(
+    `INSERT INTO edu_installments (enrollment_id, seq, due_date, amount, paid_amount, status, paid_at)
+     VALUES ($1, 0, $2, $3, $4, $5, ${tokenPaid ? 'NOW()' : 'NULL'}) RETURNING id`,
+    [enrollmentId, tokenDue, tokenAmt, tokenPaid ? tokenAmt : 0, tokenPaid ? 'paid' : 'pending']
+  );
+  if (tokenPaid) {
+    await db.query(
+      `INSERT INTO edu_payments (installment_id, enrollment_id, amount, method, reference, received_by)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [tokR.rows[0].id, enrollmentId, tokenAmt,
+       p.token_method || 'upi', p.token_reference || 'TOKEN', me.id]
+    );
+  }
+
+  // 3) Installments — seq=1..N
+  for (let i = 0; i < installments.length; i++) {
+    const row = installments[i];
+    if (!row || !row.amount || !row.due_date) continue;
+    await db.query(
+      `INSERT INTO edu_installments (enrollment_id, seq, due_date, amount, paid_amount, status)
+       VALUES ($1, $2, $3, $4, 0, 'pending')`,
+      [enrollmentId, i + 1, row.due_date, Number(row.amount)]
+    );
+  }
+
+  return {
+    ok: true,
+    enrollment_id: enrollmentId,
+    total_amount: totalAmount,
+    token_paid: !!tokenPaid,
+    installments_added: installments.length
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────
 // Register
 // ─────────────────────────────────────────────────────────────────
@@ -593,5 +681,6 @@ module.exports = {
   api_edu_documents_delete, api_edu_documents_verify,
   api_edu_students_list,
   api_edu_enrollment_create_v2,
+  api_edu_enrollment_createCustom,
   _ensureSchema, _ensureSchemaV3
 };

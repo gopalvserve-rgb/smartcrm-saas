@@ -26529,3 +26529,224 @@ async function openManageBranchesModal() {
 try {
   window.openManageBranchesModal = openManageBranchesModal;
 } catch (_) {}
+
+
+// ═════════════════════════════════════════════════════════════════════
+// 🎓 Education pack — Phase 4 (Course terminology, sale-closure modal)
+// ═════════════════════════════════════════════════════════════════════
+// Pack-aware terminology swap: when Education is installed, references to
+// "Product" become "Course" in the sidebar nav label + Products page heading.
+// The underlying tenant `products` table is untouched — pure label swap so
+// Generic CRM features are not affected.
+(function _eduTerminologySwap() {
+  function apply() {
+    try {
+      const installed = (CRM.installedPacks instanceof Set) ? CRM.installedPacks : null;
+      const isEdu = installed && installed.has('education');
+      if (!isEdu) return;
+
+      // Sidebar nav link
+      document.querySelectorAll('.sidebar nav a, #bottom-nav a').forEach(a => {
+        if (a.getAttribute('href') === '#/products' || a.dataset.view === 'products') {
+          const label = a.querySelector('span:not(.nav-icon):not(.bn-ico)');
+          if (label && /Products?/.test(label.textContent)) label.textContent = 'Courses';
+          const ico = a.querySelector('.nav-icon, .bn-ico');
+          if (ico) ico.textContent = '📚';
+        }
+      });
+
+      // Settings subtab + page heading: catch any text node containing
+      // "📦 Products" and swap.
+      document.querySelectorAll('.subtab, .admin-settings-item, h2, h3').forEach(el => {
+        if (/^\s*📦\s*Products?\s*$/.test(el.textContent)) {
+          el.textContent = '📚 Courses';
+        }
+      });
+    } catch (_) {}
+  }
+  // Apply on first render + every hash change (covers re-renders)
+  document.addEventListener('DOMContentLoaded', apply);
+  window.addEventListener('hashchange', () => setTimeout(apply, 50));
+  // Periodic re-check for late renders (e.g. settings tabs)
+  setInterval(apply, 1500);
+})();
+
+// ───── Sale-closure modal — Token + custom installments ─────
+async function openCloseSaleModal(leadId, onDone) {
+  const m = h('div', { class:'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const modal = h('div', { class:'modal modal-lg' });
+  modal.appendChild(h('div', { class:'modal-head' },
+    h('h3', {}, '💰 Close Sale — Enroll student & set payment schedule'),
+    h('button', { class:'btn ghost', onclick: () => m.remove() }, '✕')
+  ));
+
+  const body = h('div', { class:'modal-body' });
+
+  // Course + batch + branch
+  const fCourse = h('input', { type:'text', placeholder:'e.g. JEE Advanced 2027' });
+  const fBatch  = h('input', { type:'text', placeholder:'e.g. Morning · 8 AM' });
+  const fBranch = h('select', {}, h('option', { value:'' }, '— No specific branch —'));
+
+  body.appendChild(h('div', { style:{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'.6rem' } },
+    h('label', {}, 'Course name', fCourse),
+    h('label', {}, 'Batch', fBatch),
+    h('label', { style:{ gridColumn:'span 2' } }, 'Branch (optional)', fBranch)
+  ));
+
+  // Token row
+  body.appendChild(h('h4', { style:{ margin:'1rem 0 .3rem 0', color:'#0c4a6e' } }, '🪙 Token amount (paid at sale closure)'));
+  const fTokenAmt    = h('input', { type:'number', placeholder:'5000', style:{ width:'100%' } });
+  const fTokenDate   = h('input', { type:'date',  value: new Date().toISOString().slice(0,10) });
+  const fTokenMethod = h('select', {}, ...['upi','cash','bank','card','cheque'].map(m => h('option', { value:m }, m.toUpperCase())));
+  const fTokenRef    = h('input', { type:'text', placeholder:'Receipt / txn id' });
+  const fTokenPaid   = h('input', { type:'checkbox', checked:'checked' });
+  body.appendChild(h('div', { class:'card', style:{ padding:'.6rem .8rem', background:'#f0f9ff' } },
+    h('div', { style:{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr', gap:'.4rem' } },
+      h('label', {}, 'Amount ₹', fTokenAmt),
+      h('label', {}, 'Due / received on', fTokenDate),
+      h('label', {}, 'Method', fTokenMethod),
+      h('label', {}, 'Reference', fTokenRef)
+    ),
+    h('label', { style:{ display:'flex', gap:'.4rem', marginTop:'.3rem', fontSize:'.85em' } }, fTokenPaid, h('span', {}, 'Token already received (record as PAID)'))
+  ));
+
+  // Installments — start with 3 rows, add/remove
+  body.appendChild(h('h4', { style:{ margin:'1rem 0 .3rem 0', color:'#0c4a6e' } }, '📅 Installment schedule (after token)'));
+  const insWrap = h('div', {});
+  body.appendChild(insWrap);
+
+  function addInsRow(prefill) {
+    const idx = insWrap.children.length + 1;
+    const fLabel = h('input', { type:'text', value: (prefill && prefill.label) || ('Installment ' + idx), style:{ flex:1 } });
+    const fAmt   = h('input', { type:'number', placeholder:'Amount ₹', value: (prefill && prefill.amount) || '', style:{ width:'120px' } });
+    const fDate  = h('input', { type:'date',   value: (prefill && prefill.due_date) || '' });
+    const row = h('div', { class:'card', style:{ padding:'.4rem .6rem', marginBottom:'.3rem', display:'flex', gap:'.3rem', alignItems:'center' } },
+      h('span', { class:'muted', style:{ minWidth:'24px' } }, '#' + idx),
+      fLabel, fAmt, fDate,
+      h('button', { class:'btn xs danger', onclick: () => { row.remove(); _renumber(); } }, '✕')
+    );
+    row._getRow = () => ({
+      label: fLabel.value, amount: Number(fAmt.value || 0), due_date: fDate.value
+    });
+    insWrap.appendChild(row);
+  }
+  function _renumber() {
+    [...insWrap.children].forEach((row, i) => {
+      const s = row.querySelector('span.muted');
+      if (s) s.textContent = '#' + (i+1);
+    });
+  }
+
+  body.appendChild(h('div', { style:{ display:'flex', gap:'.3rem', marginTop:'.3rem' } },
+    h('button', { class:'btn sm', onclick: () => addInsRow() }, '+ Add installment'),
+    h('button', { class:'btn sm', onclick: () => { insWrap.innerHTML=''; ['1','2','3'].forEach(()=>addInsRow()); } }, '↺ Reset to 3 rows'),
+    h('button', { class:'btn sm', onclick: () => {
+      // Quick fill: split remainder of (annual fee guess) into equal monthly payments
+      const guess = Number(prompt('Total annual fee (₹) to split — token will be deducted:', '60000') || 0);
+      if (!guess) return;
+      const months = Number(prompt('Number of monthly installments:', '6') || 0);
+      if (!months) return;
+      const tok = Number(fTokenAmt.value || 0);
+      const rem = guess - tok;
+      const per = Math.round((rem / months) * 100) / 100;
+      const startDate = fTokenDate.value || new Date().toISOString().slice(0,10);
+      insWrap.innerHTML = '';
+      for (let i = 0; i < months; i++) {
+        const d = new Date(startDate); d.setMonth(d.getMonth() + (i+1));
+        addInsRow({ label: 'Installment ' + (i+1), amount: per, due_date: d.toISOString().slice(0,10) });
+      }
+    } }, '⚡ Quick split')
+  ));
+
+  // Init 3 rows
+  ['1','2','3'].forEach(()=>addInsRow());
+
+  // Live total
+  const totalEl = h('div', { style:{ marginTop:'.8rem', padding:'.6rem', background:'#fef3c7', borderRadius:'6px', fontWeight:600 } }, 'Total: ₹0');
+  body.appendChild(totalEl);
+  function _recalc() {
+    const tok = Number(fTokenAmt.value || 0);
+    const ins = [...insWrap.children].reduce((s, row) => s + (row._getRow ? Number(row._getRow().amount || 0) : 0), 0);
+    totalEl.textContent = 'Total: ₹' + (tok + ins).toLocaleString('en-IN') + ' (Token ₹' + tok.toLocaleString('en-IN') + ' + Installments ₹' + ins.toLocaleString('en-IN') + ')';
+  }
+  body.addEventListener('input', _recalc);
+  setTimeout(_recalc, 100);
+
+  modal.appendChild(body);
+  modal.appendChild(h('div', { class:'actions' },
+    h('button', { class:'btn', onclick: () => m.remove() }, 'Cancel'),
+    h('button', { class:'btn primary', onclick: async () => {
+      if (!Number(fTokenAmt.value)) { toast('Token amount required', 'err'); return; }
+      const installments = [...insWrap.children]
+        .map(row => row._getRow && row._getRow())
+        .filter(r => r && r.amount > 0 && r.due_date);
+      try {
+        const r = await api('api_edu_enrollment_createCustom', {
+          lead_id: leadId,
+          course_name: fCourse.value || '',
+          batch_name: fBatch.value || '',
+          branch_id: fBranch.value ? Number(fBranch.value) : null,
+          token_amount: Number(fTokenAmt.value),
+          token_due_date: fTokenDate.value,
+          token_paid: fTokenPaid.checked ? 1 : 0,
+          token_method: fTokenMethod.value,
+          token_reference: fTokenRef.value || '',
+          installments
+        });
+        toast('✓ Sale closed · ₹' + Number(r.total_amount).toLocaleString('en-IN') + ' total, ' + r.installments_added + ' installments');
+        m.remove();
+        if (onDone) onDone();
+      } catch (e) { toast(e.message, 'err'); }
+    } }, '💰 Close Sale')
+  ));
+
+  m.appendChild(modal);
+  document.body.appendChild(m);
+
+  // Populate branches
+  try {
+    const bs = await api('api_edu_branches_list');
+    (bs || []).filter(b => Number(b.is_active)).forEach(b => fBranch.appendChild(h('option', { value: b.id }, b.name + (b.code ? ' (' + b.code + ')' : ''))));
+  } catch (_) {}
+}
+
+// Mount a "💰 Close Sale" button at the TOP of the lead modal when Education
+// pack is installed (and only when the lead is NOT yet enrolled).
+(function _wireEduCloseSaleButton() {
+  if (typeof openLeadModal !== 'function') return;
+  const _prev = openLeadModal;
+  window.openLeadModal = async function patchedForCloseSale(id) {
+    const out = await _prev.apply(this, arguments);
+    if (!id) return out;
+    setTimeout(async () => {
+      try {
+        const installed = await api('api_packs_listInstalled').catch(() => []);
+        const eduActive = (installed || []).some(p => p.pack_id === 'education' && Number(p.is_active));
+        if (!eduActive) return;
+        const body = document.querySelector('.modal-backdrop:last-of-type .modal');
+        if (!body || body.querySelector('.edu-close-sale-btn')) return;
+
+        // Skip if already enrolled
+        let enrolled = false;
+        try {
+          const e = await api('api_edu_enrollment_byLead', id);
+          enrolled = Array.isArray(e) && e.length > 0;
+        } catch (_) {}
+
+        const btn = h('button', {
+          class: 'btn primary edu-close-sale-btn',
+          style: { background: '#16a34a', borderColor: '#16a34a', marginLeft: '.4rem' },
+          onclick: () => openCloseSaleModal(id, () => { try { _prev(id); } catch (_) {} })
+        }, enrolled ? '💰 Add another enrollment' : '💰 Close Sale');
+
+        // Drop it next to the head's existing buttons / X close
+        const head = body.querySelector('.modal-head');
+        if (head) head.insertBefore(btn, head.lastChild);
+        else body.insertBefore(btn, body.firstChild);
+      } catch (_) {}
+    }, 250);
+    return out;
+  };
+})();
+
+try { window.openCloseSaleModal = openCloseSaleModal; } catch (_) {}
