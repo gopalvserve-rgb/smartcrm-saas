@@ -693,6 +693,121 @@ async function api_edu_enrollment_createCustom(token, payload) {
   };
 }
 
+
+// ───── Branch ↔ User assignments (multi-user per branch) ────────────
+async function _ensureBranchUsersSchema() {
+  try {
+    await db.query(`CREATE TABLE IF NOT EXISTS edu_branch_users (
+      id SERIAL PRIMARY KEY,
+      branch_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      role_in_branch TEXT NOT NULL DEFAULT 'agent',
+      assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (branch_id, user_id)
+    )`);
+    await db.query(`CREATE INDEX IF NOT EXISTS edu_branch_users_branch_idx ON edu_branch_users(branch_id)`);
+    await db.query(`CREATE INDEX IF NOT EXISTS edu_branch_users_user_idx   ON edu_branch_users(user_id)`);
+  } catch (_) {}
+}
+
+async function api_edu_branch_users_list(token, branchId) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV3();
+  await _ensureBranchUsersSchema();
+  if (!branchId) throw new Error('branchId required');
+  const r = await db.query(`
+    SELECT bu.user_id, bu.role_in_branch, bu.assigned_at,
+           u.name, u.email, u.role AS user_role, u.is_active
+      FROM edu_branch_users bu
+      LEFT JOIN users u ON u.id = bu.user_id
+     WHERE bu.branch_id = $1
+     ORDER BY u.role ASC, u.name ASC
+  `, [Number(branchId)]);
+  return r.rows;
+}
+
+async function api_edu_branch_users_assign(token, payload) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV3();
+  await _ensureBranchUsersSchema();
+  const p = payload || {};
+  if (!p.branch_id) throw new Error('branch_id required');
+  if (!Array.isArray(p.user_ids)) throw new Error('user_ids array required');
+
+  // Wipe existing assignments and re-insert (simpler than diff)
+  await db.query(`DELETE FROM edu_branch_users WHERE branch_id=$1`, [Number(p.branch_id)]);
+
+  let inserted = 0;
+  for (const uid of p.user_ids) {
+    if (!uid) continue;
+    try {
+      // Look up the user's CRM role to default role_in_branch
+      const uR = await db.query(`SELECT role FROM users WHERE id=$1`, [Number(uid)]);
+      const role = (uR.rows[0] && uR.rows[0].role) || 'agent';
+      await db.query(
+        `INSERT INTO edu_branch_users (branch_id, user_id, role_in_branch) VALUES ($1, $2, $3)
+         ON CONFLICT (branch_id, user_id) DO NOTHING`,
+        [Number(p.branch_id), Number(uid), role]
+      );
+      inserted++;
+    } catch (_) {}
+  }
+  return { ok: true, branch_id: Number(p.branch_id), assigned: inserted };
+}
+
+async function api_edu_branch_users_remove(token, payload) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV3();
+  await _ensureBranchUsersSchema();
+  const p = payload || {};
+  if (!p.branch_id || !p.user_id) throw new Error('branch_id and user_id required');
+  await db.query(`DELETE FROM edu_branch_users WHERE branch_id=$1 AND user_id=$2`,
+    [Number(p.branch_id), Number(p.user_id)]);
+  return { ok: true };
+}
+
+// List all branches a given user is assigned to (handy for "my branches" filter)
+async function api_edu_branches_byUser(token, userId) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV3();
+  await _ensureBranchUsersSchema();
+  if (!userId) throw new Error('userId required');
+  const r = await db.query(`
+    SELECT b.*, bu.role_in_branch
+      FROM edu_branches b
+      JOIN edu_branch_users bu ON bu.branch_id = b.id
+     WHERE bu.user_id = $1 AND b.is_active = 1
+     ORDER BY b.name
+  `, [Number(userId)]);
+  return r.rows;
+}
+
+// Extend branches list to include user counts
+async function api_edu_branches_listWithCounts(token) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV3();
+  await _ensureBranchUsersSchema();
+  const r = await db.query(`
+    SELECT b.*,
+           COUNT(bu.id) FILTER (WHERE u.role='admin')       ::int AS admin_count,
+           COUNT(bu.id) FILTER (WHERE u.role='manager')     ::int AS manager_count,
+           COUNT(bu.id) FILTER (WHERE u.role='team_leader') ::int AS lead_count,
+           COUNT(bu.id) FILTER (WHERE u.role='agent' OR u.role IS NULL OR u.role NOT IN ('admin','manager','team_leader')) ::int AS agent_count,
+           COUNT(bu.id)                                     ::int AS total_users
+      FROM edu_branches b
+      LEFT JOIN edu_branch_users bu ON bu.branch_id = b.id
+      LEFT JOIN users u             ON u.id = bu.user_id
+     GROUP BY b.id
+     ORDER BY b.is_active DESC, b.name
+  `);
+  return r.rows;
+}
+
 // ─────────────────────────────────────────────────────────────────
 // Register
 // ─────────────────────────────────────────────────────────────────
@@ -730,5 +845,7 @@ module.exports = {
   api_edu_students_list,
   api_edu_enrollment_create_v2,
   api_edu_enrollment_createCustom,
+  api_edu_branch_users_list, api_edu_branch_users_assign, api_edu_branch_users_remove,
+  api_edu_branches_byUser, api_edu_branches_listWithCounts,
   _ensureSchema, _ensureSchemaV3
 };

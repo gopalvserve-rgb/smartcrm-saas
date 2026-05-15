@@ -27244,3 +27244,258 @@ try { window.openCourseEditModal = openCourseEditModal; } catch (_) {}
   setTimeout(check, 500);
 })();
 
+
+
+// ═════════════════════════════════════════════════════════════════════
+// 🏢 Branch hierarchy — assign agents / team leaders / managers per branch
+// ═════════════════════════════════════════════════════════════════════
+// Replaces the simpler openManageBranchesModal with one that supports
+// multi-user assignment per branch (admin, manager, team_leader, agent).
+async function openManageBranchesModalV2() {
+  const m = h('div', { class:'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const modal = h('div', { class:'modal modal-lg' });
+  modal.appendChild(h('div', { class:'modal-head' },
+    h('h3', {}, '🏢 Branch hierarchy — assign users per branch'),
+    h('button', { class:'btn ghost', onclick: () => m.remove() }, '✕')
+  ));
+  const body = h('div', { class:'modal-body' });
+  modal.appendChild(body);
+
+  const refresh = async () => {
+    body.innerHTML = '<div class="muted">Loading…</div>';
+    try {
+      // Try the rich query with user counts first, fall back to plain list
+      let branches = [];
+      try { branches = await api('api_edu_branches_listWithCounts'); }
+      catch (_) { branches = await api('api_edu_branches_list'); }
+
+      const allUsers = await api('api_users_list').catch(() => []);
+
+      body.innerHTML = '';
+
+      branches.forEach(b => {
+        const card = h('div', { class:'card', style:{ padding:'.7rem .9rem', marginBottom:'.6rem' } });
+        // Header row
+        card.appendChild(h('div', { style:{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'.4rem' } },
+          h('div', {},
+            h('strong', {}, b.name + (b.code ? ' · ' + b.code : '')),
+            !Number(b.is_active) ? h('span', { style:{ marginLeft:'.4rem', background:'#fee2e2', color:'#991b1b', padding:'2px 6px', borderRadius:'4px', fontSize:'.7em' } }, 'INACTIVE') : null,
+            b.address ? h('div', { class:'muted', style:{ fontSize:'.78em' } }, '📍 ' + b.address) : null,
+            b.phone   ? h('div', { class:'muted', style:{ fontSize:'.78em' } }, '📞 ' + b.phone) : null
+          ),
+          h('div', { style:{ display:'flex', gap:'.3rem' } },
+            h('button', { class:'btn sm', onclick: () => editBranch(b) }, '✎ Edit'),
+            Number(b.is_active)
+              ? h('button', { class:'btn sm', onclick: async () => { await api('api_edu_branches_save', Object.assign({}, b, { is_active: 0 })); refresh(); } }, 'Disable')
+              : h('button', { class:'btn sm primary', onclick: async () => { await api('api_edu_branches_save', Object.assign({}, b, { is_active: 1 })); refresh(); } }, 'Enable')
+          )
+        ));
+
+        // Assigned users section
+        const usersWrap = h('div', { style:{ background:'#f8fafc', padding:'.5rem .7rem', borderRadius:'6px', marginTop:'.4rem' } });
+        card.appendChild(usersWrap);
+
+        // Stats row
+        if (typeof b.total_users === 'number') {
+          usersWrap.appendChild(h('div', { style:{ display:'flex', gap:'.4rem', marginBottom:'.4rem', fontSize:'.78em' } },
+            b.manager_count > 0 ? h('span', { style:{ background:'#ddd6fe', color:'#5b21b6', padding:'2px 6px', borderRadius:'4px' } }, '👔 ' + b.manager_count + ' manager' + (b.manager_count > 1 ? 's' : '')) : null,
+            b.lead_count > 0    ? h('span', { style:{ background:'#bfdbfe', color:'#1e40af', padding:'2px 6px', borderRadius:'4px' } }, '🎯 ' + b.lead_count + ' team lead' + (b.lead_count > 1 ? 's' : '')) : null,
+            b.agent_count > 0   ? h('span', { style:{ background:'#dcfce7', color:'#166534', padding:'2px 6px', borderRadius:'4px' } }, '👥 ' + b.agent_count + ' agent' + (b.agent_count > 1 ? 's' : '')) : null,
+            b.total_users === 0 ? h('span', { class:'muted' }, '⚠ No users assigned — leads cannot route to this branch') : null
+          ));
+        }
+
+        // List of assigned users
+        const listEl = h('div', { class:'muted', style:{ fontSize:'.85em' } }, 'Loading users…');
+        usersWrap.appendChild(listEl);
+        usersWrap.appendChild(h('button', { class:'btn sm primary', style:{ marginTop:'.4rem' }, onclick: () => openAssignUsersModal(b, allUsers, refresh) }, '+ Manage users'));
+
+        // Async load assignments
+        (async () => {
+          try {
+            const assigned = await api('api_edu_branch_users_list', b.id);
+            listEl.innerHTML = '';
+            if (!assigned.length) {
+              listEl.textContent = 'No users assigned yet. Click "Manage users" below to start.';
+              return;
+            }
+            const chips = h('div', { style:{ display:'flex', flexWrap:'wrap', gap:'.3rem' } });
+            assigned.forEach(u => {
+              const roleColor = u.user_role === 'admin' ? '#fef3c7' :
+                                u.user_role === 'manager' ? '#ddd6fe' :
+                                u.user_role === 'team_leader' ? '#bfdbfe' :
+                                '#dcfce7';
+              const roleText  = u.user_role === 'admin' ? 'Admin' :
+                                u.user_role === 'manager' ? 'Manager' :
+                                u.user_role === 'team_leader' ? 'Team Lead' :
+                                'Agent';
+              chips.appendChild(h('span', {
+                style:{ background: roleColor, padding:'3px 8px', borderRadius:'4px', fontSize:'.8em', display:'inline-flex', gap:'.3rem', alignItems:'center' },
+                title: u.email || ''
+              },
+                h('span', {}, u.name || ('User #' + u.user_id)),
+                h('span', { style:{ fontSize:'.7em', opacity:0.7 } }, roleText),
+                h('button', { style:{ background:'transparent', border:'none', cursor:'pointer', padding:'0 0 0 .3rem', color:'#dc2626', fontSize:'.8em' },
+                  title: 'Remove from branch',
+                  onclick: async (ev) => {
+                    ev.stopPropagation();
+                    if (!confirm('Remove ' + (u.name || 'this user') + ' from ' + b.name + '?')) return;
+                    await api('api_edu_branch_users_remove', { branch_id: b.id, user_id: u.user_id });
+                    refresh();
+                  }
+                }, '✕')
+              ));
+            });
+            listEl.appendChild(chips);
+          } catch (e) {
+            listEl.textContent = 'Could not load users: ' + e.message;
+          }
+        })();
+
+        body.appendChild(card);
+      });
+
+      // Add-branch form
+      const fName = h('input', { type:'text', placeholder:'New branch name (e.g. Andheri West)' });
+      const fCode = h('input', { type:'text', placeholder:'Short code (e.g. AND)' });
+      const fAddr = h('input', { type:'text', placeholder:'Address' });
+      const fPhone = h('input', { type:'text', placeholder:'Phone' });
+      body.appendChild(h('div', { class:'card', style:{ padding:'.7rem .9rem', background:'#fef9c3', borderLeft:'4px solid #f59e0b', marginTop:'.8rem' } },
+        h('h4', { style:{ margin:'0 0 .4rem' } }, '+ Add new branch'),
+        h('div', { style:{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'.4rem' } }, fName, fCode, fAddr, fPhone),
+        h('button', { class:'btn primary', style:{ marginTop:'.4rem' }, onclick: async () => {
+          if (!fName.value.trim()) { toast('Branch name required', 'err'); return; }
+          try {
+            await api('api_edu_branches_save', { name: fName.value.trim(), code: fCode.value, address: fAddr.value, phone: fPhone.value });
+            toast('Branch added — now assign users to it');
+            refresh();
+          } catch (e) { toast(e.message, 'err'); }
+        } }, '+ Save branch')
+      ));
+    } catch (e) {
+      body.innerHTML = '';
+      body.appendChild(h('div', { class:'error-box' }, e.message));
+    }
+  };
+
+  function editBranch(b) {
+    const fName = h('input', { type:'text', value: b.name });
+    const fCode = h('input', { type:'text', value: b.code || '' });
+    const fAddr = h('input', { type:'text', value: b.address || '' });
+    const fPhone = h('input', { type:'text', value: b.phone || '' });
+    const m2 = h('div', { class:'modal-backdrop' });
+    const card = h('div', { class:'modal' });
+    card.appendChild(h('div', { class:'modal-head' }, h('h3', {}, 'Edit branch'), h('button', { class:'btn ghost', onclick: () => m2.remove() }, '✕')));
+    card.appendChild(h('div', { class:'modal-body' },
+      h('label', {}, 'Name', fName),
+      h('label', {}, 'Code', fCode),
+      h('label', {}, 'Address', fAddr),
+      h('label', {}, 'Phone', fPhone)
+    ));
+    card.appendChild(h('div', { class:'actions' },
+      h('button', { class:'btn', onclick: () => m2.remove() }, 'Cancel'),
+      h('button', { class:'btn primary', onclick: async () => {
+        try {
+          await api('api_edu_branches_save', { id: b.id, name: fName.value.trim(), code: fCode.value, address: fAddr.value, phone: fPhone.value });
+          toast('Saved'); m2.remove(); refresh();
+        } catch (e) { toast(e.message, 'err'); }
+      } }, 'Save')
+    ));
+    m2.appendChild(card);
+    document.body.appendChild(m2);
+  }
+
+  m.appendChild(modal);
+  document.body.appendChild(m);
+  refresh();
+}
+
+// Multi-user assignment modal — admin/manager/team_leader/agent
+async function openAssignUsersModal(branch, allUsers, onDone) {
+  const m = h('div', { class:'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const modal = h('div', { class:'modal modal-lg' });
+  modal.appendChild(h('div', { class:'modal-head' },
+    h('h3', {}, '👥 Assign users to ' + branch.name),
+    h('button', { class:'btn ghost', onclick: () => m.remove() }, '✕')
+  ));
+
+  const body = h('div', { class:'modal-body' });
+  body.appendChild(h('p', { class:'muted', style:{ fontSize:'.85em', marginTop:0 } },
+    'Tick the users who should have access to this branch. Their role badge comes from their global CRM role — change a user\'s role in Settings → Users. You can assign one user to multiple branches.'));
+
+  // Get currently assigned user IDs
+  let assigned = [];
+  try { assigned = await api('api_edu_branch_users_list', branch.id); }
+  catch (_) {}
+  const assignedSet = new Set(assigned.map(a => Number(a.user_id)));
+
+  // Group users by role
+  const grouped = { admin: [], manager: [], team_leader: [], agent: [] };
+  (allUsers || []).filter(u => Number(u.is_active)).forEach(u => {
+    const r = u.role || 'agent';
+    if (grouped[r]) grouped[r].push(u);
+    else grouped.agent.push(u);
+  });
+
+  const roleMeta = {
+    admin:       { label: '👑 Admins',       bg:'#fef3c7', color:'#92400e' },
+    manager:     { label: '👔 Managers',     bg:'#ddd6fe', color:'#5b21b6' },
+    team_leader: { label: '🎯 Team Leaders', bg:'#bfdbfe', color:'#1e40af' },
+    agent:       { label: '👥 Agents',       bg:'#dcfce7', color:'#166534' }
+  };
+
+  const checkboxes = [];
+  ['admin','manager','team_leader','agent'].forEach(role => {
+    const users = grouped[role] || [];
+    if (!users.length) return;
+    const meta = roleMeta[role];
+    body.appendChild(h('h4', { style:{ margin:'.8rem 0 .3rem', color: meta.color } }, meta.label + ' (' + users.length + ')'));
+    const list = h('div', { style:{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(220px, 1fr))', gap:'.3rem' } });
+    users.forEach(u => {
+      const cb = h('input', { type:'checkbox', value: u.id, 'data-uid': u.id });
+      if (assignedSet.has(Number(u.id))) cb.checked = true;
+      checkboxes.push(cb);
+      list.appendChild(h('label', {
+        style:{ display:'flex', alignItems:'center', gap:'.4rem', padding:'.4rem .5rem', background: meta.bg, borderRadius:'4px', cursor:'pointer', fontSize:'.88em' }
+      },
+        cb, h('span', {}, u.name || u.email)
+      ));
+    });
+    body.appendChild(list);
+  });
+
+  // Bulk-select chips
+  body.appendChild(h('div', { style:{ marginTop:'.8rem', display:'flex', gap:'.3rem', flexWrap:'wrap' } },
+    h('button', { class:'btn sm', onclick: () => checkboxes.forEach(c => c.checked = true) }, '✓ Select all'),
+    h('button', { class:'btn sm', onclick: () => checkboxes.forEach(c => c.checked = false) }, '✕ Clear all'),
+    ...['admin','manager','team_leader','agent'].map(r => h('button', { class:'btn sm', onclick: () => {
+      checkboxes.forEach(c => {
+        const u = (allUsers || []).find(x => Number(x.id) === Number(c.dataset.uid));
+        if (u && (u.role || 'agent') === r) c.checked = true;
+      });
+    } }, '+ All ' + r.replace('_', ' ') + 's'))
+  ));
+
+  modal.appendChild(body);
+  modal.appendChild(h('div', { class:'actions' },
+    h('button', { class:'btn', onclick: () => m.remove() }, 'Cancel'),
+    h('button', { class:'btn primary', onclick: async () => {
+      const ids = checkboxes.filter(c => c.checked).map(c => Number(c.value));
+      try {
+        const r = await api('api_edu_branch_users_assign', { branch_id: branch.id, user_ids: ids });
+        toast('✓ ' + r.assigned + ' user(s) assigned to ' + branch.name);
+        m.remove();
+        if (onDone) onDone();
+      } catch (e) { toast(e.message, 'err'); }
+    } }, '💾 Save assignments')
+  ));
+
+  m.appendChild(modal);
+  document.body.appendChild(m);
+}
+
+// Swap the older openManageBranchesModal to use the v2 implementation
+try {
+  window.openManageBranchesModal = openManageBranchesModalV2;
+  window.openAssignUsersModal = openAssignUsersModal;
+} catch (_) {}
