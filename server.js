@@ -2311,6 +2311,40 @@ setInterval(() => {
 setTimeout(() => _runNurtureForAllTenants().catch(() => {}), 45_000);
 console.log('[nurture] sequence worker started');
 
+// ── Background: per-tenant Education fee-reminder worker ────────────────
+// Runs hourly. For tenants with the Education pack active, picks up
+// installments due in 15 / 7 / 1 / 0 days and sends one reminder each
+// via WhatsApp (preferred) or email. Idempotent — never reminds twice
+// for the same bucket.
+async function _runEduRemindersForAllTenants() {
+  let rows = [];
+  try {
+    const r = await controlDb.query(
+      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500`
+    );
+    rows = r.rows;
+  } catch (e) { console.warn('[eduReminder] tenant list failed:', e.message); return; }
+  let worker;
+  try { worker = require('./utils/eduReminderWorker'); } catch (e) { return; }
+  if (!worker.tick) return;
+  for (const row of rows) {
+    let t; try { t = await tenantPoolMod.findActiveTenant(row.slug); } catch (_) { continue; }
+    if (!t) continue;
+    const pool = tenantPoolMod.poolFor(t);
+    if (!pool) continue;
+    try {
+      await tenantDb.tenantStorage.run({ pool, tenant: t, slug: row.slug },
+        () => worker.tick()
+      );
+    } catch (e) { console.warn(`[eduReminder] ${row.slug} tick failed:`, e.message); }
+  }
+}
+setInterval(() => {
+  _runEduRemindersForAllTenants().catch(e => console.error('[eduReminder] cycle failed:', e.message));
+}, Number(process.env.EDU_REMINDER_INTERVAL_MS || 60 * 60_000));   // hourly
+setTimeout(() => _runEduRemindersForAllTenants().catch(() => {}), 90_000);
+console.log('[eduReminder] worker started — hourly tick');
+
 // ── Background: per-tenant AI Call Summary worker ──────────────────────
 // aiCallSummary.startWorker() is only wired in server.tenant.js. Without
 // this, SaaS-tenant recordings never get auto-processed by Gemini — they

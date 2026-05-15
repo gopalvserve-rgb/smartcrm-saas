@@ -4051,6 +4051,75 @@ async function openLeadModal(id) {
     });
   }
 
+  // ---- Education pack: Fees panel for this lead ----
+  // Only renders when the Education pack is installed. Backend throws
+  // 'pack not active' if not — we catch and silently skip.
+  if (id) {
+    const eduFeesCard = h('div', { class: 'card', style: { marginTop: '.75rem' } });
+    const eduHeader = h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '.4rem' } },
+      h('h4', { style: { margin: 0 } }, '🎓 Fees & Installments'),
+      h('button', { class: 'btn sm primary', type: 'button', onclick: () => openCreateEnrollmentModal(lead, () => openLeadModal(id)) }, '+ Enroll')
+    );
+    const eduList = h('div', { class: 'muted', style: { fontSize: '.85rem' } }, 'Loading…');
+    eduFeesCard.appendChild(eduHeader);
+    eduFeesCard.appendChild(eduList);
+    api('api_edu_enrollment_byLead', id).then(enrolls => {
+      eduList.innerHTML = '';
+      if (!enrolls || !enrolls.length) {
+        eduList.appendChild(h('div', { class: 'muted', style: { fontSize: '.85rem' } }, 'No fee plan attached. Tap “+ Enroll” to set up an installment schedule.'));
+        body.appendChild(eduFeesCard);
+        return;
+      }
+      enrolls.forEach(e => {
+        const totalDue = (e.installments || []).reduce((sum, i) => sum + Math.max(0, Number(i.amount) + Number(i.late_fee) - Number(i.paid_amount)), 0);
+        const totalPaid = (e.installments || []).reduce((sum, i) => sum + Number(i.paid_amount), 0);
+        const head = h('div', { style: { display: 'flex', alignItems: 'baseline', gap: '.5rem', marginTop: '.3rem' } },
+          h('strong', {}, e.course_name || 'Enrollment #' + e.id),
+          e.batch_name ? h('span', { class: 'muted', style: { fontSize: '.78rem' } }, '· ' + e.batch_name) : null,
+          h('span', { style: { marginLeft: 'auto', color: '#16a34a', fontWeight: 600 } }, '₹' + totalPaid.toLocaleString('en-IN') + ' paid'),
+          h('span', { style: { color: '#dc2626', fontWeight: 600 } }, '· ₹' + totalDue.toLocaleString('en-IN') + ' due')
+        );
+        eduFeesCard.appendChild(head);
+        const tbl = h('table', { style: { width: '100%', fontSize: '.85rem', marginTop: '.3rem' } },
+          h('thead', {}, h('tr', {},
+            h('th', { style: { textAlign: 'left' } }, '#'),
+            h('th', { style: { textAlign: 'left' } }, 'Due'),
+            h('th', { style: { textAlign: 'right' } }, 'Amount'),
+            h('th', { style: { textAlign: 'right' } }, 'Paid'),
+            h('th', { style: { textAlign: 'left' } }, 'Status'),
+            h('th', {}, '')
+          )),
+          h('tbody', {}, ...(e.installments || []).map(i => {
+            const statusColor = { paid: '#16a34a', partial: '#f59e0b', due: '#64748b', overdue: '#dc2626' }[i.status] || '#64748b';
+            const isOverdue = i.status !== 'paid' && new Date(i.due_date) < new Date();
+            return h('tr', {},
+              h('td', {}, '#' + i.seq),
+              h('td', { style: { color: isOverdue ? '#dc2626' : 'inherit', fontWeight: isOverdue ? 600 : 400 } },
+                String(i.due_date).slice(0, 10)),
+              h('td', { style: { textAlign: 'right' } }, '₹' + Number(i.amount).toLocaleString('en-IN')),
+              h('td', { style: { textAlign: 'right', color: '#16a34a' } }, Number(i.paid_amount) ? '₹' + Number(i.paid_amount).toLocaleString('en-IN') : '—'),
+              h('td', {},
+                h('span', { style: { background: statusColor, color: '#fff', padding: '.1rem .4rem', borderRadius: '4px', fontSize: '.74rem' } },
+                  isOverdue && i.status !== 'paid' ? 'overdue' : i.status)),
+              h('td', { style: { textAlign: 'right' } },
+                i.status === 'paid' ? null :
+                  h('button', { class: 'btn xs', type: 'button', onclick: () => openMarkPaidModal(i, () => openLeadModal(id)) }, '₹ Mark paid')
+              )
+            );
+          }))
+        );
+        eduFeesCard.appendChild(tbl);
+      });
+      body.appendChild(eduFeesCard);
+    }).catch(err => {
+      // Pack not installed = silently skip
+      if (/not active/i.test(String(err.message || ''))) return;
+      eduList.innerHTML = '';
+      eduList.appendChild(h('div', { class: 'muted', style: { fontSize: '.85rem' } }, 'Fees panel unavailable: ' + err.message));
+      body.appendChild(eduFeesCard);
+    });
+  }
+
   // Customer / campaign-supplied fields are read-only for non-admins on
   // existing leads. Reps can update status/notes/follow-up/etc. but cannot
   // overwrite what the customer typed in the form, the source, the GCLID,
@@ -24422,6 +24491,130 @@ VIEWS.edufees = async (view) => {
     view.appendChild(tbl);
   }
 };
+
+
+// ─────────────────────────────────────────────────────────────────────
+// Education pack: Create-enrollment + Mark-paid modals
+// ─────────────────────────────────────────────────────────────────────
+async function openCreateEnrollmentModal(lead, onSaved) {
+  let plans = [];
+  try { plans = await api('api_edu_feePlans_list'); }
+  catch (e) {
+    if (/not active/i.test(String(e.message || ''))) {
+      toast('Education pack is not installed. Go to Settings → Industry Packs.', 'warn');
+    } else { toast(e.message, 'err'); }
+    return;
+  }
+  const active = (plans || []).filter(p => Number(p.is_active));
+  if (!active.length) { toast('No active fee plans. Add one from Fee Collection → Fee plan templates.', 'warn'); return; }
+
+  const planSel = h('select', { style: { width: '100%' } },
+    ...active.map(p => h('option', { value: p.id, 'data-amt': p.total_amount },
+      p.name + ' · ₹' + Number(p.total_amount).toLocaleString('en-IN') + ' · ' + p.num_installments + 'x'))
+  );
+  const totalInput = h('input', { type: 'number', step: '0.01', value: active[0].total_amount });
+  planSel.addEventListener('change', () => {
+    const opt = planSel.options[planSel.selectedIndex];
+    totalInput.value = opt && opt.dataset.amt || '';
+  });
+  const courseInput = h('input', { type: 'text', placeholder: 'e.g. JEE Advanced 2027', value: lead.course_name || '' });
+  const batchInput  = h('input', { type: 'text', placeholder: 'e.g. Morning batch · 8 AM', value: lead.batch_name || '' });
+  const startInput  = h('input', { type: 'date', value: new Date().toISOString().slice(0, 10) });
+
+  const m = h('div', { class: 'modal-backdrop',
+    onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const modal = h('div', { class: 'modal' });
+  modal.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, '🎓 Create enrollment'),
+    h('button', { class: 'btn ghost', onclick: () => m.remove() }, '✕')
+  ));
+  const body = h('div', { style: { padding: '0 0 .5rem' } });
+  function row(lbl, ctrl, hint) {
+    const r = h('div', { style: { marginBottom: '.6rem' } },
+      h('label', { style: { display: 'block', fontWeight: 600, fontSize: '.85rem', marginBottom: '.2rem' } }, lbl),
+      ctrl
+    );
+    if (hint) r.appendChild(h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '.15rem' } }, hint));
+    return r;
+  }
+  body.appendChild(row('Fee plan', planSel, 'Auto-generates installment schedule on save'));
+  body.appendChild(row('Total amount (₹)', totalInput, 'Override the plan default if needed'));
+  body.appendChild(row('Course', courseInput));
+  body.appendChild(row('Batch', batchInput));
+  body.appendChild(row('Start date', startInput, 'First installment is due on this date'));
+  modal.appendChild(body);
+  modal.appendChild(h('div', { class: 'actions' },
+    h('button', { class: 'btn', onclick: () => m.remove() }, 'Cancel'),
+    h('button', { class: 'btn primary', onclick: async () => {
+      try {
+        await api('api_edu_enrollment_create', {
+          lead_id: lead.id,
+          fee_plan_id: Number(planSel.value),
+          total_amount: Number(totalInput.value) || 0,
+          course_name: courseInput.value.trim(),
+          batch_name: batchInput.value.trim(),
+          start_date: startInput.value
+        });
+        toast('Enrolled — installment schedule created', 'ok');
+        m.remove();
+        if (onSaved) onSaved();
+      } catch (e) { toast(e.message, 'err'); }
+    } }, '💾 Enroll + generate schedule')
+  ));
+  m.appendChild(modal);
+  document.body.appendChild(m);
+}
+
+async function openMarkPaidModal(installment, onSaved) {
+  const due = Math.max(0, Number(installment.amount) + Number(installment.late_fee) - Number(installment.paid_amount));
+  const amtInput = h('input', { type: 'number', step: '0.01', value: due });
+  const modeSel = h('select', {},
+    ...['cash','upi','bank','card','cheque','other'].map(m => h('option', { value: m }, m.toUpperCase())));
+  const receiptInput = h('input', { type: 'text', placeholder: 'Optional' });
+  const noteInput = h('textarea', { rows: 2, placeholder: 'Optional note' });
+
+  const m = h('div', { class: 'modal-backdrop',
+    onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const modal = h('div', { class: 'modal' });
+  modal.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, '💰 Mark installment paid'),
+    h('button', { class: 'btn ghost', onclick: () => m.remove() }, '✕')
+  ));
+  const body = h('div', { style: { padding: '0 0 .5rem' } });
+  function row(lbl, ctrl) {
+    return h('div', { style: { marginBottom: '.6rem' } },
+      h('label', { style: { display: 'block', fontWeight: 600, fontSize: '.85rem', marginBottom: '.2rem' } }, lbl),
+      ctrl);
+  }
+  body.appendChild(h('div', { class: 'muted', style: { fontSize: '.82rem', marginBottom: '.6rem' } },
+    'Installment #' + installment.seq + ' · due ' + String(installment.due_date).slice(0, 10) +
+    ' · pending ₹' + due.toLocaleString('en-IN')));
+  body.appendChild(row('Amount received (₹)', amtInput));
+  body.appendChild(row('Mode', modeSel));
+  body.appendChild(row('Receipt number', receiptInput));
+  body.appendChild(row('Note', noteInput));
+  modal.appendChild(body);
+  modal.appendChild(h('div', { class: 'actions' },
+    h('button', { class: 'btn', onclick: () => m.remove() }, 'Cancel'),
+    h('button', { class: 'btn primary', onclick: async () => {
+      try {
+        const r = await api('api_edu_installment_markPaid', {
+          installment_id: installment.id,
+          amount: Number(amtInput.value) || 0,
+          mode: modeSel.value,
+          receipt_no: receiptInput.value.trim(),
+          note: noteInput.value.trim()
+        });
+        toast('Saved — installment ' + r.status, 'ok');
+        m.remove();
+        if (onSaved) onSaved();
+      } catch (e) { toast(e.message, 'err'); }
+    } }, '💾 Save payment')
+  ));
+  m.appendChild(modal);
+  document.body.appendChild(m);
+}
+try { window.openCreateEnrollmentModal = openCreateEnrollmentModal; window.openMarkPaidModal = openMarkPaidModal; } catch (_) {}
 
 
 (function bootCopilot() {
