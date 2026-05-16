@@ -316,15 +316,23 @@ async function warmCache() {
     api('api_packs_listInstalled').catch(() => [])
   ]);
   CRM.cache = { statuses, sources, products, users, customFields };
-  // Build the active-pack Set. Only is_active=1 rows count.
+  // Build the active-pack Set from TWO sources, either of which resolves:
+  //   1. api_packs_listInstalled (canonical, requires valid auth token)
+  //   2. brand.INDUSTRY_PACK (public, self-heals — added 2026-05-16 hotfix)
+  // The brand fallback is critical: when a tenant token expires,
+  // api_packs_listInstalled returns 401 and the pack list stays empty,
+  // which used to hide Education/RealEstate sidebar items even on tenants
+  // that legitimately had those packs. brand always works.
   try {
     const set = new Set();
     (packs || []).forEach(p => {
       if (p && p.pack_id && Number(p.is_active) === 1) set.add(String(p.pack_id));
     });
+    if (brand && brand.INDUSTRY_PACK) set.add(String(brand.INDUSTRY_PACK));
     CRM.installedPacks = set;
   } catch (_) {
     CRM.installedPacks = new Set();
+    if (brand && brand.INDUSTRY_PACK) CRM.installedPacks.add(String(brand.INDUSTRY_PACK));
   }
   // Merge: admin cfg wins for keys it has, but for non-admin users (where
   // api_admin_getConfig returned {}) we fall back to brand so colours apply.

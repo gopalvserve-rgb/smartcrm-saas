@@ -117,6 +117,68 @@ async function api_company_info(token) {
 // themed UI even though api_admin_getConfig rejects them.
 async function api_admin_brand(_token) {
   const cfg = await _getAllConfig();
+
+  // ── Industry pack detection (with self-heal) ─────────────────────
+  // The SPA's _navAnchor filter hides Education/RealEstate sidebar items
+  // unless this tenant has the matching pack installed. We resolve the
+  // active pack here (in the PUBLIC, no-auth endpoint) so the visibility
+  // logic works even when the user's tenant token is expired — that was
+  // the whole reason testfv / showcase-edu stayed on the Generic sidebar.
+  //
+  // Resolution order:
+  //   1. installed_packs row in tenant DB where is_active=1
+  //   2. Slug pattern (showcase-edu → education, showcase-re → realestate)
+  //   3. audit_log entry from tenant creation (industry_pack field)
+  // If 2 or 3 yields a hit and 1 was empty, install the pack on-the-fly
+  // so subsequent calls find it via path 1.
+  let industryPack = '';
+  try {
+    const db = require('../db/pg');
+    const r = await db.query(`SELECT pack_id FROM installed_packs WHERE is_active = 1 ORDER BY installed_at DESC LIMIT 1`);
+    if (r && r.rows && r.rows[0]) industryPack = String(r.rows[0].pack_id || '');
+  } catch (_) {}
+
+  if (!industryPack) {
+    // Look up by slug pattern / audit_log
+    let expected = null;
+    try {
+      const db = require('../db/pg');
+      const store = db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore();
+      const slug = store && store.slug ? String(store.slug) : null;
+      if (slug === 'showcase-edu') expected = 'education';
+      else if (slug === 'showcase-re') expected = 'realestate';
+      else if (slug) {
+        try {
+          const control = require('../control/db');
+          const ar = await control.query(
+            `SELECT detail FROM audit_log
+                WHERE event = 'tenant.created_manually'
+                  AND detail::jsonb->>'slug' = $1
+                ORDER BY created_at DESC LIMIT 1`,
+            [slug]
+          );
+          const det = ar.rows && ar.rows[0] && ar.rows[0].detail;
+          const parsed = (typeof det === 'string') ? JSON.parse(det) : det;
+          if (parsed && parsed.industry_pack && parsed.industry_pack !== 'generic') {
+            expected = String(parsed.industry_pack);
+          }
+        } catch (e) {
+          console.warn('[admin_brand] audit_log lookup failed:', e.message);
+        }
+      }
+      if (expected) {
+        try {
+          const fw = require('./packs/_framework');
+          await fw.installPack(expected, {});
+          industryPack = expected;
+          console.log('[admin_brand] self-healed: installed', expected, 'on', slug);
+        } catch (e) {
+          console.warn('[admin_brand] auto-install failed for', slug, expected, '—', e.message);
+        }
+      }
+    } catch (_) {}
+  }
+
   return {
     BRAND_PRIMARY_COLOR:  cfg.BRAND_PRIMARY_COLOR  || '',
     BRAND_ACCENT_COLOR:   cfg.BRAND_ACCENT_COLOR   || '',
@@ -128,7 +190,9 @@ async function api_admin_brand(_token) {
     // Demo tenant flags — read by the SPA so the showcase tour shows up
     // for every role (api_admin_getConfig rejects non-admin users).
     DEMO_TENANT:          cfg.DEMO_TENANT          || '',
-    DEMO_TOUR_ENABLED:    cfg.DEMO_TOUR_ENABLED    || ''
+    DEMO_TOUR_ENABLED:    cfg.DEMO_TOUR_ENABLED    || '',
+    // Active industry pack — used by SPA _navAnchor filter
+    INDUSTRY_PACK:        industryPack             || ''
   };
 }
 
