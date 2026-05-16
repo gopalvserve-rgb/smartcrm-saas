@@ -30389,37 +30389,46 @@ try {
     if (typeof original !== 'function') return;
     VIEWS[viewId] = async function patched(view) {
       const r = await original.apply(this, arguments);
-      // Inject the Connect button at the top of the page if no pages yet
+      // ALWAYS inject a Connect / Manage strip at the top of every Social
+      // view, regardless of whether any pages are connected. Previously this
+      // was conditional on api_social_pages_list returning empty — admins
+      // who already had pages saw only a tiny 'Manage' link and missed it.
       try {
-        const pages = await api('api_social_pages_list').catch(() => []);
-        if (!pages.length) {
-          const banner = h('div', {
-            style: { background:'#fff7ed', border:'1px solid #fed7aa', color:'#9a3412',
-                     padding:'.7rem 1rem', borderRadius:'8px', marginBottom:'.8rem',
-                     display:'flex', alignItems:'center', justifyContent:'space-between', gap:'.6rem', flexWrap:'wrap' }
-          },
-            h('div', {},
-              h('strong', {}, '⚠ No Facebook pages connected for Social Hub.'),
-              h('div', { style:{ fontSize:'.9em', marginTop:'.2rem' } },
-                'This is separate from your Lead Sync integration — connect once to enable Inbox, Comments, Publisher and Ad Reports.')
-            ),
-            h('button', { class:'btn primary', onclick: () => openSocialConnectModal() }, '🔗 Connect Now')
-          );
-          const pageEl = view.querySelector('.page');
-          if (pageEl) pageEl.insertBefore(banner, pageEl.firstChild);
-          else view.insertBefore(banner, view.firstChild);
-        } else {
-          // Add a small "Manage connections" link to the page header
-          const pageHeader = view.querySelector('.page > h2');
-          if (pageHeader && !pageHeader.parentNode.querySelector('.social-manage-conn')) {
-            const link = h('button', {
-              class: 'btn sm ghost social-manage-conn',
-              style: { marginLeft:'auto' },
-              onclick: () => openSocialConnectModal()
-            }, '⚙ Manage connections');
-            pageHeader.parentNode.appendChild(link);
+        if (view.querySelector('.social-connect-strip')) return r;
+        const strip = h('div', {
+          class: 'social-connect-strip',
+          style: {
+            background: 'linear-gradient(135deg,#fef3c7,#fff7ed)',
+            border: '1px solid #fcd34d',
+            padding: '.7rem 1rem',
+            borderRadius: '8px',
+            marginBottom: '.8rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '.6rem',
+            flexWrap: 'wrap'
           }
-        }
+        },
+          h('div', {},
+            h('strong', { style: { color: '#92400e' } }, '🔗 Facebook & Instagram for Social Hub'),
+            h('div', { class: 'muted', style: { fontSize: '.9em', marginTop: '.2rem' } },
+              'Separate from your Lead Sync setup. Click Connect to grant Messenger / IG DM / posts / comments / ads_read on the pages you choose.')
+          ),
+          h('div', { style: { display: 'flex', gap: '.4rem' } },
+            h('button', { class: 'btn primary', onclick: () => openSocialConnectModal() }, '🔗 Connect / Manage'),
+            h('button', { class: 'btn ghost', onclick: async () => {
+              try {
+                const pages = await api('api_social_pages_list');
+                if (!pages.length) toast('No pages connected yet. Click Connect to start.', 'warn');
+                else toast(pages.length + ' page(s) connected · ' + pages.filter(p => p.instagram_business_id).length + ' IG');
+              } catch (e) { toast(e.message, 'err'); }
+            } }, '👁 Status')
+          )
+        );
+        const pageEl = view.querySelector('.page');
+        if (pageEl) pageEl.insertBefore(strip, pageEl.firstChild);
+        else view.insertBefore(strip, view.firstChild);
       } catch (_) {}
       return r;
     };
