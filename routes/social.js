@@ -96,7 +96,7 @@ async function _pagesFromConfig() {
 
 async function _findPage(pageId) {
   await _ensureSocialPagesSchema();
-  const r = await db.query(`SELECT page_id, page_name, access_token, instagram_business_id, ig_username FROM social_pages WHERE page_id = $1 LIMIT 1`, [String(pageId)]);
+  const r = await db.query(`SELECT page_id, page_name, access_token, instagram_business_id, ig_username FROM social_pages WHERE page_id = $1::text LIMIT 1`, [String(pageId)]);
   return (r.rows && r.rows[0]) || null;
 }
 
@@ -309,7 +309,7 @@ async function api_social_fb_disconnect(token, pageId) {
   await authUser(token);
   await _ensureSocialPagesSchema();
   if (pageId) {
-    await db.query(`DELETE FROM social_pages WHERE page_id = $1`, [String(pageId)]);
+    await db.query(`DELETE FROM social_pages WHERE page_id = $1::text`, [String(pageId)]);
   } else {
     // Disconnect ALL social pages (admin "remove integration")
     await db.query(`DELETE FROM social_pages`);
@@ -322,7 +322,7 @@ async function api_social_fb_toggleMonitor(token, payload) {
   await _ensureSocialPagesSchema();
   const p = payload || {};
   if (!p.page_id) throw new Error('page_id required');
-  await db.query(`UPDATE social_pages SET is_monitored = $1 WHERE page_id = $2`,
+  await db.query(`UPDATE social_pages SET is_monitored = $1 WHERE page_id = $2::text`,
     [p.monitor === false ? 0 : 1, String(p.page_id)]);
   return { ok: true };
 }
@@ -374,7 +374,7 @@ async function api_social_inbox_messages(token, payload) {
     SELECT id, direction, sender_name, sender_handle, text, attachments,
            message_id, lead_id, read_at, sent_by, created_at
       FROM social_messages
-     WHERE platform = $1 AND page_id = $2 AND thread_id = $3
+     WHERE platform = $1::text AND page_id = $2::text AND thread_id = $3::text
      ORDER BY created_at ASC
      LIMIT 500
   `, [String(p.platform), String(p.page_id), String(p.thread_id)]);
@@ -382,7 +382,7 @@ async function api_social_inbox_messages(token, payload) {
   try {
     await db.query(`
       UPDATE social_messages SET read_at = NOW()
-       WHERE platform = $1 AND page_id = $2 AND thread_id = $3
+       WHERE platform = $1::text AND page_id = $2::text AND thread_id = $3::text
          AND direction = 'in' AND read_at IS NULL
     `, [String(p.platform), String(p.page_id), String(p.thread_id)]);
   } catch (_) {}
@@ -486,7 +486,7 @@ async function _handleInboundMessage(body) {
       // Dedupe by message_id
       if (mid) {
         try {
-          const dup = await db.query(`SELECT 1 FROM social_messages WHERE message_id = $1 LIMIT 1`, [mid]);
+          const dup = await db.query(`SELECT 1 FROM social_messages WHERE message_id = $1::text LIMIT 1`, [mid]);
           if (dup.rows && dup.rows[0]) continue;
         } catch (_) {}
       }
@@ -618,7 +618,7 @@ async function api_social_comments_byPost(token, payload) {
     SELECT id, comment_id, parent_id, author_id, author_name, author_handle,
            text, verb, is_hidden, is_from_us, replied_at, replied_by, created_at
       FROM social_comments
-     WHERE post_id = $1
+     WHERE post_id = $1::text
      ORDER BY created_at ASC
      LIMIT 500
   `, [String(p.post_id)]);
@@ -649,14 +649,14 @@ async function api_social_comments_reply(token, payload) {
 
   // Mark the parent as replied, and persist our reply row
   try {
-    await db.query(`UPDATE social_comments SET replied_at = NOW(), replied_by = $1 WHERE comment_id = $2`,
+    await db.query(`UPDATE social_comments SET replied_at = NOW(), replied_by = $1 WHERE comment_id = $2::text`,
       [me.id, String(p.comment_id)]);
   } catch (_) {}
 
   // Best-effort: fetch the parent to get the post_id + platform for our row
   let parentRow = null;
   try {
-    const pr = await db.query(`SELECT platform, page_id, post_id FROM social_comments WHERE comment_id=$1 LIMIT 1`, [String(p.comment_id)]);
+    const pr = await db.query(`SELECT platform, page_id, post_id FROM social_comments WHERE comment_id=$1::text LIMIT 1`, [String(p.comment_id)]);
     parentRow = pr.rows && pr.rows[0];
   } catch (_) {}
 
@@ -694,7 +694,7 @@ async function api_social_comments_hide(token, payload) {
   const j = await r.json();
   if (j.error) throw new Error('Hide failed: ' + j.error.message);
   try {
-    await db.query(`UPDATE social_comments SET is_hidden = $1 WHERE comment_id = $2`,
+    await db.query(`UPDATE social_comments SET is_hidden = $1 WHERE comment_id = $2::text`,
       [hide ? 1 : 0, String(p.comment_id)]);
   } catch (_) {}
   return { ok: true, is_hidden: hide };
@@ -713,7 +713,7 @@ async function api_social_comments_delete(token, payload) {
   const j = await r.json();
   if (j.error) throw new Error('Delete failed: ' + j.error.message);
   try {
-    await db.query(`UPDATE social_comments SET verb='remove' WHERE comment_id = $1`, [String(p.comment_id)]);
+    await db.query(`UPDATE social_comments SET verb='remove' WHERE comment_id = $1::text`, [String(p.comment_id)]);
   } catch (_) {}
   return { ok: true };
 }
@@ -750,14 +750,14 @@ async function _handleInboundComment(body) {
       if (!commentId) continue;
       // Dedupe
       try {
-        const dup = await db.query(`SELECT 1 FROM social_comments WHERE comment_id = $1 LIMIT 1`, [commentId]);
+        const dup = await db.query(`SELECT 1 FROM social_comments WHERE comment_id = $1::text LIMIT 1`, [commentId]);
         if (dup.rows && dup.rows[0]) {
           // If verb='edited' update text
           if (v.verb === 'edited') {
-            await db.query(`UPDATE social_comments SET text = $1, verb='edited' WHERE comment_id = $2`,
+            await db.query(`UPDATE social_comments SET text = $1, verb='edited' WHERE comment_id = $2::text`,
               [String(v.message || ''), commentId]);
-          } else if (v.verb === 'remove' || v.verb === 'remove') {
-            await db.query(`UPDATE social_comments SET verb='remove' WHERE comment_id = $1`, [commentId]);
+          } else if (v.verb === 'remove') {
+            await db.query(`UPDATE social_comments SET verb='remove' WHERE comment_id = $1::text`, [commentId]);
           }
           continue;
         }
@@ -1101,7 +1101,7 @@ async function api_social_ads_accounts_save(token, payload) {
 async function api_social_ads_accounts_delete(token, adAccountId) {
   await authUser(token);
   await _ensureSchemaS4();
-  await db.query(`DELETE FROM social_ad_accounts WHERE ad_account_id = $1`, [String(adAccountId)]);
+  await db.query(`DELETE FROM social_ad_accounts WHERE ad_account_id = $1::text`, [String(adAccountId)]);
   return { ok: true };
 }
 
@@ -1109,7 +1109,7 @@ async function api_social_ads_accounts_delete(token, adAccountId) {
 // Prefers the account's own stored token; falls back to ANY page's
 // access_token (page tokens with ads_read perm work for owned ad accounts).
 async function _adAccountToken(adAccountId) {
-  const r = await db.query(`SELECT access_token FROM social_ad_accounts WHERE ad_account_id = $1 LIMIT 1`, [adAccountId]);
+  const r = await db.query(`SELECT access_token FROM social_ad_accounts WHERE ad_account_id = $1::text LIMIT 1`, [adAccountId]);
   if (r.rows && r.rows[0] && r.rows[0].access_token) return r.rows[0].access_token;
   const pages = await _pagesFromConfig();
   const withToken = pages.find(p => p.access_token);
@@ -1196,7 +1196,7 @@ async function _pullAdAccountInsights(adAccountId, dateFrom, dateTo) {
     } catch (e) { console.warn('[ads] daily upsert failed:', e.message); }
   }
 
-  await db.query(`UPDATE social_ad_accounts SET last_synced_at = NOW() WHERE ad_account_id = $1`, [acct]);
+  await db.query(`UPDATE social_ad_accounts SET last_synced_at = NOW() WHERE ad_account_id = $1::text`, [acct]);
   return { ok: true, account: acct, saved };
 }
 
