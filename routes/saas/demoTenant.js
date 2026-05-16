@@ -1239,6 +1239,58 @@ async function _seedEducationDemoData(pool, adminUserId, slugOverride) {
     await fw.installPack('education', { userId: adminUserId });
   });
 
+  // ── Seed a realistic Course catalog (mapped to the generic 'products' table)
+  // Each course has price + auto-fills Token/EMI defaults via config.edu_course_extras
+  // so the 📚 Courses page + 💰 Close Sale auto-fill flow are demo-ready.
+  const DEMO_COURSES = [
+    { name: 'JEE Advanced 2027',        price: 95000, token: 10000, emi: 8500,  count: 10, image_url: '' },
+    { name: 'NEET Premium 2027',        price: 110000,token: 15000, emi: 9500,  count: 10, image_url: '' },
+    { name: 'CAT Prep — Online',        price: 45000, token:  5000, emi: 5000,  count: 8,  image_url: '' },
+    { name: 'IELTS Premium',            price: 35000, token:  5000, emi: 3000,  count: 10, image_url: '' },
+    { name: 'GMAT Online',              price: 60000, token: 10000, emi: 5000,  count: 10, image_url: '' },
+    { name: 'Class 11 Foundation',      price: 80000, token: 10000, emi: 7000,  count: 10, image_url: '' },
+    { name: 'Class 12 Crash Course',    price: 50000, token:  5000, emi: 4500,  count: 10, image_url: '' }
+  ];
+  const courseExtras = {};
+  for (const c of DEMO_COURSES) {
+    let courseId;
+    try {
+      const existing = await pool.query(`SELECT id FROM products WHERE LOWER(name)=LOWER($1) LIMIT 1`, [c.name]);
+      if (existing.rows && existing.rows[0]) {
+        courseId = existing.rows[0].id;
+        await pool.query(`UPDATE products SET price=$1, image_url=$2 WHERE id=$3`, [c.price, c.image_url, courseId]);
+      } else {
+        const r = await pool.query(
+          `INSERT INTO products (name, description, price, gst_pct, image_url, is_active)
+           VALUES ($1, $2, $3, 18, $4, 1) RETURNING id`,
+          [c.name, c.name + ' — coaching programme', c.price, c.image_url]
+        );
+        courseId = r.rows[0].id;
+      }
+      courseExtras[String(courseId)] = { course_name: c.name, token: c.token, emi: c.emi, count: c.count };
+    } catch (e) {
+      console.warn('[demo-edu] could not seed course "' + c.name + '": ' + e.message);
+    }
+  }
+  // Persist EMI defaults so the 💰 Close Sale picker auto-fills
+  try {
+    const cfgRow = await pool.query(`SELECT 1 FROM config WHERE key='edu_course_extras' LIMIT 1`);
+    if (cfgRow.rows && cfgRow.rows.length) {
+      await pool.query(`UPDATE config SET value=$1 WHERE key='edu_course_extras'`, [JSON.stringify(courseExtras)]);
+    } else {
+      await pool.query(`INSERT INTO config (key, value) VALUES ('edu_course_extras', $1)`, [JSON.stringify(courseExtras)]);
+    }
+  } catch (_) {}
+
+  // Per-course margin defaults so the 💎 Revenue tab shows net revenue out of the box
+  try {
+    const marginExtras = {};
+    Object.entries(courseExtras).forEach(([id, ex]) => {
+      marginExtras[id] = Object.assign({}, ex, { margin_type: 'percent', margin_value: 65 });
+    });
+    await pool.query(`UPDATE config SET value=$1 WHERE key='edu_course_extras'`, [JSON.stringify(marginExtras)]);
+  } catch (_) {}
+
   // Pull plan IDs we just seeded
   const plansR = await pool.query(`SELECT id, total_amount, num_installments, interval_days FROM edu_fee_plans ORDER BY id`);
   const plans = plansR.rows || [];
@@ -1248,7 +1300,7 @@ async function _seedEducationDemoData(pool, adminUserId, slugOverride) {
   // showcase leads so the lead-modal shows the 🎓 panel for known names.
   const leadsR = await pool.query(`SELECT id, name FROM leads ORDER BY id ASC LIMIT 10`);
   const leads = leadsR.rows || [];
-  const courses = ['JEE Advanced 2027', 'NEET 2026', 'CAT Prep', 'Class 11 Foundation', 'Class 12 Crash', 'IELTS Premium', 'GMAT Online'];
+  const courses = DEMO_COURSES.map(c => c.name);
   const batches = ['Morning · 8 AM', 'Afternoon · 2 PM', 'Evening · 6 PM', 'Weekend Only'];
 
   let enrolled = 0, installmentRows = 0, payments = 0;
@@ -1456,7 +1508,12 @@ async function api_saas_demo_seedEducationPack(token) {
   if (!pool) throw new Error('Could not connect to demo tenant DB');
 
   const adminUserId = await _resetAdminPassword(pool, conf.email, conf.password);
-  const summary = await _seedEducationDemoData(pool, adminUserId, conf.slug);
+
+  // Always seed the generic base (leads, calls, recordings, WA threads) so the
+  // Education showcase has rich enrollable leads even on a fresh tenant.
+  const baseSummary = await _wipeAndSeed(pool, adminUserId);
+  const eduSummary  = await _seedEducationDemoData(pool, adminUserId, conf.slug);
+  const summary = Object.assign({}, baseSummary && baseSummary.counts || {}, eduSummary || {});
 
   const baseUrl = (process.env.PUBLIC_BASE_URL || 'https://crm.smartcrmsolution.com').replace(/\/+$/, '');
   const url = `${baseUrl}/t/${tenant.slug}/#/edufees`;
@@ -1494,7 +1551,11 @@ async function api_saas_demo_seedRealEstatePack(token) {
   if (!pool) throw new Error('Could not connect to demo tenant DB');
 
   const adminUserId = await _resetAdminPassword(pool, conf.email, conf.password);
-  const summary = await _seedRealEstateDemoData(pool, adminUserId, conf.slug);
+
+  // Same flow as Education — base wipe+seed first, then RE pack data on top.
+  const baseSummary = await _wipeAndSeed(pool, adminUserId);
+  const reSummary   = await _seedRealEstateDemoData(pool, adminUserId, conf.slug);
+  const summary = Object.assign({}, baseSummary && baseSummary.counts || {}, reSummary || {});
 
   const baseUrl = (process.env.PUBLIC_BASE_URL || 'https://crm.smartcrmsolution.com').replace(/\/+$/, '');
   const url = `${baseUrl}/t/${tenant.slug}/#/reinventory`;

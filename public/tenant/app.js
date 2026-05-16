@@ -297,7 +297,7 @@ function parseHashView() {
 }
 
 async function warmCache() {
-  const [statuses, sources, products, users, customFields, cfg, mods, brand] = await Promise.all([
+  const [statuses, sources, products, users, customFields, cfg, mods, brand, packs] = await Promise.all([
     api('api_statuses_list'),
     api('api_sources_list'),
     api('api_products_list'),
@@ -307,9 +307,25 @@ async function warmCache() {
     api('api_modules_active').catch(() => null),
     // Public brand endpoint — works for non-admins too. We merge it under
     // any admin-config we already have so themes apply for every user role.
-    api('api_admin_brand').catch(() => ({}))
+    api('api_admin_brand').catch(() => ({})),
+    // Industry packs installed for THIS tenant. Drives the requiresPack
+    // filter in _navAnchor so Edu/RE tabs only show when their pack is
+    // active. Without this load CRM.installedPacks stays undefined and
+    // every requiresPack item gets hidden — which is why Education
+    // showcase was rendering as Generic.
+    api('api_packs_listInstalled').catch(() => [])
   ]);
   CRM.cache = { statuses, sources, products, users, customFields };
+  // Build the active-pack Set. Only is_active=1 rows count.
+  try {
+    const set = new Set();
+    (packs || []).forEach(p => {
+      if (p && p.pack_id && Number(p.is_active) === 1) set.add(String(p.pack_id));
+    });
+    CRM.installedPacks = set;
+  } catch (_) {
+    CRM.installedPacks = new Set();
+  }
   // Merge: admin cfg wins for keys it has, but for non-admin users (where
   // api_admin_getConfig returned {}) we fall back to brand so colours apply.
   const mergedCfg = Object.assign({}, brand || {}, cfg || {});
