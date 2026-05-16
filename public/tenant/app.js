@@ -1280,7 +1280,16 @@ const VIEWS = {};
  * ============================================================ */
 
 VIEWS.dashboard = async (view) => {
+  // Concurrent-call guard — boot can race (navigateTo from boot + a
+  // hashchange listener can both fire VIEWS.dashboard) and both calls
+  // pass view.innerHTML = '' then await api_dashboard_get, then both
+  // appendChild their head — producing two '🏠 Dashboard' headings.
+  // Stamp a fresh render ID, then bail at every await boundary if the
+  // ID changed (someone newer is rendering).
+  const renderToken = (view.__renderToken = (view.__renderToken || 0) + 1);
+  const _stale = () => view.__renderToken !== renderToken;
   await ensureChartJs();
+  if (_stale()) return;
   view.innerHTML = '';
   CRM._dashEditMode = CRM._dashEditMode || false;
 
@@ -1289,6 +1298,7 @@ VIEWS.dashboard = async (view) => {
   let layoutResp;
   try { layoutResp = await api('api_dashboard_get'); }
   catch (e) { layoutResp = { widgets: DEFAULT_DASH_LAYOUT, is_default: true }; }
+  if (_stale()) return;
   let widgets = (layoutResp.widgets || DEFAULT_DASH_LAYOUT).slice();
 
   // ONE-TIME auto-add of call-activity widgets for users whose saved
