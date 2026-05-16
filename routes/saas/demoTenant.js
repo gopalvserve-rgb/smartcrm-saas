@@ -36,6 +36,34 @@ const { requireSuperAdmin } = require('./superAdminAuth');
 const DEMO_SLUG = 'showcase';
 const DEMO_EMAIL = 'demo@smartcrm.in';
 const DEMO_PASSWORD = 'Showcase@123';
+
+// ── Per-industry showcase tenants ────────────────────────────────
+// Three separate tenants so each vertical has its own demo workspace
+// with the right pack installed + appropriate seed data, not one
+// shared tenant with toggles.
+const INDUSTRY_SHOWCASES = {
+  generic: {
+    slug: 'showcase',
+    email: 'demo@smartcrm.in',
+    password: 'Showcase@123',
+    org_name: 'Showcase CRM (Generic)',
+    pack: null
+  },
+  education: {
+    slug: 'showcase-edu',
+    email: 'demo-edu@smartcrm.in',
+    password: 'Showcase@123',
+    org_name: 'Brilliant Coaching Institute (Demo)',
+    pack: 'education'
+  },
+  realestate: {
+    slug: 'showcase-re',
+    email: 'demo-re@smartcrm.in',
+    password: 'Showcase@123',
+    org_name: 'Skyline Developers (Demo)',
+    pack: 'realestate'
+  }
+};
 const DEMO_ORG_NAME = 'SmartCRM Showcase Co.';
 
 // ---- Demo data dictionaries ------------------------------------------------
@@ -266,9 +294,14 @@ function _phone() { return '+91 9' + String(_randInt(100000000, 999999999)); }
 function _daysAgo(d) { const x = new Date(); x.setDate(x.getDate() - d); return x.toISOString(); }
 function _daysFromNow(d) { const x = new Date(); x.setDate(x.getDate() + d); return x.toISOString(); }
 
-async function _findOrCreateDemoTenant(operatorId, operatorEmail) {
+async function _findOrCreateDemoTenant(operatorId, operatorEmail, conf) {
+  // Default to the generic showcase config when not provided.
+  conf = conf || INDUSTRY_SHOWCASES.generic;
+  const targetSlug = conf.slug || DEMO_SLUG;
+  const targetEmail = conf.email || DEMO_EMAIL;
+  const targetOrg = conf.org_name || DEMO_ORG_NAME;
   // Look for existing showcase tenant first.
-  const existing = await control.findOneBy('tenants', 'slug', DEMO_SLUG);
+  const existing = await control.findOneBy('tenants', 'slug', targetSlug);
   if (existing) return existing;
 
   // Pick a default package — prefer one flagged is_default=1, else first.
@@ -303,29 +336,32 @@ async function _findOrCreateDemoTenant(operatorId, operatorEmail) {
   // invoice, etc.).
   const signupId = await control.insert('signups', {
     name: 'Demo Admin',
-    email: DEMO_EMAIL,
+    email: targetEmail,
     mobile: '+919999999999',
-    org_name: DEMO_ORG_NAME,
+    org_name: targetOrg,
     package_id: packageId,
-    desired_slug: DEMO_SLUG,
+    desired_slug: targetSlug,
     status: 'pending',
     metadata: JSON.stringify({
-      demo_seed: true, created_by: operatorEmail, created_by_id: operatorId
+      demo_seed: true, industry: conf.pack || 'generic',
+      created_by: operatorEmail, created_by_id: operatorId
     })
   });
   await provisioning.provisionFromSignup(signupId);
 
-  const t = await control.findOneBy('tenants', 'slug', DEMO_SLUG);
+  const t = await control.findOneBy('tenants', 'slug', targetSlug);
   if (!t) throw new Error('Provisioning succeeded but tenant row not found — please retry.');
   return t;
 }
 
-async function _resetAdminPassword(pool) {
-  const hash = bcrypt.hashSync(DEMO_PASSWORD, 10);
+async function _resetAdminPassword(pool, emailOverride, passwordOverride) {
+  const _email = emailOverride || DEMO_EMAIL;
+  const _password = passwordOverride || DEMO_PASSWORD;
+  const hash = bcrypt.hashSync(_password, 10);
   // Try to update by email; if no row, insert.
   const r = await pool.query(
     `UPDATE users SET name = 'Demo Admin', password_hash = $1, role = 'admin', is_active = 1, designation = 'Founder' WHERE email = $2 RETURNING id`,
-    [hash, DEMO_EMAIL]
+    [hash, _email]
   );
   if (r.rows.length) return Number(r.rows[0].id);
   const ins = await pool.query(
@@ -333,7 +369,7 @@ async function _resetAdminPassword(pool) {
      VALUES ('Demo Admin', $1, $2, 'admin', 1, 'Founder', NOW())
      ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash
      RETURNING id`,
-    [DEMO_EMAIL, hash]
+    [_email, hash]
   );
   return Number(ins.rows[0].id);
 }
@@ -1165,10 +1201,11 @@ async function _runInShowcase(pool, fn) {
   return db.tenantStorage.run({ pool, slug: DEMO_SLUG }, fn);
 }
 
-async function _seedEducationDemoData(pool, adminUserId) {
+async function _seedEducationDemoData(pool, adminUserId, slugOverride) {
+  const showcaseSlug = slugOverride || DEMO_SLUG;
   // Install the pack (idempotent — seeds 3 fee plans, 4 custom fields,
   // 7 statuses if not already there).
-  await _runInShowcase(pool, async () => {
+  await db.tenantStorage.run({ pool, slug: showcaseSlug }, async () => {
     const fw = require('../packs/_framework');
     require('../packs/education'); // ensure registered
     await fw.installPack('education', { userId: adminUserId });
@@ -1239,8 +1276,9 @@ async function _seedEducationDemoData(pool, adminUserId) {
   return { enrolled, installments: installmentRows, payments };
 }
 
-async function _seedRealEstateDemoData(pool, adminUserId) {
-  await _runInShowcase(pool, async () => {
+async function _seedRealEstateDemoData(pool, adminUserId, slugOverride) {
+  const showcaseSlug = slugOverride || DEMO_SLUG;
+  await db.tenantStorage.run({ pool, slug: showcaseSlug }, async () => {
     const fw = require('../packs/_framework');
     require('../packs/realestate'); // ensure registered
     await fw.installPack('realestate', { userId: adminUserId });
@@ -1384,12 +1422,13 @@ async function _seedRealEstateDemoData(pool, adminUserId) {
  */
 async function api_saas_demo_seedEducationPack(token) {
   const me = await requireSuperAdmin(token);
-  const tenant = await _findOrCreateDemoTenant(me.id, me.email);
+  const conf = INDUSTRY_SHOWCASES.education;
+  const tenant = await _findOrCreateDemoTenant(me.id, me.email, conf);
   const pool = tenantPool.poolFor(tenant);
   if (!pool) throw new Error('Could not connect to demo tenant DB');
 
-  const adminUserId = await _resetAdminPassword(pool);
-  const summary = await _seedEducationDemoData(pool, adminUserId);
+  const adminUserId = await _resetAdminPassword(pool, conf.email, conf.password);
+  const summary = await _seedEducationDemoData(pool, adminUserId, conf.slug);
 
   const baseUrl = (process.env.PUBLIC_BASE_URL || 'https://crm.smartcrmsolution.com').replace(/\/+$/, '');
   const url = `${baseUrl}/t/${tenant.slug}/#/edufees`;
@@ -1404,8 +1443,8 @@ async function api_saas_demo_seedEducationPack(token) {
     ok: true,
     slug: tenant.slug,
     url,
-    email: DEMO_EMAIL,
-    password: DEMO_PASSWORD,
+    email: conf.email,
+    password: conf.password,
     pack: 'education',
     counts: summary,
     showcase_links: {
@@ -1421,12 +1460,13 @@ async function api_saas_demo_seedEducationPack(token) {
  */
 async function api_saas_demo_seedRealEstatePack(token) {
   const me = await requireSuperAdmin(token);
-  const tenant = await _findOrCreateDemoTenant(me.id, me.email);
+  const conf = INDUSTRY_SHOWCASES.realestate;
+  const tenant = await _findOrCreateDemoTenant(me.id, me.email, conf);
   const pool = tenantPool.poolFor(tenant);
   if (!pool) throw new Error('Could not connect to demo tenant DB');
 
-  const adminUserId = await _resetAdminPassword(pool);
-  const summary = await _seedRealEstateDemoData(pool, adminUserId);
+  const adminUserId = await _resetAdminPassword(pool, conf.email, conf.password);
+  const summary = await _seedRealEstateDemoData(pool, adminUserId, conf.slug);
 
   const baseUrl = (process.env.PUBLIC_BASE_URL || 'https://crm.smartcrmsolution.com').replace(/\/+$/, '');
   const url = `${baseUrl}/t/${tenant.slug}/#/reinventory`;
@@ -1441,8 +1481,8 @@ async function api_saas_demo_seedRealEstatePack(token) {
     ok: true,
     slug: tenant.slug,
     url,
-    email: DEMO_EMAIL,
-    password: DEMO_PASSWORD,
+    email: conf.email,
+    password: conf.password,
     pack: 'realestate',
     counts: summary,
     showcase_links: {

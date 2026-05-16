@@ -710,9 +710,9 @@ async function openShowcaseDemoModal() {
   const result = h('div', { id: 'demo-result', style: { display: 'none', marginTop: '.6rem' } });
   body.appendChild(result);
 
-  const runBtn = h('button', { class: 'btn primary', id: 'demo-run-btn', onclick: () => _runDemoSeed() }, '✨ Create / refresh demo');
-  const eduBtn = h('button', { class: 'btn', style: { background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' }, onclick: () => _runIndustrySeed('education') }, '🎓 Seed Education demo');
-  const reBtn  = h('button', { class: 'btn', style: { background: '#dbeafe', color: '#1e40af', borderColor: '#bfdbfe' }, onclick: () => _runIndustrySeed('realestate') }, '🏢 Seed Real Estate demo');
+  const runBtn = h('button', { class: 'btn primary', id: 'demo-run-btn', onclick: () => _runDemoSeed() }, '✨ Generic CRM demo (showcase)');
+  const eduBtn = h('button', { class: 'btn', style: { background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' }, onclick: () => _runIndustrySeed('education') }, '🎓 Education demo (showcase-edu)');
+  const reBtn  = h('button', { class: 'btn', style: { background: '#dbeafe', color: '#1e40af', borderColor: '#bfdbfe' }, onclick: () => _runIndustrySeed('realestate') }, '🏢 Real Estate demo (showcase-re)');
   const cancelBtn = h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Close');
   body.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: '.5rem', marginTop: '1rem', flexWrap: 'wrap' } },
     h('div', { style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap' } }, eduBtn, reBtn),
@@ -754,7 +754,7 @@ async function openShowcaseDemoModal() {
       status.style.background = '#fee2e2'; status.style.color = '#991b1b';
       status.textContent = '❌ ' + e.message;
       btn.disabled = false;
-      btn.textContent = label === '🎓 Education' ? '🎓 Seed Education demo' : '🏢 Seed Real Estate demo';
+      btn.textContent = label === '🎓 Education' ? '🔄 Re-seed Education demo' : '🔄 Re-seed Real Estate demo';
     }
   }
 
