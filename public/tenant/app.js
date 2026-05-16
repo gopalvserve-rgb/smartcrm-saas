@@ -29867,11 +29867,12 @@ try {
         const tb = h('tbody', {});
         posts.forEach(p => {
           const targets = Array.isArray(p.targets) ? p.targets : (typeof p.targets === 'string' ? JSON.parse(p.targets) : []);
+          const results = Array.isArray(p.results) ? p.results : (typeof p.results === 'string' ? JSON.parse(p.results || '[]') : []);
           const statusColors = { draft:'#6b7280', scheduled:'#d97706', publishing:'#4f46e5', published:'#16a34a', failed:'#dc2626' };
           const when = p.published_at ? 'Posted ' + new Date(p.published_at).toLocaleString()
                      : p.scheduled_at ? 'Scheduled ' + new Date(p.scheduled_at).toLocaleString()
                      : 'Saved ' + new Date(p.created_at).toLocaleString();
-          tb.appendChild(h('tr', {},
+          const mainRow = h('tr', {},
             h('td', {}, h('span', {
               style: { background: statusColors[p.status] || '#6b7280', color:'#fff', padding:'.15rem .5rem', borderRadius:'4px', fontSize:'.8em' }
             }, p.status)),
@@ -29879,7 +29880,27 @@ try {
             h('td', { style:{ maxWidth:'400px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' } }, p.text || '(no text)'),
             h('td', { class:'muted', style:{ fontSize:'.85em' } }, when),
             h('td', {},
-              h('button', { class:'btn sm', onclick: () => openComposer(p, render) }, p.status === 'published' ? '👁 View' : '✎'),
+              p.status === 'failed' || p.status === 'published'
+                ? h('button', { class:'btn sm', onclick: () => {
+                    const detail = tb.querySelector('tr[data-detail-for="' + p.id + '"]');
+                    if (detail) detail.remove();
+                    else mainRow.parentNode.insertBefore(detailRow, mainRow.nextSibling);
+                  } }, p.status === 'failed' ? '⚠ Why?' : '✓ Detail')
+                : h('button', { class:'btn sm', onclick: () => openComposer(p, render) }, '✎'),
+              ' ',
+              p.status === 'failed'
+                ? h('button', { class:'btn sm primary', onclick: async () => {
+                    if (!confirm('Retry publishing to all targets now?')) return;
+                    try {
+                      const r = await api('api_social_posts_publishNow', {
+                        id: p.id, text: p.text, media_url: p.media_url, media_type: p.media_type, targets
+                      });
+                      if (r.ok) toast('Published');
+                      else toast('Retry also failed — check details', 'warn');
+                      render();
+                    } catch (e) { toast(e.message, 'err'); }
+                  } }, '🔁 Retry')
+                : null,
               ' ',
               h('button', { class:'btn sm danger', onclick: async () => {
                 if (!confirm('Delete this post entry from the queue? (Already-published posts on FB/IG are NOT deleted.)')) return;
@@ -29887,7 +29908,33 @@ try {
                 catch (e) { toast(e.message, 'err'); }
               } }, '🗑')
             )
-          ));
+          );
+
+          // Expandable detail row — shows per-target results / errors
+          const detailCells = [];
+          if (results.length) {
+            const detailWrap = h('div', { style:{ padding:'.5rem .7rem' } },
+              h('div', { style:{ fontWeight:'600', marginBottom:'.3rem' } }, 'Per-target outcome:'),
+              ...results.map(r => h('div', {
+                style: { padding:'.3rem .5rem', marginBottom:'.2rem', borderRadius:'4px',
+                         background: r.ok ? '#dcfce7' : '#fee2e2',
+                         color: r.ok ? '#166534' : '#991b1b' }
+              },
+                (r.platform === 'instagram' ? '📷' : '🅵') + ' ' + (r.page_id || '') + ' — ',
+                r.ok ? ('✅ Posted (id: ' + (r.post_id || '?') + ')')
+                     : ('❌ ' + (r.error || 'unknown error'))
+              ))
+            );
+            detailCells.push(h('td', { colspan: '5', style:{ background:'rgba(0,0,0,.03)' } }, detailWrap));
+          } else if (p.error) {
+            detailCells.push(h('td', { colspan: '5', style:{ background:'#fee2e2', color:'#991b1b', padding:'.5rem' } },
+              '❌ ' + p.error));
+          } else {
+            detailCells.push(h('td', { colspan: '5', style:{ padding:'.5rem', color:'#6b7280' } },
+              'No per-target detail recorded.'));
+          }
+          const detailRow = h('tr', { dataset: { detailFor: p.id } }, ...detailCells);
+          tb.appendChild(mainRow);
         });
         tbl.appendChild(tb);
         card.appendChild(tbl);
