@@ -35,6 +35,17 @@ async function metaEvent(req, res) {
     const body = req.body || {};
     await db.insert('webhook_log', { source: 'meta', payload: body, processed: 0 });
 
+    // ── Social Inbox path: Messenger/IG DMs ─────────────────────
+    // Meta delivers DM events with entry.messaging[] (Messenger) or
+    // entry.changes[].field === 'messages' (IG via webhook subscription).
+    // Fire-and-forget so leadgen processing continues even if this fails.
+    try {
+      const social = require('./social');
+      if (typeof social._handleInboundMessage === 'function') {
+        await social._handleInboundMessage(body);
+      }
+    } catch (e) { console.warn('[meta] social inbound failed:', e.message); }
+
     const entries = body.entry || [];
     for (const entry of entries) {
       for (const change of (entry.changes || [])) {

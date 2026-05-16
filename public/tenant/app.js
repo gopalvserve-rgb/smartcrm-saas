@@ -955,6 +955,7 @@ const NAV_GROUPS = [
     { id: 'tatreport',     label: 'TAT report',      icon: '⏱️', roles: ['admin', 'manager', 'team_leader'] }
   ] },
   { label: 'Workspace', icon: '💬', items: [
+    { id: 'socialinbox', label: 'Social Inbox', icon: '📱', countKey: 'social_unread' },
     { id: 'whatsbot',   label: 'WhatsBot',   icon: '💬' },
     { id: 'aibot',      label: 'AI Bot',     icon: '🤖', roles: ['admin', 'manager'] },
     { id: 'quotations', label: 'Quotations', icon: '📄' },
@@ -29468,4 +29469,163 @@ try {
     window.eduParentsBlock = eduParentsBlock;
   } catch (_) {}
 
+})();
+
+
+// ═════════════════════════════════════════════════════════════════════
+// SOCIAL INBOX — Phase S1 SPA (Messenger + Instagram DMs)
+// Two-pane chat UI mirroring the WhatsApp inbox layout. Available to every
+// tenant — no pack gate.
+// ═════════════════════════════════════════════════════════════════════
+(function socialInboxUI() {
+  if (typeof VIEWS === 'undefined' || typeof h !== 'function') return;
+
+  VIEWS.socialinbox = async (view) => {
+    view.innerHTML = '';
+    const wrap = h('div', { class:'page' });
+
+    // Filter bar
+    const platformSel = h('select', { style:{ padding:'.4rem .6rem' } },
+      h('option', { value:'' }, 'All channels'),
+      h('option', { value:'messenger' }, 'Messenger only'),
+      h('option', { value:'instagram' }, 'Instagram only')
+    );
+    const pageSel = h('select', { style:{ padding:'.4rem .6rem' } }, h('option', { value:'' }, 'All pages'));
+    const unreadOnly = h('input', { type:'checkbox' });
+    const reloadBtn = h('button', { class:'btn sm', onclick: () => loadThreads() }, '🔄 Reload');
+    const head = h('div', { style:{ display:'flex', alignItems:'center', gap:'.6rem', marginBottom:'.8rem', flexWrap:'wrap' } },
+      h('h2', { style:{ margin:0, flex:'1 1 auto' } }, '📱 Social Inbox'),
+      platformSel, pageSel,
+      h('label', {}, unreadOnly, ' Unread only'),
+      reloadBtn
+    );
+    wrap.appendChild(head);
+
+    const grid = h('div', { style:{ display:'grid', gridTemplateColumns:'minmax(260px,360px) 1fr', gap:'1rem' } });
+    const threadCol = h('div', { class:'card', style:{ maxHeight:'70vh', overflowY:'auto' } });
+    const chatCol   = h('div', { class:'card' });
+    grid.appendChild(threadCol);
+    grid.appendChild(chatCol);
+    wrap.appendChild(grid);
+    view.appendChild(wrap);
+
+    let pages = [];
+    let activeThread = null;
+    try {
+      pages = await api('api_social_pages_list');
+      pages.forEach(p => pageSel.appendChild(
+        h('option', { value: p.page_id }, p.page_name + (p.is_monitored ? '' : ' (not monitored)'))
+      ));
+    } catch (e) {
+      threadCol.innerHTML = '';
+      threadCol.appendChild(h('div', { class:'error-box' }, e.message));
+    }
+
+    platformSel.onchange = () => loadThreads();
+    pageSel.onchange = () => loadThreads();
+    unreadOnly.onchange = () => loadThreads();
+
+    async function loadThreads() {
+      threadCol.innerHTML = '';
+      threadCol.appendChild(h('div', { class:'loading' }, 'Loading conversations…'));
+      try {
+        const filters = {};
+        if (platformSel.value) filters.platform = platformSel.value;
+        if (pageSel.value)     filters.page_id  = pageSel.value;
+        if (unreadOnly.checked) filters.unread  = true;
+        const threads = await api('api_social_inbox_threads', filters);
+        threadCol.innerHTML = '';
+        if (!threads.length) {
+          threadCol.appendChild(h('div', { class:'empty', style:{ padding:'2rem', textAlign:'center' } },
+            'No conversations yet. Messages from your connected Facebook Pages and Instagram Business accounts will appear here.'));
+          return;
+        }
+        threads.forEach(t => {
+          const isActive = activeThread &&
+            t.platform === activeThread.platform &&
+            t.page_id === activeThread.page_id &&
+            t.thread_id === activeThread.thread_id;
+          const platformIcon = t.platform === 'instagram' ? '📷' : '💬';
+          const item = h('div', {
+            style: {
+              padding:'.6rem', borderBottom:'1px solid rgba(0,0,0,.06)',
+              cursor:'pointer', display:'flex', flexDirection:'column', gap:'.2rem',
+              background: isActive ? 'rgba(99,102,241,.12)' : 'transparent'
+            },
+            onclick: () => { activeThread = t; openThread(t); loadThreads(); }
+          },
+            h('div', { style:{ display:'flex', alignItems:'center', justifyContent:'space-between' } },
+              h('span', { style:{ fontWeight:'600' } }, platformIcon + ' ' + (t.sender_name || t.sender_handle || t.thread_id)),
+              Number(t.unread) > 0 ? h('span', {
+                style:{ background:'#dc2626', color:'#fff', borderRadius:'10px', padding:'.05rem .45rem', fontSize:'.75em' }
+              }, t.unread) : null
+            ),
+            h('div', { class:'muted', style:{ fontSize:'.85em', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' } },
+              (t.last_direction === 'out' ? '↩ ' : '') + (t.last_text || '(no preview)'))
+          );
+          threadCol.appendChild(item);
+        });
+      } catch (e) {
+        threadCol.innerHTML = '';
+        threadCol.appendChild(h('div', { class:'error-box' }, e.message));
+      }
+    }
+
+    async function openThread(t) {
+      chatCol.innerHTML = '';
+      chatCol.appendChild(h('div', { class:'loading' }, 'Loading messages…'));
+      try {
+        const msgs = await api('api_social_inbox_messages', { platform: t.platform, page_id: t.page_id, thread_id: t.thread_id });
+        chatCol.innerHTML = '';
+        chatCol.appendChild(h('div', { style:{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'.5rem' } },
+          h('h4', { style:{ margin:0 } }, (t.platform === 'instagram' ? '📷 ' : '💬 ') + (t.sender_name || t.sender_handle || t.thread_id)),
+          h('span', { class:'muted', style:{ fontSize:'.85em' } }, t.platform.toUpperCase())
+        ));
+        const stream = h('div', { style:{ maxHeight:'55vh', overflowY:'auto', padding:'.5rem', background:'rgba(0,0,0,.02)', borderRadius:'6px' } });
+        msgs.forEach(m => {
+          const bubble = h('div', {
+            style: {
+              maxWidth:'70%',
+              marginBottom:'.4rem', padding:'.5rem .7rem', borderRadius:'10px',
+              background: m.direction === 'out' ? 'rgba(99,102,241,.18)' : '#fff',
+              border:'1px solid rgba(0,0,0,.06)',
+              alignSelf: m.direction === 'out' ? 'flex-end' : 'flex-start',
+              marginLeft: m.direction === 'out' ? 'auto' : '0'
+            }
+          },
+            h('div', {}, m.text || (m.attachments ? '📎 [attachment]' : '')),
+            h('div', { class:'muted', style:{ fontSize:'.7em', marginTop:'.2rem' } },
+              new Date(m.created_at).toLocaleString())
+          );
+          stream.appendChild(bubble);
+        });
+        chatCol.appendChild(stream);
+
+        // Reply box
+        const reply = h('textarea', { rows:'2', placeholder:'Type a reply…', style:{ width:'100%', marginTop:'.5rem' } });
+        const sendBtn = h('button', { class:'btn primary', style:{ marginTop:'.4rem' }, onclick: async () => {
+          const text = reply.value.trim();
+          if (!text) return;
+          try {
+            await api('api_social_inbox_send', { platform: t.platform, page_id: t.page_id, thread_id: t.thread_id, text });
+            reply.value = '';
+            openThread(t);
+            loadThreads();
+          } catch (e) { toast(e.message, 'err'); }
+        } }, '✈ Send');
+        chatCol.appendChild(reply);
+        chatCol.appendChild(sendBtn);
+
+        // Scroll to bottom
+        setTimeout(() => { stream.scrollTop = stream.scrollHeight; }, 50);
+      } catch (e) {
+        chatCol.innerHTML = '';
+        chatCol.appendChild(h('div', { class:'error-box' }, e.message));
+      }
+    }
+
+    chatCol.appendChild(h('div', { class:'muted', style:{ padding:'2rem', textAlign:'center' } },
+      'Pick a conversation from the left to view & reply.'));
+    loadThreads();
+  };
 })();

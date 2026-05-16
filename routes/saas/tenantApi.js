@@ -87,6 +87,7 @@ const ROUTE_FILES = [
   'waWidget',
   'packs/education',
   'packs/realestate',
+  'social',
 ];
 
 const API = {};
