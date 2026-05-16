@@ -276,20 +276,25 @@ const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
 // ---- Facebook OAuth callback (one URL for all tenants) ----------
 app.get('/fb/auth/callback', async (req, res) => {
   const stateRaw = (req.query.state || '').toString();
-  // Decode state (no verify) to get slug for routing Ã¢ÂÂ the inner
-  // expressOAuthCallback will do full jwt.verify with secret.
-  let slug;
+  // Decode state (no verify) to get slug + purpose for routing — the
+  // inner handler will do full jwt.verify with secret.
+  let slug, purpose;
   try {
     const peek = jwtLib.decode(stateRaw);
     if (peek && peek.slug) slug = peek.slug;
+    if (peek && peek.purpose) purpose = peek.purpose;
   } catch (_) {}
+
+  // Pick the handler based on state.purpose. 'social' goes to Social Hub
+  // connect; anything else (including legacy/empty) goes to Lead Sync.
+  const handler = (purpose === 'social')
+    ? (require('./routes/social').expressOAuthCallbackSocial)
+    : fbRoute.expressOAuthCallback;
+
   if (!slug) {
-    // Single-tenant deployment fallback: run the original handler
-    // directly. The slug-aware redirect logic in fb.js falls back to
-    // / when no slug, so it still works.
-    return fbRoute.expressOAuthCallback(req, res);
+    return handler(req, res);
   }
-  return _runAsTenant(slug, req, res, fbRoute.expressOAuthCallback);
+  return _runAsTenant(slug, req, res, handler);
 });
 
 // ---- Meta Lead Ads webhook (one URL for all tenants) ------------

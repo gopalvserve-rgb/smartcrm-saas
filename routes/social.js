@@ -146,17 +146,32 @@ const SOCIAL_FB_SCOPES = [
 ].join(',');
 
 async function api_social_fb_oauth_url(token, baseUrl) {
-  await authUser(token);
-  const fb = require('./fb');
-  // Reuse the Lead Sync helper that knows the app id + redirect URI shape,
-  // but pass our own scopes so the social grant is independent.
+  const me = await authUser(token);
+  // Same shape as routes/fb.js → api_fb_oauth_url so /fb/auth/callback can
+  // peek at the state JWT, find the slug, and dispatch us to the right
+  // tenant DB. We add purpose='social' so the callback can route to the
+  // SOCIAL handler instead of the Lead Sync handler.
+  const jwt = require('jsonwebtoken');
+  const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
   const fbAppId = process.env.PLATFORM_FB_APP_ID || '965594974738358';
-  const origin = String(baseUrl || process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
-  const redirectUri = origin + '/fb/auth/callback?social=1';
+
+  let slug;
+  try { slug = (db.tenantStorage && db.tenantStorage.getStore() || {}).slug; } catch (_) {}
+  const stateToken = jwt.sign(
+    Object.assign({ uid: me.id, t: 'fb_oauth', purpose: 'social' }, slug ? { slug } : {}),
+    JWT_SECRET,
+    { expiresIn: '10m' }
+  );
+
+  const origin = String(baseUrl || process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
+  // SAME redirect URI as Lead Sync. Already whitelisted in the Facebook
+  // App. The state JWT's purpose='social' field tells the callback to
+  // dispatch to our connect handler instead of the Lead Sync one.
+  const redirectUri = origin + '/fb/auth/callback';
   const params = new URLSearchParams({
     client_id: fbAppId,
     redirect_uri: redirectUri,
-    state: 'social-connect',
+    state: stateToken,
     scope: SOCIAL_FB_SCOPES,
     response_type: 'code',
     auth_type: 'rerequest'
@@ -166,6 +181,63 @@ async function api_social_fb_oauth_url(token, baseUrl) {
     redirect_uri: redirectUri,
     scopes: SOCIAL_FB_SCOPES
   };
+}
+
+// Express handler — invoked by server.js /fb/auth/callback when the state
+// JWT carries purpose='social'. Exchanges the code for tokens and feeds
+// them through the same pipeline as the SDK-popup path (api_social_fb_connect),
+// then renders an HTML 'connection complete, close this tab' page.
+async function expressOAuthCallbackSocial(req, res) {
+  const code = (req.query.code || '').toString();
+  const stateRaw = (req.query.state || '').toString();
+  const errMsg = (req.query.error_description || req.query.error || '').toString();
+  if (errMsg) {
+    return res.status(400).send('<h2>Facebook returned an error</h2><pre>' + errMsg + '</pre><p>You can close this tab.</p>');
+  }
+  if (!code) return res.status(400).send('Missing code from Facebook.');
+
+  const jwt = require('jsonwebtoken');
+  const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
+  let payload;
+  try { payload = jwt.verify(stateRaw, JWT_SECRET); }
+  catch (_) { return res.status(400).send('Invalid state'); }
+
+  const fbAppId = process.env.PLATFORM_FB_APP_ID || '965594974738358';
+  const fbAppSecret = process.env.PLATFORM_FB_APP_SECRET || '3d04f767b437f9083ee45533e97d3c18';
+
+  const origin = req.protocol + '://' + req.get('host');
+  const redirectUri = origin + '/fb/auth/callback';
+
+  // 1. Code → short-lived token
+  const tokenUrl = `${GRAPH}/oauth/access_token?client_id=${fbAppId}&client_secret=${fbAppSecret}&redirect_uri=${encodeURIComponent(redirectUri)}&code=${encodeURIComponent(code)}`;
+  const tj = await fetch(tokenUrl).then(r => r.json());
+  if (tj.error) return res.status(500).send('<pre>' + tj.error.message + '</pre>');
+  const shortToken = tj.access_token;
+  if (!shortToken) return res.status(500).send('No token returned');
+
+  // 2. Run the same persist path as the SDK popup. We're already inside
+  //    tenantStorage.run() because server.js wraps this callback with
+  //    _runAsTenant when the state JWT had a slug.
+  try {
+    // Fake an authenticated context for api_social_fb_connect by directly
+    // calling the underlying logic. Simplest: re-issue a fresh JWT for the
+    // operator we recorded in state.uid, call our own dispatcher.
+    const me = await db.findById('users', payload.uid);
+    if (!me) return res.status(403).send('User not found');
+    const jwt2 = require('jsonwebtoken');
+    const opToken = jwt2.sign({ id: me.id, email: me.email, role: me.role, t: payload.slug }, JWT_SECRET, { expiresIn: '5m' });
+    const r = await api_social_fb_connect(opToken, shortToken);
+    return res.send(`
+      <html><head><title>Connected</title></head><body style="font-family:system-ui;padding:2rem;max-width:540px;margin:0 auto;text-align:center">
+        <h2>✅ Facebook connected for Social Hub</h2>
+        <p>Pages connected: <b>${r.pages_connected}</b><br>Instagram accounts linked: <b>${r.ig_accounts}</b></p>
+        <p class="muted">You can close this tab and go back to the CRM.</p>
+        <script>setTimeout(()=>{ try { window.close(); } catch (_) {} }, 2000)</script>
+      </body></html>
+    `);
+  } catch (e) {
+    return res.status(500).send('<pre>' + (e.message || String(e)) + '</pre>');
+  }
 }
 
 // Exchange a short user token (from FB SDK login) → long-lived user token
@@ -1338,6 +1410,7 @@ module.exports = {
   // Phase S1 — dedicated FB connect (separate from Lead Sync)
   api_social_fb_oauth_url,
   api_social_fb_connect,
+  expressOAuthCallbackSocial,
   api_social_fb_disconnect,
   api_social_fb_toggleMonitor,
   api_social_inbox_threads,
