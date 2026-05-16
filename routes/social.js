@@ -545,6 +545,224 @@ async function _handleInboundComment(body) {
   return { ok: true, saved };
 }
 
+
+// ═════════════════════════════════════════════════════════════════════
+// PHASE S3 — Post Publisher (FB + IG, schedule + media)
+// ═════════════════════════════════════════════════════════════════════
+
+async function _ensureSchemaS3() {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS social_posts (
+      id              SERIAL PRIMARY KEY,
+      author_id       INTEGER,                  -- our user who composed
+      text            TEXT,
+      media_url       TEXT,                     -- public URL for the image/video
+      media_type      TEXT,                     -- 'image' | 'video' | null
+      targets         JSONB NOT NULL,           -- [{ platform, page_id, ig_user_id? }]
+      status          TEXT NOT NULL DEFAULT 'draft',  -- draft | scheduled | publishing | published | failed
+      scheduled_at    TIMESTAMPTZ,
+      published_at    TIMESTAMPTZ,
+      results         JSONB,                    -- per-target { platform, page_id, ok, post_id?, error? }
+      error           TEXT,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  try { await db.query(`CREATE INDEX IF NOT EXISTS idx_social_posts_status ON social_posts(status, scheduled_at)`); } catch (_) {}
+}
+
+async function api_social_posts_list(token, filters) {
+  await authUser(token);
+  await _ensureSchemaS3();
+  const f = filters || {};
+  const params = [];
+  let where = '1=1';
+  if (f.status) { params.push(String(f.status)); where += ` AND status = ${params.length}`; }
+  const r = await db.query(`
+    SELECT id, author_id, text, media_url, media_type, targets, status,
+           scheduled_at, published_at, results, error, created_at, updated_at
+      FROM social_posts WHERE ${where}
+      ORDER BY (published_at IS NULL) DESC, COALESCE(scheduled_at, created_at) DESC
+      LIMIT 200
+  `, params);
+  return r.rows || [];
+}
+
+async function api_social_posts_save(token, payload) {
+  const me = await authUser(token);
+  await _ensureSchemaS3();
+  const p = payload || {};
+  const targets = Array.isArray(p.targets) ? p.targets : [];
+  if (!targets.length) throw new Error('Pick at least one target (FB Page or IG account)');
+  const text = String(p.text || '').trim();
+  if (!text && !p.media_url) throw new Error('Provide text or attach media');
+
+  const status = p.scheduled_at ? 'scheduled' : 'draft';
+  if (p.id) {
+    await db.query(`
+      UPDATE social_posts SET
+        text = $1, media_url = $2, media_type = $3, targets = $4::jsonb,
+        status = $5, scheduled_at = $6, updated_at = NOW()
+       WHERE id = $7
+    `, [text, p.media_url || null, p.media_type || null, JSON.stringify(targets),
+        status, p.scheduled_at || null, Number(p.id)]);
+    return { ok: true, id: Number(p.id), status };
+  }
+  const r = await db.query(`
+    INSERT INTO social_posts (author_id, text, media_url, media_type, targets, status, scheduled_at)
+    VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7) RETURNING id
+  `, [me.id, text, p.media_url || null, p.media_type || null, JSON.stringify(targets), status, p.scheduled_at || null]);
+  return { ok: true, id: r.rows[0].id, status };
+}
+
+async function api_social_posts_delete(token, id) {
+  await authUser(token);
+  await _ensureSchemaS3();
+  await db.query(`DELETE FROM social_posts WHERE id = $1`, [Number(id)]);
+  return { ok: true };
+}
+
+// Publish to ONE target — Graph API call. Returns { ok, post_id?, error? }
+async function _publishOne(target, text, mediaUrl, mediaType) {
+  const page = await _findPage(target.page_id);
+  if (!page || !page.access_token) return { ok: false, error: 'Page not connected' };
+
+  try {
+    if (target.platform === 'facebook') {
+      // Page wall: /{page-id}/feed (text) or /{page-id}/photos (image) or /{page-id}/videos (video)
+      let url, body;
+      if (mediaUrl && mediaType === 'image') {
+        url = `${GRAPH}/${page.page_id}/photos`;
+        body = { url: mediaUrl, caption: text, access_token: page.access_token };
+      } else if (mediaUrl && mediaType === 'video') {
+        url = `${GRAPH}/${page.page_id}/videos`;
+        body = { file_url: mediaUrl, description: text, access_token: page.access_token };
+      } else {
+        url = `${GRAPH}/${page.page_id}/feed`;
+        body = { message: text, access_token: page.access_token };
+      }
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const j = await r.json();
+      if (j.error) return { ok: false, error: j.error.message };
+      return { ok: true, post_id: j.id || j.post_id || null };
+    }
+
+    if (target.platform === 'instagram') {
+      // IG needs the IG Business Account id (stored on the page record)
+      const igId = page.instagram_business_id || target.ig_user_id;
+      if (!igId) return { ok: false, error: 'No Instagram Business Account linked to this page' };
+      if (!mediaUrl) return { ok: false, error: 'Instagram requires an image or video' };
+      // 1. Create media container
+      const containerUrl = `${GRAPH}/${igId}/media`;
+      const containerBody = mediaType === 'video'
+        ? { media_type: 'VIDEO', video_url: mediaUrl, caption: text, access_token: page.access_token }
+        : { image_url: mediaUrl, caption: text, access_token: page.access_token };
+      const c = await fetch(containerUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(containerBody)
+      });
+      const cj = await c.json();
+      if (cj.error) return { ok: false, error: cj.error.message };
+      const containerId = cj.id;
+      // 2. Publish (with retry for video processing)
+      let publishedId = null;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const pubUrl = `${GRAPH}/${igId}/media_publish`;
+        const pp = await fetch(pubUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ creation_id: containerId, access_token: page.access_token })
+        });
+        const pj = await pp.json();
+        if (pj.id) { publishedId = pj.id; break; }
+        if (pj.error && /not ready/i.test(pj.error.message)) {
+          await new Promise(r => setTimeout(r, 3000));
+          continue;
+        }
+        return { ok: false, error: (pj.error && pj.error.message) || 'IG publish failed' };
+      }
+      if (!publishedId) return { ok: false, error: 'IG video not ready after retries' };
+      return { ok: true, post_id: publishedId };
+    }
+
+    return { ok: false, error: 'Unsupported platform: ' + target.platform };
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) };
+  }
+}
+
+async function api_social_posts_publishNow(token, payload) {
+  const me = await authUser(token);
+  await _ensureSchemaS3();
+  const p = payload || {};
+
+  // Save first (or update) so we have a row to track
+  const save = await api_social_posts_save(token, Object.assign({}, p, { scheduled_at: null }));
+  await db.query(`UPDATE social_posts SET status='publishing', updated_at=NOW() WHERE id=$1`, [save.id]);
+
+  // Refetch the row to get its persisted fields
+  const r = await db.query(`SELECT * FROM social_posts WHERE id=$1`, [save.id]);
+  const post = r.rows[0];
+  if (!post) throw new Error('Post row missing after save');
+  const targets = typeof post.targets === 'string' ? JSON.parse(post.targets) : post.targets;
+
+  const results = [];
+  let anyOk = false;
+  for (const t of targets) {
+    const out = await _publishOne(t, post.text, post.media_url, post.media_type);
+    results.push(Object.assign({ platform: t.platform, page_id: t.page_id }, out));
+    if (out.ok) anyOk = true;
+  }
+  const status = anyOk ? (results.every(x => x.ok) ? 'published' : 'failed') : 'failed';
+  const errLine = anyOk ? null : results.map(x => (x.platform + ':' + (x.error || '?'))).join(' | ');
+  await db.query(`
+    UPDATE social_posts SET status=$1, published_at=NOW(), results=$2::jsonb, error=$3, updated_at=NOW()
+    WHERE id=$4
+  `, [status, JSON.stringify(results), errLine, save.id]);
+  return { ok: anyOk, id: save.id, status, results };
+}
+
+// Worker — fires scheduled posts. Should be called every minute by server.js boot.
+async function _runScheduledPosts() {
+  try {
+    await _ensureSchemaS3();
+    const r = await db.query(`
+      SELECT id FROM social_posts
+       WHERE status = 'scheduled' AND scheduled_at <= NOW()
+       ORDER BY scheduled_at ASC LIMIT 20
+    `);
+    for (const row of (r.rows || [])) {
+      try {
+        await db.query(`UPDATE social_posts SET status='publishing', updated_at=NOW() WHERE id=$1`, [row.id]);
+        const post = (await db.query(`SELECT * FROM social_posts WHERE id=$1`, [row.id])).rows[0];
+        if (!post) continue;
+        const targets = typeof post.targets === 'string' ? JSON.parse(post.targets) : post.targets;
+        const results = [];
+        let anyOk = false;
+        for (const t of targets) {
+          const out = await _publishOne(t, post.text, post.media_url, post.media_type);
+          results.push(Object.assign({ platform: t.platform, page_id: t.page_id }, out));
+          if (out.ok) anyOk = true;
+        }
+        const status = anyOk ? (results.every(x => x.ok) ? 'published' : 'failed') : 'failed';
+        const errLine = anyOk ? null : results.map(x => (x.platform + ':' + (x.error || '?'))).join(' | ');
+        await db.query(`
+          UPDATE social_posts SET status=$1, published_at=NOW(), results=$2::jsonb, error=$3, updated_at=NOW()
+          WHERE id=$4
+        `, [status, JSON.stringify(results), errLine, row.id]);
+      } catch (e) {
+        await db.query(`UPDATE social_posts SET status='failed', error=$1, updated_at=NOW() WHERE id=$2`,
+          [String(e.message || e).slice(0, 500), row.id]);
+      }
+    }
+  } catch (e) { console.warn('[social] scheduled posts run failed:', e.message); }
+}
+
 module.exports = {
   api_social_pages_list,
   api_social_inbox_threads,
@@ -559,6 +777,13 @@ module.exports = {
   api_social_comments_delete,
   api_social_comments_markReplied,
   _handleInboundComment,
+  // Phase S3 — Post Publisher
+  api_social_posts_list,
+  api_social_posts_save,
+  api_social_posts_delete,
+  api_social_posts_publishNow,
+  _runScheduledPosts,
   _ensureSchema,
-  _ensureSchemaS2
+  _ensureSchemaS2,
+  _ensureSchemaS3
 };

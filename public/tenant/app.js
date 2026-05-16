@@ -957,6 +957,7 @@ const NAV_GROUPS = [
   { label: 'Workspace', icon: '💬', items: [
     { id: 'socialinbox', label: 'Social Inbox', icon: '📱', countKey: 'social_unread' },
     { id: 'socialcomments', label: 'Social Comments', icon: '💭', countKey: 'social_unreplied' },
+    { id: 'socialpublish',  label: 'Social Publisher', icon: '🚀' },
     { id: 'whatsbot',   label: 'WhatsBot',   icon: '💬' },
     { id: 'aibot',      label: 'AI Bot',     icon: '🤖', roles: ['admin', 'manager'] },
     { id: 'quotations', label: 'Quotations', icon: '📄' },
@@ -29820,5 +29821,199 @@ try {
     detailCol.appendChild(h('div', { class:'muted', style:{ padding:'2rem', textAlign:'center' } },
       'Pick a post from the left to view & reply to its comments.'));
     loadPosts();
+  };
+})();
+
+
+// ═════════════════════════════════════════════════════════════════════
+// SOCIAL PUBLISHER — Phase S3 SPA
+// Compose post, pick targets (FB Pages + IG accounts), attach media URL,
+// publish now or schedule. Lists past + scheduled + draft posts.
+// ═════════════════════════════════════════════════════════════════════
+(function socialPublisherUI() {
+  if (typeof VIEWS === 'undefined' || typeof h !== 'function') return;
+
+  VIEWS.socialpublish = async (view) => {
+    view.innerHTML = '';
+    const wrap = h('div', { class:'page' });
+    wrap.appendChild(h('div', { style:{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'.8rem', flexWrap:'wrap', gap:'.6rem' } },
+      h('h2', { style:{ margin:0 } }, '🚀 Social Publisher'),
+      h('button', { class:'btn primary', onclick: () => openComposer(null, render) }, '+ New post')
+    ));
+
+    const card = h('div', { class:'card' });
+    card.appendChild(h('div', { class:'loading' }, 'Loading…'));
+    wrap.appendChild(card);
+    view.appendChild(wrap);
+
+    async function render() {
+      card.innerHTML = '';
+      try {
+        const posts = await api('api_social_posts_list', {});
+        if (!posts.length) {
+          card.appendChild(h('div', { class:'empty', style:{ padding:'2rem', textAlign:'center' } },
+            'No posts yet. Click "+ New post" to compose your first.'));
+          return;
+        }
+        const tbl = h('table', { class:'tbl', style:{ width:'100%' } });
+        tbl.appendChild(h('thead', {}, h('tr', {},
+          h('th', {}, 'Status'),
+          h('th', {}, 'Targets'),
+          h('th', {}, 'Content'),
+          h('th', {}, 'When'),
+          h('th', {}, '')
+        )));
+        const tb = h('tbody', {});
+        posts.forEach(p => {
+          const targets = Array.isArray(p.targets) ? p.targets : (typeof p.targets === 'string' ? JSON.parse(p.targets) : []);
+          const statusColors = { draft:'#6b7280', scheduled:'#d97706', publishing:'#4f46e5', published:'#16a34a', failed:'#dc2626' };
+          const when = p.published_at ? 'Posted ' + new Date(p.published_at).toLocaleString()
+                     : p.scheduled_at ? 'Scheduled ' + new Date(p.scheduled_at).toLocaleString()
+                     : 'Saved ' + new Date(p.created_at).toLocaleString();
+          tb.appendChild(h('tr', {},
+            h('td', {}, h('span', {
+              style: { background: statusColors[p.status] || '#6b7280', color:'#fff', padding:'.15rem .5rem', borderRadius:'4px', fontSize:'.8em' }
+            }, p.status)),
+            h('td', {}, targets.map(t => (t.platform === 'instagram' ? '📷' : '🅵') + ' ' + (t.page_id || '')).join(', ')),
+            h('td', { style:{ maxWidth:'400px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' } }, p.text || '(no text)'),
+            h('td', { class:'muted', style:{ fontSize:'.85em' } }, when),
+            h('td', {},
+              h('button', { class:'btn sm', onclick: () => openComposer(p, render) }, p.status === 'published' ? '👁 View' : '✎'),
+              ' ',
+              h('button', { class:'btn sm danger', onclick: async () => {
+                if (!confirm('Delete this post entry from the queue? (Already-published posts on FB/IG are NOT deleted.)')) return;
+                try { await api('api_social_posts_delete', p.id); render(); }
+                catch (e) { toast(e.message, 'err'); }
+              } }, '🗑')
+            )
+          ));
+        });
+        tbl.appendChild(tb);
+        card.appendChild(tbl);
+      } catch (e) {
+        card.innerHTML = '';
+        card.appendChild(h('div', { class:'error-box' }, e.message));
+      }
+    }
+
+    async function openComposer(post, onSave) {
+      const m = h('div', { class:'modal-backdrop' });
+      const modal = h('div', { class:'modal', style:{ maxWidth:'640px' } });
+      modal.appendChild(h('div', { class:'modal-head' },
+        h('h3', {}, post ? '✎ Edit post' : '+ New post'),
+        h('button', { class:'btn ghost', onclick: () => m.remove() }, '✕')
+      ));
+      const body = h('div', { class:'modal-body' });
+
+      const fText = h('textarea', { rows:'5', placeholder:'What do you want to say?', style:{ width:'100%' } });
+      if (post && post.text) fText.value = post.text;
+
+      const fMediaUrl = h('input', { type:'url', placeholder:'https://… (image or video URL)', style:{ width:'100%' } });
+      if (post && post.media_url) fMediaUrl.value = post.media_url;
+      const fMediaType = h('select', {},
+        h('option', { value:'' }, '— no media —'),
+        h('option', { value:'image' }, 'Image'),
+        h('option', { value:'video' }, 'Video')
+      );
+      if (post && post.media_type) fMediaType.value = post.media_type;
+
+      const fSchedule = h('input', { type:'datetime-local' });
+      if (post && post.scheduled_at) fSchedule.value = new Date(post.scheduled_at).toISOString().slice(0, 16);
+
+      // Targets — fetch pages and render checkboxes for FB + IG
+      const targetsBox = h('div', { style:{ display:'grid', gap:'.3rem' } });
+      targetsBox.appendChild(h('div', { class:'loading' }, 'Loading pages…'));
+      let pages = [];
+      try { pages = await api('api_social_pages_list'); } catch (_) {}
+      targetsBox.innerHTML = '';
+      if (!pages.length) {
+        targetsBox.appendChild(h('p', { class:'muted' },
+          'No pages connected. Connect a Facebook Page first under Settings → Facebook.'));
+      } else {
+        const existingTargets = Array.isArray(post && post.targets) ? post.targets
+                              : (post && typeof post.targets === 'string' ? JSON.parse(post.targets) : []);
+        pages.forEach(p => {
+          // FB checkbox
+          const fbChecked = existingTargets.some(t => t.platform==='facebook' && String(t.page_id)===String(p.page_id));
+          const fbCb = h('input', { type:'checkbox', dataset:{ platform:'facebook', pageId: p.page_id }, checked: fbChecked ? 'checked' : null });
+          targetsBox.appendChild(h('label', { style:{ display:'flex', gap:'.5rem', alignItems:'center' } },
+            fbCb, h('span', {}, '🅵 ' + p.page_name)));
+          // IG checkbox (only if IG business linked)
+          if (p.instagram_business_id) {
+            const igChecked = existingTargets.some(t => t.platform==='instagram' && String(t.page_id)===String(p.page_id));
+            const igCb = h('input', { type:'checkbox', dataset:{ platform:'instagram', pageId: p.page_id, igUserId: p.instagram_business_id }, checked: igChecked ? 'checked' : null });
+            targetsBox.appendChild(h('label', { style:{ display:'flex', gap:'.5rem', alignItems:'center', marginLeft:'1rem' } },
+              igCb, h('span', {}, '📷 IG (linked to ' + p.page_name + ')')));
+          }
+        });
+      }
+
+      [
+        ['Targets', targetsBox],
+        ['Text', fText],
+        ['Media URL (optional, must be publicly accessible)', fMediaUrl],
+        ['Media type', fMediaType],
+        ['Schedule (leave empty to save as draft / publish now)', fSchedule]
+      ].forEach(([l, inp]) => body.appendChild(h('div', { style:{ marginBottom:'.6rem' } }, h('label', {}, l), inp)));
+
+      modal.appendChild(body);
+
+      function gatherTargets() {
+        const arr = [];
+        targetsBox.querySelectorAll('input[type=checkbox]:checked').forEach(cb => {
+          arr.push({
+            platform: cb.dataset.platform,
+            page_id: cb.dataset.pageId,
+            ig_user_id: cb.dataset.igUserId || null
+          });
+        });
+        return arr;
+      }
+
+      modal.appendChild(h('div', { class:'modal-foot' },
+        post && post.status === 'published'
+          ? h('span', { class:'muted' }, 'This post is already published on Meta — cannot edit.')
+          : null,
+        h('button', { class:'btn', onclick: async () => {
+          const targets = gatherTargets();
+          if (!targets.length) { toast('Pick at least one target', 'err'); return; }
+          try {
+            const r = await api('api_social_posts_save', {
+              id: post && post.id || null,
+              text: fText.value,
+              media_url: fMediaUrl.value || null,
+              media_type: fMediaType.value || null,
+              targets,
+              scheduled_at: fSchedule.value ? new Date(fSchedule.value).toISOString() : null
+            });
+            toast(fSchedule.value ? 'Scheduled' : 'Saved as draft');
+            m.remove(); if (onSave) onSave();
+          } catch (e) { toast(e.message, 'err'); }
+        } }, '💾 Save / Schedule'),
+        h('button', { class:'btn primary', onclick: async () => {
+          const targets = gatherTargets();
+          if (!targets.length) { toast('Pick at least one target', 'err'); return; }
+          if (!confirm('Publish to ' + targets.length + ' target(s) now?')) return;
+          try {
+            const r = await api('api_social_posts_publishNow', {
+              id: post && post.id || null,
+              text: fText.value,
+              media_url: fMediaUrl.value || null,
+              media_type: fMediaType.value || null,
+              targets
+            });
+            if (r.ok) toast('Published');
+            else toast('Some publishes failed — check the list', 'warn');
+            m.remove(); if (onSave) onSave();
+          } catch (e) { toast(e.message, 'err'); }
+        } }, '🚀 Publish now'),
+        h('button', { class:'btn ghost', onclick: () => m.remove() }, 'Cancel')
+      ));
+
+      m.appendChild(modal);
+      document.body.appendChild(m);
+    }
+
+    render();
   };
 })();

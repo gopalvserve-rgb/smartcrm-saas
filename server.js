@@ -60,6 +60,15 @@ const aiUsageIngest = require('./routes/saas/aiUsageIngest');
 require('./routes/packs/education');
 require('./routes/packs/realestate');
 
+// ── Social Post Publisher — fire scheduled posts every minute ──────
+// Runs in-process; idempotent (status='scheduled' rows only).
+try {
+  const social = require('./routes/social');
+  if (social && typeof social._runScheduledPosts === 'function') {
+    setInterval(() => social._runScheduledPosts().catch(() => {}), 60_000);
+  }
+} catch (_) {}
+
 // Combine every SaaS api_* into one dispatch map
 const SAAS_API = {};
 [
