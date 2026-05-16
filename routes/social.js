@@ -54,34 +54,205 @@ async function _ensureSchema() {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Pages — reads META_PAGES_LIST (set up by routes/fb.js connect flow)
+// Pages — DEDICATED social_pages table (separate from Lead Sync)
+// The Facebook Lead Sync integration stores its pages in
+// META_PAGES_LIST config. We keep Social completely separate so an
+// admin can choose to connect different pages for Social vs. Lead
+// Sync, use different permission scopes (Social needs messaging/
+// comments/publish/ads_read which Lead Sync doesn't), and revoking
+// one never breaks the other.
 // ─────────────────────────────────────────────────────────────────
+
+async function _ensureSocialPagesSchema() {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS social_pages (
+      id                      SERIAL PRIMARY KEY,
+      page_id                 TEXT NOT NULL UNIQUE,
+      page_name               TEXT,
+      access_token            TEXT NOT NULL,
+      instagram_business_id   TEXT,
+      ig_username             TEXT,
+      is_monitored            INTEGER NOT NULL DEFAULT 1,
+      scopes                  TEXT,           -- comma list of granted permissions
+      connected_by            INTEGER,        -- our user id
+      connected_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_subscribed_at      TIMESTAMPTZ,
+      diagnostic              JSONB
+    )
+  `);
+  try { await db.query(`CREATE INDEX IF NOT EXISTS idx_social_pages_monitored ON social_pages(is_monitored) WHERE is_monitored = 1`); } catch (_) {}
+}
+
 async function _pagesFromConfig() {
+  // Renamed for clarity, kept the name so the rest of the file doesn't change.
+  // Reads ONLY from social_pages — never from META_PAGES_LIST (which belongs
+  // to the Lead Sync integration).
+  await _ensureSocialPagesSchema();
   try {
-    const raw = await db.getConfig('META_PAGES_LIST', '');
-    if (!raw) return [];
-    const list = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    return Array.isArray(list) ? list : [];
+    const r = await db.query(`SELECT page_id, page_name, access_token, instagram_business_id, is_monitored, ig_username FROM social_pages WHERE is_monitored = 1 ORDER BY page_name`);
+    return r.rows || [];
   } catch (_) { return []; }
 }
 
 async function _findPage(pageId) {
-  const list = await _pagesFromConfig();
-  return list.find(p => String(p.page_id) === String(pageId)) || null;
+  await _ensureSocialPagesSchema();
+  const r = await db.query(`SELECT page_id, page_name, access_token, instagram_business_id, ig_username FROM social_pages WHERE page_id = $1 LIMIT 1`, [String(pageId)]);
+  return (r.rows && r.rows[0]) || null;
 }
 
 async function api_social_pages_list(token) {
   await authUser(token);
   await _ensureSchema();
-  const list = await _pagesFromConfig();
-  // Strip access_token from response — never leak to SPA
-  return list.map(p => ({
+  await _ensureSocialPagesSchema();
+  const r = await db.query(`
+    SELECT page_id, page_name, instagram_business_id, ig_username,
+           is_monitored, connected_at, last_subscribed_at,
+           (access_token IS NOT NULL) AS has_token
+      FROM social_pages
+     ORDER BY page_name ASC, page_id ASC
+  `);
+  return (r.rows || []).map(p => ({
     page_id: p.page_id,
     page_name: p.page_name,
-    is_monitored: !!p.is_monitored,
+    is_monitored: !!Number(p.is_monitored),
     instagram_business_id: p.instagram_business_id || null,
-    has_token: !!p.access_token
+    ig_username: p.ig_username || null,
+    connected_at: p.connected_at,
+    last_subscribed_at: p.last_subscribed_at,
+    has_token: !!p.has_token
   }));
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Connect / disconnect — Facebook embedded login (separate from
+// the Lead Sync flow in routes/fb.js).
+// ─────────────────────────────────────────────────────────────────
+
+// Permissions the Social Hub asks for (UNION of all 4 phases needs)
+const SOCIAL_FB_SCOPES = [
+  'pages_show_list',
+  'pages_read_engagement',
+  'pages_manage_metadata',
+  'pages_messaging',
+  'pages_manage_posts',
+  'pages_manage_engagement',
+  'pages_read_user_content',
+  'instagram_basic',
+  'instagram_manage_messages',
+  'instagram_manage_comments',
+  'instagram_content_publish',
+  'ads_read',
+  'business_management'
+].join(',');
+
+async function api_social_fb_oauth_url(token, baseUrl) {
+  await authUser(token);
+  const fb = require('./fb');
+  // Reuse the Lead Sync helper that knows the app id + redirect URI shape,
+  // but pass our own scopes so the social grant is independent.
+  const fbAppId = process.env.PLATFORM_FB_APP_ID || '965594974738358';
+  const origin = String(baseUrl || process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
+  const redirectUri = origin + '/fb/auth/callback?social=1';
+  const params = new URLSearchParams({
+    client_id: fbAppId,
+    redirect_uri: redirectUri,
+    state: 'social-connect',
+    scope: SOCIAL_FB_SCOPES,
+    response_type: 'code',
+    auth_type: 'rerequest'
+  });
+  return {
+    auth_url: 'https://www.facebook.com/v19.0/dialog/oauth?' + params.toString(),
+    redirect_uri: redirectUri,
+    scopes: SOCIAL_FB_SCOPES
+  };
+}
+
+// Exchange a short user token (from FB SDK login) → long-lived user token
+// → page access tokens → IG business accounts → persist into social_pages.
+async function api_social_fb_connect(token, shortToken, opts) {
+  const me = await authUser(token);
+  await _ensureSocialPagesSchema();
+  if (!shortToken) throw new Error('Facebook short-lived user token required');
+
+  const fbAppId = process.env.PLATFORM_FB_APP_ID || '965594974738358';
+  const fbAppSecret = process.env.PLATFORM_FB_APP_SECRET || '3d04f767b437f9083ee45533e97d3c18';
+
+  // 1. Long-lived user token
+  const exchUrl = `${GRAPH}/oauth/access_token?grant_type=fb_exchange_token&client_id=${fbAppId}&client_secret=${fbAppSecret}&fb_exchange_token=${encodeURIComponent(shortToken)}`;
+  const ex = await fetch(exchUrl).then(r => r.json());
+  if (ex.error) throw new Error('Token exchange: ' + ex.error.message);
+  const userToken = ex.access_token;
+  if (!userToken) throw new Error('No long-lived user token returned');
+
+  // 2. List managed Pages with their (non-expiring) Page Access Tokens
+  const pagesResp = await fetch(`${GRAPH}/me/accounts?fields=id,name,access_token,instagram_business_account{id,username},tasks&limit=200&access_token=${encodeURIComponent(userToken)}`).then(r => r.json());
+  if (pagesResp.error) throw new Error('Pages fetch: ' + pagesResp.error.message);
+  const pages = pagesResp.data || [];
+  if (!pages.length) throw new Error('No Facebook Pages found for this user');
+
+  let saved = 0;
+  for (const p of pages) {
+    const pageId   = String(p.id);
+    const pageTok  = p.access_token;
+    if (!pageTok) continue;
+    const igBiz    = p.instagram_business_account ? String(p.instagram_business_account.id) : null;
+    const igUser   = p.instagram_business_account && p.instagram_business_account.username || null;
+
+    // 3. Subscribe this page to all social webhook fields
+    try {
+      const subUrl = `${GRAPH}/${pageId}/subscribed_apps`;
+      await fetch(subUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          subscribed_fields: 'messages,messaging_postbacks,feed,mention,comments',
+          access_token: pageTok
+        })
+      });
+    } catch (_) {}
+
+    // 4. Persist into our dedicated table
+    await db.query(`
+      INSERT INTO social_pages
+        (page_id, page_name, access_token, instagram_business_id, ig_username,
+         is_monitored, scopes, connected_by, last_subscribed_at)
+      VALUES ($1,$2,$3,$4,$5,1,$6,$7,NOW())
+      ON CONFLICT (page_id) DO UPDATE SET
+        page_name = EXCLUDED.page_name,
+        access_token = EXCLUDED.access_token,
+        instagram_business_id = EXCLUDED.instagram_business_id,
+        ig_username = EXCLUDED.ig_username,
+        scopes = EXCLUDED.scopes,
+        connected_by = EXCLUDED.connected_by,
+        last_subscribed_at = NOW()
+    `, [pageId, p.name || '', pageTok, igBiz, igUser, SOCIAL_FB_SCOPES, me.id]);
+    saved++;
+  }
+
+  return { ok: true, pages_connected: saved, ig_accounts: pages.filter(p => p.instagram_business_account).length };
+}
+
+async function api_social_fb_disconnect(token, pageId) {
+  await authUser(token);
+  await _ensureSocialPagesSchema();
+  if (pageId) {
+    await db.query(`DELETE FROM social_pages WHERE page_id = $1`, [String(pageId)]);
+  } else {
+    // Disconnect ALL social pages (admin "remove integration")
+    await db.query(`DELETE FROM social_pages`);
+  }
+  return { ok: true };
+}
+
+async function api_social_fb_toggleMonitor(token, payload) {
+  await authUser(token);
+  await _ensureSocialPagesSchema();
+  const p = payload || {};
+  if (!p.page_id) throw new Error('page_id required');
+  await db.query(`UPDATE social_pages SET is_monitored = $1 WHERE page_id = $2`,
+    [p.monitor === false ? 0 : 1, String(p.page_id)]);
+  return { ok: true };
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -1164,6 +1335,11 @@ async function _runAdDailySnapshot() {
 
 module.exports = {
   api_social_pages_list,
+  // Phase S1 — dedicated FB connect (separate from Lead Sync)
+  api_social_fb_oauth_url,
+  api_social_fb_connect,
+  api_social_fb_disconnect,
+  api_social_fb_toggleMonitor,
   api_social_inbox_threads,
   api_social_inbox_messages,
   api_social_inbox_send,

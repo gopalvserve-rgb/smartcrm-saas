@@ -30232,3 +30232,196 @@ try {
     render();
   };
 })();
+
+
+// ═════════════════════════════════════════════════════════════════════
+// SOCIAL — Dedicated Facebook Connect (separate from Lead Sync setup)
+// Exposes openSocialConnectModal() — callable from any "Connect" button
+// inside the Social tabs.
+// ═════════════════════════════════════════════════════════════════════
+(function socialConnectUI() {
+  if (typeof window === 'undefined' || typeof h !== 'function') return;
+
+  // Lazily load the official FB SDK (same source as Lead Sync flow uses)
+  let _fbSdkLoading = null;
+  async function _ensureFbSdk(appId) {
+    if (window.FB) return window.FB;
+    if (_fbSdkLoading) return _fbSdkLoading;
+    _fbSdkLoading = new Promise((resolve, reject) => {
+      window.fbAsyncInit = function () {
+        try {
+          window.FB.init({ appId, cookie: true, xfbml: false, version: 'v19.0' });
+          resolve(window.FB);
+        } catch (e) { reject(e); }
+      };
+      const s = document.createElement('script');
+      s.src = 'https://connect.facebook.net/en_US/sdk.js';
+      s.async = true; s.defer = true; s.crossOrigin = 'anonymous';
+      s.onerror = () => reject(new Error('FB SDK failed to load'));
+      document.body.appendChild(s);
+    });
+    return _fbSdkLoading;
+  }
+
+  const SOCIAL_SCOPES = [
+    'pages_show_list','pages_read_engagement','pages_manage_metadata',
+    'pages_messaging','pages_manage_posts','pages_manage_engagement',
+    'pages_read_user_content','instagram_basic','instagram_manage_messages',
+    'instagram_manage_comments','instagram_content_publish',
+    'ads_read','business_management'
+  ].join(',');
+
+  async function openSocialConnectModal() {
+    const m = h('div', { class:'modal-backdrop' });
+    const modal = h('div', { class:'modal', style:{ maxWidth:'620px' } });
+    modal.appendChild(h('div', { class:'modal-head' },
+      h('h3', {}, '📱 Connect Facebook & Instagram for Social Hub'),
+      h('button', { class:'btn ghost', onclick: () => m.remove() }, '✕')
+    ));
+    const body = h('div', { class:'modal-body' });
+
+    body.appendChild(h('p', {},
+      'This is a ', h('b', {}, 'separate'), ' integration from the existing Facebook Lead Sync. ' +
+      'Connecting here grants permission to receive Messenger/Instagram DMs, post on your pages, ' +
+      'read & reply to comments, and pull ad spend data. It does NOT affect your Lead Sync setup.'
+    ));
+    body.appendChild(h('details', { style:{ background:'rgba(99,102,241,.08)', padding:'.6rem .8rem', borderRadius:'6px' } },
+      h('summary', { style:{ cursor:'pointer', fontWeight:'600' } }, 'Permissions requested'),
+      h('ul', { class:'muted', style:{ fontSize:'.85em', margin:'.5rem 0 0 1rem' } },
+        ...['pages_show_list', 'pages_messaging (Messenger DMs)',
+            'pages_manage_posts (publish + delete posts)',
+            'pages_manage_engagement (reply/hide/like comments)',
+            'instagram_basic + instagram_manage_messages + instagram_manage_comments + instagram_content_publish',
+            'ads_read + business_management (Ad Reports)'].map(s => h('li', {}, s))
+      )
+    ));
+
+    // Currently connected pages
+    const statusBox = h('div', { style:{ marginTop:'.8rem' } });
+    body.appendChild(statusBox);
+
+    async function refresh() {
+      statusBox.innerHTML = '';
+      statusBox.appendChild(h('h4', { style:{ margin:'.4rem 0' } }, 'Currently connected pages'));
+      try {
+        const pages = await api('api_social_pages_list');
+        if (!pages.length) {
+          statusBox.appendChild(h('p', { class:'muted', style:{ margin:0 } }, 'No pages connected yet.'));
+          return;
+        }
+        const ul = h('div', {});
+        pages.forEach(p => {
+          ul.appendChild(h('div', { style:{ display:'flex', alignItems:'center', gap:'.5rem', padding:'.4rem 0', borderBottom:'1px solid rgba(0,0,0,.06)' } },
+            h('div', { style:{ flex:'1 1 auto' } },
+              h('div', { style:{ fontWeight:'600' } }, '🅵 ' + (p.page_name || p.page_id)),
+              p.instagram_business_id
+                ? h('div', { class:'muted', style:{ fontSize:'.85em' } }, '📷 ' + (p.ig_username || p.instagram_business_id))
+                : h('div', { class:'muted', style:{ fontSize:'.85em' } }, 'No Instagram linked'),
+              h('div', { class:'muted', style:{ fontSize:'.75em' } },
+                'Connected ' + new Date(p.connected_at).toLocaleDateString() +
+                (p.last_subscribed_at ? ' · subscribed ' + new Date(p.last_subscribed_at).toLocaleDateString() : ''))
+            ),
+            h('label', { class:'toggle-row' },
+              h('input', { type:'checkbox', checked: p.is_monitored ? 'checked' : null,
+                onchange: async ev => {
+                  try { await api('api_social_fb_toggleMonitor', { page_id: p.page_id, monitor: ev.target.checked }); }
+                  catch (e) { toast(e.message, 'err'); }
+                }
+              }), ' Monitor'
+            ),
+            h('button', { class:'btn sm danger', onclick: async () => {
+              if (!confirm('Disconnect ' + (p.page_name || p.page_id) + ' from Social Hub?\n(Does not affect Lead Sync.)')) return;
+              try { await api('api_social_fb_disconnect', p.page_id); refresh(); }
+              catch (e) { toast(e.message, 'err'); }
+            } }, '🗑 Remove')
+          ));
+        });
+        statusBox.appendChild(ul);
+      } catch (e) {
+        statusBox.appendChild(h('div', { class:'error-box' }, e.message));
+      }
+    }
+
+    modal.appendChild(body);
+    modal.appendChild(h('div', { class:'modal-foot' },
+      h('button', { class:'btn primary', onclick: async () => {
+        try {
+          // Use SDK popup (preferred). Fallback to OAuth redirect on SDK failure.
+          const fbAppId = '965594974738358';  // same App ID as Lead Sync
+          try {
+            const FB = await _ensureFbSdk(fbAppId);
+            await new Promise((resolve, reject) => {
+              FB.login(async (resp) => {
+                if (!resp || !resp.authResponse || !resp.authResponse.accessToken) {
+                  reject(new Error(resp && resp.status === 'unknown' ? 'Cancelled' : 'No token'));
+                  return;
+                }
+                try {
+                  const r = await api('api_social_fb_connect', resp.authResponse.accessToken);
+                  toast('Connected ' + r.pages_connected + ' page(s)' + (r.ig_accounts ? ' · ' + r.ig_accounts + ' IG' : ''));
+                  refresh();
+                  resolve();
+                } catch (e) { toast(e.message, 'err'); reject(e); }
+              }, { scope: SOCIAL_SCOPES, auth_type: 'rerequest', return_scopes: true });
+            });
+          } catch (sdkErr) {
+            // Fallback: OAuth redirect
+            const r = await api('api_social_fb_oauth_url', location.origin);
+            location.href = r.auth_url;
+          }
+        } catch (e) { toast(e.message, 'err'); }
+      } }, '🔗 Connect with Facebook'),
+      h('button', { class:'btn ghost', onclick: () => m.remove() }, 'Close')
+    ));
+    m.appendChild(modal);
+    document.body.appendChild(m);
+    refresh();
+  }
+
+  // Expose globally
+  try { window.openSocialConnectModal = openSocialConnectModal; } catch (_) {}
+
+  // Patch the four Social VIEWS so they show a "+ Connect Page" button
+  // at the top when no pages are connected yet — easier discoverability.
+  // We hook in once on first VIEWS load.
+  ['socialinbox', 'socialcomments', 'socialpublish', 'socialads'].forEach(viewId => {
+    const original = VIEWS[viewId];
+    if (typeof original !== 'function') return;
+    VIEWS[viewId] = async function patched(view) {
+      const r = await original.apply(this, arguments);
+      // Inject the Connect button at the top of the page if no pages yet
+      try {
+        const pages = await api('api_social_pages_list').catch(() => []);
+        if (!pages.length) {
+          const banner = h('div', {
+            style: { background:'#fff7ed', border:'1px solid #fed7aa', color:'#9a3412',
+                     padding:'.7rem 1rem', borderRadius:'8px', marginBottom:'.8rem',
+                     display:'flex', alignItems:'center', justifyContent:'space-between', gap:'.6rem', flexWrap:'wrap' }
+          },
+            h('div', {},
+              h('strong', {}, '⚠ No Facebook pages connected for Social Hub.'),
+              h('div', { style:{ fontSize:'.9em', marginTop:'.2rem' } },
+                'This is separate from your Lead Sync integration — connect once to enable Inbox, Comments, Publisher and Ad Reports.')
+            ),
+            h('button', { class:'btn primary', onclick: () => openSocialConnectModal() }, '🔗 Connect Now')
+          );
+          const pageEl = view.querySelector('.page');
+          if (pageEl) pageEl.insertBefore(banner, pageEl.firstChild);
+          else view.insertBefore(banner, view.firstChild);
+        } else {
+          // Add a small "Manage connections" link to the page header
+          const pageHeader = view.querySelector('.page > h2');
+          if (pageHeader && !pageHeader.parentNode.querySelector('.social-manage-conn')) {
+            const link = h('button', {
+              class: 'btn sm ghost social-manage-conn',
+              style: { marginLeft:'auto' },
+              onclick: () => openSocialConnectModal()
+            }, '⚙ Manage connections');
+            pageHeader.parentNode.appendChild(link);
+          }
+        }
+      } catch (_) {}
+      return r;
+    };
+  });
+})();
