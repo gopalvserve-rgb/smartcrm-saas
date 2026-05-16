@@ -958,6 +958,7 @@ const NAV_GROUPS = [
     { id: 'socialinbox', label: 'Social Inbox', icon: '📱', countKey: 'social_unread' },
     { id: 'socialcomments', label: 'Social Comments', icon: '💭', countKey: 'social_unreplied' },
     { id: 'socialpublish',  label: 'Social Publisher', icon: '🚀' },
+    { id: 'socialads',      label: 'Ad Reports', icon: '📈' },
     { id: 'whatsbot',   label: 'WhatsBot',   icon: '💬' },
     { id: 'aibot',      label: 'AI Bot',     icon: '🤖', roles: ['admin', 'manager'] },
     { id: 'quotations', label: 'Quotations', icon: '📄' },
@@ -30012,6 +30013,220 @@ try {
 
       m.appendChild(modal);
       document.body.appendChild(m);
+    }
+
+    render();
+  };
+})();
+
+
+// ═════════════════════════════════════════════════════════════════════
+// AD REPORTS — Phase S4 SPA
+// ═════════════════════════════════════════════════════════════════════
+(function socialAdsUI() {
+  if (typeof VIEWS === 'undefined' || typeof h !== 'function') return;
+
+  VIEWS.socialads = async (view) => {
+    view.innerHTML = '';
+    const wrap = h('div', { class:'page' });
+
+    const daysSel = h('select', { style:{ padding:'.4rem .6rem' } },
+      h('option', { value:'1' },  'Today'),
+      h('option', { value:'7', selected:'selected' }, 'Last 7 days'),
+      h('option', { value:'14' }, 'Last 14 days'),
+      h('option', { value:'30' }, 'Last 30 days'),
+      h('option', { value:'90' }, 'Last 90 days')
+    );
+    const pullBtn = h('button', { class:'btn primary', onclick: async () => {
+      try { toast('Fetching from Meta…'); await api('api_social_ads_pullNow', { days: Number(daysSel.value) }); render(); }
+      catch (e) { toast(e.message, 'err'); }
+    } }, '🔄 Pull from Meta');
+    const acctBtn = h('button', { class:'btn', onclick: () => openAccountsModal(render) }, '⚙ Ad Accounts');
+
+    wrap.appendChild(h('div', { style:{ display:'flex', alignItems:'center', gap:'.6rem', marginBottom:'.8rem', flexWrap:'wrap' } },
+      h('h2', { style:{ margin:0, flex:'1 1 auto' } }, '📈 Ad Reports'),
+      h('label', {}, 'Period: '), daysSel, pullBtn, acctBtn
+    ));
+
+    const summaryRow = h('div', { style:{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))', gap:'.7rem', marginBottom:'1rem' } });
+    wrap.appendChild(summaryRow);
+
+    const alertsCard = h('div', { class:'card', style:{ marginBottom:'1rem' } });
+    wrap.appendChild(alertsCard);
+
+    const campTable = h('div', { class:'card' });
+    wrap.appendChild(campTable);
+
+    view.appendChild(wrap);
+
+    daysSel.onchange = () => render();
+
+    function kpi(label, value, deltaPct, currency) {
+      const delta = Number(deltaPct);
+      const arrow = delta > 0 ? '▲' : (delta < 0 ? '▼' : '·');
+      const color = delta > 5 ? '#16a34a' : (delta < -5 ? '#dc2626' : '#6b7280');
+      const dispVal = (currency ? '₹' : '') + (typeof value === 'number' ? value.toLocaleString('en-IN', { maximumFractionDigits: 0 }) : value);
+      return h('div', { class:'card', style:{ padding:'.7rem' } },
+        h('div', { class:'muted', style:{ fontSize:'.85em' } }, label),
+        h('div', { style:{ fontSize:'1.4em', fontWeight:'bold', margin:'.2rem 0' } }, dispVal),
+        deltaPct != null ? h('div', { style:{ color, fontSize:'.85em' } }, arrow + ' ' + Math.abs(delta).toFixed(1) + '% vs previous') : null
+      );
+    }
+
+    async function render() {
+      summaryRow.innerHTML = '';
+      alertsCard.innerHTML = '';
+      campTable.innerHTML = '';
+      summaryRow.appendChild(h('div', { class:'loading' }, 'Loading…'));
+
+      try {
+        const [summary, campaigns, alerts] = await Promise.all([
+          api('api_social_ads_summary',  { days: Number(daysSel.value) }),
+          api('api_social_ads_campaigns', { days: Number(daysSel.value) }),
+          api('api_social_ads_alerts')
+        ]);
+
+        // Summary cards
+        summaryRow.innerHTML = '';
+        summaryRow.appendChild(kpi('Spend',       summary.current.spend,       summary.delta_pct.spend, true));
+        summaryRow.appendChild(kpi('Impressions', summary.current.impressions, summary.delta_pct.impressions));
+        summaryRow.appendChild(kpi('Clicks',      summary.current.clicks,      summary.delta_pct.clicks));
+        summaryRow.appendChild(kpi('CPC',         '₹' + summary.current.cpc.toFixed(2)));
+        summaryRow.appendChild(kpi('CTR',         summary.current.ctr.toFixed(2) + '%'));
+        summaryRow.appendChild(kpi('Leads',       summary.current.leads,       summary.delta_pct.leads));
+        summaryRow.appendChild(kpi('CPL',         '₹' + summary.current.cpl.toFixed(0)));
+        summaryRow.appendChild(kpi('Results',     summary.current.results,     summary.delta_pct.results));
+
+        // Alerts
+        if (!alerts.length) {
+          alertsCard.appendChild(h('div', { class:'muted', style:{ padding:'.7rem' } }, '✅ No active alerts.'));
+        } else {
+          alertsCard.appendChild(h('h4', { style:{ margin:'0 0 .5rem 0' } }, '🚨 Alerts'));
+          alerts.forEach(a => {
+            const colorMap = { warn: '#d97706', error: '#dc2626', info: '#4f46e5' };
+            const row = h('div', {
+              style: { display:'flex', justifyContent:'space-between', alignItems:'center', padding:'.4rem .5rem', borderLeft:'3px solid ' + (colorMap[a.severity] || '#d97706'), marginBottom:'.3rem', opacity: Number(a.acknowledged) === 1 ? 0.5 : 1 }
+            },
+              h('div', {},
+                h('span', { style:{ fontWeight:'600' } }, '[' + a.alert_type + '] ' + (a.campaign_name || a.campaign_id || a.ad_account_id)),
+                h('div', { class:'muted', style:{ fontSize:'.85em' } }, a.message)
+              ),
+              Number(a.acknowledged) === 0
+                ? h('button', { class:'btn sm', onclick: async () => { try { await api('api_social_ads_alerts_ack', a.id); render(); } catch (e) { toast(e.message, 'err'); } } }, '✓ Ack')
+                : null
+            );
+            alertsCard.appendChild(row);
+          });
+        }
+
+        // Campaigns table
+        campTable.appendChild(h('h4', { style:{ margin:'0 0 .5rem 0' } }, 'Campaign breakdown'));
+        if (!campaigns.length) {
+          campTable.appendChild(h('div', { class:'empty', style:{ padding:'1.5rem', textAlign:'center' } },
+            'No campaign data in this period. Click "🔄 Pull from Meta" to fetch.'));
+        } else {
+          const tbl = h('table', { class:'tbl', style:{ width:'100%' } });
+          tbl.appendChild(h('thead', {}, h('tr', {},
+            h('th', {}, 'Campaign'),
+            h('th', {}, 'Spend'),
+            h('th', {}, 'Impr.'),
+            h('th', {}, 'Clicks'),
+            h('th', {}, 'CTR'),
+            h('th', {}, 'CPC'),
+            h('th', {}, 'Leads'),
+            h('th', {}, 'CPL')
+          )));
+          const tb = h('tbody', {});
+          campaigns.forEach(c => {
+            const ctr = c.impressions > 0 ? (c.clicks / c.impressions * 100).toFixed(2) + '%' : '—';
+            tb.appendChild(h('tr', {},
+              h('td', {},
+                h('div', { style:{ fontWeight:'600' } }, c.campaign_name || c.campaign_id),
+                h('div', { class:'muted', style:{ fontSize:'.8em' } }, c.ad_account_id)
+              ),
+              h('td', {}, '₹' + Number(c.spend).toLocaleString('en-IN', { maximumFractionDigits: 0 })),
+              h('td', {}, Number(c.impressions).toLocaleString('en-IN')),
+              h('td', {}, Number(c.clicks).toLocaleString('en-IN')),
+              h('td', {}, ctr),
+              h('td', {}, '₹' + Number(c.cpc).toFixed(2)),
+              h('td', {}, c.leads || 0),
+              h('td', {}, c.cpl ? '₹' + Number(c.cpl).toFixed(0) : '—')
+            ));
+          });
+          tbl.appendChild(tb);
+          campTable.appendChild(tbl);
+        }
+      } catch (e) {
+        summaryRow.innerHTML = '';
+        summaryRow.appendChild(h('div', { class:'error-box' }, e.message));
+      }
+    }
+
+    async function openAccountsModal(onSave) {
+      const m = h('div', { class:'modal-backdrop' });
+      const modal = h('div', { class:'modal' });
+      modal.appendChild(h('div', { class:'modal-head' },
+        h('h3', {}, '⚙ Ad Accounts'),
+        h('button', { class:'btn ghost', onclick: () => m.remove() }, '✕')
+      ));
+      const body = h('div', { class:'modal-body' });
+      body.appendChild(h('p', { class:'muted' },
+        'Connect Meta Ad Account(s) to monitor. The account id looks like ' +
+        'act_1234567890 — find it in Meta Ads Manager → Account Overview → URL.'));
+      const list = h('div', {});
+      body.appendChild(list);
+      const fAcct = h('input', { type:'text', placeholder:'act_1234567890', style:{ width:'100%' } });
+      const fName = h('input', { type:'text', placeholder:'Display name (optional)', style:{ width:'100%' } });
+      body.appendChild(h('div', { style:{ marginTop:'.8rem' } },
+        h('label', {}, 'Add new account'),
+        fAcct,
+        h('div', { style:{ height:'.3rem' } }),
+        fName,
+        h('button', { class:'btn primary', style:{ marginTop:'.5rem' }, onclick: async () => {
+          if (!fAcct.value.trim()) { toast('Account id required', 'err'); return; }
+          try {
+            await api('api_social_ads_accounts_save', {
+              ad_account_id: fAcct.value.trim(), name: fName.value.trim() || null
+            });
+            fAcct.value = ''; fName.value = '';
+            await refresh();
+          } catch (e) { toast(e.message, 'err'); }
+        } }, '+ Add')
+      ));
+
+      async function refresh() {
+        list.innerHTML = '';
+        try {
+          const accts = await api('api_social_ads_accounts_list');
+          if (!accts.length) {
+            list.appendChild(h('p', { class:'muted' }, 'No ad accounts connected yet.'));
+            return;
+          }
+          accts.forEach(a => {
+            list.appendChild(h('div', { style:{ display:'flex', alignItems:'center', gap:'.5rem', padding:'.4rem 0', borderBottom:'1px solid rgba(0,0,0,.05)' } },
+              h('div', { style:{ flex:'1 1 auto' } },
+                h('div', { style:{ fontWeight:'600' } }, a.name || a.ad_account_id),
+                h('div', { class:'muted', style:{ fontSize:'.85em' } },
+                  a.ad_account_id + (a.last_synced_at ? ' · synced ' + new Date(a.last_synced_at).toLocaleString() : ' · never synced'))
+              ),
+              h('button', { class:'btn sm danger', onclick: async () => {
+                if (!confirm('Remove this account from monitoring?')) return;
+                try { await api('api_social_ads_accounts_delete', a.ad_account_id); refresh(); }
+                catch (e) { toast(e.message, 'err'); }
+              } }, '🗑')
+            ));
+          });
+        } catch (e) {
+          list.appendChild(h('div', { class:'error-box' }, e.message));
+        }
+      }
+      modal.appendChild(body);
+      modal.appendChild(h('div', { class:'modal-foot' },
+        h('button', { class:'btn', onclick: () => { m.remove(); if (onSave) onSave(); } }, 'Close')
+      ));
+      m.appendChild(modal);
+      document.body.appendChild(m);
+      refresh();
     }
 
     render();

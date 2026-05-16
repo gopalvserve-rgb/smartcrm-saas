@@ -763,6 +763,405 @@ async function _runScheduledPosts() {
   } catch (e) { console.warn('[social] scheduled posts run failed:', e.message); }
 }
 
+
+// ═════════════════════════════════════════════════════════════════════
+// PHASE S4 — Ad Reporting (Meta Marketing API)
+// ═════════════════════════════════════════════════════════════════════
+
+async function _ensureSchemaS4() {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS social_ad_accounts (
+      id              SERIAL PRIMARY KEY,
+      ad_account_id   TEXT NOT NULL UNIQUE,     -- 'act_<id>'
+      name            TEXT,
+      currency        TEXT,
+      access_token    TEXT,                     -- user token with ads_read scope
+      is_monitored    INTEGER NOT NULL DEFAULT 1,
+      last_synced_at  TIMESTAMPTZ,
+      added_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS social_ad_daily (
+      id              SERIAL PRIMARY KEY,
+      ad_account_id   TEXT NOT NULL,
+      campaign_id     TEXT NOT NULL,
+      campaign_name   TEXT,
+      date            DATE NOT NULL,
+      spend           NUMERIC(14,2),
+      impressions     INTEGER,
+      reach           INTEGER,
+      clicks          INTEGER,
+      ctr             NUMERIC(8,4),             -- percent
+      cpc             NUMERIC(10,2),
+      cpm             NUMERIC(10,2),
+      results         INTEGER,                  -- objective-defined results
+      cost_per_result NUMERIC(10,2),
+      leads           INTEGER,                  -- lead_count from actions
+      cost_per_lead   NUMERIC(10,2),
+      raw             JSONB,
+      pulled_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  try {
+    await db.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_social_ad_daily_key
+                    ON social_ad_daily(ad_account_id, campaign_id, date)`);
+  } catch (_) {}
+  try { await db.query(`CREATE INDEX IF NOT EXISTS idx_social_ad_daily_date ON social_ad_daily(date DESC)`); } catch (_) {}
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS social_ad_alerts (
+      id              SERIAL PRIMARY KEY,
+      ad_account_id   TEXT NOT NULL,
+      campaign_id     TEXT,
+      campaign_name   TEXT,
+      alert_type      TEXT NOT NULL,            -- cpc_spike | zero_conversions | budget_exhausted | cpa_threshold
+      severity        TEXT NOT NULL DEFAULT 'warn',
+      message         TEXT NOT NULL,
+      acknowledged    INTEGER NOT NULL DEFAULT 0,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  try { await db.query(`CREATE INDEX IF NOT EXISTS idx_social_ad_alerts_unack ON social_ad_alerts(created_at DESC) WHERE acknowledged = 0`); } catch (_) {}
+}
+
+// Ad Account CRUD
+async function api_social_ads_accounts_list(token) {
+  await authUser(token);
+  await _ensureSchemaS4();
+  const r = await db.query(
+    `SELECT ad_account_id, name, currency, is_monitored, last_synced_at, added_at
+       FROM social_ad_accounts ORDER BY added_at DESC`
+  );
+  return r.rows || [];
+}
+
+async function api_social_ads_accounts_save(token, payload) {
+  await authUser(token);
+  await _ensureSchemaS4();
+  const p = payload || {};
+  if (!p.ad_account_id) throw new Error('ad_account_id required (e.g. act_1234567890)');
+  const adId = String(p.ad_account_id).trim();
+  await db.query(`
+    INSERT INTO social_ad_accounts (ad_account_id, name, currency, access_token, is_monitored)
+    VALUES ($1,$2,$3,$4,$5)
+    ON CONFLICT (ad_account_id) DO UPDATE SET
+      name = COALESCE(EXCLUDED.name, social_ad_accounts.name),
+      currency = COALESCE(EXCLUDED.currency, social_ad_accounts.currency),
+      access_token = COALESCE(EXCLUDED.access_token, social_ad_accounts.access_token),
+      is_monitored = EXCLUDED.is_monitored
+  `, [adId, p.name || null, p.currency || null, p.access_token || null,
+      p.is_monitored === false ? 0 : 1]);
+  return { ok: true };
+}
+
+async function api_social_ads_accounts_delete(token, adAccountId) {
+  await authUser(token);
+  await _ensureSchemaS4();
+  await db.query(`DELETE FROM social_ad_accounts WHERE ad_account_id = $1`, [String(adAccountId)]);
+  return { ok: true };
+}
+
+// Helper: pick an access token to use for a given ad account.
+// Prefers the account's own stored token; falls back to ANY page's
+// access_token (page tokens with ads_read perm work for owned ad accounts).
+async function _adAccountToken(adAccountId) {
+  const r = await db.query(`SELECT access_token FROM social_ad_accounts WHERE ad_account_id = $1 LIMIT 1`, [adAccountId]);
+  if (r.rows && r.rows[0] && r.rows[0].access_token) return r.rows[0].access_token;
+  const pages = await _pagesFromConfig();
+  const withToken = pages.find(p => p.access_token);
+  return withToken ? withToken.access_token : null;
+}
+
+// Pull insights for one ad account from Marketing API
+async function _pullAdAccountInsights(adAccountId, dateFrom, dateTo) {
+  await _ensureSchemaS4();
+  const token = await _adAccountToken(adAccountId);
+  if (!token) throw new Error('No access token for ' + adAccountId);
+  const acct = adAccountId.startsWith('act_') ? adAccountId : ('act_' + adAccountId);
+
+  // Get campaign-level insights for the date range
+  const fields = 'campaign_id,campaign_name,date_start,spend,impressions,reach,clicks,ctr,cpc,cpm,actions,cost_per_action_type,objective';
+  const params = new URLSearchParams({
+    level: 'campaign',
+    fields,
+    time_range: JSON.stringify({ since: dateFrom, until: dateTo }),
+    time_increment: '1',
+    limit: '500',
+    access_token: token
+  });
+  const url = `${GRAPH}/${acct}/insights?` + params.toString();
+  const r = await fetch(url);
+  const j = await r.json();
+  if (j.error) throw new Error('Marketing API: ' + j.error.message);
+
+  let saved = 0;
+  for (const row of (j.data || [])) {
+    // Extract lead count from actions array if present
+    let leads = 0;
+    let cpl = null;
+    if (Array.isArray(row.actions)) {
+      for (const a of row.actions) {
+        if (a.action_type === 'lead' || a.action_type === 'leadgen.other') {
+          leads += Number(a.value) || 0;
+        }
+      }
+    }
+    if (Array.isArray(row.cost_per_action_type)) {
+      for (const c of row.cost_per_action_type) {
+        if (c.action_type === 'lead' || c.action_type === 'leadgen.other') {
+          cpl = Number(c.value);
+        }
+      }
+    }
+    const results = leads || (Number(row.clicks) || 0);
+    const costPerResult = cpl || (row.cpc != null ? Number(row.cpc) : null);
+
+    try {
+      await db.query(`
+        INSERT INTO social_ad_daily
+          (ad_account_id, campaign_id, campaign_name, date,
+           spend, impressions, reach, clicks, ctr, cpc, cpm,
+           results, cost_per_result, leads, cost_per_lead, raw)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb)
+        ON CONFLICT (ad_account_id, campaign_id, date) DO UPDATE SET
+          campaign_name = EXCLUDED.campaign_name,
+          spend = EXCLUDED.spend,
+          impressions = EXCLUDED.impressions,
+          reach = EXCLUDED.reach,
+          clicks = EXCLUDED.clicks,
+          ctr = EXCLUDED.ctr,
+          cpc = EXCLUDED.cpc,
+          cpm = EXCLUDED.cpm,
+          results = EXCLUDED.results,
+          cost_per_result = EXCLUDED.cost_per_result,
+          leads = EXCLUDED.leads,
+          cost_per_lead = EXCLUDED.cost_per_lead,
+          raw = EXCLUDED.raw,
+          pulled_at = NOW()
+      `, [
+        acct, String(row.campaign_id), row.campaign_name || null, row.date_start,
+        Number(row.spend) || 0, Number(row.impressions) || 0, Number(row.reach) || 0,
+        Number(row.clicks) || 0,
+        row.ctr != null ? Number(row.ctr) : null,
+        row.cpc != null ? Number(row.cpc) : null,
+        row.cpm != null ? Number(row.cpm) : null,
+        results, costPerResult, leads, cpl,
+        JSON.stringify(row)
+      ]);
+      saved++;
+    } catch (e) { console.warn('[ads] daily upsert failed:', e.message); }
+  }
+
+  await db.query(`UPDATE social_ad_accounts SET last_synced_at = NOW() WHERE ad_account_id = $1`, [acct]);
+  return { ok: true, account: acct, saved };
+}
+
+async function api_social_ads_pullNow(token, payload) {
+  await authUser(token);
+  await _ensureSchemaS4();
+  const p = payload || {};
+  const days = Math.min(Math.max(Number(p.days) || 7, 1), 90);
+  const to = new Date();
+  const from = new Date(to.getTime() - (days - 1) * 86400000);
+  const fromStr = from.toISOString().slice(0, 10);
+  const toStr   = to.toISOString().slice(0, 10);
+
+  const accounts = await db.query(
+    `SELECT ad_account_id FROM social_ad_accounts WHERE is_monitored = 1`
+  );
+  const out = [];
+  for (const a of (accounts.rows || [])) {
+    try {
+      const r = await _pullAdAccountInsights(a.ad_account_id, fromStr, toStr);
+      out.push(r);
+    } catch (e) {
+      out.push({ ok: false, account: a.ad_account_id, error: e.message });
+    }
+  }
+  // After pulling, regenerate alerts for the most recent day
+  try { await _generateAlerts(toStr); } catch (_) {}
+  return { ok: true, days, from: fromStr, to: toStr, results: out };
+}
+
+// Generate alert rows for a given date based on the data we just pulled.
+// Rules (all configurable later via tenant settings):
+//   1. CPC spike — today's CPC > 1.5x of campaign's 7-day average
+//   2. Zero conversions — today's results = 0 but spend > 100
+//   3. Budget exhausted — spend < 10% of yesterday's spend (proxy)
+//   4. CPL above threshold — placeholder (no threshold config yet)
+async function _generateAlerts(forDate) {
+  try {
+    // Clear today's previous alerts so we don't dupe
+    await db.query(`DELETE FROM social_ad_alerts WHERE acknowledged = 0 AND created_at >= NOW() - INTERVAL '24 hours'`);
+    // 1. CPC spike — compare to 7-day avg
+    const cpcRows = await db.query(`
+      WITH avg7 AS (
+        SELECT ad_account_id, campaign_id, AVG(NULLIF(cpc,0)) AS avg_cpc
+          FROM social_ad_daily
+         WHERE date >= ($1::date - INTERVAL '7 days') AND date < $1::date
+         GROUP BY ad_account_id, campaign_id
+      )
+      SELECT d.ad_account_id, d.campaign_id, d.campaign_name, d.cpc, a.avg_cpc
+        FROM social_ad_daily d
+        JOIN avg7 a USING (ad_account_id, campaign_id)
+       WHERE d.date = $1::date AND d.cpc > a.avg_cpc * 1.5 AND a.avg_cpc > 0
+    `, [forDate]);
+    for (const row of (cpcRows.rows || [])) {
+      await db.query(`
+        INSERT INTO social_ad_alerts (ad_account_id, campaign_id, campaign_name, alert_type, severity, message)
+        VALUES ($1,$2,$3,'cpc_spike','warn',$4)
+      `, [row.ad_account_id, row.campaign_id, row.campaign_name,
+          'CPC spiked to ₹' + Number(row.cpc).toFixed(2) + ' (7-day avg ₹' + Number(row.avg_cpc).toFixed(2) + ')']);
+    }
+    // 2. Zero conversions with spend
+    const zeroRows = await db.query(`
+      SELECT ad_account_id, campaign_id, campaign_name, spend
+        FROM social_ad_daily
+       WHERE date = $1::date AND results = 0 AND spend > 100
+    `, [forDate]);
+    for (const row of (zeroRows.rows || [])) {
+      await db.query(`
+        INSERT INTO social_ad_alerts (ad_account_id, campaign_id, campaign_name, alert_type, severity, message)
+        VALUES ($1,$2,$3,'zero_conversions','warn',$4)
+      `, [row.ad_account_id, row.campaign_id, row.campaign_name,
+          'Zero results today despite ₹' + Number(row.spend).toFixed(0) + ' spend']);
+    }
+  } catch (e) { console.warn('[ads] alert gen failed:', e.message); }
+}
+
+// Summary KPIs — totals for a date range + delta vs previous equal range
+async function api_social_ads_summary(token, filters) {
+  await authUser(token);
+  await _ensureSchemaS4();
+  const f = filters || {};
+  const days = Math.min(Math.max(Number(f.days) || 7, 1), 90);
+  const to = new Date();
+  const from = new Date(to.getTime() - (days - 1) * 86400000);
+  const prevTo = new Date(from.getTime() - 86400000);
+  const prevFrom = new Date(prevTo.getTime() - (days - 1) * 86400000);
+  const ymd = d => d.toISOString().slice(0,10);
+
+  const cur = await db.query(`
+    SELECT
+      COALESCE(SUM(spend),0)       AS spend,
+      COALESCE(SUM(impressions),0) AS impressions,
+      COALESCE(SUM(clicks),0)      AS clicks,
+      COALESCE(SUM(results),0)     AS results,
+      COALESCE(SUM(leads),0)       AS leads
+    FROM social_ad_daily WHERE date BETWEEN $1 AND $2
+  `, [ymd(from), ymd(to)]);
+  const prev = await db.query(`
+    SELECT
+      COALESCE(SUM(spend),0)       AS spend,
+      COALESCE(SUM(impressions),0) AS impressions,
+      COALESCE(SUM(clicks),0)      AS clicks,
+      COALESCE(SUM(results),0)     AS results,
+      COALESCE(SUM(leads),0)       AS leads
+    FROM social_ad_daily WHERE date BETWEEN $1 AND $2
+  `, [ymd(prevFrom), ymd(prevTo)]);
+
+  const c = cur.rows[0] || {};
+  const p = prev.rows[0] || {};
+  const pct = (a, b) => (Number(b) > 0 ? ((Number(a) - Number(b)) / Number(b)) * 100 : (Number(a) > 0 ? 100 : 0));
+  return {
+    period: { days, from: ymd(from), to: ymd(to) },
+    current: {
+      spend: Number(c.spend), impressions: Number(c.impressions),
+      clicks: Number(c.clicks), results: Number(c.results), leads: Number(c.leads),
+      cpc: Number(c.clicks) > 0 ? Number(c.spend) / Number(c.clicks) : 0,
+      cpl: Number(c.leads)  > 0 ? Number(c.spend) / Number(c.leads)  : 0,
+      ctr: Number(c.impressions) > 0 ? (Number(c.clicks) / Number(c.impressions)) * 100 : 0
+    },
+    previous: {
+      spend: Number(p.spend), impressions: Number(p.impressions),
+      clicks: Number(p.clicks), results: Number(p.results), leads: Number(p.leads)
+    },
+    delta_pct: {
+      spend: pct(c.spend, p.spend),
+      impressions: pct(c.impressions, p.impressions),
+      clicks: pct(c.clicks, p.clicks),
+      results: pct(c.results, p.results),
+      leads: pct(c.leads, p.leads)
+    }
+  };
+}
+
+// Per-campaign breakdown
+async function api_social_ads_campaigns(token, filters) {
+  await authUser(token);
+  await _ensureSchemaS4();
+  const f = filters || {};
+  const days = Math.min(Math.max(Number(f.days) || 7, 1), 90);
+  const to = new Date();
+  const from = new Date(to.getTime() - (days - 1) * 86400000);
+  const ymd = d => d.toISOString().slice(0,10);
+
+  const r = await db.query(`
+    SELECT
+      ad_account_id, campaign_id, campaign_name,
+      SUM(spend) AS spend,
+      SUM(impressions) AS impressions,
+      SUM(clicks) AS clicks,
+      SUM(results) AS results,
+      SUM(leads) AS leads,
+      MAX(date) AS last_day
+    FROM social_ad_daily WHERE date BETWEEN $1 AND $2
+    GROUP BY ad_account_id, campaign_id, campaign_name
+    ORDER BY SUM(spend) DESC NULLS LAST
+    LIMIT 200
+  `, [ymd(from), ymd(to)]);
+  return (r.rows || []).map(row => ({
+    ad_account_id: row.ad_account_id,
+    campaign_id: row.campaign_id,
+    campaign_name: row.campaign_name,
+    spend: Number(row.spend),
+    impressions: Number(row.impressions),
+    clicks: Number(row.clicks),
+    results: Number(row.results),
+    leads: Number(row.leads),
+    cpc: Number(row.clicks) > 0 ? Number(row.spend) / Number(row.clicks) : 0,
+    cpl: Number(row.leads)  > 0 ? Number(row.spend) / Number(row.leads)  : 0,
+    last_day: row.last_day
+  }));
+}
+
+async function api_social_ads_alerts(token) {
+  await authUser(token);
+  await _ensureSchemaS4();
+  const r = await db.query(`
+    SELECT id, ad_account_id, campaign_id, campaign_name, alert_type, severity, message, acknowledged, created_at
+      FROM social_ad_alerts
+     ORDER BY (acknowledged = 1), created_at DESC
+     LIMIT 100
+  `);
+  return r.rows || [];
+}
+
+async function api_social_ads_alerts_ack(token, alertId) {
+  await authUser(token);
+  await _ensureSchemaS4();
+  await db.query(`UPDATE social_ad_alerts SET acknowledged = 1 WHERE id = $1`, [Number(alertId)]);
+  return { ok: true };
+}
+
+// Background snapshot worker — pulls every hour for the last 2 days
+async function _runAdDailySnapshot() {
+  try {
+    await _ensureSchemaS4();
+    const accts = await db.query(`SELECT ad_account_id FROM social_ad_accounts WHERE is_monitored = 1`);
+    if (!accts.rows || !accts.rows.length) return;
+    const to = new Date();
+    const from = new Date(to.getTime() - 86400000); // yesterday
+    const ymd = d => d.toISOString().slice(0,10);
+    for (const a of accts.rows) {
+      try { await _pullAdAccountInsights(a.ad_account_id, ymd(from), ymd(to)); }
+      catch (e) { console.warn('[ads] snapshot failed for', a.ad_account_id, e.message); }
+    }
+    await _generateAlerts(ymd(to));
+  } catch (e) { console.warn('[ads] snapshot worker error:', e.message); }
+}
+
 module.exports = {
   api_social_pages_list,
   api_social_inbox_threads,
@@ -783,7 +1182,18 @@ module.exports = {
   api_social_posts_delete,
   api_social_posts_publishNow,
   _runScheduledPosts,
+  // Phase S4 — Ad Reporting
+  api_social_ads_accounts_list,
+  api_social_ads_accounts_save,
+  api_social_ads_accounts_delete,
+  api_social_ads_pullNow,
+  api_social_ads_summary,
+  api_social_ads_campaigns,
+  api_social_ads_alerts,
+  api_social_ads_alerts_ack,
+  _runAdDailySnapshot,
   _ensureSchema,
   _ensureSchemaS2,
-  _ensureSchemaS3
+  _ensureSchemaS3,
+  _ensureSchemaS4
 };

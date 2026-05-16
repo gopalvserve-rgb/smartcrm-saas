@@ -67,6 +67,14 @@ try {
   if (social && typeof social._runScheduledPosts === 'function') {
     setInterval(() => social._runScheduledPosts().catch(() => {}), 60_000);
   }
+  // Phase S4 — Pull ad insights every hour. Updates today's + yesterday's
+  // snapshot rows and regenerates alerts. Cheap on the API quota since
+  // we only fetch 2 days at a time.
+  if (social && typeof social._runAdDailySnapshot === 'function') {
+    setInterval(() => social._runAdDailySnapshot().catch(() => {}), 60 * 60 * 1000);
+    // First snapshot after 90 seconds (let the server settle)
+    setTimeout(() => social._runAdDailySnapshot().catch(() => {}), 90_000);
+  }
 } catch (_) {}
 
 // Combine every SaaS api_* into one dispatch map
