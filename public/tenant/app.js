@@ -856,7 +856,9 @@ const NAV_GROUPS = [
     { id: 'edufees',     label: 'Fee Collection', icon: '💰', roles: ['admin','manager','team_leader'] },
     { id: 'edustudents', label: '👥 Students',      icon: '👥', roles: ['admin','manager','team_leader'] },
     { id: 'educourses',  label: '📚 Courses',       icon: '📚', roles: ['admin','manager'] },
+    { id: 'edudues',     label: '📋 Fee Dues',       icon: '📋', roles: ['admin','manager','team_leader','agent'] },
     { id: 'edurevenue',  label: '💎 Revenue',       icon: '💎', roles: ['admin','manager'] },
+    { id: 'edureports',  label: '📊 Collection Report', icon: '📊', roles: ['admin','manager'] },
     { id: 'reinventory', label: 'Inventory Board', icon: '🏢', roles: ['admin','manager','team_leader'] },
     { id: 'recommissions', label: 'Commissions', icon: '💸', roles: ['admin','manager'] },
     { id: 'campaigns',  label: 'Campaigns',      icon: '📣', roles: ['admin','manager'] },
@@ -28071,3 +28073,278 @@ async function openMarginEditorModal(onDone) {
 }
 
 try { window.openMarginEditorModal = openMarginEditorModal; } catch (_) {}
+
+
+// ═════════════════════════════════════════════════════════════════════
+// 📋 Fee Dues — back-office follow-up view (Education Phase 6)
+// Separated from 💎 Revenue (forecasting) so the back-office team has
+// a focused workspace for following up overdue + upcoming installments.
+// ═════════════════════════════════════════════════════════════════════
+VIEWS.edudues = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('div', { style:{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'.6rem' } },
+    h('h2', { style:{ margin:0 } }, '📋 Fee Dues — Back-office Follow-up'),
+    h('div', { style:{ display:'flex', gap:'.4rem', alignItems:'center' } },
+      h('select', { id:'dues-branch-filter', style:{ minWidth:'180px' } }, h('option', { value:'' }, '— All branches —'))
+    )
+  ));
+  view.appendChild(h('p', { class:'muted' },
+    'Daily worklist for the fee-collection team. Click any row → opens the lead → mark paid or trigger a reminder.'));
+
+  const branchSel = view.querySelector('#dues-branch-filter');
+  try {
+    const bs = await api('api_edu_branches_list').catch(() => []);
+    (bs || []).filter(b => Number(b.is_active)).forEach(b =>
+      branchSel.appendChild(h('option', { value: b.id }, b.name + (b.code ? ' (' + b.code + ')' : ''))));
+  } catch (_) {}
+
+  const body = h('div', {});
+  view.appendChild(body);
+
+  async function render() {
+    body.innerHTML = '<div class="muted" style="padding:1rem">Loading…</div>';
+    let data;
+    try {
+      data = await api('api_edu_revenue_forecast', { branch_id: branchSel.value ? Number(branchSel.value) : null });
+    } catch (e) {
+      body.innerHTML = '';
+      body.appendChild(h('div', { class:'error-box' }, e.message));
+      return;
+    }
+    body.innerHTML = '';
+
+    const s = data.summary || {};
+
+    // Just 3 follow-up KPIs (not the full revenue dashboard)
+    body.appendChild(h('div', { style:{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(200px, 1fr))', gap:'.6rem', marginBottom:'1rem' } },
+      h('div', { class:'card', style:{ padding:'.7rem .9rem', borderLeft:'4px solid #dc2626' } },
+        h('div', { class:'muted', style:{ fontSize:'.72em' } }, 'OVERDUE — collect today'),
+        h('div', { style:{ fontSize:'1.4rem', fontWeight:700, color:'#dc2626' } }, '₹' + Number(s.overdue||0).toLocaleString('en-IN'))),
+      h('div', { class:'card', style:{ padding:'.7rem .9rem', borderLeft:'4px solid #0ea5e9' } },
+        h('div', { class:'muted', style:{ fontSize:'.72em' } }, 'UPCOMING — next 30 days'),
+        h('div', { style:{ fontSize:'1.4rem', fontWeight:700, color:'#0ea5e9' } }, '₹' + Number(s.upcoming_30d||0).toLocaleString('en-IN'))),
+      h('div', { class:'card', style:{ padding:'.7rem .9rem', borderLeft:'4px solid #ea580c' } },
+        h('div', { class:'muted', style:{ fontSize:'.72em' } }, 'TOTAL OUTSTANDING'),
+        h('div', { style:{ fontSize:'1.4rem', fontWeight:700, color:'#ea580c' } }, '₹' + Number(s.outstanding||0).toLocaleString('en-IN')))
+    ));
+
+    // Overdue first — needs immediate attention
+    body.appendChild(h('h3', { style:{ margin:'1rem 0 .3rem', color:'#dc2626' } }, '⚠ Overdue installments — student-wise'));
+    const ov = data.overdue || [];
+    if (!ov.length) {
+      body.appendChild(h('div', { class:'muted ok-box', style:{ padding:'.6rem 1rem', background:'#ecfdf5', borderRadius:'8px' } }, '✅ Nothing overdue right now — great job!'));
+    } else {
+      body.appendChild(h('table', { class:'mini-table' },
+        h('thead', {}, h('tr', {},
+          h('th', {}, 'Student'),
+          h('th', {}, 'Course / Batch'),
+          h('th', {}, 'Installment'),
+          h('th', {}, 'Due'),
+          h('th', {}, 'Balance'),
+          h('th', {}, 'Overdue'),
+          h('th', {}, 'Actions')
+        )),
+        h('tbody', {}, ...ov.map(o => h('tr', { style:{ background:'#fef2f2' } },
+          h('td', {}, h('div', { style:{ fontWeight:600 } }, o.student_name || '—'), o.phone ? h('div', { class:'muted', style:{ fontSize:'.75em' } }, o.phone) : null),
+          h('td', {}, (o.course_name||'—') + (o.batch_name ? ' · ' + o.batch_name : '')),
+          h('td', {}, 'Seq ' + o.seq),
+          h('td', {}, String(o.due_date||'-').slice(0,10)),
+          h('td', { style:{ fontWeight:600 } }, '₹' + Number(Number(o.amount)-Number(o.paid_amount||0)).toLocaleString('en-IN')),
+          h('td', { style:{ color:'#dc2626', fontWeight:600 } }, o.days_overdue + ' d'),
+          h('td', {},
+            h('button', { class:'btn xs primary', style:{ marginRight:'.2rem' }, onclick: () => openLeadModal(o.lead_id) }, '💰 Collect'),
+            h('button', { class:'btn xs', title:'Send WhatsApp + email reminder', onclick: async () => {
+              try {
+                if (typeof api_edu_sendReminder !== 'undefined') {} // no-op
+                await api('api_edu_installment_sendReminder', { id: o.id }).catch(() => null);
+                toast('Reminder triggered');
+              } catch (e) { toast(e.message, 'err'); }
+            } }, '🔔 Remind')
+          )
+        )))
+      ));
+    }
+
+    // Upcoming
+    body.appendChild(h('h3', { style:{ margin:'1.2rem 0 .3rem', color:'#0ea5e9' } }, '⏰ Upcoming — next 30 days'));
+    const up = data.upcoming || [];
+    if (!up.length) {
+      body.appendChild(h('div', { class:'muted', style:{ padding:'.6rem 1rem' } }, 'No installments due in the next 30 days.'));
+    } else {
+      body.appendChild(h('table', { class:'mini-table' },
+        h('thead', {}, h('tr', {},
+          h('th', {}, 'Student'),
+          h('th', {}, 'Course / Batch'),
+          h('th', {}, 'Installment'),
+          h('th', {}, 'Due'),
+          h('th', {}, 'Amount'),
+          h('th', {}, 'Actions')
+        )),
+        h('tbody', {}, ...up.map(o => {
+          const daysUntil = Math.round((new Date(o.due_date) - new Date()) / (1000*60*60*24));
+          return h('tr', {},
+            h('td', {}, h('div', { style:{ fontWeight:600 } }, o.student_name || '—'), o.phone ? h('div', { class:'muted', style:{ fontSize:'.75em' } }, o.phone) : null),
+            h('td', {}, (o.course_name||'—') + (o.batch_name ? ' · ' + o.batch_name : '')),
+            h('td', {}, 'Seq ' + o.seq),
+            h('td', {}, String(o.due_date||'-').slice(0,10) + (daysUntil >= 0 ? ' (' + daysUntil + 'd)' : '')),
+            h('td', { style:{ fontWeight:600 } }, '₹' + Number(Number(o.amount)-Number(o.paid_amount||0)).toLocaleString('en-IN')),
+            h('td', {}, h('button', { class:'btn xs', onclick: () => openLeadModal(o.lead_id) }, 'Open lead'))
+          );
+        }))
+      ));
+    }
+  }
+
+  branchSel.addEventListener('change', render);
+  render();
+};
+
+// ═════════════════════════════════════════════════════════════════════
+// 📊 Collection Report — employee/manager/branch/role-wise (Phase 6)
+// ═════════════════════════════════════════════════════════════════════
+VIEWS.edureports = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('h2', {}, '📊 Collection & Revenue Report'));
+  view.appendChild(h('p', { class:'muted' },
+    'See who collected how much. Group by counsellor (assigned-to), manager, agent, branch, or role.'));
+
+  // Controls
+  const fGroup = h('select', {},
+    h('option', { value:'user',    selected:'selected' }, '👤 By Employee (assigned-to user)'),
+    h('option', { value:'manager' }, '👔 By Manager'),
+    h('option', { value:'agent' },   '👥 By Agent'),
+    h('option', { value:'branch' },  '🏢 By Branch'),
+    h('option', { value:'role' },    '📛 By Role')
+  );
+  const fStart = h('input', { type:'date', value: new Date(Date.now() - 90*24*60*60*1000).toISOString().slice(0,10) });
+  const fEnd   = h('input', { type:'date', value: new Date().toISOString().slice(0,10) });
+  const fBranch = h('select', {}, h('option', { value:'' }, '— All branches —'));
+  const runBtn = h('button', { class:'btn primary' }, '🔄 Run report');
+
+  const controls = h('div', { class:'card', style:{ padding:'.6rem .8rem', marginBottom:'.8rem', display:'flex', gap:'.5rem', flexWrap:'wrap', alignItems:'flex-end' } },
+    h('div', {}, h('label', { style:{ fontSize:'.75em' } }, 'Group by'),     fGroup),
+    h('div', {}, h('label', { style:{ fontSize:'.75em' } }, 'Start date'),   fStart),
+    h('div', {}, h('label', { style:{ fontSize:'.75em' } }, 'End date'),     fEnd),
+    h('div', {}, h('label', { style:{ fontSize:'.75em' } }, 'Branch'),       fBranch),
+    runBtn
+  );
+  view.appendChild(controls);
+
+  try {
+    const bs = await api('api_edu_branches_list').catch(() => []);
+    (bs || []).filter(b => Number(b.is_active)).forEach(b =>
+      fBranch.appendChild(h('option', { value: b.id }, b.name)));
+  } catch (_) {}
+
+  const body = h('div', {});
+  view.appendChild(body);
+
+  async function render() {
+    body.innerHTML = '<div class="muted" style="padding:1rem">Loading…</div>';
+    runBtn.disabled = true; runBtn.textContent = '⏳ Loading…';
+    try {
+      const data = await api('api_edu_collection_report', {
+        group_by: fGroup.value,
+        start_date: fStart.value,
+        end_date: fEnd.value,
+        branch_id: fBranch.value ? Number(fBranch.value) : null
+      });
+      body.innerHTML = '';
+
+      // Totals tiles
+      const t = data.totals || {};
+      body.appendChild(h('div', { style:{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(180px, 1fr))', gap:'.6rem', marginBottom:'1rem' } },
+        h('div', { class:'card', style:{ padding:'.7rem .9rem' } },
+          h('div', { class:'muted', style:{ fontSize:'.72em' } }, 'TOTAL ENROLLMENTS'),
+          h('div', { style:{ fontSize:'1.3rem', fontWeight:700 } }, String(t.enrollments || 0))),
+        h('div', { class:'card', style:{ padding:'.7rem .9rem' } },
+          h('div', { class:'muted', style:{ fontSize:'.72em' } }, 'FEE COLLECTED'),
+          h('div', { style:{ fontSize:'1.3rem', fontWeight:700, color:'#16a34a' } }, '₹' + Number(t.fee_collected||0).toLocaleString('en-IN'))),
+        h('div', { class:'card', style:{ padding:'.7rem .9rem' } },
+          h('div', { class:'muted', style:{ fontSize:'.72em' } }, 'OUTSTANDING'),
+          h('div', { style:{ fontSize:'1.3rem', fontWeight:700, color:'#ea580c' } }, '₹' + Number(t.fee_outstanding||0).toLocaleString('en-IN'))),
+        h('div', { class:'card', style:{ padding:'.7rem .9rem' } },
+          h('div', { class:'muted', style:{ fontSize:'.72em' } }, 'NET REVENUE'),
+          h('div', { style:{ fontSize:'1.3rem', fontWeight:700, color:'#7c3aed' } }, '₹' + Number(t.net_revenue||0).toLocaleString('en-IN')))
+      ));
+
+      const rows = data.rows || [];
+      if (!rows.length) {
+        body.appendChild(h('div', { class:'muted', style:{ padding:'1rem' } }, 'No collections in this period.'));
+        return;
+      }
+
+      // Group label header
+      const groupLabel = ({ user:'Employee', agent:'Agent', manager:'Manager', branch:'Branch', role:'Role' })[data.group_by] || 'Group';
+
+      // Bars — max of fee_collected to scale
+      const maxCol = Math.max(...rows.map(r => Number(r.fee_collected)), 1);
+
+      body.appendChild(h('table', { class:'mini-table' },
+        h('thead', {}, h('tr', {},
+          h('th', {}, groupLabel),
+          h('th', { style:{ width:'90px', textAlign:'right' } }, 'Enrollments'),
+          h('th', { style:{ width:'130px', textAlign:'right' } }, 'Fee collected'),
+          h('th', { style:{ width:'130px', textAlign:'right' } }, 'Outstanding'),
+          h('th', { style:{ width:'130px', textAlign:'right' } }, 'Net revenue'),
+          h('th', { style:{ width:'130px', textAlign:'right' } }, 'Last payment'),
+          h('th', { style:{ minWidth:'200px' } }, 'Collection bar')
+        )),
+        h('tbody', {}, ...rows.map(r => h('tr', {},
+          h('td', {}, h('strong', {}, r.group_label || '—')),
+          h('td', { style:{ textAlign:'right' } }, String(r.enrollments)),
+          h('td', { style:{ textAlign:'right', color:'#16a34a', fontWeight:600 } }, '₹' + Number(r.fee_collected).toLocaleString('en-IN')),
+          h('td', { style:{ textAlign:'right' } }, '₹' + Number(r.fee_outstanding).toLocaleString('en-IN')),
+          h('td', { style:{ textAlign:'right', color:'#7c3aed', fontWeight:600 } }, '₹' + Number(r.net_revenue).toLocaleString('en-IN')),
+          h('td', { style:{ textAlign:'right', fontSize:'.85em', color:'#64748b' } }, r.last_payment_at ? String(r.last_payment_at).slice(0,10) : '—'),
+          h('td', {},
+            h('div', { style:{ background:'#e5e7eb', borderRadius:'4px', height:'18px', position:'relative' } },
+              h('div', { style:{ background:'#16a34a', height:'100%', borderRadius:'4px', width: (Number(r.fee_collected) / maxCol * 100) + '%' } })
+            )
+          )
+        )))
+      ));
+    } catch (e) {
+      body.innerHTML = '';
+      body.appendChild(h('div', { class:'error-box' }, e.message));
+    } finally {
+      runBtn.disabled = false; runBtn.textContent = '🔄 Run report';
+    }
+  }
+
+  runBtn.addEventListener('click', render);
+  render();
+};
+
+
+// Strip the Overdue + Upcoming tables from VIEWS.edurevenue so it focuses
+// on forecasting + margins only. The back-office follow-up tables now
+// live in VIEWS.edudues.
+(function _trimRevenueView() {
+  if (typeof VIEWS === 'undefined' || !VIEWS.edurevenue) return;
+  const _orig = VIEWS.edurevenue;
+  VIEWS.edurevenue = async function patchedRevenue(view) {
+    await _orig.call(this, view);
+    // Remove the Overdue + Upcoming sections post-render
+    setTimeout(() => {
+      [...view.querySelectorAll('h3')].forEach(h3 => {
+        const txt = (h3.textContent || '').trim();
+        if (/^⚠.*Overdue.*student-wise/i.test(txt) || /^⏰\s*Upcoming/i.test(txt)) {
+          // Remove the heading AND the next sibling (table or message)
+          const next = h3.nextElementSibling;
+          h3.remove();
+          if (next) next.remove();
+        }
+      });
+      // Add a hint pointing to the new view
+      const hint = view.querySelector('.edu-revenue-hint');
+      if (!hint) {
+        const link = document.createElement('div');
+        link.className = 'edu-revenue-hint';
+        link.style.cssText = 'background:#f0f9ff;border-left:4px solid #0ea5e9;padding:.6rem 1rem;border-radius:6px;margin-top:1rem;font-size:.88em;';
+        link.innerHTML = '💡 Overdue + Upcoming installments are now in <a href="#/edudues" style="font-weight:600;color:#0c4a6e">📋 Fee Dues</a> — a dedicated back-office follow-up workspace.';
+        view.appendChild(link);
+      }
+    }, 250);
+  };
+})();

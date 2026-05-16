@@ -1185,6 +1185,143 @@ async function api_edu_course_margin_save(token, payload) {
   return { ok: true, course: key, saved: extras[key] };
 }
 
+
+// ═════════════════════════════════════════════════════════════════
+// Phase 6 — Role-based collection reports + Back-office Fee Dues view
+// ═════════════════════════════════════════════════════════════════
+
+/**
+ * api_edu_collection_report(filters)
+ *
+ * Aggregates fee collection + net revenue grouped by a dimension:
+ *   filters.group_by: 'user' | 'manager' | 'branch' | 'role' | 'agent'
+ *   filters.start_date / filters.end_date — optional (defaults to last 365d)
+ *
+ * For each group returns:
+ *   group_id, group_label, enrollments, fee_collected, fee_outstanding,
+ *   net_revenue, last_payment_at
+ *
+ * Definitions:
+ *   user/agent  → lead.assigned_to (the counsellor who handled the lead)
+ *   manager     → user whose CRM role is 'manager' — aggregated across
+ *                 their team (their assigned leads + their team's leads)
+ *   role        → admin / manager / team_leader / agent
+ *   branch      → enrollment.branch_id
+ */
+async function api_edu_collection_report(token, filters) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureSchema();
+  await _ensureSchemaV3();
+  try { await db.query(`ALTER TABLE edu_installments ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ`); } catch (_) {}
+
+  const f = filters || {};
+  const groupBy = ['user','manager','branch','role','agent'].includes(f.group_by) ? f.group_by : 'user';
+
+  // Date range (defaults to last 365 days)
+  const startDate = f.start_date || new Date(Date.now() - 365*24*60*60*1000).toISOString().slice(0,10);
+  const endDate   = f.end_date   || new Date().toISOString().slice(0,10);
+
+  // Optional branch filter (applies on top of group_by)
+  const params = [startDate, endDate];
+  let branchClause = '';
+  if (f.branch_id) {
+    params.push(Number(f.branch_id));
+    branchClause = `AND e.branch_id = $${params.length}`;
+  }
+
+  let groupSelect, groupKeyExpr, joinClause;
+  if (groupBy === 'branch') {
+    groupSelect = `b.id AS group_id, COALESCE(b.name, '— No branch —') AS group_label`;
+    groupKeyExpr = `b.id, b.name`;
+    joinClause = `LEFT JOIN edu_branches b ON b.id = e.branch_id`;
+  } else if (groupBy === 'role') {
+    groupSelect = `COALESCE(u.role, 'unassigned') AS group_id, COALESCE(u.role, 'Unassigned') AS group_label`;
+    groupKeyExpr = `u.role`;
+    joinClause = `LEFT JOIN leads l ON l.id = e.lead_id LEFT JOIN users u ON u.id = l.assigned_to`;
+  } else {
+    // user / agent / manager — all key on lead.assigned_to
+    groupSelect = `u.id AS group_id, COALESCE(u.name, 'Unassigned') AS group_label`;
+    groupKeyExpr = `u.id, u.name`;
+    joinClause = `LEFT JOIN leads l ON l.id = e.lead_id LEFT JOIN users u ON u.id = l.assigned_to`;
+  }
+
+  const rolesFilter = groupBy === 'manager' ? `AND u.role = 'manager'`
+                     : groupBy === 'agent'   ? `AND (u.role = 'agent' OR u.role IS NULL)`
+                     : '';
+
+  // Load course margins for net revenue calculation
+  const extras = await _loadCourseExtras();
+
+  // Pull rows with course names so we can apply margin per course at JS level
+  // (cheaper than building margin into SQL).
+  const sql = `
+    SELECT ${groupSelect},
+           e.course_name,
+           COUNT(DISTINCT e.id)::int                       AS enrollments,
+           COALESCE(SUM(p.amount), 0)::numeric              AS fee_collected,
+           COALESCE(SUM(i.amount - i.paid_amount), 0)::numeric AS fee_outstanding,
+           MAX(p.received_at)                                AS last_payment_at
+      FROM edu_enrollments e
+      ${joinClause}
+      LEFT JOIN edu_installments i ON i.enrollment_id = e.id
+      LEFT JOIN edu_payments p     ON p.enrollment_id = e.id
+        AND p.received_at BETWEEN $1::date AND ($2::date + INTERVAL '1 day')
+     WHERE 1=1 ${rolesFilter} ${branchClause}
+     GROUP BY ${groupKeyExpr}, e.course_name
+     ORDER BY ${groupKeyExpr}
+  `;
+  const r = await db.query(sql, params);
+
+  // Roll up per-group, applying course margin
+  const groupMap = {};
+  for (const row of (r.rows || [])) {
+    const key = String(row.group_id || 'null');
+    if (!groupMap[key]) groupMap[key] = {
+      group_id: row.group_id,
+      group_label: row.group_label,
+      enrollments: 0,
+      fee_collected: 0,
+      fee_outstanding: 0,
+      net_revenue: 0,
+      last_payment_at: null
+    };
+    const g = groupMap[key];
+    g.enrollments    += Number(row.enrollments);
+    g.fee_collected  += Number(row.fee_collected);
+    g.fee_outstanding += Number(row.fee_outstanding);
+
+    // Apply per-course margin
+    let marginConf = null;
+    for (const [pid, ex] of Object.entries(extras || {})) {
+      if (ex && ex.course_name && row.course_name &&
+          ex.course_name.toLowerCase() === row.course_name.toLowerCase()) { marginConf = ex; break; }
+    }
+    g.net_revenue += _applyMargin(row.fee_collected, marginConf);
+
+    if (row.last_payment_at && (!g.last_payment_at || row.last_payment_at > g.last_payment_at)) {
+      g.last_payment_at = row.last_payment_at;
+    }
+  }
+
+  // Totals
+  const totals = Object.values(groupMap).reduce((acc, g) => {
+    acc.enrollments    += g.enrollments;
+    acc.fee_collected  += g.fee_collected;
+    acc.fee_outstanding += g.fee_outstanding;
+    acc.net_revenue    += g.net_revenue;
+    return acc;
+  }, { enrollments: 0, fee_collected: 0, fee_outstanding: 0, net_revenue: 0 });
+
+  return {
+    group_by: groupBy,
+    start_date: startDate,
+    end_date: endDate,
+    rows: Object.values(groupMap).sort((a,b) => Number(b.fee_collected) - Number(a.fee_collected)),
+    totals
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────
 // Register
 // ─────────────────────────────────────────────────────────────────
@@ -1202,9 +1339,11 @@ framework.register({
     'Education statuses + parent custom fields seeded'
   ],
   nav_items: [
+    { id: 'edudues',     label: '📋 Fee Dues',       icon: '📋' },
     { id: 'edufees',     label: '💰 Fee Collection', icon: '💰' },
     { id: 'edustudents', label: '👥 Students',       icon: '👥' },
-    { id: 'edurevenue',  label: '💎 Revenue',        icon: '💎' }
+    { id: 'edurevenue',  label: '💎 Revenue',        icon: '💎' },
+    { id: 'edureports',  label: '📊 Collection Report', icon: '📊' }
   ],
   install,
   uninstall
@@ -1228,5 +1367,6 @@ module.exports = {
   api_edu_docTypes_list, api_edu_docTypes_save,
   api_edu_leadDocs_list, api_edu_leadDocs_register, api_edu_leadDocs_delete, api_edu_leadDocs_verify,
   api_edu_revenue_forecast, api_edu_course_margin_save,
+  api_edu_collection_report,
   _ensureSchema, _ensureSchemaV3
 };
