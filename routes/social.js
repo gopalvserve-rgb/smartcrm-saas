@@ -278,7 +278,7 @@ async function api_social_fb_connect(token, shortToken, opts) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          subscribed_fields: 'messages,messaging_postbacks,feed,mention,comments',
+          subscribed_fields: 'messages,messaging_postbacks,feed,mention',
           access_token: pageTok
         })
       });
@@ -1497,7 +1497,7 @@ async function api_social_resubscribePages(token) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          subscribed_fields: 'messages,messaging_postbacks,feed,mention,comments',
+          subscribed_fields: 'messages,messaging_postbacks,feed,mention',
           access_token: p.access_token
         })
       });
