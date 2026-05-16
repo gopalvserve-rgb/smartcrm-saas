@@ -356,7 +356,52 @@ async function api_packs_listInstalled(token) {
   const { authUser } = require('../../utils/auth');
   await authUser(token);
   const fw = require('../packs/_framework');
-  return fw.listInstalledPacks();
+  let rows = await fw.listInstalledPacks();
+
+  // SELF-HEAL: if no packs are installed but this tenant SHOULD have one
+  // (showcase-edu / showcase-re / a manually-created tenant whose
+  // industry_pack got saved in the audit_log but failed to install
+  // because the pack registry was empty at the time), install it now.
+  // Without this, tenants like testfv stay stuck on Generic forever.
+  const activeRows = (rows || []).filter(r => Number(r && r.is_active) === 1);
+  if (!activeRows.length) {
+    let expected = null;
+    const slug = _activeSlugForToken();
+    if (slug === 'showcase-edu') expected = 'education';
+    else if (slug === 'showcase-re') expected = 'realestate';
+    else if (slug) {
+      // Fall back to the audit_log entry from tenant creation. The
+      // industry_pack chosen on the Create-tenant form is preserved
+      // in the 'tenant.created_manually' event's detail JSON.
+      try {
+        const control = require('../../control/db');
+        const ar = await control.query(
+          `SELECT detail FROM audit_log
+              WHERE event = 'tenant.created_manually'
+                AND detail::jsonb->>'slug' = $1
+              ORDER BY created_at DESC LIMIT 1`,
+          [slug]
+        );
+        const det = ar.rows && ar.rows[0] && ar.rows[0].detail;
+        const parsed = (typeof det === 'string') ? JSON.parse(det) : det;
+        if (parsed && parsed.industry_pack && parsed.industry_pack !== 'generic') {
+          expected = String(parsed.industry_pack);
+        }
+      } catch (e) {
+        console.warn('[packs_listInstalled] audit_log lookup failed:', e.message);
+      }
+    }
+    if (expected) {
+      try {
+        await fw.installPack(expected, {});
+        rows = await fw.listInstalledPacks();
+        console.log('[packs_listInstalled] self-healed: installed', expected, 'on', slug);
+      } catch (e) {
+        console.warn('[packs_listInstalled] auto-install failed for', slug, expected, '—', e.message);
+      }
+    }
+  }
+  return rows;
 }
 async function api_packs_install(token, packId) {
   const { authUser } = require('../../utils/auth');
