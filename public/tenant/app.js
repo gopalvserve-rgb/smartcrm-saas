@@ -27592,3 +27592,205 @@ try {
   window.openManageBranchesModal = openManageBranchesModalV2;
   window.openAssignUsersModal = openAssignUsersModal;
 } catch (_) {}
+
+
+// ═════════════════════════════════════════════════════════════════════
+// 🎓 Education pack — Lead-level documents (works pre-sale + at-sale)
+// ═════════════════════════════════════════════════════════════════════
+// Auto-mounts a "📎 Documents" block on every lead modal (when Education
+// pack is installed) — so docs can be collected at any stage of the
+// funnel, not just after enrolment.
+
+async function _eduUploadFileToStorage(file) {
+  // Tries existing tenant /api/files/upload first; falls back to data URL
+  // for small files. Returns the storage_url string.
+  if (!file) return '';
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const up = await fetch('/api/files/upload', {
+      method:'POST', headers: { 'Authorization': 'Bearer ' + (CRM.token || '') }, body: fd
+    });
+    if (up.ok) {
+      const j = await up.json();
+      const url = j.url || j.path || j.location || '';
+      if (url) return url;
+    }
+  } catch (_) {}
+  if (file.size < 200000) {
+    return await new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(file); });
+  }
+  throw new Error('File upload service not available (configure /api/files/upload)');
+}
+
+function packLeadDocumentsBlock(leadId, opts) {
+  opts = opts || {};
+  const wrap = h('div', { class:'pack-block edu-lead-docs', style:{ marginTop:'1rem', borderTop:'1px solid #e5e7eb', paddingTop:'1rem' } });
+
+  const head = h('div', { style:{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'.4rem' } },
+    h('h4', { style:{ margin:0 } }, '📎 Documents'),
+    h('button', { class:'btn sm', onclick: () => openManageDocTypesModal(() => refresh()) }, '⚙ Doc types')
+  );
+  wrap.appendChild(head);
+
+  const uploadRow = h('div', { class:'card', style:{ padding:'.5rem .7rem', background:'#f0f9ff', marginBottom:'.5rem' } });
+  wrap.appendChild(uploadRow);
+
+  const listEl = h('div', {}, h('div', { class:'muted' }, 'Loading documents…'));
+  wrap.appendChild(listEl);
+
+  async function refresh() {
+    try {
+      const [types, docs] = await Promise.all([
+        api('api_edu_docTypes_list').catch(() => []),
+        api('api_edu_leadDocs_list', leadId).catch(() => [])
+      ]);
+
+      // Rebuild upload row
+      uploadRow.innerHTML = '';
+      const fType = h('select', { style:{ minWidth:'160px' } },
+        ...types.map(t => h('option', { value: t.code }, t.label))
+      );
+      const fLabel = h('input', { type:'text', placeholder:'Label (optional)', style:{ flex:1, minWidth:'140px' } });
+      const fFile  = h('input', { type:'file', accept:'image/*,application/pdf,.doc,.docx,.xls,.xlsx' });
+      const btn    = h('button', { class:'btn sm primary', onclick: async () => {
+        if (!fFile.files[0]) { toast('Pick a file first', 'err'); return; }
+        const file = fFile.files[0];
+        btn.disabled = true; btn.textContent = '⏳ Uploading…';
+        try {
+          const storageUrl = await _eduUploadFileToStorage(file);
+          await api('api_edu_leadDocs_register', {
+            lead_id: leadId,
+            enrollment_id: opts.enrollment_id || null,
+            doc_type: fType.value,
+            label: fLabel.value || file.name,
+            filename: file.name,
+            mime_type: file.type,
+            file_size: file.size,
+            storage_url: storageUrl,
+            stage: opts.stage || 'lead'
+          });
+          toast('✓ Document uploaded');
+          fLabel.value = '';
+          fFile.value = '';
+          refresh();
+        } catch (e) { toast(e.message, 'err'); }
+        finally { btn.disabled = false; btn.textContent = '📤 Upload'; }
+      } }, '📤 Upload');
+      uploadRow.appendChild(h('div', { style:{ display:'flex', gap:'.3rem', alignItems:'center', flexWrap:'wrap' } },
+        fType, fLabel, fFile, btn
+      ));
+
+      // List of existing docs
+      listEl.innerHTML = '';
+      if (!docs.length) {
+        listEl.appendChild(h('div', { class:'muted', style:{ padding:'.4rem 0', fontSize:'.85em' } }, 'No documents uploaded yet.'));
+        return;
+      }
+      docs.forEach(d => {
+        const stageBadge = d.stage === 'enrollment' ? '🎓' : '📋';
+        listEl.appendChild(h('div', { style:{ display:'flex', alignItems:'center', gap:'.4rem', padding:'.3rem .4rem', fontSize:'.85em', borderBottom:'1px dashed #e5e7eb' } },
+          h('span', { title: d.stage }, stageBadge),
+          h('span', { style:{ background:'#e0e7ff', color:'#3730a3', padding:'1px 6px', borderRadius:'3px', fontSize:'.75em', whiteSpace:'nowrap' } }, (d.doc_type || 'other').toUpperCase()),
+          d.storage_url
+            ? h('a', { href: d.storage_url, target:'_blank', style:{ flex:1 } }, d.label || d.filename)
+            : h('span', { style:{ flex:1 } }, d.label || d.filename),
+          d.file_size ? h('span', { class:'muted', style:{ fontSize:'.75em' } }, Math.round(d.file_size / 1024) + ' KB') : null,
+          Number(d.is_verified)
+            ? h('span', { style:{ color:'#16a34a' }, title:'Verified' }, '✓ Verified')
+            : h('button', { class:'btn xs', onclick: async () => { await api('api_edu_leadDocs_verify', { id: d.id, is_verified: 1 }); refresh(); } }, 'Verify'),
+          h('button', { class:'btn xs danger', onclick: async () => { if (confirm('Delete this document?')) { await api('api_edu_leadDocs_delete', d.id); refresh(); } } }, '🗑')
+        ));
+      });
+    } catch (e) {
+      listEl.innerHTML = '';
+      if (!/not active/i.test(String(e.message || ''))) listEl.appendChild(h('div', { class:'muted' }, e.message));
+    }
+  }
+  refresh();
+  return wrap;
+}
+
+// Doc-types catalog manager (admin only)
+async function openManageDocTypesModal(onDone) {
+  let types = [];
+  try { types = await api('api_edu_docTypes_list'); } catch (_) { types = []; }
+
+  const m = h('div', { class:'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const modal = h('div', { class:'modal modal-lg' });
+  modal.appendChild(h('div', { class:'modal-head' },
+    h('h3', {}, '⚙ Document types catalog'),
+    h('button', { class:'btn ghost', onclick: () => m.remove() }, '✕')
+  ));
+  const body = h('div', { class:'modal-body' });
+  body.appendChild(h('p', { class:'muted', style:{ fontSize:'.85em', marginTop:0 } },
+    'Customize the document types your team collects from leads/students. Tick "Required before sale" to flag docs that must be collected before sale closure.'));
+
+  const rowsWrap = h('div', { class:'card', style:{ padding:'.5rem .7rem' } });
+  body.appendChild(rowsWrap);
+
+  function addRow(t) {
+    t = t || { code: '', label: '', required_before_sale: false };
+    const fCode = h('input', { type:'text', value: t.code, placeholder:'code (e.g. aadhar)', style:{ width:'140px' } });
+    const fLabel = h('input', { type:'text', value: t.label, placeholder:'Label (e.g. Aadhar Card)', style:{ flex:1, minWidth:'180px' } });
+    const fReq = h('input', { type:'checkbox' });
+    if (t.required_before_sale) fReq.checked = true;
+    const row = h('div', { style:{ display:'flex', gap:'.3rem', alignItems:'center', padding:'.3rem 0', borderBottom:'1px solid #f1f5f9' } },
+      fCode, fLabel,
+      h('label', { style:{ display:'flex', gap:'.2rem', alignItems:'center', fontSize:'.8em' } }, fReq, h('span', {}, 'Required pre-sale')),
+      h('button', { class:'btn xs danger', onclick: () => row.remove() }, '✕')
+    );
+    row._get = () => ({ code: fCode.value, label: fLabel.value, required_before_sale: fReq.checked });
+    rowsWrap.appendChild(row);
+  }
+  types.forEach(addRow);
+
+  body.appendChild(h('button', { class:'btn sm', style:{ marginTop:'.4rem' }, onclick: () => addRow() }, '+ Add doc type'));
+
+  modal.appendChild(body);
+  modal.appendChild(h('div', { class:'actions' },
+    h('button', { class:'btn', onclick: () => m.remove() }, 'Cancel'),
+    h('button', { class:'btn primary', onclick: async () => {
+      const all = [...rowsWrap.children].map(r => r._get && r._get()).filter(x => x && x.code && x.label);
+      try {
+        await api('api_edu_docTypes_save', { types: all });
+        toast('Doc types saved · ' + all.length + ' types');
+        m.remove();
+        if (onDone) onDone();
+      } catch (e) { toast(e.message, 'err'); }
+    } }, '💾 Save')
+  ));
+
+  m.appendChild(modal);
+  document.body.appendChild(m);
+}
+
+// Mount Documents block on every Education-installed lead modal
+(function _wireEduLeadDocs() {
+  if (typeof openLeadModal !== 'function') return;
+  const _prev = openLeadModal;
+  window.openLeadModal = async function patchedForEduDocs(id) {
+    const out = await _prev.apply(this, arguments);
+    if (!id) return out;
+    setTimeout(async () => {
+      try {
+        const installed = await api('api_packs_listInstalled').catch(() => []);
+        const eduActive = (installed || []).some(p => p.pack_id === 'education' && Number(p.is_active));
+        if (!eduActive) return;
+        const body = document.querySelector('.modal-backdrop:last-of-type .modal');
+        if (!body || body.querySelector('.edu-lead-docs')) return;
+
+        const panel = packLeadDocumentsBlock(id, { stage: 'lead' });
+        const actions = body.querySelector('.actions');
+        if (actions) body.insertBefore(panel, actions);
+        else body.appendChild(panel);
+      } catch (_) {}
+    }, 350);
+    return out;
+  };
+})();
+
+try {
+  window.packLeadDocumentsBlock = packLeadDocumentsBlock;
+  window.openManageDocTypesModal = openManageDocTypesModal;
+} catch (_) {}

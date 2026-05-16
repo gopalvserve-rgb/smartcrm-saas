@@ -62,7 +62,7 @@ async function _ensureSchema() {
     id SERIAL PRIMARY KEY,
     enrollment_id INTEGER NOT NULL,
     seq INTEGER NOT NULL,
-    due_date DATE NOT NULL,
+    due_date DATE,
     amount NUMERIC(12,2) NOT NULL DEFAULT 0,
     paid_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
     late_fee NUMERIC(12,2) NOT NULL DEFAULT 0,
@@ -72,8 +72,12 @@ async function _ensureSchema() {
     reminded_7d  INTEGER NOT NULL DEFAULT 0,
     reminded_1d  INTEGER NOT NULL DEFAULT 0,
     reminded_due INTEGER NOT NULL DEFAULT 0,
+    paid_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`);
+  // Defensive — for legacy installs that pre-date the paid_at column
+  try { await db.query(`ALTER TABLE edu_installments ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ`); } catch (_) {}
+  try { await db.query(`ALTER TABLE edu_installments ALTER COLUMN due_date DROP NOT NULL`); } catch (_) {}
   await db.query(`CREATE INDEX IF NOT EXISTS idx_edu_inst_enrol ON edu_installments(enrollment_id)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_edu_inst_due   ON edu_installments(due_date, status)`);
 
@@ -808,6 +812,137 @@ async function api_edu_branches_listWithCounts(token) {
   return r.rows;
 }
 
+
+// ───── Lead-level documents — works for both LEADS (pre-sale) and ENROLLMENTS (post-sale)
+// Customizable doc-type catalog stored in config.edu_doc_types.
+async function _ensureLeadDocsSchema() {
+  try {
+    await db.query(`CREATE TABLE IF NOT EXISTS edu_lead_documents (
+      id SERIAL PRIMARY KEY,
+      lead_id INTEGER NOT NULL,
+      enrollment_id INTEGER,
+      doc_type TEXT NOT NULL DEFAULT 'other',
+      label TEXT NOT NULL DEFAULT '',
+      filename TEXT NOT NULL DEFAULT '',
+      mime_type TEXT NOT NULL DEFAULT '',
+      file_size INTEGER NOT NULL DEFAULT 0,
+      storage_url TEXT NOT NULL DEFAULT '',
+      uploaded_by INTEGER,
+      uploaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      is_verified INTEGER NOT NULL DEFAULT 0,
+      stage TEXT NOT NULL DEFAULT 'lead'  -- 'lead' = pre-sale, 'enrollment' = post-sale
+    )`);
+    await db.query(`CREATE INDEX IF NOT EXISTS edu_lead_docs_lead_idx ON edu_lead_documents(lead_id)`);
+  } catch (_) {}
+}
+
+// Doc-type catalog — admin-customizable list of allowed doc types
+async function api_edu_docTypes_list(token) {
+  await authUser(token);
+  await _requireEducation();
+  try {
+    const r = await db.query(`SELECT value FROM config WHERE key='edu_doc_types' LIMIT 1`);
+    if (r.rows && r.rows[0] && r.rows[0].value) {
+      return JSON.parse(r.rows[0].value);
+    }
+  } catch (_) {}
+  // Default catalog if nothing saved
+  return [
+    { code:'aadhar',      label:'Aadhar Card',       required_before_sale: false },
+    { code:'pan',         label:'PAN Card',          required_before_sale: false },
+    { code:'photo',       label:'Passport Photo',    required_before_sale: false },
+    { code:'marksheet10', label:'10th Marksheet',    required_before_sale: false },
+    { code:'marksheet12', label:'12th Marksheet',    required_before_sale: false },
+    { code:'addr_proof',  label:'Address Proof',     required_before_sale: false },
+    { code:'parent_id',   label:'Parent ID Proof',   required_before_sale: false },
+    { code:'agreement',   label:'Signed Agreement',  required_before_sale: false },
+    { code:'other',       label:'Other',             required_before_sale: false }
+  ];
+}
+
+async function api_edu_docTypes_save(token, payload) {
+  const me = await authUser(token);
+  if (!['admin','manager'].includes(me.role)) throw new Error('Admin or manager role required');
+  await _requireEducation();
+  const types = Array.isArray(payload && payload.types) ? payload.types : [];
+  // Validate shape — must have code + label per entry
+  const clean = types
+    .filter(t => t && t.code && t.label)
+    .map(t => ({
+      code: String(t.code).toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 40),
+      label: String(t.label).trim().slice(0, 80),
+      required_before_sale: !!t.required_before_sale
+    }));
+  try {
+    await db.query(
+      `INSERT INTO config (key, value) VALUES ('edu_doc_types', $1)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+      [JSON.stringify(clean)]
+    );
+  } catch (e) {
+    // Fallback if config has different schema
+    try {
+      await db.query(`UPDATE config SET value=$1 WHERE key='edu_doc_types'`, [JSON.stringify(clean)]);
+    } catch (_) {}
+  }
+  return { ok: true, count: clean.length };
+}
+
+// List documents for a lead (pre-sale + post-sale combined)
+async function api_edu_leadDocs_list(token, leadId) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureLeadDocsSchema();
+  if (!leadId) throw new Error('leadId required');
+  const r = await db.query(
+    `SELECT id, lead_id, enrollment_id, doc_type, label, filename, mime_type,
+            file_size, storage_url, uploaded_by, uploaded_at, is_verified, stage
+       FROM edu_lead_documents WHERE lead_id=$1 ORDER BY uploaded_at DESC`,
+    [Number(leadId)]
+  );
+  return r.rows;
+}
+
+async function api_edu_leadDocs_register(token, payload) {
+  const me = await authUser(token);
+  await _requireEducation();
+  await _ensureLeadDocsSchema();
+  const p = payload || {};
+  if (!p.lead_id) throw new Error('lead_id required');
+  if (!p.storage_url && !p.filename) throw new Error('storage_url or filename required');
+  const r = await db.query(
+    `INSERT INTO edu_lead_documents (lead_id, enrollment_id, doc_type, label, filename, mime_type, file_size, storage_url, uploaded_by, stage)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+    [Number(p.lead_id), p.enrollment_id ? Number(p.enrollment_id) : null,
+     p.doc_type || 'other', p.label || p.filename || '',
+     p.filename || '', p.mime_type || '', Number(p.file_size || 0),
+     p.storage_url || '', me.id, p.stage || 'lead']
+  );
+  return { ok: true, id: r.rows[0].id };
+}
+
+async function api_edu_leadDocs_delete(token, id) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureLeadDocsSchema();
+  if (!id) throw new Error('id required');
+  await db.query(`DELETE FROM edu_lead_documents WHERE id=$1`, [Number(id)]);
+  return { ok: true };
+}
+
+async function api_edu_leadDocs_verify(token, payload) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureLeadDocsSchema();
+  const p = payload || {};
+  if (!p.id) throw new Error('id required');
+  await db.query(
+    `UPDATE edu_lead_documents SET is_verified=$1 WHERE id=$2`,
+    [Number(p.is_verified ? 1 : 0), Number(p.id)]
+  );
+  return { ok: true };
+}
+
 // ─────────────────────────────────────────────────────────────────
 // Register
 // ─────────────────────────────────────────────────────────────────
@@ -847,5 +982,7 @@ module.exports = {
   api_edu_enrollment_createCustom,
   api_edu_branch_users_list, api_edu_branch_users_assign, api_edu_branch_users_remove,
   api_edu_branches_byUser, api_edu_branches_listWithCounts,
+  api_edu_docTypes_list, api_edu_docTypes_save,
+  api_edu_leadDocs_list, api_edu_leadDocs_register, api_edu_leadDocs_delete, api_edu_leadDocs_verify,
   _ensureSchema, _ensureSchemaV3
 };
