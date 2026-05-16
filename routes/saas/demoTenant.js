@@ -1264,7 +1264,7 @@ async function _seedEducationDemoData(pool, adminUserId, slugOverride) {
       installmentRows++;
       if (paidAmt > 0) {
         await pool.query(
-          `INSERT INTO edu_payments (installment_id, enrollment_id, amount, method, reference, received_by)
+          `INSERT INTO edu_payments (installment_id, enrollment_id, amount, mode, receipt_no, recorded_by)
            VALUES ($1, $2, $3, 'upi', 'DEMO-TXN-' || $1, $4)`,
           [iR.rows[0].id, enrollmentId, paidAmt, adminUserId]
         );

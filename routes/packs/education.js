@@ -538,7 +538,7 @@ async function api_edu_students_list(token, filters) {
              COALESCE(SUM(i.amount - i.paid_amount), 0)                  AS outstanding,
              COALESCE(SUM(CASE WHEN i.due_date < CURRENT_DATE AND i.status<>'paid'
                                THEN i.amount - i.paid_amount ELSE 0 END), 0) AS overdue,
-             MAX(p.received_at) AS last_payment_at,
+             MAX(p.paid_at) AS last_payment_at,
              COUNT(i.id)                                                 AS installments_total,
              COUNT(*) FILTER (WHERE i.status='paid')                     AS installments_paid
         FROM edu_enrollments e
@@ -681,7 +681,7 @@ async function api_edu_enrollment_createCustom(token, payload) {
   );
   if (tokenPaid) {
     await db.query(
-      `INSERT INTO edu_payments (installment_id, enrollment_id, amount, method, reference, received_by)
+      `INSERT INTO edu_payments (installment_id, enrollment_id, amount, mode, receipt_no, recorded_by)
        VALUES ($1, $2, $3, $4, $5, $6)`,
       [tokR.rows[0].id, enrollmentId, tokenAmt,
        p.token_method || 'upi', p.token_reference || 'TOKEN', me.id]
@@ -1261,12 +1261,12 @@ async function api_edu_collection_report(token, filters) {
            COUNT(DISTINCT e.id)::int                       AS enrollments,
            COALESCE(SUM(p.amount), 0)::numeric              AS fee_collected,
            COALESCE(SUM(i.amount - i.paid_amount), 0)::numeric AS fee_outstanding,
-           MAX(p.received_at)                                AS last_payment_at
+           MAX(p.paid_at)                                AS last_payment_at
       FROM edu_enrollments e
       ${joinClause}
       LEFT JOIN edu_installments i ON i.enrollment_id = e.id
       LEFT JOIN edu_payments p     ON p.enrollment_id = e.id
-        AND p.received_at BETWEEN $1::date AND ($2::date + INTERVAL '1 day')
+        AND p.paid_at BETWEEN $1::date AND ($2::date + INTERVAL '1 day')
      WHERE 1=1 ${rolesFilter} ${branchClause}
      GROUP BY ${groupKeyExpr}, e.course_name
      ORDER BY ${groupKeyExpr}
