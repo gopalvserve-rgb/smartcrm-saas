@@ -1322,6 +1322,483 @@ async function api_edu_collection_report(token, filters) {
   };
 }
 
+
+// ═════════════════════════════════════════════════════════════════
+// PHASE 7 — Parent contacts · Attendance · Test scores · Cross-sell
+// ═════════════════════════════════════════════════════════════════
+// All tables strictly namespaced under edu_*; non-Education tenants
+// never see these because (a) the install hook creates them only on
+// install, (b) every API below guards with _assertEducationActive
+// which throws 'Education pack not installed' for any tenant that
+// lacks the active pack row. Generic + Real-Estate tenants stay
+// untouched.
+
+async function _assertEducationActive() {
+  try {
+    const r = await db.query(
+      `SELECT 1 FROM installed_packs WHERE pack_id='education' AND is_active=1 LIMIT 1`
+    );
+    if (!r.rows || !r.rows[0]) throw new Error('Education pack not installed on this workspace');
+  } catch (e) {
+    if (String(e.message || '').includes('relation "installed_packs"')) {
+      throw new Error('Education pack not installed on this workspace');
+    }
+    throw e;
+  }
+}
+
+async function _ensureSchemaPhase7() {
+  // --- Parent contacts: 0..N parents/guardians per student lead ----
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS edu_parent_contacts (
+      id           SERIAL PRIMARY KEY,
+      lead_id      INTEGER NOT NULL,
+      name         TEXT NOT NULL,
+      relation     TEXT,                    -- father | mother | guardian | other
+      phone        TEXT,
+      whatsapp     TEXT,
+      email        TEXT,
+      receive_reminders INTEGER NOT NULL DEFAULT 1,
+      receive_announcements INTEGER NOT NULL DEFAULT 1,
+      notes        TEXT,
+      created_by   INTEGER,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  try { await db.query(`CREATE INDEX IF NOT EXISTS idx_edu_parent_lead ON edu_parent_contacts(lead_id)`); } catch (_) {}
+
+  // --- Attendance: daily roster per student (optionally per enrollment) ---
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS edu_attendance (
+      id             SERIAL PRIMARY KEY,
+      lead_id        INTEGER NOT NULL,
+      enrollment_id  INTEGER,                 -- optional FK to edu_enrollments
+      date           DATE NOT NULL,
+      status         TEXT NOT NULL DEFAULT 'present',  -- present | absent | late | excused
+      check_in_at    TIMESTAMPTZ,
+      check_out_at   TIMESTAMPTZ,
+      notes          TEXT,
+      marked_by      INTEGER,
+      marked_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  // One attendance row per (lead, enrollment, date) — using a partial unique
+  // index that tolerates NULL enrollment_id (a lead may be in multiple courses).
+  try {
+    await db.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_edu_att_lead_enr_date
+      ON edu_attendance(lead_id, COALESCE(enrollment_id, 0), date)
+    `);
+  } catch (_) {}
+  try { await db.query(`CREATE INDEX IF NOT EXISTS idx_edu_att_lead_date ON edu_attendance(lead_id, date DESC)`); } catch (_) {}
+  try { await db.query(`CREATE INDEX IF NOT EXISTS idx_edu_att_enr_date ON edu_attendance(enrollment_id, date DESC)`); } catch (_) {}
+
+  // --- Test catalog ------------------------------------------------
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS edu_tests (
+      id           SERIAL PRIMARY KEY,
+      name         TEXT NOT NULL,
+      course_id    INTEGER,                 -- references products(id) loosely
+      test_date    DATE,
+      max_marks    NUMERIC(8,2) NOT NULL DEFAULT 100,
+      pass_marks   NUMERIC(8,2),
+      notes        TEXT,
+      created_by   INTEGER,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  try { await db.query(`CREATE INDEX IF NOT EXISTS idx_edu_tests_course ON edu_tests(course_id)`); } catch (_) {}
+
+  // --- Test scores -------------------------------------------------
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS edu_test_scores (
+      id           SERIAL PRIMARY KEY,
+      test_id      INTEGER NOT NULL,
+      lead_id      INTEGER NOT NULL,
+      score        NUMERIC(8,2),
+      percentile   NUMERIC(5,2),
+      rank_in_batch INTEGER,
+      notes        TEXT,
+      recorded_by  INTEGER,
+      recorded_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  try {
+    await db.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_edu_score_test_lead ON edu_test_scores(test_id, lead_id)`);
+  } catch (_) {}
+  try { await db.query(`CREATE INDEX IF NOT EXISTS idx_edu_score_lead ON edu_test_scores(lead_id)`); } catch (_) {}
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Parent contacts CRUD
+// ─────────────────────────────────────────────────────────────────
+async function api_edu_parents_byLead(token, leadId) {
+  await authUser(token); await _assertEducationActive(); await _ensureSchemaPhase7();
+  const lid = Number(leadId || 0);
+  if (!lid) return [];
+  const r = await db.query(
+    `SELECT id, lead_id, name, relation, phone, whatsapp, email,
+            receive_reminders, receive_announcements, notes, updated_at
+       FROM edu_parent_contacts WHERE lead_id = $1 ORDER BY id ASC`, [lid]
+  );
+  return r.rows || [];
+}
+
+async function api_edu_parents_save(token, payload) {
+  const me = await authUser(token); await _assertEducationActive(); await _ensureSchemaPhase7();
+  const p = payload || {};
+  if (!p.lead_id) throw new Error('lead_id required');
+  if (!p.name) throw new Error('name required');
+  const lid = Number(p.lead_id);
+  const fields = {
+    name: String(p.name).trim(),
+    relation: p.relation ? String(p.relation).trim().toLowerCase() : null,
+    phone: p.phone ? String(p.phone).trim() : null,
+    whatsapp: p.whatsapp ? String(p.whatsapp).trim() : (p.phone ? String(p.phone).trim() : null),
+    email: p.email ? String(p.email).trim() : null,
+    receive_reminders: p.receive_reminders === false || p.receive_reminders === 0 ? 0 : 1,
+    receive_announcements: p.receive_announcements === false || p.receive_announcements === 0 ? 0 : 1,
+    notes: p.notes ? String(p.notes) : null
+  };
+  if (p.id) {
+    await db.query(
+      `UPDATE edu_parent_contacts SET
+         name=$1, relation=$2, phone=$3, whatsapp=$4, email=$5,
+         receive_reminders=$6, receive_announcements=$7, notes=$8,
+         updated_at=NOW()
+       WHERE id=$9 AND lead_id=$10`,
+      [fields.name, fields.relation, fields.phone, fields.whatsapp, fields.email,
+       fields.receive_reminders, fields.receive_announcements, fields.notes,
+       Number(p.id), lid]
+    );
+    return { ok: true, id: Number(p.id) };
+  }
+  const ins = await db.query(
+    `INSERT INTO edu_parent_contacts
+       (lead_id, name, relation, phone, whatsapp, email, receive_reminders,
+        receive_announcements, notes, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+     RETURNING id`,
+    [lid, fields.name, fields.relation, fields.phone, fields.whatsapp,
+     fields.email, fields.receive_reminders, fields.receive_announcements,
+     fields.notes, me.id]
+  );
+  return { ok: true, id: ins.rows[0].id };
+}
+
+async function api_edu_parents_delete(token, id) {
+  await authUser(token); await _assertEducationActive();
+  await db.query(`DELETE FROM edu_parent_contacts WHERE id=$1`, [Number(id)]);
+  return { ok: true };
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Attendance
+// ─────────────────────────────────────────────────────────────────
+async function api_edu_attendance_mark(token, payload) {
+  const me = await authUser(token); await _assertEducationActive(); await _ensureSchemaPhase7();
+  const p = payload || {};
+  if (!p.lead_id || !p.date) throw new Error('lead_id + date required');
+  const status = String(p.status || 'present').toLowerCase();
+  if (!['present','absent','late','excused'].includes(status)) {
+    throw new Error('status must be present|absent|late|excused');
+  }
+  const lid = Number(p.lead_id);
+  const eid = p.enrollment_id ? Number(p.enrollment_id) : null;
+  const date = String(p.date).slice(0, 10);
+  // UPSERT by (lead, enrollment, date) — uses COALESCE-on-NULL unique index
+  await db.query(
+    `INSERT INTO edu_attendance (lead_id, enrollment_id, date, status, check_in_at, check_out_at, notes, marked_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+     ON CONFLICT (lead_id, COALESCE(enrollment_id, 0), date) DO UPDATE SET
+       status = EXCLUDED.status,
+       check_in_at = EXCLUDED.check_in_at,
+       check_out_at = EXCLUDED.check_out_at,
+       notes = EXCLUDED.notes,
+       marked_by = EXCLUDED.marked_by,
+       marked_at = NOW()`,
+    [lid, eid, date, status, p.check_in_at || null, p.check_out_at || null, p.notes || null, me.id]
+  );
+  return { ok: true };
+}
+
+async function api_edu_attendance_bulkMark(token, payload) {
+  const me = await authUser(token); await _assertEducationActive(); await _ensureSchemaPhase7();
+  const p = payload || {};
+  const date = String(p.date || '').slice(0, 10);
+  if (!date) throw new Error('date required');
+  const rows = Array.isArray(p.rows) ? p.rows : [];
+  if (!rows.length) return { ok: true, saved: 0 };
+  let saved = 0;
+  for (const r of rows) {
+    if (!r.lead_id) continue;
+    const status = String(r.status || 'present').toLowerCase();
+    const eid = r.enrollment_id ? Number(r.enrollment_id) : null;
+    try {
+      await db.query(
+        `INSERT INTO edu_attendance (lead_id, enrollment_id, date, status, notes, marked_by)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (lead_id, COALESCE(enrollment_id, 0), date) DO UPDATE SET
+           status=EXCLUDED.status, notes=EXCLUDED.notes,
+           marked_by=EXCLUDED.marked_by, marked_at=NOW()`,
+        [Number(r.lead_id), eid, date, status, r.notes || null, me.id]
+      );
+      saved++;
+    } catch (e) {
+      console.warn('[edu_attendance_bulkMark]', e.message);
+    }
+  }
+  return { ok: true, saved };
+}
+
+async function api_edu_attendance_byLead(token, leadId, filters) {
+  await authUser(token); await _assertEducationActive(); await _ensureSchemaPhase7();
+  const lid = Number(leadId || 0);
+  if (!lid) return { rows: [], summary: {} };
+  const f = filters || {};
+  const params = [lid];
+  let q = `SELECT id, date, status, enrollment_id, check_in_at, check_out_at,
+                  notes, marked_by, marked_at
+             FROM edu_attendance WHERE lead_id = $1`;
+  if (f.from) { params.push(String(f.from).slice(0,10)); q += ` AND date >= ${params.length}`; }
+  if (f.to)   { params.push(String(f.to).slice(0,10));   q += ` AND date <= ${params.length}`; }
+  q += ' ORDER BY date DESC LIMIT 1000';
+  const r = await db.query(q, params);
+  const rows = r.rows || [];
+  const total = rows.length;
+  const present = rows.filter(x => x.status === 'present').length;
+  const absent  = rows.filter(x => x.status === 'absent').length;
+  const late    = rows.filter(x => x.status === 'late').length;
+  const excused = rows.filter(x => x.status === 'excused').length;
+  return {
+    rows,
+    summary: {
+      total, present, absent, late, excused,
+      percent: total ? Math.round(((present + late) / total) * 100) : 0
+    }
+  };
+}
+
+async function api_edu_attendance_summary(token, filters) {
+  await authUser(token); await _assertEducationActive(); await _ensureSchemaPhase7();
+  const f = filters || {};
+  const params = [];
+  let where = '1=1';
+  if (f.from) { params.push(String(f.from).slice(0,10)); where += ` AND a.date >= ${params.length}`; }
+  if (f.to)   { params.push(String(f.to).slice(0,10));   where += ` AND a.date <= ${params.length}`; }
+  if (f.enrollment_id) { params.push(Number(f.enrollment_id)); where += ` AND a.enrollment_id = ${params.length}`; }
+  const r = await db.query(
+    `SELECT a.lead_id,
+            l.name AS student_name,
+            COUNT(*) AS total,
+            COUNT(*) FILTER (WHERE a.status='present') AS present,
+            COUNT(*) FILTER (WHERE a.status='absent')  AS absent,
+            COUNT(*) FILTER (WHERE a.status='late')    AS late,
+            COUNT(*) FILTER (WHERE a.status='excused') AS excused
+       FROM edu_attendance a
+       LEFT JOIN leads l ON l.id = a.lead_id
+      WHERE ${where}
+      GROUP BY a.lead_id, l.name
+      ORDER BY l.name ASC NULLS LAST
+      LIMIT 1000`, params);
+  return (r.rows || []).map(row => Object.assign({}, row, {
+    percent: Number(row.total) ? Math.round(((Number(row.present) + Number(row.late)) / Number(row.total)) * 100) : 0
+  }));
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Tests + Scores
+// ─────────────────────────────────────────────────────────────────
+async function api_edu_tests_list(token, filters) {
+  await authUser(token); await _assertEducationActive(); await _ensureSchemaPhase7();
+  const f = filters || {};
+  const params = [];
+  let where = '1=1';
+  if (f.course_id) { params.push(Number(f.course_id)); where += ` AND course_id = ${params.length}`; }
+  if (f.from)      { params.push(String(f.from).slice(0,10)); where += ` AND test_date >= ${params.length}`; }
+  if (f.to)        { params.push(String(f.to).slice(0,10));   where += ` AND test_date <= ${params.length}`; }
+  const r = await db.query(
+    `SELECT id, name, course_id, test_date, max_marks, pass_marks, notes, created_at
+       FROM edu_tests WHERE ${where} ORDER BY test_date DESC NULLS LAST, id DESC LIMIT 200`,
+    params
+  );
+  return r.rows || [];
+}
+
+async function api_edu_tests_save(token, payload) {
+  const me = await authUser(token); await _assertEducationActive(); await _ensureSchemaPhase7();
+  const p = payload || {};
+  if (!p.name) throw new Error('name required');
+  const f = {
+    name: String(p.name).trim(),
+    course_id: p.course_id ? Number(p.course_id) : null,
+    test_date: p.test_date ? String(p.test_date).slice(0,10) : null,
+    max_marks: p.max_marks != null ? Number(p.max_marks) : 100,
+    pass_marks: p.pass_marks != null && p.pass_marks !== '' ? Number(p.pass_marks) : null,
+    notes: p.notes || null
+  };
+  if (p.id) {
+    await db.query(
+      `UPDATE edu_tests SET name=$1, course_id=$2, test_date=$3, max_marks=$4, pass_marks=$5, notes=$6
+        WHERE id=$7`,
+      [f.name, f.course_id, f.test_date, f.max_marks, f.pass_marks, f.notes, Number(p.id)]
+    );
+    return { ok: true, id: Number(p.id) };
+  }
+  const r = await db.query(
+    `INSERT INTO edu_tests (name, course_id, test_date, max_marks, pass_marks, notes, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+    [f.name, f.course_id, f.test_date, f.max_marks, f.pass_marks, f.notes, me.id]
+  );
+  return { ok: true, id: r.rows[0].id };
+}
+
+async function api_edu_tests_delete(token, id) {
+  await authUser(token); await _assertEducationActive();
+  await db.query(`DELETE FROM edu_test_scores WHERE test_id=$1`, [Number(id)]);
+  await db.query(`DELETE FROM edu_tests WHERE id=$1`, [Number(id)]);
+  return { ok: true };
+}
+
+async function api_edu_testScores_byTest(token, testId) {
+  await authUser(token); await _assertEducationActive(); await _ensureSchemaPhase7();
+  const r = await db.query(
+    `SELECT s.id, s.test_id, s.lead_id, s.score, s.percentile, s.rank_in_batch,
+            s.notes, s.recorded_at,
+            l.name AS student_name, l.phone AS student_phone
+       FROM edu_test_scores s
+       LEFT JOIN leads l ON l.id = s.lead_id
+      WHERE s.test_id = $1
+      ORDER BY (s.score IS NULL) ASC, s.score DESC NULLS LAST`,
+    [Number(testId)]
+  );
+  return r.rows || [];
+}
+
+async function api_edu_testScores_byLead(token, leadId) {
+  await authUser(token); await _assertEducationActive(); await _ensureSchemaPhase7();
+  const r = await db.query(
+    `SELECT s.id, s.test_id, s.score, s.percentile, s.rank_in_batch, s.notes, s.recorded_at,
+            t.name AS test_name, t.test_date, t.max_marks, t.course_id
+       FROM edu_test_scores s
+       JOIN edu_tests t ON t.id = s.test_id
+      WHERE s.lead_id = $1
+      ORDER BY t.test_date DESC NULLS LAST, s.id DESC LIMIT 200`,
+    [Number(leadId)]
+  );
+  return r.rows || [];
+}
+
+async function api_edu_testScores_save(token, payload) {
+  const me = await authUser(token); await _assertEducationActive(); await _ensureSchemaPhase7();
+  const p = payload || {};
+  if (!p.test_id || !p.lead_id) throw new Error('test_id + lead_id required');
+  const score = p.score != null && p.score !== '' ? Number(p.score) : null;
+  const pct   = p.percentile != null && p.percentile !== '' ? Number(p.percentile) : null;
+  const rk    = p.rank_in_batch ? Number(p.rank_in_batch) : null;
+  await db.query(
+    `INSERT INTO edu_test_scores (test_id, lead_id, score, percentile, rank_in_batch, notes, recorded_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
+     ON CONFLICT (test_id, lead_id) DO UPDATE SET
+       score = EXCLUDED.score,
+       percentile = EXCLUDED.percentile,
+       rank_in_batch = EXCLUDED.rank_in_batch,
+       notes = EXCLUDED.notes,
+       recorded_by = EXCLUDED.recorded_by,
+       recorded_at = NOW()`,
+    [Number(p.test_id), Number(p.lead_id), score, pct, rk, p.notes || null, me.id]
+  );
+  return { ok: true };
+}
+
+async function api_edu_testScores_bulkSave(token, payload) {
+  const me = await authUser(token); await _assertEducationActive(); await _ensureSchemaPhase7();
+  const p = payload || {};
+  if (!p.test_id || !Array.isArray(p.rows)) throw new Error('test_id + rows[] required');
+  let saved = 0;
+  for (const r of p.rows) {
+    if (!r.lead_id) continue;
+    const score = r.score != null && r.score !== '' ? Number(r.score) : null;
+    const pct   = r.percentile != null && r.percentile !== '' ? Number(r.percentile) : null;
+    try {
+      await db.query(
+        `INSERT INTO edu_test_scores (test_id, lead_id, score, percentile, rank_in_batch, notes, recorded_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)
+         ON CONFLICT (test_id, lead_id) DO UPDATE SET
+           score=EXCLUDED.score, percentile=EXCLUDED.percentile,
+           rank_in_batch=EXCLUDED.rank_in_batch, notes=EXCLUDED.notes,
+           recorded_by=EXCLUDED.recorded_by, recorded_at=NOW()`,
+        [Number(p.test_id), Number(r.lead_id), score, pct,
+         r.rank_in_batch ? Number(r.rank_in_batch) : null, r.notes || null, me.id]
+      );
+      saved++;
+    } catch (e) { console.warn('[testScores_bulkSave]', e.message); }
+  }
+  return { ok: true, saved };
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Cross-sell / upsell candidate signals
+// ─────────────────────────────────────────────────────────────────
+// Heuristic: a student is a cross-sell candidate if they have at least one
+// enrollment and AT LEAST ONE of the following triggers fires:
+//   1. They've fully paid their current course (no pending installments)
+//   2. Their average test score is >= 75%
+//   3. Their attendance percentage is >= 80% (engaged students)
+// We return students with reason flags so the counsellor can prioritise.
+async function api_edu_crossSell_candidates(token, filters) {
+  await authUser(token); await _assertEducationActive(); await _ensureSchemaPhase7();
+  const f = filters || {};
+  const limit = Math.min(Number(f.limit) || 100, 500);
+
+  // Active enrollments and their fee/test/attendance summaries.
+  const r = await db.query(`
+    SELECT
+      e.id AS enrollment_id,
+      e.lead_id,
+      l.name AS student_name,
+      l.phone AS student_phone,
+      e.course_name,
+      e.amount AS course_amount,
+      COALESCE((SELECT COUNT(*) FROM edu_installments i WHERE i.enrollment_id = e.id AND i.status <> 'paid'), 0) AS pending_installments,
+      COALESCE((SELECT AVG(CASE WHEN t.max_marks > 0 THEN (s.score / t.max_marks) * 100 ELSE NULL END)
+                  FROM edu_test_scores s JOIN edu_tests t ON t.id = s.test_id
+                 WHERE s.lead_id = e.lead_id), NULL) AS avg_test_pct,
+      COALESCE((SELECT
+                  CASE WHEN COUNT(*) = 0 THEN NULL
+                       ELSE ROUND((COUNT(*) FILTER (WHERE a.status IN ('present','late'))) * 100.0 / COUNT(*), 0)
+                  END
+                  FROM edu_attendance a WHERE a.lead_id = e.lead_id), NULL) AS attendance_pct
+      FROM edu_enrollments e
+      JOIN leads l ON l.id = e.lead_id
+     ORDER BY e.id DESC
+     LIMIT $1
+  `, [limit]).catch(e => { console.warn('[edu_crossSell]', e.message); return { rows: [] }; });
+
+  const out = [];
+  for (const row of (r.rows || [])) {
+    const triggers = [];
+    if (Number(row.pending_installments) === 0) triggers.push('course_paid_off');
+    if (row.avg_test_pct != null && Number(row.avg_test_pct) >= 75) triggers.push('strong_scores');
+    if (row.attendance_pct != null && Number(row.attendance_pct) >= 80) triggers.push('engaged');
+    if (!triggers.length) continue;
+    out.push({
+      lead_id: row.lead_id,
+      student_name: row.student_name,
+      student_phone: row.student_phone,
+      current_course: row.course_name,
+      avg_test_pct: row.avg_test_pct != null ? Number(row.avg_test_pct).toFixed(1) : null,
+      attendance_pct: row.attendance_pct != null ? Number(row.attendance_pct) : null,
+      pending_installments: Number(row.pending_installments),
+      triggers
+    });
+  }
+  return out;
+}
+
+// authUser is already required at top of file via the existing APIs
+
 // ─────────────────────────────────────────────────────────────────
 // Register
 // ─────────────────────────────────────────────────────────────────
@@ -1368,5 +1845,14 @@ module.exports = {
   api_edu_leadDocs_list, api_edu_leadDocs_register, api_edu_leadDocs_delete, api_edu_leadDocs_verify,
   api_edu_revenue_forecast, api_edu_course_margin_save,
   api_edu_collection_report,
+  // Phase 7 — Parent contacts, Attendance, Tests, Cross-sell
+  api_edu_parents_byLead, api_edu_parents_save, api_edu_parents_delete,
+  api_edu_attendance_mark, api_edu_attendance_bulkMark,
+  api_edu_attendance_byLead, api_edu_attendance_summary,
+  api_edu_tests_list, api_edu_tests_save, api_edu_tests_delete,
+  api_edu_testScores_byTest, api_edu_testScores_byLead,
+  api_edu_testScores_save, api_edu_testScores_bulkSave,
+  api_edu_crossSell_candidates,
+  _ensureSchemaPhase7,
   _ensureSchema, _ensureSchemaV3
 };
