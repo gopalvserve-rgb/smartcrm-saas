@@ -1160,26 +1160,84 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
         const _finalMime = (_detectedMime && _detectedMime !== 'application/octet-stream')
           ? _detectedMime
           : (req.file.mimetype || 'audio/mp4');
-        const id = await db.insert('lead_recordings', {
-          lead_id: leadId,
-          user_id: me.id,
-          phone,
-          direction,
-          duration_s: Number(req.body.duration_s) || 0,
-          device_path: String(req.body.device_path || ''),
-          mime_type: _finalMime,
-          size_bytes: req.file.size || 0,
-          audio_bytes: req.file.buffer,
-          started_at: req.body.started_at || db.nowIso(),
-          created_at: db.nowIso()
-        });
+        // REC_DEDUP_v1 — idempotent upload so Re-sync All never doubles rows.
+        // Build a stable dedup_key from the device file path when present,
+        // else (started_at_minute, size_bytes). Same key = same file.
+        const _devicePath = String(req.body.device_path || '');
+        let _startedAtMs;
+        try { _startedAtMs = new Date(req.body.started_at || db.nowIso()).getTime() || Date.now(); }
+        catch (_) { _startedAtMs = Date.now(); }
+        const _dedupKey = _devicePath
+          ? ('p:' + _devicePath)
+          : ('t:' + Math.floor(_startedAtMs / 60000) + ':s:' + (req.file.size||0));
+        // Self-heal schema on first hit (column + unique index).
         try {
-          await db.insert('call_events', {
-            lead_id: leadId, user_id: me.id, phone, direction,
-            event: 'recording_saved',
-            duration_s: Number(req.body.duration_s) || 0,
-            recording_id: id, created_at: db.nowIso()
-          });
+          await db.query('ALTER TABLE lead_recordings ADD COLUMN IF NOT EXISTS dedup_key TEXT');
+          await db.query('CREATE UNIQUE INDEX IF NOT EXISTS uniq_lead_rec_user_dedup ON lead_recordings(user_id, dedup_key) WHERE dedup_key IS NOT NULL');
+        } catch (_) {}
+        // Already uploaded? Return its id so client treats as no-op success.
+        let id = null;
+        try {
+          const _ex = await db.query(
+            'SELECT id, lead_id FROM lead_recordings WHERE user_id = $1 AND dedup_key = $2 LIMIT 1',
+            [me.id, _dedupKey]
+          );
+          if (_ex.rows[0]) {
+            return res.json({
+              ok: true,
+              id: _ex.rows[0].id,
+              lead_id: _ex.rows[0].lead_id,
+              auto_created: false,
+              already_synced: true
+            });
+          }
+        } catch (_) {}
+        // Fresh upload — INSERT with ON CONFLICT for race safety.
+        try {
+          const _ins = await db.query(
+            `INSERT INTO lead_recordings
+               (lead_id, user_id, phone, direction, duration_s, device_path, mime_type, size_bytes, audio_bytes, started_at, created_at, dedup_key)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+             ON CONFLICT (user_id, dedup_key) DO NOTHING
+             RETURNING id`,
+            [leadId, me.id, phone, direction, Number(req.body.duration_s) || 0,
+             _devicePath, _finalMime, (req.file.size||0), req.file.buffer,
+             req.body.started_at || db.nowIso(), db.nowIso(), _dedupKey]
+          );
+          id = _ins.rows[0] ? _ins.rows[0].id : null;
+        } catch (e) {
+          console.error('[/api/recordings] insert error:', e.message);
+        }
+        if (!id) {
+          // Lost race against a concurrent identical upload — find the winner.
+          try {
+            const _r2 = await db.query(
+              'SELECT id, lead_id FROM lead_recordings WHERE user_id = $1 AND dedup_key = $2 LIMIT 1',
+              [me.id, _dedupKey]
+            );
+            if (_r2.rows[0]) {
+              return res.json({
+                ok: true,
+                id: _r2.rows[0].id,
+                lead_id: _r2.rows[0].lead_id,
+                auto_created: false,
+                already_synced: true
+              });
+            }
+          } catch (_) {}
+          throw new Error('lead_recordings insert returned no id');
+        }
+        try {
+          // Dedup: skip if a recording_saved event already exists for this recording_id.
+          const _ce = await db.query('SELECT id FROM call_events WHERE recording_id = $1 LIMIT 1', [id]);
+          if (!_ce.rows[0]) {
+            await db.insert('call_events', {
+              lead_id: leadId, user_id: me.id, phone, direction,
+              event: 'recording_saved',
+              duration_s: Number(req.body.duration_s) || 0,
+              recording_id: id, created_at: db.nowIso()
+            });
+          }
         } catch (_) {}
         res.json({ ok: true, id, lead_id: leadId, auto_created: autoCreated });
       } catch (e) {
