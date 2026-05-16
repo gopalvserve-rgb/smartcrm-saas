@@ -30545,7 +30545,7 @@ try {
               ),
               hasMessages ? null : h('div', { style:{ color:'#dc2626', fontSize:'.85em', marginTop:'.3rem' } },
                 '⚠ This page is not receiving Messenger DMs. Click Re-subscribe below to fix.')
-            );
+            ));
           });
         }
 
