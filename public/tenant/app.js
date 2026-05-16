@@ -30481,3 +30481,148 @@ try {
     };
   });
 })();
+
+
+// ═════════════════════════════════════════════════════════════════════
+// SOCIAL DIAGNOSTICS — accessed via window.openSocialDiagModal()
+// Wired into the Social Inbox header so admins can find it.
+// ═════════════════════════════════════════════════════════════════════
+(function socialDiagUI() {
+  if (typeof window === 'undefined' || typeof h !== 'function') return;
+
+  async function openSocialDiagModal() {
+    const m = h('div', { class:'modal-backdrop' });
+    const modal = h('div', { class:'modal', style:{ maxWidth:'780px' } });
+    modal.appendChild(h('div', { class:'modal-head' },
+      h('h3', {}, '🔧 Social Hub Diagnostics'),
+      h('button', { class:'btn ghost', onclick: () => m.remove() }, '✕')
+    ));
+    const body = h('div', { class:'modal-body' });
+    body.appendChild(h('div', { class:'loading' }, 'Inspecting…'));
+    modal.appendChild(body);
+    m.appendChild(modal);
+    document.body.appendChild(m);
+
+    async function refresh() {
+      body.innerHTML = '';
+      body.appendChild(h('div', { class:'loading' }, 'Inspecting…'));
+      try {
+        const d = await api('api_social_diag');
+        body.innerHTML = '';
+
+        // Hint banner
+        body.appendChild(h('div', {
+          style: { background:'#fef3c7', border:'1px solid #fcd34d', padding:'.7rem', borderRadius:'6px', marginBottom:'.8rem' }
+        },
+          h('strong', {}, '💡 Diagnosis: '),
+          h('span', {}, d.hint || '(no hint)')
+        ));
+
+        // Pages section
+        body.appendChild(h('h4', {}, 'Connected pages & subscriptions'));
+        if (!d.pages.length) {
+          body.appendChild(h('p', { class:'muted' }, 'No pages connected via Social Hub.'));
+        } else {
+          d.pages.forEach(p => {
+            const fields = p.subscribed_fields || [];
+            const hasMessages = Array.isArray(fields) && fields.includes('messages');
+            body.appendChild(h('div', { style:{ padding:'.5rem .7rem', border:'1px solid #e5e7eb', borderRadius:'6px', marginBottom:'.4rem' } },
+              h('div', { style:{ fontWeight:'600' } }, '🅵 ' + (p.page_name || p.page_id)),
+              h('div', { class:'muted', style:{ fontSize:'.85em' } },
+                'Token: ' + (p.token_health === 'ok' ? '✅ valid' : ('❌ ' + (p.error || 'invalid'))) +
+                ' · Monitored: ' + (p.is_monitored ? 'yes' : 'no') +
+                ' · IG linked: ' + (p.instagram_business_id ? '✅' : '❌')),
+              h('div', { style:{ marginTop:'.3rem' } },
+                'Subscribed fields: ',
+                Array.isArray(fields) && fields.length
+                  ? fields.map(f => h('span', {
+                      style: { display:'inline-block', padding:'.1rem .4rem', margin:'.1rem',
+                               borderRadius:'4px', fontSize:'.8em',
+                               background: f === 'messages' ? '#dcfce7' : '#f3f4f6',
+                               color: f === 'messages' ? '#166534' : '#374151' }
+                    }, f))
+                  : h('span', { style:{ color:'#dc2626' } }, '⚠ NONE — page is not subscribed')
+              ),
+              hasMessages ? null : h('div', { style:{ color:'#dc2626', fontSize:'.85em', marginTop:'.3rem' } },
+                '⚠ This page is not receiving Messenger DMs. Click Re-subscribe below to fix.')
+            );
+          });
+        }
+
+        body.appendChild(h('div', { style:{ marginTop:'.6rem' } },
+          h('button', { class:'btn primary', onclick: async () => {
+            try {
+              const r = await api('api_social_resubscribePages');
+              const okCount = r.results.filter(x => x.ok).length;
+              toast('Re-subscribed ' + okCount + '/' + r.results.length + ' page(s)');
+              refresh();
+            } catch (e) { toast(e.message, 'err'); }
+          } }, '🔁 Re-subscribe all pages to webhooks'),
+          ' ',
+          h('button', { class:'btn ghost', onclick: refresh }, '🔄 Refresh diagnostics')
+        ));
+
+        // Webhook log section
+        body.appendChild(h('h4', { style:{ marginTop:'1rem' } }, 'Recent /hook/meta webhook hits'));
+        body.appendChild(h('p', { class:'muted', style:{ fontSize:'.85em' } },
+          'Messages stored in last 24h: ' + d.webhook_messages_24h));
+        if (!d.webhook_recent.length) {
+          body.appendChild(h('div', {
+            style:{ background:'#fee2e2', color:'#991b1b', padding:'.6rem', borderRadius:'6px' }
+          }, '❌ No webhook events recorded. Meta is not calling /hook/meta. Check the App-level webhook config in Meta App Dashboard → Webhooks → Page.'));
+        } else {
+          const tbl = h('table', { class:'tbl', style:{ width:'100%', fontSize:'.85em' } });
+          tbl.appendChild(h('thead', {}, h('tr', {},
+            h('th', {}, 'When'),
+            h('th', {}, 'Processed'),
+            h('th', {}, 'Payload preview')
+          )));
+          const tb = h('tbody', {});
+          d.webhook_recent.forEach(w => {
+            tb.appendChild(h('tr', {},
+              h('td', {}, new Date(w.created_at).toLocaleString()),
+              h('td', {}, Number(w.processed) === 1 ? '✓' : '·'),
+              h('td', { style:{ fontFamily:'monospace', fontSize:'.8em', maxWidth:'440px', overflow:'hidden', textOverflow:'ellipsis' } }, w.preview)
+            ));
+          });
+          tbl.appendChild(tb);
+          body.appendChild(tbl);
+        }
+
+        // Common-fixes section
+        body.appendChild(h('h4', { style:{ marginTop:'1rem' } }, 'If messages still aren\'t arriving, check'));
+        body.appendChild(h('ol', { style:{ fontSize:'.9em' } },
+          h('li', {}, h('strong', {}, 'Meta App is in Live mode'), ' — Development mode only delivers webhooks for users with App roles (admin/dev/tester).'),
+          h('li', {}, h('strong', {}, 'pages_messaging permission is approved'), ' — Meta requires App Review for sending messages to non-app-roles; receiving may also need approval.'),
+          h('li', {}, h('strong', {}, 'App-level webhook subscription includes the "messages" field'), ' — go to Meta App Dashboard → Webhooks → Page → confirm \'messages\', \'messaging_postbacks\', \'feed\', \'comments\' are checked.'),
+          h('li', {}, h('strong', {}, 'Callback URL is correct'), ' — should be https://crm.smartcrmsolution.com/hook/meta with Verify Token matching tenant config META_VERIFY_TOKEN.'),
+          h('li', {}, h('strong', {}, 'Friend has actually messaged the Page'), ' — make sure the message went to the connected Page\'s Messenger inbox, not to a personal account.')
+        ));
+      } catch (e) {
+        body.innerHTML = '';
+        body.appendChild(h('div', { class:'error-box' }, e.message));
+      }
+    }
+    refresh();
+  }
+
+  try { window.openSocialDiagModal = openSocialDiagModal; } catch (_) {}
+
+  // Add a "🔧 Diagnostics" button to the Social Inbox header automatically
+  if (typeof VIEWS !== 'undefined' && typeof VIEWS.socialinbox === 'function') {
+    const original = VIEWS.socialinbox;
+    VIEWS.socialinbox = async function patched(view) {
+      const r = await original.apply(this, arguments);
+      try {
+        const header = view.querySelector('.page > div[style*="display:flex"], .page > div[style*="display: flex"]');
+        if (header && !header.querySelector('.social-diag-btn')) {
+          header.appendChild(h('button', {
+            class:'btn sm ghost social-diag-btn',
+            onclick: () => openSocialDiagModal()
+          }, '🔧 Diagnostics'));
+        }
+      } catch (_) {}
+      return r;
+    };
+  }
+})();

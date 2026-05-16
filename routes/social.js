@@ -1405,12 +1405,123 @@ async function _runAdDailySnapshot() {
   } catch (e) { console.warn('[ads] snapshot worker error:', e.message); }
 }
 
+
+
+// ═════════════════════════════════════════════════════════════════════
+// DIAGNOSTICS — for troubleshooting "messages not arriving"
+// ═════════════════════════════════════════════════════════════════════
+async function api_social_diag(token) {
+  await authUser(token);
+  await _ensureSchema();
+  await _ensureSocialPagesSchema();
+  const out = { pages: [], webhook_recent: [], webhook_messages_24h: 0, hint: '' };
+
+  // 1. List each connected page and ask Graph what fields it's subscribed to
+  const pagesR = await db.query(`SELECT page_id, page_name, access_token, instagram_business_id, is_monitored FROM social_pages`);
+  for (const p of (pagesR.rows || [])) {
+    const item = {
+      page_id: p.page_id,
+      page_name: p.page_name,
+      is_monitored: !!Number(p.is_monitored),
+      instagram_business_id: p.instagram_business_id || null,
+      subscribed_fields: null,
+      subscribed_apps_raw: null,
+      token_health: null,
+      error: null
+    };
+    try {
+      // Page subscription check
+      const sUrl = `${GRAPH}/${p.page_id}/subscribed_apps?access_token=${encodeURIComponent(p.access_token)}`;
+      const sJ = await fetch(sUrl).then(r => r.json());
+      if (sJ.error) {
+        item.error = sJ.error.message;
+        item.token_health = 'invalid';
+      } else {
+        item.subscribed_apps_raw = sJ.data || [];
+        // The fields are usually inside data[0].subscribed_fields
+        const first = (sJ.data || [])[0] || {};
+        item.subscribed_fields = first.subscribed_fields || null;
+        item.token_health = 'ok';
+      }
+    } catch (e) {
+      item.error = String(e.message || e);
+    }
+    out.pages.push(item);
+  }
+
+  // 2. Recent webhook_log rows for source='meta'
+  try {
+    const r = await db.query(`SELECT id, payload, processed, error, created_at
+                                 FROM webhook_log
+                                WHERE source = 'meta'
+                                ORDER BY id DESC LIMIT 10`);
+    out.webhook_recent = (r.rows || []).map(row => ({
+      id: row.id,
+      created_at: row.created_at,
+      processed: row.processed,
+      error: row.error,
+      preview: (typeof row.payload === 'string' ? row.payload : JSON.stringify(row.payload || {})).slice(0, 400)
+    }));
+  } catch (_) {}
+
+  // 3. Count how many social_messages we have stored in last 24h
+  try {
+    const r = await db.query(`SELECT COUNT(*)::int AS c FROM social_messages WHERE created_at > NOW() - INTERVAL '24 hours'`);
+    out.webhook_messages_24h = (r.rows && r.rows[0] && r.rows[0].c) || 0;
+  } catch (_) {}
+
+  // 4. Friendly hint
+  if (!out.pages.length) {
+    out.hint = 'No pages connected via the Social Hub flow. Click Connect/Manage and connect at least one Facebook Page.';
+  } else if (out.pages.every(p => !p.subscribed_fields || !p.subscribed_fields.includes('messages'))) {
+    out.hint = 'Pages are connected but NONE are subscribed to the "messages" webhook field. Hit Re-subscribe below to fix.';
+  } else if (out.webhook_recent.length === 0) {
+    out.hint = 'Page subscriptions look fine, but no /hook/meta events have arrived yet. This usually means (a) the Facebook App is still in Development mode and the sender is not an App-role user, or (b) the App-level webhook subscription in Meta App Dashboard does not include "messages" + "messaging_postbacks" subscribed fields.';
+  } else if (out.webhook_messages_24h === 0) {
+    out.hint = 'Events ARE arriving at /hook/meta but nothing is being stored in social_messages. Check webhook_recent for the raw payload — might be leadgen events only.';
+  } else {
+    out.hint = 'Looks healthy. ' + out.webhook_messages_24h + ' messages stored in the last 24h.';
+  }
+  return out;
+}
+
+async function api_social_resubscribePages(token) {
+  await authUser(token);
+  await _ensureSocialPagesSchema();
+  const r = await db.query(`SELECT page_id, page_name, access_token FROM social_pages`);
+  const results = [];
+  for (const p of (r.rows || [])) {
+    try {
+      const url = `${GRAPH}/${p.page_id}/subscribed_apps`;
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          subscribed_fields: 'messages,messaging_postbacks,feed,mention,comments',
+          access_token: p.access_token
+        })
+      });
+      const j = await resp.json();
+      if (j.error) results.push({ page_id: p.page_id, page_name: p.page_name, ok: false, error: j.error.message });
+      else {
+        results.push({ page_id: p.page_id, page_name: p.page_name, ok: true });
+        await db.query(`UPDATE social_pages SET last_subscribed_at = NOW() WHERE page_id = $1::text`, [p.page_id]);
+      }
+    } catch (e) {
+      results.push({ page_id: p.page_id, page_name: p.page_name, ok: false, error: String(e.message || e) });
+    }
+  }
+  return { ok: true, results };
+}
+
 module.exports = {
   api_social_pages_list,
   // Phase S1 — dedicated FB connect (separate from Lead Sync)
   api_social_fb_oauth_url,
   api_social_fb_connect,
   expressOAuthCallbackSocial,
+  api_social_diag,
+  api_social_resubscribePages,
   api_social_fb_disconnect,
   api_social_fb_toggleMonitor,
   api_social_inbox_threads,
