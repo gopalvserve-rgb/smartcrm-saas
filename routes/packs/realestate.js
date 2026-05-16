@@ -842,6 +842,328 @@ async function uninstall(opts) {
 // ─────────────────────────────────────────────────────────────────
 // Register
 // ─────────────────────────────────────────────────────────────────
+
+// ═════════════════════════════════════════════════════════════════
+// Phase 3 — Buyer requirements, Site visits, CP performance, Discount
+// ═════════════════════════════════════════════════════════════════
+
+async function _ensureSchemaPhase3() {
+  await db.query(`CREATE TABLE IF NOT EXISTS re_buyer_requirements (
+    id SERIAL PRIMARY KEY,
+    lead_id INTEGER NOT NULL,
+    budget_min NUMERIC(14,2) NOT NULL DEFAULT 0,
+    budget_max NUMERIC(14,2) NOT NULL DEFAULT 0,
+    preferred_bhk TEXT NOT NULL DEFAULT '',
+    preferred_locations TEXT NOT NULL DEFAULT '',
+    preferred_projects TEXT NOT NULL DEFAULT '',
+    possession_timeline TEXT NOT NULL DEFAULT '',
+    intent TEXT NOT NULL DEFAULT 'self_use',
+    notes TEXT NOT NULL DEFAULT '',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  await db.query(`CREATE INDEX IF NOT EXISTS re_req_lead_idx ON re_buyer_requirements(lead_id)`);
+
+  await db.query(`CREATE TABLE IF NOT EXISTS re_site_visits (
+    id SERIAL PRIMARY KEY,
+    lead_id INTEGER NOT NULL,
+    project_id INTEGER,
+    unit_id INTEGER,
+    scheduled_at TIMESTAMPTZ NOT NULL,
+    assigned_to INTEGER,
+    status TEXT NOT NULL DEFAULT 'scheduled',
+    pickup_location TEXT NOT NULL DEFAULT '',
+    pickup_time TIMESTAMPTZ,
+    drop_location TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    feedback TEXT NOT NULL DEFAULT '',
+    visit_outcome TEXT NOT NULL DEFAULT '',
+    visited_at TIMESTAMPTZ,
+    reminded_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_by INTEGER
+  )`);
+  await db.query(`CREATE INDEX IF NOT EXISTS re_visit_lead_idx ON re_site_visits(lead_id)`);
+  await db.query(`CREATE INDEX IF NOT EXISTS re_visit_sched_idx ON re_site_visits(scheduled_at)`);
+
+  // Discount column on bookings — additive
+  try { await db.query(`ALTER TABLE re_bookings ADD COLUMN IF NOT EXISTS discount_amount NUMERIC(14,2) NOT NULL DEFAULT 0`); } catch (_) {}
+  try { await db.query(`ALTER TABLE re_bookings ADD COLUMN IF NOT EXISTS discount_reason TEXT NOT NULL DEFAULT ''`); } catch (_) {}
+  try { await db.query(`ALTER TABLE re_bookings ADD COLUMN IF NOT EXISTS salesperson_id INTEGER`); } catch (_) {}
+  try { await db.query(`ALTER TABLE re_bookings ADD COLUMN IF NOT EXISTS salesperson_commission_pct NUMERIC(5,2) NOT NULL DEFAULT 0`); } catch (_) {}
+}
+
+// ───── Buyer Requirements ─────
+async function api_re_requirements_save(token, payload) {
+  await authUser(token);
+  await _requireRealEstate();
+  await _ensureSchema();
+  await _ensureSchemaPhase3();
+  const p = payload || {};
+  if (!p.lead_id) throw new Error('lead_id required');
+  if (p.id) {
+    await db.query(`UPDATE re_buyer_requirements SET
+      budget_min=$1, budget_max=$2, preferred_bhk=$3, preferred_locations=$4,
+      preferred_projects=$5, possession_timeline=$6, intent=$7, notes=$8,
+      is_active=$9, updated_at=NOW() WHERE id=$10`,
+      [Number(p.budget_min||0), Number(p.budget_max||0), p.preferred_bhk||'',
+       p.preferred_locations||'', p.preferred_projects||'', p.possession_timeline||'',
+       p.intent||'self_use', p.notes||'', p.is_active==null?1:Number(!!p.is_active), p.id]);
+    return { ok: true, id: p.id };
+  }
+  const r = await db.query(`INSERT INTO re_buyer_requirements
+    (lead_id, budget_min, budget_max, preferred_bhk, preferred_locations,
+     preferred_projects, possession_timeline, intent, notes)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+    [Number(p.lead_id), Number(p.budget_min||0), Number(p.budget_max||0),
+     p.preferred_bhk||'', p.preferred_locations||'', p.preferred_projects||'',
+     p.possession_timeline||'', p.intent||'self_use', p.notes||'']);
+  return { ok: true, id: r.rows[0].id };
+}
+
+async function api_re_requirements_byLead(token, leadId) {
+  await authUser(token);
+  await _requireRealEstate();
+  await _ensureSchemaPhase3();
+  if (!leadId) throw new Error('leadId required');
+  const r = await db.query(`SELECT * FROM re_buyer_requirements WHERE lead_id=$1 ORDER BY id DESC`, [Number(leadId)]);
+  return r.rows;
+}
+
+/**
+ * api_re_requirements_match — finds available units that match a buyer's
+ * requirement. Scoring: budget (40), BHK (30), location (20), project (10).
+ * Returns top 20 matches with a score 0..100.
+ */
+async function api_re_requirements_match(token, requirementId) {
+  await authUser(token);
+  await _requireRealEstate();
+  await _ensureSchemaPhase3();
+  if (!requirementId) throw new Error('requirementId required');
+  const rqR = await db.query(`SELECT * FROM re_buyer_requirements WHERE id=$1`, [Number(requirementId)]);
+  const rq = rqR.rows && rqR.rows[0];
+  if (!rq) throw new Error('Requirement not found');
+
+  const unitsR = await db.query(`
+    SELECT u.id, u.unit_no, u.floor, u.type, u.carpet_sqft, u.price, u.status,
+           p.id AS project_id, p.name AS project_name, p.location AS project_location, p.tower_code
+      FROM re_units u
+      JOIN re_projects p ON p.id = u.project_id
+     WHERE u.status = 'available'
+  `);
+  const units = unitsR.rows || [];
+
+  const bhkPref = String(rq.preferred_bhk || '').toLowerCase();
+  const locPref = String(rq.preferred_locations || '').toLowerCase().split(',').map(s=>s.trim()).filter(Boolean);
+  const projPref = String(rq.preferred_projects || '').toLowerCase().split(',').map(s=>s.trim()).filter(Boolean);
+  const bMin = Number(rq.budget_min || 0);
+  const bMax = Number(rq.budget_max || 0) || Infinity;
+
+  const scored = units.map(u => {
+    let score = 0, reasons = [];
+    const p = Number(u.price || 0);
+
+    // Budget (40 pts)
+    if (bMax === Infinity && bMin === 0) {
+      score += 20; reasons.push('No budget set');
+    } else if (p >= bMin && p <= bMax) {
+      score += 40; reasons.push('Budget match');
+    } else if (p < bMin) {
+      score += 15; reasons.push('Below budget (₹' + p.toLocaleString('en-IN') + ')');
+    } else if (p <= bMax * 1.1) {
+      score += 25; reasons.push('Slightly over budget (10%)');
+    }
+
+    // BHK (30 pts)
+    if (bhkPref) {
+      if ((u.type || '').toLowerCase().includes(bhkPref)) {
+        score += 30; reasons.push('BHK match');
+      }
+    } else { score += 15; }
+
+    // Location (20 pts)
+    if (locPref.length) {
+      const locTxt = (u.project_location || '').toLowerCase();
+      if (locPref.some(l => locTxt.includes(l))) { score += 20; reasons.push('Location match'); }
+    } else { score += 10; }
+
+    // Project (10 pts)
+    if (projPref.length) {
+      const projTxt = (u.project_name || '').toLowerCase();
+      if (projPref.some(pr => projTxt.includes(pr))) { score += 10; reasons.push('Preferred project'); }
+    } else { score += 5; }
+
+    return { ...u, _score: Math.min(100, score), _reasons: reasons };
+  });
+
+  scored.sort((a, b) => b._score - a._score);
+  return { requirement: rq, matches: scored.slice(0, 20) };
+}
+
+// ───── Site Visit Management ─────
+async function api_re_visits_schedule(token, payload) {
+  const me = await authUser(token);
+  await _requireRealEstate();
+  await _ensureSchemaPhase3();
+  const p = payload || {};
+  if (!p.lead_id) throw new Error('lead_id required');
+  if (!p.scheduled_at) throw new Error('scheduled_at required');
+  if (p.id) {
+    await db.query(`UPDATE re_site_visits SET
+      scheduled_at=$1, project_id=$2, unit_id=$3, assigned_to=$4,
+      pickup_location=$5, pickup_time=$6, drop_location=$7,
+      notes=$8 WHERE id=$9`,
+      [p.scheduled_at, p.project_id || null, p.unit_id || null, p.assigned_to || null,
+       p.pickup_location || '', p.pickup_time || null, p.drop_location || '',
+       p.notes || '', p.id]);
+    return { ok: true, id: p.id };
+  }
+  const r = await db.query(`INSERT INTO re_site_visits
+    (lead_id, project_id, unit_id, scheduled_at, assigned_to,
+     pickup_location, pickup_time, drop_location, notes, created_by)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+    [Number(p.lead_id), p.project_id || null, p.unit_id || null, p.scheduled_at,
+     p.assigned_to || null, p.pickup_location || '', p.pickup_time || null,
+     p.drop_location || '', p.notes || '', me.id]);
+  return { ok: true, id: r.rows[0].id };
+}
+
+async function api_re_visits_byLead(token, leadId) {
+  await authUser(token);
+  await _requireRealEstate();
+  await _ensureSchemaPhase3();
+  if (!leadId) throw new Error('leadId required');
+  const r = await db.query(`
+    SELECT v.*, p.name AS project_name, u.unit_no, ag.name AS assigned_to_name
+      FROM re_site_visits v
+      LEFT JOIN re_projects p ON p.id = v.project_id
+      LEFT JOIN re_units u    ON u.id = v.unit_id
+      LEFT JOIN users ag      ON ag.id = v.assigned_to
+     WHERE v.lead_id = $1
+     ORDER BY v.scheduled_at DESC
+  `, [Number(leadId)]);
+  return r.rows;
+}
+
+async function api_re_visits_upcoming(token, filters) {
+  await authUser(token);
+  await _requireRealEstate();
+  await _ensureSchemaPhase3();
+  const f = filters || {};
+  const days = Math.max(1, Math.min(60, Number(f.days || 7)));
+  const r = await db.query(`
+    SELECT v.*, p.name AS project_name, u.unit_no,
+           l.name AS lead_name, l.phone AS lead_phone,
+           ag.name AS assigned_to_name
+      FROM re_site_visits v
+      LEFT JOIN re_projects p ON p.id = v.project_id
+      LEFT JOIN re_units u    ON u.id = v.unit_id
+      LEFT JOIN leads l       ON l.id = v.lead_id
+      LEFT JOIN users ag      ON ag.id = v.assigned_to
+     WHERE v.status NOT IN ('done','no_show','cancelled')
+       AND v.scheduled_at BETWEEN NOW() AND NOW() + ($1::int || ' days')::interval
+     ORDER BY v.scheduled_at ASC
+     LIMIT 100
+  `, [days]);
+  return r.rows;
+}
+
+async function api_re_visits_markDone(token, payload) {
+  await authUser(token);
+  await _requireRealEstate();
+  await _ensureSchemaPhase3();
+  const p = payload || {};
+  if (!p.id) throw new Error('id required');
+  const outcome = p.outcome || 'done';  // done / no_show / cancelled / interested / not_interested
+  await db.query(`UPDATE re_site_visits SET
+    status='done', visit_outcome=$1, feedback=$2,
+    visited_at=NOW() WHERE id=$3`,
+    [outcome, p.feedback || '', Number(p.id)]);
+  return { ok: true };
+}
+
+async function api_re_visits_reschedule(token, payload) {
+  await authUser(token);
+  await _requireRealEstate();
+  await _ensureSchemaPhase3();
+  const p = payload || {};
+  if (!p.id) throw new Error('id required');
+  if (!p.scheduled_at) throw new Error('new scheduled_at required');
+  await db.query(`UPDATE re_site_visits SET
+    scheduled_at=$1, status='scheduled', notes = COALESCE(notes,'') || E'\\n[Rescheduled: ' || $2 || ']' WHERE id=$3`,
+    [p.scheduled_at, p.reason || 'no reason given', Number(p.id)]);
+  return { ok: true };
+}
+
+async function api_re_visits_sendReminder(token, payload) {
+  await authUser(token);
+  await _requireRealEstate();
+  await _ensureSchemaPhase3();
+  const p = payload || {};
+  if (!p.id) throw new Error('id required');
+  const r = await db.query(`
+    SELECT v.*, l.name, l.phone, l.email, l.whatsapp,
+           p.name AS project_name, u.unit_no
+      FROM re_site_visits v
+      LEFT JOIN leads l ON l.id = v.lead_id
+      LEFT JOIN re_projects p ON p.id = v.project_id
+      LEFT JOIN re_units u ON u.id = v.unit_id
+     WHERE v.id = $1
+  `, [Number(p.id)]);
+  const v = r.rows && r.rows[0];
+  if (!v) throw new Error('Visit not found');
+  const msg = `Hi ${v.name || ''}! Reminder: your site visit is scheduled for ${String(v.scheduled_at).slice(0,16).replace('T',' ')} at ${v.project_name || ''}${v.unit_no ? ' · Unit ' + v.unit_no : ''}.${v.pickup_location ? ' Pickup: ' + v.pickup_location : ''} See you there!`;
+  const result = { wa: null, email: null };
+  try {
+    const whatsbot = require('../whatsbot');
+    const phone = (v.whatsapp || v.phone || '').replace(/\D/g, '');
+    if (whatsbot && whatsbot._sendFreeform && phone) {
+      await whatsbot._sendFreeform(phone, msg);
+      result.wa = { ok: true };
+    }
+  } catch (e) { result.wa = { ok: false, reason: e.message }; }
+  try {
+    const mailer = require('../../utils/mailer');
+    if (mailer && mailer._sendRaw && v.email) {
+      await mailer._sendRaw({ to: v.email, subject: 'Site visit reminder', text: msg });
+      result.email = { ok: true };
+    }
+  } catch (e) { result.email = { ok: false, reason: e.message }; }
+  await db.query(`UPDATE re_site_visits SET reminded_at=NOW() WHERE id=$1`, [Number(p.id)]);
+  return result;
+}
+
+// ───── CP performance report ─────
+async function api_re_cp_performance(token, filters) {
+  await authUser(token);
+  await _requireRealEstate();
+  await _ensureSchema();
+  const f = filters || {};
+  const start = f.start_date || new Date(Date.now() - 180*24*60*60*1000).toISOString().slice(0,10);
+  const end   = f.end_date   || new Date().toISOString().slice(0,10);
+
+  const r = await db.query(`
+    SELECT cp.id, cp.name, cp.phone, cp.email, cp.commission_pct,
+           COUNT(b.id)::int                                        AS bookings,
+           COUNT(b.id) FILTER (WHERE b.status='cancelled')::int    AS cancelled,
+           COUNT(b.id) FILTER (WHERE b.status='registered')::int   AS registered,
+           COALESCE(SUM(b.total_price), 0)::numeric                 AS gmv,
+           COALESCE(SUM(cl.amount_due), 0)::numeric                 AS commission_due,
+           COALESCE(SUM(cl.amount_paid), 0)::numeric                AS commission_paid,
+           MAX(b.booking_date) AS last_booking_date
+      FROM re_channel_partners cp
+      LEFT JOIN re_bookings b
+             ON b.channel_partner_id = cp.id
+            AND b.booking_date BETWEEN $1::date AND $2::date
+      LEFT JOIN re_commission_ledger cl ON cl.booking_id = b.id
+     GROUP BY cp.id
+     ORDER BY gmv DESC
+  `, [start, end]);
+  return { rows: r.rows || [], start_date: start, end_date: end };
+}
+
+
 framework.register({
   id: PACK_ID,
   name: 'Real Estate',
@@ -857,7 +1179,10 @@ framework.register({
     'Real Estate statuses + custom fields seeded'
   ],
   nav_items: [
-    { id: 'reinventory', label: '🏢 Inventory Board', icon: '🏢' }
+    { id: 'reinventory',    label: '🏢 Inventory Board', icon: '🏢' },
+    { id: 'rerequirements', label: '🎯 Buyer Requirements', icon: '🎯' },
+    { id: 'revisits',       label: '📅 Site Visits',     icon: '📅' },
+    { id: 'recpperf',       label: '👥 Broker Performance', icon: '👥' }
   ],
   install,
   uninstall
@@ -872,6 +1197,10 @@ module.exports = {
   api_re_channelPartners_list, api_re_channelPartners_save,
   api_re_commission_list, api_re_commission_markPaid,
   api_re_summary,
-  _ensureSchema,
+  api_re_requirements_save, api_re_requirements_byLead, api_re_requirements_match,
+  api_re_visits_schedule, api_re_visits_byLead, api_re_visits_upcoming,
+  api_re_visits_markDone, api_re_visits_reschedule, api_re_visits_sendReminder,
+  api_re_cp_performance,
+  _ensureSchema, _ensureSchemaPhase3,
   DEFAULT_MILESTONES
 };

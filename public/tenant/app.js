@@ -880,8 +880,11 @@ const NAV_GROUPS = [
     { id: 'edudues',     label: '📋 Fee Dues',       icon: '📋', roles: ['admin','manager','team_leader','agent'], requiresPack: 'education' },
     { id: 'edurevenue',  label: '💎 Revenue',       icon: '💎', roles: ['admin','manager'],                requiresPack: 'education' },
     { id: 'edureports',  label: '📊 Collection Report', icon: '📊', roles: ['admin','manager'],            requiresPack: 'education' },
-    { id: 'reinventory',   label: 'Inventory Board', icon: '🏢', roles: ['admin','manager','team_leader'], requiresPack: 'realestate' },
-    { id: 'recommissions', label: 'Commissions',     icon: '💸', roles: ['admin','manager'],                requiresPack: 'realestate' },
+    { id: 'reinventory',     label: 'Inventory Board', icon: '🏢', roles: ['admin','manager','team_leader'], requiresPack: 'realestate' },
+    { id: 'rerequirements',  label: 'Buyer Reqs',      icon: '🎯', roles: ['admin','manager','team_leader','agent'], requiresPack: 'realestate' },
+    { id: 'revisits',        label: 'Site Visits',     icon: '📅', roles: ['admin','manager','team_leader','agent'], requiresPack: 'realestate' },
+    { id: 'recpperf',        label: 'Broker Perf',     icon: '👥', roles: ['admin','manager'],                requiresPack: 'realestate' },
+    { id: 'recommissions',   label: 'Commissions',     icon: '💸', roles: ['admin','manager'],                requiresPack: 'realestate' },
     { id: 'campaigns',  label: 'Campaigns',      icon: '📣', roles: ['admin','manager'] },
     { id: 'pipeline',   label: 'Pipeline',       icon: '📈' },
     { id: 'kanban',     label: 'Kanban',         icon: '🗂️' },
@@ -28380,3 +28383,489 @@ VIEWS.edureports = async (view) => {
     }, 250);
   };
 })();
+
+
+// ═════════════════════════════════════════════════════════════════════
+// 🎯 Real Estate Phase 3 — Buyer Reqs, Site Visits, Broker Performance
+// ═════════════════════════════════════════════════════════════════════
+
+// ── 🎯 Buyer Requirements view (admin/manager/team_leader/agent)
+VIEWS.rerequirements = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('h2', {}, '🎯 Buyer Requirements — Match leads to inventory'));
+  view.appendChild(h('p', { class:'muted' }, 'Capture each buyer\'s wishlist (budget / BHK / location / timeline) then auto-match against available units.'));
+  const body = h('div', {});
+  view.appendChild(body);
+  // Show recent requirements + quick add
+  body.appendChild(h('div', { class:'muted', style:{ padding:'1rem' } },
+    'Open any lead → scroll to 🎯 Requirements & Matches block at the bottom to add a buyer requirement and see auto-matched units.'));
+};
+
+// ── 📅 Site Visits view
+VIEWS.revisits = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('h2', {}, '📅 Site Visits — Schedule, remind, track outcomes'));
+  const body = h('div', {});
+  view.appendChild(body);
+
+  async function render() {
+    body.innerHTML = '<div class="muted" style="padding:1rem">Loading…</div>';
+    try {
+      const r = await api('api_re_visits_upcoming', { days: 14 });
+      body.innerHTML = '';
+      const visits = r || [];
+      if (!visits.length) {
+        body.appendChild(h('div', { class:'muted', style:{ padding:'1rem' } }, 'No upcoming site visits in the next 14 days. Open a lead → schedule one from the Site Visits panel.'));
+        return;
+      }
+      body.appendChild(h('table', { class:'mini-table' },
+        h('thead', {}, h('tr', {},
+          h('th', {}, 'When'),
+          h('th', {}, 'Lead'),
+          h('th', {}, 'Project / Unit'),
+          h('th', {}, 'Assigned'),
+          h('th', {}, 'Pickup'),
+          h('th', {}, 'Status'),
+          h('th', {}, '')
+        )),
+        h('tbody', {}, ...visits.map(v => h('tr', {},
+          h('td', {}, String(v.scheduled_at).slice(0,16).replace('T',' ')),
+          h('td', {}, h('div', { style:{ fontWeight:600 } }, v.lead_name || '—'), v.lead_phone ? h('div', { class:'muted', style:{ fontSize:'.75em' } }, v.lead_phone) : null),
+          h('td', {}, (v.project_name || '—') + (v.unit_no ? ' · ' + v.unit_no : '')),
+          h('td', {}, v.assigned_to_name || h('span', { class:'muted' }, 'Unassigned')),
+          h('td', {}, v.pickup_location || h('span', { class:'muted' }, '—')),
+          h('td', {}, h('span', { style:{ background:'#dbeafe', color:'#1e40af', padding:'2px 6px', borderRadius:'3px', fontSize:'.75em' } }, v.status)),
+          h('td', {},
+            h('button', { class:'btn xs primary', onclick: () => openLeadModal(v.lead_id) }, 'Open lead'),
+            h('button', { class:'btn xs', style:{ marginLeft:'.2rem' }, onclick: async () => {
+              try { await api('api_re_visits_sendReminder', { id: v.id }); toast('Reminder sent'); } catch (e) { toast(e.message, 'err'); }
+            } }, '🔔 Remind')
+          )
+        )))
+      ));
+    } catch (e) {
+      body.innerHTML = '';
+      body.appendChild(h('div', { class:'error-box' }, e.message));
+    }
+  }
+  render();
+};
+
+// ── 👥 Broker Performance view
+VIEWS.recpperf = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('h2', {}, '👥 Broker / Channel Partner Performance'));
+
+  const fStart = h('input', { type:'date', value: new Date(Date.now() - 180*24*60*60*1000).toISOString().slice(0,10) });
+  const fEnd   = h('input', { type:'date', value: new Date().toISOString().slice(0,10) });
+  const runBtn = h('button', { class:'btn primary' }, '🔄 Run');
+  view.appendChild(h('div', { class:'card', style:{ padding:'.6rem .8rem', marginBottom:'.8rem', display:'flex', gap:'.4rem', alignItems:'flex-end' } },
+    h('div', {}, h('label', { style:{ fontSize:'.75em' } }, 'Start'), fStart),
+    h('div', {}, h('label', { style:{ fontSize:'.75em' } }, 'End'),   fEnd),
+    runBtn
+  ));
+
+  const body = h('div', {});
+  view.appendChild(body);
+
+  async function render() {
+    body.innerHTML = '<div class="muted" style="padding:1rem">Loading…</div>';
+    try {
+      const r = await api('api_re_cp_performance', { start_date: fStart.value, end_date: fEnd.value });
+      body.innerHTML = '';
+      const rows = r.rows || [];
+      if (!rows.length) { body.appendChild(h('div', { class:'muted', style:{ padding:'1rem' } }, 'No data in this period.')); return; }
+      const maxGmv = Math.max(...rows.map(x => Number(x.gmv)), 1);
+      body.appendChild(h('table', { class:'mini-table' },
+        h('thead', {}, h('tr', {},
+          h('th', {}, 'Partner'),
+          h('th', {}, '# Bookings'),
+          h('th', {}, 'Registered'),
+          h('th', {}, 'Cancelled'),
+          h('th', {}, 'GMV'),
+          h('th', {}, 'Commission'),
+          h('th', {}, 'Last booking'),
+          h('th', {style:{ width:'30%' }}, 'GMV bar')
+        )),
+        h('tbody', {}, ...rows.map(r => h('tr', {},
+          h('td', {},
+            h('strong', {}, r.name),
+            r.phone ? h('div', { class:'muted', style:{ fontSize:'.75em' } }, r.phone) : null
+          ),
+          h('td', {}, String(r.bookings)),
+          h('td', { style:{ color:'#7c3aed', fontWeight:600 } }, String(r.registered)),
+          h('td', { style:{ color: r.cancelled > 0 ? '#dc2626' : 'inherit' } }, String(r.cancelled)),
+          h('td', { style:{ fontWeight:600 } }, '₹' + Number(r.gmv).toLocaleString('en-IN')),
+          h('td', {},
+            h('div', {}, 'Due ₹' + Number(r.commission_due - r.commission_paid).toLocaleString('en-IN')),
+            h('div', { class:'muted', style:{ fontSize:'.75em' } }, 'Paid ₹' + Number(r.commission_paid).toLocaleString('en-IN'))
+          ),
+          h('td', { class:'muted', style:{ fontSize:'.85em' } }, r.last_booking_date ? String(r.last_booking_date).slice(0,10) : '—'),
+          h('td', {},
+            h('div', { style:{ background:'#e5e7eb', borderRadius:'4px', height:'18px' } },
+              h('div', { style:{ background:'#7c3aed', height:'100%', borderRadius:'4px', width: (Number(r.gmv) / maxGmv * 100) + '%' } })
+            )
+          )
+        )))
+      ));
+    } catch (e) { body.innerHTML = ''; body.appendChild(h('div', { class:'error-box' }, e.message)); }
+  }
+  runBtn.addEventListener('click', render);
+  render();
+};
+
+// ── 🎯 Requirements + Site Visits panel on the lead modal
+(function _wireRealEstateLeadPanels() {
+  if (typeof openLeadModal !== 'function') return;
+  const _prev = openLeadModal;
+  window.openLeadModal = async function patchedRE(id) {
+    const out = await _prev.apply(this, arguments);
+    if (!id) return out;
+    setTimeout(async () => {
+      try {
+        const installed = await api('api_packs_listInstalled').catch(() => []);
+        const reActive = (installed || []).some(p => p.pack_id === 'realestate' && Number(p.is_active));
+        if (!reActive) return;
+        const body = document.querySelector('.modal-backdrop:last-of-type .modal');
+        if (!body || body.querySelector('.re-extra-panels')) return;
+
+        const wrap = h('div', { class:'re-extra-panels' });
+
+        // Requirements + matches block
+        wrap.appendChild(buildRequirementsBlock(id));
+
+        // Site visits block
+        wrap.appendChild(buildSiteVisitsBlock(id));
+
+        const actions = body.querySelector('.actions');
+        if (actions) body.insertBefore(wrap, actions); else body.appendChild(wrap);
+      } catch (_) {}
+    }, 350);
+    return out;
+  };
+})();
+
+function buildRequirementsBlock(leadId) {
+  const wrap = h('div', { style:{ marginTop:'1rem', borderTop:'1px solid #e5e7eb', paddingTop:'1rem' } },
+    h('h4', { style:{ margin:'0 0 .5rem 0' } }, '🎯 Buyer Requirements & Auto-Matches')
+  );
+  const inner = h('div', {}, h('div', { class:'muted' }, 'Loading…'));
+  wrap.appendChild(inner);
+
+  async function refresh() {
+    try {
+      const reqs = await api('api_re_requirements_byLead', leadId);
+      inner.innerHTML = '';
+
+      if (!reqs.length) {
+        inner.appendChild(h('div', { class:'muted', style:{ padding:'.5rem 0' } }, 'No requirement captured yet.'));
+        inner.appendChild(h('button', { class:'btn sm primary', onclick: () => openReqModal(leadId, null, refresh) }, '+ Capture requirement'));
+        return;
+      }
+
+      reqs.forEach(rq => {
+        const card = h('div', { class:'card', style:{ padding:'.5rem .7rem', marginBottom:'.4rem' } });
+        card.appendChild(h('div', { style:{ display:'flex', justifyContent:'space-between' } },
+          h('div', {},
+            h('strong', {}, '₹' + Number(rq.budget_min).toLocaleString('en-IN') + ' – ₹' + Number(rq.budget_max).toLocaleString('en-IN')),
+            rq.preferred_bhk ? h('span', { style:{ marginLeft:'.4rem', background:'#dbeafe', padding:'1px 6px', borderRadius:'3px', fontSize:'.75em' } }, rq.preferred_bhk) : null,
+            rq.intent ? h('span', { style:{ marginLeft:'.3rem', background:'#fef3c7', padding:'1px 6px', borderRadius:'3px', fontSize:'.75em' } }, rq.intent) : null
+          ),
+          h('div', { style:{ display:'flex', gap:'.3rem' } },
+            h('button', { class:'btn xs', onclick: () => openReqModal(leadId, rq, refresh) }, '✎'),
+            h('button', { class:'btn xs primary', onclick: () => openMatchesModal(rq.id) }, '🔍 Show matches')
+          )
+        ));
+        const meta = [];
+        if (rq.preferred_locations) meta.push('📍 ' + rq.preferred_locations);
+        if (rq.preferred_projects)  meta.push('🏢 ' + rq.preferred_projects);
+        if (rq.possession_timeline) meta.push('⏱ ' + rq.possession_timeline);
+        if (meta.length) card.appendChild(h('div', { class:'muted', style:{ fontSize:'.8em', marginTop:'.2rem' } }, meta.join(' · ')));
+        if (rq.notes) card.appendChild(h('div', { class:'muted', style:{ fontSize:'.8em', marginTop:'.15rem', fontStyle:'italic' } }, rq.notes));
+        inner.appendChild(card);
+      });
+      inner.appendChild(h('button', { class:'btn sm', onclick: () => openReqModal(leadId, null, refresh) }, '+ Add another'));
+    } catch (e) {
+      inner.innerHTML = '';
+      if (!/not active/i.test(String(e.message||''))) inner.appendChild(h('div', { class:'muted' }, e.message));
+    }
+  }
+  refresh();
+  return wrap;
+}
+
+function openReqModal(leadId, existing, onDone) {
+  const ex = existing || {};
+  const m = h('div', { class:'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const modal = h('div', { class:'modal modal-lg' });
+  modal.appendChild(h('div', { class:'modal-head' },
+    h('h3', {}, ex.id ? '✎ Edit requirement' : '🎯 Capture buyer requirement'),
+    h('button', { class:'btn ghost', onclick: () => m.remove() }, '✕')
+  ));
+
+  const fBmin = h('input', { type:'number', value: ex.budget_min || '', placeholder:'Min ₹' });
+  const fBmax = h('input', { type:'number', value: ex.budget_max || '', placeholder:'Max ₹' });
+  const fBhk = h('select', {},
+    ...['', '1BHK','2BHK','3BHK','4BHK','5BHK+','Studio','Plot','Shop','Office']
+      .map(t => h('option', { value: t, selected: ex.preferred_bhk === t ? 'selected' : null }, t || '— Any —'))
+  );
+  const fLoc = h('input', { type:'text', value: ex.preferred_locations || '', placeholder:'e.g. Andheri, Powai, Bandra' });
+  const fProj = h('input', { type:'text', value: ex.preferred_projects || '', placeholder:'e.g. Sample Heights' });
+  const fTime = h('select', {},
+    ...['','Immediate','3 months','6 months','1 year','2+ years','Investment']
+      .map(t => h('option', { value: t, selected: ex.possession_timeline === t ? 'selected' : null }, t || '— Any —'))
+  );
+  const fIntent = h('select', {},
+    h('option', { value:'self_use',  selected: (ex.intent||'self_use')==='self_use'  ? 'selected' : null }, '🏠 Self-use'),
+    h('option', { value:'investment', selected: ex.intent === 'investment' ? 'selected' : null }, '💰 Investment'),
+    h('option', { value:'rental_income', selected: ex.intent === 'rental_income' ? 'selected' : null }, '🏘 Rental income')
+  );
+  const fNotes = h('textarea', { rows:2, placeholder:'Additional notes…' }); fNotes.value = ex.notes || '';
+
+  modal.appendChild(h('div', { class:'modal-body' },
+    h('div', { style:{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'.5rem' } },
+      h('label', {}, 'Min budget ₹', fBmin),
+      h('label', {}, 'Max budget ₹', fBmax),
+      h('label', {}, 'Preferred BHK', fBhk),
+      h('label', {}, 'Possession timeline', fTime),
+      h('label', { style:{ gridColumn:'span 2' } }, 'Preferred locations (comma-separated)', fLoc),
+      h('label', { style:{ gridColumn:'span 2' } }, 'Preferred projects (comma-separated)', fProj),
+      h('label', {}, 'Intent', fIntent),
+      h('label', { style:{ gridColumn:'span 2' } }, 'Notes', fNotes)
+    )
+  ));
+
+  modal.appendChild(h('div', { class:'actions' },
+    h('button', { class:'btn', onclick: () => m.remove() }, 'Cancel'),
+    h('button', { class:'btn primary', onclick: async () => {
+      try {
+        await api('api_re_requirements_save', {
+          id: ex.id, lead_id: leadId,
+          budget_min: Number(fBmin.value)||0, budget_max: Number(fBmax.value)||0,
+          preferred_bhk: fBhk.value, preferred_locations: fLoc.value,
+          preferred_projects: fProj.value, possession_timeline: fTime.value,
+          intent: fIntent.value, notes: fNotes.value
+        });
+        toast('Saved');
+        m.remove();
+        if (onDone) onDone();
+      } catch (e) { toast(e.message, 'err'); }
+    } }, '💾 Save')
+  ));
+  m.appendChild(modal);
+  document.body.appendChild(m);
+}
+
+async function openMatchesModal(reqId) {
+  const m = h('div', { class:'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const modal = h('div', { class:'modal modal-lg' });
+  modal.appendChild(h('div', { class:'modal-head' },
+    h('h3', {}, '🔍 Matching properties'),
+    h('button', { class:'btn ghost', onclick: () => m.remove() }, '✕')
+  ));
+  const body = h('div', { class:'modal-body' }, h('div', { class:'muted' }, 'Loading…'));
+  modal.appendChild(body);
+  m.appendChild(modal);
+  document.body.appendChild(m);
+
+  try {
+    const data = await api('api_re_requirements_match', reqId);
+    body.innerHTML = '';
+    const ms = data.matches || [];
+    if (!ms.length) { body.appendChild(h('div', { class:'muted' }, 'No available units match this requirement.')); return; }
+    ms.forEach(u => {
+      const scoreColor = u._score >= 80 ? '#16a34a' : (u._score >= 50 ? '#0ea5e9' : '#94a3b8');
+      body.appendChild(h('div', { class:'card', style:{ padding:'.5rem .7rem', marginBottom:'.4rem', borderLeft:'4px solid ' + scoreColor } },
+        h('div', { style:{ display:'flex', justifyContent:'space-between', alignItems:'center' } },
+          h('div', {},
+            h('strong', {}, (u.project_name || '') + ' · ' + (u.unit_no || '')),
+            u.type ? h('span', { class:'muted', style:{ marginLeft:'.4rem' } }, u.type) : null,
+            u.carpet_sqft ? h('span', { class:'muted' }, ' · ' + u.carpet_sqft + ' sqft') : null
+          ),
+          h('div', { style:{ textAlign:'right' } },
+            h('div', { style:{ fontWeight:700, color:scoreColor } }, u._score + ' / 100'),
+            h('div', { class:'muted', style:{ fontSize:'.75em' } }, '₹' + Number(u.price).toLocaleString('en-IN'))
+          )
+        ),
+        u._reasons && u._reasons.length ? h('div', { class:'muted', style:{ fontSize:'.78em', marginTop:'.2rem' } }, '✓ ' + u._reasons.join(' · ')) : null
+      ));
+    });
+  } catch (e) {
+    body.innerHTML = '';
+    body.appendChild(h('div', { class:'error-box' }, e.message));
+  }
+}
+
+function buildSiteVisitsBlock(leadId) {
+  const wrap = h('div', { style:{ marginTop:'1rem', borderTop:'1px solid #e5e7eb', paddingTop:'1rem' } },
+    h('h4', { style:{ margin:'0 0 .5rem 0' } }, '📅 Site Visits')
+  );
+  const inner = h('div', {}, h('div', { class:'muted' }, 'Loading…'));
+  wrap.appendChild(inner);
+
+  async function refresh() {
+    try {
+      const visits = await api('api_re_visits_byLead', leadId);
+      inner.innerHTML = '';
+      const list = visits || [];
+      list.forEach(v => {
+        const past = new Date(v.scheduled_at) < new Date();
+        const statusColor = v.status === 'done' ? '#16a34a' : (past ? '#dc2626' : '#0ea5e9');
+        const card = h('div', { class:'card', style:{ padding:'.4rem .6rem', marginBottom:'.3rem', borderLeft:'3px solid ' + statusColor } },
+          h('div', { style:{ display:'flex', justifyContent:'space-between', alignItems:'center' } },
+            h('div', {},
+              h('strong', {}, String(v.scheduled_at).slice(0,16).replace('T',' ')),
+              h('div', { class:'muted', style:{ fontSize:'.8em' } },
+                (v.project_name || 'No project') + (v.unit_no ? ' · ' + v.unit_no : '') +
+                (v.assigned_to_name ? ' · 👤 ' + v.assigned_to_name : '')
+              ),
+              v.pickup_location ? h('div', { class:'muted', style:{ fontSize:'.78em' } }, '🚗 Pickup: ' + v.pickup_location) : null,
+              v.feedback ? h('div', { class:'muted', style:{ fontSize:'.78em', fontStyle:'italic', marginTop:'.15rem' } }, '💬 ' + v.feedback) : null
+            ),
+            h('div', { style:{ display:'flex', gap:'.2rem' } },
+              v.status !== 'done' ? h('button', { class:'btn xs primary', onclick: () => openMarkVisitDoneModal(v, refresh) }, '✓ Done') : null,
+              v.status !== 'done' ? h('button', { class:'btn xs', onclick: () => openRescheduleModal(v, refresh) }, '↻') : null,
+              v.status !== 'done' ? h('button', { class:'btn xs', onclick: async () => {
+                try { await api('api_re_visits_sendReminder', { id: v.id }); toast('Reminder sent'); }
+                catch (e) { toast(e.message, 'err'); }
+              } }, '🔔') : null,
+              h('span', { style:{ background: statusColor, color:'white', padding:'2px 6px', borderRadius:'3px', fontSize:'.7em' } }, v.status)
+            )
+          )
+        );
+        inner.appendChild(card);
+      });
+      inner.appendChild(h('button', { class:'btn sm primary', onclick: () => openScheduleVisitModal(leadId, null, refresh) }, '+ Schedule visit'));
+    } catch (e) {
+      inner.innerHTML = '';
+      if (!/not active/i.test(String(e.message||''))) inner.appendChild(h('div', { class:'muted' }, e.message));
+    }
+  }
+  refresh();
+  return wrap;
+}
+
+async function openScheduleVisitModal(leadId, existing, onDone) {
+  const ex = existing || {};
+  const m = h('div', { class:'modal-backdrop' });
+  const modal = h('div', { class:'modal modal-lg' });
+  modal.appendChild(h('div', { class:'modal-head' },
+    h('h3', {}, ex.id ? '✎ Edit visit' : '📅 Schedule site visit'),
+    h('button', { class:'btn ghost', onclick: () => m.remove() }, '✕')
+  ));
+
+  const fProj = h('select', {}, h('option', { value:'' }, '— Pick project —'));
+  const fUnit = h('select', {}, h('option', { value:'' }, '— Pick unit (optional) —'));
+  const fWhen = h('input', { type:'datetime-local', value: ex.scheduled_at ? String(ex.scheduled_at).slice(0,16) : '' });
+  const fAssign = h('select', {}, h('option', { value:'' }, '— Unassigned —'));
+  const fPickup = h('input', { type:'text', value: ex.pickup_location || '', placeholder:'Pickup address' });
+  const fPickupAt = h('input', { type:'datetime-local', value: ex.pickup_time ? String(ex.pickup_time).slice(0,16) : '' });
+  const fDrop = h('input', { type:'text', value: ex.drop_location || '', placeholder:'Drop address (optional)' });
+  const fNotes = h('textarea', { rows:2 }); fNotes.value = ex.notes || '';
+
+  modal.appendChild(h('div', { class:'modal-body' },
+    h('div', { style:{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'.5rem' } },
+      h('label', {}, 'Project', fProj),
+      h('label', {}, 'Unit (optional)', fUnit),
+      h('label', {}, 'When *', fWhen),
+      h('label', {}, 'Assign to', fAssign),
+      h('label', {}, '🚗 Pickup location', fPickup),
+      h('label', {}, 'Pickup time', fPickupAt),
+      h('label', { style:{ gridColumn:'span 2' } }, 'Drop location', fDrop),
+      h('label', { style:{ gridColumn:'span 2' } }, 'Notes', fNotes)
+    )
+  ));
+  modal.appendChild(h('div', { class:'actions' },
+    h('button', { class:'btn', onclick: () => m.remove() }, 'Cancel'),
+    h('button', { class:'btn primary', onclick: async () => {
+      if (!fWhen.value) { toast('Schedule date required','err'); return; }
+      try {
+        await api('api_re_visits_schedule', {
+          id: ex.id, lead_id: leadId,
+          project_id: fProj.value ? Number(fProj.value) : null,
+          unit_id: fUnit.value ? Number(fUnit.value) : null,
+          scheduled_at: fWhen.value,
+          assigned_to: fAssign.value ? Number(fAssign.value) : null,
+          pickup_location: fPickup.value, pickup_time: fPickupAt.value || null,
+          drop_location: fDrop.value, notes: fNotes.value
+        });
+        toast('Visit scheduled');
+        m.remove();
+        if (onDone) onDone();
+      } catch (e) { toast(e.message, 'err'); }
+    } }, 'Save')
+  ));
+  m.appendChild(modal);
+  document.body.appendChild(m);
+
+  try {
+    const projects = await api('api_re_projects_list');
+    (projects || []).forEach(p => fProj.appendChild(h('option', { value: p.id, selected: ex.project_id == p.id ? 'selected' : null }, p.name)));
+    const users = await api('api_users_list').catch(() => []);
+    (users || []).filter(u => Number(u.is_active)).forEach(u =>
+      fAssign.appendChild(h('option', { value: u.id, selected: ex.assigned_to == u.id ? 'selected' : null }, u.name + ' (' + (u.role||'agent') + ')')));
+  } catch (_) {}
+
+  fProj.addEventListener('change', async () => {
+    fUnit.innerHTML = ''; fUnit.appendChild(h('option', { value:'' }, '— Pick unit —'));
+    if (!fProj.value) return;
+    try {
+      const units = await api('api_re_units_byProject', Number(fProj.value));
+      (units || []).forEach(u => fUnit.appendChild(h('option', { value: u.id }, u.unit_no + ' · ' + (u.type||'') + ' · ' + u.status)));
+    } catch (_) {}
+  });
+}
+
+function openMarkVisitDoneModal(visit, onDone) {
+  const m = h('div', { class:'modal-backdrop' });
+  const modal = h('div', { class:'modal' });
+  modal.appendChild(h('div', { class:'modal-head' }, h('h3', {}, '✓ Mark visit done'), h('button', { class:'btn ghost', onclick: () => m.remove() }, '✕')));
+  const fOutcome = h('select', {},
+    ...[['done','✓ Visited'],['no_show','❌ No-show'],['interested','🔥 Interested'],['not_interested','😐 Not interested'],['cancelled','🚫 Cancelled by customer']]
+      .map(([v,l]) => h('option', { value:v }, l))
+  );
+  const fFeedback = h('textarea', { rows:3, placeholder:'Visit feedback / customer remarks…' });
+  modal.appendChild(h('div', { class:'modal-body' },
+    h('label', {}, 'Outcome', fOutcome),
+    h('label', {}, 'Feedback', fFeedback)
+  ));
+  modal.appendChild(h('div', { class:'actions' },
+    h('button', { class:'btn', onclick: () => m.remove() }, 'Cancel'),
+    h('button', { class:'btn primary', onclick: async () => {
+      try {
+        await api('api_re_visits_markDone', { id: visit.id, outcome: fOutcome.value, feedback: fFeedback.value });
+        toast('Marked done'); m.remove(); if (onDone) onDone();
+      } catch (e) { toast(e.message, 'err'); }
+    } }, 'Save')
+  ));
+  m.appendChild(modal); document.body.appendChild(m);
+}
+
+function openRescheduleModal(visit, onDone) {
+  const m = h('div', { class:'modal-backdrop' });
+  const modal = h('div', { class:'modal' });
+  modal.appendChild(h('div', { class:'modal-head' }, h('h3', {}, '↻ Reschedule visit'), h('button', { class:'btn ghost', onclick: () => m.remove() }, '✕')));
+  const fWhen = h('input', { type:'datetime-local' });
+  const fReason = h('input', { type:'text', placeholder:'Reason (e.g. customer requested)' });
+  modal.appendChild(h('div', { class:'modal-body' },
+    h('label', {}, 'New date/time *', fWhen),
+    h('label', {}, 'Reason', fReason)
+  ));
+  modal.appendChild(h('div', { class:'actions' },
+    h('button', { class:'btn', onclick: () => m.remove() }, 'Cancel'),
+    h('button', { class:'btn primary', onclick: async () => {
+      if (!fWhen.value) { toast('New date required','err'); return; }
+      try {
+        await api('api_re_visits_reschedule', { id: visit.id, scheduled_at: fWhen.value, reason: fReason.value });
+        toast('Rescheduled'); m.remove(); if (onDone) onDone();
+      } catch (e) { toast(e.message, 'err'); }
+    } }, 'Save')
+  ));
+  m.appendChild(modal); document.body.appendChild(m);
+}
+
+try {
+  window.openReqModal = openReqModal;
+  window.openMatchesModal = openMatchesModal;
+  window.openScheduleVisitModal = openScheduleVisitModal;
+} catch (_) {}
