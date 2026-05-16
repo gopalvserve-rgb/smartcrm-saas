@@ -1060,11 +1060,39 @@ async function _wipeAndSeed(pool, adminUserId) {
 async function api_saas_demo_seed(token /*, opts */) {
   const me = await requireSuperAdmin(token);
 
-  const tenant = await _findOrCreateDemoTenant(me.id, me.email);
+  // Use the explicit Generic showcase conf so this stays in sync with
+  // the per-industry seeders (and so the seeder works even after the
+  // INDUSTRY_SHOWCASES refactor).
+  const conf = INDUSTRY_SHOWCASES.generic;
+  const tenant = await _findOrCreateDemoTenant(me.id, me.email, conf);
   const pool = tenantPool.poolFor(tenant);
   if (!pool) throw new Error('Could not connect to demo tenant DB');
 
-  const adminUserId = await _resetAdminPassword(pool);
+  const adminUserId = await _resetAdminPassword(pool, conf.email, conf.password);
+
+  // Make sure this tenant is PURE Generic — uninstall any industry packs
+  // that may have been installed by previous test runs of the seedEducation
+  // / seedRealEstate buttons on the same showcase tenant. Soft-uninstall
+  // (data stays in re_* / edu_* tables but the SPA stops surfacing the
+  // pack-specific tabs).
+  await db.tenantStorage.run({ pool, slug: tenant.slug }, async () => {
+    try {
+      await db.query(`CREATE TABLE IF NOT EXISTS installed_packs (
+        pack_id TEXT PRIMARY KEY,
+        version TEXT NOT NULL,
+        installed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        installed_by INTEGER,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        config TEXT NOT NULL DEFAULT ''
+      )`);
+      const r = await db.query(`UPDATE installed_packs SET is_active = 0 WHERE is_active = 1 RETURNING pack_id`);
+      const off = (r.rows || []).map(x => x.pack_id);
+      if (off.length) console.log('[demo-seed] Generic showcase — disabled industry packs:', off.join(', '));
+    } catch (e) {
+      console.warn('[demo-seed] Could not disable industry packs on Generic showcase:', e.message);
+    }
+  });
+
   const summary = await _wipeAndSeed(pool, adminUserId);
 
   const baseUrl = (process.env.PUBLIC_BASE_URL || 'https://crm.smartcrmsolution.com').replace(/\/+$/, '');
@@ -1080,8 +1108,8 @@ async function api_saas_demo_seed(token /*, opts */) {
     ok: true,
     slug: tenant.slug,
     url,
-    email: DEMO_EMAIL,
-    password: DEMO_PASSWORD,
+    email: conf.email,
+    password: conf.password,
     counts: summary.counts
   };
 }
