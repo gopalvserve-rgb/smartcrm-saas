@@ -19,6 +19,15 @@ const jwt    = require('jsonwebtoken');
 const db     = require('../../db/pg');
 const { hashPassword, verifyPassword, signToken, authUser } = require('../../utils/auth');
 
+// Pull active tenant slug from tenantStorage context — used to bind freshly
+// minted tokens to the issuing tenant.
+function _activeSlugForToken() {
+  try {
+    const store = db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore();
+    return store && store.slug ? String(store.slug) : null;
+  } catch (_) { return null; }
+}
+
 // Optional — gracefully absent in single-tenant deployments.
 // In the SaaS server, errorLogs lives next to this file and writes to
 // the platform control DB so the super-admin /admin/#/errors view picks
@@ -116,7 +125,7 @@ async function api_login(_token, email, password) {
   if (!Number(user.is_active)) throw new Error('Account is deactivated');
   if (!verifyPassword(password, user.password_hash)) throw new Error('Invalid email or password');
 
-  const token = signToken(user);
+  const token = signToken(user, _activeSlugForToken());
   return {
     token,
     user: {
@@ -145,7 +154,7 @@ async function api_login_otp_verify(_token, challengeToken) {
   const user = await db.findById('users', payload.id);
   if (!user || !Number(user.is_active)) throw new Error('User not found or inactive');
 
-  const token = signToken(user);
+  const token = signToken(user, _activeSlugForToken());
   return {
     token,
     user: { id: user.id, name: user.name, email: user.email, role: user.role, photo_url: user.photo_url || '' }
@@ -235,7 +244,7 @@ async function api_auth_ssoLogin(_token, payload) {
   if (!user) throw new Error('No users found in this tenant workspace yet.');
   if (!Number(user.is_active)) throw new Error('Target user account is deactivated.');
 
-  const token = signToken(user);
+  const token = signToken(user, _activeSlugForToken());
   return {
     token,
     user: {

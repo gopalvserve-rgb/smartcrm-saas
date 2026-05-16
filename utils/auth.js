@@ -19,12 +19,17 @@ function verifyPassword(plain, hash) {
   catch(_) { return false; }
 }
 
-function signToken(user) {
+function signToken(user, tenantSlug) {
   const payload = {
     id: user.id,
     email: user.email,
     role: user.role
   };
+  // Bind the token to the issuing tenant — prevents cross-tenant token reuse.
+  // Tokens issued in single-tenant deployments (no tenantStorage context) get
+  // no slug claim; the API guard treats absence as "any" for backwards compat
+  // on legacy single-tenant CRMs but blocks slug-mismatch on multi-tenant.
+  if (tenantSlug) payload.t = String(tenantSlug);
   return jwt.sign(payload, JWT_SECRET, { expiresIn: TOKEN_TTL });
 }
 
@@ -34,8 +39,31 @@ function verifyToken(token) {
   catch(e) { throw new Error('Invalid or expired token'); }
 }
 
+/**
+ * Cross-tenant guard. Throws if the token's tenant_slug claim does not
+ * match the active tenant. Single-tenant deployments (no tenantStorage
+ * context, no slug on the token) pass through.
+ */
+function _activeTenantSlug() {
+  try {
+    const store = db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore();
+    return store && store.slug ? String(store.slug) : null;
+  } catch (_) { return null; }
+}
+
 async function authUser(token) {
   const decoded = verifyToken(token);
+  // Cross-tenant guard
+  const activeSlug = _activeTenantSlug();
+  if (activeSlug && decoded.t && String(decoded.t) !== activeSlug) {
+    throw new Error('Token does not belong to this workspace — please sign in.');
+  }
+  // Legacy tokens without tenant slug claim are still accepted to keep
+  // existing users logged in after this deploy (they'll get a fresh
+  // slug-bound token on next login). Log so we can monitor migration.
+  if (activeSlug && !decoded.t) {
+    console.warn('[auth] legacy token without tenant_slug for tenant=' + activeSlug + ' user=' + decoded.id);
+  }
   const user = await db.findById('users', decoded.id);
   if (!user || !user.is_active) throw new Error('User inactive or not found');
   return user;

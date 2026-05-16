@@ -4,7 +4,28 @@
  */
 
 const CRM = {
-  token: localStorage.getItem('crm_token') || null,
+  // Slug-aware token key — prevents one tenant's token from being read on
+  // another tenant's /t/<slug>/ page. e.g. token for /t/vserve/ is stored
+  // under 'crm_token_vserve', not the shared 'crm_token'.
+  _slug: (function() {
+    try {
+      const m = (location.pathname || '').match(/\/t\/([^\/]+)\//);
+      return m ? m[1] : '';
+    } catch (_) { return ''; }
+  })(),
+  // Read scoped key first; fall back to the legacy 'crm_token' once for
+  // a smooth migration of users already signed in pre-fix.
+  token: (function() {
+    try {
+      const m = (location.pathname || '').match(/\/t\/([^\/]+)\//);
+      const slug = m ? m[1] : '';
+      if (slug) {
+        const t = localStorage.getItem('crm_token_' + slug);
+        if (t) return t;
+      }
+      return localStorage.getItem('crm_token') || null;
+    } catch (_) { return localStorage.getItem('crm_token') || null; }
+  })(),
   user: null,
   config: { company_name: 'Lead CRM', company_logo_url: '', base_url: location.origin },
   cache: {},
@@ -557,7 +578,7 @@ function confirmDialog(msg) {
 }
 
 function logout() {
-  localStorage.removeItem('crm_token');
+  localStorage.removeItem(CRM._slug ? ('crm_token_' + CRM._slug) : 'crm_token'); try { localStorage.removeItem('crm_token'); } catch (_) {}
   CRM.token = null; CRM.user = null;
   location.hash = '';
   location.reload();
@@ -621,7 +642,7 @@ function renderLogin() {
     ev.preventDefault();
     if (!confirm('Switch to a different workspace?\n\nThis signs you out of "' + (window.TENANT_SLUG || '') + '" and takes you to the workspace picker.')) return;
     try { localStorage.removeItem('tenant_slug'); } catch (_) {}
-    try { localStorage.removeItem('crm_token'); } catch (_) {}
+    try { localStorage.removeItem(CRM._slug ? ('crm_token_' + CRM._slug) : 'crm_token'); try { localStorage.removeItem('crm_token'); } catch (_) {} } catch (_) {}
     try { localStorage.removeItem('crm_user'); } catch (_) {}
     location.href = '/app?stay=1';
   });
@@ -639,7 +660,7 @@ function renderLogin() {
         return;
       }
       CRM.token = r.token; CRM.user = r.user;
-      localStorage.setItem('crm_token', r.token);
+      localStorage.setItem(CRM._slug ? ('crm_token_' + CRM._slug) : 'crm_token', r.token);
       _syncNativeCallEventCreds();
       location.reload();
     } catch (e) { $('#login-err').textContent = e.message; }
@@ -833,7 +854,7 @@ function showOtpStep(challengeToken, who) {
     try {
       const r = await apiRaw('api_login_otp_verify', challengeToken, otp);
       CRM.token = r.token; CRM.user = r.user;
-      localStorage.setItem('crm_token', r.token);
+      localStorage.setItem(CRM._slug ? ('crm_token_' + CRM._slug) : 'crm_token', r.token);
       _syncNativeCallEventCreds();
       location.reload();
     } catch (e) { document.getElementById('login-err').textContent = e.message; }
