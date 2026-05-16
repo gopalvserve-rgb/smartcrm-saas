@@ -874,12 +874,12 @@ const NAV_GROUPS = [
   ] },
   { label: 'Sales', icon: '💼', items: [
     { id: 'leads',      label: 'Leads',          icon: '🎯' },
-    { id: 'edufees',     label: 'Fee Collection', icon: '💰', roles: ['admin','manager','team_leader'] },
-    { id: 'edustudents', label: '👥 Students',      icon: '👥', roles: ['admin','manager','team_leader'] },
-    { id: 'educourses',  label: '📚 Courses',       icon: '📚', roles: ['admin','manager'] },
-    { id: 'edudues',     label: '📋 Fee Dues',       icon: '📋', roles: ['admin','manager','team_leader','agent'] },
-    { id: 'edurevenue',  label: '💎 Revenue',       icon: '💎', roles: ['admin','manager'] },
-    { id: 'edureports',  label: '📊 Collection Report', icon: '📊', roles: ['admin','manager'] },
+    { id: 'edufees',     label: 'Fee Collection', icon: '💰', roles: ['admin','manager','team_leader'], requiresPack: 'education' },
+    { id: 'edustudents', label: '👥 Students',      icon: '👥', roles: ['admin','manager','team_leader'], requiresPack: 'education' },
+    { id: 'educourses',  label: '📚 Courses',       icon: '📚', roles: ['admin','manager'],                requiresPack: 'education' },
+    { id: 'edudues',     label: '📋 Fee Dues',       icon: '📋', roles: ['admin','manager','team_leader','agent'], requiresPack: 'education' },
+    { id: 'edurevenue',  label: '💎 Revenue',       icon: '💎', roles: ['admin','manager'],                requiresPack: 'education' },
+    { id: 'edureports',  label: '📊 Collection Report', icon: '📊', roles: ['admin','manager'],            requiresPack: 'education' },
     { id: 'reinventory', label: 'Inventory Board', icon: '🏢', roles: ['admin','manager','team_leader'] },
     { id: 'recommissions', label: 'Commissions', icon: '💸', roles: ['admin','manager'] },
     { id: 'campaigns',  label: 'Campaigns',      icon: '📣', roles: ['admin','manager'] },
@@ -990,6 +990,13 @@ function renderShell() {
     if (item.roles && !item.roles.includes(CRM.user.role)) return null;
     if (hiddenNavIds.includes(item.id)) return null;
     if (item.id === 'teamchat' && CRM.access && CRM.access.can_chat === false) return null;
+    // Industry-pack gate — only show pack-specific items when the pack
+    // is installed for THIS tenant. CRM.installedPacks is populated at
+    // boot from api_packs_listInstalled.
+    if (item.requiresPack) {
+      const installed = (CRM.installedPacks instanceof Set) ? CRM.installedPacks : new Set();
+      if (!installed.has(item.requiresPack)) return null;
+    }
     const countBadge = item.countKey
       ? h('span', { class: 'nav-count', 'data-count-key': item.countKey, hidden: 'hidden' }, '0')
       : null;
@@ -1069,6 +1076,10 @@ function renderShell() {
     if (item.roles && !item.roles.includes(CRM.user.role)) return;
     if (hiddenNavIds.includes(item.id)) return;
     if (item.id === 'teamchat' && CRM.access && CRM.access.can_chat === false) return;
+    if (item.requiresPack) {
+      const installed = (CRM.installedPacks instanceof Set) ? CRM.installedPacks : new Set();
+      if (!installed.has(item.requiresPack)) return;
+    }
     const _modKey2 = (typeof _moduleForNavId === 'function') ? _moduleForNavId(item.id) : null;
     if (_modKey2 && !_isModuleActive(_modKey2)) return;
     if (mobilePrimary.includes(item.id)) {
