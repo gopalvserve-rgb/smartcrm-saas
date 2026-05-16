@@ -956,6 +956,7 @@ const NAV_GROUPS = [
   ] },
   { label: 'Workspace', icon: '💬', items: [
     { id: 'socialinbox', label: 'Social Inbox', icon: '📱', countKey: 'social_unread' },
+    { id: 'socialcomments', label: 'Social Comments', icon: '💭', countKey: 'social_unreplied' },
     { id: 'whatsbot',   label: 'WhatsBot',   icon: '💬' },
     { id: 'aibot',      label: 'AI Bot',     icon: '🤖', roles: ['admin', 'manager'] },
     { id: 'quotations', label: 'Quotations', icon: '📄' },
@@ -29627,5 +29628,197 @@ try {
     chatCol.appendChild(h('div', { class:'muted', style:{ padding:'2rem', textAlign:'center' } },
       'Pick a conversation from the left to view & reply.'));
     loadThreads();
+  };
+})();
+
+
+// ═════════════════════════════════════════════════════════════════════
+// SOCIAL COMMENTS — Phase S2 SPA
+// Two-pane: posts list (with unreplied counts) → comments thread + reply box
+// ═════════════════════════════════════════════════════════════════════
+(function socialCommentsUI() {
+  if (typeof VIEWS === 'undefined' || typeof h !== 'function') return;
+
+  VIEWS.socialcomments = async (view) => {
+    view.innerHTML = '';
+    const wrap = h('div', { class:'page' });
+
+    const platformSel = h('select', { style:{ padding:'.4rem .6rem' } },
+      h('option', { value:'' }, 'All platforms'),
+      h('option', { value:'facebook' }, 'Facebook'),
+      h('option', { value:'instagram' }, 'Instagram')
+    );
+    const pageSel = h('select', { style:{ padding:'.4rem .6rem' } }, h('option', { value:'' }, 'All pages'));
+    const unrepliedOnly = h('input', { type:'checkbox', checked:'checked' });
+    const reloadBtn = h('button', { class:'btn sm', onclick: () => loadPosts() }, '🔄 Reload');
+    wrap.appendChild(h('div', { style:{ display:'flex', alignItems:'center', gap:'.6rem', marginBottom:'.8rem', flexWrap:'wrap' } },
+      h('h2', { style:{ margin:0, flex:'1 1 auto' } }, '💭 Social Comments'),
+      platformSel, pageSel,
+      h('label', {}, unrepliedOnly, ' Unreplied only'),
+      reloadBtn
+    ));
+
+    const grid = h('div', { style:{ display:'grid', gridTemplateColumns:'minmax(280px,400px) 1fr', gap:'1rem' } });
+    const postCol = h('div', { class:'card', style:{ maxHeight:'70vh', overflowY:'auto' } });
+    const detailCol = h('div', { class:'card' });
+    grid.appendChild(postCol);
+    grid.appendChild(detailCol);
+    wrap.appendChild(grid);
+    view.appendChild(wrap);
+
+    let activePost = null;
+    try {
+      const pages = await api('api_social_pages_list');
+      pages.forEach(p => pageSel.appendChild(h('option', { value: p.page_id }, p.page_name)));
+    } catch (_) {}
+
+    platformSel.onchange = () => loadPosts();
+    pageSel.onchange = () => loadPosts();
+    unrepliedOnly.onchange = () => loadPosts();
+
+    async function loadPosts() {
+      postCol.innerHTML = '';
+      postCol.appendChild(h('div', { class:'loading' }, 'Loading posts…'));
+      try {
+        const filters = {};
+        if (platformSel.value) filters.platform = platformSel.value;
+        if (pageSel.value)     filters.page_id = pageSel.value;
+        if (unrepliedOnly.checked) filters.unreplied = true;
+        const posts = await api('api_social_comments_posts', filters);
+        postCol.innerHTML = '';
+        if (!posts.length) {
+          postCol.appendChild(h('div', { class:'empty', style:{ padding:'2rem', textAlign:'center' } },
+            'No comments yet. Comments on your Facebook posts, ads, and Instagram posts will appear here.'));
+          return;
+        }
+        posts.forEach(p => {
+          const isActive = activePost && activePost.post_id === p.post_id;
+          const icon = p.platform === 'instagram' ? '📷' : '🅵';
+          const item = h('div', {
+            style: {
+              padding:'.6rem', borderBottom:'1px solid rgba(0,0,0,.06)',
+              cursor:'pointer', display:'flex', flexDirection:'column', gap:'.25rem',
+              background: isActive ? 'rgba(99,102,241,.12)' : 'transparent'
+            },
+            onclick: () => { activePost = p; openPost(p); loadPosts(); }
+          },
+            h('div', { style:{ display:'flex', alignItems:'center', justifyContent:'space-between' } },
+              h('span', { style:{ fontWeight:'600' } }, icon + '  Post ' + String(p.post_id).slice(-12)),
+              Number(p.unreplied) > 0 ? h('span', {
+                style:{ background:'#dc2626', color:'#fff', borderRadius:'10px', padding:'.05rem .45rem', fontSize:'.75em' }
+              }, p.unreplied + ' pending') : null
+            ),
+            h('div', { class:'muted', style:{ fontSize:'.85em' } },
+              (p.last_author || '') + ': ' + (p.last_text ? p.last_text.slice(0, 80) : '(no preview)')),
+            h('div', { class:'muted', style:{ fontSize:'.75em' } }, p.total + ' total · ' + p.platform)
+          );
+          postCol.appendChild(item);
+        });
+      } catch (e) {
+        postCol.innerHTML = '';
+        postCol.appendChild(h('div', { class:'error-box' }, e.message));
+      }
+    }
+
+    async function openPost(p) {
+      detailCol.innerHTML = '';
+      detailCol.appendChild(h('div', { class:'loading' }, 'Loading comments…'));
+      try {
+        const comments = await api('api_social_comments_byPost', { post_id: p.post_id });
+        detailCol.innerHTML = '';
+        detailCol.appendChild(h('div', { style:{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'.5rem' } },
+          h('h4', { style:{ margin:0 } }, (p.platform === 'instagram' ? '📷 IG' : '🅵 FB') + ' · Post ' + String(p.post_id).slice(-14)),
+          h('span', { class:'muted', style:{ fontSize:'.85em' } }, comments.length + ' comments')
+        ));
+        if (!comments.length) {
+          detailCol.appendChild(h('p', { class:'muted' }, 'No comments on this post.'));
+          return;
+        }
+
+        const stream = h('div', { style:{ maxHeight:'55vh', overflowY:'auto', padding:'.5rem', background:'rgba(0,0,0,.02)', borderRadius:'6px' } });
+        comments.forEach(c => {
+          const ours = Number(c.is_from_us) === 1;
+          const replied = !!c.replied_at;
+          const card = h('div', {
+            style: {
+              marginBottom:'.5rem', padding:'.5rem .7rem', borderRadius:'8px',
+              background: ours ? 'rgba(99,102,241,.15)' : '#fff',
+              border:'1px solid rgba(0,0,0,.06)',
+              opacity: c.verb === 'remove' ? 0.5 : 1,
+              marginLeft: c.parent_id ? '2rem' : '0'
+            }
+          },
+            h('div', { style:{ display:'flex', justifyContent:'space-between', alignItems:'baseline' } },
+              h('strong', {}, c.author_name || c.author_handle || 'Anonymous'),
+              h('span', { class:'muted', style:{ fontSize:'.75em' } }, new Date(c.created_at).toLocaleString())
+            ),
+            h('div', { style:{ marginTop:'.25rem' } }, c.verb === 'remove' ? '[deleted]' : c.text),
+            !ours && c.verb !== 'remove' ? h('div', { style:{ marginTop:'.4rem', display:'flex', gap:'.3rem', flexWrap:'wrap' } },
+              h('button', { class:'btn sm', onclick: () => promptReply(p, c) }, '↩ Reply'),
+              h('button', { class:'btn sm', onclick: async () => {
+                try {
+                  await api('api_social_comments_hide', { page_id: p.page_id, comment_id: c.comment_id, hide: !c.is_hidden });
+                  openPost(p);
+                } catch (e) { toast(e.message, 'err'); }
+              } }, Number(c.is_hidden) === 1 ? '👁 Unhide' : '🙈 Hide'),
+              h('button', { class:'btn sm danger', onclick: async () => {
+                if (!confirm('Delete this comment? (permanent)')) return;
+                try {
+                  await api('api_social_comments_delete', { page_id: p.page_id, comment_id: c.comment_id });
+                  openPost(p);
+                } catch (e) { toast(e.message, 'err'); }
+              } }, '🗑'),
+              !replied ? h('button', { class:'btn sm ghost', onclick: async () => {
+                try {
+                  await api('api_social_comments_markReplied', { comment_id: c.comment_id });
+                  openPost(p); loadPosts();
+                } catch (e) { toast(e.message, 'err'); }
+              } }, '✓ Mark replied') : null,
+              replied ? h('span', { class:'muted', style:{ fontSize:'.8em', marginLeft:'auto' } }, '✓ replied') : null
+            ) : null
+          );
+          stream.appendChild(card);
+        });
+        detailCol.appendChild(stream);
+      } catch (e) {
+        detailCol.innerHTML = '';
+        detailCol.appendChild(h('div', { class:'error-box' }, e.message));
+      }
+    }
+
+    function promptReply(post, comment) {
+      const m = h('div', { class:'modal-backdrop' });
+      const modal = h('div', { class:'modal' });
+      modal.appendChild(h('div', { class:'modal-head' },
+        h('h3', {}, '↩ Reply to ' + (comment.author_name || 'comment')),
+        h('button', { class:'btn ghost', onclick: () => m.remove() }, '✕')
+      ));
+      const body = h('div', { class:'modal-body' });
+      body.appendChild(h('blockquote', { style:{ background:'rgba(0,0,0,.04)', padding:'.5rem', borderLeft:'3px solid #6366f1', margin:'0 0 .8rem 0' } }, comment.text || ''));
+      const fText = h('textarea', { rows:'4', placeholder:'Your reply…', style:{ width:'100%' } });
+      body.appendChild(fText);
+      modal.appendChild(body);
+      modal.appendChild(h('div', { class:'modal-foot' },
+        h('button', { class:'btn primary', onclick: async () => {
+          const text = fText.value.trim();
+          if (!text) { toast('Reply cannot be empty', 'err'); return; }
+          try {
+            await api('api_social_comments_reply', {
+              page_id: post.page_id, comment_id: comment.comment_id, text
+            });
+            toast('Reply posted');
+            m.remove();
+            openPost(post); loadPosts();
+          } catch (e) { toast(e.message, 'err'); }
+        } }, '✈ Send reply'),
+        h('button', { class:'btn ghost', onclick: () => m.remove() }, 'Cancel')
+      ));
+      m.appendChild(modal);
+      document.body.appendChild(m);
+    }
+
+    detailCol.appendChild(h('div', { class:'muted', style:{ padding:'2rem', textAlign:'center' } },
+      'Pick a post from the left to view & reply to its comments.'));
+    loadPosts();
   };
 })();

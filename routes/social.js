@@ -301,11 +301,264 @@ async function _handleInboundMessage(body) {
   return { ok: true, saved };
 }
 
+
+// ═════════════════════════════════════════════════════════════════════
+// PHASE S2 — Comments inbox (FB posts + FB ads + IG posts)
+// ═════════════════════════════════════════════════════════════════════
+
+async function _ensureSchemaS2() {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS social_comments (
+      id              SERIAL PRIMARY KEY,
+      platform        TEXT NOT NULL,            -- 'facebook' | 'instagram'
+      page_id         TEXT NOT NULL,            -- our connected page id
+      post_id         TEXT NOT NULL,            -- FB post id or IG media id
+      comment_id      TEXT NOT NULL,            -- platform comment id (idempotency key)
+      parent_id       TEXT,                     -- when this is a reply to another comment
+      author_id       TEXT,                     -- commenter's user id (PSID/IGSID/page id)
+      author_name     TEXT,
+      author_handle   TEXT,                     -- @ username (IG) or fb name
+      text            TEXT,
+      verb            TEXT,                     -- 'add' | 'edited' | 'remove'
+      is_hidden       INTEGER NOT NULL DEFAULT 0,
+      is_from_us      INTEGER NOT NULL DEFAULT 0,
+      replied_at      TIMESTAMPTZ,              -- when WE replied to this comment
+      replied_by      INTEGER,                  -- our user id
+      raw             JSONB,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  try { await db.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_social_comments_cid ON social_comments(comment_id)`); } catch (_) {}
+  try { await db.query(`CREATE INDEX IF NOT EXISTS idx_social_comments_post ON social_comments(platform, page_id, post_id, created_at DESC)`); } catch (_) {}
+  try { await db.query(`CREATE INDEX IF NOT EXISTS idx_social_comments_unreplied ON social_comments(replied_at) WHERE replied_at IS NULL AND is_from_us = 0`); } catch (_) {}
+}
+
+// List comments grouped by post, with unreplied counter
+async function api_social_comments_posts(token, filters) {
+  await authUser(token);
+  await _ensureSchemaS2();
+  const f = filters || {};
+  const params = [];
+  let where = '1=1';
+  if (f.platform) { params.push(String(f.platform)); where += ` AND platform = ${params.length}`; }
+  if (f.page_id)  { params.push(String(f.page_id));  where += ` AND page_id = ${params.length}`; }
+  if (f.unreplied) {
+    where += ` AND EXISTS (SELECT 1 FROM social_comments c2
+                            WHERE c2.platform=c.platform AND c2.page_id=c.page_id
+                              AND c2.post_id=c.post_id AND c2.is_from_us=0
+                              AND c2.replied_at IS NULL AND c2.verb <> 'remove')`;
+  }
+  const r = await db.query(`
+    SELECT
+      c.platform, c.page_id, c.post_id,
+      COUNT(*) AS total,
+      COUNT(*) FILTER (WHERE c.is_from_us = 0 AND c.replied_at IS NULL AND c.verb <> 'remove') AS unreplied,
+      MAX(c.created_at) AS last_at,
+      (SELECT text FROM social_comments WHERE post_id = c.post_id ORDER BY created_at DESC LIMIT 1) AS last_text,
+      (SELECT author_name FROM social_comments WHERE post_id = c.post_id ORDER BY created_at DESC LIMIT 1) AS last_author
+    FROM social_comments c
+    WHERE ${where}
+    GROUP BY c.platform, c.page_id, c.post_id
+    ORDER BY last_at DESC
+    LIMIT 200
+  `, params);
+  return r.rows || [];
+}
+
+// Comments on one post (threaded view)
+async function api_social_comments_byPost(token, payload) {
+  await authUser(token);
+  await _ensureSchemaS2();
+  const p = payload || {};
+  if (!p.post_id) throw new Error('post_id required');
+  const r = await db.query(`
+    SELECT id, comment_id, parent_id, author_id, author_name, author_handle,
+           text, verb, is_hidden, is_from_us, replied_at, replied_by, created_at
+      FROM social_comments
+     WHERE post_id = $1
+     ORDER BY created_at ASC
+     LIMIT 500
+  `, [String(p.post_id)]);
+  return r.rows || [];
+}
+
+// Reply to a comment — calls /{comment-id}/comments
+async function api_social_comments_reply(token, payload) {
+  const me = await authUser(token);
+  await _ensureSchemaS2();
+  const p = payload || {};
+  if (!p.page_id || !p.comment_id) throw new Error('page_id + comment_id required');
+  const text = String(p.text || '').trim();
+  if (!text) throw new Error('text required');
+
+  const page = await _findPage(p.page_id);
+  if (!page) throw new Error('Page not connected.');
+  if (!page.access_token) throw new Error('Page has no access token.');
+
+  const url = `${GRAPH}/${encodeURIComponent(p.comment_id)}/comments`;
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: text, access_token: page.access_token })
+  });
+  const j = await r.json();
+  if (j.error) throw new Error('Reply failed: ' + j.error.message);
+
+  // Mark the parent as replied, and persist our reply row
+  try {
+    await db.query(`UPDATE social_comments SET replied_at = NOW(), replied_by = $1 WHERE comment_id = $2`,
+      [me.id, String(p.comment_id)]);
+  } catch (_) {}
+
+  // Best-effort: fetch the parent to get the post_id + platform for our row
+  let parentRow = null;
+  try {
+    const pr = await db.query(`SELECT platform, page_id, post_id FROM social_comments WHERE comment_id=$1 LIMIT 1`, [String(p.comment_id)]);
+    parentRow = pr.rows && pr.rows[0];
+  } catch (_) {}
+
+  if (j.id && parentRow) {
+    try {
+      await db.query(`
+        INSERT INTO social_comments
+          (platform, page_id, post_id, comment_id, parent_id,
+           author_name, text, verb, is_from_us, replied_at, replied_by)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,'add',1,NOW(),$8)
+        ON CONFLICT (comment_id) DO NOTHING
+      `, [parentRow.platform, parentRow.page_id, parentRow.post_id,
+          String(j.id), String(p.comment_id), page.page_name || 'Us', text, me.id]);
+    } catch (_) {}
+  }
+  return { ok: true, reply_id: j.id || null };
+}
+
+// Hide / unhide
+async function api_social_comments_hide(token, payload) {
+  await authUser(token);
+  await _ensureSchemaS2();
+  const p = payload || {};
+  if (!p.page_id || !p.comment_id) throw new Error('page_id + comment_id required');
+  const page = await _findPage(p.page_id);
+  if (!page || !page.access_token) throw new Error('Page not connected.');
+
+  const hide = p.hide === false ? false : true;
+  const url = `${GRAPH}/${encodeURIComponent(p.comment_id)}`;
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ is_hidden: hide, access_token: page.access_token })
+  });
+  const j = await r.json();
+  if (j.error) throw new Error('Hide failed: ' + j.error.message);
+  try {
+    await db.query(`UPDATE social_comments SET is_hidden = $1 WHERE comment_id = $2`,
+      [hide ? 1 : 0, String(p.comment_id)]);
+  } catch (_) {}
+  return { ok: true, is_hidden: hide };
+}
+
+// Delete (our comments only — Graph allows page to delete any comment on own posts)
+async function api_social_comments_delete(token, payload) {
+  await authUser(token);
+  await _ensureSchemaS2();
+  const p = payload || {};
+  if (!p.page_id || !p.comment_id) throw new Error('page_id + comment_id required');
+  const page = await _findPage(p.page_id);
+  if (!page || !page.access_token) throw new Error('Page not connected.');
+  const url = `${GRAPH}/${encodeURIComponent(p.comment_id)}?access_token=${encodeURIComponent(page.access_token)}`;
+  const r = await fetch(url, { method: 'DELETE' });
+  const j = await r.json();
+  if (j.error) throw new Error('Delete failed: ' + j.error.message);
+  try {
+    await db.query(`UPDATE social_comments SET verb='remove' WHERE comment_id = $1`, [String(p.comment_id)]);
+  } catch (_) {}
+  return { ok: true };
+}
+
+// Mark replied without sending (e.g. agent replied outside the tool)
+async function api_social_comments_markReplied(token, payload) {
+  const me = await authUser(token);
+  await _ensureSchemaS2();
+  const p = payload || {};
+  if (!p.comment_id) throw new Error('comment_id required');
+  await db.query(`UPDATE social_comments SET replied_at = NOW(), replied_by = $1 WHERE comment_id = $2`,
+    [me.id, String(p.comment_id)]);
+  return { ok: true };
+}
+
+// Webhook handler — processes feed/comment events from /hook/meta
+async function _handleInboundComment(body) {
+  await _ensureSchemaS2();
+  const entries = Array.isArray(body && body.entry) ? body.entry : [];
+  let saved = 0;
+  for (const entry of entries) {
+    const pageId = String(entry.id || '');
+    if (!pageId) continue;
+
+    for (const change of (entry.changes || [])) {
+      // FB Page feed comment: change.field === 'feed' with value.item === 'comment'
+      // IG comment: change.field === 'comments'
+      const isFbFeedComment = change.field === 'feed' && change.value && change.value.item === 'comment';
+      const isIgComment     = change.field === 'comments';
+      if (!isFbFeedComment && !isIgComment) continue;
+
+      const v = change.value || {};
+      const commentId = String(v.comment_id || v.id || '');
+      if (!commentId) continue;
+      // Dedupe
+      try {
+        const dup = await db.query(`SELECT 1 FROM social_comments WHERE comment_id = $1 LIMIT 1`, [commentId]);
+        if (dup.rows && dup.rows[0]) {
+          // If verb='edited' update text
+          if (v.verb === 'edited') {
+            await db.query(`UPDATE social_comments SET text = $1, verb='edited' WHERE comment_id = $2`,
+              [String(v.message || ''), commentId]);
+          } else if (v.verb === 'remove' || v.verb === 'remove') {
+            await db.query(`UPDATE social_comments SET verb='remove' WHERE comment_id = $1`, [commentId]);
+          }
+          continue;
+        }
+      } catch (_) {}
+
+      const platform = isIgComment ? 'instagram' : 'facebook';
+      const postId   = String(v.post_id || v.media_id || v.parent_id || commentId);
+      const parentId = v.parent_id && v.parent_id !== postId ? String(v.parent_id) : null;
+      const authorId = String((v.from && v.from.id) || v.user_id || '');
+      const authorName = (v.from && v.from.name) || '';
+      const text = String(v.message || v.text || '');
+
+      try {
+        await db.query(`
+          INSERT INTO social_comments
+            (platform, page_id, post_id, comment_id, parent_id,
+             author_id, author_name, author_handle, text, verb, raw)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb)
+          ON CONFLICT (comment_id) DO NOTHING
+        `, [platform, pageId, postId, commentId, parentId,
+            authorId, authorName, authorName, text, v.verb || 'add', JSON.stringify(v)]);
+        saved++;
+      } catch (e) {
+        console.warn('[social_comments] insert failed:', e.message);
+      }
+    }
+  }
+  return { ok: true, saved };
+}
+
 module.exports = {
   api_social_pages_list,
   api_social_inbox_threads,
   api_social_inbox_messages,
   api_social_inbox_send,
   _handleInboundMessage,
-  _ensureSchema
+  // Phase S2 — Comments
+  api_social_comments_posts,
+  api_social_comments_byPost,
+  api_social_comments_reply,
+  api_social_comments_hide,
+  api_social_comments_delete,
+  api_social_comments_markReplied,
+  _handleInboundComment,
+  _ensureSchema,
+  _ensureSchemaS2
 };

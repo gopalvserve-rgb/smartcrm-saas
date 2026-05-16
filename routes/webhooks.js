@@ -44,6 +44,11 @@ async function metaEvent(req, res) {
       if (typeof social._handleInboundMessage === 'function') {
         await social._handleInboundMessage(body);
       }
+      // Phase S2 — also fan out comment events (field='feed' item='comment' for FB,
+      // field='comments' for IG).
+      if (typeof social._handleInboundComment === 'function') {
+        await social._handleInboundComment(body);
+      }
     } catch (e) { console.warn('[meta] social inbound failed:', e.message); }
 
     const entries = body.entry || [];
