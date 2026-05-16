@@ -218,6 +218,8 @@ async function api_edu_enrollment_byLead(token, leadId) {
 }
 
 async function api_edu_installment_markPaid(token, payload) {
+  // Defensive — ensure paid_at column exists before any UPDATE that references it
+  try { await db.query(`ALTER TABLE edu_installments ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ`); } catch (_) {}
   const me = await authUser(token);
   await _requireEducation();
   const p = payload || {};
@@ -639,6 +641,15 @@ async function api_edu_enrollment_createCustom(token, payload) {
   await _requireEducation();
   await _ensureSchema();
   await _ensureSchemaV3();
+  // HARD-FORCE the paid_at column — some legacy tenants had this column
+  // missing AND the _ensureSchema ALTER was silently swallowed. Run it
+  // explicitly here and log if it fails so we can debug.
+  try {
+    await db.query(`ALTER TABLE edu_installments ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ`);
+  } catch (alterErr) {
+    console.warn('[edu_enrollment_createCustom] ALTER paid_at failed:', alterErr.message);
+  }
+  try { await db.query(`ALTER TABLE edu_installments ALTER COLUMN due_date DROP NOT NULL`); } catch (_) {}
   const p = payload || {};
   if (!p.lead_id) throw new Error('lead_id required');
   if (!Number(p.token_amount)) throw new Error('Token amount required');
@@ -865,7 +876,6 @@ async function api_edu_docTypes_save(token, payload) {
   if (!['admin','manager'].includes(me.role)) throw new Error('Admin or manager role required');
   await _requireEducation();
   const types = Array.isArray(payload && payload.types) ? payload.types : [];
-  // Validate shape — must have code + label per entry
   const clean = types
     .filter(t => t && t.code && t.label)
     .map(t => ({
@@ -873,17 +883,14 @@ async function api_edu_docTypes_save(token, payload) {
       label: String(t.label).trim().slice(0, 80),
       required_before_sale: !!t.required_before_sale
     }));
+  // Use the framework setConfig (defined in db/pg.js) — handles both INSERT and UPDATE
+  // and doesn't depend on UNIQUE constraint on config.key.
   try {
-    await db.query(
-      `INSERT INTO config (key, value) VALUES ('edu_doc_types', $1)
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
-      [JSON.stringify(clean)]
-    );
+    await db.setConfig('edu_doc_types', JSON.stringify(clean));
   } catch (e) {
-    // Fallback if config has different schema
-    try {
-      await db.query(`UPDATE config SET value=$1 WHERE key='edu_doc_types'`, [JSON.stringify(clean)]);
-    } catch (_) {}
+    // Last-resort fallback if setConfig isn't available
+    try { await db.query(`DELETE FROM config WHERE key='edu_doc_types'`); } catch (_) {}
+    try { await db.query(`INSERT INTO config (key, value) VALUES ('edu_doc_types', $1)`, [JSON.stringify(clean)]); } catch (_) {}
   }
   return { ok: true, count: clean.length };
 }

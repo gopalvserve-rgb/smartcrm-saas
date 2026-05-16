@@ -27642,10 +27642,25 @@ function packLeadDocumentsBlock(leadId, opts) {
 
   async function refresh() {
     try {
-      const [types, docs] = await Promise.all([
+      const DEFAULT_DOC_TYPES = [
+        { code:'aadhar',      label:'Aadhar Card' },
+        { code:'pan',         label:'PAN Card' },
+        { code:'photo',       label:'Passport Photo' },
+        { code:'marksheet10', label:'10th Marksheet' },
+        { code:'marksheet12', label:'12th Marksheet' },
+        { code:'addr_proof',  label:'Address Proof' },
+        { code:'parent_id',   label:'Parent ID Proof' },
+        { code:'agreement',   label:'Signed Agreement' },
+        { code:'other',       label:'Other' }
+      ];
+      let [types, docs] = await Promise.all([
         api('api_edu_docTypes_list').catch(() => []),
         api('api_edu_leadDocs_list', leadId).catch(() => [])
       ]);
+      // If the API returned only 1 type (or none), use the hardcoded fallback
+      // so reps always have a useful selection. They can still customize via
+      // the ⚙ Doc types button.
+      if (!types || types.length < 2) types = DEFAULT_DOC_TYPES;
 
       // Rebuild upload row
       uploadRow.innerHTML = '';
