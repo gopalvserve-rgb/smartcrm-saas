@@ -856,6 +856,7 @@ const NAV_GROUPS = [
     { id: 'edufees',     label: 'Fee Collection', icon: '💰', roles: ['admin','manager','team_leader'] },
     { id: 'edustudents', label: '👥 Students',      icon: '👥', roles: ['admin','manager','team_leader'] },
     { id: 'educourses',  label: '📚 Courses',       icon: '📚', roles: ['admin','manager'] },
+    { id: 'edurevenue',  label: '💎 Revenue',       icon: '💎', roles: ['admin','manager'] },
     { id: 'reinventory', label: 'Inventory Board', icon: '🏢', roles: ['admin','manager','team_leader'] },
     { id: 'recommissions', label: 'Commissions', icon: '💸', roles: ['admin','manager'] },
     { id: 'campaigns',  label: 'Campaigns',      icon: '📣', roles: ['admin','manager'] },
@@ -27794,3 +27795,264 @@ try {
   window.packLeadDocumentsBlock = packLeadDocumentsBlock;
   window.openManageDocTypesModal = openManageDocTypesModal;
 } catch (_) {}
+
+
+// ═════════════════════════════════════════════════════════════════════
+// 💎 Revenue Forecast view — Education Phase 5
+// ═════════════════════════════════════════════════════════════════════
+VIEWS.edurevenue = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('div', { style:{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'.75rem' } },
+    h('h2', { style:{ margin:0 } }, '💎 Revenue Forecast'),
+    h('div', { style:{ display:'flex', gap:'.4rem', alignItems:'center' } },
+      h('select', { id:'rev-branch-filter', style:{ minWidth:'180px' } }, h('option', { value:'' }, '— All branches —')),
+      h('button', { class:'btn primary', onclick: () => openMarginEditorModal(() => VIEWS.edurevenue(view)) }, '💰 Edit course margins')
+    )
+  ));
+  view.appendChild(h('p', { class:'muted' },
+    'Fee due student-wise, upcoming + overdue collection, and a 12-month revenue forecast. Set per-course margin (% or fixed cost) to see NET revenue alongside gross collection.'));
+
+  // Populate branch filter
+  const branchSel = view.querySelector('#rev-branch-filter');
+  try {
+    const bs = await api('api_edu_branches_list').catch(() => []);
+    (bs || []).filter(b => Number(b.is_active)).forEach(b =>
+      branchSel.appendChild(h('option', { value: b.id }, b.name + (b.code ? ' (' + b.code + ')' : ''))));
+  } catch (_) {}
+
+  const body = h('div', {});
+  view.appendChild(body);
+
+  async function render() {
+    body.innerHTML = '<div class="muted" style="padding:1rem">Loading…</div>';
+    let data;
+    try {
+      data = await api('api_edu_revenue_forecast', { branch_id: branchSel.value ? Number(branchSel.value) : null });
+    } catch (e) {
+      body.innerHTML = '';
+      if (/not active/i.test(String(e.message || ''))) {
+        body.appendChild(h('div', { class:'error-box' }, 'Education pack not installed. Settings → 🧩 Industry Packs.'));
+      } else { body.appendChild(h('div', { class:'error-box' }, e.message)); }
+      return;
+    }
+    body.innerHTML = '';
+
+    const s = data.summary || {};
+    const nr = data.net_revenue || {};
+
+    // KPI tiles — Gross + Net
+    const kpiBlock = h('div', { style:{ marginBottom:'1rem' } });
+    kpiBlock.appendChild(h('h3', { style:{ margin:'.3rem 0' } }, 'Gross figures'));
+    kpiBlock.appendChild(h('div', { style:{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(170px, 1fr))', gap:'.6rem' } },
+      kpi('TOTAL BILLED',     '₹' + Number(s.billed||0).toLocaleString('en-IN'), '#4f46e5'),
+      kpi('COLLECTED',        '₹' + Number(s.collected||0).toLocaleString('en-IN'), '#16a34a'),
+      kpi('OUTSTANDING',      '₹' + Number(s.outstanding||0).toLocaleString('en-IN'), '#ea580c'),
+      kpi('OVERDUE',          '₹' + Number(s.overdue||0).toLocaleString('en-IN'), '#dc2626'),
+      kpi('UPCOMING (30 D)',  '₹' + Number(s.upcoming_30d||0).toLocaleString('en-IN'), '#0ea5e9'),
+      kpi('ENROLLMENTS',      String(s.enrollments||0), '#64748b')
+    ));
+    body.appendChild(kpiBlock);
+
+    const netBlock = h('div', { style:{ marginBottom:'1rem' } });
+    netBlock.appendChild(h('h3', { style:{ margin:'.3rem 0' } }, '💎 Net revenue (after margin)'));
+    netBlock.appendChild(h('div', { style:{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(220px, 1fr))', gap:'.6rem' } },
+      kpi('NET BILLED REVENUE',      '₹' + Number(nr.total_net_billed||0).toLocaleString('en-IN'), '#7c3aed'),
+      kpi('NET COLLECTED REVENUE',   '₹' + Number(nr.total_net_collected||0).toLocaleString('en-IN'), '#059669'),
+      kpi('NET OUTSTANDING',         '₹' + Number(nr.total_net_outstanding||0).toLocaleString('en-IN'), '#d97706')
+    ));
+    body.appendChild(netBlock);
+
+    // Monthly forecast — bars
+    body.appendChild(h('h3', { style:{ margin:'1.2rem 0 .3rem' } }, '📅 Monthly forecast — next 12 months'));
+    const months = data.monthly_forecast || [];
+    if (!months.length) {
+      body.appendChild(h('div', { class:'muted', style:{ padding:'1rem' } }, 'No upcoming installments scheduled — enroll students to see the forecast.'));
+    } else {
+      const maxGross = Math.max(...months.map(m => Number(m.expected_gross)), 1);
+      const chart = h('div', { class:'card', style:{ padding:'.7rem .9rem' } });
+      const tbl = h('table', { class:'mini-table' },
+        h('thead', {}, h('tr', {}, h('th', {}, 'Month'), h('th', {}, 'Expected (Gross)'), h('th', {}, 'Net revenue'), h('th', {style:{ width:'50%' }}, 'Bar'))),
+        h('tbody', {}, ...months.map(m => h('tr', {},
+          h('td', {}, m.month),
+          h('td', {}, '₹' + Number(m.expected_gross).toLocaleString('en-IN')),
+          h('td', { style:{ color:'#7c3aed', fontWeight:600 } }, '₹' + Number(m.expected_net).toLocaleString('en-IN')),
+          h('td', {},
+            h('div', { style:{ background:'#e5e7eb', borderRadius:'4px', height:'18px', position:'relative' } },
+              h('div', { style:{ background:'#4f46e5', height:'100%', borderRadius:'4px', width: (Number(m.expected_gross) / maxGross * 100) + '%' } }),
+              h('div', { style:{ background:'#7c3aed', height:'8px', position:'absolute', top:'5px', left:'0', borderRadius:'4px', width: (Number(m.expected_net) / maxGross * 100) + '%' } })
+            )
+          )
+        )))
+      );
+      chart.appendChild(tbl);
+      chart.appendChild(h('div', { class:'muted', style:{ fontSize:'.78em', marginTop:'.4rem' } }, 'Wide bar = Gross expected · Inner darker bar = Net revenue after margin'));
+      body.appendChild(chart);
+    }
+
+    // By course breakdown
+    body.appendChild(h('h3', { style:{ margin:'1.2rem 0 .3rem' } }, '📚 Course-wise breakdown'));
+    if (!data.by_course || !data.by_course.length) {
+      body.appendChild(h('div', { class:'muted', style:{ padding:'1rem' } }, 'No enrollments yet.'));
+    } else {
+      body.appendChild(h('table', { class:'mini-table' },
+        h('thead', {}, h('tr', {},
+          h('th', {}, 'Course'),
+          h('th', {}, '# Enrolled'),
+          h('th', {}, 'Billed (gross)'),
+          h('th', {}, 'Collected'),
+          h('th', {}, 'Outstanding'),
+          h('th', {}, 'Margin'),
+          h('th', {}, 'Net revenue')
+        )),
+        h('tbody', {}, ...data.by_course.map(c => h('tr', {},
+          h('td', {}, c.course_name),
+          h('td', {}, String(c.enrollments)),
+          h('td', {}, '₹' + Number(c.billed).toLocaleString('en-IN')),
+          h('td', { style:{ color:'#16a34a', fontWeight:600 } }, '₹' + Number(c.collected).toLocaleString('en-IN')),
+          h('td', {}, '₹' + Number(c.outstanding).toLocaleString('en-IN')),
+          h('td', {}, c.margin_type
+              ? (c.margin_type === 'percent' ? c.margin_value + '%' : '−₹' + Number(c.margin_value).toLocaleString('en-IN'))
+              : h('span', { class:'muted' }, '— Set margin —')),
+          h('td', { style:{ color:'#7c3aed', fontWeight:600 } }, '₹' + Number(c.net_revenue).toLocaleString('en-IN'))
+        )))
+      ));
+    }
+
+    // Overdue table
+    body.appendChild(h('h3', { style:{ margin:'1.2rem 0 .3rem', color:'#dc2626' } }, '⚠ Overdue installments — student-wise'));
+    const ov = data.overdue || [];
+    if (!ov.length) {
+      body.appendChild(h('div', { class:'muted ok-box', style:{ padding:'.6rem 1rem', background:'#ecfdf5', borderRadius:'8px' } }, '✅ No overdue installments. Great job!'));
+    } else {
+      body.appendChild(h('table', { class:'mini-table' },
+        h('thead', {}, h('tr', {},
+          h('th', {}, 'Student'),
+          h('th', {}, 'Course / Batch'),
+          h('th', {}, 'Installment'),
+          h('th', {}, 'Due'),
+          h('th', {}, 'Balance'),
+          h('th', {}, 'Overdue'),
+          h('th', {}, '')
+        )),
+        h('tbody', {}, ...ov.map(o => h('tr', { style:{ background:'#fef2f2' } },
+          h('td', {}, o.student_name || '—'),
+          h('td', {}, (o.course_name||'—') + (o.batch_name ? ' · ' + o.batch_name : '')),
+          h('td', {}, 'Seq ' + o.seq),
+          h('td', {}, String(o.due_date||'-').slice(0,10)),
+          h('td', { style:{ fontWeight:600 } }, '₹' + Number(Number(o.amount)-Number(o.paid_amount||0)).toLocaleString('en-IN')),
+          h('td', { style:{ color:'#dc2626', fontWeight:600 } }, o.days_overdue + ' d'),
+          h('td', {}, h('button', { class:'btn xs primary', onclick: () => openLeadModal(o.lead_id) }, '💰 Collect'))
+        )))
+      ));
+    }
+
+    // Upcoming table
+    body.appendChild(h('h3', { style:{ margin:'1.2rem 0 .3rem', color:'#0ea5e9' } }, '⏰ Upcoming — next 30 days'));
+    const up = data.upcoming || [];
+    if (!up.length) {
+      body.appendChild(h('div', { class:'muted', style:{ padding:'.6rem 1rem' } }, 'No installments due in the next 30 days.'));
+    } else {
+      body.appendChild(h('table', { class:'mini-table' },
+        h('thead', {}, h('tr', {},
+          h('th', {}, 'Student'),
+          h('th', {}, 'Course / Batch'),
+          h('th', {}, 'Installment'),
+          h('th', {}, 'Due'),
+          h('th', {}, 'Amount'),
+          h('th', {}, '')
+        )),
+        h('tbody', {}, ...up.map(o => h('tr', {},
+          h('td', {}, o.student_name || '—'),
+          h('td', {}, (o.course_name||'—') + (o.batch_name ? ' · ' + o.batch_name : '')),
+          h('td', {}, 'Seq ' + o.seq),
+          h('td', {}, String(o.due_date||'-').slice(0,10)),
+          h('td', { style:{ fontWeight:600 } }, '₹' + Number(Number(o.amount)-Number(o.paid_amount||0)).toLocaleString('en-IN')),
+          h('td', {}, h('button', { class:'btn xs', onclick: () => openLeadModal(o.lead_id) }, 'Open lead'))
+        )))
+      ));
+    }
+  }
+
+  function kpi(label, value, color) {
+    return h('div', { class:'card', style:{ padding:'.7rem .9rem' } },
+      h('div', { class:'muted', style:{ fontSize:'.72em', textTransform:'uppercase', letterSpacing:'.05em' } }, label),
+      h('div', { style:{ fontSize:'1.25rem', fontWeight:700, color: color || 'inherit' } }, value)
+    );
+  }
+
+  branchSel.addEventListener('change', render);
+  render();
+};
+
+// Per-course margin editor (% or fixed)
+async function openMarginEditorModal(onDone) {
+  let courses = [], extras = {};
+  try {
+    courses = await api('api_products_list');
+    const raw = await api('api_admin_getConfig', 'edu_course_extras').catch(() => null);
+    extras = (raw && raw.value) ? JSON.parse(raw.value) : {};
+  } catch (e) { toast(e.message, 'err'); return; }
+
+  const m = h('div', { class:'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const modal = h('div', { class:'modal modal-lg' });
+  modal.appendChild(h('div', { class:'modal-head' },
+    h('h3', {}, '💰 Course margins — drives the Net revenue tile'),
+    h('button', { class:'btn ghost', onclick: () => m.remove() }, '✕')
+  ));
+  const body = h('div', { class:'modal-body' });
+  body.appendChild(h('p', { class:'muted', style:{ fontSize:'.85em', marginTop:0 } },
+    'Margin can be either a Percent (of every fee collection) OR a Fixed cost subtracted from each enrollment. Example: 70% margin → for every ₹100 fee collected, ₹70 counts as revenue. Or Fixed ₹10,000 cost per student → revenue = fee − ₹10,000.'));
+
+  const rows = courses.map(c => {
+    const ex = extras[String(c.id)] || extras[c.name] || {};
+    const fType = h('select', { style:{ width:'120px' } },
+      h('option', { value:'percent', selected: (ex.margin_type||'percent') === 'percent' ? 'selected' : null }, '% Percent'),
+      h('option', { value:'fixed',   selected: ex.margin_type === 'fixed' ? 'selected' : null }, '₹ Fixed cost')
+    );
+    const fVal = h('input', { type:'number', value: ex.margin_value || 0, step:'0.01', style:{ width:'120px', textAlign:'right' } });
+    const tr = h('tr', {},
+      h('td', {}, c.name),
+      h('td', {}, '₹' + Number(c.price || 0).toLocaleString('en-IN')),
+      h('td', {}, fType),
+      h('td', {}, fVal),
+      h('td', {},
+        h('button', { class:'btn sm primary', onclick: async () => {
+          try {
+            await api('api_edu_course_margin_save', {
+              course_id: c.id,
+              course_name: c.name,
+              margin_type: fType.value,
+              margin_value: Number(fVal.value) || 0
+            });
+            toast('Saved margin for ' + c.name);
+          } catch (e) { toast(e.message, 'err'); }
+        } }, '💾')
+      )
+    );
+    return tr;
+  });
+
+  body.appendChild(h('table', { class:'mini-table' },
+    h('thead', {}, h('tr', {},
+      h('th', {}, 'Course'),
+      h('th', {}, 'Price'),
+      h('th', {}, 'Margin type'),
+      h('th', {}, 'Value'),
+      h('th', {}, '')
+    )),
+    h('tbody', {}, ...rows)
+  ));
+
+  if (!courses.length) {
+    body.appendChild(h('div', { class:'muted', style:{ padding:'1rem', textAlign:'center' } }, 'No courses yet — add some from 📚 Courses first.'));
+  }
+
+  modal.appendChild(body);
+  modal.appendChild(h('div', { class:'actions' },
+    h('button', { class:'btn primary', onclick: () => { m.remove(); if (onDone) onDone(); } }, 'Done')
+  ));
+  m.appendChild(modal);
+  document.body.appendChild(m);
+}
+
+try { window.openMarginEditorModal = openMarginEditorModal; } catch (_) {}

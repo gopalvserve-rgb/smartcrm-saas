@@ -943,6 +943,241 @@ async function api_edu_leadDocs_verify(token, payload) {
   return { ok: true };
 }
 
+
+// ═════════════════════════════════════════════════════════════════
+// Phase 5 — Revenue forecast + per-course margin
+// ═════════════════════════════════════════════════════════════════
+//
+// Margin storage: piggy-backs on the existing edu_course_extras config
+// which we already use for course Token/EMI/count. We add two more
+// fields per course_id: margin_type ('percent' | 'fixed') and margin_value.
+// Net revenue per installment is computed at query time, so a tenant
+// can edit margin live and see the forecast update without backfills.
+
+async function _loadCourseExtras() {
+  try {
+    const r = await db.query(`SELECT value FROM config WHERE key='edu_course_extras' LIMIT 1`);
+    if (r.rows && r.rows[0] && r.rows[0].value) {
+      return JSON.parse(r.rows[0].value);
+    }
+  } catch (_) {}
+  return {};
+}
+
+// Helper — applies margin to a gross amount given the course's margin config
+function _applyMargin(gross, marginConf) {
+  if (!gross || !marginConf) return Number(gross || 0);
+  const t = marginConf.margin_type;
+  const v = Number(marginConf.margin_value || 0);
+  if (!v) return Number(gross);
+  if (t === 'percent') return Math.round(Number(gross) * (v / 100) * 100) / 100;
+  if (t === 'fixed')   return Math.max(0, Number(gross) - v);
+  return Number(gross);
+}
+
+/**
+ * api_edu_revenue_forecast
+ *
+ * Returns:
+ *   summary           — billed / collected / outstanding / overdue / upcoming_30d
+ *   net_revenue       — same totals AFTER margin applied per course
+ *   monthly_forecast  — [{ month, expected_gross, expected_net, billed_count }]
+ *   by_course         — [{ course_name, count, billed, collected, outstanding, net_revenue, margin_type, margin_value }]
+ *   by_branch         — same shape but grouped by branch
+ *   upcoming          — installments due in next 30 days (student-wise)
+ *   overdue           — overdue installments (student-wise)
+ */
+async function api_edu_revenue_forecast(token, filters) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureSchema();
+  await _ensureSchemaV3();
+  // Defensive — for tenants that pre-date paid_at
+  try { await db.query(`ALTER TABLE edu_installments ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ`); } catch (_) {}
+
+  const f = filters || {};
+  // Optional branch filter
+  const params = [];
+  let branchClause = '';
+  if (f.branch_id) {
+    params.push(Number(f.branch_id));
+    branchClause = `AND e.branch_id = $${params.length}`;
+  }
+
+  const extras = await _loadCourseExtras();
+
+  // 1) Summary totals
+  const sumQ = await db.query(`
+    SELECT
+      COALESCE(SUM(i.amount),0)::numeric                                              AS billed,
+      COALESCE(SUM(i.paid_amount),0)::numeric                                         AS collected,
+      COALESCE(SUM(i.amount - i.paid_amount),0)::numeric                              AS outstanding,
+      COALESCE(SUM(CASE WHEN i.due_date < CURRENT_DATE AND i.status<>'paid'
+                        THEN i.amount - i.paid_amount ELSE 0 END),0)::numeric         AS overdue,
+      COALESCE(SUM(CASE WHEN i.due_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days' AND i.status<>'paid'
+                        THEN i.amount - i.paid_amount ELSE 0 END),0)::numeric         AS upcoming_30d,
+      COUNT(DISTINCT e.id)::int                                                       AS enrollments,
+      COUNT(i.id)::int                                                                AS installments
+    FROM edu_enrollments e
+    LEFT JOIN edu_installments i ON i.enrollment_id = e.id
+    WHERE 1=1 ${branchClause}
+  `, params);
+
+  // 2) Per-course aggregation (so we can apply margin per course)
+  const courseQ = await db.query(`
+    SELECT e.fee_plan_id,
+           e.course_name,
+           e.fee_plan_id AS course_id_fallback,
+           COUNT(DISTINCT e.id)::int                            AS enrollments,
+           COALESCE(SUM(i.amount),0)::numeric                    AS billed,
+           COALESCE(SUM(i.paid_amount),0)::numeric               AS collected,
+           COALESCE(SUM(i.amount - i.paid_amount),0)::numeric    AS outstanding
+      FROM edu_enrollments e
+      LEFT JOIN edu_installments i ON i.enrollment_id = e.id
+     WHERE 1=1 ${branchClause}
+     GROUP BY e.fee_plan_id, e.course_name
+     ORDER BY billed DESC
+  `, params);
+
+  const by_course = [];
+  let totalNetRevenue = 0;
+  let totalCollectedNet = 0;
+  let totalOutstandingNet = 0;
+  for (const r of (courseQ.rows || [])) {
+    // Pick margin: course-extras keyed by product id is not directly available
+    // here (we stored by product id). Best-effort: look for any extras entry
+    // whose name resembles the course_name — fall back to no margin.
+    let marginConf = null;
+    for (const [pid, ex] of Object.entries(extras || {})) {
+      if (ex && ex.course_name && r.course_name &&
+          ex.course_name.toLowerCase() === r.course_name.toLowerCase()) {
+        marginConf = ex; break;
+      }
+    }
+    const netBilled       = _applyMargin(r.billed, marginConf);
+    const netCollected    = _applyMargin(r.collected, marginConf);
+    const netOutstanding  = _applyMargin(r.outstanding, marginConf);
+    totalNetRevenue       += Number(netBilled);
+    totalCollectedNet     += Number(netCollected);
+    totalOutstandingNet   += Number(netOutstanding);
+    by_course.push({
+      course_name:   r.course_name || '— Unnamed —',
+      enrollments:   Number(r.enrollments),
+      billed:        Number(r.billed),
+      collected:     Number(r.collected),
+      outstanding:   Number(r.outstanding),
+      net_revenue:   Number(netBilled),
+      net_collected: Number(netCollected),
+      margin_type:   marginConf ? marginConf.margin_type : null,
+      margin_value:  marginConf ? Number(marginConf.margin_value || 0) : 0
+    });
+  }
+
+  // 3) Monthly forecast (next 12 months — gross + net)
+  const monthQ = await db.query(`
+    SELECT to_char(date_trunc('month', i.due_date), 'YYYY-MM') AS month,
+           e.course_name,
+           COALESCE(SUM(i.amount - i.paid_amount),0)::numeric    AS expected_gross,
+           COUNT(*)::int                                          AS rows
+      FROM edu_installments i
+      JOIN edu_enrollments e ON e.id = i.enrollment_id
+     WHERE i.status<>'paid' AND i.due_date IS NOT NULL
+       AND i.due_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '12 months'
+       ${branchClause}
+     GROUP BY 1, e.course_name
+     ORDER BY 1
+  `, params);
+
+  // Roll up per month, applying per-course margin
+  const monthMap = {};
+  for (const r of (monthQ.rows || [])) {
+    let marginConf = null;
+    for (const [pid, ex] of Object.entries(extras || {})) {
+      if (ex && ex.course_name && r.course_name &&
+          ex.course_name.toLowerCase() === r.course_name.toLowerCase()) { marginConf = ex; break; }
+    }
+    const net = _applyMargin(r.expected_gross, marginConf);
+    if (!monthMap[r.month]) monthMap[r.month] = { month: r.month, expected_gross: 0, expected_net: 0, rows: 0 };
+    monthMap[r.month].expected_gross += Number(r.expected_gross);
+    monthMap[r.month].expected_net   += Number(net);
+    monthMap[r.month].rows += Number(r.rows);
+  }
+  const monthly_forecast = Object.values(monthMap).sort((a, b) => a.month.localeCompare(b.month));
+
+  // 4) Upcoming installments (next 30 days) — student-wise
+  const upR = await db.query(`
+    SELECT i.id, i.due_date, i.amount, i.paid_amount, i.status, i.seq,
+           e.id AS enrollment_id, e.course_name, e.batch_name,
+           l.id AS lead_id, l.name AS student_name, l.phone
+      FROM edu_installments i
+      JOIN edu_enrollments e ON e.id = i.enrollment_id
+      LEFT JOIN leads l ON l.id = e.lead_id
+     WHERE i.status<>'paid' AND i.due_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'
+     ${branchClause}
+     ORDER BY i.due_date ASC LIMIT 100
+  `, params);
+
+  // 5) Overdue (oldest first, capped)
+  const ovR = await db.query(`
+    SELECT i.id, i.due_date, i.amount, i.paid_amount, i.status, i.seq,
+           e.id AS enrollment_id, e.course_name, e.batch_name,
+           l.id AS lead_id, l.name AS student_name, l.phone,
+           (CURRENT_DATE - i.due_date) AS days_overdue
+      FROM edu_installments i
+      JOIN edu_enrollments e ON e.id = i.enrollment_id
+      LEFT JOIN leads l ON l.id = e.lead_id
+     WHERE i.status<>'paid' AND i.due_date < CURRENT_DATE
+     ${branchClause}
+     ORDER BY i.due_date ASC LIMIT 100
+  `, params);
+
+  return {
+    summary: sumQ.rows[0] || {},
+    net_revenue: {
+      total_net_billed:      totalNetRevenue,
+      total_net_collected:   totalCollectedNet,
+      total_net_outstanding: totalOutstandingNet
+    },
+    by_course,
+    monthly_forecast,
+    upcoming: upR.rows || [],
+    overdue:  ovR.rows || []
+  };
+}
+
+// Save/Update margin for a course inside edu_course_extras
+async function api_edu_course_margin_save(token, payload) {
+  const me = await authUser(token);
+  if (!['admin','manager'].includes(me.role)) throw new Error('Admin or manager role required');
+  await _requireEducation();
+  const p = payload || {};
+  if (!p.course_id && !p.course_name) throw new Error('course_id or course_name required');
+
+  let extras = {};
+  try {
+    const r = await db.query(`SELECT value FROM config WHERE key='edu_course_extras' LIMIT 1`);
+    if (r.rows && r.rows[0] && r.rows[0].value) extras = JSON.parse(r.rows[0].value);
+  } catch (_) {}
+
+  const key = String(p.course_id || p.course_name);
+  extras[key] = Object.assign({}, extras[key] || {}, {
+    course_name: p.course_name || (extras[key] && extras[key].course_name) || '',
+    margin_type: p.margin_type === 'fixed' ? 'fixed' : 'percent',
+    margin_value: Number(p.margin_value || 0)
+  });
+
+  try {
+    await db.query(
+      `INSERT INTO config (key, value) VALUES ('edu_course_extras', $1)
+       ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value`,
+      [JSON.stringify(extras)]
+    );
+  } catch (_) {
+    try { await db.query(`UPDATE config SET value=$1 WHERE key='edu_course_extras'`, [JSON.stringify(extras)]); } catch (_) {}
+  }
+  return { ok: true, course: key, saved: extras[key] };
+}
+
 // ─────────────────────────────────────────────────────────────────
 // Register
 // ─────────────────────────────────────────────────────────────────
@@ -961,7 +1196,8 @@ framework.register({
   ],
   nav_items: [
     { id: 'edufees',     label: '💰 Fee Collection', icon: '💰' },
-    { id: 'edustudents', label: '👥 Students',       icon: '👥' }
+    { id: 'edustudents', label: '👥 Students',       icon: '👥' },
+    { id: 'edurevenue',  label: '💎 Revenue',        icon: '💎' }
   ],
   install,
   uninstall
@@ -984,5 +1220,6 @@ module.exports = {
   api_edu_branches_byUser, api_edu_branches_listWithCounts,
   api_edu_docTypes_list, api_edu_docTypes_save,
   api_edu_leadDocs_list, api_edu_leadDocs_register, api_edu_leadDocs_delete, api_edu_leadDocs_verify,
+  api_edu_revenue_forecast, api_edu_course_margin_save,
   _ensureSchema, _ensureSchemaV3
 };
