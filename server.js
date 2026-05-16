@@ -48,6 +48,18 @@ const tenantModules = require('./routes/saas/tenantModules');
 const demoTenant = require('./routes/saas/demoTenant');
 const aiUsageIngest = require('./routes/saas/aiUsageIngest');
 
+// ---- Industry Packs: load + self-register at boot ----------------
+// Each pack module calls framework.register({...}) on require, populating
+// the in-memory REGISTRY that installPack reads. Without this,
+// fw.installPack('education') throws "Unknown pack" because the registry
+// is empty — which is why testfv (and any tenant created with industry=
+// education/realestate) got the pack column saved in control DB but the
+// install actually failed and the SPA's _navAnchor saw an empty
+// installedPacks Set. Loading them here makes them registered for both
+// the SaaS dispatcher path AND the per-tenant API path.
+require('./routes/packs/education');
+require('./routes/packs/realestate');
+
 // Combine every SaaS api_* into one dispatch map
 const SAAS_API = {};
 [
