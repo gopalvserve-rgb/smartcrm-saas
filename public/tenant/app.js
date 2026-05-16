@@ -206,6 +206,21 @@ async function apiRaw(fn, ...args) {
   if (CRM.token) {
     try {
       CRM.user = await api('api_me');
+      // Load industry pack BEFORE renderShell so the sidebar's requiresPack
+      // filter sees the active pack at render time. Without this, the nav
+      // gets built with installedPacks=undefined, every Edu/RE item gets
+      // filtered out, and even though warmCache later populates the Set,
+      // the sidebar has already been rendered without those items.
+      try {
+        const brand = await api('api_admin_brand').catch(() => ({}));
+        const set = (CRM.installedPacks instanceof Set) ? CRM.installedPacks : new Set();
+        if (brand && brand.INDUSTRY_PACK) set.add(String(brand.INDUSTRY_PACK));
+        CRM.installedPacks = set;
+        // Stash brand on CRM so warmCache and other consumers can read it.
+        CRM._earlyBrand = brand || {};
+      } catch (_) {
+        if (!(CRM.installedPacks instanceof Set)) CRM.installedPacks = new Set();
+      }
       renderShell();
       await warmCache();
       // Resolve chat access for the current user — admin can disable chat
