@@ -918,7 +918,10 @@ const NAV_GROUPS = [
     { id: 'educourses',  label: '📚 Courses',       icon: '📚', roles: ['admin','manager'],                requiresPack: 'education' },
     { id: 'edudues',     label: '📋 Fee Dues',       icon: '📋', roles: ['admin','manager','team_leader','agent'], requiresPack: 'education' },
     { id: 'edurevenue',  label: '💎 Revenue',       icon: '💎', roles: ['admin','manager'],                requiresPack: 'education' },
-    { id: 'edureports',  label: '📊 Collection Report', icon: '📊', roles: ['admin','manager'],            requiresPack: 'education' },
+    { id: 'edureports',   label: '📊 Collection Report', icon: '📊', roles: ['admin','manager'],            requiresPack: 'education' },
+    { id: 'eduattendance', label: '🗓 Attendance',    icon: '🗓', roles: ['admin','manager','team_leader'], requiresPack: 'education' },
+    { id: 'edutests',      label: '📝 Tests & Scores', icon: '📝', roles: ['admin','manager','team_leader'], requiresPack: 'education' },
+    { id: 'educrosssell',  label: '⭐ Cross-Sell',    icon: '⭐', roles: ['admin','manager'],                requiresPack: 'education' },
     { id: 'reinventory',     label: 'Inventory Board', icon: '🏢', roles: ['admin','manager','team_leader'], requiresPack: 'realestate' },
     { id: 'rerequirements',  label: 'Buyer Reqs',      icon: '🎯', roles: ['admin','manager','team_leader','agent'], requiresPack: 'realestate' },
     { id: 'revisits',        label: 'Site Visits',     icon: '📅', roles: ['admin','manager','team_leader','agent'], requiresPack: 'realestate' },
@@ -28918,3 +28921,551 @@ try {
   window.openMatchesModal = openMatchesModal;
   window.openScheduleVisitModal = openScheduleVisitModal;
 } catch (_) {}
+
+
+// ═════════════════════════════════════════════════════════════════════
+// EDUCATION PACK — PHASE 7.B (SPA UI)
+// Parents panel · Attendance grid · Tests entry · Cross-sell widget
+// All views gated by requiresPack:'education' — hidden on Generic/RE tenants.
+// ═════════════════════════════════════════════════════════════════════
+
+(function eduPhase7BUI() {
+  if (typeof VIEWS === 'undefined' || typeof h !== 'function') return;
+
+  // ---- helper: short course list (from products cache or API) -------
+  async function _eduCourses() {
+    try {
+      const cached = (CRM.cache && CRM.cache.products) || [];
+      if (cached.length) return cached.map(p => ({ id: p.id, name: p.name }));
+    } catch (_) {}
+    try {
+      const r = await api('api_products_list');
+      return (r || []).map(p => ({ id: p.id, name: p.name }));
+    } catch (_) { return []; }
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // VIEWS.eduattendance — daily roster
+  // ─────────────────────────────────────────────────────────────────
+  VIEWS.eduattendance = async (view) => {
+    view.innerHTML = '';
+    const today = new Date().toISOString().slice(0, 10);
+    const wrap = h('div', { class: 'page' });
+
+    // Header bar
+    const datePick = h('input', { type:'date', value: today, style:{ padding:'.4rem .6rem' } });
+    const courseSel = h('select', { style:{ padding:'.4rem .6rem' } }, h('option', { value:'' }, 'All courses'));
+    const reloadBtn = h('button', { class:'btn', onclick: () => render() }, '🔄 Reload');
+    const head = h('div', { style:{ display:'flex', gap:'.6rem', alignItems:'center', marginBottom:'.8rem', flexWrap:'wrap' } },
+      h('h2', { style:{ margin:0, flex:'1 1 auto' } }, '🗓 Attendance'),
+      h('label', { class:'muted' }, 'Date '), datePick,
+      h('label', { class:'muted' }, 'Course '), courseSel,
+      reloadBtn
+    );
+    wrap.appendChild(head);
+
+    const studentsCard = h('div', { class:'card', style:{ marginBottom:'1rem' } });
+    studentsCard.appendChild(h('div', { class:'loading' }, 'Loading students…'));
+    wrap.appendChild(studentsCard);
+
+    const summaryCard = h('div', { class:'card' });
+    wrap.appendChild(summaryCard);
+
+    view.appendChild(wrap);
+
+    // Populate course filter
+    try {
+      const courses = await _eduCourses();
+      courses.forEach(c => courseSel.appendChild(h('option', { value: c.id }, c.name)));
+    } catch (_) {}
+
+    datePick.onchange = () => render();
+    courseSel.onchange = () => render();
+
+    async function render() {
+      studentsCard.innerHTML = '';
+      studentsCard.appendChild(h('div', { class:'loading' }, 'Loading…'));
+      summaryCard.innerHTML = '';
+
+      // Students list = active enrollments (filtered by course if chosen)
+      let students = [];
+      try {
+        const filter = courseSel.value ? { course_id: Number(courseSel.value) } : {};
+        students = await api('api_edu_students_list', filter);
+      } catch (e) { students = []; }
+
+      if (!students.length) {
+        studentsCard.innerHTML = '';
+        studentsCard.appendChild(h('div', { class:'empty', style:{ padding:'2rem', textAlign:'center' } },
+          'No students enrolled' + (courseSel.value ? ' for this course' : '') + '.'));
+        return;
+      }
+
+      // Existing attendance for the day (so we pre-select)
+      const dayMap = new Map();
+      try {
+        for (const s of students.slice(0, 200)) {
+          const sum = await api('api_edu_attendance_byLead', s.lead_id, { from: datePick.value, to: datePick.value });
+          if (sum && sum.rows && sum.rows[0]) dayMap.set(s.lead_id, sum.rows[0].status);
+        }
+      } catch (_) {}
+
+      // Render grid
+      studentsCard.innerHTML = '';
+      const tbl = h('table', { class:'tbl', style:{ width:'100%' } });
+      tbl.appendChild(h('thead', {}, h('tr', {},
+        h('th', {}, 'Student'),
+        h('th', {}, 'Course'),
+        h('th', { style:{ width:'160px' } }, 'Status')
+      )));
+      const tbody = h('tbody', {});
+      const rowEls = [];
+      students.forEach(s => {
+        const status = dayMap.get(s.lead_id) || 'present';
+        const sel = h('select', { class:'att-sel', dataset:{ leadId: s.lead_id, enrollmentId: s.enrollment_id || '' } },
+          ['present','absent','late','excused'].map(v =>
+            h('option', { value: v, selected: status === v ? 'selected' : null }, v.charAt(0).toUpperCase()+v.slice(1))
+          )
+        );
+        rowEls.push(sel);
+        tbody.appendChild(h('tr', {},
+          h('td', {}, s.student_name || s.name || '—'),
+          h('td', { class:'muted' }, s.course_name || ''),
+          h('td', {}, sel)
+        ));
+      });
+      tbl.appendChild(tbody);
+      studentsCard.appendChild(tbl);
+
+      const saveBtn = h('button', { class:'btn primary', style:{ marginTop:'.8rem' }, onclick: async () => {
+        const rows = rowEls.map(el => ({
+          lead_id: Number(el.dataset.leadId),
+          enrollment_id: el.dataset.enrollmentId ? Number(el.dataset.enrollmentId) : null,
+          status: el.value
+        }));
+        try {
+          const r = await api('api_edu_attendance_bulkMark', { date: datePick.value, rows });
+          toast('Saved ' + (r.saved || 0) + ' attendance rows');
+        } catch (e) { toast(e.message, 'err'); }
+      } }, '💾 Save attendance');
+      studentsCard.appendChild(saveBtn);
+
+      // Summary card — last 30 days % per student
+      summaryCard.innerHTML = '';
+      summaryCard.appendChild(h('h4', {}, '📊 Last 30 days summary'));
+      try {
+        const from = new Date(Date.now() - 30*86400000).toISOString().slice(0,10);
+        const sum = await api('api_edu_attendance_summary', { from });
+        if (!sum || !sum.length) {
+          summaryCard.appendChild(h('p', { class:'muted' }, 'No attendance recorded in last 30 days.'));
+        } else {
+          const t = h('table', { class:'tbl', style:{ width:'100%' } });
+          t.appendChild(h('thead', {}, h('tr', {},
+            h('th', {}, 'Student'),
+            h('th', {}, 'Total'),
+            h('th', {}, 'Present'),
+            h('th', {}, 'Absent'),
+            h('th', {}, 'Late'),
+            h('th', {}, '% Attendance')
+          )));
+          const tb = h('tbody', {});
+          sum.forEach(r => tb.appendChild(h('tr', {},
+            h('td', {}, r.student_name || '—'),
+            h('td', {}, r.total),
+            h('td', { style:{ color:'#16a34a' } }, r.present),
+            h('td', { style:{ color:'#dc2626' } }, r.absent),
+            h('td', { style:{ color:'#d97706' } }, r.late),
+            h('td', { style:{ fontWeight:'bold' } }, r.percent + '%')
+          )));
+          t.appendChild(tb);
+          summaryCard.appendChild(t);
+        }
+      } catch (e) {
+        summaryCard.appendChild(h('div', { class:'error-box' }, e.message));
+      }
+    }
+    render();
+  };
+
+  // ─────────────────────────────────────────────────────────────────
+  // VIEWS.edutests — test catalog + score entry
+  // ─────────────────────────────────────────────────────────────────
+  VIEWS.edutests = async (view) => {
+    view.innerHTML = '';
+    const wrap = h('div', { class:'page' });
+    const head = h('div', { style:{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'.8rem', flexWrap:'wrap', gap:'.6rem' } },
+      h('h2', { style:{ margin:0 } }, '📝 Tests & Scores'),
+      h('button', { class:'btn primary', onclick: () => openTestEditModal(null, render) }, '+ Add test')
+    );
+    wrap.appendChild(head);
+
+    const split = h('div', { style:{ display:'grid', gridTemplateColumns:'minmax(260px,360px) 1fr', gap:'1rem' } });
+    const listCard = h('div', { class:'card' });
+    const detailCard = h('div', { class:'card' });
+    split.appendChild(listCard);
+    split.appendChild(detailCard);
+    wrap.appendChild(split);
+    view.appendChild(wrap);
+
+    let activeTestId = null;
+
+    async function render() {
+      listCard.innerHTML = '';
+      listCard.appendChild(h('h4', { style:{ margin:'0 0 .5rem 0' } }, 'Tests'));
+      try {
+        const tests = await api('api_edu_tests_list', {});
+        if (!tests.length) {
+          listCard.appendChild(h('p', { class:'muted' }, 'No tests yet. Add one →'));
+          detailCard.innerHTML = '';
+          return;
+        }
+        tests.forEach(t => {
+          const item = h('div', {
+            class: 'list-item' + (Number(t.id) === Number(activeTestId) ? ' active' : ''),
+            style: { padding:'.5rem .6rem', borderRadius:'6px', cursor:'pointer', marginBottom:'.25rem',
+                     background: Number(t.id) === Number(activeTestId) ? 'rgba(99,102,241,.12)' : 'transparent' },
+            onclick: () => { activeTestId = t.id; render(); }
+          },
+            h('div', { style:{ fontWeight:'600' } }, t.name),
+            h('div', { class:'muted', style:{ fontSize:'.85em' } },
+              (t.test_date || 'no date') + ' · max ' + t.max_marks)
+          );
+          listCard.appendChild(item);
+        });
+      } catch (e) {
+        listCard.appendChild(h('div', { class:'error-box' }, e.message));
+      }
+      if (activeTestId) renderDetail();
+      else { detailCard.innerHTML = ''; detailCard.appendChild(h('p', { class:'muted' }, 'Pick a test from the left to enter scores.')); }
+    }
+
+    async function renderDetail() {
+      detailCard.innerHTML = '';
+      detailCard.appendChild(h('div', { class:'loading' }, 'Loading…'));
+      try {
+        const [tests, scores] = await Promise.all([
+          api('api_edu_tests_list', {}),
+          api('api_edu_testScores_byTest', activeTestId)
+        ]);
+        const t = (tests || []).find(x => Number(x.id) === Number(activeTestId));
+        detailCard.innerHTML = '';
+        detailCard.appendChild(h('div', { style:{ display:'flex', justifyContent:'space-between', alignItems:'center' } },
+          h('h4', { style:{ margin:0 } }, t ? t.name : 'Test'),
+          h('div', {},
+            h('button', { class:'btn sm', onclick: () => openTestEditModal(t, render) }, '✎ Edit'),
+            ' ',
+            h('button', { class:'btn sm danger', onclick: async () => {
+              if (!confirm('Delete this test and all its scores?')) return;
+              try { await api('api_edu_tests_delete', activeTestId); toast('Deleted'); activeTestId = null; render(); }
+              catch (e) { toast(e.message, 'err'); }
+            } }, '🗑 Delete')
+          )
+        ));
+        detailCard.appendChild(h('p', { class:'muted' },
+          'Course #' + (t && t.course_id || '—') + ' · ' + (t && t.test_date || 'no date') +
+          ' · max ' + (t && t.max_marks || '?') + (t && t.pass_marks ? (' · pass ' + t.pass_marks) : '')));
+
+        // Students who could have a score = active enrollments
+        const students = await api('api_edu_students_list', t && t.course_id ? { course_id: t.course_id } : {});
+        const scoreMap = new Map();
+        (scores || []).forEach(s => scoreMap.set(Number(s.lead_id), s));
+
+        const tbl = h('table', { class:'tbl', style:{ width:'100%' } });
+        tbl.appendChild(h('thead', {}, h('tr', {},
+          h('th', {}, 'Student'),
+          h('th', { style:{ width:'90px' } }, 'Score'),
+          h('th', { style:{ width:'90px' } }, '%-ile'),
+          h('th', { style:{ width:'70px' } }, 'Rank'),
+          h('th', {}, 'Notes')
+        )));
+        const tb = h('tbody', {});
+        const inputs = [];
+        (students || []).forEach(s => {
+          const prev = scoreMap.get(Number(s.lead_id)) || {};
+          const score = h('input', { type:'number', step:'0.01', value: prev.score != null ? prev.score : '', style:{ width:'80px' } });
+          const pct   = h('input', { type:'number', step:'0.01', value: prev.percentile != null ? prev.percentile : '', style:{ width:'80px' } });
+          const rk    = h('input', { type:'number', value: prev.rank_in_batch || '', style:{ width:'60px' } });
+          const nt    = h('input', { type:'text', value: prev.notes || '', style:{ width:'100%' } });
+          inputs.push({ lead_id: s.lead_id, score, pct, rk, nt });
+          tb.appendChild(h('tr', {},
+            h('td', {}, s.student_name || '—'),
+            h('td', {}, score),
+            h('td', {}, pct),
+            h('td', {}, rk),
+            h('td', {}, nt)
+          ));
+        });
+        tbl.appendChild(tb);
+        detailCard.appendChild(tbl);
+
+        detailCard.appendChild(h('button', { class:'btn primary', style:{ marginTop:'.8rem' }, onclick: async () => {
+          const rows = inputs.map(x => ({
+            lead_id: x.lead_id,
+            score: x.score.value === '' ? null : Number(x.score.value),
+            percentile: x.pct.value === '' ? null : Number(x.pct.value),
+            rank_in_batch: x.rk.value === '' ? null : Number(x.rk.value),
+            notes: x.nt.value || ''
+          }));
+          try {
+            const r = await api('api_edu_testScores_bulkSave', { test_id: activeTestId, rows });
+            toast('Saved ' + (r.saved || 0) + ' scores');
+          } catch (e) { toast(e.message, 'err'); }
+        } }, '💾 Save scores'));
+      } catch (e) {
+        detailCard.innerHTML = '';
+        detailCard.appendChild(h('div', { class:'error-box' }, e.message));
+      }
+    }
+
+    render();
+  };
+
+  // ─────────────────────────────────────────────────────────────────
+  // Test add/edit modal
+  // ─────────────────────────────────────────────────────────────────
+  async function openTestEditModal(test, onSave) {
+    const m = h('div', { class:'modal-backdrop' });
+    const modal = h('div', { class:'modal' });
+    modal.appendChild(h('div', { class:'modal-head' },
+      h('h3', {}, test ? '✎ Edit test' : '+ Add test'),
+      h('button', { class:'btn ghost', onclick: () => m.remove() }, '✕')
+    ));
+    const body = h('div', { class:'modal-body' });
+    const fName  = h('input', { type:'text', value: test && test.name || '' });
+    const fDate  = h('input', { type:'date', value: test && test.test_date || '' });
+    const fMax   = h('input', { type:'number', step:'0.01', value: test && test.max_marks != null ? test.max_marks : 100 });
+    const fPass  = h('input', { type:'number', step:'0.01', value: test && test.pass_marks != null ? test.pass_marks : '' });
+    const fCourse = h('select', {}, h('option', { value:'' }, '— pick a course —'));
+    try {
+      const courses = await _eduCourses();
+      courses.forEach(c => fCourse.appendChild(h('option', { value: c.id, selected: test && Number(test.course_id) === Number(c.id) ? 'selected' : null }, c.name)));
+    } catch (_) {}
+    const fNotes = h('textarea', { rows:'3' }, test && test.notes || '');
+
+    [
+      ['Name *', fName], ['Course', fCourse], ['Date', fDate],
+      ['Max marks', fMax], ['Pass marks', fPass], ['Notes', fNotes]
+    ].forEach(([label, inp]) => {
+      body.appendChild(h('div', { style:{ marginBottom:'.6rem' } },
+        h('label', {}, label), inp
+      ));
+    });
+    modal.appendChild(body);
+
+    modal.appendChild(h('div', { class:'modal-foot' },
+      h('button', { class:'btn primary', onclick: async () => {
+        try {
+          await api('api_edu_tests_save', {
+            id: test && test.id || null,
+            name: fName.value.trim(),
+            course_id: fCourse.value || null,
+            test_date: fDate.value || null,
+            max_marks: fMax.value || 100,
+            pass_marks: fPass.value || null,
+            notes: fNotes.value || ''
+          });
+          toast('Saved');
+          m.remove();
+          if (onSave) onSave();
+        } catch (e) { toast(e.message, 'err'); }
+      } }, '💾 Save'),
+      h('button', { class:'btn ghost', onclick: () => m.remove() }, 'Cancel')
+    ));
+    m.appendChild(modal);
+    document.body.appendChild(m);
+  }
+
+  // ─────────────────────────────────────────────────────────────────
+  // VIEWS.educrosssell — eligibility dashboard
+  // ─────────────────────────────────────────────────────────────────
+  VIEWS.educrosssell = async (view) => {
+    view.innerHTML = '';
+    const wrap = h('div', { class:'page' });
+    wrap.appendChild(h('h2', {}, '⭐ Cross-Sell Candidates'));
+    wrap.appendChild(h('p', { class:'muted' },
+      'Students with at least one of: course fully paid, average score ≥ 75%, or attendance ≥ 80%. ' +
+      'Click a row to open the lead and pitch the next-level course.'));
+
+    const card = h('div', { class:'card' });
+    card.appendChild(h('div', { class:'loading' }, 'Loading…'));
+    wrap.appendChild(card);
+    view.appendChild(wrap);
+
+    try {
+      const rows = await api('api_edu_crossSell_candidates', { limit: 200 });
+      card.innerHTML = '';
+      if (!rows.length) {
+        card.appendChild(h('div', { class:'empty', style:{ padding:'2rem', textAlign:'center' } },
+          'No candidates yet — try recording some test scores or attendance first.'));
+        return;
+      }
+      const tbl = h('table', { class:'tbl', style:{ width:'100%' } });
+      tbl.appendChild(h('thead', {}, h('tr', {},
+        h('th', {}, 'Student'),
+        h('th', {}, 'Phone'),
+        h('th', {}, 'Current Course'),
+        h('th', {}, 'Avg %'),
+        h('th', {}, 'Attendance'),
+        h('th', {}, 'Pending Dues'),
+        h('th', {}, 'Why')
+      )));
+      const tb = h('tbody', {});
+      rows.forEach(r => {
+        const tr = h('tr', { style:{ cursor:'pointer' }, onclick: () => {
+          if (typeof openLeadModal === 'function') openLeadModal(r.lead_id);
+        }});
+        tr.appendChild(h('td', {}, r.student_name || '—'));
+        tr.appendChild(h('td', {}, r.student_phone || ''));
+        tr.appendChild(h('td', {}, r.current_course || ''));
+        tr.appendChild(h('td', {}, r.avg_test_pct != null ? r.avg_test_pct + '%' : '—'));
+        tr.appendChild(h('td', {}, r.attendance_pct != null ? r.attendance_pct + '%' : '—'));
+        tr.appendChild(h('td', {}, r.pending_installments));
+        const badges = (r.triggers || []).map(t => h('span', {
+          style:{ background:'rgba(99,102,241,.15)', color:'#4f46e5', padding:'.15rem .5rem',
+                  borderRadius:'4px', fontSize:'.8em', marginRight:'.25rem' }
+        }, t.replace(/_/g,' ')));
+        tr.appendChild(h('td', {}, ...badges));
+        tb.appendChild(tr);
+      });
+      tbl.appendChild(tb);
+      card.appendChild(tbl);
+    } catch (e) {
+      card.innerHTML = '';
+      card.appendChild(h('div', { class:'error-box' }, e.message));
+    }
+  };
+
+  // ─────────────────────────────────────────────────────────────────
+  // Parents panel — appended to lead modal when Education pack active
+  // ─────────────────────────────────────────────────────────────────
+  function eduParentsBlock(leadId) {
+    const block = h('div', { class:'pack-block edu-parents', style:{ marginTop:'1rem' } });
+    block.appendChild(h('h4', { style:{ margin:'0 0 .5rem 0' } }, '👨‍👩‍👧 Parents / Guardians'));
+    const card = h('div', { class:'card', style:{ padding:'.6rem' } });
+    card.appendChild(h('div', { class:'loading' }, 'Loading…'));
+    block.appendChild(card);
+
+    const addBtn = h('button', { class:'btn sm', style:{ marginTop:'.5rem' }, onclick: () => openParentModal(null, leadId, refresh) }, '+ Add parent');
+    block.appendChild(addBtn);
+
+    async function refresh() {
+      try {
+        const list = await api('api_edu_parents_byLead', leadId);
+        card.innerHTML = '';
+        if (!list.length) {
+          card.appendChild(h('p', { class:'muted', style:{ margin:0 } }, 'No parents on record.'));
+          return;
+        }
+        list.forEach(p => {
+          const row = h('div', { style:{ display:'flex', alignItems:'center', gap:'.5rem', padding:'.4rem 0', borderBottom:'1px solid rgba(0,0,0,.06)', flexWrap:'wrap' } },
+            h('div', { style:{ flex:'1 1 200px' } },
+              h('div', { style:{ fontWeight:'600' } }, p.name + (p.relation ? ' (' + p.relation + ')' : '')),
+              h('div', { class:'muted', style:{ fontSize:'.85em' } },
+                (p.phone || '') + (p.email ? ' · ' + p.email : '') +
+                (Number(p.receive_reminders) === 1 ? '  🔔' : ''))
+            ),
+            h('button', { class:'btn sm ghost', onclick: () => openParentModal(p, leadId, refresh) }, '✎'),
+            h('button', { class:'btn sm danger', onclick: async () => {
+              if (!confirm('Remove this parent?')) return;
+              try { await api('api_edu_parents_delete', p.id); refresh(); }
+              catch (e) { toast(e.message, 'err'); }
+            } }, '🗑')
+          );
+          card.appendChild(row);
+        });
+      } catch (e) {
+        card.innerHTML = '';
+        card.appendChild(h('div', { class:'error-box' }, e.message));
+      }
+    }
+    refresh();
+    return block;
+  }
+
+  function openParentModal(parent, leadId, onSave) {
+    const m = h('div', { class:'modal-backdrop' });
+    const modal = h('div', { class:'modal' });
+    modal.appendChild(h('div', { class:'modal-head' },
+      h('h3', {}, parent ? '✎ Edit parent' : '+ Add parent'),
+      h('button', { class:'btn ghost', onclick: () => m.remove() }, '✕')
+    ));
+    const body = h('div', { class:'modal-body' });
+    const fName  = h('input', { type:'text', value: parent && parent.name || '' });
+    const fRel   = h('select', {},
+      h('option', { value:'' }, '— pick relation —'),
+      ...['father','mother','guardian','other'].map(r =>
+        h('option', { value: r, selected: parent && parent.relation === r ? 'selected' : null }, r.charAt(0).toUpperCase()+r.slice(1)))
+    );
+    const fPhone = h('input', { type:'tel', value: parent && parent.phone || '' });
+    const fWA    = h('input', { type:'tel', value: parent && parent.whatsapp || '' });
+    const fEmail = h('input', { type:'email', value: parent && parent.email || '' });
+    const fRem   = h('input', { type:'checkbox', checked: parent ? Number(parent.receive_reminders) === 1 : true });
+    const fAnn   = h('input', { type:'checkbox', checked: parent ? Number(parent.receive_announcements) === 1 : true });
+    const fNotes = h('textarea', { rows:'2' }, parent && parent.notes || '');
+
+    [
+      ['Name *', fName], ['Relation', fRel], ['Phone', fPhone], ['WhatsApp', fWA], ['Email', fEmail]
+    ].forEach(([l, inp]) => body.appendChild(h('div', { style:{ marginBottom:'.5rem' } }, h('label', {}, l), inp)));
+    body.appendChild(h('div', { style:{ marginBottom:'.5rem' } }, h('label', { class:'toggle-row' }, fRem, ' Receive fee reminders')));
+    body.appendChild(h('div', { style:{ marginBottom:'.5rem' } }, h('label', { class:'toggle-row' }, fAnn, ' Receive announcements')));
+    body.appendChild(h('div', {}, h('label', {}, 'Notes'), fNotes));
+    modal.appendChild(body);
+
+    modal.appendChild(h('div', { class:'modal-foot' },
+      h('button', { class:'btn primary', onclick: async () => {
+        if (!fName.value.trim()) { toast('Name required', 'err'); return; }
+        try {
+          await api('api_edu_parents_save', {
+            id: parent && parent.id || null,
+            lead_id: leadId,
+            name: fName.value.trim(),
+            relation: fRel.value || null,
+            phone: fPhone.value || null,
+            whatsapp: fWA.value || fPhone.value || null,
+            email: fEmail.value || null,
+            receive_reminders: fRem.checked ? 1 : 0,
+            receive_announcements: fAnn.checked ? 1 : 0,
+            notes: fNotes.value || null
+          });
+          toast('Saved'); m.remove();
+          if (onSave) onSave();
+        } catch (e) { toast(e.message, 'err'); }
+      } }, '💾 Save'),
+      h('button', { class:'btn ghost', onclick: () => m.remove() }, 'Cancel')
+    ));
+    m.appendChild(modal);
+    document.body.appendChild(m);
+  }
+
+  // Hook the parents block into the lead modal AFTER it opens.
+  // Only injects when Education pack is installed.
+  if (typeof window.openLeadModal === 'function') {
+    const _origOpen = window.openLeadModal;
+    window.openLeadModal = async function patchedOpenLeadModalEduParents(id) {
+      const r = await _origOpen.apply(this, arguments);
+      if (!id) return r;
+      setTimeout(() => {
+        try {
+          const installed = (CRM.installedPacks instanceof Set) ? CRM.installedPacks : new Set();
+          if (!installed.has('education')) return;
+          const body = document.querySelector('.modal-backdrop:last-of-type .modal');
+          if (body && !body.querySelector('.pack-block.edu-parents')) {
+            const panel = eduParentsBlock(id);
+            const actions = body.querySelector('.actions');
+            if (actions) body.insertBefore(panel, actions);
+            else body.appendChild(panel);
+          }
+        } catch (_) {}
+      }, 220);
+      return r;
+    };
+  }
+
+  // Expose helpers globally so other modules (e.g. dashboard widget) can use them
+  try {
+    window.openParentModal = openParentModal;
+    window.openTestEditModal = openTestEditModal;
+    window.eduParentsBlock = eduParentsBlock;
+  } catch (_) {}
+
+})();

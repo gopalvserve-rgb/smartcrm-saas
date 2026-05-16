@@ -56,6 +56,46 @@ async function _sendOnce(installment, lead, bucket) {
       sentSomething = true;
     } catch (_) {}
   }
+
+  // ── ALSO send to parents/guardians who opted in (Phase 7.B) ──────
+  // Reads edu_parent_contacts; for each row with receive_reminders=1
+  // tries WhatsApp first then email. Best-effort: failures are logged
+  // and do not affect the student-side send result.
+  try {
+    let parents = [];
+    try {
+      const r = await db.query(
+        `SELECT id, name, phone, whatsapp, email, receive_reminders
+           FROM edu_parent_contacts
+          WHERE lead_id = $1 AND receive_reminders = 1`,
+        [lead && lead.id]
+      );
+      parents = (r && r.rows) || [];
+    } catch (_) { /* table may not exist on older tenants — skip silently */ }
+    for (const p of parents) {
+      const parentMsg =
+        'Hi ' + (p.name || 'Parent') + ',\n\n' +
+        'Reminder for ' + (lead.name || 'your ward') + ' — installment #' + installment.seq +
+        (bucket === 'due' ? ' is due today (' + dueDate + ').'
+                          : ' is due on ' + dueDate + ' (in ' + bucket + ' day' + (bucket === '1' ? '' : 's') + ').') +
+        '\nAmount: ₹' + due.toLocaleString('en-IN') +
+        '\n\nIf already paid, please ignore. Thanks!';
+      const pPhone = String(p.whatsapp || p.phone || '').replace(/\D/g, '');
+      if (pPhone) {
+        try {
+          const wb = require('../routes/whatsbot');
+          if (wb && typeof wb._sendFreeform === 'function') await wb._sendFreeform(pPhone, parentMsg);
+          else if (wb && typeof wb._sendText === 'function') await wb._sendText(pPhone, parentMsg);
+        } catch (e) { console.warn('[eduReminder] parent WA failed:', e.message); }
+      } else if (p.email) {
+        try {
+          const mailer = require('./mailer');
+          await mailer._sendRaw(p.email, 'Fee reminder · ' + (lead.name || ''), '<pre>' + parentMsg + '</pre>');
+        } catch (e) { console.warn('[eduReminder] parent email failed:', e.message); }
+      }
+    }
+  } catch (e) { console.warn('[eduReminder] parent broadcast failed:', e.message); }
+
   return sentSomething;
 }
 
