@@ -47,6 +47,7 @@ const aiCosting  = require('./routes/saas/aiCosting');
 const tenantModules = require('./routes/saas/tenantModules');
 const demoTenant = require('./routes/saas/demoTenant');
 const aiUsageIngest = require('./routes/saas/aiUsageIngest');
+const tickets = require('./routes/saas/tickets');
 
 // ---- Industry Packs: load + self-register at boot ----------------
 // Each pack module calls framework.register({...}) on require, populating
@@ -83,7 +84,8 @@ const SAAS_API = {};
   superAdmin, packages, signup, tenants, invoices, settings,
   announcements, customReqs, webhookLogs, errorLogs, whatsbotBackfill, applySchema, crashReport,
   aiSettings, aiCosting,
-  tenantModules, demoTenant
+  tenantModules, demoTenant,
+  tickets
 ].forEach(mod => {
   Object.keys(mod).forEach(k => {
     if (typeof mod[k] === 'function' && k.startsWith('api_saas_')) SAAS_API[k] = mod[k];
@@ -185,6 +187,21 @@ app.get('/api/saas/debug/tcp', async (req, res) => {
 // inside errorLogs.logError(). No auth so anonymous visitors hitting
 // the landing page can still report their own browser errors.
 app.post('/api/saas/log-error', errorLogs.expressClientErrorEndpoint);
+
+// ---- Support ticket attachments ---------------------------------
+// Multipart upload + bytes download for tenant & super-admin ticket
+// attachments. 25 MB cap; tenants only see their own files; admins see
+// all. Token may arrive via header OR ?token= query string on the
+// download path (so an <a href="..."> works without custom JS).
+const _ticketAttachUpload = require('multer')({
+  storage: require('multer').memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 }
+});
+app.post('/api/saas/ticket-attachment',
+  _ticketAttachUpload.single('file'),
+  tickets.expressAttachmentUpload
+);
+app.get('/api/saas/ticket-attachment/:id', tickets.expressAttachmentDownload);
 
 // ---- Tenant-scoped Meta/WhatsApp webhooks + FB OAuth callback -----
 //

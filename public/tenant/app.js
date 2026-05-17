@@ -975,6 +975,14 @@ const NAV_GROUPS = [
   { label: 'Admin', icon: '⚙️', items: [
     { id: 'users', label: 'Users',    icon: '👥', roles: ['admin', 'manager'] },
     { id: 'admin', label: 'Settings', icon: '⚙️', roles: ['admin'] }
+  ] },
+  // TKT_UI_v1 — Help & Support menu surfaces the cross-tenant ticket system.
+  // Visible to every role so any user can raise a ticket; replies thread
+  // shows in the same view. Tickets live in the SaaS control DB and the
+  // SPA hits /api/saas (not /api) through sapi(), unlike the rest of the
+  // CRM which targets /api.
+  { label: 'Help & Support', icon: '🎫', items: [
+    { id: 'tickets', label: 'Support Tickets', icon: '🎫' }
   ] }
 ];
 // Flatten for backwards-compat with anywhere that iterates NAV.
@@ -30626,3 +30634,414 @@ try {
     };
   }
 })();
+
+
+// ================================================================
+// TKT_UI_v1 — Help & Support / Support Tickets (cross-tenant)
+//
+// Backend lives in routes/saas/tickets.js. The SPA talks to the
+// /api/saas dispatcher (not /api), so we add a small sapi() helper
+// that wraps fetch with the regular tenant JWT — tickets.js verifies
+// the token, resolves the tenant from its 't' claim, and only
+// returns/operates on rows for that tenant.
+// ================================================================
+async function sapi(fn, ...args) {
+  const r = await fetch('/api/saas', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Auth-Token': CRM.token || ''
+    },
+    body: JSON.stringify({ fn, args })
+  });
+  const j = await r.json();
+  if (!r.ok || j.error) throw new Error(j.error || ('HTTP ' + r.status));
+  return j.result;
+}
+window.sapi = sapi;
+
+// Cached category/priority/status catalog (no auth, safe to call once).
+let _ticketCat = null;
+async function _loadTicketCatalog() {
+  if (_ticketCat) return _ticketCat;
+  try { _ticketCat = await sapi('api_saas_tk_categories'); }
+  catch (e) { console.warn('[tickets] catalog load failed:', e); _ticketCat = { categories: [], priorities: [], statuses: [] }; }
+  return _ticketCat;
+}
+
+function _statusPill(status, cat) {
+  const found = (cat && cat.statuses || []).find(s => s.id === status);
+  const color = found ? found.color : '#6b7280';
+  const label = found ? found.label : status;
+  return h('span', { class: 'tag', style: { background: color + '22', color, border: '1px solid ' + color + '55', padding: '.15rem .55rem', borderRadius: '12px', fontSize: '.78rem', fontWeight: 600 } }, label);
+}
+function _priorityPill(priority, cat) {
+  const found = (cat && cat.priorities || []).find(p => p.id === priority);
+  const color = found ? found.color : '#3b82f6';
+  const label = found ? found.label : priority;
+  return h('span', { style: { color, fontSize: '.78rem', fontWeight: 600 } }, '● ' + label);
+}
+function _fmtTs(ts) {
+  if (!ts) return '';
+  try {
+    const d = new Date(ts);
+    const now = new Date();
+    const diffMs = now - d;
+    const min = Math.round(diffMs / 60000);
+    if (min < 1)    return 'just now';
+    if (min < 60)   return min + ' min ago';
+    if (min < 1440) return Math.round(min / 60) + 'h ago';
+    if (min < 7 * 1440) return Math.round(min / 1440) + 'd ago';
+    return d.toLocaleString();
+  } catch (_) { return ts; }
+}
+
+// ---- VIEWS.tickets — list ---------------------------------------
+VIEWS.tickets = async (view) => {
+  view.innerHTML = '';
+  const wrap = h('div', { class: 'page' });
+  wrap.appendChild(h('div', { class: 'page-head', style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' } },
+    h('div', {},
+      h('h2', { style: { margin: 0 } }, '🎫 Support Tickets'),
+      h('div', { class: 'page-sub', style: { color: '#6b7280', fontSize: '.88rem', marginTop: '.15rem' } }, 'Raise an issue, request a feature, or get help from our team.')
+    ),
+    h('button', { class: 'btn primary', onclick: () => location.hash = '#/ticketnew' }, '➕ New Ticket')
+  ));
+
+  const cat = await _loadTicketCatalog();
+  // Filter row
+  const filterRow = h('div', { class: 'toolbar', style: { margin: '.75rem 0', display: 'flex', gap: '.5rem', flexWrap: 'wrap', alignItems: 'center' } });
+  const statusSel = h('select', { class: 'input' });
+  statusSel.appendChild(h('option', { value: '' }, 'All statuses'));
+  (cat.statuses || []).forEach(s => statusSel.appendChild(h('option', { value: s.id }, s.label)));
+  const searchIn = h('input', { class: 'input', placeholder: 'Search subject or ticket number', style: { minWidth: '220px' } });
+  filterRow.appendChild(statusSel);
+  filterRow.appendChild(searchIn);
+  const refreshBtn = h('button', { class: 'btn' }, '🔄 Refresh');
+  filterRow.appendChild(refreshBtn);
+  wrap.appendChild(filterRow);
+
+  const tableWrap = h('div', { id: 'tk-table' });
+  wrap.appendChild(tableWrap);
+
+  async function load() {
+    tableWrap.innerHTML = '<div style="padding:1.5rem;color:#6b7280">Loading...</div>';
+    let res;
+    try {
+      res = await sapi('api_saas_tk_listMine', {
+        status: statusSel.value || null,
+        q: searchIn.value.trim() || null
+      });
+    } catch (e) {
+      tableWrap.innerHTML = '';
+      tableWrap.appendChild(h('div', { style: { padding: '1rem', color: '#dc2626' } }, '⚠ Failed to load: ' + e.message));
+      return;
+    }
+    const tickets = res.tickets || [];
+    tableWrap.innerHTML = '';
+    if (!tickets.length) {
+      tableWrap.appendChild(h('div', { style: { padding: '2rem', textAlign: 'center', color: '#6b7280', border: '1px dashed #d1d5db', borderRadius: '8px' } },
+        h('div', { style: { fontSize: '2rem', marginBottom: '.5rem' } }, '🎫'),
+        h('div', {}, 'No tickets yet.'),
+        h('div', { style: { fontSize: '.85rem', marginTop: '.5rem' } }, 'Click "New Ticket" above to raise a support request.')
+      ));
+      return;
+    }
+    const tbl = h('table', { class: 'data-table', style: { width: '100%' } });
+    tbl.appendChild(h('thead', {}, h('tr', {},
+      h('th', {}, 'Ticket'),
+      h('th', {}, 'Subject'),
+      h('th', {}, 'Status'),
+      h('th', {}, 'Priority'),
+      h('th', {}, 'Last reply'),
+      h('th', {}, 'Replies'),
+      h('th', {}, '')
+    )));
+    const tbody = h('tbody', {});
+    tickets.forEach(t => {
+      tbody.appendChild(h('tr', { style: { cursor: 'pointer' }, onclick: () => location.hash = '#/ticketview/' + t.id },
+        h('td', {}, h('span', { style: { fontFamily: 'monospace', fontSize: '.85rem' } }, t.ticket_number)),
+        h('td', {}, h('div', { style: { maxWidth: '380px', overflow: 'hidden', textOverflow: 'ellipsis' } }, t.subject)),
+        h('td', {}, _statusPill(t.status, cat)),
+        h('td', {}, _priorityPill(t.priority, cat)),
+        h('td', { style: { color: '#6b7280', fontSize: '.85rem' } }, _fmtTs(t.last_reply_at || t.created_at)),
+        h('td', { style: { textAlign: 'center' } }, String(t.reply_count || 0)),
+        h('td', {}, h('button', { class: 'btn ghost', onclick: ev => { ev.stopPropagation(); location.hash = '#/ticketview/' + t.id; } }, 'Open →'))
+      ));
+    });
+    tbl.appendChild(tbody);
+    tableWrap.appendChild(tbl);
+  }
+
+  refreshBtn.onclick = load;
+  statusSel.onchange = load;
+  searchIn.addEventListener('keydown', e => { if (e.key === 'Enter') load(); });
+  await load();
+  view.appendChild(wrap);
+};
+
+// ---- VIEWS.ticketnew — create form ------------------------------
+VIEWS.ticketnew = async (view) => {
+  view.innerHTML = '';
+  const cat = await _loadTicketCatalog();
+  const wrap = h('div', { class: 'page' });
+  wrap.appendChild(h('h2', { style: { margin: '0 0 .5rem' } }, '➕ New Support Ticket'));
+  wrap.appendChild(h('p', { style: { color: '#6b7280', margin: '0 0 1.25rem' } }, 'Tell us what you need. We auto-fill your contact details — edit them if you want a different reply-to.'));
+
+  const form = h('div', { style: { display: 'grid', gap: '1rem', maxWidth: '720px' } });
+
+  // Contact card
+  const contact = h('div', { style: { background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '1rem' } });
+  contact.appendChild(h('div', { style: { fontWeight: 600, marginBottom: '.5rem' } }, '👤 Your contact details'));
+  const nameIn  = h('input', { class: 'input', placeholder: 'Your name',  value: CRM.user && CRM.user.name  || '' });
+  const emailIn = h('input', { class: 'input', placeholder: 'Email',       value: CRM.user && CRM.user.email || '', type: 'email' });
+  const phoneIn = h('input', { class: 'input', placeholder: 'Phone (optional)', value: CRM.user && CRM.user.phone || '' });
+  contact.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: '.5rem' } },
+    h('label', {}, h('div', { style: { fontSize: '.75rem', color: '#6b7280' } }, 'Name'),  nameIn),
+    h('label', {}, h('div', { style: { fontSize: '.75rem', color: '#6b7280' } }, 'Email'), emailIn),
+    h('label', {}, h('div', { style: { fontSize: '.75rem', color: '#6b7280' } }, 'Phone'), phoneIn)
+  ));
+  form.appendChild(contact);
+
+  // Category + Priority
+  const catRow = h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '.75rem' } });
+  const catSel = h('select', { class: 'input' });
+  catSel.appendChild(h('option', { value: '' }, '— Pick a category —'));
+  (cat.categories || []).forEach(c => catSel.appendChild(h('option', { value: c.id }, c.icon + ' ' + c.label)));
+  const priSel = h('select', { class: 'input' });
+  (cat.priorities || []).forEach(p => priSel.appendChild(h('option', { value: p.id, selected: p.id === 'normal' }, p.label)));
+  catRow.appendChild(h('label', {}, h('div', { style: { fontSize: '.85rem', fontWeight: 600, marginBottom: '.25rem' } }, 'Category *'), catSel));
+  catRow.appendChild(h('label', {}, h('div', { style: { fontSize: '.85rem', fontWeight: 600, marginBottom: '.25rem' } }, 'Priority'), priSel));
+  form.appendChild(catRow);
+
+  // Subject
+  const subjIn = h('input', { class: 'input', placeholder: 'Short summary of your issue', maxlength: 200 });
+  form.appendChild(h('label', {}, h('div', { style: { fontSize: '.85rem', fontWeight: 600, marginBottom: '.25rem' } }, 'Subject *'), subjIn));
+
+  // Description
+  const descIn = h('textarea', { class: 'input', placeholder: 'Describe what you tried, what you expected, and what happened. Steps + screenshots help us resolve faster.', rows: 8, style: { minHeight: '160px' } });
+  form.appendChild(h('label', {}, h('div', { style: { fontSize: '.85rem', fontWeight: 600, marginBottom: '.25rem' } }, 'Description *'), descIn));
+
+  // Attachment (single file for now — easy to extend)
+  const fileIn = h('input', { type: 'file', accept: 'image/*,application/pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.log,.zip', style: { display: 'block', marginTop: '.25rem' } });
+  form.appendChild(h('label', {},
+    h('div', { style: { fontSize: '.85rem', fontWeight: 600, marginBottom: '.25rem' } }, 'Attachment (optional, max 25 MB)'),
+    fileIn
+  ));
+
+  // Submit
+  const errBox = h('div', { style: { color: '#dc2626', fontSize: '.85rem', minHeight: '1.2rem' } });
+  const submitBtn = h('button', { class: 'btn primary', style: { padding: '.65rem 1.5rem' } }, '🚀 Submit Ticket');
+  submitBtn.onclick = async () => {
+    errBox.textContent = '';
+    if (!catSel.value)       { errBox.textContent = 'Pick a category.'; return; }
+    if (!subjIn.value.trim()) { errBox.textContent = 'Subject is required.'; return; }
+    if (!descIn.value.trim()) { errBox.textContent = 'Description is required.'; return; }
+    submitBtn.disabled = true; submitBtn.textContent = 'Submitting...';
+    let created;
+    try {
+      created = await sapi('api_saas_tk_submit', {
+        category: catSel.value,
+        priority: priSel.value,
+        subject: subjIn.value.trim(),
+        description: descIn.value.trim(),
+        contact_name: nameIn.value.trim(),
+        contact_email: emailIn.value.trim(),
+        contact_phone: phoneIn.value.trim()
+      });
+    } catch (e) {
+      errBox.textContent = e.message || 'Failed to submit.';
+      submitBtn.disabled = false; submitBtn.textContent = '🚀 Submit Ticket';
+      return;
+    }
+    // Optional attachment
+    if (fileIn.files && fileIn.files[0]) {
+      try {
+        const fd = new FormData();
+        fd.append('ticket_id', created.id);
+        fd.append('file', fileIn.files[0]);
+        const r = await fetch('/api/saas/ticket-attachment', {
+          method: 'POST',
+          headers: { 'X-Auth-Token': CRM.token || '' },
+          body: fd
+        });
+        const j = await r.json();
+        if (!r.ok || j.error) console.warn('[tickets] attach upload failed:', j.error);
+      } catch (e) { console.warn('[tickets] attach upload failed:', e); }
+    }
+    if (typeof toast === 'function') toast('✅ Ticket ' + created.ticket_number + ' created', 'ok');
+    location.hash = '#/ticketview/' + created.id;
+  };
+  form.appendChild(errBox);
+  form.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center' } },
+    submitBtn,
+    h('button', { class: 'btn ghost', onclick: () => location.hash = '#/tickets' }, '← Cancel')
+  ));
+
+  wrap.appendChild(form);
+  view.appendChild(wrap);
+};
+
+// ---- VIEWS.ticketview — single ticket + replies + composer ------
+VIEWS.ticketview = async (view, params) => {
+  view.innerHTML = '';
+  const id = (params && params[0]) || (location.hash.split('/')[2]);
+  if (!id) { view.innerHTML = '<p style="padding:1rem">Ticket not found.</p>'; return; }
+  const cat = await _loadTicketCatalog();
+
+  const wrap = h('div', { class: 'page' });
+  wrap.appendChild(h('div', { style: { marginBottom: '.5rem' } },
+    h('a', { href: '#/tickets', style: { color: '#6b7280', textDecoration: 'none' } }, '← Back to tickets')
+  ));
+
+  const body = h('div', {});
+  wrap.appendChild(body);
+  view.appendChild(wrap);
+
+  async function load() {
+    body.innerHTML = '<div style="padding:1.5rem;color:#6b7280">Loading...</div>';
+    let t;
+    try { t = await sapi('api_saas_tk_getMine', Number(id)); }
+    catch (e) {
+      body.innerHTML = '';
+      body.appendChild(h('div', { style: { padding: '1rem', color: '#dc2626' } }, '⚠ ' + e.message));
+      return;
+    }
+    body.innerHTML = '';
+    // Header card
+    body.appendChild(h('div', { style: { background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '1.25rem', marginBottom: '1rem' } },
+      h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap' } },
+        h('div', {},
+          h('div', { style: { fontFamily: 'monospace', fontSize: '.8rem', color: '#6b7280' } }, t.ticket_number),
+          h('h2', { style: { margin: '.15rem 0 .5rem', fontSize: '1.25rem' } }, t.subject),
+          h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', flexWrap: 'wrap', fontSize: '.85rem' } },
+            _statusPill(t.status, cat),
+            _priorityPill(t.priority, cat),
+            h('span', { style: { color: '#6b7280' } }, '· ' + ((cat.categories || []).find(c => c.id === t.category) || {}).label || t.category),
+            h('span', { style: { color: '#6b7280' } }, '· opened ' + _fmtTs(t.created_at))
+          )
+        ),
+        h('div', { style: { display: 'flex', gap: '.5rem' } },
+          (t.status === 'resolved' || t.status === 'closed')
+            ? h('button', { class: 'btn ghost', onclick: async () => { await sapi('api_saas_tk_reopenMine', t.id); load(); } }, '↺ Re-open')
+            : h('button', { class: 'btn ghost', onclick: async () => { if (!confirm('Mark this ticket as resolved?')) return; await sapi('api_saas_tk_closeMine', t.id); load(); } }, '✓ Mark resolved')
+        )
+      )
+    ));
+
+    // Original description (shown as first message)
+    const thread = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '.75rem' } });
+    thread.appendChild(_renderMsg({
+      author_type: 'tenant',
+      author_name: t.contact_name || (CRM.user && CRM.user.name) || 'You',
+      body: t.description,
+      created_at: t.created_at,
+      attachments: (t.attachments || []).filter(a => !a.reply_id)
+    }, cat));
+    (t.replies || []).forEach(r => thread.appendChild(_renderMsg(Object.assign({}, r, {
+      attachments: (t.attachments || []).filter(a => a.reply_id === r.id)
+    }), cat)));
+    body.appendChild(thread);
+
+    // Reply composer
+    if (t.status !== 'closed') {
+      const compWrap = h('div', { style: { marginTop: '1rem', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '8px', padding: '1rem' } });
+      compWrap.appendChild(h('div', { style: { fontWeight: 600, marginBottom: '.5rem' } }, '✏ Add a reply'));
+      const replyIn = h('textarea', { class: 'input', rows: 4, placeholder: 'Type your reply...', style: { width: '100%', minHeight: '90px' } });
+      const fileIn  = h('input', { type: 'file', accept: 'image/*,application/pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.log,.zip' });
+      compWrap.appendChild(replyIn);
+      compWrap.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', marginTop: '.5rem', flexWrap: 'wrap' } },
+        fileIn,
+        h('button', { class: 'btn primary', onclick: async (e) => {
+          const text = replyIn.value.trim();
+          if (!text) { if (typeof toast === 'function') toast('Type a reply first', 'warn'); return; }
+          e.target.disabled = true; e.target.textContent = 'Sending...';
+          try {
+            const r = await sapi('api_saas_tk_replyTenant', { ticket_id: t.id, body: text });
+            if (fileIn.files && fileIn.files[0]) {
+              try {
+                const fd = new FormData();
+                fd.append('ticket_id', t.id);
+                fd.append('reply_id', r.reply_id);
+                fd.append('file', fileIn.files[0]);
+                await fetch('/api/saas/ticket-attachment', {
+                  method: 'POST',
+                  headers: { 'X-Auth-Token': CRM.token || '' },
+                  body: fd
+                });
+              } catch (_) {}
+            }
+            replyIn.value = '';
+            if (typeof toast === 'function') toast('✓ Reply sent', 'ok');
+            load();
+          } catch (err) {
+            if (typeof toast === 'function') toast('⚠ ' + (err.message || 'Failed'), 'err');
+            e.target.disabled = false; e.target.textContent = 'Send reply';
+          }
+        } }, 'Send reply')
+      ));
+      body.appendChild(compWrap);
+    } else {
+      body.appendChild(h('div', { style: { padding: '1rem', textAlign: 'center', background: '#f3f4f6', borderRadius: '6px', color: '#6b7280', fontSize: '.9rem' } },
+        'This ticket is closed.'
+      ));
+    }
+  }
+
+  function _renderMsg(m, cat) {
+    const isAdmin = m.author_type === 'admin';
+    const bg     = isAdmin ? '#eff6ff' : '#fff';
+    const border = isAdmin ? '#bfdbfe' : '#e5e7eb';
+    const accent = isAdmin ? '#3b82f6' : '#10b981';
+    const card = h('div', { style: { background: bg, border: '1px solid ' + border, borderLeft: '4px solid ' + accent, borderRadius: '6px', padding: '.85rem 1rem' } },
+      h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: '.5rem', alignItems: 'baseline', marginBottom: '.4rem', fontSize: '.85rem' } },
+        h('div', {},
+          h('b', {}, m.author_name || (isAdmin ? 'Support team' : 'You')),
+          isAdmin ? h('span', { style: { marginLeft: '.5rem', color: '#3b82f6', fontWeight: 600, fontSize: '.75rem', background: '#dbeafe', padding: '.05rem .4rem', borderRadius: '4px' } }, '🛟 SUPPORT') : null
+        ),
+        h('span', { style: { color: '#6b7280' } }, _fmtTs(m.created_at))
+      ),
+      h('div', { style: { whiteSpace: 'pre-wrap', fontSize: '.95rem', lineHeight: 1.5 } }, m.body)
+    );
+    if (m.attachments && m.attachments.length) {
+      const attRow = h('div', { style: { marginTop: '.6rem', display: 'flex', gap: '.4rem', flexWrap: 'wrap' } });
+      m.attachments.forEach(a => {
+        const url = '/api/saas/ticket-attachment/' + a.id + '?token=' + encodeURIComponent(CRM.token || '');
+        const isImg = /^image//i.test(a.mime_type || '');
+        if (isImg) {
+          attRow.appendChild(h('a', { href: url, target: '_blank' }, h('img', { src: url, style: { maxHeight: '120px', maxWidth: '200px', borderRadius: '4px', border: '1px solid ' + border, display: 'block' } })));
+        } else {
+          attRow.appendChild(h('a', { href: url, target: '_blank', style: { display: 'inline-flex', alignItems: 'center', gap: '.35rem', padding: '.35rem .6rem', background: '#fff', border: '1px solid ' + border, borderRadius: '4px', textDecoration: 'none', fontSize: '.82rem' } },
+            '📎 ' + (a.filename || 'file')
+          ));
+        }
+      });
+      card.appendChild(attRow);
+    }
+    return card;
+  }
+
+  await load();
+};
+
+// ---- Hash router hook -------------------------------------------
+// Tenant SPA's router parses location.hash and dispatches to VIEWS[id].
+// '#/ticketview/<id>' isn't standard so we register an alias: when the
+// hash matches that pattern we manually invoke the view with the id.
+(function _wireTicketRoutes() {
+  function _maybeRoute() {
+    const m = String(location.hash || '').match(/^#\/ticketview\/(\d+)/);
+    if (!m) return;
+    const id = Number(m[1]);
+    const view = document.getElementById('view');
+    if (!view) return;
+    if (typeof VIEWS.ticketview === 'function') {
+      try { VIEWS.ticketview(view, [id]); } catch (e) { console.warn('[tickets] route err:', e); }
+    }
+  }
+  window.addEventListener('hashchange', _maybeRoute);
+  // Initial dispatch if the page loaded directly on a ticket URL.
+  setTimeout(_maybeRoute, 50);
+})();
+
+

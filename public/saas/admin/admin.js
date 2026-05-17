@@ -129,6 +129,7 @@ const NAV = [
   { id: 'ai_costing',    label: '🤖 AI Costing' },
   { id: 'announcements', label: '📣 Updates' },
   { id: 'requirements',  label: '🛠 Custom Requirements' },
+  { id: 'tickets',       label: '🎫 Support Tickets' },   // TKT_ADMIN_v1
   { id: 'admins',        label: '👥 Super Assistants' },
   { id: 'settings',      label: '⚙️ Settings' }
 ];
@@ -1770,3 +1771,328 @@ async function openModulesModal(t) {
 
 window.addEventListener('hashchange', route);
 route();
+
+
+// ================================================================
+// TKT_ADMIN_v1 — Support Tickets (all tenants)
+// ================================================================
+let _tkCat = null;
+async function _loadTkCatalog() {
+  if (_tkCat) return _tkCat;
+  try { _tkCat = await api('api_saas_tk_categories'); }
+  catch (e) { console.warn('[tk-admin] catalog load failed:', e); _tkCat = { categories: [], priorities: [], statuses: [] }; }
+  return _tkCat;
+}
+function _tkStatusPill(status, cat) {
+  const f = (cat && cat.statuses || []).find(s => s.id === status);
+  const color = f ? f.color : '#6b7280';
+  const label = f ? f.label : status;
+  return h('span', { style: { background: color + '22', color, border: '1px solid ' + color + '55', padding: '.15rem .55rem', borderRadius: '12px', fontSize: '.78rem', fontWeight: 600 } }, label);
+}
+function _tkPrioPill(p, cat) {
+  const f = (cat && cat.priorities || []).find(x => x.id === p);
+  const color = f ? f.color : '#3b82f6';
+  return h('span', { style: { color, fontWeight: 600, fontSize: '.8rem' } }, '● ' + (f ? f.label : p));
+}
+function _tkFmt(ts) {
+  if (!ts) return '';
+  try {
+    const d = new Date(ts), now = new Date();
+    const min = Math.round((now - d) / 60000);
+    if (min < 1) return 'just now';
+    if (min < 60) return min + 'm ago';
+    if (min < 1440) return Math.round(min / 60) + 'h ago';
+    return d.toLocaleString();
+  } catch (_) { return ts; }
+}
+
+VIEWS.tickets = async (view) => {
+  const cat = await _loadTkCatalog();
+  view.appendChild(h('h1', {}, '🎫 Support Tickets'));
+
+  // Filter bar
+  const statusSel = h('select', { class: 'input' });
+  statusSel.appendChild(h('option', { value: '' }, 'All statuses'));
+  (cat.statuses || []).forEach(s => statusSel.appendChild(h('option', { value: s.id }, s.label)));
+  const prioSel = h('select', { class: 'input' });
+  prioSel.appendChild(h('option', { value: '' }, 'All priorities'));
+  (cat.priorities || []).forEach(p => prioSel.appendChild(h('option', { value: p.id }, p.label)));
+  const catSel = h('select', { class: 'input' });
+  catSel.appendChild(h('option', { value: '' }, 'All categories'));
+  (cat.categories || []).forEach(c => catSel.appendChild(h('option', { value: c.id }, c.icon + ' ' + c.label)));
+  const searchIn = h('input', { class: 'input', placeholder: 'Search subject, ticket #, or tenant slug', style: { minWidth: '260px' } });
+  const refreshBtn = h('button', { class: 'btn' }, '🔄 Refresh');
+  const onlyUnassigned = h('label', { style: { display: 'inline-flex', gap: '.3rem', alignItems: 'center' } },
+    h('input', { type: 'checkbox', id: 'tk-unassigned' }), 'Unassigned only'
+  );
+
+  view.appendChild(h('div', { class: 'toolbar', style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap', alignItems: 'center', margin: '1rem 0' } },
+    statusSel, prioSel, catSel, onlyUnassigned, searchIn, refreshBtn
+  ));
+
+  const statsRow = h('div', { id: 'tk-stats', style: { display: 'flex', gap: '.75rem', flexWrap: 'wrap', marginBottom: '1rem' } });
+  view.appendChild(statsRow);
+  const tableWrap = h('div', { id: 'tk-table' });
+  view.appendChild(tableWrap);
+
+  async function load() {
+    tableWrap.innerHTML = '<div class="muted" style="padding:1rem">Loading...</div>';
+    let res;
+    try {
+      res = await api('api_saas_tk_admin_listAll', {
+        status: statusSel.value || null,
+        priority: prioSel.value || null,
+        category: catSel.value || null,
+        q: searchIn.value.trim() || null,
+        unassigned: document.getElementById('tk-unassigned').checked ? 1 : null
+      });
+    } catch (e) {
+      tableWrap.innerHTML = '';
+      tableWrap.appendChild(h('div', { class: 'error-box' }, '⚠ ' + e.message));
+      return;
+    }
+    // Stats cards
+    statsRow.innerHTML = '';
+    const s = res.stats || {};
+    function statCard(label, n, color) {
+      return h('div', { style: { background: '#fff', border: '1px solid #e5e7eb', borderRadius: '6px', padding: '.6rem .9rem', minWidth: '110px' } },
+        h('div', { style: { fontSize: '.72rem', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '.04em' } }, label),
+        h('div', { style: { fontSize: '1.3rem', fontWeight: 700, color: color || '#0f172a' } }, String(n || 0))
+      );
+    }
+    statsRow.appendChild(statCard('Total', s.total, '#0f172a'));
+    statsRow.appendChild(statCard('Open', s.open, '#3b82f6'));
+    statsRow.appendChild(statCard('In progress', s.in_progress, '#8b5cf6'));
+    statsRow.appendChild(statCard('Waiting customer', s.waiting_customer, '#f59e0b'));
+    statsRow.appendChild(statCard('Reopened', s.reopened, '#ef4444'));
+    statsRow.appendChild(statCard('Urgent open', s.urgent_open, '#dc2626'));
+    statsRow.appendChild(statCard('Resolved', s.resolved, '#10b981'));
+
+    // Table
+    tableWrap.innerHTML = '';
+    const tickets = res.tickets || [];
+    if (!tickets.length) {
+      tableWrap.appendChild(h('div', { class: 'empty' }, 'No tickets match these filters.'));
+      return;
+    }
+    const tbl = h('table', { class: 'table' });
+    tbl.appendChild(h('thead', {}, h('tr', {},
+      h('th', {}, '#'),
+      h('th', {}, 'Tenant'),
+      h('th', {}, 'Subject'),
+      h('th', {}, 'Category'),
+      h('th', {}, 'Status'),
+      h('th', {}, 'Priority'),
+      h('th', {}, 'Assignee'),
+      h('th', {}, 'Last activity'),
+      h('th', {}, 'Replies'),
+      h('th', {}, '')
+    )));
+    const tbody = h('tbody', {});
+    tickets.forEach(t => {
+      const catObj = (cat.categories || []).find(c => c.id === t.category);
+      tbody.appendChild(h('tr', { style: { cursor: 'pointer' }, onclick: () => openAdminTicketModal(t.id) },
+        h('td', {}, h('span', { style: { fontFamily: 'monospace', fontSize: '.82rem' } }, t.ticket_number)),
+        h('td', {}, h('div', {},
+          h('div', { style: { fontWeight: 600 } }, t.org_name || t.tenant_slug),
+          h('div', { class: 'muted', style: { fontSize: '.75rem' } }, t.tenant_slug)
+        )),
+        h('td', { style: { maxWidth: '300px' } }, h('div', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, t.subject)),
+        h('td', {}, (catObj ? catObj.icon + ' ' + catObj.label : t.category)),
+        h('td', {}, _tkStatusPill(t.status, cat)),
+        h('td', {}, _tkPrioPill(t.priority, cat)),
+        h('td', { class: 'muted', style: { fontSize: '.85rem' } }, t.assignee_name || '—'),
+        h('td', { class: 'muted', style: { fontSize: '.82rem' } }, _tkFmt(t.last_reply_at || t.created_at)),
+        h('td', { style: { textAlign: 'center' } }, String(t.reply_count || 0)),
+        h('td', {}, h('button', { class: 'btn small', onclick: (e) => { e.stopPropagation(); openAdminTicketModal(t.id); } }, 'Open →'))
+      ));
+    });
+    tbl.appendChild(tbody);
+    tableWrap.appendChild(tbl);
+  }
+  refreshBtn.onclick = load;
+  statusSel.onchange = load; prioSel.onchange = load; catSel.onchange = load;
+  document.getElementById('tk-unassigned').onchange = load;
+  searchIn.addEventListener('keydown', e => { if (e.key === 'Enter') load(); });
+  await load();
+};
+
+// ---- Ticket detail modal ----------------------------------------
+async function openAdminTicketModal(ticketId) {
+  const cat = await _loadTkCatalog();
+  const m = h('div', { class: 'modal-bd' });
+  const card = h('div', { class: 'modal', style: { maxWidth: '880px', maxHeight: '90vh', overflow: 'auto', width: '95%' } });
+  m.appendChild(card);
+  document.body.appendChild(m);
+  m.addEventListener('click', (e) => { if (e.target === m) m.remove(); });
+
+  const body = h('div', {}, h('div', { class: 'muted' }, 'Loading…'));
+  card.appendChild(body);
+
+  async function load() {
+    body.innerHTML = '<div class="muted">Loading…</div>';
+    let t;
+    try { t = await api('api_saas_tk_admin_get', ticketId); }
+    catch (e) { body.innerHTML = ''; body.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+    body.innerHTML = '';
+
+    // Header
+    const head = h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' } });
+    head.appendChild(h('div', {},
+      h('div', { style: { fontFamily: 'monospace', fontSize: '.78rem', color: '#6b7280' } }, t.ticket_number),
+      h('h3', { style: { margin: '.15rem 0 .35rem' } }, t.subject),
+      h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', flexWrap: 'wrap', fontSize: '.82rem', color: '#475569' } },
+        _tkStatusPill(t.status, cat),
+        _tkPrioPill(t.priority, cat),
+        h('span', {}, '· ' + (t.tenant_org_name || t.tenant_slug)),
+        h('span', {}, '· ' + ((cat.categories || []).find(c => c.id === t.category) || {}).label || t.category),
+        h('span', {}, '· opened ' + _tkFmt(t.created_at))
+      )
+    ));
+    const actions = h('div', { style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap' } });
+    // Status dropdown
+    const statusSel = h('select', { class: 'input', onchange: async () => {
+      try { await api('api_saas_tk_admin_setStatus', { ticket_id: t.id, status: statusSel.value }); toast('Status updated'); load(); }
+      catch (e) { toast(e.message, 'err'); }
+    } });
+    (cat.statuses || []).forEach(s => statusSel.appendChild(h('option', { value: s.id, selected: s.id === t.status }, s.label)));
+    actions.appendChild(h('label', {}, h('div', { class: 'muted', style: { fontSize: '.7rem' } }, 'Status'), statusSel));
+    // Priority
+    const prioSel = h('select', { class: 'input', onchange: async () => {
+      try { await api('api_saas_tk_admin_setPriority', { ticket_id: t.id, priority: prioSel.value }); toast('Priority updated'); load(); }
+      catch (e) { toast(e.message, 'err'); }
+    } });
+    (cat.priorities || []).forEach(p => prioSel.appendChild(h('option', { value: p.id, selected: p.id === t.priority }, p.label)));
+    actions.appendChild(h('label', {}, h('div', { class: 'muted', style: { fontSize: '.7rem' } }, 'Priority'), prioSel));
+    // Assignee
+    const assignSel = h('select', { class: 'input', onchange: async () => {
+      const id = assignSel.value ? Number(assignSel.value) : null;
+      try { await api('api_saas_tk_admin_assign', { ticket_id: t.id, assignee_id: id }); toast(id ? 'Assigned' : 'Unassigned'); load(); }
+      catch (e) { toast(e.message, 'err'); }
+    } });
+    assignSel.appendChild(h('option', { value: '' }, '— Unassigned —'));
+    try {
+      const admins = await api('api_saas_admin_list');
+      (admins || []).filter(a => Number(a.is_active) === 1).forEach(a => {
+        assignSel.appendChild(h('option', { value: a.id, selected: Number(a.id) === Number(t.assignee_id) }, a.name + ' (' + a.role + ')'));
+      });
+    } catch (_) {}
+    actions.appendChild(h('label', {}, h('div', { class: 'muted', style: { fontSize: '.7rem' } }, 'Assignee'), assignSel));
+    head.appendChild(actions);
+    body.appendChild(head);
+
+    // Contact info
+    body.appendChild(h('div', { style: { background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '6px', padding: '.6rem .9rem', margin: '.75rem 0', fontSize: '.85rem' } },
+      h('b', {}, 'Reporter: '), (t.contact_name || '—'),
+      h('span', { class: 'muted' }, ' · ', t.contact_email || 'no email', ' · ', t.contact_phone || 'no phone')
+    ));
+
+    // Thread
+    const thread = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '.6rem', marginTop: '.5rem' } });
+    function renderMsg(m) {
+      const isAdmin = m.author_type === 'admin';
+      const isInternal = Number(m.is_internal) === 1;
+      const bg     = isInternal ? '#fffbeb' : (isAdmin ? '#eff6ff' : '#fff');
+      const border = isInternal ? '#fcd34d' : (isAdmin ? '#bfdbfe' : '#e5e7eb');
+      const accent = isInternal ? '#f59e0b' : (isAdmin ? '#3b82f6' : '#10b981');
+      const card = h('div', { style: { background: bg, border: '1px solid ' + border, borderLeft: '4px solid ' + accent, borderRadius: '6px', padding: '.7rem .9rem' } },
+        h('div', { style: { display: 'flex', justifyContent: 'space-between', fontSize: '.82rem', marginBottom: '.3rem' } },
+          h('div', {},
+            h('b', {}, m.author_name || (isAdmin ? 'Support' : 'Customer')),
+            isAdmin ? h('span', { style: { marginLeft: '.4rem', color: '#3b82f6', fontSize: '.7rem', background: '#dbeafe', padding: '.05rem .35rem', borderRadius: '4px', fontWeight: 600 } }, '🛟 SUPPORT') : h('span', { style: { marginLeft: '.4rem', color: '#10b981', fontSize: '.7rem', background: '#d1fae5', padding: '.05rem .35rem', borderRadius: '4px', fontWeight: 600 } }, '👤 CUSTOMER'),
+            isInternal ? h('span', { style: { marginLeft: '.4rem', color: '#b45309', fontSize: '.7rem', background: '#fef3c7', padding: '.05rem .35rem', borderRadius: '4px', fontWeight: 600 } }, '🔒 INTERNAL NOTE') : null
+          ),
+          h('span', { class: 'muted', style: { fontSize: '.78rem' } }, _tkFmt(m.created_at))
+        ),
+        h('div', { style: { whiteSpace: 'pre-wrap', lineHeight: 1.5, fontSize: '.92rem' } }, m.body)
+      );
+      // Attachments scoped to this reply
+      const atts = (t.attachments || []).filter(a => a.reply_id === m.id);
+      if (atts.length) {
+        const row = h('div', { style: { marginTop: '.5rem', display: 'flex', gap: '.4rem', flexWrap: 'wrap' } });
+        atts.forEach(a => {
+          const url = '/api/saas/ticket-attachment/' + a.id + '?token=' + encodeURIComponent(APP.token);
+          row.appendChild(h('a', { href: url, target: '_blank', style: { display: 'inline-flex', alignItems: 'center', gap: '.3rem', padding: '.3rem .55rem', background: '#fff', border: '1px solid ' + border, borderRadius: '4px', textDecoration: 'none', fontSize: '.8rem' } },
+            '📎 ' + (a.filename || 'file')
+          ));
+        });
+        card.appendChild(row);
+      }
+      return card;
+    }
+    // Description acts as first message
+    thread.appendChild(renderMsg({
+      author_type: 'tenant',
+      author_name: t.contact_name || 'Customer',
+      body: t.description,
+      created_at: t.created_at,
+      id: null
+    }));
+    // Description-level attachments (reply_id IS NULL)
+    const descAtts = (t.attachments || []).filter(a => !a.reply_id);
+    if (descAtts.length) {
+      const row = h('div', { style: { marginTop: '.4rem', display: 'flex', gap: '.4rem', flexWrap: 'wrap' } });
+      descAtts.forEach(a => {
+        const url = '/api/saas/ticket-attachment/' + a.id + '?token=' + encodeURIComponent(APP.token);
+        row.appendChild(h('a', { href: url, target: '_blank', style: { padding: '.3rem .55rem', background: '#fff', border: '1px solid #e5e7eb', borderRadius: '4px', textDecoration: 'none', fontSize: '.8rem' } },
+          '📎 ' + (a.filename || 'file')
+        ));
+      });
+      thread.appendChild(row);
+    }
+    (t.replies || []).forEach(r => thread.appendChild(renderMsg(r)));
+    body.appendChild(thread);
+
+    // Composer
+    const compWrap = h('div', { style: { marginTop: '1rem', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '6px', padding: '.85rem' } });
+    const replyIn = h('textarea', { class: 'input', rows: 4, placeholder: 'Type your reply...', style: { width: '100%', minHeight: '80px' } });
+    const fileIn = h('input', { type: 'file' });
+    const intCb = h('input', { type: 'checkbox' });
+    compWrap.appendChild(h('div', { style: { fontWeight: 600, marginBottom: '.4rem' } }, '✏ Reply'));
+    compWrap.appendChild(replyIn);
+    compWrap.appendChild(h('div', { style: { display: 'flex', gap: '.6rem', alignItems: 'center', marginTop: '.5rem', flexWrap: 'wrap' } },
+      fileIn,
+      h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: '.25rem', fontSize: '.85rem' } }, intCb, '🔒 Internal note (hidden from customer)'),
+      h('button', { class: 'btn primary', onclick: async (e) => {
+        if (!replyIn.value.trim()) { toast('Type a reply', 'err'); return; }
+        e.target.disabled = true; e.target.textContent = 'Sending...';
+        try {
+          const r = await api('api_saas_tk_admin_reply', {
+            ticket_id: t.id,
+            body: replyIn.value.trim(),
+            is_internal: intCb.checked ? 1 : 0
+          });
+          if (fileIn.files && fileIn.files[0]) {
+            try {
+              const fd = new FormData();
+              fd.append('ticket_id', t.id);
+              fd.append('reply_id', r.reply_id);
+              fd.append('file', fileIn.files[0]);
+              await fetch('/api/saas/ticket-attachment', {
+                method: 'POST',
+                headers: { 'X-Auth-Token': APP.token },
+                body: fd
+              });
+            } catch (_) {}
+          }
+          replyIn.value = '';
+          intCb.checked = false;
+          toast('✓ Reply sent');
+          load();
+        } catch (err) {
+          toast(err.message, 'err');
+          e.target.disabled = false; e.target.textContent = 'Send reply';
+        }
+      } }, 'Send reply')
+    ));
+    body.appendChild(compWrap);
+
+    // Footer close
+    body.appendChild(h('div', { style: { marginTop: '1rem', textAlign: 'right' } },
+      h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Close')
+    ));
+  }
+  await load();
+}
+window.openAdminTicketModal = openAdminTicketModal;
+

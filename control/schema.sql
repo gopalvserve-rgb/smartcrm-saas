@@ -375,3 +375,67 @@ CREATE INDEX IF NOT EXISTS idx_ai_usage_kind       ON ai_usage_log(call_kind);
 -- Super-admin sets this from the Tenants page; the tenant SPA filters
 -- its sidebar + Settings rail to only show enabled modules.
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS modules_json JSONB;
+
+-- ============================================================
+
+-- ============================================================
+-- Support tickets (2026-05-17)
+-- ============================================================
+-- Cross-tenant ticket system. Tenants raise tickets through their CRM
+-- (Help & Support sidebar item), super-admin handles them through
+-- /admin → Tickets. Lives in the control DB so super-admin can list
+-- everyone's tickets in one place without round-tripping each tenant
+-- DB. Email notifications fire on every state change via saasMailer.
+CREATE TABLE IF NOT EXISTS support_tickets (
+  id                  SERIAL PRIMARY KEY,
+  ticket_number       TEXT NOT NULL UNIQUE,
+  tenant_id           INTEGER REFERENCES tenants(id) ON DELETE CASCADE,
+  tenant_slug         TEXT NOT NULL,
+  contact_name        TEXT,
+  contact_email       TEXT,
+  contact_phone       TEXT,
+  created_by_user_id  INTEGER,
+  category            TEXT NOT NULL,
+  priority            TEXT NOT NULL DEFAULT 'normal',
+  subject             TEXT NOT NULL,
+  description         TEXT NOT NULL,
+  status              TEXT NOT NULL DEFAULT 'open',
+  assignee_id         INTEGER REFERENCES super_admins(id) ON DELETE SET NULL,
+  reply_count         INTEGER NOT NULL DEFAULT 0,
+  last_reply_at       TIMESTAMPTZ,
+  last_reply_by       TEXT,
+  closed_at           TIMESTAMPTZ,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_support_tickets_tenant  ON support_tickets(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_support_tickets_status  ON support_tickets(status);
+CREATE INDEX IF NOT EXISTS idx_support_tickets_created ON support_tickets(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS support_ticket_replies (
+  id           SERIAL PRIMARY KEY,
+  ticket_id    INTEGER NOT NULL REFERENCES support_tickets(id) ON DELETE CASCADE,
+  author_type  TEXT NOT NULL,
+  author_id    INTEGER,
+  author_name  TEXT,
+  author_email TEXT,
+  body         TEXT NOT NULL,
+  is_internal  INTEGER NOT NULL DEFAULT 0,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_support_replies_ticket ON support_ticket_replies(ticket_id, created_at);
+
+CREATE TABLE IF NOT EXISTS support_ticket_attachments (
+  id               SERIAL PRIMARY KEY,
+  ticket_id        INTEGER NOT NULL REFERENCES support_tickets(id) ON DELETE CASCADE,
+  reply_id         INTEGER REFERENCES support_ticket_replies(id) ON DELETE CASCADE,
+  filename         TEXT NOT NULL,
+  mime_type        TEXT,
+  size_bytes       INTEGER NOT NULL DEFAULT 0,
+  file_bytes       BYTEA,
+  uploaded_by_type TEXT NOT NULL,
+  uploaded_by_id   INTEGER,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_support_attach_ticket ON support_ticket_attachments(ticket_id);
+CREATE INDEX IF NOT EXISTS idx_support_attach_reply  ON support_ticket_attachments(reply_id);
