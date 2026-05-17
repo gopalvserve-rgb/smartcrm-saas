@@ -4164,6 +4164,62 @@ async function openLeadModal(id) {
     });
   } catch (e) { console.warn('[orphan-cf render]', e && e.message); }
 
+  // THREE_FEATURES_v1 — F2: collapsible "All fields" so power-users can
+  // see every column the leads row carries even if it isn't in the
+  // hardcoded form above. Read-only for system fields (created_at,
+  // heat_score, etc.). Editable for the rest. Custom fields are
+  // already rendered above so they're skipped here.
+  try {
+    const _allFieldsRendered = new Set([
+      'id', 'name', 'phone', 'whatsapp', 'email', 'source', 'product_id',
+      'status_id', 'assigned_to', 'campaign_id', 'tags', 'next_followup_at',
+      'city', 'qualified', 'budget_max', 'requirement_type', 'requirement_notes',
+      'notes', 'extra_json', 'extra', 'extra_phones', 'remarks',
+      'is_duplicate', 'duplicate_of'
+    ]);
+    const _readOnlyKeys = new Set([
+      'created_at', 'updated_at', 'last_status_change_at',
+      'created_by', 'heat_score', 'heat_score_at',
+      'ai_processed_at', 'ai_score'
+    ]);
+    const moreKeys = [];
+    Object.keys(lead || {}).forEach(k => {
+      if (_allFieldsRendered.has(k)) return;
+      const v = lead[k];
+      if (v !== null && typeof v === 'object') return; // skip arrays/objects
+      moreKeys.push(k);
+    });
+    if (moreKeys.length) {
+      const det = h('details', { class: 'all-fields', style: { gridColumn: '1 / -1', marginTop: '.4rem', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '6px', padding: '.4rem .6rem' } });
+      det.appendChild(h('summary', { style: { cursor: 'pointer', fontWeight: 600, padding: '.25rem 0', color: '#0f172a' } }, '\ud83d\udccb All other fields (' + moreKeys.length + ')'));
+      const grid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: '.5rem', padding: '.4rem 0' } });
+      function _humanize(k) {
+        return String(k || '').replace(/[_\-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      }
+      moreKeys.forEach(k => {
+        const ro = _readOnlyKeys.has(k);
+        const v = lead[k];
+        const isDate = /at$|_date$/.test(k) && v && /\d{4}-\d{2}/.test(String(v));
+        const wrap = h('label', { class: 'field all-field' + (ro ? ' readonly' : ''), 'data-all-field-key': k, style: { display: 'flex', flexDirection: 'column', gap: '.15rem' } });
+        wrap.appendChild(h('span', { style: { fontWeight: 600, fontSize: '.82rem' } },
+          _humanize(k),
+          ro ? h('span', { style: { color: '#94a3b8', fontSize: '.7rem', marginLeft: '.3rem' } }, '(read-only)') : null
+        ));
+        wrap.appendChild(h('input', {
+          type: 'text',
+          name: 'allf_' + k,
+          value: v == null ? '' : (isDate ? String(v).slice(0, 16).replace('T', ' ') : String(v)),
+          class: 'input',
+          readonly: ro ? 'readonly' : null,
+          style: ro ? { background: '#f3f4f6', color: '#475569' } : {}
+        }));
+        grid.appendChild(wrap);
+      });
+      det.appendChild(grid);
+      form.appendChild(det);
+    }
+  } catch (e) { console.warn('[F2 all-fields]', e && e.message); }
+
 
     // Append extra-phones widget AT THE END of the form so it spans width and
   // doesn't crowd the address fields.
@@ -4417,6 +4473,22 @@ async function openLeadModal(id) {
         if (v !== null && typeof v === 'object') extra[k] = v;
       });
     } catch (e) { console.warn('[orphan-cf submit]', e && e.message); }
+
+    // THREE_FEATURES_v1 — F2 submit: collect editable "All fields" back
+    // into payload. These map directly onto leads-table columns (not
+    // into extra_json) since they came from there. Read-only inputs
+    // are skipped (browser doesn't include readonly values? — it does,
+    // but we filter them client-side anyway because server might reject).
+    try {
+      form.querySelectorAll('.all-field').forEach(wrap => {
+        if (wrap.classList.contains('readonly')) return;
+        const k = wrap.getAttribute('data-all-field-key');
+        if (!k) return;
+        const inp = wrap.querySelector('input,textarea,select');
+        if (!inp) return;
+        payload[k] = inp.value;
+      });
+    } catch (e) { console.warn('[F2 all-fields submit]', e && e.message); }
     // Tags: if non-admin, the tags field is a multi-select — collect with getAll.
     const tagsValue = isAdmin
       ? (fd.get('tags') || '')
@@ -15720,6 +15792,65 @@ async function adminIntegrations() {
   wrap.appendChild(h('h4', { style: { margin: '1.5rem 0 .5rem' } }, '📥 Import from another CRM'));
   wrap.appendChild(h('p', { class: 'muted' },
     'Migrating from LeadSquared / Zoho CRM / HubSpot / Salesforce? Export your leads to CSV from the source CRM, then upload it here. We auto-map common columns to lead fields.'));
+
+  // THREE_FEATURES_v1 — F1: Required-columns panel + downloadable sample CSV
+  // Shows users exactly what column names to use so the auto-mapper hits
+  // every field. Custom fields are pulled live from CRM.cache.customFields.
+  (function _renderCsvRequiredPanel(){
+    const cfRows = (CRM.cache && CRM.cache.customFields) || [];
+    const cfHeaders = cfRows.filter(c => Number(c.is_active) !== 0 && c.key).map(c => 'cf_' + c.key);
+    const required = ['name', 'phone'];
+    const recommended = ['email', 'whatsapp', 'source', 'city', 'status', 'assigned_to', 'product', 'tags', 'notes'];
+    const sampleHeader = required.concat(recommended).concat(cfHeaders);
+    const sampleRow = [
+      'Acme Industries', '+91 9876543210', 'rahul@acme.in', '+91 9876543210',
+      'Website', 'Mumbai', 'New', 'rahul@yourcrm.in', 'Premium Plan',
+      'enterprise,hot', 'Asked about pricing on landing page'
+    ];
+    while (sampleRow.length < sampleHeader.length) sampleRow.push('');
+    const card = h('div', { class: 'card', style: { background: '#f0f9ff', border: '1px solid #bae6fd', marginBottom: '.8rem' } });
+    card.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.4rem', flexWrap: 'wrap', gap: '.4rem' } },
+      h('div', {},
+        h('div', { style: { fontWeight: 700, fontSize: '.95rem', color: '#075985' } }, '📋 Required & recommended columns'),
+        h('div', { class: 'muted', style: { fontSize: '.78rem' } }, 'Use these exact column headers in your CSV/Excel for auto-mapping. Extra columns become custom fields.')
+      ),
+      h('button', { class: 'btn small primary', title: 'Download a CSV template with one row of dummy data', onclick: () => {
+        const csv = sampleHeader.map(h => '"' + String(h).replace(/"/g, '""') + '"').join(',') + '\n'
+                  + sampleRow.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',') + '\n';
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = 'sample-leads-template.csv';
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } }, '⬇ Download sample CSV')
+    ));
+    const pill = (txt, color, bg) => h('span', {
+      style: { display: 'inline-block', padding: '.2rem .55rem', borderRadius: '999px',
+               background: bg, color, fontSize: '.78rem', fontWeight: 600,
+               border: '1px solid ' + color + '44', margin: '.15rem .25rem .15rem 0', fontFamily: 'monospace' }
+    }, txt);
+    const required_row = h('div', { style: { marginBottom: '.5rem' } },
+      h('div', { style: { fontSize: '.78rem', color: '#7c2d12', fontWeight: 600, marginBottom: '.2rem' } }, 'Required (one of these two minimum):'),
+      ...required.map(k => pill(k, '#dc2626', '#fee2e2'))
+    );
+    const recommended_row = h('div', { style: { marginBottom: '.5rem' } },
+      h('div', { style: { fontSize: '.78rem', color: '#1e40af', fontWeight: 600, marginBottom: '.2rem' } }, 'Recommended:'),
+      ...recommended.map(k => pill(k, '#1d4ed8', '#dbeafe'))
+    );
+    card.appendChild(required_row);
+    card.appendChild(recommended_row);
+    if (cfHeaders.length) {
+      card.appendChild(h('div', {},
+        h('div', { style: { fontSize: '.78rem', color: '#166534', fontWeight: 600, marginBottom: '.2rem' } }, 'Your custom fields (prefix cf_):'),
+        ...cfHeaders.map(k => pill(k, '#15803d', '#dcfce7'))
+      ));
+    }
+    card.appendChild(h('div', { class: 'muted', style: { fontSize: '.74rem', marginTop: '.5rem', borderTop: '1px dashed #bae6fd', paddingTop: '.4rem' } },
+      'Tip: leave a column empty if you don\u2019t have a value \u2014 it won\u2019t overwrite an existing field. Phone numbers are deduplicated automatically.'
+    ));
+    wrap.appendChild(card);
+  })();
   const importCard = h('div', { class: 'card' });
   const sourceSel = h('select', {},
     h('option', { value: 'leadsquared' }, 'LeadSquared'),
@@ -18651,7 +18782,9 @@ VIEWS.users = async (view) => {
   view.innerHTML = '';
   view.append(
     h('div', { class: 'toolbar' },
-      h('button', { class: 'btn primary', onclick: () => openUserModal() }, '+ New User')
+      h('button', { class: 'btn primary', onclick: () => openUserModal() }, '+ New User'),
+      // THREE_FEATURES_v1 — F3: org-hierarchy preview button
+      h('button', { class: 'btn ghost', style: { marginLeft: '.4rem' }, onclick: () => openUserHierarchyModal(users) }, '\ud83d\udcca Hierarchy chart')
     ),
     h('div', { class: 'table-wrap' }, h('table', {},
       h('thead', {}, h('tr', {},
@@ -31129,4 +31262,177 @@ VIEWS.ticketview = async (view, params) => {
   setTimeout(_maybeRoute, 50);
 })();
 
+
+// THREE_FEATURES_v1 — F3: openUserHierarchyModal — SVG org chart
+// Walks the users list, finds roots (no parent_id or orphan parent),
+// renders a top-down tree with auto-layout. Click any box to open
+// that user's edit modal.
+function openUserHierarchyModal(users) {
+  const list = (users && users.length) ? users : [];
+  if (!list.length) {
+    if (typeof toast === 'function') toast('No users to chart', 'warn');
+    return;
+  }
+  // Build tree from parent_id -> children
+  const byId = {};
+  list.forEach(u => { byId[u.id] = Object.assign({ children: [] }, u); });
+  const roots = [];
+  list.forEach(u => {
+    const pid = Number(u.parent_id);
+    if (pid && byId[pid]) byId[pid].children.push(byId[u.id]);
+    else roots.push(byId[u.id]);
+  });
+
+  // Recursive layout — Reingold–Tilford-lite. Compute width of each
+  // subtree, then x-position children evenly under their parent.
+  const NODE_W = 180;
+  const NODE_H = 64;
+  const H_GAP  = 24;
+  const V_GAP  = 50;
+  function _layout(node, depth) {
+    node.depth = depth;
+    if (!node.children.length) {
+      node.width = NODE_W;
+      return NODE_W;
+    }
+    let total = 0;
+    node.children.forEach(c => { total += _layout(c, depth + 1); });
+    total += H_GAP * (node.children.length - 1);
+    node.width = Math.max(NODE_W, total);
+    return node.width;
+  }
+  function _assignX(node, x0) {
+    node.x = x0 + (node.width - NODE_W) / 2;
+    node.y = 30 + node.depth * (NODE_H + V_GAP);
+    let cx = x0;
+    node.children.forEach((c, i) => {
+      if (i > 0) cx += H_GAP;
+      _assignX(c, cx);
+      cx += c.width;
+    });
+  }
+  let totalW = 0;
+  roots.forEach(r => { totalW += _layout(r, 0); });
+  totalW += H_GAP * Math.max(0, roots.length - 1);
+  let cx = 0;
+  roots.forEach((r, i) => { if (i > 0) cx += H_GAP * 2; _assignX(r, cx); cx += r.width; });
+
+  // Compute SVG dimensions
+  let maxX = 0, maxY = 0;
+  list.forEach(u => {
+    const n = byId[u.id];
+    if (n.x == null) return;
+    if (n.x + NODE_W > maxX) maxX = n.x + NODE_W;
+    if (n.y + NODE_H > maxY) maxY = n.y + NODE_H;
+  });
+  const SVG_W = Math.max(maxX + 30, 600);
+  const SVG_H = Math.max(maxY + 30, 200);
+
+  // Build SVG
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 ' + SVG_W + ' ' + SVG_H);
+  svg.setAttribute('width', SVG_W);
+  svg.setAttribute('height', SVG_H);
+  svg.style.maxWidth = '100%';
+  svg.style.background = '#fff';
+
+  // Lines: parent bottom-center to child top-center, via right-angle elbow
+  list.forEach(u => {
+    const n = byId[u.id];
+    if (!n.children || !n.children.length) return;
+    const pcx = n.x + NODE_W / 2;
+    const pcy = n.y + NODE_H;
+    n.children.forEach(c => {
+      const ccx = c.x + NODE_W / 2;
+      const ccy = c.y;
+      const midY = (pcy + ccy) / 2;
+      const path = document.createElementNS(ns, 'path');
+      path.setAttribute('d', 'M' + pcx + ',' + pcy + ' V' + midY + ' H' + ccx + ' V' + ccy);
+      path.setAttribute('fill', 'none');
+      path.setAttribute('stroke', '#cbd5e1');
+      path.setAttribute('stroke-width', '2');
+      svg.appendChild(path);
+    });
+  });
+
+  // Nodes
+  const roleColors = {
+    admin:        { bg: '#fef3c7', border: '#f59e0b', text: '#92400e' },
+    manager:      { bg: '#dbeafe', border: '#3b82f6', text: '#1e40af' },
+    team_leader:  { bg: '#e9d5ff', border: '#8b5cf6', text: '#5b21b6' },
+    agent:        { bg: '#dcfce7', border: '#10b981', text: '#065f46' }
+  };
+  list.forEach(u => {
+    const n = byId[u.id];
+    if (n.x == null) return;
+    const c = roleColors[u.role] || { bg: '#f1f5f9', border: '#94a3b8', text: '#0f172a' };
+    const g = document.createElementNS(ns, 'g');
+    g.setAttribute('transform', 'translate(' + n.x + ',' + n.y + ')');
+    g.style.cursor = 'pointer';
+    g.addEventListener('click', () => {
+      m.remove();
+      if (typeof openUserModal === 'function') openUserModal(u.id);
+    });
+    const rect = document.createElementNS(ns, 'rect');
+    rect.setAttribute('width', NODE_W);
+    rect.setAttribute('height', NODE_H);
+    rect.setAttribute('rx', 8);
+    rect.setAttribute('fill', c.bg);
+    rect.setAttribute('stroke', c.border);
+    rect.setAttribute('stroke-width', '2');
+    g.appendChild(rect);
+    const name = document.createElementNS(ns, 'text');
+    name.setAttribute('x', NODE_W / 2);
+    name.setAttribute('y', 24);
+    name.setAttribute('text-anchor', 'middle');
+    name.setAttribute('font-family', 'Inter, Arial, sans-serif');
+    name.setAttribute('font-size', '13');
+    name.setAttribute('font-weight', '700');
+    name.setAttribute('fill', c.text);
+    name.textContent = (u.name || '').slice(0, 24);
+    g.appendChild(name);
+    const role = document.createElementNS(ns, 'text');
+    role.setAttribute('x', NODE_W / 2);
+    role.setAttribute('y', 42);
+    role.setAttribute('text-anchor', 'middle');
+    role.setAttribute('font-family', 'Inter, Arial, sans-serif');
+    role.setAttribute('font-size', '10');
+    role.setAttribute('fill', c.text);
+    role.setAttribute('opacity', '0.85');
+    role.textContent = (u.role || '').toUpperCase();
+    g.appendChild(role);
+    const dept = document.createElementNS(ns, 'text');
+    dept.setAttribute('x', NODE_W / 2);
+    dept.setAttribute('y', 56);
+    dept.setAttribute('text-anchor', 'middle');
+    dept.setAttribute('font-family', 'Inter, Arial, sans-serif');
+    dept.setAttribute('font-size', '10');
+    dept.setAttribute('fill', '#475569');
+    dept.textContent = (u.department || '').slice(0, 28);
+    g.appendChild(dept);
+    svg.appendChild(g);
+  });
+
+  const m = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const card = h('div', { class: 'modal', style: { maxWidth: '95vw', maxHeight: '92vh', overflow: 'auto', width: 'auto' } });
+  m.appendChild(card);
+  card.appendChild(h('div', { class: 'modal-head' },
+    h('h3', { style: { margin: 0 } }, '\ud83d\udcca User Hierarchy'),
+    h('div', { class: 'muted', style: { fontSize: '.82rem', marginLeft: 'auto', marginRight: '1rem' } }, list.length + ' users \u00b7 click any box to edit'),
+    h('button', { class: 'btn icon', onclick: () => m.remove() }, '\u2715')
+  ));
+  const wrap2 = h('div', { style: { padding: '.5rem', overflow: 'auto', maxHeight: '78vh' } });
+  wrap2.appendChild(svg);
+  card.appendChild(wrap2);
+  // Legend
+  card.appendChild(h('div', { style: { display: 'flex', gap: '.6rem', flexWrap: 'wrap', padding: '.4rem .8rem', borderTop: '1px solid #e5e7eb', fontSize: '.78rem' } },
+    h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '.25rem' } }, h('span', { style: { width: 14, height: 14, borderRadius: 3, background: '#fef3c7', border: '2px solid #f59e0b', display: 'inline-block' } }), 'Admin'),
+    h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '.25rem' } }, h('span', { style: { width: 14, height: 14, borderRadius: 3, background: '#dbeafe', border: '2px solid #3b82f6', display: 'inline-block' } }), 'Manager'),
+    h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '.25rem' } }, h('span', { style: { width: 14, height: 14, borderRadius: 3, background: '#e9d5ff', border: '2px solid #8b5cf6', display: 'inline-block' } }), 'Team Leader'),
+    h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '.25rem' } }, h('span', { style: { width: 14, height: 14, borderRadius: 3, background: '#dcfce7', border: '2px solid #10b981', display: 'inline-block' } }), 'Agent')
+  ));
+  document.body.appendChild(m);
+}
+window.openUserHierarchyModal = openUserHierarchyModal;
 
