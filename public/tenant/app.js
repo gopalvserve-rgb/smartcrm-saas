@@ -30730,7 +30730,8 @@ try {
 // returns/operates on rows for that tenant.
 // ================================================================
 async function sapi(fn, ...args) {
-  const r = await fetch('/api/saas', {
+  // TKT_FETCH_FIX_v1 — use absolute URL so the tenant fetch shim does NOT prepend /t/<slug>/.
+  const r = await fetch(location.origin + '/api/saas', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -30944,7 +30945,7 @@ VIEWS.ticketnew = async (view) => {
         const fd = new FormData();
         fd.append('ticket_id', created.id);
         fd.append('file', fileIn.files[0]);
-        const r = await fetch('/api/saas/ticket-attachment', {
+        const r = await fetch(location.origin + '/api/saas/ticket-attachment', {
           method: 'POST',
           headers: { 'X-Auth-Token': CRM.token || '' },
           body: fd
@@ -31048,7 +31049,7 @@ VIEWS.ticketview = async (view, params) => {
                 fd.append('ticket_id', t.id);
                 fd.append('reply_id', r.reply_id);
                 fd.append('file', fileIn.files[0]);
-                await fetch('/api/saas/ticket-attachment', {
+                await fetch(location.origin + '/api/saas/ticket-attachment', {
                   method: 'POST',
                   headers: { 'X-Auth-Token': CRM.token || '' },
                   body: fd
