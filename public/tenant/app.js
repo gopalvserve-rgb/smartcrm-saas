@@ -4107,6 +4107,64 @@ async function openLeadModal(id) {
     form.appendChild(customFieldInput(cf, extra[cf.key]));
   });
 
+  // ORPHAN_CF_v1 — render fallback inputs for any extra_json key that
+  // (a) isn't a built-in reserved field, (b) isn't already covered by a
+  // registered active custom_fields row, and (c) doesn't start with '_'
+  // (internal flags). This covers two real-world cases:
+  //   1. The CF row got deactivated (is_active=0), so api_customFields_list
+  //      drops it, but leads still carry the value in extra_json. Without
+  //      this fallback the value silently lives forever, invisible.
+  //   2. The key arrived via /hook/website, /hook/leadsource, or a CSV
+  //      import that mapped an unknown column straight to extra_json.
+  //      Examples we've seen in the wild: company_name on shipuncle,
+  //      designation on adbullet, hsn_code on stockbox.
+  // The fallback input is a plain text box labelled from the key
+  // (kebab/snake → Title Case) with a 🪜 hint so admins know they can
+  // turn it into a proper field in Admin → Custom Fields.
+  try {
+    const _renderedCfKeys = new Set();
+    (customFields || []).forEach(cf => {
+      if (cf && cf.key) _renderedCfKeys.add(String(cf.key));
+    });
+    const _orphanIgnore = new Set([
+      'extra_phones', 'is_duplicate', 'duplicate_of'
+    ]);
+    const _extraObj = (lead && lead.extra) || {};
+    function _humanize(k) {
+      return String(k || '')
+        .replace(/[_\-]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/\b\w/g, c => c.toUpperCase());
+    }
+    Object.keys(_extraObj).forEach(rawKey => {
+      const key = String(rawKey || '');
+      if (!key) return;
+      if (key[0] === '_') return;
+      if (_orphanIgnore.has(key)) return;
+      if (RESERVED_FIELD_KEYS.has(key.toLowerCase())) return;
+      if (_renderedCfKeys.has(key)) return;
+      const val = _extraObj[key];
+      // Skip non-primitive values (arrays/objects) — they likely belong
+      // to a structured widget (extra_phones etc.) and shouldn't be
+      // surfaced as a single text input.
+      if (val !== null && typeof val === 'object') return;
+      const wrap = h('label', { class: 'field orphan-cf', 'data-orphan-cf-key': key, style: { display: 'flex', flexDirection: 'column', gap: '.15rem' } });
+      wrap.appendChild(h('span', { style: { fontWeight: 600, fontSize: '.85rem', display: 'inline-flex', alignItems: 'center', gap: '.25rem' } },
+        _humanize(key),
+        h('span', { title: 'This field came from an import or webhook and isn\u2019t in your Custom Fields list yet. Saving the lead keeps the value; admins can register it in Settings \u2192 Custom Fields to add type/options.', style: { color: '#f59e0b', cursor: 'help', fontSize: '.78rem' } }, '\ud83e\ude9c')
+      ));
+      wrap.appendChild(h('input', {
+        type: 'text',
+        name: 'cf_' + key,
+        value: val == null ? '' : String(val),
+        class: 'input'
+      }));
+      form.appendChild(wrap);
+    });
+  } catch (e) { console.warn('[orphan-cf render]', e && e.message); }
+
+
     // Append extra-phones widget AT THE END of the form so it spans width and
   // doesn't crowd the address fields.
   try { form.appendChild(extraPhonesWrap); } catch (_) {}
@@ -4333,6 +4391,32 @@ async function openLeadModal(id) {
       if (cf.field_type === 'multiselect') extra[cf.key] = fd.getAll(key).join(',');
       else extra[cf.key] = fd.get(key) || '';
     });
+    // ORPHAN_CF_v1 — collect orphan extra-json fields rendered above
+    // (e.g. company_name from a webhook import). The input names use
+    // the same 'cf_<key>' convention so server merge logic stays the
+    // same. We also preserve any non-string values the original lead
+    // already carried (arrays/objects we skipped in the render pass).
+    try {
+      const _origExtra = (lead && lead.extra) || {};
+      form.querySelectorAll('.orphan-cf').forEach(wrap => {
+        const k = wrap.getAttribute('data-orphan-cf-key');
+        if (!k) return;
+        const inp = wrap.querySelector('input,textarea,select');
+        if (!inp) return;
+        // Don't overwrite if the registered-CF loop already wrote
+        // something for this key (would mean a name collision; the
+        // registered field wins).
+        if (Object.prototype.hasOwnProperty.call(extra, k)) return;
+        extra[k] = inp.value || '';
+      });
+      // Preserve non-primitive values that the render pass intentionally
+      // skipped (e.g. arrays we wouldn't render as text inputs).
+      Object.keys(_origExtra).forEach(k => {
+        if (Object.prototype.hasOwnProperty.call(extra, k)) return;
+        const v = _origExtra[k];
+        if (v !== null && typeof v === 'object') extra[k] = v;
+      });
+    } catch (e) { console.warn('[orphan-cf submit]', e && e.message); }
     // Tags: if non-admin, the tags field is a multi-select — collect with getAll.
     const tagsValue = isAdmin
       ? (fd.get('tags') || '')
