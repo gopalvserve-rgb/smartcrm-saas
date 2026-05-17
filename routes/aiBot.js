@@ -961,24 +961,145 @@ async function _buildPrompt(settings, phone, leadId, inboundText) {
     if (buf.trim()) kb = '\n\n=== KNOWLEDGE BASE ===' + buf + '\n=== END KNOWLEDGE BASE ===';
   }
 
-  const system = personaWithLang + kb;
+  // AIBOT_CONTEXT_v1 — lead snapshot injected into the system prompt.
+  // Without this block the bot answered every customer the same way
+  // regardless of who they were ("forgets who the lead is"). We fetch a
+  // small JSON profile and render it as a delimited section so the model
+  // can refer to "the customer's name", "their last status", "what they
+  // bought last time" etc. Falls back gracefully when leadId is missing
+  // (first-touch with no lead row yet).
+  let leadContextBlock = '';
+  try {
+    if (leadId) {
+      const lr = await db.query(
+        `SELECT l.id, l.name, l.phone, l.email, l.city, l.source, l.tags,
+                l.created_at, l.next_followup_at, l.notes, l.extra_json,
+                l.budget_max, l.requirement_type, l.requirement_notes,
+                l.heat_score, l.assigned_to,
+                s.name AS status_name,
+                p.name AS product_name,
+                u.name AS owner_name
+           FROM leads l
+           LEFT JOIN statuses s ON s.id = l.status_id
+           LEFT JOIN products p ON p.id = l.product_id
+           LEFT JOIN users    u ON u.id = l.assigned_to
+          WHERE l.id = $1 LIMIT 1`,
+        [leadId]
+      );
+      const lead = lr.rows[0];
+      if (lead) {
+        const lines = [];
+        if (lead.name)         lines.push('Name: ' + lead.name);
+        if (lead.status_name)  lines.push('Status: ' + lead.status_name);
+        if (lead.source)       lines.push('Source: ' + lead.source);
+        if (lead.product_name) lines.push('Product interest: ' + lead.product_name);
+        if (lead.city)         lines.push('City: ' + lead.city);
+        if (lead.tags)         lines.push('Tags: ' + lead.tags);
+        if (lead.owner_name)   lines.push('Sales rep: ' + lead.owner_name);
+        if (lead.budget_max)   lines.push('Budget: \u20b9' + lead.budget_max);
+        if (lead.requirement_type)  lines.push('Requirement: ' + lead.requirement_type);
+        if (lead.requirement_notes) lines.push('Requirement notes: ' + String(lead.requirement_notes).slice(0, 200));
+        if (lead.next_followup_at)  lines.push('Next follow-up scheduled: ' + new Date(lead.next_followup_at).toISOString().slice(0, 16).replace('T', ' '));
+        // Custom fields from extra_json — surface every primitive value
+        if (lead.extra_json) {
+          let ej = lead.extra_json;
+          if (typeof ej === 'string') { try { ej = JSON.parse(ej); } catch (_) { ej = null; } }
+          if (ej && typeof ej === 'object') {
+            const cfBits = [];
+            Object.keys(ej).forEach(k => {
+              if (k[0] === '_') return;
+              if (k === 'extra_phones') return;
+              const v = ej[k];
+              if (v == null || v === '') return;
+              if (typeof v === 'object') return;
+              const human = k.replace(/[_\-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+              cfBits.push(human + ': ' + String(v).slice(0, 160));
+            });
+            if (cfBits.length) lines.push('Other details \u2014 ' + cfBits.slice(0, 12).join('; '));
+          }
+        }
+        if (Number(lead.heat_score) > 0) lines.push('Heat score: ' + Number(lead.heat_score) + '/100 (higher = more buying intent)');
+        if (lead.notes) lines.push('Internal notes about this lead: ' + String(lead.notes).slice(0, 400));
 
-  // History: last N inbound + outbound messages (chronological).
-  const hCount = Math.max(0, Number(settings.history_messages || 8));
+        // Last 3 remarks (most recent first) — agents' notes about prior conversations
+        try {
+          const rmk = await db.query(
+            `SELECT remark, created_at FROM remarks
+              WHERE lead_id = $1 AND remark IS NOT NULL AND remark <> ''
+              ORDER BY created_at DESC LIMIT 3`,
+            [leadId]
+          );
+          if (rmk.rows.length) {
+            lines.push('Recent activity notes:');
+            rmk.rows.forEach(r => {
+              const when = new Date(r.created_at).toISOString().slice(0, 10);
+              lines.push('  - [' + when + '] ' + String(r.remark || '').slice(0, 240));
+            });
+          }
+        } catch (_) {}
+
+        // Open quotation if any — bot can reference the active quote
+        try {
+          const qz = await db.query(
+            `SELECT number, status, total, created_at FROM quotations
+              WHERE lead_id = $1 ORDER BY created_at DESC LIMIT 2`,
+            [leadId]
+          );
+          if (qz.rows.length) {
+            lines.push('Quotations on file:');
+            qz.rows.forEach(q => lines.push('  - ' + q.number + ' (' + q.status + ', \u20b9' + Number(q.total || 0).toLocaleString('en-IN') + ')'));
+          }
+        } catch (_) {}
+
+        if (lines.length) {
+          leadContextBlock = '\n\n=== CUSTOMER CONTEXT ===\n'
+            + 'You are talking to this specific person on WhatsApp. Use their name when natural, '
+            + 'reference past activity if relevant, and tailor your tone to their stage in the pipeline.\n'
+            + lines.join('\n')
+            + '\n=== END CUSTOMER CONTEXT ===';
+        }
+      }
+    }
+  } catch (e) { console.warn('[aiBot] lead-context build failed:', e && e.message); }
+
+  const system = personaWithLang + leadContextBlock + kb;
+
+  // History: last N inbound + outbound messages (chronological), but
+  // exclude the just-arrived inbound that whatsbot already wrote to
+  // whatsapp_messages before invoking us — otherwise the model sees
+  // the user's current question both in history AND in 'prompt' and
+  // starts replying as if it had already been asked twice.
+  // Floor at 10 so legacy tenants who left history_messages at 0/1
+  // also benefit from short-term memory.
+  const hCountRaw = Number(settings.history_messages);
+  const hCount = Math.max(10, isFinite(hCountRaw) && hCountRaw > 0 ? hCountRaw : 10);
   const history = [];
-  if (hCount > 0) {
+  try {
     const r = await db.query(
-      `SELECT direction, body, message_type FROM whatsapp_messages
+      `SELECT direction, body, message_type, created_at FROM whatsapp_messages
         WHERE (from_number = $1 OR to_number = $1)
         ORDER BY created_at DESC
         LIMIT $2`,
-      [phone, hCount]
+      [phone, hCount + 2]   // fetch a few extra so we can safely drop the inbound dup
     );
-    r.rows.reverse().forEach(m => {
+    let rows = r.rows.slice().reverse();
+    // Drop the most recent inbound if its body matches the current
+    // inboundText — that's the message we're answering, it shouldn't
+    // be in history. Walk from the tail.
+    if (rows.length && inboundText) {
+      const last = rows[rows.length - 1];
+      if (last && last.direction === 'in' && String(last.body || '').trim() === String(inboundText).trim()) {
+        rows.pop();
+      }
+    }
+    // Trim to hCount
+    if (rows.length > hCount) rows = rows.slice(rows.length - hCount);
+    rows.forEach(m => {
       const text = m.body || ('[' + (m.message_type || 'media') + ']');
       history.push({ role: m.direction === 'in' ? 'user' : 'model', text });
     });
-  }
+  } catch (e) { console.warn('[aiBot] history build failed:', e && e.message); }
+
   return { system, history, prompt: String(inboundText || '') };
 }
 
