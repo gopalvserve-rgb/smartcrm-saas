@@ -99,8 +99,15 @@ async function _saveResult(id, fields) {
     vals.push(v);
   }
   vals.push(id);
+  // PROMISE_TRACK_v1 — self-heal schema cols + compute actual_followup_at + gap.
+  try {
+    await db.query(`ALTER TABLE lead_recordings ADD COLUMN IF NOT EXISTS committed_callback_at TIMESTAMPTZ`);
+    await db.query(`ALTER TABLE lead_recordings ADD COLUMN IF NOT EXISTS actual_followup_at  TIMESTAMPTZ`);
+    await db.query(`ALTER TABLE lead_recordings ADD COLUMN IF NOT EXISTS callback_gap_minutes INTEGER`);
+  } catch (e) { console.warn('[ai-summary] schema heal:', e.message); }
+
   await db.query(
-    `UPDATE lead_recordings SET ${cols.join(', ')} WHERE id = $${i}`,
+    `UPDATE lead_recordings SET ${cols.join(', ')} WHERE id = ${i}`,
     vals
   );
 }
@@ -118,6 +125,7 @@ Listen to the entire call. Then return ONLY a JSON object with these exact keys:
   "sentiment": "<one of: positive | neutral | negative>",
   "suggested_status": "<one of the existing CRM statuses that best fits where this lead is now>",
   "next_followup_in_days": <integer 0-30 — when should the rep call back? 0 = today>,
+  "committed_callback_at": "<ISO8601 timestamp like 2026-05-18T10:30:00 — ONLY set this if the REP specifically promised a callback time on the call (e.g. \"I'll call you at 10:30 AM tomorrow\"). Use the call recording date as the base. Set to null otherwise>",
   "key_insight": "<one-sentence insight that would surprise a busy manager>",
   "suggested_rating": <integer 1-5 — rate the REP's performance on this call.
     1 = poor (no qualifying, no objection handling, no next step),
@@ -316,6 +324,8 @@ async function processRecording(id) {
     ai_model: GEMINI_MODEL,
     ai_error: null,
     next_followup_days: Number(ai.next_followup_in_days) || null,
+    // PROMISE_TRACK_v1 — committed callback time the rep verbally promised
+    committed_callback_at: (() => { try { const d = ai.committed_callback_at ? new Date(ai.committed_callback_at) : null; return (d && !isNaN(d.getTime())) ? d.toISOString() : null; } catch (_) { return null; } })(),
     key_insight: ai.key_insight || null,
     ai_suggested_rating: suggestedRating,
     ai_input_tokens:  tk.prompt,
@@ -324,6 +334,29 @@ async function processRecording(id) {
     ai_cost_inr: cost.total_inr
   });
 
+  // PROMISE_GAP_COMPUTE_v1 — compute actual_followup_at + gap after save.
+  try {
+    const recRow = (await db.query('SELECT lead_id, started_at, duration_s, committed_callback_at FROM lead_recordings WHERE id = $1', [id])).rows[0];
+    if (recRow && recRow.lead_id) {
+      const callEnd = new Date(recRow.started_at || Date.now());
+      callEnd.setSeconds(callEnd.getSeconds() + (Number(recRow.duration_s) || 0));
+      const nxt = (await db.query(
+        `SELECT MIN(t) AS first_after FROM (
+          SELECT created_at AS t FROM remarks          WHERE lead_id = $1 AND created_at > $2
+          UNION ALL SELECT created_at FROM call_events WHERE lead_id = $1 AND created_at > $2
+          UNION ALL SELECT created_at FROM whatsapp_messages WHERE lead_id = $1 AND created_at > $2
+        ) z`, [recRow.lead_id, callEnd.toISOString()]
+      )).rows[0];
+      if (nxt && nxt.first_after) {
+        const actual = new Date(nxt.first_after);
+        let gap = null;
+        if (recRow.committed_callback_at) {
+          gap = Math.round((actual.getTime() - new Date(recRow.committed_callback_at).getTime()) / 60000);
+        }
+        await db.query('UPDATE lead_recordings SET actual_followup_at = $1, callback_gap_minutes = $2 WHERE id = $3', [actual.toISOString(), gap, id]);
+      }
+    }
+  } catch (e) { console.warn('[ai-summary] followup-compute:', e.message); }
   return { ok: true, id, summary: ai.summary };
 }
 

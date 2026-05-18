@@ -1,3 +1,4 @@
+// PROMISE_TRACK_v1
 /**
  * routes/recordings.js — Call recordings + call event logging
  *
@@ -1053,6 +1054,13 @@ async function api_recording_recentInsights(token, opts) {
            lr.created_at, lr.ai_processed_at, lr.sentiment, lr.summary,
            lr.action_items, lr.key_insight, lr.suggested_status_id,
            lr.next_followup_days, lr.rating, lr.ai_suggested_rating,
+           lr.committed_callback_at, lr.actual_followup_at, lr.callback_gap_minutes,
+           -- PROMISE_TRACK_v1 — most recent activity timestamp on the lead, across remarks/call_events/wa
+           (SELECT MAX(t) FROM (
+              SELECT created_at AS t FROM remarks          WHERE lead_id = lr.lead_id
+              UNION ALL SELECT created_at FROM call_events WHERE lead_id = lr.lead_id
+              UNION ALL SELECT created_at FROM whatsapp_messages WHERE lead_id = lr.lead_id
+           ) z) AS last_activity_at,
            l.name AS lead_name, l.status_id AS lead_status_id,
            u.name AS rep_name, u.role AS rep_role,
            s.name AS suggested_status_name, ls.name AS lead_status_name
@@ -1078,7 +1086,11 @@ async function api_recording_recentInsights(token, opts) {
         key_insight: r.key_insight,
         suggested_status_name: r.suggested_status_name,
         next_followup_days: r.next_followup_days,
-        rating: r.rating, ai_suggested_rating: r.ai_suggested_rating
+        rating: r.rating, ai_suggested_rating: r.ai_suggested_rating,
+        committed_callback_at: r.committed_callback_at,
+        actual_followup_at:    r.actual_followup_at,
+        callback_gap_minutes:  r.callback_gap_minutes,
+        last_activity_at:      r.last_activity_at
       };
     });
   } catch (e) {

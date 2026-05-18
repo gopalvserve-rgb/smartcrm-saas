@@ -1530,3 +1530,8 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS ivr_extension TEXT;
 ALTER TABLE call_events ADD COLUMN IF NOT EXISTS ivr_call_id   TEXT;
 ALTER TABLE call_events ADD COLUMN IF NOT EXISTS ivr_vendor    TEXT;
 ALTER TABLE call_events ADD COLUMN IF NOT EXISTS recording_url TEXT;
+
+-- PROMISE_TRACK_v1 (2026-05-18) — promised vs actual callback tracking
+ALTER TABLE lead_recordings ADD COLUMN IF NOT EXISTS committed_callback_at TIMESTAMPTZ;
+ALTER TABLE lead_recordings ADD COLUMN IF NOT EXISTS actual_followup_at    TIMESTAMPTZ;
+ALTER TABLE lead_recordings ADD COLUMN IF NOT EXISTS callback_gap_minutes  INTEGER;

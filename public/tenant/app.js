@@ -12998,6 +12998,7 @@ function downloadCallActivityCsv() {
  * Scrollable feed of every recent call with AI summary, action items,
  * sentiment, suggested status — across all leads + reps.
  */
+// PROMISE_TRACK_v1
 VIEWS.callinsights = async (view) => {
   view.innerHTML = '';
   const out = h('div', {});
@@ -13095,7 +13096,20 @@ VIEWS.callinsights = async (view) => {
           h('a', { href: '#/leads', onclick: e => { e.preventDefault(); openLeadModal(r.lead_id); } },
             h('b', {}, r.lead_name || r.phone || '—')
           ),
-          h('span', { class: 'muted' }, ' · ' + (r.rep_name || '—') + ' · ' + mm + ':' + ss + ' · ' + fmtDate(r.created_at, 'relative'))
+          h('span', { class: 'muted' }, ' · ' + (r.rep_name || '—') + ' · ' + mm + ':' + ss + ' · ' + fmtDate(r.created_at, 'relative')),
+          // PROMISE_TRACK_v1 — second info row
+          h('div', { class: 'pt-row', style: { display: 'flex', gap: '.6rem', flexWrap: 'wrap', alignItems: 'center', marginTop: '.3rem', fontSize: '.78rem' } },
+            r.lead_status_name ? h('span', { style: { background: '#dbeafe', color: '#1e40af', padding: '.1rem .5rem', borderRadius: '999px', fontWeight: 600 } }, '📍 ' + r.lead_status_name) : null,
+            r.last_activity_at ? h('span', { class: 'muted', title: new Date(r.last_activity_at).toLocaleString() }, '🕒 last activity ' + fmtDate(r.last_activity_at, 'relative')) : null,
+            r.committed_callback_at ? h('span', { class: 'muted' }, '⏰ promised ' + new Date(r.committed_callback_at).toLocaleString('en-IN',{hour:'2-digit',minute:'2-digit',day:'2-digit',month:'short'})) : null,
+            r.actual_followup_at ? h('span', { class: 'muted' }, '✅ actual ' + new Date(r.actual_followup_at).toLocaleString('en-IN',{hour:'2-digit',minute:'2-digit',day:'2-digit',month:'short'})) : null,
+            (r.callback_gap_minutes != null) ? (() => {
+              const g = Number(r.callback_gap_minutes);
+              if (g <= 5)   return h('span', { style: { background: '#dcfce7', color: '#15803d', padding: '.1rem .5rem', borderRadius: '999px', fontWeight: 600 } }, '🎯 on time');
+              if (g <= 60)  return h('span', { style: { background: '#fef3c7', color: '#92400e', padding: '.1rem .5rem', borderRadius: '999px', fontWeight: 600 } }, '⚠ ' + g + ' min late');
+              return         h('span', { style: { background: '#fee2e2', color: '#b91c1c', padding: '.1rem .5rem', borderRadius: '999px', fontWeight: 600 } }, '🚨 ' + g + ' min late');
+            })() : null
+          )
         ),
         h('div', {},
           h('span', { class: 'ai-sentiment-pill', style: 'background:' + sentColor }, sentLabel + ' ' + (r.sentiment || '—')),
