@@ -546,6 +546,12 @@ async function _runHookAsTenant(req, res, handler) {
 app.post('/hook/website', (req, res) => _runHookAsTenant(req, res, webhooksRoute.websiteHook));
 app.post('/hook/other',   (req, res) => _runHookAsTenant(req, res, webhooksRoute.otherHook));
 
+// IVR_HOOK_MOUNT_v1 — generic IVR / Cloud Calling inbound webhook.
+// Per-tenant URL: POST /t/<slug>/hook/ivr/:vendor_key — runs inside
+// tenantStorage scope so routes/ivr.js can use db.query freely.
+const ivrRoute = require('./routes/ivr');
+app.post('/hook/ivr/:vendor', (req, res) => _runHookAsTenant(req, res, ivrRoute.expressInbound));
+
 // Ã¢ÂÂÃ¢ÂÂ Public API documentation page Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 app.get('/api-docs', (req, res) => {
   const host = req.protocol + '://' + req.get('host');

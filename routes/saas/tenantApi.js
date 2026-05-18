@@ -88,6 +88,7 @@ const ROUTE_FILES = [
   'packs/education',
   'packs/realestate',
   'social',
+  'ivr',
 ];
 
 const API = {};

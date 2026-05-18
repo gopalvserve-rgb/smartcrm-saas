@@ -1494,3 +1494,39 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_bot_settings_phone
 -- ============================================================
 ALTER TABLE ai_kb_documents ADD COLUMN IF NOT EXISTS phone_number_id TEXT;
 CREATE INDEX IF NOT EXISTS idx_ai_kb_documents_phone ON ai_kb_documents(phone_number_id);
+
+-- ============================================================
+-- IVR / Cloud Calling integration (2026-05-17)
+-- ============================================================
+-- Per-tenant config rows for any IVR vendor (Exotel, MyOperator,
+-- Knowlarity, Tata Tele, Servetel, Ozonetel, Twilio, or Generic).
+-- Inbound webhook URL: /t/<slug>/hook/ivr/<vendor_key>?secret=<webhook_secret>
+-- Outbound click-to-call dispatched via the vendor's API by routes/ivr.js.
+CREATE TABLE IF NOT EXISTS ivr_configs (
+  id                SERIAL PRIMARY KEY,
+  vendor_key        TEXT NOT NULL,
+  display_name      TEXT NOT NULL,
+  is_active         INTEGER NOT NULL DEFAULT 1,
+  is_default        INTEGER NOT NULL DEFAULT 0,
+  api_base_url      TEXT,
+  account_sid       TEXT,
+  api_key           TEXT,
+  api_token         TEXT,
+  caller_id         TEXT,
+  webhook_secret    TEXT,
+  field_mapping     JSONB,
+  auto_create_lead  INTEGER NOT NULL DEFAULT 1,
+  default_status_id INTEGER REFERENCES statuses(id) ON DELETE SET NULL,
+  notes             TEXT,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_ivr_active ON ivr_configs(is_active);
+CREATE INDEX IF NOT EXISTS idx_ivr_vendor ON ivr_configs(vendor_key);
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS ivr_agent_id  TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS ivr_extension TEXT;
+
+ALTER TABLE call_events ADD COLUMN IF NOT EXISTS ivr_call_id   TEXT;
+ALTER TABLE call_events ADD COLUMN IF NOT EXISTS ivr_vendor    TEXT;
+ALTER TABLE call_events ADD COLUMN IF NOT EXISTS recording_url TEXT;

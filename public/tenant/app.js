@@ -15788,6 +15788,61 @@ async function adminIntegrations() {
   ));
 
 
+  // --- Section 2c: IVR / Cloud Calling — IVR_UI_v1 -------------------
+  wrap.appendChild(h('h4', { style: { margin: '1.5rem 0 .5rem' } }, '📞 Cloud Calling / IVR'));
+  wrap.appendChild(h('p', { class: 'muted' },
+    'Plug in any IVR or cloud telephony vendor (Exotel, MyOperator, Knowlarity, Tata Tele, Servetel, Ozonetel, Twilio) — calls show in Recent Calls, recordings attach to leads automatically, and the Call button on each lead initiates calls through your vendor.'));
+  (async function _ivrSection(){
+    const ivrWrap = h('div', { class: 'card' });
+    wrap.appendChild(ivrWrap);
+    async function render() {
+      ivrWrap.innerHTML = '';
+      let configs = [];
+      try { configs = await api('api_ivr_configs_list'); }
+      catch (e) { ivrWrap.appendChild(h('div', { class: 'muted' }, 'Could not load: ' + e.message)); return; }
+      if (!configs.length) {
+        ivrWrap.appendChild(h('div', { class: 'muted', style: { padding: '.5rem 0' } }, 'No IVR vendor connected yet. Click below to add one.'));
+      } else {
+        const tbl = h('table', { class: 'table', style: { width: '100%' } });
+        tbl.appendChild(h('thead', {}, h('tr', {},
+          h('th', {}, 'Name'),
+          h('th', {}, 'Vendor'),
+          h('th', {}, 'Active'),
+          h('th', {}, 'Default'),
+          h('th', {}, 'Caller ID'),
+          h('th', {}, '')
+        )));
+        const tb = h('tbody', {});
+        configs.forEach(c => {
+          tb.appendChild(h('tr', {},
+            h('td', {}, c.display_name),
+            h('td', {}, c.vendor_key),
+            h('td', {}, Number(c.is_active) === 1 ? '✅' : '⏸'),
+            h('td', {}, Number(c.is_default) === 1 ? '★' : ''),
+            h('td', {}, c.caller_id || '—'),
+            h('td', {},
+              h('button', { class: 'btn sm', onclick: () => openIvrConfigModal(c.id, render) }, '✎ Edit'),
+              ' ',
+              h('button', { class: 'btn sm ghost', onclick: () => openIvrWebhookModal(c.id) }, '🔗 Webhook URL'),
+              ' ',
+              h('button', { class: 'btn sm danger', onclick: async () => {
+                if (!confirm('Disconnect ' + c.display_name + '? Calls will stop routing through this vendor.')) return;
+                try { await api('api_ivr_config_delete', c.id); toast('Disconnected', 'ok'); render(); }
+                catch (e) { toast(e.message, 'err'); }
+              } }, '🗑')
+            )
+          ));
+        });
+        tbl.appendChild(tb);
+        ivrWrap.appendChild(tbl);
+      }
+      ivrWrap.appendChild(h('div', { class: 'actions', style: { marginTop: '.75rem' } },
+        h('button', { class: 'btn primary', onclick: () => openIvrConfigModal(null, render) }, '+ Connect IVR vendor')
+      ));
+    }
+    render();
+  })();
+
   // --- Section 2b: CSV import from another CRM -----------------------
   wrap.appendChild(h('h4', { style: { margin: '1.5rem 0 .5rem' } }, '📥 Import from another CRM'));
   wrap.appendChild(h('p', { class: 'muted' },
@@ -31435,4 +31490,171 @@ function openUserHierarchyModal(users) {
   document.body.appendChild(m);
 }
 window.openUserHierarchyModal = openUserHierarchyModal;
+
+
+// IVR_UI_v1 — Connect / edit modal for an IVR vendor.
+async function openIvrConfigModal(id, onSaved) {
+  let cfg = { vendor_key: 'exotel', display_name: '', api_base_url: '', account_sid: '', api_key: '', api_token: '', caller_id: '', webhook_secret: '', field_mapping: null, auto_create_lead: 1, default_status_id: null, is_active: 1, is_default: 0 };
+  if (id) { try { cfg = await api('api_ivr_config_get', Number(id)) || cfg; } catch (e) { toast('Load failed: ' + e.message, 'err'); return; } }
+  let vendors = [];
+  try { const v = await api('api_ivr_vendors'); vendors = v.vendors || []; } catch (_) {}
+
+  const m = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const body = h('div', { class: 'modal modal-lg' });
+  m.appendChild(body);
+  body.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, id ? '✎ Edit IVR config' : '+ Connect IVR vendor'),
+    h('button', { class: 'btn icon', onclick: () => m.remove() }, '✕')
+  ));
+
+  const vendorSel = h('select', { name: 'vendor_key', class: 'input', onchange: () => updateHints() },
+    ...vendors.map(v => h('option', { value: v.key, selected: v.key === cfg.vendor_key ? 'selected' : null }, v.name))
+  );
+  const nameInp     = h('input', { name: 'display_name', class: 'input', value: cfg.display_name || '', placeholder: 'e.g. Acme Exotel' });
+  const apiBaseInp  = h('input', { name: 'api_base_url', class: 'input', value: cfg.api_base_url || '', placeholder: 'API base URL (vendor default if blank)' });
+  const sidInp      = h('input', { name: 'account_sid',  class: 'input', value: cfg.account_sid || '',  placeholder: 'Account SID / Subdomain' });
+  const keyInp      = h('input', { name: 'api_key',      class: 'input', value: cfg.api_key || '',      placeholder: 'API Key' });
+  const tokInp      = h('input', { name: 'api_token',    class: 'input', value: cfg.api_token || '',    placeholder: 'API Token / Auth Token', type: 'password' });
+  const callerInp   = h('input', { name: 'caller_id',    class: 'input', value: cfg.caller_id || '',    placeholder: 'Caller ID number (virtual number)' });
+  const mapInp      = h('textarea', { name: 'field_mapping', class: 'input', rows: 4, placeholder: 'JSON for Generic vendor only. Example:\n{ "phone": "from", "agent_id": "agent", "duration_s": "duration", "recording_url": "recording" }' },
+    cfg.field_mapping ? JSON.stringify(cfg.field_mapping, null, 2) : '');
+  const activeChk   = h('input', { name: 'is_active',  type: 'checkbox', checked: Number(cfg.is_active) === 1 ? 'checked' : null });
+  const defaultChk  = h('input', { name: 'is_default', type: 'checkbox', checked: Number(cfg.is_default) === 1 ? 'checked' : null });
+  const autoLeadChk = h('input', { name: 'auto_create_lead', type: 'checkbox', checked: Number(cfg.auto_create_lead) !== 0 ? 'checked' : null });
+
+  function field(label, inp, hint) {
+    return h('label', { style: { display: 'block', marginBottom: '.55rem' } },
+      h('div', { style: { fontSize: '.85rem', fontWeight: 600, marginBottom: '.15rem' } }, label),
+      inp,
+      hint ? h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '.15rem' } }, hint) : null
+    );
+  }
+  const hintBox = h('div', { class: 'muted', style: { fontSize: '.78rem', background: '#fef9c3', border: '1px solid #fde68a', borderRadius: '6px', padding: '.5rem .65rem', margin: '.25rem 0 .75rem' } });
+  function updateHints() {
+    const v = vendorSel.value;
+    const hints = {
+      exotel: 'Account SID = your Exotel account SID. API Key + API Token from the API tab. Caller ID = your virtual number (e.g. +91-22-...). Webhook in Exotel dashboard → Apps → CallFlow → use the URL below.',
+      myoperator: 'API Token from MyOperator Settings → API. Caller ID = your buying number. Webhook URL → MyOperator Settings → Webhooks → All call events.',
+      knowlarity: 'API Key (X-API-KEY header) and Account SID (Authorization header) from your Super Receptionist account. Caller ID = your Knowlarity number (K-number).',
+      tata: 'API Token = your Tata Smartflo Bearer token (Tools → Smartflo APIs). Caller ID = your Tata DID. Webhook in Tata dashboard → Settings → Webhooks.',
+      servetel: 'API Token from Servetel dashboard. Caller ID = your DID number. Webhook → Servetel Settings → Webhooks → Call events.',
+      ozonetel: 'API Key + Username (Account SID) from CloudAgent → Manage → API. Webhook → CloudAgent → Manage → Webhooks.',
+      twilio: 'Account SID + Auth Token from console.twilio.com. Caller ID = a number you own on Twilio. Add field_mapping.twiml_url pointing to your TwiML bin.',
+      generic: 'Custom vendor. Field mapping JSON is REQUIRED to tell us how to read inbound payloads. For outbound, add a field_mapping.outbound_url template with {agent} and {to} placeholders.'
+    };
+    hintBox.textContent = hints[v] || '';
+  }
+  updateHints();
+
+  body.appendChild(h('div', { class: 'modal-body', style: { padding: '1rem' } },
+    field('Vendor', vendorSel),
+    hintBox,
+    field('Display name *', nameInp),
+    field('Caller ID (virtual number)', callerInp),
+    h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '.6rem' } },
+      field('Account SID / Username', sidInp),
+      field('API Key', keyInp)
+    ),
+    field('API Token / Auth Token', tokInp),
+    field('API base URL (optional)', apiBaseInp, 'Leave blank to use the vendor default.'),
+    field('Field mapping JSON (Generic vendor)', mapInp, 'Only needed if you picked Generic.'),
+    h('div', { style: { display: 'flex', gap: '1rem', flexWrap: 'wrap', marginTop: '.5rem' } },
+      h('label', {}, activeChk, ' Active'),
+      h('label', {}, defaultChk, ' Default for outbound click-to-call'),
+      h('label', {}, autoLeadChk, ' Auto-create lead on inbound calls from unknown numbers')
+    )
+  ));
+
+  body.appendChild(h('div', { class: 'modal-foot' },
+    h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Cancel'),
+    h('button', { class: 'btn primary', onclick: async () => {
+      let fm = null;
+      const fmtxt = mapInp.value.trim();
+      if (fmtxt) {
+        try { fm = JSON.parse(fmtxt); } catch (e) { toast('Field mapping must be valid JSON', 'err'); return; }
+      }
+      const payload = {
+        id: id || undefined,
+        vendor_key: vendorSel.value,
+        display_name: nameInp.value.trim(),
+        api_base_url: apiBaseInp.value.trim(),
+        account_sid: sidInp.value.trim(),
+        api_key: keyInp.value.trim(),
+        api_token: tokInp.value.trim(),
+        caller_id: callerInp.value.trim(),
+        field_mapping: fm,
+        is_active: activeChk.checked ? 1 : 0,
+        is_default: defaultChk.checked ? 1 : 0,
+        auto_create_lead: autoLeadChk.checked ? 1 : 0
+      };
+      if (!payload.display_name) { toast('Display name required', 'err'); return; }
+      try {
+        const r = await api('api_ivr_config_save', payload);
+        toast('Saved', 'ok');
+        m.remove();
+        if (typeof onSaved === 'function') onSaved();
+        // After save, surface the webhook URL so they can paste it into the vendor.
+        if (r.id) setTimeout(() => openIvrWebhookModal(r.id), 200);
+      } catch (e) { toast('Save failed: ' + e.message, 'err'); }
+    } }, id ? 'Save changes' : 'Connect')
+  ));
+  document.body.appendChild(m);
+}
+window.openIvrConfigModal = openIvrConfigModal;
+
+// Show the webhook URL the tenant needs to paste into their vendor dashboard.
+async function openIvrWebhookModal(id) {
+  let info;
+  try { info = await api('api_ivr_webhook_url', Number(id)); }
+  catch (e) { toast(e.message, 'err'); return; }
+  const m = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const body = h('div', { class: 'modal' });
+  m.appendChild(body);
+  body.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, '🔗 Inbound Webhook URL'),
+    h('button', { class: 'btn icon', onclick: () => m.remove() }, '✕')
+  ));
+  const urlInp = h('input', { class: 'input', value: info.inbound_url || '', readonly: 'readonly', style: { width: '100%', fontFamily: 'monospace', fontSize: '.85rem' } });
+  body.appendChild(h('div', { class: 'modal-body', style: { padding: '1rem' } },
+    h('p', { class: 'muted' }, 'Paste this URL into your vendor dashboard as the Call Events / Webhook destination. We verify the embedded ?secret= on every hit so make sure it stays in the URL.'),
+    urlInp,
+    h('div', { class: 'actions', style: { marginTop: '.5rem' } },
+      h('button', { class: 'btn', onclick: () => { urlInp.select(); document.execCommand('copy'); toast('Copied'); } }, '📋 Copy URL')
+    ),
+    h('p', { class: 'muted', style: { marginTop: '1rem', fontSize: '.82rem' } },
+      'After pasting, send yourself a test call. Inbound calls will appear in Recent Calls (Reports → Call Activity) within a few seconds.'
+    )
+  ));
+  document.body.appendChild(m);
+}
+window.openIvrWebhookModal = openIvrWebhookModal;
+
+// IVR_UI_v1 — Click-to-call hook. If an active IVR config exists,
+// fire it via the server (server contacts vendor's API). Falls back
+// silently if no IVR is configured. We wrap the existing callLead()
+// rather than replacing it so the dialler / mobile / etc. paths
+// keep working.
+(function _wrapCallLead() {
+  if (typeof window.callLead !== 'function') return;
+  if (window.callLead._ivrWrapped) return;
+  const original = window.callLead;
+  window.callLead = async function (lead) {
+    try {
+      const r = await api('api_ivr_initiateCall', { phone: lead && (lead.phone || lead), lead_id: lead && lead.id });
+      if (r && r.ok) {
+        if (typeof toast === 'function') toast('📞 Calling via ' + (r.vendor || 'IVR') + '…', 'ok');
+        return r;
+      }
+    } catch (e) {
+      // If the error is "No active IVR config" — silently fall through to the
+      // original tel: dialer. Any other error → show it.
+      if (!/No active IVR config|not configured/i.test(e.message || '')) {
+        if (typeof toast === 'function') toast('IVR call failed: ' + e.message, 'err');
+        return;
+      }
+    }
+    return original.apply(this, arguments);
+  };
+  window.callLead._ivrWrapped = true;
+})();
 
