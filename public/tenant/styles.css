@@ -2765,3 +2765,46 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
     box-shadow: 0 1px 3px rgba(0,0,0,.12);
   }
 }
+
+/* ================================================================
+   MOBILE_DATE_FIX_v1 — From/To date inputs on the Leads filter row
+   ----------------------------------------------------------------
+   The inputs had inline width:140px which on a 360-380px phone left
+   them looking like tiny empty squares (especially when no value is
+   selected — the calendar glyph alone is hard to see and tap).
+   Fix at <=600px:
+     - .date-range becomes its own full-width row
+     - both inputs flex:1 to fill remaining horizontal space
+     - inline width:140px is overridden via !important
+     - the From/To labels stay compact and never wrap
+   ================================================================ */
+@media (max-width: 600px) {
+  .toolbar .date-range {
+    display: flex !important;
+    width: 100% !important;
+    align-items: center;
+    gap: .35rem !important;
+    margin: 0 0 .35rem !important;
+    flex-wrap: nowrap;
+  }
+  .toolbar .date-range > span {
+    flex-shrink: 0;
+    font-size: .82rem !important;
+    white-space: nowrap;
+  }
+  .toolbar .date-range input[type="date"] {
+    flex: 1 !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    padding: .5rem .4rem !important;
+    font-size: 14px !important;        /* still <16 to keep iOS from zooming */
+    border: 1px solid var(--border, #e5e7eb) !important;
+    border-radius: 6px !important;
+    background: #fff !important;
+    color: var(--text, #0f172a) !important;
+  }
+  .toolbar .date-range input[type="date"]:invalid::-webkit-datetime-edit {
+    color: #94a3b8;       /* visible placeholder hint on iOS when empty */
+  }
+}
