@@ -1807,6 +1807,18 @@ app.get('/hook/whatsapp_webhook', async (req, res, next) => {
   } catch (_) {}
   return res.status(403).send('Verify token mismatch');
 });
+// IVR_HOOK_TENANT_SCOPED_v1 — tenant-prefixed IVR webhook so the URL we
+// surface to vendors (/t/<slug>/hook/ivr/<vendor>) actually matches a
+// route. Mirrors the whatsapp_webhook pattern: bare URL handler is
+// registered before attachTenant (above), tenant-scoped handler here
+// runs AFTER attachTenant strips the /t/<slug>/ prefix.
+app.post('/hook/ivr/:vendor', (req, res, next) => {
+  if (!req.tenant) return next();
+  let ivrMod;
+  try { ivrMod = require('./routes/ivr'); }
+  catch (e) { console.error('[hook/ivr] ivr module load failed:', e.message); return res.status(500).json({ error: 'IVR module unavailable' }); }
+  return ivrMod.expressInbound(req, res);
+});
 app.post('/hook/whatsapp_webhook', (req, res, next) => {
   if (!req.tenant) return next();
   // CRITICAL: scope the handler in tenantStorage.run so _handleInbound's
