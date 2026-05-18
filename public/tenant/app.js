@@ -31026,6 +31026,52 @@ try {
         ));
 
         // Webhook log section
+        /* META_DIAG_v1 — copy-paste config + test-fire button */
+        try {
+          const info = await api('api_social_callbackInfo');
+          const copyBtn = (val, label) => {
+            const b = h('button', { class:'btn xs', style:{ marginLeft:'.3rem' } }, '📋 Copy ' + label);
+            b.onclick = () => { navigator.clipboard.writeText(val); toast(label + ' copied'); };
+            return b;
+          };
+          const cfgCard = h('div', { style:{ marginTop:'1rem', padding:'.8rem 1rem', background:'#eff6ff', border:'1px solid #bfdbfe', borderRadius:'8px' } },
+            h('div', { style:{ fontWeight:600, marginBottom:'.4rem' } }, '⚙ Meta App Dashboard configuration'),
+            h('div', { class:'muted', style:{ fontSize:'.82rem', marginBottom:'.5rem' } }, 'Paste these EXACT values into Meta App Dashboard → Webhooks → Page → Edit subscription.'),
+            h('div', { style:{ fontFamily:'monospace', fontSize:'.84rem', background:'#fff', padding:'.4rem .6rem', borderRadius:'4px', marginBottom:'.3rem', display:'flex', alignItems:'center' } },
+              h('span', { style:{ flex:1 } }, '🔗 Callback URL: ' + info.callback_url),
+              copyBtn(info.callback_url, 'URL')
+            ),
+            h('div', { style:{ fontFamily:'monospace', fontSize:'.84rem', background:'#fff', padding:'.4rem .6rem', borderRadius:'4px', marginBottom:'.3rem', display:'flex', alignItems:'center' } },
+              h('span', { style:{ flex:1 } }, '🔑 Verify Token: ' + (info.verify_token || h('em', { style:{ color:'#dc2626' } }, '(NOT SET — open Settings → Integrations → set META_VERIFY_TOKEN)'))),
+              info.verify_token ? copyBtn(info.verify_token, 'token') : null
+            ),
+            h('div', { style:{ fontFamily:'monospace', fontSize:'.84rem', background:'#fff', padding:'.4rem .6rem', borderRadius:'4px', marginBottom:'.5rem' } },
+              '📋 Fields to subscribe: messages, messaging_postbacks, feed, mention'
+            )
+          );
+          /* Test-fire button */
+          const testBtn = h('button', { class:'btn primary', style:{ marginTop:'.3rem' } }, '🧪 Test our /hook/meta receiver');
+          const testOut = h('div', { style:{ marginTop:'.5rem', fontSize:'.85rem' } });
+          testBtn.onclick = async () => {
+            testBtn.disabled = true; testBtn.textContent = '⏳ Testing…';
+            try {
+              const r = await api('api_social_testReceiver');
+              const colour = r.ok && r.webhook_log_grew_by > 0 ? '#dcfce7' : '#fee2e2';
+              testOut.innerHTML = '';
+              testOut.appendChild(h('div', { style:{ background:colour, padding:'.5rem .7rem', borderRadius:'6px' } },
+                (r.ok && r.webhook_log_grew_by > 0 ? '✅ ' : '⚠ ') + r.interpretation
+              ));
+              testOut.appendChild(h('pre', { style:{ background:'#f8fafc', padding:'.4rem', borderRadius:'4px', fontSize:'.75rem', maxHeight:'150px', overflow:'auto' } },
+                JSON.stringify({ http_status: r.http_status, webhook_log_grew_by: r.webhook_log_grew_by, post_error: r.post_error }, null, 2)
+              ));
+            } catch (e) {
+              testOut.innerHTML = '<div style="background:#fee2e2;padding:.5rem .7rem;border-radius:6px">⚠ ' + e.message + '</div>';
+            } finally { testBtn.disabled = false; testBtn.textContent = '🧪 Test our /hook/meta receiver'; }
+          };
+          cfgCard.appendChild(testBtn);
+          cfgCard.appendChild(testOut);
+          body.appendChild(cfgCard);
+        } catch (_) {}
         body.appendChild(h('h4', { style:{ marginTop:'1rem' } }, 'Recent /hook/meta webhook hits'));
         body.appendChild(h('p', { class:'muted', style:{ fontSize:'.85em' } },
           'Messages stored in last 24h: ' + d.webhook_messages_24h));

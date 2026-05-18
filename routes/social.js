@@ -1514,13 +1514,111 @@ async function api_social_resubscribePages(token) {
   return { ok: true, results };
 }
 
+
+/* META_DIAG_v1 — surface the exact Meta callback config for self-service fix */
+async function api_social_callbackInfo(token) {
+  await authUser(token);
+  // The public callback URL Meta should call. We trust the env / config first,
+  // then fall back to the request-time host if exposed via a global.
+  const base = (process.env.SAAS_PUBLIC_BASE_URL || '').replace(/\/$/, '')
+             || (await db.getConfig('PUBLIC_BASE_URL', '') || '').replace(/\/$/, '')
+             || 'https://crm.smartcrmsolution.com';
+  const callback_url = base + '/hook/meta';
+
+  let verify_token = '';
+  try { verify_token = await db.getConfig('META_VERIFY_TOKEN', '') || ''; } catch (_) {}
+
+  // Count successful verify handshakes by looking at server logs is tricky;
+  // we approximate by checking if webhook_log has ANY meta rows (verify
+  // events get logged with action='verify' or are silently 200'd).
+  let any_meta_log = false;
+  try {
+    const r = await db.query(`SELECT 1 FROM webhook_log WHERE source = 'meta' LIMIT 1`);
+    any_meta_log = r.rows.length > 0;
+  } catch (_) {}
+
+  return {
+    callback_url,
+    verify_token,
+    verify_token_set: !!verify_token,
+    any_meta_log,
+    instructions: [
+      'Open Meta App Dashboard → your app → Webhooks (left rail) → Page',
+      'Edit subscription. Set Callback URL exactly as shown above.',
+      'Set Verify Token exactly as shown above (copy/paste).',
+      'Subscribe to these fields: messages, messaging_postbacks, feed, mention',
+      'Save. Meta will hit GET /hook/meta once to verify (must return 200 with the challenge).',
+      'If your app is in Development mode, only users with Admin/Developer/Tester role can trigger webhook events. Either promote your tester or submit the app for Review (Standard Access on pages_messaging + pages_show_list + pages_read_engagement).'
+    ]
+  };
+}
+
+/* META_DIAG_v1 — fire a synthetic webhook into our OWN /hook/meta to prove the receiver is alive */
+async function api_social_testReceiver(token) {
+  await authUser(token);
+  await _ensureSchema();
+
+  // Pick the first connected page so the synthetic payload looks real.
+  const p = await db.query(`SELECT page_id, page_name FROM social_pages LIMIT 1`);
+  const pg = p.rows[0];
+  if (!pg) return { ok: false, error: 'No pages connected yet. Connect a Facebook Page first.' };
+
+  const synthetic = {
+    object: 'page',
+    entry: [{
+      id: pg.page_id,
+      time: Math.floor(Date.now() / 1000),
+      messaging: [{
+        sender: { id: 'TEST_USER_1' },
+        recipient: { id: pg.page_id },
+        timestamp: Date.now(),
+        message: { mid: 'm_test_' + Date.now(), text: '[CRM self-test] hello from Diagnose button' }
+      }]
+    }]
+  };
+
+  // Determine the base URL we should hit (loopback works if same process)
+  const base = (process.env.SAAS_PUBLIC_BASE_URL || '').replace(/\/$/, '')
+             || (await db.getConfig('PUBLIC_BASE_URL', '') || '').replace(/\/$/, '')
+             || 'http://127.0.0.1:' + (process.env.PORT || 3000);
+  const url = base + '/hook/meta';
+
+  const before = await db.query(`SELECT COUNT(*)::int AS c FROM webhook_log WHERE source = 'meta'`).then(r => Number(r.rows[0].c || 0)).catch(() => 0);
+
+  let postErr = null, postStatus = null;
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(synthetic)
+    });
+    postStatus = r.status;
+  } catch (e) { postErr = String(e.message || e); }
+
+  // Give the writer a beat.
+  await new Promise(r => setTimeout(r, 600));
+  const after = await db.query(`SELECT COUNT(*)::int AS c FROM webhook_log WHERE source = 'meta'`).then(r => Number(r.rows[0].c || 0)).catch(() => 0);
+
+  return {
+    ok: postErr === null && (postStatus >= 200 && postStatus < 300),
+    callback_url: url,
+    http_status: postStatus,
+    post_error: postErr,
+    webhook_log_grew_by: after - before,
+    interpretation: postErr ? 'Could not even POST to your own /hook/meta — outbound network blocked or wrong URL.' :
+                     (postStatus < 200 || postStatus >= 300) ? 'Endpoint returned ' + postStatus + ' — receiver is up but rejected the payload. Check server logs.' :
+                     (after - before) > 0 ? '✅ Receiver works. Webhook stored. So 100% sure Meta is NOT actually calling this URL — fix the App Dashboard config.' :
+                     'Endpoint returned 200 but no row landed in webhook_log. Possible silent drop — check server logs and routes/webhooks.js metaEvent handler.'
+  };
+}
+
 module.exports = {
   api_social_pages_list,
   // Phase S1 — dedicated FB connect (separate from Lead Sync)
   api_social_fb_oauth_url,
   api_social_fb_connect,
   expressOAuthCallbackSocial,
-  api_social_diag,
+  api_social_diag, api_social_callbackInfo, api_social_testReceiver,  /* META_DIAG_v1 */
   api_social_resubscribePages,
   api_social_fb_disconnect,
   api_social_fb_toggleMonitor,
