@@ -2512,6 +2512,37 @@ setInterval(() => {
 setTimeout(() => _runEduRemindersForAllTenants().catch(() => {}), 90_000);
 console.log('[eduReminder] worker started — hourly tick');
 
+// ── Background: per-tenant Real Estate demand-letter reminder worker ──
+async function _runReRemindersForAllTenants() {
+  let rows = [];
+  try {
+    const r = await controlDb.query(
+      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500`
+    );
+    rows = r.rows;
+  } catch (e) { console.warn('[reReminder] tenant list failed:', e.message); return; }
+  let worker;
+  try { worker = require('./utils/reReminderWorker'); } catch (e) { return; }
+  if (!worker || !worker.tick) return;
+  for (const row of rows) {
+    let t; try { t = await tenantPoolMod.findActiveTenant(row.slug); } catch (_) { continue; }
+    if (!t) continue;
+    const pool = tenantPoolMod.poolFor(t);
+    if (!pool) continue;
+    try {
+      await tenantDb.tenantStorage.run({ pool, tenant: t, slug: row.slug },
+        () => worker.tick()
+      );
+    } catch (e) { console.warn(`[reReminder] ${row.slug} tick failed:`, e.message); }
+  }
+}
+setInterval(() => {
+  _runReRemindersForAllTenants().catch(e => console.error('[reReminder] cycle failed:', e.message));
+}, Number(process.env.RE_REMINDER_INTERVAL_MS || 60 * 60_000));   // hourly
+setTimeout(() => _runReRemindersForAllTenants().catch(() => {}), 120_000);
+console.log('[reReminder] Real Estate demand-letter worker started — hourly tick');
+
+
 // ── Background: per-tenant AI Call Summary worker ──────────────────────
 // aiCallSummary.startWorker() is only wired in server.tenant.js. Without
 // this, SaaS-tenant recordings never get auto-processed by Gemini — they

@@ -28868,16 +28868,56 @@ VIEWS.edureports = async (view) => {
 // 🎯 Real Estate Phase 3 — Buyer Reqs, Site Visits, Broker Performance
 // ═════════════════════════════════════════════════════════════════════
 
-// ── 🎯 Buyer Requirements view (admin/manager/team_leader/agent)
+// ── 🎯 Buyer Requirements view (admin/manager/team_leader/agent)  [REQ_LIST_v1]
 VIEWS.rerequirements = async (view) => {
   view.innerHTML = '';
   view.appendChild(h('h2', {}, '🎯 Buyer Requirements — Match leads to inventory'));
-  view.appendChild(h('p', { class:'muted' }, 'Capture each buyer\'s wishlist (budget / BHK / location / timeline) then auto-match against available units.'));
+  view.appendChild(h('p', { class:'muted' }, 'Every buyer wishlist captured across all leads — click any row to open the lead and see live matches against your inventory.'));
   const body = h('div', {});
   view.appendChild(body);
-  // Show recent requirements + quick add
-  body.appendChild(h('div', { class:'muted', style:{ padding:'1rem' } },
-    'Open any lead → scroll to 🎯 Requirements & Matches block at the bottom to add a buyer requirement and see auto-matched units.'));
+  async function load() {
+    body.innerHTML = '<div class=muted style=padding:1rem>Loading…</div>';
+    try {
+      const rows = await api('api_re_requirements_recent', { limit: 200 });
+      body.innerHTML = '';
+      if (!rows.length) {
+        body.appendChild(h('div', { class:'muted', style:{ padding:'1rem' } }, 'No requirements captured yet. Open any lead → scroll to the 🎯 Requirements & Matches block at the bottom to add the first one.'));
+        return;
+      }
+      const tbl = h('table', { class:'mini-table', style:{ width:'100%' } },
+        h('thead', {}, h('tr', {},
+          h('th', {}, 'When'),
+          h('th', {}, 'Lead'),
+          h('th', {}, 'Phone'),
+          h('th', {}, 'Budget'),
+          h('th', {}, 'BHK'),
+          h('th', {}, 'Location / Project'),
+          h('th', {}, 'Timeline'),
+          h('th', {}, 'Owner'),
+          h('th', {}, '')
+        )),
+        h('tbody', {}, ...rows.map(r => h('tr', {},
+          h('td', { class:'muted', style:{ fontSize:'.78rem' } }, fmtDate(r.created_at, 'relative')),
+          h('td', {}, h('a', { href:'#', onclick: e => { e.preventDefault(); openLeadModal(r.lead_id); } }, h('b', {}, r.lead_name || '—'))),
+          h('td', { class:'muted', style:{ fontSize:'.8rem' } }, r.lead_phone || '—'),
+          h('td', {}, '₹' + Number(r.budget_min || 0).toLocaleString('en-IN') + ' – ₹' + Number(r.budget_max || 0).toLocaleString('en-IN')),
+          h('td', {}, r.preferred_bhk ? h('span', { style:{ background:'#dbeafe', color:'#1e40af', padding:'1px 8px', borderRadius:'999px', fontSize:'.8rem' } }, r.preferred_bhk) : '—'),
+          h('td', { class:'muted', style:{ fontSize:'.8rem' } }, [r.preferred_locations, r.preferred_projects].filter(Boolean).join(' · ') || '—'),
+          h('td', { class:'muted', style:{ fontSize:'.8rem' } }, r.possession_timeline || '—'),
+          h('td', { class:'muted' }, r.rep_name || '—'),
+          h('td', {},
+            h('button', { class:'btn xs primary', onclick: () => openLeadModal(r.lead_id) }, 'Open lead'),
+            h('button', { class:'btn xs', style:{ marginLeft:'.2rem' }, onclick: () => openMatchesModal(r.id) }, '🔍 Matches')
+          )
+        )))
+      );
+      body.appendChild(tbl);
+    } catch (e) {
+      body.innerHTML = '';
+      body.appendChild(h('div', { class:'error-box' }, e.message));
+    }
+  }
+  load();
 };
 
 // ── 📅 Site Visits view

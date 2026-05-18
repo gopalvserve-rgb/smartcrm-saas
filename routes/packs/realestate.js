@@ -936,6 +936,23 @@ async function api_re_requirements_byLead(token, leadId) {
  * requirement. Scoring: budget (40), BHK (30), location (20), project (10).
  * Returns top 20 matches with a score 0..100.
  */
+async function api_re_requirements_recent(token, opts) {
+  await _requireRealEstate();
+  await authUser(token);
+  const limit = Math.min(200, Math.max(1, Number((opts && opts.limit) || 100)));
+  const r = await db.query(
+    `SELECT rq.id, rq.lead_id, rq.budget_min, rq.budget_max, rq.preferred_bhk, rq.preferred_locations, rq.preferred_projects, rq.possession_timeline, rq.intent, rq.notes, rq.created_at,
+            l.name AS lead_name, l.phone AS lead_phone, l.email AS lead_email,
+            u.name AS rep_name
+       FROM re_requirements rq
+       LEFT JOIN leads l ON l.id = rq.lead_id
+       LEFT JOIN users u ON u.id = l.assigned_to
+      ORDER BY rq.created_at DESC LIMIT $1`,
+    [limit]
+  );
+  return r.rows || [];
+}
+
 async function api_re_requirements_match(token, requirementId) {
   await authUser(token);
   await _requireRealEstate();
@@ -1197,7 +1214,7 @@ module.exports = {
   api_re_channelPartners_list, api_re_channelPartners_save,
   api_re_commission_list, api_re_commission_markPaid,
   api_re_summary,
-  api_re_requirements_save, api_re_requirements_byLead, api_re_requirements_match,
+  api_re_requirements_save, api_re_requirements_byLead, api_re_requirements_match, api_re_requirements_recent,
   api_re_visits_schedule, api_re_visits_byLead, api_re_visits_upcoming,
   api_re_visits_markDone, api_re_visits_reschedule, api_re_visits_sendReminder,
   api_re_cp_performance,
