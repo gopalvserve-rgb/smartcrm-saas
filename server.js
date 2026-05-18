@@ -546,11 +546,17 @@ async function _runHookAsTenant(req, res, handler) {
 app.post('/hook/website', (req, res) => _runHookAsTenant(req, res, webhooksRoute.websiteHook));
 app.post('/hook/other',   (req, res) => _runHookAsTenant(req, res, webhooksRoute.otherHook));
 
-// IVR_HOOK_MOUNT_v1 — generic IVR / Cloud Calling inbound webhook.
-// Per-tenant URL: POST /t/<slug>/hook/ivr/:vendor_key — runs inside
-// tenantStorage scope so routes/ivr.js can use db.query freely.
-const ivrRoute = require('./routes/ivr');
-app.post('/hook/ivr/:vendor', (req, res) => _runHookAsTenant(req, res, ivrRoute.expressInbound));
+// IVR_HOOK_MOUNT_v1 + IVR_HOOK_DEFENSIVE_v1 — generic IVR / Cloud Calling
+// inbound webhook, wrapped in try/catch so a module-level error in
+// routes/ivr.js (e.g. a missing dependency in a future change) can NOT
+// prevent server.js boot. Without this guard a Railway redeploy that
+// breaks ivr.js takes the whole CRM down.
+try {
+  const ivrRoute = require('./routes/ivr');
+  app.post('/hook/ivr/:vendor', (req, res) => _runHookAsTenant(req, res, ivrRoute.expressInbound));
+} catch (e) {
+  console.error('[boot] routes/ivr.js failed to load — IVR endpoints disabled:', e && e.message);
+}
 
 // Ã¢ÂÂÃ¢ÂÂ Public API documentation page Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 app.get('/api-docs', (req, res) => {
