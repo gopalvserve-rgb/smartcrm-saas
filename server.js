@@ -188,6 +188,26 @@ app.get('/api/saas/debug/tcp', async (req, res) => {
 // the landing page can still report their own browser errors.
 app.post('/api/saas/log-error', errorLogs.expressClientErrorEndpoint);
 
+// META_PAGE_DIAG_v1 — page-routing diagnostic.
+// GET /api/saas/debug/page-tenant?page_id=12345 returns which tenant owns
+// that Facebook Page (per the META_PAGES_LIST config). Super-admin only.
+// Helps debug Lead Ads test-tool failures by confirming whether our DB
+// thinks the page is connected to any tenant at all.
+app.get('/api/saas/debug/page-tenant', async (req, res) => {
+  const token = (req.headers['x-auth-token'] || req.query.token || '').toString();
+  try { await superAdmin.requireSuperAdmin(token); }
+  catch (e) { return res.status(401).json({ error: e.message }); }
+  const pageId = String(req.query.page_id || '').trim();
+  if (!pageId) return res.status(400).json({ error: 'page_id required' });
+  try {
+    const t = await _findTenantByLookup(
+      `SELECT 1 FROM config WHERE key IN ('META_PAGES_LIST','META_PAGES') AND value LIKE $1 LIMIT 1`,
+      ['%' + pageId + '%']
+    );
+    res.json({ page_id: pageId, tenant: t ? { id: t.id, slug: t.slug, org_name: t.org_name } : null });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ---- Support ticket attachments ---------------------------------
 // Multipart upload + bytes download for tenant & super-admin ticket
 // attachments. 25 MB cap; tenants only see their own files; admins see
@@ -372,8 +392,13 @@ app.post('/hook/meta', async (req, res) => {
     }).catch(() => {});
     return res.sendStatus(200);
   }
+  // META_PAGES_LIST_KEY_FIX_v1 — the Lead Sync flow saves the connected
+  // pages under config key 'META_PAGES_LIST' (a JSON array), not 'META_PAGES'.
+  // The original lookup queried the wrong key so EVERY bare /hook/meta hit
+  // landed in the 'no owning tenant' branch and was silently dropped, even
+  // when the page was correctly connected. Fixed below.
   const t = await _findTenantByLookup(
-    `SELECT 1 FROM config WHERE key = 'META_PAGES' AND value LIKE $1 LIMIT 1`,
+    `SELECT 1 FROM config WHERE key IN ('META_PAGES_LIST','META_PAGES') AND value LIKE $1 LIMIT 1`,
     ['%' + pageId + '%']
   );
   if (!t) {
