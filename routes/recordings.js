@@ -1036,6 +1036,12 @@ async function api_recording_bulkAudit(token, payload) {
 
 async function api_recording_recentInsights(token, opts) {
   const me = await authUser(token);
+  // PROMISE_SCHEMA_HEAL_v1 — ensure new cols exist before SELECT references them.
+  try {
+    await db.query(`ALTER TABLE lead_recordings ADD COLUMN IF NOT EXISTS committed_callback_at TIMESTAMPTZ`);
+    await db.query(`ALTER TABLE lead_recordings ADD COLUMN IF NOT EXISTS actual_followup_at  TIMESTAMPTZ`);
+    await db.query(`ALTER TABLE lead_recordings ADD COLUMN IF NOT EXISTS callback_gap_minutes INTEGER`);
+  } catch (e) { console.warn('[recentInsights] heal:', e.message); }
   opts = opts || {};
   const limit = Math.min(Number(opts.limit) || 50, 200);
   const where = ['lr.ai_processed_at IS NOT NULL'];
