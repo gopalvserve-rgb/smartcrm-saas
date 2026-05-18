@@ -13101,6 +13101,7 @@ VIEWS.callinsights = async (view) => {
           h('div', { class: 'pt-row', style: { display: 'flex', gap: '.6rem', flexWrap: 'wrap', alignItems: 'center', marginTop: '.3rem', fontSize: '.78rem' } },
             r.lead_status_name ? h('span', { style: { background: '#dbeafe', color: '#1e40af', padding: '.1rem .5rem', borderRadius: '999px', fontWeight: 600 } }, '📍 ' + r.lead_status_name) : null,
             r.last_activity_at ? h('span', { class: 'muted', title: new Date(r.last_activity_at).toLocaleString() }, '🕒 last activity ' + fmtDate(r.last_activity_at, 'relative')) : null,
+            /* NEXT_ACTIVITY_v1 */ r.lead_next_followup_at ? h('span', { class: 'pill', style: 'background:#e0e7ff;color:#3730a3;padding:.1rem .5rem;border-radius:999px;font-weight:600', title: new Date(r.lead_next_followup_at).toLocaleString() }, '🗓 next activity ' + new Date(r.lead_next_followup_at).toLocaleString('en-IN',{hour:'2-digit',minute:'2-digit',day:'2-digit',month:'short'})) : null,
             r.committed_callback_at ? h('span', { class: 'muted' }, '⏰ promised ' + new Date(r.committed_callback_at).toLocaleString('en-IN',{hour:'2-digit',minute:'2-digit',day:'2-digit',month:'short'})) : null,
             r.actual_followup_at ? h('span', { class: 'muted' }, '✅ actual ' + new Date(r.actual_followup_at).toLocaleString('en-IN',{hour:'2-digit',minute:'2-digit',day:'2-digit',month:'short'})) : null,
             (r.callback_gap_minutes != null) ? (() => {

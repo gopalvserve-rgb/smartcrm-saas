@@ -1068,6 +1068,7 @@ async function api_recording_recentInsights(token, opts) {
               UNION ALL SELECT created_at FROM whatsapp_messages WHERE lead_id = lr.lead_id
            ) z) AS last_activity_at,
            l.name AS lead_name, l.status_id AS lead_status_id,
+           /* NEXT_ACTIVITY_v1 */ l.next_followup_at AS lead_next_followup_at,
            u.name AS rep_name, u.role AS rep_role,
            s.name AS suggested_status_name, ls.name AS lead_status_name
       FROM lead_recordings lr
@@ -1096,7 +1097,8 @@ async function api_recording_recentInsights(token, opts) {
         committed_callback_at: r.committed_callback_at,
         actual_followup_at:    r.actual_followup_at,
         callback_gap_minutes:  r.callback_gap_minutes,
-        last_activity_at:      r.last_activity_at
+        last_activity_at:      r.last_activity_at,
+        /* NEXT_ACTIVITY_v1 */ lead_next_followup_at: r.lead_next_followup_at
       };
     });
   } catch (e) {

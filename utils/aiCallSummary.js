@@ -125,7 +125,8 @@ Listen to the entire call. Then return ONLY a JSON object with these exact keys:
   "sentiment": "<one of: positive | neutral | negative>",
   "suggested_status": "<one of the existing CRM statuses that best fits where this lead is now>",
   "next_followup_in_days": <integer 0-30 — when should the rep call back? 0 = today>,
-  "committed_callback_at": "<ISO8601 timestamp like 2026-05-18T10:30:00 — ONLY set this if the REP specifically promised a callback time on the call (e.g. \"I'll call you at 10:30 AM tomorrow\"). Use the call recording date as the base. Set to null otherwise>",
+  /* PROMISE_TRACK_v2 — looser callback-time capture */
+  "committed_callback_at": "<ISO8601 timestamp like 2026-05-18T10:30:00. Set this whenever EITHER party commits to a specific next-call time on this call. Examples: (a) rep promises a callback — e.g. "I will call you at 10:30 AM tomorrow". (b) customer asks for a callback — e.g. "call me back after 30 minutes", "call in 1 hour", "phir kal subah call karna". (c) both agree on a specific time. Resolve relative phrases (30 minutes, 1 hour, tomorrow, kal, parso, day-after) using the call recording timestamp as the base. Set to null ONLY if NO specific next-call time was discussed by either side.>",
   "key_insight": "<one-sentence insight that would surprise a busy manager>",
   "suggested_rating": <integer 1-5 — rate the REP's performance on this call.
     1 = poor (no qualifying, no objection handling, no next step),
