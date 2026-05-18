@@ -2712,3 +2712,56 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
   }
   .toolbar .flex { flex: 1 1 100%; min-width: 0; }
 }
+
+/* ================================================================
+   MOBILE_FILTER_FIX_v1 — Leads page filter overlap fix (2026-05-17)
+   ----------------------------------------------------------------
+   Bug: the multi-select dropdown panel (Status / Source / Assigned)
+   used position:absolute + min-width 260px. On phones <600px wide
+   that meant opening one dropdown covered the other filter buttons
+   AND the lead list underneath — users couldn't see what they were
+   filtering. Symptom in the wild: "filter is hiding".
+   Fix: at mobile width
+     (a) stack each filter trigger onto its own row (block width)
+     (b) render the dropdown panel as a full-width bottom sheet
+         (position:fixed near the bottom of the viewport)
+     (c) lead-card status pill — guarantee no truncation
+   ================================================================ */
+@media (max-width: 600px) {
+  /* Stack each filter trigger to its own row so opening one doesn't
+     hide adjacent filters. */
+  .toolbar .ms-dropdown { display: block !important; width: 100% !important; margin: 0 0 .35rem !important; }
+  .toolbar .ms-dropdown .ms-dropdown-button {
+    width: 100% !important; min-width: 0 !important; max-width: none !important;
+    justify-content: space-between;
+  }
+  /* Multi-select popup → bottom sheet so it never overlaps other
+     filter buttons (now stacked above) or the lead list. */
+  .ms-dropdown-panel {
+    position: fixed !important;
+    left: 8px !important; right: 8px !important;
+    top: auto !important; bottom: 12px !important;
+    width: auto !important; min-width: 0 !important; max-width: none !important;
+    max-height: 65vh !important;
+    z-index: 9999 !important;
+    border-radius: 14px !important;
+    box-shadow: 0 -10px 28px rgba(15,23,42,.22) !important;
+    padding: .75rem !important;
+  }
+  /* Soft backdrop hint behind the bottom sheet so users see it's modal-ish */
+  .ms-dropdown-panel::before {
+    content: ""; position: fixed; inset: 0; z-index: -1;
+    background: rgba(15,23,42,.18);
+  }
+  /* Lead-card status pill — keep it visible at the right edge of the
+     card header even when name is long. */
+  .lead-card .lc-head { gap: .4rem; }
+  .lead-card .lc-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lead-card .lc-status {
+    flex-shrink: 0; white-space: nowrap;
+    padding: 3px 9px !important;
+    font-size: .72rem !important;
+    font-weight: 600 !important;
+    box-shadow: 0 1px 3px rgba(0,0,0,.12);
+  }
+}
