@@ -2063,7 +2063,121 @@ async function api_aibot_heat_diagnostics(token, opts) {
   };
 }
 
+
+/* BOT_DIAGNOSE_v1 — explain why the AI Bot did or didn't reply for a given phone */
+async function api_aiBot_diagnose(token, payload) {
+  const me = await authUser(token);
+  if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin or Manager only');
+  const phone = String((payload && payload.phone) || '').replace(/\D/g, '');
+  if (!phone) throw new Error('phone required');
+
+  const out = { phone, checks: [], recent_log: [], recent_messages: [], settings: {}, flow_session: null };
+
+  // Bot settings snapshot
+  try {
+    const s = (await db.query(`SELECT * FROM ai_bot_settings ORDER BY id ASC LIMIT 1`)).rows[0];
+    if (s) {
+      out.settings = {
+        id: s.id,
+        is_enabled: s.is_enabled,
+        reply_modes: s.reply_modes,
+        off_keywords: s.off_keywords,
+        pause_after_human_handoff: s.pause_after_human_handoff,
+        resume_after_idle_seconds: s.resume_after_idle_seconds,
+        max_replies_per_thread: s.max_replies_per_thread,
+        active_phone_number_ids: s.active_phone_number_ids,
+        phone_number_id: s.phone_number_id
+      };
+      if (Number(s.is_enabled) !== 1) out.checks.push({ level: 'block', msg: 'Bot is DISABLED in settings (is_enabled = 0). Turn it on in AI Bot → Settings.' });
+    } else {
+      out.checks.push({ level: 'block', msg: 'No ai_bot_settings row found for this tenant — bot has not been configured.' });
+    }
+  } catch (e) { out.checks.push({ level: 'warn', msg: 'Could not read ai_bot_settings: ' + e.message }); }
+
+  // Has any human agent EVER replied? (pause_after_human_handoff sticky mute)
+  try {
+    const r = await db.query(
+      `SELECT created_at, user_id, body FROM whatsapp_messages
+        WHERE direction = 'out' AND user_id IS NOT NULL
+          AND (to_number = $1 OR from_number = $1)
+        ORDER BY created_at DESC LIMIT 1`,
+      [phone]
+    );
+    if (r.rows.length) {
+      out.checks.push({
+        level: out.settings.pause_after_human_handoff ? 'block' : 'info',
+        msg: 'A human agent (user_id=' + r.rows[0].user_id + ') replied on this thread at ' + r.rows[0].created_at + '. ' +
+             (out.settings.pause_after_human_handoff ?
+               'pause_after_human_handoff=1 → the bot is permanently muted on this thread until you disable the setting.' :
+               'Bot will still reply (handoff pause is OFF) but the 30-min "human actively chatting" rule will suppress for 30 min after.'),
+        last_human_at: r.rows[0].created_at
+      });
+    } else {
+      out.checks.push({ level: 'ok', msg: 'No human agent has replied on this thread. Handoff suppression does not apply.' });
+    }
+  } catch (e) { out.checks.push({ level: 'warn', msg: 'human-agent check failed: ' + e.message }); }
+
+  // Recent ai_chat_log entries (last 10) — show what the bot did or why it skipped
+  try {
+    const r = await db.query(
+      `SELECT created_at, status, suppressed_reason, mode_used, reply_text, error_text, inbound_msg_id, phone_number_id
+         FROM ai_chat_log WHERE phone = $1 ORDER BY created_at DESC LIMIT 10`,
+      [phone]
+    );
+    out.recent_log = r.rows;
+    if (r.rows.length === 0) {
+      out.checks.push({ level: 'warn', msg: 'No ai_chat_log entries for this phone — the AI Bot pipeline never ran for any inbound from this number. Possible causes: tenant-wide off, inbound webhook not reaching the bot, or button-reply not being routed.' });
+    } else if (r.rows[0].status === 'suppressed') {
+      out.checks.push({ level: 'block', msg: 'Most recent inbound was SUPPRESSED. Reason: ' + (r.rows[0].suppressed_reason || '(no reason captured)') });
+    } else if (r.rows[0].status === 'failed') {
+      out.checks.push({ level: 'block', msg: 'Most recent reply FAILED. Error: ' + (r.rows[0].error_text || '(no error captured)') });
+    } else if (r.rows[0].status === 'sent') {
+      out.checks.push({ level: 'ok', msg: 'Most recent reply was SENT at ' + r.rows[0].created_at + '. Customer may not have received it (WhatsApp 24-hr window expired? token revoked?). Check whatsapp_messages for the actual Meta status.' });
+    }
+  } catch (e) { out.checks.push({ level: 'warn', msg: 'ai_chat_log read failed: ' + e.message }); }
+
+  // Last 10 whatsapp_messages — to compare with ai_chat_log
+  try {
+    const r = await db.query(
+      `SELECT created_at, direction, user_id, message_type, status, error_text, LEFT(body, 200) AS body, phone_number_id
+         FROM whatsapp_messages
+        WHERE from_number = $1 OR to_number = $1
+        ORDER BY created_at DESC LIMIT 10`,
+      [phone]
+    );
+    out.recent_messages = r.rows;
+  } catch (e) { out.checks.push({ level: 'warn', msg: 'whatsapp_messages read failed: ' + e.message }); }
+
+  // Active bot-flow session
+  try {
+    const r = await db.query(
+      `SELECT id, flow_id, current_node_id, is_completed, last_at FROM wa_bot_flow_sessions
+        WHERE phone = $1 AND is_completed = 0 ORDER BY last_at DESC LIMIT 1`,
+      [phone.slice(-15)]
+    );
+    if (r.rows.length) {
+      out.flow_session = r.rows[0];
+      out.checks.push({ level: 'block', msg: 'Active Bot Flow session is consuming this thread (flow_id=' + r.rows[0].flow_id + ', node=' + r.rows[0].current_node_id + '). The Bot Flow runs BEFORE the AI Bot, so the AI Bot never gets the inbound. Close the session or finish the flow.' });
+    } else {
+      out.checks.push({ level: 'ok', msg: 'No active Bot Flow session — AI Bot path is not blocked by a flow.' });
+    }
+  } catch (e) { out.checks.push({ level: 'warn', msg: 'flow session check failed: ' + e.message }); }
+
+  return out;
+}
+
+/* BOT_DIAGNOSE_v1 — clear a stuck bot-flow session so the AI Bot regains the thread */
+async function api_aiBot_clearFlowSession(token, payload) {
+  const me = await authUser(token);
+  if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin or Manager only');
+  const phone = String((payload && payload.phone) || '').replace(/\D/g, '').slice(-15);
+  if (!phone) throw new Error('phone required');
+  const r = await db.query(`UPDATE wa_bot_flow_sessions SET is_completed = 1 WHERE phone = $1 AND is_completed = 0`, [phone]);
+  return { ok: true, cleared: r.rowCount || 0 };
+}
+
 module.exports = {
+  api_aiBot_diagnose, api_aiBot_clearFlowSession,  /* BOT_DIAGNOSE_v1 */
   // Public tenant API (auto-exposed via tenantApi.js loader)
   api_aibot_settings_get, api_aibot_settings_save,
   api_aibot_settings_listAll, api_aibot_settings_delete,

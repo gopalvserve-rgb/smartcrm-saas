@@ -9404,7 +9404,10 @@ async function _aibotKbView() {
 // ============================================================
 async function _aibotActivityView() {
   const wrap = h('div', { class: 'card' });
-  wrap.appendChild(h('h3', { style: { marginTop: 0 } }, 'Recent bot activity'));
+  wrap.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', marginBottom: '.5rem' } },
+    h('h3', { style: { margin: 0, flex: 1 } }, 'Recent bot activity'),
+    /* BOT_DIAGNOSE_v1 */ h('button', { class: 'btn sm ghost', title: 'Trace why the bot replied / skipped for a specific phone', onclick: () => openAIBotDiagnose('') }, '🔎 Why no reply?')
+  ));
   let rows;
   try { rows = await api('api_aibot_chatlog_list', { limit: 50 }); }
   catch (e) { wrap.appendChild(h('div', { style: { color: '#dc2626' } }, e.message)); return wrap; }
@@ -31798,3 +31801,67 @@ window.openIvrWebhookModal = openIvrWebhookModal;
   window.callLead._ivrWrapped = true;
 })();
 
+
+/* BOT_DIAGNOSE_v1 — Admin diagnostic modal: why didn't the AI Bot reply? */
+async function openAIBotDiagnose(presetPhone) {
+  const phoneInp = h('input', { class: 'input', placeholder: 'e.g. 919876543210', value: presetPhone || '', style: { width: '100%' } });
+  const resultBox = h('div', { style: { marginTop: '.8rem', maxHeight: '60vh', overflow: 'auto', fontSize: '.85rem' } });
+  const modal = h('div', { class: 'modal' });
+  modal.appendChild(h('div', { class: 'modal-content', style: { maxWidth: '720px' } },
+    h('h3', {}, '🔎 Why didn\'t the AI Bot reply?'),
+    h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+      'Enter a customer phone number. We\'ll check bot settings, recent activity, suppression reasons, ' +
+      'flow sessions and recent messages on this thread, then explain what happened.'),
+    phoneInp,
+    h('div', { class: 'modal-actions', style: { display: 'flex', gap: '.5rem', marginTop: '.6rem' } },
+      h('button', { class: 'btn ghost', onclick: () => modal.remove() }, 'Close'),
+      h('button', { class: 'btn primary', onclick: async () => {
+        const phone = String(phoneInp.value || '').replace(/\\D/g, '');
+        if (!phone) { toast('Enter a phone number', 'warn'); return; }
+        resultBox.textContent = 'Checking…';
+        try {
+          const r = await api('api_aiBot_diagnose', { phone });
+          resultBox.innerHTML = '';
+          // Checks summary
+          (r.checks || []).forEach(c => {
+            const colour = c.level === 'block' ? '#fee2e2' : (c.level === 'warn' ? '#fef3c7' : (c.level === 'ok' ? '#dcfce7' : '#e0e7ff'));
+            const icon   = c.level === 'block' ? '🚫' : (c.level === 'warn' ? '⚠' : (c.level === 'ok' ? '✅' : 'ℹ'));
+            resultBox.appendChild(h('div', { style: { padding: '.5rem .7rem', background: colour, borderRadius: '6px', margin: '.3rem 0' } }, icon + ' ' + c.msg));
+          });
+          // Clear-flow-session button if a flow is blocking
+          if (r.flow_session) {
+            const clearBtn = h('button', { class: 'btn sm danger', style: { marginTop: '.4rem' } }, '🧹 Clear stuck flow session');
+            clearBtn.onclick = async () => {
+              try { const rr = await api('api_aiBot_clearFlowSession', { phone }); toast('Cleared ' + rr.cleared + ' session(s)'); openAIBotDiagnose(phone); modal.remove(); }
+              catch (e) { toast(e.message, 'err'); }
+            };
+            resultBox.appendChild(clearBtn);
+          }
+          // Recent log
+          if (r.recent_log && r.recent_log.length) {
+            resultBox.appendChild(h('h4', { style: { margin: '.8rem 0 .3rem' } }, '🧾 Recent AI Bot log (latest 10):'));
+            r.recent_log.forEach(row => {
+              const colour = row.status === 'sent' ? '#dcfce7' : (row.status === 'suppressed' ? '#fef3c7' : '#fee2e2');
+              resultBox.appendChild(h('div', { style: { padding: '.35rem .6rem', background: colour, borderRadius: '4px', margin: '.2rem 0', fontFamily: 'monospace', fontSize: '.78rem' } },
+                (row.created_at || '') + ' · ' + (row.status || '') + ' · ' + (row.suppressed_reason || row.error_text || (row.reply_text || '').slice(0, 100))
+              ));
+            });
+          }
+          // Recent messages
+          if (r.recent_messages && r.recent_messages.length) {
+            resultBox.appendChild(h('h4', { style: { margin: '.8rem 0 .3rem' } }, '💬 Recent messages (latest 10):'));
+            r.recent_messages.forEach(row => {
+              const arrow = row.direction === 'in' ? '⇦' : '⇨';
+              const tag   = row.user_id ? '👤 user#' + row.user_id : '🤖';
+              resultBox.appendChild(h('div', { style: { padding: '.3rem .5rem', background: row.direction === 'in' ? '#e0e7ff' : '#f1f5f9', borderRadius: '4px', margin: '.2rem 0', fontSize: '.78rem' } },
+                arrow + ' ' + (row.created_at || '') + ' ' + tag + ' [' + (row.message_type || 'text') + '] ' + (row.body || '').slice(0, 200)
+              ));
+            });
+          }
+        } catch (e) { resultBox.textContent = '⚠ ' + e.message; }
+      } }, '🔎 Diagnose')
+    ),
+    resultBox
+  ));
+  document.body.appendChild(modal);
+}
