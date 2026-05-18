@@ -1227,7 +1227,11 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
         // Self-heal schema on first hit (column + unique index).
         try {
           await db.query('ALTER TABLE lead_recordings ADD COLUMN IF NOT EXISTS dedup_key TEXT');
-          await db.query('CREATE UNIQUE INDEX IF NOT EXISTS uniq_lead_rec_user_dedup ON lead_recordings(user_id, dedup_key) WHERE dedup_key IS NOT NULL');
+          // REC_DEDUP_v2_HOTFIX — partial index broke ON CONFLICT clause matching.
+          // Drop it + recreate as non-partial. dedup_key is always computed so NULL never appears,
+          // but COALESCE is belt-and-braces. The drop is safe (only runs if old index exists).
+          await db.query('DROP INDEX IF EXISTS uniq_lead_rec_user_dedup');
+          await db.query('CREATE UNIQUE INDEX IF NOT EXISTS uniq_lead_rec_user_dedup ON lead_recordings(user_id, dedup_key)');
         } catch (_) {}
         // Already uploaded? Return its id so client treats as no-op success.
         let id = null;
@@ -1260,7 +1264,12 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
           );
           id = _ins.rows[0] ? _ins.rows[0].id : null;
         } catch (e) {
+          // REC_DEDUP_v2_HOTFIX — used to silently swallow this. The actual SQL
+          // error (e.g. 'no unique constraint matching ON CONFLICT') has to bubble
+          // up to the client so we can see real failures instead of a generic
+          // 'insert returned no id' downstream.
           console.error('[/api/recordings] insert error:', e.message);
+          throw e;
         }
         if (!id) {
           // Lost race against a concurrent identical upload — find the winner.
