@@ -2124,6 +2124,7 @@ VIEWS.leads = async (view) => {
     h('button', { class: 'btn sm', onclick: bulkWhatsAppPrompt }, '💬 WhatsApp'),
     h('button', { class: 'btn sm', onclick: bulkCampaignPrompt }, '🎯 Campaign'),
     h('button', { class: 'btn sm', onclick: bulkNurturePrompt, title: 'Enroll selected leads in a nurture sequence' }, '🌱 Nurture'),
+    h('button', { class: 'btn sm', onclick: bulkMergePrompt, title: 'Merge selected leads into one' }, '🔀 Merge'),
     h('button', { class: 'btn sm danger', onclick: bulkDelete }, '🗑️ Delete'),
     h('button', { class: 'btn sm ghost', onclick: () => clearSelection() }, 'Clear')
   ));
@@ -3206,6 +3207,59 @@ async function bulkAddTagPrompt() {
  * - Empty value clears the field for every selected lead (sets extra_json[key] = '').
  * Backend merges into each lead's existing extra_json so other CF values are preserved.
  */
+
+/* LEAD_MERGE_v1 — bulk merge selected leads into one target */
+async function bulkMergePrompt() {
+  const ids = selectedIds(); if (ids.length < 2) { toast('Select at least 2 leads to merge'); return; }
+  if (ids.length > 50) { toast('Pick 50 leads or fewer'); return; }
+  // Pull the lead rows for each selected id so the modal can show them.
+  const leadsCache = (CRM.cache.leads || []);
+  const rows = ids.map(id => leadsCache.find(l => Number(l.id) === Number(id)) || { id, name: '#' + id });
+
+  const modal = h('div', { class: 'modal' });
+  const targetId = { v: rows[0].id };
+  const list = h('div', { style: { maxHeight: '300px', overflow: 'auto', border: '1px solid var(--border, #e2e8f0)', borderRadius: '8px', padding: '.5rem' } });
+  rows.forEach(r => {
+    const radio = h('input', { type: 'radio', name: 'merge-target', value: r.id });
+    if (Number(r.id) === Number(targetId.v)) radio.checked = true;
+    radio.onchange = () => { targetId.v = Number(r.id); };
+    list.appendChild(h('label', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', padding: '.4rem .2rem', cursor: 'pointer', borderBottom: '1px dashed #eee' } },
+      radio,
+      h('div', { style: { flex: '1' } },
+        h('b', {}, r.name || r.phone || ('Lead #' + r.id)),
+        h('span', { class: 'muted', style: { marginLeft: '.5rem', fontSize: '.8rem' } },
+          [r.phone, r.email, r.company].filter(Boolean).join(' · ') || ' '
+        )
+      )
+    ));
+  });
+
+  modal.innerHTML = '';
+  modal.appendChild(h('div', { class: 'modal-content' },
+    h('h3', {}, '🔀 Merge ' + ids.length + ' leads into one'),
+    h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+      'Pick the lead to KEEP. The other ' + (ids.length - 1) + ' will be merged into it ' +
+      '(remarks, call recordings, WhatsApp chats, follow-ups, quotations all move over). ' +
+      'Blank fields on the target get filled in from the duplicates. This cannot be undone.'),
+    list,
+    h('div', { class: 'modal-actions', style: { display: 'flex', gap: '.5rem', marginTop: '.8rem', justifyContent: 'flex-end' } },
+      h('button', { class: 'btn ghost', onclick: () => modal.remove() }, 'Cancel'),
+      h('button', { class: 'btn primary', onclick: async () => {
+        const target_id = Number(targetId.v);
+        const source_ids = ids.map(Number).filter(n => n !== target_id);
+        try {
+          const r = await api('api_leads_merge', { target_id, source_ids });
+          toast('✅ Merged ' + r.merged_count + ' lead(s) into #' + target_id);
+          modal.remove();
+          clearSelection();
+          loadLeads();
+        } catch (e) { toast('⚠ ' + e.message, 'err'); }
+      } }, '🔀 Merge into selected target')
+    )
+  ));
+  document.body.appendChild(modal);
+}
+
 async function bulkCustomFieldPrompt() {
   const ids = selectedIds(); if (!ids.length) return;
   const cfList = (CRM.cache.customFields || []).filter(c => Number(c.is_active) !== 0 && c.key);
@@ -18843,8 +18897,8 @@ async function adminPermissions() {
 async function adminDuplicates() {
   const cfg = await api('api_admin_getConfig');
   return configForm(cfg, ['DUPLICATE_POLICY', 'DUPLICATE_WINDOW_HOURS', 'DUPLICATE_MATCH_FIELDS'], {
-    DUPLICATE_POLICY: { type: 'select', options: ['allow', 'assign_same_user', 'skip_assignment', 'reject'],
-      hint: 'allow=always create · assign_same_user=give to original assignee · skip_assignment=leave unassigned · reject=drop incoming dup' },
+    DUPLICATE_POLICY: { type: 'select', options: ['allow', 'assign_same_user', 'skip_assignment', 'reject', 'merge'] /* LEAD_MERGE_v1 */,
+      hint: 'allow=always create · assign_same_user=give to original · skip_assignment=leave unassigned · reject=drop · merge=fold into existing (recommended)' },
     DUPLICATE_WINDOW_HOURS: { hint: 'Only check dupes within this window (hours)' },
     DUPLICATE_MATCH_FIELDS: { hint: 'Comma-separated: phone, email' }
   });

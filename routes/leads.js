@@ -137,6 +137,10 @@ async function _applyDuplicatePolicy(payload, fallbackUserId) {
     out.assigned_to = match.assigned_to || fallbackUserId || '';
   } else if (policy === 'skip_assignment') {
     out.assigned_to = '';
+  } else if (policy === 'merge') {
+    /* LEAD_MERGE_v1 — fold the incoming payload into the matched lead, skip the insert */
+    try { await _foldIntoLead(match.id, out); } catch (e) { console.warn('[merge fold] ' + e.message); }
+    return { payload: out, duplicate: true, merged: true, matched_id: match.id, skipped: true };
   }
   return { payload: out, duplicate: true, matched_id: match.id, matched_assigned_to: match.assigned_to || '' };
 }
@@ -2225,6 +2229,165 @@ async function api_leads_rescanDuplicates(token) {
   return { ok: true, flagged, unflagged, total_groups_with_dups: [...groups.values()].filter(a => a.length > 1).length };
 }
 
+
+/* ============================================================
+ * LEAD_MERGE_v1 — merge duplicate leads into one
+ * ============================================================
+ * Use cases:
+ *   1) Duplicate-rule policy='merge' → silent fold of incoming
+ *      payload into the existing matched lead (no new row).
+ *   2) Bulk Merge from the Leads page → user picks N source leads
+ *      + 1 target; we move all their children (remarks/calls/wa/
+ *      recordings/followups/quotations) onto the target and delete
+ *      the sources.
+ * ============================================================ */
+
+/** Fold a payload's non-empty fields onto an existing lead row (in-place update). */
+async function _foldIntoLead(leadId, payload) {
+  const existing = await db.findById('leads', leadId);
+  if (!existing) return;
+  const patch = {};
+  // Scalar fields: only overwrite when EXISTING is blank and incoming has a value.
+  const scalarFields = ['name', 'phone', 'email', 'whatsapp', 'company', 'designation',
+                        'city', 'state', 'country', 'source', 'source_ref', 'notes', 'tags',
+                        'product_id', 'campaign_id'];
+  for (const f of scalarFields) {
+    const cur = existing[f];
+    const inc = payload[f];
+    if ((cur === null || cur === undefined || String(cur).trim() === '') && inc != null && String(inc).trim() !== '') {
+      patch[f] = inc;
+    }
+  }
+  // Tags: union of both (preserving order).
+  if (payload.tags) {
+    const cur = String(existing.tags || '').split(',').map(s => s.trim()).filter(Boolean);
+    const inc = String(payload.tags).split(',').map(s => s.trim()).filter(Boolean);
+    const union = Array.from(new Set([...cur, ...inc]));
+    if (union.length !== cur.length) patch.tags = union.join(', ');
+  }
+  // Notes: append a separator + the new content.
+  if (payload.notes && payload.notes !== existing.notes) {
+    patch.notes = (existing.notes ? existing.notes + '\n---\n' : '') + payload.notes;
+  }
+  // extra_json: shallow-merge custom fields, incoming wins ONLY on blank existing keys.
+  if (payload.extra && typeof payload.extra === 'object') {
+    let cur = {};
+    try { cur = JSON.parse(existing.extra_json || '{}'); } catch (_) {}
+    let changed = false;
+    for (const [k, v] of Object.entries(payload.extra)) {
+      if ((cur[k] === undefined || cur[k] === null || cur[k] === '') && v != null && v !== '') {
+        cur[k] = v;
+        changed = true;
+      }
+    }
+    if (changed) patch.extra_json = JSON.stringify(cur);
+  }
+  // Record a remark trail so the user can see what happened.
+  await db.insert('remarks', {
+    lead_id: leadId,
+    user_id: payload.created_by || null,
+    body: '[Auto-merge] Duplicate incoming lead folded into this record. Source: ' + (payload.source || 'unknown'),
+    created_at: db.nowIso()
+  }).catch(() => null);
+  if (Object.keys(patch).length) {
+    patch.updated_at = db.nowIso();
+    await db.update('leads', leadId, patch);
+  }
+}
+
+/**
+ * api_leads_merge — admin/manager bulk-merge N duplicate leads into one target.
+ *
+ *   payload: { target_id: <int>, source_ids: [<int>, ...] }
+ *
+ * Effects on each source row:
+ *   - remarks         → reparented to target_id
+ *   - call_events     → reparented to target_id
+ *   - lead_recordings → reparented to target_id
+ *   - whatsapp_messages → reparented to target_id (if table exists)
+ *   - followups       → reparented to target_id (if table exists)
+ *   - quotations      → reparented to target_id (if table exists)
+ *   - lead_actions    → reparented to target_id (audit history)
+ *   - source row     → deleted
+ * Then target lead is field-merged with any non-empty source values
+ * (target wins, but blanks are filled from sources).
+ */
+async function api_leads_merge(token, payload) {
+  const me = await authUser(token);
+  if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin or Manager only');
+  const p = payload || {};
+  const target_id = Number(p.target_id);
+  const source_ids = (p.source_ids || []).map(Number).filter(n => n && n !== target_id);
+  if (!target_id) throw new Error('target_id required');
+  if (!source_ids.length) throw new Error('source_ids required');
+
+  const target = await db.findById('leads', target_id);
+  if (!target) throw new Error('Target lead ' + target_id + ' not found');
+
+  // Pull all source rows and field-fold each one onto target (target wins,
+  // but blanks come from sources).
+  const sources = [];
+  for (const sid of source_ids) {
+    const s = await db.findById('leads', sid);
+    if (s) sources.push(s);
+  }
+
+  // Field-fold each source's non-empty values into target (only filling blanks).
+  for (const s of sources) {
+    const foldPayload = {
+      name: s.name, phone: s.phone, email: s.email, whatsapp: s.whatsapp,
+      company: s.company, designation: s.designation, city: s.city, state: s.state, country: s.country,
+      source: s.source, source_ref: s.source_ref, notes: s.notes, tags: s.tags,
+      product_id: s.product_id, campaign_id: s.campaign_id,
+      extra: (() => { try { return JSON.parse(s.extra_json || '{}'); } catch (_) { return {}; } })()
+    };
+    await _foldIntoLead(target_id, foldPayload);
+  }
+
+  // Reparent children — wrapped in per-table try/catch so a missing
+  // optional table (e.g. tenant doesn't have quotations) won't blow up.
+  const reparents = [
+    'UPDATE remarks           SET lead_id = $1 WHERE lead_id = ANY($2::int[])',
+    'UPDATE call_events       SET lead_id = $1 WHERE lead_id = ANY($2::int[])',
+    'UPDATE lead_recordings   SET lead_id = $1 WHERE lead_id = ANY($2::int[])',
+    'UPDATE whatsapp_messages SET lead_id = $1 WHERE lead_id = ANY($2::int[])',
+    'UPDATE followups         SET lead_id = $1 WHERE lead_id = ANY($2::int[])',
+    'UPDATE quotations        SET lead_id = $1 WHERE lead_id = ANY($2::int[])',
+    'UPDATE lead_actions      SET lead_id = $1 WHERE lead_id = ANY($2::int[])'
+  ];
+  const movedCounts = {};
+  for (const sql of reparents) {
+    const tableName = sql.match(/UPDATE\s+(\w+)/)[1];
+    try {
+      const r = await db.query(sql, [target_id, source_ids]);
+      movedCounts[tableName] = r.rowCount || 0;
+    } catch (e) {
+      // table likely doesn't exist on this tenant — quietly skip.
+      movedCounts[tableName] = 0;
+    }
+  }
+
+  // Audit row on the surviving target.
+  try {
+    await db.insert('remarks', {
+      lead_id: target_id,
+      user_id: me.id,
+      body: '[Merge] Merged ' + sources.length + ' duplicate lead(s) into this record: ['
+             + sources.map(s => '#' + s.id + ' ' + (s.name || s.phone || '—')).join(', ') + ']',
+      created_at: db.nowIso()
+    });
+  } catch (_) {}
+
+  // Delete source rows.
+  let deleted = 0;
+  for (const sid of source_ids) {
+    if (await db.removeRow('leads', sid)) deleted++;
+  }
+
+  return { ok: true, target_id, merged_count: deleted, moved: movedCounts };
+}
+/* end LEAD_MERGE_v1 */
+
 module.exports = {
   api_leads_list, api_leads_distinctTags, api_leads_phoneBook, api_leads_statusCounts, api_leads_get, api_leads_create, api_leads_update,
   api_leads_addRemark, api_leads_pipeline, api_myFollowups, api_followup_done,
@@ -2235,5 +2398,6 @@ module.exports = {
 ,
   api_leads_pull, api_leads_pullInfo,
   api_leads_assignToCampaign,
-  api_leads_rescanDuplicates
+  api_leads_rescanDuplicates,
+  api_leads_merge  /* LEAD_MERGE_v1 */
 };
