@@ -3425,6 +3425,25 @@ const BULK_MAP_TARGETS = [
   { v: 'utm_content',      l: 'UTM content' }
 ];
 
+/* CSV_MAP_CF_v1 — append active custom fields to the bulk-mapping target list */
+function _bulkMapTargets() {
+  const base = BULK_MAP_TARGETS.slice();
+  const cfList = (CRM && CRM.cache && CRM.cache.customFields) || [];
+  // Filter to active CFs with a usable key.
+  const active = cfList.filter(c => Number(c.is_active) !== 0 && c.key);
+  if (!active.length) return base;
+  // Push a separator pseudo-option then one option per CF.
+  base.push({ v: '__cf_sep', l: '── Custom fields ──', disabled: true });
+  for (const cf of active) {
+    base.push({
+      v: 'cf_' + cf.key,
+      l: '🧩 ' + (cf.label || cf.key) + (cf.label && cf.label !== cf.key ? ' (' + cf.key + ')' : '')
+    });
+  }
+  return base;
+}
+
+
 // Auto-suggest a target for a source column based on common header aliases.
 function _bulkSuggestTarget(col) {
   const c = String(col || '').toLowerCase().replace(/[\s\-_]+/g, '');
@@ -3459,6 +3478,17 @@ function _bulkSuggestTarget(col) {
   if (exact[c]) return exact[c];
   // If the column already matches a lead column name verbatim, use it
   if (BULK_MAP_TARGETS.some(t => t.v === c)) return c;
+  /* CSV_MAP_CF_v1 — try to match a registered custom field */
+  try {
+    const cfList = (CRM && CRM.cache && CRM.cache.customFields) || [];
+    const want = c;
+    for (const cf of cfList) {
+      if (Number(cf.is_active) === 0 || !cf.key) continue;
+      const k = String(cf.key).toLowerCase().replace(/[\s\-_]+/g, '');
+      const lbl = String(cf.label || '').toLowerCase().replace(/[\s\-_]+/g, '');
+      if (k === want || lbl === want) return 'cf_' + cf.key;
+    }
+  } catch (_) {}
   return '__skip';
 }
 
@@ -3539,7 +3569,7 @@ function openBulkUpload() {
     sourceHeaders.forEach(col => {
       const sample = (parsedRows[0] && parsedRows[0][col]) || (parsedRows[1] && parsedRows[1][col]) || '';
       const sel = h('select', { style: { width: '100%', padding: '.25rem' } },
-        ...BULK_MAP_TARGETS.map(t => h('option', { value: t.v, selected: (columnMapping[col] || '__skip') === t.v ? 'selected' : null }, t.l))
+        ...(_bulkMapTargets()).map(t => h('option', Object.assign({ value: t.v, selected: (columnMapping[col] || '__skip') === t.v ? 'selected' : null }, t.disabled ? { disabled: 'disabled' } : {}), t.l))
       );
       sel.addEventListener('change', () => { columnMapping[col] = sel.value; });
       tbody.appendChild(h('tr', {},
