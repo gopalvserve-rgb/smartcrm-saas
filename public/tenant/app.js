@@ -13037,6 +13037,47 @@ VIEWS.callinsights = async (view) => {
         kpiCard('😟 Negative',  neg + ' (' + Math.round(neg/total*100) + '%)', 'Need review', 'warn'),
         kpiCard('🤖 AI accuracy', '~95%', 'Hindi-English code-mix', 'accent')
       ));
+      // BULK_AUDIT_v1 — admin/manager-only bulk audit toolbar
+      if (['admin','manager'].includes((CRM.user || {}).role)) {
+        const _bulkBar = h('div', { class: 'card', style: { padding: '.7rem .9rem', margin: '0 0 1rem', display: 'flex', flexWrap: 'wrap', gap: '.5rem', alignItems: 'center', background: '#f1f5f9' } },
+          h('span', { style: { fontWeight: 600 } }, '🤖 Bulk AI Audit'),
+          h('span', { class: 'muted', style: { fontSize: '.82rem' } }, 'Queue many recordings at once.')
+        );
+        const _scopeSel = h('select', { class: 'input', style: { maxWidth: '220px' } },
+          h('option', { value: 'unprocessed', selected: 'selected' }, 'All unaudited recordings'),
+          h('option', { value: 'failed' }, 'Previously failed only'),
+          h('option', { value: 'all' }, 'Force re-audit ALL (last 2000)')
+        );
+        const _userSel2 = h('select', { class: 'input', style: { maxWidth: '180px' } },
+          h('option', { value: '' }, 'All reps'),
+          ...((CRM.cache.users || []).map(u => h('option', { value: u.id }, u.name)))
+        );
+        const _limitInp = h('input', { class: 'input', type: 'number', min: 1, max: 2000, value: 500, style: { width: '90px' }, title: 'Max number of recordings to process' });
+        const _runBtn = h('button', { class: 'btn primary' }, '🚀 Run audit');
+        _runBtn.onclick = async () => {
+          const scope = _scopeSel.value;
+          if (scope === 'all' && !confirm('Re-audit ALL recordings? This wipes existing summaries and re-runs Gemini on every recording. Can be expensive.')) return;
+          _runBtn.disabled = true; _runBtn.textContent = '⏳ Queueing…';
+          try {
+            const r = await api('api_recording_bulkAudit', {
+              scope,
+              limit: Number(_limitInp.value) || 500,
+              user_id: _userSel2.value ? Number(_userSel2.value) : null
+            });
+            if (typeof toast === 'function') toast('✅ Queued ' + r.queued + ' recordings — AI processing in background', 'ok');
+            setTimeout(() => load(), 8000); // re-load list after first batch starts settling
+          } catch (e) {
+            if (typeof toast === 'function') toast('⚠ ' + e.message, 'err');
+          } finally {
+            _runBtn.disabled = false; _runBtn.textContent = '🚀 Run audit';
+          }
+        };
+        _bulkBar.appendChild(_scopeSel);
+        _bulkBar.appendChild(_userSel2);
+        _bulkBar.appendChild(_limitInp);
+        _bulkBar.appendChild(_runBtn);
+        feedDiv.appendChild(_bulkBar);
+      }
       rows.forEach(r => feedDiv.appendChild(insightCard(r)));
     } catch (e) {
       feedDiv.innerHTML = '<div class="ai-error">Could not load: ' + esc(e.message) + '</div>';
