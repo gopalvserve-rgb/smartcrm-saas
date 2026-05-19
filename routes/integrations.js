@@ -56,56 +56,143 @@ function _csvParse(text) {
   return rows;
 }
 
+/* SHEET_SYNC_v2 — honor explicit column_mapping (JSON) on the integration
+ * so admins can point sheet columns to CRM fields without renaming the sheet.
+ * Falls back to header-based heuristics so default sheets ('name', 'phone',
+ * 'email') still work without any mapping. */
+function _normaliseHeader(h) {
+  return String(h || '').trim().toLowerCase().replace(/[\s\-]+/g, '_');
+}
+const _HEADER_ALIASES = {
+  name: ['name', 'full_name', 'customer_name', 'lead_name', 'contact_name', 'sender_name'],
+  phone: ['phone', 'mobile', 'mobile_no', 'contact_number', 'contact', 'phone_number', 'whatsapp_number', 'cell'],
+  whatsapp: ['whatsapp', 'whatsapp_no', 'wa_number'],
+  email: ['email', 'e_mail', 'email_id', 'emailaddress', 'email_address'],
+  source: ['source', 'lead_source'],
+  city: ['city', 'town'],
+  state: ['state'],
+  country: ['country'],
+  company: ['company', 'firm', 'business'],
+  notes: ['notes', 'message', 'remarks', 'requirement', 'enquiry'],
+  tags: ['tags', 'tag'],
+  value: ['value', 'budget', 'price']
+};
+
+function _parseMapping(integration) {
+  let mapping = {};
+  try {
+    if (integration.column_mapping) {
+      mapping = typeof integration.column_mapping === 'string'
+        ? JSON.parse(integration.column_mapping)
+        : (integration.column_mapping || {});
+    }
+  } catch (_) {}
+  return mapping;
+}
+
+function _resolveColumnTarget(rawHeader, mapping) {
+  const norm = _normaliseHeader(rawHeader);
+  if (mapping && Object.prototype.hasOwnProperty.call(mapping, rawHeader)) return mapping[rawHeader];
+  if (mapping && Object.prototype.hasOwnProperty.call(mapping, norm))      return mapping[norm];
+  for (const [crmField, aliases] of Object.entries(_HEADER_ALIASES)) {
+    if (aliases.includes(norm)) return crmField;
+  }
+  return norm;  /* keep as-is; might be a custom field like cf_<key> */
+}
+
+/* SHEET_SYNC_v2 — self-heal column_mapping column on sheet_integrations. */
+let _schemaHealed = false;
+async function _ensureSchema() {
+  if (_schemaHealed) return;
+  try { await db.query("ALTER TABLE sheet_integrations ADD COLUMN IF NOT EXISTS column_mapping TEXT DEFAULT '{}'"); } catch (_) {}
+  _schemaHealed = true;
+}
+
+async function _fetchSheetCsv(integration, opts) {
+  opts = opts || {};
+  const sheet_id  = (opts.sheet_id  || integration.sheet_id  || '').trim();
+  const sheet_gid = (opts.sheet_gid || integration.sheet_gid || '0').trim();
+  if (!sheet_id) return { ok: false, error: 'No sheet URL configured (push-only integration)' };
+  const url = 'https://docs.google.com/spreadsheets/d/' + sheet_id + '/export?format=csv&gid=' + sheet_gid;
+  let res;
+  try { res = await fetch(url, { redirect: 'follow', timeout: 20000 }); }
+  catch (e) { return { ok: false, error: 'Fetch failed: ' + e.message }; }
+  if (!res.ok) return { ok: false, error: 'HTTP ' + res.status + ' (is the sheet shared as "Anyone with link – Viewer"?)' };
+  const text = await res.text();
+  const rows = _csvParse(text);
+  return { ok: true, sheet_id, sheet_gid, csv_text_bytes: text.length, total_rows: rows.length, raw: rows };
+}
+
 async function _runSheetSync(integration) {
-  if (!String(integration.sheet_id || '').trim()) {
+  await _ensureSchema();
+  const sheet_id = String(integration.sheet_id || '').trim();
+  if (!sheet_id) {
     if (integration.last_error) {
       try { await db.update('sheet_integrations', integration.id, { last_error: '' }); } catch (_) {}
     }
-    return { imported: 0, skipped: 0, total: 0, mode: 'push' };
+    return {
+      imported: 0, skipped: 0, total: 0, mode: 'push_only',
+      message: 'This integration has no public sheet URL — it is in PUSH mode. New rows arrive via the Apps Script webhook. To use polling instead, edit the integration and add a sheet URL (sheet must be shared as Anyone with link – Viewer).'
+    };
   }
-  const url = `https://docs.google.com/spreadsheets/d/${integration.sheet_id}/export?format=csv&gid=${integration.sheet_gid || '0'}`;
-  const res = await fetch(url, { redirect: 'follow', timeout: 20000 });
-  if (!res.ok) throw new Error('Sheet fetch failed: HTTP ' + res.status + ' (is the sheet shared as "Anyone with link Ã¢ÂÂ Viewer"?)');
-  const text = await res.text();
-  const rows = _csvParse(text);
-  if (rows.length < 2) return { imported: 0, skipped: 0, total: 0 };
-  const headers = rows[0].map(h => String(h || '').trim().toLowerCase());
+  const fetched = await _fetchSheetCsv(integration);
+  if (!fetched.ok) throw new Error(fetched.error);
+  const rows = fetched.raw;
+  if (rows.length < 2) return { imported: 0, skipped: 0, total: 0, mode: 'pull', message: 'Sheet has no data rows (only header found)' };
+
+  const rawHeaders = rows[0].map(h => String(h || ''));
+  const mapping = _parseMapping(integration);
+  const colTargets = rawHeaders.map(h => _resolveColumnTarget(h, mapping));
+
   const data = rows.slice(1).filter(r => r.some(c => String(c || '').trim() !== ''));
   const seen = new Set((await db.getAll('sheet_imported_rows'))
     .filter(r => Number(r.integration_id) === Number(integration.id))
     .map(r => r.row_hash));
   let imported = 0, skipped = 0;
+  const skipped_reasons = { duplicate: 0, no_phone: 0, error: 0 };
   for (const r of data) {
     const obj = {};
-    headers.forEach((h, i) => { if (h) obj[h] = String(r[i] || '').trim(); });
+    colTargets.forEach((t, i) => {
+      if (!t) return;
+      const v = String(r[i] || '').trim();
+      if (!v) return;
+      obj[t] = v;
+    });
     const hash = _hashRow(obj);
-    if (seen.has(hash)) { skipped++; continue; }
-    if (!obj.name && !obj.phone && !obj.mobile) { skipped++; continue; }
+    if (seen.has(hash)) { skipped++; skipped_reasons.duplicate++; continue; }
+    if (!obj.name && !obj.phone && !obj.mobile && !obj.whatsapp) { skipped++; skipped_reasons.no_phone++; continue; }
     obj.source = obj.source || integration.default_source || 'Google Sheet';
-    if (!obj.assigned_to && integration.default_assignee_id) {
-      obj.assigned_to = integration.default_assignee_id;
-    }
+    if (!obj.assigned_to && integration.default_assignee_id) obj.assigned_to = integration.default_assignee_id;
     try {
       const created = await _internalCreateLead(obj, integration.created_by);
       await db.insert('sheet_imported_rows', {
-        integration_id: integration.id, row_hash: hash, imported_at: db.nowIso(),
-        lead_id: created.id || null
+        integration_id: integration.id, row_hash: hash, imported_at: db.nowIso(), lead_id: created.id || null
       });
       imported++;
     } catch (e) {
+      console.warn('[sheetSync] row failed:', e.message);
       await db.insert('sheet_imported_rows', {
-        integration_id: integration.id, row_hash: hash, imported_at: db.nowIso(),
-        lead_id: null
+        integration_id: integration.id, row_hash: hash, imported_at: db.nowIso(), lead_id: null
       });
-      skipped++;
+      skipped++; skipped_reasons.error++;
     }
   }
   await db.update('sheet_integrations', integration.id, {
-    last_synced_at: db.nowIso(),
-    last_synced_count: imported,
-    last_error: ''
+    last_synced_at: db.nowIso(), last_synced_count: imported, last_error: ''
   });
-  return { imported, skipped, total: data.length };
+  let message;
+  if (imported > 0) {
+    message = 'Imported ' + imported + ' new lead(s), skipped ' + skipped + '.';
+  } else if (data.length === 0) {
+    message = 'Sheet has no data rows.';
+  } else if (skipped_reasons.duplicate === data.length) {
+    message = 'All ' + data.length + ' row(s) were already imported earlier (deduped by row content hash). To re-import, edit the sheet or clear the imported history.';
+  } else if (skipped_reasons.no_phone === data.length) {
+    message = 'Found ' + data.length + ' row(s) but none mapped to a name/phone/mobile/whatsapp column. Use the Column Mapping in the integration editor to point your sheet columns to the right CRM fields.';
+  } else {
+    message = 'Imported 0 of ' + data.length + ' rows — ' + skipped_reasons.duplicate + ' duplicate, ' + skipped_reasons.no_phone + ' missing phone, ' + skipped_reasons.error + ' errored.';
+  }
+  return { imported, skipped, total: data.length, mode: 'pull', skipped_reasons, message };
 }
 
 async function runDueSheetSyncs() {
@@ -221,6 +308,7 @@ async function api_sheetSync_list(token) {
 async function api_sheetSync_save(token, payload) {
   const me = await authUser(token);
   if (me.role !== 'admin') throw new Error('Admin only');
+  await _ensureSchema();
   const p = payload || {};
   if (!p.name) throw new Error('Name required');
   let sheet_id = '', sheet_gid = '0';
@@ -231,13 +319,21 @@ async function api_sheetSync_save(token, payload) {
     sheet_id = parsed.sheet_id || '';
     sheet_gid = parsed.sheet_gid || '0';
   }
+  /* SHEET_SYNC_v2 — persist column_mapping as JSON. Accept either an
+   * object { sheetHeader: 'crmField' } or a JSON string. */
+  let column_mapping = '{}';
+  try {
+    if (p.column_mapping && typeof p.column_mapping === 'object') column_mapping = JSON.stringify(p.column_mapping);
+    else if (typeof p.column_mapping === 'string' && p.column_mapping.trim()) column_mapping = p.column_mapping.trim();
+  } catch (_) {}
   const data = {
     name: String(p.name).trim(),
     sheet_id, sheet_gid,
     default_source: p.default_source || 'Google Sheet',
     default_assignee_id: p.default_assignee_id ? Number(p.default_assignee_id) : null,
     poll_interval_min: Math.max(5, Number(p.poll_interval_min) || 15),
-    is_active: p.is_active === 0 ? 0 : 1
+    is_active: p.is_active === 0 ? 0 : 1,
+    column_mapping
   };
   if (p.id) {
     await db.update('sheet_integrations', p.id, data);
@@ -305,6 +401,88 @@ async function api_sheetSync_delete(token, id) {
   if (me.role !== 'admin') throw new Error('Admin only');
   await db.removeRow('sheet_integrations', id);
   return { ok: true };
+}
+
+async function api_sheetSync_diagnose(token, id) {
+  const me = await authUser(token);
+  if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin / manager only');
+  await _ensureSchema();
+  const integration = await db.findOneBy('sheet_integrations', 'id', id);
+  if (!integration) throw new Error('Integration not found');
+  const out = {
+    integration_id: integration.id,
+    name: integration.name,
+    sheet_id: integration.sheet_id || '',
+    sheet_gid: integration.sheet_gid || '0',
+    mode: integration.sheet_id ? 'pull' : 'push_only',
+    is_active: Number(integration.is_active) === 1,
+    last_synced_at: integration.last_synced_at || null,
+    last_synced_count: Number(integration.last_synced_count || 0),
+    last_error: integration.last_error || null,
+    poll_interval_min: Number(integration.poll_interval_min || 15),
+    column_mapping: _parseMapping(integration),
+    webhook_url_push: integration.webhook_token ? ('/hook/sheet/' + integration.webhook_token) : null,
+    already_imported_rows: 0,
+    csv: null,
+    headers: [],
+    detected_columns: [],
+    preview: [],
+    advice: []
+  };
+  try {
+    const imp = (await db.getAll('sheet_imported_rows')).filter(r => Number(r.integration_id) === Number(id));
+    out.already_imported_rows = imp.length;
+  } catch (_) {}
+
+  if (out.mode === 'push_only') {
+    out.advice.push("This integration is PUSH-mode only. New rows arrive via the Apps Script webhook (POST to " + out.webhook_url_push + "). Verify in your Sheet: Extensions → Apps Script → Triggers — the pushNewRowsToCRM function should have a clock trigger. Or add a sheet URL below to switch to pull-mode polling.");
+    return out;
+  }
+
+  const fetched = await _fetchSheetCsv(integration);
+  if (!fetched.ok) {
+    out.csv = { ok: false, error: fetched.error };
+    out.advice.push("Sheet fetch failed: " + fetched.error);
+    out.advice.push('Make sure the sheet is shared as "Anyone with the link → Viewer" so the CSV export endpoint can reach it.');
+    return out;
+  }
+  out.csv = { ok: true, sheet_id: fetched.sheet_id, sheet_gid: fetched.sheet_gid, bytes: fetched.csv_text_bytes, total_rows: fetched.total_rows };
+  const rows = fetched.raw;
+  if (!rows.length) { out.advice.push("Sheet appears empty."); return out; }
+  const rawHeaders = rows[0].map(h => String(h || ''));
+  const mapping = _parseMapping(integration);
+  out.headers = rawHeaders;
+  out.detected_columns = rawHeaders.map(h => {
+    const norm = _normaliseHeader(h);
+    const target = _resolveColumnTarget(h, mapping);
+    const explicit = mapping && (Object.prototype.hasOwnProperty.call(mapping, h) || Object.prototype.hasOwnProperty.call(mapping, norm));
+    return { raw: h, normalised: norm, mapped_to: target, source: explicit ? 'explicit_mapping' : 'auto_heuristic' };
+  });
+  const dataRows = rows.slice(1).filter(r => r.some(c => String(c || '').trim() !== ''));
+  out.preview = dataRows.slice(0, 3).map(r => {
+    const obj = {};
+    out.detected_columns.forEach((c, i) => {
+      const v = String(r[i] || '').trim();
+      if (v) obj[c.mapped_to || c.normalised] = v;
+    });
+    return obj;
+  });
+  out.total_data_rows = dataRows.length;
+
+  /* Advice — common pitfalls */
+  const targets = out.detected_columns.map(c => c.mapped_to);
+  if (!targets.includes('name') && !targets.includes('phone') && !targets.includes('mobile') && !targets.includes('whatsapp')) {
+    out.advice.push('⚠ None of the sheet columns map to name/phone/mobile/whatsapp. Use the Column Mapping below to point at least one of your columns to "phone" (or "name"), otherwise every row will be skipped.');
+  } else if (!targets.includes('phone') && !targets.includes('mobile') && !targets.includes('whatsapp')) {
+    out.advice.push('Note: no phone-like column detected. Rows without a phone will be skipped on import.');
+  }
+  if (out.already_imported_rows && out.already_imported_rows >= dataRows.length) {
+    out.advice.push('All ' + dataRows.length + ' rows in the sheet have already been imported earlier (deduped by row content hash). To re-import a row, edit any cell in that row so its hash changes.');
+  }
+  if (!out.advice.length) {
+    out.advice.push('Looks good — click ▶ Sync now and the parser will pick up ' + dataRows.length + ' rows.');
+  }
+  return out;
 }
 
 async function api_sheetSync_runNow(token, id) {
@@ -1304,6 +1482,7 @@ module.exports = {
   runDueSheetSyncs,
   api_sheetSync_list,
   api_sheetSync_save,
+  api_sheetSync_diagnose,  /* SHEET_SYNC_v2 */
   api_sheetSync_delete,
   api_sheetSync_runNow,
   // Webhook endpoints

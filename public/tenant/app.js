@@ -16244,9 +16244,18 @@ async function adminIntegrations() {
         s.last_error ? h('div', { class: 'muted', style: { fontSize: '.78rem', color: '#dc2626' } }, '⚠ ' + s.last_error) : null
       ),
       h('button', { class: 'btn sm', onclick: async () => {
-        try { const r = await api('api_sheetSync_runNow', s.id); toast('Synced — ' + r.imported + ' new, ' + r.skipped + ' skipped'); showAdminTab('integrations'); }
+        try {
+          const r = await api('api_sheetSync_runNow', s.id);
+          /* SHEET_SYNC_v2 — surface the server's detailed message instead of
+           * the misleading 'X new, Y skipped' line when X=0. */
+          if (r.message) toast(r.message, r.imported > 0 ? 'ok' : 'err');
+          else toast('Synced — ' + r.imported + ' new, ' + r.skipped + ' skipped', 'ok');
+          showAdminTab('integrations');
+        }
         catch (e) { toast(e.message, 'err'); }
       } }, '🔄 Sync now'),
+      /* SHEET_SYNC_v2 — Diagnose button */
+      h('button', { class: 'btn sm', onclick: () => openSheetSyncDiagnoseModal(s.id), title: 'Inspect what the parser sees + suggested fixes' }, '🩺 Diagnose'),
       h('button', { class: 'btn sm', onclick: () => openSheetSyncEditModal(s, () => showAdminTab('integrations')) }, '✎ Edit'),
       h('button', { class: 'btn sm danger', onclick: async () => {
         if (!await confirmDialog('Disconnect "' + s.name + '"? Leads already imported from it stay; the CRM just stops polling.')) return;
@@ -33979,3 +33988,204 @@ async function openLeadsModalByIds(ids) {
   } catch (e) { toast(e.message, 'err'); }
 }
 
+
+
+/* ==========================================================================
+ * SHEET_SYNC_v2 — Diagnose modal + Column Mapping editor
+ * ========================================================================== */
+
+const _SHEET_CRM_FIELDS = [
+  { value: '',         label: '— Ignore this column —' },
+  { value: 'name',     label: '👤 Name' },
+  { value: 'phone',    label: '📞 Phone (primary)' },
+  { value: 'whatsapp', label: '💬 WhatsApp number' },
+  { value: 'email',    label: '📧 Email' },
+  { value: 'company',  label: '🏢 Company' },
+  { value: 'city',     label: '🏙 City' },
+  { value: 'state',    label: '📍 State' },
+  { value: 'country',  label: '🌍 Country' },
+  { value: 'source',   label: '🌐 Source (overrides default)' },
+  { value: 'notes',    label: '📝 Notes / Message' },
+  { value: 'tags',     label: '🏷 Tags (CSV)' },
+  { value: 'value',    label: '💰 Value' },
+  { value: 'assigned_to', label: '👥 Assigned user ID' }
+];
+
+async function openSheetSyncDiagnoseModal(id) {
+  const backdrop = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target === backdrop) backdrop.remove(); } });
+  const modal = h('div', { class: 'modal modal-lg' });
+  const body  = h('div', { class: 'modal-body', style: { maxHeight: '72vh', overflowY: 'auto' } }, '⏳ Running diagnostics…');
+  modal.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, '🩺 Sheet Sync diagnostics'),
+    h('button', { class: 'btn ghost', onclick: () => backdrop.remove() }, '✕')
+  ));
+  modal.appendChild(body);
+  modal.appendChild(h('div', { class: 'actions' },
+    h('button', { class: 'btn', onclick: () => backdrop.remove() }, 'Close')
+  ));
+  backdrop.appendChild(modal);
+  document.body.appendChild(backdrop);
+
+  let d;
+  try { d = await api('api_sheetSync_diagnose', id); }
+  catch (e) { body.innerHTML = '<div style="color:#dc2626">' + (e && e.message || e) + '</div>'; return; }
+
+  body.innerHTML = '';
+
+  /* Header card */
+  body.appendChild(h('div', { class: 'card', style: { padding: '.7rem 1rem', marginBottom: '.7rem' } },
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', flexWrap: 'wrap' } },
+      h('b', {}, d.name),
+      h('span', { class: 'tag', style: { background: d.mode === 'pull' ? '#dbeafe' : '#fef3c7', color: d.mode === 'pull' ? '#1e40af' : '#92400e' } }, d.mode === 'pull' ? '📥 PULL (CSV poll)' : '📤 PUSH (webhook)'),
+      d.is_active ? h('span', { class: 'tag', style: { background: '#dcfce7', color: '#166534' } }, 'ACTIVE') : h('span', { class: 'tag', style: { background: '#fee2e2', color: '#991b1b' } }, 'PAUSED'),
+      h('span', { class: 'muted', style: { fontSize: '.78rem' } }, 'Last synced ' + (d.last_synced_at ? new Date(d.last_synced_at).toLocaleString() : 'never') + ' · ' + d.already_imported_rows + ' rows imported earlier')
+    ),
+    d.last_error ? h('div', { style: { color: '#dc2626', fontSize: '.82rem', marginTop: '.3rem' } }, '⚠ Last error: ' + d.last_error) : null
+  ));
+
+  /* Advice */
+  if (d.advice && d.advice.length) {
+    const ad = h('div', { class: 'card', style: { padding: '.7rem 1rem', marginBottom: '.7rem', background: '#fffbeb', border: '1px solid #fde68a' } },
+      h('div', { style: { fontWeight: 600, marginBottom: '.3rem' } }, '💡 Advice'));
+    d.advice.forEach(line => ad.appendChild(h('div', { style: { fontSize: '.85rem', marginTop: '.2rem' } }, '• ' + line)));
+    body.appendChild(ad);
+  }
+
+  /* PUSH mode info */
+  if (d.mode === 'push_only') {
+    body.appendChild(h('div', { class: 'card', style: { padding: '.7rem 1rem', marginBottom: '.7rem' } },
+      h('div', { style: { fontWeight: 600, marginBottom: '.3rem' } }, '📤 Push webhook'),
+      h('div', { class: 'muted', style: { fontSize: '.82rem' } }, 'New rows are POSTed by your sheet\'s Apps Script to:'),
+      h('code', { style: { display: 'block', padding: '.4rem .6rem', background: '#f1f5f9', borderRadius: '6px', wordBreak: 'break-all', marginTop: '.3rem' } }, d.webhook_url_push || '(no token yet)'),
+      h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.3rem' } }, 'To verify the script is running: open the sheet → Extensions → Apps Script → Executions tab. Each run should show as ✓ Completed.')
+    ));
+    return;
+  }
+
+  /* CSV connection info */
+  if (d.csv) {
+    body.appendChild(h('div', { class: 'card', style: { padding: '.7rem 1rem', marginBottom: '.7rem' } },
+      h('div', { style: { fontWeight: 600, marginBottom: '.3rem' } }, '📊 CSV fetch'),
+      h('div', { style: { fontSize: '.85rem' } },
+        d.csv.ok
+          ? ('✓ Fetched ' + d.csv.bytes + ' bytes · ' + d.csv.total_rows + ' total rows (incl. header) · ' + (d.total_data_rows || 0) + ' data rows')
+          : ('⚠ ' + d.csv.error)
+      ),
+      h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.2rem' } }, 'Sheet ID: ' + d.sheet_id + ' · GID: ' + d.sheet_gid)
+    ));
+  }
+
+  /* Detected columns table */
+  if (d.detected_columns && d.detected_columns.length) {
+    const tbl = h('table', { class: 'mini-table' },
+      h('thead', {}, h('tr', {},
+        h('th', {}, 'Sheet column'),
+        h('th', {}, 'Normalised'),
+        h('th', {}, 'Mapped to CRM field'),
+        h('th', {}, 'Source')
+      )),
+      h('tbody', {},
+        ...d.detected_columns.map(c => h('tr', {},
+          h('td', {}, h('b', {}, c.raw || '(empty)')),
+          h('td', { class: 'muted', style: { fontFamily: 'monospace' } }, c.normalised),
+          h('td', {}, c.mapped_to
+            ? h('span', { style: { padding: '.1rem .4rem', borderRadius: '4px', background: '#dcfce7', color: '#166534', fontSize: '.8rem', fontWeight: 600 } }, c.mapped_to)
+            : h('span', { class: 'muted' }, '— ignored —')),
+          h('td', { class: 'muted', style: { fontSize: '.78rem' } }, c.source === 'explicit_mapping' ? '✎ Explicit mapping' : '🪄 Auto-detected')
+        ))
+      )
+    );
+    body.appendChild(h('div', { class: 'card', style: { padding: '.7rem 1rem', marginBottom: '.7rem' } },
+      h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.4rem' } },
+        h('div', { style: { fontWeight: 600 } }, '🔍 Detected columns'),
+        h('button', { class: 'btn sm', onclick: async () => {
+          backdrop.remove();
+          const integ = (await api('api_sheetSync_list')).find(x => Number(x.id) === Number(id));
+          if (integ) openSheetSyncMappingEditor(integ, () => showAdminTab('integrations'));
+        } }, '✎ Edit mapping')
+      ),
+      tbl
+    ));
+  }
+
+  /* Preview rows */
+  if (d.preview && d.preview.length) {
+    const keys = Array.from(new Set(d.preview.flatMap(r => Object.keys(r))));
+    const tbl = h('table', { class: 'mini-table' },
+      h('thead', {}, h('tr', {}, ...keys.map(k => h('th', {}, k)))),
+      h('tbody', {}, ...d.preview.map(r => h('tr', {}, ...keys.map(k => h('td', {}, r[k] || ''))))));
+    body.appendChild(h('div', { class: 'card', style: { padding: '.7rem 1rem' } },
+      h('div', { style: { fontWeight: 600, marginBottom: '.4rem' } }, '👀 Preview — what the CRM would import (first 3 rows)'),
+      tbl
+    ));
+  }
+}
+try { window.openSheetSyncDiagnoseModal = openSheetSyncDiagnoseModal; } catch (_) {}
+
+/* Standalone Column Mapping editor — opens for a specific sheet integration. */
+async function openSheetSyncMappingEditor(integ, onSaved) {
+  const backdrop = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target === backdrop) backdrop.remove(); } });
+  const modal = h('div', { class: 'modal' });
+  const body = h('div', { class: 'modal-body', style: { maxHeight: '70vh', overflowY: 'auto' } }, '⏳');
+  modal.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, '🗺 Column mapping — ' + integ.name),
+    h('button', { class: 'btn ghost', onclick: () => backdrop.remove() }, '✕')
+  ));
+  modal.appendChild(body);
+  const saveBtn = h('button', { class: 'btn primary' }, '💾 Save mapping');
+  modal.appendChild(h('div', { class: 'actions' },
+    h('button', { class: 'btn', onclick: () => backdrop.remove() }, 'Cancel'),
+    saveBtn
+  ));
+  backdrop.appendChild(modal);
+  document.body.appendChild(backdrop);
+
+  /* Discover columns via the diagnose endpoint so we know what headers exist. */
+  let d;
+  try { d = await api('api_sheetSync_diagnose', integ.id); }
+  catch (e) { body.innerHTML = '<div style="color:#dc2626">' + (e && e.message || e) + '</div>'; return; }
+
+  if (d.mode === 'push_only') {
+    body.innerHTML = '<div class="muted" style="padding:1rem">Column mapping is only used in PULL mode (sheet URL). In PUSH mode, your Apps Script controls the field names directly.</div>';
+    saveBtn.disabled = true;
+    return;
+  }
+  if (!d.detected_columns || !d.detected_columns.length) {
+    body.innerHTML = '<div class="muted" style="padding:1rem">No columns detected. ' + ((d.csv && d.csv.error) || 'Check the sheet has a header row.') + '</div>';
+    saveBtn.disabled = true;
+    return;
+  }
+
+  body.innerHTML = '';
+  body.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+    'Point each sheet column to a CRM field. Columns left as "Ignore" are not imported. The CRM falls back to auto-detection for any column you don\'t explicitly map.'));
+
+  const selects = {};
+  const currentMapping = d.column_mapping || {};
+  d.detected_columns.forEach(c => {
+    const sel = h('select', { class: 'input', style: { minWidth: '260px' } },
+      ..._SHEET_CRM_FIELDS.map(f => h('option', { value: f.value, selected: (currentMapping[c.raw] === f.value || currentMapping[c.normalised] === f.value || (!currentMapping[c.raw] && !currentMapping[c.normalised] && c.mapped_to === f.value)) ? 'selected' : null }, f.label))
+    );
+    selects[c.raw] = sel;
+    body.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 280px', gap: '.6rem', alignItems: 'center', margin: '.4rem 0' } },
+      h('div', {},
+        h('b', {}, c.raw || '(empty header)'),
+        h('div', { class: 'muted', style: { fontSize: '.72rem', fontFamily: 'monospace' } }, c.normalised + ' · auto: ' + (c.mapped_to || 'ignored'))
+      ),
+      sel
+    ));
+  });
+
+  saveBtn.onclick = async () => {
+    const mapping = {};
+    Object.entries(selects).forEach(([k, sel]) => { if (sel.value) mapping[k] = sel.value; });
+    saveBtn.disabled = true; saveBtn.textContent = '⏳';
+    try {
+      await api('api_sheetSync_save', { id: integ.id, name: integ.name, column_mapping: mapping });
+      toast('Mapping saved — click 🔄 Sync now to apply', 'ok');
+      backdrop.remove();
+      if (onSaved) onSaved();
+    } catch (e) { toast(e.message, 'err'); saveBtn.disabled = false; saveBtn.textContent = '💾 Save mapping'; }
+  };
+}
+try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_) {}
