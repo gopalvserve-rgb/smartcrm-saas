@@ -14433,6 +14433,28 @@ VIEWS.reportbuilder = async (view) => {
     dimSelect.appendChild(customGroup);
   }
 
+  /* REPORT_BUILDER_v3 — Google-Ads style top-right action toolbar */
+  const _topActions = h('div', { class: 'card', style: { padding: '.7rem 1rem', display: 'flex', alignItems: 'center', gap: '.4rem', marginBottom: '.6rem', flexWrap: 'wrap' } },
+    h('div', { style: { flex: 1, display: 'flex', alignItems: 'center', gap: '.5rem' } },
+      h('h3', { style: { margin: 0, fontSize: '1rem' } }, '🧪 Report builder'),
+      h('span', { class: 'muted', style: { fontSize: '.78rem' } }, ' — pick a template above or configure custom report below')
+    ),
+    h('button', { class: 'btn', title: 'Reset filters + metrics', onclick: () => {
+      window._rbPicked = {}; window._rbChartType = 'bar';
+      window._rbActiveMetrics = ['count', 'pct'];
+      try { _syncChartTypeUI(); } catch (_) {}
+      const f = document.getElementById('rb-from'); if (f) f.value = '';
+      const t = document.getElementById('rb-to');   if (t) t.value = '';
+      loadReportBuilder();
+    } }, '↺ Reset'),
+    h('button', { class: 'btn', onclick: () => openReportTemplateSave(), title: 'Save current report config (overwrite)' }, '💾 Save'),
+    h('button', { class: 'btn', onclick: () => openReportTemplateSave(), title: 'Save as new template' }, '💾 Save as'),
+    h('button', { class: 'btn', onclick: () => { try { localStorage.setItem('rb_addtoDashboard', JSON.stringify(_rbCurrentConfig())); toast('Saved to dashboard staging — open Dashboard → 🧩 Customize → ➕ Add widget', 'ok'); } catch (e) { toast(e.message, 'err'); } }, title: 'Add this report to your Dashboard widgets' }, '📌 Add to dashboard'),
+    h('button', { class: 'btn', onclick: () => openReportTemplatesModal(), title: 'View saved templates + schedules' }, '📂 Templates'),
+    h('button', { class: 'btn', onclick: () => { gallery.style.display = ''; gallery.scrollIntoView({ behavior: 'smooth' }); }, title: 'Back to template gallery' }, '⬅ Gallery')
+  );
+  view.appendChild(_topActions);
+
   view.append(
     h('div', { class: 'card', style: { padding: '1rem', marginBottom: '1rem' } },
       h('h3', { style: { marginTop: 0 } }, '🧪 Report builder'),
@@ -14501,15 +14523,25 @@ VIEWS.reportbuilder = async (view) => {
       )
     ),
     h('div', { id: 'rb-summary', class: 'cards', style: { marginBottom: '1rem' } }),
-    h('div', { class: 'chart-grid' },
-      h('div', { class: 'card card-wide' },
-        h('h3', { id: 'rb-chart-title' }, 'Breakdown'),
-        h('div', { class: 'chart-wrap', style: { height: '320px' } }, h('canvas', { id: 'rb-chart' }))
+    /* REPORT_BUILDER_v3 — main canvas (left) + Generate report rail (right) */
+    h('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 320px', gap: '1rem', alignItems: 'start' } },
+      h('div', {},  /* LEFT: chart card stacked on top of detail table */
+        h('div', { class: 'card', style: { padding: '.8rem 1rem' } },
+          h('h3', { id: 'rb-chart-title', style: { marginTop: 0 } }, 'Breakdown'),
+          h('div', { class: 'chart-wrap', style: { height: '320px' } }, h('canvas', { id: 'rb-chart' }))
+        ),
+        h('div', { class: 'card', style: { padding: '.8rem 1rem', marginTop: '.8rem' } },
+          h('h3', { style: { marginTop: 0 } }, 'Detail'),
+          h('div', { id: 'rb-table' })
+        )
       ),
-      h('div', { class: 'card card-wide' },
-        h('h3', {}, 'Detail'),
-        h('div', { id: 'rb-table' })
-      )
+      h('div', { id: 'rb-rail', style: {
+        position: 'sticky', top: '1rem',
+        padding: '.9rem', background: '#fff',
+        border: '1px solid #e2e8f0', borderRadius: '8px',
+        boxShadow: '0 1px 3px rgba(15,23,42,.05)',
+        maxHeight: 'calc(100vh - 100px)', overflowY: 'auto'
+      } })
     )
   );
 
@@ -14565,6 +14597,7 @@ async function loadReportBuilder() {
   let resp;
   try {
     resp = await api('api_reports_groupBy', filters, dim);
+    window._rbLastResp = resp;  /* REPORT_BUILDER_v3 — expose for rail */
   } catch (e) {
     $('#rb-table').innerHTML = `<div class="error-box">${esc(e.message || e)}</div>`;
     return;
@@ -33474,3 +33507,197 @@ async function openREPaymentPlanEditor(plan, onSaved) {
   } catch (_) {}
 }
 try { window.openREPaymentPlanEditor = openREPaymentPlanEditor; } catch (_) {}
+
+
+/* ==========================================================================
+ * REPORT_BUILDER_v3 — Generate-report right rail (Google-Ads style)
+ * ========================================================================== */
+
+/* Catalog of metrics the user can add as columns. Each metric defines:
+ *   key      — internal id
+ *   label    — column header text
+ *   icon     — small emoji prefix
+ *   compute  — (row, idx, allRows, total) → numeric/string for the cell
+ *   align    — 'left' | 'right' (default right) */
+const RB_METRICS = {
+  count:        { key: 'count',        label: 'Leads',         icon: '🔢', compute: (r) => Number(r.count) || 0 },
+  pct:          { key: 'pct',          label: '% of total',    icon: '📊', compute: (r, i, all, total) => total > 0 ? ((Number(r.count) / total) * 100).toFixed(2) + '%' : '0%' },
+  cumulative:   { key: 'cumulative',   label: 'Cumulative',    icon: '➕', compute: (r, i, all) => { let s = 0; for (let k = 0; k <= i; k++) s += Number(all[k].count) || 0; return s; } },
+  cumulative_pct:{ key: 'cumulative_pct', label: 'Cumulative %', icon: '📈', compute: (r, i, all, total) => { if (total <= 0) return '0%'; let s = 0; for (let k = 0; k <= i; k++) s += Number(all[k].count) || 0; return (s/total*100).toFixed(1) + '%'; } },
+  rank:         { key: 'rank',         label: 'Rank',          icon: '🏷', compute: (r, i) => i + 1 }
+};
+
+const RB_DEFAULT_METRICS = ['count', 'pct'];
+
+function _rbRail() { return document.getElementById('rb-rail'); }
+
+function _rbRenderRail(currentDim, dimSelectEl) {
+  const rail = _rbRail();
+  if (!rail) return;
+  rail.innerHTML = '';
+
+  // Header
+  rail.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', marginBottom: '.7rem' } },
+    h('span', { style: { fontSize: '1rem' } }, '⚙️'),
+    h('div', { style: { fontWeight: 700, fontSize: '.95rem' } }, 'Generate report')
+  ));
+
+  // Output type chooser (mirrors the Table dropdown in Google Ads)
+  rail.appendChild(h('div', { style: { padding: '.5rem .6rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px', marginBottom: '.8rem' } },
+    h('div', { class: 'muted', style: { fontSize: '.7rem', fontWeight: 600, marginBottom: '.3rem' } }, 'Output type'),
+    (() => {
+      const sel = h('select', { class: 'input', style: { width: '100%' } },
+        h('option', { value: 'table', selected: window._rbChartType === 'table' ? 'selected' : null }, '🗒 Table'),
+        h('option', { value: 'bar',   selected: !window._rbChartType || window._rbChartType === 'bar' ? 'selected' : null }, '📊 Bar chart'),
+        h('option', { value: 'line',  selected: window._rbChartType === 'line' ? 'selected' : null }, '📈 Line chart'),
+        h('option', { value: 'pie',   selected: window._rbChartType === 'pie' ? 'selected' : null }, '🥧 Pie chart')
+      );
+      sel.onchange = () => { window._rbChartType = sel.value; try { _syncChartTypeUI(); } catch (_) {} loadReportBuilder(); };
+      return sel;
+    })()
+  ));
+
+  // --- ROW section ---
+  rail.appendChild(h('div', { style: { fontWeight: 700, fontSize: '.78rem', color: '#475569', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: '.3rem' } }, 'Row'));
+  const rowCard = h('div', { style: { padding: '.4rem .5rem', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '6px', display: 'flex', alignItems: 'center', gap: '.4rem', marginBottom: '.8rem' } },
+    h('span', { style: { cursor: 'grab', color: '#94a3b8' } }, '⋮⋮'),
+    h('span', { style: { flex: 1, fontSize: '.85rem', fontWeight: 500 } }, _rbDimLabel(currentDim, dimSelectEl)),
+    h('button', { class: 'btn icon', title: 'Change row dimension', style: { padding: '.1rem .35rem' }, onclick: () => {
+      // Bring the user back to the inline dim select
+      if (dimSelectEl) { dimSelectEl.focus(); dimSelectEl.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+    } }, '✎')
+  );
+  rail.appendChild(rowCard);
+
+  // --- COLUMN section ---
+  window._rbActiveMetrics = window._rbActiveMetrics || RB_DEFAULT_METRICS.slice();
+  rail.appendChild(h('div', { style: { fontWeight: 700, fontSize: '.78rem', color: '#475569', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: '.3rem' } }, 'Column'));
+  const colsBox = h('div', { style: { marginBottom: '.5rem' } });
+  function _renderCols() {
+    colsBox.innerHTML = '';
+    if (!window._rbActiveMetrics.length) {
+      colsBox.appendChild(h('div', { class: 'muted', style: { fontSize: '.75rem', padding: '.4rem', textAlign: 'center', border: '1px dashed #cbd5e1', borderRadius: '6px' } }, 'No columns yet — pick from Recommended below'));
+      return;
+    }
+    window._rbActiveMetrics.forEach((mk, i) => {
+      const m = RB_METRICS[mk]; if (!m) return;
+      const item = h('div', { style: { padding: '.4rem .5rem', background: '#fff', border: '1px solid #e2e8f0', borderRadius: '6px', display: 'flex', alignItems: 'center', gap: '.4rem', marginBottom: '.3rem' } },
+        h('span', { style: { cursor: 'grab', color: '#94a3b8' } }, '⋮⋮'),
+        h('span', { style: { flex: 1, fontSize: '.82rem' } }, m.icon + ' ' + m.label),
+        i > 0 ? h('button', { class: 'btn icon', title: 'Move up', style: { padding: '.1rem .3rem', fontSize: '.7rem' }, onclick: () => { const tmp = window._rbActiveMetrics[i-1]; window._rbActiveMetrics[i-1] = mk; window._rbActiveMetrics[i] = tmp; _renderCols(); loadReportBuilder(); } }, '↑') : null,
+        i < window._rbActiveMetrics.length - 1 ? h('button', { class: 'btn icon', title: 'Move down', style: { padding: '.1rem .3rem', fontSize: '.7rem' }, onclick: () => { const tmp = window._rbActiveMetrics[i+1]; window._rbActiveMetrics[i+1] = mk; window._rbActiveMetrics[i] = tmp; _renderCols(); loadReportBuilder(); } }, '↓') : null,
+        h('button', { class: 'btn icon', title: 'Remove', style: { padding: '.1rem .35rem', fontSize: '.78rem', color: '#dc2626' }, onclick: () => { window._rbActiveMetrics = window._rbActiveMetrics.filter(k => k !== mk); _renderCols(); _renderRec(); loadReportBuilder(); } }, '✕')
+      );
+      colsBox.appendChild(item);
+    });
+  }
+  rail.appendChild(colsBox);
+
+  // --- RECOMMENDED COLUMNS section ---
+  rail.appendChild(h('div', { style: { fontWeight: 700, fontSize: '.78rem', color: '#475569', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: '.3rem', marginTop: '.7rem' } }, 'Recommended columns'));
+  rail.appendChild(h('div', { class: 'muted', style: { fontSize: '.72rem', marginBottom: '.4rem' } }, 'Click to add to the Column list above.'));
+  const recBox = h('div', {});
+  function _renderRec() {
+    recBox.innerHTML = '';
+    const active = new Set(window._rbActiveMetrics || []);
+    let n = 0;
+    Object.values(RB_METRICS).forEach(m => {
+      if (active.has(m.key)) return;
+      n += 1;
+      recBox.appendChild(h('button', {
+        class: 'btn',
+        style: { display: 'block', width: '100%', textAlign: 'left', marginBottom: '.25rem', fontSize: '.78rem', padding: '.3rem .5rem' },
+        onclick: () => {
+          window._rbActiveMetrics = (window._rbActiveMetrics || []).concat([m.key]);
+          _renderCols(); _renderRec();
+          loadReportBuilder();
+        }
+      }, '➕ ' + m.icon + ' ' + m.label));
+    });
+    if (n === 0) {
+      recBox.appendChild(h('div', { class: 'muted', style: { fontSize: '.75rem', padding: '.4rem', textAlign: 'center' } }, 'All metrics are in use.'));
+    }
+  }
+  rail.appendChild(recBox);
+
+  _renderCols();
+  _renderRec();
+}
+
+function _rbDimLabel(dim, dimSelectEl) {
+  if (dimSelectEl && dimSelectEl.options) {
+    const opt = Array.from(dimSelectEl.options).find(o => o.value === dim);
+    if (opt) return opt.textContent;
+  }
+  return dim || '(no dimension)';
+}
+
+/* Hook: call after every loadReportBuilder() run to render the rail + the
+ * extra columns into the detail table. We monkey-patch loadReportBuilder
+ * with a wrapper that triggers _rbRenderRail + _rbInjectExtraColumns. */
+(function wrap() {
+  const origLoad = window.loadReportBuilder;
+  if (!origLoad || origLoad.__rb3Wrapped) return;
+  async function wrapped() {
+    const r = await origLoad.apply(this, arguments);
+    try {
+      const dimSel = document.getElementById('rb-dim');
+      _rbRenderRail((dimSel || {}).value || 'product', dimSel);
+      _rbInjectExtraColumns();
+    } catch (_) {}
+    return r;
+  }
+  wrapped.__rb3Wrapped = true;
+  window.loadReportBuilder = wrapped;
+  try { loadReportBuilder = wrapped; } catch (_) {}
+})();
+
+/* After the existing renderer drew the detail table with Leads + % of total,
+ * append columns for every active metric that isn't already shown. Uses the
+ * resp data attached to ctx by the renderer; falls back to no-op if absent. */
+function _rbInjectExtraColumns() {
+  const tableEl = document.getElementById('rb-table');
+  if (!tableEl) return;
+  const table = tableEl.querySelector('table'); if (!table) return;
+  // We rebuild the table directly using window._rbLastResp (populated by the
+  // existing loader). If it's not exposed, derive from DOM.
+  const resp = window._rbLastResp;
+  const dim  = (document.getElementById('rb-dim') || {}).value || '';
+  const dimLabel = (() => {
+    const ds = document.getElementById('rb-dim');
+    if (!ds) return '';
+    const o = Array.from(ds.options).find(o => o.value === dim);
+    return o ? o.textContent : '';
+  })();
+  if (!resp || !resp.rows) return;
+  const total = resp.rows.reduce((a, r) => a + (Number(r.count) || 0), 0);
+  const metrics = (window._rbActiveMetrics && window._rbActiveMetrics.length) ? window._rbActiveMetrics : RB_DEFAULT_METRICS;
+  // Replace the existing thead/tbody with a metric-driven one
+  const thead = h('thead', {}, h('tr', {},
+    h('th', {}, dimLabel),
+    ...metrics.map(mk => RB_METRICS[mk] ? h('th', { style: { textAlign: 'right' } }, RB_METRICS[mk].icon + ' ' + RB_METRICS[mk].label) : null)
+  ));
+  const tbody = h('tbody', {});
+  resp.rows.forEach((r, i) => {
+    tbody.appendChild(h('tr', {},
+      h('td', {}, r.value || '—'),
+      ...metrics.map(mk => {
+        const m = RB_METRICS[mk]; if (!m) return null;
+        const v = m.compute(r, i, resp.rows, total);
+        return h('td', { style: { textAlign: 'right' } }, String(v));
+      })
+    ));
+  });
+  tbody.appendChild(h('tr', { style: { fontWeight: 700, background: '#f8fafc' } },
+    h('td', {}, 'Total'),
+    ...metrics.map(mk => {
+      const m = RB_METRICS[mk]; if (!m) return null;
+      if (mk === 'count') return h('td', { style: { textAlign: 'right' } }, String(total));
+      if (mk === 'pct')   return h('td', { style: { textAlign: 'right' } }, '100%');
+      return h('td', { style: { textAlign: 'right' } }, '—');
+    })
+  ));
+  table.innerHTML = '';
+  table.appendChild(thead);
+  table.appendChild(tbody);
+}
