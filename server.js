@@ -773,6 +773,13 @@ function copyPre(btn) {
 }
 
 
+/* HELP_SHOTS_v1 — public help-page screenshot store. */
+const helpShots = require('./routes/saas/helpShots');
+const _hsUpload = require('express').json({ limit: '5mb' });
+app.post('/api/saas/uploadHelpShot', _hsUpload, helpShots.expressUpload);
+app.get('/api/saas/helpShot/:name',  helpShots.expressServe);
+app.get('/api/saas/helpShots',       helpShots.expressList);
+
 // Public brand JSON (used by the landing page)
 app.get('/api/saas/brand', async (_req, res) => {
   try {
