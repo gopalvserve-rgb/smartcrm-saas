@@ -100,11 +100,75 @@ function _resolveColumnTarget(rawHeader, mapping) {
   return norm;  /* keep as-is; might be a custom field like cf_<key> */
 }
 
-/* SHEET_SYNC_v2 — self-heal column_mapping column on sheet_integrations. */
+/* SHEET_SYNC_v3 — full self-heal for sheet_integrations + sheet_imported_rows.
+ * Some tenants ended up with a table that was missing the id column or
+ * was never created at all (pre-bootstrap-era tenants). The 'column id
+ * does not exist' error was the symptom. This routine now:
+ *   1. Creates both tables fresh if missing (with id SERIAL PRIMARY KEY).
+ *   2. Adds any columns the runtime relies on (idempotent ALTERs).
+ *   3. Cached after first successful run to keep the hot path cheap. */
 let _schemaHealed = false;
 async function _ensureSchema() {
   if (_schemaHealed) return;
-  try { await db.query("ALTER TABLE sheet_integrations ADD COLUMN IF NOT EXISTS column_mapping TEXT DEFAULT '{}'"); } catch (_) {}
+  try {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS sheet_integrations (
+        id SERIAL PRIMARY KEY,
+        name TEXT,
+        sheet_id TEXT,
+        sheet_gid TEXT DEFAULT '0',
+        default_source TEXT DEFAULT 'Google Sheet',
+        default_assignee_id INTEGER,
+        poll_interval_min INTEGER DEFAULT 15,
+        last_synced_at TIMESTAMPTZ,
+        last_synced_count INTEGER DEFAULT 0,
+        last_error TEXT,
+        is_active INTEGER DEFAULT 1,
+        created_by INTEGER,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        webhook_token TEXT,
+        column_mapping TEXT DEFAULT '{}'
+      )
+    `);
+    // For older tables created without one or more columns — add them now.
+    const colsToAdd = [
+      ['name', 'TEXT'],
+      ['sheet_id', 'TEXT'],
+      ['sheet_gid', "TEXT DEFAULT '0'"],
+      ['default_source', "TEXT DEFAULT 'Google Sheet'"],
+      ['default_assignee_id', 'INTEGER'],
+      ['poll_interval_min', 'INTEGER DEFAULT 15'],
+      ['last_synced_at', 'TIMESTAMPTZ'],
+      ['last_synced_count', 'INTEGER DEFAULT 0'],
+      ['last_error', 'TEXT'],
+      ['is_active', 'INTEGER DEFAULT 1'],
+      ['created_by', 'INTEGER'],
+      ['created_at', 'TIMESTAMPTZ DEFAULT NOW()'],
+      ['webhook_token', 'TEXT'],
+      ['column_mapping', "TEXT DEFAULT '{}'"]
+    ];
+    for (const [col, type] of colsToAdd) {
+      try { await db.query('ALTER TABLE sheet_integrations ADD COLUMN IF NOT EXISTS ' + col + ' ' + type); } catch (_) {}
+    }
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS sheet_imported_rows (
+        id SERIAL PRIMARY KEY,
+        integration_id INTEGER,
+        row_hash TEXT,
+        imported_at TIMESTAMPTZ DEFAULT NOW(),
+        lead_id INTEGER
+      )
+    `);
+    const colsImport = [
+      ['integration_id', 'INTEGER'],
+      ['row_hash', 'TEXT'],
+      ['imported_at', 'TIMESTAMPTZ DEFAULT NOW()'],
+      ['lead_id', 'INTEGER']
+    ];
+    for (const [col, type] of colsImport) {
+      try { await db.query('ALTER TABLE sheet_imported_rows ADD COLUMN IF NOT EXISTS ' + col + ' ' + type); } catch (_) {}
+    }
+  } catch (e) { console.warn('[_ensureSchema sheet_integrations]', e.message); }
   _schemaHealed = true;
 }
 
@@ -316,6 +380,7 @@ async function api_sheetSync_list(token) {
 
 async function api_sheetSync_save(token, payload) {
   const me = await authUser(token);
+  await _ensureSchema();
   if (me.role !== 'admin') throw new Error('Admin only');
   await _ensureSchema();
   const p = payload || {};
@@ -424,6 +489,7 @@ async function api_sheetSync_delete(token, id) {
 
 async function api_sheetSync_diagnose(token, id) {
   const me = await authUser(token);
+  await _ensureSchema();
   if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin / manager only');
   await _ensureSchema();
   const integration = await db.findOneBy('sheet_integrations', 'id', id);
@@ -570,6 +636,7 @@ async function api_sheetSync_recentActivity(token, id) {
 
 async function api_sheetSync_runNow(token, id) {
   const me = await authUser(token);
+  await _ensureSchema();
   if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin / manager only');
   const i = await db.findOneBy('sheet_integrations', 'id', id);
   if (!i) throw new Error('Integration not found');
@@ -701,6 +768,7 @@ function _applyCustomMapping(payload, mapping) {
 
 async function api_integrations_mapping_get(token, source) {
   const me = await authUser(token);
+  await _ensureSchema();
   if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
   await _ensureLeadSourceMappingTable();
   const norm = String(source || '').toLowerCase();
