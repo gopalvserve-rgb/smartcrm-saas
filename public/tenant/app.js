@@ -12904,10 +12904,11 @@ function _renderCallActivity(r) {
       if (sub) c.appendChild(h('div', { class: 'kpi-sub' }, sub));
       return c;
     };
-    cards.appendChild(mk('📞 Total calls',   s.total_calls || 0));
-    cards.appendChild(mk('📥 Incoming',      s.incoming || 0));
-    cards.appendChild(mk('📤 Outgoing',      s.outgoing || 0));
-    cards.appendChild(mk('❌ Missed',        s.missed || 0));
+    /* CALL_UNIQUE_v1 — KPI subtitles show distinct phone counts */
+    cards.appendChild(mk('📞 Total calls', s.total_calls || 0, '#️⃣ ' + (s.unique_total || 0) + ' unique numbers'));
+    cards.appendChild(mk('📥 Incoming',    s.incoming || 0,    '#️⃣ ' + (s.unique_incoming || 0) + ' unique callers'));
+    cards.appendChild(mk('📤 Outgoing',    s.outgoing || 0,    '#️⃣ ' + (s.unique_outgoing || 0) + ' unique dialled'));
+    cards.appendChild(mk('❌ Missed',      s.missed || 0,      '#️⃣ ' + (s.unique_missed || 0) + ' unique missed'));
     cards.appendChild(mk('🗣️ Total talk',    _caSecsToHuman(s.total_talk_s), 'sum of recorded durations'));
     cards.appendChild(mk('⏱️ Avg call',       _caSecsToHuman(s.avg_talk_s), 'mean of non-zero calls'));
     cards.appendChild(mk('👥 Active users',  s.total_users || 0));
@@ -12926,6 +12927,7 @@ function _renderCallActivity(r) {
       t.innerHTML = '<thead><tr>' +
         '<th>Rep</th><th>Manager</th>' +
         '<th>Total</th><th>In</th><th>Out</th><th>Missed</th>' +
+        /* CALL_UNIQUE_v1 */ '<th title="Distinct phone numbers contacted by this rep">Unique #s</th>' +
         '<th>Talk</th><th>Avg call</th><th>Avg gap</th><th>Last call</th>' +
         '</tr></thead><tbody>' +
         rows.map(r => '<tr>' +
@@ -12935,6 +12937,7 @@ function _renderCallActivity(r) {
           '<td>' + (r.in_calls || 0) + '</td>' +
           '<td>' + (r.out_calls || 0) + '</td>' +
           '<td>' + (r.missed_calls || 0) + '</td>' +
+          /* CALL_UNIQUE_v1 */ '<td><b>' + (r.unique_phones || 0) + '</b>' + (r.unique_out ? ' <span class="muted" style="font-size:.78em">(' + r.unique_out + ' out)</span>' : '') + '</td>' +
           '<td>' + _caSecsToHuman(r.talk_s) + '</td>' +
           '<td>' + _caSecsToHuman(r.avg_talk_s) + '</td>' +
           '<td>' + _caSecsToHuman(r.avg_gap_s) + '</td>' +

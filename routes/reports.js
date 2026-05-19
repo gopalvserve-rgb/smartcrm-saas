@@ -1011,10 +1011,15 @@ async function api_reports_callActivity(token, filters) {
   // --- Summary ---
   const summarySql = callsCte + `
     SELECT
-      COUNT(*)::int                                        AS total_calls,
-      COUNT(*) FILTER (WHERE direction = 'in')::int        AS incoming,
-      COUNT(*) FILTER (WHERE direction = 'out')::int       AS outgoing,
-      COUNT(*) FILTER (WHERE direction = 'missed')::int    AS missed,
+      /* CALL_UNIQUE_v1 — totals + distinct-phone counts */
+      COUNT(*)::int                                                            AS total_calls,
+      COUNT(*) FILTER (WHERE direction = 'in')::int                            AS incoming,
+      COUNT(*) FILTER (WHERE direction = 'out')::int                           AS outgoing,
+      COUNT(*) FILTER (WHERE direction = 'missed')::int                        AS missed,
+      COUNT(DISTINCT phone)::int                                               AS unique_total,
+      COUNT(DISTINCT phone) FILTER (WHERE direction = 'in')::int               AS unique_incoming,
+      COUNT(DISTINCT phone) FILTER (WHERE direction = 'out')::int              AS unique_outgoing,
+      COUNT(DISTINCT phone) FILTER (WHERE direction = 'missed')::int           AS unique_missed,
       COALESCE(SUM(duration_s), 0)::int                    AS total_talk_s,
       ROUND(COALESCE(AVG(NULLIF(duration_s, 0))::numeric, 0), 0)::int AS avg_talk_s,
       COUNT(DISTINCT user_id)::int                          AS total_users
@@ -1061,6 +1066,8 @@ async function api_reports_callActivity(token, filters) {
       COUNT(*) FILTER (WHERE direction='in')::int            AS in_calls,
       COUNT(*) FILTER (WHERE direction='out')::int           AS out_calls,
       COUNT(*) FILTER (WHERE direction='missed')::int        AS missed_calls,
+      /* CALL_UNIQUE_v1 */ COUNT(DISTINCT phone)::int        AS unique_phones,
+      COUNT(DISTINCT phone) FILTER (WHERE direction='out')::int AS unique_out,
       COALESCE(SUM(duration_s), 0)::int                      AS talk_s,
       ROUND(COALESCE(AVG(NULLIF(duration_s, 0))::numeric, 0), 0)::int AS avg_talk_s,
       ROUND(COALESCE(AVG(gap_s)::numeric, 0), 0)::int        AS avg_gap_s,
