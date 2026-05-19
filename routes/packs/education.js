@@ -202,6 +202,8 @@ async function api_edu_enrollment_create(token, payload) {
   );
   const enrollmentId = r.rows[0].id;
   await _generateSchedule(enrollmentId, startDate, totalAmount, plan);
+  /* LEAD_ACTIVITY_v1 — count enrollment as a lead activity */
+  try { require('../tat').logAction(leadId, 'edu_enrollment_created', me.id, { enrollment_id: enrollmentId, course: String(p.course_name || ''), amount: totalAmount }); } catch (_) {}
   return { ok: true, enrollment_id: enrollmentId };
 }
 
@@ -238,6 +240,12 @@ async function api_edu_installment_markPaid(token, payload) {
      VALUES ($1,$2,$3,$4,$5,$6,$7)`,
     [inst.id, inst.enrollment_id, amount, String(p.mode || 'cash'), String(p.receipt_no || ''), String(p.note || ''), me.id]
   );
+  /* LEAD_ACTIVITY_v1 — count fee payment as a lead activity */
+  try {
+    const er = await db.query('SELECT lead_id FROM edu_enrollments WHERE id = $1', [inst.enrollment_id]);
+    const leadId = er.rows[0] && er.rows[0].lead_id;
+    if (leadId) require('../tat').logAction(leadId, 'edu_payment', me.id, { installment_id: inst.id, amount, status, mode: String(p.mode || 'cash') });
+  } catch (_) {}
   return { ok: true, status, paid_amount: newPaid };
 }
 

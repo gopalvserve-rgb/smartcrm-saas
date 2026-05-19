@@ -291,6 +291,11 @@ async function api_re_booking_create(token, payload) {
     );
   }
 
+  /* LEAD_ACTIVITY_v1 — count booking creation as a lead activity */
+  try {
+    const _me = await authUser(token);
+    require('../tat').logAction(Number(p.lead_id), 're_booking_created', _me.id, { booking_id: bookingId, unit_id: Number(p.unit_id), total_price: total, channel_partner_id: cpId || null });
+  } catch (_) {}
   return { ok: true, booking_id: bookingId, demands: DEFAULT_MILESTONES.length };
 }
 
@@ -357,6 +362,14 @@ async function api_re_demand_markPaid(token, payload) {
       await db.query(`UPDATE re_bookings SET status='registered' WHERE id=$1`, [dem.booking_id]);
     }
   }
+
+  /* LEAD_ACTIVITY_v1 — count demand payment as a lead activity */
+  try {
+    const _me = await authUser(token);
+    const lr = await db.query('SELECT lead_id FROM re_bookings WHERE id = $1', [dem.booking_id]);
+    const leadId = lr.rows[0] && lr.rows[0].lead_id;
+    if (leadId) require('../tat').logAction(leadId, 're_demand_paid', _me.id, { demand_id: Number(p.id), amount: amt, status, code: dem.code });
+  } catch (_) {}
 
   return { ok: true, status, paid_amount: newPaid };
 }
@@ -670,6 +683,14 @@ async function api_re_booking_cancel(token, payload) {
       await db.query(`UPDATE re_commission_ledger SET status='cancelled' WHERE id=$1`, [row.id]);
     }
   } catch (_) {}
+  /* LEAD_ACTIVITY_v1 — count booking cancellation as a lead activity */
+  try {
+    const _me = await authUser(token);
+    const lr = await db.query('SELECT lead_id FROM re_bookings WHERE id = $1', [Number(payload && payload.id)]);
+    const _leadId = lr.rows[0] && lr.rows[0].lead_id;
+    if (_leadId) require('../tat').logAction(_leadId, 're_booking_cancelled', _me.id, { booking_id: Number(payload.id) });
+  } catch (_) {}
+
 
   return {
     ok: true,
@@ -910,6 +931,9 @@ async function api_re_requirements_save(token, payload) {
       [Number(p.budget_min||0), Number(p.budget_max||0), p.preferred_bhk||'',
        p.preferred_locations||'', p.preferred_projects||'', p.possession_timeline||'',
        p.intent||'self_use', p.notes||'', p.is_active==null?1:Number(!!p.is_active), p.id]);
+  /* LEAD_ACTIVITY_v1 — count buyer-req save as a lead activity */
+  try { const _me = await authUser(token); if (payload && payload.lead_id) require('../tat').logAction(Number(payload.lead_id), 're_requirement_saved', _me.id, { type: String(payload.requirement_type || ''), budget_max: Number(payload.budget_max || 0) }); } catch (_) {}
+
     return { ok: true, id: p.id };
   }
   const r = await db.query(`INSERT INTO re_buyer_requirements

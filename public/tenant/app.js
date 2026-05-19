@@ -32173,7 +32173,11 @@ async function openLeadActivityTimeline(leadId, leadName) {
     const _icon = {
       created: '✨', status_change: '🔄', remark: '💬', note_updated: '📝',
       followup_set: '🗓', tags_updated: '🏷', assigned: '👤', reassigned: '🔁',
-      qualified: '✅', unqualified: '↩️', whatsapp_in: '📥', whatsapp_out: '📤'
+      qualified: '✅', unqualified: '↩️', whatsapp_in: '📥', whatsapp_out: '📤',
+      /* LEAD_ACTIVITY_v1 — Education + Real Estate pack action types */
+      edu_enrollment_created: '🎓', edu_payment: '💰',
+      re_booking_created: '🏢', re_demand_paid: '💸',
+      re_requirement_saved: '🎯', re_booking_cancelled: '❌'
     };
     rows.forEach(r => {
       const ic = _icon[r.action] || '·';
@@ -32186,6 +32190,13 @@ async function openLeadActivityTimeline(leadId, leadName) {
         if (r.action === 'assigned') return 'Reassigned to user #' + (m.to || '?');
         if (r.action === 'note_updated') return (m.preview || '').slice(0, 200);
         if (r.action === 'whatsapp_out' || r.action === 'whatsapp_in') return (m.body || m.text || '').slice(0, 200);
+        /* LEAD_ACTIVITY_v1 — pack action descriptions */
+        if (r.action === 'edu_enrollment_created') return 'Enrolled in ' + (m.course || 'course') + ' · ₹' + (m.amount || 0);
+        if (r.action === 'edu_payment') return 'Payment ₹' + (m.amount || 0) + ' (' + (m.mode || 'cash') + ') · status: ' + (m.status || 'paid');
+        if (r.action === 're_booking_created') return 'Unit booked · ₹' + (m.total_price || 0) + (m.channel_partner_id ? ' · via partner #' + m.channel_partner_id : '');
+        if (r.action === 're_demand_paid') return 'Demand "' + (m.code || '') + '" paid ₹' + (m.amount || 0) + ' · status: ' + (m.status || 'paid');
+        if (r.action === 're_requirement_saved') return 'Buyer reqs saved · ' + (m.type || 'type') + (m.budget_max ? ' · max ₹' + m.budget_max : '');
+        if (r.action === 're_booking_cancelled') return 'Booking #' + (m.booking_id || '?') + ' cancelled';
         return '';
       })();
       body.appendChild(h('div', {
@@ -32263,7 +32274,11 @@ VIEWS.activityreport = async (view) => {
         const _actEmoji = {
           remark: '💬', status_change: '🔄', followup_set: '🗓', note_updated: '📝',
           tags_updated: '🏷', assigned: '👤', reassigned: '🔁',
-          qualified: '✅', unqualified: '↩️', whatsapp_in: '📥', whatsapp_out: '📤'
+          qualified: '✅', unqualified: '↩️', whatsapp_in: '📥', whatsapp_out: '📤',
+          /* LEAD_ACTIVITY_v1 — pack action types */
+          edu_enrollment_created: '🎓', edu_payment: '💰',
+          re_booking_created: '🏢', re_demand_paid: '💸',
+          re_requirement_saved: '🎯', re_booking_cancelled: '❌'
         };
 
         const tbl = h('table', { class: 'table' });
