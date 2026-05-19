@@ -11359,6 +11359,50 @@ function buildWaCompose(phone, onSent, opts) {
     if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); send(); }
   });
 
+  /* WA_PASTE_IMG_v1 — Ctrl/Cmd+V image from clipboard → attach as pending media */
+  input.addEventListener('paste', async ev => {
+    const items = (ev.clipboardData && ev.clipboardData.items) || [];
+    let imgFile = null;
+    for (const it of items) {
+      if (it && it.kind === 'file' && /^image\//.test(it.type || '')) {
+        const f = it.getAsFile();
+        if (f) { imgFile = f; break; }
+      }
+    }
+    if (!imgFile) return;            // not an image paste — let default handler run
+    ev.preventDefault();
+    if (imgFile.size > 25 * 1024 * 1024) {
+      toast('Pasted image too large — WhatsApp images cap at 16 MB', 'err');
+      return;
+    }
+    // Synth a friendly filename if the clipboard didn't give us one
+    if (!imgFile.name || imgFile.name === 'image.png') {
+      const ext = (imgFile.type || 'image/png').split('/')[1] || 'png';
+      Object.defineProperty(imgFile, 'name', { value: 'pasted-' + Date.now() + '.' + ext, writable: false });
+    }
+    previewSlot.innerHTML = '';
+    previewSlot.hidden = false;
+    previewSlot.appendChild(h('span', { class: 'muted' }, 'Uploading pasted image…'));
+    try {
+      const fd = new FormData();
+      fd.append('file', imgFile);
+      const r = await fetch('/api/wa/upload', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + (CRM.token || '') },
+        body: fd
+      });
+      const j = await r.json();
+      if (!r.ok || j.error) throw new Error(j.error || ('upload failed (' + r.status + ')'));
+      pending = j;
+      renderPreview();
+      input.focus();
+    } catch (e) {
+      pending = null;
+      previewSlot.hidden = true;
+      toast(e.message || 'Pasted image upload failed', 'err');
+    }
+  });
+
   fileInput.addEventListener('change', async () => {
     const f = fileInput.files && fileInput.files[0];
     if (!f) return;
@@ -25527,7 +25571,43 @@ function _initFloatingChat() {
     document.getElementById('chat-back-btn').onclick = () => { _activePhone = null; body.style.display = ''; renderThreads(); };
     const inp = document.getElementById('chat-thread-input');
     const send = document.getElementById('chat-thread-send');
-    send.onclick = async () => {
+    /* WA_PASTE_IMG_v1 — paste image into floating dock compose */
+    inp.addEventListener && inp.addEventListener('paste', async ev => {
+      const items = (ev.clipboardData && ev.clipboardData.items) || [];
+      let imgFile = null;
+      for (const it of items) {
+        if (it && it.kind === 'file' && /^image\//.test(it.type || '')) {
+          const f = it.getAsFile();
+          if (f) { imgFile = f; break; }
+        }
+      }
+      if (!imgFile) return;
+      ev.preventDefault();
+      if (imgFile.size > 25 * 1024 * 1024) { toast('Pasted image too large (max 25 MB)', 'err'); return; }
+      if (!imgFile.name || imgFile.name === 'image.png') {
+        const ext = (imgFile.type || 'image/png').split('/')[1] || 'png';
+        try { Object.defineProperty(imgFile, 'name', { value: 'pasted-' + Date.now() + '.' + ext, writable: false }); } catch (_) {}
+      }
+      previewSlot.style.display = 'block';
+      previewSlot.innerHTML = '<span class="muted">Uploading pasted image…</span>';
+      try {
+        const fd = new FormData();
+        fd.append('file', imgFile);
+        const r = await fetch('/api/wa/upload', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + (CRM.token || '') },
+          body: fd
+        });
+        const j = await r.json();
+        if (!r.ok || j.error) throw new Error(j.error || ('upload failed (' + r.status + ')'));
+        _pending = j;
+        renderPreview();
+      } catch (e) {
+        _pending = null; previewSlot.style.display = 'none';
+        toast('Pasted image upload failed: ' + e.message, 'err');
+      }
+    });
+        send.onclick = async () => {
       const t = inp.value.trim();
       if (!t && !_pending) return;
       send.disabled = true; const _orig = send.textContent; send.textContent = 'Sending...';
