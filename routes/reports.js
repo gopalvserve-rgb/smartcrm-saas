@@ -1591,5 +1591,6 @@ module.exports = {
   api_reports_callRatingByUser, api_reports_callActivity,
   api_reports_aiUsage, api_reports_aiCostEstimator,
   api_calendar_events,
-  api_reports_activityByUser  /* LEAD_ACTIVITY_v1 */
+  api_reports_activityByUser,  /* LEAD_ACTIVITY_v1 */
+  api_reports_pivot            /* REPORT_BUILDER_v4 */
 };
