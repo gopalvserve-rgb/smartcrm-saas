@@ -130,10 +130,19 @@ async function _runSheetSync(integration) {
     if (integration.last_error) {
       try { await db.update('sheet_integrations', integration.id, { last_error: '' }); } catch (_) {}
     }
-    return {
-      imported: 0, skipped: 0, total: 0, mode: 'push_only',
-      message: 'This integration has no public sheet URL — it is in PUSH mode. New rows arrive via the Apps Script webhook. To use polling instead, edit the integration and add a sheet URL (sheet must be shared as Anyone with link – Viewer).'
-    };
+    /* SHEET_SYNC_v2 — push-mode is a no-op for manual sync. Tell the user
+     * what's happening so they don't think they need to make the sheet public.
+     * Surface last-webhook stats so they can verify the Apps Script trigger
+     * is firing. */
+    const lastAt = integration.last_synced_at;
+    const lastN  = Number(integration.last_synced_count || 0);
+    let message = '✅ PUSH mode is active — nothing to sync manually. Your Apps Script POSTs each new row to the CRM automatically.';
+    if (lastAt) {
+      message += ' Last lead received via webhook: ' + new Date(lastAt).toLocaleString() + ' (' + lastN + ' lead' + (lastN === 1 ? '' : 's') + ' in that batch).';
+    } else {
+      message += ' No leads received yet — open your sheet → Extensions → Apps Script → Triggers and confirm the pushNewRowsToCRM function has a clock or onChange trigger.';
+    }
+    return { imported: 0, skipped: 0, total: 0, mode: 'push_only', message };
   }
   const fetched = await _fetchSheetCsv(integration);
   if (!fetched.ok) throw new Error(fetched.error);
@@ -377,6 +386,16 @@ async function sheetPushWebhook(req, res) {
       try {
         const created = await _internalCreateLead(lower, integ.created_by);
         results.push({ ok: true, lead_id: created.id });
+        /* SHEET_SYNC_v2 — log push imports so 'already_imported_rows' in
+         * diagnose reflects push leads too, and the same row can\'t be
+         * imported twice if the script accidentally re-sends it. */
+        try {
+          const hash = _hashRow(lower);
+          await db.insert('sheet_imported_rows', {
+            integration_id: integ.id, row_hash: hash,
+            imported_at: db.nowIso(), lead_id: created.id || null
+          });
+        } catch (_) {}
       } catch (e) {
         results.push({ ok: false, error: String(e.message || e) });
       }
@@ -435,7 +454,12 @@ async function api_sheetSync_diagnose(token, id) {
   } catch (_) {}
 
   if (out.mode === 'push_only') {
-    out.advice.push("This integration is PUSH-mode only. New rows arrive via the Apps Script webhook (POST to " + out.webhook_url_push + "). Verify in your Sheet: Extensions → Apps Script → Triggers — the pushNewRowsToCRM function should have a clock trigger. Or add a sheet URL below to switch to pull-mode polling.");
+    out.advice.push("✅ This integration uses PUSH mode — your sheet stays fully private. The Apps Script POSTs each new row to the CRM via the webhook URL below. You do NOT need to make the sheet public.");
+    if (out.last_synced_at) {
+      out.advice.push("Last lead received via webhook: " + new Date(out.last_synced_at).toLocaleString() + " (" + Number(out.last_synced_count || 0) + " in that batch). Add a row to your sheet, wait up to 5 min for the trigger to fire, then refresh this page — last_synced_at should update.");
+    } else {
+      out.advice.push("⚠ No leads received yet. To diagnose: open your sheet → Extensions → Apps Script → Triggers. Confirm the pushNewRowsToCRM function has a trigger (clock-based every 5 min, or 'On change'). Then open Executions tab — recent runs should show ✓ Completed.");
+    }
     return out;
   }
 

@@ -16246,10 +16246,15 @@ async function adminIntegrations() {
       h('button', { class: 'btn sm', onclick: async () => {
         try {
           const r = await api('api_sheetSync_runNow', s.id);
-          /* SHEET_SYNC_v2 — surface the server's detailed message instead of
-           * the misleading 'X new, Y skipped' line when X=0. */
-          if (r.message) toast(r.message, r.imported > 0 ? 'ok' : 'err');
-          else toast('Synced — ' + r.imported + ' new, ' + r.skipped + ' skipped', 'ok');
+          /* SHEET_SYNC_v2 — server returns mode='push_only' when there\'s no
+           * sheet URL configured. That\'s informational (push mode is healthy),
+           * not an error, so render it as 'ok' tone. */
+          if (r.message) {
+            const tone = (r.imported > 0 || r.mode === 'push_only') ? 'ok' : 'err';
+            toast(r.message, tone);
+          } else {
+            toast('Synced — ' + r.imported + ' new, ' + r.skipped + ' skipped', 'ok');
+          }
           showAdminTab('integrations');
         }
         catch (e) { toast(e.message, 'err'); }
