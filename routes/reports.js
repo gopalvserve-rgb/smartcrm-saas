@@ -1181,16 +1181,26 @@ async function api_reports_activityByUser(token, opts) {
   const visible = await getVisibleUserIds(me);
   opts = opts || {};
 
-  // Date window: default last 30 days (inclusive)
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const defFromD = new Date(today); defFromD.setDate(defFromD.getDate() - 29);
-  const fromStr = (opts.from && /^\d{4}-\d{2}-\d{2}$/.test(opts.from)) ? opts.from : defFromD.toISOString().slice(0, 10);
-  const toStr   = (opts.to   && /^\d{4}-\d{2}-\d{2}$/.test(opts.to))   ? opts.to   : today.toISOString().slice(0, 10);
-  const fromIso = fromStr + 'T00:00:00';
-  const toIso   = toStr   + 'T23:59:59';
-  const todayStr = today.toISOString().slice(0, 10);
-  const weekStart = new Date(today); weekStart.setDate(weekStart.getDate() - weekStart.getDay()); // Sun
-  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+  // LEAD_ACTIVITY_v1 HOTFIX — use REPORT_TZ everywhere for day buckets.
+  // Server runs UTC on Railway but users think in IST. Use _tzDate() (above)
+  // so today / week / month all match what the user sees on their screen.
+  const nowTz = _tzDate(new Date());              // 'YYYY-MM-DD' in REPORT_TZ
+  const _today = new Date(nowTz + 'T00:00:00');   // midnight of TZ-today, parsed as local
+  const defFromD = new Date(_today); defFromD.setDate(defFromD.getDate() - 29);
+  const fromStr = (opts.from && /^\d{4}-\d{2}-\d{2}$/.test(opts.from)) ? opts.from : _tzDate(defFromD);
+  const toStr   = (opts.to   && /^\d{4}-\d{2}-\d{2}$/.test(opts.to))   ? opts.to   : nowTz;
+  // Use a wide UTC window for the SQL to be safe across timezones:
+  // start at 18:30 UTC of (fromStr - 1) and end at 18:30 UTC of toStr — covers IST midnight to midnight.
+  // Simpler: use the full day in UTC, then filter by TZ-day in JS for precision.
+  const fromIso = fromStr + 'T00:00:00.000Z';
+  const _toEnd  = new Date(toStr + 'T00:00:00.000Z'); _toEnd.setUTCDate(_toEnd.getUTCDate() + 1);
+  const toIso   = _toEnd.toISOString();
+  const todayStr = nowTz;
+  // Week start = Sunday of TZ-today.
+  const weekStartD = new Date(_today); weekStartD.setDate(weekStartD.getDate() - weekStartD.getDay());
+  const weekStartStr = _tzDate(weekStartD);
+  // Month start = first of TZ-today's month.
+  const monthStartStr = nowTz.slice(0, 7) + '-01';
 
   // User scope: rep sees only self; manager/admin sees their visible set
   let userIds = visible;
@@ -1237,14 +1247,18 @@ async function api_reports_activityByUser(token, opts) {
 
   for (const r of rows) {
     const uid  = Number(r.user_id) || 0;
-    const day  = String(r.created_at).slice(0, 10);
+    // LEAD_ACTIVITY_v1 HOTFIX — TZ-aware day key. _tzDate() normalises both
+    // a JS Date and a string to "YYYY-MM-DD" in REPORT_TZ. String compares
+    // against todayStr / weekStartStr / monthStartStr then Just Work.
+    const day  = _tzDate(r.created_at);
     const act  = String(r.action_type || 'other');
-    const tIso = String(r.created_at);
+    // Skip rows outside the requested TZ-window (SQL used a wider UTC slice).
+    if (day < fromStr || day > toStr) continue;
     summary.total += 1;
     summary.by_action[act] = (summary.by_action[act] || 0) + 1;
-    if (day === todayStr) summary.today += 1;
-    if (tIso >= weekStart.toISOString()) summary.this_week += 1;
-    if (tIso >= monthStart.toISOString()) summary.this_month += 1;
+    if (day === todayStr)        summary.today      += 1;
+    if (day >= weekStartStr)     summary.this_week  += 1;
+    if (day >= monthStartStr)    summary.this_month += 1;
 
     if (!byUser[uid]) {
       byUser[uid] = { user_id: uid, user_name: r.user_name || '—', user_role: r.user_role || '',
@@ -1253,9 +1267,9 @@ async function api_reports_activityByUser(token, opts) {
     const u = byUser[uid];
     u.total += 1;
     u.by_action[act] = (u.by_action[act] || 0) + 1;
-    if (day === todayStr) u.today += 1;
-    if (tIso >= weekStart.toISOString()) u.this_week += 1;
-    if (tIso >= monthStart.toISOString()) u.this_month += 1;
+    if (day === todayStr)     u.today      += 1;
+    if (day >= weekStartStr)  u.this_week  += 1;
+    if (day >= monthStartStr) u.this_month += 1;
 
     if (!byDay[day]) byDay[day] = { day, total: 0, by_action: {} };
     byDay[day].total += 1;
@@ -1265,12 +1279,17 @@ async function api_reports_activityByUser(token, opts) {
     grid[uid].days[day] = (grid[uid].days[day] || 0) + 1;
   }
 
-  // Fill missing days in by_day so the chart shows a full timeline
+  // Fill missing days in by_day so the chart shows a full timeline.
+  // LEAD_ACTIVITY_v1 HOTFIX — iterate via fromStr/toStr inclusive in YYYY-MM-DD space.
   const allDays = [];
-  for (let d = new Date(fromStr); d <= new Date(toStr); d.setDate(d.getDate() + 1)) {
-    const ds = d.toISOString().slice(0, 10);
-    allDays.push(ds);
-    if (!byDay[ds]) byDay[ds] = { day: ds, total: 0, by_action: {} };
+  {
+    const _f = new Date(fromStr + 'T12:00:00Z');  // mid-day UTC to dodge DST drift
+    const _t = new Date(toStr   + 'T12:00:00Z');
+    for (let d = new Date(_f); d <= _t; d.setUTCDate(d.getUTCDate() + 1)) {
+      const ds = d.toISOString().slice(0, 10);
+      allDays.push(ds);
+      if (!byDay[ds]) byDay[ds] = { day: ds, total: 0, by_action: {} };
+    }
   }
 
   return {
