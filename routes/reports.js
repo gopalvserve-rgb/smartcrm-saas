@@ -1445,11 +1445,19 @@ async function api_reports_pivot(token, payload) {
   const NOW = Date.now();
   const finalStatusIds = new Set(statuses.filter(s => Number(s.is_final) === 1).map(s => Number(s.id)));
 
+  // Load campaigns table for 'campaign' dimension (best-effort — table may not exist on every tenant)
+  let campaignsById = {};
+  try {
+    const cr = await db.query("SELECT id, name FROM campaigns").catch(() => null);
+    if (cr && cr.rows) cr.rows.forEach(r => { campaignsById[Number(r.id)] = r; });
+  } catch (_) {}
+
   function _dimValue(dim, l) {
     if (dim === 'status')        return statusesById[Number(l.status_id)]?.name || NONE;
     if (dim === 'source')        return (l.source && String(l.source).trim()) || NONE;
     if (dim === 'product')       return productsById[Number(l.product_id)]?.name || NONE;
     if (dim === 'assigned_to')   return usersById[Number(l.assigned_to)]?.name || NONE;
+    if (dim === 'campaign')      return (campaignsById[Number(l.campaign_id)]?.name) || (l.campaign_id ? ('Campaign #' + l.campaign_id) : NONE);
     if (dim === 'qualified')     return Number(l.qualified) === 1 ? 'Qualified' : 'Not qualified';
     if (dim === 'is_duplicate')  return Number(l.is_duplicate) === 1 ? 'Duplicate' : 'Unique';
     if (dim === 'created_day')   return _tzDate(l.created_at) || NONE;

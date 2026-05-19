@@ -14325,17 +14325,44 @@ VIEWS.reportbuilder = async (view) => {
   /* REPORT_BUILDER_v2 — Template gallery shown at the top.
    * Each preset is a one-click shortcut that pre-fills the dim + filters +
    * chart type below. Users can also open any of their saved templates. */
+  /* REPORT_BUILDER_v4.1 — user-named templates.
+   * Each preset specifies the full v4 config: row_dims[], metrics[],
+   * chart_type. Click pre-fills + auto-runs.
+   * Two special presets ('calling' and 'activity') route to existing
+   * dedicated views instead, because their data lives outside the
+   * pivot model (call_events / lead_actions). */
   const PRESETS = [
-    { key: 'leads_by_status',   icon: '📊', name: 'Lead status performance',  desc: 'How many leads are in each status today.', dim: 'status',       chart: 'bar' },
-    { key: 'leads_by_source',   icon: '🌐', name: 'Source performance',        desc: 'Which lead sources are driving volume.',    dim: 'source',       chart: 'pie' },
-    { key: 'leads_by_product',  icon: '📦', name: 'Product performance',       desc: 'Lead volume by product interest.',          dim: 'product',      chart: 'bar' },
-    { key: 'leads_by_rep',      icon: '👥', name: 'Rep performance',           desc: 'Leads assigned to each rep.',                dim: 'assigned_to',  chart: 'bar' },
-    { key: 'leads_by_city',     icon: '🏙', name: 'City performance',          desc: 'Geographic breakdown by city.',              dim: 'city',         chart: 'bar' },
-    { key: 'leads_by_tag',      icon: '🏷', name: 'Tag performance',           desc: 'Volume per tag (multi-value).',              dim: 'tags',         chart: 'pie' },
-    { key: 'leads_by_day',      icon: '📅', name: 'Daily lead intake',         desc: 'New leads per day (last 30).',               dim: 'created_day',  chart: 'line' },
-    { key: 'leads_by_month',    icon: '🗓', name: 'Monthly trend',             desc: 'Lead intake by month.',                      dim: 'created_month', chart: 'line' },
-    { key: 'leads_by_utm_src',  icon: '📈', name: 'UTM source performance',    desc: 'Attribution by utm_source.',                 dim: 'utm_source',   chart: 'pie' },
-    { key: 'leads_by_qualified',icon: '✅', name: 'Qualified vs Unqualified',  desc: 'Pipeline quality at a glance.',              dim: 'qualified',    chart: 'pie' }
+    { key: 'status_wise', icon: '🎯', name: 'Status Wise Report',
+      desc: 'Lead count, conversion %, value totals broken down by status.',
+      row_dims: ['status'],
+      metrics: ['count', 'pct', 'qualified_count', 'conversion_pct', 'value_sum'],
+      chart: 'bar' },
+
+    { key: 'campaign_wise', icon: '📣', name: 'Campaign Wise Report',
+      desc: 'Performance of each marketing campaign — volume, conversion, value.',
+      row_dims: ['campaign'],
+      metrics: ['count', 'qualified_count', 'conversion_pct', 'won_count', 'value_sum'],
+      chart: 'bar' },
+
+    { key: 'calling_data', icon: '☎', name: 'Calling Data Report',
+      desc: 'Calls dialled / received / missed by each rep. Opens the dedicated Call Activity view.',
+      route: '#/callactivity' },
+
+    { key: 'activity', icon: '📝', name: 'Activity Report',
+      desc: 'Every rep action (status changes, remarks, follow-ups, calls, WhatsApp) by rep + day.',
+      route: '#/activityreport' },
+
+    { key: 'daily_intake', icon: '📅', name: 'Daily Lead Intake Report',
+      desc: 'New leads per day with qualified count + conversion %.',
+      row_dims: ['created_day'],
+      metrics: ['count', 'qualified_count', 'conversion_pct', 'recent_24h'],
+      chart: 'line' },
+
+    { key: 'rep_wise', icon: '👥', name: 'Rep Wise Report',
+      desc: 'Lead distribution + conversion + value by each sales rep.',
+      row_dims: ['assigned_to'],
+      metrics: ['count', 'qualified_count', 'conversion_pct', 'won_count', 'lost_count', 'value_sum'],
+      chart: 'bar' }
   ];
 
   function _renderGallery() {
@@ -14357,23 +14384,25 @@ VIEWS.reportbuilder = async (view) => {
         onmouseover: function() { this.style.background = '#eff6ff'; },
         onmouseout:  function() { this.style.background = ''; },
         onclick: () => {
-          // Apply preset to the editor below + auto-run
-          const dimSel = document.getElementById('rb-dim');
-          if (dimSel) {
-            const opt = Array.from(dimSel.options).find(o => o.value === p.dim);
-            if (opt) opt.selected = true;
-          }
-          window._rbChartType = p.chart;
-          _syncChartTypeUI();
+          /* REPORT_BUILDER_v4.1 — preset can either route to another view
+           * (Calling Data, Activity) or load a v4 pivot config. */
+          if (p.route) { window.location.hash = p.route; return; }
+          window._rbRowDims        = (p.row_dims || [p.dim || 'status']).slice();
+          window._rbActiveMetrics  = (p.metrics  || ['count', 'pct']).slice();
+          window._rbChartType      = p.chart || 'bar';
+          try { _syncChartTypeUI(); } catch (_) {}
           loadReportBuilder();
-          gallery.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          // Scroll to the editor card just below the gallery
+          const ed = document.getElementById('rb-rail');
+          if (ed) ed.scrollIntoView({ behavior: 'smooth', block: 'center' });
           toast('Loaded — ' + p.name, 'ok');
         }
       },
         h('div', { style: { fontSize: '1.5rem' } }, p.icon),
         h('div', { style: { fontWeight: 700, marginTop: '.2rem' } }, p.name),
         h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.2rem', lineHeight: '1.3' } }, p.desc),
-        h('div', { class: 'muted', style: { fontSize: '.72rem', marginTop: '.4rem' } }, '📊 ' + p.chart.toUpperCase())
+        h('div', { class: 'muted', style: { fontSize: '.72rem', marginTop: '.4rem' } },
+          p.route ? '➜ Opens dedicated view' : ('📊 ' + (p.chart || 'bar').toUpperCase() + ' · ' + (p.metrics ? p.metrics.length : 2) + ' metrics'))
       ));
     });
     galleryWrap.appendChild(grid);
@@ -33521,6 +33550,7 @@ const RB_DIM_CATALOGUE = [
   { key: 'source',         label: 'Source',         icon: '🌐' },
   { key: 'product',        label: 'Product',        icon: '📦' },
   { key: 'assigned_to',    label: 'Assigned user',  icon: '👤' },
+  { key: 'campaign',       label: 'Campaign',       icon: '📣' },
   { key: 'qualified',      label: 'Qualified flag', icon: '✅' },
   { key: 'is_duplicate',   label: 'Duplicate flag', icon: '👯' },
   { key: 'created_day',    label: 'Created date (day)',   icon: '📅' },
