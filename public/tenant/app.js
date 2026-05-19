@@ -14322,6 +14322,67 @@ VIEWS.reportbuilder = async (view) => {
   view.innerHTML = '';
   const { users = [], products = [], sources = [], statuses = [], customFields = [] } = CRM.cache;
 
+  /* REPORT_BUILDER_v2 — Template gallery shown at the top.
+   * Each preset is a one-click shortcut that pre-fills the dim + filters +
+   * chart type below. Users can also open any of their saved templates. */
+  const PRESETS = [
+    { key: 'leads_by_status',   icon: '📊', name: 'Lead status performance',  desc: 'How many leads are in each status today.', dim: 'status',       chart: 'bar' },
+    { key: 'leads_by_source',   icon: '🌐', name: 'Source performance',        desc: 'Which lead sources are driving volume.',    dim: 'source',       chart: 'pie' },
+    { key: 'leads_by_product',  icon: '📦', name: 'Product performance',       desc: 'Lead volume by product interest.',          dim: 'product',      chart: 'bar' },
+    { key: 'leads_by_rep',      icon: '👥', name: 'Rep performance',           desc: 'Leads assigned to each rep.',                dim: 'assigned_to',  chart: 'bar' },
+    { key: 'leads_by_city',     icon: '🏙', name: 'City performance',          desc: 'Geographic breakdown by city.',              dim: 'city',         chart: 'bar' },
+    { key: 'leads_by_tag',      icon: '🏷', name: 'Tag performance',           desc: 'Volume per tag (multi-value).',              dim: 'tags',         chart: 'pie' },
+    { key: 'leads_by_day',      icon: '📅', name: 'Daily lead intake',         desc: 'New leads per day (last 30).',               dim: 'created_day',  chart: 'line' },
+    { key: 'leads_by_month',    icon: '🗓', name: 'Monthly trend',             desc: 'Lead intake by month.',                      dim: 'created_month', chart: 'line' },
+    { key: 'leads_by_utm_src',  icon: '📈', name: 'UTM source performance',    desc: 'Attribution by utm_source.',                 dim: 'utm_source',   chart: 'pie' },
+    { key: 'leads_by_qualified',icon: '✅', name: 'Qualified vs Unqualified',  desc: 'Pipeline quality at a glance.',              dim: 'qualified',    chart: 'pie' }
+  ];
+
+  function _renderGallery() {
+    const galleryWrap = h('div', { class: 'card', style: { padding: '1rem', marginBottom: '1rem' } },
+      h('div', { style: { display: 'flex', alignItems: 'center', marginBottom: '.5rem' } },
+        h('h3', { style: { margin: 0, flex: 1 } }, '📋 Template gallery'),
+        h('button', { class: 'btn', onclick: () => { gallery.style.display = 'none'; toast('Custom report mode — pick fields below', 'ok'); } }, '✏️ Custom report'),
+        h('button', { class: 'btn', style: { marginLeft: '.4rem' }, onclick: () => openReportTemplatesModal() }, '📂 My saved templates')
+      ),
+      h('p', { class: 'muted', style: { fontSize: '.85rem', margin: '.2rem 0 1rem' } }, 'Click a card to instantly generate that report. Customise filters + group-by below, save as your own template, and schedule for Email / WhatsApp delivery.')
+    );
+    const grid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '.6rem' } });
+    PRESETS.forEach(p => {
+      grid.appendChild(h('div', {
+        class: 'card', style: {
+          padding: '.7rem .8rem', cursor: 'pointer', borderLeft: '3px solid #3b82f6',
+          transition: 'background .15s'
+        },
+        onmouseover: function() { this.style.background = '#eff6ff'; },
+        onmouseout:  function() { this.style.background = ''; },
+        onclick: () => {
+          // Apply preset to the editor below + auto-run
+          const dimSel = document.getElementById('rb-dim');
+          if (dimSel) {
+            const opt = Array.from(dimSel.options).find(o => o.value === p.dim);
+            if (opt) opt.selected = true;
+          }
+          window._rbChartType = p.chart;
+          _syncChartTypeUI();
+          loadReportBuilder();
+          gallery.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          toast('Loaded — ' + p.name, 'ok');
+        }
+      },
+        h('div', { style: { fontSize: '1.5rem' } }, p.icon),
+        h('div', { style: { fontWeight: 700, marginTop: '.2rem' } }, p.name),
+        h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.2rem', lineHeight: '1.3' } }, p.desc),
+        h('div', { class: 'muted', style: { fontSize: '.72rem', marginTop: '.4rem' } }, '📊 ' + p.chart.toUpperCase())
+      ));
+    });
+    galleryWrap.appendChild(grid);
+    return galleryWrap;
+  }
+
+  const gallery = _renderGallery();
+  view.appendChild(gallery);
+
   // Built-in dimensions every CRM has — grouped so the dropdown reads naturally.
   const builtIn = [
     { value: 'product',       label: 'Product' },
@@ -14424,11 +14485,19 @@ VIEWS.reportbuilder = async (view) => {
           rb.id = 'rb-rule-btn'; window._rbRuleBtn = rb; const hold = document.createElement('span'); hold.appendChild(rb); return hold;
         })(),
         h('button', { class: 'btn primary', onclick: loadReportBuilder }, '🔎 Generate'),
-        h('button', { class: 'btn', onclick: downloadReportBuilderExcel, title: 'Export breakdown + lead details to Excel' }, '📊 Export Excel'),
+        /* REPORT_BUILDER_v2 — output type toggle (Table / Bar / Line / Pie) */
+        h('span', { id: 'rb-chart-toggle', style: { display: 'inline-flex', alignItems: 'center', gap: '.2rem', marginLeft: '.4rem', padding: '.15rem .3rem', border: '1px solid #cbd5e1', borderRadius: '6px', background: '#fff' } },
+          h('button', { 'data-chart': 'table', class: 'btn', onclick: () => { window._rbChartType = 'table'; _syncChartTypeUI(); loadReportBuilder(); }, style: { fontSize: '.78rem', padding: '.15rem .4rem' } }, '🗒 Table'),
+          h('button', { 'data-chart': 'bar',   class: 'btn', onclick: () => { window._rbChartType = 'bar';   _syncChartTypeUI(); loadReportBuilder(); }, style: { fontSize: '.78rem', padding: '.15rem .4rem' } }, '📊 Bar'),
+          h('button', { 'data-chart': 'line',  class: 'btn', onclick: () => { window._rbChartType = 'line';  _syncChartTypeUI(); loadReportBuilder(); }, style: { fontSize: '.78rem', padding: '.15rem .4rem' } }, '📈 Line'),
+          h('button', { 'data-chart': 'pie',   class: 'btn', onclick: () => { window._rbChartType = 'pie';   _syncChartTypeUI(); loadReportBuilder(); }, style: { fontSize: '.78rem', padding: '.15rem .4rem' } }, '🥧 Pie')
+        ),
+        h('button', { class: 'btn', onclick: downloadReportBuilderExcel, title: 'Export breakdown + lead details to Excel' }, '📊 Excel'),
         h('button', { class: 'btn', onclick: downloadReportBuilderCsv, title: 'Export breakdown to CSV' }, '⬇️ CSV'),
         /* REPORT_SCHEDULE_v1 — save / load / schedule current report */
         h('button', { class: 'btn', onclick: () => openReportTemplateSave(), title: 'Save current report config as a reusable template' }, '💾 Save template'),
-        h('button', { class: 'btn', onclick: () => openReportTemplatesModal(), title: 'View saved templates + schedules' }, '📂 My templates')
+        h('button', { class: 'btn', onclick: () => openReportTemplatesModal(), title: 'View saved templates + schedules' }, '📂 My templates'),
+        h('button', { class: 'btn', onclick: () => { gallery.style.display = ''; gallery.scrollIntoView({ behavior: 'smooth' }); }, title: 'Back to template gallery' }, '⬅ Gallery')
       )
     ),
     h('div', { id: 'rb-summary', class: 'cards', style: { marginBottom: '1rem' } }),
@@ -14448,6 +14517,9 @@ VIEWS.reportbuilder = async (view) => {
   const last = localStorage.getItem('rb_last_dim');
   if (last && [...dimSelect.options].some(o => o.value === last)) dimSelect.value = last;
 
+  // Initialise chart type pill highlight
+  if (!window._rbChartType) window._rbChartType = 'bar';
+  setTimeout(() => { try { _syncChartTypeUI(); } catch (_) {} }, 0);
   await loadReportBuilder();
 };
 
@@ -14474,6 +14546,17 @@ function _currentReportBuilderFilters() {
     rules: (window._rbRuleBtn && window._rbRuleBtn.getRules) ? window._rbRuleBtn.getRules() : []
   };
 }
+
+function _syncChartTypeUI() {
+  const t = (window._rbChartType || 'bar');
+  document.querySelectorAll('#rb-chart-toggle button').forEach(b => {
+    const isMe = b.getAttribute('data-chart') === t;
+    b.style.background    = isMe ? '#6366f1' : '';
+    b.style.color         = isMe ? '#fff'    : '';
+    b.style.fontWeight    = isMe ? '600'     : '';
+  });
+}
+try { window._syncChartTypeUI = _syncChartTypeUI; } catch (_) {}
 
 async function loadReportBuilder() {
   const dim = $('#rb-dim')?.value || 'product';
@@ -14509,29 +14592,38 @@ async function loadReportBuilder() {
     });
   }
 
-  // Chart — top 25 buckets so a high-cardinality dimension (e.g. UTM Term)
-  // doesn't render an unreadable forest of bars.
+  /* REPORT_BUILDER_v2 — render chart according to window._rbChartType
+   * (table | bar | line | pie). Table mode hides the chart card entirely
+   * so the detail table gets the whole width. */
+  const chartType = (window._rbChartType || 'bar');
   const top25 = resp.rows.slice(0, 25);
   const ctx = document.getElementById('rb-chart');
-  if (ctx) {
+  const chartCard = ctx ? ctx.closest('.card') : null;
+  if (chartCard) chartCard.style.display = (chartType === 'table') ? 'none' : '';
+  if (ctx && chartType !== 'table') {
     if (ctx._chart) ctx._chart.destroy();
-    const palette = ['#6366f1', '#06b6d4', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6'];
+    const palette = ['#6366f1', '#06b6d4', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316', '#84cc16'];
+    const isHoriz = (chartType === 'bar');
+    const datasetCfg = {
+      label: 'Leads',
+      data: top25.map(r => r.count),
+      backgroundColor: chartType === 'pie' ? top25.map((_, i) => palette[i % palette.length]) : '#6366f1',
+      borderColor: chartType === 'line' ? '#6366f1' : undefined,
+      fill: chartType === 'line' ? false : true,
+      tension: chartType === 'line' ? 0.3 : 0,
+      borderWidth: chartType === 'line' ? 2 : 0
+    };
     ctx._chart = new Chart(ctx, {
-      type: 'bar',
-      data: {
-        labels: top25.map(r => r.value),
-        datasets: [{
-          label: 'Leads',
-          data: top25.map(r => r.count),
-          backgroundColor: top25.map((_, i) => palette[i % palette.length]),
-          borderWidth: 0
-        }]
-      },
+      type: chartType === 'pie' ? 'pie' : (chartType === 'line' ? 'line' : 'bar'),
+      data: { labels: top25.map(r => r.value), datasets: [datasetCfg] },
       options: {
-        indexAxis: 'y',
+        indexAxis: chartType === 'bar' ? 'y' : 'x',
         responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false }, datalabels: { color: '#111', anchor: 'end', align: 'right', font: { weight: 'bold' } } },
-        scales: { x: { beginAtZero: true, ticks: { stepSize: 1, precision: 0 } } }
+        plugins: {
+          legend: { display: chartType === 'pie' },
+          datalabels: chartType === 'pie' ? {} : { color: '#111', anchor: 'end', align: 'right', font: { weight: 'bold' } }
+        },
+        scales: chartType === 'pie' ? {} : { x: { beginAtZero: true, ticks: { stepSize: 1, precision: 0 } } }
       }
     });
   }
@@ -32949,7 +33041,10 @@ try { window.openComplianceRuleEditor = openComplianceRuleEditor; } catch (_) {}
 /* Read current Report Builder UI state into the same shape as _currentReportBuilderFilters */
 function _rbCurrentConfig() {
   const dim = (document.getElementById('rb-dim') || {}).value || 'product';
-  return { dim, filters: _currentReportBuilderFilters() };
+  const filters = _currentReportBuilderFilters();
+  /* Persist chart type with the saved template so 'Open' restores it. */
+  filters._chart_type = window._rbChartType || 'bar';
+  return { dim, filters };
 }
 
 /* Apply a saved config back onto the Report Builder UI */
@@ -32968,6 +33063,8 @@ function _rbApplyConfig(cfg) {
   if (Array.isArray(f.status_ids))     window._rbPicked.statuses = f.status_ids.map(String);
   if (Array.isArray(f.product_ids))    window._rbPicked.products = f.product_ids.map(String);
   if (Array.isArray(f.sources))        window._rbPicked.sources  = f.sources;
+  /* Restore chart type from saved template */
+  if (f._chart_type) { window._rbChartType = f._chart_type; if (typeof _syncChartTypeUI === 'function') _syncChartTypeUI(); }
 }
 
 /* Save-as-template modal */
