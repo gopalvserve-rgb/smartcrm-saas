@@ -2376,9 +2376,22 @@ app.post('/hook/leadsource/:source/:key', (req, res) => {
   _runHookAsTenant(req, res, integrations.leadSourceWebhook);
 });
 
-app.post('/hook/sheet/:token', (req, res) => {
-  req.body.api_key = req.params.token;
-  _runHookAsTenant(req, res, integrations.sheetPushWebhook);
+app.post('/hook/sheet/:token', async (req, res) => {
+  /* SHEET_SYNC_v3 HOTFIX — the previous code called _runHookAsTenant which
+   * authenticates via config.WEBSITE_API_KEY. Sheet integration tokens
+   * (sht_xxx) live in tenant.sheet_integrations.webhook_token instead,
+   * so every Apps Script POST was returning 401 'Invalid API key' and
+   * no leads ever arrived. Resolve the tenant by scanning that table. */
+  const token = String(req.params.token || '').trim();
+  if (!token) return res.status(400).json({ error: 'missing token' });
+  req.body = req.body || {};
+  req.body.api_key = token;
+  const t = await _findTenantByLookup(
+    'SELECT 1 FROM sheet_integrations WHERE webhook_token = $1 LIMIT 1',
+    [token]
+  ).catch(() => null);
+  if (!t) return res.status(404).json({ error: 'Unknown sheet webhook token — re-copy the URL from the CRM' });
+  return _runAsTenant(t.slug, req, res, integrations.sheetPushWebhook);
 });
 
 // Background: run sheet syncs and native pulls every 5 minutes
