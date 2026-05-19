@@ -832,10 +832,21 @@ VIEWS.invoices = async (view) => {
 };
 
 VIEWS.webhooks = async (view) => {
+  /* WEBHOOK_LOGS_v2 — Toolbar with date range + filters; summary cards
+   * above the table; S.No column added. */
+  const today = new Date().toISOString().slice(0, 10);
+  const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const prevFrom = (document.getElementById('wh-from') || {}).value || monthAgo;
+  const prevTo   = (document.getElementById('wh-to')   || {}).value || today;
+
   view.appendChild(h('div', { class: 'toolbar' },
     h('h1', {}, 'Cashfree Webhook Logs'),
-    h('div', {},
-      h('select', { id: 'wh-status', style: { marginRight: '.5rem' }, onchange: () => navigate('webhooks') },
+    h('div', { style: { display: 'flex', gap: '.4rem', alignItems: 'center', flexWrap: 'wrap' } },
+      h('label', { class: 'muted', style: { fontSize: '.8rem' } }, 'From'),
+      h('input', { type: 'date', id: 'wh-from', value: prevFrom, onchange: () => navigate('webhooks') }),
+      h('label', { class: 'muted', style: { fontSize: '.8rem' } }, 'To'),
+      h('input', { type: 'date', id: 'wh-to', value: prevTo, onchange: () => navigate('webhooks') }),
+      h('select', { id: 'wh-status', onchange: () => navigate('webhooks') },
         h('option', { value: '' }, 'All statuses'),
         h('option', { value: 'SUCCESS' }, 'SUCCESS'),
         h('option', { value: 'FAILED' }, 'FAILED'),
@@ -851,16 +862,52 @@ VIEWS.webhooks = async (view) => {
       )
     )
   ));
+
+  // Re-read after the toolbar renders (so first paint uses defaults)
+  const fromEl = document.getElementById('wh-from');
+  const toEl   = document.getElementById('wh-to');
+  const filters = {};
+  if (fromEl && fromEl.value) filters.from = fromEl.value;
+  if (toEl   && toEl.value)   filters.to   = toEl.value + ' 23:59:59';
+  const sStatus = document.getElementById('wh-status'); if (sStatus && sStatus.value) filters.status = sStatus.value;
+  const sEntity = document.getElementById('wh-entity'); if (sEntity && sEntity.value) filters.entity_type = sEntity.value;
+
+  /* Summary card row — drives off api_saas_webhookLogs_summary which
+   * uses the same date+entity filters as the list (intentionally ignores
+   * status filter so admins can compare success vs failed within the
+   * same window). */
+  const summaryFilters = { from: filters.from, to: filters.to, entity_type: filters.entity_type };
+  let summary;
+  try { summary = await api('api_saas_webhookLogs_summary', summaryFilters); }
+  catch (e) { /* non-fatal: continue without summary */ summary = null; }
+  if (summary) {
+    const _inr = n => '₹' + Math.round(Number(n) || 0).toLocaleString('en-IN');
+    const mk = (icon, label, count, amount, bg, fg) => h('div', { style: {
+      flex: '1 1 180px', background: bg, color: fg, padding: '.7rem .9rem',
+      borderRadius: '8px', border: '1px solid rgba(0,0,0,.05)'
+    } },
+      h('div', { style: { fontSize: '.75rem', fontWeight: 600, opacity: .85 } }, icon + ' ' + label),
+      h('div', { style: { fontSize: '1.5rem', fontWeight: 700, marginTop: '.15rem' } }, _inr(amount)),
+      h('div', { style: { fontSize: '.78rem', opacity: .85, marginTop: '.1rem' } }, String(count) + ' txn' + (Number(count) === 1 ? '' : 's'))
+    );
+    view.appendChild(h('div', { style: { display: 'flex', gap: '.6rem', flexWrap: 'wrap', marginBottom: '1rem' } },
+      mk('✅', 'Success',  summary.success.count,  summary.success.amount,  '#dcfce7', '#166534'),
+      mk('❌', 'Failed',   summary.failed.count,   summary.failed.amount,   '#fee2e2', '#991b1b'),
+      mk('⏳', 'Pending',  summary.pending.count,  summary.pending.amount,  '#fef3c7', '#854d0e'),
+      mk('📊', 'Total',    summary.total.count,    summary.total.amount,    '#e0e7ff', '#3730a3')
+    ));
+  }
+
   let list;
-  try {
-    const filters = {};
-    const sStatus = document.getElementById('wh-status'); if (sStatus && sStatus.value) filters.status = sStatus.value;
-    const sEntity = document.getElementById('wh-entity'); if (sEntity && sEntity.value) filters.entity_type = sEntity.value;
-    list = await api('api_saas_webhookLogs_list', filters);
-  } catch (e) { view.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
-  if (!list.length) { view.appendChild(h('div', { class: 'empty' }, 'No webhooks received yet.')); return; }
+  try { list = await api('api_saas_webhookLogs_list', filters); }
+  catch (e) { view.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+  if (!list.length) {
+    view.appendChild(h('div', { class: 'empty' }, 'No webhooks in this date range.'));
+    return;
+  }
   const tbl = h('table', {},
     h('thead', {}, h('tr', {},
+      h('th', { style: { width: '40px' } }, 'S.No'),  /* WEBHOOK_LOGS_v2 */
       h('th', {}, 'When'),
       h('th', {}, 'Type'),
       h('th', {}, 'Entity'),
@@ -871,7 +918,8 @@ VIEWS.webhooks = async (view) => {
       h('th', {}, 'Result'),
       h('th', {}, '')
     )),
-    h('tbody', {}, ...list.map(w => h('tr', {},
+    h('tbody', {}, ...list.map((w, idx) => h('tr', {},
+      h('td', { class: 'muted', style: { textAlign: 'right' } }, String(idx + 1)),
       h('td', { class: 'muted', style: { whiteSpace: 'nowrap' } }, fmtDateTime(w.created_at)),
       h('td', { style: { fontSize: '.78rem' } }, w.webhook_type || '—'),
       h('td', {}, w.entity_type || '—'),
