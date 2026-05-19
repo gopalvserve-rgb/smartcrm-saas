@@ -12491,32 +12491,135 @@ VIEWS.projects = async (view) => {
       : null
   ));
 
+  /* SALE_CLOSURE_FILTERS_v1 — filter toolbar.
+   * Date range filters by project_stage_started_at (entered closure).
+   * Multi-select for users / sources / products mirrors the leads page UX.
+   * State persists per-user in localStorage so filters survive page reloads. */
+  const _filtersKey = 'crm_projects_filters_v1';
+  let filtersState = {};
+  try { filtersState = JSON.parse(localStorage.getItem(_filtersKey) || '{}'); } catch (_) {}
+
+  const users    = (window.CRM && CRM.cache && CRM.cache.users)    || [];
+  const sources  = (window.CRM && CRM.cache && CRM.cache.sources)  || [];
+  const products = (window.CRM && CRM.cache && CRM.cache.products) || [];
+
+  const fromInp = h('input', { type: 'date', class: 'input', value: filtersState.from || '', style: { width: '150px' } });
+  const toInp   = h('input', { type: 'date', class: 'input', value: filtersState.to   || '', style: { width: '150px' } });
+  const userSel = h('select', { class: 'input', multiple: 'multiple', style: { minWidth: '200px', height: '34px' }, title: 'Assigned to (multi-select)' },
+    ...users.map(u => h('option', { value: String(u.id),
+      selected: (filtersState.assigned_tos || []).map(String).includes(String(u.id)) ? 'selected' : null }, u.name))
+  );
+  const srcSel = h('select', { class: 'input', multiple: 'multiple', style: { minWidth: '200px', height: '34px' }, title: 'Source (multi-select)' },
+    ...sources.map(sr => h('option', { value: String(sr.name || sr),
+      selected: (filtersState.sources || []).map(String).includes(String(sr.name || sr)) ? 'selected' : null }, (sr.name || sr)))
+  );
+  const prodSel = h('select', { class: 'input', multiple: 'multiple', style: { minWidth: '200px', height: '34px' }, title: 'Product (multi-select)' },
+    ...products.map(pr => h('option', { value: String(pr.id),
+      selected: (filtersState.product_ids || []).map(String).includes(String(pr.id)) ? 'selected' : null }, pr.name))
+  );
+  const stalledChk = h('input', { type: 'checkbox', checked: filtersState.stalled_only ? 'checked' : null });
+
+  function _collectFilters() {
+    return {
+      from: fromInp.value || null,
+      to:   toInp.value   || null,
+      assigned_tos: Array.from(userSel.selectedOptions).map(o => Number(o.value)),
+      sources:      Array.from(srcSel.selectedOptions).map(o => o.value),
+      product_ids:  Array.from(prodSel.selectedOptions).map(o => Number(o.value)),
+      stalled_only: stalledChk.checked ? 1 : 0
+    };
+  }
+  function _persistFilters() {
+    try { localStorage.setItem(_filtersKey, JSON.stringify(_collectFilters())); } catch (_) {}
+  }
+
+  const applyBtn = h('button', { class: 'btn primary' }, '🔍 Apply');
+  const clearBtn = h('button', { class: 'btn' }, '✖ Clear');
+  const expBtn   = h('button', { class: 'btn', title: 'Export current view to CSV' }, '⬇ CSV');
+
+  const filterBar = h('div', { class: 'card', style: { padding: '.7rem', display: 'flex', gap: '.5rem', flexWrap: 'wrap', alignItems: 'center', marginBottom: '.7rem', background: '#f8fafc' } },
+    h('label', { class: 'muted', style: { fontSize: '.78rem' } }, 'From'), fromInp,
+    h('label', { class: 'muted', style: { fontSize: '.78rem' } }, 'To'),   toInp,
+    h('label', { class: 'muted', style: { fontSize: '.78rem' } }, 'Caller'), userSel,
+    h('label', { class: 'muted', style: { fontSize: '.78rem' } }, 'Source'), srcSel,
+    h('label', { class: 'muted', style: { fontSize: '.78rem' } }, 'Product'), prodSel,
+    h('label', { style: { fontSize: '.85rem', display: 'flex', alignItems: 'center', gap: '.3rem' } }, stalledChk, ' Stalled only'),
+    applyBtn, clearBtn, expBtn
+  );
+  view.appendChild(filterBar);
+
   const listEl = h('div', { id: 'proj-board' }, h('div', { class: 'loading' }, 'Loading…'));
   view.appendChild(listEl);
 
+  async function _load() {
+    listEl.innerHTML = '';
+    listEl.appendChild(h('div', { class: 'loading' }, 'Loading…'));
+    _persistFilters();
+    let board;
+    try { board = await api('api_projectStages_board', _collectFilters()); }
+    catch (e) {
+      listEl.innerHTML = '';
+      listEl.appendChild(h('div', { class: 'error-box' }, e.message));
+      return;
+    }
+    _renderBoard(board, listEl);
+  }
+  applyBtn.onclick = _load;
+  clearBtn.onclick = () => {
+    fromInp.value = ''; toInp.value = '';
+    Array.from(userSel.options).forEach(o => o.selected = false);
+    Array.from(srcSel.options).forEach(o  => o.selected = false);
+    Array.from(prodSel.options).forEach(o => o.selected = false);
+    stalledChk.checked = false;
+    _load();
+  };
+  expBtn.onclick = async () => {
+    try {
+      const board = await api('api_projectStages_board', _collectFilters());
+      const flat = [];
+      board.board.forEach(col => col.leads.forEach(l => flat.push({
+        stage: col.stage.name, name: l.name, phone: l.phone || '',
+        assigned: l.assigned_name || '', source: l.source || '',
+        product: l.product_name || '', value: l.value || 0,
+        days_at_stage: l.days_at_stage == null ? '' : l.days_at_stage,
+        stalled: l.stalled ? 'YES' : '', entered_at: l.project_stage_started_at || ''
+      })));
+      if (!flat.length) { toast('Nothing to export', 'err'); return; }
+      const cols = Object.keys(flat[0]);
+      const csv = [cols.join(',')].concat(flat.map(r => cols.map(c => '"' + String(r[c] || '').replace(/"/g, '""') + '"').join(','))).join('\n');
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob); const a = document.createElement('a');
+      a.href = url; a.download = 'sale-closure-' + new Date().toISOString().slice(0,10) + '.csv';
+      a.click(); URL.revokeObjectURL(url);
+    } catch (e) { toast(e.message, 'err'); }
+  };
+
   let board;
-  try { board = await api('api_projectStages_board'); }
+  try { board = await api('api_projectStages_board', _collectFilters()); }
   catch (e) {
     listEl.innerHTML = '';
     listEl.appendChild(h('div', { class: 'error-box' }, e.message));
     return;
   }
 
+  _renderBoard(board, listEl);
+};
+
+/* SALE_CLOSURE_FILTERS_v1 — extracted renderer so initial + filter reloads share code. */
+function _renderBoard(board, listEl) {
+  listEl.innerHTML = '';
   if (!board.stages.length) {
-    listEl.innerHTML = '';
     listEl.appendChild(h('p', { class: 'muted' },
       'No stages defined yet. Admin: head to Settings → 🚚 Sale Final Closure Stages to create your closure workflow.'));
     return;
   }
-
   const totalLeads = board.board.reduce((n, col) => n + col.leads.length, 0);
   if (!totalLeads) {
-    listEl.innerHTML = '';
     listEl.appendChild(h('p', { class: 'muted' },
-      'No leads are in final closure yet. Open a won/closed lead → "🚚 Sale Final Closure" → Start closure tracker.'));
+      'No leads match your filters (or no leads are in final closure yet).'));
     return;
   }
-
+  // Show a small filter summary so users know what's active
   const wrap = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '.75rem' } });
   board.board.forEach(col => {
     const stalledCount = col.leads.filter(l => l.stalled).length;
@@ -12538,15 +12641,16 @@ VIEWS.projects = async (view) => {
         h('div', { style: { fontWeight: 600 } }, l.name),
         l.value ? h('div', { class: 'muted', style: { fontSize: '.8rem' } }, '₹ ' + Number(l.value).toLocaleString('en-IN')) : null,
         l.assigned_name ? h('div', { class: 'muted', style: { fontSize: '.78rem' } }, '👤 ' + l.assigned_name) : null,
+        l.source ? h('div', { class: 'muted', style: { fontSize: '.78rem' } }, '🌐 ' + l.source) : null,
+        l.product_name ? h('div', { class: 'muted', style: { fontSize: '.78rem' } }, '📦 ' + l.product_name) : null,
         l.days_at_stage != null ? h('div', { class: 'muted', style: { fontSize: '.78rem', color: l.stalled ? '#dc2626' : '#6b7280' } },
           '⏱ ' + l.days_at_stage + 'd' + (l.stalled ? ' · STALLED (>' + col.stage.expected_days + 'd)' : '')) : null
       ));
     });
     wrap.appendChild(colWrap);
   });
-  listEl.innerHTML = '';
   listEl.appendChild(wrap);
-};
+}
 
 VIEWS.targets = async (view) => {
   const isAdmin = ['admin', 'manager'].includes(CRM.user.role);

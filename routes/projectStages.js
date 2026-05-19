@@ -109,19 +109,47 @@ async function api_projectStages_advanceLead(token, leadId, notes) {
  * Board: every lead currently mid-delivery, grouped by stage.
  * Surfaces stalled leads (sat at a stage longer than expected_days).
  */
-async function api_projectStages_board(token) {
+async function api_projectStages_board(token, filters) {
   const me = await authUser(token);
   const visible = (await require('../utils/auth').getVisibleUserIds(me)) || [];
+  filters = filters || {};
   const stages = (await db.getAll('project_stages'))
     .filter(s => Number(s.is_active) === 1)
     .sort((a, b) => Number(a.sort_order) - Number(b.sort_order));
   const leads = (await db.getAll('leads')).filter(l => l.project_stage_id);
   const users = await db.getAll('users');
-  const usersById = {};
-  users.forEach(u => { usersById[Number(u.id)] = u; });
+  const products = await db.getAll('products');
+  const usersById = {};   users.forEach(u    => { usersById[Number(u.id)]    = u; });
+  const prodById  = {};   products.forEach(p => { prodById[Number(p.id)] = p; });
+
+  /* SALE_CLOSURE_FILTERS_v1 — server-side filter pass so user-supplied
+   * date / assigned / source / product filters narrow the result before
+   * we bucket by stage. Stages remain the same; only lead lists change.
+   * 'stalled_only' surfaces stuck cards; useful for managers. */
   const filtered = leads.filter(l => {
-    if (me.role === 'admin' || me.role === 'manager') return true;
-    return visible.includes(Number(l.assigned_to));
+    if (!(me.role === 'admin' || me.role === 'manager' || visible.includes(Number(l.assigned_to)))) return false;
+
+    // Date — uses project_stage_started_at (when the lead entered closure).
+    // Falls back to lead.created_at if started_at missing.
+    if (filters.from || filters.to) {
+      const ref = String(l.project_stage_started_at || l.created_at || '').slice(0, 10);
+      if (filters.from && ref < filters.from) return false;
+      if (filters.to   && ref > filters.to)   return false;
+    }
+    // Assigned-to (multi)
+    if (Array.isArray(filters.assigned_tos) && filters.assigned_tos.length) {
+      if (!filters.assigned_tos.map(Number).includes(Number(l.assigned_to))) return false;
+    }
+    // Source (multi). String compare — leads.source is a free-form string.
+    if (Array.isArray(filters.sources) && filters.sources.length) {
+      if (!filters.sources.map(String).includes(String(l.source || ''))) return false;
+    }
+    // Product (multi)
+    if (Array.isArray(filters.product_ids) && filters.product_ids.length) {
+      if (!filters.product_ids.map(Number).includes(Number(l.product_id))) return false;
+    }
+    // Stalled-only toggle (kept for completeness; client also filters).
+    return true;
   });
   const now = Date.now();
   const byStage = {};
@@ -132,12 +160,18 @@ async function api_projectStages_board(token) {
     const startedAt = l.project_stage_started_at ? new Date(l.project_stage_started_at).getTime() : null;
     const days = startedAt ? Math.floor((now - startedAt) / (1000 * 60 * 60 * 24)) : null;
     const stalled = days != null && days > Number(byStage[sid].stage.expected_days || 7);
+    if (filters.stalled_only && !stalled) return;
     byStage[sid].leads.push({
       id: l.id,
       name: l.name,
       phone: l.phone,
       assigned_to: l.assigned_to,
       assigned_name: l.assigned_to ? (usersById[Number(l.assigned_to)]?.name || '') : '',
+      /* SALE_CLOSURE_FILTERS_v1 — extra fields needed by SPA filter UI */
+      source: l.source || '',
+      product_id: l.product_id || null,
+      product_name: l.product_id ? (prodById[Number(l.product_id)]?.name || '') : '',
+      created_at: l.created_at || null,
       value: Number(l.value) || 0,
       project_stage_started_at: l.project_stage_started_at,
       days_at_stage: days,
