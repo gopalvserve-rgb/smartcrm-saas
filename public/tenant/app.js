@@ -33649,19 +33649,28 @@ function _rbGetMetrics()  { return window._rbActiveMetrics || ['count', 'pct']; 
 function _rbRail() { return document.getElementById('rb-rail'); }
 
 async function _rbReload() {
-  const rail = _rbRail(); if (!rail) return;
-  const filters = (typeof _currentReportBuilderFilters === 'function') ? _currentReportBuilderFilters() : {};
+  const rail = _rbRail();
+  const tbl = document.getElementById('rb-table');
+  if (!rail && !tbl) return;  /* view not mounted yet */
   let resp;
   try {
+    const filters = (typeof _currentReportBuilderFilters === 'function') ? _currentReportBuilderFilters() : {};
+    const rowDims = _rbGetRowDims();
+    const metrics = _rbGetMetrics();
+    if (!rowDims.length) {
+      // Fallback to status if somehow empty
+      window._rbRowDims = ['status'];
+    }
     resp = await api('api_reports_pivot', { row_dims: _rbGetRowDims(), metrics: _rbGetMetrics(), filters });
     window._rbLastPivot = resp;
   } catch (e) {
-    const tbl = document.getElementById('rb-table'); if (tbl) tbl.innerHTML = '<div class="error-box">' + (e.message || e) + '</div>';
+    if (tbl) tbl.innerHTML = '<div class="error-box" style="padding:1rem;background:#fee2e2;border:1px solid #fca5a5;border-radius:8px;color:#991b1b"><b>⚠ Report failed</b><br>' + esc(String(e && e.message || e)) + '<br><br><small>Try clicking another preset, or use ↺ Reset above.</small></div>';
+    console.error('[reportbuilder] _rbReload failed:', e);
     return;
   }
-  _rbRenderRailV4();
-  _rbRenderPivotTable();
-  _rbRenderPivotChart();
+  try { _rbRenderRailV4(); }     catch (e) { console.error('[reportbuilder] rail render:', e); }
+  try { _rbRenderPivotTable(); } catch (e) { console.error('[reportbuilder] table render:', e); if (tbl) tbl.innerHTML = '<div class="error-box">Table render failed: ' + esc(e.message) + '</div>'; }
+  try { _rbRenderPivotChart(); } catch (e) { console.error('[reportbuilder] chart render:', e); }
 }
 
 function _rbRenderRailV4() {
@@ -33887,10 +33896,14 @@ function _rbRenderPivotTable() {
 
 /* Render the chart using the first row dim as labels and the first metric. */
 function _rbRenderPivotChart() {
-  const ctx = document.getElementById('rb-chart'); if (!ctx) return;
+  const ctx = document.getElementById('rb-chart');
   const chartType = (window._rbChartType || 'bar');
-  const chartCard = ctx.closest('.card');
-  if (chartCard) chartCard.style.display = (chartType === 'table') ? 'none' : '';
+  if (ctx) {
+    const chartCard = ctx.closest('.card');
+    if (chartCard) chartCard.style.display = (chartType === 'table') ? 'none' : '';
+  }
+  if (!ctx) return;
+  if (typeof Chart === 'undefined') { console.warn('[reportbuilder] Chart.js not loaded'); return; }
   const resp = window._rbLastPivot; if (!resp || !resp.rows) return;
   if (chartType === 'table') { if (ctx._chart) { ctx._chart.destroy(); ctx._chart = null; } return; }
   const top = resp.rows.slice(0, 25);
