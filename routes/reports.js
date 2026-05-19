@@ -1321,6 +1321,14 @@ async function api_reports_activityByUser(token, opts) {
   if (!includeCreated) {
     where += " AND la.action_type <> 'created'";
   }
+  /* LEAD_ACTIVITY_v2 — exclude WhatsApp action types from the report by
+   * default. Bot replies + auto-template sends + inbound messages would
+   * otherwise inflate per-rep totals. Caller can pass include_whatsapp=true
+   * to override (used by detailed audit views, not by the default Report). */
+  const includeWhatsApp = !!opts.include_whatsapp;
+  if (!includeWhatsApp) {
+    where += " AND la.action_type NOT IN ('whatsapp_in', 'whatsapp_out')";
+  }
   if (actionFilter) {
     params.push(actionFilter);
     where += ' AND la.action_type = ANY($' + params.length + '::text[])';

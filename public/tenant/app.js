@@ -32510,6 +32510,8 @@ VIEWS.activityreport = async (view) => {
   view.appendChild(h('h3', {}, '📝 Activity Report'));
   view.appendChild(h('p', { class: 'muted' },
     'Track every action your team takes on leads: status changes, remarks, follow-up edits, reassignments. Caller-wise totals + day-wise heatmap.'));
+  view.appendChild(h('p', { class: 'muted', style: { fontSize: '.78rem', marginTop: '-.3rem' } },
+    'ⓘ WhatsApp messages (bot replies + auto-template sends + inbound) are NOT counted as rep activity — only manual rep actions are.'));
 
   // Filters bar
   const today = new Date(); today.setHours(0, 0, 0, 0);

@@ -504,10 +504,15 @@ async function api_leads_list(token, filters) {
     const ids = hydrated.map(l => Number(l.id)).filter(Boolean);
     if (ids.length) {
       const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+      /* LEAD_ACTIVITY_v2 — exclude WhatsApp actions from rep activity counts.
+       * Reason: bot replies + auto-template sends + customer inbound messages
+       * are not rep work and inflate the numbers if counted. They still show
+       * up in the per-lead timeline modal for context, just not in totals. */
+      const _EXCLUDED = "('created', 'whatsapp_in', 'whatsapp_out')";
       const q = await db.query(
         `SELECT lead_id,
-                COUNT(*) FILTER (WHERE action_type <> 'created')::int                                   AS act_total,
-                COUNT(*) FILTER (WHERE action_type <> 'created' AND created_at >= $2)::int              AS act_today
+                COUNT(*) FILTER (WHERE action_type NOT IN ${_EXCLUDED})::int                                   AS act_total,
+                COUNT(*) FILTER (WHERE action_type NOT IN ${_EXCLUDED} AND created_at >= $2)::int              AS act_today
          FROM lead_actions
          WHERE lead_id = ANY($1::int[])
          GROUP BY lead_id`,

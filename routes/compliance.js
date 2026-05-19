@@ -299,12 +299,14 @@ async function _evalMinDailyActivity(rule) {
   const minN = Number(cfg.min_activities || 5);
   const roles = Array.isArray(cfg.target_roles) ? cfg.target_roles.map(String) : null;
   if (!minN) return;
+  /* LEAD_ACTIVITY_v2 — exclude WhatsApp from rep activity quota so bot
+   * replies / auto-template sends don't artificially boost a rep's count. */
   const q = await db.query(
     `SELECT u.id AS user_id, u.name, u.role,
             COALESCE((
               SELECT COUNT(*) FROM lead_actions la
                WHERE la.user_id = u.id
-                 AND la.action_type <> 'created'
+                 AND la.action_type NOT IN ('created', 'whatsapp_in', 'whatsapp_out')
                  AND la.created_at >= CURRENT_DATE
             ), 0)::int AS act_count
        FROM users u
