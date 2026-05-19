@@ -1031,8 +1031,10 @@ async function api_reports_callActivity(token, filters) {
   // --- byUser: per-rep breakdown with gap/idle calculations ---
   const byUserSql = callsCte + `,
     user_calls AS (
+      /* CALL_UNIQUE_v1_HOTFIX — pass phone through so DISTINCT-phone counts work */
       SELECT
         user_id,
+        phone,
         direction,
         duration_s,
         started_at,
@@ -1042,7 +1044,7 @@ async function api_reports_callActivity(token, filters) {
     ),
     user_with_gaps AS (
       SELECT
-        user_id, direction, duration_s, started_at,
+        user_id, phone, direction, duration_s, started_at,
         -- Gap = seconds between end of previous call and start of this one.
         -- Cap at 1 hour so a lunch break doesn't dominate the average.
         CASE
@@ -1066,8 +1068,8 @@ async function api_reports_callActivity(token, filters) {
       COUNT(*) FILTER (WHERE direction='in')::int            AS in_calls,
       COUNT(*) FILTER (WHERE direction='out')::int           AS out_calls,
       COUNT(*) FILTER (WHERE direction='missed')::int        AS missed_calls,
-      /* CALL_UNIQUE_v1 */ COUNT(DISTINCT phone)::int        AS unique_phones,
-      COUNT(DISTINCT phone) FILTER (WHERE direction='out')::int AS unique_out,
+      /* CALL_UNIQUE_v1_HOTFIX */ COUNT(DISTINCT uwg.phone)::int        AS unique_phones,
+      COUNT(DISTINCT uwg.phone) FILTER (WHERE direction='out')::int AS unique_out,
       COALESCE(SUM(duration_s), 0)::int                      AS talk_s,
       ROUND(COALESCE(AVG(NULLIF(duration_s, 0))::numeric, 0), 0)::int AS avg_talk_s,
       ROUND(COALESCE(AVG(gap_s)::numeric, 0), 0)::int        AS avg_gap_s,
