@@ -89,6 +89,7 @@ const ROUTE_FILES = [
   'packs/realestate',
   'social',
   'ivr',
+  'compliance',  /* COMPLIANCE_v1 */
 ];
 
 const API = {};

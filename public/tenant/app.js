@@ -976,7 +976,9 @@ const NAV_GROUPS = [
   ] },
   { label: 'Admin', icon: '⚙️', items: [
     { id: 'users', label: 'Users',    icon: '👥', roles: ['admin', 'manager'] },
-    { id: 'admin', label: 'Settings', icon: '⚙️', roles: ['admin'] }
+    { id: 'admin', label: 'Settings', icon: '⚙️', roles: ['admin'] },
+    /* COMPLIANCE_v1 */
+    { id: 'compliance', label: 'Compliance', icon: '🛡', roles: ['admin', 'manager', 'team_leader'] }
   ] },
   // TKT_UI_v1 — Help & Support menu surfaces the cross-tenant ticket system.
   // Visible to every role so any user can raise a ticket; replies thread
@@ -32356,3 +32358,348 @@ VIEWS.activityreport = async (view) => {
   goBtn.onclick = load;
   load();
 };
+
+
+/* ==========================================================================
+ * COMPLIANCE_v1 — Tenant-customisable Rule engine + Violations dashboard
+ * ========================================================================== */
+
+VIEWS.compliance = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('h3', {}, '🛡 Compliance — Rules & Violations'));
+  view.appendChild(h('p', { class: 'muted' },
+    'Design rules to enforce agent discipline (e.g. "NP must be dialed at least 1× per day", "Cannot set follow-up without a recent call"). Violations are logged + agents notified.'));
+
+  const tabs = h('div', { class: 'tabs', style: { margin: '.7rem 0' } });
+  const tabRules = h('button', { class: 'tab active' }, '⚙️ Rules');
+  const tabVios  = h('button', { class: 'tab' },        '🚨 Violations');
+  tabs.appendChild(tabRules); tabs.appendChild(tabVios);
+  view.appendChild(tabs);
+
+  const panel = h('div', { id: 'compliance-panel' });
+  view.appendChild(panel);
+
+  async function renderRules() {
+    tabRules.classList.add('active'); tabVios.classList.remove('active');
+    panel.innerHTML = '⏳';
+    let types, rules;
+    try {
+      [types, rules] = await Promise.all([
+        api('api_compliance_listCheckTypes'),
+        api('api_compliance_rules_list')
+      ]);
+    } catch (e) { panel.innerHTML = '<div style="color:#dc2626">' + e.message + '</div>'; return; }
+    panel.innerHTML = '';
+    const isAdmin = (CRM.user && CRM.user.role === 'admin');
+    if (isAdmin) {
+      const addBtn = h('button', { class: 'btn primary' }, '➕ New rule');
+      addBtn.onclick = () => openComplianceRuleEditor(null, types, renderRules);
+      panel.appendChild(addBtn);
+      panel.appendChild(h('button', { class: 'btn', style: { marginLeft: '.4rem' } , onclick: async () => {
+        try { const r = await api('api_compliance_runScanNow'); toast('Scan complete: ' + r.violations_logged + ' new violations from ' + r.rules_run + ' rules', 'ok'); }
+        catch (e) { toast(e.message, 'err'); }
+      } }, '🔄 Run scan now'));
+    }
+    if (!rules.length) {
+      panel.appendChild(h('div', { class: 'muted', style: { margin: '1rem 0' } }, isAdmin ? 'No rules yet — click "New rule" to add one.' : 'No rules configured by your admin yet.'));
+      return;
+    }
+    const tbl = h('table', { class: 'table', style: { marginTop: '.8rem' } });
+    tbl.appendChild(h('thead', {}, h('tr', {},
+      h('th', {}, 'Rule'),
+      h('th', {}, 'Check type'),
+      h('th', {}, 'Severity'),
+      h('th', {}, 'Status'),
+      h('th', {}, 'Notify'),
+      h('th', {}, '')
+    )));
+    const tbody = h('tbody', {});
+    rules.forEach(r => {
+      const ct = (types || []).find(t => t.key === r.check_type) || {};
+      tbody.appendChild(h('tr', {},
+        h('td', {}, h('b', {}, r.name), h('div', { class: 'muted', style: { fontSize: '.78rem' } }, r.description || ct.description || '')),
+        h('td', {}, h('span', { class: 'muted', style: { fontSize: '.8rem' } }, ct.label || r.check_type)),
+        h('td', {}, h('span', { style: { padding: '.1rem .4rem', borderRadius: '4px',
+            background: r.severity === 'critical' ? '#fee2e2' : (r.severity === 'info' ? '#e0e7ff' : '#fef3c7'),
+            color: r.severity === 'critical' ? '#991b1b' : (r.severity === 'info' ? '#3730a3' : '#92400e'),
+            fontSize: '.75rem', fontWeight: 600 } }, r.severity || 'warning')),
+        h('td', {}, Number(r.enabled) === 1
+          ? h('span', { style: { color: '#15803d', fontWeight: 600 } }, '✓ Enabled')
+          : h('span', { class: 'muted' }, '— Off')),
+        h('td', { style: { fontSize: '.78rem' } },
+          Number(r.notify_agent) === 1 ? '🔔 Agent ' : '',
+          Number(r.notify_manager) === 1 ? '📨 Mgr' : ''
+        ),
+        h('td', {},
+          isAdmin ? h('button', { class: 'btn', onclick: () => openComplianceRuleEditor(r, types, renderRules) }, '✏️ Edit') : null,
+          isAdmin ? h('button', { class: 'btn', style: { marginLeft: '.3rem' }, onclick: async () => {
+            try { const t = await api('api_compliance_rules_test', r.id); toast(t.message || ('Logged ' + t.new_violations + ' new violations'), 'ok'); renderRules(); }
+            catch (e) { toast(e.message, 'err'); }
+          } }, '🧪 Test') : null,
+          isAdmin ? h('button', { class: 'btn danger', style: { marginLeft: '.3rem' }, onclick: async () => {
+            if (!confirm('Delete rule "' + r.name + '"?')) return;
+            try { await api('api_compliance_rules_delete', r.id); toast('Deleted', 'ok'); renderRules(); }
+            catch (e) { toast(e.message, 'err'); }
+          } }, '🗑') : null
+        )
+      ));
+    });
+    tbl.appendChild(tbody);
+    panel.appendChild(tbl);
+  }
+
+  async function renderVios() {
+    tabRules.classList.remove('active'); tabVios.classList.add('active');
+    panel.innerHTML = '⏳';
+    let summary, list;
+    try {
+      const today = new Date(); today.setHours(0,0,0,0);
+      const defFrom = new Date(today); defFrom.setDate(defFrom.getDate() - 6);
+      [summary, list] = await Promise.all([
+        api('api_compliance_violations_summary', { from: defFrom.toISOString().slice(0,10), to: today.toISOString().slice(0,10) }),
+        api('api_compliance_violations_list',    { from: defFrom.toISOString().slice(0,10), to: today.toISOString().slice(0,10) })
+      ]);
+    } catch (e) { panel.innerHTML = '<div style="color:#dc2626">' + e.message + '</div>'; return; }
+    panel.innerHTML = '';
+
+    // KPI cards
+    const t = (summary && summary.total) || { total: 0, open: 0, critical: 0, today: 0 };
+    const cards = h('div', { class: 'cards' });
+    const mk = (label, n, bg) => h('div', { class: 'card', style: { background: bg || '' } },
+      h('div', { class: 'muted', style: { fontSize: '.75rem' } }, label),
+      h('div', { style: { fontSize: '1.6rem', fontWeight: 700 } }, String(n))
+    );
+    cards.appendChild(mk('🚨 Total (last 7d)', t.total || 0));
+    cards.appendChild(mk('⚡ Today',            t.today || 0));
+    cards.appendChild(mk('❗ Critical',          t.critical || 0, t.critical > 0 ? '#fee2e2' : ''));
+    cards.appendChild(mk('🟢 Open (unack)',     t.open || 0));
+    panel.appendChild(cards);
+
+    // By-rule + By-user summaries side by side
+    const grid2 = h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', margin: '1rem 0' } });
+    function ruleBox() {
+      const box = h('div', {}, h('h4', {}, '📋 By rule'));
+      const rows = (summary && summary.by_rule) || [];
+      if (!rows.length) { box.appendChild(h('div', { class: 'muted' }, 'None.')); return box; }
+      const t2 = h('table', { class: 'table' });
+      t2.appendChild(h('thead', {}, h('tr', {}, h('th', {}, 'Rule'), h('th', {}, 'Type'), h('th', { style: { textAlign: 'right' } }, 'Count'))));
+      const tbody = h('tbody', {});
+      rows.forEach(r => tbody.appendChild(h('tr', {},
+        h('td', {}, r.rule_name || ('Rule #' + r.rule_id)),
+        h('td', { class: 'muted', style: { fontSize: '.78rem' } }, r.check_type),
+        h('td', { style: { textAlign: 'right', fontWeight: 700 } }, String(r.n))
+      )));
+      t2.appendChild(tbody);
+      box.appendChild(t2);
+      return box;
+    }
+    function userBox() {
+      const box = h('div', {}, h('h4', {}, '👥 By caller'));
+      const rows = (summary && summary.by_user) || [];
+      if (!rows.length) { box.appendChild(h('div', { class: 'muted' }, 'None.')); return box; }
+      const t2 = h('table', { class: 'table' });
+      t2.appendChild(h('thead', {}, h('tr', {}, h('th', {}, 'Caller'), h('th', { style: { textAlign: 'right' } }, 'Open'), h('th', { style: { textAlign: 'right' } }, 'Total'))));
+      const tbody = h('tbody', {});
+      rows.forEach(r => tbody.appendChild(h('tr', {},
+        h('td', {}, r.user_name || '—'),
+        h('td', { style: { textAlign: 'right', color: r.open_n > 0 ? '#dc2626' : '#9ca3af', fontWeight: 600 } }, String(r.open_n || 0)),
+        h('td', { style: { textAlign: 'right', fontWeight: 700 } }, String(r.n || 0))
+      )));
+      t2.appendChild(tbody);
+      box.appendChild(t2);
+      return box;
+    }
+    grid2.appendChild(ruleBox());
+    grid2.appendChild(userBox());
+    panel.appendChild(grid2);
+
+    // Detail list of recent violations
+    panel.appendChild(h('h4', {}, '📜 Recent violations (last 7 days)'));
+    if (!list.length) {
+      panel.appendChild(h('div', { class: 'muted' }, 'No violations detected. 🎉'));
+      return;
+    }
+    const tbl = h('table', { class: 'table' });
+    tbl.appendChild(h('thead', {}, h('tr', {},
+      h('th', {}, 'When'), h('th', {}, 'Rule'), h('th', {}, 'Caller'),
+      h('th', {}, 'Lead'), h('th', {}, 'Details'), h('th', {}, '')
+    )));
+    const tbody = h('tbody', {});
+    list.forEach(v => {
+      const detail = (() => {
+        const m = v.meta || {};
+        if (v.check_type === 'np_min_dials')   return 'Dialed ' + (m.dial_count || 0) + '× (min ' + m.min_required + ' / ' + m.window_hours + 'h)';
+        if (v.check_type === 'followup_requires_call') return m.reason || 'No outgoing call in window';
+        if (v.check_type === 'idle_in_stage')  return 'Idle ' + m.max_idle_days + 'd · last activity: ' + (m.last_activity ? new Date(m.last_activity).toLocaleDateString() : '—');
+        if (v.check_type === 'min_daily_activity') return 'Activity ' + (m.activity_count || 0) + ' (min ' + m.min_required + ')';
+        return JSON.stringify(m).slice(0, 80);
+      })();
+      tbody.appendChild(h('tr', { style: v.acknowledged_at ? { opacity: '0.5' } : {} },
+        h('td', { class: 'muted', style: { whiteSpace: 'nowrap', fontSize: '.78rem' } }, new Date(v.detected_at).toLocaleString()),
+        h('td', {}, h('b', {}, v.rule_name || ('Rule #' + v.rule_id)),
+          h('span', { style: { marginLeft: '.4rem', padding: '.05rem .3rem', borderRadius: '4px',
+            background: v.severity === 'critical' ? '#fee2e2' : '#fef3c7',
+            color: v.severity === 'critical' ? '#991b1b' : '#92400e',
+            fontSize: '.7rem' } }, v.severity || 'warning')),
+        h('td', {}, v.user_name || '—'),
+        h('td', {}, v.lead_id
+          ? h('a', { href: '#', onclick: (ev) => { ev.preventDefault(); openLeadModal(v.lead_id); } }, v.lead_name || ('Lead #' + v.lead_id))
+          : h('span', { class: 'muted' }, '—')),
+        h('td', { style: { fontSize: '.8rem' } }, detail),
+        h('td', {}, !v.acknowledged_at
+          ? h('button', { class: 'btn', onclick: async () => { try { await api('api_compliance_violations_acknowledge', v.id); toast('Acknowledged', 'ok'); renderVios(); } catch (e) { toast(e.message, 'err'); } } }, '✓ Ack')
+          : h('span', { class: 'muted', style: { fontSize: '.75rem' } }, '✓ ' + new Date(v.acknowledged_at).toLocaleDateString())
+        )
+      ));
+    });
+    tbl.appendChild(tbody);
+    panel.appendChild(tbl);
+  }
+
+  tabRules.onclick = renderRules;
+  tabVios.onclick  = renderVios;
+  renderRules();
+};
+
+/* Rule editor modal — open/edit a single rule. Type-specific config fields. */
+async function openComplianceRuleEditor(rule, types, onSaved) {
+  const modal = h('div', { class: 'modal' });
+  const isNew = !rule;
+  rule = rule || { name: '', description: '', check_type: types[0].key, severity: 'warning', enabled: 1, notify_agent: 1, notify_manager: 0, config: {} };
+
+  const nameInp = h('input', { class: 'input', value: rule.name || '', placeholder: 'e.g. NP must be dialled once a day' });
+  const descInp = h('input', { class: 'input', value: rule.description || '', placeholder: 'Short description / why this rule exists' });
+  const typeSel = h('select', { class: 'input' }, ...types.map(t => h('option', { value: t.key, selected: t.key === rule.check_type ? 'selected' : null }, t.label)));
+  const sevSel  = h('select', { class: 'input' },
+    h('option', { value: 'info',     selected: rule.severity === 'info'     ? 'selected' : null }, '🟦 info'),
+    h('option', { value: 'warning',  selected: !rule.severity || rule.severity === 'warning' ? 'selected' : null }, '🟨 warning'),
+    h('option', { value: 'critical', selected: rule.severity === 'critical' ? 'selected' : null }, '🟥 critical')
+  );
+  const enChk = h('input', { type: 'checkbox', checked: Number(rule.enabled) === 1 ? 'checked' : null });
+  const naChk = h('input', { type: 'checkbox', checked: Number(rule.notify_agent) === 1 ? 'checked' : null });
+  const nmChk = h('input', { type: 'checkbox', checked: Number(rule.notify_manager) === 1 ? 'checked' : null });
+
+  // Type-specific config form — rebuilt when typeSel changes
+  const cfgBox = h('div', { style: { padding: '.8rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', margin: '.6rem 0' } });
+  function buildCfgForm() {
+    cfgBox.innerHTML = '';
+    const t = types.find(x => x.key === typeSel.value);
+    if (!t) return;
+    cfgBox.appendChild(h('div', { class: 'muted', style: { fontSize: '.8rem', marginBottom: '.4rem' } }, '💡 ' + t.description));
+
+    const cfg = rule.config || {};
+    const inputs = {};
+
+    function addRow(label, input) {
+      const row = h('div', { style: { display: 'flex', alignItems: 'center', gap: '.6rem', margin: '.4rem 0' } },
+        h('label', { style: { minWidth: '180px', fontSize: '.85rem' } }, label), input);
+      cfgBox.appendChild(row);
+    }
+
+    if (t.config_keys.includes('status_ids')) {
+      const statuses = (window.CRM && CRM.statuses) || [];
+      const sel = h('select', { class: 'input', multiple: 'multiple', style: { minWidth: '260px', height: '90px' } },
+        ...statuses.map(st => h('option', { value: String(st.id),
+          selected: (cfg.status_ids || []).map(Number).includes(Number(st.id)) ? 'selected' : null }, st.name))
+      );
+      inputs.status_ids = () => Array.from(sel.selectedOptions).map(o => Number(o.value));
+      addRow('Status(es) to check', sel);
+    }
+    if (t.config_keys.includes('min_dials')) {
+      const inp = h('input', { type: 'number', class: 'input', min: '1', max: '20', value: cfg.min_dials || 1, style: { width: '80px' } });
+      inputs.min_dials = () => Number(inp.value || 1);
+      addRow('Min dials required', inp);
+    }
+    if (t.config_keys.includes('window_hours')) {
+      const inp = h('input', { type: 'number', class: 'input', min: '1', max: '720', value: cfg.window_hours || 24, style: { width: '80px' } });
+      inputs.window_hours = () => Number(inp.value || 24);
+      addRow('Window (hours)', inp);
+    }
+    if (t.config_keys.includes('direction')) {
+      const sel = h('select', { class: 'input' },
+        h('option', { value: 'out',    selected: !cfg.direction || cfg.direction === 'out' ? 'selected' : null }, 'Outgoing'),
+        h('option', { value: 'in',     selected: cfg.direction === 'in' ? 'selected' : null }, 'Incoming'),
+        h('option', { value: 'missed', selected: cfg.direction === 'missed' ? 'selected' : null }, 'Missed'),
+        h('option', { value: 'any',    selected: cfg.direction === 'any' ? 'selected' : null }, 'Any')
+      );
+      inputs.direction = () => sel.value;
+      addRow('Call direction', sel);
+    }
+    if (t.config_keys.includes('call_window_hours')) {
+      const inp = h('input', { type: 'number', class: 'input', min: '1', max: '168', value: cfg.call_window_hours || 24, style: { width: '80px' } });
+      inputs.call_window_hours = () => Number(inp.value || 24);
+      addRow('Recent-call window (hours)', inp);
+    }
+    if (t.config_keys.includes('max_idle_days')) {
+      const inp = h('input', { type: 'number', class: 'input', min: '1', max: '180', value: cfg.max_idle_days || 7, style: { width: '80px' } });
+      inputs.max_idle_days = () => Number(inp.value || 7);
+      addRow('Max idle days', inp);
+    }
+    if (t.config_keys.includes('min_activities')) {
+      const inp = h('input', { type: 'number', class: 'input', min: '1', max: '500', value: cfg.min_activities || 5, style: { width: '80px' } });
+      inputs.min_activities = () => Number(inp.value || 5);
+      addRow('Min activities / day', inp);
+    }
+    if (t.config_keys.includes('target_roles')) {
+      const sel = h('select', { class: 'input', multiple: 'multiple', style: { minWidth: '260px', height: '90px' } },
+        h('option', { value: 'agent',       selected: (cfg.target_roles || []).includes('agent')      ? 'selected' : null }, 'Agent'),
+        h('option', { value: 'sales',       selected: (cfg.target_roles || []).includes('sales')      ? 'selected' : null }, 'Sales'),
+        h('option', { value: 'employee',    selected: (cfg.target_roles || []).includes('employee')   ? 'selected' : null }, 'Employee'),
+        h('option', { value: 'team_leader', selected: (cfg.target_roles || []).includes('team_leader')? 'selected' : null }, 'Team Leader'),
+        h('option', { value: 'manager',     selected: (cfg.target_roles || []).includes('manager')    ? 'selected' : null }, 'Manager')
+      );
+      inputs.target_roles = () => Array.from(sel.selectedOptions).map(o => o.value);
+      addRow('Target roles', sel);
+    }
+    cfgBox._collect = () => {
+      const out = {};
+      Object.keys(inputs).forEach(k => { out[k] = inputs[k](); });
+      return out;
+    };
+  }
+  buildCfgForm();
+  typeSel.onchange = buildCfgForm;
+
+  const saveBtn = h('button', { class: 'btn primary' }, isNew ? '💾 Create rule' : '💾 Save');
+  saveBtn.onclick = async () => {
+    if (!nameInp.value.trim()) { toast('Name required', 'err'); return; }
+    const cfg = cfgBox._collect ? cfgBox._collect() : {};
+    saveBtn.disabled = true; saveBtn.textContent = '⏳ Saving…';
+    try {
+      await api('api_compliance_rules_save', {
+        id: rule.id || null,
+        name: nameInp.value.trim(),
+        description: descInp.value.trim(),
+        check_type: typeSel.value,
+        severity: sevSel.value,
+        enabled: enChk.checked ? 1 : 0,
+        notify_agent: naChk.checked ? 1 : 0,
+        notify_manager: nmChk.checked ? 1 : 0,
+        config: cfg
+      });
+      toast('Saved', 'ok');
+      modal.remove();
+      if (onSaved) onSaved();
+    } catch (e) { toast(e.message, 'err'); saveBtn.disabled = false; saveBtn.textContent = '💾 Save'; }
+  };
+
+  modal.appendChild(h('div', { class: 'modal-content', style: { maxWidth: '640px' } },
+    h('h3', {}, isNew ? '➕ New compliance rule' : '✏️ Edit rule'),
+    h('label', { class: 'muted', style: { fontSize: '.75rem' } }, 'Name'), nameInp,
+    h('label', { class: 'muted', style: { fontSize: '.75rem' } }, 'Description'), descInp,
+    h('label', { class: 'muted', style: { fontSize: '.75rem' } }, 'Check type'), typeSel,
+    cfgBox,
+    h('div', { style: { display: 'flex', gap: '.8rem', flexWrap: 'wrap', alignItems: 'center', margin: '.5rem 0' } },
+      h('label', { style: { fontSize: '.85rem' } }, 'Severity ', sevSel),
+      h('label', { style: { fontSize: '.85rem' } }, enChk, ' Enabled'),
+      h('label', { style: { fontSize: '.85rem' } }, naChk, ' Notify agent'),
+      h('label', { style: { fontSize: '.85rem' } }, nmChk, ' Notify manager')
+    ),
+    h('div', { class: 'modal-actions', style: { display: 'flex', justifyContent: 'flex-end', gap: '.4rem', marginTop: '.6rem' } },
+      h('button', { class: 'btn', onclick: () => modal.remove() }, 'Cancel'),
+      saveBtn
+    )
+  ));
+  document.body.appendChild(modal);
+}
+try { window.openComplianceRuleEditor = openComplianceRuleEditor; } catch (_) {}

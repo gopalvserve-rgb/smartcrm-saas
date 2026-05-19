@@ -2543,6 +2543,45 @@ setTimeout(() => _runReRemindersForAllTenants().catch(() => {}), 120_000);
 console.log('[reReminder] Real Estate demand-letter worker started — hourly tick');
 
 
+// ── COMPLIANCE_v1 — daily violation scan ───────────────────────────────
+// Every tenant gets a compliance.runDailyScan() once per hour. Cheap if
+// no rules are enabled (early-exit), otherwise sweeps all daily-flagged
+// rules (np_min_dials, idle_in_stage, min_daily_activity) and writes to
+// compliance_violations. The real-time rules (followup_requires_call)
+// fire from routes/leads.js so don't need the scheduler.
+async function _runComplianceScanForAllTenants() {
+  let rows = [];
+  try {
+    const r = await controlDb.query(
+      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500`
+    );
+    rows = r.rows;
+  } catch (e) { console.warn('[compliance] tenant list failed:', e.message); return; }
+  let compliance;
+  try { compliance = require('./routes/compliance'); } catch (_) { return; }
+  if (!compliance || !compliance.runDailyScan) return;
+  for (const row of rows) {
+    let t; try { t = await tenantPoolMod.findActiveTenant(row.slug); } catch (_) { continue; }
+    if (!t) continue;
+    const pool = tenantPoolMod.poolFor(t);
+    if (!pool) continue;
+    try {
+      await tenantDb.tenantStorage.run({ pool, tenant: t, slug: row.slug }, async () => {
+        const r = await compliance.runDailyScan();
+        if (r && Number(r.violations_logged) > 0) {
+          console.log('[compliance] ' + row.slug + ': ' + r.violations_logged + ' violations from ' + r.rules_run + ' rules');
+        }
+      });
+    } catch (e) { console.warn('[compliance] ' + row.slug + ' scan failed:', e.message); }
+  }
+}
+setInterval(() => {
+  _runComplianceScanForAllTenants().catch(e => console.error('[compliance] cycle failed:', e.message));
+}, Number(process.env.COMPLIANCE_INTERVAL_MS || 60 * 60_000));   // hourly
+setTimeout(() => _runComplianceScanForAllTenants().catch(() => {}), 180_000);
+console.log('[compliance] daily violation scan worker started — hourly tick');
+
+
 // ── Background: per-tenant AI Call Summary worker ──────────────────────
 // aiCallSummary.startWorker() is only wired in server.tenant.js. Without
 // this, SaaS-tenant recordings never get auto-processed by Gemini — they

@@ -1219,6 +1219,11 @@ async function api_leads_update(token, id, patch) {
   // Lead-form fields that the user might want to track changes on
   if ('next_followup_at' in patch && patch.next_followup_at !== lead.next_followup_at) {
     try { require('./tat').logAction(id, 'followup_set', me.id, { due_at: patch.next_followup_at }); } catch (_) {}
+    /* COMPLIANCE_v1 — real-time check: follow-up requires a recent call */
+    try {
+      const v = await require('./compliance').evaluateRealtime({ event: 'followup_set', leadId: id, userId: me.id });
+      if (v && v.violated) console.warn('[compliance violation]', v.message);
+    } catch (_) {}
   }
   if ('tags' in patch && String(patch.tags || '') !== String(lead.tags || '')) {
     try { require('./tat').logAction(id, 'tags_updated', me.id, { tags: patch.tags || '' }); } catch (_) {}
@@ -1392,6 +1397,13 @@ async function api_leads_addRemark(token, leadId, payload) {
       await tat.logAction(leadId, 'followup_set', me.id, { due_at: p.next_followup_at });
     }
   } catch (_) {}
+  /* COMPLIANCE_v1 — real-time check on remark+followup path */
+  if (p.next_followup_at) {
+    try {
+      const v = await require('./compliance').evaluateRealtime({ event: 'followup_set', leadId, userId: me.id });
+      if (v && v.violated) console.warn('[compliance violation]', v.message);
+    } catch (_) {}
+  }
   return { ok: true };
 }
 
