@@ -6048,6 +6048,7 @@ function renderDialerSettings() {
             /* REC_RETRY_v1 */ h('button', { class: 'btn primary', title: 'Clears uploaded markers + re-scans every file. Use after a server-side fix.', onclick: async () => { if (!confirm('Reset upload markers and re-scan EVERY file in the folder?')) return; localStorage.removeItem('rec_uploaded'); localStorage.removeItem('rec_last_sync'); toast('Markers cleared — running full sync now…', 'ok'); await syncRecordings({ full: true }); } }, '🩹 Fresh sync (after fix)'),
             h('button', { class: 'btn', onclick: () => openRecordingSyncDebug() }, '🐞 Debug sync'),
             h('button', { class: 'btn', onclick: () => openRecordingSyncDiagnostics() }, '🩺 Sync diagnostics'),
+            /* REC_SELFTEST_v1 */ h('button', { class: 'btn primary', title: 'Run an end-to-end self-test of the recording pipeline. Shows pass/fail for each stage.', onclick: () => openRecordingSelftest() }, '🧪 Run self-test'),
             h('button', { class: 'btn ghost', onclick: () => { setupRecordingFolder(); } }, 'Change folder'),
             h('button', { class: 'btn ghost', onclick: () => { if (confirm('Forget folder + clear sync history?')) resetRecordingFolder(); } }, 'Reset')
           ),
@@ -32037,3 +32038,55 @@ async function openAIBotDiagnose(presetPhone) {
   ));
   document.body.appendChild(modal);
 }
+
+
+/* REC_SELFTEST_v1 — end-to-end recording pipeline self-test modal */
+async function openRecordingSelftest() {
+  const modal = h('div', { class: 'modal' });
+  const result = h('div', { style: { fontSize: '.85rem', maxHeight: '60vh', overflow: 'auto' } });
+  modal.appendChild(h('div', { class: 'modal-content', style: { maxWidth: '720px' } },
+    h('h3', {}, '🧪 Recording pipeline self-test'),
+    h('p', { class: 'muted', style: { fontSize: '.82rem' } },
+      'Runs the entire recording-sync chain end-to-end and reports pass/fail for each phase. ' +
+      'Useful when "recordings stopped syncing" — tells you exactly which step is broken.'),
+    h('div', { class: 'modal-actions', style: { display: 'flex', gap: '.5rem' } },
+      h('button', { class: 'btn ghost', onclick: () => modal.remove() }, 'Close'),
+      h('button', { class: 'btn primary', onclick: async (ev) => {
+        ev.target.disabled = true; ev.target.textContent = '⏳ Running…';
+        result.innerHTML = '';
+        // Client-side phase 1: native bridge
+        const phases = [];
+        const native = !!(window.LeadCRMNative && typeof LeadCRMNative.listRecordings === 'function');
+        phases.push({ phase: 'native_bridge', status: native ? 'ok' : 'info',
+          msg: native ? 'LeadCRMNative bridge loaded (APK mode)' : 'No native bridge — this is a browser tab; auto-sync only runs in the APK.' });
+        let folder = '';
+        try { folder = native ? (LeadCRMNative.getRecordingFolder() || '') : ''; } catch (_) {}
+        phases.push({ phase: 'folder', status: folder ? 'ok' : 'info',
+          msg: folder ? 'Folder picked: ' + folder : 'No folder picked yet — tap Change folder above.' });
+        phases.push({ phase: 'token', status: CRM.token ? 'ok' : 'fail',
+          msg: CRM.token ? 'Auth token present' : 'No token — re-login first.' });
+        // Server-side phases
+        let server;
+        try { server = await api('api_recording_selftest'); }
+        catch (e) { phases.push({ phase: 'server', status: 'fail', msg: e.message }); }
+        if (server && server.phases) phases.push(...server.phases);
+        // Render
+        const palette = { ok: '#dcfce7', info: '#e0e7ff', fail: '#fee2e2' };
+        const icon    = { ok: '✅',    info: 'ℹ',     fail: '🚫'    };
+        phases.forEach(p => {
+          result.appendChild(h('div', {
+            style: { padding: '.45rem .65rem', background: palette[p.status] || '#f8fafc',
+                     borderRadius: '6px', margin: '.25rem 0', fontFamily: 'monospace', fontSize: '.78rem' } },
+            icon[p.status] + ' [' + p.phase + '] ' + p.msg));
+        });
+        const summary = phases.reduce((a, p) => { a[p.status] = (a[p.status] || 0) + 1; return a; }, {});
+        result.appendChild(h('div', { style: { marginTop: '.6rem', fontWeight: 600, fontSize: '.9rem' } },
+          'Summary: ' + (summary.ok || 0) + ' ✅ · ' + (summary.fail || 0) + ' 🚫 · ' + (summary.info || 0) + ' ℹ'));
+        ev.target.disabled = false; ev.target.textContent = '🔁 Run again';
+      } }, '▶ Run')
+    ),
+    result
+  ));
+  document.body.appendChild(modal);
+}
+try { window.openRecordingSelftest = openRecordingSelftest; } catch (_) {}

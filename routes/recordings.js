@@ -1109,6 +1109,99 @@ async function api_recording_recentInsights(token, opts) {
   }
 }
 
+
+/* REC_SELFTEST_v1 — server-side end-to-end self-test
+ *
+ * Inserts a synthetic recording row (with a tiny 8-byte buffer + an
+ * obvious dedup_key like 'selftest:<userId>:<timestamp>'), confirms
+ * the lead-match path ran, then deletes the row. Returns a structured
+ * pass/fail report for each phase.
+ */
+async function api_recording_selftest(token) {
+  const me = await authUser(token);
+  const report = { phases: [], me_id: me.id };
+  const _ok = (k, msg) => report.phases.push({ phase: k, status: 'ok', msg });
+  const _fail = (k, msg) => report.phases.push({ phase: k, status: 'fail', msg });
+  const _info = (k, msg) => report.phases.push({ phase: k, status: 'info', msg });
+
+  _ok('auth', 'Token resolved to user #' + me.id + ' (' + (me.email || me.name) + ')');
+
+  // Phase: insert a synthetic row to confirm DB write + dedup path.
+  const dedupKey = 'selftest:' + me.id + ':' + Date.now();
+  let insertedId = null;
+  try {
+    // Self-heal dedup column if missing.
+    try { await db.query('ALTER TABLE lead_recordings ADD COLUMN IF NOT EXISTS dedup_key TEXT'); } catch (_) {}
+
+    const ins = await db.query(
+      `INSERT INTO lead_recordings
+         (user_id, phone, direction, duration_s, mime_type, size_bytes, audio_bytes, started_at, created_at, dedup_key)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING id`,
+      [me.id, '9999999999', 'out', 1, 'audio/mpeg', 8, Buffer.from('SELFTEST'), new Date().toISOString(), new Date().toISOString(), dedupKey]
+    );
+    insertedId = ins.rows[0] && ins.rows[0].id;
+    if (insertedId) _ok('db_insert', 'Synthetic recording row inserted (id=' + insertedId + ')');
+    else _fail('db_insert', 'INSERT returned no id');
+  } catch (e) {
+    _fail('db_insert', 'INSERT failed: ' + e.message);
+  }
+
+  // Phase: confirm we can read it back.
+  if (insertedId) {
+    try {
+      const r = await db.query('SELECT id, user_id, dedup_key, size_bytes FROM lead_recordings WHERE id = $1', [insertedId]);
+      if (r.rows[0]) _ok('db_read', 'Row read-back OK: ' + JSON.stringify(r.rows[0]));
+      else _fail('db_read', 'Inserted id ' + insertedId + ' not found on read-back');
+    } catch (e) { _fail('db_read', e.message); }
+  }
+
+  // Phase: lead-match attempt — call _findLeadByPhone with a real phone.
+  try {
+    const recRoutes = require('./recordings');
+    if (typeof recRoutes._findLeadByPhone === 'function') {
+      const lead = await recRoutes._findLeadByPhone('9999999999');
+      if (lead) _info('lead_match', 'Test phone 9999999999 matched lead #' + lead.id + ' (' + (lead.name || '—') + ')');
+      else _info('lead_match', 'Test phone 9999999999 did NOT match any lead — auto-create-lead would fire if config allows');
+    } else { _info('lead_match', '_findLeadByPhone not exported — skipping'); }
+  } catch (e) { _fail('lead_match', e.message); }
+
+  // Phase: check auto-create-lead policy config.
+  try {
+    const cfgIn  = await db.getConfig('CALLS_AUTOLEAD_INBOUND', '1');
+    const cfgOut = await db.getConfig('CALLS_AUTOLEAD_OUTBOUND', '0');
+    _info('autolead_config', 'CALLS_AUTOLEAD_INBOUND=' + cfgIn + ' · CALLS_AUTOLEAD_OUTBOUND=' + cfgOut + ' — unmatched recordings auto-create a lead when the matching flag is "1"');
+  } catch (e) { _info('autolead_config', 'config read failed: ' + e.message); }
+
+  // Phase: dedup index sanity check.
+  try {
+    const idx = await db.query(
+      `SELECT indexdef FROM pg_indexes WHERE indexname = 'uniq_lead_rec_user_dedup'`
+    );
+    if (idx.rows[0]) {
+      const def = idx.rows[0].indexdef;
+      const partial = def.includes('WHERE');
+      if (partial) _fail('dedup_index', 'Partial unique index detected — ON CONFLICT will not match: ' + def);
+      else _ok('dedup_index', 'Non-partial unique index OK: ' + def);
+    } else _info('dedup_index', 'Index uniq_lead_rec_user_dedup not present yet (will self-heal on first /api/recordings hit)');
+  } catch (e) { _fail('dedup_index', e.message); }
+
+  // Cleanup: remove the synthetic row.
+  if (insertedId) {
+    try {
+      await db.query('DELETE FROM lead_recordings WHERE id = $1', [insertedId]);
+      _ok('cleanup', 'Synthetic row deleted');
+    } catch (e) { _fail('cleanup', 'Cleanup failed: ' + e.message); }
+  }
+
+  report.summary = {
+    ok:   report.phases.filter(p => p.status === 'ok').length,
+    fail: report.phases.filter(p => p.status === 'fail').length,
+    info: report.phases.filter(p => p.status === 'info').length
+  };
+  return report;
+}
+
 module.exports = {
   api_call_logEvent, api_call_events_pending, api_call_events_convertToLeads,
   api_call_hasRecentEvent,
