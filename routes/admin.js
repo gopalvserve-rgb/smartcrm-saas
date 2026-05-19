@@ -64,7 +64,8 @@ const CONFIG_KEYS = [
   'DEMO_TENANT', 'DEMO_TOUR_ENABLED',
   // Minimum seconds an answered inbound call must last before it creates a lead.
   // 0 = create on every call (incl. missed). Default 5.
-  'CALLS_AUTOLEAD_MIN_SECONDS'
+  'CALLS_AUTOLEAD_MIN_SECONDS',
+  /* PROD_IMG_v1 */ 'QUOTATION_PRODUCT_IMAGE_SIZE'
 ];
 
 const SENSITIVE_KEYS = ['META_APP_SECRET', 'META_PAGE_ACCESS_TOKEN', 'WHATSAPP_ACCESS_TOKEN', 'SMTP_PASSWORD'];

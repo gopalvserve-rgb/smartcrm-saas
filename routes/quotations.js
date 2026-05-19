@@ -361,16 +361,20 @@ async function _renderHtml(quotation, items, brandConfig) {
   const primary = (brandConfig && brandConfig.BRAND_PRIMARY_COLOR) || '#6366f1';
   const validUntil = q.valid_until ? new Date(q.valid_until).toLocaleDateString('en-IN') : '';
   const issue = q.issue_date ? new Date(q.issue_date).toLocaleDateString('en-IN') : '';
+  /* PROD_IMG_v1 — tenant-configurable image size on quotation */
+  const _sizeKey = (brandConfig && brandConfig.QUOTATION_PRODUCT_IMAGE_SIZE) || 'large';
+  const _sizes = { hidden: 0, small: 60, medium: 110, large: 180, xl: 260 };
+  const _imgPx = Number.isFinite(_sizes[_sizeKey]) ? _sizes[_sizeKey] : _sizes.large;
   const itemsHtml = items.map(it => {
-    const img = it.product_image_url
-      ? `<img src="${_esc(it.product_image_url)}" alt="" style="width:44px;height:44px;object-fit:cover;border-radius:4px;border:1px solid #e2e8f0;vertical-align:middle;margin-right:8px"/>`
+    const img = (it.product_image_url && _imgPx > 0)
+      ? `<div style="text-align:center;margin-bottom:6px"><img src="${_esc(it.product_image_url)}" alt="" style="max-width:${_imgPx}px;max-height:${_imgPx}px;width:auto;height:auto;object-fit:contain;border-radius:6px;border:1px solid #e2e8f0;background:#fff;padding:4px;display:inline-block"/></div>`
       : '';
     const gstCell = Number(it.gst_pct || 0) > 0
       ? `<td style="text-align:right">${Number(it.gst_pct)}%</td>`
       : `<td style="text-align:right">—</td>`;
     return `
     <tr>
-      <td>${img}<span style="vertical-align:middle">${_esc(it.description)}</span></td>
+      <td>${img}<div style="font-weight:500;line-height:1.4">${_esc(it.description)}</div></td>
       <td style="text-align:right">${Number(it.quantity || 0)}</td>
       <td style="text-align:right">${fmt(it.unit_price)}</td>
       <td style="text-align:right">${Number(it.discount_pct || 0)}%</td>

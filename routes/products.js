@@ -33,7 +33,8 @@ async function api_products_save(token, product) {
     description: p.description || '',
     price: Number(p.price) || 0,
     gst_pct: Math.max(0, Math.min(100, Number(p.gst_pct) || 0)),
-    image_url: p.image_url ? String(p.image_url).slice(0, 2000) : null,
+    /* PROD_IMG_v1 — allow data: URIs (base64) which can run several hundred KB */
+    image_url: p.image_url ? String(p.image_url).slice(0, 5_000_000) : null,
     is_active: 1
   };
   if (p.id) { await db.update('products', p.id, payload); return { id: Number(p.id) }; }
