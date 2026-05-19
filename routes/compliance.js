@@ -64,6 +64,42 @@ const CHECK_TYPES = {
     realtime: false,
     daily: true,
     config_keys: ['min_activities', 'target_roles']
+  },
+  /* COMPLIANCE_v2 — extra check types added based on tenant feedback */
+  status_change_requires_remark: {
+    label: 'Status change must include a remark (real-time)',
+    description: 'When an agent changes a lead\'s status to one of the chosen statuses, refuse-log if no remark was logged in the same save or within the last few minutes.',
+    realtime: true,
+    daily: false,
+    config_keys: ['status_ids']
+  },
+  status_change_requires_recent_call: {
+    label: 'Status change must follow a recent call (real-time)',
+    description: 'When an agent moves a lead into one of the chosen statuses (e.g. Demo Scheduled, Qualified, Won), refuse-log if there\'s no outgoing call in the last N hours.',
+    realtime: true,
+    daily: false,
+    config_keys: ['status_ids', 'call_window_hours']
+  },
+  no_status_change_in_n_days: {
+    label: 'No status change in N days',
+    description: 'Flags leads that have been parked in the same status for longer than max_days, regardless of activity. Use for SLA enforcement.',
+    realtime: false,
+    daily: true,
+    config_keys: ['status_ids', 'max_days']
+  },
+  call_outside_hours: {
+    label: 'Calls outside business hours',
+    description: 'Flags outgoing calls made before start_hour or after end_hour (in tenant timezone). Useful for compliance/regulator rules.',
+    realtime: false,
+    daily: true,
+    config_keys: ['start_hour', 'end_hour', 'allow_weekends']
+  },
+  assigned_no_action_n_days: {
+    label: 'Assigned but no rep action for N days',
+    description: 'Lead has an assigned rep, but no rep activity (remark / call / status / WhatsApp) has happened on it for the last N days.',
+    realtime: false,
+    daily: true,
+    config_keys: ['max_days']
   }
 };
 
@@ -287,6 +323,137 @@ async function _evalMinDailyActivity(rule) {
 }
 
 // ============================================================
+// COMPLIANCE_v2 — additional evaluators
+// ============================================================
+
+/* status_change_requires_remark — REAL-TIME hook. Caller passes
+ *   { event:'status_change', leadId, userId, oldStatusId, newStatusId, hasRemarkInPatch }
+ * If newStatusId is in rule.status_ids, check whether a remark was saved in
+ * the same patch (hasRemarkInPatch) OR a remark was logged within last 60s. */
+async function _evalStatusChangeRequiresRemark(rule, ctx) {
+  const cfg = _parseConfig(rule);
+  const statusIds = (cfg.status_ids || []).map(Number).filter(Boolean);
+  if (!statusIds.length || !statusIds.includes(Number(ctx.newStatusId))) return null;
+  if (ctx.hasRemarkInPatch) return null;
+  const q = await db.query(
+    `SELECT COUNT(*)::int AS c FROM remarks
+      WHERE lead_id = $1 AND user_id = $2 AND created_at >= NOW() - INTERVAL '90 seconds'`,
+    [Number(ctx.leadId), Number(ctx.userId)]
+  );
+  if (q.rows[0] && Number(q.rows[0].c) > 0) return null;
+  await _logViolation(rule, ctx.leadId, ctx.userId, {
+    new_status_id: ctx.newStatusId,
+    old_status_id: ctx.oldStatusId,
+    reason: 'Status changed to a watched status without a remark'
+  });
+  return { violated: true, message: rule.name + ' — please add a remark when changing to this status' };
+}
+
+/* status_change_requires_recent_call — REAL-TIME. Same as above but the
+ * gate is an outgoing call within rule.call_window_hours. */
+async function _evalStatusChangeRequiresRecentCall(rule, ctx) {
+  const cfg = _parseConfig(rule);
+  const statusIds = (cfg.status_ids || []).map(Number).filter(Boolean);
+  if (!statusIds.length || !statusIds.includes(Number(ctx.newStatusId))) return null;
+  const win = Number(cfg.call_window_hours || 24);
+  const q = await db.query(
+    `SELECT COUNT(*)::int AS c FROM call_events
+      WHERE lead_id = $1 AND direction = 'out'
+        AND created_at >= NOW() - ($2 || ' hours')::interval`,
+    [Number(ctx.leadId), String(win)]
+  );
+  if (q.rows[0] && Number(q.rows[0].c) > 0) return null;
+  await _logViolation(rule, ctx.leadId, ctx.userId, {
+    new_status_id: ctx.newStatusId,
+    call_window_hours: win,
+    reason: 'Status changed without a call in the last ' + win + 'h'
+  });
+  return { violated: true, message: rule.name + ' — please call before changing to this status' };
+}
+
+/* no_status_change_in_n_days — daily. Flag leads where last_status_change_at
+ * is older than rule.max_days AND the current status is in rule.status_ids. */
+async function _evalNoStatusChangeInNDays(rule) {
+  const cfg = _parseConfig(rule);
+  const statusIds = (cfg.status_ids || []).map(Number).filter(Boolean);
+  const maxDays   = Number(cfg.max_days || 7);
+  if (!statusIds.length || !maxDays) return;
+  const q = await db.query(
+    `SELECT l.id AS lead_id, l.assigned_to AS user_id, l.name,
+            COALESCE(l.last_status_change_at, l.updated_at, l.created_at) AS last_change
+       FROM leads l
+      WHERE l.status_id = ANY($1::int[])
+        AND l.assigned_to IS NOT NULL
+        AND COALESCE(l.last_status_change_at, l.updated_at, l.created_at) < NOW() - ($2 || ' days')::interval`,
+    [statusIds, String(maxDays)]
+  );
+  for (const row of q.rows) {
+    await _logViolation(rule, row.lead_id, row.user_id, {
+      last_change: row.last_change, max_days: maxDays,
+      reason: 'No status change for over ' + maxDays + ' days'
+    });
+  }
+}
+
+/* call_outside_hours — daily. Find call_events from the last 24h whose
+ * IST hour is < start_hour or >= end_hour. Optionally skip weekends. */
+async function _evalCallOutsideHours(rule) {
+  const cfg = _parseConfig(rule);
+  const startH = Number(cfg.start_hour ?? 9);
+  const endH   = Number(cfg.end_hour   ?? 19);
+  const allowWeekends = !!cfg.allow_weekends;
+  const q = await db.query(
+    `SELECT id, lead_id, user_id, direction, created_at
+       FROM call_events
+      WHERE direction = 'out'
+        AND created_at >= NOW() - INTERVAL '24 hours'`);
+  for (const row of q.rows) {
+    const d = row.created_at instanceof Date ? row.created_at : new Date(row.created_at);
+    // Convert to Asia/Kolkata to get the user's local hour + weekday
+    const tz = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', hour: '2-digit', weekday: 'short', hour12: false });
+    const parts = tz.formatToParts(d);
+    const hour = Number(parts.find(p => p.type === 'hour').value);
+    const wk   = parts.find(p => p.type === 'weekday').value;
+    const isWeekend = wk === 'Sat' || wk === 'Sun';
+    if (isWeekend && !allowWeekends) {
+      await _logViolation(rule, row.lead_id, row.user_id, { at: row.created_at, hour, weekday: wk, reason: 'Call on weekend' });
+      continue;
+    }
+    if (hour < startH || hour >= endH) {
+      await _logViolation(rule, row.lead_id, row.user_id, {
+        at: row.created_at, hour, allowed: startH + '–' + endH,
+        reason: 'Call outside ' + startH + ':00–' + endH + ':00 hours'
+      });
+    }
+  }
+}
+
+/* assigned_no_action_n_days — daily. Lead has assigned_to but no
+ * lead_actions newer than max_days. */
+async function _evalAssignedNoActionNDays(rule) {
+  const cfg = _parseConfig(rule);
+  const maxDays = Number(cfg.max_days || 3);
+  if (!maxDays) return;
+  const q = await db.query(
+    `SELECT l.id AS lead_id, l.assigned_to AS user_id, l.name,
+            COALESCE((SELECT MAX(la.created_at) FROM lead_actions la
+                       WHERE la.lead_id = l.id AND la.action_type <> 'created'), l.created_at) AS last_act
+       FROM leads l
+      WHERE l.assigned_to IS NOT NULL
+        AND COALESCE((SELECT MAX(la.created_at) FROM lead_actions la
+                       WHERE la.lead_id = l.id AND la.action_type <> 'created'), l.created_at)
+            < NOW() - ($1 || ' days')::interval`,
+    [String(maxDays)]
+  );
+  for (const row of q.rows) {
+    await _logViolation(rule, row.lead_id, row.user_id, {
+      last_activity: row.last_act, max_days: maxDays,
+      reason: 'No rep activity for over ' + maxDays + ' days'
+    });
+  }
+}
+
+// ============================================================
 // PUBLIC ENTRY POINTS
 // ============================================================
 
@@ -302,6 +469,19 @@ async function evaluateRealtime(ctx) {
       const rules = await _activeRules('followup_requires_call');
       for (const r of rules) {
         const v = await _evalFollowupRequiresCall(r, ctx);
+        if (v && v.violated) return v;
+      }
+    }
+    /* COMPLIANCE_v2 — status-change realtime checks */
+    if (ctx.event === 'status_change') {
+      const remarkRules = await _activeRules('status_change_requires_remark');
+      for (const r of remarkRules) {
+        const v = await _evalStatusChangeRequiresRemark(r, ctx);
+        if (v && v.violated) return v;
+      }
+      const callRules = await _activeRules('status_change_requires_recent_call');
+      for (const r of callRules) {
+        const v = await _evalStatusChangeRequiresRecentCall(r, ctx);
         if (v && v.violated) return v;
       }
     }
@@ -325,9 +505,13 @@ async function runDailyScan() {
     const meta = CHECK_TYPES[r.check_type];
     if (!meta || !meta.daily) continue;
     try {
-      if (r.check_type === 'np_min_dials')        await _evalNpMinDials(r);
-      else if (r.check_type === 'idle_in_stage')  await _evalIdleInStage(r);
-      else if (r.check_type === 'min_daily_activity') await _evalMinDailyActivity(r);
+      if (r.check_type === 'np_min_dials')                  await _evalNpMinDials(r);
+      else if (r.check_type === 'idle_in_stage')            await _evalIdleInStage(r);
+      else if (r.check_type === 'min_daily_activity')       await _evalMinDailyActivity(r);
+      /* COMPLIANCE_v2 — new daily evaluators */
+      else if (r.check_type === 'no_status_change_in_n_days') await _evalNoStatusChangeInNDays(r);
+      else if (r.check_type === 'call_outside_hours')         await _evalCallOutsideHours(r);
+      else if (r.check_type === 'assigned_no_action_n_days')  await _evalAssignedNoActionNDays(r);
     } catch (e) {
       console.warn('[compliance rule ' + r.id + ']', e.message);
     }
@@ -409,9 +593,13 @@ async function api_compliance_rules_test(token, id) {
   const before = await db.query(`SELECT COUNT(*)::int AS c FROM compliance_violations`);
   const meta = CHECK_TYPES[rule.check_type];
   if (!meta || !meta.daily) return { ok: true, message: 'This rule is real-time only — fires on actual events.' };
-  if (rule.check_type === 'np_min_dials')         await _evalNpMinDials(rule);
-  else if (rule.check_type === 'idle_in_stage')   await _evalIdleInStage(rule);
-  else if (rule.check_type === 'min_daily_activity') await _evalMinDailyActivity(rule);
+  if (rule.check_type === 'np_min_dials')                  await _evalNpMinDials(rule);
+  else if (rule.check_type === 'idle_in_stage')            await _evalIdleInStage(rule);
+  else if (rule.check_type === 'min_daily_activity')       await _evalMinDailyActivity(rule);
+  /* COMPLIANCE_v2 */
+  else if (rule.check_type === 'no_status_change_in_n_days') await _evalNoStatusChangeInNDays(rule);
+  else if (rule.check_type === 'call_outside_hours')         await _evalCallOutsideHours(rule);
+  else if (rule.check_type === 'assigned_no_action_n_days')  await _evalAssignedNoActionNDays(rule);
   const after = await db.query(`SELECT COUNT(*)::int AS c FROM compliance_violations`);
   return { ok: true, new_violations: Number(after.rows[0].c) - Number(before.rows[0].c) };
 }

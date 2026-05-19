@@ -1225,6 +1225,21 @@ async function api_leads_update(token, id, patch) {
       if (v && v.violated) console.warn('[compliance violation]', v.message);
     } catch (_) {}
   }
+
+  /* COMPLIANCE_v2 — real-time check on status change. Hook fires after the
+   * status was updated (so violation reflects the NEW status). Notes-in-patch
+   * counts as a remark; downstream rules can require richer evidence. */
+  if ('status_id' in patch && Number(patch.status_id) !== Number(lead.status_id)) {
+    try {
+      const hasRemarkInPatch = !!(patch.notes && String(patch.notes).trim().length > 3);
+      const v = await require('./compliance').evaluateRealtime({
+        event: 'status_change', leadId: id, userId: me.id,
+        oldStatusId: lead.status_id, newStatusId: patch.status_id,
+        hasRemarkInPatch
+      });
+      if (v && v.violated) console.warn('[compliance violation]', v.message);
+    } catch (_) {}
+  }
   if ('tags' in patch && String(patch.tags || '') !== String(lead.tags || '')) {
     try { require('./tat').logAction(id, 'tags_updated', me.id, { tags: patch.tags || '' }); } catch (_) {}
     // Fire nurture auto-enroll for each newly-added tag

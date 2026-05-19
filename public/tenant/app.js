@@ -32668,104 +32668,230 @@ VIEWS.compliance = async (view) => {
   renderRules();
 };
 
-/* Rule editor modal — open/edit a single rule. Type-specific config fields. */
+/* Rule editor modal v2 — quick-pick presets, English preview, fixed
+ * CRM.cache.statuses path, and config forms for every check_type. */
 async function openComplianceRuleEditor(rule, types, onSaved) {
   const modal = h('div', { class: 'modal' });
   const isNew = !rule;
   rule = rule || { name: '', description: '', check_type: types[0].key, severity: 'warning', enabled: 1, notify_agent: 1, notify_manager: 0, config: {} };
 
-  const nameInp = h('input', { class: 'input', value: rule.name || '', placeholder: 'e.g. NP must be dialled once a day' });
-  const descInp = h('input', { class: 'input', value: rule.description || '', placeholder: 'Short description / why this rule exists' });
-  const typeSel = h('select', { class: 'input' }, ...types.map(t => h('option', { value: t.key, selected: t.key === rule.check_type ? 'selected' : null }, t.label)));
+  /* COMPLIANCE_v2 — quick-pick presets. Click loads a ready-made rule. */
+  const PRESETS = [
+    { key: 'np_3_per_day', label: '☎ NP must be dialled ≥ 3× per day',
+      check_type: 'np_min_dials',
+      cfg: { min_dials: 3, window_hours: 24, direction: 'out' },
+      hint: 'Pick your Not-Picked status(es) after applying.' },
+    { key: 'np_1_per_day', label: '☎ NP must be dialled ≥ 1× per day',
+      check_type: 'np_min_dials',
+      cfg: { min_dials: 1, window_hours: 24, direction: 'out' },
+      hint: 'Pick your Not-Picked status(es) after applying.' },
+    { key: 'followup_needs_call', label: '🗓 Follow-up requires recent outgoing call',
+      check_type: 'followup_requires_call',
+      cfg: { call_window_hours: 24 } },
+    { key: 'status_change_needs_remark', label: '💬 Status change must include a remark',
+      check_type: 'status_change_requires_remark', cfg: {} },
+    { key: 'status_change_needs_call', label: '☎ Status change must follow a call',
+      check_type: 'status_change_requires_recent_call', cfg: { call_window_hours: 24 } },
+    { key: 'idle_7d', label: '⏳ Lead idle > 7 days (no activity)',
+      check_type: 'idle_in_stage', cfg: { max_idle_days: 7 } },
+    { key: 'no_stage_change_5d', label: '⛔ No status change in 5+ days',
+      check_type: 'no_status_change_in_n_days', cfg: { max_days: 5 } },
+    { key: 'rep_daily_5', label: '📊 Each rep must log ≥ 5 activities/day',
+      check_type: 'min_daily_activity', cfg: { min_activities: 5, target_roles: ['agent','sales','employee'] } },
+    { key: 'work_hours', label: '🕘 Calls only 9 AM – 7 PM (no weekends)',
+      check_type: 'call_outside_hours', cfg: { start_hour: 9, end_hour: 19, allow_weekends: false } },
+    { key: 'assigned_no_action_3d', label: '🔕 Assigned but no action in 3+ days',
+      check_type: 'assigned_no_action_n_days', cfg: { max_days: 3 } }
+  ];
+
+  const nameInp = h('input', { class: 'input', value: rule.name || '', placeholder: 'e.g. NP must be dialled 3× a day', style: { width: '100%' } });
+  const descInp = h('input', { class: 'input', value: rule.description || '', placeholder: 'Short description — why this rule exists (optional)', style: { width: '100%' } });
+  const typeSel = h('select', { class: 'input', style: { width: '100%' } },
+    ...types.map(t => h('option', { value: t.key, selected: t.key === rule.check_type ? 'selected' : null }, t.label)));
   const sevSel  = h('select', { class: 'input' },
-    h('option', { value: 'info',     selected: rule.severity === 'info'     ? 'selected' : null }, '🟦 info'),
-    h('option', { value: 'warning',  selected: !rule.severity || rule.severity === 'warning' ? 'selected' : null }, '🟨 warning'),
-    h('option', { value: 'critical', selected: rule.severity === 'critical' ? 'selected' : null }, '🟥 critical')
+    h('option', { value: 'info',     selected: rule.severity === 'info'     ? 'selected' : null }, '🟦 Info'),
+    h('option', { value: 'warning',  selected: !rule.severity || rule.severity === 'warning' ? 'selected' : null }, '🟨 Warning'),
+    h('option', { value: 'critical', selected: rule.severity === 'critical' ? 'selected' : null }, '🟥 Critical')
   );
   const enChk = h('input', { type: 'checkbox', checked: Number(rule.enabled) === 1 ? 'checked' : null });
   const naChk = h('input', { type: 'checkbox', checked: Number(rule.notify_agent) === 1 ? 'checked' : null });
   const nmChk = h('input', { type: 'checkbox', checked: Number(rule.notify_manager) === 1 ? 'checked' : null });
 
-  // Type-specific config form — rebuilt when typeSel changes
-  const cfgBox = h('div', { style: { padding: '.8rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', margin: '.6rem 0' } });
+  // Preview box — English-language summary of the rule, regenerated on every change.
+  const previewBox = h('div', { style: { padding: '.7rem .9rem', background: '#eff6ff', border: '1px dashed #93c5fd', borderRadius: '8px', margin: '.8rem 0', fontSize: '.85rem', color: '#1e3a8a' } }, '');
+
+  // Type-specific config form
+  const cfgBox = h('div', { style: { padding: '.9rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', margin: '.6rem 0' } });
+
+  function _statusName(id) {
+    const s = (CRM && CRM.cache && CRM.cache.statuses || []).find(x => Number(x.id) === Number(id));
+    return s ? s.name : ('#' + id);
+  }
+
+  function _updatePreview() {
+    const t = types.find(x => x.key === typeSel.value) || {};
+    const cfg = cfgBox._collect ? cfgBox._collect() : {};
+    let txt = '📜 ' + t.label + ': ';
+    if (typeSel.value === 'np_min_dials') {
+      const statusList = (cfg.status_ids || []).map(_statusName).join(', ') || '(pick statuses)';
+      txt += 'Leads in [' + statusList + '] must be ' + (cfg.direction || 'out') + '-dialled ≥ ' + (cfg.min_dials || 1) + '× every ' + (cfg.window_hours || 24) + ' hour(s).';
+    } else if (typeSel.value === 'followup_requires_call') {
+      txt += 'Refuse-log when an agent sets a follow-up with no outgoing call in the last ' + (cfg.call_window_hours || 24) + 'h.';
+    } else if (typeSel.value === 'idle_in_stage') {
+      const statusList = (cfg.status_ids || []).map(_statusName).join(', ') || '(pick statuses)';
+      txt += 'Leads in [' + statusList + '] with no activity for ' + (cfg.max_idle_days || 7) + '+ days.';
+    } else if (typeSel.value === 'min_daily_activity') {
+      const roles = (cfg.target_roles || []).join(', ') || 'all roles';
+      txt += 'Reps (' + roles + ') with < ' + (cfg.min_activities || 5) + ' activities today.';
+    } else if (typeSel.value === 'status_change_requires_remark') {
+      const statusList = (cfg.status_ids || []).map(_statusName).join(', ') || '(pick statuses)';
+      txt += 'Changing to [' + statusList + '] requires a remark in the same save (or within the last 90s).';
+    } else if (typeSel.value === 'status_change_requires_recent_call') {
+      const statusList = (cfg.status_ids || []).map(_statusName).join(', ') || '(pick statuses)';
+      txt += 'Changing to [' + statusList + '] requires an outgoing call in the last ' + (cfg.call_window_hours || 24) + 'h.';
+    } else if (typeSel.value === 'no_status_change_in_n_days') {
+      const statusList = (cfg.status_ids || []).map(_statusName).join(', ') || '(pick statuses)';
+      txt += 'Leads parked in [' + statusList + '] for ' + (cfg.max_days || 7) + '+ days.';
+    } else if (typeSel.value === 'call_outside_hours') {
+      txt += 'Outgoing calls outside ' + (cfg.start_hour ?? 9) + ':00–' + (cfg.end_hour ?? 19) + ':00' + (cfg.allow_weekends ? '' : ' or on weekends') + '.';
+    } else if (typeSel.value === 'assigned_no_action_n_days') {
+      txt += 'Assigned leads with zero rep activity for ' + (cfg.max_days || 3) + '+ days.';
+    }
+    previewBox.textContent = txt;
+  }
+
   function buildCfgForm() {
     cfgBox.innerHTML = '';
     const t = types.find(x => x.key === typeSel.value);
     if (!t) return;
-    cfgBox.appendChild(h('div', { class: 'muted', style: { fontSize: '.8rem', marginBottom: '.4rem' } }, '💡 ' + t.description));
+    cfgBox.appendChild(h('div', { class: 'muted', style: { fontSize: '.82rem', marginBottom: '.6rem', lineHeight: '1.4' } }, '💡 ' + t.description));
 
+    const statuses = (window.CRM && CRM.cache && CRM.cache.statuses) || [];
     const cfg = rule.config || {};
     const inputs = {};
 
-    function addRow(label, input) {
-      const row = h('div', { style: { display: 'flex', alignItems: 'center', gap: '.6rem', margin: '.4rem 0' } },
-        h('label', { style: { minWidth: '180px', fontSize: '.85rem' } }, label), input);
+    function addRow(label, input, helper) {
+      const row = h('div', { style: { display: 'grid', gridTemplateColumns: '200px 1fr', alignItems: 'center', gap: '.6rem', margin: '.5rem 0' } },
+        h('label', { style: { fontSize: '.88rem', fontWeight: 500 } }, label),
+        h('div', {}, input, helper ? h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '.2rem' } }, helper) : null)
+      );
       cfgBox.appendChild(row);
     }
 
     if (t.config_keys.includes('status_ids')) {
-      const statuses = (window.CRM && CRM.statuses) || [];
-      const sel = h('select', { class: 'input', multiple: 'multiple', style: { minWidth: '260px', height: '90px' } },
-        ...statuses.map(st => h('option', { value: String(st.id),
-          selected: (cfg.status_ids || []).map(Number).includes(Number(st.id)) ? 'selected' : null }, st.name))
-      );
-      inputs.status_ids = () => Array.from(sel.selectedOptions).map(o => Number(o.value));
-      addRow('Status(es) to check', sel);
+      if (!statuses.length) {
+        addRow('Status(es)', h('div', { class: 'muted', style: { color: '#dc2626' } }, '⚠ No statuses configured yet — go to Settings → Statuses first.'));
+      } else {
+        const sel = h('select', { class: 'input', multiple: 'multiple', style: { minWidth: '100%', height: '120px' } },
+          ...statuses.map(st => h('option', { value: String(st.id),
+            selected: (cfg.status_ids || []).map(Number).includes(Number(st.id)) ? 'selected' : null }, st.name))
+        );
+        sel.onchange = _updatePreview;
+        inputs.status_ids = () => Array.from(sel.selectedOptions).map(o => Number(o.value));
+        addRow('Status(es) to check', sel, 'Hold Ctrl/Cmd to select multiple. Pick the statuses this rule applies to.');
+      }
     }
     if (t.config_keys.includes('min_dials')) {
-      const inp = h('input', { type: 'number', class: 'input', min: '1', max: '20', value: cfg.min_dials || 1, style: { width: '80px' } });
+      const inp = h('input', { type: 'number', class: 'input', min: '1', max: '20', value: cfg.min_dials || 1, style: { width: '90px' } });
+      inp.oninput = _updatePreview;
       inputs.min_dials = () => Number(inp.value || 1);
-      addRow('Min dials required', inp);
+      addRow('Minimum dials required', inp, 'How many times an agent should dial a lead in the chosen window.');
     }
     if (t.config_keys.includes('window_hours')) {
-      const inp = h('input', { type: 'number', class: 'input', min: '1', max: '720', value: cfg.window_hours || 24, style: { width: '80px' } });
+      const inp = h('input', { type: 'number', class: 'input', min: '1', max: '720', value: cfg.window_hours || 24, style: { width: '90px' } });
+      inp.oninput = _updatePreview;
       inputs.window_hours = () => Number(inp.value || 24);
-      addRow('Window (hours)', inp);
+      addRow('Window (hours)', inp, '24 = each day, 168 = each week. The check looks back this many hours from now.');
     }
     if (t.config_keys.includes('direction')) {
       const sel = h('select', { class: 'input' },
-        h('option', { value: 'out',    selected: !cfg.direction || cfg.direction === 'out' ? 'selected' : null }, 'Outgoing'),
-        h('option', { value: 'in',     selected: cfg.direction === 'in' ? 'selected' : null }, 'Incoming'),
-        h('option', { value: 'missed', selected: cfg.direction === 'missed' ? 'selected' : null }, 'Missed'),
-        h('option', { value: 'any',    selected: cfg.direction === 'any' ? 'selected' : null }, 'Any')
+        h('option', { value: 'out',    selected: !cfg.direction || cfg.direction === 'out' ? 'selected' : null }, '📞 Outgoing'),
+        h('option', { value: 'in',     selected: cfg.direction === 'in' ? 'selected' : null }, '📥 Incoming'),
+        h('option', { value: 'missed', selected: cfg.direction === 'missed' ? 'selected' : null }, '❌ Missed'),
+        h('option', { value: 'any',    selected: cfg.direction === 'any' ? 'selected' : null }, '🔁 Any direction')
       );
+      sel.onchange = _updatePreview;
       inputs.direction = () => sel.value;
       addRow('Call direction', sel);
     }
     if (t.config_keys.includes('call_window_hours')) {
-      const inp = h('input', { type: 'number', class: 'input', min: '1', max: '168', value: cfg.call_window_hours || 24, style: { width: '80px' } });
+      const inp = h('input', { type: 'number', class: 'input', min: '1', max: '168', value: cfg.call_window_hours || 24, style: { width: '90px' } });
+      inp.oninput = _updatePreview;
       inputs.call_window_hours = () => Number(inp.value || 24);
-      addRow('Recent-call window (hours)', inp);
+      addRow('Recent-call window (hours)', inp, 'A call must have happened within this many hours before the action.');
     }
     if (t.config_keys.includes('max_idle_days')) {
-      const inp = h('input', { type: 'number', class: 'input', min: '1', max: '180', value: cfg.max_idle_days || 7, style: { width: '80px' } });
+      const inp = h('input', { type: 'number', class: 'input', min: '1', max: '180', value: cfg.max_idle_days || 7, style: { width: '90px' } });
+      inp.oninput = _updatePreview;
       inputs.max_idle_days = () => Number(inp.value || 7);
-      addRow('Max idle days', inp);
+      addRow('Max idle days', inp, 'Trigger when a lead sees no activity for this many days.');
+    }
+    if (t.config_keys.includes('max_days')) {
+      const inp = h('input', { type: 'number', class: 'input', min: '1', max: '180', value: cfg.max_days || 7, style: { width: '90px' } });
+      inp.oninput = _updatePreview;
+      inputs.max_days = () => Number(inp.value || 7);
+      addRow('Max days', inp);
     }
     if (t.config_keys.includes('min_activities')) {
-      const inp = h('input', { type: 'number', class: 'input', min: '1', max: '500', value: cfg.min_activities || 5, style: { width: '80px' } });
+      const inp = h('input', { type: 'number', class: 'input', min: '1', max: '500', value: cfg.min_activities || 5, style: { width: '90px' } });
+      inp.oninput = _updatePreview;
       inputs.min_activities = () => Number(inp.value || 5);
-      addRow('Min activities / day', inp);
+      addRow('Minimum activities / day', inp, 'Counts every status change, remark, follow-up edit, reassign, WhatsApp send, etc.');
     }
     if (t.config_keys.includes('target_roles')) {
-      const sel = h('select', { class: 'input', multiple: 'multiple', style: { minWidth: '260px', height: '90px' } },
+      const sel = h('select', { class: 'input', multiple: 'multiple', style: { minWidth: '100%', height: '120px' } },
         h('option', { value: 'agent',       selected: (cfg.target_roles || []).includes('agent')      ? 'selected' : null }, 'Agent'),
         h('option', { value: 'sales',       selected: (cfg.target_roles || []).includes('sales')      ? 'selected' : null }, 'Sales'),
         h('option', { value: 'employee',    selected: (cfg.target_roles || []).includes('employee')   ? 'selected' : null }, 'Employee'),
         h('option', { value: 'team_leader', selected: (cfg.target_roles || []).includes('team_leader')? 'selected' : null }, 'Team Leader'),
         h('option', { value: 'manager',     selected: (cfg.target_roles || []).includes('manager')    ? 'selected' : null }, 'Manager')
       );
+      sel.onchange = _updatePreview;
       inputs.target_roles = () => Array.from(sel.selectedOptions).map(o => o.value);
-      addRow('Target roles', sel);
+      addRow('Target roles', sel, 'Which roles this quota applies to. Leave empty to cover everyone.');
     }
+    if (t.config_keys.includes('start_hour')) {
+      const inp = h('input', { type: 'number', class: 'input', min: '0', max: '23', value: cfg.start_hour ?? 9, style: { width: '90px' } });
+      inp.oninput = _updatePreview;
+      inputs.start_hour = () => Number(inp.value);
+      addRow('Start hour (0–23)', inp, '9 = 9 AM. Anything before is flagged.');
+    }
+    if (t.config_keys.includes('end_hour')) {
+      const inp = h('input', { type: 'number', class: 'input', min: '0', max: '23', value: cfg.end_hour ?? 19, style: { width: '90px' } });
+      inp.oninput = _updatePreview;
+      inputs.end_hour = () => Number(inp.value);
+      addRow('End hour (0–23)', inp, '19 = 7 PM. Anything at/after is flagged.');
+    }
+    if (t.config_keys.includes('allow_weekends')) {
+      const chk = h('input', { type: 'checkbox', checked: cfg.allow_weekends ? 'checked' : null });
+      chk.onchange = _updatePreview;
+      inputs.allow_weekends = () => !!chk.checked;
+      addRow('Allow Sat/Sun calls', chk);
+    }
+
     cfgBox._collect = () => {
       const out = {};
       Object.keys(inputs).forEach(k => { out[k] = inputs[k](); });
       return out;
     };
+    _updatePreview();
   }
   buildCfgForm();
-  typeSel.onchange = buildCfgForm;
+  typeSel.onchange = () => { buildCfgForm(); _updatePreview(); };
+
+  // Presets row
+  const presetRow = h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '.35rem', marginBottom: '.7rem' } });
+  PRESETS.forEach(p => {
+    presetRow.appendChild(h('button', { class: 'btn', type: 'button', style: { fontSize: '.78rem' }, onclick: () => {
+      // Apply preset onto the editor: name, check_type, config
+      nameInp.value = nameInp.value || p.label.replace(/^[^\w]+/, '').slice(0, 80);
+      // Switch the type, then rebuild and pre-fill cfg
+      typeSel.value = p.check_type;
+      rule.config = Object.assign({}, p.cfg);
+      buildCfgForm();
+      if (p.hint) toast(p.hint, 'ok');
+    } }, p.label));
+  });
 
   const saveBtn = h('button', { class: 'btn primary' }, isNew ? '💾 Create rule' : '💾 Save');
   saveBtn.onclick = async () => {
@@ -32790,19 +32916,23 @@ async function openComplianceRuleEditor(rule, types, onSaved) {
     } catch (e) { toast(e.message, 'err'); saveBtn.disabled = false; saveBtn.textContent = '💾 Save'; }
   };
 
-  modal.appendChild(h('div', { class: 'modal-content', style: { maxWidth: '640px' } },
+  modal.appendChild(h('div', { class: 'modal-content', style: { maxWidth: '780px' } },
     h('h3', {}, isNew ? '➕ New compliance rule' : '✏️ Edit rule'),
-    h('label', { class: 'muted', style: { fontSize: '.75rem' } }, 'Name'), nameInp,
-    h('label', { class: 'muted', style: { fontSize: '.75rem' } }, 'Description'), descInp,
-    h('label', { class: 'muted', style: { fontSize: '.75rem' } }, 'Check type'), typeSel,
+    h('p', { class: 'muted', style: { fontSize: '.85rem' } }, isNew ? 'Pick a preset below to start fast, or pick a check type and configure it manually.' : 'Update this rule\'s configuration.'),
+    isNew ? h('div', { style: { fontSize: '.78rem', color: '#475569', marginBottom: '.3rem' } }, '⚡ Quick presets:') : null,
+    isNew ? presetRow : null,
+    h('label', { class: 'muted', style: { fontSize: '.78rem', display: 'block', marginTop: '.4rem' } }, 'Rule name'), nameInp,
+    h('label', { class: 'muted', style: { fontSize: '.78rem', display: 'block', marginTop: '.4rem' } }, 'Description (optional)'), descInp,
+    h('label', { class: 'muted', style: { fontSize: '.78rem', display: 'block', marginTop: '.4rem' } }, 'Check type'), typeSel,
     cfgBox,
-    h('div', { style: { display: 'flex', gap: '.8rem', flexWrap: 'wrap', alignItems: 'center', margin: '.5rem 0' } },
-      h('label', { style: { fontSize: '.85rem' } }, 'Severity ', sevSel),
-      h('label', { style: { fontSize: '.85rem' } }, enChk, ' Enabled'),
-      h('label', { style: { fontSize: '.85rem' } }, naChk, ' Notify agent'),
-      h('label', { style: { fontSize: '.85rem' } }, nmChk, ' Notify manager')
+    previewBox,
+    h('div', { style: { display: 'flex', gap: '1.2rem', flexWrap: 'wrap', alignItems: 'center', marginTop: '.5rem', padding: '.5rem .7rem', background: '#fafafa', borderRadius: '6px' } },
+      h('label', { style: { fontSize: '.85rem', display: 'flex', alignItems: 'center', gap: '.3rem' } }, 'Severity ', sevSel),
+      h('label', { style: { fontSize: '.85rem', display: 'flex', alignItems: 'center', gap: '.3rem' } }, enChk, ' Enabled'),
+      h('label', { style: { fontSize: '.85rem', display: 'flex', alignItems: 'center', gap: '.3rem' } }, naChk, ' Notify agent'),
+      h('label', { style: { fontSize: '.85rem', display: 'flex', alignItems: 'center', gap: '.3rem' } }, nmChk, ' Notify manager')
     ),
-    h('div', { class: 'modal-actions', style: { display: 'flex', justifyContent: 'flex-end', gap: '.4rem', marginTop: '.6rem' } },
+    h('div', { class: 'modal-actions', style: { display: 'flex', justifyContent: 'flex-end', gap: '.4rem', marginTop: '.8rem' } },
       h('button', { class: 'btn', onclick: () => modal.remove() }, 'Cancel'),
       saveBtn
     )
