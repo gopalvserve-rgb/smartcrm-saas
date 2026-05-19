@@ -370,38 +370,136 @@ async function api_reports_groupBy(token, filters, groupBy) {
     throw new Error('Unknown groupBy dimension: ' + dim);
   }
 
-  // Aggregate
-  const buckets = {}; // label -> { count, lead_ids: [...] }
+  /* REPORT_BUILDER_v3 — rich per-bucket aggregation.
+   * Beyond the basic count, we surface: qualified_count, hot_count,
+   * won_count (leads in is_final status with qualified=1), lost_count
+   * (is_final + not qualified), value_sum, value_avg, has_email/phone/whatsapp,
+   * distinct_emails/phones/companies, recent_24h/7d/30d, newest/oldest,
+   * avg_age_days. Plus per-custom-field filled_count + numeric sum/avg
+   * for every custom field on this tenant. */
+  const NOW = Date.now();
+  const ONE_DAY = 24 * 60 * 60 * 1000;
+  const finalStatusIds = new Set(statuses.filter(s => Number(s.is_final) === 1).map(s => Number(s.id)));
+
+  // Discover custom-field keys from the leads we already filtered
+  const cfKeys = new Set();
+  rows.forEach(l => {
+    let extra = l.extra_json;
+    try { if (typeof extra === 'string') extra = JSON.parse(extra || '{}'); } catch (_) { extra = {}; }
+    if (extra && typeof extra === 'object') Object.keys(extra).forEach(k => cfKeys.add(k));
+  });
+  const cfKeysList = Array.from(cfKeys);
+
+  function _newBucket() {
+    const b = {
+      count: 0, lead_ids: [],
+      qualified_count: 0, hot_count: 0, won_count: 0, lost_count: 0, open_count: 0,
+      value_sum: 0, value_count_for_avg: 0,
+      has_email: 0, has_phone: 0, has_whatsapp: 0,
+      _emails: new Set(), _phones: new Set(), _companies: new Set(),
+      recent_24h: 0, recent_7d: 0, recent_30d: 0,
+      newest_ms: 0, oldest_ms: 0,
+      _age_sum: 0, _age_n: 0,
+      cf: {}
+    };
+    cfKeysList.forEach(k => { b.cf[k] = { filled: 0, sum: 0, num_n: 0 }; });
+    return b;
+  }
+  function _accum(b, l) {
+    b.count += 1;
+    b.lead_ids.push(Number(l.id));
+    if (Number(l.qualified) === 1) b.qualified_count += 1;
+    if (Number(l.heat_score) >= 60) b.hot_count += 1;
+    const isFinal = finalStatusIds.has(Number(l.status_id));
+    if (isFinal && Number(l.qualified) === 1) b.won_count += 1;
+    if (isFinal && Number(l.qualified) !== 1) b.lost_count += 1;
+    if (!isFinal) b.open_count += 1;
+    const val = Number(l.value);
+    if (isFinite(val) && val > 0) { b.value_sum += val; b.value_count_for_avg += 1; }
+    if (l.email)    { b.has_email    += 1; b._emails.add(String(l.email).toLowerCase()); }
+    if (l.phone)    { b.has_phone    += 1; b._phones.add(String(l.phone).replace(/\D/g, '')); }
+    if (l.whatsapp) { b.has_whatsapp += 1; }
+    if (l.company)  { b._companies.add(String(l.company).toLowerCase().trim()); }
+    const cMs = l.created_at ? new Date(l.created_at).getTime() : 0;
+    if (cMs) {
+      if (NOW - cMs <= 1 * ONE_DAY)  b.recent_24h += 1;
+      if (NOW - cMs <= 7 * ONE_DAY)  b.recent_7d  += 1;
+      if (NOW - cMs <= 30 * ONE_DAY) b.recent_30d += 1;
+      if (cMs > b.newest_ms || b.newest_ms === 0) b.newest_ms = cMs;
+      if (cMs < b.oldest_ms || b.oldest_ms === 0) b.oldest_ms = cMs;
+      const ageDays = Math.max(0, Math.floor((NOW - cMs) / ONE_DAY));
+      b._age_sum += ageDays; b._age_n += 1;
+    }
+    // Custom fields
+    if (cfKeysList.length) {
+      let extra = l.extra_json;
+      try { if (typeof extra === 'string') extra = JSON.parse(extra || '{}'); } catch (_) { extra = {}; }
+      if (extra && typeof extra === 'object') {
+        cfKeysList.forEach(k => {
+          const raw = extra[k];
+          if (raw == null || raw === '') return;
+          b.cf[k].filled += 1;
+          const n = Number(raw);
+          if (!isNaN(n)) { b.cf[k].sum += n; b.cf[k].num_n += 1; }
+        });
+      }
+    }
+  }
+  function _finalize(b, value) {
+    const out = {
+      value, count: b.count, lead_ids: b.lead_ids,
+      qualified_count: b.qualified_count,
+      hot_count: b.hot_count,
+      won_count: b.won_count,
+      lost_count: b.lost_count,
+      open_count: b.open_count,
+      conversion_pct: b.count > 0 ? Math.round((b.qualified_count / b.count) * 10000) / 100 : 0,
+      win_pct:        b.count > 0 ? Math.round((b.won_count       / b.count) * 10000) / 100 : 0,
+      value_sum: Math.round(b.value_sum * 100) / 100,
+      value_avg: b.value_count_for_avg > 0 ? Math.round((b.value_sum / b.value_count_for_avg) * 100) / 100 : 0,
+      has_email_count:    b.has_email,
+      has_phone_count:    b.has_phone,
+      has_whatsapp_count: b.has_whatsapp,
+      distinct_emails:    b._emails.size,
+      distinct_phones:    b._phones.size,
+      distinct_companies: b._companies.size,
+      recent_24h: b.recent_24h, recent_7d: b.recent_7d, recent_30d: b.recent_30d,
+      newest_at: b.newest_ms ? new Date(b.newest_ms).toISOString() : null,
+      oldest_at: b.oldest_ms ? new Date(b.oldest_ms).toISOString() : null,
+      avg_age_days: b._age_n > 0 ? Math.round(b._age_sum / b._age_n) : 0,
+      cf: b.cf
+    };
+    return out;
+  }
+
+  const buckets = {}; // label -> mutable accumulator
   if (dim === 'tags') {
     rows.forEach(l => {
       const tags = String(l.tags || '').split(',').map(t => t.trim()).filter(Boolean);
       if (tags.length === 0) {
         const label = NONE;
-        if (!buckets[label]) buckets[label] = { count: 0, lead_ids: [] };
-        buckets[label].count++;
-        buckets[label].lead_ids.push(Number(l.id));
+        if (!buckets[label]) buckets[label] = _newBucket();
+        _accum(buckets[label], l);
       } else {
         tags.forEach(t => {
-          if (!buckets[t]) buckets[t] = { count: 0, lead_ids: [] };
-          buckets[t].count++;
-          buckets[t].lead_ids.push(Number(l.id));
+          if (!buckets[t]) buckets[t] = _newBucket();
+          _accum(buckets[t], l);
         });
       }
     });
   } else {
     rows.forEach(l => {
       const label = labelFor(l);
-      if (!buckets[label]) buckets[label] = { count: 0, lead_ids: [] };
-      buckets[label].count++;
-      buckets[label].lead_ids.push(Number(l.id));
+      if (!buckets[label]) buckets[label] = _newBucket();
+      _accum(buckets[label], l);
     });
   }
 
   const out = Object.keys(buckets)
-    .map(k => ({ value: k, count: buckets[k].count, lead_ids: buckets[k].lead_ids }))
+    .map(k => _finalize(buckets[k], k))
     .sort((a, b) => b.count - a.count);
 
-  return { rows: out, total: rows.length, dimension: dim };
+  return { rows: out, total: rows.length, dimension: dim, custom_field_keys: cfKeysList };
 }
 
 /**
@@ -1301,6 +1399,173 @@ async function api_reports_activityByUser(token, opts) {
     by_day:  allDays.map(d => byDay[d]),
     grid:    Object.values(grid)
   };
+}
+
+/* REPORT_BUILDER_v4 — true pivot table API.
+ * Accepts row_dims[] (one or more) + metrics[] (one or more) + filters.
+ * Returns one row per unique tuple of dim values, with all requested
+ * metrics computed for that bucket.
+ *
+ * Shape:
+ *   row_dims: ['status', 'source']              // multiple group-by columns
+ *   metrics : ['count', 'qualified_count', ...]  // metric keys
+ *   filters : { from, to, ... }                  // same as groupBy
+ *
+ * Returns:
+ *   {
+ *     row_dims, metrics,
+ *     rows: [
+ *       { dims: { status: 'NP', source: 'Website' }, key: 'NP||Website', metrics: { count: 12, ... } },
+ *       ...
+ *     ],
+ *     total: <total lead count after filters>,
+ *     custom_field_keys: [...]
+ *   }
+ */
+async function api_reports_pivot(token, payload) {
+  const me = await authUser(token);
+  let leads = await _visibleLeads(me);
+  const users = await db.getAll('users');
+  const [statuses, products] = await Promise.all([db.getAll('statuses'), db.getAll('products')]);
+  const usersById = {}, statusesById = {}, productsById = {};
+  users.forEach(u => { usersById[Number(u.id)] = u; });
+  statuses.forEach(s => { statusesById[Number(s.id)] = s; });
+  products.forEach(p => { productsById[Number(p.id)] = p; });
+
+  const p = payload || {};
+  const rowDims = Array.isArray(p.row_dims) ? p.row_dims.map(String).filter(Boolean) : [];
+  const metrics = Array.isArray(p.metrics) ? p.metrics.map(String).filter(Boolean) : ['count'];
+  const filters = p.filters || {};
+  leads = await _applyReportFilters(leads, filters, users);
+
+  if (!rowDims.length) throw new Error('row_dims is required (pass at least one dimension)');
+
+  const NONE = '— None —';
+  const ONE_DAY = 24 * 60 * 60 * 1000;
+  const NOW = Date.now();
+  const finalStatusIds = new Set(statuses.filter(s => Number(s.is_final) === 1).map(s => Number(s.id)));
+
+  function _dimValue(dim, l) {
+    if (dim === 'status')        return statusesById[Number(l.status_id)]?.name || NONE;
+    if (dim === 'source')        return (l.source && String(l.source).trim()) || NONE;
+    if (dim === 'product')       return productsById[Number(l.product_id)]?.name || NONE;
+    if (dim === 'assigned_to')   return usersById[Number(l.assigned_to)]?.name || NONE;
+    if (dim === 'qualified')     return Number(l.qualified) === 1 ? 'Qualified' : 'Not qualified';
+    if (dim === 'is_duplicate')  return Number(l.is_duplicate) === 1 ? 'Duplicate' : 'Unique';
+    if (dim === 'created_day')   return _tzDate(l.created_at) || NONE;
+    if (dim === 'created_month') { const d = _tzDate(l.created_at); return d ? d.slice(0, 7) : NONE; }
+    if (dim.startsWith('extra:')) {
+      const key = dim.slice('extra:'.length);
+      let extra = l.extra_json;
+      try { if (typeof extra === 'string') extra = JSON.parse(extra || '{}'); } catch (_) { extra = {}; }
+      const v = (extra && extra[key] != null) ? String(extra[key]) : '';
+      return v.trim() || NONE;
+    }
+    if (['city','state','country','utm_source','utm_medium','utm_campaign','utm_term','utm_content','gclid','gad_campaignid','company'].includes(dim)) {
+      return (l[dim] && String(l[dim]).trim()) || NONE;
+    }
+    return NONE;
+  }
+
+  // Discover CF keys for the SPA to dynamically build per-CF metrics
+  const cfKeys = new Set();
+  leads.forEach(l => {
+    let extra = l.extra_json;
+    try { if (typeof extra === 'string') extra = JSON.parse(extra || '{}'); } catch (_) { extra = {}; }
+    if (extra && typeof extra === 'object') Object.keys(extra).forEach(k => cfKeys.add(k));
+  });
+  const cfKeysList = Array.from(cfKeys);
+
+  // Bucket — key = JSON-encoded array of dim values to avoid collisions
+  const buckets = {};
+  function _newBucket(dims) {
+    return {
+      dims, count: 0, lead_ids: [],
+      qualified_count: 0, hot_count: 0, won_count: 0, lost_count: 0, open_count: 0,
+      value_sum: 0, value_count_for_avg: 0,
+      has_email: 0, has_phone: 0, has_whatsapp: 0,
+      _emails: new Set(), _phones: new Set(), _companies: new Set(),
+      recent_24h: 0, recent_7d: 0, recent_30d: 0,
+      newest_ms: 0, oldest_ms: 0, _age_sum: 0, _age_n: 0,
+      cf: {}
+    };
+  }
+  function _accum(b, l) {
+    b.count += 1; b.lead_ids.push(Number(l.id));
+    if (Number(l.qualified) === 1) b.qualified_count += 1;
+    if (Number(l.heat_score) >= 60) b.hot_count += 1;
+    const isFinal = finalStatusIds.has(Number(l.status_id));
+    if (isFinal && Number(l.qualified) === 1) b.won_count += 1;
+    if (isFinal && Number(l.qualified) !== 1) b.lost_count += 1;
+    if (!isFinal) b.open_count += 1;
+    const val = Number(l.value);
+    if (isFinite(val) && val > 0) { b.value_sum += val; b.value_count_for_avg += 1; }
+    if (l.email)    { b.has_email += 1; b._emails.add(String(l.email).toLowerCase()); }
+    if (l.phone)    { b.has_phone += 1; b._phones.add(String(l.phone).replace(/\D/g, '')); }
+    if (l.whatsapp) { b.has_whatsapp += 1; }
+    if (l.company)  { b._companies.add(String(l.company).toLowerCase().trim()); }
+    const cMs = l.created_at ? new Date(l.created_at).getTime() : 0;
+    if (cMs) {
+      if (NOW - cMs <= 1 * ONE_DAY)  b.recent_24h += 1;
+      if (NOW - cMs <= 7 * ONE_DAY)  b.recent_7d  += 1;
+      if (NOW - cMs <= 30 * ONE_DAY) b.recent_30d += 1;
+      if (cMs > b.newest_ms || b.newest_ms === 0) b.newest_ms = cMs;
+      if (cMs < b.oldest_ms || b.oldest_ms === 0) b.oldest_ms = cMs;
+      b._age_sum += Math.max(0, Math.floor((NOW - cMs) / ONE_DAY)); b._age_n += 1;
+    }
+    if (cfKeysList.length) {
+      let extra = l.extra_json;
+      try { if (typeof extra === 'string') extra = JSON.parse(extra || '{}'); } catch (_) { extra = {}; }
+      if (extra && typeof extra === 'object') {
+        cfKeysList.forEach(k => {
+          const raw = extra[k];
+          if (raw == null || raw === '') return;
+          if (!b.cf[k]) b.cf[k] = { filled: 0, sum: 0, num_n: 0 };
+          b.cf[k].filled += 1;
+          const n = Number(raw);
+          if (!isNaN(n)) { b.cf[k].sum += n; b.cf[k].num_n += 1; }
+        });
+      }
+    }
+  }
+
+  leads.forEach(l => {
+    const dimVals = {};
+    rowDims.forEach(d => { dimVals[d] = _dimValue(d, l); });
+    const key = rowDims.map(d => dimVals[d]).join('||');
+    if (!buckets[key]) buckets[key] = _newBucket(dimVals);
+    _accum(buckets[key], l);
+  });
+
+  const rows = Object.entries(buckets).map(([key, b]) => ({
+    key, dims: b.dims,
+    metrics: {
+      count: b.count,
+      qualified_count: b.qualified_count,
+      hot_count: b.hot_count,
+      won_count: b.won_count,
+      lost_count: b.lost_count,
+      open_count: b.open_count,
+      conversion_pct: b.count > 0 ? Math.round((b.qualified_count / b.count) * 10000) / 100 : 0,
+      win_pct:        b.count > 0 ? Math.round((b.won_count       / b.count) * 10000) / 100 : 0,
+      value_sum: Math.round(b.value_sum * 100) / 100,
+      value_avg: b.value_count_for_avg > 0 ? Math.round((b.value_sum / b.value_count_for_avg) * 100) / 100 : 0,
+      has_email_count: b.has_email,
+      has_phone_count: b.has_phone,
+      has_whatsapp_count: b.has_whatsapp,
+      distinct_emails: b._emails.size,
+      distinct_phones: b._phones.size,
+      distinct_companies: b._companies.size,
+      recent_24h: b.recent_24h, recent_7d: b.recent_7d, recent_30d: b.recent_30d,
+      newest_at: b.newest_ms ? new Date(b.newest_ms).toISOString() : null,
+      oldest_at: b.oldest_ms ? new Date(b.oldest_ms).toISOString() : null,
+      avg_age_days: b._age_n > 0 ? Math.round(b._age_sum / b._age_n) : 0,
+      cf: b.cf
+    },
+    lead_ids: b.lead_ids
+  })).sort((a, b) => b.metrics.count - a.metrics.count);
+
+  return { row_dims: rowDims, metrics, rows, total: leads.length, custom_field_keys: cfKeysList };
 }
 
 module.exports = {

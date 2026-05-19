@@ -33510,30 +33510,130 @@ try { window.openREPaymentPlanEditor = openREPaymentPlanEditor; } catch (_) {}
 
 
 /* ==========================================================================
- * REPORT_BUILDER_v3 — Generate-report right rail (Google-Ads style)
+ * REPORT_BUILDER_v4 — true pivot: multiple ROW dimensions + multiple COLUMN metrics
  * ========================================================================== */
 
-/* Catalog of metrics the user can add as columns. Each metric defines:
- *   key      — internal id
- *   label    — column header text
- *   icon     — small emoji prefix
- *   compute  — (row, idx, allRows, total) → numeric/string for the cell
- *   align    — 'left' | 'right' (default right) */
-const RB_METRICS = {
-  count:        { key: 'count',        label: 'Leads',         icon: '🔢', compute: (r) => Number(r.count) || 0 },
-  pct:          { key: 'pct',          label: '% of total',    icon: '📊', compute: (r, i, all, total) => total > 0 ? ((Number(r.count) / total) * 100).toFixed(2) + '%' : '0%' },
-  cumulative:   { key: 'cumulative',   label: 'Cumulative',    icon: '➕', compute: (r, i, all) => { let s = 0; for (let k = 0; k <= i; k++) s += Number(all[k].count) || 0; return s; } },
-  cumulative_pct:{ key: 'cumulative_pct', label: 'Cumulative %', icon: '📈', compute: (r, i, all, total) => { if (total <= 0) return '0%'; let s = 0; for (let k = 0; k <= i; k++) s += Number(all[k].count) || 0; return (s/total*100).toFixed(1) + '%'; } },
-  rank:         { key: 'rank',         label: 'Rank',          icon: '🏷', compute: (r, i) => i + 1 }
+/* Catalogue of every dimension a row can break down by. Used both for the
+ * Row cards' dropdown and for the Recommended Columns side-list (the user
+ * can add a NEW dimension or metric from there). */
+const RB_DIM_CATALOGUE = [
+  { key: 'status',         label: 'Status',         icon: '🎯' },
+  { key: 'source',         label: 'Source',         icon: '🌐' },
+  { key: 'product',        label: 'Product',        icon: '📦' },
+  { key: 'assigned_to',    label: 'Assigned user',  icon: '👤' },
+  { key: 'qualified',      label: 'Qualified flag', icon: '✅' },
+  { key: 'is_duplicate',   label: 'Duplicate flag', icon: '👯' },
+  { key: 'created_day',    label: 'Created date (day)',   icon: '📅' },
+  { key: 'created_month',  label: 'Created date (month)', icon: '🗓' },
+  { key: 'city',           label: 'City',           icon: '🏙' },
+  { key: 'state',          label: 'State',          icon: '📍' },
+  { key: 'country',        label: 'Country',        icon: '🌍' },
+  { key: 'company',        label: 'Company',        icon: '🏢' },
+  { key: 'utm_source',     label: 'UTM Source',     icon: '📈' },
+  { key: 'utm_medium',     label: 'UTM Medium',     icon: '📡' },
+  { key: 'utm_campaign',   label: 'UTM Campaign',   icon: '🚩' },
+  { key: 'utm_term',       label: 'UTM Term',       icon: '🔑' },
+  { key: 'utm_content',    label: 'UTM Content',    icon: '🧩' },
+  { key: 'gclid',          label: 'GCLID',          icon: '🆔' },
+  { key: 'gad_campaignid', label: 'Google Ads Campaign ID', icon: '📣' }
+];
+
+/* Inject custom-field dimensions dynamically (one per CF on this tenant). */
+function _rbCFDims() {
+  const out = [];
+  ((window.CRM && CRM.cache && CRM.cache.customFields) || []).forEach(cf => {
+    out.push({ key: 'extra:' + cf.key, label: 'Custom · ' + (cf.label || cf.key), icon: '📝' });
+  });
+  return out;
+}
+
+function _rbAllDims() { return RB_DIM_CATALOGUE.concat(_rbCFDims()); }
+function _rbDimMeta(key) { return _rbAllDims().find(d => d.key === key); }
+
+/* Metric catalogue — every metric the user can put in the Column section. */
+const RB_METRIC_CATALOGUE = {
+  // Volume
+  count:          { key: 'count',          label: 'Leads',           icon: '🔢', group: 'Volume',        fmt: (v) => Number(v) || 0 },
+  pct:            { key: 'pct',            label: '% of total',      icon: '📊', group: 'Volume',        derived: (m, total) => total > 0 ? ((Number(m.count) / total) * 100).toFixed(2) + '%' : '0%' },
+  cumulative:     { key: 'cumulative',     label: 'Cumulative',      icon: '➕', group: 'Volume',        cum:  (rows, i) => { let s = 0; for (let k = 0; k <= i; k++) s += Number(rows[k].metrics.count) || 0; return s; } },
+  cumulative_pct: { key: 'cumulative_pct', label: 'Cumulative %',    icon: '📈', group: 'Volume',        cum:  (rows, i, total) => { if (total <= 0) return '0%'; let s = 0; for (let k = 0; k <= i; k++) s += Number(rows[k].metrics.count) || 0; return (s/total*100).toFixed(1) + '%'; } },
+  rank:           { key: 'rank',           label: 'Rank',            icon: '🏷', group: 'Volume',        cum:  (rows, i) => i + 1 },
+  // Quality
+  qualified_count:{ key: 'qualified_count',label: 'Qualified leads', icon: '✅', group: 'Quality',       fmt: (v) => Number(v) || 0 },
+  conversion_pct: { key: 'conversion_pct', label: 'Conversion %',    icon: '🎯', group: 'Quality',       fmt: (v) => (Number(v) || 0).toFixed(2) + '%' },
+  hot_count:      { key: 'hot_count',      label: 'Hot leads',       icon: '🔥', group: 'Quality',       fmt: (v) => Number(v) || 0 },
+  open_count:     { key: 'open_count',     label: 'Open leads',      icon: '⏳', group: 'Quality',       fmt: (v) => Number(v) || 0 },
+  won_count:      { key: 'won_count',      label: 'Won',             icon: '🏆', group: 'Quality',       fmt: (v) => Number(v) || 0 },
+  lost_count:     { key: 'lost_count',     label: 'Lost',            icon: '❌', group: 'Quality',       fmt: (v) => Number(v) || 0 },
+  win_pct:        { key: 'win_pct',        label: 'Win rate %',      icon: '🥇', group: 'Quality',       fmt: (v) => (Number(v) || 0).toFixed(2) + '%' },
+  // Value
+  value_sum:      { key: 'value_sum',      label: 'Total value (₹)', icon: '💰', group: 'Value',         fmt: (v) => '₹' + Math.round(Number(v) || 0).toLocaleString('en-IN') },
+  value_avg:      { key: 'value_avg',      label: 'Avg value (₹)',   icon: '💵', group: 'Value',         fmt: (v) => '₹' + Math.round(Number(v) || 0).toLocaleString('en-IN') },
+  // Contactability
+  has_email_count:    { key: 'has_email_count',    label: 'Has email',     icon: '📧', group: 'Contactability', fmt: (v) => Number(v) || 0 },
+  has_phone_count:    { key: 'has_phone_count',    label: 'Has phone',     icon: '📞', group: 'Contactability', fmt: (v) => Number(v) || 0 },
+  has_whatsapp_count: { key: 'has_whatsapp_count', label: 'Has WhatsApp',  icon: '💬', group: 'Contactability', fmt: (v) => Number(v) || 0 },
+  distinct_emails:    { key: 'distinct_emails',    label: 'Distinct emails',    icon: '🆔', group: 'Contactability', fmt: (v) => Number(v) || 0 },
+  distinct_phones:    { key: 'distinct_phones',    label: 'Distinct phones',    icon: '☎️', group: 'Contactability', fmt: (v) => Number(v) || 0 },
+  distinct_companies: { key: 'distinct_companies', label: 'Distinct companies', icon: '🏢', group: 'Contactability', fmt: (v) => Number(v) || 0 },
+  // Recency
+  recent_24h:     { key: 'recent_24h',     label: 'New last 24h',    icon: '⚡', group: 'Recency',       fmt: (v) => Number(v) || 0 },
+  recent_7d:      { key: 'recent_7d',      label: 'New last 7 days', icon: '📅', group: 'Recency',       fmt: (v) => Number(v) || 0 },
+  recent_30d:     { key: 'recent_30d',     label: 'New last 30 days',icon: '🗓', group: 'Recency',       fmt: (v) => Number(v) || 0 },
+  newest_at:      { key: 'newest_at',      label: 'Newest lead',     icon: '🆕', group: 'Recency',       fmt: (v) => v ? new Date(v).toLocaleDateString() : '—' },
+  oldest_at:      { key: 'oldest_at',      label: 'Oldest lead',     icon: '📜', group: 'Recency',       fmt: (v) => v ? new Date(v).toLocaleDateString() : '—' },
+  avg_age_days:   { key: 'avg_age_days',   label: 'Avg age (days)',  icon: '⏱', group: 'Recency',       fmt: (v) => Number(v) || 0 }
 };
 
-const RB_DEFAULT_METRICS = ['count', 'pct'];
+function _rbAllMetrics() {
+  const out = Object.assign({}, RB_METRIC_CATALOGUE);
+  // CF metrics
+  const cfMeta = {};
+  ((window.CRM && CRM.cache && CRM.cache.customFields) || []).forEach(cf => { cfMeta[cf.key] = cf; });
+  const cfKeys = (window._rbLastPivot && window._rbLastPivot.custom_field_keys) || Object.keys(cfMeta);
+  cfKeys.forEach(k => {
+    const meta = cfMeta[k] || { key: k, label: k };
+    const label = meta.label || k;
+    out['cf_' + k + '_filled'] = { key: 'cf_' + k + '_filled', label: 'CF filled: ' + label, icon: '📝', group: 'Custom fields',
+      cfRead: (r) => (r.metrics && r.metrics.cf && r.metrics.cf[k]) ? Number(r.metrics.cf[k].filled) || 0 : 0 };
+    out['cf_' + k + '_sum']    = { key: 'cf_' + k + '_sum',    label: 'CF sum: ' + label,    icon: '➕', group: 'Custom fields',
+      cfRead: (r) => (r.metrics && r.metrics.cf && r.metrics.cf[k]) ? Number(r.metrics.cf[k].sum) || 0 : 0 };
+    out['cf_' + k + '_avg']    = { key: 'cf_' + k + '_avg',    label: 'CF avg: ' + label,    icon: '⚖️', group: 'Custom fields',
+      cfRead: (r) => {
+        const c = r.metrics && r.metrics.cf && r.metrics.cf[k];
+        if (!c || !c.num_n) return '—';
+        return Math.round((Number(c.sum) / Number(c.num_n)) * 100) / 100;
+      }};
+  });
+  return out;
+}
+function _rbMetricMeta(key) { return _rbAllMetrics()[key]; }
 
+/* Reads current Row + Column selections from window state (default if absent) */
+function _rbGetRowDims()  { return window._rbRowDims || ['status']; }
+function _rbGetMetrics()  { return window._rbActiveMetrics || ['count', 'pct']; }
+
+/* Renders the right rail and (re)issues the pivot fetch when anything changes. */
 function _rbRail() { return document.getElementById('rb-rail'); }
 
-function _rbRenderRail(currentDim, dimSelectEl) {
-  const rail = _rbRail();
-  if (!rail) return;
+async function _rbReload() {
+  const rail = _rbRail(); if (!rail) return;
+  const filters = (typeof _currentReportBuilderFilters === 'function') ? _currentReportBuilderFilters() : {};
+  let resp;
+  try {
+    resp = await api('api_reports_pivot', { row_dims: _rbGetRowDims(), metrics: _rbGetMetrics(), filters });
+    window._rbLastPivot = resp;
+  } catch (e) {
+    const tbl = document.getElementById('rb-table'); if (tbl) tbl.innerHTML = '<div class="error-box">' + (e.message || e) + '</div>';
+    return;
+  }
+  _rbRenderRailV4();
+  _rbRenderPivotTable();
+  _rbRenderPivotChart();
+}
+
+function _rbRenderRailV4() {
+  const rail = _rbRail(); if (!rail) return;
   rail.innerHTML = '';
 
   // Header
@@ -33542,7 +33642,7 @@ function _rbRenderRail(currentDim, dimSelectEl) {
     h('div', { style: { fontWeight: 700, fontSize: '.95rem' } }, 'Generate report')
   ));
 
-  // Output type chooser (mirrors the Table dropdown in Google Ads)
+  // Output type
   rail.appendChild(h('div', { style: { padding: '.5rem .6rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px', marginBottom: '.8rem' } },
     h('div', { class: 'muted', style: { fontSize: '.7rem', fontWeight: 600, marginBottom: '.3rem' } }, 'Output type'),
     (() => {
@@ -33552,152 +33652,285 @@ function _rbRenderRail(currentDim, dimSelectEl) {
         h('option', { value: 'line',  selected: window._rbChartType === 'line' ? 'selected' : null }, '📈 Line chart'),
         h('option', { value: 'pie',   selected: window._rbChartType === 'pie' ? 'selected' : null }, '🥧 Pie chart')
       );
-      sel.onchange = () => { window._rbChartType = sel.value; try { _syncChartTypeUI(); } catch (_) {} loadReportBuilder(); };
+      sel.onchange = () => { window._rbChartType = sel.value; _rbRenderPivotChart(); _rbRenderPivotTable(); };
       return sel;
     })()
   ));
 
-  // --- ROW section ---
+  // -------- ROW section --------
   rail.appendChild(h('div', { style: { fontWeight: 700, fontSize: '.78rem', color: '#475569', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: '.3rem' } }, 'Row'));
-  const rowCard = h('div', { style: { padding: '.4rem .5rem', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '6px', display: 'flex', alignItems: 'center', gap: '.4rem', marginBottom: '.8rem' } },
-    h('span', { style: { cursor: 'grab', color: '#94a3b8' } }, '⋮⋮'),
-    h('span', { style: { flex: 1, fontSize: '.85rem', fontWeight: 500 } }, _rbDimLabel(currentDim, dimSelectEl)),
-    h('button', { class: 'btn icon', title: 'Change row dimension', style: { padding: '.1rem .35rem' }, onclick: () => {
-      // Bring the user back to the inline dim select
-      if (dimSelectEl) { dimSelectEl.focus(); dimSelectEl.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
-    } }, '✎')
-  );
-  rail.appendChild(rowCard);
+  const rowsBox = h('div', { style: { marginBottom: '.4rem' } });
+  function _renderRows() {
+    rowsBox.innerHTML = '';
+    const dims = _rbGetRowDims();
+    dims.forEach((dk, i) => {
+      const meta = _rbDimMeta(dk) || { key: dk, label: dk, icon: '·' };
+      const card = h('div', { style: { padding: '.4rem .5rem', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '6px', display: 'flex', alignItems: 'center', gap: '.3rem', marginBottom: '.3rem' } },
+        h('span', { style: { color: '#94a3b8' } }, '⋮⋮'),
+        (() => {
+          const sel = h('select', { class: 'input', style: { flex: 1, fontSize: '.82rem' } },
+            ..._rbAllDims().map(d => h('option', { value: d.key, selected: d.key === dk ? 'selected' : null }, d.icon + ' ' + d.label))
+          );
+          sel.onchange = () => { window._rbRowDims = _rbGetRowDims(); window._rbRowDims[i] = sel.value; _rbReload(); };
+          return sel;
+        })(),
+        i > 0 ? h('button', { class: 'btn icon', title: 'Move up', style: { padding: '.1rem .3rem', fontSize: '.7rem' }, onclick: () => { const a = _rbGetRowDims(); const t = a[i-1]; a[i-1]=a[i]; a[i]=t; window._rbRowDims = a; _rbReload(); } }, '↑') : null,
+        i < dims.length - 1 ? h('button', { class: 'btn icon', title: 'Move down', style: { padding: '.1rem .3rem', fontSize: '.7rem' }, onclick: () => { const a = _rbGetRowDims(); const t = a[i+1]; a[i+1]=a[i]; a[i]=t; window._rbRowDims = a; _rbReload(); } }, '↓') : null,
+        dims.length > 1 ? h('button', { class: 'btn icon', title: 'Remove', style: { padding: '.1rem .35rem', fontSize: '.78rem', color: '#dc2626' }, onclick: () => { window._rbRowDims = _rbGetRowDims().filter((_, k) => k !== i); _rbReload(); } }, '✕') : null
+      );
+      rowsBox.appendChild(card);
+    });
+    rowsBox.appendChild(h('button', { class: 'btn', style: { width: '100%', fontSize: '.78rem', marginTop: '.2rem' }, onclick: () => {
+      // Add first unused dim
+      const used = new Set(_rbGetRowDims());
+      const next = _rbAllDims().find(d => !used.has(d.key));
+      if (!next) { toast('All dimensions are already in use', 'err'); return; }
+      window._rbRowDims = _rbGetRowDims().concat([next.key]);
+      _rbReload();
+    } }, '+ Add row dimension'));
+  }
+  rail.appendChild(rowsBox);
+  _renderRows();
 
-  // --- COLUMN section ---
-  window._rbActiveMetrics = window._rbActiveMetrics || RB_DEFAULT_METRICS.slice();
-  rail.appendChild(h('div', { style: { fontWeight: 700, fontSize: '.78rem', color: '#475569', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: '.3rem' } }, 'Column'));
-  const colsBox = h('div', { style: { marginBottom: '.5rem' } });
+  // -------- COLUMN section --------
+  rail.appendChild(h('div', { style: { fontWeight: 700, fontSize: '.78rem', color: '#475569', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: '.3rem', marginTop: '.7rem' } }, 'Column'));
+  const colsBox = h('div', { style: { marginBottom: '.4rem' } });
   function _renderCols() {
     colsBox.innerHTML = '';
-    if (!window._rbActiveMetrics.length) {
-      colsBox.appendChild(h('div', { class: 'muted', style: { fontSize: '.75rem', padding: '.4rem', textAlign: 'center', border: '1px dashed #cbd5e1', borderRadius: '6px' } }, 'No columns yet — pick from Recommended below'));
-      return;
-    }
-    window._rbActiveMetrics.forEach((mk, i) => {
-      const m = RB_METRICS[mk]; if (!m) return;
-      const item = h('div', { style: { padding: '.4rem .5rem', background: '#fff', border: '1px solid #e2e8f0', borderRadius: '6px', display: 'flex', alignItems: 'center', gap: '.4rem', marginBottom: '.3rem' } },
-        h('span', { style: { cursor: 'grab', color: '#94a3b8' } }, '⋮⋮'),
-        h('span', { style: { flex: 1, fontSize: '.82rem' } }, m.icon + ' ' + m.label),
-        i > 0 ? h('button', { class: 'btn icon', title: 'Move up', style: { padding: '.1rem .3rem', fontSize: '.7rem' }, onclick: () => { const tmp = window._rbActiveMetrics[i-1]; window._rbActiveMetrics[i-1] = mk; window._rbActiveMetrics[i] = tmp; _renderCols(); loadReportBuilder(); } }, '↑') : null,
-        i < window._rbActiveMetrics.length - 1 ? h('button', { class: 'btn icon', title: 'Move down', style: { padding: '.1rem .3rem', fontSize: '.7rem' }, onclick: () => { const tmp = window._rbActiveMetrics[i+1]; window._rbActiveMetrics[i+1] = mk; window._rbActiveMetrics[i] = tmp; _renderCols(); loadReportBuilder(); } }, '↓') : null,
-        h('button', { class: 'btn icon', title: 'Remove', style: { padding: '.1rem .35rem', fontSize: '.78rem', color: '#dc2626' }, onclick: () => { window._rbActiveMetrics = window._rbActiveMetrics.filter(k => k !== mk); _renderCols(); _renderRec(); loadReportBuilder(); } }, '✕')
+    const metrics = _rbGetMetrics();
+    metrics.forEach((mk, i) => {
+      const meta = _rbMetricMeta(mk) || { key: mk, label: mk, icon: '·' };
+      const card = h('div', { style: { padding: '.4rem .5rem', background: '#fff', border: '1px solid #e2e8f0', borderRadius: '6px', display: 'flex', alignItems: 'center', gap: '.3rem', marginBottom: '.3rem' } },
+        h('span', { style: { color: '#94a3b8' } }, '⋮⋮'),
+        (() => {
+          const sel = h('select', { class: 'input', style: { flex: 1, fontSize: '.82rem' } });
+          const all = _rbAllMetrics();
+          // Group options by group
+          const groups = {};
+          Object.values(all).forEach(m => { (groups[m.group || 'Other'] = groups[m.group || 'Other'] || []).push(m); });
+          ['Volume', 'Quality', 'Value', 'Contactability', 'Recency', 'Custom fields'].forEach(gn => {
+            const lst = groups[gn]; if (!lst || !lst.length) return;
+            const og = document.createElement('optgroup');
+            og.label = gn;
+            lst.forEach(m => {
+              const opt = document.createElement('option');
+              opt.value = m.key; opt.textContent = m.icon + ' ' + m.label;
+              if (m.key === mk) opt.selected = true;
+              og.appendChild(opt);
+            });
+            sel.appendChild(og);
+          });
+          sel.onchange = () => { window._rbActiveMetrics = _rbGetMetrics(); window._rbActiveMetrics[i] = sel.value; _rbReload(); };
+          return sel;
+        })(),
+        i > 0 ? h('button', { class: 'btn icon', title: 'Move up', style: { padding: '.1rem .3rem', fontSize: '.7rem' }, onclick: () => { const a = _rbGetMetrics(); const t = a[i-1]; a[i-1]=a[i]; a[i]=t; window._rbActiveMetrics = a; _rbReload(); } }, '↑') : null,
+        i < metrics.length - 1 ? h('button', { class: 'btn icon', title: 'Move down', style: { padding: '.1rem .3rem', fontSize: '.7rem' }, onclick: () => { const a = _rbGetMetrics(); const t = a[i+1]; a[i+1]=a[i]; a[i]=t; window._rbActiveMetrics = a; _rbReload(); } }, '↓') : null,
+        h('button', { class: 'btn icon', title: 'Remove', style: { padding: '.1rem .35rem', fontSize: '.78rem', color: '#dc2626' }, onclick: () => { window._rbActiveMetrics = _rbGetMetrics().filter((_, k) => k !== i); _rbReload(); } }, '✕')
       );
-      colsBox.appendChild(item);
+      colsBox.appendChild(card);
     });
+    colsBox.appendChild(h('button', { class: 'btn', style: { width: '100%', fontSize: '.78rem', marginTop: '.2rem' }, onclick: () => {
+      const used = new Set(_rbGetMetrics());
+      const next = Object.values(_rbAllMetrics()).find(m => !used.has(m.key));
+      if (!next) { toast('All metrics already added', 'err'); return; }
+      window._rbActiveMetrics = _rbGetMetrics().concat([next.key]);
+      _rbReload();
+    } }, '+ Add metric column'));
   }
   rail.appendChild(colsBox);
+  _renderCols();
 
-  // --- RECOMMENDED COLUMNS section ---
+  // -------- RECOMMENDED COLUMNS section --------
   rail.appendChild(h('div', { style: { fontWeight: 700, fontSize: '.78rem', color: '#475569', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: '.3rem', marginTop: '.7rem' } }, 'Recommended columns'));
-  rail.appendChild(h('div', { class: 'muted', style: { fontSize: '.72rem', marginBottom: '.4rem' } }, 'Click to add to the Column list above.'));
+  rail.appendChild(h('div', { class: 'muted', style: { fontSize: '.72rem', marginBottom: '.4rem' } }, 'Click to add a dimension (Row) or metric (Column).'));
+
+  const searchInp = h('input', { type: 'text', class: 'input', placeholder: '🔎 Search dimensions & metrics…', style: { width: '100%', marginBottom: '.4rem', fontSize: '.78rem' } });
   const recBox = h('div', {});
+
   function _renderRec() {
     recBox.innerHTML = '';
-    const active = new Set(window._rbActiveMetrics || []);
-    let n = 0;
-    Object.values(RB_METRICS).forEach(m => {
-      if (active.has(m.key)) return;
-      n += 1;
-      recBox.appendChild(h('button', {
-        class: 'btn',
-        style: { display: 'block', width: '100%', textAlign: 'left', marginBottom: '.25rem', fontSize: '.78rem', padding: '.3rem .5rem' },
-        onclick: () => {
-          window._rbActiveMetrics = (window._rbActiveMetrics || []).concat([m.key]);
-          _renderCols(); _renderRec();
-          loadReportBuilder();
-        }
-      }, '➕ ' + m.icon + ' ' + m.label));
+    const q = String(searchInp.value || '').toLowerCase().trim();
+    const activeDims    = new Set(_rbGetRowDims());
+    const activeMetrics = new Set(_rbGetMetrics());
+
+    // Dimensions section
+    const dimsToShow = _rbAllDims().filter(d => !activeDims.has(d.key) && (!q || d.label.toLowerCase().includes(q) || d.key.toLowerCase().includes(q)));
+    if (dimsToShow.length) {
+      recBox.appendChild(h('div', { style: { fontSize: '.7rem', fontWeight: 700, color: '#64748b', marginTop: '.4rem', marginBottom: '.2rem' } }, '📐 DIMENSIONS (add to Row)'));
+      dimsToShow.forEach(d => {
+        recBox.appendChild(h('button', {
+          class: 'btn',
+          style: { display: 'block', width: '100%', textAlign: 'left', marginBottom: '.18rem', fontSize: '.78rem', padding: '.28rem .5rem' },
+          title: 'Add as a new Row dimension',
+          onclick: () => { window._rbRowDims = _rbGetRowDims().concat([d.key]); _rbReload(); }
+        }, '+ ' + d.icon + ' ' + d.label));
+      });
+    }
+
+    // Metrics — grouped
+    const allMetrics = _rbAllMetrics();
+    const byGroup = {};
+    Object.values(allMetrics).forEach(m => {
+      if (activeMetrics.has(m.key)) return;
+      if (q && !(m.label.toLowerCase().includes(q) || m.key.toLowerCase().includes(q))) return;
+      (byGroup[m.group || 'Other'] = byGroup[m.group || 'Other'] || []).push(m);
     });
-    if (n === 0) {
-      recBox.appendChild(h('div', { class: 'muted', style: { fontSize: '.75rem', padding: '.4rem', textAlign: 'center' } }, 'All metrics are in use.'));
+    ['Volume', 'Quality', 'Value', 'Contactability', 'Recency', 'Custom fields', 'Other'].forEach(g => {
+      const list = byGroup[g]; if (!list || !list.length) return;
+      recBox.appendChild(h('div', { style: { fontSize: '.7rem', fontWeight: 700, color: '#64748b', marginTop: '.4rem', marginBottom: '.2rem' } }, '🔢 ' + g.toUpperCase() + ' (add to Column)'));
+      list.forEach(m => {
+        recBox.appendChild(h('button', {
+          class: 'btn',
+          style: { display: 'block', width: '100%', textAlign: 'left', marginBottom: '.18rem', fontSize: '.78rem', padding: '.28rem .5rem' },
+          title: 'Add as a metric column',
+          onclick: () => { window._rbActiveMetrics = _rbGetMetrics().concat([m.key]); _rbReload(); }
+        }, '+ ' + m.icon + ' ' + m.label));
+      });
+    });
+
+    if (recBox.children.length === 0) {
+      recBox.appendChild(h('div', { class: 'muted', style: { fontSize: '.75rem', padding: '.4rem', textAlign: 'center' } }, q ? 'No matches.' : 'Everything is in use.'));
     }
   }
+  searchInp.oninput = _renderRec;
+  rail.appendChild(searchInp);
   rail.appendChild(recBox);
-
-  _renderCols();
   _renderRec();
 }
 
-function _rbDimLabel(dim, dimSelectEl) {
-  if (dimSelectEl && dimSelectEl.options) {
-    const opt = Array.from(dimSelectEl.options).find(o => o.value === dim);
-    if (opt) return opt.textContent;
-  }
-  return dim || '(no dimension)';
+/* Resolve a metric value for a given pivot row. Handles base, derived,
+ * cumulative, and CF-read metric types. */
+function _rbMetricValue(metaKey, row, idx, rows, total) {
+  const meta = _rbMetricMeta(metaKey);
+  if (!meta) return '—';
+  if (typeof meta.cfRead === 'function') return meta.cfRead(row);
+  if (typeof meta.derived === 'function') return meta.derived(row.metrics, total);
+  if (typeof meta.cum     === 'function') return meta.cum(rows, idx, total);
+  const raw = row.metrics && row.metrics[metaKey];
+  return typeof meta.fmt === 'function' ? meta.fmt(raw) : raw;
 }
 
-/* Hook: call after every loadReportBuilder() run to render the rail + the
- * extra columns into the detail table. We monkey-patch loadReportBuilder
- * with a wrapper that triggers _rbRenderRail + _rbInjectExtraColumns. */
-(function wrap() {
-  const origLoad = window.loadReportBuilder;
-  if (!origLoad || origLoad.__rb3Wrapped) return;
-  async function wrapped() {
-    const r = await origLoad.apply(this, arguments);
-    try {
-      const dimSel = document.getElementById('rb-dim');
-      _rbRenderRail((dimSel || {}).value || 'product', dimSel);
-      _rbInjectExtraColumns();
-    } catch (_) {}
-    return r;
-  }
-  wrapped.__rb3Wrapped = true;
-  window.loadReportBuilder = wrapped;
-  try { loadReportBuilder = wrapped; } catch (_) {}
-})();
+function _rbRenderPivotTable() {
+  const tableEl = document.getElementById('rb-table'); if (!tableEl) return;
+  const resp = window._rbLastPivot; if (!resp || !resp.rows) { tableEl.innerHTML = ''; return; }
+  const rowDims = resp.row_dims || _rbGetRowDims();
+  const metrics = _rbGetMetrics();
+  const total = resp.total || 0;
 
-/* After the existing renderer drew the detail table with Leads + % of total,
- * append columns for every active metric that isn't already shown. Uses the
- * resp data attached to ctx by the renderer; falls back to no-op if absent. */
-function _rbInjectExtraColumns() {
-  const tableEl = document.getElementById('rb-table');
-  if (!tableEl) return;
-  const table = tableEl.querySelector('table'); if (!table) return;
-  // We rebuild the table directly using window._rbLastResp (populated by the
-  // existing loader). If it's not exposed, derive from DOM.
-  const resp = window._rbLastResp;
-  const dim  = (document.getElementById('rb-dim') || {}).value || '';
-  const dimLabel = (() => {
-    const ds = document.getElementById('rb-dim');
-    if (!ds) return '';
-    const o = Array.from(ds.options).find(o => o.value === dim);
-    return o ? o.textContent : '';
-  })();
-  if (!resp || !resp.rows) return;
-  const total = resp.rows.reduce((a, r) => a + (Number(r.count) || 0), 0);
-  const metrics = (window._rbActiveMetrics && window._rbActiveMetrics.length) ? window._rbActiveMetrics : RB_DEFAULT_METRICS;
-  // Replace the existing thead/tbody with a metric-driven one
-  const thead = h('thead', {}, h('tr', {},
-    h('th', {}, dimLabel),
-    ...metrics.map(mk => RB_METRICS[mk] ? h('th', { style: { textAlign: 'right' } }, RB_METRICS[mk].icon + ' ' + RB_METRICS[mk].label) : null)
-  ));
+  const tbl = h('table', { class: 'mini-table' });
+  const tr = h('tr', {});
+  rowDims.forEach(dk => tr.appendChild(h('th', {}, (_rbDimMeta(dk) || {}).label || dk)));
+  metrics.forEach(mk => { const m = _rbMetricMeta(mk); tr.appendChild(h('th', { style: { textAlign: 'right' } }, m ? (m.icon + ' ' + m.label) : mk)); });
+  tbl.appendChild(h('thead', {}, tr));
   const tbody = h('tbody', {});
   resp.rows.forEach((r, i) => {
-    tbody.appendChild(h('tr', {},
-      h('td', {}, r.value || '—'),
-      ...metrics.map(mk => {
-        const m = RB_METRICS[mk]; if (!m) return null;
-        const v = m.compute(r, i, resp.rows, total);
-        return h('td', { style: { textAlign: 'right' } }, String(v));
-      })
-    ));
+    const trr = h('tr', { style: { cursor: 'pointer' }, onclick: () => {
+      // Drill: open leads filtered by the chosen dim values (status / source / etc.)
+      if (r.lead_ids && r.lead_ids.length) openLeadsModalByIds(r.lead_ids).catch(() => {});
+    } });
+    rowDims.forEach(dk => trr.appendChild(h('td', {}, r.dims[dk] || '—')));
+    metrics.forEach(mk => trr.appendChild(h('td', { style: { textAlign: 'right' } }, String(_rbMetricValue(mk, r, i, resp.rows, total)))));
+    tbody.appendChild(trr);
   });
-  tbody.appendChild(h('tr', { style: { fontWeight: 700, background: '#f8fafc' } },
-    h('td', {}, 'Total'),
-    ...metrics.map(mk => {
-      const m = RB_METRICS[mk]; if (!m) return null;
-      if (mk === 'count') return h('td', { style: { textAlign: 'right' } }, String(total));
-      if (mk === 'pct')   return h('td', { style: { textAlign: 'right' } }, '100%');
-      return h('td', { style: { textAlign: 'right' } }, '—');
-    })
-  ));
-  table.innerHTML = '';
-  table.appendChild(thead);
-  table.appendChild(tbody);
+  // Totals row
+  const tfoot = h('tr', { style: { fontWeight: 700, background: '#f8fafc' } });
+  rowDims.forEach((dk, i) => tfoot.appendChild(h('td', {}, i === 0 ? 'Total' : '')));
+  metrics.forEach(mk => {
+    if (mk === 'count') tfoot.appendChild(h('td', { style: { textAlign: 'right' } }, String(total)));
+    else if (mk === 'pct') tfoot.appendChild(h('td', { style: { textAlign: 'right' } }, '100%'));
+    else if (mk === 'value_sum') {
+      const s = resp.rows.reduce((a, r) => a + (Number(r.metrics.value_sum) || 0), 0);
+      tfoot.appendChild(h('td', { style: { textAlign: 'right' } }, '₹' + Math.round(s).toLocaleString('en-IN')));
+    } else tfoot.appendChild(h('td', { style: { textAlign: 'right' } }, '—'));
+  });
+  tbody.appendChild(tfoot);
+  tbl.appendChild(tbody);
+
+  tableEl.innerHTML = '';
+  // Show which dimensions + metrics are active
+  tableEl.appendChild(h('div', { class: 'muted', style: { fontSize: '.78rem', marginBottom: '.4rem' } },
+    'Group by ' + rowDims.map(d => (_rbDimMeta(d) || {}).label || d).join(' × ') + ' · ' + resp.rows.length + ' rows · ' + total + ' total leads'));
+  tableEl.appendChild(h('div', { class: 'table-wrap', style: { maxHeight: '480px', overflowY: 'auto' } }, tbl));
 }
+
+/* Render the chart using the first row dim as labels and the first metric. */
+function _rbRenderPivotChart() {
+  const ctx = document.getElementById('rb-chart'); if (!ctx) return;
+  const chartType = (window._rbChartType || 'bar');
+  const chartCard = ctx.closest('.card');
+  if (chartCard) chartCard.style.display = (chartType === 'table') ? 'none' : '';
+  const resp = window._rbLastPivot; if (!resp || !resp.rows) return;
+  if (chartType === 'table') { if (ctx._chart) { ctx._chart.destroy(); ctx._chart = null; } return; }
+  const top = resp.rows.slice(0, 25);
+  const rowDims = resp.row_dims || [];
+  const labelMaker = (r) => rowDims.map(d => r.dims[d]).join(' / ');
+  const metricKey = (_rbGetMetrics()[0]) || 'count';
+  const palette = ['#6366f1', '#06b6d4', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316', '#84cc16'];
+  if (ctx._chart) ctx._chart.destroy();
+  ctx._chart = new Chart(ctx, {
+    type: chartType === 'pie' ? 'pie' : (chartType === 'line' ? 'line' : 'bar'),
+    data: {
+      labels: top.map(labelMaker),
+      datasets: [{
+        label: (_rbMetricMeta(metricKey) || {}).label || metricKey,
+        data: top.map(r => Number(r.metrics[metricKey]) || 0),
+        backgroundColor: chartType === 'pie' ? top.map((_, i) => palette[i % palette.length]) : '#6366f1',
+        borderColor: chartType === 'line' ? '#6366f1' : undefined,
+        fill: chartType === 'line' ? false : true,
+        tension: chartType === 'line' ? 0.3 : 0
+      }]
+    },
+    options: {
+      indexAxis: chartType === 'bar' ? 'y' : 'x',
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: chartType === 'pie' } },
+      scales: chartType === 'pie' ? {} : { x: { beginAtZero: true } }
+    }
+  });
+  const title = document.getElementById('rb-chart-title');
+  if (title) title.textContent = (_rbMetricMeta(metricKey) || {}).label + ' by ' + rowDims.map(d => (_rbDimMeta(d) || {}).label || d).join(' / ');
+}
+
+/* Stub: the old loadReportBuilder used a single dim. Replace with v4. */
+async function _rbInjectExtraColumns() { /* superseded by _rbRenderPivotTable */ }
+
+/* Replace window.loadReportBuilder with our v4 pivot reload. */
+(function rebindLoad() {
+  window.loadReportBuilder = async function() {
+    // Make sure we have defaults
+    if (!window._rbRowDims || !window._rbRowDims.length) {
+      const dimSel = document.getElementById('rb-dim');
+      window._rbRowDims = [dimSel && dimSel.value ? dimSel.value : 'status'];
+    }
+    if (!window._rbActiveMetrics || !window._rbActiveMetrics.length) {
+      window._rbActiveMetrics = ['count', 'pct'];
+    }
+    await _rbReload();
+  };
+  try { loadReportBuilder = window.loadReportBuilder; } catch (_) {}
+})();
+
+/* Open a leads modal showing the bucket's drill-down. Best-effort — falls
+ * back to navigating to /leads if a per-id modal helper isn't available. */
+async function openLeadsModalByIds(ids) {
+  try {
+    const m = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target === m) m.remove(); } });
+    const md = h('div', { class: 'modal modal-lg' });
+    md.appendChild(h('div', { class: 'modal-head' }, h('h3', {}, '🔍 ' + ids.length + ' leads in this bucket'), h('button', { class: 'btn ghost', onclick: () => m.remove() }, '✕')));
+    const body = h('div', { class: 'modal-body', style: { maxHeight: '60vh', overflowY: 'auto' } }, '⏳');
+    md.appendChild(body);
+    m.appendChild(md);
+    document.body.appendChild(m);
+    const all = await api('api_leads_list', { page: 1, page_size: 500 });
+    const set = new Set(ids.map(Number));
+    const rows = (all.leads || []).filter(l => set.has(Number(l.id))).slice(0, 200);
+    body.innerHTML = '';
+    rows.forEach(l => {
+      body.appendChild(h('div', { class: 'card', style: { padding: '.4rem .6rem', margin: '.3rem 0', cursor: 'pointer' }, onclick: () => { m.remove(); openLeadModal(l.id); } },
+        h('b', {}, l.name || ('Lead #' + l.id)),
+        h('span', { class: 'muted', style: { marginLeft: '.5rem', fontSize: '.78rem' } }, [l.phone, l.email].filter(Boolean).join(' · '))
+      ));
+    });
+  } catch (e) { toast(e.message, 'err'); }
+}
+
