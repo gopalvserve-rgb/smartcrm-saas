@@ -130,6 +130,28 @@ async function _ensureSchema() {
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     paid_at TIMESTAMPTZ
   )`);
+
+  /* RE_PAYMENT_PLANS_v1 — tenant-configurable payment plans.
+   * milestones_json holds an array of { code, label, offset_days, pct }
+   * — same shape as DEFAULT_MILESTONES. project_id is optional: NULL =
+   * the plan can be used for any project. */
+  await db.query(`CREATE TABLE IF NOT EXISTS re_payment_plans (
+    id SERIAL PRIMARY KEY,
+    project_id INTEGER,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    milestones_json TEXT NOT NULL DEFAULT '[]',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    created_by INTEGER,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  await db.query(`CREATE INDEX IF NOT EXISTS re_payment_plans_project_idx ON re_payment_plans(project_id)`);
+
+  /* Add payment_plan_id to existing bookings so we can recall which plan
+   * was used to generate the demand schedule. */
+  await db.query(`ALTER TABLE re_bookings ADD COLUMN IF NOT EXISTS payment_plan_id INTEGER`);
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -270,17 +292,57 @@ async function api_re_booking_create(token, payload) {
 
   await db.query(`UPDATE re_units SET status='booked' WHERE id=$1`, [Number(p.unit_id)]);
 
+  /* RE_PAYMENT_PLANS_v1 — pick milestones from the chosen payment plan.
+   * Resolution order:
+   *   1. p.payment_plan_id explicitly passed by the caller
+   *   2. The project's default plan (is_default = 1)
+   *   3. DEFAULT_MILESTONES constant (back-compat)
+   * If the plan exists but milestones_json is empty/invalid, fall back. */
+  let milestones = DEFAULT_MILESTONES;
+  let usedPlanId = null;
+  try {
+    let planRow = null;
+    if (p.payment_plan_id) {
+      const r = await db.query(`SELECT * FROM re_payment_plans WHERE id=$1`, [Number(p.payment_plan_id)]);
+      planRow = r.rows[0] || null;
+    }
+    if (!planRow) {
+      const r = await db.query(
+        `SELECT * FROM re_payment_plans
+          WHERE is_active=1 AND is_default=1 AND (project_id IS NULL OR project_id=$1)
+          ORDER BY (project_id IS NULL) ASC LIMIT 1`,
+        [Number(unit.project_id)]
+      );
+      planRow = r.rows[0] || null;
+    }
+    if (planRow) {
+      let parsed = [];
+      try { parsed = JSON.parse(planRow.milestones_json || '[]'); } catch (_) {}
+      if (Array.isArray(parsed) && parsed.length) {
+        milestones = parsed;
+        usedPlanId = planRow.id;
+      }
+    }
+  } catch (_) {}
+
   const start = new Date(bookingDate);
-  for (let i = 0; i < DEFAULT_MILESTONES.length; i++) {
-    const m = DEFAULT_MILESTONES[i];
+  for (let i = 0; i < milestones.length; i++) {
+    const m = milestones[i];
     const due = new Date(start.getTime());
-    due.setDate(due.getDate() + (m.offset_days || 0));
-    const amt = Math.round(total * (m.pct / 100) * 100) / 100;
+    due.setDate(due.getDate() + (Number(m.offset_days) || 0));
+    const amt = Math.round(total * (Number(m.pct) / 100) * 100) / 100;
     await db.query(
       `INSERT INTO re_demands (booking_id, seq, code, label, due_date, amount)
        VALUES ($1,$2,$3,$4,$5,$6)`,
-      [bookingId, i + 1, m.code, m.label, due.toISOString().slice(0, 10), amt]
+      [bookingId, i + 1, String(m.code || ('m' + (i+1))).slice(0, 60),
+       String(m.label || ('Milestone ' + (i+1))).slice(0, 200),
+       due.toISOString().slice(0, 10), amt]
     );
+  }
+
+  // Persist which plan was actually used for this booking.
+  if (usedPlanId) {
+    try { await db.query(`UPDATE re_bookings SET payment_plan_id=$1 WHERE id=$2`, [usedPlanId, bookingId]); } catch (_) {}
   }
 
   if (cpId && cpPct) {
@@ -296,7 +358,7 @@ async function api_re_booking_create(token, payload) {
     const _me = await authUser(token);
     require('../tat').logAction(Number(p.lead_id), 're_booking_created', _me.id, { booking_id: bookingId, unit_id: Number(p.unit_id), total_price: total, channel_partner_id: cpId || null });
   } catch (_) {}
-  return { ok: true, booking_id: bookingId, demands: DEFAULT_MILESTONES.length };
+  return { ok: true, booking_id: bookingId, payment_plan_id: usedPlanId, demands: milestones.length };
 }
 
 async function api_re_booking_byLead(token, leadId) {
@@ -1205,6 +1267,117 @@ async function api_re_cp_performance(token, filters) {
 }
 
 
+/* ==========================================================================
+ * RE_PAYMENT_PLANS_v1 — Payment Plan CRUD
+ * ========================================================================== */
+
+/* List plans, optionally filtered by project_id. NULL project_id = global. */
+async function api_re_paymentPlans_list(token, opts) {
+  await authUser(token);
+  await _requireRealEstate();
+  await _ensureSchema();
+  opts = opts || {};
+  let where = '1=1';
+  const params = [];
+  if (opts.project_id != null && opts.project_id !== '') {
+    params.push(Number(opts.project_id));
+    where += ' AND (project_id = $' + params.length + ' OR project_id IS NULL)';
+  }
+  const r = await db.query(
+    `SELECT pp.*, pr.name AS project_name
+       FROM re_payment_plans pp
+       LEFT JOIN re_projects pr ON pr.id = pp.project_id
+      WHERE ${where}
+      ORDER BY pp.is_default DESC, pp.is_active DESC, pp.id DESC`,
+    params
+  );
+  return r.rows.map(row => Object.assign({}, row, {
+    milestones: (() => { try { return JSON.parse(row.milestones_json || '[]'); } catch (_) { return []; } })()
+  }));
+}
+
+async function api_re_paymentPlans_save(token, payload) {
+  const me = await authUser(token);
+  await _requireRealEstate();
+  await _ensureSchema();
+  if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin or Manager only');
+  const p = payload || {};
+  if (!p.name) throw new Error('Plan name required');
+  const milestones = Array.isArray(p.milestones) ? p.milestones : [];
+  if (!milestones.length) throw new Error('At least one milestone required');
+
+  // Normalise + validate
+  const cleaned = milestones.map((m, i) => ({
+    code: String(m.code || ('m' + (i+1))).slice(0, 60).toLowerCase().replace(/[^a-z0-9_]/g, ''),
+    label: String(m.label || ('Milestone ' + (i+1))).slice(0, 200),
+    offset_days: Math.max(0, Number(m.offset_days || 0)),
+    pct: Math.max(0, Math.min(100, Number(m.pct || 0)))
+  }));
+  const sum = cleaned.reduce((a, m) => a + Number(m.pct), 0);
+  if (Math.abs(sum - 100) > 0.5) throw new Error('Milestone percentages must sum to 100 (got ' + sum.toFixed(2) + ')');
+
+  const isActive  = p.is_active  === false || Number(p.is_active)  === 0 ? 0 : 1;
+  const isDefault = p.is_default === true  || Number(p.is_default) === 1 ? 1 : 0;
+  const projectId = p.project_id ? Number(p.project_id) : null;
+
+  // When marking as default, unflag siblings (per project_id scope).
+  if (isDefault) {
+    await db.query(
+      `UPDATE re_payment_plans SET is_default = 0
+        WHERE COALESCE(project_id, 0) = COALESCE($1, 0)`,
+      [projectId]
+    );
+  }
+
+  if (p.id) {
+    await db.query(
+      `UPDATE re_payment_plans SET project_id=$1, name=$2, description=$3,
+            milestones_json=$4, is_active=$5, is_default=$6, updated_at=NOW()
+        WHERE id=$7`,
+      [projectId, String(p.name).slice(0, 200), String(p.description || '').slice(0, 1000),
+       JSON.stringify(cleaned), isActive, isDefault, Number(p.id)]
+    );
+    return { ok: true, id: Number(p.id) };
+  } else {
+    const r = await db.query(
+      `INSERT INTO re_payment_plans (project_id, name, description, milestones_json, is_active, is_default, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+      [projectId, String(p.name).slice(0, 200), String(p.description || '').slice(0, 1000),
+       JSON.stringify(cleaned), isActive, isDefault, me.id]
+    );
+    return { ok: true, id: r.rows[0].id };
+  }
+}
+
+async function api_re_paymentPlans_delete(token, id) {
+  const me = await authUser(token);
+  await _requireRealEstate();
+  await _ensureSchema();
+  if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin or Manager only');
+  // Detach from any bookings that referenced it so demand letters
+  // remain intact (the demands themselves are not affected).
+  await db.query(`UPDATE re_bookings SET payment_plan_id = NULL WHERE payment_plan_id = $1`, [Number(id)]);
+  await db.query(`DELETE FROM re_payment_plans WHERE id = $1`, [Number(id)]);
+  return { ok: true };
+}
+
+/* Seed the DEFAULT_MILESTONES as a "Standard 1-9-30-30-30" plan once,
+ * so brand-new tenants see something to start from. Idempotent. */
+async function api_re_paymentPlans_seedDefaults(token) {
+  const me = await authUser(token);
+  await _requireRealEstate();
+  await _ensureSchema();
+  if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin or Manager only');
+  const existing = await db.query(`SELECT COUNT(*)::int AS c FROM re_payment_plans`);
+  if (Number(existing.rows[0].c) > 0) return { ok: true, message: 'Already seeded — skipped' };
+  await db.query(
+    `INSERT INTO re_payment_plans (project_id, name, description, milestones_json, is_active, is_default, created_by)
+     VALUES (NULL, 'Standard 1-9-30-30-30', 'Token 1% · Agreement 9% · Excavation 30% · Slab 30% · Registration 30%', $1, 1, 1, $2)`,
+    [JSON.stringify(DEFAULT_MILESTONES), me.id]
+  );
+  return { ok: true, message: 'Seeded the default Standard 1-9-30-30-30 plan' };
+}
+
 framework.register({
   id: PACK_ID,
   name: 'Real Estate',
@@ -1242,6 +1415,9 @@ module.exports = {
   api_re_visits_schedule, api_re_visits_byLead, api_re_visits_upcoming,
   api_re_visits_markDone, api_re_visits_reschedule, api_re_visits_sendReminder,
   api_re_cp_performance,
+  /* RE_PAYMENT_PLANS_v1 */
+  api_re_paymentPlans_list, api_re_paymentPlans_save,
+  api_re_paymentPlans_delete, api_re_paymentPlans_seedDefaults,
   _ensureSchema, _ensureSchemaPhase3,
   DEFAULT_MILESTONES
 };

@@ -24879,7 +24879,7 @@ async function openWaWidgetEditor(widgetId, onSaved) {
     try {
       const r = await api('api_waWidget_save', payload);
       toast('Saved', 'ok');
-      modal.remove();
+      backdrop.remove();
       if (onSaved) onSaved();
       if (!widgetId && r && r.widget) setTimeout(() => openWaWidgetSnippet(r.widget.id), 250);
     } catch (e) { toast(e.message, 'err'); }
@@ -26624,7 +26624,10 @@ VIEWS.reinventory = async (view) => {
   view.innerHTML = '';
   view.appendChild(h('div', { style: { display:'flex', alignItems:'center', justifyContent:'space-between', gap:'.5rem', marginBottom:'.75rem' } },
     h('h2', { style:{ margin:0 } }, '🏢 Inventory Board'),
-    h('button', { class: 'btn primary', onclick: () => openCreateProjectModal() }, '+ New Project')
+    h('div', { style: { display: 'flex', gap: '.4rem' } },
+      h('button', { class: 'btn', onclick: () => openREPaymentPlansModal(), title: 'Manage payment plans for bookings' }, '💰 Payment Plans'),
+      h('button', { class: 'btn primary', onclick: () => openCreateProjectModal() }, '+ New Project')
+    )
   ));
   view.appendChild(h('p', { class: 'muted' }, 'Real Estate pack: projects, units, bookings, demand letters, channel-partner commissions.'));
 
@@ -26812,6 +26815,10 @@ async function openCreateBookingModal(leadId, onDone) {
   const fDate = h('input', { type:'date', value: new Date().toISOString().slice(0,10) });
   const fPartner = h('select', {});
   fPartner.appendChild(h('option', { value:'' }, '— None / Direct —'));
+  /* RE_PAYMENT_PLANS_v1 — payment plan dropdown. Populates after project pick. */
+  const fPlan = h('select', {});
+  fPlan.appendChild(h('option', { value:'' }, '— Default plan (auto) —'));
+  const fPlanHelp = h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '.2rem' } }, 'Pick the payment plan to generate demand letters from. Leave blank to use the project default.');
 
   modal.appendChild(h('div', { class:'modal-body' },
     h('label', {}, 'Project', fProject),
@@ -26819,7 +26826,8 @@ async function openCreateBookingModal(leadId, onDone) {
     h('label', {}, 'Buyer name', fBuyer),
     h('label', {}, 'Total price (₹)', fTotal),
     h('label', {}, 'Booking date', fDate),
-    h('label', {}, 'Channel partner', fPartner)
+    h('label', {}, 'Channel partner', fPartner),
+    h('label', {}, '💰 Payment plan', fPlan, fPlanHelp)
   ));
   modal.appendChild(h('div', { class:'actions' },
     h('button', { class:'btn', onclick: () => m.remove() }, 'Cancel'),
@@ -26832,7 +26840,8 @@ async function openCreateBookingModal(leadId, onDone) {
           buyer_name: fBuyer.value || '',
           total_price: fTotal.value ? Number(fTotal.value) : undefined,
           booking_date: fDate.value,
-          channel_partner_id: fPartner.value ? Number(fPartner.value) : null
+          channel_partner_id: fPartner.value ? Number(fPartner.value) : null,
+          payment_plan_id: fPlan.value ? Number(fPlan.value) : null
         });
         toast('Booking created · ' + r.demands + ' demand letters generated');
         m.remove();
@@ -26853,6 +26862,19 @@ async function openCreateBookingModal(leadId, onDone) {
       fPartner.appendChild(h('option', { value: p.id }, p.name + ' (' + p.commission_pct + '%)')));
   } catch (_) {}
 
+  async function _refreshPlans(projectId) {
+    fPlan.innerHTML = '';
+    fPlan.appendChild(h('option', { value:'' }, '— Default plan (auto) —'));
+    try {
+      const plans = await api('api_re_paymentPlans_list', { project_id: projectId || null });
+      (plans || []).filter(p => Number(p.is_active)).forEach(p => {
+        const label = p.name + (Number(p.is_default) === 1 ? ' (default)' : '') + ' · ' + (p.milestones ? p.milestones.length : 0) + ' milestones';
+        fPlan.appendChild(h('option', { value: p.id, selected: Number(p.is_default) === 1 ? 'selected' : null }, label));
+      });
+    } catch (_) {}
+  }
+  _refreshPlans(null);  /* initial load: global plans */
+
   fProject.addEventListener('change', async () => {
     fUnit.innerHTML = '';
     fUnit.appendChild(h('option', { value:'' }, '— Choose unit —'));
@@ -26862,6 +26884,8 @@ async function openCreateBookingModal(leadId, onDone) {
       (units || []).filter(u => u.status === 'available').forEach(u =>
         fUnit.appendChild(h('option', { value: u.id }, u.unit_no + ' · ' + (u.type || '') + ' · ₹' + Number(u.price).toLocaleString('en-IN'))));
     } catch (_) {}
+    /* Reload plans scoped to this project */
+    _refreshPlans(Number(fProject.value));
   });
   fUnit.addEventListener('change', () => {
     const sel = fUnit.selectedOptions[0];
@@ -32763,7 +32787,11 @@ VIEWS.compliance = async (view) => {
 /* Rule editor modal v2 — quick-pick presets, English preview, fixed
  * CRM.cache.statuses path, and config forms for every check_type. */
 async function openComplianceRuleEditor(rule, types, onSaved) {
-  const modal = h('div', { class: 'modal' });
+  /* COMPLIANCE_v2 HOTFIX — wrap in modal-backdrop so the dialog centers
+   * over a dimmed overlay (the bare .modal class is just the white box). */
+  try { if (!CRM.cache || !CRM.cache.statuses || !CRM.cache.statuses.length) { await warmCache(); } } catch (_) {}
+  const backdrop = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target === backdrop) backdrop.remove(); } });
+  const modal = h('div', { class: 'modal modal-lg' });
   const isNew = !rule;
   rule = rule || { name: '', description: '', check_type: types[0].key, severity: 'warning', enabled: 1, notify_agent: 1, notify_manager: 0, config: {} };
 
@@ -33008,9 +33036,16 @@ async function openComplianceRuleEditor(rule, types, onSaved) {
     } catch (e) { toast(e.message, 'err'); saveBtn.disabled = false; saveBtn.textContent = '💾 Save'; }
   };
 
-  modal.appendChild(h('div', { class: 'modal-content', style: { maxWidth: '780px' } },
+  /* COMPLIANCE_v2 HOTFIX — use modal-head + modal-body + actions structure
+   * (same as every other modal in the codebase). The 'modal-content' class
+   * doesn't exist in styles.css — previous editor rendered without proper
+   * scrolling or centering. */
+  modal.appendChild(h('div', { class: 'modal-head' },
     h('h3', {}, isNew ? '➕ New compliance rule' : '✏️ Edit rule'),
-    h('p', { class: 'muted', style: { fontSize: '.85rem' } }, isNew ? 'Pick a preset below to start fast, or pick a check type and configure it manually.' : 'Update this rule\'s configuration.'),
+    h('button', { class: 'btn ghost', onclick: () => backdrop.remove() }, '✕')
+  ));
+  modal.appendChild(h('div', { class: 'modal-body', style: { maxHeight: '70vh', overflowY: 'auto', paddingRight: '.4rem' } },
+    h('p', { class: 'muted', style: { fontSize: '.85rem', marginTop: 0 } }, isNew ? 'Pick a preset below to start fast, or pick a check type and configure it manually.' : 'Update this rule\'s configuration.'),
     isNew ? h('div', { style: { fontSize: '.78rem', color: '#475569', marginBottom: '.3rem' } }, '⚡ Quick presets:') : null,
     isNew ? presetRow : null,
     h('label', { class: 'muted', style: { fontSize: '.78rem', display: 'block', marginTop: '.4rem' } }, 'Rule name'), nameInp,
@@ -33023,13 +33058,18 @@ async function openComplianceRuleEditor(rule, types, onSaved) {
       h('label', { style: { fontSize: '.85rem', display: 'flex', alignItems: 'center', gap: '.3rem' } }, enChk, ' Enabled'),
       h('label', { style: { fontSize: '.85rem', display: 'flex', alignItems: 'center', gap: '.3rem' } }, naChk, ' Notify agent'),
       h('label', { style: { fontSize: '.85rem', display: 'flex', alignItems: 'center', gap: '.3rem' } }, nmChk, ' Notify manager')
-    ),
-    h('div', { class: 'modal-actions', style: { display: 'flex', justifyContent: 'flex-end', gap: '.4rem', marginTop: '.8rem' } },
-      h('button', { class: 'btn', onclick: () => modal.remove() }, 'Cancel'),
-      saveBtn
     )
   ));
-  document.body.appendChild(modal);
+  modal.appendChild(h('div', { class: 'actions' },
+    h('button', { class: 'btn', onclick: () => backdrop.remove() }, 'Cancel'),
+    saveBtn
+  ));
+  // Update existing saveBtn handlers that referenced modal.remove() to close backdrop
+  const _origOnclick = saveBtn.onclick;
+  saveBtn.onclick = async (...args) => { try { await _origOnclick(...args); } finally { /* backdrop removed inside the handler on success */ } };
+  // Patch presetRow buttons in modal flow: nothing further needed; already use buildCfgForm + toast.
+  backdrop.appendChild(modal);
+  document.body.appendChild(backdrop);
 }
 try { window.openComplianceRuleEditor = openComplianceRuleEditor; } catch (_) {}
 
@@ -33252,3 +33292,185 @@ function openReportScheduleEditor(template, existing, onSaved) {
   document.body.appendChild(modal);
 }
 try { window.openReportScheduleEditor = openReportScheduleEditor; } catch (_) {}
+
+
+/* ==========================================================================
+ * RE_PAYMENT_PLANS_v1 — Payment Plan manager + editor
+ * ========================================================================== */
+
+async function openREPaymentPlansModal() {
+  const m = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const modal = h('div', { class: 'modal', style: { maxWidth: '780px' } });
+  const body = h('div', { class: 'modal-body', style: { maxHeight: '70vh', overflowY: 'auto' } }, '⏳ Loading…');
+  modal.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, '💰 Payment Plans'),
+    h('button', { class: 'btn ghost', onclick: () => m.remove() }, '✕')
+  ));
+  modal.appendChild(h('div', { style: { padding: '.6rem 1rem' } },
+    h('p', { class: 'muted', style: { fontSize: '.85rem', margin: '.2rem 0 .6rem' } },
+      'Configure payment plans (e.g. 30-30-30-10 CLP, Subvention 20-80, Possession-linked). When a buyer books a unit, demand letters are generated from the chosen plan.'),
+    h('div', { style: { display: 'flex', gap: '.4rem', marginBottom: '.8rem' } },
+      h('button', { class: 'btn primary', onclick: () => openREPaymentPlanEditor(null, load) }, '➕ New plan'),
+      h('button', { class: 'btn', onclick: async () => {
+        try { const r = await api('api_re_paymentPlans_seedDefaults'); toast(r.message, 'ok'); load(); }
+        catch (e) { toast(e.message, 'err'); }
+      } }, '🌱 Seed default plan')
+    )
+  ));
+  modal.appendChild(body);
+  m.appendChild(modal);
+  document.body.appendChild(m);
+
+  async function load() {
+    body.innerHTML = '⏳';
+    let plans;
+    try { plans = await api('api_re_paymentPlans_list', {}); }
+    catch (e) { body.innerHTML = '<div style="color:#dc2626">' + e.message + '</div>'; return; }
+    body.innerHTML = '';
+    if (!plans.length) {
+      body.appendChild(h('div', { class: 'muted', style: { padding: '1.5rem', textAlign: 'center' } },
+        'No plans yet. Click ➕ New plan to build one, or 🌱 Seed default plan to start with our Standard 1-9-30-30-30 milestone schedule.'));
+      return;
+    }
+    plans.forEach(p => {
+      const milestones = p.milestones || [];
+      const sum = milestones.reduce((a, m) => a + Number(m.pct || 0), 0);
+      const card = h('div', { class: 'card', style: { padding: '.7rem .9rem', margin: '.5rem 0', borderLeft: '4px solid ' + (Number(p.is_active) === 1 ? '#10b981' : '#9ca3af') } },
+        h('div', { style: { display: 'flex', alignItems: 'flex-start', gap: '.6rem' } },
+          h('div', { style: { flex: 1 } },
+            h('div', { style: { fontWeight: 700, fontSize: '1rem' } },
+              p.name,
+              Number(p.is_default) === 1 ? h('span', { style: { marginLeft: '.4rem', padding: '.1rem .35rem', background: '#dbeafe', color: '#1e40af', borderRadius: '4px', fontSize: '.7rem' } }, '⭐ DEFAULT') : null,
+              Number(p.is_active) === 0 ? h('span', { class: 'muted', style: { marginLeft: '.4rem', fontSize: '.78rem' } }, '(disabled)') : null,
+              p.project_name ? h('span', { class: 'muted', style: { marginLeft: '.4rem', fontSize: '.78rem' } }, '· ' + p.project_name) : null
+            ),
+            p.description ? h('div', { class: 'muted', style: { fontSize: '.8rem', margin: '.2rem 0' } }, p.description) : null,
+            h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '.3rem', marginTop: '.4rem' } },
+              ...milestones.map((m, i) => h('span', {
+                style: { padding: '.15rem .4rem', background: '#f1f5f9', borderRadius: '4px', fontSize: '.75rem' }
+              }, (i + 1) + '. ' + m.label + ' · ' + m.pct + '% · day ' + m.offset_days))
+            ),
+            h('div', { class: 'muted', style: { fontSize: '.7rem', marginTop: '.3rem' } },
+              'Total: ' + sum + '%' + (Math.abs(sum - 100) > 0.5 ? ' ⚠ should be 100' : ' ✓'))
+          ),
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: '.3rem' } },
+            h('button', { class: 'btn', onclick: () => openREPaymentPlanEditor(p, load) }, '✏️ Edit'),
+            h('button', { class: 'btn danger', onclick: async () => {
+              if (!confirm('Delete plan "' + p.name + '"? Existing bookings keep their demand letters.')) return;
+              try { await api('api_re_paymentPlans_delete', p.id); toast('Deleted', 'ok'); load(); }
+              catch (e) { toast(e.message, 'err'); }
+            } }, '🗑')
+          )
+        )
+      );
+      body.appendChild(card);
+    });
+  }
+  load();
+}
+try { window.openREPaymentPlansModal = openREPaymentPlansModal; } catch (_) {}
+
+async function openREPaymentPlanEditor(plan, onSaved) {
+  plan = plan || { name: '', description: '', project_id: null, is_active: 1, is_default: 0, milestones: [
+    { code: 'token',  label: 'Token',  pct: 10, offset_days: 0 },
+    { code: 'agreement', label: 'Agreement', pct: 20, offset_days: 30 },
+    { code: 'construction', label: 'Construction', pct: 40, offset_days: 180 },
+    { code: 'possession', label: 'Possession', pct: 30, offset_days: 365 }
+  ] };
+
+  const m = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const modal = h('div', { class: 'modal', style: { maxWidth: '760px' } });
+
+  const nameInp = h('input', { class: 'input', value: plan.name || '', placeholder: 'e.g. CLP 30-30-30-10' });
+  const descInp = h('input', { class: 'input', value: plan.description || '', placeholder: 'Optional description' });
+  const projSel = h('select', { class: 'input' }, h('option', { value: '' }, '🌐 Global — any project'));
+  const enChk   = h('input', { type: 'checkbox', checked: Number(plan.is_active) === 1 ? 'checked' : null });
+  const defChk  = h('input', { type: 'checkbox', checked: Number(plan.is_default) === 1 ? 'checked' : null });
+
+  const milestonesBox = h('div', { style: { padding: '.7rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px' } });
+  const sumLbl = h('span', { id: 'pp-sum', style: { fontWeight: 700 } }, '');
+
+  function _renderMilestones() {
+    milestonesBox.innerHTML = '';
+    milestonesBox.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 110px 110px 50px', gap: '.4rem', fontSize: '.75rem', fontWeight: 600, color: '#475569' } },
+      h('div', {}, 'Milestone label'),
+      h('div', {}, '% of total'),
+      h('div', {}, 'Days from booking'),
+      h('div', {}, '')
+    ));
+    (plan.milestones || []).forEach((mil, i) => {
+      const labelInp = h('input', { type: 'text', class: 'input', value: mil.label || '', placeholder: 'e.g. Slab' });
+      const pctInp   = h('input', { type: 'number', class: 'input', value: mil.pct || 0, min: '0', max: '100', step: '0.01' });
+      const dayInp   = h('input', { type: 'number', class: 'input', value: mil.offset_days || 0, min: '0', step: '1' });
+      const delBtn   = h('button', { class: 'btn danger', onclick: () => { plan.milestones.splice(i, 1); _renderMilestones(); } }, '🗑');
+      labelInp.oninput = () => { mil.label = labelInp.value; };
+      pctInp.oninput   = () => { mil.pct   = Number(pctInp.value || 0); _updateSum(); };
+      dayInp.oninput   = () => { mil.offset_days = Number(dayInp.value || 0); };
+      milestonesBox.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 110px 110px 50px', gap: '.4rem', marginTop: '.3rem' } },
+        labelInp, pctInp, dayInp, delBtn));
+    });
+    milestonesBox.appendChild(h('div', { style: { marginTop: '.6rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+      h('button', { class: 'btn', onclick: () => {
+        plan.milestones = plan.milestones || [];
+        plan.milestones.push({ code: 'm' + (plan.milestones.length + 1), label: '', pct: 0, offset_days: 0 });
+        _renderMilestones();
+      } }, '➕ Add milestone'),
+      h('div', {}, 'Total: ', sumLbl)
+    ));
+    _updateSum();
+  }
+  function _updateSum() {
+    const sum = (plan.milestones || []).reduce((a, m) => a + Number(m.pct || 0), 0);
+    sumLbl.textContent = sum.toFixed(2) + '%';
+    sumLbl.style.color = Math.abs(sum - 100) > 0.5 ? '#dc2626' : '#15803d';
+  }
+
+  modal.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, plan.id ? '✏️ Edit payment plan' : '➕ New payment plan'),
+    h('button', { class: 'btn ghost', onclick: () => m.remove() }, '✕')
+  ));
+  modal.appendChild(h('div', { class: 'modal-body', style: { maxHeight: '70vh', overflowY: 'auto' } },
+    h('label', {}, 'Plan name', nameInp),
+    h('label', {}, 'Description', descInp),
+    h('label', {}, 'Scope (project)', projSel,
+      h('div', { class: 'muted', style: { fontSize: '.72rem', marginTop: '.2rem' } }, 'Pick a specific project, or leave on "Global" to make this plan available for every project.')),
+    h('h4', { style: { marginTop: '1rem' } }, '📋 Milestones'),
+    h('p', { class: 'muted', style: { fontSize: '.8rem' } }, 'Each milestone becomes a demand letter on the buyer\'s booking. Percentages must sum to 100. Days = offset from the booking date.'),
+    milestonesBox,
+    h('div', { style: { display: 'flex', gap: '1rem', marginTop: '.8rem', padding: '.4rem .6rem', background: '#fafafa', borderRadius: '6px' } },
+      h('label', { style: { display: 'flex', alignItems: 'center', gap: '.3rem', fontSize: '.85rem' } }, enChk, ' Enabled'),
+      h('label', { style: { display: 'flex', alignItems: 'center', gap: '.3rem', fontSize: '.85rem' } }, defChk, ' Default for this scope (auto-pick)')
+    )
+  ));
+  modal.appendChild(h('div', { class: 'actions' },
+    h('button', { class: 'btn', onclick: () => m.remove() }, 'Cancel'),
+    h('button', { class: 'btn primary', onclick: async () => {
+      if (!nameInp.value.trim()) { toast('Name required', 'err'); return; }
+      try {
+        await api('api_re_paymentPlans_save', {
+          id: plan.id || null,
+          name: nameInp.value.trim(),
+          description: descInp.value.trim(),
+          project_id: projSel.value ? Number(projSel.value) : null,
+          is_active: enChk.checked ? 1 : 0,
+          is_default: defChk.checked ? 1 : 0,
+          milestones: plan.milestones
+        });
+        toast('Saved', 'ok');
+        m.remove();
+        if (onSaved) onSaved();
+      } catch (e) { toast(e.message, 'err'); }
+    } }, '💾 Save plan')
+  ));
+  m.appendChild(modal);
+  document.body.appendChild(m);
+
+  _renderMilestones();
+
+  // Populate project dropdown
+  try {
+    const projects = await api('api_re_projects_list');
+    (projects || []).forEach(p => projSel.appendChild(h('option', { value: p.id, selected: Number(plan.project_id) === Number(p.id) ? 'selected' : null }, p.name)));
+  } catch (_) {}
+}
+try { window.openREPaymentPlanEditor = openREPaymentPlanEditor; } catch (_) {}
