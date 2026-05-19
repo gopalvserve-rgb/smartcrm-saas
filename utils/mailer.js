@@ -542,6 +542,10 @@ async function recordLogin(userId, req) {
 module.exports = {
   SUPPORTED_EVENTS,
   sendEvent, testSmtp,
+  /* REPORT_SCHEDULE_v1 — expose raw send so scheduled report templates can
+   * dispatch HTML emails to arbitrary recipients without needing a templated
+   * event row. Keeps existing event-driven flow intact. */
+  sendRaw: _sendRaw,
   sendMorningFollowups, sendDayEndReport, sendDayEndPerRep,
   startDailyCron,
   recordLogin

@@ -90,6 +90,7 @@ const ROUTE_FILES = [
   'social',
   'ivr',
   'compliance',  /* COMPLIANCE_v1 */
+  'reportTemplates',  /* REPORT_SCHEDULE_v1 */
 ];
 
 const API = {};

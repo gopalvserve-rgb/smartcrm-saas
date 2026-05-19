@@ -14425,7 +14425,10 @@ VIEWS.reportbuilder = async (view) => {
         })(),
         h('button', { class: 'btn primary', onclick: loadReportBuilder }, '🔎 Generate'),
         h('button', { class: 'btn', onclick: downloadReportBuilderExcel, title: 'Export breakdown + lead details to Excel' }, '📊 Export Excel'),
-        h('button', { class: 'btn', onclick: downloadReportBuilderCsv, title: 'Export breakdown to CSV' }, '⬇️ CSV')
+        h('button', { class: 'btn', onclick: downloadReportBuilderCsv, title: 'Export breakdown to CSV' }, '⬇️ CSV'),
+        /* REPORT_SCHEDULE_v1 — save / load / schedule current report */
+        h('button', { class: 'btn', onclick: () => openReportTemplateSave(), title: 'Save current report config as a reusable template' }, '💾 Save template'),
+        h('button', { class: 'btn', onclick: () => openReportTemplatesModal(), title: 'View saved templates + schedules' }, '📂 My templates')
       )
     ),
     h('div', { id: 'rb-summary', class: 'cards', style: { marginBottom: '1rem' } }),
@@ -32807,3 +32810,218 @@ async function openComplianceRuleEditor(rule, types, onSaved) {
   document.body.appendChild(modal);
 }
 try { window.openComplianceRuleEditor = openComplianceRuleEditor; } catch (_) {}
+
+
+/* ==========================================================================
+ * REPORT_SCHEDULE_v1 — Save / Load / Schedule reports
+ * ========================================================================== */
+
+/* Read current Report Builder UI state into the same shape as _currentReportBuilderFilters */
+function _rbCurrentConfig() {
+  const dim = (document.getElementById('rb-dim') || {}).value || 'product';
+  return { dim, filters: _currentReportBuilderFilters() };
+}
+
+/* Apply a saved config back onto the Report Builder UI */
+function _rbApplyConfig(cfg) {
+  if (!cfg) return;
+  const dimSel = document.getElementById('rb-dim');
+  if (dimSel && cfg.dim) {
+    Array.from(dimSel.options).forEach(o => { if (o.value === cfg.dim) o.selected = true; });
+  }
+  const f = cfg.filters || {};
+  const fromEl = document.getElementById('rb-from'); if (fromEl && f.from) fromEl.value = f.from;
+  const toEl   = document.getElementById('rb-to');   if (toEl   && f.to)   toEl.value   = f.to;
+  const qEl    = document.getElementById('rb-qualified'); if (qEl && f.qualified) qEl.value = f.qualified;
+  window._rbPicked = window._rbPicked || {};
+  if (Array.isArray(f.scope_user_ids)) window._rbPicked.users    = f.scope_user_ids.map(String);
+  if (Array.isArray(f.status_ids))     window._rbPicked.statuses = f.status_ids.map(String);
+  if (Array.isArray(f.product_ids))    window._rbPicked.products = f.product_ids.map(String);
+  if (Array.isArray(f.sources))        window._rbPicked.sources  = f.sources;
+}
+
+/* Save-as-template modal */
+async function openReportTemplateSave() {
+  const cfg = _rbCurrentConfig();
+  const modal = h('div', { class: 'modal' });
+  const nameInp = h('input', { class: 'input', placeholder: 'Template name (e.g. "Daily by source")' });
+  const descInp = h('input', { class: 'input', placeholder: 'Description (optional)' });
+  const saveBtn = h('button', { class: 'btn primary' }, '💾 Save');
+  saveBtn.onclick = async () => {
+    if (!nameInp.value.trim()) { toast('Name required', 'err'); return; }
+    saveBtn.disabled = true; saveBtn.textContent = '⏳';
+    try {
+      const r = await api('api_reportTemplate_save', { name: nameInp.value.trim(), description: descInp.value.trim(), dim: cfg.dim, filters: cfg.filters });
+      toast('Saved — template #' + r.id, 'ok');
+      modal.remove();
+    } catch (e) { toast(e.message, 'err'); saveBtn.disabled = false; saveBtn.textContent = '💾 Save'; }
+  };
+  modal.appendChild(h('div', { class: 'modal-content', style: { maxWidth: '480px' } },
+    h('h3', {}, '💾 Save report template'),
+    h('p', { class: 'muted', style: { fontSize: '.85rem' } }, 'Saves the current grouping (' + cfg.dim + ') + all filters. You can re-open + edit later from 📂 My templates, or schedule it to send via Email / WhatsApp.'),
+    h('label', { class: 'muted', style: { fontSize: '.75rem' } }, 'Name'), nameInp,
+    h('label', { class: 'muted', style: { fontSize: '.75rem' } }, 'Description'), descInp,
+    h('div', { class: 'modal-actions', style: { display: 'flex', justifyContent: 'flex-end', gap: '.4rem', marginTop: '.8rem' } },
+      h('button', { class: 'btn', onclick: () => modal.remove() }, 'Cancel'), saveBtn
+    )
+  ));
+  document.body.appendChild(modal);
+}
+
+/* My-templates modal — list of saved templates with View/Edit/Schedule/Delete */
+async function openReportTemplatesModal() {
+  const modal = h('div', { class: 'modal' });
+  const body = h('div', { style: { maxHeight: '70vh', overflowY: 'auto' } }, '⏳ Loading…');
+  modal.appendChild(h('div', { class: 'modal-content', style: { maxWidth: '760px' } },
+    h('h3', {}, '📂 My saved report templates'),
+    h('p', { class: 'muted', style: { fontSize: '.85rem' } }, 'Open a template to re-run + edit, or schedule it to send via Email / WhatsApp on a daily / weekly / monthly cadence.'),
+    h('div', { class: 'modal-actions', style: { display: 'flex', justifyContent: 'flex-end' } },
+      h('button', { class: 'btn', onclick: () => modal.remove() }, 'Close')
+    ),
+    body
+  ));
+  document.body.appendChild(modal);
+
+  async function load() {
+    body.innerHTML = '⏳';
+    let tpls, schs;
+    try {
+      [tpls, schs] = await Promise.all([
+        api('api_reportTemplate_list'),
+        api('api_reportSchedule_list')
+      ]);
+    } catch (e) { body.innerHTML = '<div style="color:#dc2626">' + e.message + '</div>'; return; }
+    body.innerHTML = '';
+    if (!tpls.length) { body.appendChild(h('div', { class: 'muted', style: { padding: '1.5rem', textAlign: 'center' } }, 'No saved templates yet. Use 💾 Save template to create one.')); return; }
+    const schedsByTpl = {}; (schs || []).forEach(s => { (schedsByTpl[s.template_id] = schedsByTpl[s.template_id] || []).push(s); });
+    tpls.forEach(t => {
+      const tplSchs = schedsByTpl[t.id] || [];
+      const card = h('div', { class: 'card', style: { padding: '.7rem .9rem', margin: '.5rem 0' } },
+        h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '.5rem' } },
+          h('div', { style: { flex: 1 } },
+            h('div', { style: { fontWeight: 700 } }, '📊 ' + t.name),
+            h('div', { class: 'muted', style: { fontSize: '.78rem' } }, t.description || ''),
+            h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '.2rem' } }, 'Group by ' + t.dim + ' · saved ' + new Date(t.created_at).toLocaleDateString())
+          ),
+          h('div', {},
+            h('button', { class: 'btn primary', title: 'Load this template into the Report Builder', onclick: () => { _rbApplyConfig({ dim: t.dim, filters: t.filters }); modal.remove(); loadReportBuilder(); toast('Loaded — modify + click 💾 Save template to save changes', 'ok'); } }, '▶ Open'),
+            h('button', { class: 'btn', style: { marginLeft: '.3rem' }, title: 'Schedule send via Email / WhatsApp', onclick: () => openReportScheduleEditor(t, null, load) }, '🗓 Schedule'),
+            h('button', { class: 'btn danger', style: { marginLeft: '.3rem' }, onclick: async () => {
+              if (!confirm('Delete template "' + t.name + '" and all its schedules?')) return;
+              try { await api('api_reportTemplate_delete', t.id); toast('Deleted', 'ok'); load(); }
+              catch (e) { toast(e.message, 'err'); }
+            } }, '🗑')
+          )
+        )
+      );
+      if (tplSchs.length) {
+        const list = h('div', { style: { marginTop: '.5rem', padding: '.5rem .7rem', background: '#f8fafc', borderRadius: '6px', fontSize: '.82rem' } },
+          h('div', { class: 'muted', style: { fontWeight: 600, marginBottom: '.3rem' } }, '🗓 Active schedules')
+        );
+        tplSchs.forEach(sc => {
+          const recip = ((sc.recipients_email || []).length ? '📧 ' + sc.recipients_email.length : '') +
+                        ((sc.recipients_whatsapp || []).length ? ' 📱 ' + sc.recipients_whatsapp.length : '');
+          list.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', margin: '.2rem 0' } },
+            h('span', { style: { flex: 1 } },
+              sc.frequency === 'weekly' ? '📅 Weekly · ' + ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][sc.day_of_week || 0]
+                : sc.frequency === 'monthly' ? '📅 Monthly · day ' + (sc.day_of_month || 1)
+                : '📅 Daily',
+              ' at ' + String(sc.hour).padStart(2,'0') + ':' + String(sc.minute || 0).padStart(2,'0'),
+              ' · ' + recip,
+              Number(sc.enabled) === 1 ? '' : ' · ⏸ Disabled',
+              sc.last_error ? ' · ⚠ ' + sc.last_error.slice(0, 60) : ''
+            ),
+            h('button', { class: 'btn', onclick: async () => { try { const r = await api('api_reportSchedule_runNow', sc.id); toast('Sent · ' + ((r.results && r.results.email && r.results.email.length) || 0) + ' email · ' + ((r.results && r.results.whatsapp && r.results.whatsapp.length) || 0) + ' wa', 'ok'); } catch (e) { toast(e.message, 'err'); } } }, '▶ Send now'),
+            h('button', { class: 'btn', onclick: () => openReportScheduleEditor(t, sc, load) }, '✏️'),
+            h('button', { class: 'btn danger', onclick: async () => { if (!confirm('Delete this schedule?')) return; try { await api('api_reportSchedule_delete', sc.id); toast('Deleted', 'ok'); load(); } catch (e) { toast(e.message, 'err'); } } }, '🗑')
+          ));
+        });
+        card.appendChild(list);
+      }
+      body.appendChild(card);
+    });
+  }
+  load();
+}
+try { window.openReportTemplatesModal = openReportTemplatesModal; window.openReportTemplateSave = openReportTemplateSave; } catch (_) {}
+
+/* Schedule editor modal */
+function openReportScheduleEditor(template, existing, onSaved) {
+  existing = existing || { frequency: 'daily', hour: 9, minute: 0, day_of_week: 1, day_of_month: 1,
+    recipients_email: [], recipients_whatsapp: [], message_template: '', enabled: 1 };
+  const modal = h('div', { class: 'modal' });
+
+  const freqSel = h('select', { class: 'input' },
+    h('option', { value: 'daily',   selected: existing.frequency === 'daily'   ? 'selected' : null }, 'Daily'),
+    h('option', { value: 'weekly',  selected: existing.frequency === 'weekly'  ? 'selected' : null }, 'Weekly'),
+    h('option', { value: 'monthly', selected: existing.frequency === 'monthly' ? 'selected' : null }, 'Monthly')
+  );
+  const hourInp = h('input', { type: 'number', class: 'input', min: '0', max: '23', value: existing.hour ?? 9, style: { width: '70px' } });
+  const minInp  = h('input', { type: 'number', class: 'input', min: '0', max: '59', value: existing.minute ?? 0, style: { width: '70px' } });
+  const dowSel = h('select', { class: 'input' },
+    ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'].map((d, i) =>
+      h('option', { value: String(i), selected: Number(existing.day_of_week) === i ? 'selected' : null }, d))
+  );
+  const domInp = h('input', { type: 'number', class: 'input', min: '1', max: '28', value: existing.day_of_month ?? 1, style: { width: '80px' } });
+
+  const emailsInp = h('textarea', { class: 'input', placeholder: 'one@example.com, two@example.com', rows: '2', style: { minHeight: '50px' } });
+  emailsInp.value = (existing.recipients_email || []).join(', ');
+  const phonesInp = h('textarea', { class: 'input', placeholder: '919876543210, 919812345678 (no +, include country code)', rows: '2', style: { minHeight: '50px' } });
+  phonesInp.value = (existing.recipients_whatsapp || []).join(', ');
+  const msgInp = h('textarea', { class: 'input', placeholder: 'Optional intro message (used for WhatsApp + email body)', rows: '2' });
+  msgInp.value = existing.message_template || '';
+  const enChk = h('input', { type: 'checkbox', checked: Number(existing.enabled) === 1 ? 'checked' : null });
+
+  freqSel.onchange = () => { rowDow.style.display = freqSel.value === 'weekly' ? '' : 'none'; rowDom.style.display = freqSel.value === 'monthly' ? '' : 'none'; };
+
+  const rowDow = h('div', { style: { display: existing.frequency === 'weekly'  ? 'flex' : 'none', gap: '.5rem', alignItems: 'center', margin: '.3rem 0' } },
+    h('label', { style: { minWidth: '120px' } }, 'Day of week'), dowSel);
+  const rowDom = h('div', { style: { display: existing.frequency === 'monthly' ? 'flex' : 'none', gap: '.5rem', alignItems: 'center', margin: '.3rem 0' } },
+    h('label', { style: { minWidth: '120px' } }, 'Day of month (1-28)'), domInp);
+
+  const saveBtn = h('button', { class: 'btn primary' }, existing.id ? '💾 Save' : '🗓 Create schedule');
+  saveBtn.onclick = async () => {
+    const emails = (emailsInp.value || '').split(/[,;\n]+/).map(s => s.trim()).filter(s => /^.+@.+\..+$/.test(s));
+    const phones = (phonesInp.value || '').split(/[,;\n]+/).map(s => s.replace(/\D/g, '')).filter(s => s.length >= 8);
+    if (!emails.length && !phones.length) { toast('Add at least one email or WhatsApp number', 'err'); return; }
+    saveBtn.disabled = true; saveBtn.textContent = '⏳';
+    try {
+      const r = await api('api_reportSchedule_save', {
+        id: existing.id || null,
+        template_id: template.id,
+        name: template.name,
+        frequency: freqSel.value,
+        hour: Number(hourInp.value || 9),
+        minute: Number(minInp.value || 0),
+        day_of_week:  freqSel.value === 'weekly'  ? Number(dowSel.value) : null,
+        day_of_month: freqSel.value === 'monthly' ? Number(domInp.value) : null,
+        recipients_email: emails,
+        recipients_whatsapp: phones,
+        message_template: msgInp.value || '',
+        enabled: enChk.checked ? 1 : 0
+      });
+      toast('Saved · next run ' + new Date(r.next_run_at).toLocaleString(), 'ok');
+      modal.remove(); if (onSaved) onSaved();
+    } catch (e) { toast(e.message, 'err'); saveBtn.disabled = false; saveBtn.textContent = '💾 Save'; }
+  };
+
+  modal.appendChild(h('div', { class: 'modal-content', style: { maxWidth: '600px' } },
+    h('h3', {}, '🗓 Schedule "' + template.name + '"'),
+    h('p', { class: 'muted', style: { fontSize: '.82rem' } }, 'Send the report on a recurring schedule to email + WhatsApp recipients. Uses your CRM\'s SMTP and WhatsApp Business API.'),
+    h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', margin: '.4rem 0' } },
+      h('label', { style: { minWidth: '120px' } }, 'Frequency'), freqSel,
+      h('label', { style: { marginLeft: '.5rem' } }, 'At'), hourInp, h('span', {}, ':'), minInp,
+      h('span', { class: 'muted', style: { fontSize: '.75rem' } }, ' (IST)')
+    ),
+    rowDow, rowDom,
+    h('label', { class: 'muted', style: { fontSize: '.75rem', display: 'block', marginTop: '.5rem' } }, '📧 Email recipients (comma-separated)'), emailsInp,
+    h('label', { class: 'muted', style: { fontSize: '.75rem', display: 'block', marginTop: '.4rem' } }, '📱 WhatsApp numbers (with country code, no +)'), phonesInp,
+    h('label', { class: 'muted', style: { fontSize: '.75rem', display: 'block', marginTop: '.4rem' } }, 'Intro message (optional)'), msgInp,
+    h('label', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', marginTop: '.5rem' } }, enChk, ' Enabled'),
+    h('div', { class: 'modal-actions', style: { display: 'flex', justifyContent: 'flex-end', gap: '.4rem', marginTop: '.8rem' } },
+      h('button', { class: 'btn', onclick: () => modal.remove() }, 'Cancel'), saveBtn
+    )
+  ));
+  document.body.appendChild(modal);
+}
+try { window.openReportScheduleEditor = openReportScheduleEditor; } catch (_) {}

@@ -2582,6 +2582,41 @@ setTimeout(() => _runComplianceScanForAllTenants().catch(() => {}), 180_000);
 console.log('[compliance] daily violation scan worker started — hourly tick');
 
 
+// ── REPORT_SCHEDULE_v1 — scheduled-report dispatcher (per-tenant, hourly) ──
+// Walks tenants once per hour. For each, picks up report_schedules whose
+// next_run_at <= NOW, runs the saved report, sends to email + WhatsApp
+// recipients, advances next_run_at by frequency.
+async function _runScheduledReportsForAllTenants() {
+  let rows = [];
+  try {
+    const r = await controlDb.query(
+      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500`
+    );
+    rows = r.rows;
+  } catch (e) { console.warn('[reportSchedule] tenant list failed:', e.message); return; }
+  let mod;
+  try { mod = require('./routes/reportTemplates'); } catch (_) { return; }
+  if (!mod || !mod.tickScheduledReports) return;
+  for (const row of rows) {
+    let t; try { t = await tenantPoolMod.findActiveTenant(row.slug); } catch (_) { continue; }
+    if (!t) continue;
+    const pool = tenantPoolMod.poolFor(t);
+    if (!pool) continue;
+    try {
+      await tenantDb.tenantStorage.run({ pool, tenant: t, slug: row.slug }, async () => {
+        const r = await mod.tickScheduledReports();
+        if (r && r.ran > 0) console.log('[reportSchedule] ' + row.slug + ': ran ' + r.ran + ' schedules');
+      });
+    } catch (e) { console.warn('[reportSchedule] ' + row.slug + ' tick failed:', e.message); }
+  }
+}
+setInterval(() => {
+  _runScheduledReportsForAllTenants().catch(e => console.error('[reportSchedule] cycle failed:', e.message));
+}, Number(process.env.REPORT_SCHEDULE_INTERVAL_MS || 15 * 60_000));   // every 15 min
+setTimeout(() => _runScheduledReportsForAllTenants().catch(() => {}), 240_000);
+console.log('[reportSchedule] scheduled-report dispatcher started — 15-min tick');
+
+
 // ── Background: per-tenant AI Call Summary worker ──────────────────────
 // aiCallSummary.startWorker() is only wired in server.tenant.js. Without
 // this, SaaS-tenant recordings never get auto-processed by Gemini — they
