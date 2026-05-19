@@ -493,6 +493,36 @@ async function api_leads_list(token, filters) {
     h.recent_remark_at = r ? r.created_at : '';
     return h;
   });
+
+  /* LEAD_ACTIVITY_v1 — attach activity_total + activity_today per lead.
+   * We aggregate from lead_actions (status_change, remark, followup_set,
+   * note_updated, tags_updated, assigned, qualified, whatsapp_in/out, etc.)
+   * in a single SQL roll-up for the paged lead IDs. 'created' is excluded
+   * because that's the lead being created — not a rep activity.
+   */
+  try {
+    const ids = hydrated.map(l => Number(l.id)).filter(Boolean);
+    if (ids.length) {
+      const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+      const q = await db.query(
+        `SELECT lead_id,
+                COUNT(*) FILTER (WHERE action_type <> 'created')::int                                   AS act_total,
+                COUNT(*) FILTER (WHERE action_type <> 'created' AND created_at >= $2)::int              AS act_today
+         FROM lead_actions
+         WHERE lead_id = ANY($1::int[])
+         GROUP BY lead_id`,
+        [ids, todayStart.toISOString()]
+      );
+      const byId = {};
+      q.rows.forEach(r => { byId[Number(r.lead_id)] = r; });
+      hydrated.forEach(h => {
+        const a = byId[Number(h.id)];
+        h.activity_total = a ? Number(a.act_total) : 0;
+        h.activity_today = a ? Number(a.act_today) : 0;
+      });
+    }
+  } catch (e) { console.warn('[leads activity counts]', e.message); }
+
   return { leads: hydrated, total, page, page_size: pageSize, status_count: statusCount };
 }
 
@@ -2388,6 +2418,34 @@ async function api_leads_merge(token, payload) {
 }
 /* end LEAD_MERGE_v1 */
 
+/* LEAD_ACTIVITY_v1 — activity timeline for one lead (used by lead modal).
+ * Returns the lead_actions list newest-first, hydrated with user name. */
+async function api_leads_activityTimeline(token, leadId) {
+  const me = await authUser(token);
+  const visible = await getVisibleUserIds(me);
+  const lead = await db.findById('leads', leadId);
+  if (!lead) throw new Error('Not found');
+  if (!_isVisible(me, visible, lead)) throw new Error('Forbidden');
+  const { rows } = await db.query(
+    `SELECT la.id, la.action_type, la.user_id, la.meta_json, la.created_at,
+            u.name AS user_name
+       FROM lead_actions la
+       LEFT JOIN users u ON u.id = la.user_id
+      WHERE la.lead_id = $1
+      ORDER BY la.id DESC
+      LIMIT 200`,
+    [Number(leadId)]
+  );
+  return rows.map(r => ({
+    id: r.id,
+    action: r.action_type,
+    user_id: r.user_id,
+    user_name: r.user_name || '—',
+    meta: (() => { try { return r.meta_json ? JSON.parse(r.meta_json) : {}; } catch (_) { return {}; } })(),
+    at: r.created_at
+  }));
+}
+
 module.exports = {
   api_leads_list, api_leads_distinctTags, api_leads_phoneBook, api_leads_statusCounts, api_leads_get, api_leads_create, api_leads_update,
   api_leads_addRemark, api_leads_pipeline, api_myFollowups, api_followup_done,
@@ -2399,5 +2457,6 @@ module.exports = {
   api_leads_pull, api_leads_pullInfo,
   api_leads_assignToCampaign,
   api_leads_rescanDuplicates,
-  api_leads_merge  /* LEAD_MERGE_v1 */
+  api_leads_merge,
+  api_leads_activityTimeline  /* LEAD_ACTIVITY_v1 */  /* LEAD_MERGE_v1 */
 };

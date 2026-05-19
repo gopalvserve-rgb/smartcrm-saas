@@ -1165,11 +1165,131 @@ async function api_reports_callActivity(token, filters) {
   };
 }
 
+/* LEAD_ACTIVITY_v1 — Activity report.
+ * Returns:
+ *   summary : { total, today, this_week, this_month, by_action: {...} }
+ *   by_user : [ { user_id, user_name, total, today, this_week, by_action } ]
+ *   by_day  : [ { day: 'YYYY-MM-DD', total, by_action: {...} } ] (last N days)
+ *   grid    : [ { user_id, user_name, days: { 'YYYY-MM-DD': count } } ] (for heatmap)
+ *
+ * Admin / manager: sees everyone visible to them via getVisibleUserIds.
+ * Rep: sees only their own activity.
+ * Filters: { from, to, user_ids, action_types } — sensible defaults (last 30 days).
+ */
+async function api_reports_activityByUser(token, opts) {
+  const me = await authUser(token);
+  const visible = await getVisibleUserIds(me);
+  opts = opts || {};
+
+  // Date window: default last 30 days (inclusive)
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const defFromD = new Date(today); defFromD.setDate(defFromD.getDate() - 29);
+  const fromStr = (opts.from && /^\d{4}-\d{2}-\d{2}$/.test(opts.from)) ? opts.from : defFromD.toISOString().slice(0, 10);
+  const toStr   = (opts.to   && /^\d{4}-\d{2}-\d{2}$/.test(opts.to))   ? opts.to   : today.toISOString().slice(0, 10);
+  const fromIso = fromStr + 'T00:00:00';
+  const toIso   = toStr   + 'T23:59:59';
+  const todayStr = today.toISOString().slice(0, 10);
+  const weekStart = new Date(today); weekStart.setDate(weekStart.getDate() - weekStart.getDay()); // Sun
+  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+
+  // User scope: rep sees only self; manager/admin sees their visible set
+  let userIds = visible;
+  if (Array.isArray(opts.user_ids) && opts.user_ids.length) {
+    const wanted = opts.user_ids.map(x => Number(x)).filter(Boolean);
+    userIds = userIds.filter(u => wanted.includes(Number(u)));
+  }
+  if (!userIds.length) {
+    return { summary: { total: 0, today: 0, this_week: 0, this_month: 0, by_action: {} }, by_user: [], by_day: [], grid: [], from: fromStr, to: toStr };
+  }
+
+  // Action filter — exclude 'created' (not a rep activity) unless explicitly asked.
+  const includeCreated = !!opts.include_created;
+  const actionFilter = Array.isArray(opts.action_types) && opts.action_types.length
+    ? opts.action_types.map(s => String(s))
+    : null;
+
+  let where = 'la.created_at BETWEEN $1 AND $2 AND la.user_id = ANY($3::int[])';
+  const params = [fromIso, toIso, userIds];
+  if (!includeCreated) {
+    where += " AND la.action_type <> 'created'";
+  }
+  if (actionFilter) {
+    params.push(actionFilter);
+    where += ' AND la.action_type = ANY($' + params.length + '::text[])';
+  }
+
+  // Pull the raw rows once — we summarise in JS so the calls table
+  // is not joined N times in SQL. lead_actions is light (1 row per
+  // rep action) so even 30 days × 50 reps is small.
+  const { rows } = await db.query(
+    `SELECT la.user_id, la.action_type, la.created_at,
+            u.name AS user_name, u.role AS user_role
+       FROM lead_actions la
+       LEFT JOIN users u ON u.id = la.user_id
+      WHERE ${where}`.replace('${where}', where),
+    params
+  );
+
+  const summary = { total: 0, today: 0, this_week: 0, this_month: 0, by_action: {} };
+  const byUser  = {};
+  const byDay   = {};
+  const grid    = {};
+
+  for (const r of rows) {
+    const uid  = Number(r.user_id) || 0;
+    const day  = String(r.created_at).slice(0, 10);
+    const act  = String(r.action_type || 'other');
+    const tIso = String(r.created_at);
+    summary.total += 1;
+    summary.by_action[act] = (summary.by_action[act] || 0) + 1;
+    if (day === todayStr) summary.today += 1;
+    if (tIso >= weekStart.toISOString()) summary.this_week += 1;
+    if (tIso >= monthStart.toISOString()) summary.this_month += 1;
+
+    if (!byUser[uid]) {
+      byUser[uid] = { user_id: uid, user_name: r.user_name || '—', user_role: r.user_role || '',
+                      total: 0, today: 0, this_week: 0, this_month: 0, by_action: {} };
+    }
+    const u = byUser[uid];
+    u.total += 1;
+    u.by_action[act] = (u.by_action[act] || 0) + 1;
+    if (day === todayStr) u.today += 1;
+    if (tIso >= weekStart.toISOString()) u.this_week += 1;
+    if (tIso >= monthStart.toISOString()) u.this_month += 1;
+
+    if (!byDay[day]) byDay[day] = { day, total: 0, by_action: {} };
+    byDay[day].total += 1;
+    byDay[day].by_action[act] = (byDay[day].by_action[act] || 0) + 1;
+
+    if (!grid[uid]) grid[uid] = { user_id: uid, user_name: r.user_name || '—', days: {} };
+    grid[uid].days[day] = (grid[uid].days[day] || 0) + 1;
+  }
+
+  // Fill missing days in by_day so the chart shows a full timeline
+  const allDays = [];
+  for (let d = new Date(fromStr); d <= new Date(toStr); d.setDate(d.getDate() + 1)) {
+    const ds = d.toISOString().slice(0, 10);
+    allDays.push(ds);
+    if (!byDay[ds]) byDay[ds] = { day: ds, total: 0, by_action: {} };
+  }
+
+  return {
+    from: fromStr,
+    to:   toStr,
+    days: allDays,
+    summary,
+    by_user: Object.values(byUser).sort((a, b) => b.total - a.total),
+    by_day:  allDays.map(d => byDay[d]),
+    grid:    Object.values(grid)
+  };
+}
+
 module.exports = {
   api_reports_summary, api_reports_funnel, api_reports_daily,
   api_reports_exportLeads, api_reports_groupBy,
   api_reports_followupsByUser, api_reports_tatViolationsByUser,
   api_reports_callRatingByUser, api_reports_callActivity,
   api_reports_aiUsage, api_reports_aiCostEstimator,
-  api_calendar_events
+  api_calendar_events,
+  api_reports_activityByUser  /* LEAD_ACTIVITY_v1 */
 };

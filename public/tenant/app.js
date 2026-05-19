@@ -952,7 +952,9 @@ const NAV_GROUPS = [
   { label: 'Reports', icon: '📉', items: [
     { id: 'reports',       label: 'Reports',         icon: '📉', roles: ['admin', 'manager', 'team_leader'] },
     { id: 'reportbuilder', label: 'Report builder',  icon: '🧪', roles: ['admin', 'manager', 'team_leader'] },
-    { id: 'tatreport',     label: 'TAT report',      icon: '⏱️', roles: ['admin', 'manager', 'team_leader'] }
+    { id: 'tatreport',     label: 'TAT report',      icon: '⏱️', roles: ['admin', 'manager', 'team_leader'] },
+    /* LEAD_ACTIVITY_v1 */
+    { id: 'activityreport', label: 'Activity report', icon: '📝', roles: ['admin', 'manager', 'team_leader'] }
   ] },
   { label: 'Workspace', icon: '💬', items: [
     { id: 'socialinbox', label: 'Social Inbox', icon: '📱', countKey: 'social_unread' },
@@ -2859,7 +2861,23 @@ function renderCell(col, l, statuses) {
         h('a', { href: '#', onclick: ev => { ev.preventDefault(); openLeadModal(l.id); } }, l.name || '—'),
         renderHeatChip(l),
         l.is_duplicate ? h('span', { class: 'dup-pill', title: 'Duplicate — click to see past leads', onclick: ev => { ev.stopPropagation(); ev.preventDefault(); openDuplicateHistory(l.id); } }, 'DUP') : null,
-        l.tat_violation ? h('span', { class: 'tat-pill', title: tatViolationTitle(l) }, '⚠ TAT ', tatOverLabel(l)) : null
+        l.tat_violation ? h('span', { class: 'tat-pill', title: tatViolationTitle(l) }, '⚠ TAT ', tatOverLabel(l)) : null,
+        /* LEAD_ACTIVITY_v1 — activity counter pill. Shows total / today.
+         * Click opens the lead activity timeline. Hidden when no activity yet. */
+        (Number(l.activity_total) > 0)
+          ? h('span', {
+              class: 'activity-pill',
+              title: 'Activities done on this lead — click for timeline. Counts status changes, remarks, follow-up edits, reassignments, etc.',
+              onclick: ev => { ev.stopPropagation(); ev.preventDefault(); openLeadActivityTimeline(l.id, l.name); },
+              style: {
+                marginLeft: '.4rem', padding: '.05rem .35rem', borderRadius: '10px',
+                background: Number(l.activity_today) > 0 ? '#dcfce7' : '#e0e7ff',
+                color: Number(l.activity_today) > 0 ? '#15803d' : '#3730a3',
+                fontSize: '.7rem', fontWeight: '600', cursor: 'pointer',
+                border: '1px solid ' + (Number(l.activity_today) > 0 ? '#86efac' : '#c7d2fe')
+              }
+            }, '📝 ' + Number(l.activity_total) + (Number(l.activity_today) > 0 ? ' · ' + Number(l.activity_today) + ' today' : ''))
+          : null
       );
     }
     case 'phone': {
@@ -32126,3 +32144,200 @@ async function openRecordingSelftest() {
   document.body.appendChild(modal);
 }
 try { window.openRecordingSelftest = openRecordingSelftest; } catch (_) {}
+
+
+/* ==========================================================================
+ * LEAD_ACTIVITY_v1 — Activity Report view + per-lead activity timeline modal
+ * ========================================================================== */
+
+/* Per-lead activity timeline modal — opened from the 📝 pill on lead rows. */
+async function openLeadActivityTimeline(leadId, leadName) {
+  const modal = h('div', { class: 'modal' });
+  const body  = h('div', { style: { maxHeight: '65vh', overflowY: 'auto' } }, '⏳ Loading…');
+  modal.appendChild(h('div', { class: 'modal-content', style: { maxWidth: '640px' } },
+    h('h3', {}, '📝 Activity timeline — ', leadName || ('Lead #' + leadId)),
+    h('p', { class: 'muted', style: { fontSize: '.8rem' } }, 'Every change made to this lead: status updates, remarks, follow-up edits, reassignments, tag changes, WhatsApp messages.'),
+    h('div', { class: 'modal-actions', style: { display: 'flex', justifyContent: 'flex-end' } },
+      h('button', { class: 'btn', onclick: () => modal.remove() }, 'Close')
+    ),
+    body
+  ));
+  document.body.appendChild(modal);
+  try {
+    const rows = await api('api_leads_activityTimeline', leadId);
+    body.innerHTML = '';
+    if (!rows || !rows.length) {
+      body.appendChild(h('div', { class: 'muted', style: { padding: '1rem' } }, 'No activity recorded yet.'));
+      return;
+    }
+    const _icon = {
+      created: '✨', status_change: '🔄', remark: '💬', note_updated: '📝',
+      followup_set: '🗓', tags_updated: '🏷', assigned: '👤', reassigned: '🔁',
+      qualified: '✅', unqualified: '↩️', whatsapp_in: '📥', whatsapp_out: '📤'
+    };
+    rows.forEach(r => {
+      const ic = _icon[r.action] || '·';
+      const metaTxt = (() => {
+        const m = r.meta || {};
+        if (r.action === 'remark') return (m.remark || '').slice(0, 200);
+        if (r.action === 'followup_set' && m.due_at) return 'Due ' + new Date(m.due_at).toLocaleString();
+        if (r.action === 'status_change') return 'Status #' + (m.from_status_id || '?') + ' → #' + (m.to_status_id || '?');
+        if (r.action === 'tags_updated') return 'Tags: ' + (m.tags || '');
+        if (r.action === 'assigned') return 'Reassigned to user #' + (m.to || '?');
+        if (r.action === 'note_updated') return (m.preview || '').slice(0, 200);
+        if (r.action === 'whatsapp_out' || r.action === 'whatsapp_in') return (m.body || m.text || '').slice(0, 200);
+        return '';
+      })();
+      body.appendChild(h('div', {
+        style: { padding: '.55rem .7rem', borderLeft: '3px solid #6366f1', background: '#f8fafc', margin: '.35rem 0', borderRadius: '0 8px 8px 0' }
+      },
+        h('div', { style: { display: 'flex', justifyContent: 'space-between', fontSize: '.82rem', fontWeight: 600 } },
+          h('span', {}, ic + ' ' + r.action.replace(/_/g, ' ')),
+          h('span', { class: 'muted', style: { fontWeight: 400 } }, new Date(r.at).toLocaleString())
+        ),
+        h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '.15rem' } }, 'by ' + (r.user_name || '—')),
+        metaTxt ? h('div', { style: { fontSize: '.78rem', marginTop: '.25rem', color: '#334155' } }, metaTxt) : null
+      ));
+    });
+  } catch (e) {
+    body.innerHTML = '';
+    body.appendChild(h('div', { class: 'muted', style: { padding: '1rem', color: '#dc2626' } }, '⚠ ' + e.message));
+  }
+}
+try { window.openLeadActivityTimeline = openLeadActivityTimeline; } catch (_) {}
+
+/* Manager / admin Activity Report — caller-wise + day-wise grid. */
+VIEWS.activityreport = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('h3', {}, '📝 Activity Report'));
+  view.appendChild(h('p', { class: 'muted' },
+    'Track every action your team takes on leads: status changes, remarks, follow-up edits, reassignments. Caller-wise totals + day-wise heatmap.'));
+
+  // Filters bar
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const defFrom = new Date(today); defFrom.setDate(defFrom.getDate() - 29);
+  const fromInp = h('input', { type: 'date', value: defFrom.toISOString().slice(0, 10), class: 'input', style: { width: '160px' } });
+  const toInp   = h('input', { type: 'date', value: today.toISOString().slice(0, 10),    class: 'input', style: { width: '160px' } });
+  const goBtn   = h('button', { class: 'btn primary' }, '🔄 Refresh');
+
+  const filters = h('div', { style: { display: 'flex', gap: '.6rem', alignItems: 'center', flexWrap: 'wrap', margin: '.6rem 0 1rem' } },
+    h('label', { class: 'muted', style: { fontSize: '.8rem' } }, 'From'), fromInp,
+    h('label', { class: 'muted', style: { fontSize: '.8rem' } }, 'To'),   toInp,
+    goBtn
+  );
+  view.appendChild(filters);
+
+  const summary = h('div', { class: 'cards' });
+  view.appendChild(summary);
+  const byUserBox = h('div', { style: { margin: '1rem 0' } });
+  view.appendChild(byUserBox);
+  const heatmapBox = h('div', { style: { margin: '1rem 0', overflowX: 'auto' } });
+  view.appendChild(heatmapBox);
+
+  async function load() {
+    summary.innerHTML = '⏳ Loading…';
+    byUserBox.innerHTML = '';
+    heatmapBox.innerHTML = '';
+    try {
+      const data = await api('api_reports_activityByUser', { from: fromInp.value, to: toInp.value });
+      // ---- Summary KPIs ----
+      summary.innerHTML = '';
+      const mk = (label, n, sub) => h('div', { class: 'card' },
+        h('div', { class: 'muted', style: { fontSize: '.75rem' } }, label),
+        h('div', { style: { fontSize: '1.6rem', fontWeight: 700, marginTop: '.2rem' } }, String(n)),
+        sub ? h('div', { class: 'muted', style: { fontSize: '.72rem', marginTop: '.1rem' } }, sub) : null
+      );
+      const s = data.summary || {};
+      summary.appendChild(mk('📝 Total activities', s.total || 0, data.from + ' → ' + data.to));
+      summary.appendChild(mk('⚡ Today',         s.today || 0));
+      summary.appendChild(mk('📅 This week',     s.this_week || 0));
+      summary.appendChild(mk('🗓 This month',     s.this_month || 0));
+
+      // ---- By-user table ----
+      const users = data.by_user || [];
+      if (users.length) {
+        // Build the action-types list dynamically from what we got
+        const actionsSeen = new Set();
+        users.forEach(u => Object.keys(u.by_action || {}).forEach(a => actionsSeen.add(a)));
+        const actionList = Array.from(actionsSeen).sort();
+        const _actEmoji = {
+          remark: '💬', status_change: '🔄', followup_set: '🗓', note_updated: '📝',
+          tags_updated: '🏷', assigned: '👤', reassigned: '🔁',
+          qualified: '✅', unqualified: '↩️', whatsapp_in: '📥', whatsapp_out: '📤'
+        };
+
+        const tbl = h('table', { class: 'table' });
+        const trH = h('tr', {},
+          h('th', {}, 'Caller'),
+          h('th', { style: { textAlign: 'right' } }, 'Today'),
+          h('th', { style: { textAlign: 'right' } }, 'This week'),
+          h('th', { style: { textAlign: 'right' } }, 'This month'),
+          h('th', { style: { textAlign: 'right' } }, 'Total'),
+          ...actionList.map(a => h('th', { style: { textAlign: 'right' }, title: a }, (_actEmoji[a] || '') + ' ' + a.replace(/_/g, ' ')))
+        );
+        tbl.appendChild(h('thead', {}, trH));
+        const tbody = h('tbody', {});
+        users.forEach(u => {
+          const tr = h('tr', {},
+            h('td', {}, h('b', {}, u.user_name || '—'), u.user_role ? h('span', { class: 'muted', style: { marginLeft: '.4rem', fontSize: '.72rem' } }, u.user_role) : null),
+            h('td', { style: { textAlign: 'right', fontWeight: 600, color: u.today > 0 ? '#15803d' : '#9ca3af' } }, String(u.today || 0)),
+            h('td', { style: { textAlign: 'right' } }, String(u.this_week || 0)),
+            h('td', { style: { textAlign: 'right' } }, String(u.this_month || 0)),
+            h('td', { style: { textAlign: 'right', fontWeight: 700 } }, String(u.total || 0)),
+            ...actionList.map(a => h('td', { style: { textAlign: 'right', color: (u.by_action || {})[a] ? '#1f2937' : '#cbd5e1' } }, String((u.by_action || {})[a] || 0)))
+          );
+          tbody.appendChild(tr);
+        });
+        tbl.appendChild(tbody);
+        byUserBox.appendChild(h('h4', {}, '👥 Caller-wise activity'));
+        byUserBox.appendChild(tbl);
+      } else {
+        byUserBox.appendChild(h('div', { class: 'muted' }, 'No activity in this range.'));
+      }
+
+      // ---- Day-wise heatmap (grid: user × day) ----
+      const grid = data.grid || [];
+      const days = data.days || [];
+      if (grid.length && days.length) {
+        heatmapBox.appendChild(h('h4', {}, '🗓 Day-wise heatmap'));
+        heatmapBox.appendChild(h('p', { class: 'muted', style: { fontSize: '.78rem' } }, 'Activity count per caller per day. Darker = more activities. Click a cell for the day total.'));
+        // Compute max for colour scale
+        let maxN = 0;
+        grid.forEach(g => Object.values(g.days || {}).forEach(n => { if (n > maxN) maxN = n; }));
+        const _bg = n => {
+          if (!n) return '#f8fafc';
+          const t = Math.min(1, n / Math.max(1, maxN));
+          // green ramp
+          const r = Math.round(220 - 130 * t);
+          const g = Math.round(252 - 30 * t);
+          const b = Math.round(231 - 130 * t);
+          return 'rgb(' + r + ',' + g + ',' + b + ')';
+        };
+        const tbl = h('table', { class: 'table', style: { fontSize: '.72rem' } });
+        const head = h('tr', {}, h('th', { style: { position: 'sticky', left: '0', background: '#fff' } }, 'Caller'),
+          ...days.map(d => h('th', { style: { textAlign: 'center', padding: '.15rem .35rem' }, title: d }, d.slice(5))));
+        tbl.appendChild(h('thead', {}, head));
+        const tbody = h('tbody', {});
+        grid.forEach(g => {
+          const tr = h('tr', {}, h('td', { style: { position: 'sticky', left: '0', background: '#fff', fontWeight: 600 } }, g.user_name || '—'));
+          days.forEach(d => {
+            const n = (g.days || {})[d] || 0;
+            tr.appendChild(h('td', {
+              style: { textAlign: 'center', background: _bg(n), color: n > maxN * 0.6 ? '#fff' : '#1f2937', padding: '.2rem' },
+              title: g.user_name + ' · ' + d + ' · ' + n + ' activities'
+            }, n ? String(n) : ''));
+          });
+          tbody.appendChild(tr);
+        });
+        tbl.appendChild(tbody);
+        heatmapBox.appendChild(tbl);
+      }
+    } catch (e) {
+      summary.innerHTML = '';
+      summary.appendChild(h('div', { style: { color: '#dc2626' } }, '⚠ ' + e.message));
+    }
+  }
+
+  goBtn.onclick = load;
+  load();
+};
