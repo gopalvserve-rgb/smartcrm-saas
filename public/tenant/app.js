@@ -6045,6 +6045,7 @@ function renderDialerSettings() {
           h('div', { class: 'actions' },
             h('button', { class: 'btn primary', onclick: () => syncRecordings() }, '🔄 Sync now'),
             h('button', { class: 'btn', onclick: () => syncRecordings({ full: true }) }, '⚡ Re-sync all'),
+            /* REC_RETRY_v1 */ h('button', { class: 'btn primary', title: 'Clears uploaded markers + re-scans every file. Use after a server-side fix.', onclick: async () => { if (!confirm('Reset upload markers and re-scan EVERY file in the folder?')) return; localStorage.removeItem('rec_uploaded'); localStorage.removeItem('rec_last_sync'); toast('Markers cleared — running full sync now…', 'ok'); await syncRecordings({ full: true }); } }, '🩹 Fresh sync (after fix)'),
             h('button', { class: 'btn', onclick: () => openRecordingSyncDebug() }, '🐞 Debug sync'),
             h('button', { class: 'btn', onclick: () => openRecordingSyncDiagnostics() }, '🩺 Sync diagnostics'),
             h('button', { class: 'btn ghost', onclick: () => { setupRecordingFolder(); } }, 'Change folder'),
@@ -21148,7 +21149,9 @@ async function syncRecordings(opts) {
   }
 
   localStorage.setItem('rec_uploaded', JSON.stringify(uploaded));
-  localStorage.setItem('rec_last_sync', String(Date.now()));
+  /* REC_RETRY_v1 — only advance watermark when nothing failed, so failed files retry on next tick */
+  if (failed === 0) { localStorage.setItem('rec_last_sync', String(Date.now())); }
+  else { console.warn('[leadcrm] not advancing rec_last_sync — ' + failed + ' files failed, will retry'); }
   const parts = [];
   parts.push(`📂 ${files.length} found`);
   parts.push(`✅ ${success} synced`);
