@@ -16537,45 +16537,79 @@ function openSheetSyncEditModal(s, onSaved) {
   const sheetUrlValue = s.sheet_id ? `https://docs.google.com/spreadsheets/d/${s.sheet_id}/edit#gid=${s.sheet_gid || '0'}` : '';
   const users = (CRM.cache.users || []).filter(u => Number(u.is_active) === 1);
   const pushUrl = s.webhook_token ? location.origin + '/hook/sheet/' + s.webhook_token : '';
-  const pushScript = pushUrl ? `// Paste this into your sheet: Extensions → Apps Script → replace the
-// default code with this → Save → Triggers (clock icon) → Add Trigger:
-//   Function = pushNewRowsToCRM, Event = Time-driven, every 5 min.
-// Add a column called "CRM_Sent" — the script writes ✓ there once a
-// row has been sent so it never sends the same row twice.
+  const pushScript = pushUrl ? `// SHEET → CRM push script (sheet stays private).
 //
-// SHEET STAYS FULLY PRIVATE — the script runs as you (the sheet owner)
-// and POSTs each new row to the unique URL below. No "Anyone with link"
-// sharing required.
+// 🚀 ONE-TIME SETUP (3 clicks):
+//   1. Click ▶ Run, pick 'installCrmPushTrigger', authorise when prompted.
+//   2. That's it — a 5-minute trigger is installed automatically and a
+//      'CRM_Sent' column is added that the script writes ✓/✗ into.
+//   3. To send your existing rows immediately, click ▶ Run with the
+//      'pushNewRowsToCRM' function selected.
+//
+// 📌 Manual setup (alternative): Save → Triggers (clock icon) →
+//      Add Trigger → Function = pushNewRowsToCRM, Event = Time-driven,
+//      every 5 min. Run pushNewRowsToCRM once manually to authorise.
+//
+// ⚠ If 'CRM_Sent' shows ✗ <code>: read the code (401/403 = wrong webhook URL,
+//    network error = try again, '✗ Authorization required' = run manually once).
+
 const CRM_WEBHOOK = '${pushUrl}';
 
-function pushNewRowsToCRM() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-  const data = sheet.getDataRange().getValues();
-  if (data.length < 2) return;
-  let headers = data[0].map(h => String(h).trim().toLowerCase());
-  let sentCol = headers.indexOf('crm_sent');
-  if (sentCol < 0) {
-    sheet.getRange(1, headers.length + 1).setValue('CRM_Sent');
-    sentCol = headers.length;
-    headers.push('crm_sent');
+/** One-time helper: installs the 5-min trigger + adds CRM_Sent column. */
+function installCrmPushTrigger() {
+  const triggers = ScriptApp.getProjectTriggers();
+  const exists = triggers.some(t => t.getHandlerFunction() === 'pushNewRowsToCRM');
+  if (!exists) {
+    ScriptApp.newTrigger('pushNewRowsToCRM').timeBased().everyMinutes(5).create();
   }
-  for (let r = 1; r < data.length; r++) {
-    if (data[r][sentCol]) continue;
-    const lead = {};
-    headers.forEach((h, c) => { if (h && h !== 'crm_sent') lead[h] = data[r][c]; });
-    if (!lead.name && !lead.phone) continue;
-    try {
-      const res = UrlFetchApp.fetch(CRM_WEBHOOK, {
-        method: 'post', contentType: 'application/json',
-        payload: JSON.stringify(lead), muteHttpExceptions: true
-      });
-      const ok = res.getResponseCode() === 200;
-      sheet.getRange(r + 1, sentCol + 1)
-        .setValue(ok ? '✓ ' + new Date().toLocaleString() : '✗ ' + res.getResponseCode());
-    } catch (e) {
-      sheet.getRange(r + 1, sentCol + 1).setValue('✗ ' + e.message);
+  // Touch every sheet so CRM_Sent column exists everywhere.
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  ss.getSheets().forEach(sh => {
+    const data = sh.getDataRange().getValues();
+    if (!data.length) return;
+    const headers = data[0].map(h => String(h).trim().toLowerCase());
+    if (headers.indexOf('crm_sent') < 0) {
+      sh.getRange(1, headers.length + 1).setValue('CRM_Sent');
     }
-  }
+  });
+  pushNewRowsToCRM();  // send any existing rows right away
+  Logger.log('✅ CRM push trigger installed + initial sync done');
+}
+
+/** Send every unsent row across EVERY sheet in this spreadsheet. */
+function pushNewRowsToCRM() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  ss.getSheets().forEach(sheet => {
+    const data = sheet.getDataRange().getValues();
+    if (data.length < 2) return;
+    let headers = data[0].map(h => String(h).trim().toLowerCase());
+    let sentCol = headers.indexOf('crm_sent');
+    if (sentCol < 0) {
+      sheet.getRange(1, headers.length + 1).setValue('CRM_Sent');
+      sentCol = headers.length;
+      headers.push('crm_sent');
+    }
+    for (let r = 1; r < data.length; r++) {
+      if (data[r][sentCol]) continue;
+      const lead = {};
+      headers.forEach((h, c) => { if (h && h !== 'crm_sent') lead[h] = data[r][c]; });
+      if (!lead.name && !lead.phone && !lead.mobile && !lead.whatsapp) continue;
+      try {
+        const res = UrlFetchApp.fetch(CRM_WEBHOOK, {
+          method: 'post', contentType: 'application/json',
+          payload: JSON.stringify(lead), muteHttpExceptions: true
+        });
+        const code = res.getResponseCode();
+        const ok = code >= 200 && code < 300;
+        const mark = ok ? '✓ ' + Utilities.formatDate(new Date(), 'GMT+5:30', 'dd-MM HH:mm') : '✗ HTTP ' + code;
+        sheet.getRange(r + 1, sentCol + 1).setValue(mark);
+        Logger.log(sheet.getName() + ' row ' + (r+1) + ': ' + mark + ' · ' + JSON.stringify(lead).slice(0, 200));
+      } catch (e) {
+        sheet.getRange(r + 1, sentCol + 1).setValue('✗ ' + String(e).slice(0, 80));
+        Logger.log('ERROR on ' + sheet.getName() + ' row ' + (r+1) + ': ' + e);
+      }
+    }
+  });
 }` : '';
   const modal = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) modal.remove(); } });
   modal.appendChild(h('div', { class: 'modal modal-lg' },
@@ -34047,6 +34081,65 @@ async function openSheetSyncDiagnoseModal(id) {
     ),
     d.last_error ? h('div', { style: { color: '#dc2626', fontSize: '.82rem', marginTop: '.3rem' } }, '⚠ Last error: ' + d.last_error) : null
   ));
+
+  /* SHEET_SYNC_v2 — 📤 Test webhook button: POSTs a synthetic test row
+   * end-to-end to prove the webhook URL works (no Apps Script involved). */
+  const testBtn = h('button', { class: 'btn primary' }, '📤 Send test row through webhook');
+  const testOut = h('div', { style: { marginTop: '.4rem' } });
+  testBtn.onclick = async () => {
+    testBtn.disabled = true; testBtn.textContent = '⏳ Sending…';
+    testOut.innerHTML = '';
+    try {
+      const r = await api('api_sheetSync_testReceive', id);
+      const lead = r.response && r.response.results && r.response.results[0];
+      if (r.response && r.response.created > 0) {
+        testOut.appendChild(h('div', { style: { color: '#15803d', fontSize: '.82rem' } },
+          '✓ Webhook works — test lead created (id #' + (lead && lead.lead_id) + '). This means your CRM is ready to receive rows. If your sheet rows aren\'t arriving, the issue is in Apps Script (trigger not installed, or authorisation pending).'));
+      } else {
+        testOut.appendChild(h('div', { style: { color: '#dc2626', fontSize: '.82rem' } },
+          '✗ Test failed: ' + (lead && lead.error) + ' · Response: ' + JSON.stringify(r.response).slice(0, 200)));
+      }
+    } catch (e) { testOut.appendChild(h('div', { style: { color: '#dc2626' } }, '✗ ' + e.message)); }
+    testBtn.disabled = false; testBtn.textContent = '📤 Send test row through webhook';
+    // Refresh diagnose to show the new imported_rows count
+    try {
+      const d2 = await api('api_sheetSync_diagnose', id);
+      const hc = body.querySelector('.test-receive-section');
+      if (d2) { /* leave inline — full refresh handled separately */ }
+    } catch (_) {}
+  };
+  body.appendChild(h('div', { class: 'card test-receive-section', style: { padding: '.7rem 1rem', marginBottom: '.7rem', background: '#f0fdf4', border: '1px solid #86efac' } },
+    h('div', { style: { fontWeight: 600, marginBottom: '.3rem' } }, '📤 Test the webhook directly'),
+    h('div', { class: 'muted', style: { fontSize: '.82rem', marginBottom: '.4rem' } },
+      'Bypasses Apps Script entirely — sends one synthetic row straight into the CRM webhook URL. If this works but your real rows don\'t arrive, the issue is on the Apps Script side (trigger not installed / not authorised). If this fails, the integration row is broken.'),
+    testBtn, testOut
+  ));
+
+  /* SHEET_SYNC_v2 — Recent activity panel */
+  const actBox = h('div', { class: 'card', style: { padding: '.7rem 1rem', marginBottom: '.7rem' } },
+    h('div', { style: { fontWeight: 600, marginBottom: '.3rem' } }, '📜 Recent webhook activity'),
+    h('div', { class: 'muted', style: { fontSize: '.78rem' } }, 'Loading…')
+  );
+  body.appendChild(actBox);
+  api('api_sheetSync_recentActivity', id).then(rows => {
+    actBox.innerHTML = '';
+    actBox.appendChild(h('div', { style: { fontWeight: 600, marginBottom: '.3rem' } }, '📜 Recent webhook activity (last 20)'));
+    if (!rows || !rows.length) {
+      actBox.appendChild(h('div', { class: 'muted', style: { fontSize: '.82rem' } },
+        '— No leads received yet via the webhook. If you\'ve installed the Apps Script trigger, wait up to 5 minutes for the first run. Or click 📤 Send test row above to verify the webhook URL is reachable.'));
+      return;
+    }
+    actBox.appendChild(h('table', { class: 'mini-table', style: { fontSize: '.82rem' } },
+      h('thead', {}, h('tr', {}, h('th', {}, 'When'), h('th', {}, 'Lead'), h('th', {}, 'Phone'))),
+      h('tbody', {}, ...rows.map(r => h('tr', {},
+        h('td', { class: 'muted', style: { whiteSpace: 'nowrap' } }, new Date(r.imported_at).toLocaleString()),
+        h('td', {}, r.lead_name || ('#' + r.lead_id)),
+        h('td', { class: 'muted' }, r.lead_phone || '')
+      )))
+    ));
+  }).catch(e => {
+    actBox.innerHTML = '<div style="color:#dc2626;font-size:.82rem">' + e.message + '</div>';
+  });
 
   /* Advice */
   if (d.advice && d.advice.length) {

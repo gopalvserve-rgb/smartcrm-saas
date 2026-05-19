@@ -509,6 +509,65 @@ async function api_sheetSync_diagnose(token, id) {
   return out;
 }
 
+/* SHEET_SYNC_v2 — Send a synthetic test row to the integration\'s own
+ * webhook URL, end-to-end. Proves the URL is reachable + valid + the
+ * integration row is set up. Bypasses Apps Script entirely. */
+async function api_sheetSync_testReceive(token, id) {
+  const me = await authUser(token);
+  if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin / manager only');
+  await _ensureSchema();
+  const integration = await db.findOneBy('sheet_integrations', 'id', id);
+  if (!integration) throw new Error('Integration not found');
+  if (!integration.webhook_token) throw new Error('No webhook_token on integration — re-save it');
+
+  const baseUrl = (process.env.PUBLIC_BASE_URL || process.env.BASE_URL || '').replace(/\/+$/, '');
+  const testPayload = {
+    name: 'TEST · Sheet sync probe',
+    phone: '9999999990',
+    email: 'sheetsync-probe@example.com',
+    notes: 'Synthetic test row inserted by 📤 Test webhook button at ' + new Date().toISOString(),
+    source: integration.default_source || 'Google Sheet (test)'
+  };
+
+  // Prefer calling the webhook handler directly (in-process) so we don\'t
+  // need a public URL configured. Falls back to HTTP fetch if base URL set.
+  try {
+    const fakeReq = { params: { token: integration.webhook_token }, body: testPayload };
+    let respBody = null, respStatus = 200;
+    const fakeRes = {
+      status(c) { respStatus = c; return this; },
+      json(o)   { respBody = o; return this; }
+    };
+    await sheetPushWebhook(fakeReq, fakeRes);
+    return { ok: true, mode: 'inproc', status: respStatus, response: respBody, payload: testPayload };
+  } catch (e) {
+    return { ok: false, error: e.message, payload: testPayload };
+  }
+}
+
+/* Recent activity — last 20 rows imported for this integration so the
+ * user can see whether the webhook is actually firing. */
+async function api_sheetSync_recentActivity(token, id) {
+  const me = await authUser(token);
+  if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin / manager only');
+  const all = await db.getAll('sheet_imported_rows');
+  const rows = all
+    .filter(r => Number(r.integration_id) === Number(id))
+    .sort((a, b) => String(b.imported_at).localeCompare(String(a.imported_at)))
+    .slice(0, 20);
+  // Hydrate lead names
+  const leadIds = rows.map(r => Number(r.lead_id)).filter(Boolean);
+  const leads = (await db.getAll('leads')).filter(l => leadIds.includes(Number(l.id)));
+  const byId = {}; leads.forEach(l => { byId[Number(l.id)] = l; });
+  return rows.map(r => ({
+    imported_at: r.imported_at,
+    lead_id: r.lead_id,
+    lead_name: (byId[Number(r.lead_id)] || {}).name || '',
+    lead_phone: (byId[Number(r.lead_id)] || {}).phone || '',
+    row_hash: r.row_hash
+  }));
+}
+
 async function api_sheetSync_runNow(token, id) {
   const me = await authUser(token);
   if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin / manager only');
@@ -1506,7 +1565,9 @@ module.exports = {
   runDueSheetSyncs,
   api_sheetSync_list,
   api_sheetSync_save,
-  api_sheetSync_diagnose,  /* SHEET_SYNC_v2 */
+  api_sheetSync_diagnose,        /* SHEET_SYNC_v2 */
+  api_sheetSync_testReceive,     /* SHEET_SYNC_v2 */
+  api_sheetSync_recentActivity,  /* SHEET_SYNC_v2 */
   api_sheetSync_delete,
   api_sheetSync_runNow,
   // Webhook endpoints
