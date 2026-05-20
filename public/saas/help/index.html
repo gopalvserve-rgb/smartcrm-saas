@@ -466,6 +466,12 @@ table.kv td code { white-space: nowrap; }
   <a href="#calls">Call recordings sync</a>
   <a href="#theme">Theme &amp; branding</a>
   <a href="#permissions">Permissions</a>
+  <a href="#bot-flows">🌳 Bot Flows</a>
+  <a href="#heat-detection">🔥 Heat Detection</a>
+  <a href="#call-audit">📞 AI Call Audit</a>
+  <a href="#quotations">📄 Quotations</a>
+  <a href="#industry-packs">🧩 Industry Packs</a>
+  <a href="#tickets">🎫 Support Tickets</a>
   <a href="#troubleshoot">Troubleshooting</a>
 </aside>
 
@@ -1591,6 +1597,292 @@ What's your preferred date?</code></pre>
 <li><strong>Module visibility (per-role).</strong> Settings → <em>Menu visibility</em>. Hide entire features (eg. Reports, Quotations) from a role to declutter their UI.</li>
 </ol>
 </article>
+
+<article class="section" id="bot-flows" data-keywords="bot flow flows whatsapp builder visual canvas drag drop button automation conversation tree">
+<h2><span class="num">33</span>🌳 WhatsApp Bot Flows</h2>
+<p class="lede">Build conversation trees on a visual canvas — no code, no Zapier, no extra cost. Reply automatically to inbound WhatsApp messages with branching logic, buttons, and template sends.</p>
+
+<div class="callout callout-info">
+<span class="callout-icon">ℹ️</span>
+<div><strong>When to use Bot Flows vs the AI Bot:</strong> Flows are for <em>predictable</em> conversations (menu trees, FAQs, lead-qualification questionnaires). The AI Bot is for <em>open-ended</em> queries where the customer types whatever they want. You can run both together — flows handle the menu, the AI handles the "I have a different question" branch.</div>
+</div>
+
+<h3>Step-by-step</h3>
+<ol class="steps">
+
+<li><strong>Open WhatsApp → Bot Flows</strong>
+<p>From the left sidebar click <em>WhatsApp</em>, then the <em>Bot Flows</em> tab at the top.</p>
+<div class="shot"><svg viewBox="0 0 600 280" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="WhatsApp page → Bot Flows tab"><rect width="600" height="280" fill="#f8fafc"/><rect x="20" y="20" width="560" height="240" fill="#fff" stroke="#e5e7eb" rx="8"/><text x="40" y="50" font-family="Inter,Arial,sans-serif" font-size="14" fill="#0f172a" font-weight="700">💬 WhatsApp</text><rect x="40" y="70" width="80" height="28" fill="#fff" stroke="#cbd5e1" rx="4"/><text x="80" y="88" font-family="Inter,Arial,sans-serif" font-size="11" fill="#64748b" text-anchor="middle">Chat</text><rect x="125" y="70" width="90" height="28" fill="#fff" stroke="#cbd5e1" rx="4"/><text x="170" y="88" font-family="Inter,Arial,sans-serif" font-size="11" fill="#64748b" text-anchor="middle">Templates</text><rect x="220" y="70" width="90" height="28" fill="#eff6ff" stroke="#3b82f6" stroke-width="2" rx="4"/><text x="265" y="88" font-family="Inter,Arial,sans-serif" font-size="11" fill="#1d4ed8" text-anchor="middle" font-weight="700">🌳 Bot Flows</text><rect x="315" y="70" width="80" height="28" fill="#fff" stroke="#cbd5e1" rx="4"/><text x="355" y="88" font-family="Inter,Arial,sans-serif" font-size="11" fill="#64748b" text-anchor="middle">Settings</text><rect x="40" y="120" width="220" height="120" fill="#f1f5f9" stroke="#e5e7eb" rx="6"/><text x="55" y="145" font-family="Inter,Arial,sans-serif" font-size="12" fill="#0f172a" font-weight="700">🟢 Welcome Flow</text><text x="55" y="165" font-family="Inter,Arial,sans-serif" font-size="10" fill="#64748b">Triggered: "hi", "hello"</text><text x="55" y="183" font-family="Inter,Arial,sans-serif" font-size="10" fill="#64748b">Active · 6 nodes</text><rect x="280" y="120" width="220" height="120" fill="#fff" stroke="#cbd5e1" stroke-dasharray="4,3" rx="6"/><text x="390" y="190" font-family="Inter,Arial,sans-serif" font-size="13" fill="#3b82f6" text-anchor="middle" font-weight="600">+ New flow</text><g transform="translate(220,84)"><rect x="0" y="-12" width="98" height="24" fill="#3b82f6" rx="3"/><text x="49" y="4" font-family="Inter,Arial,sans-serif" font-size="11" fill="#fff" text-anchor="middle" font-weight="600">Click Bot Flows</text></g></svg><div class="shot-cap">Step 1 — WhatsApp → Bot Flows tab</div></div>
+</li>
+
+<li><strong>Click "+ New flow"</strong>
+<p>Give it a name, set the trigger keyword(s), and pick which WhatsApp number it runs on (if you have more than one connected).</p>
+<ul class="mini-steps">
+<li><strong>Name</strong> → for your reference only, eg. "Lead qualification" or "Pricing menu"</li>
+<li><strong>Trigger</strong> → match exact words ("price", "hi", "menu") or set to <em>(any inbound)</em> to greet every new contact</li>
+<li><strong>Phone scope</strong> → all numbers, or restrict to one specific number</li>
+<li><strong>Enabled</strong> → keep OFF until you've finished building, then flip ON</li>
+</ul>
+</li>
+
+<li><strong>Drag components onto the canvas</strong>
+<p>The left palette has 13 components. Drag (or click) to add. Each component has its own properties panel on the right.</p>
+<div class="shot"><svg viewBox="0 0 600 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Visual canvas — palette + nodes + properties"><rect width="600" height="360" fill="#f8fafc"/><rect x="10" y="20" width="120" height="330" fill="#fff" stroke="#e5e7eb" rx="6"/><text x="20" y="40" font-family="Inter,Arial,sans-serif" font-size="11" fill="#475569" font-weight="700">PALETTE</text><rect x="18" y="50" width="104" height="24" fill="#f1f5f9" rx="4"/><text x="70" y="66" font-family="Inter,Arial,sans-serif" font-size="10" fill="#0f172a" text-anchor="middle">💬 Text reply</text><rect x="18" y="80" width="104" height="24" fill="#f1f5f9" rx="4"/><text x="70" y="96" font-family="Inter,Arial,sans-serif" font-size="10" fill="#0f172a" text-anchor="middle">🔘 Buttons</text><rect x="18" y="110" width="104" height="24" fill="#f1f5f9" rx="4"/><text x="70" y="126" font-family="Inter,Arial,sans-serif" font-size="10" fill="#0f172a" text-anchor="middle">📋 List menu</text><rect x="18" y="140" width="104" height="24" fill="#f1f5f9" rx="4"/><text x="70" y="156" font-family="Inter,Arial,sans-serif" font-size="10" fill="#0f172a" text-anchor="middle">🖼️ Media</text><rect x="18" y="170" width="104" height="24" fill="#f1f5f9" rx="4"/><text x="70" y="186" font-family="Inter,Arial,sans-serif" font-size="10" fill="#0f172a" text-anchor="middle">📨 Template</text><rect x="18" y="200" width="104" height="24" fill="#f1f5f9" rx="4"/><text x="70" y="216" font-family="Inter,Arial,sans-serif" font-size="10" fill="#0f172a" text-anchor="middle">❓ Question</text><rect x="18" y="230" width="104" height="24" fill="#f1f5f9" rx="4"/><text x="70" y="246" font-family="Inter,Arial,sans-serif" font-size="10" fill="#0f172a" text-anchor="middle">🔀 Branch</text><rect x="18" y="260" width="104" height="24" fill="#f1f5f9" rx="4"/><text x="70" y="276" font-family="Inter,Arial,sans-serif" font-size="10" fill="#0f172a" text-anchor="middle">🏷️ Tag lead</text><rect x="18" y="290" width="104" height="24" fill="#f1f5f9" rx="4"/><text x="70" y="306" font-family="Inter,Arial,sans-serif" font-size="10" fill="#0f172a" text-anchor="middle">⏰ Delay</text><rect x="18" y="320" width="104" height="24" fill="#f1f5f9" rx="4"/><text x="70" y="336" font-family="Inter,Arial,sans-serif" font-size="10" fill="#0f172a" text-anchor="middle">👤 Handoff</text><rect x="145" y="20" width="320" height="330" fill="#fff" stroke="#e5e7eb" rx="6"/><text x="155" y="40" font-family="Inter,Arial,sans-serif" font-size="11" fill="#475569" font-weight="700">CANVAS</text><rect x="170" y="60" width="120" height="40" fill="#dbeafe" stroke="#3b82f6" rx="6"/><text x="230" y="84" font-family="Inter,Arial,sans-serif" font-size="11" fill="#0f172a" text-anchor="middle" font-weight="600">💬 "Welcome!"</text><line x1="230" y1="100" x2="230" y2="130" stroke="#94a3b8" stroke-width="2"/><rect x="170" y="130" width="120" height="58" fill="#ecfdf5" stroke="#10b981" rx="6"/><text x="230" y="150" font-family="Inter,Arial,sans-serif" font-size="11" fill="#0f172a" text-anchor="middle" font-weight="600">🔘 Buttons</text><text x="230" y="167" font-family="Inter,Arial,sans-serif" font-size="9" fill="#475569" text-anchor="middle">Pricing · Demo · Support</text><line x1="170" y1="178" x2="120" y2="220" stroke="#94a3b8" stroke-width="2"/><line x1="230" y1="188" x2="230" y2="220" stroke="#94a3b8" stroke-width="2"/><line x1="290" y1="178" x2="340" y2="220" stroke="#94a3b8" stroke-width="2"/><rect x="80" y="220" width="90" height="36" fill="#fff" stroke="#cbd5e1" rx="6"/><text x="125" y="242" font-family="Inter,Arial,sans-serif" font-size="10" fill="#0f172a" text-anchor="middle">📋 Pricing</text><rect x="185" y="220" width="90" height="36" fill="#fff" stroke="#cbd5e1" rx="6"/><text x="230" y="242" font-family="Inter,Arial,sans-serif" font-size="10" fill="#0f172a" text-anchor="middle">👤 Demo</text><rect x="290" y="220" width="90" height="36" fill="#fff" stroke="#cbd5e1" rx="6"/><text x="335" y="242" font-family="Inter,Arial,sans-serif" font-size="10" fill="#0f172a" text-anchor="middle">🏷️ Support</text><rect x="475" y="20" width="115" height="330" fill="#fff" stroke="#e5e7eb" rx="6"/><text x="485" y="40" font-family="Inter,Arial,sans-serif" font-size="11" fill="#475569" font-weight="700">PROPERTIES</text><text x="485" y="60" font-family="Inter,Arial,sans-serif" font-size="10" fill="#64748b">Selected: Buttons</text><text x="485" y="85" font-family="Inter,Arial,sans-serif" font-size="9" fill="#475569">Question text</text><rect x="485" y="90" width="100" height="20" fill="#f1f5f9" rx="3"/><text x="485" y="125" font-family="Inter,Arial,sans-serif" font-size="9" fill="#475569">Button 1</text><rect x="485" y="130" width="100" height="20" fill="#f1f5f9" rx="3"/><text x="485" y="165" font-family="Inter,Arial,sans-serif" font-size="9" fill="#475569">Button 2</text><rect x="485" y="170" width="100" height="20" fill="#f1f5f9" rx="3"/><text x="485" y="205" font-family="Inter,Arial,sans-serif" font-size="9" fill="#475569">Button 3</text><rect x="485" y="210" width="100" height="20" fill="#f1f5f9" rx="3"/></svg><div class="shot-cap">Step 3 — Drag components from the palette, connect with lines</div></div>
+<ul class="mini-steps">
+<li><strong>Text reply</strong> — sends a free-form message</li>
+<li><strong>Buttons</strong> — sends up to 3 reply buttons; each button branches</li>
+<li><strong>List menu</strong> — up to 10 menu options, grouped into sections</li>
+<li><strong>Media</strong> — image / video / PDF document</li>
+<li><strong>Template</strong> — send an approved Meta template (use this OUTSIDE the 24-hour window)</li>
+<li><strong>Question</strong> — ask, wait for typed answer, save into a lead field</li>
+<li><strong>Branch</strong> — if/else on lead status, source, custom field, or last reply</li>
+<li><strong>Tag lead</strong> — add a tag (eg. "interested-pricing")</li>
+<li><strong>Delay</strong> — wait N seconds before next step</li>
+<li><strong>Handoff</strong> — stop the bot, ping a human, assign the lead</li>
+</ul>
+</li>
+
+<li><strong>Connect the nodes</strong>
+<p>Click the bottom of one node and drag to the top of the next. For Buttons / List, each option gets its own outgoing line.</p>
+<div class="tip">If drag-to-connect feels finicky, use the click-to-add shortcut: select a node, then click a palette item — the new node lands below and auto-connects.</div>
+</li>
+
+<li><strong>Save + flip Enabled ON</strong>
+<p>Save the flow, then toggle the green <em>Active</em> switch at the top. From the next inbound matching your trigger, the flow runs.</p>
+<div class="callout callout-success"><span class="callout-icon">✅</span><div><strong>Tip:</strong> Test with your own phone first. The <em>Test in chat</em> button on the canvas simulates a conversation without spending Meta credits.</div></div>
+</li>
+
+</ol>
+
+<h3>Analytics</h3>
+<p>The <em>Analytics</em> sub-tab inside Bot Flows shows, per flow: messages sent, completion rate (% who reached the last node), drop-off node (where most people quit), and conversion (% tagged or handed off). Use this to find dead-ends and trim your flow.</p>
+
+</article>
+
+<article class="section" id="heat-detection" data-keywords="heat detection hot lead score score alert notification urgent buying signal interested ready">
+<h2><span class="num">34</span>🔥 Hot-lead Heat Detection</h2>
+<p class="lede">Detect when a lead is signalling buying intent and ping the right salesperson within seconds — automatically.</p>
+
+<div class="callout callout-info">
+<span class="callout-icon">ℹ️</span>
+<div><strong>How it works:</strong> Every inbound WhatsApp message, call summary, and chat reply is scored against your tenant-configurable keyword list. When the score crosses a threshold, the lead is tagged <em>Hot</em>, a heat alert popup fires on the assigned salesperson's screen, and a push notification lands on their phone.</div>
+</div>
+
+<h3>Set up in 3 steps</h3>
+<ol class="steps">
+
+<li><strong>Open Settings → Heat Detection</strong>
+<p>From the sidebar, Settings → <em>Heat Detection</em>. You'll see the default keyword list and the threshold slider.</p>
+<div class="shot"><svg viewBox="0 0 580 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Heat Detection settings — keywords + threshold"><rect width="580" height="320" fill="#f8fafc"/><rect x="20" y="20" width="540" height="280" fill="#fff" stroke="#e5e7eb" rx="8"/><text x="40" y="50" font-family="Inter,Arial,sans-serif" font-size="14" fill="#0f172a" font-weight="700">🔥 Heat Detection</text><text x="40" y="68" font-family="Inter,Arial,sans-serif" font-size="11" fill="#64748b">Score every inbound — alert when crosses threshold</text><rect x="40" y="90" width="500" height="56" fill="#fef3c7" stroke="#f59e0b" rx="6"/><text x="55" y="113" font-family="Inter,Arial,sans-serif" font-size="11" fill="#92400e" font-weight="600">Threshold: 7</text><rect x="55" y="120" width="470" height="6" fill="#fde68a" rx="3"/><rect x="55" y="120" width="200" height="6" fill="#f59e0b" rx="3"/><circle cx="255" cy="123" r="8" fill="#fff" stroke="#f59e0b" stroke-width="2"/><text x="55" y="142" font-family="Inter,Arial,sans-serif" font-size="9" fill="#92400e">Lead becomes 🔥 when total score ≥ 7</text><text x="40" y="180" font-family="Inter,Arial,sans-serif" font-size="11" fill="#475569" font-weight="700">Keywords (weight)</text><rect x="40" y="190" width="240" height="26" fill="#dcfce7" stroke="#10b981" rx="4"/><text x="55" y="208" font-family="Inter,Arial,sans-serif" font-size="11" fill="#065f46" font-weight="600">"book a demo"  ·  +5</text><rect x="290" y="190" width="240" height="26" fill="#dcfce7" stroke="#10b981" rx="4"/><text x="305" y="208" font-family="Inter,Arial,sans-serif" font-size="11" fill="#065f46" font-weight="600">"how much"  ·  +3</text><rect x="40" y="222" width="240" height="26" fill="#dcfce7" stroke="#10b981" rx="4"/><text x="55" y="240" font-family="Inter,Arial,sans-serif" font-size="11" fill="#065f46" font-weight="600">"ready to buy"  ·  +5</text><rect x="290" y="222" width="240" height="26" fill="#dcfce7" stroke="#10b981" rx="4"/><text x="305" y="240" font-family="Inter,Arial,sans-serif" font-size="11" fill="#065f46" font-weight="600">"send proposal"  ·  +4</text><rect x="40" y="254" width="240" height="26" fill="#fee2e2" stroke="#ef4444" rx="4"/><text x="55" y="272" font-family="Inter,Arial,sans-serif" font-size="11" fill="#991b1b" font-weight="600">"not interested"  ·  −4</text><rect x="290" y="254" width="240" height="26" fill="#fff" stroke="#cbd5e1" stroke-dasharray="4,3" rx="4"/><text x="410" y="272" font-family="Inter,Arial,sans-serif" font-size="11" fill="#3b82f6" text-anchor="middle">+ Add keyword</text></svg><div class="shot-cap">Heat Detection settings — keywords + weights + threshold</div></div>
+</li>
+
+<li><strong>Tune the keywords</strong>
+<p>Defaults work for most B2B sales — add 3–5 keywords specific to your business and adjust weights.</p>
+<ul class="mini-steps">
+<li><strong>Positive keywords</strong> (positive weight) — words that signal buying intent: <em>"pricing", "demo", "schedule", "order", "purchase", "ready", "interested", "GST", "invoice"</em></li>
+<li><strong>Negative keywords</strong> (negative weight) — words that signal disinterest: <em>"not interested", "too expensive", "remove", "stop"</em></li>
+<li><strong>Threshold</strong> — 7 is a good starting point. Lower = more alerts (noisier). Higher = fewer alerts (quieter).</li>
+</ul>
+</li>
+
+<li><strong>Pick notification channels</strong>
+<p>Choose how the assigned salesperson gets alerted. Multi-select.</p>
+<ul class="mini-steps">
+<li><strong>In-app popup</strong> — modal pops up in the CRM with the lead name + the message that triggered the alert (recommended)</li>
+<li><strong>Mobile push notification</strong> — uses your existing FCM setup (section 28)</li>
+<li><strong>WhatsApp to manager</strong> — sends a templated alert to a fallback recipient (set in the same panel)</li>
+<li><strong>Email</strong> — uses your SMTP setup (section 27)</li>
+</ul>
+</li>
+
+</ol>
+
+<h3>Test it</h3>
+<p>There's a <em>🧪 Test</em> button on the settings page. It picks a recent lead and simulates an inbound matching your keyword list, then fires the full alert pipeline. If the popup + push notification arrive within 5 seconds, you're set.</p>
+
+<div class="callout callout-warn"><span class="callout-icon">⚠️</span><div><strong>Heat ≠ AI Bot.</strong> Heat detection runs <em>after</em> the AI Bot has replied — both fire on the same inbound. The AI Bot answers the customer; heat detection wakes up the salesperson.</div></div>
+
+</article>
+
+<article class="section" id="call-audit" data-keywords="call audit summary ai recording transcribe analyze insights promise callback gemini">
+<h2><span class="num">35</span>📞 AI Call Audit + Insights</h2>
+<p class="lede">Every call recording gets transcribed and analysed by AI — pulling out the lead's status, what was promised, sentiment, and the next action. Surfaces missed callbacks, objections, and hot leads automatically.</p>
+
+<div class="callout callout-info">
+<span class="callout-icon">ℹ️</span>
+<div><strong>What gets analysed:</strong> any recording uploaded via the mobile app or manually attached to a lead. Audio flows to Gemini 2.5 Flash Lite for transcription + structured insight extraction. Output lands on the lead's timeline + a Call Insights report.</div>
+</div>
+
+<h3>Three ways to trigger an audit</h3>
+<ol class="steps">
+
+<li><strong>Auto-audit on upload (recommended)</strong>
+<p>Settings → <em>AI Call Summary</em> → toggle "Auto-summarise new recordings". From then on, every recording the app uploads gets processed within a minute.</p>
+<ul class="mini-steps">
+<li><strong>Per-user toggle</strong> — admins can turn it OFF for users whose calls don't need AI (eg. delivery agents)</li>
+<li><strong>Minimum duration</strong> — set to 30 seconds so 5-second pocket dials don't burn tokens</li>
+<li><strong>Cost</strong> — ~₹0.50 per 5-minute call at Flash Lite pricing</li>
+</ul>
+</li>
+
+<li><strong>Manual "Audit this call" button</strong>
+<p>On any lead's Recordings panel, each row has an <em>🤖 Audit</em> button. Use for one-off cases.</p>
+<div class="shot"><svg viewBox="0 0 580 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Lead modal → Recordings panel with Audit button"><rect width="580" height="200" fill="#f8fafc"/><rect x="20" y="20" width="540" height="160" fill="#fff" stroke="#e5e7eb" rx="8"/><text x="40" y="50" font-family="Inter,Arial,sans-serif" font-size="13" fill="#0f172a" font-weight="700">📞 Call recordings — Rahul Sharma</text><rect x="40" y="70" width="500" height="40" fill="#f8fafc" stroke="#e5e7eb" rx="4"/><text x="55" y="86" font-family="Inter,Arial,sans-serif" font-size="11" fill="#0f172a" font-weight="600">▶ Outgoing · 18 May 2026, 14:22 · 4m 12s</text><text x="55" y="102" font-family="Inter,Arial,sans-serif" font-size="10" fill="#64748b">Pricing discussion · Followup committed at 21 May 11:00</text><rect x="430" y="78" width="100" height="24" fill="#3b82f6" rx="4"/><text x="480" y="94" font-family="Inter,Arial,sans-serif" font-size="11" fill="#fff" text-anchor="middle" font-weight="600">🤖 Audit</text><rect x="40" y="120" width="500" height="40" fill="#f8fafc" stroke="#e5e7eb" rx="4"/><text x="55" y="136" font-family="Inter,Arial,sans-serif" font-size="11" fill="#0f172a" font-weight="600">▶ Incoming · 17 May 2026, 10:08 · 2m 45s</text><text x="55" y="152" font-family="Inter,Arial,sans-serif" font-size="10" fill="#64748b">Audited · Sentiment: positive · 🔥 Hot lead</text></svg><div class="shot-cap">Lead modal → Recordings → 🤖 Audit button</div></div>
+</li>
+
+<li><strong>Bulk audit (Call Insights view)</strong>
+<p>Reports → <em>Call Insights</em> → date range → <em>Audit all unaudited calls</em>. Useful for backfilling a week of recordings in one go.</p>
+<div class="callout callout-warn"><span class="callout-icon">⚠️</span><div><strong>Cost preview before bulk:</strong> the dialog estimates token cost before you commit. A bulk run of 200 five-minute calls is ~₹100 at Flash Lite. Keep an eye on your monthly AI Studio spend cap.</div></div>
+</li>
+
+</ol>
+
+<h3>What insights the audit extracts</h3>
+<table class="kv">
+<tr><td><strong>Summary</strong></td><td>2-3 line plain-English recap of what was discussed</td></tr>
+<tr><td><strong>Lead status suggestion</strong></td><td>AI proposes a new status (Qualified, Demo Scheduled, etc.) — click to apply</td></tr>
+<tr><td><strong>Promised callback</strong></td><td>"I'll get back to you Wednesday 3pm" → stored as <code>committed_callback_at</code></td></tr>
+<tr><td><strong>Promise vs reality gap</strong></td><td>If actual followup was &gt;2 days after promised — flagged red on Call Insights view</td></tr>
+<tr><td><strong>Next activity</strong></td><td>Suggested next step ("send proposal", "book demo")</td></tr>
+<tr><td><strong>Sentiment</strong></td><td>Positive / Neutral / Negative</td></tr>
+<tr><td><strong>Heat trigger</strong></td><td>If any keyword from your Heat Detection list appeared, the lead is marked 🔥 Hot</td></tr>
+</table>
+
+<div class="tip">All insights land on the lead's <em>Timeline</em> + the recording row, and feed the Call Insights report on the Reports page.</div>
+
+</article>
+
+<article class="section" id="quotations" data-keywords="quotation quote proposal pricing pdf send email whatsapp products gst tax invoice template">
+<h2><span class="num">36</span>📄 Quotations</h2>
+<p class="lede">Build a branded PDF quote in 30 seconds — pick products, apply GST, add T&amp;C, send via email or WhatsApp without leaving the lead.</p>
+
+<h3>Step-by-step</h3>
+<ol class="steps">
+
+<li><strong>Make sure your Products are set up first</strong>
+<p>Settings → Products. Add SKU, price, GST %, and a product image. The image and price will show on every quotation. (See section 06 for product setup details.)</p>
+</li>
+
+<li><strong>Open the lead → Quotations panel</strong>
+<p>From the lead modal, scroll to the <em>📄 Quotations</em> section. Click <em>+ Create quote</em>.</p>
+<div class="shot"><svg viewBox="0 0 600 280" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Lead modal → Quotations panel → Create quote"><rect width="600" height="280" fill="#f8fafc"/><rect x="20" y="20" width="560" height="240" fill="#fff" stroke="#e5e7eb" rx="8"/><text x="40" y="50" font-family="Inter,Arial,sans-serif" font-size="13" fill="#0f172a" font-weight="700">📄 Quotations — for Rahul Sharma</text><rect x="40" y="70" width="520" height="50" fill="#f8fafc" stroke="#e5e7eb" rx="4"/><text x="55" y="90" font-family="Inter,Arial,sans-serif" font-size="11" fill="#0f172a" font-weight="600">Q-2026-0042 · ₹ 1,18,000 (incl GST) · Sent 18 May</text><text x="55" y="108" font-family="Inter,Arial,sans-serif" font-size="10" fill="#64748b">Status: Awaiting customer reply</text><rect x="40" y="130" width="520" height="60" fill="#fff" stroke="#cbd5e1" stroke-dasharray="4,3" rx="6"/><text x="300" y="166" font-family="Inter,Arial,sans-serif" font-size="13" fill="#3b82f6" text-anchor="middle" font-weight="700">+ Create quote</text><text x="300" y="183" font-family="Inter,Arial,sans-serif" font-size="10" fill="#64748b" text-anchor="middle">Pick products → tweak qty &amp; discount → preview PDF → send</text></svg><div class="shot-cap">Lead modal → Quotations panel</div></div>
+</li>
+
+<li><strong>Pick products + quantities + discount</strong>
+<p>Type to search products, click to add. Each row: qty, unit price (editable), discount %, GST is auto-calculated from the product's GST setting.</p>
+<ul class="mini-steps">
+<li>Add as many line items as you want</li>
+<li>Discount can be % or absolute ₹</li>
+<li>Subtotal, GST, and total recompute live</li>
+<li><strong>Terms &amp; Conditions</strong> — free-text block at the bottom of the PDF. Save a default in Settings → Quotations so you don't retype.</li>
+</ul>
+</li>
+
+<li><strong>Preview the PDF</strong>
+<p>Click <em>Preview</em> to see exactly what the customer will receive — your logo, company name, your address, the line items, GST breakdown, total, T&amp;C, and a signature block.</p>
+</li>
+
+<li><strong>Send via Email or WhatsApp</strong>
+<p>Two buttons. Email opens a compose window with the PDF attached. WhatsApp sends the PDF + a short message inside the active chat thread (auto-creates the thread if there's none yet).</p>
+<div class="callout callout-success"><span class="callout-icon">✅</span><div><strong>Status tracking:</strong> when you send the quote, the lead's status moves to <em>Quote Sent</em>. If the customer replies on WhatsApp, the chat thread flags it. If they don't reply for 3 days, the follow-up dashboard surfaces the lead.</div></div>
+</li>
+
+</ol>
+
+<h3>Tracking quote performance</h3>
+<p>Reports → <em>Quotations</em> shows: quotes sent per week, average quote value, conversion rate (Quote Sent → Won), and time-to-conversion. Filter by salesperson or product line.</p>
+
+</article>
+
+<article class="section" id="industry-packs" data-keywords="industry packs education real estate fee installment payment plan inventory unit booking project showcase">
+<h2><span class="num">37</span>🧩 Industry Packs (Education + Real Estate)</h2>
+<p class="lede">Optional modules that add industry-specific tables, panels, and workflows on top of the generic CRM. Currently: Education and Real Estate.</p>
+
+<div class="callout callout-info">
+<span class="callout-icon">ℹ️</span>
+<div><strong>How packs work:</strong> a pack adds new sidebar menu items, new panels inside the lead modal, new reports, and new background workers. They're tenant-level — install one pack per tenant. Most tenants stay on <em>Generic</em>.</div>
+</div>
+
+<h3>How to install</h3>
+<ol class="steps">
+
+<li><strong>Super-admin installs the pack on your tenant</strong>
+<p>Tenant detail page → <em>Industry Pack</em> section → pick <em>Education</em> or <em>Real Estate</em> → Install. This is a one-time switch — the pack stays on until uninstalled.</p>
+<div class="callout callout-warn"><span class="callout-icon">⚠️</span><div>If you don't see a pack and want one, email <a href="mailto:support@smartcrmsolution.com">support@smartcrmsolution.com</a> with your tenant slug. We'll enable it within an hour.</div></div>
+</li>
+
+<li><strong>Reload the CRM</strong>
+<p>After install, log out and back in. New sidebar items appear. New panels show inside every lead modal. Reports get new tabs.</p>
+</li>
+
+</ol>
+
+<h3>🎓 Education pack — what you get</h3>
+<table class="kv">
+<tr><td><strong>Fee plans</strong></td><td>Course-level fee structures with EMI installments (1 / 3 / 6 / 12 month splits)</td></tr>
+<tr><td><strong>Lead-modal "Fees" panel</strong></td><td>Inline enrollment + installment table + mark-paid</td></tr>
+<tr><td><strong>Auto reminder worker</strong></td><td>15 / 7 / 1 day before due-date + on due-date — WhatsApp + email to parent &amp; student</td></tr>
+<tr><td><strong>Parent contacts</strong></td><td>Add parent phone + email to a lead; broadcast reminders</td></tr>
+<tr><td><strong>Attendance + test scores</strong></td><td>Capture per-student attendance and assessment scores</td></tr>
+<tr><td><strong>Cross-sell signals</strong></td><td>Auto-suggest add-on courses based on past enrollment</td></tr>
+</table>
+
+<h3>🏠 Real Estate pack — what you get</h3>
+<table class="kv">
+<tr><td><strong>Projects + Units</strong></td><td>Hierarchical inventory: Project → Tower → Unit (sqft, price, status)</td></tr>
+<tr><td><strong>Inventory Board view</strong></td><td>Kanban-style: Available / Held / Booked / Sold — drag-drop to update</td></tr>
+<tr><td><strong>Lead-modal "Booking" panel</strong></td><td>Pick a unit, create a booking, mark token money received</td></tr>
+<tr><td><strong>Payment Plans</strong></td><td>Per-project: 30% down + 4 installments at construction milestones, etc.</td></tr>
+<tr><td><strong>Demand letters</strong></td><td>Auto-generate demand letter PDFs with payment-plan-driven dates</td></tr>
+<tr><td><strong>Channel partner tracking</strong></td><td>Broker-introduced leads + commission tracking</td></tr>
+<tr><td><strong>Inventory Matching</strong></td><td>For each lead, see which available units match their stated requirement</td></tr>
+<tr><td><strong>Site Visit button</strong></td><td>Schedule + log site visits, with reminder push notifications</td></tr>
+</table>
+
+</article>
+
+<article class="section" id="tickets" data-keywords="tickets support help internal customer issue priority status sla escalation">
+<h2><span class="num">38</span>🎫 Support Tickets</h2>
+<p class="lede">An internal tickets system — your team raises issues with SmartCRM support, and we reply inside the CRM (no email chasing).</p>
+
+<h3>How it works</h3>
+<ol class="steps">
+
+<li><strong>Sidebar → Support</strong>
+<p>Click <em>🎫 Support</em> in the left sidebar. You see the list of all your past tickets and their status.</p>
+<div class="shot"><svg viewBox="0 0 580 280" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Support tickets list"><rect width="580" height="280" fill="#f8fafc"/><rect x="20" y="20" width="540" height="240" fill="#fff" stroke="#e5e7eb" rx="8"/><text x="40" y="50" font-family="Inter,Arial,sans-serif" font-size="14" fill="#0f172a" font-weight="700">🎫 Support tickets</text><rect x="440" y="35" width="100" height="28" fill="#3b82f6" rx="6"/><text x="490" y="53" font-family="Inter,Arial,sans-serif" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">+ New ticket</text><rect x="40" y="75" width="500" height="40" fill="#f8fafc" stroke="#e5e7eb" rx="4"/><rect x="50" y="84" width="40" height="22" fill="#fef3c7" rx="3"/><text x="70" y="98" font-family="Inter,Arial,sans-serif" font-size="9" fill="#92400e" text-anchor="middle" font-weight="700">OPEN</text><text x="105" y="92" font-family="Inter,Arial,sans-serif" font-size="11" fill="#0f172a" font-weight="600">#42 · Webhook returning 401 from Pabbly</text><text x="105" y="108" font-family="Inter,Arial,sans-serif" font-size="9" fill="#64748b">Raised 18 May · High priority · 2 replies</text><rect x="40" y="120" width="500" height="40" fill="#f8fafc" stroke="#e5e7eb" rx="4"/><rect x="50" y="129" width="50" height="22" fill="#dbeafe" rx="3"/><text x="75" y="143" font-family="Inter,Arial,sans-serif" font-size="9" fill="#1d4ed8" text-anchor="middle" font-weight="700">REPLIED</text><text x="115" y="137" font-family="Inter,Arial,sans-serif" font-size="11" fill="#0f172a" font-weight="600">#39 · Add custom field for GST number</text><text x="115" y="153" font-family="Inter,Arial,sans-serif" font-size="9" fill="#64748b">Raised 16 May · Normal · Awaiting your reply</text><rect x="40" y="165" width="500" height="40" fill="#f8fafc" stroke="#e5e7eb" rx="4"/><rect x="50" y="174" width="55" height="22" fill="#dcfce7" rx="3"/><text x="77" y="188" font-family="Inter,Arial,sans-serif" font-size="9" fill="#065f46" text-anchor="middle" font-weight="700">RESOLVED</text><text x="120" y="182" font-family="Inter,Arial,sans-serif" font-size="11" fill="#0f172a" font-weight="600">#37 · Mobile app crash on launch (Samsung A52)</text><text x="120" y="198" font-family="Inter,Arial,sans-serif" font-size="9" fill="#64748b">Raised 14 May · Critical · Closed</text></svg><div class="shot-cap">Support → Ticket list (open + replied + resolved)</div></div>
+</li>
+
+<li><strong>Click "+ New ticket"</strong>
+<p>Fill in:</p>
+<ul class="mini-steps">
+<li><strong>Title</strong> — short summary, eg. "Webhook returning 401 from Pabbly"</li>
+<li><strong>Description</strong> — the actual issue. Include steps to reproduce and what you tried.</li>
+<li><strong>Priority</strong> — Low / Normal / High / Critical. Critical wakes the on-call engineer.</li>
+<li><strong>Attachments</strong> — drag-drop screenshots, error logs, or sample CSVs (PDF / PNG / JPG, up to 5 MB each)</li>
+</ul>
+</li>
+
+<li><strong>Submit</strong>
+<p>The ticket lands in the smartcrm-saas super-admin queue. You get an email confirmation. SmartCRM support replies inside the ticket thread.</p>
+<div class="callout callout-info"><span class="callout-icon">ℹ️</span><div><strong>Reply SLA:</strong> Normal — within 1 working day. High — within 4 hours. Critical — within 30 minutes during business hours (9am–9pm IST).</div></div>
+</li>
+
+<li><strong>Continue the conversation inside the ticket</strong>
+<p>When SmartCRM support replies, the ticket goes to <em>REPLIED</em> and you get an email + in-app notification. Reply by opening the ticket and typing in the message box — same as a chat.</p>
+</li>
+
+</ol>
+
+<h3>Tips</h3>
+<ul class="mini-steps">
+<li><strong>One issue per ticket.</strong> Easier to track than a mega-ticket with five things.</li>
+<li><strong>Critical only for production-down issues</strong> — webhook not firing for all tenants, login broken, data loss. Don't use Critical for feature requests.</li>
+<li><strong>Include screenshots.</strong> A picture cuts diagnosis time by half.</li>
+</ul>
+
+</article>
+
 
 <article class="section" id="troubleshoot" data-keywords="troubleshoot debug help support fix problem error not working broken">
 <h2><span class="num">99</span>🛠️ Troubleshooting</h2>
