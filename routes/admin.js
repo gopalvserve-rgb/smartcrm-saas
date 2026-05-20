@@ -140,6 +140,37 @@ async function api_admin_brand(_token) {
       const fw = require('./packs/_framework');
       await fw._reconcileActivePacks();
     } catch (_) {}
+
+    // NEGATIVE-HEAL: if audit_log says this tenant is 'generic' but
+    // installed_packs has active rows, deactivate them — leftover from
+    // an old manual install or a buggy pre-mutex pack registry.
+    try {
+      const db2 = require('../db/pg');
+      const store = db2.tenantStorage && db2.tenantStorage.getStore && db2.tenantStorage.getStore();
+      const slug = store && store.slug ? String(store.slug) : null;
+      if (slug && slug !== 'showcase-edu' && slug !== 'showcase-re') {
+        const control = require('../control/db');
+        const ar = await control.query(
+          `SELECT detail FROM audit_log
+              WHERE event = 'tenant.created_manually'
+                AND detail::jsonb->>'slug' = $1
+              ORDER BY created_at DESC LIMIT 1`,
+          [slug]
+        );
+        const det = ar.rows && ar.rows[0] && ar.rows[0].detail;
+        const parsed = (typeof det === 'string') ? JSON.parse(det) : det;
+        const auditPack = parsed && parsed.industry_pack;
+        if (auditPack === 'generic' || auditPack === '' || auditPack == null) {
+          const upd = await db2.query(`UPDATE installed_packs SET is_active = 0 WHERE is_active = 1`);
+          if (upd && upd.rowCount > 0) {
+            console.log('[admin_brand] negative-heal: deactivated', upd.rowCount, 'pack(s) on generic tenant', slug);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[admin_brand] negative-heal skipped:', e.message);
+    }
+
     const db = require('../db/pg');
     const r = await db.query(`SELECT pack_id FROM installed_packs WHERE is_active = 1 ORDER BY installed_at DESC LIMIT 1`);
     if (r && r.rows && r.rows[0]) industryPack = String(r.rows[0].pack_id || '');

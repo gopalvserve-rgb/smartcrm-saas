@@ -365,6 +365,39 @@ async function api_packs_listInstalled(token) {
   // pick up a stale is_active=0 row and render Education on a Generic
   // tenant (task #442).
   try { await fw._reconcileActivePacks(); } catch (_) {}
+
+  // NEGATIVE SELF-HEAL (task #442 follow-up): if this tenant was
+  // explicitly created as 'generic' in the audit_log, any rows in
+  // installed_packs are leftover state from a wrong manual install or
+  // a buggy past self-heal. Deactivate them so the sidebar gate stops
+  // rendering Education/Real Estate menus. Showcase tenants are exempt.
+  try {
+    const slug = _activeSlugForToken();
+    if (slug && slug !== 'showcase-edu' && slug !== 'showcase-re') {
+      const control = require('../../control/db');
+      const ar = await control.query(
+        `SELECT detail FROM audit_log
+            WHERE event = 'tenant.created_manually'
+              AND detail::jsonb->>'slug' = $1
+            ORDER BY created_at DESC LIMIT 1`,
+        [slug]
+      );
+      const det = ar.rows && ar.rows[0] && ar.rows[0].detail;
+      const parsed = (typeof det === 'string') ? JSON.parse(det) : det;
+      const auditPack = parsed && parsed.industry_pack;
+      if (auditPack === 'generic' || auditPack === '' || auditPack == null) {
+        // Wipe any active packs — this tenant was meant to be Generic.
+        const db = require('../../db/pg');
+        const upd = await db.query(`UPDATE installed_packs SET is_active = 0 WHERE is_active = 1`);
+        if (upd && upd.rowCount > 0) {
+          console.log('[packs_listInstalled] negative-heal: deactivated', upd.rowCount, 'pack(s) on generic tenant', slug);
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[packs_listInstalled] negative-heal skipped:', e.message);
+  }
+
   let rows = await fw.listInstalledPacks();
 
   // SELF-HEAL: if no packs are installed but this tenant SHOULD have one
