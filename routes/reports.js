@@ -1103,6 +1103,18 @@ async function api_reports_callActivity(token, filters) {
           ELSE COALESCE(direction, 'unknown')
         END AS direction
       FROM bucketed
+      -- CALL_FILTER_v1 (2026-05-20):
+      -- A bucket gets counted as a "call" only if SOMETHING confirms it
+      -- actually happened — call_ended event, attached recording, an
+      -- explicit missed flag, or any non-zero duration. Otherwise the
+      -- rep just clicked "Call" in the CRM (logged as dial_requested or
+      -- autodial_requested with duration=0) and we end up double-counting
+      -- intentions as calls. shipuncle saw 499 'outgoing' calls that
+      -- were 100% dial-intent events because their APK isn't reporting
+      -- back call_ended events.
+      WHERE connected = true
+         OR direction IN ('in', 'missed')
+         OR duration_s > 0
     )
   `;
 
