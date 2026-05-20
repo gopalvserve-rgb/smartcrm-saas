@@ -161,9 +161,11 @@ async function api_admin_brand(_token) {
         const parsed = (typeof det === 'string') ? JSON.parse(det) : det;
         const auditPack = parsed && parsed.industry_pack;
         if (auditPack === 'generic' || auditPack === '' || auditPack == null) {
-          const upd = await db2.query(`UPDATE installed_packs SET is_active = 0 WHERE is_active = 1`);
+          // Only nuke self-heal-installed packs (installed_by IS NULL). User
+          // explicitly installed via super-admin keeps its pack.
+          const upd = await db2.query(`UPDATE installed_packs SET is_active = 0 WHERE is_active = 1 AND installed_by IS NULL`);
           if (upd && upd.rowCount > 0) {
-            console.log('[admin_brand] negative-heal: deactivated', upd.rowCount, 'pack(s) on generic tenant', slug);
+            console.log('[admin_brand] negative-heal: deactivated', upd.rowCount, 'self-heal pack(s) on generic tenant', slug);
           }
         }
       }

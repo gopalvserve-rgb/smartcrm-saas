@@ -386,11 +386,14 @@ async function api_packs_listInstalled(token) {
       const parsed = (typeof det === 'string') ? JSON.parse(det) : det;
       const auditPack = parsed && parsed.industry_pack;
       if (auditPack === 'generic' || auditPack === '' || auditPack == null) {
-        // Wipe any active packs — this tenant was meant to be Generic.
+        // Wipe ONLY self-heal-installed packs (installed_by IS NULL).
+        // User-installed packs (via super-admin button) have installed_by set
+        // and must NOT be deactivated — those are legitimate post-creation
+        // pack additions (task #442 follow-up).
         const db = require('../../db/pg');
-        const upd = await db.query(`UPDATE installed_packs SET is_active = 0 WHERE is_active = 1`);
+        const upd = await db.query(`UPDATE installed_packs SET is_active = 0 WHERE is_active = 1 AND installed_by IS NULL`);
         if (upd && upd.rowCount > 0) {
-          console.log('[packs_listInstalled] negative-heal: deactivated', upd.rowCount, 'pack(s) on generic tenant', slug);
+          console.log('[packs_listInstalled] negative-heal: deactivated', upd.rowCount, 'self-heal pack(s) on generic tenant', slug);
         }
       }
     }
