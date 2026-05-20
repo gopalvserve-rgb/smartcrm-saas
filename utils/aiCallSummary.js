@@ -33,20 +33,20 @@ const db = require('../db/pg');
 let demo = { on: false };
 try { demo = require('./demoGuard'); } catch (_) { /* not in demo build */ }
 
-const GEMINI_MODEL = 'gemini-2.5-flash';
+const GEMINI_MODEL = 'gemini-2.5-flash-lite';
 const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta';
 
-// ----- Cost model (Gemini 2.5 Flash, audio in / text out) -----
-// Gemini 2.5 Flash pricing as of mid-2025:
-//   - Input  (text/image/audio/video): $0.30 per 1M tokens
-//   - Output (text):                   $2.50 per 1M tokens
+// ----- Cost model (Gemini 2.5 Flash Lite, audio in / text out) -----
+// Gemini 2.5 Flash Lite pricing (switched 2026-05-20 to cut cost ~6x):
+//   - Input  (text/image/audio/video): $0.10 per 1M tokens
+//   - Output (text):                   $0.40 per 1M tokens
 //   - Audio is tokenised at 32 tokens / second (so 1 min = 1920 tokens).
 //
 // All numbers here are USD per 1M tokens. The 30% markup we charge
 // clients is applied at report time (utils/aiUsage.js _withMarkup),
 // so this constant stays the raw vendor cost.
-const GEMINI_INPUT_USD_PER_M  = 0.30;
-const GEMINI_OUTPUT_USD_PER_M = 2.50;
+const GEMINI_INPUT_USD_PER_M  = 0.10;
+const GEMINI_OUTPUT_USD_PER_M = 0.40;
 const USD_TO_INR              = Number(process.env.USD_TO_INR_RATE || 84);
 
 function _estimateCost(promptTokens, candidateTokens) {
