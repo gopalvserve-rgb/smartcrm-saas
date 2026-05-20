@@ -11,16 +11,25 @@
  * Tenants on no pack stay on "Generic" — same experience they have today.
  * Installing a pack is purely additive — never drops or renames base tables.
  *
+ * Mutual exclusivity (added 2026-05-20 — task #442):
+ *   A tenant can only have ONE active pack at a time. When installPack is
+ *   called we explicitly deactivate every other row in installed_packs first,
+ *   then activate the target. Previously two packs could simultaneously have
+ *   is_active=1, which caused Education + Real Estate sidebar items to both
+ *   render on Generic / mismatched tenants.
+ *
  * Storage:
  *   - control.industry_packs        — global pack registry (one row per pack id)
  *   - <tenant_db>.installed_packs   — which packs are active in this tenant
  *
  * Public API surface:
  *   listAvailablePacks()                       — returns all known packs
- *   listInstalledPacks(tenantSlug)             — returns active packs for tenant
- *   installPack(tenantSlug, packId, opts)      — runs the pack's installer
- *   uninstallPack(tenantSlug, packId, opts)    — soft-disable (data kept by default)
- *   isPackActive(packId)                       — runtime check inside tenant context
+ *   listInstalledPacks(opts)                   — returns packs for tenant.
+ *                                                Default activeOnly=true.
+ *   installPack(packId, opts)                  — runs the pack's installer;
+ *                                                deactivates other packs.
+ *   uninstallPack(packId, opts)                — soft-disable (data kept).
+ *   isPackActive(packId)                       — runtime check inside tenant ctx.
  */
 'use strict';
 
@@ -64,9 +73,19 @@ async function _ensureInstalledPacksSchema() {
   )`);
 }
 
-async function listInstalledPacks() {
+/**
+ * List installed packs. By default returns only active rows (is_active=1)
+ * — the SPA's sidebar gate needs active packs, and historically returning
+ * inactive rows made the gate leak (Education menu showing on Generic).
+ * Pass { activeOnly: false } to get every row (super-admin diagnostics).
+ */
+async function listInstalledPacks(opts) {
   await _ensureInstalledPacksSchema();
-  const r = await db.query(`SELECT pack_id, version, is_active, installed_at FROM installed_packs ORDER BY installed_at DESC`);
+  const activeOnly = !opts || opts.activeOnly !== false;
+  const sql = activeOnly
+    ? `SELECT pack_id, version, is_active, installed_at FROM installed_packs WHERE is_active = 1 ORDER BY installed_at DESC`
+    : `SELECT pack_id, version, is_active, installed_at FROM installed_packs ORDER BY installed_at DESC`;
+  const r = await db.query(sql);
   return r.rows;
 }
 
@@ -85,6 +104,12 @@ async function installPack(packId, opts) {
   await _ensureInstalledPacksSchema();
   // Run installer
   await pack.install(opts || {});
+  // MUTEX: a tenant gets exactly ONE active pack. Deactivate every other
+  // row BEFORE flipping the target on, so a buggy past install (or a
+  // double self-heal between admin.js and tenantApi.js) can never leave
+  // two packs both is_active=1 — which would cause both their sidebar
+  // items to render.
+  await db.query(`UPDATE installed_packs SET is_active = 0 WHERE pack_id <> $1`, [pack.id]);
   // Mark installed (or refresh version)
   await db.query(
     `INSERT INTO installed_packs (pack_id, version, installed_by, is_active)
@@ -110,6 +135,26 @@ async function uninstallPack(packId, opts) {
   return { ok: true, pack_id: pack.id };
 }
 
+/**
+ * One-shot reconciler — used by listInstalledPacks self-heal paths.
+ * If the table has 2+ active rows (legacy data from before the mutex),
+ * keep only the most recent and deactivate the rest. Safe to call
+ * frequently; no-op when already clean.
+ */
+async function _reconcileActivePacks() {
+  try {
+    await _ensureInstalledPacksSchema();
+    const r = await db.query(`SELECT pack_id, installed_at FROM installed_packs WHERE is_active = 1 ORDER BY installed_at DESC`);
+    if (!r.rows || r.rows.length <= 1) return;
+    // Keep first (most recent), deactivate everything older
+    const keep = r.rows[0].pack_id;
+    await db.query(`UPDATE installed_packs SET is_active = 0 WHERE pack_id <> $1`, [keep]);
+    console.log('[packs] reconcileActivePacks: kept', keep, 'deactivated', r.rows.length - 1, 'older row(s)');
+  } catch (e) {
+    console.warn('[packs] reconcileActivePacks failed:', e.message);
+  }
+}
+
 module.exports = {
   register,
   listAvailablePacks,
@@ -117,7 +162,8 @@ module.exports = {
   isPackActive,
   installPack,
   uninstallPack,
-  _ensureInstalledPacksSchema
+  _ensureInstalledPacksSchema,
+  _reconcileActivePacks
 };
 
 // Auto-register all packs in this folder (each pack file calls .register())

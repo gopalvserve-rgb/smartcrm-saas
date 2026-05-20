@@ -134,6 +134,12 @@ async function api_admin_brand(_token) {
   // so subsequent calls find it via path 1.
   let industryPack = '';
   try {
+    // Reconcile any legacy duplicates first (task #442) so we pick the
+    // canonical single-active pack, not a stale row.
+    try {
+      const fw = require('./packs/_framework');
+      await fw._reconcileActivePacks();
+    } catch (_) {}
     const db = require('../db/pg');
     const r = await db.query(`SELECT pack_id FROM installed_packs WHERE is_active = 1 ORDER BY installed_at DESC LIMIT 1`);
     if (r && r.rows && r.rows[0]) industryPack = String(r.rows[0].pack_id || '');

@@ -360,6 +360,11 @@ async function api_packs_listInstalled(token) {
   const { authUser } = require('../../utils/auth');
   await authUser(token);
   const fw = require('../packs/_framework');
+  // Reconcile any legacy state where >1 pack ended up active (pre-mutex
+  // data). Then read only active rows — so the SPA sidebar gate can't
+  // pick up a stale is_active=0 row and render Education on a Generic
+  // tenant (task #442).
+  try { await fw._reconcileActivePacks(); } catch (_) {}
   let rows = await fw.listInstalledPacks();
 
   // SELF-HEAL: if no packs are installed but this tenant SHOULD have one
@@ -367,7 +372,8 @@ async function api_packs_listInstalled(token) {
   // industry_pack got saved in the audit_log but failed to install
   // because the pack registry was empty at the time), install it now.
   // Without this, tenants like testfv stay stuck on Generic forever.
-  const activeRows = (rows || []).filter(r => Number(r && r.is_active) === 1);
+  // rows is already filtered to active rows by listInstalledPacks now.
+  const activeRows = rows || [];
   if (!activeRows.length) {
     let expected = null;
     const slug = _activeSlugForToken();
