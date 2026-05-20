@@ -32618,6 +32618,42 @@ VIEWS.activityreport = async (view) => {
           re_requirement_saved: '🎯', re_booking_cancelled: '❌'
         };
 
+        // LEAD_ACTIVITY_DRILL_v1 — wrap each numeric cell in a clickable
+        // chip that opens a drill-down modal listing the underlying
+        // lead_actions rows. Zero-count cells stay un-clickable.
+        const _cellChip = (n, opts) => {
+          n = Number(n) || 0;
+          if (!n) {
+            return h('td', { style: { textAlign: 'right', color: '#cbd5e1' } }, '0');
+          }
+          const onClick = (ev) => {
+            ev.preventDefault(); ev.stopPropagation();
+            _openActivityDrillModal({
+              user_id:     opts.user_id,
+              user_name:   opts.user_name,
+              action_type: opts.action_type || 'all',
+              scope:       opts.scope || 'total',
+              label:       opts.label,
+              from:        fromInp.value,
+              to:          toInp.value
+            });
+          };
+          return h('td', { style: { textAlign: 'right' } },
+            h('a', {
+              href: '#',
+              onclick: onClick,
+              style: {
+                color: opts.colour || '#0f172a',
+                fontWeight: opts.weight || 600,
+                textDecoration: 'none',
+                cursor: 'pointer',
+                borderBottom: '1px dotted ' + (opts.colour || '#94a3b8')
+              },
+              title: 'Click to view all ' + n + ' activities (' + (opts.label || '') + ')'
+            }, String(n))
+          );
+        };
+
         const tbl = h('table', { class: 'table' });
         const trH = h('tr', {},
           h('th', {}, 'Caller'),
@@ -32631,17 +32667,24 @@ VIEWS.activityreport = async (view) => {
         const tbody = h('tbody', {});
         users.forEach(u => {
           const tr = h('tr', {},
-            h('td', {}, h('b', {}, u.user_name || '—'), u.user_role ? h('span', { class: 'muted', style: { marginLeft: '.4rem', fontSize: '.72rem' } }, u.user_role) : null),
-            h('td', { style: { textAlign: 'right', fontWeight: 600, color: u.today > 0 ? '#15803d' : '#9ca3af' } }, String(u.today || 0)),
-            h('td', { style: { textAlign: 'right' } }, String(u.this_week || 0)),
-            h('td', { style: { textAlign: 'right' } }, String(u.this_month || 0)),
-            h('td', { style: { textAlign: 'right', fontWeight: 700 } }, String(u.total || 0)),
-            ...actionList.map(a => h('td', { style: { textAlign: 'right', color: (u.by_action || {})[a] ? '#1f2937' : '#cbd5e1' } }, String((u.by_action || {})[a] || 0)))
+            h('td', {},
+              h('b', {}, u.user_name || '—'),
+              u.user_role ? h('span', { class: 'muted', style: { marginLeft: '.4rem', fontSize: '.72rem' } }, u.user_role) : null
+            ),
+            _cellChip(u.today,      { user_id: u.user_id, user_name: u.user_name, action_type: 'all', scope: 'today',      label: 'today',      colour: u.today > 0 ? '#15803d' : '#9ca3af' }),
+            _cellChip(u.this_week,  { user_id: u.user_id, user_name: u.user_name, action_type: 'all', scope: 'this_week',  label: 'this week' }),
+            _cellChip(u.this_month, { user_id: u.user_id, user_name: u.user_name, action_type: 'all', scope: 'this_month', label: 'this month' }),
+            _cellChip(u.total,      { user_id: u.user_id, user_name: u.user_name, action_type: 'all', scope: 'total',      label: 'total', weight: 700 }),
+            ...actionList.map(a => _cellChip((u.by_action || {})[a] || 0, {
+              user_id: u.user_id, user_name: u.user_name, action_type: a, scope: 'total',
+              label: a.replace(/_/g, ' ')
+            }))
           );
           tbody.appendChild(tr);
         });
         tbl.appendChild(tbody);
         byUserBox.appendChild(h('h4', {}, '👥 Caller-wise activity'));
+        byUserBox.appendChild(h('div', { class: 'muted', style: { fontSize: '.78rem', marginBottom: '.4rem' } }, '💡 Click any number to drill down to the underlying activities.'));
         byUserBox.appendChild(tbl);
       } else {
         byUserBox.appendChild(h('div', { class: 'muted' }, 'No activity in this range.'));

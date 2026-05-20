@@ -1596,6 +1596,166 @@ async function api_reports_pivot(token, payload) {
   return { row_dims: rowDims, metrics, rows, total: leads.length, custom_field_keys: cfKeysList };
 }
 
+
+/* ============================================================
+ * LEAD_ACTIVITY_DRILL_v1 (2026-05-20)
+ *
+ * api_reports_activityDetail(token, opts)
+ *
+ * Drill-down for the Activity Report — given a cell coordinate
+ * (user_id + action_type + scope), return the raw lead_action
+ * rows so the SPA can list them in a modal. Each row enriched
+ * with the lead's name + the status names for status_change
+ * meta and a 1-line summary text.
+ *
+ * opts: {
+ *   user_id:      number            // required (cell row identifies a user)
+ *   action_type:  string | null     // null = all action types for that user
+ *   scope:        'today' | 'this_week' | 'this_month' | 'total'  // optional
+ *   from, to:     'YYYY-MM-DD'      // optional — used when scope=='total' or not given
+ *   limit:        number            // default 500
+ * }
+ *
+ * Response: {
+ *   range:   { from, to },
+ *   rows:    [ { id, created_at, lead_id, lead_name, action_type, summary, meta } ]
+ * }
+ * ============================================================ */
+async function api_reports_activityDetail(token, opts) {
+  const me = await authUser(token);
+  const visible = await getVisibleUserIds(me);
+  opts = opts || {};
+  const targetUid = Number(opts.user_id);
+  if (!targetUid || !visible.includes(targetUid)) {
+    throw new Error('User not visible in your scope');
+  }
+
+  // Resolve date range from scope/from/to. Use REPORT_TZ-aware day buckets
+  // for parity with the activity-report grid.
+  const nowTz = _tzDate(new Date());
+  const _today = new Date(nowTz + 'T00:00:00');
+  let fromStr, toStr;
+  if (opts.scope === 'today') {
+    fromStr = nowTz; toStr = nowTz;
+  } else if (opts.scope === 'this_week') {
+    const ws = new Date(_today); ws.setDate(ws.getDate() - ws.getDay());
+    fromStr = _tzDate(ws); toStr = nowTz;
+  } else if (opts.scope === 'this_month') {
+    fromStr = nowTz.slice(0, 7) + '-01'; toStr = nowTz;
+  } else {
+    // 'total' / unspecified — fall back to opts.from/to or last 30 days
+    const def = new Date(_today); def.setDate(def.getDate() - 29);
+    fromStr = (opts.from && /^\d{4}-\d{2}-\d{2}$/.test(opts.from)) ? opts.from : _tzDate(def);
+    toStr   = (opts.to   && /^\d{4}-\d{2}-\d{2}$/.test(opts.to))   ? opts.to   : nowTz;
+  }
+  const fromIso = fromStr + 'T00:00:00.000Z';
+  const _toEnd  = new Date(toStr + 'T00:00:00.000Z'); _toEnd.setUTCDate(_toEnd.getUTCDate() + 1);
+  const toIso   = _toEnd.toISOString();
+
+  const limit = Math.max(1, Math.min(2000, Number(opts.limit) || 500));
+
+  const params = [fromIso, toIso, targetUid];
+  let actSql = '';
+  if (opts.action_type && String(opts.action_type) !== 'all') {
+    params.push(String(opts.action_type));
+    actSql = ' AND la.action_type = $' + params.length;
+  }
+  // Exclude bot/auto WhatsApp activity from drill-down (same as the
+  // main report) unless explicitly requested.
+  if (!opts.include_whatsapp) {
+    actSql += " AND la.action_type NOT IN ('whatsapp_in', 'whatsapp_out')";
+  }
+  if (!opts.include_created) {
+    actSql += " AND la.action_type <> 'created'";
+  }
+
+  const sql = `
+    SELECT la.id, la.created_at, la.lead_id, la.action_type, la.meta_json,
+           l.name AS lead_name, l.phone AS lead_phone
+      FROM lead_actions la
+      LEFT JOIN leads l ON l.id = la.lead_id
+     WHERE la.created_at BETWEEN $1 AND $2
+       AND la.user_id = $3
+       ${actSql}
+     ORDER BY la.created_at DESC
+     LIMIT ${limit}
+  `;
+  const { rows } = await db.query(sql, params);
+
+  // Filter by TZ-day (safety against UTC bleed-over from $1/$2 wide window)
+  const inRange = rows.filter(r => {
+    const d = _tzDate(r.created_at);
+    return d >= fromStr && d <= toStr;
+  });
+
+  // Pre-resolve statuses for nicer status_change summaries
+  let statusesById = {};
+  try {
+    const sRows = await db.getAll('statuses');
+    sRows.forEach(s => { statusesById[Number(s.id)] = s.name; });
+  } catch (_) { /* tenant might not have statuses table yet */ }
+
+  const out = inRange.map(r => {
+    let meta = null;
+    try { meta = r.meta_json ? (typeof r.meta_json === 'object' ? r.meta_json : JSON.parse(r.meta_json)) : null; }
+    catch (_) { meta = null; }
+    let summary = '';
+    switch (r.action_type) {
+      case 'remark':
+        summary = (meta && meta.remark) ? String(meta.remark).slice(0, 200) : '(remark added)';
+        break;
+      case 'status_change': {
+        const f = meta && meta.from_status_id ? (statusesById[Number(meta.from_status_id)] || '?') : '?';
+        const t = meta && meta.to_status_id   ? (statusesById[Number(meta.to_status_id)]   || '?') : '?';
+        summary = f + ' → ' + t;
+        if (meta && meta.reason) summary += '  (' + meta.reason + ')';
+        break;
+      }
+      case 'followup_set':
+        summary = meta && meta.due_at ? ('due ' + String(meta.due_at).slice(0, 16).replace('T', ' ')) : '(follow-up set)';
+        break;
+      case 'note_updated':
+        summary = meta && meta.preview ? String(meta.preview).slice(0, 200) : '(notes edited)';
+        break;
+      case 'assigned':
+      case 'reassigned':
+        summary = (meta && (meta.from !== undefined) && (meta.to !== undefined))
+          ? ('user ' + (meta.from || '—') + ' → ' + (meta.to || '—'))
+          : (r.action_type === 'assigned' ? '(assigned)' : '(reassigned)');
+        break;
+      case 'qualified':
+      case 'unqualified':
+        summary = r.action_type;
+        break;
+      case 'tags_updated':
+        summary = meta && meta.tags ? ('tags: ' + String(meta.tags).slice(0, 100)) : '(tags edited)';
+        break;
+      default:
+        summary = meta ? JSON.stringify(meta).slice(0, 120) : '';
+    }
+    return {
+      id: r.id,
+      created_at: r.created_at,
+      lead_id: r.lead_id,
+      lead_name: r.lead_name || '—',
+      lead_phone: r.lead_phone || '',
+      action_type: r.action_type,
+      summary,
+      meta
+    };
+  });
+
+  return {
+    range: { from: fromStr, to: toStr, scope: opts.scope || null },
+    user_id: targetUid,
+    action_type: opts.action_type || null,
+    rows: out,
+    total: out.length,
+    truncated: out.length === limit
+  };
+}
+
+
 module.exports = {
   api_reports_summary, api_reports_funnel, api_reports_daily,
   api_reports_exportLeads, api_reports_groupBy,
@@ -1603,6 +1763,7 @@ module.exports = {
   api_reports_callRatingByUser, api_reports_callActivity,
   api_reports_aiUsage, api_reports_aiCostEstimator,
   api_calendar_events,
-  api_reports_activityByUser,  /* LEAD_ACTIVITY_v1 */
-  api_reports_pivot            /* REPORT_BUILDER_v4 */
+  api_reports_activityByUser,    /* LEAD_ACTIVITY_v1 */
+  api_reports_activityDetail,    /* LEAD_ACTIVITY_DRILL_v1 */
+  api_reports_pivot              /* REPORT_BUILDER_v4 */
 };
