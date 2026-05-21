@@ -6834,6 +6834,101 @@ function _rePipelineCardClick(card, stage, leads, allStatuses) {
   card.appendChild(body);
   card.classList.add('open');
 }
+// GENERIC_PIPE_GRID_v1 (2026-05-21) — card-grid Pipeline for ALL tenants.
+// Builds the same layout as _reRenderCPProcessPipeline but using whatever
+// statuses the tenant has, sorted by sort_order. Re-uses the RE canonical
+// bullets when a status NAME matches a canonical RE stage name; otherwise
+// shows a brief placeholder so non-real-estate tenants get a useful card
+// without canned content.
+function _genericRenderCardGridPipeline(view, pipeline, allStatuses) {
+  view.innerHTML = '';
+  view.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '.5rem', marginBottom: '.5rem', flexWrap: 'wrap' } },
+    h('div', {},
+      h('h2', { style: { margin: 0 }}, '\ud83d\udcc8 Lead Pipeline \u2014 New Lead To Sales'),
+      h('p', { class: 'muted', style: { fontSize: '.82rem', margin: '.2rem 0 0' } }, 'Click any stage to expand and see the leads currently sitting in that stage. Click a lead row to open the full lead.')
+    ),
+    h('button', { class: 'btn ghost sm', type: 'button', onclick: () => { window._rePipeForceKanban = true; VIEWS.pipeline(view); } }, '\ud83d\udcca Switch to Kanban view')
+  ));
+
+  const sorted = [...(allStatuses || [])].sort((a, b) =>
+    (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0)
+  );
+
+  const grid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '.7rem', marginTop: '.6rem' } });
+
+  sorted.forEach((status, idx) => {
+    const entry = pipeline.find(p => Number(p.id) === Number(status.id));
+    const leads = (entry && entry.leads) || [];
+    const count = leads.length;
+    const color = status.color || '#6366f1';
+    // If the status name matches a RE canonical stage, reuse its bullets.
+    let icon = '\u26AB';
+    let bullets = [];
+    if (typeof _RE_STAGE_META !== 'undefined') {
+      const meta = _RE_STAGE_META.find(m => m.match.some(n => n.toLowerCase() === String(status.name || '').toLowerCase()));
+      if (meta) { icon = meta.icon; bullets = meta.bullets; }
+    }
+    if (!bullets.length) {
+      // Generic placeholder bullets — encourage reps to take an action.
+      bullets = [
+        'Reach out and qualify',
+        'Update lead notes / next follow-up'
+      ];
+    }
+
+    const card = h('div', { class: 're-pipe-card', style: {
+      border: '2px solid ' + color + '55',
+      borderRadius: '12px',
+      padding: '.75rem .85rem',
+      background: '#fff',
+      boxShadow: '0 1px 4px rgba(0,0,0,.04)',
+      cursor: 'pointer',
+      transition: 'transform .15s, box-shadow .15s',
+      position: 'relative'
+    }});
+    card.onmouseenter = () => { card.style.transform = 'translateY(-2px)'; card.style.boxShadow = '0 4px 12px rgba(0,0,0,.08)'; };
+    card.onmouseleave = () => { card.style.transform = ''; card.style.boxShadow = '0 1px 4px rgba(0,0,0,.04)'; };
+    card.onclick = (ev) => {
+      if (ev.target.closest('a, button, .re-pipe-card-body')) return;
+      _rePipelineCardClick(card, { match: [status.name] }, leads, allStatuses);
+    };
+
+    card.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem' }},
+      h('div', { style: { minWidth: '30px', height: '30px', borderRadius: '7px', background: color, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: '.9rem' }}, String(idx + 1)),
+      h('div', { style: { flex: 1, minWidth: 0 }},
+        h('div', { style: { fontWeight: 700, fontSize: '.95rem', color: color, display: 'flex', alignItems: 'center', gap: '.3rem' }},
+          h('span', {}, icon),
+          h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}, status.name)
+        )
+      ),
+      h('div', { style: { background: count > 0 ? color : '#e5e7eb', color: count > 0 ? '#fff' : '#666', padding: '.15rem .5rem', borderRadius: '999px', fontWeight: 700, fontSize: '.85rem', minWidth: '32px', textAlign: 'center' }}, String(count))
+    ));
+
+    card.appendChild(h('ul', { style: { margin: '.4rem 0 .35rem 1.05rem', padding: 0, fontSize: '.76rem', color: '#444', lineHeight: '1.35' }},
+      ...bullets.map(b => h('li', { style: { marginBottom: '.1rem' }}, b))
+    ));
+
+    card.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '.35rem' }},
+      h('div', { style: { background: '#f1f5f9', padding: '.15rem .45rem', borderRadius: '999px', fontSize: '.68rem', color: '#334155', fontWeight: 600 }}, 'Status: ' + status.name),
+      count > 0
+        ? h('div', { style: { fontSize: '.7rem', color: color, fontWeight: 600 }}, count + ' lead' + (count === 1 ? '' : 's') + ' \u2192')
+        : h('div', { style: { fontSize: '.7rem', color: '#aaa' }}, 'empty')
+    ));
+
+    grid.appendChild(card);
+  });
+
+  view.appendChild(grid);
+
+  const totalLeads = pipeline.reduce((a, p) => a + ((p.leads || []).length), 0);
+  const active = pipeline.filter(p => (p.leads || []).length > 0).length;
+  view.appendChild(h('div', { style: { marginTop: '1rem', padding: '.6rem .8rem', background: '#f8fafc', borderRadius: '10px', fontSize: '.78rem', color: '#475569', display: 'flex', gap: '1rem', flexWrap: 'wrap' }},
+    h('span', {}, '\ud83d\udcca Total in pipeline: ', h('b', { style: { color: '#0f172a' }}, totalLeads)),
+    h('span', {}, '\ud83d\udfe2 Active stages: ', h('b', { style: { color: '#0f172a' }}, active)),
+    h('span', { class: 'muted' }, 'Empty stages stay visible to remind reps to fill the pipeline.')
+  ));
+}
+
 function _reRenderCPProcessPipeline(view, pipeline, allStatuses) {
   view.innerHTML = '';
   // Header
@@ -6960,17 +7055,21 @@ function _reRenderCPProcessPipeline(view, pipeline, allStatuses) {
 }
 
 VIEWS.pipeline = async (view) => {
-  // RE_CP_PIPELINE_VIEW_v1: when Real Estate pack is installed, render the
-  // CP CRM Process card grid instead of the funnel + kanban-lane layout.
-  // Toggle by clicking '📊 Switch to Kanban view' (sets _rePipeForceKanban).
-  if (!window._rePipeForceKanban && typeof _reIsActive === 'function' && _reIsActive()) {
+  // GENERIC_PIPE_GRID_v1 (2026-05-21) — render the card-grid Pipeline layout
+  // for EVERY tenant by default. If Real Estate pack is installed, use the
+  // RE-specific renderer with canonical 12-stage bullets; otherwise use the
+  // generic renderer that pulls the tenant's own statuses. Either way, the
+  // user can toggle to standard kanban via the header button.
+  if (!window._rePipeForceKanban) {
     try {
       const { statuses = [] } = CRM.cache;
       const pipeline = await api('api_leads_pipeline');
-      _reRenderCPProcessPipeline(view, pipeline, statuses);
+      const useREGrid = (typeof _reIsActive === 'function') && _reIsActive();
+      if (useREGrid) _reRenderCPProcessPipeline(view, pipeline, statuses);
+      else _genericRenderCardGridPipeline(view, pipeline, statuses);
       return;
     } catch (e) {
-      console.warn('[RE pipeline] fallback to kanban:', e.message);
+      console.warn('[pipeline grid] fallback to kanban:', e.message);
       // fall through to standard view
     }
   }
