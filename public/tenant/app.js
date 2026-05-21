@@ -986,7 +986,8 @@ const NAV_GROUPS = [
   // SPA hits /api/saas (not /api) through sapi(), unlike the rest of the
   // CRM which targets /api.
   { label: 'Help & Support', icon: '🎫', items: [
-    { id: 'tickets', label: 'Support Tickets', icon: '🎫' }
+    { id: 'kbvideos', label: 'Video Tutorials', icon: '🎬' },
+    { id: 'tickets',  label: 'Support Tickets', icon: '🎫' }
   ] }
 ];
 // Flatten for backwards-compat with anywhere that iterates NAV.
@@ -32438,6 +32439,150 @@ function _fmtTs(ts) {
 }
 
 // ---- VIEWS.tickets — list ---------------------------------------
+
+
+// KB_VIDEOS_v1 (2026-05-21) — Video tutorials page sourced from
+// smartcrmsolution.com/home/smart-crm-plan/knowledge-base.php. Filterable
+// by topic, Google Drive embed previews, open-in-new-tab fallback.
+const _KB_VIDEOS = [
+  { n: 1,  topic: 'Setup',        cat: 'Getting started',     title: 'User Creation',
+    desc: 'Create team accounts, assign roles, and configure user permissions inside your Smart CRM workspace.',
+    drive: '1NMMwtu6eM4xzDE5Gsk-Ya-BGtpgPsTGp' },
+  { n: 2,  topic: 'Setup',        cat: 'Configuration',       title: 'Products, Statuses & Custom Fields',
+    desc: 'Tailor the CRM to your business — add products, define lead statuses, and create the custom fields you actually need.',
+    drive: '1uzkz7Qz9F6nuBL_eVWavKsEqorcHVxHY' },
+  { n: 3,  topic: 'Leads',        cat: 'Lead management',     title: 'Bulk Lead Upload',
+    desc: 'Import leads in bulk via CSV or Excel — map fields and validate data in minutes.',
+    drive: '1iS9wgmx1shIL4dNiuVI3uezE2vTYnyMj' },
+  { n: 4,  topic: 'Leads',        cat: 'Automation',          title: 'Lead Auto Assign',
+    desc: 'Set rules that automatically route incoming leads to the right team member — fair, fast, rule-based.',
+    drive: '10nC6gSnlrl3jo4tmUab3CLAwlYZ1nJlT' },
+  { n: 5,  topic: 'Leads',        cat: 'Automation',          title: 'Lead Auto Assign — Advanced',
+    desc: 'Go deeper with weighted distribution, source-based routing, and team-specific assignment rules.',
+    drive: '1MOHxdtRxr52NxOnsbPtP8MfVM0_EiVc5' },
+  { n: 6,  topic: 'Integrations', cat: 'Lead sources',        title: 'Connect Website API, JustDial, IndiaMart & Other Sources',
+    desc: 'Pull leads automatically from your website, JustDial, IndiaMart, and other channels — no copy-paste, no missed inquiries.',
+    drive: '1iSRXa9JEzJ3GyzFNkdtZ6CQovHNaH9G2' },
+  { n: 7,  topic: 'Integrations', cat: 'Lead sources',        title: 'Facebook Lead Ads Connect',
+    desc: 'Sync your Facebook Lead Ads directly into Smart CRM — every form submission lands in your pipeline in real time.',
+    drive: '1lKWn5lNRpKHF9fiT34i6pj02DMXXTua2' },
+  { n: 8,  topic: 'WhatsApp',     cat: 'WhatsApp setup',      title: 'Connect Your WhatsApp',
+    desc: 'Link WhatsApp Business to Smart CRM — the foundation for every WhatsApp workflow that follows.',
+    drive: '1JAJY-aJtsT1tzxjxXq_KdbFajfrHrGE5' },
+  { n: 9,  topic: 'WhatsApp',     cat: 'WhatsApp messaging',  title: 'Templates & Bulk Send',
+    desc: 'Build approved templates and send bulk WhatsApp campaigns the right way — without getting your number flagged.',
+    drive: '1Kjme07ODhpVwapk5-9CbMcAuYFYTkFic' },
+  { n: 10, topic: 'WhatsApp',     cat: 'WhatsApp automation', title: 'Auto Send & Lead Nurturing',
+    desc: 'Trigger automated WhatsApp messages based on lead status — nurture prospects without lifting a finger.',
+    drive: '16qQrh6DroUhLxzCWJZx26FrKAOmWVfYu' },
+  { n: 11, topic: 'WhatsApp',     cat: 'WhatsApp · AI',       title: 'Build an AI WhatsApp Bot',
+    desc: 'Set up an intelligent WhatsApp bot that qualifies, replies, and routes leads 24/7 — straight inside Smart CRM.',
+    drive: '18xdFCcop46NRPd0DFQ492rAadhJ2APmi' }
+];
+const _KB_TOPICS = ['All', 'Setup', 'Leads', 'WhatsApp', 'Integrations'];
+
+VIEWS.kbvideos = async (view) => {
+  view.innerHTML = '';
+  let activeTopic = (window._kbVideosTopic || 'All');
+
+  const header = h('div', {},
+    h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: '.5rem' } },
+      h('div', {},
+        h('div', { class: 'muted', style: { fontSize: '.7rem', textTransform: 'uppercase', letterSpacing: '.08em', color: '#6366f1', fontWeight: 700 }}, '🎬 Knowledge Base · ' + new Date().getFullYear()),
+        h('h2', { style: { margin: '.2rem 0' }}, 'Learn Smart CRM, one short video at a time'),
+        h('p', { class: 'muted', style: { maxWidth: '620px' }}, 'From setting up your first lead pipeline to building an AI-powered WhatsApp bot — every workflow your team needs, documented in plain, practical videos.')
+      ),
+      h('a', { class: 'btn ghost', href: 'https://smartcrmsolution.com/home/smart-crm-plan/knowledge-base.php', target: '_blank' }, '🌐 Open full library →')
+    )
+  );
+
+  // KPI strip
+  const counts = { tutorials: _KB_VIDEOS.length, tracks: new Set(_KB_VIDEOS.map(v => v.topic)).size };
+  const stat = (n, lbl) => h('div', { style: { padding: '.7rem 1rem', borderRadius: '10px', background: 'linear-gradient(135deg, #eef2ff, #f0f9ff)', minWidth: '120px', flex: 1 }},
+    h('div', { style: { fontSize: '1.5rem', fontWeight: 800, color: '#3730a3' }}, String(n)),
+    h('div', { class: 'muted', style: { fontSize: '.75rem' }}, lbl)
+  );
+  header.appendChild(h('div', { style: { display: 'flex', gap: '.6rem', marginTop: '.8rem', flexWrap: 'wrap' }},
+    stat(counts.tutorials, 'Tutorials'),
+    stat(counts.tracks,    'Topic tracks'),
+    stat('24×7',           'Self-serve access'),
+    stat('100%',           'Free access')
+  ));
+  view.appendChild(header);
+
+  // Topic filter
+  const filterBar = h('div', { style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap', marginTop: '1.2rem', marginBottom: '.6rem' } });
+  const gridWrap = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '.8rem' } });
+
+  function renderGrid() {
+    gridWrap.innerHTML = '';
+    const filtered = activeTopic === 'All' ? _KB_VIDEOS : _KB_VIDEOS.filter(v => v.topic === activeTopic);
+    filtered.forEach(v => {
+      const card = h('div', { style: {
+        border: '1px solid #e5e7eb', borderRadius: '12px', background: '#fff',
+        overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,.04)', display: 'flex', flexDirection: 'column'
+      }});
+      // Drive embed iframe
+      card.appendChild(h('div', { style: { position: 'relative', paddingBottom: '56.25%', height: 0, background: '#000' }},
+        h('iframe', {
+          src: 'https://drive.google.com/file/d/' + v.drive + '/preview',
+          style: { position: 'absolute', top: '0', left: '0', width: '100%', height: '100%', border: '0' },
+          allow: 'autoplay; encrypted-media',
+          allowfullscreen: 'allowfullscreen',
+          loading: 'lazy'
+        })
+      ));
+      // Meta
+      card.appendChild(h('div', { style: { padding: '.7rem .85rem' }},
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', fontSize: '.7rem', fontWeight: 700, color: '#6366f1', textTransform: 'uppercase', letterSpacing: '.05em' }},
+          h('span', { style: { background: '#eef2ff', padding: '.1rem .4rem', borderRadius: '999px' }}, String(v.n).padStart(2, '0') + ' · ' + v.cat),
+          h('span', { style: { background: '#fef3c7', color: '#92400e', padding: '.1rem .4rem', borderRadius: '999px' }}, v.topic)
+        ),
+        h('h4', { style: { margin: '.4rem 0 .3rem', fontSize: '1rem' }}, v.title),
+        h('p', { class: 'muted', style: { fontSize: '.82rem', marginTop: 0, marginBottom: '.6rem' }}, v.desc),
+        h('a', {
+          href: 'https://drive.google.com/file/d/' + v.drive + '/view',
+          target: '_blank',
+          class: 'btn sm ghost',
+          style: { textDecoration: 'none' }
+        }, '↗ Open in new tab')
+      ));
+      gridWrap.appendChild(card);
+    });
+    if (!filtered.length) {
+      gridWrap.appendChild(h('p', { class: 'muted', style: { textAlign: 'center', padding: '2rem', gridColumn: '1 / -1' }}, 'No videos in this topic yet.'));
+    }
+  }
+
+  _KB_TOPICS.forEach(t => {
+    const count = t === 'All' ? _KB_VIDEOS.length : _KB_VIDEOS.filter(v => v.topic === t).length;
+    const btn = h('button', { class: 'btn ' + (activeTopic === t ? 'primary' : 'ghost') + ' sm',
+      onclick: () => { activeTopic = t; window._kbVideosTopic = t; [...filterBar.children].forEach(c => c.className = c.dataset.kbTopic === activeTopic ? 'btn primary sm' : 'btn ghost sm'); renderGrid(); }
+    }, t + ' (' + count + ')');
+    btn.dataset.kbTopic = t;
+    filterBar.appendChild(btn);
+  });
+  view.appendChild(filterBar);
+  view.appendChild(gridWrap);
+  renderGrid();
+
+  // Footer support card
+  view.appendChild(h('div', { style: {
+    marginTop: '1.5rem', padding: '1rem 1.2rem', borderRadius: '12px',
+    background: 'linear-gradient(135deg, #ecfdf5, #f0fdfa)', border: '1px solid #6ee7b7',
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '.6rem'
+  }},
+    h('div', {},
+      h('div', { style: { fontWeight: 700, color: '#065f46' }}, 'Still stuck? Talk to a human.'),
+      h('div', { class: 'muted', style: { fontSize: '.85rem' }}, 'Our support team responds within a few hours on business days. Or jump straight to WhatsApp.')
+    ),
+    h('div', { style: { display: 'flex', gap: '.4rem' }},
+      h('a', { class: 'btn primary sm', href: 'https://wa.me/919315119643', target: '_blank' }, '💬 WhatsApp Us'),
+      h('a', { class: 'btn ghost sm',   href: 'mailto:sales@smartcrmsolution.com' }, '✉️ Email Support')
+    )
+  ));
+};
+
 VIEWS.tickets = async (view) => {
   view.innerHTML = '';
   const wrap = h('div', { class: 'page' });
