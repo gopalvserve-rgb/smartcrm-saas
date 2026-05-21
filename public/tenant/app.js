@@ -4235,6 +4235,120 @@ function _reOpenProcessGuide() {
   document.body.appendChild(m);
 }
 
+
+// RE_STAGE_DATA_v1 (2026-05-21) — stage-specific data capture for Real Estate.
+// Fields are stored in lead.extra_json under re_* keys so no DB migration is
+// needed. The panel renders inside the lead modal AFTER the standard form
+// fields and re-renders whenever the status dropdown changes — only shows
+// the inputs relevant to the current stage.
+const _RE_STAGE_FIELDS = {
+  'Site Visit Fixed': [
+    { key: 're_site_visit_at',      label: '📅 Visit date & time', type: 'datetime-local' },
+    { key: 're_site_visit_project', label: '🏢 Project / Tower',   type: 'text', placeholder: 'e.g. Sample Heights · Tower A' },
+    { key: 're_site_visit_with',    label: '👥 Visit with',        type: 'text', placeholder: 'Accompanying person, if any' }
+  ],
+  'Site Visit Done': [
+    { key: 're_visit_completed_at',  label: '✅ Visit completed at',  type: 'datetime-local' },
+    { key: 're_visit_likes',         label: '👍 Client likes',        type: 'textarea', placeholder: 'What the client liked about the project' },
+    { key: 're_visit_dislikes',      label: '👎 Client dislikes',     type: 'textarea', placeholder: 'Concerns / objections raised' },
+    { key: 're_visit_next_step',     label: '➡️ Next step',           type: 'text',     placeholder: 'e.g. Send revised cost sheet by Monday' }
+  ],
+  'Offer Given': [
+    { key: 're_offer_amount',   label: '💵 Offer amount (₹)', type: 'number', step: '1' },
+    { key: 're_offer_discount', label: '🎁 Discount / benefit (₹)', type: 'number', step: '1' },
+    { key: 're_offer_payment_plan', label: '📋 Payment plan', type: 'text', placeholder: 'e.g. 10:20:70 CLP' }
+  ],
+  'Booked': [
+    { key: 're_booking_unit',   label: '🏠 Unit', type: 'text', placeholder: 'e.g. A-1204' },
+    { key: 're_token_amount',   label: '💰 Token amount received (₹)', type: 'number', step: '1' },
+    { key: 're_booking_date',   label: '📅 Booking date', type: 'date' }
+  ],
+  'Documents Collected': [
+    { key: 're_kyc_pan',         label: '🪪 PAN received', type: 'select', options: ['','Yes','No','Pending'] },
+    { key: 're_kyc_aadhaar',     label: '🆔 Aadhaar received', type: 'select', options: ['','Yes','No','Pending'] },
+    { key: 're_booking_form',    label: '📋 Booking form signed', type: 'select', options: ['','Yes','No','Pending'] },
+    { key: 're_cheque_details',  label: '💳 Cheque / payment details', type: 'text', placeholder: 'e.g. Ch #123456 / HDFC / 5L' }
+  ],
+  'Commission In Progress': [
+    { key: 're_cp_name',         label: '🤝 Channel partner', type: 'text', placeholder: 'Broker / agency name' },
+    { key: 're_cp_slab_pct',     label: '📊 Commission slab %', type: 'number', step: '0.01' },
+    { key: 're_cp_amount',       label: '💰 Commission amount (₹)', type: 'number', step: '1' },
+    { key: 're_cp_tds_pct',      label: '🧾 TDS %', type: 'number', step: '0.01' }
+  ],
+  'Paid': [
+    { key: 're_payout_amount',   label: '🏦 Payout amount released (₹)', type: 'number', step: '1' },
+    { key: 're_payout_date',     label: '📅 Payout date', type: 'date' },
+    { key: 're_payout_ref',      label: '📄 Payout reference / UTR', type: 'text', placeholder: 'e.g. UTR123456789' }
+  ]
+};
+function _reStageDataFieldsFor(statusName) {
+  if (!statusName) return null;
+  // Case-insensitive match
+  for (const k of Object.keys(_RE_STAGE_FIELDS)) {
+    if (k.toLowerCase() === String(statusName).toLowerCase()) return _RE_STAGE_FIELDS[k];
+  }
+  return null;
+}
+function _reBuildStagePanel(lead, statuses, container) {
+  if (!_reIsActive || !_reIsActive()) return;
+  const statusSel = container.parentElement && container.parentElement.querySelector('[name="status_id"]');
+  const renderFor = () => {
+    container.innerHTML = '';
+    const sid = statusSel ? Number(statusSel.value) : Number(lead.status_id);
+    const status = (statuses || []).find(s => Number(s.id) === sid);
+    if (!status) return;
+    const fields = _reStageDataFieldsFor(status.name);
+    if (!fields || !fields.length) return;
+    const ex = (lead && lead.extra) || {};
+    const card = document.createElement('div');
+    card.style.cssText = 'grid-column:1/-1;border:2px solid ' + (status.color || '#6366f1') + '55;border-radius:10px;padding:.7rem .9rem;background:linear-gradient(180deg,' + (status.color || '#6366f1') + '0a,transparent);margin-top:.3rem';
+    const head = document.createElement('div');
+    head.style.cssText = 'display:flex;align-items:center;gap:.4rem;margin-bottom:.5rem;';
+    head.innerHTML = '<span style="background:' + (status.color || '#6366f1') + ';color:#fff;padding:.15rem .45rem;border-radius:6px;font-weight:700;font-size:.7rem">' + status.name.toUpperCase() + '</span><span style="font-size:.8rem;color:#475569">Stage-specific data</span>';
+    card.appendChild(head);
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.5rem .6rem;';
+    fields.forEach(f => {
+      const wrap = document.createElement('label');
+      wrap.style.cssText = 'display:flex;flex-direction:column;font-size:.75rem;';
+      wrap.appendChild(Object.assign(document.createElement('span'), { textContent: f.label, style: 'color:#475569;margin-bottom:.15rem;font-weight:600;' }));
+      let inp;
+      if (f.type === 'textarea') {
+        inp = document.createElement('textarea');
+        inp.rows = 2;
+      } else if (f.type === 'select') {
+        inp = document.createElement('select');
+        (f.options || []).forEach(o => {
+          const opt = document.createElement('option');
+          opt.value = o;
+          opt.textContent = o || '— select —';
+          inp.appendChild(opt);
+        });
+      } else {
+        inp = document.createElement('input');
+        inp.type = f.type || 'text';
+        if (f.step) inp.step = f.step;
+      }
+      inp.name = f.key;
+      inp.className = 're-stage-field input';
+      if (f.placeholder) inp.placeholder = f.placeholder;
+      inp.style.cssText = 'padding:.4rem .5rem;border:1px solid #cbd5e1;border-radius:6px;font-size:.85rem;background:#fff;';
+      // Pre-fill from existing extra
+      const prefill = ex[f.key];
+      if (prefill != null) inp.value = String(prefill);
+      wrap.appendChild(inp);
+      grid.appendChild(wrap);
+    });
+    card.appendChild(grid);
+    container.appendChild(card);
+  };
+  renderFor();
+  // Re-render when the user changes status via the dropdown OR via the strip
+  if (statusSel) {
+    statusSel.addEventListener('change', renderFor);
+  }
+}
+
 async function openLeadModal(id) {
   const { statuses, sources, products, users, customFields } = CRM.cache;
   // Lazy-load the admin-managed tag library; cached for the session.
@@ -4344,6 +4458,15 @@ async function openLeadModal(id) {
     field('requirement_notes', 'Requirement notes', lead.requirement_notes, { type: 'textarea', full: true }),
     field('notes', 'Notes', lead.notes, { type: 'textarea', full: true })
   );
+
+  // RE_STAGE_DATA_v1 — stage-specific data capture panel inside the form.
+  // Re-renders when status changes. Inputs use name="re_*" so the
+  // submit handler picks them up into extra.re_*.
+  const _reStageDataWrap = document.createElement('div');
+  _reStageDataWrap.className = 're-stage-data-wrap';
+  _reStageDataWrap.style.cssText = 'grid-column:1/-1;';
+  form.appendChild(_reStageDataWrap);
+  try { _reBuildStagePanel(lead, statuses, _reStageDataWrap); } catch (e) { console.warn('[RE stage panel]', e && e.message); }
 
   // RE_CP_PIPELINE_v1 (2026-05-21) — render 12-stage horizontal strip above the form
   // when Real Estate pack is installed. Clicking a stage updates the status_id
@@ -4727,6 +4850,14 @@ async function openLeadModal(id) {
       if (cf.field_type === 'multiselect') extra[cf.key] = fd.getAll(key).join(',');
       else extra[cf.key] = fd.get(key) || '';
     });
+    // RE_STAGE_DATA_v1 — scoop re_* stage-specific inputs into extra
+    try {
+      form.querySelectorAll('.re-stage-field').forEach(inp => {
+        const k = inp.name;
+        if (!k || !k.startsWith('re_')) return;
+        extra[k] = inp.value || '';
+      });
+    } catch (e) { console.warn('[re-stage submit]', e && e.message); }
     // ORPHAN_CF_v1 — collect orphan extra-json fields rendered above
     // (e.g. company_name from a webhook import). The input names use
     // the same 'cf_<key>' convention so server merge logic stays the
@@ -6619,23 +6750,70 @@ function _rePipelineCardClick(card, stage, leads, allStatuses) {
     card.classList.add('open');
     return;
   }
+  // Helper: format a stage-specific chip string from the lead's extra_json
+  const stageName = (stage && stage.match && stage.match[0]) || '';
+  const stageFields = (typeof _RE_STAGE_FIELDS !== 'undefined') ? _RE_STAGE_FIELDS[stageName] : null;
+  const fmtChip = (val, key) => {
+    if (val == null || val === '') return null;
+    if (/_at$/.test(key) || /_date$/.test(key)) {
+      try {
+        const d = new Date(val);
+        if (!isNaN(d)) return d.toLocaleDateString() + (val.length > 10 ? ' ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '');
+      } catch(_) {}
+    }
+    if (/_amount$/.test(key) || /_pct$/.test(key)) return '₹ ' + Number(val).toLocaleString('en-IN');
+    return String(val);
+  };
   leads.slice(0, 50).forEach(l => {
     const row = document.createElement('div');
-    row.style.cssText = 'padding:.35rem 0;border-bottom:1px solid #f4f4f5;cursor:pointer;font-size:.8rem;display:flex;justify-content:space-between;gap:.4rem;align-items:center;';
+    row.style.cssText = 'padding:.45rem 0;border-bottom:1px solid #f4f4f5;cursor:pointer;font-size:.8rem;';
     row.onclick = (ev) => { ev.stopPropagation(); openLeadModal(l.id); };
+
+    const topRow = document.createElement('div');
+    topRow.style.cssText = 'display:flex;justify-content:space-between;gap:.4rem;align-items:center;';
     const left = document.createElement('div');
     left.style.cssText = 'display:flex;flex-direction:column;';
     const name = document.createElement('div'); name.style.fontWeight = '600'; name.textContent = l.name || '—';
     const meta = document.createElement('div'); meta.style.cssText = 'color:#666;font-size:.72rem;';
     meta.textContent = (l.phone || '') + ' · ' + (l.assigned_name || 'unassigned');
     left.appendChild(name); left.appendChild(meta);
-    row.appendChild(left);
+    topRow.appendChild(left);
     if (l.next_followup_at) {
       const fu = document.createElement('div');
       const overdue = new Date(l.next_followup_at) < new Date();
       fu.style.cssText = 'font-size:.7rem;color:' + (overdue ? '#b91c1c' : '#666') + ';';
       try { fu.textContent = fmtDate(l.next_followup_at, 'relative'); } catch(_) { fu.textContent = ''; }
-      row.appendChild(fu);
+      topRow.appendChild(fu);
+    }
+    row.appendChild(topRow);
+
+    // RE_STAGE_DATA_v1 — chips for stage-specific fields read from lead.extra
+    if (stageFields && stageFields.length) {
+      const ex = l.extra || {};
+      const chips = [];
+      stageFields.forEach(f => {
+        const v = ex[f.key];
+        if (v != null && v !== '') {
+          const formatted = fmtChip(v, f.key);
+          if (formatted) chips.push({ label: f.label.replace(/^[^\s]+\s/, ''), val: formatted });
+        }
+      });
+      if (chips.length) {
+        const chipRow = document.createElement('div');
+        chipRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:.25rem;margin-top:.3rem;';
+        chips.forEach(c => {
+          const chip = document.createElement('span');
+          chip.style.cssText = 'background:#eef2ff;color:#3730a3;padding:.1rem .4rem;border-radius:6px;font-size:.7rem;';
+          chip.textContent = c.label + ': ' + c.val;
+          chipRow.appendChild(chip);
+        });
+        row.appendChild(chipRow);
+      } else {
+        const hint = document.createElement('div');
+        hint.style.cssText = 'font-size:.68rem;color:#94a3b8;margin-top:.25rem;font-style:italic;';
+        hint.textContent = 'Tap to fill stage data: ' + stageFields.map(f => f.label.replace(/^[^\s]+\s/, '')).slice(0, 3).join(' · ');
+        row.appendChild(hint);
+      }
     }
     body.appendChild(row);
   });
