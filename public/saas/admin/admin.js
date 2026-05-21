@@ -430,6 +430,10 @@ VIEWS.tenants = async (view) => {
         h('button', { class: 'btn ghost xs', title: 'Toggle modules ON/OFF for this tenant',
           onclick: () => openModulesModal(t)
         }, '\ud83e\udde9 Modules'),
+        // PACK_RETROFIT_v1 — install / switch industry pack on existing tenant.
+        h('button', { class: 'btn ghost xs', title: 'Install or switch industry pack (Education / Real Estate / Generic)',
+          onclick: () => openInstallPackModal(t)
+        }, '\ud83c\udfd7\ufe0f Pack'),
         t.status === 'active'
           ? h('button', { class: 'btn ghost xs', onclick: async () => { await api('api_saas_tenants_suspend', t.id); navigate('tenants'); } }, 'Suspend')
           : h('button', { class: 'btn ghost xs', onclick: async () => { await api('api_saas_tenants_restore', t.id); navigate('tenants'); } }, 'Restore')
@@ -2144,3 +2148,50 @@ async function openAdminTicketModal(ticketId) {
 }
 window.openAdminTicketModal = openAdminTicketModal;
 
+
+
+// PACK_RETROFIT_v1 (2026-05-21) — Install / switch industry pack on existing tenant.
+async function openInstallPackModal(t) {
+  const m = document.createElement('div');
+  m.className = 'modal-backdrop';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:99999;display:flex;align-items:center;justify-content:center;';
+  m.onclick = (ev) => { if (ev.target === m) m.remove(); };
+  const card = h('div', { class: 'card', style: { maxWidth: '480px', width: '92%', padding: '1.2rem 1.4rem', background: '#fff', borderRadius: '12px' } });
+  card.appendChild(h('h3', { style: { marginTop: 0 } }, '\ud83c\udfd7\ufe0f Install / Switch Industry Pack'));
+  card.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+    'Tenant: ', h('b', {}, t.org_name || t.slug), ' (', t.slug, ')'));
+  card.appendChild(h('p', { class: 'muted', style: { fontSize: '.78rem', marginTop: '-.4rem' } },
+    'Installs the pack\'s tables, custom fields, seed data, and 12-stage pipeline (where applicable). Existing data is preserved; statuses are added only if not already present.'));
+
+  const packSel = h('select', { style: { width: '100%', padding: '.5rem', borderRadius: '8px', border: '1px solid #cbd5e1', marginTop: '.5rem' } },
+    h('option', { value: '' }, '— pick a pack —'),
+    h('option', { value: 'realestate' }, '\ud83c\udfe2 Real Estate — inventory + bookings + 12-stage CP pipeline'),
+    h('option', { value: 'education' },  '\ud83c\udf93 Education / Coaching — fees + installments + reminders'),
+    h('option', { value: 'generic' },    '\ud83e\udde9 Generic CRM (uninstall current pack, soft — data kept)')
+  );
+  card.appendChild(h('label', { style: { fontSize: '.8rem', fontWeight: 600 } }, 'Industry pack'));
+  card.appendChild(packSel);
+
+  const status = h('div', { style: { marginTop: '.7rem', fontSize: '.8rem' } });
+  card.appendChild(status);
+
+  const btnRow = h('div', { style: { display: 'flex', gap: '.5rem', justifyContent: 'flex-end', marginTop: '1rem' } },
+    h('button', { type: 'button', class: 'btn ghost', onclick: () => m.remove() }, 'Cancel'),
+    h('button', { type: 'button', class: 'btn primary', onclick: async () => {
+      const packId = packSel.value;
+      if (!packId) { status.innerHTML = '<span style="color:#b91c1c">Pick a pack first.</span>'; return; }
+      status.innerHTML = '⏳ Installing — this can take a few seconds…';
+      try {
+        const r = await api('api_saas_tenants_installPack', { slug: t.slug, pack_id: packId });
+        status.innerHTML = '<span style="color:#16a34a">✔ Pack installed: <b>' + packId + '</b>. Tenant SPA will pick it up on next reload.</span>';
+        toast('Pack installed: ' + packId + ' on ' + t.slug);
+        setTimeout(() => { m.remove(); navigate('tenants'); }, 1600);
+      } catch (e) {
+        status.innerHTML = '<span style="color:#b91c1c">✗ ' + e.message + '</span>';
+      }
+    } }, 'Install pack')
+  );
+  card.appendChild(btnRow);
+  m.appendChild(card);
+  document.body.appendChild(m);
+}

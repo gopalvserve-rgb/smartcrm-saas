@@ -481,6 +481,63 @@ async function api_saas_tenants_runBootstrap(token, payload) {
   return { ok: true, count: results.length, results };
 }
 
+// PACK_RETROFIT_v1 (2026-05-21) — install or switch an industry pack on an
+// EXISTING tenant (originally only available at tenant-create time). Runs the
+// pack's installer inside tenantStorage so all schema seeding lands in the
+// tenant DB. Updates tenant_config.industry_pack so brand endpoint reports it.
+async function api_saas_tenants_installPack(token, payload) {
+  const { requireSuperAdmin } = require('./superAdminAuth');
+  await requireSuperAdmin(token);
+  const slug = String((payload && payload.slug) || '').trim();
+  const packId = String((payload && payload.pack_id) || '').trim();
+  if (!slug)   throw new Error('slug required');
+  if (!packId) throw new Error('pack_id required');
+  if (!['education','realestate','generic'].includes(packId)) {
+    throw new Error('Unknown pack: ' + packId);
+  }
+
+  const tenantPoolMod = require('../../utils/tenantPool');
+  const t = await tenantPoolMod.findActiveTenant(slug);
+  if (!t) throw new Error('Tenant not found or inactive: ' + slug);
+  const pool = tenantPoolMod.poolFor(t);
+  if (!pool) throw new Error('No tenant pool available for ' + slug);
+
+  // For 'generic' we just clear the active pack record; no installer to run.
+  const tenantDb = require('../../db/pg');
+  let installResult = null;
+  await tenantDb.tenantStorage.run({ pool, tenant: t, slug }, async () => {
+    if (packId === 'generic') {
+      // mark all installed_packs inactive (soft uninstall, data kept)
+      try {
+        await tenantDb.query(
+          `UPDATE installed_packs SET is_active = 0, uninstalled_at = NOW() WHERE is_active = 1`
+        );
+      } catch (_) { /* table may not exist yet on a brand-new tenant */ }
+      installResult = { ok: true, pack_id: 'generic' };
+    } else {
+      const fw = require('../packs/_framework');
+      installResult = await fw.installPack(packId, { userId: 0 });
+    }
+  });
+
+  // Surface industry_pack on the public brand endpoint so the tenant SPA picks
+  // it up on next reload without waiting for a token refresh.
+  try {
+    const controlDb = require('../../db/pg');
+    await controlDb.query(
+      `UPDATE tenant_config SET industry_pack = $1, updated_at = NOW() WHERE tenant_id = $2`,
+      [packId, t.id]
+    );
+  } catch (_) { /* tenant_config row may not exist; brand endpoint falls back to installed_packs */ }
+
+  return {
+    ok: true,
+    slug,
+    pack_id: packId,
+    install: installResult
+  };
+}
+
 module.exports = {
   api_saas_tenants_list,
   api_saas_tenants_get,
@@ -493,5 +550,6 @@ module.exports = {
   api_saas_tenants_loginAs,
   api_saas_tenants_reseedKb,
   api_saas_tenants_resetUserPassword,
-  api_saas_tenants_runBootstrap
+  api_saas_tenants_runBootstrap,
+  api_saas_tenants_installPack
 };
