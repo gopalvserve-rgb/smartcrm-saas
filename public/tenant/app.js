@@ -6730,11 +6730,19 @@ const _RE_STAGE_META = [
   { n: 12, match: ['Paid','Possession Given','Registered'], icon: '🏦', color: '#15803d', bullets: ['Commission due', 'Approval', 'Payment released, payout receipt'] }
 ];
 function _reFindStageStatus(allStatuses, names) {
+  // Backward-compat: returns the FIRST matching status (used by stage panel).
   for (const nm of names) {
     const hit = (allStatuses || []).find(s => String(s.name || '').toLowerCase() === nm.toLowerCase());
     if (hit) return hit;
   }
   return null;
+}
+// Returns ALL statuses whose name matches any of the alias names — so the
+// Pipeline card aggregates leads from 'Site Visit Planned' + 'Site Visit Fixed'
+// into the same stage 6 card.
+function _reFindAllStageStatuses(allStatuses, names) {
+  const lower = names.map(n => n.toLowerCase());
+  return (allStatuses || []).filter(s => lower.includes(String(s.name || '').toLowerCase()));
 }
 function _rePipelineCardClick(card, stage, leads, allStatuses) {
   // Toggle inline body with the leads in this stage.
@@ -6848,11 +6856,20 @@ function _reRenderCPProcessPipeline(view, pipeline, allStatuses) {
   });
 
   _RE_STAGE_META.forEach(meta => {
-    const status = _reFindStageStatus(allStatuses, meta.match);
-    const entry = status ? pipeline.find(p => Number(p.id) === Number(status.id)) : null;
-    const leads = (entry && entry.leads) || [];
+    // RE_STAGE_AGGREGATE_v1 — combine leads from EVERY matching status name
+    // so the demo's old 'Site Visit Planned' + the seeded 'Site Visit Fixed'
+    // BOTH count toward stage 6's card.
+    const matchedStatuses = _reFindAllStageStatuses(allStatuses, meta.match);
+    const status = matchedStatuses[0] || null;
+    let leads = [];
+    matchedStatuses.forEach(st => {
+      const entry = pipeline.find(p => Number(p.id) === Number(st.id));
+      if (entry && Array.isArray(entry.leads)) leads = leads.concat(entry.leads);
+    });
     const count = leads.length;
-    const usedName = status ? status.name : meta.match[0];
+    const usedName = matchedStatuses.length > 1
+      ? matchedStatuses.map(s => s.name).join(' / ')
+      : (status ? status.name : meta.match[0]);
 
     const card = h('div', { class: 're-pipe-card', style: {
       border: '2px solid ' + meta.color + '55',
