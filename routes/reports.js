@@ -1094,6 +1094,7 @@ async function api_reports_callActivity(token, filters) {
         bucket,
         started_at,
         duration_s,
+        connected,
         -- A call is "missed" if it never transitioned to call_ended /
         -- no recording was attached, regardless of how the row's
         -- direction column is labelled.
@@ -1103,18 +1104,13 @@ async function api_reports_callActivity(token, filters) {
           ELSE COALESCE(direction, 'unknown')
         END AS direction
       FROM bucketed
-      -- CALL_FILTER_v1 (2026-05-20):
-      -- A bucket gets counted as a "call" only if SOMETHING confirms it
-      -- actually happened — call_ended event, attached recording, an
-      -- explicit missed flag, or any non-zero duration. Otherwise the
-      -- rep just clicked "Call" in the CRM (logged as dial_requested or
-      -- autodial_requested with duration=0) and we end up double-counting
-      -- intentions as calls. shipuncle saw 499 'outgoing' calls that
-      -- were 100% dial-intent events because their APK isn't reporting
-      -- back call_ended events.
-      WHERE connected = true
-         OR direction IN ('in', 'missed')
-         OR duration_s > 0
+      -- CALL_FILTER_v2 (2026-05-21):
+      -- v1 was too aggressive — it filtered out outgoing dial-intents whose
+      -- APK never reported call_ended, leaving the report at 0 (shipuncle).
+      -- v2: count EVERY bucketed call (intent counts as a dial attempt).
+      -- Use the separate connected_calls metric below to show how many were
+      -- actually answered. This way the headline counts match what the user
+      -- sees in the Recent Calls feed.
     )
   `;
 
@@ -1130,6 +1126,8 @@ async function api_reports_callActivity(token, filters) {
       COUNT(DISTINCT phone) FILTER (WHERE direction = 'in')::int               AS unique_incoming,
       COUNT(DISTINCT phone) FILTER (WHERE direction = 'out')::int              AS unique_outgoing,
       COUNT(DISTINCT phone) FILTER (WHERE direction = 'missed')::int           AS unique_missed,
+      COUNT(*) FILTER (WHERE connected = true)::int                            AS connected_calls,
+      COUNT(*) FILTER (WHERE connected = false AND direction = 'out')::int     AS unanswered_outgoing,
       COALESCE(SUM(duration_s), 0)::int                    AS total_talk_s,
       ROUND(COALESCE(AVG(NULLIF(duration_s, 0))::numeric, 0), 0)::int AS avg_talk_s,
       COUNT(DISTINCT user_id)::int                          AS total_users
