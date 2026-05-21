@@ -6576,7 +6576,209 @@ function refreshDialerHistory() {
 }
 
 /* ---------------- Pipeline ---------------- */
+// RE_CP_PIPELINE_VIEW_v1 (2026-05-21) — replace the Pipeline page with the
+// CP CRM Process card-grid layout (3-row infographic style) when the Real
+// Estate industry pack is installed. Each card shows the stage number, icon,
+// title, action bullets, lead count, and status pill - matching the user's
+// canonical CP CRM Process diagram. Click a card to expand inline and show
+// the leads currently in that stage.
+//
+// Falls back to the standard kanban-lane layout for tenants without RE pack.
+const _RE_STAGE_META = [
+  { n: 1,  match: ['New Lead'],              icon: '📣', color: '#a855f7', bullets: ['Source: CP, Call, Website, WhatsApp, Walk-in', 'Lead details capture'] },
+  { n: 2,  match: ['Lead Captured'],         icon: '📝', color: '#3b82f6', bullets: ['Name, Mobile, Email', 'Requirement (Budget, BHK, Location)', 'Source / CP name'] },
+  { n: 3,  match: ['Assigned'],              icon: '👤', color: '#06b6d4', bullets: ['Assign to Executive / CP Manager', 'Auto notification to owner'] },
+  { n: 4,  match: ['In Follow-up','Follow Up','Follow-up'], icon: '📞', color: '#22c55e', bullets: ['Call within 5–10 min', 'Discuss requirement, budget, timeline', 'Update in CRM'] },
+  { n: 5,  match: ['Presentation Done'],     icon: '🏢', color: '#f59e0b', bullets: ['Brochure, Cost sheet', 'Floor plan, Location video', 'Send & Update'] },
+  { n: 6,  match: ['Site Visit Fixed','Site Visit Scheduled','Site Visit Planned'], icon: '📅', color: '#ec4899', bullets: ['Date & time fix', 'Send details to client', 'Update in CRM'] },
+  { n: 7,  match: ['Site Visit Done'],       icon: '👣', color: '#0ea5e9', bullets: ['Visit completed', 'Client feedback (likes / dislikes)', 'Update in CRM'] },
+  { n: 8,  match: ['Offer Given'],           icon: '🤝', color: '#f97316', bullets: ['Price discussion', 'Discount / benefits', 'Payment plan & update'] },
+  { n: 9,  match: ['Booked','Token Amount Done','Token Paid'], icon: '✅', color: '#16a34a', bullets: ['Client agrees', 'Token amount received', 'Update in CRM'] },
+  { n: 10, match: ['Documents Collected','Agreement Signed'], icon: '📋', color: '#8b5cf6', bullets: ['Booking form', 'KYC docs (PAN, Aadhaar)', 'Cheque / payment details'] },
+  { n: 11, match: ['Commission In Progress'],icon: '💰', color: '#0284c7', bullets: ['CP agreement', 'Commission slab', 'Stage-wise tracking, TDS'] },
+  { n: 12, match: ['Paid','Possession Given','Registered'], icon: '🏦', color: '#15803d', bullets: ['Commission due', 'Approval', 'Payment released, payout receipt'] }
+];
+function _reFindStageStatus(allStatuses, names) {
+  for (const nm of names) {
+    const hit = (allStatuses || []).find(s => String(s.name || '').toLowerCase() === nm.toLowerCase());
+    if (hit) return hit;
+  }
+  return null;
+}
+function _rePipelineCardClick(card, stage, leads, allStatuses) {
+  // Toggle inline body with the leads in this stage.
+  const existing = card.querySelector('.re-pipe-card-body');
+  if (existing) { existing.remove(); card.classList.remove('open'); return; }
+  const body = document.createElement('div');
+  body.className = 're-pipe-card-body';
+  body.style.cssText = 'margin-top:.5rem;border-top:1px solid #eee;padding-top:.5rem;';
+  if (!leads.length) {
+    body.style.cssText = 'font-size:.78rem;color:#888;padding:.4rem 0;';
+    body.textContent = 'No leads in this stage yet.';
+    card.appendChild(body);
+    card.classList.add('open');
+    return;
+  }
+  leads.slice(0, 50).forEach(l => {
+    const row = document.createElement('div');
+    row.style.cssText = 'padding:.35rem 0;border-bottom:1px solid #f4f4f5;cursor:pointer;font-size:.8rem;display:flex;justify-content:space-between;gap:.4rem;align-items:center;';
+    row.onclick = (ev) => { ev.stopPropagation(); openLeadModal(l.id); };
+    const left = document.createElement('div');
+    left.style.cssText = 'display:flex;flex-direction:column;';
+    const name = document.createElement('div'); name.style.fontWeight = '600'; name.textContent = l.name || '—';
+    const meta = document.createElement('div'); meta.style.cssText = 'color:#666;font-size:.72rem;';
+    meta.textContent = (l.phone || '') + ' · ' + (l.assigned_name || 'unassigned');
+    left.appendChild(name); left.appendChild(meta);
+    row.appendChild(left);
+    if (l.next_followup_at) {
+      const fu = document.createElement('div');
+      const overdue = new Date(l.next_followup_at) < new Date();
+      fu.style.cssText = 'font-size:.7rem;color:' + (overdue ? '#b91c1c' : '#666') + ';';
+      try { fu.textContent = fmtDate(l.next_followup_at, 'relative'); } catch(_) { fu.textContent = ''; }
+      row.appendChild(fu);
+    }
+    body.appendChild(row);
+  });
+  if (leads.length > 50) {
+    const more = document.createElement('div');
+    more.style.cssText = 'font-size:.7rem;color:#888;margin-top:.3rem;';
+    more.textContent = '+ ' + (leads.length - 50) + ' more';
+    body.appendChild(more);
+  }
+  card.appendChild(body);
+  card.classList.add('open');
+}
+function _reRenderCPProcessPipeline(view, pipeline, allStatuses) {
+  view.innerHTML = '';
+  // Header
+  view.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '.5rem', marginBottom: '.5rem', flexWrap: 'wrap' } },
+    h('div', {},
+      h('h2', { style: { margin: 0 }}, '🏢 CP CRM Process — Lead Received → Payout'),
+      h('p', { class: 'muted', style: { fontSize: '.82rem', margin: '.2rem 0 0' } }, 'Click any stage to expand and see the leads currently sitting in that stage. Click a lead row to open the full lead with the 12-stage strip.')
+    ),
+    h('button', { class: 'btn ghost sm', type: 'button', onclick: () => { window._rePipeForceKanban = true; VIEWS.pipeline(view); } }, '📊 Switch to Kanban view')
+  ));
+
+  // 12-card grid
+  const grid = h('div', {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+      gap: '.7rem',
+      marginTop: '.6rem'
+    }
+  });
+
+  _RE_STAGE_META.forEach(meta => {
+    const status = _reFindStageStatus(allStatuses, meta.match);
+    const entry = status ? pipeline.find(p => Number(p.id) === Number(status.id)) : null;
+    const leads = (entry && entry.leads) || [];
+    const count = leads.length;
+    const usedName = status ? status.name : meta.match[0];
+
+    const card = h('div', { class: 're-pipe-card', style: {
+      border: '2px solid ' + meta.color + '55',
+      borderRadius: '12px',
+      padding: '.75rem .85rem',
+      background: '#fff',
+      boxShadow: '0 1px 4px rgba(0,0,0,.04)',
+      cursor: 'pointer',
+      transition: 'transform .15s, box-shadow .15s',
+      position: 'relative'
+    }});
+    card.onmouseenter = () => { card.style.transform = 'translateY(-2px)'; card.style.boxShadow = '0 4px 12px rgba(0,0,0,.08)'; };
+    card.onmouseleave = () => { card.style.transform = ''; card.style.boxShadow = '0 1px 4px rgba(0,0,0,.04)'; };
+    card.onclick = (ev) => {
+      if (ev.target.closest('a, button, .re-pipe-card-body')) return;
+      _rePipelineCardClick(card, meta, leads, allStatuses);
+    };
+
+    // Header row: number badge + icon + title + count
+    card.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem' }},
+      h('div', { style: {
+        minWidth: '30px', height: '30px', borderRadius: '7px',
+        background: meta.color, color: '#fff',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontWeight: 700, fontSize: '.9rem'
+      }}, String(meta.n)),
+      h('div', { style: { flex: 1, minWidth: 0 }},
+        h('div', { style: { fontWeight: 700, fontSize: '.95rem', color: meta.color, display: 'flex', alignItems: 'center', gap: '.3rem' }},
+          h('span', {}, meta.icon),
+          h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}, meta.match[0])
+        )
+      ),
+      h('div', { style: {
+        background: count > 0 ? meta.color : '#e5e7eb',
+        color: count > 0 ? '#fff' : '#666',
+        padding: '.15rem .5rem',
+        borderRadius: '999px',
+        fontWeight: 700,
+        fontSize: '.85rem',
+        minWidth: '32px',
+        textAlign: 'center'
+      }}, String(count))
+    ));
+
+    // Bullets
+    card.appendChild(h('ul', { style: {
+      margin: '.4rem 0 .35rem 1.05rem',
+      padding: 0,
+      fontSize: '.76rem',
+      color: '#444',
+      lineHeight: '1.35'
+    } },
+      ...meta.bullets.map(b => h('li', { style: { marginBottom: '.1rem' } }, b))
+    ));
+
+    // Status pill at bottom + click hint
+    card.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '.35rem' } },
+      h('div', { style: {
+        background: '#f1f5f9',
+        padding: '.15rem .45rem',
+        borderRadius: '999px',
+        fontSize: '.68rem',
+        color: '#334155',
+        fontWeight: 600
+      }}, 'Status: ' + usedName),
+      count > 0
+        ? h('div', { style: { fontSize: '.7rem', color: meta.color, fontWeight: 600 } }, count + ' lead' + (count === 1 ? '' : 's') + ' →')
+        : h('div', { style: { fontSize: '.7rem', color: '#aaa' } }, 'empty')
+    ));
+
+    grid.appendChild(card);
+  });
+
+  view.appendChild(grid);
+
+  // Footer — summary stats
+  const totalLeads = pipeline.reduce((a, p) => a + ((p.leads || []).length), 0);
+  const active = pipeline.filter(p => (p.leads || []).length > 0).length;
+  view.appendChild(h('div', { style: {
+    marginTop: '1rem', padding: '.6rem .8rem', background: '#f8fafc',
+    borderRadius: '10px', fontSize: '.78rem', color: '#475569',
+    display: 'flex', gap: '1rem', flexWrap: 'wrap'
+  }},
+    h('span', {}, '📊 Total in pipeline: ', h('b', { style: { color: '#0f172a' }}, totalLeads)),
+    h('span', {}, '🟢 Active stages: ', h('b', { style: { color: '#0f172a' }}, active)),
+    h('span', { class: 'muted' }, 'Empty stages stay visible to remind reps to fill the pipeline.')
+  ));
+}
+
 VIEWS.pipeline = async (view) => {
+  // RE_CP_PIPELINE_VIEW_v1: when Real Estate pack is installed, render the
+  // CP CRM Process card grid instead of the funnel + kanban-lane layout.
+  // Toggle by clicking '📊 Switch to Kanban view' (sets _rePipeForceKanban).
+  if (!window._rePipeForceKanban && typeof _reIsActive === 'function' && _reIsActive()) {
+    try {
+      const { statuses = [] } = CRM.cache;
+      const pipeline = await api('api_leads_pipeline');
+      _reRenderCPProcessPipeline(view, pipeline, statuses);
+      return;
+    } catch (e) {
+      console.warn('[RE pipeline] fallback to kanban:', e.message);
+      // fall through to standard view
+    }
+  }
   // Filter state (stored on window so it survives re-render).
   window._pipePicked = window._pipePicked || { statuses: [], sources: [], users: [] };
   const _pipeFilters = {
