@@ -71,6 +71,67 @@ async function _migrateTenantDb(dbName) {
   }
 }
 
+
+// GENERIC_DEFAULTS_v1 (2026-05-21) — seed every NEW tenant with a
+// sensible set of statuses + tags so the SPA isn't empty on day 1.
+// Idempotent: skip if any rows already exist.
+async function _seedTenantDefaults(dbName) {
+  const baseUrl = process.env.CONTROL_DATABASE_URL || process.env.DATABASE_URL;
+  const u = new URL(baseUrl);
+  u.pathname = '/' + dbName;
+  const tPool = new Pool({
+    connectionString: u.toString(),
+    ssl: /sslmode=require|railway|neon|supabase|render/i.test(baseUrl) ? { rejectUnauthorized: false } : false,
+    max: 1
+  });
+  try {
+    // Statuses — only insert if statuses table is empty (don't override a
+    // pack installer that ran first OR a tenant who's already configured).
+    const st = await tPool.query('SELECT COUNT(*)::int AS c FROM statuses').catch(() => ({ rows: [{ c: 1 }] }));
+    if (Number(st.rows[0].c) === 0) {
+      const defaults = [
+        { name: 'New',            color: '#3b82f6', sort_order: 10  },
+        { name: 'Follow Up',      color: '#f59e0b', sort_order: 20  },
+        { name: 'Not Pick',       color: '#a855f7', sort_order: 30  },
+        { name: 'Not Interested', color: '#ef4444', sort_order: 40  },
+        { name: 'Junk',           color: '#6b7280', sort_order: 50  }
+      ];
+      for (const s of defaults) {
+        try {
+          await tPool.query(
+            'INSERT INTO statuses (name, color, sort_order, is_final) VALUES ($1, $2, $3, 0)',
+            [s.name, s.color, s.sort_order]
+          );
+        } catch (e) { /* swallow individual insert failures */ }
+      }
+      console.log('[provisioning] seeded ' + defaults.length + ' default statuses for ' + dbName);
+    }
+
+    // Tags — only insert if tag_library is empty
+    try {
+      const tg = await tPool.query('SELECT COUNT(*)::int AS c FROM tag_library');
+      if (Number(tg.rows[0].c) === 0) {
+        const tags = [
+          { name: 'hot',  color: '#ef4444' },
+          { name: 'warm', color: '#f59e0b' },
+          { name: 'cold', color: '#3b82f6' }
+        ];
+        for (const t of tags) {
+          try {
+            await tPool.query(
+              'INSERT INTO tag_library (name, color, is_active) VALUES ($1, $2, 1) ON CONFLICT (name) DO NOTHING',
+              [t.name, t.color]
+            );
+          } catch (e) { /* tag_library may not exist on very-old tenants */ }
+        }
+        console.log('[provisioning] seeded ' + tags.length + ' default tags for ' + dbName);
+      }
+    } catch (e) { console.warn('[provisioning] tag seed skipped for ' + dbName + ':', e.message); }
+  } finally {
+    try { await tPool.end(); } catch (_) {}
+  }
+}
+
 async function _seedTenantAdmin(dbName, signup) {
   const baseUrl = process.env.CONTROL_DATABASE_URL || process.env.DATABASE_URL;
   const u = new URL(baseUrl);
@@ -137,6 +198,8 @@ async function provisionFromSignup(signupId) {
   await _provisionDb(dbName);
   // 2. Schema
   await _migrateTenantDb(dbName);
+  // 2a. Default statuses + tags (GENERIC_DEFAULTS_v1)
+  try { await _seedTenantDefaults(dbName); } catch (e) { console.warn('[provisioning] defaults seed failed:', e.message); }
   // 3. Admin user
   const oneTimePassword = await _seedTenantAdmin(dbName, signup);
 
