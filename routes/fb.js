@@ -288,9 +288,30 @@ async function _centralRegistryCall(page, op, opts) {
       },
       body: JSON.stringify(payload)
     });
-    const j = await r.json().catch(() => ({}));
+    // FB_REGISTRY_DIAG_v1 — capture raw body for diagnosis when JSON parse fails
+    // (e.g. PHP file not uploaded yet -> HTML 404 page; PHP fatal -> stack trace HTML).
+    let rawBody = '';
+    let j = {};
+    try {
+      rawBody = await r.text();
+      try { j = JSON.parse(rawBody); } catch (_) { j = {}; }
+    } catch (_) {}
     if (!r.ok || j.error) {
-      console.warn('[fb-registry] HTTP ' + r.status + ' for page ' + payload.page_id + ': ' + (j.error || 'unknown'));
+      // Build a useful error message:
+      //   - PHP returned JSON with error field -> use that
+      //   - Otherwise expose HTTP status + first 120 chars of body
+      let msg;
+      if (j.error) {
+        msg = j.error;
+      } else {
+        const snippet = (rawBody || '').replace(/<[^>]+>/g, '').trim().slice(0, 120);
+        if (r.status === 404)      msg = 'HTTP 404 - fb_leads_register.php not found on smartcrmsolution.com (is it uploaded?)';
+        else if (r.status === 401) msg = 'HTTP 401 - invalid X-Register-Secret. Set FB_REGISTRY_SECRET env var on Railway to match SHARED_SECRET in PHP.';
+        else if (r.status === 500) msg = 'HTTP 500 - PHP error: ' + (snippet || 'check fb_leads_register.log on server');
+        else if (r.status === 0)   msg = 'Network error - could not reach ' + url;
+        else                       msg = 'HTTP ' + r.status + (snippet ? ' - ' + snippet : '');
+      }
+      console.warn('[fb-registry] ' + msg + ' (page=' + payload.page_id + ')');
       try {
         const list = await _readPagesList();
         const idx = list.findIndex(p => String(p.page_id) === payload.page_id);
@@ -298,11 +319,11 @@ async function _centralRegistryCall(page, op, opts) {
           list[idx].last_registry_sync_at = new Date().toISOString();
           list[idx].last_registry_sync_op = op;
           list[idx].last_registry_sync_ok = false;
-          list[idx].last_registry_sync_error = j.error || ('HTTP ' + r.status);
+          list[idx].last_registry_sync_error = msg;
           await _writePagesList(list);
         }
       } catch (_) {}
-      return { ok: false, status: r.status, error: j.error || 'unknown' };
+      return { ok: false, status: r.status, error: msg };
     }
     console.log('[fb-registry] ' + op + ' page=' + payload.page_id + ' db_prefix=' + payload.db_prefix + ' total=' + (j.total_entries != null ? j.total_entries : j.total_pages));
     // FB_REGISTRY_STATUS_v1 — stamp last_registry_sync_at on the page entry
@@ -777,6 +798,10 @@ function safeJson(s) { try { return JSON.parse(s); } catch (_) { return { raw: s
 async function api_fb_pages_syncRegistry(token, pageId) {
   const me = await authUser(token);
   if (me.role !== 'admin') throw new Error('Admin only');
+  // FB_REGISTRY_DIAG_v1 — fail fast with a helpful message when basics are missing.
+  if (!process.env.FB_REGISTRY_SECRET) {
+    throw new Error('FB_REGISTRY_SECRET env var is not set on Railway. Set it to the same value as SHARED_SECRET in fb_leads_register.php on smartcrmsolution.com.');
+  }
   const list = await _readPagesList();
   const tenantSlug = (typeof db.getTenantSlug === 'function') ? (db.getTenantSlug() || '') : (process.env.TENANT_SLUG || '');
   const appId = await db.getConfig('META_APP_ID', '');
