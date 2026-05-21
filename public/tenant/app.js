@@ -32690,10 +32690,20 @@ VIEWS.activityreport = async (view) => {
     'ⓘ WhatsApp messages (bot replies + auto-template sends + inbound) are NOT counted as rep activity — only manual rep actions are.'));
 
   // Filters bar
+  // ACTIVITY_DATE_TZ_v1 (2026-05-21): use LOCAL date components, not toISOString().
+  // setHours(0,0,0,0) sets LOCAL midnight; toISOString() then converts to UTC,
+  // which in IST is yesterday-18:30 — so the slice came out as YESTERDAY and
+  // users saw "Today=0" because today's data was outside the visible range.
+  const _fmtYmd = (d) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return y + '-' + m + '-' + dd;
+  };
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const defFrom = new Date(today); defFrom.setDate(defFrom.getDate() - 29);
-  const fromInp = h('input', { type: 'date', value: defFrom.toISOString().slice(0, 10), class: 'input', style: { width: '160px' } });
-  const toInp   = h('input', { type: 'date', value: today.toISOString().slice(0, 10),    class: 'input', style: { width: '160px' } });
+  const fromInp = h('input', { type: 'date', value: _fmtYmd(defFrom), class: 'input', style: { width: '160px' } });
+  const toInp   = h('input', { type: 'date', value: _fmtYmd(today),   class: 'input', style: { width: '160px' } });
   const goBtn   = h('button', { class: 'btn primary' }, '🔄 Refresh');
 
   const filters = h('div', { style: { display: 'flex', gap: '.6rem', alignItems: 'center', flexWrap: 'wrap', margin: '.6rem 0 1rem' } },
