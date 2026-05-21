@@ -538,6 +538,77 @@ async function api_saas_tenants_installPack(token, payload) {
   };
 }
 
+// FB_REGISTRY_BACKFILL_v1 (2026-05-21) — iterate every active tenant, read
+// META_PAGES_LIST, and POST every page to fb_leads_register.php so old
+// tenants who connected FB before FB_CENTRAL_REGISTRY_v2 deploy show up in
+// the central JSON registry. Idempotent — calling twice updates entries
+// in place via upsert.
+async function api_saas_fb_backfillRegistry(token, payload) {
+  const { requireSuperAdmin } = require('./superAdminAuth');
+  await requireSuperAdmin(token);
+  const onlySlug = payload && payload.slug ? String(payload.slug) : null;
+  const controlDb = require('../../db/pg');
+  const tenantPoolMod = require('../../utils/tenantPool');
+  const tenantDb = require('../../db/pg');
+
+  const r = await controlDb.query(
+    `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC`
+  );
+  const results = [];
+  let totalRegistered = 0, totalSkipped = 0, totalErrors = 0;
+
+  for (const row of r.rows) {
+    if (onlySlug && row.slug !== onlySlug) continue;
+    let t;
+    try { t = await tenantPoolMod.findActiveTenant(row.slug); } catch (_) { continue; }
+    if (!t) { results.push({ slug: row.slug, error: 'tenant not found' }); totalErrors++; continue; }
+    const pool = tenantPoolMod.poolFor(t);
+    if (!pool) { results.push({ slug: row.slug, error: 'no pool' }); totalErrors++; continue; }
+
+    try {
+      const out = await tenantDb.tenantStorage.run({ pool, tenant: t, slug: row.slug }, async () => {
+        const fb = require('../fb');
+        const db = require('../../db/pg');
+        // Read this tenant's META_PAGES_LIST and META_APP_ID
+        const rawList = await db.getConfig('META_PAGES_LIST', '');
+        let pages = [];
+        try { pages = JSON.parse(rawList); } catch (_) {}
+        if (!Array.isArray(pages) || !pages.length) {
+          return { skipped: true, reason: 'no pages connected' };
+        }
+        const appId = await db.getConfig('META_APP_ID', '');
+        const verifyToken = await db.getConfig('META_VERIFY_TOKEN', '');
+        let registered = 0, skipped = 0, errors = 0;
+        for (const pg of pages) {
+          try {
+            const res = await fb._centralRegistryCall(
+              pg,
+              pg.is_monitored ? 'upsert' : 'remove',
+              { tenant_slug: row.slug, app_id: appId, is_subscribed: pg.is_monitored ? 1 : 0, verify_token: verifyToken }
+            );
+            if (res && res.ok !== false) registered++;
+            else { skipped++; }
+          } catch (e) { errors++; }
+        }
+        return { pages: pages.length, registered, skipped, errors };
+      });
+      results.push({ slug: row.slug, ...out });
+      if (out.registered) totalRegistered += out.registered;
+      if (out.skipped) totalSkipped += (typeof out.skipped === 'number' ? out.skipped : 0);
+      if (out.errors) totalErrors += out.errors;
+    } catch (e) {
+      results.push({ slug: row.slug, error: e.message });
+      totalErrors++;
+    }
+  }
+
+  return {
+    ok: true,
+    summary: { tenants_scanned: results.length, totalRegistered, totalSkipped, totalErrors },
+    results
+  };
+}
+
 module.exports = {
   api_saas_tenants_list,
   api_saas_tenants_get,
@@ -551,5 +622,6 @@ module.exports = {
   api_saas_tenants_reseedKb,
   api_saas_tenants_resetUserPassword,
   api_saas_tenants_runBootstrap,
-  api_saas_tenants_installPack
+  api_saas_tenants_installPack,
+  api_saas_fb_backfillRegistry
 };

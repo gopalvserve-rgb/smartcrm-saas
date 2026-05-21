@@ -205,7 +205,37 @@ VIEWS.packages = async (view) => {
       h('td', { style: { textAlign: 'right' } }, h('button', { class: 'btn ghost sm', onclick: () => editPackage(p) }, 'Edit'))
     )))
   );
-  view.appendChild(h('div', { class: 'card', style: { padding: 0 } }, tbl));
+  // FB_REGISTRY_BACKFILL_v1 — one-click sync all tenant FB pages into central registry
+  const fbBackfillBar = h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', marginBottom: '.6rem', padding: '.5rem .7rem', background: '#fef3c7', borderRadius: '8px', border: '1px solid #fde68a' }},
+    h('span', { style: { fontSize: '.85rem' }}, '\ud83d\udce1 FB Lead Ads central registry:'),
+    h('span', { class: 'muted', style: { fontSize: '.78rem', flex: 1 }},
+      'Push every tenant\'s connected Facebook pages into fb_leads_connections.json on smartcrmsolution.com so the central webhook routes leads correctly. Safe to run anytime.'),
+    h('button', { class: 'btn primary', style: { whiteSpace: 'nowrap' }, onclick: async (ev) => {
+      const btn = ev.target;
+      btn.disabled = true; btn.textContent = '\u23f3 Backfilling...';
+      try {
+        const out = await api('api_saas_fb_backfillRegistry', {});
+        const s = out.summary || {};
+        toast('\u2714 Backfill done: ' + (s.totalRegistered || 0) + ' pages registered across ' + (s.tenants_scanned || 0) + ' tenants');
+        // Show results in a quick modal
+        const m = document.createElement('div');
+        m.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:99999;display:flex;align-items:center;justify-content:center;';
+        m.onclick = (e) => { if (e.target === m) m.remove(); };
+        const card = document.createElement('div');
+        card.style.cssText = 'background:#fff;border-radius:12px;max-width:720px;width:92%;max-height:80vh;overflow:auto;padding:1.2rem 1.4rem;';
+        card.innerHTML = '<h3 style="margin:0 0 .4rem">\u{1f4e1} FB Registry backfill results</h3>' +
+                        '<p class="muted" style="font-size:.85rem;margin-bottom:.6rem">Pages registered: <b>' + (s.totalRegistered || 0) + '</b> &middot; tenants scanned: <b>' + (s.tenants_scanned || 0) + '</b> &middot; errors: <b>' + (s.totalErrors || 0) + '</b></p>' +
+                        '<pre style="background:#0f172a;color:#e2e8f0;padding:.7rem;border-radius:6px;font-size:.74rem;max-height:55vh;overflow:auto;white-space:pre-wrap">' + JSON.stringify(out.results, null, 2) + '</pre>' +
+                        '<div style="text-align:right;margin-top:.7rem"><button id="re-close" style="padding:.45rem .8rem;border-radius:8px;border:none;background:#6366f1;color:#fff;cursor:pointer;font-weight:600">Close</button></div>';
+        m.appendChild(card);
+        document.body.appendChild(m);
+        card.querySelector('#re-close').onclick = () => m.remove();
+      } catch(e) { toast('Backfill failed: ' + e.message, 'err'); }
+      finally { btn.disabled = false; btn.textContent = '\ud83d\udd04 Backfill FB Registry'; }
+    }}, '\ud83d\udd04 Backfill FB Registry')
+  );
+  view.appendChild(fbBackfillBar);
+    view.appendChild(h('div', { class: 'card', style: { padding: 0 } }, tbl));
 };
 
 function editPackage(p) {
@@ -440,7 +470,37 @@ VIEWS.tenants = async (view) => {
       )
     )))
   );
-  view.appendChild(h('div', { class: 'card', style: { padding: 0 } }, tbl));
+  // FB_REGISTRY_BACKFILL_v1 — one-click sync all tenant FB pages into central registry
+  const fbBackfillBar = h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', marginBottom: '.6rem', padding: '.5rem .7rem', background: '#fef3c7', borderRadius: '8px', border: '1px solid #fde68a' }},
+    h('span', { style: { fontSize: '.85rem' }}, '\ud83d\udce1 FB Lead Ads central registry:'),
+    h('span', { class: 'muted', style: { fontSize: '.78rem', flex: 1 }},
+      'Push every tenant\'s connected Facebook pages into fb_leads_connections.json on smartcrmsolution.com so the central webhook routes leads correctly. Safe to run anytime.'),
+    h('button', { class: 'btn primary', style: { whiteSpace: 'nowrap' }, onclick: async (ev) => {
+      const btn = ev.target;
+      btn.disabled = true; btn.textContent = '\u23f3 Backfilling...';
+      try {
+        const out = await api('api_saas_fb_backfillRegistry', {});
+        const s = out.summary || {};
+        toast('\u2714 Backfill done: ' + (s.totalRegistered || 0) + ' pages registered across ' + (s.tenants_scanned || 0) + ' tenants');
+        // Show results in a quick modal
+        const m = document.createElement('div');
+        m.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:99999;display:flex;align-items:center;justify-content:center;';
+        m.onclick = (e) => { if (e.target === m) m.remove(); };
+        const card = document.createElement('div');
+        card.style.cssText = 'background:#fff;border-radius:12px;max-width:720px;width:92%;max-height:80vh;overflow:auto;padding:1.2rem 1.4rem;';
+        card.innerHTML = '<h3 style="margin:0 0 .4rem">\u{1f4e1} FB Registry backfill results</h3>' +
+                        '<p class="muted" style="font-size:.85rem;margin-bottom:.6rem">Pages registered: <b>' + (s.totalRegistered || 0) + '</b> &middot; tenants scanned: <b>' + (s.tenants_scanned || 0) + '</b> &middot; errors: <b>' + (s.totalErrors || 0) + '</b></p>' +
+                        '<pre style="background:#0f172a;color:#e2e8f0;padding:.7rem;border-radius:6px;font-size:.74rem;max-height:55vh;overflow:auto;white-space:pre-wrap">' + JSON.stringify(out.results, null, 2) + '</pre>' +
+                        '<div style="text-align:right;margin-top:.7rem"><button id="re-close" style="padding:.45rem .8rem;border-radius:8px;border:none;background:#6366f1;color:#fff;cursor:pointer;font-weight:600">Close</button></div>';
+        m.appendChild(card);
+        document.body.appendChild(m);
+        card.querySelector('#re-close').onclick = () => m.remove();
+      } catch(e) { toast('Backfill failed: ' + e.message, 'err'); }
+      finally { btn.disabled = false; btn.textContent = '\ud83d\udd04 Backfill FB Registry'; }
+    }}, '\ud83d\udd04 Backfill FB Registry')
+  );
+  view.appendChild(fbBackfillBar);
+    view.appendChild(h('div', { class: 'card', style: { padding: 0 } }, tbl));
 };
 
 /**
@@ -832,7 +892,37 @@ VIEWS.invoices = async (view) => {
       )
     )))
   );
-  view.appendChild(h('div', { class: 'card', style: { padding: 0 } }, tbl));
+  // FB_REGISTRY_BACKFILL_v1 — one-click sync all tenant FB pages into central registry
+  const fbBackfillBar = h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', marginBottom: '.6rem', padding: '.5rem .7rem', background: '#fef3c7', borderRadius: '8px', border: '1px solid #fde68a' }},
+    h('span', { style: { fontSize: '.85rem' }}, '\ud83d\udce1 FB Lead Ads central registry:'),
+    h('span', { class: 'muted', style: { fontSize: '.78rem', flex: 1 }},
+      'Push every tenant\'s connected Facebook pages into fb_leads_connections.json on smartcrmsolution.com so the central webhook routes leads correctly. Safe to run anytime.'),
+    h('button', { class: 'btn primary', style: { whiteSpace: 'nowrap' }, onclick: async (ev) => {
+      const btn = ev.target;
+      btn.disabled = true; btn.textContent = '\u23f3 Backfilling...';
+      try {
+        const out = await api('api_saas_fb_backfillRegistry', {});
+        const s = out.summary || {};
+        toast('\u2714 Backfill done: ' + (s.totalRegistered || 0) + ' pages registered across ' + (s.tenants_scanned || 0) + ' tenants');
+        // Show results in a quick modal
+        const m = document.createElement('div');
+        m.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:99999;display:flex;align-items:center;justify-content:center;';
+        m.onclick = (e) => { if (e.target === m) m.remove(); };
+        const card = document.createElement('div');
+        card.style.cssText = 'background:#fff;border-radius:12px;max-width:720px;width:92%;max-height:80vh;overflow:auto;padding:1.2rem 1.4rem;';
+        card.innerHTML = '<h3 style="margin:0 0 .4rem">\u{1f4e1} FB Registry backfill results</h3>' +
+                        '<p class="muted" style="font-size:.85rem;margin-bottom:.6rem">Pages registered: <b>' + (s.totalRegistered || 0) + '</b> &middot; tenants scanned: <b>' + (s.tenants_scanned || 0) + '</b> &middot; errors: <b>' + (s.totalErrors || 0) + '</b></p>' +
+                        '<pre style="background:#0f172a;color:#e2e8f0;padding:.7rem;border-radius:6px;font-size:.74rem;max-height:55vh;overflow:auto;white-space:pre-wrap">' + JSON.stringify(out.results, null, 2) + '</pre>' +
+                        '<div style="text-align:right;margin-top:.7rem"><button id="re-close" style="padding:.45rem .8rem;border-radius:8px;border:none;background:#6366f1;color:#fff;cursor:pointer;font-weight:600">Close</button></div>';
+        m.appendChild(card);
+        document.body.appendChild(m);
+        card.querySelector('#re-close').onclick = () => m.remove();
+      } catch(e) { toast('Backfill failed: ' + e.message, 'err'); }
+      finally { btn.disabled = false; btn.textContent = '\ud83d\udd04 Backfill FB Registry'; }
+    }}, '\ud83d\udd04 Backfill FB Registry')
+  );
+  view.appendChild(fbBackfillBar);
+    view.appendChild(h('div', { class: 'card', style: { padding: 0 } }, tbl));
 };
 
 VIEWS.webhooks = async (view) => {
@@ -1396,7 +1486,37 @@ VIEWS.requirements = async (view) => {
       h('td', { class: 'muted' }, fmtDate(c.created_at))
     )))
   );
-  view.appendChild(h('div', { class: 'card', style: { padding: 0 } }, tbl));
+  // FB_REGISTRY_BACKFILL_v1 — one-click sync all tenant FB pages into central registry
+  const fbBackfillBar = h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', marginBottom: '.6rem', padding: '.5rem .7rem', background: '#fef3c7', borderRadius: '8px', border: '1px solid #fde68a' }},
+    h('span', { style: { fontSize: '.85rem' }}, '\ud83d\udce1 FB Lead Ads central registry:'),
+    h('span', { class: 'muted', style: { fontSize: '.78rem', flex: 1 }},
+      'Push every tenant\'s connected Facebook pages into fb_leads_connections.json on smartcrmsolution.com so the central webhook routes leads correctly. Safe to run anytime.'),
+    h('button', { class: 'btn primary', style: { whiteSpace: 'nowrap' }, onclick: async (ev) => {
+      const btn = ev.target;
+      btn.disabled = true; btn.textContent = '\u23f3 Backfilling...';
+      try {
+        const out = await api('api_saas_fb_backfillRegistry', {});
+        const s = out.summary || {};
+        toast('\u2714 Backfill done: ' + (s.totalRegistered || 0) + ' pages registered across ' + (s.tenants_scanned || 0) + ' tenants');
+        // Show results in a quick modal
+        const m = document.createElement('div');
+        m.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:99999;display:flex;align-items:center;justify-content:center;';
+        m.onclick = (e) => { if (e.target === m) m.remove(); };
+        const card = document.createElement('div');
+        card.style.cssText = 'background:#fff;border-radius:12px;max-width:720px;width:92%;max-height:80vh;overflow:auto;padding:1.2rem 1.4rem;';
+        card.innerHTML = '<h3 style="margin:0 0 .4rem">\u{1f4e1} FB Registry backfill results</h3>' +
+                        '<p class="muted" style="font-size:.85rem;margin-bottom:.6rem">Pages registered: <b>' + (s.totalRegistered || 0) + '</b> &middot; tenants scanned: <b>' + (s.tenants_scanned || 0) + '</b> &middot; errors: <b>' + (s.totalErrors || 0) + '</b></p>' +
+                        '<pre style="background:#0f172a;color:#e2e8f0;padding:.7rem;border-radius:6px;font-size:.74rem;max-height:55vh;overflow:auto;white-space:pre-wrap">' + JSON.stringify(out.results, null, 2) + '</pre>' +
+                        '<div style="text-align:right;margin-top:.7rem"><button id="re-close" style="padding:.45rem .8rem;border-radius:8px;border:none;background:#6366f1;color:#fff;cursor:pointer;font-weight:600">Close</button></div>';
+        m.appendChild(card);
+        document.body.appendChild(m);
+        card.querySelector('#re-close').onclick = () => m.remove();
+      } catch(e) { toast('Backfill failed: ' + e.message, 'err'); }
+      finally { btn.disabled = false; btn.textContent = '\ud83d\udd04 Backfill FB Registry'; }
+    }}, '\ud83d\udd04 Backfill FB Registry')
+  );
+  view.appendChild(fbBackfillBar);
+    view.appendChild(h('div', { class: 'card', style: { padding: 0 } }, tbl));
 };
 
 VIEWS.admins = async (view) => {
@@ -1421,7 +1541,37 @@ VIEWS.admins = async (view) => {
       h('td', { style: { textAlign: 'right' } }, h('button', { class: 'btn ghost xs', onclick: () => editAdmin(a) }, 'Edit'))
     )))
   );
-  view.appendChild(h('div', { class: 'card', style: { padding: 0 } }, tbl));
+  // FB_REGISTRY_BACKFILL_v1 — one-click sync all tenant FB pages into central registry
+  const fbBackfillBar = h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', marginBottom: '.6rem', padding: '.5rem .7rem', background: '#fef3c7', borderRadius: '8px', border: '1px solid #fde68a' }},
+    h('span', { style: { fontSize: '.85rem' }}, '\ud83d\udce1 FB Lead Ads central registry:'),
+    h('span', { class: 'muted', style: { fontSize: '.78rem', flex: 1 }},
+      'Push every tenant\'s connected Facebook pages into fb_leads_connections.json on smartcrmsolution.com so the central webhook routes leads correctly. Safe to run anytime.'),
+    h('button', { class: 'btn primary', style: { whiteSpace: 'nowrap' }, onclick: async (ev) => {
+      const btn = ev.target;
+      btn.disabled = true; btn.textContent = '\u23f3 Backfilling...';
+      try {
+        const out = await api('api_saas_fb_backfillRegistry', {});
+        const s = out.summary || {};
+        toast('\u2714 Backfill done: ' + (s.totalRegistered || 0) + ' pages registered across ' + (s.tenants_scanned || 0) + ' tenants');
+        // Show results in a quick modal
+        const m = document.createElement('div');
+        m.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:99999;display:flex;align-items:center;justify-content:center;';
+        m.onclick = (e) => { if (e.target === m) m.remove(); };
+        const card = document.createElement('div');
+        card.style.cssText = 'background:#fff;border-radius:12px;max-width:720px;width:92%;max-height:80vh;overflow:auto;padding:1.2rem 1.4rem;';
+        card.innerHTML = '<h3 style="margin:0 0 .4rem">\u{1f4e1} FB Registry backfill results</h3>' +
+                        '<p class="muted" style="font-size:.85rem;margin-bottom:.6rem">Pages registered: <b>' + (s.totalRegistered || 0) + '</b> &middot; tenants scanned: <b>' + (s.tenants_scanned || 0) + '</b> &middot; errors: <b>' + (s.totalErrors || 0) + '</b></p>' +
+                        '<pre style="background:#0f172a;color:#e2e8f0;padding:.7rem;border-radius:6px;font-size:.74rem;max-height:55vh;overflow:auto;white-space:pre-wrap">' + JSON.stringify(out.results, null, 2) + '</pre>' +
+                        '<div style="text-align:right;margin-top:.7rem"><button id="re-close" style="padding:.45rem .8rem;border-radius:8px;border:none;background:#6366f1;color:#fff;cursor:pointer;font-weight:600">Close</button></div>';
+        m.appendChild(card);
+        document.body.appendChild(m);
+        card.querySelector('#re-close').onclick = () => m.remove();
+      } catch(e) { toast('Backfill failed: ' + e.message, 'err'); }
+      finally { btn.disabled = false; btn.textContent = '\ud83d\udd04 Backfill FB Registry'; }
+    }}, '\ud83d\udd04 Backfill FB Registry')
+  );
+  view.appendChild(fbBackfillBar);
+    view.appendChild(h('div', { class: 'card', style: { padding: 0 } }, tbl));
 };
 
 function editAdmin(a) {

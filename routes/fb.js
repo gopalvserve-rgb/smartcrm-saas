@@ -752,6 +752,8 @@ module.exports = {
   api_fb_oauth_url, api_fb_debug,
   // exported for server.js to mount as a plain route
   expressOAuthCallback,
+  // exported for super-admin backfill API (FB_REGISTRY_BACKFILL_v1)
+  _centralRegistryCall,
   // exported for use inside webhooks.js
   _pageContextForWebhook
 };
