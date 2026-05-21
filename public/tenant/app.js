@@ -32552,6 +32552,93 @@ async function openLeadActivityTimeline(leadId, leadName) {
 }
 try { window.openLeadActivityTimeline = openLeadActivityTimeline; } catch (_) {}
 
+/* LEAD_ACTIVITY_DRILL_v1 — modal that lists the lead_actions rows
+ * behind any numeric cell in the Activity Report. Fired by clicking
+ * a count in the caller-wise table. */
+async function _openActivityDrillModal(opts) {
+  const _emoji = {
+    remark: '💬', status_change: '🔄', followup_set: '🗓', note_updated: '📝',
+    tags_updated: '🏷', assigned: '👤', reassigned: '🔁',
+    qualified: '✅', unqualified: '↩️',
+    edu_enrollment_created: '🎓', edu_payment: '💰',
+    re_booking_created: '🏢', re_demand_paid: '💸',
+    re_requirement_saved: '🎯', re_booking_cancelled: '❌'
+  };
+  const titleBits = [];
+  if (opts.user_name) titleBits.push('👤 ' + opts.user_name);
+  if (opts.action_type && opts.action_type !== 'all') {
+    titleBits.push((_emoji[opts.action_type] || '') + ' ' + opts.action_type.replace(/_/g, ' '));
+  } else {
+    titleBits.push('all actions');
+  }
+  if (opts.label) titleBits.push('· ' + opts.label);
+
+  const body = h('div', {}, h('div', { class: 'muted' }, '⏳ Loading activities…'));
+  const close = h('button', { class: 'btn', onclick: () => modal.remove() }, 'Close');
+  const modal = h('div', {
+    class: 'modal-backdrop',
+    onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) modal.remove(); }
+  }, h('div', { class: 'modal', style: { maxWidth: '780px', width: '92vw' } },
+    h('div', { class: 'modal-head' },
+      h('h3', { style: { margin: 0 } }, '📋 Activity drill-down'),
+      h('div', { class: 'muted', style: { fontSize: '.85rem', marginTop: '.2rem' } }, titleBits.join('   '))
+    ),
+    h('div', { class: 'modal-body' }, body),
+    h('div', { class: 'modal-foot' }, close)
+  ));
+  document.body.appendChild(modal);
+
+  try {
+    const data = await api('api_reports_activityDetail', {
+      user_id:     opts.user_id,
+      action_type: opts.action_type,
+      scope:       opts.scope,
+      from:        opts.from,
+      to:          opts.to,
+      limit:       500
+    });
+    body.innerHTML = '';
+    body.appendChild(h('div', { class: 'muted', style: { fontSize: '.8rem', marginBottom: '.4rem' } },
+      data.range.from + ' → ' + data.range.to + '  ·  ' + (data.total || 0) + ' rows' +
+      (data.truncated ? '  (showing first 500)' : '')
+    ));
+    if (!data.rows || !data.rows.length) {
+      body.appendChild(h('div', { class: 'muted' }, 'No activities recorded for this cell.'));
+      return;
+    }
+    const tbl = h('table', { class: 'table', style: { fontSize: '.85rem' } });
+    tbl.appendChild(h('thead', {}, h('tr', {},
+      h('th', {}, 'When'),
+      h('th', {}, 'Lead'),
+      h('th', {}, 'Action'),
+      h('th', {}, 'Detail')
+    )));
+    const tb = h('tbody', {});
+    data.rows.forEach(r => {
+      const when = r.created_at ? new Date(r.created_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }) : '';
+      const tr = h('tr', {},
+        h('td', { style: { whiteSpace: 'nowrap', color: '#475569' } }, when),
+        h('td', {},
+          r.lead_id
+            ? h('a', { href: '#/leads', onclick: ev => { ev.preventDefault(); modal.remove(); try { navigateTo('leads', { leadId: r.lead_id }); } catch (_) { location.hash = '#/leads'; } }, style: { color: '#1d4ed8', cursor: 'pointer' } }, r.lead_name || ('Lead #' + r.lead_id))
+            : h('span', { class: 'muted' }, r.lead_name || '—')
+        ),
+        h('td', { style: { whiteSpace: 'nowrap' } }, (_emoji[r.action_type] || '·') + ' ' + r.action_type.replace(/_/g, ' ')),
+        h('td', { style: { color: '#1f2937' } }, r.summary || '')
+      );
+      tb.appendChild(tr);
+    });
+    tbl.appendChild(tb);
+    body.appendChild(tbl);
+  } catch (e) {
+    body.innerHTML = '';
+    body.appendChild(h('div', { style: { color: '#dc2626' } }, '⚠ ' + e.message));
+  }
+}
+// Expose for debugging + extension points
+try { window._openActivityDrillModal = _openActivityDrillModal; } catch (_) {}
+
+
 /* Manager / admin Activity Report — caller-wise + day-wise grid. */
 VIEWS.activityreport = async (view) => {
   view.innerHTML = '';
