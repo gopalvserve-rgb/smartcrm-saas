@@ -32376,6 +32376,10 @@ window.openIvrWebhookModal = openIvrWebhookModal;
   if (window.callLead._ivrWrapped) return;
   const original = window.callLead;
   window.callLead = async function (lead) {
+    // IVR_FALLBACK_v2 (2026-05-20) — always fall through to the native
+    // dialer on any IVR failure. The native tel: link is the
+    // always-available path; an IVR misconfig / network blip / iOS
+    // Safari 'Load failed' shouldn't block the rep from calling.
     try {
       const r = await api('api_ivr_initiateCall', { phone: lead && (lead.phone || lead), lead_id: lead && lead.id });
       if (r && r.ok) {
@@ -32383,11 +32387,16 @@ window.openIvrWebhookModal = openIvrWebhookModal;
         return r;
       }
     } catch (e) {
-      // If the error is "No active IVR config" — silently fall through to the
-      // original tel: dialer. Any other error → show it.
-      if (!/No active IVR config|not configured/i.test(e.message || '')) {
-        if (typeof toast === 'function') toast('IVR call failed: ' + e.message, 'err');
-        return;
+      // Log to console for debugging, but never block the call. Only
+      // surface a toast when the message looks like an actual server-side
+      // configuration error (not iOS 'Load failed' or generic network).
+      console.warn('[ivr] initiateCall failed, falling back to tel:', e && e.message);
+      const msg = String(e && e.message || '');
+      const isConfigError = /No active IVR|not configured/i.test(msg);
+      const isNetworkError = /Load failed|Failed to fetch|NetworkError|timeout/i.test(msg);
+      if (!isConfigError && !isNetworkError && typeof toast === 'function') {
+        // Real IVR error worth surfacing — but still fall through to native.
+        toast('IVR error: ' + msg + ' (using native dialer)', 'warn');
       }
     }
     return original.apply(this, arguments);
