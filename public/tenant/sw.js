@@ -12,7 +12,7 @@
  * - Tapping the notification focuses an open CRM tab if there is one,
  *   otherwise opens a new one at the URL the push payload specifies.
  */
-const CACHE = 'lead-crm-shell-v248-pipegrid';
+const CACHE = 'lead-crm-shell-v249-fbregstat';
 const SHELL = ['/', '/index.html', '/app.js', '/styles.css', '/manifest.webmanifest'];
 
 self.addEventListener('install', ev => {

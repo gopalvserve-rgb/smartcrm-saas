@@ -291,9 +291,32 @@ async function _centralRegistryCall(page, op, opts) {
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.error) {
       console.warn('[fb-registry] HTTP ' + r.status + ' for page ' + payload.page_id + ': ' + (j.error || 'unknown'));
+      try {
+        const list = await _readPagesList();
+        const idx = list.findIndex(p => String(p.page_id) === payload.page_id);
+        if (idx >= 0) {
+          list[idx].last_registry_sync_at = new Date().toISOString();
+          list[idx].last_registry_sync_op = op;
+          list[idx].last_registry_sync_ok = false;
+          list[idx].last_registry_sync_error = j.error || ('HTTP ' + r.status);
+          await _writePagesList(list);
+        }
+      } catch (_) {}
       return { ok: false, status: r.status, error: j.error || 'unknown' };
     }
     console.log('[fb-registry] ' + op + ' page=' + payload.page_id + ' db_prefix=' + payload.db_prefix + ' total=' + (j.total_entries != null ? j.total_entries : j.total_pages));
+    // FB_REGISTRY_STATUS_v1 — stamp last_registry_sync_at on the page entry
+    // so the Settings → Facebook UI can show a 'Synced' badge.
+    try {
+      const list = await _readPagesList();
+      const idx = list.findIndex(p => String(p.page_id) === payload.page_id);
+      if (idx >= 0) {
+        list[idx].last_registry_sync_at = new Date().toISOString();
+        list[idx].last_registry_sync_op = op;
+        list[idx].last_registry_sync_ok = true;
+        await _writePagesList(list);
+      }
+    } catch (_) { /* best-effort */ }
     return j;
   } catch (e) {
     console.warn('[fb-registry] network error for page ' + payload.page_id + ': ' + e.message);
@@ -400,6 +423,7 @@ async function api_fb_pages_list(token) {
   if (me.role !== 'admin') throw new Error('Admin only');
   const list = await _readPagesList();
   // Don't leak the access_token to the frontend.
+  // FB_REGISTRY_STATUS_v1 — keep registry status fields so the SPA can render badges
   return list.map(({ access_token, ...rest }) => rest);
 }
 
@@ -745,10 +769,46 @@ async function api_fb_debug(token) {
 }
 function safeJson(s) { try { return JSON.parse(s); } catch (_) { return { raw: s }; } }
 
+
+// FB_REGISTRY_STATUS_v1 (2026-05-21) — Manual sync to central registry.
+// Tenant admin clicks 'Sync to central' on the Settings → Facebook page;
+// calls _centralRegistryCall for one page (if pageId provided) or all
+// monitored pages. Result stamps last_registry_sync_* on each entry.
+async function api_fb_pages_syncRegistry(token, pageId) {
+  const me = await authUser(token);
+  if (me.role !== 'admin') throw new Error('Admin only');
+  const list = await _readPagesList();
+  const tenantSlug = (typeof db.getTenantSlug === 'function') ? (db.getTenantSlug() || '') : (process.env.TENANT_SLUG || '');
+  const appId = await db.getConfig('META_APP_ID', '');
+
+  const targets = pageId
+    ? list.filter(p => String(p.page_id) === String(pageId))
+    : list;
+
+  let ok = 0, failed = 0;
+  const results = [];
+  for (const pg of targets) {
+    try {
+      const r = await _centralRegistryCall(
+        pg,
+        pg.is_monitored ? 'upsert' : 'remove',
+        {
+          tenant_slug: tenantSlug,
+          app_id: appId,
+          is_subscribed: pg.is_monitored ? 1 : 0
+        }
+      );
+      if (r && r.ok !== false) ok++; else failed++;
+      results.push({ page_id: pg.page_id, page_name: pg.page_name, ok: r && r.ok !== false, error: r && r.error });
+    } catch (e) { failed++; results.push({ page_id: pg.page_id, error: e.message }); }
+  }
+  return { ok, failed, total: targets.length, results };
+}
+
 module.exports = {
   api_fb_connect, api_fb_disconnect, api_fb_status,
   api_fb_settings_get, api_fb_settings_set,
-  api_fb_pages_list, api_fb_pages_refetch, api_fb_pages_toggle, api_fb_pages_addManual,
+  api_fb_pages_list, api_fb_pages_refetch, api_fb_pages_toggle, api_fb_pages_addManual, api_fb_pages_syncRegistry,
   api_fb_oauth_url, api_fb_debug,
   // exported for server.js to mount as a plain route
   expressOAuthCallback,

@@ -18498,14 +18498,73 @@ async function adminFb() {
   }
 
   if (pages.length > 0) {
+    // FB_REGISTRY_STATUS_v1 — Sync-all button above the table
+    const syncAllBar = h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '.5rem', marginBottom: '.4rem', padding: '.45rem .6rem', background: '#eef2ff', borderRadius: '8px', border: '1px solid #c7d2fe' }},
+      h('span', { style: { fontSize: '.8rem', color: '#3730a3' } },
+        '\ud83d\udce1 Central registry: pushes each monitored page to ',
+        h('code', { style: { background: '#fff', padding: '.05rem .3rem', borderRadius: '4px', fontSize: '.72rem' } }, 'smartcrmsolution.com/fb_leads_connections.json'),
+        ' so Meta Lead Ads can route incoming leads.'),
+      h('button', { class: 'btn sm primary', style: { whiteSpace: 'nowrap' }, onclick: async (ev) => {
+        const btn = ev.target;
+        btn.disabled = true; btn.textContent = '\u23f3 Syncing\u2026';
+        try {
+          const out = await api('api_fb_pages_syncRegistry');
+          toast('\u2714 Synced ' + (out.ok || 0) + '/' + (out.total || 0) + ' pages to central registry');
+          showAdminTab('fb');
+        } catch (e) { toast(e.message, 'err'); }
+        finally { btn.disabled = false; btn.textContent = '\ud83d\udd04 Sync all to central'; }
+      } }, '\ud83d\udd04 Sync all to central')
+    );
+    pagesCard.appendChild(syncAllBar);
+
+    function _registryBadge(pg) {
+      if (!pg.is_monitored) {
+        return h('span', { style: { fontSize: '.7rem', color: '#888' } }, '\u2014 Not monitored');
+      }
+      if (pg.last_registry_sync_ok === true) {
+        const when = pg.last_registry_sync_at ? new Date(pg.last_registry_sync_at) : null;
+        const whenTxt = when ? when.toLocaleString() : '';
+        return h('span', { title: 'Last sync: ' + whenTxt, style: { background: '#dcfce7', color: '#166534', padding: '.1rem .4rem', borderRadius: '999px', fontSize: '.7rem', fontWeight: 600 } },
+          '\u2714 Synced'
+        );
+      }
+      if (pg.last_registry_sync_ok === false) {
+        return h('span', { title: pg.last_registry_sync_error || '', style: { background: '#fee2e2', color: '#b91c1c', padding: '.1rem .4rem', borderRadius: '999px', fontSize: '.7rem', fontWeight: 600 } },
+          '\u2717 Sync failed'
+        );
+      }
+      return h('span', { style: { background: '#fef3c7', color: '#92400e', padding: '.1rem .4rem', borderRadius: '999px', fontSize: '.7rem', fontWeight: 600 } },
+        '\u26a0 Not synced yet'
+      );
+    }
+
     const tbl = h('table', { class: 'mini-table fb-pages' },
       h('thead', {}, h('tr', {},
-        h('th', {}, 'Page Name'), h('th', { style: { textAlign: 'right' } }, 'Action')
+        h('th', {}, 'Page Name'),
+        h('th', {}, 'Page ID'),
+        h('th', {}, 'Central Registry'),
+        h('th', { style: { textAlign: 'right' } }, 'Action')
       )),
       h('tbody', {}, ...pages.map(pg => h('tr', {},
         h('td', {},
           h('div', {}, pg.page_name || ('Page ' + pg.page_id)),
           pg.category ? h('div', { class: 'muted', style: { fontSize: '.75rem' } }, pg.category) : null
+        ),
+        h('td', { style: { fontFamily: 'monospace', fontSize: '.72rem', color: '#666' } }, pg.page_id || ''),
+        h('td', {},
+          _registryBadge(pg),
+          pg.is_monitored
+            ? h('button', { class: 'btn xs ghost', style: { marginLeft: '.4rem' }, onclick: async (ev) => {
+                const btn = ev.target;
+                btn.disabled = true; btn.textContent = '\u23f3';
+                try {
+                  const out = await api('api_fb_pages_syncRegistry', pg.page_id);
+                  toast(out.ok ? '\u2714 Synced ' + pg.page_name : '\u2717 Sync failed: ' + (out.results && out.results[0] && out.results[0].error || 'unknown'), out.ok ? 'ok' : 'err');
+                  showAdminTab('fb');
+                } catch (e) { toast(e.message, 'err'); }
+                finally { btn.disabled = false; btn.textContent = '\ud83d\udd04 Sync'; }
+              } }, '\ud83d\udd04 Sync')
+            : null
         ),
         h('td', { style: { textAlign: 'right' } },
           pg.is_monitored
