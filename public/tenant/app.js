@@ -4110,8 +4110,8 @@ function _reCanonStages(allStatuses) {
   // (the range our installer uses) so the strip still works.
   if (out.length === 0) {
     return (allStatuses || [])
-      .filter(s => Number(s.display_order) >= 200 && Number(s.display_order) < 300)
-      .sort((a,b) => Number(a.display_order) - Number(b.display_order));
+      .filter(s => Number(s.sort_order) >= 200 && Number(s.sort_order) < 300)
+      .sort((a,b) => Number(a.sort_order) - Number(b.sort_order));
   }
   return out;
 }

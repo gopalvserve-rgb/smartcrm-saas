@@ -918,7 +918,7 @@ async function install(opts) {
         if (!have.rows.length) {
           try {
             await db.query(
-              `INSERT INTO statuses (name, display_order, color) VALUES ($1, $2, $3)`,
+              `INSERT INTO statuses (name, sort_order, color) VALUES ($1, $2, $3)`,
               [name, 200 + i, color]
             );
           } catch (_) {}
