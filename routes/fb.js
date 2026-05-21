@@ -219,6 +219,95 @@ async function api_fb_settings_set(token, payload) {
   return { ok: true };
 }
 
+
+
+// ============================================================
+// FB_CENTRAL_REGISTRY_v1 (2026-05-20)
+//
+// Forward page connect/disconnect events to the shared registry on
+// smartcrmsolution.com/fb_leads_register.php so the central
+// fb_leads_webhook.php can route incoming Meta Lead Ads back to the
+// right tenant's /hook/meta endpoint.
+//
+// Without this call, leads arriving at the shared callback URL
+// produce "Page id not found" because the PHP doesn't know which
+// tenant owns which page_id.
+//
+// Config (via env vars, falls back to defaults so it auto-works):
+//   FB_REGISTRY_URL    — default 'https://smartcrmsolution.com/fb_leads_register.php'
+//   FB_REGISTRY_SECRET — required. Same string as SHARED_SECRET in the PHP.
+//   FB_FORWARD_URL_BASE — base of the per-tenant /hook/meta URL.
+//                        Default tries to use the request's host.
+// ============================================================
+async function _centralRegistryCall(page, op, opts) {
+  opts = opts || {};
+  const url    = process.env.FB_REGISTRY_URL    || 'https://smartcrmsolution.com/fb_leads_register.php';
+  const secret = process.env.FB_REGISTRY_SECRET || '';
+  if (!secret) {
+    console.warn('[fb-registry] FB_REGISTRY_SECRET env not set — skipping central registration for page', page && page.page_id);
+    return { ok: false, skipped: 'no_secret' };
+  }
+  // Build target_url per CRM. Each repo overrides FB_TARGET_URL_BUILDER if
+  // the default doesn't match the actual /hook/meta path for that CRM.
+  let target_url = '';
+  if (typeof _fbTargetUrlBuilder === 'function') {
+    try { target_url = _fbTargetUrlBuilder(page, opts); } catch (_) {}
+  }
+  if (!target_url) target_url = opts.target_url || '';
+  if (!target_url && op === 'upsert') {
+    console.warn('[fb-registry] cannot resolve target_url for page', page && page.page_id);
+    return { ok: false, skipped: 'no_target_url' };
+  }
+
+  const payload = {
+    op,
+    page_id:      String((page && page.page_id) || ''),
+    page_name:    String((page && page.page_name) || ''),
+    access_token: String((page && page.access_token) || ''),
+    tenant_slug:  String(opts.tenant_slug || ''),
+    crm_brand:    String(opts.crm_brand || (process.env.CRM_BRAND || '')),
+    target_url,
+    verify_token: String(opts.verify_token || '')
+  };
+
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Register-Secret': secret
+      },
+      body: JSON.stringify(payload)
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.error) {
+      console.warn('[fb-registry] HTTP ' + r.status + ' for page ' + payload.page_id + ': ' + (j.error || 'unknown'));
+      return { ok: false, status: r.status, error: j.error || 'unknown' };
+    }
+    console.log('[fb-registry] ' + op + ' page=' + payload.page_id + ' tenant=' + payload.tenant_slug + ' total=' + j.total_pages);
+    return j;
+  } catch (e) {
+    console.warn('[fb-registry] network error for page ' + payload.page_id + ': ' + e.message);
+    return { ok: false, error: e.message };
+  }
+}
+
+// ============================================================
+// CRM-specific overrides — each repo defines _fbTargetUrlBuilder
+// to compute the per-page target_url that the central webhook will
+// POST to. Defaults below assume single-tenant (Celeste/Stockbox).
+// smartcrm-saas overrides this to bake the tenant slug into the URL.
+// ============================================================
+
+function _fbTargetUrlBuilder(page, opts) {
+  // smartcrm-saas is multi-tenant: bake the slug into the path.
+  const slug = String(opts && opts.tenant_slug || '').replace(/[^a-z0-9_-]/gi, '');
+  if (!slug) return '';
+  const base = process.env.FB_FORWARD_URL_BASE || 'https://crm.smartcrmsolution.com';
+  return base.replace(/\/$/, '') + '/t/' + slug + '/hook/meta';
+}
+
+
 // ---------- API: Connect (FB Login) ----------
 
 async function api_fb_connect(token, shortToken) {
@@ -271,6 +360,11 @@ async function api_fb_disconnect(token) {
   for (const pg of list.filter(p => p.is_monitored)) {
     try { await _subscribePage(pg.page_id, pg.access_token, false); }
     catch (_) { /* best-effort */ }
+  }
+  // FB_CENTRAL_REGISTRY_v1 — also remove from the shared registry.
+  for (const pg of list) {
+    try { await _centralRegistryCall(pg, 'remove', { tenant_slug: (typeof db.getTenantSlug === 'function' ? (db.getTenantSlug() || '') : (process.env.TENANT_SLUG || '')) }); }
+    catch (_) {}
   }
   await db.setConfig('META_USER_TOKEN', '');
   await db.setConfig('META_CONNECTED_AT', '');
@@ -383,6 +477,17 @@ async function api_fb_pages_toggle(token, pageId, monitor) {
   pg.is_monitored = !!monitor;
   pg.last_action_at = db.nowIso();
   await _writePagesList(list);
+
+  // FB_CENTRAL_REGISTRY_v1 — keep the shared registry in sync with monitor state.
+  try {
+    const verifyToken = await db.getConfig('META_VERIFY_TOKEN', '');
+    const tenantSlug = (typeof db.getTenantSlug === 'function') ? (db.getTenantSlug() || '') : (process.env.TENANT_SLUG || '');
+    await _centralRegistryCall(pg, monitor ? 'upsert' : 'remove', {
+      tenant_slug: tenantSlug,
+      verify_token: verifyToken
+    });
+  } catch (e) { console.warn('[fb-registry] toggle sync failed:', e.message); }
+
   return { ok: true, page: { page_id: pg.page_id, page_name: pg.page_name, is_monitored: pg.is_monitored } };
 }
 
