@@ -892,19 +892,34 @@ async function install(opts) {
     console.warn('[packs/realestate] custom_fields seed skipped:', e.message);
   }
 
-  // Statuses (additive)
+  // RE_CP_PIPELINE_v1 (2026-05-21) — Statuses (additive, 12-stage CP flow)
+  // Mirrors the canonical 'CP CRM Process' diagram: Lead Received -> Payout.
+  // Editable by tenants after install (they can rename/delete/reorder).
   try {
     const stT = await db.query(`SELECT 1 FROM information_schema.tables WHERE table_name='statuses' LIMIT 1`);
     if (stT.rows.length) {
-      const wanted = ['Site Visit Scheduled','Site Visit Done','Token Paid','Agreement Signed','Booked','Registered','Possession Given'];
-      for (let i = 0; i < wanted.length; i++) {
-        const name = wanted[i];
+      const RE_STAGES = [
+        { name: 'New Lead',             color: '#a855f7' },  // 1 violet
+        { name: 'Lead Captured',        color: '#3b82f6' },  // 2 blue
+        { name: 'Assigned',             color: '#06b6d4' },  // 3 cyan
+        { name: 'In Follow-up',         color: '#22c55e' },  // 4 green
+        { name: 'Presentation Done',    color: '#f59e0b' },  // 5 amber
+        { name: 'Site Visit Fixed',     color: '#ec4899' },  // 6 pink
+        { name: 'Site Visit Done',      color: '#0ea5e9' },  // 7 sky
+        { name: 'Offer Given',          color: '#f97316' },  // 8 orange
+        { name: 'Booked',               color: '#16a34a' },  // 9 green-dark
+        { name: 'Documents Collected',  color: '#8b5cf6' },  // 10 indigo
+        { name: 'Commission In Progress', color: '#0284c7' },// 11 blue-dark
+        { name: 'Paid',                 color: '#15803d' }   // 12 green-paid
+      ];
+      for (let i = 0; i < RE_STAGES.length; i++) {
+        const { name, color } = RE_STAGES[i];
         const have = await db.query(`SELECT 1 FROM statuses WHERE LOWER(name)=LOWER($1) LIMIT 1`, [name]);
         if (!have.rows.length) {
           try {
             await db.query(
               `INSERT INTO statuses (name, display_order, color) VALUES ($1, $2, $3)`,
-              [name, 200 + i, '#0ea5e9']
+              [name, 200 + i, color]
             );
           } catch (_) {}
         }

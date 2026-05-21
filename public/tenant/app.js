@@ -4084,6 +4084,157 @@ function openColumnChooser() {
 }
 
 /* --- Lead modal --- */
+// RE_CP_PIPELINE_v1 (2026-05-21) — horizontal 12-stage strip + process guide modal.
+// Only renders when the Real Estate industry pack is installed. Uses the
+// tenant's statuses table directly so renames/reorders by the admin flow
+// through to the strip without code changes.
+function _reIsActive() {
+  try { return !!(CRM.installedPacks && CRM.installedPacks.has && CRM.installedPacks.has('realestate')); }
+  catch (_) { return false; }
+}
+// Match by name to the seeded RE_CP_PIPELINE_v1 stage labels (case-insensitive).
+const _RE_CANON_STAGES = [
+  'New Lead','Lead Captured','Assigned','In Follow-up','Presentation Done',
+  'Site Visit Fixed','Site Visit Done','Offer Given','Booked',
+  'Documents Collected','Commission In Progress','Paid'
+];
+function _reCanonStages(allStatuses) {
+  const byName = new Map();
+  (allStatuses || []).forEach(s => byName.set(String(s.name || '').toLowerCase(), s));
+  const out = [];
+  for (const nm of _RE_CANON_STAGES) {
+    const hit = byName.get(nm.toLowerCase());
+    if (hit) out.push(hit);
+  }
+  // If the tenant renamed everything, fall back to display_order range 200-299
+  // (the range our installer uses) so the strip still works.
+  if (out.length === 0) {
+    return (allStatuses || [])
+      .filter(s => Number(s.display_order) >= 200 && Number(s.display_order) < 300)
+      .sort((a,b) => Number(a.display_order) - Number(b.display_order));
+  }
+  return out;
+}
+function _reStageStrip(lead, statuses, opts) {
+  if (!_reIsActive()) return null;
+  const stages = _reCanonStages(statuses);
+  if (!stages.length) return null;
+  const currentId = Number(lead && lead.status_id) || 0;
+  const currentIdx = stages.findIndex(s => Number(s.id) === currentId);
+  const onPick = (opts && opts.onPick) || function(){};
+
+  const strip = h('div', { class: 're-stage-strip', style: {
+    display: 'flex', gap: '.35rem', overflowX: 'auto', padding: '.55rem .25rem',
+    margin: '.4rem 0 .8rem', borderRadius: '10px',
+    background: 'linear-gradient(180deg, rgba(99,102,241,.04), rgba(99,102,241,.01))',
+    border: '1px solid rgba(99,102,241,.18)'
+  }});
+
+  stages.forEach((s, i) => {
+    const isCurrent = Number(s.id) === currentId;
+    const isPast    = currentIdx >= 0 && i < currentIdx;
+    const color = s.color || '#6366f1';
+    const card = h('button', {
+      type: 'button',
+      title: 'Click to move lead to "' + s.name + '"',
+      onclick: ev => { ev.preventDefault(); onPick(s); },
+      style: {
+        flex: '0 0 auto', minWidth: '120px',
+        padding: '.45rem .55rem',
+        borderRadius: '8px',
+        border: isCurrent ? ('2px solid ' + color) : '1px solid rgba(0,0,0,.08)',
+        background: isCurrent ? color : (isPast ? '#e8f5e9' : '#fff'),
+        color: isCurrent ? '#fff' : (isPast ? '#1b5e20' : '#222'),
+        boxShadow: isCurrent ? ('0 2px 8px ' + color + '55') : 'none',
+        cursor: 'pointer',
+        textAlign: 'left',
+        fontSize: '.75rem',
+        lineHeight: '1.15'
+      }
+    },
+      h('div', { style: { fontWeight: 700, fontSize: '.62rem', opacity: '.85' } }, (isPast ? '✓ ' : '') + (i+1) + ' / ' + stages.length),
+      h('div', { style: { fontWeight: 600, marginTop: '.15rem' } }, s.name)
+    );
+    strip.appendChild(card);
+    if (i < stages.length - 1) {
+      strip.appendChild(h('div', { style: {
+        alignSelf: 'center', color: '#94a3b8', fontSize: '.9rem', userSelect: 'none'
+      }}, '›'));
+    }
+  });
+
+  const guideBtn = h('button', {
+    type: 'button', class: 'btn sm ghost',
+    style: { marginLeft: 'auto', alignSelf: 'center', whiteSpace: 'nowrap', flex: '0 0 auto' },
+    onclick: ev => { ev.preventDefault(); _reOpenProcessGuide(); }
+  }, '📋 Process Guide');
+
+  // Outer wrap with the guide button on the right
+  return h('div', { style: { display: 'flex', gap: '.4rem', alignItems: 'stretch' } }, strip, guideBtn);
+}
+
+function _reOpenProcessGuide() {
+  const m = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); }});
+  const body = h('div', { class: 'modal modal-lg', style: { maxWidth: '1100px' } });
+  m.appendChild(body);
+  body.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, '🏢 Real Estate CP Process — Lead Received → Payout'),
+    h('button', { class: 'btn icon', onclick: () => m.remove() }, '✕')
+  ));
+  const stages = [
+    { n: 1,  t: 'Lead Received',          s: 'New Lead',            c: '#a855f7', i: '📣', bullets: ['Source: CP, Call, Website, WhatsApp, Walk-in', 'Lead details capture'] },
+    { n: 2,  t: 'Lead Entry in CRM',      s: 'Lead Captured',       c: '#3b82f6', i: '📝', bullets: ['Name, Mobile, Email', 'Requirement (Budget, BHK, Location)', 'Source / CP name'] },
+    { n: 3,  t: 'Lead Assign',            s: 'Assigned',            c: '#06b6d4', i: '👤', bullets: ['Assign to Executive / CP Manager', 'Auto notification to owner'] },
+    { n: 4,  t: 'First Follow-up',        s: 'In Follow-up',        c: '#22c55e', i: '📞', bullets: ['Call within 5–10 min', 'Discuss requirement, budget, timeline', 'Update in CRM'] },
+    { n: 5,  t: 'Project Presentation',   s: 'Presentation Done',   c: '#f59e0b', i: '🏢', bullets: ['Brochure, Cost sheet', 'Floor plan, Location video', 'Send & Update'] },
+    { n: 6,  t: 'Site Visit Schedule',    s: 'Site Visit Fixed',    c: '#ec4899', i: '📅', bullets: ['Date & time fix', 'Send details to client', 'Update in CRM'] },
+    { n: 7,  t: 'Site Visit Done',        s: 'Site Visit Done',     c: '#0ea5e9', i: '👣', bullets: ['Visit completed', 'Client feedback (likes / dislikes)', 'Update in CRM'] },
+    { n: 8,  t: 'Negotiation & Offer',    s: 'Offer Given',         c: '#f97316', i: '🤝', bullets: ['Price discussion', 'Discount / benefits', 'Payment plan & update'] },
+    { n: 9,  t: 'Booking Confirmation',   s: 'Booked',              c: '#16a34a', i: '✅', bullets: ['Client agrees', 'Token amount received', 'Update in CRM'] },
+    { n: 10, t: 'Booking Form & Docs',    s: 'Documents Collected', c: '#8b5cf6', i: '📋', bullets: ['Booking form', 'KYC docs (PAN, Aadhaar)', 'Cheque / payment details'] },
+    { n: 11, t: 'Commission Tracking',    s: 'Commission In Progress', c: '#0284c7', i: '💰', bullets: ['CP agreement', 'Commission slab', 'Stage-wise tracking, TDS'] },
+    { n: 12, t: 'Payout to CP',           s: 'Paid',                c: '#15803d', i: '🏦', bullets: ['Commission due', 'Approval', 'Payment released, payout receipt'] }
+  ];
+  const grid = h('div', { style: {
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+    gap: '.7rem', padding: '1rem'
+  }});
+  stages.forEach(st => {
+    const card = h('div', { style: {
+      border: '2px solid ' + st.c + '55', borderRadius: '12px', padding: '.7rem .8rem',
+      background: '#fff', boxShadow: '0 1px 4px rgba(0,0,0,.04)'
+    }},
+      h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', marginBottom: '.35rem' }},
+        h('div', { style: {
+          width: '28px', height: '28px', borderRadius: '6px',
+          background: st.c, color: '#fff', display: 'flex',
+          alignItems: 'center', justifyContent: 'center',
+          fontWeight: 700, fontSize: '.85rem'
+        }}, String(st.n)),
+        h('div', { style: { fontWeight: 700, fontSize: '.95rem', color: st.c } }, st.i + ' ' + st.t)
+      ),
+      h('ul', { style: { fontSize: '.78rem', margin: '.2rem 0 .35rem 1.1rem', padding: 0, color: '#444' } },
+        ...st.bullets.map(b => h('li', { style: { marginBottom: '.1rem' } }, b))
+      ),
+      h('div', { style: {
+        marginTop: '.3rem',
+        background: '#f1f5f9', padding: '.18rem .45rem',
+        borderRadius: '999px', fontSize: '.7rem',
+        color: '#334155', display: 'inline-block', fontWeight: 600
+      }}, 'Status: ' + st.s)
+    );
+    grid.appendChild(card);
+  });
+  body.appendChild(grid);
+  body.appendChild(h('div', {
+    style: {
+      padding: '.7rem 1rem 1rem', background: '#fafafa',
+      borderTop: '1px solid #eee', fontSize: '.78rem', color: '#475569'
+    }
+  }, 'Tip: click any stage in the lead\'s pipeline strip to advance the lead. The 12 statuses above are seeded on Real Estate pack install — your admin can rename, reorder, or add stages from Settings → Statuses.'));
+  document.body.appendChild(m);
+}
+
 async function openLeadModal(id) {
   const { statuses, sources, products, users, customFields } = CRM.cache;
   // Lazy-load the admin-managed tag library; cached for the session.
@@ -4193,6 +4344,31 @@ async function openLeadModal(id) {
     field('requirement_notes', 'Requirement notes', lead.requirement_notes, { type: 'textarea', full: true }),
     field('notes', 'Notes', lead.notes, { type: 'textarea', full: true })
   );
+
+  // RE_CP_PIPELINE_v1 (2026-05-21) — render 12-stage horizontal strip above the form
+  // when Real Estate pack is installed. Clicking a stage updates the status_id
+  // select in-place (no save until the user clicks Save).
+  let _reLocalLead = lead;
+  function _reRenderStrip() {
+    const old = body.querySelector('.re-stage-strip-wrap');
+    const fresh = _reStageStrip(_reLocalLead, statuses, {
+      onPick: (stage) => {
+        _reLocalLead = Object.assign({}, _reLocalLead, { status_id: stage.id });
+        const sel = form.querySelector('[name="status_id"]');
+        if (sel) {
+          sel.value = String(stage.id);
+          sel.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        _reRenderStrip();
+      }
+    });
+    if (fresh) {
+      fresh.classList.add('re-stage-strip-wrap');
+      if (old) old.replaceWith(fresh);
+      else body.appendChild(fresh);
+    }
+  }
+  _reRenderStrip();
 
   // Hide any custom field that collides with a hardcoded built-in field key —
   // otherwise the user sees Budget / Requirement type / Requirement notes
