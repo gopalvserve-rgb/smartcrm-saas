@@ -1202,6 +1202,40 @@ async function api_recording_selftest(token) {
   return report;
 }
 
+
+
+/* REC_FILENAME_DEDUP_v1 (2026-05-20)
+ * Pre-flight check used by the recording-sync client. Given an array of
+ * filenames the device wants to upload, returns the subset that are
+ * ALREADY in lead_recordings for this tenant. The client then skips
+ * those locally, avoiding redundant network round-trips for files that
+ * are guaranteed to bounce as "already_synced".
+ *
+ * Replaces fragile local-watermark logic: even if localStorage is
+ * cleared, the device is reinstalled, or a second device syncs to the
+ * same tenant, this API correctly identifies what's already on the CRM.
+ *
+ * payload: { filenames: ['call_20260520_143215.m4a', ...] } (max 500)
+ * returns: { present: ['call_20260520_143215.m4a', ...], asked: <n> }
+ */
+async function api_recordings_filenamesPresent(token, payload) {
+  await authUser(token);
+  const names = Array.isArray(payload && payload.filenames) ? payload.filenames : [];
+  const list = names.map(s => String(s || '').trim()).filter(Boolean).slice(0, 500);
+  if (!list.length) return { present: [], asked: 0 };
+  // Self-heal column on first hit (idempotent).
+  try { await db.query('ALTER TABLE lead_recordings ADD COLUMN IF NOT EXISTS original_filename TEXT'); } catch (_) {}
+  try {
+    const { rows } = await db.query(
+      'SELECT DISTINCT original_filename FROM lead_recordings WHERE original_filename = ANY($1::text[])',
+      [list]
+    );
+    return { present: rows.map(r => r.original_filename), asked: list.length };
+  } catch (e) {
+    return { present: [], asked: list.length, error: e.message };
+  }
+}
+
 module.exports = {
   api_call_logEvent, api_call_events_pending, api_call_events_convertToLeads,
   api_call_hasRecentEvent,
@@ -1211,6 +1245,7 @@ module.exports = {
   api_call_history,
   api_my_recordings,
   api_recordings_delete, api_recordings_resetAll, api_recordings_relinkOrphans,
+  api_recordings_filenamesPresent, /* REC_FILENAME_DEDUP_v1 */
   api_recording_aiSummary,
   api_recording_aiReprocess,
   api_recording_applySuggestion,

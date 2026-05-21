@@ -21288,6 +21288,29 @@ async function syncRecordings(opts) {
   let files = [];
   try { files = JSON.parse(filesJson || '[]'); } catch (e) { files = []; }
 
+  /* REC_FILENAME_DEDUP_v1 (2026-05-20)
+   * Pre-flight: ask the server which of these filenames are already
+   * uploaded. Drop them from the local list. This means even if the
+   * device's localStorage was cleared, we still don't double-upload.
+   * Server has the authoritative answer, not the local watermark. */
+  if (files.length) {
+    try {
+      const filenames = files.map(f => f.name).filter(Boolean);
+      if (filenames.length) {
+        const r = await api('api_recordings_filenamesPresent', { filenames });
+        const presentSet = new Set((r && r.present) || []);
+        if (presentSet.size) {
+          const beforeCount = files.length;
+          files = files.filter(f => !presentSet.has(f.name));
+          console.log('[leadcrm] server dedup: dropped ' + (beforeCount - files.length) + ' files already on CRM');
+        }
+      }
+    } catch (e) {
+      console.warn('[leadcrm] server-side filename dedup failed (continuing):', e.message);
+      // Non-fatal — fall through to normal upload + dedup_key path
+    }
+  }
+
   if (files.length === 0) {
     const watermarkAge = Math.round((Date.now() - sinceMs) / 60000);
     const msg = opts.full
