@@ -988,15 +988,17 @@ async function api_leads_create(token, payload) {
             tag:   'autodial-' + id,
             sticky: false
           });
-          // Log a call_events row so the recording-sync pipeline (if used)
-          // has a reference point to match against. Mirrors api_call_via_mobile.
-          try {
-            await db.insert('call_events', {
-              lead_id: id, user_id: resolvedAssignee, phone: base.phone,
-              direction: 'out', event: 'autodial_requested', duration_s: 0,
-              recording_id: null, created_at: db.nowIso()
-            });
-          } catch (_) {}
+          // AUTODIAL_NO_PRECREATE_v1 (2026-05-21): Do NOT pre-insert a
+          // call_events row here. The auto-dial push notification just
+          // tells the rep 'tap to call' — they may or may not actually
+          // call. Writing a placeholder makes the Call Activity Report
+          // count EVERY new lead as an outgoing call, which is wrong.
+          // The real call event is written by:
+          //   - PhoneStateReceiver (APK) via /api/call_event_native
+          //   - api_call_via_mobile when the rep explicitly clicks Call in the SPA
+          //   - Recording sync when the .mp3/.amr file is uploaded
+          // Each of those paths writes the row with real data (duration,
+          // call_started/call_ended event names) — no need to pre-create.
         }
       }
     } catch (e) { console.warn('[push] autodial failed:', e.message); }

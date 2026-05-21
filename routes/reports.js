@@ -1057,6 +1057,12 @@ async function api_reports_callActivity(token, filters) {
       FROM call_events ce
       LEFT JOIN lead_recordings lr ON lr.id = ce.recording_id
       WHERE ce.created_at >= $1 AND ce.created_at <= $2
+            -- CALL_INTENT_EXCLUDE_v1 (2026-05-21): exclude push-notification
+            -- "intent" events like autodial_requested / dial_requested that
+            -- never resulted in an actual call. These were pre-inserted on
+            -- lead-create as a recording-sync anchor but they shouldn't show
+            -- up in the Call Activity totals.
+            AND ce.event NOT IN ('autodial_requested', 'dial_requested')
             ${userScopeSql.replace(/user_id/g, 'ce.user_id')}
     ),
     bucketed AS (
@@ -1254,6 +1260,8 @@ async function api_reports_callActivity(token, filters) {
       LEFT JOIN users u ON u.id = ce.user_id
       LEFT JOIN lead_recordings r ON r.id = ce.recording_id
      WHERE ce.created_at >= $1 AND ce.created_at <= $2
+           -- CALL_INTENT_EXCLUDE_v1 — hide intent events from Recent Calls too
+           AND ce.event NOT IN ('autodial_requested', 'dial_requested')
            ${userScopeSql.replace(/user_id/g, 'ce.user_id')}
      ORDER BY ce.created_at DESC
      LIMIT 200
