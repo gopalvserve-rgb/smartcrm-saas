@@ -21273,8 +21273,17 @@ async function syncRecordings(opts) {
   // watermark (e.g. user picked the folder a year ago) from re-pulling
   // every recording on the device. The gate-by-call-event logic below
   // is the backup; this is the front-line filter.
+  // REC_REWIND_v1 (2026-05-20): when computing the incremental window,
+  // step the watermark BACK by 5 minutes. Reason: Android dialer flushes
+  // recording files a few seconds after the call ends. If sync runs at
+  // T+0 and the previous sync left watermark = T-2min, files written
+  // between T-5min and T-2min would otherwise be permanently skipped
+  // because their mod-time predates the stored watermark. The
+  // `uploaded[f.uri]` map still dedupes within a single user's device,
+  // so re-checking older files is free.
+  const REWIND_MS = 5 * 60_000;
   const minWatermark = Date.now() - 30 * 60_000;
-  const sinceMs = opts.full ? 0 : Math.max(stored, minWatermark);
+  const sinceMs = opts.full ? 0 : Math.max(stored - REWIND_MS, minWatermark);
   const filesJson = LeadCRMNative.listRecordings(sinceMs);
   let files = [];
   try { files = JSON.parse(filesJson || '[]'); } catch (e) { files = []; }
@@ -21283,7 +21292,7 @@ async function syncRecordings(opts) {
     const watermarkAge = Math.round((Date.now() - sinceMs) / 60000);
     const msg = opts.full
       ? 'No recordings found in the folder. Check that the folder you picked actually has .m4a / .amr / .mp3 / .wav / .ogg / .flac files.'
-      : 'No NEW recordings since ' + watermarkAge + ' min ago. Tap "⚡ Re-sync all" to scan every file in the folder.';
+      : 'No NEW recordings since ' + watermarkAge + ' min ago. (Looking at files newer than ' + new Date(sinceMs).toLocaleString('en-IN', {hour:'2-digit', minute:'2-digit', day:'2-digit', month:'short'}) + '.) Tap "⚡ Re-sync all" to scan every file in the folder.';
     toast(msg, 'warn');
     console.warn('[leadcrm] sync: 0 files | folder=' + folderName + ' | sinceMs=' + sinceMs + ' (' + new Date(sinceMs).toISOString() + ')');
     return;
