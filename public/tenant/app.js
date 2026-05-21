@@ -4178,7 +4178,7 @@ function _reOpenProcessGuide() {
   const body = h('div', { class: 'modal modal-lg', style: { maxWidth: '1100px' } });
   m.appendChild(body);
   body.appendChild(h('div', { class: 'modal-head' },
-    h('h3', {}, '🏢 Real Estate CP Process — Lead Received → Payout'),
+    h('h3', {}, '📈 Lead Pipeline — New Lead To Sales'),
     h('button', { class: 'btn icon', onclick: () => m.remove() }, '✕')
   ));
   const stages = [
@@ -6831,7 +6831,7 @@ function _reRenderCPProcessPipeline(view, pipeline, allStatuses) {
   // Header
   view.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '.5rem', marginBottom: '.5rem', flexWrap: 'wrap' } },
     h('div', {},
-      h('h2', { style: { margin: 0 }}, '🏢 CP CRM Process — Lead Received → Payout'),
+      h('h2', { style: { margin: 0 }}, '📈 Lead Pipeline — New Lead To Sales'),
       h('p', { class: 'muted', style: { fontSize: '.82rem', margin: '.2rem 0 0' } }, 'Click any stage to expand and see the leads currently sitting in that stage. Click a lead row to open the full lead with the 12-stage strip.')
     ),
     h('button', { class: 'btn ghost sm', type: 'button', onclick: () => { window._rePipeForceKanban = true; VIEWS.pipeline(view); } }, '📊 Switch to Kanban view')
