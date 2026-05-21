@@ -1040,12 +1040,16 @@ async function api_re_requirements_byLead(token, leadId) {
 async function api_re_requirements_recent(token, opts) {
   await _requireRealEstate();
   await authUser(token);
+  // BUYER_REQS_TABLE_FIX_v1 (2026-05-21): table is re_buyer_requirements,
+  // not re_requirements. Also ensure schema is applied for tenants
+  // installed before Phase 3 — the table won't exist until then.
+  await _ensureSchemaPhase3();
   const limit = Math.min(200, Math.max(1, Number((opts && opts.limit) || 100)));
   const r = await db.query(
     `SELECT rq.id, rq.lead_id, rq.budget_min, rq.budget_max, rq.preferred_bhk, rq.preferred_locations, rq.preferred_projects, rq.possession_timeline, rq.intent, rq.notes, rq.created_at,
             l.name AS lead_name, l.phone AS lead_phone, l.email AS lead_email,
             u.name AS rep_name
-       FROM re_requirements rq
+       FROM re_buyer_requirements rq
        LEFT JOIN leads l ON l.id = rq.lead_id
        LEFT JOIN users u ON u.id = l.assigned_to
       ORDER BY rq.created_at DESC LIMIT $1`,
