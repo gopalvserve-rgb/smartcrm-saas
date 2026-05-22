@@ -13,9 +13,49 @@
 const { Pool } = require('pg');
 const control = require('../control/db');
 
-const _pools = new Map();
-const _slugCache = new Map();   // slug -> { tenant row, expiresAt }
-const SLUG_TTL_MS = 30 * 1000;  // 30s — long enough to be hot, short enough that suspends/upgrades are picked up quickly
+// POOL_EVICT_v1 (2026-05-22) — Per-tenant pools have caused
+// 'sorry, too many clients already' errors on Postgres. With 30+
+// tenants × max=10 = 300 potential connections, we blew past Postgres
+// max_connections (typically 100-200). Fix:
+//   • Each tenant pool now max=3 (most tenants have 1-3 concurrent users)
+//   • idleTimeoutMillis lowered 30s → 10s so dormant connections release fast
+//   • connectionTimeoutMillis=5s — requests fail fast if the DB is saturated
+//     instead of piling up and amplifying the problem
+//   • LRU eviction: at most POOL_LRU_MAX (default 25) tenant pools cached;
+//     least-recently-used pools get .end()'d
+//
+// Net effect: 25 tenants × max 3 = 75 connections + control pool max 10 =
+// 85 connections total, safely under Postgres limits even on small plans.
+
+const POOL_PER_TENANT_MAX = Number(process.env.PG_POOL_PER_TENANT_MAX || 3);
+const POOL_LRU_MAX        = Number(process.env.PG_POOL_LRU_MAX || 25);
+
+const _pools = new Map();          // db_name -> pg.Pool
+const _poolLastUsed = new Map();   // db_name -> ts (for LRU eviction)
+const _slugCache = new Map();      // slug -> { tenant row, expiresAt }
+const SLUG_TTL_MS = 30 * 1000;     // 30s — long enough to be hot, short enough that suspends/upgrades are picked up quickly
+
+// Evict the least-recently-used pool when we exceed POOL_LRU_MAX.
+function _evictIfNeeded() {
+  if (_pools.size <= POOL_LRU_MAX) return;
+  // Find the oldest entry
+  let oldestKey = null;
+  let oldestTs = Infinity;
+  for (const [k, ts] of _poolLastUsed.entries()) {
+    if (ts < oldestTs) { oldestTs = ts; oldestKey = k; }
+  }
+  if (oldestKey) {
+    const p = _pools.get(oldestKey);
+    _pools.delete(oldestKey);
+    _poolLastUsed.delete(oldestKey);
+    if (p) {
+      // end() is async but we don't await — request handlers using this
+      // exact tenant right now will finish; new requests grab a fresh pool.
+      try { p.end().catch(() => {}); } catch (_) {}
+    }
+    console.log('[tenant-pool] LRU evicted', oldestKey, 'cache size now', _pools.size);
+  }
+}
 
 /**
  * Build a Postgres URL for a specific tenant DB. We parse the control
@@ -37,16 +77,22 @@ function _tenantUrl(dbName) {
  */
 function poolFor(tenant) {
   if (!tenant || !tenant.db_name) return null;
-  if (_pools.has(tenant.db_name)) return _pools.get(tenant.db_name);
+  if (_pools.has(tenant.db_name)) {
+    _poolLastUsed.set(tenant.db_name, Date.now());
+    return _pools.get(tenant.db_name);
+  }
   const url = _tenantUrl(tenant.db_name);
   const p = new Pool({
     connectionString: url,
     ssl: /sslmode=require|railway|neon|supabase|render/i.test(url) ? { rejectUnauthorized: false } : false,
-    max: 10,
-    idleTimeoutMillis: 30000
+    max: POOL_PER_TENANT_MAX,
+    idleTimeoutMillis: 10_000,
+    connectionTimeoutMillis: 5_000
   });
   p.on('error', err => console.error('[tenant-db]', tenant.slug, 'pool error:', err.message));
   _pools.set(tenant.db_name, p);
+  _poolLastUsed.set(tenant.db_name, Date.now());
+  _evictIfNeeded();
 
   // Centralised tenant bootstrap — runs all accumulated schema deltas
   // + seeds default config keys. Fire-and-forget so we don't block the
@@ -105,9 +151,31 @@ async function removeTenant(slug, dbName) {
   if (p) {
     try { await p.end(); } catch (_) {}
     _pools.delete(dbName);
+    _poolLastUsed.delete(dbName);
   }
 }
 
+// Expose pool stats for the super-admin diagnostic page.
+function getPoolStats() {
+  const arr = [];
+  for (const [dbName, p] of _pools.entries()) {
+    arr.push({
+      db_name: dbName,
+      total: p.totalCount,
+      idle: p.idleCount,
+      waiting: p.waitingCount,
+      last_used: _poolLastUsed.get(dbName) || 0
+    });
+  }
+  return {
+    cached_pools: _pools.size,
+    lru_max: POOL_LRU_MAX,
+    per_tenant_max: POOL_PER_TENANT_MAX,
+    total_connections: arr.reduce((s, x) => s + x.total, 0),
+    pools: arr.sort((a, b) => b.last_used - a.last_used)
+  };
+}
+
 module.exports = {
-  poolFor, findActiveTenant, invalidateSlug, removeTenant
+  poolFor, findActiveTenant, invalidateSlug, removeTenant, getPoolStats
 };

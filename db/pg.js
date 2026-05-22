@@ -66,7 +66,8 @@ const ssl =
 const pool = new Pool({
   connectionString,
   ssl,
-  max: Number(process.env.PG_POOL_MAX || 10),
+  // POOL_EVICT_v1: lowered control pool max from 10 to 5 since per-tenant pools (utils/tenantPool.js) carry their own connections — combined max keeps us under PG max_connections.
+  max: Number(process.env.PG_POOL_MAX || 5),
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 10_000
 });
