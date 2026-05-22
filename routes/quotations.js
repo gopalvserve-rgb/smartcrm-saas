@@ -619,7 +619,22 @@ async function expressPublicQuote(req, res) {
     const r = await db.query(`SELECT * FROM quotations WHERE public_token = $1 AND is_public = 1`, [tk]);
     row = r.rows[0];
     if (!row) return res.status(404).send('Quotation not found or no longer available');
-    items = (await db.query(`SELECT * FROM quotation_items WHERE quotation_id = $1 ORDER BY position ASC, id ASC`, [row.id])).rows;
+    // QUOTE_IMG_FIX_v2 (extend) — same LEFT JOIN + COALESCE-in-JS used by
+    // api_quotations_get, so the public PDF viewer also shows product
+    // images for legacy lines saved before product_image_url existed.
+    const itemsRaw = (await db.query(`
+      SELECT qi.*, p.image_url AS _product_master_image
+        FROM quotation_items qi
+        LEFT JOIN products p ON p.id = qi.product_id
+       WHERE qi.quotation_id = $1
+       ORDER BY qi.position ASC, qi.id ASC
+    `, [row.id])).rows;
+    items = itemsRaw.map(r => {
+      const masterImg = r._product_master_image;
+      const lineImg = r.product_image_url;
+      const finalImg = (lineImg && String(lineImg).trim()) ? lineImg : (masterImg || '');
+      return Object.assign({}, r, { product_image_url: finalImg, _product_master_image: undefined });
+    });
   } catch (e) {
     return res.status(500).send('Error: ' + e.message);
   }
