@@ -398,14 +398,19 @@ async function otherHook(req, res) {
 // -------------------- Shared lead creator ------------------------
 // Applies simple round-robin if assignment_rules don't match.
 async function _createLeadFromWebhook(lead) {
-  // 0. Phone validation. Reject leads with no phone outright (we can't
-  //    follow up without one). Auto-flag short phones (<10 digits) as
-  //    Junk so they're visible but don't pollute the active pipeline.
+  // 0. Phone validation. ACCEPT_NO_PHONE_v1 - only reject leads if BOTH
+  //    phone AND email are missing AND there's no usable name. Meta Lead
+  //    Ads test leads have literal "<test lead: dummy data..." strings
+  //    for the phone, which used to be silently dropped here. Now they
+  //    get flagged Junk so the user can see the test landed.
   const _phDigits = String(lead.phone || '').replace(/\D/g, '');
-  if (!_phDigits) {
-    return { ok: false, error: 'phone required' };
+  const _hasEmail = !!String(lead.email || '').trim();
+  const _hasName  = !!String(lead.name || '').trim();
+  if (!_phDigits && !_hasEmail && !_hasName) {
+    return { ok: false, error: 'empty lead - no phone, email, or name' };
   }
-  const isJunkPhone = _phDigits.length < 10;
+  // Short or missing phone -> flag Junk so dialer/automation doesn't try it.
+  const isJunkPhone = !_phDigits || _phDigits.length < 10;
 
   // 1. Find default status — 'Junk' if the phone is too short, else 'New'
   const statuses = await db.getAll('statuses');
