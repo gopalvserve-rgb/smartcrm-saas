@@ -69,8 +69,28 @@ class RecordingsBackgroundSyncWorker(
         val folderUriStr = prefs.getString(KEY_FOLDER_URI, null)
         val baseUrl = prefs.getString(KEY_BASE_URL, null)
         val token = prefs.getString(KEY_TOKEN, null)
+        // REC_DIAG_PING_v1 — always ping at the start, even before we know if
+        // we can do useful work. This is THE diagnostic that tells us "the
+        // worker ran" regardless of whether it found anything to upload.
+        val trigger = inputData.getString("trigger") ?: tags.firstOrNull { it.startsWith("post-") || it == "rec-bg-sync-periodic" } ?: "unknown"
+        pingDiagSafe(baseUrl, token, mapOf(
+            "trigger" to trigger,
+            "phase" to "start",
+            "has_folder" to !folderUriStr.isNullOrEmpty(),
+            "has_token" to !token.isNullOrEmpty(),
+            "has_base" to !baseUrl.isNullOrEmpty(),
+            "apk_version" to "1.7"
+        ))
         if (folderUriStr.isNullOrEmpty() || baseUrl.isNullOrEmpty() || token.isNullOrEmpty()) {
             Log.i(TAG, "skip: missing folder/base/token — user hasn't completed setup yet")
+            pingDiagSafe(baseUrl, token, mapOf(
+                "trigger" to trigger,
+                "phase" to "early-exit",
+                "has_folder" to !folderUriStr.isNullOrEmpty(),
+                "has_token" to !token.isNullOrEmpty(),
+                "has_base" to !baseUrl.isNullOrEmpty(),
+                "note" to "missing-setup"
+            ))
             return Result.success()
         }
 
@@ -81,6 +101,13 @@ class RecordingsBackgroundSyncWorker(
         val dir = DocumentFile.fromTreeUri(ctx, tree)
         if (dir == null || !dir.exists() || !dir.canRead()) {
             Log.w(TAG, "folder unreachable — user may have revoked SAF permission")
+            pingDiagSafe(baseUrl, token, mapOf(
+                "trigger" to trigger,
+                "phase" to "early-exit",
+                "has_folder" to true,
+                "folder_readable" to false,
+                "note" to "folder-unreachable-or-revoked"
+            ))
             return Result.success()
         }
 
@@ -135,10 +162,60 @@ class RecordingsBackgroundSyncWorker(
             .apply()
 
         Log.i(TAG, "done: uploaded=$uploaded skipped=$skipped failed=$failed watermark=$newWatermark")
+        pingDiagSafe(baseUrl, token, mapOf(
+            "trigger" to trigger,
+            "phase" to "done",
+            "has_folder" to true,
+            "has_token" to true,
+            "has_base" to true,
+            "folder_readable" to true,
+            "file_count" to candidates.size,
+            "uploaded" to uploaded,
+            "skipped" to skipped,
+            "failed" to failed
+        ))
         return Result.success()
     }
 
-    private fun collectAudio(dir: DocumentFile, sinceMs: Long, out: ArrayList<DocumentFile>, depth: Int) {
+    /**
+     * REC_DIAG_PING_v1 — fire-and-forget POST to /api/rec-diag carrying the
+     * worker's current state. Lets us see in Railway logs what the worker
+     * is doing without needing adb logcat on the device. Best-effort: any
+     * network or JSON error is swallowed so it never breaks the upload flow.
+     */
+    private fun pingDiagSafe(baseUrl: String?, token: String?, fields: Map<String, Any?>) {
+        // We still try when baseUrl is missing — fall back to the SAS host
+        // we know is hard-coded (lets us diagnose freshly-installed devices
+        // with no creds at all).
+        val rawBase = baseUrl?.trimEnd('/')?.takeIf { it.isNotEmpty() }
+            ?: "https://crm.smartcrmsolution.com"
+        // Strip /t/<slug>/ since /api/rec-diag is tenant-agnostic.
+        val baseClean = rawBase.replace(Regex("/t/[^/]+/?$"), "")
+        Thread {
+            try {
+                val url = URL("$baseClean/api/rec-diag")
+                val conn = (url.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = 5_000
+                    readTimeout = 5_000
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json")
+                    if (!token.isNullOrEmpty()) setRequestProperty("x-auth-token", token)
+                }
+                val body = JSONObject().apply {
+                    fields.forEach { (k, v) -> put(k, v) }
+                }.toString()
+                conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                val code = conn.responseCode
+                Log.d(TAG, "diag ping → $code")
+                conn.disconnect()
+            } catch (e: Throwable) {
+                Log.w(TAG, "diag ping failed: ${e.message}")
+            }
+        }.start()
+    }
+
+        private fun collectAudio(dir: DocumentFile, sinceMs: Long, out: ArrayList<DocumentFile>, depth: Int) {
         if (depth > 3) return
         val kids = try { dir.listFiles() } catch (_: Exception) { return } ?: return
         for (f in kids) {

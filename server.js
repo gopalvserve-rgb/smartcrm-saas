@@ -1407,6 +1407,37 @@ app.post('/api/call_event_native', require('express').json({ limit: '64kb' }), a
   }
 });
 
+// REC_DIAG_PING_v1 — receives status pings from RecordingsBackgroundSyncWorker
+// on the APK. Lets us see in Railway logs exactly what the worker is doing
+// without device-side adb logcat. Auth-optional: the whole point is to
+// diagnose missing-creds cases, so don't reject when token is absent.
+app.post('/api/rec-diag', require('express').json({ limit: '8kb' }), async (req, res) => {
+  try {
+    const b = req.body || {};
+    console.log('[/api/rec-diag]',
+      'trigger=', b.trigger || '?',
+      'phase=', b.phase || '?',
+      'tenant=', b.tenant || '?',
+      'user=', b.user_id != null ? b.user_id : '?',
+      'apk_version=', b.apk_version || '?',
+      'has_folder=', b.has_folder ? 'yes' : 'NO',
+      'has_token=', b.has_token ? 'yes' : 'NO',
+      'has_base=', b.has_base ? 'yes' : 'NO',
+      'folder_readable=', b.folder_readable != null ? (b.folder_readable ? 'yes' : 'NO') : '?',
+      'files=', b.file_count != null ? b.file_count : '?',
+      'uploaded=', b.uploaded != null ? b.uploaded : '?',
+      'skipped=', b.skipped != null ? b.skipped : '?',
+      'failed=', b.failed != null ? b.failed : '?',
+      'note=', (b.note || '').toString().slice(0, 200)
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[/api/rec-diag] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
 // Admin diag: run ffmpeg -i on the stored bytes and report whether
 // ffmpeg itself can decode them. Returns the head hex of the first 1KB
 // so support can inspect the file format without downloading megabytes.
