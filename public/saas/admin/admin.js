@@ -464,6 +464,10 @@ VIEWS.tenants = async (view) => {
         h('button', { class: 'btn ghost xs', title: 'Install or switch industry pack (Education / Real Estate / Generic)',
           onclick: () => openInstallPackModal(t)
         }, '\ud83c\udfd7\ufe0f Pack'),
+        // ADMIN_ADD_USER_v1 — manage users + per-user pricing for this tenant
+        h('button', { class: 'btn ghost xs', title: 'Add users + set per-user monthly cost',
+          onclick: () => openTenantUsersModal(t)
+        }, '\ud83d\udc64 Users'),
         t.status === 'active'
           ? h('button', { class: 'btn ghost xs', onclick: async () => { await api('api_saas_tenants_suspend', t.id); navigate('tenants'); } }, 'Suspend')
           : h('button', { class: 'btn ghost xs', onclick: async () => { await api('api_saas_tenants_restore', t.id); navigate('tenants'); } }, 'Restore')
@@ -2345,3 +2349,135 @@ async function openInstallPackModal(t) {
   m.appendChild(card);
   document.body.appendChild(m);
 }
+
+// ADMIN_ADD_USER_v1 (2026-05-22) — super-admin manages users + per-user monthly cost.
+async function openTenantUsersModal(t) {
+  const m = document.createElement('div');
+  m.className = 'modal-backdrop';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:99999;display:flex;align-items:center;justify-content:center;padding:1rem;';
+  m.onclick = (ev) => { if (ev.target === m) m.remove(); };
+  const card = h('div', { class: 'card', style: { maxWidth: '780px', width: '100%', maxHeight: '90vh', overflow: 'auto', padding: '1.2rem 1.4rem', background: '#fff', borderRadius: '12px' } });
+
+  card.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+    h('h3', { style: { margin: 0 } }, '\ud83d\udc64 Users \u2014 ', t.org_name || t.slug),
+    h('button', { type: 'button', class: 'btn ghost', onclick: () => m.remove() }, '\u2715')
+  ));
+  card.appendChild(h('p', { class: 'muted', style: { fontSize: '.8rem', marginTop: '.4rem' } },
+    'Slug: ', h('code', {}, t.slug), ' \u00b7 Add users directly to this tenant. Each user can have its own monthly subscription cost (in INR) for your billing records.'));
+
+  const totalsBar = h('div', { style: { background: '#f1f5f9', padding: '.6rem .8rem', borderRadius: '8px', margin: '.7rem 0', fontSize: '.85rem' } }, 'Loading\u2026');
+  card.appendChild(totalsBar);
+
+  const tableWrap = h('div', { style: { maxHeight: '300px', overflow: 'auto', border: '1px solid #e2e8f0', borderRadius: '8px' } });
+  card.appendChild(tableWrap);
+
+  const formHeading = h('h4', { style: { marginTop: '1.2rem', marginBottom: '.4rem' } }, '\u2795 Add new user');
+  card.appendChild(formHeading);
+
+  const nameIn  = h('input', { type: 'text', placeholder: 'Full name', style: { width: '100%', padding: '.45rem', border: '1px solid #cbd5e1', borderRadius: '6px' } });
+  const emailIn = h('input', { type: 'email', placeholder: 'email@example.com', style: { width: '100%', padding: '.45rem', border: '1px solid #cbd5e1', borderRadius: '6px' } });
+  const phoneIn = h('input', { type: 'tel', placeholder: '+91 98765 43210', style: { width: '100%', padding: '.45rem', border: '1px solid #cbd5e1', borderRadius: '6px' } });
+  const roleSel = h('select', { style: { width: '100%', padding: '.45rem', border: '1px solid #cbd5e1', borderRadius: '6px' } },
+    h('option', { value: 'sales' }, 'Sales'),
+    h('option', { value: 'team_leader' }, 'Team Leader'),
+    h('option', { value: 'manager' }, 'Manager'),
+    h('option', { value: 'admin' }, 'Admin'),
+    h('option', { value: 'employee' }, 'Employee')
+  );
+  const passIn  = h('input', { type: 'text', placeholder: 'Initial password (min 6 chars)', style: { width: '100%', padding: '.45rem', border: '1px solid #cbd5e1', borderRadius: '6px' } });
+  const costIn  = h('input', { type: 'number', step: '0.01', min: '0', placeholder: '0', value: '0', style: { width: '100%', padding: '.45rem', border: '1px solid #cbd5e1', borderRadius: '6px', textAlign: 'right' } });
+
+  // Helper to generate a sensible default password.
+  function _genPw() {
+    const alpha = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+    let out = '';
+    for (let i = 0; i < 10; i++) out += alpha[Math.floor(Math.random() * alpha.length)];
+    return out;
+  }
+  passIn.value = _genPw();
+
+  const form = h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '.5rem' } },
+    h('label', { style: { display: 'flex', flexDirection: 'column', gap: '.2rem', fontSize: '.78rem', fontWeight: 600 } }, 'Name *', nameIn),
+    h('label', { style: { display: 'flex', flexDirection: 'column', gap: '.2rem', fontSize: '.78rem', fontWeight: 600 } }, 'Email *', emailIn),
+    h('label', { style: { display: 'flex', flexDirection: 'column', gap: '.2rem', fontSize: '.78rem', fontWeight: 600 } }, 'Phone', phoneIn),
+    h('label', { style: { display: 'flex', flexDirection: 'column', gap: '.2rem', fontSize: '.78rem', fontWeight: 600 } }, 'Role', roleSel),
+    h('label', { style: { display: 'flex', flexDirection: 'column', gap: '.2rem', fontSize: '.78rem', fontWeight: 600 } }, 'Initial password *', passIn),
+    h('label', { style: { display: 'flex', flexDirection: 'column', gap: '.2rem', fontSize: '.78rem', fontWeight: 600 } }, 'Monthly cost (\u20b9)', costIn)
+  );
+  card.appendChild(form);
+
+  const status = h('div', { style: { fontSize: '.82rem', marginTop: '.6rem', minHeight: '1.2rem' } });
+  card.appendChild(status);
+
+  const addBtn = h('button', { type: 'button', class: 'btn primary', style: { marginTop: '.6rem' }, onclick: async () => {
+    const name = nameIn.value.trim();
+    const email = emailIn.value.trim().toLowerCase();
+    const password = passIn.value.trim();
+    if (!name || !email || !password) { status.innerHTML = '<span style="color:#b91c1c">Name, email and password are required.</span>'; return; }
+    addBtn.disabled = true;
+    status.innerHTML = '\u23f3 Creating user\u2026';
+    try {
+      const r = await api('api_saas_tenants_addUser', {
+        slug: t.slug, name, email,
+        phone: phoneIn.value.trim(),
+        role: roleSel.value,
+        password,
+        monthly_cost_inr: Number(costIn.value) || 0
+      });
+      status.innerHTML = '<span style="color:#16a34a">\u2714 User added: ' + r.email + ' \u00b7 \u20b9' + (r.monthly_cost_inr || 0) + '/mo</span>';
+      // Clear form for next entry
+      nameIn.value = ''; emailIn.value = ''; phoneIn.value = ''; passIn.value = _genPw(); costIn.value = '0';
+      await refresh();
+    } catch (e) {
+      status.innerHTML = '<span style="color:#b91c1c">\u2717 ' + e.message + '</span>';
+    } finally { addBtn.disabled = false; }
+  } }, '\u2795 Add user');
+  card.appendChild(addBtn);
+
+  async function refresh() {
+    tableWrap.innerHTML = '<div style="padding:1rem;color:#64748b">Loading users\u2026</div>';
+    try {
+      const r = await api('api_saas_tenants_listUsers', t.slug);
+      totalsBar.innerHTML = '<b>' + r.counts.active + '</b> active user(s), <b>' + r.counts.total + '</b> total \u00b7 Combined monthly cost: <b>\u20b9' + Number(r.monthly_cost_total_inr).toLocaleString('en-IN') + '</b>';
+      tableWrap.innerHTML = '';
+      const table = h('table', { style: { width: '100%', fontSize: '.83rem', borderCollapse: 'collapse' } });
+      table.appendChild(h('thead', {}, h('tr', { style: { background: '#f8fafc' } },
+        h('th', { style: { padding: '.4rem .55rem', textAlign: 'left' } }, 'Name'),
+        h('th', { style: { padding: '.4rem .55rem', textAlign: 'left' } }, 'Email'),
+        h('th', { style: { padding: '.4rem .55rem', textAlign: 'left' } }, 'Role'),
+        h('th', { style: { padding: '.4rem .55rem', textAlign: 'right' } }, '\u20b9 / month'),
+        h('th', { style: { padding: '.4rem .55rem', textAlign: 'center' } }, 'Active')
+      )));
+      const tbody = h('tbody', {});
+      r.users.forEach(u => {
+        const costInput = h('input', { type: 'number', step: '0.01', min: '0', value: String(u.monthly_cost_inr || 0), style: { width: '90px', padding: '.25rem .4rem', border: '1px solid #cbd5e1', borderRadius: '4px', textAlign: 'right', fontSize: '.8rem' } });
+        const saveCostBtn = h('button', { type: 'button', class: 'btn xs', title: 'Save cost', style: { marginLeft: '.3rem' }, onclick: async () => {
+          saveCostBtn.disabled = true;
+          try {
+            await api('api_saas_tenants_updateUserCost', { slug: t.slug, user_id: u.id, monthly_cost_inr: Number(costInput.value) || 0 });
+            saveCostBtn.textContent = '\u2714';
+            setTimeout(() => { saveCostBtn.textContent = '\ud83d\udcbe'; saveCostBtn.disabled = false; refresh(); }, 700);
+          } catch (e) { toast(e.message, 'err'); saveCostBtn.disabled = false; }
+        } }, '\ud83d\udcbe');
+        tbody.appendChild(h('tr', { style: { borderTop: '1px solid #e2e8f0', opacity: Number(u.is_active) === 1 ? '1' : '.55' } },
+          h('td', { style: { padding: '.35rem .55rem' } }, u.name),
+          h('td', { style: { padding: '.35rem .55rem', color: '#475569' } }, u.email),
+          h('td', { style: { padding: '.35rem .55rem' } },
+            h('span', { style: { background: '#e0e7ff', color: '#3730a3', padding: '1px 7px', borderRadius: '999px', fontSize: '.7rem', fontWeight: 600 } }, u.role)),
+          h('td', { style: { padding: '.35rem .55rem', textAlign: 'right' } }, costInput, saveCostBtn),
+          h('td', { style: { padding: '.35rem .55rem', textAlign: 'center', color: Number(u.is_active) === 1 ? '#16a34a' : '#94a3b8' } }, Number(u.is_active) === 1 ? '\u2714' : '\u2715')
+        ));
+      });
+      if (!r.users.length) tbody.appendChild(h('tr', {}, h('td', { colspan: 5, style: { padding: '1rem', color: '#94a3b8', textAlign: 'center' } }, 'No users yet \u2014 add one below.')));
+      table.appendChild(tbody);
+      tableWrap.appendChild(table);
+    } catch (e) {
+      tableWrap.innerHTML = '<div style="padding:1rem;color:#b91c1c">\u2717 ' + e.message + '</div>';
+    }
+  }
+
+  m.appendChild(card);
+  document.body.appendChild(m);
+  refresh();
+}
+

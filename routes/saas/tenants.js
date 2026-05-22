@@ -609,6 +609,136 @@ async function api_saas_fb_backfillRegistry(token, payload) {
   };
 }
 
+
+/**
+ * ADMIN_ADD_USER_v1 — list users in a specific tenant with their
+ * per-user monthly cost. Used by the super-admin "👤 Users" modal.
+ */
+async function api_saas_tenants_listUsers(token, slug) {
+  await requireSuperAdmin(token);
+  const slugClean = String(slug || '').trim().toLowerCase();
+  if (!slugClean) throw new Error('slug required');
+  const t = await control.findOneBy('tenants', 'slug', slugClean);
+  if (!t) throw new Error('Tenant not found');
+  if (t.status === 'deleted') throw new Error('Tenant is deleted');
+
+  const pool = tenantPool.poolFor(t);
+  if (!pool) throw new Error('Could not connect to tenant DB');
+
+  // Defensive auto-migration: add the per-user cost column if missing.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS monthly_cost_inr NUMERIC(10,2) NOT NULL DEFAULT 0`).catch(() => {});
+
+  const r = await pool.query(`
+    SELECT id, name, email, phone, role, is_active, created_at,
+           COALESCE(monthly_cost_inr, 0) AS monthly_cost_inr
+    FROM users
+    ORDER BY id ASC
+  `);
+  const users = r.rows.map(u => ({
+    id: u.id, name: u.name, email: u.email, phone: u.phone,
+    role: u.role, is_active: u.is_active,
+    monthly_cost_inr: Number(u.monthly_cost_inr) || 0,
+    created_at: u.created_at
+  }));
+  const totalActive = users.filter(u => Number(u.is_active) === 1).length;
+  const totalCost = users
+    .filter(u => Number(u.is_active) === 1)
+    .reduce((s, u) => s + (Number(u.monthly_cost_inr) || 0), 0);
+  return {
+    slug: t.slug,
+    org_name: t.org_name,
+    users,
+    counts: { total: users.length, active: totalActive },
+    monthly_cost_total_inr: Math.round(totalCost * 100) / 100
+  };
+}
+
+/**
+ * ADMIN_ADD_USER_v1 — super-admin inserts a new user into a tenant DB
+ * with a per-user monthly cost. Bypasses tenant-level role checks.
+ */
+async function api_saas_tenants_addUser(token, payload) {
+  const me = await requireFullAdmin(token);
+  const p = payload || {};
+  const slug = String(p.slug || '').trim().toLowerCase();
+  if (!slug) throw new Error('slug required');
+
+  const name = String(p.name || '').trim();
+  const email = String(p.email || '').trim().toLowerCase();
+  const phone = String(p.phone || '').trim();
+  const role = String(p.role || 'sales').trim().toLowerCase();
+  const password = String(p.password || '').trim();
+  const monthlyCost = Math.max(0, Number(p.monthly_cost_inr) || 0);
+
+  if (!name)  throw new Error('Name required');
+  if (!email || !/^\S+@\S+\.\S+$/.test(email)) throw new Error('Valid email required');
+  if (!password || password.length < 6) throw new Error('Password must be at least 6 chars');
+  const VALID_ROLES = ['admin', 'manager', 'team_leader', 'sales', 'employee'];
+  if (!VALID_ROLES.includes(role)) throw new Error('role must be one of: ' + VALID_ROLES.join(', '));
+  if (!_bcrypt) throw new Error('bcrypt library not installed on the server');
+
+  const t = await control.findOneBy('tenants', 'slug', slug);
+  if (!t) throw new Error('Tenant not found');
+  if (t.status === 'deleted')   throw new Error('Tenant is deleted');
+  if (t.status === 'suspended') throw new Error('Tenant is suspended — restore first');
+
+  const pool = tenantPool.poolFor(t);
+  if (!pool) throw new Error('Could not connect to tenant DB');
+
+  // Defensive migration: add monthly_cost_inr column if missing.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS monthly_cost_inr NUMERIC(10,2) NOT NULL DEFAULT 0`).catch(() => {});
+
+  // Duplicate-email check inside the tenant DB.
+  const dup = await pool.query(`SELECT id FROM users WHERE LOWER(email) = $1 LIMIT 1`, [email]);
+  if (dup.rows.length) throw new Error('A user with this email already exists in tenant ' + slug);
+
+  const hash = _bcrypt.hashSync(password, 10);
+  const ins = await pool.query(
+    `INSERT INTO users (name, email, phone, password_hash, role, is_active, monthly_cost_inr, created_at)
+     VALUES ($1, $2, $3, $4, $5, 1, $6, NOW()) RETURNING id`,
+    [name, email, phone, hash, role, monthlyCost]
+  );
+  const userId = ins.rows[0]?.id;
+
+  await control.insert('audit_log', {
+    actor_type: 'super_admin', actor_id: me.id, actor_email: me.email,
+    tenant_id: t.id, event: 'tenant.user_added_manually',
+    detail: JSON.stringify({ slug: t.slug, new_user_id: userId, email, role, monthly_cost_inr: monthlyCost })
+  });
+
+  return { ok: true, slug: t.slug, user_id: userId, email, role, monthly_cost_inr: monthlyCost };
+}
+
+/**
+ * ADMIN_ADD_USER_v1 — update the per-user monthly cost OR active state
+ * of an existing user in a tenant.
+ */
+async function api_saas_tenants_updateUserCost(token, payload) {
+  const me = await requireFullAdmin(token);
+  const p = payload || {};
+  const slug = String(p.slug || '').trim().toLowerCase();
+  const userId = Number(p.user_id);
+  if (!slug || !userId) throw new Error('slug + user_id required');
+  const newCost = Math.max(0, Number(p.monthly_cost_inr) || 0);
+
+  const t = await control.findOneBy('tenants', 'slug', slug);
+  if (!t) throw new Error('Tenant not found');
+  const pool = tenantPool.poolFor(t);
+  if (!pool) throw new Error('Could not connect to tenant DB');
+
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS monthly_cost_inr NUMERIC(10,2) NOT NULL DEFAULT 0`).catch(() => {});
+  const u = await pool.query(`UPDATE users SET monthly_cost_inr = $1 WHERE id = $2 RETURNING id, email`, [newCost, userId]);
+  if (!u.rows.length) throw new Error('User not found in tenant');
+
+  await control.insert('audit_log', {
+    actor_type: 'super_admin', actor_id: me.id, actor_email: me.email,
+    tenant_id: t.id, event: 'tenant.user_cost_updated',
+    detail: JSON.stringify({ slug: t.slug, user_id: userId, monthly_cost_inr: newCost })
+  });
+
+  return { ok: true, user_id: userId, monthly_cost_inr: newCost };
+}
+
 module.exports = {
   api_saas_tenants_list,
   api_saas_tenants_get,
@@ -623,5 +753,8 @@ module.exports = {
   api_saas_tenants_resetUserPassword,
   api_saas_tenants_runBootstrap,
   api_saas_tenants_installPack,
-  api_saas_fb_backfillRegistry
+  api_saas_fb_backfillRegistry,
+  api_saas_tenants_listUsers,
+  api_saas_tenants_addUser,
+  api_saas_tenants_updateUserCost
 };
