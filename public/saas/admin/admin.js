@@ -468,6 +468,12 @@ VIEWS.tenants = async (view) => {
         h('button', { class: 'btn ghost xs', title: 'Add users + set per-user monthly cost',
           onclick: () => openTenantUsersModal(t)
         }, '\ud83d\udc64 Users'),
+        // ADMIN_AI_RECORDING_TOGGLE_v1 — flip AI Call Summary on/off for this tenant
+        h('button', {
+          class: 'btn ghost xs',
+          title: 'Toggle AI Call Summary (recording transcription) on/off',
+          onclick: () => openAiRecordingModal(t)
+        }, '\ud83c\udf99\ufe0f AI Rec'),
         t.status === 'active'
           ? h('button', { class: 'btn ghost xs', onclick: async () => { await api('api_saas_tenants_suspend', t.id); navigate('tenants'); } }, 'Suspend')
           : h('button', { class: 'btn ghost xs', onclick: async () => { await api('api_saas_tenants_restore', t.id); navigate('tenants'); } }, 'Restore')
