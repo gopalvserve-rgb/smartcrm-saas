@@ -8635,7 +8635,7 @@ VIEWS.quotations = async (view) => {
 
 async function openQuotationModal(qid, prefillLead) {
   const m = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
-  const card = h('div', { class: 'modal', style: { maxWidth: '780px', maxHeight: '90vh', overflow: 'auto' } });
+  const card = h('div', { class: 'modal', style: { width: '95vw', maxWidth: '1280px', maxHeight: '95vh', overflow: 'auto', padding: '1.25rem 1.5rem' } });
   m.appendChild(card);
   document.body.appendChild(m);
 
@@ -8783,18 +8783,29 @@ async function openQuotationModal(qid, prefillLead) {
     row._prodSel = prodSel;
     row._imageUrl = initialImg || null;
     row.appendChild(imgWrap); row.appendChild(prodSel); row.appendChild(desc); row.appendChild(qty); row.appendChild(pr); row.appendChild(dp); row.appendChild(amt); row.appendChild(del);
-    itemsWrap.appendChild(row);
+    // QUOTE_FULLPAGE_v1: insertBefore the add-button so new rows land
+    // ABOVE it and the button stays anchored at the bottom of the list.
+    if (addBtn && addBtn.parentNode === itemsWrap) itemsWrap.insertBefore(row, addBtn);
+    else itemsWrap.appendChild(row);
     recompute();
     return row;
   }
   // Header row
-  itemsWrap.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '48px 1fr 1.5fr 1.2fr 1.1fr .9fr 1.1fr 28px', gap: '.4rem', fontSize: '.78rem', color: '#64748b', marginBottom: '.3rem' } },
+  itemsWrap.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '48px 1fr 1.5fr 1.2fr 1.1fr .9fr 1.1fr 28px', gap: '.4rem', fontSize: '.78rem', color: '#64748b', marginBottom: '.3rem', fontWeight: 600 } },
     h('div', {}, 'Image'), h('div', {}, 'Product'), h('div', {}, 'Description'), h('div', {}, 'Qty'), h('div', {}, 'Unit price'), h('div', {}, 'Disc %'),
     h('div', { style: { textAlign: 'right' } }, 'Amount'), h('div', {})
   ));
+  // QUOTE_FULLPAGE_v1: create addBtn FIRST so addItem can insertBefore it.
+  // Big primary-styled button so it's obvious you can keep adding items.
+  const addBtn = h('button', {
+    class: 'btn primary',
+    type: 'button',
+    style: { marginTop: '.75rem', width: '100%', padding: '.5rem', fontWeight: '600' },
+    onclick: () => addItem()
+  }, '\u2795 Add another product / line item');
   (q.items || []).forEach(it => addItem(it));
   if (!q.items || !q.items.length) addItem();
-  itemsWrap.appendChild(h('button', { class: 'btn sm ghost', type: 'button', style: { marginTop: '.5rem' }, onclick: () => addItem() }, '+ Add line item'));
+  itemsWrap.appendChild(addBtn);
   card.appendChild(itemsWrap);
 
   card.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '.5rem', marginTop: '.5rem' } },
