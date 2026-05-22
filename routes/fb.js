@@ -245,7 +245,7 @@ async function _centralRegistryCall(page, op, opts) {
   const secret = process.env.FB_REGISTRY_SECRET || '';
   if (!secret) {
     console.warn('[fb-registry] FB_REGISTRY_SECRET env not set \u2014 skipping central registration for page', page && page.page_id);
-    return { ok: false, skipped: 'no_secret' };
+    return { ok: false, skipped: 'no_secret', error: 'FB_REGISTRY_SECRET env var is not set on Railway. Set it to match the SHARED_SECRET in fb_leads_register.php on smartcrmsolution.com, then restart the service.' };
   }
   // Build target_url per CRM. Each repo overrides _fbTargetUrlBuilder if
   // the default doesn't match the actual /hook/meta path for that CRM.
@@ -256,7 +256,7 @@ async function _centralRegistryCall(page, op, opts) {
   if (!target_url) target_url = opts.target_url || '';
   if (!target_url && op === 'upsert') {
     console.warn('[fb-registry] cannot resolve target_url for page', page && page.page_id);
-    return { ok: false, skipped: 'no_target_url' };
+    return { ok: false, skipped: 'no_target_url', error: 'Could not resolve a target_url (CRM webhook URL) for this page. Make sure _fbTargetUrlBuilder is wired for this CRM and that the page has been refetched once.' };
   }
 
   // db_prefix: smartcrmsaas_<slug>_tbl (matches legacy table-prefix scheme so
@@ -279,8 +279,9 @@ async function _centralRegistryCall(page, op, opts) {
     is_subscribed:          opts.is_subscribed != null ? (opts.is_subscribed ? 1 : 0) : 1
   };
 
+  let r;
   try {
-    const r = await fetch(url, {
+    r = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -288,6 +289,12 @@ async function _centralRegistryCall(page, op, opts) {
       },
       body: JSON.stringify(payload)
     });
+  } catch (netErr) {
+    const msg = 'Network error reaching ' + url + ' \u2014 ' + (netErr && netErr.message || 'fetch failed');
+    console.warn('[fb-registry] ' + msg);
+    return { ok: false, status: 0, error: msg };
+  }
+  try {
     // FB_REGISTRY_DIAG_v1 — capture raw body for diagnosis when JSON parse fails
     // (e.g. PHP file not uploaded yet -> HTML 404 page; PHP fatal -> stack trace HTML).
     let rawBody = '';

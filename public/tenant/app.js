@@ -18800,7 +18800,13 @@ async function adminFb() {
                 btn.disabled = true; btn.textContent = '\u23f3';
                 try {
                   const out = await api('api_fb_pages_syncRegistry', pg.page_id);
-                  if (out.ok) { toast('\u2714 Synced ' + pg.page_name, 'ok'); } else { const errMsg = (out.results && out.results[0] && out.results[0].error) || 'Unknown error'; toast('\u2717 Sync failed', 'err'); alert('Sync failed for ' + pg.page_name + ':\n\n' + errMsg); }
+                  if (out.ok) { toast('\u2714 Synced ' + pg.page_name, 'ok'); }
+                  else {
+                    const r0 = (out.results && out.results[0]) || {};
+                    const errMsg = r0.error || r0.skipped || ('Unknown error \u2014 raw: ' + JSON.stringify(out).slice(0, 400));
+                    toast('\u2717 Sync failed', 'err');
+                    alert('Sync failed for ' + pg.page_name + ':\n\n' + errMsg + '\n\nFix the issue (usually FB_REGISTRY_SECRET env var on Railway), then click Sync again.');
+                  }
                   showAdminTab('fb');
                 } catch (e) { toast(e.message, 'err'); }
                 finally { btn.disabled = false; btn.textContent = '\ud83d\udd04 Sync'; }
