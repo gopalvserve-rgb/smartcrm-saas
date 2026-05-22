@@ -28,6 +28,15 @@ import androidx.documentfile.provider.DocumentFile;
 
 import com.getcapacitor.BridgeActivity;
 
+// REC_BG_SYNC_v1 — WorkManager for background recording sync
+import androidx.work.Constraints;
+import androidx.work.ExistingPeriodicWorkPolicy;
+import androidx.work.NetworkType;
+import androidx.work.PeriodicWorkRequest;
+import androidx.work.WorkManager;
+import androidx.work.OneTimeWorkRequest;
+import java.util.concurrent.TimeUnit;
+
 import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
 import java.io.DataOutputStream;
@@ -57,6 +66,7 @@ public class MainActivity extends BridgeActivity {
         registerCallReceiver();
         getBridge().getWebView().addJavascriptInterface(new LeadCRMBridge(), "LeadCRMNative");
         handleSharedIntent(getIntent());
+        scheduleRecordingBgSync();
 
         // Allow WebView to use navigator.geolocation. Without this the SPA's
         // getCurrentPosition() in checkInOut() is silently denied and
@@ -529,6 +539,58 @@ public class MainActivity extends BridgeActivity {
             out.writeBytes("Content-Disposition: form-data; name=\"" + name + "\"\r\n\r\n");
             out.write(value.getBytes("UTF-8"));
             out.writeBytes("\r\n");
+        }
+
+        // REC_BG_SYNC_v1 — JS calls this once after login so the background
+        // worker has the auth token + base URL it needs to upload while the
+        // WebView is dead. Stored in SharedPreferences (NOT WorkData) so
+        // the worker reads the same up-to-date values on every periodic run.
+        @JavascriptInterface
+        public void registerBgSyncCreds(String baseUrl, String token) {
+            SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+            prefs.edit()
+                .putString("rec_bg_base_url", baseUrl == null ? "" : baseUrl)
+                .putString("rec_bg_token", token == null ? "" : token)
+                .apply();
+            Log.i(TAG, "bg-sync creds saved (baseUrl=" + (baseUrl == null ? "?" : baseUrl.replaceAll("token=[^&]*", "token=***")) + ")");
+            // Make sure the periodic worker is scheduled (idempotent — KEEP policy).
+            scheduleRecordingBgSync();
+        }
+
+        // REC_BG_SYNC_v1 — JS can trigger an immediate scan (e.g. right after
+        // a call ends, or from the Sync Now button). Returns immediately;
+        // WorkManager handles backoff/retry under the hood.
+        @JavascriptInterface
+        public void runBgSyncNow() {
+            try {
+                OneTimeWorkRequest req = new OneTimeWorkRequest.Builder(RecordingsBackgroundSyncWorker.class).build();
+                WorkManager.getInstance(MainActivity.this).enqueue(req);
+                Log.i(TAG, "bg-sync one-shot enqueued");
+            } catch (Exception e) {
+                Log.w(TAG, "runBgSyncNow failed: " + e.getMessage());
+            }
+        }
+    }
+
+    /** Schedule the recordings background sync to run every ~15 min (Android minimum). */
+    private void scheduleRecordingBgSync() {
+        try {
+            Constraints constraints = new Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .build();
+            PeriodicWorkRequest req = new PeriodicWorkRequest.Builder(
+                    RecordingsBackgroundSyncWorker.class, 15, TimeUnit.MINUTES)
+                .setConstraints(constraints)
+                .addTag("rec-bg-sync")
+                .build();
+            WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+                "rec-bg-sync-periodic",
+                ExistingPeriodicWorkPolicy.KEEP,
+                req
+            );
+            Log.i(TAG, "scheduleRecordingBgSync: periodic 15-min worker enqueued");
+        } catch (Exception e) {
+            Log.w(TAG, "scheduleRecordingBgSync failed: " + e.getMessage());
         }
     }
 }

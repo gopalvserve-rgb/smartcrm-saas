@@ -49,6 +49,14 @@ function _syncNativeCallEventCreds() {
     const base = (CRM.config && CRM.config.base_url) ||
                  location.origin;
     LeadCRMNative.saveCallEventCreds(base, tok);
+    // REC_BG_SYNC_v1 — also hand the creds to the recordings background worker
+    // so it can upload while the WebView is dead. tenant-scoped URL (with
+    // /t/<slug>/) so /api/recordings auth resolves to the right tenant.
+    if (typeof LeadCRMNative.registerBgSyncCreds === 'function') {
+      const tenantBase = String(location.origin + location.pathname).replace(/\/$/, '').replace(/\/#.*$/, '');
+      // location.pathname is e.g. /t/vserve/ — strip trailing slash to match server expectations.
+      try { LeadCRMNative.registerBgSyncCreds(tenantBase, tok); } catch (_) {}
+    }
   } catch (_) {}
 }
 
