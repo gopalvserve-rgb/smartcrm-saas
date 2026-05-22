@@ -8605,6 +8605,13 @@ VIEWS.quotations = async (view) => {
           h('td', { class: 'muted' }, r.sent_at ? fmtDate(r.sent_at, 'relative') : '—'),
           h('td', {},
             h('button', { class: 'btn xs', title: 'Edit', onclick: () => openQuotationModal(r.id) }, '✎'),
+            h('button', { class: 'btn xs ghost', title: 'Download as PDF', onclick: async () => {
+              try {
+                const u = await api('api_quotations_public_url', r.id);
+                const sep = u.url.indexOf('?') === -1 ? '?' : '&';
+                window.open(u.url + sep + 'autoprint=1', '_blank');
+              } catch (e) { toast(e.message, 'err'); }
+            } }, '📄'),
             h('button', { class: 'btn xs ghost', title: 'View public link', onclick: async () => {
               try { const u = await api('api_quotations_public_url', r.id); window.open(u.url, '_blank'); }
               catch (e) { toast(e.message, 'err'); }
@@ -8862,8 +8869,20 @@ async function openQuotationModal(qid, prefillLead) {
     catch (e) { toast(e.message, 'err'); }
   };
 
+  // QUOTE_PDF_v1 — download-as-PDF button. Opens the public viewer with
+  // ?autoprint=1 which auto-triggers the browser's Save-as-PDF dialog.
+  const pdfBtn = h('button', { class: 'btn', style: { background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' }, title: 'Download as PDF — opens the printable view and triggers Save-as-PDF' }, '\ud83d\udcc4 Download PDF');
+  pdfBtn.onclick = async () => {
+    if (!currentId) await save();
+    try {
+      const u = await api('api_quotations_public_url', currentId);
+      const sep = u.url.indexOf('?') === -1 ? '?' : '&';
+      window.open(u.url + sep + 'autoprint=1', '_blank');
+    } catch (e) { toast(e.message, 'err'); }
+  };
+
   card.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', marginTop: '1rem', justifyContent: 'space-between', flexWrap: 'wrap' } },
-    h('div', { style: { display: 'flex', gap: '.4rem' } }, saveBtn, emailBtn, waBtn, linkBtn),
+    h('div', { style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap' } }, saveBtn, pdfBtn, emailBtn, waBtn, linkBtn),
     h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Close')
   ));
   recompute();

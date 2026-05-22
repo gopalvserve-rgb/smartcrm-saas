@@ -522,6 +522,20 @@ async function _renderHtml(quotation, items, brandConfig) {
   <div class="actions">
     <button class="btn-print" onclick="window.print()">🖨️ Print / save as PDF</button>
   </div>
+  <script>
+    // QUOTE_PDF_v1 — auto-trigger the print dialog when opened with ?autoprint=1
+    // so the 'Download PDF' button on the SPA can launch the browser's Save-as-PDF
+    // flow in one click. Tiny delay so images / fonts have loaded.
+    (function() {
+      try {
+        if (/[?&]autoprint=1/.test(location.search)) {
+          window.addEventListener('load', function() {
+            setTimeout(function() { window.print(); }, 400);
+          });
+        }
+      } catch (e) {}
+    })();
+  </script>
 </body></html>`;
 }
 function _esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
