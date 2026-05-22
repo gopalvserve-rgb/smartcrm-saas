@@ -1062,7 +1062,7 @@ async function api_reports_callActivity(token, filters) {
             -- never resulted in an actual call. These were pre-inserted on
             -- lead-create as a recording-sync anchor but they shouldn't show
             -- up in the Call Activity totals.
-            AND ce.event NOT IN ('autodial_requested', 'dial_requested')
+            AND ce.event != 'autodial_requested'
             ${userScopeSql.replace(/user_id/g, 'ce.user_id')}
     ),
     bucketed AS (
@@ -1261,7 +1261,7 @@ async function api_reports_callActivity(token, filters) {
       LEFT JOIN lead_recordings r ON r.id = ce.recording_id
      WHERE ce.created_at >= $1 AND ce.created_at <= $2
            -- CALL_INTENT_EXCLUDE_v1 — hide intent events from Recent Calls too
-           AND ce.event NOT IN ('autodial_requested', 'dial_requested')
+           AND ce.event != 'autodial_requested'
            ${userScopeSql.replace(/user_id/g, 'ce.user_id')}
      ORDER BY ce.created_at DESC
      LIMIT 200
