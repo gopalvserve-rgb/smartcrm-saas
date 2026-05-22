@@ -12028,6 +12028,24 @@ function buildWaCompose(phone, onSent, opts) {
   let pending = null; // { id, wa_media_id, mime_type, filename, url }
 
   const previewSlot = h('div', { class: 'wb-compose-preview', hidden: 'hidden' });
+  // WA_REPLY_v1: reply preview slot rendered above input when user clicks
+  // ↩ Reply on a message.
+  const replyPreviewSlot = h('div', { class: 'wb-compose-reply-preview', style: { display: 'none', padding: '.4rem .55rem', background: 'linear-gradient(90deg, #eef2ff, #ffffff)', borderLeft: '3px solid #6366f1', borderRadius: '6px', margin: '0 0 .35rem', fontSize: '.78rem', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '.4rem' } });
+  window._renderWaReplyPreview = () => {
+    const t = window._waReplyTarget;
+    if (!t) { replyPreviewSlot.style.display = 'none'; replyPreviewSlot.innerHTML = ''; return; }
+    replyPreviewSlot.style.display = 'flex';
+    replyPreviewSlot.innerHTML = '';
+    replyPreviewSlot.appendChild(h('div', { style: { flex: 1, minWidth: 0 } },
+      h('div', { style: { fontWeight: 700, fontSize: '.65rem', color: '#3730a3', opacity: .85 } }, '↩ Replying to ' + (t.direction === 'out' ? 'yourself' : 'them')),
+      h('div', { style: { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: '#1e1b4b' } }, String(t.body || '').slice(0, 120))
+    ));
+    replyPreviewSlot.appendChild(h('button', {
+      class: 'btn xs ghost', type: 'button', title: 'Cancel reply',
+      onclick: () => { window._waReplyTarget = null; window._renderWaReplyPreview(); }
+    }, '✕'));
+  };
+
   const input = h('textarea', { rows: 2, placeholder: 'Type a message — Enter to send, Shift+Enter for newline' });
   // Phase 2 multi-WhatsApp: per-message 'Send from' picker on the
   // chat composer. Reads from CRM.cache.waPhones (pre-warmed by the
@@ -12069,6 +12087,10 @@ function buildWaCompose(phone, onSent, opts) {
     try {
       const payload = { phone, text };
       if (composerPicker.value) payload.from_phone_number_id = composerPicker.value;
+      // WA_REPLY_v1: include the reply_to wa_message_id if user is replying
+      if (window._waReplyTarget && window._waReplyTarget.wa_message_id) {
+        payload.reply_to = window._waReplyTarget.wa_message_id;
+      }
       if (pending) {
         payload.media_id = pending.wa_media_id;
         payload.media_type = waMediaTypeFor(pending.mime_type);
@@ -12078,6 +12100,9 @@ function buildWaCompose(phone, onSent, opts) {
       await api('api_wb_chat_send', payload);
       input.value = '';
       pending = null; fileInput.value = ''; renderPreview();
+      // WA_REPLY_v1: clear reply target after successful send
+      window._waReplyTarget = null;
+      if (typeof window._renderWaReplyPreview === 'function') window._renderWaReplyPreview();
       if (typeof onSent === 'function') onSent();
     } catch (e) { toast(e.message, 'err'); }
     finally { input.disabled = false; input.focus(); }
@@ -12184,6 +12209,7 @@ function buildWaCompose(phone, onSent, opts) {
     );
     wrap.appendChild(fromRow);
   }
+  wrap.appendChild(replyPreviewSlot);
   wrap.appendChild(h('div', { class: 'wb-compose-row' }, attachBtn, tplBtn, input, sendBtn, fileInput));
   return wrap;
 }
@@ -12543,7 +12569,63 @@ async function wbChat() {
           }
         }
       } catch (_) {}
-      log.appendChild(h('div', { class: 'wb-msg ' + (msg.direction === 'in' ? 'in' : 'out') + (isFailed ? ' failed' : '') },
+      // WA_REPLY_v1 (2026-05-21): if this message is a reply, render the
+      // quoted parent as a small grey strip above the body.
+      let _quotedNode = null;
+      if (msg.reply_to) {
+        const parent = msgs.find(x => x.wa_message_id === msg.reply_to);
+        if (parent) {
+          const pText = parent.body || ('[' + (parent.message_type || 'message') + ']');
+          _quotedNode = h('div', { class: 'wb-msg-quote', style: {
+            borderLeft: '3px solid #6366f1',
+            background: 'rgba(99,102,241,.08)',
+            padding: '.25rem .45rem',
+            borderRadius: '4px',
+            fontSize: '.75rem',
+            color: '#3730a3',
+            marginBottom: '.25rem',
+            cursor: 'pointer',
+            maxWidth: '90%'
+          }, title: 'Scroll to original message', onclick: () => {
+            const el = document.querySelector('[data-wam-id="' + parent.wa_message_id + '"]');
+            if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.add('wb-msg-highlight'); setTimeout(() => el.classList.remove('wb-msg-highlight'), 1500); }
+          }},
+            h('div', { style: { fontWeight: 700, fontSize: '.65rem', opacity: .8 }}, parent.direction === 'out' ? 'You' : 'Them'),
+            h('div', { style: { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}, pText.slice(0, 80))
+          );
+        }
+      }
+      // Reply button — hover-shown ↩ that sets _waReplyTarget so the
+      // compose row can render a quoted preview + send with reply_to.
+      const _replyBtn = h('button', {
+        class: 'wb-msg-reply-btn',
+        title: 'Reply to this message',
+        style: {
+          position: 'absolute', top: '4px', right: '4px',
+          background: 'rgba(255,255,255,.85)', border: '1px solid #e5e7eb',
+          borderRadius: '4px', padding: '1px 5px', fontSize: '.7rem',
+          cursor: 'pointer', display: 'none'
+        },
+        onclick: (ev) => {
+          ev.stopPropagation();
+          window._waReplyTarget = {
+            wa_message_id: msg.wa_message_id,
+            body: msg.body || ('[' + (msg.message_type || 'message') + ']'),
+            direction: msg.direction
+          };
+          // Render the reply preview above the input
+          try { window._renderWaReplyPreview && window._renderWaReplyPreview(); } catch (_) {}
+        }
+      }, '↩ Reply');
+      const _msgEl = h('div', {
+        class: 'wb-msg ' + (msg.direction === 'in' ? 'in' : 'out') + (isFailed ? ' failed' : ''),
+        'data-wam-id': msg.wa_message_id || '',
+        style: { position: 'relative' },
+        onmouseenter: () => { _replyBtn.style.display = 'block'; },
+        onmouseleave: () => { _replyBtn.style.display = 'none'; }
+      },
+        _quotedNode,
+        _replyBtn,
         mediaNode,
         h('div', { class: 'wb-msg-body' }, (function() {
           // Friendly fallback for already-saved messages with empty body
@@ -12575,7 +12657,8 @@ async function wbChat() {
             : null,
           _phoneBadge
         )
-      ));
+      );
+      log.appendChild(_msgEl);
     });
     // Auto-scroll to bottom IF the user was already at/near the bottom.
     // If they had scrolled up to read history, leave them there.
