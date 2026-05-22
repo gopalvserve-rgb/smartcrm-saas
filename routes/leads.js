@@ -722,11 +722,25 @@ async function api_leads_create(token, payload) {
   // sees it on the dashboard and can route it manually.
   let _capWarning = null;
   const _adminBypass = me.role === 'admin' && p.cap_bypass === true;
+  // LEAD_CREATOR_OWNS_v1 — when a user MANUALLY creates a lead from the
+  // CRM UI (mobile or desktop), bypass auto-assign rules + cap checks
+  // and assign the lead to the creator. Reason: a user who just typed
+  // in lead details expects to see that lead in their list immediately;
+  // routing it through campaign rules / round-robin / caps surprises
+  // them ("I created it but I don't see it"). Webhook + CSV + QR-form
+  // paths set p.source explicitly so they continue through auto-assign.
+  //
+  // Detection: missing or empty/"manual" source AND an authenticated
+  // user (me.id present). The SPA's lead form passes source='manual' by
+  // default; webhooks/integrations always set a different source.
+  const _isManualCreatorOwn = (!resolvedAssignee) &&
+    (!p.source || String(p.source).trim().toLowerCase() === 'manual') &&
+    !!me.id;
   // If the caller didn't pin an assignee explicitly, run the auto-assign
   // rules. Custom-field rules (cf_<key>) read from extraObj in addition
-  // to standard lead fields.
+  // to standard lead fields. Skip for manual creator-own creates.
   let _ruleAssignee = null;
-  if (!resolvedAssignee) {
+  if (!resolvedAssignee && !_isManualCreatorOwn) {
     try {
       const { pickAssigneeFromRules } = require('../utils/assignmentRules');
       // Build a probe object the matcher can read against. Mirrors the
@@ -746,7 +760,11 @@ async function api_leads_create(token, payload) {
     } catch (e) { console.warn('[leads] rule eval skipped:', e.message); }
   }
   let _proposedAssignee = resolvedAssignee || _ruleAssignee || me.id;
-  if (_proposedAssignee && !_adminBypass) {
+  // LEAD_CREATOR_OWNS_v1 — also bypass the cap check when the lead is
+  // being self-assigned by the creator. The cap is for ROUTING (limit
+  // how many leads a rep gets auto-assigned per day); a user actively
+  // typing in their own lead is not "routing", it's data entry.
+  if (_proposedAssignee && !_adminBypass && !_isManualCreatorOwn) {
     const capCheck = await _canAssignToUser(_proposedAssignee, false);
     if (!capCheck.ok) {
       _capWarning = capCheck.reason + ' for user #' + _proposedAssignee;
