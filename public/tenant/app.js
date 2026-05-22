@@ -27701,7 +27701,35 @@ async function openSourceMappingModal(sourceId, sourceLabel) {
   const allKeys = knownKeys.concat(extraKeys);
   const saved = data.mapping || {};
   const crmFields = data.crm_fields || ['name','phone','email','company','city','state','source','source_ref','notes','product','value','tags'];
+  // CFMAP_v1 — custom fields from tenant DB (cf_<key> + label).
+  const customFields = Array.isArray(data.custom_fields) ? data.custom_fields : [];
   const selectByKey = {};
+
+  // Helper: build the <select> with two optgroups (Core + Custom). Pre-selects
+  // savedVal if provided. Falls back to a top-level option for cf_* values
+  // that are no longer in the tenant's custom_fields list (so a stale saved
+  // mapping still renders correctly).
+  function _buildMapSelect(savedVal) {
+    const optsTop = [h('option', { value: '' }, '— ignore (use default) —')];
+    const coreGroup = h('optgroup', { label: 'Core lead columns' },
+      ...crmFields.map(f => h('option', { value: f, selected: savedVal === f ? 'selected' : null }, f))
+    );
+    optsTop.push(coreGroup);
+    if (customFields.length) {
+      const cfGroup = h('optgroup', { label: '✨ Custom fields' },
+        ...customFields.map(cf => h('option', {
+          value: cf.key,
+          selected: savedVal === cf.key ? 'selected' : null
+        }, cf.label + '  (' + cf.key + ')'))
+      );
+      optsTop.push(cfGroup);
+    }
+    // Fallback for legacy/orphan cf_ values
+    if (savedVal && savedVal.startsWith('cf_') && !customFields.some(cf => cf.key === savedVal)) {
+      optsTop.push(h('option', { value: savedVal, selected: 'selected' }, savedVal + '  (custom field, no longer defined)'));
+    }
+    return h('select', { style: { width: '100%' } }, ...optsTop);
+  }
 
   const table = h('table', { class: 'mini-table', style: { width: '100%' } });
   table.appendChild(h('thead', {}, h('tr', {},
@@ -27710,12 +27738,7 @@ async function openSourceMappingModal(sourceId, sourceLabel) {
   )));
   const tbody = h('tbody', {});
   allKeys.forEach(k => {
-    const opts = [h('option', { value: '' }, '— ignore (use default) —')]
-      .concat(crmFields.map(f => h('option', { value: f, selected: saved[k] === f ? 'selected' : null }, f)));
-    if (saved[k] && saved[k].startsWith('cf_')) {
-      opts.push(h('option', { value: saved[k], selected: 'selected' }, saved[k] + ' (custom field)'));
-    }
-    const sel = h('select', { style: { width: '100%' } }, ...opts);
+    const sel = _buildMapSelect(saved[k]);
     selectByKey[k] = sel;
     tbody.appendChild(h('tr', {},
       h('td', {}, h('code', {}, k)),
@@ -27726,18 +27749,17 @@ async function openSourceMappingModal(sourceId, sourceLabel) {
   body.appendChild(table);
 
   const customKeyInp = h('input', { placeholder: 'Add another incoming key (optional)', style: { width: '60%' } });
-  const customFieldSel = h('select', { style: { width: '36%' } },
-    h('option', { value: '' }, '— pick CRM field —'),
-    ...crmFields.map(f => h('option', { value: f }, f))
-  );
+  // CFMAP_v1 — adder row also uses the optgroup'd select so admins can map
+  // a brand-new incoming key directly to a custom field.
+  const customFieldSel = _buildMapSelect('');
+  // Override placeholder to make the empty option more obvious here.
+  if (customFieldSel.firstChild) customFieldSel.firstChild.textContent = '— pick CRM field —';
+  customFieldSel.style.width = '36%';
   body.appendChild(h('div', { style: { display: 'flex', gap: '.4rem', alignItems: 'center', marginTop: '.6rem' } },
     customKeyInp, customFieldSel,
     h('button', { class: 'btn sm', onclick: () => {
       if (!customKeyInp.value.trim() || !customFieldSel.value) { toast('Pick a key + field', 'err'); return; }
-      const sel = h('select', { style: { width: '100%' } },
-        h('option', { value: '' }, '— ignore —'),
-        ...crmFields.map(f => h('option', { value: f, selected: customFieldSel.value === f ? 'selected' : null }, f))
-      );
+      const sel = _buildMapSelect(customFieldSel.value);
       selectByKey[customKeyInp.value.trim()] = sel;
       tbody.appendChild(h('tr', {},
         h('td', {}, h('code', {}, customKeyInp.value.trim())),

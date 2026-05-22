@@ -777,13 +777,29 @@ async function api_integrations_mapping_get(token, source) {
     const r = await db.query(`SELECT mapping, last_payload, last_seen_at FROM lead_source_mapping WHERE source = $1`, [norm]);
     row = r.rows[0] || null;
   } catch (_) {}
+  // CFMAP_v1 — include tenant custom fields so the field-mapping modal
+  // can offer them as targets (not just core lead columns).
+  let customFields = [];
+  try {
+    const cf = await db.query(
+      `SELECT key, label, field_type FROM custom_fields
+       WHERE COALESCE(is_active, 1) = 1 ORDER BY COALESCE(sort_order, 0), id`
+    );
+    customFields = (cf.rows || [])
+      .filter(r => r && r.key)
+      .map(r => ({ key: 'cf_' + r.key, label: r.label || r.key, type: r.field_type || 'text' }));
+  } catch (e) {
+    console.warn('[integrations.mapping_get] custom_fields lookup failed:', e.message);
+  }
+
   return {
     source: norm,
     mapping: row ? (typeof row.mapping === 'string' ? JSON.parse(row.mapping) : row.mapping) : {},
     last_payload: row ? row.last_payload : null,
     last_seen_at: row ? row.last_seen_at : null,
     known_keys: KNOWN_KEYS_BY_SOURCE[norm] || KNOWN_KEYS_BY_SOURCE.generic,
-    crm_fields: CRM_FIELDS
+    crm_fields: CRM_FIELDS,
+    custom_fields: customFields
   };
 }
 
