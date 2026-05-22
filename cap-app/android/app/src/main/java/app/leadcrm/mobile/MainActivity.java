@@ -112,6 +112,12 @@ public class MainActivity extends BridgeActivity {
         String[] perms = {
                 Manifest.permission.READ_PHONE_STATE,
                 Manifest.permission.CALL_PHONE,
+                // CALL_PHONE_CAPTURE_v1: needed for the CallLog fallback in
+                // PhoneStateReceiver. On Android 10+ EXTRA_INCOMING_NUMBER
+                // returns null so the receiver queries CallLog.Calls for
+                // the most recent number. Without this permission the
+                // query throws SecurityException and phone stays empty.
+                Manifest.permission.READ_CALL_LOG,
                 Manifest.permission.READ_CONTACTS,
                 Manifest.permission.POST_NOTIFICATIONS,
                 Manifest.permission.ACCESS_FINE_LOCATION,
