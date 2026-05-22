@@ -4401,7 +4401,28 @@ async function openLeadModal(id) {
         title: 'Create a quotation pre-filled with this lead\'s details',
         style: { background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' },
         onclick: () => { modal.remove(); openQuotationModal(null, lead); }
-      }, '\ud83d\udcc4 Quote')
+      }, '\ud83d\udcc4 Quote'),
+      // WA_WHITELIST_v1 — whitelist this number so future inbound WA never
+      // creates a lead; also deletes THIS lead (it's clearly a personal
+      // contact or junk that the rep wants gone).
+      _digits ? h('button', {
+        type: 'button', class: 'btn sm',
+        title: 'Whitelist this number — future WhatsApp inbound from it will NOT create a lead. Also deletes this lead.',
+        style: { background: '#fee2e2', color: '#b91c1c', borderColor: '#fecaca' },
+        onclick: async () => {
+          const note = prompt('Add a note (optional, e.g. "Personal contact", "Junk lead"):', lead.name || '');
+          if (note === null) return;
+          if (!confirm('Whitelist ' + lead.phone + '?\n\n• Future inbound WhatsApp messages from this number will NOT create a lead.\n• This lead (#' + id + ') will also be deleted.\n\nContinue?')) return;
+          try {
+            const r = await api('api_wb_whitelist_add', { phone: lead.phone, note });
+            // Also delete the current lead since user explicitly chose to whitelist it
+            try { await api('api_leads_bulkDelete', [id]); } catch (_) {}
+            toast('\u2713 Whitelisted ' + lead.phone + (r.leads_removed ? ' (' + r.leads_removed + ' lead(s) removed)' : ''));
+            modal.remove();
+            try { navigateTo('leads'); } catch (_) {}
+          } catch (e) { toast(e.message, 'err'); }
+        }
+      }, '\ud83d\udeab Whitelist') : null
     ));
   }
 
