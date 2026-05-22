@@ -201,17 +201,24 @@ async function api_quotations_get(token, id) {
   const qid = Number(id);
   const q = (await db.query(`SELECT * FROM quotations WHERE id = $1`, [qid])).rows[0];
   if (!q) throw new Error('Quotation not found');
-  // QUOTE_IMG_FIX_v1 — LEFT JOIN products so legacy lines (saved before
+  // QUOTE_IMG_FIX_v2 — LEFT JOIN products so legacy lines (saved before
   // product_image_url was a column) still get their image from the
-  // product master record. If the line stored its own image_url it wins.
-  const items = (await db.query(`
-    SELECT qi.*,
-           COALESCE(NULLIF(qi.product_image_url, ''), p.image_url) AS product_image_url
+  // product master record. v1 used 'qi.* + AS product_image_url' which
+  // duplicated the column name and pg returned the original NULL value.
+  // v2 uses a distinct alias and coalesces in JS.
+  const itemsRaw = (await db.query(`
+    SELECT qi.*, p.image_url AS _product_master_image
       FROM quotation_items qi
       LEFT JOIN products p ON p.id = qi.product_id
      WHERE qi.quotation_id = $1
      ORDER BY qi.position ASC, qi.id ASC
   `, [qid])).rows;
+  const items = itemsRaw.map(r => {
+    const masterImg = r._product_master_image;
+    const lineImg = r.product_image_url;
+    const finalImg = (lineImg && String(lineImg).trim()) ? lineImg : (masterImg || '');
+    return Object.assign({}, r, { product_image_url: finalImg, _product_master_image: undefined });
+  });
   return { quotation: q, items };
 }
 
