@@ -1359,7 +1359,21 @@ app.post('/api/call_event_native', require('express').json({ limit: '64kb' }), a
     let decoded; try { decoded = jwt.verify(raw, _JWT_SECRET); } catch (_) { return res.status(401).json({ error: 'Bad token' }); }
     const uid = Number(decoded && decoded.id);
     if (!uid) return res.status(401).json({ error: 'Token has no user id' });
-    const t = await _findTenantByLookup('SELECT 1 FROM users WHERE id=$1 AND COALESCE(is_active,1)=1 LIMIT 1', [uid]);
+    // CALL_EVENT_TENANT_DIRECT_v1: prefer slug from JWT (decoded.t — set
+    // by signToken at login). Falling back to _findTenantByLookup —
+    // which scans every tenant pool — would make this endpoint 30+s
+    // with ~30 tenants, and the APK PhoneStateReceiver POSTs here on
+    // every call event, so the slow path is unacceptable.
+    let t = null;
+    const slugFromJwt = decoded && (decoded.t || decoded.slug);
+    if (slugFromJwt) {
+      try { t = await tenantPoolMod.findActiveTenant(String(slugFromJwt).toLowerCase()); } catch (_) {}
+    }
+    if (!t) {
+      // Slow legacy path — only used if older clients are still on a JWT
+      // that doesn't carry the slug.
+      t = await _findTenantByLookup('SELECT 1 FROM users WHERE id=$1 AND COALESCE(is_active,1)=1 LIMIT 1', [uid]);
+    }
     if (!t) return res.status(404).json({ error: 'No active tenant for user' });
     const pool = tenantPoolMod.poolFor(t);
     if (!pool) return res.status(500).json({ error: 'tenant pool unavailable' });
