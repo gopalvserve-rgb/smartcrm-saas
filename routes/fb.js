@@ -605,12 +605,43 @@ async function api_fb_status(token) {
  */
 async function _pageContextForWebhook(pageId) {
   const list = await _readPagesList();
-  const pg = list.find(p => String(p.page_id) === String(pageId));
+  let pg = list.find(p => String(p.page_id) === String(pageId));
   const [defaultUserId, defaultSource, defaultStatusId] = await Promise.all([
     db.getConfig('META_DEFAULT_USER_ID', ''),
     db.getConfig('META_DEFAULT_SOURCE', 'Facebook'),
     db.getConfig('META_DEFAULT_STATUS_ID', '')
   ]);
+
+  // CENTRAL_REGISTRY_FALLBACK_v1 - if the page is not in the local
+  // META_PAGES_LIST (or is there with an empty access_token), fall back
+  // to the central registry on smartcrmsolution.com. The Sync button
+  // writes the token there, so as long as the user has clicked Sync at
+  // least once we can recover. This makes "FB Connect" optional; just
+  // Sync is enough to receive leads.
+  if (!pg || !pg.access_token) {
+    try {
+      const url = process.env.FB_REGISTRY_PUBLIC_URL || 'https://smartcrmsolution.com/fb_leads_connections.json';
+      const r = await fetch(url, { headers: { 'Accept': 'application/json' } });
+      if (r && r.ok) {
+        const arr = await r.json();
+        if (Array.isArray(arr)) {
+          const central = arr.find(e => String(e && e.page_id) === String(pageId));
+          if (central && central.page_access_token) {
+            pg = {
+              page_id: String(central.page_id),
+              page_name: central.page_name || (pg && pg.page_name) || '',
+              access_token: central.page_access_token,
+              is_monitored: (pg && pg.is_monitored) || true
+            };
+            console.log('[fb-webhook] page', pageId, 'token resolved from central registry fallback');
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[fb-webhook] central registry fallback failed:', e.message);
+    }
+  }
+
   return {
     access_token: pg ? pg.access_token : '',
     page_name: pg ? pg.page_name : '',

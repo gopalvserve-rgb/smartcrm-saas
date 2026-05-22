@@ -61,10 +61,24 @@ async function metaEvent(req, res) {
         if (!leadgenId) continue;
         try {
           await _processLeadgen(leadgenId, pageId, formId);
-        } catch (e) {
-          console.error('[meta] leadgen failed:', leadgenId, e.message);
+          // LEADGEN_TRACE_v1 - mark as processed for diagnostics.
           await db.insert('webhook_log', {
-            source: 'meta', payload: { leadgen_id: leadgenId, error: e.message },
+            source: 'meta', payload: { leadgen_id: leadgenId, page_id: pageId, form_id: formId, status: 'lead_created' },
+            processed: 1
+          });
+        } catch (e) {
+          console.error('[meta] leadgen failed:', leadgenId, 'page=' + pageId, 'reason=' + e.message);
+          // Surface the failure in errorLogs so admins can see it without DB access.
+          try {
+            const errorLogs = require('../utils/errorLogs');
+            await errorLogs.logError({
+              source: 'fb_leadgen', severity: 'error',
+              message: 'FB lead ingest failed for leadgen_id=' + leadgenId + ' page_id=' + pageId,
+              context: { leadgen_id: leadgenId, page_id: pageId, form_id: formId, error: e.message, stack: (e.stack||'').split('\n').slice(0,5).join(' | ') }
+            });
+          } catch(_) {}
+          await db.insert('webhook_log', {
+            source: 'meta', payload: { leadgen_id: leadgenId, page_id: pageId, form_id: formId, error: e.message },
             processed: 0, error: e.message
           });
         }
