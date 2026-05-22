@@ -8613,6 +8613,12 @@ async function openQuotationModal(qid, prefillLead) {
 
   let existing = null;
   if (qid) {
+    // QUOTE_IMG_FIX_v1 — pre-warm the products cache so _imgUrlForRow's
+    // fallback works even if the user never opened the Products page.
+    if (!CRM.cache) CRM.cache = {};
+    if (!Array.isArray(CRM.cache.products) || !CRM.cache.products.length) {
+      try { CRM.cache.products = await api('api_products_list') || []; } catch (_) { CRM.cache.products = []; }
+    }
     try { const r = await api('api_quotations_get', qid); existing = { ...(r.quotation || {}), items: r.items || [] }; }
     catch (e) { card.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
   }
