@@ -597,7 +597,7 @@ async function _loadBrand() {
   const keys = [
     'COMPANY_NAME', 'COMPANY_LOGO_URL', 'BRAND_PRIMARY_COLOR', 'BASE_URL',
     'COMPANY_GST', 'COMPANY_ADDRESS', 'COMPANY_PHONE', 'COMPANY_EMAIL',
-    'QUOTATION_PRODUCT_IMAGE_SIZE'
+    'QUOTATION_PRODUCT_IMAGE_SIZE', 'QUOTATION_DEFAULT_TERMS'
   ];
   const out = {};
   for (const k of keys) {

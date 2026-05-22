@@ -8663,8 +8663,8 @@ VIEWS.quotations = async (view) => {
 };
 
 async function openQuotationModal(qid, prefillLead) {
-  const m = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
-  const card = h('div', { class: 'modal', style: { width: '95vw', maxWidth: '1280px', maxHeight: '95vh', overflow: 'auto', padding: '1.25rem 1.5rem' } });
+  const m = h('div', { class: 'modal-backdrop q-modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const card = h('div', { class: 'modal q-modal', style: { width: '95vw', maxWidth: '1280px', maxHeight: '95vh', overflow: 'auto', padding: '1.25rem 1.5rem' } });
   m.appendChild(card);
   document.body.appendChild(m);
 
@@ -8691,6 +8691,16 @@ async function openQuotationModal(qid, prefillLead) {
   } : { items: [], currency: 'INR', tax_pct: 18, discount_pct: 0, issue_date: new Date().toISOString().slice(0, 10) };
   const q = existing || seed;
 
+  // QUOTE_DEFAULT_TC_v1 — for brand new quotes, pre-fill T&C from the
+  // saved tenant default (QUOTATION_DEFAULT_TERMS). Falls back silently
+  // if the config endpoint isn't reachable.
+  if (!qid && !q.terms) {
+    try {
+      const cfg = await api('api_admin_getConfig', 'QUOTATION_DEFAULT_TERMS');
+      if (cfg && cfg.value) q.terms = cfg.value;
+    } catch (_) { /* default not set yet — that's fine */ }
+  }
+
   card.appendChild(h('h3', { style: { marginTop: 0 } }, qid ? '✎ Edit quotation ' + (q.number || '') : '+ New quotation'));
 
   const nameInp  = h('input', { type: 'text', value: q.customer_name || '', placeholder: 'Customer name *', style: { width: '100%' } });
@@ -8714,7 +8724,7 @@ async function openQuotationModal(qid, prefillLead) {
 
   // ---- Items ----
   card.appendChild(h('h4', { style: { marginBottom: '.25rem' } }, 'Line items'));
-  const itemsWrap = h('div', { style: { border: '1px solid #e2e8f0', borderRadius: '6px', padding: '.5rem' } });
+  const itemsWrap = h('div', { class: 'q-items', style: { border: '1px solid #e2e8f0', borderRadius: '6px', padding: '.5rem' } });
   const totalsLine = h('div', { style: { textAlign: 'right', marginTop: '.5rem', fontWeight: '700' } });
   const discInp = h('input', { type: 'number', value: q.discount_pct || 0, step: '0.01', min: 0, max: 100, style: { width: '5rem' } });
   const taxInp  = h('input', { type: 'number', value: q.tax_pct      || 18, step: '0.01', min: 0, max: 100, style: { width: '5rem' } });
@@ -8846,8 +8856,28 @@ async function openQuotationModal(qid, prefillLead) {
 
   const notesInp = h('textarea', { rows: 2, placeholder: 'Internal notes (visible to customer)', style: { width: '100%' } }, q.notes || '');
   const termsInp = h('textarea', { rows: 3, placeholder: 'Terms & conditions (e.g. 50% advance, balance on delivery)', style: { width: '100%' } }, q.terms || '');
-  card.appendChild(h('div', { class: 'field' }, h('label', {}, 'Notes'), notesInp));
-  card.appendChild(h('div', { class: 'field' }, h('label', {}, 'Terms & conditions'), termsInp));
+  card.appendChild(h('div', { class: 'field q-field-notes' }, h('label', {}, 'Notes'), notesInp));
+  // QUOTE_DEFAULT_TC_v1 — provide an inline "Save as default" link so the
+  // admin can update QUOTATION_DEFAULT_TERMS for future quotes without
+  // leaving the modal. Saves to tenant config via api_admin_setConfig.
+  const saveTcDefaultLink = h('a', {
+    href: '#',
+    style: { fontSize: '.75rem', color: '#6366f1', textDecoration: 'underline', cursor: 'pointer', marginLeft: '.5rem' },
+    title: 'Save this T&C text as the default for every new quotation',
+    onclick: async (ev) => {
+      ev.preventDefault();
+      const txt = String(termsInp.value || '').trim();
+      if (!txt) { toast('Type your default T&C first', 'err'); return; }
+      try {
+        await api('api_admin_setConfig', { key: 'QUOTATION_DEFAULT_TERMS', value: txt });
+        toast('📌 Saved as default — new quotes will auto-fill this T&C', 'ok');
+      } catch (e) { toast(e.message, 'err'); }
+    }
+  }, '📌 Save as default');
+  card.appendChild(h('div', { class: 'field q-field-terms' },
+    h('label', {}, 'Terms & conditions', saveTcDefaultLink),
+    termsInp
+  ));
 
   // ---- Save / Send ----
   const saveBtn = h('button', { class: 'btn primary' }, '💾 Save');
@@ -8900,8 +8930,27 @@ async function openQuotationModal(qid, prefillLead) {
   waBtn.onclick = async () => {
     if (!phoneInp.value) return toast('Add customer phone first', 'err');
     if (!currentId) await save();
-    try { const r = await api('api_quotations_send_whatsapp', currentId); toast('💬 Sent to ' + r.sent_to, 'ok'); }
-    catch (e) { toast(e.message, 'err'); }
+    waBtn.disabled = true;
+    const _origLabel = waBtn.textContent;
+    waBtn.textContent = '⏳ Sending…';
+    try {
+      const r = await api('api_quotations_send_whatsapp', currentId);
+      toast('💬 Sent to ' + r.sent_to, 'ok');
+    } catch (e) {
+      // QUOTE_WA_ERROR_v1 — give actionable guidance for the most common
+      // WhatsApp send failures so the user knows what to fix.
+      const msg = String(e.message || '');
+      let hint = '';
+      if (/WhatsApp not connected/i.test(msg)) hint = ' Open Settings → WhatsApp and connect a Cloud-API number first.';
+      else if (/WhatsApp module not available/i.test(msg)) hint = ' Server-side WhatsApp module not loaded — contact support.';
+      else if (/24-hour|outside.*window|re-?engagement/i.test(msg)) hint = ' Customer must message you first (24-hr WhatsApp policy) or use a pre-approved template.';
+      else if (/invalid|wa_id|phone/i.test(msg)) hint = ' Check the customer phone number (must include country code, e.g. +91...).';
+      else if (/token|expired|OAuth/i.test(msg)) hint = ' WhatsApp token expired — reconnect under Settings → WhatsApp.';
+      toast('❌ ' + msg + hint, 'err');
+    } finally {
+      waBtn.disabled = false;
+      waBtn.textContent = _origLabel;
+    }
   };
   linkBtn.onclick = async () => {
     if (!currentId) await save();
@@ -8921,8 +8970,8 @@ async function openQuotationModal(qid, prefillLead) {
     } catch (e) { toast(e.message, 'err'); }
   };
 
-  card.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', marginTop: '1rem', justifyContent: 'space-between', flexWrap: 'wrap' } },
-    h('div', { style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap' } }, saveBtn, pdfBtn, emailBtn, waBtn, linkBtn),
+  card.appendChild(h('div', { class: 'q-actions', style: { display: 'flex', gap: '.5rem', marginTop: '1rem', justifyContent: 'space-between', flexWrap: 'wrap' } },
+    h('div', { class: 'q-actions-left', style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap' } }, saveBtn, pdfBtn, emailBtn, waBtn, linkBtn),
     h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Close')
   ));
   recompute();
