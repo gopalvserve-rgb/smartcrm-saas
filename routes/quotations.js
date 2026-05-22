@@ -356,14 +356,53 @@ async function _renderHtml(quotation, items, brandConfig) {
   const cur = q.currency || 'INR';
   const sym = cur === 'INR' ? '₹' : cur === 'USD' ? '$' : cur === 'EUR' ? '€' : cur + ' ';
   const fmt = n => sym + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const company = (brandConfig && brandConfig.COMPANY_NAME) || 'Quotation';
+  const companyRaw = (brandConfig && brandConfig.COMPANY_NAME) || 'Quotation';
   const logo = (brandConfig && brandConfig.COMPANY_LOGO_URL) || '';
   const primary = (brandConfig && brandConfig.BRAND_PRIMARY_COLOR) || '#6366f1';
   // QUOTE_PRO_UI_v1: structured company fields for the 'From' block
-  const companyGst     = (brandConfig && brandConfig.COMPANY_GST)     || '';
-  const companyAddress = (brandConfig && brandConfig.COMPANY_ADDRESS) || '';
-  const companyPhone   = (brandConfig && brandConfig.COMPANY_PHONE)   || '';
-  const companyEmail   = (brandConfig && brandConfig.COMPANY_EMAIL)   || '';
+  let companyGst     = (brandConfig && brandConfig.COMPANY_GST)     || '';
+  let companyAddress = (brandConfig && brandConfig.COMPANY_ADDRESS) || '';
+  let companyPhone   = (brandConfig && brandConfig.COMPANY_PHONE)   || '';
+  const companyEmail = (brandConfig && brandConfig.COMPANY_EMAIL)   || '';
+
+  // QUOTE_AUTOSPLIT_v1 — many tenants stuffed everything into COMPANY_NAME:
+  // 'AEROLINE FITNESS GST 09BHZPA... ADDRESS Bjli Bamba... MOB 936...'
+  // If the structured fields are still empty, auto-split the raw string
+  // into name + GST + address + phone using common keyword boundaries.
+  let company = companyRaw;
+  (function _autoSplit() {
+    const txt = String(companyRaw || '');
+    if (!txt) return;
+    // Only split if at least one keyword appears AND the structured field
+    // for it hasn't been set by the admin already.
+    const kwRe = /\b(GSTIN|GST|ADDRESS|ADDR|MOBILE|MOB|PHONE|TEL|EMAIL|E-?MAIL)\b[\s:\-]*/i;
+    if (!kwRe.test(txt)) return;
+
+    // Walk the string, finding keyword anchors and slicing between them.
+    const anchors = [];
+    const re = /\b(GSTIN|GST|ADDRESS|ADDR|MOBILE|MOB|PHONE|TEL|EMAIL|E-?MAIL)\b[\s:\-]*/gi;
+    let m;
+    while ((m = re.exec(txt)) !== null) {
+      anchors.push({ kw: m[1].toUpperCase().replace('E-MAIL','EMAIL').replace('EMAIL',''), start: m.index, end: re.lastIndex, full: m[0] });
+    }
+    if (!anchors.length) return;
+
+    // Everything before the first anchor = company name
+    company = txt.slice(0, anchors[0].start).trim().replace(/[,;:|]+$/, '').trim() || companyRaw;
+
+    // Each anchor's value runs until the next anchor (or end of string)
+    for (let i = 0; i < anchors.length; i++) {
+      const a = anchors[i];
+      const next = anchors[i + 1];
+      const val = txt.slice(a.end, next ? next.start : txt.length).trim().replace(/^[,;:|\s]+|[,;:|\s]+$/g, '').trim();
+      if (!val) continue;
+      const kw = a.kw;
+      if ((kw === 'GST' || kw === 'GSTIN') && !companyGst) companyGst = val;
+      else if ((kw === 'ADDRESS' || kw === 'ADDR') && !companyAddress) companyAddress = val;
+      else if ((kw === 'MOB' || kw === 'MOBILE' || kw === 'PHONE' || kw === 'TEL') && !companyPhone) companyPhone = val;
+    }
+  })();
+
   const validUntil = q.valid_until ? new Date(q.valid_until).toLocaleDateString('en-IN') : '';
   const issue = q.issue_date ? new Date(q.issue_date).toLocaleDateString('en-IN') : '';
   /* PROD_IMG_v1 — tenant-configurable image size on quotation */
