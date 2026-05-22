@@ -2350,6 +2350,71 @@ async function openInstallPackModal(t) {
   document.body.appendChild(m);
 }
 
+
+
+// ADMIN_AI_RECORDING_TOGGLE_v1 — super-admin per-tenant AI Call Summary toggle.
+async function openAiRecordingModal(t) {
+  const m = document.createElement('div');
+  m.className = 'modal-backdrop';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:99999;display:flex;align-items:center;justify-content:center;';
+  m.onclick = (ev) => { if (ev.target === m) m.remove(); };
+  const card = h('div', { class: 'card', style: { maxWidth: '480px', width: '92%', padding: '1.2rem 1.4rem', background: '#fff', borderRadius: '12px' } });
+  card.appendChild(h('h3', { style: { marginTop: 0 } }, '\ud83c\udf99\ufe0f AI Call Summary'));
+  card.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem' } }, 'Tenant: ', h('b', {}, t.org_name || t.slug), ' (', t.slug, ')'));
+  card.appendChild(h('p', { class: 'muted', style: { fontSize: '.78rem' } },
+    'When ON, the platform transcribes + summarises every uploaded recording with Gemini. '
+    + 'When OFF, the worker silently skips them (still saves the audio, just no AI processing). '
+    + 'Useful to cut Gemini cost for tenants who don\'t use the AI summary feature.'));
+
+  const status = h('div', { style: { padding: '.6rem', background: '#f1f5f9', borderRadius: '8px', margin: '.5rem 0', fontSize: '.85rem' } }, '\u23f3 Loading current state\u2026');
+  card.appendChild(status);
+
+  const onBtn  = h('button', { class: 'btn primary', type: 'button', disabled: true }, '\u25cf Turn ON');
+  const offBtn = h('button', { class: 'btn', type: 'button', disabled: true, style: { background: '#fee2e2', color: '#b91c1c', borderColor: '#fecaca' } }, '\u25cb Turn OFF');
+  const btnRow = h('div', { style: { display: 'flex', gap: '.5rem', justifyContent: 'flex-end', marginTop: '1rem' } },
+    h('button', { type: 'button', class: 'btn ghost', onclick: () => m.remove() }, 'Close'),
+    offBtn, onBtn
+  );
+  card.appendChild(btnRow);
+  m.appendChild(card);
+  document.body.appendChild(m);
+
+  async function refresh() {
+    try {
+      const r = await api('api_saas_tenants_getAiRecording', t.slug);
+      status.innerHTML = '<b>Current state:</b> ' + (r.enabled
+        ? '<span style="color:#16a34a">\u2714 ON \u2014 every uploaded recording is processed by Gemini</span>'
+        : '<span style="color:#b91c1c">\u2717 OFF \u2014 worker skips recordings, no AI cost</span>');
+      onBtn.disabled  = r.enabled;
+      offBtn.disabled = !r.enabled;
+      onBtn.style.opacity  = r.enabled  ? '.4' : '1';
+      offBtn.style.opacity = !r.enabled ? '.4' : '1';
+    } catch (e) {
+      status.innerHTML = '<span style="color:#b91c1c">\u2717 ' + e.message + '</span>';
+    }
+  }
+
+  onBtn.onclick = async () => {
+    onBtn.disabled = true;
+    try {
+      await api('api_saas_tenants_setAiRecording', { slug: t.slug, enabled: true });
+      toast('AI Call Summary turned ON for ' + t.slug);
+      await refresh();
+    } catch (e) { toast(e.message, 'err'); onBtn.disabled = false; }
+  };
+  offBtn.onclick = async () => {
+    if (!confirm('Turn AI Call Summary OFF for ' + t.slug + '?\n\nUploaded recordings will still be saved, but the worker will NOT call Gemini for transcription/summary. Save instant Gemini cost.')) return;
+    offBtn.disabled = true;
+    try {
+      await api('api_saas_tenants_setAiRecording', { slug: t.slug, enabled: false });
+      toast('AI Call Summary turned OFF for ' + t.slug);
+      await refresh();
+    } catch (e) { toast(e.message, 'err'); offBtn.disabled = false; }
+  };
+
+  refresh();
+}
+
 // ADMIN_ADD_USER_v1 (2026-05-22) — super-admin manages users + per-user monthly cost.
 async function openTenantUsersModal(t) {
   const m = document.createElement('div');

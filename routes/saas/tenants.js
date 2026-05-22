@@ -877,6 +877,52 @@ async function api_saas_tenants_updateUserCost(token, payload) {
   return { ok: true, user_id: userId, monthly_cost_inr: newCost };
 }
 
+
+/**
+ * ADMIN_AI_RECORDING_TOGGLE_v1 — super-admin reads & writes the
+ * AI_TRANSCRIPTION_ENABLED config inside a specific tenant's DB.
+ * '1' = on (default), '0' = off (worker will skip every recording).
+ */
+async function api_saas_tenants_getAiRecording(token, slug) {
+  await requireSuperAdmin(token);
+  const cleanSlug = String(slug || '').trim().toLowerCase();
+  if (!cleanSlug) throw new Error('slug required');
+  const t = await control.findOneBy('tenants', 'slug', cleanSlug);
+  if (!t) throw new Error('Tenant not found');
+  const pool = tenantPool.poolFor(t);
+  if (!pool) throw new Error('Could not connect to tenant DB');
+  let val = '1';
+  try {
+    const r = await pool.query(`SELECT value FROM config WHERE key = $1 LIMIT 1`, ['AI_TRANSCRIPTION_ENABLED']);
+    if (r.rows.length) val = String(r.rows[0].value || '');
+  } catch (_) {}
+  return { slug: t.slug, enabled: val === '1' };
+}
+
+async function api_saas_tenants_setAiRecording(token, payload) {
+  const me = await requireFullAdmin(token);
+  const p = payload || {};
+  const cleanSlug = String(p.slug || '').trim().toLowerCase();
+  if (!cleanSlug) throw new Error('slug required');
+  const enabled = p.enabled ? '1' : '0';
+  const t = await control.findOneBy('tenants', 'slug', cleanSlug);
+  if (!t) throw new Error('Tenant not found');
+  const pool = tenantPool.poolFor(t);
+  if (!pool) throw new Error('Could not connect to tenant DB');
+  try { await pool.query(`CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT)`); } catch (_) {}
+  await pool.query(
+    `INSERT INTO config (key, value) VALUES ($1, $2)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+    ['AI_TRANSCRIPTION_ENABLED', enabled]
+  );
+  await control.insert('audit_log', {
+    actor_type: 'super_admin', actor_id: me.id, actor_email: me.email,
+    tenant_id: t.id, event: 'tenant.ai_recording_toggled',
+    detail: JSON.stringify({ slug: t.slug, enabled: enabled === '1' })
+  });
+  return { ok: true, slug: t.slug, enabled: enabled === '1' };
+}
+
 module.exports = {
   api_saas_tenants_list,
   api_saas_tenants_get,
@@ -897,5 +943,7 @@ module.exports = {
   api_saas_tenants_updateUserCost,
   api_saas_tenants_getUserPlan,
   api_saas_tenants_setUserPlan,
-  api_saas_tenants_chargeExtraUsers
+  api_saas_tenants_chargeExtraUsers,
+  api_saas_tenants_getAiRecording,
+  api_saas_tenants_setAiRecording
 };
