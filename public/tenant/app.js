@@ -20668,10 +20668,14 @@ function generateTempPasswordClient() {
 /* ---------------- HR views ---------------- */
 VIEWS.tasks = async (view) => {
   view.innerHTML = '';
-  // Two-tab view: All tasks + Done today
+  /* TASKS_BY_EMP_v1 — admin/manager/team_leader see a "By Employee" subtab
+   * that groups every employee's task counts so they can drill into who has
+   * done what. Backend api_tasks_list already returns all tasks for admin. */
+  const _isAdminLike = CRM.user.role === 'admin' || CRM.user.role === 'manager' || CRM.user.role === 'team_leader';
   const tabs = h('div', { class: 'subtabs' },
     h('button', { class: 'subtab active', onclick: ev => switchTab(ev, 'all') }, 'All tasks'),
-    h('button', { class: 'subtab', onclick: ev => switchTab(ev, 'today') }, "✅ What I did today")
+    h('button', { class: 'subtab', onclick: ev => switchTab(ev, 'today') }, "✅ What I did today"),
+    _isAdminLike ? h('button', { class: 'subtab', onclick: ev => switchTab(ev, 'byemp') }, "👥 By Employee") : null
   );
   const content = h('div', { id: 'task-content' });
   view.append(tabs, content);
@@ -20682,6 +20686,140 @@ VIEWS.tasks = async (view) => {
     ev.target.classList.add('active');
     if (which === 'all')   renderAllTasks();
     if (which === 'today') renderTodayTasks();
+    if (which === 'byemp') renderByEmployee();
+  }
+
+  /* TASKS_BY_EMP_v1 — admin view: who has done what */
+  async function renderByEmployee() {
+    content.innerHTML = '<div class="loading">Loading employee task breakdown…</div>';
+    const [allTasks, users] = await Promise.all([
+      api('api_tasks_list', {}),
+      (CRM.cache && CRM.cache.users) || api('api_users_list')
+    ]);
+    const _ymd = (iso) => {
+      if (!iso) return '';
+      const d = new Date(iso);
+      return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+    };
+    const today = _ymd(new Date().toISOString());
+    const weekStart = (() => { const d = new Date(); d.setDate(d.getDate() - 6); return _ymd(d.toISOString()); })();
+    const monthStart = (() => { const d = new Date(); d.setDate(1); return _ymd(d.toISOString()); })();
+    const groups = {};
+    users.forEach(u => { groups[Number(u.id)] = { user: u, total: 0, open: 0, done: 0, done_today: 0, done_week: 0, done_month: 0, last_done_at: null, last_done_title: '', tasks: [] }; });
+    allTasks.forEach(t => {
+      const uid = Number(t.assigned_to);
+      const g = groups[uid];
+      if (!g) return;
+      g.total++; g.tasks.push(t);
+      if (t.status === 'done') {
+        g.done++;
+        const ymd = _ymd(t.completed_at || t.created_at);
+        if (ymd === today) g.done_today++;
+        if (ymd >= weekStart) g.done_week++;
+        if (ymd >= monthStart) g.done_month++;
+        if (!g.last_done_at || String(t.completed_at) > String(g.last_done_at)) {
+          g.last_done_at = t.completed_at;
+          g.last_done_title = t.title;
+        }
+      } else { g.open++; }
+    });
+    const list = Object.values(groups).filter(g => g.total > 0)
+      .sort((a, b) => (b.done_week - a.done_week) || (b.done_month - a.done_month) || String(a.user.name).localeCompare(String(b.user.name)));
+    const totals = list.reduce((s, g) => ({
+      done: s.done + g.done, open: s.open + g.open,
+      week: s.week + g.done_week, today: s.today + g.done_today, month: s.month + g.done_month
+    }), { done: 0, open: 0, week: 0, today: 0, month: 0 });
+    content.innerHTML = '';
+    content.append(
+      h('div', { class: 'cards' },
+        h('div', { class: 'card stat ok' },
+          h('div', { class: 'stat-icon' }, '✅'),
+          h('div', { class: 'stat-body' },
+            h('div', { class: 'stat-label' }, 'Done today (team)'),
+            h('div', { class: 'stat-value' }, String(totals.today)))),
+        h('div', { class: 'card stat accent' },
+          h('div', { class: 'stat-icon' }, '📅'),
+          h('div', { class: 'stat-body' },
+            h('div', { class: 'stat-label' }, 'Done this week'),
+            h('div', { class: 'stat-value' }, String(totals.week)))),
+        h('div', { class: 'card stat' },
+          h('div', { class: 'stat-icon' }, '🗓'),
+          h('div', { class: 'stat-body' },
+            h('div', { class: 'stat-label' }, 'Done this month'),
+            h('div', { class: 'stat-value' }, String(totals.month)))),
+        h('div', { class: 'card stat warn' },
+          h('div', { class: 'stat-icon' }, '⏳'),
+          h('div', { class: 'stat-body' },
+            h('div', { class: 'stat-label' }, 'Open (team-wide)'),
+            h('div', { class: 'stat-value' }, String(totals.open))))
+      ),
+      h('div', { class: 'card', style: { marginTop: '.75rem' } },
+        h('h3', { style:{ marginTop:0 } }, '👥 Tasks done by employee'),
+        h('div', { class: 'muted', style:{ marginBottom: '.5rem' } }, list.length + ' employee(s) with tasks. Click any row to see that employee\'s full list.'),
+        list.length === 0
+          ? h('p', { class: 'muted' }, 'No tasks assigned yet.')
+          : h('div', { class: 'table-wrap' }, h('table', {},
+              h('thead', {}, h('tr', {},
+                h('th', {}, 'Employee'),
+                h('th', {}, 'Role'),
+                h('th', { style:{ textAlign:'right' } }, '✅ Today'),
+                h('th', { style:{ textAlign:'right' } }, '📅 Week'),
+                h('th', { style:{ textAlign:'right' } }, '🗓 Month'),
+                h('th', { style:{ textAlign:'right' } }, 'Done (total)'),
+                h('th', { style:{ textAlign:'right' } }, 'Open'),
+                h('th', {}, 'Last activity'),
+                h('th', {}, '')
+              )),
+              h('tbody', {}, ...list.map(g => h('tr', { style:{ cursor:'pointer' }, onclick: () => _showEmpTasks(g) },
+                h('td', {}, h('b', {}, g.user.name || '—')),
+                h('td', { class:'muted' }, g.user.role || ''),
+                h('td', { style:{ textAlign:'right', fontWeight: g.done_today > 0 ? 700 : 400, color: g.done_today > 0 ? '#15803d' : 'inherit' } }, String(g.done_today)),
+                h('td', { style:{ textAlign:'right', fontWeight: g.done_week > 0 ? 600 : 400 } }, String(g.done_week)),
+                h('td', { style:{ textAlign:'right' } }, String(g.done_month)),
+                h('td', { style:{ textAlign:'right', color:'#15803d', fontWeight:600 } }, String(g.done)),
+                h('td', { style:{ textAlign:'right', color: g.open > 0 ? '#92400e' : 'inherit' } }, String(g.open)),
+                h('td', { class:'muted', style:{ fontSize:'.78rem' } }, g.last_done_at ? (fmtDate(g.last_done_at, 'relative') + ' — ' + (g.last_done_title || '').slice(0, 40)) : '—'),
+                h('td', {}, h('button', { class: 'btn xs' }, 'View →'))
+              )))
+            ))
+      )
+    );
+  }
+  function _showEmpTasks(g) {
+    const modal = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target === modal) modal.remove(); } });
+    const card = h('div', { class: 'modal', style: { maxWidth: '880px', maxHeight: '85vh', overflow: 'auto' } });
+    card.appendChild(h('div', { class: 'modal-head' },
+      h('h3', {}, '👤 ' + (g.user.name || 'Employee') + ' — ' + g.done + ' done, ' + g.open + ' open'),
+      h('button', { class: 'btn icon', onclick: () => modal.remove() }, '✕')
+    ));
+    const body = h('div', { class: 'modal-body' });
+    const sorted = [...g.tasks].sort((a, b) => {
+      if (a.status === 'done' && b.status === 'done') return String(b.completed_at || '').localeCompare(String(a.completed_at || ''));
+      if (a.status === 'done') return -1;
+      if (b.status === 'done') return 1;
+      return String(a.due_at || '9999').localeCompare(String(b.due_at || '9999'));
+    });
+    body.appendChild(h('div', { class:'table-wrap' }, h('table', {},
+      h('thead', {}, h('tr', {},
+        h('th', {}, 'Title'),
+        h('th', {}, 'Status'),
+        h('th', {}, 'Due'),
+        h('th', {}, 'Completed'),
+        h('th', {}, 'Created by')
+      )),
+      h('tbody', {}, ...sorted.map(t => h('tr', {},
+        h('td', {}, h('b', {}, t.title)),
+        h('td', {}, h('span', {
+          style: { background: t.status==='done' ? '#dcfce7' : '#fef3c7', color: t.status==='done' ? '#15803d' : '#92400e', padding:'1px 8px', borderRadius:'999px', fontSize:'.75rem', fontWeight:600 }
+        }, t.status)),
+        h('td', { class:'muted' }, t.due_at ? fmtDate(t.due_at) : '—'),
+        h('td', { class:'muted' }, t.completed_at ? fmtDate(t.completed_at, 'relative') : '—'),
+        h('td', { class:'muted' }, t.creator_name || '—')
+      )))
+    )));
+    card.appendChild(body);
+    modal.appendChild(card);
+    document.body.appendChild(modal);
   }
 
   async function renderAllTasks() {
