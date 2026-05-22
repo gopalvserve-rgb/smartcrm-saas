@@ -17078,7 +17078,10 @@ async function adminIntegrations() {
           const inp = ev.target.parentNode.querySelector('input');
           navigator.clipboard.writeText(inp.value).then(() => toast('Copied'), () => { inp.select(); document.execCommand('copy'); toast('Copied'); });
         } }, '📋 Copy'),
-        h('button', { class: 'btn sm', style: { marginLeft: '.3rem' }, title: 'Map incoming JSON keys to CRM fields',
+        h('button', {
+          class: 'btn',
+          style: { marginLeft: '.3rem', background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' },
+          title: 'Map incoming JSON keys to CRM lead columns / custom fields',
           onclick: () => openSourceMappingModal(s.id, s.label)
         }, '🗺 Map fields')
       ));
@@ -17160,6 +17163,15 @@ async function adminIntegrations() {
         href: 'https://www.make.com/en/help/tools/http', target: '_blank', rel: 'noopener',
         class: 'btn ghost'
       }, 'Make HTTP module docs ↗'),
+      // MAKE_FIELDMAP_v1 — surface the field-mapping editor on the Make card
+      // so admins can rename custom JSON keys (e.g. property_type, budget,
+      // utm_source) to CRM lead columns without leaving the page.
+      h('button', {
+        class: 'btn',
+        style: { background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' },
+        title: 'Map incoming JSON keys to CRM lead columns / custom fields',
+        onclick: () => openSourceMappingModal('make', 'Make.com')
+      }, '🗺 Map fields'),
       testStatus
     ));
     wrap.appendChild(makeCard);
