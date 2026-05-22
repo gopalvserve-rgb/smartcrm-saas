@@ -1,5 +1,21 @@
 package app.leadcrm.mobile
 
+/*
+ * ============================================================
+ * 🔒 LOCKED FILE — Recording & Call Sync Pipeline
+ * ============================================================
+ * This file is part of the call/recording sync pipeline. It is
+ * mission-critical: any change here can stop recordings from
+ * reaching the CRM, which is a customer-visible regression.
+ *
+ * BEFORE editing — read docs/LOCKED_FILES.md and
+ * RECORDING_ARCHITECTURE_AND_LOCKDOWN.md (workspace root), then
+ * ASK THE USER explicitly before making any change. No
+ * "cleanups", no "refactors", no "fixes for unused imports"
+ * without approval.
+ * ============================================================
+ */
+
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent

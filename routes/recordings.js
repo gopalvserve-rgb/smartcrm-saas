@@ -1,3 +1,18 @@
+/*
+ * ============================================================
+ * 🔒 LOCKED FILE — Recording & Call Sync Pipeline
+ * ============================================================
+ * This entire file is part of the call/recording sync pipeline.
+ * Functions here power: lead matching, call history, recording
+ * playback, AI summary, and the /api/recordings upload flow.
+ *
+ * BEFORE editing — read docs/LOCKED_FILES.md and
+ * RECORDING_ARCHITECTURE_AND_LOCKDOWN.md (workspace root), then
+ * ASK THE USER explicitly. No silent refactors. Small targeted
+ * patches only.
+ * ============================================================
+ */
+
 // PROMISE_TRACK_v1
 /**
  * routes/recordings.js — Call recordings + call event logging

@@ -1,6 +1,22 @@
 // build-stamp: 2026-05-11 v1.2 — APK refresh to ship MANAGE_EXTERNAL_STORAGE + auto-prompt flow
 package app.leadcrm.mobile
 
+/*
+ * ============================================================
+ * 🔒 LOCKED FILE — Recording & Call Sync Pipeline
+ * ============================================================
+ * This file is part of the call/recording sync pipeline. It is
+ * mission-critical: any change here can stop recordings from
+ * reaching the CRM, which is a customer-visible regression.
+ *
+ * BEFORE editing — read docs/LOCKED_FILES.md and
+ * RECORDING_ARCHITECTURE_AND_LOCKDOWN.md (workspace root), then
+ * ASK THE USER explicitly before making any change. No
+ * "cleanups", no "refactors", no "fixes for unused imports"
+ * without approval.
+ * ============================================================
+ */
+
 import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager

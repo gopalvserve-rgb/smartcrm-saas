@@ -1049,6 +1049,16 @@ const _recUpload = _multer({
   storage: _multer.memoryStorage(),
   limits: { fileSize: 100 * 1024 * 1024 }
 });
+// ============================================================
+// 🔒 LOCKED — /api/recordings upload + AI Call Summary worker
+// ============================================================
+// The block below (recording upload handler + helpers + AI
+// worker) is mission-critical. Read docs/LOCKED_FILES.md before
+// editing. Ask the user before any change. The phone fallback
+// chain, dedup logic, MIME detection, and lead resolution are
+// the result of multiple iterations against real OEM behaviour.
+// ============================================================
+
 app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) => {
   // Tenant-agnostic upload: if the request didn't come through /t/<slug>/
   // (e.g. the native APK posts directly to /api/recordings), resolve the
@@ -2715,6 +2725,10 @@ console.log('[reportSchedule] scheduled-report dispatcher started — 15-min tic
 // button. Walk every active tenant once a minute and run _tick() inside
 // that tenant's storage scope so the existing 'WHERE ai_processed_at IS
 // NULL LIMIT 5' query runs against per-tenant DB pools.
+// 🔒 LOCKED — AI Call Summary worker. Respects per-tenant
+// AI_TRANSCRIPTION_ENABLED config (see processRecording in
+// utils/aiCallSummary.js). Ask before modifying the schedule.
+
 async function _runAiCallSummaryForAllTenants() {
   let rows = [];
   try {
