@@ -56,7 +56,7 @@ const _DEFAULT_SETTINGS = {
   escalation_keywords: '',
   model_override: null,
   use_kb: 1,
-  kb_max_chars: 8000,
+  kb_max_chars: 4000,  // COST_REDUCE_v1: was 8000. Most KBs answer well within 4000 chars; admin can raise per-bot.
   history_messages: 8,
   reengage_enabled: 0,
   reengage_after_minutes: 60,

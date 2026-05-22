@@ -192,7 +192,7 @@ async function _callGemini(audioBytes, mimeType, meta) {
     generationConfig: {
       responseMimeType: 'application/json',
       temperature: 0.2,
-      maxOutputTokens: 4096
+      maxOutputTokens: 1500   // COST_REDUCE_v1: was 4096. 1.5k covers transcript+summary+actions for 95% of calls. Long-tail truncates cleanly via JSON parser.
     }
   };
 
@@ -295,6 +295,31 @@ async function processRecording(id) {
   if (!(await _key())) throw new Error('GEMINI_API_KEY not configured. Set it in super-admin Settings → AI or via GEMINI_API_KEY env var.');
   if (!rec.audio_bytes || rec.audio_bytes.length === 0) {
     throw new Error('Recording has no audio bytes');
+  }
+
+  // COST_REDUCE_v1 — skip very short calls (mis-dials, hangups) AND very
+  // long calls (training sessions, voicemails) that would otherwise burn
+  // 200K+ input tokens. Configurable per-tenant.
+  const minS = Number(await db.getConfig('AI_SUMMARY_MIN_SECONDS', '15')) || 15;
+  const maxS = Number(await db.getConfig('AI_SUMMARY_MAX_SECONDS', '600')) || 600;
+  const dur = Number(rec.duration_s) || 0;
+  if (dur < minS) {
+    await _saveResult(id, {
+      ai_processed_at: db.nowIso(),
+      ai_provider: 'skipped',
+      ai_model: 'none',
+      ai_error: 'Skipped (duration ' + dur + 's < ' + minS + 's minimum)'
+    });
+    return { ok: false, skipped: 'too_short', id, duration_s: dur };
+  }
+  if (dur > maxS) {
+    await _saveResult(id, {
+      ai_processed_at: db.nowIso(),
+      ai_provider: 'skipped',
+      ai_model: 'none',
+      ai_error: 'Skipped (duration ' + dur + 's > ' + maxS + 's cap — avoid huge audio token spend)'
+    });
+    return { ok: false, skipped: 'too_long', id, duration_s: dur };
   }
 
   const ai = await _callGemini(rec.audio_bytes, rec.mime_type, {

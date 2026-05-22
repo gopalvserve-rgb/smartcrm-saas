@@ -1453,7 +1453,7 @@ IMPORTANT RULES:
     system, history: hist, prompt: text,
     tools: TOOLS,
     runTool: (name, args) => _runTool(name, args, ctx),
-    maxTurns: 8, maxOutputTokens: 1800, temperature: 0.2,
+    maxTurns: 6, maxOutputTokens: 1200, temperature: 0.2,  // COST_REDUCE_v1: was 8/1800
   });
 
   let answer = result.text || '';
