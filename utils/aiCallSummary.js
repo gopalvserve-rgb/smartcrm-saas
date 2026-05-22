@@ -314,6 +314,30 @@ async function processRecording(id) {
   const tk = ai.__tokens || { prompt: 0, candidates: 0, total: 0 };
   const cost = _estimateCost(tk.prompt, tk.candidates);
 
+  // AI_USAGE_LOG_LEAK_FIX_v1 — log to control.ai_usage_log so the super-
+  // admin AI Costing dashboard sees AI Call Summary usage. Previously
+  // this path bypassed logUsage entirely → massive (>90%) undercount
+  // versus Google AI Studio reality.
+  try {
+    const tenantPoolMod = require('./tenantPool');
+    const slug = (tenantPoolMod.tenantStorage && tenantPoolMod.tenantStorage.getStore && tenantPoolMod.tenantStorage.getStore()?.slug) || null;
+    await _gemini.logUsage({
+      tenant_slug: slug,
+      call_kind: 'call_summary',
+      lead_id: rec.lead_id || null,
+      result: {
+        ok: true,
+        model: GEMINI_MODEL,
+        input_tokens: tk.prompt,
+        output_tokens: tk.candidates,
+        cost_usd: cost.total_usd,
+        // Real cost (no markup) — billed = real for internal worker.
+        cost_inr_real:   cost.total_inr,
+        cost_inr_billed: cost.total_inr
+      }
+    });
+  } catch (e) { console.warn('[ai-summary] logUsage failed:', e.message); }
+
   await _saveResult(id, {
     transcript: ai.transcript || '',
     summary: ai.summary || '',
