@@ -6,9 +6,13 @@ import android.content.Intent
 import android.provider.CallLog
 import android.telephony.TelephonyManager
 import android.util.Log
+import androidx.work.OneTimeWorkRequest
+import androidx.work.OutOfQuotaPolicy
+import androidx.work.WorkManager
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.TimeUnit
 
 /**
  * Three-path call-event bridge so the chain doesn't break in any
@@ -99,6 +103,7 @@ class PhoneStateReceiver : BroadcastReceiver() {
                         safeCapacitor { CallerIdPlugin.instance?.emitEnded(finalNumber, 0, missed = true) }
                         sendCallEvent(ctx, "call_ended", finalNumber, missed = true, durationSec = 0)
                         postNativeAsync(ctx, "call_ended", finalNumber, direction = "missed", missed = true, durationSec = 0)
+                        enqueueRecordingBgSync(ctx, "post-missed-call")
                     }
                 } else if (lastState == TelephonyManager.EXTRA_STATE_OFFHOOK) {
                     val dur = (now - offhookStartMs) / 1000
@@ -113,6 +118,7 @@ class PhoneStateReceiver : BroadcastReceiver() {
                         // Otherwise the call started via OFFHOOK directly — outbound.
                         val dir = if (ringHappened) "in" else "out"
                         postNativeAsync(ctx, "call_ended", finalNumber, direction = dir, missed = false, durationSec = dur)
+                        enqueueRecordingBgSync(ctx, "post-ended-call")
                     }
                 }
                 ringStartMs = 0
@@ -269,6 +275,35 @@ class PhoneStateReceiver : BroadcastReceiver() {
                 Log.e(TAG, "postNativeAsync failed: ${e.message}")
             }
         }.start()
+    }
+
+    /**
+     * REC_POSTCALL_BG_SYNC_v1 — enqueue a one-shot background recording
+     * sync 30 seconds after a call ends. The OEM dialer typically takes
+     * 5-20 seconds to flush the .m4a file to disk after the call hangs
+     * up; 30s is a safe margin. Uses ExpeditedWorkRequest where possible
+     * so the system runs it in seconds (Doze-exempt) instead of queueing
+     * for the next periodic window. Falls back to a normal one-time
+     * request if the expedited quota is exhausted.
+     *
+     * Survives WebView death — runs purely in the native side. The
+     * worker already lives in RecordingsBackgroundSyncWorker.kt and
+     * reads its creds (rec_bg_base_url + rec_bg_token + rec_folder_uri)
+     * from SharedPreferences, written on every SPA login.
+     */
+    private fun enqueueRecordingBgSync(ctx: Context, reason: String) {
+        try {
+            val req = OneTimeWorkRequest.Builder(RecordingsBackgroundSyncWorker::class.java)
+                .setInitialDelay(30, TimeUnit.SECONDS)
+                .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                .addTag("rec-bg-sync-postcall")
+                .addTag(reason)
+                .build()
+            WorkManager.getInstance(ctx).enqueue(req)
+            Log.i(TAG, "enqueued recording bg-sync ($reason) — runs in ~30s")
+        } catch (e: Throwable) {
+            Log.w(TAG, "enqueueRecordingBgSync failed: ${e.message}")
+        }
     }
 
     private fun buildRichNotification(ctx: Context, phone: String, lookup: JSONObject) {
