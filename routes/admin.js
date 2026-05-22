@@ -10,7 +10,7 @@ const db = require('../db/pg');
 const { authUser } = require('../utils/auth');
 
 const CONFIG_KEYS = [
-  'COMPANY_NAME', 'COMPANY_LOGO_URL',
+  'COMPANY_NAME', 'COMPANY_LOGO_URL', 'COMPANY_GST', 'COMPANY_ADDRESS', 'COMPANY_PHONE', 'COMPANY_EMAIL',
   'META_APP_ID', 'META_APP_SECRET', 'META_PAGE_ID', 'META_PAGE_ACCESS_TOKEN', 'META_VERIFY_TOKEN',
   'WHATSAPP_PHONE_NUMBER_ID', 'WHATSAPP_BUSINESS_ACCOUNT_ID', 'WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_VERIFY_TOKEN',
   'WHATSAPP_COEXISTENCE_MODE',
@@ -227,6 +227,10 @@ async function api_admin_brand(_token) {
     THEME_MODE:           cfg.THEME_MODE           || 'auto',
     COMPANY_NAME:         cfg.COMPANY_NAME         || '',
     COMPANY_LOGO_URL:     cfg.COMPANY_LOGO_URL     || '',
+    COMPANY_GST:          cfg.COMPANY_GST          || '',
+    COMPANY_ADDRESS:      cfg.COMPANY_ADDRESS      || '',
+    COMPANY_PHONE:        cfg.COMPANY_PHONE        || '',
+    COMPANY_EMAIL:        cfg.COMPANY_EMAIL        || '',
     // Demo tenant flags — read by the SPA so the showcase tour shows up
     // for every role (api_admin_getConfig rejects non-admin users).
     DEMO_TENANT:          cfg.DEMO_TENANT          || '',

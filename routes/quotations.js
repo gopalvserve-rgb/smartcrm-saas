@@ -359,6 +359,11 @@ async function _renderHtml(quotation, items, brandConfig) {
   const company = (brandConfig && brandConfig.COMPANY_NAME) || 'Quotation';
   const logo = (brandConfig && brandConfig.COMPANY_LOGO_URL) || '';
   const primary = (brandConfig && brandConfig.BRAND_PRIMARY_COLOR) || '#6366f1';
+  // QUOTE_PRO_UI_v1: structured company fields for the 'From' block
+  const companyGst     = (brandConfig && brandConfig.COMPANY_GST)     || '';
+  const companyAddress = (brandConfig && brandConfig.COMPANY_ADDRESS) || '';
+  const companyPhone   = (brandConfig && brandConfig.COMPANY_PHONE)   || '';
+  const companyEmail   = (brandConfig && brandConfig.COMPANY_EMAIL)   || '';
   const validUntil = q.valid_until ? new Date(q.valid_until).toLocaleDateString('en-IN') : '';
   const issue = q.issue_date ? new Date(q.issue_date).toLocaleDateString('en-IN') : '';
   /* PROD_IMG_v1 — tenant-configurable image size on quotation */
@@ -395,9 +400,13 @@ async function _renderHtml(quotation, items, brandConfig) {
   .meta { text-align: right; }
   .meta h1 { color: ${_esc(primary)}; margin: 0; font-size: 1.6rem; }
   .meta div { font-size: .9rem; color: #64748b; }
-  .who { display: flex; gap: 2rem; margin: 1rem 0; }
-  .who .col { flex: 1; }
-  .col h4 { margin: 0 0 .25rem; color: #475569; font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; }
+  .who { display: flex; gap: 2rem; margin: 1.25rem 0; }
+  .who .col { flex: 1; background: #f8fafc; padding: .9rem 1rem; border-radius: 8px; border: 1px solid #e2e8f0; }
+  .col h4 { margin: 0 0 .5rem; color: ${_esc(primary)}; font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; font-weight: 700; border-bottom: 1px solid #e2e8f0; padding-bottom: .35rem; }
+  .from-name, .to-name { font-size: 1.05rem; margin-bottom: .35rem; color: #0f172a; }
+  .from-line, .to-line { font-size: .85rem; color: #475569; margin: .15rem 0; line-height: 1.45; }
+  .from-line .lbl, .to-line .lbl { color: #94a3b8; font-weight: 500; min-width: 52px; display: inline-block; }
+  .from-line.addr, .to-line.addr { margin-top: .4rem; padding-top: .35rem; border-top: 1px dashed #e2e8f0; font-style: normal; }
   table.items { width: 100%; border-collapse: collapse; margin-top: 1rem; }
   table.items th, table.items td { padding: .55rem .6rem; border-bottom: 1px solid #e2e8f0; font-size: .92rem; }
   table.items thead th { background: ${_esc(primary)}; color: #fff; text-align: left; font-weight: 600; }
@@ -423,14 +432,18 @@ async function _renderHtml(quotation, items, brandConfig) {
   <div class="who">
     <div class="col">
       <h4>From</h4>
-      <div><b>${_esc(company)}</b></div>
+      <div class="from-name"><b>${_esc(company)}</b></div>
+      ${companyGst     ? '<div class="from-line"><span class="lbl">GSTIN:</span> ' + _esc(companyGst) + '</div>' : ''}
+      ${companyAddress ? '<div class="from-line addr">' + _esc(companyAddress).replace(/\n/g, '<br/>') + '</div>' : ''}
+      ${companyPhone   ? '<div class="from-line"><span class="lbl">Phone:</span> ' + _esc(companyPhone) + '</div>' : ''}
+      ${companyEmail   ? '<div class="from-line"><span class="lbl">Email:</span> ' + _esc(companyEmail) + '</div>' : ''}
     </div>
     <div class="col">
       <h4>To</h4>
-      <div><b>${_esc(q.customer_name || '')}</b></div>
-      ${q.customer_email  ? '<div>' + _esc(q.customer_email) + '</div>' : ''}
-      ${q.customer_phone  ? '<div>' + _esc(q.customer_phone) + '</div>' : ''}
-      ${q.customer_address? '<div style="margin-top:.25rem">' + _esc(q.customer_address) + '</div>' : ''}
+      <div class="to-name"><b>${_esc(q.customer_name || '')}</b></div>
+      ${q.customer_email  ? '<div class="to-line"><span class="lbl">Email:</span> ' + _esc(q.customer_email) + '</div>' : ''}
+      ${q.customer_phone  ? '<div class="to-line"><span class="lbl">Phone:</span> ' + _esc(q.customer_phone) + '</div>' : ''}
+      ${q.customer_address? '<div class="to-line addr">' + _esc(q.customer_address).replace(/\n/g, '<br/>') + '</div>' : ''}
     </div>
   </div>
   <table class="items">
@@ -510,7 +523,14 @@ async function api_quotations_send_whatsapp(token, id, opts) {
 }
 
 async function _loadBrand() {
-  const keys = ['COMPANY_NAME', 'COMPANY_LOGO_URL', 'BRAND_PRIMARY_COLOR', 'BASE_URL'];
+  // QUOTE_PRO_UI_v1: include company contact details so _renderHtml can
+  // show them as structured blocks (GST, Address, Phone, Email) instead
+  // of admins stuffing everything into COMPANY_NAME as one long string.
+  const keys = [
+    'COMPANY_NAME', 'COMPANY_LOGO_URL', 'BRAND_PRIMARY_COLOR', 'BASE_URL',
+    'COMPANY_GST', 'COMPANY_ADDRESS', 'COMPANY_PHONE', 'COMPANY_EMAIL',
+    'QUOTATION_PRODUCT_IMAGE_SIZE'
+  ];
   const out = {};
   for (const k of keys) {
     out[k] = await db.getConfig(k, '').catch(() => '');

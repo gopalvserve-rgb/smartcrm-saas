@@ -8711,7 +8711,7 @@ async function openQuotationModal(qid, prefillLead) {
   }
   function addItem(seed) {
     const it = seed || { description: '', quantity: 1, unit_price: 0, discount_pct: 0 };
-    const row = h('div', { class: 'q-item', style: { display: 'grid', gridTemplateColumns: '52px 1.1fr 1.8fr 1fr 1fr .85fr 1fr 28px', gap: '.4rem', alignItems: 'center', marginBottom: '.3rem' } });
+    const row = h('div', { class: 'q-item', style: { display: 'grid', gridTemplateColumns: '48px 1fr 1.5fr 1.2fr 1.1fr .9fr 1.1fr 28px', gap: '.4rem', alignItems: 'center', marginBottom: '.3rem' } });
     const prodSel = _productSelect(it);
     // Image thumbnail (48x48) — shows product master / line-saved image
     const initialImg = _imgUrlForRow(it, prodSel.value);
@@ -8739,7 +8739,7 @@ async function openQuotationModal(qid, prefillLead) {
       if (price && Number(pr.value || 0) === 0) pr.value = String(price);
       recompute();
     };
-    const qty  = h('input', { 'data-k': 'qty',   type: 'number', value: it.quantity || 1, step: '0.001', min: 0, style: { width: '100%' } });
+    const qty  = h('input', { 'data-k': 'qty',   type: 'number', value: it.quantity || 1, step: '0.001', min: 0, style: { width: '100%', minWidth: '70px', padding: '4px 6px', textAlign: 'right' } });
     const pr   = h('input', { 'data-k': 'price', type: 'number', value: it.unit_price || 0, step: '0.01', min: 0, style: { width: '100%' } });
     const dp   = h('input', { 'data-k': 'disc',  type: 'number', value: it.discount_pct || 0, step: '0.01', min: 0, max: 100, style: { width: '100%' } });
     const amt  = h('div', { 'data-k': 'amt', style: { textAlign: 'right', fontFamily: 'monospace' } }, '₹0.00');
@@ -8754,7 +8754,7 @@ async function openQuotationModal(qid, prefillLead) {
     return row;
   }
   // Header row
-  itemsWrap.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '52px 1.1fr 1.8fr 1fr 1fr .85fr 1fr 28px', gap: '.4rem', fontSize: '.78rem', color: '#64748b', marginBottom: '.3rem' } },
+  itemsWrap.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '48px 1fr 1.5fr 1.2fr 1.1fr .9fr 1.1fr 28px', gap: '.4rem', fontSize: '.78rem', color: '#64748b', marginBottom: '.3rem' } },
     h('div', {}, 'Image'), h('div', {}, 'Product'), h('div', {}, 'Description'), h('div', {}, 'Qty'), h('div', {}, 'Unit price'), h('div', {}, 'Disc %'),
     h('div', { style: { textAlign: 'right' } }, 'Amount'), h('div', {})
   ));
@@ -17929,20 +17929,45 @@ async function adminCompany() {
       h('p', { class: 'muted', style: { fontSize: '.8rem', marginTop: '.3rem' } },
         'Shown on the login screen, sidebar, and emails.'
       ),
-      h('div', { class: 'actions', style: { marginTop: '1rem' } },
-        h('button', { class: 'btn primary', onclick: async () => {
-          const newName = nameInput.value.trim();
-          if (!newName) return toast('Name cannot be empty', 'warn');
-          try {
-            await api('api_admin_setConfig', { COMPANY_NAME: newName });
-            CRM.config.company_name = newName;
-            document.title = newName;
-            const brandSpan = document.querySelector('.brand-name');
-            if (brandSpan) brandSpan.textContent = newName;
-            toast('Saved');
-          } catch (e) { toast(e.message, 'err'); }
-        } }, 'Save name')
-      )
+      // QUOTE_PRO_UI_v1: GST / address / phone / email — used on quotations, invoices
+      (function() {
+        const gstInput   = h('input', { type: 'text', value: cfg.COMPANY_GST || '', placeholder: 'e.g. 09BHZPA7744J2ZK', style: { width: '100%' } });
+        const addrInput  = h('textarea', { rows: 3, placeholder: 'Full registered address (use new lines for street / city / state / pincode)', style: { width: '100%', resize: 'vertical' } }, cfg.COMPANY_ADDRESS || '');
+        const phoneInput = h('input', { type: 'text', value: cfg.COMPANY_PHONE || '', placeholder: 'e.g. +91 98765 43210', style: { width: '100%' } });
+        const emailInput = h('input', { type: 'email', value: cfg.COMPANY_EMAIL || '', placeholder: 'e.g. sales@yourcompany.com', style: { width: '100%' } });
+        return h('div', { style: { display: 'grid', gap: '.6rem', marginTop: '.8rem' } },
+          h('div', {}, h('label', { style: { display: 'block', fontWeight: 600, fontSize: '.85rem', marginBottom: '.2rem' } }, 'GSTIN'), gstInput,
+            h('p', { class: 'muted', style: { fontSize: '.75rem', margin: '.2rem 0 0' } }, 'Appears on every quotation under your company name.')
+          ),
+          h('div', {}, h('label', { style: { display: 'block', fontWeight: 600, fontSize: '.85rem', marginBottom: '.2rem' } }, 'Address'), addrInput,
+            h('p', { class: 'muted', style: { fontSize: '.75rem', margin: '.2rem 0 0' } }, 'Use line breaks for street / city / state / pincode — each line renders separately on the quote.')
+          ),
+          h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '.6rem' } },
+            h('div', {}, h('label', { style: { display: 'block', fontWeight: 600, fontSize: '.85rem', marginBottom: '.2rem' } }, 'Phone'), phoneInput),
+            h('div', {}, h('label', { style: { display: 'block', fontWeight: 600, fontSize: '.85rem', marginBottom: '.2rem' } }, 'Email'), emailInput)
+          ),
+          h('div', { class: 'actions', style: { marginTop: '.6rem' } },
+            h('button', { class: 'btn primary', onclick: async () => {
+              const newName = nameInput.value.trim();
+              if (!newName) return toast('Company name cannot be empty', 'warn');
+              try {
+                await api('api_admin_setConfig', {
+                  COMPANY_NAME:    newName,
+                  COMPANY_GST:     gstInput.value.trim(),
+                  COMPANY_ADDRESS: addrInput.value.trim(),
+                  COMPANY_PHONE:   phoneInput.value.trim(),
+                  COMPANY_EMAIL:   emailInput.value.trim()
+                });
+                CRM.config.company_name = newName;
+                document.title = newName;
+                const brandSpan = document.querySelector('.brand-name');
+                if (brandSpan) brandSpan.textContent = newName;
+                toast('✓ Company details saved');
+              } catch (e) { toast(e.message, 'err'); }
+            } }, '💾 Save company details')
+          )
+        );
+      })()
     )
   ));
 
