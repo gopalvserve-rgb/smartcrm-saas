@@ -610,6 +610,144 @@ async function api_saas_fb_backfillRegistry(token, payload) {
 }
 
 
+
+/* ADMIN_USER_CAP_v1 — defensive migration: per-tenant user-cap + extra-user billing. */
+async function _ensureUserCapColumns() {
+  try {
+    await control.query(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS user_cap INTEGER`);
+    await control.query(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS user_extra_charge_inr NUMERIC(10,2) NOT NULL DEFAULT 0`);
+    await control.query(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS user_extra_charge_period TEXT NOT NULL DEFAULT 'month'`);
+  } catch (e) { console.warn('[saas] ensureUserCapColumns:', e.message); }
+}
+
+/**
+ * ADMIN_USER_CAP_v1 — read the user-plan info for the modal.
+ * Returns base cap (from package.quotas.users.limit), override cap,
+ * current users in tenant DB, extra count, and the charge config.
+ */
+async function api_saas_tenants_getUserPlan(token, slug) {
+  await requireSuperAdmin(token);
+  await _ensureUserCapColumns();
+  const cleanSlug = String(slug || '').trim().toLowerCase();
+  if (!cleanSlug) throw new Error('slug required');
+  const t = await control.findOneBy('tenants', 'slug', cleanSlug);
+  if (!t) throw new Error('Tenant not found');
+
+  // Pull package to get the base cap from quotas.users.limit
+  let baseCap = null;
+  let packageName = '';
+  if (t.package_id) {
+    const pkg = await control.findById('packages', t.package_id);
+    if (pkg) {
+      packageName = pkg.name || '';
+      const q = pkg.quotas;
+      const quotas = (typeof q === 'string') ? JSON.parse(q || '{}') : (q || {});
+      if (quotas.users && (quotas.users.limit != null)) baseCap = Number(quotas.users.limit);
+    }
+  }
+
+  // Count current users in tenant DB
+  let userCount = 0;
+  const pool = tenantPool.poolFor(t);
+  if (pool) {
+    try {
+      const r = await pool.query(`SELECT COUNT(*)::int AS c FROM users WHERE COALESCE(is_active, 1) = 1`);
+      userCount = Number(r.rows[0].c) || 0;
+    } catch (_) {}
+  }
+
+  const overrideCap = (t.user_cap != null && t.user_cap !== '') ? Number(t.user_cap) : null;
+  const effectiveCap = (overrideCap != null) ? overrideCap : baseCap;
+  const extra = (effectiveCap != null) ? Math.max(0, userCount - effectiveCap) : 0;
+  const extraChargeInr = Number(t.user_extra_charge_inr || 0);
+  const period = String(t.user_extra_charge_period || 'month');
+
+  return {
+    slug: t.slug, org_name: t.org_name, package_name: packageName,
+    base_cap: baseCap,
+    override_cap: overrideCap,
+    effective_cap: effectiveCap,
+    current_users: userCount,
+    extra_users: extra,
+    extra_charge_inr_per_user: extraChargeInr,
+    period,
+    pending_charge_inr: extra * extraChargeInr
+  };
+}
+
+/** ADMIN_USER_CAP_v1 — update tenant cap + extra-user charge. */
+async function api_saas_tenants_setUserPlan(token, payload) {
+  const me = await requireFullAdmin(token);
+  await _ensureUserCapColumns();
+  const p = payload || {};
+  const cleanSlug = String(p.slug || '').trim().toLowerCase();
+  if (!cleanSlug) throw new Error('slug required');
+  const t = await control.findOneBy('tenants', 'slug', cleanSlug);
+  if (!t) throw new Error('Tenant not found');
+
+  const capRaw = p.cap;
+  const cap = (capRaw === '' || capRaw == null) ? null : Math.max(0, Math.floor(Number(capRaw)));
+  const extraInr = Math.max(0, Number(p.extra_inr) || 0);
+  const VALID_PERIODS = ['month', 'quarter', 'year'];
+  const period = VALID_PERIODS.includes(String(p.period)) ? String(p.period) : 'month';
+
+  await control.query(
+    `UPDATE tenants SET user_cap = $1, user_extra_charge_inr = $2, user_extra_charge_period = $3, updated_at = NOW() WHERE id = $4`,
+    [cap, extraInr, period, t.id]
+  );
+
+  await control.insert('audit_log', {
+    actor_type: 'super_admin', actor_id: me.id, actor_email: me.email,
+    tenant_id: t.id, event: 'tenant.user_plan_updated',
+    detail: JSON.stringify({ slug: t.slug, cap, extra_inr: extraInr, period })
+  });
+
+  return { ok: true, slug: t.slug, cap, extra_inr: extraInr, period };
+}
+
+/**
+ * ADMIN_USER_CAP_v1 — generate an invoice for the tenant's extra users.
+ * Amount = extra_users × per-user rate. Tax = 18% GST. Creates a pending
+ * invoice that the tenant can pay via the same Cashfree flow as their
+ * regular subscription.
+ */
+async function api_saas_tenants_chargeExtraUsers(token, payload) {
+  const me = await requireFullAdmin(token);
+  const cleanSlug = String((payload || {}).slug || '').trim().toLowerCase();
+  if (!cleanSlug) throw new Error('slug required');
+  const plan = await api_saas_tenants_getUserPlan(token, cleanSlug);
+  const tenant = await control.findOneBy('tenants', 'slug', cleanSlug);
+  if (!tenant) throw new Error('Tenant not found');
+
+  const extra = Number(plan.extra_users) || 0;
+  const rate = Number(plan.extra_charge_inr_per_user) || 0;
+  if (extra <= 0) throw new Error('No extra users — current count ' + plan.current_users + ' is at or below cap ' + plan.effective_cap);
+  if (rate <= 0)  throw new Error('Per-extra-user charge is zero — set a rate first');
+
+  const subtotal = Math.round(extra * rate * 100) / 100;
+  const tax = Math.round(subtotal * 18 / 100 * 100) / 100;
+  const total = Math.round((subtotal + tax) * 100) / 100;
+
+  const yr = new Date().getFullYear();
+  const cnt = await control.query(`SELECT COUNT(*) AS c FROM invoices`);
+  const number = `INV-${yr}-${String(Number(cnt.rows[0].c) + 1).padStart(6, '0')}`;
+
+  const description = extra + ' extra user' + (extra === 1 ? '' : 's') + ' × ₹' + rate.toLocaleString('en-IN') + ' / ' + plan.period + ' (over cap of ' + plan.effective_cap + ')';
+
+  const invoiceId = await control.insert('invoices', {
+    tenant_id: tenant.id, number, description,
+    subtotal_inr: subtotal, tax_inr: tax, total_inr: total, status: 'pending'
+  });
+
+  await control.insert('audit_log', {
+    actor_type: 'super_admin', actor_id: me.id, actor_email: me.email,
+    tenant_id: tenant.id, event: 'tenant.extra_user_invoice_created',
+    detail: JSON.stringify({ slug: tenant.slug, invoice_id: invoiceId, number, extra, rate, period: plan.period, total })
+  });
+
+  return { ok: true, invoice_id: invoiceId, number, subtotal_inr: subtotal, tax_inr: tax, total_inr: total, description };
+}
+
 /**
  * ADMIN_ADD_USER_v1 — list users in a specific tenant with their
  * per-user monthly cost. Used by the super-admin "👤 Users" modal.
@@ -756,5 +894,8 @@ module.exports = {
   api_saas_fb_backfillRegistry,
   api_saas_tenants_listUsers,
   api_saas_tenants_addUser,
-  api_saas_tenants_updateUserCost
+  api_saas_tenants_updateUserCost,
+  api_saas_tenants_getUserPlan,
+  api_saas_tenants_setUserPlan,
+  api_saas_tenants_chargeExtraUsers
 };

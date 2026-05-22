@@ -2363,7 +2363,98 @@ async function openTenantUsersModal(t) {
     h('button', { type: 'button', class: 'btn ghost', onclick: () => m.remove() }, '\u2715')
   ));
   card.appendChild(h('p', { class: 'muted', style: { fontSize: '.8rem', marginTop: '.4rem' } },
-    'Slug: ', h('code', {}, t.slug), ' \u00b7 Add users directly to this tenant. Each user can have its own monthly subscription cost (in INR) for your billing records.'));
+    'Slug: ', h('code', {}, t.slug), ' \u00b7 Manage seat cap + per-extra-user billing and add users to this tenant.'));
+
+  // ADMIN_USER_CAP_v1 — Plan & cap card. Shows base cap from package, override
+  // cap, current user count, extra count, and per-user charge config.
+  const planCard = h('div', { style: { background: '#fef3c7', border: '1px solid #fde68a', padding: '.8rem 1rem', borderRadius: '10px', margin: '.7rem 0' } }, 'Loading plan\u2026');
+  card.appendChild(planCard);
+
+  async function loadPlan() {
+    planCard.innerHTML = '<div style="color:#92400e">Loading plan\u2026</div>';
+    let plan;
+    try { plan = await api('api_saas_tenants_getUserPlan', t.slug); }
+    catch (e) { planCard.innerHTML = '<div style="color:#b91c1c">' + e.message + '</div>'; return; }
+
+    planCard.innerHTML = '';
+    const capInput   = h('input', { type: 'number', min: '0', step: '1', value: plan.override_cap != null ? String(plan.override_cap) : '', placeholder: plan.base_cap != null ? String(plan.base_cap) + ' (from plan)' : 'No cap', style: { width: '110px', padding: '.4rem', border: '1px solid #cbd5e1', borderRadius: '6px', textAlign: 'right' } });
+    const rateInput  = h('input', { type: 'number', min: '0', step: '0.01', value: String(plan.extra_charge_inr_per_user || 0), style: { width: '110px', padding: '.4rem', border: '1px solid #cbd5e1', borderRadius: '6px', textAlign: 'right' } });
+    const periodSel  = h('select', { style: { padding: '.4rem', border: '1px solid #cbd5e1', borderRadius: '6px' } },
+      h('option', { value: 'month',   selected: plan.period === 'month'   ? 'selected' : null }, 'per month'),
+      h('option', { value: 'quarter', selected: plan.period === 'quarter' ? 'selected' : null }, 'per quarter'),
+      h('option', { value: 'year',    selected: plan.period === 'year'    ? 'selected' : null }, 'per year')
+    );
+
+    const capStr = (plan.effective_cap == null) ? 'Unlimited' : String(plan.effective_cap);
+    const capColor = (plan.extra_users > 0) ? '#b91c1c' : (plan.current_users >= plan.effective_cap ? '#92400e' : '#15803d');
+
+    planCard.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '.8rem' } },
+      h('div', {},
+        h('div', { style: { fontWeight: 700, color: '#0f172a', fontSize: '.95rem' } }, '\ud83d\udcca Plan & seat cap'),
+        h('div', { style: { fontSize: '.82rem', color: '#475569', marginTop: '.25rem' } },
+          'Package: ', h('b', {}, plan.package_name || '(none)'),
+          ' \u00b7 Base cap: ', h('b', {}, plan.base_cap != null ? String(plan.base_cap) : 'unlimited'),
+          plan.override_cap != null ? h('span', {}, ' \u00b7 Override: ', h('b', { style: { color: '#3730a3' } }, String(plan.override_cap))) : null
+        ),
+        h('div', { style: { marginTop: '.5rem', fontSize: '1.05rem' } },
+          h('span', {}, 'Users: '),
+          h('b', { style: { color: capColor } }, String(plan.current_users) + ' / ' + capStr),
+          plan.extra_users > 0 ? h('span', { style: { color: '#b91c1c', fontWeight: 700, marginLeft: '.4rem' } }, '\u00b7 ' + plan.extra_users + ' extra over cap') : null
+        )
+      ),
+      h('div', { style: { display: 'flex', flexDirection: 'column', gap: '.4rem', alignItems: 'flex-end' } },
+        h('div', { style: { display: 'flex', gap: '.4rem', alignItems: 'center' } },
+          h('label', { style: { fontSize: '.78rem', fontWeight: 600 } }, 'Total seats:'),
+          capInput
+        ),
+        h('div', { style: { display: 'flex', gap: '.4rem', alignItems: 'center' } },
+          h('label', { style: { fontSize: '.78rem', fontWeight: 600 } }, '\u20b9 per extra user:'),
+          rateInput,
+          periodSel
+        )
+      )
+    ));
+
+    const status = h('div', { style: { marginTop: '.5rem', fontSize: '.82rem', minHeight: '1.2rem' } });
+    const saveBtn = h('button', { class: 'btn primary', type: 'button', onclick: async () => {
+      saveBtn.disabled = true;
+      status.innerHTML = '\u23f3 Saving\u2026';
+      try {
+        const r = await api('api_saas_tenants_setUserPlan', {
+          slug: t.slug,
+          cap: capInput.value === '' ? null : Number(capInput.value),
+          extra_inr: Number(rateInput.value) || 0,
+          period: periodSel.value
+        });
+        status.innerHTML = '<span style="color:#16a34a">\u2714 Saved. Cap: ' + (r.cap == null ? 'unlimited' : r.cap) + ' \u00b7 \u20b9' + r.extra_inr + ' / ' + r.period + ' per extra user.</span>';
+        await loadPlan();
+      } catch (e) { status.innerHTML = '<span style="color:#b91c1c">' + e.message + '</span>'; }
+      finally { saveBtn.disabled = false; }
+    } }, '\ud83d\udcbe Save cap & rate');
+
+    const chargeBtn = h('button', { class: 'btn', type: 'button', title: 'Create a pending invoice for the extra users × per-user rate', style: { background: '#dcfce7', color: '#15803d', borderColor: '#86efac' }, onclick: async () => {
+      if (!confirm('Generate an invoice for ' + plan.extra_users + ' extra user(s) at \u20b9' + plan.extra_charge_inr_per_user + ' / ' + plan.period + ' = \u20b9' + plan.pending_charge_inr + ' + 18% GST?')) return;
+      chargeBtn.disabled = true;
+      status.innerHTML = '\u23f3 Creating invoice\u2026';
+      try {
+        const r = await api('api_saas_tenants_chargeExtraUsers', { slug: t.slug });
+        status.innerHTML = '<span style="color:#15803d">\u2714 Invoice ' + r.number + ' created \u00b7 \u20b9' + r.total_inr + ' (incl. GST). Tenant can pay via the regular flow.</span>';
+      } catch (e) { status.innerHTML = '<span style="color:#b91c1c">' + e.message + '</span>'; }
+      finally { chargeBtn.disabled = false; }
+    } }, '\ud83e\uddfe Generate invoice for extra users');
+
+    const actionsRow = h('div', { style: { display: 'flex', gap: '.5rem', marginTop: '.7rem', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap' } },
+      saveBtn,
+      (plan.extra_users > 0 && plan.extra_charge_inr_per_user > 0) ? chargeBtn : null
+    );
+    planCard.appendChild(actionsRow);
+    planCard.appendChild(status);
+    if (plan.extra_users > 0 && plan.extra_charge_inr_per_user > 0) {
+      planCard.appendChild(h('div', { style: { marginTop: '.4rem', fontSize: '.78rem', color: '#92400e' } },
+        '\ud83d\udcb0 Pending: \u20b9' + Number(plan.pending_charge_inr).toLocaleString('en-IN') + ' + GST for ' + plan.extra_users + ' extra user(s) this ' + plan.period + '.'));
+    }
+  }
+  loadPlan();
 
   const totalsBar = h('div', { style: { background: '#f1f5f9', padding: '.6rem .8rem', borderRadius: '8px', margin: '.7rem 0', fontSize: '.85rem' } }, 'Loading\u2026');
   card.appendChild(totalsBar);
@@ -2428,6 +2519,7 @@ async function openTenantUsersModal(t) {
       // Clear form for next entry
       nameIn.value = ''; emailIn.value = ''; phoneIn.value = ''; passIn.value = _genPw(); costIn.value = '0';
       await refresh();
+      try { await loadPlan(); } catch (_) {}
     } catch (e) {
       status.innerHTML = '<span style="color:#b91c1c">\u2717 ' + e.message + '</span>';
     } finally { addBtn.disabled = false; }
