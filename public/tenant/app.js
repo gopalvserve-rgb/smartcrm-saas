@@ -8695,13 +8695,43 @@ async function openQuotationModal(qid, prefillLead) {
     );
     return sel;
   }
+  // QUOTE_UI_v2 (2026-05-21) — Widen Qty/Price columns, add product image
+  //   thumbnail in each row, hydrate from item.product_image_url (saved on
+  //   the quotation_items row) OR from the product master record.
+  function _imgUrlForRow(it, prodIdSelected) {
+    // Priority: line-saved image > product master image (lookup by id)
+    if (it && it.product_image_url) return it.product_image_url;
+    const pid = Number(prodIdSelected || (it && it.product_id) || 0);
+    if (pid) {
+      const products = (CRM.cache && CRM.cache.products) || [];
+      const hit = products.find(p => Number(p.id) === pid);
+      if (hit && hit.image_url) return hit.image_url;
+    }
+    return '';
+  }
   function addItem(seed) {
     const it = seed || { description: '', quantity: 1, unit_price: 0, discount_pct: 0 };
-    const row = h('div', { class: 'q-item', style: { display: 'grid', gridTemplateColumns: '1.2fr 2fr .7fr .9fr .6fr 1fr 28px', gap: '.4rem', alignItems: 'center', marginBottom: '.3rem' } });
+    const row = h('div', { class: 'q-item', style: { display: 'grid', gridTemplateColumns: '52px 1.1fr 1.8fr 1fr 1fr .85fr 1fr 28px', gap: '.4rem', alignItems: 'center', marginBottom: '.3rem' } });
     const prodSel = _productSelect(it);
+    // Image thumbnail (48x48) — shows product master / line-saved image
+    const initialImg = _imgUrlForRow(it, prodSel.value);
+    const imgWrap = h('div', { style: { width: '48px', height: '48px', borderRadius: '6px', border: '1px solid #e2e8f0', overflow: 'hidden', background: '#f8fafc', display: 'flex', alignItems: 'center', justifyContent: 'center' }});
+    const imgEl = h('img', {
+      src: initialImg || '',
+      style: { width: '100%', height: '100%', objectFit: 'cover', display: initialImg ? 'block' : 'none' },
+      onerror: (ev) => { ev.target.style.display = 'none'; imgPh.style.display = 'flex'; }
+    });
+    const imgPh = h('div', { style: { fontSize: '.65rem', color: '#94a3b8', display: initialImg ? 'none' : 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%' }}, '📦');
+    imgWrap.appendChild(imgEl); imgWrap.appendChild(imgPh);
     const desc = h('input', { type: 'text', placeholder: 'Description', value: it.description || '', style: { width: '100%' } });
     prodSel.onchange = () => {
       const opt = prodSel.options[prodSel.selectedIndex];
+      // Update image thumbnail on product change
+      const url = _imgUrlForRow(it, prodSel.value);
+      if (url) { imgEl.src = url; imgEl.style.display = 'block'; imgPh.style.display = 'none'; }
+      else     { imgEl.style.display = 'none';  imgPh.style.display = 'flex'; }
+      // Remember URL on the row so save() can persist it.
+      row._imageUrl = url;
       if (!opt || !opt.value) return;
       const name = opt.getAttribute('data-name') || '';
       const price = Number(opt.getAttribute('data-price') || 0);
@@ -8709,22 +8739,23 @@ async function openQuotationModal(qid, prefillLead) {
       if (price && Number(pr.value || 0) === 0) pr.value = String(price);
       recompute();
     };
-    const qty  = h('input', { 'data-k': 'qty',   type: 'number', value: it.quantity || 1, step: '0.001', min: 0 });
-    const pr   = h('input', { 'data-k': 'price', type: 'number', value: it.unit_price || 0, step: '0.01', min: 0 });
-    const dp   = h('input', { 'data-k': 'disc',  type: 'number', value: it.discount_pct || 0, step: '0.01', min: 0, max: 100 });
+    const qty  = h('input', { 'data-k': 'qty',   type: 'number', value: it.quantity || 1, step: '0.001', min: 0, style: { width: '100%' } });
+    const pr   = h('input', { 'data-k': 'price', type: 'number', value: it.unit_price || 0, step: '0.01', min: 0, style: { width: '100%' } });
+    const dp   = h('input', { 'data-k': 'disc',  type: 'number', value: it.discount_pct || 0, step: '0.01', min: 0, max: 100, style: { width: '100%' } });
     const amt  = h('div', { 'data-k': 'amt', style: { textAlign: 'right', fontFamily: 'monospace' } }, '₹0.00');
     const del  = h('button', { class: 'btn xs ghost danger', type: 'button', onclick: () => { row.remove(); recompute(); } }, '✕');
     [qty, pr, dp].forEach(el => el.addEventListener('input', recompute));
     row._desc = desc; row._qty = qty; row._pr = pr; row._dp = dp;
     row._prodSel = prodSel;
-    row.appendChild(prodSel); row.appendChild(desc); row.appendChild(qty); row.appendChild(pr); row.appendChild(dp); row.appendChild(amt); row.appendChild(del);
+    row._imageUrl = initialImg || null;
+    row.appendChild(imgWrap); row.appendChild(prodSel); row.appendChild(desc); row.appendChild(qty); row.appendChild(pr); row.appendChild(dp); row.appendChild(amt); row.appendChild(del);
     itemsWrap.appendChild(row);
     recompute();
     return row;
   }
   // Header row
-  itemsWrap.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '1.2fr 2fr .7fr .9fr .6fr 1fr 28px', gap: '.4rem', fontSize: '.78rem', color: '#64748b', marginBottom: '.3rem' } },
-    h('div', {}, 'Product'), h('div', {}, 'Description'), h('div', {}, 'Qty'), h('div', {}, 'Unit price'), h('div', {}, 'Disc %'),
+  itemsWrap.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '52px 1.1fr 1.8fr 1fr 1fr .85fr 1fr 28px', gap: '.4rem', fontSize: '.78rem', color: '#64748b', marginBottom: '.3rem' } },
+    h('div', {}, 'Image'), h('div', {}, 'Product'), h('div', {}, 'Description'), h('div', {}, 'Qty'), h('div', {}, 'Unit price'), h('div', {}, 'Disc %'),
     h('div', { style: { textAlign: 'right' } }, 'Amount'), h('div', {})
   ));
   (q.items || []).forEach(it => addItem(it));
@@ -8758,7 +8789,9 @@ async function openQuotationModal(qid, prefillLead) {
       quantity: Number(row._qty.value || 0),
       unit_price: Number(row._pr.value || 0),
       discount_pct: Number(row._dp.value || 0),
-      product_id: row._prodSel && row._prodSel.value ? Number(row._prodSel.value) : null
+      product_id: row._prodSel && row._prodSel.value ? Number(row._prodSel.value) : null,
+      // QUOTE_UI_v2 — include image url so server can persist on quotation_items
+      product_image_url: row._imageUrl || ''
     })).filter(it => it.description);
     try {
       const r = await api('api_quotations_save', {
