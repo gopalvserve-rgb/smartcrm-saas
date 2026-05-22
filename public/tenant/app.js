@@ -2466,8 +2466,17 @@ function renderLeadsTable(rows) {
         h('td', { class: 'td-check' }, h('input', { type: 'checkbox', class: 'row-check', 'data-id': l.id, onclick: onRowCheck })),
         ...activeCols.map(col => renderCell(col, l, statuses)),
         ...extraCols.map(f => h('td', {}, (l.extra && l.extra[f.key]) || '')),
-        h('td', { class: 'td-actions' },
-          h('button', { class: 'btn sm ghost', onclick: () => openLeadModal(l.id) }, '✎')
+        h('td', { class: 'td-actions', style: { whiteSpace: 'nowrap' } },
+          h('button', { class: 'btn sm ghost', title: 'Edit lead', onclick: () => openLeadModal(l.id) }, '\u270e'),
+          l.phone ? h('button', {
+            class: 'btn sm ghost', title: 'Whitelist this number (skip future auto-lead) + delete this lead',
+            style: { color: '#b91c1c', marginLeft: '.2rem' },
+            onclick: async (ev) => {
+              ev.stopPropagation();
+              const ok = await whitelistLeadPhone(l);
+              if (ok) loadLeads();
+            }
+          }, '\ud83d\udeab') : null
         )
       ));
     });
@@ -2531,7 +2540,12 @@ function renderLeadsMobile(rows) {
         }, '💬 My WA') : null,
         digits ? h('button', { class: 'btn sm', onclick: () => sendCalendlyLink(l) }, '📅 Meet') : null,
         h('button', { class: 'btn sm', onclick: () => openRemarkInline(l.id) }, '📝 Note'),
-        h('button', { class: 'btn sm ghost', onclick: () => openLeadModal(l.id) }, '✎ Edit')
+        h('button', { class: 'btn sm ghost', onclick: () => openLeadModal(l.id) }, '✎ Edit'),
+        digits ? h('button', {
+          class: 'btn sm', title: 'Whitelist this number + delete lead',
+          style: { background: '#fee2e2', color: '#b91c1c', borderColor: '#fecaca' },
+          onclick: async () => { const ok = await whitelistLeadPhone(l); if (ok) loadLeads(); }
+        }, '\ud83d\udeab Whitelist') : null
       )
     );
     m.appendChild(card);
@@ -4350,6 +4364,31 @@ function _reBuildStagePanel(lead, statuses, container) {
   }
 }
 
+
+// WA_WHITELIST_v1 — shared helper used by the lead modal Quick Actions,
+// the lead list row actions, the mobile card actions, and the WA chat
+// header. Whitelists a phone so future WA inbound doesn't auto-create a
+// lead; optionally deletes the current lead too.
+async function whitelistLeadPhone(lead, opts) {
+  if (!lead || !lead.phone) { toast('No phone number on this lead', 'err'); return false; }
+  const note = prompt('Add a note (optional, e.g. "Personal contact", "Junk lead"):', lead.name || '');
+  if (note === null) return false;
+  const deleteAlso = !opts || opts.deleteLead !== false;
+  const msg = 'Whitelist ' + lead.phone + '?\n\n'
+    + '\u2022 Future inbound WhatsApp messages from this number will NOT create a lead.\n'
+    + (deleteAlso && lead.id ? '\u2022 This lead (#' + lead.id + ') will also be deleted.\n' : '')
+    + '\nContinue?';
+  if (!confirm(msg)) return false;
+  try {
+    const r = await api('api_wb_whitelist_add', { phone: lead.phone, note });
+    if (deleteAlso && lead.id) {
+      try { await api('api_leads_bulkDelete', [lead.id]); } catch (_) {}
+    }
+    toast('\u2713 Whitelisted ' + lead.phone + (r.leads_removed ? ' (' + r.leads_removed + ' lead(s) removed)' : ''));
+    return true;
+  } catch (e) { toast(e.message, 'err'); return false; }
+}
+
 async function openLeadModal(id) {
   const { statuses, sources, products, users, customFields } = CRM.cache;
   // Lazy-load the admin-managed tag library; cached for the session.
@@ -4403,24 +4442,14 @@ async function openLeadModal(id) {
         onclick: () => { modal.remove(); openQuotationModal(null, lead); }
       }, '\ud83d\udcc4 Quote'),
       // WA_WHITELIST_v1 — whitelist this number so future inbound WA never
-      // creates a lead; also deletes THIS lead (it's clearly a personal
-      // contact or junk that the rep wants gone).
+      // creates a lead; also deletes THIS lead.
       _digits ? h('button', {
         type: 'button', class: 'btn sm',
         title: 'Whitelist this number — future WhatsApp inbound from it will NOT create a lead. Also deletes this lead.',
         style: { background: '#fee2e2', color: '#b91c1c', borderColor: '#fecaca' },
         onclick: async () => {
-          const note = prompt('Add a note (optional, e.g. "Personal contact", "Junk lead"):', lead.name || '');
-          if (note === null) return;
-          if (!confirm('Whitelist ' + lead.phone + '?\n\n• Future inbound WhatsApp messages from this number will NOT create a lead.\n• This lead (#' + id + ') will also be deleted.\n\nContinue?')) return;
-          try {
-            const r = await api('api_wb_whitelist_add', { phone: lead.phone, note });
-            // Also delete the current lead since user explicitly chose to whitelist it
-            try { await api('api_leads_bulkDelete', [id]); } catch (_) {}
-            toast('\u2713 Whitelisted ' + lead.phone + (r.leads_removed ? ' (' + r.leads_removed + ' lead(s) removed)' : ''));
-            modal.remove();
-            try { navigateTo('leads'); } catch (_) {}
-          } catch (e) { toast(e.message, 'err'); }
+          const ok = await whitelistLeadPhone(Object.assign({}, lead, { id }));
+          if (ok) { modal.remove(); try { navigateTo('leads'); } catch (_) {} }
         }
       }, '\ud83d\udeab Whitelist') : null
     ));
