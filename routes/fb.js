@@ -23,6 +23,19 @@ const fetch = require('node-fetch');
 const db = require('../db/pg');
 const { authUser } = require('../utils/auth');
 
+// FB_TENANT_SLUG_RESOLVER_v1 - smartcrm-saas is multi-tenant; resolve slug
+// from AsyncLocalStorage (set by tenantStorage.run() in server.js).
+function _fbResolveTenantSlug() {
+  try {
+    const store = db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore();
+    if (store && store.slug) return String(store.slug);
+  } catch (_) {}
+  if (typeof db.getTenantSlug === 'function') {
+    try { const s = db.getTenantSlug(); if (s) return String(s); } catch (_) {}
+  }
+  return process.env.TENANT_SLUG || '';
+}
+
 const GRAPH = 'https://graph.facebook.com/v19.0';
 
 // ---------- Platform-managed Meta App credentials ----------
@@ -432,7 +445,7 @@ async function api_fb_disconnect(token) {
   // FB_CENTRAL_REGISTRY_v1 — also remove from the shared registry.
   for (const pg of list) {
     try {
-      const _slug = (typeof db.getTenantSlug === 'function') ? (db.getTenantSlug() || '') : (process.env.TENANT_SLUG || '');
+      const _slug = _fbResolveTenantSlug();
       const _appId = await db.getConfig('META_APP_ID', '');
       await _centralRegistryCall(pg, 'remove', { tenant_slug: _slug, app_id: _appId, is_subscribed: 0 });
     }
@@ -554,7 +567,7 @@ async function api_fb_pages_toggle(token, pageId, monitor) {
   // FB_CENTRAL_REGISTRY_v1 — keep the shared registry in sync with monitor state.
   try {
     const verifyToken = await db.getConfig('META_VERIFY_TOKEN', '');
-    const tenantSlug = (typeof db.getTenantSlug === 'function') ? (db.getTenantSlug() || '') : (process.env.TENANT_SLUG || '');
+    const tenantSlug = _fbResolveTenantSlug();
     const appId = await db.getConfig('META_APP_ID', '');
     await _centralRegistryCall(pg, monitor ? 'upsert' : 'remove', {
       tenant_slug: tenantSlug,
@@ -810,7 +823,7 @@ async function api_fb_pages_syncRegistry(token, pageId) {
     throw new Error('FB_REGISTRY_SECRET env var is not set on Railway. Set it to the same value as SHARED_SECRET in fb_leads_register.php on smartcrmsolution.com.');
   }
   const list = await _readPagesList();
-  const tenantSlug = (typeof db.getTenantSlug === 'function') ? (db.getTenantSlug() || '') : (process.env.TENANT_SLUG || '');
+  const tenantSlug = _fbResolveTenantSlug();
   const appId = await db.getConfig('META_APP_ID', '');
 
   const targets = pageId
