@@ -12756,6 +12756,19 @@ async function wbChat() {
       ),
       h('div', { class: 'wb-chat-status-slot', style: { display: 'flex', alignItems: 'center' } }),
       buildAgentPicker(phone, threadMeta),
+      // WA_WHITELIST_v1 — mark this phone as a personal contact so future
+      // inbound messages are dropped (lead not created, message not saved).
+      h('button', { class: 'btn sm ghost', title: 'Whitelist this number — future inbound messages will be silently dropped (personal contact)', style: { color: '#b91c1c' }, onclick: async () => {
+        const note = prompt('Add a note (optional, e.g. "My brother", "Personal"):', '') || '';
+        if (note === null) return;
+        if (!confirm('Whitelist ' + phone + '?\n\n• Future inbound messages from this number will NOT create a lead and will NOT appear in WhatsApp chat.\n• Any existing auto-generated empty lead for this number will be removed.\n\nContinue?')) return;
+        try {
+          const r = await api('api_wb_whitelist_add', { phone, note });
+          toast('✓ Whitelisted ' + phone + (r.leads_removed ? ' (removed ' + r.leads_removed + ' auto-lead)' : ''));
+          // Refresh the thread list — the row will linger until next inbound; that\'s fine
+          if (typeof renderThreadList === 'function') { lastThreadsFingerprint = ''; renderThreadList(); }
+        } catch (e) { toast(e.message, 'err'); }
+      } }, '🚫 Whitelist'),
       h('button', { class: 'btn sm ghost', title: 'Refresh this thread', onclick: () => renderActiveThread(true) }, '↻')
     );
     right.appendChild(head);

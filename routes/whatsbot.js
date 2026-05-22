@@ -2261,6 +2261,40 @@ async function expressEvent(req, res) {
   }
 }
 
+/* WA_WHITELIST_v1 — phones on this list never auto-create leads on inbound. */
+let _waWhitelistEnsured = false;
+async function _ensureWhitelistTable() {
+  if (_waWhitelistEnsured) return;
+  try {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS wa_whitelist (
+        id SERIAL PRIMARY KEY,
+        phone_digits VARCHAR(20) NOT NULL UNIQUE,
+        note TEXT,
+        added_by INTEGER,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_wa_whitelist_phone ON wa_whitelist(phone_digits)`);
+    _waWhitelistEnsured = true;
+  } catch (e) { console.warn('[wb] whitelist table create:', e.message); }
+}
+async function _isWhitelisted(digits) {
+  if (!digits) return false;
+  try {
+    await _ensureWhitelistTable();
+    const last10 = String(digits).length > 10 ? String(digits).slice(-10) : String(digits);
+    const r = await db.query(
+      `SELECT id FROM wa_whitelist
+        WHERE regexp_replace(phone_digits, '\D', '', 'g') = $1
+           OR regexp_replace(phone_digits, '\D', '', 'g') = $2
+        LIMIT 1`,
+      [String(digits), last10]
+    );
+    return r.rows.length > 0;
+  } catch (e) { console.warn('[wb] whitelist check failed:', e.message); return false; }
+}
+
 async function _handleInbound(m, value) {
   const cfg = await _cfg();
   const from = String(m.from || '').replace(/\D/g, '');
@@ -2331,6 +2365,15 @@ async function _handleInbound(m, value) {
   else if (m.type) {
     // Future-proof: ANY new Meta type lands here with a readable label
     text = '\uD83D\uDCAC ' + m.type.charAt(0).toUpperCase() + m.type.slice(1).replace(/_/g, ' ');
+  }
+
+  // WA_WHITELIST_v1: if this phone is whitelisted (e.g. a personal contact),
+  // skip BOTH lead creation AND saving the inbound message. The chat won't
+  // appear in the CRM at all — exactly what the admin asked for when they
+  // whitelisted the number.
+  if (await _isWhitelisted(from)) {
+    try { await _logActivity({ category: 'wa_whitelist_skip', name: 'inbound_skipped', response_code: 200, request: { from }, response: { reason: 'whitelisted' } }); } catch (_) {}
+    return; // Bail before lead lookup, message save, push, AI bot, etc.
   }
 
   // Look up or auto-create the lead.
@@ -2746,6 +2789,66 @@ async function api_wa_phones_syncFromMeta(token) {
   return { ok: true, total: phones.length, added, updated, phones };
 }
 
+
+
+/* WA_WHITELIST_v1 — APIs to manage the whitelist. */
+async function api_wb_whitelist_list(_token) {
+  await _ensureWhitelistTable();
+  const r = await db.query(`
+    SELECT w.id, w.phone_digits, w.note, w.created_at,
+           u.name AS added_by_name
+      FROM wa_whitelist w
+      LEFT JOIN users u ON u.id = w.added_by
+     ORDER BY w.created_at DESC
+  `);
+  return r.rows;
+}
+
+async function api_wb_whitelist_add(token, payload) {
+  const me = await require('../utils/auth').authUser(token);
+  await _ensureWhitelistTable();
+  const p = payload || {};
+  const raw = String(p.phone || '').replace(/\D/g, '');
+  if (!raw || raw.length < 8) throw new Error('Valid phone required');
+  const note = String(p.note || '').slice(0, 240);
+  // Also remove any auto-created junk lead for this phone that has no
+  // remarks (personal contact accidentally captured as a lead).
+  let leadsRemoved = 0;
+  try {
+    const last10 = raw.length > 10 ? raw.slice(-10) : raw;
+    const candidates = await db.query(`
+      SELECT id FROM leads
+       WHERE (regexp_replace(COALESCE(phone, ''),    '\D', '', 'g') IN ($1, $2)
+           OR regexp_replace(COALESCE(whatsapp, ''), '\D', '', 'g') IN ($1, $2))
+         AND LOWER(COALESCE(source, '')) = 'whatsapp'
+         AND (SELECT COUNT(*) FROM remarks WHERE lead_id = leads.id) = 0
+    `, [raw, last10]).catch(() => ({ rows: [] }));
+    for (const row of candidates.rows) {
+      await db.query(`DELETE FROM whatsapp_messages WHERE lead_id = $1`, [row.id]).catch(() => {});
+      await db.query(`DELETE FROM tat_log WHERE lead_id = $1`, [row.id]).catch(() => {});
+      await db.query(`DELETE FROM leads WHERE id = $1`, [row.id]).catch(() => {});
+      leadsRemoved++;
+    }
+  } catch (e) { console.warn('[wb] whitelist cleanup failed:', e.message); }
+  // Upsert into whitelist
+  try {
+    await db.query(
+      `INSERT INTO wa_whitelist (phone_digits, note, added_by)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (phone_digits) DO UPDATE SET note = EXCLUDED.note, added_by = EXCLUDED.added_by`,
+      [raw, note, Number(me.id) || null]
+    );
+  } catch (e) { throw new Error('Whitelist save failed: ' + e.message); }
+  return { ok: true, phone: raw, leads_removed: leadsRemoved };
+}
+
+async function api_wb_whitelist_remove(_token, id) {
+  await _ensureWhitelistTable();
+  if (!id) throw new Error('id required');
+  await db.query(`DELETE FROM wa_whitelist WHERE id = $1`, [Number(id)]);
+  return { ok: true };
+}
+
 module.exports = {
   // Settings
   api_wb_settings_get, api_wb_settings_save, api_wb_connect_verify, api_wb_disconnect,
@@ -2777,5 +2880,6 @@ module.exports = {
   trimActivityLog,
   // Helpers exported for the file-upload Express route in server.js
   // and for routes/aiBot.js auto-reply path.
-  _uploadMediaToWhatsApp, _cfg, _cfgForPhone, _sendText, _sendInteractiveButtons, _sendMedia, _graphPost
+  _uploadMediaToWhatsApp, _cfg, _cfgForPhone, _sendText, _sendInteractiveButtons, _sendMedia, _graphPost,
+  api_wb_whitelist_list, api_wb_whitelist_add, api_wb_whitelist_remove
 };
