@@ -8699,14 +8699,20 @@ async function openQuotationModal(qid, prefillLead) {
   } : { items: [], currency: 'INR', tax_pct: 18, discount_pct: 0, issue_date: new Date().toISOString().slice(0, 10) };
   const q = existing || seed;
 
-  // QUOTE_DEFAULT_TC_v1 — for brand new quotes, pre-fill T&C from the
-  // saved tenant default (QUOTATION_DEFAULT_TERMS). Falls back silently
-  // if the config endpoint isn't reachable.
-  if (!qid && !q.terms) {
+  // QUOTE_DEFAULT_TC_v2 — for brand new quotes, pre-fill T&C + Notes
+  // from the tenant-level defaults configured in Settings → Quotation
+  // Defaults. Falls back silently if the config endpoint isn't reachable.
+  if (!qid) {
     try {
-      const cfg = await api('api_admin_getConfig', 'QUOTATION_DEFAULT_TERMS');
-      if (cfg && cfg.value) q.terms = cfg.value;
-    } catch (_) { /* default not set yet — that's fine */ }
+      if (!q.terms) {
+        const t = await api('api_admin_getConfig', 'QUOTATION_DEFAULT_TERMS');
+        if (t && t.value) q.terms = t.value;
+      }
+      if (!q.notes) {
+        const n = await api('api_admin_getConfig', 'QUOTATION_DEFAULT_NOTES');
+        if (n && n.value) q.notes = n.value;
+      }
+    } catch (_) { /* defaults not set yet — that's fine */ }
   }
 
   card.appendChild(h('h3', { style: { marginTop: 0 } }, qid ? '✎ Edit quotation ' + (q.number || '') : '+ New quotation'));
@@ -8865,25 +8871,19 @@ async function openQuotationModal(qid, prefillLead) {
   const notesInp = h('textarea', { rows: 2, placeholder: 'Internal notes (visible to customer)', style: { width: '100%' } }, q.notes || '');
   const termsInp = h('textarea', { rows: 3, placeholder: 'Terms & conditions (e.g. 50% advance, balance on delivery)', style: { width: '100%' } }, q.terms || '');
   card.appendChild(h('div', { class: 'field q-field-notes' }, h('label', {}, 'Notes'), notesInp));
-  // QUOTE_DEFAULT_TC_v1 — provide an inline "Save as default" link so the
-  // admin can update QUOTATION_DEFAULT_TERMS for future quotes without
-  // leaving the modal. Saves to tenant config via api_admin_setConfig.
-  const saveTcDefaultLink = h('a', {
-    href: '#',
-    style: { fontSize: '.75rem', color: '#6366f1', textDecoration: 'underline', cursor: 'pointer', marginLeft: '.5rem' },
-    title: 'Save this T&C text as the default for every new quotation',
-    onclick: async (ev) => {
-      ev.preventDefault();
-      const txt = String(termsInp.value || '').trim();
-      if (!txt) { toast('Type your default T&C first', 'err'); return; }
-      try {
-        await api('api_admin_setConfig', { key: 'QUOTATION_DEFAULT_TERMS', value: txt });
-        toast('📌 Saved as default — new quotes will auto-fill this T&C', 'ok');
-      } catch (e) { toast(e.message, 'err'); }
-    }
-  }, '📌 Save as default');
+  // QUOTE_DEFAULT_TC_v2 — T&C defaults live in Settings → Quotation Defaults
+  // (admin-only). The textarea below is for THIS quote only; tenant-wide
+  // template editing happens there.
   card.appendChild(h('div', { class: 'field q-field-terms' },
-    h('label', {}, 'Terms & conditions', saveTcDefaultLink),
+    h('label', {},
+      'Terms & conditions',
+      h('a', {
+        href: '#/admin',
+        style: { fontSize: '.75rem', color: '#6366f1', textDecoration: 'underline', marginLeft: '.5rem' },
+        title: 'Edit the default T&C template that auto-fills every new quotation',
+        onclick: (ev) => { ev.preventDefault(); m.remove(); location.hash = '#/admin'; setTimeout(() => showAdminTab && showAdminTab('quotation'), 150); }
+      }, '⚙ Edit default template')
+    ),
     termsInp
   ));
 
@@ -15826,6 +15826,7 @@ VIEWS.admin = async (view) => {
       { id: 'products',     label: '📦 Products' },
       { id: 'projstages',   label: '🚚 Sale Final Closure Stages' },
       { id: 'duplicates',   label: '👥 Duplicates' },
+      { id: 'quotation',    label: '📄 Quotation Defaults' },
     ]},
     { title: 'Routing', items: [
       { id: 'rules',        label: '⚖️ Auto-assign Rules' },
@@ -15931,6 +15932,7 @@ async function showAdminTab(id) {
     if (id === 'rules')    body.replaceChildren(await adminRules());
     if (id === 'permissions') body.replaceChildren(await adminPermissions());
     if (id === 'duplicates') body.replaceChildren(await adminDuplicates());
+    if (id === 'quotation') body.replaceChildren(await adminQuotation());
     if (id === 'smtp')     body.replaceChildren(await adminSmtp());
     if (id === 'announce') body.replaceChildren(await adminAnnouncements());
     if (id === 'chatperm') body.replaceChildren(await adminChatPermissions());
@@ -18012,6 +18014,74 @@ function openAnnounceModal(initial, onSave) {
     } catch (e) { toast(e.message, 'err'); }
   });
   document.body.appendChild(m);
+}
+
+// ---------- Quotation Defaults ----------
+// Tenant admin sets a default T&C + default Notes block. Every NEW
+// quotation auto-fills these. Per-quote editing still works.
+async function adminQuotation() {
+  const card = h('div', { class: 'card' });
+  card.appendChild(h('h3', { style: { marginTop: 0 } }, '📄 Quotation Defaults'));
+  card.appendChild(h('p', { class: 'muted', style: { marginTop: '-.25rem' } },
+    'Set the default Terms & Conditions and Notes text that every new quotation will start with. Reps can still edit per-quote before sending.'));
+
+  // Load current defaults
+  let cfgTerms = ''; let cfgNotes = '';
+  try {
+    const t = await api('api_admin_getConfig', 'QUOTATION_DEFAULT_TERMS');
+    if (t && t.value) cfgTerms = t.value;
+  } catch (_) {}
+  try {
+    const n = await api('api_admin_getConfig', 'QUOTATION_DEFAULT_NOTES');
+    if (n && n.value) cfgNotes = n.value;
+  } catch (_) {}
+
+  // Terms textarea
+  const termsInp = h('textarea', {
+    rows: 8,
+    placeholder: 'e.g.\n• 50% advance, balance on delivery.\n• Quote valid for 30 days.\n• GST 18% extra (where applicable).\n• Delivery within 7 working days from confirmation.\n• Any change in scope will be re-quoted.',
+    style: { width: '100%', padding: '.6rem', fontSize: '.9rem', lineHeight: '1.5' }
+  }, cfgTerms);
+  card.appendChild(h('div', { class: 'field' },
+    h('label', { style: { fontWeight: '600' } }, 'Default Terms & Conditions'),
+    h('div', { class: 'muted', style: { fontSize: '.78rem', marginBottom: '.35rem' } },
+      'Pre-fills the T&C box on every new quotation. Markdown-free plain text — line breaks are preserved.'),
+    termsInp
+  ));
+
+  // Notes textarea
+  const notesInp = h('textarea', {
+    rows: 4,
+    placeholder: 'e.g.\n• Thank you for your business!\n• For any clarification call us on +91 98765 43210.',
+    style: { width: '100%', padding: '.6rem', fontSize: '.9rem', lineHeight: '1.5' }
+  }, cfgNotes);
+  card.appendChild(h('div', { class: 'field' },
+    h('label', { style: { fontWeight: '600' } }, 'Default Notes (visible to customer)'),
+    h('div', { class: 'muted', style: { fontSize: '.78rem', marginBottom: '.35rem' } },
+      'Optional. Appears below the items table on the quote PDF.'),
+    notesInp
+  ));
+
+  const status = h('div', { style: { fontSize: '.85rem' } });
+  const saveBtn = h('button', { class: 'btn primary' }, '💾 Save defaults');
+  saveBtn.onclick = async () => {
+    saveBtn.disabled = true;
+    status.textContent = '⏳ Saving…'; status.style.color = '';
+    try {
+      await api('api_admin_setConfig', { key: 'QUOTATION_DEFAULT_TERMS', value: String(termsInp.value || '') });
+      await api('api_admin_setConfig', { key: 'QUOTATION_DEFAULT_NOTES', value: String(notesInp.value || '') });
+      status.textContent = '✅ Saved. New quotations will auto-fill these.';
+      status.style.color = '#16a34a';
+    } catch (e) {
+      status.textContent = '❌ ' + e.message; status.style.color = '#dc2626';
+    } finally {
+      saveBtn.disabled = false;
+    }
+  };
+  card.appendChild(h('div', { style: { display: 'flex', gap: '.6rem', alignItems: 'center', marginTop: '.6rem' } },
+    saveBtn, status
+  ));
+  return card;
 }
 
 async function adminCompany() {
