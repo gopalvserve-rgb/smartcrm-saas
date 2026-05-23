@@ -32,7 +32,18 @@ const CRM = {
   prefs: {
     columns: JSON.parse(localStorage.getItem('crm_cols') || '["name","phone","source","status","assigned","followup","last_change","remark","created"]'),
     filters: JSON.parse(localStorage.getItem('crm_filters') || '{}'),
-    showHeader: localStorage.getItem('crm_show_header') !== '0'
+    showHeader: (function () {
+      // LEADS_FILTER_COLLAPSE_v3 — on mobile, default the status-chip
+      // header to hidden so the user immediately sees the leads list
+      // instead of a wall of pills. Desktop keeps the existing behaviour
+      // (visible unless explicitly hidden). User's explicit choice always
+      // wins via localStorage.
+      var v = localStorage.getItem('crm_show_header');
+      if (v === '0') return false;
+      if (v === '1') return true;
+      // Unset — fall back to default. Mobile = hidden, desktop = shown.
+      try { return !(window.innerWidth < 900); } catch (_) { return true; }
+    })()
   }
 };
 
@@ -49,6 +60,14 @@ function _syncNativeCallEventCreds() {
     const base = (CRM.config && CRM.config.base_url) ||
                  location.origin;
     LeadCRMNative.saveCallEventCreds(base, tok);
+    // REC_BG_SYNC_v1 — also hand the creds to the recordings background worker
+    // so it can upload while the WebView is dead. tenant-scoped URL (with
+    // /t/<slug>/) so /api/recordings auth resolves to the right tenant.
+    if (typeof LeadCRMNative.registerBgSyncCreds === 'function') {
+      const tenantBase = String(location.origin + location.pathname).replace(/\/$/, '').replace(/\/#.*$/, '');
+      // location.pathname is e.g. /t/vserve/ — strip trailing slash to match server expectations.
+      try { LeadCRMNative.registerBgSyncCreds(tenantBase, tok); } catch (_) {}
+    }
   } catch (_) {}
 }
 
@@ -952,7 +971,9 @@ const NAV_GROUPS = [
   { label: 'Reports', icon: '📉', items: [
     { id: 'reports',       label: 'Reports',         icon: '📉', roles: ['admin', 'manager', 'team_leader'] },
     { id: 'reportbuilder', label: 'Report builder',  icon: '🧪', roles: ['admin', 'manager', 'team_leader'] },
-    { id: 'tatreport',     label: 'TAT report',      icon: '⏱️', roles: ['admin', 'manager', 'team_leader'] }
+    { id: 'tatreport',     label: 'TAT report',      icon: '⏱️', roles: ['admin', 'manager', 'team_leader'] },
+    /* LEAD_ACTIVITY_v1 */
+    { id: 'activityreport', label: 'Activity report', icon: '📝', roles: ['admin', 'manager', 'team_leader'] }
   ] },
   { label: 'Workspace', icon: '💬', items: [
     { id: 'socialinbox', label: 'Social Inbox', icon: '📱', countKey: 'social_unread' },
@@ -983,11 +1004,14 @@ const NAV_GROUPS = [
     { id: 'invCompanies', label: 'My Companies',        icon: '🏢', module: 'invoicing' },
     { id: 'invCustomers', label: 'Bill-To Customers',   icon: '👤', module: 'invoicing' },
     { id: 'invItems',     label: 'Items / Services',    icon: '📦', module: 'invoicing' },
-    { id: 'invGstr1',     label: 'GSTR-1 Export',       icon: '📤', module: 'invoicing' }
+    { id: 'invGstr1',     label: 'GSTR-1 Export',       icon: '📤', module: 'invoicing' },
+    { id: 'invSettings',  label: 'Settings & T&C',      icon: '⚙️', module: 'invoicing' }
   ] },
   { label: 'Admin', icon: '⚙️', items: [
     { id: 'users', label: 'Users',    icon: '👥', roles: ['admin', 'manager'] },
-    { id: 'admin', label: 'Settings', icon: '⚙️', roles: ['admin'] }
+    { id: 'admin', label: 'Settings', icon: '⚙️', roles: ['admin'] },
+    /* COMPLIANCE_v1 */
+    { id: 'compliance', label: 'Compliance', icon: '🛡', roles: ['admin', 'manager', 'team_leader'] }
   ] },
   // TKT_UI_v1 — Help & Support menu surfaces the cross-tenant ticket system.
   // Visible to every role so any user can raise a ticket; replies thread
@@ -995,7 +1019,8 @@ const NAV_GROUPS = [
   // SPA hits /api/saas (not /api) through sapi(), unlike the rest of the
   // CRM which targets /api.
   { label: 'Help & Support', icon: '🎫', items: [
-    { id: 'tickets', label: 'Support Tickets', icon: '🎫' }
+    { id: 'kbvideos', label: 'Video Tutorials', icon: '🎬' },
+    { id: 'tickets',  label: 'Support Tickets', icon: '🎫' }
   ] }
 ];
 // Flatten for backwards-compat with anywhere that iterates NAV.
@@ -2023,7 +2048,7 @@ VIEWS.leads = async (view) => {
     ], CRM.prefs.filters.sort || 'created_desc')),
     h('button', { class: 'btn', onclick: () => { CRM._leadsPage = 1; loadLeads({ page: 1 }); } }, '🔎'),
     h('button', { class: 'btn ghost', onclick: openSavedFiltersMenu, title: 'Saved filter presets' }, '📌'),
-    h('button', { class: 'btn ghost', onclick: clearFilters, title: 'Reset filters' }, '✕'),
+    h('button', { class: 'btn ghost', onclick: clearFilters, title: 'Reset all filters', style: { fontWeight: '600' } }, '↺ Reset'),
     h('button', { class: 'btn ghost', id: 'btn-refresh-leads', onclick: refreshLeads, title: 'Refresh leads list' }, '🔄'),
     h('button', { class: 'btn ghost', onclick: openColumnChooser, title: 'Columns' }, '☰'),
     h('button', { class: 'btn ghost', onclick: openBulkUpload, title: 'Upload CSV' }, '⬆️'),
@@ -2058,6 +2083,114 @@ VIEWS.leads = async (view) => {
       : null,
     h('button', { class: 'btn primary', onclick: () => openLeadModal() }, '+ New Lead')
   );
+
+  // LEADS_FILTER_COLLAPSE_v2 — on mobile the filter toolbar fills the
+  // entire viewport before any leads are visible. Wrap it in a one-line
+  // toggle so the list shows immediately and filters are an explicit
+  // tap away. Default: collapsed on mobile (< 900px), expanded on
+  // desktop. User's choice is remembered in localStorage.
+  //
+  // v2 fixes a render race: apply display:none INLINE on the toolbar
+  // before appending (so it never gets a chance to paint expanded),
+  // and use a wider mobile threshold (<900) since Capacitor WebView on
+  // some Samsung devices reports innerWidth in the 720-820 range.
+  toolbar.id = 'leads-toolbar';
+  const _filterIsMobile = (typeof window !== 'undefined') && window.innerWidth < 900;
+  const _filterPrefRaw = (() => { try { return localStorage.getItem('crm_leads_filter_open'); } catch (_) { return null; } })();
+  let _filterOpen = (_filterPrefRaw === '1' || _filterPrefRaw === '0')
+    ? (_filterPrefRaw === '1')
+    : !_filterIsMobile;
+  // FILTER_FIRST_CLICK_NOOP_FIX: persist the initial state so the
+  // toggle handler (which reads from localStorage) doesn't think the
+  // panel is in a state different from what's visible. Without this,
+  // localStorage stays null on first render, the toggle reads null
+  // as 'closed', tries to 'open', but the panel was already open on
+  // desktop — net result: first click looks broken.
+  if (_filterPrefRaw === null) {
+    try { localStorage.setItem('crm_leads_filter_open', _filterOpen ? '1' : '0'); } catch (_) {}
+  }
+  // Apply the initial visibility IMMEDIATELY on the toolbar element
+  // BEFORE it's appended to the DOM. No setTimeout = no timing race.
+  if (!_filterOpen) toolbar.style.display = 'none';
+  function _countActiveFilters() {
+    const f = CRM.prefs.filters || {};
+    let n = 0;
+    if (f.q && String(f.q).trim()) n++;
+    if (f.status) n++;
+    if (f.source || (Array.isArray(f.sources) && f.sources.length)) n++;
+    if (Array.isArray(f.tags) && f.tags.length) n++;
+    if (f.from || f.to) n++;
+    if (f.assignee || (Array.isArray(f.assignees) && f.assignees.length)) n++;
+    if (Array.isArray(f.heat) && f.heat.length) n++;
+    if (f.cf && Object.keys(f.cf).length) n++;
+    if (f.rb && Array.isArray(f.rb) && f.rb.length) n++;
+    return n;
+  }
+  const _filterActiveLabel = h('span', { style: { fontWeight: '600' } }, '');
+  const _filterStateLabel  = h('span', { style: { fontSize: '.85rem', opacity: 0.85 } }, '');
+  const _filterToggle = h('button', {
+    class: 'btn',
+    id: 'leads-filter-toggle',
+    style: {
+      width: '100%', display: 'flex', justifyContent: 'space-between',
+      alignItems: 'center', marginBottom: '.5rem', padding: '.6rem .9rem',
+      fontWeight: '600', borderRadius: '8px'
+    }
+  }, _filterActiveLabel, _filterStateLabel);
+  function _refreshFilterToggleLabel() {
+    const n = _countActiveFilters();
+    _filterActiveLabel.textContent = n > 0 ? ('🔍 Filters (' + n + ' active)') : '🔍 Filters';
+    _filterStateLabel.textContent  = _filterOpen ? '▴ Hide' : '▾ Show';
+    _filterToggle.style.background = n > 0 ? '#fef3c7' : '#f8fafc';
+    _filterToggle.style.borderColor = n > 0 ? '#fcd34d' : '#e2e8f0';
+  }
+  function _applyFilterPanelVisible(open) {
+    // LEADS_FILTER_COLLAPSE_v3 — also toggle the status-chip header
+    // (leads-header) and its "▾ Show header" twin so all the filter
+    // chrome opens/closes as one unit.
+    const t = document.getElementById('leads-toolbar');
+    const c = document.getElementById('cf-filter-row');
+    if (t) t.style.display = open ? '' : 'none';
+    if (c) {
+      if (!open) { if (c.style.display && c.style.display !== 'none') c.dataset._prevDisplay = c.style.display; c.style.display = 'none'; }
+      else if (c.dataset._prevDisplay) { c.style.display = c.dataset._prevDisplay; }
+    }
+    // Toggle header visibility too — set the global pref so future
+    // renders match. If we're opening, undo any earlier hide.
+    try {
+      CRM.prefs.showHeader = open;
+      localStorage.setItem('crm_show_header', open ? '1' : '0');
+      const h1 = document.querySelector('.leads-header');
+      const h2 = document.querySelector('.header-hidden-toggle');
+      if (h1) h1.style.display = open ? '' : 'none';
+      if (h2) h2.style.display = open ? 'none' : '';
+    } catch (_) {}
+    _filterOpen = open;
+    _refreshFilterToggleLabel();
+    try { localStorage.setItem('crm_leads_filter_open', open ? '1' : '0'); } catch (_) {}
+  }
+  // LEADS_FILTER_COLLAPSE_v5 — read state FRESH from localStorage on
+  // every tap (no closure-captured _filterOpen), then save the next
+  // state and re-render. This prevents the v4 bug where touchend AND
+  // click both fired on mobile and double-toggled back to the
+  // original state. Only bind 'click' — mobile browsers do fire it,
+  // they just also fire touchend, so binding both = double-fire =
+  // visible no-op.
+  function _toggleFilterPanel() {
+    // Read current state fresh — don't trust closure variable in case
+    // multiple renders have left stale closures around.
+    var cur;
+    try { cur = localStorage.getItem('crm_leads_filter_open'); } catch (_) { cur = null; }
+    var nowOpen = (cur === '1');
+    var next = !nowOpen;
+    try { localStorage.setItem('crm_leads_filter_open', next ? '1' : '0'); } catch (_) {}
+    try { localStorage.setItem('crm_show_header', next ? '1' : '0'); CRM.prefs.showHeader = next; } catch (_) {}
+    try { navigateTo('leads'); } catch (_) { try { location.reload(); } catch (__) {} }
+  }
+  _filterToggle.addEventListener('click', _toggleFilterPanel);
+  _refreshFilterToggleLabel();
+  view.appendChild(_filterToggle);
+
   view.appendChild(toolbar);
 
   if (CRM.user && CRM.user.role !== 'admin') {
@@ -2126,6 +2259,9 @@ VIEWS.leads = async (view) => {
     } }, '🧩 Custom field filter' + (_cfHasSaved ? ' \u2022' : ''));
   if (_cfHasSaved) cfBtn.classList.add('active');
   toolbar.appendChild(cfBtn);
+  // Apply initial cfRow visibility too — keep it hidden when the
+  // parent filter panel is collapsed.
+  if (!_filterOpen) cfRow.style.display = 'none';
   view.appendChild(cfRow);
 
   view.appendChild(h('div', { class: 'bulk-bar', id: 'bulk-bar', hidden: true },
@@ -2137,6 +2273,7 @@ VIEWS.leads = async (view) => {
     h('button', { class: 'btn sm', onclick: bulkWhatsAppPrompt }, '💬 WhatsApp'),
     h('button', { class: 'btn sm', onclick: bulkCampaignPrompt }, '🎯 Campaign'),
     h('button', { class: 'btn sm', onclick: bulkNurturePrompt, title: 'Enroll selected leads in a nurture sequence' }, '🌱 Nurture'),
+    h('button', { class: 'btn sm', onclick: bulkMergePrompt, title: 'Merge selected leads into one' }, '🔀 Merge'),
     h('button', { class: 'btn sm danger', onclick: bulkDelete }, '🗑️ Delete'),
     h('button', { class: 'btn sm ghost', onclick: () => clearSelection() }, 'Clear')
   ));
@@ -2159,8 +2296,16 @@ function toggleHeader(show) {
   navigateTo('leads');
 }
 function clearFilters() {
+  // RESET_FILTERS_v2 — wipe every filter slice: standard fields, custom
+  // fields (cf), rule-builder rules (rb), search text (q), and the
+  // 'show custom-fields row' toggle. Also reset to page 1 so a
+  // previously paged-deep view doesn't render empty. Then re-navigate
+  // to leads so the toolbar re-reads the empty state.
   CRM.prefs.filters = {};
-  localStorage.setItem('crm_filters', '{}');
+  try { localStorage.setItem('crm_filters', '{}'); } catch (_) {}
+  try { localStorage.removeItem('crm_filters_q'); } catch (_) {}
+  CRM._leadsPage = 1;
+  toast('Filters cleared', 'ok');
   navigateTo('leads');
 }
 
@@ -2473,8 +2618,17 @@ function renderLeadsTable(rows) {
         h('td', { class: 'td-check' }, h('input', { type: 'checkbox', class: 'row-check', 'data-id': l.id, onclick: onRowCheck })),
         ...activeCols.map(col => renderCell(col, l, statuses)),
         ...extraCols.map(f => h('td', {}, (l.extra && l.extra[f.key]) || '')),
-        h('td', { class: 'td-actions' },
-          h('button', { class: 'btn sm ghost', onclick: () => openLeadModal(l.id) }, '✎')
+        h('td', { class: 'td-actions', style: { whiteSpace: 'nowrap' } },
+          h('button', { class: 'btn sm ghost', title: 'Edit lead', onclick: () => openLeadModal(l.id) }, '\u270e'),
+          l.phone ? h('button', {
+            class: 'btn sm ghost', title: 'Whitelist this number (skip future auto-lead) + delete this lead',
+            style: { color: '#b91c1c', marginLeft: '.2rem' },
+            onclick: async (ev) => {
+              ev.stopPropagation();
+              const ok = await whitelistLeadPhone(l);
+              if (ok) loadLeads();
+            }
+          }, '\ud83d\udeab') : null
         )
       ));
     });
@@ -2538,7 +2692,12 @@ function renderLeadsMobile(rows) {
         }, '💬 My WA') : null,
         digits ? h('button', { class: 'btn sm', onclick: () => sendCalendlyLink(l) }, '📅 Meet') : null,
         h('button', { class: 'btn sm', onclick: () => openRemarkInline(l.id) }, '📝 Note'),
-        h('button', { class: 'btn sm ghost', onclick: () => openLeadModal(l.id) }, '✎ Edit')
+        h('button', { class: 'btn sm ghost', onclick: () => openLeadModal(l.id) }, '✎ Edit'),
+        digits ? h('button', {
+          class: 'btn sm', title: 'Whitelist this number + delete lead',
+          style: { background: '#fee2e2', color: '#b91c1c', borderColor: '#fecaca' },
+          onclick: async () => { const ok = await whitelistLeadPhone(l); if (ok) loadLeads(); }
+        }, '\ud83d\udeab Whitelist') : null
       )
     );
     m.appendChild(card);
@@ -2871,7 +3030,23 @@ function renderCell(col, l, statuses) {
         h('a', { href: '#', onclick: ev => { ev.preventDefault(); openLeadModal(l.id); } }, l.name || '—'),
         renderHeatChip(l),
         l.is_duplicate ? h('span', { class: 'dup-pill', title: 'Duplicate — click to see past leads', onclick: ev => { ev.stopPropagation(); ev.preventDefault(); openDuplicateHistory(l.id); } }, 'DUP') : null,
-        l.tat_violation ? h('span', { class: 'tat-pill', title: tatViolationTitle(l) }, '⚠ TAT ', tatOverLabel(l)) : null
+        l.tat_violation ? h('span', { class: 'tat-pill', title: tatViolationTitle(l) }, '⚠ TAT ', tatOverLabel(l)) : null,
+        /* LEAD_ACTIVITY_v1 — activity counter pill. Shows total / today.
+         * Click opens the lead activity timeline. Hidden when no activity yet. */
+        (Number(l.activity_total) > 0)
+          ? h('span', {
+              class: 'activity-pill',
+              title: 'Activities done on this lead — click for timeline. Counts status changes, remarks, follow-up edits, reassignments, etc.',
+              onclick: ev => { ev.stopPropagation(); ev.preventDefault(); openLeadActivityTimeline(l.id, l.name); },
+              style: {
+                marginLeft: '.4rem', padding: '.05rem .35rem', borderRadius: '10px',
+                background: Number(l.activity_today) > 0 ? '#dcfce7' : '#e0e7ff',
+                color: Number(l.activity_today) > 0 ? '#15803d' : '#3730a3',
+                fontSize: '.7rem', fontWeight: '600', cursor: 'pointer',
+                border: '1px solid ' + (Number(l.activity_today) > 0 ? '#86efac' : '#c7d2fe')
+              }
+            }, '📝 ' + Number(l.activity_total) + (Number(l.activity_today) > 0 ? ' · ' + Number(l.activity_today) + ' today' : ''))
+          : null
       );
     }
     case 'phone': {
@@ -3219,6 +3394,59 @@ async function bulkAddTagPrompt() {
  * - Empty value clears the field for every selected lead (sets extra_json[key] = '').
  * Backend merges into each lead's existing extra_json so other CF values are preserved.
  */
+
+/* LEAD_MERGE_v1 — bulk merge selected leads into one target */
+async function bulkMergePrompt() {
+  const ids = selectedIds(); if (ids.length < 2) { toast('Select at least 2 leads to merge'); return; }
+  if (ids.length > 50) { toast('Pick 50 leads or fewer'); return; }
+  // Pull the lead rows for each selected id so the modal can show them.
+  const leadsCache = (CRM.cache.leads || []);
+  const rows = ids.map(id => leadsCache.find(l => Number(l.id) === Number(id)) || { id, name: '#' + id });
+
+  const modal = h('div', { class: 'modal' });
+  const targetId = { v: rows[0].id };
+  const list = h('div', { style: { maxHeight: '300px', overflow: 'auto', border: '1px solid var(--border, #e2e8f0)', borderRadius: '8px', padding: '.5rem' } });
+  rows.forEach(r => {
+    const radio = h('input', { type: 'radio', name: 'merge-target', value: r.id });
+    if (Number(r.id) === Number(targetId.v)) radio.checked = true;
+    radio.onchange = () => { targetId.v = Number(r.id); };
+    list.appendChild(h('label', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', padding: '.4rem .2rem', cursor: 'pointer', borderBottom: '1px dashed #eee' } },
+      radio,
+      h('div', { style: { flex: '1' } },
+        h('b', {}, r.name || r.phone || ('Lead #' + r.id)),
+        h('span', { class: 'muted', style: { marginLeft: '.5rem', fontSize: '.8rem' } },
+          [r.phone, r.email, r.company].filter(Boolean).join(' · ') || ' '
+        )
+      )
+    ));
+  });
+
+  modal.innerHTML = '';
+  modal.appendChild(h('div', { class: 'modal-content' },
+    h('h3', {}, '🔀 Merge ' + ids.length + ' leads into one'),
+    h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+      'Pick the lead to KEEP. The other ' + (ids.length - 1) + ' will be merged into it ' +
+      '(remarks, call recordings, WhatsApp chats, follow-ups, quotations all move over). ' +
+      'Blank fields on the target get filled in from the duplicates. This cannot be undone.'),
+    list,
+    h('div', { class: 'modal-actions', style: { display: 'flex', gap: '.5rem', marginTop: '.8rem', justifyContent: 'flex-end' } },
+      h('button', { class: 'btn ghost', onclick: () => modal.remove() }, 'Cancel'),
+      h('button', { class: 'btn primary', onclick: async () => {
+        const target_id = Number(targetId.v);
+        const source_ids = ids.map(Number).filter(n => n !== target_id);
+        try {
+          const r = await api('api_leads_merge', { target_id, source_ids });
+          toast('✅ Merged ' + r.merged_count + ' lead(s) into #' + target_id);
+          modal.remove();
+          clearSelection();
+          loadLeads();
+        } catch (e) { toast('⚠ ' + e.message, 'err'); }
+      } }, '🔀 Merge into selected target')
+    )
+  ));
+  document.body.appendChild(modal);
+}
+
 async function bulkCustomFieldPrompt() {
   const ids = selectedIds(); if (!ids.length) return;
   const cfList = (CRM.cache.customFields || []).filter(c => Number(c.is_active) !== 0 && c.key);
@@ -3384,6 +3612,25 @@ const BULK_MAP_TARGETS = [
   { v: 'utm_content',      l: 'UTM content' }
 ];
 
+/* CSV_MAP_CF_v1 — append active custom fields to the bulk-mapping target list */
+function _bulkMapTargets() {
+  const base = BULK_MAP_TARGETS.slice();
+  const cfList = (CRM && CRM.cache && CRM.cache.customFields) || [];
+  // Filter to active CFs with a usable key.
+  const active = cfList.filter(c => Number(c.is_active) !== 0 && c.key);
+  if (!active.length) return base;
+  // Push a separator pseudo-option then one option per CF.
+  base.push({ v: '__cf_sep', l: '── Custom fields ──', disabled: true });
+  for (const cf of active) {
+    base.push({
+      v: 'cf_' + cf.key,
+      l: '🧩 ' + (cf.label || cf.key) + (cf.label && cf.label !== cf.key ? ' (' + cf.key + ')' : '')
+    });
+  }
+  return base;
+}
+
+
 // Auto-suggest a target for a source column based on common header aliases.
 function _bulkSuggestTarget(col) {
   const c = String(col || '').toLowerCase().replace(/[\s\-_]+/g, '');
@@ -3418,6 +3665,17 @@ function _bulkSuggestTarget(col) {
   if (exact[c]) return exact[c];
   // If the column already matches a lead column name verbatim, use it
   if (BULK_MAP_TARGETS.some(t => t.v === c)) return c;
+  /* CSV_MAP_CF_v1 — try to match a registered custom field */
+  try {
+    const cfList = (CRM && CRM.cache && CRM.cache.customFields) || [];
+    const want = c;
+    for (const cf of cfList) {
+      if (Number(cf.is_active) === 0 || !cf.key) continue;
+      const k = String(cf.key).toLowerCase().replace(/[\s\-_]+/g, '');
+      const lbl = String(cf.label || '').toLowerCase().replace(/[\s\-_]+/g, '');
+      if (k === want || lbl === want) return 'cf_' + cf.key;
+    }
+  } catch (_) {}
   return '__skip';
 }
 
@@ -3498,7 +3756,7 @@ function openBulkUpload() {
     sourceHeaders.forEach(col => {
       const sample = (parsedRows[0] && parsedRows[0][col]) || (parsedRows[1] && parsedRows[1][col]) || '';
       const sel = h('select', { style: { width: '100%', padding: '.25rem' } },
-        ...BULK_MAP_TARGETS.map(t => h('option', { value: t.v, selected: (columnMapping[col] || '__skip') === t.v ? 'selected' : null }, t.l))
+        ...(_bulkMapTargets()).map(t => h('option', Object.assign({ value: t.v, selected: (columnMapping[col] || '__skip') === t.v ? 'selected' : null }, t.disabled ? { disabled: 'disabled' } : {}), t.l))
       );
       sel.addEventListener('change', () => { columnMapping[col] = sel.value; });
       tbody.appendChild(h('tr', {},
@@ -3993,6 +4251,296 @@ function openColumnChooser() {
 }
 
 /* --- Lead modal --- */
+// RE_CP_PIPELINE_v1 (2026-05-21) — horizontal 12-stage strip + process guide modal.
+// Only renders when the Real Estate industry pack is installed. Uses the
+// tenant's statuses table directly so renames/reorders by the admin flow
+// through to the strip without code changes.
+function _reIsActive() {
+  try { return !!(CRM.installedPacks && CRM.installedPacks.has && CRM.installedPacks.has('realestate')); }
+  catch (_) { return false; }
+}
+// Match by name to the seeded RE_CP_PIPELINE_v1 stage labels (case-insensitive).
+const _RE_CANON_STAGES = [
+  'New Lead','Lead Captured','Assigned','In Follow-up','Presentation Done',
+  'Site Visit Fixed','Site Visit Done','Offer Given','Booked',
+  'Documents Collected','Commission In Progress','Paid'
+];
+function _reCanonStages(allStatuses) {
+  const byName = new Map();
+  (allStatuses || []).forEach(s => byName.set(String(s.name || '').toLowerCase(), s));
+  const out = [];
+  for (const nm of _RE_CANON_STAGES) {
+    const hit = byName.get(nm.toLowerCase());
+    if (hit) out.push(hit);
+  }
+  // If the tenant renamed everything, fall back to display_order range 200-299
+  // (the range our installer uses) so the strip still works.
+  if (out.length === 0) {
+    return (allStatuses || [])
+      .filter(s => Number(s.sort_order) >= 200 && Number(s.sort_order) < 300)
+      .sort((a,b) => Number(a.sort_order) - Number(b.sort_order));
+  }
+  return out;
+}
+function _reStageStrip(lead, statuses, opts) {
+  if (!_reIsActive()) return null;
+  const stages = _reCanonStages(statuses);
+  if (!stages.length) return null;
+  const currentId = Number(lead && lead.status_id) || 0;
+  const currentIdx = stages.findIndex(s => Number(s.id) === currentId);
+  const onPick = (opts && opts.onPick) || function(){};
+
+  const strip = h('div', { class: 're-stage-strip', style: {
+    display: 'flex', gap: '.35rem', overflowX: 'auto', padding: '.55rem .25rem',
+    margin: '.4rem 0 .8rem', borderRadius: '10px',
+    background: 'linear-gradient(180deg, rgba(99,102,241,.04), rgba(99,102,241,.01))',
+    border: '1px solid rgba(99,102,241,.18)'
+  }});
+
+  stages.forEach((s, i) => {
+    const isCurrent = Number(s.id) === currentId;
+    const isPast    = currentIdx >= 0 && i < currentIdx;
+    const color = s.color || '#6366f1';
+    const card = h('button', {
+      type: 'button',
+      title: 'Click to move lead to "' + s.name + '"',
+      onclick: ev => { ev.preventDefault(); onPick(s); },
+      style: {
+        flex: '0 0 auto', minWidth: '120px',
+        padding: '.45rem .55rem',
+        borderRadius: '8px',
+        border: isCurrent ? ('2px solid ' + color) : '1px solid rgba(0,0,0,.08)',
+        background: isCurrent ? color : (isPast ? '#e8f5e9' : '#fff'),
+        color: isCurrent ? '#fff' : (isPast ? '#1b5e20' : '#222'),
+        boxShadow: isCurrent ? ('0 2px 8px ' + color + '55') : 'none',
+        cursor: 'pointer',
+        textAlign: 'left',
+        fontSize: '.75rem',
+        lineHeight: '1.15'
+      }
+    },
+      h('div', { style: { fontWeight: 700, fontSize: '.62rem', opacity: '.85' } }, (isPast ? '✓ ' : '') + (i+1) + ' / ' + stages.length),
+      h('div', { style: { fontWeight: 600, marginTop: '.15rem' } }, s.name)
+    );
+    strip.appendChild(card);
+    if (i < stages.length - 1) {
+      strip.appendChild(h('div', { style: {
+        alignSelf: 'center', color: '#94a3b8', fontSize: '.9rem', userSelect: 'none'
+      }}, '›'));
+    }
+  });
+
+  const guideBtn = h('button', {
+    type: 'button', class: 'btn sm ghost',
+    style: { marginLeft: 'auto', alignSelf: 'center', whiteSpace: 'nowrap', flex: '0 0 auto' },
+    onclick: ev => { ev.preventDefault(); _reOpenProcessGuide(); }
+  }, '📋 Process Guide');
+
+  // Outer wrap with the guide button on the right
+  return h('div', { style: { display: 'flex', gap: '.4rem', alignItems: 'stretch' } }, strip, guideBtn);
+}
+
+function _reOpenProcessGuide() {
+  const m = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); }});
+  const body = h('div', { class: 'modal modal-lg', style: { maxWidth: '1100px' } });
+  m.appendChild(body);
+  body.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, '📈 Lead Pipeline — New Lead To Sales'),
+    h('button', { class: 'btn icon', onclick: () => m.remove() }, '✕')
+  ));
+  const stages = [
+    { n: 1,  t: 'Lead Received',          s: 'New Lead',            c: '#a855f7', i: '📣', bullets: ['Source: CP, Call, Website, WhatsApp, Walk-in', 'Lead details capture'] },
+    { n: 2,  t: 'Lead Entry in CRM',      s: 'Lead Captured',       c: '#3b82f6', i: '📝', bullets: ['Name, Mobile, Email', 'Requirement (Budget, BHK, Location)', 'Source / CP name'] },
+    { n: 3,  t: 'Lead Assign',            s: 'Assigned',            c: '#06b6d4', i: '👤', bullets: ['Assign to Executive / CP Manager', 'Auto notification to owner'] },
+    { n: 4,  t: 'First Follow-up',        s: 'In Follow-up',        c: '#22c55e', i: '📞', bullets: ['Call within 5–10 min', 'Discuss requirement, budget, timeline', 'Update in CRM'] },
+    { n: 5,  t: 'Project Presentation',   s: 'Presentation Done',   c: '#f59e0b', i: '🏢', bullets: ['Brochure, Cost sheet', 'Floor plan, Location video', 'Send & Update'] },
+    { n: 6,  t: 'Site Visit Schedule',    s: 'Site Visit Fixed',    c: '#ec4899', i: '📅', bullets: ['Date & time fix', 'Send details to client', 'Update in CRM'] },
+    { n: 7,  t: 'Site Visit Done',        s: 'Site Visit Done',     c: '#0ea5e9', i: '👣', bullets: ['Visit completed', 'Client feedback (likes / dislikes)', 'Update in CRM'] },
+    { n: 8,  t: 'Negotiation & Offer',    s: 'Offer Given',         c: '#f97316', i: '🤝', bullets: ['Price discussion', 'Discount / benefits', 'Payment plan & update'] },
+    { n: 9,  t: 'Booking Confirmation',   s: 'Booked',              c: '#16a34a', i: '✅', bullets: ['Client agrees', 'Token amount received', 'Update in CRM'] },
+    { n: 10, t: 'Booking Form & Docs',    s: 'Documents Collected', c: '#8b5cf6', i: '📋', bullets: ['Booking form', 'KYC docs (PAN, Aadhaar)', 'Cheque / payment details'] },
+    { n: 11, t: 'Commission Tracking',    s: 'Commission In Progress', c: '#0284c7', i: '💰', bullets: ['CP agreement', 'Commission slab', 'Stage-wise tracking, TDS'] },
+    { n: 12, t: 'Payout to CP',           s: 'Paid',                c: '#15803d', i: '🏦', bullets: ['Commission due', 'Approval', 'Payment released, payout receipt'] }
+  ];
+  const grid = h('div', { style: {
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+    gap: '.7rem', padding: '1rem'
+  }});
+  stages.forEach(st => {
+    const card = h('div', { style: {
+      border: '2px solid ' + st.c + '55', borderRadius: '12px', padding: '.7rem .8rem',
+      background: '#fff', boxShadow: '0 1px 4px rgba(0,0,0,.04)'
+    }},
+      h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', marginBottom: '.35rem' }},
+        h('div', { style: {
+          width: '28px', height: '28px', borderRadius: '6px',
+          background: st.c, color: '#fff', display: 'flex',
+          alignItems: 'center', justifyContent: 'center',
+          fontWeight: 700, fontSize: '.85rem'
+        }}, String(st.n)),
+        h('div', { style: { fontWeight: 700, fontSize: '.95rem', color: st.c } }, st.i + ' ' + st.t)
+      ),
+      h('ul', { style: { fontSize: '.78rem', margin: '.2rem 0 .35rem 1.1rem', padding: 0, color: '#444' } },
+        ...st.bullets.map(b => h('li', { style: { marginBottom: '.1rem' } }, b))
+      ),
+      h('div', { style: {
+        marginTop: '.3rem',
+        background: '#f1f5f9', padding: '.18rem .45rem',
+        borderRadius: '999px', fontSize: '.7rem',
+        color: '#334155', display: 'inline-block', fontWeight: 600
+      }}, 'Status: ' + st.s)
+    );
+    grid.appendChild(card);
+  });
+  body.appendChild(grid);
+  body.appendChild(h('div', {
+    style: {
+      padding: '.7rem 1rem 1rem', background: '#fafafa',
+      borderTop: '1px solid #eee', fontSize: '.78rem', color: '#475569'
+    }
+  }, 'Tip: click any stage in the lead\'s pipeline strip to advance the lead. The 12 statuses above are seeded on Real Estate pack install — your admin can rename, reorder, or add stages from Settings → Statuses.'));
+  document.body.appendChild(m);
+}
+
+
+// RE_STAGE_DATA_v1 (2026-05-21) — stage-specific data capture for Real Estate.
+// Fields are stored in lead.extra_json under re_* keys so no DB migration is
+// needed. The panel renders inside the lead modal AFTER the standard form
+// fields and re-renders whenever the status dropdown changes — only shows
+// the inputs relevant to the current stage.
+const _RE_STAGE_FIELDS = {
+  'Site Visit Fixed': [
+    { key: 're_site_visit_at',      label: '📅 Visit date & time', type: 'datetime-local' },
+    { key: 're_site_visit_project', label: '🏢 Project / Tower',   type: 'text', placeholder: 'e.g. Sample Heights · Tower A' },
+    { key: 're_site_visit_with',    label: '👥 Visit with',        type: 'text', placeholder: 'Accompanying person, if any' }
+  ],
+  'Site Visit Done': [
+    { key: 're_visit_completed_at',  label: '✅ Visit completed at',  type: 'datetime-local' },
+    { key: 're_visit_likes',         label: '👍 Client likes',        type: 'textarea', placeholder: 'What the client liked about the project' },
+    { key: 're_visit_dislikes',      label: '👎 Client dislikes',     type: 'textarea', placeholder: 'Concerns / objections raised' },
+    { key: 're_visit_next_step',     label: '➡️ Next step',           type: 'text',     placeholder: 'e.g. Send revised cost sheet by Monday' }
+  ],
+  'Offer Given': [
+    { key: 're_offer_amount',   label: '💵 Offer amount (₹)', type: 'number', step: '1' },
+    { key: 're_offer_discount', label: '🎁 Discount / benefit (₹)', type: 'number', step: '1' },
+    { key: 're_offer_payment_plan', label: '📋 Payment plan', type: 'text', placeholder: 'e.g. 10:20:70 CLP' }
+  ],
+  'Booked': [
+    { key: 're_booking_unit',   label: '🏠 Unit', type: 'text', placeholder: 'e.g. A-1204' },
+    { key: 're_token_amount',   label: '💰 Token amount received (₹)', type: 'number', step: '1' },
+    { key: 're_booking_date',   label: '📅 Booking date', type: 'date' }
+  ],
+  'Documents Collected': [
+    { key: 're_kyc_pan',         label: '🪪 PAN received', type: 'select', options: ['','Yes','No','Pending'] },
+    { key: 're_kyc_aadhaar',     label: '🆔 Aadhaar received', type: 'select', options: ['','Yes','No','Pending'] },
+    { key: 're_booking_form',    label: '📋 Booking form signed', type: 'select', options: ['','Yes','No','Pending'] },
+    { key: 're_cheque_details',  label: '💳 Cheque / payment details', type: 'text', placeholder: 'e.g. Ch #123456 / HDFC / 5L' }
+  ],
+  'Commission In Progress': [
+    { key: 're_cp_name',         label: '🤝 Channel partner', type: 'text', placeholder: 'Broker / agency name' },
+    { key: 're_cp_slab_pct',     label: '📊 Commission slab %', type: 'number', step: '0.01' },
+    { key: 're_cp_amount',       label: '💰 Commission amount (₹)', type: 'number', step: '1' },
+    { key: 're_cp_tds_pct',      label: '🧾 TDS %', type: 'number', step: '0.01' }
+  ],
+  'Paid': [
+    { key: 're_payout_amount',   label: '🏦 Payout amount released (₹)', type: 'number', step: '1' },
+    { key: 're_payout_date',     label: '📅 Payout date', type: 'date' },
+    { key: 're_payout_ref',      label: '📄 Payout reference / UTR', type: 'text', placeholder: 'e.g. UTR123456789' }
+  ]
+};
+function _reStageDataFieldsFor(statusName) {
+  if (!statusName) return null;
+  // Case-insensitive match
+  for (const k of Object.keys(_RE_STAGE_FIELDS)) {
+    if (k.toLowerCase() === String(statusName).toLowerCase()) return _RE_STAGE_FIELDS[k];
+  }
+  return null;
+}
+function _reBuildStagePanel(lead, statuses, container) {
+  if (!_reIsActive || !_reIsActive()) return;
+  const statusSel = container.parentElement && container.parentElement.querySelector('[name="status_id"]');
+  const renderFor = () => {
+    container.innerHTML = '';
+    const sid = statusSel ? Number(statusSel.value) : Number(lead.status_id);
+    const status = (statuses || []).find(s => Number(s.id) === sid);
+    if (!status) return;
+    const fields = _reStageDataFieldsFor(status.name);
+    if (!fields || !fields.length) return;
+    const ex = (lead && lead.extra) || {};
+    const card = document.createElement('div');
+    card.style.cssText = 'grid-column:1/-1;border:2px solid ' + (status.color || '#6366f1') + '55;border-radius:10px;padding:.7rem .9rem;background:linear-gradient(180deg,' + (status.color || '#6366f1') + '0a,transparent);margin-top:.3rem';
+    const head = document.createElement('div');
+    head.style.cssText = 'display:flex;align-items:center;gap:.4rem;margin-bottom:.5rem;';
+    head.innerHTML = '<span style="background:' + (status.color || '#6366f1') + ';color:#fff;padding:.15rem .45rem;border-radius:6px;font-weight:700;font-size:.7rem">' + status.name.toUpperCase() + '</span><span style="font-size:.8rem;color:#475569">Stage-specific data</span>';
+    card.appendChild(head);
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.5rem .6rem;';
+    fields.forEach(f => {
+      const wrap = document.createElement('label');
+      wrap.style.cssText = 'display:flex;flex-direction:column;font-size:.75rem;';
+      wrap.appendChild(Object.assign(document.createElement('span'), { textContent: f.label, style: 'color:#475569;margin-bottom:.15rem;font-weight:600;' }));
+      let inp;
+      if (f.type === 'textarea') {
+        inp = document.createElement('textarea');
+        inp.rows = 2;
+      } else if (f.type === 'select') {
+        inp = document.createElement('select');
+        (f.options || []).forEach(o => {
+          const opt = document.createElement('option');
+          opt.value = o;
+          opt.textContent = o || '— select —';
+          inp.appendChild(opt);
+        });
+      } else {
+        inp = document.createElement('input');
+        inp.type = f.type || 'text';
+        if (f.step) inp.step = f.step;
+      }
+      inp.name = f.key;
+      inp.className = 're-stage-field input';
+      if (f.placeholder) inp.placeholder = f.placeholder;
+      inp.style.cssText = 'padding:.4rem .5rem;border:1px solid #cbd5e1;border-radius:6px;font-size:.85rem;background:#fff;';
+      // Pre-fill from existing extra
+      const prefill = ex[f.key];
+      if (prefill != null) inp.value = String(prefill);
+      wrap.appendChild(inp);
+      grid.appendChild(wrap);
+    });
+    card.appendChild(grid);
+    container.appendChild(card);
+  };
+  renderFor();
+  // Re-render when the user changes status via the dropdown OR via the strip
+  if (statusSel) {
+    statusSel.addEventListener('change', renderFor);
+  }
+}
+
+
+// WA_WHITELIST_v1 — shared helper used by the lead modal Quick Actions,
+// the lead list row actions, the mobile card actions, and the WA chat
+// header. Whitelists a phone so future WA inbound doesn't auto-create a
+// lead; optionally deletes the current lead too.
+async function whitelistLeadPhone(lead, opts) {
+  if (!lead || !lead.phone) { toast('No phone number on this lead', 'err'); return false; }
+  const note = prompt('Add a note (optional, e.g. "Personal contact", "Junk lead"):', lead.name || '');
+  if (note === null) return false;
+  const deleteAlso = !opts || opts.deleteLead !== false;
+  const msg = 'Whitelist ' + lead.phone + '?\n\n'
+    + '\u2022 Future inbound WhatsApp messages from this number will NOT create a lead.\n'
+    + (deleteAlso && lead.id ? '\u2022 This lead (#' + lead.id + ') will also be deleted.\n' : '')
+    + '\nContinue?';
+  if (!confirm(msg)) return false;
+  try {
+    const r = await api('api_wb_whitelist_add', { phone: lead.phone, note });
+    if (deleteAlso && lead.id) {
+      try { await api('api_leads_bulkDelete', [lead.id]); } catch (_) {}
+    }
+    toast('\u2713 Whitelisted ' + lead.phone + (r.leads_removed ? ' (' + r.leads_removed + ' lead(s) removed)' : ''));
+    return true;
+  } catch (e) { toast(e.message, 'err'); return false; }
+}
+
 async function openLeadModal(id) {
   const { statuses, sources, products, users, customFields } = CRM.cache;
   // Lazy-load the admin-managed tag library; cached for the session.
@@ -4044,7 +4592,18 @@ async function openLeadModal(id) {
         title: 'Create a quotation pre-filled with this lead\'s details',
         style: { background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' },
         onclick: () => { modal.remove(); openQuotationModal(null, lead); }
-      }, '\ud83d\udcc4 Quote')
+      }, '\ud83d\udcc4 Quote'),
+      // WA_WHITELIST_v1 — whitelist this number so future inbound WA never
+      // creates a lead; also deletes THIS lead.
+      _digits ? h('button', {
+        type: 'button', class: 'btn sm',
+        title: 'Whitelist this number — future WhatsApp inbound from it will NOT create a lead. Also deletes this lead.',
+        style: { background: '#fee2e2', color: '#b91c1c', borderColor: '#fecaca' },
+        onclick: async () => {
+          const ok = await whitelistLeadPhone(Object.assign({}, lead, { id }));
+          if (ok) { modal.remove(); try { navigateTo('leads'); } catch (_) {} }
+        }
+      }, '\ud83d\udeab Whitelist') : null
     ));
   }
 
@@ -4102,6 +4661,40 @@ async function openLeadModal(id) {
     field('requirement_notes', 'Requirement notes', lead.requirement_notes, { type: 'textarea', full: true }),
     field('notes', 'Notes', lead.notes, { type: 'textarea', full: true })
   );
+
+  // RE_STAGE_DATA_v1 — stage-specific data capture panel inside the form.
+  // Re-renders when status changes. Inputs use name="re_*" so the
+  // submit handler picks them up into extra.re_*.
+  const _reStageDataWrap = document.createElement('div');
+  _reStageDataWrap.className = 're-stage-data-wrap';
+  _reStageDataWrap.style.cssText = 'grid-column:1/-1;';
+  form.appendChild(_reStageDataWrap);
+  try { _reBuildStagePanel(lead, statuses, _reStageDataWrap); } catch (e) { console.warn('[RE stage panel]', e && e.message); }
+
+  // RE_CP_PIPELINE_v1 (2026-05-21) — render 12-stage horizontal strip above the form
+  // when Real Estate pack is installed. Clicking a stage updates the status_id
+  // select in-place (no save until the user clicks Save).
+  let _reLocalLead = lead;
+  function _reRenderStrip() {
+    const old = body.querySelector('.re-stage-strip-wrap');
+    const fresh = _reStageStrip(_reLocalLead, statuses, {
+      onPick: (stage) => {
+        _reLocalLead = Object.assign({}, _reLocalLead, { status_id: stage.id });
+        const sel = form.querySelector('[name="status_id"]');
+        if (sel) {
+          sel.value = String(stage.id);
+          sel.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        _reRenderStrip();
+      }
+    });
+    if (fresh) {
+      fresh.classList.add('re-stage-strip-wrap');
+      if (old) old.replaceWith(fresh);
+      else body.appendChild(fresh);
+    }
+  }
+  _reRenderStrip();
 
   // Hide any custom field that collides with a hardcoded built-in field key —
   // otherwise the user sees Budget / Requirement type / Requirement notes
@@ -4460,6 +5053,14 @@ async function openLeadModal(id) {
       if (cf.field_type === 'multiselect') extra[cf.key] = fd.getAll(key).join(',');
       else extra[cf.key] = fd.get(key) || '';
     });
+    // RE_STAGE_DATA_v1 — scoop re_* stage-specific inputs into extra
+    try {
+      form.querySelectorAll('.re-stage-field').forEach(inp => {
+        const k = inp.name;
+        if (!k || !k.startsWith('re_')) return;
+        extra[k] = inp.value || '';
+      });
+    } catch (e) { console.warn('[re-stage submit]', e && e.message); }
     // ORPHAN_CF_v1 — collect orphan extra-json fields rendered above
     // (e.g. company_name from a webhook import). The input names use
     // the same 'cf_<key>' convention so server merge logic stays the
@@ -5974,8 +6575,10 @@ function renderDialerSettings() {
           h('div', { class: 'actions' },
             h('button', { class: 'btn primary', onclick: () => syncRecordings() }, '🔄 Sync now'),
             h('button', { class: 'btn', onclick: () => syncRecordings({ full: true }) }, '⚡ Re-sync all'),
+            /* REC_RETRY_v1 */ h('button', { class: 'btn primary', title: 'Clears uploaded markers + re-scans every file. Use after a server-side fix.', onclick: async () => { if (!confirm('Reset upload markers and re-scan EVERY file in the folder?')) return; localStorage.removeItem('rec_uploaded'); localStorage.removeItem('rec_last_sync'); toast('Markers cleared — running full sync now…', 'ok'); await syncRecordings({ full: true }); } }, '🩹 Fresh sync (after fix)'),
             h('button', { class: 'btn', onclick: () => openRecordingSyncDebug() }, '🐞 Debug sync'),
             h('button', { class: 'btn', onclick: () => openRecordingSyncDiagnostics() }, '🩺 Sync diagnostics'),
+            /* REC_SELFTEST_v1 */ h('button', { class: 'btn primary', title: 'Run an end-to-end self-test of the recording pipeline. Shows pass/fail for each stage.', onclick: () => openRecordingSelftest() }, '🧪 Run self-test'),
             h('button', { class: 'btn ghost', onclick: () => { setupRecordingFolder(); } }, 'Change folder'),
             h('button', { class: 'btn ghost', onclick: () => { if (confirm('Forget folder + clear sync history?')) resetRecordingFolder(); } }, 'Reset')
           ),
@@ -6307,7 +6910,372 @@ function refreshDialerHistory() {
 }
 
 /* ---------------- Pipeline ---------------- */
+// RE_CP_PIPELINE_VIEW_v1 (2026-05-21) — replace the Pipeline page with the
+// CP CRM Process card-grid layout (3-row infographic style) when the Real
+// Estate industry pack is installed. Each card shows the stage number, icon,
+// title, action bullets, lead count, and status pill - matching the user's
+// canonical CP CRM Process diagram. Click a card to expand inline and show
+// the leads currently in that stage.
+//
+// Falls back to the standard kanban-lane layout for tenants without RE pack.
+const _RE_STAGE_META = [
+  { n: 1,  match: ['New Lead'],              icon: '📣', color: '#a855f7', bullets: ['Source: CP, Call, Website, WhatsApp, Walk-in', 'Lead details capture'] },
+  { n: 2,  match: ['Lead Captured'],         icon: '📝', color: '#3b82f6', bullets: ['Name, Mobile, Email', 'Requirement (Budget, BHK, Location)', 'Source / CP name'] },
+  { n: 3,  match: ['Assigned'],              icon: '👤', color: '#06b6d4', bullets: ['Assign to Executive / CP Manager', 'Auto notification to owner'] },
+  { n: 4,  match: ['In Follow-up','Follow Up','Follow-up'], icon: '📞', color: '#22c55e', bullets: ['Call within 5–10 min', 'Discuss requirement, budget, timeline', 'Update in CRM'] },
+  { n: 5,  match: ['Presentation Done'],     icon: '🏢', color: '#f59e0b', bullets: ['Brochure, Cost sheet', 'Floor plan, Location video', 'Send & Update'] },
+  { n: 6,  match: ['Site Visit Fixed','Site Visit Scheduled','Site Visit Planned'], icon: '📅', color: '#ec4899', bullets: ['Date & time fix', 'Send details to client', 'Update in CRM'] },
+  { n: 7,  match: ['Site Visit Done'],       icon: '👣', color: '#0ea5e9', bullets: ['Visit completed', 'Client feedback (likes / dislikes)', 'Update in CRM'] },
+  { n: 8,  match: ['Offer Given'],           icon: '🤝', color: '#f97316', bullets: ['Price discussion', 'Discount / benefits', 'Payment plan & update'] },
+  { n: 9,  match: ['Booked','Token Amount Done','Token Paid'], icon: '✅', color: '#16a34a', bullets: ['Client agrees', 'Token amount received', 'Update in CRM'] },
+  { n: 10, match: ['Documents Collected','Agreement Signed'], icon: '📋', color: '#8b5cf6', bullets: ['Booking form', 'KYC docs (PAN, Aadhaar)', 'Cheque / payment details'] },
+  { n: 11, match: ['Commission In Progress'],icon: '💰', color: '#0284c7', bullets: ['CP agreement', 'Commission slab', 'Stage-wise tracking, TDS'] },
+  { n: 12, match: ['Paid','Possession Given','Registered'], icon: '🏦', color: '#15803d', bullets: ['Commission due', 'Approval', 'Payment released, payout receipt'] }
+];
+function _reFindStageStatus(allStatuses, names) {
+  // Backward-compat: returns the FIRST matching status (used by stage panel).
+  for (const nm of names) {
+    const hit = (allStatuses || []).find(s => String(s.name || '').toLowerCase() === nm.toLowerCase());
+    if (hit) return hit;
+  }
+  return null;
+}
+// Returns ALL statuses whose name matches any of the alias names — so the
+// Pipeline card aggregates leads from 'Site Visit Planned' + 'Site Visit Fixed'
+// into the same stage 6 card.
+function _reFindAllStageStatuses(allStatuses, names) {
+  const lower = names.map(n => n.toLowerCase());
+  return (allStatuses || []).filter(s => lower.includes(String(s.name || '').toLowerCase()));
+}
+function _rePipelineCardClick(card, stage, leads, allStatuses) {
+  // Toggle inline body with the leads in this stage.
+  const existing = card.querySelector('.re-pipe-card-body');
+  if (existing) { existing.remove(); card.classList.remove('open'); return; }
+  const body = document.createElement('div');
+  body.className = 're-pipe-card-body';
+  body.style.cssText = 'margin-top:.5rem;border-top:1px solid #eee;padding-top:.5rem;';
+  if (!leads.length) {
+    body.style.cssText = 'font-size:.78rem;color:#888;padding:.4rem 0;';
+    body.textContent = 'No leads in this stage yet.';
+    card.appendChild(body);
+    card.classList.add('open');
+    return;
+  }
+  // Helper: format a stage-specific chip string from the lead's extra_json
+  const stageName = (stage && stage.match && stage.match[0]) || '';
+  const stageFields = (typeof _RE_STAGE_FIELDS !== 'undefined') ? _RE_STAGE_FIELDS[stageName] : null;
+  const fmtChip = (val, key) => {
+    if (val == null || val === '') return null;
+    if (/_at$/.test(key) || /_date$/.test(key)) {
+      try {
+        const d = new Date(val);
+        if (!isNaN(d)) return d.toLocaleDateString() + (val.length > 10 ? ' ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '');
+      } catch(_) {}
+    }
+    if (/_amount$/.test(key) || /_pct$/.test(key)) return '₹ ' + Number(val).toLocaleString('en-IN');
+    return String(val);
+  };
+  leads.slice(0, 50).forEach(l => {
+    const row = document.createElement('div');
+    row.style.cssText = 'padding:.45rem 0;border-bottom:1px solid #f4f4f5;cursor:pointer;font-size:.8rem;';
+    row.onclick = (ev) => { ev.stopPropagation(); openLeadModal(l.id); };
+
+    const topRow = document.createElement('div');
+    topRow.style.cssText = 'display:flex;justify-content:space-between;gap:.4rem;align-items:center;';
+    const left = document.createElement('div');
+    left.style.cssText = 'display:flex;flex-direction:column;';
+    const name = document.createElement('div'); name.style.fontWeight = '600'; name.textContent = l.name || '—';
+    const meta = document.createElement('div'); meta.style.cssText = 'color:#666;font-size:.72rem;';
+    meta.textContent = (l.phone || '') + ' · ' + (l.assigned_name || 'unassigned');
+    left.appendChild(name); left.appendChild(meta);
+    topRow.appendChild(left);
+    if (l.next_followup_at) {
+      const fu = document.createElement('div');
+      const overdue = new Date(l.next_followup_at) < new Date();
+      fu.style.cssText = 'font-size:.7rem;color:' + (overdue ? '#b91c1c' : '#666') + ';';
+      try { fu.textContent = fmtDate(l.next_followup_at, 'relative'); } catch(_) { fu.textContent = ''; }
+      topRow.appendChild(fu);
+    }
+    row.appendChild(topRow);
+
+    // RE_STAGE_DATA_v1 — chips for stage-specific fields read from lead.extra
+    if (stageFields && stageFields.length) {
+      const ex = l.extra || {};
+      const chips = [];
+      stageFields.forEach(f => {
+        const v = ex[f.key];
+        if (v != null && v !== '') {
+          const formatted = fmtChip(v, f.key);
+          if (formatted) chips.push({ label: f.label.replace(/^[^\s]+\s/, ''), val: formatted });
+        }
+      });
+      if (chips.length) {
+        const chipRow = document.createElement('div');
+        chipRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:.25rem;margin-top:.3rem;';
+        chips.forEach(c => {
+          const chip = document.createElement('span');
+          chip.style.cssText = 'background:#eef2ff;color:#3730a3;padding:.1rem .4rem;border-radius:6px;font-size:.7rem;';
+          chip.textContent = c.label + ': ' + c.val;
+          chipRow.appendChild(chip);
+        });
+        row.appendChild(chipRow);
+      } else {
+        const hint = document.createElement('div');
+        hint.style.cssText = 'font-size:.68rem;color:#94a3b8;margin-top:.25rem;font-style:italic;';
+        hint.textContent = 'Tap to fill stage data: ' + stageFields.map(f => f.label.replace(/^[^\s]+\s/, '')).slice(0, 3).join(' · ');
+        row.appendChild(hint);
+      }
+    }
+    body.appendChild(row);
+  });
+  if (leads.length > 50) {
+    const more = document.createElement('div');
+    more.style.cssText = 'font-size:.7rem;color:#888;margin-top:.3rem;';
+    more.textContent = '+ ' + (leads.length - 50) + ' more';
+    body.appendChild(more);
+  }
+  card.appendChild(body);
+  card.classList.add('open');
+}
+// GENERIC_PIPE_GRID_v1 (2026-05-21) — card-grid Pipeline for ALL tenants.
+// Builds the same layout as _reRenderCPProcessPipeline but using whatever
+// statuses the tenant has, sorted by sort_order. Re-uses the RE canonical
+// bullets when a status NAME matches a canonical RE stage name; otherwise
+// shows a brief placeholder so non-real-estate tenants get a useful card
+// without canned content.
+function _genericRenderCardGridPipeline(view, pipeline, allStatuses) {
+  view.innerHTML = '';
+  view.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '.5rem', marginBottom: '.5rem', flexWrap: 'wrap' } },
+    h('div', {},
+      h('h2', { style: { margin: 0 }}, '\ud83d\udcc8 Lead Pipeline \u2014 New Lead To Sales'),
+      h('p', { class: 'muted', style: { fontSize: '.82rem', margin: '.2rem 0 0' } }, 'Click any stage to expand and see the leads currently sitting in that stage. Click a lead row to open the full lead.')
+    ),
+    h('button', { class: 'btn ghost sm', type: 'button', onclick: () => { window._rePipeForceKanban = true; VIEWS.pipeline(view); } }, '\ud83d\udcca Switch to Kanban view')
+  ));
+
+  const sorted = [...(allStatuses || [])].sort((a, b) =>
+    (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0)
+  );
+
+  const grid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '.7rem', marginTop: '.6rem' } });
+
+  sorted.forEach((status, idx) => {
+    const entry = pipeline.find(p => Number(p.id) === Number(status.id));
+    const leads = (entry && entry.leads) || [];
+    const count = leads.length;
+    const color = status.color || '#6366f1';
+    // If the status name matches a RE canonical stage, reuse its bullets.
+    let icon = '\u26AB';
+    let bullets = [];
+    if (typeof _RE_STAGE_META !== 'undefined') {
+      const meta = _RE_STAGE_META.find(m => m.match.some(n => n.toLowerCase() === String(status.name || '').toLowerCase()));
+      if (meta) { icon = meta.icon; bullets = meta.bullets; }
+    }
+    if (!bullets.length) {
+      // Generic placeholder bullets — encourage reps to take an action.
+      bullets = [
+        'Reach out and qualify',
+        'Update lead notes / next follow-up'
+      ];
+    }
+
+    const card = h('div', { class: 're-pipe-card', style: {
+      border: '2px solid ' + color + '55',
+      borderRadius: '12px',
+      padding: '.75rem .85rem',
+      background: '#fff',
+      boxShadow: '0 1px 4px rgba(0,0,0,.04)',
+      cursor: 'pointer',
+      transition: 'transform .15s, box-shadow .15s',
+      position: 'relative'
+    }});
+    card.onmouseenter = () => { card.style.transform = 'translateY(-2px)'; card.style.boxShadow = '0 4px 12px rgba(0,0,0,.08)'; };
+    card.onmouseleave = () => { card.style.transform = ''; card.style.boxShadow = '0 1px 4px rgba(0,0,0,.04)'; };
+    card.onclick = (ev) => {
+      if (ev.target.closest('a, button, .re-pipe-card-body')) return;
+      _rePipelineCardClick(card, { match: [status.name] }, leads, allStatuses);
+    };
+
+    card.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem' }},
+      h('div', { style: { minWidth: '30px', height: '30px', borderRadius: '7px', background: color, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: '.9rem' }}, String(idx + 1)),
+      h('div', { style: { flex: 1, minWidth: 0 }},
+        h('div', { style: { fontWeight: 700, fontSize: '.95rem', color: color, display: 'flex', alignItems: 'center', gap: '.3rem' }},
+          h('span', {}, icon),
+          h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}, status.name)
+        )
+      ),
+      h('div', { style: { background: count > 0 ? color : '#e5e7eb', color: count > 0 ? '#fff' : '#666', padding: '.15rem .5rem', borderRadius: '999px', fontWeight: 700, fontSize: '.85rem', minWidth: '32px', textAlign: 'center' }}, String(count))
+    ));
+
+    card.appendChild(h('ul', { style: { margin: '.4rem 0 .35rem 1.05rem', padding: 0, fontSize: '.76rem', color: '#444', lineHeight: '1.35' }},
+      ...bullets.map(b => h('li', { style: { marginBottom: '.1rem' }}, b))
+    ));
+
+    card.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '.35rem' }},
+      h('div', { style: { background: '#f1f5f9', padding: '.15rem .45rem', borderRadius: '999px', fontSize: '.68rem', color: '#334155', fontWeight: 600 }}, 'Status: ' + status.name),
+      count > 0
+        ? h('div', { style: { fontSize: '.7rem', color: color, fontWeight: 600 }}, count + ' lead' + (count === 1 ? '' : 's') + ' \u2192')
+        : h('div', { style: { fontSize: '.7rem', color: '#aaa' }}, 'empty')
+    ));
+
+    grid.appendChild(card);
+  });
+
+  view.appendChild(grid);
+
+  const totalLeads = pipeline.reduce((a, p) => a + ((p.leads || []).length), 0);
+  const active = pipeline.filter(p => (p.leads || []).length > 0).length;
+  view.appendChild(h('div', { style: { marginTop: '1rem', padding: '.6rem .8rem', background: '#f8fafc', borderRadius: '10px', fontSize: '.78rem', color: '#475569', display: 'flex', gap: '1rem', flexWrap: 'wrap' }},
+    h('span', {}, '\ud83d\udcca Total in pipeline: ', h('b', { style: { color: '#0f172a' }}, totalLeads)),
+    h('span', {}, '\ud83d\udfe2 Active stages: ', h('b', { style: { color: '#0f172a' }}, active)),
+    h('span', { class: 'muted' }, 'Empty stages stay visible to remind reps to fill the pipeline.')
+  ));
+}
+
+function _reRenderCPProcessPipeline(view, pipeline, allStatuses) {
+  view.innerHTML = '';
+  // Header
+  view.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '.5rem', marginBottom: '.5rem', flexWrap: 'wrap' } },
+    h('div', {},
+      h('h2', { style: { margin: 0 }}, '📈 Lead Pipeline — New Lead To Sales'),
+      h('p', { class: 'muted', style: { fontSize: '.82rem', margin: '.2rem 0 0' } }, 'Click any stage to expand and see the leads currently sitting in that stage. Click a lead row to open the full lead with the 12-stage strip.')
+    ),
+    h('button', { class: 'btn ghost sm', type: 'button', onclick: () => { window._rePipeForceKanban = true; VIEWS.pipeline(view); } }, '📊 Switch to Kanban view')
+  ));
+
+  // 12-card grid
+  const grid = h('div', {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+      gap: '.7rem',
+      marginTop: '.6rem'
+    }
+  });
+
+  _RE_STAGE_META.forEach(meta => {
+    // RE_STAGE_AGGREGATE_v1 — combine leads from EVERY matching status name
+    // so the demo's old 'Site Visit Planned' + the seeded 'Site Visit Fixed'
+    // BOTH count toward stage 6's card.
+    const matchedStatuses = _reFindAllStageStatuses(allStatuses, meta.match);
+    const status = matchedStatuses[0] || null;
+    let leads = [];
+    matchedStatuses.forEach(st => {
+      const entry = pipeline.find(p => Number(p.id) === Number(st.id));
+      if (entry && Array.isArray(entry.leads)) leads = leads.concat(entry.leads);
+    });
+    const count = leads.length;
+    const usedName = matchedStatuses.length > 1
+      ? matchedStatuses.map(s => s.name).join(' / ')
+      : (status ? status.name : meta.match[0]);
+
+    const card = h('div', { class: 're-pipe-card', style: {
+      border: '2px solid ' + meta.color + '55',
+      borderRadius: '12px',
+      padding: '.75rem .85rem',
+      background: '#fff',
+      boxShadow: '0 1px 4px rgba(0,0,0,.04)',
+      cursor: 'pointer',
+      transition: 'transform .15s, box-shadow .15s',
+      position: 'relative'
+    }});
+    card.onmouseenter = () => { card.style.transform = 'translateY(-2px)'; card.style.boxShadow = '0 4px 12px rgba(0,0,0,.08)'; };
+    card.onmouseleave = () => { card.style.transform = ''; card.style.boxShadow = '0 1px 4px rgba(0,0,0,.04)'; };
+    card.onclick = (ev) => {
+      if (ev.target.closest('a, button, .re-pipe-card-body')) return;
+      _rePipelineCardClick(card, meta, leads, allStatuses);
+    };
+
+    // Header row: number badge + icon + title + count
+    card.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem' }},
+      h('div', { style: {
+        minWidth: '30px', height: '30px', borderRadius: '7px',
+        background: meta.color, color: '#fff',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontWeight: 700, fontSize: '.9rem'
+      }}, String(meta.n)),
+      h('div', { style: { flex: 1, minWidth: 0 }},
+        h('div', { style: { fontWeight: 700, fontSize: '.95rem', color: meta.color, display: 'flex', alignItems: 'center', gap: '.3rem' }},
+          h('span', {}, meta.icon),
+          h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}, meta.match[0])
+        )
+      ),
+      h('div', { style: {
+        background: count > 0 ? meta.color : '#e5e7eb',
+        color: count > 0 ? '#fff' : '#666',
+        padding: '.15rem .5rem',
+        borderRadius: '999px',
+        fontWeight: 700,
+        fontSize: '.85rem',
+        minWidth: '32px',
+        textAlign: 'center'
+      }}, String(count))
+    ));
+
+    // Bullets
+    card.appendChild(h('ul', { style: {
+      margin: '.4rem 0 .35rem 1.05rem',
+      padding: 0,
+      fontSize: '.76rem',
+      color: '#444',
+      lineHeight: '1.35'
+    } },
+      ...meta.bullets.map(b => h('li', { style: { marginBottom: '.1rem' } }, b))
+    ));
+
+    // Status pill at bottom + click hint
+    card.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '.35rem' } },
+      h('div', { style: {
+        background: '#f1f5f9',
+        padding: '.15rem .45rem',
+        borderRadius: '999px',
+        fontSize: '.68rem',
+        color: '#334155',
+        fontWeight: 600
+      }}, 'Status: ' + usedName),
+      count > 0
+        ? h('div', { style: { fontSize: '.7rem', color: meta.color, fontWeight: 600 } }, count + ' lead' + (count === 1 ? '' : 's') + ' →')
+        : h('div', { style: { fontSize: '.7rem', color: '#aaa' } }, 'empty')
+    ));
+
+    grid.appendChild(card);
+  });
+
+  view.appendChild(grid);
+
+  // Footer — summary stats
+  const totalLeads = pipeline.reduce((a, p) => a + ((p.leads || []).length), 0);
+  const active = pipeline.filter(p => (p.leads || []).length > 0).length;
+  view.appendChild(h('div', { style: {
+    marginTop: '1rem', padding: '.6rem .8rem', background: '#f8fafc',
+    borderRadius: '10px', fontSize: '.78rem', color: '#475569',
+    display: 'flex', gap: '1rem', flexWrap: 'wrap'
+  }},
+    h('span', {}, '📊 Total in pipeline: ', h('b', { style: { color: '#0f172a' }}, totalLeads)),
+    h('span', {}, '🟢 Active stages: ', h('b', { style: { color: '#0f172a' }}, active)),
+    h('span', { class: 'muted' }, 'Empty stages stay visible to remind reps to fill the pipeline.')
+  ));
+}
+
 VIEWS.pipeline = async (view) => {
+  // GENERIC_PIPE_GRID_v1 (2026-05-21) — render the card-grid Pipeline layout
+  // for EVERY tenant by default. If Real Estate pack is installed, use the
+  // RE-specific renderer with canonical 12-stage bullets; otherwise use the
+  // generic renderer that pulls the tenant's own statuses. Either way, the
+  // user can toggle to standard kanban via the header button.
+  if (!window._rePipeForceKanban) {
+    try {
+      const { statuses = [] } = CRM.cache;
+      const pipeline = await api('api_leads_pipeline');
+      const useREGrid = (typeof _reIsActive === 'function') && _reIsActive();
+      if (useREGrid) _reRenderCPProcessPipeline(view, pipeline, statuses);
+      else _genericRenderCardGridPipeline(view, pipeline, statuses);
+      return;
+    } catch (e) {
+      console.warn('[pipeline grid] fallback to kanban:', e.message);
+      // fall through to standard view
+    }
+  }
   // Filter state (stored on window so it survives re-render).
   window._pipePicked = window._pipePicked || { statuses: [], sources: [], users: [] };
   const _pipeFilters = {
@@ -7818,6 +8786,13 @@ VIEWS.quotations = async (view) => {
           h('td', { class: 'muted' }, r.sent_at ? fmtDate(r.sent_at, 'relative') : '—'),
           h('td', {},
             h('button', { class: 'btn xs', title: 'Edit', onclick: () => openQuotationModal(r.id) }, '✎'),
+            h('button', { class: 'btn xs ghost', title: 'Download as PDF', onclick: async () => {
+              try {
+                const u = await api('api_quotations_public_url', r.id);
+                const sep = u.url.indexOf('?') === -1 ? '?' : '&';
+                window.open(u.url + sep + 'autoprint=1', '_blank');
+              } catch (e) { toast(e.message, 'err'); }
+            } }, '📄'),
             h('button', { class: 'btn xs ghost', title: 'View public link', onclick: async () => {
               try { const u = await api('api_quotations_public_url', r.id); window.open(u.url, '_blank'); }
               catch (e) { toast(e.message, 'err'); }
@@ -7840,13 +8815,19 @@ VIEWS.quotations = async (view) => {
 };
 
 async function openQuotationModal(qid, prefillLead) {
-  const m = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
-  const card = h('div', { class: 'modal', style: { maxWidth: '780px', maxHeight: '90vh', overflow: 'auto' } });
+  const m = h('div', { class: 'modal-backdrop q-modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const card = h('div', { class: 'modal q-modal', style: { width: '95vw', maxWidth: '1280px', maxHeight: '95vh', overflow: 'auto', padding: '1.25rem 1.5rem' } });
   m.appendChild(card);
   document.body.appendChild(m);
 
   let existing = null;
   if (qid) {
+    // QUOTE_IMG_FIX_v1 — pre-warm the products cache so _imgUrlForRow's
+    // fallback works even if the user never opened the Products page.
+    if (!CRM.cache) CRM.cache = {};
+    if (!Array.isArray(CRM.cache.products) || !CRM.cache.products.length) {
+      try { CRM.cache.products = await api('api_products_list') || []; } catch (_) { CRM.cache.products = []; }
+    }
     try { const r = await api('api_quotations_get', qid); existing = { ...(r.quotation || {}), items: r.items || [] }; }
     catch (e) { card.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
   }
@@ -7861,6 +8842,22 @@ async function openQuotationModal(qid, prefillLead) {
     customer_address: prefillLead.address || prefillLead.location || ''
   } : { items: [], currency: 'INR', tax_pct: 18, discount_pct: 0, issue_date: new Date().toISOString().slice(0, 10) };
   const q = existing || seed;
+
+  // QUOTE_DEFAULT_TC_v2 — for brand new quotes, pre-fill T&C + Notes
+  // from the tenant-level defaults configured in Settings → Quotation
+  // Defaults. Falls back silently if the config endpoint isn't reachable.
+  if (!qid) {
+    try {
+      if (!q.terms) {
+        const t = await api('api_admin_getConfig', 'QUOTATION_DEFAULT_TERMS');
+        if (t && t.value) q.terms = t.value;
+      }
+      if (!q.notes) {
+        const n = await api('api_admin_getConfig', 'QUOTATION_DEFAULT_NOTES');
+        if (n && n.value) q.notes = n.value;
+      }
+    } catch (_) { /* defaults not set yet — that's fine */ }
+  }
 
   card.appendChild(h('h3', { style: { marginTop: 0 } }, qid ? '✎ Edit quotation ' + (q.number || '') : '+ New quotation'));
 
@@ -7885,7 +8882,7 @@ async function openQuotationModal(qid, prefillLead) {
 
   // ---- Items ----
   card.appendChild(h('h4', { style: { marginBottom: '.25rem' } }, 'Line items'));
-  const itemsWrap = h('div', { style: { border: '1px solid #e2e8f0', borderRadius: '6px', padding: '.5rem' } });
+  const itemsWrap = h('div', { class: 'q-items', style: { border: '1px solid #e2e8f0', borderRadius: '6px', padding: '.5rem' } });
   const totalsLine = h('div', { style: { textAlign: 'right', marginTop: '.5rem', fontWeight: '700' } });
   const discInp = h('input', { type: 'number', value: q.discount_pct || 0, step: '0.01', min: 0, max: 100, style: { width: '5rem' } });
   const taxInp  = h('input', { type: 'number', value: q.tax_pct      || 18, step: '0.01', min: 0, max: 100, style: { width: '5rem' } });
@@ -7929,13 +8926,43 @@ async function openQuotationModal(qid, prefillLead) {
     );
     return sel;
   }
+  // QUOTE_UI_v2 (2026-05-21) — Widen Qty/Price columns, add product image
+  //   thumbnail in each row, hydrate from item.product_image_url (saved on
+  //   the quotation_items row) OR from the product master record.
+  function _imgUrlForRow(it, prodIdSelected) {
+    // Priority: line-saved image > product master image (lookup by id)
+    if (it && it.product_image_url) return it.product_image_url;
+    const pid = Number(prodIdSelected || (it && it.product_id) || 0);
+    if (pid) {
+      const products = (CRM.cache && CRM.cache.products) || [];
+      const hit = products.find(p => Number(p.id) === pid);
+      if (hit && hit.image_url) return hit.image_url;
+    }
+    return '';
+  }
   function addItem(seed) {
     const it = seed || { description: '', quantity: 1, unit_price: 0, discount_pct: 0 };
-    const row = h('div', { class: 'q-item', style: { display: 'grid', gridTemplateColumns: '1.2fr 2fr .7fr .9fr .6fr 1fr 28px', gap: '.4rem', alignItems: 'center', marginBottom: '.3rem' } });
+    const row = h('div', { class: 'q-item', style: { display: 'grid', gridTemplateColumns: '48px 1fr 1.5fr 1.2fr 1.1fr .9fr 1.1fr 28px', gap: '.4rem', alignItems: 'center', marginBottom: '.3rem' } });
     const prodSel = _productSelect(it);
+    // Image thumbnail (48x48) — shows product master / line-saved image
+    const initialImg = _imgUrlForRow(it, prodSel.value);
+    const imgWrap = h('div', { style: { width: '48px', height: '48px', borderRadius: '6px', border: '1px solid #e2e8f0', overflow: 'hidden', background: '#f8fafc', display: 'flex', alignItems: 'center', justifyContent: 'center' }});
+    const imgEl = h('img', {
+      src: initialImg || '',
+      style: { width: '100%', height: '100%', objectFit: 'cover', display: initialImg ? 'block' : 'none' },
+      onerror: (ev) => { ev.target.style.display = 'none'; imgPh.style.display = 'flex'; }
+    });
+    const imgPh = h('div', { style: { fontSize: '.65rem', color: '#94a3b8', display: initialImg ? 'none' : 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%' }}, '📦');
+    imgWrap.appendChild(imgEl); imgWrap.appendChild(imgPh);
     const desc = h('input', { type: 'text', placeholder: 'Description', value: it.description || '', style: { width: '100%' } });
     prodSel.onchange = () => {
       const opt = prodSel.options[prodSel.selectedIndex];
+      // Update image thumbnail on product change
+      const url = _imgUrlForRow(it, prodSel.value);
+      if (url) { imgEl.src = url; imgEl.style.display = 'block'; imgPh.style.display = 'none'; }
+      else     { imgEl.style.display = 'none';  imgPh.style.display = 'flex'; }
+      // Remember URL on the row so save() can persist it.
+      row._imageUrl = url;
       if (!opt || !opt.value) return;
       const name = opt.getAttribute('data-name') || '';
       const price = Number(opt.getAttribute('data-price') || 0);
@@ -7943,27 +8970,39 @@ async function openQuotationModal(qid, prefillLead) {
       if (price && Number(pr.value || 0) === 0) pr.value = String(price);
       recompute();
     };
-    const qty  = h('input', { 'data-k': 'qty',   type: 'number', value: it.quantity || 1, step: '0.001', min: 0 });
-    const pr   = h('input', { 'data-k': 'price', type: 'number', value: it.unit_price || 0, step: '0.01', min: 0 });
-    const dp   = h('input', { 'data-k': 'disc',  type: 'number', value: it.discount_pct || 0, step: '0.01', min: 0, max: 100 });
+    const qty  = h('input', { 'data-k': 'qty',   type: 'number', value: it.quantity || 1, step: '0.001', min: 0, style: { width: '100%', minWidth: '70px', padding: '4px 6px', textAlign: 'right' } });
+    const pr   = h('input', { 'data-k': 'price', type: 'number', value: it.unit_price || 0, step: '0.01', min: 0, style: { width: '100%' } });
+    const dp   = h('input', { 'data-k': 'disc',  type: 'number', value: it.discount_pct || 0, step: '0.01', min: 0, max: 100, style: { width: '100%' } });
     const amt  = h('div', { 'data-k': 'amt', style: { textAlign: 'right', fontFamily: 'monospace' } }, '₹0.00');
     const del  = h('button', { class: 'btn xs ghost danger', type: 'button', onclick: () => { row.remove(); recompute(); } }, '✕');
     [qty, pr, dp].forEach(el => el.addEventListener('input', recompute));
     row._desc = desc; row._qty = qty; row._pr = pr; row._dp = dp;
     row._prodSel = prodSel;
-    row.appendChild(prodSel); row.appendChild(desc); row.appendChild(qty); row.appendChild(pr); row.appendChild(dp); row.appendChild(amt); row.appendChild(del);
-    itemsWrap.appendChild(row);
+    row._imageUrl = initialImg || null;
+    row.appendChild(imgWrap); row.appendChild(prodSel); row.appendChild(desc); row.appendChild(qty); row.appendChild(pr); row.appendChild(dp); row.appendChild(amt); row.appendChild(del);
+    // QUOTE_FULLPAGE_v1: insertBefore the add-button so new rows land
+    // ABOVE it and the button stays anchored at the bottom of the list.
+    if (addBtn && addBtn.parentNode === itemsWrap) itemsWrap.insertBefore(row, addBtn);
+    else itemsWrap.appendChild(row);
     recompute();
     return row;
   }
   // Header row
-  itemsWrap.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '1.2fr 2fr .7fr .9fr .6fr 1fr 28px', gap: '.4rem', fontSize: '.78rem', color: '#64748b', marginBottom: '.3rem' } },
-    h('div', {}, 'Product'), h('div', {}, 'Description'), h('div', {}, 'Qty'), h('div', {}, 'Unit price'), h('div', {}, 'Disc %'),
+  itemsWrap.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '48px 1fr 1.5fr 1.2fr 1.1fr .9fr 1.1fr 28px', gap: '.4rem', fontSize: '.78rem', color: '#64748b', marginBottom: '.3rem', fontWeight: 600 } },
+    h('div', {}, 'Image'), h('div', {}, 'Product'), h('div', {}, 'Description'), h('div', {}, 'Qty'), h('div', {}, 'Unit price'), h('div', {}, 'Disc %'),
     h('div', { style: { textAlign: 'right' } }, 'Amount'), h('div', {})
   ));
+  // QUOTE_FULLPAGE_v1: create addBtn FIRST so addItem can insertBefore it.
+  // Big primary-styled button so it's obvious you can keep adding items.
+  const addBtn = h('button', {
+    class: 'btn primary',
+    type: 'button',
+    style: { marginTop: '.75rem', width: '100%', padding: '.5rem', fontWeight: '600' },
+    onclick: () => addItem()
+  }, '\u2795 Add another product / line item');
   (q.items || []).forEach(it => addItem(it));
   if (!q.items || !q.items.length) addItem();
-  itemsWrap.appendChild(h('button', { class: 'btn sm ghost', type: 'button', style: { marginTop: '.5rem' }, onclick: () => addItem() }, '+ Add line item'));
+  itemsWrap.appendChild(addBtn);
   card.appendChild(itemsWrap);
 
   card.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '.5rem', marginTop: '.5rem' } },
@@ -7975,8 +9014,22 @@ async function openQuotationModal(qid, prefillLead) {
 
   const notesInp = h('textarea', { rows: 2, placeholder: 'Internal notes (visible to customer)', style: { width: '100%' } }, q.notes || '');
   const termsInp = h('textarea', { rows: 3, placeholder: 'Terms & conditions (e.g. 50% advance, balance on delivery)', style: { width: '100%' } }, q.terms || '');
-  card.appendChild(h('div', { class: 'field' }, h('label', {}, 'Notes'), notesInp));
-  card.appendChild(h('div', { class: 'field' }, h('label', {}, 'Terms & conditions'), termsInp));
+  card.appendChild(h('div', { class: 'field q-field-notes' }, h('label', {}, 'Notes'), notesInp));
+  // QUOTE_DEFAULT_TC_v2 — T&C defaults live in Settings → Quotation Defaults
+  // (admin-only). The textarea below is for THIS quote only; tenant-wide
+  // template editing happens there.
+  card.appendChild(h('div', { class: 'field q-field-terms' },
+    h('label', {},
+      'Terms & conditions',
+      h('a', {
+        href: '#/admin',
+        style: { fontSize: '.75rem', color: '#6366f1', textDecoration: 'underline', marginLeft: '.5rem' },
+        title: 'Edit the default T&C template that auto-fills every new quotation',
+        onclick: (ev) => { ev.preventDefault(); m.remove(); location.hash = '#/admin'; setTimeout(() => showAdminTab && showAdminTab('quotation'), 150); }
+      }, '⚙ Edit default template')
+    ),
+    termsInp
+  ));
 
   // ---- Save / Send ----
   const saveBtn = h('button', { class: 'btn primary' }, '💾 Save');
@@ -7992,7 +9045,9 @@ async function openQuotationModal(qid, prefillLead) {
       quantity: Number(row._qty.value || 0),
       unit_price: Number(row._pr.value || 0),
       discount_pct: Number(row._dp.value || 0),
-      product_id: row._prodSel && row._prodSel.value ? Number(row._prodSel.value) : null
+      product_id: row._prodSel && row._prodSel.value ? Number(row._prodSel.value) : null,
+      // QUOTE_UI_v2 — include image url so server can persist on quotation_items
+      product_image_url: row._imageUrl || ''
     })).filter(it => it.description);
     try {
       const r = await api('api_quotations_save', {
@@ -8027,8 +9082,27 @@ async function openQuotationModal(qid, prefillLead) {
   waBtn.onclick = async () => {
     if (!phoneInp.value) return toast('Add customer phone first', 'err');
     if (!currentId) await save();
-    try { const r = await api('api_quotations_send_whatsapp', currentId); toast('💬 Sent to ' + r.sent_to, 'ok'); }
-    catch (e) { toast(e.message, 'err'); }
+    waBtn.disabled = true;
+    const _origLabel = waBtn.textContent;
+    waBtn.textContent = '⏳ Sending…';
+    try {
+      const r = await api('api_quotations_send_whatsapp', currentId);
+      toast('💬 Sent to ' + r.sent_to, 'ok');
+    } catch (e) {
+      // QUOTE_WA_ERROR_v1 — give actionable guidance for the most common
+      // WhatsApp send failures so the user knows what to fix.
+      const msg = String(e.message || '');
+      let hint = '';
+      if (/WhatsApp not connected/i.test(msg)) hint = ' Open Settings → WhatsApp and connect a Cloud-API number first.';
+      else if (/WhatsApp module not available/i.test(msg)) hint = ' Server-side WhatsApp module not loaded — contact support.';
+      else if (/24-hour|outside.*window|re-?engagement/i.test(msg)) hint = ' Customer must message you first (24-hr WhatsApp policy) or use a pre-approved template.';
+      else if (/invalid|wa_id|phone/i.test(msg)) hint = ' Check the customer phone number (must include country code, e.g. +91...).';
+      else if (/token|expired|OAuth/i.test(msg)) hint = ' WhatsApp token expired — reconnect under Settings → WhatsApp.';
+      toast('❌ ' + msg + hint, 'err');
+    } finally {
+      waBtn.disabled = false;
+      waBtn.textContent = _origLabel;
+    }
   };
   linkBtn.onclick = async () => {
     if (!currentId) await save();
@@ -8036,8 +9110,20 @@ async function openQuotationModal(qid, prefillLead) {
     catch (e) { toast(e.message, 'err'); }
   };
 
-  card.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', marginTop: '1rem', justifyContent: 'space-between', flexWrap: 'wrap' } },
-    h('div', { style: { display: 'flex', gap: '.4rem' } }, saveBtn, emailBtn, waBtn, linkBtn),
+  // QUOTE_PDF_v1 — download-as-PDF button. Opens the public viewer with
+  // ?autoprint=1 which auto-triggers the browser's Save-as-PDF dialog.
+  const pdfBtn = h('button', { class: 'btn', style: { background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' }, title: 'Download as PDF — opens the printable view and triggers Save-as-PDF' }, '\ud83d\udcc4 Download PDF');
+  pdfBtn.onclick = async () => {
+    if (!currentId) await save();
+    try {
+      const u = await api('api_quotations_public_url', currentId);
+      const sep = u.url.indexOf('?') === -1 ? '?' : '&';
+      window.open(u.url + sep + 'autoprint=1', '_blank');
+    } catch (e) { toast(e.message, 'err'); }
+  };
+
+  card.appendChild(h('div', { class: 'q-actions', style: { display: 'flex', gap: '.5rem', marginTop: '1rem', justifyContent: 'space-between', flexWrap: 'wrap' } },
+    h('div', { class: 'q-actions-left', style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap' } }, saveBtn, pdfBtn, emailBtn, waBtn, linkBtn),
     h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Close')
   ));
   recompute();
@@ -9333,7 +10419,10 @@ async function _aibotKbView() {
 // ============================================================
 async function _aibotActivityView() {
   const wrap = h('div', { class: 'card' });
-  wrap.appendChild(h('h3', { style: { marginTop: 0 } }, 'Recent bot activity'));
+  wrap.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', marginBottom: '.5rem' } },
+    h('h3', { style: { margin: 0, flex: 1 } }, 'Recent bot activity'),
+    /* BOT_DIAGNOSE_v1 */ h('button', { class: 'btn sm ghost', title: 'Trace why the bot replied / skipped for a specific phone', onclick: () => openAIBotDiagnose('') }, '🔎 Why no reply?')
+  ));
   let rows;
   try { rows = await api('api_aibot_chatlog_list', { limit: 50 }); }
   catch (e) { wrap.appendChild(h('div', { style: { color: '#dc2626' } }, e.message)); return wrap; }
@@ -11226,6 +12315,24 @@ function buildWaCompose(phone, onSent, opts) {
   let pending = null; // { id, wa_media_id, mime_type, filename, url }
 
   const previewSlot = h('div', { class: 'wb-compose-preview', hidden: 'hidden' });
+  // WA_REPLY_v1: reply preview slot rendered above input when user clicks
+  // ↩ Reply on a message.
+  const replyPreviewSlot = h('div', { class: 'wb-compose-reply-preview', style: { display: 'none', padding: '.4rem .55rem', background: 'linear-gradient(90deg, #eef2ff, #ffffff)', borderLeft: '3px solid #6366f1', borderRadius: '6px', margin: '0 0 .35rem', fontSize: '.78rem', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '.4rem' } });
+  window._renderWaReplyPreview = () => {
+    const t = window._waReplyTarget;
+    if (!t) { replyPreviewSlot.style.display = 'none'; replyPreviewSlot.innerHTML = ''; return; }
+    replyPreviewSlot.style.display = 'flex';
+    replyPreviewSlot.innerHTML = '';
+    replyPreviewSlot.appendChild(h('div', { style: { flex: 1, minWidth: 0 } },
+      h('div', { style: { fontWeight: 700, fontSize: '.65rem', color: '#3730a3', opacity: .85 } }, '↩ Replying to ' + (t.direction === 'out' ? 'yourself' : 'them')),
+      h('div', { style: { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: '#1e1b4b' } }, String(t.body || '').slice(0, 120))
+    ));
+    replyPreviewSlot.appendChild(h('button', {
+      class: 'btn xs ghost', type: 'button', title: 'Cancel reply',
+      onclick: () => { window._waReplyTarget = null; window._renderWaReplyPreview(); }
+    }, '✕'));
+  };
+
   const input = h('textarea', { rows: 2, placeholder: 'Type a message — Enter to send, Shift+Enter for newline' });
   // Phase 2 multi-WhatsApp: per-message 'Send from' picker on the
   // chat composer. Reads from CRM.cache.waPhones (pre-warmed by the
@@ -11267,6 +12374,10 @@ function buildWaCompose(phone, onSent, opts) {
     try {
       const payload = { phone, text };
       if (composerPicker.value) payload.from_phone_number_id = composerPicker.value;
+      // WA_REPLY_v1: include the reply_to wa_message_id if user is replying
+      if (window._waReplyTarget && window._waReplyTarget.wa_message_id) {
+        payload.reply_to = window._waReplyTarget.wa_message_id;
+      }
       if (pending) {
         payload.media_id = pending.wa_media_id;
         payload.media_type = waMediaTypeFor(pending.mime_type);
@@ -11276,6 +12387,9 @@ function buildWaCompose(phone, onSent, opts) {
       await api('api_wb_chat_send', payload);
       input.value = '';
       pending = null; fileInput.value = ''; renderPreview();
+      // WA_REPLY_v1: clear reply target after successful send
+      window._waReplyTarget = null;
+      if (typeof window._renderWaReplyPreview === 'function') window._renderWaReplyPreview();
       if (typeof onSent === 'function') onSent();
     } catch (e) { toast(e.message, 'err'); }
     finally { input.disabled = false; input.focus(); }
@@ -11283,6 +12397,50 @@ function buildWaCompose(phone, onSent, opts) {
 
   input.addEventListener('keydown', ev => {
     if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); send(); }
+  });
+
+  /* WA_PASTE_IMG_v1 — Ctrl/Cmd+V image from clipboard → attach as pending media */
+  input.addEventListener('paste', async ev => {
+    const items = (ev.clipboardData && ev.clipboardData.items) || [];
+    let imgFile = null;
+    for (const it of items) {
+      if (it && it.kind === 'file' && /^image\//.test(it.type || '')) {
+        const f = it.getAsFile();
+        if (f) { imgFile = f; break; }
+      }
+    }
+    if (!imgFile) return;            // not an image paste — let default handler run
+    ev.preventDefault();
+    if (imgFile.size > 25 * 1024 * 1024) {
+      toast('Pasted image too large — WhatsApp images cap at 16 MB', 'err');
+      return;
+    }
+    // Synth a friendly filename if the clipboard didn't give us one
+    if (!imgFile.name || imgFile.name === 'image.png') {
+      const ext = (imgFile.type || 'image/png').split('/')[1] || 'png';
+      Object.defineProperty(imgFile, 'name', { value: 'pasted-' + Date.now() + '.' + ext, writable: false });
+    }
+    previewSlot.innerHTML = '';
+    previewSlot.hidden = false;
+    previewSlot.appendChild(h('span', { class: 'muted' }, 'Uploading pasted image…'));
+    try {
+      const fd = new FormData();
+      fd.append('file', imgFile);
+      const r = await fetch('/api/wa/upload', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + (CRM.token || '') },
+        body: fd
+      });
+      const j = await r.json();
+      if (!r.ok || j.error) throw new Error(j.error || ('upload failed (' + r.status + ')'));
+      pending = j;
+      renderPreview();
+      input.focus();
+    } catch (e) {
+      pending = null;
+      previewSlot.hidden = true;
+      toast(e.message || 'Pasted image upload failed', 'err');
+    }
   });
 
   fileInput.addEventListener('change', async () => {
@@ -11338,6 +12496,7 @@ function buildWaCompose(phone, onSent, opts) {
     );
     wrap.appendChild(fromRow);
   }
+  wrap.appendChild(replyPreviewSlot);
   wrap.appendChild(h('div', { class: 'wb-compose-row' }, attachBtn, tplBtn, input, sendBtn, fileInput));
   return wrap;
 }
@@ -11697,7 +12856,63 @@ async function wbChat() {
           }
         }
       } catch (_) {}
-      log.appendChild(h('div', { class: 'wb-msg ' + (msg.direction === 'in' ? 'in' : 'out') + (isFailed ? ' failed' : '') },
+      // WA_REPLY_v1 (2026-05-21): if this message is a reply, render the
+      // quoted parent as a small grey strip above the body.
+      let _quotedNode = null;
+      if (msg.reply_to) {
+        const parent = msgs.find(x => x.wa_message_id === msg.reply_to);
+        if (parent) {
+          const pText = parent.body || ('[' + (parent.message_type || 'message') + ']');
+          _quotedNode = h('div', { class: 'wb-msg-quote', style: {
+            borderLeft: '3px solid #6366f1',
+            background: 'rgba(99,102,241,.08)',
+            padding: '.25rem .45rem',
+            borderRadius: '4px',
+            fontSize: '.75rem',
+            color: '#3730a3',
+            marginBottom: '.25rem',
+            cursor: 'pointer',
+            maxWidth: '90%'
+          }, title: 'Scroll to original message', onclick: () => {
+            const el = document.querySelector('[data-wam-id="' + parent.wa_message_id + '"]');
+            if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.add('wb-msg-highlight'); setTimeout(() => el.classList.remove('wb-msg-highlight'), 1500); }
+          }},
+            h('div', { style: { fontWeight: 700, fontSize: '.65rem', opacity: .8 }}, parent.direction === 'out' ? 'You' : 'Them'),
+            h('div', { style: { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}, pText.slice(0, 80))
+          );
+        }
+      }
+      // Reply button — hover-shown ↩ that sets _waReplyTarget so the
+      // compose row can render a quoted preview + send with reply_to.
+      const _replyBtn = h('button', {
+        class: 'wb-msg-reply-btn',
+        title: 'Reply to this message',
+        style: {
+          position: 'absolute', top: '4px', right: '4px',
+          background: 'rgba(255,255,255,.85)', border: '1px solid #e5e7eb',
+          borderRadius: '4px', padding: '1px 5px', fontSize: '.7rem',
+          cursor: 'pointer', display: 'none'
+        },
+        onclick: (ev) => {
+          ev.stopPropagation();
+          window._waReplyTarget = {
+            wa_message_id: msg.wa_message_id,
+            body: msg.body || ('[' + (msg.message_type || 'message') + ']'),
+            direction: msg.direction
+          };
+          // Render the reply preview above the input
+          try { window._renderWaReplyPreview && window._renderWaReplyPreview(); } catch (_) {}
+        }
+      }, '↩ Reply');
+      const _msgEl = h('div', {
+        class: 'wb-msg ' + (msg.direction === 'in' ? 'in' : 'out') + (isFailed ? ' failed' : ''),
+        'data-wam-id': msg.wa_message_id || '',
+        style: { position: 'relative' },
+        onmouseenter: () => { _replyBtn.style.display = 'block'; },
+        onmouseleave: () => { _replyBtn.style.display = 'none'; }
+      },
+        _quotedNode,
+        _replyBtn,
         mediaNode,
         h('div', { class: 'wb-msg-body' }, (function() {
           // Friendly fallback for already-saved messages with empty body
@@ -11729,7 +12944,8 @@ async function wbChat() {
             : null,
           _phoneBadge
         )
-      ));
+      );
+      log.appendChild(_msgEl);
     });
     // Auto-scroll to bottom IF the user was already at/near the bottom.
     // If they had scrolled up to read history, leave them there.
@@ -11827,6 +13043,19 @@ async function wbChat() {
       ),
       h('div', { class: 'wb-chat-status-slot', style: { display: 'flex', alignItems: 'center' } }),
       buildAgentPicker(phone, threadMeta),
+      // WA_WHITELIST_v1 — mark this phone as a personal contact so future
+      // inbound messages are dropped (lead not created, message not saved).
+      h('button', { class: 'btn sm ghost', title: 'Whitelist this number — future inbound messages will be silently dropped (personal contact)', style: { color: '#b91c1c' }, onclick: async () => {
+        const note = prompt('Add a note (optional, e.g. "My brother", "Personal"):', '') || '';
+        if (note === null) return;
+        if (!confirm('Whitelist ' + phone + '?\n\n• Future inbound messages from this number will NOT create a lead and will NOT appear in WhatsApp chat.\n• Any existing auto-generated empty lead for this number will be removed.\n\nContinue?')) return;
+        try {
+          const r = await api('api_wb_whitelist_add', { phone, note });
+          toast('✓ Whitelisted ' + phone + (r.leads_removed ? ' (removed ' + r.leads_removed + ' auto-lead)' : ''));
+          // Refresh the thread list — the row will linger until next inbound; that\'s fine
+          if (typeof renderThreadList === 'function') { lastThreadsFingerprint = ''; renderThreadList(); }
+        } catch (e) { toast(e.message, 'err'); }
+      } }, '🚫 Whitelist'),
       h('button', { class: 'btn sm ghost', title: 'Refresh this thread', onclick: () => renderActiveThread(true) }, '↻')
     );
     right.appendChild(head);
@@ -12351,32 +13580,135 @@ VIEWS.projects = async (view) => {
       : null
   ));
 
+  /* SALE_CLOSURE_FILTERS_v1 — filter toolbar.
+   * Date range filters by project_stage_started_at (entered closure).
+   * Multi-select for users / sources / products mirrors the leads page UX.
+   * State persists per-user in localStorage so filters survive page reloads. */
+  const _filtersKey = 'crm_projects_filters_v1';
+  let filtersState = {};
+  try { filtersState = JSON.parse(localStorage.getItem(_filtersKey) || '{}'); } catch (_) {}
+
+  const users    = (window.CRM && CRM.cache && CRM.cache.users)    || [];
+  const sources  = (window.CRM && CRM.cache && CRM.cache.sources)  || [];
+  const products = (window.CRM && CRM.cache && CRM.cache.products) || [];
+
+  const fromInp = h('input', { type: 'date', class: 'input', value: filtersState.from || '', style: { width: '150px' } });
+  const toInp   = h('input', { type: 'date', class: 'input', value: filtersState.to   || '', style: { width: '150px' } });
+  const userSel = h('select', { class: 'input', multiple: 'multiple', style: { minWidth: '200px', height: '34px' }, title: 'Assigned to (multi-select)' },
+    ...users.map(u => h('option', { value: String(u.id),
+      selected: (filtersState.assigned_tos || []).map(String).includes(String(u.id)) ? 'selected' : null }, u.name))
+  );
+  const srcSel = h('select', { class: 'input', multiple: 'multiple', style: { minWidth: '200px', height: '34px' }, title: 'Source (multi-select)' },
+    ...sources.map(sr => h('option', { value: String(sr.name || sr),
+      selected: (filtersState.sources || []).map(String).includes(String(sr.name || sr)) ? 'selected' : null }, (sr.name || sr)))
+  );
+  const prodSel = h('select', { class: 'input', multiple: 'multiple', style: { minWidth: '200px', height: '34px' }, title: 'Product (multi-select)' },
+    ...products.map(pr => h('option', { value: String(pr.id),
+      selected: (filtersState.product_ids || []).map(String).includes(String(pr.id)) ? 'selected' : null }, pr.name))
+  );
+  const stalledChk = h('input', { type: 'checkbox', checked: filtersState.stalled_only ? 'checked' : null });
+
+  function _collectFilters() {
+    return {
+      from: fromInp.value || null,
+      to:   toInp.value   || null,
+      assigned_tos: Array.from(userSel.selectedOptions).map(o => Number(o.value)),
+      sources:      Array.from(srcSel.selectedOptions).map(o => o.value),
+      product_ids:  Array.from(prodSel.selectedOptions).map(o => Number(o.value)),
+      stalled_only: stalledChk.checked ? 1 : 0
+    };
+  }
+  function _persistFilters() {
+    try { localStorage.setItem(_filtersKey, JSON.stringify(_collectFilters())); } catch (_) {}
+  }
+
+  const applyBtn = h('button', { class: 'btn primary' }, '🔍 Apply');
+  const clearBtn = h('button', { class: 'btn' }, '✖ Clear');
+  const expBtn   = h('button', { class: 'btn', title: 'Export current view to CSV' }, '⬇ CSV');
+
+  const filterBar = h('div', { class: 'card', style: { padding: '.7rem', display: 'flex', gap: '.5rem', flexWrap: 'wrap', alignItems: 'center', marginBottom: '.7rem', background: '#f8fafc' } },
+    h('label', { class: 'muted', style: { fontSize: '.78rem' } }, 'From'), fromInp,
+    h('label', { class: 'muted', style: { fontSize: '.78rem' } }, 'To'),   toInp,
+    h('label', { class: 'muted', style: { fontSize: '.78rem' } }, 'Caller'), userSel,
+    h('label', { class: 'muted', style: { fontSize: '.78rem' } }, 'Source'), srcSel,
+    h('label', { class: 'muted', style: { fontSize: '.78rem' } }, 'Product'), prodSel,
+    h('label', { style: { fontSize: '.85rem', display: 'flex', alignItems: 'center', gap: '.3rem' } }, stalledChk, ' Stalled only'),
+    applyBtn, clearBtn, expBtn
+  );
+  view.appendChild(filterBar);
+
   const listEl = h('div', { id: 'proj-board' }, h('div', { class: 'loading' }, 'Loading…'));
   view.appendChild(listEl);
 
+  async function _load() {
+    listEl.innerHTML = '';
+    listEl.appendChild(h('div', { class: 'loading' }, 'Loading…'));
+    _persistFilters();
+    let board;
+    try { board = await api('api_projectStages_board', _collectFilters()); }
+    catch (e) {
+      listEl.innerHTML = '';
+      listEl.appendChild(h('div', { class: 'error-box' }, e.message));
+      return;
+    }
+    _renderBoard(board, listEl);
+  }
+  applyBtn.onclick = _load;
+  clearBtn.onclick = () => {
+    fromInp.value = ''; toInp.value = '';
+    Array.from(userSel.options).forEach(o => o.selected = false);
+    Array.from(srcSel.options).forEach(o  => o.selected = false);
+    Array.from(prodSel.options).forEach(o => o.selected = false);
+    stalledChk.checked = false;
+    _load();
+  };
+  expBtn.onclick = async () => {
+    try {
+      const board = await api('api_projectStages_board', _collectFilters());
+      const flat = [];
+      board.board.forEach(col => col.leads.forEach(l => flat.push({
+        stage: col.stage.name, name: l.name, phone: l.phone || '',
+        assigned: l.assigned_name || '', source: l.source || '',
+        product: l.product_name || '', value: l.value || 0,
+        days_at_stage: l.days_at_stage == null ? '' : l.days_at_stage,
+        stalled: l.stalled ? 'YES' : '', entered_at: l.project_stage_started_at || ''
+      })));
+      if (!flat.length) { toast('Nothing to export', 'err'); return; }
+      const cols = Object.keys(flat[0]);
+      const csv = [cols.join(',')].concat(flat.map(r => cols.map(c => '"' + String(r[c] || '').replace(/"/g, '""') + '"').join(','))).join('\n');
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob); const a = document.createElement('a');
+      a.href = url; a.download = 'sale-closure-' + new Date().toISOString().slice(0,10) + '.csv';
+      a.click(); URL.revokeObjectURL(url);
+    } catch (e) { toast(e.message, 'err'); }
+  };
+
   let board;
-  try { board = await api('api_projectStages_board'); }
+  try { board = await api('api_projectStages_board', _collectFilters()); }
   catch (e) {
     listEl.innerHTML = '';
     listEl.appendChild(h('div', { class: 'error-box' }, e.message));
     return;
   }
 
+  _renderBoard(board, listEl);
+};
+
+/* SALE_CLOSURE_FILTERS_v1 — extracted renderer so initial + filter reloads share code. */
+function _renderBoard(board, listEl) {
+  listEl.innerHTML = '';
   if (!board.stages.length) {
-    listEl.innerHTML = '';
     listEl.appendChild(h('p', { class: 'muted' },
       'No stages defined yet. Admin: head to Settings → 🚚 Sale Final Closure Stages to create your closure workflow.'));
     return;
   }
-
   const totalLeads = board.board.reduce((n, col) => n + col.leads.length, 0);
   if (!totalLeads) {
-    listEl.innerHTML = '';
     listEl.appendChild(h('p', { class: 'muted' },
-      'No leads are in final closure yet. Open a won/closed lead → "🚚 Sale Final Closure" → Start closure tracker.'));
+      'No leads match your filters (or no leads are in final closure yet).'));
     return;
   }
-
+  // Show a small filter summary so users know what's active
   const wrap = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '.75rem' } });
   board.board.forEach(col => {
     const stalledCount = col.leads.filter(l => l.stalled).length;
@@ -12398,15 +13730,16 @@ VIEWS.projects = async (view) => {
         h('div', { style: { fontWeight: 600 } }, l.name),
         l.value ? h('div', { class: 'muted', style: { fontSize: '.8rem' } }, '₹ ' + Number(l.value).toLocaleString('en-IN')) : null,
         l.assigned_name ? h('div', { class: 'muted', style: { fontSize: '.78rem' } }, '👤 ' + l.assigned_name) : null,
+        l.source ? h('div', { class: 'muted', style: { fontSize: '.78rem' } }, '🌐 ' + l.source) : null,
+        l.product_name ? h('div', { class: 'muted', style: { fontSize: '.78rem' } }, '📦 ' + l.product_name) : null,
         l.days_at_stage != null ? h('div', { class: 'muted', style: { fontSize: '.78rem', color: l.stalled ? '#dc2626' : '#6b7280' } },
           '⏱ ' + l.days_at_stage + 'd' + (l.stalled ? ' · STALLED (>' + col.stage.expected_days + 'd)' : '')) : null
       ));
     });
     wrap.appendChild(colWrap);
   });
-  listEl.innerHTML = '';
   listEl.appendChild(wrap);
-};
+}
 
 VIEWS.targets = async (view) => {
   const isAdmin = ['admin', 'manager'].includes(CRM.user.role);
@@ -12785,10 +14118,11 @@ function _renderCallActivity(r) {
       if (sub) c.appendChild(h('div', { class: 'kpi-sub' }, sub));
       return c;
     };
-    cards.appendChild(mk('📞 Total calls',   s.total_calls || 0));
-    cards.appendChild(mk('📥 Incoming',      s.incoming || 0));
-    cards.appendChild(mk('📤 Outgoing',      s.outgoing || 0));
-    cards.appendChild(mk('❌ Missed',        s.missed || 0));
+    /* CALL_UNIQUE_v1 — KPI subtitles show distinct phone counts */
+    cards.appendChild(mk('📞 Total calls', s.total_calls || 0, '#️⃣ ' + (s.unique_total || 0) + ' unique numbers'));
+    cards.appendChild(mk('📥 Incoming',    s.incoming || 0,    '#️⃣ ' + (s.unique_incoming || 0) + ' unique callers'));
+    cards.appendChild(mk('📤 Outgoing',    s.outgoing || 0,    '#️⃣ ' + (s.unique_outgoing || 0) + ' unique dialled'));
+    cards.appendChild(mk('❌ Missed',      s.missed || 0,      '#️⃣ ' + (s.unique_missed || 0) + ' unique missed'));
     cards.appendChild(mk('🗣️ Total talk',    _caSecsToHuman(s.total_talk_s), 'sum of recorded durations'));
     cards.appendChild(mk('⏱️ Avg call',       _caSecsToHuman(s.avg_talk_s), 'mean of non-zero calls'));
     cards.appendChild(mk('👥 Active users',  s.total_users || 0));
@@ -12807,6 +14141,7 @@ function _renderCallActivity(r) {
       t.innerHTML = '<thead><tr>' +
         '<th>Rep</th><th>Manager</th>' +
         '<th>Total</th><th>In</th><th>Out</th><th>Missed</th>' +
+        /* CALL_UNIQUE_v1 */ '<th title="Distinct phone numbers contacted by this rep">Unique #s</th>' +
         '<th>Talk</th><th>Avg call</th><th>Avg gap</th><th>Last call</th>' +
         '</tr></thead><tbody>' +
         rows.map(r => '<tr>' +
@@ -12816,6 +14151,7 @@ function _renderCallActivity(r) {
           '<td>' + (r.in_calls || 0) + '</td>' +
           '<td>' + (r.out_calls || 0) + '</td>' +
           '<td>' + (r.missed_calls || 0) + '</td>' +
+          /* CALL_UNIQUE_v1 */ '<td><b>' + (r.unique_phones || 0) + '</b>' + (r.unique_out ? ' <span class="muted" style="font-size:.78em">(' + r.unique_out + ' out)</span>' : '') + '</td>' +
           '<td>' + _caSecsToHuman(r.talk_s) + '</td>' +
           '<td>' + _caSecsToHuman(r.avg_talk_s) + '</td>' +
           '<td>' + _caSecsToHuman(r.avg_gap_s) + '</td>' +
@@ -13011,6 +14347,7 @@ function downloadCallActivityCsv() {
  * Scrollable feed of every recent call with AI summary, action items,
  * sentiment, suggested status — across all leads + reps.
  */
+// PROMISE_TRACK_v1
 VIEWS.callinsights = async (view) => {
   view.innerHTML = '';
   const out = h('div', {});
@@ -13050,6 +14387,47 @@ VIEWS.callinsights = async (view) => {
         kpiCard('😟 Negative',  neg + ' (' + Math.round(neg/total*100) + '%)', 'Need review', 'warn'),
         kpiCard('🤖 AI accuracy', '~95%', 'Hindi-English code-mix', 'accent')
       ));
+      // BULK_AUDIT_v1 — admin/manager-only bulk audit toolbar
+      if (['admin','manager'].includes((CRM.user || {}).role)) {
+        const _bulkBar = h('div', { class: 'card', style: { padding: '.7rem .9rem', margin: '0 0 1rem', display: 'flex', flexWrap: 'wrap', gap: '.5rem', alignItems: 'center', background: '#f1f5f9' } },
+          h('span', { style: { fontWeight: 600 } }, '🤖 Bulk AI Audit'),
+          h('span', { class: 'muted', style: { fontSize: '.82rem' } }, 'Queue many recordings at once.')
+        );
+        const _scopeSel = h('select', { class: 'input', style: { maxWidth: '220px' } },
+          h('option', { value: 'unprocessed', selected: 'selected' }, 'All unaudited recordings'),
+          h('option', { value: 'failed' }, 'Previously failed only'),
+          h('option', { value: 'all' }, 'Force re-audit ALL (last 2000)')
+        );
+        const _userSel2 = h('select', { class: 'input', style: { maxWidth: '180px' } },
+          h('option', { value: '' }, 'All reps'),
+          ...((CRM.cache.users || []).map(u => h('option', { value: u.id }, u.name)))
+        );
+        const _limitInp = h('input', { class: 'input', type: 'number', min: 1, max: 2000, value: 500, style: { width: '90px' }, title: 'Max number of recordings to process' });
+        const _runBtn = h('button', { class: 'btn primary' }, '🚀 Run audit');
+        _runBtn.onclick = async () => {
+          const scope = _scopeSel.value;
+          if (scope === 'all' && !confirm('Re-audit ALL recordings? This wipes existing summaries and re-runs Gemini on every recording. Can be expensive.')) return;
+          _runBtn.disabled = true; _runBtn.textContent = '⏳ Queueing…';
+          try {
+            const r = await api('api_recording_bulkAudit', {
+              scope,
+              limit: Number(_limitInp.value) || 500,
+              user_id: _userSel2.value ? Number(_userSel2.value) : null
+            });
+            if (typeof toast === 'function') toast('✅ Queued ' + r.queued + ' recordings — AI processing in background', 'ok');
+            setTimeout(() => load(), 8000); // re-load list after first batch starts settling
+          } catch (e) {
+            if (typeof toast === 'function') toast('⚠ ' + e.message, 'err');
+          } finally {
+            _runBtn.disabled = false; _runBtn.textContent = '🚀 Run audit';
+          }
+        };
+        _bulkBar.appendChild(_scopeSel);
+        _bulkBar.appendChild(_userSel2);
+        _bulkBar.appendChild(_limitInp);
+        _bulkBar.appendChild(_runBtn);
+        feedDiv.appendChild(_bulkBar);
+      }
       rows.forEach(r => feedDiv.appendChild(insightCard(r)));
     } catch (e) {
       feedDiv.innerHTML = '<div class="ai-error">Could not load: ' + esc(e.message) + '</div>';
@@ -13067,7 +14445,21 @@ VIEWS.callinsights = async (view) => {
           h('a', { href: '#/leads', onclick: e => { e.preventDefault(); openLeadModal(r.lead_id); } },
             h('b', {}, r.lead_name || r.phone || '—')
           ),
-          h('span', { class: 'muted' }, ' · ' + (r.rep_name || '—') + ' · ' + mm + ':' + ss + ' · ' + fmtDate(r.created_at, 'relative'))
+          h('span', { class: 'muted' }, ' · ' + (r.rep_name || '—') + ' · ' + mm + ':' + ss + ' · ' + fmtDate(r.created_at, 'relative')),
+          // PROMISE_TRACK_v1 — second info row
+          h('div', { class: 'pt-row', style: { display: 'flex', gap: '.6rem', flexWrap: 'wrap', alignItems: 'center', marginTop: '.3rem', fontSize: '.78rem' } },
+            r.lead_status_name ? h('span', { style: { background: '#dbeafe', color: '#1e40af', padding: '.1rem .5rem', borderRadius: '999px', fontWeight: 600 } }, '📍 ' + r.lead_status_name) : null,
+            r.last_activity_at ? h('span', { class: 'muted', title: new Date(r.last_activity_at).toLocaleString() }, '🕒 last activity ' + fmtDate(r.last_activity_at, 'relative')) : null,
+            /* NEXT_ACTIVITY_v1 */ r.lead_next_followup_at ? h('span', { class: 'pill', style: 'background:#e0e7ff;color:#3730a3;padding:.1rem .5rem;border-radius:999px;font-weight:600', title: new Date(r.lead_next_followup_at).toLocaleString() }, '🗓 next activity ' + new Date(r.lead_next_followup_at).toLocaleString('en-IN',{hour:'2-digit',minute:'2-digit',day:'2-digit',month:'short'})) : null,
+            r.committed_callback_at ? h('span', { class: 'muted' }, '⏰ promised ' + new Date(r.committed_callback_at).toLocaleString('en-IN',{hour:'2-digit',minute:'2-digit',day:'2-digit',month:'short'})) : null,
+            r.actual_followup_at ? h('span', { class: 'muted' }, '✅ actual ' + new Date(r.actual_followup_at).toLocaleString('en-IN',{hour:'2-digit',minute:'2-digit',day:'2-digit',month:'short'})) : null,
+            (r.callback_gap_minutes != null) ? (() => {
+              const g = Number(r.callback_gap_minutes);
+              if (g <= 5)   return h('span', { style: { background: '#dcfce7', color: '#15803d', padding: '.1rem .5rem', borderRadius: '999px', fontWeight: 600 } }, '🎯 on time');
+              if (g <= 60)  return h('span', { style: { background: '#fef3c7', color: '#92400e', padding: '.1rem .5rem', borderRadius: '999px', fontWeight: 600 } }, '⚠ ' + g + ' min late');
+              return         h('span', { style: { background: '#fee2e2', color: '#b91c1c', padding: '.1rem .5rem', borderRadius: '999px', fontWeight: 600 } }, '🚨 ' + g + ' min late');
+            })() : null
+          )
         ),
         h('div', {},
           h('span', { class: 'ai-sentiment-pill', style: 'background:' + sentColor }, sentLabel + ' ' + (r.sentiment || '—')),
@@ -14019,6 +15411,96 @@ VIEWS.reportbuilder = async (view) => {
   view.innerHTML = '';
   const { users = [], products = [], sources = [], statuses = [], customFields = [] } = CRM.cache;
 
+  /* REPORT_BUILDER_v2 — Template gallery shown at the top.
+   * Each preset is a one-click shortcut that pre-fills the dim + filters +
+   * chart type below. Users can also open any of their saved templates. */
+  /* REPORT_BUILDER_v4.1 — user-named templates.
+   * Each preset specifies the full v4 config: row_dims[], metrics[],
+   * chart_type. Click pre-fills + auto-runs.
+   * Two special presets ('calling' and 'activity') route to existing
+   * dedicated views instead, because their data lives outside the
+   * pivot model (call_events / lead_actions). */
+  const PRESETS = [
+    { key: 'status_wise', icon: '🎯', name: 'Status Wise Report',
+      desc: 'Lead count, conversion %, value totals broken down by status.',
+      row_dims: ['status'],
+      metrics: ['count', 'pct', 'qualified_count', 'conversion_pct', 'value_sum'],
+      chart: 'bar' },
+
+    { key: 'campaign_wise', icon: '📣', name: 'Campaign Wise Report',
+      desc: 'Performance of each marketing campaign — volume, conversion, value.',
+      row_dims: ['campaign'],
+      metrics: ['count', 'qualified_count', 'conversion_pct', 'won_count', 'value_sum'],
+      chart: 'bar' },
+
+    { key: 'calling_data', icon: '☎', name: 'Calling Data Report',
+      desc: 'Calls dialled / received / missed by each rep. Opens the dedicated Call Activity view.',
+      route: '#/callactivity' },
+
+    { key: 'activity', icon: '📝', name: 'Activity Report',
+      desc: 'Every rep action (status changes, remarks, follow-ups, calls, WhatsApp) by rep + day.',
+      route: '#/activityreport' },
+
+    { key: 'daily_intake', icon: '📅', name: 'Daily Lead Intake Report',
+      desc: 'New leads per day with qualified count + conversion %.',
+      row_dims: ['created_day'],
+      metrics: ['count', 'qualified_count', 'conversion_pct', 'recent_24h'],
+      chart: 'line' },
+
+    { key: 'rep_wise', icon: '👥', name: 'Rep Wise Report',
+      desc: 'Lead distribution + conversion + value by each sales rep.',
+      row_dims: ['assigned_to'],
+      metrics: ['count', 'qualified_count', 'conversion_pct', 'won_count', 'lost_count', 'value_sum'],
+      chart: 'bar' }
+  ];
+
+  function _renderGallery() {
+    const galleryWrap = h('div', { class: 'card', style: { padding: '1rem', marginBottom: '1rem' } },
+      h('div', { style: { display: 'flex', alignItems: 'center', marginBottom: '.5rem' } },
+        h('h3', { style: { margin: 0, flex: 1 } }, '📋 Template gallery'),
+        h('button', { class: 'btn', onclick: () => { gallery.style.display = 'none'; toast('Custom report mode — pick fields below', 'ok'); } }, '✏️ Custom report'),
+        h('button', { class: 'btn', style: { marginLeft: '.4rem' }, onclick: () => openReportTemplatesModal() }, '📂 My saved templates')
+      ),
+      h('p', { class: 'muted', style: { fontSize: '.85rem', margin: '.2rem 0 1rem' } }, 'Click a card to instantly generate that report. Customise filters + group-by below, save as your own template, and schedule for Email / WhatsApp delivery.')
+    );
+    const grid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '.6rem' } });
+    PRESETS.forEach(p => {
+      grid.appendChild(h('div', {
+        class: 'card', style: {
+          padding: '.7rem .8rem', cursor: 'pointer', borderLeft: '3px solid #3b82f6',
+          transition: 'background .15s'
+        },
+        onmouseover: function() { this.style.background = '#eff6ff'; },
+        onmouseout:  function() { this.style.background = ''; },
+        onclick: () => {
+          /* REPORT_BUILDER_v4.1 — preset can either route to another view
+           * (Calling Data, Activity) or load a v4 pivot config. */
+          if (p.route) { window.location.hash = p.route; return; }
+          window._rbRowDims        = (p.row_dims || [p.dim || 'status']).slice();
+          window._rbActiveMetrics  = (p.metrics  || ['count', 'pct']).slice();
+          window._rbChartType      = p.chart || 'bar';
+          try { _syncChartTypeUI(); } catch (_) {}
+          loadReportBuilder();
+          // Scroll to the editor card just below the gallery
+          const ed = document.getElementById('rb-rail');
+          if (ed) ed.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          toast('Loaded — ' + p.name, 'ok');
+        }
+      },
+        h('div', { style: { fontSize: '1.5rem' } }, p.icon),
+        h('div', { style: { fontWeight: 700, marginTop: '.2rem' } }, p.name),
+        h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.2rem', lineHeight: '1.3' } }, p.desc),
+        h('div', { class: 'muted', style: { fontSize: '.72rem', marginTop: '.4rem' } },
+          p.route ? '➜ Opens dedicated view' : ('📊 ' + (p.chart || 'bar').toUpperCase() + ' · ' + (p.metrics ? p.metrics.length : 2) + ' metrics'))
+      ));
+    });
+    galleryWrap.appendChild(grid);
+    return galleryWrap;
+  }
+
+  const gallery = _renderGallery();
+  view.appendChild(gallery);
+
   // Built-in dimensions every CRM has — grouped so the dropdown reads naturally.
   const builtIn = [
     { value: 'product',       label: 'Product' },
@@ -14068,6 +15550,28 @@ VIEWS.reportbuilder = async (view) => {
     });
     dimSelect.appendChild(customGroup);
   }
+
+  /* REPORT_BUILDER_v3 — Google-Ads style top-right action toolbar */
+  const _topActions = h('div', { class: 'card', style: { padding: '.7rem 1rem', display: 'flex', alignItems: 'center', gap: '.4rem', marginBottom: '.6rem', flexWrap: 'wrap' } },
+    h('div', { style: { flex: 1, display: 'flex', alignItems: 'center', gap: '.5rem' } },
+      h('h3', { style: { margin: 0, fontSize: '1rem' } }, '🧪 Report builder'),
+      h('span', { class: 'muted', style: { fontSize: '.78rem' } }, ' — pick a template above or configure custom report below')
+    ),
+    h('button', { class: 'btn', title: 'Reset filters + metrics', onclick: () => {
+      window._rbPicked = {}; window._rbChartType = 'bar';
+      window._rbActiveMetrics = ['count', 'pct'];
+      try { _syncChartTypeUI(); } catch (_) {}
+      const f = document.getElementById('rb-from'); if (f) f.value = '';
+      const t = document.getElementById('rb-to');   if (t) t.value = '';
+      loadReportBuilder();
+    } }, '↺ Reset'),
+    h('button', { class: 'btn', onclick: () => openReportTemplateSave(), title: 'Save current report config (overwrite)' }, '💾 Save'),
+    h('button', { class: 'btn', onclick: () => openReportTemplateSave(), title: 'Save as new template' }, '💾 Save as'),
+    h('button', { class: 'btn', onclick: () => { try { localStorage.setItem('rb_addtoDashboard', JSON.stringify(_rbCurrentConfig())); toast('Saved to dashboard staging — open Dashboard → 🧩 Customize → ➕ Add widget', 'ok'); } catch (e) { toast(e.message, 'err'); } }, title: 'Add this report to your Dashboard widgets' }, '📌 Add to dashboard'),
+    h('button', { class: 'btn', onclick: () => openReportTemplatesModal(), title: 'View saved templates + schedules' }, '📂 Templates'),
+    h('button', { class: 'btn', onclick: () => { gallery.style.display = ''; gallery.scrollIntoView({ behavior: 'smooth' }); }, title: 'Back to template gallery' }, '⬅ Gallery')
+  );
+  view.appendChild(_topActions);
 
   view.append(
     h('div', { class: 'card', style: { padding: '1rem', marginBottom: '1rem' } },
@@ -14121,20 +15625,41 @@ VIEWS.reportbuilder = async (view) => {
           rb.id = 'rb-rule-btn'; window._rbRuleBtn = rb; const hold = document.createElement('span'); hold.appendChild(rb); return hold;
         })(),
         h('button', { class: 'btn primary', onclick: loadReportBuilder }, '🔎 Generate'),
-        h('button', { class: 'btn', onclick: downloadReportBuilderExcel, title: 'Export breakdown + lead details to Excel' }, '📊 Export Excel'),
-        h('button', { class: 'btn', onclick: downloadReportBuilderCsv, title: 'Export breakdown to CSV' }, '⬇️ CSV')
+        /* REPORT_BUILDER_v2 — output type toggle (Table / Bar / Line / Pie) */
+        h('span', { id: 'rb-chart-toggle', style: { display: 'inline-flex', alignItems: 'center', gap: '.2rem', marginLeft: '.4rem', padding: '.15rem .3rem', border: '1px solid #cbd5e1', borderRadius: '6px', background: '#fff' } },
+          h('button', { 'data-chart': 'table', class: 'btn', onclick: () => { window._rbChartType = 'table'; _syncChartTypeUI(); loadReportBuilder(); }, style: { fontSize: '.78rem', padding: '.15rem .4rem' } }, '🗒 Table'),
+          h('button', { 'data-chart': 'bar',   class: 'btn', onclick: () => { window._rbChartType = 'bar';   _syncChartTypeUI(); loadReportBuilder(); }, style: { fontSize: '.78rem', padding: '.15rem .4rem' } }, '📊 Bar'),
+          h('button', { 'data-chart': 'line',  class: 'btn', onclick: () => { window._rbChartType = 'line';  _syncChartTypeUI(); loadReportBuilder(); }, style: { fontSize: '.78rem', padding: '.15rem .4rem' } }, '📈 Line'),
+          h('button', { 'data-chart': 'pie',   class: 'btn', onclick: () => { window._rbChartType = 'pie';   _syncChartTypeUI(); loadReportBuilder(); }, style: { fontSize: '.78rem', padding: '.15rem .4rem' } }, '🥧 Pie')
+        ),
+        h('button', { class: 'btn', onclick: downloadReportBuilderExcel, title: 'Export breakdown + lead details to Excel' }, '📊 Excel'),
+        h('button', { class: 'btn', onclick: downloadReportBuilderCsv, title: 'Export breakdown to CSV' }, '⬇️ CSV'),
+        /* REPORT_SCHEDULE_v1 — save / load / schedule current report */
+        h('button', { class: 'btn', onclick: () => openReportTemplateSave(), title: 'Save current report config as a reusable template' }, '💾 Save template'),
+        h('button', { class: 'btn', onclick: () => openReportTemplatesModal(), title: 'View saved templates + schedules' }, '📂 My templates'),
+        h('button', { class: 'btn', onclick: () => { gallery.style.display = ''; gallery.scrollIntoView({ behavior: 'smooth' }); }, title: 'Back to template gallery' }, '⬅ Gallery')
       )
     ),
     h('div', { id: 'rb-summary', class: 'cards', style: { marginBottom: '1rem' } }),
-    h('div', { class: 'chart-grid' },
-      h('div', { class: 'card card-wide' },
-        h('h3', { id: 'rb-chart-title' }, 'Breakdown'),
-        h('div', { class: 'chart-wrap', style: { height: '320px' } }, h('canvas', { id: 'rb-chart' }))
+    /* REPORT_BUILDER_v3 — main canvas (left) + Generate report rail (right) */
+    h('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 320px', gap: '1rem', alignItems: 'start' } },
+      h('div', {},  /* LEFT: chart card stacked on top of detail table */
+        h('div', { class: 'card', style: { padding: '.8rem 1rem' } },
+          h('h3', { id: 'rb-chart-title', style: { marginTop: 0 } }, 'Breakdown'),
+          h('div', { class: 'chart-wrap', style: { height: '320px' } }, h('canvas', { id: 'rb-chart' }))
+        ),
+        h('div', { class: 'card', style: { padding: '.8rem 1rem', marginTop: '.8rem' } },
+          h('h3', { style: { marginTop: 0 } }, 'Detail'),
+          h('div', { id: 'rb-table' })
+        )
       ),
-      h('div', { class: 'card card-wide' },
-        h('h3', {}, 'Detail'),
-        h('div', { id: 'rb-table' })
-      )
+      h('div', { id: 'rb-rail', style: {
+        position: 'sticky', top: '1rem',
+        padding: '.9rem', background: '#fff',
+        border: '1px solid #e2e8f0', borderRadius: '8px',
+        boxShadow: '0 1px 3px rgba(15,23,42,.05)',
+        maxHeight: 'calc(100vh - 100px)', overflowY: 'auto'
+      } })
     )
   );
 
@@ -14142,6 +15667,9 @@ VIEWS.reportbuilder = async (view) => {
   const last = localStorage.getItem('rb_last_dim');
   if (last && [...dimSelect.options].some(o => o.value === last)) dimSelect.value = last;
 
+  // Initialise chart type pill highlight
+  if (!window._rbChartType) window._rbChartType = 'bar';
+  setTimeout(() => { try { _syncChartTypeUI(); } catch (_) {} }, 0);
   await loadReportBuilder();
 };
 
@@ -14169,6 +15697,17 @@ function _currentReportBuilderFilters() {
   };
 }
 
+function _syncChartTypeUI() {
+  const t = (window._rbChartType || 'bar');
+  document.querySelectorAll('#rb-chart-toggle button').forEach(b => {
+    const isMe = b.getAttribute('data-chart') === t;
+    b.style.background    = isMe ? '#6366f1' : '';
+    b.style.color         = isMe ? '#fff'    : '';
+    b.style.fontWeight    = isMe ? '600'     : '';
+  });
+}
+try { window._syncChartTypeUI = _syncChartTypeUI; } catch (_) {}
+
 async function loadReportBuilder() {
   const dim = $('#rb-dim')?.value || 'product';
   localStorage.setItem('rb_last_dim', dim);
@@ -14176,6 +15715,7 @@ async function loadReportBuilder() {
   let resp;
   try {
     resp = await api('api_reports_groupBy', filters, dim);
+    window._rbLastResp = resp;  /* REPORT_BUILDER_v3 — expose for rail */
   } catch (e) {
     $('#rb-table').innerHTML = `<div class="error-box">${esc(e.message || e)}</div>`;
     return;
@@ -14203,29 +15743,38 @@ async function loadReportBuilder() {
     });
   }
 
-  // Chart — top 25 buckets so a high-cardinality dimension (e.g. UTM Term)
-  // doesn't render an unreadable forest of bars.
+  /* REPORT_BUILDER_v2 — render chart according to window._rbChartType
+   * (table | bar | line | pie). Table mode hides the chart card entirely
+   * so the detail table gets the whole width. */
+  const chartType = (window._rbChartType || 'bar');
   const top25 = resp.rows.slice(0, 25);
   const ctx = document.getElementById('rb-chart');
-  if (ctx) {
+  const chartCard = ctx ? ctx.closest('.card') : null;
+  if (chartCard) chartCard.style.display = (chartType === 'table') ? 'none' : '';
+  if (ctx && chartType !== 'table') {
     if (ctx._chart) ctx._chart.destroy();
-    const palette = ['#6366f1', '#06b6d4', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6'];
+    const palette = ['#6366f1', '#06b6d4', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316', '#84cc16'];
+    const isHoriz = (chartType === 'bar');
+    const datasetCfg = {
+      label: 'Leads',
+      data: top25.map(r => r.count),
+      backgroundColor: chartType === 'pie' ? top25.map((_, i) => palette[i % palette.length]) : '#6366f1',
+      borderColor: chartType === 'line' ? '#6366f1' : undefined,
+      fill: chartType === 'line' ? false : true,
+      tension: chartType === 'line' ? 0.3 : 0,
+      borderWidth: chartType === 'line' ? 2 : 0
+    };
     ctx._chart = new Chart(ctx, {
-      type: 'bar',
-      data: {
-        labels: top25.map(r => r.value),
-        datasets: [{
-          label: 'Leads',
-          data: top25.map(r => r.count),
-          backgroundColor: top25.map((_, i) => palette[i % palette.length]),
-          borderWidth: 0
-        }]
-      },
+      type: chartType === 'pie' ? 'pie' : (chartType === 'line' ? 'line' : 'bar'),
+      data: { labels: top25.map(r => r.value), datasets: [datasetCfg] },
       options: {
-        indexAxis: 'y',
+        indexAxis: chartType === 'bar' ? 'y' : 'x',
         responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false }, datalabels: { color: '#111', anchor: 'end', align: 'right', font: { weight: 'bold' } } },
-        scales: { x: { beginAtZero: true, ticks: { stepSize: 1, precision: 0 } } }
+        plugins: {
+          legend: { display: chartType === 'pie' },
+          datalabels: chartType === 'pie' ? {} : { color: '#111', anchor: 'end', align: 'right', font: { weight: 'bold' } }
+        },
+        scales: chartType === 'pie' ? {} : { x: { beginAtZero: true, ticks: { stepSize: 1, precision: 0 } } }
       }
     });
   }
@@ -14421,6 +15970,7 @@ VIEWS.admin = async (view) => {
       { id: 'products',     label: '📦 Products' },
       { id: 'projstages',   label: '🚚 Sale Final Closure Stages' },
       { id: 'duplicates',   label: '👥 Duplicates' },
+      { id: 'quotation',    label: '📄 Quotation Defaults' },
     ]},
     { title: 'Routing', items: [
       { id: 'rules',        label: '⚖️ Auto-assign Rules' },
@@ -14526,6 +16076,7 @@ async function showAdminTab(id) {
     if (id === 'rules')    body.replaceChildren(await adminRules());
     if (id === 'permissions') body.replaceChildren(await adminPermissions());
     if (id === 'duplicates') body.replaceChildren(await adminDuplicates());
+    if (id === 'quotation') body.replaceChildren(await adminQuotation());
     if (id === 'smtp')     body.replaceChildren(await adminSmtp());
     if (id === 'announce') body.replaceChildren(await adminAnnouncements());
     if (id === 'chatperm') body.replaceChildren(await adminChatPermissions());
@@ -15673,7 +17224,10 @@ async function adminIntegrations() {
           const inp = ev.target.parentNode.querySelector('input');
           navigator.clipboard.writeText(inp.value).then(() => toast('Copied'), () => { inp.select(); document.execCommand('copy'); toast('Copied'); });
         } }, '📋 Copy'),
-        h('button', { class: 'btn sm', style: { marginLeft: '.3rem' }, title: 'Map incoming JSON keys to CRM fields',
+        h('button', {
+          class: 'btn',
+          style: { marginLeft: '.3rem', background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' },
+          title: 'Map incoming JSON keys to CRM lead columns / custom fields',
           onclick: () => openSourceMappingModal(s.id, s.label)
         }, '🗺 Map fields')
       ));
@@ -15755,6 +17309,15 @@ async function adminIntegrations() {
         href: 'https://www.make.com/en/help/tools/http', target: '_blank', rel: 'noopener',
         class: 'btn ghost'
       }, 'Make HTTP module docs ↗'),
+      // MAKE_FIELDMAP_v1 — surface the field-mapping editor on the Make card
+      // so admins can rename custom JSON keys (e.g. property_type, budget,
+      // utm_source) to CRM lead columns without leaving the page.
+      h('button', {
+        class: 'btn',
+        style: { background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' },
+        title: 'Map incoming JSON keys to CRM lead columns / custom fields',
+        onclick: () => openSourceMappingModal('make', 'Make.com')
+      }, '🗺 Map fields'),
       testStatus
     ));
     wrap.appendChild(makeCard);
@@ -15784,9 +17347,23 @@ async function adminIntegrations() {
         s.last_error ? h('div', { class: 'muted', style: { fontSize: '.78rem', color: '#dc2626' } }, '⚠ ' + s.last_error) : null
       ),
       h('button', { class: 'btn sm', onclick: async () => {
-        try { const r = await api('api_sheetSync_runNow', s.id); toast('Synced — ' + r.imported + ' new, ' + r.skipped + ' skipped'); showAdminTab('integrations'); }
+        try {
+          const r = await api('api_sheetSync_runNow', s.id);
+          /* SHEET_SYNC_v2 — server returns mode='push_only' when there\'s no
+           * sheet URL configured. That\'s informational (push mode is healthy),
+           * not an error, so render it as 'ok' tone. */
+          if (r.message) {
+            const tone = (r.imported > 0 || r.mode === 'push_only') ? 'ok' : 'err';
+            toast(r.message, tone);
+          } else {
+            toast('Synced — ' + r.imported + ' new, ' + r.skipped + ' skipped', 'ok');
+          }
+          showAdminTab('integrations');
+        }
         catch (e) { toast(e.message, 'err'); }
       } }, '🔄 Sync now'),
+      /* SHEET_SYNC_v2 — Diagnose button */
+      h('button', { class: 'btn sm', onclick: () => openSheetSyncDiagnoseModal(s.id), title: 'Inspect what the parser sees + suggested fixes' }, '🩺 Diagnose'),
       h('button', { class: 'btn sm', onclick: () => openSheetSyncEditModal(s, () => showAdminTab('integrations')) }, '✎ Edit'),
       h('button', { class: 'btn sm danger', onclick: async () => {
         if (!await confirmDialog('Disconnect "' + s.name + '"? Leads already imported from it stay; the CRM just stops polling.')) return;
@@ -15800,6 +17377,61 @@ async function adminIntegrations() {
     h('button', { class: 'btn primary', onclick: () => openSheetSyncEditModal(null, () => showAdminTab('integrations')) }, '+ Connect Google Sheet')
   ));
 
+
+  // --- Section 2c: IVR / Cloud Calling — IVR_UI_v1 -------------------
+  wrap.appendChild(h('h4', { style: { margin: '1.5rem 0 .5rem' } }, '📞 Cloud Calling / IVR'));
+  wrap.appendChild(h('p', { class: 'muted' },
+    'Plug in any IVR or cloud telephony vendor (Exotel, MyOperator, Knowlarity, Tata Tele, Servetel, Ozonetel, Twilio) — calls show in Recent Calls, recordings attach to leads automatically, and the Call button on each lead initiates calls through your vendor.'));
+  (async function _ivrSection(){
+    const ivrWrap = h('div', { class: 'card' });
+    wrap.appendChild(ivrWrap);
+    async function render() {
+      ivrWrap.innerHTML = '';
+      let configs = [];
+      try { configs = await api('api_ivr_configs_list'); }
+      catch (e) { ivrWrap.appendChild(h('div', { class: 'muted' }, 'Could not load: ' + e.message)); return; }
+      if (!configs.length) {
+        ivrWrap.appendChild(h('div', { class: 'muted', style: { padding: '.5rem 0' } }, 'No IVR vendor connected yet. Click below to add one.'));
+      } else {
+        const tbl = h('table', { class: 'table', style: { width: '100%' } });
+        tbl.appendChild(h('thead', {}, h('tr', {},
+          h('th', {}, 'Name'),
+          h('th', {}, 'Vendor'),
+          h('th', {}, 'Active'),
+          h('th', {}, 'Default'),
+          h('th', {}, 'Caller ID'),
+          h('th', {}, '')
+        )));
+        const tb = h('tbody', {});
+        configs.forEach(c => {
+          tb.appendChild(h('tr', {},
+            h('td', {}, c.display_name),
+            h('td', {}, c.vendor_key),
+            h('td', {}, Number(c.is_active) === 1 ? '✅' : '⏸'),
+            h('td', {}, Number(c.is_default) === 1 ? '★' : ''),
+            h('td', {}, c.caller_id || '—'),
+            h('td', {},
+              h('button', { class: 'btn sm', onclick: () => openIvrConfigModal(c.id, render) }, '✎ Edit'),
+              ' ',
+              h('button', { class: 'btn sm ghost', onclick: () => openIvrWebhookModal(c.id) }, '🔗 Webhook URL'),
+              ' ',
+              h('button', { class: 'btn sm danger', onclick: async () => {
+                if (!confirm('Disconnect ' + c.display_name + '? Calls will stop routing through this vendor.')) return;
+                try { await api('api_ivr_config_delete', c.id); toast('Disconnected', 'ok'); render(); }
+                catch (e) { toast(e.message, 'err'); }
+              } }, '🗑')
+            )
+          ));
+        });
+        tbl.appendChild(tb);
+        ivrWrap.appendChild(tbl);
+      }
+      ivrWrap.appendChild(h('div', { class: 'actions', style: { marginTop: '.75rem' } },
+        h('button', { class: 'btn primary', onclick: () => openIvrConfigModal(null, render) }, '+ Connect IVR vendor')
+      ));
+    }
+    render();
+  })();
 
   // --- Section 2b: CSV import from another CRM -----------------------
   wrap.appendChild(h('h4', { style: { margin: '1.5rem 0 .5rem' } }, '📥 Import from another CRM'));
@@ -16008,45 +17640,79 @@ function openSheetSyncEditModal(s, onSaved) {
   const sheetUrlValue = s.sheet_id ? `https://docs.google.com/spreadsheets/d/${s.sheet_id}/edit#gid=${s.sheet_gid || '0'}` : '';
   const users = (CRM.cache.users || []).filter(u => Number(u.is_active) === 1);
   const pushUrl = s.webhook_token ? location.origin + '/hook/sheet/' + s.webhook_token : '';
-  const pushScript = pushUrl ? `// Paste this into your sheet: Extensions → Apps Script → replace the
-// default code with this → Save → Triggers (clock icon) → Add Trigger:
-//   Function = pushNewRowsToCRM, Event = Time-driven, every 5 min.
-// Add a column called "CRM_Sent" — the script writes ✓ there once a
-// row has been sent so it never sends the same row twice.
+  const pushScript = pushUrl ? `// SHEET → CRM push script (sheet stays private).
 //
-// SHEET STAYS FULLY PRIVATE — the script runs as you (the sheet owner)
-// and POSTs each new row to the unique URL below. No "Anyone with link"
-// sharing required.
+// 🚀 ONE-TIME SETUP (3 clicks):
+//   1. Click ▶ Run, pick 'installCrmPushTrigger', authorise when prompted.
+//   2. That's it — a 5-minute trigger is installed automatically and a
+//      'CRM_Sent' column is added that the script writes ✓/✗ into.
+//   3. To send your existing rows immediately, click ▶ Run with the
+//      'pushNewRowsToCRM' function selected.
+//
+// 📌 Manual setup (alternative): Save → Triggers (clock icon) →
+//      Add Trigger → Function = pushNewRowsToCRM, Event = Time-driven,
+//      every 5 min. Run pushNewRowsToCRM once manually to authorise.
+//
+// ⚠ If 'CRM_Sent' shows ✗ <code>: read the code (401/403 = wrong webhook URL,
+//    network error = try again, '✗ Authorization required' = run manually once).
+
 const CRM_WEBHOOK = '${pushUrl}';
 
-function pushNewRowsToCRM() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-  const data = sheet.getDataRange().getValues();
-  if (data.length < 2) return;
-  let headers = data[0].map(h => String(h).trim().toLowerCase());
-  let sentCol = headers.indexOf('crm_sent');
-  if (sentCol < 0) {
-    sheet.getRange(1, headers.length + 1).setValue('CRM_Sent');
-    sentCol = headers.length;
-    headers.push('crm_sent');
+/** One-time helper: installs the 5-min trigger + adds CRM_Sent column. */
+function installCrmPushTrigger() {
+  const triggers = ScriptApp.getProjectTriggers();
+  const exists = triggers.some(t => t.getHandlerFunction() === 'pushNewRowsToCRM');
+  if (!exists) {
+    ScriptApp.newTrigger('pushNewRowsToCRM').timeBased().everyMinutes(5).create();
   }
-  for (let r = 1; r < data.length; r++) {
-    if (data[r][sentCol]) continue;
-    const lead = {};
-    headers.forEach((h, c) => { if (h && h !== 'crm_sent') lead[h] = data[r][c]; });
-    if (!lead.name && !lead.phone) continue;
-    try {
-      const res = UrlFetchApp.fetch(CRM_WEBHOOK, {
-        method: 'post', contentType: 'application/json',
-        payload: JSON.stringify(lead), muteHttpExceptions: true
-      });
-      const ok = res.getResponseCode() === 200;
-      sheet.getRange(r + 1, sentCol + 1)
-        .setValue(ok ? '✓ ' + new Date().toLocaleString() : '✗ ' + res.getResponseCode());
-    } catch (e) {
-      sheet.getRange(r + 1, sentCol + 1).setValue('✗ ' + e.message);
+  // Touch every sheet so CRM_Sent column exists everywhere.
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  ss.getSheets().forEach(sh => {
+    const data = sh.getDataRange().getValues();
+    if (!data.length) return;
+    const headers = data[0].map(h => String(h).trim().toLowerCase());
+    if (headers.indexOf('crm_sent') < 0) {
+      sh.getRange(1, headers.length + 1).setValue('CRM_Sent');
     }
-  }
+  });
+  pushNewRowsToCRM();  // send any existing rows right away
+  Logger.log('✅ CRM push trigger installed + initial sync done');
+}
+
+/** Send every unsent row across EVERY sheet in this spreadsheet. */
+function pushNewRowsToCRM() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  ss.getSheets().forEach(sheet => {
+    const data = sheet.getDataRange().getValues();
+    if (data.length < 2) return;
+    let headers = data[0].map(h => String(h).trim().toLowerCase());
+    let sentCol = headers.indexOf('crm_sent');
+    if (sentCol < 0) {
+      sheet.getRange(1, headers.length + 1).setValue('CRM_Sent');
+      sentCol = headers.length;
+      headers.push('crm_sent');
+    }
+    for (let r = 1; r < data.length; r++) {
+      if (data[r][sentCol]) continue;
+      const lead = {};
+      headers.forEach((h, c) => { if (h && h !== 'crm_sent') lead[h] = data[r][c]; });
+      if (!lead.name && !lead.phone && !lead.mobile && !lead.whatsapp) continue;
+      try {
+        const res = UrlFetchApp.fetch(CRM_WEBHOOK, {
+          method: 'post', contentType: 'application/json',
+          payload: JSON.stringify(lead), muteHttpExceptions: true
+        });
+        const code = res.getResponseCode();
+        const ok = code >= 200 && code < 300;
+        const mark = ok ? '✓ ' + Utilities.formatDate(new Date(), 'GMT+5:30', 'dd-MM HH:mm') : '✗ HTTP ' + code;
+        sheet.getRange(r + 1, sentCol + 1).setValue(mark);
+        Logger.log(sheet.getName() + ' row ' + (r+1) + ': ' + mark + ' · ' + JSON.stringify(lead).slice(0, 200));
+      } catch (e) {
+        sheet.getRange(r + 1, sentCol + 1).setValue('✗ ' + String(e).slice(0, 80));
+        Logger.log('ERROR on ' + sheet.getName() + ' row ' + (r+1) + ': ' + e);
+      }
+    }
+  });
 }` : '';
   const modal = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) modal.remove(); } });
   modal.appendChild(h('div', { class: 'modal modal-lg' },
@@ -16494,6 +18160,74 @@ function openAnnounceModal(initial, onSave) {
   document.body.appendChild(m);
 }
 
+// ---------- Quotation Defaults ----------
+// Tenant admin sets a default T&C + default Notes block. Every NEW
+// quotation auto-fills these. Per-quote editing still works.
+async function adminQuotation() {
+  const card = h('div', { class: 'card' });
+  card.appendChild(h('h3', { style: { marginTop: 0 } }, '📄 Quotation Defaults'));
+  card.appendChild(h('p', { class: 'muted', style: { marginTop: '-.25rem' } },
+    'Set the default Terms & Conditions and Notes text that every new quotation will start with. Reps can still edit per-quote before sending.'));
+
+  // Load current defaults
+  let cfgTerms = ''; let cfgNotes = '';
+  try {
+    const t = await api('api_admin_getConfig', 'QUOTATION_DEFAULT_TERMS');
+    if (t && t.value) cfgTerms = t.value;
+  } catch (_) {}
+  try {
+    const n = await api('api_admin_getConfig', 'QUOTATION_DEFAULT_NOTES');
+    if (n && n.value) cfgNotes = n.value;
+  } catch (_) {}
+
+  // Terms textarea
+  const termsInp = h('textarea', {
+    rows: 8,
+    placeholder: 'e.g.\n• 50% advance, balance on delivery.\n• Quote valid for 30 days.\n• GST 18% extra (where applicable).\n• Delivery within 7 working days from confirmation.\n• Any change in scope will be re-quoted.',
+    style: { width: '100%', padding: '.6rem', fontSize: '.9rem', lineHeight: '1.5' }
+  }, cfgTerms);
+  card.appendChild(h('div', { class: 'field' },
+    h('label', { style: { fontWeight: '600' } }, 'Default Terms & Conditions'),
+    h('div', { class: 'muted', style: { fontSize: '.78rem', marginBottom: '.35rem' } },
+      'Pre-fills the T&C box on every new quotation. Markdown-free plain text — line breaks are preserved.'),
+    termsInp
+  ));
+
+  // Notes textarea
+  const notesInp = h('textarea', {
+    rows: 4,
+    placeholder: 'e.g.\n• Thank you for your business!\n• For any clarification call us on +91 98765 43210.',
+    style: { width: '100%', padding: '.6rem', fontSize: '.9rem', lineHeight: '1.5' }
+  }, cfgNotes);
+  card.appendChild(h('div', { class: 'field' },
+    h('label', { style: { fontWeight: '600' } }, 'Default Notes (visible to customer)'),
+    h('div', { class: 'muted', style: { fontSize: '.78rem', marginBottom: '.35rem' } },
+      'Optional. Appears below the items table on the quote PDF.'),
+    notesInp
+  ));
+
+  const status = h('div', { style: { fontSize: '.85rem' } });
+  const saveBtn = h('button', { class: 'btn primary' }, '💾 Save defaults');
+  saveBtn.onclick = async () => {
+    saveBtn.disabled = true;
+    status.textContent = '⏳ Saving…'; status.style.color = '';
+    try {
+      await api('api_admin_setConfig', { key: 'QUOTATION_DEFAULT_TERMS', value: String(termsInp.value || '') });
+      await api('api_admin_setConfig', { key: 'QUOTATION_DEFAULT_NOTES', value: String(notesInp.value || '') });
+      status.textContent = '✅ Saved. New quotations will auto-fill these.';
+      status.style.color = '#16a34a';
+    } catch (e) {
+      status.textContent = '❌ ' + e.message; status.style.color = '#dc2626';
+    } finally {
+      saveBtn.disabled = false;
+    }
+  };
+  card.appendChild(h('div', { style: { display: 'flex', gap: '.6rem', alignItems: 'center', marginTop: '.6rem' } },
+    saveBtn, status
+  ));
+  return card;
+}
+
 async function adminCompany() {
   const cfg = await api('api_admin_getConfig');
   const wrap = h('div', {});
@@ -16577,20 +18311,45 @@ async function adminCompany() {
       h('p', { class: 'muted', style: { fontSize: '.8rem', marginTop: '.3rem' } },
         'Shown on the login screen, sidebar, and emails.'
       ),
-      h('div', { class: 'actions', style: { marginTop: '1rem' } },
-        h('button', { class: 'btn primary', onclick: async () => {
-          const newName = nameInput.value.trim();
-          if (!newName) return toast('Name cannot be empty', 'warn');
-          try {
-            await api('api_admin_setConfig', { COMPANY_NAME: newName });
-            CRM.config.company_name = newName;
-            document.title = newName;
-            const brandSpan = document.querySelector('.brand-name');
-            if (brandSpan) brandSpan.textContent = newName;
-            toast('Saved');
-          } catch (e) { toast(e.message, 'err'); }
-        } }, 'Save name')
-      )
+      // QUOTE_PRO_UI_v1: GST / address / phone / email — used on quotations, invoices
+      (function() {
+        const gstInput   = h('input', { type: 'text', value: cfg.COMPANY_GST || '', placeholder: 'e.g. 09BHZPA7744J2ZK', style: { width: '100%' } });
+        const addrInput  = h('textarea', { rows: 3, placeholder: 'Full registered address (use new lines for street / city / state / pincode)', style: { width: '100%', resize: 'vertical' } }, cfg.COMPANY_ADDRESS || '');
+        const phoneInput = h('input', { type: 'text', value: cfg.COMPANY_PHONE || '', placeholder: 'e.g. +91 98765 43210', style: { width: '100%' } });
+        const emailInput = h('input', { type: 'email', value: cfg.COMPANY_EMAIL || '', placeholder: 'e.g. sales@yourcompany.com', style: { width: '100%' } });
+        return h('div', { style: { display: 'grid', gap: '.6rem', marginTop: '.8rem' } },
+          h('div', {}, h('label', { style: { display: 'block', fontWeight: 600, fontSize: '.85rem', marginBottom: '.2rem' } }, 'GSTIN'), gstInput,
+            h('p', { class: 'muted', style: { fontSize: '.75rem', margin: '.2rem 0 0' } }, 'Appears on every quotation under your company name.')
+          ),
+          h('div', {}, h('label', { style: { display: 'block', fontWeight: 600, fontSize: '.85rem', marginBottom: '.2rem' } }, 'Address'), addrInput,
+            h('p', { class: 'muted', style: { fontSize: '.75rem', margin: '.2rem 0 0' } }, 'Use line breaks for street / city / state / pincode — each line renders separately on the quote.')
+          ),
+          h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '.6rem' } },
+            h('div', {}, h('label', { style: { display: 'block', fontWeight: 600, fontSize: '.85rem', marginBottom: '.2rem' } }, 'Phone'), phoneInput),
+            h('div', {}, h('label', { style: { display: 'block', fontWeight: 600, fontSize: '.85rem', marginBottom: '.2rem' } }, 'Email'), emailInput)
+          ),
+          h('div', { class: 'actions', style: { marginTop: '.6rem' } },
+            h('button', { class: 'btn primary', onclick: async () => {
+              const newName = nameInput.value.trim();
+              if (!newName) return toast('Company name cannot be empty', 'warn');
+              try {
+                await api('api_admin_setConfig', {
+                  COMPANY_NAME:    newName,
+                  COMPANY_GST:     gstInput.value.trim(),
+                  COMPANY_ADDRESS: addrInput.value.trim(),
+                  COMPANY_PHONE:   phoneInput.value.trim(),
+                  COMPANY_EMAIL:   emailInput.value.trim()
+                });
+                CRM.config.company_name = newName;
+                document.title = newName;
+                const brandSpan = document.querySelector('.brand-name');
+                if (brandSpan) brandSpan.textContent = newName;
+                toast('✓ Company details saved');
+              } catch (e) { toast(e.message, 'err'); }
+            } }, '💾 Save company details')
+          )
+        );
+      })()
     )
   ));
 
@@ -17263,14 +19022,79 @@ async function adminFb() {
   }
 
   if (pages.length > 0) {
+    // FB_REGISTRY_STATUS_v1 — Sync-all button above the table
+    const syncAllBar = h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '.5rem', marginBottom: '.4rem', padding: '.45rem .6rem', background: '#eef2ff', borderRadius: '8px', border: '1px solid #c7d2fe' }},
+      h('span', { style: { fontSize: '.8rem', color: '#3730a3' } },
+        '\ud83d\udce1 Central registry: pushes each monitored page to ',
+        h('code', { style: { background: '#fff', padding: '.05rem .3rem', borderRadius: '4px', fontSize: '.72rem' } }, 'smartcrmsolution.com/fb_leads_connections.json'),
+        ' so Meta Lead Ads can route incoming leads.'),
+      h('button', { class: 'btn sm primary', style: { whiteSpace: 'nowrap' }, onclick: async (ev) => {
+        const btn = ev.target;
+        btn.disabled = true; btn.textContent = '\u23f3 Syncing\u2026';
+        try {
+          const out = await api('api_fb_pages_syncRegistry');
+          toast('\u2714 Synced ' + (out.ok || 0) + '/' + (out.total || 0) + ' pages to central registry');
+          showAdminTab('fb');
+        } catch (e) { toast(e.message, 'err'); }
+        finally { btn.disabled = false; btn.textContent = '\ud83d\udd04 Sync all to central'; }
+      } }, '\ud83d\udd04 Sync all to central')
+    );
+    pagesCard.appendChild(syncAllBar);
+
+    function _registryBadge(pg) {
+      if (!pg.is_monitored) {
+        return h('span', { style: { fontSize: '.7rem', color: '#888' } }, '\u2014 Not monitored');
+      }
+      if (pg.last_registry_sync_ok === true) {
+        const when = pg.last_registry_sync_at ? new Date(pg.last_registry_sync_at) : null;
+        const whenTxt = when ? when.toLocaleString() : '';
+        return h('span', { title: 'Last sync: ' + whenTxt, style: { background: '#dcfce7', color: '#166534', padding: '.1rem .4rem', borderRadius: '999px', fontSize: '.7rem', fontWeight: 600 } },
+          '\u2714 Synced'
+        );
+      }
+      if (pg.last_registry_sync_ok === false) {
+        return h('span', { title: pg.last_registry_sync_error || '', style: { background: '#fee2e2', color: '#b91c1c', padding: '.1rem .4rem', borderRadius: '999px', fontSize: '.7rem', fontWeight: 600 } },
+          '\u2717 Sync failed'
+        );
+      }
+      return h('span', { style: { background: '#fef3c7', color: '#92400e', padding: '.1rem .4rem', borderRadius: '999px', fontSize: '.7rem', fontWeight: 600 } },
+        '\u26a0 Not synced yet'
+      );
+    }
+
     const tbl = h('table', { class: 'mini-table fb-pages' },
       h('thead', {}, h('tr', {},
-        h('th', {}, 'Page Name'), h('th', { style: { textAlign: 'right' } }, 'Action')
+        h('th', {}, 'Page Name'),
+        h('th', {}, 'Page ID'),
+        h('th', {}, 'Central Registry'),
+        h('th', { style: { textAlign: 'right' } }, 'Action')
       )),
       h('tbody', {}, ...pages.map(pg => h('tr', {},
         h('td', {},
           h('div', {}, pg.page_name || ('Page ' + pg.page_id)),
           pg.category ? h('div', { class: 'muted', style: { fontSize: '.75rem' } }, pg.category) : null
+        ),
+        h('td', { style: { fontFamily: 'monospace', fontSize: '.72rem', color: '#666' } }, pg.page_id || ''),
+        h('td', {},
+          _registryBadge(pg),
+          pg.is_monitored
+            ? h('button', { class: 'btn xs ghost', style: { marginLeft: '.4rem' }, onclick: async (ev) => {
+                const btn = ev.target;
+                btn.disabled = true; btn.textContent = '\u23f3';
+                try {
+                  const out = await api('api_fb_pages_syncRegistry', pg.page_id);
+                  if (out.ok) { toast('\u2714 Synced ' + pg.page_name, 'ok'); }
+                  else {
+                    const r0 = (out.results && out.results[0]) || {};
+                    const errMsg = r0.error || r0.skipped || ('Unknown error \u2014 raw: ' + JSON.stringify(out).slice(0, 400));
+                    toast('\u2717 Sync failed', 'err');
+                    alert('Sync failed for ' + pg.page_name + ':\n\n' + errMsg + '\n\nFix the issue (usually FB_REGISTRY_SECRET env var on Railway), then click Sync again.');
+                  }
+                  showAdminTab('fb');
+                } catch (e) { toast(e.message, 'err'); }
+                finally { btn.disabled = false; btn.textContent = '\ud83d\udd04 Sync'; }
+              } }, '\ud83d\udd04 Sync')
+            : null
         ),
         h('td', { style: { textAlign: 'right' } },
           pg.is_monitored
@@ -18252,12 +20076,23 @@ async function adminProducts() {
                 alt: "",
                 style: { width: "48px", height: "48px", objectFit: "cover", borderRadius: "4px", border: "1px solid #e2e8f0", display: p.image_url ? "block" : "none" }
               });
-              const urlInp = h("input", { type: "text", placeholder: "Image URL", value: p.image_url || "", "data-id": p.id, "data-field": "image_url", style: { width: "100%", fontSize: ".75rem" } });
+              const urlInp = h("input", { type: "text", placeholder: "Image URL or upload →", value: p.image_url || "", "data-id": p.id, "data-field": "image_url", style: { width: "100%", fontSize: ".75rem" } });
+              /* PROD_IMG_v1 — file upload that fills the URL input with a data: URI */
+              const upBtn = h("button", { type: "button", class: "btn xs", title: "Upload image from disk", style: { fontSize: ".7rem", marginTop: ".2rem" } }, "📷 Upload");
+              const fileInp = h("input", { type: "file", accept: "image/*", style: { display: "none" } });
+              upBtn.onclick = () => fileInp.click();
+              fileInp.onchange = () => {
+                const f = fileInp.files && fileInp.files[0]; if (!f) return;
+                if (f.size > 1_500_000) { toast('Image too large (max 1.5 MB) — try a smaller file or compress it first', 'err'); return; }
+                const r = new FileReader();
+                r.onload = () => { urlInp.value = r.result; urlInp.dispatchEvent(new Event('input')); toast('Image loaded — click Save to persist', 'ok'); };
+                r.readAsDataURL(f);
+              };
               urlInp.addEventListener("input", () => {
                 previewImg.src = urlInp.value;
                 previewImg.style.display = urlInp.value ? "block" : "none";
               });
-              wrap.appendChild(previewImg); wrap.appendChild(urlInp);
+              wrap.appendChild(previewImg); wrap.appendChild(urlInp); wrap.appendChild(upBtn); wrap.appendChild(fileInp);
               return wrap;
             })()
           ),
@@ -18288,7 +20123,32 @@ async function adminProducts() {
   ));
   card.appendChild(tbl);
 
-  // ---- Add product form ----
+  /* PROD_IMG_v1 — tenant-wide quotation image size setting */
+  card.appendChild(h("div", { style: { marginTop: "1.5rem", padding: ".7rem .9rem", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: "8px" } },
+    h("div", { style: { fontWeight: 600, marginBottom: ".3rem" } }, "🖼 Image size on quotations"),
+    h("div", { class: "muted", style: { fontSize: ".82rem", marginBottom: ".4rem" } },
+      "Choose how large product images appear on every quotation generated by this tenant."),
+    (() => {
+      const sel = h("select", { class: "input", style: { maxWidth: "220px" } },
+        h("option", { value: "hidden" }, "Hidden — no image"),
+        h("option", { value: "small"  }, "Small (60px)"),
+        h("option", { value: "medium" }, "Medium (110px)"),
+        h("option", { value: "large", selected: "selected" }, "Large (180px) — default"),
+        h("option", { value: "xl"     }, "Extra large (260px)")
+      );
+      api("api_admin_getConfig").then(cfg => {
+        const v = (cfg && cfg.QUOTATION_PRODUCT_IMAGE_SIZE) || "large";
+        try { sel.value = v; } catch (_) {}
+      }).catch(() => {});
+      const saveBtn = h("button", { class: "btn primary sm", style: { marginLeft: ".4rem" } }, "💾 Save");
+      saveBtn.onclick = async () => {
+        try { await api("api_admin_setConfig", { QUOTATION_PRODUCT_IMAGE_SIZE: sel.value }); toast("Saved — new quotations will use this size", "ok"); }
+        catch (e) { toast(e.message, "err"); }
+      };
+      return h("div", { style: { display: "flex", alignItems: "center" } }, sel, saveBtn);
+    })()
+  ));
+    // ---- Add product form ----
   card.appendChild(h("h5", { style: { marginTop: "1.5rem" } }, "+ Add new product"));
   card.appendChild(h("form", { class: "inline-form", style: { display: "flex", gap: ".5rem", flexWrap: "wrap", alignItems: "center" },
     onsubmit: async ev => {
@@ -18745,8 +20605,8 @@ async function adminPermissions() {
 async function adminDuplicates() {
   const cfg = await api('api_admin_getConfig');
   return configForm(cfg, ['DUPLICATE_POLICY', 'DUPLICATE_WINDOW_HOURS', 'DUPLICATE_MATCH_FIELDS'], {
-    DUPLICATE_POLICY: { type: 'select', options: ['allow', 'assign_same_user', 'skip_assignment', 'reject'],
-      hint: 'allow=always create · assign_same_user=give to original assignee · skip_assignment=leave unassigned · reject=drop incoming dup' },
+    DUPLICATE_POLICY: { type: 'select', options: ['allow', 'assign_same_user', 'skip_assignment', 'reject', 'merge'] /* LEAD_MERGE_v1 */,
+      hint: 'allow=always create · assign_same_user=give to original · skip_assignment=leave unassigned · reject=drop · merge=fold into existing (recommended)' },
     DUPLICATE_WINDOW_HOURS: { hint: 'Only check dupes within this window (hours)' },
     DUPLICATE_MATCH_FIELDS: { hint: 'Comma-separated: phone, email' }
   });
@@ -19221,10 +21081,14 @@ function generateTempPasswordClient() {
 /* ---------------- HR views ---------------- */
 VIEWS.tasks = async (view) => {
   view.innerHTML = '';
-  // Two-tab view: All tasks + Done today
+  /* TASKS_BY_EMP_v1 — admin/manager/team_leader see a "By Employee" subtab
+   * that groups every employee's task counts so they can drill into who has
+   * done what. Backend api_tasks_list already returns all tasks for admin. */
+  const _isAdminLike = CRM.user.role === 'admin' || CRM.user.role === 'manager' || CRM.user.role === 'team_leader';
   const tabs = h('div', { class: 'subtabs' },
     h('button', { class: 'subtab active', onclick: ev => switchTab(ev, 'all') }, 'All tasks'),
-    h('button', { class: 'subtab', onclick: ev => switchTab(ev, 'today') }, "✅ What I did today")
+    h('button', { class: 'subtab', onclick: ev => switchTab(ev, 'today') }, "✅ What I did today"),
+    _isAdminLike ? h('button', { class: 'subtab', onclick: ev => switchTab(ev, 'byemp') }, "👥 By Employee") : null
   );
   const content = h('div', { id: 'task-content' });
   view.append(tabs, content);
@@ -19235,6 +21099,140 @@ VIEWS.tasks = async (view) => {
     ev.target.classList.add('active');
     if (which === 'all')   renderAllTasks();
     if (which === 'today') renderTodayTasks();
+    if (which === 'byemp') renderByEmployee();
+  }
+
+  /* TASKS_BY_EMP_v1 — admin view: who has done what */
+  async function renderByEmployee() {
+    content.innerHTML = '<div class="loading">Loading employee task breakdown…</div>';
+    const [allTasks, users] = await Promise.all([
+      api('api_tasks_list', {}),
+      (CRM.cache && CRM.cache.users) || api('api_users_list')
+    ]);
+    const _ymd = (iso) => {
+      if (!iso) return '';
+      const d = new Date(iso);
+      return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+    };
+    const today = _ymd(new Date().toISOString());
+    const weekStart = (() => { const d = new Date(); d.setDate(d.getDate() - 6); return _ymd(d.toISOString()); })();
+    const monthStart = (() => { const d = new Date(); d.setDate(1); return _ymd(d.toISOString()); })();
+    const groups = {};
+    users.forEach(u => { groups[Number(u.id)] = { user: u, total: 0, open: 0, done: 0, done_today: 0, done_week: 0, done_month: 0, last_done_at: null, last_done_title: '', tasks: [] }; });
+    allTasks.forEach(t => {
+      const uid = Number(t.assigned_to);
+      const g = groups[uid];
+      if (!g) return;
+      g.total++; g.tasks.push(t);
+      if (t.status === 'done') {
+        g.done++;
+        const ymd = _ymd(t.completed_at || t.created_at);
+        if (ymd === today) g.done_today++;
+        if (ymd >= weekStart) g.done_week++;
+        if (ymd >= monthStart) g.done_month++;
+        if (!g.last_done_at || String(t.completed_at) > String(g.last_done_at)) {
+          g.last_done_at = t.completed_at;
+          g.last_done_title = t.title;
+        }
+      } else { g.open++; }
+    });
+    const list = Object.values(groups).filter(g => g.total > 0)
+      .sort((a, b) => (b.done_week - a.done_week) || (b.done_month - a.done_month) || String(a.user.name).localeCompare(String(b.user.name)));
+    const totals = list.reduce((s, g) => ({
+      done: s.done + g.done, open: s.open + g.open,
+      week: s.week + g.done_week, today: s.today + g.done_today, month: s.month + g.done_month
+    }), { done: 0, open: 0, week: 0, today: 0, month: 0 });
+    content.innerHTML = '';
+    content.append(
+      h('div', { class: 'cards' },
+        h('div', { class: 'card stat ok' },
+          h('div', { class: 'stat-icon' }, '✅'),
+          h('div', { class: 'stat-body' },
+            h('div', { class: 'stat-label' }, 'Done today (team)'),
+            h('div', { class: 'stat-value' }, String(totals.today)))),
+        h('div', { class: 'card stat accent' },
+          h('div', { class: 'stat-icon' }, '📅'),
+          h('div', { class: 'stat-body' },
+            h('div', { class: 'stat-label' }, 'Done this week'),
+            h('div', { class: 'stat-value' }, String(totals.week)))),
+        h('div', { class: 'card stat' },
+          h('div', { class: 'stat-icon' }, '🗓'),
+          h('div', { class: 'stat-body' },
+            h('div', { class: 'stat-label' }, 'Done this month'),
+            h('div', { class: 'stat-value' }, String(totals.month)))),
+        h('div', { class: 'card stat warn' },
+          h('div', { class: 'stat-icon' }, '⏳'),
+          h('div', { class: 'stat-body' },
+            h('div', { class: 'stat-label' }, 'Open (team-wide)'),
+            h('div', { class: 'stat-value' }, String(totals.open))))
+      ),
+      h('div', { class: 'card', style: { marginTop: '.75rem' } },
+        h('h3', { style:{ marginTop:0 } }, '👥 Tasks done by employee'),
+        h('div', { class: 'muted', style:{ marginBottom: '.5rem' } }, list.length + ' employee(s) with tasks. Click any row to see that employee\'s full list.'),
+        list.length === 0
+          ? h('p', { class: 'muted' }, 'No tasks assigned yet.')
+          : h('div', { class: 'table-wrap' }, h('table', {},
+              h('thead', {}, h('tr', {},
+                h('th', {}, 'Employee'),
+                h('th', {}, 'Role'),
+                h('th', { style:{ textAlign:'right' } }, '✅ Today'),
+                h('th', { style:{ textAlign:'right' } }, '📅 Week'),
+                h('th', { style:{ textAlign:'right' } }, '🗓 Month'),
+                h('th', { style:{ textAlign:'right' } }, 'Done (total)'),
+                h('th', { style:{ textAlign:'right' } }, 'Open'),
+                h('th', {}, 'Last activity'),
+                h('th', {}, '')
+              )),
+              h('tbody', {}, ...list.map(g => h('tr', { style:{ cursor:'pointer' }, onclick: () => _showEmpTasks(g) },
+                h('td', {}, h('b', {}, g.user.name || '—')),
+                h('td', { class:'muted' }, g.user.role || ''),
+                h('td', { style:{ textAlign:'right', fontWeight: g.done_today > 0 ? 700 : 400, color: g.done_today > 0 ? '#15803d' : 'inherit' } }, String(g.done_today)),
+                h('td', { style:{ textAlign:'right', fontWeight: g.done_week > 0 ? 600 : 400 } }, String(g.done_week)),
+                h('td', { style:{ textAlign:'right' } }, String(g.done_month)),
+                h('td', { style:{ textAlign:'right', color:'#15803d', fontWeight:600 } }, String(g.done)),
+                h('td', { style:{ textAlign:'right', color: g.open > 0 ? '#92400e' : 'inherit' } }, String(g.open)),
+                h('td', { class:'muted', style:{ fontSize:'.78rem' } }, g.last_done_at ? (fmtDate(g.last_done_at, 'relative') + ' — ' + (g.last_done_title || '').slice(0, 40)) : '—'),
+                h('td', {}, h('button', { class: 'btn xs' }, 'View →'))
+              )))
+            ))
+      )
+    );
+  }
+  function _showEmpTasks(g) {
+    const modal = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target === modal) modal.remove(); } });
+    const card = h('div', { class: 'modal', style: { maxWidth: '880px', maxHeight: '85vh', overflow: 'auto' } });
+    card.appendChild(h('div', { class: 'modal-head' },
+      h('h3', {}, '👤 ' + (g.user.name || 'Employee') + ' — ' + g.done + ' done, ' + g.open + ' open'),
+      h('button', { class: 'btn icon', onclick: () => modal.remove() }, '✕')
+    ));
+    const body = h('div', { class: 'modal-body' });
+    const sorted = [...g.tasks].sort((a, b) => {
+      if (a.status === 'done' && b.status === 'done') return String(b.completed_at || '').localeCompare(String(a.completed_at || ''));
+      if (a.status === 'done') return -1;
+      if (b.status === 'done') return 1;
+      return String(a.due_at || '9999').localeCompare(String(b.due_at || '9999'));
+    });
+    body.appendChild(h('div', { class:'table-wrap' }, h('table', {},
+      h('thead', {}, h('tr', {},
+        h('th', {}, 'Title'),
+        h('th', {}, 'Status'),
+        h('th', {}, 'Due'),
+        h('th', {}, 'Completed'),
+        h('th', {}, 'Created by')
+      )),
+      h('tbody', {}, ...sorted.map(t => h('tr', {},
+        h('td', {}, h('b', {}, t.title)),
+        h('td', {}, h('span', {
+          style: { background: t.status==='done' ? '#dcfce7' : '#fef3c7', color: t.status==='done' ? '#15803d' : '#92400e', padding:'1px 8px', borderRadius:'999px', fontSize:'.75rem', fontWeight:600 }
+        }, t.status)),
+        h('td', { class:'muted' }, t.due_at ? fmtDate(t.due_at) : '—'),
+        h('td', { class:'muted' }, t.completed_at ? fmtDate(t.completed_at, 'relative') : '—'),
+        h('td', { class:'muted' }, t.creator_name || '—')
+      )))
+    )));
+    card.appendChild(body);
+    modal.appendChild(card);
+    document.body.appendChild(modal);
   }
 
   async function renderAllTasks() {
@@ -20674,17 +22672,49 @@ async function syncRecordings(opts) {
   // watermark (e.g. user picked the folder a year ago) from re-pulling
   // every recording on the device. The gate-by-call-event logic below
   // is the backup; this is the front-line filter.
+  // REC_REWIND_v1 (2026-05-20): when computing the incremental window,
+  // step the watermark BACK by 5 minutes. Reason: Android dialer flushes
+  // recording files a few seconds after the call ends. If sync runs at
+  // T+0 and the previous sync left watermark = T-2min, files written
+  // between T-5min and T-2min would otherwise be permanently skipped
+  // because their mod-time predates the stored watermark. The
+  // `uploaded[f.uri]` map still dedupes within a single user's device,
+  // so re-checking older files is free.
+  const REWIND_MS = 5 * 60_000;
   const minWatermark = Date.now() - 30 * 60_000;
-  const sinceMs = opts.full ? 0 : Math.max(stored, minWatermark);
+  const sinceMs = opts.full ? 0 : Math.max(stored - REWIND_MS, minWatermark);
   const filesJson = LeadCRMNative.listRecordings(sinceMs);
   let files = [];
   try { files = JSON.parse(filesJson || '[]'); } catch (e) { files = []; }
+
+  /* REC_FILENAME_DEDUP_v1 (2026-05-20)
+   * Pre-flight: ask the server which of these filenames are already
+   * uploaded. Drop them from the local list. This means even if the
+   * device's localStorage was cleared, we still don't double-upload.
+   * Server has the authoritative answer, not the local watermark. */
+  if (files.length) {
+    try {
+      const filenames = files.map(f => f.name).filter(Boolean);
+      if (filenames.length) {
+        const r = await api('api_recordings_filenamesPresent', { filenames });
+        const presentSet = new Set((r && r.present) || []);
+        if (presentSet.size) {
+          const beforeCount = files.length;
+          files = files.filter(f => !presentSet.has(f.name));
+          console.log('[leadcrm] server dedup: dropped ' + (beforeCount - files.length) + ' files already on CRM');
+        }
+      }
+    } catch (e) {
+      console.warn('[leadcrm] server-side filename dedup failed (continuing):', e.message);
+      // Non-fatal — fall through to normal upload + dedup_key path
+    }
+  }
 
   if (files.length === 0) {
     const watermarkAge = Math.round((Date.now() - sinceMs) / 60000);
     const msg = opts.full
       ? 'No recordings found in the folder. Check that the folder you picked actually has .m4a / .amr / .mp3 / .wav / .ogg / .flac files.'
-      : 'No NEW recordings since ' + watermarkAge + ' min ago. Tap "⚡ Re-sync all" to scan every file in the folder.';
+      : 'No NEW recordings since ' + watermarkAge + ' min ago. (Looking at files newer than ' + new Date(sinceMs).toLocaleString('en-IN', {hour:'2-digit', minute:'2-digit', day:'2-digit', month:'short'}) + '.) Tap "⚡ Re-sync all" to scan every file in the folder.';
     toast(msg, 'warn');
     console.warn('[leadcrm] sync: 0 files | folder=' + folderName + ' | sinceMs=' + sinceMs + ' (' + new Date(sinceMs).toISOString() + ')');
     return;
@@ -20919,7 +22949,9 @@ async function syncRecordings(opts) {
   }
 
   localStorage.setItem('rec_uploaded', JSON.stringify(uploaded));
-  localStorage.setItem('rec_last_sync', String(Date.now()));
+  /* REC_RETRY_v1 — only advance watermark when nothing failed, so failed files retry on next tick */
+  if (failed === 0) { localStorage.setItem('rec_last_sync', String(Date.now())); }
+  else { console.warn('[leadcrm] not advancing rec_last_sync — ' + failed + ' files failed, will retry'); }
   const parts = [];
   parts.push(`📂 ${files.length} found`);
   parts.push(`✅ ${success} synced`);
@@ -21808,15 +23840,6 @@ async function _silentSyncRecordings(opts) {
     const realToast = window.toast;
     let suppressed = 0;
     window.toast = function (msg, kind) {
-      // REC_SYNC_QUIET_v1 — auto-sync ticks every 90s + after every save / focus / call.
-      // The "No NEW recordings since X min ago" warn fires every single tick when
-      // nothing new is on disk → user sees the message constantly. Swallow it
-      // (and the "browser-only" / "no folder" / "already pending" variants) on
-      // background runs; manual "🔄 Sync now" still calls syncRecordings directly
-      // so the user-initiated toast still shows.
-      if (kind === 'warn' && typeof msg === 'string' && /No NEW recordings|No recordings found|Sync only works|sync already running/i.test(msg)) {
-        return; // silent — this is background polling, nothing to tell the user
-      }
       if (kind === 'warn' || kind === 'err') return realToast(msg, kind);
       if (typeof msg === 'string' && /✅\s*[1-9]/.test(msg)) suppressed++;
     };
@@ -24397,7 +26420,7 @@ async function openWaWidgetEditor(widgetId, onSaved) {
     try {
       const r = await api('api_waWidget_save', payload);
       toast('Saved', 'ok');
-      modal.remove();
+      backdrop.remove();
       if (onSaved) onSaved();
       if (!widgetId && r && r.widget) setTimeout(() => openWaWidgetSnippet(r.widget.id), 250);
     } catch (e) { toast(e.message, 'err'); }
@@ -25351,7 +27374,43 @@ function _initFloatingChat() {
     document.getElementById('chat-back-btn').onclick = () => { _activePhone = null; body.style.display = ''; renderThreads(); };
     const inp = document.getElementById('chat-thread-input');
     const send = document.getElementById('chat-thread-send');
-    send.onclick = async () => {
+    /* WA_PASTE_IMG_v1 — paste image into floating dock compose */
+    inp.addEventListener && inp.addEventListener('paste', async ev => {
+      const items = (ev.clipboardData && ev.clipboardData.items) || [];
+      let imgFile = null;
+      for (const it of items) {
+        if (it && it.kind === 'file' && /^image\//.test(it.type || '')) {
+          const f = it.getAsFile();
+          if (f) { imgFile = f; break; }
+        }
+      }
+      if (!imgFile) return;
+      ev.preventDefault();
+      if (imgFile.size > 25 * 1024 * 1024) { toast('Pasted image too large (max 25 MB)', 'err'); return; }
+      if (!imgFile.name || imgFile.name === 'image.png') {
+        const ext = (imgFile.type || 'image/png').split('/')[1] || 'png';
+        try { Object.defineProperty(imgFile, 'name', { value: 'pasted-' + Date.now() + '.' + ext, writable: false }); } catch (_) {}
+      }
+      previewSlot.style.display = 'block';
+      previewSlot.innerHTML = '<span class="muted">Uploading pasted image…</span>';
+      try {
+        const fd = new FormData();
+        fd.append('file', imgFile);
+        const r = await fetch('/api/wa/upload', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + (CRM.token || '') },
+          body: fd
+        });
+        const j = await r.json();
+        if (!r.ok || j.error) throw new Error(j.error || ('upload failed (' + r.status + ')'));
+        _pending = j;
+        renderPreview();
+      } catch (e) {
+        _pending = null; previewSlot.style.display = 'none';
+        toast('Pasted image upload failed: ' + e.message, 'err');
+      }
+    });
+        send.onclick = async () => {
       const t = inp.value.trim();
       if (!t && !_pending) return;
       send.disabled = true; const _orig = send.textContent; send.textContent = 'Sending...';
@@ -25856,7 +27915,35 @@ async function openSourceMappingModal(sourceId, sourceLabel) {
   const allKeys = knownKeys.concat(extraKeys);
   const saved = data.mapping || {};
   const crmFields = data.crm_fields || ['name','phone','email','company','city','state','source','source_ref','notes','product','value','tags'];
+  // CFMAP_v1 — custom fields from tenant DB (cf_<key> + label).
+  const customFields = Array.isArray(data.custom_fields) ? data.custom_fields : [];
   const selectByKey = {};
+
+  // Helper: build the <select> with two optgroups (Core + Custom). Pre-selects
+  // savedVal if provided. Falls back to a top-level option for cf_* values
+  // that are no longer in the tenant's custom_fields list (so a stale saved
+  // mapping still renders correctly).
+  function _buildMapSelect(savedVal) {
+    const optsTop = [h('option', { value: '' }, '— ignore (use default) —')];
+    const coreGroup = h('optgroup', { label: 'Core lead columns' },
+      ...crmFields.map(f => h('option', { value: f, selected: savedVal === f ? 'selected' : null }, f))
+    );
+    optsTop.push(coreGroup);
+    if (customFields.length) {
+      const cfGroup = h('optgroup', { label: '✨ Custom fields' },
+        ...customFields.map(cf => h('option', {
+          value: cf.key,
+          selected: savedVal === cf.key ? 'selected' : null
+        }, cf.label + '  (' + cf.key + ')'))
+      );
+      optsTop.push(cfGroup);
+    }
+    // Fallback for legacy/orphan cf_ values
+    if (savedVal && savedVal.startsWith('cf_') && !customFields.some(cf => cf.key === savedVal)) {
+      optsTop.push(h('option', { value: savedVal, selected: 'selected' }, savedVal + '  (custom field, no longer defined)'));
+    }
+    return h('select', { style: { width: '100%' } }, ...optsTop);
+  }
 
   const table = h('table', { class: 'mini-table', style: { width: '100%' } });
   table.appendChild(h('thead', {}, h('tr', {},
@@ -25865,12 +27952,7 @@ async function openSourceMappingModal(sourceId, sourceLabel) {
   )));
   const tbody = h('tbody', {});
   allKeys.forEach(k => {
-    const opts = [h('option', { value: '' }, '— ignore (use default) —')]
-      .concat(crmFields.map(f => h('option', { value: f, selected: saved[k] === f ? 'selected' : null }, f)));
-    if (saved[k] && saved[k].startsWith('cf_')) {
-      opts.push(h('option', { value: saved[k], selected: 'selected' }, saved[k] + ' (custom field)'));
-    }
-    const sel = h('select', { style: { width: '100%' } }, ...opts);
+    const sel = _buildMapSelect(saved[k]);
     selectByKey[k] = sel;
     tbody.appendChild(h('tr', {},
       h('td', {}, h('code', {}, k)),
@@ -25881,18 +27963,17 @@ async function openSourceMappingModal(sourceId, sourceLabel) {
   body.appendChild(table);
 
   const customKeyInp = h('input', { placeholder: 'Add another incoming key (optional)', style: { width: '60%' } });
-  const customFieldSel = h('select', { style: { width: '36%' } },
-    h('option', { value: '' }, '— pick CRM field —'),
-    ...crmFields.map(f => h('option', { value: f }, f))
-  );
+  // CFMAP_v1 — adder row also uses the optgroup'd select so admins can map
+  // a brand-new incoming key directly to a custom field.
+  const customFieldSel = _buildMapSelect('');
+  // Override placeholder to make the empty option more obvious here.
+  if (customFieldSel.firstChild) customFieldSel.firstChild.textContent = '— pick CRM field —';
+  customFieldSel.style.width = '36%';
   body.appendChild(h('div', { style: { display: 'flex', gap: '.4rem', alignItems: 'center', marginTop: '.6rem' } },
     customKeyInp, customFieldSel,
     h('button', { class: 'btn sm', onclick: () => {
       if (!customKeyInp.value.trim() || !customFieldSel.value) { toast('Pick a key + field', 'err'); return; }
-      const sel = h('select', { style: { width: '100%' } },
-        h('option', { value: '' }, '— ignore —'),
-        ...crmFields.map(f => h('option', { value: f, selected: customFieldSel.value === f ? 'selected' : null }, f))
-      );
+      const sel = _buildMapSelect(customFieldSel.value);
       selectByKey[customKeyInp.value.trim()] = sel;
       tbody.appendChild(h('tr', {},
         h('td', {}, h('code', {}, customKeyInp.value.trim())),
@@ -26106,7 +28187,10 @@ VIEWS.reinventory = async (view) => {
   view.innerHTML = '';
   view.appendChild(h('div', { style: { display:'flex', alignItems:'center', justifyContent:'space-between', gap:'.5rem', marginBottom:'.75rem' } },
     h('h2', { style:{ margin:0 } }, '🏢 Inventory Board'),
-    h('button', { class: 'btn primary', onclick: () => openCreateProjectModal() }, '+ New Project')
+    h('div', { style: { display: 'flex', gap: '.4rem' } },
+      h('button', { class: 'btn', onclick: () => openREPaymentPlansModal(), title: 'Manage payment plans for bookings' }, '💰 Payment Plans'),
+      h('button', { class: 'btn primary', onclick: () => openCreateProjectModal() }, '+ New Project')
+    )
   ));
   view.appendChild(h('p', { class: 'muted' }, 'Real Estate pack: projects, units, bookings, demand letters, channel-partner commissions.'));
 
@@ -26294,6 +28378,10 @@ async function openCreateBookingModal(leadId, onDone) {
   const fDate = h('input', { type:'date', value: new Date().toISOString().slice(0,10) });
   const fPartner = h('select', {});
   fPartner.appendChild(h('option', { value:'' }, '— None / Direct —'));
+  /* RE_PAYMENT_PLANS_v1 — payment plan dropdown. Populates after project pick. */
+  const fPlan = h('select', {});
+  fPlan.appendChild(h('option', { value:'' }, '— Default plan (auto) —'));
+  const fPlanHelp = h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '.2rem' } }, 'Pick the payment plan to generate demand letters from. Leave blank to use the project default.');
 
   modal.appendChild(h('div', { class:'modal-body' },
     h('label', {}, 'Project', fProject),
@@ -26301,7 +28389,8 @@ async function openCreateBookingModal(leadId, onDone) {
     h('label', {}, 'Buyer name', fBuyer),
     h('label', {}, 'Total price (₹)', fTotal),
     h('label', {}, 'Booking date', fDate),
-    h('label', {}, 'Channel partner', fPartner)
+    h('label', {}, 'Channel partner', fPartner),
+    h('label', {}, '💰 Payment plan', fPlan, fPlanHelp)
   ));
   modal.appendChild(h('div', { class:'actions' },
     h('button', { class:'btn', onclick: () => m.remove() }, 'Cancel'),
@@ -26314,7 +28403,8 @@ async function openCreateBookingModal(leadId, onDone) {
           buyer_name: fBuyer.value || '',
           total_price: fTotal.value ? Number(fTotal.value) : undefined,
           booking_date: fDate.value,
-          channel_partner_id: fPartner.value ? Number(fPartner.value) : null
+          channel_partner_id: fPartner.value ? Number(fPartner.value) : null,
+          payment_plan_id: fPlan.value ? Number(fPlan.value) : null
         });
         toast('Booking created · ' + r.demands + ' demand letters generated');
         m.remove();
@@ -26335,6 +28425,19 @@ async function openCreateBookingModal(leadId, onDone) {
       fPartner.appendChild(h('option', { value: p.id }, p.name + ' (' + p.commission_pct + '%)')));
   } catch (_) {}
 
+  async function _refreshPlans(projectId) {
+    fPlan.innerHTML = '';
+    fPlan.appendChild(h('option', { value:'' }, '— Default plan (auto) —'));
+    try {
+      const plans = await api('api_re_paymentPlans_list', { project_id: projectId || null });
+      (plans || []).filter(p => Number(p.is_active)).forEach(p => {
+        const label = p.name + (Number(p.is_default) === 1 ? ' (default)' : '') + ' · ' + (p.milestones ? p.milestones.length : 0) + ' milestones';
+        fPlan.appendChild(h('option', { value: p.id, selected: Number(p.is_default) === 1 ? 'selected' : null }, label));
+      });
+    } catch (_) {}
+  }
+  _refreshPlans(null);  /* initial load: global plans */
+
   fProject.addEventListener('change', async () => {
     fUnit.innerHTML = '';
     fUnit.appendChild(h('option', { value:'' }, '— Choose unit —'));
@@ -26344,6 +28447,8 @@ async function openCreateBookingModal(leadId, onDone) {
       (units || []).filter(u => u.status === 'available').forEach(u =>
         fUnit.appendChild(h('option', { value: u.id }, u.unit_no + ' · ' + (u.type || '') + ' · ₹' + Number(u.price).toLocaleString('en-IN'))));
     } catch (_) {}
+    /* Reload plans scoped to this project */
+    _refreshPlans(Number(fProject.value));
   });
   fUnit.addEventListener('change', () => {
     const sel = fUnit.selectedOptions[0];
@@ -28692,16 +30797,56 @@ VIEWS.edureports = async (view) => {
 // 🎯 Real Estate Phase 3 — Buyer Reqs, Site Visits, Broker Performance
 // ═════════════════════════════════════════════════════════════════════
 
-// ── 🎯 Buyer Requirements view (admin/manager/team_leader/agent)
+// ── 🎯 Buyer Requirements view (admin/manager/team_leader/agent)  [REQ_LIST_v1]
 VIEWS.rerequirements = async (view) => {
   view.innerHTML = '';
   view.appendChild(h('h2', {}, '🎯 Buyer Requirements — Match leads to inventory'));
-  view.appendChild(h('p', { class:'muted' }, 'Capture each buyer\'s wishlist (budget / BHK / location / timeline) then auto-match against available units.'));
+  view.appendChild(h('p', { class:'muted' }, 'Every buyer wishlist captured across all leads — click any row to open the lead and see live matches against your inventory.'));
   const body = h('div', {});
   view.appendChild(body);
-  // Show recent requirements + quick add
-  body.appendChild(h('div', { class:'muted', style:{ padding:'1rem' } },
-    'Open any lead → scroll to 🎯 Requirements & Matches block at the bottom to add a buyer requirement and see auto-matched units.'));
+  async function load() {
+    body.innerHTML = '<div class=muted style=padding:1rem>Loading…</div>';
+    try {
+      const rows = await api('api_re_requirements_recent', { limit: 200 });
+      body.innerHTML = '';
+      if (!rows.length) {
+        body.appendChild(h('div', { class:'muted', style:{ padding:'1rem' } }, 'No requirements captured yet. Open any lead → scroll to the 🎯 Requirements & Matches block at the bottom to add the first one.'));
+        return;
+      }
+      const tbl = h('table', { class:'mini-table', style:{ width:'100%' } },
+        h('thead', {}, h('tr', {},
+          h('th', {}, 'When'),
+          h('th', {}, 'Lead'),
+          h('th', {}, 'Phone'),
+          h('th', {}, 'Budget'),
+          h('th', {}, 'BHK'),
+          h('th', {}, 'Location / Project'),
+          h('th', {}, 'Timeline'),
+          h('th', {}, 'Owner'),
+          h('th', {}, '')
+        )),
+        h('tbody', {}, ...rows.map(r => h('tr', {},
+          h('td', { class:'muted', style:{ fontSize:'.78rem' } }, fmtDate(r.created_at, 'relative')),
+          h('td', {}, h('a', { href:'#', onclick: e => { e.preventDefault(); openLeadModal(r.lead_id); } }, h('b', {}, r.lead_name || '—'))),
+          h('td', { class:'muted', style:{ fontSize:'.8rem' } }, r.lead_phone || '—'),
+          h('td', {}, '₹' + Number(r.budget_min || 0).toLocaleString('en-IN') + ' – ₹' + Number(r.budget_max || 0).toLocaleString('en-IN')),
+          h('td', {}, r.preferred_bhk ? h('span', { style:{ background:'#dbeafe', color:'#1e40af', padding:'1px 8px', borderRadius:'999px', fontSize:'.8rem' } }, r.preferred_bhk) : '—'),
+          h('td', { class:'muted', style:{ fontSize:'.8rem' } }, [r.preferred_locations, r.preferred_projects].filter(Boolean).join(' · ') || '—'),
+          h('td', { class:'muted', style:{ fontSize:'.8rem' } }, r.possession_timeline || '—'),
+          h('td', { class:'muted' }, r.rep_name || '—'),
+          h('td', {},
+            h('button', { class:'btn xs primary', onclick: () => openLeadModal(r.lead_id) }, 'Open lead'),
+            h('button', { class:'btn xs', style:{ marginLeft:'.2rem' }, onclick: () => openMatchesModal(r.id) }, '🔍 Matches')
+          )
+        )))
+      );
+      body.appendChild(tbl);
+    } catch (e) {
+      body.innerHTML = '';
+      body.appendChild(h('div', { class:'error-box' }, e.message));
+    }
+  }
+  load();
 };
 
 // ── 📅 Site Visits view
@@ -30810,6 +32955,52 @@ try {
         ));
 
         // Webhook log section
+        /* META_DIAG_v1 — copy-paste config + test-fire button */
+        try {
+          const info = await api('api_social_callbackInfo');
+          const copyBtn = (val, label) => {
+            const b = h('button', { class:'btn xs', style:{ marginLeft:'.3rem' } }, '📋 Copy ' + label);
+            b.onclick = () => { navigator.clipboard.writeText(val); toast(label + ' copied'); };
+            return b;
+          };
+          const cfgCard = h('div', { style:{ marginTop:'1rem', padding:'.8rem 1rem', background:'#eff6ff', border:'1px solid #bfdbfe', borderRadius:'8px' } },
+            h('div', { style:{ fontWeight:600, marginBottom:'.4rem' } }, '⚙ Meta App Dashboard configuration'),
+            h('div', { class:'muted', style:{ fontSize:'.82rem', marginBottom:'.5rem' } }, 'Paste these EXACT values into Meta App Dashboard → Webhooks → Page → Edit subscription.'),
+            h('div', { style:{ fontFamily:'monospace', fontSize:'.84rem', background:'#fff', padding:'.4rem .6rem', borderRadius:'4px', marginBottom:'.3rem', display:'flex', alignItems:'center' } },
+              h('span', { style:{ flex:1 } }, '🔗 Callback URL: ' + info.callback_url),
+              copyBtn(info.callback_url, 'URL')
+            ),
+            h('div', { style:{ fontFamily:'monospace', fontSize:'.84rem', background:'#fff', padding:'.4rem .6rem', borderRadius:'4px', marginBottom:'.3rem', display:'flex', alignItems:'center' } },
+              h('span', { style:{ flex:1 } }, '🔑 Verify Token: ' + (info.verify_token || h('em', { style:{ color:'#dc2626' } }, '(NOT SET — open Settings → Integrations → set META_VERIFY_TOKEN)'))),
+              info.verify_token ? copyBtn(info.verify_token, 'token') : null
+            ),
+            h('div', { style:{ fontFamily:'monospace', fontSize:'.84rem', background:'#fff', padding:'.4rem .6rem', borderRadius:'4px', marginBottom:'.5rem' } },
+              '📋 Fields to subscribe: messages, messaging_postbacks, feed, mention'
+            )
+          );
+          /* Test-fire button */
+          const testBtn = h('button', { class:'btn primary', style:{ marginTop:'.3rem' } }, '🧪 Test our /hook/meta receiver');
+          const testOut = h('div', { style:{ marginTop:'.5rem', fontSize:'.85rem' } });
+          testBtn.onclick = async () => {
+            testBtn.disabled = true; testBtn.textContent = '⏳ Testing…';
+            try {
+              const r = await api('api_social_testReceiver');
+              const colour = r.ok && r.webhook_log_grew_by > 0 ? '#dcfce7' : '#fee2e2';
+              testOut.innerHTML = '';
+              testOut.appendChild(h('div', { style:{ background:colour, padding:'.5rem .7rem', borderRadius:'6px' } },
+                (r.ok && r.webhook_log_grew_by > 0 ? '✅ ' : '⚠ ') + r.interpretation
+              ));
+              testOut.appendChild(h('pre', { style:{ background:'#f8fafc', padding:'.4rem', borderRadius:'4px', fontSize:'.75rem', maxHeight:'150px', overflow:'auto' } },
+                JSON.stringify({ http_status: r.http_status, webhook_log_grew_by: r.webhook_log_grew_by, post_error: r.post_error }, null, 2)
+              ));
+            } catch (e) {
+              testOut.innerHTML = '<div style="background:#fee2e2;padding:.5rem .7rem;border-radius:6px">⚠ ' + e.message + '</div>';
+            } finally { testBtn.disabled = false; testBtn.textContent = '🧪 Test our /hook/meta receiver'; }
+          };
+          cfgCard.appendChild(testBtn);
+          cfgCard.appendChild(testOut);
+          body.appendChild(cfgCard);
+        } catch (_) {}
         body.appendChild(h('h4', { style:{ marginTop:'1rem' } }, 'Recent /hook/meta webhook hits'));
         body.appendChild(h('p', { class:'muted', style:{ fontSize:'.85em' } },
           'Messages stored in last 24h: ' + d.webhook_messages_24h));
@@ -30937,6 +33128,43 @@ function _fmtTs(ts) {
 }
 
 // ---- VIEWS.tickets — list ---------------------------------------
+
+
+// KB_VIDEOS_v2 (2026-05-21) — Simple iframe embed of the live knowledge-base
+// page on smartcrmsolution.com. Avoids hardcoding the video list in the SPA so
+// new videos added on the marketing site appear instantly.
+VIEWS.kbvideos = async (view) => {
+  view.innerHTML = '';
+  const KB_URL = 'https://smartcrmsolution.com/home/smart-crm-plan/knowledge-base.php';
+  // Header bar
+  view.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '.6rem', marginBottom: '.7rem' }},
+    h('div', {},
+      h('h2', { style: { margin: 0 }}, '\ud83c\udfac Video Tutorials'),
+      h('p', { class: 'muted', style: { margin: '.2rem 0 0', fontSize: '.85rem' }}, 'Self-serve learning library — step-by-step videos for every Smart CRM workflow.')
+    ),
+    h('a', { class: 'btn primary', href: KB_URL, target: '_blank', style: { textDecoration: 'none' }}, '\u2197 Open in new tab')
+  ));
+  // Embedded iframe — fills available space, scrolls internally
+  const wrap = h('div', { style: {
+    width: '100%',
+    height: 'calc(100vh - 180px)',
+    minHeight: '600px',
+    border: '1px solid #e5e7eb',
+    borderRadius: '12px',
+    overflow: 'hidden',
+    boxShadow: '0 1px 3px rgba(0,0,0,.05)',
+    background: '#fff'
+  }});
+  const iframe = h('iframe', {
+    src: KB_URL,
+    style: { width: '100%', height: '100%', border: '0' },
+    loading: 'lazy',
+    referrerpolicy: 'no-referrer-when-downgrade'
+  });
+  wrap.appendChild(iframe);
+  view.appendChild(wrap);
+};
+
 VIEWS.tickets = async (view) => {
   view.innerHTML = '';
   const wrap = h('div', { class: 'page' });
@@ -31459,6 +33687,2246 @@ function openUserHierarchyModal(users) {
 window.openUserHierarchyModal = openUserHierarchyModal;
 
 
+// IVR_UI_v1 — Connect / edit modal for an IVR vendor.
+async function openIvrConfigModal(id, onSaved) {
+  let cfg = { vendor_key: 'exotel', display_name: '', api_base_url: '', account_sid: '', api_key: '', api_token: '', caller_id: '', webhook_secret: '', field_mapping: null, auto_create_lead: 1, default_status_id: null, is_active: 1, is_default: 0 };
+  if (id) { try { cfg = await api('api_ivr_config_get', Number(id)) || cfg; } catch (e) { toast('Load failed: ' + e.message, 'err'); return; } }
+  let vendors = [];
+  try { const v = await api('api_ivr_vendors'); vendors = v.vendors || []; } catch (_) {}
+
+  const m = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const body = h('div', { class: 'modal modal-lg' });
+  m.appendChild(body);
+  body.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, id ? '✎ Edit IVR config' : '+ Connect IVR vendor'),
+    h('button', { class: 'btn icon', onclick: () => m.remove() }, '✕')
+  ));
+
+  const vendorSel = h('select', { name: 'vendor_key', class: 'input', onchange: () => updateHints() },
+    ...vendors.map(v => h('option', { value: v.key, selected: v.key === cfg.vendor_key ? 'selected' : null }, v.name))
+  );
+  const nameInp     = h('input', { name: 'display_name', class: 'input', value: cfg.display_name || '', placeholder: 'e.g. Acme Exotel' });
+  const apiBaseInp  = h('input', { name: 'api_base_url', class: 'input', value: cfg.api_base_url || '', placeholder: 'API base URL (vendor default if blank)' });
+  const sidInp      = h('input', { name: 'account_sid',  class: 'input', value: cfg.account_sid || '',  placeholder: 'Account SID / Subdomain' });
+  const keyInp      = h('input', { name: 'api_key',      class: 'input', value: cfg.api_key || '',      placeholder: 'API Key' });
+  const tokInp      = h('input', { name: 'api_token',    class: 'input', value: cfg.api_token || '',    placeholder: 'API Token / Auth Token', type: 'password' });
+  const callerInp   = h('input', { name: 'caller_id',    class: 'input', value: cfg.caller_id || '',    placeholder: 'Caller ID number (virtual number)' });
+  const mapInp      = h('textarea', { name: 'field_mapping', class: 'input', rows: 4, placeholder: 'JSON for Generic vendor only. Example:\n{ "phone": "from", "agent_id": "agent", "duration_s": "duration", "recording_url": "recording" }' },
+    cfg.field_mapping ? JSON.stringify(cfg.field_mapping, null, 2) : '');
+  const activeChk   = h('input', { name: 'is_active',  type: 'checkbox', checked: Number(cfg.is_active) === 1 ? 'checked' : null });
+  const defaultChk  = h('input', { name: 'is_default', type: 'checkbox', checked: Number(cfg.is_default) === 1 ? 'checked' : null });
+  const autoLeadChk = h('input', { name: 'auto_create_lead', type: 'checkbox', checked: Number(cfg.auto_create_lead) !== 0 ? 'checked' : null });
+
+  function field(label, inp, hint) {
+    return h('label', { style: { display: 'block', marginBottom: '.55rem' } },
+      h('div', { style: { fontSize: '.85rem', fontWeight: 600, marginBottom: '.15rem' } }, label),
+      inp,
+      hint ? h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '.15rem' } }, hint) : null
+    );
+  }
+  const hintBox = h('div', { class: 'muted', style: { fontSize: '.78rem', background: '#fef9c3', border: '1px solid #fde68a', borderRadius: '6px', padding: '.5rem .65rem', margin: '.25rem 0 .75rem' } });
+  function updateHints() {
+    const v = vendorSel.value;
+    const hints = {
+      exotel: 'Account SID = your Exotel account SID. API Key + API Token from the API tab. Caller ID = your virtual number (e.g. +91-22-...). Webhook in Exotel dashboard → Apps → CallFlow → use the URL below.',
+      myoperator: 'API Token from MyOperator Settings → API. Caller ID = your buying number. Webhook URL → MyOperator Settings → Webhooks → All call events.',
+      knowlarity: 'API Key (X-API-KEY header) and Account SID (Authorization header) from your Super Receptionist account. Caller ID = your Knowlarity number (K-number).',
+      tata: 'API Token = your Tata Smartflo Bearer token (Tools → Smartflo APIs). Caller ID = your Tata DID. Webhook in Tata dashboard → Settings → Webhooks.',
+      servetel: 'API Token from Servetel dashboard. Caller ID = your DID number. Webhook → Servetel Settings → Webhooks → Call events.',
+      ozonetel: 'API Key + Username (Account SID) from CloudAgent → Manage → API. Webhook → CloudAgent → Manage → Webhooks.',
+      twilio: 'Account SID + Auth Token from console.twilio.com. Caller ID = a number you own on Twilio. Add field_mapping.twiml_url pointing to your TwiML bin.',
+      generic: 'Custom vendor. Field mapping JSON is REQUIRED to tell us how to read inbound payloads. For outbound, add a field_mapping.outbound_url template with {agent} and {to} placeholders.'
+    };
+    hintBox.textContent = hints[v] || '';
+  }
+  updateHints();
+
+  body.appendChild(h('div', { class: 'modal-body', style: { padding: '1rem' } },
+    field('Vendor', vendorSel),
+    hintBox,
+    field('Display name *', nameInp),
+    field('Caller ID (virtual number)', callerInp),
+    h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '.6rem' } },
+      field('Account SID / Username', sidInp),
+      field('API Key', keyInp)
+    ),
+    field('API Token / Auth Token', tokInp),
+    field('API base URL (optional)', apiBaseInp, 'Leave blank to use the vendor default.'),
+    field('Field mapping JSON (Generic vendor)', mapInp, 'Only needed if you picked Generic.'),
+    h('div', { style: { display: 'flex', gap: '1rem', flexWrap: 'wrap', marginTop: '.5rem' } },
+      h('label', {}, activeChk, ' Active'),
+      h('label', {}, defaultChk, ' Default for outbound click-to-call'),
+      h('label', {}, autoLeadChk, ' Auto-create lead on inbound calls from unknown numbers')
+    )
+  ));
+
+  body.appendChild(h('div', { class: 'modal-foot' },
+    h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Cancel'),
+    h('button', { class: 'btn primary', onclick: async () => {
+      let fm = null;
+      const fmtxt = mapInp.value.trim();
+      if (fmtxt) {
+        try { fm = JSON.parse(fmtxt); } catch (e) { toast('Field mapping must be valid JSON', 'err'); return; }
+      }
+      const payload = {
+        id: id || undefined,
+        vendor_key: vendorSel.value,
+        display_name: nameInp.value.trim(),
+        api_base_url: apiBaseInp.value.trim(),
+        account_sid: sidInp.value.trim(),
+        api_key: keyInp.value.trim(),
+        api_token: tokInp.value.trim(),
+        caller_id: callerInp.value.trim(),
+        field_mapping: fm,
+        is_active: activeChk.checked ? 1 : 0,
+        is_default: defaultChk.checked ? 1 : 0,
+        auto_create_lead: autoLeadChk.checked ? 1 : 0
+      };
+      if (!payload.display_name) { toast('Display name required', 'err'); return; }
+      try {
+        const r = await api('api_ivr_config_save', payload);
+        toast('Saved', 'ok');
+        m.remove();
+        if (typeof onSaved === 'function') onSaved();
+        // After save, surface the webhook URL so they can paste it into the vendor.
+        if (r.id) setTimeout(() => openIvrWebhookModal(r.id), 200);
+      } catch (e) { toast('Save failed: ' + e.message, 'err'); }
+    } }, id ? 'Save changes' : 'Connect')
+  ));
+  document.body.appendChild(m);
+}
+window.openIvrConfigModal = openIvrConfigModal;
+
+// Show the webhook URL the tenant needs to paste into their vendor dashboard.
+async function openIvrWebhookModal(id) {
+  let info;
+  try { info = await api('api_ivr_webhook_url', Number(id)); }
+  catch (e) { toast(e.message, 'err'); return; }
+  const m = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const body = h('div', { class: 'modal' });
+  m.appendChild(body);
+  body.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, '🔗 Inbound Webhook URL'),
+    h('button', { class: 'btn icon', onclick: () => m.remove() }, '✕')
+  ));
+  const urlInp = h('input', { class: 'input', value: info.inbound_url || '', readonly: 'readonly', style: { width: '100%', fontFamily: 'monospace', fontSize: '.85rem' } });
+  body.appendChild(h('div', { class: 'modal-body', style: { padding: '1rem' } },
+    h('p', { class: 'muted' }, 'Paste this URL into your vendor dashboard as the Call Events / Webhook destination. We verify the embedded ?secret= on every hit so make sure it stays in the URL.'),
+    urlInp,
+    h('div', { class: 'actions', style: { marginTop: '.5rem' } },
+      h('button', { class: 'btn', onclick: () => { urlInp.select(); document.execCommand('copy'); toast('Copied'); } }, '📋 Copy URL')
+    ),
+    h('p', { class: 'muted', style: { marginTop: '1rem', fontSize: '.82rem' } },
+      'After pasting, send yourself a test call. Inbound calls will appear in Recent Calls (Reports → Call Activity) within a few seconds.'
+    )
+  ));
+  document.body.appendChild(m);
+}
+window.openIvrWebhookModal = openIvrWebhookModal;
+
+// IVR_UI_v1 — Click-to-call hook. If an active IVR config exists,
+// fire it via the server (server contacts vendor's API). Falls back
+// silently if no IVR is configured. We wrap the existing callLead()
+// rather than replacing it so the dialler / mobile / etc. paths
+// keep working.
+(function _wrapCallLead() {
+  if (typeof window.callLead !== 'function') return;
+  if (window.callLead._ivrWrapped) return;
+  const original = window.callLead;
+  window.callLead = async function (lead) {
+    // IVR_FALLBACK_v2 (2026-05-20) — always fall through to the native
+    // dialer on any IVR failure. The native tel: link is the
+    // always-available path; an IVR misconfig / network blip / iOS
+    // Safari 'Load failed' shouldn't block the rep from calling.
+    try {
+      const r = await api('api_ivr_initiateCall', { phone: lead && (lead.phone || lead), lead_id: lead && lead.id });
+      if (r && r.ok) {
+        if (typeof toast === 'function') toast('📞 Calling via ' + (r.vendor || 'IVR') + '…', 'ok');
+        return r;
+      }
+    } catch (e) {
+      // Log to console for debugging, but never block the call. Only
+      // surface a toast when the message looks like an actual server-side
+      // configuration error (not iOS 'Load failed' or generic network).
+      console.warn('[ivr] initiateCall failed, falling back to tel:', e && e.message);
+      const msg = String(e && e.message || '');
+      const isConfigError = /No active IVR|not configured/i.test(msg);
+      const isNetworkError = /Load failed|Failed to fetch|NetworkError|timeout/i.test(msg);
+      if (!isConfigError && !isNetworkError && typeof toast === 'function') {
+        // Real IVR error worth surfacing — but still fall through to native.
+        toast('IVR error: ' + msg + ' (using native dialer)', 'warn');
+      }
+    }
+    return original.apply(this, arguments);
+  };
+  window.callLead._ivrWrapped = true;
+})();
+
+
+/* BOT_DIAGNOSE_v1 — Admin diagnostic modal: why didn't the AI Bot reply? */
+async function openAIBotDiagnose(presetPhone) {
+  const phoneInp = h('input', { class: 'input', placeholder: 'e.g. 919876543210', value: presetPhone || '', style: { width: '100%' } });
+  const resultBox = h('div', { style: { marginTop: '.8rem', maxHeight: '60vh', overflow: 'auto', fontSize: '.85rem' } });
+  const modal = h('div', { class: 'modal' });
+  modal.appendChild(h('div', { class: 'modal-content', style: { maxWidth: '720px' } },
+    h('h3', {}, '🔎 Why didn\'t the AI Bot reply?'),
+    h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+      'Enter a customer phone number. We\'ll check bot settings, recent activity, suppression reasons, ' +
+      'flow sessions and recent messages on this thread, then explain what happened.'),
+    phoneInp,
+    h('div', { class: 'modal-actions', style: { display: 'flex', gap: '.5rem', marginTop: '.6rem' } },
+      h('button', { class: 'btn ghost', onclick: () => modal.remove() }, 'Close'),
+      h('button', { class: 'btn primary', onclick: async () => {
+        const phone = String(phoneInp.value || '').replace(/\\D/g, '');
+        if (!phone) { toast('Enter a phone number', 'warn'); return; }
+        resultBox.textContent = 'Checking…';
+        try {
+          const r = await api('api_aiBot_diagnose', { phone });
+          resultBox.innerHTML = '';
+          // Checks summary
+          (r.checks || []).forEach(c => {
+            const colour = c.level === 'block' ? '#fee2e2' : (c.level === 'warn' ? '#fef3c7' : (c.level === 'ok' ? '#dcfce7' : '#e0e7ff'));
+            const icon   = c.level === 'block' ? '🚫' : (c.level === 'warn' ? '⚠' : (c.level === 'ok' ? '✅' : 'ℹ'));
+            resultBox.appendChild(h('div', { style: { padding: '.5rem .7rem', background: colour, borderRadius: '6px', margin: '.3rem 0' } }, icon + ' ' + c.msg));
+          });
+          // Clear-flow-session button if a flow is blocking
+          if (r.flow_session) {
+            const clearBtn = h('button', { class: 'btn sm danger', style: { marginTop: '.4rem' } }, '🧹 Clear stuck flow session');
+            clearBtn.onclick = async () => {
+              try { const rr = await api('api_aiBot_clearFlowSession', { phone }); toast('Cleared ' + rr.cleared + ' session(s)'); openAIBotDiagnose(phone); modal.remove(); }
+              catch (e) { toast(e.message, 'err'); }
+            };
+            resultBox.appendChild(clearBtn);
+          }
+          // Recent log
+          if (r.recent_log && r.recent_log.length) {
+            resultBox.appendChild(h('h4', { style: { margin: '.8rem 0 .3rem' } }, '🧾 Recent AI Bot log (latest 10):'));
+            r.recent_log.forEach(row => {
+              const colour = row.status === 'sent' ? '#dcfce7' : (row.status === 'suppressed' ? '#fef3c7' : '#fee2e2');
+              resultBox.appendChild(h('div', { style: { padding: '.35rem .6rem', background: colour, borderRadius: '4px', margin: '.2rem 0', fontFamily: 'monospace', fontSize: '.78rem' } },
+                (row.created_at || '') + ' · ' + (row.status || '') + ' · ' + (row.suppressed_reason || row.error_text || (row.reply_text || '').slice(0, 100))
+              ));
+            });
+          }
+          // Recent messages
+          if (r.recent_messages && r.recent_messages.length) {
+            resultBox.appendChild(h('h4', { style: { margin: '.8rem 0 .3rem' } }, '💬 Recent messages (latest 10):'));
+            r.recent_messages.forEach(row => {
+              const arrow = row.direction === 'in' ? '⇦' : '⇨';
+              const tag   = row.user_id ? '👤 user#' + row.user_id : '🤖';
+              resultBox.appendChild(h('div', { style: { padding: '.3rem .5rem', background: row.direction === 'in' ? '#e0e7ff' : '#f1f5f9', borderRadius: '4px', margin: '.2rem 0', fontSize: '.78rem' } },
+                arrow + ' ' + (row.created_at || '') + ' ' + tag + ' [' + (row.message_type || 'text') + '] ' + (row.body || '').slice(0, 200)
+              ));
+            });
+          }
+        } catch (e) { resultBox.textContent = '⚠ ' + e.message; }
+      } }, '🔎 Diagnose')
+    ),
+    resultBox
+  ));
+  document.body.appendChild(modal);
+}
+
+
+/* REC_SELFTEST_v1 — end-to-end recording pipeline self-test modal */
+async function openRecordingSelftest() {
+  const modal = h('div', { class: 'modal' });
+  const result = h('div', { style: { fontSize: '.85rem', maxHeight: '60vh', overflow: 'auto' } });
+  modal.appendChild(h('div', { class: 'modal-content', style: { maxWidth: '720px' } },
+    h('h3', {}, '🧪 Recording pipeline self-test'),
+    h('p', { class: 'muted', style: { fontSize: '.82rem' } },
+      'Runs the entire recording-sync chain end-to-end and reports pass/fail for each phase. ' +
+      'Useful when "recordings stopped syncing" — tells you exactly which step is broken.'),
+    h('div', { class: 'modal-actions', style: { display: 'flex', gap: '.5rem' } },
+      h('button', { class: 'btn ghost', onclick: () => modal.remove() }, 'Close'),
+      h('button', { class: 'btn primary', onclick: async (ev) => {
+        ev.target.disabled = true; ev.target.textContent = '⏳ Running…';
+        result.innerHTML = '';
+        // Client-side phase 1: native bridge
+        const phases = [];
+        const native = !!(window.LeadCRMNative && typeof LeadCRMNative.listRecordings === 'function');
+        phases.push({ phase: 'native_bridge', status: native ? 'ok' : 'info',
+          msg: native ? 'LeadCRMNative bridge loaded (APK mode)' : 'No native bridge — this is a browser tab; auto-sync only runs in the APK.' });
+        let folder = '';
+        try { folder = native ? (LeadCRMNative.getRecordingFolder() || '') : ''; } catch (_) {}
+        phases.push({ phase: 'folder', status: folder ? 'ok' : 'info',
+          msg: folder ? 'Folder picked: ' + folder : 'No folder picked yet — tap Change folder above.' });
+        phases.push({ phase: 'token', status: CRM.token ? 'ok' : 'fail',
+          msg: CRM.token ? 'Auth token present' : 'No token — re-login first.' });
+        // Server-side phases
+        let server;
+        try { server = await api('api_recording_selftest'); }
+        catch (e) { phases.push({ phase: 'server', status: 'fail', msg: e.message }); }
+        if (server && server.phases) phases.push(...server.phases);
+        // Render
+        const palette = { ok: '#dcfce7', info: '#e0e7ff', fail: '#fee2e2' };
+        const icon    = { ok: '✅',    info: 'ℹ',     fail: '🚫'    };
+        phases.forEach(p => {
+          result.appendChild(h('div', {
+            style: { padding: '.45rem .65rem', background: palette[p.status] || '#f8fafc',
+                     borderRadius: '6px', margin: '.25rem 0', fontFamily: 'monospace', fontSize: '.78rem' } },
+            icon[p.status] + ' [' + p.phase + '] ' + p.msg));
+        });
+        const summary = phases.reduce((a, p) => { a[p.status] = (a[p.status] || 0) + 1; return a; }, {});
+        result.appendChild(h('div', { style: { marginTop: '.6rem', fontWeight: 600, fontSize: '.9rem' } },
+          'Summary: ' + (summary.ok || 0) + ' ✅ · ' + (summary.fail || 0) + ' 🚫 · ' + (summary.info || 0) + ' ℹ'));
+        ev.target.disabled = false; ev.target.textContent = '🔁 Run again';
+      } }, '▶ Run')
+    ),
+    result
+  ));
+  document.body.appendChild(modal);
+}
+try { window.openRecordingSelftest = openRecordingSelftest; } catch (_) {}
+
+
+/* ==========================================================================
+ * LEAD_ACTIVITY_v1 — Activity Report view + per-lead activity timeline modal
+ * ========================================================================== */
+
+/* Per-lead activity timeline modal — opened from the 📝 pill on lead rows. */
+async function openLeadActivityTimeline(leadId, leadName) {
+  const modal = h('div', { class: 'modal' });
+  const body  = h('div', { style: { maxHeight: '65vh', overflowY: 'auto' } }, '⏳ Loading…');
+  modal.appendChild(h('div', { class: 'modal-content', style: { maxWidth: '640px' } },
+    h('h3', {}, '📝 Activity timeline — ', leadName || ('Lead #' + leadId)),
+    h('p', { class: 'muted', style: { fontSize: '.8rem' } }, 'Every change made to this lead: status updates, remarks, follow-up edits, reassignments, tag changes, WhatsApp messages.'),
+    h('div', { class: 'modal-actions', style: { display: 'flex', justifyContent: 'flex-end' } },
+      h('button', { class: 'btn', onclick: () => modal.remove() }, 'Close')
+    ),
+    body
+  ));
+  document.body.appendChild(modal);
+  try {
+    const rows = await api('api_leads_activityTimeline', leadId);
+    body.innerHTML = '';
+    if (!rows || !rows.length) {
+      body.appendChild(h('div', { class: 'muted', style: { padding: '1rem' } }, 'No activity recorded yet.'));
+      return;
+    }
+    const _icon = {
+      created: '✨', status_change: '🔄', remark: '💬', note_updated: '📝',
+      followup_set: '🗓', tags_updated: '🏷', assigned: '👤', reassigned: '🔁',
+      qualified: '✅', unqualified: '↩️', whatsapp_in: '📥', whatsapp_out: '📤',
+      /* LEAD_ACTIVITY_v1 — Education + Real Estate pack action types */
+      edu_enrollment_created: '🎓', edu_payment: '💰',
+      re_booking_created: '🏢', re_demand_paid: '💸',
+      re_requirement_saved: '🎯', re_booking_cancelled: '❌'
+    };
+    rows.forEach(r => {
+      const ic = _icon[r.action] || '·';
+      const metaTxt = (() => {
+        const m = r.meta || {};
+        if (r.action === 'remark') return (m.remark || '').slice(0, 200);
+        if (r.action === 'followup_set' && m.due_at) return 'Due ' + new Date(m.due_at).toLocaleString();
+        if (r.action === 'status_change') return 'Status #' + (m.from_status_id || '?') + ' → #' + (m.to_status_id || '?');
+        if (r.action === 'tags_updated') return 'Tags: ' + (m.tags || '');
+        if (r.action === 'assigned') return 'Reassigned to user #' + (m.to || '?');
+        if (r.action === 'note_updated') return (m.preview || '').slice(0, 200);
+        if (r.action === 'whatsapp_out' || r.action === 'whatsapp_in') return (m.body || m.text || '').slice(0, 200);
+        /* LEAD_ACTIVITY_v1 — pack action descriptions */
+        if (r.action === 'edu_enrollment_created') return 'Enrolled in ' + (m.course || 'course') + ' · ₹' + (m.amount || 0);
+        if (r.action === 'edu_payment') return 'Payment ₹' + (m.amount || 0) + ' (' + (m.mode || 'cash') + ') · status: ' + (m.status || 'paid');
+        if (r.action === 're_booking_created') return 'Unit booked · ₹' + (m.total_price || 0) + (m.channel_partner_id ? ' · via partner #' + m.channel_partner_id : '');
+        if (r.action === 're_demand_paid') return 'Demand "' + (m.code || '') + '" paid ₹' + (m.amount || 0) + ' · status: ' + (m.status || 'paid');
+        if (r.action === 're_requirement_saved') return 'Buyer reqs saved · ' + (m.type || 'type') + (m.budget_max ? ' · max ₹' + m.budget_max : '');
+        if (r.action === 're_booking_cancelled') return 'Booking #' + (m.booking_id || '?') + ' cancelled';
+        return '';
+      })();
+      body.appendChild(h('div', {
+        style: { padding: '.55rem .7rem', borderLeft: '3px solid #6366f1', background: '#f8fafc', margin: '.35rem 0', borderRadius: '0 8px 8px 0' }
+      },
+        h('div', { style: { display: 'flex', justifyContent: 'space-between', fontSize: '.82rem', fontWeight: 600 } },
+          h('span', {}, ic + ' ' + r.action.replace(/_/g, ' ')),
+          h('span', { class: 'muted', style: { fontWeight: 400 } }, new Date(r.at).toLocaleString())
+        ),
+        h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '.15rem' } }, 'by ' + (r.user_name || '—')),
+        metaTxt ? h('div', { style: { fontSize: '.78rem', marginTop: '.25rem', color: '#334155' } }, metaTxt) : null
+      ));
+    });
+  } catch (e) {
+    body.innerHTML = '';
+    body.appendChild(h('div', { class: 'muted', style: { padding: '1rem', color: '#dc2626' } }, '⚠ ' + e.message));
+  }
+}
+try { window.openLeadActivityTimeline = openLeadActivityTimeline; } catch (_) {}
+
+/* LEAD_ACTIVITY_DRILL_v1 — modal that lists the lead_actions rows
+ * behind any numeric cell in the Activity Report. Fired by clicking
+ * a count in the caller-wise table. */
+async function _openActivityDrillModal(opts) {
+  const _emoji = {
+    remark: '💬', status_change: '🔄', followup_set: '🗓', note_updated: '📝',
+    tags_updated: '🏷', assigned: '👤', reassigned: '🔁',
+    qualified: '✅', unqualified: '↩️',
+    edu_enrollment_created: '🎓', edu_payment: '💰',
+    re_booking_created: '🏢', re_demand_paid: '💸',
+    re_requirement_saved: '🎯', re_booking_cancelled: '❌'
+  };
+  const titleBits = [];
+  if (opts.user_name) titleBits.push('👤 ' + opts.user_name);
+  if (opts.action_type && opts.action_type !== 'all') {
+    titleBits.push((_emoji[opts.action_type] || '') + ' ' + opts.action_type.replace(/_/g, ' '));
+  } else {
+    titleBits.push('all actions');
+  }
+  if (opts.label) titleBits.push('· ' + opts.label);
+
+  const body = h('div', {}, h('div', { class: 'muted' }, '⏳ Loading activities…'));
+  const close = h('button', { class: 'btn', onclick: () => modal.remove() }, 'Close');
+  const modal = h('div', {
+    class: 'modal-backdrop',
+    onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) modal.remove(); }
+  }, h('div', { class: 'modal', style: { maxWidth: '780px', width: '92vw' } },
+    h('div', { class: 'modal-head' },
+      h('h3', { style: { margin: 0 } }, '📋 Activity drill-down'),
+      h('div', { class: 'muted', style: { fontSize: '.85rem', marginTop: '.2rem' } }, titleBits.join('   '))
+    ),
+    h('div', { class: 'modal-body' }, body),
+    h('div', { class: 'modal-foot' }, close)
+  ));
+  document.body.appendChild(modal);
+
+  try {
+    const data = await api('api_reports_activityDetail', {
+      user_id:     opts.user_id,
+      action_type: opts.action_type,
+      scope:       opts.scope,
+      from:        opts.from,
+      to:          opts.to,
+      limit:       500
+    });
+    body.innerHTML = '';
+    body.appendChild(h('div', { class: 'muted', style: { fontSize: '.8rem', marginBottom: '.4rem' } },
+      data.range.from + ' → ' + data.range.to + '  ·  ' + (data.total || 0) + ' rows' +
+      (data.truncated ? '  (showing first 500)' : '')
+    ));
+    if (!data.rows || !data.rows.length) {
+      body.appendChild(h('div', { class: 'muted' }, 'No activities recorded for this cell.'));
+      return;
+    }
+    const tbl = h('table', { class: 'table', style: { fontSize: '.85rem' } });
+    tbl.appendChild(h('thead', {}, h('tr', {},
+      h('th', {}, 'When'),
+      h('th', {}, 'Lead'),
+      h('th', {}, 'Action'),
+      h('th', {}, 'Detail')
+    )));
+    const tb = h('tbody', {});
+    data.rows.forEach(r => {
+      const when = r.created_at ? new Date(r.created_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }) : '';
+      const tr = h('tr', {},
+        h('td', { style: { whiteSpace: 'nowrap', color: '#475569' } }, when),
+        h('td', {},
+          r.lead_id
+            ? h('a', { href: '#/leads', onclick: ev => { ev.preventDefault(); modal.remove(); try { navigateTo('leads', { leadId: r.lead_id }); } catch (_) { location.hash = '#/leads'; } }, style: { color: '#1d4ed8', cursor: 'pointer' } }, r.lead_name || ('Lead #' + r.lead_id))
+            : h('span', { class: 'muted' }, r.lead_name || '—')
+        ),
+        h('td', { style: { whiteSpace: 'nowrap' } }, (_emoji[r.action_type] || '·') + ' ' + r.action_type.replace(/_/g, ' ')),
+        h('td', { style: { color: '#1f2937' } }, r.summary || '')
+      );
+      tb.appendChild(tr);
+    });
+    tbl.appendChild(tb);
+    body.appendChild(tbl);
+  } catch (e) {
+    body.innerHTML = '';
+    body.appendChild(h('div', { style: { color: '#dc2626' } }, '⚠ ' + e.message));
+  }
+}
+// Expose for debugging + extension points
+try { window._openActivityDrillModal = _openActivityDrillModal; } catch (_) {}
+
+
+/* Manager / admin Activity Report — caller-wise + day-wise grid. */
+VIEWS.activityreport = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('h3', {}, '📝 Activity Report'));
+  view.appendChild(h('p', { class: 'muted' },
+    'Track every action your team takes on leads: status changes, remarks, follow-up edits, reassignments. Caller-wise totals + day-wise heatmap.'));
+  view.appendChild(h('p', { class: 'muted', style: { fontSize: '.78rem', marginTop: '-.3rem' } },
+    'ⓘ WhatsApp messages (bot replies + auto-template sends + inbound) are NOT counted as rep activity — only manual rep actions are.'));
+
+  // Filters bar
+  // ACTIVITY_DATE_TZ_v1 (2026-05-21): use LOCAL date components, not toISOString().
+  // setHours(0,0,0,0) sets LOCAL midnight; toISOString() then converts to UTC,
+  // which in IST is yesterday-18:30 — so the slice came out as YESTERDAY and
+  // users saw "Today=0" because today's data was outside the visible range.
+  const _fmtYmd = (d) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return y + '-' + m + '-' + dd;
+  };
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const defFrom = new Date(today); defFrom.setDate(defFrom.getDate() - 29);
+  const fromInp = h('input', { type: 'date', value: _fmtYmd(defFrom), class: 'input', style: { width: '160px' } });
+  const toInp   = h('input', { type: 'date', value: _fmtYmd(today),   class: 'input', style: { width: '160px' } });
+  const goBtn   = h('button', { class: 'btn primary' }, '🔄 Refresh');
+
+  const filters = h('div', { style: { display: 'flex', gap: '.6rem', alignItems: 'center', flexWrap: 'wrap', margin: '.6rem 0 1rem' } },
+    h('label', { class: 'muted', style: { fontSize: '.8rem' } }, 'From'), fromInp,
+    h('label', { class: 'muted', style: { fontSize: '.8rem' } }, 'To'),   toInp,
+    goBtn
+  );
+  view.appendChild(filters);
+
+  const summary = h('div', { class: 'cards' });
+  view.appendChild(summary);
+  const byUserBox = h('div', { style: { margin: '1rem 0' } });
+  view.appendChild(byUserBox);
+  const heatmapBox = h('div', { style: { margin: '1rem 0', overflowX: 'auto' } });
+  view.appendChild(heatmapBox);
+
+  async function load() {
+    summary.innerHTML = '⏳ Loading…';
+    byUserBox.innerHTML = '';
+    heatmapBox.innerHTML = '';
+    try {
+      const data = await api('api_reports_activityByUser', { from: fromInp.value, to: toInp.value });
+      // ---- Summary KPIs ----
+      summary.innerHTML = '';
+      const mk = (label, n, sub) => h('div', { class: 'card' },
+        h('div', { class: 'muted', style: { fontSize: '.75rem' } }, label),
+        h('div', { style: { fontSize: '1.6rem', fontWeight: 700, marginTop: '.2rem' } }, String(n)),
+        sub ? h('div', { class: 'muted', style: { fontSize: '.72rem', marginTop: '.1rem' } }, sub) : null
+      );
+      const s = data.summary || {};
+      summary.appendChild(mk('📝 Total activities', s.total || 0, data.from + ' → ' + data.to));
+      summary.appendChild(mk('⚡ Today',         s.today || 0));
+      summary.appendChild(mk('📅 This week',     s.this_week || 0));
+      summary.appendChild(mk('🗓 This month',     s.this_month || 0));
+
+      // ---- By-user table ----
+      const users = data.by_user || [];
+      if (users.length) {
+        // Build the action-types list dynamically from what we got
+        const actionsSeen = new Set();
+        users.forEach(u => Object.keys(u.by_action || {}).forEach(a => actionsSeen.add(a)));
+        const actionList = Array.from(actionsSeen).sort();
+        const _actEmoji = {
+          remark: '💬', status_change: '🔄', followup_set: '🗓', note_updated: '📝',
+          tags_updated: '🏷', assigned: '👤', reassigned: '🔁',
+          qualified: '✅', unqualified: '↩️', whatsapp_in: '📥', whatsapp_out: '📤',
+          /* LEAD_ACTIVITY_v1 — pack action types */
+          edu_enrollment_created: '🎓', edu_payment: '💰',
+          re_booking_created: '🏢', re_demand_paid: '💸',
+          re_requirement_saved: '🎯', re_booking_cancelled: '❌'
+        };
+
+        // LEAD_ACTIVITY_DRILL_v1 — wrap each numeric cell in a clickable
+        // chip that opens a drill-down modal listing the underlying
+        // lead_actions rows. Zero-count cells stay un-clickable.
+        const _cellChip = (n, opts) => {
+          n = Number(n) || 0;
+          if (!n) {
+            return h('td', { style: { textAlign: 'right', color: '#cbd5e1' } }, '0');
+          }
+          const onClick = (ev) => {
+            ev.preventDefault(); ev.stopPropagation();
+            _openActivityDrillModal({
+              user_id:     opts.user_id,
+              user_name:   opts.user_name,
+              action_type: opts.action_type || 'all',
+              scope:       opts.scope || 'total',
+              label:       opts.label,
+              from:        fromInp.value,
+              to:          toInp.value
+            });
+          };
+          return h('td', { style: { textAlign: 'right' } },
+            h('a', {
+              href: '#',
+              onclick: onClick,
+              style: {
+                color: opts.colour || '#0f172a',
+                fontWeight: opts.weight || 600,
+                textDecoration: 'none',
+                cursor: 'pointer',
+                borderBottom: '1px dotted ' + (opts.colour || '#94a3b8')
+              },
+              title: 'Click to view all ' + n + ' activities (' + (opts.label || '') + ')'
+            }, String(n))
+          );
+        };
+
+        const tbl = h('table', { class: 'table' });
+        const trH = h('tr', {},
+          h('th', {}, 'Caller'),
+          h('th', { style: { textAlign: 'right' } }, 'Today'),
+          h('th', { style: { textAlign: 'right' } }, 'This week'),
+          h('th', { style: { textAlign: 'right' } }, 'This month'),
+          h('th', { style: { textAlign: 'right' } }, 'Total'),
+          ...actionList.map(a => h('th', { style: { textAlign: 'right' }, title: a }, (_actEmoji[a] || '') + ' ' + a.replace(/_/g, ' ')))
+        );
+        tbl.appendChild(h('thead', {}, trH));
+        const tbody = h('tbody', {});
+        users.forEach(u => {
+          const tr = h('tr', {},
+            h('td', {},
+              h('b', {}, u.user_name || '—'),
+              u.user_role ? h('span', { class: 'muted', style: { marginLeft: '.4rem', fontSize: '.72rem' } }, u.user_role) : null
+            ),
+            _cellChip(u.today,      { user_id: u.user_id, user_name: u.user_name, action_type: 'all', scope: 'today',      label: 'today',      colour: u.today > 0 ? '#15803d' : '#9ca3af' }),
+            _cellChip(u.this_week,  { user_id: u.user_id, user_name: u.user_name, action_type: 'all', scope: 'this_week',  label: 'this week' }),
+            _cellChip(u.this_month, { user_id: u.user_id, user_name: u.user_name, action_type: 'all', scope: 'this_month', label: 'this month' }),
+            _cellChip(u.total,      { user_id: u.user_id, user_name: u.user_name, action_type: 'all', scope: 'total',      label: 'total', weight: 700 }),
+            ...actionList.map(a => _cellChip((u.by_action || {})[a] || 0, {
+              user_id: u.user_id, user_name: u.user_name, action_type: a, scope: 'total',
+              label: a.replace(/_/g, ' ')
+            }))
+          );
+          tbody.appendChild(tr);
+        });
+        tbl.appendChild(tbody);
+        byUserBox.appendChild(h('h4', {}, '👥 Caller-wise activity'));
+        byUserBox.appendChild(h('div', { class: 'muted', style: { fontSize: '.78rem', marginBottom: '.4rem' } }, '💡 Click any number to drill down to the underlying activities.'));
+        byUserBox.appendChild(tbl);
+      } else {
+        byUserBox.appendChild(h('div', { class: 'muted' }, 'No activity in this range.'));
+      }
+
+      // ---- Day-wise heatmap (grid: user × day) ----
+      const grid = data.grid || [];
+      const days = data.days || [];
+      if (grid.length && days.length) {
+        heatmapBox.appendChild(h('h4', {}, '🗓 Day-wise heatmap'));
+        heatmapBox.appendChild(h('p', { class: 'muted', style: { fontSize: '.78rem' } }, 'Activity count per caller per day. Darker = more activities. Click a cell for the day total.'));
+        // Compute max for colour scale
+        let maxN = 0;
+        grid.forEach(g => Object.values(g.days || {}).forEach(n => { if (n > maxN) maxN = n; }));
+        const _bg = n => {
+          if (!n) return '#f8fafc';
+          const t = Math.min(1, n / Math.max(1, maxN));
+          // green ramp
+          const r = Math.round(220 - 130 * t);
+          const g = Math.round(252 - 30 * t);
+          const b = Math.round(231 - 130 * t);
+          return 'rgb(' + r + ',' + g + ',' + b + ')';
+        };
+        const tbl = h('table', { class: 'table', style: { fontSize: '.72rem' } });
+        const head = h('tr', {}, h('th', { style: { position: 'sticky', left: '0', background: '#fff' } }, 'Caller'),
+          ...days.map(d => h('th', { style: { textAlign: 'center', padding: '.15rem .35rem' }, title: d }, d.slice(5))));
+        tbl.appendChild(h('thead', {}, head));
+        const tbody = h('tbody', {});
+        grid.forEach(g => {
+          const tr = h('tr', {}, h('td', { style: { position: 'sticky', left: '0', background: '#fff', fontWeight: 600 } }, g.user_name || '—'));
+          days.forEach(d => {
+            const n = (g.days || {})[d] || 0;
+            tr.appendChild(h('td', {
+              style: { textAlign: 'center', background: _bg(n), color: n > maxN * 0.6 ? '#fff' : '#1f2937', padding: '.2rem' },
+              title: g.user_name + ' · ' + d + ' · ' + n + ' activities'
+            }, n ? String(n) : ''));
+          });
+          tbody.appendChild(tr);
+        });
+        tbl.appendChild(tbody);
+        heatmapBox.appendChild(tbl);
+      }
+    } catch (e) {
+      summary.innerHTML = '';
+      summary.appendChild(h('div', { style: { color: '#dc2626' } }, '⚠ ' + e.message));
+    }
+  }
+
+  goBtn.onclick = load;
+  load();
+};
+
+
+/* ==========================================================================
+ * COMPLIANCE_v1 — Tenant-customisable Rule engine + Violations dashboard
+ * ========================================================================== */
+
+VIEWS.compliance = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('h3', {}, '🛡 Compliance — Rules & Violations'));
+  view.appendChild(h('p', { class: 'muted' },
+    'Design rules to enforce agent discipline (e.g. "NP must be dialed at least 1× per day", "Cannot set follow-up without a recent call"). Violations are logged + agents notified.'));
+
+  const tabs = h('div', { class: 'tabs', style: { margin: '.7rem 0' } });
+  const tabRules = h('button', { class: 'tab active' }, '⚙️ Rules');
+  const tabVios  = h('button', { class: 'tab' },        '🚨 Violations');
+  tabs.appendChild(tabRules); tabs.appendChild(tabVios);
+  view.appendChild(tabs);
+
+  const panel = h('div', { id: 'compliance-panel' });
+  view.appendChild(panel);
+
+  async function renderRules() {
+    tabRules.classList.add('active'); tabVios.classList.remove('active');
+    panel.innerHTML = '⏳';
+    let types, rules;
+    try {
+      [types, rules] = await Promise.all([
+        api('api_compliance_listCheckTypes'),
+        api('api_compliance_rules_list')
+      ]);
+    } catch (e) { panel.innerHTML = '<div style="color:#dc2626">' + e.message + '</div>'; return; }
+    panel.innerHTML = '';
+    const isAdmin = (CRM.user && CRM.user.role === 'admin');
+    if (isAdmin) {
+      const addBtn = h('button', { class: 'btn primary' }, '➕ New rule');
+      addBtn.onclick = () => openComplianceRuleEditor(null, types, renderRules);
+      panel.appendChild(addBtn);
+      panel.appendChild(h('button', { class: 'btn', style: { marginLeft: '.4rem' } , onclick: async () => {
+        try { const r = await api('api_compliance_runScanNow'); toast('Scan complete: ' + r.violations_logged + ' new violations from ' + r.rules_run + ' rules', 'ok'); }
+        catch (e) { toast(e.message, 'err'); }
+      } }, '🔄 Run scan now'));
+    }
+    if (!rules.length) {
+      panel.appendChild(h('div', { class: 'muted', style: { margin: '1rem 0' } }, isAdmin ? 'No rules yet — click "New rule" to add one.' : 'No rules configured by your admin yet.'));
+      return;
+    }
+    const tbl = h('table', { class: 'table', style: { marginTop: '.8rem' } });
+    tbl.appendChild(h('thead', {}, h('tr', {},
+      h('th', {}, 'Rule'),
+      h('th', {}, 'Check type'),
+      h('th', {}, 'Severity'),
+      h('th', {}, 'Status'),
+      h('th', {}, 'Notify'),
+      h('th', {}, '')
+    )));
+    const tbody = h('tbody', {});
+    rules.forEach(r => {
+      const ct = (types || []).find(t => t.key === r.check_type) || {};
+      tbody.appendChild(h('tr', {},
+        h('td', {}, h('b', {}, r.name), h('div', { class: 'muted', style: { fontSize: '.78rem' } }, r.description || ct.description || '')),
+        h('td', {}, h('span', { class: 'muted', style: { fontSize: '.8rem' } }, ct.label || r.check_type)),
+        h('td', {}, h('span', { style: { padding: '.1rem .4rem', borderRadius: '4px',
+            background: r.severity === 'critical' ? '#fee2e2' : (r.severity === 'info' ? '#e0e7ff' : '#fef3c7'),
+            color: r.severity === 'critical' ? '#991b1b' : (r.severity === 'info' ? '#3730a3' : '#92400e'),
+            fontSize: '.75rem', fontWeight: 600 } }, r.severity || 'warning')),
+        h('td', {}, Number(r.enabled) === 1
+          ? h('span', { style: { color: '#15803d', fontWeight: 600 } }, '✓ Enabled')
+          : h('span', { class: 'muted' }, '— Off')),
+        h('td', { style: { fontSize: '.78rem' } },
+          Number(r.notify_agent) === 1 ? '🔔 Agent ' : '',
+          Number(r.notify_manager) === 1 ? '📨 Mgr' : ''
+        ),
+        h('td', {},
+          isAdmin ? h('button', { class: 'btn', onclick: () => openComplianceRuleEditor(r, types, renderRules) }, '✏️ Edit') : null,
+          isAdmin ? h('button', { class: 'btn', style: { marginLeft: '.3rem' }, onclick: async () => {
+            try { const t = await api('api_compliance_rules_test', r.id); toast(t.message || ('Logged ' + t.new_violations + ' new violations'), 'ok'); renderRules(); }
+            catch (e) { toast(e.message, 'err'); }
+          } }, '🧪 Test') : null,
+          isAdmin ? h('button', { class: 'btn danger', style: { marginLeft: '.3rem' }, onclick: async () => {
+            if (!confirm('Delete rule "' + r.name + '"?')) return;
+            try { await api('api_compliance_rules_delete', r.id); toast('Deleted', 'ok'); renderRules(); }
+            catch (e) { toast(e.message, 'err'); }
+          } }, '🗑') : null
+        )
+      ));
+    });
+    tbl.appendChild(tbody);
+    panel.appendChild(tbl);
+  }
+
+  async function renderVios() {
+    tabRules.classList.remove('active'); tabVios.classList.add('active');
+    panel.innerHTML = '⏳';
+    let summary, list;
+    try {
+      const today = new Date(); today.setHours(0,0,0,0);
+      const defFrom = new Date(today); defFrom.setDate(defFrom.getDate() - 6);
+      [summary, list] = await Promise.all([
+        api('api_compliance_violations_summary', { from: defFrom.toISOString().slice(0,10), to: today.toISOString().slice(0,10) }),
+        api('api_compliance_violations_list',    { from: defFrom.toISOString().slice(0,10), to: today.toISOString().slice(0,10) })
+      ]);
+    } catch (e) { panel.innerHTML = '<div style="color:#dc2626">' + e.message + '</div>'; return; }
+    panel.innerHTML = '';
+
+    // KPI cards
+    const t = (summary && summary.total) || { total: 0, open: 0, critical: 0, today: 0 };
+    const cards = h('div', { class: 'cards' });
+    const mk = (label, n, bg) => h('div', { class: 'card', style: { background: bg || '' } },
+      h('div', { class: 'muted', style: { fontSize: '.75rem' } }, label),
+      h('div', { style: { fontSize: '1.6rem', fontWeight: 700 } }, String(n))
+    );
+    cards.appendChild(mk('🚨 Total (last 7d)', t.total || 0));
+    cards.appendChild(mk('⚡ Today',            t.today || 0));
+    cards.appendChild(mk('❗ Critical',          t.critical || 0, t.critical > 0 ? '#fee2e2' : ''));
+    cards.appendChild(mk('🟢 Open (unack)',     t.open || 0));
+    panel.appendChild(cards);
+
+    // By-rule + By-user summaries side by side
+    const grid2 = h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', margin: '1rem 0' } });
+    function ruleBox() {
+      const box = h('div', {}, h('h4', {}, '📋 By rule'));
+      const rows = (summary && summary.by_rule) || [];
+      if (!rows.length) { box.appendChild(h('div', { class: 'muted' }, 'None.')); return box; }
+      const t2 = h('table', { class: 'table' });
+      t2.appendChild(h('thead', {}, h('tr', {}, h('th', {}, 'Rule'), h('th', {}, 'Type'), h('th', { style: { textAlign: 'right' } }, 'Count'))));
+      const tbody = h('tbody', {});
+      rows.forEach(r => tbody.appendChild(h('tr', {},
+        h('td', {}, r.rule_name || ('Rule #' + r.rule_id)),
+        h('td', { class: 'muted', style: { fontSize: '.78rem' } }, r.check_type),
+        h('td', { style: { textAlign: 'right', fontWeight: 700 } }, String(r.n))
+      )));
+      t2.appendChild(tbody);
+      box.appendChild(t2);
+      return box;
+    }
+    function userBox() {
+      const box = h('div', {}, h('h4', {}, '👥 By caller'));
+      const rows = (summary && summary.by_user) || [];
+      if (!rows.length) { box.appendChild(h('div', { class: 'muted' }, 'None.')); return box; }
+      const t2 = h('table', { class: 'table' });
+      t2.appendChild(h('thead', {}, h('tr', {}, h('th', {}, 'Caller'), h('th', { style: { textAlign: 'right' } }, 'Open'), h('th', { style: { textAlign: 'right' } }, 'Total'))));
+      const tbody = h('tbody', {});
+      rows.forEach(r => tbody.appendChild(h('tr', {},
+        h('td', {}, r.user_name || '—'),
+        h('td', { style: { textAlign: 'right', color: r.open_n > 0 ? '#dc2626' : '#9ca3af', fontWeight: 600 } }, String(r.open_n || 0)),
+        h('td', { style: { textAlign: 'right', fontWeight: 700 } }, String(r.n || 0))
+      )));
+      t2.appendChild(tbody);
+      box.appendChild(t2);
+      return box;
+    }
+    grid2.appendChild(ruleBox());
+    grid2.appendChild(userBox());
+    panel.appendChild(grid2);
+
+    // Detail list of recent violations
+    panel.appendChild(h('h4', {}, '📜 Recent violations (last 7 days)'));
+    if (!list.length) {
+      panel.appendChild(h('div', { class: 'muted' }, 'No violations detected. 🎉'));
+      return;
+    }
+    const tbl = h('table', { class: 'table' });
+    tbl.appendChild(h('thead', {}, h('tr', {},
+      h('th', {}, 'When'), h('th', {}, 'Rule'), h('th', {}, 'Caller'),
+      h('th', {}, 'Lead'), h('th', {}, 'Details'), h('th', {}, '')
+    )));
+    const tbody = h('tbody', {});
+    list.forEach(v => {
+      const detail = (() => {
+        const m = v.meta || {};
+        if (v.check_type === 'np_min_dials')   return 'Dialed ' + (m.dial_count || 0) + '× (min ' + m.min_required + ' / ' + m.window_hours + 'h)';
+        if (v.check_type === 'followup_requires_call') return m.reason || 'No outgoing call in window';
+        if (v.check_type === 'idle_in_stage')  return 'Idle ' + m.max_idle_days + 'd · last activity: ' + (m.last_activity ? new Date(m.last_activity).toLocaleDateString() : '—');
+        if (v.check_type === 'min_daily_activity') return 'Activity ' + (m.activity_count || 0) + ' (min ' + m.min_required + ')';
+        return JSON.stringify(m).slice(0, 80);
+      })();
+      tbody.appendChild(h('tr', { style: v.acknowledged_at ? { opacity: '0.5' } : {} },
+        h('td', { class: 'muted', style: { whiteSpace: 'nowrap', fontSize: '.78rem' } }, new Date(v.detected_at).toLocaleString()),
+        h('td', {}, h('b', {}, v.rule_name || ('Rule #' + v.rule_id)),
+          h('span', { style: { marginLeft: '.4rem', padding: '.05rem .3rem', borderRadius: '4px',
+            background: v.severity === 'critical' ? '#fee2e2' : '#fef3c7',
+            color: v.severity === 'critical' ? '#991b1b' : '#92400e',
+            fontSize: '.7rem' } }, v.severity || 'warning')),
+        h('td', {}, v.user_name || '—'),
+        h('td', {}, v.lead_id
+          ? h('a', { href: '#', onclick: (ev) => { ev.preventDefault(); openLeadModal(v.lead_id); } }, v.lead_name || ('Lead #' + v.lead_id))
+          : h('span', { class: 'muted' }, '—')),
+        h('td', { style: { fontSize: '.8rem' } }, detail),
+        h('td', {}, !v.acknowledged_at
+          ? h('button', { class: 'btn', onclick: async () => { try { await api('api_compliance_violations_acknowledge', v.id); toast('Acknowledged', 'ok'); renderVios(); } catch (e) { toast(e.message, 'err'); } } }, '✓ Ack')
+          : h('span', { class: 'muted', style: { fontSize: '.75rem' } }, '✓ ' + new Date(v.acknowledged_at).toLocaleDateString())
+        )
+      ));
+    });
+    tbl.appendChild(tbody);
+    panel.appendChild(tbl);
+  }
+
+  tabRules.onclick = renderRules;
+  tabVios.onclick  = renderVios;
+  renderRules();
+};
+
+/* Rule editor modal v2 — quick-pick presets, English preview, fixed
+ * CRM.cache.statuses path, and config forms for every check_type. */
+async function openComplianceRuleEditor(rule, types, onSaved) {
+  /* COMPLIANCE_v2 HOTFIX — wrap in modal-backdrop so the dialog centers
+   * over a dimmed overlay (the bare .modal class is just the white box). */
+  try { if (!CRM.cache || !CRM.cache.statuses || !CRM.cache.statuses.length) { await warmCache(); } } catch (_) {}
+  const backdrop = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target === backdrop) backdrop.remove(); } });
+  const modal = h('div', { class: 'modal modal-lg' });
+  const isNew = !rule;
+  rule = rule || { name: '', description: '', check_type: types[0].key, severity: 'warning', enabled: 1, notify_agent: 1, notify_manager: 0, config: {} };
+
+  /* COMPLIANCE_v2 — quick-pick presets. Click loads a ready-made rule. */
+  const PRESETS = [
+    { key: 'np_3_per_day', label: '☎ NP must be dialled ≥ 3× per day',
+      check_type: 'np_min_dials',
+      cfg: { min_dials: 3, window_hours: 24, direction: 'out' },
+      hint: 'Pick your Not-Picked status(es) after applying.' },
+    { key: 'np_1_per_day', label: '☎ NP must be dialled ≥ 1× per day',
+      check_type: 'np_min_dials',
+      cfg: { min_dials: 1, window_hours: 24, direction: 'out' },
+      hint: 'Pick your Not-Picked status(es) after applying.' },
+    { key: 'followup_needs_call', label: '🗓 Follow-up requires recent outgoing call',
+      check_type: 'followup_requires_call',
+      cfg: { call_window_hours: 24 } },
+    { key: 'status_change_needs_remark', label: '💬 Status change must include a remark',
+      check_type: 'status_change_requires_remark', cfg: {} },
+    { key: 'status_change_needs_call', label: '☎ Status change must follow a call',
+      check_type: 'status_change_requires_recent_call', cfg: { call_window_hours: 24 } },
+    { key: 'idle_7d', label: '⏳ Lead idle > 7 days (no activity)',
+      check_type: 'idle_in_stage', cfg: { max_idle_days: 7 } },
+    { key: 'no_stage_change_5d', label: '⛔ No status change in 5+ days',
+      check_type: 'no_status_change_in_n_days', cfg: { max_days: 5 } },
+    { key: 'rep_daily_5', label: '📊 Each rep must log ≥ 5 activities/day',
+      check_type: 'min_daily_activity', cfg: { min_activities: 5, target_roles: ['agent','sales','employee'] } },
+    { key: 'work_hours', label: '🕘 Calls only 9 AM – 7 PM (no weekends)',
+      check_type: 'call_outside_hours', cfg: { start_hour: 9, end_hour: 19, allow_weekends: false } },
+    { key: 'assigned_no_action_3d', label: '🔕 Assigned but no action in 3+ days',
+      check_type: 'assigned_no_action_n_days', cfg: { max_days: 3 } }
+  ];
+
+  const nameInp = h('input', { class: 'input', value: rule.name || '', placeholder: 'e.g. NP must be dialled 3× a day', style: { width: '100%' } });
+  const descInp = h('input', { class: 'input', value: rule.description || '', placeholder: 'Short description — why this rule exists (optional)', style: { width: '100%' } });
+  const typeSel = h('select', { class: 'input', style: { width: '100%' } },
+    ...types.map(t => h('option', { value: t.key, selected: t.key === rule.check_type ? 'selected' : null }, t.label)));
+  const sevSel  = h('select', { class: 'input' },
+    h('option', { value: 'info',     selected: rule.severity === 'info'     ? 'selected' : null }, '🟦 Info'),
+    h('option', { value: 'warning',  selected: !rule.severity || rule.severity === 'warning' ? 'selected' : null }, '🟨 Warning'),
+    h('option', { value: 'critical', selected: rule.severity === 'critical' ? 'selected' : null }, '🟥 Critical')
+  );
+  const enChk = h('input', { type: 'checkbox', checked: Number(rule.enabled) === 1 ? 'checked' : null });
+  const naChk = h('input', { type: 'checkbox', checked: Number(rule.notify_agent) === 1 ? 'checked' : null });
+  const nmChk = h('input', { type: 'checkbox', checked: Number(rule.notify_manager) === 1 ? 'checked' : null });
+
+  // Preview box — English-language summary of the rule, regenerated on every change.
+  const previewBox = h('div', { style: { padding: '.7rem .9rem', background: '#eff6ff', border: '1px dashed #93c5fd', borderRadius: '8px', margin: '.8rem 0', fontSize: '.85rem', color: '#1e3a8a' } }, '');
+
+  // Type-specific config form
+  const cfgBox = h('div', { style: { padding: '.9rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', margin: '.6rem 0' } });
+
+  function _statusName(id) {
+    const s = (CRM && CRM.cache && CRM.cache.statuses || []).find(x => Number(x.id) === Number(id));
+    return s ? s.name : ('#' + id);
+  }
+
+  function _updatePreview() {
+    const t = types.find(x => x.key === typeSel.value) || {};
+    const cfg = cfgBox._collect ? cfgBox._collect() : {};
+    let txt = '📜 ' + t.label + ': ';
+    if (typeSel.value === 'np_min_dials') {
+      const statusList = (cfg.status_ids || []).map(_statusName).join(', ') || '(pick statuses)';
+      txt += 'Leads in [' + statusList + '] must be ' + (cfg.direction || 'out') + '-dialled ≥ ' + (cfg.min_dials || 1) + '× every ' + (cfg.window_hours || 24) + ' hour(s).';
+    } else if (typeSel.value === 'followup_requires_call') {
+      txt += 'Refuse-log when an agent sets a follow-up with no outgoing call in the last ' + (cfg.call_window_hours || 24) + 'h.';
+    } else if (typeSel.value === 'idle_in_stage') {
+      const statusList = (cfg.status_ids || []).map(_statusName).join(', ') || '(pick statuses)';
+      txt += 'Leads in [' + statusList + '] with no activity for ' + (cfg.max_idle_days || 7) + '+ days.';
+    } else if (typeSel.value === 'min_daily_activity') {
+      const roles = (cfg.target_roles || []).join(', ') || 'all roles';
+      txt += 'Reps (' + roles + ') with < ' + (cfg.min_activities || 5) + ' activities today.';
+    } else if (typeSel.value === 'status_change_requires_remark') {
+      const statusList = (cfg.status_ids || []).map(_statusName).join(', ') || '(pick statuses)';
+      txt += 'Changing to [' + statusList + '] requires a remark in the same save (or within the last 90s).';
+    } else if (typeSel.value === 'status_change_requires_recent_call') {
+      const statusList = (cfg.status_ids || []).map(_statusName).join(', ') || '(pick statuses)';
+      txt += 'Changing to [' + statusList + '] requires an outgoing call in the last ' + (cfg.call_window_hours || 24) + 'h.';
+    } else if (typeSel.value === 'no_status_change_in_n_days') {
+      const statusList = (cfg.status_ids || []).map(_statusName).join(', ') || '(pick statuses)';
+      txt += 'Leads parked in [' + statusList + '] for ' + (cfg.max_days || 7) + '+ days.';
+    } else if (typeSel.value === 'call_outside_hours') {
+      txt += 'Outgoing calls outside ' + (cfg.start_hour ?? 9) + ':00–' + (cfg.end_hour ?? 19) + ':00' + (cfg.allow_weekends ? '' : ' or on weekends') + '.';
+    } else if (typeSel.value === 'assigned_no_action_n_days') {
+      txt += 'Assigned leads with zero rep activity for ' + (cfg.max_days || 3) + '+ days.';
+    }
+    previewBox.textContent = txt;
+  }
+
+  function buildCfgForm() {
+    cfgBox.innerHTML = '';
+    const t = types.find(x => x.key === typeSel.value);
+    if (!t) return;
+    cfgBox.appendChild(h('div', { class: 'muted', style: { fontSize: '.82rem', marginBottom: '.6rem', lineHeight: '1.4' } }, '💡 ' + t.description));
+
+    const statuses = (window.CRM && CRM.cache && CRM.cache.statuses) || [];
+    const cfg = rule.config || {};
+    const inputs = {};
+
+    function addRow(label, input, helper) {
+      const row = h('div', { style: { display: 'grid', gridTemplateColumns: '200px 1fr', alignItems: 'center', gap: '.6rem', margin: '.5rem 0' } },
+        h('label', { style: { fontSize: '.88rem', fontWeight: 500 } }, label),
+        h('div', {}, input, helper ? h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '.2rem' } }, helper) : null)
+      );
+      cfgBox.appendChild(row);
+    }
+
+    if (t.config_keys.includes('status_ids')) {
+      if (!statuses.length) {
+        addRow('Status(es)', h('div', { class: 'muted', style: { color: '#dc2626' } }, '⚠ No statuses configured yet — go to Settings → Statuses first.'));
+      } else {
+        const sel = h('select', { class: 'input', multiple: 'multiple', style: { minWidth: '100%', height: '120px' } },
+          ...statuses.map(st => h('option', { value: String(st.id),
+            selected: (cfg.status_ids || []).map(Number).includes(Number(st.id)) ? 'selected' : null }, st.name))
+        );
+        sel.onchange = _updatePreview;
+        inputs.status_ids = () => Array.from(sel.selectedOptions).map(o => Number(o.value));
+        addRow('Status(es) to check', sel, 'Hold Ctrl/Cmd to select multiple. Pick the statuses this rule applies to.');
+      }
+    }
+    if (t.config_keys.includes('min_dials')) {
+      const inp = h('input', { type: 'number', class: 'input', min: '1', max: '20', value: cfg.min_dials || 1, style: { width: '90px' } });
+      inp.oninput = _updatePreview;
+      inputs.min_dials = () => Number(inp.value || 1);
+      addRow('Minimum dials required', inp, 'How many times an agent should dial a lead in the chosen window.');
+    }
+    if (t.config_keys.includes('window_hours')) {
+      const inp = h('input', { type: 'number', class: 'input', min: '1', max: '720', value: cfg.window_hours || 24, style: { width: '90px' } });
+      inp.oninput = _updatePreview;
+      inputs.window_hours = () => Number(inp.value || 24);
+      addRow('Window (hours)', inp, '24 = each day, 168 = each week. The check looks back this many hours from now.');
+    }
+    if (t.config_keys.includes('direction')) {
+      const sel = h('select', { class: 'input' },
+        h('option', { value: 'out',    selected: !cfg.direction || cfg.direction === 'out' ? 'selected' : null }, '📞 Outgoing'),
+        h('option', { value: 'in',     selected: cfg.direction === 'in' ? 'selected' : null }, '📥 Incoming'),
+        h('option', { value: 'missed', selected: cfg.direction === 'missed' ? 'selected' : null }, '❌ Missed'),
+        h('option', { value: 'any',    selected: cfg.direction === 'any' ? 'selected' : null }, '🔁 Any direction')
+      );
+      sel.onchange = _updatePreview;
+      inputs.direction = () => sel.value;
+      addRow('Call direction', sel);
+    }
+    if (t.config_keys.includes('call_window_hours')) {
+      const inp = h('input', { type: 'number', class: 'input', min: '1', max: '168', value: cfg.call_window_hours || 24, style: { width: '90px' } });
+      inp.oninput = _updatePreview;
+      inputs.call_window_hours = () => Number(inp.value || 24);
+      addRow('Recent-call window (hours)', inp, 'A call must have happened within this many hours before the action.');
+    }
+    if (t.config_keys.includes('max_idle_days')) {
+      const inp = h('input', { type: 'number', class: 'input', min: '1', max: '180', value: cfg.max_idle_days || 7, style: { width: '90px' } });
+      inp.oninput = _updatePreview;
+      inputs.max_idle_days = () => Number(inp.value || 7);
+      addRow('Max idle days', inp, 'Trigger when a lead sees no activity for this many days.');
+    }
+    if (t.config_keys.includes('max_days')) {
+      const inp = h('input', { type: 'number', class: 'input', min: '1', max: '180', value: cfg.max_days || 7, style: { width: '90px' } });
+      inp.oninput = _updatePreview;
+      inputs.max_days = () => Number(inp.value || 7);
+      addRow('Max days', inp);
+    }
+    if (t.config_keys.includes('min_activities')) {
+      const inp = h('input', { type: 'number', class: 'input', min: '1', max: '500', value: cfg.min_activities || 5, style: { width: '90px' } });
+      inp.oninput = _updatePreview;
+      inputs.min_activities = () => Number(inp.value || 5);
+      addRow('Minimum activities / day', inp, 'Counts every status change, remark, follow-up edit, reassign, WhatsApp send, etc.');
+    }
+    if (t.config_keys.includes('target_roles')) {
+      const sel = h('select', { class: 'input', multiple: 'multiple', style: { minWidth: '100%', height: '120px' } },
+        h('option', { value: 'agent',       selected: (cfg.target_roles || []).includes('agent')      ? 'selected' : null }, 'Agent'),
+        h('option', { value: 'sales',       selected: (cfg.target_roles || []).includes('sales')      ? 'selected' : null }, 'Sales'),
+        h('option', { value: 'employee',    selected: (cfg.target_roles || []).includes('employee')   ? 'selected' : null }, 'Employee'),
+        h('option', { value: 'team_leader', selected: (cfg.target_roles || []).includes('team_leader')? 'selected' : null }, 'Team Leader'),
+        h('option', { value: 'manager',     selected: (cfg.target_roles || []).includes('manager')    ? 'selected' : null }, 'Manager')
+      );
+      sel.onchange = _updatePreview;
+      inputs.target_roles = () => Array.from(sel.selectedOptions).map(o => o.value);
+      addRow('Target roles', sel, 'Which roles this quota applies to. Leave empty to cover everyone.');
+    }
+    if (t.config_keys.includes('start_hour')) {
+      const inp = h('input', { type: 'number', class: 'input', min: '0', max: '23', value: cfg.start_hour ?? 9, style: { width: '90px' } });
+      inp.oninput = _updatePreview;
+      inputs.start_hour = () => Number(inp.value);
+      addRow('Start hour (0–23)', inp, '9 = 9 AM. Anything before is flagged.');
+    }
+    if (t.config_keys.includes('end_hour')) {
+      const inp = h('input', { type: 'number', class: 'input', min: '0', max: '23', value: cfg.end_hour ?? 19, style: { width: '90px' } });
+      inp.oninput = _updatePreview;
+      inputs.end_hour = () => Number(inp.value);
+      addRow('End hour (0–23)', inp, '19 = 7 PM. Anything at/after is flagged.');
+    }
+    if (t.config_keys.includes('allow_weekends')) {
+      const chk = h('input', { type: 'checkbox', checked: cfg.allow_weekends ? 'checked' : null });
+      chk.onchange = _updatePreview;
+      inputs.allow_weekends = () => !!chk.checked;
+      addRow('Allow Sat/Sun calls', chk);
+    }
+
+    cfgBox._collect = () => {
+      const out = {};
+      Object.keys(inputs).forEach(k => { out[k] = inputs[k](); });
+      return out;
+    };
+    _updatePreview();
+  }
+  buildCfgForm();
+  typeSel.onchange = () => { buildCfgForm(); _updatePreview(); };
+
+  // Presets row
+  const presetRow = h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '.35rem', marginBottom: '.7rem' } });
+  PRESETS.forEach(p => {
+    presetRow.appendChild(h('button', { class: 'btn', type: 'button', style: { fontSize: '.78rem' }, onclick: () => {
+      // Apply preset onto the editor: name, check_type, config
+      nameInp.value = nameInp.value || p.label.replace(/^[^\w]+/, '').slice(0, 80);
+      // Switch the type, then rebuild and pre-fill cfg
+      typeSel.value = p.check_type;
+      rule.config = Object.assign({}, p.cfg);
+      buildCfgForm();
+      if (p.hint) toast(p.hint, 'ok');
+    } }, p.label));
+  });
+
+  const saveBtn = h('button', { class: 'btn primary' }, isNew ? '💾 Create rule' : '💾 Save');
+  saveBtn.onclick = async () => {
+    if (!nameInp.value.trim()) { toast('Name required', 'err'); return; }
+    const cfg = cfgBox._collect ? cfgBox._collect() : {};
+    saveBtn.disabled = true; saveBtn.textContent = '⏳ Saving…';
+    try {
+      await api('api_compliance_rules_save', {
+        id: rule.id || null,
+        name: nameInp.value.trim(),
+        description: descInp.value.trim(),
+        check_type: typeSel.value,
+        severity: sevSel.value,
+        enabled: enChk.checked ? 1 : 0,
+        notify_agent: naChk.checked ? 1 : 0,
+        notify_manager: nmChk.checked ? 1 : 0,
+        config: cfg
+      });
+      toast('Saved', 'ok');
+      modal.remove();
+      if (onSaved) onSaved();
+    } catch (e) { toast(e.message, 'err'); saveBtn.disabled = false; saveBtn.textContent = '💾 Save'; }
+  };
+
+  /* COMPLIANCE_v2 HOTFIX — use modal-head + modal-body + actions structure
+   * (same as every other modal in the codebase). The 'modal-content' class
+   * doesn't exist in styles.css — previous editor rendered without proper
+   * scrolling or centering. */
+  modal.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, isNew ? '➕ New compliance rule' : '✏️ Edit rule'),
+    h('button', { class: 'btn ghost', onclick: () => backdrop.remove() }, '✕')
+  ));
+  modal.appendChild(h('div', { class: 'modal-body', style: { maxHeight: '70vh', overflowY: 'auto', paddingRight: '.4rem' } },
+    h('p', { class: 'muted', style: { fontSize: '.85rem', marginTop: 0 } }, isNew ? 'Pick a preset below to start fast, or pick a check type and configure it manually.' : 'Update this rule\'s configuration.'),
+    isNew ? h('div', { style: { fontSize: '.78rem', color: '#475569', marginBottom: '.3rem' } }, '⚡ Quick presets:') : null,
+    isNew ? presetRow : null,
+    h('label', { class: 'muted', style: { fontSize: '.78rem', display: 'block', marginTop: '.4rem' } }, 'Rule name'), nameInp,
+    h('label', { class: 'muted', style: { fontSize: '.78rem', display: 'block', marginTop: '.4rem' } }, 'Description (optional)'), descInp,
+    h('label', { class: 'muted', style: { fontSize: '.78rem', display: 'block', marginTop: '.4rem' } }, 'Check type'), typeSel,
+    cfgBox,
+    previewBox,
+    h('div', { style: { display: 'flex', gap: '1.2rem', flexWrap: 'wrap', alignItems: 'center', marginTop: '.5rem', padding: '.5rem .7rem', background: '#fafafa', borderRadius: '6px' } },
+      h('label', { style: { fontSize: '.85rem', display: 'flex', alignItems: 'center', gap: '.3rem' } }, 'Severity ', sevSel),
+      h('label', { style: { fontSize: '.85rem', display: 'flex', alignItems: 'center', gap: '.3rem' } }, enChk, ' Enabled'),
+      h('label', { style: { fontSize: '.85rem', display: 'flex', alignItems: 'center', gap: '.3rem' } }, naChk, ' Notify agent'),
+      h('label', { style: { fontSize: '.85rem', display: 'flex', alignItems: 'center', gap: '.3rem' } }, nmChk, ' Notify manager')
+    )
+  ));
+  modal.appendChild(h('div', { class: 'actions' },
+    h('button', { class: 'btn', onclick: () => backdrop.remove() }, 'Cancel'),
+    saveBtn
+  ));
+  // Update existing saveBtn handlers that referenced modal.remove() to close backdrop
+  const _origOnclick = saveBtn.onclick;
+  saveBtn.onclick = async (...args) => { try { await _origOnclick(...args); } finally { /* backdrop removed inside the handler on success */ } };
+  // Patch presetRow buttons in modal flow: nothing further needed; already use buildCfgForm + toast.
+  backdrop.appendChild(modal);
+  document.body.appendChild(backdrop);
+}
+try { window.openComplianceRuleEditor = openComplianceRuleEditor; } catch (_) {}
+
+
+/* ==========================================================================
+ * REPORT_SCHEDULE_v1 — Save / Load / Schedule reports
+ * ========================================================================== */
+
+/* Read current Report Builder UI state into the same shape as _currentReportBuilderFilters */
+function _rbCurrentConfig() {
+  const dim = (document.getElementById('rb-dim') || {}).value || 'product';
+  const filters = _currentReportBuilderFilters();
+  /* Persist chart type with the saved template so 'Open' restores it. */
+  filters._chart_type = window._rbChartType || 'bar';
+  return { dim, filters };
+}
+
+/* Apply a saved config back onto the Report Builder UI */
+function _rbApplyConfig(cfg) {
+  if (!cfg) return;
+  const dimSel = document.getElementById('rb-dim');
+  if (dimSel && cfg.dim) {
+    Array.from(dimSel.options).forEach(o => { if (o.value === cfg.dim) o.selected = true; });
+  }
+  const f = cfg.filters || {};
+  const fromEl = document.getElementById('rb-from'); if (fromEl && f.from) fromEl.value = f.from;
+  const toEl   = document.getElementById('rb-to');   if (toEl   && f.to)   toEl.value   = f.to;
+  const qEl    = document.getElementById('rb-qualified'); if (qEl && f.qualified) qEl.value = f.qualified;
+  window._rbPicked = window._rbPicked || {};
+  if (Array.isArray(f.scope_user_ids)) window._rbPicked.users    = f.scope_user_ids.map(String);
+  if (Array.isArray(f.status_ids))     window._rbPicked.statuses = f.status_ids.map(String);
+  if (Array.isArray(f.product_ids))    window._rbPicked.products = f.product_ids.map(String);
+  if (Array.isArray(f.sources))        window._rbPicked.sources  = f.sources;
+  /* Restore chart type from saved template */
+  if (f._chart_type) { window._rbChartType = f._chart_type; if (typeof _syncChartTypeUI === 'function') _syncChartTypeUI(); }
+}
+
+/* Save-as-template modal */
+async function openReportTemplateSave() {
+  const cfg = _rbCurrentConfig();
+  const modal = h('div', { class: 'modal' });
+  const nameInp = h('input', { class: 'input', placeholder: 'Template name (e.g. "Daily by source")' });
+  const descInp = h('input', { class: 'input', placeholder: 'Description (optional)' });
+  const saveBtn = h('button', { class: 'btn primary' }, '💾 Save');
+  saveBtn.onclick = async () => {
+    if (!nameInp.value.trim()) { toast('Name required', 'err'); return; }
+    saveBtn.disabled = true; saveBtn.textContent = '⏳';
+    try {
+      const r = await api('api_reportTemplate_save', { name: nameInp.value.trim(), description: descInp.value.trim(), dim: cfg.dim, filters: cfg.filters });
+      toast('Saved — template #' + r.id, 'ok');
+      modal.remove();
+    } catch (e) { toast(e.message, 'err'); saveBtn.disabled = false; saveBtn.textContent = '💾 Save'; }
+  };
+  modal.appendChild(h('div', { class: 'modal-content', style: { maxWidth: '480px' } },
+    h('h3', {}, '💾 Save report template'),
+    h('p', { class: 'muted', style: { fontSize: '.85rem' } }, 'Saves the current grouping (' + cfg.dim + ') + all filters. You can re-open + edit later from 📂 My templates, or schedule it to send via Email / WhatsApp.'),
+    h('label', { class: 'muted', style: { fontSize: '.75rem' } }, 'Name'), nameInp,
+    h('label', { class: 'muted', style: { fontSize: '.75rem' } }, 'Description'), descInp,
+    h('div', { class: 'modal-actions', style: { display: 'flex', justifyContent: 'flex-end', gap: '.4rem', marginTop: '.8rem' } },
+      h('button', { class: 'btn', onclick: () => modal.remove() }, 'Cancel'), saveBtn
+    )
+  ));
+  document.body.appendChild(modal);
+}
+
+/* My-templates modal — list of saved templates with View/Edit/Schedule/Delete */
+async function openReportTemplatesModal() {
+  const modal = h('div', { class: 'modal' });
+  const body = h('div', { style: { maxHeight: '70vh', overflowY: 'auto' } }, '⏳ Loading…');
+  modal.appendChild(h('div', { class: 'modal-content', style: { maxWidth: '760px' } },
+    h('h3', {}, '📂 My saved report templates'),
+    h('p', { class: 'muted', style: { fontSize: '.85rem' } }, 'Open a template to re-run + edit, or schedule it to send via Email / WhatsApp on a daily / weekly / monthly cadence.'),
+    h('div', { class: 'modal-actions', style: { display: 'flex', justifyContent: 'flex-end' } },
+      h('button', { class: 'btn', onclick: () => modal.remove() }, 'Close')
+    ),
+    body
+  ));
+  document.body.appendChild(modal);
+
+  async function load() {
+    body.innerHTML = '⏳';
+    let tpls, schs;
+    try {
+      [tpls, schs] = await Promise.all([
+        api('api_reportTemplate_list'),
+        api('api_reportSchedule_list')
+      ]);
+    } catch (e) { body.innerHTML = '<div style="color:#dc2626">' + e.message + '</div>'; return; }
+    body.innerHTML = '';
+    if (!tpls.length) { body.appendChild(h('div', { class: 'muted', style: { padding: '1.5rem', textAlign: 'center' } }, 'No saved templates yet. Use 💾 Save template to create one.')); return; }
+    const schedsByTpl = {}; (schs || []).forEach(s => { (schedsByTpl[s.template_id] = schedsByTpl[s.template_id] || []).push(s); });
+    tpls.forEach(t => {
+      const tplSchs = schedsByTpl[t.id] || [];
+      const card = h('div', { class: 'card', style: { padding: '.7rem .9rem', margin: '.5rem 0' } },
+        h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '.5rem' } },
+          h('div', { style: { flex: 1 } },
+            h('div', { style: { fontWeight: 700 } }, '📊 ' + t.name),
+            h('div', { class: 'muted', style: { fontSize: '.78rem' } }, t.description || ''),
+            h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '.2rem' } }, 'Group by ' + t.dim + ' · saved ' + new Date(t.created_at).toLocaleDateString())
+          ),
+          h('div', {},
+            h('button', { class: 'btn primary', title: 'Load this template into the Report Builder', onclick: () => { _rbApplyConfig({ dim: t.dim, filters: t.filters }); modal.remove(); loadReportBuilder(); toast('Loaded — modify + click 💾 Save template to save changes', 'ok'); } }, '▶ Open'),
+            h('button', { class: 'btn', style: { marginLeft: '.3rem' }, title: 'Schedule send via Email / WhatsApp', onclick: () => openReportScheduleEditor(t, null, load) }, '🗓 Schedule'),
+            h('button', { class: 'btn danger', style: { marginLeft: '.3rem' }, onclick: async () => {
+              if (!confirm('Delete template "' + t.name + '" and all its schedules?')) return;
+              try { await api('api_reportTemplate_delete', t.id); toast('Deleted', 'ok'); load(); }
+              catch (e) { toast(e.message, 'err'); }
+            } }, '🗑')
+          )
+        )
+      );
+      if (tplSchs.length) {
+        const list = h('div', { style: { marginTop: '.5rem', padding: '.5rem .7rem', background: '#f8fafc', borderRadius: '6px', fontSize: '.82rem' } },
+          h('div', { class: 'muted', style: { fontWeight: 600, marginBottom: '.3rem' } }, '🗓 Active schedules')
+        );
+        tplSchs.forEach(sc => {
+          const recip = ((sc.recipients_email || []).length ? '📧 ' + sc.recipients_email.length : '') +
+                        ((sc.recipients_whatsapp || []).length ? ' 📱 ' + sc.recipients_whatsapp.length : '');
+          list.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', margin: '.2rem 0' } },
+            h('span', { style: { flex: 1 } },
+              sc.frequency === 'weekly' ? '📅 Weekly · ' + ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][sc.day_of_week || 0]
+                : sc.frequency === 'monthly' ? '📅 Monthly · day ' + (sc.day_of_month || 1)
+                : '📅 Daily',
+              ' at ' + String(sc.hour).padStart(2,'0') + ':' + String(sc.minute || 0).padStart(2,'0'),
+              ' · ' + recip,
+              Number(sc.enabled) === 1 ? '' : ' · ⏸ Disabled',
+              sc.last_error ? ' · ⚠ ' + sc.last_error.slice(0, 60) : ''
+            ),
+            h('button', { class: 'btn', onclick: async () => { try { const r = await api('api_reportSchedule_runNow', sc.id); toast('Sent · ' + ((r.results && r.results.email && r.results.email.length) || 0) + ' email · ' + ((r.results && r.results.whatsapp && r.results.whatsapp.length) || 0) + ' wa', 'ok'); } catch (e) { toast(e.message, 'err'); } } }, '▶ Send now'),
+            h('button', { class: 'btn', onclick: () => openReportScheduleEditor(t, sc, load) }, '✏️'),
+            h('button', { class: 'btn danger', onclick: async () => { if (!confirm('Delete this schedule?')) return; try { await api('api_reportSchedule_delete', sc.id); toast('Deleted', 'ok'); load(); } catch (e) { toast(e.message, 'err'); } } }, '🗑')
+          ));
+        });
+        card.appendChild(list);
+      }
+      body.appendChild(card);
+    });
+  }
+  load();
+}
+try { window.openReportTemplatesModal = openReportTemplatesModal; window.openReportTemplateSave = openReportTemplateSave; } catch (_) {}
+
+/* Schedule editor modal */
+function openReportScheduleEditor(template, existing, onSaved) {
+  existing = existing || { frequency: 'daily', hour: 9, minute: 0, day_of_week: 1, day_of_month: 1,
+    recipients_email: [], recipients_whatsapp: [], message_template: '', enabled: 1 };
+  const modal = h('div', { class: 'modal' });
+
+  const freqSel = h('select', { class: 'input' },
+    h('option', { value: 'daily',   selected: existing.frequency === 'daily'   ? 'selected' : null }, 'Daily'),
+    h('option', { value: 'weekly',  selected: existing.frequency === 'weekly'  ? 'selected' : null }, 'Weekly'),
+    h('option', { value: 'monthly', selected: existing.frequency === 'monthly' ? 'selected' : null }, 'Monthly')
+  );
+  const hourInp = h('input', { type: 'number', class: 'input', min: '0', max: '23', value: existing.hour ?? 9, style: { width: '70px' } });
+  const minInp  = h('input', { type: 'number', class: 'input', min: '0', max: '59', value: existing.minute ?? 0, style: { width: '70px' } });
+  const dowSel = h('select', { class: 'input' },
+    ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'].map((d, i) =>
+      h('option', { value: String(i), selected: Number(existing.day_of_week) === i ? 'selected' : null }, d))
+  );
+  const domInp = h('input', { type: 'number', class: 'input', min: '1', max: '28', value: existing.day_of_month ?? 1, style: { width: '80px' } });
+
+  const emailsInp = h('textarea', { class: 'input', placeholder: 'one@example.com, two@example.com', rows: '2', style: { minHeight: '50px' } });
+  emailsInp.value = (existing.recipients_email || []).join(', ');
+  const phonesInp = h('textarea', { class: 'input', placeholder: '919876543210, 919812345678 (no +, include country code)', rows: '2', style: { minHeight: '50px' } });
+  phonesInp.value = (existing.recipients_whatsapp || []).join(', ');
+  const msgInp = h('textarea', { class: 'input', placeholder: 'Optional intro message (used for WhatsApp + email body)', rows: '2' });
+  msgInp.value = existing.message_template || '';
+  const enChk = h('input', { type: 'checkbox', checked: Number(existing.enabled) === 1 ? 'checked' : null });
+
+  freqSel.onchange = () => { rowDow.style.display = freqSel.value === 'weekly' ? '' : 'none'; rowDom.style.display = freqSel.value === 'monthly' ? '' : 'none'; };
+
+  const rowDow = h('div', { style: { display: existing.frequency === 'weekly'  ? 'flex' : 'none', gap: '.5rem', alignItems: 'center', margin: '.3rem 0' } },
+    h('label', { style: { minWidth: '120px' } }, 'Day of week'), dowSel);
+  const rowDom = h('div', { style: { display: existing.frequency === 'monthly' ? 'flex' : 'none', gap: '.5rem', alignItems: 'center', margin: '.3rem 0' } },
+    h('label', { style: { minWidth: '120px' } }, 'Day of month (1-28)'), domInp);
+
+  const saveBtn = h('button', { class: 'btn primary' }, existing.id ? '💾 Save' : '🗓 Create schedule');
+  saveBtn.onclick = async () => {
+    const emails = (emailsInp.value || '').split(/[,;\n]+/).map(s => s.trim()).filter(s => /^.+@.+\..+$/.test(s));
+    const phones = (phonesInp.value || '').split(/[,;\n]+/).map(s => s.replace(/\D/g, '')).filter(s => s.length >= 8);
+    if (!emails.length && !phones.length) { toast('Add at least one email or WhatsApp number', 'err'); return; }
+    saveBtn.disabled = true; saveBtn.textContent = '⏳';
+    try {
+      const r = await api('api_reportSchedule_save', {
+        id: existing.id || null,
+        template_id: template.id,
+        name: template.name,
+        frequency: freqSel.value,
+        hour: Number(hourInp.value || 9),
+        minute: Number(minInp.value || 0),
+        day_of_week:  freqSel.value === 'weekly'  ? Number(dowSel.value) : null,
+        day_of_month: freqSel.value === 'monthly' ? Number(domInp.value) : null,
+        recipients_email: emails,
+        recipients_whatsapp: phones,
+        message_template: msgInp.value || '',
+        enabled: enChk.checked ? 1 : 0
+      });
+      toast('Saved · next run ' + new Date(r.next_run_at).toLocaleString(), 'ok');
+      modal.remove(); if (onSaved) onSaved();
+    } catch (e) { toast(e.message, 'err'); saveBtn.disabled = false; saveBtn.textContent = '💾 Save'; }
+  };
+
+  modal.appendChild(h('div', { class: 'modal-content', style: { maxWidth: '600px' } },
+    h('h3', {}, '🗓 Schedule "' + template.name + '"'),
+    h('p', { class: 'muted', style: { fontSize: '.82rem' } }, 'Send the report on a recurring schedule to email + WhatsApp recipients. Uses your CRM\'s SMTP and WhatsApp Business API.'),
+    h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', margin: '.4rem 0' } },
+      h('label', { style: { minWidth: '120px' } }, 'Frequency'), freqSel,
+      h('label', { style: { marginLeft: '.5rem' } }, 'At'), hourInp, h('span', {}, ':'), minInp,
+      h('span', { class: 'muted', style: { fontSize: '.75rem' } }, ' (IST)')
+    ),
+    rowDow, rowDom,
+    h('label', { class: 'muted', style: { fontSize: '.75rem', display: 'block', marginTop: '.5rem' } }, '📧 Email recipients (comma-separated)'), emailsInp,
+    h('label', { class: 'muted', style: { fontSize: '.75rem', display: 'block', marginTop: '.4rem' } }, '📱 WhatsApp numbers (with country code, no +)'), phonesInp,
+    h('label', { class: 'muted', style: { fontSize: '.75rem', display: 'block', marginTop: '.4rem' } }, 'Intro message (optional)'), msgInp,
+    h('label', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', marginTop: '.5rem' } }, enChk, ' Enabled'),
+    h('div', { class: 'modal-actions', style: { display: 'flex', justifyContent: 'flex-end', gap: '.4rem', marginTop: '.8rem' } },
+      h('button', { class: 'btn', onclick: () => modal.remove() }, 'Cancel'), saveBtn
+    )
+  ));
+  document.body.appendChild(modal);
+}
+try { window.openReportScheduleEditor = openReportScheduleEditor; } catch (_) {}
+
+
+/* ==========================================================================
+ * RE_PAYMENT_PLANS_v1 — Payment Plan manager + editor
+ * ========================================================================== */
+
+async function openREPaymentPlansModal() {
+  const m = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const modal = h('div', { class: 'modal', style: { maxWidth: '780px' } });
+  const body = h('div', { class: 'modal-body', style: { maxHeight: '70vh', overflowY: 'auto' } }, '⏳ Loading…');
+  modal.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, '💰 Payment Plans'),
+    h('button', { class: 'btn ghost', onclick: () => m.remove() }, '✕')
+  ));
+  modal.appendChild(h('div', { style: { padding: '.6rem 1rem' } },
+    h('p', { class: 'muted', style: { fontSize: '.85rem', margin: '.2rem 0 .6rem' } },
+      'Configure payment plans (e.g. 30-30-30-10 CLP, Subvention 20-80, Possession-linked). When a buyer books a unit, demand letters are generated from the chosen plan.'),
+    h('div', { style: { display: 'flex', gap: '.4rem', marginBottom: '.8rem' } },
+      h('button', { class: 'btn primary', onclick: () => openREPaymentPlanEditor(null, load) }, '➕ New plan'),
+      h('button', { class: 'btn', onclick: async () => {
+        try { const r = await api('api_re_paymentPlans_seedDefaults'); toast(r.message, 'ok'); load(); }
+        catch (e) { toast(e.message, 'err'); }
+      } }, '🌱 Seed default plan')
+    )
+  ));
+  modal.appendChild(body);
+  m.appendChild(modal);
+  document.body.appendChild(m);
+
+  async function load() {
+    body.innerHTML = '⏳';
+    let plans;
+    try { plans = await api('api_re_paymentPlans_list', {}); }
+    catch (e) { body.innerHTML = '<div style="color:#dc2626">' + e.message + '</div>'; return; }
+    body.innerHTML = '';
+    if (!plans.length) {
+      body.appendChild(h('div', { class: 'muted', style: { padding: '1.5rem', textAlign: 'center' } },
+        'No plans yet. Click ➕ New plan to build one, or 🌱 Seed default plan to start with our Standard 1-9-30-30-30 milestone schedule.'));
+      return;
+    }
+    plans.forEach(p => {
+      const milestones = p.milestones || [];
+      const sum = milestones.reduce((a, m) => a + Number(m.pct || 0), 0);
+      const card = h('div', { class: 'card', style: { padding: '.7rem .9rem', margin: '.5rem 0', borderLeft: '4px solid ' + (Number(p.is_active) === 1 ? '#10b981' : '#9ca3af') } },
+        h('div', { style: { display: 'flex', alignItems: 'flex-start', gap: '.6rem' } },
+          h('div', { style: { flex: 1 } },
+            h('div', { style: { fontWeight: 700, fontSize: '1rem' } },
+              p.name,
+              Number(p.is_default) === 1 ? h('span', { style: { marginLeft: '.4rem', padding: '.1rem .35rem', background: '#dbeafe', color: '#1e40af', borderRadius: '4px', fontSize: '.7rem' } }, '⭐ DEFAULT') : null,
+              Number(p.is_active) === 0 ? h('span', { class: 'muted', style: { marginLeft: '.4rem', fontSize: '.78rem' } }, '(disabled)') : null,
+              p.project_name ? h('span', { class: 'muted', style: { marginLeft: '.4rem', fontSize: '.78rem' } }, '· ' + p.project_name) : null
+            ),
+            p.description ? h('div', { class: 'muted', style: { fontSize: '.8rem', margin: '.2rem 0' } }, p.description) : null,
+            h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '.3rem', marginTop: '.4rem' } },
+              ...milestones.map((m, i) => h('span', {
+                style: { padding: '.15rem .4rem', background: '#f1f5f9', borderRadius: '4px', fontSize: '.75rem' }
+              }, (i + 1) + '. ' + m.label + ' · ' + m.pct + '% · day ' + m.offset_days))
+            ),
+            h('div', { class: 'muted', style: { fontSize: '.7rem', marginTop: '.3rem' } },
+              'Total: ' + sum + '%' + (Math.abs(sum - 100) > 0.5 ? ' ⚠ should be 100' : ' ✓'))
+          ),
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: '.3rem' } },
+            h('button', { class: 'btn', onclick: () => openREPaymentPlanEditor(p, load) }, '✏️ Edit'),
+            h('button', { class: 'btn danger', onclick: async () => {
+              if (!confirm('Delete plan "' + p.name + '"? Existing bookings keep their demand letters.')) return;
+              try { await api('api_re_paymentPlans_delete', p.id); toast('Deleted', 'ok'); load(); }
+              catch (e) { toast(e.message, 'err'); }
+            } }, '🗑')
+          )
+        )
+      );
+      body.appendChild(card);
+    });
+  }
+  load();
+}
+try { window.openREPaymentPlansModal = openREPaymentPlansModal; } catch (_) {}
+
+async function openREPaymentPlanEditor(plan, onSaved) {
+  plan = plan || { name: '', description: '', project_id: null, is_active: 1, is_default: 0, milestones: [
+    { code: 'token',  label: 'Token',  pct: 10, offset_days: 0 },
+    { code: 'agreement', label: 'Agreement', pct: 20, offset_days: 30 },
+    { code: 'construction', label: 'Construction', pct: 40, offset_days: 180 },
+    { code: 'possession', label: 'Possession', pct: 30, offset_days: 365 }
+  ] };
+
+  const m = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const modal = h('div', { class: 'modal', style: { maxWidth: '760px' } });
+
+  const nameInp = h('input', { class: 'input', value: plan.name || '', placeholder: 'e.g. CLP 30-30-30-10' });
+  const descInp = h('input', { class: 'input', value: plan.description || '', placeholder: 'Optional description' });
+  const projSel = h('select', { class: 'input' }, h('option', { value: '' }, '🌐 Global — any project'));
+  const enChk   = h('input', { type: 'checkbox', checked: Number(plan.is_active) === 1 ? 'checked' : null });
+  const defChk  = h('input', { type: 'checkbox', checked: Number(plan.is_default) === 1 ? 'checked' : null });
+
+  const milestonesBox = h('div', { style: { padding: '.7rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px' } });
+  const sumLbl = h('span', { id: 'pp-sum', style: { fontWeight: 700 } }, '');
+
+  function _renderMilestones() {
+    milestonesBox.innerHTML = '';
+    milestonesBox.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 110px 110px 50px', gap: '.4rem', fontSize: '.75rem', fontWeight: 600, color: '#475569' } },
+      h('div', {}, 'Milestone label'),
+      h('div', {}, '% of total'),
+      h('div', {}, 'Days from booking'),
+      h('div', {}, '')
+    ));
+    (plan.milestones || []).forEach((mil, i) => {
+      const labelInp = h('input', { type: 'text', class: 'input', value: mil.label || '', placeholder: 'e.g. Slab' });
+      const pctInp   = h('input', { type: 'number', class: 'input', value: mil.pct || 0, min: '0', max: '100', step: '0.01' });
+      const dayInp   = h('input', { type: 'number', class: 'input', value: mil.offset_days || 0, min: '0', step: '1' });
+      const delBtn   = h('button', { class: 'btn danger', onclick: () => { plan.milestones.splice(i, 1); _renderMilestones(); } }, '🗑');
+      labelInp.oninput = () => { mil.label = labelInp.value; };
+      pctInp.oninput   = () => { mil.pct   = Number(pctInp.value || 0); _updateSum(); };
+      dayInp.oninput   = () => { mil.offset_days = Number(dayInp.value || 0); };
+      milestonesBox.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 110px 110px 50px', gap: '.4rem', marginTop: '.3rem' } },
+        labelInp, pctInp, dayInp, delBtn));
+    });
+    milestonesBox.appendChild(h('div', { style: { marginTop: '.6rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+      h('button', { class: 'btn', onclick: () => {
+        plan.milestones = plan.milestones || [];
+        plan.milestones.push({ code: 'm' + (plan.milestones.length + 1), label: '', pct: 0, offset_days: 0 });
+        _renderMilestones();
+      } }, '➕ Add milestone'),
+      h('div', {}, 'Total: ', sumLbl)
+    ));
+    _updateSum();
+  }
+  function _updateSum() {
+    const sum = (plan.milestones || []).reduce((a, m) => a + Number(m.pct || 0), 0);
+    sumLbl.textContent = sum.toFixed(2) + '%';
+    sumLbl.style.color = Math.abs(sum - 100) > 0.5 ? '#dc2626' : '#15803d';
+  }
+
+  modal.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, plan.id ? '✏️ Edit payment plan' : '➕ New payment plan'),
+    h('button', { class: 'btn ghost', onclick: () => m.remove() }, '✕')
+  ));
+  modal.appendChild(h('div', { class: 'modal-body', style: { maxHeight: '70vh', overflowY: 'auto' } },
+    h('label', {}, 'Plan name', nameInp),
+    h('label', {}, 'Description', descInp),
+    h('label', {}, 'Scope (project)', projSel,
+      h('div', { class: 'muted', style: { fontSize: '.72rem', marginTop: '.2rem' } }, 'Pick a specific project, or leave on "Global" to make this plan available for every project.')),
+    h('h4', { style: { marginTop: '1rem' } }, '📋 Milestones'),
+    h('p', { class: 'muted', style: { fontSize: '.8rem' } }, 'Each milestone becomes a demand letter on the buyer\'s booking. Percentages must sum to 100. Days = offset from the booking date.'),
+    milestonesBox,
+    h('div', { style: { display: 'flex', gap: '1rem', marginTop: '.8rem', padding: '.4rem .6rem', background: '#fafafa', borderRadius: '6px' } },
+      h('label', { style: { display: 'flex', alignItems: 'center', gap: '.3rem', fontSize: '.85rem' } }, enChk, ' Enabled'),
+      h('label', { style: { display: 'flex', alignItems: 'center', gap: '.3rem', fontSize: '.85rem' } }, defChk, ' Default for this scope (auto-pick)')
+    )
+  ));
+  modal.appendChild(h('div', { class: 'actions' },
+    h('button', { class: 'btn', onclick: () => m.remove() }, 'Cancel'),
+    h('button', { class: 'btn primary', onclick: async () => {
+      if (!nameInp.value.trim()) { toast('Name required', 'err'); return; }
+      try {
+        await api('api_re_paymentPlans_save', {
+          id: plan.id || null,
+          name: nameInp.value.trim(),
+          description: descInp.value.trim(),
+          project_id: projSel.value ? Number(projSel.value) : null,
+          is_active: enChk.checked ? 1 : 0,
+          is_default: defChk.checked ? 1 : 0,
+          milestones: plan.milestones
+        });
+        toast('Saved', 'ok');
+        m.remove();
+        if (onSaved) onSaved();
+      } catch (e) { toast(e.message, 'err'); }
+    } }, '💾 Save plan')
+  ));
+  m.appendChild(modal);
+  document.body.appendChild(m);
+
+  _renderMilestones();
+
+  // Populate project dropdown
+  try {
+    const projects = await api('api_re_projects_list');
+    (projects || []).forEach(p => projSel.appendChild(h('option', { value: p.id, selected: Number(plan.project_id) === Number(p.id) ? 'selected' : null }, p.name)));
+  } catch (_) {}
+}
+try { window.openREPaymentPlanEditor = openREPaymentPlanEditor; } catch (_) {}
+
+
+/* ==========================================================================
+ * REPORT_BUILDER_v4 — true pivot: multiple ROW dimensions + multiple COLUMN metrics
+ * ========================================================================== */
+
+/* Catalogue of every dimension a row can break down by. Used both for the
+ * Row cards' dropdown and for the Recommended Columns side-list (the user
+ * can add a NEW dimension or metric from there). */
+const RB_DIM_CATALOGUE = [
+  { key: 'status',         label: 'Status',         icon: '🎯' },
+  { key: 'source',         label: 'Source',         icon: '🌐' },
+  { key: 'product',        label: 'Product',        icon: '📦' },
+  { key: 'assigned_to',    label: 'Assigned user',  icon: '👤' },
+  { key: 'campaign',       label: 'Campaign',       icon: '📣' },
+  { key: 'qualified',      label: 'Qualified flag', icon: '✅' },
+  { key: 'is_duplicate',   label: 'Duplicate flag', icon: '👯' },
+  { key: 'created_day',    label: 'Created date (day)',   icon: '📅' },
+  { key: 'created_month',  label: 'Created date (month)', icon: '🗓' },
+  { key: 'city',           label: 'City',           icon: '🏙' },
+  { key: 'state',          label: 'State',          icon: '📍' },
+  { key: 'country',        label: 'Country',        icon: '🌍' },
+  { key: 'company',        label: 'Company',        icon: '🏢' },
+  { key: 'utm_source',     label: 'UTM Source',     icon: '📈' },
+  { key: 'utm_medium',     label: 'UTM Medium',     icon: '📡' },
+  { key: 'utm_campaign',   label: 'UTM Campaign',   icon: '🚩' },
+  { key: 'utm_term',       label: 'UTM Term',       icon: '🔑' },
+  { key: 'utm_content',    label: 'UTM Content',    icon: '🧩' },
+  { key: 'gclid',          label: 'GCLID',          icon: '🆔' },
+  { key: 'gad_campaignid', label: 'Google Ads Campaign ID', icon: '📣' }
+];
+
+/* Inject custom-field dimensions dynamically (one per CF on this tenant). */
+function _rbCFDims() {
+  const out = [];
+  ((window.CRM && CRM.cache && CRM.cache.customFields) || []).forEach(cf => {
+    out.push({ key: 'extra:' + cf.key, label: 'Custom · ' + (cf.label || cf.key), icon: '📝' });
+  });
+  return out;
+}
+
+function _rbAllDims() { return RB_DIM_CATALOGUE.concat(_rbCFDims()); }
+function _rbDimMeta(key) { return _rbAllDims().find(d => d.key === key); }
+
+/* Metric catalogue — every metric the user can put in the Column section. */
+const RB_METRIC_CATALOGUE = {
+  // Volume
+  count:          { key: 'count',          label: 'Leads',           icon: '🔢', group: 'Volume',        fmt: (v) => Number(v) || 0 },
+  pct:            { key: 'pct',            label: '% of total',      icon: '📊', group: 'Volume',        derived: (m, total) => total > 0 ? ((Number(m.count) / total) * 100).toFixed(2) + '%' : '0%' },
+  cumulative:     { key: 'cumulative',     label: 'Cumulative',      icon: '➕', group: 'Volume',        cum:  (rows, i) => { let s = 0; for (let k = 0; k <= i; k++) s += Number(rows[k].metrics.count) || 0; return s; } },
+  cumulative_pct: { key: 'cumulative_pct', label: 'Cumulative %',    icon: '📈', group: 'Volume',        cum:  (rows, i, total) => { if (total <= 0) return '0%'; let s = 0; for (let k = 0; k <= i; k++) s += Number(rows[k].metrics.count) || 0; return (s/total*100).toFixed(1) + '%'; } },
+  rank:           { key: 'rank',           label: 'Rank',            icon: '🏷', group: 'Volume',        cum:  (rows, i) => i + 1 },
+  // Quality
+  qualified_count:{ key: 'qualified_count',label: 'Qualified leads', icon: '✅', group: 'Quality',       fmt: (v) => Number(v) || 0 },
+  conversion_pct: { key: 'conversion_pct', label: 'Conversion %',    icon: '🎯', group: 'Quality',       fmt: (v) => (Number(v) || 0).toFixed(2) + '%' },
+  hot_count:      { key: 'hot_count',      label: 'Hot leads',       icon: '🔥', group: 'Quality',       fmt: (v) => Number(v) || 0 },
+  open_count:     { key: 'open_count',     label: 'Open leads',      icon: '⏳', group: 'Quality',       fmt: (v) => Number(v) || 0 },
+  won_count:      { key: 'won_count',      label: 'Won',             icon: '🏆', group: 'Quality',       fmt: (v) => Number(v) || 0 },
+  lost_count:     { key: 'lost_count',     label: 'Lost',            icon: '❌', group: 'Quality',       fmt: (v) => Number(v) || 0 },
+  win_pct:        { key: 'win_pct',        label: 'Win rate %',      icon: '🥇', group: 'Quality',       fmt: (v) => (Number(v) || 0).toFixed(2) + '%' },
+  // Value
+  value_sum:      { key: 'value_sum',      label: 'Total value (₹)', icon: '💰', group: 'Value',         fmt: (v) => '₹' + Math.round(Number(v) || 0).toLocaleString('en-IN') },
+  value_avg:      { key: 'value_avg',      label: 'Avg value (₹)',   icon: '💵', group: 'Value',         fmt: (v) => '₹' + Math.round(Number(v) || 0).toLocaleString('en-IN') },
+  // Contactability
+  has_email_count:    { key: 'has_email_count',    label: 'Has email',     icon: '📧', group: 'Contactability', fmt: (v) => Number(v) || 0 },
+  has_phone_count:    { key: 'has_phone_count',    label: 'Has phone',     icon: '📞', group: 'Contactability', fmt: (v) => Number(v) || 0 },
+  has_whatsapp_count: { key: 'has_whatsapp_count', label: 'Has WhatsApp',  icon: '💬', group: 'Contactability', fmt: (v) => Number(v) || 0 },
+  distinct_emails:    { key: 'distinct_emails',    label: 'Distinct emails',    icon: '🆔', group: 'Contactability', fmt: (v) => Number(v) || 0 },
+  distinct_phones:    { key: 'distinct_phones',    label: 'Distinct phones',    icon: '☎️', group: 'Contactability', fmt: (v) => Number(v) || 0 },
+  distinct_companies: { key: 'distinct_companies', label: 'Distinct companies', icon: '🏢', group: 'Contactability', fmt: (v) => Number(v) || 0 },
+  // Recency
+  recent_24h:     { key: 'recent_24h',     label: 'New last 24h',    icon: '⚡', group: 'Recency',       fmt: (v) => Number(v) || 0 },
+  recent_7d:      { key: 'recent_7d',      label: 'New last 7 days', icon: '📅', group: 'Recency',       fmt: (v) => Number(v) || 0 },
+  recent_30d:     { key: 'recent_30d',     label: 'New last 30 days',icon: '🗓', group: 'Recency',       fmt: (v) => Number(v) || 0 },
+  newest_at:      { key: 'newest_at',      label: 'Newest lead',     icon: '🆕', group: 'Recency',       fmt: (v) => v ? new Date(v).toLocaleDateString() : '—' },
+  oldest_at:      { key: 'oldest_at',      label: 'Oldest lead',     icon: '📜', group: 'Recency',       fmt: (v) => v ? new Date(v).toLocaleDateString() : '—' },
+  avg_age_days:   { key: 'avg_age_days',   label: 'Avg age (days)',  icon: '⏱', group: 'Recency',       fmt: (v) => Number(v) || 0 }
+};
+
+function _rbAllMetrics() {
+  const out = Object.assign({}, RB_METRIC_CATALOGUE);
+  // CF metrics
+  const cfMeta = {};
+  ((window.CRM && CRM.cache && CRM.cache.customFields) || []).forEach(cf => { cfMeta[cf.key] = cf; });
+  const cfKeys = (window._rbLastPivot && window._rbLastPivot.custom_field_keys) || Object.keys(cfMeta);
+  cfKeys.forEach(k => {
+    const meta = cfMeta[k] || { key: k, label: k };
+    const label = meta.label || k;
+    out['cf_' + k + '_filled'] = { key: 'cf_' + k + '_filled', label: 'CF filled: ' + label, icon: '📝', group: 'Custom fields',
+      cfRead: (r) => (r.metrics && r.metrics.cf && r.metrics.cf[k]) ? Number(r.metrics.cf[k].filled) || 0 : 0 };
+    out['cf_' + k + '_sum']    = { key: 'cf_' + k + '_sum',    label: 'CF sum: ' + label,    icon: '➕', group: 'Custom fields',
+      cfRead: (r) => (r.metrics && r.metrics.cf && r.metrics.cf[k]) ? Number(r.metrics.cf[k].sum) || 0 : 0 };
+    out['cf_' + k + '_avg']    = { key: 'cf_' + k + '_avg',    label: 'CF avg: ' + label,    icon: '⚖️', group: 'Custom fields',
+      cfRead: (r) => {
+        const c = r.metrics && r.metrics.cf && r.metrics.cf[k];
+        if (!c || !c.num_n) return '—';
+        return Math.round((Number(c.sum) / Number(c.num_n)) * 100) / 100;
+      }};
+  });
+  return out;
+}
+function _rbMetricMeta(key) { return _rbAllMetrics()[key]; }
+
+/* Reads current Row + Column selections from window state (default if absent) */
+function _rbGetRowDims()  { return window._rbRowDims || ['status']; }
+function _rbGetMetrics()  { return window._rbActiveMetrics || ['count', 'pct']; }
+
+/* Renders the right rail and (re)issues the pivot fetch when anything changes. */
+function _rbRail() { return document.getElementById('rb-rail'); }
+
+async function _rbReload() {
+  const rail = _rbRail();
+  const tbl = document.getElementById('rb-table');
+  if (!rail && !tbl) return;  /* view not mounted yet */
+  let resp;
+  try {
+    const filters = (typeof _currentReportBuilderFilters === 'function') ? _currentReportBuilderFilters() : {};
+    const rowDims = _rbGetRowDims();
+    const metrics = _rbGetMetrics();
+    if (!rowDims.length) {
+      // Fallback to status if somehow empty
+      window._rbRowDims = ['status'];
+    }
+    resp = await api('api_reports_pivot', { row_dims: _rbGetRowDims(), metrics: _rbGetMetrics(), filters });
+    window._rbLastPivot = resp;
+  } catch (e) {
+    if (tbl) tbl.innerHTML = '<div class="error-box" style="padding:1rem;background:#fee2e2;border:1px solid #fca5a5;border-radius:8px;color:#991b1b"><b>⚠ Report failed</b><br>' + esc(String(e && e.message || e)) + '<br><br><small>Try clicking another preset, or use ↺ Reset above.</small></div>';
+    console.error('[reportbuilder] _rbReload failed:', e);
+    return;
+  }
+  try { _rbRenderRailV4(); }     catch (e) { console.error('[reportbuilder] rail render:', e); }
+  try { _rbRenderPivotTable(); } catch (e) { console.error('[reportbuilder] table render:', e); if (tbl) tbl.innerHTML = '<div class="error-box">Table render failed: ' + esc(e.message) + '</div>'; }
+  try { _rbRenderPivotChart(); } catch (e) { console.error('[reportbuilder] chart render:', e); }
+}
+
+function _rbRenderRailV4() {
+  const rail = _rbRail(); if (!rail) return;
+  rail.innerHTML = '';
+
+  // Header
+  rail.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', marginBottom: '.7rem' } },
+    h('span', { style: { fontSize: '1rem' } }, '⚙️'),
+    h('div', { style: { fontWeight: 700, fontSize: '.95rem' } }, 'Generate report')
+  ));
+
+  // Output type
+  rail.appendChild(h('div', { style: { padding: '.5rem .6rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px', marginBottom: '.8rem' } },
+    h('div', { class: 'muted', style: { fontSize: '.7rem', fontWeight: 600, marginBottom: '.3rem' } }, 'Output type'),
+    (() => {
+      const sel = h('select', { class: 'input', style: { width: '100%' } },
+        h('option', { value: 'table', selected: window._rbChartType === 'table' ? 'selected' : null }, '🗒 Table'),
+        h('option', { value: 'bar',   selected: !window._rbChartType || window._rbChartType === 'bar' ? 'selected' : null }, '📊 Bar chart'),
+        h('option', { value: 'line',  selected: window._rbChartType === 'line' ? 'selected' : null }, '📈 Line chart'),
+        h('option', { value: 'pie',   selected: window._rbChartType === 'pie' ? 'selected' : null }, '🥧 Pie chart')
+      );
+      sel.onchange = () => { window._rbChartType = sel.value; _rbRenderPivotChart(); _rbRenderPivotTable(); };
+      return sel;
+    })()
+  ));
+
+  // -------- ROW section --------
+  rail.appendChild(h('div', { style: { fontWeight: 700, fontSize: '.78rem', color: '#475569', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: '.3rem' } }, 'Row'));
+  const rowsBox = h('div', { style: { marginBottom: '.4rem' } });
+  function _renderRows() {
+    rowsBox.innerHTML = '';
+    const dims = _rbGetRowDims();
+    dims.forEach((dk, i) => {
+      const meta = _rbDimMeta(dk) || { key: dk, label: dk, icon: '·' };
+      const card = h('div', { style: { padding: '.4rem .5rem', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '6px', display: 'flex', alignItems: 'center', gap: '.3rem', marginBottom: '.3rem' } },
+        h('span', { style: { color: '#94a3b8' } }, '⋮⋮'),
+        (() => {
+          const sel = h('select', { class: 'input', style: { flex: 1, fontSize: '.82rem' } },
+            ..._rbAllDims().map(d => h('option', { value: d.key, selected: d.key === dk ? 'selected' : null }, d.icon + ' ' + d.label))
+          );
+          sel.onchange = () => { window._rbRowDims = _rbGetRowDims(); window._rbRowDims[i] = sel.value; _rbReload(); };
+          return sel;
+        })(),
+        i > 0 ? h('button', { class: 'btn icon', title: 'Move up', style: { padding: '.1rem .3rem', fontSize: '.7rem' }, onclick: () => { const a = _rbGetRowDims(); const t = a[i-1]; a[i-1]=a[i]; a[i]=t; window._rbRowDims = a; _rbReload(); } }, '↑') : null,
+        i < dims.length - 1 ? h('button', { class: 'btn icon', title: 'Move down', style: { padding: '.1rem .3rem', fontSize: '.7rem' }, onclick: () => { const a = _rbGetRowDims(); const t = a[i+1]; a[i+1]=a[i]; a[i]=t; window._rbRowDims = a; _rbReload(); } }, '↓') : null,
+        dims.length > 1 ? h('button', { class: 'btn icon', title: 'Remove', style: { padding: '.1rem .35rem', fontSize: '.78rem', color: '#dc2626' }, onclick: () => { window._rbRowDims = _rbGetRowDims().filter((_, k) => k !== i); _rbReload(); } }, '✕') : null
+      );
+      rowsBox.appendChild(card);
+    });
+    rowsBox.appendChild(h('button', { class: 'btn', style: { width: '100%', fontSize: '.78rem', marginTop: '.2rem' }, onclick: () => {
+      // Add first unused dim
+      const used = new Set(_rbGetRowDims());
+      const next = _rbAllDims().find(d => !used.has(d.key));
+      if (!next) { toast('All dimensions are already in use', 'err'); return; }
+      window._rbRowDims = _rbGetRowDims().concat([next.key]);
+      _rbReload();
+    } }, '+ Add row dimension'));
+  }
+  rail.appendChild(rowsBox);
+  _renderRows();
+
+  // -------- COLUMN section --------
+  rail.appendChild(h('div', { style: { fontWeight: 700, fontSize: '.78rem', color: '#475569', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: '.3rem', marginTop: '.7rem' } }, 'Column'));
+  const colsBox = h('div', { style: { marginBottom: '.4rem' } });
+  function _renderCols() {
+    colsBox.innerHTML = '';
+    const metrics = _rbGetMetrics();
+    metrics.forEach((mk, i) => {
+      const meta = _rbMetricMeta(mk) || { key: mk, label: mk, icon: '·' };
+      const card = h('div', { style: { padding: '.4rem .5rem', background: '#fff', border: '1px solid #e2e8f0', borderRadius: '6px', display: 'flex', alignItems: 'center', gap: '.3rem', marginBottom: '.3rem' } },
+        h('span', { style: { color: '#94a3b8' } }, '⋮⋮'),
+        (() => {
+          const sel = h('select', { class: 'input', style: { flex: 1, fontSize: '.82rem' } });
+          const all = _rbAllMetrics();
+          // Group options by group
+          const groups = {};
+          Object.values(all).forEach(m => { (groups[m.group || 'Other'] = groups[m.group || 'Other'] || []).push(m); });
+          ['Volume', 'Quality', 'Value', 'Contactability', 'Recency', 'Custom fields'].forEach(gn => {
+            const lst = groups[gn]; if (!lst || !lst.length) return;
+            const og = document.createElement('optgroup');
+            og.label = gn;
+            lst.forEach(m => {
+              const opt = document.createElement('option');
+              opt.value = m.key; opt.textContent = m.icon + ' ' + m.label;
+              if (m.key === mk) opt.selected = true;
+              og.appendChild(opt);
+            });
+            sel.appendChild(og);
+          });
+          sel.onchange = () => { window._rbActiveMetrics = _rbGetMetrics(); window._rbActiveMetrics[i] = sel.value; _rbReload(); };
+          return sel;
+        })(),
+        i > 0 ? h('button', { class: 'btn icon', title: 'Move up', style: { padding: '.1rem .3rem', fontSize: '.7rem' }, onclick: () => { const a = _rbGetMetrics(); const t = a[i-1]; a[i-1]=a[i]; a[i]=t; window._rbActiveMetrics = a; _rbReload(); } }, '↑') : null,
+        i < metrics.length - 1 ? h('button', { class: 'btn icon', title: 'Move down', style: { padding: '.1rem .3rem', fontSize: '.7rem' }, onclick: () => { const a = _rbGetMetrics(); const t = a[i+1]; a[i+1]=a[i]; a[i]=t; window._rbActiveMetrics = a; _rbReload(); } }, '↓') : null,
+        h('button', { class: 'btn icon', title: 'Remove', style: { padding: '.1rem .35rem', fontSize: '.78rem', color: '#dc2626' }, onclick: () => { window._rbActiveMetrics = _rbGetMetrics().filter((_, k) => k !== i); _rbReload(); } }, '✕')
+      );
+      colsBox.appendChild(card);
+    });
+    colsBox.appendChild(h('button', { class: 'btn', style: { width: '100%', fontSize: '.78rem', marginTop: '.2rem' }, onclick: () => {
+      const used = new Set(_rbGetMetrics());
+      const next = Object.values(_rbAllMetrics()).find(m => !used.has(m.key));
+      if (!next) { toast('All metrics already added', 'err'); return; }
+      window._rbActiveMetrics = _rbGetMetrics().concat([next.key]);
+      _rbReload();
+    } }, '+ Add metric column'));
+  }
+  rail.appendChild(colsBox);
+  _renderCols();
+
+  // -------- RECOMMENDED COLUMNS section --------
+  rail.appendChild(h('div', { style: { fontWeight: 700, fontSize: '.78rem', color: '#475569', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: '.3rem', marginTop: '.7rem' } }, 'Recommended columns'));
+  rail.appendChild(h('div', { class: 'muted', style: { fontSize: '.72rem', marginBottom: '.4rem' } }, 'Click to add a dimension (Row) or metric (Column).'));
+
+  const searchInp = h('input', { type: 'text', class: 'input', placeholder: '🔎 Search dimensions & metrics…', style: { width: '100%', marginBottom: '.4rem', fontSize: '.78rem' } });
+  const recBox = h('div', {});
+
+  function _renderRec() {
+    recBox.innerHTML = '';
+    const q = String(searchInp.value || '').toLowerCase().trim();
+    const activeDims    = new Set(_rbGetRowDims());
+    const activeMetrics = new Set(_rbGetMetrics());
+
+    // Dimensions section
+    const dimsToShow = _rbAllDims().filter(d => !activeDims.has(d.key) && (!q || d.label.toLowerCase().includes(q) || d.key.toLowerCase().includes(q)));
+    if (dimsToShow.length) {
+      recBox.appendChild(h('div', { style: { fontSize: '.7rem', fontWeight: 700, color: '#64748b', marginTop: '.4rem', marginBottom: '.2rem' } }, '📐 DIMENSIONS (add to Row)'));
+      dimsToShow.forEach(d => {
+        recBox.appendChild(h('button', {
+          class: 'btn',
+          style: { display: 'block', width: '100%', textAlign: 'left', marginBottom: '.18rem', fontSize: '.78rem', padding: '.28rem .5rem' },
+          title: 'Add as a new Row dimension',
+          onclick: () => { window._rbRowDims = _rbGetRowDims().concat([d.key]); _rbReload(); }
+        }, '+ ' + d.icon + ' ' + d.label));
+      });
+    }
+
+    // Metrics — grouped
+    const allMetrics = _rbAllMetrics();
+    const byGroup = {};
+    Object.values(allMetrics).forEach(m => {
+      if (activeMetrics.has(m.key)) return;
+      if (q && !(m.label.toLowerCase().includes(q) || m.key.toLowerCase().includes(q))) return;
+      (byGroup[m.group || 'Other'] = byGroup[m.group || 'Other'] || []).push(m);
+    });
+    ['Volume', 'Quality', 'Value', 'Contactability', 'Recency', 'Custom fields', 'Other'].forEach(g => {
+      const list = byGroup[g]; if (!list || !list.length) return;
+      recBox.appendChild(h('div', { style: { fontSize: '.7rem', fontWeight: 700, color: '#64748b', marginTop: '.4rem', marginBottom: '.2rem' } }, '🔢 ' + g.toUpperCase() + ' (add to Column)'));
+      list.forEach(m => {
+        recBox.appendChild(h('button', {
+          class: 'btn',
+          style: { display: 'block', width: '100%', textAlign: 'left', marginBottom: '.18rem', fontSize: '.78rem', padding: '.28rem .5rem' },
+          title: 'Add as a metric column',
+          onclick: () => { window._rbActiveMetrics = _rbGetMetrics().concat([m.key]); _rbReload(); }
+        }, '+ ' + m.icon + ' ' + m.label));
+      });
+    });
+
+    if (recBox.children.length === 0) {
+      recBox.appendChild(h('div', { class: 'muted', style: { fontSize: '.75rem', padding: '.4rem', textAlign: 'center' } }, q ? 'No matches.' : 'Everything is in use.'));
+    }
+  }
+  searchInp.oninput = _renderRec;
+  rail.appendChild(searchInp);
+  rail.appendChild(recBox);
+  _renderRec();
+}
+
+/* Resolve a metric value for a given pivot row. Handles base, derived,
+ * cumulative, and CF-read metric types. */
+function _rbMetricValue(metaKey, row, idx, rows, total) {
+  const meta = _rbMetricMeta(metaKey);
+  if (!meta) return '—';
+  if (typeof meta.cfRead === 'function') return meta.cfRead(row);
+  if (typeof meta.derived === 'function') return meta.derived(row.metrics, total);
+  if (typeof meta.cum     === 'function') return meta.cum(rows, idx, total);
+  const raw = row.metrics && row.metrics[metaKey];
+  return typeof meta.fmt === 'function' ? meta.fmt(raw) : raw;
+}
+
+function _rbRenderPivotTable() {
+  const tableEl = document.getElementById('rb-table'); if (!tableEl) return;
+  const resp = window._rbLastPivot; if (!resp || !resp.rows) { tableEl.innerHTML = ''; return; }
+  const rowDims = resp.row_dims || _rbGetRowDims();
+  const metrics = _rbGetMetrics();
+  const total = resp.total || 0;
+
+  const tbl = h('table', { class: 'mini-table' });
+  const tr = h('tr', {});
+  rowDims.forEach(dk => tr.appendChild(h('th', {}, (_rbDimMeta(dk) || {}).label || dk)));
+  metrics.forEach(mk => { const m = _rbMetricMeta(mk); tr.appendChild(h('th', { style: { textAlign: 'right' } }, m ? (m.icon + ' ' + m.label) : mk)); });
+  tbl.appendChild(h('thead', {}, tr));
+  const tbody = h('tbody', {});
+  resp.rows.forEach((r, i) => {
+    const trr = h('tr', { style: { cursor: 'pointer' }, onclick: () => {
+      // Drill: open leads filtered by the chosen dim values (status / source / etc.)
+      if (r.lead_ids && r.lead_ids.length) openLeadsModalByIds(r.lead_ids).catch(() => {});
+    } });
+    rowDims.forEach(dk => trr.appendChild(h('td', {}, r.dims[dk] || '—')));
+    metrics.forEach(mk => trr.appendChild(h('td', { style: { textAlign: 'right' } }, String(_rbMetricValue(mk, r, i, resp.rows, total)))));
+    tbody.appendChild(trr);
+  });
+  // Totals row
+  const tfoot = h('tr', { style: { fontWeight: 700, background: '#f8fafc' } });
+  rowDims.forEach((dk, i) => tfoot.appendChild(h('td', {}, i === 0 ? 'Total' : '')));
+  metrics.forEach(mk => {
+    if (mk === 'count') tfoot.appendChild(h('td', { style: { textAlign: 'right' } }, String(total)));
+    else if (mk === 'pct') tfoot.appendChild(h('td', { style: { textAlign: 'right' } }, '100%'));
+    else if (mk === 'value_sum') {
+      const s = resp.rows.reduce((a, r) => a + (Number(r.metrics.value_sum) || 0), 0);
+      tfoot.appendChild(h('td', { style: { textAlign: 'right' } }, '₹' + Math.round(s).toLocaleString('en-IN')));
+    } else tfoot.appendChild(h('td', { style: { textAlign: 'right' } }, '—'));
+  });
+  tbody.appendChild(tfoot);
+  tbl.appendChild(tbody);
+
+  tableEl.innerHTML = '';
+  // Show which dimensions + metrics are active
+  tableEl.appendChild(h('div', { class: 'muted', style: { fontSize: '.78rem', marginBottom: '.4rem' } },
+    'Group by ' + rowDims.map(d => (_rbDimMeta(d) || {}).label || d).join(' × ') + ' · ' + resp.rows.length + ' rows · ' + total + ' total leads'));
+  tableEl.appendChild(h('div', { class: 'table-wrap', style: { maxHeight: '480px', overflowY: 'auto' } }, tbl));
+}
+
+/* Render the chart using the first row dim as labels and the first metric. */
+function _rbRenderPivotChart() {
+  const ctx = document.getElementById('rb-chart');
+  const chartType = (window._rbChartType || 'bar');
+  if (ctx) {
+    const chartCard = ctx.closest('.card');
+    if (chartCard) chartCard.style.display = (chartType === 'table') ? 'none' : '';
+  }
+  if (!ctx) return;
+  if (typeof Chart === 'undefined') { console.warn('[reportbuilder] Chart.js not loaded'); return; }
+  const resp = window._rbLastPivot; if (!resp || !resp.rows) return;
+  if (chartType === 'table') { if (ctx._chart) { ctx._chart.destroy(); ctx._chart = null; } return; }
+  const top = resp.rows.slice(0, 25);
+  const rowDims = resp.row_dims || [];
+  const labelMaker = (r) => rowDims.map(d => r.dims[d]).join(' / ');
+  const metricKey = (_rbGetMetrics()[0]) || 'count';
+  const palette = ['#6366f1', '#06b6d4', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316', '#84cc16'];
+  if (ctx._chart) ctx._chart.destroy();
+  ctx._chart = new Chart(ctx, {
+    type: chartType === 'pie' ? 'pie' : (chartType === 'line' ? 'line' : 'bar'),
+    data: {
+      labels: top.map(labelMaker),
+      datasets: [{
+        label: (_rbMetricMeta(metricKey) || {}).label || metricKey,
+        data: top.map(r => Number(r.metrics[metricKey]) || 0),
+        backgroundColor: chartType === 'pie' ? top.map((_, i) => palette[i % palette.length]) : '#6366f1',
+        borderColor: chartType === 'line' ? '#6366f1' : undefined,
+        fill: chartType === 'line' ? false : true,
+        tension: chartType === 'line' ? 0.3 : 0
+      }]
+    },
+    options: {
+      indexAxis: chartType === 'bar' ? 'y' : 'x',
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: chartType === 'pie' } },
+      scales: chartType === 'pie' ? {} : { x: { beginAtZero: true } }
+    }
+  });
+  const title = document.getElementById('rb-chart-title');
+  if (title) title.textContent = (_rbMetricMeta(metricKey) || {}).label + ' by ' + rowDims.map(d => (_rbDimMeta(d) || {}).label || d).join(' / ');
+}
+
+/* Stub: the old loadReportBuilder used a single dim. Replace with v4. */
+async function _rbInjectExtraColumns() { /* superseded by _rbRenderPivotTable */ }
+
+/* Replace window.loadReportBuilder with our v4 pivot reload. */
+(function rebindLoad() {
+  window.loadReportBuilder = async function() {
+    // Make sure we have defaults
+    if (!window._rbRowDims || !window._rbRowDims.length) {
+      const dimSel = document.getElementById('rb-dim');
+      window._rbRowDims = [dimSel && dimSel.value ? dimSel.value : 'status'];
+    }
+    if (!window._rbActiveMetrics || !window._rbActiveMetrics.length) {
+      window._rbActiveMetrics = ['count', 'pct'];
+    }
+    await _rbReload();
+  };
+  try { loadReportBuilder = window.loadReportBuilder; } catch (_) {}
+})();
+
+/* Open a leads modal showing the bucket's drill-down. Best-effort — falls
+ * back to navigating to /leads if a per-id modal helper isn't available. */
+async function openLeadsModalByIds(ids) {
+  try {
+    const m = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target === m) m.remove(); } });
+    const md = h('div', { class: 'modal modal-lg' });
+    md.appendChild(h('div', { class: 'modal-head' }, h('h3', {}, '🔍 ' + ids.length + ' leads in this bucket'), h('button', { class: 'btn ghost', onclick: () => m.remove() }, '✕')));
+    const body = h('div', { class: 'modal-body', style: { maxHeight: '60vh', overflowY: 'auto' } }, '⏳');
+    md.appendChild(body);
+    m.appendChild(md);
+    document.body.appendChild(m);
+    const all = await api('api_leads_list', { page: 1, page_size: 500 });
+    const set = new Set(ids.map(Number));
+    const rows = (all.leads || []).filter(l => set.has(Number(l.id))).slice(0, 200);
+    body.innerHTML = '';
+    rows.forEach(l => {
+      body.appendChild(h('div', { class: 'card', style: { padding: '.4rem .6rem', margin: '.3rem 0', cursor: 'pointer' }, onclick: () => { m.remove(); openLeadModal(l.id); } },
+        h('b', {}, l.name || ('Lead #' + l.id)),
+        h('span', { class: 'muted', style: { marginLeft: '.5rem', fontSize: '.78rem' } }, [l.phone, l.email].filter(Boolean).join(' · '))
+      ));
+    });
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+
+
+/* ==========================================================================
+ * SHEET_SYNC_v2 — Diagnose modal + Column Mapping editor
+ * ========================================================================== */
+
+const _SHEET_CRM_FIELDS = [
+  { value: '',         label: '— Ignore this column —' },
+  { value: 'name',     label: '👤 Name' },
+  { value: 'phone',    label: '📞 Phone (primary)' },
+  { value: 'whatsapp', label: '💬 WhatsApp number' },
+  { value: 'email',    label: '📧 Email' },
+  { value: 'company',  label: '🏢 Company' },
+  { value: 'city',     label: '🏙 City' },
+  { value: 'state',    label: '📍 State' },
+  { value: 'country',  label: '🌍 Country' },
+  { value: 'source',   label: '🌐 Source (overrides default)' },
+  { value: 'notes',    label: '📝 Notes / Message' },
+  { value: 'tags',     label: '🏷 Tags (CSV)' },
+  { value: 'value',    label: '💰 Value' },
+  { value: 'assigned_to', label: '👥 Assigned user ID' }
+];
+
+async function openSheetSyncDiagnoseModal(id) {
+  const backdrop = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target === backdrop) backdrop.remove(); } });
+  const modal = h('div', { class: 'modal modal-lg' });
+  const body  = h('div', { class: 'modal-body', style: { maxHeight: '72vh', overflowY: 'auto' } }, '⏳ Running diagnostics…');
+  modal.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, '🩺 Sheet Sync diagnostics'),
+    h('button', { class: 'btn ghost', onclick: () => backdrop.remove() }, '✕')
+  ));
+  modal.appendChild(body);
+  modal.appendChild(h('div', { class: 'actions' },
+    h('button', { class: 'btn', onclick: () => backdrop.remove() }, 'Close')
+  ));
+  backdrop.appendChild(modal);
+  document.body.appendChild(backdrop);
+
+  let d;
+  try { d = await api('api_sheetSync_diagnose', id); }
+  catch (e) { body.innerHTML = '<div style="color:#dc2626">' + (e && e.message || e) + '</div>'; return; }
+
+  body.innerHTML = '';
+
+  /* Header card */
+  body.appendChild(h('div', { class: 'card', style: { padding: '.7rem 1rem', marginBottom: '.7rem' } },
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', flexWrap: 'wrap' } },
+      h('b', {}, d.name),
+      h('span', { class: 'tag', style: { background: d.mode === 'pull' ? '#dbeafe' : '#fef3c7', color: d.mode === 'pull' ? '#1e40af' : '#92400e' } }, d.mode === 'pull' ? '📥 PULL (CSV poll)' : '📤 PUSH (webhook)'),
+      d.is_active ? h('span', { class: 'tag', style: { background: '#dcfce7', color: '#166534' } }, 'ACTIVE') : h('span', { class: 'tag', style: { background: '#fee2e2', color: '#991b1b' } }, 'PAUSED'),
+      h('span', { class: 'muted', style: { fontSize: '.78rem' } }, 'Last synced ' + (d.last_synced_at ? new Date(d.last_synced_at).toLocaleString() : 'never') + ' · ' + d.already_imported_rows + ' rows imported earlier')
+    ),
+    d.last_error ? h('div', { style: { color: '#dc2626', fontSize: '.82rem', marginTop: '.3rem' } }, '⚠ Last error: ' + d.last_error) : null
+  ));
+
+  /* SHEET_SYNC_v2 — 📤 Test webhook button: POSTs a synthetic test row
+   * end-to-end to prove the webhook URL works (no Apps Script involved). */
+  const testBtn = h('button', { class: 'btn primary' }, '📤 Send test row through webhook');
+  const testOut = h('div', { style: { marginTop: '.4rem' } });
+  testBtn.onclick = async () => {
+    testBtn.disabled = true; testBtn.textContent = '⏳ Sending…';
+    testOut.innerHTML = '';
+    try {
+      const r = await api('api_sheetSync_testReceive', id);
+      const lead = r.response && r.response.results && r.response.results[0];
+      if (r.response && r.response.created > 0) {
+        testOut.appendChild(h('div', { style: { color: '#15803d', fontSize: '.82rem' } },
+          '✓ Webhook works — test lead created (id #' + (lead && lead.lead_id) + '). This means your CRM is ready to receive rows. If your sheet rows aren\'t arriving, the issue is in Apps Script (trigger not installed, or authorisation pending).'));
+      } else {
+        testOut.appendChild(h('div', { style: { color: '#dc2626', fontSize: '.82rem' } },
+          '✗ Test failed: ' + (lead && lead.error) + ' · Response: ' + JSON.stringify(r.response).slice(0, 200)));
+      }
+    } catch (e) { testOut.appendChild(h('div', { style: { color: '#dc2626' } }, '✗ ' + e.message)); }
+    testBtn.disabled = false; testBtn.textContent = '📤 Send test row through webhook';
+    // Refresh diagnose to show the new imported_rows count
+    try {
+      const d2 = await api('api_sheetSync_diagnose', id);
+      const hc = body.querySelector('.test-receive-section');
+      if (d2) { /* leave inline — full refresh handled separately */ }
+    } catch (_) {}
+  };
+  body.appendChild(h('div', { class: 'card test-receive-section', style: { padding: '.7rem 1rem', marginBottom: '.7rem', background: '#f0fdf4', border: '1px solid #86efac' } },
+    h('div', { style: { fontWeight: 600, marginBottom: '.3rem' } }, '📤 Test the webhook directly'),
+    h('div', { class: 'muted', style: { fontSize: '.82rem', marginBottom: '.4rem' } },
+      'Bypasses Apps Script entirely — sends one synthetic row straight into the CRM webhook URL. If this works but your real rows don\'t arrive, the issue is on the Apps Script side (trigger not installed / not authorised). If this fails, the integration row is broken.'),
+    testBtn, testOut
+  ));
+
+  /* SHEET_SYNC_v2 — Recent activity panel */
+  const actBox = h('div', { class: 'card', style: { padding: '.7rem 1rem', marginBottom: '.7rem' } },
+    h('div', { style: { fontWeight: 600, marginBottom: '.3rem' } }, '📜 Recent webhook activity'),
+    h('div', { class: 'muted', style: { fontSize: '.78rem' } }, 'Loading…')
+  );
+  body.appendChild(actBox);
+  api('api_sheetSync_recentActivity', id).then(rows => {
+    actBox.innerHTML = '';
+    actBox.appendChild(h('div', { style: { fontWeight: 600, marginBottom: '.3rem' } }, '📜 Recent webhook activity (last 20)'));
+    if (!rows || !rows.length) {
+      actBox.appendChild(h('div', { class: 'muted', style: { fontSize: '.82rem' } },
+        '— No leads received yet via the webhook. If you\'ve installed the Apps Script trigger, wait up to 5 minutes for the first run. Or click 📤 Send test row above to verify the webhook URL is reachable.'));
+      return;
+    }
+    actBox.appendChild(h('table', { class: 'mini-table', style: { fontSize: '.82rem' } },
+      h('thead', {}, h('tr', {}, h('th', {}, 'When'), h('th', {}, 'Lead'), h('th', {}, 'Phone'))),
+      h('tbody', {}, ...rows.map(r => h('tr', {},
+        h('td', { class: 'muted', style: { whiteSpace: 'nowrap' } }, new Date(r.imported_at).toLocaleString()),
+        h('td', {}, r.lead_name || ('#' + r.lead_id)),
+        h('td', { class: 'muted' }, r.lead_phone || '')
+      )))
+    ));
+  }).catch(e => {
+    actBox.innerHTML = '<div style="color:#dc2626;font-size:.82rem">' + e.message + '</div>';
+  });
+
+  /* Advice */
+  if (d.advice && d.advice.length) {
+    const ad = h('div', { class: 'card', style: { padding: '.7rem 1rem', marginBottom: '.7rem', background: '#fffbeb', border: '1px solid #fde68a' } },
+      h('div', { style: { fontWeight: 600, marginBottom: '.3rem' } }, '💡 Advice'));
+    d.advice.forEach(line => ad.appendChild(h('div', { style: { fontSize: '.85rem', marginTop: '.2rem' } }, '• ' + line)));
+    body.appendChild(ad);
+  }
+
+  /* PUSH mode info */
+  if (d.mode === 'push_only') {
+    body.appendChild(h('div', { class: 'card', style: { padding: '.7rem 1rem', marginBottom: '.7rem' } },
+      h('div', { style: { fontWeight: 600, marginBottom: '.3rem' } }, '📤 Push webhook'),
+      h('div', { class: 'muted', style: { fontSize: '.82rem' } }, 'New rows are POSTed by your sheet\'s Apps Script to:'),
+      h('code', { style: { display: 'block', padding: '.4rem .6rem', background: '#f1f5f9', borderRadius: '6px', wordBreak: 'break-all', marginTop: '.3rem' } }, d.webhook_url_push || '(no token yet)'),
+      h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.3rem' } }, 'To verify the script is running: open the sheet → Extensions → Apps Script → Executions tab. Each run should show as ✓ Completed.')
+    ));
+    return;
+  }
+
+  /* CSV connection info */
+  if (d.csv) {
+    body.appendChild(h('div', { class: 'card', style: { padding: '.7rem 1rem', marginBottom: '.7rem' } },
+      h('div', { style: { fontWeight: 600, marginBottom: '.3rem' } }, '📊 CSV fetch'),
+      h('div', { style: { fontSize: '.85rem' } },
+        d.csv.ok
+          ? ('✓ Fetched ' + d.csv.bytes + ' bytes · ' + d.csv.total_rows + ' total rows (incl. header) · ' + (d.total_data_rows || 0) + ' data rows')
+          : ('⚠ ' + d.csv.error)
+      ),
+      h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.2rem' } }, 'Sheet ID: ' + d.sheet_id + ' · GID: ' + d.sheet_gid)
+    ));
+  }
+
+  /* Detected columns table */
+  if (d.detected_columns && d.detected_columns.length) {
+    const tbl = h('table', { class: 'mini-table' },
+      h('thead', {}, h('tr', {},
+        h('th', {}, 'Sheet column'),
+        h('th', {}, 'Normalised'),
+        h('th', {}, 'Mapped to CRM field'),
+        h('th', {}, 'Source')
+      )),
+      h('tbody', {},
+        ...d.detected_columns.map(c => h('tr', {},
+          h('td', {}, h('b', {}, c.raw || '(empty)')),
+          h('td', { class: 'muted', style: { fontFamily: 'monospace' } }, c.normalised),
+          h('td', {}, c.mapped_to
+            ? h('span', { style: { padding: '.1rem .4rem', borderRadius: '4px', background: '#dcfce7', color: '#166534', fontSize: '.8rem', fontWeight: 600 } }, c.mapped_to)
+            : h('span', { class: 'muted' }, '— ignored —')),
+          h('td', { class: 'muted', style: { fontSize: '.78rem' } }, c.source === 'explicit_mapping' ? '✎ Explicit mapping' : '🪄 Auto-detected')
+        ))
+      )
+    );
+    body.appendChild(h('div', { class: 'card', style: { padding: '.7rem 1rem', marginBottom: '.7rem' } },
+      h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.4rem' } },
+        h('div', { style: { fontWeight: 600 } }, '🔍 Detected columns'),
+        h('button', { class: 'btn sm', onclick: async () => {
+          backdrop.remove();
+          const integ = (await api('api_sheetSync_list')).find(x => Number(x.id) === Number(id));
+          if (integ) openSheetSyncMappingEditor(integ, () => showAdminTab('integrations'));
+        } }, '✎ Edit mapping')
+      ),
+      tbl
+    ));
+  }
+
+  /* Preview rows */
+  if (d.preview && d.preview.length) {
+    const keys = Array.from(new Set(d.preview.flatMap(r => Object.keys(r))));
+    const tbl = h('table', { class: 'mini-table' },
+      h('thead', {}, h('tr', {}, ...keys.map(k => h('th', {}, k)))),
+      h('tbody', {}, ...d.preview.map(r => h('tr', {}, ...keys.map(k => h('td', {}, r[k] || ''))))));
+    body.appendChild(h('div', { class: 'card', style: { padding: '.7rem 1rem' } },
+      h('div', { style: { fontWeight: 600, marginBottom: '.4rem' } }, '👀 Preview — what the CRM would import (first 3 rows)'),
+      tbl
+    ));
+  }
+}
+try { window.openSheetSyncDiagnoseModal = openSheetSyncDiagnoseModal; } catch (_) {}
+
+/* Standalone Column Mapping editor — opens for a specific sheet integration. */
+async function openSheetSyncMappingEditor(integ, onSaved) {
+  const backdrop = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target === backdrop) backdrop.remove(); } });
+  const modal = h('div', { class: 'modal' });
+  const body = h('div', { class: 'modal-body', style: { maxHeight: '70vh', overflowY: 'auto' } }, '⏳');
+  modal.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, '🗺 Column mapping — ' + integ.name),
+    h('button', { class: 'btn ghost', onclick: () => backdrop.remove() }, '✕')
+  ));
+  modal.appendChild(body);
+  const saveBtn = h('button', { class: 'btn primary' }, '💾 Save mapping');
+  modal.appendChild(h('div', { class: 'actions' },
+    h('button', { class: 'btn', onclick: () => backdrop.remove() }, 'Cancel'),
+    saveBtn
+  ));
+  backdrop.appendChild(modal);
+  document.body.appendChild(backdrop);
+
+  /* Discover columns via the diagnose endpoint so we know what headers exist. */
+  let d;
+  try { d = await api('api_sheetSync_diagnose', integ.id); }
+  catch (e) { body.innerHTML = '<div style="color:#dc2626">' + (e && e.message || e) + '</div>'; return; }
+
+  if (d.mode === 'push_only') {
+    body.innerHTML = '<div class="muted" style="padding:1rem">Column mapping is only used in PULL mode (sheet URL). In PUSH mode, your Apps Script controls the field names directly.</div>';
+    saveBtn.disabled = true;
+    return;
+  }
+  if (!d.detected_columns || !d.detected_columns.length) {
+    body.innerHTML = '<div class="muted" style="padding:1rem">No columns detected. ' + ((d.csv && d.csv.error) || 'Check the sheet has a header row.') + '</div>';
+    saveBtn.disabled = true;
+    return;
+  }
+
+  body.innerHTML = '';
+  body.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+    'Point each sheet column to a CRM field. Columns left as "Ignore" are not imported. The CRM falls back to auto-detection for any column you don\'t explicitly map.'));
+
+  const selects = {};
+  const currentMapping = d.column_mapping || {};
+  d.detected_columns.forEach(c => {
+    const sel = h('select', { class: 'input', style: { minWidth: '260px' } },
+      ..._SHEET_CRM_FIELDS.map(f => h('option', { value: f.value, selected: (currentMapping[c.raw] === f.value || currentMapping[c.normalised] === f.value || (!currentMapping[c.raw] && !currentMapping[c.normalised] && c.mapped_to === f.value)) ? 'selected' : null }, f.label))
+    );
+    selects[c.raw] = sel;
+    body.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 280px', gap: '.6rem', alignItems: 'center', margin: '.4rem 0' } },
+      h('div', {},
+        h('b', {}, c.raw || '(empty header)'),
+        h('div', { class: 'muted', style: { fontSize: '.72rem', fontFamily: 'monospace' } }, c.normalised + ' · auto: ' + (c.mapped_to || 'ignored'))
+      ),
+      sel
+    ));
+  });
+
+  saveBtn.onclick = async () => {
+    const mapping = {};
+    Object.entries(selects).forEach(([k, sel]) => { if (sel.value) mapping[k] = sel.value; });
+    saveBtn.disabled = true; saveBtn.textContent = '⏳';
+    try {
+      await api('api_sheetSync_save', { id: integ.id, name: integ.name, column_mapping: mapping });
+      toast('Mapping saved — click 🔄 Sync now to apply', 'ok');
+      backdrop.remove();
+      if (onSaved) onSaved();
+    } catch (e) { toast(e.message, 'err'); saveBtn.disabled = false; saveBtn.textContent = '💾 Save mapping'; }
+  };
+}
+try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_) {}
+
 /* ====================================================================
  * Accounts (GST Invoicing) — opt-in module
  * --------------------------------------------------------------------
@@ -31684,8 +36152,8 @@ window.openUserHierarchyModal = openUserHierarchyModal;
       const billTo    = _ta('bill_to_address', invoice ? invoice.bill_to_address : '', 2);
       const invDate   = _txt('invoice_date',   invoice ? String(invoice.invoice_date).slice(0,10) : today(), { type:'date' });
       const dueDate   = _txt('due_date',       invoice && invoice.due_date ? String(invoice.due_date).slice(0,10) : '', { type:'date' });
-      const notes     = _ta('notes',           invoice ? invoice.notes : '', 2);
-      const terms     = _ta('terms',           invoice ? invoice.terms : '', 2);
+      const notes     = _ta('notes',           invoice ? invoice.notes : (settings.default_notes || ''), 2);
+      const terms     = _ta('terms',           invoice ? invoice.terms : (settings.default_terms || ''), 2);
       const discount  = _txt('discount',       invoice ? invoice.discount : 0, { type:'number', step:'0.01', min:'0' });
 
       // Auto-fill customer details when picking from master
@@ -31959,10 +36427,11 @@ window.openUserHierarchyModal = openUserHierarchyModal;
   });
 
   async function openCompany(id, after) {
-    /* INV_COMPANY_FULL_v1 (2026-05-23) — surfaced previously-hidden fields:
+    /* INV_COMPANY_FULL_v1 (2026-05-23) - surfaced previously-hidden fields:
        logo_url, signature_url, legal_name, pan, city, pincode, website,
        state_code, default_notes, bank_branch, no_padding.
-       The PDF render at routes/invoicing.js:681 already uses company.logo_url
+       Backend api_invoicing_companies_save already whitelists these (routes/invoicing.js)
+       and the PDF render at routes/invoicing.js:681 already uses company.logo_url -
        so once saved here the brand logo immediately appears on every invoice. */
     const row = id ? await api('api_invoicing_companies_get', id) : { prefix:'INV', next_no:1, no_padding:6, is_active:1 };
     _modal(id ? 'Edit Company' : 'New Company', (body, close) => {
@@ -31990,9 +36459,9 @@ window.openUserHierarchyModal = openUserHierarchyModal;
       const dflt  = _txt('is_default', row.is_default ? '1' : '0', { type:'checkbox' }); dflt.checked = !!row.is_default;
       const terms = _ta('default_terms', row.default_terms, 3);
       const notes = _ta('default_notes', row.default_notes, 2);
-      /* Logo / Signature URLs — paste-or-upload */
-      const logoUrl = _txt('logo_url', row.logo_url, { type:'url', placeholder:'https://…/logo.png' });
-      const sigUrl  = _txt('signature_url', row.signature_url, { type:'url', placeholder:'https://…/signature.png' });
+      /* Logo / Signature URLs - paste-to-show preview */
+      const logoUrl = _txt('logo_url', row.logo_url, { type:'url', placeholder:'https://.../logo.png' });
+      const sigUrl  = _txt('signature_url', row.signature_url, { type:'url', placeholder:'https://.../signature.png' });
       const logoPrev = h('img', { src: row.logo_url || '', alt:'logo preview',
         style: { maxHeight:'48px', maxWidth:'180px', objectFit:'contain', border:'1px solid #e2e8f0', borderRadius:'4px', padding:'2px', background:'#fff', marginTop:'.3rem', display: row.logo_url ? 'block' : 'none' } });
       logoUrl.addEventListener('input', () => {
@@ -32005,7 +36474,6 @@ window.openUserHierarchyModal = openUserHierarchyModal;
         if (sigUrl.value) { sigPrev.src = sigUrl.value; sigPrev.style.display = 'block'; }
         else { sigPrev.style.display = 'none'; }
       });
-      /* Logo URL + preview wrapped in a column */
       const logoCol = h('div', {}, _field('Brand Logo URL', logoUrl, 'Appears at the top of every PDF invoice'), logoPrev);
       const sigCol  = h('div', {}, _field('Signature Image URL', sigUrl, 'Appears above "Authorised Signatory"'), sigPrev);
 
@@ -32022,7 +36490,7 @@ window.openUserHierarchyModal = openUserHierarchyModal;
       f.appendChild(_field('Pincode', pincode));
       f.appendChild(_field('Invoice Prefix', prefix));
       f.appendChild(_field('Next Invoice #', nextN));
-      f.appendChild(_field('Number Padding', padN, 'e.g. 6 → INV000001'));
+      f.appendChild(_field('Number Padding', padN, 'e.g. 6 -> INV000001'));
       f.appendChild(_field('UPI ID', upi));
       f.appendChild(_field('Bank Name', bankN));
       f.appendChild(_field('Bank Account', bank));
@@ -32181,3 +36649,175 @@ window.openUserHierarchyModal = openUserHierarchyModal;
       body.appendChild(f);
       body.appendChild(_field('Description', desc));
       body.appendChild(h('div', { style: { display:'flex', justifyContent:'flex-end', gap:'.5rem', marginTop:'1rem' } },
+        _btn('Cancel', { kind:'ghost', onclick: close }),
+        _btn('Save', { onclick: async () => {
+          try {
+            await api('api_invoicing_items_save', {
+              id: id || undefined, name: name.value.trim(), hsn_sac: hsn.value, unit: unit.value,
+              rate: Number(rate.value)||0, gst_pct: Number(gst.value)||0, description: desc.value
+            });
+            toast('Saved', 'ok'); close(); if (after) after();
+          } catch (e) { toast(e.message, 'err'); }
+        }})
+      ));
+    });
+  }
+
+  // ==================== GSTR-1 ====================
+  VIEWS.invGstr1 = async (view) => _safe(view, async () => {
+    view.innerHTML = '';
+    const pg = _page('📤 GSTR-1 Export');
+    const companies = await api('api_invoicing_companies_list');
+    if (!companies.length) {
+      pg.appendChild(h('div', { style:{padding:'1rem',background:'#fef3c7',borderRadius:'8px'} }, 'Add a seller company first.'));
+      view.appendChild(pg); return;
+    }
+    const compSel = _sel('company_id', companies.map(c => ({ value:c.id, label:c.name + (c.gstin ? ' • ' + c.gstin : '') })), (companies.find(c => c.is_default) || companies[0]).id);
+    const from = _txt('from', daysAgo(30), { type:'date' });
+    const to   = _txt('to',   today(),     { type:'date' });
+    const filters = h('div', { style: { display:'grid', gridTemplateColumns:'2fr 1fr 1fr auto', gap:'.7rem', alignItems:'end', marginBottom:'1rem' } },
+      _field('Seller Company', compSel),
+      _field('From', from),
+      _field('To', to),
+      _btn('Preview', { onclick: runPreview })
+    );
+    pg.appendChild(filters);
+    const out = h('div'); pg.appendChild(out);
+    view.appendChild(pg);
+
+    async function runPreview() {
+      out.innerHTML = '';
+      try {
+        const r = await api('api_invoicing_gstr1_preview', { company_id: Number(compSel.value), from: from.value, to: to.value });
+        const grid = h('div', { style: { display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))', gap:'.8rem', marginBottom:'1rem' } },
+          _kpi('B2B rows',  r.b2b_count,  '#3b82f6'),
+          _kpi('B2CL rows', r.b2cl_count, '#8b5cf6'),
+          _kpi('B2CS rows', r.b2cs_count, '#06b6d4'),
+          _kpi('CDNR rows', r.cdnr_count, '#f59e0b'),
+          _kpi('HSN rows',  r.hsn_count,  '#10b981'),
+          _kpi('Docs net',  r.docs.net,   '#0ea5e9')
+        );
+        out.appendChild(grid);
+        out.appendChild(h('div', { style:{padding:'.7rem .9rem',background:'#f8fafc',borderRadius:'8px',marginBottom:'1rem'} },
+          'Issued: ' + r.docs.issued + ' • Cancelled: ' + r.docs.cancelled + ' • Net: ' + r.docs.net
+        ));
+        out.appendChild(_btn('Download GSTR-1 (CSV bundle)', { onclick: downloadCsv }));
+      } catch (e) { toast(e.message, 'err'); }
+    }
+    async function downloadCsv() {
+      try {
+        const r = await api('api_invoicing_gstr1_csv', { company_id: Number(compSel.value), from: from.value, to: to.value });
+        Object.entries(r.sheets).forEach(([name, csv]) => {
+          const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url; a.download = `gstr1_${name}_${from.value}_to_${to.value}.csv`;
+          document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 4000);
+        });
+        toast('CSV sheets downloaded', 'ok');
+      } catch (e) { toast(e.message, 'err'); }
+    }
+  });
+
+  // Expose for debugging only
+  // ==================== SETTINGS & T&C ====================
+  // Per-tenant invoicing knobs: default GST %, currency, default
+  // Terms & Conditions, default Notes, invoice footer. The T&C is
+  // automatically prefilled into the Terms field on every new invoice
+  // (see openInvoiceModal — `settings.default_terms` is used as the
+  // fallback when invoice.terms is empty). Tenant users can still
+  // override per-invoice in the New Invoice modal.
+  VIEWS.invSettings = async (view) => _safe(view, async () => {
+    view.innerHTML = '';
+    const s = await api('api_invoicing_settings_get');
+    const pg = _page('⚙️ Invoicing Settings & T&C');
+
+    // Intro card
+    pg.appendChild(h('div', { style: { background:'#eff6ff', border:'1px solid #bfdbfe', borderRadius:'8px', padding:'.8rem 1rem', marginBottom:'1.2rem', color:'#1e3a8a', fontSize:'.88rem' } },
+      h('div', { style: { fontWeight:600, marginBottom:'.25rem' } }, '💡 How this works'),
+      h('div', {}, 'The Terms & Conditions you save here will auto-fill into every NEW invoice you create. You can still edit them per-invoice in the New Invoice modal. The T&C text appears in the footer of the printed PDF.')
+    ));
+
+    const card = h('div', { style: { background:'#fff', borderRadius:'10px', padding:'1.2rem', boxShadow:'0 1px 3px rgba(0,0,0,.06)', maxWidth:'820px' } });
+
+    // ---- Numbering / Currency ----
+    const row1 = h('div', { style: { display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'.8rem' } });
+    const gst   = _txt('default_gst_pct', s.default_gst_pct, { type:'number', step:'0.01', min:'0' });
+    const cur   = _txt('currency_symbol', s.currency_symbol || '₹');
+    const code  = _txt('currency_code', s.currency_code || 'INR');
+    row1.appendChild(_field('Default GST %', gst, 'Pre-selected on new line items'));
+    row1.appendChild(_field('Currency Symbol', cur));
+    row1.appendChild(_field('Currency Code', code));
+    card.appendChild(row1);
+
+    // ---- B2CL threshold ----
+    const row2 = h('div', { style: { display:'grid', gridTemplateColumns:'1fr 1fr', gap:'.8rem', marginTop:'.4rem' } });
+    const b2cl  = _txt('b2cl_threshold', s.b2cl_threshold, { type:'number', step:'1', min:'0' });
+    const fy    = _txt('fy_start_month', s.fy_start_month || 4, { type:'number', min:'1', max:'12' });
+    row2.appendChild(_field('B2CL Threshold (₹)', b2cl, 'Inter-state B2C invoices above this go to B2CL sheet'));
+    row2.appendChild(_field('Financial Year Start Month', fy, '4 = April (default for India)'));
+    card.appendChild(row2);
+
+    // ---- Default Terms & Conditions ----
+    card.appendChild(h('h3', { style: { margin:'1.4rem 0 .4rem', fontSize:'1rem' } }, '📜 Default Terms & Conditions'));
+    card.appendChild(h('div', { style: { fontSize:'.78rem', color:'#64748b', marginBottom:'.5rem' } }, 'Shown at the bottom of every invoice PDF. New invoices auto-fill the Terms field with this text — editable per-invoice.'));
+    const terms = h('textarea', { name:'default_terms', rows: 8, style: { width:'100%', padding:'.6rem .7rem', border:'1px solid #cbd5e1', borderRadius:'6px', font:'inherit', resize:'vertical', minHeight:'160px' }, placeholder:'e.g.\n1. Payment due within 7 days of invoice date.\n2. Interest @ 18% per annum on overdue amounts.\n3. All disputes subject to Delhi jurisdiction.\n4. Goods once sold will not be taken back.' }, s.default_terms || '');
+    card.appendChild(terms);
+
+    // ---- Default Notes ----
+    card.appendChild(h('h3', { style: { margin:'1.4rem 0 .4rem', fontSize:'1rem' } }, '📝 Default Invoice Notes'));
+    card.appendChild(h('div', { style: { fontSize:'.78rem', color:'#64748b', marginBottom:'.5rem' } }, 'Optional. Auto-fills the Notes field on new invoices. Appears above T&C on the PDF.'));
+    const notes = h('textarea', { name:'default_notes', rows: 3, style: { width:'100%', padding:'.6rem .7rem', border:'1px solid #cbd5e1', borderRadius:'6px', font:'inherit', resize:'vertical' }, placeholder:'e.g. Thank you for your business!' }, s.default_notes || '');
+    card.appendChild(notes);
+
+    // ---- Footer ----
+    card.appendChild(h('h3', { style: { margin:'1.4rem 0 .4rem', fontSize:'1rem' } }, '🦶 Invoice Footer'));
+    card.appendChild(h('div', { style: { fontSize:'.78rem', color:'#64748b', marginBottom:'.5rem' } }, 'Optional footer text printed at the bottom of every PDF (e.g. company tagline, registration numbers, fine print).'));
+    const footer = h('textarea', { name:'invoice_footer', rows: 2, style: { width:'100%', padding:'.6rem .7rem', border:'1px solid #cbd5e1', borderRadius:'6px', font:'inherit', resize:'vertical' } }, s.invoice_footer || '');
+    card.appendChild(footer);
+
+    // ---- Toggles ----
+    const toggles = h('div', { style: { display:'flex', gap:'1.4rem', flexWrap:'wrap', marginTop:'1.2rem', padding:'.8rem 0', borderTop:'1px solid #f1f5f9' } });
+    function _toggle(name, label, checked) {
+      const wrap = h('label', { style: { display:'flex', alignItems:'center', gap:'.4rem', cursor:'pointer', fontSize:'.88rem' } });
+      const cb = h('input', { type:'checkbox', name });
+      if (checked) cb.checked = true;
+      wrap.appendChild(cb); wrap.appendChild(h('span', {}, label));
+      return wrap;
+    }
+    const roundOff = _toggle('enable_round_off', 'Enable round-off on invoice totals', Number(s.enable_round_off));
+    const qr       = _toggle('enable_qr', 'Show UPI QR code on PDF (when UPI is set)', Number(s.enable_qr));
+    toggles.appendChild(roundOff); toggles.appendChild(qr);
+    card.appendChild(toggles);
+
+    // ---- Save button ----
+    const actions = h('div', { style: { display:'flex', justifyContent:'flex-end', gap:'.6rem', marginTop:'1.2rem' } });
+    const saveBtn = _btn('💾 Save settings', { onclick: async () => {
+      saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
+      try {
+        await api('api_invoicing_settings_save', {
+          default_gst_pct:  Number(gst.value) || 0,
+          currency_symbol: cur.value || '₹',
+          currency_code:   code.value || 'INR',
+          b2cl_threshold:  Number(b2cl.value) || 250000,
+          fy_start_month:  Number(fy.value) || 4,
+          default_terms:   terms.value,
+          default_notes:   notes.value,
+          invoice_footer:  footer.value,
+          enable_round_off: roundOff.querySelector('input').checked ? 1 : 0,
+          enable_qr:        qr.querySelector('input').checked ? 1 : 0,
+        });
+        toast('Settings saved — they will apply to your next new invoice', 'ok');
+      } catch (e) { toast(e.message, 'err'); }
+      finally { saveBtn.disabled = false; saveBtn.textContent = '💾 Save settings'; }
+    }});
+    actions.appendChild(saveBtn);
+    card.appendChild(actions);
+
+    pg.appendChild(card);
+    view.appendChild(pg);
+  });
+
+  window.INV = INV;
+})();
