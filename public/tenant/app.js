@@ -2100,6 +2100,15 @@ VIEWS.leads = async (view) => {
   let _filterOpen = (_filterPrefRaw === '1' || _filterPrefRaw === '0')
     ? (_filterPrefRaw === '1')
     : !_filterIsMobile;
+  // FILTER_FIRST_CLICK_NOOP_FIX: persist the initial state so the
+  // toggle handler (which reads from localStorage) doesn't think the
+  // panel is in a state different from what's visible. Without this,
+  // localStorage stays null on first render, the toggle reads null
+  // as 'closed', tries to 'open', but the panel was already open on
+  // desktop — net result: first click looks broken.
+  if (_filterPrefRaw === null) {
+    try { localStorage.setItem('crm_leads_filter_open', _filterOpen ? '1' : '0'); } catch (_) {}
+  }
   // Apply the initial visibility IMMEDIATELY on the toolbar element
   // BEFORE it's appended to the DOM. No setTimeout = no timing race.
   if (!_filterOpen) toolbar.style.display = 'none';

@@ -10,7 +10,7 @@
        prefix and the express.static handler in server.js serves
        the file from public/tenant/. The trailing slash is enforced
        by a redirect in server.js so these always resolve correctly. -->
-  <link rel="stylesheet" href="styles.css?v=2026-05-23-filtv5" />
+  <link rel="stylesheet" href="styles.css?v=2026-05-23-firstclick" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><text y=%2224%22 font-size=%2226%22>🎯</text></svg>" />
@@ -148,10 +148,10 @@
         // Wait for DOMContentLoaded before injecting scripts.
         function injectSpaScripts() {
           var s = document.createElement('script');
-          s.src = 'app.js?v=2026-05-23-filtv5';
+          s.src = 'app.js?v=2026-05-23-firstclick';
           document.body.appendChild(s);
           var c = document.createElement('script');
-          c.src = 'caller-id-native.js?v=2026-05-23-filtv5';
+          c.src = 'caller-id-native.js?v=2026-05-23-firstclick';
           document.body.appendChild(c);
         }
         if (document.body) injectSpaScripts();
