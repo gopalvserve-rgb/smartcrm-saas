@@ -1,95 +1,61 @@
 /**
- * Service worker — offline shell + Web Push.
+ * SW_KILL_SWITCH_v1 (2026-05-23)
  *
- * Caching:
- * - Network-first for the app shell; cache is only a fallback when offline.
- * - /api and /hook requests always go to the network — never cached.
+ * The tenant SPA's index.html no longer registers a service worker
+ * (that registration was disabled when /t/<slug>/ scope handling
+ * couldn't be done cleanly). However, devices that opened the app
+ * BEFORE that change still have the previous SW alive and intercepting
+ * requests — serving stale cached app.js / index.html and making it
+ * impossible to receive updates without a manual cache wipe.
  *
- * Web Push:
- * - Listens for `push` events and shows a native OS notification (banner +
- *   sound + vibration). Works even when the app/browser is fully closed,
- *   exactly like SMS — provided the user granted Notification permission.
- * - Tapping the notification focuses an open CRM tab if there is one,
- *   otherwise opens a new one at the URL the push payload specifies.
+ * This file replaces the old SW with a one-time killer:
+ *
+ *   - On `install`: skipWaiting() so this kill-version activates immediately.
+ *   - On `activate`: delete every cache, then unregister itself, then
+ *                    refresh every open client window so they pick up the
+ *                    real (network-fetched) index.html + app.js.
+ *   - `fetch` handler intentionally passes through to the network with
+ *     NO caching while the unregister is in flight.
+ *
+ * Once every device has loaded this once, the SW is gone and future
+ * loads talk to the network directly — exactly what we want now that
+ * SW registration is disabled in index.html.
  */
-const CACHE = 'lead-crm-shell-v266-aitoggle';
-const SHELL = ['/', '/index.html', '/app.js', '/styles.css', '/manifest.webmanifest'];
 
-self.addEventListener('install', ev => {
-  ev.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).catch(() => {}));
+self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
-self.addEventListener('activate', ev => {
-  ev.waitUntil(
-    caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
-      .then(() => self.clients.claim())
-  );
-});
-self.addEventListener('fetch', ev => {
-  const req = ev.request;
-  if (req.method !== 'GET') return;
-  const url = new URL(req.url);
 
-  // API / hook / setup / config / csv — always network, never cache
-  if (url.pathname.startsWith('/api/') || url.pathname === '/api' ||
-      url.pathname.startsWith('/hook/') || url.pathname === '/setup' ||
-      url.pathname === '/config.json') {
-    return;
-  }
+self.addEventListener('activate', (event) => {
+  event.waitUntil((async () => {
+    try {
+      // 1. Nuke every cache.
+      const keys = await caches.keys();
+      await Promise.all(keys.map((k) => caches.delete(k)));
+    } catch (_) {}
 
-  // Shell: network-first. Cache is only a fallback when offline.
-  ev.respondWith(
-    fetch(req).then(resp => {
-      if (resp && resp.ok) {
-        const clone = resp.clone();
-        caches.open(CACHE).then(c => c.put(req, clone)).catch(() => {});
-      }
-      return resp;
-    }).catch(() => caches.match(req))
-  );
-});
+    try {
+      // 2. Unregister this service worker.
+      await self.registration.unregister();
+    } catch (_) {}
 
-// ---- Web Push handlers ---------------------------------------------
-
-self.addEventListener('push', ev => {
-  let data = {};
-  try { data = ev.data ? ev.data.json() : {}; } catch (_) {
-    try { data = { title: 'Lead CRM', body: ev.data ? ev.data.text() : '' }; } catch (__) {}
-  }
-  const title = data.title || '🔔 Lead CRM';
-  const opts = {
-    body: data.body || '',
-    icon: data.icon || '/icon-192.png',
-    badge: '/icon-192.png',
-    tag: data.tag || ('crm-' + Date.now()),
-    data: { url: data.url || '/' },
-    // Android replays the OS sound + vibration pattern, mirroring an SMS.
-    vibrate: [120, 60, 120, 60, 200],
-    requireInteraction: !!data.sticky,
-    renotify: true
-  };
-  ev.waitUntil(self.registration.showNotification(title, opts));
-});
-
-self.addEventListener('notificationclick', ev => {
-  ev.notification.close();
-  const targetUrl = (ev.notification.data && ev.notification.data.url) || '/';
-  ev.waitUntil((async () => {
-    const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    // If a CRM tab is already open, focus it and tell it to navigate.
-    for (const client of all) {
-      try {
-        const u = new URL(client.url);
-        if (u.origin === self.location.origin) {
-          await client.focus();
-          client.postMessage({ type: 'navigate', url: targetUrl });
-          return;
+    try {
+      // 3. Tell every controlled client to reload so they fetch fresh
+      //    HTML + JS from the network (no SW in front of them anymore).
+      const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      for (const c of clients) {
+        try { c.navigate(c.url); } catch (_) {
+          try { c.postMessage({ type: 'sw-reload' }); } catch (__) {}
         }
-      } catch (_) {}
-    }
-    // Otherwise open a fresh window.
-    if (self.clients.openWindow) {
-      await self.clients.openWindow(targetUrl);
-    }
+      }
+    } catch (_) {}
   })());
+});
+
+// While the SW is still in control, never serve from cache — always
+// pass through to network. After the activate handler runs the SW is
+// unregistered so this handler stops firing entirely.
+self.addEventListener('fetch', (event) => {
+  // Intentionally do not call event.respondWith — letting the browser
+  // do its default network fetch is what we want during the wind-down.
 });
