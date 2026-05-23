@@ -10,11 +10,73 @@
        prefix and the express.static handler in server.js serves
        the file from public/tenant/. The trailing slash is enforced
        by a redirect in server.js so these always resolve correctly. -->
-  <link rel="stylesheet" href="styles.css?v=2026-05-23-swkill" />
+  <link rel="stylesheet" href="styles.css?v=2026-05-23-inlinekill" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><text y=%2224%22 font-size=%2226%22>🎯</text></svg>" />
   <link rel="apple-touch-icon" href="icon-192.png" />
+  <script>
+    // ---- SW_KILL_INLINE_v1 (2026-05-23) ------------------------------
+    // Belt-and-suspenders cleanup. A previous version of the tenant SPA
+    // registered a service worker, and devices that opened the app
+    // before SW registration was removed still have that stale SW alive
+    // serving cached app.js — blocking every update we ship. The
+    // sw.js file is now a kill-switch, but if the old SW caches its own
+    // /sw.js fetch we'd deadlock waiting for it to self-update.
+    //
+    // This inline block runs at parse-time and:
+    //   1. Lists every SW registration in the current scope.
+    //   2. Unregisters each one (await all).
+    //   3. Clears every Cache Storage entry.
+    //   4. If anything was actually removed, reloads ONCE with a
+    //      one-shot URL flag so we don't loop.
+    //
+    // Safe to leave in forever: on a clean device with no SW + no
+    // caches, the calls return empty and we just continue rendering.
+    (function () {
+      try {
+        if (!('serviceWorker' in navigator)) return;
+        var qs = new URLSearchParams(window.location.search || '');
+        // Don't loop: if we already reloaded after a cleanup, stop.
+        if (qs.get('_swkilled') === '1') return;
+        navigator.serviceWorker.getRegistrations().then(function (regs) {
+          if (!regs || !regs.length) {
+            // No registrations — also flush Cache Storage just in case
+            // a stale Cache entry survived an earlier unregister.
+            if (window.caches && caches.keys) {
+              caches.keys().then(function (keys) {
+                if (!keys.length) return;
+                Promise.all(keys.map(function (k) { return caches.delete(k); })).then(function () {
+                  // Reload only if we actually deleted something.
+                  var u = new URL(window.location.href);
+                  u.searchParams.set('_swkilled', '1');
+                  window.location.replace(u.toString());
+                });
+              });
+            }
+            return;
+          }
+          Promise.all(regs.map(function (r) {
+            try { return r.unregister(); } catch (_) { return Promise.resolve(false); }
+          })).then(function () {
+            // After unregistering, nuke caches too.
+            var done = function () {
+              var u = new URL(window.location.href);
+              u.searchParams.set('_swkilled', '1');
+              window.location.replace(u.toString());
+            };
+            if (window.caches && caches.keys) {
+              caches.keys().then(function (keys) {
+                Promise.all(keys.map(function (k) { return caches.delete(k); })).then(done, done);
+              }, done);
+            } else {
+              done();
+            }
+          });
+        }).catch(function () { /* silent */ });
+      } catch (_) { /* silent */ }
+    })();
+  </script>
   <script>
     // ---- Tenant-aware fetch shim --------------------------------------
     // The original Celeste SPA POSTs to absolute /api etc. In the SaaS
@@ -88,10 +150,10 @@
         // Wait for DOMContentLoaded before injecting scripts.
         function injectSpaScripts() {
           var s = document.createElement('script');
-          s.src = 'app.js?v=2026-05-23-swkill';
+          s.src = 'app.js?v=2026-05-23-inlinekill';
           document.body.appendChild(s);
           var c = document.createElement('script');
-          c.src = 'caller-id-native.js?v=2026-05-23-swkill';
+          c.src = 'caller-id-native.js?v=2026-05-23-inlinekill';
           document.body.appendChild(c);
         }
         if (document.body) injectSpaScripts();
