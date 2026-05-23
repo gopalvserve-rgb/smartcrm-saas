@@ -2174,6 +2174,13 @@ app.get('/LeadCRM.apk', (req, res) => {
 // (handled by the earlier app.get('/') registration above).
 app.get('/', (req, res, next) => {
   if (!req.tenant) return next();          // no tenant Ã¢ÂÂ fall through to landing/static
+  // INDEX_NO_CACHE_v1 - force browsers to revalidate the SPA shell on
+  // every request. Without this, browsers cached index.html and kept
+  // loading the OLD app.js?v= reference even after we shipped new
+  // versions, locking users on stale JS.
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   res.sendFile(path.join(__dirname, 'public', 'tenant', 'index.html'));
 });
 
