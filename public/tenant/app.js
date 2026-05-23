@@ -2072,6 +2072,66 @@ VIEWS.leads = async (view) => {
       : null,
     h('button', { class: 'btn primary', onclick: () => openLeadModal() }, '+ New Lead')
   );
+
+  // LEADS_FILTER_COLLAPSE_v1 — on mobile the filter toolbar fills the
+  // entire viewport before any leads are visible. Wrap it in a one-line
+  // toggle so the list shows immediately and filters are an explicit
+  // tap away. Default: collapsed on mobile (< 768px), expanded on
+  // desktop. User's choice is remembered in localStorage.
+  toolbar.id = 'leads-toolbar';
+  const _filterIsMobile = (typeof window !== 'undefined') && window.innerWidth < 768;
+  const _filterPrefRaw = (() => { try { return localStorage.getItem('crm_leads_filter_open'); } catch (_) { return null; } })();
+  let _filterOpen = (_filterPrefRaw === '1' || _filterPrefRaw === '0')
+    ? (_filterPrefRaw === '1')
+    : !_filterIsMobile;
+  function _countActiveFilters() {
+    const f = CRM.prefs.filters || {};
+    let n = 0;
+    if (f.q && String(f.q).trim()) n++;
+    if (f.status) n++;
+    if (f.source || (Array.isArray(f.sources) && f.sources.length)) n++;
+    if (Array.isArray(f.tags) && f.tags.length) n++;
+    if (f.from || f.to) n++;
+    if (f.assignee || (Array.isArray(f.assignees) && f.assignees.length)) n++;
+    if (Array.isArray(f.heat) && f.heat.length) n++;
+    if (f.cf && Object.keys(f.cf).length) n++;
+    if (f.rb && Array.isArray(f.rb) && f.rb.length) n++;
+    return n;
+  }
+  const _filterActiveLabel = h('span', { style: { fontWeight: '600' } }, '');
+  const _filterStateLabel  = h('span', { style: { fontSize: '.85rem', opacity: 0.85 } }, '');
+  const _filterToggle = h('button', {
+    class: 'btn',
+    id: 'leads-filter-toggle',
+    style: {
+      width: '100%', display: 'flex', justifyContent: 'space-between',
+      alignItems: 'center', marginBottom: '.5rem', padding: '.6rem .9rem',
+      fontWeight: '600', borderRadius: '8px'
+    }
+  }, _filterActiveLabel, _filterStateLabel);
+  function _refreshFilterToggleLabel() {
+    const n = _countActiveFilters();
+    _filterActiveLabel.textContent = n > 0 ? ('🔍 Filters (' + n + ' active)') : '🔍 Filters';
+    _filterStateLabel.textContent  = _filterOpen ? '▴ Hide' : '▾ Show';
+    _filterToggle.style.background = n > 0 ? '#fef3c7' : '#f8fafc';
+    _filterToggle.style.borderColor = n > 0 ? '#fcd34d' : '#e2e8f0';
+  }
+  function _applyFilterPanelVisible(open) {
+    const t = document.getElementById('leads-toolbar');
+    const c = document.getElementById('cf-filter-row');
+    if (t) t.style.display = open ? '' : 'none';
+    if (c) {
+      if (!open) { if (c.style.display && c.style.display !== 'none') c.dataset._prevDisplay = c.style.display; c.style.display = 'none'; }
+      else if (c.dataset._prevDisplay) { c.style.display = c.dataset._prevDisplay; }
+    }
+    _filterOpen = open;
+    _refreshFilterToggleLabel();
+    try { localStorage.setItem('crm_leads_filter_open', open ? '1' : '0'); } catch (_) {}
+  }
+  _filterToggle.onclick = () => _applyFilterPanelVisible(!_filterOpen);
+  _refreshFilterToggleLabel();
+  view.appendChild(_filterToggle);
+
   view.appendChild(toolbar);
 
   if (CRM.user && CRM.user.role !== 'admin') {
@@ -2141,6 +2201,10 @@ VIEWS.leads = async (view) => {
   if (_cfHasSaved) cfBtn.classList.add('active');
   toolbar.appendChild(cfBtn);
   view.appendChild(cfRow);
+
+  // Apply initial filter-panel visibility now that both toolbar and
+  // cfRow are in the DOM. Defer to next tick so element IDs resolve.
+  setTimeout(() => _applyFilterPanelVisible(_filterOpen), 0);
 
   view.appendChild(h('div', { class: 'bulk-bar', id: 'bulk-bar', hidden: true },
     h('span', { id: 'bulk-count', class: 'bulk-count' }, '0 selected'),
