@@ -204,8 +204,18 @@ async function provisionFromSignup(signupId) {
   const oneTimePassword = await _seedTenantAdmin(dbName, signup);
 
   // 4. Tenants row
-  const now = new Date();
-  const periodEnd = _computePeriodEnd(now, pkg);
+  // BILL_OVERRIDES_v1 (2026-05-23) - honour optional start_date / end_date /
+  // amount overrides stashed in signups.metadata by super-admin createManual.
+  // This lets the operator backdate a tenant ("start = last Monday"), set a
+  // bespoke amount different from the package list price, or extend validity
+  // beyond the default cycle (e.g. promotional 14-month yearly plan).
+  let _meta = {};
+  try { _meta = typeof signup.metadata === 'string' ? JSON.parse(signup.metadata) : (signup.metadata || {}); } catch (_) { _meta = {}; }
+  const _now = new Date();
+  const now = (_meta.start_date_override && !isNaN(new Date(_meta.start_date_override).getTime()))
+    ? new Date(_meta.start_date_override) : _now;
+  const periodEnd = (_meta.end_date_override && !isNaN(new Date(_meta.end_date_override).getTime()))
+    ? new Date(_meta.end_date_override) : _computePeriodEnd(now, pkg);
   let tenantId;
   const existing = await control.findOneBy('tenants', 'slug', slug);
   if (existing) {
@@ -228,7 +238,10 @@ async function provisionFromSignup(signupId) {
   }
 
   // 5. First invoice + mark paid
-  const total = Number(pkg.base_price_inr) || 0;
+  // BILL_OVERRIDES_v1 - use amount_override when super-admin entered a custom price.
+  const total = (_meta.amount_override != null && !isNaN(Number(_meta.amount_override)))
+    ? Number(_meta.amount_override)
+    : (Number(pkg.base_price_inr) || 0);
   const tax = Math.round((total * Number(pkg.tax_percent || 0) / 100) * 100) / 100;
   const grand = Math.round((total + tax) * 100) / 100;
   const invNumber = await _nextInvoiceNumber();

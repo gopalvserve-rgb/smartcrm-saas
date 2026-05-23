@@ -629,9 +629,90 @@ async function openCreateTenant() {
     )));
   const pkgSel = h('select', { name: 'package_id', required: 'required', style: { width: '100%' } },
     h('option', { value: '' }, '— pick a plan —'),
-    ...pkgs.map(p => h('option', { value: p.id }, p.name + ' · ₹' + Number(p.base_price_inr || 0).toLocaleString('en-IN')))
+    ...pkgs.map(p => h('option', { value: p.id }, p.name + ' · ₹' + Number(p.base_price_inr || 0).toLocaleString('en-IN') + ' · ' + (p.recurring_period_count || 1) + ' ' + p.recurring_period))
   );
   form.appendChild(field('Package *', pkgSel));
+
+  /* --- BILL_PLAN_PICKER_v1 (2026-05-23) ---
+     Start Date + Amount Override + live Validity-ends-on display.
+     - Start Date defaults to today; super-admin can backdate.
+     - Amount field auto-fills from the picked package's base_price_inr.
+     - Validity ends on: computed live from (Start Date) + (cycle * count).
+     - Custom end-date checkbox lets you punch in a bespoke date (trials, promos). */
+  const _todayIso = new Date().toISOString().slice(0, 10);
+  const startInp  = h('input', { name: 'start_date', type: 'date', value: _todayIso, style: { width: '100%' } });
+  form.appendChild(field('Validity start date *', startInp));
+
+  const amtInp = h('input', { name: 'override_amount', type: 'number', step: '0.01', min: '0',
+    placeholder: 'auto-fills from package', style: { width: '100%' } });
+  form.appendChild(field('Amount (₹) — override package price',
+    h('div', {},
+      amtInp,
+      h('div', { class: 'muted', style: { fontSize: '.72rem', marginTop: '.2rem' } },
+        'Leave blank to use the package list price. Override for discounts, custom deals or promotional pricing.')
+    )));
+
+  const endPrev = h('div', { id: 'create-tenant-end-preview',
+    style: { padding: '.5rem .7rem', background: '#f1f5f9', borderRadius: '6px', fontSize: '.85rem', color: '#0f172a' } },
+    'Pick a package and start date to see when validity ends');
+  form.appendChild(field('Validity ends on (auto-computed)', endPrev));
+
+  const customEndChk = h('input', { type: 'checkbox', name: 'use_custom_end' });
+  const customEndInp = h('input', { name: 'override_end_date', type: 'date', value: '', style: { width: '100%', display: 'none' } });
+  customEndChk.addEventListener('change', () => {
+    customEndInp.style.display = customEndChk.checked ? '' : 'none';
+    if (!customEndChk.checked) customEndInp.value = '';
+    _refreshEndPreview();
+  });
+  form.appendChild(h('label', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', fontSize: '.78rem', color: '#475569', margin: '.4rem 0 .2rem' } },
+    customEndChk, h('span', {}, 'Use custom end date (override the auto-computed one)')));
+  form.appendChild(customEndInp);
+
+  function _addPeriod(startDate, cycle, count) {
+    const d = new Date(startDate);
+    const n = Math.max(1, Number(count) || 1);
+    const c = String(cycle || 'month').toLowerCase();
+    if (c === 'lifetime') { d.setFullYear(d.getFullYear() + 99); return d; }
+    if (c === 'year')     { d.setFullYear(d.getFullYear() + n); return d; }
+    if (c === 'quarter')  { d.setMonth(d.getMonth() + (3 * n));  return d; }
+    if (c === 'week')     { d.setDate(d.getDate() + (7 * n));    return d; }
+    d.setMonth(d.getMonth() + n);
+    return d;
+  }
+  function _fmtIst(d) { return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }); }
+  function _refreshEndPreview() {
+    const pkgId = Number(pkgSel.value);
+    const pkg = pkgs.find(p => p.id === pkgId);
+    if (!pkg || !startInp.value) {
+      endPrev.textContent = 'Pick a package and start date to see when validity ends';
+      endPrev.style.background = '#f1f5f9';
+      return;
+    }
+    if (customEndChk.checked && customEndInp.value) {
+      const d = new Date(customEndInp.value);
+      const days = Math.round((d - new Date(startInp.value)) / 86400000);
+      endPrev.innerHTML = '<b>' + _fmtIst(d) + '</b> · ' + days + ' days from start · <span style="color:#7c3aed">custom</span>';
+      endPrev.style.background = '#ede9fe';
+      return;
+    }
+    if (Number(pkg.is_lifetime) === 1) {
+      endPrev.innerHTML = '<b>Lifetime</b> · no expiry · ' + pkg.name;
+      endPrev.style.background = '#d1fae5';
+      return;
+    }
+    const end = _addPeriod(startInp.value, pkg.recurring_period, pkg.recurring_period_count);
+    const days = Math.round((end - new Date(startInp.value)) / 86400000);
+    endPrev.innerHTML = '<b>' + _fmtIst(end) + '</b> · ' + days + ' days · ' + (pkg.recurring_period_count || 1) + ' ' + pkg.recurring_period + (Number(pkg.recurring_period_count) > 1 ? 's' : '');
+    endPrev.style.background = '#dbeafe';
+  }
+  pkgSel.addEventListener('change', () => {
+    const pkg = pkgs.find(p => p.id === Number(pkgSel.value));
+    if (pkg && !amtInp.value) amtInp.placeholder = '₹ ' + Number(pkg.base_price_inr || 0).toLocaleString('en-IN') + ' (package default — leave blank to use)';
+    _refreshEndPreview();
+  });
+  startInp.addEventListener('change', _refreshEndPreview);
+  customEndInp.addEventListener('change', _refreshEndPreview);
+  /* --- /BILL_PLAN_PICKER_v1 --- */
 
   // Industry pack — selects a vertical-specific bundle. 'Generic' (default)
   // is the base CRM with no pack; picking a pack triggers its installer
@@ -691,6 +772,9 @@ async function _submitCreateTenant(form, pkgs, modal) {
   const setBtn = (txt, dis) => { btn.textContent = txt; btn.disabled = !!dis; };
   setBtn('Creating…', true);
   const fd = new FormData(form);
+  // BILL_PLAN_PICKER_v1 — also send start_date / override_amount / override_end_date.
+  const overrideAmtRaw = (fd.get('override_amount') || '').toString().trim();
+  const customEndRaw   = (fd.get('override_end_date') || '').toString().trim();
   const payload = {
     name:         (fd.get('name') || '').toString().trim(),
     email:        (fd.get('email') || '').toString().trim(),
@@ -700,7 +784,10 @@ async function _submitCreateTenant(form, pkgs, modal) {
     package_id:   Number(fd.get('package_id')) || 0,
     industry_pack: (fd.get('industry_pack') || '').toString().trim(),
     notes:        (fd.get('notes') || '').toString().trim() || null,
-    mark_paid:    fd.get('mark_paid') === 'on'
+    mark_paid:    fd.get('mark_paid') === 'on',
+    start_date:   (fd.get('start_date') || '').toString().trim(),
+    override_amount: overrideAmtRaw === '' ? null : Number(overrideAmtRaw),
+    override_end_date: customEndRaw || null
   };
   try {
     const r = await api('api_saas_tenants_createManual', payload);

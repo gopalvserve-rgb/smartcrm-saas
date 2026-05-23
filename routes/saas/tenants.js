@@ -181,6 +181,23 @@ async function api_saas_tenants_createManual(token, payload) {
   const existingTenant = await control.findOneBy('tenants', 'slug', slug);
   if (existingTenant) throw new Error('Workspace URL "' + slug + '" is already taken');
 
+  // BILL_OVERRIDES_v1 (2026-05-23) - optional manual fields used to override
+  // package defaults when super-admin needs a custom plan for a tenant:
+  //   start_date          (YYYY-MM-DD)  - backdate the validity start
+  //   override_end_date   (YYYY-MM-DD)  - set explicit end_date; else computed
+  //   override_amount     (number)      - custom price (often a discount/upsell)
+  // All three are optional; if blank we fall back to the package defaults.
+  const _validDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(new Date(s).getTime());
+  const startDateOverride = String(p.start_date || '').trim();
+  const endDateOverride   = String(p.override_end_date || '').trim();
+  const amountOverrideRaw = p.override_amount;
+  if (startDateOverride && !_validDate(startDateOverride)) throw new Error('start_date must be YYYY-MM-DD');
+  if (endDateOverride   && !_validDate(endDateOverride))   throw new Error('override_end_date must be YYYY-MM-DD');
+  if (amountOverrideRaw != null && amountOverrideRaw !== '' && isNaN(Number(amountOverrideRaw))) {
+    throw new Error('override_amount must be a number');
+  }
+  const amountOverride = (amountOverrideRaw != null && amountOverrideRaw !== '') ? Number(amountOverrideRaw) : null;
+
   // ---- 1. Create a synthetic signup row -------------------------
   const signupId = await control.insert('signups', {
     name, email, mobile, org_name: orgName,
@@ -190,8 +207,11 @@ async function api_saas_tenants_createManual(token, payload) {
       manual_create: true,
       created_by: me.email,
       created_by_id: me.id,
-      mark_paid: p.mark_paid !== false,   // default true for manual create
-      notes: p.notes || null
+      mark_paid: p.mark_paid !== false,
+      notes: p.notes || null,
+      start_date_override: startDateOverride || null,
+      end_date_override:   endDateOverride   || null,
+      amount_override:     amountOverride
     })
   });
 
