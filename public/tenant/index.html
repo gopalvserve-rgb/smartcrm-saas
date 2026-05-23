@@ -88,10 +88,10 @@
         // Wait for DOMContentLoaded before injecting scripts.
         function injectSpaScripts() {
           var s = document.createElement('script');
-          s.src = 'app.js?v=2026-05-23-tcdefault';
+          s.src = 'app.js?v=2026-05-23-resetbtn';
           document.body.appendChild(s);
           var c = document.createElement('script');
-          c.src = 'caller-id-native.js?v=2026-05-23-tcdefault';
+          c.src = 'caller-id-native.js?v=2026-05-23-resetbtn';
           document.body.appendChild(c);
         }
         if (document.body) injectSpaScripts();

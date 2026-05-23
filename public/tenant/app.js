@@ -2036,7 +2036,7 @@ VIEWS.leads = async (view) => {
     ], CRM.prefs.filters.sort || 'created_desc')),
     h('button', { class: 'btn', onclick: () => { CRM._leadsPage = 1; loadLeads({ page: 1 }); } }, '🔎'),
     h('button', { class: 'btn ghost', onclick: openSavedFiltersMenu, title: 'Saved filter presets' }, '📌'),
-    h('button', { class: 'btn ghost', onclick: clearFilters, title: 'Reset filters' }, '✕'),
+    h('button', { class: 'btn ghost', onclick: clearFilters, title: 'Reset all filters', style: { fontWeight: '600' } }, '↺ Reset'),
     h('button', { class: 'btn ghost', id: 'btn-refresh-leads', onclick: refreshLeads, title: 'Refresh leads list' }, '🔄'),
     h('button', { class: 'btn ghost', onclick: openColumnChooser, title: 'Columns' }, '☰'),
     h('button', { class: 'btn ghost', onclick: openBulkUpload, title: 'Upload CSV' }, '⬆️'),
@@ -2173,8 +2173,16 @@ function toggleHeader(show) {
   navigateTo('leads');
 }
 function clearFilters() {
+  // RESET_FILTERS_v2 — wipe every filter slice: standard fields, custom
+  // fields (cf), rule-builder rules (rb), search text (q), and the
+  // 'show custom-fields row' toggle. Also reset to page 1 so a
+  // previously paged-deep view doesn't render empty. Then re-navigate
+  // to leads so the toolbar re-reads the empty state.
   CRM.prefs.filters = {};
-  localStorage.setItem('crm_filters', '{}');
+  try { localStorage.setItem('crm_filters', '{}'); } catch (_) {}
+  try { localStorage.removeItem('crm_filters_q'); } catch (_) {}
+  CRM._leadsPage = 1;
+  toast('Filters cleared', 'ok');
   navigateTo('leads');
 }
 
