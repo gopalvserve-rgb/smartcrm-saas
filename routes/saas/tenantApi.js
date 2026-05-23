@@ -77,6 +77,7 @@ const ROUTE_FILES = [
   'whatsbot',
   'aiBot',
   'quotations',
+  'invoicing',
   'modules',
   'crmCopilot',
   'waBotFlows',

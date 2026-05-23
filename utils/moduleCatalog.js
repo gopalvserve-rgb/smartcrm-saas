@@ -101,6 +101,18 @@ const MODULE_CATALOG = [
     api_prefixes: ['api_fb_','api_integrations_'],
     default_on: true,  always_on: false },
 
+  // ---- Accounts / GST Invoicing (opt-in) ----------------------------
+  // Full GST-compliant invoicing module ported from the Apps Script
+  // single-tenant tool. Lives under the "Accounts" group in the tenant
+  // SPA sidebar. OPT-IN: tenants do NOT get it by default; super-admin
+  // toggles it on per tenant from /admin → Tenants → Modules.
+  { key: 'invoicing',  label: '🧾 Accounts (GST Invoicing)',
+    description: 'GST-compliant invoicing: sellers, customers, items, invoices, payments, PDF, GSTR-1 export.',
+    nav_ids:      ['invDashboard','invList','invCompanies','invCustomers','invItems','invGstr1'],
+    settings_ids: ['invoicing'],
+    api_prefixes: ['api_invoicing_'],
+    default_on: false,  always_on: false },
+
   // Always-on core — branding + users + roles. Toggle hidden in UI.
   { key: 'core',       label: '⚙️ Core (always on)', description: 'Company branding, theme, users, roles, permissions, dashboard.',
     nav_ids:      ['dashboard','users','admin'],

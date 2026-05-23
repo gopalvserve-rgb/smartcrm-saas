@@ -982,6 +982,19 @@ const NAV_GROUPS = [
     { id: 'salary',     label: 'Salary',     icon: '💰' },
     { id: 'bank',       label: 'Bank',       icon: '🏦' }
   ] },
+  // ---- Accounts (GST Invoicing) — OPT-IN per tenant ----
+  // nav_ids are tagged with `module: 'invoicing'` so the existing
+  // module-active filter (in renderSidebar) hides the entire group
+  // unless super-admin has flipped the 'invoicing' key on for this
+  // tenant. Backend routes also fail closed with 403.
+  { label: 'Accounts', icon: '🧾', items: [
+    { id: 'invDashboard', label: 'Invoicing Dashboard', icon: '📊', module: 'invoicing' },
+    { id: 'invList',      label: 'Invoices',            icon: '🧾', module: 'invoicing' },
+    { id: 'invCompanies', label: 'My Companies',        icon: '🏢', module: 'invoicing' },
+    { id: 'invCustomers', label: 'Bill-To Customers',   icon: '👤', module: 'invoicing' },
+    { id: 'invItems',     label: 'Items / Services',    icon: '📦', module: 'invoicing' },
+    { id: 'invGstr1',     label: 'GSTR-1 Export',       icon: '📤', module: 'invoicing' }
+  ] },
   { label: 'Admin', icon: '⚙️', items: [
     { id: 'users', label: 'Users',    icon: '👥', roles: ['admin', 'manager'] },
     { id: 'admin', label: 'Settings', icon: '⚙️', roles: ['admin'] },
@@ -35782,3 +35795,749 @@ async function openSheetSyncMappingEditor(integ, onSaved) {
   };
 }
 try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_) {}
+
+/* ====================================================================
+ * Accounts (GST Invoicing) — opt-in module
+ * --------------------------------------------------------------------
+ * Backend: routes/invoicing.js (api_invoicing_*)
+ * Schema:  migrations/2026_05_23_invoicing.sql
+ * Module:  utils/moduleCatalog.js → key 'invoicing' (default_on=false)
+ *
+ * Six VIEWS, all bound to nav ids tagged with module:'invoicing':
+ *   invDashboard, invList, invCompanies, invCustomers, invItems, invGstr1
+ *
+ * Uses globals already defined above: h, esc, api, toast, navigateTo, $.
+ * No new global helpers required — everything is namespaced inside INV.
+ * ==================================================================== */
+(function () {
+  const INV = {};
+
+  // ---- formatting helpers ----
+  const fmtINR = (n) => '₹ ' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtDt  = (d) => { if (!d) return ''; const x = new Date(d); return isNaN(x) ? '' : x.toLocaleDateString('en-IN'); };
+  const today  = () => new Date().toISOString().slice(0, 10);
+  const daysAgo = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); };
+
+  // ---- shared shell wrapper (page title + actions row) ----
+  function _page(title, ...children) {
+    return h('div', { class: 'page' },
+      h('div', { class: 'page-head', style: { display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'1rem', flexWrap:'wrap', gap:'.6rem' } },
+        h('h2', { style: { margin: 0 } }, title)
+      ),
+      ...children
+    );
+  }
+
+  // ---- modal helpers ----
+  function _modal(title, body, opts) {
+    opts = opts || {};
+    const back = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target === back) close(); } });
+    const card = h('div', { class: 'modal', style: { maxWidth: opts.width || '720px', maxHeight: '92vh', overflow: 'auto' } });
+    const close = () => back.remove();
+    card.appendChild(h('div', { class: 'modal-head', style: { display:'flex', alignItems:'center', justifyContent:'space-between' } },
+      h('h3', { style: { margin: 0 } }, title),
+      h('button', { class: 'btn icon', onclick: close }, '✕')
+    ));
+    const bodyWrap = h('div', { class: 'modal-body', style: { padding: '1rem' } });
+    if (typeof body === 'function') body(bodyWrap, close);
+    else if (body instanceof Node) bodyWrap.appendChild(body);
+    card.appendChild(bodyWrap);
+    back.appendChild(card);
+    document.body.appendChild(back);
+    return { close, card, body: bodyWrap };
+  }
+
+  // ---- field helpers ----
+  function _field(label, input, hint) {
+    return h('label', { class: 'inv-field', style: { display:'block', marginBottom:'.7rem' } },
+      h('div', { style: { fontSize:'.78rem', fontWeight:600, color:'#475569', marginBottom:'.2rem' } }, label),
+      input,
+      hint ? h('div', { style: { fontSize:'.72rem', color:'#94a3b8', marginTop:'.15rem' } }, hint) : null
+    );
+  }
+  function _txt(name, value, opts) {
+    opts = opts || {};
+    const i = h('input', Object.assign({ name, value: value == null ? '' : value, class: 'inv-inp', style: { width:'100%', padding:'.45rem .55rem', border:'1px solid #cbd5e1', borderRadius:'6px', font:'inherit' } }, opts));
+    return i;
+  }
+  function _sel(name, options, value) {
+    const s = h('select', { name, class:'inv-sel', style: { width:'100%', padding:'.45rem .55rem', border:'1px solid #cbd5e1', borderRadius:'6px', font:'inherit', background:'#fff' } });
+    options.forEach(o => {
+      const op = h('option', { value: o.value }, o.label);
+      if (String(o.value) === String(value)) op.setAttribute('selected', '');
+      s.appendChild(op);
+    });
+    return s;
+  }
+  function _ta(name, value, rows) {
+    return h('textarea', { name, rows: rows || 3, style: { width:'100%', padding:'.45rem .55rem', border:'1px solid #cbd5e1', borderRadius:'6px', font:'inherit', resize:'vertical' } }, value || '');
+  }
+  function _btn(label, opts) {
+    opts = opts || {};
+    return h('button', Object.assign({ class: 'btn ' + (opts.kind || 'primary'), type: opts.type || 'button' },
+      opts.onclick ? { onclick: opts.onclick } : {},
+      opts.style   ? { style: opts.style } : {}
+    ), label);
+  }
+
+  // ---- module-disabled friendly error ----
+  async function _safe(view, fn) {
+    try { await fn(); }
+    catch (e) {
+      view.innerHTML = '';
+      view.appendChild(h('div', { class: 'error-box', style: { padding:'1.2rem', background:'#fef2f2', border:'1px solid #fecaca', borderRadius:'8px', color:'#991b1b' } },
+        h('div', { style: { fontWeight:700, marginBottom:'.4rem' } }, '⚠️ Invoicing unavailable'),
+        h('div', {}, String(e.message || e)),
+        /not enabled/i.test(String(e.message || '')) ? h('div', { style: { marginTop:'.7rem', fontSize:'.85rem', color:'#7f1d1d' } }, 'Ask your super-admin to enable the Invoicing module from /admin → Tenants → Modules.') : null
+      ));
+    }
+  }
+
+  // ==================== DASHBOARD ====================
+  VIEWS.invDashboard = async (view) => _safe(view, async () => {
+    view.innerHTML = '';
+    const d = await api('api_invoicing_dashboard');
+    const pg = _page('🧾 Invoicing Dashboard');
+
+    const kpiRow = h('div', { style: { display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(190px,1fr))', gap:'1rem', marginBottom:'1.4rem' } },
+      _kpi('Total Invoices',   d.invoice_count, '#3b82f6'),
+      _kpi('Total Sales',      fmtINR(d.total_sales), '#10b981'),
+      _kpi('GST Collected',    fmtINR(d.gst_collected), '#8b5cf6'),
+      _kpi('Received',         fmtINR(d.received), '#06b6d4'),
+      _kpi('Pending',          fmtINR(d.pending), d.pending > 0 ? '#ef4444' : '#94a3b8')
+    );
+    pg.appendChild(kpiRow);
+
+    pg.appendChild(h('h3', { style: { margin:'1.4rem 0 .6rem' } }, 'Recent Invoices'));
+    const tbl = h('table', { class: 'data', style: { width:'100%', borderCollapse:'collapse', background:'#fff', borderRadius:'8px', overflow:'hidden', boxShadow:'0 1px 3px rgba(0,0,0,.06)' } });
+    tbl.innerHTML = `<thead><tr style="background:#f8fafc;text-align:left">
+      <th style="padding:.55rem .7rem">#</th><th style="padding:.55rem .7rem">Date</th>
+      <th style="padding:.55rem .7rem">Customer</th><th style="padding:.55rem .7rem;text-align:right">Total</th>
+      <th style="padding:.55rem .7rem">Status</th></tr></thead>`;
+    const tb = h('tbody');
+    if (!d.recent.length) tb.appendChild(h('tr', {}, h('td', { colspan:5, style: { padding:'1rem', textAlign:'center', color:'#94a3b8' } }, 'No invoices yet — create your first one from the Invoices tab.')));
+    d.recent.forEach(r => {
+      const tr = h('tr', { style: { borderTop:'1px solid #f1f5f9', cursor:'pointer' }, onclick: () => openInvoiceModal(r.id) });
+      tr.appendChild(h('td', { style:{padding:'.5rem .7rem',fontWeight:600} }, r.invoice_no));
+      tr.appendChild(h('td', { style:{padding:'.5rem .7rem'} }, fmtDt(r.invoice_date)));
+      tr.appendChild(h('td', { style:{padding:'.5rem .7rem'} }, r.customer_name));
+      tr.appendChild(h('td', { style:{padding:'.5rem .7rem',textAlign:'right'} }, fmtINR(r.total)));
+      tr.appendChild(h('td', { style:{padding:'.5rem .7rem'} }, _statusChip(r.paid_status)));
+      tb.appendChild(tr);
+    });
+    tbl.appendChild(tb);
+    pg.appendChild(tbl);
+    view.appendChild(pg);
+  });
+
+  function _kpi(label, value, color) {
+    return h('div', { style: { background:'#fff', borderRadius:'10px', padding:'1rem', boxShadow:'0 1px 3px rgba(0,0,0,.06)', borderLeft:'4px solid '+color } },
+      h('div', { style: { fontSize:'.74rem', color:'#64748b', textTransform:'uppercase', letterSpacing:'.5px', marginBottom:'.4rem' } }, label),
+      h('div', { style: { fontSize:'1.4rem', fontWeight:700, color:'#0f172a' } }, value)
+    );
+  }
+  function _statusChip(s) {
+    const palette = { paid:['#dcfce7','#166534'], partial:['#fef3c7','#92400e'], unpaid:['#fee2e2','#991b1b'], cancelled:['#e5e7eb','#374151'], draft:['#dbeafe','#1e40af'], finalized:['#dcfce7','#166534'] };
+    const [bg,fg] = palette[s] || ['#e5e7eb','#374151'];
+    return h('span', { style: { background:bg, color:fg, padding:'.15rem .55rem', borderRadius:'10px', fontSize:'.72rem', fontWeight:600, textTransform:'uppercase' } }, s || '—');
+  }
+
+  // ==================== INVOICES LIST ====================
+  VIEWS.invList = async (view) => _safe(view, async () => {
+    view.innerHTML = '';
+    const pg = _page('🧾 Invoices');
+    pg.querySelector('.page-head').appendChild(_btn('+ New Invoice', { onclick: () => openInvoiceModal(0) }));
+
+    const filters = h('div', { style: { display:'flex', gap:'.6rem', flexWrap:'wrap', marginBottom:'1rem' } });
+    const qIn = _txt('q', '', { placeholder:'Search invoice # or customer…' });
+    qIn.style.maxWidth = '260px';
+    const statusSel = _sel('status', [
+      { value:'', label:'All statuses' },
+      { value:'finalized', label:'Finalized' },
+      { value:'draft', label:'Draft' },
+      { value:'cancelled', label:'Cancelled' }
+    ], '');
+    statusSel.style.maxWidth = '180px';
+    filters.appendChild(qIn);
+    filters.appendChild(statusSel);
+    filters.appendChild(_btn('Apply', { kind:'ghost', onclick: () => load() }));
+    pg.appendChild(filters);
+
+    const tbl = h('div'); pg.appendChild(tbl);
+    view.appendChild(pg);
+
+    async function load() {
+      const rows = await api('api_invoicing_invoices_list', { q: qIn.value || undefined, status: statusSel.value || undefined });
+      tbl.innerHTML = '';
+      const t = h('table', { class:'data', style: { width:'100%', borderCollapse:'collapse', background:'#fff', borderRadius:'8px', overflow:'hidden', boxShadow:'0 1px 3px rgba(0,0,0,.06)' } });
+      t.innerHTML = `<thead><tr style="background:#f8fafc;text-align:left">
+        <th style="padding:.55rem .7rem">Invoice #</th><th style="padding:.55rem .7rem">Date</th>
+        <th style="padding:.55rem .7rem">Customer</th><th style="padding:.55rem .7rem;text-align:right">Total</th>
+        <th style="padding:.55rem .7rem;text-align:right">Paid</th>
+        <th style="padding:.55rem .7rem">Status</th><th style="padding:.55rem .7rem;text-align:right">Actions</th></tr></thead>`;
+      const tb = h('tbody');
+      if (!rows.length) tb.appendChild(h('tr', {}, h('td', { colspan:7, style:{padding:'1rem',textAlign:'center',color:'#94a3b8'} }, 'No invoices match the filters.')));
+      rows.forEach(r => {
+        const tr = h('tr', { style: { borderTop:'1px solid #f1f5f9' } });
+        tr.appendChild(h('td', { style:{padding:'.5rem .7rem',fontWeight:600,cursor:'pointer'}, onclick:() => openInvoiceModal(r.id) }, r.invoice_no));
+        tr.appendChild(h('td', { style:{padding:'.5rem .7rem'} }, fmtDt(r.invoice_date)));
+        tr.appendChild(h('td', { style:{padding:'.5rem .7rem'} }, r.customer_name));
+        tr.appendChild(h('td', { style:{padding:'.5rem .7rem',textAlign:'right'} }, fmtINR(r.total)));
+        tr.appendChild(h('td', { style:{padding:'.5rem .7rem',textAlign:'right'} }, fmtINR(r.amount_paid)));
+        tr.appendChild(h('td', { style:{padding:'.5rem .7rem'} }, _statusChip(r.status === 'cancelled' ? 'cancelled' : r.paid_status)));
+        const act = h('td', { style:{padding:'.5rem .7rem',textAlign:'right',whiteSpace:'nowrap'} });
+        act.appendChild(_btn('PDF',     { kind:'ghost', onclick: () => openInvoicePdf(r.id), style:{marginRight:'.3rem'} }));
+        act.appendChild(_btn('Pay',     { kind:'ghost', onclick: () => openPaymentModal(r.id, () => load()), style:{marginRight:'.3rem'} }));
+        act.appendChild(_btn('Open',    { kind:'ghost', onclick: () => openInvoiceModal(r.id) }));
+        tr.appendChild(act);
+        tb.appendChild(tr);
+      });
+      t.appendChild(tb);
+      tbl.appendChild(t);
+    }
+    load();
+  });
+
+  // ---- invoice editor modal (new + edit) ----
+  async function openInvoiceModal(id) {
+    const [companies, customers, items, settings] = await Promise.all([
+      api('api_invoicing_companies_list'),
+      api('api_invoicing_customers_list'),
+      api('api_invoicing_items_list'),
+      api('api_invoicing_settings_get')
+    ]);
+    if (!companies.length) { toast('Add at least one Company (seller) first.', 'warn'); return navigateTo('invCompanies'); }
+    let invoice = null;
+    if (id) invoice = await api('api_invoicing_invoices_get', id);
+    const lines = (invoice && invoice.lines && invoice.lines.length) ? invoice.lines.slice() : [{ description:'', qty:1, rate:0, discount_pct:0, gst_pct: Number(settings.default_gst_pct||18) }];
+
+    const m = _modal(invoice ? `Edit ${invoice.invoice_no}` : 'New Invoice', (body, close) => {
+      const top = h('div', { style: { display:'grid', gridTemplateColumns:'1fr 1fr', gap:'.8rem' } });
+      const compSel = _sel('company_id', companies.map(c => ({ value:c.id, label:c.name + (c.gstin ? ' • ' + c.gstin : '') })), invoice ? invoice.company_id : (companies.find(c => c.is_default) || companies[0]).id);
+      const custSel = _sel('customer_id', [{ value:'', label:'— pick / type a name below —' }].concat(customers.map(c => ({ value:c.id, label:c.name + (c.gstin ? ' • ' + c.gstin : '') }))), invoice ? invoice.customer_id : '');
+      const custName  = _txt('customer_name',  invoice ? invoice.customer_name : '');
+      const custGstin = _txt('customer_gstin', invoice ? invoice.customer_gstin : '');
+      const custState = _txt('customer_state', invoice ? invoice.customer_state : '');
+      const billTo    = _ta('bill_to_address', invoice ? invoice.bill_to_address : '', 2);
+      const invDate   = _txt('invoice_date',   invoice ? String(invoice.invoice_date).slice(0,10) : today(), { type:'date' });
+      const dueDate   = _txt('due_date',       invoice && invoice.due_date ? String(invoice.due_date).slice(0,10) : '', { type:'date' });
+      const notes     = _ta('notes',           invoice ? invoice.notes : '', 2);
+      const terms     = _ta('terms',           invoice ? invoice.terms : '', 2);
+      const discount  = _txt('discount',       invoice ? invoice.discount : 0, { type:'number', step:'0.01', min:'0' });
+
+      // Auto-fill customer details when picking from master
+      custSel.addEventListener('change', () => {
+        const c = customers.find(x => String(x.id) === String(custSel.value));
+        if (!c) return;
+        custName.value  = c.name || '';
+        custGstin.value = c.gstin || '';
+        custState.value = c.state || '';
+        billTo.value    = c.billing_address || '';
+      });
+
+      top.appendChild(_field('Seller (Your Company)', compSel));
+      top.appendChild(_field('Customer (existing)', custSel));
+      top.appendChild(_field('Bill-To Name *', custName));
+      top.appendChild(_field('Customer GSTIN', custGstin, 'Leave blank for B2C'));
+      top.appendChild(_field('Customer State', custState, 'Drives CGST+SGST vs IGST'));
+      top.appendChild(_field('Place of Supply', _txt('place_of_supply', invoice ? invoice.place_of_supply : '')));
+      top.appendChild(_field('Bill-To Address', billTo));
+      top.appendChild(_field('Ship-To Address', _ta('ship_to_address', invoice ? invoice.ship_to_address : '', 2)));
+      top.appendChild(_field('Invoice Date', invDate));
+      top.appendChild(_field('Due Date', dueDate));
+      body.appendChild(top);
+
+      // Line items
+      body.appendChild(h('h4', { style: { margin:'1.2rem 0 .4rem' } }, 'Line Items'));
+      const linesWrap = h('div');
+      const totalsBox = h('div', { style: { marginTop:'.8rem', padding:'.8rem', background:'#f8fafc', borderRadius:'8px' } });
+
+      function recompute() {
+        const sellerState = (companies.find(c => String(c.id) === String(compSel.value)) || {}).state || '';
+        const custStateVal = custState.value || '';
+        const same = sellerState && custStateVal && sellerState.trim().toLowerCase() === custStateVal.trim().toLowerCase();
+        let sub=0, cgst=0, sgst=0, igst=0;
+        lines.forEach((ln, idx) => {
+          const qty  = Number(ln.qty)||0, rate = Number(ln.rate)||0, dp = Number(ln.discount_pct)||0, gp = Number(ln.gst_pct)||0;
+          const gross = qty*rate; const tax = gross - gross*dp/100;
+          ln.taxable_value = Math.round(tax*100)/100;
+          if (same) { ln.cgst = Math.round(tax*gp/2)/100; ln.sgst = ln.cgst; ln.igst = 0; }
+          else      { ln.igst = Math.round(tax*gp)/100; ln.cgst = 0; ln.sgst = 0; }
+          ln.line_total = Math.round((ln.taxable_value + ln.cgst + ln.sgst + ln.igst)*100)/100;
+          sub  += ln.taxable_value;
+          cgst += ln.cgst; sgst += ln.sgst; igst += ln.igst;
+        });
+        const disc = Number(discount.value)||0;
+        const gross = sub + cgst + sgst + igst - disc;
+        const rounded = Math.round(gross);
+        const roundOff = Math.round((rounded-gross)*100)/100;
+        totalsBox.innerHTML = '';
+        totalsBox.appendChild(h('div', { style:{display:'flex',justifyContent:'space-between'} }, h('span',{},'Subtotal'), h('span',{}, fmtINR(sub))));
+        if (same) {
+          totalsBox.appendChild(h('div', { style:{display:'flex',justifyContent:'space-between'} }, h('span',{},'CGST'), h('span',{}, fmtINR(cgst))));
+          totalsBox.appendChild(h('div', { style:{display:'flex',justifyContent:'space-between'} }, h('span',{},'SGST'), h('span',{}, fmtINR(sgst))));
+        } else {
+          totalsBox.appendChild(h('div', { style:{display:'flex',justifyContent:'space-between'} }, h('span',{},'IGST'), h('span',{}, fmtINR(igst))));
+        }
+        if (disc) totalsBox.appendChild(h('div', { style:{display:'flex',justifyContent:'space-between'} }, h('span',{},'Discount'), h('span',{}, '- ' + fmtINR(disc))));
+        if (roundOff) totalsBox.appendChild(h('div', { style:{display:'flex',justifyContent:'space-between'} }, h('span',{},'Round Off'), h('span',{}, fmtINR(roundOff))));
+        totalsBox.appendChild(h('div', { style:{display:'flex',justifyContent:'space-between',borderTop:'2px solid #0f172a',marginTop:'.4rem',paddingTop:'.4rem',fontWeight:700,fontSize:'1.05rem'} }, h('span',{},'Total'), h('span',{}, fmtINR(rounded))));
+      }
+      compSel.addEventListener('change', recompute);
+      custState.addEventListener('input', recompute);
+      discount.addEventListener('input', recompute);
+
+      function renderLines() {
+        linesWrap.innerHTML = '';
+        const tbl = h('table', { style: { width:'100%', borderCollapse:'collapse', fontSize:'.85rem' } });
+        tbl.innerHTML = `<thead><tr style="background:#f1f5f9">
+          <th style="padding:.3rem;text-align:left">Item / Description</th>
+          <th style="padding:.3rem;width:80px">HSN/SAC</th>
+          <th style="padding:.3rem;width:60px">Qty</th>
+          <th style="padding:.3rem;width:90px">Rate</th>
+          <th style="padding:.3rem;width:60px">GST%</th>
+          <th style="padding:.3rem;width:100px;text-align:right">Amount</th>
+          <th style="padding:.3rem;width:40px"></th></tr></thead>`;
+        const tb = h('tbody');
+        lines.forEach((ln, idx) => {
+          const tr = h('tr', { style: { borderBottom:'1px solid #f1f5f9' } });
+
+          const itemSel = _sel('item', [{ value:'', label:'— pick item —' }].concat(items.map(it => ({ value: it.id, label: it.name }))), ln.item_id || '');
+          itemSel.style.fontSize = '.78rem';
+          itemSel.addEventListener('change', () => {
+            const it = items.find(x => String(x.id) === String(itemSel.value));
+            if (!it) return;
+            ln.item_id = it.id;
+            ln.description = it.name + (it.description ? ' — ' + it.description : '');
+            ln.hsn_sac = it.hsn_sac || '';
+            ln.unit = it.unit || 'PCS';
+            ln.rate = Number(it.rate)||0;
+            ln.gst_pct = Number(it.gst_pct)||0;
+            renderLines(); recompute();
+          });
+          const descIn = _txt('description', ln.description, { placeholder:'Description' });
+          descIn.style.fontSize = '.85rem';
+          descIn.addEventListener('input', () => { ln.description = descIn.value; });
+          const descCell = h('td', { style:{padding:'.25rem'} });
+          descCell.appendChild(itemSel); descCell.appendChild(h('div',{style:{height:'.25rem'}})); descCell.appendChild(descIn);
+          tr.appendChild(descCell);
+
+          tr.appendChild(_tdInp(ln, 'hsn_sac', { width:'100%' }, recompute));
+          tr.appendChild(_tdInp(ln, 'qty',     { type:'number', step:'0.01', min:'0' }, recompute));
+          tr.appendChild(_tdInp(ln, 'rate',    { type:'number', step:'0.01', min:'0' }, recompute));
+          tr.appendChild(_tdInp(ln, 'gst_pct', { type:'number', step:'0.01', min:'0' }, recompute));
+          tr.appendChild(h('td', { style:{padding:'.25rem',textAlign:'right'} }, h('span', { 'data-tot':idx }, fmtINR(ln.line_total||0))));
+          tr.appendChild(h('td', { style:{padding:'.25rem',textAlign:'center'} },
+            h('button', { class:'btn icon', type:'button', onclick: () => { lines.splice(idx,1); if (!lines.length) lines.push({ description:'', qty:1, rate:0, discount_pct:0, gst_pct:Number(settings.default_gst_pct||18) }); renderLines(); recompute(); } }, '✕')
+          ));
+          tb.appendChild(tr);
+        });
+        tbl.appendChild(tb);
+        linesWrap.appendChild(tbl);
+        const addBtn = _btn('+ Add line', { kind:'ghost', onclick: () => { lines.push({ description:'', qty:1, rate:0, discount_pct:0, gst_pct: Number(settings.default_gst_pct||18) }); renderLines(); recompute(); }, style:{ marginTop:'.5rem' } });
+        linesWrap.appendChild(addBtn);
+      }
+      function _tdInp(ln, key, opts, after) {
+        const cell = h('td', { style:{padding:'.25rem'} });
+        const inp  = _txt(key, ln[key] == null ? '' : ln[key], opts);
+        inp.addEventListener('input', () => { ln[key] = (opts && opts.type === 'number') ? Number(inp.value) : inp.value; if (after) after(); });
+        cell.appendChild(inp);
+        return cell;
+      }
+      renderLines();
+      body.appendChild(linesWrap);
+
+      body.appendChild(h('div', { style: { display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'.8rem', marginTop:'1rem' } },
+        _field('Notes', notes),
+        _field('Terms', terms),
+        _field('Header Discount (₹)', discount)
+      ));
+      body.appendChild(totalsBox);
+      recompute();
+
+      const actions = h('div', { style: { display:'flex', justifyContent:'flex-end', gap:'.5rem', marginTop:'1rem' } });
+      if (invoice && invoice.status !== 'cancelled') {
+        actions.appendChild(_btn('Cancel Invoice', { kind:'ghost', onclick: async () => {
+          if (!confirm('Cancel invoice ' + invoice.invoice_no + '? It will be excluded from totals.')) return;
+          await api('api_invoicing_invoices_cancel', invoice.id);
+          toast('Invoice cancelled', 'ok');
+          close();
+          if (VIEWS[parseHashView()]) navigateTo(parseHashView());
+        }}));
+      }
+      actions.appendChild(_btn('Close', { kind:'ghost', onclick: close }));
+      actions.appendChild(_btn(invoice ? 'Save Changes' : 'Create Invoice', { onclick: async () => {
+        try {
+          const payload = {
+            id: invoice ? invoice.id : 0,
+            company_id: Number(compSel.value),
+            customer_id: custSel.value ? Number(custSel.value) : null,
+            customer_name: custName.value.trim(),
+            customer_gstin: custGstin.value.trim(),
+            customer_state: custState.value.trim(),
+            place_of_supply: (body.querySelector('input[name="place_of_supply"]') || {}).value || '',
+            bill_to_address: billTo.value,
+            ship_to_address: (body.querySelector('textarea[name="ship_to_address"]') || {}).value || '',
+            invoice_date: invDate.value, due_date: dueDate.value || null,
+            discount: Number(discount.value)||0,
+            notes: notes.value, terms: terms.value,
+            lines: lines.map(l => ({
+              item_id: l.item_id || null,
+              description: l.description, hsn_sac: l.hsn_sac, unit: l.unit || 'PCS',
+              qty: Number(l.qty)||0, rate: Number(l.rate)||0, gst_pct: Number(l.gst_pct)||0, discount_pct: Number(l.discount_pct)||0
+            }))
+          };
+          const r = await api('api_invoicing_invoices_save', payload);
+          toast('Saved ' + r.invoice_no, 'ok');
+          close();
+          if (VIEWS[parseHashView()]) navigateTo(parseHashView());
+        } catch (e) { toast(e.message, 'err'); }
+      }}));
+      body.appendChild(actions);
+    });
+  }
+
+  async function openInvoicePdf(id) {
+    try {
+      const r = await api('api_invoicing_invoices_pdf_html', id);
+      const w = window.open('', '_blank');
+      if (!w) return toast('Pop-ups are blocked', 'err');
+      w.document.write(r.html);
+      w.document.close();
+      setTimeout(() => { try { w.focus(); w.print(); } catch (_) {} }, 600);
+    } catch (e) { toast(e.message, 'err'); }
+  }
+
+  async function openPaymentModal(invoiceId, after) {
+    const inv = await api('api_invoicing_invoices_get', invoiceId);
+    _modal('Record payment for ' + inv.invoice_no, (body, close) => {
+      const dueAmt = Math.max(0, Number(inv.total) - Number(inv.amount_paid));
+      body.appendChild(h('div', { style:{marginBottom:'.8rem',padding:'.6rem',background:'#f1f5f9',borderRadius:'6px'} },
+        h('div', {}, 'Total: ' + fmtINR(inv.total) + ' • Paid: ' + fmtINR(inv.amount_paid) + ' • Due: ' + fmtINR(dueAmt))
+      ));
+      const amt  = _txt('amount', dueAmt, { type:'number', step:'0.01', min:'0' });
+      const date = _txt('pay_date', today(), { type:'date' });
+      const mode = _sel('mode', ['UPI','Bank','Cash','Cheque','Other'].map(x => ({ value:x, label:x })), 'UPI');
+      const ref  = _txt('reference', '', { placeholder:'UPI ref / cheque # / UTR' });
+      const notes= _ta('notes', '', 2);
+      body.appendChild(_field('Amount', amt));
+      body.appendChild(_field('Date', date));
+      body.appendChild(_field('Mode', mode));
+      body.appendChild(_field('Reference', ref));
+      body.appendChild(_field('Notes', notes));
+
+      // existing payments
+      if (inv.payments && inv.payments.length) {
+        body.appendChild(h('h4', { style:{margin:'1rem 0 .4rem'} }, 'Earlier payments'));
+        inv.payments.forEach(p => {
+          body.appendChild(h('div', { style:{display:'flex',justifyContent:'space-between',padding:'.3rem 0',borderBottom:'1px solid #f1f5f9',fontSize:'.85rem'} },
+            h('span', {}, fmtDt(p.pay_date) + ' • ' + p.mode + (p.reference ? ' (' + p.reference + ')' : '')),
+            h('span', {}, fmtINR(p.amount) + ' ',
+              h('button', { class:'btn ghost icon', onclick: async () => {
+                if (!confirm('Delete this payment?')) return;
+                await api('api_invoicing_payments_delete', p.id); toast('Removed','ok'); close(); openPaymentModal(invoiceId, after);
+              } }, '✕')
+            )
+          ));
+        });
+      }
+
+      body.appendChild(h('div', { style: { display:'flex', justifyContent:'flex-end', gap:'.5rem', marginTop:'1rem' } },
+        _btn('Close', { kind:'ghost', onclick: close }),
+        _btn('Record Payment', { onclick: async () => {
+          try {
+            await api('api_invoicing_payments_add', invoiceId, {
+              amount: Number(amt.value), pay_date: date.value, mode: mode.value, reference: ref.value, notes: notes.value
+            });
+            toast('Payment recorded', 'ok'); close(); if (after) after();
+          } catch (e) { toast(e.message, 'err'); }
+        }})
+      ));
+    });
+  }
+
+  // ==================== COMPANIES (sellers) ====================
+  VIEWS.invCompanies = async (view) => _safe(view, async () => {
+    view.innerHTML = '';
+    const pg = _page('🏢 My Companies (Sellers)');
+    pg.querySelector('.page-head').appendChild(_btn('+ Add Company', { onclick: () => openCompany(0, load) }));
+    const wrap = h('div'); pg.appendChild(wrap); view.appendChild(pg);
+    async function load() {
+      const rows = await api('api_invoicing_companies_list');
+      wrap.innerHTML = '';
+      if (!rows.length) {
+        wrap.appendChild(h('div', { style:{padding:'2rem',textAlign:'center',background:'#fff',borderRadius:'10px'} },
+          h('div', { style: { fontSize:'2rem', marginBottom:'.5rem' } }, '🏢'),
+          h('div', {}, 'No seller companies yet. Add at least one before creating invoices.')
+        ));
+        return;
+      }
+      const tbl = h('table', { style: { width:'100%', borderCollapse:'collapse', background:'#fff', borderRadius:'8px', overflow:'hidden' } });
+      tbl.innerHTML = `<thead><tr style="background:#f8fafc;text-align:left">
+        <th style="padding:.55rem .7rem">Name</th><th style="padding:.55rem .7rem">GSTIN</th>
+        <th style="padding:.55rem .7rem">State</th><th style="padding:.55rem .7rem">Prefix</th>
+        <th style="padding:.55rem .7rem">Next #</th><th style="padding:.55rem .7rem">UPI</th>
+        <th style="padding:.55rem .7rem"></th></tr></thead>`;
+      const tb = h('tbody');
+      rows.forEach(r => {
+        const tr = h('tr', { style: { borderTop:'1px solid #f1f5f9', cursor:'pointer' }, onclick: () => openCompany(r.id, load) });
+        tr.appendChild(h('td', { style:{padding:'.5rem .7rem',fontWeight:600} }, (r.is_default ? '⭐ ' : '') + r.name));
+        tr.appendChild(h('td', { style:{padding:'.5rem .7rem'} }, r.gstin || '—'));
+        tr.appendChild(h('td', { style:{padding:'.5rem .7rem'} }, r.state || '—'));
+        tr.appendChild(h('td', { style:{padding:'.5rem .7rem'} }, r.prefix));
+        tr.appendChild(h('td', { style:{padding:'.5rem .7rem'} }, r.next_no));
+        tr.appendChild(h('td', { style:{padding:'.5rem .7rem'} }, r.upi_id || '—'));
+        tr.appendChild(h('td', { style:{padding:'.5rem .7rem'} }, _btn('Edit', { kind:'ghost' })));
+        tb.appendChild(tr);
+      });
+      tbl.appendChild(tb); wrap.appendChild(tbl);
+    }
+    load();
+  });
+
+  async function openCompany(id, after) {
+    const row = id ? await api('api_invoicing_companies_get', id) : { prefix:'INV', next_no:1, no_padding:6, is_active:1 };
+    _modal(id ? 'Edit Company' : 'New Company', (body, close) => {
+      const f = h('div', { style: { display:'grid', gridTemplateColumns:'1fr 1fr', gap:'.7rem' } });
+      const name = _txt('name', row.name);
+      const gst  = _txt('gstin', row.gstin, { placeholder:'07AAFCV3028D2ZL' });
+      const state= _txt('state', row.state, { placeholder:'Delhi' });
+      const addr = _ta('address', row.address, 2);
+      const phone= _txt('phone', row.phone);
+      const email= _txt('email', row.email, { type:'email' });
+      const prefix=_txt('prefix', row.prefix);
+      const nextN= _txt('next_no', row.next_no, { type:'number', min:'1' });
+      const upi  = _txt('upi_id', row.upi_id);
+      const bank = _txt('bank_account', row.bank_account);
+      const ifsc = _txt('bank_ifsc', row.bank_ifsc);
+      const bankN= _txt('bank_name', row.bank_name);
+      const dflt = _txt('is_default', row.is_default ? '1' : '0', { type:'checkbox' }); dflt.checked = !!row.is_default;
+      const terms= _ta('default_terms', row.default_terms, 3);
+      f.appendChild(_field('Legal Name *', name));
+      f.appendChild(_field('GSTIN', gst));
+      f.appendChild(_field('State', state));
+      f.appendChild(_field('Phone', phone));
+      f.appendChild(_field('Email', email));
+      f.appendChild(_field('Invoice Prefix', prefix));
+      f.appendChild(_field('Next Invoice #', nextN));
+      f.appendChild(_field('UPI ID', upi));
+      f.appendChild(_field('Bank Name', bankN));
+      f.appendChild(_field('Bank Account', bank));
+      f.appendChild(_field('IFSC', ifsc));
+      f.appendChild(_field('Default Seller', dflt, 'Pre-selected in new-invoice form'));
+      body.appendChild(f);
+      body.appendChild(_field('Registered Address', addr));
+      body.appendChild(_field('Default Terms & Conditions', terms));
+      body.appendChild(h('div', { style: { display:'flex', justifyContent:'flex-end', gap:'.5rem', marginTop:'1rem' } },
+        _btn('Cancel', { kind:'ghost', onclick: close }),
+        _btn('Save', { onclick: async () => {
+          try {
+            await api('api_invoicing_companies_save', {
+              id: id || undefined,
+              name: name.value.trim(), gstin: gst.value.trim(), state: state.value.trim(),
+              address: addr.value, phone: phone.value, email: email.value,
+              prefix: prefix.value.trim() || 'INV', next_no: Number(nextN.value) || 1,
+              upi_id: upi.value, bank_name: bankN.value, bank_account: bank.value, bank_ifsc: ifsc.value,
+              is_default: dflt.checked ? 1 : 0, default_terms: terms.value
+            });
+            toast('Saved', 'ok'); close(); if (after) after();
+          } catch (e) { toast(e.message, 'err'); }
+        }})
+      ));
+    });
+  }
+
+  // ==================== CUSTOMERS ====================
+  VIEWS.invCustomers = async (view) => _safe(view, async () => {
+    view.innerHTML = '';
+    const pg = _page('👤 Bill-To Customers');
+    pg.querySelector('.page-head').appendChild(_btn('+ Add Customer', { onclick: () => openCustomer(0, load) }));
+    const search = _txt('q', '', { placeholder:'Search…' }); search.style.maxWidth='240px'; search.style.marginBottom='.6rem';
+    search.addEventListener('input', () => { clearTimeout(search._t); search._t = setTimeout(load, 200); });
+    pg.appendChild(search);
+    const wrap = h('div'); pg.appendChild(wrap); view.appendChild(pg);
+    async function load() {
+      const rows = await api('api_invoicing_customers_list', search.value || undefined);
+      wrap.innerHTML = '';
+      const tbl = h('table', { style: { width:'100%', borderCollapse:'collapse', background:'#fff', borderRadius:'8px', overflow:'hidden' } });
+      tbl.innerHTML = `<thead><tr style="background:#f8fafc;text-align:left">
+        <th style="padding:.55rem .7rem">Name</th><th style="padding:.55rem .7rem">Type</th>
+        <th style="padding:.55rem .7rem">GSTIN</th><th style="padding:.55rem .7rem">State</th>
+        <th style="padding:.55rem .7rem">Phone</th><th style="padding:.55rem .7rem">Email</th></tr></thead>`;
+      const tb = h('tbody');
+      if (!rows.length) tb.appendChild(h('tr', {}, h('td', { colspan:6, style:{padding:'1rem',textAlign:'center',color:'#94a3b8'} }, 'No customers yet.')));
+      rows.forEach(r => {
+        const tr = h('tr', { style: { borderTop:'1px solid #f1f5f9', cursor:'pointer' }, onclick: () => openCustomer(r.id, load) });
+        tr.appendChild(h('td', { style:{padding:'.5rem .7rem',fontWeight:600} }, r.name));
+        tr.appendChild(h('td', { style:{padding:'.5rem .7rem'} }, r.customer_type || (r.gstin ? 'B2B':'B2C')));
+        tr.appendChild(h('td', { style:{padding:'.5rem .7rem'} }, r.gstin || '—'));
+        tr.appendChild(h('td', { style:{padding:'.5rem .7rem'} }, r.state || '—'));
+        tr.appendChild(h('td', { style:{padding:'.5rem .7rem'} }, r.phone || '—'));
+        tr.appendChild(h('td', { style:{padding:'.5rem .7rem'} }, r.email || '—'));
+        tb.appendChild(tr);
+      });
+      tbl.appendChild(tb); wrap.appendChild(tbl);
+    }
+    load();
+  });
+
+  async function openCustomer(id, after) {
+    const row = id ? await api('api_invoicing_customers_get', id) : { customer_type:'B2C', country:'India', is_active:1 };
+    _modal(id ? 'Edit Customer' : 'New Customer', (body, close) => {
+      const f = h('div', { style: { display:'grid', gridTemplateColumns:'1fr 1fr', gap:'.7rem' } });
+      const name = _txt('name', row.name);
+      const gst  = _txt('gstin', row.gstin);
+      const typ  = _sel('customer_type', ['B2B','B2C','EXPORT','SEZ'].map(x => ({ value:x, label:x })), row.customer_type);
+      const state= _txt('state', row.state);
+      const phone= _txt('phone', row.phone);
+      const email= _txt('email', row.email, { type:'email' });
+      const bill = _ta('billing_address', row.billing_address, 2);
+      const ship = _ta('shipping_address', row.shipping_address, 2);
+      f.appendChild(_field('Name *', name));
+      f.appendChild(_field('Type', typ));
+      f.appendChild(_field('GSTIN', gst, 'Blank = B2C'));
+      f.appendChild(_field('State', state));
+      f.appendChild(_field('Phone', phone));
+      f.appendChild(_field('Email', email));
+      body.appendChild(f);
+      body.appendChild(_field('Billing Address', bill));
+      body.appendChild(_field('Shipping Address', ship));
+      body.appendChild(h('div', { style: { display:'flex', justifyContent:'flex-end', gap:'.5rem', marginTop:'1rem' } },
+        _btn('Cancel', { kind:'ghost', onclick: close }),
+        _btn('Save', { onclick: async () => {
+          try {
+            await api('api_invoicing_customers_save', {
+              id: id || undefined,
+              name: name.value.trim(), gstin: gst.value.trim(), customer_type: typ.value,
+              state: state.value.trim(), phone: phone.value, email: email.value,
+              billing_address: bill.value, shipping_address: ship.value
+            });
+            toast('Saved', 'ok'); close(); if (after) after();
+          } catch (e) { toast(e.message, 'err'); }
+        }})
+      ));
+    });
+  }
+
+  // ==================== ITEMS ====================
+  VIEWS.invItems = async (view) => _safe(view, async () => {
+    view.innerHTML = '';
+    const pg = _page('📦 Items / Services');
+    pg.querySelector('.page-head').appendChild(_btn('+ Add Item', { onclick: () => openItem(0, load) }));
+    const wrap = h('div'); pg.appendChild(wrap); view.appendChild(pg);
+    async function load() {
+      const rows = await api('api_invoicing_items_list');
+      wrap.innerHTML = '';
+      const tbl = h('table', { style: { width:'100%', borderCollapse:'collapse', background:'#fff', borderRadius:'8px', overflow:'hidden' } });
+      tbl.innerHTML = `<thead><tr style="background:#f8fafc;text-align:left">
+        <th style="padding:.55rem .7rem">Name</th><th style="padding:.55rem .7rem">HSN/SAC</th>
+        <th style="padding:.55rem .7rem">Unit</th><th style="padding:.55rem .7rem;text-align:right">Rate</th>
+        <th style="padding:.55rem .7rem;text-align:right">GST%</th></tr></thead>`;
+      const tb = h('tbody');
+      if (!rows.length) tb.appendChild(h('tr', {}, h('td', { colspan:5, style:{padding:'1rem',textAlign:'center',color:'#94a3b8'} }, 'No items yet.')));
+      rows.forEach(r => {
+        const tr = h('tr', { style: { borderTop:'1px solid #f1f5f9', cursor:'pointer' }, onclick: () => openItem(r.id, load) });
+        tr.appendChild(h('td', { style:{padding:'.5rem .7rem',fontWeight:600} }, r.name));
+        tr.appendChild(h('td', { style:{padding:'.5rem .7rem'} }, r.hsn_sac || '—'));
+        tr.appendChild(h('td', { style:{padding:'.5rem .7rem'} }, r.unit));
+        tr.appendChild(h('td', { style:{padding:'.5rem .7rem',textAlign:'right'} }, fmtINR(r.rate)));
+        tr.appendChild(h('td', { style:{padding:'.5rem .7rem',textAlign:'right'} }, Number(r.gst_pct).toFixed(2) + '%'));
+        tb.appendChild(tr);
+      });
+      tbl.appendChild(tb); wrap.appendChild(tbl);
+    }
+    load();
+  });
+
+  async function openItem(id, after) {
+    const row = id ? await api('api_invoicing_items_get', id) : { unit:'PCS', gst_pct:18, rate:0, is_active:1 };
+    _modal(id ? 'Edit Item' : 'New Item', (body, close) => {
+      const f = h('div', { style: { display:'grid', gridTemplateColumns:'1fr 1fr', gap:'.7rem' } });
+      const name = _txt('name', row.name);
+      const hsn  = _txt('hsn_sac', row.hsn_sac);
+      const unit = _sel('unit', ['PCS','KG','HRS','NOS','LITRE','METER','BOX','SET','OTH'].map(x => ({ value:x, label:x })), row.unit);
+      const rate = _txt('rate', row.rate, { type:'number', step:'0.01', min:'0' });
+      const gst  = _txt('gst_pct', row.gst_pct, { type:'number', step:'0.01', min:'0' });
+      const desc = _ta('description', row.description, 2);
+      f.appendChild(_field('Name *', name));
+      f.appendChild(_field('HSN / SAC', hsn));
+      f.appendChild(_field('Unit', unit));
+      f.appendChild(_field('Default Rate (₹)', rate));
+      f.appendChild(_field('GST %', gst));
+      body.appendChild(f);
+      body.appendChild(_field('Description', desc));
+      body.appendChild(h('div', { style: { display:'flex', justifyContent:'flex-end', gap:'.5rem', marginTop:'1rem' } },
+        _btn('Cancel', { kind:'ghost', onclick: close }),
+        _btn('Save', { onclick: async () => {
+          try {
+            await api('api_invoicing_items_save', {
+              id: id || undefined, name: name.value.trim(), hsn_sac: hsn.value, unit: unit.value,
+              rate: Number(rate.value)||0, gst_pct: Number(gst.value)||0, description: desc.value
+            });
+            toast('Saved', 'ok'); close(); if (after) after();
+          } catch (e) { toast(e.message, 'err'); }
+        }})
+      ));
+    });
+  }
+
+  // ==================== GSTR-1 ====================
+  VIEWS.invGstr1 = async (view) => _safe(view, async () => {
+    view.innerHTML = '';
+    const pg = _page('📤 GSTR-1 Export');
+    const companies = await api('api_invoicing_companies_list');
+    if (!companies.length) {
+      pg.appendChild(h('div', { style:{padding:'1rem',background:'#fef3c7',borderRadius:'8px'} }, 'Add a seller company first.'));
+      view.appendChild(pg); return;
+    }
+    const compSel = _sel('company_id', companies.map(c => ({ value:c.id, label:c.name + (c.gstin ? ' • ' + c.gstin : '') })), (companies.find(c => c.is_default) || companies[0]).id);
+    const from = _txt('from', daysAgo(30), { type:'date' });
+    const to   = _txt('to',   today(),     { type:'date' });
+    const filters = h('div', { style: { display:'grid', gridTemplateColumns:'2fr 1fr 1fr auto', gap:'.7rem', alignItems:'end', marginBottom:'1rem' } },
+      _field('Seller Company', compSel),
+      _field('From', from),
+      _field('To', to),
+      _btn('Preview', { onclick: runPreview })
+    );
+    pg.appendChild(filters);
+    const out = h('div'); pg.appendChild(out);
+    view.appendChild(pg);
+
+    async function runPreview() {
+      out.innerHTML = '';
+      try {
+        const r = await api('api_invoicing_gstr1_preview', { company_id: Number(compSel.value), from: from.value, to: to.value });
+        const grid = h('div', { style: { display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))', gap:'.8rem', marginBottom:'1rem' } },
+          _kpi('B2B rows',  r.b2b_count,  '#3b82f6'),
+          _kpi('B2CL rows', r.b2cl_count, '#8b5cf6'),
+          _kpi('B2CS rows', r.b2cs_count, '#06b6d4'),
+          _kpi('CDNR rows', r.cdnr_count, '#f59e0b'),
+          _kpi('HSN rows',  r.hsn_count,  '#10b981'),
+          _kpi('Docs net',  r.docs.net,   '#0ea5e9')
+        );
+        out.appendChild(grid);
+        out.appendChild(h('div', { style:{padding:'.7rem .9rem',background:'#f8fafc',borderRadius:'8px',marginBottom:'1rem'} },
+          'Issued: ' + r.docs.issued + ' • Cancelled: ' + r.docs.cancelled + ' • Net: ' + r.docs.net
+        ));
+        out.appendChild(_btn('Download GSTR-1 (CSV bundle)', { onclick: downloadCsv }));
+      } catch (e) { toast(e.message, 'err'); }
+    }
+    async function downloadCsv() {
+      try {
+        const r = await api('api_invoicing_gstr1_csv', { company_id: Number(compSel.value), from: from.value, to: to.value });
+        Object.entries(r.sheets).forEach(([name, csv]) => {
+          const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url; a.download = `gstr1_${name}_${from.value}_to_${to.value}.csv`;
+          document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 4000);
+        });
+        toast('CSV sheets downloaded', 'ok');
+      } catch (e) { toast(e.message, 'err'); }
+    }
+  });
+
+  // Expose for debugging only
+  window.INV = INV;
+})();
