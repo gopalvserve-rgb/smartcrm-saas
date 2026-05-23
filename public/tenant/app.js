@@ -2073,17 +2073,25 @@ VIEWS.leads = async (view) => {
     h('button', { class: 'btn primary', onclick: () => openLeadModal() }, '+ New Lead')
   );
 
-  // LEADS_FILTER_COLLAPSE_v1 — on mobile the filter toolbar fills the
+  // LEADS_FILTER_COLLAPSE_v2 — on mobile the filter toolbar fills the
   // entire viewport before any leads are visible. Wrap it in a one-line
   // toggle so the list shows immediately and filters are an explicit
-  // tap away. Default: collapsed on mobile (< 768px), expanded on
+  // tap away. Default: collapsed on mobile (< 900px), expanded on
   // desktop. User's choice is remembered in localStorage.
+  //
+  // v2 fixes a render race: apply display:none INLINE on the toolbar
+  // before appending (so it never gets a chance to paint expanded),
+  // and use a wider mobile threshold (<900) since Capacitor WebView on
+  // some Samsung devices reports innerWidth in the 720-820 range.
   toolbar.id = 'leads-toolbar';
-  const _filterIsMobile = (typeof window !== 'undefined') && window.innerWidth < 768;
+  const _filterIsMobile = (typeof window !== 'undefined') && window.innerWidth < 900;
   const _filterPrefRaw = (() => { try { return localStorage.getItem('crm_leads_filter_open'); } catch (_) { return null; } })();
   let _filterOpen = (_filterPrefRaw === '1' || _filterPrefRaw === '0')
     ? (_filterPrefRaw === '1')
     : !_filterIsMobile;
+  // Apply the initial visibility IMMEDIATELY on the toolbar element
+  // BEFORE it's appended to the DOM. No setTimeout = no timing race.
+  if (!_filterOpen) toolbar.style.display = 'none';
   function _countActiveFilters() {
     const f = CRM.prefs.filters || {};
     let n = 0;
@@ -2200,11 +2208,10 @@ VIEWS.leads = async (view) => {
     } }, '🧩 Custom field filter' + (_cfHasSaved ? ' \u2022' : ''));
   if (_cfHasSaved) cfBtn.classList.add('active');
   toolbar.appendChild(cfBtn);
+  // Apply initial cfRow visibility too — keep it hidden when the
+  // parent filter panel is collapsed.
+  if (!_filterOpen) cfRow.style.display = 'none';
   view.appendChild(cfRow);
-
-  // Apply initial filter-panel visibility now that both toolbar and
-  // cfRow are in the DOM. Defer to next tick so element IDs resolve.
-  setTimeout(() => _applyFilterPanelVisible(_filterOpen), 0);
 
   view.appendChild(h('div', { class: 'bulk-bar', id: 'bulk-bar', hidden: true },
     h('span', { id: 'bulk-count', class: 'bulk-count' }, '0 selected'),
