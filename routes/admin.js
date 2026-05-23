@@ -254,8 +254,33 @@ async function api_layout_get(_token) {
 }
 
 // Preferred name used by the frontend
-async function api_admin_getConfig(token) {
+async function api_admin_getConfig(token, maybeKey) {
   const me = await authUser(token);
+  // QUOTE_DEFAULTS_PUBLIC_READ_v1 — when a single non-sensitive key is
+  // requested, allow any authenticated user to read it. The SPA quote
+  // modal calls this with the key as the second arg to pre-fill T&C +
+  // Notes on a new quote, and sales users (non-admin) must be able to
+  // get those defaults too. Without this, the API silently returned the
+  // entire config map ignoring the key arg, so `result.value` was
+  // undefined and defaults never appeared on the quote modal.
+  const PUBLIC_READ_KEYS = new Set([
+    'QUOTATION_DEFAULT_TERMS',
+    'QUOTATION_DEFAULT_NOTES',
+    'QUOTATION_PRODUCT_IMAGE_SIZE',
+    'COMPANY_NAME', 'COMPANY_LOGO_URL', 'COMPANY_GST',
+    'COMPANY_ADDRESS', 'COMPANY_PHONE', 'COMPANY_EMAIL',
+    'BRAND_PRIMARY_COLOR'
+  ]);
+  const keyArg = (typeof maybeKey === 'string' && maybeKey)
+    ? maybeKey
+    : (maybeKey && typeof maybeKey === 'object' && maybeKey.key) ? String(maybeKey.key) : '';
+  if (keyArg && PUBLIC_READ_KEYS.has(keyArg)) {
+    if (SENSITIVE_KEYS.includes(keyArg)) {
+      return { key: keyArg, value: '••••••••' };
+    }
+    const v = await db.getConfig(keyArg, "");
+    return { key: keyArg, value: v || '' };
+  }
   if (me.role !== 'admin') throw new Error('Admin only');
   const cfg = await _getAllConfig();
   // Redact sensitive values in the response
@@ -263,6 +288,8 @@ async function api_admin_getConfig(token) {
   for (const [k, v] of Object.entries(cfg)) {
     safe[k] = SENSITIVE_KEYS.includes(k) && v ? '••••••••' : v;
   }
+  // If admin asked for a single key, still return shape they expect.
+  if (keyArg) return { key: keyArg, value: safe[keyArg] || '' };
   return safe;
 }
 // Legacy alias

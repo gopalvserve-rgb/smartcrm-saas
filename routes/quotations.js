@@ -232,6 +232,27 @@ async function api_quotations_save(token, payload) {
 
   if (!p.customer_name || !String(p.customer_name).trim()) throw new Error('Customer name required');
 
+  // QUOTE_DEFAULT_TC_SAFETY_v1 — server-side safety net so the tenant-
+  // configured T&C / Notes defaults ALWAYS apply to a new quote, even
+  // if the client didn't pre-fill the modal (older app.js, API caller,
+  // automation). Only applies to brand-new quotes (no id) and only when
+  // the field is blank. Editing an existing quote with intentionally
+  // empty terms is preserved.
+  if (!id) {
+    if (!p.terms || !String(p.terms).trim()) {
+      try {
+        const def = await db.getConfig('QUOTATION_DEFAULT_TERMS', '');
+        if (def) p.terms = def;
+      } catch (_) {}
+    }
+    if (!p.notes || !String(p.notes).trim()) {
+      try {
+        const def = await db.getConfig('QUOTATION_DEFAULT_NOTES', '');
+        if (def) p.notes = def;
+      } catch (_) {}
+    }
+  }
+
   if (id) {
     await db.query(
       `UPDATE quotations SET
