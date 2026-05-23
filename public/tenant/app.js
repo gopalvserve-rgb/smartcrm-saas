@@ -2160,7 +2160,28 @@ VIEWS.leads = async (view) => {
     _refreshFilterToggleLabel();
     try { localStorage.setItem('crm_leads_filter_open', open ? '1' : '0'); } catch (_) {}
   }
-  _filterToggle.onclick = () => _applyFilterPanelVisible(!_filterOpen);
+  // LEADS_FILTER_COLLAPSE_v4 — Capacitor WebView doesn't always
+  // repaint when we mutate element.style.display directly. Use the
+  // same pattern as the existing toggleHeader() button: save the
+  // preference + re-render the entire leads view. addEventListener
+  // is more robust than .onclick on Android WebView.
+  function _toggleFilterPanel() {
+    const next = !_filterOpen;
+    _filterOpen = next;
+    try { localStorage.setItem('crm_leads_filter_open', next ? '1' : '0'); } catch (_) {}
+    try { localStorage.setItem('crm_show_header', next ? '1' : '0'); CRM.prefs.showHeader = next; } catch (_) {}
+    // Re-render — view.innerHTML is wiped at the top of VIEWS.leads
+    // so all the styles get re-evaluated with the new preference.
+    try { navigateTo('leads'); } catch (_) { try { location.reload(); } catch (__) {} }
+  }
+  _filterToggle.addEventListener('click', _toggleFilterPanel);
+  _filterToggle.addEventListener('touchend', function (ev) {
+    // Some Android WebViews swallow click on full-width buttons —
+    // touchend is the most reliable fallback. preventDefault stops
+    // the ghost-click that would fire ~300ms later.
+    ev.preventDefault();
+    _toggleFilterPanel();
+  });
   _refreshFilterToggleLabel();
   view.appendChild(_filterToggle);
 
