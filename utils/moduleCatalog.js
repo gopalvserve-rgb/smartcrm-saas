@@ -108,7 +108,7 @@ const MODULE_CATALOG = [
   // toggles it on per tenant from /admin → Tenants → Modules.
   { key: 'invoicing',  label: '🧾 Accounts (GST Invoicing)',
     description: 'GST-compliant invoicing: sellers, customers, items, invoices, payments, PDF, GSTR-1 export.',
-    nav_ids:      ['invDashboard','invList','invCompanies','invCustomers','invItems','invGstr1'],
+    nav_ids:      ['invDashboard','invList','invCompanies','invCustomers','invItems','invGstr1','invSettings'],
     settings_ids: ['invoicing'],
     api_prefixes: ['api_invoicing_'],
     default_on: false,  always_on: false },

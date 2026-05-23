@@ -449,6 +449,7 @@ async function api_invoicing_invoices_save(token, payload) {
   // Snapshot seller / customer
   const company = (await db.query(`SELECT * FROM inv_companies WHERE id=$1`, [Number(payload.company_id)])).rows[0];
   if (!company) throw new Error('Seller company not found');
+  const settings = (await db.query(`SELECT default_terms, default_notes FROM inv_settings WHERE id=1`)).rows[0] || {};
   let customer = null;
   if (payload.customer_id) {
     customer = (await db.query(`SELECT * FROM inv_customers WHERE id=$1`, [Number(payload.customer_id)])).rows[0];
@@ -534,8 +535,8 @@ async function api_invoicing_invoices_save(token, payload) {
         s(company.name), s(company.gstin), s(company.state),
         subtotal, discount, cgst, sgst, igst, cess, roundOff, total, _amountInWords(total),
         status, 'unpaid', 0,
-        s(payload.notes || company.default_notes || ''),
-        s(payload.terms || company.default_terms || ''),
+        s(payload.notes || company.default_notes || settings.default_notes || ''),
+        s(payload.terms || company.default_terms || settings.default_terms || ''),
         payload.is_reverse_charge ? 1 : 0,
         user.id
       ]);
@@ -740,6 +741,7 @@ async function api_invoicing_invoices_pdf_html(token, id) {
     ${inv.terms ? `<div style="margin-top:6px"><b>Terms & Conditions:</b><br/>${esc(inv.terms).replace(/\n/g,'<br/>')}</div>` : ''}
     ${company.upi_id ? `<div style="margin-top:8px"><b>Pay via UPI:</b> ${esc(company.upi_id)}</div>` : ''}
     ${company.bank_account ? `<div style="margin-top:4px"><b>Bank:</b> ${esc(company.bank_name||'')} • A/c ${esc(company.bank_account)} • IFSC ${esc(company.bank_ifsc||'')}</div>` : ''}
+    ${settings.invoice_footer ? `<div style="margin-top:12px;padding-top:10px;border-top:1px dashed #cbd5e1;font-size:11px;color:#475569;text-align:center">${esc(settings.invoice_footer)}</div>` : ''}
     <div style="margin-top:14px;text-align:right">For <b>${esc(inv.company_name)}</b><br/><br/><br/>Authorised Signatory</div>
   </div>
 </body></html>`;

@@ -993,7 +993,8 @@ const NAV_GROUPS = [
     { id: 'invCompanies', label: 'My Companies',        icon: '🏢', module: 'invoicing' },
     { id: 'invCustomers', label: 'Bill-To Customers',   icon: '👤', module: 'invoicing' },
     { id: 'invItems',     label: 'Items / Services',    icon: '📦', module: 'invoicing' },
-    { id: 'invGstr1',     label: 'GSTR-1 Export',       icon: '📤', module: 'invoicing' }
+    { id: 'invGstr1',     label: 'GSTR-1 Export',       icon: '📤', module: 'invoicing' },
+    { id: 'invSettings',  label: 'Settings & T&C',      icon: '⚙️', module: 'invoicing' }
   ] },
   { label: 'Admin', icon: '⚙️', items: [
     { id: 'users', label: 'Users',    icon: '👥', roles: ['admin', 'manager'] },
@@ -36029,8 +36030,8 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
       const billTo    = _ta('bill_to_address', invoice ? invoice.bill_to_address : '', 2);
       const invDate   = _txt('invoice_date',   invoice ? String(invoice.invoice_date).slice(0,10) : today(), { type:'date' });
       const dueDate   = _txt('due_date',       invoice && invoice.due_date ? String(invoice.due_date).slice(0,10) : '', { type:'date' });
-      const notes     = _ta('notes',           invoice ? invoice.notes : '', 2);
-      const terms     = _ta('terms',           invoice ? invoice.terms : '', 2);
+      const notes     = _ta('notes',           invoice ? invoice.notes : (settings.default_notes || ''), 2);
+      const terms     = _ta('terms',           invoice ? invoice.terms : (settings.default_terms || ''), 2);
       const discount  = _txt('discount',       invoice ? invoice.discount : 0, { type:'number', step:'0.01', min:'0' });
 
       // Auto-fill customer details when picking from master
@@ -36547,5 +36548,103 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
   });
 
   // Expose for debugging only
+  // ==================== SETTINGS & T&C ====================
+  // Per-tenant invoicing knobs: default GST %, currency, default
+  // Terms & Conditions, default Notes, invoice footer. The T&C is
+  // automatically prefilled into the Terms field on every new invoice
+  // (see openInvoiceModal — `settings.default_terms` is used as the
+  // fallback when invoice.terms is empty). Tenant users can still
+  // override per-invoice in the New Invoice modal.
+  VIEWS.invSettings = async (view) => _safe(view, async () => {
+    view.innerHTML = '';
+    const s = await api('api_invoicing_settings_get');
+    const pg = _page('⚙️ Invoicing Settings & T&C');
+
+    // Intro card
+    pg.appendChild(h('div', { style: { background:'#eff6ff', border:'1px solid #bfdbfe', borderRadius:'8px', padding:'.8rem 1rem', marginBottom:'1.2rem', color:'#1e3a8a', fontSize:'.88rem' } },
+      h('div', { style: { fontWeight:600, marginBottom:'.25rem' } }, '💡 How this works'),
+      h('div', {}, 'The Terms & Conditions you save here will auto-fill into every NEW invoice you create. You can still edit them per-invoice in the New Invoice modal. The T&C text appears in the footer of the printed PDF.')
+    ));
+
+    const card = h('div', { style: { background:'#fff', borderRadius:'10px', padding:'1.2rem', boxShadow:'0 1px 3px rgba(0,0,0,.06)', maxWidth:'820px' } });
+
+    // ---- Numbering / Currency ----
+    const row1 = h('div', { style: { display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'.8rem' } });
+    const gst   = _txt('default_gst_pct', s.default_gst_pct, { type:'number', step:'0.01', min:'0' });
+    const cur   = _txt('currency_symbol', s.currency_symbol || '₹');
+    const code  = _txt('currency_code', s.currency_code || 'INR');
+    row1.appendChild(_field('Default GST %', gst, 'Pre-selected on new line items'));
+    row1.appendChild(_field('Currency Symbol', cur));
+    row1.appendChild(_field('Currency Code', code));
+    card.appendChild(row1);
+
+    // ---- B2CL threshold ----
+    const row2 = h('div', { style: { display:'grid', gridTemplateColumns:'1fr 1fr', gap:'.8rem', marginTop:'.4rem' } });
+    const b2cl  = _txt('b2cl_threshold', s.b2cl_threshold, { type:'number', step:'1', min:'0' });
+    const fy    = _txt('fy_start_month', s.fy_start_month || 4, { type:'number', min:'1', max:'12' });
+    row2.appendChild(_field('B2CL Threshold (₹)', b2cl, 'Inter-state B2C invoices above this go to B2CL sheet'));
+    row2.appendChild(_field('Financial Year Start Month', fy, '4 = April (default for India)'));
+    card.appendChild(row2);
+
+    // ---- Default Terms & Conditions ----
+    card.appendChild(h('h3', { style: { margin:'1.4rem 0 .4rem', fontSize:'1rem' } }, '📜 Default Terms & Conditions'));
+    card.appendChild(h('div', { style: { fontSize:'.78rem', color:'#64748b', marginBottom:'.5rem' } }, 'Shown at the bottom of every invoice PDF. New invoices auto-fill the Terms field with this text — editable per-invoice.'));
+    const terms = h('textarea', { name:'default_terms', rows: 8, style: { width:'100%', padding:'.6rem .7rem', border:'1px solid #cbd5e1', borderRadius:'6px', font:'inherit', resize:'vertical', minHeight:'160px' }, placeholder:'e.g.\n1. Payment due within 7 days of invoice date.\n2. Interest @ 18% per annum on overdue amounts.\n3. All disputes subject to Delhi jurisdiction.\n4. Goods once sold will not be taken back.' }, s.default_terms || '');
+    card.appendChild(terms);
+
+    // ---- Default Notes ----
+    card.appendChild(h('h3', { style: { margin:'1.4rem 0 .4rem', fontSize:'1rem' } }, '📝 Default Invoice Notes'));
+    card.appendChild(h('div', { style: { fontSize:'.78rem', color:'#64748b', marginBottom:'.5rem' } }, 'Optional. Auto-fills the Notes field on new invoices. Appears above T&C on the PDF.'));
+    const notes = h('textarea', { name:'default_notes', rows: 3, style: { width:'100%', padding:'.6rem .7rem', border:'1px solid #cbd5e1', borderRadius:'6px', font:'inherit', resize:'vertical' }, placeholder:'e.g. Thank you for your business!' }, s.default_notes || '');
+    card.appendChild(notes);
+
+    // ---- Footer ----
+    card.appendChild(h('h3', { style: { margin:'1.4rem 0 .4rem', fontSize:'1rem' } }, '🦶 Invoice Footer'));
+    card.appendChild(h('div', { style: { fontSize:'.78rem', color:'#64748b', marginBottom:'.5rem' } }, 'Optional footer text printed at the bottom of every PDF (e.g. company tagline, registration numbers, fine print).'));
+    const footer = h('textarea', { name:'invoice_footer', rows: 2, style: { width:'100%', padding:'.6rem .7rem', border:'1px solid #cbd5e1', borderRadius:'6px', font:'inherit', resize:'vertical' } }, s.invoice_footer || '');
+    card.appendChild(footer);
+
+    // ---- Toggles ----
+    const toggles = h('div', { style: { display:'flex', gap:'1.4rem', flexWrap:'wrap', marginTop:'1.2rem', padding:'.8rem 0', borderTop:'1px solid #f1f5f9' } });
+    function _toggle(name, label, checked) {
+      const wrap = h('label', { style: { display:'flex', alignItems:'center', gap:'.4rem', cursor:'pointer', fontSize:'.88rem' } });
+      const cb = h('input', { type:'checkbox', name });
+      if (checked) cb.checked = true;
+      wrap.appendChild(cb); wrap.appendChild(h('span', {}, label));
+      return wrap;
+    }
+    const roundOff = _toggle('enable_round_off', 'Enable round-off on invoice totals', Number(s.enable_round_off));
+    const qr       = _toggle('enable_qr', 'Show UPI QR code on PDF (when UPI is set)', Number(s.enable_qr));
+    toggles.appendChild(roundOff); toggles.appendChild(qr);
+    card.appendChild(toggles);
+
+    // ---- Save button ----
+    const actions = h('div', { style: { display:'flex', justifyContent:'flex-end', gap:'.6rem', marginTop:'1.2rem' } });
+    const saveBtn = _btn('💾 Save settings', { onclick: async () => {
+      saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
+      try {
+        await api('api_invoicing_settings_save', {
+          default_gst_pct:  Number(gst.value) || 0,
+          currency_symbol: cur.value || '₹',
+          currency_code:   code.value || 'INR',
+          b2cl_threshold:  Number(b2cl.value) || 250000,
+          fy_start_month:  Number(fy.value) || 4,
+          default_terms:   terms.value,
+          default_notes:   notes.value,
+          invoice_footer:  footer.value,
+          enable_round_off: roundOff.querySelector('input').checked ? 1 : 0,
+          enable_qr:        qr.querySelector('input').checked ? 1 : 0,
+        });
+        toast('Settings saved — they will apply to your next new invoice', 'ok');
+      } catch (e) { toast(e.message, 'err'); }
+      finally { saveBtn.disabled = false; saveBtn.textContent = '💾 Save settings'; }
+    }});
+    actions.appendChild(saveBtn);
+    card.appendChild(actions);
+
+    pg.appendChild(card);
+    view.appendChild(pg);
+  });
+
   window.INV = INV;
 })();
