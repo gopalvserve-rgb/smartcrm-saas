@@ -10,7 +10,7 @@
        prefix and the express.static handler in server.js serves
        the file from public/tenant/. The trailing slash is enforced
        by a redirect in server.js so these always resolve correctly. -->
-  <link rel="stylesheet" href="styles.css?v=2026-05-23-filtv4" />
+  <link rel="stylesheet" href="styles.css?v=2026-05-23-killfix" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><text y=%2224%22 font-size=%2226%22>🎯</text></svg>" />
@@ -36,9 +36,11 @@
     (function () {
       try {
         if (!('serviceWorker' in navigator)) return;
-        var qs = new URLSearchParams(window.location.search || '');
-        // Don't loop: if we already reloaded after a cleanup, stop.
-        if (qs.get('_swkilled') === '1') return;
+        // SW_KILL_INLINE_v2 — no sticky flag. The cleanup is a no-op when
+        // there's nothing to clean (registrations + caches both empty),
+        // so it's safe to run on every load. Removing the flag prevents
+        // users from getting permanently stuck on the first cached
+        // version after the inline kill-switch initially ran.
         navigator.serviceWorker.getRegistrations().then(function (regs) {
           if (!regs || !regs.length) {
             // No registrations — also flush Cache Storage just in case
@@ -48,9 +50,7 @@
                 if (!keys.length) return;
                 Promise.all(keys.map(function (k) { return caches.delete(k); })).then(function () {
                   // Reload only if we actually deleted something.
-                  var u = new URL(window.location.href);
-                  u.searchParams.set('_swkilled', '1');
-                  window.location.replace(u.toString());
+                  window.location.reload();
                 });
               });
             }
@@ -61,9 +61,7 @@
           })).then(function () {
             // After unregistering, nuke caches too.
             var done = function () {
-              var u = new URL(window.location.href);
-              u.searchParams.set('_swkilled', '1');
-              window.location.replace(u.toString());
+              window.location.reload();
             };
             if (window.caches && caches.keys) {
               caches.keys().then(function (keys) {
@@ -150,10 +148,10 @@
         // Wait for DOMContentLoaded before injecting scripts.
         function injectSpaScripts() {
           var s = document.createElement('script');
-          s.src = 'app.js?v=2026-05-23-filtv4';
+          s.src = 'app.js?v=2026-05-23-killfix';
           document.body.appendChild(s);
           var c = document.createElement('script');
-          c.src = 'caller-id-native.js?v=2026-05-23-filtv4';
+          c.src = 'caller-id-native.js?v=2026-05-23-killfix';
           document.body.appendChild(c);
         }
         if (document.body) injectSpaScripts();
