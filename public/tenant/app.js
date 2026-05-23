@@ -32,7 +32,18 @@ const CRM = {
   prefs: {
     columns: JSON.parse(localStorage.getItem('crm_cols') || '["name","phone","source","status","assigned","followup","last_change","remark","created"]'),
     filters: JSON.parse(localStorage.getItem('crm_filters') || '{}'),
-    showHeader: localStorage.getItem('crm_show_header') !== '0'
+    showHeader: (function () {
+      // LEADS_FILTER_COLLAPSE_v3 — on mobile, default the status-chip
+      // header to hidden so the user immediately sees the leads list
+      // instead of a wall of pills. Desktop keeps the existing behaviour
+      // (visible unless explicitly hidden). User's explicit choice always
+      // wins via localStorage.
+      var v = localStorage.getItem('crm_show_header');
+      if (v === '0') return false;
+      if (v === '1') return true;
+      // Unset — fall back to default. Mobile = hidden, desktop = shown.
+      try { return !(window.innerWidth < 900); } catch (_) { return true; }
+    })()
   }
 };
 
@@ -2125,6 +2136,9 @@ VIEWS.leads = async (view) => {
     _filterToggle.style.borderColor = n > 0 ? '#fcd34d' : '#e2e8f0';
   }
   function _applyFilterPanelVisible(open) {
+    // LEADS_FILTER_COLLAPSE_v3 — also toggle the status-chip header
+    // (leads-header) and its "▾ Show header" twin so all the filter
+    // chrome opens/closes as one unit.
     const t = document.getElementById('leads-toolbar');
     const c = document.getElementById('cf-filter-row');
     if (t) t.style.display = open ? '' : 'none';
@@ -2132,6 +2146,16 @@ VIEWS.leads = async (view) => {
       if (!open) { if (c.style.display && c.style.display !== 'none') c.dataset._prevDisplay = c.style.display; c.style.display = 'none'; }
       else if (c.dataset._prevDisplay) { c.style.display = c.dataset._prevDisplay; }
     }
+    // Toggle header visibility too — set the global pref so future
+    // renders match. If we're opening, undo any earlier hide.
+    try {
+      CRM.prefs.showHeader = open;
+      localStorage.setItem('crm_show_header', open ? '1' : '0');
+      const h1 = document.querySelector('.leads-header');
+      const h2 = document.querySelector('.header-hidden-toggle');
+      if (h1) h1.style.display = open ? '' : 'none';
+      if (h2) h2.style.display = open ? 'none' : '';
+    } catch (_) {}
     _filterOpen = open;
     _refreshFilterToggleLabel();
     try { localStorage.setItem('crm_leads_filter_open', open ? '1' : '0'); } catch (_) {}
