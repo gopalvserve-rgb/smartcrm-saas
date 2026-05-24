@@ -2889,13 +2889,13 @@ VIEWS.deviceHealthUser = async function (view, slug, userId, userName) {
     var lastAt = stats.last_event_at ? new Date(stats.last_event_at).toLocaleString() : null;
     var box = h('div', { style: { padding: '20px', background: '#fffbe6', borderRadius: '6px', color: '#a60', border: '1px solid #fed' } });
     if (tenantTotal === 0) {
-      box.appendChild(h('div', { style: { fontWeight: 'bold', marginBottom: '8px' } }, '⚠️ No telemetry from any user in this tenant yet'));
+      box.appendChild(h('div', { style: { fontWeight: 'bold', marginBottom: '8px' } }, 'ℹ️ No telemetry from any user in this tenant yet'));
       box.appendChild(h('div', { style: { fontSize: '13px', lineHeight: '1.5' } },
-        'The phone telemetry script (deviceDiag.js) is shipped but no events have reached the server. Possible causes:',
+        'The phone telemetry script is live. Events arrive within 60–90 seconds of a user opening the app (APK or browser). If nothing shows up, check:',
         h('ul', { style: { marginTop: '6px' } },
-          h('li', {}, 'Users haven’t opened the web SPA since the deploy. Ask any user to open ', h('code', {}, '/t/<tenant>/'), ' in a browser; events arrive within 60 seconds.'),
-          h('li', {}, 'Users only open the Android APK — the APK serves bundled assets, not the live deviceDiag.js. An APK rebuild is needed to bundle it.'),
-          h('li', {}, 'Browser blocks localStorage / cookies (auth token absent → no POST).')
+          h('li', {}, 'No user has opened the CRM in the last ~3 days (retention window). Ask any user to launch the APK or open ', h('code', {}, '/t/<tenant>/'), ' in a browser; the first heartbeat fires within ~60s.'),
+          h('li', {}, 'The user closes the app immediately — telemetry needs ~60s of visible-tab time before the first heartbeat is sent.'),
+          h('li', {}, 'Browser blocks localStorage / cookies (the auth token can\'t be read → no POST).')
         )
       ));
     } else {
