@@ -11048,7 +11048,12 @@ async function wbConnect() {
           autolead_source: fd.get('autolead_source') || 'WhatsApp',
           default_country_code: fd.get('default_country_code') || '91',
           default_user_id: fd.get('default_user_id') || '',
-          default_status_id: fd.get('default_status_id') || ''
+          default_status_id: fd.get('default_status_id') || '',
+          /* WA_AUTOLEAD_BC_v1 — business-hours + keyword gates */
+          autolead_hours_on:    !!fd.get('autolead_hours_on'),
+          autolead_hours_start: fd.get('autolead_hours_start') || '09:00',
+          autolead_hours_end:   fd.get('autolead_hours_end')   || '19:00',
+          autolead_keywords:    fd.get('autolead_keywords')    || ''
         });
         toast('Auto-lead settings saved', 'ok');
       } catch (e) { toast(e.message, 'err'); }
@@ -11078,6 +11083,31 @@ async function wbConnect() {
         ..._statuses.map(st => h('option', { value: st.id, selected: String(s.default_status_id || '') === String(st.id) ? 'selected' : null }, st.name))
       )
     ));
+    /* WA_AUTOLEAD_BC_v1 — business-hours + keyword gates UI.
+       Sits between the existing default-status picker and the Save button. */
+    aForm.appendChild(h('div', { class: 'f-row full', style: { marginTop: '.6rem', borderTop: '1px dashed #cbd5e1', paddingTop: '.6rem' } },
+      h('div', { style: { fontWeight: '600', marginBottom: '.3rem' } }, '⏰ Business hours only'),
+      h('p', { class: 'muted', style: { fontSize: '.78rem', margin: '.2rem 0' } },
+        'When ON, only inbound messages received between Start and End time (IST) auto-create leads. Outside that window the chat still saves but no lead is created. Useful to stop after-hours spam-bot calls from becoming a 3-AM lead pile.')
+    ));
+    aForm.appendChild(h('div', { class: 'f-row full' },
+      h('label', { class: 'qual-toggle' },
+        h('input', { type: 'checkbox', name: 'autolead_hours_on', checked: s.autolead_hours_on ? 'checked' : null }),
+        ' Enabled — only create leads during the time window below')
+    ));
+    aForm.appendChild(_alField('Start time (IST, 24-hour)',
+      h('input', { name: 'autolead_hours_start', type: 'time', value: s.autolead_hours_start || '09:00' })));
+    aForm.appendChild(_alField('End time (IST, 24-hour)',
+      h('input', { name: 'autolead_hours_end',   type: 'time', value: s.autolead_hours_end   || '19:00' })));
+
+    aForm.appendChild(h('div', { class: 'f-row full', style: { marginTop: '.6rem', borderTop: '1px dashed #cbd5e1', paddingTop: '.6rem' } },
+      h('div', { style: { fontWeight: '600', marginBottom: '.3rem' } }, '🔑 Keyword filter (optional)'),
+      h('p', { class: 'muted', style: { fontSize: '.78rem', margin: '.2rem 0' } },
+        'When set, the inbound message body must contain at least one of these keywords (case-insensitive) to auto-create a lead. Comma-separated. Filters out "hi", "test", "wrong number" probes. Leave blank to disable the keyword check.')
+    ));
+    aForm.appendChild(_alField('Required keywords (comma-separated)',
+      h('input', { name: 'autolead_keywords', value: s.autolead_keywords || '', placeholder: 'e.g. price, demo, interested, quote, buy' })));
+
     aForm.appendChild(h('div', { class: 'f-row full', style: { marginTop: '.6rem' } },
       h('button', { type: 'submit', class: 'btn primary' }, '💾 Save auto-lead settings')
     ));

@@ -37,7 +37,8 @@ const PLATFORM_FB_CONFIG_ID  = process.env.PLATFORM_FB_CONFIG_ID  || '6782672953
 // ---------- shared helpers ----------------------------------------
 
 async function _cfg() {
-  const [wabaId, token, phoneId, defaultStatus, defaultUser, autoLeadOn, autoLeadSource, defaultCC] = await Promise.all([
+  const [wabaId, token, phoneId, defaultStatus, defaultUser, autoLeadOn, autoLeadSource, defaultCC,
+         hoursOn, hoursStart, hoursEnd, keywords] = await Promise.all([
     db.getConfig('WHATSAPP_BUSINESS_ACCOUNT_ID', process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || ''),
     db.getConfig('WHATSAPP_ACCESS_TOKEN',        process.env.WHATSAPP_ACCESS_TOKEN || ''),
     db.getConfig('WHATSAPP_PHONE_NUMBER_ID',     process.env.WHATSAPP_PHONE_NUMBER_ID || ''),
@@ -45,10 +46,69 @@ async function _cfg() {
     db.getConfig('WB_DEFAULT_USER_ID', ''),
     db.getConfig('WB_AUTOLEAD_ON', '1'),
     db.getConfig('WB_AUTOLEAD_SOURCE', 'WhatsApp'),
-    db.getConfig('WB_DEFAULT_COUNTRY_CODE', '91')   // India default
+    db.getConfig('WB_DEFAULT_COUNTRY_CODE', '91'),   // India default
+    /* WA_AUTOLEAD_BC_v1 — business-hours + keyword gates */
+    db.getConfig('WA_AUTOLEAD_HOURS_ON',  '0'),
+    db.getConfig('WA_AUTOLEAD_HOURS_START', '09:00'),
+    db.getConfig('WA_AUTOLEAD_HOURS_END',   '19:00'),
+    db.getConfig('WA_AUTOLEAD_KEYWORDS',    '')
   ]);
-  return { wabaId, token, phoneId, defaultStatus, defaultUser, autoLeadOn: String(autoLeadOn) === '1', autoLeadSource, defaultCC: (defaultCC || '91').replace(/\D/g, '') };
+  return { wabaId, token, phoneId, defaultStatus, defaultUser,
+    autoLeadOn: String(autoLeadOn) === '1', autoLeadSource,
+    defaultCC: (defaultCC || '91').replace(/\D/g, ''),
+    autoLeadHoursOn: String(hoursOn) === '1',
+    autoLeadHoursStart: String(hoursStart || '09:00'),
+    autoLeadHoursEnd:   String(hoursEnd   || '19:00'),
+    autoLeadKeywords:   String(keywords   || '')
+  };
 }
+
+/* WA_AUTOLEAD_BC_v1 — helper: does message pass the business-hours + keyword
+   gates? Called from _handleInbound AFTER existing whitelist+per-phone+global
+   checks have already approved auto-creating a lead. Returns {ok, reason}
+   so we can log the skip reason for tenant debugging.
+
+   Business hours: configured in IST (UTC+5:30) since the platform is India-only.
+   Server may run in UTC on Railway — we explicitly compute IST clock by adding
+   5h30m offset rather than relying on server TZ. Handles wrap-around windows
+   (e.g. 22:00–06:00 = "outside daytime") cleanly.
+
+   Keywords: CSV, case-insensitive substring match, OR semantics. Empty CSV
+   = no gate (everything passes). Trimmed + lowercased on both sides. */
+function _waLeadGatePasses(text, cfg) {
+  // (b) Business hours
+  if (cfg.autoLeadHoursOn) {
+    const now = new Date();
+    const istMs = now.getTime() + (5.5 * 60 * 60 * 1000);
+    const ist = new Date(istMs);
+    const nowMin = ist.getUTCHours() * 60 + ist.getUTCMinutes();
+    const parse = s => {
+      const m = /^(\d{1,2}):(\d{2})$/.exec(String(s || '').trim());
+      if (!m) return null;
+      const hh = Math.max(0, Math.min(23, Number(m[1])));
+      const mm = Math.max(0, Math.min(59, Number(m[2])));
+      return hh * 60 + mm;
+    };
+    const startMin = parse(cfg.autoLeadHoursStart);
+    const endMin   = parse(cfg.autoLeadHoursEnd);
+    if (startMin != null && endMin != null) {
+      // Window may wrap midnight (e.g. 22:00–06:00).
+      const inWindow = (startMin <= endMin)
+        ? (nowMin >= startMin && nowMin < endMin)
+        : (nowMin >= startMin || nowMin < endMin);
+      if (!inWindow) return { ok: false, reason: 'outside business hours (' + cfg.autoLeadHoursStart + '–' + cfg.autoLeadHoursEnd + ' IST)' };
+    }
+  }
+  // (c) Keyword gate
+  const kw = (cfg.autoLeadKeywords || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+  if (kw.length) {
+    const t = String(text || '').toLowerCase();
+    const hit = kw.find(k => t.includes(k));
+    if (!hit) return { ok: false, reason: 'no matching keyword (looking for one of: ' + kw.join(', ') + ')' };
+  }
+  return { ok: true };
+}
+
 
 /**
  * Like _cfg() but for a SPECIFIC phone_number_id. Looks up the row in
@@ -199,6 +259,11 @@ async function api_wb_settings_get(token) {
     default_user_id: cfg.defaultUser,
     default_status_id: cfg.defaultStatus,
     default_country_code: cfg.defaultCC || '91',
+    /* WA_AUTOLEAD_BC_v1 */
+    autolead_hours_on:    cfg.autoLeadHoursOn,
+    autolead_hours_start: cfg.autoLeadHoursStart,
+    autolead_hours_end:   cfg.autoLeadHoursEnd,
+    autolead_keywords:    cfg.autoLeadKeywords,
     // Embedded Signup — platform credentials. The App ID & Config ID are
     // exposed because the FB JS SDK needs them in the browser to launch the
     // dialog. The App SECRET stays on the server only.
@@ -227,6 +292,11 @@ async function api_wb_settings_save(token, payload) {
   if ('default_user_id' in p)     await db.setConfig('WB_DEFAULT_USER_ID', String(p.default_user_id || ''));
   if ('default_status_id' in p)   await db.setConfig('WB_DEFAULT_STATUS_ID', String(p.default_status_id || ''));
   if ('default_country_code' in p) await db.setConfig('WB_DEFAULT_COUNTRY_CODE', String(p.default_country_code || '91').replace(/\D/g, '') || '91');
+  /* WA_AUTOLEAD_BC_v1 — business-hours + keyword gates */
+  if ('autolead_hours_on'    in p) await db.setConfig('WA_AUTOLEAD_HOURS_ON',    p.autolead_hours_on ? '1' : '0');
+  if ('autolead_hours_start' in p) await db.setConfig('WA_AUTOLEAD_HOURS_START', String(p.autolead_hours_start || '09:00').slice(0, 5));
+  if ('autolead_hours_end'   in p) await db.setConfig('WA_AUTOLEAD_HOURS_END',   String(p.autolead_hours_end   || '19:00').slice(0, 5));
+  if ('autolead_keywords'    in p) await db.setConfig('WA_AUTOLEAD_KEYWORDS',    String(p.autolead_keywords || '').slice(0, 1000));
   // NOTE: fb_app_id / fb_app_secret / fb_config_id are platform-managed
   // constants now — silently ignored if a stale client tries to send them.
   return { ok: true };
@@ -2401,7 +2471,22 @@ async function _handleInbound(m, value) {
       const _effectiveAutoLeadOn = (perPhoneAutoleadMode === 'on')  ? true
                                   : (perPhoneAutoleadMode === 'off') ? false
                                   : !!cfg.autoLeadOn;
-      if (_effectiveAutoLeadOn) {
+      // WA_AUTOLEAD_BC_v1 — business-hours + keyword gates apply on top of
+      // the effective on/off. Per-phone 'on' OVERRIDES these gates (admin
+      // explicitly said "always" for that line); 'inherit' and 'off' respect
+      // the global hours/keyword config.
+      let _bcGateOk = true; let _bcSkipReason = '';
+      if (_effectiveAutoLeadOn && perPhoneAutoleadMode !== 'on') {
+        const _g = _waLeadGatePasses(text, cfg);
+        _bcGateOk = _g.ok;
+        _bcSkipReason = _g.reason || '';
+      }
+      if (!_bcGateOk) {
+        try { await _logActivity({ category: 'wa_autolead_skip', name: 'gate_blocked',
+          response_code: 200, request: { from, text: String(text || '').slice(0, 200) },
+          response: { reason: _bcSkipReason } }); } catch (_) {}
+      }
+      if (_effectiveAutoLeadOn && _bcGateOk) {
       // Create a fresh lead for this inbound contact
       const profileName = (value?.contacts || []).find(c => c.wa_id === m.from)?.profile?.name || from;
       // Per-WhatsApp-number lead owner (May 2026): if the admin set a
