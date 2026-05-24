@@ -6,8 +6,26 @@
   'use strict';
 
   function getToken() {
-    try { return localStorage.getItem('token') || localStorage.getItem('jwt') || null; }
-    catch (e) { return null; }
+    /* DEVICE_DIAG_TOKEN_KEY_FIX: tenant SPA stores auth under 'crm_token' (and
+       'crm_token_<slug>' for per-tenant tokens). Read all variants. Earlier
+       version of this script only read 'token'/'jwt' which never existed, so
+       flush() always bailed and no telemetry ever reached the server. */
+    try {
+      var slug = tenantSlug();
+      var keys = [
+        'crm_token_' + (slug || ''),  // per-tenant token if present
+        'crm_token',                   // single-workspace token
+        'token',                       // legacy fallbacks
+        'jwt'
+      ];
+      for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        if (!k) continue;
+        var v = localStorage.getItem(k);
+        if (v) return v;
+      }
+    } catch (e) {}
+    return null;
   }
 
   var QUEUE_KEY = 'deviceDiag.queue';
