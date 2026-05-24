@@ -131,6 +131,7 @@ const NAV = [
   { id: 'requirements',  label: '🛠 Custom Requirements' },
   { id: 'tickets',       label: '🎫 Support Tickets' },   // TKT_ADMIN_v1
   { id: 'admins',        label: '👥 Super Assistants' },
+  { id: 'deviceHealth',  label: '📱 Device Health' },  /* DEVICE_DIAG_v1 */
   { id: 'settings',      label: '⚙️ Settings' }
 ];
 
@@ -2884,25 +2885,6 @@ VIEWS.deviceHealthUser = async function (view, slug, userId, userName) {
   ));
 };
 
-/* DEVICE_DIAG_v1 — best-effort sidebar/topbar link injection */
-(function () {
-  function inject() {
-    if (document.getElementById('dh-tab-btn')) return;
-    var nav = document.querySelector('aside.nav, nav.sidebar, .admin-nav, .topbar, header.admin') || document.body;
-    var btn = document.createElement('a');
-    btn.id = 'dh-tab-btn';
-    btn.href = '#deviceHealth';
-    btn.textContent = '📱 Device Health';
-    btn.style.cssText = 'display:inline-block;padding:6px 10px;margin:6px;border:1px solid #ddd;border-radius:6px;background:#fff;color:#234;text-decoration:none;font-size:13px;cursor:pointer;';
-    btn.addEventListener('click', function (e) {
-      e.preventDefault();
-      var view = document.getElementById('view') || document.getElementById('main') || document.querySelector('.view') || document.body;
-      if (typeof VIEWS !== 'undefined' && VIEWS.deviceHealth) { VIEWS.deviceHealth(view); }
-    });
-    nav.appendChild(btn);
-  }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', inject);
-  else inject();
-  setInterval(inject, 5000);
-})();
+/* DEVICE_DIAG_v1 — bootstrap removed in v2 (NAV entry handles it) */
+
 

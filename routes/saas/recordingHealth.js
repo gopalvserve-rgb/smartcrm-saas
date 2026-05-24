@@ -67,7 +67,7 @@ async function api_saas_recHealth_overview(token, opts) {
   await requireSuperAdmin(token);
 
   const tenants = await control.query(
-    "SELECT id, slug, name, status FROM tenants" +
+    "SELECT id, slug, org_name AS name, status FROM tenants" +
     " WHERE status NOT IN ('deleted', 'suspended')" +
     " ORDER BY slug ASC"
   ).then(r => r.rows || []);
