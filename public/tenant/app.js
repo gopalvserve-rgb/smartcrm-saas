@@ -10763,6 +10763,7 @@ async function wbConnect() {
         h('th', {}, 'Label'),
         h('th', {}, 'WABA'),
         h('th', {}, 'Status'),
+        h('th', { title: 'WA_PERNUMBER_AUTOLEAD_v1 — per-number override of the global Auto-lead toggle. Inherit = use global setting; Always = always create a lead from inbound on this number; Never = never create a lead from inbound on this number.' }, 'Auto-lead'),
         h('th', { style: { textAlign: 'right' } }, '')
       )),
       h('tbody', {}, ...(phones.length ? phones : []).map(ph => h('tr', {},
@@ -10784,6 +10785,32 @@ async function wbConnect() {
           Number(ph.is_active) === 1
             ? h('span', { class: 'badge ok' }, ph.status || 'active')
             : h('span', { class: 'badge warn' }, 'inactive')
+        ),
+        /* WA_PERNUMBER_AUTOLEAD_v1 — 3-state per-phone autolead picker.
+           Saves inline on change via api_wa_phones_save. */
+        h('td', {},
+          (() => {
+            const sel = h('select', { style: { fontSize: '.78rem', padding: '.18rem .35rem', borderRadius: '6px' }, title: 'Inherit = use the global Auto-lead toggle. Always = ALWAYS create a lead from inbound on this number. Never = NEVER create a lead from inbound on this number.' },
+              h('option', { value: 'inherit', selected: (ph.autolead_mode || 'inherit') === 'inherit' ? 'selected' : null }, '↩ Inherit (global)'),
+              h('option', { value: 'on',      selected: ph.autolead_mode === 'on'      ? 'selected' : null }, '✓ Always create'),
+              h('option', { value: 'off',     selected: ph.autolead_mode === 'off'     ? 'selected' : null }, '✗ Never create')
+            );
+            sel.addEventListener('change', async () => {
+              const prev = ph.autolead_mode || 'inherit';
+              sel.disabled = true;
+              try {
+                await api('api_wa_phones_save', { id: ph.id, autolead_mode: sel.value });
+                ph.autolead_mode = sel.value;
+                toast('Auto-lead mode: ' + sel.value, 'ok');
+              } catch (e) {
+                sel.value = prev;
+                toast(e.message, 'err');
+              } finally {
+                sel.disabled = false;
+              }
+            });
+            return sel;
+          })()
         ),
         h('td', { style: { textAlign: 'right' } },
           Number(ph.is_default) !== 1

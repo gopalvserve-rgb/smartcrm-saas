@@ -2392,7 +2392,16 @@ async function _handleInbound(m, value) {
       [from, last10]
     );
     if (ld.rows.length) leadId = ld.rows[0].id;
-    else if (cfg.autoLeadOn) {
+    else {
+      // WA_PERNUMBER_AUTOLEAD_v1 effective decision:
+      //   per-phone 'off' → never create, regardless of global
+      //   per-phone 'on'  → always create, regardless of global
+      //   per-phone 'inherit' (default) → fall back to global cfg.autoLeadOn
+      // Computed AFTER the per-phone lookup above so perPhoneAutoleadMode is set.
+      const _effectiveAutoLeadOn = (perPhoneAutoleadMode === 'on')  ? true
+                                  : (perPhoneAutoleadMode === 'off') ? false
+                                  : !!cfg.autoLeadOn;
+      if (_effectiveAutoLeadOn) {
       // Create a fresh lead for this inbound contact
       const profileName = (value?.contacts || []).find(c => c.wa_id === m.from)?.profile?.name || from;
       // Per-WhatsApp-number lead owner (May 2026): if the admin set a
@@ -2401,14 +2410,20 @@ async function _handleInbound(m, value) {
       // tenant-wide cfg.defaultUser when the per-phone field is empty
       // or the lookup fails (older tenants without the column).
       let perPhoneOwner = null;
+      let perPhoneAutoleadMode = 'inherit';
       if (inboundPhoneId) {
         try {
+          // WA_PERNUMBER_AUTOLEAD_v1 — read autolead_mode in the SAME query.
           const phRow = await db.query(
-            `SELECT default_owner_user_id FROM wa_phones WHERE phone_number_id = $1 LIMIT 1`,
+            `SELECT default_owner_user_id, COALESCE(autolead_mode, 'inherit') AS autolead_mode
+               FROM wa_phones WHERE phone_number_id = $1 LIMIT 1`,
             [String(inboundPhoneId)]
           );
           if (phRow.rows.length && phRow.rows[0].default_owner_user_id != null) {
             perPhoneOwner = Number(phRow.rows[0].default_owner_user_id);
+          }
+          if (phRow.rows.length && phRow.rows[0].autolead_mode) {
+            perPhoneAutoleadMode = String(phRow.rows[0].autolead_mode).toLowerCase();
           }
         } catch (_) {}
       }
@@ -2425,6 +2440,7 @@ async function _handleInbound(m, value) {
       });
       leadId = newId;
       try { require('./tat').logAction(newId, 'created', null, { source: 'whatsapp_inbound' }); } catch (_) {}
+      }  // /WA_PERNUMBER_AUTOLEAD_v1 effective-gate
     }
   } catch (_) {}
 
@@ -2597,6 +2613,13 @@ async function _ensureWaPhonesColumns() {
   try {
     await db.query(`ALTER TABLE wa_phones ADD COLUMN IF NOT EXISTS default_owner_user_id INTEGER`);
   } catch (_) {}
+  // WA_PERNUMBER_AUTOLEAD_v1: per-phone autolead override.
+  //   'inherit' = use the global cfg.autoLeadOn (default)
+  //   'on'      = always auto-create lead from inbound on THIS phone
+  //   'off'     = never auto-create lead from inbound on THIS phone
+  try {
+    await db.query(`ALTER TABLE wa_phones ADD COLUMN IF NOT EXISTS autolead_mode TEXT DEFAULT 'inherit'`);
+  } catch (_) {}
 }
 
 async function api_wa_phones_listAll(token) {
@@ -2609,6 +2632,7 @@ async function api_wa_phones_listAll(token) {
              display_phone_number, verified_name, label,
              quality_rating, status, messaging_limit_tier,
              is_default, is_active, default_owner_user_id,
+             COALESCE(autolead_mode, 'inherit') AS autolead_mode,
              last_seen_at, created_at, updated_at
         FROM wa_phones
        ORDER BY is_default DESC, created_at ASC
@@ -2643,9 +2667,19 @@ async function api_wa_phones_save(token, payload) {
     defaultOwner = (v == null || v === '' || Number(v) === 0) ? null : Number(v);
   }
   const sets = []; const vals = []; let i = 1;
+  // WA_PERNUMBER_AUTOLEAD_v1: per-phone autolead override.
+  // Validate strictly to one of three values; reject garbage so the
+  // UI can't accidentally write a typo and silently disable autolead.
+  let autoleadMode;
+  if (Object.prototype.hasOwnProperty.call(p, 'autolead_mode')) {
+    const v = String(p.autolead_mode || 'inherit').toLowerCase();
+    if (!['inherit', 'on', 'off'].includes(v)) throw new Error("autolead_mode must be one of: inherit, on, off");
+    autoleadMode = v;
+  }
   if (label         != null)      { sets.push(`label = $${i++}`);                  vals.push(label); }
   if (isActive      != null)      { sets.push(`is_active = $${i++}`);              vals.push(isActive); }
   if (defaultOwner !== undefined) { sets.push(`default_owner_user_id = $${i++}`);  vals.push(defaultOwner); }
+  if (autoleadMode !== undefined) { sets.push(`autolead_mode = $${i++}`);          vals.push(autoleadMode); }
   if (!sets.length) return { ok: true };
   vals.push(id);
   await db.query(`UPDATE wa_phones SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $${i}`, vals);
