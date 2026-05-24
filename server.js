@@ -334,6 +334,22 @@ app.get('/fb/auth/callback', async (req, res) => {
   return _runAsTenant(slug, req, res, handler);
 });
 
+// ---- GMEET_v1 — Google Calendar OAuth callback (one URL for all tenants) ----
+// Mirrors the FB callback pattern: decode the state JWT (no verify) to peek
+// at the tenant slug, then run the actual handler inside _runAsTenant so
+// db.query writes to the right tenant DB.
+app.get('/saas/google/callback', async (req, res) => {
+  const stateRaw = (req.query.state || '').toString();
+  let slug;
+  try {
+    const peek = jwtLib.decode(stateRaw);
+    if (peek && peek.slug) slug = peek.slug;
+  } catch (_) {}
+  if (!slug) return res.status(400).type('html').send('<h2>Bad state — missing tenant slug</h2>');
+  const handler = require('./routes/googleCalendar').expressOAuthCallback;
+  return _runAsTenant(slug, req, res, handler);
+});
+
 // ---- Meta Lead Ads webhook (one URL for all tenants) ------------
 //
 // FB calls these in two flavours:

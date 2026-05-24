@@ -36731,7 +36731,209 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
     });
   }
 
-  // ==================== CUSTOMERS ====================
+  
+  /* ════════════════════════════════════════════════════════════════════
+     GMEET_v1 — Google Calendar / Meet integration
+     ════════════════════════════════════════════════════════════════════
+     Surfaces:
+       • Settings → Integrations card: Connect / Disconnect Google Calendar
+       • Lead modal: 📅 Schedule meeting button + Meetings list panel
+       • Cancellation + re-send-WhatsApp from list
+     Backend: api_gcal_status / api_gcal_authUrl / api_gcal_disconnect,
+              api_meetings_create / list / cancel / resendWa.
+  */
+  async function gmeetRenderConnectCard() {
+    const wrap = h('div', { class: 'card', style: { marginBottom: '1rem' } });
+    wrap.appendChild(h('h3', { style: { marginTop: 0 } }, '📅 Google Calendar + Meet'));
+    wrap.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+      'Connect your Google account to schedule meetings from any lead and auto-send the Google Meet link to the customer over WhatsApp. Each user connects their own Google account — meetings appear on your personal calendar.'));
+    const body = h('div', {}, h('div', { class: 'muted' }, 'Loading…'));
+    wrap.appendChild(body);
+    try {
+      const s = await api('api_gcal_status');
+      body.innerHTML = '';
+      if (!s.configured) {
+        body.appendChild(h('div', { class: 'error-box' },
+          'Google OAuth is not configured on the platform. Ask support to set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET on Railway, plus register the redirect URI on Google Cloud Console.'));
+        return wrap;
+      }
+      if (s.connected) {
+        body.appendChild(h('div', { class: 'muted', style: { padding: '.5rem 0' } },
+          '✅ Connected as ', h('b', {}, s.email || 'unknown')
+        ));
+        body.appendChild(h('button', { class: 'btn ghost danger', onclick: async () => {
+          if (!confirm('Disconnect Google Calendar? Existing scheduled meetings stay on Google but you won\'t be able to create new ones until you reconnect.')) return;
+          try {
+            await api('api_gcal_disconnect');
+            toast('Disconnected', 'ok');
+            wrap.replaceWith(await gmeetRenderConnectCard());
+          } catch (e) { toast(e.message, 'err'); }
+        } }, '🚪 Disconnect'));
+      } else {
+        body.appendChild(h('button', { class: 'btn primary', style: { background: '#4285f4', borderColor: '#4285f4' }, onclick: async () => {
+          try {
+            const r = await api('api_gcal_authUrl');
+            window.open(r.url, '_blank', 'width=520,height=640');
+            toast('Approve in the popup. The window closes when done — then reload this page.', 'info');
+          } catch (e) { toast(e.message, 'err'); }
+        } }, '🔗 Connect Google Calendar'));
+      }
+    } catch (e) {
+      body.innerHTML = '';
+      body.appendChild(h('div', { class: 'error-box' }, 'Status check failed: ' + e.message));
+    }
+    return wrap;
+  }
+
+  /* Lead-modal helper — meetings panel. Call from any lead-modal renderer:
+       const panel = await gmeetMeetingsPanel(leadId);
+       container.appendChild(panel);
+  */
+  async function gmeetMeetingsPanel(leadId) {
+    const panel = h('div', { class: 'card', style: { marginTop: '.8rem' } });
+    panel.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+      h('h4', { style: { margin: 0 } }, '📅 Meetings & Google Meet'),
+      h('button', { class: 'btn sm primary', style: { background: '#16a34a', borderColor: '#16a34a' },
+        onclick: () => gmeetOpenScheduleModal(leadId, () => gmeetRefreshPanel(panel, leadId)) },
+        '+ Schedule meeting')
+    ));
+    const listWrap = h('div', { class: 'gmeet-list', style: { marginTop: '.5rem' } }, h('div', { class: 'muted' }, 'Loading…'));
+    panel.appendChild(listWrap);
+    await gmeetRefreshPanel(panel, leadId);
+    return panel;
+  }
+
+  async function gmeetRefreshPanel(panel, leadId) {
+    const listWrap = panel.querySelector('.gmeet-list');
+    if (!listWrap) return;
+    try {
+      const rows = await api('api_meetings_list', leadId);
+      listWrap.innerHTML = '';
+      if (!rows.length) {
+        listWrap.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+          'No meetings yet. Click + Schedule meeting to create one with a Google Meet link, auto-sent to the lead over WhatsApp.'));
+        return;
+      }
+      rows.forEach(m => {
+        const start = new Date(m.start_at);
+        const istStr = start.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' });
+        const cancelled = m.status === 'cancelled';
+        const row = h('div', { class: 'gmeet-row',
+          style: { padding: '.55rem .7rem', borderRadius: '8px', background: cancelled ? '#fef2f2' : '#f0fdf4',
+                   border: '1px solid ' + (cancelled ? '#fecaca' : '#bbf7d0'), marginBottom: '.4rem',
+                   display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '.5rem', flexWrap: 'wrap' } },
+          h('div', { style: { flex: 1, minWidth: '180px' } },
+            h('div', { style: { fontWeight: 600, fontSize: '.9rem', textDecoration: cancelled ? 'line-through' : 'none' } }, m.title),
+            h('div', { style: { fontSize: '.78rem', color: '#475569', marginTop: '.2rem' } },
+              '🕐 ', istStr, ' IST · ', String(m.user_name || ''),
+              m.wa_sent_at ? h('span', { style: { marginLeft: '.4rem', color: '#16a34a' } }, '· ✓ sent on WhatsApp') : null,
+              cancelled ? h('span', { style: { marginLeft: '.4rem', color: '#b91c1c', fontWeight: 600 } }, '· CANCELLED') : null
+            )
+          ),
+          h('div', { style: { display: 'flex', gap: '.3rem', flexShrink: 0 } },
+            m.meet_link ? h('a', { href: m.meet_link, target: '_blank', class: 'btn sm', style: { background: '#4285f4', color: '#fff', borderColor: '#4285f4' } }, '🔗 Join') : null,
+            !cancelled && m.meet_link ? h('button', { class: 'btn sm', title: 'Re-send Meet link to lead via WhatsApp',
+              onclick: async (ev) => {
+                const btn = ev.currentTarget; btn.disabled = true;
+                try { await api('api_meetings_resendWa', m.id); toast('Sent', 'ok'); await gmeetRefreshPanel(panel, leadId); }
+                catch (e) { toast(e.message, 'err'); btn.disabled = false; }
+              } }, '📤 Resend') : null,
+            !cancelled ? h('button', { class: 'btn sm danger', onclick: async () => {
+              if (!confirm('Cancel this meeting? Lead will get a cancellation notice in their email/calendar.')) return;
+              try { await api('api_meetings_cancel', m.id); toast('Cancelled', 'ok'); await gmeetRefreshPanel(panel, leadId); }
+              catch (e) { toast(e.message, 'err'); }
+            } }, '✕ Cancel') : null
+          )
+        );
+        listWrap.appendChild(row);
+      });
+    } catch (e) {
+      listWrap.innerHTML = '';
+      listWrap.appendChild(h('div', { class: 'error-box' }, 'Could not load meetings: ' + e.message));
+    }
+  }
+
+  /* Modal: date / time / duration / title / agenda + send-on-whatsapp checkbox. */
+  function gmeetOpenScheduleModal(leadId, onSaved) {
+    const _today = new Date();
+    _today.setMinutes(_today.getMinutes() - _today.getTimezoneOffset()); // local time
+    const _todayLocal = _today.toISOString().slice(0, 10);
+    const _nowH = String(new Date().getHours() + 1).padStart(2, '0');
+    const titleI = h('input', { value: '', placeholder: 'e.g. Site visit walkthrough', style: { width: '100%' } });
+    const descI  = h('textarea', { rows: 3, placeholder: 'Agenda / notes (optional, included in calendar invite)', style: { width: '100%' } });
+    const dateI  = h('input', { type: 'date', value: _todayLocal, style: { width: '100%' } });
+    const timeI  = h('input', { type: 'time', value: _nowH + ':00', style: { width: '100%' } });
+    const durI   = h('select', { style: { width: '100%' } },
+      ...[15, 30, 45, 60, 90, 120].map(n => h('option', { value: String(n), selected: n === 30 ? 'selected' : null }, n + ' minutes'))
+    );
+    const waChk  = h('input', { type: 'checkbox', checked: 'checked' });
+
+    const m = h('div', { class: 'modal-backdrop' });
+    const card = h('div', { class: 'modal', style: { maxWidth: '500px' } },
+      h('div', { class: 'modal-head' },
+        h('h3', {}, '📅 Schedule meeting'),
+        h('button', { class: 'btn icon', onclick: () => m.remove() }, '✕')
+      ),
+      h('div', { style: { padding: '1rem' } },
+        h('p', { class: 'muted', style: { fontSize: '.85rem', marginTop: 0 } },
+          'Creates a Google Calendar event with an auto-generated Google Meet link. Send the link to the lead over WhatsApp in one click.'),
+        h('div', { style: { display: 'grid', gridTemplateColumns: '1fr', gap: '.5rem' } },
+          h('div', {}, h('label', { style: { fontSize: '.78rem', color: '#475569' } }, 'Title'), titleI),
+          h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '.5rem' } },
+            h('div', {}, h('label', { style: { fontSize: '.78rem', color: '#475569' } }, 'Date'), dateI),
+            h('div', {}, h('label', { style: { fontSize: '.78rem', color: '#475569' } }, 'Start time (IST)'), timeI)
+          ),
+          h('div', {}, h('label', { style: { fontSize: '.78rem', color: '#475569' } }, 'Duration'), durI),
+          h('div', {}, h('label', { style: { fontSize: '.78rem', color: '#475569' } }, 'Agenda / notes'), descI),
+          h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', marginTop: '.3rem' } },
+            waChk, h('span', { style: { fontSize: '.85rem' } }, 'Send Meet link to lead on WhatsApp immediately'))
+        )
+      ),
+      h('div', { class: 'actions', style: { display: 'flex', justifyContent: 'flex-end', gap: '.5rem', padding: '1rem', borderTop: '1px solid #e2e8f0' } },
+        h('button', { class: 'btn', onclick: () => m.remove() }, 'Cancel'),
+        h('button', { class: 'btn primary', style: { background: '#16a34a', borderColor: '#16a34a' }, onclick: async (ev) => {
+          const btn = ev.currentTarget;
+          if (!titleI.value.trim()) { toast('Title required', 'err'); return; }
+          if (!dateI.value || !timeI.value) { toast('Pick date + time', 'err'); return; }
+          btn.disabled = true; btn.textContent = '⏳ Creating meeting…';
+          try {
+            // Combine date + time + IST offset
+            const startISO = dateI.value + 'T' + timeI.value + ':00+05:30';
+            const r = await api('api_meetings_create', {
+              lead_id: leadId,
+              title: titleI.value.trim(),
+              description: descI.value.trim(),
+              start_at: startISO,
+              duration_minutes: Number(durI.value),
+              send_wa: waChk.checked
+            });
+            if (r.wa_attempted && !r.wa_sent) {
+              toast('✓ Meeting created — but WhatsApp send failed: ' + (r.wa_error || 'unknown'), 'warn');
+            } else if (r.wa_sent) {
+              toast('✓ Meeting created + WhatsApp sent', 'ok');
+            } else {
+              toast('✓ Meeting created', 'ok');
+            }
+            m.remove();
+            if (typeof onSaved === 'function') onSaved();
+          } catch (e) {
+            toast(e.message, 'err');
+            btn.disabled = false; btn.textContent = 'Create + send';
+          }
+        } }, 'Create + send')
+      )
+    );
+    m.appendChild(card);
+    document.body.appendChild(m);
+    setTimeout(() => titleI.focus(), 50);
+  }
+
+  /* Expose to window so any existing lead-modal renderer can call it. */
+  window.gmeetOpenScheduleModal = gmeetOpenScheduleModal;
+  window.gmeetMeetingsPanel = gmeetMeetingsPanel;
+  window.gmeetRenderConnectCard = gmeetRenderConnectCard;
+
+// ==================== CUSTOMERS ====================
   VIEWS.invCustomers = async (view) => _safe(view, async () => {
     view.innerHTML = '';
     const pg = _page('👤 Bill-To Customers');

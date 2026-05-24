@@ -92,6 +92,8 @@ const ROUTE_FILES = [
   'ivr',
   'compliance',  /* COMPLIANCE_v1 */
   'reportTemplates',  /* REPORT_SCHEDULE_v1 */
+  'googleCalendar',  /* GMEET_v1 */
+  'meetings',        /* GMEET_v1 */
 ];
 
 const API = {};
