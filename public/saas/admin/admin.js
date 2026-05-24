@@ -131,7 +131,7 @@ const NAV = [
   { id: 'requirements',  label: '🛠 Custom Requirements' },
   { id: 'tickets',       label: '🎫 Support Tickets' },   // TKT_ADMIN_v1
   { id: 'admins',        label: '👥 Super Assistants' },
-  { id: 'deviceHealth',  label: '📱 Device Health' },  /* DEVICE_DIAG_v1 */
+  { id: 'device_health', label: '📱 Device Health' },  /* DEVICE_DIAG_v1 */
   { id: 'settings',      label: '⚙️ Settings' }
 ];
 
@@ -2735,11 +2735,11 @@ async function openTenantUsersModal(t) {
 /* ============================================================
  * DEVICE_DIAG_v1 — "Device Health" super-admin tab
  * ============================================================ */
-VIEWS.deviceHealth = async function (view) {
+VIEWS.device_health = async function (view) {
   view.innerHTML = '';
   var header = h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' } },
     h('h2', { style: { margin: 0 } }, 'Device Health — recording sync diagnosis'),
-    h('button', { class: 'btn sm ghost', onclick: function () { VIEWS.deviceHealth(view); } }, 'Refresh')
+    h('button', { class: 'btn sm ghost', onclick: function () { VIEWS.device_health(view); } }, 'Refresh')
   );
   view.appendChild(header);
 
@@ -2784,7 +2784,7 @@ VIEWS.deviceHealth = async function (view) {
 VIEWS.deviceHealthTenant = async function (view, slug) {
   view.innerHTML = '';
   view.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' } },
-    h('button', { class: 'btn sm ghost', onclick: function () { VIEWS.deviceHealth(view); } }, 'Back'),
+    h('button', { class: 'btn sm ghost', onclick: function () { VIEWS.device_health(view); } }, 'Back'),
     h('h2', { style: { margin: 0 } }, slug)
   ));
   var status = h('div', { style: { padding: '12px', color: '#666' } }, 'Diagnosing users...');
