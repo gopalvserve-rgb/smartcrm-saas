@@ -10918,6 +10918,75 @@ async function wbConnect() {
     });
   }
 
+  /* WA_AUTOLEAD_CARD_v1 (2026-05-24) — standalone Auto-Lead Settings card.
+     Previously the autolead_on / autolead_source / default_user_id /
+     default_status_id / default_country_code controls lived ONLY inside the
+     Manual-Entry credentials card (rendered when embOn === false). Since the
+     default for every tenant is Embedded SignIn (embOn = true) AND the
+     Embedded branch returns early at the bottom of this function, those
+     controls were never reachable for normally-connected tenants — confirmed
+     reproducible.
+
+     Fix: render a self-contained card here, BEFORE the embOn gate, so any
+     connected tenant can flip the auto-lead behaviour regardless of how
+     they connected WhatsApp. Backend (api_wb_settings_save + cfg.autoLeadOn
+     in whatsbot._handleInbound) already respects all these fields. */
+  if (isConnected) {
+    const aLead = h('div', { class: 'card', style: { marginBottom: '.8rem' } });
+    aLead.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', marginBottom: '.4rem' } },
+      h('h3', { style: { margin: 0 } }, '📥 Auto-lead from inbound WhatsApp'),
+      h('span', { class: 'muted', style: { fontSize: '.75rem' } }, '— controls what happens when a number messages you')
+    ));
+    aLead.appendChild(h('p', { class: 'muted', style: { fontSize: '.82rem', marginTop: '.2rem', marginBottom: '.7rem' } },
+      'OFF → inbound messages are still saved to the WhatsApp chat thread, but no lead is created. ',
+      'ON → a fresh lead is auto-created for any unknown number (current behaviour). ',
+      'Per-number whitelist (🚫 button on Lead modal / chat header) still works independently.'));
+    const aForm = h('form', { class: 'form-grid', style: { marginTop: '.4rem' }, onsubmit: async ev => {
+      ev.preventDefault();
+      const fd = new FormData(ev.target);
+      try {
+        await api('api_wb_settings_save', {
+          autolead_on: !!fd.get('autolead_on'),
+          autolead_source: fd.get('autolead_source') || 'WhatsApp',
+          default_country_code: fd.get('default_country_code') || '91',
+          default_user_id: fd.get('default_user_id') || '',
+          default_status_id: fd.get('default_status_id') || ''
+        });
+        toast('Auto-lead settings saved', 'ok');
+      } catch (e) { toast(e.message, 'err'); }
+    }});
+    const _alField = (label, inp) => h('div', { class: 'f-row' }, h('label', {}, label), inp);
+    aForm.appendChild(h('div', { class: 'f-row full' },
+      h('label', {}, 'Convert new messages to leads'),
+      h('label', { class: 'qual-toggle' },
+        h('input', { type: 'checkbox', name: 'autolead_on', checked: s.autolead_on ? 'checked' : null }),
+        ' Enabled — turn OFF to stop auto-creating leads from inbound messages')
+    ));
+    aForm.appendChild(_alField('Lead source label',
+      h('input', { name: 'autolead_source', value: s.autolead_source || 'WhatsApp', placeholder: 'WhatsApp' })));
+    aForm.appendChild(_alField('Default country code (for 10-digit numbers)',
+      h('input', { name: 'default_country_code', value: s.default_country_code || '91', placeholder: '91' })));
+    const _users = CRM.cache.users || [];
+    const _statuses = CRM.cache.statuses || [];
+    aForm.appendChild(_alField('Default assignee for new WhatsApp leads',
+      h('select', { name: 'default_user_id' },
+        h('option', { value: '' }, '— Use assignment rules —'),
+        ..._users.map(u => h('option', { value: u.id, selected: String(s.default_user_id || '') === String(u.id) ? 'selected' : null }, u.name))
+      )
+    ));
+    aForm.appendChild(_alField('Default status for new WhatsApp leads',
+      h('select', { name: 'default_status_id' },
+        h('option', { value: '' }, '— First status —'),
+        ..._statuses.map(st => h('option', { value: st.id, selected: String(s.default_status_id || '') === String(st.id) ? 'selected' : null }, st.name))
+      )
+    ));
+    aForm.appendChild(h('div', { class: 'f-row full', style: { marginTop: '.6rem' } },
+      h('button', { type: 'submit', class: 'btn primary' }, '💾 Save auto-lead settings')
+    ));
+    aLead.appendChild(aForm);
+    wrap.appendChild(aLead);
+  }
+
   if (embOn) {
     // ============ EMBEDDED SIGNIN MODE ============
     // Already connected → don't show the Connect button again, just an
