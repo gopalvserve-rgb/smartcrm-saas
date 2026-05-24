@@ -94,6 +94,7 @@ const ROUTE_FILES = [
   'reportTemplates',  /* REPORT_SCHEDULE_v1 */
   'googleCalendar',  /* GMEET_v1 */
   'meetings',        /* GMEET_v1 */
+  'recordingHealth', /* DEVICE_DIAG_v1 */
 ];
 
 const API = {};

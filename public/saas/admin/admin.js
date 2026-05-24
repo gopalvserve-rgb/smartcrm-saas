@@ -2731,3 +2731,178 @@ async function openTenantUsersModal(t) {
   refresh();
 }
 
+/* ============================================================
+ * DEVICE_DIAG_v1 — "Device Health" super-admin tab
+ * ============================================================ */
+VIEWS.deviceHealth = async function (view) {
+  view.innerHTML = '';
+  var header = h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' } },
+    h('h2', { style: { margin: 0 } }, 'Device Health — recording sync diagnosis'),
+    h('button', { class: 'btn sm ghost', onclick: function () { VIEWS.deviceHealth(view); } }, 'Refresh')
+  );
+  view.appendChild(header);
+
+  var status = h('div', { style: { padding: '12px', color: '#666' } }, 'Loading tenants...');
+  view.appendChild(status);
+
+  var resp;
+  try { resp = await api('api_saas_recHealth_overview', {}); }
+  catch (e) { status.textContent = 'Error: ' + (e.message || e); return; }
+  if (!resp || !resp.ok) { status.textContent = 'Error: ' + (resp && resp.error || 'unknown'); return; }
+  status.remove();
+
+  var rows = (resp.tenants || []).map(function (t) {
+    var lastRec = t.last_rec_at ? new Date(t.last_rec_at).toLocaleString() : '-';
+    var stale = t.last_rec_at ? ((Date.now() - Date.parse(t.last_rec_at)) > 3 * 24 * 60 * 60 * 1000) : true;
+    return h('tr', {},
+      h('td', {}, h('b', {}, t.name || t.slug), h('div', { style: { fontSize: '11px', color: '#888' } }, t.slug)),
+      h('td', {}, String(t.users || 0)),
+      h('td', {}, String(t.calls_24h || 0)),
+      h('td', {}, String(t.recs_24h || 0)),
+      h('td', { style: { color: stale ? '#c00' : '#080' } }, lastRec),
+      h('td', {}, h('button', {
+        class: 'btn sm',
+        onclick: (function (slug) { return function () { VIEWS.deviceHealthTenant(view, slug); }; })(t.slug)
+      }, 'Diagnose'))
+    );
+  });
+
+  view.appendChild(h('table', { class: 'tbl', style: { width: '100%' } },
+    h('thead', {}, h('tr', {},
+      h('th', {}, 'Tenant'),
+      h('th', {}, 'Users'),
+      h('th', {}, 'Calls 24h'),
+      h('th', {}, 'Recs 24h'),
+      h('th', {}, 'Last recording'),
+      h('th', {}, '')
+    )),
+    h('tbody', {}, rows)
+  ));
+};
+
+VIEWS.deviceHealthTenant = async function (view, slug) {
+  view.innerHTML = '';
+  view.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' } },
+    h('button', { class: 'btn sm ghost', onclick: function () { VIEWS.deviceHealth(view); } }, 'Back'),
+    h('h2', { style: { margin: 0 } }, slug)
+  ));
+  var status = h('div', { style: { padding: '12px', color: '#666' } }, 'Diagnosing users...');
+  view.appendChild(status);
+
+  var resp;
+  try { resp = await api('api_saas_recHealth_byTenant', { tenant_slug: slug }); }
+  catch (e) { status.textContent = 'Error: ' + (e.message || e); return; }
+  if (!resp || !resp.ok) { status.textContent = 'Error: ' + (resp && resp.error || 'unknown'); return; }
+  status.remove();
+
+  var s = resp.summary || {};
+  view.appendChild(h('div', { style: { display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' } },
+    h('div', { style: { padding: '8px 12px', background: '#fee', color: '#c00', borderRadius: '6px', border: '1px solid #fcc' } }, (s.users_red || 0) + ' broken'),
+    h('div', { style: { padding: '8px 12px', background: '#fff7e6', color: '#a60', borderRadius: '6px', border: '1px solid #fec' } }, (s.users_yellow || 0) + ' warning'),
+    h('div', { style: { padding: '8px 12px', background: '#e6fff0', color: '#080', borderRadius: '6px', border: '1px solid #cfc' } }, (s.users_green || 0) + ' healthy'),
+    h('div', { style: { padding: '8px 12px', background: '#eef', color: '#234', borderRadius: '6px', border: '1px solid #dde' } }, (s.users_total || 0) + ' total users')
+  ));
+
+  var userRows = (resp.users || []).map(function (u) {
+    var sev = u.diagnosis && u.diagnosis.severity;
+    var bg = sev === 'red' ? '#fff5f5' : sev === 'yellow' ? '#fffaf0' : '#f5fff5';
+    return h('tr', { style: { background: bg } },
+      h('td', {}, h('b', {}, u.user_name || u.user_email), h('div', { style: { fontSize: '11px', color: '#888' } }, u.user_role || '')),
+      h('td', {},
+        h('div', { style: { fontSize: '12px' } }, (u.diagnosis && u.diagnosis.message) || ''),
+        h('div', { style: { fontSize: '10px', color: '#888', textTransform: 'uppercase' } }, 'Step: ' + ((u.diagnosis && u.diagnosis.step) || '?'))
+      ),
+      h('td', {}, u.days_since_login == null ? '-' : (u.days_since_login + 'd ago')),
+      h('td', {}, u.days_since_call == null ? '-' : (u.days_since_call + 'd ago')),
+      h('td', {}, u.days_since_recording == null ? '-' : (u.days_since_recording + 'd ago')),
+      h('td', {}, (u.recordings_total || 0) + (u.recordings_matched_pct != null ? (' (' + u.recordings_matched_pct + '% matched)') : '')),
+      h('td', {}, h('button', {
+        class: 'btn sm ghost',
+        onclick: (function (slug, uid, name) { return function () { VIEWS.deviceHealthUser(view, slug, uid, name); }; })(slug, u.user_id, u.user_name)
+      }, 'Timeline'))
+    );
+  });
+
+  view.appendChild(h('table', { class: 'tbl', style: { width: '100%' } },
+    h('thead', {}, h('tr', {},
+      h('th', {}, 'User'),
+      h('th', {}, 'Diagnosis'),
+      h('th', {}, 'Login'),
+      h('th', {}, 'Last call'),
+      h('th', {}, 'Last rec'),
+      h('th', {}, 'Recs'),
+      h('th', {}, '')
+    )),
+    h('tbody', {}, userRows)
+  ));
+};
+
+VIEWS.deviceHealthUser = async function (view, slug, userId, userName) {
+  view.innerHTML = '';
+  view.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' } },
+    h('button', { class: 'btn sm ghost', onclick: (function (s) { return function () { VIEWS.deviceHealthTenant(view, s); }; })(slug) }, 'Back'),
+    h('h2', { style: { margin: 0 } }, (userName || 'user') + ' — event timeline')
+  ));
+  var status = h('div', { style: { padding: '12px', color: '#666' } }, 'Loading events...');
+  view.appendChild(status);
+
+  var resp;
+  try { resp = await api('api_saas_devicediag_timeline', { tenant_slug: slug, user_id: userId, limit: 200 }); }
+  catch (e) { status.textContent = 'Error: ' + (e.message || e); return; }
+  if (!resp || !resp.ok) { status.textContent = 'Error: ' + (resp && resp.error || 'unknown'); return; }
+  status.remove();
+
+  var events = resp.events || [];
+  if (!events.length) {
+    view.appendChild(h('div', { style: { padding: '24px', background: '#fffbe6', borderRadius: '6px', color: '#a60' } },
+      'No telemetry events from this user yet. The phone telemetry script ships with the new deploy; events start flowing within 60 seconds of the user reopening the app.'));
+    return;
+  }
+
+  var rows = events.map(function (ev) {
+    var bg = ev.severity === 'error' ? '#fff5f5' : ev.severity === 'warn' ? '#fffaf0' : '#fff';
+    var payloadShort = '';
+    try { payloadShort = JSON.stringify(ev.payload || {}).slice(0, 200); } catch (e) { payloadShort = '?'; }
+    return h('tr', { style: { background: bg } },
+      h('td', {}, new Date(ev.created_at).toLocaleString()),
+      h('td', {}, ev.step || '-'),
+      h('td', {}, ev.event_type || ''),
+      h('td', {}, ev.severity || ''),
+      h('td', { style: { fontFamily: 'monospace', fontSize: '10px', color: '#555' } }, payloadShort)
+    );
+  });
+
+  view.appendChild(h('table', { class: 'tbl', style: { width: '100%', fontSize: '12px' } },
+    h('thead', {}, h('tr', {},
+      h('th', {}, 'When'),
+      h('th', {}, 'Step'),
+      h('th', {}, 'Event'),
+      h('th', {}, 'Severity'),
+      h('th', {}, 'Payload')
+    )),
+    h('tbody', {}, rows)
+  ));
+};
+
+/* DEVICE_DIAG_v1 — best-effort sidebar/topbar link injection */
+(function () {
+  function inject() {
+    if (document.getElementById('dh-tab-btn')) return;
+    var nav = document.querySelector('aside.nav, nav.sidebar, .admin-nav, .topbar, header.admin') || document.body;
+    var btn = document.createElement('a');
+    btn.id = 'dh-tab-btn';
+    btn.href = '#deviceHealth';
+    btn.textContent = '📱 Device Health';
+    btn.style.cssText = 'display:inline-block;padding:6px 10px;margin:6px;border:1px solid #ddd;border-radius:6px;background:#fff;color:#234;text-decoration:none;font-size:13px;cursor:pointer;';
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      var view = document.getElementById('view') || document.getElementById('main') || document.querySelector('.view') || document.body;
+      if (typeof VIEWS !== 'undefined' && VIEWS.deviceHealth) { VIEWS.deviceHealth(view); }
+    });
+    nav.appendChild(btn);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', inject);
+  else inject();
+  setInterval(inject, 5000);
+})();
+
