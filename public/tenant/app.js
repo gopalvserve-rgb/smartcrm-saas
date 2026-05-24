@@ -3403,7 +3403,7 @@ async function bulkMergePrompt() {
   const leadsCache = (CRM.cache.leads || []);
   const rows = ids.map(id => leadsCache.find(l => Number(l.id) === Number(id)) || { id, name: '#' + id });
 
-  const modal = h('div', { class: 'modal' });
+  const modal = h('div', { class: 'modal-backdrop' });  /* LEAD_MERGE_MODAL_FIX_v1 */
   const targetId = { v: rows[0].id };
   const list = h('div', { style: { maxHeight: '300px', overflow: 'auto', border: '1px solid var(--border, #e2e8f0)', borderRadius: '8px', padding: '.5rem' } });
   rows.forEach(r => {
@@ -3422,7 +3422,7 @@ async function bulkMergePrompt() {
   });
 
   modal.innerHTML = '';
-  modal.appendChild(h('div', { class: 'modal-content' },
+  modal.appendChild(h('div', { class: 'modal' },  /* LEAD_MERGE_MODAL_FIX_v1: inner card uses .modal */
     h('h3', {}, '🔀 Merge ' + ids.length + ' leads into one'),
     h('p', { class: 'muted', style: { fontSize: '.85rem' } },
       'Pick the lead to KEEP. The other ' + (ids.length - 1) + ' will be merged into it ' +
