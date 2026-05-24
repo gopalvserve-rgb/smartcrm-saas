@@ -15,6 +15,15 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><text y=%2224%22 font-size=%2226%22>🎯</text></svg>" />
   <link rel="apple-touch-icon" href="icon-192.png" />
+  <!-- SC_IOS_PWA_v1 — iOS Add-to-Home-Screen support. apple-mobile-web-app-capable
+       tells iOS Safari to treat us as a standalone app when launched from the
+       home screen. title is the label that appears under the home-screen icon.
+       mobile-web-app-capable is the W3C-spec counterpart for compatibility. -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="SmartCRM" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="format-detection" content="telephone=no" />
   <script>
     // ---- SW_KILL_INLINE_v1 (2026-05-23) ------------------------------
     // Belt-and-suspenders cleanup. A previous version of the tenant SPA
@@ -168,6 +177,129 @@
 </head>
 <body>
   <div id="app"></div>
+
+  <!-- SC_IOS_PWA_v1 — install hint banner. Only shows on iOS Safari when
+       not already running in standalone mode and not dismissed before. -->
+  <style>
+    @keyframes ios-arrow-bounce { 0%,100%{transform:translateY(0);opacity:.6} 50%{transform:translateY(6px);opacity:1} }
+    @keyframes ios-pulse { 0%,100%{transform:scale(1);opacity:1} 50%{transform:scale(1.08);opacity:.85} }
+    #ios-install-hint { animation: ios-pulse 2.4s ease-in-out infinite }
+    #ios-install-arrow { animation: ios-arrow-bounce 1.4s ease-in-out infinite }
+    @keyframes fadeIn { from{opacity:0} to{opacity:1} }
+    #ios-howto-overlay { animation: fadeIn .25s ease-out }
+  </style>
+  <div id="ios-install-hint" style="display:none;position:fixed;bottom:4.5rem;left:1rem;right:1rem;z-index:99999;background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);color:#fff;padding:1rem;border-radius:16px;box-shadow:0 16px 48px rgba(0,0,0,.4);font:14px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;border:1px solid rgba(99,102,241,.4)">
+    <button id="ios-install-close" aria-label="Dismiss" style="position:absolute;top:.4rem;right:.4rem;background:transparent;border:none;color:rgba(255,255,255,.6);font-size:1.1rem;width:28px;height:28px;border-radius:50%;cursor:pointer;line-height:1">×</button>
+    <div style="display:flex;align-items:flex-start;gap:.7rem;padding-right:1.5rem">
+      <div style="font-size:1.8rem;flex-shrink:0">📱</div>
+      <div style="flex:1">
+        <div style="font-weight:700;font-size:.95rem;margin-bottom:.2rem">Install SmartCRM on your iPhone</div>
+        <div style="font-size:.78rem;opacity:.8;margin-bottom:.6rem">Works fullscreen like a real app — no App Store needed.</div>
+        <button id="ios-install-howto" style="background:#6366f1;color:#fff;border:none;border-radius:10px;padding:.55rem 1rem;font-size:.85rem;font-weight:600;cursor:pointer;width:100%">Show me how →</button>
+      </div>
+    </div>
+    <div id="ios-install-arrow" style="position:absolute;left:50%;bottom:-1.6rem;transform:translateX(-50%);color:#6366f1;font-size:1.6rem;pointer-events:none;text-shadow:0 2px 8px rgba(99,102,241,.5)">▼</div>
+  </div>
+  <div id="ios-howto-overlay" style="display:none;position:fixed;inset:0;z-index:99998;background:rgba(15,23,42,.94);color:#fff;overflow-y:auto;font:14px/1.5 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif">
+    <div style="max-width:480px;margin:0 auto;padding:2rem 1.5rem;min-height:100vh;box-sizing:border-box">
+      <button id="ios-howto-close" aria-label="Close" style="position:fixed;top:1rem;right:1rem;background:rgba(255,255,255,.15);border:none;color:#fff;font-size:1.3rem;width:40px;height:40px;border-radius:50%;cursor:pointer;backdrop-filter:blur(8px)">×</button>
+      <div style="text-align:center;margin-bottom:1.5rem">
+        <div style="font-size:3rem;margin-bottom:.5rem">📱</div>
+        <h2 style="margin:0 0 .3rem;font-size:1.4rem;font-weight:700">Install SmartCRM on iPhone</h2>
+        <p style="margin:0;opacity:.7;font-size:.85rem">3 quick steps. The install button is inside Safari, not on this page.</p>
+      </div>
+      <div style="background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:14px;padding:1.2rem;margin-bottom:1rem">
+        <div style="display:flex;gap:.8rem;align-items:flex-start">
+          <div style="background:#6366f1;color:#fff;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0">1</div>
+          <div style="flex:1">
+            <div style="font-weight:600;margin-bottom:.3rem">Find Safari's Share button</div>
+            <div style="opacity:.85;font-size:.85rem;margin-bottom:.7rem">At the BOTTOM of Safari you'll see a row of icons. The Share button is a small square with an up-arrow ↑ coming out of the top. If you don't see icons, scroll to the top of the page or tap the URL pill to expand the toolbar.</div>
+            <div style="display:flex;align-items:center;gap:.4rem;justify-content:center;padding:.6rem;background:rgba(0,0,0,.25);border-radius:8px;font-size:.75rem;opacity:.9">
+              <span style="opacity:.5">◁</span>
+              <span style="opacity:.5">▷</span>
+              <span style="background:#6366f1;color:#fff;padding:.25rem .5rem;border-radius:6px;font-weight:600">↑ this one</span>
+              <span style="opacity:.5">📑</span>
+              <span style="opacity:.5">⊞</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style="background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:14px;padding:1.2rem;margin-bottom:1rem">
+        <div style="display:flex;gap:.8rem;align-items:flex-start">
+          <div style="background:#6366f1;color:#fff;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0">2</div>
+          <div style="flex:1">
+            <div style="font-weight:600;margin-bottom:.3rem">Tap "Add to Home Screen"</div>
+            <div style="opacity:.85;font-size:.85rem;margin-bottom:.7rem">A big sheet slides up. Scroll DOWN until you see "Add to Home Screen".</div>
+            <div style="padding:.6rem;background:rgba(0,0,0,.25);border-radius:8px;font-size:.78rem">
+              <div style="opacity:.5;margin-bottom:.25rem">Copy</div>
+              <div style="opacity:.5;margin-bottom:.25rem">Find on Page</div>
+              <div style="opacity:.5;margin-bottom:.25rem">Add to Reading List</div>
+              <div style="background:#6366f1;color:#fff;padding:.3rem .5rem;border-radius:6px;font-weight:600;display:inline-block">➕ Add to Home Screen</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style="background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:14px;padding:1.2rem;margin-bottom:1.5rem">
+        <div style="display:flex;gap:.8rem;align-items:flex-start">
+          <div style="background:#6366f1;color:#fff;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0">3</div>
+          <div style="flex:1">
+            <div style="font-weight:600;margin-bottom:.3rem">Tap Add → find the icon</div>
+            <div style="opacity:.85;font-size:.85rem;margin-bottom:.7rem">Confirmation shows the app name. Tap <b>Add</b> top-right. The icon appears on the <b>last page</b> of your home screen (swipe right to find it).</div>
+            <div style="display:flex;align-items:center;gap:.5rem;padding:.6rem;background:rgba(0,0,0,.25);border-radius:8px">
+              <div style="background:#6366f1;color:#fff;width:50px;height:50px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:1.4rem">🎯</div>
+              <div style="font-size:.85rem">
+                <div style="font-weight:600">SmartCRM</div>
+                <div style="opacity:.7;font-size:.75rem">On your home screen, fullscreen</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style="text-align:center;padding-bottom:2rem">
+        <button id="ios-howto-dismiss" style="background:transparent;border:1px solid rgba(255,255,255,.3);color:#fff;border-radius:10px;padding:.6rem 1.5rem;font-size:.9rem;cursor:pointer">Got it — close this guide</button>
+        <div style="opacity:.5;font-size:.75rem;margin-top:1rem">Apple doesn't let websites install apps — only Safari can. That's why you tap the Share button manually.</div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function(){
+      try {
+        var ua = navigator.userAgent || '';
+        var isIOS = /iPad|iPhone|iPod/.test(ua) && !window.MSStream;
+        // iPadOS 13+ pretends to be a Mac. Tighten the detection so real Macs
+        // with Touch Bar / multi-touch trackpads don't get the banner.
+        if (!isIOS && /Macintosh/.test(ua) && navigator.maxTouchPoints > 2) {
+          var mm = window.matchMedia;
+          var coarse  = mm && mm('(pointer: coarse)').matches;
+          var noHover = mm && mm('(hover: none)').matches;
+          if (coarse && noHover) isIOS = true;
+        }
+        var isStandalone = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
+        if (!isStandalone && navigator.standalone === true) isStandalone = true;
+        var dismissed = false;
+        try { dismissed = localStorage.getItem('ios_install_dismissed') === '1'; } catch(_) {}
+        function persistDismiss() { try { localStorage.setItem('ios_install_dismissed', '1'); } catch(_) {} }
+        if (isIOS && !isStandalone && !dismissed) {
+          var hint = document.getElementById('ios-install-hint');
+          var overlay = document.getElementById('ios-howto-overlay');
+          if (!hint || !overlay) return;
+          setTimeout(function(){ hint.style.display = 'block'; }, 2000);
+          var howtoBtn = document.getElementById('ios-install-howto');
+          var closeBtn = document.getElementById('ios-install-close');
+          var overlayCloseBtn = document.getElementById('ios-howto-close');
+          var overlayDismissBtn = document.getElementById('ios-howto-dismiss');
+          if (howtoBtn) howtoBtn.onclick = function(){ overlay.style.display = 'block'; };
+          if (closeBtn) closeBtn.onclick = function(){ hint.style.display = 'none'; persistDismiss(); };
+          if (overlayCloseBtn) overlayCloseBtn.onclick = function(){ overlay.style.display = 'none'; };
+          if (overlayDismissBtn) overlayDismissBtn.onclick = function(){
+            overlay.style.display = 'none';
+            hint.style.display = 'none';
+            persistDismiss();
+          };
+        }
+      } catch(_) {}
+    })();
+  </script>
 
   <!-- Login screen -->
   <template id="tpl-login">
