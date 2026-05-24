@@ -41,6 +41,7 @@ async function api_devicediag_ingest(token, payload) {
 
   const batch = events.slice(0, 50);
   let written = 0;
+  let firstError = null;
   for (const ev of batch) {
     try {
       const created = ev && ev.created_at_ms && Number(ev.created_at_ms)
@@ -53,12 +54,12 @@ async function api_devicediag_ingest(token, payload) {
           String(ev.event_type || 'unknown').slice(0, 64),
           String(ev.severity || 'info').slice(0, 16),
           String(ev.step || '').slice(0, 32) || null,
-          ev.payload && typeof ev.payload === 'object' ? ev.payload : { raw: ev.payload },
+          ev.payload && typeof ev.payload === 'object' ? JSON.stringify(ev.payload) : JSON.stringify({ raw: ev.payload }),
           created,
         ]
       );
       written++;
-    } catch (_e) {}
+    } catch (e) { if (!firstError) firstError = e.message || String(e); }
   }
   // DEVICE_DIAG_RETENTION_3D: keep only events from the last 3 days.
   // Runs on every ingest call (cheap because of the (created_at DESC) index),
@@ -67,7 +68,7 @@ async function api_devicediag_ingest(token, payload) {
     await db.query("DELETE FROM device_diag_events WHERE created_at < NOW() - INTERVAL '3 days'");
   } catch (_e) {}
 
-  return { ok: true, written: written };
+  return { ok: true, written: written, error: firstError, debug: { eventsCount: events.length, userId: userId, deviceId: deviceId } };
 }
 
 module.exports = { api_devicediag_ingest };
