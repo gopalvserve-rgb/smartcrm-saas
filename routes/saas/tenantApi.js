@@ -94,7 +94,7 @@ const ROUTE_FILES = [
   'reportTemplates',  /* REPORT_SCHEDULE_v1 */
   'googleCalendar',  /* GMEET_v1 */
   'meetings',        /* GMEET_v1 */
-  'recordingHealth', /* DEVICE_DIAG_v1 */
+  'devicediag',      /* DEVICE_DIAG_INGEST_FIX_v1 — tenant ingest only; super-admin reads stay in routes/saas/recordingHealth.js */
 ];
 
 const API = {};

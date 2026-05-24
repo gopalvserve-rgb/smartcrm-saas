@@ -343,53 +343,7 @@ async function _ensureDiagTable() {
   await db.query("CREATE INDEX IF NOT EXISTS idx_devicediag_step_created ON device_diag_events (step, created_at DESC)").catch(() => {});
 }
 
-async function api_devicediag_ingest(token, payload) {
-  // Decode user from JWT (any logged-in user can post their own diagnostics)
-  let userId = null;
-  try {
-    const jwt = require('jsonwebtoken');
-    const decoded = jwt.decode(String(token || '').replace(/^Bearer\s+/i, ''));
-    if (decoded && decoded.id) userId = Number(decoded.id) || null;
-  } catch (_e) {}
-
-  await _ensureDiagTable();
-  const db = require('../../db/pg');
-  const events = Array.isArray(payload && payload.events) ? payload.events : [];
-  const deviceId = String((payload && payload.device_id) || '').slice(0, 64) || null;
-  if (!events.length) return { ok: true, written: 0 };
-
-  const batch = events.slice(0, 50);
-  let written = 0;
-  for (const ev of batch) {
-    try {
-      const created = ev && ev.created_at_ms && Number(ev.created_at_ms)
-                       ? new Date(Number(ev.created_at_ms)) : new Date();
-      await db.query(
-        "INSERT INTO device_diag_events (user_id, device_id, event_type, severity, step, payload, created_at)" +
-        " VALUES ($1, $2, $3, $4, $5, $6, $7)",
-        [
-          userId,
-          deviceId,
-          String(ev.event_type || 'unknown').slice(0, 64),
-          String(ev.severity || 'info').slice(0, 16),
-          String(ev.step || '').slice(0, 32) || null,
-          ev.payload && typeof ev.payload === 'object' ? ev.payload : { raw: ev.payload },
-          created,
-        ]
-      );
-      written++;
-    } catch (_e) {}
-  }
-
-  // Cap table size — keep last 5000 rows per tenant
-  try {
-    await db.query(
-      "DELETE FROM device_diag_events WHERE id < (SELECT MAX(id) - 5000 FROM device_diag_events)"
-    );
-  } catch (_e) {}
-
-  return { ok: true, written: written };
-}
+/* api_devicediag_ingest moved to routes/devicediag.js (tenant scope) — DEVICE_DIAG_INGEST_FIX_v1 */
 
 async function api_saas_devicediag_timeline(token, opts) {
   await requireSuperAdmin(token);
@@ -399,7 +353,7 @@ async function api_saas_devicediag_timeline(token, opts) {
   if (!slug) return { ok: false, error: 'tenant_slug required' };
 
   try {
-    const rows = await withTenantDb(slug, async () => {
+    const data = await withTenantDb(slug, async () => {
       await _ensureDiagTable();
       const db = require('../../db/pg');
       const where = userId ? 'WHERE user_id = $1' : '';
@@ -407,9 +361,19 @@ async function api_saas_devicediag_timeline(token, opts) {
       const sql = "SELECT id, user_id, device_id, event_type, severity, step, payload, created_at" +
                   " FROM device_diag_events " + where +
                   " ORDER BY created_at DESC LIMIT $" + params.length;
-      return await db.query(sql, params).then(r => r.rows || []);
+      const events = await db.query(sql, params).then(r => r.rows || []);
+      // DEVICE_DIAG_INGEST_FIX_v1: include tenant-wide stats so the empty state
+      // can tell the operator WHY they see nothing.
+      const stats = await db.query(
+        "SELECT" +
+        " COUNT(*)::int AS tenant_total," +
+        " COUNT(DISTINCT user_id)::int AS distinct_users," +
+        " MAX(created_at) AS last_event_at" +
+        " FROM device_diag_events"
+      ).then(r => r.rows[0] || {}).catch(() => ({}));
+      return { events, stats };
     });
-    return { ok: true, events: rows };
+    return { ok: true, events: data.events, stats: data.stats };
   } catch (e) {
     return { ok: false, error: e.message || String(e) };
   }
@@ -418,6 +382,6 @@ async function api_saas_devicediag_timeline(token, opts) {
 module.exports = {
   api_saas_recHealth_overview: api_saas_recHealth_overview,
   api_saas_recHealth_byTenant: api_saas_recHealth_byTenant,
-  api_devicediag_ingest: api_devicediag_ingest,
+  /* api_devicediag_ingest exported from routes/devicediag.js — DEVICE_DIAG_INGEST_FIX_v1 */
   api_saas_devicediag_timeline: api_saas_devicediag_timeline,
 };

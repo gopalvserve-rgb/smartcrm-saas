@@ -2883,8 +2883,30 @@ VIEWS.deviceHealthUser = async function (view, slug, userId, userName) {
 
   var events = resp.events || [];
   if (!events.length) {
-    view.appendChild(h('div', { style: { padding: '24px', background: '#fffbe6', borderRadius: '6px', color: '#a60' } },
-      'No telemetry events from this user yet. The phone telemetry script ships with the new deploy; events start flowing within 60 seconds of the user reopening the app.'));
+    var stats = resp.stats || {};
+    var tenantTotal = Number(stats.tenant_total || 0);
+    var distinctUsers = Number(stats.distinct_users || 0);
+    var lastAt = stats.last_event_at ? new Date(stats.last_event_at).toLocaleString() : null;
+    var box = h('div', { style: { padding: '20px', background: '#fffbe6', borderRadius: '6px', color: '#a60', border: '1px solid #fed' } });
+    if (tenantTotal === 0) {
+      box.appendChild(h('div', { style: { fontWeight: 'bold', marginBottom: '8px' } }, '⚠️ No telemetry from any user in this tenant yet'));
+      box.appendChild(h('div', { style: { fontSize: '13px', lineHeight: '1.5' } },
+        'The phone telemetry script (deviceDiag.js) is shipped but no events have reached the server. Possible causes:',
+        h('ul', { style: { marginTop: '6px' } },
+          h('li', {}, 'Users haven’t opened the web SPA since the deploy. Ask any user to open ', h('code', {}, '/t/<tenant>/'), ' in a browser; events arrive within 60 seconds.'),
+          h('li', {}, 'Users only open the Android APK — the APK serves bundled assets, not the live deviceDiag.js. An APK rebuild is needed to bundle it.'),
+          h('li', {}, 'Browser blocks localStorage / cookies (auth token absent → no POST).')
+        )
+      ));
+    } else {
+      box.appendChild(h('div', { style: { fontWeight: 'bold', marginBottom: '8px' } }, 'No events for this specific user yet'));
+      box.appendChild(h('div', { style: { fontSize: '13px', lineHeight: '1.5' } },
+        'This tenant has telemetry flowing (', h('b', {}, String(tenantTotal)), ' events from ', h('b', {}, String(distinctUsers)), ' distinct users',
+        lastAt ? '; last event ' + lastAt : '',
+        ') — but this user has produced 0. Most likely: they haven’t opened the web SPA since the telemetry shipped, or they only use the APK.'
+      ));
+    }
+    view.appendChild(box);
     return;
   }
 
