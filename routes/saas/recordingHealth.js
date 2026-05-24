@@ -118,6 +118,38 @@ async function api_saas_recHealth_byTenant(token, opts) {
         }
       }
 
+      // DEVICE_DIAG_v1 lastseen: aggregate freshest activity across many tables.
+      // Each table queried defensively so a missing one (industry-pack-only,
+      // optional schemas) contributes zero rows instead of erroring the request.
+      async function _maxByUser(sql) {
+        try {
+          const rows = await db.query(sql).then(r => r.rows || []);
+          return rows;
+        } catch (_e) { return []; }
+      }
+      const activityQueries = [
+        "SELECT user_id, MAX(created_at)  AS ts FROM device_diag_events GROUP BY user_id",
+        "SELECT user_id, MAX(created_at)  AS ts FROM call_events        GROUP BY user_id",
+        "SELECT user_id, MAX(uploaded_at) AS ts FROM recordings         GROUP BY user_id",
+        "SELECT user_id, MAX(created_at)  AS ts FROM lead_remarks       GROUP BY user_id",
+        "SELECT user_id, MAX(updated_at)  AS ts FROM leads              WHERE updated_at > NOW() - INTERVAL '90 days' AND assigned_to IS NOT NULL GROUP BY assigned_to, user_id",
+        "SELECT assigned_to AS user_id, MAX(updated_at) AS ts FROM leads WHERE updated_at > NOW() - INTERVAL '90 days' GROUP BY assigned_to",
+        "SELECT user_id, MAX(created_at)  AS ts FROM attendance         GROUP BY user_id",
+        "SELECT user_id, MAX(updated_at)  AS ts FROM whatsapp_messages  WHERE updated_at > NOW() - INTERVAL '90 days' GROUP BY user_id"
+      ];
+      const allRows = await Promise.all(activityQueries.map(q => _maxByUser(q)));
+      const lastSeenByUser = new Map();
+      for (const rows of allRows) {
+        for (const r of rows) {
+          const uid = Number(r.user_id) || null;
+          if (!uid || !r.ts) continue;
+          const t = (r.ts instanceof Date) ? r.ts.getTime() : Date.parse(String(r.ts));
+          if (!t) continue;
+          const cur = lastSeenByUser.get(uid) || 0;
+          if (t > cur) lastSeenByUser.set(uid, t);
+        }
+      }
+
       const recRows = await db.query(
         "SELECT user_id, MAX(uploaded_at) AS last_uploaded_at," +
         " MAX(created_at) AS last_created_at," +
@@ -150,7 +182,15 @@ async function api_saas_recHealth_byTenant(token, opts) {
         const r = recByUser.get(Number(u.id)) || {};
         const c = callByUser.get(Number(u.id)) || {};
         const f = fcmByUser.get(Number(u.id)) || {};
-        const lastLoginIso = u.last_login_at || u.created_at;
+        // DEVICE_DIAG_v1 lastseen: prefer recent activity (heartbeats / calls /
+        // recordings / lead edits) over the static last_login_at column. The
+        // old behaviour fell back to created_at when last_login_at was null,
+        // which made every user look "not opened in N days" on tenants that
+        // don't write to users.last_login_at on each login.
+        const lastSeenMs = lastSeenByUser.get(Number(u.id));
+        const lastLoginIso = lastSeenMs
+          ? new Date(lastSeenMs).toISOString()
+          : (u.last_login_at || u.created_at);
         const lastRecIso = r.last_uploaded_at || r.last_created_at;
         const lastCallIso = c.last_event_at;
         const lastFcmIso  = f.last_registered_at;
