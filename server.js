@@ -44,6 +44,7 @@ const applySchema = require('./routes/saas/applySchema');
 const crashReport = require('./routes/saas/crashReport');
 const aiSettings = require('./routes/saas/aiSettings');
 const aiCosting  = require('./routes/saas/aiCosting');
+const recordingHealth = require('./routes/saas/recordingHealth'); /* DEVICE_DIAG_v1 */
 const tenantModules = require('./routes/saas/tenantModules');
 const demoTenant = require('./routes/saas/demoTenant');
 const aiUsageIngest = require('./routes/saas/aiUsageIngest');
@@ -85,7 +86,8 @@ const SAAS_API = {};
   announcements, customReqs, webhookLogs, errorLogs, whatsbotBackfill, applySchema, crashReport,
   aiSettings, aiCosting,
   tenantModules, demoTenant,
-  tickets
+  tickets,
+  recordingHealth /* DEVICE_DIAG_v1 */
 ].forEach(mod => {
   Object.keys(mod).forEach(k => {
     if (typeof mod[k] === 'function' && k.startsWith('api_saas_')) SAAS_API[k] = mod[k];
