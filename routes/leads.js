@@ -2424,6 +2424,23 @@ async function api_leads_merge(token, payload) {
       extra: (() => { try { return JSON.parse(s.extra_json || '{}'); } catch (_) { return {}; } })()
     };
     await _foldIntoLead(target_id, foldPayload);
+
+    /* LEAD_MERGE_AUDIT_v1: write a 'merged_from_duplicate' entry per source so
+       the activity timeline preserves the history of where this lead's data
+       came from. Each entry captures the source lead id, its original
+       arrival date and identifying fields so an admin can later trace
+       "this number used to be lead #N, originally received on X". */
+    try {
+      await require('./tat').logAction(target_id, 'merged_from_duplicate', me.id, {
+        source_id: s.id,
+        source_name: s.name || null,
+        source_phone: s.phone || null,
+        source_email: s.email || null,
+        source_source: s.source || null,
+        source_created_at: s.created_at || null,
+        source_assigned_to: s.assigned_to || null
+      });
+    } catch (_) {}
   }
 
   // Reparent children — wrapped in per-table try/catch so a missing

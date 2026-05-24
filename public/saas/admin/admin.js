@@ -2797,18 +2797,45 @@ VIEWS.deviceHealthTenant = async function (view, slug) {
   status.remove();
 
   var s = resp.summary || {};
+  /* DEVICE_HEALTH_FILTER_v1: clickable filter chips */
+  if (!window._dhFilter) window._dhFilter = 'all';
+  function mkPill(label, key, bg, fg, br) {
+    var active = window._dhFilter === key;
+    return h('div', {
+      style: {
+        padding: '8px 12px', background: bg, color: fg, borderRadius: '6px',
+        border: '2px solid ' + (active ? fg : br), cursor: 'pointer',
+        fontWeight: active ? 'bold' : 'normal'
+      },
+      onclick: function () { window._dhFilter = key; VIEWS.deviceHealthTenant(view, slug); }
+    }, label);
+  }
   view.appendChild(h('div', { style: { display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' } },
-    h('div', { style: { padding: '8px 12px', background: '#fee', color: '#c00', borderRadius: '6px', border: '1px solid #fcc' } }, (s.users_red || 0) + ' broken'),
-    h('div', { style: { padding: '8px 12px', background: '#fff7e6', color: '#a60', borderRadius: '6px', border: '1px solid #fec' } }, (s.users_yellow || 0) + ' warning'),
-    h('div', { style: { padding: '8px 12px', background: '#e6fff0', color: '#080', borderRadius: '6px', border: '1px solid #cfc' } }, (s.users_green || 0) + ' healthy'),
-    h('div', { style: { padding: '8px 12px', background: '#eef', color: '#234', borderRadius: '6px', border: '1px solid #dde' } }, (s.users_total || 0) + ' total users')
+    mkPill((s.users_red || 0) + ' broken',  'red',    '#fee',   '#c00', '#fcc'),
+    mkPill((s.users_yellow || 0) + ' warning', 'yellow', '#fff7e6', '#a60', '#fec'),
+    mkPill((s.users_green || 0) + ' healthy',  'green',  '#e6fff0', '#080', '#cfc'),
+    mkPill((s.users_total || 0) + ' all users',  'all',    '#eef',    '#234', '#dde')
   ));
 
-  var userRows = (resp.users || []).map(function (u) {
+  /* DEVICE_HEALTH_FILTER_v1: apply pill filter */
+  var filtered = (resp.users || []).filter(function (u) {
+    if (window._dhFilter === 'all') return true;
+    return u.diagnosis && u.diagnosis.severity === window._dhFilter;
+  });
+  var userRows = filtered.map(function (u) {
     var sev = u.diagnosis && u.diagnosis.severity;
     var bg = sev === 'red' ? '#fff5f5' : sev === 'yellow' ? '#fffaf0' : '#f5fff5';
+    var di = u.device_info || {};
+    var deviceCell = di.model
+      ? h('div', {},
+          h('div', { style: { fontSize: '12px', fontWeight: 'bold' } }, (di.manufacturer ? di.manufacturer + ' ' : '') + (di.model || '')),
+          h('div', { style: { fontSize: '10px', color: '#666' } }, (di.platform || '') + ' ' + (di.os_version || '')),
+          di.app_version ? h('div', { style: { fontSize: '10px', color: '#888' } }, 'v' + di.app_version) : null
+        )
+      : h('span', { class: 'muted', style: { fontSize: '11px' } }, 'No telemetry yet');
     return h('tr', { style: { background: bg } },
       h('td', {}, h('b', {}, u.user_name || u.user_email), h('div', { style: { fontSize: '11px', color: '#888' } }, u.user_role || '')),
+      h('td', {}, deviceCell),
       h('td', {},
         h('div', { style: { fontSize: '12px' } }, (u.diagnosis && u.diagnosis.message) || ''),
         h('div', { style: { fontSize: '10px', color: '#888', textTransform: 'uppercase' } }, 'Step: ' + ((u.diagnosis && u.diagnosis.step) || '?'))
@@ -2827,6 +2854,7 @@ VIEWS.deviceHealthTenant = async function (view, slug) {
   view.appendChild(h('table', { class: 'tbl', style: { width: '100%' } },
     h('thead', {}, h('tr', {},
       h('th', {}, 'User'),
+      h('th', {}, 'Device'),
       h('th', {}, 'Diagnosis'),
       h('th', {}, 'Login'),
       h('th', {}, 'Last call'),
@@ -2860,26 +2888,59 @@ VIEWS.deviceHealthUser = async function (view, slug, userId, userName) {
     return;
   }
 
+  /* DEVICE_HEALTH_TIMELINE_v1: render each event as a human-readable row instead of raw JSON. */
+  function _summarize(ev) {
+    var p = ev.payload;
+    if (typeof p === 'string') { try { p = JSON.parse(p); } catch (_) { p = {}; } }
+    p = p || {};
+    var cap = p.capacitor || {};
+    var dev = cap.device || {};
+    var net = cap.network || {};
+    var batt = cap.battery || {};
+    var perms = p.perms || {};
+    var bc = p.breadcrumbs || {};
+    var parts = [];
+    if (dev.model) parts.push((dev.manufacturer || '') + ' ' + dev.model + (dev.osVersion ? ' (Android ' + dev.osVersion + ')' : ''));
+    if (dev.appVersion) parts.push('app v' + dev.appVersion);
+    if (net.connectionType) parts.push('net: ' + net.connectionType);
+    if (batt.batteryLevel != null) parts.push('battery: ' + Math.round(Number(batt.batteryLevel) * 100) + '%' + (batt.isCharging ? ' charging' : ''));
+    var permFlags = [];
+    if (perms.microphone)  permFlags.push('mic:' + perms.microphone);
+    if (perms.geolocation) permFlags.push('geo:' + perms.geolocation);
+    if (perms.notifications) permFlags.push('notif:' + perms.notifications);
+    if (permFlags.length) parts.push('perms[' + permFlags.join(', ') + ']');
+    if (bc.rec_last_sync_at) parts.push('last rec sync: ' + bc.rec_last_sync_at + (bc.rec_last_sync_count ? (' (' + bc.rec_last_sync_count + ' files)') : ''));
+    if (bc.rec_last_sync_error) parts.push('rec err: ' + bc.rec_last_sync_error);
+    if (bc.call_last_event_at) parts.push('last call evt: ' + bc.call_last_event_type + ' @ ' + bc.call_last_event_at);
+    return parts.join(' · ') || '(no payload)';
+  }
+  function _eventLabel(ev) {
+    var t = ev.event_type || '';
+    if (t === 'app_open') return '🚀 App opened';
+    if (t === 'heartbeat') return '💓 Heartbeat';
+    if (t === 'resume') return '🔄 Resumed (after gap)';
+    return t;
+  }
   var rows = events.map(function (ev) {
     var bg = ev.severity === 'error' ? '#fff5f5' : ev.severity === 'warn' ? '#fffaf0' : '#fff';
-    var payloadShort = '';
-    try { payloadShort = JSON.stringify(ev.payload || {}).slice(0, 200); } catch (e) { payloadShort = '?'; }
     return h('tr', { style: { background: bg } },
-      h('td', {}, new Date(ev.created_at).toLocaleString()),
-      h('td', {}, ev.step || '-'),
-      h('td', {}, ev.event_type || ''),
-      h('td', {}, ev.severity || ''),
-      h('td', { style: { fontFamily: 'monospace', fontSize: '10px', color: '#555' } }, payloadShort)
+      h('td', { style: { whiteSpace: 'nowrap' } }, new Date(ev.created_at).toLocaleString()),
+      h('td', {}, h('b', {}, _eventLabel(ev)), h('div', { style: { fontSize: '10px', color: '#888' } }, ev.step || '')),
+      h('td', { style: { fontSize: '11px', color: '#333' } }, _summarize(ev)),
+      h('td', {}, h('details', {},
+        h('summary', { style: { cursor: 'pointer', fontSize: '11px', color: '#888' } }, 'raw'),
+        h('pre', { style: { fontFamily: 'monospace', fontSize: '10px', color: '#555', whiteSpace: 'pre-wrap', wordBreak: 'break-all' } },
+          (function () { try { return JSON.stringify(ev.payload || {}, null, 2); } catch (_) { return ''; } })())
+      ))
     );
   });
 
   view.appendChild(h('table', { class: 'tbl', style: { width: '100%', fontSize: '12px' } },
     h('thead', {}, h('tr', {},
       h('th', {}, 'When'),
-      h('th', {}, 'Step'),
       h('th', {}, 'Event'),
-      h('th', {}, 'Severity'),
-      h('th', {}, 'Payload')
+      h('th', {}, 'Details'),
+      h('th', {}, '')
     )),
     h('tbody', {}, rows)
   ));

@@ -6051,7 +6051,8 @@ function actionTimelineBlock(leadId) {
       qualified:      { icon: '⭐', label: 'Marked qualified',     color: '#10b981' },
       unqualified:    { icon: '✕',  label: 'Unmarked qualified',   color: '#ef4444' },
       duplicated:     { icon: '📋', label: 'Duplicated',           color: '#64748b' },
-      email_out:      { icon: '📧', label: 'Email sent',           color: '#3b82f6' }
+      email_out:      { icon: '📧', label: 'Email sent',           color: '#3b82f6' },
+      merged_from_duplicate: { icon: '🔀', label: 'Merged from duplicate', color: '#7c3aed' }  /* LEAD_MERGE_AUDIT_v1 */
     };
 
     // Render in REVERSE chronological order (newest first) — easier to skim
@@ -6080,6 +6081,11 @@ function actionTimelineBlock(leadId) {
         sub = m.preview || null;
       } else if (r.action_type === 'tags_updated') {
         sub = m.tags || null;
+      } else if (r.action_type === 'merged_from_duplicate') {  /* LEAD_MERGE_AUDIT_v1 */
+        const who = m.source_name || m.source_phone || m.source_email || ('lead #' + (m.source_id || '?'));
+        const when = m.source_created_at ? (' · originally arrived ' + fmtDate(m.source_created_at, 'relative')) : '';
+        const id = m.source_id ? (' (#' + m.source_id + ')') : '';
+        sub = 'Absorbed: ' + who + id + when;
       }
       ul.appendChild(h('li', {},
         h('span', { class: 'tl-dot tl-dot-rich', style: { background: c.color } }, c.icon),

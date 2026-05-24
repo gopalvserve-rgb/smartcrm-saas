@@ -178,6 +178,22 @@ async function api_saas_recHealth_byTenant(token, opts) {
       }
       const fcmByUser = new Map(fcmRows.map(r => [Number(r.user_id) || null, r]));
 
+      // DEVICE_DIAG_v1.2: pull latest device_diag_events row per user to extract
+      // device model / manufacturer / app version + last permission state. We use this
+      // to populate the "Device" column on the super-admin Device Health view.
+      let lastDiagByUser = new Map();
+      try {
+        const db2 = require('../../db/pg');
+        await _ensureDiagTable();
+        const rows = await db2.query(
+          "SELECT DISTINCT ON (user_id) user_id, device_id, payload, created_at" +
+          " FROM device_diag_events" +
+          " WHERE user_id IS NOT NULL" +
+          " ORDER BY user_id, created_at DESC"
+        ).then(r => r.rows || []);
+        lastDiagByUser = new Map(rows.map(r => [Number(r.user_id) || null, r]));
+      } catch (_e) {}
+
       const perUser = users.map(u => {
         const r = recByUser.get(Number(u.id)) || {};
         const c = callByUser.get(Number(u.id)) || {};
@@ -224,11 +240,42 @@ async function api_saas_recHealth_byTenant(token, opts) {
           diag = { step: 'lead_match', severity: 'yellow', message: 'Only ' + matchedPct + '% of recordings matched to a lead — filename parser may be off' };
         }
 
+        // Extract device info from the latest telemetry row (Phase 2 heartbeats).
+        const dd = lastDiagByUser.get(Number(u.id));
+        let device_info = null;
+        if (dd && dd.payload) {
+          try {
+            const p = typeof dd.payload === 'string' ? JSON.parse(dd.payload) : dd.payload;
+            const cap = p.capacitor || {};
+            const dev = cap.device || {};
+            const net = cap.network || {};
+            const batt = cap.battery || {};
+            device_info = {
+              model: dev.model || null,
+              manufacturer: dev.manufacturer || null,
+              platform: dev.platform || null,
+              os_version: dev.osVersion || null,
+              app_version: dev.appVersion || null,
+              app_build: dev.appBuild || null,
+              network_type: net.connectionType || null,
+              battery_pct: batt.batteryLevel != null ? Math.round(Number(batt.batteryLevel) * 100) : null,
+              charging: batt.isCharging != null ? !!batt.isCharging : null,
+              perm_mic: (p.perms && p.perms.microphone) || null,
+              perm_geo: (p.perms && p.perms.geolocation) || null,
+              perm_notif: (p.perms && p.perms.notifications) || null,
+              breadcrumbs: p.breadcrumbs || null,
+              last_diag_at: dd.created_at,
+              device_id: dd.device_id,
+            };
+          } catch (_) {}
+        }
+
         return {
           user_id: u.id,
           user_name: u.name || u.email,
           user_email: u.email,
           user_role: u.role,
+          device_info: device_info,
           last_login_at: lastLoginIso,
           last_fcm_at: lastFcmIso,
           last_call_event_at: lastCallIso,
