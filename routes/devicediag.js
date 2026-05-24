@@ -60,9 +60,11 @@ async function api_devicediag_ingest(token, payload) {
       written++;
     } catch (_e) {}
   }
-  // Cap table size — keep last 5000 rows per tenant
+  // DEVICE_DIAG_RETENTION_3D: keep only events from the last 3 days.
+  // Runs on every ingest call (cheap because of the (created_at DESC) index),
+  // so the table self-heals continuously without a separate cron.
   try {
-    await db.query("DELETE FROM device_diag_events WHERE id < (SELECT MAX(id) - 5000 FROM device_diag_events)");
+    await db.query("DELETE FROM device_diag_events WHERE created_at < NOW() - INTERVAL '3 days'");
   } catch (_e) {}
 
   return { ok: true, written: written };

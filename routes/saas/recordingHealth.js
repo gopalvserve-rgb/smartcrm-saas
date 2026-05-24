@@ -341,6 +341,9 @@ async function _ensureDiagTable() {
   ).catch(() => {});
   await db.query("CREATE INDEX IF NOT EXISTS idx_devicediag_user_created ON device_diag_events (user_id, created_at DESC)").catch(() => {});
   await db.query("CREATE INDEX IF NOT EXISTS idx_devicediag_step_created ON device_diag_events (step, created_at DESC)").catch(() => {});
+  // DEVICE_DIAG_RETENTION_3D: drop events older than 3 days every time the table is touched.
+  // Acts as a passive cron — every super-admin read or first-ingest call cleans up.
+  await db.query("DELETE FROM device_diag_events WHERE created_at < NOW() - INTERVAL '3 days'").catch(() => {});
 }
 
 /* api_devicediag_ingest moved to routes/devicediag.js (tenant scope) — DEVICE_DIAG_INGEST_FIX_v1 */
