@@ -2849,6 +2849,114 @@ async function api_wb_whitelist_remove(_token, id) {
   return { ok: true };
 }
 
+
+/* WA_CONVERT_LEAD_v1 (2026-05-24) — convert an existing WhatsApp chat thread
+   into a CRM lead on demand. Used by the 🎯 "Save as lead" button on the
+   chat header when the tenant has auto-lead-creation turned OFF (or simply
+   wants to convert a previously-skipped chat).
+
+   Behaviour mirrors the auto-create branch of _handleInbound but is driven
+   by an explicit user click and allows overrides. After creating the lead
+   it backfills lead_id on any existing whatsapp_messages for that phone
+   so the chat history shows on the lead page.
+
+   Args: { phone, name?, user_id?, status_id?, source?, notes? }
+   Returns: { ok, lead_id, already_linked, messages_backfilled }
+*/
+async function api_wb_thread_convertToLead(token, payload) {
+  await requireAuth(token);
+  const p = payload || {};
+  const raw = String(p.phone || '').replace(/\D/g, '');
+  if (!raw || raw.length < 6) throw new Error('Valid phone is required');
+  const cfg = await _cfg();
+
+  // Reuse the same look-up the auto-create path uses (full digits OR last 10
+  // so 91-prefixed and 10-digit variants both match the same person).
+  const last10 = raw.length > 10 ? raw.slice(-10) : raw;
+  const existing = await db.query(
+    `SELECT id FROM leads
+      WHERE regexp_replace(COALESCE(phone,    ''), '\D', '', 'g') = $1
+         OR regexp_replace(COALESCE(whatsapp, ''), '\D', '', 'g') = $1
+         OR regexp_replace(COALESCE(phone,    ''), '\D', '', 'g') = $2
+         OR regexp_replace(COALESCE(whatsapp, ''), '\D', '', 'g') = $2
+      LIMIT 1`,
+    [raw, last10]
+  );
+  if (existing.rows.length) {
+    return { ok: true, lead_id: existing.rows[0].id, already_linked: true, messages_backfilled: 0 };
+  }
+
+  // Try to pick a sensible display-name: explicit override > most recent
+  // WA profile_name we've seen for this phone in messages > the phone itself.
+  let displayName = String(p.name || '').trim();
+  if (!displayName) {
+    try {
+      const last = await db.query(
+        `SELECT body FROM whatsapp_messages
+          WHERE from_number = $1 AND direction = 'in'
+          ORDER BY created_at DESC LIMIT 1`,
+        [raw]
+      );
+      // Profile name isn't stored separately; we just fall back to phone.
+      displayName = raw;
+      void last;
+    } catch (_) { displayName = raw; }
+  }
+
+  // Resolve status: explicit override > tenant default via _resolveDefaultStatusId.
+  let statusId = null;
+  if (p.status_id != null && p.status_id !== '') {
+    statusId = Number(p.status_id) || null;
+  } else {
+    try { statusId = await _resolveDefaultStatusId(cfg); } catch (_) { statusId = null; }
+  }
+
+  // Resolve owner: explicit override > tenant default (cfg.defaultUser).
+  let assignedTo = null;
+  if (p.user_id != null && p.user_id !== '') {
+    assignedTo = Number(p.user_id) || null;
+  } else {
+    assignedTo = cfg.defaultUser || null;
+  }
+
+  const source = String(p.source || cfg.autoLeadSource || 'WhatsApp').slice(0, 80);
+  const notes  = String(p.notes  || '').slice(0, 2000) || null;
+
+  const insertPayload = {
+    name: displayName, phone: raw, whatsapp: raw,
+    source: source,
+    status_id: statusId,
+    assigned_to: assignedTo,
+    created_at: db.nowIso(), updated_at: db.nowIso()
+  };
+  if (notes) insertPayload.notes = notes;
+
+  const newId = await db.insert('leads', insertPayload);
+
+  // TAT log so the activity tracker sees this lead being born.
+  try { require('./tat').logAction(newId, 'created', null, { source: 'whatsapp_manual_convert' }); } catch (_) {}
+
+  // Backfill any orphan whatsapp_messages rows for this phone so the chat
+  // history shows on the new lead's page. Match on from_number OR to_number
+  // since outbound rows would have it in to_number.
+  let backfilled = 0;
+  try {
+    const upd = await db.query(
+      `UPDATE whatsapp_messages
+          SET lead_id = $1
+        WHERE lead_id IS NULL
+          AND (regexp_replace(COALESCE(from_number,''), '\D', '', 'g') = $2
+            OR regexp_replace(COALESCE(to_number,  ''), '\D', '', 'g') = $2
+            OR regexp_replace(COALESCE(from_number,''), '\D', '', 'g') = $3
+            OR regexp_replace(COALESCE(to_number,  ''), '\D', '', 'g') = $3)`,
+      [newId, raw, last10]
+    );
+    backfilled = upd.rowCount || 0;
+  } catch (e) { console.warn('[wb] convertToLead message backfill failed:', e.message); }
+
+  return { ok: true, lead_id: newId, already_linked: false, messages_backfilled: backfilled };
+}
+
 module.exports = {
   // Settings
   api_wb_settings_get, api_wb_settings_save, api_wb_connect_verify, api_wb_disconnect,
@@ -2881,5 +2989,6 @@ module.exports = {
   // Helpers exported for the file-upload Express route in server.js
   // and for routes/aiBot.js auto-reply path.
   _uploadMediaToWhatsApp, _cfg, _cfgForPhone, _sendText, _sendInteractiveButtons, _sendMedia, _graphPost,
-  api_wb_whitelist_list, api_wb_whitelist_add, api_wb_whitelist_remove
+  api_wb_whitelist_list, api_wb_whitelist_add, api_wb_whitelist_remove,
+  api_wb_thread_convertToLead
 };

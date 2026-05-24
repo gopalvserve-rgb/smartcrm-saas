@@ -10598,6 +10598,77 @@ async function showWbTab(id) {
   } catch (e) { body.innerHTML = `<div class="error-box">${esc(e.message)}</div>`; }
 }
 
+/* WA_CONVERT_LEAD_v1 (2026-05-24) — modal that pre-fills tenant defaults
+   from api_wb_settings_get and lets the user adjust before saving. */
+async function _wbOpenConvertToLeadModal(phone, threadMeta) {
+  let s = {};
+  try { s = await api('api_wb_settings_get'); } catch (_) { s = {}; }
+  const users = CRM.cache.users || [];
+  const statuses = CRM.cache.statuses || [];
+
+  const nameInp   = h('input', { value: (threadMeta && threadMeta.lead_name) || phone, placeholder: phone, style: { width: '100%' } });
+  const sourceInp = h('input', { value: s.autolead_source || 'WhatsApp', placeholder: 'WhatsApp', style: { width: '100%' } });
+  const ownerSel  = h('select', { style: { width: '100%' } },
+    h('option', { value: '' }, '— Use assignment rules —'),
+    ...users.map(u => h('option', { value: u.id, selected: String(s.default_user_id || '') === String(u.id) ? 'selected' : null }, u.name))
+  );
+  const statusSel = h('select', { style: { width: '100%' } },
+    h('option', { value: '' }, '— First status —'),
+    ...statuses.map(st => h('option', { value: st.id, selected: String(s.default_status_id || '') === String(st.id) ? 'selected' : null }, st.name))
+  );
+  const notesInp  = h('textarea', { rows: 3, placeholder: 'Internal notes (optional)', style: { width: '100%' } });
+
+  const m = h('div', { class: 'modal-backdrop' }, h('div', { class: 'modal', style: { maxWidth: '520px' } },
+    h('div', { class: 'modal-head' },
+      h('h3', {}, '🎯 Save WhatsApp chat as lead'),
+      h('button', { class: 'btn icon', onclick: () => m.remove() }, '✕')
+    ),
+    h('p', { class: 'muted', style: { fontSize: '.85rem', marginTop: 0 } },
+      'Creates a CRM lead for ', h('b', {}, phone),
+      ' and links the existing chat history to it. Defaults come from your WhatsApp auto-lead settings; tweak below before saving.'),
+    h('div', { style: { display: 'grid', gridTemplateColumns: '1fr', gap: '.5rem' } },
+      h('div', {}, h('label', { style: { fontSize: '.78rem', color: '#475569' } }, 'Lead name'), nameInp),
+      h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '.5rem' } },
+        h('div', {}, h('label', { style: { fontSize: '.78rem', color: '#475569' } }, 'Assigned to'), ownerSel),
+        h('div', {}, h('label', { style: { fontSize: '.78rem', color: '#475569' } }, 'Status'), statusSel)
+      ),
+      h('div', {}, h('label', { style: { fontSize: '.78rem', color: '#475569' } }, 'Lead source'), sourceInp),
+      h('div', {}, h('label', { style: { fontSize: '.78rem', color: '#475569' } }, 'Notes (optional)'), notesInp)
+    ),
+    h('div', { class: 'actions', style: { display: 'flex', justifyContent: 'flex-end', gap: '.5rem', marginTop: '1rem' } },
+      h('button', { class: 'btn', onclick: () => m.remove() }, 'Cancel'),
+      h('button', { class: 'btn primary', style: { background: '#16a34a', borderColor: '#16a34a' }, onclick: async (ev) => {
+        const btn = ev.currentTarget;
+        btn.disabled = true; btn.textContent = '⏳ Saving…';
+        try {
+          const r = await api('api_wb_thread_convertToLead', {
+            phone, name: nameInp.value.trim() || phone,
+            user_id: ownerSel.value, status_id: statusSel.value,
+            source: sourceInp.value.trim() || 'WhatsApp',
+            notes: notesInp.value.trim()
+          });
+          if (r.already_linked) {
+            toast('Already a lead — opened it', 'info');
+          } else {
+            toast('✓ Lead created' + (r.messages_backfilled ? ' (' + r.messages_backfilled + ' message' + (r.messages_backfilled === 1 ? '' : 's') + ' linked)' : ''), 'ok');
+          }
+          m.remove();
+          // Refresh the thread list so the lead_id/lead_name show up.
+          if (typeof lastThreadsFingerprint !== 'undefined') lastThreadsFingerprint = '';
+          if (typeof renderThreadList === 'function') renderThreadList();
+          // Re-open the same thread so the chat header rebuilds with the new lead.
+          if (typeof renderActiveThread === 'function') setTimeout(() => renderActiveThread(true), 400);
+        } catch (e) {
+          toast(e.message, 'err');
+          btn.disabled = false; btn.textContent = '🎯 Save as lead';
+        }
+      } }, '🎯 Save as lead')
+    )
+  ));
+  document.body.appendChild(m);
+  setTimeout(() => nameInp.focus(), 50);
+}
+
 // ---------- Connect Account ----------
 async function wbConnect() {
   const s = await api('api_wb_settings_get');
@@ -13125,6 +13196,11 @@ async function wbChat() {
           if (typeof renderThreadList === 'function') { lastThreadsFingerprint = ''; renderThreadList(); }
         } catch (e) { toast(e.message, 'err'); }
       } }, '🚫 Whitelist'),
+      // WA_CONVERT_LEAD_v1 — 🎯 "Save as lead" button. Only shown when the
+      // current chat isn't already linked to a lead (threadMeta.lead_id is
+      // null). Opens a small modal with editable name/owner/status/source/
+      // notes pre-filled with the tenant's WhatsApp auto-lead defaults.
+      (!threadMeta.lead_id ? h('button', { class: 'btn sm primary', title: 'Convert this WhatsApp chat into a CRM lead', style: { background: '#16a34a', borderColor: '#16a34a', color: '#fff' }, onclick: () => _wbOpenConvertToLeadModal(phone, threadMeta) }, '🎯 Save as lead') : null),
       h('button', { class: 'btn sm ghost', title: 'Refresh this thread', onclick: () => renderActiveThread(true) }, '↻')
     );
     right.appendChild(head);
