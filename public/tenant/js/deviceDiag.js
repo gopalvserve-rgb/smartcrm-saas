@@ -148,13 +148,15 @@
     if (!q.length) return;
     _flushing = true;
     try {
+      // DEVICE_DIAG_ARGS_FIX: tenant /api dispatcher uses args[0]=token convention
+      // (matches the SPA's window.api() helper). Wrap our payload in [token, payload].
       var body = JSON.stringify({
         fn: 'api_devicediag_ingest',
-        args: { device_id: getDeviceId(), events: q.slice(0, 50) }
+        args: [tok, { device_id: getDeviceId(), events: q.slice(0, 50) }]
       });
       var r = await fetch(apiUrl(), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok },
+        headers: { 'Content-Type': 'application/json' },
         body: body
       });
       if (r.ok) {
@@ -214,10 +216,10 @@
       if (!tok || !q.length) return;
       fetch(apiUrl(), {
         method: 'POST', keepalive: true,
-        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           fn: 'api_devicediag_ingest',
-          args: { device_id: getDeviceId(), events: q.slice(0, 50) }
+          args: [tok, { device_id: getDeviceId(), events: q.slice(0, 50) }]  /* DEVICE_DIAG_ARGS_FIX */
         })
       }).catch(function () {});
     } catch (e) {}
