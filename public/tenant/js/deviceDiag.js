@@ -1,22 +1,14 @@
-/* DEVICE_DIAG_v1 — phone-side telemetry. Posts batched events to
- * api_devicediag_ingest. Pure additive — does NOT touch the locked
- * recording sync pipeline.
+/* DEVICE_DIAG_v1 — phone-side telemetry. Posts batched events via the JSON
+ * dispatcher (POST /api with { fn: 'api_devicediag_ingest', args }).
+ * Pure additive — does NOT touch the locked recording sync pipeline.
  */
 (function () {
   'use strict';
 
-  function tenantSlug() {
-    try {
-      var m = location.pathname.match(/^\/t\/([^/]+)/);
-      return m ? m[1] : null;
-    } catch (e) { return null; }
-  }
   function getToken() {
     try { return localStorage.getItem('token') || localStorage.getItem('jwt') || null; }
     catch (e) { return null; }
   }
-  var slug = tenantSlug();
-  if (!slug) return;
 
   var QUEUE_KEY = 'deviceDiag.queue';
   var DEVICE_ID_KEY = 'deviceDiag.deviceId';
@@ -97,6 +89,12 @@
     }
     return out;
   }
+  function tenantSlug() {
+    try {
+      var m = location.pathname.match(/^\/t\/([^/]+)/);
+      return m ? m[1] : null;
+    } catch (e) { return null; }
+  }
   async function buildSnapshot(reason) {
     var perms = await Promise.all([
       permissionState('microphone'),
@@ -112,13 +110,18 @@
       perms: { microphone: perms[0], geolocation: perms[1], notifications: perms[2] },
       capacitor: cap,
       breadcrumbs: breadcrumbsFromLocalStorage(),
-      tenant_slug: slug,
+      tenant_slug: tenantSlug(),
       v: '1'
     };
   }
 
   var _flushing = false;
   var _backoffMs = 0;
+  function apiUrl() {
+    var slug = tenantSlug();
+    return slug ? ('/t/' + encodeURIComponent(slug) + '/api') : '/api';
+  }
+
   async function flush() {
     if (_flushing) return;
     var tok = getToken();
@@ -127,12 +130,14 @@
     if (!q.length) return;
     _flushing = true;
     try {
-      var url = '/t/' + encodeURIComponent(slug) + '/api/devicediag/ingest';
-      var body = { device_id: getDeviceId(), events: q.slice(0, 50) };
-      var r = await fetch(url, {
+      var body = JSON.stringify({
+        fn: 'api_devicediag_ingest',
+        args: { device_id: getDeviceId(), events: q.slice(0, 50) }
+      });
+      var r = await fetch(apiUrl(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok },
-        body: JSON.stringify(body)
+        body: body
       });
       if (r.ok) {
         saveQueue(q.slice(50));
@@ -189,11 +194,13 @@
       var tok = getToken();
       var q = loadQueue();
       if (!tok || !q.length) return;
-      var url = '/t/' + encodeURIComponent(slug) + '/api/devicediag/ingest';
-      fetch(url, {
+      fetch(apiUrl(), {
         method: 'POST', keepalive: true,
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok },
-        body: JSON.stringify({ device_id: getDeviceId(), events: q.slice(0, 50) })
+        body: JSON.stringify({
+          fn: 'api_devicediag_ingest',
+          args: { device_id: getDeviceId(), events: q.slice(0, 50) }
+        })
       }).catch(function () {});
     } catch (e) {}
   });
