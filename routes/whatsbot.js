@@ -2386,6 +2386,34 @@ async function expressEvent(req, res) {
             await _handleInbound(m, value);
           }
         }
+        // WA_ECHO_HANDLER_v1 (2026-05-25) — Coexistence Messaging Echoes.
+        // When an agent sends from the WhatsApp Business mobile app on a
+        // Coexistence-enabled number, Meta forwards an event with
+        // value.message_echoes[] containing the FULL body. We mirror
+        // these to whatsapp_messages as direction='out' so admin / other
+        // agents see them in the CRM chat thread.
+        //
+        // Requires: 'smb_message_echoes' field is checked in WABA →
+        // Webhooks subscribed fields on Meta Business Manager. Without
+        // that subscription, Meta only sends statuses (sent/delivered/
+        // read) for BSP-app messages — never the body — and admin's
+        // CRM view of the agent's reply stays empty.
+        if (Array.isArray(value.message_echoes)) {
+          for (const m of value.message_echoes) {
+            try {
+              await _handleEcho(m, value);
+            } catch (e) {
+              try {
+                await _logActivity({
+                  category: 'wa_echo_fail', name: e.code || 'error',
+                  response_code: 500,
+                  request: { wa_message_id: m && m.id, to: m && m.to },
+                  response: { error: String(e.message || e), stack: String(e.stack || '').slice(0, 400) }
+                });
+              } catch (_) {}
+            }
+          }
+        }
       }
     }
   } catch (e) {
@@ -2425,6 +2453,101 @@ async function _isWhitelisted(digits) {
     );
     return r.rows.length > 0;
   } catch (e) { console.warn('[wb] whitelist check failed:', e.message); return false; }
+}
+
+/**
+ * WA_ECHO_HANDLER_v1 (2026-05-25) — Persist a Coexistence smb_message_echo
+ * (= a message the business agent sent from the WhatsApp Business mobile
+ * app) into whatsapp_messages as direction='out'. Mirrors the existing
+ * _sendText INSERT shape so the chat thread renders it identically to
+ * messages sent from CRM web.
+ *
+ * Payload shape (from Meta docs):
+ *   m.from      = our business phone number (display format)
+ *   m.to        = customer's phone number
+ *   m.id        = WA message id (wa_message_id)
+ *   m.timestamp = unix seconds
+ *   m.type      = text|image|audio|video|document|sticker|location|interactive|button|reaction
+ *   m[m.type]   = type-specific payload (e.g. m.text.body)
+ */
+async function _handleEcho(m, value) {
+  const ourNumber = String(m.from || '').replace(/\D/g, '');
+  const custNumber = String(m.to || '').replace(/\D/g, '');
+  if (!custNumber) return;
+  const inboundPhoneId = String(value?.metadata?.phone_number_id || '') || null;
+
+  // Resolve text body by message type — same matrix as _handleInbound.
+  let text = '';
+  let mtype = m.type || 'text';
+  let mediaId = null;
+  let mediaUrl = null;
+  if (m.type === 'text') text = m.text?.body || '';
+  else if (m.type === 'interactive') {
+    text = m.interactive?.button_reply?.title || m.interactive?.list_reply?.title || JSON.stringify(m.interactive || {});
+  } else if (m.type === 'button') {
+    text = m.button?.text || '';
+  } else if (['image', 'audio', 'video', 'document'].includes(m.type)) {
+    text = m[m.type]?.caption || '';
+    mediaId = m[m.type]?.id || null;
+  } else if (m.type === 'sticker') { text = '\uD83C\uDFAD Sticker'; mediaId = m.sticker?.id || null; }
+  else if (m.type === 'reaction') { const emoji = m.reaction?.emoji || ''; text = '\uD83D\uDC4D Reacted ' + (emoji ? '\u201C' + emoji + '\u201D' : ''); }
+  else if (m.type === 'location') { text = '\uD83D\uDCCD Location'; }
+  else text = '[' + mtype + ']';
+
+  // Find lead by customer phone (digits, last-10 fallback)
+  let leadId = null;
+  try {
+    const last10 = custNumber.length > 10 ? custNumber.slice(-10) : custNumber;
+    const ld = await db.query(
+      `SELECT id FROM leads
+        WHERE regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') = $1
+           OR regexp_replace(COALESCE(whatsapp, ''), '\\D', '', 'g') = $1
+           OR regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') = $2
+           OR regexp_replace(COALESCE(whatsapp, ''), '\\D', '', 'g') = $2
+        LIMIT 1`,
+      [custNumber, last10]
+    );
+    if (ld.rows.length) leadId = ld.rows[0].id;
+  } catch (_) {}
+
+  // Skip duplicates: api_wb_chat_send already inserts the row when sent
+  // via Cloud API. If a row with this wa_message_id already exists, the
+  // echo is just Meta confirming our own send back to us — don't double.
+  if (m.id) {
+    try {
+      const ex = await db.query(`SELECT 1 FROM whatsapp_messages WHERE wa_message_id = $1 LIMIT 1`, [m.id]);
+      if (ex.rows.length) return;
+    } catch (_) {}
+  }
+
+  // Save as outbound. user_id is NULL (we don't know which CRM user
+  // sent it from the BSP app — only that the business sent it).
+  try {
+    await db.query(
+      `INSERT INTO whatsapp_messages (lead_id, user_id, direction, from_number, to_number, body, wa_message_id, status, message_type, media_id, phone_number_id)
+       VALUES ($1, NULL, 'out', $2, $3, $4, $5, 'sent', $6, $7, $8)`,
+      [leadId, ourNumber, custNumber, text, m.id || null, mtype, mediaId, inboundPhoneId]
+    );
+    try {
+      await _logActivity({
+        category: 'webhook_echo', name: mtype,
+        response_code: 200,
+        request: { to: custNumber, from: ourNumber, wa_message_id: m.id },
+        response: { saved: true, source: 'smb_message_echoes' }
+      });
+    } catch (_) {}
+    if (leadId) {
+      try {
+        require('./tat').logAction(leadId, 'whatsapp_out', null, {
+          preview: String(text || '').slice(0, 200),
+          type: mtype, via: 'mobile_app_coexistence'
+        });
+      } catch (_) {}
+    }
+  } catch (e) {
+    console.warn('[wb] echo save failed:', e.message);
+    throw e;
+  }
 }
 
 async function _handleInbound(m, value) {
