@@ -137,14 +137,29 @@ object CallOverlayManager {
             elevation = dp(ctx, 8).toFloat()
         }
 
-        // Brand pill at top
+        // CALL_OVERLAY_v2: top row = brand pill + explicit ✕ close button
+        val topRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 0, 0, dp(ctx, 4))
+        }
         val brand = TextView(ctx).apply {
             text = "📞 SmartCRM"
             setTextColor(0xFF4F46E5.toInt())  // SmartCRM indigo
             textSize = 11f
-            setPadding(0, 0, 0, dp(ctx, 4))
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
-        card.addView(brand)
+        topRow.addView(brand)
+        val closeBtn = TextView(ctx).apply {
+            text = "✕"
+            setTextColor(0xFF94A3B8.toInt())
+            textSize = 18f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setPadding(dp(ctx, 14), dp(ctx, 4), dp(ctx, 6), dp(ctx, 6))
+            // Larger touch target so it's easy to tap
+            setOnClickListener { hide(ctx) }
+        }
+        topRow.addView(closeBtn)
+        card.addView(topRow)
 
         // Phone number (always)
         val phoneTv = TextView(ctx).apply {
@@ -250,8 +265,9 @@ object CallOverlayManager {
         }
         card.addView(actionBtn)
 
-        // Tap anywhere on the card background dismisses
-        card.setOnClickListener { hide(ctx) }
+        // CALL_OVERLAY_v2: removed background-tap-to-dismiss. Users have
+        // an explicit ✕ close button now; background-tap was firing when
+        // users tried to read the card text.
 
         // Wrap in a margin container so it doesn't kiss the screen edge
         val wrap = LinearLayout(ctx).apply {

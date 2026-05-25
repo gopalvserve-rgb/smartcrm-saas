@@ -42,7 +42,7 @@ class CallTrackingForegroundService : Service() {
 
     companion object {
         private const val TAG = "LeadCRM/FgSvc"
-        private const val CHANNEL_ID = "leadcrm_call_tracking_v2"   // FG_SVC_v2: v2 forces fresh LOW channel on existing installs
+        private const val CHANNEL_ID = "leadcrm_call_tracking_v3"  // FG_SVC_v3: bumped to DEFAULT importance (silent via setSilent)   // FG_SVC_v2: v2 forces fresh LOW channel on existing installs
         private const val OLD_CHANNEL_ID = "leadcrm_call_tracking"
         private const val CHANNEL_NAME = "Call tracking"
         private const val NOTIF_ID = 8801
@@ -141,7 +141,7 @@ class CallTrackingForegroundService : Service() {
         val ch = NotificationChannel(
             CHANNEL_ID,
             CHANNEL_NAME,
-            NotificationManager.IMPORTANCE_LOW
+            NotificationManager.IMPORTANCE_DEFAULT  // FG_SVC_v3: DEFAULT not LOW — Vivo still swiped LOW
         ).apply {
             description = "Keeps SmartCRM running so calls and recordings sync reliably."
             setShowBadge(false)
@@ -176,13 +176,18 @@ class CallTrackingForegroundService : Service() {
             .setContentTitle("SmartCRM")
             .setContentText("Call tracking is enabled")
             .setSmallIcon(smallIcon)
-            .setPriority(NotificationCompat.PRIORITY_LOW)  // FG_SVC_v2: LOW so Vivo/Oppo can't swipe it
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)  // FG_SVC_v3
             .setOngoing(true)
             .setSilent(true)
             .setShowWhen(false)
             .setContentIntent(pi)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setVisibility(NotificationCompat.VISIBILITY_SECRET)
-            .build()
+            .build().apply {
+                // FG_SVC_v3: explicit FLAG_NO_CLEAR — some OEMs (Vivo, Realme,
+                // OriginOS) still let users swipe even FG-service notifications.
+                // FLAG_NO_CLEAR is a stronger signal than setOngoing alone.
+                flags = flags or Notification.FLAG_NO_CLEAR or Notification.FLAG_ONGOING_EVENT
+            }
     }
 }
