@@ -145,7 +145,7 @@ class PermissionOnboardingActivity : AppCompatActivity() {
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(dp(20), dp(56), dp(20), dp(16))
-            setBackgroundColor(0xFFDC2626.toInt())  // red top bar like Runo
+            setBackgroundColor(0xFF4F46E5.toInt())  // SmartCRM brand indigo
         }
         // Apply the real top inset (status bar + cutout if any) once we know it.
         androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(header) { v, insets ->
@@ -198,7 +198,7 @@ class PermissionOnboardingActivity : AppCompatActivity() {
         doneBtn = TextView(this).apply {
             text = "Done"
             setTextColor(0xFFFFFFFF.toInt())
-            setBackgroundColor(0xFFDC2626.toInt())
+            setBackgroundColor(0xFF4F46E5.toInt())
             textSize = 16f
             gravity = android.view.Gravity.CENTER
             setPadding(dp(16), dp(16), dp(16), dp(16))
