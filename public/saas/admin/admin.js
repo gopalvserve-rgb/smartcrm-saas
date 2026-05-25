@@ -2934,6 +2934,21 @@ VIEWS.deviceHealthUser = async function (view, slug, userId, userName) {
     if (bc.rec_last_sync_at) parts.push('last rec sync: ' + bc.rec_last_sync_at + (bc.rec_last_sync_count ? (' (' + bc.rec_last_sync_count + ' files)') : ''));
     if (bc.rec_last_sync_error) parts.push('rec err: ' + bc.rec_last_sync_error);
     if (bc.call_last_event_at) parts.push('last call evt: ' + bc.call_last_event_type + ' @ ' + bc.call_last_event_at);
+    /* REC_SYNC_DIAG_LOG_v1 — rec_sync_attempt rows carry a different payload shape */
+    if (p && p.kind === 'recording_sync_diag') {
+      parts = [];
+      if (p.trigger) parts.push('trigger: ' + p.trigger);
+      if (p.phase)   parts.push('phase: ' + p.phase);
+      if (p.apk_version) parts.push('apk v' + p.apk_version);
+      parts.push('folder: ' + (p.has_folder ? '✓' : '✗'));
+      parts.push('token: '  + (p.has_token  ? '✓' : '✗'));
+      parts.push('readable: ' + (p.folder_readable === false ? '✗ NO' : p.folder_readable === true ? '✓ yes' : '?'));
+      if (p.file_count != null) parts.push('files: ' + p.file_count);
+      if (p.uploaded != null)   parts.push('uploaded: ' + p.uploaded);
+      if (p.skipped != null)    parts.push('skipped: ' + p.skipped);
+      if (p.failed != null && p.failed > 0) parts.push('⚠ failed: ' + p.failed);
+      if (p.note) parts.push('note: ' + p.note);
+    }
     return parts.join(' · ') || '(no payload)';
   }
   function _eventLabel(ev) {
@@ -2941,6 +2956,7 @@ VIEWS.deviceHealthUser = async function (view, slug, userId, userName) {
     if (t === 'app_open') return '🚀 App opened';
     if (t === 'heartbeat') return '💓 Heartbeat';
     if (t === 'resume') return '🔄 Resumed (after gap)';
+    if (t === 'rec_sync_attempt') return '🎙 Recording sync';  /* REC_SYNC_DIAG_LOG_v1 */
     return t;
   }
   var rows = events.map(function (ev) {

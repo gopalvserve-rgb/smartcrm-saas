@@ -365,8 +365,46 @@ async function api_saas_devicediag_timeline(token, opts) {
                   " FROM device_diag_events " + where +
                   " ORDER BY created_at DESC LIMIT $" + params.length;
       const events = await db.query(sql, params).then(r => r.rows || []);
-      // DEVICE_DIAG_INGEST_FIX_v1: include tenant-wide stats so the empty state
-      // can tell the operator WHY they see nothing.
+
+      /* REC_SYNC_DIAG_LOG_v1: pull recording-sync diagnostic pings and merge
+         into the timeline so admin sees folder_readable=NO events alongside
+         the heartbeats. Each row is shaped to look like a device_diag_event
+         row so the SPA renderer can show them with the same structure. */
+      let recSyncEvents = [];
+      try {
+        const recWhere = userId ? 'WHERE user_id = $1' : '';
+        const recParams = userId ? [userId, limit] : [limit];
+        const recSql = "SELECT id, user_id, trigger, phase, apk_version," +
+                       " has_folder, has_token, has_base, folder_readable," +
+                       " file_count, uploaded, skipped, failed, note, payload," +
+                       " created_at" +
+                       " FROM recording_sync_diag " + recWhere +
+                       " ORDER BY created_at DESC LIMIT $" + recParams.length;
+        const rows = await db.query(recSql, recParams).then(r => r.rows || []).catch(() => []);
+        recSyncEvents = rows.map(r => ({
+          id: 'rs-' + r.id,
+          user_id: r.user_id,
+          device_id: null,
+          event_type: 'rec_sync_attempt',
+          severity: (r.folder_readable === false || r.failed > 0) ? 'warn' : 'info',
+          step: 'rec_sync',
+          payload: {
+            kind: 'recording_sync_diag',
+            trigger: r.trigger, phase: r.phase, apk_version: r.apk_version,
+            has_folder: r.has_folder, has_token: r.has_token, has_base: r.has_base,
+            folder_readable: r.folder_readable,
+            file_count: r.file_count, uploaded: r.uploaded,
+            skipped: r.skipped, failed: r.failed, note: r.note,
+            raw: r.payload,
+          },
+          created_at: r.created_at,
+        }));
+      } catch (_e) {}
+
+      const merged = events.concat(recSyncEvents).sort((a, b) =>
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      ).slice(0, limit);
+
       const stats = await db.query(
         "SELECT" +
         " COUNT(*)::int AS tenant_total," +
@@ -374,7 +412,15 @@ async function api_saas_devicediag_timeline(token, opts) {
         " MAX(created_at) AS last_event_at" +
         " FROM device_diag_events"
       ).then(r => r.rows[0] || {}).catch(() => ({}));
-      return { events, stats };
+      // Also count recording-sync pings tenant-wide so the empty state knows.
+      const recStats = await db.query(
+        "SELECT COUNT(*)::int AS rec_total, MAX(created_at) AS last_rec_at FROM recording_sync_diag"
+      ).then(r => r.rows[0] || {}).catch(() => ({}));
+      const mergedStats = Object.assign({}, stats, {
+        rec_sync_total: recStats.rec_total || 0,
+        rec_sync_last_at: recStats.last_rec_at,
+      });
+      return { events: merged, stats: mergedStats };
     });
     return { ok: true, events: data.events, stats: data.stats };
   } catch (e) {
