@@ -42,7 +42,8 @@ class CallTrackingForegroundService : Service() {
 
     companion object {
         private const val TAG = "LeadCRM/FgSvc"
-        private const val CHANNEL_ID = "leadcrm_call_tracking"
+        private const val CHANNEL_ID = "leadcrm_call_tracking_v2"   // FG_SVC_v2: v2 forces fresh LOW channel on existing installs
+        private const val OLD_CHANNEL_ID = "leadcrm_call_tracking"
         private const val CHANNEL_NAME = "Call tracking"
         private const val NOTIF_ID = 8801
 
@@ -97,6 +98,25 @@ class CallTrackingForegroundService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    // FG_SVC_v2: when user swipes the app from Recents, Android calls this.
+    // We restart ourselves with a delayed PendingIntent so we come back ~2s
+    // later — this is the standard "don't die on swipe" pattern.
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        try {
+            val restart = android.app.PendingIntent.getService(
+                this, 1,
+                Intent(applicationContext, CallTrackingForegroundService::class.java),
+                android.app.PendingIntent.FLAG_ONE_SHOT or android.app.PendingIntent.FLAG_IMMUTABLE
+            )
+            val alarm = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+            alarm.set(android.app.AlarmManager.ELAPSED_REALTIME, android.os.SystemClock.elapsedRealtime() + 2_000L, restart)
+            Log.d(TAG, "task removed → service self-restart scheduled in 2s")
+        } catch (e: Exception) {
+            Log.w(TAG, "self-restart schedule failed: ${e.message}")
+        }
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onDestroy() {
         Log.d(TAG, "foreground service stopped")
         super.onDestroy()
@@ -105,11 +125,23 @@ class CallTrackingForegroundService : Service() {
     private fun ensureChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        // FG_SVC_v2: clean up the obsolete v1 MIN channel so Settings doesn't
+        // show two "Call tracking" entries side by side.
+        try {
+            if (nm.getNotificationChannel(OLD_CHANNEL_ID) != null) {
+                nm.deleteNotificationChannel(OLD_CHANNEL_ID)
+            }
+        } catch (e: Exception) { /* ignore */ }
         if (nm.getNotificationChannel(CHANNEL_ID) != null) return
+        // FG_SVC_v2: IMPORTANCE_LOW (not MIN) — LOW is still silent + no
+        // heads-up + no vibration, but on aggressive OEMs (Vivo, Oppo,
+        // Realme) the user CANNOT swipe a LOW foreground-service
+        // notification away. MIN was swipeable and the user killed the
+        // service by accident.
         val ch = NotificationChannel(
             CHANNEL_ID,
             CHANNEL_NAME,
-            NotificationManager.IMPORTANCE_MIN
+            NotificationManager.IMPORTANCE_LOW
         ).apply {
             description = "Keeps SmartCRM running so calls and recordings sync reliably."
             setShowBadge(false)
@@ -144,7 +176,7 @@ class CallTrackingForegroundService : Service() {
             .setContentTitle("SmartCRM")
             .setContentText("Call tracking is enabled")
             .setSmallIcon(smallIcon)
-            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setPriority(NotificationCompat.PRIORITY_LOW)  // FG_SVC_v2: LOW so Vivo/Oppo can't swipe it
             .setOngoing(true)
             .setSilent(true)
             .setShowWhen(false)

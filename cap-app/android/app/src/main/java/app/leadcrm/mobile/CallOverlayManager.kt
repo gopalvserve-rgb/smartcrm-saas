@@ -1,0 +1,271 @@
+package app.leadcrm.mobile
+
+import android.annotation.SuppressLint
+import android.content.Context
+import android.content.Intent
+import android.graphics.Color
+import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
+import android.net.Uri
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.provider.Settings
+import android.util.Log
+import android.util.TypedValue
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.view.WindowManager
+import android.widget.LinearLayout
+import android.widget.TextView
+import org.json.JSONObject
+
+/**
+ * CALL_OVERLAY_v1 (2026-05-25) — Runo-style call-card overlay drawn on top of
+ * the system dialer when an outgoing call is placed from inside the CRM.
+ *
+ * Trigger: the SPA already calls LeadCRMNative.registerOutgoingCall(phone,
+ * leadId, startedAt) right before every dial. We extend that hook to also
+ * invoke CallOverlayManager.show() with the lead JSON so the overlay can
+ * render name / last note / last call instantly without a server round-trip.
+ *
+ * Auto-dismiss: 45 seconds from show OR when the user taps the X. The
+ * overlay is also wiped on app foreground (MainActivity.onResume).
+ *
+ * Requires SYSTEM_ALERT_WINDOW (granted via PermissionOnboardingActivity).
+ * If the user revoked it, show() silently no-ops.
+ *
+ * Pure addition — does NOT touch PhoneStateReceiver / RecordingObserver /
+ * RecordingsBackgroundSyncWorker / CallerIdPlugin.
+ */
+object CallOverlayManager {
+    private const val TAG = "LeadCRM/Overlay"
+
+    @Volatile private var currentView: View? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val autoDismiss = Runnable { hide(currentCtx) }
+    private var currentCtx: Context? = null
+
+    @JvmStatic
+    fun show(ctx: Context, phone: String, leadJson: String?) {
+        if (!canDrawOverlays(ctx)) {
+            Log.w(TAG, "SYSTEM_ALERT_WINDOW not granted — overlay skipped")
+            return
+        }
+        mainHandler.post {
+            try {
+                currentCtx = ctx.applicationContext
+                hide(ctx) // dispose any stale overlay
+                val view = buildOverlayView(ctx, phone, leadJson)
+                val wm = ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+                val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                else
+                    @Suppress("DEPRECATION")
+                    WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
+                val lp = WindowManager.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    type,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                        or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                    PixelFormat.TRANSLUCENT
+                )
+                lp.gravity = Gravity.TOP
+                lp.y = dp(ctx, 72) // sit below the status bar / notch
+                wm.addView(view, lp)
+                currentView = view
+                mainHandler.removeCallbacks(autoDismiss)
+                mainHandler.postDelayed(autoDismiss, 45_000L)
+                Log.d(TAG, "overlay shown for $phone")
+            } catch (e: Exception) {
+                Log.e(TAG, "show() failed: ${e.message}", e)
+            }
+        }
+    }
+
+    @JvmStatic
+    fun hide(ctx: Context?) {
+        mainHandler.post {
+            try {
+                val v = currentView ?: return@post
+                val c = ctx ?: currentCtx ?: return@post
+                val wm = c.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+                if (v.isAttachedToWindow) wm.removeViewImmediate(v)
+                currentView = null
+                Log.d(TAG, "overlay hidden")
+            } catch (e: Exception) {
+                Log.e(TAG, "hide() failed: ${e.message}", e)
+            }
+        }
+    }
+
+    private fun canDrawOverlays(ctx: Context): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(ctx)
+
+    @SuppressLint("SetTextI18n")
+    private fun buildOverlayView(ctx: Context, phone: String, leadJson: String?): View {
+        // Parse the lead JSON the SPA passed in. Falls back gracefully when null.
+        var name = ""
+        var status = ""
+        var lastNote = ""
+        var lastCallAt = ""
+        var leadId = ""
+        try {
+            if (!leadJson.isNullOrBlank() && leadJson != "null") {
+                val o = JSONObject(leadJson)
+                name = o.optString("name", "")
+                status = o.optString("status_name", "")
+                lastNote = o.optString("last_note", "")
+                lastCallAt = o.optString("last_call_at", "")
+                leadId = o.optString("id", "")
+            }
+        } catch (e: Exception) { /* ignore */ }
+
+        // Card container
+        val card = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(ctx, 16), dp(ctx, 14), dp(ctx, 16), dp(ctx, 14))
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                setColor(Color.WHITE)
+                cornerRadius = dp(ctx, 14).toFloat()
+                setStroke(dp(ctx, 1), 0xFFE5E7EB.toInt())
+            }
+            elevation = dp(ctx, 8).toFloat()
+        }
+
+        // Brand pill at top
+        val brand = TextView(ctx).apply {
+            text = "📞 SmartCRM"
+            setTextColor(0xFF4F46E5.toInt())  // SmartCRM indigo
+            textSize = 11f
+            setPadding(0, 0, 0, dp(ctx, 4))
+        }
+        card.addView(brand)
+
+        // Phone number (always)
+        val phoneTv = TextView(ctx).apply {
+            text = phone
+            setTextColor(0xFF0F172A.toInt())
+            textSize = 17f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }
+        card.addView(phoneTv)
+
+        // Name + status row, or "No customer data found"
+        if (name.isNotBlank()) {
+            val row = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(0, dp(ctx, 4), 0, 0)
+            }
+            val nameTv = TextView(ctx).apply {
+                text = name
+                setTextColor(0xFF334155.toInt())
+                textSize = 14f
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            row.addView(nameTv)
+            if (status.isNotBlank()) {
+                val pill = TextView(ctx).apply {
+                    text = status
+                    setTextColor(0xFF4F46E5.toInt())
+                    textSize = 11f
+                    setPadding(dp(ctx, 8), dp(ctx, 3), dp(ctx, 8), dp(ctx, 3))
+                    background = GradientDrawable().apply {
+                        shape = GradientDrawable.RECTANGLE
+                        setColor(0x1A4F46E5)
+                        cornerRadius = dp(ctx, 10).toFloat()
+                    }
+                }
+                row.addView(pill)
+            }
+            card.addView(row)
+            if (lastNote.isNotBlank()) {
+                val noteTv = TextView(ctx).apply {
+                    text = "📝 " + truncate(lastNote, 90)
+                    setTextColor(0xFF475569.toInt())
+                    textSize = 12f
+                    setPadding(0, dp(ctx, 6), 0, 0)
+                }
+                card.addView(noteTv)
+            }
+            if (lastCallAt.isNotBlank()) {
+                val callTv = TextView(ctx).apply {
+                    text = "📞 Last call: $lastCallAt"
+                    setTextColor(0xFF64748B.toInt())
+                    textSize = 11f
+                    setPadding(0, dp(ctx, 3), 0, 0)
+                }
+                card.addView(callTv)
+            }
+        } else {
+            val noData = TextView(ctx).apply {
+                text = "No customer data found"
+                setTextColor(0xFF94A3B8.toInt())
+                textSize = 13f
+                setPadding(0, dp(ctx, 6), 0, 0)
+            }
+            card.addView(noData)
+        }
+
+        // Action button — opens the lead inside the CRM (or the dialer-add flow)
+        val actionBtn = TextView(ctx).apply {
+            text = if (name.isNotBlank()) "Open Lead in CRM" else "+ Add as Lead"
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            gravity = Gravity.CENTER
+            setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                setColor(0xFF4F46E5.toInt())
+                cornerRadius = dp(ctx, 10).toFloat()
+            }
+            val lp = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            lp.topMargin = dp(ctx, 12)
+            layoutParams = lp
+            setOnClickListener {
+                hide(ctx)
+                try {
+                    val i = Intent(ctx, MainActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                                Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                                Intent.FLAG_ACTIVITY_SINGLE_TOP
+                        if (leadId.isNotBlank()) {
+                            putExtra("open_lead_id", leadId)
+                        } else {
+                            putExtra("open_new_lead_phone", phone)
+                        }
+                    }
+                    ctx.startActivity(i)
+                } catch (e: Exception) {
+                    Log.e(TAG, "tap action failed: ${e.message}")
+                }
+            }
+        }
+        card.addView(actionBtn)
+
+        // Tap anywhere on the card background dismisses
+        card.setOnClickListener { hide(ctx) }
+
+        // Wrap in a margin container so it doesn't kiss the screen edge
+        val wrap = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(ctx, 12), 0, dp(ctx, 12), 0)
+        }
+        wrap.addView(card)
+        return wrap
+    }
+
+    private fun dp(ctx: Context, v: Int): Int =
+        TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v.toFloat(),
+            ctx.resources.displayMetrics).toInt()
+
+    private fun truncate(s: String, n: Int): String =
+        if (s.length <= n) s else s.substring(0, n) + "…"
+}

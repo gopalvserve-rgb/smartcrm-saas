@@ -131,6 +131,20 @@ public class MainActivity extends BridgeActivity {
         handleSharedIntent(intent);
     }
 
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // CALL_OVERLAY_v1: when the user is back inside the CRM, we no longer
+        // need the dialer-overlay card. The 45s auto-dismiss handles the case
+        // where the user stays on the dialer.
+        try { CallOverlayManager.hide(MainActivity.this); } catch (Exception e) {}
+        // FG_SVC_v2: if the user swiped the persistent notification (or Vivo
+        // killed it overnight), restart the foreground service so call/recording
+        // sync stays bulletproof. start() is idempotent — safe to call on every
+        // resume.
+        try { CallTrackingForegroundService.start(this); } catch (Exception e) {}
+    }
+
     private void handleSharedIntent(Intent intent) {
         if (intent != null && Intent.ACTION_SEND.equals(intent.getAction())
                 && "text/plain".equals(intent.getType())) {
@@ -388,6 +402,14 @@ public class MainActivity extends BridgeActivity {
          */
         @JavascriptInterface
         public void registerOutgoingCall(String phone, String leadId, double startedAtMs) {
+            registerOutgoingCallWithContext(phone, leadId, startedAtMs, null);
+        }
+
+        // CALL_OVERLAY_v1: extended variant that also takes a leadJson blob the
+        // SPA can pre-fill (name, status, last note, last call date). Old callers
+        // keep working via the shim above.
+        @JavascriptInterface
+        public void registerOutgoingCallWithContext(String phone, String leadId, double startedAtMs, String leadJson) {
             SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
             prefs.edit()
                     .putString("last_dialed_phone", phone == null ? "" : phone)
@@ -395,6 +417,21 @@ public class MainActivity extends BridgeActivity {
                     .putLong("last_dialed_at", (long) startedAtMs)
                     .apply();
             Log.d(TAG, "registered call → " + phone + " lead=" + leadId);
+            // Show the Runo-style overlay (no-ops if SYSTEM_ALERT_WINDOW
+            // is not granted). Wrapped in try so a UI failure never blocks
+            // the dial flow.
+            try {
+                CallOverlayManager.show(MainActivity.this, phone == null ? "" : phone, leadJson);
+            } catch (Exception e) {
+                Log.w(TAG, "CallOverlayManager.show failed: " + e.getMessage());
+            }
+        }
+
+        // CALL_OVERLAY_v1: SPA-callable to dismiss the overlay (e.g. once the
+        // call ends or the SPA explicitly hangs up).
+        @JavascriptInterface
+        public void hideCallOverlay() {
+            try { CallOverlayManager.hide(MainActivity.this); } catch (Exception e) {}
         }
 
         @JavascriptInterface
