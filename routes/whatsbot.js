@@ -2292,13 +2292,25 @@ async function expressEvent(req, res) {
           ? (!_myCfg.phoneId || _incomingPhoneId === String(_myCfg.phoneId))
           : _ownedIds.includes(_incomingPhoneId);
         if (!_accept) {
+          // WA_PHONE_ID_RELAX_v1 (2026-05-25) — was hard-dropping with
+          // phone_id_mismatch. Two real cases this broke:
+          //   1) Coexistence outbound echoes: agent sends from WA Business
+          //      mobile app; Meta forwards an echo to the webhook with a
+          //      related but different phone_number_id (the BSP-side id).
+          //      Hard-drop meant admin never saw agent's replies.
+          //   2) wa_phones row out of sync with what Meta is now sending
+          //      (e.g. number was re-numbered or a related test phone).
+          // New behaviour: LOG the mismatch (for debugging) but do NOT
+          // drop. _handleInbound will still save inbound rows under the
+          // tenant default phone_id. Anything Meta sends to this webhook
+          // URL is by definition for this tenant — the URL is per-tenant.
           await _logActivity({
-            category: 'webhook_in', name: 'phone_id_mismatch',
+            category: 'webhook_in', name: 'phone_id_mismatch_accepted',
             response_code: 200,
             request: { incoming_phone_id: _incomingPhoneId, owned_phone_ids: _ownedIds },
-            response: { skipped: true, reason: 'phone_number_id mismatch — payload not for this tenant' }
+            response: { accepted: true, note: 'WA_PHONE_ID_RELAX_v1: processing despite mismatch — will tag with default phone_id' }
           });
-          return; // Drop silently — not for this tenant
+          // fall through — DO NOT return
         }
       } catch (_) {} // If _cfg() fails, allow processing to continue
     }
