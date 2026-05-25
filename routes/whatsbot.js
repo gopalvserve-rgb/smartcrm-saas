@@ -1794,6 +1794,42 @@ async function api_wb_chat_assign(token, payload) {
   // Mirror onto the lead — when admin/manager assigns a chat to a rep,
   // the lead also belongs to that rep without needing a rule.
   if (newOwner) await _mirrorLeadOwner(phone, newOwner, me.id);
+
+  // WA_CHAT_ASSIGN_PUSH_v1 (2026-05-25) — notify the newly assigned user
+  // on their mobile (FCM) + web (push_subscriptions) so they know they
+  // need to handle this chat. Skip self-assigns (no point) and unassigns.
+  // Wrapped in try/catch — a push failure must NOT fail the API call;
+  // the assignment row is already saved at this point.
+  if (newOwner && Number(newOwner) !== Number(me.id)) {
+    try {
+      const push = require('./push');
+      // Look up lead name (if any) for nicer notification text.
+      let custLabel = '+' + phone;
+      try {
+        const ld = await db.query(
+          `SELECT id, name FROM leads
+            WHERE regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') = $1
+               OR regexp_replace(COALESCE(whatsapp, ''), '\\D', '', 'g') = $1
+            LIMIT 1`,
+          [phone]
+        );
+        if (ld.rows.length) {
+          custLabel = ld.rows[0].name || ('+' + phone);
+        }
+      } catch (_) {}
+      const assignerName = me.name || me.email || 'Admin';
+      await push.sendPushToUser(Number(newOwner), {
+        title: '💬 Chat assigned to you',
+        body:  custLabel + (p.note ? '\n' + String(p.note).slice(0, 100) : ' · by ' + assignerName),
+        url:   '/#/whatsbot/chat?phone=' + phone,
+        tag:   'wa-chat-assign-' + phone,
+        sticky: false
+      });
+    } catch (e) {
+      console.warn('[wb] chat-assign push send skipped:', e.message);
+    }
+  }
+
   return { ok: true, phone, assigned_to: newOwner };
 }
 
