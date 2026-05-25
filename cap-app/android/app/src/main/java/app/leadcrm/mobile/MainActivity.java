@@ -132,7 +132,7 @@ public class MainActivity extends BridgeActivity {
     }
 
     @Override
-    protected void onResume() {
+    public void onResume() {
         super.onResume();
         // CALL_OVERLAY_v1: when the user is back inside the CRM, we no longer
         // need the dialer-overlay card. The 45s auto-dismiss handles the case
