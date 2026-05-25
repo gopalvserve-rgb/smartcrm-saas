@@ -122,6 +122,12 @@ async function api(fn, ...args) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fn, args: [CRM.token, ...args] })
     });
+    // QUOTE_MANY_ITEMS_v1: 413 Payload Too Large comes back as HTML
+    // from Express's default error handler, not JSON. Catch it here
+    // so users see a useful message instead of "Unexpected token <".
+    if (res.status === 413) {
+      throw new Error('Payload too large — your quote / data has too much embedded content (often big product images). Try smaller product images, or save in smaller batches.');
+    }
     const j = await res.json();
     if (!res.ok || j.error) {
       // Strict allow-list. Old regex matched any error containing the
@@ -9046,15 +9052,37 @@ async function openQuotationModal(qid, prefillLead) {
   let currentId = qid || null;
   async function save() {
     saveBtn.disabled = true;
-    const items = [...itemsWrap.querySelectorAll('.q-item')].map(row => ({
-      description: row._desc.value,
-      quantity: Number(row._qty.value || 0),
-      unit_price: Number(row._pr.value || 0),
-      discount_pct: Number(row._dp.value || 0),
-      product_id: row._prodSel && row._prodSel.value ? Number(row._prodSel.value) : null,
-      // QUOTE_UI_v2 — include image url so server can persist on quotation_items
-      product_image_url: row._imageUrl || ''
-    })).filter(it => it.description);
+    // QUOTE_MANY_ITEMS_v1 (2026-05-25) — strip product_image_url when it
+    // equals the product master's image. Reason: products store image_url
+    // as data:image/...;base64,... (can be 200-500 KB per product). When
+    // 15-20 line items each re-send the same data URI, the JSON body
+    // exceeded Express's 4 MB limit and returned 413 PayloadTooLarge —
+    // which the SPA surfaced to the user as "too many items".
+    // The server already hydrates product_image_url back from the master
+    // record on read + save when this field is empty, so dropping it
+    // here is safe and shaves megabytes off the payload.
+    const _prodImgIndex = (CRM.cache && CRM.cache.products) || [];
+    const _masterImgFor = (pid) => {
+      if (!pid) return '';
+      const hit = _prodImgIndex.find(p => Number(p.id) === Number(pid));
+      return (hit && hit.image_url) || '';
+    };
+    const items = [...itemsWrap.querySelectorAll('.q-item')].map(row => {
+      const pid = row._prodSel && row._prodSel.value ? Number(row._prodSel.value) : null;
+      const img = row._imageUrl || '';
+      const masterImg = _masterImgFor(pid);
+      // Only send line-image when it DIFFERS from the master (a custom
+      // override). When they match, server re-hydrates from products.
+      const sendImg = (img && img !== masterImg) ? img : '';
+      return {
+        description: row._desc.value,
+        quantity: Number(row._qty.value || 0),
+        unit_price: Number(row._pr.value || 0),
+        discount_pct: Number(row._dp.value || 0),
+        product_id: pid,
+        product_image_url: sendImg
+      };
+    }).filter(it => it.description);
     try {
       const r = await api('api_quotations_save', {
         id: currentId,

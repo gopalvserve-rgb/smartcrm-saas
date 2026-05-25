@@ -112,11 +112,11 @@ app.post('/hook/cashfree',
   cashfreeWebhook.expressWebhook
 );
 
-app.use(bodyParser.json({ limit: '4mb' }));
+app.use(bodyParser.json({ limit: '25mb' })); // QUOTE_MANY_ITEMS_v1: was 4mb, bumped for quotes with embedded data:image product images
 // Accept form-encoded bodies on /hook/website + /hook/other so HTML
 // contact forms (and tools like Zapier) can post directly without
 // JSON.stringify.
-app.use(bodyParser.urlencoded({ extended: true, limit: '4mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '25mb' })); // QUOTE_MANY_ITEMS_v1
 app.use(require('cookie-parser')());
 
 // ---- Cross-deployment AI usage ingest (Stockbox/Celeste -> here) ----
