@@ -2513,11 +2513,51 @@ async function _handleInbound(m, value) {
     );
     if (ld.rows.length) leadId = ld.rows[0].id;
     else {
-      // WA_PERNUMBER_AUTOLEAD_v1 effective decision:
-      //   per-phone 'off' → never create, regardless of global
-      //   per-phone 'on'  → always create, regardless of global
-      //   per-phone 'inherit' (default) → fall back to global cfg.autoLeadOn
-      // Computed AFTER the per-phone lookup above so perPhoneAutoleadMode is set.
+      // WA_AUTOLEAD_TDZ_FIX_v1 (2026-05-25) — per-phone lookup MUST run
+      // BEFORE the _effectiveAutoLeadOn calculation, otherwise reading
+      // perPhoneAutoleadMode in the ternary throws ReferenceError (let
+      // before declaration). That silent throw was the real reason
+      // auto-lead stopped working after WA_PERNUMBER_AUTOLEAD_v1 — every
+      // new phone hit the TDZ, the outer try/catch swallowed it, lead
+      // never got created. The inbound message still saved (separate
+      // try block below) so admin saw the chat but never the lead.
+      //
+      // Also added wa_chat_assignments lookup so new leads land with the
+      // existing chat owner (if a previous agent already claimed/was
+      // assigned to this phone). Falls back to per-phone default_owner,
+      // then tenant default user.
+      let perPhoneOwner = null;
+      let perPhoneAutoleadMode = 'inherit';
+      if (inboundPhoneId) {
+        try {
+          const phRow = await db.query(
+            `SELECT default_owner_user_id, COALESCE(autolead_mode, 'inherit') AS autolead_mode
+               FROM wa_phones WHERE phone_number_id = $1 LIMIT 1`,
+            [String(inboundPhoneId)]
+          );
+          if (phRow.rows.length && phRow.rows[0].default_owner_user_id != null) {
+            perPhoneOwner = Number(phRow.rows[0].default_owner_user_id);
+          }
+          if (phRow.rows.length && phRow.rows[0].autolead_mode) {
+            perPhoneAutoleadMode = String(phRow.rows[0].autolead_mode).toLowerCase();
+          }
+        } catch (_) {}
+      }
+      // WA_LEAD_CHATOWNER_v1: if a chat is already assigned to an agent
+      // for this phone, the new lead inherits that agent. This honours
+      // workflow where admin manually assigned a chat to an agent
+      // earlier, then the customer comes back as a fresh lead — the
+      // agent who's been chatting with them should own the lead too.
+      let chatOwnerForLead = null;
+      try {
+        const cas = await db.query(
+          `SELECT assigned_to FROM wa_chat_assignments WHERE phone = $1 AND assigned_to IS NOT NULL LIMIT 1`,
+          [from]
+        );
+        if (cas.rows.length) chatOwnerForLead = Number(cas.rows[0].assigned_to) || null;
+      } catch (_) {}
+
+      // NOW we can safely compute the effective autolead decision.
       const _effectiveAutoLeadOn = (perPhoneAutoleadMode === 'on')  ? true
                                   : (perPhoneAutoleadMode === 'off') ? false
                                   : !!cfg.autoLeadOn;
@@ -2539,29 +2579,6 @@ async function _handleInbound(m, value) {
       if (_effectiveAutoLeadOn && _bcGateOk) {
       // Create a fresh lead for this inbound contact
       const profileName = (value?.contacts || []).find(c => c.wa_id === m.from)?.profile?.name || from;
-      // Per-WhatsApp-number lead owner (May 2026): if the admin set a
-      // default_owner_user_id on the wa_phones row that received the
-      // inbound, route THIS lead to that user. Falls back to the
-      // tenant-wide cfg.defaultUser when the per-phone field is empty
-      // or the lookup fails (older tenants without the column).
-      let perPhoneOwner = null;
-      let perPhoneAutoleadMode = 'inherit';
-      if (inboundPhoneId) {
-        try {
-          // WA_PERNUMBER_AUTOLEAD_v1 — read autolead_mode in the SAME query.
-          const phRow = await db.query(
-            `SELECT default_owner_user_id, COALESCE(autolead_mode, 'inherit') AS autolead_mode
-               FROM wa_phones WHERE phone_number_id = $1 LIMIT 1`,
-            [String(inboundPhoneId)]
-          );
-          if (phRow.rows.length && phRow.rows[0].default_owner_user_id != null) {
-            perPhoneOwner = Number(phRow.rows[0].default_owner_user_id);
-          }
-          if (phRow.rows.length && phRow.rows[0].autolead_mode) {
-            perPhoneAutoleadMode = String(phRow.rows[0].autolead_mode).toLowerCase();
-          }
-        } catch (_) {}
-      }
       // Resolve via _resolveDefaultStatusId so a missing / dangling
       // WB_DEFAULT_STATUS_ID falls through to the canonical "New"
       // status — fixes leads landing under a phantom filter with the
@@ -2570,7 +2587,7 @@ async function _handleInbound(m, value) {
         name: profileName, phone: from, whatsapp: from,
         source: cfg.autoLeadSource || 'WhatsApp',
         status_id: await _resolveDefaultStatusId(cfg),
-        assigned_to: perPhoneOwner || cfg.defaultUser || null,
+        assigned_to: chatOwnerForLead || perPhoneOwner || cfg.defaultUser || null, // WA_LEAD_CHATOWNER_v1: existing chat owner wins
         created_at: db.nowIso(), updated_at: db.nowIso()
       });
       leadId = newId;
