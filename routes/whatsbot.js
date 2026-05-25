@@ -1033,7 +1033,17 @@ async function _sendTemplate({ to, templateName, language, variables, imageUrl, 
         });
       } catch (_) {}
     }
-  } catch (_) {}
+  } catch (_dbErr) {
+    // WA_OUT_DIAG_v1 (2026-05-25) — surface INSERT failures instead of swallowing them.
+    try {
+      await _logActivity({
+        category: 'wa_out_db_fail', name: String(_dbErr.code || 'error'),
+        response_code: 500,
+        request: { to: body.to, text_preview: String(text || '').slice(0, 80) },
+        response: { error: String(_dbErr.message || _dbErr), stack: String(_dbErr.stack || '').slice(0, 500) }
+      });
+    } catch (_) {}
+  }
   return { status: r.status, body: r.body, wa_message_id: waMsgId, error: errorText };
 }
 
@@ -1065,7 +1075,17 @@ async function _sendText({ to, text, replyTo, leadId, userId }, cfg) {
         });
       } catch (_) {}
     }
-  } catch (_) {}
+  } catch (_dbErr) {
+    // WA_OUT_DIAG_v1 (2026-05-25) — surface INSERT failures instead of swallowing them.
+    try {
+      await _logActivity({
+        category: 'wa_out_db_fail', name: String(_dbErr.code || 'error'),
+        response_code: 500,
+        request: { to: body.to, text_preview: String(text || '').slice(0, 80) },
+        response: { error: String(_dbErr.message || _dbErr), stack: String(_dbErr.stack || '').slice(0, 500) }
+      });
+    } catch (_) {}
+  }
   return { status: r.status, body: r.body, wa_message_id: waMsgId, error: errorText };
 }
 
@@ -1125,7 +1145,17 @@ async function _sendInteractiveButtons({ to, text, buttons, replyTo, leadId, use
         });
       } catch (_) {}
     }
-  } catch (_) {}
+  } catch (_dbErr) {
+    // WA_OUT_DIAG_v1 (2026-05-25) — surface INSERT failures instead of swallowing them.
+    try {
+      await _logActivity({
+        category: 'wa_out_db_fail', name: String(_dbErr.code || 'error'),
+        response_code: 500,
+        request: { to: body.to, text_preview: String(text || '').slice(0, 80) },
+        response: { error: String(_dbErr.message || _dbErr), stack: String(_dbErr.stack || '').slice(0, 500) }
+      });
+    } catch (_) {}
+  }
   return { status: r.status, body: r.body, wa_message_id: waMsgId, error: errorText };
 }
 
@@ -1154,7 +1184,17 @@ async function _sendMedia({ to, mediaType, mediaUrl, caption, leadId, userId }, 
         });
       } catch (_) {}
     }
-  } catch (_) {}
+  } catch (_dbErr) {
+    // WA_OUT_DIAG_v1 (2026-05-25) — surface INSERT failures instead of swallowing them.
+    try {
+      await _logActivity({
+        category: 'wa_out_db_fail', name: String(_dbErr.code || 'error'),
+        response_code: 500,
+        request: { to: body.to, text_preview: String(text || '').slice(0, 80) },
+        response: { error: String(_dbErr.message || _dbErr), stack: String(_dbErr.stack || '').slice(0, 500) }
+      });
+    } catch (_) {}
+  }
   return { status: r.status, body: r.body, wa_message_id: waMsgId, error: errorText };
 }
 
@@ -1195,7 +1235,17 @@ async function _sendMediaById({ to, mediaType, mediaId, filename, caption, leadI
         });
       } catch (_) {}
     }
-  } catch (_) {}
+  } catch (_dbErr) {
+    // WA_OUT_DIAG_v1 (2026-05-25) — surface INSERT failures instead of swallowing them.
+    try {
+      await _logActivity({
+        category: 'wa_out_db_fail', name: String(_dbErr.code || 'error'),
+        response_code: 500,
+        request: { to: body.to, text_preview: String(text || '').slice(0, 80) },
+        response: { error: String(_dbErr.message || _dbErr), stack: String(_dbErr.stack || '').slice(0, 500) }
+      });
+    } catch (_) {}
+  }
   return { status: r.status, body: r.body, wa_message_id: waMsgId, error: errorText };
 }
 
