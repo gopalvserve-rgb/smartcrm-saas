@@ -1458,66 +1458,6 @@ app.post('/api/rec-diag', require('express').json({ limit: '8kb' }), async (req,
       'failed=', b.failed != null ? b.failed : '?',
       'note=', (b.note || '').toString().slice(0, 200)
     );
-
-    /* REC_SYNC_DIAG_LOG_v1 — persist to per-tenant DB so super-admin can
-       see WHEN the worker stopped getting folder access, not just THAT it
-       did. Fire-and-forget — the endpoint must still return ok:true even
-       if the DB write fails. */
-    setImmediate(async () => {
-      try {
-        const tenantSlug = String(b.tenant || '').trim();
-        if (!tenantSlug) return;
-        const tenantPoolMod = require('./utils/tenantPool');
-        const t = await tenantPoolMod.findActiveTenant(tenantSlug);
-        if (!t) return;
-        const pool = tenantPoolMod.poolFor(t);
-        if (!pool) return;
-        const tenantDb = require('./db/pg');
-        await tenantDb.tenantStorage.run({ pool, tenant: t, slug: tenantSlug }, async () => {
-          const db = require('./db/pg');
-          await db.query(
-            "CREATE TABLE IF NOT EXISTS recording_sync_diag (" +
-            "  id BIGSERIAL PRIMARY KEY, user_id BIGINT," +
-            "  trigger TEXT, phase TEXT, apk_version TEXT," +
-            "  has_folder BOOLEAN, has_token BOOLEAN, has_base BOOLEAN," +
-            "  folder_readable BOOLEAN," +
-            "  file_count INT, uploaded INT, skipped INT, failed INT," +
-            "  note TEXT, payload JSONB, created_at TIMESTAMPTZ DEFAULT NOW())"
-          ).catch(() => {});
-          await db.query(
-            "CREATE INDEX IF NOT EXISTS idx_recsyncdiag_user_created" +
-            " ON recording_sync_diag (user_id, created_at DESC)"
-          ).catch(() => {});
-          // Retention: keep last 3 days (matches device_diag_events policy).
-          await db.query(
-            "DELETE FROM recording_sync_diag WHERE created_at < NOW() - INTERVAL '3 days'"
-          ).catch(() => {});
-          await db.query(
-            "INSERT INTO recording_sync_diag" +
-            " (user_id, trigger, phase, apk_version, has_folder, has_token, has_base," +
-            "  folder_readable, file_count, uploaded, skipped, failed, note, payload)" +
-            " VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
-            [
-              b.user_id != null ? Number(b.user_id) || null : null,
-              String(b.trigger || '').slice(0, 64) || null,
-              String(b.phase || '').slice(0, 32) || null,
-              String(b.apk_version || '').slice(0, 32) || null,
-              b.has_folder != null ? !!b.has_folder : null,
-              b.has_token  != null ? !!b.has_token  : null,
-              b.has_base   != null ? !!b.has_base   : null,
-              b.folder_readable != null ? !!b.folder_readable : null,
-              Number.isFinite(Number(b.file_count)) ? Number(b.file_count) : null,
-              Number.isFinite(Number(b.uploaded))   ? Number(b.uploaded)   : null,
-              Number.isFinite(Number(b.skipped))    ? Number(b.skipped)    : null,
-              Number.isFinite(Number(b.failed))     ? Number(b.failed)     : null,
-              String(b.note || '').slice(0, 500) || null,
-              b,
-            ]
-          );
-        });
-      } catch (_e) { /* swallow — must not break the endpoint */ }
-    });
-
     res.json({ ok: true });
   } catch (e) {
     console.error('[/api/rec-diag] error:', e.message);
