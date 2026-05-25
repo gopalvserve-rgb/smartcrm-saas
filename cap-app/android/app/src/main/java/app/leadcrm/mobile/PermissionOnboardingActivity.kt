@@ -133,18 +133,29 @@ class PermissionOnboardingActivity : AppCompatActivity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(0xFFF7F8FA.toInt())
+            // PERM_ONBOARDING_v1.2: let the system handle status-bar inset automatically
+            fitsSystemWindows = true
         }
-        // Header
-        // PERM_ONBOARDING_v1.1: respect status-bar inset (Vivo / Oppo / notch phones
-        // were clipping the "App Permissions" title behind the system status bar).
-        val statusBarPx = try {
-            val resId = resources.getIdentifier("status_bar_height", "dimen", "android")
-            if (resId > 0) resources.getDimensionPixelSize(resId) else dp(28)
-        } catch (e: Exception) { dp(28) }
+        // PERM_ONBOARDING_v1.2: status-bar inset on Vivo / Oppo / notch phones.
+        // The v1.1 attempt used android:status_bar_height which returns the
+        // basic 24dp value and ignores the display cutout. We now use a
+        // WindowInsetsListener (true cutout + status bar) and start with a
+        // generous static padding (dp(56)) so the title is visible BEFORE
+        // the first inset callback fires.
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(20), statusBarPx + dp(16), dp(20), dp(16))
+            setPadding(dp(20), dp(56), dp(20), dp(16))
             setBackgroundColor(0xFFDC2626.toInt())  // red top bar like Runo
+        }
+        // Apply the real top inset (status bar + cutout if any) once we know it.
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(header) { v, insets ->
+            val sys = insets.getInsets(
+                androidx.core.view.WindowInsetsCompat.Type.statusBars()
+                    or androidx.core.view.WindowInsetsCompat.Type.displayCutout()
+            )
+            val top = if (sys.top > 0) sys.top + dp(12) else dp(56)
+            v.setPadding(dp(20), top, dp(20), dp(16))
+            insets
         }
         val title = TextView(this).apply {
             text = "App Permissions"
