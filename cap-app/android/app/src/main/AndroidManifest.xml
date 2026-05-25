@@ -77,6 +77,12 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
+        <!-- PERM_ONBOARDING_v1: Runo-style permission onboarding (additive). -->
+        <activity
+            android:name=".PermissionOnboardingActivity"
+            android:exported="false"
+            android:label="App Permissions"
+            android:theme="@style/AppTheme.NoActionBar" />
     </application>
 
     <uses-permission android:name="android.permission.INTERNET" />
@@ -105,6 +111,13 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- PERM_ONBOARDING_v1 (2026-05-25): keep WorkManager / FCM alive across Doze. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- PERM_ONBOARDING_v1: caller-ID popup needs to draw above other apps. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- PERM_ONBOARDING_v1: sync follow-ups to phone calendar. -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <uses-permission android:name="android.permission.WRITE_CALENDAR" />
 
     <queries>
         <!-- Phone dialer (DIAL = pre-fill number, VIEW = open dialer) -->

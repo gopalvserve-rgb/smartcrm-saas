@@ -84,6 +84,17 @@ public class MainActivity extends BridgeActivity {
         handleSharedIntent(getIntent());
         scheduleRecordingBgSync();
 
+        // PERM_ONBOARDING_v1: launch Runo-style permission onboarding on first run
+        // or whenever critical perms (battery whitelist / MANAGE_EXTERNAL_STORAGE / recording folder)
+        // are missing. Activity ships an upper-right Skip button so it's never a hard block.
+        try {
+            if (PermissionOnboardingActivity.shouldShow(this)) {
+                startActivity(new Intent(this, PermissionOnboardingActivity.class));
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "PermissionOnboarding launch failed: " + e.getMessage());
+        }
+
         // Allow WebView to use navigator.geolocation. Without this the SPA's
         // getCurrentPosition() in checkInOut() is silently denied and
         // attendance check-in saves with no lat/lng.
@@ -308,6 +319,20 @@ public class MainActivity extends BridgeActivity {
                 invokeJsCallback(callback, false, e.getMessage());
                 pendingPickerCallback = null;
             }
+        }
+
+        // PERM_ONBOARDING_v1: SPA-callable re-trigger for the onboarding screen
+        // (e.g. from a "Fix permissions" button in Settings)
+        @JavascriptInterface
+        public void openRecordingSetup() {
+            runOnUiThread(() -> {
+                try {
+                    Intent i = new Intent(MainActivity.this, PermissionOnboardingActivity.class);
+                    startActivity(i);
+                } catch (Exception e) {
+                    Log.e(TAG, "openRecordingSetup: " + e.getMessage());
+                }
+            });
         }
 
         @JavascriptInterface
