@@ -135,9 +135,15 @@ class PermissionOnboardingActivity : AppCompatActivity() {
             setBackgroundColor(0xFFF7F8FA.toInt())
         }
         // Header
+        // PERM_ONBOARDING_v1.1: respect status-bar inset (Vivo / Oppo / notch phones
+        // were clipping the "App Permissions" title behind the system status bar).
+        val statusBarPx = try {
+            val resId = resources.getIdentifier("status_bar_height", "dimen", "android")
+            if (resId > 0) resources.getDimensionPixelSize(resId) else dp(28)
+        } catch (e: Exception) { dp(28) }
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(20), dp(40), dp(20), dp(16))
+            setPadding(dp(20), statusBarPx + dp(16), dp(20), dp(16))
             setBackgroundColor(0xFFDC2626.toInt())  // red top bar like Runo
         }
         val title = TextView(this).apply {
