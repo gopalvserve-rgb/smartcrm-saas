@@ -733,7 +733,17 @@ async function api_leads_create(token, payload) {
   // Detection: missing or empty/"manual" source AND an authenticated
   // user (me.id present). The SPA's lead form passes source='manual' by
   // default; webhooks/integrations always set a different source.
-  const _isManualCreatorOwn = (!resolvedAssignee) &&
+  // LEAD_CREATOR_OWNS_v2 — also treat "creator is self-assigning" as a manual
+  // creator-own. The SPA lead form pre-fills assigned_to with CRM.user.id, so
+  // a sales rep typing in a new lead sends assigned_to=<their_id> explicitly.
+  // Without this branch the cap check below kicks in, and a rep who's at cap
+  // sees their own newly-created lead land UNASSIGNED.
+  const _isManualCreatorOwn = (
+    // a) caller passed no assignee at all
+    (!resolvedAssignee) ||
+    // b) caller passed THEIR OWN id (self-assign from the lead form)
+    (resolvedAssignee && Number(resolvedAssignee) === Number(me.id))
+  ) &&
     (!p.source || String(p.source).trim().toLowerCase() === 'manual') &&
     !!me.id;
   // If the caller didn't pin an assignee explicitly, run the auto-assign
