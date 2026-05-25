@@ -491,7 +491,17 @@ async function _renderHtml(quotation, items, brandConfig) {
   .terms { margin-top: 1.5rem; font-size: .88rem; color: #475569; white-space: pre-wrap; }
   .actions { margin-top: 2rem; text-align: center; }
   .btn-print { background: ${_esc(primary)}; color: #fff; border: none; padding: .7rem 1.4rem; border-radius: 8px; font-weight: 600; cursor: pointer; }
-  @media print { .actions, .btn-print { display: none; } }
+  /* QUOTE_PDF_NOFOOTER_v1 (2026-05-25) — hide Chrome's auto-injected
+     URL + page-number footer on print/save-as-PDF. Setting @page margin
+     to 0 removes the OS-painted gutter where browsers print
+     "https://...?autoprint=1" and "1/2" page indicators. We then re-add
+     visual margins on the body so content still has breathing room. */
+  @page { size: A4; margin: 0; }
+  @media print {
+    html, body { margin: 0 !important; }
+    body { padding: 12mm 12mm 14mm 12mm; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .actions, .btn-print { display: none; }
+  }
 </style>
 </head>
 <body>

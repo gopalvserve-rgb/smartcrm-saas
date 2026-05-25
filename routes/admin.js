@@ -65,7 +65,12 @@ const CONFIG_KEYS = [
   // Minimum seconds an answered inbound call must last before it creates a lead.
   // 0 = create on every call (incl. missed). Default 5.
   'CALLS_AUTOLEAD_MIN_SECONDS',
-  /* PROD_IMG_v1 */ 'QUOTATION_PRODUCT_IMAGE_SIZE'
+  /* PROD_IMG_v1 */ 'QUOTATION_PRODUCT_IMAGE_SIZE',
+  /* QUOTE_DEFAULTS_KEYS_FIX_v1 (2026-05-25) — these were missing from
+     CONFIG_KEYS, so api_admin_setConfig silently dropped them. Admin
+     "saved" the T&C / Notes defaults but nothing reached the DB —
+     so new quotes never pre-filled. Added to allow-list now. */
+  'QUOTATION_DEFAULT_TERMS', 'QUOTATION_DEFAULT_NOTES'
 ];
 
 const SENSITIVE_KEYS = ['META_APP_SECRET', 'META_PAGE_ACCESS_TOKEN', 'WHATSAPP_ACCESS_TOKEN', 'SMTP_PASSWORD'];
