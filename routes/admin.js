@@ -304,9 +304,22 @@ const api_admin_config = api_admin_getConfig;
 async function api_admin_setConfig(token, keyOrPatch, maybeValue) {
   const me = await authUser(token);
   if (me.role !== 'admin') throw new Error('Admin only');
-  const patch = (typeof keyOrPatch === 'object' && keyOrPatch !== null)
-    ? keyOrPatch
-    : { [keyOrPatch]: maybeValue };
+  // QUOTE_DEFAULTS_SHAPE_FIX_v1 (2026-05-25) — also accept {key, value}
+  // shape (some old SPA callers send this). If we see exactly those two
+  // keys and 'key' itself isn't in CONFIG_KEYS, treat it as a single-pair
+  // patch. Belt-and-suspenders: client now sends the right shape, but
+  // defensively unwrapping prevents future regressions.
+  let normalised = keyOrPatch;
+  if (typeof keyOrPatch === 'object' && keyOrPatch !== null
+      && Object.keys(keyOrPatch).length === 2
+      && typeof keyOrPatch.key === 'string'
+      && Object.prototype.hasOwnProperty.call(keyOrPatch, 'value')
+      && !CONFIG_KEYS.includes('key')) {
+    normalised = { [keyOrPatch.key]: keyOrPatch.value };
+  }
+  const patch = (typeof normalised === 'object' && normalised !== null)
+    ? normalised
+    : { [normalised]: maybeValue };
   const saved = [];
   for (const [k, v] of Object.entries(patch)) {
     if (!CONFIG_KEYS.includes(k)) continue;

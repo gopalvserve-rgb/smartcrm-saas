@@ -18448,8 +18448,12 @@ async function adminQuotation() {
     saveBtn.disabled = true;
     status.textContent = '⏳ Saving…'; status.style.color = '';
     try {
-      await api('api_admin_setConfig', { key: 'QUOTATION_DEFAULT_TERMS', value: String(termsInp.value || '') });
-      await api('api_admin_setConfig', { key: 'QUOTATION_DEFAULT_NOTES', value: String(notesInp.value || '') });
+      // QUOTE_DEFAULTS_SHAPE_FIX_v1 (2026-05-25) — was sending {key, value}
+      // which the server treats as a patch where 'key' and 'value' ARE the
+      // config keys. Neither matches CONFIG_KEYS so both got silently
+      // dropped. Send proper patch shape: {<CONFIG_KEY>: <value>}.
+      await api('api_admin_setConfig', { QUOTATION_DEFAULT_TERMS: String(termsInp.value || '') });
+      await api('api_admin_setConfig', { QUOTATION_DEFAULT_NOTES: String(notesInp.value || '') });
       status.textContent = '✅ Saved. New quotations will auto-fill these.';
       status.style.color = '#16a34a';
     } catch (e) {
