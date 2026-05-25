@@ -95,6 +95,18 @@ public class MainActivity extends BridgeActivity {
             Log.w(TAG, "PermissionOnboarding launch failed: " + e.getMessage());
         }
 
+        // FG_SVC_v1: start the always-on foreground service so the OS can't
+        // kill the app on aggressive OEMs (Vivo, Oppo, Realme). The service
+        // shows a low-priority "Call tracking is enabled" notification and
+        // does nothing else — it exists purely to keep the process alive
+        // so the existing PhoneStateReceiver / RecordingObserver /
+        // WorkManager pipeline keeps firing reliably.
+        try {
+            CallTrackingForegroundService.start(this);
+        } catch (Exception e) {
+            Log.w(TAG, "CallTrackingForegroundService.start failed: " + e.getMessage());
+        }
+
         // Allow WebView to use navigator.geolocation. Without this the SPA's
         // getCurrentPosition() in checkInOut() is silently denied and
         // attendance check-in saves with no lat/lng.
