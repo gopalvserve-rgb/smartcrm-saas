@@ -1252,6 +1252,12 @@ async function api_leads_update(token, id, patch) {
     try { require('./tat').logAction(id, 'note_updated', me.id, { preview: String(patch.notes || '').slice(0, 200) }); } catch (_) {}
   }
   // Lead-form fields that the user might want to track changes on
+  // FU_DONE_v1: when status changes to a terminal value (NI/Junk/Closed/etc.)
+  // auto-clear pending followups so the lead drops out of the due queue.
+  if ('status_id' in patch && patch.status_id && Number(patch.status_id) !== Number(lead.status_id)) {
+    await _autoClearFollowupsOnTerminalStatus(id, patch.status_id, me.id);
+  }
+
   if ('next_followup_at' in patch && patch.next_followup_at !== lead.next_followup_at) {
     try { require('./tat').logAction(id, 'followup_set', me.id, { due_at: patch.next_followup_at }); } catch (_) {}
     /* COMPLIANCE_v1 — real-time check: follow-up requires a recent call */
@@ -1489,9 +1495,91 @@ async function api_myFollowups(token) {
 }
 
 async function api_followup_done(token, id) {
-  await authUser(token);
-  await db.update('followups', id, { is_done: 1, done_at: db.nowIso() });
+  const me = await authUser(token);
+  // FU_DONE_v1: also clear the lead's next_followup_at so it stops showing
+  // in Due/Today/Upcoming lists. Without this, the followups row was
+  // marked done but lead-level views (which read leads.next_followup_at)
+  // kept showing the lead.
+  await _checkFollowupDonePermission(me);
+  const row = await db.findById('followups', id);
+  await db.update('followups', id, { is_done: 1, done_at: db.nowIso(), done_by: me.id });
+  if (row && row.lead_id) {
+    await db.update('leads', row.lead_id, { next_followup_at: null });
+    try { require('./tat').logAction(row.lead_id, 'followup_done', me.id, { followup_id: id }); } catch (_) {}
+  }
   return { ok: true };
+}
+
+/**
+ * FU_DONE_v1 — top-level "mark follow-up done" by lead id. Closes ALL
+ * pending followups for the lead AND clears leads.next_followup_at.
+ * Used by the SPA buttons on the Lead modal and Follow-ups list row.
+ */
+async function api_leads_followupDone(token, leadId) {
+  const me = await authUser(token);
+  await _checkFollowupDonePermission(me);
+  const lead = await db.findById('leads', leadId);
+  if (!lead) throw new Error('Lead not found');
+  // Close any open followup rows for this lead
+  try {
+    await db.query(
+      "UPDATE followups SET is_done = 1, done_at = NOW(), done_by = $1 WHERE lead_id = $2 AND (is_done IS NULL OR is_done = 0)",
+      [me.id, Number(leadId)]
+    );
+  } catch (_) {
+    // Older tenants may not have done_by — fall back without it
+    try { await db.query(
+      "UPDATE followups SET is_done = 1, done_at = NOW() WHERE lead_id = $1 AND (is_done IS NULL OR is_done = 0)",
+      [Number(leadId)]
+    ); } catch (_) {}
+  }
+  await db.update('leads', leadId, { next_followup_at: null });
+  try { require('./tat').logAction(leadId, 'followup_done', me.id, {}); } catch (_) {}
+  return { ok: true };
+}
+
+/**
+ * FU_DONE_v1 — enforce the ALLOW_AGENT_FOLLOWUP_DONE admin toggle.
+ * Admins / managers / team leaders can always mark done. Sales users
+ * can only do it when the config is '1' (default) or unset.
+ */
+async function _checkFollowupDonePermission(me) {
+  if (['admin','manager','team_leader'].includes(me.role)) return;
+  let allow = '1';
+  try {
+    const row = await db.findFirst('config', { key: 'ALLOW_AGENT_FOLLOWUP_DONE' });
+    if (row && row.value != null) allow = String(row.value);
+  } catch (_) {}
+  if (allow === '0' || /^(no|false|off)$/i.test(allow)) {
+    throw new Error('Marking follow-up Done is disabled for agents. Ask your admin to enable it.');
+  }
+}
+
+/**
+ * FU_DONE_v1 — auto-clear followups when a lead moves to a terminal
+ * status (Not Interested / Junk / Sale Closed / Won / Lost etc.).
+ * Reads FOLLOWUP_AUTO_CLEAR_STATUSES config (CSV of status names).
+ */
+async function _autoClearFollowupsOnTerminalStatus(leadId, newStatusId, userId) {
+  if (!leadId || !newStatusId) return;
+  try {
+    const status = await db.findById('statuses', newStatusId);
+    if (!status) return;
+    let csv = 'Not Interested,Junk,Sale Closed,Final Sale Done,Won,Lost,NI,Closed,Dead';
+    try {
+      const row = await db.findFirst('config', { key: 'FOLLOWUP_AUTO_CLEAR_STATUSES' });
+      if (row && row.value) csv = String(row.value);
+    } catch (_) {}
+    const terminal = csv.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    const isTerminal = terminal.includes(String(status.name || '').trim().toLowerCase());
+    if (!isTerminal) return;
+    await db.query(
+      "UPDATE followups SET is_done = 1, done_at = NOW() WHERE lead_id = $1 AND (is_done IS NULL OR is_done = 0)",
+      [Number(leadId)]
+    );
+    await db.update('leads', leadId, { next_followup_at: null });
+    try { require('./tat').logAction(leadId, 'followup_auto_cleared', userId || 0, { reason: status.name }); } catch (_) {}
+  } catch (e) { console.warn('[fu-done] auto-clear failed:', e.message); }
 }
 
 async function api_leads_bulkUpdate(token, leadIds, patch) {
@@ -2527,7 +2615,7 @@ async function api_leads_activityTimeline(token, leadId) {
 
 module.exports = {
   api_leads_list, api_leads_distinctTags, api_leads_phoneBook, api_leads_statusCounts, api_leads_get, api_leads_create, api_leads_update,
-  api_leads_addRemark, api_leads_pipeline, api_myFollowups, api_followup_done,
+  api_leads_addRemark, api_leads_pipeline, api_myFollowups, api_followup_done, api_leads_followupDone,
   api_leads_bulkUpdate, api_leads_bulkDelete, api_leads_bulkCreate, api_leads_duplicateHistory,
   api_leads_deleteAllDuplicates, api_leads_duplicateAndReassign,
   api_leads_cleanupJunk,

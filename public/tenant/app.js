@@ -7715,7 +7715,20 @@ async function renderFollowupSection(view, key) {
           waHref  ? h('a', { class: 'btn sm ghost', href: waHref, target: '_blank', rel: 'noopener', style: { marginLeft: '.25rem' } }, '💬') : null,
           r.id ? h('button', { class: 'btn sm primary', style: { marginLeft: '.25rem' },
             onclick: () => openNextFollowupModal(r, () => navigateTo(key === 'overdue' ? 'overdue' : key === 'due_today' ? 'duetoday' : 'upcoming'))
-          }, '⏰ Next') : null
+          }, '⏰ Next') : null,
+          /* FU_DONE_v1: "Mark Done" closes the followup AND clears the
+             lead's next_followup_at so the row disappears from due lists. */
+          r.lead_id ? h('button', { class: 'btn sm ok', style: { marginLeft: '.25rem' },
+            title: 'Mark follow-up done (lead drops off this list)',
+            onclick: async () => {
+              if (!confirm('Mark this follow-up as done? The lead will be removed from Due / Overdue lists.')) return;
+              try {
+                await api('api_leads_followupDone', r.lead_id);
+                toast('Follow-up marked done ✓');
+                navigateTo(key === 'overdue' ? 'overdue' : key === 'due_today' ? 'duetoday' : 'upcoming');
+              } catch (e) { toast(e.message || 'Failed to mark done', 'err'); }
+            }
+          }, '✓ Done') : null
         )
       );
     }))

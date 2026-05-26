@@ -70,7 +70,14 @@ const CONFIG_KEYS = [
      CONFIG_KEYS, so api_admin_setConfig silently dropped them. Admin
      "saved" the T&C / Notes defaults but nothing reached the DB —
      so new quotes never pre-filled. Added to allow-list now. */
-  'QUOTATION_DEFAULT_TERMS', 'QUOTATION_DEFAULT_NOTES'
+  'QUOTATION_DEFAULT_TERMS', 'QUOTATION_DEFAULT_NOTES',
+  /* FU_DONE_v1 (2026-05-25) — admin toggle: allow agents to mark followups
+     as Done themselves ('1' default). Set to '0' to lock it to managers only. */
+  'ALLOW_AGENT_FOLLOWUP_DONE',
+  /* FU_DONE_v1 — CSV of terminal status NAMES (case-insensitive) that
+     auto-clear pending followups when set. Defaults to
+     "Not Interested, Junk, Sale Closed, Final Sale Done, Won, Lost, NI". */
+  'FOLLOWUP_AUTO_CLEAR_STATUSES'
 ];
 
 const SENSITIVE_KEYS = ['META_APP_SECRET', 'META_PAGE_ACCESS_TOKEN', 'WHATSAPP_ACCESS_TOKEN', 'SMTP_PASSWORD'];
