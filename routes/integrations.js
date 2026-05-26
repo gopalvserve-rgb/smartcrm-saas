@@ -691,6 +691,7 @@ const KNOWN_KEYS_BY_SOURCE = {
   pabbly:        ['name', 'phone', 'email', 'company', 'city', 'message', 'source', 'utm_source', 'utm_medium', 'utm_campaign', 'gclid'],
   zapier:        ['name', 'phone', 'email', 'company', 'city', 'message', 'source', 'utm_source', 'utm_medium', 'utm_campaign', 'gclid'],
   make:          ['name', 'full_name', 'contact_name', 'phone', 'mobile', 'email', 'company', 'organization', 'city', 'message', 'enquiry', 'source', 'source_ref', 'utm_source', 'utm_medium', 'utm_campaign', 'gclid'],
+  facebook:      ['full_name', 'name', 'first_name', 'last_name', 'phone_number', 'mobile_phone', 'email', 'company_name', 'job_title', 'city', 'state', 'country', 'date_of_birth', 'gender', 'street_address', 'post_code', 'zip_code', 'budget', 'product_of_interest', 'service_of_interest', 'message'],
   website:       ['name', 'phone', 'email', 'company', 'city', 'state', 'address', 'message', 'source', 'source_ref', 'product', 'value', 'tags', 'campaign_name_new', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'gclid', 'gad_campaignid'],
   generic:       ['name', 'phone', 'email', 'company', 'city', 'state', 'address', 'message', 'source', 'source_ref', 'product', 'value', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'gclid', 'gad_campaignid']
 };
@@ -1668,4 +1669,9 @@ module.exports = {
   api_integration_save,
   api_integration_delete,
   api_integration_syncNow,
+  // Reusable helpers — exported so other ingest paths (FB Lead Ads, etc.)
+  // can apply the same per-tenant field mapping system without duplicating logic.
+  _loadCustomMapping,
+  _applyCustomMapping,
+  _saveLastPayload,
 };

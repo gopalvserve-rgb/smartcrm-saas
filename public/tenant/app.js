@@ -19098,6 +19098,35 @@ async function adminFb() {
   const wrap = h('div', { class: 'fb-admin' });
   wrap.appendChild(h('h3', { style: { margin: '0 0 1rem' } }, 'Facebook Leads Integration'));
 
+  // FB_FIELD_MAP_v1 — quick-action card: map FB form fields to CRM fields.
+  // Uses the same field-mapping modal as Make.com / Pabbly / etc.
+  // Mapping is tenant-wide (all FB pages share it). If admins ever need
+  // per-page mapping we can add a key selector later.
+  {
+    const mapCard = h('div', { class: 'card', style: { borderLeft: '4px solid #4F46E5', marginBottom: '1rem' } });
+    mapCard.appendChild(h('h4', { style: { marginTop: 0 } }, '🗺 Map Lead Fields'));
+    mapCard.appendChild(h('p', { class: 'muted', style: { marginBottom: '.6rem' } },
+      'Map the field names from your Facebook Lead form (e.g. ',
+      h('code', {}, 'full_name'), ', ', h('code', {}, 'phone_number'), ', ',
+      h('code', {}, 'date_of_birth'), ', or any custom question you added) ',
+      'to CRM standard fields or custom fields. Saved mapping applies to ALL connected pages.'
+    ));
+    mapCard.appendChild(h('button', {
+      class: 'btn primary',
+      onclick: () => {
+        if (typeof openSourceMappingModal === 'function') {
+          openSourceMappingModal('facebook', 'Facebook Lead Ads');
+        } else {
+          toast('Mapping editor not loaded — please refresh the page', 'err');
+        }
+      }
+    }, '🗺 Open Field Mapping'));
+    mapCard.appendChild(h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.5rem' } },
+      '💡 Tip: send a test lead through your FB form first — the modal shows the ',
+      h('b', {}, 'last received payload'), ' so you can see the exact field names Meta sends.'));
+    wrap.appendChild(mapCard);
+  }
+
   // ============ 1. Application Settings ============
   // Platform-managed Meta App credentials — admins never input these. The
   // App ID + Secret are baked into the backend (same Meta Developer App as

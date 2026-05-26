@@ -116,19 +116,62 @@ async function _processLeadgen(leadgenId, pageId, formId) {
     payload[f.name] = Array.isArray(f.values) ? f.values.join(', ') : f.values;
   });
 
+  // FB_FIELD_MAP_v1 — save the last-seen payload + apply tenant-configured
+  // mapping if one exists. Lets admins map FB form fields (e.g. 'date_of_birth'
+  // or any custom question they added on the form) to CRM standard or custom
+  // fields without code changes. Same UI/system used by Make.com, Pabbly, etc.
+  let mappedExtras = {};
+  let mappedOverrides = {};
+  try {
+    const integrations = require('./integrations');
+    if (integrations && typeof integrations._saveLastPayload === 'function') {
+      try { await integrations._saveLastPayload('facebook', payload); } catch (_) {}
+    }
+    const customMap = integrations && typeof integrations._loadCustomMapping === 'function'
+      ? await integrations._loadCustomMapping('facebook')
+      : null;
+    if (customMap && Object.keys(customMap).length) {
+      const out = integrations._applyCustomMapping({ data: payload }, customMap);
+      const first = (out && out[0]) || {};
+      if (first.custom_fields) mappedExtras = first.custom_fields;
+      // Standard-field overrides (e.g. mapped 'phone_number' -> 'phone')
+      ['name','phone','email','whatsapp','company','city','state','address','source','source_ref','notes','product','value','tags','utm_source','utm_medium','utm_campaign','utm_term','utm_content','gclid'].forEach(k => {
+        if (first[k] != null && first[k] !== '') mappedOverrides[k] = first[k];
+      });
+    }
+  } catch (e) { console.warn('[fb-ingest] mapping skipped:', e.message); }
+
   const lead = {
-    name:     payload.full_name || payload.name || '',
-    phone:    payload.phone_number || payload.phone || '',
-    email:    payload.email || '',
-    whatsapp: payload.phone_number || payload.phone || '',
-    source:   ctx.default_source || 'Facebook Lead Ad',
-    notes:    'Imported from Meta Lead Ad' + (ctx.page_name ? ' — page: ' + ctx.page_name : ''),
+    name:     mappedOverrides.name  || payload.full_name || payload.name || '',
+    phone:    mappedOverrides.phone || payload.phone_number || payload.phone || '',
+    email:    mappedOverrides.email || payload.email || '',
+    whatsapp: mappedOverrides.whatsapp || payload.phone_number || payload.phone || '',
+    source:   mappedOverrides.source || ctx.default_source || 'Facebook Lead Ad',
+    source_ref: mappedOverrides.source_ref || '',
+    company:  mappedOverrides.company || '',
+    city:     mappedOverrides.city || '',
+    state:    mappedOverrides.state || '',
+    address:  mappedOverrides.address || '',
+    notes:    mappedOverrides.notes || ('Imported from Meta Lead Ad' + (ctx.page_name ? ' — page: ' + ctx.page_name : '')),
+    tags:     mappedOverrides.tags || '',
+    value:    mappedOverrides.value != null ? Number(mappedOverrides.value) || null : null,
+    utm_source:   mappedOverrides.utm_source || '',
+    utm_medium:   mappedOverrides.utm_medium || '',
+    utm_campaign: mappedOverrides.utm_campaign || '',
+    utm_term:     mappedOverrides.utm_term || '',
+    utm_content:  mappedOverrides.utm_content || '',
+    gclid:        mappedOverrides.gclid || '',
     meta_json: { leadgen_id: leadgenId, page_id: pageId, form_id: formId, raw: j },
     created_at: db.nowIso(),
     updated_at: db.nowIso()
   };
   if (ctx.default_user_id) lead.assigned_to = ctx.default_user_id;
   if (ctx.default_status_id) lead.status_id = ctx.default_status_id;
+  // Custom-field values from the mapping land in extra_json (same shape
+  // as the leadsource webhook path produces).
+  if (Object.keys(mappedExtras).length) {
+    lead.extra_json = JSON.stringify(mappedExtras);
+  }
 
   await _createLeadFromWebhook(lead);
 }
