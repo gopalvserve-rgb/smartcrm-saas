@@ -1313,7 +1313,18 @@ function navigateTo(id) {
   if (!item) item = NAV[0];
   $$('.sidebar nav a, #bottom-nav a').forEach(a => a.classList.toggle('active', a.dataset.view === item.id));
   $('#page-title').textContent = item.label;
+  // SCROLL_RESET_v1 — when navigating to a new view, jump to the top of
+  // the page. Without this, the previous view's scroll position is kept
+  // and the new view's content can render below the viewport (user has
+  // to manually scroll up). Belt-and-braces: reset window, main element,
+  // and #view itself in case any of those is the scroll container.
+  try {
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+    const mainEl = document.querySelector('.main');
+    if (mainEl) mainEl.scrollTop = 0;
+  } catch (_) {}
   const view = $('#view');
+  if (view) view.scrollTop = 0;
   view.innerHTML = '<div class="loading">Loading…</div>';
   if (parseHashView() !== item.id) location.hash = '#/' + item.id;
   const fn = VIEWS[item.id];
