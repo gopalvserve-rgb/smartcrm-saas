@@ -2893,17 +2893,3 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
     font-size: 14px !important;
   }
 }
-/* ============================================================
- * SIDEBAR_CLOSED_DEFAULT_v1 — sidebar closed by default on desktop.
- * The ☰ hamburger button in the topbar (previously mobile-only)
- * toggles .sb-closed on .shell, switching the grid template so
- * the sidebar column collapses to 0 and the main pane takes 100%.
- * ============================================================ */
-@media (min-width: 781px) {
-  /* Show the hamburger button on desktop too (was hidden by line 1093) */
-  .topbar-mobile-menu { display: inline-flex !important; }
-  /* When closed, hide the sidebar and let main fill the viewport */
-  .shell.sb-closed { grid-template-columns: 0 1fr; }
-  .shell.sb-closed > .sidebar { display: none; }
-}
-

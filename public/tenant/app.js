@@ -1197,29 +1197,7 @@ function renderShell() {
   $('#btn-logout').onclick = logout;
   const _btnSec = $('#btn-security'); if (_btnSec) _btnSec.onclick = openSecurityModal;
   $('#btn-notif').onclick = showNotifs;
-  // SIDEBAR_CLOSED_DEFAULT_v1 — on desktop the same ☰ button toggles the
-  // sidebar (closed by default). On mobile it still opens the More sheet.
-  $('#btn-more').onclick = function () {
-    const isDesktop = window.matchMedia('(min-width: 781px)').matches;
-    if (isDesktop) {
-      const shell = document.querySelector('.shell');
-      if (shell) {
-        shell.classList.toggle('sb-closed');
-        try { localStorage.setItem('sb-closed', shell.classList.contains('sb-closed') ? '1' : '0'); } catch (_) {}
-      }
-    } else {
-      showMobileMore();
-    }
-  };
-  // Apply persisted state — default to CLOSED if no preference saved.
-  try {
-    const shell = document.querySelector('.shell');
-    if (shell && window.matchMedia('(min-width: 781px)').matches) {
-      const saved = localStorage.getItem('sb-closed');
-      const closed = saved === null ? true : saved === '1';
-      shell.classList.toggle('sb-closed', closed);
-    }
-  } catch (_) {}
+  $('#btn-more').onclick = showMobileMore;
   const _ga = $('#btn-getapp'); if (_ga) _ga.onclick = showGetApp;
 }
 
