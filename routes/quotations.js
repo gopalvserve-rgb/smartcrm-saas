@@ -686,6 +686,24 @@ async function expressPublicQuote(req, res) {
   res.send(html);
 }
 
+
+/**
+ * QUOTE_WA_PHONE_FIX_v1 — robust phone normalizer for the Meta Graph API.
+ *   - strips +, spaces, dashes, parens
+ *   - strips leading 00 (international dial prefix)
+ *   - 10 digits → assume India, prepend 91
+ *   - 11 digits starting with 0 → strip 0 + prepend 91
+ *   - 12+ digits → pass through (already has country code)
+ */
+function _normalizeQuotePhone(raw) {
+  let d = String(raw || '').replace(/\D/g, '');
+  if (!d) return '';
+  if (d.startsWith('00')) d = d.slice(2);
+  if (d.length === 10) return '91' + d;
+  if (d.length === 11 && d.startsWith('0')) return '91' + d.slice(1);
+  return d;
+}
+
 module.exports = {
   api_quotations_list, api_quotations_get, api_quotations_save,
   api_quotations_delete, api_quotations_set_status,
