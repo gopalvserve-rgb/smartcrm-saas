@@ -942,6 +942,16 @@ app.get('/q/:token', (req, res, next) => {
   });
 });
 
+// QUOTE_PDF_v1: stream the quotation as a true PDF document. Used by the
+// WhatsApp document-send (Meta needs a publicly-fetchable .pdf URL).
+app.get('/q/:token.pdf', (req, res, next) => {
+  if (!req.tenant) return res.status(404).send('Tenant not found');
+  const tenantDb = require('./db/pg');
+  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug }, () => {
+    require('./routes/quotations').expressPublicQuotePdf(req, res).catch(next);
+  });
+});
+
 // ---- Public QR lead form (tenant-scoped) ----
 // GET  /t/<slug>/form/<form-slug>          — branded HTML form
 // POST /t/<slug>/form/<form-slug>/submit   — JSON submit → creates lead

@@ -629,10 +629,31 @@ async function api_quotations_send_whatsapp(token, id, opts) {
     'Tap the link above → click *🖨️ Print / save as PDF* button at top of page.\n\n' +
     'Looking forward to your confirmation. 🙏';
   const wb = _wb();
-  if (!wb._sendText || !wb._cfg) throw new Error('WhatsApp module not available');
+  if (!wb._sendText || !wb._cfg || !wb._sendMedia) throw new Error('WhatsApp module not available');
   const cfgWa = await wb._cfg();
   if (!cfgWa.token || !cfgWa.phoneId) throw new Error('WhatsApp not connected. Settings → WhatsApp → Connect Account.');
-  const send = await wb._sendText({ to: phone, text, leadId: q.lead_id || null, userId: null }, cfgWa);
+
+  // QUOTE_PDF_v1: send the actual PDF as a document attachment, with the
+  // formatted text as the caption. Customer sees a tappable PDF preview
+  // bubble inside WhatsApp — exactly what the user asked for.
+  const pdfUrl = u.url.replace(/\/q\/([a-zA-Z0-9]+)$/, '/q/$1.pdf');
+  let send;
+  try {
+    send = await wb._sendMedia({
+      to: phone,
+      mediaType: 'document',
+      mediaUrl: pdfUrl,
+      caption: text,
+      leadId: q.lead_id || null,
+      userId: null
+    }, cfgWa);
+  } catch (e) {
+    // If document send fails for any reason (Meta couldn't fetch the URL,
+    // PDF generator crashed, etc.) fall back to plain text so the message
+    // still goes through.
+    console.warn('[quote-wa] PDF send failed, falling back to text:', e.message);
+    send = await wb._sendText({ to: phone, text, leadId: q.lead_id || null, userId: null }, cfgWa);
+  }
   if (send && send.body && send.body.error) {
     const e = send.body.error;
     const code = e.code || e.error_subcode || '';
@@ -716,10 +737,39 @@ function _normalizeQuotePhone(raw) {
   return d;
 }
 
+
+/**
+ * QUOTE_PDF_v1 — public PDF endpoint. Same auth model as expressPublicQuote
+ * (public_token in URL, is_public=1 in DB). Streams a freshly-rendered PDF
+ * so WhatsApp can fetch + forward it as a document attachment.
+ */
+async function expressPublicQuotePdf(req, res) {
+  await _ensureTables();
+  const tk = String(req.params.token || '').trim();
+  if (!tk) { res.status(400).send('Missing token'); return; }
+  const r = await db.query(`SELECT * FROM quotations WHERE public_token = $1 AND is_public = 1`, [tk]);
+  if (!r.rows.length) { res.status(404).send('Quotation not found'); return; }
+  const q = r.rows[0];
+  const its = await db.query(`SELECT * FROM quotation_items WHERE quotation_id = $1 ORDER BY position`, [q.id]);
+  const brand = await _loadBrand();
+
+  // Hydrate product images on items so the PDF renderer could optionally
+  // include them later (current renderer is text-only — image support is
+  // an easy follow-up if customers ask).
+  const items = its.rows;
+
+  const { renderQuotationPdf } = require('../utils/quotationPdf');
+  const safeNumber = String(q.number || ('Quote-' + q.id)).replace(/[^A-Za-z0-9_\-]/g, '_');
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', 'inline; filename="' + safeNumber + '.pdf"');
+  const stream = renderQuotationPdf({ quotation: q, items, brand });
+  stream.pipe(res);
+}
+
 module.exports = {
   api_quotations_list, api_quotations_get, api_quotations_save,
   api_quotations_delete, api_quotations_set_status,
   api_quotations_send_email, api_quotations_send_whatsapp,
   api_quotations_public_url,
-  expressPublicQuote,
+  expressPublicQuote, expressPublicQuotePdf,
 };
