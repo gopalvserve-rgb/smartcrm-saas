@@ -9157,16 +9157,25 @@ async function openQuotationModal(qid, prefillLead) {
   emailBtn.onclick = async () => {
     if (!emailInp.value) return toast('Add customer email first', 'err');
     if (!currentId) await save();
-    try { const r = await api('api_quotations_send_email', currentId); toast('📧 Sent to ' + r.sent_to, 'ok'); }
-    catch (e) { toast(e.message, 'err'); }
+    try {
+      await save();  // QUOTE_WA_PHONE_FIX_v2: persist latest changes before sending email
+      const r = await api('api_quotations_send_email', currentId);
+      toast('📧 Sent to ' + r.sent_to, 'ok');
+    } catch (e) { toast(e.message, 'err'); }
   };
   waBtn.onclick = async () => {
     if (!phoneInp.value) return toast('Add customer phone first', 'err');
-    if (!currentId) await save();
     waBtn.disabled = true;
     const _origLabel = waBtn.textContent;
     waBtn.textContent = '⏳ Sending…';
     try {
+      // QUOTE_WA_PHONE_FIX_v2: ALWAYS save before sending, even if the
+      // quote already has an id. Previously we only saved if !currentId,
+      // which meant any change to the phone field AFTER the first save
+      // never reached the server — Send-WA used the old empty phone and
+      // threw "Customer phone missing". Now we save first so the latest
+      // input value is persisted before the send call.
+      await save();
       const r = await api('api_quotations_send_whatsapp', currentId);
       toast('💬 Sent to ' + r.sent_to, 'ok');
     } catch (e) {
