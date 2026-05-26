@@ -427,9 +427,24 @@ async function api_admin_emailTemplateSave(token, payload) {
 async function api_admin_emailTestSend(token, payload) {
   const me = await authUser(token);
   if (me.role !== 'admin') throw new Error('Admin only');
-  const to = (payload && payload.to) || me.email;
+  payload = payload || {};
+  const to = payload.to || me.email;
   if (!to) throw new Error('Recipient email required');
   const mailer = require('../utils/mailer');
+  // SMTP_TEST_v1 — accept ad-hoc overrides so user can verify creds BEFORE saving.
+  // If any of host/port/secure/user/pass/from is present, use the adhoc path.
+  const hasOverride = !!(payload.host || payload.port || payload.secure != null || payload.user || payload.pass || payload.from);
+  if (hasOverride && mailer.testSmtpAdhoc) {
+    const out = await mailer.testSmtpAdhoc(to, {
+      host: payload.host,
+      port: payload.port,
+      secure: payload.secure,
+      user: payload.user,
+      pass: payload.pass,
+      from: payload.from
+    });
+    return Object.assign({ sent_to: to }, out);
+  }
   await mailer.testSmtp(to);
   return { ok: true, sent_to: to };
 }

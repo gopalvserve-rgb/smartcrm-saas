@@ -279,6 +279,57 @@ async function testSmtp(to) {
   return { ok: true };
 }
 
+// SMTP_TEST_v1: test with ad-hoc overrides so the user can verify creds BEFORE saving them.
+// `overrides` accepts { host, port, secure, user, pass, from } — any missing values fall back to saved config.
+async function testSmtpAdhoc(to, overrides) {
+  overrides = overrides || {};
+  const cfg = await _allConfig();
+  const host = overrides.host || cfg.SMTP_HOST || process.env.SMTP_HOST;
+  if (!host) throw new Error('SMTP host required');
+  const port = Number(overrides.port || cfg.SMTP_PORT || process.env.SMTP_PORT || 587);
+  const secureStr = overrides.secure != null ? String(overrides.secure) : String(cfg.SMTP_SECURE || process.env.SMTP_SECURE || '0');
+  const secure = (secureStr === '1' || secureStr === 'true' || port === 465);
+  const user = overrides.user || cfg.SMTP_USER || process.env.SMTP_USER || '';
+  const pass = overrides.pass || cfg.SMTP_PASSWORD || process.env.SMTP_PASSWORD || '';
+  const from = overrides.from || cfg.SMTP_FROM || cfg.EMAIL_NOTIFY_FROM || cfg.SMTP_USER || user || 'no-reply@example.com';
+  const company = cfg.COMPANY_NAME || 'Lead CRM';
+  const tx = nodemailer.createTransport({
+    host, port, secure,
+    requireTLS: !secure && port !== 25,
+    auth: user ? { user, pass } : undefined,
+    tls: { rejectUnauthorized: false },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 15000
+  });
+  // 1) verify (connect + auth)
+  try { await tx.verify(); }
+  catch (e) {
+    tx.close && tx.close();
+    const msg = e && e.message ? e.message : String(e);
+    const code = e && e.code ? ' [' + e.code + ']' : '';
+    throw new Error('SMTP verify failed' + code + ': ' + msg);
+  }
+  // 2) send a real message
+  const html = `<div style="font-family:Arial,sans-serif">
+<p>This is a test email from <b>${company}</b>.</p>
+<p>If you can read this, your SMTP settings are working correctly. ✅</p>
+<p style="color:#94a3b8;font-size:13px">Sent at ${new Date().toLocaleString('en-IN')}</p>
+<hr><p style="color:#94a3b8;font-size:12px">host=${host} port=${port} secure=${secure} user=${user || '(none)'}</p>
+</div>`;
+  let info;
+  try {
+    info = await tx.sendMail({ from, to, subject: 'SMTP test from ' + company, html });
+  } catch (e) {
+    tx.close && tx.close();
+    const msg = e && e.message ? e.message : String(e);
+    const code = e && e.code ? ' [' + e.code + ']' : '';
+    throw new Error('SMTP send failed' + code + ': ' + msg);
+  }
+  tx.close && tx.close();
+  return { ok: true, messageId: info && info.messageId, accepted: info && info.accepted, rejected: info && info.rejected, host, port, secure, user };
+}
+
 // ---------- daily morning follow-ups (9 AM) ----------
 async function sendMorningFollowups() {
   if (!await _eventEnabled('morning_followups')) return { ok: false, skipped: 'disabled' };
@@ -541,7 +592,7 @@ async function recordLogin(userId, req) {
 
 module.exports = {
   SUPPORTED_EVENTS,
-  sendEvent, testSmtp,
+  sendEvent, testSmtp, testSmtpAdhoc,
   /* REPORT_SCHEDULE_v1 — expose raw send so scheduled report templates can
    * dispatch HTML emails to arbitrary recipients without needing a templated
    * event row. Keeps existing event-driven flow intact. */

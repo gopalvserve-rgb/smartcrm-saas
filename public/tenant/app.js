@@ -20981,11 +20981,69 @@ async function adminDuplicates() {
 }
 async function adminSmtp() {
   const cfg = await api('api_admin_getConfig');
-  return configForm(cfg, ['EMAIL_NOTIFY_ENABLED', 'SMTP_HOST', 'SMTP_PORT', 'SMTP_SECURE', 'SMTP_USER', 'SMTP_PASSWORD', 'EMAIL_NOTIFY_FROM', 'EMAIL_NOTIFY_SUBJECT_PREFIX', 'FOLLOWUP_REMIND_MIN'], {
+  const me = CRM && CRM.user ? CRM.user : {};
+  const form = configForm(cfg, ['EMAIL_NOTIFY_ENABLED', 'SMTP_HOST', 'SMTP_PORT', 'SMTP_SECURE', 'SMTP_USER', 'SMTP_PASSWORD', 'EMAIL_NOTIFY_FROM', 'EMAIL_NOTIFY_SUBJECT_PREFIX', 'FOLLOWUP_REMIND_MIN'], {
     EMAIL_NOTIFY_ENABLED: { type: 'select', options: ['0', '1'], hint: '0 = off, 1 = send reminder emails' },
     SMTP_SECURE: { type: 'select', options: ['false', 'true'], hint: 'true for port 465, false for 587/STARTTLS' },
     FOLLOWUP_REMIND_MIN: { hint: 'Remind this many minutes before due_at' }
   });
+
+  // SMTP_TEST_v1 — Test SMTP card: read the form's current values and send a real test email.
+  const wrap = h('div', {});
+  wrap.appendChild(form);
+
+  const testCard = h('div', {
+    style: {
+      marginTop: '1rem', padding: '14px 16px', border: '1px solid #c7d2fe',
+      background: 'linear-gradient(180deg, #eef2ff 0%, #fafaff 100%)', borderRadius: '12px'
+    }
+  });
+  testCard.appendChild(h('div', { style: { fontWeight: 700, fontSize: '.95rem', color: '#3730a3', marginBottom: '4px' } }, '✉️ Test SMTP'));
+  testCard.appendChild(h('div', { style: { fontSize: '.82rem', color: '#475569', marginBottom: '10px' } },
+    'Send a real test email using the values shown in the form above (you do NOT need to save first). If it fails, the exact SMTP error will be shown so you can fix it.'));
+
+  const toInput = h('input', {
+    type: 'email',
+    placeholder: 'Recipient (e.g. you@example.com)',
+    value: (me && me.email) || '',
+    style: { padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '8px', minWidth: '260px', marginRight: '8px' }
+  });
+  const testBtn = h('button', { type: 'button', class: 'btn primary' }, '📤 Send test email');
+  const result = h('div', { style: { marginTop: '10px', fontSize: '.85rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word' } });
+
+  testBtn.onclick = async () => {
+    const to = (toInput.value || '').trim();
+    if (!to) { toInput.focus(); result.innerHTML = '<span style="color:#b91c1c">⚠️ Recipient email required</span>'; return; }
+    const f = form;
+    const get = name => { const el = f.querySelector('[name="' + name + '"]'); return el ? el.value : ''; };
+    const payload = {
+      to,
+      host: get('SMTP_HOST'),
+      port: get('SMTP_PORT'),
+      secure: get('SMTP_SECURE'),
+      user: get('SMTP_USER'),
+      pass: get('SMTP_PASSWORD'),
+      from: get('EMAIL_NOTIFY_FROM')
+    };
+    testBtn.disabled = true;
+    const origLabel = testBtn.textContent;
+    testBtn.textContent = '⏳ Sending…';
+    result.innerHTML = '<span style="color:#475569">Connecting to SMTP server…</span>';
+    try {
+      const res = await api('api_admin_emailTestSend', payload);
+      result.innerHTML = '<div style="background:#dcfce7;color:#14532d;padding:8px 12px;border-radius:8px;border:1px solid #86efac">✅ <b>Test email sent successfully to ' + to + '</b><br><span style="font-size:.78rem;color:#166534">' + (res.messageId ? 'Message ID: ' + res.messageId + ' · ' : '') + 'Check your inbox (and spam folder). If it arrives, save the form above to persist these creds.</span></div>';
+    } catch (e) {
+      result.innerHTML = '<div style="background:#fee2e2;color:#7f1d1d;padding:8px 12px;border-radius:8px;border:1px solid #fca5a5"><b>❌ ' + (e && e.message ? e.message : 'SMTP test failed') + '</b><br><span style="font-size:.78rem;color:#991b1b">Common causes: wrong host/port, app-password instead of normal password (Gmail), port 465 needs SMTP_SECURE=true, port 587 needs SMTP_SECURE=false, firewall blocking outbound SMTP.</span></div>';
+    } finally {
+      testBtn.disabled = false;
+      testBtn.textContent = origLabel;
+    }
+  };
+
+  testCard.appendChild(h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' } }, toInput, testBtn));
+  testCard.appendChild(result);
+  wrap.appendChild(testCard);
+  return wrap;
 }
 
 function configForm(cfg, keys, meta) {
