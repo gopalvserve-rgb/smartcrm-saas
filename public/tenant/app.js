@@ -37507,29 +37507,40 @@ async function openFbFormMapper() {
     mapWrap.innerHTML = '';
     mapWrap.appendChild(h('h4', { style: { marginTop: 0, marginBottom: '.4rem' } },
       'Map ' + form.questions.length + ' questions from "' + (form.name || fid) + '"'));
-    mapWrap.appendChild(h('div', { class: 'muted', style: { fontSize: '.78rem', marginBottom: '.6rem' } },
+    mapWrap.appendChild(h('div', { class: 'muted', style: { fontSize: '.78rem', marginBottom: '.8rem' } },
       'For each question, pick the CRM field to populate. Leave as "ignore" to skip.'));
 
-    const tbl = h('table', { class: 'mini-table', style: { width: '100%' } });
-    const thead = h('thead', {}, h('tr', {},
-      h('th', { style: { textAlign: 'left' } }, 'Form question (key)'),
-      h('th', { style: { textAlign: 'left' } }, 'Maps to CRM field')
-    ));
-    const tbody = h('tbody', {});
+    // FB_FORM_MAP_UI_FIX_v1 — stack each row vertically (question on top,
+    // dropdown full-width below) so long question labels don't push the
+    // dropdown off-screen on narrower modals/viewports.
+    const list = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '.5rem' } });
     const sels = [];
     form.questions.forEach(q => {
       const sel = _buildTargetSelect(saved[q.key] || '');
+      sel.style.width = '100%';
       sels.push({ key: q.key, sel });
-      tbody.appendChild(h('tr', {},
-        h('td', {},
-          h('div', { style: { fontWeight: 600 } }, q.label || q.key),
-          h('code', { style: { fontSize: '.78rem', color: '#64748b' } }, q.key + ' · ' + q.type)
+      const row = h('div', {
+        style: {
+          padding: '.6rem .75rem',
+          background: '#f8fafc',
+          border: '1px solid #e2e8f0',
+          borderRadius: '6px'
+        }
+      },
+        h('div', { style: { fontWeight: 600, fontSize: '.88rem', marginBottom: '.2rem', wordBreak: 'break-word' } },
+          q.label || q.key),
+        h('div', { style: { marginBottom: '.4rem' } },
+          h('code', { style: { fontSize: '.74rem', color: '#64748b', wordBreak: 'break-all' } },
+            q.key + ' · ' + q.type)
         ),
-        h('td', {}, sel)
-      ));
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '.4rem' } },
+          h('span', { style: { fontSize: '.78rem', color: '#475569', whiteSpace: 'nowrap' } }, '→ CRM:'),
+          sel
+        )
+      );
+      list.appendChild(row);
     });
-    tbl.appendChild(thead); tbl.appendChild(tbody);
-    mapWrap.appendChild(tbl);
+    mapWrap.appendChild(list);
 
     const saveBtn = h('button', { class: 'btn primary', style: { marginTop: '1rem' } }, '💾 Save Mapping');
     saveBtn.onclick = async () => {
