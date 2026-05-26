@@ -37536,31 +37536,51 @@ async function openFbFormMapper() {
 
     mapWrap.innerHTML = '';
     mapWrap.appendChild(h('h4', { style: { marginTop: 0, marginBottom: '.4rem' } },
-      'Map ' + form.questions.length + ' questions from "' + (form.name || fid) + '"'));
+      'Map fields from "' + (form.name || fid) + '"'));
     mapWrap.appendChild(h('div', { class: 'muted', style: { fontSize: '.78rem', marginBottom: '.8rem' } },
-      'For each question, pick the CRM field to populate. Leave as "ignore" to skip.'));
+      'For each field, pick the CRM column to populate. Leave as "ignore" to skip. ',
+      'Lead metadata (page/campaign/ad) is also available below — you can map e.g. Page Name → source, or Campaign Name → utm_campaign.'
+    ));
 
-    // FB_FORM_MAP_UI_FIX_v1 — stack each row vertically (question on top,
-    // dropdown full-width below) so long question labels don't push the
-    // dropdown off-screen on narrower modals/viewports.
+    // FB_FORM_MAP_UI_FIX_v1 + FB_MAP_META_FIELDS_v1 — render two sections:
+    //  (1) Lead metadata (virtual fields injected by the server: page name,
+    //      campaign id/name, ad id/name, form id/name)
+    //  (2) The form's actual user-submitted questions
     const list = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '.5rem' } });
     const sels = [];
-    form.questions.forEach(q => {
+
+    // FB_MAP_META_FIELDS_v1 — Lead metadata section header
+    list.appendChild(h('div', {
+      style: { fontWeight: 600, fontSize: '.85rem', color: '#4F46E5', marginTop: '.3rem', textTransform: 'uppercase', letterSpacing: '.5px' }
+    }, '📍 Lead metadata (auto-attached by Meta)'));
+
+    const META_FIELDS = [
+      { key: '_page_name',     label: 'Page Name (the FB page the lead came from)', type: 'meta' },
+      { key: '_page_id',       label: 'Page ID', type: 'meta' },
+      { key: '_form_name',     label: 'Form Name', type: 'meta' },
+      { key: '_form_id',       label: 'Form ID', type: 'meta' },
+      { key: '_campaign_name', label: 'Ad Campaign Name', type: 'meta' },
+      { key: '_campaign_id',   label: 'Ad Campaign ID', type: 'meta' },
+      { key: '_adset_name',    label: 'Ad Set Name', type: 'meta' },
+      { key: '_ad_name',       label: 'Ad Name', type: 'meta' },
+      { key: '_ad_id',         label: 'Ad ID', type: 'meta' }
+    ];
+    function _renderRow(q, isMeta) {
       const sel = _buildTargetSelect(saved[q.key] || '');
       sel.style.width = '100%';
       sels.push({ key: q.key, sel });
       const row = h('div', {
         style: {
-          padding: '.6rem .75rem',
-          background: '#f8fafc',
-          border: '1px solid #e2e8f0',
+          padding: '.55rem .7rem',
+          background: isMeta ? '#eef2ff' : '#f8fafc',
+          border: '1px solid ' + (isMeta ? '#c7d2fe' : '#e2e8f0'),
           borderRadius: '6px'
         }
       },
-        h('div', { style: { fontWeight: 600, fontSize: '.88rem', marginBottom: '.2rem', wordBreak: 'break-word' } },
+        h('div', { style: { fontWeight: 600, fontSize: '.85rem', marginBottom: '.2rem', wordBreak: 'break-word' } },
           q.label || q.key),
         h('div', { style: { marginBottom: '.4rem' } },
-          h('code', { style: { fontSize: '.74rem', color: '#64748b', wordBreak: 'break-all' } },
+          h('code', { style: { fontSize: '.72rem', color: '#64748b', wordBreak: 'break-all' } },
             q.key + ' · ' + q.type)
         ),
         h('div', { style: { display: 'flex', alignItems: 'center', gap: '.4rem' } },
@@ -37569,7 +37589,15 @@ async function openFbFormMapper() {
         )
       );
       list.appendChild(row);
-    });
+    }
+    META_FIELDS.forEach(q => _renderRow(q, true));
+
+    // Form questions section header
+    list.appendChild(h('div', {
+      style: { fontWeight: 600, fontSize: '.85rem', color: '#4F46E5', marginTop: '.6rem', textTransform: 'uppercase', letterSpacing: '.5px' }
+    }, '📝 Form questions (' + form.questions.length + ')'));
+
+    form.questions.forEach(q => _renderRow(q, false));
     mapWrap.appendChild(list);
 
     const saveBtn = h('button', { class: 'btn primary', style: { marginTop: '1rem' } }, '💾 Save Mapping');

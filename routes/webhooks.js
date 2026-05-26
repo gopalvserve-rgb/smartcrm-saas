@@ -106,7 +106,11 @@ async function _processLeadgen(leadgenId, pageId, formId) {
   }
   if (!pageToken) throw new Error('No access token for page ' + pageId + ' — admin must connect with Facebook and monitor this page.');
 
-  const r = await fetch(`${GRAPH}/${leadgenId}?access_token=${pageToken}`);
+  // FB_MAP_META_FIELDS_v1 — request ad/campaign/form metadata too so the
+  // admin can map page name, campaign id/name, ad id/name, form id into
+  // CRM standard or custom fields. Without this Graph only returns id +
+  // created_time + field_data, leaving us with no attribution context.
+  const r = await fetch(`${GRAPH}/${leadgenId}?fields=id,created_time,ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,form_id,field_data&access_token=${pageToken}`);
   const j = await r.json();
   if (j.error) throw new Error('Graph: ' + j.error.message);
 
@@ -115,6 +119,30 @@ async function _processLeadgen(leadgenId, pageId, formId) {
   fieldData.forEach(f => {
     payload[f.name] = Array.isArray(f.values) ? f.values.join(', ') : f.values;
   });
+  // FB_MAP_META_FIELDS_v1 — inject lead-metadata as underscore-prefixed
+  // virtual keys so the field-mapping UI / engine can route them like any
+  // other form question. Underscore prefix distinguishes them from the
+  // actual user-submitted form questions.
+  if (j.ad_id)        payload._ad_id        = String(j.ad_id);
+  if (j.ad_name)      payload._ad_name      = String(j.ad_name);
+  if (j.adset_id)     payload._adset_id     = String(j.adset_id);
+  if (j.adset_name)   payload._adset_name   = String(j.adset_name);
+  if (j.campaign_id)  payload._campaign_id  = String(j.campaign_id);
+  if (j.campaign_name) payload._campaign_name = String(j.campaign_name);
+  if (j.form_id || formId) payload._form_id = String(j.form_id || formId || '');
+  if (pageId)         payload._page_id      = String(pageId);
+  if (ctx && ctx.page_name) payload._page_name = String(ctx.page_name);
+  // _form_name needs a separate Graph call (the leadgen response doesn't
+  // include it). Fetch it best-effort — cheap and cached most of the time
+  // by Meta's CDN. Skip silently on failure.
+  try {
+    const fid = j.form_id || formId;
+    if (fid) {
+      const fr = await fetch(`${GRAPH}/${fid}?fields=name&access_token=${pageToken}`);
+      const fj = await fr.json();
+      if (fj && fj.name) payload._form_name = String(fj.name);
+    }
+  } catch (_) {}
 
   // FB_FORM_MAP_v2 — try per-form mapping first (source='facebook:<form_id>'),
   // fall back to tenant-wide 'facebook' mapping if no per-form mapping exists.
