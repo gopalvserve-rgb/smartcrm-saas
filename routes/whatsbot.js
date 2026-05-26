@@ -2786,22 +2786,34 @@ async function _handleInbound(m, value) {
 
   // Auto-assign the chat if no explicit assignment exists yet — applies
   // the active rule (lead_owner / round_robin / least_busy / manual).
+  // WA_INBOUND_PUSH_v2: separated lookup from auto-assign so an auto-assign
+  // throw doesn't silently kill the push notification. Also verbose-logged
+  // each step so we can tell from Railway logs WHY a push was skipped.
   let _wbInboundOwnerId = null;
+  let leadAssignedTo = null;
   try {
-    let leadAssignedTo = null;
     if (leadId) {
       const ld = await db.findById('leads', leadId);
-      leadAssignedTo = ld ? ld.assigned_to : null;
+      leadAssignedTo = ld ? Number(ld.assigned_to) || null : null;
     }
+  } catch (e) { console.warn('[wb-push] lead lookup failed:', e.message); }
+  try {
     await _autoAssignChat(from, leadId, leadAssignedTo);
-    // Resolve the agent who now owns this chat so we can ping them.
+  } catch (e) { console.warn('[wb-push] auto-assign threw (continuing):', e.message); }
+  try {
     const exp = await _chatAssignmentsByPhone([from]);
     if (exp[from] && exp[from].assigned_to) {
       _wbInboundOwnerId = Number(exp[from].assigned_to);
-    } else if (leadAssignedTo) {
-      _wbInboundOwnerId = Number(leadAssignedTo);
     }
-  } catch (e) { console.warn('[wb] auto-assign failed:', e.message); }
+  } catch (e) { console.warn('[wb-push] chat-assignments lookup failed:', e.message); }
+  // Always fall through to the lead's assigned_to if chat assignment didn't
+  // resolve. This was the silent bug — _autoAssignChat throws on phantom
+  // tenants and the original try-block swallowed BOTH the lookup AND the
+  // fallback in one go, leaving _wbInboundOwnerId null forever.
+  if (!_wbInboundOwnerId && leadAssignedTo) {
+    _wbInboundOwnerId = leadAssignedTo;
+  }
+  console.log('[wb-push] resolved inbound owner', { from, leadId, leadAssignedTo, _wbInboundOwnerId });
 
   // Push notification — fire to whoever owns this chat. Best-effort.
   // For media messages, show a generic body (we don't have caption text
@@ -2816,14 +2828,17 @@ async function _handleInbound(m, value) {
             + (text ? ' · ' + text.slice(0, 100) : ''));
       const ld2 = leadId ? await db.findById('leads', leadId) : null;
       const senderLabel = (ld2 && ld2.name) ? ld2.name : ('+' + from);
-      await push.sendPushToUser(_wbInboundOwnerId, {
+      const result = await push.sendPushToUser(_wbInboundOwnerId, {
         title: '💬 ' + senderLabel,
         body:  previewBody || '(no preview)',
         url:   leadId ? ('/#/leads/' + leadId) : ('/#/chat?phone=' + from),
         tag:   'wa-' + from
       });
+      console.log('[wb-push] inbound push sent', { user: _wbInboundOwnerId, sent: result.sent, failed: result.failed });
+    } else {
+      console.log('[wb-push] inbound push SKIPPED — no owner resolved for', from);
     }
-  } catch (e) { console.warn('[wb] inbound push send skipped:', e.message); }
+  } catch (e) { console.warn('[wb-push] inbound push send threw:', e.message); }
 
   // ── Bot Flow Runner ──────────────────────────────────────────
   // If a flow session is active for this phone OR the inbound matches a
