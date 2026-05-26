@@ -13287,7 +13287,7 @@ async function wbChat() {
         const prev = currentId;
         sel.disabled = true;
         try {
-          await api('api_leads_save', { id: leadId, status_id: newId });
+          await api('api_leads_update', leadId, { status_id: newId });
           if (typeof toast === 'function') toast('Status updated', 'ok');
           if (typeof opts.onChange === 'function') opts.onChange(newId);
         } catch (e) {
@@ -27760,7 +27760,7 @@ function _initFloatingChat() {
           if (!newId || newId === currentId) return;
           sel.disabled = true;
           try {
-            await api('api_leads_save', { id: thread.lead_id, status_id: newId });
+            await api('api_leads_update', thread.lead_id, { status_id: newId });
             if (typeof toast === 'function') toast('Status updated', 'ok');
           } catch (e) {
             if (typeof toast === 'function') toast('Status update failed: ' + e.message, 'err');
