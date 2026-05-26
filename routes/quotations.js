@@ -377,10 +377,18 @@ async function api_quotations_public_url(token, id) {
   if (!r.rows.length) throw new Error('Quotation not found');
   const slug = (db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore())
     ? (db.tenantStorage.getStore().slug || '') : '';
-  // BASE_URL config or origin from request — for now use BASE_URL config + slug.
-  const base = (await db.getConfig('BASE_URL', '')).replace(/\/+$/, '') || '';
+  // QUOTE_LINK_ABSOLUTE_v1: BASE_URL config wins; otherwise fall back to
+  // process.env.PUBLIC_BASE_URL (set at server boot); otherwise hardcoded
+  // smartcrm-saas production URL. Whatever happens we ALWAYS return an
+  // absolute https:// URL so WhatsApp / Email recipients can actually
+  // click the link.
+  let base = String(await db.getConfig('BASE_URL', '') || '').replace(/\/+$/, '');
+  if (!base) base = String(process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
+  if (!base) base = 'https://crm.smartcrmsolution.com';
+  // Make sure base has a scheme
+  if (!/^https?:\/\//.test(base)) base = 'https://' + base;
   const path = (slug ? '/t/' + slug : '') + '/q/' + r.rows[0].public_token;
-  return { url: base ? base + path : path, token: r.rows[0].public_token };
+  return { url: base + path, token: r.rows[0].public_token };
 }
 
 /**
@@ -613,9 +621,13 @@ async function api_quotations_send_whatsapp(token, id, opts) {
   const cur = q.currency || 'INR';
   const sym = cur === 'INR' ? '₹' : cur === 'USD' ? '$' : cur + ' ';
   const text = o.text ||
-    'Hello ' + (q.customer_name || 'there') + ',\n\n' +
-    'Please find your quotation ' + q.number + ' (' + sym + Number(q.total).toLocaleString('en-IN') + ').\n' +
-    'View / download: ' + u.url + '\n\n— ' + company;
+    '*' + company + '*\n\n' +
+    'Hi ' + (q.customer_name || 'there') + ',\n\n' +
+    'Please find your quotation *' + q.number + '* attached below.\n\n' +
+    '💰 Total: *' + sym + Number(q.total).toLocaleString('en-IN') + '*\n\n' +
+    '📄 View / Download PDF:\n' + u.url + '\n\n' +
+    'Tap the link above → click *🖨️ Print / save as PDF* button at top of page.\n\n' +
+    'Looking forward to your confirmation. 🙏';
   const wb = _wb();
   if (!wb._sendText || !wb._cfg) throw new Error('WhatsApp module not available');
   const cfgWa = await wb._cfg();
