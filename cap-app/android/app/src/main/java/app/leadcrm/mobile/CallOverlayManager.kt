@@ -64,12 +64,17 @@ object CallOverlayManager {
                 else
                     @Suppress("DEPRECATION")
                     WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
+                // CALL_OVERLAY_v4: FLAG_NOT_FOCUSABLE was the culprit — on Vivo /
+                // OriginOS it blocks click events from reaching child views inside
+                // a WindowManager overlay. Replaced with FLAG_ALT_FOCUSABLE_IM
+                // (keeps soft keyboard hidden) + FLAG_NOT_TOUCH_MODAL (touches
+                // outside our card still reach the dialer below).
                 val lp = WindowManager.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                     type,
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                        or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                        or WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM
                         or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                     PixelFormat.TRANSLUCENT
                 )
@@ -291,9 +296,13 @@ object CallOverlayManager {
         }
         card.addView(actionBtn)
 
-        // CALL_OVERLAY_v2: removed background-tap-to-dismiss. Users have
-        // an explicit ✕ close button now; background-tap was firing when
-        // users tried to read the card text.
+        // CALL_OVERLAY_v4: long-press anywhere on the card also dismisses
+        // (200ms threshold so a normal read-tap doesn't fire). The explicit ✕
+        // button is the primary mechanism; this is a safety net.
+        card.setOnLongClickListener {
+            Log.d(TAG, "card long-pressed → hiding overlay")
+            hide(ctx); true
+        }
 
         // Wrap in a margin container so it doesn't kiss the screen edge
         val wrap = LinearLayout(ctx).apply {
