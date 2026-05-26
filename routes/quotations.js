@@ -597,8 +597,15 @@ async function api_quotations_send_whatsapp(token, id, opts) {
   const o = opts || {};
   const r = await api_quotations_get(token, Number(id));
   const q = r.quotation;
-  const phone = o.phone || q.customer_phone;
-  if (!phone) throw new Error('Customer phone missing — set it on the quotation or pass payload.phone.');
+  // QUOTE_WA_PHONE_FIX_v1: normalize phone BEFORE sending so we catch
+  // bad-format issues HERE with a clear message instead of bubbling up
+  // Meta's cryptic "P100 invalid parameter".
+  const phoneRaw = o.phone || q.customer_phone;
+  if (!phoneRaw) throw new Error('Customer phone missing — set it on the quotation or pass payload.phone.');
+  const phone = _normalizeQuotePhone(phoneRaw);
+  if (!phone || phone.length < 10) {
+    throw new Error('Customer phone "' + phoneRaw + '" is not in a valid format. WhatsApp needs international format like 919876543210 (country code + 10 digit number, no spaces or dashes).');
+  }
   // Resolve public URL
   const u = await api_quotations_public_url(token, q.id);
   const cfg = await _loadBrand();
@@ -615,7 +622,11 @@ async function api_quotations_send_whatsapp(token, id, opts) {
   if (!cfgWa.token || !cfgWa.phoneId) throw new Error('WhatsApp not connected. Settings → WhatsApp → Connect Account.');
   const send = await wb._sendText({ to: phone, text, leadId: q.lead_id || null, userId: null }, cfgWa);
   if (send && send.body && send.body.error) {
-    throw new Error('WhatsApp rejected: ' + send.body.error.message);
+    const e = send.body.error;
+    const code = e.code || e.error_subcode || '';
+    const detail = e.error_data && e.error_data.details ? ' (' + e.error_data.details + ')' : '';
+    throw new Error('WhatsApp rejected to ' + phone + ': [' + code + '] ' + (e.message || 'unknown error') + detail +
+      '\nCommon fix: lead phone may be missing country code. Edit the lead and set the phone as +919876543210 format.');
   }
   await db.query(`UPDATE quotations SET sent_at = NOW(), sent_via = COALESCE(sent_via, '') || (CASE WHEN COALESCE(sent_via,'') ILIKE '%whatsapp%' THEN '' ELSE 'whatsapp,' END), status = CASE WHEN status='draft' THEN 'sent' ELSE status END WHERE id = $1`, [q.id]);
   return { ok: true, sent_to: phone, url: u.url };
