@@ -1908,10 +1908,31 @@ VIEWS.leads = async (view) => {
   // Fetch (or refresh) the distinct-tag list every time the Leads view
   // renders. Cheap (one extra round-trip) and keeps the Tag dropdown
   // current as users add new tags inline.
-  try { CRM.cache.tags = await api('api_leads_distinctTags'); }
-  catch (_) { CRM.cache.tags = CRM.cache.tags || []; }
+  // LEADS_PERF_v1: cache distinct-tags for 5 minutes instead of refetching
+  // on EVERY visit. Server-side this query scans the whole leads table,
+  // which on big tenants is the #1 cause of the Leads page feeling hung
+  // for 5-10 seconds after every nav. The tag dropdown still updates when
+  // a user adds a new tag in the lead form (we invalidate the cache there).
+  const TAG_CACHE_TTL = 5 * 60 * 1000;
+  const _tagsAge = Date.now() - (CRM.cache._tagsAt || 0);
+  if (!CRM.cache.tags || _tagsAge > TAG_CACHE_TTL) {
+    // Don't BLOCK first paint — fire async and update later when it lands.
+    CRM.cache.tags = CRM.cache.tags || [];
+    api('api_leads_distinctTags').then(t => {
+      CRM.cache.tags = t || [];
+      CRM.cache._tagsAt = Date.now();
+    }).catch(() => { CRM.cache.tags = CRM.cache.tags || []; });
+  }
 
   view.innerHTML = '';
+  // Show a skeleton loader IMMEDIATELY so the user sees the page render
+  // instead of feeling like the app is hung while warmCache + leads list
+  // resolve on cold start.
+  const _skel = h('div', { class: 'card', id: '_leads-skel', style: { padding: '2rem', textAlign: 'center', color: '#94a3b8' } },
+    h('div', { style: { fontSize: '32px', marginBottom: '.5rem' } }, '⏳'),
+    h('div', {}, 'Loading leads…')
+  );
+  view.appendChild(_skel);
 
   if (CRM.prefs.showHeader !== false) {
     const header = h('div', { class: 'leads-header' },
