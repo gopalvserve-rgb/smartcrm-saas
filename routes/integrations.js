@@ -752,8 +752,13 @@ function _applyCustomMapping(payload, mapping) {
       const target = mapping[srcKey];
       if (!target || row[srcKey] == null || row[srcKey] === '') return;
       if (target.startsWith('cf_')) {
-        if (!out.extra_json) out.extra_json = {};
-        out.extra_json[target] = String(row[srcKey]);
+        // MAKE_CF_MAP_FIX_v1 — store custom-field values under
+        // out.custom_fields[<key>] (without the 'cf_' prefix). This is the
+        // shape _internalCreateLead expects when it builds extra_json.
+        // Previously stored as out.extra_json.cf_<key> which _internalCreateLead
+        // never read, causing the value to be silently dropped.
+        if (!out.custom_fields) out.custom_fields = {};
+        out.custom_fields[target.slice(3)] = String(row[srcKey]);
       } else {
         // If multiple source keys map to same target, append.
         if (out[target] && target === 'name') out[target] += ' ' + String(row[srcKey]);
