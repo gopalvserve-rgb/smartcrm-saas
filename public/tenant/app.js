@@ -2473,6 +2473,13 @@ async function openSavedFiltersMenu() {
 
 async function loadLeads(opts) {
   opts = opts || {};
+  // LEADS_SKEL_REMOVE_v2 — kill the skeleton THE MOMENT loadLeads is
+  // invoked, not just on success. If the API errored or hung, v1's
+  // post-await removal never ran. This fires regardless.
+  try {
+    const s = document.getElementById('_leads-skel');
+    if (s) s.remove();
+  } catch (_) {}
   const pageSize = Number(localStorage.getItem('crm_page_size') || 25);
   const page = Number(opts.page || CRM._leadsPage || 1);
   CRM._leadsPage = page;
