@@ -9176,7 +9176,10 @@ async function openQuotationModal(qid, prefillLead) {
       // threw "Customer phone missing". Now we save first so the latest
       // input value is persisted before the send call.
       await save();
-      const r = await api('api_quotations_send_whatsapp', currentId);
+      // QUOTE_WA_PHONE_FIX_v3: pass the phone from the input directly so even
+      // if save() somehow didn't persist (race, network blip), the send still
+      // uses the user-typed number rather than whatever's stale in the DB.
+      const r = await api('api_quotations_send_whatsapp', currentId, { phone: phoneInp.value });
       toast('💬 Sent to ' + r.sent_to, 'ok');
     } catch (e) {
       // QUOTE_WA_ERROR_v1 — give actionable guidance for the most common
