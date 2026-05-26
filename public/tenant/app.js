@@ -1111,7 +1111,10 @@ function renderShell() {
   // collapsed — users only see top-level section headers until they click
   // one open, mirroring the Zoho sidebar pattern.
   const expandedKey = 'crm_nav_expanded_v1';
-  const expanded = new Set((localStorage.getItem(expandedKey) || '').split(',').filter(Boolean));
+  // NAV_GROUPS_COLLAPSED_v1 — wipe any persisted expansion (legacy users)
+  // and start with empty set. User toggles in-session don't save anymore.
+  try { localStorage.removeItem(expandedKey); } catch (_) {}
+  const expanded = new Set();
   const _saveExpanded = () => localStorage.setItem(expandedKey, [...expanded].join(','));
 
   // Apply admin-defined sidebar group order (Settings → Menu order).
@@ -1145,11 +1148,13 @@ function renderShell() {
       return;
     }
 
-    // Auto-collapse the group whose active item lives — that one starts
-    // open so the user sees where they are. Otherwise default = collapsed
-    // unless the user has previously toggled it open.
-    const groupHasActive = group.items.some(i => i.id === (location.hash.replace('#/', '') || 'dashboard'));
-    const isCollapsed = !(expanded.has(group.label) || groupHasActive);
+    // NAV_GROUPS_COLLAPSED_v1 — start every group COLLAPSED on every page
+    // load/refresh. User explicitly asked for this: 'when we open or refresh
+    // page it should keep all menu close not open'.
+    // In-session toggles via the chevron still work, but we no longer
+    // pre-expand based on the active route or persisted localStorage —
+    // every refresh resets to all-closed.
+    const isCollapsed = true;
     const groupEl = h('div', { class: 'nav-group' + (isCollapsed ? ' collapsed' : '') });
     const headBtn = h('button', {
       class: 'nav-group-head',
