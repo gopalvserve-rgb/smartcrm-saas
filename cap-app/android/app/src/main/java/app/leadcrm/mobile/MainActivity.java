@@ -134,10 +134,6 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onResume() {
         super.onResume();
-        // CALL_OVERLAY_v1: when the user is back inside the CRM, we no longer
-        // need the dialer-overlay card. The 45s auto-dismiss handles the case
-        // where the user stays on the dialer.
-        try { CallOverlayManager.hide(MainActivity.this); } catch (Exception e) {}
         // FG_SVC_v2: if the user swiped the persistent notification (or Vivo
         // killed it overnight), restart the foreground service so call/recording
         // sync stays bulletproof. start() is idempotent — safe to call on every
@@ -417,22 +413,18 @@ public class MainActivity extends BridgeActivity {
                     .putLong("last_dialed_at", (long) startedAtMs)
                     .apply();
             Log.d(TAG, "registered call → " + phone + " lead=" + leadId);
-            // Show the Runo-style overlay (no-ops if SYSTEM_ALERT_WINDOW
-            // is not granted). Wrapped in try so a UI failure never blocks
-            // the dial flow.
-            try {
-                CallOverlayManager.show(MainActivity.this, phone == null ? "" : phone, leadJson);
-            } catch (Exception e) {
-                Log.w(TAG, "CallOverlayManager.show failed: " + e.getMessage());
-            }
+            // CALL_OVERLAY_REMOVE: overlay popup removed at user request — the
+            // close-button never reliably dismissed on Vivo / OriginOS despite
+            // 5 different iterations. We keep the registerOutgoingCallWithContext
+            // bridge in place (the SPA still uses it for last_dialed_phone) but
+            // do NOT show the floating card any more.
         }
 
-        // CALL_OVERLAY_v1: SPA-callable to dismiss the overlay (e.g. once the
-        // call ends or the SPA explicitly hangs up).
+        // CALL_OVERLAY_REMOVE: hideCallOverlay kept as a no-op so any
+        // SPA code that still references it doesn't throw. The overlay
+        // itself is no longer shown.
         @JavascriptInterface
-        public void hideCallOverlay() {
-            try { CallOverlayManager.hide(MainActivity.this); } catch (Exception e) {}
-        }
+        public void hideCallOverlay() { /* no-op — overlay removed */ }
 
         @JavascriptInterface
         public String getLastDialedCall() {
