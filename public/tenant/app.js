@@ -1313,22 +1313,41 @@ function navigateTo(id) {
   if (!item) item = NAV[0];
   $$('.sidebar nav a, #bottom-nav a').forEach(a => a.classList.toggle('active', a.dataset.view === item.id));
   $('#page-title').textContent = item.label;
-  // SCROLL_RESET_v1 — when navigating to a new view, jump to the top of
-  // the page. Without this, the previous view's scroll position is kept
-  // and the new view's content can render below the viewport (user has
-  // to manually scroll up). Belt-and-braces: reset window, main element,
-  // and #view itself in case any of those is the scroll container.
-  try {
-    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
-    const mainEl = document.querySelector('.main');
-    if (mainEl) mainEl.scrollTop = 0;
-  } catch (_) {}
+  // SCROLL_RESET_v2 — aggressive reset on EVERY plausible scroll container.
+  // Different layouts (mobile vs desktop, sidebar collapsed vs open, etc.)
+  // make different elements the actual scroll parent, so reset all.
+  // Run BEFORE content load (clear stale scroll) AND AGAIN after rAFx2
+  // (catches any layout shift caused by content appending pushing scroll
+  // back down). v1 only reset window+main+view — wasn't enough on mobile.
+  function _scrollReset() {
+    try { window.scrollTo({ top: 0, left: 0, behavior: 'auto' }); } catch (_) {}
+    try { document.documentElement.scrollTop = 0; document.documentElement.scrollLeft = 0; } catch (_) {}
+    try { document.body.scrollTop = 0; document.body.scrollLeft = 0; } catch (_) {}
+    ['.shell', '.app', '.main', '#view'].forEach(sel => {
+      try {
+        const el = document.querySelector(sel);
+        if (el) { el.scrollTop = 0; el.scrollLeft = 0; }
+      } catch (_) {}
+    });
+    // Final fallback — bring the topbar (page header) into view. Works
+    // regardless of which element is the scroll container.
+    try {
+      const tb = document.querySelector('.topbar');
+      if (tb && typeof tb.scrollIntoView === 'function') tb.scrollIntoView({ block: 'start', behavior: 'auto' });
+    } catch (_) {}
+  }
+  _scrollReset();
   const view = $('#view');
-  if (view) view.scrollTop = 0;
   view.innerHTML = '<div class="loading">Loading…</div>';
   if (parseHashView() !== item.id) location.hash = '#/' + item.id;
   const fn = VIEWS[item.id];
-  Promise.resolve(fn ? fn(view) : null).catch(e => {
+  Promise.resolve(fn ? fn(view) : null).then(() => {
+    // Re-scroll after the view has rendered. Use double rAF to wait until
+    // browser has laid out + painted the new content. If we don't do this,
+    // a tall view that appends after our pre-load reset will scroll the
+    // viewport down as DOM grows (especially with images / async lazy widgets).
+    requestAnimationFrame(() => requestAnimationFrame(_scrollReset));
+  }).catch(e => {
     view.innerHTML = `<div class="error-box">${esc(e.message)}</div>`;
   });
 }
