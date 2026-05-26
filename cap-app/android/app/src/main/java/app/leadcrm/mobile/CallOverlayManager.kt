@@ -149,14 +149,40 @@ object CallOverlayManager {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
         topRow.addView(brand)
+        // CALL_OVERLAY_v3: real button-sized close target. The previous TextView
+        // had a 14dp padding around a single ✕ character — too small for finger
+        // tap on Vivo, and click events sometimes get absorbed by the parent
+        // WindowManager layer. Now using a 44dp x 44dp clickable region with
+        // an explicit isClickable + ripple-style background highlight.
         val closeBtn = TextView(ctx).apply {
             text = "✕"
-            setTextColor(0xFF94A3B8.toInt())
-            textSize = 18f
+            setTextColor(0xFF334155.toInt())   // darker for visibility
+            textSize = 20f
             setTypeface(typeface, android.graphics.Typeface.BOLD)
-            setPadding(dp(ctx, 14), dp(ctx, 4), dp(ctx, 6), dp(ctx, 6))
-            // Larger touch target so it's easy to tap
-            setOnClickListener { hide(ctx) }
+            gravity = android.view.Gravity.CENTER
+            isClickable = true
+            isFocusable = true
+            // 44x44dp Material-standard touch target — easy to hit
+            layoutParams = LinearLayout.LayoutParams(dp(ctx, 44), dp(ctx, 44))
+            // Light grey circular background so user sees it's a button
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(0xFFF1F5F9.toInt())
+                setStroke(dp(ctx, 1), 0xFFE2E8F0.toInt())
+            }
+            setOnClickListener {
+                Log.d(TAG, "close button tapped → hiding overlay")
+                hide(ctx)
+            }
+            // Belt-and-braces: also listen for touch in case onClick is being
+            // swallowed by the WindowManager layer.
+            setOnTouchListener { _, ev ->
+                if (ev.action == android.view.MotionEvent.ACTION_UP) {
+                    Log.d(TAG, "close button touched (UP) → hiding overlay")
+                    hide(ctx)
+                    true
+                } else false
+            }
         }
         topRow.addView(closeBtn)
         card.addView(topRow)
