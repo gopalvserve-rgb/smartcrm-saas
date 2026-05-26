@@ -116,25 +116,34 @@ async function _processLeadgen(leadgenId, pageId, formId) {
     payload[f.name] = Array.isArray(f.values) ? f.values.join(', ') : f.values;
   });
 
-  // FB_FIELD_MAP_v1 — save the last-seen payload + apply tenant-configured
-  // mapping if one exists. Lets admins map FB form fields (e.g. 'date_of_birth'
-  // or any custom question they added on the form) to CRM standard or custom
-  // fields without code changes. Same UI/system used by Make.com, Pabbly, etc.
+  // FB_FORM_MAP_v2 — try per-form mapping first (source='facebook:<form_id>'),
+  // fall back to tenant-wide 'facebook' mapping if no per-form mapping exists.
+  // Each FB form has its own keys (admin maps them via the Form Mapper UI).
   let mappedExtras = {};
   let mappedOverrides = {};
   try {
     const integrations = require('./integrations');
     if (integrations && typeof integrations._saveLastPayload === 'function') {
+      // Save under per-form key so the mapping UI can show the latest payload
+      // from THIS form. Also save under generic 'facebook' for backward compat.
+      try { await integrations._saveLastPayload('facebook:' + formId, payload); } catch (_) {}
       try { await integrations._saveLastPayload('facebook', payload); } catch (_) {}
     }
-    const customMap = integrations && typeof integrations._loadCustomMapping === 'function'
-      ? await integrations._loadCustomMapping('facebook')
-      : null;
+    let customMap = null;
+    if (integrations && typeof integrations._loadCustomMapping === 'function') {
+      // Per-form mapping first (most specific)
+      if (formId) {
+        customMap = await integrations._loadCustomMapping('facebook:' + formId);
+      }
+      // Fallback to tenant-wide
+      if (!customMap || !Object.keys(customMap).length) {
+        customMap = await integrations._loadCustomMapping('facebook');
+      }
+    }
     if (customMap && Object.keys(customMap).length) {
       const out = integrations._applyCustomMapping({ data: payload }, customMap);
       const first = (out && out[0]) || {};
       if (first.custom_fields) mappedExtras = first.custom_fields;
-      // Standard-field overrides (e.g. mapped 'phone_number' -> 'phone')
       ['name','phone','email','whatsapp','company','city','state','address','source','source_ref','notes','product','value','tags','utm_source','utm_medium','utm_campaign','utm_term','utm_content','gclid'].forEach(k => {
         if (first[k] != null && first[k] !== '') mappedOverrides[k] = first[k];
       });

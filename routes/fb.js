@@ -881,9 +881,72 @@ async function api_fb_pages_syncRegistry(token, pageId) {
   return { ok, failed, total: targets.length, results };
 }
 
+// FB_FORM_MAP_v2 — list leadgen forms for a page and fetch a form's questions.
+// Used by the field-mapping UI so admins can pick a real form + map its
+// actual questions to CRM fields (instead of guessing field names).
+
+async function api_fb_listForms(token, pageId) {
+  const me = await authUser(token);
+  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  if (!pageId) throw new Error('pageId is required');
+  const ctx = await _pageContextForWebhook(String(pageId));
+  const pageToken = ctx && ctx.access_token;
+  if (!pageToken) throw new Error('No access token for page ' + pageId + ' (page not connected or token missing).');
+  let url = GRAPH + '/' + encodeURIComponent(String(pageId)) +
+    '/leadgen_forms?fields=id,name,locale,status,created_time&limit=100&access_token=' +
+    encodeURIComponent(pageToken);
+  const forms = [];
+  let safety = 0;
+  while (url && safety++ < 20) {
+    const r = await fetch(url);
+    const j = await r.json();
+    if (j && j.error) throw new Error('Graph: ' + (j.error.error_user_msg || j.error.message));
+    (j.data || []).forEach(f => forms.push({
+      id: String(f.id), name: f.name || '(unnamed)',
+      status: f.status || '', locale: f.locale || '', created_time: f.created_time || ''
+    }));
+    url = j.paging && j.paging.next ? j.paging.next : null;
+  }
+  return forms;
+}
+
+async function api_fb_getFormQuestions(token, formId, pageId) {
+  const me = await authUser(token);
+  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  if (!formId) throw new Error('formId is required');
+  let pageToken = '';
+  if (pageId) {
+    const ctx = await _pageContextForWebhook(String(pageId));
+    pageToken = ctx && ctx.access_token || '';
+  }
+  if (!pageToken) {
+    const list = await _readPagesList();
+    const pg = list.find(p => p.access_token);
+    pageToken = pg ? pg.access_token : '';
+  }
+  if (!pageToken) throw new Error('No FB page access token available — connect a page first.');
+  const url = GRAPH + '/' + encodeURIComponent(String(formId)) +
+    '?fields=id,name,questions{key,label,type,options},status,locale&access_token=' +
+    encodeURIComponent(pageToken);
+  const r = await fetch(url);
+  const j = await r.json();
+  if (j && j.error) throw new Error('Graph: ' + (j.error.error_user_msg || j.error.message));
+  const questions = (j.questions || []).map(q => ({
+    key: String(q.key || ''),
+    label: String(q.label || q.key || ''),
+    type: String(q.type || 'text')
+  })).filter(q => q.key);
+  return {
+    id: String(j.id || ''), name: j.name || '',
+    status: j.status || '', locale: j.locale || '',
+    questions
+  };
+}
+
 module.exports = {
   api_fb_connect, api_fb_disconnect, api_fb_status,
   api_fb_settings_get, api_fb_settings_set,
+  api_fb_listForms, api_fb_getFormQuestions,
   api_fb_pages_list, api_fb_pages_refetch, api_fb_pages_toggle, api_fb_pages_addManual, api_fb_pages_syncRegistry,
   api_fb_oauth_url, api_fb_debug,
   // exported for server.js to mount as a plain route

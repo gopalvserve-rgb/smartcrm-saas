@@ -19128,32 +19128,21 @@ async function adminFb() {
   const wrap = h('div', { class: 'fb-admin' });
   wrap.appendChild(h('h3', { style: { margin: '0 0 1rem' } }, 'Facebook Leads Integration'));
 
-  // FB_FIELD_MAP_v1 — quick-action card: map FB form fields to CRM fields.
-  // Uses the same field-mapping modal as Make.com / Pabbly / etc.
-  // Mapping is tenant-wide (all FB pages share it). If admins ever need
-  // per-page mapping we can add a key selector later.
+  // FB_FORM_MAP_v2 — proper per-form mapping. Pick Page → pick Form → fetch
+  // the form's actual questions from Meta → map each to a CRM field.
   {
     const mapCard = h('div', { class: 'card', style: { borderLeft: '4px solid #4F46E5', marginBottom: '1rem' } });
-    mapCard.appendChild(h('h4', { style: { marginTop: 0 } }, '🗺 Map Lead Fields'));
+    mapCard.appendChild(h('h4', { style: { marginTop: 0 } }, '🗺 Map Lead Form Fields'));
     mapCard.appendChild(h('p', { class: 'muted', style: { marginBottom: '.6rem' } },
-      'Map the field names from your Facebook Lead form (e.g. ',
-      h('code', {}, 'full_name'), ', ', h('code', {}, 'phone_number'), ', ',
-      h('code', {}, 'date_of_birth'), ', or any custom question you added) ',
-      'to CRM standard fields or custom fields. Saved mapping applies to ALL connected pages.'
+      'Pick a page → pick the Lead form → map each form question to a CRM standard or custom field. The actual question keys are pulled live from Meta — no guessing.'
     ));
     mapCard.appendChild(h('button', {
       class: 'btn primary',
-      onclick: () => {
-        if (typeof openSourceMappingModal === 'function') {
-          openSourceMappingModal('facebook', 'Facebook Lead Ads');
-        } else {
-          toast('Mapping editor not loaded — please refresh the page', 'err');
-        }
-      }
-    }, '🗺 Open Field Mapping'));
+      onclick: () => openFbFormMapper()
+    }, '🗺 Open Form Mapper'));
     mapCard.appendChild(h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.5rem' } },
-      '💡 Tip: send a test lead through your FB form first — the modal shows the ',
-      h('b', {}, 'last received payload'), ' so you can see the exact field names Meta sends.'));
+      '💡 Each form gets its own mapping. If you have multiple Lead forms, configure them separately.'
+    ));
     wrap.appendChild(mapCard);
   }
 
@@ -37381,3 +37370,177 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
 
   window.INV = INV;
 })();
+
+// ============================================================
+// FB_FORM_MAP_v2 — Facebook Lead Form field mapper
+// Flow: pick Page → pick Form → fetch form questions from Meta → map each.
+// Saved per-form in lead_source_mapping with source='facebook:<form_id>'.
+// Falls back to source='facebook' (tenant-wide) if no per-form mapping.
+// ============================================================
+async function openFbFormMapper() {
+  const back = h('div', { class: 'modal-backdrop',
+    onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) back.remove(); }
+  });
+  const card = h('div', { class: 'modal', style: { maxWidth: '780px' } });
+  card.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, '🗺 Facebook Lead Form Mapping'),
+    h('button', { class: 'x', onclick: () => back.remove() }, '✕')
+  ));
+  const body = h('div', { class: 'modal-body', style: { padding: '1rem' } });
+  card.appendChild(body);
+  back.appendChild(card);
+  document.body.appendChild(back);
+
+  // Step 1 — pick a page
+  body.appendChild(h('div', { class: 'muted', style: { marginBottom: '.5rem' } }, '⏳ Loading your connected pages…'));
+  let pages = [];
+  try { pages = await api('api_fb_pages_list'); }
+  catch (e) { body.innerHTML = '<div class="error-box">' + esc(e.message) + '</div>'; return; }
+  body.innerHTML = '';
+  const monitored = pages.filter(p => p.is_monitored);
+  if (!monitored.length) {
+    body.appendChild(h('div', { class: 'error-box' },
+      'No monitored pages found. Connect a page and toggle Monitor first.'));
+    return;
+  }
+
+  body.appendChild(h('label', { style: { display: 'block', fontSize: '.85rem', marginBottom: '.3rem' } }, '1. Pick page'));
+  const pageSel = h('select', { style: { width: '100%', marginBottom: '1rem' } },
+    h('option', { value: '' }, '— Choose a page —'),
+    ...monitored.map(p => h('option', { value: p.page_id }, p.page_name + ' (' + p.page_id + ')'))
+  );
+  body.appendChild(pageSel);
+
+  // Step 2 — form picker (populated on page select)
+  body.appendChild(h('label', { style: { display: 'block', fontSize: '.85rem', marginBottom: '.3rem' } }, '2. Pick form'));
+  const formSel = h('select', { style: { width: '100%', marginBottom: '1rem' }, disabled: 'disabled' },
+    h('option', { value: '' }, '— Pick a page first —')
+  );
+  body.appendChild(formSel);
+
+  // Step 3 — mapping rows (populated on form select)
+  const mapWrap = h('div', { style: { marginTop: '.5rem' } });
+  body.appendChild(mapWrap);
+
+  // CRM field catalog — same set used by other source mappers
+  let customFields = [];
+  try {
+    const cf = await api('api_customFields_list').catch(() => []);
+    customFields = (cf || []).filter(c => c && c.key).map(c => ({
+      key: 'cf_' + c.key, label: c.label || c.key
+    }));
+  } catch (_) {}
+  const STANDARD_TARGETS = [
+    { key: '', label: '— ignore —' },
+    { key: 'name', label: 'Name' },
+    { key: 'phone', label: 'Phone' },
+    { key: 'email', label: 'Email' },
+    { key: 'whatsapp', label: 'WhatsApp' },
+    { key: 'company', label: 'Company' },
+    { key: 'city', label: 'City' },
+    { key: 'state', label: 'State' },
+    { key: 'address', label: 'Address' },
+    { key: 'notes', label: 'Notes / Message' },
+    { key: 'source', label: 'Source' },
+    { key: 'source_ref', label: 'Source ref' },
+    { key: 'tags', label: 'Tags' },
+    { key: 'value', label: 'Value (₹)' },
+    { key: 'utm_source', label: 'UTM Source' },
+    { key: 'utm_medium', label: 'UTM Medium' },
+    { key: 'utm_campaign', label: 'UTM Campaign' },
+    { key: 'gclid', label: 'GCLID' }
+  ];
+  function _buildTargetSelect(initialKey) {
+    const sel = h('select', { style: { width: '100%' } });
+    STANDARD_TARGETS.forEach(t => sel.appendChild(h('option', { value: t.key }, t.label)));
+    if (customFields.length) {
+      const og = h('optgroup', { label: 'Custom fields' });
+      customFields.forEach(c => og.appendChild(h('option', { value: c.key }, c.label)));
+      sel.appendChild(og);
+    }
+    if (initialKey) sel.value = initialKey;
+    return sel;
+  }
+
+  pageSel.onchange = async () => {
+    formSel.disabled = true;
+    formSel.innerHTML = '<option>⏳ Loading forms…</option>';
+    mapWrap.innerHTML = '';
+    const pid = pageSel.value;
+    if (!pid) { formSel.innerHTML = '<option value="">— Pick a page first —</option>'; return; }
+    let forms;
+    try { forms = await api('api_fb_listForms', pid); }
+    catch (e) { formSel.innerHTML = '<option>❌ ' + e.message + '</option>'; return; }
+    if (!forms.length) {
+      formSel.innerHTML = '<option value="">No Lead forms on this page</option>';
+      mapWrap.appendChild(h('div', { class: 'muted', style: { fontSize: '.85rem' } },
+        'No Lead Generation forms found on this page. Create one in Meta Business Suite → Lead Center first.'));
+      return;
+    }
+    formSel.disabled = false;
+    formSel.innerHTML = '';
+    formSel.appendChild(h('option', { value: '' }, '— Choose a form —'));
+    forms.forEach(f => formSel.appendChild(h('option', { value: f.id }, f.name + ' · ' + (f.status || '?'))));
+  };
+
+  formSel.onchange = async () => {
+    mapWrap.innerHTML = '';
+    const fid = formSel.value;
+    const pid = pageSel.value;
+    if (!fid) return;
+    mapWrap.appendChild(h('div', { class: 'muted' }, '⏳ Loading form questions…'));
+    let form;
+    try { form = await api('api_fb_getFormQuestions', fid, pid); }
+    catch (e) { mapWrap.innerHTML = '<div class="error-box">' + esc(e.message) + '</div>'; return; }
+    // Also load saved mapping for this form, if any
+    let saved = {};
+    try {
+      const data = await api('api_integrations_mapping_get', 'facebook:' + fid);
+      saved = (data && data.mapping) || {};
+    } catch (_) {}
+
+    mapWrap.innerHTML = '';
+    mapWrap.appendChild(h('h4', { style: { marginTop: 0, marginBottom: '.4rem' } },
+      'Map ' + form.questions.length + ' questions from "' + (form.name || fid) + '"'));
+    mapWrap.appendChild(h('div', { class: 'muted', style: { fontSize: '.78rem', marginBottom: '.6rem' } },
+      'For each question, pick the CRM field to populate. Leave as "ignore" to skip.'));
+
+    const tbl = h('table', { class: 'mini-table', style: { width: '100%' } });
+    const thead = h('thead', {}, h('tr', {},
+      h('th', { style: { textAlign: 'left' } }, 'Form question (key)'),
+      h('th', { style: { textAlign: 'left' } }, 'Maps to CRM field')
+    ));
+    const tbody = h('tbody', {});
+    const sels = [];
+    form.questions.forEach(q => {
+      const sel = _buildTargetSelect(saved[q.key] || '');
+      sels.push({ key: q.key, sel });
+      tbody.appendChild(h('tr', {},
+        h('td', {},
+          h('div', { style: { fontWeight: 600 } }, q.label || q.key),
+          h('code', { style: { fontSize: '.78rem', color: '#64748b' } }, q.key + ' · ' + q.type)
+        ),
+        h('td', {}, sel)
+      ));
+    });
+    tbl.appendChild(thead); tbl.appendChild(tbody);
+    mapWrap.appendChild(tbl);
+
+    const saveBtn = h('button', { class: 'btn primary', style: { marginTop: '1rem' } }, '💾 Save Mapping');
+    saveBtn.onclick = async () => {
+      saveBtn.disabled = true;
+      const mapping = {};
+      sels.forEach(({ key, sel }) => { if (sel.value) mapping[key] = sel.value; });
+      try {
+        await api('api_integrations_mapping_save', 'facebook:' + fid, mapping);
+        toast('✓ Mapping saved for ' + (form.name || fid), 'ok');
+        back.remove();
+      } catch (e) {
+        toast('Save failed: ' + e.message, 'err');
+        saveBtn.disabled = false;
+      }
+    };
+    mapWrap.appendChild(saveBtn);
+  };
+}
+
