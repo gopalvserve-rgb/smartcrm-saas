@@ -43,6 +43,7 @@ object CallOverlayManager {
     private const val TAG = "LeadCRM/Overlay"
 
     @Volatile private var currentView: View? = null
+    @Volatile private var currentWm: WindowManager? = null   // CALL_OVERLAY_v5: cache the exact WM that added the view
     private val mainHandler = Handler(Looper.getMainLooper())
     private val autoDismiss = Runnable { hide(currentCtx) }
     private var currentCtx: Context? = null
@@ -58,7 +59,11 @@ object CallOverlayManager {
                 currentCtx = ctx.applicationContext
                 hide(ctx) // dispose any stale overlay
                 val view = buildOverlayView(ctx, phone, leadJson)
-                val wm = ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+                // CALL_OVERLAY_v5: pull WindowManager from APPLICATION context so it
+                // survives Activity lifecycle changes (e.g. dialer comes to front),
+                // and CACHE the reference so hide() uses the same WM instance.
+                val wm = ctx.applicationContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+                currentWm = wm
                 val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
                     WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                 else
@@ -94,16 +99,37 @@ object CallOverlayManager {
     @JvmStatic
     fun hide(ctx: Context?) {
         mainHandler.post {
-            try {
-                val v = currentView ?: return@post
-                val c = ctx ?: currentCtx ?: return@post
-                val wm = c.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-                if (v.isAttachedToWindow) wm.removeViewImmediate(v)
-                currentView = null
-                Log.d(TAG, "overlay hidden")
-            } catch (e: Exception) {
-                Log.e(TAG, "hide() failed: ${e.message}", e)
+            val v = currentView
+            if (v == null) {
+                Log.d(TAG, "hide() called but no overlay attached")
+                return@post
             }
+            // CALL_OVERLAY_v5: visibility-hide FIRST — even if WM removal fails or
+            // is delayed, the user sees the overlay disappear instantly.
+            try { v.visibility = View.GONE } catch (_: Exception) {}
+
+            // Try the cached WM first (the exact instance that added the view).
+            // Fall back to deriving a fresh WM from the application context.
+            val wm = currentWm
+                ?: (ctx ?: currentCtx)?.applicationContext
+                    ?.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+
+            if (wm != null) {
+                try {
+                    if (v.isAttachedToWindow) {
+                        wm.removeView(v)   // async, safer than removeViewImmediate
+                        Log.d(TAG, "overlay removed via WM")
+                    } else {
+                        Log.d(TAG, "overlay was not attached; visibility-hidden only")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "WM removeView failed (view stays hidden via visibility): ${e.message}", e)
+                }
+            } else {
+                Log.w(TAG, "no WindowManager available to remove overlay; visibility-hidden only")
+            }
+            currentView = null
+            currentWm = null
         }
     }
 
