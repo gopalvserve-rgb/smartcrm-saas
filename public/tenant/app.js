@@ -2350,6 +2350,15 @@ VIEWS.leads = async (view) => {
 
   CRM._leadsPage = 1;
   await loadLeads({ page: 1 });
+  // LEADS_SKEL_REMOVE_v1 — remove the skeleton loader now that the actual
+  // lead list has rendered. Without this the '⏳ Loading leads...' card
+  // sat permanently above the real list. Use both retrieval methods —
+  // by id (cheap) AND by stored reference (covers cases where the
+  // skeleton was re-mounted across renders).
+  try {
+    const s = document.getElementById('_leads-skel');
+    if (s) s.remove();
+  } catch (_) {}
 };
 
 function toggleHeader(show) {
