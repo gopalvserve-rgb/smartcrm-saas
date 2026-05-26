@@ -27833,10 +27833,34 @@ function _initFloatingChat() {
     if (!_activePhone) return;
     const wrap = document.getElementById('chat-thread-msgs');
     if (!wrap) return;
+    // FLOAT_CHAT_INCREMENTAL_v1 — skip refresh entirely if the input is
+    // focused (user is typing) AND we've already loaded once. Without
+    // this, the 8-second poll re-renders the chat while user types and
+    // pulls focus away.
+    const inputEl = document.getElementById('chat-thread-input');
+    const alreadyLoaded = wrap.dataset.everLoaded === '1';
+    if (alreadyLoaded && inputEl && document.activeElement === inputEl) {
+      return;
+    }
     try {
       const msgs = await api('api_wb_chat_messages', _activePhone);
-      wrap.innerHTML = '';
+      // Track which message IDs are already rendered so we can append
+      // only new ones. Without this we wipe innerHTML every poll cycle,
+      // killing scroll position and triggering visible flicker.
+      const existingIds = new Set();
+      if (alreadyLoaded) {
+        wrap.querySelectorAll('[data-msg-id]').forEach(el => existingIds.add(el.dataset.msgId));
+      }
+      // Remember whether user was scrolled near the bottom — only auto-scroll
+      // to bottom after appending if so. If they scrolled up to read history,
+      // leave them where they are.
+      const nearBottom = (wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight) < 80;
+      if (!alreadyLoaded) wrap.innerHTML = '';
+      let appendedAny = false;
       msgs.forEach(m => {
+        const idStr = String(m.id || ('tmp-' + (m.wa_message_id || m.created_at)));
+        if (existingIds.has(idStr)) return;
+        appendedAny = true;
         const isOut = m.direction === 'out';
         const isFailed = m.status === 'failed' || !!m.error_text;
         // Tick glyph based on delivery state — same logic as the main chat:
@@ -27893,10 +27917,16 @@ function _initFloatingChat() {
         meta.innerHTML = '<span>' + esc(ts) + '</span>' +
           (isOut ? '<span style="color: ' + tickColor + '; font-size: .8rem;" title="' + esc(isFailed ? (m.error_text || 'failed') : (m.read_at ? 'read' : m.delivered_at ? 'delivered' : 'sent')) + '">' + tickGlyph + '</span>' : '');
         bubble.appendChild(meta);
+        row.dataset.msgId = idStr;
         row.appendChild(bubble);
         wrap.appendChild(row);
       });
-      wrap.scrollTop = wrap.scrollHeight;
+      wrap.dataset.everLoaded = '1';
+      // Only auto-scroll to bottom if (a) initial load or (b) user was
+      // already near the bottom + we just appended new messages.
+      if (!alreadyLoaded || (appendedAny && nearBottom)) {
+        wrap.scrollTop = wrap.scrollHeight;
+      }
     } catch (_) {}
   }
 
