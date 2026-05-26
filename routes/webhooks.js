@@ -146,28 +146,33 @@ async function _processLeadgen(leadgenId, pageId, formId) {
 
   // FB_FORM_MAP_v2 — try per-form mapping first (source='facebook:<form_id>'),
   // fall back to tenant-wide 'facebook' mapping if no per-form mapping exists.
-  // Each FB form has its own keys (admin maps them via the Form Mapper UI).
+  // FB_MAP_DIAG_v1 — verbose logging on every step so admins can see why
+  // a mapping isn't applying.
   let mappedExtras = {};
   let mappedOverrides = {};
+  const _diag = { form_id: formId || null, page_id: pageId || null, payload_keys: Object.keys(payload) };
   try {
     const integrations = require('./integrations');
     if (integrations && typeof integrations._saveLastPayload === 'function') {
-      // Save under per-form key so the mapping UI can show the latest payload
-      // from THIS form. Also save under generic 'facebook' for backward compat.
       try { await integrations._saveLastPayload('facebook:' + formId, payload); } catch (_) {}
       try { await integrations._saveLastPayload('facebook', payload); } catch (_) {}
     }
     let customMap = null;
+    let mapSource = null;
     if (integrations && typeof integrations._loadCustomMapping === 'function') {
       // Per-form mapping first (most specific)
       if (formId) {
         customMap = await integrations._loadCustomMapping('facebook:' + formId);
+        if (customMap && Object.keys(customMap).length) mapSource = 'facebook:' + formId;
       }
       // Fallback to tenant-wide
       if (!customMap || !Object.keys(customMap).length) {
         customMap = await integrations._loadCustomMapping('facebook');
+        if (customMap && Object.keys(customMap).length) mapSource = 'facebook';
       }
     }
+    _diag.map_source = mapSource;
+    _diag.map_keys = customMap ? Object.keys(customMap) : [];
     if (customMap && Object.keys(customMap).length) {
       const out = integrations._applyCustomMapping({ data: payload }, customMap);
       const first = (out && out[0]) || {};
@@ -175,8 +180,27 @@ async function _processLeadgen(leadgenId, pageId, formId) {
       ['name','phone','email','whatsapp','company','city','state','address','source','source_ref','notes','product','value','tags','utm_source','utm_medium','utm_campaign','utm_term','utm_content','gclid'].forEach(k => {
         if (first[k] != null && first[k] !== '') mappedOverrides[k] = first[k];
       });
+      _diag.applied_overrides = Object.keys(mappedOverrides);
+      _diag.applied_extras = Object.keys(mappedExtras);
+    } else {
+      _diag.applied_overrides = [];
+      _diag.applied_extras = [];
+      _diag.reason = 'no_mapping_found';
     }
-  } catch (e) { console.warn('[fb-ingest] mapping skipped:', e.message); }
+  } catch (e) {
+    _diag.error = e.message;
+    console.warn('[fb-ingest] mapping skipped:', e.message);
+  }
+  // Persist diagnostic to webhook_log so admin can inspect via the
+  // Webhook Logs viewer in Settings → Integrations.
+  try {
+    await db.insert('webhook_log', {
+      source: 'meta',
+      payload: { kind: 'fb_map_diag', leadgen_id: leadgenId, form_id: formId, page_id: pageId, diag: _diag },
+      processed: 1, error: ''
+    });
+  } catch (_) {}
+  console.log('[fb-ingest] map diag:', JSON.stringify(_diag));
 
   const lead = {
     name:     mappedOverrides.name  || payload.full_name || payload.name || '',
