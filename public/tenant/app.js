@@ -7860,7 +7860,20 @@ VIEWS.followups = async (view) => {
             // dismissing the reminder.
             r.id ? h('button', { class: 'btn sm primary', style: { marginLeft: '.3rem' },
               onclick: () => openNextFollowupModal(r, () => navigateTo('followups'))
-            }, '⏰ Next follow-up') : null
+            }, '⏰ Next follow-up') : null,
+            /* FU_DONE_v1.2 — mark follow-up done on the /followups view too
+               (renderFollowupSection had it but VIEWS.followups didn't). */
+            r.lead_id ? h('button', { class: 'btn sm ok', style: { marginLeft: '.3rem', background: '#16a34a', color: '#fff' },
+              title: 'Mark follow-up done (lead drops off this list)',
+              onclick: async () => {
+                if (!confirm('Mark this follow-up as done? The lead will be removed from Due / Overdue lists.')) return;
+                try {
+                  await api('api_leads_followupDone', r.lead_id);
+                  toast('Follow-up marked done ✓');
+                  VIEWS.followups(view);
+                } catch (e) { toast(e.message || 'Failed to mark done', 'err'); }
+              }
+            }, '✓ Done') : null
           )
         );
       }))
