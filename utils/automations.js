@@ -114,17 +114,30 @@ function _render(tpl, ctx) {
 }
 
 async function _sendEmail(to, subject, html) {
-  if (String(process.env.EMAIL_NOTIFY_ENABLED || '') !== '1') return { ok: false, error: 'SMTP disabled' };
+  // AUTOMATION_SMTP_DBCONFIG_v1: read SMTP config from the per-tenant config
+  // table first, with process.env as fallback. Previously this function
+  // only looked at process.env — so tenants that had saved credentials via
+  // Settings → SMTP (which writes to the config DB, not env) always got
+  // 'SMTP disabled' even though the Test SMTP button worked.
+  const enabled = await db.getConfig('EMAIL_NOTIFY_ENABLED', process.env.EMAIL_NOTIFY_ENABLED);
+  const host    = await db.getConfig('SMTP_HOST', process.env.SMTP_HOST);
+  const port    = await db.getConfig('SMTP_PORT', process.env.SMTP_PORT);
+  const secure  = await db.getConfig('SMTP_SECURE', process.env.SMTP_SECURE);
+  const user    = await db.getConfig('SMTP_USER', process.env.SMTP_USER);
+  const pass    = await db.getConfig('SMTP_PASSWORD', process.env.SMTP_PASSWORD);
+  const from    = await db.getConfig('EMAIL_NOTIFY_FROM', process.env.EMAIL_NOTIFY_FROM);
+  if (String(enabled || '') !== '1') return { ok: false, error: 'SMTP disabled (EMAIL_NOTIFY_ENABLED != 1)' };
+  if (!host || !user || !pass) return { ok: false, error: 'SMTP creds missing (host/user/pass)' };
   try {
     const nodemailer = require('nodemailer');
     const t = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: Number(process.env.SMTP_PORT) || 587,
-      secure: String(process.env.SMTP_SECURE || '').toLowerCase() === 'true',
-      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD }
+      host,
+      port: Number(port) || 587,
+      secure: String(secure || '').toLowerCase() === 'true',
+      auth: { user, pass }
     });
     await t.sendMail({
-      from: process.env.EMAIL_NOTIFY_FROM || 'Lead CRM <noreply@localhost>',
+      from: from || 'Lead CRM <noreply@localhost>',
       to, subject, html
     });
     return { ok: true, detail: 'sent to ' + to };
