@@ -1947,6 +1947,37 @@ async function openAddWidgetModal(onPicked) {
 
 
 /* ---------------- Leads ---------------- */
+
+// QUOTE_WA_DESKTOP_v1 — helper that produces a WhatsApp share URL respecting
+// the user's preference. localStorage.crm_wa_open_mode = 'app' returns the
+// whatsapp:// protocol URL (which the OS routes to the WhatsApp Desktop app
+// if installed). Otherwise returns wa.me/... which opens web.whatsapp.com.
+window._waShareUrl = function(phone, text) {
+  const dig = String(phone || '').replace(/\D/g, '');
+  if (!dig) return '';
+  const mode = (localStorage.getItem('crm_wa_open_mode') || 'web');
+  if (mode === 'app') {
+    return 'whatsapp://send?phone=' + dig + (text ? '&text=' + encodeURIComponent(text) : '');
+  }
+  return 'https://wa.me/' + dig + (text ? '?text=' + encodeURIComponent(text) : '');
+};
+window._waOpenLink = function(phone, text) {
+  // Helper that opens the link in the right way for the picked mode.
+  // For 'app' mode we use location.href so the OS protocol handler is
+  // invoked (window.open with a custom protocol is blocked by some browsers).
+  const url = window._waShareUrl(phone, text);
+  if (!url) return;
+  const mode = (localStorage.getItem('crm_wa_open_mode') || 'web');
+  if (mode === 'app') {
+    // Use an invisible anchor click — works across Chrome/Edge/Firefox/Safari
+    const a = document.createElement('a');
+    a.href = url; a.style.display = 'none'; document.body.appendChild(a);
+    a.click(); setTimeout(() => a.remove(), 100);
+  } else {
+    window.open(url, '_blank');
+  }
+};
+
 const LEAD_COLUMNS = [
   { key: 'name',        label: 'Name',          default: true },
   { key: 'phone',       label: 'Phone',         default: true },
@@ -7544,7 +7575,7 @@ VIEWS.pipeline = async (view) => {
                 h('td', {},
                   l.phone || '',
                   l.phone ? h('button', { class: 'btn icon', title: 'Copy', onclick: () => { navigator.clipboard.writeText(l.phone); toast('Copied'); } }, '📋') : null,
-                  l.phone ? h('a', { class: 'btn icon', href: `https://wa.me/${String(l.phone).replace(/\D/g,'')}`, target: '_blank', title: 'WhatsApp' }, '💬') : null
+                  l.phone ? h('a', { class: 'btn icon', href: window._waShareUrl(l.phone, ''), target: '_blank', title: 'WhatsApp (toggle Web/App in user menu)' }, '💬') : null
                 ),
                 h('td', {}, l.source || ''),
                 h('td', {}, l.assigned_name || '—'),
@@ -7827,7 +7858,7 @@ async function renderFollowupSection(view, key) {
     h('tbody', {}, ...rows.map(r => {
       const phone = String(r.lead_phone || '').trim();
       const telHref = phone ? 'tel:' + phone.replace(/[^\d+]/g, '') : null;
-      const waHref  = phone ? 'https://wa.me/' + phone.replace(/[^\d]/g, '') : null;
+      const waHref  = phone ? window._waShareUrl(phone, '') : null;
       return h('tr', {},
         h('td', {}, h('a', { href: '#', onclick: ev => { ev.preventDefault(); openLeadModal(r.lead_id); } }, r.lead_name || '—')),
         h('td', {}, phone || ''),
@@ -7958,7 +7989,7 @@ VIEWS.followups = async (view) => {
       h('tbody', {}, ...rows.map(r => {
         const phone = String(r.lead_phone || '').trim();
         const telHref = phone ? 'tel:' + phone.replace(/[^\d+]/g, '') : null;
-        const waHref  = phone ? 'https://wa.me/' + phone.replace(/[^\d]/g, '') : null;
+        const waHref  = phone ? window._waShareUrl(phone, '') : null;
         return h('tr', {},
           h('td', {},
             h('a', { href: '#', onclick: ev => { ev.preventDefault(); openLeadModal(r.lead_id); } }, r.lead_name || '—')
@@ -9284,7 +9315,7 @@ async function openQuotationModal(qid, prefillLead) {
       // if save() somehow didn't persist (race, network blip), the send still
       // uses the user-typed number rather than whatever's stale in the DB.
       const r = await api('api_quotations_send_whatsapp', currentId, { phone: phoneInp.value });
-      toast('💬 Sent to ' + r.sent_to, 'ok');
+      toast('💬 Accepted by Meta for ' + r.sent_to + ' — should arrive on the customer\'s WhatsApp in a few seconds. If they don\'t see it: they must have messaged us within the last 24 hours (WhatsApp\'s free-form rule).', 'ok');
     } catch (e) {
       // QUOTE_WA_ERROR_v1 — give actionable guidance for the most common
       // WhatsApp send failures so the user knows what to fix.
@@ -11502,7 +11533,7 @@ function sendCalendlyLink(lead) {
   const name = (lead?.name || 'there').split(/\s+/)[0]; // first name only
   const me = (CRM.user && CRM.user.name) ? (' — ' + CRM.user.name) : '';
   const text = `Hi ${name}, please pick a time that works for a quick call: ${url}${me}`;
-  const waUrl = 'https://wa.me/' + dial + '?text=' + encodeURIComponent(text);
+  const waUrl = window._waShareUrl(dial, text);
   // Best-effort: log a remark so the team knows a meeting link went out.
   try { api('api_leads_addRemark', lead.id, { remark: '📅 Calendly meeting link sent via WhatsApp' }).catch(() => {}); } catch (_) {}
   window.open(waUrl, '_blank');
@@ -11544,9 +11575,9 @@ async function openPersonalWaPicker(lead) {
 
   const modal = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) modal.remove(); } });
   const launch = (text) => {
-    const url = 'https://wa.me/' + dial + (text ? '?text=' + encodeURIComponent(text) : '');
+    const url = window._waShareUrl(dial, text);
     try { if (lead?.id) api('api_leads_addRemark', lead.id, { remark: '💬 WhatsApp sent (personal): ' + (text || '(blank chat opened)').slice(0, 200) }).catch(() => {}); } catch (_) {}
-    window.open(url, '_blank');
+    window._waOpenLink(dial, text);
     modal.remove();
   };
   const list = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '.4rem', maxHeight: '50vh', overflowY: 'auto' } });
@@ -19647,6 +19678,46 @@ async function adminWhatsapp() {
     h('button', { class: 'btn', onclick: async () => { const r = await api('api_admin_testWhatsApp'); toast(r.ok ? 'Verified: ' + r.phone.verified_name : (r.error || 'Failed'), r.ok ? 'ok' : 'err'); } }, 'Test WhatsApp'),
     h('p', { class: 'muted' }, 'Webhook URL: ', h('code', {}, location.origin + '/hook/whatsapp'))
   ));
+
+  // ---- QUOTE_WA_SEND_v1: WhatsApp open-mode preference (Web vs Desktop App) ----
+  // Controls how *manual* WhatsApp share links open from the CRM UI (lead row, quote)
+  // — NOT the automated Cloud API sends (those always go via Meta API).
+  (function _renderOpenModeCard(){
+    const curMode = (localStorage.getItem('crm_wa_open_mode') || 'web');
+    const modeCard = h('div', { class: 'card', style: { marginTop: '1rem', background: 'linear-gradient(135deg, #fef3c7 0%, #fffbeb 100%)', border: '1px solid #fcd34d' } });
+    modeCard.appendChild(h('h4', { style: { margin: '0 0 .4rem', color: '#78350f' } }, '\ud83d\udcf1 Manual WhatsApp link behaviour'));
+    modeCard.appendChild(h('p', { style: { margin: '0 0 .55rem', fontSize: '.86rem' } },
+      'When you click \ud83d\udcac next to a lead, or "Send by WhatsApp" on a quote \u2014 should the link open in your browser (wa.me) or jump straight to your installed WhatsApp Desktop app?'));
+    modeCard.appendChild(h('p', { style: { margin: '0 0 .55rem', fontSize: '.78rem', color: '#92400e' } },
+      'Note: this only affects manual share clicks. Automated messages from the CRM (campaigns, AI bot replies, quote auto-sends) always go through ',
+      h('b', {}, 'Meta WhatsApp Cloud API'),
+      ' \u2014 independent of this setting.'));
+    const radioRow = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '.4rem', background: '#fff', padding: '.6rem .8rem', borderRadius: '8px' } });
+    function makeRadio(val, label, hint) {
+      const wrap = h('label', { style: { display: 'flex', alignItems: 'flex-start', gap: '.45rem', cursor: 'pointer' } });
+      const r = h('input', { type: 'radio', name: 'wa-open-mode', value: val });
+      if (curMode === val) r.checked = true;
+      r.onchange = () => {
+        if (r.checked) {
+          localStorage.setItem('crm_wa_open_mode', val);
+          toast('WhatsApp link mode set to: ' + label, 'ok');
+        }
+      };
+      wrap.appendChild(r);
+      wrap.appendChild(h('div', {},
+        h('div', { style: { fontWeight: '600', fontSize: '.88rem' } }, label),
+        h('div', { class: 'muted', style: { fontSize: '.78rem' } }, hint)
+      ));
+      return wrap;
+    }
+    radioRow.appendChild(makeRadio('web', 'Open in browser (wa.me)', 'Default. Universal \u2014 works even if WhatsApp Desktop isn\'t installed. Uses https://wa.me/...'));
+    radioRow.appendChild(makeRadio('app', 'Open in WhatsApp Desktop app (whatsapp://)', 'Jumps to your installed desktop app. Requires WhatsApp Desktop or WhatsApp mobile installed on this device \u2014 falls back to browser if the protocol isn\'t registered.'));
+    modeCard.appendChild(radioRow);
+    modeCard.appendChild(h('p', { class: 'muted', style: { fontSize: '.76rem', margin: '.5rem 0 0' } },
+      'Saved locally on this device per user \u2014 no server roundtrip. Refresh the page after changing for it to apply everywhere.'));
+    card.appendChild(modeCard);
+  })();
+
   // Append the Coexistence Mode card defined at the top of this function.
   try { _renderCoexistenceCard(card, {}, cfg || {}); } catch (_) {}
   return card;
@@ -25337,7 +25408,7 @@ async function _initWhatsappTopbar() {
   const cleaned = phone.replace(/[^\d+]/g, '').replace(/^\+/, '');
   btn.title = cleaned ? ('Open WhatsApp (' + phone + ')') : 'Open WhatsApp Web';
   btn.addEventListener('click', () => {
-    const url = cleaned ? ('https://wa.me/' + cleaned) : 'https://web.whatsapp.com/';
+    const url = cleaned ? window._waShareUrl(cleaned, '') : 'https://web.whatsapp.com/';
     window.open(url, '_blank', 'noopener');
   });
 }
