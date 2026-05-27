@@ -16328,6 +16328,7 @@ VIEWS.admin = async (view) => {
       { id: 'fb',           label: '🌍 Facebook' },
       { id: 'api',          label: '🔌 Website API' },
       { id: 'integrations', label: '🧩 Integrations' },
+      { id: 'outwh',       label: '🚀 Outbound Webhooks' },
       { id: 'qrforms',      label: '📲 QR Lead Forms' },
       { id: 'forms',        label: '📝 Forms' },
       { id: 'pages',        label: '🌐 Landing Pages' },
@@ -16434,6 +16435,7 @@ async function showAdminTab(id) {
     if (id === 'wawidget')   body.replaceChildren(await adminWaWidget());
     if (id === 'packs')      body.replaceChildren(await adminPacks());
     if (id === 'integrations') body.replaceChildren(await adminIntegrations());
+    if (id === 'outwh') body.replaceChildren(await adminOutboundWebhooks());
     if (id === 'qrforms')     body.replaceChildren(await adminQrForms());
     if (id === 'whlogs')      body.replaceChildren(await adminWebhookLogs());
     if (id === 'recdiag')     body.replaceChildren(await adminRecordingDiag());
@@ -26712,6 +26714,217 @@ function openPagePreview(url, name) {
 // ──────────────────────────────────────────────────────────────────
 // Settings → 💚 WhatsApp Chat Widget (embeddable site snippet)
 // ──────────────────────────────────────────────────────────────────
+
+/* ---------------- OUTBOUND_WH_v1 ---------------- */
+async function adminOutboundWebhooks() {
+  const wrap = h('div', {});
+  wrap.appendChild(h('h2', {}, '🚀 Outbound Webhooks'));
+  wrap.appendChild(h('p', { class: 'muted', style: { marginBottom: '12px' } }, 'Forward every NEW lead to one or more external URLs (other CRM, Zapier, Make.com, partner system, etc.). Each webhook can be filtered by source / status / custom-field values so it only fires for the leads you care about.'));
+  const tools = h('div', { style: { marginBottom: '10px' } },
+    h('button', { class: 'btn primary', onclick: () => _outWhOpenEditor(null, wrap) }, '➕ New Webhook'),
+    h('button', { class: 'btn ghost', style: { marginLeft: '8px' }, onclick: () => _outWhRender(wrap) }, '↻ Reload')
+  );
+  wrap.appendChild(tools);
+  const list = h('div', { id: 'outwh-list' }, h('div', { class: 'loading' }, 'Loading…'));
+  wrap.appendChild(list);
+  await _outWhRender(wrap);
+  return wrap;
+}
+
+async function _outWhRender(wrap) {
+  const list = wrap.querySelector('#outwh-list');
+  list.innerHTML = '<div class="loading">Loading…</div>';
+  let rows = [];
+  try { rows = await api('api_outboundWebhook_list'); } catch (e) { list.innerHTML = '<div style="color:#b91c1c">' + (e.message||'load failed') + '</div>'; return; }
+  list.innerHTML = '';
+  if (!rows || rows.length === 0) {
+    list.appendChild(h('div', { style: { padding: '16px', background: '#f8fafc', border: '1px dashed #cbd5e1', borderRadius: '10px', color: '#64748b' } }, 'No outbound webhooks yet. Click ➕ New Webhook above to forward leads to another CRM, Zapier, Make.com, or any URL.'));
+    return;
+  }
+  const table = h('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: '.88rem' } });
+  table.appendChild(h('thead', {}, h('tr', { style: { background: '#eef2ff' } },
+    h('th', { style: { textAlign: 'left', padding: '8px 10px' } }, 'Name'),
+    h('th', { style: { textAlign: 'left', padding: '8px 10px' } }, 'URL'),
+    h('th', { style: { textAlign: 'left', padding: '8px 10px' } }, 'Method'),
+    h('th', { style: { textAlign: 'left', padding: '8px 10px' } }, 'Filters'),
+    h('th', { style: { textAlign: 'center', padding: '8px 10px' } }, 'Enabled'),
+    h('th', { style: { textAlign: 'right', padding: '8px 10px' } }, 'Actions')
+  )));
+  const tbody = h('tbody', {});
+  rows.forEach(r => {
+    let cfPretty = '';
+    try { const o = typeof r.cf_filter_json === 'string' ? JSON.parse(r.cf_filter_json||'{}') : (r.cf_filter_json||{}); cfPretty = Object.entries(o).filter(([k,v])=>v).map(([k,v])=>k+'='+v).join(', '); } catch (_) {}
+    const filters = [
+      r.source_filter ? 'src: ' + r.source_filter : '',
+      r.status_filter ? 'sts: ' + r.status_filter : '',
+      cfPretty ? 'cf: ' + cfPretty : ''
+    ].filter(Boolean).join(' · ') || '— all —';
+    tbody.appendChild(h('tr', { style: { borderBottom: '1px solid #f1f5f9' } },
+      h('td', { style: { padding: '8px 10px', fontWeight: 600 } }, r.name || '(unnamed)'),
+      h('td', { style: { padding: '8px 10px', fontFamily: 'monospace', fontSize: '.78rem', maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: r.url }, r.url || ''),
+      h('td', { style: { padding: '8px 10px' } }, r.method || 'POST'),
+      h('td', { style: { padding: '8px 10px', fontSize: '.78rem', color: '#475569' } }, filters),
+      h('td', { style: { padding: '8px 10px', textAlign: 'center' } }, (r.enabled === true || r.enabled === 1 || String(r.enabled)==='true') ? '✅' : '⏸️'),
+      h('td', { style: { padding: '8px 10px', textAlign: 'right', whiteSpace: 'nowrap' } },
+        h('button', { class: 'btn small ghost', onclick: () => _outWhTest(r.id) }, '🧪 Test'),
+        ' ',
+        h('button', { class: 'btn small ghost', onclick: () => _outWhShowLogs(r.id, r.name||'') }, '📜 Logs'),
+        ' ',
+        h('button', { class: 'btn small primary', onclick: () => _outWhOpenEditor(r, document.querySelector('#admin-body')) }, '✏️ Edit'),
+        ' ',
+        h('button', { class: 'btn small', style: { background:'#fee2e2', color:'#7f1d1d' }, onclick: async () => {
+          if (!confirm('Delete webhook "' + (r.name||'') + '"?')) return;
+          try { await api('api_outboundWebhook_delete', r.id); toast('Deleted'); await _outWhRender(wrap); } catch (e) { toast(e.message,'err'); }
+        } }, '🗑️')
+      )
+    ));
+  });
+  table.appendChild(tbody);
+  list.appendChild(table);
+}
+
+function _outWhOpenEditor(row, refreshTarget) {
+  row = row || {};
+  const body = h('div', { style: { display:'flex', flexDirection:'column', gap:'10px' } });
+  const rowFor = (label, control, hint) => h('div', { style: { display:'flex', flexDirection:'column', gap:'4px' } },
+    h('label', { style: { fontSize:'.82rem', fontWeight:600, color:'#334155' } }, label),
+    control,
+    hint ? h('small', { style: { color:'#64748b' } }, hint) : null
+  );
+  const inpName = h('input', { value: row.name || '', placeholder: 'e.g. Forward to partner CRM' });
+  const inpUrl = h('input', { value: row.url || '', placeholder: 'https://hook.partner.com/api/leads' });
+  const inpMethod = h('select', {}, ...['POST','PUT','GET','PATCH'].map(m=>h('option',{value:m,selected:(row.method||'POST')===m?'selected':null},m)));
+  const inpSrc = h('input', { value: row.source_filter || '', placeholder: 'e.g. Facebook, Pabbly  (comma-separated, empty = all sources)' });
+  const inpStatus = h('input', { value: row.status_filter || '', placeholder: 'e.g. Hot, Follow Up  (comma-separated, empty = all statuses)' });
+  let cfStr = '';
+  try { const o = typeof row.cf_filter_json==='string'? JSON.parse(row.cf_filter_json||'{}') : (row.cf_filter_json||{}); cfStr = JSON.stringify(o, null, 2); } catch (_) { cfStr = '{}'; }
+  if (!cfStr || cfStr==='{}') cfStr = '{\n  \n}';
+  const inpCf = h('textarea', { rows: 4, style: { fontFamily:'monospace', fontSize:'.82rem' } }); inpCf.value = cfStr;
+  let hdrStr = '';
+  try { const o = typeof row.headers_json==='string'? JSON.parse(row.headers_json||'{}') : (row.headers_json||{}); hdrStr = JSON.stringify(o, null, 2); } catch (_) { hdrStr = '{}'; }
+  if (!hdrStr || hdrStr==='{}') hdrStr = '{\n  \n}';
+  const inpHdr = h('textarea', { rows: 4, style: { fontFamily:'monospace', fontSize:'.82rem' } }); inpHdr.value = hdrStr;
+  const inpBody = h('textarea', { rows: 6, style: { fontFamily:'monospace', fontSize:'.82rem' }, placeholder: 'Leave empty for default JSON (all lead fields). Use {{name}} {{phone}} {{email}} {{source}} {{status}} {{cf_campaign}} etc.' });
+  inpBody.value = row.body_template || '';
+  const inpEnabled = h('input', { type:'checkbox' });
+  inpEnabled.checked = (row.enabled === true || row.enabled === 1 || String(row.enabled)==='true' || row.id == null);
+  const advToggle = h('button', { type:'button', class:'btn ghost small', style:{ alignSelf:'flex-start' } }, '⚙️ Show advanced (method / headers / body template)');
+  const advBlock = h('div', { style: { display:'none', flexDirection:'column', gap:'10px', padding:'10px', border:'1px dashed #cbd5e1', borderRadius:'8px', background:'#fafafa' } },
+    rowFor('HTTP method', inpMethod),
+    rowFor('Custom headers (JSON)', inpHdr, 'e.g. {"Authorization":"Bearer abc", "X-Api-Key":"xyz"}. Content-Type defaults to application/json.'),
+    rowFor('Body template', inpBody, 'Plain text/JSON with {{var}} placeholders. Empty = send full lead JSON. Variables: name, phone, whatsapp, email, source, source_ref, status, status_id, city, company, notes, tags, value, assigned_to_name, created_at, plus cf_* custom fields.')
+  );
+  advToggle.onclick = () => { const open = advBlock.style.display === 'flex'; advBlock.style.display = open ? 'none' : 'flex'; advToggle.textContent = open ? '⚙️ Show advanced (method / headers / body template)' : '⚙️ Hide advanced'; };
+  body.appendChild(rowFor('Name', inpName));
+  body.appendChild(rowFor('Target URL', inpUrl, 'The external endpoint that will receive each matching new lead.'));
+  body.appendChild(rowFor('Filter — Source (any of)', inpSrc, 'Comma-separated. Empty = fire for ALL sources. Examples: Facebook, Pabbly, Make.com, Website API, Sheet sync, Manual, Meta Lead Ad.'));
+  body.appendChild(rowFor('Filter — Status (any of)', inpStatus, 'Comma-separated status names. Empty = fire on whatever status the lead is created with (usually "New").'));
+  body.appendChild(rowFor('Filter — Custom Field rules (JSON, AND across keys)', inpCf, 'e.g. {"cf_campaign":"White Label", "cf_page_name":"Smart CRM Solution"} — webhook only fires if ALL these custom field values match.'));
+  body.appendChild(h('label', { style:{ display:'flex', alignItems:'center', gap:'6px' } }, inpEnabled, h('span', {}, 'Enabled')));
+  body.appendChild(advToggle);
+  body.appendChild(advBlock);
+
+  const onSave = async () => {
+    try {
+      const payload = {
+        id: row.id || undefined,
+        name: inpName.value.trim(),
+        url: inpUrl.value.trim(),
+        method: inpMethod.value,
+        headers_json: inpHdr.value.trim() || '{}',
+        body_template: inpBody.value,
+        source_filter: inpSrc.value.trim(),
+        status_filter: inpStatus.value.trim(),
+        cf_filter_json: inpCf.value.trim() || '{}',
+        enabled: inpEnabled.checked
+      };
+      await api('api_outboundWebhook_save', payload);
+      toast('Saved');
+      _closeModal();
+      const adminBody = document.querySelector('#admin-body');
+      if (adminBody) adminBody.replaceChildren(await adminOutboundWebhooks());
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  const onTest = async () => {
+    try {
+      // Save first if new, then test
+      let id = row.id;
+      if (!id) {
+        const r = await api('api_outboundWebhook_save', { name: inpName.value.trim(), url: inpUrl.value.trim(), method: inpMethod.value, headers_json: inpHdr.value.trim()||'{}', body_template: inpBody.value, source_filter: inpSrc.value.trim(), status_filter: inpStatus.value.trim(), cf_filter_json: inpCf.value.trim()||'{}', enabled: true });
+        id = r.id; row.id = id;
+      }
+      const res = await api('api_outboundWebhook_test', { webhook_id: id });
+      alert((res.success ? '✅ Test fired successfully — HTTP ' + (res.httpStatus||'') : '❌ Test failed: ' + (res.errorMessage||'')) + '\n\nResponse body:\n' + (res.responseBody||'(empty)').slice(0, 800));
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  _openModal((row.id ? 'Edit' : 'New') + ' outbound webhook', body, [
+    { label: '🧪 Save & Test', cls: 'btn ghost', onclick: onTest },
+    { label: '💾 Save', cls: 'btn primary', onclick: onSave }
+  ]);
+}
+
+async function _outWhTest(webhookId) {
+  try {
+    const res = await api('api_outboundWebhook_test', { webhook_id: webhookId });
+    alert((res.success ? '✅ Test fired successfully — HTTP ' + (res.httpStatus||'') : '❌ Test failed: ' + (res.errorMessage||'')) + '\n\nResponse body:\n' + (res.responseBody||'(empty)').slice(0, 800));
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function _outWhShowLogs(webhookId, webhookName) {
+  const body = h('div', { style: { maxHeight: '70vh', overflowY: 'auto' } }, h('div', { class: 'loading' }, 'Loading deliveries…'));
+  _openModal('📜 Deliveries — ' + webhookName, body, [{ label:'Close', cls:'btn', onclick: _closeModal }]);
+  try {
+    const rows = await api('api_outboundWebhook_logs', { webhook_id: webhookId, limit: 100 });
+    body.innerHTML = '';
+    if (!rows || rows.length === 0) { body.appendChild(h('div', { style:{ padding:'20px', color:'#64748b' } }, 'No deliveries yet for this webhook.')); return; }
+    const tbl = h('table', { style:{ width:'100%', borderCollapse:'collapse', fontSize:'.82rem' } });
+    tbl.appendChild(h('thead', {}, h('tr', { style:{ background:'#f1f5f9' } },
+      h('th', { style:{ textAlign:'left', padding:'6px 8px' } }, 'When'),
+      h('th', { style:{ textAlign:'left', padding:'6px 8px' } }, 'Lead'),
+      h('th', { style:{ textAlign:'left', padding:'6px 8px' } }, 'Status'),
+      h('th', { style:{ textAlign:'left', padding:'6px 8px' } }, 'Error / Response'),
+      h('th', { style:{ textAlign:'right', padding:'6px 8px' } }, 'Actions')
+    )));
+    const tbody = h('tbody', {});
+    rows.forEach(r => {
+      const success = (r.success === true || r.success === 't' || r.success === 1);
+      const when = new Date(r.attempted_at).toLocaleString();
+      const msg = success ? '✅ HTTP ' + (r.http_status||'') : '❌ ' + (r.error_message || ('HTTP ' + (r.http_status||'')));
+      const respPreview = (r.response_body||'').slice(0, 200);
+      tbody.appendChild(h('tr', { style:{ borderBottom:'1px solid #f1f5f9' } },
+        h('td', { style:{ padding:'6px 8px', whiteSpace:'nowrap' } }, when),
+        h('td', { style:{ padding:'6px 8px' } }, r.lead_id ? ('#'+r.lead_id) : '—'),
+        h('td', { style:{ padding:'6px 8px', color: success ? '#15803d' : '#b91c1c', fontWeight:600 } }, msg),
+        h('td', { style:{ padding:'6px 8px', fontFamily:'monospace', fontSize:'.72rem', maxWidth:'400px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }, title: r.response_body||'' }, respPreview),
+        h('td', { style:{ padding:'6px 8px', textAlign:'right' } }, success ? '' : h('button', { class:'btn small ghost', onclick: async () => {
+          try { const out = await api('api_outboundWebhook_retry', r.id); toast(out.success ? 'Retry OK' : 'Retry failed: ' + out.errorMessage, out.success?'':'err'); _outWhShowLogs(webhookId, webhookName); } catch (e) { toast(e.message,'err'); }
+        } }, '↻ Retry'))
+      ));
+    });
+    tbl.appendChild(tbody);
+    body.appendChild(tbl);
+  } catch (e) { body.innerHTML = '<div style="color:#b91c1c;padding:20px">' + (e.message||'load failed') + '</div>'; }
+}
+
+/* Light modal helpers (in case _openModal/_closeModal don't exist in this scope) */
+if (typeof _openModal === 'undefined') {
+  window._openModal = function(title, body, buttons) {
+    let bd = document.querySelector('#outwh-backdrop');
+    if (bd) bd.remove();
+    bd = document.createElement('div'); bd.id = 'outwh-backdrop';
+    Object.assign(bd.style, { position:'fixed', inset:0, background:'rgba(0,0,0,.4)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:9999 });
+    const card = document.createElement('div');
+    Object.assign(card.style, { background:'#fff', borderRadius:'12px', padding:'18px 20px', minWidth:'520px', maxWidth:'90vw', maxHeight:'90vh', overflowY:'auto', boxShadow:'0 20px 50px rgba(0,0,0,.25)' });
+    const titleEl = document.createElement('h3'); titleEl.textContent = title; titleEl.style.marginTop = '0';
+    card.appendChild(titleEl); card.appendChild(body);
+    const ftr = document.createElement('div'); Object.assign(ftr.style, { marginTop:'14px', textAlign:'right', display:'flex', justifyContent:'flex-end', gap:'8px' });
+    (buttons||[]).forEach(b => { const x = document.createElement('button'); x.textContent = b.label; x.className = b.cls||'btn'; x.onclick = b.onclick; ftr.appendChild(x); });
+    const closeBtn = document.createElement('button'); closeBtn.textContent='Cancel'; closeBtn.className='btn'; closeBtn.onclick = _closeModal; ftr.insertBefore(closeBtn, ftr.firstChild);
+    card.appendChild(ftr); bd.appendChild(card); document.body.appendChild(bd);
+  };
+  window._closeModal = function() { const bd = document.querySelector('#outwh-backdrop'); if (bd) bd.remove(); };
+}
+
 async function adminWaWidget() {
   const wrap = h('div', { class: 'wa-widget-admin' });
   wrap.appendChild(h('div', { class: 'mod-h2' }, [
@@ -37495,6 +37708,56 @@ async function openFbFormMapper() {
   card.appendChild(body);
   back.appendChild(card);
   document.body.appendChild(back);
+
+  // FB_FORM_MAP_LIST_v1 — Saved mappings panel (list previously-configured forms)
+  const savedPanel = h('div', { style: { marginBottom: '1rem' } });
+  body.appendChild(savedPanel);
+  async function _renderSavedMappings() {
+    savedPanel.innerHTML = '';
+    let list = [];
+    try { list = await api('api_integrations_mapping_listFB'); } catch (_) { list = []; }
+    if (!list || list.length === 0) return;
+    const card = h('div', { style: { padding: '10px 12px', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '10px' } });
+    card.appendChild(h('div', { style: { fontWeight: 700, color: '#075985', marginBottom: '6px' } }, '📋 Previously configured mappings (' + list.length + ')'));
+    card.appendChild(h('div', { style: { fontSize: '.78rem', color: '#0c4a6e', marginBottom: '8px' } }, 'Click Edit to reopen one and change the field assignments. Each Lead form on Meta has its own mapping — if you create a copy of a form, that copy needs its own mapping.'));
+    const tbl = h('table', { style: { width: '100%', fontSize: '.82rem', borderCollapse: 'collapse' } });
+    list.forEach(m => {
+      const tr = h('tr', { style: { borderBottom: '1px solid #e0f2fe' } });
+      tr.appendChild(h('td', { style: { padding: '6px 6px' } },
+        h('div', { style: { fontWeight: 600 } }, m.form_name || ('Form ' + m.form_id)),
+        h('div', { style: { fontSize: '.7rem', color: '#0369a1' } }, m.page_name ? (m.page_name + (m.page_id ? ' · ' + m.page_id : '')) : ('page id ' + (m.page_id || '?')))
+      ));
+      tr.appendChild(h('td', { style: { padding: '6px 6px', textAlign: 'center', whiteSpace: 'nowrap' } },
+        h('span', { style: { fontSize: '.72rem', background: '#e0f2fe', padding: '2px 8px', borderRadius: '999px' } }, m.mapping_count + ' fields')
+      ));
+      tr.appendChild(h('td', { style: { padding: '6px 6px', fontSize: '.72rem', color: '#475569', whiteSpace: 'nowrap' } },
+        m.last_seen_at ? ('seen ' + new Date(m.last_seen_at).toLocaleDateString()) : '—'
+      ));
+      const editBtn = h('button', { class: 'btn small primary' }, '✏️ Edit');
+      editBtn.onclick = async () => {
+        if (!m.page_id) { alert('This mapping has no page id stored yet (no lead has arrived since it was saved). Pick the page manually.'); return; }
+        pageSel.value = String(m.page_id);
+        await pageSel.onchange();
+        // Wait a tick for the form select to populate, then pick the form and trigger
+        for (let i = 0; i < 30; i++) {
+          if (!formSel.disabled && formSel.options.length > 1) break;
+          await new Promise(r => setTimeout(r, 100));
+        }
+        formSel.value = String(m.form_id);
+        await formSel.onchange();
+      };
+      const delBtn = h('button', { class: 'btn small ghost', style: { marginLeft: '6px', color: '#b91c1c' } }, '🗑');
+      delBtn.onclick = async () => {
+        if (!confirm('Delete mapping for "' + (m.form_name || m.form_id) + '"? Future leads on this form will fall back to defaults.')) return;
+        try { await api('api_integrations_mapping_save', m.source, {}); await _renderSavedMappings(); } catch (e) { alert(e.message); }
+      };
+      tr.appendChild(h('td', { style: { padding: '6px 6px', textAlign: 'right', whiteSpace: 'nowrap' } }, editBtn, delBtn));
+      tbl.appendChild(tr);
+    });
+    card.appendChild(tbl);
+    savedPanel.appendChild(card);
+  }
+  await _renderSavedMappings();
 
   // Step 1 — pick a page
   body.appendChild(h('div', { class: 'muted', style: { marginBottom: '.5rem' } }, '⏳ Loading your connected pages…'));

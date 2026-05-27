@@ -873,6 +873,14 @@ async function api_leads_create(token, payload) {
 
   const id = await db.insert('leads', base);
 
+  // OUTBOUND_WH_v1 — fire outbound webhooks (async, never block lead creation)
+  try {
+    const { fireOutboundWebhooks } = require('./outboundWebhook');
+    setImmediate(() => {
+      fireOutboundWebhooks(Object.assign({ id }, base)).catch(e => console.error('[outboundWebhook] manual create fire failed:', e.message));
+    });
+  } catch (_) { /* module not loaded */ }
+
   // Backfill: link any existing orphan recordings (lead_id is null) that
   // were uploaded BEFORE this lead was created. Match by last-10-digit
   // phone — same logic recordings.js uses on upload. Best-effort, never

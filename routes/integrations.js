@@ -358,6 +358,15 @@ async function _internalCreateLead(payload, asUserId) {
     }
   } catch (e) { console.warn('[integrations] campaign match lookup failed:', e.message); }
   const id = await db.insert('leads', lead);
+
+  // OUTBOUND_WH_v1 — fire outbound webhooks (async, never block lead creation)
+  try {
+    const { fireOutboundWebhooks } = require('./outboundWebhook');
+    setImmediate(() => {
+      fireOutboundWebhooks(Object.assign({ id }, lead)).catch(e => console.error('[outboundWebhook] webhook-create fire failed:', e.message));
+    });
+  } catch (_) { /* module not loaded */ }
+
   // If we auto-attached, run the distribution engine so the campaign's
   // assigned agent (round-robin / equal / etc.) gets the lead.
   if (_autoCampaignId) {
@@ -807,6 +816,41 @@ async function api_integrations_mapping_get(token, source) {
     crm_fields: CRM_FIELDS,
     custom_fields: customFields
   };
+}
+
+
+// FB_FORM_MAP_LIST_v1 — list every saved facebook:<form_id> mapping so the
+// SPA Form Mapper modal can show 'previously configured forms' with Edit buttons.
+async function api_integrations_mapping_listFB(token) {
+  const me = await authUser(token);
+  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  await _ensureLeadSourceMappingTable();
+  let rows = [];
+  try {
+    const r = await db.query(
+      `SELECT source, mapping, last_seen_at, last_payload FROM lead_source_mapping
+       WHERE source LIKE 'facebook:%' ORDER BY last_seen_at DESC NULLS LAST, source`
+    );
+    rows = r.rows || [];
+  } catch (_) {}
+  return rows.map(r => {
+    let map = r.mapping;
+    if (typeof map === 'string') { try { map = JSON.parse(map); } catch (_) { map = {}; } }
+    map = map || {};
+    let pl = r.last_payload;
+    if (typeof pl === 'string') { try { pl = JSON.parse(pl); } catch (_) { pl = null; } }
+    const formId = String(r.source).replace(/^facebook:/, '');
+    return {
+      source: r.source,
+      form_id: formId,
+      form_name: pl && pl._form_name || '',
+      page_name: pl && pl._page_name || '',
+      page_id: pl && pl._page_id || '',
+      mapping_count: Object.keys(map).length,
+      last_seen_at: r.last_seen_at,
+      mapping: map
+    };
+  });
 }
 
 async function api_integrations_mapping_save(token, source, mapping) {
@@ -1648,7 +1692,7 @@ async function api_integrations_csvImport(token, payload) {
 }
 
 module.exports = {
-  api_integrations_mapping_get,
+  api_integrations_mapping_get, api_integrations_mapping_listFB,
   api_integrations_mapping_save,
   api_integrations_csvImport,
   // Sheet sync
