@@ -1062,7 +1062,36 @@ async function _buildPrompt(settings, phone, leadId, inboundText) {
     }
   } catch (e) { console.warn('[aiBot] lead-context build failed:', e && e.message); }
 
-  const system = personaWithLang + leadContextBlock + kb;
+  // AIBOT_HOURS_v1 — working hours awareness so the bot proposes callbacks
+  // at the next business slot instead of promising immediate action.
+  let businessHoursBlock = '';
+  try {
+    const bh = settings.business_hours || _DEFAULT_SETTINGS.business_hours;
+    const tz = (bh && bh.tz) || 'Asia/Kolkata';
+    const fmt = new Intl.DateTimeFormat('en-IN', { timeZone: tz, weekday: 'long', hour: '2-digit', minute: '2-digit', hour12: true, day: '2-digit', month: 'short' });
+    const nowStr = fmt.format(new Date());
+    const isAfter = _isAfterHours(bh);
+    const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    const workDays = (Array.isArray(bh.days) ? bh.days : [1,2,3,4,5]).map(d => dayNames[d]).join(', ');
+    const lines = [
+      'Current time: ' + nowStr + ' (' + tz + ')',
+      'Business hours: ' + (bh.start || '09:00') + ' to ' + (bh.end || '19:00') + ' on ' + workDays,
+      'Status RIGHT NOW: ' + (isAfter ? 'OUTSIDE business hours' : 'INSIDE business hours')
+    ];
+    if (isAfter) {
+      lines.push('');
+      lines.push('IMPORTANT — we are currently OUTSIDE business hours. If the customer asks for a call back, demo, or to speak with a human:');
+      lines.push('  • Do NOT promise an immediate callback or that someone is calling now.');
+      lines.push('  • Politely tell them our team is offline and propose the NEXT business slot. Example: "Our team is offline right now — I will arrange a callback tomorrow morning at 10 AM. Does that work?"');
+      lines.push('  • If they propose a specific later time, acknowledge and confirm the agent will call them then.');
+    } else {
+      lines.push('');
+      lines.push('We are currently WITHIN business hours. If the customer asks for a call back, confirm and tell them an agent will reach out shortly.');
+    }
+    businessHoursBlock = '\n\n=== BUSINESS HOURS POLICY ===\n' + lines.join('\n') + '\n=== END BUSINESS HOURS POLICY ===';
+  } catch (e) { console.warn('[aiBot] business-hours block failed:', e && e.message); }
+
+  const system = personaWithLang + leadContextBlock + businessHoursBlock + kb;
 
   // History: last N inbound + outbound messages (chronological), but
   // exclude the just-arrived inbound that whatsbot already wrote to
@@ -1072,7 +1101,8 @@ async function _buildPrompt(settings, phone, leadId, inboundText) {
   // Floor at 10 so legacy tenants who left history_messages at 0/1
   // also benefit from short-term memory.
   const hCountRaw = Number(settings.history_messages);
-  const hCount = Math.max(10, isFinite(hCountRaw) && hCountRaw > 0 ? hCountRaw : 10);
+  // AIBOT_HISTORY_v2 — deeper history window so bot sees prior commitments / decisions
+  const hCount = Math.max(20, isFinite(hCountRaw) && hCountRaw > 0 ? hCountRaw : 20);
   const history = [];
   try {
     const r = await db.query(
@@ -1399,8 +1429,59 @@ async function api_aibot_discard_draft(token, draftId) {
 // to fire after `reengage_after_minutes` of silence. If the customer
 // replies before that, _cancelReengage() blanks the row.
 // ============================================================
+// AIBOT_COMMIT_v1 — detect if the customer has already committed (booked demo,
+// scheduled callback, made a decision). If so, we skip re-engagement and skip
+// any further auto follow-ups — the customer doesn't need to be poked again.
+// Returns { committed: bool, reason: '...' }.
+async function _hasCommitSignal(phone) {
+  if (!phone) return { committed: false };
+  try {
+    const r = await db.query(
+      `SELECT direction, body, created_at FROM whatsapp_messages
+        WHERE (from_number = $1 OR to_number = $1)
+          AND created_at > NOW() - INTERVAL '7 days'
+        ORDER BY created_at DESC LIMIT 12`,
+      [String(phone)]
+    );
+    const msgs = (r.rows || []).map(m => ({ dir: m.direction, txt: String(m.body || '').toLowerCase() }));
+    // Customer commit signals (THEY said these)
+    const COMMIT_KW_IN = [
+      'book demo', 'book a demo', 'book the demo', 'demo booked', 'demo confirmed',
+      'schedule call', 'schedule a call', 'call me tomorrow', 'call me at', 'call back tomorrow',
+      'callback at', 'call back at', 'fix the meeting', 'meeting scheduled', 'meeting fixed',
+      'i will buy', "i'll buy", 'go ahead', 'send proposal', 'send the proposal', 'send quote',
+      'send quotation', 'send invoice', 'send the invoice', 'i agree', "i'm in", 'we are in',
+      'we will go ahead', 'lets proceed', "let's proceed", 'confirmed', 'deal done',
+      'order placed', 'i have decided', 'decision taken', 'going with you', 'will sign',
+      'ok done', 'ok confirmed', 'thik hai', 'theek hai', 'bana do', 'kal call karo',
+      'kal baat karte', 'kal milte', 'kal milenge', 'subah call', 'morning call'
+    ];
+    // Bot / agent acknowledgements
+    const COMMIT_KW_OUT = [
+      'callback scheduled', 'demo scheduled', 'demo booked', 'meeting confirmed',
+      'i will arrange', 'will arrange a callback', 'arranged a callback',
+      'agent will call', 'our team will call', 'thanks for confirming'
+    ];
+    for (const m of msgs) {
+      const kws = m.dir === 'in' ? COMMIT_KW_IN : COMMIT_KW_OUT;
+      for (const kw of kws) {
+        if (m.txt.includes(kw)) return { committed: true, reason: 'commit signal: "' + kw + '" (' + m.dir + ')' };
+      }
+    }
+  } catch (e) { /* fail open — don't block legit re-engagement */ }
+  return { committed: false };
+}
+
 async function _scheduleReengage({ settings, phone, leadId, inboundPhoneId }) {
   if (!settings || Number(settings.reengage_enabled) !== 1) return;
+  // AIBOT_COMMIT_v1 — skip re-engagement if customer has already committed.
+  try {
+    const sig = await _hasCommitSignal(phone);
+    if (sig.committed) {
+      console.log('[reengage] skipped — ' + sig.reason);
+      return;
+    }
+  } catch (_) {}
   const minutes = Math.max(5, Math.min(10080, Number(settings.reengage_after_minutes || 60)));
   // Cancel any earlier scheduled rows for this phone so we only ever have one pending.
   try {
