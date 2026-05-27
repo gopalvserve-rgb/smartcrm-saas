@@ -19167,6 +19167,57 @@ async function adminFb() {
       '💡 Each form gets its own mapping. If you have multiple Lead forms, configure them separately.'
     ));
     wrap.appendChild(mapCard);
+
+    // FB_FORM_MAP_LIST_v2 — show saved mappings inline on the Facebook page (not just inside the modal)
+    const savedCard = h('div', { class: 'card', style: { borderLeft: '4px solid #0ea5e9', marginBottom: '1rem' } });
+    savedCard.appendChild(h('h4', { style: { marginTop: 0 } }, '📋 Saved Form Mappings'));
+    const savedListEl = h('div', {}, h('div', { class: 'muted', style: { fontSize: '.82rem' } }, '⏳ Loading saved mappings…'));
+    savedCard.appendChild(savedListEl);
+    wrap.appendChild(savedCard);
+    (async () => {
+      let list = [];
+      try { list = await api('api_integrations_mapping_listFB'); } catch (_) { list = []; }
+      savedListEl.innerHTML = '';
+      if (!list || list.length === 0) {
+        savedListEl.appendChild(h('div', { class: 'muted', style: { fontSize: '.82rem', padding: '8px' } }, 'No form mappings saved yet. Click 🗺 Open Form Mapper above to configure your first one. Once a Facebook lead arrives on a form, it shows up here for easy editing.'));
+        return;
+      }
+      const tbl = h('table', { style: { width: '100%', fontSize: '.85rem', borderCollapse: 'collapse' } });
+      tbl.appendChild(h('thead', {}, h('tr', { style: { background: '#f0f9ff' } },
+        h('th', { style: { textAlign: 'left', padding: '6px 8px' } }, 'Form'),
+        h('th', { style: { textAlign: 'left', padding: '6px 8px' } }, 'Page'),
+        h('th', { style: { textAlign: 'center', padding: '6px 8px' } }, 'Fields mapped'),
+        h('th', { style: { textAlign: 'left', padding: '6px 8px' } }, 'Last lead'),
+        h('th', { style: { textAlign: 'right', padding: '6px 8px' } }, 'Actions')
+      )));
+      const tbody = h('tbody', {});
+      list.forEach(m => {
+        const formLabel = m.form_name || ('Form ' + m.form_id);
+        const pageLabel = m.page_name || (m.page_id ? ('Page ' + m.page_id) : '—');
+        const lastSeen = m.last_seen_at ? new Date(m.last_seen_at).toLocaleString() : '—';
+        const editBtn = h('button', { class: 'btn small primary' }, '✏️ Edit mapping');
+        editBtn.onclick = () => {
+          // Stash the target form so the mapper opens directly on it
+          window.__pendingFbMapping = { page_id: m.page_id, form_id: m.form_id };
+          openFbFormMapper();
+        };
+        const delBtn = h('button', { class: 'btn small ghost', style: { marginLeft: '6px', color: '#b91c1c' } }, '🗑');
+        delBtn.onclick = async () => {
+          if (!confirm('Delete mapping for "' + formLabel + '"? Future leads on this form will fall back to defaults.')) return;
+          try { await api('api_integrations_mapping_save', m.source, {}); savedListEl.innerHTML='<div class="muted">Reloading…</div>'; const l2 = await api('api_integrations_mapping_listFB').catch(()=>[]); /* re-render */ savedCard.removeChild(savedListEl); const fresh = h('div', {}); savedCard.appendChild(fresh); /* simple reload: just call adminFb again */ const view = document.querySelector('#admin-body'); if (view) view.replaceChildren(await adminFb()); } catch (e) { alert(e.message); }
+        };
+        const fieldsBadge = h('span', { style: { background: m.mapping_count > 0 ? '#dcfce7' : '#fef3c7', color: m.mapping_count > 0 ? '#14532d' : '#92400e', padding: '2px 10px', borderRadius: '999px', fontSize: '.75rem', fontWeight: 600 } }, m.mapping_count > 0 ? (m.mapping_count + ' fields') : 'NO MAPPING');
+        tbody.appendChild(h('tr', { style: { borderBottom: '1px solid #f1f5f9' } },
+          h('td', { style: { padding: '6px 8px', fontWeight: 600 } }, formLabel),
+          h('td', { style: { padding: '6px 8px', color: '#475569' } }, pageLabel),
+          h('td', { style: { padding: '6px 8px', textAlign: 'center' } }, fieldsBadge),
+          h('td', { style: { padding: '6px 8px', fontSize: '.78rem', color: '#475569', whiteSpace: 'nowrap' } }, lastSeen),
+          h('td', { style: { padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' } }, editBtn, delBtn)
+        ));
+      });
+      tbl.appendChild(tbody);
+      savedListEl.appendChild(tbl);
+    })();
   }
 
   // ============ 1. Application Settings ============
@@ -37759,6 +37810,11 @@ async function openFbFormMapper() {
   }
   await _renderSavedMappings();
 
+  // FB_FORM_MAP_LIST_v2 — if caller stashed __pendingFbMapping, jump straight to that form
+  // (__pendingFbMapping handled)
+  const pending = window.__pendingFbMapping;
+  window.__pendingFbMapping = null;
+
   // Step 1 — pick a page
   body.appendChild(h('div', { class: 'muted', style: { marginBottom: '.5rem' } }, '⏳ Loading your connected pages…'));
   let pages = [];
@@ -37789,6 +37845,24 @@ async function openFbFormMapper() {
   // Step 3 — mapping rows (populated on form select)
   const mapWrap = h('div', { style: { marginTop: '.5rem' } });
   body.appendChild(mapWrap);
+
+  // FB_FORM_MAP_LIST_v2 — apply pending hint now that selectors exist
+  if (pending && pending.page_id) {
+    setTimeout(async () => {
+      try {
+        pageSel.value = String(pending.page_id);
+        await pageSel.onchange();
+        for (let i = 0; i < 30; i++) {
+          if (!formSel.disabled && formSel.options.length > 1) break;
+          await new Promise(r => setTimeout(r, 100));
+        }
+        if (pending.form_id) {
+          formSel.value = String(pending.form_id);
+          await formSel.onchange();
+        }
+      } catch (_) {}
+    }, 100);
+  }
 
   // CRM field catalog — same set used by other source mappers
   let customFields = [];
