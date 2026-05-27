@@ -1960,6 +1960,7 @@ const LEAD_COLUMNS = [
   { key: 'followup',    label: 'Follow-up',     default: true },
   { key: 'last_change', label: 'Last change',   default: true },
   { key: 'remark',      label: 'Recent remark', default: true },
+  { key: 'notes',       label: 'Notes',         default: false },
   { key: 'city',        label: 'City',          default: false },
   { key: 'created',     label: 'Created',       default: true }
 ];
@@ -3247,6 +3248,15 @@ function renderCell(col, l, statuses) {
       h('button', { class: 'btn icon', title: 'Add remark', onclick: ev => { ev.stopPropagation(); openRemarkInline(l.id); } }, '💬+'),
       h('button', { class: 'btn icon', title: 'Nurture sequences', onclick: ev => { ev.stopPropagation(); openLeadSequencesModal(l.id, l.name); } }, '🌱')
     );
+    case 'notes': {
+      // LEAD_LIST_NOTES_v1 — lead.notes (the long-form sticky note on a lead)
+      // shown truncated with a hover tooltip + click-to-edit. Different from
+      // 'remark' which lists per-event remarks; 'notes' is the single lead-level
+      // note field on the leads table.
+      const txt = String(l.notes || '').trim();
+      const preview = txt ? (txt.length > 80 ? txt.slice(0, 80) + '…' : txt) : '—';
+      return h('td', { class: 'cell-notes', style: { maxWidth: '260px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: txt ? 'pointer' : 'default' }, title: txt || '(no notes)', onclick: ev => { ev.stopPropagation(); openLeadModal(l.id); } }, preview);
+    }
     case 'city':    return h('td', {}, l.city || '');
     case 'created': {
       // Two-line cell: date on top, time below in muted/smaller. Keeps the
