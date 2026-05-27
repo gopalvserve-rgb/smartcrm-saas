@@ -368,6 +368,63 @@ async function api_outboundWebhook_retry(token, logId) {
   return { ok: true, success, httpStatus, errorMessage, responseBody };
 }
 
+
+// OUTBOUND_WH_v2 — return dropdown options so the SPA can render friendly
+// pickers instead of CSV / JSON textareas. Lists sources, statuses, and
+// each custom field with its known distinct values (sampled from
+// extra_json across recent leads).
+async function api_outboundWebhook_filterOptions(token) {
+  const me = await authUser(token);
+  if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin / manager only');
+  // 1) Sources: distinct lead.source values + lead_source_mapping rows
+  let sources = [];
+  try {
+    const r1 = await db.query(`SELECT DISTINCT source FROM leads WHERE source IS NOT NULL AND source <> '' ORDER BY source LIMIT 200`);
+    sources = (r1.rows || []).map(r => r.source).filter(Boolean);
+  } catch (_) {}
+  // 2) Statuses
+  let statuses = [];
+  try {
+    const r2 = await db.query(`SELECT name FROM statuses ORDER BY COALESCE(sort_order, 0), id`);
+    statuses = (r2.rows || []).map(r => r.name).filter(Boolean);
+  } catch (_) {}
+  // 3) Custom fields + distinct values sampled from leads.extra_json
+  let customFields = [];
+  try {
+    const r3 = await db.query(`SELECT key, label FROM custom_fields WHERE COALESCE(is_active, 1) = 1 ORDER BY COALESCE(sort_order, 0), id`);
+    const fields = (r3.rows || []).filter(r => r && r.key);
+    for (const f of fields) {
+      const key = 'cf_' + f.key;
+      let values = [];
+      try {
+        // Pull from leads.extra_json JSONB. Falls back gracefully if extra_json is text.
+        const r4 = await db.query(
+          `SELECT DISTINCT (extra_json->>$1) AS v FROM leads WHERE extra_json IS NOT NULL AND (extra_json->>$1) IS NOT NULL AND (extra_json->>$1) <> '' ORDER BY v LIMIT 50`,
+          [key]
+        );
+        values = (r4.rows || []).map(r => r.v).filter(Boolean);
+      } catch (_) {
+        try {
+          // Fallback if extra_json is stored as text
+          const r5 = await db.query(`SELECT extra_json FROM leads WHERE extra_json IS NOT NULL AND extra_json::text LIKE $1 LIMIT 500`, ['%"' + key + '"%']);
+          const seen = new Set();
+          for (const row of (r5.rows || [])) {
+            try {
+              const obj = typeof row.extra_json === 'string' ? JSON.parse(row.extra_json) : row.extra_json;
+              if (obj && obj[key]) seen.add(String(obj[key]));
+            } catch (_) {}
+          }
+          values = Array.from(seen).slice(0, 50).sort();
+        } catch (_) {}
+      }
+      customFields.push({ key, label: f.label || f.key, values });
+    }
+  } catch (e) {
+    console.warn('[outboundWebhook] filterOptions cf lookup failed:', e.message);
+  }
+  return { sources, statuses, custom_fields: customFields };
+}
+
 module.exports = {
   fireOutboundWebhooks,
   api_outboundWebhook_list,
@@ -375,5 +432,6 @@ module.exports = {
   api_outboundWebhook_delete,
   api_outboundWebhook_test,
   api_outboundWebhook_logs,
+  api_outboundWebhook_filterOptions,
   api_outboundWebhook_retry
 };

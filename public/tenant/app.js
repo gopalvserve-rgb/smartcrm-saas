@@ -26834,9 +26834,17 @@ async function _outWhRender(wrap) {
   list.appendChild(table);
 }
 
-function _outWhOpenEditor(row, refreshTarget) {
+async function _outWhOpenEditor(row, refreshTarget) {
+  // OUTBOUND_WH_v2_DROPDOWNS — dropdowns for source / status / custom fields
   row = row || {};
   const body = h('div', { style: { display:'flex', flexDirection:'column', gap:'10px' } });
+  body.appendChild(h('div', { class: 'loading' }, '⏳ Loading filter options…'));
+  // Show modal while we load
+  const showModal = () => {};
+  let opts = { sources: [], statuses: [], custom_fields: [] };
+  try { opts = await api('api_outboundWebhook_filterOptions'); } catch (_) {}
+  body.innerHTML = '';
+
   const rowFor = (label, control, hint) => h('div', { style: { display:'flex', flexDirection:'column', gap:'4px' } },
     h('label', { style: { fontSize:'.82rem', fontWeight:600, color:'#334155' } }, label),
     control,
@@ -26845,12 +26853,112 @@ function _outWhOpenEditor(row, refreshTarget) {
   const inpName = h('input', { value: row.name || '', placeholder: 'e.g. Forward to partner CRM' });
   const inpUrl = h('input', { value: row.url || '', placeholder: 'https://hook.partner.com/api/leads' });
   const inpMethod = h('select', {}, ...['POST','PUT','GET','PATCH'].map(m=>h('option',{value:m,selected:(row.method||'POST')===m?'selected':null},m)));
-  const inpSrc = h('input', { value: row.source_filter || '', placeholder: 'e.g. Facebook, Pabbly  (comma-separated, empty = all sources)' });
-  const inpStatus = h('input', { value: row.status_filter || '', placeholder: 'e.g. Hot, Follow Up  (comma-separated, empty = all statuses)' });
-  let cfStr = '';
-  try { const o = typeof row.cf_filter_json==='string'? JSON.parse(row.cf_filter_json||'{}') : (row.cf_filter_json||{}); cfStr = JSON.stringify(o, null, 2); } catch (_) { cfStr = '{}'; }
-  if (!cfStr || cfStr==='{}') cfStr = '{\n  \n}';
-  const inpCf = h('textarea', { rows: 4, style: { fontFamily:'monospace', fontSize:'.82rem' } }); inpCf.value = cfStr;
+
+  // --- Multi-select chip-style dropdown helper ---
+  function _mkMultiSel(options, initialCsv, placeholder) {
+    const selected = String(initialCsv||'').split(',').map(x=>x.trim()).filter(Boolean);
+    const wrap = h('div', { style: { display:'flex', flexWrap:'wrap', gap:'4px', padding:'4px', border:'1px solid #cbd5e1', borderRadius:'8px', background:'#fff', minHeight:'36px', alignItems:'center' } });
+    function render() {
+      wrap.innerHTML = '';
+      selected.forEach(v => {
+        const chip = h('span', { style: { background:'#e0e7ff', color:'#3730a3', padding:'2px 8px', borderRadius:'999px', fontSize:'.78rem', display:'inline-flex', alignItems:'center', gap:'4px' } }, v);
+        const x = h('button', { type:'button', style: { background:'transparent', border:'none', cursor:'pointer', color:'#3730a3', padding:'0', fontWeight:700 } }, '✕');
+        x.onclick = () => { const i = selected.indexOf(v); if (i>=0) selected.splice(i,1); render(); };
+        chip.appendChild(x);
+        wrap.appendChild(chip);
+      });
+      const sel = h('select', { style: { border:'none', outline:'none', background:'transparent', flex:'1', minWidth:'150px', padding:'4px' } });
+      sel.appendChild(h('option', { value:'' }, placeholder || '+ Add'));
+      (options||[]).filter(o => !selected.includes(o)).forEach(o => sel.appendChild(h('option', { value:o }, o)));
+      sel.onchange = () => { const v = sel.value; if (v && !selected.includes(v)) { selected.push(v); render(); } };
+      wrap.appendChild(sel);
+    }
+    render();
+    wrap.getValue = () => selected.join(',');
+    return wrap;
+  }
+
+  const inpSrc = _mkMultiSel(opts.sources, row.source_filter || '', '+ Pick a source (empty = all)');
+  const inpStatus = _mkMultiSel(opts.statuses, row.status_filter || '', '+ Pick a status (empty = all)');
+
+  // --- Custom field rule builder ---
+  let cfRulesInit = {};
+  try { cfRulesInit = typeof row.cf_filter_json==='string'? JSON.parse(row.cf_filter_json||'{}') : (row.cf_filter_json||{}); } catch (_) {}
+  const cfWrap = h('div', { style: { display:'flex', flexDirection:'column', gap:'6px' } });
+  const cfRows = [];
+  function _cfFieldOptions(currentKey) {
+    const sel = h('select', { style: { padding:'6px 8px', borderRadius:'6px', border:'1px solid #cbd5e1', minWidth:'200px' } });
+    sel.appendChild(h('option', { value:'' }, '— Pick custom field —'));
+    (opts.custom_fields || []).forEach(cf => {
+      sel.appendChild(h('option', { value: cf.key, selected: cf.key === currentKey ? 'selected' : null }, cf.label + '  ('+cf.key+')'));
+    });
+    return sel;
+  }
+  function _cfValueInput(fieldKey, currentValue) {
+    const cf = (opts.custom_fields || []).find(c => c.key === fieldKey);
+    const values = cf && cf.values && cf.values.length ? cf.values : [];
+    if (values.length > 0) {
+      // Combo: dropdown of known values + free text fallback
+      const cont = h('div', { style: { display:'flex', gap:'4px', flex:'1' } });
+      const sel = h('select', { style: { padding:'6px 8px', borderRadius:'6px', border:'1px solid #cbd5e1', flex:'1' } });
+      sel.appendChild(h('option', { value:'' }, '— Pick value —'));
+      values.forEach(v => sel.appendChild(h('option', { value: v, selected: v === currentValue ? 'selected' : null }, v)));
+      // If currentValue is not in list, add it
+      if (currentValue && !values.includes(currentValue)) {
+        sel.appendChild(h('option', { value: currentValue, selected: 'selected' }, currentValue + ' (custom)'));
+      }
+      const txt = h('input', { value: currentValue || '', placeholder: 'or type custom value', style: { flex:'1', padding:'6px 8px', borderRadius:'6px', border:'1px solid #cbd5e1' } });
+      sel.onchange = () => { if (sel.value) txt.value = sel.value; };
+      cont.appendChild(sel);
+      cont.appendChild(txt);
+      cont.getValue = () => txt.value || sel.value || '';
+      return cont;
+    }
+    const txt = h('input', { value: currentValue || '', placeholder: 'Value', style: { flex:'1', padding:'6px 8px', borderRadius:'6px', border:'1px solid #cbd5e1' } });
+    txt.getValue = () => txt.value;
+    return txt;
+  }
+  function _renderCfRows() {
+    cfWrap.innerHTML = '';
+    cfRows.forEach((r, idx) => {
+      const rowEl = h('div', { style: { display:'flex', gap:'6px', alignItems:'center' } });
+      const fieldSel = _cfFieldOptions(r.key);
+      const valBox = h('div', { style: { flex:'1' } });
+      let valInp = _cfValueInput(r.key, r.value);
+      valBox.appendChild(valInp);
+      fieldSel.onchange = () => {
+        r.key = fieldSel.value;
+        valBox.innerHTML = '';
+        valInp = _cfValueInput(r.key, '');
+        valBox.appendChild(valInp);
+        r._valBox = valInp;
+      };
+      r._fieldSel = fieldSel;
+      r._valBox = valInp;
+      const delBtn = h('button', { type:'button', style: { background:'#fee2e2', color:'#7f1d1d', border:'1px solid #fca5a5', borderRadius:'6px', padding:'4px 8px', cursor:'pointer' } }, '✕');
+      delBtn.onclick = () => { cfRows.splice(idx, 1); _renderCfRows(); };
+      rowEl.appendChild(fieldSel);
+      rowEl.appendChild(h('span', { style: { color:'#64748b', fontSize:'.85rem' } }, '='));
+      rowEl.appendChild(valBox);
+      rowEl.appendChild(delBtn);
+      cfWrap.appendChild(rowEl);
+    });
+    const addBtn = h('button', { type:'button', class:'btn small ghost', style: { alignSelf:'flex-start' } }, '➕ Add custom-field rule');
+    addBtn.onclick = () => { cfRows.push({ key:'', value:'' }); _renderCfRows(); };
+    cfWrap.appendChild(addBtn);
+  }
+  Object.keys(cfRulesInit).forEach(k => { if (k && cfRulesInit[k]) cfRows.push({ key: k, value: String(cfRulesInit[k]) }); });
+  _renderCfRows();
+  function _collectCfRules() {
+    const out = {};
+    cfRows.forEach(r => {
+      const k = r._fieldSel ? r._fieldSel.value : r.key;
+      const v = r._valBox && r._valBox.getValue ? r._valBox.getValue() : (r._valBox ? r._valBox.value : r.value);
+      if (k && v) out[k] = v;
+    });
+    return out;
+  }
+
   let hdrStr = '';
   try { const o = typeof row.headers_json==='string'? JSON.parse(row.headers_json||'{}') : (row.headers_json||{}); hdrStr = JSON.stringify(o, null, 2); } catch (_) { hdrStr = '{}'; }
   if (!hdrStr || hdrStr==='{}') hdrStr = '{\n  \n}';
@@ -26868,9 +26976,9 @@ function _outWhOpenEditor(row, refreshTarget) {
   advToggle.onclick = () => { const open = advBlock.style.display === 'flex'; advBlock.style.display = open ? 'none' : 'flex'; advToggle.textContent = open ? '⚙️ Show advanced (method / headers / body template)' : '⚙️ Hide advanced'; };
   body.appendChild(rowFor('Name', inpName));
   body.appendChild(rowFor('Target URL', inpUrl, 'The external endpoint that will receive each matching new lead.'));
-  body.appendChild(rowFor('Filter — Source (any of)', inpSrc, 'Comma-separated. Empty = fire for ALL sources. Examples: Facebook, Pabbly, Make.com, Website API, Sheet sync, Manual, Meta Lead Ad.'));
-  body.appendChild(rowFor('Filter — Status (any of)', inpStatus, 'Comma-separated status names. Empty = fire on whatever status the lead is created with (usually "New").'));
-  body.appendChild(rowFor('Filter — Custom Field rules (JSON, AND across keys)', inpCf, 'e.g. {"cf_campaign":"White Label", "cf_page_name":"Smart CRM Solution"} — webhook only fires if ALL these custom field values match.'));
+  body.appendChild(rowFor('Filter — Source (any of)', inpSrc, 'Empty = fire for ALL sources. Pick one or more from the dropdown.'));
+  body.appendChild(rowFor('Filter — Status (any of)', inpStatus, 'Empty = match any status. Pick one or more from the dropdown.'));
+  body.appendChild(rowFor('Filter — Custom Field rules (ALL must match)', cfWrap, 'Add rows of <custom-field> = <value>. Empty = no custom-field filtering. If a field already has values in your CRM, you can pick from the dropdown; otherwise type a value.'));
   body.appendChild(h('label', { style:{ display:'flex', alignItems:'center', gap:'6px' } }, inpEnabled, h('span', {}, 'Enabled')));
   body.appendChild(advToggle);
   body.appendChild(advBlock);
@@ -26884,9 +26992,9 @@ function _outWhOpenEditor(row, refreshTarget) {
         method: inpMethod.value,
         headers_json: inpHdr.value.trim() || '{}',
         body_template: inpBody.value,
-        source_filter: inpSrc.value.trim(),
-        status_filter: inpStatus.value.trim(),
-        cf_filter_json: inpCf.value.trim() || '{}',
+        source_filter: inpSrc.getValue ? inpSrc.getValue() : '',
+        status_filter: inpStatus.getValue ? inpStatus.getValue() : '',
+        cf_filter_json: JSON.stringify(_collectCfRules()),
         enabled: inpEnabled.checked
       };
       await api('api_outboundWebhook_save', payload);
@@ -26898,12 +27006,16 @@ function _outWhOpenEditor(row, refreshTarget) {
   };
   const onTest = async () => {
     try {
-      // Save first if new, then test
       let id = row.id;
-      if (!id) {
-        const r = await api('api_outboundWebhook_save', { name: inpName.value.trim(), url: inpUrl.value.trim(), method: inpMethod.value, headers_json: inpHdr.value.trim()||'{}', body_template: inpBody.value, source_filter: inpSrc.value.trim(), status_filter: inpStatus.value.trim(), cf_filter_json: inpCf.value.trim()||'{}', enabled: true });
-        id = r.id; row.id = id;
-      }
+      const payloadBase = {
+        name: inpName.value.trim(), url: inpUrl.value.trim(), method: inpMethod.value,
+        headers_json: inpHdr.value.trim()||'{}', body_template: inpBody.value,
+        source_filter: inpSrc.getValue ? inpSrc.getValue() : '',
+        status_filter: inpStatus.getValue ? inpStatus.getValue() : '',
+        cf_filter_json: JSON.stringify(_collectCfRules()),
+        enabled: true
+      };
+      if (!id) { const r = await api('api_outboundWebhook_save', payloadBase); id = r.id; row.id = id; }
       const res = await api('api_outboundWebhook_test', { webhook_id: id });
       alert((res.success ? '✅ Test fired successfully — HTTP ' + (res.httpStatus||'') : '❌ Test failed: ' + (res.errorMessage||'')) + '\n\nResponse body:\n' + (res.responseBody||'(empty)').slice(0, 800));
     } catch (e) { toast(e.message, 'err'); }
