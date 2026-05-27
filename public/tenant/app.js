@@ -27041,6 +27041,108 @@ async function _outWhOpenEditor(row, refreshTarget) {
     return out;
   }
 
+  // OUTBOUND_WH_v4_FIELDMAP — friendly field mapping (destination_field = CRM source)
+  // Builds a JSON body template behind the scenes so users never write JSON.
+  const CRM_SOURCE_FIELDS = [
+    { value: '', label: '— (literal value)' },
+    { value: '{{name}}', label: 'Name' },
+    { value: '{{phone}}', label: 'Phone' },
+    { value: '{{whatsapp}}', label: 'WhatsApp' },
+    { value: '{{email}}', label: 'Email' },
+    { value: '{{source}}', label: 'Source' },
+    { value: '{{source_ref}}', label: 'Source ref' },
+    { value: '{{status}}', label: 'Status (name)' },
+    { value: '{{status_id}}', label: 'Status ID' },
+    { value: '{{city}}', label: 'City' },
+    { value: '{{company}}', label: 'Company' },
+    { value: '{{notes}}', label: 'Notes' },
+    { value: '{{tags}}', label: 'Tags' },
+    { value: '{{value}}', label: 'Value' },
+    { value: '{{assigned_to_id}}', label: 'Assigned User ID' },
+    { value: '{{assigned_to_name}}', label: 'Assigned User Name' },
+    { value: '{{created_at}}', label: 'Created At' },
+    { value: '{{id}}', label: 'Lead ID' }
+  ];
+  function _addCfsToCrmFields() {
+    const cfs = (opts.custom_fields || []);
+    return cfs.map(c => ({ value: '{{' + c.key + '}}', label: c.label + '  (' + c.key + ')' }));
+  }
+  // Parse existing body_template into mapping rows (if it's JSON)
+  const fmRows = [];
+  try {
+    const tpl = String(row.body_template || '').trim();
+    if (tpl) {
+      const obj = JSON.parse(tpl);
+      if (obj && typeof obj === 'object') {
+        Object.keys(obj).forEach(k => fmRows.push({ k, v: String(obj[k] || '') }));
+      }
+    }
+  } catch (_) {}
+  const fmWrap = h('div', { style: { display:'flex', flexDirection:'column', gap:'6px' } });
+  function _renderFmRows() {
+    fmWrap.innerHTML = '';
+    if (fmRows.length === 0) {
+      fmWrap.appendChild(h('div', { style: { padding: '10px', background: '#f8fafc', border: '1px dashed #cbd5e1', borderRadius: '8px', color: '#64748b', fontSize: '.82rem' } }, 'No field mapping yet — webhook will send the full default lead JSON. Click ➕ Add field mapping below to define exactly which fields go to your destination CRM (e.g. assigned, mobile, etc).'));
+    }
+    fmRows.forEach((r, idx) => {
+      const rowEl = h('div', { style: { display:'flex', gap:'6px', alignItems:'center', flexWrap:'wrap' } });
+      // Target field name (text input the destination expects)
+      const keyInp = h('input', { value: r.k || '', placeholder: 'their field name (e.g. assigned, mobile)', style: { padding:'6px 8px', borderRadius:'6px', border:'1px solid #cbd5e1', flex:'1', minWidth:'180px' } });
+      keyInp.addEventListener('input', () => { r.k = keyInp.value; });
+      const eq = h('span', { style: { color:'#64748b' } }, '=');
+      // Value picker (dropdown of CRM fields + free text)
+      const valWrap = h('div', { style: { display:'flex', gap:'4px', flex:'1', minWidth:'260px' } });
+      const sel = h('select', { style: { padding:'6px 8px', borderRadius:'6px', border:'1px solid #cbd5e1', flex:'1' } });
+      const allFields = CRM_SOURCE_FIELDS.concat(_addCfsToCrmFields());
+      // Mark selected if r.v matches an option exactly
+      allFields.forEach(opt => {
+        const o = h('option', { value: opt.value }, opt.label);
+        if (opt.value === r.v) o.selected = 'selected';
+        sel.appendChild(o);
+      });
+      const txt = h('input', { value: r.v || '', placeholder: 'literal value or {{var}}', style: { padding:'6px 8px', borderRadius:'6px', border:'1px solid #cbd5e1', flex:'1' } });
+      sel.onchange = () => { if (sel.value) { txt.value = sel.value; r.v = sel.value; } };
+      txt.addEventListener('input', () => { r.v = txt.value; });
+      valWrap.appendChild(sel); valWrap.appendChild(txt);
+      const delBtn = h('button', { type:'button', style: { background:'#fee2e2', color:'#7f1d1d', border:'1px solid #fca5a5', borderRadius:'6px', padding:'4px 8px', cursor:'pointer' } }, '✕');
+      delBtn.onclick = () => { fmRows.splice(idx, 1); _renderFmRows(); };
+      rowEl.appendChild(keyInp);
+      rowEl.appendChild(eq);
+      rowEl.appendChild(valWrap);
+      rowEl.appendChild(delBtn);
+      fmWrap.appendChild(rowEl);
+    });
+    const add = h('button', { type:'button', class:'btn small ghost', style: { alignSelf:'flex-start' } }, '➕ Add field mapping');
+    add.onclick = () => { fmRows.push({ k:'', v:'' }); _renderFmRows(); };
+    fmWrap.appendChild(add);
+    // Quick presets row
+    const presets = h('div', { style: { display:'flex', gap:'6px', flexWrap:'wrap', marginTop:'6px' } });
+    presets.appendChild(h('span', { style: { fontSize:'.78rem', color:'#475569', alignSelf:'center' } }, 'Quick fill:'));
+    [
+      { label:'Standard (name/phone/email/source)', rows: [{k:'name',v:'{{name}}'},{k:'phone',v:'{{phone}}'},{k:'email',v:'{{email}}'},{k:'source',v:'{{source}}'}] },
+      { label:'Adbullet-style (name/mobile/email/assigned)', rows: [{k:'name',v:'{{name}}'},{k:'mobile',v:'{{phone}}'},{k:'email',v:'{{email}}'},{k:'source',v:'{{source}}'},{k:'assigned',v:'1'}] }
+    ].forEach(preset => {
+      const btn = h('button', { type:'button', class:'btn small ghost', style: { fontSize:'.74rem' } }, preset.label);
+      btn.onclick = () => {
+        if (fmRows.length && !confirm('Replace current mappings with preset?')) return;
+        fmRows.length = 0;
+        preset.rows.forEach(r => fmRows.push({ ...r }));
+        _renderFmRows();
+      };
+      presets.appendChild(btn);
+    });
+    fmWrap.appendChild(presets);
+  }
+  _renderFmRows();
+  // Build JSON body template from rows
+  function _buildBodyTemplate() {
+    const valid = fmRows.filter(r => r.k && r.k.trim());
+    if (valid.length === 0) return '';
+    const obj = {};
+    valid.forEach(r => { obj[r.k.trim()] = r.v || ''; });
+    return JSON.stringify(obj, null, 2);
+  }
+
   let hdrStr = '';
   try { const o = typeof row.headers_json==='string'? JSON.parse(row.headers_json||'{}') : (row.headers_json||{}); hdrStr = JSON.stringify(o, null, 2); } catch (_) { hdrStr = '{}'; }
   if (!hdrStr || hdrStr==='{}') hdrStr = '{\n  \n}';
@@ -27053,7 +27155,7 @@ async function _outWhOpenEditor(row, refreshTarget) {
   const advBlock = h('div', { style: { display:'none', flexDirection:'column', gap:'10px', padding:'10px', border:'1px dashed #cbd5e1', borderRadius:'8px', background:'#fafafa' } },
     rowFor('HTTP method', inpMethod),
     rowFor('Custom headers (JSON)', inpHdr, 'e.g. {"Authorization":"Bearer abc", "X-Api-Key":"xyz"}. Content-Type defaults to application/json.'),
-    rowFor('Body template', inpBody, 'Plain text/JSON with {{var}} placeholders. Empty = send full lead JSON. Variables: name, phone, whatsapp, email, source, source_ref, status, status_id, city, company, notes, tags, value, assigned_to_name, created_at, plus cf_* custom fields.')
+    rowFor('Raw body template (advanced — overrides field mapping above if mapping is empty)', inpBody, 'Most users should use the Field Mapping above instead. Use this only if you need a non-JSON body or full control. Plain text with {{var}} placeholders.')
   );
   advToggle.onclick = () => { const open = advBlock.style.display === 'flex'; advBlock.style.display = open ? 'none' : 'flex'; advToggle.textContent = open ? '⚙️ Show advanced (method / headers / body template)' : '⚙️ Hide advanced'; };
   body.appendChild(rowFor('Name', inpName));
@@ -27061,6 +27163,7 @@ async function _outWhOpenEditor(row, refreshTarget) {
   body.appendChild(rowFor('Filter — Source (any of)', inpSrc, 'Empty = fire for ALL sources. Pick one or more from the dropdown.'));
   body.appendChild(rowFor('Filter — Status (any of)', inpStatus, 'Empty = match any status. Pick one or more from the dropdown.'));
   body.appendChild(rowFor('Filter — Custom Field rules (ALL must match)', cfWrap, 'Add rows of <custom-field> = <value>. Empty = no custom-field filtering. If a field already has values in your CRM, you can pick from the dropdown; otherwise type a value.'));
+  body.appendChild(rowFor('📤 Field mapping (destination = your CRM field)', fmWrap, 'Define exactly which fields the destination expects. Empty = send full default lead JSON. Left side = field name in the destination CRM (e.g. assigned, mobile). Right side = pick from your CRM fields OR type a literal value. This is the easy way to build the body — no JSON needed.'));
   body.appendChild(h('label', { style:{ display:'flex', alignItems:'center', gap:'6px' } }, inpEnabled, h('span', {}, 'Enabled')));
   body.appendChild(advToggle);
   body.appendChild(advBlock);
@@ -27073,7 +27176,7 @@ async function _outWhOpenEditor(row, refreshTarget) {
         url: inpUrl.value.trim(),
         method: inpMethod.value,
         headers_json: inpHdr.value.trim() || '{}',
-        body_template: inpBody.value,
+        body_template: (_buildBodyTemplate() || inpBody.value),
         source_filter: inpSrc.getValue ? inpSrc.getValue() : '',
         status_filter: inpStatus.getValue ? inpStatus.getValue() : '',
         cf_filter_json: JSON.stringify(_collectCfRules()),
@@ -27091,7 +27194,7 @@ async function _outWhOpenEditor(row, refreshTarget) {
       let id = row.id;
       const payloadBase = {
         name: inpName.value.trim(), url: inpUrl.value.trim(), method: inpMethod.value,
-        headers_json: inpHdr.value.trim()||'{}', body_template: inpBody.value,
+        headers_json: inpHdr.value.trim()||'{}', body_template: (_buildBodyTemplate() || inpBody.value),
         source_filter: inpSrc.getValue ? inpSrc.getValue() : '',
         status_filter: inpStatus.getValue ? inpStatus.getValue() : '',
         cf_filter_json: JSON.stringify(_collectCfRules()),
