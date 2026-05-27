@@ -1445,22 +1445,49 @@ VIEWS.dashboard = async (view) => {
   );
   view.appendChild(head);
 
+  // DASH_CAMP_FILTER_v1 — campaign filter bar (admin/manager only)
+  CRM._dashCampaignIds = CRM._dashCampaignIds || [];
+  let _campOpts = CRM.cache.campaigns;
+  if (!_campOpts) { try { CRM.cache.campaigns = await api('api_campaigns_list'); _campOpts = CRM.cache.campaigns; } catch (_) { _campOpts = []; } }
+  if (_campOpts && _campOpts.length && CRM.user && ['admin','manager','team_leader'].includes(CRM.user.role)) {
+    const filterBar = h('div', { style: { display:'flex', alignItems:'center', gap:'8px', marginBottom:'.7rem', padding:'8px 12px', background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:'10px', flexWrap:'wrap' } });
+    filterBar.appendChild(h('span', { style: { fontWeight:600, fontSize:'.85rem', color:'#475569' } }, '🎯 Campaign filter:'));
+    // Use existing multiSelectDropdown helper
+    const sel = multiSelectDropdown({
+      id: 'dash-camp-filter', label: 'Campaign',
+      options: _campOpts.map(c => ({ id: c.id, name: c.name })),
+      values: CRM._dashCampaignIds,
+      allLabel: 'All campaigns',
+      onApply: (vals) => {
+        CRM._dashCampaignIds = vals.map(v => Number(v));
+        VIEWS.dashboard(view);
+      }
+    });
+    filterBar.appendChild(sel);
+    if (CRM._dashCampaignIds.length > 0) {
+      const clr = h('button', { class: 'btn small ghost', style: { marginLeft:'4px' }, onclick: () => { CRM._dashCampaignIds = []; VIEWS.dashboard(view); } }, '✕ Clear');
+      filterBar.appendChild(clr);
+      filterBar.appendChild(h('span', { style: { fontSize:'.78rem', color:'#0369a1' } }, '• Scoping all KPIs to ' + CRM._dashCampaignIds.length + ' campaign(s)'));
+    }
+    view.appendChild(filterBar);
+  }
+
   // Pre-fetch the data each rendered widget will need. We fetch in
   // parallel and then index by API name so widget renderers can pull
   // their slice without further round-trips.
   const usedTypes = new Set(widgets.map(w => w.type));
   const fetchTasks = {};
   if (['kpi_total_leads','kpi_won','kpi_qualified','chart_status','chart_source','chart_product','daily_volume'].some(t => usedTypes.has(t))) {
-    fetchTasks.summary = api('api_reports_summary', {}).catch(() => null);
+    fetchTasks.summary = api('api_reports_summary', { campaign_ids: CRM._dashCampaignIds }).catch(() => null);
   }
   if (['kpi_new_today','kpi_due_today','kpi_overdue','followups_panel'].some(t => usedTypes.has(t))) {
     fetchTasks.notifs = api('api_notifications_mine').catch(() => null);
   }
   if (usedTypes.has('funnel_pipeline')) {
-    fetchTasks.funnel = api('api_reports_funnel', {}).catch(() => []);
+    fetchTasks.funnel = api('api_reports_funnel', { campaign_ids: CRM._dashCampaignIds }).catch(() => []);
   }
   if (usedTypes.has('tat_alerts')) {
-    fetchTasks.tat = api('api_tat_report', {}).catch(() => null);
+    fetchTasks.tat = api('api_tat_report', { campaign_ids: CRM._dashCampaignIds }).catch(() => null);
   }
   if (usedTypes.has('project_stages')) {
     fetchTasks.projects = api('api_projectStages_board').catch(() => null);
@@ -1472,7 +1499,7 @@ VIEWS.dashboard = async (view) => {
     fetchTasks.teamTat = api('api_reports_tatViolationsByUser').catch(() => []);
   }
   if (usedTypes.has('daily_volume')) {
-    fetchTasks.daily = api('api_reports_daily', {}).catch(() => []);
+    fetchTasks.daily = api('api_reports_daily', { campaign_ids: CRM._dashCampaignIds }).catch(() => []);
   }
   if (usedTypes.has('call_activity_summary') || usedTypes.has('call_activity_topusers') || usedTypes.has('call_activity_recent')) {
     fetchTasks.callActivity = api('api_reports_callActivity', {}).catch(() => null);
@@ -2019,6 +2046,10 @@ VIEWS.leads = async (view) => {
     h('span', { class: 'muted', style: { fontSize: '.78rem' } }, 'To'),
     toInput
   );
+  /* CAMPAIGN_FILTER_v1: warm campaigns */
+  if (!CRM.cache.campaigns) {
+    try { CRM.cache.campaigns = await api('api_campaigns_list'); } catch (_) { CRM.cache.campaigns = []; }
+  }
   const toolbar = h('div', { class: 'toolbar' },
     searchInput,
     dateWrap,
@@ -2072,6 +2103,17 @@ VIEWS.leads = async (view) => {
           }
         })
       : null,
+    // CAMPAIGN_FILTER_v1 — campaign multi-select. Pulls from CRM.cache.campaigns (warmed on demand).
+    multiSelectDropdown({
+      id: 'f-campaign', label: 'Campaign',
+      options: (CRM.cache.campaigns || []).map(c => ({ id: c.id, name: c.name })),
+      values: CRM.prefs.filters.campaign_ids || [],
+      allLabel: 'Any campaign',
+      onApply: (vals) => {
+        CRM.prefs.filters.campaign_ids = vals.map(v => Number(v));
+        CRM._leadsPage = 1; loadLeads({ page: 1 });
+      }
+    }),
     (function(){
       const heatBtn = h('button', { class: 'btn ghost', id: 'f-heat-btn', title: 'Filter to hot/very hot/on fire leads' });
       function refreshHeatBtn() {
@@ -2488,6 +2530,7 @@ async function loadLeads(opts) {
   const sids = (CRM.prefs.filters.status_ids && CRM.prefs.filters.status_ids.length) ? CRM.prefs.filters.status_ids : null;
   const srcs = (CRM.prefs.filters.sources && CRM.prefs.filters.sources.length) ? CRM.prefs.filters.sources : null;
   const ats  = (CRM.prefs.filters.assigned_tos && CRM.prefs.filters.assigned_tos.length) ? CRM.prefs.filters.assigned_tos : null;
+  const cids = (CRM.prefs.filters.campaign_ids && CRM.prefs.filters.campaign_ids.length) ? CRM.prefs.filters.campaign_ids : null;
   // Tag multi-select — read from the persisted prefs (no #f-tags input
   // since multiSelectDropdown stores its state internally; the dropdown's
   // onApply already mutates CRM.prefs.filters.tags).

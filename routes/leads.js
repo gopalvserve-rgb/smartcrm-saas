@@ -390,6 +390,13 @@ async function api_leads_list(token, filters) {
       return wanted.some(w => lt.includes(w));
     });
   }
+  // CAMPAIGN_FILTER_v1 — filter by campaign(s)
+  if (Array.isArray(filters.campaign_ids) && filters.campaign_ids.length) {
+    const set = new Set(filters.campaign_ids.map(x => Number(x)));
+    rows = rows.filter(l => set.has(Number(l.campaign_id)));
+  } else if (filters.campaign_id) {
+    rows = rows.filter(l => Number(l.campaign_id) === Number(filters.campaign_id));
+  }
   if (filters.product_id)  rows = rows.filter(l => Number(l.product_id) === Number(filters.product_id));
   if (Array.isArray(filters.assigned_tos) && filters.assigned_tos.length) {
     const set = new Set(filters.assigned_tos.map(x => Number(x)));

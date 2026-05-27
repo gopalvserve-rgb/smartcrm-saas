@@ -114,6 +114,13 @@ async function _applyReportFilters(rows, filters, users) {
     const userIds = (users || []).filter(u => u.role === filters.role).map(u => Number(u.id));
     rows = rows.filter(l => userIds.includes(Number(l.assigned_to)));
   }
+  // CAMPAIGN_FILTER_v1 — filter by campaign(s)
+  if (Array.isArray(filters.campaign_ids) && filters.campaign_ids.length) {
+    const set = new Set(filters.campaign_ids.map(x => Number(x)));
+    rows = rows.filter(l => set.has(Number(l.campaign_id)));
+  } else if (filters.campaign_id) {
+    rows = rows.filter(l => Number(l.campaign_id) === Number(filters.campaign_id));
+  }
   if (filters.product_id) rows = rows.filter(l => Number(l.product_id) === Number(filters.product_id));
   if (filters.source)     rows = rows.filter(l => (l.source || '') === filters.source);
   if (filters.status_id)  rows = rows.filter(l => Number(l.status_id) === Number(filters.status_id));
