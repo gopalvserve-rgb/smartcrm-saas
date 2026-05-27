@@ -27081,38 +27081,72 @@ async function _outWhOpenEditor(row, refreshTarget) {
   const fmWrap = h('div', { style: { display:'flex', flexDirection:'column', gap:'6px' } });
   function _renderFmRows() {
     fmWrap.innerHTML = '';
-    if (fmRows.length === 0) {
-      fmWrap.appendChild(h('div', { style: { padding: '10px', background: '#f8fafc', border: '1px dashed #cbd5e1', borderRadius: '8px', color: '#64748b', fontSize: '.82rem' } }, 'No field mapping yet — webhook will send the full default lead JSON. Click ➕ Add field mapping below to define exactly which fields go to your destination CRM (e.g. assigned, mobile, etc).'));
+
+    // OUTBOUND_WH_v5 — Pabbly-style sticky 'Available variables' chip panel.
+    // Tracks which Value input is focused so a chip-click inserts at cursor.
+    let focusedVal = null;
+    const varsCard = h('div', { style: { padding: '10px 12px', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '8px', marginBottom: '8px' } });
+    varsCard.appendChild(h('div', { style: { fontSize: '.78rem', fontWeight: 700, color: '#0c4a6e', marginBottom: '6px' } }, '📋 Click any variable to insert into the focused Value field'));
+    const chipBar = h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '4px' } });
+    const allVars = [
+      { v: '{{name}}', l: 'Name' }, { v: '{{phone}}', l: 'Phone' },
+      { v: '{{whatsapp}}', l: 'WhatsApp' }, { v: '{{email}}', l: 'Email' },
+      { v: '{{source}}', l: 'Source' }, { v: '{{source_ref}}', l: 'Src ref' },
+      { v: '{{status}}', l: 'Status' }, { v: '{{status_id}}', l: 'Status ID' },
+      { v: '{{city}}', l: 'City' }, { v: '{{company}}', l: 'Company' },
+      { v: '{{notes}}', l: 'Notes' }, { v: '{{tags}}', l: 'Tags' },
+      { v: '{{value}}', l: 'Value' },
+      { v: '{{assigned_to_id}}', l: 'Owner ID' }, { v: '{{assigned_to_name}}', l: 'Owner Name' },
+      { v: '{{created_at}}', l: 'Created At' }, { v: '{{id}}', l: 'Lead ID' }
+    ];
+    (opts.custom_fields || []).forEach(cf => allVars.push({ v: '{{' + cf.key + '}}', l: cf.label }));
+    allVars.forEach(av => {
+      const chip = h('button', { type: 'button', style: { background: '#fff', border: '1px solid #cbd5e1', color: '#334155', padding: '3px 8px', borderRadius: '999px', fontSize: '.74rem', cursor: 'pointer', whiteSpace: 'nowrap' } }, av.l + ' ' + av.v.replace('{{','').replace('}}',''));
+      chip.onclick = (ev) => {
+        ev.preventDefault();
+        if (!focusedVal) { alert('Click into a Value field first, then click a variable to insert.'); return; }
+        const inp = focusedVal;
+        const s = inp.selectionStart || 0, e = inp.selectionEnd || 0;
+        inp.value = inp.value.slice(0, s) + av.v + inp.value.slice(e);
+        const newPos = s + av.v.length;
+        inp.setSelectionRange(newPos, newPos);
+        // Trigger input event so row r.v updates
+        inp.dispatchEvent(new Event('input', { bubbles: true }));
+        inp.focus();
+      };
+      chipBar.appendChild(chip);
+    });
+    varsCard.appendChild(chipBar);
+    fmWrap.appendChild(varsCard);
+
+    // Header row
+    if (fmRows.length > 0) {
+      const head = h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr 32px', gap: '6px', fontSize: '.74rem', fontWeight: 700, color: '#64748b', padding: '0 4px' } },
+        h('div', {}, 'Label (their field name)'),
+        h('div', {}, 'Value (literal or {{var}})'),
+        h('div', {}, '')
+      );
+      fmWrap.appendChild(head);
     }
+
+    if (fmRows.length === 0) {
+      fmWrap.appendChild(h('div', { style: { padding: '14px', background: '#fafafa', border: '1px dashed #cbd5e1', borderRadius: '8px', color: '#64748b', fontSize: '.85rem', textAlign: 'center' } }, 'No mapping yet — webhook sends full default lead JSON.  Click ➕ Add field mapping below to define exactly which fields go to your destination CRM.'));
+    }
+
     fmRows.forEach((r, idx) => {
-      const rowEl = h('div', { style: { display:'flex', gap:'6px', alignItems:'center', flexWrap:'wrap' } });
-      // Target field name (text input the destination expects)
-      const keyInp = h('input', { value: r.k || '', placeholder: 'their field name (e.g. assigned, mobile)', style: { padding:'6px 8px', borderRadius:'6px', border:'1px solid #cbd5e1', flex:'1', minWidth:'180px' } });
+      const rowEl = h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr 32px', gap: '6px', alignItems: 'center' } });
+      const keyInp = h('input', { value: r.k || '', placeholder: 'e.g. name / assigned / mobile', style: { padding: '8px 10px', borderRadius: '6px', border: '1px solid #cbd5e1' } });
       keyInp.addEventListener('input', () => { r.k = keyInp.value; });
-      const eq = h('span', { style: { color:'#64748b' } }, '=');
-      // Value picker (dropdown of CRM fields + free text)
-      const valWrap = h('div', { style: { display:'flex', gap:'4px', flex:'1', minWidth:'260px' } });
-      const sel = h('select', { style: { padding:'6px 8px', borderRadius:'6px', border:'1px solid #cbd5e1', flex:'1' } });
-      const allFields = CRM_SOURCE_FIELDS.concat(_addCfsToCrmFields());
-      // Mark selected if r.v matches an option exactly
-      allFields.forEach(opt => {
-        const o = h('option', { value: opt.value }, opt.label);
-        if (opt.value === r.v) o.selected = 'selected';
-        sel.appendChild(o);
-      });
-      const txt = h('input', { value: r.v || '', placeholder: 'literal value or {{var}}', style: { padding:'6px 8px', borderRadius:'6px', border:'1px solid #cbd5e1', flex:'1' } });
-      sel.onchange = () => { if (sel.value) { txt.value = sel.value; r.v = sel.value; } };
-      txt.addEventListener('input', () => { r.v = txt.value; });
-      valWrap.appendChild(sel); valWrap.appendChild(txt);
-      const delBtn = h('button', { type:'button', style: { background:'#fee2e2', color:'#7f1d1d', border:'1px solid #fca5a5', borderRadius:'6px', padding:'4px 8px', cursor:'pointer' } }, '✕');
+      const valInp = h('input', { value: r.v || '', placeholder: 'literal or click a variable above', style: { padding: '8px 10px', borderRadius: '6px', border: '1px solid #cbd5e1' } });
+      valInp.addEventListener('focus', () => { focusedVal = valInp; valInp.style.borderColor = '#6366f1'; valInp.style.boxShadow = '0 0 0 2px rgba(99,102,241,.15)'; });
+      valInp.addEventListener('blur', () => { valInp.style.borderColor = '#cbd5e1'; valInp.style.boxShadow = 'none'; });
+      valInp.addEventListener('input', () => { r.v = valInp.value; });
+      const delBtn = h('button', { type: 'button', title: 'Remove row', style: { background: '#fee2e2', color: '#7f1d1d', border: '1px solid #fca5a5', borderRadius: '6px', padding: '6px 0', cursor: 'pointer' } }, '✕');
       delBtn.onclick = () => { fmRows.splice(idx, 1); _renderFmRows(); };
-      rowEl.appendChild(keyInp);
-      rowEl.appendChild(eq);
-      rowEl.appendChild(valWrap);
-      rowEl.appendChild(delBtn);
+      rowEl.appendChild(keyInp); rowEl.appendChild(valInp); rowEl.appendChild(delBtn);
       fmWrap.appendChild(rowEl);
     });
-    const add = h('button', { type:'button', class:'btn small ghost', style: { alignSelf:'flex-start' } }, '➕ Add field mapping');
+    const add = h('button', { type:'button', class:'btn small ghost', style: { alignSelf:'flex-start', marginTop: '4px' } }, '➕ Add field mapping');
     add.onclick = () => { fmRows.push({ k:'', v:'' }); _renderFmRows(); };
     fmWrap.appendChild(add);
     // Quick presets row
@@ -27120,7 +27154,7 @@ async function _outWhOpenEditor(row, refreshTarget) {
     presets.appendChild(h('span', { style: { fontSize:'.78rem', color:'#475569', alignSelf:'center' } }, 'Quick fill:'));
     [
       { label:'Standard (name/phone/email/source)', rows: [{k:'name',v:'{{name}}'},{k:'phone',v:'{{phone}}'},{k:'email',v:'{{email}}'},{k:'source',v:'{{source}}'}] },
-      { label:'Adbullet-style (name/mobile/email/assigned)', rows: [{k:'name',v:'{{name}}'},{k:'mobile',v:'{{phone}}'},{k:'email',v:'{{email}}'},{k:'source',v:'{{source}}'},{k:'assigned',v:'1'}] }
+      { label:'Adbullet-style (name/mobile/email/assigned)', rows: [{k:'name',v:'{{name}}'},{k:'mobile',v:'{{phone}}'},{k:'email',v:'{{email}}'},{k:'source',v:'{{source}}'},{k:'assigned',v:'1'},{k:'status',v:'1'},{k:'phonenumber',v:'{{phone}}'},{k:'city',v:'{{city}}'}] }
     ].forEach(preset => {
       const btn = h('button', { type:'button', class:'btn small ghost', style: { fontSize:'.74rem' } }, preset.label);
       btn.onclick = () => {
