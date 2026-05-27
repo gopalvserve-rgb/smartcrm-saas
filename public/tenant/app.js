@@ -26930,41 +26930,80 @@ async function _outWhOpenEditor(row, refreshTarget) {
   const cfWrap = h('div', { style: { display:'flex', flexDirection:'column', gap:'6px' } });
   const cfRows = [];
   function _cfFieldOptions(currentKey) {
-    const sel = h('select', { style: { padding:'6px 8px', borderRadius:'6px', border:'1px solid #cbd5e1', minWidth:'200px' } });
+    // OUTBOUND_WH_v3 — narrower field select so the value picker gets more room
+    const sel = h('select', { style: { padding:'6px 8px', borderRadius:'6px', border:'1px solid #cbd5e1', minWidth:'180px', maxWidth:'220px', flex:'0 0 auto' } });
     sel.appendChild(h('option', { value:'' }, '— Pick custom field —'));
     (opts.custom_fields || []).forEach(cf => {
       sel.appendChild(h('option', { value: cf.key, selected: cf.key === currentKey ? 'selected' : null }, cf.label + '  ('+cf.key+')'));
     });
     return sel;
   }
+  // OUTBOUND_WH_v3_CFCHIPS — chip-style multi-value picker per custom field.
+  // Returns an element with .getValue() that returns either:
+  //   - a single string  (if user typed/picked one value)
+  //   - an array of strings (if user picked multiple — OR semantics in backend)
   function _cfValueInput(fieldKey, currentValue) {
     const cf = (opts.custom_fields || []).find(c => c.key === fieldKey);
-    const values = cf && cf.values && cf.values.length ? cf.values : [];
-    if (values.length > 0) {
-      // Combo: dropdown of known values + free text fallback
-      const cont = h('div', { style: { display:'flex', gap:'4px', flex:'1' } });
-      const sel = h('select', { style: { padding:'6px 8px', borderRadius:'6px', border:'1px solid #cbd5e1', flex:'1' } });
-      sel.appendChild(h('option', { value:'' }, '— Pick value —'));
-      values.forEach(v => sel.appendChild(h('option', { value: v, selected: v === currentValue ? 'selected' : null }, v)));
-      // If currentValue is not in list, add it
-      if (currentValue && !values.includes(currentValue)) {
-        sel.appendChild(h('option', { value: currentValue, selected: 'selected' }, currentValue + ' (custom)'));
-      }
-      const txt = h('input', { value: currentValue || '', placeholder: 'or type custom value', style: { flex:'1', padding:'6px 8px', borderRadius:'6px', border:'1px solid #cbd5e1' } });
-      sel.onchange = () => { if (sel.value) txt.value = sel.value; };
-      cont.appendChild(sel);
-      cont.appendChild(txt);
-      cont.getValue = () => txt.value || sel.value || '';
-      return cont;
+    const knownValues = cf && cf.values && cf.values.length ? cf.values : [];
+    // Normalise currentValue → array of selected values
+    const selected = [];
+    if (Array.isArray(currentValue)) {
+      currentValue.forEach(v => { if (v != null && String(v).trim() !== '') selected.push(String(v)); });
+    } else if (typeof currentValue === 'string' && currentValue.trim() !== '') {
+      // accept comma-separated legacy values
+      currentValue.split(',').map(s => s.trim()).filter(Boolean).forEach(v => selected.push(v));
     }
-    const txt = h('input', { value: currentValue || '', placeholder: 'Value', style: { flex:'1', padding:'6px 8px', borderRadius:'6px', border:'1px solid #cbd5e1' } });
-    txt.getValue = () => txt.value;
-    return txt;
+
+    const wrap = h('div', { style: { display:'flex', flexWrap:'wrap', gap:'4px', padding:'5px 6px', border:'1px solid #cbd5e1', borderRadius:'6px', background:'#fff', flex:'1', minWidth:'280px', minHeight:'34px', alignItems:'center' } });
+
+    function _addValue(v) {
+      v = String(v || '').trim();
+      if (!v) return;
+      if (!selected.includes(v)) { selected.push(v); render(); }
+    }
+    function _removeAt(i) { selected.splice(i, 1); render(); }
+
+    function render() {
+      wrap.innerHTML = '';
+      selected.forEach((v, i) => {
+        const chip = h('span', { style: { background:'#e0e7ff', color:'#3730a3', padding:'2px 8px', borderRadius:'999px', fontSize:'.78rem', display:'inline-flex', alignItems:'center', gap:'4px' } }, v);
+        const x = h('button', { type:'button', style: { background:'transparent', border:'none', cursor:'pointer', color:'#3730a3', padding:'0', fontWeight:700 } }, '✕');
+        x.onclick = () => _removeAt(i);
+        chip.appendChild(x);
+        wrap.appendChild(chip);
+      });
+      // Picker: dropdown (if known values exist) + free-text input
+      if (knownValues.length > 0) {
+        const sel = h('select', { style: { border:'none', outline:'none', background:'transparent', padding:'4px', fontSize:'.85rem', minWidth:'140px' } });
+        sel.appendChild(h('option', { value:'' }, selected.length ? '+ Add another value' : '+ Pick value (or type below)'));
+        knownValues.filter(v => !selected.includes(v)).forEach(v => sel.appendChild(h('option', { value: v }, v)));
+        sel.onchange = () => { const v = sel.value; if (v) _addValue(v); };
+        wrap.appendChild(sel);
+      }
+      const txt = h('input', { type:'text', placeholder: selected.length ? '+ type & Enter' : (knownValues.length ? 'or type custom & Enter' : 'type value & Enter'), style: { border:'none', outline:'none', background:'transparent', padding:'4px', flex:'1', minWidth:'120px', fontSize:'.85rem' } });
+      txt.addEventListener('keydown', ev => {
+        if (ev.key === 'Enter' || ev.key === ',') {
+          ev.preventDefault();
+          if (txt.value.trim()) { _addValue(txt.value); txt.value = ''; }
+        }
+      });
+      txt.addEventListener('blur', () => { if (txt.value.trim()) { _addValue(txt.value); txt.value = ''; } });
+      wrap.appendChild(txt);
+    }
+    render();
+
+    wrap.getValue = () => {
+      // Single value → return string (backward compat); multiple → array
+      if (selected.length === 0) return '';
+      if (selected.length === 1) return selected[0];
+      return selected.slice();
+    };
+    return wrap;
   }
   function _renderCfRows() {
     cfWrap.innerHTML = '';
     cfRows.forEach((r, idx) => {
-      const rowEl = h('div', { style: { display:'flex', gap:'6px', alignItems:'center' } });
+      const rowEl = h('div', { style: { display:'flex', gap:'6px', alignItems:'center', flexWrap:'wrap' } });
       const fieldSel = _cfFieldOptions(r.key);
       const valBox = h('div', { style: { flex:'1' } });
       let valInp = _cfValueInput(r.key, r.value);

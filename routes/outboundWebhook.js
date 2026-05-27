@@ -98,10 +98,16 @@ async function _matchesFilters(webhook, lead) {
   cfRules = cfRules || {};
   const cfs = _flattenCfs(lead);
   for (const [k, v] of Object.entries(cfRules)) {
-    if (!v) continue;
+    // OUTBOUND_WH_v3 — value may be a single string OR an array (OR semantics within one key).
+    // Empty / null / empty-array → no rule on this key.
+    const wanted = Array.isArray(v)
+      ? v.filter(x => x != null && String(x).trim() !== '').map(x => String(x).trim().toLowerCase())
+      : (v != null && String(v).trim() !== '' ? [String(v).trim().toLowerCase()] : []);
+    if (wanted.length === 0) continue;
     const have = cfs[String(k).toLowerCase()];
     if (have == null) return false;
-    if (String(have).trim().toLowerCase() !== String(v).trim().toLowerCase()) return false;
+    const haveLower = String(have).trim().toLowerCase();
+    if (!wanted.includes(haveLower)) return false;
   }
   return true;
 }
