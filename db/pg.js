@@ -428,6 +428,24 @@ const SCHEMA = {
       'created_by', 'created_at', 'updated_at'
     ],
     json: []
+  },
+  // OUTBOUND_WH_v1
+  outbound_webhooks: {
+    columns: [
+      'name', 'url', 'method', 'headers_json', 'body_template',
+      'source_filter', 'status_filter', 'cf_filter_json',
+      'enabled', 'created_at', 'updated_at'
+    ],
+    json: ['headers_json', 'cf_filter_json']
+  },
+  outbound_webhook_log: {
+    columns: [
+      'webhook_id', 'lead_id', 'url', 'method',
+      'request_headers', 'request_body',
+      'http_status', 'response_body', 'error_message',
+      'success', 'attempted_at', 'retry_count'
+    ],
+    json: []
   }
 };
 
