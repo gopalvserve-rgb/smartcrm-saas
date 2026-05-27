@@ -28320,16 +28320,40 @@ function _initFloatingChat() {
   // ---- Render thread list ----
   let _activePhone = null;
   let _activeThreadCache = null;
+  // FLOAT_CHAT_FLICKER_FIX_v1 — only show 'Loading…' on the FIRST render.
+  // On every subsequent poll (every 8s) we silently swap in the new list,
+  // preserving scroll position and never showing the placeholder again.
+  let _threadsEverRendered = false;
+  let _threadsLastSig = '';
   async function renderThreads() {
     const body = drawer.querySelector('#chat-drawer-body');
     if (_activePhone) return; // we're inside a thread - keep it
-    body.innerHTML = '<div style="padding: 1.5rem; text-align: center; color: #94a3b8;">Loading\u2026</div>';
+    if (!_threadsEverRendered) {
+      body.innerHTML = '<div style="padding: 1.5rem; text-align: center; color: #94a3b8;">Loading\u2026</div>';
+    }
     try {
       const threads = await api('api_wb_chat_threads', { phone_number_id: 'all' });
       if (!threads.length) {
-        body.innerHTML = '<div style="padding: 1.5rem; text-align: center; color: #94a3b8;">No conversations yet.</div>';
+        // Only paint the empty state once; don't keep re-painting it on every poll
+        if (body.dataset.emptyShown !== '1') {
+          body.innerHTML = '<div style="padding: 1.5rem; text-align: center; color: #94a3b8;">No conversations yet.</div>';
+          body.dataset.emptyShown = '1';
+        }
+        _threadsEverRendered = true;
         return;
       }
+      body.dataset.emptyShown = '';
+      // Signature lets us bail out early if nothing material changed —
+      // no DOM thrash, no scroll reset, no flicker.
+      const sig = threads.slice(0, 30).map(t => [
+        t.phone, t.lead_name || '',
+        t.last_at || '', (t.last_message || t.last_body || '').slice(0, 80),
+        t.unread || t.unread_count || 0, t.phone_number_id || ''
+      ].join('|')).join('~');
+      if (_threadsEverRendered && sig === _threadsLastSig) return;
+      _threadsLastSig = sig;
+      // Preserve scroll position across silent re-renders
+      const prevScroll = body.scrollTop;
       body.innerHTML = '';
       let _phMap = window._phoneIdToDisplay || {};
       if (Object.keys(_phMap).length === 0) {
@@ -28366,8 +28390,15 @@ function _initFloatingChat() {
         row.onclick = () => openThread(t);
         body.appendChild(row);
       });
+      // Restore scroll position so silent refreshes don't jump the user back to top
+      try { body.scrollTop = prevScroll; } catch (_) {}
+      _threadsEverRendered = true;
     } catch (e) {
-      body.innerHTML = '<div style="padding: 1.5rem; color: #dc2626;">Could not load: ' + esc(e.message) + '</div>';
+      // Don't blow away the existing thread list on a transient error —
+      // only paint the error if we have nothing to show yet.
+      if (!_threadsEverRendered) {
+        body.innerHTML = '<div style="padding: 1.5rem; color: #dc2626;">Could not load: ' + esc(e.message) + '</div>';
+      }
     }
   }
 
