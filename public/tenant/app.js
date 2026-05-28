@@ -8220,24 +8220,18 @@ async function _renderPipelineFunnel(view) {
     return;
   }
 
-  // Derive top/bottom widths from data so the trapezoids actually connect.
-  // pct_of_total is computed server-side against the first non-empty band.
-  // Use sqrt scaling so heavily-skewed tenants (e.g. 1072 → 127 → 54) still
-  // produce a visually descending funnel instead of one giant band + 4 slivers.
-  // Min 18%, max 100%. Each subsequent band must be narrower than the previous.
+  // Derive top/bottom widths DIRECTLY from data so the trapezoids match
+  // the reference design (widths == pct_of_total). Tiny bands get a floor
+  // of 16% so they stay visible. Each band's bottom edge = next band's top.
   const rawPcts = bands.map(b => Math.max(0, Math.min(100, Number(b.pct_of_total) || 0)));
-  const widths = rawPcts.map((p, i) => {
-    // sqrt scale brings tiny pct values up to a visible but still-smaller width
-    const scaled = p > 0 ? Math.round(Math.sqrt(p / 100) * 100) : 0;
-    return Math.max(18, Math.min(100, scaled));
-  });
-  // Force monotonic descent: each band can't be wider than the one above it
+  const widths = rawPcts.map(p => p > 0 ? Math.max(16, Math.min(100, p)) : 16);
+  // Force monotonic descent
   for (let i = 1; i < widths.length; i++) {
-    if (widths[i] > widths[i-1] - 6) widths[i] = Math.max(18, widths[i-1] - 6);
+    if (widths[i] > widths[i-1]) widths[i] = Math.max(14, widths[i-1] - 4);
   }
   // Bottom of each band = next band's top width; last band tapers further
   const bottoms = widths.map((w, i) =>
-    i < widths.length - 1 ? widths[i + 1] : Math.max(14, w - 8));
+    i < widths.length - 1 ? widths[i + 1] : Math.max(12, w - 6));
 
   const BAND_H = 64;            // px per band
   const FUNNEL_W = 520;         // funnel column width
