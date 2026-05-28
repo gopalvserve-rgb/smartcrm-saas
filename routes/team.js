@@ -45,7 +45,7 @@ async function api_team_liveStatus(token, _payload) {
       // Only the last 30 min is enough for on-call / wrapping detection.
       const cutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
       const r = await db.query(
-        `SELECT id, user_id, event_type, phone, created_at
+        `SELECT id, user_id, event, phone, created_at
            FROM call_events
           WHERE created_at >= $1
           ORDER BY created_at DESC
@@ -75,7 +75,7 @@ async function api_team_liveStatus(token, _payload) {
   // wider window so 'Offline' / 'Idle' rows can say 'last call at <time>'.
   const lastCallByUser = await _safe(async () => {
     const r = await db.query(
-      `SELECT DISTINCT ON (user_id) user_id, phone, event_type, created_at
+      `SELECT DISTINCT ON (user_id) user_id, phone, event, created_at
          FROM call_events
         WHERE user_id IS NOT NULL
           AND created_at >= NOW() - INTERVAL '7 days'
@@ -131,11 +131,11 @@ async function api_team_liveStatus(token, _payload) {
       state = 'on_break';
     }
     // 2. On-call detection
-    else if (lastCall && /^(dial_requested|incoming_ringing|answered|dialing|ringing)$/.test(String(lastCall.event_type))) {
+    else if (lastCall && /^(outgoing_call|incoming_ringing|call_answered|dial_requested|answered|dialing|ringing)$/.test(String(lastCall.event))) {
       // No newer end?
       const newerEnd = calls.find(e =>
         new Date(e.created_at).getTime() > new Date(lastCall.created_at).getTime()
-        && /^(ended|missed|hangup|completed|disconnected)$/.test(String(e.event_type))
+        && /^(call_ended|ended|missed|hangup|completed|disconnected)$/.test(String(e.event))
       );
       if (!newerEnd) {
         state = 'on_call';
@@ -147,7 +147,7 @@ async function api_team_liveStatus(token, _payload) {
     if (state === 'idle') {
       // 3. Wrapping up: just-ended call in last 120s
       const endedRecent = calls.find(e =>
-        /^(ended|missed|hangup|completed|disconnected)$/.test(String(e.event_type))
+        /^(call_ended|ended|missed|hangup|completed|disconnected)$/.test(String(e.event))
         && (now - new Date(e.created_at).getTime()) < 120 * 1000
       );
       if (endedRecent) {
@@ -188,7 +188,7 @@ async function api_team_liveStatus(token, _payload) {
       sub,
       last_call_at: lc ? new Date(lc.created_at).toISOString() : null,
       last_call_phone: lc ? (lc.phone || '') : '',
-      last_call_event: lc ? String(lc.event_type || '') : ''
+      last_call_event: lc ? String(lc.event || '') : ''
     };
   });
 
