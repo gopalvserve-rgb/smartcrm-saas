@@ -13516,17 +13516,29 @@ async function wbChat() {
   }
 
   // Initial render + auto-poll
+  // WA_CHAT_REFRESH_SLOWDOWN_v1 — user reported visible refresh/flash every
+  // ~5s on the chat page (8s list + 4s thread were running concurrently).
+  // Even though both have fingerprint guards, the thread one fires every
+  // 4s and on EVERY status-update (delivered_at/read_at) it rebuilds the
+  // entire log via innerHTML='', causing visible flicker. Bumped to
+  // 20s/15s respectively — still feels live for new inbound messages
+  // (push notification surfaces those instantly), but no more constant
+  // background re-render.
   await renderThreadList();
   window._wbChatTimers.threadList = setInterval(() => {
     // Pause polling when the tab is hidden — saves battery on mobile and
     // avoids piling up requests if the user steps away for an hour.
     if (document.visibilityState === 'hidden') return;
     renderThreadList().catch(() => {});
-  }, 8000);
+  }, 20000);
   window._wbChatTimers.activeThread = setInterval(() => {
     if (document.visibilityState === 'hidden') return;
+    // Skip refresh while user is actively typing in the compose box —
+    // a re-render mid-keystroke can blur the input and lose focus.
+    const composer = document.querySelector('.wb-chat-compose textarea, .wb-chat-compose input[type=text]');
+    if (composer && document.activeElement === composer) return;
     if (openPhone) renderActiveThread(false).catch(() => {});
-  }, 4000);
+  }, 15000);
 
   return wrap;
 }
