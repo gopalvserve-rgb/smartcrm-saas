@@ -715,6 +715,31 @@ async function openCreateTenant() {
   customEndInp.addEventListener('change', _refreshEndPreview);
   /* --- /BILL_PLAN_PICKER_v1 --- */
 
+  /* CREATE_TENANT_USERS_v1 (2026-05-28) — user cap + extra-user pricing.
+     - user_cap blank → backend auto-uses package quotas.users.limit
+     - extra-user charge is what we bill per user OVER the cap, per period. */
+  const userCapInp = h('input', { name: 'user_cap', type: 'number', min: '0', step: '1',
+    placeholder: 'leave blank → use package quota', style: { width: '100%' } });
+  form.appendChild(field('User cap (max active users)',
+    h('div', {},
+      userCapInp,
+      h('div', { class: 'muted', style: { fontSize: '.72rem', marginTop: '.2rem' } },
+        'Blank = use the package\'s built-in user limit. Set a number to override (custom plans, agency bundles, paid add-ons).')
+    )));
+
+  const extraInrInp = h('input', { name: 'user_extra_charge_inr', type: 'number', min: '0', step: '0.01',
+    placeholder: '0', value: '0', style: { width: '100%' } });
+  const extraPerSel = h('select', { name: 'user_extra_charge_period', style: { width: '100%' } },
+    h('option', { value: 'month' }, 'per month'),
+    h('option', { value: 'quarter' }, 'per quarter'),
+    h('option', { value: 'year' }, 'per year')
+  );
+  form.appendChild(field('Extra-user pricing (when tenant exceeds cap)',
+    h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '.5rem' } },
+      h('div', {}, h('div', { class: 'muted', style: { fontSize: '.7rem', marginBottom: '.2rem' } }, '₹ per extra user'),  extraInrInp),
+      h('div', {}, h('div', { class: 'muted', style: { fontSize: '.7rem', marginBottom: '.2rem' } }, 'billed'),                extraPerSel)
+    )));
+
   // Industry pack — selects a vertical-specific bundle. 'Generic' (default)
   // is the base CRM with no pack; picking a pack triggers its installer
   // (extra tables, seed data, statuses, custom fields) immediately after
@@ -788,7 +813,11 @@ async function _submitCreateTenant(form, pkgs, modal) {
     mark_paid:    fd.get('mark_paid') === 'on',
     start_date:   (fd.get('start_date') || '').toString().trim(),
     override_amount: overrideAmtRaw === '' ? null : Number(overrideAmtRaw),
-    override_end_date: customEndRaw || null
+    override_end_date: customEndRaw || null,
+    // CREATE_TENANT_USERS_v1 — user cap + extra-user pricing
+    user_cap: (() => { const v = (fd.get('user_cap') || '').toString().trim(); return v === '' ? null : Math.max(0, Math.floor(Number(v) || 0)); })(),
+    user_extra_charge_inr: Math.max(0, Number((fd.get('user_extra_charge_inr') || '0').toString().trim()) || 0),
+    user_extra_charge_period: (fd.get('user_extra_charge_period') || 'month').toString().trim()
   };
   try {
     const r = await api('api_saas_tenants_createManual', payload);

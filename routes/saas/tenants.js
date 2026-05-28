@@ -198,6 +198,18 @@ async function api_saas_tenants_createManual(token, payload) {
   }
   const amountOverride = (amountOverrideRaw != null && amountOverrideRaw !== '') ? Number(amountOverrideRaw) : null;
 
+  // CREATE_TENANT_USERS_v1 (2026-05-28) — user cap + extra-user pricing.
+  //   user_cap                  null/blank → backend uses package.quotas.users.limit
+  //   user_extra_charge_inr     ₹ billed per user OVER the cap
+  //   user_extra_charge_period  month | quarter | year
+  // All three optional; if blank/zero we don't write to the tenants row at all.
+  const _userCapRaw = p.user_cap;
+  const userCapOverride = (_userCapRaw == null || _userCapRaw === '' || isNaN(Number(_userCapRaw)))
+    ? null : Math.max(0, Math.floor(Number(_userCapRaw)));
+  const userExtraInr = Math.max(0, Number(p.user_extra_charge_inr) || 0);
+  const _VALID_PER = ['month', 'quarter', 'year'];
+  const userExtraPeriod = _VALID_PER.includes(String(p.user_extra_charge_period)) ? String(p.user_extra_charge_period) : 'month';
+
   // ---- 1. Create a synthetic signup row -------------------------
   const signupId = await control.insert('signups', {
     name, email, mobile, org_name: orgName,
@@ -242,13 +254,34 @@ async function api_saas_tenants_createManual(token, payload) {
     } catch (_) {}
   }
 
+  // CREATE_TENANT_USERS_v1 — apply user_cap + extra-user pricing if super-admin set any
+  if (userCapOverride != null || userExtraInr > 0) {
+    try {
+      await _ensureUserCapColumns();
+      await control.query(
+        `UPDATE tenants
+            SET user_cap = $1,
+                user_extra_charge_inr = $2,
+                user_extra_charge_period = $3,
+                updated_at = NOW()
+          WHERE id = $4`,
+        [userCapOverride, userExtraInr, userExtraPeriod, prov.tenant_id]
+      );
+    } catch (e) {
+      console.warn('[createManual] user-cap apply failed (non-fatal):', e.message);
+    }
+  }
+
   // ---- 4. Audit trail -----------------------------------------
   await control.insert('audit_log', {
     actor_type: 'super_admin', actor_id: me.id, actor_email: me.email,
     tenant_id: prov.tenant_id, event: 'tenant.created_manually',
     detail: JSON.stringify({
       slug: prov.slug, package: pkg.name, mark_paid: p.mark_paid !== false,
-      industry_pack: industryPack || 'generic'
+      industry_pack: industryPack || 'generic',
+      user_cap: userCapOverride,
+      user_extra_charge_inr: userExtraInr,
+      user_extra_charge_period: userExtraPeriod
     })
   });
 
