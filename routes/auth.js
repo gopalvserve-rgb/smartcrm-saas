@@ -33,6 +33,14 @@ async function api_login(email, password, meta) {
   }
 
   const token = signToken(user);
+  // TEAM_LIVE_LASTLOGIN_FIX_v1 — stamp last_login_at on every successful
+  // password login so the Live Team Status widget (and any other
+  // freshness check) can tell who's actually active.
+  setImmediate(async () => {
+    try {
+      await db.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
+    } catch (e) { console.warn('[auth] last_login_at update failed:', e.message); }
+  });
   setImmediate(async () => {
     try {
       const mailer = require('../utils/mailer');
@@ -74,6 +82,11 @@ async function api_login_otp_verify(challengeToken, otp, meta) {
   if (!totp.verify(user.totp_secret, otp)) throw new Error('Invalid 6-digit code — check your authenticator app');
 
   const token = signToken(user);
+  // TEAM_LIVE_LASTLOGIN_FIX_v1 — same stamp for the 2FA path.
+  setImmediate(async () => {
+    try { await db.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]); }
+    catch (e) { console.warn('[auth] last_login_at update failed (otp):', e.message); }
+  });
   return {
     token,
     user: {

@@ -106,10 +106,24 @@ async function api_team_liveStatus(token, _payload) {
     const att = attByUser[uid];
     const calls = callsByUser[uid] || [];
     const lastCall = calls[0];
+    const lc = lastCallByUser[uid];
     const lastLogin = u.last_login_at ? new Date(u.last_login_at).getTime() : 0;
 
+    // TEAM_LIVE_LASTLOGIN_FIX_v1 — derive an effective login signal:
+    //   1) users.last_login_at (the column we now stamp on login)
+    //   2) attendance.check_in today (mobile users may not POST login)
+    //   3) any call_event for this user in the wider 7-day window
+    //      (means they were active at some point)
+    let effectiveLogin = lastLogin;
+    if (!effectiveLogin && att && att.check_in) {
+      effectiveLogin = new Date(att.check_in).getTime();
+    }
+    if (!effectiveLogin && lc && lc.created_at) {
+      effectiveLogin = new Date(lc.created_at).getTime();
+    }
+
     let state = 'idle';
-    let since = lastLogin || null;
+    let since = effectiveLogin || null;
     let sub = '';
 
     // 1. On break wins over almost everything
@@ -148,21 +162,21 @@ async function api_team_liveStatus(token, _payload) {
         state = 'checked_out';
         since = new Date(att.check_out).getTime();
       }
-      // 5. No login today and no attendance → never / logged_out
-      else if (!lastLogin) {
+      // 5. No login signal at all → never_logged_in.
+      //    Else stale login + no attendance → logged_out (Offline).
+      else if (!effectiveLogin) {
         state = 'never_logged_in';
         since = null;
       }
-      else if (!att && (now - lastLogin) > 10 * 3600 * 1000) {
+      else if (!att && (now - effectiveLogin) > 10 * 3600 * 1000) {
         state = 'logged_out';
-        since = lastLogin;
+        since = effectiveLogin;
       }
       // Otherwise stays idle
     }
 
     summary[state] = (summary[state] || 0) + 1;
 
-    const lc = lastCallByUser[uid];
     return {
       id: uid,
       name: u.name || u.email || ('User #' + uid),
