@@ -1469,13 +1469,19 @@ VIEWS.dashboard = async (view) => {
   // layout pre-dates the call widgets. We tag the user in localStorage
   // so we never re-inject (lets them remove widgets if they want).
   try {
-    const injKey = '_callWidgetsAutoInjected_' + ((CRM.user && CRM.user.id) || 'anon');
+    // TEAM_LIVE_PICKER_MISSING_v1 — bumped to v2 so existing users get the
+    // team-live widget auto-injected too (call widgets are idempotent: only
+    // added if not already present).
+    const injKey = '_dashAutoInjected_v2_' + ((CRM.user && CRM.user.id) || 'anon');
     if (!localStorage.getItem(injKey)) {
       const has = (t) => widgets.some(w => w.type === t);
       const additions = [];
       if (!has('call_activity_summary')) additions.push({ id: 'auto-call-sum-' + Date.now(), type: 'call_activity_summary', size: 'medium' });
       if (!has('call_activity_topusers')) additions.push({ id: 'auto-call-top-' + Date.now(), type: 'call_activity_topusers', size: 'medium' });
       if (!has('call_activity_recent')) additions.push({ id: 'auto-call-rec-' + Date.now(), type: 'call_activity_recent', size: 'wide' });
+      // TEAM_LIVE_PICKER_MISSING_v1 — also auto-add the live team widget so it
+      // shows up without the user having to hunt for it in the picker.
+      if (!has('team_live_status')) additions.push({ id: 'auto-team-live-' + Date.now(), type: 'team_live_status', size: 'wide' });
       if (additions.length) {
         widgets = widgets.concat(additions);
         // Persist so the auto-add sticks across reloads
@@ -1701,7 +1707,8 @@ const WIDGET_LIBRARY = {
   // sticky dashboard + the regular Customise Dashboard picker. Pulls
   // its own data via api_team_liveStatus, so the host dashboard
   // doesn't need any extra fetch.
-  team_live_status: { title: '🟢 Live Team Status', group: 'Team',
+  team_live_status: { title: '🟢 Live Team Status (caller-wise)', group: 'Team',
+    description: 'Real-time who is on-call, on-break, idle, checked-out or logged-out — refreshes every 20s.',
     render: async (c, _cfg, _d, w) => {
       c.appendChild(h('h3', { style: { margin: '0 0 .4rem' } }, w.title || '🟢 Live Team Status'));
       const body = h('div', {});
@@ -19266,13 +19273,29 @@ function _automationFieldOptions() {
   return opts;
 }
 
+// AUTOMATION_RULES_v2_OPS — multi-operator condition rules.
+// Storage format on each part:
+//   field=value      equals
+//   field!=value     not equals
+//   field~value      contains
+//   field!~value     does not contain
+//   tag:value        legacy tag-equals (lead has tag)
+//   tag!:value       tag does NOT match
 function _parseAutomationCondition(str) {
   const rules = [];
   String(str || '').split(/\s*&&\s*/).forEach(p => {
-    if (!p.trim()) return;
-    const m = p.match(/^([a-zA-Z0-9_]+)\s*[=:]\s*(.*)$/);
+    const part = p.trim();
+    if (!part) return;
+    // Try operators longest-first so '!=' / '!~' / '!:' beat '=' / '~' / ':'.
+    let m, op = 'eq';
+    if ((m = part.match(/^([a-zA-Z0-9_]+)\s*!=\s*(.*)$/))) op = 'neq';
+    else if ((m = part.match(/^([a-zA-Z0-9_]+)\s*!~\s*(.*)$/))) op = 'ncontains';
+    else if ((m = part.match(/^([a-zA-Z0-9_]+)\s*!:\s*(.*)$/))) op = 'neq';
+    else if ((m = part.match(/^([a-zA-Z0-9_]+)\s*~\s*(.*)$/))) op = 'contains';
+    else if ((m = part.match(/^([a-zA-Z0-9_]+)\s*=\s*(.*)$/))) op = 'eq';
+    else if ((m = part.match(/^([a-zA-Z0-9_]+)\s*:\s*(.*)$/))) op = 'eq';
     if (!m) return;
-    rules.push({ field: m[1].trim(), value: m[2].trim() });
+    rules.push({ field: m[1].trim(), op, value: m[2].trim() });
   });
   return rules;
 }
@@ -19281,11 +19304,24 @@ function _serializeAutomationCondition(rules) {
   return rules
     .filter(r => r.field && String(r.value || '').trim() !== '')
     .map(r => {
-      const sep = r.field === 'tag' ? ':' : '=';
+      const op = r.op || 'eq';
+      const isTag = r.field === 'tag';
+      let sep = '=';
+      if (op === 'neq')       sep = isTag ? '!:' : '!=';
+      else if (op === 'contains')  sep = '~';
+      else if (op === 'ncontains') sep = '!~';
+      else                          sep = isTag ? ':' : '=';
       return r.field + sep + String(r.value).trim();
     })
     .join(' && ');
 }
+
+const _AUTO_OPS = [
+  { id: 'eq',        label: 'equals' },
+  { id: 'neq',       label: 'not equals' },
+  { id: 'contains',  label: 'contains' },
+  { id: 'ncontains', label: 'does not contain' }
+];
 
 function _wireAutomationConditionBuilder(initial) {
   const container = document.getElementById('auto-cond-builder');
@@ -19358,10 +19394,16 @@ function _wireAutomationConditionBuilder(initial) {
         style: { color: '#dc2626' },
         onclick: () => { rules.splice(idx, 1); render(); sync(); }
       }, '✕');
+      // AUTOMATION_RULES_v2_OPS — operator <select> between field and value.
+      if (!r.op) r.op = 'eq';
+      const opSel = h('select', { style: { minWidth: '140px' } },
+        ..._AUTO_OPS.map(o => h('option', { value: o.id, selected: o.id === r.op ? 'selected' : null }, o.label))
+      );
+      opSel.addEventListener('change', () => { r.op = opSel.value; sync(); });
       const row = h('div', {
         style: { display: 'flex', gap: '.4rem', alignItems: 'center', flexWrap: 'wrap',
                  background: '#f8fafc', padding: '.3rem .4rem', borderRadius: '6px' }
-      }, fieldSel, h('span', { class: 'muted', style: { fontSize: '.78rem' } }, 'equals'), valueEl, delBtn);
+      }, fieldSel, opSel, valueEl, delBtn);
       container.appendChild(row);
     });
   }
@@ -19373,7 +19415,7 @@ function _wireAutomationConditionBuilder(initial) {
   }
 
   addBtn && addBtn.addEventListener('click', () => {
-    rules.push({ field: 'status', value: '' });
+    rules.push({ field: 'status', op: 'eq', value: '' });
     render(); sync();
   });
   rawTog && rawTog.addEventListener('change', () => {

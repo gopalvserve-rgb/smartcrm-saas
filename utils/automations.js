@@ -55,29 +55,66 @@ async function fire(event, ctx) {
   }
 }
 
+// AUTOMATION_RULES_v2_OPS — recognise operators eq / neq / contains / ncontains.
+// Storage format on each part:
+//   field=value      equals
+//   field!=value     not equals
+//   field~value      contains
+//   field!~value     does not contain
+//   tag:value        legacy tag-equals (lead has tag)
+//   tag!:value       tag does NOT match
 function _matchesCondition(cond, ctx) {
   if (!cond) return true;
   const c = String(cond).trim();
   if (!c) return true;
-  // Simple syntax: field=value or field:value; multiple conditions joined by &&
   const parts = c.split(/\s*&&\s*/);
-  for (const p of parts) {
-    const [lhs, rhs] = p.split(/=|:/).map(s => s && s.trim());
+  for (const raw of parts) {
+    const part = String(raw || '').trim();
+    if (!part) continue;
+    // Detect operator longest-first.
+    let m, op = 'eq';
+    if ((m = part.match(/^([a-zA-Z0-9_]+)\s*!=\s*(.*)$/))) op = 'neq';
+    else if ((m = part.match(/^([a-zA-Z0-9_]+)\s*!~\s*(.*)$/))) op = 'ncontains';
+    else if ((m = part.match(/^([a-zA-Z0-9_]+)\s*!:\s*(.*)$/))) op = 'neq';
+    else if ((m = part.match(/^([a-zA-Z0-9_]+)\s*~\s*(.*)$/))) op = 'contains';
+    else if ((m = part.match(/^([a-zA-Z0-9_]+)\s*=\s*(.*)$/))) op = 'eq';
+    else if ((m = part.match(/^([a-zA-Z0-9_]+)\s*:\s*(.*)$/))) op = 'eq';
+    if (!m) continue;
+    const lhs = m[1].trim();
+    const rhs = String(m[2] || '').trim();
     if (!lhs) continue;
+
+    // Resolve the actual field value off the context.
+    let actual;
     if (lhs.startsWith('tag')) {
-      const tags = String(ctx.lead?.tags || '').toLowerCase().split(',').map(s => s.trim());
-      if (!tags.includes(String(rhs || '').toLowerCase())) return false;
+      const tags = String(ctx.lead?.tags || '').toLowerCase().split(',').map(s => s.trim()).filter(Boolean);
+      const want = rhs.toLowerCase();
+      const present = tags.includes(want);
+      // For tag: eq means "lead has tag", neq means "lead does NOT have tag",
+      // contains is the same as eq, ncontains is the same as neq.
+      const wantPresent = (op === 'eq' || op === 'contains');
+      if (wantPresent !== present) return false;
+      continue;
     } else if (lhs === 'status' || lhs === 'status_name') {
-      if (String(ctx.new_status?.name || ctx.lead?.status_name || '').toLowerCase() !== String(rhs || '').toLowerCase()) return false;
+      actual = String(ctx.new_status?.name || ctx.lead?.status_name || '');
     } else if (lhs === 'source') {
-      if (String(ctx.lead?.source || '').toLowerCase() !== String(rhs || '').toLowerCase()) return false;
+      actual = String(ctx.lead?.source || '');
     } else if (lhs === 'product') {
-      if (String(ctx.lead?.product_name || ctx.lead?.product || '').toLowerCase() !== String(rhs || '').toLowerCase()) return false;
+      actual = String(ctx.lead?.product_name || ctx.lead?.product || '');
     } else {
-      // Generic: lead[field]
-      const v = ctx.lead?.[lhs];
-      if (String(v || '').toLowerCase() !== String(rhs || '').toLowerCase()) return false;
+      actual = ctx.lead?.[lhs];
+      if (actual == null) actual = '';
+      actual = String(actual);
     }
+    const a = actual.toLowerCase();
+    const b = rhs.toLowerCase();
+    let ok = false;
+    if (op === 'eq')        ok = (a === b);
+    else if (op === 'neq')  ok = (a !== b);
+    else if (op === 'contains')  ok = a.includes(b);
+    else if (op === 'ncontains') ok = !a.includes(b);
+    else ok = (a === b);
+    if (!ok) return false;
   }
   return true;
 }
