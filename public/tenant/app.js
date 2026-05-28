@@ -1662,9 +1662,12 @@ VIEWS.dashboard = async (view) => {
     // TEAM_LIVE_PICKER_MISSING_v1 — bumped to v2 so existing users get the
     // team-live widget auto-injected too (call widgets are idempotent: only
     // added if not already present).
-    // TEAM_LIVE_TOP_v1 — bumped to v3 so existing users get the widget
-    // moved to the TOP of their dashboard if they hadn't already.
-    const injKey = '_dashAutoInjected_v3_' + ((CRM.user && CRM.user.id) || 'anon');
+    // TEAM_LIVE_TOP_v2_REPOSITION — bumped to v4 because v3 fired before
+    // the reposition logic landed, so users who ran v3 between the two
+    // deploys had the one-shot key set without actually getting moved.
+    // v4 re-runs once for everyone; new logic will splice + unshift any
+    // existing team_live_status to position 0.
+    const injKey = '_dashAutoInjected_v4_' + ((CRM.user && CRM.user.id) || 'anon');
     if (!localStorage.getItem(injKey)) {
       const has = (t) => widgets.some(w => w.type === t);
       const additions = [];
