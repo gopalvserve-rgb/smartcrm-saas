@@ -7941,7 +7941,7 @@ function _genericRenderCardGridPipeline(view, pipeline, allStatuses) {
       h('h2', { style: { margin: 0 }}, '\ud83d\udcc8 Lead Pipeline \u2014 New Lead To Sales'),
       h('p', { class: 'muted', style: { fontSize: '.82rem', margin: '.2rem 0 0' } }, 'Click any stage to expand and see the leads currently sitting in that stage. Click a lead row to open the full lead.')
     ),
-    h('button', { class: 'btn ghost sm', type: 'button', onclick: () => { window._rePipeForceKanban = true; VIEWS.pipeline(view); } }, '\ud83d\udcca Switch to Kanban view')
+    h('button', { class: 'btn ghost sm', type: 'button', onclick: () => { window._rePipeForceKanban = false; window._rePipeForceLegacyGrid = false; VIEWS.pipeline(view); } }, '📈 Switch to Funnel view')
   ));
 
   const sorted = [...(allStatuses || [])].sort((a, b) =>
@@ -8031,7 +8031,7 @@ function _reRenderCPProcessPipeline(view, pipeline, allStatuses) {
       h('h2', { style: { margin: 0 }}, '📈 Lead Pipeline — New Lead To Sales'),
       h('p', { class: 'muted', style: { fontSize: '.82rem', margin: '.2rem 0 0' } }, 'Click any stage to expand and see the leads currently sitting in that stage. Click a lead row to open the full lead with the 12-stage strip.')
     ),
-    h('button', { class: 'btn ghost sm', type: 'button', onclick: () => { window._rePipeForceKanban = true; VIEWS.pipeline(view); } }, '📊 Switch to Kanban view')
+    h('button', { class: 'btn ghost sm', type: 'button', onclick: () => { window._rePipeForceKanban = false; window._rePipeForceLegacyGrid = false; VIEWS.pipeline(view); } }, '📈 Switch to Funnel view')
   ));
 
   // 12-card grid
@@ -8190,8 +8190,88 @@ async function _renderPipelineFunnel(view) {
     )
   ));
 
+  // ───── Filter bar ─────
+  // Same pattern as the old VIEWS.pipeline so users have a familiar UX.
+  // Persists across funnel re-renders via window._funnelPicked.
+  window._funnelPicked = window._funnelPicked || {
+    from: '', to: '', sources: [], users: [], products: [], campaigns: [], statuses: []
+  };
+  const fp = window._funnelPicked;
+  // Warm campaigns cache on demand
+  if (!CRM.cache.campaigns) {
+    try { CRM.cache.campaigns = await api('api_campaigns_list'); } catch (_) { CRM.cache.campaigns = []; }
+  }
+  const _statuses = CRM.cache.statuses || [];
+  const _sources  = CRM.cache.sources  || [];
+  const _users    = CRM.cache.users    || [];
+  const _products = CRM.cache.products || [];
+  const _camps    = CRM.cache.campaigns || [];
+
+  const filterBar = h('div', { style: { display:'flex', alignItems:'center', flexWrap:'wrap', gap:'.4rem', marginBottom:'.85rem', padding:'.55rem .65rem', background:'#fff', border:'1px solid #e2e8f0', borderRadius:'10px' } });
+  filterBar.appendChild(h('span', { style: { fontSize:'.78rem', fontWeight:600, color:'#475569', marginRight:'.2rem' } }, '🔎 Filters:'));
+  const _dateFrom = h('input', { type:'date', class:'input', value: fp.from || '', style: { width:'140px', fontSize:'.8rem', padding:'.3rem .4rem' } });
+  const _dateTo   = h('input', { type:'date', class:'input', value: fp.to   || '', style: { width:'140px', fontSize:'.8rem', padding:'.3rem .4rem' } });
+  function _apply() {
+    fp.from = _dateFrom.value || '';
+    fp.to   = _dateTo.value   || '';
+    _renderPipelineFunnel(view);
+  }
+  _dateFrom.addEventListener('change', _apply);
+  _dateTo.addEventListener('change', _apply);
+  filterBar.appendChild(h('span', { style: { fontSize:'.72rem', color:'#64748b' } }, 'From'));
+  filterBar.appendChild(_dateFrom);
+  filterBar.appendChild(h('span', { style: { fontSize:'.72rem', color:'#64748b' } }, 'To'));
+  filterBar.appendChild(_dateTo);
+
+  if (typeof multiSelectDropdown === 'function') {
+    filterBar.appendChild(multiSelectDropdown({ label:'Status', allLabel:'Any status',
+      options: _statuses.map(s => ({ id: String(s.id), name: s.name })),
+      values:  fp.statuses || [],
+      onApply: (v) => { fp.statuses = v; _renderPipelineFunnel(view); }
+    }));
+    filterBar.appendChild(multiSelectDropdown({ label:'Source', allLabel:'Any source',
+      options: _sources.map(s => ({ id: s.name, name: s.name })),
+      values:  fp.sources || [],
+      onApply: (v) => { fp.sources = v; _renderPipelineFunnel(view); }
+    }));
+    filterBar.appendChild(multiSelectDropdown({ label:'Owner', allLabel:'All users',
+      options: _users.map(u => ({ id: String(u.id), name: u.name })),
+      values:  fp.users || [],
+      onApply: (v) => { fp.users = v; _renderPipelineFunnel(view); }
+    }));
+    filterBar.appendChild(multiSelectDropdown({ label:'Product', allLabel:'Any product',
+      options: _products.map(pr => ({ id: String(pr.id), name: pr.name })),
+      values:  fp.products || [],
+      onApply: (v) => { fp.products = v; _renderPipelineFunnel(view); }
+    }));
+    filterBar.appendChild(multiSelectDropdown({ label:'Campaign', allLabel:'Any campaign',
+      options: _camps.map(c => ({ id: String(c.id), name: c.name })),
+      values:  fp.campaigns || [],
+      onApply: (v) => { fp.campaigns = v; _renderPipelineFunnel(view); }
+    }));
+  }
+
+  const hasFilters = fp.from || fp.to || (fp.statuses && fp.statuses.length) || (fp.sources && fp.sources.length) || (fp.users && fp.users.length) || (fp.products && fp.products.length) || (fp.campaigns && fp.campaigns.length);
+  if (hasFilters) {
+    const clr = h('button', { class:'btn ghost', style: { fontSize:'.74rem', padding:'.3rem .55rem' },
+      onclick: () => { window._funnelPicked = { from:'', to:'', sources:[], users:[], products:[], campaigns:[], statuses:[] }; _renderPipelineFunnel(view); }
+    }, '✕ Clear all');
+    filterBar.appendChild(clr);
+  }
+  view.appendChild(filterBar);
+
+  // Build payload for backend
+  const funnelPayload = {};
+  if (fp.from) funnelPayload.from = fp.from;
+  if (fp.to)   funnelPayload.to   = fp.to;
+  if (fp.sources && fp.sources.length)   funnelPayload.source_ids   = fp.sources;
+  if (fp.users && fp.users.length)       funnelPayload.user_ids     = fp.users.map(Number).filter(Boolean);
+  if (fp.products && fp.products.length) funnelPayload.product_ids  = fp.products.map(Number).filter(Boolean);
+  if (fp.campaigns && fp.campaigns.length) funnelPayload.campaign_ids = fp.campaigns.map(Number).filter(Boolean);
+  if (fp.statuses && fp.statuses.length) funnelPayload.status_ids   = fp.statuses.map(Number).filter(Boolean);
+
   let data;
-  try { data = await api('api_pipeline_funnel', {}); }
+  try { data = await api('api_pipeline_funnel', funnelPayload); }
   catch (e) {
     view.appendChild(h('div', { class: 'error-box' }, 'Could not load funnel: ' + e.message));
     return;

@@ -100,6 +100,19 @@ async function api_pipeline_funnel(token, payload) {
     scopeSql += ` AND source = ANY($${ai++}::text[])`;
     args.push(p.source_ids.map(String));
   }
+  // PIPELINE_FUNNEL_FILTERS_v1 — product / campaign / status filters
+  if (Array.isArray(p.product_ids) && p.product_ids.length) {
+    scopeSql += ` AND product_id = ANY($${ai++}::int[])`;
+    args.push(p.product_ids.map(x => Number(x)).filter(Boolean));
+  }
+  if (Array.isArray(p.campaign_ids) && p.campaign_ids.length) {
+    scopeSql += ` AND campaign_id = ANY($${ai++}::int[])`;
+    args.push(p.campaign_ids.map(x => Number(x)).filter(Boolean));
+  }
+  if (Array.isArray(p.status_ids) && p.status_ids.length) {
+    scopeSql += ` AND status_id = ANY($${ai++}::int[])`;
+    args.push(p.status_ids.map(x => Number(x)).filter(Boolean));
+  }
 
   const r = await db.query(
     `SELECT id, status_id, value, last_status_change_at, created_at

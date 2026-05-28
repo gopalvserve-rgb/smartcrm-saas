@@ -92,6 +92,18 @@ SELECT * FROM (VALUES
 
   ('fix', 'Live Team widget — restore on tenants where it disappeared',
    'After earlier dashboard edits some tenants (shipuncle, others) lost the Live Team widget because the auto-inject one-shot localStorage flag had already fired against the v4 key. Bumped to v5 so it re-runs once for every user — if your saved layout doesn''t already include team_live_status it gets prepended back to the top of the dashboard. Tenants that explicitly removed it can do so again after this re-add.',
-   '#/dashboard', '🟢', NOW())
+   '#/dashboard', '🟢', NOW() - INTERVAL '15 minutes'),
+
+  ('feature', 'Pipeline funnel — filter bar',
+   'Pipeline page now has a filter bar above the funnel: Date From/To, Status, Source, Owner, Product and Campaign multi-select dropdowns plus an X Clear all button. Filters apply to KPIs, funnel bands and Won/Lost counts and are passed to the backend so the aggregator only counts matching leads.',
+   '#/pipeline', '🔎', NOW() - INTERVAL '5 minutes'),
+
+  ('fix', 'Pipeline — Switch back to Funnel view',
+   'Once you clicked Switch to Kanban there was no way to switch back to the funnel — the button on the Kanban view still said Switch to Kanban which did nothing. Replaced it with 📈 Switch to Funnel view that clears the force flag and re-renders the funnel.',
+   '#/pipeline', '🔄', NOW() - INTERVAL '2 minutes'),
+
+  ('modify', 'Pipeline funnel — minimum band width for readability',
+   'On heavily-skewed pipelines (e.g. 1072 New / 127 Contacted / 54 Qualified / 18 Negotiation / 15 Proposal) the lower bands were collapsing to under 100px wide and the labels were getting truncated. Raised the minimum band width to 38% so every label fits cleanly while the top band still renders at its real 100% so the funnel still narrows.',
+   '#/pipeline', '📐', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
