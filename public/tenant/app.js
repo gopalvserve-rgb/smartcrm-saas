@@ -9247,6 +9247,11 @@ async function openQuotationModal(qid, prefillLead) {
     } catch (_) {}
   })();
   const waBtn = h('button', { class: 'btn', disabled: qid ? null : 'disabled', title: 'Sends via Meta WhatsApp Cloud API. Pick an approved template on the left to send outside the 24h window.' }, '💬 Send by WhatsApp');
+  // QUOTE_WA_PERSONAL_v1 — second WA button that opens YOUR personal WhatsApp
+  // (Web or Desktop per Settings) with the customer chat + pre-filled
+  // quote message. Use whenever Meta API path can't deliver (template
+  // not approved, customer outside 24h window, etc).
+  const waPersonalBtn = h('button', { class: 'btn', style: { background: '#dcfce7', color: '#166534', borderColor: '#86efac' }, disabled: qid ? null : 'disabled', title: 'Opens YOUR own WhatsApp (Web or Desktop app per Settings) with the customer chat + message pre-filled. You tap Send manually — message goes from your number, not the API. Works even when Meta API path fails.' }, '📱 Send via My WhatsApp');
   const linkBtn = h('button', { class: 'btn ghost', disabled: qid ? null : 'disabled' }, '🔗 Public link');
 
   let currentId = qid || null;
@@ -9354,6 +9359,53 @@ async function openQuotationModal(qid, prefillLead) {
       waBtn.textContent = _origLabel;
     }
   };
+  // QUOTE_WA_PERSONAL_v1 — open rep's own WhatsApp with pre-filled quote msg
+  waPersonalBtn.onclick = async () => {
+    if (!phoneInp.value) return toast('Add customer phone first', 'err');
+    waPersonalBtn.disabled = true;
+    const _origLbl = waPersonalBtn.textContent;
+    waPersonalBtn.textContent = '⏳ Preparing…';
+    try {
+      await save();
+      let publicUrl = '';
+      try {
+        const u = await api('api_quotations_public_url', currentId);
+        publicUrl = u && u.url ? u.url : '';
+      } catch (_) {}
+      const cust = (nameInp.value || '').trim() || 'there';
+      const quoteN = (q.number || '').toString().trim();
+      const totalT = (totalsLine && totalsLine.textContent) || '';
+      const totalMatch = totalT.match(/Total[^₹]*₹\s*([\d.,]+)/);
+      const total = totalMatch ? totalMatch[1] : '';
+      const lines = [];
+      lines.push('Hi ' + cust + ',');
+      lines.push('');
+      lines.push('Please find your quotation' + (quoteN ? ' ' + quoteN : '') + (total ? ' — Total ₹' + total : '') + '.');
+      if (publicUrl) {
+        lines.push('');
+        lines.push('📄 View / Download PDF:');
+        lines.push(publicUrl);
+      }
+      lines.push('');
+      lines.push('Let me know if you have any questions.');
+      const text = lines.join('\n');
+      const dial = String(phoneInp.value).replace(/\D/g, '');
+      if (!dial) { toast('Customer phone is not a valid number', 'err'); return; }
+      window._waOpenLink(dial, text);
+      try {
+        if (q.lead_id) {
+          api('api_leads_addRemark', q.lead_id, { remark: '📱 Quote ' + (quoteN || '') + ' sent via personal WhatsApp to ' + dial }).catch(() => {});
+        }
+      } catch (_) {}
+      toast('📱 Your WhatsApp opened with the quote pre-filled — tap Send to deliver it from your number.', 'ok');
+    } catch (e) {
+      toast('❌ ' + e.message, 'err');
+    } finally {
+      waPersonalBtn.disabled = false;
+      waPersonalBtn.textContent = _origLbl;
+    }
+  };
+
   linkBtn.onclick = async () => {
     if (!currentId) await save();
     try { const u = await api('api_quotations_public_url', currentId); window.open(u.url, '_blank'); }
@@ -9373,7 +9425,7 @@ async function openQuotationModal(qid, prefillLead) {
   };
 
   card.appendChild(h('div', { class: 'q-actions', style: { display: 'flex', gap: '.5rem', marginTop: '1rem', justifyContent: 'space-between', flexWrap: 'wrap' } },
-    h('div', { class: 'q-actions-left', style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap', alignItems: 'center' } }, saveBtn, pdfBtn, emailBtn, h('span', { style: { fontSize: '.78rem', color: '#64748b' } }, 'WA Template:'), waTplSel, waBtn, linkBtn),
+    h('div', { class: 'q-actions-left', style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap', alignItems: 'center' } }, saveBtn, pdfBtn, emailBtn, h('span', { style: { fontSize: '.78rem', color: '#64748b' } }, 'WA Template:'), waTplSel, waBtn, waPersonalBtn, linkBtn),
     h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Close')
   ));
   recompute();
