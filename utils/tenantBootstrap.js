@@ -170,10 +170,23 @@ const SCHEMA_MIGRATIONS = [
       id          SERIAL PRIMARY KEY,
       user_id     INTEGER NOT NULL,
       token       TEXT NOT NULL UNIQUE,
+      platform    TEXT,
+      ua          TEXT,
       device_info TEXT,
-      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      registered_at TIMESTAMPTZ DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS idx_fcm_tokens_user ON fcm_tokens(user_id);
+  ` },
+  // FCM_TOKENS_HEAL_v2 — for older tenants whose fcm_tokens table was
+  // created BEFORE the platform/ua columns existed. ALTER ADD COLUMN
+  // IF NOT EXISTS is idempotent — no-op on healthy tenants, heals
+  // the rest. Runs on every tenant bootstrap so it catches drift.
+  { name: '2026_05_fcm_tokens_add_cols', sql: `
+    ALTER TABLE fcm_tokens ADD COLUMN IF NOT EXISTS platform TEXT;
+    ALTER TABLE fcm_tokens ADD COLUMN IF NOT EXISTS ua TEXT;
+    ALTER TABLE fcm_tokens ADD COLUMN IF NOT EXISTS device_info TEXT;
+    ALTER TABLE fcm_tokens ADD COLUMN IF NOT EXISTS registered_at TIMESTAMPTZ DEFAULT NOW();
   ` },
 ];
 
