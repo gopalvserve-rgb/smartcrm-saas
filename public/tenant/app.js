@@ -1815,12 +1815,13 @@ VIEWS.dashboard = async (view) => {
     // TEAM_LIVE_PICKER_MISSING_v1 — bumped to v2 so existing users get the
     // team-live widget auto-injected too (call widgets are idempotent: only
     // added if not already present).
-    // TEAM_LIVE_TOP_v2_REPOSITION — bumped to v4 because v3 fired before
-    // the reposition logic landed, so users who ran v3 between the two
-    // deploys had the one-shot key set without actually getting moved.
-    // v4 re-runs once for everyone; new logic will splice + unshift any
-    // existing team_live_status to position 0.
-    const injKey = '_dashAutoInjected_v4_' + ((CRM.user && CRM.user.id) || 'anon');
+    // TEAM_LIVE_VISIBILITY_v5 — user reports widget missing on some tenants
+    // (shipuncle etc) after earlier injections. Their saved layouts were
+    // mutated (widget removed) but localStorage still had v4 set, so the
+    // auto-add never re-ran. Bumping to v5 forces one more re-injection
+    // across all users — if their server-side widgets array doesn't
+    // include team_live_status we prepend it again.
+    const injKey = '_dashAutoInjected_v5_' + ((CRM.user && CRM.user.id) || 'anon');
     if (!localStorage.getItem(injKey)) {
       const has = (t) => widgets.some(w => w.type === t);
       const additions = [];

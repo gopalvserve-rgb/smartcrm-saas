@@ -88,6 +88,10 @@ SELECT * FROM (VALUES
 
   ('fix', 'Live Team widget — empty state',
    'On some tenants the Live Team widget showed only the header with an empty body. Now it renders one of three meaningful messages: an error pill if the API returns nothing, a setup hint if the route is missing, or a friendly No team activity right now message when no users have logged in or made a call recently.',
-   '#/dashboard', '🌙', NOW())
+   '#/dashboard', '🌙', NOW() - INTERVAL '5 minutes'),
+
+  ('fix', 'Live Team widget — restore on tenants where it disappeared',
+   'After earlier dashboard edits some tenants (shipuncle, others) lost the Live Team widget because the auto-inject one-shot localStorage flag had already fired against the v4 key. Bumped to v5 so it re-runs once for every user — if your saved layout doesn''t already include team_live_status it gets prepended back to the top of the dashboard. Tenants that explicitly removed it can do so again after this re-add.',
+   '#/dashboard', '🟢', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
