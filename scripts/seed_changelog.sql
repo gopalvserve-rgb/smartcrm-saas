@@ -60,6 +60,10 @@ SELECT * FROM (VALUES
 
   ('modify', 'Team Live — richer per-user lines',
    'Cards now show role next to name, plus a contextual tail line: ''with +911206...'' for active calls, ''Last activity 5:14 pm'' or ''Last dialed 5:19 pm'' for everyone else.',
-   '#/dashboard', '📞', NOW() - INTERVAL '2 hours')
+   '#/dashboard', '📞', NOW() - INTERVAL '2 hours'),
+
+  ('feature', 'Industry pack fields in Automation rules',
+   'Edit Automation Condition rule-builder now exposes Enrollment status / Fee paid % / Has overdue fee / Parent phone when the Education pack is installed, and Booking stage / Has active booking / Unit type / Demand overdue when the Real Estate pack is installed. You can build automations that fire only for specific pack states.',
+   '#/automation', '🧩', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);

@@ -19806,6 +19806,22 @@ function _automationFieldOptions() {
     { key: 'product', label: 'Product',       kind: 'product' },
     { key: 'tag',     label: 'Tag',           kind: 'tag'     }
   ];
+  // PACK_PARITY_v1 — surface pack-specific fields when the matching
+  // industry pack is installed. Backend matcher already handles them
+  // via the generic `lead.<key>` lookup path.
+  const packs = (CRM && CRM.installedPacks) || new Set();
+  if (packs.has && packs.has('education')) {
+    opts.push({ key: 'enrollment_status', label: '🎓 Enrollment status',  kind: 'text' });
+    opts.push({ key: 'fee_paid_pct',      label: '🎓 Fee paid %',          kind: 'number' });
+    opts.push({ key: 'has_overdue_fee',   label: '🎓 Has overdue fee',     kind: 'bool' });
+    opts.push({ key: 'parent_phone',      label: '🎓 Parent phone present', kind: 'bool' });
+  }
+  if (packs.has && packs.has('realestate')) {
+    opts.push({ key: 'booking_stage',     label: '🏢 Booking stage',       kind: 'text' });
+    opts.push({ key: 'has_active_booking', label: '🏢 Has active booking', kind: 'bool' });
+    opts.push({ key: 're_unit_type',      label: '🏢 Unit type',           kind: 'text' });
+    opts.push({ key: 'demand_overdue',    label: '🏢 Demand overdue',      kind: 'bool' });
+  }
   const cfList = (CRM && CRM.cache && CRM.cache.customFields) || [];
   cfList.filter(c => Number(c.is_active) !== 0 && c.key).forEach(c => {
     opts.push({ key: String(c.key), label: 'CF · ' + (c.label || c.key), kind: 'cf', cf: c });
