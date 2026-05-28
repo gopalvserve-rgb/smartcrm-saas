@@ -2483,7 +2483,37 @@ async function boot() {
   }
 
 // ── Lead-source & Google Sheet webhook endpoints ────────────────────────────
+// INDIAMART_WEBHOOK_v1 (2026-05-28): always log every hit on /hook/leadsource/*
+// to control.error_logs BEFORE auth/tenant routing so we can debug 401s
+// and wrong-URL pokes. IndiaMart in particular sometimes calls the URL
+// with GET during their "Test" verification — we now answer those with
+// a friendly 200 OK so the test passes while still logging the visit.
+app.get('/hook/leadsource/:source/:key', (req, res) => {
+  try {
+    errorLogs.logError({
+      source: 'leadsource-ping',
+      severity: 'info',
+      message: 'GET ping on /hook/leadsource/' + req.params.source + ' (test/verification)',
+      stack: 'method=GET key=' + String(req.params.key || '').slice(0, 4) + '... ua=' + (req.get('user-agent') || '').slice(0, 80)
+    }).catch(() => {});
+  } catch (_) {}
+  return res.json({ ok: true, msg: 'leadsource endpoint reachable. Send a POST with JSON body to push leads.', source: req.params.source });
+});
+
 app.post('/hook/leadsource/:source/:key', (req, res) => {
+  // INDIAMART_WEBHOOK_v1 — always log the incoming POST attempt FIRST so
+  // even a wrong-key 401 leaves a breadcrumb the super-admin can see.
+  try {
+    const keyShown = String(req.params.key || '').slice(0, 4) + '...' + String(req.params.key || '').slice(-4);
+    const bodyPreview = JSON.stringify(req.body || {}).slice(0, 800);
+    errorLogs.logError({
+      source: 'leadsource-attempt',
+      severity: 'info',
+      message: 'POST /hook/leadsource/' + req.params.source + ' key=' + keyShown,
+      stack: 'body=' + bodyPreview + ' ua=' + (req.get('user-agent') || '').slice(0, 80) + ' ip=' + (req.ip || '')
+    }).catch(() => {});
+  } catch (_) {}
+
   req.body.api_key = req.params.key;
   req.body._hookSource = req.params.source;
   // Pass the actual handler function — earlier code passed `next` and
