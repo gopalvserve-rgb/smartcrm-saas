@@ -163,6 +163,22 @@ async function _ensurePushSchema() {
   if (pool && _pushEnsuredPools.has(pool)) return;
   await ensureSchema();
   if (pool) _pushEnsuredPools.add(pool);
+  // FCM_REGISTER_LOG_v1 — observability: every api_fcm_register call logs here
+  try {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS fcm_register_log (
+        id BIGSERIAL PRIMARY KEY,
+        user_id INTEGER,
+        attempted_at TIMESTAMPTZ DEFAULT NOW(),
+        success SMALLINT DEFAULT 0,
+        error_text TEXT,
+        token_prefix TEXT,
+        platform TEXT,
+        ua TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_fcm_log_user_time ON fcm_register_log(user_id, attempted_at DESC);
+    `);
+  } catch (_) {}
 }
 
 async function api_push_subscribe(token, subscription, ua) {
@@ -207,23 +223,31 @@ async function api_push_unsubscribe(token, endpoint) {
  */
 async function api_fcm_register(token, fcmToken, platform, ua) {
   const me = await authUser(token);
+  const tokenPrefix = (fcmToken || '').slice(0, 14);
   if (!fcmToken || typeof fcmToken !== 'string' || fcmToken.length < 20) {
+    // FCM_REGISTER_LOG_v1 — log even invalid attempts so we can see if the
+    // APK is even reaching here. Best-effort, never blocks.
+    try { await _ensurePushSchema(); await db.query("INSERT INTO fcm_register_log (user_id, success, error_text, token_prefix, platform, ua) VALUES ($1, 0, $2, $3, $4, $5)", [me.id, 'invalid token (length=' + (fcmToken || '').length + ')', tokenPrefix, String(platform || ''), String(ua || '').slice(0, 250)]); } catch (_) {}
     throw new Error('Invalid FCM token');
   }
-  // Self-heal on tenants migrated before fcm_tokens was added — the
-  // ensure-schema helper creates the table on the current pool if it
-  // doesn't exist yet, so subscribe + register both work without a
-  // separate Re-apply schema step.
   await _ensurePushSchema();
-  await db.query(`
-    INSERT INTO fcm_tokens (user_id, token, platform, ua)
-    VALUES ($1, $2, $3, $4)
-    ON CONFLICT (token) DO UPDATE
-    SET user_id = EXCLUDED.user_id,
-        platform = EXCLUDED.platform,
-        ua = EXCLUDED.ua
-  `, [me.id, fcmToken, String(platform || 'android'), String(ua || '').slice(0, 250)]);
-  return { ok: true };
+  console.log('[fcm-reg] user=' + me.id + ' tokenPrefix=' + tokenPrefix + ' platform=' + platform);
+  try {
+    await db.query(`
+      INSERT INTO fcm_tokens (user_id, token, platform, ua)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (token) DO UPDATE
+      SET user_id = EXCLUDED.user_id,
+          platform = EXCLUDED.platform,
+          ua = EXCLUDED.ua
+    `, [me.id, fcmToken, String(platform || 'android'), String(ua || '').slice(0, 250)]);
+    try { await db.query("INSERT INTO fcm_register_log (user_id, success, token_prefix, platform, ua) VALUES ($1, 1, $2, $3, $4)", [me.id, tokenPrefix, String(platform || ''), String(ua || '').slice(0, 250)]); } catch (_) {}
+    return { ok: true };
+  } catch (e) {
+    console.warn('[fcm-reg] FAILED user=' + me.id + ' err=' + e.message);
+    try { await db.query("INSERT INTO fcm_register_log (user_id, success, error_text, token_prefix, platform, ua) VALUES ($1, 0, $2, $3, $4, $5)", [me.id, String(e.message || e).slice(0, 500), tokenPrefix, String(platform || ''), String(ua || '').slice(0, 250)]); } catch (_) {}
+    throw e;
+  }
 }
 
 async function api_fcm_unregister(token, fcmToken) {
@@ -478,6 +502,28 @@ async function api_fcm_userDiag(token) {
     cause = 'OK — ' + myTokens + ' token(s) registered for you';
     nextSteps = '';
   }
+  // FCM_REGISTER_LOG_v1 — surface recent register attempts so the user can
+  // see exactly WHY registration failed (or whether the APK is even calling).
+  let recentAttempts = [];
+  try {
+    const r = await db.query("SELECT attempted_at, success, error_text, token_prefix, platform FROM fcm_register_log WHERE user_id = $1 ORDER BY attempted_at DESC LIMIT 5", [me.id]);
+    recentAttempts = r.rows;
+  } catch (_) {}
+  // If we have attempts but no saved token, surface the most recent error
+  if (myTokens === 0 && recentAttempts.length) {
+    const lastFail = recentAttempts.find(a => Number(a.success) !== 1);
+    if (lastFail && lastFail.error_text) {
+      cause = 'Last APK register attempt failed: ' + lastFail.error_text;
+      nextSteps = 'This means the APK IS reaching the server but the database insert failed. Send this to support: "' + lastFail.error_text + '"';
+    } else if (recentAttempts.every(a => Number(a.success) === 1)) {
+      // Successful inserts but token_count=0 — someone DELETE'd the rows. Re-register.
+      cause = 'Token rows were saved then deleted — usually an APK uninstall or token rotation.';
+      nextSteps = 'Open the APK and stay on it for 2-3 minutes — auto-heal will re-register.';
+    }
+  } else if (myTokens === 0 && recentAttempts.length === 0) {
+    cause = 'The APK has NEVER attempted to register an FCM token for this user.';
+    nextSteps = 'Likely cause: (a) APK notification permission denied (phone Settings → Apps → Lead CRM → Notifications → Allow), or (b) APK is running an old build that pre-dates FCM register code, or (c) APK is logged into a DIFFERENT tenant. Open APK → log out → log into bhumija specifically.';
+  }
   return {
     ok: myTokens > 0 && fcmInitOk,
     my_token_count: myTokens,
@@ -489,7 +535,8 @@ async function api_fcm_userDiag(token) {
     user_id: me.id,
     user_name: me.name,
     cause: cause,
-    next_steps: nextSteps
+    next_steps: nextSteps,
+    recent_attempts: recentAttempts
   };
 }
 

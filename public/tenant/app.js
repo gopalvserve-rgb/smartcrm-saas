@@ -11626,10 +11626,15 @@ async function callViaMobile(lead) {
       let detail = '';
       try {
         const diag = await api('api_fcm_userDiag');
-        if (diag && diag.cause) detail = '\n\n' + diag.cause + (diag.next_steps ? '\n\n' + diag.next_steps : '');
-        // Also offer a one-click modal so the user can read it without dismissing
+        let attemptsStr = '';
+        if (diag && Array.isArray(diag.recent_attempts) && diag.recent_attempts.length) {
+          attemptsStr = '\n\nRecent APK register attempts:\n' + diag.recent_attempts.map(a => '• ' + (a.attempted_at || '?') + ' — ' + (Number(a.success) === 1 ? 'SUCCESS' : ('FAILED: ' + (a.error_text || 'unknown'))) + ' (prefix ' + (a.token_prefix || '?') + ')').join('\n');
+        } else if (diag && diag.my_token_count === 0) {
+          attemptsStr = '\n\nRecent APK register attempts: NONE (the APK never called the register endpoint for this user)';
+        }
+        if (diag && diag.cause) detail = '\n\n' + diag.cause + (diag.next_steps ? '\n\n' + diag.next_steps : '') + attemptsStr;
         if (typeof openInfoModal === 'function' && diag && !diag.ok) {
-          openInfoModal('📱 Mobile push not ready', (diag.cause || 'Unknown issue') + (diag.next_steps ? '\n\n' + diag.next_steps : ''));
+          openInfoModal('📱 Mobile push not ready', (diag.cause || 'Unknown issue') + (diag.next_steps ? '\n\n' + diag.next_steps : '') + attemptsStr);
           return;
         }
       } catch (_) {}
