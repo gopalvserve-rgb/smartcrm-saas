@@ -149,7 +149,7 @@ const SCHEMA = {
     json: []
   },
   statuses: {
-    columns: ['name', 'color', 'sort_order', 'is_final'],
+    columns: ['name', 'color', 'sort_order', 'is_final', 'stage'],
     json: []
   },
   roles: {

@@ -68,6 +68,10 @@ SELECT * FROM (VALUES
 
   ('feature', 'Universal pipeline stages on every Status',
    'Settings → Statuses now has a 🚦 Stage column. Map each of your tenant statuses to one of 7 universal stages: Fresh Lead, Attempted / Contacted, Connected & Qualified, Negotiation, Proposal / Payment Link Sent, Won, Lost. Phase 2 (coming next) will use these to power a new funnel pipeline view + Dashboard widget that works the same across every tenant and pack.',
-   '#/settings/statuses', '🚦', NOW())
+   '#/settings/statuses', '🚦', NOW() - INTERVAL '20 minutes'),
+
+  ('fix', 'Status stage save now actually persists',
+   'When you picked a Stage and clicked save, the toast said Saved but the value was silently dropped because db/pg.js _serialize() filters every column against a hard-coded whitelist that did not include the brand-new stage column. Fixed both layers — schema whitelist plus a raw SQL belt-and-braces UPDATE in the route. Existing mappings now stick across refresh.',
+   '#/settings/statuses', '🐛', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);

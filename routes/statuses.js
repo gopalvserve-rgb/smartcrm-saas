@@ -36,8 +36,20 @@ async function api_statuses_save(token, s) {
     is_final: Number(s.is_final) || 0,
     stage: PIPE_STAGES.includes(String(s.stage || '').toLowerCase()) ? String(s.stage).toLowerCase() : null
   };
-  if (s.id) { await db.update('statuses', s.id, payload); return { id: Number(s.id) }; }
+  if (s.id) {
+    await db.update('statuses', s.id, payload);
+    // PIPELINE_STAGE_SAVE_FIX_v1 — belt-and-braces: write `stage` via raw
+    // SQL too in case an older db/pg.js (deployed mid-rollout) still has
+    // the old column whitelist that drops `stage`.
+    try {
+      await db.query('UPDATE statuses SET stage = $1 WHERE id = $2', [payload.stage, Number(s.id)]);
+    } catch (e) { console.warn('[statuses] raw stage update failed:', e.message); }
+    return { id: Number(s.id) };
+  }
   const id = await db.insert('statuses', payload);
+  try {
+    if (payload.stage) await db.query('UPDATE statuses SET stage = $1 WHERE id = $2', [payload.stage, Number(id)]);
+  } catch (e) { console.warn('[statuses] raw stage insert update failed:', e.message); }
   return { id };
 }
 async function api_statuses_delete(token, id) {
