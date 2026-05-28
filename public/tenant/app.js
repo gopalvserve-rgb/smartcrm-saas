@@ -1415,6 +1415,196 @@ function navigateTo(id) {
 
 const VIEWS = {};
 
+/* ---------------- Date-range presets (DATE_PRESETS_v1) ---------------- */
+/*
+ * window._attachDatePresets(fromInp, toInp, opts)
+ *   Drops a chip bar (Today / Yesterday / Last 7d / Last 30d / This Month /
+ *   Last Month / Custom + ⭐ Save default) right before the supplied two
+ *   <input type="date"> elements and wires them up.
+ *
+ * opts:
+ *   key       — namespace for the saved default (per-page).
+ *               Defaults to 'global'.
+ *   apply()   — optional callback fired after a chip sets new values
+ *               (the input change events are already dispatched).
+ *   storageKey — full localStorage key override.
+ */
+(function () {
+  function _ymd(d) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return y + '-' + m + '-' + dd;
+  }
+  function _today()    { return new Date(); }
+  function _ago(days)  { const d = _today(); d.setDate(d.getDate() - days); return d; }
+  function _monthStart(offsetMonths) {
+    const n = _today();
+    return new Date(n.getFullYear(), n.getMonth() + (offsetMonths || 0), 1);
+  }
+  function _monthEnd(offsetMonths) {
+    const n = _today();
+    return new Date(n.getFullYear(), n.getMonth() + (offsetMonths || 0) + 1, 0);
+  }
+  const PRESETS = [
+    { id: 'today',     label: 'Today',       range: () => ({ from: _today(),       to: _today() }) },
+    { id: 'yest',      label: 'Yesterday',   range: () => ({ from: _ago(1),        to: _ago(1)  }) },
+    { id: 'w7',        label: 'Last 7 days', range: () => ({ from: _ago(6),        to: _today() }) },
+    { id: 'm30',       label: 'Last 30 days',range: () => ({ from: _ago(29),       to: _today() }) },
+    { id: 'mtd',       label: 'This month',  range: () => ({ from: _monthStart(0), to: _today() }) },
+    { id: 'lastmonth', label: 'Last month',  range: () => ({ from: _monthStart(-1),to: _monthEnd(-1) }) },
+    { id: 'all',       label: 'All time',    range: () => ({ from: null,           to: null }) }
+  ];
+
+  function _fire(inp) {
+    try { inp.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {}
+    try { inp.dispatchEvent(new Event('input',  { bubbles: true })); } catch (_) {}
+  }
+  function _setRange(fromInp, toInp, range) {
+    const fv = range.from ? _ymd(range.from) : '';
+    const tv = range.to   ? _ymd(range.to)   : '';
+    if (fromInp) fromInp.value = fv;
+    if (toInp)   toInp.value   = tv;
+    if (fromInp) _fire(fromInp);
+    if (toInp)   _fire(toInp);
+  }
+  function _detectActive(fromInp, toInp) {
+    const fv = (fromInp && fromInp.value) || '';
+    const tv = (toInp   && toInp.value)   || '';
+    if (!fv && !tv) return 'all';
+    for (const p of PRESETS) {
+      const r = p.range();
+      const wantF = r.from ? _ymd(r.from) : '';
+      const wantT = r.to   ? _ymd(r.to)   : '';
+      if (wantF === fv && wantT === tv) return p.id;
+    }
+    return 'custom';
+  }
+
+  window._attachDatePresets = function (fromInp, toInp, opts) {
+    if (!fromInp || !toInp) return null;
+    opts = opts || {};
+    const key = opts.storageKey || ('crm_default_daterange:' + (opts.key || 'global'));
+
+    const bar = document.createElement('div');
+    bar.className = 'date-preset-bar';
+    bar.style.cssText = [
+      'display:flex','align-items:center','flex-wrap:wrap',
+      'gap:.35rem','margin:.25rem 0 .5rem',
+      'padding:.4rem .55rem','background:#f8fafc',
+      'border:1px solid #e2e8f0','border-radius:10px'
+    ].join(';');
+
+    const chipBtns = {};
+    function paint(activeId) {
+      Object.entries(chipBtns).forEach(([id, b]) => {
+        const on = id === activeId;
+        b.style.background = on ? '#4f46e5' : '#fff';
+        b.style.color      = on ? '#fff'    : '#0f172a';
+        b.style.borderColor = on ? '#4f46e5' : '#cbd5e1';
+        b.style.fontWeight  = on ? '600'    : '500';
+      });
+    }
+    function makeChip(p) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = p.label;
+      b.style.cssText = [
+        'padding:.28rem .65rem','font-size:.78rem',
+        'border:1px solid #cbd5e1','border-radius:999px',
+        'background:#fff','color:#0f172a','cursor:pointer',
+        'transition:all .15s ease'
+      ].join(';');
+      b.addEventListener('click', () => {
+        _setRange(fromInp, toInp, p.range());
+        paint(p.id);
+        if (typeof opts.apply === 'function') { try { opts.apply(); } catch (_) {} }
+      });
+      chipBtns[p.id] = b;
+      return b;
+    }
+
+    const label = document.createElement('span');
+    label.textContent = '📅';
+    label.style.cssText = 'font-size:.9rem;margin-right:.15rem';
+    bar.appendChild(label);
+
+    PRESETS.forEach(p => bar.appendChild(makeChip(p)));
+
+    const custom = document.createElement('button');
+    custom.type = 'button';
+    custom.textContent = 'Custom';
+    custom.style.cssText = [
+      'padding:.28rem .65rem','font-size:.78rem',
+      'border:1px dashed #94a3b8','border-radius:999px',
+      'background:#fff','color:#475569','cursor:default'
+    ].join(';');
+    chipBtns['custom'] = custom;
+    bar.appendChild(custom);
+
+    // ⭐ Save default
+    const sep = document.createElement('span');
+    sep.style.cssText = 'flex:1';
+    bar.appendChild(sep);
+
+    const star = document.createElement('button');
+    star.type = 'button';
+    star.title = 'Save this range as my default for this page';
+    star.textContent = '⭐ Save default';
+    star.style.cssText = [
+      'padding:.28rem .6rem','font-size:.74rem',
+      'border:1px solid #e2e8f0','border-radius:6px',
+      'background:#fff','color:#4f46e5','cursor:pointer'
+    ].join(';');
+    star.addEventListener('click', () => {
+      const active = _detectActive(fromInp, toInp);
+      const payload = { id: active };
+      if (active === 'custom') payload.custom = { from: fromInp.value || '', to: toInp.value || '' };
+      try { localStorage.setItem(key, JSON.stringify(payload)); } catch (_) {}
+      star.textContent = '✓ Saved';
+      setTimeout(() => { star.textContent = '⭐ Save default'; }, 1500);
+    });
+    bar.appendChild(star);
+
+    // React to manual changes in either input — repaint active chip.
+    function repaint() { paint(_detectActive(fromInp, toInp)); }
+    fromInp.addEventListener('change', repaint);
+    toInp.addEventListener('change', repaint);
+
+    // Mount BEFORE the from input's nearest container row, if possible.
+    // Otherwise insert before fromInp itself.
+    const host = (fromInp.parentNode === toInp.parentNode) ? fromInp.parentNode : null;
+    if (host) host.parentNode.insertBefore(bar, host);
+    else fromInp.parentNode.insertBefore(bar, fromInp);
+
+    // Apply saved default if both inputs are empty.
+    let appliedDefault = false;
+    if (!fromInp.value && !toInp.value) {
+      try {
+        const raw = localStorage.getItem(key);
+        if (raw) {
+          const saved = JSON.parse(raw);
+          if (saved && saved.id) {
+            if (saved.id === 'custom' && saved.custom) {
+              if (saved.custom.from) fromInp.value = saved.custom.from;
+              if (saved.custom.to)   toInp.value   = saved.custom.to;
+              if (fromInp.value) _fire(fromInp);
+              if (toInp.value)   _fire(toInp);
+              appliedDefault = true;
+            } else {
+              const preset = PRESETS.find(p => p.id === saved.id);
+              if (preset) { _setRange(fromInp, toInp, preset.range()); appliedDefault = true; }
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    repaint();
+    return { bar, repaint, appliedDefault };
+  };
+})();
+
 /* ---------------- Dashboard ---------------- */
 /* ============================================================
  * Custom Dashboard
@@ -1522,6 +1712,27 @@ VIEWS.dashboard = async (view) => {
   );
   view.appendChild(head);
 
+  // DATE_PRESETS_v1 — global Dashboard date filter (chip bar + From/To).
+  // Hooked into every data-fetching widget below via CRM._dashRange.
+  CRM._dashRange = CRM._dashRange || { from: '', to: '' };
+  (function buildDashDateBar() {
+    const row = h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '.6rem', padding: '8px 12px', background: '#fff', border: '1px solid #e2e8f0', borderRadius: '10px', flexWrap: 'wrap' } });
+    row.appendChild(h('span', { style: { fontWeight: 600, fontSize: '.85rem', color: '#475569' } }, '📅 Date range:'));
+    const _df = h('input', { type: 'date', class: 'input', value: CRM._dashRange.from || '', style: { width: '150px' } });
+    const _dt = h('input', { type: 'date', class: 'input', value: CRM._dashRange.to   || '', style: { width: '150px' } });
+    function _apply() {
+      CRM._dashRange = { from: _df.value || '', to: _dt.value || '' };
+      VIEWS.dashboard(view);
+    }
+    _df.addEventListener('change', _apply);
+    _dt.addEventListener('change', _apply);
+    row.appendChild(_df);
+    row.appendChild(h('span', { class: 'muted', style: { fontSize: '.78rem' } }, 'to'));
+    row.appendChild(_dt);
+    view.appendChild(row);
+    setTimeout(() => { try { window._attachDatePresets && window._attachDatePresets(_df, _dt, { key: 'dashboard', apply: _apply }); } catch (_) {} }, 0);
+  })();
+
   // DASH_CAMP_FILTER_v1 — campaign filter bar (admin/manager only)
   CRM._dashCampaignIds = CRM._dashCampaignIds || [];
   let _campOpts = CRM.cache.campaigns;
@@ -1555,16 +1766,16 @@ VIEWS.dashboard = async (view) => {
   const usedTypes = new Set(widgets.map(w => w.type));
   const fetchTasks = {};
   if (['kpi_total_leads','kpi_won','kpi_qualified','chart_status','chart_source','chart_product','daily_volume','leads_by_user'].some(t => usedTypes.has(t))) {
-    fetchTasks.summary = api('api_reports_summary', { campaign_ids: CRM._dashCampaignIds }).catch(() => null);
+    fetchTasks.summary = api('api_reports_summary', { campaign_ids: CRM._dashCampaignIds, from: CRM._dashRange && CRM._dashRange.from, to: CRM._dashRange && CRM._dashRange.to }).catch(() => null);
   }
   if (['kpi_new_today','kpi_due_today','kpi_overdue','followups_panel'].some(t => usedTypes.has(t))) {
     fetchTasks.notifs = api('api_notifications_mine').catch(() => null);
   }
   if (usedTypes.has('funnel_pipeline')) {
-    fetchTasks.funnel = api('api_reports_funnel', { campaign_ids: CRM._dashCampaignIds }).catch(() => []);
+    fetchTasks.funnel = api('api_reports_funnel', { campaign_ids: CRM._dashCampaignIds, from: CRM._dashRange && CRM._dashRange.from, to: CRM._dashRange && CRM._dashRange.to }).catch(() => []);
   }
   if (usedTypes.has('tat_alerts')) {
-    fetchTasks.tat = api('api_tat_report', { campaign_ids: CRM._dashCampaignIds }).catch(() => null);
+    fetchTasks.tat = api('api_tat_report', { campaign_ids: CRM._dashCampaignIds, from: CRM._dashRange && CRM._dashRange.from, to: CRM._dashRange && CRM._dashRange.to }).catch(() => null);
   }
   if (usedTypes.has('project_stages')) {
     fetchTasks.projects = api('api_projectStages_board').catch(() => null);
@@ -1576,10 +1787,10 @@ VIEWS.dashboard = async (view) => {
     fetchTasks.teamTat = api('api_reports_tatViolationsByUser').catch(() => []);
   }
   if (usedTypes.has('daily_volume')) {
-    fetchTasks.daily = api('api_reports_daily', { campaign_ids: CRM._dashCampaignIds }).catch(() => []);
+    fetchTasks.daily = api('api_reports_daily', { campaign_ids: CRM._dashCampaignIds, from: CRM._dashRange && CRM._dashRange.from, to: CRM._dashRange && CRM._dashRange.to }).catch(() => []);
   }
   if (usedTypes.has('call_activity_summary') || usedTypes.has('call_activity_topusers') || usedTypes.has('call_activity_recent')) {
-    fetchTasks.callActivity = api('api_reports_callActivity', {}).catch(() => null);
+    fetchTasks.callActivity = api('api_reports_callActivity', { from: CRM._dashRange && CRM._dashRange.from, to: CRM._dashRange && CRM._dashRange.to }).catch(() => null);
   }
   const data = {};
   await Promise.all(Object.entries(fetchTasks).map(async ([k, p]) => { data[k] = await p; }));
@@ -2222,6 +2433,8 @@ VIEWS.leads = async (view) => {
   const toInput   = h('input', { id: 'f-to',   type: 'date', value: CRM.prefs.filters.to   || '', title: 'Filter: created on or before this date', style: { width: '140px' } });
   fromInput.addEventListener('change', applyFilters);
   toInput.addEventListener('change', applyFilters);
+  // DATE_PRESETS_v1 — attach chip bar after the inputs are mounted (deferred).
+  setTimeout(() => { try { window._attachDatePresets && window._attachDatePresets(fromInput, toInput, { key: 'leads', apply: applyFilters }); } catch (_) {} }, 0);
   const dateWrap = h('div', { class: 'date-range', title: 'Filter by lead-created date range', style: { display: 'inline-flex', alignItems: 'center', gap: '.25rem' } },
     h('span', { class: 'muted', style: { fontSize: '.78rem' } }, '📅 From'),
     fromInput,
@@ -14276,6 +14489,8 @@ VIEWS.projects = async (view) => {
 
   const fromInp = h('input', { type: 'date', class: 'input', value: filtersState.from || '', style: { width: '150px' } });
   const toInp   = h('input', { type: 'date', class: 'input', value: filtersState.to   || '', style: { width: '150px' } });
+  // DATE_PRESETS_v1
+  setTimeout(() => { try { window._attachDatePresets && window._attachDatePresets(fromInp, toInp, { key: 'activity', apply: () => { try { applyFilters && applyFilters(); } catch (_) {} } }); } catch (_) {} }, 0);
   const userSel = h('select', { class: 'input', multiple: 'multiple', style: { minWidth: '200px', height: '34px' }, title: 'Assigned to (multi-select)' },
     ...users.map(u => h('option', { value: String(u.id),
       selected: (filtersState.assigned_tos || []).map(String).includes(String(u.id)) ? 'selected' : null }, u.name))
@@ -14709,10 +14924,12 @@ VIEWS.callactivity = async (view) => {
   const from30 = new Date(today.getTime() - 30 * 86400 * 1000);
   const isoDate = d => d.toISOString().slice(0, 10);
 
+  const _caFrom = h('input', { type: 'date', id: 'ca-from', value: isoDate(from30) });
+  const _caTo   = h('input', { type: 'date', id: 'ca-to',   value: isoDate(today) });
   const toolbar = h('div', { class: 'toolbar' },
-    h('input', { type: 'date', id: 'ca-from', value: isoDate(from30) }),
+    _caFrom,
     h('span', {}, 'to'),
-    h('input', { type: 'date', id: 'ca-to',   value: isoDate(today) }),
+    _caTo,
     h('select', { id: 'ca-user' },
       h('option', { value: '' }, 'All users'),
       ...users.map(u => h('option', { value: String(u.id) }, u.name))
@@ -14721,6 +14938,7 @@ VIEWS.callactivity = async (view) => {
     h('button', { class: 'btn', onclick: () => downloadCallActivityCsv() }, '⬇️ CSV')
   );
   view.appendChild(toolbar);
+  setTimeout(() => { try { window._attachDatePresets && window._attachDatePresets(_caFrom, _caTo, { key: 'callactivity', apply: () => { try { loadCallActivity(); } catch (_) {} } }); } catch (_) {} }, 0);
 
   view.appendChild(h('div', { id: 'ca-cards', class: 'cards' }));
   view.appendChild(h('div', { class: 'chart-grid' },
@@ -15275,6 +15493,7 @@ VIEWS.callratings = async (view) => {
   const { users = [] } = CRM.cache;
   const fromInp = h('input', { type: 'date' });
   const toInp   = h('input', { type: 'date' });
+  setTimeout(() => { try { window._attachDatePresets && window._attachDatePresets(fromInp, toInp, { key: 'callratings', apply: () => { try { load && load(); } catch (_) {} } }); } catch (_) {} }, 0);
   const userSel = h('select', {},
     h('option', { value: '' }, 'All users'),
     ...users.map(u => h('option', { value: u.id }, u.name))
@@ -15366,6 +15585,7 @@ VIEWS.tatreport = async (view) => {
   const { users = [] } = CRM.cache;
   const fromInp = h('input', { type: 'date' });
   const toInp   = h('input', { type: 'date' });
+  setTimeout(() => { try { window._attachDatePresets && window._attachDatePresets(fromInp, toInp, { key: 'tatreport', apply: () => { try { load && load(); } catch (_) {} } }); } catch (_) {} }, 0);
   // Multi-select users + rule-builder for advanced filtering.
   const userSel = multiSelectDropdown({ id: 'tat-user', label: 'Users', allLabel: 'All users',
     options: users.map(u => ({ id: String(u.id), name: u.name })),
@@ -15471,10 +15691,13 @@ VIEWS.reports = async (view) => {
   await ensureChartJs();
   view.innerHTML = '';
   const { users = [], products = [], sources = [], statuses = [] } = CRM.cache;
+  const _repFrom = h('input', { type: 'date', id: 'rep-from' });
+  const _repTo   = h('input', { type: 'date', id: 'rep-to' });
+  setTimeout(() => { try { window._attachDatePresets && window._attachDatePresets(_repFrom, _repTo, { key: 'reports' }); } catch (_) {} }, 0);
   const filterBar = h('div', { class: 'toolbar' },
-    h('input', { type: 'date', id: 'rep-from' }),
+    _repFrom,
     h('span', {}, 'to'),
-    h('input', { type: 'date', id: 'rep-to' }),
+    _repTo,
     multiSelectDropdown({ id: 'rep-user', label: 'Users', allLabel: 'All users',
       options: users.map(u => ({ id: String(u.id), name: u.name })),
       values: (window._repPicked && window._repPicked.users) || [],
@@ -16262,13 +16485,19 @@ VIEWS.reportbuilder = async (view) => {
         'Pick any field below — including any custom field on your leads — and ' +
         'see how leads break down by that field. Apply date and other filters ' +
         'on the right. Click any row in the table to view the leads in that bucket.'),
+      (function() {
+        window._rbFrom = h('input', { type: 'date', id: 'rb-from' });
+        window._rbTo   = h('input', { type: 'date', id: 'rb-to' });
+        setTimeout(() => { try { window._attachDatePresets && window._attachDatePresets(window._rbFrom, window._rbTo, { key: 'reportbuilder' }); } catch (_) {} }, 0);
+        return null;
+      })(),
       h('div', { class: 'toolbar', style: { flexWrap: 'wrap' } },
         h('span', { class: 'muted' }, 'Group by'),
         dimSelect,
         h('span', { class: 'muted', style: { marginLeft: '1rem' } }, 'From'),
-        h('input', { type: 'date', id: 'rb-from' }),
+        window._rbFrom,
         h('span', { class: 'muted' }, 'to'),
-        h('input', { type: 'date', id: 'rb-to' }),
+        window._rbTo,
         multiSelectDropdown({ id: 'rb-user', label: 'Users', allLabel: 'All users',
           options: users.map(u => ({ id: String(u.id), name: u.name })),
           values: (window._rbPicked && window._rbPicked.users) || [],
