@@ -76,6 +76,10 @@ SELECT * FROM (VALUES
 
   ('feature', 'Sales pipeline funnel view + Dashboard widget',
    'Pipeline page now opens with a true funnel: a KPI strip (total leads, open value, win rate, avg cycle), 5 descending bands (Fresh → Attempted → Qualified → Negotiation → Proposal) with dashed connectors to right-side labels, and Won / Lost cards at the bottom. Click any band and you jump to a Leads list filtered by that stage. Same view is available as a Dashboard widget — pick it from + Add widget under the Pipeline group. The old card-grid Kanban is still there as a Switch-to-Kanban escape hatch.',
-   '#/pipeline', '📈', NOW())
+   '#/pipeline', '📈', NOW() - INTERVAL '10 minutes'),
+
+  ('fix', 'Pipeline funnel — won_at column error',
+   'Pipeline page was throwing Could not load funnel: column won_at does not exist because the new aggregator assumed a column the leads table never had. Switched the avg-cycle calculation to use last_status_change_at on won leads instead. Pipeline + Dashboard funnel widget now load cleanly.',
+   '#/pipeline', '🐛', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);

@@ -102,7 +102,7 @@ async function api_pipeline_funnel(token, payload) {
   }
 
   const r = await db.query(
-    `SELECT id, status_id, value, won_at, lost_at, last_status_change_at, created_at
+    `SELECT id, status_id, value, last_status_change_at, created_at
        FROM leads
       WHERE 1=1 ${scopeSql}`,
     args
@@ -137,9 +137,11 @@ async function api_pipeline_funnel(token, payload) {
       totalOpen++;
       openValue += v;
     }
-    // Avg cycle: from created_at to won_at
-    if (stg === 'won' && l.won_at && l.created_at) {
-      const days = (new Date(l.won_at).getTime() - new Date(l.created_at).getTime()) / 86400000;
+    // Avg cycle: from created_at to last_status_change_at on won leads
+    // (leads table has no won_at column; status changing TO won lands in
+    // last_status_change_at, so this is the closest proxy).
+    if (stg === 'won' && l.last_status_change_at && l.created_at) {
+      const days = (new Date(l.last_status_change_at).getTime() - new Date(l.created_at).getTime()) / 86400000;
       if (days >= 0 && days < 365) { cycleSumDays += days; cycleSamples++; }
     }
   }
