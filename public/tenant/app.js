@@ -19203,6 +19203,151 @@ async function adminAutomations() {
   return card;
 }
 
+
+// AUTOMATION_RULES_v1 (2026-05-28) — structured rule builder for the
+// Condition field on the Edit Automation modal. Stores rules as an
+// array of {field, value} pairs and serializes to the same wire
+// format the backend already parses: "field=value && field=value &&
+// tag:vip". Custom fields are addressable by their key.
+function _automationFieldOptions() {
+  const opts = [
+    { key: 'status',  label: 'Status',        kind: 'status'  },
+    { key: 'source',  label: 'Source',        kind: 'source'  },
+    { key: 'product', label: 'Product',       kind: 'product' },
+    { key: 'tag',     label: 'Tag',           kind: 'tag'     }
+  ];
+  const cfList = (CRM && CRM.cache && CRM.cache.customFields) || [];
+  cfList.filter(c => Number(c.is_active) !== 0 && c.key).forEach(c => {
+    opts.push({ key: String(c.key), label: 'CF · ' + (c.label || c.key), kind: 'cf', cf: c });
+  });
+  return opts;
+}
+
+function _parseAutomationCondition(str) {
+  const rules = [];
+  String(str || '').split(/\s*&&\s*/).forEach(p => {
+    if (!p.trim()) return;
+    const m = p.match(/^([a-zA-Z0-9_]+)\s*[=:]\s*(.*)$/);
+    if (!m) return;
+    rules.push({ field: m[1].trim(), value: m[2].trim() });
+  });
+  return rules;
+}
+
+function _serializeAutomationCondition(rules) {
+  return rules
+    .filter(r => r.field && String(r.value || '').trim() !== '')
+    .map(r => {
+      const sep = r.field === 'tag' ? ':' : '=';
+      return r.field + sep + String(r.value).trim();
+    })
+    .join(' && ');
+}
+
+function _wireAutomationConditionBuilder(initial) {
+  const container = document.getElementById('auto-cond-builder');
+  const hidden    = document.getElementById('auto-cond-hidden');
+  const addBtn    = document.getElementById('auto-cond-add');
+  const rawTog    = document.getElementById('auto-cond-raw-toggle');
+  const rawWrap   = document.getElementById('auto-cond-raw-wrap');
+  const rawInp    = document.getElementById('auto-cond-raw');
+  if (!container || !hidden) return;
+
+  const opts = _automationFieldOptions();
+  let rules = _parseAutomationCondition(initial);
+
+  function render() {
+    container.innerHTML = '';
+    if (!rules.length) {
+      container.appendChild(h('div', { class: 'muted', style: { fontSize: '.78rem', padding: '.3rem 0' } },
+        'No conditions — automation fires for every matching event.'));
+    }
+    rules.forEach((r, idx) => {
+      const opt = opts.find(o => o.key === r.field) || opts[0];
+      const fieldSel = h('select', { style: { minWidth: '160px' } },
+        ...opts.map(o => h('option', { value: o.key, selected: o.key === r.field ? 'selected' : null }, o.label))
+      );
+      fieldSel.addEventListener('change', () => {
+        r.field = fieldSel.value;
+        r.value = '';
+        render();
+        sync();
+      });
+
+      let valueEl;
+      const kind = opt.kind;
+      if (kind === 'status') {
+        const list = (CRM.cache && CRM.cache.statuses) || [];
+        valueEl = h('select', { style: { minWidth: '180px' } },
+          h('option', { value: '' }, '— pick —'),
+          ...list.map(s => h('option', { value: s.name, selected: s.name === r.value ? 'selected' : null }, s.name))
+        );
+      } else if (kind === 'source') {
+        const list = (CRM.cache && CRM.cache.sources) || [];
+        valueEl = h('select', { style: { minWidth: '180px' } },
+          h('option', { value: '' }, '— pick —'),
+          ...list.map(s => h('option', { value: s.name, selected: s.name === r.value ? 'selected' : null }, s.name))
+        );
+      } else if (kind === 'product') {
+        const list = (CRM.cache && CRM.cache.products) || [];
+        valueEl = h('select', { style: { minWidth: '180px' } },
+          h('option', { value: '' }, '— pick —'),
+          ...list.map(p => h('option', { value: p.name, selected: p.name === r.value ? 'selected' : null }, p.name))
+        );
+      } else if (kind === 'tag') {
+        const list = (CRM.cache && CRM.cache.tagFilterOpts) || [];
+        const inp = h('input', { value: r.value || '', placeholder: 'e.g. hot, vip',
+          style: { minWidth: '180px' }, list: 'auto-cond-tag-list-' + idx });
+        const dl = h('datalist', { id: 'auto-cond-tag-list-' + idx },
+          ...list.map(t => h('option', { value: t.name || t })));
+        valueEl = h('div', { style: { display: 'flex', flexDirection: 'column' } }, inp, dl);
+        inp.addEventListener('input', () => { r.value = inp.value; sync(); });
+      } else {
+        // custom field — text input
+        valueEl = h('input', { value: r.value || '', placeholder: 'value', style: { minWidth: '180px' } });
+        valueEl.addEventListener('input', () => { r.value = valueEl.value; sync(); });
+      }
+      if (valueEl.tagName === 'SELECT') {
+        valueEl.addEventListener('change', () => { r.value = valueEl.value; sync(); });
+      }
+
+      const delBtn = h('button', { type: 'button', class: 'btn sm', title: 'Remove rule',
+        style: { color: '#dc2626' },
+        onclick: () => { rules.splice(idx, 1); render(); sync(); }
+      }, '✕');
+      const row = h('div', {
+        style: { display: 'flex', gap: '.4rem', alignItems: 'center', flexWrap: 'wrap',
+                 background: '#f8fafc', padding: '.3rem .4rem', borderRadius: '6px' }
+      }, fieldSel, h('span', { class: 'muted', style: { fontSize: '.78rem' } }, 'equals'), valueEl, delBtn);
+      container.appendChild(row);
+    });
+  }
+
+  function sync() {
+    const str = _serializeAutomationCondition(rules);
+    hidden.value = str;
+    if (rawInp && rawInp !== document.activeElement) rawInp.value = str;
+  }
+
+  addBtn && addBtn.addEventListener('click', () => {
+    rules.push({ field: 'status', value: '' });
+    render(); sync();
+  });
+  rawTog && rawTog.addEventListener('change', () => {
+    const advanced = rawTog.checked;
+    rawWrap.style.display = advanced ? '' : 'none';
+    container.style.display = advanced ? 'none' : '';
+    addBtn.style.display    = advanced ? 'none' : '';
+    if (advanced && rawInp) rawInp.value = hidden.value || '';
+  });
+  rawInp && rawInp.addEventListener('input', () => {
+    hidden.value = rawInp.value;
+    rules = _parseAutomationCondition(rawInp.value);
+  });
+
+  render(); sync();
+}
+
 function openAutomationModal(existing) {
   const a = existing || { name: '', event: 'lead_created', channel: 'email', recipient: 'lead', condition: '', subject: '', template: '', is_active: 1 };
   const modal = h('div', { class: 'modal-backdrop' },
@@ -19229,9 +19374,28 @@ function openAutomationModal(existing) {
           { value: 'assignee', label: 'Assigned user' },
           { value: 'admin',    label: 'Admin' }
         ]),
+        // AUTOMATION_RULES_v1 (2026-05-28): structured rule-builder for the
+        // Condition field. Saves to the SAME wire format the backend already
+        // understands: "field=value && field=value && tag:hot". Free-form
+        // editing is also possible — toggle "Use advanced text" to see/edit
+        // the raw string for power users.
         h('div', { class: 'f-row full' },
           h('label', {}, 'Condition (optional)'),
-          h('input', { name: 'condition', value: a.condition || '', placeholder: 'e.g. status=Qualified   or   source=Website   or   tag:vip' })
+          h('div', { id: 'auto-cond-builder', style: { display: 'flex', flexDirection: 'column', gap: '.4rem' } }),
+          h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', marginTop: '.3rem', flexWrap: 'wrap' } },
+            h('button', { type: 'button', class: 'btn sm', id: 'auto-cond-add' }, '+ Add rule'),
+            h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: '.3rem', fontSize: '.78rem', color: '#475569' } },
+              h('input', { type: 'checkbox', id: 'auto-cond-raw-toggle' }),
+              h('span', {}, 'Use advanced text')
+            ),
+            h('span', { class: 'muted', style: { fontSize: '.72rem' } }, 'All rules must match (AND).')
+          ),
+          h('div', { id: 'auto-cond-raw-wrap', style: { display: 'none', marginTop: '.4rem' } },
+            h('input', { id: 'auto-cond-raw', placeholder: 'e.g. status=Qualified && source=Website && tag:vip',
+              style: { width: '100%' } })
+          ),
+          // The hidden input is what actually goes into the FormData payload.
+          h('input', { type: 'hidden', name: 'condition', id: 'auto-cond-hidden', value: a.condition || '' })
         ),
         h('div', { class: 'f-row full', id: 'auto-subject-row' },
           h('label', {}, 'Email subject (email only)'),
@@ -19308,6 +19472,10 @@ function openAutomationModal(existing) {
   // Wire channel change to reveal/hide subject vs WA template row
   const chSel = modal.querySelector('select[name="channel"]');
   if (chSel) chSel.addEventListener('change', () => toggleChannelUI(chSel.value));
+
+  // AUTOMATION_RULES_v1: build the structured condition UI now that the
+  // modal is in the DOM (so CRM.cache is fully warmed).
+  _wireAutomationConditionBuilder(a.condition || '');
   toggleChannelUI(a.channel);
   // Wire template-select change so variable inputs render when the user
   // picks a different template.
