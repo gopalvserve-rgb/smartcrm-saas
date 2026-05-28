@@ -28868,6 +28868,16 @@ function _initFloatingChat() {
 // State persisted per-device in localStorage.crm_sticky_v2.
 function _initStickyWidget() {
   if (document.getElementById('sticky-fab')) return;
+  // DASH_STICKY_HIDE_MOBILE_v1 — sticky is desktop-only. Bail out on:
+  //   - Capacitor wrapper APK (window.Capacitor present)
+  //   - Narrow viewports (<900px wide — phones, small tablets)
+  //   - Coarse-pointer touch-only devices (drag-resize is awkward on touch)
+  // Web tablet/desktop users still get the feature.
+  try {
+    if (window.Capacitor) return;
+    if (typeof window.innerWidth === 'number' && window.innerWidth < 900) return;
+    if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches && window.innerWidth < 1100) return;
+  } catch (_) {}
   const MAX_PINS = 4;
   const STORAGE_KEY = 'crm_sticky_v2';
   const OLD_KEY = 'crm_sticky_v1';
@@ -29234,24 +29244,51 @@ function _initStickyWidget() {
     body.appendChild(h('div', { class: 'muted', style: { fontSize: '.68rem', textAlign: 'right', marginTop: '.3rem', opacity: 0.7 } }, 'Updated ' + new Date().toLocaleTimeString()));
   }
   function _stickyRenderPivot(body, res) {
+    // api_reports_pivot returns:
+    //   { row_dims:[...], metrics:[...], rows:[{key, dims:[v1,v2,...], metrics:{count,won_count,...}, lead_ids}], total }
     const rows = (res && res.rows) || [];
-    const cols = (res && res.columns) || [];
-    if (!rows.length) { body.appendChild(h('div', { class: 'muted', style: { padding: '1rem', textAlign: 'center' } }, 'No data')); return; }
+    const rowDims = (res && res.row_dims) || ['status'];
+    const metrics = (res && res.metrics) || ['count'];
+    if (!rows.length) {
+      body.appendChild(h('div', { class: 'muted', style: { padding: '1rem', textAlign: 'center' } }, 'No data for selected date range.'));
+      return;
+    }
+    // Pretty-print dim + metric labels
+    const dimLabel = (d) => ({
+      status: 'Status', source: 'Source', product: 'Product', assigned_to: 'User',
+      campaign: 'Campaign', qualified: 'Qualified', is_duplicate: 'Duplicate',
+      created_day: 'Date', created_month: 'Month', city: 'City', state: 'State',
+      country: 'Country', company: 'Company',
+      utm_source: 'UTM Source', utm_medium: 'UTM Medium', utm_campaign: 'UTM Campaign'
+    })[d] || (d.startsWith('extra:') ? d.slice(6) : d);
+    const metricLabel = (m) => ({
+      count: 'Count', qualified_count: 'Qualified', hot_count: 'Hot', won_count: 'Won',
+      lost_count: 'Lost', open_count: 'Open', conversion_pct: 'Conv %', win_pct: 'Win %',
+      value_sum: 'Value', value_avg: 'Avg value', recent_24h: '24h', recent_7d: '7d',
+      recent_30d: '30d', avg_age_days: 'Avg age (d)'
+    })[m] || m;
     const wrap = h('div', { style: { overflowX: 'auto' } });
     const tbl = h('table', { class: 'tbl', style: { width: '100%', fontSize: '.8rem' } });
     const headTr = h('tr', {});
-    cols.forEach(c => headTr.appendChild(h('th', { style: { textAlign: 'left', padding: '.25rem .4rem', borderBottom: '1px solid #e2e8f0', background: '#f8fafc' } }, c.label || c.key)));
+    rowDims.forEach(d => headTr.appendChild(h('th', { style: { textAlign: 'left', padding: '.25rem .4rem', borderBottom: '1px solid #e2e8f0', background: '#f8fafc' } }, dimLabel(d))));
+    metrics.forEach(m => headTr.appendChild(h('th', { style: { textAlign: 'right', padding: '.25rem .4rem', borderBottom: '1px solid #e2e8f0', background: '#f8fafc' } }, metricLabel(m))));
     tbl.appendChild(h('thead', {}, headTr));
     const tb = h('tbody', {});
     rows.slice(0, 50).forEach(r => {
       const tr = h('tr', {});
-      cols.forEach(c => tr.appendChild(h('td', { style: { padding: '.22rem .4rem', borderBottom: '1px solid #f1f5f9' } }, String(r[c.key] == null ? '' : r[c.key]))));
+      (r.dims || []).forEach(v => tr.appendChild(h('td', { style: { padding: '.22rem .4rem', borderBottom: '1px solid #f1f5f9' } }, String(v == null ? '' : v))));
+      metrics.forEach(m => {
+        const v = r.metrics && r.metrics[m] != null ? r.metrics[m] : '';
+        tr.appendChild(h('td', { style: { padding: '.22rem .4rem', borderBottom: '1px solid #f1f5f9', textAlign: 'right', fontWeight: m === 'count' ? '700' : '500' } }, String(v)));
+      });
       tb.appendChild(tr);
     });
     tbl.appendChild(tb);
     wrap.appendChild(tbl);
     body.appendChild(wrap);
-    if (rows.length > 50) body.appendChild(h('div', { class: 'muted', style: { fontSize: '.7rem', marginTop: '.3rem' } }, 'Showing first 50 of ' + rows.length + ' rows. Open the full report for everything.'));
+    const totalsLine = h('div', { class: 'muted', style: { fontSize: '.7rem', marginTop: '.3rem' } },
+      'Total leads in scope: ' + ((res && res.total) || 0) + (rows.length > 50 ? ' · Showing first 50 of ' + rows.length + ' rows' : ''));
+    body.appendChild(totalsLine);
   }
 
   // Auto-restore all pins
