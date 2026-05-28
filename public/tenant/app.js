@@ -28886,14 +28886,27 @@ function _initStickyWidget() {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const s = JSON.parse(raw);
-        if (s && Array.isArray(s.pins)) return s;
+        if (s && Array.isArray(s.pins)) {
+          // DASH_STICKY_v3 — auto-migrate old single-type pin shape to types[]
+          s.pins = s.pins.map(p => {
+            if (p.types && Array.isArray(p.types)) return p;
+            const types = p.type ? [p.type] : [];
+            const rbTemplates = {};
+            if (p.rbTemplate && p.type) rbTemplates[p.type] = p.rbTemplate;
+            return { types, activeIdx: 0, rbTemplates,
+              range: p.range || 'all', customFrom: p.customFrom, customTo: p.customTo,
+              x: p.x, y: p.y, w: p.w, h: p.h, minimized: !!p.minimized };
+          }).filter(p => p.types.length);
+          return s;
+        }
       }
-      // Migrate from v1 single-pin state if present
       const old = JSON.parse(localStorage.getItem(OLD_KEY) || '{}');
       if (old && old.type) {
+        const rbT = {}; if (old.rbTemplate) rbT[old.type] = old.rbTemplate;
         const migrated = { pins: [{
-          type: old.type, x: old.x, y: old.y, w: old.w, h: old.h,
-          minimized: !!old.minimized, range: 'all', rbTemplate: old.rbTemplate || null
+          types: [old.type], activeIdx: 0, rbTemplates: rbT,
+          x: old.x, y: old.y, w: old.w, h: old.h,
+          minimized: !!old.minimized, range: 'all'
         }] };
         localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated));
         return migrated;
@@ -28982,18 +28995,33 @@ function _initStickyWidget() {
     card.appendChild(h('p', { class: 'muted', style: { margin: '0 0 .7rem', fontSize: '.85rem' } },
       'Pin up to ' + MAX_PINS + ' widgets to keep them visible on every page. Drag the header to move, drag the bottom-right corner to resize, pick a date range on each card.'));
 
-    // Existing pins (with remove button)
+    // Existing pins — each row has '+ Add widget' (adds to this pin) and '🗑 Remove'
     if (state.pins.length) {
-      card.appendChild(h('h4', { style: { margin: '.7rem 0 .25rem', fontSize: '.86rem', color: '#16a34a' } }, '✓ Already pinned — click to remove'));
+      card.appendChild(h('h4', { style: { margin: '.7rem 0 .25rem', fontSize: '.86rem', color: '#16a34a' } }, '✓ Currently pinned · + adds widget to that pin'));
       const wrap = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '.3rem' } });
       state.pins.forEach((p, idx) => {
-        const def = p.type && p.type.startsWith('rb:') ? { title: '📊 ' + (p.rbTemplate ? p.rbTemplate.name : 'Report') } : (lib[p.type] || { title: p.type });
-        wrap.appendChild(h('button', {
-          class: 'btn danger', style: { textAlign: 'left', padding: '.5rem .7rem', fontSize: '.84rem' },
-          onclick: () => { modal.remove(); removePin(idx); }
-        }, '🗑 Remove · ' + def.title));
+        const labelParts = (p.types || []).map(t => {
+          if (t && t.startsWith('rb:')) return '📊 ' + ((p.rbTemplates && p.rbTemplates[t] && p.rbTemplates[t].name) || 'Report');
+          return (lib[t] && lib[t].title) || t;
+        });
+        const row = h('div', { style: { display: 'flex', gap: '.3rem', alignItems: 'center', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '6px', padding: '.45rem .6rem' } },
+          h('div', { style: { flex: 1, fontSize: '.84rem', color: '#14532d' } }, 'Pin ' + (idx + 1) + ': ' + labelParts.join(' · ') + ' (' + p.types.length + ')'),
+          h('button', { class: 'btn sm', style: { background: '#dcfce7', color: '#166534' },
+            onclick: () => { state.pendingTargetPin = idx; modal.remove(); openPicker(); }
+          }, '+ Add widget'),
+          h('button', { class: 'btn sm danger', onclick: () => { modal.remove(); removePin(idx); } }, '🗑')
+        );
+        wrap.appendChild(row);
       });
       card.appendChild(wrap);
+    }
+    // Banner if user is adding a widget to a specific existing pin
+    if (state.pendingTargetPin != null && state.pins[state.pendingTargetPin]) {
+      const tIdx = state.pendingTargetPin;
+      card.appendChild(h('div', { style: { margin: '.6rem 0', padding: '.55rem .7rem', background: '#fef3c7', border: '1px solid #fcd34d', borderRadius: '6px', fontSize: '.84rem' } },
+        '➕ Adding a widget to Pin ' + (tIdx + 1) + ' · ',
+        h('a', { href: '#', style: { color: '#7c2d12' }, onclick: (ev) => { ev.preventDefault(); state.pendingTargetPin = null; modal.remove(); openPicker(); } }, 'Cancel — add as new pin instead')
+      ));
     }
 
     if (state.pins.length >= MAX_PINS) {
@@ -29030,17 +29058,34 @@ function _initStickyWidget() {
 
   // -------- Pin management --------
   function addPin(type, extra) {
+    // DASH_STICKY_v3 — if state.pendingTargetPin is set, add this widget as
+    // a new tab in that existing pin instead of creating a new pin.
+    if (state.pendingTargetPin != null && state.pins[state.pendingTargetPin]) {
+      const tgt = state.pins[state.pendingTargetPin];
+      const MAX_W = 6;
+      if (tgt.types.length >= MAX_W) { toast('Max ' + MAX_W + ' widgets per pin', 'err'); state.pendingTargetPin = null; return; }
+      tgt.types.push(type);
+      tgt.activeIdx = tgt.types.length - 1;
+      if (extra && extra.rbTemplate) { tgt.rbTemplates = tgt.rbTemplates || {}; tgt.rbTemplates[type] = extra.rbTemplate; }
+      const idx = state.pendingTargetPin;
+      state.pendingTargetPin = null;
+      _save(state);
+      delete (document.getElementById('sticky-body-' + idx) || {}).dataset; // force loading state on next render
+      renderPin(idx);
+      return;
+    }
     if (state.pins.length >= MAX_PINS) { toast('Max ' + MAX_PINS + ' pins reached', 'err'); return; }
-    // Stagger position so new pins don't overlap exactly
     const offset = state.pins.length * 20;
     const w = 380, h = 320;
+    const rbT = {};
+    if (extra && extra.rbTemplate) rbT[type] = extra.rbTemplate;
     const pin = {
-      type, range: 'all', minimized: false,
+      types: [type], activeIdx: 0, rbTemplates: rbT,
+      range: 'all', minimized: false,
       x: Math.max(20, window.innerWidth - w - 40) - offset,
       y: 120 + offset,
       w, h
     };
-    if (extra && extra.rbTemplate) pin.rbTemplate = extra.rbTemplate;
     state.pins.push(pin);
     _save(state);
     _refreshFabLabel();
@@ -29078,9 +29123,11 @@ function _initStickyWidget() {
     const header = document.createElement('div');
     header.style.cssText = 'padding: .35rem .55rem; background: linear-gradient(135deg, #fef3c7, #fde68a); color: #78350f; display: flex; align-items: center; gap: .35rem; cursor: move; font-size: .82rem; font-weight: 600; user-select: none;';
     const lib = (typeof WIDGET_LIBRARY !== 'undefined') ? WIDGET_LIBRARY : {};
-    const def = lib[pin.type];
-    const isRb = String(pin.type || '').startsWith('rb:');
-    const headerLabel = isRb && pin.rbTemplate ? ('📊 ' + pin.rbTemplate.name) : ((def && def.title) || pin.type);
+    const curType = pin.types[pin.activeIdx || 0];
+    const def = lib[curType];
+    const isRb = String(curType || '').startsWith('rb:');
+    const curRbTpl = isRb && pin.rbTemplates ? pin.rbTemplates[curType] : null;
+    const headerLabel = isRb && curRbTpl ? ('📊 ' + curRbTpl.name) : ((def && def.title) || curType || 'widget');
     header.innerHTML = `<span>📌</span><span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${headerLabel}</span>`;
     // Refresh
     const rBtn = document.createElement('button');
@@ -29133,6 +29180,52 @@ function _initStickyWidget() {
     rangeBar.appendChild(rangeSel);
     if (pin.minimized) rangeBar.style.display = 'none';
     panel.appendChild(rangeBar);
+
+    // DASH_STICKY_v3 — Tab strip if pin has multiple widgets
+    if (pin.types.length > 1 || true) {
+      const tabBar = document.createElement('div');
+      tabBar.style.cssText = 'padding:.25rem .4rem;background:#fff;border-bottom:1px solid #e2e8f0;display:flex;gap:.25rem;flex-wrap:wrap;overflow-x:auto;';
+      if (pin.minimized) tabBar.style.display = 'none';
+      pin.types.forEach((t, i) => {
+        const isAct = (pin.activeIdx || 0) === i;
+        const tLabel = (t && t.startsWith('rb:'))
+          ? '📊 ' + ((pin.rbTemplates && pin.rbTemplates[t] && pin.rbTemplates[t].name) || 'Report').slice(0, 14)
+          : (((lib[t] && lib[t].title) || t).split('·').pop().trim().slice(0, 18));
+        const tab = document.createElement('button');
+        tab.style.cssText = 'background:' + (isAct ? '#fde68a' : '#f1f5f9') + ';color:' + (isAct ? '#78350f' : '#475569') + ';border:1px solid ' + (isAct ? '#f59e0b' : '#cbd5e1') + ';border-radius:14px;padding:.15rem .55rem;font-size:.72rem;cursor:pointer;display:inline-flex;align-items:center;gap:.25rem;white-space:nowrap;font-weight:' + (isAct ? '600' : '500') + ';';
+        const span = document.createElement('span');
+        span.textContent = tLabel;
+        tab.appendChild(span);
+        if (pin.types.length > 1) {
+          const xBtn = document.createElement('span');
+          xBtn.textContent = '×';
+          xBtn.style.cssText = 'color:#64748b;font-weight:700;font-size:.9rem;margin-left:.15rem;line-height:.7;';
+          xBtn.onclick = (e) => {
+            e.stopPropagation();
+            pin.types.splice(i, 1);
+            if (pin.rbTemplates) delete pin.rbTemplates[t];
+            if (pin.activeIdx >= pin.types.length) pin.activeIdx = Math.max(0, pin.types.length - 1);
+            _save(state);
+            renderPin(idx);
+          };
+          tab.appendChild(xBtn);
+        }
+        tab.onclick = () => {
+          pin.activeIdx = i;
+          _save(state);
+          renderPin(idx);
+        };
+        tabBar.appendChild(tab);
+      });
+      // + button to add another widget to this pin
+      const addBtn = document.createElement('button');
+      addBtn.textContent = '+';
+      addBtn.title = 'Add another widget to this pin';
+      addBtn.style.cssText = 'background:#dcfce7;color:#166534;border:1px dashed #86efac;border-radius:14px;padding:.15rem .55rem;font-size:.78rem;cursor:pointer;font-weight:700;';
+      addBtn.onclick = () => { state.pendingTargetPin = idx; openPicker(); };
+      tabBar.appendChild(addBtn);
+      panel.appendChild(tabBar);
+    }
 
     // Body
     const body = document.createElement('div');
@@ -29195,12 +29288,13 @@ function _initStickyWidget() {
     const body = document.getElementById('sticky-body-' + idx);
     if (!body) return;
     const dateFilters = _rangeToFilters(pin);
-    const isRb = String(pin.type || '').startsWith('rb:');
+    const curType = pin.types[pin.activeIdx || 0];
+    const isRb = String(curType || '').startsWith('rb:');
     if (!body.dataset.everLoaded) body.innerHTML = '<div class="muted" style="text-align:center;padding:1rem;">Loading…</div>';
     // ---- Report Builder template branch ----
     if (isRb) {
       try {
-        const t = pin.rbTemplate || {};
+        const t = (pin.rbTemplates && pin.rbTemplates[curType]) || {};
         const filters = Object.assign({}, t.filters || {}, dateFilters);
         const res = await api('api_reports_pivot', { row_dims: t.dim ? [t.dim] : ['status'], metrics: t.metrics || ['count'], filters });
         body.innerHTML = '';
@@ -29213,7 +29307,7 @@ function _initStickyWidget() {
       return;
     }
     const lib = (typeof WIDGET_LIBRARY !== 'undefined') ? WIDGET_LIBRARY : {};
-    const def = lib[pin.type];
+    const def = lib[curType];
     if (!def) { body.innerHTML = '<div class="muted">Unknown widget</div>'; return; }
     try {
       const camp = (typeof CRM !== 'undefined' && CRM._dashCampaignIds) || [];
@@ -29230,7 +29324,7 @@ function _initStickyWidget() {
       const data = { summary, notifs, funnel, tat, projects, daily, callActivity };
       body.innerHTML = '';
       try {
-        def.render(body, {}, data, { id: 'sticky-' + idx, type: pin.type, title: def.title });
+        def.render(body, {}, data, { id: 'sticky-' + idx, type: curType, title: def.title });
       } catch (e) {
         body.innerHTML = '<div class="muted" style="color:#b91c1c;">Render error: ' + (e.message || e) + '</div>';
       }
