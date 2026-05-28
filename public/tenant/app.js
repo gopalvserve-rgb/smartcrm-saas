@@ -1795,6 +1795,22 @@ VIEWS.dashboard = async (view) => {
   const data = {};
   await Promise.all(Object.entries(fetchTasks).map(async ([k, p]) => { data[k] = await p; }));
 
+  // DASH_DRAG_v1 — inject CSS once for drop indicators.
+  if (!document.getElementById('dash-drag-style')) {
+    const _st = document.createElement('style');
+    _st.id = 'dash-drag-style';
+    _st.textContent = '.dash-drop-left{box-shadow:-4px 0 0 0 #4f46e5 inset, 4px 0 0 0 transparent inset;}' +
+                      '.dash-drop-right{box-shadow:4px 0 0 0 #4f46e5 inset, -4px 0 0 0 transparent inset;}' +
+                      '.dash-dragging{transform:scale(.97);}' +
+                      '.dash-edit-hint{background:linear-gradient(90deg,#eef2ff,#f5f3ff);border:1px solid #c7d2fe;border-radius:8px;padding:.55rem .8rem;margin-bottom:.6rem;color:#3730a3;font-size:.85rem;display:flex;align-items:center;gap:.5rem;}';
+    document.head.appendChild(_st);
+  }
+  if (CRM._dashEditMode) {
+    view.appendChild(h('div', { class: 'dash-edit-hint' },
+      h('span', {}, '🪄 Customise mode.'),
+      h('span', { class: 'muted' }, 'Grab the ⋮⋮ handle on any card and drag to reorder. Use ↔ to resize, 🗑 to remove. Click 💾 Done to save.')
+    ));
+  }
   // Render the grid
   const grid = h('div', { id: 'dash-grid', class: 'dash-grid' });
   view.appendChild(grid);
@@ -1809,19 +1825,81 @@ VIEWS.dashboard = async (view) => {
     const sizeClass = w.size === 'small' ? '' : (w.size === 'wide' ? 'card-wide' : '');
     const card = h('div', { class: 'card ' + sizeClass });
     if (CRM._dashEditMode) {
-      card.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px dashed #e2e8f0', padding: '.25rem .35rem .45rem', marginBottom: '.5rem' } },
-        h('span', { class: 'muted', style: { fontSize: '.78rem' } }, '🛠 ' + (w.title || def.title || w.type)),
+      // DASH_DRAG_v1 — drag-and-drop edit mode.
+      card.setAttribute('draggable', 'true');
+      card.dataset.widgetIndex = String(idx);
+      card.style.position = 'relative';
+      card.style.cursor = 'default';
+      card.style.transition = 'transform .15s ease, box-shadow .15s ease';
+      card.style.outline = '2px dashed #c7d2fe';
+      card.style.outlineOffset = '-2px';
+
+      const head = h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px dashed #e2e8f0', padding: '.25rem .35rem .45rem', marginBottom: '.5rem', background: '#eef2ff', borderRadius: '6px 6px 0 0' } },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '.4rem' } },
+          h('span', { class: 'drag-handle', title: 'Drag to reorder', style: { cursor: 'grab', fontSize: '1.1rem', color: '#4f46e5', userSelect: 'none', padding: '0 .15rem' } }, '⋮⋮'),
+          h('span', { style: { fontSize: '.8rem', fontWeight: 600, color: '#3730a3' } }, (w.title || def.title || w.type))
+        ),
         h('div', { style: { display: 'flex', gap: '.2rem' } },
-          h('button', { class: 'btn sm ghost', title: 'Move up',
-            onclick: () => { if (idx > 0) { [widgets[idx-1], widgets[idx]] = [widgets[idx], widgets[idx-1]]; _syncEdit(); VIEWS.dashboard(view); } } }, '▲'),
-          h('button', { class: 'btn sm ghost', title: 'Move down',
-            onclick: () => { if (idx < widgets.length - 1) { [widgets[idx+1], widgets[idx]] = [widgets[idx], widgets[idx+1]]; _syncEdit(); VIEWS.dashboard(view); } } }, '▼'),
-          h('button', { class: 'btn sm ghost', title: 'Resize',
+          h('button', { class: 'btn sm ghost', title: 'Cycle size: small / medium / wide',
             onclick: () => { w.size = w.size === 'wide' ? 'medium' : (w.size === 'medium' ? 'small' : 'wide'); _syncEdit(); VIEWS.dashboard(view); } }, '↔'),
-          h('button', { class: 'btn sm danger', title: 'Remove',
+          h('button', { class: 'btn sm danger', title: 'Remove widget',
             onclick: () => { widgets.splice(idx, 1); _syncEdit(); VIEWS.dashboard(view); } }, '🗑')
         )
-      ));
+      );
+      card.appendChild(head);
+
+      // Make only the handle initiate dragging — clicks elsewhere on the
+      // card chrome shouldn't accidentally start a drag.
+      const handle = head.querySelector('.drag-handle');
+      // We attach drag events to the CARD (the whole card is the drag image),
+      // but block dragstart unless the user pressed on the handle area or on
+      // the card edge — avoids the user grabbing the chart inside.
+      let _armed = false;
+      card.addEventListener('mousedown', (ev) => {
+        const t = ev.target;
+        // Arm drag if clicking the handle, the head bar, or the card itself.
+        _armed = !!(t.closest('.drag-handle') || t === head || t === card || t.closest('div[style*="cursor: grab"]'));
+      });
+      card.addEventListener('dragstart', (ev) => {
+        if (!_armed) { ev.preventDefault(); return; }
+        try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', String(idx)); } catch (_) {}
+        card.style.opacity = '.4';
+        card.classList.add('dash-dragging');
+      });
+      card.addEventListener('dragend', () => {
+        card.style.opacity = '';
+        card.classList.remove('dash-dragging');
+        Array.from(document.querySelectorAll('.dash-drop-left, .dash-drop-right')).forEach(el => el.classList.remove('dash-drop-left', 'dash-drop-right'));
+      });
+      card.addEventListener('dragover', (ev) => {
+        ev.preventDefault();
+        try { ev.dataTransfer.dropEffect = 'move'; } catch (_) {}
+        const rect = card.getBoundingClientRect();
+        const before = ev.clientX < rect.left + rect.width / 2;
+        card.classList.toggle('dash-drop-left', before);
+        card.classList.toggle('dash-drop-right', !before);
+      });
+      card.addEventListener('dragleave', () => {
+        card.classList.remove('dash-drop-left', 'dash-drop-right');
+      });
+      card.addEventListener('drop', (ev) => {
+        ev.preventDefault();
+        const srcStr = ev.dataTransfer.getData('text/plain');
+        const src = Number(srcStr);
+        const dst = Number(card.dataset.widgetIndex);
+        if (Number.isNaN(src) || Number.isNaN(dst) || src === dst) {
+          card.classList.remove('dash-drop-left', 'dash-drop-right');
+          return;
+        }
+        const rect = card.getBoundingClientRect();
+        const before = ev.clientX < rect.left + rect.width / 2;
+        const item = widgets.splice(src, 1)[0];
+        let target = dst > src ? dst - 1 : dst;
+        if (!before) target += 1;
+        widgets.splice(Math.max(0, Math.min(widgets.length, target)), 0, item);
+        _syncEdit();
+        VIEWS.dashboard(view);
+      });
     }
     try { def.render(card, w.config || {}, data, w); }
     catch (e) { card.appendChild(h('div', { class: 'error-box' }, 'Widget error: ' + e.message)); }

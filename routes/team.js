@@ -20,7 +20,7 @@
 // ------------------------------------------------------------------
 
 const db = require('../db/pg');
-const { authUser } = require('./auth');
+const { authUser } = require('../utils/auth');
 
 async function _safe(fn, fallback) {
   try { return await fn(); } catch (_) { return fallback; }
