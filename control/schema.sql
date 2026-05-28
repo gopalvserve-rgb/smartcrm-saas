@@ -439,3 +439,21 @@ CREATE TABLE IF NOT EXISTS support_ticket_attachments (
 );
 CREATE INDEX IF NOT EXISTS idx_support_attach_ticket ON support_ticket_attachments(ticket_id);
 CREATE INDEX IF NOT EXISTS idx_support_attach_reply  ON support_ticket_attachments(reply_id);
+
+-- ---- changelog --------------------------------------------------
+-- CHANGELOG_v1 (2026-05-28) — global What's New timeline shown to every
+-- tenant via the top-right 🎁 icon in the tenant SPA. Lives in the
+-- control DB so the platform owner can publish once and every tenant
+-- sees the same updates. Per-user "last seen" is kept in the tenant DB
+-- so unread badges work per-user without cross-tenant chatter.
+CREATE TABLE IF NOT EXISTS changelog (
+  id          SERIAL PRIMARY KEY,
+  category    TEXT NOT NULL,           -- 'feature' | 'fix' | 'modify'
+  title       TEXT NOT NULL,
+  body        TEXT NOT NULL DEFAULT '',
+  link        TEXT,                    -- optional deep-link inside the app (e.g. #/dashboard)
+  icon        TEXT,                    -- optional emoji or text override
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_changelog_created ON changelog(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_changelog_category ON changelog(category);

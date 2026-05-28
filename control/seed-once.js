@@ -144,5 +144,34 @@ module.exports = async function seedOnce() {
     await control.setSetting(k, v);
     console.log('[seed-once] seeded ' + k + ' from env (value not logged)');
   }
+  // CHANGELOG_v1 — ensure the changelog table exists AND backfill the
+  // initial set of entries. Idempotent: we INSERT only when no row with
+  // the same title exists, so adding more entries here in future deploys
+  // just appends, never duplicates.
+  try {
+    await control.query(`
+      CREATE TABLE IF NOT EXISTS changelog (
+        id          SERIAL PRIMARY KEY,
+        category    TEXT NOT NULL,
+        title       TEXT NOT NULL,
+        body        TEXT NOT NULL DEFAULT '',
+        link        TEXT,
+        icon        TEXT,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_changelog_created  ON changelog(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_changelog_category ON changelog(category);
+    `);
+    const fs = require('fs');
+    const path = require('path');
+    const sqlPath = path.join(__dirname, '..', 'scripts', 'seed_changelog.sql');
+    if (fs.existsSync(sqlPath)) {
+      const sql = fs.readFileSync(sqlPath, 'utf8');
+      await control.query(sql);
+      console.log('[seed-once] changelog backfill applied');
+    }
+  } catch (e) {
+    console.warn('[seed-once] changelog seed skipped:', e.message);
+  }
   console.log('[seed-once] done.');
 };

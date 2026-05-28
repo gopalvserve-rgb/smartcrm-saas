@@ -1122,6 +1122,7 @@ function renderShell() {
             <a class="btn ghost topbar-chip" href="#/upcoming" title="Upcoming follow-ups"><span>⏰</span><span class="topbar-chip-label">Upcoming</span><span class="nav-count" data-count-key="upcoming" hidden>0</span></a>
             <button class="btn ghost" id="btn-getapp" title="Install / Download the app"><span>📱</span><span class="topbar-getapp-text">Get app</span></button>
             <a class="btn ghost" id="btn-help" href="https://crm.smartcrmsolution.com/saas/help/" target="_blank" rel="noopener" title="Setup guide — Pabbly, WhatsApp, AI Bot, etc."><span>📘</span><span class="topbar-help-text">Help</span></a>
+            <button class="btn ghost" id="btn-changelog" title="What's New — recent updates" style="position:relative">🎁<span class="badge" id="changelog-count" hidden style="background:#dc2626">0</span></button>
             <a class="btn ghost" id="btn-wa-notif" href="#/whatsbot/chat" title="WhatsApp inbox" style="position:relative;text-decoration:none">💬<span class="badge" id="wa-notif-count" hidden style="background:#16a34a">0</span></a>
             <button class="btn ghost" id="btn-notif" title="Notifications">🔔<span class="badge" id="notif-count" hidden>0</span></button>
           </div>
@@ -1414,6 +1415,158 @@ function navigateTo(id) {
 }
 
 const VIEWS = {};
+
+/* ---------------- What's New (CHANGELOG_v1) ---------------- */
+/*
+ * Top-right 🎁 icon shows the platform changelog. Three tabs:
+ *   New Features   (category=feature, icon ✨)
+ *   Issue Resolved (category=fix,     icon 🛠)
+ *   Upgrade/Modify (category=modify,  icon ⚡)
+ *
+ * Data: api_changelog_list (control DB, last 1 year)
+ * Unread badge: api_changelog_unread (per-user pointer in tenant config)
+ * Mark seen: api_changelog_mark_seen (called when modal opens)
+ */
+function _initChangelog() {
+  const btn = document.getElementById('btn-changelog');
+  if (!btn) return;
+  const badge = document.getElementById('changelog-count');
+
+  async function refreshUnread() {
+    try {
+      const r = await api('api_changelog_unread', {});
+      const n = Number(r && r.count) || 0;
+      if (badge) {
+        if (n > 0) { badge.hidden = false; badge.textContent = n > 99 ? '99+' : String(n); }
+        else { badge.hidden = true; }
+      }
+    } catch (_) {}
+  }
+  refreshUnread();
+  setInterval(refreshUnread, 5 * 60 * 1000);
+
+  btn.addEventListener('click', () => openChangelogModal());
+}
+
+const _CL_META = {
+  feature: { label: 'New Feature',      icon: '✨', color: '#0369a1', bg: '#e0f2fe' },
+  fix:     { label: 'Issue Resolved',   icon: '🛠', color: '#15803d', bg: '#dcfce7' },
+  modify:  { label: 'Upgrade / Modify', icon: '⚡', color: '#b45309', bg: '#fef3c7' }
+};
+const _CL_ORDER = ['feature', 'fix', 'modify'];
+
+async function openChangelogModal() {
+  // Mark seen the moment the user opens the panel; updates the badge.
+  try { await api('api_changelog_mark_seen', {}); } catch (_) {}
+  const badge = document.getElementById('changelog-count');
+  if (badge) badge.hidden = true;
+
+  const m = h('div', { class: 'modal-backdrop',
+    onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const modal = h('div', { class: 'modal modal-lg' });
+  modal.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, '🎁 What\'s New'),
+    h('button', { class: 'btn icon', onclick: () => m.remove() }, '✕')
+  ));
+
+  // Tab bar
+  let activeTab = 'all';
+  const tabs = h('div', { style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap', padding: '.5rem 1rem .25rem' } });
+  const listWrap = h('div', { style: { padding: '.5rem 1rem 1rem', maxHeight: 'calc(100vh - 250px)', overflowY: 'auto' } });
+
+  modal.appendChild(tabs);
+  modal.appendChild(listWrap);
+  m.appendChild(modal);
+  document.body.appendChild(m);
+
+  let lastEntries = [];
+  let lastCounts = { feature: 0, fix: 0, modify: 0 };
+
+  function tabPill(id, label, count) {
+    const on = activeTab === id;
+    const b = h('button', { class: 'btn',
+      style: {
+        padding: '.35rem .75rem', fontSize: '.82rem',
+        border: '1px solid ' + (on ? '#4f46e5' : '#cbd5e1'),
+        borderRadius: '999px', background: on ? '#4f46e5' : '#fff',
+        color: on ? '#fff' : '#0f172a', fontWeight: on ? '600' : '500', cursor: 'pointer'
+      },
+      onclick: () => { activeTab = id; renderTabs(); renderList(); }
+    }, label + (count != null ? ' · ' + count : ''));
+    return b;
+  }
+  function renderTabs() {
+    tabs.innerHTML = '';
+    const total = (lastCounts.feature || 0) + (lastCounts.fix || 0) + (lastCounts.modify || 0);
+    tabs.appendChild(tabPill('all', 'All', total));
+    _CL_ORDER.forEach(k => tabs.appendChild(tabPill(k, _CL_META[k].icon + ' ' + _CL_META[k].label, lastCounts[k])));
+  }
+
+  function renderList() {
+    listWrap.innerHTML = '';
+    const rows = activeTab === 'all' ? lastEntries : lastEntries.filter(e => e.category === activeTab);
+    if (!rows.length) {
+      listWrap.appendChild(h('div', { class: 'muted', style: { padding: '1.5rem', textAlign: 'center' } }, 'Nothing here yet.'));
+      return;
+    }
+    rows.forEach(e => {
+      const meta = _CL_META[e.category] || _CL_META.feature;
+      const when = new Date(e.created_at);
+      const dateStr = when.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+      const card = h('div', {
+        style: {
+          display: 'flex', gap: '.7rem', padding: '.75rem .9rem', marginBottom: '.55rem',
+          border: '1px solid #e2e8f0', borderRadius: '10px', background: '#fff',
+          cursor: e.link ? 'pointer' : 'default'
+        },
+        onclick: () => {
+          if (!e.link) return;
+          m.remove();
+          if (e.link.startsWith('#')) location.hash = e.link;
+          else if (e.link.startsWith('/')) location.hash = '#' + e.link;
+          else window.open(e.link, '_blank');
+        }
+      },
+        h('div', {
+          style: {
+            flexShrink: '0', width: '40px', height: '40px', borderRadius: '10px',
+            background: meta.bg, color: meta.color, display: 'flex',
+            alignItems: 'center', justifyContent: 'center', fontSize: '1.2rem'
+          }
+        }, e.icon || meta.icon),
+        h('div', { style: { flex: 1, minWidth: 0 } },
+          h('div', { style: { display: 'flex', gap: '.4rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '.15rem' } },
+            h('span', { style: { fontWeight: 600, color: '#0f172a' } }, e.title),
+            h('span', {
+              style: {
+                background: meta.bg, color: meta.color, fontSize: '.66rem',
+                padding: '.08rem .4rem', borderRadius: '4px', fontWeight: 600,
+                textTransform: 'uppercase', letterSpacing: '.03em'
+              }
+            }, meta.label)
+          ),
+          e.body ? h('div', { style: { color: '#475569', fontSize: '.82rem', lineHeight: '1.4' } }, e.body) : null,
+          h('div', { class: 'muted', style: { fontSize: '.7rem', marginTop: '.3rem' } }, dateStr)
+        )
+      );
+      listWrap.appendChild(card);
+    });
+  }
+
+  // Initial load
+  renderTabs();
+  listWrap.appendChild(h('div', { class: 'loading' }, 'Loading...'));
+  try {
+    const r = await api('api_changelog_list', { limit: 200 });
+    lastEntries = (r && r.entries) || [];
+    lastCounts  = (r && r.counts)  || { feature: 0, fix: 0, modify: 0 };
+    renderTabs();
+    renderList();
+  } catch (e) {
+    listWrap.innerHTML = '';
+    listWrap.appendChild(h('div', { class: 'error-box' }, 'Could not load updates: ' + e.message));
+  }
+}
 
 /* ---------------- Date-range presets (DATE_PRESETS_v1) ---------------- */
 /*
@@ -30438,7 +30591,7 @@ function _initStickyWidget() {
   function start() {
     let n = 0;
     const t = setInterval(() => {
-      if (typeof CRM !== 'undefined' && CRM.user) { _initCrmCopilot(); _initFloatingChat(); _initStickyWidget(); clearInterval(t); }
+      if (typeof CRM !== 'undefined' && CRM.user) { _initCrmCopilot(); _initFloatingChat(); _initStickyWidget(); _initChangelog(); clearInterval(t); }
       else if (++n > 120) clearInterval(t);
     }, 500);
   }

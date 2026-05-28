@@ -97,6 +97,7 @@ const ROUTE_FILES = [
   'devicediag',      /* DEVICE_DIAG_INGEST_FIX_v1 — tenant ingest only; super-admin reads stay in routes/saas/recordingHealth.js */
   'outboundWebhook', /* OUTBOUND_WH_v1 — send each NEW lead to external URLs based on filter rules */
   'team',            /* TEAM_LIVE_STATUS_v1 — Live Team Status panel + Break toggle */
+  'changelog',       /* CHANGELOG_v1 — What's New / changelog feed */
 ];
 
 const API = {};
