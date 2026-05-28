@@ -28860,10 +28860,240 @@ function _initFloatingChat() {
   // Allow other modules to control the dock
   window._toggleChatDock = () => fab.click();
 }
+
+// DASH_STICKY_v1 — pinned floating dashboard widget. Tenant picks any
+// widget from WIDGET_LIBRARY and it becomes a persistent draggable,
+// resizable card visible on every page. Auto-refreshes every 60s plus
+// a manual ↻ button. State (type + x/y/w/h + minimized) persisted
+// per-device in localStorage.crm_sticky_v1.
+function _initStickyWidget() {
+  if (document.getElementById('sticky-fab')) return;
+  const STORAGE_KEY = 'crm_sticky_v1';
+  const _load = () => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch (_) { return {}; } };
+  const _save = (s) => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); } catch (_) {} };
+  let state = _load();
+
+  // -------- Floating launcher (always visible when no widget pinned) --------
+  const fab = document.createElement('button');
+  fab.id = 'sticky-fab';
+  fab.title = 'Pin a dashboard widget';
+  fab.textContent = '📌';
+  fab.style.cssText = `
+    position: fixed; bottom: 78px; right: 24px;
+    width: 44px; height: 44px; border-radius: 50%;
+    background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+    color: #fff; font-size: 1.3rem; cursor: pointer;
+    border: none; box-shadow: 0 4px 12px rgba(245, 158, 11, .35);
+    z-index: 9988; display: ${state.type ? 'none' : 'flex'};
+    align-items: center; justify-content: center;
+  `;
+  document.body.appendChild(fab);
+  fab.onclick = () => openPicker();
+
+  // -------- Picker modal --------
+  function openPicker() {
+    const lib = (typeof WIDGET_LIBRARY !== 'undefined') ? WIDGET_LIBRARY : {};
+    const entries = Object.entries(lib);
+    if (!entries.length) { toast('No widgets available', 'err'); return; }
+    // Group by widget.group
+    const groups = {};
+    entries.forEach(([key, def]) => {
+      const g = def.group || 'Other';
+      if (!groups[g]) groups[g] = [];
+      groups[g].push({ key, def });
+    });
+    const modal = h('div', { class: 'modal-backdrop', onclick: (ev) => { if (ev.target.classList.contains('modal-backdrop')) modal.remove(); } });
+    const card = h('div', { class: 'modal', style: { maxWidth: '640px' } });
+    card.appendChild(h('div', { class: 'modal-head' },
+      h('h3', {}, '📌 Pin a widget to keep it always visible'),
+      h('button', { class: 'btn icon', onclick: () => modal.remove() }, '✕')
+    ));
+    card.appendChild(h('p', { class: 'muted', style: { margin: '0 0 .7rem', fontSize: '.85rem' } },
+      'Pick which dashboard widget should float on top of every page. Auto-refreshes every 60 seconds. Drag the header to move, drag the bottom-right corner to resize.'));
+    Object.keys(groups).sort().forEach(g => {
+      card.appendChild(h('h4', { style: { margin: '.7rem 0 .25rem', fontSize: '.86rem', color: '#64748b' } }, g));
+      const grid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '.4rem' } });
+      groups[g].forEach(({ key, def }) => {
+        const opt = h('button', {
+          class: 'btn', style: { textAlign: 'left', padding: '.55rem .7rem', fontSize: '.85rem', whiteSpace: 'normal' },
+          onclick: () => { modal.remove(); pin(key); }
+        }, def.title || key);
+        grid.appendChild(opt);
+      });
+      card.appendChild(grid);
+    });
+    modal.appendChild(card);
+    document.body.appendChild(modal);
+  }
+
+  // -------- The pinned panel itself --------
+  let panel = null;
+  let _refreshTimer = null;
+
+  function pin(type) {
+    state.type = type;
+    if (!state.w) { state.w = 380; state.h = 320; }
+    if (state.x == null) { state.x = Math.max(20, window.innerWidth - state.w - 40); }
+    if (state.y == null) { state.y = 120; }
+    state.minimized = false;
+    _save(state);
+    fab.style.display = 'none';
+    render();
+  }
+
+  function unpin() {
+    if (_refreshTimer) { clearInterval(_refreshTimer); _refreshTimer = null; }
+    if (panel) { panel.remove(); panel = null; }
+    state.type = null;
+    _save(state);
+    fab.style.display = 'flex';
+  }
+
+  function render() {
+    if (panel) { panel.remove(); }
+    panel = document.createElement('div');
+    panel.id = 'sticky-panel';
+    panel.style.cssText = `
+      position: fixed; left: ${state.x}px; top: ${state.y}px;
+      width: ${state.w}px; height: ${state.minimized ? '40px' : state.h + 'px'};
+      background: #fff; border: 1px solid #cbd5e1; border-radius: 10px;
+      box-shadow: 0 8px 24px rgba(15,23,42,.18);
+      z-index: 9987; display: flex; flex-direction: column;
+      overflow: hidden; min-width: 280px; min-height: 40px;
+    `;
+    // Header (draggable)
+    const header = document.createElement('div');
+    header.style.cssText = 'padding: .35rem .55rem; background: linear-gradient(135deg, #fef3c7, #fde68a); color: #78350f; display: flex; align-items: center; gap: .35rem; cursor: move; font-size: .82rem; font-weight: 600; user-select: none;';
+    const lib = (typeof WIDGET_LIBRARY !== 'undefined') ? WIDGET_LIBRARY : {};
+    const def = lib[state.type];
+    header.innerHTML = `<span>📌</span><span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${(def && def.title) || state.type}</span>`;
+    const refreshBtn = document.createElement('button');
+    refreshBtn.textContent = '↻'; refreshBtn.title = 'Refresh now';
+    refreshBtn.style.cssText = 'background:transparent;border:none;cursor:pointer;font-size:1rem;color:#78350f;padding:0 .25rem;';
+    refreshBtn.onclick = (e) => { e.stopPropagation(); refreshData(); };
+    header.appendChild(refreshBtn);
+    const swapBtn = document.createElement('button');
+    swapBtn.textContent = '⇄'; swapBtn.title = 'Pick a different widget';
+    swapBtn.style.cssText = 'background:transparent;border:none;cursor:pointer;font-size:.9rem;color:#78350f;padding:0 .25rem;';
+    swapBtn.onclick = (e) => { e.stopPropagation(); openPicker(); };
+    header.appendChild(swapBtn);
+    const minBtn = document.createElement('button');
+    minBtn.textContent = state.minimized ? '▢' : '_';
+    minBtn.title = state.minimized ? 'Restore' : 'Minimize';
+    minBtn.style.cssText = 'background:transparent;border:none;cursor:pointer;font-size:1rem;color:#78350f;padding:0 .25rem;';
+    minBtn.onclick = (e) => { e.stopPropagation(); state.minimized = !state.minimized; _save(state); render(); };
+    header.appendChild(minBtn);
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕'; closeBtn.title = 'Unpin';
+    closeBtn.style.cssText = 'background:transparent;border:none;cursor:pointer;font-size:1rem;color:#78350f;padding:0 .25rem;';
+    closeBtn.onclick = (e) => { e.stopPropagation(); unpin(); };
+    header.appendChild(closeBtn);
+    panel.appendChild(header);
+
+    // Body
+    const body = document.createElement('div');
+    body.style.cssText = 'flex:1; overflow:auto; padding:.55rem .65rem;';
+    body.id = 'sticky-body';
+    if (state.minimized) body.style.display = 'none';
+    panel.appendChild(body);
+
+    // Resize handle (bottom-right)
+    const resize = document.createElement('div');
+    resize.style.cssText = 'position:absolute;right:2px;bottom:2px;width:14px;height:14px;cursor:nwse-resize;background:linear-gradient(135deg,transparent 50%,#94a3b8 50%);border-radius:0 0 8px 0;';
+    panel.appendChild(resize);
+
+    document.body.appendChild(panel);
+
+    // ---- Drag ----
+    let drag = null;
+    header.addEventListener('mousedown', (e) => {
+      if (e.target.tagName === 'BUTTON') return;
+      drag = { startX: e.clientX, startY: e.clientY, origX: state.x, origY: state.y };
+      e.preventDefault();
+    });
+    // ---- Resize ----
+    let rsz = null;
+    resize.addEventListener('mousedown', (e) => {
+      rsz = { startX: e.clientX, startY: e.clientY, origW: state.w, origH: state.h };
+      e.preventDefault(); e.stopPropagation();
+    });
+    function onMove(e) {
+      if (drag) {
+        const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
+        state.x = Math.max(0, Math.min(window.innerWidth - 60, drag.origX + dx));
+        state.y = Math.max(0, Math.min(window.innerHeight - 40, drag.origY + dy));
+        panel.style.left = state.x + 'px'; panel.style.top = state.y + 'px';
+      } else if (rsz) {
+        const dw = e.clientX - rsz.startX, dh = e.clientY - rsz.startY;
+        state.w = Math.max(280, rsz.origW + dw);
+        state.h = Math.max(120, rsz.origH + dh);
+        panel.style.width = state.w + 'px'; panel.style.height = state.h + 'px';
+      }
+    }
+    function onUp() { if (drag || rsz) { _save(state); } drag = null; rsz = null; }
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    // Cleanup on unmount: store removers on panel for orphan-cleanup
+    panel._cleanup = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+
+    // Fetch + render the widget content
+    refreshData();
+    if (_refreshTimer) clearInterval(_refreshTimer);
+    _refreshTimer = setInterval(() => { if (!state.minimized && document.visibilityState !== 'hidden') refreshData(); }, 60000);
+  }
+
+  // Universal data fetch — covers every widget in WIDGET_LIBRARY
+  async function refreshData() {
+    if (state.minimized) return;
+    const body = document.getElementById('sticky-body');
+    if (!body) return;
+    const lib = (typeof WIDGET_LIBRARY !== 'undefined') ? WIDGET_LIBRARY : {};
+    const def = lib[state.type];
+    if (!def) { body.innerHTML = '<div class="muted">Unknown widget</div>'; return; }
+    // Show loading hint only on first paint
+    if (!body.dataset.everLoaded) {
+      body.innerHTML = '<div class="muted" style="text-align:center;padding:1rem;">Loading…</div>';
+    }
+    try {
+      const camp = (typeof CRM !== 'undefined' && CRM._dashCampaignIds) || [];
+      // Fetch everything — small overhead; widgets read whatever slice they need
+      const [summary, notifs, funnel, tat, projects, daily, callActivity] = await Promise.all([
+        api('api_reports_summary', { campaign_ids: camp }).catch(() => null),
+        api('api_notifications_mine').catch(() => null),
+        api('api_reports_funnel', { campaign_ids: camp }).catch(() => []),
+        api('api_tat_report', { campaign_ids: camp }).catch(() => null),
+        api('api_projectStages_board').catch(() => null),
+        api('api_reports_daily', { campaign_ids: camp }).catch(() => []),
+        api('api_reports_callActivity', {}).catch(() => null)
+      ]);
+      const data = { summary, notifs, funnel, tat, projects, daily, callActivity };
+      body.innerHTML = '';
+      try {
+        def.render(body, {}, data, { id: 'sticky', type: state.type, title: def.title });
+      } catch (e) {
+        body.innerHTML = '<div class="muted" style="color:#b91c1c;">Render error: ' + (e.message || e) + '</div>';
+      }
+      const stamp = h('div', { class: 'muted', style: { fontSize: '.68rem', textAlign: 'right', marginTop: '.3rem', opacity: 0.7 } }, 'Updated ' + new Date().toLocaleTimeString());
+      body.appendChild(stamp);
+      body.dataset.everLoaded = '1';
+    } catch (e) {
+      body.innerHTML = '<div class="muted" style="color:#b91c1c;">Failed: ' + (e.message || e) + '</div>';
+    }
+  }
+
+  // Auto-restore if already pinned
+  if (state.type) render();
+  // Expose toggle for keyboard shortcut or external callers
+  window._toggleStickyWidget = () => { if (state.type) unpin(); else openPicker(); };
+}
+
   function start() {
     let n = 0;
     const t = setInterval(() => {
-      if (typeof CRM !== 'undefined' && CRM.user) { _initCrmCopilot(); _initFloatingChat(); clearInterval(t); }
+      if (typeof CRM !== 'undefined' && CRM.user) { _initCrmCopilot(); _initFloatingChat(); _initStickyWidget(); clearInterval(t); }
       else if (++n > 120) clearInterval(t);
     }, 500);
   }
