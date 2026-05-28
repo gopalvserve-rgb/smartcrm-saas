@@ -1024,8 +1024,7 @@ const NAV_GROUPS = [
     { id: 'callinsights', label: 'Call insights', icon: '🎙' },
     { id: 'callratings',  label: 'Call ratings',  icon: '⭐', roles: ['admin', 'manager', 'team_leader'] },
     { id: 'aiusage',      label: 'AI usage',      icon: '🤖', roles: ['admin', 'manager'] },
-    { id: 'callactivity', label: 'Call activity', icon: '📞', roles: ['admin', 'manager', 'team_leader'] },
-    { id: 'teamlive',     label: 'Live Team',     icon: '🟢' }  /* TEAM_LIVE_STATUS_v1 */
+    { id: 'callactivity', label: 'Call activity', icon: '📞', roles: ['admin', 'manager', 'team_leader'] }
   ] },
   { label: 'Catalog', icon: '📦', items: [
     { id: 'inventory',  label: 'Inventory', icon: '📦' },
@@ -1689,10 +1688,7 @@ const WIDGET_LIBRARY = {
   // doesn't need any extra fetch.
   team_live_status: { title: '🟢 Live Team Status', group: 'Team',
     render: async (c, _cfg, _d, w) => {
-      c.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', marginBottom: '.5rem' } },
-        h('h3', { style: { margin: 0, flex: 1 } }, w.title || '🟢 Live Team Status'),
-        h('a', { href: '#/teamlive', class: 'muted', style: { fontSize: '.78rem', textDecoration: 'none' } }, 'Open ›')
-      ));
+      c.appendChild(h('h3', { style: { margin: '0 0 .4rem' } }, w.title || '🟢 Live Team Status'));
       const body = h('div', {});
       c.appendChild(body);
       let aborted = false;
