@@ -281,6 +281,7 @@ async function apiRaw(fn, ...args) {
       // Native push (Capacitor APK only) — talks to Firebase Cloud Messaging.
       // No-ops in regular browsers / installed PWAs (those use Web Push above).
       setTimeout(() => registerCapacitorPush().catch(() => {}), 2500);
+      setTimeout(() => _startFcmAutoHeal(), 10000);  // FCM_AUTOHEAL_v1
       // If a notification tap launched the app cold and we stashed the
       // target URL before the router was ready, apply it now that we're in.
       try {
@@ -24438,7 +24439,63 @@ function applyPushUrl(url) {
  *   4. Wire 'pushNotificationActionPerformed' so tapping a notification
  *      navigates the WebView to the URL we baked into the data payload.
  */
-async function registerCapacitorPush() {
+// FCM_AUTOHEAL_v1 — periodically verify that this APK has registered an
+// FCM token under the current user. If api_fcm_userDiag says my_token_count
+// is 0, force-re-run Push.register() with a fresh listener so the token is
+// re-delivered + saved. Stops once token count > 0 or after MAX_TRIES.
+let _fcmHealTimer = null;
+let _fcmHealAttempts = 0;
+async function _startFcmAutoHeal() {
+  const cap = window.Capacitor;
+  if (!cap || typeof cap.isNativePlatform !== 'function' || !cap.isNativePlatform()) return;
+  if (_fcmHealTimer) return;
+  const MAX_TRIES = 5;
+  async function tick() {
+    _fcmHealAttempts++;
+    try {
+      const diag = await api('api_fcm_userDiag');
+      if (diag && diag.my_token_count > 0) {
+        console.log('[fcm-heal] OK — token registered, stopping auto-heal');
+        clearInterval(_fcmHealTimer); _fcmHealTimer = null;
+        return;
+      }
+      // Re-run register — listener will fire if a fresh token arrives
+      console.log('[fcm-heal] no token yet, attempt #' + _fcmHealAttempts + ' of ' + MAX_TRIES);
+      try { await registerCapacitorPush(true); } catch (_) {}
+    } catch (e) { console.warn('[fcm-heal] diag failed', e && e.message); }
+    if (_fcmHealAttempts >= MAX_TRIES) {
+      clearInterval(_fcmHealTimer); _fcmHealTimer = null;
+      console.warn('[fcm-heal] gave up after ' + MAX_TRIES + ' attempts');
+    }
+  }
+  // First check after 8s, then every 30s
+  setTimeout(tick, 8000);
+  _fcmHealTimer = setInterval(tick, 30000);
+}
+
+// Manual button — for Settings UI. Returns the diag result after a retry.
+async function fcmRetryRegister() {
+  const cap = window.Capacitor;
+  if (!cap || typeof cap.isNativePlatform !== 'function' || !cap.isNativePlatform()) {
+    if (typeof toast === 'function') toast('Open this on the Lead CRM APK — not the web browser.', 'warn');
+    return null;
+  }
+  if (typeof toast === 'function') toast('🔄 Re-registering this device for push…');
+  try { await registerCapacitorPush(true); } catch (_) {}
+  // Give the FCM listener up to 6s to fire + the api call to land
+  await new Promise(r => setTimeout(r, 6000));
+  let diag = null;
+  try { diag = await api('api_fcm_userDiag'); } catch (_) {}
+  if (diag && diag.my_token_count > 0) {
+    if (typeof toast === 'function') toast('✅ Registered (' + diag.my_token_count + ' device token).', 'ok');
+  } else {
+    if (typeof toast === 'function') toast('⚠ Still no token. Likely cause: notification permission denied. Open phone Settings → Apps → Lead CRM → Notifications → Allow.', 'err');
+  }
+  return diag;
+}
+window.fcmRetryRegister = fcmRetryRegister;
+
+async function registerCapacitorPush(force) {
   const cap = window.Capacitor;
   if (!cap || typeof cap.isNativePlatform !== 'function' || !cap.isNativePlatform()) return;
   const Push = cap.Plugins && cap.Plugins.PushNotifications;
