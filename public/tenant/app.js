@@ -8221,18 +8221,28 @@ async function _renderPipelineFunnel(view) {
     return;
   }
 
-  // Derive top/bottom widths DIRECTLY from data so the trapezoids match
-  // the reference design (widths == pct_of_total). Tiny bands get a floor
-  // of 16% so they stay visible. Each band's bottom edge = next band's top.
+  // Derive top/bottom widths from data. For balanced pipelines (e.g.
+  // reference 100/76/45/29/17) the funnel reads naturally. For heavily-
+  // skewed pipelines (e.g. 100/12/5/2/1) we lift the floor to 38% so the
+  // bottom bands stay wide enough to fit their labels ("Proposal sent ·
+  // 15 leads · 1% of total" needs ~180px). Top band stays at the real
+  // pct_of_total so the funnel still narrows visibly.
+  const MIN_BAND_W = 38;   // % — keeps text readable inside the band
   const rawPcts = bands.map(b => Math.max(0, Math.min(100, Number(b.pct_of_total) || 0)));
-  const widths = rawPcts.map(p => p > 0 ? Math.max(16, Math.min(100, p)) : 16);
-  // Force monotonic descent
+  // Blend: width = max(MIN_BAND_W, raw_pct). For raw values above MIN it's
+  // identical to raw_pct (matches reference). For raw values below MIN it
+  // gets lifted to MIN.
+  const widths = rawPcts.map(p => Math.max(MIN_BAND_W, Math.min(100, p)));
+  // Force monotonic descent — each band must be at least 2pp narrower
+  // than the one above so the funnel doesn't go flat. Skip if doing so
+  // would push us below MIN_BAND_W (then we just stay equal).
   for (let i = 1; i < widths.length; i++) {
-    if (widths[i] > widths[i-1]) widths[i] = Math.max(14, widths[i-1] - 4);
+    const cap = widths[i - 1] - 2;
+    if (widths[i] > cap) widths[i] = Math.max(MIN_BAND_W, cap);
   }
-  // Bottom of each band = next band's top width; last band tapers further
+  // Bottom of each band = next band's top width; last band tapers a bit
   const bottoms = widths.map((w, i) =>
-    i < widths.length - 1 ? widths[i + 1] : Math.max(12, w - 6));
+    i < widths.length - 1 ? widths[i + 1] : Math.max(MIN_BAND_W - 4, w - 4));
 
   const BAND_H = 64;            // px per band
   const FUNNEL_W = 520;         // funnel column width
