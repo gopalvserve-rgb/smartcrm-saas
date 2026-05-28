@@ -80,6 +80,14 @@ SELECT * FROM (VALUES
 
   ('fix', 'Pipeline funnel — won_at column error',
    'Pipeline page was throwing Could not load funnel: column won_at does not exist because the new aggregator assumed a column the leads table never had. Switched the avg-cycle calculation to use last_status_change_at on won leads instead. Pipeline + Dashboard funnel widget now load cleanly.',
-   '#/pipeline', '🐛', NOW())
+   '#/pipeline', '🐛', NOW() - INTERVAL '20 minutes'),
+
+  ('modify', 'Pipeline funnel — redesigned to match reference',
+   'Funnel is now compact and fits the page: connected SVG trapezoids whose widths are data-driven (top edge of each band = next band start), tighter stacking, smaller KPI strip, Won/Lost cards visible without scrolling. Right-side dashed connectors and X leads / value / advance labels now align with each band.',
+   '#/pipeline', '🎨', NOW() - INTERVAL '5 minutes'),
+
+  ('fix', 'Live Team widget — empty state',
+   'On some tenants the Live Team widget showed only the header with an empty body. Now it renders one of three meaningful messages: an error pill if the API returns nothing, a setup hint if the route is missing, or a friendly No team activity right now message when no users have logged in or made a call recently.',
+   '#/dashboard', '🌙', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);

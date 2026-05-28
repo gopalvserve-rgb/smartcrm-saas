@@ -8166,25 +8166,28 @@ function _formatInr(n) {
 }
 
 async function _renderPipelineFunnel(view) {
+  // PIPELINE_FUNNEL_REDESIGN_v2 — compact, viewport-fitting funnel that
+  // matches the reference: connected trapezoids whose widths are data-
+  // driven (top edge of band i = pct_of_total[i], bottom edge = pct_of_total[i+1]),
+  // tight stacking, compact KPI strip, Won/Lost cards visible without scroll.
   view.innerHTML = '';
 
   // Header
   const tenantName = (CRM.tenant && CRM.tenant.name) || (CRM.brand && CRM.brand.name) || '';
-  const head = h('div', { style: { display:'flex', alignItems:'flex-start', justifyContent:'space-between', flexWrap:'wrap', gap:'.6rem', marginBottom:'1.2rem' } },
+  view.appendChild(h('div', { style: { display:'flex', alignItems:'flex-start', justifyContent:'space-between', flexWrap:'wrap', gap:'.5rem', marginBottom:'.85rem' } },
     h('div', {},
-      h('h2', { style: { margin:0, fontSize:'1.55rem', color:'#0f172a', letterSpacing:'-.01em' } }, 'Sales pipeline'),
-      h('div', { class: 'muted', style: { fontSize:'.85rem', marginTop:'.25rem', color:'#64748b' } },
-        (tenantName ? (tenantName + ' \u00B7 ') : '') + 'auto-updated')
+      h('h2', { style: { margin:0, fontSize:'1.3rem', color:'#0f172a', letterSpacing:'-.01em' } }, 'Sales pipeline'),
+      h('div', { class: 'muted', style: { fontSize:'.78rem', marginTop:'.15rem', color:'#64748b' } },
+        (tenantName ? (tenantName + ' · ') : '') + 'auto-updated')
     ),
-    h('div', { style: { display:'flex', gap:'.5rem', alignItems:'center', flexWrap:'wrap' } },
-      h('span', { style: { background:'#dbeafe', color:'#1e40af', padding:'.4rem .85rem', borderRadius:'999px', fontSize:'.82rem', fontWeight:600, display:'inline-flex', alignItems:'center', gap:'.35rem' } },
-        h('span', { style: { color:'#facc15' } }, '\u26A1'),
+    h('div', { style: { display:'flex', gap:'.4rem', alignItems:'center', flexWrap:'wrap' } },
+      h('span', { style: { background:'#dbeafe', color:'#1e40af', padding:'.3rem .65rem', borderRadius:'999px', fontSize:'.72rem', fontWeight:600, display:'inline-flex', alignItems:'center', gap:'.3rem' } },
+        h('span', { style: { color:'#facc15' } }, '⚡'),
         'leads move automatically'
       ),
-      h('button', { class: 'btn ghost sm', onclick: () => { window._rePipeForceKanban = true; VIEWS.pipeline(view); } }, '\u{1F4CA} Switch to Kanban')
+      h('button', { class: 'btn ghost sm', style: { fontSize:'.78rem', padding:'.3rem .65rem' }, onclick: () => { window._rePipeForceKanban = true; VIEWS.pipeline(view); } }, '\u{1F4CA} Switch to Kanban')
     )
-  );
-  view.appendChild(head);
+  ));
 
   let data;
   try { data = await api('api_pipeline_funnel', {}); }
@@ -8194,128 +8197,191 @@ async function _renderPipelineFunnel(view) {
   }
   const k = data.kpis || {};
 
-  // KPI strip — 4 light-blue rounded cards
-  const kpiRow = h('div', { style: { display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(200px, 1fr))', gap:'.85rem', marginBottom:'2rem' } });
+  // Compact KPI strip — 4 light-blue rounded cards
+  const kpiRow = h('div', { style: { display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(170px, 1fr))', gap:'.6rem', marginBottom:'1.1rem' } });
   function kpi(label, val, sub) {
-    return h('div', { style: { background:'#eff6ff', border:'1px solid #dbeafe', borderRadius:'12px', padding:'1rem 1.2rem' } },
-      h('div', { style: { fontSize:'.78rem', color:'#1e40af', marginBottom:'.4rem' } }, label),
-      h('div', { style: { fontSize:'2rem', fontWeight:700, color:'#0f172a', lineHeight:'1.1' } }, val),
-      h('div', { style: { fontSize:'.78rem', color:'#64748b', marginTop:'.35rem' } }, sub)
+    return h('div', { style: { background:'#eff6ff', border:'1px solid #dbeafe', borderRadius:'10px', padding:'.6rem .85rem' } },
+      h('div', { style: { fontSize:'.68rem', color:'#1e40af', textTransform:'lowercase', letterSpacing:'.02em' } }, label),
+      h('div', { style: { fontSize:'1.5rem', fontWeight:700, color:'#0f172a', lineHeight:'1.1', marginTop:'.15rem' } }, val),
+      h('div', { style: { fontSize:'.68rem', color:'#64748b', marginTop:'.2rem' } }, sub)
     );
   }
   kpiRow.appendChild(kpi('total leads',  String(k.total_leads || 0), 'in pipeline'));
   kpiRow.appendChild(kpi('open value',   _formatInr(k.open_value || 0), 'weighted ' + _formatInr(k.weighted_value || 0)));
   kpiRow.appendChild(kpi('win rate',     (k.win_rate || 0) + '%', 'won vs closed'));
-  kpiRow.appendChild(kpi('avg cycle',    k.avg_cycle_days != null ? (k.avg_cycle_days + 'd') : '\u2014', 'lead to close'));
+  kpiRow.appendChild(kpi('avg cycle',    k.avg_cycle_days != null ? (k.avg_cycle_days + 'd') : '—', 'lead to close'));
   view.appendChild(kpiRow);
 
-  // Funnel — descending trapezoids
-  const bands = (data.bands || []);
-  const maxCount = Math.max(1, ...bands.map(b => b.count || 0));
-  // Compute each band's width as % of container. Top band ~80%, narrowing.
-  const funnelWrap = h('div', { style: { maxWidth:'960px', margin:'0 auto', padding:'.5rem 0' } });
+  // ---- Funnel drawn as a single SVG: connected trapezoids ----
+  const bands = (data.bands || []).slice(0, 5);
+  if (!bands.length) {
+    view.appendChild(h('div', { class:'muted', style:{ padding:'1rem', textAlign:'center' } },
+      'No leads in the pipeline yet. As leads come in and get their stage mapped, they\'ll appear here.'));
+    return;
+  }
+
+  // Derive top/bottom widths from data so the trapezoids actually connect.
+  // pct_of_total is computed server-side against the first non-empty band.
+  const MIN_W = 22; // % — keeps tiny bands visible
+  const widths = bands.map(b => Math.max(MIN_W, Math.min(100, Number(b.pct_of_total) || 0)));
+  // Bottom of each band = next band's top width (last band tapers to MIN_W * 0.85)
+  const bottoms = widths.map((w, i) => i < widths.length - 1 ? widths[i + 1] : Math.max(MIN_W * 0.7, w * 0.55));
+
+  const BAND_H = 64;            // px per band
+  const FUNNEL_W = 520;         // funnel column width
+  const RIGHT_GUTTER = 250;     // space for the right-side label
+  const TOTAL_W = FUNNEL_W + 90 + RIGHT_GUTTER; // funnel + connector + label
+  const FUNNEL_H = BAND_H * bands.length;
+
+  const wrap = h('div', { style: { display:'flex', justifyContent:'center', margin:'.2rem 0' } });
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 ' + TOTAL_W + ' ' + FUNNEL_H);
+  svg.setAttribute('width', '100%');
+  svg.setAttribute('style', 'max-width:' + TOTAL_W + 'px; height:auto; display:block;');
+
+  function pctToX(pct) { return (50 - pct / 2) * (FUNNEL_W / 100); }
+  function pctToXR(pct) { return (50 + pct / 2) * (FUNNEL_W / 100); }
+
   bands.forEach((b, i) => {
-    const topWidth = Math.max(28, Math.round(80 - i * 11));  // 80, 69, 58, 47, 36 (approximate)
-    const bgColor = _FUNNEL_BAND_COLORS[i] || _FUNNEL_BAND_COLORS[_FUNNEL_BAND_COLORS.length - 1];
-    const textColor = _FUNNEL_BAND_TEXT[i] || '#fff';
-    const dotColor = _FUNNEL_DOT_COLORS[i] || '#1e3a8a';
-    // Build the trapezoid with clip-path
-    const trap = h('div', {
-      style: {
-        margin:'0 auto', width: topWidth + '%', height: '110px',
-        background: bgColor,
-        clipPath: 'polygon(8% 0, 92% 0, 100% 100%, 0% 100%)',
-        display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
-        color: textColor, cursor: 'pointer',
-        transition: 'transform .15s ease, filter .15s ease'
-      },
-      title: 'Click to see leads in ' + b.label,
-      onmouseenter: (ev) => { ev.currentTarget.style.transform = 'scale(1.015)'; ev.currentTarget.style.filter = 'brightness(1.06)'; },
-      onmouseleave: (ev) => { ev.currentTarget.style.transform = ''; ev.currentTarget.style.filter = ''; },
-      onclick: () => { location.hash = '#/leads?stage=' + b.id; }
-    },
-      h('div', { style: { fontWeight:700, fontSize:'1.05rem' } }, b.label),
-      h('div', { style: { fontSize:'.85rem', opacity:.95, marginTop:'.2rem' } },
-        b.count + ' leads \u00B7 ' + b.pct_of_total + '% of total')
-    );
+    const yTop = i * BAND_H;
+    const yBot = (i + 1) * BAND_H;
+    const wTop = widths[i];
+    const wBot = bottoms[i];
+    const tl = pctToX(wTop), tr = pctToXR(wTop);
+    const bl = pctToX(wBot), br = pctToXR(wBot);
+    const fill = _FUNNEL_BAND_COLORS[i] || _FUNNEL_BAND_COLORS[_FUNNEL_BAND_COLORS.length - 1];
+    const txt  = _FUNNEL_BAND_TEXT[i] || '#fff';
+    const dot  = _FUNNEL_DOT_COLORS[i] || '#1e3a8a';
 
-    // Row: [ trapezoid | dashed connector + dot | right label ]
-    const row = h('div', { style: { display:'grid', gridTemplateColumns:'minmax(0,1fr) 90px 180px', alignItems:'center', gap:'.4rem', marginBottom:'.55rem' } });
-    row.appendChild(trap);
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', 'M ' + tl + ' ' + yTop + ' L ' + tr + ' ' + yTop + ' L ' + br + ' ' + yBot + ' L ' + bl + ' ' + yBot + ' Z');
+    path.setAttribute('fill', fill);
+    path.setAttribute('stroke', '#ffffff');
+    path.setAttribute('stroke-width', '1');
+    path.style.cursor = 'pointer';
+    path.addEventListener('mouseenter', () => { path.setAttribute('filter', 'brightness(1.08)'); });
+    path.addEventListener('mouseleave', () => { path.removeAttribute('filter'); });
+    path.addEventListener('click', () => { location.hash = '#/leads?stage=' + b.id; });
+    const t = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+    t.textContent = 'Click to see leads in ' + b.label;
+    path.appendChild(t);
+    svg.appendChild(path);
 
-    // Dashed connector
-    const connector = h('div', { style: { display:'flex', alignItems:'center', height:'100%' } },
-      h('div', { style: { flex:1, height:'2px', borderTop:'2px dashed ' + dotColor, opacity:.7 } }),
-      h('div', { style: { width:'10px', height:'10px', borderRadius:'50%', background: dotColor, flexShrink:0 } })
-    );
-    row.appendChild(connector);
+    // Label text inside band
+    const labelGrp = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    labelGrp.setAttribute('pointer-events', 'none');
+    const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    lbl.setAttribute('x', FUNNEL_W / 2);
+    lbl.setAttribute('y', yTop + BAND_H / 2 - 4);
+    lbl.setAttribute('text-anchor', 'middle');
+    lbl.setAttribute('fill', txt);
+    lbl.setAttribute('font-weight', '700');
+    lbl.setAttribute('font-size', '14');
+    lbl.textContent = b.label;
+    labelGrp.appendChild(lbl);
+    const sub = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    sub.setAttribute('x', FUNNEL_W / 2);
+    sub.setAttribute('y', yTop + BAND_H / 2 + 12);
+    sub.setAttribute('text-anchor', 'middle');
+    sub.setAttribute('fill', txt);
+    sub.setAttribute('opacity', '0.95');
+    sub.setAttribute('font-size', '11');
+    sub.textContent = b.count + ' leads · ' + b.pct_of_total + '% of total';
+    labelGrp.appendChild(sub);
+    svg.appendChild(labelGrp);
 
-    // Right label
-    const advanceText = (b.advance_pct != null)
+    // Dashed connector + dot at right edge of band middle
+    const yMid = yTop + BAND_H / 2;
+    const connector = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    connector.setAttribute('x1', FUNNEL_W);
+    connector.setAttribute('y1', yMid);
+    connector.setAttribute('x2', FUNNEL_W + 80);
+    connector.setAttribute('y2', yMid);
+    connector.setAttribute('stroke', dot);
+    connector.setAttribute('stroke-width', '1.5');
+    connector.setAttribute('stroke-dasharray', '4 4');
+    connector.setAttribute('opacity', '0.7');
+    svg.appendChild(connector);
+
+    const dotEl = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    dotEl.setAttribute('cx', FUNNEL_W + 80);
+    dotEl.setAttribute('cy', yMid);
+    dotEl.setAttribute('r', '4.5');
+    dotEl.setAttribute('fill', dot);
+    svg.appendChild(dotEl);
+
+    // Right-side label text
+    const rTitle = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    rTitle.setAttribute('x', FUNNEL_W + 95);
+    rTitle.setAttribute('y', yMid - 3);
+    rTitle.setAttribute('fill', '#0f172a');
+    rTitle.setAttribute('font-weight', '700');
+    rTitle.setAttribute('font-size', '13');
+    rTitle.textContent = b.count + ' leads';
+    svg.appendChild(rTitle);
+
+    const advanceText = (b.advance_pct != null && i < bands.length - 1)
       ? (b.advance_pct + '% advance')
       : (i === bands.length - 1 ? 'final stage' : '');
-    const rightCol = h('div', { style: { fontSize:'.92rem', color:'#0f172a' } },
-      h('div', { style: { fontWeight:700 } }, b.count + ' leads'),
-      h('div', { style: { fontSize:'.82rem', color:'#64748b', marginTop:'.15rem' } },
-        _formatInr(b.value) + (advanceText ? (' \u00B7 ' + advanceText) : ''))
-    );
-    row.appendChild(rightCol);
-
-    funnelWrap.appendChild(row);
+    const rSub = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    rSub.setAttribute('x', FUNNEL_W + 95);
+    rSub.setAttribute('y', yMid + 12);
+    rSub.setAttribute('fill', '#64748b');
+    rSub.setAttribute('font-size', '11');
+    rSub.textContent = _formatInr(b.value) + (advanceText ? (' · ' + advanceText) : '');
+    svg.appendChild(rSub);
   });
-  view.appendChild(funnelWrap);
+  wrap.appendChild(svg);
+  view.appendChild(wrap);
 
-  // Won / Lost summary — equal-width green/red cards
+  // ---- Won / Lost cards ----
   const won = data.won || { count:0, value:0 };
   const lost = data.lost || { count:0, value:0 };
   const closed = won.count + lost.count;
   const lostPct = closed ? Math.round((lost.count / closed) * 100) : 0;
 
-  const summary = h('div', { style: { display:'grid', gridTemplateColumns:'1fr 1fr', gap:'.85rem', marginTop:'2rem' } });
+  const summary = h('div', { style: { display:'grid', gridTemplateColumns:'1fr 1fr', gap:'.6rem', marginTop:'1rem' } });
 
-  // Won card
   summary.appendChild(h('div', {
-    style: { background:'#dcfce7', border:'1px solid #bbf7d0', borderRadius:'12px', padding:'1rem 1.25rem', cursor:'pointer', display:'flex', alignItems:'center', gap:'1rem' },
+    style: { background:'#dcfce7', border:'1px solid #bbf7d0', borderRadius:'10px', padding:'.7rem .9rem', cursor:'pointer', display:'flex', alignItems:'center', gap:'.7rem' },
     onclick: () => { location.hash = '#/leads?stage=won'; }
   },
-    h('div', { style: { width:'44px', height:'44px', borderRadius:'10px', background:'#86efac', color:'#14532d', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'1.3rem', fontWeight:700, flexShrink:0 } }, '\u2713'),
+    h('div', { style: { width:'34px', height:'34px', borderRadius:'8px', background:'#86efac', color:'#14532d', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'1.05rem', fontWeight:700, flexShrink:0 } }, '✓'),
     h('div', { style: { flex:1, minWidth:0 } },
-      h('div', { style: { fontWeight:700, color:'#14532d', fontSize:'1.05rem' } }, 'Won'),
-      h('div', { style: { fontSize:'.8rem', color:'#15803d', marginTop:'.15rem' } }, (data.kpis.win_rate || 0) + '% win rate')
+      h('div', { style: { fontWeight:700, color:'#14532d', fontSize:'.92rem' } }, 'Won'),
+      h('div', { style: { fontSize:'.7rem', color:'#15803d', marginTop:'.1rem' } }, (data.kpis.win_rate || 0) + '% win rate')
     ),
     h('div', { style: { textAlign:'right' } },
-      h('div', { style: { fontWeight:700, fontSize:'1.65rem', color:'#14532d', lineHeight:1 } }, String(won.count)),
-      h('div', { style: { fontSize:'.82rem', color:'#16a34a', marginTop:'.3rem' } }, _formatInr(won.value))
+      h('div', { style: { fontWeight:700, fontSize:'1.3rem', color:'#14532d', lineHeight:1 } }, String(won.count)),
+      h('div', { style: { fontSize:'.72rem', color:'#16a34a', marginTop:'.2rem' } }, _formatInr(won.value))
     )
   ));
 
-  // Lost card
   summary.appendChild(h('div', {
-    style: { background:'#fee2e2', border:'1px solid #fecaca', borderRadius:'12px', padding:'1rem 1.25rem', cursor:'pointer', display:'flex', alignItems:'center', gap:'1rem' },
+    style: { background:'#fee2e2', border:'1px solid #fecaca', borderRadius:'10px', padding:'.7rem .9rem', cursor:'pointer', display:'flex', alignItems:'center', gap:'.7rem' },
     onclick: () => { location.hash = '#/leads?stage=lost'; }
   },
-    h('div', { style: { width:'44px', height:'44px', borderRadius:'10px', background:'#fca5a5', color:'#7f1d1d', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'1.3rem', fontWeight:700, flexShrink:0 } }, '\u2715'),
+    h('div', { style: { width:'34px', height:'34px', borderRadius:'8px', background:'#fca5a5', color:'#7f1d1d', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'1.05rem', fontWeight:700, flexShrink:0 } }, '✕'),
     h('div', { style: { flex:1, minWidth:0 } },
-      h('div', { style: { fontWeight:700, color:'#7f1d1d', fontSize:'1.05rem' } }, 'Lost'),
-      h('div', { style: { fontSize:'.8rem', color:'#b91c1c', marginTop:'.15rem' } }, lostPct + '% of closed')
+      h('div', { style: { fontWeight:700, color:'#7f1d1d', fontSize:'.92rem' } }, 'Lost'),
+      h('div', { style: { fontSize:'.7rem', color:'#b91c1c', marginTop:'.1rem' } }, lostPct + '% of closed')
     ),
     h('div', { style: { textAlign:'right' } },
-      h('div', { style: { fontWeight:700, fontSize:'1.65rem', color:'#7f1d1d', lineHeight:1 } }, String(lost.count)),
-      h('div', { style: { fontSize:'.82rem', color:'#dc2626', marginTop:'.3rem' } }, _formatInr(lost.value))
+      h('div', { style: { fontWeight:700, fontSize:'1.3rem', color:'#7f1d1d', lineHeight:1 } }, String(lost.count)),
+      h('div', { style: { fontSize:'.72rem', color:'#dc2626', marginTop:'.2rem' } }, _formatInr(lost.value))
     )
   ));
-
   view.appendChild(summary);
 
   // Unmapped statuses warning
   if (data.unmapped && data.unmapped.count > 0) {
-    view.appendChild(h('div', { style: { marginTop:'1.2rem', background:'#fef3c7', border:'1px solid #fde68a', borderRadius:'10px', padding:'.75rem 1rem', display:'flex', alignItems:'center', gap:'.7rem', cursor:'pointer' },
+    view.appendChild(h('div', { style: { marginTop:'.8rem', background:'#fef3c7', border:'1px solid #fde68a', borderRadius:'10px', padding:'.55rem .85rem', display:'flex', alignItems:'center', gap:'.6rem', cursor:'pointer' },
       onclick: () => { location.hash = '#/admin'; }
     },
-      h('span', { style: { fontSize:'1.3rem' } }, '\u26A0\uFE0F'),
+      h('span', { style: { fontSize:'1.1rem' } }, '⚠️'),
       h('div', { style: { flex:1 } },
-        h('div', { style: { fontWeight:600, color:'#92400e', fontSize:'.88rem' } }, data.unmapped.count + ' leads on unmapped statuses'),
-        h('div', { style: { fontSize:'.78rem', color:'#b45309', marginTop:'.15rem' } }, 'These don\'t appear in the funnel. Click to open Settings \u2192 Statuses and map them to a stage.')
+        h('div', { style: { fontWeight:600, color:'#92400e', fontSize:'.82rem' } }, data.unmapped.count + ' leads on unmapped statuses'),
+        h('div', { style: { fontSize:'.72rem', color:'#b45309', marginTop:'.1rem' } }, 'These don\'t appear in the funnel. Click to open Settings → Statuses and map them to a stage.')
       )
     ));
   }
@@ -22636,8 +22702,24 @@ function _agoMins(min) {
  *  pinnable dashboard widget. Pass the full server response. */
 function _renderTeamLiveCompact(container, data) {
   container.innerHTML = '';
-  if (!data || !Array.isArray(data.users)) {
-    container.appendChild(h('div', { class: 'muted', style: { padding: '.5rem' } }, 'No team data.'));
+  // TEAM_LIVE_EMPTY_FIX_v1 — old code returned silently when data.users was
+  // missing or empty; widget body would render blank and only the header
+  // would show. Now we always render a meaningful message.
+  if (!data || typeof data !== 'object') {
+    container.appendChild(h('div', { class: 'muted', style: { padding: '.5rem', fontSize: '.85rem' } },
+      '⚠️ Could not load team status. Server returned no data.'));
+    return;
+  }
+  if (!Array.isArray(data.users)) {
+    container.appendChild(h('div', { class: 'muted', style: { padding: '.5rem', fontSize: '.85rem' } },
+      'No team data — Team Live needs the api_team_liveStatus route. Check Settings → Users so each user has a role + status.'));
+    return;
+  }
+  if (data.users.length === 0) {
+    container.appendChild(h('div', { style: { padding: '.6rem .8rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '.82rem', color: '#475569' } },
+      h('div', { style: { fontWeight: 600, marginBottom: '.2rem' } }, '🌙 No team activity right now'),
+      h('div', { style: { fontSize: '.75rem', color: '#64748b' } }, 'Either no users are added to this tenant, or no one has logged in or made a call recently. Add team members in Settings → Users, or check that login + call sync are wired up.')
+    ));
     return;
   }
   // Summary chips
