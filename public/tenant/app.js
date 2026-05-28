@@ -103,7 +103,7 @@ const _POLL_OR_OPTIONAL_FNS = new Set([
   'api_announcements_active',
   'api_company_info',
   'api_call_logEvent',
-  'api_fcm_register',
+  'api_fcm_register', 'api_fcm_userDiag',
   'api_push_subscribe',
   'api_push_publicKey'
 ]);
@@ -11621,7 +11621,18 @@ async function callViaMobile(lead) {
     const r = await api('api_call_via_mobile', lead?.id || null, dial, lead?.name || '');
     const fcmCount = (r.push && r.push.fcm && r.push.fcm.sent) || 0;
     if (fcmCount === 0) {
-      toast('No mobile device registered for push. Install the Android app + log in, then try again.', 'warn');
+      // FCM_USERDIAG_v1 — surface the precise reason via api_fcm_userDiag
+      let detail = '';
+      try {
+        const diag = await api('api_fcm_userDiag');
+        if (diag && diag.cause) detail = '\n\n' + diag.cause + (diag.next_steps ? '\n\n' + diag.next_steps : '');
+        // Also offer a one-click modal so the user can read it without dismissing
+        if (typeof openInfoModal === 'function' && diag && !diag.ok) {
+          openInfoModal('📱 Mobile push not ready', (diag.cause || 'Unknown issue') + (diag.next_steps ? '\n\n' + diag.next_steps : ''));
+          return;
+        }
+      } catch (_) {}
+      toast('No mobile device registered for push.' + detail, 'warn');
     } else {
       toast('📱 Sent to your phone — tap the notification to open the dialer.');
     }

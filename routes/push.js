@@ -441,6 +441,59 @@ async function api_call_via_mobile(token, leadId, phone, leadName) {
 
 
 /**
+ * Self-diagnostic — any logged-in user can call this for their own user_id.
+ * Returns whether the server can push to THIS user's mobile device(s) and
+ * surfaces the exact reason if not. Used by the SPA when the 'send to
+ * mobile' click fails so the user gets actionable next steps instead of
+ * a generic 'no device registered'.
+ */
+async function api_fcm_userDiag(token) {
+  const me = await authUser(token);
+  await _ensurePushSchema();
+  const fcmInitOk = !!(admin && _initFcm());
+  const fcmCreds = !!(process.env.FIREBASE_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_APPLICATION_CREDENTIALS);
+  let myTokens = 0, lastReg = null, lastUa = '';
+  try {
+    const r = await db.query("SELECT id, platform, ua, COALESCE(registered_at, created_at) AS last_at FROM fcm_tokens WHERE user_id = $1 ORDER BY COALESCE(registered_at, created_at) DESC LIMIT 5", [me.id]);
+    myTokens = r.rows.length;
+    if (r.rows[0]) { lastReg = r.rows[0].last_at; lastUa = r.rows[0].ua || ''; }
+  } catch (_) {
+    // table may not have registered_at column on older tenants — fall back
+    try {
+      const r = await db.query("SELECT id, platform, ua FROM fcm_tokens WHERE user_id = $1 LIMIT 5", [me.id]);
+      myTokens = r.rows.length;
+      if (r.rows[0]) lastUa = r.rows[0].ua || '';
+    } catch (_) {}
+  }
+  // Decide the most likely cause
+  let cause = '';
+  let nextSteps = '';
+  if (!admin) { cause = 'firebase-admin npm package missing on server'; nextSteps = 'Contact support.'; }
+  else if (!fcmCreds) { cause = 'FIREBASE_SERVICE_ACCOUNT_JSON not set on server'; nextSteps = 'Contact support.'; }
+  else if (!fcmInitOk) { cause = 'Firebase Admin SDK failed to initialise'; nextSteps = 'Contact support.'; }
+  else if (myTokens === 0) {
+    cause = 'No FCM token saved for your user account';
+    nextSteps = '1) Open the Lead CRM APK on your phone. 2) If you see a permission prompt for notifications, allow it. 3) Log out and log back in to the same tenant (' + (me.workspace_id ? 'workspace #' + me.workspace_id : 'this workspace') + '). The APK will re-register on login. 4) Then come back here and click Send to Mobile again.';
+  } else {
+    cause = 'OK — ' + myTokens + ' token(s) registered for you';
+    nextSteps = '';
+  }
+  return {
+    ok: myTokens > 0 && fcmInitOk,
+    my_token_count: myTokens,
+    last_registered_at: lastReg,
+    last_device_ua: lastUa,
+    firebase_admin_loaded: !!admin,
+    fcm_credentials_present: fcmCreds,
+    fcm_initialized: fcmInitOk,
+    user_id: me.id,
+    user_name: me.name,
+    cause: cause,
+    next_steps: nextSteps
+  };
+}
+
+/**
  * Diagnostic — admin-only. Returns everything we know about the push
  * subsystem so the admin can see at a glance whether FCM is wired up.
  */
@@ -474,7 +527,7 @@ async function api_push_diag(token) {
 
 module.exports = {
   api_push_publicKey, api_push_subscribe, api_push_unsubscribe, api_push_test,
-  api_fcm_register, api_fcm_unregister,
+  api_fcm_register, api_fcm_unregister, api_fcm_userDiag,
   api_call_via_mobile,
   api_push_diag,
   sendPushToUser
