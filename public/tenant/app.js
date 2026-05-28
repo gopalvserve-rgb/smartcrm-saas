@@ -1561,6 +1561,7 @@ const DEFAULT_DASH_LAYOUT = [
   { id: 'def-call-sum',     type: 'call_activity_summary', size: 'medium' },
   { id: 'def-call-top',     type: 'call_activity_topusers', size: 'medium' },
   { id: 'def-call-rec',     type: 'call_activity_recent', size: 'wide'   },
+  { id: 'def-by-user',      type: 'leads_by_user',     size: 'wide'   },
   { id: 'def-projects',     type: 'project_stages',   size: 'wide'   },
   { id: 'def-source',       type: 'chart_source',     size: 'wide'   }
 ];
@@ -1582,9 +1583,52 @@ function _renderKpi(card, label, value, klass, icon, href) {
 // responses bundled in `data` (data.summary, data.notifs, data.funnel,
 // data.tat, data.projects, data.teamFu, data.teamTat, data.daily).
 const WIDGET_LIBRARY = {
+  // ----- User-wise breakdown -----
+  // DASH_BY_USER_v1 — leaderboard table of every active user's leads:
+  // total, new, open, won, lost. Click a row to drill into that user's
+  // filtered Lead list. Data already comes for free in d.summary.by_user.
+  leads_by_user: { title: 'Leads · By user (leaderboard)', group: 'Team',
+    render: (c, _cfg, d, w) => {
+      c.appendChild(h('h3', {}, w.title || '\ud83d\udc65 Leads by user'));
+      const rows = (d.summary && d.summary.by_user) || [];
+      if (!rows.length) {
+        c.appendChild(h('div', { class: 'muted' }, 'No leads assigned yet.'));
+        return;
+      }
+      // Sort descending by total leads — biggest contributor at top
+      const sorted = rows.slice().sort((a, b) => (Number(b.total)||0) - (Number(a.total)||0));
+      const tbl = h('table', { class: 'tbl', style: { width: '100%', fontSize: '.85rem' } });
+      tbl.appendChild(h('thead', {}, h('tr', {},
+        h('th', { style: { textAlign: 'left' } }, 'User'),
+        h('th', { style: { textAlign: 'left' } }, 'Role'),
+        h('th', { style: { textAlign: 'right' } }, 'Total'),
+        h('th', { style: { textAlign: 'right' } }, 'New'),
+        h('th', { style: { textAlign: 'right' } }, 'Open'),
+        h('th', { style: { textAlign: 'right' } }, 'Won'),
+        h('th', { style: { textAlign: 'right' } }, 'Lost')
+      )));
+      const tb = h('tbody', {});
+      sorted.forEach(u => {
+        const tr = h('tr', { style: { cursor: 'pointer' }, title: 'Open ' + (u.name || 'user') + '\u2019s leads',
+          onclick: () => { location.hash = '#/leads?assigned_to=' + encodeURIComponent(u.id || ''); }
+        });
+        tr.appendChild(h('td', { style: { textAlign: 'left' } }, String(u.name || '—')));
+        tr.appendChild(h('td', { style: { textAlign: 'left', color: '#64748b', fontSize: '.78rem' } }, String(u.role || '')));
+        tr.appendChild(h('td', { style: { textAlign: 'right', fontWeight: 700 } }, String(u.total || 0)));
+        tr.appendChild(h('td', { style: { textAlign: 'right', color: '#0369a1' } }, String(u.new_leads || 0)));
+        tr.appendChild(h('td', { style: { textAlign: 'right' } }, String(u.open_leads || 0)));
+        tr.appendChild(h('td', { style: { textAlign: 'right', color: '#15803d', fontWeight: 600 } }, String(u.won || 0)));
+        tr.appendChild(h('td', { style: { textAlign: 'right', color: '#b91c1c' } }, String(u.lost || 0)));
+        tb.appendChild(tr);
+      });
+      tbl.appendChild(tb);
+      c.appendChild(h('div', { style: { overflowX: 'auto' } }, tbl));
+      c.appendChild(h('div', { class: 'muted', style: { fontSize: '.74rem', marginTop: '.35rem' } }, '\ud83d\udca1 Click any row to open that user\u2019s leads. Sorted by total leads.'));
+    }
+  },
   // ----- KPI tiles -----
   kpi_total_leads: { title: 'KPI · Total leads', group: 'KPI',
-    render: (c, _cfg, d) => _renderKpi(c, 'Total leads', d.summary?.totals?.total ?? 0, 'accent', '🎯', '#/leads') },
+    render: (c, _cfg, d) => _renderKpi(c, 'Total leads', d.summary?.totals?.total ?? 0, 'accent', '\ud83c\udfaf', '#/leads') },
   kpi_new_today: { title: 'KPI · New today', group: 'KPI',
     render: (c, _cfg, d) => _renderKpi(c, 'New today', d.notifs?.counts?.new_today ?? 0, 'accent', '✨', '#/leads?filter=new_today') },
   kpi_won: { title: 'KPI · Won', group: 'KPI',
