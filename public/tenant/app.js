@@ -1024,7 +1024,8 @@ const NAV_GROUPS = [
     { id: 'callinsights', label: 'Call insights', icon: '🎙' },
     { id: 'callratings',  label: 'Call ratings',  icon: '⭐', roles: ['admin', 'manager', 'team_leader'] },
     { id: 'aiusage',      label: 'AI usage',      icon: '🤖', roles: ['admin', 'manager'] },
-    { id: 'callactivity', label: 'Call activity', icon: '📞', roles: ['admin', 'manager', 'team_leader'] }
+    { id: 'callactivity', label: 'Call activity', icon: '📞', roles: ['admin', 'manager', 'team_leader'] },
+    { id: 'teamlive',     label: 'Live Team',     icon: '🟢' }  /* TEAM_LIVE_STATUS_v1 */
   ] },
   { label: 'Catalog', icon: '📦', items: [
     { id: 'inventory',  label: 'Inventory', icon: '📦' },
@@ -1680,6 +1681,37 @@ const WIDGET_LIBRARY = {
       tbl.appendChild(tb);
       c.appendChild(h('div', { style: { overflowX: 'auto' } }, tbl));
       c.appendChild(h('div', { class: 'muted', style: { fontSize: '.74rem', marginTop: '.35rem' } }, '\ud83d\udca1 Click any row to open that user\u2019s leads. Sorted by total leads.'));
+    }
+  },
+  // TEAM_LIVE_STATUS_v1 — compact live-status grid pinnable from the
+  // sticky dashboard + the regular Customise Dashboard picker. Pulls
+  // its own data via api_team_liveStatus, so the host dashboard
+  // doesn't need any extra fetch.
+  team_live_status: { title: '🟢 Live Team Status', group: 'Team',
+    render: async (c, _cfg, _d, w) => {
+      c.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', marginBottom: '.5rem' } },
+        h('h3', { style: { margin: 0, flex: 1 } }, w.title || '🟢 Live Team Status'),
+        h('a', { href: '#/teamlive', class: 'muted', style: { fontSize: '.78rem', textDecoration: 'none' } }, 'Open ›')
+      ));
+      const body = h('div', {});
+      c.appendChild(body);
+      let aborted = false;
+      const refresh = async () => {
+        if (aborted) return;
+        try {
+          const r = await api('api_team_liveStatus', {});
+          _renderTeamLiveCompact(body, r);
+        } catch (e) {
+          body.innerHTML = '<div class="muted" style="padding:.4rem">Could not load team status.</div>';
+        }
+      };
+      refresh();
+      const tm = setInterval(refresh, 20000);
+      // Stop the timer if the widget node is removed from the DOM
+      const obs = new MutationObserver(() => {
+        if (!document.body.contains(body)) { aborted = true; clearInterval(tm); obs.disconnect(); }
+      });
+      try { obs.observe(document.body, { childList: true, subtree: true }); } catch (_) {}
     }
   },
   // ----- KPI tiles -----
@@ -21616,6 +21648,202 @@ function configForm(cfg, keys, meta) {
 }
 
 /* ---------------- Users ---------------- */
+/* =====================================================================
+ * TEAM_LIVE_STATUS_v1 (2026-05-28) — Live Team Status panel
+ *
+ * Full-page view + a compact renderer shared with the dashboard widget.
+ * Brand-styled in SmartCRM indigo (#4f46e5), works on web + APK (mobile
+ * web) without any layout breakage. Auto-refreshes every 15s.
+ *
+ *   API:  api_team_liveStatus  → { summary:{state:count}, users:[…] }
+ *         api_team_setBreak    → toggles my own on-break flag
+ * ===================================================================== */
+const TEAM_STATE_META = {
+  on_call:        { label: 'On Call',          icon: '🎧', color: '#16a34a', bg: '#dcfce7' },
+  wrapping_up:    { label: 'Wrapping up',      icon: '⏳', color: '#a16207', bg: '#fef3c7' },
+  on_break:       { label: 'On Break',         icon: '☕',  color: '#7c3aed', bg: '#ede9fe' },
+  idle:           { label: 'Idle',             icon: '💤', color: '#475569', bg: '#e2e8f0' },
+  checked_out:    { label: 'Checked out',      icon: '✓',  color: '#0f766e', bg: '#ccfbf1' },
+  logged_out:     { label: 'Logged out',       icon: '↩',  color: '#dc2626', bg: '#fee2e2' },
+  never_logged_in:{ label: "Hasn't logged in", icon: '⨯',  color: '#d97706', bg: '#fed7aa' }
+};
+const TEAM_STATE_ORDER = ['on_call','wrapping_up','on_break','idle','checked_out','logged_out','never_logged_in'];
+
+function _initials(name) {
+  return String(name || '?').trim().split(/\s+/).slice(0, 2).map(p => p[0] || '').join('').toUpperCase() || '?';
+}
+function _avatarColor(seed) {
+  // Deterministic colour from name so the same user keeps the same chip.
+  const palette = ['#4f46e5','#0891b2','#16a34a','#ea580c','#db2777','#7c3aed','#0284c7','#65a30d'];
+  let h = 0;
+  for (const c of String(seed || '')) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return palette[h % palette.length];
+}
+function _agoMins(min) {
+  if (min == null) return '';
+  if (min < 1) return 'just now';
+  if (min < 60) return min + 'm';
+  const h = Math.floor(min / 60); return h + 'h ' + (min % 60) + 'm';
+}
+
+/** Compact card grid — used by both the full-page view and the
+ *  pinnable dashboard widget. Pass the full server response. */
+function _renderTeamLiveCompact(container, data) {
+  container.innerHTML = '';
+  if (!data || !Array.isArray(data.users)) {
+    container.appendChild(h('div', { class: 'muted', style: { padding: '.5rem' } }, 'No team data.'));
+    return;
+  }
+  // Summary chips
+  const chipRow = h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '.35rem', marginBottom: '.6rem' } });
+  TEAM_STATE_ORDER.forEach(s => {
+    const cnt = (data.summary && data.summary[s]) || 0;
+    if (!cnt && s !== 'on_call' && s !== 'idle') return;
+    const m = TEAM_STATE_META[s];
+    chipRow.appendChild(h('span', {
+      style: {
+        display: 'inline-flex', alignItems: 'center', gap: '.25rem',
+        background: m.bg, color: m.color, fontWeight: 600,
+        padding: '.18rem .55rem', borderRadius: '999px', fontSize: '.72rem'
+      }
+    }, h('span', {}, m.icon + ' ' + m.label), h('span', { style: { opacity: .8 } }, '· ' + cnt)));
+  });
+  container.appendChild(chipRow);
+
+  // Card grid
+  const grid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '.45rem' } });
+  data.users.forEach(u => {
+    const m = TEAM_STATE_META[u.state] || TEAM_STATE_META.idle;
+    const av = h('div', {
+      style: {
+        width: '36px', height: '36px', borderRadius: '50%',
+        background: _avatarColor(u.name), color: '#fff', flexShrink: '0',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontWeight: 700, fontSize: '.85rem'
+      }
+    }, _initials(u.name));
+    // Status dot on avatar corner
+    const dot = h('span', {
+      style: {
+        position: 'absolute', right: '-2px', bottom: '-2px',
+        width: '12px', height: '12px', borderRadius: '50%',
+        background: m.color, border: '2px solid #fff'
+      }
+    });
+    const avWrap = h('div', { style: { position: 'relative' } }, av, dot);
+
+    const sinceTxt = u.since_min != null ? _agoMins(u.since_min) : '';
+    const card = h('div', {
+      style: {
+        display: 'flex', alignItems: 'center', gap: '.55rem',
+        background: '#fff', border: '1px solid #e2e8f0', borderRadius: '12px',
+        padding: '.45rem .55rem', boxShadow: '0 1px 1.5px rgba(15,23,42,.04)'
+      }
+    },
+      avWrap,
+      h('div', { style: { flex: 1, minWidth: 0 } },
+        h('div', { style: { fontWeight: 600, fontSize: '.83rem', color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, u.name),
+        h('div', { style: { display: 'flex', gap: '.35rem', alignItems: 'center', marginTop: '2px' } },
+          h('span', { style: { color: m.color, fontSize: '.74rem', fontWeight: 600 } }, m.icon + ' ' + m.label),
+          sinceTxt ? h('span', { class: 'muted', style: { fontSize: '.7rem' } }, '· ' + sinceTxt) : null
+        )
+      )
+    );
+    grid.appendChild(card);
+  });
+  if (!data.users.length) {
+    grid.appendChild(h('div', { class: 'muted' }, 'No active users.'));
+  }
+  container.appendChild(grid);
+}
+
+VIEWS.teamlive = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('div', { class: 'view-head', style: { display: 'flex', alignItems: 'center', gap: '.6rem', marginBottom: '.6rem' } },
+    h('h2', { style: { margin: 0, flex: 1, color: '#0f172a', fontSize: '1.15rem' } }, '🟢 Live Team Status'),
+    h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: '.35rem', fontSize: '.82rem', color: '#475569' } },
+      h('input', { type: 'checkbox', id: 'tlv-break-toggle', title: 'Set your own break status' }),
+      h('span', {}, 'I am on break')
+    ),
+    h('button', { class: 'btn', onclick: () => _tlvRefresh() }, '🔄 Refresh')
+  ));
+
+  // SmartCRM indigo header strip — branding cue
+  view.appendChild(h('div', {
+    style: {
+      background: 'linear-gradient(135deg, #4f46e5 0%, #6366f1 100%)',
+      borderRadius: '12px', padding: '1rem 1.2rem', color: '#fff',
+      marginBottom: '.8rem', display: 'flex', alignItems: 'center', gap: '.8rem'
+    }
+  },
+    h('div', { style: { fontSize: '1.4rem' } }, '👥'),
+    h('div', { style: { flex: 1 } },
+      h('div', { style: { fontWeight: 700, fontSize: '1rem' } }, 'Who is doing what — right now'),
+      h('div', { style: { opacity: .9, fontSize: '.78rem' } }, 'Auto-refreshes every 15 seconds. Click Pin on the dashboard to keep it visible everywhere.')
+    )
+  ));
+
+  const search = h('input', { id: 'tlv-search', placeholder: '🔎 Search name…', style: { flex: 1, minWidth: '160px' } });
+  const stateSel = h('select', { id: 'tlv-filter' },
+    h('option', { value: '' }, 'All statuses'),
+    ...TEAM_STATE_ORDER.map(s => h('option', { value: s }, TEAM_STATE_META[s].label))
+  );
+  view.appendChild(h('div', { class: 'toolbar', style: { marginBottom: '.6rem' } }, search, stateSel));
+
+  const body = h('div', { id: 'tlv-body' });
+  view.appendChild(body);
+  body.appendChild(h('div', { class: 'muted' }, 'Loading…'));
+
+  let lastData = null;
+  function _applyClientFilter() {
+    if (!lastData) return;
+    const q = String(search.value || '').toLowerCase().trim();
+    const sFilter = String(stateSel.value || '');
+    const filtered = {
+      summary: lastData.summary,
+      users: lastData.users.filter(u =>
+        (!q || u.name.toLowerCase().includes(q)) &&
+        (!sFilter || u.state === sFilter)
+      )
+    };
+    _renderTeamLiveCompact(body, filtered);
+  }
+  search.addEventListener('input', _applyClientFilter);
+  stateSel.addEventListener('change', _applyClientFilter);
+
+  window._tlvRefresh = async () => {
+    try {
+      const r = await api('api_team_liveStatus', {});
+      lastData = r;
+      _applyClientFilter();
+    } catch (e) {
+      body.innerHTML = '';
+      body.appendChild(h('div', { class: 'error-box' }, 'Could not load team status: ' + (e.message || e)));
+    }
+  };
+  await window._tlvRefresh();
+  // Auto-refresh + cancel when navigating away
+  const tm = setInterval(() => {
+    if (!document.body.contains(view)) { clearInterval(tm); return; }
+    window._tlvRefresh();
+  }, 15000);
+
+  // Wire the I-am-on-break toggle
+  const breakChk = view.querySelector('#tlv-break-toggle');
+  if (breakChk) {
+    // Initial state = my current row
+    try {
+      const me = (lastData && lastData.users) ? lastData.users.find(u => Number(u.id) === Number((CRM.user && CRM.user.id) || 0)) : null;
+      breakChk.checked = me && me.state === 'on_break';
+    } catch (_) {}
+    breakChk.addEventListener('change', async () => {
+      try { await api('api_team_setBreak', { on: breakChk.checked }); toast(breakChk.checked ? 'Break ON' : 'Break OFF'); }
+      catch (e) { toast(e.message || 'Could not update', 'err'); breakChk.checked = !breakChk.checked; }
+      window._tlvRefresh();
+    });
+  }
+};
+
 VIEWS.users = async (view) => {
   const users = await api('api_users_list');
   const me = CRM.user || {};
