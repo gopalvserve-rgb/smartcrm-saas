@@ -29280,38 +29280,21 @@ function _initStickyWidget() {
     }, 60000);
   }
 
-  // -------- Data fetch for one pin --------
+  // -------- Data fetch for one pin (DASH_STICKY_v3.1 stacked layout) --------
   async function refreshData(idx) {
     const pin = state.pins[idx];
-    if (!pin) return;
-    if (pin.minimized) return;
+    if (!pin || pin.minimized) return;
     const body = document.getElementById('sticky-body-' + idx);
     if (!body) return;
     const dateFilters = _rangeToFilters(pin);
-    const curType = pin.types[pin.activeIdx || 0];
-    const isRb = String(curType || '').startsWith('rb:');
-    if (!body.dataset.everLoaded) body.innerHTML = '<div class="muted" style="text-align:center;padding:1rem;">Loading…</div>';
-    // ---- Report Builder template branch ----
-    if (isRb) {
-      try {
-        const t = (pin.rbTemplates && pin.rbTemplates[curType]) || {};
-        const filters = Object.assign({}, t.filters || {}, dateFilters);
-        const res = await api('api_reports_pivot', { row_dims: t.dim ? [t.dim] : ['status'], metrics: t.metrics || ['count'], filters });
-        body.innerHTML = '';
-        _stickyRenderPivot(body, res);
-        _stickyStamp(body);
-        body.dataset.everLoaded = '1';
-      } catch (e) {
-        body.innerHTML = '<div class="muted" style="color:#b91c1c;">' + (e.message || e) + '</div>';
-      }
-      return;
-    }
     const lib = (typeof WIDGET_LIBRARY !== 'undefined') ? WIDGET_LIBRARY : {};
-    const def = lib[curType];
-    if (!def) { body.innerHTML = '<div class="muted">Unknown widget</div>'; return; }
+    if (body.dataset.everLoaded !== '1') body.innerHTML = '<div class="muted" style="text-align:center;padding:1rem;">Loading…</div>';
+
+    // Fetch the universal data bundle ONCE for the whole pin
+    const camp = (typeof CRM !== 'undefined' && CRM._dashCampaignIds) || [];
+    const baseF = Object.assign({}, dateFilters, { campaign_ids: camp });
+    let data;
     try {
-      const camp = (typeof CRM !== 'undefined' && CRM._dashCampaignIds) || [];
-      const baseF = Object.assign({}, dateFilters, { campaign_ids: camp });
       const [summary, notifs, funnel, tat, projects, daily, callActivity] = await Promise.all([
         api('api_reports_summary', baseF).catch(() => null),
         api('api_notifications_mine').catch(() => null),
@@ -29321,19 +29304,84 @@ function _initStickyWidget() {
         api('api_reports_daily', baseF).catch(() => []),
         api('api_reports_callActivity', dateFilters).catch(() => null)
       ]);
-      const data = { summary, notifs, funnel, tat, projects, daily, callActivity };
-      body.innerHTML = '';
-      try {
-        def.render(body, {}, data, { id: 'sticky-' + idx, type: curType, title: def.title });
-      } catch (e) {
-        body.innerHTML = '<div class="muted" style="color:#b91c1c;">Render error: ' + (e.message || e) + '</div>';
-      }
-      _stickyStamp(body);
-      body.dataset.everLoaded = '1';
+      data = { summary, notifs, funnel, tat, projects, daily, callActivity };
     } catch (e) {
       body.innerHTML = '<div class="muted" style="color:#b91c1c;">Failed: ' + (e.message || e) + '</div>';
+      return;
     }
+
+    body.innerHTML = '';
+    // Render each widget as its own sub-section stacked vertically
+    for (let i = 0; i < pin.types.length; i++) {
+      const curType = pin.types[i];
+      const isRb = String(curType || '').startsWith('rb:');
+      const curRbTpl = isRb && pin.rbTemplates ? pin.rbTemplates[curType] : null;
+      const def = lib[curType];
+      const sectionTitle = isRb && curRbTpl ? ('📊 ' + curRbTpl.name) : ((def && def.title) || curType || 'widget');
+      const section = document.createElement('div');
+      section.style.cssText = 'border:1px solid #e2e8f0;border-radius:6px;margin-bottom:.55rem;background:#fff;overflow:hidden;';
+      const sh = document.createElement('div');
+      sh.style.cssText = 'display:flex;align-items:center;gap:.35rem;padding:.3rem .55rem;background:#f8fafc;border-bottom:1px solid #e2e8f0;font-size:.78rem;font-weight:600;color:#475569;';
+      const titleSpan = document.createElement('span');
+      titleSpan.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+      titleSpan.textContent = sectionTitle;
+      sh.appendChild(titleSpan);
+      if (pin.types.length > 1) {
+        if (i > 0) {
+          const upB = document.createElement('button');
+          upB.textContent = '▲'; upB.title = 'Move up';
+          upB.style.cssText = 'background:transparent;border:none;cursor:pointer;font-size:.7rem;color:#64748b;padding:0 .25rem;';
+          upB.onclick = () => { const tmp = pin.types[i-1]; pin.types[i-1] = pin.types[i]; pin.types[i] = tmp; _save(state); renderPin(idx); };
+          sh.appendChild(upB);
+        }
+        if (i < pin.types.length - 1) {
+          const dnB = document.createElement('button');
+          dnB.textContent = '▼'; dnB.title = 'Move down';
+          dnB.style.cssText = 'background:transparent;border:none;cursor:pointer;font-size:.7rem;color:#64748b;padding:0 .25rem;';
+          dnB.onclick = () => { const tmp = pin.types[i+1]; pin.types[i+1] = pin.types[i]; pin.types[i] = tmp; _save(state); renderPin(idx); };
+          sh.appendChild(dnB);
+        }
+        const rmB = document.createElement('button');
+        rmB.textContent = '×'; rmB.title = 'Remove this widget from pin';
+        rmB.style.cssText = 'background:transparent;border:none;cursor:pointer;font-size:.95rem;color:#b91c1c;padding:0 .25rem;font-weight:700;';
+        rmB.onclick = () => { pin.types.splice(i, 1); if (pin.rbTemplates) delete pin.rbTemplates[curType]; _save(state); renderPin(idx); };
+        sh.appendChild(rmB);
+      }
+      section.appendChild(sh);
+      const sb = document.createElement('div');
+      sb.style.cssText = 'padding:.5rem .6rem;';
+      section.appendChild(sb);
+      body.appendChild(section);
+      if (isRb) {
+        try {
+          const t = curRbTpl || {};
+          const filters = Object.assign({}, t.filters || {}, dateFilters);
+          const res = await api('api_reports_pivot', { row_dims: t.dim ? [t.dim] : ['status'], metrics: t.metrics || ['count'], filters });
+          _stickyRenderPivot(sb, res);
+        } catch (e) {
+          sb.innerHTML = '<div class="muted" style="color:#b91c1c;font-size:.78rem;">' + (e.message || e) + '</div>';
+        }
+      } else if (def) {
+        try { def.render(sb, {}, data, { id: 'sticky-' + idx + '-' + i, type: curType, title: def.title }); }
+        catch (e) { sb.innerHTML = '<div class="muted" style="color:#b91c1c;font-size:.78rem;">Render error: ' + (e.message || e) + '</div>'; }
+      } else {
+        sb.innerHTML = '<div class="muted">Unknown widget</div>';
+      }
+    }
+
+    // + Add another widget button at the bottom
+    const addRow = document.createElement('div');
+    addRow.style.cssText = 'text-align:center;margin:.4rem 0;';
+    const addBtn = document.createElement('button');
+    addBtn.textContent = '+ Add another widget below';
+    addBtn.style.cssText = 'background:#dcfce7;color:#166534;border:1px dashed #86efac;border-radius:6px;padding:.4rem .8rem;font-size:.8rem;cursor:pointer;font-weight:600;';
+    addBtn.onclick = () => { state.pendingTargetPin = idx; openPicker(); };
+    addRow.appendChild(addBtn);
+    body.appendChild(addRow);
+    _stickyStamp(body);
+    body.dataset.everLoaded = '1';
   }
+
   function _stickyStamp(body) {
     body.appendChild(h('div', { class: 'muted', style: { fontSize: '.68rem', textAlign: 'right', marginTop: '.3rem', opacity: 0.7 } }, 'Updated ' + new Date().toLocaleTimeString()));
   }
