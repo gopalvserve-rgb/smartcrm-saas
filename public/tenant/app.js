@@ -15224,22 +15224,81 @@ function _renderCallActivity(r) {
 }
 
 
-function _caRenderRecent(rows) {
+function _caRenderRecent(rowsAll) {
   const el = document.getElementById('ca-recent');
   if (!el) return;
-  if (!rows || !rows.length) { el.innerHTML = '<div class="muted">No calls in this window.</div>'; return; }
+  const allRows = rowsAll || [];
+  // CA_FILTERS_v1 - cache full list so chip clicks re-filter w/o reload.
+  window._caAllRecent = allRows;
+  window._caFilter = window._caFilter || { direction: '', duration: '' };
+  const fState = window._caFilter;
+
+  function _isMissed(r) {
+    return r.direction === 'missed' || (r.direction === 'in' && !r.recording_id && r.event === 'incoming_ringing');
+  }
+  function _matchDir(r) {
+    if (!fState.direction) return true;
+    if (fState.direction === 'missed') return _isMissed(r);
+    if (fState.direction === 'in')     return r.direction === 'in'  && !_isMissed(r);
+    if (fState.direction === 'out')    return r.direction === 'out';
+    return true;
+  }
+  function _matchDur(r) {
+    if (!fState.duration) return true;
+    const d = Number(r.rec_duration || r.duration_s) || 0;
+    if (fState.duration === 'zero')    return d === 0;
+    if (fState.duration === 'u30')     return d > 0 && d < 30;
+    if (fState.duration === '30_120')  return d >= 30 && d < 120;
+    if (fState.duration === '120_300') return d >= 120 && d < 300;
+    if (fState.duration === 'gte300')  return d >= 300;
+    return true;
+  }
+  const rows = allRows.filter(r => _matchDir(r) && _matchDur(r));
+
   window._caSelectedIds = window._caSelectedIds || new Set();
-  // Toolbar — bulk-convert affordance, ALWAYS visible so users
-  // discover it. Button is disabled until they tick at least one row.
   const unlinkedCount = rows.filter(r => !r.lead_id).length;
+
+  function _chipBtn(label, group, value) {
+    const on = fState[group] === value;
+    return h('button', { class: 'btn',
+      style: {
+        padding: '.28rem .65rem', fontSize: '.78rem',
+        border: '1px solid ' + (on ? '#4f46e5' : '#cbd5e1'),
+        borderRadius: '999px', background: on ? '#4f46e5' : '#fff',
+        color: on ? '#fff' : '#0f172a', fontWeight: on ? '600' : '500', cursor: 'pointer'
+      },
+      onclick: () => { fState[group] = on ? '' : value; _caRenderRecent(allRows); }
+    }, label);
+  }
+  const fbar = h('div', { id: 'ca-recent-filterbar', style: { display: 'flex', gap: '.35rem', alignItems: 'center', flexWrap: 'wrap', padding: '.45rem .55rem', background: '#fff', border: '1px solid #e2e8f0', borderRadius: '10px', marginBottom: '.4rem' } },
+    h('span', { style: { fontWeight: 600, fontSize: '.82rem', marginRight: '.2rem' } }, '\uD83D\uDD0E Filter:'),
+    h('span', { class: 'muted', style: { fontSize: '.76rem', marginRight: '.15rem' } }, 'Direction'),
+    _chipBtn('\uD83D\uDCF2 Incoming', 'direction', 'in'),
+    _chipBtn('\uD83D\uDCDE Outgoing', 'direction', 'out'),
+    _chipBtn('\u274C Missed', 'direction', 'missed'),
+    h('span', { style: { width: '1px', height: '20px', background: '#cbd5e1', margin: '0 .25rem' } }),
+    h('span', { class: 'muted', style: { fontSize: '.76rem', marginRight: '.15rem' } }, 'Duration'),
+    _chipBtn('No-answer (0s)', 'duration', 'zero'),
+    _chipBtn('< 30s',     'duration', 'u30'),
+    _chipBtn('30s-2m',    'duration', '30_120'),
+    _chipBtn('2-5m',      'duration', '120_300'),
+    _chipBtn('5m+',       'duration', 'gte300'),
+    h('span', { style: { flex: 1 } }),
+    h('span', { class: 'muted', style: { fontSize: '.76rem' } }, rows.length + ' / ' + allRows.length + ' calls'),
+    (fState.direction || fState.duration)
+      ? h('button', { class: 'btn sm ghost', style: { color: '#dc2626' },
+          onclick: () => { window._caFilter = { direction: '', duration: '' }; _caRenderRecent(allRows); } }, '\u2716 Clear')
+      : null
+  );
+
   const tb = h('div', { id: 'ca-recent-toolbar', style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap', alignItems: 'center', padding: '.5rem .35rem', background: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: '8px', marginBottom: '.5rem' } },
     h('span', { style: { fontWeight: 600, fontSize: '.85rem', marginRight: '.4rem' } },
       'Bulk actions:'),
     h('span', { class: 'muted', style: { fontSize: '.78rem' } },
       unlinkedCount + ' unlinked call(s) below'),
     h('span', { style: { flex: 1 } }),
-    h('button', { class: 'btn sm', onclick: () => { window._caSelectedIds = new Set(rows.filter(r => !r.lead_id).map(r => r.id)); _caRenderRecent(rows); } }, '\u2611\uFE0F Select all unlinked'),
-    h('button', { class: 'btn sm ghost', onclick: () => { window._caSelectedIds = new Set(); _caRenderRecent(rows); } }, 'Clear'),
+    h('button', { class: 'btn sm', onclick: () => { window._caSelectedIds = new Set(rows.filter(r => !r.lead_id).map(r => r.id)); _caRenderRecent(allRows); } }, '\u2611\uFE0F Select all unlinked'),
+    h('button', { class: 'btn sm ghost', onclick: () => { window._caSelectedIds = new Set(); _caRenderRecent(allRows); } }, 'Clear'),
     (function(){
       const b = h('button', { class: 'btn sm primary', onclick: () => _caBulkConvert(rows) },
         '\u2795 Add ' + window._caSelectedIds.size + ' as lead' + (window._caSelectedIds.size === 1 ? '' : 's'));
@@ -15248,7 +15307,9 @@ function _caRenderRecent(rows) {
     })()
   );
   el.innerHTML = '';
+  el.appendChild(fbar);
   el.appendChild(tb);
+  if (!rows.length) { el.appendChild(h('div', { class: 'muted', style: { padding: '.5rem' } }, 'No calls match the current filters.')); return; }
   const dirIcon = (r) => {
     if (r.direction === 'missed' || (r.direction === 'in' && !r.recording_id && r.event === 'incoming_ringing')) return '\u274C';
     if (r.direction === 'in')  return '\uD83D\uDCF2';
