@@ -1673,10 +1673,20 @@ VIEWS.dashboard = async (view) => {
       if (!has('call_activity_recent')) additions.push({ id: 'auto-call-rec-' + Date.now(), type: 'call_activity_recent', size: 'wide' });
       // TEAM_LIVE_PICKER_MISSING_v1 — also auto-add the live team widget so it
       // shows up without the user having to hunt for it in the picker.
-      // Team Live is added to the FRONT instead of the back.
+      // Team Live should always be at the TOP of the dashboard.
+      // 1) If missing, prepend a fresh one.
+      // 2) If present at index > 0, splice it out and unshift it to the front.
       let _teamLivePrepend = null;
-      if (!has('team_live_status')) _teamLivePrepend = { id: 'auto-team-live-' + Date.now(), type: 'team_live_status', size: 'wide' };
-      if (additions.length || _teamLivePrepend) {
+      let _teamLiveMoved = false;
+      const _tlIdx = widgets.findIndex(w => w.type === 'team_live_status');
+      if (_tlIdx === -1) {
+        _teamLivePrepend = { id: 'auto-team-live-' + Date.now(), type: 'team_live_status', size: 'wide' };
+      } else if (_tlIdx > 0) {
+        const existing = widgets.splice(_tlIdx, 1)[0];
+        widgets = [existing].concat(widgets);
+        _teamLiveMoved = true;
+      }
+      if (additions.length || _teamLivePrepend || _teamLiveMoved) {
         if (_teamLivePrepend) widgets = [_teamLivePrepend].concat(widgets);
         widgets = widgets.concat(additions);
         // Persist so the auto-add sticks across reloads
