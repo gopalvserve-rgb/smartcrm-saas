@@ -1445,11 +1445,25 @@ VIEWS.dashboard = async (view) => {
 
   // Load the user's layout (or defaults). Falls back gracefully on
   // tenant DBs that haven't received the user_dashboard migration.
+  // DASH_WIDGET_ADD_BUG_v1 — while in edit mode, prefer the in-memory
+  // working copy so the user's pending changes (added/removed/moved/
+  // resized widgets) survive the every-mutation re-render. Otherwise
+  // each mutation would be immediately wiped by api_dashboard_get
+  // returning the last-saved layout, making it look like clicks
+  // (especially "+ Add widget") did nothing.
   let layoutResp;
-  try { layoutResp = await api('api_dashboard_get'); }
-  catch (e) { layoutResp = { widgets: DEFAULT_DASH_LAYOUT, is_default: true }; }
-  if (_stale()) return;
-  let widgets = (layoutResp.widgets || DEFAULT_DASH_LAYOUT).slice();
+  let widgets;
+  if (CRM._dashEditMode && Array.isArray(CRM._dashEditWidgets)) {
+    widgets = CRM._dashEditWidgets.slice();
+    layoutResp = { widgets, is_default: false };
+  } else {
+    try { layoutResp = await api('api_dashboard_get'); }
+    catch (e) { layoutResp = { widgets: DEFAULT_DASH_LAYOUT, is_default: true }; }
+    if (_stale()) return;
+    widgets = (layoutResp.widgets || DEFAULT_DASH_LAYOUT).slice();
+  }
+  // Helper: keep the edit-mode working copy in sync after every mutation.
+  const _syncEdit = () => { if (CRM._dashEditMode) CRM._dashEditWidgets = widgets.slice(); };
 
   // ONE-TIME auto-add of call-activity widgets for users whose saved
   // layout pre-dates the call widgets. We tag the user in localStorage
@@ -1481,19 +1495,20 @@ VIEWS.dashboard = async (view) => {
               await api('api_dashboard_save', { widgets });
               toast('Saved');
               CRM._dashEditMode = false;
+              CRM._dashEditWidgets = null;
               VIEWS.dashboard(view);
             } catch (e) { toast(e.message, 'err'); }
           } }, '💾 Done customising')
-        : h('button', { class: 'btn', onclick: () => { CRM._dashEditMode = true; VIEWS.dashboard(view); } },
+        : h('button', { class: 'btn', onclick: () => { CRM._dashEditMode = true; CRM._dashEditWidgets = widgets.slice(); VIEWS.dashboard(view); } },
             '✨ Customize'),
       CRM._dashEditMode
-        ? h('button', { class: 'btn ghost', onclick: () => { CRM._dashEditMode = false; VIEWS.dashboard(view); } },
+        ? h('button', { class: 'btn ghost', onclick: () => { CRM._dashEditMode = false; CRM._dashEditWidgets = null; VIEWS.dashboard(view); } },
             'Cancel')
         : null,
       CRM._dashEditMode
         ? h('button', { class: 'btn ghost', onclick: async () => {
             if (!await confirmDialog('Reset dashboard to default layout?')) return;
-            try { const r = await api('api_dashboard_reset'); widgets = r.widgets; toast('Reset'); CRM._dashEditMode = false; VIEWS.dashboard(view); }
+            try { const r = await api('api_dashboard_reset'); widgets = r.widgets; toast('Reset'); CRM._dashEditMode = false; CRM._dashEditWidgets = null; VIEWS.dashboard(view); }
             catch (e) { toast(e.message, 'err'); }
           } }, '🔄 Reset')
         : null
@@ -1581,13 +1596,13 @@ VIEWS.dashboard = async (view) => {
         h('span', { class: 'muted', style: { fontSize: '.78rem' } }, '🛠 ' + (w.title || def.title || w.type)),
         h('div', { style: { display: 'flex', gap: '.2rem' } },
           h('button', { class: 'btn sm ghost', title: 'Move up',
-            onclick: () => { if (idx > 0) { [widgets[idx-1], widgets[idx]] = [widgets[idx], widgets[idx-1]]; VIEWS.dashboard(view); } } }, '▲'),
+            onclick: () => { if (idx > 0) { [widgets[idx-1], widgets[idx]] = [widgets[idx], widgets[idx-1]]; _syncEdit(); VIEWS.dashboard(view); } } }, '▲'),
           h('button', { class: 'btn sm ghost', title: 'Move down',
-            onclick: () => { if (idx < widgets.length - 1) { [widgets[idx+1], widgets[idx]] = [widgets[idx], widgets[idx+1]]; VIEWS.dashboard(view); } } }, '▼'),
+            onclick: () => { if (idx < widgets.length - 1) { [widgets[idx+1], widgets[idx]] = [widgets[idx], widgets[idx+1]]; _syncEdit(); VIEWS.dashboard(view); } } }, '▼'),
           h('button', { class: 'btn sm ghost', title: 'Resize',
-            onclick: () => { w.size = w.size === 'wide' ? 'medium' : (w.size === 'medium' ? 'small' : 'wide'); VIEWS.dashboard(view); } }, '↔'),
+            onclick: () => { w.size = w.size === 'wide' ? 'medium' : (w.size === 'medium' ? 'small' : 'wide'); _syncEdit(); VIEWS.dashboard(view); } }, '↔'),
           h('button', { class: 'btn sm danger', title: 'Remove',
-            onclick: () => { widgets.splice(idx, 1); VIEWS.dashboard(view); } }, '🗑')
+            onclick: () => { widgets.splice(idx, 1); _syncEdit(); VIEWS.dashboard(view); } }, '🗑')
         )
       ));
     }
@@ -1598,7 +1613,7 @@ VIEWS.dashboard = async (view) => {
 
   if (CRM._dashEditMode) {
     grid.appendChild(h('div', { class: 'card', style: { textAlign: 'center', border: '2px dashed #cbd5e1', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '120px' },
-      onclick: () => openAddWidgetModal((picked) => { widgets.push(picked); VIEWS.dashboard(view); }) },
+      onclick: () => openAddWidgetModal((picked) => { widgets.push(picked); _syncEdit(); VIEWS.dashboard(view); }) },
       h('div', { style: { color: '#6366f1', fontWeight: 600 } }, '+ Add widget')));
   }
 };
