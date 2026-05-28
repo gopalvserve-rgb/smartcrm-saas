@@ -1662,7 +1662,9 @@ VIEWS.dashboard = async (view) => {
     // TEAM_LIVE_PICKER_MISSING_v1 — bumped to v2 so existing users get the
     // team-live widget auto-injected too (call widgets are idempotent: only
     // added if not already present).
-    const injKey = '_dashAutoInjected_v2_' + ((CRM.user && CRM.user.id) || 'anon');
+    // TEAM_LIVE_TOP_v1 — bumped to v3 so existing users get the widget
+    // moved to the TOP of their dashboard if they hadn't already.
+    const injKey = '_dashAutoInjected_v3_' + ((CRM.user && CRM.user.id) || 'anon');
     if (!localStorage.getItem(injKey)) {
       const has = (t) => widgets.some(w => w.type === t);
       const additions = [];
@@ -1671,8 +1673,11 @@ VIEWS.dashboard = async (view) => {
       if (!has('call_activity_recent')) additions.push({ id: 'auto-call-rec-' + Date.now(), type: 'call_activity_recent', size: 'wide' });
       // TEAM_LIVE_PICKER_MISSING_v1 — also auto-add the live team widget so it
       // shows up without the user having to hunt for it in the picker.
-      if (!has('team_live_status')) additions.push({ id: 'auto-team-live-' + Date.now(), type: 'team_live_status', size: 'wide' });
-      if (additions.length) {
+      // Team Live is added to the FRONT instead of the back.
+      let _teamLivePrepend = null;
+      if (!has('team_live_status')) _teamLivePrepend = { id: 'auto-team-live-' + Date.now(), type: 'team_live_status', size: 'wide' };
+      if (additions.length || _teamLivePrepend) {
+        if (_teamLivePrepend) widgets = [_teamLivePrepend].concat(widgets);
         widgets = widgets.concat(additions);
         // Persist so the auto-add sticks across reloads
         try { await api('api_dashboard_save', { widgets }); } catch (_) {}
@@ -1915,6 +1920,7 @@ VIEWS.dashboard = async (view) => {
 
 // Default layout used when the user hasn't customised yet.
 const DEFAULT_DASH_LAYOUT = [
+  { id: 'def-team-live',    type: 'team_live_status', size: 'wide' },
   { id: 'def-kpi-total',    type: 'kpi_total_leads',  size: 'small' },
   { id: 'def-kpi-new',      type: 'kpi_new_today',    size: 'small' },
   { id: 'def-kpi-won',      type: 'kpi_won',          size: 'small' },
@@ -22020,12 +22026,12 @@ function configForm(cfg, keys, meta) {
  * ===================================================================== */
 const TEAM_STATE_META = {
   on_call:        { label: 'On Call',          icon: '🎧', color: '#16a34a', bg: '#dcfce7' },
-  wrapping_up:    { label: 'Wrapping up',      icon: '⏳', color: '#a16207', bg: '#fef3c7' },
+  wrapping_up:    { label: 'Just hung up',     icon: '⏳', color: '#a16207', bg: '#fef3c7' },
   on_break:       { label: 'On Break',         icon: '☕',  color: '#7c3aed', bg: '#ede9fe' },
   idle:           { label: 'Idle',             icon: '💤', color: '#475569', bg: '#e2e8f0' },
   checked_out:    { label: 'Checked out',      icon: '✓',  color: '#0f766e', bg: '#ccfbf1' },
-  logged_out:     { label: 'Logged out',       icon: '↩',  color: '#dc2626', bg: '#fee2e2' },
-  never_logged_in:{ label: "Hasn't logged in", icon: '⨯',  color: '#d97706', bg: '#fed7aa' }
+  logged_out:     { label: 'Offline',          icon: '⚫', color: '#dc2626', bg: '#fee2e2' },
+  never_logged_in:{ label: "Never logged in",  icon: '⨯',  color: '#d97706', bg: '#fed7aa' }
 };
 const TEAM_STATE_ORDER = ['on_call','wrapping_up','on_break','idle','checked_out','logged_out','never_logged_in'];
 
@@ -22102,10 +22108,31 @@ function _renderTeamLiveCompact(container, data) {
     },
       avWrap,
       h('div', { style: { flex: 1, minWidth: 0 } },
-        h('div', { style: { fontWeight: 600, fontSize: '.83rem', color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, u.name),
-        h('div', { style: { display: 'flex', gap: '.35rem', alignItems: 'center', marginTop: '2px' } },
+        h('div', { style: { fontWeight: 600, fontSize: '.83rem', color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } },
+          u.name,
+          u.role ? h('span', { class: 'muted', style: { fontWeight: 400, fontSize: '.72rem', marginLeft: '.3rem' } }, '(' + u.role + ')') : null
+        ),
+        h('div', { style: { display: 'flex', gap: '.35rem', alignItems: 'center', marginTop: '2px', flexWrap: 'wrap' } },
           h('span', { style: { color: m.color, fontSize: '.74rem', fontWeight: 600 } }, m.icon + ' ' + m.label),
-          sinceTxt ? h('span', { class: 'muted', style: { fontSize: '.7rem' } }, '· ' + sinceTxt) : null
+          sinceTxt ? h('span', { class: 'muted', style: { fontSize: '.7rem' } }, '· ' + sinceTxt) : null,
+          (function () {
+            // Tail line: contextual info about latest activity.
+            // On-call: phone they're talking to.
+            // Just hung up: nothing extra (since covers it).
+            // Idle / Offline / Checked-out: show last call time if we have one.
+            try {
+              if (u.state === 'on_call' && u.sub) {
+                return h('span', { class: 'muted', style: { fontSize: '.7rem' } }, '· with ' + u.sub);
+              }
+              if ((u.state === 'idle' || u.state === 'logged_out' || u.state === 'checked_out' || u.state === 'on_break') && u.last_call_at) {
+                const d = new Date(u.last_call_at);
+                const t = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                const label = (u.state === 'idle') ? '· Last call ' + t : '· Last dialed ' + t;
+                return h('span', { class: 'muted', style: { fontSize: '.7rem' } }, label);
+              }
+            } catch (_) {}
+            return null;
+          })()
         )
       )
     );

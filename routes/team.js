@@ -71,6 +71,21 @@ async function api_team_liveStatus(token, _payload) {
     if (!uid) return;
     (callsByUser[uid] = callsByUser[uid] || []).push(e);
   });
+  // TEAM_LIVE_API_FIX_v2 — also pull the most-recent call per user from a
+  // wider window so 'Offline' / 'Idle' rows can say 'last call at <time>'.
+  const lastCallByUser = await _safe(async () => {
+    const r = await db.query(
+      `SELECT DISTINCT ON (user_id) user_id, phone, event_type, created_at
+         FROM call_events
+        WHERE user_id IS NOT NULL
+          AND created_at >= NOW() - INTERVAL '7 days'
+        ORDER BY user_id, created_at DESC`,
+      []
+    );
+    const out = {};
+    (r.rows || []).forEach(row => { out[Number(row.user_id)] = row; });
+    return out;
+  }, {});
 
   // Break flags from config table
   const breakFlags = {};
@@ -147,6 +162,7 @@ async function api_team_liveStatus(token, _payload) {
 
     summary[state] = (summary[state] || 0) + 1;
 
+    const lc = lastCallByUser[uid];
     return {
       id: uid,
       name: u.name || u.email || ('User #' + uid),
@@ -155,7 +171,10 @@ async function api_team_liveStatus(token, _payload) {
       state,
       since_iso: since ? new Date(since).toISOString() : null,
       since_min: since ? Math.max(0, Math.round((now - since) / 60000)) : null,
-      sub
+      sub,
+      last_call_at: lc ? new Date(lc.created_at).toISOString() : null,
+      last_call_phone: lc ? (lc.phone || '') : '',
+      last_call_event: lc ? String(lc.event_type || '') : ''
     };
   });
 
