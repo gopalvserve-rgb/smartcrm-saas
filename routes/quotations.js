@@ -633,26 +633,53 @@ async function api_quotations_send_whatsapp(token, id, opts) {
   const cfgWa = await wb._cfg();
   if (!cfgWa.token || !cfgWa.phoneId) throw new Error('WhatsApp not connected. Settings → WhatsApp → Connect Account.');
 
-  // QUOTE_PDF_v1: send the actual PDF as a document attachment, with the
-  // formatted text as the caption. Customer sees a tappable PDF preview
-  // bubble inside WhatsApp — exactly what the user asked for.
-  const pdfUrl = u.url.replace(/\/q\/([a-zA-Z0-9]+)$/, '/q/$1.pdf');
+  // QUOTE_WA_TEMPLATE_v1 — if the caller supplied a template name, send
+  // via the Meta-approved template path. This is the ONLY way to deliver
+  // to a customer who hasn't messaged us in the last 24h (free-form text
+  // gets silently dropped outside the customer-service window).
+  // Template body vars are mapped from quote fields: {{1}} = customer name,
+  // {{2}} = quote number, {{3}} = total (with currency). Override per-call
+  // via opts.template_variables = ["...", "...", "..."].
+  const tplName = o.template_name && String(o.template_name).trim();
   let send;
-  try {
-    send = await wb._sendMedia({
+  if (tplName) {
+    if (!wb._sendTemplate) throw new Error('Template send not supported by this WhatsApp module build');
+    const tplVars = Array.isArray(o.template_variables) && o.template_variables.length
+      ? o.template_variables.map(v => String(v == null ? '' : v))
+      : [
+          q.customer_name || 'there',
+          q.number || '',
+          sym + Number(q.total).toLocaleString('en-IN')
+        ];
+    send = await wb._sendTemplate({
       to: phone,
-      mediaType: 'document',
-      mediaUrl: pdfUrl,
-      caption: text,
+      templateName: tplName,
+      language: o.template_language || 'en_US',
+      variables: tplVars,
       leadId: q.lead_id || null,
       userId: null
     }, cfgWa);
-  } catch (e) {
-    // If document send fails for any reason (Meta couldn't fetch the URL,
-    // PDF generator crashed, etc.) fall back to plain text so the message
-    // still goes through.
-    console.warn('[quote-wa] PDF send failed, falling back to text:', e.message);
-    send = await wb._sendText({ to: phone, text, leadId: q.lead_id || null, userId: null }, cfgWa);
+  } else {
+    // QUOTE_PDF_v1: send the actual PDF as a document attachment, with the
+    // formatted text as the caption. Customer sees a tappable PDF preview
+    // bubble inside WhatsApp — exactly what the user asked for.
+    // NOTE: this path is FREE-FORM — only delivers if customer messaged
+    // us in the last 24h. For outside-window sends, caller should pass
+    // opts.template_name.
+    const pdfUrl = u.url.replace(/\/q\/([a-zA-Z0-9]+)$/, '/q/$1.pdf');
+    try {
+      send = await wb._sendMedia({
+        to: phone,
+        mediaType: 'document',
+        mediaUrl: pdfUrl,
+        caption: text,
+        leadId: q.lead_id || null,
+        userId: null
+      }, cfgWa);
+    } catch (e) {
+      console.warn('[quote-wa] PDF send failed, falling back to text:', e.message);
+      send = await wb._sendText({ to: phone, text, leadId: q.lead_id || null, userId: null }, cfgWa);
+    }
   }
   if (send && send.body && send.body.error) {
     const e = send.body.error;

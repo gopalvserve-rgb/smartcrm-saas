@@ -9228,7 +9228,25 @@ async function openQuotationModal(qid, prefillLead) {
   // ---- Save / Send ----
   const saveBtn = h('button', { class: 'btn primary' }, '💾 Save');
   const emailBtn = h('button', { class: 'btn', disabled: qid ? null : 'disabled' }, '📧 Send by email');
-  const waBtn = h('button', { class: 'btn', disabled: qid ? null : 'disabled' }, '💬 Send by WhatsApp');
+  // QUOTE_WA_TEMPLATE_v1 — template picker for API send. When set,
+  // the API path uses the approved Meta template instead of free-form
+  // text (the only way to deliver outside the 24h customer-service window).
+  const waTplSel = h('select', { style: { padding: '.3rem .4rem', borderRadius: '4px', border: '1px solid #cbd5e1', minWidth: '180px', fontSize: '.82rem', maxWidth: '260px' }, title: 'Pick an approved Meta template to send outside the 24-hour window. Leave blank for free-form (only works if customer messaged you in last 24h).' },
+    h('option', { value: '' }, '— No template (free-form, 24h rule) —')
+  );
+  (async () => {
+    try {
+      const tpls = await api('api_wb_templates_list');
+      (tpls || []).filter(t => String(t.status || '').toUpperCase() === 'APPROVED').forEach(t => {
+        const opt = h('option', { value: t.name, 'data-lang': t.language || 'en_US', 'data-params': String(t.body_params || 0) }, t.name + ' (' + (t.language || 'en') + ', ' + (t.body_params || 0) + ' vars)');
+        waTplSel.appendChild(opt);
+      });
+      if (waTplSel.options.length === 1) {
+        waTplSel.appendChild(h('option', { value: '', disabled: 'disabled' }, 'No approved templates — create one in Settings → WhatsApp → Templates'));
+      }
+    } catch (_) {}
+  })();
+  const waBtn = h('button', { class: 'btn', disabled: qid ? null : 'disabled', title: 'Sends via Meta WhatsApp Cloud API. Pick an approved template on the left to send outside the 24h window.' }, '💬 Send by WhatsApp');
   const linkBtn = h('button', { class: 'btn ghost', disabled: qid ? null : 'disabled' }, '🔗 Public link');
 
   let currentId = qid || null;
@@ -9314,7 +9332,11 @@ async function openQuotationModal(qid, prefillLead) {
       // QUOTE_WA_PHONE_FIX_v3: pass the phone from the input directly so even
       // if save() somehow didn't persist (race, network blip), the send still
       // uses the user-typed number rather than whatever's stale in the DB.
-      const r = await api('api_quotations_send_whatsapp', currentId, { phone: phoneInp.value });
+      const _selectedTpl = waTplSel && waTplSel.value ? waTplSel.value : '';
+      const _selectedLang = waTplSel && waTplSel.selectedOptions[0] ? (waTplSel.selectedOptions[0].getAttribute('data-lang') || 'en_US') : 'en_US';
+      const _sendOpts = { phone: phoneInp.value };
+      if (_selectedTpl) { _sendOpts.template_name = _selectedTpl; _sendOpts.template_language = _selectedLang; }
+      const r = await api('api_quotations_send_whatsapp', currentId, _sendOpts);
       toast('💬 Accepted by Meta for ' + r.sent_to + ' — should arrive on the customer\'s WhatsApp in a few seconds. If they don\'t see it: they must have messaged us within the last 24 hours (WhatsApp\'s free-form rule).', 'ok');
     } catch (e) {
       // QUOTE_WA_ERROR_v1 — give actionable guidance for the most common
@@ -9351,7 +9373,7 @@ async function openQuotationModal(qid, prefillLead) {
   };
 
   card.appendChild(h('div', { class: 'q-actions', style: { display: 'flex', gap: '.5rem', marginTop: '1rem', justifyContent: 'space-between', flexWrap: 'wrap' } },
-    h('div', { class: 'q-actions-left', style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap' } }, saveBtn, pdfBtn, emailBtn, waBtn, linkBtn),
+    h('div', { class: 'q-actions-left', style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap', alignItems: 'center' } }, saveBtn, pdfBtn, emailBtn, h('span', { style: { fontSize: '.78rem', color: '#64748b' } }, 'WA Template:'), waTplSel, waBtn, linkBtn),
     h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Close')
   ));
   recompute();
