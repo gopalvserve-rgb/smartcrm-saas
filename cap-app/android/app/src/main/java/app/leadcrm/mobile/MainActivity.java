@@ -357,6 +357,19 @@ public class MainActivity extends BridgeActivity {
             });
         }
 
+        // PERM_ONBOARDING_SOFT_v1: snapshot for SPA top-banner. JS calls this
+        // once per app boot and renders a small dismissable strip if
+        // anyMissing is true. No more hard-blocking the user on the onboarding
+        // screen — they keep using the CRM and can self-fix from a quiet hint.
+        @JavascriptInterface
+        public String getPermissionsStatus() {
+            try {
+                return PermissionOnboardingActivity.permissionsStatusJson(MainActivity.this);
+            } catch (Exception e) {
+                return "{\"anyMissing\":false}";
+            }
+        }
+
         @JavascriptInterface
         public String getRecordingFolder() {
             SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);

@@ -53,16 +53,36 @@ class PermissionOnboardingActivity : AppCompatActivity() {
         private const val REQ_RUNTIME = 9101
         private const val REQ_PICK_FOLDER = 9202
 
-        /** Caller decides whether onboarding is needed. */
+        /** PERM_ONBOARDING_SOFT_v1 (2026-05-28): one-shot only.
+         *
+         *  Old behaviour re-popped the onboarding on EVERY app launch when any
+         *  critical permission was still missing — battery whitelist, all-files
+         *  access, or the recording folder. Users said the app refused to let
+         *  them work and kept dragging them back to the T&C / conditions page.
+         *
+         *  New behaviour: show ONCE per fresh install. The moment the activity
+         *  finishes (Done / Skip / system Back / anything), we set
+         *  KEY_ONBOARDING_DONE and never auto-launch it again. The SPA can
+         *  still re-open it on demand via LeadCRMNative.openRecordingSetup()
+         *  (the existing 'Fix permissions' link in Settings), and can render
+         *  a soft top-banner using LeadCRMNative.getPermissionsStatus(). */
         @JvmStatic
         fun shouldShow(ctx: Context): Boolean {
             val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            if (prefs.getBoolean(KEY_ONBOARDING_DONE, false)) {
-                // Already shown — only re-show if a CRITICAL permission was revoked
-                return !batteryOptIgnored(ctx) || !manageExternalStorageOk(ctx)
-                        || prefs.getString(KEY_REC_FOLDER, null).isNullOrEmpty()
-            }
-            return true
+            return !prefs.getBoolean(KEY_ONBOARDING_DONE, false)
+        }
+
+        /** Snapshot of the three CRITICAL conditions for the SPA banner.
+         *  Returned to JS as a JSON blob. */
+        @JvmStatic
+        fun permissionsStatusJson(ctx: Context): String {
+            val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val battery = batteryOptIgnored(ctx)
+            val storage = manageExternalStorageOk(ctx)
+            val folder  = !prefs.getString(KEY_REC_FOLDER, null).isNullOrEmpty()
+            val seen    = prefs.getBoolean(KEY_ONBOARDING_DONE, false)
+            val anyMissing = !(battery && storage && folder)
+            return """{"batteryOk":$battery,"storageOk":$storage,"folderOk":$folder,"onboardingSeen":$seen,"anyMissing":$anyMissing}"""
         }
 
         fun batteryOptIgnored(ctx: Context): Boolean {
@@ -516,12 +536,24 @@ class PermissionOnboardingActivity : AppCompatActivity() {
     }
 
     private fun finishOnboarding(markDone: Boolean) {
-        if (markDone) {
+        // PERM_ONBOARDING_SOFT_v1: always mark as seen so the next launch
+        // never auto-redirects. Whether the user Done'd or Skip'ped doesn't
+        // matter — they saw the screen once, that's the contract.
+        getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putBoolean(KEY_ONBOARDING_DONE, true).apply()
+        setResult(if (markDone) Activity.RESULT_OK else Activity.RESULT_CANCELED)
+        finish()
+    }
+
+    // PERM_ONBOARDING_SOFT_v1: pressing the system Back button or swiping
+    // the activity away also counts as 'seen' — the user explicitly chose
+    // to leave the screen, so don't pester them on next launch.
+    override fun onPause() {
+        super.onPause()
+        if (isFinishing) {
             getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
                 .putBoolean(KEY_ONBOARDING_DONE, true).apply()
         }
-        setResult(if (markDone) Activity.RESULT_OK else Activity.RESULT_CANCELED)
-        finish()
     }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()

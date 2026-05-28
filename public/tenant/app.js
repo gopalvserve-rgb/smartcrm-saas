@@ -47,6 +47,61 @@ const CRM = {
   }
 };
 
+// PERM_ONBOARDING_SOFT_v1 (2026-05-28) — soft top-banner instead of hard
+// redirect to the permission onboarding activity. The Android side now
+// shows the onboarding ONCE per install (Done OR Skip OR Back all count
+// as seen). On every subsequent app boot the user lands straight in the
+// CRM and, if any critical permission is still missing, we render this
+// little chip at the top of the screen with a "Fix" button.
+function _renderPermSoftBanner() {
+  try {
+    if (!window.LeadCRMNative || typeof LeadCRMNative.getPermissionsStatus !== 'function') return;
+    let st;
+    try { st = JSON.parse(LeadCRMNative.getPermissionsStatus() || '{}'); } catch (_) { st = {}; }
+    if (!st || !st.anyMissing) {
+      // perms ok — remove any stale banner from a previous boot
+      const ex = document.getElementById('perm-soft-banner'); if (ex) ex.remove();
+      return;
+    }
+    // already dismissed in this session?
+    if (sessionStorage.getItem('perm_banner_dismissed') === '1') return;
+    if (document.getElementById('perm-soft-banner')) return;
+
+    const missing = [];
+    if (!st.batteryOk)  missing.push('battery');
+    if (!st.storageOk)  missing.push('storage');
+    if (!st.folderOk)   missing.push('recording folder');
+    const msg = 'For best call-tracking, finish setting up: ' + missing.join(', ') + '.';
+
+    const bar = document.createElement('div');
+    bar.id = 'perm-soft-banner';
+    bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99998;background:#fff7ed;border-bottom:1px solid #fdba74;color:#7c2d12;padding:.5rem .8rem;font:500 .82rem -apple-system,Segoe UI,Roboto,sans-serif;display:flex;align-items:center;gap:.6rem;box-shadow:0 1px 2px rgba(0,0,0,.05);';
+    bar.innerHTML =
+      '<span style="font-size:1rem">⚙️</span>' +
+      '<span style="flex:1">' + msg + '</span>' +
+      '<button id="perm-soft-fix" style="padding:.3rem .7rem;border:none;border-radius:5px;background:#ea580c;color:#fff;font-weight:600;cursor:pointer;font-size:.78rem">Fix</button>' +
+      '<button id="perm-soft-dismiss" aria-label="Dismiss" style="background:none;border:none;color:#9a3412;font-size:1.1rem;cursor:pointer;padding:0 .3rem">×</button>';
+    document.body.appendChild(bar);
+    document.getElementById('perm-soft-fix').addEventListener('click', () => {
+      try { LeadCRMNative.openRecordingSetup(); } catch (_) {}
+    });
+    document.getElementById('perm-soft-dismiss').addEventListener('click', () => {
+      try { sessionStorage.setItem('perm_banner_dismissed', '1'); } catch (_) {}
+      bar.remove();
+    });
+  } catch (_) { /* never throw on a UX nicety */ }
+}
+// Try once at boot + once a few seconds in (some perms only resolve after
+// the WebView has time to talk to the JS bridge).
+if (typeof window !== 'undefined') {
+  if (document.readyState === 'complete' || document.readyState === 'interactive') {
+    setTimeout(_renderPermSoftBanner, 800);
+  } else {
+    document.addEventListener('DOMContentLoaded', () => setTimeout(_renderPermSoftBanner, 800));
+  }
+  setTimeout(_renderPermSoftBanner, 5000);
+}
+
 // Save the auth token + API base into Android SharedPreferences so the
 // native PhoneStateReceiver can POST call events directly to
 // /api/call_event_native without depending on the WebView being alive.
