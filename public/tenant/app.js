@@ -2164,6 +2164,82 @@ const WIDGET_LIBRARY = {
       c.appendChild(h('div', { class: 'muted', style: { fontSize: '.74rem', marginTop: '.35rem' } }, '\ud83d\udca1 Click any row to open that user\u2019s leads. Sorted by total leads.'));
     }
   },
+  // PIPELINE_STAGE_v1_PHASE2 — compact funnel widget that mirrors the
+  // full Pipeline page. Clickable bands drill to /#/leads?stage=<id>.
+  pipeline_funnel: { title: 'Sales Pipeline Funnel', group: 'Pipeline',
+    description: 'Funnel grouped by universal stage with KPI strip + Won/Lost cards.',
+    render: async (c, _cfg, _d, w) => {
+      c.appendChild(h('h3', { style: { margin:'0 0 .6rem' } }, w.title || '\u{1F4C8} Sales pipeline'));
+      const body = h('div', {});
+      c.appendChild(body);
+      try {
+        const r = await api('api_pipeline_funnel', {});
+        const k = r.kpis || {};
+        // Compact KPI row
+        const kpis = h('div', { style: { display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:'.4rem', marginBottom:'.7rem' } });
+        function kp(lab, val, sub) {
+          return h('div', { style: { background:'#eff6ff', border:'1px solid #dbeafe', borderRadius:'8px', padding:'.45rem .55rem' } },
+            h('div', { style: { fontSize:'.62rem', color:'#1e40af' } }, lab),
+            h('div', { style: { fontSize:'1.05rem', fontWeight:700, color:'#0f172a' } }, val),
+            h('div', { style: { fontSize:'.62rem', color:'#64748b' } }, sub)
+          );
+        }
+        kpis.appendChild(kp('LEADS', String(k.total_leads || 0), 'in pipeline'));
+        kpis.appendChild(kp('VALUE', _formatInr(k.open_value || 0), 'wt ' + _formatInr(k.weighted_value || 0)));
+        kpis.appendChild(kp('WIN', (k.win_rate || 0) + '%', 'won/closed'));
+        kpis.appendChild(kp('CYCLE', k.avg_cycle_days != null ? (k.avg_cycle_days + 'd') : '\u2014', 'avg'));
+        body.appendChild(kpis);
+
+        // Compact bands
+        const bands = r.bands || [];
+        const maxCount = Math.max(1, ...bands.map(b => b.count || 0));
+        const funnel = h('div', { style: { padding:'.3rem 0' } });
+        bands.forEach((b, i) => {
+          const tw = Math.max(30, Math.round(85 - i * 12));
+          const bgColor = _FUNNEL_BAND_COLORS[i] || _FUNNEL_BAND_COLORS[_FUNNEL_BAND_COLORS.length - 1];
+          const tc = _FUNNEL_BAND_TEXT[i] || '#fff';
+          const trap = h('div', {
+            style: { width: tw + '%', margin:'0 auto', height:'42px', background:bgColor, clipPath:'polygon(8% 0, 92% 0, 100% 100%, 0% 100%)', display:'flex', alignItems:'center', justifyContent:'center', color: tc, cursor:'pointer', fontSize:'.78rem', fontWeight:600 },
+            onclick: () => { location.hash = '#/leads?stage=' + b.id; }
+          }, b.label + ' \u00B7 ' + b.count);
+          const row = h('div', { style: { display:'flex', alignItems:'center', gap:'.4rem', marginBottom:'.3rem' } },
+            h('div', { style: { flex:1 } }, trap),
+            h('div', { style: { width:'90px', fontSize:'.72rem', color:'#0f172a' } },
+              h('div', { style: { fontWeight:700 } }, b.count + ' leads'),
+              h('div', { style: { fontSize:'.66rem', color:'#64748b' } }, _formatInr(b.value))
+            )
+          );
+          funnel.appendChild(row);
+        });
+        body.appendChild(funnel);
+
+        // Won/Lost compact
+        const won = r.won || { count:0, value:0 };
+        const lost = r.lost || { count:0, value:0 };
+        const wl = h('div', { style: { display:'grid', gridTemplateColumns:'1fr 1fr', gap:'.4rem', marginTop:'.5rem' } },
+          h('div', { style: { background:'#dcfce7', border:'1px solid #bbf7d0', borderRadius:'8px', padding:'.4rem .55rem', display:'flex', alignItems:'center', gap:'.4rem', cursor:'pointer' },
+            onclick: () => { location.hash = '#/leads?stage=won'; } },
+            h('div', { style: { width:'24px', height:'24px', borderRadius:'6px', background:'#86efac', color:'#14532d', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'.85rem', fontWeight:700 } }, '\u2713'),
+            h('div', { style: { flex:1 } },
+              h('div', { style: { fontWeight:700, color:'#14532d', fontSize:'.78rem' } }, 'Won \u00B7 ' + won.count),
+              h('div', { style: { fontSize:'.65rem', color:'#16a34a' } }, _formatInr(won.value))
+            )
+          ),
+          h('div', { style: { background:'#fee2e2', border:'1px solid #fecaca', borderRadius:'8px', padding:'.4rem .55rem', display:'flex', alignItems:'center', gap:'.4rem', cursor:'pointer' },
+            onclick: () => { location.hash = '#/leads?stage=lost'; } },
+            h('div', { style: { width:'24px', height:'24px', borderRadius:'6px', background:'#fca5a5', color:'#7f1d1d', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'.85rem', fontWeight:700 } }, '\u2715'),
+            h('div', { style: { flex:1 } },
+              h('div', { style: { fontWeight:700, color:'#7f1d1d', fontSize:'.78rem' } }, 'Lost \u00B7 ' + lost.count),
+              h('div', { style: { fontSize:'.65rem', color:'#dc2626' } }, _formatInr(lost.value))
+            )
+          )
+        );
+        body.appendChild(wl);
+      } catch (e) {
+        body.appendChild(h('div', { class: 'muted', style: { padding:'.5rem' } }, 'Could not load funnel: ' + e.message));
+      }
+    }
+  },
   // TEAM_LIVE_STATUS_v1 — compact live-status grid pinnable from the
   // sticky dashboard + the regular Customise Dashboard picker. Pulls
   // its own data via api_team_liveStatus, so the host dashboard
@@ -3180,10 +3256,43 @@ async function loadLeads(opts) {
   // since multiSelectDropdown stores its state internally; the dropdown's
   // onApply already mutates CRM.prefs.filters.tags).
   const tags = (CRM.prefs.filters.tags && CRM.prefs.filters.tags.length) ? CRM.prefs.filters.tags : null;
+  // PIPELINE_STAGE_v1_PHASE2 — honour ?stage=<id> in the URL hash.
+  // Funnel band clicks set location.hash = '#/leads?stage=qualified' etc.
+  // We translate to a status_ids list of the statuses mapped to that stage.
+  let _hashStage = '';
+  try {
+    const m = String(location.hash || '').match(/[?&]stage=([a-z_]+)/);
+    if (m) _hashStage = m[1];
+  } catch (_) {}
+  let _stageStatusIds = null;
+  if (_hashStage) {
+    const tenantStatuses = (CRM.cache && CRM.cache.statuses) || [];
+    _stageStatusIds = tenantStatuses
+      .filter(st => String(st.stage || '') === _hashStage)
+      .map(st => st.id);
+    // Surface a chip explaining the active stage filter so users know
+    // they're not seeing every lead.
+    try {
+      const view = document.getElementById('view');
+      if (view && !view.querySelector('.stage-filter-chip')) {
+        const labels = {
+          fresh:'Fresh Lead', attempted:'Attempted/Contacted', qualified:'Connected & Qualified',
+          negotiation:'Negotiation', proposal:'Proposal/Payment Link Sent', won:'Won', lost:'Lost'
+        };
+        const chip = h('div', { class: 'stage-filter-chip', style: { display:'inline-flex', alignItems:'center', gap:'.4rem', background:'#eef2ff', color:'#3730a3', padding:'.3rem .7rem', borderRadius:'999px', fontSize:'.82rem', marginBottom:'.5rem', fontWeight:600 } },
+          h('span', {}, '\u{1F6A6} Pipeline stage:'),
+          h('span', {}, labels[_hashStage] || _hashStage),
+          h('button', { class: 'btn ghost sm', style: { padding:'0 .3rem', color:'#4f46e5' },
+            onclick: () => { location.hash = '#/leads'; } }, '\u2715')
+        );
+        view.insertBefore(chip, view.firstChild);
+      }
+    } catch (_) {}
+  }
   const filters = {
     q:           $('#f-q')?.value || undefined,
     status_id:   sids ? (sids.length === 1 ? sids[0] : undefined) : (CRM.prefs.filters.status_id || undefined),
-    status_ids:  sids || undefined,
+    status_ids:  (_stageStatusIds && _stageStatusIds.length) ? _stageStatusIds : (sids || undefined),
     source:      srcs ? (srcs.length === 1 ? srcs[0] : undefined) : (CRM.prefs.filters.source || undefined),
     sources:     srcs || undefined,
     tags:        tags || undefined,
@@ -8038,12 +8147,188 @@ function _reRenderCPProcessPipeline(view, pipeline, allStatuses) {
   ));
 }
 
+// PIPELINE_STAGE_v1_PHASE2 — new funnel pipeline view that aggregates by
+// universal stage. Becomes the default. Old kanban still reachable via the
+// 'Switch to Kanban' button. Layout follows the reference screenshot:
+// title strip + 4 KPI cards + descending trapezoid bands with dashed
+// connectors to a right-side count, then Won/Lost cards.
+
+const _FUNNEL_BAND_COLORS = ['#bfdbfe','#93c5fd','#60a5fa','#3b82f6','#1d4ed8'];
+const _FUNNEL_BAND_TEXT  = ['#1e3a8a','#1e3a8a','#1e3a8a','#ffffff','#ffffff'];
+const _FUNNEL_DOT_COLORS = ['#60a5fa','#3b82f6','#2563eb','#1d4ed8','#1e3a8a'];
+
+function _formatInr(n) {
+  n = Number(n) || 0;
+  if (n >= 10000000) return '\u20B9' + (n / 10000000).toFixed(1) + 'Cr';
+  if (n >= 100000)   return '\u20B9' + (n / 100000).toFixed(1) + 'L';
+  if (n >= 1000)     return '\u20B9' + (n / 1000).toFixed(1) + 'K';
+  return '\u20B9' + n.toLocaleString('en-IN');
+}
+
+async function _renderPipelineFunnel(view) {
+  view.innerHTML = '';
+
+  // Header
+  const tenantName = (CRM.tenant && CRM.tenant.name) || (CRM.brand && CRM.brand.name) || '';
+  const head = h('div', { style: { display:'flex', alignItems:'flex-start', justifyContent:'space-between', flexWrap:'wrap', gap:'.6rem', marginBottom:'1.2rem' } },
+    h('div', {},
+      h('h2', { style: { margin:0, fontSize:'1.55rem', color:'#0f172a', letterSpacing:'-.01em' } }, 'Sales pipeline'),
+      h('div', { class: 'muted', style: { fontSize:'.85rem', marginTop:'.25rem', color:'#64748b' } },
+        (tenantName ? (tenantName + ' \u00B7 ') : '') + 'auto-updated')
+    ),
+    h('div', { style: { display:'flex', gap:'.5rem', alignItems:'center', flexWrap:'wrap' } },
+      h('span', { style: { background:'#dbeafe', color:'#1e40af', padding:'.4rem .85rem', borderRadius:'999px', fontSize:'.82rem', fontWeight:600, display:'inline-flex', alignItems:'center', gap:'.35rem' } },
+        h('span', { style: { color:'#facc15' } }, '\u26A1'),
+        'leads move automatically'
+      ),
+      h('button', { class: 'btn ghost sm', onclick: () => { window._rePipeForceKanban = true; VIEWS.pipeline(view); } }, '\u{1F4CA} Switch to Kanban')
+    )
+  );
+  view.appendChild(head);
+
+  let data;
+  try { data = await api('api_pipeline_funnel', {}); }
+  catch (e) {
+    view.appendChild(h('div', { class: 'error-box' }, 'Could not load funnel: ' + e.message));
+    return;
+  }
+  const k = data.kpis || {};
+
+  // KPI strip — 4 light-blue rounded cards
+  const kpiRow = h('div', { style: { display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(200px, 1fr))', gap:'.85rem', marginBottom:'2rem' } });
+  function kpi(label, val, sub) {
+    return h('div', { style: { background:'#eff6ff', border:'1px solid #dbeafe', borderRadius:'12px', padding:'1rem 1.2rem' } },
+      h('div', { style: { fontSize:'.78rem', color:'#1e40af', marginBottom:'.4rem' } }, label),
+      h('div', { style: { fontSize:'2rem', fontWeight:700, color:'#0f172a', lineHeight:'1.1' } }, val),
+      h('div', { style: { fontSize:'.78rem', color:'#64748b', marginTop:'.35rem' } }, sub)
+    );
+  }
+  kpiRow.appendChild(kpi('total leads',  String(k.total_leads || 0), 'in pipeline'));
+  kpiRow.appendChild(kpi('open value',   _formatInr(k.open_value || 0), 'weighted ' + _formatInr(k.weighted_value || 0)));
+  kpiRow.appendChild(kpi('win rate',     (k.win_rate || 0) + '%', 'won vs closed'));
+  kpiRow.appendChild(kpi('avg cycle',    k.avg_cycle_days != null ? (k.avg_cycle_days + 'd') : '\u2014', 'lead to close'));
+  view.appendChild(kpiRow);
+
+  // Funnel — descending trapezoids
+  const bands = (data.bands || []);
+  const maxCount = Math.max(1, ...bands.map(b => b.count || 0));
+  // Compute each band's width as % of container. Top band ~80%, narrowing.
+  const funnelWrap = h('div', { style: { maxWidth:'960px', margin:'0 auto', padding:'.5rem 0' } });
+  bands.forEach((b, i) => {
+    const topWidth = Math.max(28, Math.round(80 - i * 11));  // 80, 69, 58, 47, 36 (approximate)
+    const bgColor = _FUNNEL_BAND_COLORS[i] || _FUNNEL_BAND_COLORS[_FUNNEL_BAND_COLORS.length - 1];
+    const textColor = _FUNNEL_BAND_TEXT[i] || '#fff';
+    const dotColor = _FUNNEL_DOT_COLORS[i] || '#1e3a8a';
+    // Build the trapezoid with clip-path
+    const trap = h('div', {
+      style: {
+        margin:'0 auto', width: topWidth + '%', height: '110px',
+        background: bgColor,
+        clipPath: 'polygon(8% 0, 92% 0, 100% 100%, 0% 100%)',
+        display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
+        color: textColor, cursor: 'pointer',
+        transition: 'transform .15s ease, filter .15s ease'
+      },
+      title: 'Click to see leads in ' + b.label,
+      onmouseenter: (ev) => { ev.currentTarget.style.transform = 'scale(1.015)'; ev.currentTarget.style.filter = 'brightness(1.06)'; },
+      onmouseleave: (ev) => { ev.currentTarget.style.transform = ''; ev.currentTarget.style.filter = ''; },
+      onclick: () => { location.hash = '#/leads?stage=' + b.id; }
+    },
+      h('div', { style: { fontWeight:700, fontSize:'1.05rem' } }, b.label),
+      h('div', { style: { fontSize:'.85rem', opacity:.95, marginTop:'.2rem' } },
+        b.count + ' leads \u00B7 ' + b.pct_of_total + '% of total')
+    );
+
+    // Row: [ trapezoid | dashed connector + dot | right label ]
+    const row = h('div', { style: { display:'grid', gridTemplateColumns:'minmax(0,1fr) 90px 180px', alignItems:'center', gap:'.4rem', marginBottom:'.55rem' } });
+    row.appendChild(trap);
+
+    // Dashed connector
+    const connector = h('div', { style: { display:'flex', alignItems:'center', height:'100%' } },
+      h('div', { style: { flex:1, height:'2px', borderTop:'2px dashed ' + dotColor, opacity:.7 } }),
+      h('div', { style: { width:'10px', height:'10px', borderRadius:'50%', background: dotColor, flexShrink:0 } })
+    );
+    row.appendChild(connector);
+
+    // Right label
+    const advanceText = (b.advance_pct != null)
+      ? (b.advance_pct + '% advance')
+      : (i === bands.length - 1 ? 'final stage' : '');
+    const rightCol = h('div', { style: { fontSize:'.92rem', color:'#0f172a' } },
+      h('div', { style: { fontWeight:700 } }, b.count + ' leads'),
+      h('div', { style: { fontSize:'.82rem', color:'#64748b', marginTop:'.15rem' } },
+        _formatInr(b.value) + (advanceText ? (' \u00B7 ' + advanceText) : ''))
+    );
+    row.appendChild(rightCol);
+
+    funnelWrap.appendChild(row);
+  });
+  view.appendChild(funnelWrap);
+
+  // Won / Lost summary — equal-width green/red cards
+  const won = data.won || { count:0, value:0 };
+  const lost = data.lost || { count:0, value:0 };
+  const closed = won.count + lost.count;
+  const lostPct = closed ? Math.round((lost.count / closed) * 100) : 0;
+
+  const summary = h('div', { style: { display:'grid', gridTemplateColumns:'1fr 1fr', gap:'.85rem', marginTop:'2rem' } });
+
+  // Won card
+  summary.appendChild(h('div', {
+    style: { background:'#dcfce7', border:'1px solid #bbf7d0', borderRadius:'12px', padding:'1rem 1.25rem', cursor:'pointer', display:'flex', alignItems:'center', gap:'1rem' },
+    onclick: () => { location.hash = '#/leads?stage=won'; }
+  },
+    h('div', { style: { width:'44px', height:'44px', borderRadius:'10px', background:'#86efac', color:'#14532d', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'1.3rem', fontWeight:700, flexShrink:0 } }, '\u2713'),
+    h('div', { style: { flex:1, minWidth:0 } },
+      h('div', { style: { fontWeight:700, color:'#14532d', fontSize:'1.05rem' } }, 'Won'),
+      h('div', { style: { fontSize:'.8rem', color:'#15803d', marginTop:'.15rem' } }, (data.kpis.win_rate || 0) + '% win rate')
+    ),
+    h('div', { style: { textAlign:'right' } },
+      h('div', { style: { fontWeight:700, fontSize:'1.65rem', color:'#14532d', lineHeight:1 } }, String(won.count)),
+      h('div', { style: { fontSize:'.82rem', color:'#16a34a', marginTop:'.3rem' } }, _formatInr(won.value))
+    )
+  ));
+
+  // Lost card
+  summary.appendChild(h('div', {
+    style: { background:'#fee2e2', border:'1px solid #fecaca', borderRadius:'12px', padding:'1rem 1.25rem', cursor:'pointer', display:'flex', alignItems:'center', gap:'1rem' },
+    onclick: () => { location.hash = '#/leads?stage=lost'; }
+  },
+    h('div', { style: { width:'44px', height:'44px', borderRadius:'10px', background:'#fca5a5', color:'#7f1d1d', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'1.3rem', fontWeight:700, flexShrink:0 } }, '\u2715'),
+    h('div', { style: { flex:1, minWidth:0 } },
+      h('div', { style: { fontWeight:700, color:'#7f1d1d', fontSize:'1.05rem' } }, 'Lost'),
+      h('div', { style: { fontSize:'.8rem', color:'#b91c1c', marginTop:'.15rem' } }, lostPct + '% of closed')
+    ),
+    h('div', { style: { textAlign:'right' } },
+      h('div', { style: { fontWeight:700, fontSize:'1.65rem', color:'#7f1d1d', lineHeight:1 } }, String(lost.count)),
+      h('div', { style: { fontSize:'.82rem', color:'#dc2626', marginTop:'.3rem' } }, _formatInr(lost.value))
+    )
+  ));
+
+  view.appendChild(summary);
+
+  // Unmapped statuses warning
+  if (data.unmapped && data.unmapped.count > 0) {
+    view.appendChild(h('div', { style: { marginTop:'1.2rem', background:'#fef3c7', border:'1px solid #fde68a', borderRadius:'10px', padding:'.75rem 1rem', display:'flex', alignItems:'center', gap:'.7rem', cursor:'pointer' },
+      onclick: () => { location.hash = '#/admin'; }
+    },
+      h('span', { style: { fontSize:'1.3rem' } }, '\u26A0\uFE0F'),
+      h('div', { style: { flex:1 } },
+        h('div', { style: { fontWeight:600, color:'#92400e', fontSize:'.88rem' } }, data.unmapped.count + ' leads on unmapped statuses'),
+        h('div', { style: { fontSize:'.78rem', color:'#b45309', marginTop:'.15rem' } }, 'These don\'t appear in the funnel. Click to open Settings \u2192 Statuses and map them to a stage.')
+      )
+    ));
+  }
+}
+
 VIEWS.pipeline = async (view) => {
-  // GENERIC_PIPE_GRID_v1 (2026-05-21) — render the card-grid Pipeline layout
-  // for EVERY tenant by default. If Real Estate pack is installed, use the
-  // RE-specific renderer with canonical 12-stage bullets; otherwise use the
-  // generic renderer that pulls the tenant's own statuses. Either way, the
-  // user can toggle to standard kanban via the header button.
+  // PIPELINE_STAGE_v1_PHASE2 — new funnel pipeline view is now the default.
+  // If user clicked Switch to Kanban, fall through to the old logic below.
+  if (!window._rePipeForceKanban && !window._rePipeForceLegacyGrid) {
+    try { await _renderPipelineFunnel(view); return; }
+    catch (e) { console.warn('[pipeline funnel] fell back to legacy:', e.message); }
+  }
+  // Legacy generic / RE card-grid pipeline (still available via the toggle).
   if (!window._rePipeForceKanban) {
     try {
       const { statuses = [] } = CRM.cache;

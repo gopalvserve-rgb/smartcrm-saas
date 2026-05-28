@@ -72,6 +72,10 @@ SELECT * FROM (VALUES
 
   ('fix', 'Status stage save now actually persists',
    'When you picked a Stage and clicked save, the toast said Saved but the value was silently dropped because db/pg.js _serialize() filters every column against a hard-coded whitelist that did not include the brand-new stage column. Fixed both layers — schema whitelist plus a raw SQL belt-and-braces UPDATE in the route. Existing mappings now stick across refresh.',
-   '#/settings/statuses', '🐛', NOW())
+   '#/settings/statuses', '🐛', NOW() - INTERVAL '15 minutes'),
+
+  ('feature', 'Sales pipeline funnel view + Dashboard widget',
+   'Pipeline page now opens with a true funnel: a KPI strip (total leads, open value, win rate, avg cycle), 5 descending bands (Fresh → Attempted → Qualified → Negotiation → Proposal) with dashed connectors to right-side labels, and Won / Lost cards at the bottom. Click any band and you jump to a Leads list filtered by that stage. Same view is available as a Dashboard widget — pick it from + Add widget under the Pipeline group. The old card-grid Kanban is still there as a Switch-to-Kanban escape hatch.',
+   '#/pipeline', '📈', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
