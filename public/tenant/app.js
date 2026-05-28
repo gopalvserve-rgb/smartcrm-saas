@@ -21394,14 +21394,56 @@ async function adminSources() {
   ));
   return card;
 }
+// PIPELINE_STAGE_v1 — 7 universal pipeline stages each tenant status can
+// be mapped to. Built so the new funnel pipeline view + Dashboard widget
+// (Phase 2) can aggregate consistently across all tenants and packs.
+const PIPE_STAGES_FALLBACK = [
+  { id: 'fresh',       label: 'Fresh Lead' },
+  { id: 'attempted',   label: 'Attempted / Contacted' },
+  { id: 'qualified',   label: 'Connected & Qualified' },
+  { id: 'negotiation', label: 'Negotiation' },
+  { id: 'proposal',    label: 'Proposal / Payment Link Sent' },
+  { id: 'won',         label: 'Won' },
+  { id: 'lost',        label: 'Lost' }
+];
+async function _pipeStageOptions() {
+  if (window._pipeStages) return window._pipeStages;
+  try {
+    const r = await api('api_pipeline_stages');
+    if (Array.isArray(r) && r.length) { window._pipeStages = r; return r; }
+  } catch (_) {}
+  window._pipeStages = PIPE_STAGES_FALLBACK;
+  return PIPE_STAGES_FALLBACK;
+}
+function _pipeStageLabel(id) {
+  const opt = ((window._pipeStages) || PIPE_STAGES_FALLBACK).find(x => x.id === id);
+  return opt ? opt.label : '';
+}
+
 async function adminStatuses() {
-  const statuses = await api('api_statuses_list');
+  const [statuses, stages] = await Promise.all([
+    api('api_statuses_list'),
+    _pipeStageOptions()
+  ]);
   const card = h('div', { class: 'card' }, h('h4', {}, 'Lead statuses'));
   const tbl = h('table', { class: 'mini-table' },
-    h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Color'), h('th', {}, 'Order'), h('th', {}, 'Final'), h('th', {}))),
+    h('thead', {}, h('tr', {},
+      h('th', {}, 'Name'),
+      h('th', {}, 'Color'),
+      h('th', { title: 'Universal pipeline stage. Drives the Pipeline funnel view + Dashboard widget.' }, '🚦 Stage'),
+      h('th', {}, 'Order'),
+      h('th', {}, 'Final'),
+      h('th', {})
+    )),
     h('tbody', {}, ...statuses.map(s => h('tr', {},
       h('td', {}, h('input', { value: s.name, 'data-id': s.id, 'data-field': 'name' })),
       h('td', {}, h('input', { type: 'color', value: s.color, 'data-id': s.id, 'data-field': 'color' })),
+      h('td', {},
+        h('select', { 'data-id': s.id, 'data-field': 'stage', style: { minWidth: '180px' }, title: 'Map this status to a universal stage' },
+          h('option', { value: '', selected: !s.stage ? 'selected' : null }, '— not mapped —'),
+          ...stages.map(st => h('option', { value: st.id, selected: String(s.stage || '') === st.id ? 'selected' : null }, st.label))
+        )
+      ),
       h('td', {}, h('input', { type: 'number', value: s.sort_order, style: { width: '70px' }, 'data-id': s.id, 'data-field': 'sort_order' })),
       h('td', {}, h('input', { type: 'checkbox', checked: Number(s.is_final) ? 'checked' : null, 'data-id': s.id, 'data-field': 'is_final' })),
       h('td', {},
@@ -21424,11 +21466,21 @@ async function adminStatuses() {
   card.appendChild(h('form', { class: 'inline-form', onsubmit: async ev => {
     ev.preventDefault();
     const f = ev.target;
-    try { await api('api_statuses_save', { name: f.n.value, color: f.c.value, sort_order: Number(f.o.value) || 10, is_final: f.fi.checked ? 1 : 0 }); toast('Added'); showAdminTab('statuses'); }
+    try { await api('api_statuses_save', {
+      name: f.n.value,
+      color: f.c.value,
+      sort_order: Number(f.o.value) || 10,
+      is_final: f.fi.checked ? 1 : 0,
+      stage: f.st.value || null
+    }); toast('Added'); showAdminTab('statuses'); }
     catch (e) { toast(e.message, 'err'); }
   }},
     h('input', { name: 'n', placeholder: 'Status name', required: true }),
     h('input', { name: 'c', type: 'color', value: '#6366f1' }),
+    h('select', { name: 'st', title: 'Map to universal pipeline stage', style: { minWidth: '180px' } },
+      h('option', { value: '' }, '— stage (optional) —'),
+      ...stages.map(st => h('option', { value: st.id }, st.label))
+    ),
     h('input', { name: 'o', type: 'number', placeholder: 'Order', value: 100, style: { width: '70px' } }),
     h('label', { class: 'cb' }, h('input', { name: 'fi', type: 'checkbox' }), ' Final'),
     h('button', { type: 'submit', class: 'btn primary' }, '+ Add status')

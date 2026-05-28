@@ -64,6 +64,10 @@ SELECT * FROM (VALUES
 
   ('feature', 'Industry pack fields in Automation rules',
    'Edit Automation Condition rule-builder now exposes Enrollment status / Fee paid % / Has overdue fee / Parent phone when the Education pack is installed, and Booking stage / Has active booking / Unit type / Demand overdue when the Real Estate pack is installed. You can build automations that fire only for specific pack states.',
-   '#/automation', '🧩', NOW())
+   '#/automation', '🧩', NOW() - INTERVAL '1 hour'),
+
+  ('feature', 'Universal pipeline stages on every Status',
+   'Settings → Statuses now has a 🚦 Stage column. Map each of your tenant statuses to one of 7 universal stages: Fresh Lead, Attempted / Contacted, Connected & Qualified, Negotiation, Proposal / Payment Link Sent, Won, Lost. Phase 2 (coming next) will use these to power a new funnel pipeline view + Dashboard widget that works the same across every tenant and pack.',
+   '#/settings/statuses', '🚦', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
