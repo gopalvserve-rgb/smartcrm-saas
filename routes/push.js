@@ -133,6 +133,17 @@ async function ensureSchema() {
         UNIQUE (token)
       )
     `);
+    // FCM_TOKENS_HEAL_v1 — bhumija (and other older tenants) had fcm_tokens
+    // created BEFORE the platform/ua columns existed. CREATE TABLE IF NOT
+    // EXISTS doesn't add missing columns to an existing table, so the
+    // INSERT in api_fcm_register would crash with 'column platform does
+    // not exist'. ALTER ADD COLUMN IF NOT EXISTS is idempotent + safe.
+    await db.query(`
+      ALTER TABLE fcm_tokens ADD COLUMN IF NOT EXISTS platform TEXT;
+      ALTER TABLE fcm_tokens ADD COLUMN IF NOT EXISTS ua TEXT;
+      ALTER TABLE fcm_tokens ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+      ALTER TABLE fcm_tokens ADD COLUMN IF NOT EXISTS registered_at TIMESTAMPTZ DEFAULT NOW();
+    `);
   } catch (e) {
     console.warn('[push] could not ensure push tables:', e.message);
   }
