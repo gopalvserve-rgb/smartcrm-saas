@@ -22131,16 +22131,28 @@ function _renderTeamLiveCompact(container, data) {
           (function () {
             // Tail line: contextual info about latest activity.
             // On-call: phone they're talking to.
-            // Just hung up: nothing extra (since covers it).
-            // Idle / Offline / Checked-out: show last call time if we have one.
+            // Just hung up: since covers it.
+            // Idle / Offline / Checked-out / On break: pick the most recent
+            //   of last_call_at vs last_action_at and show 'Last call HH:MM'
+            //   (when call wins) or 'Last activity HH:MM' (when an action
+            //   like a remark / status change wins).
             try {
               if (u.state === 'on_call' && u.sub) {
                 return h('span', { class: 'muted', style: { fontSize: '.7rem' } }, '· with ' + u.sub);
               }
-              if ((u.state === 'idle' || u.state === 'logged_out' || u.state === 'checked_out' || u.state === 'on_break') && u.last_call_at) {
-                const d = new Date(u.last_call_at);
-                const t = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                const label = (u.state === 'idle') ? '· Last call ' + t : '· Last dialed ' + t;
+              if (u.state === 'idle' || u.state === 'logged_out' || u.state === 'checked_out' || u.state === 'on_break') {
+                const callTs   = u.last_call_at   ? new Date(u.last_call_at).getTime()   : 0;
+                const actionTs = u.last_action_at ? new Date(u.last_action_at).getTime() : 0;
+                if (!callTs && !actionTs) return null;
+                let label, ts;
+                if (actionTs > callTs) {
+                  ts = actionTs;
+                  label = '· Last activity ' + new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                } else {
+                  ts = callTs;
+                  const t = new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                  label = (u.state === 'idle') ? '· Last call ' + t : '· Last dialed ' + t;
+                }
                 return h('span', { class: 'muted', style: { fontSize: '.7rem' } }, label);
               }
             } catch (_) {}

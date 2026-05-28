@@ -87,6 +87,25 @@ async function api_team_liveStatus(token, _payload) {
     return out;
   }, {});
 
+  // TEAM_LIVE_ACTIVITY_SOURCE_v1 — same lookup against the lead_actions
+  // table (the table Activity Report reads). Gives us a wider signal for
+  // 'last time this user did anything' — not just calls but remarks,
+  // status changes, lead edits, WhatsApp sends, etc. Used as another
+  // effective-login fallback and surfaced to the SPA as last_action_at.
+  const lastActionByUser = await _safe(async () => {
+    const r = await db.query(
+      `SELECT DISTINCT ON (user_id) user_id, action_type, created_at
+         FROM lead_actions
+        WHERE user_id IS NOT NULL
+          AND created_at >= NOW() - INTERVAL '7 days'
+        ORDER BY user_id, created_at DESC`,
+      []
+    );
+    const out = {};
+    (r.rows || []).forEach(row => { out[Number(row.user_id)] = row; });
+    return out;
+  }, {});
+
   // Break flags from config table
   const breakFlags = {};
   configRows.forEach(c => {
@@ -107,6 +126,7 @@ async function api_team_liveStatus(token, _payload) {
     const calls = callsByUser[uid] || [];
     const lastCall = calls[0];
     const lc = lastCallByUser[uid];
+    const la = lastActionByUser[uid];
     const lastLogin = u.last_login_at ? new Date(u.last_login_at).getTime() : 0;
 
     // TEAM_LIVE_LASTLOGIN_FIX_v1 — derive an effective login signal:
@@ -117,6 +137,9 @@ async function api_team_liveStatus(token, _payload) {
     let effectiveLogin = lastLogin;
     if (!effectiveLogin && att && att.check_in) {
       effectiveLogin = new Date(att.check_in).getTime();
+    }
+    if (!effectiveLogin && la && la.created_at) {
+      effectiveLogin = new Date(la.created_at).getTime();
     }
     if (!effectiveLogin && lc && lc.created_at) {
       effectiveLogin = new Date(lc.created_at).getTime();
@@ -188,7 +211,9 @@ async function api_team_liveStatus(token, _payload) {
       sub,
       last_call_at: lc ? new Date(lc.created_at).toISOString() : null,
       last_call_phone: lc ? (lc.phone || '') : '',
-      last_call_event: lc ? String(lc.event || '') : ''
+      last_call_event: lc ? String(lc.event || '') : '',
+      last_action_at: la ? new Date(la.created_at).toISOString() : null,
+      last_action_type: la ? String(la.action_type || '') : ''
     };
   });
 
