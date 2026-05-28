@@ -583,8 +583,12 @@ async function api_social_comments_posts(token, filters) {
   const f = filters || {};
   const params = [];
   let where = '1=1';
-  if (f.platform) { params.push(String(f.platform)); where += ` AND platform = ${params.length}`; }
-  if (f.page_id)  { params.push(String(f.page_id));  where += ` AND page_id = ${params.length}`; }
+  // SOCIAL_COMMENTS_TYPE_FIX_v1: was missing the `$` in front of the
+  // parameter index, so the SQL ended up "AND platform = 1" — comparing
+  // the TEXT column against the literal integer 1 and erroring out with
+  // "operator does not exist: text = integer". Add the $ and cast to TEXT.
+  if (f.platform) { params.push(String(f.platform)); where += ` AND platform = $${params.length}::text`; }
+  if (f.page_id)  { params.push(String(f.page_id));  where += ` AND page_id  = $${params.length}::text`; }
   if (f.unreplied) {
     where += ` AND EXISTS (SELECT 1 FROM social_comments c2
                             WHERE c2.platform=c.platform AND c2.page_id=c.page_id
@@ -820,7 +824,8 @@ async function api_social_posts_list(token, filters) {
   const f = filters || {};
   const params = [];
   let where = '1=1';
-  if (f.status) { params.push(String(f.status)); where += ` AND status = ${params.length}`; }
+  // SOCIAL_COMMENTS_TYPE_FIX_v1: same bug — missing `$` in front of params.length.
+  if (f.status) { params.push(String(f.status)); where += ` AND status = $${params.length}::text`; }
   const r = await db.query(`
     SELECT id, author_id, text, media_url, media_type, targets, status,
            scheduled_at, published_at, results, error, created_at, updated_at
