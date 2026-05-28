@@ -29491,7 +29491,7 @@ function _initStickyWidget() {
     const tb = h('tbody', {});
     rows.slice(0, 50).forEach(r => {
       const tr = h('tr', {});
-      (r.dims || []).forEach(v => tr.appendChild(h('td', { style: { padding: '.22rem .4rem', borderBottom: '1px solid #f1f5f9' } }, String(v == null ? '' : v))));
+      rowDims.forEach(d => { const v = (r.dims && r.dims[d] != null) ? r.dims[d] : ''; tr.appendChild(h('td', { style: { padding: '.22rem .4rem', borderBottom: '1px solid #f1f5f9' } }, String(v))); });
       metrics.forEach(m => {
         const v = r.metrics && r.metrics[m] != null ? r.metrics[m] : '';
         tr.appendChild(h('td', { style: { padding: '.22rem .4rem', borderBottom: '1px solid #f1f5f9', textAlign: 'right', fontWeight: m === 'count' ? '700' : '500' } }, String(v)));
