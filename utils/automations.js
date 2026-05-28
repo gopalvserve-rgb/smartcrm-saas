@@ -119,14 +119,20 @@ async function _sendEmail(to, subject, html) {
   // only looked at process.env — so tenants that had saved credentials via
   // Settings → SMTP (which writes to the config DB, not env) always got
   // 'SMTP disabled' even though the Test SMTP button worked.
-  const enabled = await db.getConfig('EMAIL_NOTIFY_ENABLED', process.env.EMAIL_NOTIFY_ENABLED);
+  const enabledRaw = await db.getConfig('EMAIL_NOTIFY_ENABLED', process.env.EMAIL_NOTIFY_ENABLED);
   const host    = await db.getConfig('SMTP_HOST', process.env.SMTP_HOST);
   const port    = await db.getConfig('SMTP_PORT', process.env.SMTP_PORT);
   const secure  = await db.getConfig('SMTP_SECURE', process.env.SMTP_SECURE);
   const user    = await db.getConfig('SMTP_USER', process.env.SMTP_USER);
   const pass    = await db.getConfig('SMTP_PASSWORD', process.env.SMTP_PASSWORD);
   const from    = await db.getConfig('EMAIL_NOTIFY_FROM', process.env.EMAIL_NOTIFY_FROM);
-  if (String(enabled || '') !== '1') return { ok: false, error: 'SMTP disabled (EMAIL_NOTIFY_ENABLED != 1)' };
+  // AUTOMATION_SMTP_AUTOENABLE_v1 — treat email as ENABLED if host/user/pass
+  // are all set, UNLESS the admin has explicitly set EMAIL_NOTIFY_ENABLED='0'
+  // to opt out. This matches user intent ('I configured + tested SMTP, of
+  // course I want it on') and removes the gotcha where the toggle defaulted
+  // to '0' on older tenants.
+  const explicitlyOff = String(enabledRaw || '') === '0';
+  if (explicitlyOff) return { ok: false, error: 'SMTP explicitly disabled (EMAIL_NOTIFY_ENABLED=0). Set it to 1 in Settings → SMTP to enable.' };
   if (!host || !user || !pass) return { ok: false, error: 'SMTP creds missing (host/user/pass)' };
   try {
     const nodemailer = require('nodemailer');
