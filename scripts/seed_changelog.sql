@@ -104,6 +104,10 @@ SELECT * FROM (VALUES
 
   ('modify', 'Pipeline funnel — minimum band width for readability',
    'On heavily-skewed pipelines (e.g. 1072 New / 127 Contacted / 54 Qualified / 18 Negotiation / 15 Proposal) the lower bands were collapsing to under 100px wide and the labels were getting truncated. Raised the minimum band width to 38% so every label fits cleanly while the top band still renders at its real 100% so the funnel still narrows.',
-   '#/pipeline', '📐', NOW())
+   '#/pipeline', '📐', NOW() - INTERVAL '3 minutes'),
+
+  ('feature', 'Pipeline funnel — date preset chips',
+   'Filter bar on the pipeline funnel now includes one-click date presets: Today, Yesterday, Last 7 days, Last 30 days, This month, Last month, All time. Click a chip and the From/To inputs auto-fill and the funnel re-aggregates. The ⭐ Save default lets you pin one preset as your tenant''s default range.',
+   '#/pipeline', '📅', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);

@@ -8223,6 +8223,14 @@ async function _renderPipelineFunnel(view) {
   filterBar.appendChild(h('span', { style: { fontSize:'.72rem', color:'#64748b' } }, 'To'));
   filterBar.appendChild(_dateTo);
 
+  // PIPELINE_FUNNEL_FILTERS_v2 — preset chips: Today / Yesterday / Last 7d /
+  // Last 30d / This month / Last month / All time. Reuses the global
+  // window._attachDatePresets helper so behaviour matches every other
+  // date-filtered surface in the app.
+  if (typeof window._attachDatePresets === 'function') {
+    try { window._attachDatePresets(_dateFrom, _dateTo, { key: 'pipeline-funnel', apply: _apply }); } catch (_) {}
+  }
+
   if (typeof multiSelectDropdown === 'function') {
     filterBar.appendChild(multiSelectDropdown({ label:'Status', allLabel:'Any status',
       options: _statuses.map(s => ({ id: String(s.id), name: s.name })),
