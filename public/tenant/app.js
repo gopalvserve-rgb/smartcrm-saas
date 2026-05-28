@@ -1477,7 +1477,7 @@ VIEWS.dashboard = async (view) => {
   // their slice without further round-trips.
   const usedTypes = new Set(widgets.map(w => w.type));
   const fetchTasks = {};
-  if (['kpi_total_leads','kpi_won','kpi_qualified','chart_status','chart_source','chart_product','daily_volume'].some(t => usedTypes.has(t))) {
+  if (['kpi_total_leads','kpi_won','kpi_qualified','chart_status','chart_source','chart_product','daily_volume','leads_by_user'].some(t => usedTypes.has(t))) {
     fetchTasks.summary = api('api_reports_summary', { campaign_ids: CRM._dashCampaignIds }).catch(() => null);
   }
   if (['kpi_new_today','kpi_due_today','kpi_overdue','followups_panel'].some(t => usedTypes.has(t))) {
@@ -28861,233 +28861,402 @@ function _initFloatingChat() {
   window._toggleChatDock = () => fab.click();
 }
 
-// DASH_STICKY_v1 — pinned floating dashboard widget. Tenant picks any
-// widget from WIDGET_LIBRARY and it becomes a persistent draggable,
-// resizable card visible on every page. Auto-refreshes every 60s plus
-// a manual ↻ button. State (type + x/y/w/h + minimized) persisted
-// per-device in localStorage.crm_sticky_v1.
+// DASH_STICKY_v2 — pinned floating dashboard widget(s). Tenant can pin
+// up to 4 widgets at once, each as its own draggable + resizable card.
+// Each pin remembers its own type, position, size, date filter scope,
+// and (for Report Builder templates) the linked saved template.
+// State persisted per-device in localStorage.crm_sticky_v2.
 function _initStickyWidget() {
   if (document.getElementById('sticky-fab')) return;
-  const STORAGE_KEY = 'crm_sticky_v1';
-  const _load = () => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch (_) { return {}; } };
+  const MAX_PINS = 4;
+  const STORAGE_KEY = 'crm_sticky_v2';
+  const OLD_KEY = 'crm_sticky_v1';
+  const _load = () => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const s = JSON.parse(raw);
+        if (s && Array.isArray(s.pins)) return s;
+      }
+      // Migrate from v1 single-pin state if present
+      const old = JSON.parse(localStorage.getItem(OLD_KEY) || '{}');
+      if (old && old.type) {
+        const migrated = { pins: [{
+          type: old.type, x: old.x, y: old.y, w: old.w, h: old.h,
+          minimized: !!old.minimized, range: 'all', rbTemplate: old.rbTemplate || null
+        }] };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated));
+        return migrated;
+      }
+    } catch (_) {}
+    return { pins: [] };
+  };
   const _save = (s) => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); } catch (_) {} };
   let state = _load();
 
-  // -------- Floating launcher (always visible when no widget pinned) --------
+  // Per-pin DOM panel + refresh timer
+  const panels = {};      // index -> panel element
+  const timers = {};      // index -> setInterval handle
+
+  // -------- Floating launcher (always visible) --------
   const fab = document.createElement('button');
   fab.id = 'sticky-fab';
-  fab.title = 'Pin a dashboard widget';
-  fab.textContent = '📌';
+  fab.title = 'Pin dashboard widgets (up to ' + MAX_PINS + ')';
   fab.style.cssText = `
     position: fixed; bottom: 78px; right: 24px;
     width: 44px; height: 44px; border-radius: 50%;
     background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
-    color: #fff; font-size: 1.3rem; cursor: pointer;
+    color: #fff; font-size: 1.15rem; cursor: pointer;
     border: none; box-shadow: 0 4px 12px rgba(245, 158, 11, .35);
-    z-index: 9988; display: ${state.type ? 'none' : 'flex'};
-    align-items: center; justify-content: center;
+    z-index: 9988; display: flex; align-items: center; justify-content: center;
+    font-weight: 700;
   `;
   document.body.appendChild(fab);
   fab.onclick = () => openPicker();
 
+  function _refreshFabLabel() {
+    fab.textContent = state.pins.length ? '📌' + state.pins.length : '📌';
+    fab.title = state.pins.length
+      ? state.pins.length + '/' + MAX_PINS + ' pinned · click to add or manage'
+      : 'Pin dashboard widgets (up to ' + MAX_PINS + ')';
+  }
+  _refreshFabLabel();
+
+  // -------- Date-range helpers (passed to API as filters.from / filters.to) --------
+  const RANGE_OPTIONS = [
+    { id: 'all',    label: 'All time' },
+    { id: 'today',  label: 'Today' },
+    { id: 'yest',   label: 'Yesterday' },
+    { id: 'w7',     label: 'Last 7 days' },
+    { id: 'm30',    label: 'Last 30 days' },
+    { id: 'mtd',    label: 'This month' },
+    { id: 'custom', label: 'Custom range…' }
+  ];
+  function _ymd(d) {
+    const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), dd = String(d.getDate()).padStart(2, '0');
+    return y + '-' + m + '-' + dd;
+  }
+  function _rangeToFilters(pin) {
+    const r = pin.range || 'all';
+    if (r === 'all') return {};
+    const now = new Date();
+    if (r === 'today') return { from: _ymd(now), to: _ymd(now) };
+    if (r === 'yest')  { const d = new Date(now); d.setDate(d.getDate() - 1); return { from: _ymd(d), to: _ymd(d) }; }
+    if (r === 'w7')    { const d = new Date(now); d.setDate(d.getDate() - 6); return { from: _ymd(d), to: _ymd(now) }; }
+    if (r === 'm30')   { const d = new Date(now); d.setDate(d.getDate() - 29); return { from: _ymd(d), to: _ymd(now) }; }
+    if (r === 'mtd')   { const d = new Date(now.getFullYear(), now.getMonth(), 1); return { from: _ymd(d), to: _ymd(now) }; }
+    if (r === 'custom') return { from: pin.customFrom || '', to: pin.customTo || '' };
+    return {};
+  }
+
   // -------- Picker modal --------
-  function openPicker() {
+  async function openPicker() {
     const lib = (typeof WIDGET_LIBRARY !== 'undefined') ? WIDGET_LIBRARY : {};
     const entries = Object.entries(lib);
     if (!entries.length) { toast('No widgets available', 'err'); return; }
-    // Group by widget.group
+    let rbTemplates = [];
+    try { rbTemplates = await api('api_reportTemplate_list').catch(() => []); } catch (_) {}
     const groups = {};
     entries.forEach(([key, def]) => {
       const g = def.group || 'Other';
       if (!groups[g]) groups[g] = [];
       groups[g].push({ key, def });
     });
+
     const modal = h('div', { class: 'modal-backdrop', onclick: (ev) => { if (ev.target.classList.contains('modal-backdrop')) modal.remove(); } });
-    const card = h('div', { class: 'modal', style: { maxWidth: '640px' } });
+    const card = h('div', { class: 'modal', style: { maxWidth: '720px', maxHeight: '85vh', overflowY: 'auto' } });
     card.appendChild(h('div', { class: 'modal-head' },
-      h('h3', {}, '📌 Pin a widget to keep it always visible'),
+      h('h3', {}, '📌 Pinned widgets (' + state.pins.length + '/' + MAX_PINS + ')'),
       h('button', { class: 'btn icon', onclick: () => modal.remove() }, '✕')
     ));
     card.appendChild(h('p', { class: 'muted', style: { margin: '0 0 .7rem', fontSize: '.85rem' } },
-      'Pick which dashboard widget should float on top of every page. Auto-refreshes every 60 seconds. Drag the header to move, drag the bottom-right corner to resize.'));
-    Object.keys(groups).sort().forEach(g => {
-      card.appendChild(h('h4', { style: { margin: '.7rem 0 .25rem', fontSize: '.86rem', color: '#64748b' } }, g));
-      const grid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '.4rem' } });
-      groups[g].forEach(({ key, def }) => {
-        const opt = h('button', {
-          class: 'btn', style: { textAlign: 'left', padding: '.55rem .7rem', fontSize: '.85rem', whiteSpace: 'normal' },
-          onclick: () => { modal.remove(); pin(key); }
-        }, def.title || key);
-        grid.appendChild(opt);
+      'Pin up to ' + MAX_PINS + ' widgets to keep them visible on every page. Drag the header to move, drag the bottom-right corner to resize, pick a date range on each card.'));
+
+    // Existing pins (with remove button)
+    if (state.pins.length) {
+      card.appendChild(h('h4', { style: { margin: '.7rem 0 .25rem', fontSize: '.86rem', color: '#16a34a' } }, '✓ Already pinned — click to remove'));
+      const wrap = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '.3rem' } });
+      state.pins.forEach((p, idx) => {
+        const def = p.type && p.type.startsWith('rb:') ? { title: '📊 ' + (p.rbTemplate ? p.rbTemplate.name : 'Report') } : (lib[p.type] || { title: p.type });
+        wrap.appendChild(h('button', {
+          class: 'btn danger', style: { textAlign: 'left', padding: '.5rem .7rem', fontSize: '.84rem' },
+          onclick: () => { modal.remove(); removePin(idx); }
+        }, '🗑 Remove · ' + def.title));
       });
-      card.appendChild(grid);
-    });
+      card.appendChild(wrap);
+    }
+
+    if (state.pins.length >= MAX_PINS) {
+      card.appendChild(h('div', { class: 'muted', style: { margin: '.7rem 0', padding: '.7rem', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '6px', fontSize: '.84rem' } },
+        '⚠ You\'ve hit the ' + MAX_PINS + '-pin maximum. Remove one above to add a new pin.'));
+    } else {
+      // Picker — RB templates first, then catalog
+      if (rbTemplates && rbTemplates.length) {
+        card.appendChild(h('h4', { style: { margin: '.9rem 0 .25rem', fontSize: '.86rem', color: '#7c3aed' } }, '📊 My Report Builder templates'));
+        const gridRb = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '.4rem' } });
+        rbTemplates.forEach(t => {
+          gridRb.appendChild(h('button', {
+            class: 'btn', style: { textAlign: 'left', padding: '.55rem .7rem', fontSize: '.85rem', whiteSpace: 'normal', background: '#f5f3ff', borderColor: '#c4b5fd', color: '#5b21b6' },
+            onclick: () => { modal.remove(); addPin('rb:' + t.id, { rbTemplate: t }); }
+          }, '📊 ' + t.name));
+        });
+        card.appendChild(gridRb);
+      }
+      Object.keys(groups).sort().forEach(g => {
+        card.appendChild(h('h4', { style: { margin: '.7rem 0 .25rem', fontSize: '.86rem', color: '#64748b' } }, g));
+        const grid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '.4rem' } });
+        groups[g].forEach(({ key, def }) => {
+          grid.appendChild(h('button', {
+            class: 'btn', style: { textAlign: 'left', padding: '.55rem .7rem', fontSize: '.85rem', whiteSpace: 'normal' },
+            onclick: () => { modal.remove(); addPin(key); }
+          }, def.title || key));
+        });
+        card.appendChild(grid);
+      });
+    }
     modal.appendChild(card);
     document.body.appendChild(modal);
   }
 
-  // -------- The pinned panel itself --------
-  let panel = null;
-  let _refreshTimer = null;
-
-  function pin(type) {
-    state.type = type;
-    if (!state.w) { state.w = 380; state.h = 320; }
-    if (state.x == null) { state.x = Math.max(20, window.innerWidth - state.w - 40); }
-    if (state.y == null) { state.y = 120; }
-    state.minimized = false;
+  // -------- Pin management --------
+  function addPin(type, extra) {
+    if (state.pins.length >= MAX_PINS) { toast('Max ' + MAX_PINS + ' pins reached', 'err'); return; }
+    // Stagger position so new pins don't overlap exactly
+    const offset = state.pins.length * 20;
+    const w = 380, h = 320;
+    const pin = {
+      type, range: 'all', minimized: false,
+      x: Math.max(20, window.innerWidth - w - 40) - offset,
+      y: 120 + offset,
+      w, h
+    };
+    if (extra && extra.rbTemplate) pin.rbTemplate = extra.rbTemplate;
+    state.pins.push(pin);
     _save(state);
-    fab.style.display = 'none';
-    render();
+    _refreshFabLabel();
+    renderPin(state.pins.length - 1);
+  }
+  function removePin(idx) {
+    // Tear down the panel + timer
+    if (timers[idx]) { clearInterval(timers[idx]); delete timers[idx]; }
+    if (panels[idx]) { try { panels[idx].remove(); } catch (_) {} delete panels[idx]; }
+    state.pins.splice(idx, 1);
+    _save(state);
+    _refreshFabLabel();
+    // Re-render everything because indices shifted
+    Object.keys(panels).forEach(k => { try { panels[k].remove(); } catch (_) {} delete panels[k]; });
+    Object.keys(timers).forEach(k => { clearInterval(timers[k]); delete timers[k]; });
+    state.pins.forEach((_, i) => renderPin(i));
   }
 
-  function unpin() {
-    if (_refreshTimer) { clearInterval(_refreshTimer); _refreshTimer = null; }
-    if (panel) { panel.remove(); panel = null; }
-    state.type = null;
-    _save(state);
-    fab.style.display = 'flex';
-  }
+  // -------- Render one pin --------
+  function renderPin(idx) {
+    const pin = state.pins[idx];
+    if (!pin) return;
+    if (panels[idx]) { try { panels[idx].remove(); } catch (_) {} }
 
-  function render() {
-    if (panel) { panel.remove(); }
-    panel = document.createElement('div');
-    panel.id = 'sticky-panel';
+    const panel = document.createElement('div');
     panel.style.cssText = `
-      position: fixed; left: ${state.x}px; top: ${state.y}px;
-      width: ${state.w}px; height: ${state.minimized ? '40px' : state.h + 'px'};
+      position: fixed; left: ${pin.x}px; top: ${pin.y}px;
+      width: ${pin.w}px; height: ${pin.minimized ? '40px' : pin.h + 'px'};
       background: #fff; border: 1px solid #cbd5e1; border-radius: 10px;
       box-shadow: 0 8px 24px rgba(15,23,42,.18);
       z-index: 9987; display: flex; flex-direction: column;
       overflow: hidden; min-width: 280px; min-height: 40px;
     `;
-    // Header (draggable)
+    // Header
     const header = document.createElement('div');
     header.style.cssText = 'padding: .35rem .55rem; background: linear-gradient(135deg, #fef3c7, #fde68a); color: #78350f; display: flex; align-items: center; gap: .35rem; cursor: move; font-size: .82rem; font-weight: 600; user-select: none;';
     const lib = (typeof WIDGET_LIBRARY !== 'undefined') ? WIDGET_LIBRARY : {};
-    const def = lib[state.type];
-    header.innerHTML = `<span>📌</span><span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${(def && def.title) || state.type}</span>`;
-    const refreshBtn = document.createElement('button');
-    refreshBtn.textContent = '↻'; refreshBtn.title = 'Refresh now';
-    refreshBtn.style.cssText = 'background:transparent;border:none;cursor:pointer;font-size:1rem;color:#78350f;padding:0 .25rem;';
-    refreshBtn.onclick = (e) => { e.stopPropagation(); refreshData(); };
-    header.appendChild(refreshBtn);
-    const swapBtn = document.createElement('button');
-    swapBtn.textContent = '⇄'; swapBtn.title = 'Pick a different widget';
-    swapBtn.style.cssText = 'background:transparent;border:none;cursor:pointer;font-size:.9rem;color:#78350f;padding:0 .25rem;';
-    swapBtn.onclick = (e) => { e.stopPropagation(); openPicker(); };
-    header.appendChild(swapBtn);
-    const minBtn = document.createElement('button');
-    minBtn.textContent = state.minimized ? '▢' : '_';
-    minBtn.title = state.minimized ? 'Restore' : 'Minimize';
-    minBtn.style.cssText = 'background:transparent;border:none;cursor:pointer;font-size:1rem;color:#78350f;padding:0 .25rem;';
-    minBtn.onclick = (e) => { e.stopPropagation(); state.minimized = !state.minimized; _save(state); render(); };
-    header.appendChild(minBtn);
-    const closeBtn = document.createElement('button');
-    closeBtn.textContent = '✕'; closeBtn.title = 'Unpin';
-    closeBtn.style.cssText = 'background:transparent;border:none;cursor:pointer;font-size:1rem;color:#78350f;padding:0 .25rem;';
-    closeBtn.onclick = (e) => { e.stopPropagation(); unpin(); };
-    header.appendChild(closeBtn);
+    const def = lib[pin.type];
+    const isRb = String(pin.type || '').startsWith('rb:');
+    const headerLabel = isRb && pin.rbTemplate ? ('📊 ' + pin.rbTemplate.name) : ((def && def.title) || pin.type);
+    header.innerHTML = `<span>📌</span><span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${headerLabel}</span>`;
+    // Refresh
+    const rBtn = document.createElement('button');
+    rBtn.textContent = '↻'; rBtn.title = 'Refresh now';
+    rBtn.style.cssText = 'background:transparent;border:none;cursor:pointer;font-size:1rem;color:#78350f;padding:0 .25rem;';
+    rBtn.onclick = (e) => { e.stopPropagation(); refreshData(idx); };
+    header.appendChild(rBtn);
+    // Min / restore
+    const mBtn = document.createElement('button');
+    mBtn.textContent = pin.minimized ? '▢' : '_';
+    mBtn.title = pin.minimized ? 'Restore' : 'Minimize';
+    mBtn.style.cssText = 'background:transparent;border:none;cursor:pointer;font-size:1rem;color:#78350f;padding:0 .25rem;';
+    mBtn.onclick = (e) => { e.stopPropagation(); pin.minimized = !pin.minimized; _save(state); renderPin(idx); };
+    header.appendChild(mBtn);
+    // Close (unpin this one)
+    const cBtn = document.createElement('button');
+    cBtn.textContent = '✕'; cBtn.title = 'Unpin this widget';
+    cBtn.style.cssText = 'background:transparent;border:none;cursor:pointer;font-size:1rem;color:#78350f;padding:0 .25rem;';
+    cBtn.onclick = (e) => { e.stopPropagation(); removePin(idx); };
+    header.appendChild(cBtn);
     panel.appendChild(header);
+
+    // Date range bar
+    const rangeBar = document.createElement('div');
+    rangeBar.style.cssText = 'padding: .3rem .55rem; background: #f8fafc; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; gap: .35rem; font-size: .75rem;';
+    rangeBar.appendChild(h('span', { style: { color: '#64748b' } }, '📅'));
+    const rangeSel = document.createElement('select');
+    rangeSel.style.cssText = 'flex: 1; padding: .2rem .3rem; border: 1px solid #cbd5e1; border-radius: 4px; font-size: .75rem; background: #fff;';
+    RANGE_OPTIONS.forEach(opt => {
+      const o = document.createElement('option');
+      o.value = opt.id; o.textContent = opt.label;
+      if (pin.range === opt.id) o.selected = true;
+      rangeSel.appendChild(o);
+    });
+    rangeSel.onchange = () => {
+      pin.range = rangeSel.value;
+      if (pin.range === 'custom') {
+        const today = _ymd(new Date());
+        const ago = _ymd(new Date(Date.now() - 7 * 86400000));
+        const cf = prompt('From date (YYYY-MM-DD)', pin.customFrom || ago);
+        if (cf == null) { rangeSel.value = 'all'; pin.range = 'all'; _save(state); return; }
+        const ct = prompt('To date (YYYY-MM-DD)', pin.customTo || today);
+        if (ct == null) { rangeSel.value = 'all'; pin.range = 'all'; _save(state); return; }
+        pin.customFrom = cf; pin.customTo = ct;
+      }
+      _save(state);
+      delete document.getElementById('sticky-body-' + idx).dataset.everLoaded;
+      refreshData(idx);
+    };
+    rangeBar.appendChild(rangeSel);
+    if (pin.minimized) rangeBar.style.display = 'none';
+    panel.appendChild(rangeBar);
 
     // Body
     const body = document.createElement('div');
+    body.id = 'sticky-body-' + idx;
     body.style.cssText = 'flex:1; overflow:auto; padding:.55rem .65rem;';
-    body.id = 'sticky-body';
-    if (state.minimized) body.style.display = 'none';
+    if (pin.minimized) body.style.display = 'none';
     panel.appendChild(body);
 
-    // Resize handle (bottom-right)
+    // Resize handle
     const resize = document.createElement('div');
     resize.style.cssText = 'position:absolute;right:2px;bottom:2px;width:14px;height:14px;cursor:nwse-resize;background:linear-gradient(135deg,transparent 50%,#94a3b8 50%);border-radius:0 0 8px 0;';
     panel.appendChild(resize);
 
     document.body.appendChild(panel);
+    panels[idx] = panel;
 
-    // ---- Drag ----
-    let drag = null;
+    // ---- Drag + resize ----
+    let drag = null, rsz = null;
     header.addEventListener('mousedown', (e) => {
       if (e.target.tagName === 'BUTTON') return;
-      drag = { startX: e.clientX, startY: e.clientY, origX: state.x, origY: state.y };
+      drag = { startX: e.clientX, startY: e.clientY, origX: pin.x, origY: pin.y };
       e.preventDefault();
     });
-    // ---- Resize ----
-    let rsz = null;
     resize.addEventListener('mousedown', (e) => {
-      rsz = { startX: e.clientX, startY: e.clientY, origW: state.w, origH: state.h };
+      rsz = { startX: e.clientX, startY: e.clientY, origW: pin.w, origH: pin.h };
       e.preventDefault(); e.stopPropagation();
     });
     function onMove(e) {
       if (drag) {
         const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
-        state.x = Math.max(0, Math.min(window.innerWidth - 60, drag.origX + dx));
-        state.y = Math.max(0, Math.min(window.innerHeight - 40, drag.origY + dy));
-        panel.style.left = state.x + 'px'; panel.style.top = state.y + 'px';
+        pin.x = Math.max(0, Math.min(window.innerWidth - 60, drag.origX + dx));
+        pin.y = Math.max(0, Math.min(window.innerHeight - 40, drag.origY + dy));
+        panel.style.left = pin.x + 'px'; panel.style.top = pin.y + 'px';
       } else if (rsz) {
         const dw = e.clientX - rsz.startX, dh = e.clientY - rsz.startY;
-        state.w = Math.max(280, rsz.origW + dw);
-        state.h = Math.max(120, rsz.origH + dh);
-        panel.style.width = state.w + 'px'; panel.style.height = state.h + 'px';
+        pin.w = Math.max(280, rsz.origW + dw);
+        pin.h = Math.max(120, rsz.origH + dh);
+        panel.style.width = pin.w + 'px'; panel.style.height = pin.h + 'px';
       }
     }
     function onUp() { if (drag || rsz) { _save(state); } drag = null; rsz = null; }
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
-    // Cleanup on unmount: store removers on panel for orphan-cleanup
-    panel._cleanup = () => {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-    };
+    panel._cleanup = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
 
-    // Fetch + render the widget content
-    refreshData();
-    if (_refreshTimer) clearInterval(_refreshTimer);
-    _refreshTimer = setInterval(() => { if (!state.minimized && document.visibilityState !== 'hidden') refreshData(); }, 60000);
+    // Fetch + render
+    refreshData(idx);
+    if (timers[idx]) clearInterval(timers[idx]);
+    timers[idx] = setInterval(() => {
+      const cur = state.pins[idx];
+      if (cur && !cur.minimized && document.visibilityState !== 'hidden') refreshData(idx);
+    }, 60000);
   }
 
-  // Universal data fetch — covers every widget in WIDGET_LIBRARY
-  async function refreshData() {
-    if (state.minimized) return;
-    const body = document.getElementById('sticky-body');
+  // -------- Data fetch for one pin --------
+  async function refreshData(idx) {
+    const pin = state.pins[idx];
+    if (!pin) return;
+    if (pin.minimized) return;
+    const body = document.getElementById('sticky-body-' + idx);
     if (!body) return;
-    const lib = (typeof WIDGET_LIBRARY !== 'undefined') ? WIDGET_LIBRARY : {};
-    const def = lib[state.type];
-    if (!def) { body.innerHTML = '<div class="muted">Unknown widget</div>'; return; }
-    // Show loading hint only on first paint
-    if (!body.dataset.everLoaded) {
-      body.innerHTML = '<div class="muted" style="text-align:center;padding:1rem;">Loading…</div>';
+    const dateFilters = _rangeToFilters(pin);
+    const isRb = String(pin.type || '').startsWith('rb:');
+    if (!body.dataset.everLoaded) body.innerHTML = '<div class="muted" style="text-align:center;padding:1rem;">Loading…</div>';
+    // ---- Report Builder template branch ----
+    if (isRb) {
+      try {
+        const t = pin.rbTemplate || {};
+        const filters = Object.assign({}, t.filters || {}, dateFilters);
+        const res = await api('api_reports_pivot', { row_dims: t.dim ? [t.dim] : ['status'], metrics: t.metrics || ['count'], filters });
+        body.innerHTML = '';
+        _stickyRenderPivot(body, res);
+        _stickyStamp(body);
+        body.dataset.everLoaded = '1';
+      } catch (e) {
+        body.innerHTML = '<div class="muted" style="color:#b91c1c;">' + (e.message || e) + '</div>';
+      }
+      return;
     }
+    const lib = (typeof WIDGET_LIBRARY !== 'undefined') ? WIDGET_LIBRARY : {};
+    const def = lib[pin.type];
+    if (!def) { body.innerHTML = '<div class="muted">Unknown widget</div>'; return; }
     try {
       const camp = (typeof CRM !== 'undefined' && CRM._dashCampaignIds) || [];
-      // Fetch everything — small overhead; widgets read whatever slice they need
+      const baseF = Object.assign({}, dateFilters, { campaign_ids: camp });
       const [summary, notifs, funnel, tat, projects, daily, callActivity] = await Promise.all([
-        api('api_reports_summary', { campaign_ids: camp }).catch(() => null),
+        api('api_reports_summary', baseF).catch(() => null),
         api('api_notifications_mine').catch(() => null),
-        api('api_reports_funnel', { campaign_ids: camp }).catch(() => []),
-        api('api_tat_report', { campaign_ids: camp }).catch(() => null),
+        api('api_reports_funnel', baseF).catch(() => []),
+        api('api_tat_report', baseF).catch(() => null),
         api('api_projectStages_board').catch(() => null),
-        api('api_reports_daily', { campaign_ids: camp }).catch(() => []),
-        api('api_reports_callActivity', {}).catch(() => null)
+        api('api_reports_daily', baseF).catch(() => []),
+        api('api_reports_callActivity', dateFilters).catch(() => null)
       ]);
       const data = { summary, notifs, funnel, tat, projects, daily, callActivity };
       body.innerHTML = '';
       try {
-        def.render(body, {}, data, { id: 'sticky', type: state.type, title: def.title });
+        def.render(body, {}, data, { id: 'sticky-' + idx, type: pin.type, title: def.title });
       } catch (e) {
         body.innerHTML = '<div class="muted" style="color:#b91c1c;">Render error: ' + (e.message || e) + '</div>';
       }
-      const stamp = h('div', { class: 'muted', style: { fontSize: '.68rem', textAlign: 'right', marginTop: '.3rem', opacity: 0.7 } }, 'Updated ' + new Date().toLocaleTimeString());
-      body.appendChild(stamp);
+      _stickyStamp(body);
       body.dataset.everLoaded = '1';
     } catch (e) {
       body.innerHTML = '<div class="muted" style="color:#b91c1c;">Failed: ' + (e.message || e) + '</div>';
     }
   }
+  function _stickyStamp(body) {
+    body.appendChild(h('div', { class: 'muted', style: { fontSize: '.68rem', textAlign: 'right', marginTop: '.3rem', opacity: 0.7 } }, 'Updated ' + new Date().toLocaleTimeString()));
+  }
+  function _stickyRenderPivot(body, res) {
+    const rows = (res && res.rows) || [];
+    const cols = (res && res.columns) || [];
+    if (!rows.length) { body.appendChild(h('div', { class: 'muted', style: { padding: '1rem', textAlign: 'center' } }, 'No data')); return; }
+    const wrap = h('div', { style: { overflowX: 'auto' } });
+    const tbl = h('table', { class: 'tbl', style: { width: '100%', fontSize: '.8rem' } });
+    const headTr = h('tr', {});
+    cols.forEach(c => headTr.appendChild(h('th', { style: { textAlign: 'left', padding: '.25rem .4rem', borderBottom: '1px solid #e2e8f0', background: '#f8fafc' } }, c.label || c.key)));
+    tbl.appendChild(h('thead', {}, headTr));
+    const tb = h('tbody', {});
+    rows.slice(0, 50).forEach(r => {
+      const tr = h('tr', {});
+      cols.forEach(c => tr.appendChild(h('td', { style: { padding: '.22rem .4rem', borderBottom: '1px solid #f1f5f9' } }, String(r[c.key] == null ? '' : r[c.key]))));
+      tb.appendChild(tr);
+    });
+    tbl.appendChild(tb);
+    wrap.appendChild(tbl);
+    body.appendChild(wrap);
+    if (rows.length > 50) body.appendChild(h('div', { class: 'muted', style: { fontSize: '.7rem', marginTop: '.3rem' } }, 'Showing first 50 of ' + rows.length + ' rows. Open the full report for everything.'));
+  }
 
-  // Auto-restore if already pinned
-  if (state.type) render();
-  // Expose toggle for keyboard shortcut or external callers
-  window._toggleStickyWidget = () => { if (state.type) unpin(); else openPicker(); };
+  // Auto-restore all pins
+  state.pins.forEach((_, i) => renderPin(i));
+  window._toggleStickyWidget = () => openPicker();
 }
 
   function start() {
