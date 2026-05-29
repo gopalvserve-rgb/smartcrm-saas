@@ -3220,3 +3220,59 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
   .lc-actions { border-top-color: #1e293b !important; }
   .lc-actions .la-label { color: #cbd5e1 !important; }
 }
+
+/* =================================================================
+ * LEADS_TYPOGRAPHY_v48 — bigger name + phone, slightly smaller icons.
+ * User feedback: "Customer Name & Number is showing very small...
+ *                 icons are looking little over size"
+ * ================================================================= */
+.lead-card .lc-name {
+  font-size: 1.18rem !important;
+  font-weight: 800 !important;
+  letter-spacing: -.01em !important;
+  line-height: 1.25 !important;
+}
+.lead-card .lc-meta {
+  font-size: .95rem !important;
+  font-weight: 500 !important;
+  color: #1e293b !important;
+  margin-top: .5rem !important;
+  gap: .5rem !important;
+  flex-wrap: wrap !important;
+}
+.lead-card .lc-meta span:first-child {
+  /* Phone number — make it pop. */
+  font-weight: 700 !important;
+  color: #0f172a !important;
+  font-size: 1rem !important;
+  letter-spacing: .005em !important;
+}
+.lead-card .lc-status {
+  font-size: .72rem !important;
+  padding: 5px 11px !important;
+}
+
+/* Icons: 48px → 40px, SVG 22 → 18. Buttons stay tappable (Apple HIG 40px ok). */
+.lc-actions .la-btn {
+  width: 40px !important;
+  height: 40px !important;
+  border-radius: 12px !important;
+}
+.lc-actions .la-btn svg {
+  width: 18px !important;
+  height: 18px !important;
+}
+.lc-actions .la-label {
+  font-size: .72rem !important;
+  font-weight: 600 !important;
+}
+.lc-actions .la-item { max-width: 84px !important; }
+.lc-actions {
+  gap: .55rem !important;
+  padding-top: .85rem !important;
+  margin-top: 1rem !important;
+}
+@media (prefers-color-scheme: dark) {
+  .lead-card .lc-meta { color: #cbd5e1 !important; }
+  .lead-card .lc-meta span:first-child { color: #f1f5f9 !important; }
+}
