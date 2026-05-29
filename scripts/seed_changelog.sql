@@ -128,6 +128,10 @@ SELECT * FROM (VALUES
 
   ('feature', 'What''s new tutorial — auto-shows once for admins + managers',
    'On first login today every admin and manager sees a one-time What''s new modal walking through Live Team Status, the new Pipeline funnel, and the action item to map their Statuses to universal Stages. Each step has a Take me there button that jumps to the right page. A ✨ New features pill is added to the topbar so the tour can be re-opened later. The red dot disappears after the user opens the tour once.',
-   '#/dashboard', '✨', NOW())
+   '#/dashboard', '✨', NOW() - INTERVAL '3 minutes'),
+
+  ('feature', 'Dashboard — 🔄 Refresh button',
+   'Added a Refresh button to the Dashboard header next to Customize. Click it to clear the cached summary / notifications / funnel / TAT data and re-fetch everything. Useful when you''ve just changed a status or made a call and want the KPI tiles + widgets to reflect it without having to hard-reload.',
+   '#/dashboard', '🔄', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);

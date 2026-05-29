@@ -1866,10 +1866,27 @@ VIEWS.dashboard = async (view) => {
     }
   } catch (_) {}
 
-  // Header bar with "✨ Customize" / "Done"
+  // Header bar with Refresh + "✨ Customize" / "Done"
   const head = h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '.6rem' } },
     h('h2', { style: { margin: 0 } }, '🏠 Dashboard'),
     h('div', { style: { display: 'flex', gap: '.4rem' } },
+      // DASH_REFRESH_v1 — explicit refresh button so users don't have to
+      // hard-reload or switch views to re-fetch widget data.
+      !CRM._dashEditMode
+        ? h('button', { class: 'btn ghost', title: 'Refresh dashboard data', onclick: () => {
+            try {
+              // Clear cached summary/notifs so widgets re-fetch
+              if (CRM.cache) {
+                CRM.cache.lastSummary = null;
+                CRM.cache.lastNotifs = null;
+                CRM.cache.lastFunnel = null;
+                CRM.cache.lastTat = null;
+              }
+            } catch (_) {}
+            toast('Refreshing…');
+            VIEWS.dashboard(view);
+          } }, '🔄 Refresh')
+        : null,
       CRM._dashEditMode
         ? h('button', { class: 'btn primary', onclick: async () => {
             try {
