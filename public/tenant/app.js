@@ -2893,6 +2893,43 @@ VIEWS.leads = async (view) => {
       { id: 'updated_desc', name: '✏️ Updated — newest first' },
       { id: 'updated_asc',  name: '⏳ Updated — oldest first' }
     ], CRM.prefs.filters.sort || 'created_desc')),
+    // PIPELINE_STAGE_v1_LEADS_RULES — advanced rule builder with full
+    // operator set (eq, neq, contains, not_contains, starts_with, ends_with,
+    // is_empty, is_not_empty, in, not_in, gt/gte/lt/lte/between). The
+    // _applyClientRules call in loadLeads already consumes window._leadsRuleBtn.
+    (function(){
+      const cfFields = (CRM.cache.customFields || []).map(cf => ({
+        id: 'cf_' + cf.name, label: cf.label || cf.name, type: 'text'
+      }));
+      const _stageOpts = [
+        { id:'fresh', name:'Fresh' }, { id:'attempted', name:'Attempted' },
+        { id:'qualified', name:'Qualified' }, { id:'negotiation', name:'Negotiation' },
+        { id:'proposal', name:'Proposal' }, { id:'won', name:'Won' }, { id:'lost', name:'Lost' }
+      ];
+      const rb = ruleBuilderButton({
+        label: '+ Filter rule',
+        storageKey: 'crm.leads.rules.v1',
+        fields: [
+          { id: 'name',     label: 'Lead name',     type: 'text' },
+          { id: 'phone',    label: 'Phone',         type: 'text' },
+          { id: 'email',    label: 'Email',         type: 'text' },
+          { id: 'whatsapp', label: 'WhatsApp',      type: 'text' },
+          { id: 'company',  label: 'Company',       type: 'text' },
+          { id: 'source',   label: 'Source',        type: 'text' },
+          { id: 'product_name', label: 'Product',   type: 'text' },
+          { id: 'status_name',  label: 'Status',    type: 'text' },
+          { id: 'stage',    label: 'Stage',         type: 'enum', options: _stageOpts },
+          { id: 'tags',     label: 'Tag',           type: 'text' },
+          { id: 'city',     label: 'City',          type: 'text' },
+          { id: 'notes',    label: 'Notes / Remark',type: 'text' },
+          { id: 'value',    label: 'Value',         type: 'number' },
+          { id: 'assigned_name', label: 'Assigned to', type: 'text' }
+        ].concat(cfFields),
+        onChange: () => { CRM._leadsPage = 1; loadLeads({ page: 1 }); }
+      });
+      window._leadsRuleBtn = rb;
+      return rb;
+    })(),
     h('button', { class: 'btn', onclick: () => { CRM._leadsPage = 1; loadLeads({ page: 1 }); } }, '🔎'),
     h('button', { class: 'btn ghost', onclick: openSavedFiltersMenu, title: 'Saved filter presets' }, '📌'),
     h('button', { class: 'btn ghost', onclick: clearFilters, title: 'Reset all filters', style: { fontWeight: '600' } }, '↺ Reset'),

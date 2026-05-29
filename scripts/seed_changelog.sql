@@ -112,6 +112,10 @@ SELECT * FROM (VALUES
 
   ('feature', 'Stage filter on Leads + Reports + Stage column on leads list',
    'Universal pipeline Stage is now a first-class filter on the Leads page and the Reports page. Pick one or more stages (Fresh / Attempted / Qualified / Negotiation / Proposal / Won / Lost) and the list/report scopes to leads whose status is mapped to those stages. The leads table also shows a coloured Stage pill on every row so you can see at a glance where each lead sits in the pipeline.',
-   '#/leads', '🚦', NOW())
+   '#/leads', '🚦', NOW() - INTERVAL '5 minutes'),
+
+  ('feature', 'Leads page — Filter rule button with exclude operators',
+   'Added the + Filter rule button to the Leads page toolbar (already present on Reports, Report Builder, Pipeline, TAT, Follow-ups). Click it to build advanced rules with is not equal to, does not contain, is empty, has any value, is not one of, greater than, less than, between — across Name, Phone, Email, WhatsApp, Company, Source, Product, Status, Stage, Tag, City, Notes, Value, Assignee, and every custom field. Multiple rules combine with AND. Rules persist per device in crm.leads.rules.v1.',
+   '#/leads', '🔍', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
