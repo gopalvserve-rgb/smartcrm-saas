@@ -43,7 +43,7 @@ async function fire(event, ctx) {
       try {
         if (!_matchesCondition(a.condition, ctx)) {
           const _why = _whyNotMatched(a.condition, ctx);
-          await _log(a, ctx, 'skipped', 'condition not met' + (_why ? ' — ' + _why : ''));
+          await _log(a, ctx, 'skipped', _why ? ('rule failed: ' + _why) : 'condition not met');
           continue;
         }
         const recipient = await _resolveRecipient(a, ctx);
@@ -151,7 +151,18 @@ function _whyNotMatched(cond, ctx) {
     else if (op === 'ncontains') ok = !a.includes(b);
     if (!ok) {
       const shown = actual === '' ? '(empty)' : actual;
-      return 'failed rule: ' + lhs + ' ' + op + ' "' + rhs + '" — actual was "' + shown + '"';
+      // List the keys that ARE present on the lead so the admin can see at
+      // a glance whether the field they're checking even landed in the data.
+      let presentKeys = [];
+      try {
+        if (ctx.lead && typeof ctx.lead === 'object') {
+          presentKeys = Object.keys(ctx.lead).filter(k =>
+            ctx.lead[k] != null && ctx.lead[k] !== '' && k !== 'extra_json' && k !== 'meta_json'
+          );
+        }
+      } catch (_) {}
+      const keyList = presentKeys.length ? presentKeys.slice(0, 25).join(',') : '(none)';
+      return lhs + ' ' + op + ' "' + rhs + '" — actual: "' + shown + '" — lead has: ' + keyList;
     }
   }
   return '';
