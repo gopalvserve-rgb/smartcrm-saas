@@ -18131,6 +18131,7 @@ VIEWS.admin = async (view) => {
       { id: 'recdiag',      label: '🎧 Recording diagnostics' },
       { id: 'pendingcalls', label: '📞 Pending calls' },
       { id: 'chatperm',     label: '💬 Chat permissions' },
+      { id: 'health',       label: '🩺 Backend health' },
     ]},
     { title: 'Automation', items: [
       { id: 'automations',  label: '⚡ Automations' },
@@ -18236,6 +18237,7 @@ async function showAdminTab(id) {
     if (id === 'roles')     body.replaceChildren(await adminRoles());
     if (id === 'pullleads') body.replaceChildren(await adminPullLeads());
     if (id === 'campaigns') body.replaceChildren(await adminCampaigns());
+    if (id === 'health')     body.replaceChildren(await adminHealth());
     if (id === 'dangerzone') body.replaceChildren(await adminDangerZone());
   } catch (e) { body.innerHTML = `<div class="error-box">${esc(e.message)}</div>`; }
 }
@@ -20652,6 +20654,184 @@ async function adminApi() {
 }
 
 /* ---- Automations ---- */
+/* PERF_HEALTH_PANEL_v1 — admin-visible backend health dashboard.
+   Pulls server-side passive timing tally + recent client-uploaded perf
+   dumps from /api/perf-summary. No DB writes — entire dataset lives
+   in-memory and resets on Railway redeploy. */
+async function adminHealth() {
+  if (!['admin','manager'].includes(CRM.user.role)) {
+    return h('div', { class: 'muted', style: { padding: '1rem' } }, 'Admin/manager only.');
+  }
+  const wrap = h('div', { class: 'card' });
+  wrap.appendChild(h('h3', { style: { margin: '0 0 .5rem 0' } }, '🩺 Backend health'));
+  wrap.appendChild(h('p', { class: 'muted', style: { fontSize: '.82rem' } },
+    'Every API call slower than 1 second is logged automatically. Recent client-side dumps (uploaded by the ⚡ panel or auto-pushed when a user has 3 slow calls in a session) are listed too. Data lives in-memory on the server and resets on each Railway redeploy.'));
+
+  const status = h('div', { class: 'muted', style: { fontSize: '.78rem', marginBottom: '.4rem' } }, 'Loading…');
+  const summaryRow = h('div', { style: { display: 'flex', gap: '.75rem', flexWrap: 'wrap', marginBottom: '.8rem' } });
+  const toolbar = h('div', { style: { display: 'flex', gap: '.5rem', marginBottom: '.8rem', flexWrap: 'wrap' } },
+    h('button', { class: 'btn sm', onclick: () => refresh() }, '🔄 Refresh'),
+    h('label', { style: { display: 'flex', alignItems: 'center', gap: '.3rem', fontSize: '.82rem' } },
+      (() => { const cb = h('input', { type: 'checkbox' }); cb.checked = true; cb.id = '_health_auto'; return cb; })(),
+      'Auto-refresh (15s)'),
+    h('button', { class: 'btn sm danger', onclick: async () => {
+      if (!await confirmDialog('Clear the entire server-side health tally? (Just clears the counter — does not affect any data.)')) return;
+      try {
+        await fetch('/api/perf-reset', { method: 'POST' });
+        toast('Health tally cleared'); refresh();
+      } catch (e) { toast(e.message, 'err'); }
+    } }, '🗑 Clear tally')
+  );
+
+  const sec1 = h('div', { style: { marginTop: '.5rem' } });
+  const sec2 = h('div', { style: { marginTop: '.8rem' } });
+  const sec3 = h('div', { style: { marginTop: '.8rem' } });
+  const sec4 = h('div', { style: { marginTop: '.8rem' } });
+
+  wrap.appendChild(toolbar);
+  wrap.appendChild(status);
+  wrap.appendChild(summaryRow);
+  wrap.appendChild(sec1);
+  wrap.appendChild(sec2);
+  wrap.appendChild(sec3);
+  wrap.appendChild(sec4);
+
+  let _timer = null;
+  async function refresh() {
+    try {
+      const r = await fetch('/api/perf-summary');
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'fetch failed');
+      _render(j);
+    } catch (e) {
+      status.textContent = '⚠ ' + e.message;
+    }
+  }
+
+  function _kpi(label, value, color) {
+    return h('div', { style: {
+      flex: '1', minWidth: '120px', padding: '.6rem .8rem',
+      background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px'
+    } },
+      h('div', { style: { fontSize: '.7rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '.5px' } }, label),
+      h('div', { style: { fontSize: '1.4rem', fontWeight: 700, color: color || '#0f172a' } }, value)
+    );
+  }
+
+  function _table(headers, rows, emptyMsg) {
+    if (!rows.length) return h('div', { class: 'muted', style: { padding: '.6rem', fontSize: '.82rem' } }, emptyMsg);
+    return h('div', { class: 'table-wrap' }, h('table', { class: 'mini-table' },
+      h('thead', {}, h('tr', {}, ...headers.map(t => h('th', {}, t)))),
+      h('tbody', {}, ...rows)
+    ));
+  }
+
+  function _render(j) {
+    const slowTotal = j.total_slow || 0;
+    const tFn = j.top_fn || [];
+    const tTen = j.top_tenant || [];
+    const recent = j.recent_slow || [];
+    const reports = j.client_reports || [];
+
+    status.textContent = 'Updated ' + new Date().toLocaleTimeString();
+
+    summaryRow.innerHTML = '';
+    summaryRow.appendChild(_kpi('Slow calls (≥1s) since deploy', slowTotal, slowTotal > 50 ? '#dc2626' : slowTotal > 10 ? '#d97706' : '#16a34a'));
+    summaryRow.appendChild(_kpi('Unique slow endpoints', tFn.length, '#0f172a'));
+    summaryRow.appendChild(_kpi('Affected tenants', tTen.length, '#0f172a'));
+    summaryRow.appendChild(_kpi('Client dumps received', reports.length, '#6366f1'));
+
+    sec1.innerHTML = '';
+    sec1.appendChild(h('h4', { style: { margin: '0 0 .35rem 0' } }, '🐌 Top slow endpoints (avg ms)'));
+    sec1.appendChild(_table(
+      ['Endpoint', 'Calls', 'Avg ms', 'Max ms'],
+      tFn.map(r => h('tr', {},
+        h('td', {}, h('code', { style: { fontSize: '.78rem' } }, r.fn)),
+        h('td', {}, String(r.n)),
+        h('td', { style: { color: r.avg > 3000 ? '#dc2626' : r.avg > 1500 ? '#d97706' : '#0f172a', fontWeight: 600 } }, r.avg + ' ms'),
+        h('td', {}, r.max + ' ms')
+      )),
+      'No slow calls yet 🎉'
+    ));
+
+    sec2.innerHTML = '';
+    sec2.appendChild(h('h4', { style: { margin: '0 0 .35rem 0' } }, '🏢 Slow by tenant'));
+    sec2.appendChild(_table(
+      ['Tenant', 'Calls', 'Avg ms', 'Max ms'],
+      tTen.map(r => h('tr', {},
+        h('td', {}, h('b', {}, r.tenant)),
+        h('td', {}, String(r.n)),
+        h('td', {}, r.avg + ' ms'),
+        h('td', {}, r.max + ' ms')
+      )),
+      'No tenant has had a slow call yet.'
+    ));
+
+    sec3.innerHTML = '';
+    sec3.appendChild(h('h4', { style: { margin: '0 0 .35rem 0' } }, '⏱ Recent slow calls (last 100)'));
+    sec3.appendChild(_table(
+      ['When', 'Endpoint', 'Tenant', 'User', 'ms'],
+      recent.slice(0, 100).map(r => h('tr', {},
+        h('td', { class: 'muted', style: { fontSize: '.78rem' } }, fmtDate(new Date(r.t).toISOString(), 'relative')),
+        h('td', {}, h('code', { style: { fontSize: '.74rem' } }, r.fn)),
+        h('td', {}, r.tenant || '?'),
+        h('td', {}, r.user || '?'),
+        h('td', { style: { fontWeight: 600, color: r.ms > 3000 ? '#dc2626' : '#0f172a' } }, r.ms + ' ms')
+      )),
+      'No slow calls yet.'
+    ));
+
+    sec4.innerHTML = '';
+    sec4.appendChild(h('h4', { style: { margin: '0 0 .35rem 0' } }, '📤 Client-side dumps (browser / APK uploads)'));
+    sec4.appendChild(h('p', { class: 'muted', style: { fontSize: '.78rem', margin: '0 0 .4rem 0' } },
+      'Auto-uploaded when a user has 3 slow calls or 1 ≥3s call in a session, or pushed manually via the ⚡ panel → 📤 Send to support.'));
+    if (!reports.length) {
+      sec4.appendChild(h('div', { class: 'muted', style: { padding: '.6rem', fontSize: '.82rem' } }, 'No client dumps yet.'));
+    } else {
+      reports.forEach(r => {
+        const card = h('details', { style: { background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px', padding: '.5rem .65rem', marginBottom: '.4rem' } },
+          h('summary', { style: { cursor: 'pointer', fontWeight: 600 } },
+            (r.tenant || '?') + ' · ' + (r.user || '?') + ' · ' + (r.platform || 'web') + ' · ' +
+            r.api_calls + ' calls / ' + r.slow_1s + ' slow / ' + r.very_slow_3s + ' very-slow · ' +
+            r.long_tasks + ' long tasks · ' + (r.mem_mb != null ? r.mem_mb + ' MB' : '?') +
+            ' · ' + fmtDate(new Date(r.at_ms).toISOString(), 'relative')
+          ),
+          h('div', { style: { padding: '.5rem .2rem', fontSize: '.82rem' } },
+            h('div', {}, h('b', {}, 'View at upload: '), r.view || '—'),
+            h('div', {}, h('b', {}, 'Network: '), r.network || '—', ' · online=' + (r.online == null ? '?' : (r.online ? 'yes' : 'no'))),
+            h('div', { style: { marginTop: '.3rem' } }, h('b', {}, 'Top by avg ms')),
+            r.top_by_avg && r.top_by_avg.length
+              ? h('ul', { style: { paddingLeft: '1.1rem', margin: '.2rem 0' } },
+                  ...r.top_by_avg.map(t => h('li', {}, h('code', { style: { fontSize: '.78rem' } }, t.fn), ' — ' + t.avg + ' ms avg (' + t.n + ' calls, max ' + t.max + ')')))
+              : h('div', { class: 'muted' }, '—'),
+            r.very_slow_sample && r.very_slow_sample.length
+              ? h('div', { style: { marginTop: '.3rem' } },
+                  h('b', {}, 'Very slow (≥3s) sample'),
+                  h('ul', { style: { paddingLeft: '1.1rem', margin: '.2rem 0' } },
+                    ...r.very_slow_sample.map(v => h('li', {}, h('code', { style: { fontSize: '.78rem' } }, v.fn), ' — ' + v.ms + ' ms · view=' + (v.view || '?')))))
+              : null,
+            r.ua ? h('div', { class: 'muted', style: { marginTop: '.3rem', fontSize: '.72rem', wordBreak: 'break-all' } }, 'UA: ' + r.ua) : null
+          )
+        );
+        sec4.appendChild(card);
+      });
+    }
+  }
+
+  function _scheduleAuto() {
+    if (_timer) clearInterval(_timer);
+    _timer = setInterval(() => {
+      const cb = document.getElementById('_health_auto');
+      if (cb && cb.checked && document.body.contains(wrap)) refresh();
+      else if (_timer) clearInterval(_timer);
+    }, 15000);
+  }
+
+  refresh();
+  _scheduleAuto();
+  return wrap;
+}
+
 async function adminAutomations() {
   const [automations, log] = await Promise.all([
     api('api_automations_list'),

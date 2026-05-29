@@ -146,6 +146,10 @@ SELECT * FROM (VALUES
    'Two passive instruments added so we can see slowness WITHOUT the user reporting it. (1) Server side: the tenantApi dispatcher now times every handler. Anything >=1000ms gets logged into Railway as [PERF_SLOW_API] with fn, ms, tenant, user. An in-memory tally is exposed at /api/perf-summary returning the top-20 slowest endpoints and top-20 slowest tenants since the last redeploy. (2) Client side: the SPA now auto-POSTs the diagnostic dump to /api/perf-report once the user hits 3 slow calls or 1 very-slow (>=3s) call in a session, throttled to once per 10 minutes. No tap needed.',
    '#/dashboard', '📡', NOW() - INTERVAL '20 minutes'),
 
+  ('feature', 'Settings → 🩺 Backend health — see exactly which API is slow',
+   'New tab in Settings for admins and managers. Shows top-20 slowest backend endpoints by average response time, top slow tenants, the last 100 ≥1-second calls, and every client-uploaded diagnostic dump (browser / APK) with the top slow APIs from that session, long-task count, memory usage and the view the user was on when they hit support. Auto-refreshes every 15 seconds. Now you can answer ''what was slow for Harsh just now'' without grep-ing Railway logs.',
+   '#/admin', '🩺', NOW()),
+
   ('fix', 'WhatsApp campaigns — Delivered / Read counters now move + click "Failed" to see why',
    'Two long-standing campaign bugs fixed. (1) Even when WhatsApp confirmed the message was delivered and read, the campaign row stayed at Delivered 0 / Read 0. The Meta status webhook was updating each recipient row but never bumping the parent campaign counter — now it does, with idempotence so a target that goes delivered → read does not double-count. (2) When a campaign showed Failed 2 of 2, there was no way to see why. The Failed number is now a clickable red link that opens a modal listing the top 3 error reasons grouped by frequency, plus a cheat-sheet for the common Meta error codes (132001 = template language mismatch, 131026 = recipient not on WhatsApp, 132000 = template variable count mismatch, 100/190 = expired access token).',
    '#/whatsbot/campaigns', '📊', NOW()),

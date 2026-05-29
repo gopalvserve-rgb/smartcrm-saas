@@ -1480,18 +1480,31 @@ app.post('/api/rec-diag', require('express').json({ limit: '8kb' }), async (req,
 // Aggregated from the tenantApi dispatcher whenever any handler takes
 // >=1000ms. No DB writes — pure in-memory accumulator that resets on each
 // Railway redeploy.
+// PERF_HEALTH_PANEL_v1 — admin can reset the tally to start fresh.
+app.post('/api/perf-reset', (req, res) => {
+  try {
+    global._perfSlowTally = { by_fn: {}, by_tenant: {}, recent: [] };
+    global._perfClientReports = [];
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/perf-summary', (req, res) => {
   try {
     const T = global._perfSlowTally || { by_fn: {}, by_tenant: {}, recent: [] };
     const top_fn = Object.entries(T.by_fn).map(([fn, st]) => ({ fn, n: st.n, avg: Math.round(st.total / st.n), max: st.max })).sort((a, b) => b.avg - a.avg).slice(0, 20);
     const top_tenant = Object.entries(T.by_tenant).map(([t, st]) => ({ tenant: t, n: st.n, avg: Math.round(st.total / st.n), max: st.max })).sort((a, b) => b.n - a.n).slice(0, 20);
+    const reports = (global._perfClientReports || []).slice(-30).reverse();
     res.json({
       ok: true,
       slow_threshold_ms: 1000,
       total_slow: T.recent.length,
       top_fn,
       top_tenant,
-      recent_slow: T.recent.slice(-100).reverse()
+      recent_slow: T.recent.slice(-100).reverse(),
+      client_reports: reports
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -1531,6 +1544,33 @@ app.post('/api/perf-report', require('express').json({ limit: '256kb' }), async 
     );
     if (top5.length) console.log('[/api/perf-report] TOP_BY_AVG_MS', JSON.stringify(top5));
     if (verySlow.length) console.log('[/api/perf-report] VERY_SLOW', JSON.stringify(verySlow.slice(0, 10).map(e => ({ fn: e.fn, ms: e.ms, view: e.view }))));
+    /* PERF_HEALTH_PANEL_v1 — persist a compact dump summary so the admin
+       dashboard can show recent client-uploaded reports without us having
+       to grep Railway logs. Keep last 50 in-memory. */
+    try {
+      if (!global._perfClientReports) global._perfClientReports = [];
+      global._perfClientReports.push({
+        at_ms: Date.now(),
+        tenant: b.tenant || '?',
+        user: b.user || '?',
+        platform: b.platform || 'web',
+        apk: b.apk_version || '',
+        online: b.online != null ? Boolean(b.online) : null,
+        network: b.network || '',
+        view: b.current_view || '',
+        api_calls: apiCalls.length,
+        slow_1s: slow.length,
+        very_slow_3s: verySlow.length,
+        long_tasks: lt.length,
+        mem_mb: memSeries.length ? memSeries[memSeries.length - 1].mb : null,
+        top_by_avg: top5,
+        very_slow_sample: verySlow.slice(0, 10).map(e => ({ fn: e.fn, ms: e.ms, view: e.view })),
+        ua: String(b.ua || '').slice(0, 200)
+      });
+      if (global._perfClientReports.length > 50) {
+        global._perfClientReports = global._perfClientReports.slice(-50);
+      }
+    } catch (_) {}
     res.json({ ok: true, received: ev.length });
   } catch (e) {
     console.error('[/api/perf-report] error:', e.message);
