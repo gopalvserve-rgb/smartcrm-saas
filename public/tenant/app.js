@@ -20856,7 +20856,10 @@ async function adminHealth() {
     const recent = j.recent_slow || [];
     const reports = j.client_reports || [];
 
-    status.textContent = 'Updated ' + new Date().toLocaleTimeString();
+    const _scope = j.scope || '(no scope)';
+    status.innerHTML = 'Updated ' + new Date().toLocaleTimeString() +
+      ' \u2013 <b>Scope:</b> <code style="background:#eef2ff;padding:2px 6px;border-radius:4px;">' + _scope + '</code>' +
+      (slowTotal === 0 ? ' \u2013 <span style="color:#16a34a;">No slow calls in this tenant since the last Railway deploy or tally reset \u2705</span>' : '');
 
     summaryRow.innerHTML = '';
     summaryRow.appendChild(_kpi('Slow calls (≥1s) since deploy', slowTotal, slowTotal > 50 ? '#dc2626' : slowTotal > 10 ? '#d97706' : '#16a34a'));
