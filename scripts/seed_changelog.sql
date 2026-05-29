@@ -108,6 +108,10 @@ SELECT * FROM (VALUES
 
   ('feature', 'Pipeline funnel — date preset chips',
    'Filter bar on the pipeline funnel now includes one-click date presets: Today, Yesterday, Last 7 days, Last 30 days, This month, Last month, All time. Click a chip and the From/To inputs auto-fill and the funnel re-aggregates. The ⭐ Save default lets you pin one preset as your tenant''s default range.',
-   '#/pipeline', '📅', NOW())
+   '#/pipeline', '📅', NOW() - INTERVAL '5 minutes'),
+
+  ('feature', 'Stage filter on Leads + Reports + Stage column on leads list',
+   'Universal pipeline Stage is now a first-class filter on the Leads page and the Reports page. Pick one or more stages (Fresh / Attempted / Qualified / Negotiation / Proposal / Won / Lost) and the list/report scopes to leads whose status is mapped to those stages. The leads table also shows a coloured Stage pill on every row so you can see at a glance where each lead sits in the pipeline.',
+   '#/leads', '🚦', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);

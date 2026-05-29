@@ -2674,6 +2674,7 @@ const LEAD_COLUMNS = [
   { key: 'source',      label: 'Source',        default: true },
   { key: 'product',     label: 'Product',       default: false },
   { key: 'status',      label: 'Status',        default: true },
+  { key: 'stage',       label: 'Stage',         default: true },
   { key: 'assigned',    label: 'Assigned',      default: true },
   { key: 'tags',        label: 'Tags',          default: false },
   { key: 'followup',    label: 'Follow-up',     default: true },
@@ -2783,6 +2784,26 @@ VIEWS.leads = async (view) => {
       onApply: (vals) => {
         CRM.prefs.filters.status_ids = vals;
         CRM.prefs.filters.status_id = vals.length === 1 ? vals[0] : '';
+        CRM._leadsPage = 1; loadLeads({ page: 1 });
+      }
+    }),
+    // PIPELINE_STAGE_v1_LEADFILTER — Stage multi-select. Translates to the
+    // set of status_ids whose status is mapped to one of the chosen stages.
+    multiSelectDropdown({
+      id: 'f-stage', label: 'Stage',
+      options: [
+        { id: 'fresh',       name: 'Fresh' },
+        { id: 'attempted',   name: 'Attempted' },
+        { id: 'qualified',   name: 'Qualified' },
+        { id: 'negotiation', name: 'Negotiation' },
+        { id: 'proposal',    name: 'Proposal' },
+        { id: 'won',         name: 'Won' },
+        { id: 'lost',        name: 'Lost' }
+      ],
+      values: CRM.prefs.filters.stages || [],
+      allLabel: 'Any stage',
+      onApply: (vals) => {
+        CRM.prefs.filters.stages = vals;
         CRM._leadsPage = 1; loadLeads({ page: 1 });
       }
     }),
@@ -3266,10 +3287,14 @@ async function loadLeads(opts) {
     if (m) _hashStage = m[1];
   } catch (_) {}
   let _stageStatusIds = null;
-  if (_hashStage) {
+  const _pickedStages = (CRM.prefs.filters.stages || []).slice();
+  const _stageSet = new Set();
+  if (_hashStage) _stageSet.add(_hashStage);
+  _pickedStages.forEach(s => _stageSet.add(s));
+  if (_stageSet.size) {
     const tenantStatuses = (CRM.cache && CRM.cache.statuses) || [];
     _stageStatusIds = tenantStatuses
-      .filter(st => String(st.stage || '') === _hashStage)
+      .filter(st => _stageSet.has(String(st.stage || '')))
       .map(st => st.id);
     // Surface a chip explaining the active stage filter so users know
     // they're not seeing every lead.
@@ -3980,6 +4005,25 @@ function renderCell(col, l, statuses) {
         value: s.id, selected: Number(s.id) === Number(l.status_id) ? 'selected' : null
       }, s.name)));
       return h('td', {}, sel);
+    }
+    case 'stage': {
+      // PIPELINE_STAGE_v1_LEADCOL — derive the stage from the lead's status.
+      const st = (statuses || []).find(x => Number(x.id) === Number(l.status_id));
+      const stg = st && st.stage ? String(st.stage) : '';
+      if (!stg) return h('td', { class: 'muted', style: { fontSize: '.78rem' } }, '—');
+      const STAGE_META = {
+        fresh:      { label: 'Fresh',       bg:'#dbeafe', fg:'#1e40af' },
+        attempted:  { label: 'Attempted',   bg:'#bfdbfe', fg:'#1e3a8a' },
+        qualified:  { label: 'Qualified',   bg:'#93c5fd', fg:'#1e3a8a' },
+        negotiation:{ label: 'Negotiation', bg:'#3b82f6', fg:'#ffffff' },
+        proposal:   { label: 'Proposal',    bg:'#1d4ed8', fg:'#ffffff' },
+        won:        { label: 'Won',         bg:'#dcfce7', fg:'#14532d' },
+        lost:       { label: 'Lost',        bg:'#fee2e2', fg:'#7f1d1d' }
+      };
+      const m = STAGE_META[stg] || { label: stg, bg:'#f1f5f9', fg:'#475569' };
+      return h('td', {},
+        h('span', { style: { display:'inline-block', padding:'.18rem .55rem', borderRadius:'999px', background:m.bg, color:m.fg, fontSize:'.74rem', fontWeight:600 } }, m.label)
+      );
     }
     case 'assigned': return h('td', {}, l.assigned_name || '—');
     case 'tags': {
@@ -16482,6 +16526,20 @@ VIEWS.reports = async (view) => {
       values: (window._repPicked && window._repPicked.statuses) || [],
       onApply: (v) => { window._repPicked = window._repPicked || {}; window._repPicked.statuses = v; }
     }),
+    // PIPELINE_STAGE_v1_REPORTS — Stage multi-select.
+    multiSelectDropdown({ id: 'rep-stage', label: 'Stage', allLabel: 'Any stage',
+      options: [
+        { id: 'fresh',       name: 'Fresh' },
+        { id: 'attempted',   name: 'Attempted' },
+        { id: 'qualified',   name: 'Qualified' },
+        { id: 'negotiation', name: 'Negotiation' },
+        { id: 'proposal',    name: 'Proposal' },
+        { id: 'won',         name: 'Won' },
+        { id: 'lost',        name: 'Lost' }
+      ],
+      values: (window._repPicked && window._repPicked.stages) || [],
+      onApply: (v) => { window._repPicked = window._repPicked || {}; window._repPicked.stages = v; }
+    }),
     multiSelectDropdown({ id: 'rep-product', label: 'Product', allLabel: 'Any product',
       options: products.map(p => ({ id: String(p.id), name: p.name })),
       values: (window._repPicked && window._repPicked.products) || [],
@@ -16550,16 +16608,31 @@ function _currentReportFilters() {
   const statusesArr = picked.statuses || [];
   const productsArr = picked.products || [];
   const sourcesArr = picked.sources || [];
+  const stagesArr = picked.stages || [];
+  // PIPELINE_STAGE_v1_REPORTS — expand stage picks into status_ids by
+  // looking up the statuses whose stage matches one of the picked stages,
+  // then merging with any explicitly-picked status_ids.
+  let mergedStatusIds = statusesArr.slice();
+  if (stagesArr.length) {
+    const tenantStatuses = (CRM.cache && CRM.cache.statuses) || [];
+    const stageSet = new Set(stagesArr.map(String));
+    tenantStatuses.forEach(st => {
+      if (stageSet.has(String(st.stage || '')) && !mergedStatusIds.includes(String(st.id))) {
+        mergedStatusIds.push(String(st.id));
+      }
+    });
+  }
   return {
     from, to, role, qualified, tag,
     scope_user_id: usersArr[0],
-    status_id: statusesArr[0],
+    status_id: mergedStatusIds[0],
     product_id: productsArr[0],
     source: sourcesArr[0],
     scope_user_ids: usersArr.length ? usersArr : undefined,
-    status_ids: statusesArr.length ? statusesArr : undefined,
+    status_ids: mergedStatusIds.length ? mergedStatusIds : undefined,
     product_ids: productsArr.length ? productsArr : undefined,
     sources: sourcesArr.length ? sourcesArr : undefined,
+    stages: stagesArr.length ? stagesArr : undefined,
     rules: (window._repRuleBtn && window._repRuleBtn.getRules) ? window._repRuleBtn.getRules() : []
   };
 }
