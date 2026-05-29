@@ -3421,7 +3421,7 @@ VIEWS.leads = async (view) => {
   const _filterActiveLabel = h('span', { style: { fontWeight: '600' } }, '');
   const _filterStateLabel  = h('span', { style: { fontSize: '.85rem', opacity: 0.85 } }, '');
   const _filterToggle = h('button', {
-    class: 'btn',
+    class: 'btn filters-toggle',
     id: 'leads-filter-toggle',
     style: {
       width: '100%', display: 'flex', justifyContent: 'space-between',

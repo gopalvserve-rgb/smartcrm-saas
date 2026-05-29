@@ -1302,8 +1302,8 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
     border: none !important;
   }
   .stat-card { display: flex; flex-direction: column; gap: .15rem; }
-  .stat-value { font-size: 1.45rem !important; font-weight: 700; }
-  .stat-label { font-size: .72rem !important; color: var(--muted); }
+  .stat-value { font-size: 1.8rem !important; font-weight: 800; line-height: 1.05; }
+  .stat-label { font-size: .8rem !important; color: var(--muted); font-weight: 600; letter-spacing: .04em; }
   .stat-card::before {
     content: ""; position: absolute; left: 0; top: 14%; bottom: 14%;
     width: 4px; border-radius: 0 4px 4px 0; background: var(--brand);
@@ -1345,17 +1345,17 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
   .lead-card {
     border-left-width: 0 !important;
     border-radius: var(--app-card-radius) !important;
-    padding: .9rem 1rem !important;
+    padding: 1.1rem 1.15rem !important;
     background: #fff !important;
-    box-shadow: 0 2px 8px rgba(15, 23, 42, .05) !important;
+    box-shadow: 0 3px 12px rgba(15, 23, 42, .07) !important;
     position: relative;
   }
   .lead-card::after {
     content: ""; position: absolute; left: 0; top: 18%; bottom: 18%;
     width: 4px; border-radius: 0 4px 4px 0; background: var(--brand-color, var(--brand));
   }
-  .lc-name { font-size: 1rem !important; }
-  .lc-meta { font-size: .8rem !important; }
+  .lc-name { font-size: 1.12rem !important; font-weight: 700 !important; color: #0f172a !important; }
+  .lc-meta { font-size: .88rem !important; gap: .55rem !important; color: #475569 !important; margin-top: .35rem !important; }
   .lc-actions {
     border-top: 1px solid #f1f5f9;
     padding-top: .6rem !important;
@@ -1363,16 +1363,100 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
     gap: .4rem !important;
   }
   .lc-actions .btn {
-    border-radius: 10px !important;
-    padding: .55rem !important;
-    font-size: .82rem !important;
-    background: #f8fafc !important;
+    border-radius: 12px !important;
+    padding: .72rem .5rem !important;
+    font-size: .9rem !important;
+    font-weight: 600 !important;
+    background: #f1f5f9 !important;
     border: none !important;
+    min-height: 44px !important;          /* iOS/Android tap-target rule */
   }
   .lc-actions .btn.btn-call {
     background: var(--ok) !important;
     color: #fff !important;
+    box-shadow: 0 2px 6px rgba(22, 163, 74, .25) !important;
   }
+  .lc-actions .btn:active { transform: scale(.97); }
+
+  
+  /* ===== MOBILE_UX_v1 (2026-05-29) — bigger, friendlier mobile ===== */
+
+  /* Section headers */
+  h2, .view-head h2 { font-size: 1.25rem !important; font-weight: 700 !important; letter-spacing: -.01em !important; }
+  h3 { font-size: 1.05rem !important; font-weight: 700 !important; }
+
+  /* Card spacing — more breathing room overall */
+  #view > .card,
+  #view > .settings-card { padding: 1.1rem 1rem !important; margin-bottom: .85rem !important; }
+
+  /* Floating "Filters" pill button at the top of Leads / Follow-ups when
+     the inline filter bar is hidden. Toggling re-uses the existing
+     LEADS_FILTER_COLLAPSE mechanism — this just makes the trigger
+     prettier and bigger on mobile. */
+  .filters-toggle,
+  .followup-filter-toggle {
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: .45rem !important;
+    padding: .65rem 1.1rem !important;
+    border-radius: 999px !important;
+    font-size: .92rem !important;
+    font-weight: 600 !important;
+    background: linear-gradient(135deg, #4f46e5, #6366f1) !important;
+    color: #fff !important;
+    border: none !important;
+    box-shadow: 0 4px 14px rgba(79, 70, 229, .35) !important;
+    min-height: 44px !important;
+  }
+  .filters-toggle:active,
+  .followup-filter-toggle:active { transform: scale(.97); }
+
+  /* When inline filter bar IS shown on mobile, give each row breathing
+     space so dropdowns don't visually merge into a wall of grey. */
+  .filter-bar, .toolbar {
+    gap: .55rem !important;
+    padding: .65rem .55rem !important;
+    background: #fff !important;
+    border-radius: 14px !important;
+    box-shadow: 0 2px 8px rgba(15, 23, 42, .04) !important;
+    margin-bottom: .85rem !important;
+  }
+  .filter-bar select, .filter-bar input, .toolbar select, .toolbar input,
+  .filter-bar .multiselect-trigger {
+    min-height: 42px !important;
+    font-size: .92rem !important;
+    border-radius: 10px !important;
+  }
+
+  /* Status chips strip — bigger taps */
+  .status-chips .chip,
+  .chip-row .chip { padding: .42rem .9rem !important; font-size: .85rem !important; border-radius: 999px !important; }
+
+  /* Pagination — bigger numbers */
+  .pagination-bar .btn { min-width: 38px !important; min-height: 38px !important; font-size: .92rem !important; }
+  .pagination-bar .btn.active { font-weight: 700 !important; }
+
+  /* Follow-up cards — match the new lead-card treatment */
+  .followup-card, .fu-card {
+    padding: 1.1rem 1.15rem !important;
+    border-radius: var(--app-card-radius) !important;
+    box-shadow: 0 3px 12px rgba(15, 23, 42, .07) !important;
+    margin-bottom: .65rem !important;
+    background: #fff !important;
+    border: none !important;
+  }
+  .followup-card .fc-name, .fu-card .fc-name { font-size: 1.12rem !important; font-weight: 700 !important; color: #0f172a !important; }
+  .followup-card .fc-meta, .fu-card .fc-meta { font-size: .88rem !important; color: #475569 !important; }
+
+  /* Dashboard widget cards — larger headings, more space */
+  .dash-grid .card h3 { font-size: 1rem !important; margin: 0 0 .55rem !important; font-weight: 700 !important; }
+  .dash-grid .card h4 { font-size: .92rem !important; font-weight: 700 !important; }
+  .dash-grid .card { padding: 1.1rem 1rem !important; }
+
+  /* Top-bar — slightly more prominent */
+  .topbar h1, .header h1 { font-size: 1.15rem !important; font-weight: 700 !important; }
+
+  /* ===== /MOBILE_UX_v1 ===== */
 
   /* ---------------- Bottom nav — pill-shaped floating ---------------- */
   .bottom-nav {
