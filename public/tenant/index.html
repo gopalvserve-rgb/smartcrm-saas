@@ -10,7 +10,7 @@
        prefix and the express.static handler in server.js serves
        the file from public/tenant/. The trailing slash is enforced
        by a redirect in server.js so these always resolve correctly. -->
-  <link rel="stylesheet" href="styles.css?v=2026-05-24-tokenkey" />
+  <link rel="stylesheet" href="styles.css?v=2026-05-29-nuke-v46" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><text y=%2224%22 font-size=%2226%22>🎯</text></svg>" />
@@ -116,7 +116,7 @@
     //   1. Exchanges the ssl token for a regular tenant JWT (api_auth_ssoLogin)
     //   2. Strips ?ssl= from the URL bar so it isn't kept in history
     //   3. THEN loads app.js so the boot code reads the freshly-written
-    //      token from localStorage. (Static <script src="/app.js?v=2026-05-29-recnames-v37" defer>
+    //      token from localStorage. (Static <script src="/app.js?v=2026-05-29-nuke-v46" defer>
     //      would race against the async exchange and the user would land
     //      on the login screen instead of being signed in.)
     (async function bootstrap() {
@@ -157,7 +157,7 @@
         // Wait for DOMContentLoaded before injecting scripts.
         function injectSpaScripts() {
           var s = document.createElement('script');
-          s.src = 'app.js?v=2026-05-29-recnames-v37';
+          s.src = 'app.js?v=2026-05-29-nuke-v46';
           document.body.appendChild(s);
           var c = document.createElement('script');
           c.src = 'caller-id-native.js?v=2026-05-24-tokenkey';

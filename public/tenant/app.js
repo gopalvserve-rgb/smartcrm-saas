@@ -3599,7 +3599,7 @@ VIEWS.leads = async (view) => {
   if (!_filterOpen) cfRow.style.display = 'none';
   view.appendChild(cfRow);
 
-  view.appendChild(h('div', { class: 'bulk-bar', id: 'bulk-bar', hidden: true },
+  view.appendChild(h('div', { class: 'bulk-bar', id: 'bulk-bar', hidden: true, 'aria-hidden': 'true', 'data-empty': '1' },
     h('span', { id: 'bulk-count', class: 'bulk-count' }, '0 selected'),
     h('button', { class: 'btn sm', onclick: bulkAssignPrompt }, '👤 Assign'),
     h('button', { class: 'btn sm', onclick: bulkStatusPrompt }, '🏷️ Status'),
@@ -4042,6 +4042,33 @@ function renderLeadsTable(rows) {
   renderLeadsMobile(rows);
 }
 
+// LEADS_ICON_LABELS_v1: vertical icon-button + tiny label-below
+function _laItem(emoji, label, onclick, extraCls) {
+  return h('div', { class: 'la-item' },
+    h('button', {
+      type: 'button',
+      class: 'btn sm la-btn' + (extraCls ? ' ' + extraCls : ''),
+      onclick,
+      'aria-label': label,
+      title: label
+    }, emoji),
+    h('div', { class: 'la-label' }, label)
+  );
+}
+
+// LEADS_NUKE_v1: strip any rogue Whitelist/Meet button from older render paths
+function _nukeUnwantedLeadButtons(root) {
+  if (!root) return;
+  const KILL = ['whitelist', 'meet'];
+  root.querySelectorAll('.lc-actions button, .lc-actions .la-item').forEach(el => {
+    const t = (el.textContent || '').toLowerCase();
+    if (KILL.some(w => t.includes(w))) {
+      const wrap = el.closest('.la-item') || el;
+      if (wrap && wrap.parentNode) wrap.parentNode.removeChild(wrap);
+    }
+  });
+}
+
 function renderLeadsMobile(rows) {
   const m = $('#leads-mobile');
   if (!m) return;
@@ -4073,24 +4100,18 @@ function renderLeadsMobile(rows) {
       l.is_duplicate ? h('div', { class: 'dup-pill', onclick: () => openDuplicateHistory(l.id) }, '⚠ DUP — see past') : null,
       due ? h('div', { class: 'lc-fu' + (overdue ? ' overdue' : '') }, '⏰ ' + fmtDate(l.next_followup_at, 'relative')) : null,
       l.recent_remark ? h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.3rem' } }, '💬 ' + (l.recent_remark || '').slice(0, 80)) : null,
+      // LEADS_ICON_LABELS_v1: each action = square icon button + tiny label below.
       h('div', { class: 'lc-actions' },
-        digits ? h('button', { class: 'btn sm btn-call', onclick: () => callLead(l) }, '📞 Call') : null,
-        digits ? h('button', { class: 'btn sm wa-cloud-btn', onclick: () => openInitiateChatModal(l) }, '🟢 WA') : null,
-        digits ? h('button', {
-          class: 'btn sm', onclick: () => openPersonalWaPicker(l)
-        }, '💬 My WA') : null,
-        digits ? h('button', { class: 'btn sm', onclick: () => sendCalendlyLink(l) }, '📅 Meet') : null,
-        h('button', { class: 'btn sm', onclick: () => openRemarkInline(l.id) }, '📝 Note'),
-        h('button', { class: 'btn sm ghost', onclick: () => openLeadModal(l.id) }, '✎ Edit'),
-        digits ? h('button', {
-          class: 'btn sm', title: 'Whitelist this number + delete lead',
-          style: { background: '#fee2e2', color: '#b91c1c', borderColor: '#fecaca' },
-          onclick: async () => { const ok = await whitelistLeadPhone(l); if (ok) loadLeads(); }
-        }, '\ud83d\udeab Whitelist') : null
+        digits ? _laItem('📞', 'Call',  () => callLead(l), 'btn-call') : null,
+        digits ? _laItem('🟢', 'WA',    () => openInitiateChatModal(l), 'wa-cloud-btn') : null,
+        digits ? _laItem('💬', 'My WA', () => openPersonalWaPicker(l)) : null,
+        _laItem('📝', 'Note', () => openRemarkInline(l.id)),
+        _laItem('✎',  'Edit', () => openLeadModal(l.id), 'ghost')
       )
     );
     m.appendChild(card);
   });
+  try { _nukeUnwantedLeadButtons(m); } catch (e) {}
 }
 
 /** Click-to-call.
@@ -4566,7 +4587,10 @@ function onRowCheck() {
   const n = $$('.row-check:checked').length;
   const bar = $('#bulk-bar');
   if (!bar) return;
-  bar.hidden = n === 0;
+  // LEADS_BULKBAR_NUCLEAR_v1: three signals for CSS
+  bar.hidden = (n === 0);
+  bar.setAttribute('aria-hidden', n === 0 ? 'true' : 'false');
+  bar.setAttribute('data-empty', n === 0 ? '1' : '0');
   $('#bulk-count').textContent = `${n} selected`;
 }
 function selectAll(on) {

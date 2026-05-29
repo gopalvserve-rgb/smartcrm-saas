@@ -2998,3 +2998,69 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
     font-size: 14px !important;
   }
 }
+
+/* =================================================================
+ * LEADS_ICON_LABELS_v1 — lead-card action layout
+ * Each action = square emoji button stacked above a tiny text label.
+ * ================================================================= */
+.lc-actions { display: flex; gap: .35rem; flex-wrap: wrap; align-items: stretch; }
+.lc-actions .la-item {
+  display: flex; flex-direction: column; align-items: stretch; gap: 4px;
+  flex: 1 1 0; min-width: 0;
+}
+.lc-actions .la-btn {
+  width: 100% !important;
+  min-height: 44px !important;
+  padding: 0 !important;
+  font-size: 1.25rem !important;
+  line-height: 1 !important;
+  display: grid !important; place-items: center !important;
+  border-radius: 10px !important;
+  background: #f1f5f9 !important;
+  border: 1px solid #e2e8f0 !important;
+  color: #0f172a !important;
+}
+.lc-actions .la-btn.btn-call {
+  background: #10b981 !important;
+  color: #fff !important;
+  border-color: #059669 !important;
+}
+.lc-actions .la-btn.wa-cloud-btn {
+  background: #25d366 !important;
+  color: #fff !important;
+  border-color: #1ebe5b !important;
+}
+.lc-actions .la-btn.ghost {
+  background: #fff !important;
+  border: 1px dashed #cbd5e1 !important;
+}
+.lc-actions .la-label {
+  font-size: .68rem;
+  line-height: 1.1;
+  color: #475569;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+
+/* LEADS_BULKBAR_NUCLEAR_v1 — three-pronged hide */
+#bulk-bar[hidden],
+#bulk-bar[aria-hidden="true"],
+#bulk-bar[data-empty="1"] {
+  display: none !important;
+  visibility: hidden !important;
+  height: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+  overflow: hidden !important;
+}
+@media (max-width: 780px) {
+  #bulk-bar {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+  }
+}
