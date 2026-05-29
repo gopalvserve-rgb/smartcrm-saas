@@ -21,9 +21,91 @@ function haversine(lat1, lon1, lat2, lon2) {
 
 const VALID_WORK_MODES = ['office', 'home', 'on_site'];
 
-async function api_attendance_checkIn(token, lat, lng, deviceInfo, locationName, workMode) {
+// ATTENDANCE_SELFIE_METER_v1 (2026-05-29) — additive columns for the
+// optional selfie + meter-reading capture on check-in/out. Self-heals
+// the schema on first call so existing tenants don't need a manual
+// migration. The flags are read from the `config` table:
+//
+//   ATTENDANCE_REQUIRE_SELFIE   '1' / '0'  (default '0' = off)
+//   ATTENDANCE_REQUIRE_METER    '1' / '0'  (default '0' = off)
+//   ATTENDANCE_METER_LABEL      free text (default 'Meter reading')
+//
+// Admin can toggle each independently from Settings → Attendance.
+// Photo is sent as a base64 data URL from the SPA; we cap at 1MB to
+// stop badly-compressed phone selfies from blowing up the row.
+let _attSelfieIdxEnsured = false;
+async function _ensureAttendanceSelfieCols() {
+  if (_attSelfieIdxEnsured) return;
+  _attSelfieIdxEnsured = true;
+  try {
+    await db.query(`ALTER TABLE attendance ADD COLUMN IF NOT EXISTS check_in_selfie TEXT`);
+    await db.query(`ALTER TABLE attendance ADD COLUMN IF NOT EXISTS check_in_meter TEXT`);
+    await db.query(`ALTER TABLE attendance ADD COLUMN IF NOT EXISTS check_out_selfie TEXT`);
+    await db.query(`ALTER TABLE attendance ADD COLUMN IF NOT EXISTS check_out_meter TEXT`);
+  } catch (e) {
+    console.warn('[attendance] selfie/meter column ensure failed:', e.message);
+  }
+}
+
+async function _attRequirements() {
+  const [reqSelfie, reqMeter, meterLabel] = await Promise.all([
+    db.getConfig('ATTENDANCE_REQUIRE_SELFIE', '0'),
+    db.getConfig('ATTENDANCE_REQUIRE_METER', '0'),
+    db.getConfig('ATTENDANCE_METER_LABEL', 'Meter reading')
+  ]);
+  return {
+    require_selfie: String(reqSelfie) === '1',
+    require_meter: String(reqMeter) === '1',
+    meter_label: String(meterLabel || 'Meter reading').slice(0, 80)
+  };
+}
+
+// Expose the policy to the SPA so the UI can show/hide the capture
+// widgets without guessing. Anyone authenticated can read it.
+async function api_attendance_policy(token) {
+  await authUser(token);
+  return await _attRequirements();
+}
+
+// Admin save — toggle the requirements + label.
+async function api_attendance_policy_save(token, payload) {
+  const me = await authUser(token);
+  if (me.role !== 'admin') throw new Error('Admin only');
+  const p = payload || {};
+  await db.setConfig('ATTENDANCE_REQUIRE_SELFIE', p.require_selfie ? '1' : '0');
+  await db.setConfig('ATTENDANCE_REQUIRE_METER', p.require_meter ? '1' : '0');
+  if (typeof p.meter_label === 'string') {
+    await db.setConfig('ATTENDANCE_METER_LABEL', p.meter_label.slice(0, 80) || 'Meter reading');
+  }
+  return { ok: true };
+}
+
+function _validSelfie(b64) {
+  if (!b64) return null;
+  const s = String(b64);
+  if (!s.startsWith('data:image/')) return null;
+  // Soft cap: 1.4 MB of base64 ≈ 1 MB of binary. Anything bigger is
+  // either a full-res photo or an attack — reject.
+  if (s.length > 1400000) throw new Error('Selfie too large — please retake');
+  return s;
+}
+function _validMeter(v) {
+  if (v == null || v === '') return null;
+  const n = String(v).trim();
+  if (!/^[0-9]+(\.[0-9]+)?$/.test(n)) throw new Error('Meter reading must be a number');
+  return n.slice(0, 20);
+}
+
+async function api_attendance_checkIn(token, lat, lng, deviceInfo, locationName, workMode, selfie, meter) {
   const me = await authUser(token);
   const date = todayIso();
+  await _ensureAttendanceSelfieCols();
+  // ATTENDANCE_SELFIE_METER_v1 — enforce the admin-configured requirements.
+  const reqs = await _attRequirements();
+  const cleanSelfie = _validSelfie(selfie);
+  const cleanMeter  = _validMeter(meter);
+  if (reqs.require_selfie && !cleanSelfie) throw new Error('Selfie is required to check in');
+  if (reqs.require_meter  && !cleanMeter)  throw new Error(reqs.meter_label + ' is required to check in');
 
   if (String(process.env.ENFORCE_GPS || '0') === '1') {
     const olat = Number(process.env.OFFICE_LAT);
@@ -53,6 +135,8 @@ async function api_attendance_checkIn(token, lat, lng, deviceInfo, locationName,
     check_in_lat: lat || null,
     check_in_lng: lng || null,
     check_in_location_name: locationName ? String(locationName).slice(0, 255) : null,
+    check_in_selfie: cleanSelfie,
+    check_in_meter: cleanMeter,
     work_mode: VALID_WORK_MODES.includes(workMode) ? workMode : 'office',
     status: 'present',
     device_info, user_agent
@@ -67,9 +151,16 @@ async function api_attendance_checkIn(token, lat, lng, deviceInfo, locationName,
   return { id, check_in: now };
 }
 
-async function api_attendance_checkOut(token, lat, lng, deviceInfo, locationName) {
+async function api_attendance_checkOut(token, lat, lng, deviceInfo, locationName, selfie, meter) {
   const me = await authUser(token);
   const date = todayIso();
+  await _ensureAttendanceSelfieCols();
+  // ATTENDANCE_SELFIE_METER_v1 — same admin requirements apply to checkout.
+  const reqs = await _attRequirements();
+  const cleanSelfie = _validSelfie(selfie);
+  const cleanMeter  = _validMeter(meter);
+  if (reqs.require_selfie && !cleanSelfie) throw new Error('Selfie is required to check out');
+  if (reqs.require_meter  && !cleanMeter)  throw new Error(reqs.meter_label + ' is required to check out');
   const row = (await db.getAll('attendance'))
     .find(a => Number(a.user_id) === Number(me.id) &&
                String(a.date).slice(0, 10) === date);
@@ -82,6 +173,8 @@ async function api_attendance_checkOut(token, lat, lng, deviceInfo, locationName
     check_out_lat: lat || null,
     check_out_lng: lng || null,
     check_out_location_name: locationName ? String(locationName).slice(0, 255) : null,
+    check_out_selfie: cleanSelfie,
+    check_out_meter: cleanMeter,
     device_info: d.summary || row.device_info,
     user_agent: d.user_agent || row.user_agent
   });
@@ -870,6 +963,7 @@ async function api_location_trail(token, userId, date) {
 
 module.exports = {
   api_attendance_checkIn, api_attendance_checkOut,
+  api_attendance_policy, api_attendance_policy_save,
   api_attendance_mine, api_attendance_team, api_attendance_report,
   api_leaves_mine, api_leaves_apply, api_leaves_pending, api_leaves_decide, api_leaves_all,
   api_tasks_list, api_tasks_save, api_tasks_complete, api_tasks_doneToday,

@@ -184,6 +184,10 @@ SELECT * FROM (VALUES
 
   ('fix', 'Team chat — every poll is now indexed SQL instead of full-table scan',
    'The internal team chat (sidebar list of rooms, the open conversation, and the "Recent unread" popup) was loading every row from chat_rooms, chat_room_members AND chat_messages on every poll — even though the average user only has a handful of rooms and reads the last 200 messages. On busy tenants this scaled badly and blocked the database pool for everyone else. Rewrote the three hot endpoints (api_chat_rooms_list, api_chat_messages_list, api_chat_recent_unread) as targeted indexed queries: rooms list runs a DISTINCT ON for the latest message per room + a tiny per-room COUNT for unread; the open conversation uses ORDER BY created_at DESC LIMIT 200; the popup uses one JOIN + LIMIT 10. Same behaviour from your point of view — just much faster, especially on the mobile app where the chat dock polls every few seconds.',
-   '#/chat', '⚡', NOW())
+   '#/chat', '⚡', NOW()),
+
+  ('feature', 'Attendance — admin can require selfie + meter reading on check-in/out',
+   'New tab in Attendance → ⚙️ Settings (admin only) lets you turn on two optional capture steps for every check-in and check-out. (1) Selfie — opens the front camera, snaps a live photo. Stops time-fraud where an employee marks attendance from a friend or family member''s phone. (2) Meter reading — a numeric input you can label "Odometer (km)", "Electricity meter", "Water meter", or whatever fits your business. Useful for drivers, field staff, vehicle assignments. Both are off by default. Toggle either ON and every employee will see the capture step before their check-in completes; the system blocks check-in if the required value is missing. Existing GPS location requirement is unchanged.',
+   '#/attendance', '📸', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);

@@ -24558,11 +24558,15 @@ async function openTaskModal() {
 VIEWS.attendance = async (view) => {
   view.innerHTML = '';
   const canReport = ['admin', 'manager', 'team_leader'].includes(CRM.user.role);
+  const isAdmin = CRM.user.role === 'admin';
   const tabs = [{ id: 'mine', label: 'My attendance' }];
   if (canReport) {
     tabs.push({ id: 'report',   label: 'Team report (matrix)' });
     tabs.push({ id: 'detailed', label: '📋 Detailed log' });
     tabs.push({ id: 'trail',    label: '🗺️ Location trail' });
+  }
+  if (isAdmin) {
+    tabs.push({ id: 'settings', label: '⚙️ Settings' });
   }
   const nav = h('div', { class: 'subtabs' },
     ...tabs.map(t => h('button', { class: 'subtab' + (t.id === 'mine' ? ' active' : ''),
@@ -24579,6 +24583,58 @@ async function showAttTab(ev, id) {
   if (id === 'report')   body.replaceChildren(await renderAttendanceReport());
   if (id === 'detailed') body.replaceChildren(await renderAttendanceDetailed());
   if (id === 'trail')    body.replaceChildren(await renderLocationTrail());
+  if (id === 'settings') body.replaceChildren(await renderAttendancePolicySettings());
+}
+
+// ATTENDANCE_SELFIE_METER_v1 — admin settings tab.
+async function renderAttendancePolicySettings() {
+  const policy = await api('api_attendance_policy').catch(() => ({}));
+  const wrap = h('div', { class: 'settings-card', style: 'max-width:560px' });
+  const selfieCb = h('input', { type: 'checkbox', id: 'att-req-selfie' });
+  if (policy.require_selfie) selfieCb.checked = true;
+  const meterCb = h('input', { type: 'checkbox', id: 'att-req-meter' });
+  if (policy.require_meter) meterCb.checked = true;
+  const labelInp = h('input', { type: 'text', class: 'input', id: 'att-meter-label',
+    value: policy.meter_label || 'Meter reading',
+    placeholder: 'e.g. Odometer (km), Electricity meter, Water meter',
+    style: 'width:100%;margin-top:.3rem' });
+
+  function row(cb, text, hint) {
+    return h('label', { style: 'display:flex;align-items:flex-start;gap:.55rem;padding:.6rem 0;border-bottom:1px solid #f1f5f9;cursor:pointer' },
+      cb,
+      h('div', { style: 'flex:1' },
+        h('div', { style: 'font-weight:600' }, text),
+        hint ? h('div', { class: 'muted', style: 'font-size:.78rem;margin-top:.15rem' }, hint) : null
+      )
+    );
+  }
+
+  const saveBtn = h('button', { class: 'btn primary', onclick: async () => {
+    saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
+    try {
+      await api('api_attendance_policy_save', {
+        require_selfie: !!selfieCb.checked,
+        require_meter: !!meterCb.checked,
+        meter_label: labelInp.value || 'Meter reading'
+      });
+      toast('Attendance policy saved');
+    } catch (e) { toast(e.message, 'err'); }
+    saveBtn.disabled = false; saveBtn.textContent = '💾 Save';
+  } }, '💾 Save');
+
+  wrap.append(
+    h('h4', { style: 'margin-top:0' }, '🕒 Attendance check-in/out requirements'),
+    h('div', { class: 'muted', style: 'font-size:.82rem;margin-bottom:.5rem' },
+      'Turn on what you want every employee to capture when they check in and check out. Selfie uses the front camera; meter reading is a number (odometer, electricity meter, etc).'),
+    row(selfieCb, '📸 Require selfie', 'A live photo from the front camera. Stops time-fraud where someone marks attendance from a friend\u2019s phone.'),
+    row(meterCb, '🧭 Require meter reading', 'A numeric reading. Useful for drivers (odometer), field staff (electricity meter), etc.'),
+    h('div', { style: 'margin:.6rem 0 .2rem' },
+      h('label', { class: 'muted', style: 'font-size:.78rem' }, 'Label shown to the employee for the meter input:'),
+      labelInp
+    ),
+    h('div', { style: 'margin-top:.85rem;text-align:right' }, saveBtn)
+  );
+  return wrap;
 }
 
 /* ---------------- Location trail view (admin / manager) ----------------
@@ -25014,6 +25070,101 @@ function _pickWorkMode() {
   });
 }
 
+
+// ATTENDANCE_SELFIE_METER_v1 — capture helpers.
+// Selfie: opens a fullscreen modal with the front camera live, snaps a
+// frame to a canvas, returns base64 data URL. Falls back to <input
+// type=file capture=user> on platforms where getUserMedia is blocked.
+async function _captureSelfie() {
+  return new Promise((resolve) => {
+    let stream = null;
+    function cleanup(val) {
+      try { stream && stream.getTracks().forEach(t => t.stop()); } catch (_) {}
+      try { modal.remove(); } catch (_) {}
+      resolve(val);
+    }
+    const video = document.createElement('video');
+    video.autoplay = true; video.playsInline = true; video.muted = true;
+    video.style.cssText = 'width:100%;max-height:60vh;background:#000;border-radius:8px';
+    const status = h('div', { class: 'muted', style: 'font-size:.78rem;margin:.4rem 0' }, 'Position your face in the frame');
+    const snapBtn = h('button', { class: 'btn primary', onclick: snap }, '📷 Capture');
+    const cancelBtn = h('button', { class: 'btn', onclick: () => cleanup(null) }, 'Cancel');
+    const fallback = h('input', { type: 'file', accept: 'image/*', capture: 'user', style: 'display:none', onchange: (ev) => {
+      const f = ev.target.files && ev.target.files[0];
+      if (!f) return cleanup(null);
+      const r = new FileReader();
+      r.onload = () => cleanup(String(r.result));
+      r.onerror = () => cleanup(null);
+      r.readAsDataURL(f);
+    }});
+    const modal = h('div', { class: 'modal-backdrop', style: 'z-index:9999' },
+      h('div', { class: 'modal', style: 'max-width:520px' },
+        h('div', { class: 'modal-head' }, h('h3', {}, '📸 Take a selfie'), h('button', { class: 'btn icon', onclick: () => cleanup(null) }, '✕')),
+        h('div', { class: 'modal-body' }, video, status,
+          h('div', { class: 'actions', style: 'display:flex;gap:.5rem;justify-content:flex-end;margin-top:.5rem' }, cancelBtn, snapBtn),
+          fallback
+        )
+      )
+    );
+    document.body.appendChild(modal);
+    function snap() {
+      try {
+        const c = document.createElement('canvas');
+        c.width = video.videoWidth || 480;
+        c.height = video.videoHeight || 640;
+        const ctx = c.getContext('2d');
+        ctx.drawImage(video, 0, 0, c.width, c.height);
+        // 0.55 quality keeps the file ~80-150 KB which sails under the
+        // server-side 1MB cap with plenty of headroom.
+        const dataUrl = c.toDataURL('image/jpeg', 0.55);
+        cleanup(dataUrl);
+      } catch (e) {
+        status.textContent = 'Capture failed: ' + e.message;
+      }
+    }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      status.textContent = 'Camera not available — pick from file';
+      fallback.click();
+      return;
+    }
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false })
+      .then(s => { stream = s; video.srcObject = s; })
+      .catch(() => {
+        status.textContent = 'Camera blocked — opening file picker';
+        fallback.click();
+      });
+  });
+}
+
+// Meter reading prompt — a real modal so it works on iOS where prompt()
+// is sometimes silently blocked, and so we can validate.
+async function _captureMeterReading(label) {
+  return new Promise((resolve) => {
+    const inp = h('input', { type: 'number', inputmode: 'decimal', step: 'any',
+      placeholder: 'e.g. 45230', style: 'width:100%;font-size:1.15rem;padding:.55rem;border:1px solid #cbd5e1;border-radius:8px' });
+    function done(val) { try { modal.remove(); } catch (_) {} resolve(val); }
+    const modal = h('div', { class: 'modal-backdrop', style: 'z-index:9999' },
+      h('div', { class: 'modal', style: 'max-width:420px' },
+        h('div', { class: 'modal-head' }, h('h3', {}, '🧭 ' + label), h('button', { class: 'btn icon', onclick: () => done(null) }, '✕')),
+        h('div', { class: 'modal-body' },
+          h('div', { class: 'muted', style: 'margin-bottom:.5rem;font-size:.8rem' }, 'Enter the current ' + (label || 'meter') + ' value'),
+          inp,
+          h('div', { class: 'actions', style: 'display:flex;gap:.5rem;justify-content:flex-end;margin-top:.75rem' },
+            h('button', { class: 'btn', onclick: () => done(null) }, 'Cancel'),
+            h('button', { class: 'btn primary', onclick: () => {
+              const v = (inp.value || '').trim();
+              if (!v || !/^[0-9]+(\.[0-9]+)?$/.test(v)) { inp.style.borderColor = '#ef4444'; return; }
+              done(v);
+            } }, '✓ Save')
+          )
+        )
+      )
+    );
+    document.body.appendChild(modal);
+    setTimeout(() => { try { inp.focus(); } catch (_) {} }, 50);
+  });
+}
+
 async function checkInOut(which) {
   const device = _collectDevice();
   // Ask work mode for check-in only (check-out doesn't need it)
@@ -25021,6 +25172,25 @@ async function checkInOut(which) {
   if (which === 'checkIn') {
     workMode = await _pickWorkMode();
     if (!workMode) return;  // user cancelled
+  }
+  // ATTENDANCE_SELFIE_METER_v1 — fetch admin policy, then ask the user
+  // for selfie + meter reading if required. Both happen BEFORE we open
+  // the GPS prompt so we don't time out the location callback.
+  let selfie = null, meter = null;
+  try {
+    const policy = await api('api_attendance_policy');
+    if (policy && policy.require_selfie) {
+      selfie = await _captureSelfie();
+      if (!selfie) { toast('Selfie required — try again', 'warn'); return; }
+    }
+    if (policy && policy.require_meter) {
+      meter = await _captureMeterReading(policy.meter_label || 'Meter reading');
+      if (meter == null || meter === '') { toast((policy.meter_label || 'Meter reading') + ' required', 'warn'); return; }
+    }
+  } catch (e) {
+    // Policy fetch failed — fail open (let them check in without extras
+    // rather than blocking) but log for diagnosis.
+    console.warn('[attendance] policy fetch failed:', e && e.message);
   }
   const call = async (lat, lng) => {
     // Reverse-geocode in parallel with the API call so check-in stays fast
@@ -25031,7 +25201,7 @@ async function checkInOut(which) {
       try { locationName = await _reverseGeocode(lat, lng); } catch (_) {}
     }
     try {
-      await api('api_attendance_' + which, lat, lng, device, locationName, workMode);
+      await api('api_attendance_' + which, lat, lng, device, locationName, workMode, selfie, meter);
       toast(which === 'checkIn'
         ? ('Checked in · ' + (workMode === 'home' ? '🏠 Home' : workMode === 'on_site' ? '📍 On-site' : '🏢 Office'))
         : 'Checked out');
