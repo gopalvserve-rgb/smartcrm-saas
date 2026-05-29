@@ -84,51 +84,110 @@ async function _findLeadByPhone(phone) {
  * every time TelephonyManager fires an event, so the call history is complete
  * even for calls without recording.
  */
+// CALL_LOG_PERF_v1 — module-level config cache. CALLS_AUTOLEAD_*
+// rarely change and were being read on EVERY call event (5 DB hits
+// per dial). Cache for 60 seconds.
+const _autoleadCfg = { at: 0, val: null };
+async function _getAutoleadCfg() {
+  const now = Date.now();
+  if (_autoleadCfg.val && (now - _autoleadCfg.at) < 60000) return _autoleadCfg.val;
+  const [mode, inb, out, statusId] = await Promise.all([
+    db.getConfig('CALLS_AUTOLEAD_MODE', 'auto'),
+    db.getConfig('CALLS_AUTOLEAD_INBOUND', '1'),
+    db.getConfig('CALLS_AUTOLEAD_OUTBOUND', '0'),
+    db.getConfig('CALLS_AUTOLEAD_STATUS_ID', '0')
+  ]);
+  _autoleadCfg.val = {
+    mode: String(mode || 'auto').toLowerCase(),
+    inbound: String(inb || '1'),
+    outbound: String(out || '0'),
+    statusId: Number(statusId) || 0
+  };
+  _autoleadCfg.at = now;
+  return _autoleadCfg.val;
+}
+
 async function api_call_logEvent(token, payload) {
+  // CALL_LOG_PERF_v1 — Harsh's call_logEvent calls were taking up to 12.6
+  // minutes average, blocking every other API behind them. Refactored to:
+  //   1. authUser (need it, fast — JWT verify + 1 user lookup)
+  //   2. insert a minimal call_event row immediately with what we know
+  //   3. return ok in <50ms
+  //   4. fire the rest (direction inference, lead lookup, auto-create,
+  //      FCM push) in setImmediate so the request returns instantly.
   const me = await authUser(token);
   const p = payload || {};
-  let lead = await _findLeadByPhone(p.phone);
-
-  // Direction inference. The mobile WebView bridge can't tell us
-  // whether a 'call_ended' was inbound or outbound (the native
-  // broadcast doesn't carry direction). So:
-  //   * explicit direction param wins
-  //   * 'incoming_ringing' is obviously inbound
-  //   * 'call_ended' / 'incoming_missed' → look at the last call_event
-  //     for this phone in the past 5 min. If we saw RINGING from this
-  //     number then this is an INBOUND call ending. Else default 'out'.
-  let direction = p.direction;
+  const phoneClean = String(p.phone || '').replace(/^'/, '').trim();
+  // Direction we can determine SYNCHRONOUSLY without a DB query.
+  let direction = p.direction || '';
   if (!direction) {
     if (p.event === 'incoming_ringing') direction = 'in';
-    else if (p.phone) {
-      try {
-        const tail = String(p.phone).replace(/\D/g, '').slice(-10);
-        const { rows } = await db.query(
-          `SELECT direction, event FROM call_events
-            WHERE created_at >= NOW() - INTERVAL '5 minutes'
-              AND phone LIKE $1
-              AND direction IN ('in','missed','out')
-            ORDER BY created_at DESC LIMIT 1`,
-          ['%' + tail]
-        );
-        if (rows[0]) {
-          direction = (rows[0].direction === 'in' || rows[0].direction === 'missed') ? 'in' : 'out';
-        } else {
-          direction = 'out';
-        }
-      } catch (e) {
-        direction = 'out';
-      }
-    } else {
-      direction = 'out';
-    }
+    else direction = 'out';  // safe default; refined async below
   }
-  // Missed-call detection — if the call_ended event came in but no
-  // OFFHOOK happened (caller never picked up), the native side passes
-  // missed=true and direction='missed'. Honour that.
   if (p.missed === true || p.missed === 'true' || String(p.missed) === '1') {
     direction = 'missed';
   }
+  // Insert immediately so the event lands even if the worker dies.
+  let callEventId = null;
+  try {
+    callEventId = await db.insert('call_events', {
+      lead_id: null,
+      user_id: me.id,
+      phone: phoneClean,
+      direction,
+      event: p.event || 'unknown',
+      duration_s: Number(p.duration_s) || 0,
+      recording_id: p.recording_id || null,
+      created_at: db.nowIso()
+    });
+  } catch (e) {
+    console.warn('[call-event] insert failed:', e.message);
+  }
+  // Background work — does NOT block the response.
+  setImmediate(async () => {
+    try {
+      await _processCallEventAsync(me, p, phoneClean, direction, callEventId);
+    } catch (e) {
+      console.warn('[call-event] background processing failed:', e.message);
+    }
+  });
+  // CALL_LOG_PERF_v1 — backward compatible response.
+  // Old SPA reads r.lead_id and r.auto_created — both null is fine
+  // because the SPA only acts when they're truthy (best-effort UI).
+  return { ok: true, queued: true, call_event_id: callEventId, lead_id: null, auto_created: false };
+}
+
+// CALL_LOG_PERF_v1 — async post-processing for the call event.
+// Runs after the API responds so the APK never blocks waiting for FCM
+// or for a lead-by-phone scan on a large call_events table.
+async function _processCallEventAsync(me, p, phoneClean, directionInitial, callEventId) {
+  let direction = directionInitial;
+  // Refine direction with a SCOPED query — only look at THIS user's
+  // recent events for the same phone tail. With (user_id, created_at)
+  // indexed (which it is), this is O(log n) not full-scan.
+  if (!p.direction && p.event !== 'incoming_ringing' && phoneClean) {
+    try {
+      const tail = phoneClean.replace(/\D/g, '').slice(-10);
+      const { rows } = await db.query(
+        `SELECT direction FROM call_events
+          WHERE user_id = $1
+            AND created_at >= NOW() - INTERVAL '5 minutes'
+            AND phone LIKE $2
+            AND direction IN ('in','missed','out')
+          ORDER BY created_at DESC LIMIT 1`,
+        [me.id, '%' + tail]
+      );
+      if (rows[0]) {
+        const refined = (rows[0].direction === 'in' || rows[0].direction === 'missed') ? 'in' : 'out';
+        if (refined !== direction && callEventId) {
+          await db.update('call_events', callEventId, { direction: refined });
+          direction = refined;
+        }
+      }
+    } catch (_) {}
+  }
+  // Find / auto-create lead.
+  let lead = await _findLeadByPhone(p.phone);
 
   // ---- Auto-create-lead the MOMENT a call rings ----
   // Driven by the same tenant config the recording-upload handler uses,
@@ -144,21 +203,15 @@ async function api_call_logEvent(token, payload) {
   let autoCreatedNow = false;
   if (!lead && p.phone) {
     try {
-      // CALLS_AUTOLEAD_MODE = 'auto' (default) → create immediately
-      //                       'manual' → log call_event only; admin reviews
-      //                                    + bulk-converts from the UI.
-      const cfgMode = String(await db.getConfig('CALLS_AUTOLEAD_MODE', 'auto') || 'auto').toLowerCase();
-      const cfgIn  = await db.getConfig('CALLS_AUTOLEAD_INBOUND',  '1');
-      const cfgOut = await db.getConfig('CALLS_AUTOLEAD_OUTBOUND', '0');
+      // CALL_LOG_PERF_v1 — cached config (60s TTL) instead of 4 DB reads per call.
+      const cfg = await _getAutoleadCfg();
       const isInbound  = direction === 'in' || direction === 'missed';
       const isOutbound = direction === 'out' || direction === 'outgoing';
-      const allowedByDirection = (isInbound  && String(cfgIn)  === '1') ||
-                                 (isOutbound && String(cfgOut) === '1');
-      // In manual mode, never auto-create — but DO still log the
-      // call_event below so the admin's 'Pending calls' UI lists it.
-      const allow = cfgMode === 'auto' && allowedByDirection;
+      const allowedByDirection = (isInbound  && cfg.inbound  === '1') ||
+                                 (isOutbound && cfg.outbound === '1');
+      const allow = cfg.mode === 'auto' && allowedByDirection;
       if (allow) {
-        const cfgStId = Number(await db.getConfig('CALLS_AUTOLEAD_STATUS_ID', '0')) || 0;
+        const cfgStId = cfg.statusId;
         let statusId = null;
         if (cfgStId) {
           try { const f = await db.findById('statuses', cfgStId); if (f) statusId = f.id; } catch (_) {}
@@ -198,17 +251,11 @@ async function api_call_logEvent(token, payload) {
     } catch (e) { console.warn('[call-event] auto-create failed:', e.message); }
   }
 
-  await db.insert('call_events', {
-    lead_id: lead ? lead.id : null,
-    user_id: me.id,
-    phone: p.phone || '',
-    direction,
-    event: p.event || 'unknown',
-    duration_s: Number(p.duration_s) || 0,
-    recording_id: p.recording_id || null,
-    created_at: db.nowIso()
-  });
-  return { ok: true, lead_id: lead ? lead.id : null, auto_created: autoCreatedNow };
+  // CALL_LOG_PERF_v1 — if we just auto-created a lead, link it onto
+  // the call_event row we inserted at the start.
+  if (lead && callEventId) {
+    try { await db.update('call_events', callEventId, { lead_id: lead.id }); } catch (_) {}
+  }
 }
 
 /**
