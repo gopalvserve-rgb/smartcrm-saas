@@ -20800,7 +20800,17 @@ async function adminHealth() {
     h('button', { class: 'btn sm danger', onclick: async () => {
       if (!await confirmDialog('Clear the entire server-side health tally? (Just clears the counter — does not affect any data.)')) return;
       try {
-        await fetch('/api/perf-reset', { method: 'POST', headers: { Authorization: 'Bearer ' + (CRM.token || '') } });
+        const _tok = (function () {
+          try {
+            return CRM.token
+              || (CRM._slug ? localStorage.getItem('crm_token_' + CRM._slug) : null)
+              || localStorage.getItem('crm_token') || '';
+          } catch (_) { return ''; }
+        })();
+        await fetch('/api/perf-reset', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + _tok, 'x-auth-token': _tok }
+        });
         toast('Health tally cleared'); refresh();
       } catch (e) { toast(e.message, 'err'); }
     } }, '🗑 Clear tally')
@@ -20822,7 +20832,22 @@ async function adminHealth() {
   let _timer = null;
   async function refresh() {
     try {
-      const r = await fetch('/api/perf-summary', { headers: { Authorization: 'Bearer ' + (CRM.token || '') } });
+      const _tok = (function () {
+        try {
+          // Match the slug-aware lookup used at SPA boot (handles vserve etc.)
+          const tk = CRM.token
+            || (CRM._slug ? localStorage.getItem('crm_token_' + CRM._slug) : null)
+            || localStorage.getItem('crm_token')
+            || '';
+          return tk || '';
+        } catch (_) { return ''; }
+      })();
+      const r = await fetch('/api/perf-summary', {
+        headers: {
+          'Authorization': 'Bearer ' + _tok,
+          'x-auth-token': _tok
+        }
+      });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'fetch failed');
       _render(j);
