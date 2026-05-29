@@ -1480,31 +1480,131 @@ app.post('/api/rec-diag', require('express').json({ limit: '8kb' }), async (req,
 // Aggregated from the tenantApi dispatcher whenever any handler takes
 // >=1000ms. No DB writes — pure in-memory accumulator that resets on each
 // Railway redeploy.
-// PERF_HEALTH_PANEL_v1 — admin can reset the tally to start fresh.
-app.post('/api/perf-reset', (req, res) => {
+// PERF_HEALTH_PANEL_v1 + PERF_HEALTH_TENANT_SCOPE_v1 — admin can reset the
+// tally for their own tenant only (super-admin clears everything).
+app.post('/api/perf-reset', async (req, res) => {
   try {
-    global._perfSlowTally = { by_fn: {}, by_tenant: {}, recent: [] };
-    global._perfClientReports = [];
+    let tenantSlug = '';
+    let isSuper = false;
+    try {
+      const jwt = require('jsonwebtoken');
+      const _JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
+      const raw = (req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+      if (!raw) return res.status(401).json({ error: 'No auth token' });
+      let decoded;
+      try { decoded = jwt.verify(raw, _JWT_SECRET); }
+      catch (e) { return res.status(401).json({ error: 'Invalid or expired token' }); }
+      if (decoded && decoded.t) tenantSlug = String(decoded.t);
+      isSuper = !!(decoded && (decoded.is_super_admin || decoded.super_admin));
+    } catch (_) {}
+
+    if (isSuper) {
+      global._perfSlowTally = { by_fn: {}, by_tenant: {}, recent: [] };
+      global._perfClientReports = [];
+    } else if (tenantSlug) {
+      const T = global._perfSlowTally || { by_fn: {}, by_tenant: {}, recent: [] };
+      T.recent = (T.recent || []).filter(r => String(r.tenant || '') !== tenantSlug);
+      delete (T.by_tenant || {})[tenantSlug];
+      global._perfSlowTally = T;
+      // Rebuild by_fn from the remaining recent slice (best-effort).
+      const agg = {};
+      (T.recent || []).forEach(r => {
+        const k = r.fn || '?';
+        if (!agg[k]) agg[k] = { n: 0, total: 0, max: 0 };
+        agg[k].n++; agg[k].total += r.ms; if (r.ms > agg[k].max) agg[k].max = r.ms;
+      });
+      T.by_fn = agg;
+      global._perfClientReports = (global._perfClientReports || []).filter(r => String(r.tenant || '') !== tenantSlug);
+    } else {
+      return res.status(403).json({ error: 'Tenant context missing' });
+    }
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-app.get('/api/perf-summary', (req, res) => {
+app.get('/api/perf-summary', async (req, res) => {
   try {
+    // PERF_HEALTH_TENANT_SCOPE_v1 — require auth + filter to the requester's
+    // tenant unless they're a super-admin. Without this, every tenant could
+    // see every other tenant's slow APIs and client dumps.
+    let tenantSlug = '';
+    let isSuper = false;
+    try {
+      const jwt = require('jsonwebtoken');
+      const _JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
+      const raw = (req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+      if (!raw) return res.status(401).json({ error: 'No auth token' });
+      let decoded;
+      try { decoded = jwt.verify(raw, _JWT_SECRET); }
+      catch (e) { return res.status(401).json({ error: 'Invalid or expired token' }); }
+      // JWT may carry the tenant slug directly (\'t\' claim) — that's the
+      // cheapest signal. Fall back to looking up the user's tenant.
+      if (decoded && decoded.t) tenantSlug = String(decoded.t);
+      isSuper = !!(decoded && (decoded.is_super_admin || decoded.super_admin));
+      if (!tenantSlug && !isSuper) {
+        const uid = Number(decoded && decoded.id);
+        if (uid) {
+          try {
+            const t = await _findTenantByLookup(
+              'SELECT 1 FROM users WHERE id = $1 AND COALESCE(is_active, 1) = 1 LIMIT 1',
+              [uid]
+            );
+            if (t) tenantSlug = t.slug || '';
+          } catch (_) {}
+        }
+      }
+      if (!isSuper && !tenantSlug) return res.status(403).json({ error: 'Tenant context missing' });
+    } catch (e) {
+      return res.status(500).json({ error: 'auth check failed: ' + e.message });
+    }
+
     const T = global._perfSlowTally || { by_fn: {}, by_tenant: {}, recent: [] };
-    const top_fn = Object.entries(T.by_fn).map(([fn, st]) => ({ fn, n: st.n, avg: Math.round(st.total / st.n), max: st.max })).sort((a, b) => b.avg - a.avg).slice(0, 20);
-    const top_tenant = Object.entries(T.by_tenant).map(([t, st]) => ({ tenant: t, n: st.n, avg: Math.round(st.total / st.n), max: st.max })).sort((a, b) => b.n - a.n).slice(0, 20);
-    const reports = (global._perfClientReports || []).slice(-30).reverse();
+
+    // Filter recent slow calls by this tenant (unless super-admin).
+    const recentAll = T.recent || [];
+    const recent_filtered = isSuper ? recentAll : recentAll.filter(r => String(r.tenant || '') === tenantSlug);
+
+    // top_fn is re-aggregated from the filtered recent slice so the average
+    // reflects only this tenant's calls. (The cross-tenant by_fn table on
+    // the global tally is super-admin-only.)
+    let top_fn;
+    if (isSuper) {
+      top_fn = Object.entries(T.by_fn || {}).map(([fn, st]) => ({ fn, n: st.n, avg: Math.round(st.total / st.n), max: st.max })).sort((a, b) => b.avg - a.avg).slice(0, 20);
+    } else {
+      const agg = {};
+      recent_filtered.forEach(r => {
+        const k = r.fn || '?';
+        if (!agg[k]) agg[k] = { n: 0, total: 0, max: 0 };
+        agg[k].n++; agg[k].total += r.ms; if (r.ms > agg[k].max) agg[k].max = r.ms;
+      });
+      top_fn = Object.entries(agg).map(([fn, st]) => ({ fn, n: st.n, avg: Math.round(st.total / st.n), max: st.max })).sort((a, b) => b.avg - a.avg).slice(0, 20);
+    }
+
+    // top_tenant is super-admin only — for tenant users it's just their row.
+    let top_tenant;
+    if (isSuper) {
+      top_tenant = Object.entries(T.by_tenant || {}).map(([t, st]) => ({ tenant: t, n: st.n, avg: Math.round(st.total / st.n), max: st.max })).sort((a, b) => b.n - a.n).slice(0, 20);
+    } else {
+      const my = (T.by_tenant || {})[tenantSlug];
+      top_tenant = my ? [{ tenant: tenantSlug, n: my.n, avg: Math.round(my.total / my.n), max: my.max }] : [];
+    }
+
+    const reportsAll = global._perfClientReports || [];
+    const reports = isSuper
+      ? reportsAll.slice(-30).reverse()
+      : reportsAll.filter(r => String(r.tenant || '') === tenantSlug).slice(-30).reverse();
+
     res.json({
       ok: true,
       slow_threshold_ms: 1000,
-      total_slow: T.recent.length,
+      total_slow: recent_filtered.length,
       top_fn,
       top_tenant,
-      recent_slow: T.recent.slice(-100).reverse(),
-      client_reports: reports
+      recent_slow: recent_filtered.slice(-100).reverse(),
+      client_reports: reports,
+      scope: isSuper ? 'all_tenants' : ('tenant:' + tenantSlug)
     });
   } catch (e) {
     res.status(500).json({ error: e.message });

@@ -20800,7 +20800,7 @@ async function adminHealth() {
     h('button', { class: 'btn sm danger', onclick: async () => {
       if (!await confirmDialog('Clear the entire server-side health tally? (Just clears the counter — does not affect any data.)')) return;
       try {
-        await fetch('/api/perf-reset', { method: 'POST' });
+        await fetch('/api/perf-reset', { method: 'POST', headers: { Authorization: 'Bearer ' + (CRM.token || '') } });
         toast('Health tally cleared'); refresh();
       } catch (e) { toast(e.message, 'err'); }
     } }, '🗑 Clear tally')
@@ -20822,7 +20822,7 @@ async function adminHealth() {
   let _timer = null;
   async function refresh() {
     try {
-      const r = await fetch('/api/perf-summary');
+      const r = await fetch('/api/perf-summary', { headers: { Authorization: 'Bearer ' + (CRM.token || '') } });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'fetch failed');
       _render(j);
