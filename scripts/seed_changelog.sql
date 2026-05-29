@@ -210,6 +210,10 @@ For admins / managers: a team table for the chosen month showing each employee''
 For employees (sales / regular users): a personal dashboard showing their own total km, the rate, the amount they have earned this month, and a day-by-day breakdown so they can verify each day was tracked correctly. Cannot edit, cannot mark paid — view only.
 
 No new schema. Reuses the existing location_pings + attendance tables. Zero double-counting — the same haversine sum that powers Day Trail powers this number.',
-   '#/tracking', '💰', NOW())
+   '#/tracking', '💰', NOW()),
+
+  ('fix', 'Performance — recording-sync preflight no longer hangs the app',
+   'After this morning''s chat fix landed, a different endpoint took over as the slowest one: api_recordings_filenamesPresent (the preflight that asks the server "which of these recording files are already uploaded?"). On busy tenants it was averaging 32.7 seconds per call, and a single mobile sync session was firing it 12 times — each one timing out at the Railway 71-second gateway limit. Every other API queued behind it: chat unread, leads list, notifications, announcements all topped out at the same 71-second mark. Root cause: the index on the original_filename column was created lazily by the upload handler, so tenants whose first upload predated the May-20 schema commit never got the index. The endpoint was sequential-scanning the whole lead_recordings table on every preflight, including its giant BYTEA audio_bytes column. Fix: module-level "ensure-once" guard runs CREATE INDEX IF NOT EXISTS on the very first call after restart, drops the redundant DISTINCT (the upload path already dedupes), and now throws on query error instead of returning empty (which would have triggered the APK to re-upload every file).',
+   '#/admin', '🛣', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);

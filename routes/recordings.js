@@ -1280,21 +1280,62 @@ async function api_recording_selftest(token) {
  * payload: { filenames: ['call_20260520_143215.m4a', ...] } (max 500)
  * returns: { present: ['call_20260520_143215.m4a', ...], asked: <n> }
  */
+// REC_FILENAMES_PERF_v1 (2026-05-29) — module-level index ensure flag.
+// Without an index on original_filename, the WHERE … = ANY(...) query
+// degrades into a sequential scan of lead_recordings on every preflight.
+// On a tenant with thousands of recording rows + BYTEA audio_bytes, this
+// was averaging 32.7 SECONDS and pinning the entire postgres pool —
+// every other API queued behind it. Backend Health dump showed 12 calls
+// in one APK session all timing out around the 71s mark, dragging down
+// chat, leads, notifications, announcements. The CREATE INDEX only ran
+// inside the /api/recordings upload handler, so tenants with the column
+// but no index (anyone whose upload predated the May-20 index commit)
+// were silently broken.
+let _filenamesIdxEnsured = false;
+async function _ensureFilenamesIndex() {
+  if (_filenamesIdxEnsured) return;
+  _filenamesIdxEnsured = true;
+  try {
+    await db.query('ALTER TABLE lead_recordings ADD COLUMN IF NOT EXISTS original_filename TEXT');
+    // Non-partial index — matches ANY() lookups even when planner is
+    // unsure about NOT NULL implication. IF NOT EXISTS makes it idempotent.
+    await db.query('CREATE INDEX IF NOT EXISTS idx_lead_rec_filename_full ON lead_recordings(original_filename)');
+  } catch (e) {
+    console.warn('[recordings filenamesPresent] index ensure failed:', e.message);
+  }
+}
+
 async function api_recordings_filenamesPresent(token, payload) {
   await authUser(token);
   const names = Array.isArray(payload && payload.filenames) ? payload.filenames : [];
   const list = names.map(s => String(s || '').trim()).filter(Boolean).slice(0, 500);
   if (!list.length) return { present: [], asked: 0 };
-  // Self-heal column on first hit (idempotent).
-  try { await db.query('ALTER TABLE lead_recordings ADD COLUMN IF NOT EXISTS original_filename TEXT'); } catch (_) {}
+  _ensureFilenamesIndex(); // fire-and-forget — first call sets the flag
   try {
+    // Dropped DISTINCT — original_filename has a dedup constraint at
+    // upload time so duplicates here would be a no-op anyway, and the
+    // planner does a faster index scan without the extra sort.
+    const t0 = Date.now();
     const { rows } = await db.query(
-      'SELECT DISTINCT original_filename FROM lead_recordings WHERE original_filename = ANY($1::text[])',
+      'SELECT original_filename FROM lead_recordings WHERE original_filename = ANY($1::text[])',
       [list]
     );
-    return { present: rows.map(r => r.original_filename), asked: list.length };
+    const ms = Date.now() - t0;
+    if (ms > 500) console.warn('[recordings filenamesPresent] slow query', { ms, asked: list.length, hits: rows.length });
+    // De-dup at the result level just in case a row somehow appears twice.
+    const seen = new Set();
+    const present = [];
+    for (const r of rows) {
+      const n = r.original_filename;
+      if (n && !seen.has(n)) { seen.add(n); present.push(n); }
+    }
+    return { present, asked: list.length };
   } catch (e) {
-    return { present: [], asked: list.length, error: e.message };
+    console.warn('[recordings filenamesPresent] query failed:', e.message);
+    // CRITICAL: do NOT return present=[] on error — that would cause the
+    // APK to re-upload every file. Better to fail the API call so the
+    // client falls back to its own watermark / dedup_key path.
+    throw e;
   }
 }
 
