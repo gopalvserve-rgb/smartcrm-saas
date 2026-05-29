@@ -201,6 +201,9 @@ window.crmPerf = (function () {
       try {
         console.warn('[CRM_PERF] slow API ' + ev.fn + ' ' + ev.ms + 'ms' + (ev.ms >= VERY_SLOW_MS ? ' (VERY SLOW)' : ''));
       } catch (_) {}
+      // CRM_PERF_v1_AUTO — auto-upload the dump once we hit 3 slow calls or
+      // a very slow call, throttled to once per 10 min so we don't spam.
+      try { _maybeAutoUpload(ev); } catch (_) {}
     }
     _save();
   }
@@ -246,6 +249,27 @@ window.crmPerf = (function () {
     if (!b) return;
     if (slowCount > 0) { b.hidden = false; b.textContent = String(slowCount); }
     else b.hidden = true;
+  }
+  let _lastAutoUpload = 0;
+  let _slowSinceUpload = 0;
+  function _maybeAutoUpload(ev) {
+    _slowSinceUpload++;
+    const now = Date.now();
+    const MIN_GAP_MS = 10 * 60 * 1000;  // never more than once per 10 min
+    const trigger = (ev.ms >= VERY_SLOW_MS) || (_slowSinceUpload >= 3);
+    if (!trigger) return;
+    if (now - _lastAutoUpload < MIN_GAP_MS) return;
+    _lastAutoUpload = now;
+    _slowSinceUpload = 0;
+    // Fire-and-forget — fall silently if the network is down or endpoint is
+    // missing. The point is to surface data when it's available, not to
+    // surface errors when it isn't.
+    try {
+      const dump = _buildPerfDump();
+      dump.auto = true;
+      fetch('/api/perf-report', { method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify(dump), keepalive: true })
+        .catch(() => {});
+    } catch (_) {}
   }
   function show() {
     const recent = events.slice(-200).reverse();

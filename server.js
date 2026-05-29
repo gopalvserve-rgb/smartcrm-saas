@@ -1476,6 +1476,28 @@ app.post('/api/rec-diag', require('express').json({ limit: '8kb' }), async (req,
 });
 
 
+// CRM_PERF_v1_SERVER — read the live per-process tally of slow API calls.
+// Aggregated from the tenantApi dispatcher whenever any handler takes
+// >=1000ms. No DB writes — pure in-memory accumulator that resets on each
+// Railway redeploy.
+app.get('/api/perf-summary', (req, res) => {
+  try {
+    const T = global._perfSlowTally || { by_fn: {}, by_tenant: {}, recent: [] };
+    const top_fn = Object.entries(T.by_fn).map(([fn, st]) => ({ fn, n: st.n, avg: Math.round(st.total / st.n), max: st.max })).sort((a, b) => b.avg - a.avg).slice(0, 20);
+    const top_tenant = Object.entries(T.by_tenant).map(([t, st]) => ({ tenant: t, n: st.n, avg: Math.round(st.total / st.n), max: st.max })).sort((a, b) => b.n - a.n).slice(0, 20);
+    res.json({
+      ok: true,
+      slow_threshold_ms: 1000,
+      total_slow: T.recent.length,
+      top_fn,
+      top_tenant,
+      recent_slow: T.recent.slice(-100).reverse()
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // CRM_PERF_v1_APK — receive a performance diagnostic dump from the SPA / APK.
 // Console-logged so it surfaces in Railway logs. Compact 1-line summary plus
 // the full JSON for support inspection. Auth optional — the whole point is

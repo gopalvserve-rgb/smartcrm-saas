@@ -140,6 +140,10 @@ SELECT * FROM (VALUES
 
   ('feature', 'Performance diagnostics — Send to support button (APK-friendly)',
    'Mobile users can''t open DevTools so the ⚡ panel now has a 📤 Send to support button that uploads the diagnostic dump directly to the server in one tap. The dump also includes Capacitor / APK flags, network type, online state, viewport size, and lifecycle events (pause/resume/visibility) so we can spot APK-specific issues like the WebView pausing during a hang.',
-   '#/dashboard', '📤', NOW())
+   '#/dashboard', '📤', NOW() - INTERVAL '5 minutes'),
+
+  ('feature', 'Performance diagnostics — server-side + auto-upload',
+   'Two passive instruments added so we can see slowness WITHOUT the user reporting it. (1) Server side: the tenantApi dispatcher now times every handler. Anything >=1000ms gets logged into Railway as [PERF_SLOW_API] with fn, ms, tenant, user. An in-memory tally is exposed at /api/perf-summary returning the top-20 slowest endpoints and top-20 slowest tenants since the last redeploy. (2) Client side: the SPA now auto-POSTs the diagnostic dump to /api/perf-report once the user hits 3 slow calls or 1 very-slow (>=3s) call in a session, throttled to once per 10 minutes. No tap needed.',
+   '#/dashboard', '📡', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);

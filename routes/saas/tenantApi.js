@@ -313,6 +313,13 @@ async function expressHandler(req, res) {
     return res.status(404).json({ error: `Unknown function: ${fn}` });
   }
 
+  // CRM_PERF_v1_SERVER — measure how long every tenant API call takes.
+  // Anything over the slow-thresholds gets a structured console.log line
+  // (auto-surfaces in Railway logs) so we can see WITHOUT any user action
+  // which functions are choking, for which tenant.
+  const _SLOW_API_MS      = 1000;
+  const _VERY_SLOW_API_MS = 3000;
+  const _perfStart = Date.now();
   try {
     const finalArgs = (args || []).slice();
     if (fn === 'api_login' || fn === 'api_login_otp_verify') {
@@ -324,6 +331,23 @@ async function expressHandler(req, res) {
     }
 
     const result = await handler(...finalArgs);
+    const _ms = Date.now() - _perfStart;
+    if (_ms >= _SLOW_API_MS) {
+      const slug = (req.tenant && req.tenant.slug) || req.tenantSlug || 'unknown';
+      const uid  = (req.tenant && req.tenant.user_id) || req.user_id || '?';
+      const tag  = _ms >= _VERY_SLOW_API_MS ? 'VERY_SLOW' : 'SLOW';
+      console.log('[PERF_SLOW_API]', tag, 'fn=' + fn, 'ms=' + _ms, 'tenant=' + slug, 'user=' + uid);
+      // Also pile up a per-process in-memory tally so a GET /api/perf-summary
+      // (defined in server.js) can return it without DB writes.
+      if (!global._perfSlowTally) global._perfSlowTally = { by_fn: {}, by_tenant: {}, recent: [] };
+      const T = global._perfSlowTally;
+      T.by_fn[fn] = T.by_fn[fn] || { n: 0, total: 0, max: 0 };
+      T.by_fn[fn].n++; T.by_fn[fn].total += _ms; if (_ms > T.by_fn[fn].max) T.by_fn[fn].max = _ms;
+      T.by_tenant[slug] = T.by_tenant[slug] || { n: 0, total: 0, max: 0 };
+      T.by_tenant[slug].n++; T.by_tenant[slug].total += _ms; if (_ms > T.by_tenant[slug].max) T.by_tenant[slug].max = _ms;
+      T.recent.push({ t: Date.now(), fn, ms: _ms, tenant: slug, user: uid });
+      if (T.recent.length > 500) T.recent.splice(0, T.recent.length - 500);
+    }
     return res.json({ ok: true, result });
   } catch (e) {
     const isUserError = /not signed in|invalid.*token|expired|forbidden|required|already/i
