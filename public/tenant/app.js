@@ -31269,7 +31269,7 @@ function _initStickyWidget() {
   function start() {
     let n = 0;
     const t = setInterval(() => {
-      if (typeof CRM !== 'undefined' && CRM.user) { _initCrmCopilot(); _initFloatingChat(); _initStickyWidget(); _initChangelog(); clearInterval(t); }
+      if (typeof CRM !== 'undefined' && CRM.user) { _initCrmCopilot(); _initFloatingChat(); _initStickyWidget(); _initChangelog(); _initNewFeaturesTour(); clearInterval(t); }
       else if (++n > 120) clearInterval(t);
     }, 500);
   }
@@ -31363,6 +31363,124 @@ let _tourState = null;
 function _showcaseTourEnabled() {
   return CRM && CRM.cache && CRM.cache.config &&
          (CRM.cache.config.DEMO_TOUR_ENABLED === '1' || CRM.cache.config.DEMO_TENANT === '1');
+}
+
+// NEW_FEATURES_TOUR_v1_2026_05_29 — auto-fire a one-time tour for admin
+// and manager users introducing today's batch of features: Live Team
+// widget, Sales Pipeline funnel, and Stage mapping in Settings → Statuses.
+// Also adds a small "✨ What's new" pill to the topbar so the tour can be
+// re-opened any time.
+function _initNewFeaturesTour() {
+  if (!CRM.user) return;
+  const role = String(CRM.user.role || '').toLowerCase();
+  if (role !== 'admin' && role !== 'manager') return;
+
+  // Inject the topbar pill (idempotent)
+  try {
+    if (!document.getElementById('btn-whatsnew-tour')) {
+      const helpBtn = document.getElementById('btn-help');
+      if (helpBtn && helpBtn.parentNode) {
+        const pill = document.createElement('button');
+        pill.id = 'btn-whatsnew-tour';
+        pill.className = 'btn ghost';
+        pill.title = "See today's new features";
+        pill.style.cssText = 'position:relative; background:linear-gradient(135deg,#fef3c7,#fde68a); color:#92400e; font-weight:600; border:1px solid #fcd34d; padding:.3rem .65rem; border-radius:999px; margin-left:.2rem;';
+        pill.innerHTML = '<span style="margin-right:.25rem">✨</span><span style="font-size:.78rem">New features</span><span class="badge" id="whatsnew-badge" style="background:#dc2626; position:absolute; top:-4px; right:-4px; min-width:8px; height:8px; border-radius:50%; padding:0;">&nbsp;</span>';
+        pill.onclick = () => _openNewFeaturesTour();
+        helpBtn.parentNode.insertBefore(pill, helpBtn);
+      }
+    }
+  } catch (_) {}
+
+  // Hide the red dot once tour has been seen
+  try {
+    const seenKey = '_newFeaturesTourSeen_v1_' + (CRM.user.id || 'anon');
+    if (localStorage.getItem(seenKey)) {
+      const badge = document.getElementById('whatsnew-badge');
+      if (badge) badge.style.display = 'none';
+    }
+  } catch (_) {}
+
+  // Auto-open the tour the FIRST time this user lands on the dashboard
+  try {
+    const seenKey = '_newFeaturesTourSeen_v1_' + (CRM.user.id || 'anon');
+    if (!localStorage.getItem(seenKey)) {
+      // Delay a moment so the dashboard has time to render its widgets
+      setTimeout(() => _openNewFeaturesTour(), 1500);
+    }
+  } catch (_) {}
+}
+
+function _openNewFeaturesTour() {
+  // Mark as seen the moment the user opens it
+  try {
+    const seenKey = '_newFeaturesTourSeen_v1_' + ((CRM.user && CRM.user.id) || 'anon');
+    localStorage.setItem(seenKey, '1');
+    const badge = document.getElementById('whatsnew-badge');
+    if (badge) badge.style.display = 'none';
+  } catch (_) {}
+
+  const m = h('div', { class: 'modal-backdrop',
+    onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const modal = h('div', { class: 'modal modal-lg', style: { maxWidth: '720px' } });
+
+  modal.appendChild(h('div', { class: 'modal-head' },
+    h('div', {},
+      h('h3', { style: { margin: 0 } }, '✨ What\'s new in SmartCRM'),
+      h('div', { class: 'muted', style: { fontSize: '.82rem', marginTop: '.2rem' } },
+        'Three big updates landed today — here\'s how to get the most out of them.')
+    ),
+    h('button', { class: 'btn icon', onclick: () => m.remove() }, '✕')
+  ));
+
+  const body = h('div', { class: 'modal-body', style: { padding: '1rem 1.4rem' } });
+
+  function card(num, icon, title, desc, ctaLabel, ctaHash) {
+    return h('div', { style: { display:'flex', gap:'.85rem', padding:'.85rem 1rem', marginBottom:'.6rem', background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:'10px' } },
+      h('div', { style: { width:'30px', height:'30px', borderRadius:'50%', background:'#4f46e5', color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', fontWeight:700, fontSize:'.95rem', flexShrink:0 } }, String(num)),
+      h('div', { style: { flex:1, minWidth:0 } },
+        h('div', { style: { fontSize:'1rem', fontWeight:700, color:'#0f172a', marginBottom:'.2rem' } }, icon + ' ' + title),
+        h('div', { style: { fontSize:'.82rem', color:'#475569', lineHeight:'1.5' } }, desc),
+        h('button', { class: 'btn primary sm', style: { marginTop:'.55rem', fontSize:'.78rem', padding:'.35rem .75rem' },
+          onclick: () => { location.hash = ctaHash; m.remove(); }
+        }, ctaLabel + ' →')
+      )
+    );
+  }
+
+  body.appendChild(card(1, '🟢',
+    'Live Team Status on the Dashboard',
+    'See who is on a call, idle, on a break, checked out or logged out — in real time. Cards refresh every 20 seconds with role, current activity and last action timestamp. Pinned to the top of the Dashboard.',
+    'Open Dashboard', '#/dashboard'));
+
+  body.appendChild(card(2, '📈',
+    'New Sales Pipeline funnel view',
+    'Pipeline now opens as a real funnel: KPI strip (total leads, open value, win rate, avg cycle), 5 descending bands and Won / Lost cards. Filters: date presets, Status, Source, Owner, Product, Campaign. Click any band to drill into the matching leads.',
+    'Open Pipeline', '#/pipeline'));
+
+  body.appendChild(card(3, '🚦',
+    'Map every Status to a universal Stage (action needed)',
+    'For the funnel and reports to work correctly, each of your tenant Statuses must be linked to one of 7 universal stages: Fresh / Attempted / Qualified / Negotiation / Proposal / Won / Lost. Open Settings → Statuses and pick the right Stage for every row.',
+    'Map statuses now', '#/admin'));
+
+  body.appendChild(h('div', { style: { display:'flex', gap:'.85rem', padding:'.7rem .9rem', marginBottom:'.4rem', background:'#eff6ff', border:'1px solid #dbeafe', borderRadius:'10px', fontSize:'.8rem', color:'#1e40af' } },
+    h('span', {}, '💡'),
+    h('div', { style: { flex:1 } },
+      h('div', { style: { fontWeight:600, marginBottom:'.15rem' } }, 'Bonus quality-of-life updates'),
+      h('div', {}, 'Stage column on Leads list · Stage filter on Leads + Reports · ⇆ Sidebar collapse toggle in the topbar · Filter rule button on Leads (with not-equal, does-not-contain, is-empty operators).')
+    )
+  ));
+
+  modal.appendChild(body);
+
+  modal.appendChild(h('div', { class: 'modal-actions', style: { padding:'.7rem 1.4rem', borderTop:'1px solid #e2e8f0', display:'flex', justifyContent:'space-between', alignItems:'center' } },
+    h('span', { class: 'muted', style: { fontSize:'.78rem' } },
+      'Need to see this again? Click the ✨ New features pill in the topbar.'),
+    h('button', { class: 'btn primary', onclick: () => m.remove() }, 'Got it')
+  ));
+
+  m.appendChild(modal);
+  document.body.appendChild(m);
 }
 
 function _initShowcaseTour() {

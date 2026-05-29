@@ -124,6 +124,10 @@ SELECT * FROM (VALUES
 
   ('feature', 'Sidebar collapse / expand toggle on desktop',
    'The ☰ icon in the topbar now collapses and expands the left sidebar on desktop too (it was mobile-only before). Click to hide the menu and get more horizontal room for the leads table, click again to bring it back. State persists per device in crm_sidebar_collapsed.',
-   '#/dashboard', '⇆', NOW())
+   '#/dashboard', '⇆', NOW() - INTERVAL '5 minutes'),
+
+  ('feature', 'What''s new tutorial — auto-shows once for admins + managers',
+   'On first login today every admin and manager sees a one-time What''s new modal walking through Live Team Status, the new Pipeline funnel, and the action item to map their Statuses to universal Stages. Each step has a Take me there button that jumps to the right page. A ✨ New features pill is added to the topbar so the tour can be re-opened later. The red dot disappears after the user opens the tour once.',
+   '#/dashboard', '✨', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
