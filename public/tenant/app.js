@@ -26720,11 +26720,18 @@ async function syncRecordings(opts) {
   }
 
   if (files.length === 0) {
-    const watermarkAge = Math.round((Date.now() - sinceMs) / 60000);
-    const msg = opts.full
-      ? 'No recordings found in the folder. Check that the folder you picked actually has .m4a / .amr / .mp3 / .wav / .ogg / .flac files.'
-      : 'No NEW recordings since ' + watermarkAge + ' min ago. (Looking at files newer than ' + new Date(sinceMs).toLocaleString('en-IN', {hour:'2-digit', minute:'2-digit', day:'2-digit', month:'short'}) + '.) Tap "⚡ Re-sync all" to scan every file in the folder.';
-    toast(msg, 'warn');
+    // SILENT_POLL_v1 (2026-05-29) — only toast when the user explicitly
+    // triggered the sync (Sync now / Sync today / Re-sync all). On the
+    // 90-second background tick + post-call kicks, finding zero new
+    // files is the EXPECTED state. Toasting it every 90s feels like
+    // the app is nagging the user even though everything is fine.
+    if (!opts.silent) {
+      const watermarkAge = Math.round((Date.now() - sinceMs) / 60000);
+      const msg = opts.full
+        ? 'No recordings found in the folder. Check that the folder you picked actually has .m4a / .amr / .mp3 / .wav / .ogg / .flac files.'
+        : 'No NEW recordings since ' + watermarkAge + ' min ago. (Looking at files newer than ' + new Date(sinceMs).toLocaleString('en-IN', {hour:'2-digit', minute:'2-digit', day:'2-digit', month:'short'}) + '.) Tap "⚡ Re-sync all" to scan every file in the folder.';
+      toast(msg, 'warn');
+    }
     console.warn('[leadcrm] sync: 0 files | folder=' + folderName + ' | sinceMs=' + sinceMs + ' (' + new Date(sinceMs).toISOString() + ')');
     return;
   }
@@ -27908,7 +27915,7 @@ async function _silentSyncRecordings(opts) {
       if (kind === 'warn' || kind === 'err') return realToast(msg, kind);
       if (typeof msg === 'string' && /✅\s*[1-9]/.test(msg)) suppressed++;
     };
-    try { await syncRecordings(Object.assign({}, opts || {})); }
+    try { await syncRecordings(Object.assign({ silent: true }, opts || {})); }
     finally { window.toast = realToast; }
     _recDiagLog({
       reason, result: 'ok',
@@ -28135,6 +28142,15 @@ async function checkNewLeads() {
   // Skip polling while the user is actively typing on the dialpad — the
   // tiny background fetch + DOM updates were causing keystroke lag.
   if (location.hash === '#/dialer' && _dialerState && _dialerState.tab === 'pad') return;
+  // SILENT_POLL_v1 (2026-05-29) — persist the baseline across page
+  // reloads and WebView resumes. Otherwise the WebView restart resets
+  // CRM._lastSeenLeadId to undefined, and every 30s the same lead keeps
+  // being detected as "new" and the popup repeats forever.
+  const _baselineKey = 'crm_lastSeenLeadId';
+  if (!CRM._lastSeenLeadId) {
+    const stored = Number(localStorage.getItem(_baselineKey) || 0);
+    if (stored) CRM._lastSeenLeadId = stored;
+  }
   try {
     const d = await api('api_leads_list', { limit: 5 });
     const leads = (d && (d.leads || d)) || [];
@@ -28144,6 +28160,7 @@ async function checkNewLeads() {
     if (!baseline) {
       // First poll — set baseline silently
       CRM._lastSeenLeadId = newest;
+      try { localStorage.setItem(_baselineKey, String(newest)); } catch (_) {}
       return;
     }
     if (newest > baseline) {
@@ -28151,7 +28168,32 @@ async function checkNewLeads() {
         .filter(l => Number(l.id) > baseline)
         .sort((a, b) => Number(a.id) - Number(b.id));
       CRM._lastSeenLeadId = newest;
+      try { localStorage.setItem(_baselineKey, String(newest)); } catch (_) {}
       if (fresh.length === 0) return;
+      // SILENT_POLL_v1 — belt-and-suspenders: if the same lead id has
+      // been popped up in the last 60 minutes, skip. Stops the popup
+      // from re-firing if some other code path resets the baseline.
+      const _shownKey = 'crm_newLeadShown';
+      let shown = {};
+      try { shown = JSON.parse(localStorage.getItem(_shownKey) || '{}'); } catch (_) { shown = {}; }
+      const now = Date.now();
+      // expire entries older than 60 min
+      Object.keys(shown).forEach(k => { if (now - shown[k] > 60 * 60 * 1000) delete shown[k]; });
+      const reallyFresh = fresh.filter(l => !shown[String(l.id)]);
+      if (reallyFresh.length === 0) {
+        try { localStorage.setItem(_shownKey, JSON.stringify(shown)); } catch (_) {}
+        return;
+      }
+      reallyFresh.forEach(l => { shown[String(l.id)] = now; });
+      try { localStorage.setItem(_shownKey, JSON.stringify(shown)); } catch (_) {}
+      // The rest of the code already uses `fresh`; rebind it so only
+      // truly-fresh leads bubble through to toast / notification / popup.
+      const _origFresh = fresh;
+      // eslint-disable-next-line no-func-assign
+      var fresh_filtered = reallyFresh;
+      // re-assign by reassigning the outer `fresh` slot:
+      Object.assign(fresh, { length: 0 });
+      reallyFresh.forEach(x => fresh.push(x));
       // Show toast + system notification (if granted) + in-app popup
       const summary = fresh.length === 1
         ? `🎯 New lead: ${fresh[0].name || fresh[0].phone || 'Unknown'}`
