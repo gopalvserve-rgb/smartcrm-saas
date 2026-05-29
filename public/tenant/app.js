@@ -1664,6 +1664,22 @@ function showMobileMore() {
         ...NAV.filter(item => {
           if (item.roles && !item.roles.includes(CRM.user.role)) return false;
           if (item.id === 'teamchat' && CRM.access && CRM.access.can_chat === false) return false;
+          // PACK_MENU_MOBILE_v1 (2026-05-29) — mirror the sidebar's
+          // requiresPack gate. Without this, Education and Real Estate
+          // pack items (Fee Collection, Students, Courses, Inventory Board,
+          // Site Visits, Commissions, etc.) showed in the mobile More
+          // menu on Generic tenants. Now: same rule as the desktop
+          // sidebar — only show pack items when the pack is installed.
+          if (item.requiresPack) {
+            const installed = (CRM.installedPacks instanceof Set) ? CRM.installedPacks : new Set();
+            if (!installed.has(item.requiresPack)) return false;
+          }
+          // Also honor admin-hidden nav items (Settings -> Menu visibility)
+          try {
+            const hiddenIds = String(CRM.config.hidden_nav_ids || 'newleads,overdue,duetoday,upcoming,dialer')
+              .split(',').map(x => x.trim()).filter(Boolean);
+            if (hiddenIds.includes(item.id)) return false;
+          } catch (_) {}
           return true;
         }).map(item =>
           h('a', { href: '#/' + item.id, class: 'menu-tile', onclick: () => sheet.remove() },
