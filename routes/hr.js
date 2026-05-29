@@ -1343,6 +1343,11 @@ async function api_reimburse_monthly(token, userId, month) {
 
 // Admin / manager view — every user in scope for the month
 async function api_reimburse_teamMonth(token, month) {
+  // REIMBURSE_PERF_v1.1 (2026-05-29) — batched. The v1 loop fired
+  // api_reimburse_monthly per user, each doing its own attendance +
+  // pings round-trip + auth check. On a 30-person team that was 60+
+  // queries per page load. Now: 3 queries total (attendance, pings,
+  // users) + in-memory aggregation.
   const me = await authUser(token);
   if (!['admin', 'manager', 'team_leader'].includes(me.role)) throw new Error('Admin / manager only');
   const visible = await getVisibleUserIds(me);
@@ -1355,21 +1360,83 @@ async function api_reimburse_teamMonth(token, month) {
   const rate = Number(perKmStr) || 0;
   const enabled = String(enabledStr) === '1';
 
-  const out = [];
-  for (const uid of userIds) {
-    try {
-      const r = await api_reimburse_monthly(token, uid, ym);
-      if (r.user) out.push({
-        user_id: r.user.id,
-        user_name: r.user.name,
-        total_km: r.total_km,
-        total_amount: r.total_amount,
-        paid: r.paid
-      });
-    } catch (_) { /* skip — likely forbidden for one user */ }
+  if (!enabled || !userIds.length) {
+    return { enabled, per_km: rate, month: ym, rows: [] };
   }
-  out.sort((a, b) => (b.total_amount || 0) - (a.total_amount || 0));
-  return { enabled, per_km: rate, month: ym, rows: out };
+
+  // 1 query for all attendance rows in scope for the month
+  const attRes = await db.query(
+    `SELECT id, user_id, date, check_in, check_in_lat, check_in_lng
+       FROM attendance
+      WHERE user_id = ANY($1::int[])
+        AND TO_CHAR(date, 'YYYY-MM') = $2`,
+    [userIds, ym]
+  );
+  const atts = attRes.rows;
+  if (!atts.length) {
+    const usersRes = await db.query('SELECT id, name FROM users WHERE id = ANY($1::int[])', [userIds]);
+    return { enabled, per_km: rate, month: ym, rows: usersRes.rows.map(u => ({
+      user_id: u.id, user_name: u.name, total_km: 0, total_amount: 0, paid: false
+    })).sort((a, b) => a.user_name.localeCompare(b.user_name)) };
+  }
+  const attIds = atts.map(a => a.id);
+
+  // 1 query for ALL pings in the month across the whole team
+  const pingsRes = await db.query(
+    `SELECT attendance_id, lat, lng, created_at, location_name
+       FROM location_pings WHERE attendance_id = ANY($1::int[])
+       ORDER BY attendance_id, created_at ASC`,
+    [attIds]
+  );
+  const pingsByAtt = {};
+  pingsRes.rows.forEach(r => {
+    const aid = Number(r.attendance_id);
+    if (!pingsByAtt[aid]) pingsByAtt[aid] = [];
+    pingsByAtt[aid].push(r);
+  });
+
+  // 1 query for user names
+  const usersRes = await db.query('SELECT id, name FROM users WHERE id = ANY($1::int[])', [userIds]);
+  const userById = {};
+  usersRes.rows.forEach(u => { userById[Number(u.id)] = u; });
+
+  // 1 query for paid flags (config keys), batched
+  const paidKeys = userIds.map(uid => 'REIMBURSEMENT_PAID:' + uid + ':' + ym);
+  let paidByUser = {};
+  try {
+    const paidRes = await db.query(
+      'SELECT key, value FROM config WHERE key = ANY($1::text[])',
+      [paidKeys]
+    );
+    paidRes.rows.forEach(r => {
+      const m = String(r.key).match(/^REIMBURSEMENT_PAID:(\d+):/);
+      if (m) paidByUser[Number(m[1])] = String(r.value) === '1';
+    });
+  } catch (_) { /* config table shape may vary; fall back to false */ }
+
+  // Aggregate per user in memory
+  const totalsByUser = {};
+  userIds.forEach(uid => { totalsByUser[uid] = { km: 0 }; });
+  atts.forEach(a => {
+    const pings = pingsByAtt[Number(a.id)] || [];
+    const { metrics } = _trkComputeHaltsAndKm(pings, a.check_in, a.check_in_lat, a.check_in_lng);
+    totalsByUser[Number(a.user_id)].km += metrics.total_km;
+  });
+
+  const rows = userIds.map(uid => {
+    const u = userById[uid];
+    if (!u) return null;
+    const km = Number((totalsByUser[uid].km || 0).toFixed(2));
+    return {
+      user_id: u.id,
+      user_name: u.name,
+      total_km: km,
+      total_amount: Number((km * rate).toFixed(2)),
+      paid: !!paidByUser[uid]
+    };
+  }).filter(Boolean);
+  rows.sort((a, b) => (b.total_amount || 0) - (a.total_amount || 0));
+  return { enabled, per_km: rate, month: ym, rows };
 }
 
 // Admin marks a (user, month) row as paid — toggle.
