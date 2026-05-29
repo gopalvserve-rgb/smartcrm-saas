@@ -134,41 +134,70 @@ class PermissionOnboardingActivity : AppCompatActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQ_PICK_FOLDER) {
-            // PERM_FOLDER_PERSIST_FIX_v1 — Always save the URI to prefs as soon
-            // as we have one, even if takePersistableUriPermission throws.
-            // The persistable-permission call fails on some Android 11+ SD-card
-            // URIs but the URI is still usable for the current process and the
-            // SharedPreference write is what the UI's checkGranted reads. Without
-            // this, the card stays stuck in "not done" even after the user
-            // successfully picked the folder.
+            // REC_FOLDER_PERSIST_v2 (2026-05-29) — proper persist-or-fail.
+            //
+            // Previous PERM_FOLDER_PERSIST_FIX_v1 saved the URI to prefs FIRST
+            // and only then tried takePersistableUriPermission. That made the
+            // ✓ Done badge appear immediately, BUT if takePersistableUriPermission
+            // silently failed (common on SD-card / scoped-storage / OEM-quirk
+            // folders), the URI was only valid for the current process. The
+            // moment Android killed the app and WorkManager started a fresh
+            // background process, DocumentFile.fromTreeUri(uri).canRead()
+            // returned false — worker exited with "folder unreachable" and
+            // sync stopped until the user re-picked. Endless loop.
+            //
+            // Fix: take the persistable permission FIRST. Only save to prefs
+            // (and show ✓ Done) if it succeeded. If persistable-permission
+            // fails, surface a clear toast asking the user to pick a folder
+            // under Internal Storage (where Android always allows persist).
             if (resultCode == Activity.RESULT_OK) {
                 val uri = data?.data
-                if (uri != null) {
-                    // Step 1: save the URI to prefs FIRST — this is what the
-                    // card's checkGranted reads to flip to ✓ Done.
-                    try {
-                        getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                            .putString(KEY_REC_FOLDER, uri.toString()).apply()
-                    } catch (e: Exception) {
-                        Log.e(TAG, "save uri to prefs: ${e.message}")
-                    }
-                    // Step 2: best-effort persistable permission. If this fails,
-                    // the URI may not survive a reboot, but the card status is
-                    // already correct.
-                    try {
-                        val flags = (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-                        contentResolver.takePersistableUriPermission(uri, flags)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "takePersistableUriPermission failed (URI still saved): ${e.message}")
-                    }
-                    android.widget.Toast.makeText(this,
-                        "✓ Recording folder selected",
-                        android.widget.Toast.LENGTH_SHORT).show()
-                } else {
+                if (uri == null) {
                     Log.w(TAG, "REQ_PICK_FOLDER RESULT_OK but data?.data is null")
                     android.widget.Toast.makeText(this,
                         "Couldn’t read folder — please try again",
                         android.widget.Toast.LENGTH_SHORT).show()
+                } else {
+                    // Step 1 (CRITICAL): take persistable permission FIRST.
+                    var persisted = false
+                    try {
+                        val intentFlags = data?.flags ?: 0
+                        val keepFlags = intentFlags and
+                            (Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                             Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                        val flags = if (keepFlags != 0) keepFlags
+                                    else Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        contentResolver.takePersistableUriPermission(uri, flags)
+                        persisted = true
+                    } catch (e: Exception) {
+                        Log.w(TAG, "takePersistableUriPermission failed: ${e.message}")
+                    }
+                    if (persisted) {
+                        // Step 2: now safe to save — worker will be able to
+                        // re-open this URI across process restarts / device reboots.
+                        try {
+                            getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                                .putString(KEY_REC_FOLDER, uri.toString()).apply()
+                        } catch (e: Exception) {
+                            Log.e(TAG, "save uri to prefs: ${e.message}")
+                        }
+                        android.widget.Toast.makeText(this,
+                            "✓ Recording folder saved — sync will keep running",
+                            android.widget.Toast.LENGTH_SHORT).show()
+                    } else {
+                        // Step 2b: refuse to save a URI that won’t survive
+                        // process death. Also clear any stale entry from v1.8
+                        // so the onboarding card honestly shows "not done".
+                        try {
+                            getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                                .remove(KEY_REC_FOLDER).apply()
+                        } catch (_: Exception) {}
+                        android.widget.Toast.makeText(this,
+                            "Android won’t let us save permission for that folder.\n" +
+                            "Please pick a folder under Internal Storage " +
+                            "(not SD card, not Recents).",
+                            android.widget.Toast.LENGTH_LONG).show()
+                    }
                 }
             } else {
                 Log.i(TAG, "REQ_PICK_FOLDER cancelled or returned $resultCode")

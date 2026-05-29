@@ -164,6 +164,10 @@ SELECT * FROM (VALUES
 
   ('fix', 'WhatsApp Inbox — back arrow now returns to the chat list',
    'The ← back button at the top of a WhatsApp Inbox conversation wasn''t doing anything. The list-of-threads renderer had a flicker-prevention optimization that early-returned when the cached signature hadn''t changed — and opening a thread doesn''t change the signature, so it stayed cached and the renderer never repainted on the way back. The back button now clears the cached signature and the thread view before re-rendering, so it actually slides you back to the inbox list.',
-   '#/dashboard', '↩️', NOW())
+   '#/dashboard', '↩️', NOW()),
+
+  ('fix', 'Recording sync — APK v1.9 fixes the "sync stops after a while" loop',
+   'Employees were reporting recording sync would work right after picking the folder, then stop a few minutes later until they re-picked. Root cause: yesterday''s v1.8 fix (PERM_FOLDER_PERSIST_FIX_v1) saved the folder URI to prefs BEFORE trying to take a persistable permission. If the persistable-permission call silently failed (common on SD-card / scoped-storage / OEM-quirk folders), the URI was only valid for the current process. The moment Android killed the app and the background WorkManager spawned a fresh process, the folder couldn''t be re-opened and the worker exited. v1.9 inverts the order: take the persistable permission FIRST, save to prefs only if it succeeded. If it failed, show a clear toast telling the employee to pick a folder under Internal Storage (not SD card / not Recents). The background worker also self-heals — if it ever finds a stale unreachable URI in prefs, it clears it so the onboarding card honestly shows "not done" instead of pretending everything is fine.',
+   '#/admin', '🎙', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);

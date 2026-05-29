@@ -116,13 +116,24 @@ class RecordingsBackgroundSyncWorker(
         }
         val dir = DocumentFile.fromTreeUri(ctx, tree)
         if (dir == null || !dir.exists() || !dir.canRead()) {
-            Log.w(TAG, "folder unreachable — user may have revoked SAF permission")
+            // REC_FOLDER_PERSIST_v2 — self-heal. The URI in prefs was either
+            // never persistable (v1.8 bug) or its permission was revoked.
+            // Clear the prefs entry so the onboarding card flips back to
+            // "not done" and the next time the user opens the app they see
+            // the "Recording folder needed" banner. Without this clear,
+            // checkGranted() keeps lying about ✓ Done forever.
+            Log.w(TAG, "folder unreachable — clearing stale prefs so user is re-prompted")
+            try {
+                prefs.edit().remove(KEY_FOLDER_URI).apply()
+            } catch (e: Exception) {
+                Log.e(TAG, "failed to clear stale folder uri: ${e.message}")
+            }
             pingDiagSafe(baseUrl, token, mapOf(
                 "trigger" to trigger,
                 "phase" to "early-exit",
                 "has_folder" to true,
                 "folder_readable" to false,
-                "note" to "folder-unreachable-or-revoked"
+                "note" to "folder-unreachable-cleared-stale-pref"
             ))
             return Result.success()
         }
