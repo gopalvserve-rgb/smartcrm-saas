@@ -7652,8 +7652,44 @@ function ratingStars(recId, currentRating, aiRating, onChange) {
   return wrap;
 }
 
+// AI_SUMMARY_DESKTOP_ONLY_v1 (2026-05-29) — APK detection.
+// On the Android app, mobile reps are MAKING calls, not reviewing them
+// in CRM. The AI Summary panel was polling api_recording_aiSummary every
+// 10s up to 18 times PER recording rendered, which (a) hammered the
+// postgres pool and (b) blew through Gemini quota for an audience that
+// doesn't read these summaries anyway. Reviews happen at desk on web.
+// On APK: skip the polling entirely, still render the Rate-this-call
+// row (so the rep can rate from phone), and show a tiny "View on desktop"
+// hint. Server-side worker still processes the recording in background,
+// so when the user opens it on web later the summary is ready instantly.
+function _isApkForAiSummary() {
+  try {
+    if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return true;
+  } catch (_) {}
+  try {
+    if (window.Capacitor) return true;
+    if (/Capacitor|wv\)/i.test(navigator.userAgent || '')) return true;
+  } catch (_) {}
+  return false;
+}
+
 async function loadRecordingAI(recId, container, retries) {
   retries = retries || 0;
+  // AI_SUMMARY_DESKTOP_ONLY_v1 — bail early on the mobile app. Render the
+  // rate-this-call stars (no API call needed — recId is enough) plus a
+  // discreet hint pointing the rep to the desktop.
+  if (_isApkForAiSummary()) {
+    try {
+      container.innerHTML = '';
+      container.appendChild(h('div', { class: 'rating-row' },
+        h('span', { class: 'rating-label' }, 'Rate this call:'),
+        ratingStars(recId, null, null)
+      ));
+      container.appendChild(h('div', { class: 'ai-pending muted', style: 'font-size:.72rem;margin-top:.4rem;color:#64748b' },
+        '🖥 AI summary is available on desktop only'));
+    } catch (_) {}
+    return;
+  }
   try {
     const r = await api('api_recording_aiSummary', recId);
     if (!r || r.status === 'pending') {

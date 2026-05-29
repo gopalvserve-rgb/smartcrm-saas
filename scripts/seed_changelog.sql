@@ -176,6 +176,10 @@ SELECT * FROM (VALUES
 
   ('fix', 'Performance — 14.7s WhatsApp unread-counter rewritten + pool freed',
    'The badge on the WhatsApp icon (and the bell-icon poll on every page navigation) was running api_chat_unreadCount which loaded EVERY row from chat_rooms + chat_room_members + chat_messages on every call, then filtered in JavaScript. On a busy tenant this averaged 14.7 seconds and stalled the entire postgres pool — every other API (recordings AI summary, leads list, notifications, IVR) waited behind it. Rewrote as a single indexed COUNT query that runs in under 50 ms even on tenants with 100K+ messages. Recording AI summary calls that previously took 5–10 seconds should now return in under 100 ms because they are not queueing behind chat anymore. Also added two indexes on chat_messages(room_id, created_at) and chat_room_members(user_id) for good measure.',
-   '#/admin', '⚡', NOW())
+   '#/admin', '⚡', NOW()),
+
+  ('fix', 'AI Call Summary — desktop only, skipped on mobile app',
+   'The 🤖 AI Summary panel was polling the server every 10 seconds up to 18 times for EVERY recording rendered, even on the Android app where reps almost never read summaries (they are out making calls). On a busy session the APK was generating 150+ polls in a few minutes, hammering the database pool and burning Gemini quota for an audience that does not use the feature. From now on the panel is desktop-only. On the Android app you will still see "Rate this call" stars (so reps can flag good or bad calls from the phone) plus a small note that AI summary is on desktop. The server-side worker keeps processing recordings in the background, so when you open the same call on desktop later the summary is already ready — no waiting.',
+   '#/recordings', '🖥', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
