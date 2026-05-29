@@ -1235,6 +1235,153 @@ async function api_tracking_teamLive(token) {
   });
 }
 
+
+// ============================================================
+// REIMBURSE_v1 (2026-05-29) — per-km travel reimbursement
+// ============================================================
+// Admin configures REIMBURSEMENT_PER_KM (e.g. '1.5'); the system
+// converts the existing location-ping data into a monthly cash amount.
+// Employee can see their own monthly reimbursement under Salary →
+// Travel reimbursement; admin sees the whole team. No double-dip — the
+// computation is purely derived from location_pings + attendance, so
+// once an employee checks in and uses the app, the amount accumulates
+// automatically. Admin marks the row 'paid' to track payouts (stored
+// in a tiny key/value config so we don't need yet another table).
+
+async function api_reimburse_policy(token) {
+  await authUser(token);
+  const [perKm, enabled] = await Promise.all([
+    db.getConfig('REIMBURSEMENT_PER_KM', '0'),
+    db.getConfig('REIMBURSEMENT_ENABLED', '0')
+  ]);
+  return {
+    per_km: Number(perKm) || 0,
+    enabled: String(enabled) === '1'
+  };
+}
+
+async function api_reimburse_policy_save(token, payload) {
+  const me = await authUser(token);
+  if (me.role !== 'admin') throw new Error('Admin only');
+  const p = payload || {};
+  const rate = Number(p.per_km);
+  if (!Number.isFinite(rate) || rate < 0 || rate > 9999) throw new Error('Rate must be between 0 and 9999');
+  await db.setConfig('REIMBURSEMENT_PER_KM', String(rate));
+  await db.setConfig('REIMBURSEMENT_ENABLED', p.enabled ? '1' : '0');
+  return { ok: true };
+}
+
+// Returns the per-day km breakdown for one user + month, the running
+// total, and the cash reimbursement at the configured rate.
+async function api_reimburse_monthly(token, userId, month) {
+  const me = await authUser(token);
+  const uid = Number(userId) || me.id;
+  if (uid !== Number(me.id)) {
+    if (!['admin', 'manager', 'team_leader'].includes(me.role)) throw new Error('Forbidden');
+    const visible = await getVisibleUserIds(me);
+    if (me.role !== 'admin' && !visible.includes(uid)) throw new Error('Forbidden');
+  }
+  const ym = String(month || (new Date().toISOString().slice(0, 7))).slice(0, 7);
+  const [perKmStr, enabledStr] = await Promise.all([
+    db.getConfig('REIMBURSEMENT_PER_KM', '0'),
+    db.getConfig('REIMBURSEMENT_ENABLED', '0')
+  ]);
+  const rate = Number(perKmStr) || 0;
+  const enabled = String(enabledStr) === '1';
+
+  // Attendance + pings for this user in this month
+  const attRes = await db.query(
+    `SELECT id, date, check_in, check_out, check_in_lat, check_in_lng
+       FROM attendance
+      WHERE user_id = $1
+        AND TO_CHAR(date, 'YYYY-MM') = $2
+      ORDER BY date ASC`,
+    [uid, ym]
+  );
+  const atts = attRes.rows;
+  if (!atts.length) {
+    const userRow = (await db.query('SELECT id, name FROM users WHERE id = $1', [uid])).rows[0] || null;
+    return {
+      enabled, per_km: rate, user: userRow, month: ym,
+      days: [], total_km: 0, total_amount: 0, paid: false
+    };
+  }
+  const attIds = atts.map(a => a.id);
+  const pingsRes = await db.query(
+    `SELECT attendance_id, lat, lng, created_at, location_name
+       FROM location_pings WHERE attendance_id = ANY($1::int[])
+       ORDER BY attendance_id, created_at ASC`,
+    [attIds]
+  );
+  const groupedByAtt = {};
+  pingsRes.rows.forEach(r => {
+    const aid = Number(r.attendance_id);
+    if (!groupedByAtt[aid]) groupedByAtt[aid] = [];
+    groupedByAtt[aid].push(r);
+  });
+
+  const days = atts.map(a => {
+    const pings = groupedByAtt[Number(a.id)] || [];
+    const { metrics } = _trkComputeHaltsAndKm(pings, a.check_in, a.check_in_lat, a.check_in_lng);
+    return {
+      date: String(a.date).slice(0, 10),
+      km: metrics.total_km,
+      drive_km: metrics.drive_km,
+      amount: Number((metrics.total_km * rate).toFixed(2))
+    };
+  });
+  const total_km = Number(days.reduce((s, d) => s + d.km, 0).toFixed(2));
+  const total_amount = Number(days.reduce((s, d) => s + d.amount, 0).toFixed(2));
+
+  // Paid marker (stored as config key, idempotent)
+  const paidKey = 'REIMBURSEMENT_PAID:' + uid + ':' + ym;
+  const paid = String(await db.getConfig(paidKey, '0')) === '1';
+
+  const userRow = (await db.query('SELECT id, name FROM users WHERE id = $1', [uid])).rows[0] || null;
+  return { enabled, per_km: rate, user: userRow, month: ym, days, total_km, total_amount, paid };
+}
+
+// Admin / manager view — every user in scope for the month
+async function api_reimburse_teamMonth(token, month) {
+  const me = await authUser(token);
+  if (!['admin', 'manager', 'team_leader'].includes(me.role)) throw new Error('Admin / manager only');
+  const visible = await getVisibleUserIds(me);
+  const userIds = visible && visible.length ? visible : [me.id];
+  const ym = String(month || (new Date().toISOString().slice(0, 7))).slice(0, 7);
+  const [perKmStr, enabledStr] = await Promise.all([
+    db.getConfig('REIMBURSEMENT_PER_KM', '0'),
+    db.getConfig('REIMBURSEMENT_ENABLED', '0')
+  ]);
+  const rate = Number(perKmStr) || 0;
+  const enabled = String(enabledStr) === '1';
+
+  const out = [];
+  for (const uid of userIds) {
+    try {
+      const r = await api_reimburse_monthly(token, uid, ym);
+      if (r.user) out.push({
+        user_id: r.user.id,
+        user_name: r.user.name,
+        total_km: r.total_km,
+        total_amount: r.total_amount,
+        paid: r.paid
+      });
+    } catch (_) { /* skip — likely forbidden for one user */ }
+  }
+  out.sort((a, b) => (b.total_amount || 0) - (a.total_amount || 0));
+  return { enabled, per_km: rate, month: ym, rows: out };
+}
+
+// Admin marks a (user, month) row as paid — toggle.
+async function api_reimburse_markPaid(token, userId, month, paid) {
+  const me = await authUser(token);
+  if (me.role !== 'admin') throw new Error('Admin only');
+  const ym = String(month || '').slice(0, 7);
+  if (!ym || !userId) throw new Error('userId + month required');
+  await db.setConfig('REIMBURSEMENT_PAID:' + Number(userId) + ':' + ym, paid ? '1' : '0');
+  return { ok: true };
+}
+
 module.exports = {
   api_attendance_checkIn, api_attendance_checkOut,
   api_attendance_policy, api_attendance_policy_save,
@@ -1245,5 +1392,7 @@ module.exports = {
   api_salary_bulkSave, api_salary_report, api_salary_payslip,
   api_bank_mine, api_bank_save, api_bank_list,
   api_location_ping, api_location_trail,
-  api_tracking_dayTrail, api_tracking_teamLive
+  api_tracking_dayTrail, api_tracking_teamLive,
+  api_reimburse_policy, api_reimburse_policy_save,
+  api_reimburse_monthly, api_reimburse_teamMonth, api_reimburse_markPaid
 };

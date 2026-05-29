@@ -1318,7 +1318,7 @@ const NAV_GROUPS = [
   { label: 'HR & Me', icon: '🕒', items: [
     { id: 'tasks',      label: 'Tasks',      icon: '✅' },
     { id: 'attendance', label: 'Attendance', icon: '🕒' },
-    { id: 'tracking',   label: 'Location tracking', icon: '🗺️', roles: ['admin','manager','team_leader'] },
+    { id: 'tracking',   label: 'Location tracking', icon: '🗺️' },
     { id: 'leaves',     label: 'Leaves',     icon: '🏖️' },
     { id: 'salary',     label: 'Salary',     icon: '💰' },
     { id: 'bank',       label: 'Bank',       icon: '🏦' }
@@ -24563,21 +24563,22 @@ async function openTaskModal() {
 VIEWS.tracking = async (view) => {
   view.innerHTML = '';
   const isAdmin = ['admin','manager','team_leader'].includes(CRM.user.role);
-  if (!isAdmin) {
-    view.appendChild(h('div', { class: 'empty-state' }, 'Location Tracking is available for admins, managers and team leaders.'));
-    return;
-  }
-  const tabs = [
+  const tabs = isAdmin ? [
     { id: 'live',  label: '📍 Live team map' },
     { id: 'trail', label: '🛣 Day trail' },
+    { id: 'reimb', label: '💰 Reimbursement' },
+    { id: 'about', label: 'ℹ️ About' }
+  ] : [
+    { id: 'reimb', label: '💰 My travel reimbursement' },
     { id: 'about', label: 'ℹ️ About' }
   ];
+  const defaultTabId = tabs[0].id;
   const nav = h('div', { class: 'subtabs' },
-    ...tabs.map(t => h('button', { class: 'subtab' + (t.id === 'live' ? ' active' : ''),
+    ...tabs.map(t => h('button', { class: 'subtab' + (t.id === defaultTabId ? ' active' : ''),
       onclick: ev => showTrackTab(ev, t.id) }, t.label))
   );
   view.append(nav, h('div', { id: 'trk-body' }));
-  showTrackTab(null, 'live');
+  showTrackTab(null, defaultTabId);
 };
 async function showTrackTab(ev, id) {
   if (ev) { $$('.subtab').forEach(b => b.classList.remove('active')); ev.target.classList.add('active'); }
@@ -24585,7 +24586,205 @@ async function showTrackTab(ev, id) {
   body.innerHTML = '<div class="loading">…</div>';
   if (id === 'live')  body.replaceChildren(await renderLiveTeamMap());
   if (id === 'trail') body.replaceChildren(await renderDayTrailPicker());
+  if (id === 'reimb') body.replaceChildren(await renderReimbursement());
   if (id === 'about') body.replaceChildren(renderTrackingAbout());
+}
+
+
+async function renderReimbursement() {
+  const isAdmin = CRM.user.role === 'admin';
+  const isMgr = ['admin','manager','team_leader'].includes(CRM.user.role);
+  const policy = await api('api_reimburse_policy').catch(() => ({ enabled: false, per_km: 0 }));
+  const month = new Date().toISOString().slice(0, 7);
+
+  const wrap = h('div', {});
+
+  // ---- Policy card (admin only) ----
+  if (isAdmin) {
+    const enabledCb = h('input', { type: 'checkbox' });
+    if (policy.enabled) enabledCb.checked = true;
+    const rateInp = h('input', { type: 'number', step: '0.1', min: '0',
+      style: 'width:120px;padding:.4rem;border:1px solid #cbd5e1;border-radius:6px',
+      value: String(policy.per_km || '') });
+    const policyCard = h('div', { class: 'settings-card', style: 'max-width:560px;margin-bottom:1rem' },
+      h('h4', { style: 'margin-top:0' }, '⚙️ Travel reimbursement settings (admin)'),
+      h('label', { style: 'display:flex;align-items:center;gap:.5rem;padding:.4rem 0' },
+        enabledCb,
+        h('span', {}, 'Enable per-km travel reimbursement')
+      ),
+      h('div', { style: 'margin:.4rem 0' },
+        h('label', { class: 'muted', style: 'font-size:.78rem' }, 'Rate per kilometre (₹)'),
+        h('div', { style: 'display:flex;gap:.4rem;align-items:center;margin-top:.2rem' },
+          h('span', {}, '₹'),
+          rateInp,
+          h('span', { class: 'muted', style: 'font-size:.78rem' }, '/ km')
+        )
+      ),
+      h('div', { class: 'muted', style: 'font-size:.76rem' },
+        'Example: at ₹1/km, an employee who drives 35 km on Mon + 22 km on Tue earns ₹57. '
+        + 'The km figure comes from the same GPS pings used on the Day Trail tab.'),
+      h('div', { style: 'margin-top:.6rem;text-align:right' },
+        h('button', { class: 'btn primary', onclick: async (ev) => {
+          ev.target.disabled = true; ev.target.textContent = 'Saving…';
+          try {
+            await api('api_reimburse_policy_save', { per_km: Number(rateInp.value)||0, enabled: !!enabledCb.checked });
+            toast('Reimbursement policy saved');
+            showTrackTab(null, 'reimb');
+          } catch (e) { toast(e.message, 'err'); }
+          ev.target.disabled = false; ev.target.textContent = '💾 Save';
+        } }, '💾 Save')
+      )
+    );
+    wrap.appendChild(policyCard);
+  }
+
+  if (!policy.enabled) {
+    wrap.appendChild(h('div', { class: 'muted', style: 'padding:1rem;background:#fef3c7;border-left:3px solid #f59e0b;border-radius:6px' },
+      isAdmin
+        ? 'ℹ️ Reimbursement is currently OFF. Turn it on above and set a per-km rate to see calculated amounts.'
+        : '⏳ Your admin has not enabled travel reimbursement yet. Check back later.'));
+    return wrap;
+  }
+
+  // ---- View toggles ----
+  const monthInp = h('input', { type: 'month', value: month, style: 'margin-left:.4rem' });
+  const userSel = isMgr ? h('select', { style: 'margin-left:.4rem;min-width:160px' },
+    h('option', { value: '' }, '— All team —'),
+    ...((CRM.cache.users || []).filter(u => u.is_active !== 0).map(u => h('option', { value: u.id }, u.name)))
+  ) : null;
+
+  const out = h('div', { style: 'margin-top:.7rem' });
+  async function load() {
+    out.innerHTML = '<div class="loading">…</div>';
+    try {
+      const ym = monthInp.value || month;
+      const uid = userSel ? userSel.value : '';
+      if (uid) {
+        const r = await api('api_reimburse_monthly', Number(uid), ym);
+        out.innerHTML = '';
+        out.appendChild(renderReimbUserCard(r, isAdmin));
+      } else if (isMgr) {
+        const team = await api('api_reimburse_teamMonth', ym);
+        out.innerHTML = '';
+        out.appendChild(renderReimbTeamTable(team, isAdmin));
+      } else {
+        // Sales user — just their own
+        const r = await api('api_reimburse_monthly', CRM.user.id, ym);
+        out.innerHTML = '';
+        out.appendChild(renderReimbUserCard(r, false));
+      }
+    } catch (e) {
+      out.innerHTML = '';
+      out.appendChild(h('div', { class: 'error-box' }, e.message));
+    }
+  }
+  monthInp.addEventListener('change', load);
+  if (userSel) userSel.addEventListener('change', load);
+
+  const toolbar = h('div', { class: 'toolbar' },
+    h('label', {}, 'Month'), monthInp
+  );
+  if (userSel) { toolbar.append(h('label', {}, 'Employee'), userSel); }
+  toolbar.append(h('button', { class: 'btn primary', onclick: load }, '🔍 Load'));
+
+  wrap.append(toolbar, out);
+  load();
+  return wrap;
+}
+
+function renderReimbUserCard(r, isAdmin) {
+  if (!r.user) return h('div', { class: 'muted' }, 'No data for this user/month.');
+  const wrap = h('div', {});
+  // Summary card
+  wrap.appendChild(h('div', { style: 'background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;border-radius:12px;padding:1rem;margin-bottom:.7rem' },
+    h('div', { style: 'font-size:.75rem;opacity:.85;letter-spacing:.02em' }, (r.user.name || '') + ' · ' + r.month),
+    h('div', { style: 'display:grid;grid-template-columns:repeat(3,1fr);gap:.5rem;margin-top:.4rem' },
+      h('div', {}, h('div', { style: 'font-size:.65rem;opacity:.7' }, 'TOTAL KM'),
+        h('div', { style: 'font-size:1.8rem;font-weight:700' }, (r.total_km || 0) + ' km')),
+      h('div', {}, h('div', { style: 'font-size:.65rem;opacity:.7' }, 'RATE'),
+        h('div', { style: 'font-size:1.8rem;font-weight:700' }, '₹' + (r.per_km || 0))),
+      h('div', {}, h('div', { style: 'font-size:.65rem;opacity:.7' }, 'AMOUNT'),
+        h('div', { style: 'font-size:1.8rem;font-weight:700' }, '₹' + (r.total_amount || 0).toLocaleString('en-IN'))),
+    ),
+    h('div', { style: 'margin-top:.5rem;font-size:.78rem;opacity:.9' },
+      r.paid ? '✅ Marked as paid' : '⏳ Pending payment'),
+    isAdmin ? h('div', { style: 'margin-top:.6rem' },
+      h('button', { class: 'btn', style: 'background:#fff;color:#4f46e5;font-weight:600',
+        onclick: async (ev) => {
+          ev.target.disabled = true;
+          try {
+            await api('api_reimburse_markPaid', r.user.id, r.month, !r.paid);
+            toast(!r.paid ? 'Marked as paid' : 'Marked unpaid');
+            showTrackTab(null, 'reimb');
+          } catch (e) { toast(e.message, 'err'); }
+        } }, r.paid ? 'Mark unpaid' : '✅ Mark as paid')
+    ) : null
+  ));
+
+  // Per-day breakdown
+  const days = (r.days || []).filter(d => d.km > 0);
+  if (!days.length) {
+    wrap.appendChild(h('div', { class: 'muted' }, 'No driving recorded in this month.'));
+    return wrap;
+  }
+  wrap.appendChild(h('h4', { style: 'margin:.6rem 0 .3rem' }, '📅 Per-day breakdown'));
+  wrap.appendChild(h('div', { class: 'table-wrap' }, h('table', {},
+    h('thead', {}, h('tr', {},
+      h('th', {}, 'Date'),
+      h('th', {}, 'Total km'),
+      h('th', {}, 'Driving km'),
+      h('th', {}, 'Amount')
+    )),
+    h('tbody', {}, ...days.map(d => h('tr', {},
+      h('td', {}, d.date),
+      h('td', {}, (d.km || 0) + ' km'),
+      h('td', { class: 'muted' }, (d.drive_km || 0) + ' km'),
+      h('td', {}, '₹' + (d.amount || 0).toLocaleString('en-IN'))
+    ))),
+    h('tfoot', {}, h('tr', { style: 'font-weight:700;background:#f1f5f9' },
+      h('td', {}, 'Total'),
+      h('td', {}, (r.total_km || 0) + ' km'),
+      h('td', {}, ''),
+      h('td', {}, '₹' + (r.total_amount || 0).toLocaleString('en-IN'))
+    ))
+  )));
+  return wrap;
+}
+
+function renderReimbTeamTable(team, isAdmin) {
+  const total = team.rows.reduce((s, r) => s + (r.total_amount || 0), 0);
+  return h('div', {},
+    h('div', { style: 'background:#eff6ff;border-radius:10px;padding:.6rem 1rem;margin-bottom:.7rem;display:flex;justify-content:space-between;align-items:center' },
+      h('div', {},
+        h('b', {}, team.month + ' team reimbursement'),
+        h('div', { class: 'muted', style: 'font-size:.78rem' }, 'Rate: ₹' + (team.per_km || 0) + '/km · ' + team.rows.length + ' employees')
+      ),
+      h('div', { style: 'font-size:1.6rem;font-weight:700;color:#4f46e5' }, '₹' + total.toLocaleString('en-IN'))
+    ),
+    h('div', { class: 'table-wrap' }, h('table', {},
+      h('thead', {}, h('tr', {},
+        h('th', {}, 'Employee'),
+        h('th', {}, 'Total km'),
+        h('th', {}, 'Amount'),
+        h('th', {}, 'Status'),
+        h('th', {}, '')
+      )),
+      h('tbody', {}, ...team.rows.map(r => h('tr', {},
+        h('td', {}, h('b', {}, r.user_name)),
+        h('td', {}, (r.total_km || 0) + ' km'),
+        h('td', {}, '₹' + (r.total_amount || 0).toLocaleString('en-IN')),
+        h('td', {}, r.paid ? h('span', { style: 'background:#10b981;color:#fff;padding:2px 8px;border-radius:10px;font-size:.72rem' }, '✅ Paid')
+                            : h('span', { style: 'background:#f59e0b;color:#fff;padding:2px 8px;border-radius:10px;font-size:.72rem' }, '⏳ Pending')),
+        h('td', {}, isAdmin
+          ? h('button', { class: 'btn xs', onclick: async () => {
+              try { await api('api_reimburse_markPaid', r.user_id, team.month, !r.paid);
+                toast(!r.paid ? 'Marked paid' : 'Marked unpaid'); showTrackTab(null, 'reimb');
+              } catch (e) { toast(e.message, 'err'); }
+            } }, r.paid ? 'Mark unpaid' : 'Mark paid')
+          : null)
+      )))
+    ))
+  );
 }
 
 function renderTrackingAbout() {

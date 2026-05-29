@@ -200,6 +200,16 @@ SELECT * FROM (VALUES
 GPS pings now fire every 10 minutes while checked in (was 30 minutes) so the trail has enough resolution for the replay to feel smooth.
 
 ✨ Roadmap coming next: geofence around customer addresses → auto-log "visited lead X" when an employee stops at a known lead location; weekly distance summary email; reimbursement CSV export; idle alerts.',
-   '#/tracking', '🗺️', NOW())
+   '#/tracking', '🗺️', NOW()),
+
+  ('feature', 'Travel reimbursement — auto-calculated from GPS km × admin rate',
+   'New tab on Location tracking → 💰 Reimbursement. Admin sets a per-kilometre rate (e.g. ₹1, ₹1.50, ₹3) and a master ON/OFF toggle. The system then takes the km already computed for the Day Trail and multiplies by the rate to give a cash amount per day, per employee, per month.
+
+For admins / managers: a team table for the chosen month showing each employee''s total km and amount, sorted highest first, plus a total payable across the team. Click a row to drill into that employee''s per-day breakdown. One-click "Mark as paid" toggle records who you have already paid out for the month.
+
+For employees (sales / regular users): a personal dashboard showing their own total km, the rate, the amount they have earned this month, and a day-by-day breakdown so they can verify each day was tracked correctly. Cannot edit, cannot mark paid — view only.
+
+No new schema. Reuses the existing location_pings + attendance tables. Zero double-counting — the same haversine sum that powers Day Trail powers this number.',
+   '#/tracking', '💰', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
