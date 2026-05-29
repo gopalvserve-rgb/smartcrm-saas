@@ -144,6 +144,10 @@ SELECT * FROM (VALUES
 
   ('feature', 'Performance diagnostics — server-side + auto-upload',
    'Two passive instruments added so we can see slowness WITHOUT the user reporting it. (1) Server side: the tenantApi dispatcher now times every handler. Anything >=1000ms gets logged into Railway as [PERF_SLOW_API] with fn, ms, tenant, user. An in-memory tally is exposed at /api/perf-summary returning the top-20 slowest endpoints and top-20 slowest tenants since the last redeploy. (2) Client side: the SPA now auto-POSTs the diagnostic dump to /api/perf-report once the user hits 3 slow calls or 1 very-slow (>=3s) call in a session, throttled to once per 10 minutes. No tap needed.',
-   '#/dashboard', '📡', NOW())
+   '#/dashboard', '📡', NOW() - INTERVAL '20 minutes'),
+
+  ('fix', 'Automation — Send email on new lead now actually fires',
+   'Automations with the Lead-created event were logging skipped — condition not met for every newly-created lead, even when the rule was Source equals Facebook or Status equals New. Cause: the lead context only had raw IDs (status_id, product_id) while the matcher reads names (status_name, product_name). The matcher now denormalizes IDs into names + merges extra_json so custom-field rules (cf_*) match too. The skipped log line also explains which clause failed and what the actual value was — e.g. skipped — condition not met — failed rule: status eq "New" — actual was "Follow Up".',
+   '#/settings', '⚡', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);

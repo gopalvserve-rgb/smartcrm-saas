@@ -26,10 +26,24 @@ async function fire(event, ctx) {
       a.event === event && Number(a.is_active) === 1
     );
     if (!automations.length) return;
+    // AUTOMATION_LEAD_CREATED_FIX_v1 — enrich the lead with denormalized
+    // names so rule conditions like "status = New", "product = Solar",
+    // "source = Facebook" actually match. Callers (routes/leads.js,
+    // routes/forms.js) pass the raw insert payload which only contains
+    // status_id / product_id — the matcher reads status_name / product_name.
+    // We also merge extra_json so cf_* fields are visible to the matcher.
+    try {
+      if (ctx && ctx.lead) {
+        ctx.lead = await _enrichLead(ctx.lead);
+      }
+    } catch (e) {
+      console.warn('[automations] enrich failed:', e.message);
+    }
     for (const a of automations) {
       try {
         if (!_matchesCondition(a.condition, ctx)) {
-          await _log(a, ctx, 'skipped', 'condition not met');
+          const _why = _whyNotMatched(a.condition, ctx);
+          await _log(a, ctx, 'skipped', 'condition not met' + (_why ? ' — ' + _why : ''));
           continue;
         }
         const recipient = await _resolveRecipient(a, ctx);
@@ -53,6 +67,94 @@ async function fire(event, ctx) {
   } catch (e) {
     console.error('[automations] fire error:', e.message);
   }
+}
+
+// AUTOMATION_LEAD_CREATED_FIX_v1 — denormalize id-only fields into the
+// human-readable names the matcher reads. Also merges extra_json so cf_*
+// keys are visible.
+async function _enrichLead(lead) {
+  if (!lead || typeof lead !== 'object') return lead;
+  const out = Object.assign({}, lead);
+  // Merge extra_json (custom fields land here at insert time).
+  try {
+    if (out.extra_json) {
+      const ex = typeof out.extra_json === 'string'
+        ? JSON.parse(out.extra_json || '{}')
+        : (out.extra_json || {});
+      for (const k of Object.keys(ex || {})) {
+        if (out[k] == null || out[k] === '') out[k] = ex[k];
+      }
+    }
+  } catch (_) {}
+  if (!out.status_name && out.status_id) {
+    try {
+      const row = await db.findById('statuses', out.status_id);
+      if (row) out.status_name = row.name;
+    } catch (_) {}
+  }
+  if (!out.product_name && out.product_id) {
+    try {
+      const row = await db.findById('products', out.product_id);
+      if (row) out.product_name = row.name;
+    } catch (_) {}
+  }
+  if (!out.assigned_name && out.assigned_to) {
+    try {
+      const u = await db.findById('users', out.assigned_to);
+      if (u) out.assigned_name = u.name;
+    } catch (_) {}
+  }
+  return out;
+}
+
+// Diagnostic — explains WHY the condition didn't match (which clause failed,
+// what the actual value was). Shown in the Automation log so admins don't
+// have to guess why "skipped — condition not met" fired.
+function _whyNotMatched(cond, ctx) {
+  if (!cond) return '';
+  const c = String(cond).trim();
+  if (!c) return '';
+  const parts = c.split(/\s*&&\s*/);
+  for (const raw of parts) {
+    const part = String(raw || '').trim();
+    if (!part) continue;
+    let m, op = 'eq';
+    if ((m = part.match(/^([a-zA-Z0-9_]+)\s*!=\s*(.*)$/))) op = 'neq';
+    else if ((m = part.match(/^([a-zA-Z0-9_]+)\s*!~\s*(.*)$/))) op = 'ncontains';
+    else if ((m = part.match(/^([a-zA-Z0-9_]+)\s*!:\s*(.*)$/))) op = 'neq';
+    else if ((m = part.match(/^([a-zA-Z0-9_]+)\s*~\s*(.*)$/))) op = 'contains';
+    else if ((m = part.match(/^([a-zA-Z0-9_]+)\s*=\s*(.*)$/))) op = 'eq';
+    else if ((m = part.match(/^([a-zA-Z0-9_]+)\s*:\s*(.*)$/))) op = 'eq';
+    if (!m) continue;
+    const lhs = m[1].trim();
+    const rhs = String(m[2] || '').trim();
+    let actual;
+    if (lhs.startsWith('tag')) {
+      actual = String(ctx.lead?.tags || '');
+    } else if (lhs === 'status' || lhs === 'status_name') {
+      actual = String(ctx.new_status?.name || ctx.lead?.status_name || '');
+    } else if (lhs === 'source') {
+      actual = String(ctx.lead?.source || '');
+    } else if (lhs === 'product') {
+      actual = String(ctx.lead?.product_name || ctx.lead?.product || '');
+    } else {
+      actual = ctx.lead?.[lhs];
+      if (actual == null) actual = '';
+      actual = String(actual);
+    }
+    const a = actual.toLowerCase();
+    const b = rhs.toLowerCase();
+    let ok = false;
+    if (op === 'eq')        ok = (a === b);
+    else if (op === 'neq')  ok = (a !== b);
+    else if (op === 'contains')  ok = a.includes(b);
+    else if (op === 'ncontains') ok = !a.includes(b);
+    if (!ok) {
+      const shown = actual === '' ? '(empty)' : actual;
+      return 'failed rule: ' + lhs + ' ' + op + ' "' + rhs + '" — actual was "' + shown + '"';
+    }
+  }
+  return '';
 }
 
 // AUTOMATION_RULES_v2_OPS — recognise operators eq / neq / contains / ncontains.
