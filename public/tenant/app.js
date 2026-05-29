@@ -30,7 +30,7 @@ const CRM = {
   config: { company_name: 'Lead CRM', company_logo_url: '', base_url: location.origin },
   cache: {},
   prefs: {
-    columns: JSON.parse(localStorage.getItem('crm_cols') || '["name","phone","source","status","assigned","followup","last_change","remark","created"]'),
+    columns: JSON.parse(localStorage.getItem('crm_cols') || '["name","phone","source","status","stage","assigned","followup","last_change","remark","created"]'),
     filters: JSON.parse(localStorage.getItem('crm_filters') || '{}'),
     showHeader: (function () {
       // LEADS_FILTER_COLLAPSE_v3 — on mobile, default the status-chip
@@ -1259,7 +1259,20 @@ function renderShell() {
   $('#btn-logout').onclick = logout;
   const _btnSec = $('#btn-security'); if (_btnSec) _btnSec.onclick = openSecurityModal;
   $('#btn-notif').onclick = showNotifs;
-  $('#btn-more').onclick = showMobileMore;
+  // SIDEBAR_TOGGLE_v1 — on desktop the ☰ button now collapses/expands the
+  // left sidebar; on mobile it still opens the existing showMobileMore.
+  $('#btn-more').onclick = () => {
+    const isMobile = window.matchMedia && window.matchMedia('(max-width: 780px)').matches;
+    if (isMobile) { showMobileMore(); return; }
+    const collapsed = document.body.classList.toggle('sidebar-collapsed');
+    try { localStorage.setItem('crm_sidebar_collapsed', collapsed ? '1' : '0'); } catch (_) {}
+  };
+  // Restore previous collapse state on load
+  try {
+    if (localStorage.getItem('crm_sidebar_collapsed') === '1') {
+      document.body.classList.add('sidebar-collapsed');
+    }
+  } catch (_) {}
   const _ga = $('#btn-getapp'); if (_ga) _ga.onclick = showGetApp;
 }
 
@@ -2687,6 +2700,21 @@ const LEAD_COLUMNS = [
 
 VIEWS.leads = async (view) => {
   if (!CRM.cache.statuses) await warmCache();
+  // STAGE_COL_AUTOADD_v1 — one-shot: existing users had a saved column list
+  // pre-dating the Stage column, so it wasn't appearing. Inject it once.
+  try {
+    const k = '_leadsStageColInjected_v1';
+    if (!localStorage.getItem(k)) {
+      const cur = Array.isArray(CRM.prefs.columns) ? CRM.prefs.columns.slice() : [];
+      if (cur.length && !cur.includes('stage')) {
+        const at = cur.indexOf('status');
+        if (at >= 0) cur.splice(at + 1, 0, 'stage'); else cur.push('stage');
+        CRM.prefs.columns = cur;
+        try { localStorage.setItem('crm_cols', JSON.stringify(cur)); } catch (_) {}
+      }
+      localStorage.setItem(k, '1');
+    }
+  } catch (_) {}
   const { statuses, sources, users } = CRM.cache;
   // Fetch (or refresh) the distinct-tag list every time the Leads view
   // renders. Cheap (one extra round-trip) and keeps the Tag dropdown

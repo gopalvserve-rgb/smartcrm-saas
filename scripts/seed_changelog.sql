@@ -116,6 +116,14 @@ SELECT * FROM (VALUES
 
   ('feature', 'Leads page — Filter rule button with exclude operators',
    'Added the + Filter rule button to the Leads page toolbar (already present on Reports, Report Builder, Pipeline, TAT, Follow-ups). Click it to build advanced rules with is not equal to, does not contain, is empty, has any value, is not one of, greater than, less than, between — across Name, Phone, Email, WhatsApp, Company, Source, Product, Status, Stage, Tag, City, Notes, Value, Assignee, and every custom field. Multiple rules combine with AND. Rules persist per device in crm.leads.rules.v1.',
-   '#/leads', '🔍', NOW())
+   '#/leads', '🔍', NOW() - INTERVAL '5 minutes'),
+
+  ('fix', 'Stage column now actually showing on Leads page',
+   'Stage column was registered in the column catalog but existing users had a saved column list pre-dating it, so it never appeared. One-shot auto-injects Stage right after Status for every user; new tenants get it in the hard-coded default. Stage column can still be removed from the ☰ Columns picker.',
+   '#/leads', '🚦', NOW() - INTERVAL '3 minutes'),
+
+  ('feature', 'Sidebar collapse / expand toggle on desktop',
+   'The ☰ icon in the topbar now collapses and expands the left sidebar on desktop too (it was mobile-only before). Click to hide the menu and get more horizontal room for the leads table, click again to bring it back. State persists per device in crm_sidebar_collapsed.',
+   '#/dashboard', '⇆', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
