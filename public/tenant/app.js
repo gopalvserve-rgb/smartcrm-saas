@@ -255,8 +255,16 @@ window.crmPerf = (function () {
   function _maybeAutoUpload(ev) {
     _slowSinceUpload++;
     const now = Date.now();
-    const MIN_GAP_MS = 10 * 60 * 1000;  // never more than once per 10 min
-    const trigger = (ev.ms >= VERY_SLOW_MS) || (_slowSinceUpload >= 3);
+    // PERF_HEALTH_DB_PERSIST_v1 — On APK, auto-upload on EVERY slow call,
+    // throttled to once per 60 seconds. Users on phones never tap Send to
+    // support — we have to be proactive. On web, keep the old conservative
+    // behaviour (3 calls or 1 ≥3s call, throttled to 10 min).
+    const isApk = !!(window.Capacitor && (Capacitor.isNativePlatform && Capacitor.isNativePlatform()))
+      || /capacitor|wv\)/i.test(String(navigator.userAgent || ''));
+    const MIN_GAP_MS = isApk ? 60 * 1000 : 10 * 60 * 1000;
+    const trigger = isApk
+      ? (ev.ms >= 1000)
+      : ((ev.ms >= VERY_SLOW_MS) || (_slowSinceUpload >= 3));
     if (!trigger) return;
     if (now - _lastAutoUpload < MIN_GAP_MS) return;
     _lastAutoUpload = now;
@@ -267,8 +275,19 @@ window.crmPerf = (function () {
     try {
       const dump = _buildPerfDump();
       dump.auto = true;
-      fetch('/api/perf-report', { method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify(dump), keepalive: true })
-        .catch(() => {});
+      const _tok = (function(){ try {
+        return CRM.token || (CRM._slug ? localStorage.getItem('crm_token_' + CRM._slug) : null) || localStorage.getItem('crm_token') || '';
+      } catch(_) { return ''; } })();
+      fetch('/api/perf-report', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + _tok,
+          'x-auth-token': _tok
+        },
+        body: JSON.stringify(dump),
+        keepalive: true
+      }).catch(() => {});
     } catch (_) {}
   }
   function show() {

@@ -257,6 +257,52 @@ const whatsbotRoute = require('./routes/whatsbot');
 const integrations = require('./routes/integrations');
 const tenantPoolMod = require('./utils/tenantPool');
 const controlDb = require('./control/db');
+
+// PERF_HEALTH_DB_PERSIST_v1 — schema bootstrap. Idempotent; runs once.
+(async () => {
+  try {
+    await controlDb.query(`
+      CREATE TABLE IF NOT EXISTS perf_slow_log (
+        id          BIGSERIAL PRIMARY KEY,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        tenant_slug TEXT,
+        user_id     INTEGER,
+        fn          TEXT,
+        ms          INTEGER,
+        tag         TEXT,
+        source      TEXT,
+        ua          TEXT
+      )
+    `);
+    await controlDb.query(`CREATE INDEX IF NOT EXISTS perf_slow_log_tenant_created_idx ON perf_slow_log(tenant_slug, created_at DESC)`);
+    await controlDb.query(`
+      CREATE TABLE IF NOT EXISTS perf_client_reports (
+        id            BIGSERIAL PRIMARY KEY,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        tenant_slug   TEXT,
+        user_email    TEXT,
+        platform      TEXT,
+        apk_version   TEXT,
+        online        BOOLEAN,
+        network       TEXT,
+        view          TEXT,
+        api_calls     INTEGER,
+        slow_1s       INTEGER,
+        very_slow_3s  INTEGER,
+        long_tasks    INTEGER,
+        mem_mb        INTEGER,
+        top_by_avg    JSONB,
+        very_slow_sample JSONB,
+        ua            TEXT
+      )
+    `);
+    await controlDb.query(`CREATE INDEX IF NOT EXISTS perf_client_reports_tenant_created_idx ON perf_client_reports(tenant_slug, created_at DESC)`);
+    console.log('[perf-health] DB tables ensured');
+  } catch (e) {
+    console.error('[perf-health] schema bootstrap failed:', e.message);
+  }
+})();
+
 const jwtLib = require('jsonwebtoken');
 
 /**
@@ -1596,15 +1642,92 @@ app.get('/api/perf-summary', async (req, res) => {
       ? reportsAll.slice(-30).reverse()
       : reportsAll.filter(r => String(r.tenant || '') === tenantSlug).slice(-30).reverse();
 
+    // PERF_HEALTH_DB_PERSIST_v1 — also pull persisted rows from DB (last 7 days)
+    // so the page survives Railway redeploys. Tenant-scoped via SQL WHERE.
+    let dbSlow = [];
+    let dbReports = [];
+    try {
+      const slowQ = isSuper
+        ? `SELECT EXTRACT(EPOCH FROM created_at)*1000 AS t, fn, ms, tenant_slug AS tenant,
+                  user_id AS \"user\", source, ua
+             FROM perf_slow_log
+            WHERE created_at >= NOW() - INTERVAL '7 days'
+            ORDER BY created_at DESC LIMIT 200`
+        : `SELECT EXTRACT(EPOCH FROM created_at)*1000 AS t, fn, ms, tenant_slug AS tenant,
+                  user_id AS \"user\", source, ua
+             FROM perf_slow_log
+            WHERE tenant_slug = $1 AND created_at >= NOW() - INTERVAL '7 days'
+            ORDER BY created_at DESC LIMIT 200`;
+      const r1 = isSuper
+        ? await controlDb.query(slowQ)
+        : await controlDb.query(slowQ, [tenantSlug]);
+      dbSlow = (r1.rows || []).map(r => ({
+        t: Number(r.t), fn: r.fn, ms: Number(r.ms),
+        tenant: r.tenant, user: r.user, source: r.source
+      }));
+
+      const repQ = isSuper
+        ? `SELECT EXTRACT(EPOCH FROM created_at)*1000 AS at_ms,
+                  tenant_slug AS tenant, user_email AS \"user\", platform,
+                  apk_version AS apk, online, network, view, api_calls, slow_1s,
+                  very_slow_3s, long_tasks, mem_mb, top_by_avg, very_slow_sample, ua
+             FROM perf_client_reports
+            WHERE created_at >= NOW() - INTERVAL '7 days'
+            ORDER BY created_at DESC LIMIT 50`
+        : `SELECT EXTRACT(EPOCH FROM created_at)*1000 AS at_ms,
+                  tenant_slug AS tenant, user_email AS \"user\", platform,
+                  apk_version AS apk, online, network, view, api_calls, slow_1s,
+                  very_slow_3s, long_tasks, mem_mb, top_by_avg, very_slow_sample, ua
+             FROM perf_client_reports
+            WHERE tenant_slug = $1 AND created_at >= NOW() - INTERVAL '7 days'
+            ORDER BY created_at DESC LIMIT 50`;
+      const r2 = isSuper
+        ? await controlDb.query(repQ)
+        : await controlDb.query(repQ, [tenantSlug]);
+      dbReports = (r2.rows || []).map(r => Object.assign({}, r, {
+        at_ms: Number(r.at_ms),
+        top_by_avg: typeof r.top_by_avg === 'string' ? JSON.parse(r.top_by_avg || '[]') : (r.top_by_avg || []),
+        very_slow_sample: typeof r.very_slow_sample === 'string' ? JSON.parse(r.very_slow_sample || '[]') : (r.very_slow_sample || [])
+      }));
+    } catch (e) {
+      console.warn('[perf-summary] DB read failed:', e.message);
+    }
+
+    // Merge in-memory + DB rows. In-memory wins (fresher). Cap at 200.
+    const mergedSlow = recent_filtered.concat(dbSlow);
+    const seen = new Set();
+    const dedupedSlow = mergedSlow.filter(r => {
+      const k = r.t + '|' + r.fn + '|' + r.ms;
+      if (seen.has(k)) return false; seen.add(k); return true;
+    }).sort((a, b) => b.t - a.t).slice(0, 200);
+
+    // Re-aggregate top_fn from the merged set (so the top APIs reflect ALL
+    // history, not just since the last deploy).
+    const agg = {};
+    dedupedSlow.forEach(r => {
+      const k = r.fn || '?';
+      if (!agg[k]) agg[k] = { n: 0, total: 0, max: 0 };
+      agg[k].n++; agg[k].total += r.ms; if (r.ms > agg[k].max) agg[k].max = r.ms;
+    });
+    const top_fn_merged = Object.entries(agg)
+      .map(([fn, st]) => ({ fn, n: st.n, avg: Math.round(st.total / st.n), max: st.max }))
+      .sort((a, b) => b.avg - a.avg).slice(0, 20);
+
+    // Merge client dumps (in-memory + DB).
+    const mergedReports = reports.concat(dbReports)
+      .filter((r, i, arr) => arr.findIndex(x => x.at_ms === r.at_ms && x.user === r.user) === i)
+      .sort((a, b) => b.at_ms - a.at_ms).slice(0, 50);
+
     res.json({
       ok: true,
       slow_threshold_ms: 1000,
-      total_slow: recent_filtered.length,
-      top_fn,
+      total_slow: dedupedSlow.length,
+      top_fn: top_fn_merged.length ? top_fn_merged : top_fn,
       top_tenant,
-      recent_slow: recent_filtered.slice(-100).reverse(),
-      client_reports: reports,
-      scope: isSuper ? 'all_tenants' : ('tenant:' + tenantSlug)
+      recent_slow: dedupedSlow,
+      client_reports: mergedReports,
+      scope: isSuper ? 'all_tenants' : ('tenant:' + tenantSlug),
+      persisted_to_db: true
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -1670,6 +1793,46 @@ app.post('/api/perf-report', require('express').json({ limit: '256kb' }), async 
       if (global._perfClientReports.length > 50) {
         global._perfClientReports = global._perfClientReports.slice(-50);
       }
+      // PERF_HEALTH_DB_PERSIST_v1 — also persist to DB so the report survives
+      // Railway redeploys. Tenant slug is read from the JWT if present (so an
+      // APK can't lie about which tenant the dump belongs to), falling back
+      // to the body's b.tenant for older clients.
+      try {
+        let dbTenant = '';
+        try {
+          const jwt = require('jsonwebtoken');
+          const _JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
+          const raw = (req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+          if (raw) {
+            const dec = jwt.verify(raw, _JWT_SECRET);
+            if (dec && dec.t) dbTenant = String(dec.t);
+          }
+        } catch (_) {}
+        if (!dbTenant) dbTenant = String(b.tenant || '');
+        controlDb.query(
+          `INSERT INTO perf_client_reports
+           (created_at, tenant_slug, user_email, platform, apk_version, online, network, view,
+            api_calls, slow_1s, very_slow_3s, long_tasks, mem_mb, top_by_avg, very_slow_sample, ua)
+           VALUES (NOW(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15)`,
+          [
+            dbTenant || null,
+            String(b.user || '').slice(0, 200),
+            String(b.platform || 'web').slice(0, 30),
+            String(b.apk_version || '').slice(0, 30),
+            b.online != null ? Boolean(b.online) : null,
+            String(b.network || '').slice(0, 30),
+            String(b.current_view || '').slice(0, 100),
+            apiCalls.length,
+            slow.length,
+            verySlow.length,
+            lt.length,
+            memSeries.length ? Number(memSeries[memSeries.length - 1].mb) : null,
+            JSON.stringify(top5),
+            JSON.stringify(verySlow.slice(0, 10).map(e => ({ fn: e.fn, ms: e.ms, view: e.view }))),
+            String(b.ua || '').slice(0, 250)
+          ]
+        ).catch(err => console.warn('[perf-report] DB insert failed:', err.message));
+      } catch (_) {}
     } catch (_) {}
     res.json({ ok: true, received: ev.length });
   } catch (e) {

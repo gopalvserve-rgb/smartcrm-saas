@@ -347,6 +347,18 @@ async function expressHandler(req, res) {
       T.by_tenant[slug].n++; T.by_tenant[slug].total += _ms; if (_ms > T.by_tenant[slug].max) T.by_tenant[slug].max = _ms;
       T.recent.push({ t: Date.now(), fn, ms: _ms, tenant: slug, user: uid });
       if (T.recent.length > 500) T.recent.splice(0, T.recent.length - 500);
+      // PERF_HEALTH_DB_PERSIST_v1 — also write to control DB so the data
+      // survives Railway redeploys (the in-memory tally wipes on each deploy).
+      try {
+        const controlDb = require('../../control/db');
+        const ua = String(req.headers['user-agent'] || '').slice(0, 250);
+        const isApk = /capacitor|wv\)/i.test(ua) || /Capacitor/.test(String(req.headers['x-capacitor'] || ''));
+        controlDb.query(
+          `INSERT INTO perf_slow_log (created_at, tenant_slug, user_id, fn, ms, tag, source, ua)
+           VALUES (NOW(), $1, $2, $3, $4, $5, $6, $7)`,
+          [slug, uid === '?' ? null : Number(uid), fn, _ms, tag, isApk ? 'apk' : 'web', ua]
+        ).catch(() => {});
+      } catch (_) {}
     }
     return res.json({ ok: true, result });
   } catch (e) {
