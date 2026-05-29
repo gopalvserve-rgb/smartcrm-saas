@@ -2318,8 +2318,17 @@ async function api_leads_assignToCampaign(token, leadIds, campaignId) {
  * even reps with restricted lead visibility can match recordings
  * without exposing data they shouldn't see.
  */
+// LEADS_PHONEBOOK_PERF_v1 (2026-05-29) — 60-second cache. APK recording
+// sync fires this on every batch and was hitting 20s avg / 30s max on
+// big-lead tenants. Leads don't change every second; staleness up to a
+// minute is irrelevant for recording-to-lead matching.
+const _phoneBookCache = { ts: 0, data: null };
+
 async function api_leads_phoneBook(token) {
   await authUser(token);
+  if (_phoneBookCache.data && (Date.now() - _phoneBookCache.ts) < 60000) {
+    return _phoneBookCache.data;
+  }
   const r = await db.query(
     `SELECT id, COALESCE(name, '') AS name,
             regexp_replace(COALESCE(phone,    ''), '\D', '', 'g') AS p,
@@ -2345,6 +2354,8 @@ async function api_leads_phoneBook(token) {
       }
     });
   }
+  _phoneBookCache.ts = Date.now();
+  _phoneBookCache.data = out;
   return out;
 }
 

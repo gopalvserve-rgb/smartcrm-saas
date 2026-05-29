@@ -16,14 +16,47 @@ const _normStatus = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, 
 const FOLLOWUP_ALLOWED_NORM = new Set(FOLLOWUP_ALLOWED_STATUSES.map(_normStatus));
 
 async function api_notifications_mine(token) {
+  // NOTIFICATIONS_PERF_v1 (2026-05-29) — was loading EVERY row from
+  // followups + leads + users + statuses on every 30s poll. On busy
+  // tenants this averaged 14.5s and was a top pool blocker. Now scoped
+  // to: open follow-ups + leads referenced + (small) users + statuses.
+  // We still load users + statuses fully because they're tiny tables.
   const me = await authUser(token);
   const visible = await getVisibleUserIds(me);
   const todayStr = new Date().toISOString().slice(0, 10);
   const now = new Date().toISOString();
 
-  const [allFollowups, allLeads, allUsers, allStatuses] = await Promise.all([
-    db.getAll('followups'), db.getAll('leads'), db.getAll('users'), db.getAll('statuses')
+  const [openFollowupsRes, allUsers, allStatuses] = await Promise.all([
+    // Only open follow-ups in the upcoming/overdue window matter for the
+    // notification panel. Skip rows that are done, ancient, or far in
+    // the future. We also pre-filter by user_id OR assigned-to scope.
+    db.query(
+      `SELECT id, lead_id, user_id, due_at, note, is_done
+         FROM followups
+        WHERE COALESCE(is_done, 0) = 0
+          AND due_at IS NOT NULL
+          AND due_at >= NOW() - INTERVAL '60 days'
+          AND due_at <= NOW() + INTERVAL '90 days'`
+    ),
+    db.getAll('users'),
+    db.getAll('statuses')
   ]);
+  const followups = openFollowupsRes.rows;
+  // Fetch only the leads referenced by those follow-ups + any with
+  // their own next_followup_at in window (legacy path). Up to ~2000
+  // leads in window — cheap with a single SELECT.
+  const referencedLeadIds = [...new Set(followups.map(f => Number(f.lead_id)).filter(Boolean))];
+  const allLeadsRes = await db.query(
+    `SELECT id, name, phone, status_id, assigned_to, next_followup_at
+       FROM leads
+      WHERE id = ANY($1::int[])
+         OR (next_followup_at IS NOT NULL
+             AND next_followup_at >= NOW() - INTERVAL '60 days'
+             AND next_followup_at <= NOW() + INTERVAL '90 days')`,
+    [referencedLeadIds.length ? referencedLeadIds : [0]]
+  );
+  const allLeads = allLeadsRes.rows;
+  const allFollowups = followups;
   const leadsById = {};
   allLeads.forEach(l => { leadsById[Number(l.id)] = l; });
   const usersById = {};

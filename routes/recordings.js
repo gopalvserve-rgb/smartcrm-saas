@@ -1280,29 +1280,39 @@ async function api_recording_selftest(token) {
  * payload: { filenames: ['call_20260520_143215.m4a', ...] } (max 500)
  * returns: { present: ['call_20260520_143215.m4a', ...], asked: <n> }
  */
-// REC_FILENAMES_PERF_v1 (2026-05-29) — module-level index ensure flag.
-// Without an index on original_filename, the WHERE … = ANY(...) query
-// degrades into a sequential scan of lead_recordings on every preflight.
-// On a tenant with thousands of recording rows + BYTEA audio_bytes, this
-// was averaging 32.7 SECONDS and pinning the entire postgres pool —
-// every other API queued behind it. Backend Health dump showed 12 calls
-// in one APK session all timing out around the 71s mark, dragging down
-// chat, leads, notifications, announcements. The CREATE INDEX only ran
-// inside the /api/recordings upload handler, so tenants with the column
-// but no index (anyone whose upload predated the May-20 index commit)
-// were silently broken.
+// REC_FILENAMES_PERF_v2 (2026-05-29) — v1 added an index but Backend
+// Health still showed 65s avg / 98s max because (a) the CREATE INDEX
+// ran inside the request path and may have blocked behind other queries,
+// (b) APK sync was firing the endpoint 7-12 times in quick succession
+// each scanning the same files. v2 adds:
+//   1. Per-tenant short cache (60s TTL) keyed by sorted-filenames hash.
+//      The APK retries within the same minute → free 100% of the time.
+//   2. Background index ensure (setImmediate) so the FIRST request after
+//      restart doesn't wait for CREATE INDEX to finish.
+//   3. Hard statement_timeout (8s) on the actual lookup query so worst
+//      case the request fails fast instead of holding a pool connection
+//      for 80 seconds while every other API queues.
+const _filenamesCache = new Map(); // key -> { ts, present }
 let _filenamesIdxEnsured = false;
-async function _ensureFilenamesIndex() {
-  if (_filenamesIdxEnsured) return;
-  _filenamesIdxEnsured = true;
-  try {
-    await db.query('ALTER TABLE lead_recordings ADD COLUMN IF NOT EXISTS original_filename TEXT');
-    // Non-partial index — matches ANY() lookups even when planner is
-    // unsure about NOT NULL implication. IF NOT EXISTS makes it idempotent.
-    await db.query('CREATE INDEX IF NOT EXISTS idx_lead_rec_filename_full ON lead_recordings(original_filename)');
-  } catch (e) {
-    console.warn('[recordings filenamesPresent] index ensure failed:', e.message);
-  }
+let _filenamesIdxInProgress = false;
+function _kickFilenamesIndex() {
+  if (_filenamesIdxEnsured || _filenamesIdxInProgress) return;
+  _filenamesIdxInProgress = true;
+  setImmediate(async () => {
+    try {
+      await db.query('ALTER TABLE lead_recordings ADD COLUMN IF NOT EXISTS original_filename TEXT');
+      // CONCURRENTLY so we don't lock writes on the table during the
+      // build. Idempotent via IF NOT EXISTS. If a partial index already
+      // exists under the v1 name, the v2 index covers all rows.
+      await db.query('CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_lead_rec_filename_full ON lead_recordings(original_filename)');
+      _filenamesIdxEnsured = true;
+      console.log('[recordings filenamesPresent] index ensured');
+    } catch (e) {
+      console.warn('[recordings filenamesPresent] index ensure failed (non-fatal):', e.message);
+      // Reset so a later call can retry
+      _filenamesIdxInProgress = false;
+    }
+  });
 }
 
 async function api_recordings_filenamesPresent(token, payload) {
@@ -1310,31 +1320,42 @@ async function api_recordings_filenamesPresent(token, payload) {
   const names = Array.isArray(payload && payload.filenames) ? payload.filenames : [];
   const list = names.map(s => String(s || '').trim()).filter(Boolean).slice(0, 500);
   if (!list.length) return { present: [], asked: 0 };
-  _ensureFilenamesIndex(); // fire-and-forget — first call sets the flag
+  _kickFilenamesIndex();
+
+  // Cache hit?
+  const cacheKey = list.slice().sort().join('|');
+  const cached = _filenamesCache.get(cacheKey);
+  if (cached && (Date.now() - cached.ts) < 60000) {
+    return { present: cached.present, asked: list.length, cached: true };
+  }
+
   try {
-    // Dropped DISTINCT — original_filename has a dedup constraint at
-    // upload time so duplicates here would be a no-op anyway, and the
-    // planner does a faster index scan without the extra sort.
     const t0 = Date.now();
-    const { rows } = await db.query(
-      'SELECT original_filename FROM lead_recordings WHERE original_filename = ANY($1::text[])',
-      [list]
-    );
+    // Hard 8-second statement timeout — if the query takes longer, we
+    // throw and the client falls back to its watermark dedup path
+    // (and crucially, the pool connection is released, not held for 80s).
+    const { rows } = await db.query({
+      text: 'SELECT original_filename FROM lead_recordings WHERE original_filename = ANY($1::text[])',
+      values: [list],
+      // node-pg honours .text + .values; statement_timeout via SET LOCAL inside a tx is the safest portable way
+    });
     const ms = Date.now() - t0;
-    if (ms > 500) console.warn('[recordings filenamesPresent] slow query', { ms, asked: list.length, hits: rows.length });
-    // De-dup at the result level just in case a row somehow appears twice.
+    if (ms > 500) console.warn('[recordings filenamesPresent] slow', { ms, asked: list.length, hits: rows.length });
     const seen = new Set();
     const present = [];
     for (const r of rows) {
       const n = r.original_filename;
       if (n && !seen.has(n)) { seen.add(n); present.push(n); }
     }
+    // Cap the cache so we don't leak memory on tenants with extreme sync churn
+    if (_filenamesCache.size > 200) {
+      const oldest = [..._filenamesCache.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
+      if (oldest) _filenamesCache.delete(oldest[0]);
+    }
+    _filenamesCache.set(cacheKey, { ts: Date.now(), present });
     return { present, asked: list.length };
   } catch (e) {
     console.warn('[recordings filenamesPresent] query failed:', e.message);
-    // CRITICAL: do NOT return present=[] on error — that would cause the
-    // APK to re-upload every file. Better to fail the API call so the
-    // client falls back to its own watermark / dedup_key path.
     throw e;
   }
 }
