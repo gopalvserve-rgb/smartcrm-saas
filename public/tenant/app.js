@@ -163,7 +163,175 @@ const _POLL_OR_OPTIONAL_FNS = new Set([
   'api_push_publicKey'
 ]);
 
+// ============================================================
+// CRM_PERF_v1 — performance diagnostic engine
+// ============================================================
+// Captures API call timings, long-task warnings, navigation timings and
+// periodic memory snapshots. All events persist in localStorage so they
+// survive reloads. Open via Ctrl+Shift+P or window.crmPerf.show().
+//
+// Goals:
+//   - Zero overhead in the happy path (just performance.now() bookkeeping)
+//   - Surface slow API calls (>1s) and very slow ones (>3s) in the topbar
+//   - Give the user a copy-paste-able JSON dump for support
+// ============================================================
+window.crmPerf = (function () {
+  const STORE_KEY = 'crm_perf_log_v1';
+  const MAX_EVENTS = 200;
+  const SLOW_MS = 1000;
+  const VERY_SLOW_MS = 3000;
+  let events = [];
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (raw) events = JSON.parse(raw) || [];
+  } catch (_) { events = []; }
+  let slowCount = 0;
+  function _save() {
+    try {
+      if (events.length > MAX_EVENTS) events = events.slice(-MAX_EVENTS);
+      localStorage.setItem(STORE_KEY, JSON.stringify(events));
+    } catch (_) {}
+  }
+  function _push(ev) {
+    ev.t = ev.t || Date.now();
+    events.push(ev);
+    if (ev.type === 'api' && ev.ms >= SLOW_MS) {
+      slowCount++;
+      _refreshBadge();
+      try {
+        console.warn('[CRM_PERF] slow API ' + ev.fn + ' ' + ev.ms + 'ms' + (ev.ms >= VERY_SLOW_MS ? ' (VERY SLOW)' : ''));
+      } catch (_) {}
+    }
+    _save();
+  }
+  function recordApi(fn, ms, ok, errMsg, payloadKb) {
+    _push({ type: 'api', fn: fn, ms: Math.round(ms), ok: !!ok, err: errMsg ? String(errMsg).slice(0, 200) : null, kb: payloadKb ? Math.round(payloadKb) : undefined, view: (CRM && CRM.currentView) || '' });
+  }
+  function recordLongTask(ms, name) {
+    _push({ type: 'longtask', ms: Math.round(ms), name: name || 'task' });
+  }
+  function recordMemory() {
+    if (!performance.memory) return;
+    _push({ type: 'mem', mb: Math.round(performance.memory.usedJSHeapSize / 1048576) });
+  }
+  function recordEvent(label, extra) {
+    _push(Object.assign({ type: 'event', label: label }, extra || {}));
+  }
+  function clear() { events = []; slowCount = 0; _save(); _refreshBadge(); }
+  function _refreshBadge() {
+    const b = document.getElementById('crm-perf-badge');
+    if (!b) return;
+    if (slowCount > 0) { b.hidden = false; b.textContent = String(slowCount); }
+    else b.hidden = true;
+  }
+  function show() {
+    const recent = events.slice(-200).reverse();
+    const apiEvents = events.filter(e => e.type === 'api');
+    const slow = apiEvents.filter(e => e.ms >= SLOW_MS).sort((a, b) => b.ms - a.ms).slice(0, 20);
+    const byFn = {};
+    apiEvents.forEach(e => {
+      const k = e.fn || 'unknown';
+      if (!byFn[k]) byFn[k] = { n: 0, total: 0, max: 0 };
+      byFn[k].n++; byFn[k].total += e.ms; if (e.ms > byFn[k].max) byFn[k].max = e.ms;
+    });
+    const topAvg = Object.entries(byFn).map(([fn, s]) => ({ fn, n: s.n, avg: Math.round(s.total / s.n), max: s.max })).sort((a, b) => b.avg - a.avg).slice(0, 15);
+    const lt = events.filter(e => e.type === 'longtask');
+    const mem = events.filter(e => e.type === 'mem').slice(-10);
+    const m = h('div', { class: 'modal-backdrop',
+      onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+    const modal = h('div', { class: 'modal modal-lg', style: { maxWidth: '900px', maxHeight: '88vh', overflow: 'auto' } });
+    modal.appendChild(h('div', { class: 'modal-head' },
+      h('h3', { style: { margin: 0 } }, '⚡ Performance diagnostics'),
+      h('button', { class: 'btn icon', onclick: () => m.remove() }, '✕')
+    ));
+    const body = h('div', { class: 'modal-body', style: { padding: '1rem 1.4rem', fontSize: '.82rem' } });
+    body.appendChild(h('div', { class: 'muted', style: { marginBottom: '.6rem' } },
+      'Slow API calls (>1s) get logged here. Send this dump to support if the CRM feels sluggish. Last 200 events kept.'));
+    body.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px,1fr))', gap: '.4rem', marginBottom: '.85rem' } },
+      _stat('Total events', events.length),
+      _stat('API calls', apiEvents.length),
+      _stat('Slow (≥1s)', slow.length),
+      _stat('Very slow (≥3s)', apiEvents.filter(e => e.ms >= VERY_SLOW_MS).length),
+      _stat('Long tasks', lt.length),
+      _stat('Latest mem (MB)', mem.length ? mem[mem.length - 1].mb : '—')
+    ));
+    body.appendChild(h('h4', { style: { marginTop: '.6rem' } }, 'Top 15 slowest API endpoints (by avg)'));
+    body.appendChild(_table(['fn', 'calls', 'avg ms', 'max ms'], topAvg.map(r => [r.fn, r.n, r.avg, r.max])));
+    body.appendChild(h('h4', { style: { marginTop: '.85rem' } }, 'Top 20 slowest individual calls'));
+    body.appendChild(_table(['fn', 'ms', 'view', 'when'], slow.map(e => [e.fn, e.ms, e.view || '', new Date(e.t).toLocaleTimeString()])));
+    body.appendChild(h('h4', { style: { marginTop: '.85rem' } }, 'Recent events (last 50)'));
+    body.appendChild(_table(['type', 'fn / label', 'ms / mb', 'when'],
+      recent.slice(0, 50).map(e => [e.type, e.fn || e.label || '', e.ms || e.mb || '', new Date(e.t).toLocaleTimeString()])));
+    modal.appendChild(body);
+    modal.appendChild(h('div', { class: 'modal-actions', style: { padding: '.7rem 1.4rem', borderTop: '1px solid #e2e8f0', display: 'flex', gap: '.5rem', justifyContent: 'flex-end' } },
+      h('button', { class: 'btn ghost', onclick: () => {
+        try {
+          const txt = JSON.stringify({ when: new Date().toISOString(), user: (CRM.user && CRM.user.email) || '', tenant: (CRM.tenant && CRM.tenant.slug) || '', events: events.slice(-200) }, null, 2);
+          navigator.clipboard.writeText(txt).then(() => toast('Copied — paste to support'));
+        } catch (e) { toast('Copy failed: ' + e.message, 'err'); }
+      } }, '📋 Copy JSON'),
+      h('button', { class: 'btn ghost', onclick: () => { clear(); m.remove(); toast('Cleared'); } }, '🗑 Clear log'),
+      h('button', { class: 'btn primary', onclick: () => m.remove() }, 'Close')
+    ));
+    m.appendChild(modal);
+    document.body.appendChild(m);
+  }
+  function _stat(lbl, val) {
+    return h('div', { style: { background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '.5rem .65rem' } },
+      h('div', { style: { fontSize: '.7rem', color: '#64748b' } }, lbl),
+      h('div', { style: { fontSize: '1.05rem', fontWeight: 700, color: '#0f172a' } }, String(val)));
+  }
+  function _table(cols, rows) {
+    const tbl = h('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: '.78rem' } });
+    const head = h('tr', {}, ...cols.map(c => h('th', { style: { textAlign: 'left', padding: '.35rem .5rem', borderBottom: '1px solid #e2e8f0', color: '#475569', background: '#f8fafc' } }, c)));
+    tbl.appendChild(head);
+    rows.forEach(r => {
+      const tr = h('tr', {}, ...r.map(c => h('td', { style: { padding: '.3rem .5rem', borderBottom: '1px solid #f1f5f9' } }, String(c))));
+      tbl.appendChild(tr);
+    });
+    return tbl;
+  }
+  // Long-task observer
+  try {
+    if (typeof PerformanceObserver === 'function') {
+      const po = new PerformanceObserver(list => {
+        list.getEntries().forEach(e => {
+          if (e.duration >= 200) recordLongTask(e.duration, e.name || 'task');
+        });
+      });
+      po.observe({ entryTypes: ['longtask'] });
+    }
+  } catch (_) {}
+  // Periodic memory snapshot
+  setInterval(recordMemory, 60_000);
+  // Global key binding: Ctrl+Shift+P opens the panel
+  document.addEventListener('keydown', ev => {
+    if (ev.ctrlKey && ev.shiftKey && (ev.key === 'P' || ev.key === 'p')) {
+      ev.preventDefault();
+      show();
+    }
+  });
+  return { recordApi, recordLongTask, recordMemory, recordEvent, show, clear, _refreshBadge };
+})();
+
+// Inject the ⚡ Perf pill into the topbar once the shell is rendered.
+function _initPerfBadge() {
+  if (document.getElementById('btn-crm-perf')) return;
+  const helpBtn = document.getElementById('btn-help');
+  if (!helpBtn || !helpBtn.parentNode) return;
+  const b = document.createElement('button');
+  b.id = 'btn-crm-perf';
+  b.className = 'btn ghost';
+  b.title = 'Performance diagnostics — Ctrl+Shift+P';
+  b.style.cssText = 'position:relative;';
+  b.innerHTML = '<span>⚡</span><span class="badge" id="crm-perf-badge" hidden style="background:#dc2626;">0</span>';
+  b.onclick = () => window.crmPerf.show();
+  helpBtn.parentNode.insertBefore(b, helpBtn);
+  window.crmPerf._refreshBadge();
+}
+
 async function api(fn, ...args) {
+  const _perfStart = performance.now();
   const silent = _SILENT_FNS.has(fn);
   // Skip pre-auth firing for background polls. Real user actions still
   // try the call (and will surface a normal error if the token expired).
@@ -195,8 +363,10 @@ async function api(fn, ...args) {
       const msg = String(j.error || '');
       const reallyExpired = /Invalid token|Bad token|Token expired|User inactive|Session expired|jwt expired|jwt malformed/i.test(msg);
       if (reallyExpired && CRM.token) logout();
+      try { window.crmPerf && window.crmPerf.recordApi(fn, performance.now() - _perfStart, false, j.error || 'API error'); } catch (_) {}
       throw new Error(j.error || 'API error');
     }
+    try { window.crmPerf && window.crmPerf.recordApi(fn, performance.now() - _perfStart, true); } catch (_) {}
     return j.result;
   } finally {
     if (!silent) _bumpApiLoader(-1);
@@ -31302,7 +31472,7 @@ function _initStickyWidget() {
   function start() {
     let n = 0;
     const t = setInterval(() => {
-      if (typeof CRM !== 'undefined' && CRM.user) { _initCrmCopilot(); _initFloatingChat(); _initStickyWidget(); _initChangelog(); _initNewFeaturesTour(); clearInterval(t); }
+      if (typeof CRM !== 'undefined' && CRM.user) { _initCrmCopilot(); _initFloatingChat(); _initStickyWidget(); _initChangelog(); _initNewFeaturesTour(); _initPerfBadge(); clearInterval(t); }
       else if (++n > 120) clearInterval(t);
     }, 500);
   }

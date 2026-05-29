@@ -132,6 +132,10 @@ SELECT * FROM (VALUES
 
   ('feature', 'Dashboard — 🔄 Refresh button',
    'Added a Refresh button to the Dashboard header next to Customize. Click it to clear the cached summary / notifications / funnel / TAT data and re-fetch everything. Useful when you''ve just changed a status or made a call and want the KPI tiles + widgets to reflect it without having to hard-reload.',
-   '#/dashboard', '🔄', NOW())
+   '#/dashboard', '🔄', NOW() - INTERVAL '15 minutes'),
+
+  ('feature', 'Performance diagnostics (⚡ panel)',
+   'New ⚡ icon in the topbar opens a Performance diagnostics panel. Captures every API call''s duration, flags anything over 1 second as slow with a red badge count, surfaces the top 15 slowest endpoints by average + top 20 slowest individual calls, plus long-task and memory snapshots. Hit Ctrl+Shift+P to open the panel any time. Use the 📋 Copy JSON button to grab a dump and send to support when the CRM feels sluggish — we''ll be able to pinpoint exactly which API or view is causing the hang.',
+   '#/dashboard', '⚡', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
