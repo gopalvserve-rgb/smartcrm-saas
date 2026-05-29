@@ -133,19 +133,48 @@ class PermissionOnboardingActivity : AppCompatActivity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == REQ_PICK_FOLDER && resultCode == Activity.RESULT_OK) {
-            val uri = data?.data
-            if (uri != null) {
-                try {
-                    val flags = (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-                    contentResolver.takePersistableUriPermission(uri, flags)
-                    getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                        .putString(KEY_REC_FOLDER, uri.toString()).apply()
-                } catch (e: Exception) {
-                    Log.e(TAG, "takePersistableUriPermission: ${e.message}")
+        if (requestCode == REQ_PICK_FOLDER) {
+            // PERM_FOLDER_PERSIST_FIX_v1 — Always save the URI to prefs as soon
+            // as we have one, even if takePersistableUriPermission throws.
+            // The persistable-permission call fails on some Android 11+ SD-card
+            // URIs but the URI is still usable for the current process and the
+            // SharedPreference write is what the UI's checkGranted reads. Without
+            // this, the card stays stuck in "not done" even after the user
+            // successfully picked the folder.
+            if (resultCode == Activity.RESULT_OK) {
+                val uri = data?.data
+                if (uri != null) {
+                    // Step 1: save the URI to prefs FIRST — this is what the
+                    // card's checkGranted reads to flip to ✓ Done.
+                    try {
+                        getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                            .putString(KEY_REC_FOLDER, uri.toString()).apply()
+                    } catch (e: Exception) {
+                        Log.e(TAG, "save uri to prefs: ${e.message}")
+                    }
+                    // Step 2: best-effort persistable permission. If this fails,
+                    // the URI may not survive a reboot, but the card status is
+                    // already correct.
+                    try {
+                        val flags = (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+                        contentResolver.takePersistableUriPermission(uri, flags)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "takePersistableUriPermission failed (URI still saved): ${e.message}")
+                    }
+                    android.widget.Toast.makeText(this,
+                        "✓ Recording folder selected",
+                        android.widget.Toast.LENGTH_SHORT).show()
+                } else {
+                    Log.w(TAG, "REQ_PICK_FOLDER RESULT_OK but data?.data is null")
+                    android.widget.Toast.makeText(this,
+                        "Couldn’t read folder — please try again",
+                        android.widget.Toast.LENGTH_SHORT).show()
                 }
+            } else {
+                Log.i(TAG, "REQ_PICK_FOLDER cancelled or returned $resultCode")
             }
         }
+        // Always re-render so the card reflects the latest pref state.
         renderCards()
     }
 
