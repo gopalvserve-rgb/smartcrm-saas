@@ -30739,7 +30739,23 @@ function _initFloatingChat() {
     body.style.padding = '0';
     body.style.display = 'flex';
     body.style.flexDirection = 'column';
-    document.getElementById('chat-back-btn').onclick = () => { _activePhone = null; body.style.display = ''; renderThreads(); };
+    document.getElementById('chat-back-btn').onclick = () => {
+      // FLOAT_CHAT_BACK_FIX_v1 — must (a) clear the thread view, (b) reset
+      // the cached threads signature so renderThreads() doesn't early-return
+      // via the FLOAT_CHAT_FLICKER_FIX_v1 optimization (the threads list
+      // hasn't changed since we opened the conversation, so its signature
+      // is identical — without clearing it, renderThreads() returns without
+      // repainting and the thread view stays put).
+      _activePhone = null;
+      _activeThreadCache = null;
+      _threadsLastSig = '';
+      _threadsEverRendered = false;
+      body.style.display = '';
+      body.style.padding = '';
+      body.style.flexDirection = '';
+      body.innerHTML = '<div style="padding: 1.5rem; text-align: center; color: #94a3b8;">Loading\u2026</div>';
+      renderThreads();
+    };
     const inp = document.getElementById('chat-thread-input');
     const send = document.getElementById('chat-thread-send');
     /* WA_PASTE_IMG_v1 — paste image into floating dock compose */

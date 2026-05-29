@@ -148,6 +148,10 @@ SELECT * FROM (VALUES
 
   ('fix', 'Automation — Send email on new lead now actually fires',
    'Automations with the Lead-created event were logging skipped — condition not met for every newly-created lead, even when the rule was Source equals Facebook or Status equals New. Cause: the lead context only had raw IDs (status_id, product_id) while the matcher reads names (status_name, product_name). The matcher now denormalizes IDs into names + merges extra_json so custom-field rules (cf_*) match too. The skipped log line also explains which clause failed and what the actual value was — e.g. skipped — condition not met — failed rule: status eq "New" — actual was "Follow Up".',
-   '#/settings', '⚡', NOW())
+   '#/settings', '⚡', NOW() - INTERVAL '10 minutes'),
+
+  ('fix', 'WhatsApp Inbox — back arrow now returns to the chat list',
+   'The ← back button at the top of a WhatsApp Inbox conversation wasn''t doing anything. The list-of-threads renderer had a flicker-prevention optimization that early-returned when the cached signature hadn''t changed — and opening a thread doesn''t change the signature, so it stayed cached and the renderer never repainted on the way back. The back button now clears the cached signature and the thread view before re-rendering, so it actually slides you back to the inbox list.',
+   '#/dashboard', '↩️', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
