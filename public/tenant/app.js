@@ -8653,6 +8653,22 @@ VIEWS.pipeline = async (view) => {
   ]);
   const total = summary.totals.total || 1;
   view.innerHTML = '';
+  // PIPELINE_LEGACY_FUNNEL_SWITCH_v1 — this legacy 'Sales funnel' fallback
+  // view never had a way to get back to the new pipeline funnel. Add a
+  // toolbar at the top with a 📈 Switch to Funnel view button that clears
+  // both force flags and re-renders.
+  view.appendChild(h('div', { style: { display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:'.5rem', marginBottom:'.55rem' } },
+    h('h2', { style: { margin: 0, fontSize: '1.3rem', color: '#0f172a' } }, 'Pipeline'),
+    h('button', { class: 'btn ghost sm', type: 'button',
+      style: { fontSize:'.78rem', padding:'.3rem .65rem' },
+      onclick: () => {
+        window._rePipeForceKanban = false;
+        window._rePipeForceLegacyGrid = false;
+        VIEWS.pipeline(view);
+      }
+    }, '📈 Switch to Funnel view')
+  ));
+
   // Filter bar — multi-select Status/Source/User + rule-builder.
   (function(){
     const { statuses = [], sources = [], users = [] } = CRM.cache;
