@@ -8679,13 +8679,17 @@ async function _renderPipelineFunnel(view) {
   filterBar.appendChild(h('span', { style: { fontSize:'.72rem', color:'#64748b' } }, 'To'));
   filterBar.appendChild(_dateTo);
 
-  // PIPELINE_FUNNEL_FILTERS_v2 — preset chips: Today / Yesterday / Last 7d /
-  // Last 30d / This month / Last month / All time. Reuses the global
-  // window._attachDatePresets helper so behaviour matches every other
-  // date-filtered surface in the app.
-  if (typeof window._attachDatePresets === 'function') {
-    try { window._attachDatePresets(_dateFrom, _dateTo, { key: 'pipeline-funnel', apply: _apply }); } catch (_) {}
-  }
+  // PIPELINE_FUNNEL_FILTERS_v2 + DASH_DATE_CHIPS_v1 (2026-05-29) — preset
+  // chips. Reuses the global window._attachDatePresets helper so behaviour
+  // matches every other date-filtered surface (Dashboard, Leads, Call
+  // Activity, etc.). MUST be deferred to setTimeout because filterBar is
+  // not yet in the DOM at this point — the helper inserts the chip row
+  // BEFORE filterBar's parent, which is null synchronously and would
+  // silently fail. Every other caller of _attachDatePresets in this file
+  // wraps in setTimeout for the same reason.
+  setTimeout(() => {
+    try { window._attachDatePresets && window._attachDatePresets(_dateFrom, _dateTo, { key: 'pipeline-funnel', apply: _apply }); } catch (_) {}
+  }, 0);
 
   if (typeof multiSelectDropdown === 'function') {
     filterBar.appendChild(multiSelectDropdown({ label:'Status', allLabel:'Any status',
