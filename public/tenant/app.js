@@ -25359,6 +25359,11 @@ async function renderAttendanceDetailed() {
 async function renderMyAttendance() {
   const rows = await api('api_attendance_mine');
   const card = h('div', {});
+  // ATTENDANCE_SELFIE_METER_v1.1 — only show selfie/meter columns if ANY
+  // row actually has data; saves screen space for tenants who haven't
+  // turned the requirement on yet.
+  const anySelfie = rows.some(r => r.check_in_selfie || r.check_out_selfie);
+  const anyMeter  = rows.some(r => r.check_in_meter  || r.check_out_meter);
   card.append(
     h('div', { class: 'toolbar' },
       h('button', { class: 'btn primary', onclick: () => checkInOut('checkIn') }, '🕘 Check in'),
@@ -25367,7 +25372,10 @@ async function renderMyAttendance() {
     h('div', { class: 'table-wrap' }, h('table', {},
       h('thead', {}, h('tr', {},
         h('th', {}, 'Date'), h('th', {}, 'In'), h('th', {}, 'Out'),
-        h('th', {}, 'Location'), h('th', {}, 'Device'), h('th', {}, 'Status')
+        h('th', {}, 'Location'),
+        anySelfie ? h('th', {}, '📸 Selfie') : null,
+        anyMeter  ? h('th', {}, '🧭 Meter')  : null,
+        h('th', {}, 'Device'), h('th', {}, 'Status')
       )),
       h('tbody', {}, ...rows.map(r => h('tr', {},
         h('td', {}, r.date),
@@ -25377,12 +25385,65 @@ async function renderMyAttendance() {
           ? h('a', { href: '#', onclick: ev => { ev.preventDefault(); openAttendanceMap(r); }, title: r.check_in_location_name || '' },
               r.check_in_location_name ? '📍 ' + r.check_in_location_name : '🗺️ Map')
           : h('span', { class: 'muted' }, '—')),
+        anySelfie ? h('td', {}, _renderSelfieThumbs(r)) : null,
+        anyMeter  ? h('td', {}, _renderMeterCell(r))    : null,
         h('td', { class: 'muted' }, r.device_info || '—'),
         h('td', {}, r.status || '')
       )))
     ))
   );
   return card;
+}
+
+// ATTENDANCE_SELFIE_METER_v1.1 — selfie thumbnail (click to enlarge) and
+// meter cell renderers. Shared by My Attendance + Detailed log + Map popup.
+function _renderSelfieThumbs(r) {
+  const wrap = h('div', { style: 'display:flex;gap:.3rem;align-items:center' });
+  function thumb(b64, label) {
+    if (!b64) return null;
+    const img = h('img', {
+      src: b64,
+      title: label + ' selfie — click to enlarge',
+      style: 'width:36px;height:36px;border-radius:6px;object-fit:cover;border:1px solid #cbd5e1;cursor:pointer',
+      onclick: () => _openSelfieFullscreen(b64, label, r.date)
+    });
+    return img;
+  }
+  const inTh = thumb(r.check_in_selfie, 'Check-in');
+  const outTh = thumb(r.check_out_selfie, 'Check-out');
+  if (inTh) wrap.appendChild(inTh);
+  if (outTh) wrap.appendChild(outTh);
+  if (!inTh && !outTh) wrap.appendChild(h('span', { class: 'muted' }, '—'));
+  return wrap;
+}
+function _renderMeterCell(r) {
+  const parts = [];
+  if (r.check_in_meter)  parts.push(h('div', { style: 'font-size:.78rem' }, h('span', { class: 'muted' }, 'IN: '), h('b', {}, r.check_in_meter)));
+  if (r.check_out_meter) parts.push(h('div', { style: 'font-size:.78rem' }, h('span', { class: 'muted' }, 'OUT: '), h('b', {}, r.check_out_meter)));
+  if (r.check_in_meter && r.check_out_meter) {
+    const diff = Number(r.check_out_meter) - Number(r.check_in_meter);
+    if (Number.isFinite(diff) && diff > 0) {
+      parts.push(h('div', { class: 'muted', style: 'font-size:.7rem;color:#10b981' }, '+' + diff.toFixed(1)));
+    }
+  }
+  if (!parts.length) return h('span', { class: 'muted' }, '—');
+  return h('div', {}, ...parts);
+}
+function _openSelfieFullscreen(b64, label, date) {
+  const modal = h('div', { class: 'modal-backdrop', style: 'z-index:9999;background:rgba(0,0,0,.85)',
+    onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) modal.remove(); } },
+    h('div', { style: 'max-width:90vw;max-height:90vh;display:flex;flex-direction:column;align-items:center;gap:.6rem' },
+      h('img', { src: b64, style: 'max-width:90vw;max-height:80vh;border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,.5)' }),
+      h('div', { style: 'color:#fff;font-size:.9rem' }, '📸 ' + label + ' selfie · ' + (date || '')),
+      h('div', { style: 'display:flex;gap:.5rem' },
+        h('a', { href: b64, download: 'selfie-' + (date||'unknown') + '-' + label.toLowerCase() + '.jpg',
+          class: 'btn', style: 'background:#fff;color:#0f172a' }, '⬇ Download'),
+        h('button', { class: 'btn', style: 'background:#fff;color:#0f172a',
+          onclick: () => modal.remove() }, '✕ Close')
+      )
+    )
+  );
+  document.body.appendChild(modal);
 }
 async function renderAttendanceReport() {
   const month = new Date().toISOString().slice(0, 7);
@@ -25482,7 +25543,30 @@ async function openAttendanceMap(r) {
         r.check_out ? h('div', {}, h('b', {}, 'Check out: '), fmtDate(r.check_out),
           r.check_out_location_name ? h('span', {}, '  ·  📍 ', h('b', {}, r.check_out_location_name)) : null,
           '  ·  ',
-          r.check_out_lat ? h('span', { class: 'muted', style: { fontSize: '.78rem' } }, `${Number(r.check_out_lat).toFixed(5)}, ${Number(r.check_out_lng).toFixed(5)}`) : '—') : null
+          r.check_out_lat ? h('span', { class: 'muted', style: { fontSize: '.78rem' } }, `${Number(r.check_out_lat).toFixed(5)}, ${Number(r.check_out_lng).toFixed(5)}`) : '—') : null,
+        // ATTENDANCE_SELFIE_METER_v1.1 — surface captured selfies + meter readings here too
+        (r.check_in_selfie || r.check_out_selfie || r.check_in_meter || r.check_out_meter)
+          ? h('div', { style: 'margin-top:.6rem;padding-top:.5rem;border-top:1px solid #e2e8f0' },
+              h('div', { style: 'font-weight:600;font-size:.82rem;margin-bottom:.3rem' }, '📸 Captures'),
+              h('div', { style: 'display:flex;gap:.6rem;align-items:flex-start;flex-wrap:wrap' },
+                r.check_in_selfie ? h('div', {},
+                  h('div', { class: 'muted', style: 'font-size:.7rem' }, 'Check-in selfie'),
+                  h('img', { src: r.check_in_selfie, style: 'width:96px;height:96px;object-fit:cover;border-radius:6px;border:1px solid #cbd5e1;cursor:pointer',
+                    onclick: () => _openSelfieFullscreen(r.check_in_selfie, 'Check-in', r.date) })
+                ) : null,
+                r.check_out_selfie ? h('div', {},
+                  h('div', { class: 'muted', style: 'font-size:.7rem' }, 'Check-out selfie'),
+                  h('img', { src: r.check_out_selfie, style: 'width:96px;height:96px;object-fit:cover;border-radius:6px;border:1px solid #cbd5e1;cursor:pointer',
+                    onclick: () => _openSelfieFullscreen(r.check_out_selfie, 'Check-out', r.date) })
+                ) : null,
+                (r.check_in_meter || r.check_out_meter) ? h('div', { style: 'min-width:120px' },
+                  h('div', { class: 'muted', style: 'font-size:.7rem' }, '🧭 Meter reading'),
+                  r.check_in_meter  ? h('div', { style: 'font-size:.85rem' }, h('span', { class: 'muted' }, 'IN: '),  h('b', {}, r.check_in_meter)) : null,
+                  r.check_out_meter ? h('div', { style: 'font-size:.85rem' }, h('span', { class: 'muted' }, 'OUT: '), h('b', {}, r.check_out_meter)) : null
+                ) : null
+              )
+            )
+          : null
       )
     )
   );
