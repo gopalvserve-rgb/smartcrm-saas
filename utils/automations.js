@@ -151,18 +151,26 @@ function _whyNotMatched(cond, ctx) {
     else if (op === 'ncontains') ok = !a.includes(b);
     if (!ok) {
       const shown = actual === '' ? '(empty)' : actual;
-      // List the keys that ARE present on the lead so the admin can see at
-      // a glance whether the field they're checking even landed in the data.
-      let presentKeys = [];
+      // AUTOMATION_FB_EXTRA_FIX_v2 — dump the most diagnostic-useful slices
+      // of the lead so the admin can immediately tell WHY the field is empty
+      // without opening a second tab:
+      //   source:       which ingest path the lead came from (manual, facebook, website…)
+      //   id:           so the admin can click into it in the leads page
+      //   extra_keys:   what custom-field keys actually landed in extra_json
+      //                 (the field-mapping target keys without the cf_ prefix)
+      const L = ctx.lead || {};
+      const src = L.source || '(no source)';
+      const id  = L.id != null ? ('#' + L.id) : '(no id)';
+      let extraKeys = '(none)';
       try {
-        if (ctx.lead && typeof ctx.lead === 'object') {
-          presentKeys = Object.keys(ctx.lead).filter(k =>
-            ctx.lead[k] != null && ctx.lead[k] !== '' && k !== 'extra_json' && k !== 'meta_json'
-          );
-        }
-      } catch (_) {}
-      const keyList = presentKeys.length ? presentKeys.slice(0, 25).join(',') : '(none)';
-      return lhs + ' ' + op + ' "' + rhs + '" — actual: "' + shown + '" — lead has: ' + keyList;
+        const ex = typeof L.extra_json === 'string'
+          ? JSON.parse(L.extra_json || '{}')
+          : (L.extra_json || {});
+        const keys = Object.keys(ex || {});
+        if (keys.length) extraKeys = keys.slice(0, 15).join(',');
+      } catch (_) { extraKeys = '(parse error)'; }
+      return lhs + ' ' + op + ' "' + rhs + '" — actual: "' + shown
+        + '" — lead ' + id + ' source=' + src + ' extras=[' + extraKeys + ']';
     }
   }
   return '';
