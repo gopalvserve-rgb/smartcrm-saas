@@ -136,6 +136,10 @@ SELECT * FROM (VALUES
 
   ('feature', 'Performance diagnostics (⚡ panel)',
    'New ⚡ icon in the topbar opens a Performance diagnostics panel. Captures every API call''s duration, flags anything over 1 second as slow with a red badge count, surfaces the top 15 slowest endpoints by average + top 20 slowest individual calls, plus long-task and memory snapshots. Hit Ctrl+Shift+P to open the panel any time. Use the 📋 Copy JSON button to grab a dump and send to support when the CRM feels sluggish — we''ll be able to pinpoint exactly which API or view is causing the hang.',
-   '#/dashboard', '⚡', NOW())
+   '#/dashboard', '⚡', NOW() - INTERVAL '5 minutes'),
+
+  ('feature', 'Performance diagnostics — Send to support button (APK-friendly)',
+   'Mobile users can''t open DevTools so the ⚡ panel now has a 📤 Send to support button that uploads the diagnostic dump directly to the server in one tap. The dump also includes Capacitor / APK flags, network type, online state, viewport size, and lifecycle events (pause/resume/visibility) so we can spot APK-specific issues like the WebView pausing during a hang.',
+   '#/dashboard', '📤', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);

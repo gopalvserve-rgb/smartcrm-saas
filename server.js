@@ -1476,6 +1476,46 @@ app.post('/api/rec-diag', require('express').json({ limit: '8kb' }), async (req,
 });
 
 
+// CRM_PERF_v1_APK — receive a performance diagnostic dump from the SPA / APK.
+// Console-logged so it surfaces in Railway logs. Compact 1-line summary plus
+// the full JSON for support inspection. Auth optional — the whole point is
+// to capture cases where the user is having trouble.
+app.post('/api/perf-report', require('express').json({ limit: '256kb' }), async (req, res) => {
+  try {
+    const b = req.body || {};
+    const ev = Array.isArray(b.events) ? b.events : [];
+    const apiCalls = ev.filter(e => e && e.type === 'api');
+    const slow = apiCalls.filter(e => e.ms >= 1000);
+    const verySlow = apiCalls.filter(e => e.ms >= 3000);
+    const lt = ev.filter(e => e && e.type === 'longtask');
+    const memSeries = ev.filter(e => e && e.type === 'mem');
+    const topByAvg = {};
+    apiCalls.forEach(e => { if (!topByAvg[e.fn]) topByAvg[e.fn] = { n: 0, total: 0, max: 0 }; topByAvg[e.fn].n++; topByAvg[e.fn].total += e.ms; if (e.ms > topByAvg[e.fn].max) topByAvg[e.fn].max = e.ms; });
+    const top5 = Object.entries(topByAvg).map(([fn, st]) => ({ fn, n: st.n, avg: Math.round(st.total / st.n), max: st.max })).sort((a, b) => b.avg - a.avg).slice(0, 5);
+    console.log('[/api/perf-report]',
+      'tenant=', b.tenant || '?',
+      'user=', b.user || '?',
+      'platform=', b.platform || 'web',
+      'apk=', b.apk_version || '?',
+      'events=', ev.length,
+      'api_calls=', apiCalls.length,
+      'slow_1s=', slow.length,
+      'very_slow_3s=', verySlow.length,
+      'long_tasks=', lt.length,
+      'mem_mb=', memSeries.length ? memSeries[memSeries.length - 1].mb : '?',
+      'online=', b.online != null ? b.online : '?',
+      'network=', b.network || '?',
+      'ua=', String(b.ua || '').slice(0, 120)
+    );
+    if (top5.length) console.log('[/api/perf-report] TOP_BY_AVG_MS', JSON.stringify(top5));
+    if (verySlow.length) console.log('[/api/perf-report] VERY_SLOW', JSON.stringify(verySlow.slice(0, 10).map(e => ({ fn: e.fn, ms: e.ms, view: e.view }))));
+    res.json({ ok: true, received: ev.length });
+  } catch (e) {
+    console.error('[/api/perf-report] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Admin diag: run ffmpeg -i on the stored bytes and report whether
 // ffmpeg itself can decode them. Returns the head hex of the first 1KB
 // so support can inspect the file format without downloading megabytes.

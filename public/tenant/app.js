@@ -218,6 +218,29 @@ window.crmPerf = (function () {
     _push(Object.assign({ type: 'event', label: label }, extra || {}));
   }
   function clear() { events = []; slowCount = 0; _save(); _refreshBadge(); }
+  function _buildPerfDump() {
+    // Capture device + environment context too so APK-side issues are easy
+    // to spot (Capacitor flag, network type, OS, viewport, online state).
+    let net = '';
+    try { net = (navigator.connection && navigator.connection.effectiveType) || ''; } catch (_) {}
+    let plat = 'web';
+    try { if (window.Capacitor || /Capacitor|wv|CapacitorWebView/i.test(navigator.userAgent)) plat = 'apk'; } catch (_) {}
+    return {
+      when: new Date().toISOString(),
+      user: (CRM.user && (CRM.user.email || CRM.user.id)) || 'anon',
+      user_id: (CRM.user && CRM.user.id) || null,
+      tenant: (CRM.tenant && CRM.tenant.slug) || (CRM.brand && CRM.brand.slug) || '',
+      platform: plat,
+      apk_version: (window.Capacitor && window.Capacitor.appVersion) || (window.CRM_VERSION) || '',
+      ua: (navigator.userAgent || '').slice(0, 240),
+      online: navigator.onLine,
+      network: net,
+      viewport: window.innerWidth + 'x' + window.innerHeight,
+      visibility: document.visibilityState,
+      view: (CRM && CRM.currentView) || '',
+      events: events.slice(-200)
+    };
+  }
   function _refreshBadge() {
     const b = document.getElementById('crm-perf-badge');
     if (!b) return;
@@ -264,10 +287,28 @@ window.crmPerf = (function () {
       recent.slice(0, 50).map(e => [e.type, e.fn || e.label || '', e.ms || e.mb || '', new Date(e.t).toLocaleTimeString()])));
     modal.appendChild(body);
     modal.appendChild(h('div', { class: 'modal-actions', style: { padding: '.7rem 1.4rem', borderTop: '1px solid #e2e8f0', display: 'flex', gap: '.5rem', justifyContent: 'flex-end' } },
+      h('button', { class: 'btn primary', style: { background:'#0ea5e9', borderColor:'#0ea5e9' }, onclick: async () => {
+        // CRM_PERF_v1_APK — one-tap upload of the diagnostic dump to the
+        // server. Works inside the APK where the user can't open DevTools.
+        try {
+          const payload = _buildPerfDump();
+          const r = await fetch('/api/perf-report', { method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify(payload) });
+          if (r.ok) {
+            toast('Report sent to support 👍');
+          } else {
+            toast('Send failed: HTTP ' + r.status, 'err');
+          }
+        } catch (e) { toast('Send failed: ' + e.message, 'err'); }
+      } }, '📤 Send to support'),
       h('button', { class: 'btn ghost', onclick: () => {
         try {
-          const txt = JSON.stringify({ when: new Date().toISOString(), user: (CRM.user && CRM.user.email) || '', tenant: (CRM.tenant && CRM.tenant.slug) || '', events: events.slice(-200) }, null, 2);
-          navigator.clipboard.writeText(txt).then(() => toast('Copied — paste to support'));
+          const txt = JSON.stringify(_buildPerfDump(), null, 2);
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(txt).then(() => toast('Copied — paste to support'));
+          } else {
+            const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
+            toast('Copied — paste to support');
+          }
         } catch (e) { toast('Copy failed: ' + e.message, 'err'); }
       } }, '📋 Copy JSON'),
       h('button', { class: 'btn ghost', onclick: () => { clear(); m.remove(); toast('Cleared'); } }, '🗑 Clear log'),
@@ -291,6 +332,19 @@ window.crmPerf = (function () {
     });
     return tbl;
   }
+  // Environment event capture — APK-specific signals
+  try {
+    window.addEventListener('online',  () => recordEvent('online'));
+    window.addEventListener('offline', () => recordEvent('offline'));
+    document.addEventListener('visibilitychange', () => recordEvent('visibility:' + document.visibilityState));
+    // Capacitor lifecycle hooks (if present)
+    if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
+      try { window.Capacitor.Plugins.App.addListener('appStateChange', ev => recordEvent('appState', { active: ev && ev.isActive })); } catch (_) {}
+      try { window.Capacitor.Plugins.App.addListener('pause',  () => recordEvent('apk:pause')); } catch (_) {}
+      try { window.Capacitor.Plugins.App.addListener('resume', () => recordEvent('apk:resume')); } catch (_) {}
+    }
+  } catch (_) {}
+
   // Long-task observer
   try {
     if (typeof PerformanceObserver === 'function') {
