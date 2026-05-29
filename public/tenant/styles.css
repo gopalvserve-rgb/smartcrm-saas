@@ -599,6 +599,10 @@ body.sidebar-collapsed .sidebar { width: 0; padding-left: 0; padding-right: 0; o
   margin-bottom: .75rem;
   display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
 }
+/* LEADS_BULKBAR_HIDE_MOBILE_v1 — the JS sets bulk-bar.hidden=true when
+   0 leads are selected, but the .bulk-bar { display:flex } above wins
+   over the user-agent's [hidden]{display:none}. Force the override. */
+.bulk-bar[hidden] { display: none !important; }
 .bulk-count { font-weight: 600; color: var(--brand-dark); margin-right: .5rem; }
 
 /* Tables */
@@ -1379,6 +1383,13 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
   .lc-actions .btn:active { transform: scale(.97); }
 
   
+  /* LEADS_BULKBAR_HIDE_MOBILE_v1 — mobile lead cards don't have row
+     checkboxes (selection lives on the desktop table). The bulk-bar
+     is dead weight up here, so just hide it. If you want bulk select
+     on mobile down the line, we'd add long-press-to-select + a slide
+     up sheet rather than the inline bar. */
+  #bulk-bar { display: none !important; }
+
   /* ===== MOBILE_UX_v1 (2026-05-29) — bigger, friendlier mobile ===== */
 
   /* Section headers */
