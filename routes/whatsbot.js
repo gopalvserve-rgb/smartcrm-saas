@@ -1968,11 +1968,31 @@ async function api_wb_campaigns_list(token) {
   await authUser(token);
   const rows = await db.getAll('wa_campaigns');
   rows.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
-  return rows.map(c => ({
-    ...c,
-    variables: typeof c.variables_json === 'string' ? safeJson(c.variables_json) : (c.variables_json || []),
-    filter:    typeof c.filter_json === 'string'    ? safeJsonObj(c.filter_json) : (c.filter_json || {}),
-  }));
+  // WA_CAMPAIGN_STATS_FIX_v1 — for each campaign with failures, pull up to
+  // 3 distinct error messages from wa_campaign_targets so the SPA can show
+  // 'why did this fail' inline without a second round trip.
+  const out = [];
+  for (const c of rows) {
+    let errorSamples = [];
+    if (Number(c.recipients_failed) > 0) {
+      try {
+        const er = await db.query(
+          `SELECT error, COUNT(*) AS n FROM wa_campaign_targets
+            WHERE campaign_id = $1 AND status = 'failed' AND error IS NOT NULL AND error != ''
+            GROUP BY error ORDER BY COUNT(*) DESC LIMIT 3`,
+          [c.id]
+        );
+        errorSamples = (er.rows || []).map(r => ({ error: r.error, count: Number(r.n) }));
+      } catch (_) {}
+    }
+    out.push({
+      ...c,
+      variables: typeof c.variables_json === 'string' ? safeJson(c.variables_json) : (c.variables_json || []),
+      filter:    typeof c.filter_json === 'string'    ? safeJsonObj(c.filter_json) : (c.filter_json || {}),
+      error_samples: errorSamples
+    });
+  }
+  return out;
 }
 function safeJsonObj(s) { try { return JSON.parse(s); } catch (_) { return {}; } }
 
@@ -2402,15 +2422,46 @@ async function expressEvent(req, res) {
                 // Reflect into campaign_targets too
                 if (s.status === 'delivered' || s.status === 'read') {
                   const col = s.status === 'read' ? 'read_at' : 'delivered_at';
-                  await db.query(
-                    `UPDATE wa_campaign_targets SET status = $2, ${col} = NOW() WHERE wa_message_id = $1 AND status NOT IN ('failed')`,
+                  // WA_CAMPAIGN_STATS_FIX_v1 — only bump the campaign counter
+                  // on the FIRST delivered/read event per target (the column
+                  // we're setting was previously NULL), so a target that goes
+                  // delivered → read doesn't double-count on the delivered side.
+                  const targetRows = await db.query(
+                    `UPDATE wa_campaign_targets
+                        SET status = $2, ${col} = NOW()
+                      WHERE wa_message_id = $1 AND status NOT IN ('failed') AND ${col} IS NULL
+                      RETURNING campaign_id`,
                     [s.id, s.status]
                   );
+                  for (const row of (targetRows.rows || [])) {
+                    if (!row.campaign_id) continue;
+                    const counterCol = s.status === 'read' ? 'recipients_read' : 'recipients_delivered';
+                    try {
+                      await db.query(
+                        `UPDATE wa_campaigns SET ${counterCol} = COALESCE(${counterCol}, 0) + 1 WHERE id = $1`,
+                        [row.campaign_id]
+                      );
+                    } catch (_) {}
+                  }
                 } else if (s.status === 'failed') {
-                  await db.query(
-                    `UPDATE wa_campaign_targets SET status = 'failed', error = $2 WHERE wa_message_id = $1`,
+                  // WA_CAMPAIGN_STATS_FIX_v1 — same idempotence guard for failed:
+                  // only bump recipients_failed if the row wasn't already failed.
+                  const failRows = await db.query(
+                    `UPDATE wa_campaign_targets
+                        SET status = 'failed', error = $2
+                      WHERE wa_message_id = $1 AND status != 'failed'
+                      RETURNING campaign_id`,
                     [s.id, err || 'failed']
                   );
+                  for (const row of (failRows.rows || [])) {
+                    if (!row.campaign_id) continue;
+                    try {
+                      await db.query(
+                        `UPDATE wa_campaigns SET recipients_failed = COALESCE(recipients_failed, 0) + 1 WHERE id = $1`,
+                        [row.campaign_id]
+                      );
+                    } catch (_) {}
+                  }
                 }
               } catch (_) {}
             }

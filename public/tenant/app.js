@@ -13804,6 +13804,37 @@ function openTplBotModal(bot, templates) {
 function safeJson_(s) { try { return JSON.parse(s); } catch (_) { return []; } }
 
 // ---------- Campaigns ----------
+/* WA_CAMPAIGN_STATS_FIX_v1 — modal showing why a campaign's messages failed. */
+function _showCampaignErrors(c) {
+  const samples = c.error_samples || [];
+  const modal = h('div', { class: 'modal-backdrop' },
+    h('div', { class: 'modal' },
+      h('div', { class: 'modal-head' },
+        h('h3', {}, '⚠ Why "' + (c.name || 'this campaign') + '" failed'),
+        h('button', { class: 'btn icon', onclick: () => modal.remove() }, '✕')
+      ),
+      h('div', { style: { padding: '.5rem 0' } },
+        h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+          c.recipients_failed + ' of ' + c.recipients_total + ' recipient(s) failed. Most common reasons:'),
+        samples.length === 0
+          ? h('div', { class: 'muted', style: { padding: '.6rem', background: '#fef3c7', border: '1px solid #fde68a', borderRadius: '6px' } },
+              'No detailed error captured. This usually means the WhatsApp template/language pair is invalid, the access token is expired, or the recipient phone was not provisioned on WhatsApp. Check the Activity tab for the raw Meta response.')
+          : h('ul', { style: { paddingLeft: '1.1rem', margin: '.6rem 0' } },
+              ...samples.map(s => h('li', { style: { marginBottom: '.4rem' } },
+                h('b', {}, s.count + ' ×'), ' ',
+                h('span', { style: { color: '#b91c1c' } }, s.error)
+              ))),
+        h('p', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.6rem' } },
+          'Fixes: 132001 → template language mismatch (set it to en_US or the language Meta approved). 131026 → recipient not on WhatsApp. 132000 → template variable count mismatch. 100 / 190 → access token expired — reconnect WhatsApp in Settings.')
+      ),
+      h('div', { class: 'modal-actions', style: { display: 'flex', justifyContent: 'flex-end' } },
+        h('button', { class: 'btn primary', onclick: () => modal.remove() }, 'Close')
+      )
+    )
+  );
+  document.body.appendChild(modal);
+}
+
 async function wbCampaigns() {
   const wrap = h('div', {});
   const [campaigns, templates] = await Promise.all([api('api_wb_campaigns_list'), api('api_wb_templates_list')]);
@@ -13827,7 +13858,18 @@ async function wbCampaigns() {
       h('td', {}, c.recipients_sent),
       h('td', {}, c.recipients_delivered),
       h('td', {}, c.recipients_read),
-      h('td', {}, c.recipients_failed),
+      h('td', {},
+        /* WA_CAMPAIGN_STATS_FIX_v1 — clickable failed count opens a modal
+           with the top error reasons + a sample recipient phone per reason.
+           If count is zero, render plain text. */
+        Number(c.recipients_failed) > 0
+          ? h('a', {
+              href: '#', style: { color: '#dc2626', fontWeight: 600, textDecoration: 'underline' },
+              title: 'Click to see why',
+              onclick: ev => { ev.preventDefault(); _showCampaignErrors(c); }
+            }, String(c.recipients_failed))
+          : '0'
+      ),
       h('td', {}, h('span', { class: 'tag', style: { background: c.status === 'completed' ? '#10b981' : c.status === 'sending' ? '#6366f1' : c.status === 'failed' ? '#ef4444' : '#64748b', color: '#fff' } }, c.status)),
       h('td', { class: 'muted' }, fmtDate(c.created_at, 'relative')),
       h('td', {},
