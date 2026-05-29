@@ -1072,7 +1072,7 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
   .bottom-nav { display: none; }
   .fab { display: none; }
   .leads-mobile { display: none; }
-  .topbar-mobile-menu { display: none; }
+  /* .topbar-mobile-menu visible on desktop too — see SIDEBAR_TOGGLE_v1 */
 }
 
 /* Call button styled for mobile */
@@ -1100,7 +1100,7 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
 #bottom-nav a.active { color: var(--brand); }
 
 /* Topbar — hide menu button on desktop */
-@media (min-width: 781px) { .topbar-mobile-menu { display: none !important; } }
+/* SIDEBAR_TOGGLE_v1 — was display:none; the topbar ☰ now toggles the sidebar on desktop too. */
 
 /* ============================================================
    Dialer view (TeleCRM-style)
