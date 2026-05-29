@@ -2162,6 +2162,65 @@ VIEWS.dashboard = async (view) => {
   );
   view.appendChild(head);
 
+  // TEAM_STATUS_TASKS_v1 — "I'm currently doing…" picker
+  try {
+    const taskBar = h('div', { id: 'my-task-bar', style: {
+      display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '.4rem',
+      padding: '.5rem .7rem', marginBottom: '.6rem',
+      background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px'
+    } }, h('span', { class: 'muted', style: { fontSize: '.82rem' } }, '\u23F3 Loading status options\u2026'));
+    view.appendChild(taskBar);
+    (async () => {
+      let tasks = [];
+      try { tasks = await api('api_team_tasks_list'); } catch (_) { tasks = []; }
+      let currentLive = null;
+      try {
+        const live = await api('api_team_liveStatus', {});
+        currentLive = (live.users || []).find(u => Number(u.id) === Number(CRM.user.id));
+      } catch (_) {}
+      taskBar.innerHTML = '';
+      taskBar.appendChild(h('span', { style: { fontSize: '.86rem', fontWeight: 600 } }, '\uD83D\uDFE2 I\u2019m currently:'));
+      const currentTaskId = (currentLive && currentLive.task) ? currentLive.task.id : '';
+      tasks.forEach(t => {
+        const isActive = String(t.id) === String(currentTaskId);
+        const chip = h('button', {
+          class: 'btn sm', type: 'button',
+          style: {
+            background: isActive ? t.color : '#fff',
+            color: isActive ? '#fff' : t.color,
+            border: '1.5px solid ' + t.color,
+            fontWeight: 600
+          },
+          onclick: async () => {
+            try {
+              const newId = isActive ? null : t.id;
+              await api('api_team_setMyTask', { task_id: newId });
+              toast(newId ? ('Status: ' + t.label) : 'Status cleared');
+              VIEWS.dashboard(view);
+            } catch (e) { toast(e.message, 'err'); }
+          }
+        }, (t.icon || '\uD83D\uDFE3') + ' ' + t.label);
+        taskBar.appendChild(chip);
+      });
+      if (currentTaskId) {
+        taskBar.appendChild(h('button', {
+          class: 'btn sm ghost', type: 'button',
+          onclick: async () => {
+            try { await api('api_team_setMyTask', { task_id: null }); toast('Status cleared'); VIEWS.dashboard(view); }
+            catch (e) { toast(e.message, 'err'); }
+          }
+        }, '\u2715 Clear'));
+      }
+      if (CRM.user.role === 'admin') {
+        taskBar.appendChild(h('span', { style: { flex: 1 } }));
+        taskBar.appendChild(h('a', {
+          href: '#/admin', style: { fontSize: '.76rem', color: '#6366f1', textDecoration: 'none' },
+          onclick: () => setTimeout(() => { try { showAdminTab('teamstatuses'); } catch (_) {} }, 200)
+        }, '\u2699 Manage tasks'));
+      }
+    })();
+  } catch (_) {}
+
   // DATE_PRESETS_v1 — global Dashboard date filter (chip bar + From/To).
   // Hooked into every data-fetching widget below via CRM._dashRange.
   CRM._dashRange = CRM._dashRange || { from: '', to: '' };
@@ -18137,6 +18196,7 @@ VIEWS.admin = async (view) => {
       { id: 'automations',  label: '⚡ Automations' },
       { id: 'nurture',      label: '🌱 Nurture Sequences' },
       { id: 'tat',          label: '⏱️ TAT' },
+      { id: 'teamstatuses', label: '👥 Team statuses' },
     ]},
     { title: 'Appearance', items: [
       { id: 'announce',     label: '📢 Announcements' },
@@ -18238,6 +18298,7 @@ async function showAdminTab(id) {
     if (id === 'pullleads') body.replaceChildren(await adminPullLeads());
     if (id === 'campaigns') body.replaceChildren(await adminCampaigns());
     if (id === 'health')     body.replaceChildren(await adminHealth());
+    if (id === 'teamstatuses') body.replaceChildren(await adminTeamStatuses());
     if (id === 'dangerzone') body.replaceChildren(await adminDangerZone());
   } catch (e) { body.innerHTML = `<div class="error-box">${esc(e.message)}</div>`; }
 }
@@ -20654,6 +20715,68 @@ async function adminApi() {
 }
 
 /* ---- Automations ---- */
+/* TEAM_STATUS_TASKS_v1 — Admin manages the list of custom offline tasks
+   (Demo / Meeting / Lunch / Training / …). Stored in config as JSON. */
+async function adminTeamStatuses() {
+  if (CRM.user.role !== 'admin') {
+    return h('div', { class: 'muted', style: { padding: '1rem' } }, 'Admin only.');
+  }
+  const wrap = h('div', { class: 'card' });
+  wrap.appendChild(h('h3', { style: { margin: '0 0 .5rem 0' } }, '\uD83D\uDC65 Team statuses (Offline tasks)'));
+  wrap.appendChild(h('p', { class: 'muted', style: { fontSize: '.82rem' } },
+    'Define the statuses your team can pick from on the dashboard when they are doing something offline \u2014 In Demo, In Meeting, On Lunch, In Training, etc. Each entry needs a short ID (auto-generated from the label), a display label, an emoji icon, and a colour. The Live Team Status widget will show the colour and label exactly as you set it.'));
+
+  let tasks = [];
+  try { tasks = await api('api_team_tasks_list'); } catch (_) { tasks = []; }
+  if (!Array.isArray(tasks)) tasks = [];
+
+  const list = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '.4rem', marginTop: '.6rem' } });
+  function render() {
+    list.innerHTML = '';
+    tasks.forEach((t, idx) => {
+      const row = h('div', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', padding: '.5rem .6rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', flexWrap: 'wrap' } });
+      const iconInp  = h('input', { value: t.icon || '\uD83D\uDFE3', style: { width: '50px', fontSize: '1rem', textAlign: 'center' } });
+      const labelInp = h('input', { value: t.label || '', placeholder: 'e.g. In Demo', style: { flex: '2', minWidth: '140px' } });
+      const colorInp = h('input', { type: 'color', value: t.color || '#7c3aed', style: { width: '50px', height: '32px', padding: 0, border: '1px solid #cbd5e1', borderRadius: '4px' } });
+      const idInp    = h('input', { value: t.id || '', placeholder: 'id (auto)', style: { width: '120px', fontFamily: 'monospace', fontSize: '.8rem' } });
+      const del = h('button', { class: 'btn sm danger', type: 'button', title: 'Remove', onclick: () => { tasks.splice(idx, 1); render(); } }, '\uD83D\uDDD1');
+      iconInp.oninput  = () => { t.icon  = iconInp.value; };
+      labelInp.oninput = () => { t.label = labelInp.value; if (!t.id) idInp.value = String(t.label || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 32); t.id = idInp.value; };
+      colorInp.oninput = () => { t.color = colorInp.value; row.style.borderLeft = '4px solid ' + t.color; };
+      idInp.oninput    = () => { t.id    = idInp.value; };
+      row.style.borderLeft = '4px solid ' + (t.color || '#7c3aed');
+      row.appendChild(iconInp);
+      row.appendChild(labelInp);
+      row.appendChild(colorInp);
+      row.appendChild(idInp);
+      row.appendChild(del);
+      list.appendChild(row);
+    });
+    if (!tasks.length) {
+      list.appendChild(h('div', { class: 'muted', style: { padding: '.6rem', fontStyle: 'italic' } }, 'No statuses defined yet \u2014 click + Add status to create one.'));
+    }
+  }
+  render();
+
+  const addBtn = h('button', { class: 'btn', type: 'button', style: { marginTop: '.6rem' }, onclick: () => {
+    tasks.push({ id: '', label: '', icon: '\uD83D\uDFE3', color: '#7c3aed' });
+    render();
+  } }, '+ Add status');
+  const saveBtn = h('button', { class: 'btn primary', type: 'button', style: { marginLeft: '.5rem' }, onclick: async () => {
+    try {
+      const r = await api('api_team_tasks_save', tasks);
+      toast('Saved ' + (r.count || tasks.length) + ' status(es)');
+      try { tasks = await api('api_team_tasks_list'); render(); } catch (_) {}
+    } catch (e) { toast(e.message, 'err'); }
+  } }, '\uD83D\uDCBE Save');
+
+  wrap.appendChild(list);
+  wrap.appendChild(h('div', { style: { marginTop: '.4rem' } }, addBtn, saveBtn));
+  wrap.appendChild(h('p', { class: 'muted', style: { fontSize: '.76rem', marginTop: '1rem' } },
+    'Tip: leave the list empty to fall back to the 4 built-in defaults (Demo, Meeting, Lunch, Training).'));
+  return wrap;
+}
+
 /* PERF_HEALTH_PANEL_v1 — admin-visible backend health dashboard.
    Pulls server-side passive timing tally + recent client-uploaded perf
    dumps from /api/perf-summary. No DB writes — entire dataset lives
@@ -23418,6 +23541,7 @@ function configForm(cfg, keys, meta) {
  * ===================================================================== */
 const TEAM_STATE_META = {
   on_call:        { label: 'On Call',          icon: '🎧', color: '#16a34a', bg: '#dcfce7' },
+  on_task:        { label: 'On Task',          icon: '🟣', color: '#7c3aed', bg: '#ede9fe' },  /* TEAM_STATUS_TASKS_v1 — overridden per-row by user.task.label/icon/color */
   wrapping_up:    { label: 'Just hung up',     icon: '⏳', color: '#a16207', bg: '#fef3c7' },
   on_break:       { label: 'On Break',         icon: '☕',  color: '#7c3aed', bg: '#ede9fe' },
   idle:           { label: 'Idle',             icon: '💤', color: '#475569', bg: '#e2e8f0' },
@@ -23425,7 +23549,7 @@ const TEAM_STATE_META = {
   logged_out:     { label: 'Offline',          icon: '⚫', color: '#dc2626', bg: '#fee2e2' },
   never_logged_in:{ label: "Never logged in",  icon: '⨯',  color: '#d97706', bg: '#fed7aa' }
 };
-const TEAM_STATE_ORDER = ['on_call','wrapping_up','on_break','idle','checked_out','logged_out','never_logged_in'];
+const TEAM_STATE_ORDER = ['on_call','on_task','wrapping_up','on_break','idle','checked_out','logged_out','never_logged_in'];
 
 function _initials(name) {
   return String(name || '?').trim().split(/\s+/).slice(0, 2).map(p => p[0] || '').join('').toUpperCase() || '?';
@@ -23487,7 +23611,11 @@ function _renderTeamLiveCompact(container, data) {
   // Card grid
   const grid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '.45rem' } });
   data.users.forEach(u => {
-    const m = TEAM_STATE_META[u.state] || TEAM_STATE_META.idle;
+    let m = TEAM_STATE_META[u.state] || TEAM_STATE_META.idle;
+    // TEAM_STATUS_TASKS_v1 — when user is on a custom task, swap in its label/icon/color
+    if (u.state === 'on_task' && u.task) {
+      m = Object.assign({}, m, { label: u.task.label, icon: u.task.icon, color: u.task.color });
+    }
     const av = h('div', {
       style: {
         width: '36px', height: '36px', borderRadius: '50%',

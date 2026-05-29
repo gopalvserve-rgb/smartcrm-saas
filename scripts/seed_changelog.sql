@@ -146,6 +146,10 @@ SELECT * FROM (VALUES
    'Two passive instruments added so we can see slowness WITHOUT the user reporting it. (1) Server side: the tenantApi dispatcher now times every handler. Anything >=1000ms gets logged into Railway as [PERF_SLOW_API] with fn, ms, tenant, user. An in-memory tally is exposed at /api/perf-summary returning the top-20 slowest endpoints and top-20 slowest tenants since the last redeploy. (2) Client side: the SPA now auto-POSTs the diagnostic dump to /api/perf-report once the user hits 3 slow calls or 1 very-slow (>=3s) call in a session, throttled to once per 10 minutes. No tap needed.',
    '#/dashboard', '📡', NOW() - INTERVAL '20 minutes'),
 
+  ('feature', 'Live Team Status — admin-defined offline tasks (Demo, Meeting, Lunch…)',
+   'Admins can now define their own offline statuses at Settings → Automation → 👥 Team statuses. Each one has an emoji icon, a colour and a label (default starter set: 🎤 In Demo, 👥 In Meeting, 🍽 On Lunch, 📚 In Training). Every employee sees an I\u2019m currently bar at the top of their dashboard with a chip per status — one click and the Live Team Status widget shows that label and colour next to their name, exactly like On Call. Click the chip again or Clear to come back to Idle. On-call calls still beat a manual task in the widget so an active phone call is always visible.',
+   '#/dashboard', '🟣', NOW()),
+
   ('feature', 'Settings → 🩺 Backend health — see exactly which API is slow',
    'New tab in Settings for admins and managers. Shows top-20 slowest backend endpoints by average response time, top slow tenants, the last 100 ≥1-second calls, and every client-uploaded diagnostic dump (browser / APK) with the top slow APIs from that session, long-task count, memory usage and the view the user was on when they hit support. Auto-refreshes every 15 seconds. Now you can answer ''what was slow for Harsh just now'' without grep-ing Railway logs.',
    '#/admin', '🩺', NOW()),

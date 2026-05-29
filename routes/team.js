@@ -108,14 +108,27 @@ async function api_team_liveStatus(token, _payload) {
 
   // Break flags from config table
   const breakFlags = {};
+  const taskFlags  = {};  // TEAM_STATUS_TASKS_v1 — { user_id → { task_id, started_at } }
   configRows.forEach(c => {
     const m = String(c.key || '').match(/^user_break:(\d+)$/);
     if (m && String(c.value || '').trim() === '1') breakFlags[Number(m[1])] = true;
+    const t = String(c.key || '').match(/^user_task:(\d+)$/);
+    if (t && String(c.value || '').trim()) {
+      const v = String(c.value).trim();
+      const idx = v.indexOf(':');
+      const taskId = idx > 0 ? v.slice(0, idx) : v;
+      const startedAt = idx > 0 ? v.slice(idx + 1) : null;
+      if (taskId) taskFlags[Number(t[1])] = { task_id: taskId, started_at: startedAt };
+    }
   });
+  // Load task catalogue once so we can hydrate labels.
+  const _taskList = (await _loadTasks().catch(() => [])).concat(DEFAULT_TASKS);
+  const _taskById = {};
+  _taskList.forEach(t => { if (!_taskById[t.id]) _taskById[t.id] = t; });
 
   const now = Date.now();
   const STATE_ORDER = [
-    'on_call', 'wrapping_up', 'on_break', 'idle',
+    'on_call', 'on_task', 'wrapping_up', 'on_break', 'idle',
     'checked_out', 'logged_out', 'never_logged_in'
   ];
   const summary = STATE_ORDER.reduce((m, k) => (m[k] = 0, m), {});
@@ -149,8 +162,18 @@ async function api_team_liveStatus(token, _payload) {
     let since = effectiveLogin || null;
     let sub = '';
 
+    // TEAM_STATUS_TASKS_v1 — Custom task wins over break/idle/etc.
+    // Only on-call beats it (we still want to know the rep is actually on
+    // a phone call, even if they had set themselves "In Demo" earlier).
+    if (taskFlags[uid]) {
+      const tf = taskFlags[uid];
+      const meta = _taskById[tf.task_id] || { label: tf.task_id, icon: '🟣', color: '#6366f1' };
+      state = 'on_task';
+      since = tf.started_at ? new Date(tf.started_at).getTime() : now;
+      sub = meta.label;
+    }
     // 1. On break wins over almost everything
-    if (breakFlags[uid]) {
+    else if (breakFlags[uid]) {
       state = 'on_break';
     }
     // 2. On-call detection
@@ -200,6 +223,8 @@ async function api_team_liveStatus(token, _payload) {
 
     summary[state] = (summary[state] || 0) + 1;
 
+    const _tf = taskFlags[uid];
+    const _tmeta = _tf ? (_taskById[_tf.task_id] || null) : null;
     return {
       id: uid,
       name: u.name || u.email || ('User #' + uid),
@@ -213,7 +238,14 @@ async function api_team_liveStatus(token, _payload) {
       last_call_phone: lc ? (lc.phone || '') : '',
       last_call_event: lc ? String(lc.event || '') : '',
       last_action_at: la ? new Date(la.created_at).toISOString() : null,
-      last_action_type: la ? String(la.action_type || '') : ''
+      last_action_type: la ? String(la.action_type || '') : '',
+      task: _tf ? {
+        id: _tf.task_id,
+        label: _tmeta ? _tmeta.label : _tf.task_id,
+        icon:  _tmeta ? _tmeta.icon  : '🟣',
+        color: _tmeta ? _tmeta.color : '#6366f1',
+        started_at: _tf.started_at
+      } : null
     };
   });
 
@@ -257,7 +289,95 @@ async function api_team_setBreak(token, payload) {
   return { ok: true, on, user_id: me.id };
 }
 
+/* ====================================================================
+ * TEAM_STATUS_TASKS_v1 — admin-defined "Offline tasks" (Demo, Meeting,
+ * Lunch, Training, etc.) that any user can flag themselves as currently
+ * doing. The task is stored in the existing `config` table:
+ *   - team_status_tasks               → JSON list of tasks
+ *   - user_task:<user_id>             → "<task_id>:<started_iso>"
+ * Live status surfaces a new state 'on_task' with the task's label /
+ * icon / colour and a summary chip per custom task.
+ * ==================================================================== */
+
+const DEFAULT_TASKS = [
+  { id: 'demo',     label: 'In Demo',     icon: '🎤', color: '#8b5cf6' },
+  { id: 'meeting',  label: 'In Meeting',  icon: '👥', color: '#0ea5e9' },
+  { id: 'lunch',    label: 'On Lunch',    icon: '🍽', color: '#f59e0b' },
+  { id: 'training', label: 'In Training', icon: '📚', color: '#10b981' }
+];
+
+async function _loadTasks() {
+  try {
+    const raw = await db.getConfig('team_status_tasks', '');
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) return arr;
+    }
+  } catch (_) {}
+  return [];
+}
+
+async function api_team_tasks_list(token) {
+  await authUser(token);
+  const tasks = await _loadTasks();
+  return tasks.length ? tasks : DEFAULT_TASKS;
+}
+
+async function api_team_tasks_save(token, payload) {
+  const me = await authUser(token);
+  if (me.role !== 'admin') throw new Error('Admin only');
+  const tasks = Array.isArray(payload) ? payload : (payload && payload.tasks) || [];
+  // Sanitize + dedupe by id, generate id if missing.
+  const seen = new Set();
+  const clean = [];
+  for (const t of tasks) {
+    const id = String(t.id || '').trim() || String(t.label || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 32);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    clean.push({
+      id,
+      label: String(t.label || id).slice(0, 60),
+      icon:  String(t.icon  || '🟣').slice(0, 8),
+      color: String(t.color || '#6366f1').slice(0, 16)
+    });
+    if (clean.length >= 30) break;
+  }
+  await db.setConfig('team_status_tasks', JSON.stringify(clean));
+  return { ok: true, count: clean.length };
+}
+
+async function api_team_setMyTask(token, payload) {
+  const me = await authUser(token);
+  const p = payload || {};
+  const taskId = p.task_id ? String(p.task_id) : '';
+  const key = 'user_task:' + me.id;
+  if (!taskId) {
+    try { await db.query(`DELETE FROM config WHERE key = $1`, [key]); } catch (_) {
+      try { await db.setConfig(key, ''); } catch (_) {}
+    }
+    return { ok: true, task_id: null };
+  }
+  // Verify the task exists (so we don't store garbage)
+  const all = (await _loadTasks().catch(() => [])).concat(DEFAULT_TASKS);
+  const exists = all.some(t => String(t.id) === taskId);
+  if (!exists) throw new Error('Unknown task');
+  const value = taskId + ':' + new Date().toISOString();
+  try {
+    await db.query(
+      `INSERT INTO config (key, value) VALUES ($1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = $2`,
+      [key, value]
+    );
+  } catch (e) {
+    try { await db.setConfig(key, value); } catch (_) { throw e; }
+  }
+  return { ok: true, task_id: taskId, started_at: value.split(':').slice(1).join(':') };
+}
+
 module.exports = {
   api_team_liveStatus,
-  api_team_setBreak
+  api_team_setBreak,
+  api_team_tasks_list,    /* TEAM_STATUS_TASKS_v1 */
+  api_team_tasks_save,    /* TEAM_STATUS_TASKS_v1 */
+  api_team_setMyTask      /* TEAM_STATUS_TASKS_v1 */
 };
