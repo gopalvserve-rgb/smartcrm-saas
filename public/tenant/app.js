@@ -55,9 +55,13 @@ const CRM = {
 // little chip at the top of the screen with a "Fix" button.
 function _renderPermSoftBanner() {
   try {
-    if (!window.LeadCRMNative || typeof LeadCRMNative.getPermissionsStatus !== 'function') return;
+    if (!window.LeadCRMNative || typeof LeadCRMNative.getPermissionsStatus !== 'function') {
+      if (window._debugPermBanner) console.log('[perm-banner] no LeadCRMNative.getPermissionsStatus — bail');
+      return;
+    }
     let st;
     try { st = JSON.parse(LeadCRMNative.getPermissionsStatus() || '{}'); } catch (_) { st = {}; }
+    if (window._debugPermBanner) console.log('[perm-banner] permissionsStatus =', st);
     if (!st || !st.anyMissing) {
       // perms ok — remove any stale banner
       const ex = document.getElementById('perm-soft-banner'); if (ex) ex.remove();
@@ -66,13 +70,16 @@ function _renderPermSoftBanner() {
       return;
     }
 
-    // PERM_LOST_BANNER_v1 (2026-05-29) — escalate the folder-lost case.
-    // If the user previously had the folder set (onboardingSeen flag is
-    // true) but it's NOT folderOk now, this is a REVOCATION — Android
-    // killed the SAF permission, or the user changed it in settings.
-    // Recording sync is silently broken until they re-pick. Show a RED
-    // un-dismissable banner instead of the orange soft one.
-    const folderLost = (st.onboardingSeen === true) && st.folderOk === false;
+    // PERM_LOST_BANNER_v1.1 (2026-05-29) — fire RED whenever folderOk is
+    // false, regardless of onboardingSeen. The original gate required
+    // onboardingSeen===true (so it would only be 'revocation' not
+    // 'first-time setup'), but PERM_ONBOARDING_SOFT_v1 stopped forcing
+    // users through the onboarding activity, so onboardingSeen stays
+    // false forever on many devices. Net effect: red banner never
+    // triggered. Now: any time the folder isn't readable -> red.
+    // The user can also force-show via window._forcePermBanner = true
+    // for testing (Test button on Settings -> Backend health).
+    const folderLost = (st.folderOk === false) || window._forcePermBanner === true;
 
     if (!folderLost) {
       // Soft (orange) — battery / storage / first-time folder. Dismissable.
@@ -131,6 +138,26 @@ if (typeof window !== 'undefined') {
       setTimeout(_renderPermSoftBanner, 300);
     }
   });
+  // PERM_LOST_BANNER_v1.1 — expose two test helpers on window so admin
+  // can verify the banner is wired up without having to actually revoke
+  // the folder permission. Call from Backend health -> Test banner.
+  window.testPermFolderLostBanner = function () {
+    try { sessionStorage.removeItem('perm_banner_dismissed'); } catch (_) {}
+    try { sessionStorage.removeItem('perm_folder_lost_seen'); } catch (_) {}
+    try { const ex = document.getElementById('perm-soft-banner'); if (ex) ex.remove(); } catch (_) {}
+    window._forcePermBanner = true;
+    window._debugPermBanner = true;
+    _renderPermSoftBanner();
+    setTimeout(() => { window._forcePermBanner = false; }, 30000);
+    console.log('[perm-banner] forced banner; will release force in 30s');
+  };
+  window.permBannerStatus = function () {
+    if (!window.LeadCRMNative || typeof LeadCRMNative.getPermissionsStatus !== 'function') {
+      return { error: 'no LeadCRMNative bridge (web mode?)' };
+    }
+    try { return JSON.parse(LeadCRMNative.getPermissionsStatus() || '{}'); }
+    catch (e) { return { error: e.message }; }
+  };
 }
 
 // Save the auth token + API base into Android SharedPreferences so the
