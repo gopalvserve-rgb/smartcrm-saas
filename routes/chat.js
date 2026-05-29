@@ -151,28 +151,64 @@ async function _ensureChannelMember(roomId, userId) {
 async function api_chat_rooms_list(token) {
   const me = await authUser(token);
   await _ensureCanChat(me);
+  _ensureChatUnreadIndex();
   const usersById = await _userMap();
-  const [rooms, members, messages] = await Promise.all([
-    db.getAll('chat_rooms'),
-    db.getAll('chat_room_members'),
-    db.getAll('chat_messages')
+
+  // CHAT_PERF_v1 — was loading ALL rooms + ALL members + ALL messages on
+  // every sidebar refresh. Now: load the (small) rooms table, my
+  // memberships only, and the latest message per room via a
+  // DISTINCT-ON / lateral query. Scales linearly with number of rooms
+  // I'm in, not with total message volume.
+  const [roomsRes, myMembersRes, latestRes] = await Promise.all([
+    db.query('SELECT id, type, name, created_at FROM chat_rooms'),
+    db.query('SELECT room_id, last_read_at FROM chat_room_members WHERE user_id = $1', [me.id]),
+    db.query(
+      `SELECT DISTINCT ON (room_id) room_id, user_id, body, created_at
+         FROM chat_messages
+        ORDER BY room_id, created_at DESC`
+    )
   ]);
+  const rooms = roomsRes.rows;
+  const myMemberships = myMembersRes.rows;
 
-  // Most recent message per room — for the preview + sort key
+  // Latest message per room
   const latestByRoom = {};
-  messages.forEach(m => {
-    const cur = latestByRoom[Number(m.room_id)];
-    if (!cur || String(m.created_at) > String(cur.created_at)) {
-      latestByRoom[Number(m.room_id)] = m;
-    }
-  });
+  latestRes.rows.forEach(m => { latestByRoom[Number(m.room_id)] = m; });
 
-  const myMemberships = members.filter(m => Number(m.user_id) === Number(me.id));
   const myRoomIds = new Set(myMemberships.map(m => Number(m.room_id)));
   const lastReadByRoom = {};
   myMemberships.forEach(m => {
     lastReadByRoom[Number(m.room_id)] = m.last_read_at || '1970-01-01T00:00:00Z';
   });
+
+  // Unread counts per visible room, one indexed COUNT per room (cheap).
+  // We compute lazily — only for rooms the user is actually a member of.
+  const unreadByRoom = {};
+  for (const rid of myRoomIds) {
+    const lastRead = lastReadByRoom[rid] || '1970-01-01T00:00:00Z';
+    try {
+      const { rows: u } = await db.query(
+        `SELECT COUNT(*)::int AS c FROM chat_messages
+          WHERE room_id = $1 AND user_id <> $2 AND created_at > $3`,
+        [rid, me.id, lastRead]
+      );
+      unreadByRoom[rid] = (u[0] && u[0].c) || 0;
+    } catch (_) { unreadByRoom[rid] = 0; }
+  }
+
+  // DM counterpart resolution: one shot, only for DM rooms in the list
+  const dmRoomIds = rooms.filter(r => r.type === 'dm').map(r => r.id);
+  const dmCounterparts = {};
+  if (dmRoomIds.length) {
+    try {
+      const { rows: cp } = await db.query(
+        `SELECT room_id, user_id FROM chat_room_members
+          WHERE room_id = ANY($1::int[]) AND user_id <> $2`,
+        [dmRoomIds, me.id]
+      );
+      cp.forEach(c => { dmCounterparts[Number(c.room_id)] = Number(c.user_id); });
+    } catch (_) {}
+  }
 
   const out = [];
   for (const r of rooms) {
@@ -195,20 +231,14 @@ async function api_chat_rooms_list(token) {
     }
 
     const last = latestByRoom[Number(r.id)];
-    const lastReadAt = lastReadByRoom[Number(r.id)] || '1970-01-01T00:00:00Z';
-    const unread = messages.filter(m =>
-      Number(m.room_id) === Number(r.id) &&
-      Number(m.user_id) !== Number(me.id) &&
-      String(m.created_at) > String(lastReadAt)
-    ).length;
+    const unread = unreadByRoom[Number(r.id)] || 0;
 
     let label = r.name || '';
     let counterpartId = null;
     if (r.type === 'dm') {
-      const ms = members.filter(m => Number(m.room_id) === Number(r.id));
-      const other = ms.find(m => Number(m.user_id) !== Number(me.id));
-      if (other) {
-        counterpartId = Number(other.user_id);
+      const cp = dmCounterparts[Number(r.id)];
+      if (cp) {
+        counterpartId = cp;
         label = usersById[counterpartId]?.name || ('User #' + counterpartId);
       }
     }
@@ -244,32 +274,34 @@ async function api_chat_messages_list(token, roomId) {
   // only the special 'team' channel is open to everyone.
   const room = await db.findById('chat_rooms', roomId);
   if (!room) throw new Error('Room not found');
-  const memberRow = (await db.getAll('chat_room_members'))
-    .find(m => Number(m.room_id) === Number(roomId) &&
-               Number(m.user_id) === Number(me.id));
+  // CHAT_PERF_v1 — targeted SQL instead of three full-table getAll() scans.
+  // Membership check via SELECT … LIMIT 1, then last-200 messages via
+  // ORDER BY created_at DESC LIMIT 200 (reversed in JS).
+  _ensureChatUnreadIndex();
+  const memberRes = await db.query(
+    'SELECT id FROM chat_room_members WHERE room_id = $1 AND user_id = $2 LIMIT 1',
+    [roomId, me.id]
+  );
+  const memberRow = memberRes.rows[0] || null;
   const isOpenChannel = room.type === 'channel' && room.name === 'team';
   if (!memberRow && !isOpenChannel) throw new Error('Forbidden');
 
   const usersById = await _userMap();
-  const all = await db.getAll('chat_messages');
-  const rows = all
-    .filter(m => Number(m.room_id) === Number(roomId))
-    .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
-    .slice(-200);
+  const msgRes = await db.query(
+    'SELECT id, user_id, body, created_at FROM chat_messages WHERE room_id = $1 ORDER BY created_at DESC LIMIT 200',
+    [roomId]
+  );
+  const rows = msgRes.rows.reverse(); // oldest-first for scroll
 
-  // Mark read — but only after we've loaded so we still see correct unread
-  // counts during the same load
+  // Mark read — only after we've loaded so the same poll still counts unread
   if (memberRow) {
-    await db.update('chat_room_members', memberRow.id, {
-      last_read_at: db.nowIso()
-    });
+    await db.query('UPDATE chat_room_members SET last_read_at = NOW() WHERE id = $1', [memberRow.id]);
   } else {
-    // Channel: ensure membership now exists for read-tracking
     await _ensureChannelMember(roomId, me.id);
-    const m = (await db.getAll('chat_room_members'))
-      .find(x => Number(x.room_id) === Number(roomId) &&
-                 Number(x.user_id) === Number(me.id));
-    if (m) await db.update('chat_room_members', m.id, { last_read_at: db.nowIso() });
+    await db.query(
+      'UPDATE chat_room_members SET last_read_at = NOW() WHERE room_id = $1 AND user_id = $2',
+      [roomId, me.id]
+    );
   }
 
   return rows.map(m => ({
@@ -545,54 +577,62 @@ async function api_chat_groups_members(token, roomId) {
  * unread badge in the chat sidebar is the right place to see everything.
  */
 async function api_chat_recent_unread(token) {
+  // CHAT_PERF_v1 — single SQL: join my memberships → unread messages →
+  // room metadata. Returns top 10 newest unread regardless of room count
+  // or message volume. Replaces a triple full-table-scan that grew
+  // linearly with chat history.
   const me = await authUser(token);
   await _ensureCanChat(me);
+  _ensureChatUnreadIndex();
   const usersById = await _userMap();
-  const [rooms, members, messages] = await Promise.all([
-    db.getAll('chat_rooms'),
-    db.getAll('chat_room_members'),
-    db.getAll('chat_messages')
-  ]);
-  const myMemberships = members.filter(m => Number(m.user_id) === Number(me.id));
-
-  const out = [];
-  for (const mem of myMemberships) {
-    const lastReadAt = mem.last_read_at || '1970-01-01T00:00:00Z';
-    const room = rooms.find(r => Number(r.id) === Number(mem.room_id));
-    if (!room) continue;
-    const unread = messages.filter(msg =>
-      Number(msg.room_id) === Number(room.id) &&
-      Number(msg.user_id) !== Number(me.id) &&
-      String(msg.created_at) > String(lastReadAt)
+  try {
+    const { rows } = await db.query(
+      `SELECT m.id, m.room_id, m.user_id, m.body, m.created_at,
+              r.type AS room_type, r.name AS room_name
+         FROM chat_room_members rm
+         JOIN chat_messages m
+           ON m.room_id = rm.room_id
+          AND m.user_id <> $1
+          AND m.created_at > COALESCE(rm.last_read_at, '1970-01-01'::timestamptz)
+         JOIN chat_rooms r ON r.id = rm.room_id
+        WHERE rm.user_id = $1
+        ORDER BY m.created_at DESC
+        LIMIT 10`,
+      [me.id]
     );
-    if (!unread.length) continue;
-
-    // Resolve a friendly label for the popup title
-    let label = room.name || '';
-    if (room.type === 'dm') {
-      const ms = members.filter(x => Number(x.room_id) === Number(room.id));
-      const other = ms.find(x => Number(x.user_id) !== Number(me.id));
-      label = usersById[Number(other?.user_id)]?.name || 'Direct message';
-    } else if (room.type === 'channel') {
-      label = '#' + (room.name || 'team');
-    }
-
-    unread.forEach(msg => {
-      out.push({
-        id: msg.id,
-        room_id: room.id,
-        room_label: label,
-        room_type: room.type,
-        user_id: msg.user_id,
-        user_name: usersById[Number(msg.user_id)]?.name || 'Teammate',
-        body: msg.body || '',
-        created_at: msg.created_at
+    // For any DM rows, resolve the counterpart's name for the label.
+    const dmRoomIds = [...new Set(rows.filter(r => r.room_type === 'dm').map(r => r.room_id))];
+    const dmLabelByRoom = {};
+    if (dmRoomIds.length) {
+      const { rows: cp } = await db.query(
+        `SELECT room_id, user_id FROM chat_room_members
+          WHERE room_id = ANY($1::int[]) AND user_id <> $2`,
+        [dmRoomIds, me.id]
+      );
+      cp.forEach(c => {
+        const u = usersById[Number(c.user_id)];
+        dmLabelByRoom[Number(c.room_id)] = (u && u.name) || 'Direct message';
       });
+    }
+    return rows.map(r => {
+      let label = r.room_name || '';
+      if (r.room_type === 'dm') label = dmLabelByRoom[Number(r.room_id)] || 'Direct message';
+      else if (r.room_type === 'channel') label = '#' + (r.room_name || 'team');
+      return {
+        id: r.id,
+        room_id: r.room_id,
+        room_label: label,
+        room_type: r.room_type,
+        user_id: r.user_id,
+        user_name: usersById[Number(r.user_id)]?.name || 'Teammate',
+        body: r.body || '',
+        created_at: r.created_at
+      };
     });
+  } catch (e) {
+    console.warn('[chat-recent-unread] fast path failed:', e.message);
+    return [];
   }
-  // Newest first — popup queue shows most-recent-first
-  out.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
-  return out.slice(0, 10);
 }
 
 module.exports = {

@@ -180,6 +180,10 @@ SELECT * FROM (VALUES
 
   ('fix', 'AI Call Summary — desktop only, skipped on mobile app',
    'The 🤖 AI Summary panel was polling the server every 10 seconds up to 18 times for EVERY recording rendered, even on the Android app where reps almost never read summaries (they are out making calls). On a busy session the APK was generating 150+ polls in a few minutes, hammering the database pool and burning Gemini quota for an audience that does not use the feature. From now on the panel is desktop-only. On the Android app you will still see "Rate this call" stars (so reps can flag good or bad calls from the phone) plus a small note that AI summary is on desktop. The server-side worker keeps processing recordings in the background, so when you open the same call on desktop later the summary is already ready — no waiting.',
-   '#/recordings', '🖥', NOW())
+   '#/recordings', '🖥', NOW()),
+
+  ('fix', 'Team chat — every poll is now indexed SQL instead of full-table scan',
+   'The internal team chat (sidebar list of rooms, the open conversation, and the "Recent unread" popup) was loading every row from chat_rooms, chat_room_members AND chat_messages on every poll — even though the average user only has a handful of rooms and reads the last 200 messages. On busy tenants this scaled badly and blocked the database pool for everyone else. Rewrote the three hot endpoints (api_chat_rooms_list, api_chat_messages_list, api_chat_recent_unread) as targeted indexed queries: rooms list runs a DISTINCT ON for the latest message per room + a tiny per-room COUNT for unread; the open conversation uses ORDER BY created_at DESC LIMIT 200; the popup uses one JOIN + LIMIT 10. Same behaviour from your point of view — just much faster, especially on the mobile app where the chat dock polls every few seconds.',
+   '#/chat', '⚡', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
