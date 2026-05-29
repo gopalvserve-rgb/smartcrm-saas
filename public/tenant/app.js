@@ -59,40 +59,65 @@ function _renderPermSoftBanner() {
     let st;
     try { st = JSON.parse(LeadCRMNative.getPermissionsStatus() || '{}'); } catch (_) { st = {}; }
     if (!st || !st.anyMissing) {
-      // perms ok — remove any stale banner from a previous boot
+      // perms ok — remove any stale banner
       const ex = document.getElementById('perm-soft-banner'); if (ex) ex.remove();
+      // Reset the folder-lost flag so a future revocation re-shows as critical
+      try { sessionStorage.removeItem('perm_folder_lost_seen'); } catch (_) {}
       return;
     }
-    // already dismissed in this session?
-    if (sessionStorage.getItem('perm_banner_dismissed') === '1') return;
+
+    // PERM_LOST_BANNER_v1 (2026-05-29) — escalate the folder-lost case.
+    // If the user previously had the folder set (onboardingSeen flag is
+    // true) but it's NOT folderOk now, this is a REVOCATION — Android
+    // killed the SAF permission, or the user changed it in settings.
+    // Recording sync is silently broken until they re-pick. Show a RED
+    // un-dismissable banner instead of the orange soft one.
+    const folderLost = (st.onboardingSeen === true) && st.folderOk === false;
+
+    if (!folderLost) {
+      // Soft (orange) — battery / storage / first-time folder. Dismissable.
+      if (sessionStorage.getItem('perm_banner_dismissed') === '1') return;
+    }
     if (document.getElementById('perm-soft-banner')) return;
 
     const missing = [];
     if (!st.batteryOk)  missing.push('battery');
     if (!st.storageOk)  missing.push('storage');
     if (!st.folderOk)   missing.push('recording folder');
-    const msg = 'For best call-tracking, finish setting up: ' + missing.join(', ') + '.';
 
     const bar = document.createElement('div');
     bar.id = 'perm-soft-banner';
-    bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99998;background:#fff7ed;border-bottom:1px solid #fdba74;color:#7c2d12;padding:.5rem .8rem;font:500 .82rem -apple-system,Segoe UI,Roboto,sans-serif;display:flex;align-items:center;gap:.6rem;box-shadow:0 1px 2px rgba(0,0,0,.05);';
-    bar.innerHTML =
-      '<span style="font-size:1rem">⚙️</span>' +
-      '<span style="flex:1">' + msg + '</span>' +
-      '<button id="perm-soft-fix" style="padding:.3rem .7rem;border:none;border-radius:5px;background:#ea580c;color:#fff;font-weight:600;cursor:pointer;font-size:.78rem">Fix</button>' +
-      '<button id="perm-soft-dismiss" aria-label="Dismiss" style="background:none;border:none;color:#9a3412;font-size:1.1rem;cursor:pointer;padding:0 .3rem">×</button>';
+    if (folderLost) {
+      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99998;background:#fee2e2;border-bottom:2px solid #ef4444;color:#7f1d1d;padding:.6rem .8rem;font:600 .85rem -apple-system,Segoe UI,Roboto,sans-serif;display:flex;align-items:center;gap:.6rem;box-shadow:0 1px 3px rgba(0,0,0,.1);';
+      bar.innerHTML =
+        '<span style="font-size:1.15rem">⚠️</span>' +
+        '<span style="flex:1">Recording folder access lost — recordings are NOT syncing. Tap to re-pick.</span>' +
+        '<button id="perm-soft-fix" style="padding:.35rem .8rem;border:none;border-radius:5px;background:#dc2626;color:#fff;font-weight:700;cursor:pointer;font-size:.8rem">Re-pick folder</button>';
+      try { sessionStorage.setItem('perm_folder_lost_seen', '1'); } catch (_) {}
+    } else {
+      const msg = 'For best call-tracking, finish setting up: ' + missing.join(', ') + '.';
+      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99998;background:#fff7ed;border-bottom:1px solid #fdba74;color:#7c2d12;padding:.5rem .8rem;font:500 .82rem -apple-system,Segoe UI,Roboto,sans-serif;display:flex;align-items:center;gap:.6rem;box-shadow:0 1px 2px rgba(0,0,0,.05);';
+      bar.innerHTML =
+        '<span style="font-size:1rem">⚙️</span>' +
+        '<span style="flex:1">' + msg + '</span>' +
+        '<button id="perm-soft-fix" style="padding:.3rem .7rem;border:none;border-radius:5px;background:#ea580c;color:#fff;font-weight:600;cursor:pointer;font-size:.78rem">Fix</button>' +
+        '<button id="perm-soft-dismiss" aria-label="Dismiss" style="background:none;border:none;color:#9a3412;font-size:1.1rem;cursor:pointer;padding:0 .3rem">×</button>';
+    }
     document.body.appendChild(bar);
-    document.getElementById('perm-soft-fix').addEventListener('click', () => {
+    const fixBtn = document.getElementById('perm-soft-fix');
+    if (fixBtn) fixBtn.addEventListener('click', () => {
       try { LeadCRMNative.openRecordingSetup(); } catch (_) {}
     });
-    document.getElementById('perm-soft-dismiss').addEventListener('click', () => {
+    const dismissBtn = document.getElementById('perm-soft-dismiss');
+    if (dismissBtn) dismissBtn.addEventListener('click', () => {
       try { sessionStorage.setItem('perm_banner_dismissed', '1'); } catch (_) {}
       bar.remove();
     });
   } catch (_) { /* never throw on a UX nicety */ }
 }
-// Try once at boot + once a few seconds in (some perms only resolve after
-// the WebView has time to talk to the JS bridge).
+// PERM_LOST_BANNER_v1 — re-check on boot, every 60s (catches mid-session
+// revocations), and on visibility change (catches the "I just opened
+// settings and changed something" round-trip).
 if (typeof window !== 'undefined') {
   if (document.readyState === 'complete' || document.readyState === 'interactive') {
     setTimeout(_renderPermSoftBanner, 800);
@@ -100,6 +125,12 @@ if (typeof window !== 'undefined') {
     document.addEventListener('DOMContentLoaded', () => setTimeout(_renderPermSoftBanner, 800));
   }
   setTimeout(_renderPermSoftBanner, 5000);
+  setInterval(_renderPermSoftBanner, 60000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      setTimeout(_renderPermSoftBanner, 300);
+    }
+  });
 }
 
 // Save the auth token + API base into Android SharedPreferences so the
