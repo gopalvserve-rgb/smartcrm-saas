@@ -2372,10 +2372,15 @@ VIEWS.dashboard = async (view) => {
     ));
   }
   // Render the grid
+  if (_stale()) return;
   const grid = h('div', { id: 'dash-grid', class: 'dash-grid' });
   view.appendChild(grid);
 
   widgets.forEach((w, idx) => {
+    // DASH_STICKY_LEADS_LEAK_v1 — guard each per-widget append. If a
+    // navigation happened mid-loop, abort so we don't keep dumping
+    // widgets into the new (e.g. Leads) view.
+    if (_stale()) return;
     const def = WIDGET_LIBRARY[w.type];
     if (!def) {
       grid.appendChild(h('div', { class: 'card' },
