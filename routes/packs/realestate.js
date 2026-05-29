@@ -892,6 +892,35 @@ async function install(opts) {
     console.warn('[packs/realestate] custom_fields seed skipped:', e.message);
   }
 
+  // RE_STAGE_RENAME_v1 (2026-05-29) — rename the three generic statuses
+  // ('Negotiation' / 'Proposal / Payment Link Sent' / 'Won') to the
+  // Real-Estate-specific labels the admin requested. Runs FIRST so the
+  // 12-stage seed below doesn't double-up. UPDATE … WHERE LOWER(name) =
+  // matches the exact legacy label only; if a tenant already renamed
+  // their status, this is a no-op. Idempotent — safe to re-run on
+  // every install.
+  try {
+    const RENAMES = [
+      { from: 'Negotiation',                  to: 'Site Visit Schedule', color: '#ec4899' },
+      { from: 'Proposal / Payment Link Sent', to: 'Site Visit done',     color: '#0ea5e9' },
+      { from: 'Proposal/Payment Link Sent',   to: 'Site Visit done',     color: '#0ea5e9' },
+      { from: 'Proposal Sent',                to: 'Site Visit done',     color: '#0ea5e9' },
+      { from: 'Won',                          to: 'Token Received',      color: '#16a34a' }
+    ];
+    for (const r of RENAMES) {
+      try {
+        await db.query(
+          `UPDATE statuses SET name = $1, color = COALESCE($2, color)
+            WHERE LOWER(name) = LOWER($3)
+              AND NOT EXISTS (SELECT 1 FROM statuses WHERE LOWER(name) = LOWER($1))`,
+          [r.to, r.color, r.from]
+        );
+      } catch (_) {}
+    }
+  } catch (e) {
+    console.warn('[packs/realestate] stage rename skipped:', e.message);
+  }
+
   // RE_CP_PIPELINE_v1 (2026-05-21) — Statuses (additive, 12-stage CP flow)
   // Mirrors the canonical 'CP CRM Process' diagram: Lead Received -> Payout.
   // Editable by tenants after install (they can rename/delete/reorder).

@@ -218,6 +218,10 @@ No new schema. Reuses the existing location_pings + attendance tables. Zero doub
 
   ('feature', 'Mobile app — bigger, friendlier Dashboard / Leads / Follow-ups',
    'Mobile app polish pass. Everything on the Dashboard, Leads and Follow-ups pages is now bigger and easier to tap. Specifically: KPI numbers grew from 1.45rem to 1.8rem and got bolder; lead and follow-up cards got more padding and a softer shadow; lead names jumped from 1rem to 1.12rem (700 weight); the row of action buttons (📞 Call / 🟢 WA / 💬 My WA / 📅 Meet / 📝 Note / ✎ Edit / 🚫 Whitelist) now meets the 44px tap-target minimum that Apple and Google recommend so fingers don''t fight to hit them; the green Call button got a subtle shadow so it stands out; filter dropdowns are now 42px tall instead of compact; status chips, pagination buttons, and section headings all sized up. The Filters bar already auto-hides on mobile behind a "🔍 Filters" toggle — that toggle is now a prominent indigo pill so it''s obvious it''s there, with a tiny scale-down animation on tap.',
-   '#/leads', '📱', NOW())
+   '#/leads', '📱', NOW()),
+
+  ('modify', 'Real Estate pack — 3 generic stage names renamed to RE-friendly labels',
+   'When you install (or re-install) the Real Estate industry pack, the three generic statuses left over from the default seed are now renamed to match your sales flow: "Negotiation" -> "Site Visit Schedule", "Proposal / Payment Link Sent" -> "Site Visit done", "Won" -> "Token Received". Existing leads sitting on those old statuses keep their FK link (we rename the row in place, not delete-recreate), so historical reports do not break. To apply to tenants that already have the RE pack installed: super-admin -> open the tenant -> Industry Pack -> Install Real Estate again. Idempotent — re-running is safe.',
+   '#/admin', '🏠', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
