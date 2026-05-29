@@ -7917,8 +7917,12 @@ function renderDialerSettings() {
           h('div', { class: 'muted' }, 'The app reads new files from this folder, parses the phone number, and uploads each recording to the matching lead.'),
           h('div', { class: 'actions' },
             h('button', { class: 'btn primary', onclick: () => syncRecordings() }, '🔄 Sync now'),
+            /* REC_DATE_SYNC_v1 — safety-net buttons: pick a day and re-sync everything from it. */
+            h('button', { class: 'btn', title: 'Re-scan + upload every recording modified TODAY (since midnight, your phone time).', onclick: () => { const d = new Date(); d.setHours(0,0,0,0); const tomorrow = d.getTime() + 24*3600*1000; toast('Scanning today\u2019s recordings\u2026', 'ok'); syncRecordings({ sinceMs: d.getTime(), untilMs: tomorrow }); } }, '📅 Sync today'),
+            h('button', { class: 'btn', title: 'Re-scan + upload every recording from YESTERDAY (midnight to midnight, your phone time).', onclick: () => { const d = new Date(); d.setHours(0,0,0,0); const yest = d.getTime() - 24*3600*1000; toast('Scanning yesterday\u2019s recordings\u2026', 'ok'); syncRecordings({ sinceMs: yest, untilMs: d.getTime() }); } }, '📆 Sync yesterday'),
+            h('button', { class: 'btn', title: 'Re-scan + upload every recording modified in the last 7 days. Useful for catching up after a long offline period.', onclick: () => { const d = new Date(); d.setHours(0,0,0,0); const wk = d.getTime() - 7*24*3600*1000; toast('Scanning last 7 days of recordings\u2026', 'ok'); syncRecordings({ sinceMs: wk }); } }, '📈 Sync last 7 days'),
             h('button', { class: 'btn', onclick: () => syncRecordings({ full: true }) }, '⚡ Re-sync all'),
-            /* REC_RETRY_v1 */ h('button', { class: 'btn primary', title: 'Clears uploaded markers + re-scans every file. Use after a server-side fix.', onclick: async () => { if (!confirm('Reset upload markers and re-scan EVERY file in the folder?')) return; localStorage.removeItem('rec_uploaded'); localStorage.removeItem('rec_last_sync'); toast('Markers cleared — running full sync now…', 'ok'); await syncRecordings({ full: true }); } }, '🩹 Fresh sync (after fix)'),
+            /* REC_RETRY_v1 */ h('button', { class: 'btn primary', title: 'Clears uploaded markers + re-scans every file. Use after a server-side fix.', onclick: async () => { if (!confirm('Reset upload markers and re-scan EVERY file in the folder?')) return; localStorage.removeItem('rec_uploaded'); localStorage.removeItem('rec_last_sync'); toast('Markers cleared — running full sync now\u2026', 'ok'); await syncRecordings({ full: true }); } }, '🩹 Fresh sync (after fix)'),
             h('button', { class: 'btn', onclick: () => openRecordingSyncDebug() }, '🐞 Debug sync'),
             h('button', { class: 'btn', onclick: () => openRecordingSyncDiagnostics() }, '🩺 Sync diagnostics'),
             /* REC_SELFTEST_v1 */ h('button', { class: 'btn primary', title: 'Run an end-to-end self-test of the recording pipeline. Shows pass/fail for each stage.', onclick: () => openRecordingSelftest() }, '🧪 Run self-test'),
@@ -25861,10 +25865,31 @@ async function syncRecordings(opts) {
   // so re-checking older files is free.
   const REWIND_MS = 5 * 60_000;
   const minWatermark = Date.now() - 30 * 60_000;
-  const sinceMs = opts.full ? 0 : Math.max(stored - REWIND_MS, minWatermark);
+  // REC_DATE_SYNC_v1 (2026-05-29): allow callers (Sync Today / Yesterday /
+  // Last 7 days buttons) to override the auto-computed sinceMs. opts.untilMs
+  // (if set) further filters files modified ON OR BEFORE that timestamp,
+  // letting us scope to a specific day without re-uploading newer files.
+  let sinceMs;
+  if (typeof opts.sinceMs === 'number') {
+    sinceMs = opts.sinceMs;
+  } else if (opts.full) {
+    sinceMs = 0;
+  } else {
+    sinceMs = Math.max(stored - REWIND_MS, minWatermark);
+  }
   const filesJson = LeadCRMNative.listRecordings(sinceMs);
   let files = [];
   try { files = JSON.parse(filesJson || '[]'); } catch (e) { files = []; }
+  // REC_DATE_SYNC_v1 — apply untilMs filter (cap end of window).
+  if (typeof opts.untilMs === 'number') {
+    const cap = opts.untilMs;
+    const before = files.length;
+    files = files.filter(f => {
+      const m = Number(f.modifiedAt || f.modified || f.modified_at || 0);
+      return m > 0 ? m <= cap : true;
+    });
+    console.log('[leadcrm] date-sync untilMs filter dropped ' + (before - files.length) + ' files newer than window');
+  }
 
   /* REC_FILENAME_DEDUP_v1 (2026-05-20)
    * Pre-flight: ask the server which of these filenames are already

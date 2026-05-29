@@ -168,6 +168,10 @@ SELECT * FROM (VALUES
 
   ('fix', 'Recording sync — APK v1.9 fixes the "sync stops after a while" loop',
    'Employees were reporting recording sync would work right after picking the folder, then stop a few minutes later until they re-picked. Root cause: yesterday''s v1.8 fix (PERM_FOLDER_PERSIST_FIX_v1) saved the folder URI to prefs BEFORE trying to take a persistable permission. If the persistable-permission call silently failed (common on SD-card / scoped-storage / OEM-quirk folders), the URI was only valid for the current process. The moment Android killed the app and the background WorkManager spawned a fresh process, the folder couldn''t be re-opened and the worker exited. v1.9 inverts the order: take the persistable permission FIRST, save to prefs only if it succeeded. If it failed, show a clear toast telling the employee to pick a folder under Internal Storage (not SD card / not Recents). The background worker also self-heals — if it ever finds a stale unreachable URI in prefs, it clears it so the onboarding card honestly shows "not done" instead of pretending everything is fine.',
-   '#/admin', '🎙', NOW())
+   '#/admin', '🎙', NOW()),
+
+  ('feature', 'Recordings — manual Sync Today / Yesterday / Last 7 days',
+   'Three new safety-net buttons on Settings → Call Recordings. Tap "📅 Sync today" to re-scan and upload every recording your phone made since midnight; "📆 Sync yesterday" for the previous full day; "📈 Sync last 7 days" to catch up after a long offline stretch. Each one ignores the auto-sync watermark and the upload-already-done markers, so even files the app thinks it has handled get re-uploaded; the server then matches them to leads by phone number / filename / timestamp as usual. Great evening or morning routine — pick a button, watch the progress count, done.',
+   '#/dialer-settings', '📆', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
