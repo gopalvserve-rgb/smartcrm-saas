@@ -1318,6 +1318,7 @@ const NAV_GROUPS = [
   { label: 'HR & Me', icon: '🕒', items: [
     { id: 'tasks',      label: 'Tasks',      icon: '✅' },
     { id: 'attendance', label: 'Attendance', icon: '🕒' },
+    { id: 'tracking',   label: 'Location tracking', icon: '🗺️', roles: ['admin','manager','team_leader'] },
     { id: 'leaves',     label: 'Leaves',     icon: '🏖️' },
     { id: 'salary',     label: 'Salary',     icon: '💰' },
     { id: 'bank',       label: 'Bank',       icon: '🏦' }
@@ -24555,6 +24556,317 @@ async function openTaskModal() {
   document.body.appendChild(modal);
 }
 
+
+// ============================================================
+// LOCATION_TRACK_v1 — Location Tracking view
+// ============================================================
+VIEWS.tracking = async (view) => {
+  view.innerHTML = '';
+  const isAdmin = ['admin','manager','team_leader'].includes(CRM.user.role);
+  if (!isAdmin) {
+    view.appendChild(h('div', { class: 'empty-state' }, 'Location Tracking is available for admins, managers and team leaders.'));
+    return;
+  }
+  const tabs = [
+    { id: 'live',  label: '📍 Live team map' },
+    { id: 'trail', label: '🛣 Day trail' },
+    { id: 'about', label: 'ℹ️ About' }
+  ];
+  const nav = h('div', { class: 'subtabs' },
+    ...tabs.map(t => h('button', { class: 'subtab' + (t.id === 'live' ? ' active' : ''),
+      onclick: ev => showTrackTab(ev, t.id) }, t.label))
+  );
+  view.append(nav, h('div', { id: 'trk-body' }));
+  showTrackTab(null, 'live');
+};
+async function showTrackTab(ev, id) {
+  if (ev) { $$('.subtab').forEach(b => b.classList.remove('active')); ev.target.classList.add('active'); }
+  const body = $('#trk-body');
+  body.innerHTML = '<div class="loading">…</div>';
+  if (id === 'live')  body.replaceChildren(await renderLiveTeamMap());
+  if (id === 'trail') body.replaceChildren(await renderDayTrailPicker());
+  if (id === 'about') body.replaceChildren(renderTrackingAbout());
+}
+
+function renderTrackingAbout() {
+  return h('div', { class: 'settings-card', style: 'max-width:720px' },
+    h('h4', { style: 'margin-top:0' }, '🗺️ How Location Tracking works'),
+    h('p', { class: 'muted' }, 'When an employee checks in on the mobile app, their phone sends a GPS ping every 10 minutes until they check out. The CRM stores each ping, then reconstructs the day:'),
+    h('ul', { style: 'line-height:1.7' },
+      h('li', {}, h('b', {}, 'Total km driven'), ' — sum of distances between consecutive pings'),
+      h('li', {}, h('b', {}, 'Halts'), ' — any cluster of pings within ~100 m that lasted ≥ 5 min (lunch, customer visits, traffic jams)'),
+      h('li', {}, h('b', {}, 'Driving time vs. halt time'), ' — for reimbursement / productivity'),
+      h('li', {}, h('b', {}, 'Live status'), ' — driving / stopped (since) / idle / offline based on the latest ping age + movement')
+    ),
+    h('h5', {}, 'Limitations to know about'),
+    h('ul', { style: 'line-height:1.7' },
+      h('li', {}, 'Pings only fire while the app is open or in the recent-apps stack. Phones aggressively kill background JS — same constraint as call tracking. We compensate with the foreground service.'),
+      h('li', {}, 'Selfie + meter reading on check-in/out is configured separately under Attendance → Settings.')
+    ),
+    h('h5', {}, '✨ Roadmap'),
+    h('div', { class: 'muted' }, 'Coming next: geofence around customer addresses → auto-log "visited lead X", weekly distance summary email, expense reimbursement CSV export, idle alerts (stopped > 90 min during work hours).')
+  );
+}
+
+async function renderLiveTeamMap() {
+  await ensureLeaflet();
+  const wrap = h('div', {});
+  const mapDiv = h('div', { id: 'trk-live-map', style: 'height:460px;border-radius:8px;border:1px solid #e2e8f0;margin-bottom:.7rem' });
+  const listDiv = h('div', {});
+  wrap.append(
+    h('div', { class: 'toolbar', style: 'gap:.5rem;align-items:center' },
+      h('span', { style: 'font-size:.85rem;font-weight:600' }, 'Currently checked in'),
+      h('span', { id: 'trk-live-count', class: 'badge', style: 'margin-left:.4rem' }, '…'),
+      h('div', { style: 'flex:1' }),
+      h('button', { class: 'btn', onclick: () => showTrackTab(null, 'live') }, '🔄 Refresh'),
+      h('span', { class: 'muted', style: 'font-size:.74rem;margin-left:.3rem' }, 'auto-refresh every 60s')
+    ),
+    mapDiv,
+    listDiv
+  );
+
+  // Render map shell first so size calc is correct
+  setTimeout(async () => {
+    const data = await api('api_tracking_teamLive').catch(() => []);
+    document.getElementById('trk-live-count').textContent = data.length + ' people';
+    const map = L.map('trk-live-map', { zoomControl: true });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19, attribution: '© OpenStreetMap'
+    }).addTo(map);
+    const bounds = [];
+    const statusColor = { driving: '#10b981', stopped: '#f59e0b', idle: '#64748b', offline: '#94a3b8', checked_out: '#cbd5e1' };
+    const statusIcon  = { driving: '🚗', stopped: '⏸', idle: '💤', offline: '📴', checked_out: '🏁' };
+    const statusLabel = { driving: 'Driving', stopped: 'Stopped', idle: 'Idle', offline: 'Offline', checked_out: 'Checked out' };
+
+    data.forEach(u => {
+      if (u.lat == null || u.lng == null) return;
+      const color = statusColor[u.status] || '#64748b';
+      const html = '<div style="background:'+color+';color:#fff;border-radius:18px;padding:2px 8px;font-size:11px;font-weight:600;box-shadow:0 1px 4px rgba(0,0,0,.3);white-space:nowrap">' +
+        (statusIcon[u.status] || '📍') + ' ' + (u.user_name || '') + '</div>';
+      const icon = L.divIcon({ html, className: '', iconSize: [120, 22], iconAnchor: [60, 11] });
+      const m = L.marker([u.lat, u.lng], { icon }).addTo(map);
+      const popup = '<b>' + esc(u.user_name) + '</b><br>' +
+        '<span style="color:'+color+'">' + (statusIcon[u.status]||'') + ' ' + (statusLabel[u.status]||u.status) + '</span>' +
+        (u.status === 'stopped' && u.stopped_since_min != null ? '<br><span class="muted">since ' + u.stopped_since_min + ' min</span>' : '') +
+        '<br>📍 ' + esc(u.location_name || (u.lat.toFixed(4) + ', ' + u.lng.toFixed(4))) +
+        '<br>🛣 ' + (u.today_km || 0) + ' km today' +
+        '<br><span class="muted">Last ping: ' + (u.last_ping_age_min != null ? (u.last_ping_age_min + ' min ago') : '—') + '</span>' +
+        '<br><button class="btn xs primary" onclick="(function(){ document.querySelectorAll(\'.subtab\').forEach(b=>b.classList.remove(\'active\')); document.querySelectorAll(\'.subtab\')[1].classList.add(\'active\'); showTrackTab(null,\'trail\').then(()=>{ const sel = document.getElementById(\'trk-trail-user\'); if(sel){sel.value=' + u.user_id + '; sel.dispatchEvent(new Event(\'change\'));} }); })()">View today\'s trail →</button>';
+      m.bindPopup(popup);
+      bounds.push([u.lat, u.lng]);
+    });
+    if (bounds.length) map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
+    else map.setView([20.5937, 78.9629], 5); // India centre
+
+    // Status table below map
+    const table = h('table', { class: 'data-table', style: 'margin-top:.7rem' },
+      h('thead', {}, h('tr', {},
+        h('th', {}, 'Employee'),
+        h('th', {}, 'Status'),
+        h('th', {}, 'Where'),
+        h('th', {}, 'Km today'),
+        h('th', {}, 'Last ping')
+      )),
+      h('tbody', {}, ...data.map(u => {
+        const c = statusColor[u.status] || '#64748b';
+        return h('tr', {},
+          h('td', {}, h('b', {}, u.user_name)),
+          h('td', {}, h('span', { style: 'background:'+c+';color:#fff;padding:2px 8px;border-radius:10px;font-size:.74rem' },
+            (statusIcon[u.status]||'') + ' ' + (statusLabel[u.status]||u.status) +
+            (u.status === 'stopped' && u.stopped_since_min != null ? ' · ' + u.stopped_since_min + 'm' : '')
+          )),
+          h('td', { class: 'muted', style: 'font-size:.82rem' }, u.location_name || '—'),
+          h('td', {}, (u.today_km || 0) + ' km'),
+          h('td', { class: 'muted', style: 'font-size:.78rem' }, u.last_ping_age_min != null ? (u.last_ping_age_min + ' min ago') : '—')
+        );
+      }))
+    );
+    listDiv.innerHTML = '';
+    listDiv.appendChild(table);
+
+    // Auto-refresh every 60s while on this tab
+    clearTimeout(window._trkLiveTimer);
+    window._trkLiveTimer = setTimeout(() => {
+      const active = document.querySelector('.subtab.active');
+      if (active && active.textContent.includes('Live team map')) showTrackTab(null, 'live');
+    }, 60000);
+  }, 50);
+
+  return wrap;
+}
+
+async function renderDayTrailPicker() {
+  const users = CRM.cache.users || await api('api_users_list').catch(() => []);
+  CRM.cache.users = users;
+  const today = new Date().toISOString().slice(0, 10);
+
+  const userSel = h('select', { id: 'trk-trail-user', style: 'min-width:180px' },
+    h('option', { value: '' }, '— pick employee —'),
+    ...users.filter(u => u.is_active !== 0).map(u => h('option', { value: u.id }, u.name))
+  );
+  const dateInp = h('input', { type: 'date', id: 'trk-trail-date', value: today, style: 'margin-left:.4rem' });
+  const out = h('div', { id: 'trk-trail-out', style: 'margin-top:.7rem' });
+
+  async function load() {
+    const uid = Number(userSel.value);
+    const dt = dateInp.value;
+    if (!uid || !dt) return;
+    out.innerHTML = '<div class="loading">Loading trail…</div>';
+    try {
+      const r = await api('api_tracking_dayTrail', uid, dt);
+      out.innerHTML = '';
+      out.appendChild(renderDayTrailResult(r, uid, dt));
+    } catch (e) {
+      out.innerHTML = '';
+      out.appendChild(h('div', { class: 'error-box' }, e.message));
+    }
+  }
+  userSel.addEventListener('change', load);
+  dateInp.addEventListener('change', load);
+
+  return h('div', {},
+    h('div', { class: 'toolbar' },
+      h('label', {}, 'Employee'), userSel,
+      h('label', {}, 'Date'), dateInp,
+      h('button', { class: 'btn primary', onclick: load }, '🔍 Load trail')
+    ),
+    h('div', { class: 'muted', style: 'font-size:.78rem;margin-top:.3rem' },
+      'Pick an employee and date to see their route, halts and km. The animated replay button lets you watch the day unfold on the map.'),
+    out
+  );
+}
+
+function renderDayTrailResult(r, uid, dt) {
+  const wrap = h('div', {});
+  const att = r.attendance;
+  if (!att) {
+    return h('div', { class: 'empty-state' }, 'No attendance found for this employee on ' + dt + '. They didn\'t check in.');
+  }
+  const m = r.metrics || {};
+  const halts = r.halts || [];
+  const pings = r.pings || [];
+
+  // KPI strip
+  const kpi = h('div', { style: 'display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.5rem;margin-bottom:.75rem' },
+    _trkKpi('🛣 Total', (m.total_km || 0) + ' km', 'covered today'),
+    _trkKpi('🚗 Driving', (m.drive_km || 0) + ' km', (m.drive_minutes || 0) + ' min'),
+    _trkKpi('⏸ Halts', (m.halt_count || 0), (m.halt_minutes || 0) + ' min stopped'),
+    _trkKpi('🚦 Max speed', (m.max_speed_kmh || 0) + ' km/h', 'between pings'),
+    _trkKpi('📍 Pings', pings.length, 'GPS samples')
+  );
+
+  // Map + replay control
+  const mapDiv = h('div', { id: 'trk-trail-map', style: 'height:460px;border-radius:8px;border:1px solid #e2e8f0;margin-bottom:.7rem' });
+  const sliderRow = h('div', { style: 'display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem' },
+    h('button', { id: 'trk-play', class: 'btn primary' }, '▶ Play replay'),
+    h('input', { type: 'range', id: 'trk-slider', min: 0, max: 0, value: 0, style: 'flex:1' }),
+    h('span', { id: 'trk-time', class: 'muted', style: 'font-size:.78rem;min-width:100px;text-align:right' }, '—')
+  );
+
+  // Halts table
+  const haltsTable = h('div', { class: 'table-wrap', style: 'margin-top:.7rem' },
+    h('h4', { style: 'margin:.6rem 0 .3rem' }, '⏸ Halts (' + halts.length + ')'),
+    halts.length === 0
+      ? h('div', { class: 'muted' }, 'No halts longer than 5 minutes detected.')
+      : h('table', {},
+        h('thead', {}, h('tr', {},
+          h('th', {}, 'From'), h('th', {}, 'To'), h('th', {}, 'Duration'),
+          h('th', {}, 'Where'), h('th', {}, '')
+        )),
+        h('tbody', {}, ...halts.map((hh, idx) => h('tr', {},
+          h('td', {}, fmtDate(hh.from, 'time')),
+          h('td', {}, fmtDate(hh.to, 'time')),
+          h('td', {}, hh.duration_min + ' min'),
+          h('td', { class: 'muted' }, hh.location_name || (hh.lat.toFixed(4) + ', ' + hh.lng.toFixed(4))),
+          h('td', {},
+            h('a', { href: 'https://www.google.com/maps?q=' + hh.lat + ',' + hh.lng, target: '_blank' }, '🗺 Map')
+          )
+        )))
+      )
+  );
+
+  wrap.append(kpi, sliderRow, mapDiv, haltsTable);
+
+  // Build the actual map after the wrap is attached
+  setTimeout(() => _trkRenderTrailMap(att, pings, halts), 50);
+  return wrap;
+}
+
+function _trkKpi(label, val, sub) {
+  return h('div', { style: 'background:#eff6ff;border:1px solid #dbeafe;border-radius:10px;padding:.55rem .75rem' },
+    h('div', { style: 'font-size:.68rem;color:#1e40af;text-transform:lowercase;letter-spacing:.02em' }, label),
+    h('div', { style: 'font-size:1.25rem;font-weight:700;color:#0f172a;line-height:1.1;margin-top:.15rem' }, val),
+    h('div', { style: 'font-size:.66rem;color:#64748b;margin-top:.15rem' }, sub)
+  );
+}
+
+async function _trkRenderTrailMap(att, pings, halts) {
+  await ensureLeaflet();
+  const map = L.map('trk-trail-map', { zoomControl: true });
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+
+  const path = [];
+  if (att.check_in_lat) path.push([Number(att.check_in_lat), Number(att.check_in_lng)]);
+  pings.forEach(p => path.push([Number(p.lat), Number(p.lng)]));
+  if (att.check_out_lat) path.push([Number(att.check_out_lat), Number(att.check_out_lng)]);
+
+  if (path.length >= 2) {
+    L.polyline(path, { color: '#4f46e5', weight: 4, opacity: 0.8 }).addTo(map);
+  }
+
+  if (att.check_in_lat) {
+    L.marker([att.check_in_lat, att.check_in_lng], { icon: _trkPin('🟢', 'Check-in') })
+      .bindPopup('<b>Check-in</b><br>' + (att.check_in_location_name || '') + '<br>' + new Date(att.check_in).toLocaleTimeString())
+      .addTo(map);
+  }
+  if (att.check_out_lat) {
+    L.marker([att.check_out_lat, att.check_out_lng], { icon: _trkPin('🔴', 'Check-out') })
+      .bindPopup('<b>Check-out</b><br>' + (att.check_out_location_name || '') + '<br>' + new Date(att.check_out).toLocaleTimeString())
+      .addTo(map);
+  }
+  halts.forEach((hh, i) => {
+    L.marker([hh.lat, hh.lng], { icon: _trkPin('⏸', 'Halt ' + (i+1)) })
+      .bindPopup('<b>Halt ' + (i+1) + '</b><br>' + hh.duration_min + ' min<br>' + (hh.location_name || ''))
+      .addTo(map);
+  });
+
+  if (path.length) map.fitBounds(path, { padding: [40, 40] });
+
+  // Replay animation: a moving dot along the path
+  if (path.length >= 2) {
+    const slider = document.getElementById('trk-slider');
+    const timeEl = document.getElementById('trk-time');
+    const playBtn = document.getElementById('trk-play');
+    slider.max = path.length - 1;
+    const moveMarker = L.marker(path[0], { icon: _trkPin('🚗', 'Now') }).addTo(map);
+    let playing = false, timer = null;
+    function showStep(i) {
+      i = Math.max(0, Math.min(path.length - 1, i));
+      slider.value = i;
+      moveMarker.setLatLng(path[i]);
+      const stamp = i === 0 ? att.check_in
+        : (i - 1 < pings.length ? pings[i - 1].created_at : att.check_out);
+      timeEl.textContent = stamp ? new Date(stamp).toLocaleTimeString() : '—';
+    }
+    slider.addEventListener('input', () => showStep(Number(slider.value)));
+    playBtn.addEventListener('click', () => {
+      if (playing) { clearInterval(timer); playing = false; playBtn.textContent = '▶ Play replay'; return; }
+      playing = true; playBtn.textContent = '⏸ Pause';
+      timer = setInterval(() => {
+        let i = Number(slider.value) + 1;
+        if (i >= path.length) { clearInterval(timer); playing = false; playBtn.textContent = '▶ Play replay'; return; }
+        showStep(i);
+      }, 350);
+    });
+    showStep(0);
+  }
+}
+
+function _trkPin(emoji, label) {
+  const html = '<div style="background:#fff;border:2px solid #4f46e5;border-radius:50%;width:30px;height:30px;display:flex;align-items:center;justify-content:center;font-size:14px;box-shadow:0 1px 4px rgba(0,0,0,.25)" title="' + (label || '') + '">' + emoji + '</div>';
+  return L.divIcon({ html, className: '', iconSize: [30, 30], iconAnchor: [15, 15] });
+}
+
 VIEWS.attendance = async (view) => {
   view.innerHTML = '';
   const canReport = ['admin', 'manager', 'team_leader'].includes(CRM.user.role);
@@ -25246,7 +25558,7 @@ async function checkInOut(which) {
  * --------------------------------------------------------------------- */
 
 let _locPingTimer = null;
-const PING_INTERVAL_MS = 30 * 60 * 1000;
+const PING_INTERVAL_MS = 10 * 60 * 1000; // LOCATION_TRACK_v1 — 10 min (was 30) for denser day trails
 
 function startLocationPingTimer() {
   if (_locPingTimer) clearInterval(_locPingTimer);

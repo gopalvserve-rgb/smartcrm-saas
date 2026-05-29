@@ -961,6 +961,280 @@ async function api_location_trail(token, userId, date) {
   };
 }
 
+
+
+// ============================================================
+// LOCATION_TRACK_v1 (2026-05-29) — Day Trail + Live Team Map
+// ============================================================
+// Builds on api_location_ping / api_location_trail. Computes:
+//   - total km (haversine sum across consecutive pings)
+//   - halts: consecutive pings within HALT_RADIUS_M (default 100m)
+//     that span >= HALT_MIN_MINUTES (default 5)
+//   - status for live team map (driving / stopped / idle / offline)
+//
+// Designed to scale on the SQL side too: per-user-per-day queries are
+// indexed on (user_id, created_at) which the location_pings table
+// already supports through (attendance_id) and chronological order.
+
+const _TRK_HALT_RADIUS_M = 100;
+const _TRK_HALT_MIN_MIN = 5;
+const _TRK_DRIVE_MIN_DIST_M = 200;        // moved this much since prev ping → driving
+const _TRK_STATUS_DRIVING_MAX_MIN = 7;    // recency threshold for "driving"
+const _TRK_STATUS_STOPPED_MAX_MIN = 15;   // recency threshold for "stopped (now)"
+const _TRK_STATUS_IDLE_MAX_MIN = 60;      // beyond this we call them offline
+
+function _trkDistanceM(lat1, lon1, lat2, lon2) {
+  if (lat1 == null || lat2 == null) return 0;
+  const R = 6371000; // metres
+  const toRad = d => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+function _trkMinutesBetween(a, b) {
+  try { return Math.max(0, (new Date(b).getTime() - new Date(a).getTime()) / 60000); }
+  catch (_) { return 0; }
+}
+function _trkComputeHaltsAndKm(pings, checkInAt, checkInLat, checkInLng) {
+  if (!pings || !pings.length) return { halts: [], metrics: { total_km: 0, drive_km: 0,
+    halt_count: 0, halt_minutes: 0, max_speed_kmh: 0, avg_speed_kmh: 0,
+    first_ping_at: null, last_ping_at: null, drive_minutes: 0 } };
+
+  // Insert a virtual "ping" at the check-in point so the trail starts there
+  // rather than at the first periodic ping (which can be 10+ min after CI).
+  const seq = [];
+  if (checkInLat != null && checkInLng != null && checkInAt) {
+    seq.push({ lat: Number(checkInLat), lng: Number(checkInLng),
+      created_at: checkInAt, accuracy_m: null, _synthetic: true });
+  }
+  pings.forEach(p => seq.push(p));
+
+  // First pass: distance + speed segments
+  let total_km = 0, drive_km = 0, max_speed_kmh = 0, drive_minutes = 0;
+  for (let i = 1; i < seq.length; i++) {
+    const a = seq[i-1], b = seq[i];
+    const dM = _trkDistanceM(Number(a.lat), Number(a.lng), Number(b.lat), Number(b.lng));
+    const mins = _trkMinutesBetween(a.created_at, b.created_at);
+    total_km += dM / 1000;
+    if (dM >= _TRK_DRIVE_MIN_DIST_M && mins > 0) {
+      drive_km += dM / 1000;
+      drive_minutes += mins;
+      const kmh = (dM / 1000) / (mins / 60);
+      if (kmh > max_speed_kmh && kmh < 200 /* cap GPS jitter */) max_speed_kmh = kmh;
+    }
+  }
+  const avg_speed_kmh = drive_minutes > 0 ? (drive_km / (drive_minutes / 60)) : 0;
+
+  // Second pass: cluster consecutive pings into halts
+  const halts = [];
+  let i = 0;
+  while (i < seq.length) {
+    let j = i;
+    // Extend cluster while we stay within HALT_RADIUS_M of the seed point
+    while (j + 1 < seq.length &&
+           _trkDistanceM(Number(seq[i].lat), Number(seq[i].lng),
+                         Number(seq[j+1].lat), Number(seq[j+1].lng)) <= _TRK_HALT_RADIUS_M) {
+      j++;
+    }
+    const durMin = _trkMinutesBetween(seq[i].created_at, seq[j].created_at);
+    if (durMin >= _TRK_HALT_MIN_MIN && (j - i) >= 1) {
+      halts.push({
+        from: seq[i].created_at,
+        to: seq[j].created_at,
+        lat: Number(seq[i].lat),
+        lng: Number(seq[i].lng),
+        duration_min: Math.round(durMin),
+        location_name: seq[i].location_name || seq[j].location_name || null
+      });
+    }
+    i = j + 1;
+  }
+  const halt_minutes = halts.reduce((a, h) => a + h.duration_min, 0);
+
+  return {
+    halts,
+    metrics: {
+      total_km: Number(total_km.toFixed(2)),
+      drive_km: Number(drive_km.toFixed(2)),
+      drive_minutes: Math.round(drive_minutes),
+      halt_count: halts.length,
+      halt_minutes,
+      max_speed_kmh: Math.round(max_speed_kmh),
+      avg_speed_kmh: Math.round(avg_speed_kmh),
+      first_ping_at: seq[0] ? seq[0].created_at : null,
+      last_ping_at: seq[seq.length-1] ? seq[seq.length-1].created_at : null
+    }
+  };
+}
+
+/**
+ * LOCATION_TRACK_v1 — full day trail for one user, ready to render.
+ * Includes attendance row, every ping, computed halts, and metrics.
+ */
+async function api_tracking_dayTrail(token, userId, date) {
+  const me = await authUser(token);
+  if (!['admin', 'manager', 'team_leader'].includes(me.role) &&
+      Number(userId) !== Number(me.id)) {
+    throw new Error('Forbidden');
+  }
+  const visible = await getVisibleUserIds(me);
+  if (me.role !== 'admin' && !visible.includes(Number(userId))) {
+    throw new Error('Forbidden');
+  }
+  const day = String(date || todayIso()).slice(0, 10);
+  // Fast SQL — index on (user_id, date) on attendance, and (attendance_id) on pings.
+  const att = (await db.query(
+    `SELECT * FROM attendance WHERE user_id = $1 AND date::text = $2 LIMIT 1`,
+    [userId, day]
+  )).rows[0] || null;
+  if (!att) return { attendance: null, pings: [], halts: [], metrics: null };
+  const pingsRes = await db.query(
+    `SELECT id, lat, lng, location_name, accuracy_m, created_at
+       FROM location_pings WHERE attendance_id = $1 ORDER BY created_at ASC`,
+    [att.id]
+  );
+  const pings = pingsRes.rows;
+  const { halts, metrics } = _trkComputeHaltsAndKm(
+    pings, att.check_in, att.check_in_lat, att.check_in_lng
+  );
+  return {
+    attendance: att,
+    pings,
+    halts,
+    metrics
+  };
+}
+
+/**
+ * LOCATION_TRACK_v1 — live snapshot of every user currently checked in,
+ * with status badges for the team map.
+ */
+async function api_tracking_teamLive(token) {
+  const me = await authUser(token);
+  if (!['admin', 'manager', 'team_leader'].includes(me.role)) {
+    throw new Error('Admin / manager / team lead only');
+  }
+  const day = todayIso();
+  const visible = await getVisibleUserIds(me);
+  const userIdFilter = visible && visible.length ? visible : [me.id];
+
+  // Today's checked-in attendance rows for the users I can see
+  const attRes = await db.query(
+    `SELECT a.id AS att_id, a.user_id, a.check_in, a.check_out, a.work_mode,
+            a.check_in_lat, a.check_in_lng, a.check_in_location_name,
+            u.name AS user_name, u.role AS user_role
+       FROM attendance a
+       JOIN users u ON u.id = a.user_id
+      WHERE a.date::text = $1
+        AND a.user_id = ANY($2::int[])`,
+    [day, userIdFilter]
+  );
+  const rows = attRes.rows;
+  if (!rows.length) return [];
+
+  // Latest ping per attendance_id, plus the previous one so we can tell
+  // if the user is moving.
+  const attIds = rows.map(r => r.att_id);
+  const lastPingRes = await db.query(
+    `SELECT DISTINCT ON (attendance_id) attendance_id, lat, lng,
+            location_name, accuracy_m, created_at
+       FROM location_pings
+      WHERE attendance_id = ANY($1::int[])
+      ORDER BY attendance_id, created_at DESC`,
+    [attIds]
+  );
+  const lastByAtt = {};
+  lastPingRes.rows.forEach(r => { lastByAtt[Number(r.attendance_id)] = r; });
+
+  // Previous ping (one before last) — used to detect "is moving"
+  const prevPingRes = await db.query(
+    `SELECT attendance_id, lat, lng, created_at FROM (
+       SELECT attendance_id, lat, lng, created_at,
+              ROW_NUMBER() OVER (PARTITION BY attendance_id ORDER BY created_at DESC) rn
+         FROM location_pings WHERE attendance_id = ANY($1::int[])
+     ) t WHERE t.rn = 2`,
+    [attIds]
+  );
+  const prevByAtt = {};
+  prevPingRes.rows.forEach(r => { prevByAtt[Number(r.attendance_id)] = r; });
+
+  // Today's km per user (lightweight — sum of consecutive distances)
+  const allTodayRes = await db.query(
+    `SELECT attendance_id, lat, lng, created_at
+       FROM location_pings WHERE attendance_id = ANY($1::int[])
+       ORDER BY attendance_id, created_at ASC`,
+    [attIds]
+  );
+  const kmByAtt = {};
+  const groupedByAtt = {};
+  allTodayRes.rows.forEach(r => {
+    const aid = Number(r.attendance_id);
+    if (!groupedByAtt[aid]) groupedByAtt[aid] = [];
+    groupedByAtt[aid].push(r);
+  });
+  Object.entries(groupedByAtt).forEach(([aid, arr]) => {
+    let m = 0;
+    for (let i = 1; i < arr.length; i++) {
+      m += _trkDistanceM(arr[i-1].lat, arr[i-1].lng, arr[i].lat, arr[i].lng);
+    }
+    kmByAtt[Number(aid)] = Number((m / 1000).toFixed(1));
+  });
+
+  const now = Date.now();
+  return rows.map(r => {
+    const last = lastByAtt[Number(r.att_id)] || null;
+    const prev = prevByAtt[Number(r.att_id)] || null;
+    // If no ping yet, fall back to check-in coords
+    const lat = last ? Number(last.lat) : Number(r.check_in_lat);
+    const lng = last ? Number(last.lng) : Number(r.check_in_lng);
+    const lastAt = last ? last.created_at : r.check_in;
+    const ageMin = lastAt ? Math.max(0, (now - new Date(lastAt).getTime()) / 60000) : null;
+    const movedM = (last && prev) ? _trkDistanceM(last.lat, last.lng, prev.lat, prev.lng) : 0;
+
+    let status = 'offline';
+    let stopped_since_min = null;
+    if (ageMin == null) status = 'offline';
+    else if (r.check_out) status = 'checked_out';
+    else if (ageMin <= _TRK_STATUS_DRIVING_MAX_MIN && movedM >= _TRK_DRIVE_MIN_DIST_M) status = 'driving';
+    else if (ageMin <= _TRK_STATUS_STOPPED_MAX_MIN) {
+      status = 'stopped';
+      // How long have they been at this spot? Walk backwards through pings
+      // while we stay within the halt radius.
+      const arr = (groupedByAtt[Number(r.att_id)] || []).slice().reverse();
+      if (arr.length >= 2) {
+        const seed = arr[0];
+        let earliestSameSpot = seed.created_at;
+        for (let i = 1; i < arr.length; i++) {
+          if (_trkDistanceM(seed.lat, seed.lng, arr[i].lat, arr[i].lng) <= _TRK_HALT_RADIUS_M) {
+            earliestSameSpot = arr[i].created_at;
+          } else break;
+        }
+        stopped_since_min = Math.round(_trkMinutesBetween(earliestSameSpot, new Date().toISOString()));
+      }
+    }
+    else if (ageMin <= _TRK_STATUS_IDLE_MAX_MIN) status = 'idle';
+    else status = 'offline';
+
+    return {
+      user_id: r.user_id,
+      user_name: r.user_name,
+      user_role: r.user_role,
+      attendance_id: r.att_id,
+      lat, lng,
+      location_name: last ? (last.location_name || null) : (r.check_in_location_name || null),
+      last_ping_at: lastAt,
+      last_ping_age_min: ageMin != null ? Math.round(ageMin) : null,
+      status,
+      stopped_since_min,
+      work_mode: r.work_mode,
+      check_in_at: r.check_in,
+      check_out_at: r.check_out,
+      today_km: kmByAtt[Number(r.att_id)] || 0
+    };
+  });
+}
+
 module.exports = {
   api_attendance_checkIn, api_attendance_checkOut,
   api_attendance_policy, api_attendance_policy_save,
@@ -970,5 +1244,6 @@ module.exports = {
   api_salary_mine, api_salary_list, api_salary_save,
   api_salary_bulkSave, api_salary_report, api_salary_payslip,
   api_bank_mine, api_bank_save, api_bank_list,
-  api_location_ping, api_location_trail
+  api_location_ping, api_location_trail,
+  api_tracking_dayTrail, api_tracking_teamLive
 };

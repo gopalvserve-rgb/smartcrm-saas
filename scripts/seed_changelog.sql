@@ -188,6 +188,18 @@ SELECT * FROM (VALUES
 
   ('feature', 'Attendance — admin can require selfie + meter reading on check-in/out',
    'New tab in Attendance → ⚙️ Settings (admin only) lets you turn on two optional capture steps for every check-in and check-out. (1) Selfie — opens the front camera, snaps a live photo. Stops time-fraud where an employee marks attendance from a friend or family member''s phone. (2) Meter reading — a numeric input you can label "Odometer (km)", "Electricity meter", "Water meter", or whatever fits your business. Useful for drivers, field staff, vehicle assignments. Both are off by default. Toggle either ON and every employee will see the capture step before their check-in completes; the system blocks check-in if the required value is missing. Existing GPS location requirement is unchanged.',
-   '#/attendance', '📸', NOW())
+   '#/attendance', '📸', NOW()),
+
+  ('feature', 'Location Tracking — Live team map + Day trail with replay',
+   'New section in the sidebar under HR & Me: 🗺️ Location tracking. Two tools.
+
+(1) 📍 Live team map — every employee currently checked in shown on a single map with a colour-coded status badge: 🚗 driving, ⏸ stopped (since X min), 💤 idle, 📴 offline. Click any pin to see their location, today''s km, last ping age, and a link to jump straight to their day trail. Auto-refreshes every 60 seconds.
+
+(2) 🛣 Day trail — pick an employee and a date, get a full breakdown: total km driven, halt count and duration, max speed between pings, every halt longer than 5 minutes shown as a table (with Google Maps link) and as a pin on the route. ▶ Play replay button animates a 🚗 marker along the route so you can watch the day unfold like a video. Check-in pin (🟢) and check-out pin (🔴) anchor the start and end.
+
+GPS pings now fire every 10 minutes while checked in (was 30 minutes) so the trail has enough resolution for the replay to feel smooth.
+
+✨ Roadmap coming next: geofence around customer addresses → auto-log "visited lead X" when an employee stops at a known lead location; weekly distance summary email; reimbursement CSV export; idle alerts.',
+   '#/tracking', '🗺️', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
