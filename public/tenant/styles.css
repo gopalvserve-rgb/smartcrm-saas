@@ -3703,3 +3703,32 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
   }
   #btn-wa-notif:hover { background: #1ebe5b !important; }
 }
+
+/* ───────── SHARE_LEAD_v1 (2026-05-30) ───────── */
+/* Lead modal: 🤝 Share row with co-owner chips + add button */
+.share-row {
+  display: inline-flex; flex-wrap: wrap; align-items: center; gap: .35rem;
+  margin-left: .5rem; vertical-align: middle;
+}
+.co-chip {
+  display: inline-flex; align-items: center; gap: .25rem;
+  background: #ecfdf5; color: #047857;
+  border: 1px solid #a7f3d0; border-radius: 999px;
+  padding: .15rem .55rem; font-size: .78rem; font-weight: 600;
+}
+.co-chip-x {
+  border: 0; background: transparent; color: #047857;
+  cursor: pointer; padding: 0 .15rem; font-size: 1rem; line-height: 1;
+}
+.co-chip-x:hover { color: #b91c1c; }
+.share-add-btn {
+  border: 1px dashed #94a3b8; background: #f8fafc; color: #475569;
+  border-radius: 999px; padding: .15rem .6rem; font-size: .78rem;
+  cursor: pointer; font-weight: 600;
+}
+.share-add-btn:hover { background: #eef2ff; border-color: #6366f1; color: #4338ca; }
+@media (prefers-color-scheme: dark) {
+  .co-chip { background: rgba(16,185,129,.15); color: #6ee7b7; border-color: rgba(16,185,129,.4); }
+  .co-chip-x { color: #6ee7b7; }
+  .share-add-btn { background: rgba(255,255,255,.05); color: #cbd5e1; border-color: #475569; }
+}

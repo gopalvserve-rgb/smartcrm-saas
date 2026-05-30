@@ -352,7 +352,10 @@ async function api_leads_list(token, filters) {
   const visible = await getVisibleUserIds(me);
   const { usersById, statusesById, productsById, tatByStatusId, finalStatusIds } = await _lookups();
   filters = filters || {};
-  let rows = (await db.getAll('leads')).filter(l => _isVisible(me, visible, l));
+  // SHARE_LEAD_v1: pre-load co-owner map so a lead also shows up under
+  // every co-owner's list, with the 🤝 badge.
+  const coOwnerMap = await _loadCoOwnerMap();
+  let rows = (await db.getAll('leads')).filter(l => _isVisibleCo(me, visible, l, coOwnerMap));
 
   // Phase 3: hide leads where is_hidden=1 (campaigns "removed user keeps
   // hidden" policy). Admins can opt-in by passing filters.show_hidden='1';
@@ -565,6 +568,23 @@ async function api_leads_list(token, filters) {
     }
   } catch (e) { console.warn('[leads activity counts]', e.message); }
 
+  // SHARE_LEAD_v1: attach co_owners + shared_with_me flag to each row.
+  try {
+    const usersByIdLocal = usersById;
+    for (const h of hydrated) {
+      const set = coOwnerMap.get(Number(h.id));
+      if (set && set.size) {
+        h.co_owners = Array.from(set).map(uid => ({
+          id: uid,
+          name: (usersByIdLocal[uid] && usersByIdLocal[uid].name) || ''
+        }));
+        h.shared_with_me = set.has(Number(me.id));
+      } else {
+        h.co_owners = [];
+        h.shared_with_me = false;
+      }
+    }
+  } catch (_) {}
   return { leads: hydrated, total, page, page_size: pageSize, status_count: statusCount };
 }
 
@@ -584,7 +604,7 @@ async function api_leads_get(token, id) {
   const visible = await getVisibleUserIds(me);
   const lead = await db.findById('leads', id);
   if (!lead) throw new Error('Not found');
-  if (!_isVisible(me, visible, lead)) throw new Error('Forbidden');
+  if (!await _isVisibleOrShared(me, visible, lead)) throw new Error('Forbidden');
   if (Number(lead.is_hidden || 0) === 1 && me.role !== 'admin') throw new Error('Forbidden');
 
   const { usersById, statusesById, productsById, tatByStatusId, finalStatusIds } = await _lookups();
@@ -910,6 +930,9 @@ async function api_leads_create(token, payload) {
 
   const id = await db.insert('leads', base);
 
+  // SHARE_LEAD_v1: auto-share rules from campaign + source. Best-effort.
+  try { await _applyAutoShare(id, Object.assign({ id }, base), me && me.id); } catch (_) {}
+
   // OUTBOUND_WH_v1 — fire outbound webhooks (async, never block lead creation)
   try {
     const { fireOutboundWebhooks } = require('./outboundWebhook');
@@ -1150,7 +1173,7 @@ async function api_leads_update(token, id, patch) {
   const visible = await getVisibleUserIds(me);
   const lead = await db.findById('leads', id);
   if (!lead) throw new Error('Not found');
-  if (!_isVisible(me, visible, lead)) throw new Error('Forbidden');
+  if (!await _isVisibleOrShared(me, visible, lead)) throw new Error('Forbidden');
 
   // Non-admins: silently strip campaign-locked fields from the patch BEFORE
   // we copy values into `allowed`. Defense in depth — frontend also shows
@@ -1882,7 +1905,7 @@ async function api_leads_duplicateHistory(token, leadId) {
   const visible = await getVisibleUserIds(me);
   const lead = await db.findById('leads', leadId);
   if (!lead) throw new Error('Not found');
-  if (!_isVisible(me, visible, lead)) throw new Error('Forbidden');
+  if (!await _isVisibleOrShared(me, visible, lead)) throw new Error('Forbidden');
 
   const phone = String(lead.phone || '').replace(/\D/g, '');
   const wa = String(lead.whatsapp || '').replace(/\D/g, '');
@@ -1975,6 +1998,7 @@ async function api_leads_duplicateAndReassign(token, leadId, newAssigneeId) {
     // qualified, qualified_at, qualified_by, last_status_change_at-from-
     // original. Fresh lead, fresh data.
   });
+          try { await _applyAutoShare(newId, Object.assign({ id: newId, source: payload.source || row.source }, row), me && me.id); } catch (_) {}
 
   // Per product owner: the manual "Duplicate & reassign" flow must leave
   // the ORIGINAL lead untouched in the UI — no reassignment trail in the
@@ -2323,7 +2347,7 @@ async function api_leads_assignToCampaign(token, leadIds, campaignId) {
   for (const id of ids) {
     const lead = await db.findById('leads', id);
     if (!lead) { results.push({ id, ok: false, error: 'not found' }); continue; }
-    if (!_isVisible(me, visible, lead)) { results.push({ id, ok: false, error: 'forbidden' }); continue; }
+    if (!await _isVisibleOrShared(me, visible, lead)) { results.push({ id, ok: false, error: 'forbidden' }); continue; }
     try {
       const r = await assignLeadToCampaign(id, cid, { actor: me });
       results.push({ id, ok: true, ...r });
@@ -2648,7 +2672,7 @@ async function api_leads_activityTimeline(token, leadId) {
   const visible = await getVisibleUserIds(me);
   const lead = await db.findById('leads', leadId);
   if (!lead) throw new Error('Not found');
-  if (!_isVisible(me, visible, lead)) throw new Error('Forbidden');
+  if (!await _isVisibleOrShared(me, visible, lead)) throw new Error('Forbidden');
   const { rows } = await db.query(
     `SELECT la.id, la.action_type, la.user_id, la.meta_json, la.created_at,
             u.name AS user_name
@@ -2669,6 +2693,129 @@ async function api_leads_activityTimeline(token, leadId) {
   }));
 }
 
+
+// SHARE_LEAD_v1 auto-share: called after every lead insert. Reads
+// campaign.auto_share_user_id and sources.auto_share_user_id (matched
+// by source name) and inserts co-owner rows. Best-effort; failures
+// never block lead creation.
+async function _applyAutoShare(leadId, lead, actorId) {
+  if (!leadId) return [];
+  const out = [];
+  try {
+    // 1) Campaign rule
+    if (lead && lead.campaign_id) {
+      try {
+        const c = await db.query(
+          'SELECT auto_share_user_id FROM campaigns WHERE id = $1 LIMIT 1',
+          [Number(lead.campaign_id)]
+        );
+        const uid = c.rows[0] && Number(c.rows[0].auto_share_user_id);
+        if (uid && uid !== Number(lead.assigned_to)) {
+          await db.query(
+            `INSERT INTO lead_co_owners (lead_id, user_id, added_by, source)
+             VALUES ($1, $2, $3, 'auto_campaign')
+             ON CONFLICT (lead_id, user_id) DO NOTHING`,
+            [leadId, uid, actorId || null]
+          );
+          out.push({ user_id: uid, source: 'auto_campaign' });
+        }
+      } catch (e) { console.warn('[autoshare campaign]', e.message); }
+    }
+    // 2) Source rule — match by source name (case-insensitive)
+    if (lead && lead.source) {
+      try {
+        const sn = String(lead.source).trim().toLowerCase();
+        const r = await db.query(
+          `SELECT auto_share_user_id FROM sources
+            WHERE LOWER(name) = $1 LIMIT 1`,
+          [sn]
+        );
+        const uid = r.rows[0] && Number(r.rows[0].auto_share_user_id);
+        if (uid && uid !== Number(lead.assigned_to)) {
+          await db.query(
+            `INSERT INTO lead_co_owners (lead_id, user_id, added_by, source)
+             VALUES ($1, $2, $3, 'auto_source')
+             ON CONFLICT (lead_id, user_id) DO NOTHING`,
+            [leadId, uid, actorId || null]
+          );
+          out.push({ user_id: uid, source: 'auto_source' });
+        }
+      } catch (e) { console.warn('[autoshare source]', e.message); }
+    }
+  } catch (_) {}
+  return out;
+}
+
+// SHARE_LEAD_v1 helper — single-lead path. Queries lead_co_owners directly
+// for the {lead_id, user_id} pair. Falls back silently if table missing.
+async function _isVisibleOrShared(me, visible, lead) {
+  if (_isVisible(me, visible, lead)) return true;
+  try {
+    const r = await db.query(
+      'SELECT 1 FROM lead_co_owners WHERE lead_id = $1 AND user_id = ANY($2::int[]) LIMIT 1',
+      [Number(lead.id), [Number(me.id), ...visible.map(Number)]]
+    );
+    return r.rows.length > 0;
+  } catch (_) {
+    return false;
+  }
+}
+
+// SHARE_LEAD_v1: add a co-owner. Only the primary owner, an admin, or
+// another existing co-owner may add a new co-owner.
+async function api_leads_shareWith(token, lead_id, user_id) {
+  const me = await authUser(token);
+  const lead = await db.findById('leads', lead_id);
+  if (!lead) throw new Error('Lead not found');
+  const visible = await getVisibleUserIds(me);
+  if (!await _isVisibleOrShared(me, visible, lead)) throw new Error('Forbidden');
+  const uid = Number(user_id);
+  if (!uid) throw new Error('user_id required');
+  if (uid === Number(lead.assigned_to)) throw new Error('That user is already the primary owner');
+  await db.query(
+    `INSERT INTO lead_co_owners (lead_id, user_id, added_by, source)
+     VALUES ($1, $2, $3, 'manual')
+     ON CONFLICT (lead_id, user_id) DO NOTHING`,
+    [Number(lead_id), uid, me.id]
+  );
+  return { ok: true };
+}
+
+// SHARE_LEAD_v1: remove a co-owner.
+async function api_leads_unshare(token, lead_id, user_id) {
+  const me = await authUser(token);
+  const lead = await db.findById('leads', lead_id);
+  if (!lead) throw new Error('Lead not found');
+  const visible = await getVisibleUserIds(me);
+  if (!await _isVisibleOrShared(me, visible, lead)) throw new Error('Forbidden');
+  await db.query(
+    'DELETE FROM lead_co_owners WHERE lead_id = $1 AND user_id = $2',
+    [Number(lead_id), Number(user_id)]
+  );
+  return { ok: true };
+}
+
+// SHARE_LEAD_v1: list current co-owners of a lead.
+async function api_leads_listCoOwners(token, lead_id) {
+  const me = await authUser(token);
+  const lead = await db.findById('leads', lead_id);
+  if (!lead) throw new Error('Lead not found');
+  const visible = await getVisibleUserIds(me);
+  if (!await _isVisibleOrShared(me, visible, lead)) throw new Error('Forbidden');
+  try {
+    const r = await db.query(
+      `SELECT co.user_id, co.added_by, co.added_at, co.source, u.name, u.email
+         FROM lead_co_owners co
+         LEFT JOIN users u ON u.id = co.user_id
+        WHERE co.lead_id = $1
+        ORDER BY co.added_at ASC`,
+      [Number(lead_id)]
+    );
+    return r.rows;
+  } catch (_) { return []; }
+}
+
+
 module.exports = {
   api_leads_list, api_leads_distinctTags, api_leads_phoneBook, api_leads_statusCounts, api_leads_get, api_leads_create, api_leads_update,
   api_leads_addRemark, api_leads_pipeline, api_myFollowups, api_followup_done, api_leads_followupDone,
@@ -2681,5 +2828,7 @@ module.exports = {
   api_leads_assignToCampaign,
   api_leads_rescanDuplicates,
   api_leads_merge,
-  api_leads_activityTimeline  /* LEAD_ACTIVITY_v1 */  /* LEAD_MERGE_v1 */
+  api_leads_activityTimeline,  /* LEAD_ACTIVITY_v1 */  /* LEAD_MERGE_v1 */
+  api_leads_shareWith, api_leads_unshare, api_leads_listCoOwners,  /* SHARE_LEAD_v1 */
+  _applyAutoShare
 };

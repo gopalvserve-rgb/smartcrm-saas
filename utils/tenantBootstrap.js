@@ -188,6 +188,29 @@ const SCHEMA_MIGRATIONS = [
     ALTER TABLE fcm_tokens ADD COLUMN IF NOT EXISTS device_info TEXT;
     ALTER TABLE fcm_tokens ADD COLUMN IF NOT EXISTS registered_at TIMESTAMPTZ DEFAULT NOW();
   ` },
+
+  // SHARE_LEAD_v1 (2026-05-30) — co-owner join table.
+  // Lets a lead appear under multiple users' "My leads" simultaneously
+  // while keeping a single primary owner in leads.assigned_to. Both can
+  // fully work the lead (change status, add remarks, call, WhatsApp).
+  // 'source' tells us whether it was added manually or by an auto-rule.
+  { name: '2026_05_30_lead_co_owners', sql: `
+    CREATE TABLE IF NOT EXISTS lead_co_owners (
+      id          SERIAL PRIMARY KEY,
+      lead_id     INTEGER NOT NULL,
+      user_id     INTEGER NOT NULL,
+      added_by    INTEGER,
+      added_at    TIMESTAMPTZ DEFAULT NOW(),
+      source      TEXT DEFAULT 'manual',
+      UNIQUE (lead_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_lead_co_owners_user ON lead_co_owners(user_id);
+    CREATE INDEX IF NOT EXISTS idx_lead_co_owners_lead ON lead_co_owners(lead_id);
+
+    -- Auto-share rules live on existing tables:
+    ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS auto_share_user_id INTEGER;
+    ALTER TABLE sources   ADD COLUMN IF NOT EXISTS auto_share_user_id INTEGER;
+  ` },
 ];
 
 /**

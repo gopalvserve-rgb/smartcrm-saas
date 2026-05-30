@@ -4205,7 +4205,7 @@ function renderLeadsMobile(rows) {
         h('div', { class: 'lc-avatar', style: { background: avatarColor } }, initials),
         h('div', { class: 'lc-body' },
           h('div', { class: 'lc-head' },
-            h('a', { href: '#', class: 'lc-name', onclick: ev => { ev.preventDefault(); openLeadModal(l.id); } }, l.name || '—'),
+            h('a', { href: '#', class: 'lc-name', onclick: ev => { ev.preventDefault(); openLeadModal(l.id); } }, (l.shared_with_me ? '🤝 ' : '') + (l.name || '—')),
             h('span', { class: 'lc-status', style: { background: statusColor } }, l.status_name || '')
           ),
           // Source + phone in one row
@@ -6151,8 +6151,67 @@ async function openLeadModal(id) {
     h('h3', {}, id ? 'Edit Lead' : 'New Lead'),
     lead.is_duplicate ? h('span', { class: 'dup-pill', onclick: () => openDuplicateHistory(id) }, 'DUPLICATE of #' + (lead.duplicate_of || '?')) : null,
     Number(lead.qualified) === 1 ? h('span', { class: 'qual-pill ok' }, '✓ Qualified') : null,
+    // SHARE_LEAD_v1: 🤝 Share button + co-owner chips. Visible on existing leads only.
+    id ? h('span', { class: 'share-row', id: 'share-row-' + id }, '') : null,
     h('button', { class: 'btn icon', onclick: () => modal.remove() }, '✕')
   ));
+
+
+  // SHARE_LEAD_v1: hydrate the share row with co-owner chips and a + Share button.
+  if (id) {
+    (async () => {
+      const sr = body.querySelector('#share-row-' + id);
+      if (!sr) return;
+      try {
+        const co = await api('api_leads_listCoOwners', id);
+        sr.innerHTML = '';
+        (co || []).forEach(c => {
+          const chip = h('span', { class: 'co-chip' },
+            '🤝 ' + (c.name || ('User #' + c.user_id)),
+            h('button', { class: 'co-chip-x', title: 'Remove', onclick: async (ev) => {
+              ev.stopPropagation();
+              if (!confirm('Remove ' + (c.name || 'this user') + ' from this lead?')) return;
+              try { await api('api_leads_unshare', id, c.user_id); chip.remove(); toast('Removed'); }
+              catch (e) { toast(e.message || 'err', 'err'); }
+            } }, '×')
+          );
+          sr.appendChild(chip);
+        });
+        const addBtn = h('button', { class: 'share-add-btn', title: 'Share with another user', onclick: () => {
+          const usersAll = (CRM.cache.users || []).filter(u => u.id !== Number(lead.assigned_to) && Number(u.is_active) === 1);
+          const taken = new Set((co || []).map(x => Number(x.user_id)));
+          const remaining = usersAll.filter(u => !taken.has(Number(u.id)));
+          if (!remaining.length) { toast('No more users to share with'); return; }
+          const pickerWrap = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) pickerWrap.remove(); } });
+          const picker = h('div', { class: 'modal modal-sm' });
+          pickerWrap.appendChild(picker);
+          picker.appendChild(h('div', { class: 'modal-head' },
+            h('h3', {}, '🤝 Share lead with…'),
+            h('button', { class: 'btn icon', onclick: () => pickerWrap.remove() }, '✕')
+          ));
+          const sel = h('select', { style: { width: '100%', padding: '.5rem' } },
+            ...remaining.map(u => h('option', { value: u.id }, u.name || u.email || ('User #' + u.id))));
+          const pbody = h('div', { class: 'modal-body' }, sel,
+            h('p', { class: 'muted', style: { marginTop: '.5rem' } }, 'Both you and the picked user will see this lead under My Leads with a 🤝 badge. Both can fully work it.'));
+          picker.appendChild(pbody);
+          picker.appendChild(h('div', { class: 'modal-foot' },
+            h('button', { class: 'btn', onclick: () => pickerWrap.remove() }, 'Cancel'),
+            h('button', { class: 'btn primary', onclick: async () => {
+              const uid = Number(sel.value);
+              try { await api('api_leads_shareWith', id, uid); pickerWrap.remove(); toast('Shared');
+                const co2 = await api('api_leads_listCoOwners', id);
+                sr.innerHTML = '';
+                (co2 || []).forEach(c => sr.appendChild(h('span', { class: 'co-chip' }, '🤝 ' + (c.name || ('User #' + c.user_id)))));
+                sr.appendChild(addBtn);
+              } catch (e) { toast(e.message || 'err', 'err'); }
+            } }, 'Share')
+          ));
+          document.body.appendChild(pickerWrap);
+        } }, '🤝 + Share');
+        sr.appendChild(addBtn);
+      } catch (e) { /* table not migrated yet — silent */ }
+    })();
+  }
 
   // Quick actions row — front-and-centre Call / personal WA / Cloud-API
   // template / Calendly buttons so reps don't have to hunt for them in
@@ -18905,6 +18964,19 @@ async function openCampaignEditModal(camp, onSaved) {
     h('span', {}, ' minutes are updated')
   ));
 
+  // SHARE_LEAD_v1: auto-share-with picker. Optional.
+  const autoShareS = h('select', { style: { padding: '.4rem .6rem', borderRadius: '6px', border: '1px solid var(--border)', minWidth: '180px' } },
+    h('option', { value: '' }, '— No auto-share —'),
+    ...((CRM.cache.users || []).filter(u => Number(u.is_active) === 1).map(u =>
+      h('option', { value: u.id, selected: (camp && Number(camp.auto_share_user_id) === Number(u.id)) ? '' : null }, u.name || u.email || ('User #' + u.id))))
+  );
+  const autoShareRow = h('div', { class: 'form-row' },
+    h('label', {}, '🤝 Auto-share every new lead in this campaign with'),
+    autoShareS,
+    h('p', { class: 'muted', style: { fontSize: '.8rem', marginTop: '.25rem' } }, 'In addition to the primary assignee, the picked user will also see every new lead created in this campaign and can fully work it.')
+  );
+  body.appendChild(autoShareRow);
+
   // Conditional rules editor — only visible when distribution_mode='conditional'.
   // Each rule is { if: { <field>: <expected> | { op, value } }, then: { user_id } }.
   body.appendChild(h('label', { style: { marginTop: '.6rem' } }, 'Conditional rules'));
@@ -19049,6 +19121,8 @@ async function openCampaignEditModal(camp, onSaved) {
           pull_require_old_updated: requireOld.checked,
           pull_old_threshold_minutes: Number(oldThreshold.value || 60),
           removed_user_action: removedAction,
+          // SHARE_LEAD_v1: auto-share every new lead in this campaign with a chosen user
+          auto_share_user_id: (autoShareS && autoShareS.value) ? Number(autoShareS.value) : null,
           conditional_rules: mode === 'conditional' ? currentRules : null,
           // Lead match filter — only persist rules that have a field; for
           // is_empty/is_not_empty operators, value is irrelevant.

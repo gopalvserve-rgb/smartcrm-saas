@@ -242,5 +242,10 @@ Background-poll cuts on the APK. Floating-WhatsApp chat dock is now disabled on 
   ('modify', 'Mobile header — cleaned up the icon strip',
    'On the phone the top-bar was getting cramped. Removed three items on screens narrower than 780px: the Get-app / Download button (you already have the app installed if you are seeing this on the phone), the Due-today calendar chip, and the Upcoming calendar chip — those follow-ups are still one tap away from the bottom-nav or the sidebar. Kept ✨ New, ⚠️ Overdue, 📘 Help, 🎁 What is new, 🔔 Notifications. The WhatsApp inbox icon (💬) is now painted in WhatsApp-green so it stands out as the chat shortcut. Desktop view is unchanged.',
    NULL, '📱', NOW())
+,
+
+  ('feature', 'Share a lead with a second user (manual + auto)',
+   'Until now every lead had exactly one assignee. You can now show the same lead to a second user in their My Leads, with both able to fully work it (change status, add remark, call, WhatsApp). Two ways to set it up. (1) Manual — on any lead modal a new 🤝 + Share button opens a user picker; the picked user instantly sees the lead under their My Leads with a 🤝 badge next to the name. Either side can remove the share with the X on the chip. (2) Automatic — when you create or edit a Campaign there is a new 🤝 Auto-share every new lead in this campaign with picker. Pick a user there and every new lead created under that campaign is automatically shared with them too. The primary owner relationship is unchanged; co-owners are an additive layer. New tables and columns are created automatically on next request (lead_co_owners join table, plus campaigns.auto_share_user_id and sources.auto_share_user_id columns) so no migration is required.',
+   '#/leads', '🤝', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);

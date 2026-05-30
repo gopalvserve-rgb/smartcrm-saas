@@ -358,6 +358,11 @@ async function _internalCreateLead(payload, asUserId) {
     }
   } catch (e) { console.warn('[integrations] campaign match lookup failed:', e.message); }
   const id = await db.insert('leads', lead);
+  // SHARE_LEAD_v1: auto-share rules from campaign + source for webhook leads.
+  try {
+    const lr = require('./leads');
+    if (typeof lr._applyAutoShare === 'function') await lr._applyAutoShare(id, Object.assign({ id }, lead), null);
+  } catch (_) {}
 
   // OUTBOUND_WH_v1 — fire outbound webhooks (async, never block lead creation)
   try {

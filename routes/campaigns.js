@@ -111,7 +111,7 @@ function _normaliseAgents(rawAgents, mode) {
 async function api_campaigns_list(token) {
   await authUser(token);   // any signed-in user can see; visibility is admin-tab gated client-side
   const r = await db.query(`
-    SELECT c.id, c.name, c.pipeline, c.manager_user_id, c.distribution_mode,
+    SELECT c.id, c.name, c.pipeline, c.manager_user_id, c.distribution_mode, c.auto_share_user_id,
            c.pull_batch_size, c.pull_initial_count,
            c.pull_require_old_updated, c.pull_old_threshold_minutes,
            c.removed_user_action, c.is_active,
@@ -163,6 +163,8 @@ async function api_campaigns_save(token, payload) {
                               : (typeof p.conditional_rules === 'string'
                                   ? p.conditional_rules
                                   : JSON.stringify(p.conditional_rules));
+  // SHARE_LEAD_v1: per-campaign auto-share. Null clears.
+  const autoShareUid = p.auto_share_user_id == null || p.auto_share_user_id === '' ? null : Number(p.auto_share_user_id) || null;
   // Lead-match filter: rules a lead must satisfy to auto-join this
   // campaign. Stored as JSONB array of { field, op, value }.
   const matchFilter       = p.match_filter == null
@@ -202,11 +204,13 @@ async function api_campaigns_save(token, payload) {
          pull_require_old_updated=$7, pull_old_threshold_minutes=$8,
          removed_user_action=$9, conditional_rules=$10, is_active=$11,
          match_filter=$13,
+         auto_share_user_id=$14,
          updated_at=NOW()
        WHERE id=$12 RETURNING id`,
       [name, pipeline, managerUserId, distributionMode,
        pullBatch, pullInitial, pullRequireOld, pullThresholdMin,
-       removedAction, conditionalRules, isActive, campaignId, matchFilter]
+       removedAction, conditionalRules, isActive, campaignId, matchFilter,
+       autoShareUid]
     );
     if (!u.rows.length) throw new Error('Campaign not found for update.');
   } else {
@@ -215,12 +219,14 @@ async function api_campaigns_save(token, payload) {
          (name, pipeline, manager_user_id, distribution_mode,
           pull_batch_size, pull_initial_count,
           pull_require_old_updated, pull_old_threshold_minutes,
-          removed_user_action, conditional_rules, is_active, match_filter)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+          removed_user_action, conditional_rules, is_active, match_filter,
+          auto_share_user_id)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
         RETURNING id`,
       [name, pipeline, managerUserId, distributionMode,
        pullBatch, pullInitial, pullRequireOld, pullThresholdMin,
-       removedAction, conditionalRules, isActive, matchFilter]
+       removedAction, conditionalRules, isActive, matchFilter,
+       autoShareUid]
     );
     campaignId = i.rows[0].id;
   }
