@@ -1502,7 +1502,7 @@ function renderShell() {
   // shortcuts (newleads / overdue / upcoming) are hidden by default
   // since they now live as chips in the topbar; admin can re-enable
   // them in Settings if they prefer the sidebar links.
-  const hiddenNavIds = String(CRM.config.hidden_nav_ids || 'newleads,overdue,duetoday,upcoming,dialer')
+  const hiddenNavIds = String(CRM.config.hidden_nav_ids || 'newleads,overdue,duetoday,upcoming')
     .split(',').map(s => s.trim()).filter(Boolean);
 
   // Helper: make one anchor for a NAV item. Returns null if user can't see it.
@@ -1712,7 +1712,7 @@ function showMobileMore() {
           }
           // Also honor admin-hidden nav items (Settings -> Menu visibility)
           try {
-            const hiddenIds = String(CRM.config.hidden_nav_ids || 'newleads,overdue,duetoday,upcoming,dialer')
+            const hiddenIds = String(CRM.config.hidden_nav_ids || 'newleads,overdue,duetoday,upcoming')
               .split(',').map(x => x.trim()).filter(Boolean);
             if (hiddenIds.includes(item.id)) return false;
           } catch (_) {}
@@ -21245,7 +21245,7 @@ function openProjectStageEditModal(s, onSaved) {
  */
 async function adminMenuVisibility() {
   const cfg = await api('api_admin_getConfig');
-  const hidden = new Set(String(cfg.HIDDEN_NAV_IDS || 'newleads,overdue,duetoday,upcoming,dialer')
+  const hidden = new Set(String(cfg.HIDDEN_NAV_IDS || 'newleads,overdue,duetoday,upcoming')
     .split(',').map(s => s.trim()).filter(Boolean));
   const wrap = h('div', {});
   wrap.appendChild(h('h4', { style: { margin: '0 0 .5rem' } }, '🧭 Sidebar menu visibility'));
