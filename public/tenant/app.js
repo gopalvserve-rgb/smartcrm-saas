@@ -3500,19 +3500,19 @@ VIEWS.leads = async (view) => {
   // some Samsung devices reports innerWidth in the 720-820 range.
   toolbar.id = 'leads-toolbar';
   const _filterIsMobile = (typeof window !== 'undefined') && window.innerWidth < 900;
-  // LEADS_FILTER_CLOSED_DEFAULT_v1 — on mobile, ignore localStorage and
-  // ALWAYS start closed. Previous sessions or desktop visits may have
-  // set crm_leads_filter_open='1', leaving mobile users stuck with the
-  // filter panel eating half their viewport on every page load. Use a
-  // window-scoped var instead so the toggle works during the session
-  // but the next fresh launch starts closed again. Desktop is unchanged:
-  // it still respects localStorage and defaults to open.
+  // LEADS_FILTER_CSS_LOCK_v1 — CSS rule in styles.css now force-hides the
+  // toolbar + header + cf-row on mobile unless body.leads-filter-open
+  // is set. JS only manages the body class — no localStorage on mobile.
   let _filterOpen;
   if (_filterIsMobile) {
     _filterOpen = !!window._mobileLeadsFilterOpen;
-    // Proactively nuke any stale stored flag so the user can't be
-    // 'sticky-opened' by code on another device.
     try { localStorage.removeItem('crm_leads_filter_open'); } catch (_) {}
+    try { localStorage.removeItem('crm_show_header'); } catch (_) {}
+    // Sync body class to current state — CSS does the visibility.
+    try {
+      if (_filterOpen) document.body.classList.add('leads-filter-open');
+      else document.body.classList.remove('leads-filter-open');
+    } catch (_) {}
   } else {
     const _filterPrefRaw = (() => { try { return localStorage.getItem('crm_leads_filter_open'); } catch (_) { return null; } })();
     _filterOpen = (_filterPrefRaw === '1' || _filterPrefRaw === '0')
@@ -3521,6 +3521,8 @@ VIEWS.leads = async (view) => {
     if (_filterPrefRaw === null) {
       try { localStorage.setItem('crm_leads_filter_open', _filterOpen ? '1' : '0'); } catch (_) {}
     }
+    // Desktop doesn't need the CSS lock, but keep the class consistent.
+    try { document.body.classList.add('leads-filter-open'); } catch (_) {}
   }
   // Apply the initial visibility IMMEDIATELY on the toolbar element
   // BEFORE it's appended to the DOM. No setTimeout = no timing race.
@@ -3590,22 +3592,25 @@ VIEWS.leads = async (view) => {
   // they just also fire touchend, so binding both = double-fire =
   // visible no-op.
   function _toggleFilterPanel() {
-    /* LEADS_FILTER_CLOSED_DEFAULT_v1 — mobile uses window-scoped state
-       so each fresh app launch starts closed. Desktop keeps using
-       localStorage so the user's preference sticks across reloads. */
+    /* LEADS_FILTER_CSS_LOCK_v1 — mobile uses body.leads-filter-open
+       class to drive CSS visibility. No localStorage on mobile. */
     var nowOpen, next;
     if (_filterIsMobile) {
       nowOpen = !!window._mobileLeadsFilterOpen;
       next = !nowOpen;
       window._mobileLeadsFilterOpen = next;
+      try {
+        if (next) document.body.classList.add('leads-filter-open');
+        else document.body.classList.remove('leads-filter-open');
+      } catch (_) {}
     } else {
       var cur;
       try { cur = localStorage.getItem('crm_leads_filter_open'); } catch (_) { cur = null; }
       nowOpen = (cur === '1');
       next = !nowOpen;
       try { localStorage.setItem('crm_leads_filter_open', next ? '1' : '0'); } catch (_) {}
+      try { localStorage.setItem('crm_show_header', next ? '1' : '0'); CRM.prefs.showHeader = next; } catch (_) {}
     }
-    try { localStorage.setItem('crm_show_header', next ? '1' : '0'); CRM.prefs.showHeader = next; } catch (_) {}
     try { navigateTo('leads'); } catch (_) { try { location.reload(); } catch (__) {} }
   }
   _filterToggle.addEventListener('click', _toggleFilterPanel);

@@ -3790,3 +3790,30 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
 .lc-extra { font-size: .82rem; line-height: 1.25; color: #1e293b; }
 .lc-extra-label { color: #64748b; font-weight: 600; margin-right: .25em; }
 .lc-extra-value { color: #0f172a; font-weight: 500; }
+
+/* =================================================================
+ * LEADS_FILTER_CSS_LOCK_v1 (2026-05-30) — CSS-only enforcement that
+ * the filter toolbar, status-chip header, custom-field row, and the
+ * "▾ Show header" toggle are HIDDEN on mobile unless body has the
+ * 'leads-filter-open' class. No JS state, no localStorage, no race.
+ *
+ * Why this exists: every JS-based attempt to default the filter to
+ * closed on mobile got beaten by stale localStorage from previous
+ * sessions or desktop visits. CSS wins.
+ *
+ * Class is toggled by _toggleFilterPanel.
+ * ================================================================= */
+@media (max-width: 900px) {
+  body:not(.leads-filter-open) #leads-toolbar,
+  body:not(.leads-filter-open) .leads-header,
+  body:not(.leads-filter-open) #cf-filter-row,
+  body:not(.leads-filter-open) .header-hidden-toggle {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+    overflow: hidden !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+  }
+}
