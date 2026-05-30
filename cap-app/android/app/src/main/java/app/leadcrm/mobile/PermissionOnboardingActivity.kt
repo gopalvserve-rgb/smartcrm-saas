@@ -13,6 +13,7 @@ import android.os.Environment
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
+import androidx.documentfile.provider.DocumentFile
 import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -79,7 +80,19 @@ class PermissionOnboardingActivity : AppCompatActivity() {
             val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             val battery = batteryOptIgnored(ctx)
             val storage = manageExternalStorageOk(ctx)
-            val folder  = !prefs.getString(KEY_REC_FOLDER, null).isNullOrEmpty()
+            // PERM_LOST_BANNER_v2 — was: just `!uri.isNullOrEmpty()`. That stayed true
+            // forever once the user had ever picked a folder, even after Android
+            // revoked the SAF permission (system reboot, user clear, low storage,
+            // OEM cleanup). Now we actually try DocumentFile.canRead() — if it
+            // returns false, the prefs are stale and we fire the RED banner.
+            val folder = run {
+                val u = prefs.getString(KEY_REC_FOLDER, null)
+                if (u.isNullOrEmpty()) return@run false
+                try {
+                    val dir = DocumentFile.fromTreeUri(ctx, Uri.parse(u))
+                    dir != null && dir.exists() && dir.canRead()
+                } catch (_: Throwable) { false }
+            }
             val seen    = prefs.getBoolean(KEY_ONBOARDING_DONE, false)
             val anyMissing = !(battery && storage && folder)
             return """{"batteryOk":$battery,"storageOk":$storage,"folderOk":$folder,"onboardingSeen":$seen,"anyMissing":$anyMissing}"""
