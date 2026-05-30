@@ -3402,15 +3402,13 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
   line-height: 1.25 !important;
 }
 .lead-card .lc-status {
-  font-size: .68rem !important;
+  /* STATUS_PILL_BRAND_OVERRIDE_FIX_v1 — dropped background/color/box-shadow
+     overrides that were forcing every status to look like the brand colour.
+     The inline style now drives the fill + text colour per status. */
   font-weight: 700 !important;
   text-transform: uppercase !important;
   letter-spacing: .04em !important;
-  padding: 4px 10px !important;
   border-radius: 999px !important;
-  background: var(--brand-soft) !important;
-  color: var(--brand-dark) !important;
-  box-shadow: inset 0 0 0 1px rgba(99,102,241,.18) !important;
   flex: 0 0 auto;
 }
 
