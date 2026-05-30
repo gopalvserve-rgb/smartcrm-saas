@@ -19206,9 +19206,11 @@ async function openCampaignEditModal(camp, onSaved) {
     { value: 'existing', label: 'Existing leads only (one-time backfill)' },
     { value: 'both',     label: 'Future + existing leads' }
   ];
+  // CAMPAIGN_ATTACH_PERSIST_v1 — restore the previously-saved choice on edit
+  const _savedApplyMode = (camp && typeof camp.apply_mode === 'string' && camp.apply_mode) || 'future';
   const _attachRadios = _attachModes.map(m => {
     const r = h('input', { type: 'radio', name: 'attach-mode', value: m.value });
-    if (m.value === 'future') r.checked = true;
+    if (m.value === _savedApplyMode) r.checked = true;
     return r;
   });
   _attachModes.forEach((m, i) => {
@@ -19305,6 +19307,45 @@ async function openCampaignEditModal(camp, onSaved) {
   window._campaignAttachReader = _readExistFilters;
   window._campaignAttachMode = () => (_attachRadios.find(r => r.checked) || {}).value || 'future';
 
+  // CAMPAIGN_ATTACH_PERSIST_v1 — restore saved backfill filters into the form
+  (() => {
+    let saved = null;
+    try {
+      if (camp && camp.backfill_filters) {
+        saved = typeof camp.backfill_filters === 'string'
+          ? JSON.parse(camp.backfill_filters)
+          : camp.backfill_filters;
+      }
+    } catch (_) { saved = null; }
+    if (!saved) return;
+    // Match mode
+    if (saved.match_mode === 'or') {
+      _matchModeRadios[1].checked = true; _matchModeRadios[0].checked = false;
+    }
+    // Assigned to multi-select
+    if (Array.isArray(saved.assigned_to)) {
+      Array.from(_assignedSel.options).forEach(o => {
+        const v = o.value === 'unassigned' ? 'unassigned' : Number(o.value);
+        o.selected = saved.assigned_to.some(x =>
+          (x === 'unassigned' && v === 'unassigned') ||
+          (Number(x) === v)
+        );
+      });
+    }
+    // Status multi-select
+    if (Array.isArray(saved.status_id)) {
+      const set = new Set(saved.status_id.map(Number));
+      Array.from(_statusSel.options).forEach(o => { o.selected = set.has(Number(o.value)); });
+    }
+    // Source multi-select
+    if (Array.isArray(saved.source)) {
+      const set = new Set(saved.source.map(String));
+      Array.from(_sourceSel.options).forEach(o => { o.selected = set.has(String(o.value)); });
+    }
+    // Also-unassign
+    if (typeof saved.also_unassign === 'boolean') _alsoUnassignCb.checked = saved.also_unassign;
+  })();
+
   // Toggle visibility based on attach-mode radio
   _attachRadios.forEach(r => {
     r.addEventListener('change', () => {
@@ -19312,6 +19353,10 @@ async function openCampaignEditModal(camp, onSaved) {
       _existFilterWrap.style.display = (mode === 'existing' || mode === 'both') ? 'block' : 'none';
     });
   });
+  // Show the filter panel immediately if the saved mode is existing/both
+  if (_savedApplyMode === 'existing' || _savedApplyMode === 'both') {
+    _existFilterWrap.style.display = 'block';
+  }
 
   // Manager
   const managerS = h('select', { style: { width: '100%' } },
@@ -19557,6 +19602,9 @@ async function openCampaignEditModal(camp, onSaved) {
           removed_user_action: removedAction,
           // SHARE_LEAD_v1: auto-share every new lead in this campaign with a chosen user
           auto_share_user_id: (autoShareS && autoShareS.value) ? Number(autoShareS.value) : null,
+          // CAMPAIGN_ATTACH_PERSIST_v1 — persist Apply-mode + backfill filters
+          apply_mode: (typeof window._campaignAttachMode === 'function') ? window._campaignAttachMode() : 'future',
+          backfill_filters: (typeof window._campaignAttachReader === 'function') ? window._campaignAttachReader() : null,
           conditional_rules: mode === 'conditional' ? currentRules : null,
           // Lead match filter — only persist rules that have a field; for
           // is_empty/is_not_empty operators, value is irrelevant.

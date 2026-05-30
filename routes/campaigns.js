@@ -254,13 +254,13 @@ async function api_campaigns_save(token, payload) {
           pull_batch_size, pull_initial_count,
           pull_require_old_updated, pull_old_threshold_minutes,
           removed_user_action, conditional_rules, is_active, match_filter,
-          auto_share_user_id)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+          auto_share_user_id, apply_mode, backfill_filters)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
         RETURNING id`,
       [name, pipeline, managerUserId, distributionMode,
        pullBatch, pullInitial, pullRequireOld, pullThresholdMin,
        removedAction, conditionalRules, isActive, matchFilter,
-       autoShareUid]
+       autoShareUid, applyMode, backfillFilters]
     );
     campaignId = i.rows[0].id;
   }

@@ -210,6 +210,15 @@ const SCHEMA_MIGRATIONS = [
     -- Auto-share rules live on existing tables:
     ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS auto_share_user_id INTEGER;
     ALTER TABLE sources   ADD COLUMN IF NOT EXISTS auto_share_user_id INTEGER;
+
+    -- CAMPAIGN_ATTACH_PERSIST_v1 — persist the "Apply to which leads?" radio
+    -- and the backfill filter so reopening the campaign editor shows what
+    -- the admin picked. backfill_filters is JSON: { match_mode, assigned_to,
+    -- status_id, source, also_unassign }. apply_mode is one of:
+    -- 'future' | 'existing' | 'both'.
+    ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS apply_mode      TEXT    DEFAULT 'future';
+    ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS backfill_filters JSONB;
+    ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS last_backfilled_at TIMESTAMP;
   ` },
 ];
 
