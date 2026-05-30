@@ -77,7 +77,12 @@ const CONFIG_KEYS = [
   /* FU_DONE_v1 — CSV of terminal status NAMES (case-insensitive) that
      auto-clear pending followups when set. Defaults to
      "Not Interested, Junk, Sale Closed, Final Sale Done, Won, Lost, NI". */
-  'FOLLOWUP_AUTO_CLEAR_STATUSES'
+  'FOLLOWUP_AUTO_CLEAR_STATUSES',
+  /* LEAD_CARD_EXTRAS_VISIBILITY_v1.1 (2026-05-30) — admin's 2 extra fields
+     to show on the mobile lead card. Was missing from CONFIG_KEYS so every
+     save was silently dropped — admin saw "Saved" but nothing landed in
+     the DB. Same bug pattern as QUOTATION_DEFAULT_TERMS. */
+  'LEAD_CARD_EXTRAS'
 ];
 
 const SENSITIVE_KEYS = ['META_APP_SECRET', 'META_PAGE_ACCESS_TOKEN', 'WHATSAPP_ACCESS_TOKEN', 'SMTP_PASSWORD'];
