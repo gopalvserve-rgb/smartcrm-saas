@@ -4124,6 +4124,32 @@ function _nukeUnwantedLeadButtons(root) {
   });
 }
 
+
+// LEAD_CARD_EXTRA_v1 — resolve a stored field key against a lead row for
+// the mobile card extras. Returns { label, value } or null if empty.
+function _resolveLeadField(l, key) {
+  if (!l || !key) return null;
+  if (key.indexOf('cf:') === 0) {
+    const cfKey = key.slice(3);
+    const cfDef = ((CRM.cache && CRM.cache.customFields) || []).find(c => c.key === cfKey);
+    const extra = l.extra || {};
+    const v = extra[cfKey] != null ? extra[cfKey] : (l['cf_' + cfKey] || '');
+    return v ? { label: (cfDef && cfDef.label) || cfKey, value: String(v) } : null;
+  }
+  const labels = {
+    product_name: 'Product', email: 'Email', whatsapp: 'WhatsApp',
+    value: 'Value', city: 'City', company: 'Company', tag: 'Tag',
+    assigned_name: 'Assigned', created_at: 'Created', last_activity_at: 'Last activity'
+  };
+  let v = l[key];
+  if (key === 'tag' && !v) v = l.tags || '';
+  if (v == null || v === '') return null;
+  if (key === 'value' && l.currency) v = (l.currency + ' ' + v);
+  if (key === 'created_at' || key === 'last_activity_at') {
+    try { v = fmtDate(v, 'short'); } catch (_) {}
+  }
+  return { label: labels[key] || key, value: String(v) };
+}
 function renderLeadsMobile(rows) {
   const m = $('#leads-mobile');
   if (!m) return;
@@ -4163,7 +4189,23 @@ function renderLeadsMobile(rows) {
             '📣 ', l.campaign_name,
             l.form_name ? h('span', { class: 'lc-form' }, '  ·  ', l.form_name) : null
           ) : null,
-          l.assigned_name ? h('div', { class: 'lc-assignee' }, '👤  ', l.assigned_name) : null
+          l.assigned_name ? h('div', { class: 'lc-assignee' }, '👤  ', l.assigned_name) : null,
+          // LEAD_CARD_EXTRA_v1: render up to 2 admin-picked extras here.
+          (() => {
+            try {
+              const raw = (CRM.config && CRM.config.LEAD_CARD_EXTRAS) || '';
+              const keys = String(raw).split(',').map(x => x.trim()).filter(Boolean).slice(0, 2);
+              if (!keys.length) return null;
+              const rows = keys.map(k => _resolveLeadField(l, k)).filter(Boolean);
+              if (!rows.length) return null;
+              return h('div', { class: 'lc-extras' },
+                ...rows.map(r => h('div', { class: 'lc-extra' },
+                  h('span', { class: 'lc-extra-label' }, r.label + ': '),
+                  h('span', { class: 'lc-extra-value' }, r.value)
+                ))
+              );
+            } catch (e) { return null; }
+          })()
         )
       ),
       l.tat_violation ? h('div', { class: 'tat-pill', title: tatViolationTitle(l) }, '⚠ TAT BREACH — ', tatOverLabel(l)) : null,
@@ -18441,6 +18483,7 @@ VIEWS.admin = async (view) => {
       { id: 'announce',     label: '📢 Announcements' },
       { id: 'menu',         label: '🧭 Menu visibility' },
       { id: 'menuorder',    label: '🧭 Menu order' },
+      { id: 'leadcardextras', label: '🪪 Lead card fields' },
     ]},
     { title: 'Danger', items: [
       { id: 'dangerzone',   label: '🛑 Danger zone' },
@@ -18522,6 +18565,7 @@ async function showAdminTab(id) {
     if (id === 'chatperm') body.replaceChildren(await adminChatPermissions());
     if (id === 'menu')     body.replaceChildren(await adminMenuVisibility());
     if (id === 'menuorder') body.replaceChildren(await adminMenuOrder());
+    if (id === 'leadcardextras') body.replaceChildren(await adminLeadCardExtras());
     if (id === 'projstages') body.replaceChildren(await adminProjectStages());
     if (id === 'forms')      body.replaceChildren(await adminForms());
     if (id === 'pages')      body.replaceChildren(await adminPages());
@@ -19007,6 +19051,74 @@ async function openCampaignEditModal(camp, onSaved) {
 // Persists as a CSV of group labels in config key SIDEBAR_NAV_GROUP_ORDER.
 // Reload the page after saving to see the new order applied.
 // ----------------------------------------------------------------
+// LEAD_CARD_EXTRA_v1 — Admin picks up to 2 extra fields to render on
+// every mobile lead card (e.g. Product, Email, City, a custom field, etc.).
+// Stored in config key LEAD_CARD_EXTRAS as 'key1,key2'. Reads on warm
+// cache so reps see the change without rebuild.
+function _leadCardFieldCatalog() {
+  // System fields available out of the box.
+  const sys = [
+    { key: 'product_name', label: '🛍 Product' },
+    { key: 'email',        label: '✉️ Email' },
+    { key: 'whatsapp',     label: '💬 WhatsApp number' },
+    { key: 'value',        label: '💰 Value' },
+    { key: 'city',         label: '📍 City' },
+    { key: 'company',      label: '🏢 Company' },
+    { key: 'tag',          label: '🏷 Tag' },
+    { key: 'assigned_name',label: '👤 Assigned to' },
+    { key: 'created_at',   label: '🆕 Created date' },
+    { key: 'last_activity_at', label: '⏱ Last activity' }
+  ];
+  const cf = ((CRM && CRM.cache && CRM.cache.customFields) || [])
+    .filter(c => Number(c.is_active) !== 0 && c.key)
+    .map(c => ({ key: 'cf:' + c.key, label: '🧩 ' + (c.label || c.key) }));
+  return sys.concat(cf);
+}
+
+async function adminLeadCardExtras() {
+  const root = h('div', { class: 'admin-section' });
+  root.appendChild(h('h3', {}, '🪪 Lead card fields'));
+  root.appendChild(h('p', { class: 'muted' },
+    'Pick up to 2 extra fields to show on the mobile lead card (between the campaign line and the action buttons). Choose any system field or a custom field. Set to "— None —" to disable.'));
+
+  const cfg = await api('api_admin_getConfig');
+  const saved = String(cfg.LEAD_CARD_EXTRAS || '').split(',').map(s => s.trim()).filter(Boolean);
+  const catalog = _leadCardFieldCatalog();
+
+  function buildSelect(currentKey) {
+    const sel = h('select', { class: 'admin-input', style: { width: '100%', maxWidth: '380px' } },
+      h('option', { value: '' }, '— None —'),
+      ...catalog.map(f => h('option', { value: f.key }, f.label))
+    );
+    if (currentKey) sel.value = currentKey;
+    return sel;
+  }
+  const sel1 = buildSelect(saved[0] || '');
+  const sel2 = buildSelect(saved[1] || '');
+
+  root.appendChild(h('div', { style: { display: 'grid', gap: '.55rem', maxWidth: '420px', margin: '.5rem 0 1rem' } },
+    h('label', { style: { fontWeight: 600 } }, 'Extra field 1'), sel1,
+    h('label', { style: { fontWeight: 600, marginTop: '.4rem' } }, 'Extra field 2'), sel2
+  ));
+
+  const status = h('div', { style: { marginTop: '.6rem', fontSize: '.85rem', color: '#475569' } });
+  root.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center' } },
+    h('button', { class: 'btn primary', onclick: async () => {
+      try {
+        const out = [sel1.value, sel2.value].filter(Boolean).join(',');
+        await api('api_admin_setConfig', { key: 'LEAD_CARD_EXTRAS', value: out });
+        // Reflect immediately on the next list render.
+        try { CRM.config = CRM.config || {}; CRM.config.LEAD_CARD_EXTRAS = out; } catch (_) {}
+        status.textContent = '✅ Saved. Reps will see the change after they reload the lead list.';
+        toast('Saved');
+      } catch (e) { status.textContent = '❌ ' + e.message; }
+    } }, 'Save'),
+    h('button', { class: 'btn ghost', onclick: () => { sel1.value = ''; sel2.value = ''; } }, 'Clear')
+  ));
+  root.appendChild(status);
+  return root;
+}
+
 async function adminMenuOrder() {
   const root = h('div', { class: 'admin-section' });
   root.appendChild(h('h3', {}, '🧭 Menu order'));

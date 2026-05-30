@@ -3656,3 +3656,31 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
   font-weight: 700 !important;
   letter-spacing: 0 !important;
 }
+
+/* LEAD_CARD_EXTRA_v1 — admin-picked extra fields on mobile cards */
+.lead-card .lc-extras {
+  margin-top: .35rem !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 2px !important;
+}
+.lead-card .lc-extra {
+  font-size: .78rem !important;
+  color: #475569 !important;
+  line-height: 1.3 !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+.lead-card .lc-extra-label {
+  color: #64748b;
+  font-weight: 500;
+}
+.lead-card .lc-extra-value {
+  color: #0f172a;
+  font-weight: 600;
+}
+@media (prefers-color-scheme: dark) {
+  .lead-card .lc-extra { color: #cbd5e1 !important; }
+  .lead-card .lc-extra-value { color: #f1f5f9 !important; }
+}
