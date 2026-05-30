@@ -9937,11 +9937,22 @@ async function renderFollowupSection(view, key) {
   view.innerHTML = '';
   const titleMap = { overdue: '⚠️ Overdue follow-ups', due_today: '📅 Due today', upcoming: '⏰ Upcoming' };
   const klassMap = { overdue: 'err', due_today: 'warn', upcoming: '' };
-  const rows = data[key] || [];
+  const allRows = data[key] || [];
+  /* FU_PAGINATION_v1 — 25 per page, persisted across re-renders via
+     window scope (key-specific so each section has its own page). */
+  const PAGE_SIZE = 25;
+  if (!window._fuPage) window._fuPage = {};
+  if (!window._fuPage[key]) window._fuPage[key] = 1;
+  const totalPages = Math.max(1, Math.ceil(allRows.length / PAGE_SIZE));
+  if (window._fuPage[key] > totalPages) window._fuPage[key] = totalPages;
+  const pageNum = window._fuPage[key];
+  const startIdx = (pageNum - 1) * PAGE_SIZE;
+  const rows = allRows.slice(startIdx, startIdx + PAGE_SIZE);
+
   const wrap = h('div', { class: 'card' },
-    h('h3', {}, titleMap[key], ' ', h('span', { class: 'chip-count ' + klassMap[key] }, rows.length))
+    h('h3', {}, titleMap[key], ' ', h('span', { class: 'chip-count ' + klassMap[key] }, allRows.length))
   );
-  if (!rows.length) {
+  if (!allRows.length) {
     wrap.appendChild(h('p', { class: 'muted' }, 'Nothing here. 🎉'));
     view.appendChild(wrap);
     return;
@@ -9987,6 +9998,31 @@ async function renderFollowupSection(view, key) {
       );
     }))
   )));
+
+  /* FU_PAGINATION_v1 — Prev/Next page controls + range display. */
+  if (totalPages > 1) {
+    const showingFrom = startIdx + 1;
+    const showingTo   = Math.min(startIdx + PAGE_SIZE, allRows.length);
+    wrap.appendChild(h('div', {
+      style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+               padding: '.7rem .25rem .25rem', gap: '.5rem', flexWrap: 'wrap' } },
+      h('span', { class: 'muted', style: { fontSize: '.85rem' } },
+        'Showing ' + showingFrom + '–' + showingTo + ' of ' + allRows.length),
+      h('div', { style: { display: 'flex', gap: '.4rem', alignItems: 'center' } },
+        h('button', { class: 'btn sm' + (pageNum <= 1 ? ' ghost' : ''),
+          disabled: pageNum <= 1,
+          onclick: () => { window._fuPage[key] = Math.max(1, pageNum - 1); renderFollowupSection(view, key); }
+        }, '‹ Prev'),
+        h('span', { style: { fontSize: '.85rem', padding: '0 .4rem' } },
+          'Page ' + pageNum + ' / ' + totalPages),
+        h('button', { class: 'btn sm' + (pageNum >= totalPages ? ' ghost' : ''),
+          disabled: pageNum >= totalPages,
+          onclick: () => { window._fuPage[key] = Math.min(totalPages, pageNum + 1); renderFollowupSection(view, key); }
+        }, 'Next ›')
+      )
+    ));
+  }
+
   view.appendChild(wrap);
 }
 
@@ -10069,9 +10105,15 @@ VIEWS.followups = async (view) => {
     data.due_today = (data.due_today || []).filter(r => _applyClientRules(r, _rules));
     data.upcoming  = (data.upcoming  || []).filter(r => _applyClientRules(r, _rules));
   }
-  const section = (title, rows, klass) => {
+  const section = (title, rows, klass, sectionKey) => {
+    /* FU_PAGINATION_v1 — cap each section at 10 rows on the combined view.
+       If there are more, append a "Show all" CTA that opens the dedicated
+       section page with proper pagination. */
+    const FU_SECTION_LIMIT = 10;
+    const total = rows.length;
+    const visibleRows = rows.slice(0, FU_SECTION_LIMIT);
     const wrap = h('div', { class: 'card' },
-      h('h3', {}, title, ' ', h('span', { class: 'chip-count ' + (klass || '') }, rows.length))
+      h('h3', {}, title, ' ', h('span', { class: 'chip-count ' + (klass || '') }, total))
     );
     if (!rows.length) { wrap.appendChild(h('p', { class: 'muted' }, 'Nothing here.')); view.appendChild(wrap); return; }
     const tbl = h('div', { class: 'table-wrap' }, h('table', {},
@@ -10084,7 +10126,7 @@ VIEWS.followups = async (view) => {
         h('th', {}, 'Note'),
         h('th', { style: { textAlign: 'right' } }, 'Actions')
       )),
-      h('tbody', {}, ...rows.map(r => {
+      h('tbody', {}, ...visibleRows.map(r => {
         const phone = String(r.lead_phone || '').trim();
         const telHref = phone ? 'tel:' + phone.replace(/[^\d+]/g, '') : null;
         const waHref  = phone ? window._waShareUrl(phone, '') : null;
@@ -10133,11 +10175,22 @@ VIEWS.followups = async (view) => {
       }))
     ));
     wrap.appendChild(tbl);
+    /* FU_PAGINATION_v1 — Show all CTA when truncated. */
+    if (total > FU_SECTION_LIMIT && sectionKey) {
+      const targetRoute = sectionKey === 'overdue' ? 'overdue'
+                       : sectionKey === 'due_today' ? 'duetoday'
+                       : 'upcoming';
+      wrap.appendChild(h('div', { style: { display: 'flex', justifyContent: 'center', padding: '.6rem 0 .2rem' } },
+        h('button', { class: 'btn primary', style: { fontWeight: 600 },
+          onclick: () => navigateTo(targetRoute) },
+          'Show all ' + total + ' →')
+      ));
+    }
     view.appendChild(wrap);
   };
-  section('⚠️ Overdue', data.overdue, 'err');
-  section('📅 Due today', data.due_today, 'warn');
-  section('⏰ Upcoming', data.upcoming);
+  section('⚠️ Overdue',  data.overdue,   'err',   'overdue');
+  section('📅 Due today', data.due_today, 'warn',  'due_today');
+  section('⏰ Upcoming',  data.upcoming,  '',      'upcoming');
 };
 
 /* ---------------- Calendar ----------------------------------------
