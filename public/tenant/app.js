@@ -19039,7 +19039,10 @@ async function adminCampaigns(reload) {
       h('th', {}, 'Manager'),
       h('th', {}, 'Mode'),
       h('th', {}, 'Agents'),
-      h('th', {}, 'Leads'),
+      h('th', { title: 'Total leads tagged to this campaign' }, 'Total'),
+      h('th', { style: { color: '#16a34a' }, title: 'Unassigned leads still eligible to pull (assigned_to IS NULL, not final, not hidden)' }, 'Free'),
+      h('th', { style: { color: '#6366f1' }, title: 'Leads assigned to an agent (not final, not hidden)' }, 'Assigned'),
+      h('th', { style: { color: '#64748b' }, title: 'Leads in a FINAL status (Won/Lost/Junk/etc) — no longer pullable' }, 'Final'),
       h('th', {}, 'Status'),
       h('th', {}, '')
     )
@@ -19053,7 +19056,10 @@ async function adminCampaigns(reload) {
       h('td', {}, esc(r.manager_name || '—')),
       h('td', {}, modeLabel),
       h('td', {}, String(r.agent_count || 0)),
-      h('td', {}, String(r.lead_count || 0)),
+      h('td', { style: { fontWeight: 600 } }, String(r.lead_count || 0)),
+      h('td', { style: { color: Number(r.leads_unassigned) > 0 ? '#16a34a' : '#94a3b8', fontWeight: 600 } }, String(r.leads_unassigned || 0)),
+      h('td', { style: { color: '#6366f1' } }, String(r.leads_assigned || 0)),
+      h('td', { class: 'muted' }, String(r.leads_final || 0)),
       h('td', {},
         Number(r.is_active) === 1
           ? h('span', { class: 'badge ok' }, 'Active')
