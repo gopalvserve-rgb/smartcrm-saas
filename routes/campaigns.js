@@ -115,6 +115,7 @@ async function api_campaigns_list(token) {
            c.pull_batch_size, c.pull_initial_count,
            c.pull_require_old_updated, c.pull_old_threshold_minutes,
            c.removed_user_action, c.is_active,
+           c.apply_mode, c.backfill_filters, c.last_backfilled_at,  /* CAMPAIGN_ATTACH_PERSIST_v1 */
            c.created_at, c.updated_at,
            mu.name  AS manager_name,
            mu.email AS manager_email,
@@ -227,6 +228,12 @@ async function api_campaigns_save(token, payload) {
       throw new Error(`Agent user_id ${a.user_id} does not exist or is inactive.`);
   }
 
+  // CAMPAIGN_ATTACH_PERSIST_v1.1 — persist apply_mode + backfill_filters on UPDATE too
+  const applyMode = (p.apply_mode === 'existing' || p.apply_mode === 'both') ? p.apply_mode : 'future';
+  const backfillFilters = p.backfill_filters == null
+    ? null
+    : (typeof p.backfill_filters === 'string' ? p.backfill_filters : JSON.stringify(p.backfill_filters));
+
   const isUpdate = !!Number(p.id);
   let campaignId;
   if (isUpdate) {
@@ -239,12 +246,14 @@ async function api_campaigns_save(token, payload) {
          removed_user_action=$9, conditional_rules=$10, is_active=$11,
          match_filter=$13,
          auto_share_user_id=$14,
+         apply_mode=$15,
+         backfill_filters=$16,
          updated_at=NOW()
        WHERE id=$12 RETURNING id`,
       [name, pipeline, managerUserId, distributionMode,
        pullBatch, pullInitial, pullRequireOld, pullThresholdMin,
        removedAction, conditionalRules, isActive, campaignId, matchFilter,
-       autoShareUid]
+       autoShareUid, applyMode, backfillFilters]
     );
     if (!u.rows.length) throw new Error('Campaign not found for update.');
   } else {

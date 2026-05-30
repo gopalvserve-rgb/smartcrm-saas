@@ -3455,10 +3455,29 @@ VIEWS.leads = async (view) => {
       : null,
     // Pull Leads — non-admins (sales / team_leader / manager) can self-claim
     // free leads from the pool. Admin sees the existing list directly.
+    /* PULL_HANDLER_MISSING_v1 — inline handler (was referencing
+       undefined pullLeadsClick from SHARE_LEAD_v1) */
     (CRM.user && CRM.user.role !== 'admin')
       ? h('button', { class: 'btn pullleads', id: 'btn-pull-leads',
             title: 'Pull free leads from the pool',
-            onclick: () => pullLeadsClick()
+            onclick: async () => {
+              const btn = document.getElementById('btn-pull-leads');
+              if (btn) { btn.disabled = true; btn.textContent = '⏳ Pulling…'; }
+              try {
+                const r = await api('api_leads_pull');
+                const n = Number(r && r.pulled_count) || 0;
+                if (n > 0) {
+                  toast(`✅ Pulled ${n} lead${n === 1 ? '' : 's'} into My Leads`);
+                } else {
+                  toast('No free leads available right now', 'err');
+                }
+                try { CRM._leadsPage = 1; loadLeads({ page: 1 }); } catch (_) {}
+              } catch (e) {
+                toast(e && e.message ? e.message : 'Pull failed', 'err');
+              } finally {
+                if (btn) { btn.disabled = false; btn.textContent = '⬇ Pull Leads'; }
+              }
+            }
           }, '⬇ Pull Leads')
       : null,
     h('button', { class: 'btn primary', onclick: () => openLeadModal() }, '+ New Lead')

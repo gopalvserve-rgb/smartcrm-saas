@@ -272,5 +272,15 @@ Background-poll cuts on the APK. Floating-WhatsApp chat dock is now disabled on 
   ('feature', '💬 Last WhatsApp message on every lead row',
    'The Leads list now shows the most recent WhatsApp message body next to every lead. Direction is colour-coded — blue arrow-down for inbound from the customer, green arrow-up for outbound from your team — and a relative timestamp (5m ago, 2h ago, yesterday) sits beside it. On desktop it appears as a new Last WhatsApp column right after Recent remark; on mobile it sits inline on the lead card under the existing remark line. Truncated to 80 characters with a hover tooltip showing the full text. Media messages with no body show as (media). The column is enabled by default for existing users via a one-shot column-list injection so nobody has to go to Settings to find it. Backend reads the latest row from whatsapp_messages per lead_id in a single SQL with DISTINCT ON, scoped to the paged lead IDs so it stays cheap even on big lists.',
    '#/leads', '💬', NOW())
+,
+
+  ('fix', '🐛 Pull Leads button worked again',
+   'Non-admin Pull Leads button on the Leads page was throwing pullLeadsClick is not defined and doing nothing. The handler was never wired up. Restored. Click ⬇ Pull Leads now claims the next batch from the pool and refreshes the list with a confirmation toast — exactly as before.',
+   '#/leads', '⬇', NOW())
+,
+
+  ('fix', '🐛 Apply to which leads now actually saves on edit',
+   'On the Campaign editor the radio Future leads only / Existing leads only / Future + existing was saving correctly on the first create but reverting to Future leads only when you reopened the campaign to edit. The UPDATE path was missing the column writes. Reopening any campaign now shows the choice you last saved, plus the filter conditions (assigned-to, status, source, match mode) you picked.',
+   '#/campaigns', '🎯', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
