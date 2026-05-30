@@ -3323,3 +3323,27 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
 @media (prefers-color-scheme: dark) {
   .lead-card .lc-note { color: #cbd5e1 !important; background: #1e293b !important; border-left-color: #475569 !important; }
 }
+
+/* =================================================================
+ * LEADS_SQUARE_v50 — proper rounded-square buttons (was squircle/oval)
+ * User: "button you made in app leads, its not in proper shape make in square"
+ * ================================================================= */
+.lc-actions .la-btn {
+  width: 34px !important;
+  height: 34px !important;
+  aspect-ratio: 1 / 1 !important;   /* enforce square even if parent flex stretches */
+  min-width: 34px !important;
+  min-height: 34px !important;
+  border-radius: 7px !important;    /* clean rounded-square (iOS-icon vibe), no more squircle */
+  padding: 0 !important;
+  flex: 0 0 auto !important;        /* never grow to fit; stay square */
+}
+.lc-actions .la-btn svg {
+  width: 17px !important;
+  height: 17px !important;
+}
+/* Item wrapper still flexes so labels distribute evenly,
+   but the button inside is pinned to 34×34 square. */
+.lc-actions .la-item {
+  align-items: center !important;
+}
