@@ -8461,6 +8461,33 @@ function renderDialerSettings() {
     return wrap;
   }
 
+  // REC_AUTOSYNC_OFF_BY_DEFAULT_v1 — auto-sync toggle card.
+  // Default OFF for everyone. User flips ON per-device if they want background polling.
+  // Manual Sync buttons below ALWAYS work regardless of this toggle.
+  const _autoOn = (function(){ try { return localStorage.getItem('crm_rec_autosync') === '1'; } catch(_) { return false; } })();
+  wrap.appendChild(h('div', { class: 'settings-card', style: { borderLeft: '4px solid ' + (_autoOn ? '#10b981' : '#94a3b8') } },
+    h('h4', {}, '🔁 Auto-sync recordings'),
+    h('p', { class: 'muted', style: { marginBottom: '.6rem' } },
+      _autoOn
+        ? 'ON — the app checks for new recordings every few minutes. Switch OFF if the app feels slow.'
+        : 'OFF (default) — the app does NOT poll for recordings in the background. Use the manual Sync buttons below in the evening or whenever you want. Call logs (incoming / missed / outgoing) are unaffected — they sync live regardless.'
+    ),
+    h('label', { class: 'toggle-row', style: { display: 'flex', alignItems: 'center', gap: '.6rem' } },
+      h('input', {
+        type: 'checkbox',
+        checked: _autoOn ? 'checked' : null,
+        onchange: ev => {
+          const on = !!ev.target.checked;
+          try { localStorage.setItem('crm_rec_autosync', on ? '1' : '0'); } catch(_) {}
+          toast(on ? 'Auto-sync ON — background checks resumed.' : 'Auto-sync OFF — use the manual Sync buttons below.', 'ok');
+          // Re-render the Recordings page so the card updates.
+          try { if (typeof navigateTo === 'function') navigateTo('recordings'); else location.reload(); } catch(_) { location.reload(); }
+        }
+      }),
+      h('span', { style: { fontWeight: 600 } }, _autoOn ? 'Auto-sync is ON' : 'Auto-sync is OFF')
+    )
+  ));
+
   // Folder card
   wrap.appendChild(h('div', { class: 'settings-card' },
     h('h4', {}, '📁 Call recordings folder'),
@@ -28920,8 +28947,22 @@ try {
 let _recAutoSyncTimer = null;
 let _recKickPending = null;
 
+// REC_AUTOSYNC_OFF_BY_DEFAULT_v1 — auto-sync is OFF by default for everyone
+// to eliminate the background api_recordings_filenamesPresent load. Users can
+// flip it ON per-device via the toggle on the Recordings page. Manual sync
+// buttons always work (they call syncRecordings directly and pass _force).
+function _recAutoSyncEnabled() {
+  try { return localStorage.getItem('crm_rec_autosync') === '1'; }
+  catch (_) { return false; }
+}
+
 async function _silentSyncRecordings(opts) {
   const reason = (opts && opts._reason) || 'unknown';
+  // REC_AUTOSYNC_OFF_BY_DEFAULT_v1: bail unless user has flipped auto-sync ON.
+  if (!_recAutoSyncEnabled() && !(opts && opts._force)) {
+    _recDiagLog({ reason, result: 'skip', note: 'auto-sync paused (default OFF) — flip toggle on Recordings page to enable' });
+    return;
+  }
   if (!window.LeadCRMNative || typeof LeadCRMNative.listRecordings !== 'function') {
     _recDiagLog({ reason, result: 'skip', note: 'no-native-bridge (browser mode?)' });
     return;
@@ -28969,6 +29010,11 @@ async function _silentSyncRecordings(opts) {
 }
 function _kickRecordingSyncSoon(delayMs, reason) {
   if (!window.LeadCRMNative || typeof LeadCRMNative.listRecordings !== 'function') return;
+  // REC_AUTOSYNC_OFF_BY_DEFAULT_v1: skip post-call / lead-save / boot kicks when paused.
+  if (typeof _recAutoSyncEnabled === 'function' && !_recAutoSyncEnabled()) {
+    if (typeof _recDiagLog === 'function') _recDiagLog({ reason: reason || 'kick', result: 'skip', note: 'auto-sync paused (default OFF)' });
+    return;
+  }
   if (_recKickPending) {
     _recDiagLog({ reason: reason || 'kick', result: 'skip', note: 'already-pending' });
     return;
