@@ -4189,6 +4189,25 @@ function _nukeUnwantedLeadButtons(root) {
 }
 
 
+// MOBILE_LEAD_CARD_POLISH_v1.1 — pick readable text colour for a coloured
+// pill based on the bg's luminance. Returns '#fff' for dark bgs and '#0f172a'
+// for light bgs. Handles #rgb, #rrggbb, and named-css-color fallback.
+function _textOnBg(bg) {
+  try {
+    let hex = String(bg || '').trim();
+    if (!hex) return '#0f172a';
+    if (hex[0] !== '#') return '#0f172a';  // be safe on named colours
+    if (hex.length === 4) hex = '#' + hex[1]+hex[1] + hex[2]+hex[2] + hex[3]+hex[3];
+    if (hex.length !== 7) return '#0f172a';
+    const r = parseInt(hex.slice(1,3), 16);
+    const g = parseInt(hex.slice(3,5), 16);
+    const b = parseInt(hex.slice(5,7), 16);
+    // Perceived luminance (sRGB). >= ~150 → use dark text.
+    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+    return lum > 155 ? '#0f172a' : '#fff';
+  } catch (_) { return '#fff'; }
+}
+
 // LEAD_CARD_EXTRA_v1 — resolve a stored field key against a lead row for
 // the mobile card extras. Returns { label, value } or null if empty.
 function _resolveLeadField(l, key) {
@@ -4242,7 +4261,7 @@ function renderLeadsMobile(rows) {
         h('div', { class: 'lc-body' },
           h('div', { class: 'lc-head' },
             h('a', { href: '#', class: 'lc-name', onclick: ev => { ev.preventDefault(); openLeadModal(l.id); } }, ((l.shared_with_me || (l.co_owners && l.co_owners.length)) ? '🤝 ' : '') + (l.name || '—')),
-            h('span', { class: 'lc-status', style: { background: statusColor } }, l.status_name || '')
+            h('span', { class: 'lc-status', style: { background: statusColor, color: _textOnBg(statusColor), border: '1px solid ' + statusColor } }, l.status_name || '')
           ),
           // Source + phone in one row
           (srcBadge || l.phone) ? h('div', { class: 'lc-meta' },
