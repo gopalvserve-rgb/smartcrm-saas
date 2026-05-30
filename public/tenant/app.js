@@ -3495,18 +3495,27 @@ VIEWS.leads = async (view) => {
   // some Samsung devices reports innerWidth in the 720-820 range.
   toolbar.id = 'leads-toolbar';
   const _filterIsMobile = (typeof window !== 'undefined') && window.innerWidth < 900;
-  const _filterPrefRaw = (() => { try { return localStorage.getItem('crm_leads_filter_open'); } catch (_) { return null; } })();
-  let _filterOpen = (_filterPrefRaw === '1' || _filterPrefRaw === '0')
-    ? (_filterPrefRaw === '1')
-    : !_filterIsMobile;
-  // FILTER_FIRST_CLICK_NOOP_FIX: persist the initial state so the
-  // toggle handler (which reads from localStorage) doesn't think the
-  // panel is in a state different from what's visible. Without this,
-  // localStorage stays null on first render, the toggle reads null
-  // as 'closed', tries to 'open', but the panel was already open on
-  // desktop — net result: first click looks broken.
-  if (_filterPrefRaw === null) {
-    try { localStorage.setItem('crm_leads_filter_open', _filterOpen ? '1' : '0'); } catch (_) {}
+  // LEADS_FILTER_CLOSED_DEFAULT_v1 — on mobile, ignore localStorage and
+  // ALWAYS start closed. Previous sessions or desktop visits may have
+  // set crm_leads_filter_open='1', leaving mobile users stuck with the
+  // filter panel eating half their viewport on every page load. Use a
+  // window-scoped var instead so the toggle works during the session
+  // but the next fresh launch starts closed again. Desktop is unchanged:
+  // it still respects localStorage and defaults to open.
+  let _filterOpen;
+  if (_filterIsMobile) {
+    _filterOpen = !!window._mobileLeadsFilterOpen;
+    // Proactively nuke any stale stored flag so the user can't be
+    // 'sticky-opened' by code on another device.
+    try { localStorage.removeItem('crm_leads_filter_open'); } catch (_) {}
+  } else {
+    const _filterPrefRaw = (() => { try { return localStorage.getItem('crm_leads_filter_open'); } catch (_) { return null; } })();
+    _filterOpen = (_filterPrefRaw === '1' || _filterPrefRaw === '0')
+      ? (_filterPrefRaw === '1')
+      : true;
+    if (_filterPrefRaw === null) {
+      try { localStorage.setItem('crm_leads_filter_open', _filterOpen ? '1' : '0'); } catch (_) {}
+    }
   }
   // Apply the initial visibility IMMEDIATELY on the toolbar element
   // BEFORE it's appended to the DOM. No setTimeout = no timing race.
@@ -3576,13 +3585,21 @@ VIEWS.leads = async (view) => {
   // they just also fire touchend, so binding both = double-fire =
   // visible no-op.
   function _toggleFilterPanel() {
-    // Read current state fresh — don't trust closure variable in case
-    // multiple renders have left stale closures around.
-    var cur;
-    try { cur = localStorage.getItem('crm_leads_filter_open'); } catch (_) { cur = null; }
-    var nowOpen = (cur === '1');
-    var next = !nowOpen;
-    try { localStorage.setItem('crm_leads_filter_open', next ? '1' : '0'); } catch (_) {}
+    /* LEADS_FILTER_CLOSED_DEFAULT_v1 — mobile uses window-scoped state
+       so each fresh app launch starts closed. Desktop keeps using
+       localStorage so the user's preference sticks across reloads. */
+    var nowOpen, next;
+    if (_filterIsMobile) {
+      nowOpen = !!window._mobileLeadsFilterOpen;
+      next = !nowOpen;
+      window._mobileLeadsFilterOpen = next;
+    } else {
+      var cur;
+      try { cur = localStorage.getItem('crm_leads_filter_open'); } catch (_) { cur = null; }
+      nowOpen = (cur === '1');
+      next = !nowOpen;
+      try { localStorage.setItem('crm_leads_filter_open', next ? '1' : '0'); } catch (_) {}
+    }
     try { localStorage.setItem('crm_show_header', next ? '1' : '0'); CRM.prefs.showHeader = next; } catch (_) {}
     try { navigateTo('leads'); } catch (_) { try { location.reload(); } catch (__) {} }
   }
