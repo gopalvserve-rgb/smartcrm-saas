@@ -4277,7 +4277,12 @@ function renderLeadsMobile(rows) {
           // LEAD_CARD_EXTRA_v1: render up to 2 admin-picked extras here.
           (() => {
             try {
-              const raw = (CRM.config && CRM.config.LEAD_CARD_EXTRAS) || '';
+              /* LEAD_CARD_EXTRAS_VISIBILITY_v1 — read from merged cache.config
+                 first (warmCache puts admin cfg + brand here) then fall back
+                 to CRM.config (public brand-only). */
+              const raw = (CRM.cache && CRM.cache.config && CRM.cache.config.LEAD_CARD_EXTRAS)
+                       || (CRM.config && CRM.config.LEAD_CARD_EXTRAS)
+                       || '';
               const keys = String(raw).split(',').map(x => x.trim()).filter(Boolean).slice(0, 2);
               if (!keys.length) return null;
               const rows = keys.map(k => _resolveLeadField(l, k)).filter(Boolean);
@@ -19757,7 +19762,11 @@ async function adminLeadCardExtras() {
         const out = [sel1.value, sel2.value].filter(Boolean).join(',');
         await api('api_admin_setConfig', { key: 'LEAD_CARD_EXTRAS', value: out });
         // Reflect immediately on the next list render.
-        try { CRM.config = CRM.config || {}; CRM.config.LEAD_CARD_EXTRAS = out; } catch (_) {}
+        try {
+          CRM.config = CRM.config || {}; CRM.config.LEAD_CARD_EXTRAS = out;
+          CRM.cache = CRM.cache || {}; CRM.cache.config = CRM.cache.config || {};
+          CRM.cache.config.LEAD_CARD_EXTRAS = out;  /* LEAD_CARD_EXTRAS_VISIBILITY_v1 */
+        } catch (_) {}
         status.textContent = '✅ Saved. Reps will see the change after they reload the lead list.';
         toast('Saved');
       } catch (e) { status.textContent = '❌ ' + e.message; }

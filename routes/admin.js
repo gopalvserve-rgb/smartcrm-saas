@@ -248,7 +248,11 @@ async function api_admin_brand(_token) {
     DEMO_TENANT:          cfg.DEMO_TENANT          || '',
     DEMO_TOUR_ENABLED:    cfg.DEMO_TOUR_ENABLED    || '',
     // Active industry pack — used by SPA _navAnchor filter
-    INDUSTRY_PACK:        industryPack             || ''
+    INDUSTRY_PACK:        industryPack             || '',
+    // LEAD_CARD_EXTRAS — admin-picked extra fields for the mobile lead card.
+    // Exposed via brand (public) so non-admin reps see the same extras
+    // their admin configured; api_admin_getConfig returns {} for them.
+    LEAD_CARD_EXTRAS:     cfg.LEAD_CARD_EXTRAS     || ''
   };
 }
 
