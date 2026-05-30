@@ -17981,7 +17981,10 @@ function makeChart(canvasId, type, labels, data, colors, extra) {
   const baseOpts = {
     responsive: true, maintainAspectRatio: false,
     plugins: {
-      legend: { position: isPieish ? 'bottom' : 'top' },
+      // REPORT_SOURCE_DIM_v1 (2026-05-30): hide the top legend for bar/line
+      // charts — they're single-series, the x-axis labels already say what
+      // each bar is, so the legend just said "undefined" (no dataset label).
+      legend: isPieish ? { position: 'bottom' } : { display: false },
       datalabels
     },
     scales: isPieish ? {} : { x: { grid: { display: false } }, y: { grid: { color: '#f3f4f6' }, beginAtZero: true } }
@@ -18000,6 +18003,8 @@ function makeChart(canvasId, type, labels, data, colors, extra) {
   ctx._chart = new Chart(ctx, {
     type, data: {
       labels, datasets: [{
+        // REPORT_SOURCE_DIM_v1: set a label so it never reads "undefined"
+        label: (extra && extra.dataset_label) || 'Leads',
         data,
         backgroundColor: labels.map((_, i) => palette[i % palette.length]),
         borderWidth: 0,
