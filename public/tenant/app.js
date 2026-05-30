@@ -4110,7 +4110,7 @@ function renderLeadsMobile(rows) {
       l.tat_violation ? h('div', { class: 'tat-pill', title: tatViolationTitle(l) }, '⚠ TAT BREACH — ', tatOverLabel(l)) : null,
       l.is_duplicate ? h('div', { class: 'dup-pill', onclick: () => openDuplicateHistory(l.id) }, '⚠ DUP — see past') : null,
       due ? h('div', { class: 'lc-fu' + (overdue ? ' overdue' : '') }, '⏰ ' + fmtDate(l.next_followup_at, 'relative')) : null,
-      l.recent_remark ? h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.3rem' } }, '💬 ' + (l.recent_remark || '').slice(0, 80)) : null,
+      l.recent_remark ? h('div', { class: 'lc-note', title: l.recent_remark }, '💬 ' + (l.recent_remark || '')) : null,
       // LEADS_ICON_LABELS_v2 (v47): SVG icons; brand colour set on the button.
       h('div', { class: 'lc-actions' },
         digits ? _laItem('call', 'Call',     () => callLead(l), 'btn-call') : null,
