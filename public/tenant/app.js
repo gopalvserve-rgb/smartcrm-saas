@@ -8545,7 +8545,11 @@ function renderDialerSettings() {
             // Native may return a JSON string with { imported, skipped, total }
             let parsed = null;
             try { parsed = (typeof r === 'string') ? JSON.parse(r) : r; } catch (_) {}
-            if (parsed && typeof parsed.imported !== 'undefined') {
+            if (parsed && parsed.error) {
+              toast(parsed.error, 'err');
+            } else if (parsed && parsed.started) {
+              toast('Backfilling ' + label + ' in background — check Call Activity in a minute.', 'ok');
+            } else if (parsed && typeof parsed.imported !== 'undefined') {
               toast('Imported ' + parsed.imported + ' calls (' + (parsed.skipped || 0) + ' skipped)', 'ok');
             } else {
               toast('Call import requested', 'ok');
