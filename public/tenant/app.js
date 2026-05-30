@@ -4259,17 +4259,35 @@ function renderLeadsMobile(rows) {
       l.recent_remark ? h('div', { class: 'lc-note', title: l.recent_remark },
         '✎  ' + String(l.recent_remark || '')
       ) : null,
-      // LEAD_LIST_WA_v1 — show latest WhatsApp on the mobile card
-      (l.last_wa_text || l.last_wa_at) ? h('div', { class: 'lc-wa', title: l.last_wa_text || '',
-        style: { display: 'flex', gap: '.3rem', alignItems: 'center', fontSize: '.78rem',
-                 color: '#334155', marginTop: '.15rem' } },
-        h('span', { style: { color: ((l.last_wa_direction === 'in' || l.last_wa_direction === 'inbound') ? '#0ea5e9' : '#16a34a'),
-                              fontWeight: 600 } },
-          (l.last_wa_direction === 'in' || l.last_wa_direction === 'inbound') ? '💬↓' : '💬↑'),
-        h('span', { style: { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 } },
-          String(l.last_wa_text || '(media)').slice(0, 80)),
-        l.last_wa_at ? h('span', { class: 'muted', style: { fontSize: '.72rem' } }, fmtDate(l.last_wa_at, 'relative')) : null
-      ) : null,
+      // LEAD_LIST_WA_v2 — show last 2 WhatsApp on the mobile card (compact, 2 lines max),
+      // hover/long-press title shows last 3 with timestamps.
+      (() => {
+        const mList = Array.isArray(l.last_wa_msgs) && l.last_wa_msgs.length
+          ? l.last_wa_msgs
+          : ((l.last_wa_text || l.last_wa_at) ? [{ body: l.last_wa_text || '', direction: l.last_wa_direction || '', created_at: l.last_wa_at || '' }] : []);
+        if (!mList.length) return null;
+        const tip = mList.slice(0, 3).map(m => {
+          const dir = String(m.direction || '').toLowerCase();
+          const arrow = (dir === 'in' || dir === 'inbound') ? '↓ IN ' : '↑ OUT';
+          const ts = m.created_at ? '  [' + fmtDate(m.created_at, 'short') + ']' : '';
+          return arrow + ts + '\n' + String(m.body || '(media)');
+        }).join('\n\n');
+        const wrap = h('div', { class: 'lc-wa', title: tip,
+          style: { display: 'flex', flexDirection: 'column', gap: '.1rem', marginTop: '.15rem' } });
+        mList.slice(0, 2).forEach(m => {
+          const dir = String(m.direction || '').toLowerCase();
+          const isIn = (dir === 'in' || dir === 'inbound');
+          wrap.appendChild(h('div', { style: { display: 'flex', gap: '.25rem', alignItems: 'center', fontSize: '.78rem', color: '#334155', lineHeight: '1.2' } },
+            h('span', { style: { color: isIn ? '#0ea5e9' : '#16a34a', fontWeight: 600, flexShrink: 0 } }, isIn ? '💬↓' : '💬↑'),
+            h('span', { style: { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1, minWidth: 0 } },
+              String(m.body || '(media)').slice(0, 80))
+          ));
+        });
+        if (mList[0] && mList[0].created_at) {
+          wrap.appendChild(h('span', { class: 'muted', style: { fontSize: '.7rem' } }, fmtDate(mList[0].created_at, 'relative')));
+        }
+        return wrap;
+      })(),
       // LEADS_ICON_LABELS_v2 (v47): SVG icons; brand colour set on the button.
       h('div', { class: 'lc-actions' },
         digits ? _laItem('call', 'Call',     () => callLead(l), 'btn-call') : null,
@@ -4739,19 +4757,39 @@ function renderCell(col, l, statuses) {
       h('button', { class: 'btn icon', title: 'Nurture sequences', onclick: ev => { ev.stopPropagation(); openLeadSequencesModal(l.id, l.name); } }, '🌱')
     );
     case 'whatsapp_msg': {
-      // LEAD_LIST_WA_v1 — show latest WhatsApp message body (inbound ↓ / outbound ↑)
-      // with a small relative timestamp. Empty cell when the lead has no WA history.
-      if (!l.last_wa_text && !l.last_wa_at) return h('td', { class: 'muted', style: { fontSize: '.78rem' } }, '—');
-      const dir = String(l.last_wa_direction || '').toLowerCase();
-      const arrow = (dir === 'in' || dir === 'inbound') ? '↓' : '↑';
-      const color = (dir === 'in' || dir === 'inbound') ? '#0ea5e9' : '#16a34a';
-      const preview = String(l.last_wa_text || '(media)').slice(0, 80);
-      return h('td', { class: 'cell-wa', style: { maxWidth: '240px' } },
-        h('div', { style: { display: 'flex', gap: '.25rem', alignItems: 'center', flexWrap: 'wrap' } },
-          h('span', { style: { color, fontWeight: 600 } }, arrow),
-          h('span', { title: l.last_wa_text || '', style: { fontSize: '.82rem', color: '#334155', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '180px' } }, preview),
-          l.last_wa_at ? h('span', { class: 'muted', style: { fontSize: '.72rem' } }, fmtDate(l.last_wa_at, 'relative')) : null
-        )
+      // LEAD_LIST_WA_v2 — show top 2 of last 3 WhatsApp messages stacked
+      // (each one line), capped at ~2 lines tall total. Hover (title attr)
+      // shows ALL 3 messages with direction + timestamp + full body.
+      const msgs = Array.isArray(l.last_wa_msgs) ? l.last_wa_msgs : [];
+      if (!msgs.length && !l.last_wa_text) {
+        return h('td', { class: 'muted', style: { fontSize: '.78rem' } }, '—');
+      }
+      // Back-compat: if waMsgsByLead returned 0 rows but legacy last_wa_text is set
+      const list = msgs.length ? msgs : [{ body: l.last_wa_text || '', direction: l.last_wa_direction || '', created_at: l.last_wa_at || '' }];
+      // Build the tooltip text — last 3 fully formatted.
+      const tipLines = list.slice(0, 3).map(m => {
+        const dir = String(m.direction || '').toLowerCase();
+        const arrow = (dir === 'in' || dir === 'inbound') ? '↓ IN ' : '↑ OUT';
+        const ts = m.created_at ? '  [' + fmtDate(m.created_at, 'short') + ']' : '';
+        const body = String(m.body || '(media)');
+        return arrow + ts + '\n' + body;
+      });
+      const tooltip = tipLines.join('\n\n');
+      // Inline rendering — top 2 messages, each one line, 2 lines total.
+      const rows = list.slice(0, 2).map(m => {
+        const dir = String(m.direction || '').toLowerCase();
+        const isIn = (dir === 'in' || dir === 'inbound');
+        const arrow = isIn ? '↓' : '↑';
+        const color = isIn ? '#0ea5e9' : '#16a34a';
+        const preview = String(m.body || '(media)').slice(0, 80);
+        return h('div', { style: { display: 'flex', gap: '.25rem', alignItems: 'center', lineHeight: '1.2', maxWidth: '260px' } },
+          h('span', { style: { color, fontWeight: 600, flexShrink: 0 } }, arrow),
+          h('span', { style: { fontSize: '.82rem', color: '#334155', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1, minWidth: 0 } }, preview)
+        );
+      });
+      return h('td', { class: 'cell-wa', title: tooltip, style: { maxWidth: '260px', verticalAlign: 'top' } },
+        h('div', { style: { display: 'flex', flexDirection: 'column', gap: '.1rem' } }, ...rows),
+        list[0] && list[0].created_at ? h('div', { class: 'muted', style: { fontSize: '.7rem', marginTop: '.1rem' } }, fmtDate(list[0].created_at, 'relative')) : null
       );
     }
     case 'notes': {

@@ -547,23 +547,34 @@ async function api_leads_list(token, filters) {
     if (!prev || String(r.created_at) > String(prev.created_at)) remarksByLead[k] = r;
   });
 
-  // LEAD_LIST_WA_v1 — latest WhatsApp message per lead (one row per lead).
-  // Single SQL with DISTINCT ON, scoped to the paged lead IDs so it stays
-  // cheap. Returns body + direction + created_at + status. Body is
-  // truncated to 140 chars to keep the payload small for big mobile lists.
-  let waByLead = {};
+  // LEAD_LIST_WA_v2 — last 3 WhatsApp messages per lead (was just 1 in v1).
+  // ROW_NUMBER OVER (PARTITION BY lead_id ORDER BY created_at DESC) <= 3
+  // is the right shape — one query, indexed scan on lead_id. Body
+  // truncated to 200 chars each so the payload stays bounded.
+  let waMsgsByLead = {};   // lead_id -> array of up to 3 message rows (newest first)
+  let waByLead = {};        // lead_id -> latest row (back-compat with v1 fields)
   if (_pagedIds.length) {
     try {
       const wr = await db.query(
-        `SELECT DISTINCT ON (lead_id) lead_id,
-                LEFT(COALESCE(body, ''), 140) AS body,
+        `SELECT lead_id,
+                LEFT(COALESCE(body, ''), 200) AS body,
                 direction, created_at, status, message_type
-           FROM whatsapp_messages
-          WHERE lead_id = ANY($1::int[])
+           FROM (
+             SELECT lead_id, body, direction, created_at, status, message_type,
+                    ROW_NUMBER() OVER (PARTITION BY lead_id ORDER BY created_at DESC) AS rn
+               FROM whatsapp_messages
+              WHERE lead_id = ANY($1::int[])
+           ) t
+          WHERE rn <= 3
           ORDER BY lead_id, created_at DESC`,
         [_pagedIds]
       );
-      wr.rows.forEach(r => { waByLead[Number(r.lead_id)] = r; });
+      wr.rows.forEach(r => {
+        const k = Number(r.lead_id);
+        if (!waMsgsByLead[k]) waMsgsByLead[k] = [];
+        waMsgsByLead[k].push(r);
+        if (!waByLead[k]) waByLead[k] = r; // first hit per lead = newest
+      });
     } catch (_) { /* table may not exist on very old tenants */ }
   }
 
@@ -589,6 +600,14 @@ async function api_leads_list(token, filters) {
     h.last_wa_direction = w ? w.direction : '';
     h.last_wa_status = w ? w.status : '';
     h.last_wa_type = w ? w.message_type : '';
+    // LEAD_LIST_WA_v2 — also expose the last 3 messages for the row + hover
+    h.last_wa_msgs = (waMsgsByLead[Number(l.id)] || []).map(m => ({
+      body: m.body || '',
+      direction: m.direction || '',
+      created_at: m.created_at || '',
+      status: m.status || '',
+      type: m.message_type || ''
+    }));
     return h;
   });
 
