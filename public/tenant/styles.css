@@ -3684,3 +3684,22 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
   .lead-card .lc-extra { color: #cbd5e1 !important; }
   .lead-card .lc-extra-value { color: #f1f5f9 !important; }
 }
+
+/* ───────── MOBILE_HEADER_v1 (2026-05-30) ───────── */
+/* On phones, the topbar gets crowded — drop low-priority items the user
+   asked to remove, and paint the WhatsApp chat icon green so it stands
+   out as the WhatsApp action. Keeps ✨ New, ⚠️ Overdue, 📘 Help, 🎁 What's New,
+   💬 WhatsApp inbox, 🔔 Notifications. Removes 📱 Get app + 📅 Due today + ⏰ Upcoming. */
+@media (max-width: 780px) {
+  #btn-getapp { display: none !important; }
+  .topbar-chip[href="#/duetoday"],
+  .topbar-chip[href="#/upcoming"] { display: none !important; }
+  /* Surface the WhatsApp chat icon — was a faint ghost button, now green */
+  #btn-wa-notif {
+    background: #25d366 !important;
+    color: #fff !important;
+    border-radius: 8px !important;
+    padding: .35rem .55rem !important;
+  }
+  #btn-wa-notif:hover { background: #1ebe5b !important; }
+}

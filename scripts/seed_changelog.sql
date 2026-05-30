@@ -237,5 +237,10 @@ Backend trimming on four heavy APIs when the request comes from the APK: api_lea
 
 Background-poll cuts on the APK. Floating-WhatsApp chat dock is now disabled on mobile entirely (it was firing api_wb_chat_threads every 8 seconds even when the drawer was closed). The follow-up / new-lead / WA-badge background pollers are no longer armed on the APK at all because FCM push already delivers new lead, follow-up due, WA inbound, TAT alerts, and heat alerts — there is nothing left for those 30-second polls to discover. The Team-Chat unread poller drops from every 10 seconds to every 60 seconds. The announcements refresh drops from every minute to every ten minutes. The recording auto-sync WebView tick drops from every 90 seconds to every 5 minutes — the native WorkManager already runs every 15 minutes plus once after every call. Net effect: idle background API rate on the APK drops from about 26 calls/minute to roughly 1 per minute, freeing the connection pool that recording-sync preflight had been hogging. Desktop behaviour is unchanged.',
    '#/admin', '📱', NOW())
+,
+
+  ('modify', 'Mobile header — cleaned up the icon strip',
+   'On the phone the top-bar was getting cramped. Removed three items on screens narrower than 780px: the Get-app / Download button (you already have the app installed if you are seeing this on the phone), the Due-today calendar chip, and the Upcoming calendar chip — those follow-ups are still one tap away from the bottom-nav or the sidebar. Kept ✨ New, ⚠️ Overdue, 📘 Help, 🎁 What is new, 🔔 Notifications. The WhatsApp inbox icon (💬) is now painted in WhatsApp-green so it stands out as the chat shortcut. Desktop view is unchanged.',
+   NULL, '📱', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
