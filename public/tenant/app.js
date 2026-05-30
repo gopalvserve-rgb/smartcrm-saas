@@ -4206,7 +4206,7 @@ function renderLeadsMobile(rows) {
         h('div', { class: 'lc-avatar', style: { background: avatarColor } }, initials),
         h('div', { class: 'lc-body' },
           h('div', { class: 'lc-head' },
-            h('a', { href: '#', class: 'lc-name', onclick: ev => { ev.preventDefault(); openLeadModal(l.id); } }, (l.shared_with_me ? '🤝 ' : '') + (l.name || '—')),
+            h('a', { href: '#', class: 'lc-name', onclick: ev => { ev.preventDefault(); openLeadModal(l.id); } }, ((l.shared_with_me || (l.co_owners && l.co_owners.length)) ? '🤝 ' : '') + (l.name || '—')),
             h('span', { class: 'lc-status', style: { background: statusColor } }, l.status_name || '')
           ),
           // Source + phone in one row
@@ -4584,6 +4584,19 @@ function renderCell(col, l, statuses) {
         h('a', { href: '#', onclick: ev => { ev.preventDefault(); openLeadModal(l.id); } }, l.name || '—'),
         renderHeatChip(l),
         l.is_duplicate ? h('span', { class: 'dup-pill', title: 'Duplicate — click to see past leads', onclick: ev => { ev.stopPropagation(); ev.preventDefault(); openDuplicateHistory(l.id); } }, 'DUP') : null,
+        // SHARE_BADGE_VISIBLE_v1: 🤝 badge on the lead row when the lead has any co-owners.
+        // Visible to everyone (primary owner sees "shared with X"), tooltip lists names.
+        (l.co_owners && l.co_owners.length)
+          ? h('span', {
+              class: 'share-pill',
+              title: 'Shared with: ' + l.co_owners.map(c => c.name || ('#' + c.id)).join(', '),
+              style: {
+                marginLeft: '.35rem', padding: '.05rem .4rem', borderRadius: '999px',
+                background: '#ecfdf5', color: '#047857', border: '1px solid #a7f3d0',
+                fontSize: '.72rem', fontWeight: '600'
+              }
+            }, '🤝 ' + (l.co_owners.length === 1 ? (l.co_owners[0].name || '1') : (l.co_owners.length + ' shared')))
+          : null,
         l.tat_violation ? h('span', { class: 'tat-pill', title: tatViolationTitle(l) }, '⚠ TAT ', tatOverLabel(l)) : null,
         /* LEAD_ACTIVITY_v1 — activity counter pill. Shows total / today.
          * Click opens the lead activity timeline. Hidden when no activity yet. */
