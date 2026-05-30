@@ -4203,6 +4203,7 @@ function _resolveLeadField(l, key) {
   const labels = {
     product_name: 'Product', email: 'Email', whatsapp: 'WhatsApp',
     value: 'Value', city: 'City', company: 'Company', tag: 'Tag',
+    campaign_name: 'Campaign', source: 'Source', phone: 'Phone',  /* MOBILE_LEAD_CARD_POLISH_v1 */
     assigned_name: 'Assigned', created_at: 'Created', last_activity_at: 'Last activity'
   };
   let v = l[key];
@@ -19691,6 +19692,9 @@ function _leadCardFieldCatalog() {
     { key: 'city',         label: '📍 City' },
     { key: 'company',      label: '🏢 Company' },
     { key: 'tag',          label: '🏷 Tag' },
+    { key: 'campaign_name',label: '📣 Campaign' },   /* MOBILE_LEAD_CARD_POLISH_v1 */
+    { key: 'source',       label: '🌐 Source' },     /* MOBILE_LEAD_CARD_POLISH_v1 */
+    { key: 'phone',        label: '📞 Phone' },      /* MOBILE_LEAD_CARD_POLISH_v1 */
     { key: 'assigned_name',label: '👤 Assigned to' },
     { key: 'created_at',   label: '🆕 Created date' },
     { key: 'last_activity_at', label: '⏱ Last activity' }

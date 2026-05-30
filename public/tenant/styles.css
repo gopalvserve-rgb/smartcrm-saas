@@ -3732,3 +3732,59 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
   .co-chip-x { color: #6ee7b7; }
   .share-add-btn { background: rgba(255,255,255,.05); color: #cbd5e1; border-color: #475569; }
 }
+
+
+/* =================================================================
+ * MOBILE_LEAD_CARD_POLISH_v1 (2026-05-30)
+ *   - Status pill: ~35% bigger text, bolder, slightly more padding.
+ *     Inline `background: statusColor` already wins; we just bump
+ *     legibility so it actually reads as a status badge.
+ *   - Action button row: ~30% smaller buttons + SVG icons so the
+ *     card doesn't look like a launcher row.
+ * Targets the mobile lead card (renderLeadsMobile / lead-card).
+ * ================================================================= */
+
+/* Status pill — bigger, bolder, sharper drop-shadow */
+.lead-card .lc-status,
+.lc-status {
+  font-size: .92rem !important;
+  font-weight: 700 !important;
+  padding: 4px 11px !important;
+  letter-spacing: .015em !important;
+  line-height: 1.15 !important;
+  border-radius: 999px !important;
+  color: #fff !important;
+  box-shadow: 0 2px 5px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.18) !important;
+  text-shadow: 0 1px 1px rgba(0,0,0,.18);
+}
+
+/* Action button row — shrink ~30% */
+.lc-actions .la-btn {
+  width: 34px !important;
+  height: 34px !important;
+  border-radius: 11px !important;
+}
+.lc-actions .la-btn svg {
+  width: 17px !important;
+  height: 17px !important;
+}
+.lc-actions .la-label {
+  font-size: .62rem !important;
+  line-height: 1.05 !important;
+}
+.lc-actions .la-item {
+  gap: 3px !important;
+  max-width: 70px !important;
+}
+.lc-actions {
+  gap: .45rem !important;
+  margin-top: .65rem !important;
+  padding-top: .55rem !important;
+}
+
+/* Extras row (admin-picked Tag, Campaign, etc.) — make values
+   stand out a little so reps can actually scan them. */
+.lc-extras { display: flex; flex-direction: column; gap: 2px; margin-top: .25rem; }
+.lc-extra { font-size: .82rem; line-height: 1.25; color: #1e293b; }
+.lc-extra-label { color: #64748b; font-weight: 600; margin-right: .25em; }
+.lc-extra-value { color: #0f172a; font-weight: 500; }

@@ -287,5 +287,10 @@ Background-poll cuts on the APK. Floating-WhatsApp chat dock is now disabled on 
   ('fix', '🐛 Campaigns page on older tenants — column does not exist',
    'On tenants created before today (e.g. smcbroking), opening Campaigns as admin showed "column c.apply_mode does not exist". The new apply_mode / backfill_filters / last_backfilled_at columns hadn''t been added to those tenants'' campaigns table yet. The Campaigns API now adds the missing columns on first call (idempotent ALTER TABLE IF NOT EXISTS) so the page loads everywhere without waiting for the tenant bootstrap migration.',
    '#/campaigns', '🎯', NOW())
+,
+
+  ('modify', '🪪 Mobile lead card — bigger status pill, tighter buttons, more extras',
+   'Three changes on the mobile Leads list cards. (1) The status pill (NEW / FOLLOW UP / etc.) is now about 35% larger, bolder, and uses the colour the admin set in Settings → Statuses — no more squinting to read it. (2) The action button row (Call · WA API · My WA · Note · Edit) is about 30% smaller so the card looks like a lead card again, not a launcher row, leaving more space for actual lead info. (3) The admin-picked Extra Fields panel (Admin → Lead card fields) now offers more choices: 📣 Campaign, 🌐 Source, and 📞 Phone are pickable alongside Product, Email, City, Tag, etc. Admin can still pick any 2.',
+   '#/leads', '🪪', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
