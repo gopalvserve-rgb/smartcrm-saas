@@ -1769,6 +1769,138 @@ async function api_reports_activityDetail(token, opts) {
 }
 
 
+
+// ---------------------------------------------------------------------------
+// WA_REPORT_v1 (2026-05-30) — WhatsApp Report
+// ---------------------------------------------------------------------------
+// Volume + delivery, per-user productivity, per-template performance.
+// Reads from whatsapp_messages with a date range filter. Status counts use
+// the most-progressed state (read > delivered > sent > failed) per row.
+// ---------------------------------------------------------------------------
+async function api_reports_whatsapp(token, filters) {
+  const me = await authUser(token);
+  if (!(me.role === 'admin' || me.role === 'manager' || me.role === 'team_leader')) {
+    throw new Error('Forbidden');
+  }
+  const f = filters || {};
+  const tz = process.env.REPORT_TZ || 'Asia/Kolkata';
+  const from = f.from || null;  // 'YYYY-MM-DD' inclusive
+  const to   = f.to   || null;
+  let where = ' WHERE 1=1';
+  const args = [];
+  if (from) { args.push(from); where += ` AND DATE(created_at AT TIME ZONE '${tz}') >= $${args.length}`; }
+  if (to)   { args.push(to);   where += ` AND DATE(created_at AT TIME ZONE '${tz}') <= $${args.length}`; }
+
+  // 1. KPI tiles + status donut
+  let inbound = 0, outbound = 0;
+  let sent = 0, delivered = 0, read = 0, failed = 0;
+  let uniqueContacts = 0;
+  try {
+    const r = await db.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE direction = 'in')::int  AS inbound,
+         COUNT(*) FILTER (WHERE direction = 'out')::int AS outbound,
+         COUNT(*) FILTER (WHERE direction = 'out' AND status = 'sent')::int      AS sent,
+         COUNT(*) FILTER (WHERE direction = 'out' AND status = 'delivered')::int AS delivered,
+         COUNT(*) FILTER (WHERE direction = 'out' AND status = 'read')::int      AS read,
+         COUNT(*) FILTER (WHERE direction = 'out' AND status = 'failed')::int    AS failed,
+         COUNT(DISTINCT CASE WHEN direction = 'in' THEN from_number ELSE to_number END)::int AS unique_contacts
+       FROM whatsapp_messages ${where}`,
+      args
+    );
+    const row = r.rows[0] || {};
+    inbound = Number(row.inbound) || 0;
+    outbound = Number(row.outbound) || 0;
+    sent = Number(row.sent) || 0;
+    delivered = Number(row.delivered) || 0;
+    read = Number(row.read) || 0;
+    failed = Number(row.failed) || 0;
+    uniqueContacts = Number(row.unique_contacts) || 0;
+  } catch (e) { console.warn('[wa report kpi]', e.message); }
+
+  // 2. By user
+  let byUser = [];
+  try {
+    const r = await db.query(
+      `SELECT
+         user_id,
+         COUNT(*) FILTER (WHERE direction = 'out')::int                          AS sent_total,
+         COUNT(*) FILTER (WHERE direction = 'out' AND status = 'delivered')::int AS delivered,
+         COUNT(*) FILTER (WHERE direction = 'out' AND status = 'read')::int      AS read,
+         COUNT(*) FILTER (WHERE direction = 'out' AND status = 'failed')::int    AS failed
+       FROM whatsapp_messages ${where} AND user_id IS NOT NULL
+       GROUP BY user_id
+       ORDER BY sent_total DESC NULLS LAST
+       LIMIT 50`,
+      args
+    );
+    const users = await db.getAll('users');
+    const byId = {};
+    users.forEach(u => { byId[Number(u.id)] = u; });
+    byUser = r.rows.map(row => ({
+      user_id: Number(row.user_id),
+      name: (byId[Number(row.user_id)] && byId[Number(row.user_id)].name) || ('User #' + row.user_id),
+      sent_total: Number(row.sent_total) || 0,
+      delivered: Number(row.delivered) || 0,
+      read: Number(row.read) || 0,
+      failed: Number(row.failed) || 0
+    }));
+  } catch (e) { console.warn('[wa report byUser]', e.message); }
+
+  // 3. By template — only outbound rows with a template_name
+  let byTemplate = [];
+  try {
+    const r = await db.query(
+      `SELECT
+         template_name,
+         COUNT(*)::int                                              AS sent_total,
+         COUNT(*) FILTER (WHERE status = 'delivered')::int          AS delivered,
+         COUNT(*) FILTER (WHERE status = 'read')::int               AS read,
+         COUNT(*) FILTER (WHERE status = 'failed')::int             AS failed
+       FROM whatsapp_messages ${where} AND direction = 'out' AND template_name IS NOT NULL AND template_name <> ''
+       GROUP BY template_name
+       ORDER BY sent_total DESC
+       LIMIT 50`,
+      args
+    );
+    byTemplate = r.rows.map(row => ({
+      template: row.template_name,
+      sent_total: Number(row.sent_total) || 0,
+      delivered: Number(row.delivered) || 0,
+      read: Number(row.read) || 0,
+      failed: Number(row.failed) || 0
+    }));
+  } catch (e) { console.warn('[wa report byTemplate]', e.message); }
+
+  // 4. Daily volume — line chart by date
+  let daily = [];
+  try {
+    const r = await db.query(
+      `SELECT
+         DATE(created_at AT TIME ZONE '${tz}') AS d,
+         COUNT(*) FILTER (WHERE direction = 'in')::int  AS inbound,
+         COUNT(*) FILTER (WHERE direction = 'out')::int AS outbound
+       FROM whatsapp_messages ${where}
+       GROUP BY d
+       ORDER BY d ASC`,
+      args
+    );
+    daily = r.rows.map(row => ({
+      date: String(row.d).slice(0, 10),
+      inbound: Number(row.inbound) || 0,
+      outbound: Number(row.outbound) || 0
+    }));
+  } catch (e) { console.warn('[wa report daily]', e.message); }
+
+  return {
+    kpi: { inbound, outbound, sent, delivered, read, failed, unique_contacts: uniqueContacts },
+    by_user: byUser,
+    by_template: byTemplate,
+    daily
+  };
+}
+
+
 module.exports = {
   api_reports_summary, api_reports_funnel, api_reports_daily,
   api_reports_exportLeads, api_reports_groupBy,
@@ -1778,5 +1910,6 @@ module.exports = {
   api_calendar_events,
   api_reports_activityByUser,    /* LEAD_ACTIVITY_v1 */
   api_reports_activityDetail,    /* LEAD_ACTIVITY_DRILL_v1 */
-  api_reports_pivot              /* REPORT_BUILDER_v4 */
+  api_reports_pivot,              /* REPORT_BUILDER_v4 */
+  api_reports_whatsapp           /* WA_REPORT_v1 */
 };

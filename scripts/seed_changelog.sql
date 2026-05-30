@@ -252,5 +252,15 @@ Background-poll cuts on the APK. Floating-WhatsApp chat dock is now disabled on 
   ('feature', 'Share leads in bulk',
    'The selection toolbar above the Leads list now has a 🤝 Share button right next to 👤 Assign. Tick the leads you want, click 🤝 Share, pick the second user, hit Share — every selected lead is now visible to that user under their My Leads with the 🤝 badge, and they can fully work all of them. Already-shared leads are silently skipped. Per-lead 🤝 + Share on the modal and the campaign Auto-share dropdown still work the same as before — this just adds a fast path for batches.',
    '#/leads', '🤝', NOW())
+,
+
+  ('feature', 'Source filter now lists every Source actually on your leads',
+   'Two related fixes on Reports and Report Builder. (1) The Source dimension drop-down was only listing Sources that an admin had added via Settings → Sources. Tenants that get most of their leads through webhooks (Pabbly, Make, FB Lead Ads, Sheet sync) often never add anything manually under Sources, so the filter looked empty even though the leads carried sources like "facebook" or "indiamart". The Source list now also includes every distinct non-empty source value that currently sits on a lead — admin entries first, then auto-collected lead-sources after. (2) Pie / donut / bar charts on Reports were showing "undefined" in their tooltip and legend because the chart datasets had no label. Charts now read "Leads" in the legend / tooltip, and the redundant top legend is hidden on non-pie charts to give the bars more room.',
+   '#/reports', '📊', NOW())
+,
+
+  ('feature', '💬 WhatsApp Report — volume, delivery, per-user, per-template',
+   'New report under the Reports group in the sidebar. KPI tiles at the top: Inbound, Outbound, Delivered, Read, Failed, unique Contacts, plus computed Delivered % and Read %. A donut chart breaks the outbound volume into Read / Delivered (not yet read) / Sent (not yet delivered) / Failed. A daily line chart plots inbound and outbound volume over the selected date range. Two tables follow. By User — for every team member, total Sent, Delivered, Read, Failed and the corresponding %s, so you can spot the agents who are sending but not getting delivery, or whose recipients are not reading. By Template — same breakdown per template name, so you can see which template is healthy and which is being silently failed. Date range defaults to yesterday and respects the same Today / Last 7 / Last 30 chips that Reports already has. Data is pulled from whatsapp_messages so it covers every connected number and every conversation type.',
+   '#/whatsappreport', '💬', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);

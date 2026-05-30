@@ -1389,7 +1389,9 @@ const NAV_GROUPS = [
     { id: 'reportbuilder', label: 'Report builder',  icon: '🧪', roles: ['admin', 'manager', 'team_leader'] },
     { id: 'tatreport',     label: 'TAT report',      icon: '⏱️', roles: ['admin', 'manager', 'team_leader'] },
     /* LEAD_ACTIVITY_v1 */
-    { id: 'activityreport', label: 'Activity report', icon: '📝', roles: ['admin', 'manager', 'team_leader'] }
+    { id: 'activityreport', label: 'Activity report', icon: '📝', roles: ['admin', 'manager', 'team_leader'] },
+    /* WA_REPORT_v1 */
+    { id: 'whatsappreport', label: 'WhatsApp report', icon: '💬', roles: ['admin', 'manager', 'team_leader'] }
   ] },
   { label: 'Workspace', icon: '💬', items: [
     { id: 'socialinbox', label: 'Social Inbox', icon: '📱', countKey: 'social_unread' },
@@ -18017,6 +18019,170 @@ function makeChart(canvasId, type, labels, data, colors, extra) {
     options: merged
   });
 }
+
+// WA_REPORT_v1 (2026-05-30) — WhatsApp Report view: KPIs + per-user + per-template + daily volume.
+VIEWS.whatsappreport = async (view) => {
+  await ensureChartJs();
+  view.innerHTML = '';
+  view.appendChild(h('h2', { style: { marginBottom: '.6rem' } }, '💬 WhatsApp Report'));
+
+  const today = new Date();
+  const yesterday = new Date(today.getTime() - 86400000);
+  const fmt = d => d.toISOString().slice(0, 10);
+  const wFrom = h('input', { type: 'date', id: 'wa-rep-from', value: fmt(yesterday), style: { padding: '.4rem' } });
+  const wTo   = h('input', { type: 'date', id: 'wa-rep-to',   value: fmt(yesterday), style: { padding: '.4rem' } });
+  const filterBar = h('div', { class: 'filter-bar', style: { marginBottom: '1rem', display: 'flex', flexWrap: 'wrap', gap: '.5rem', alignItems: 'center' } },
+    h('span', {}, 'From'), wFrom,
+    h('span', {}, 'To'), wTo,
+    h('button', { class: 'btn primary', onclick: () => loadWaReport() }, 'Apply')
+  );
+  view.appendChild(filterBar);
+  setTimeout(() => { try { window._attachDatePresets && window._attachDatePresets(wFrom, wTo, { key: 'whatsappreport', apply: () => { try { loadWaReport(); } catch (_) {} } }); } catch (_) {} }, 0);
+
+  view.appendChild(h('div', { id: 'wa-rep-kpi', class: 'cards', style: { marginBottom: '1rem' } }));
+  view.appendChild(h('div', { class: 'chart-grid' },
+    h('div', { class: 'card' }, h('h3', {}, 'Delivery breakdown'), h('div', { class: 'chart-wrap' }, h('canvas', { id: 'wa-chart-status' }))),
+    h('div', { class: 'card card-wide' }, h('h3', {}, 'Daily volume'), h('div', { class: 'chart-wrap', style: { height: '220px' } }, h('canvas', { id: 'wa-chart-daily' })))
+  ));
+  view.appendChild(h('div', { class: 'card', style: { marginTop: '1rem' } },
+    h('h3', {}, '👥 By user'),
+    h('div', { id: 'wa-rep-by-user' })
+  ));
+  view.appendChild(h('div', { class: 'card', style: { marginTop: '1rem' } },
+    h('h3', {}, '📮 By template'),
+    h('div', { id: 'wa-rep-by-template' })
+  ));
+
+  await loadWaReport();
+};
+
+async function loadWaReport() {
+  const from = (document.getElementById('wa-rep-from') || {}).value || undefined;
+  const to   = (document.getElementById('wa-rep-to')   || {}).value || undefined;
+  let res;
+  try {
+    res = await api('api_reports_whatsapp', { from, to });
+  } catch (e) {
+    document.getElementById('wa-rep-kpi').innerHTML = '<div class="error-box">' + esc(e.message || String(e)) + '</div>';
+    return;
+  }
+  const k = (res && res.kpi) || {};
+
+  const kpiEl = document.getElementById('wa-rep-kpi');
+  kpiEl.innerHTML = '';
+  function tile(emoji, label, value, color) {
+    return h('div', { class: 'kpi-card', style: { minWidth: '120px' } },
+      h('div', { class: 'kpi-label' }, emoji + ' ' + label),
+      h('div', { class: 'kpi-value', style: color ? { color } : null }, String(value == null ? '—' : value))
+    );
+  }
+  kpiEl.appendChild(tile('📥',  'Inbound',  k.inbound, '#0ea5e9'));
+  kpiEl.appendChild(tile('📤', 'Outbound', k.outbound, '#6366f1'));
+  kpiEl.appendChild(tile('✔️', 'Delivered', k.delivered, '#16a34a'));
+  kpiEl.appendChild(tile('👁', 'Read', k.read, '#3b82f6'));
+  kpiEl.appendChild(tile('⚠️', 'Failed', k.failed, '#dc2626'));
+  kpiEl.appendChild(tile('👥', 'Contacts',  k.unique_contacts, '#0f172a'));
+  const deliveredPct = k.outbound ? Math.round((k.delivered / k.outbound) * 100) : 0;
+  const readPct      = k.outbound ? Math.round((k.read      / k.outbound) * 100) : 0;
+  kpiEl.appendChild(tile('📊', 'Delivered %', deliveredPct + '%', '#16a34a'));
+  kpiEl.appendChild(tile('📖', 'Read %', readPct + '%', '#3b82f6'));
+
+  makeChart('wa-chart-status', 'doughnut',
+    ['Read', 'Delivered', 'Sent (not delivered)', 'Failed'],
+    [k.read || 0, Math.max(0, (k.delivered || 0) - (k.read || 0)), Math.max(0, (k.sent || 0)), k.failed || 0],
+    ['#3b82f6', '#16a34a', '#94a3b8', '#dc2626']);
+
+  const daily = res.daily || [];
+  const labels = daily.map(d => d.date);
+  const inboundSeries = daily.map(d => d.inbound);
+  const outboundSeries = daily.map(d => d.outbound);
+  const dailyCtx = document.getElementById('wa-chart-daily');
+  if (dailyCtx && dailyCtx._chart) dailyCtx._chart.destroy();
+  if (dailyCtx) {
+    dailyCtx._chart = new Chart(dailyCtx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          { label: 'Inbound',  data: inboundSeries,  borderColor: '#0ea5e9', backgroundColor: 'rgba(14,165,233,.15)', tension: 0.25, fill: true, pointBackgroundColor: '#0ea5e9' },
+          { label: 'Outbound', data: outboundSeries, borderColor: '#6366f1', backgroundColor: 'rgba(99,102,241,.15)', tension: 0.25, fill: true, pointBackgroundColor: '#6366f1' }
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'top' } },
+        scales: { x: { grid: { display: false } }, y: { grid: { color: '#f3f4f6' }, beginAtZero: true } }
+      }
+    });
+  }
+
+  const byUserEl = document.getElementById('wa-rep-by-user');
+  byUserEl.innerHTML = '';
+  const userRows = res.by_user || [];
+  if (!userRows.length) {
+    byUserEl.appendChild(h('div', { class: 'muted', style: { padding: '.5rem' } }, 'No outbound messages in this date range.'));
+  } else {
+    const tbl = h('table', { class: 'data-table' },
+      h('thead', {}, h('tr', {},
+        h('th', {}, 'User'),
+        h('th', {}, 'Sent'),
+        h('th', {}, 'Delivered'),
+        h('th', {}, 'Read'),
+        h('th', {}, 'Failed'),
+        h('th', {}, 'Delivered %'),
+        h('th', {}, 'Read %')
+      )),
+      h('tbody', {}, ...userRows.map(r => {
+        const dPct = r.sent_total ? Math.round((r.delivered / r.sent_total) * 100) : 0;
+        const rPct = r.sent_total ? Math.round((r.read / r.sent_total) * 100) : 0;
+        return h('tr', {},
+          h('td', {}, r.name),
+          h('td', {}, String(r.sent_total)),
+          h('td', {}, String(r.delivered)),
+          h('td', {}, String(r.read)),
+          h('td', { style: r.failed ? { color: '#dc2626', fontWeight: 600 } : null }, String(r.failed)),
+          h('td', {}, dPct + '%'),
+          h('td', {}, rPct + '%')
+        );
+      }))
+    );
+    byUserEl.appendChild(tbl);
+  }
+
+  const byTplEl = document.getElementById('wa-rep-by-template');
+  byTplEl.innerHTML = '';
+  const tplRows = res.by_template || [];
+  if (!tplRows.length) {
+    byTplEl.appendChild(h('div', { class: 'muted', style: { padding: '.5rem' } }, 'No template messages in this date range. Free-text WhatsApp messages are not template-tracked.'));
+  } else {
+    const tbl = h('table', { class: 'data-table' },
+      h('thead', {}, h('tr', {},
+        h('th', {}, 'Template'),
+        h('th', {}, 'Sent'),
+        h('th', {}, 'Delivered'),
+        h('th', {}, 'Read'),
+        h('th', {}, 'Failed'),
+        h('th', {}, 'Delivered %'),
+        h('th', {}, 'Read %')
+      )),
+      h('tbody', {}, ...tplRows.map(r => {
+        const dPct = r.sent_total ? Math.round((r.delivered / r.sent_total) * 100) : 0;
+        const rPct = r.sent_total ? Math.round((r.read / r.sent_total) * 100) : 0;
+        return h('tr', {},
+          h('td', {}, r.template),
+          h('td', {}, String(r.sent_total)),
+          h('td', {}, String(r.delivered)),
+          h('td', {}, String(r.read)),
+          h('td', { style: r.failed ? { color: '#dc2626', fontWeight: 600 } : null }, String(r.failed)),
+          h('td', {}, dPct + '%'),
+          h('td', {}, rPct + '%')
+        );
+      }))
+    );
+    byTplEl.appendChild(tbl);
+  }
+}
+
 
 /* ---------------- Report Builder ----------------------------------
  * Pivot-style report — pick ANY field (built-in or custom) as the
