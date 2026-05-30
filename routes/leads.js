@@ -2847,6 +2847,40 @@ async function api_leads_listCoOwners(token, lead_id) {
   } catch (_) { return []; }
 }
 
+// SHARE_LEAD_BULK_v1 (2026-05-30): apply 🤝 share with a single user to
+// many leads at once. Mirrors the manual api_leads_shareWith — same
+// permission rules (caller must be visible owner / co-owner / admin),
+// same dedup via ON CONFLICT. Returns per-lead ok/skipped/error tallies.
+async function api_leads_bulkShare(token, leadIds, userId) {
+  const me = await authUser(token);
+  const uid = Number(userId);
+  if (!uid) throw new Error('user_id required');
+  const visible = await getVisibleUserIds(me);
+  const ids = (Array.isArray(leadIds) ? leadIds : []).map(Number).filter(Boolean);
+  if (!ids.length) return { ok: 0, skipped: 0, errors: [] };
+  let ok = 0, skipped = 0;
+  const errors = [];
+  for (const id of ids) {
+    try {
+      const lead = await db.findById('leads', id);
+      if (!lead) { skipped++; continue; }
+      if (!await _isVisibleOrShared(me, visible, lead)) { skipped++; continue; }
+      if (uid === Number(lead.assigned_to)) { skipped++; continue; }
+      await db.query(
+        `INSERT INTO lead_co_owners (lead_id, user_id, added_by, source)
+         VALUES ($1, $2, $3, 'manual_bulk')
+         ON CONFLICT (lead_id, user_id) DO NOTHING`,
+        [id, uid, me.id]
+      );
+      ok++;
+    } catch (e) {
+      errors.push({ id, error: String(e.message || e).slice(0, 120) });
+    }
+  }
+  return { ok, skipped, errors };
+}
+
+
 
 module.exports = {
   api_leads_list, api_leads_distinctTags, api_leads_phoneBook, api_leads_statusCounts, api_leads_get, api_leads_create, api_leads_update,
@@ -2861,6 +2895,6 @@ module.exports = {
   api_leads_rescanDuplicates,
   api_leads_merge,
   api_leads_activityTimeline,  /* LEAD_ACTIVITY_v1 */  /* LEAD_MERGE_v1 */
-  api_leads_shareWith, api_leads_unshare, api_leads_listCoOwners,  /* SHARE_LEAD_v1 */
+  api_leads_shareWith, api_leads_unshare, api_leads_listCoOwners, api_leads_bulkShare,  /* SHARE_LEAD_v1 */
   _applyAutoShare
 };

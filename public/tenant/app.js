@@ -3632,6 +3632,7 @@ VIEWS.leads = async (view) => {
   view.appendChild(h('div', { class: 'bulk-bar', id: 'bulk-bar', hidden: true, 'aria-hidden': 'true', 'data-empty': '1' },
     h('span', { id: 'bulk-count', class: 'bulk-count' }, '0 selected'),
     h('button', { class: 'btn sm', onclick: bulkAssignPrompt }, '👤 Assign'),
+    h('button', { class: 'btn sm', onclick: bulkSharePrompt, title: 'Share selected leads with another user (both can fully work them)' }, '🤝 Share'),
     h('button', { class: 'btn sm', onclick: bulkStatusPrompt }, '🏷️ Status'),
     h('button', { class: 'btn sm', onclick: bulkAddTagPrompt }, '🏁 Add tag'),
     h('button', { class: 'btn sm', onclick: bulkCustomFieldPrompt, title: 'Set a custom-field value on every selected lead' }, '🧩 Field'),
@@ -4761,6 +4762,44 @@ async function bulkAssignPrompt() {
         try { await api('api_leads_bulkUpdate', ids, { assigned_to: Number($('#bulk-asgn').value) }); toast('Assigned'); modal.remove(); clearSelection(); loadLeads(); }
         catch (e) { toast(e.message, 'err'); }
       } }, 'Assign')
+    )
+  ));
+  document.body.appendChild(modal);
+}
+
+// SHARE_LEAD_BULK_v1 (2026-05-30): pick a user, share every selected lead
+// with them in one shot. Primary owner unchanged; the picked user becomes
+// a co-owner on each lead, sees it in their My Leads with 🤝 badge,
+// and can fully work it.
+async function bulkSharePrompt() {
+  const ids = selectedIds(); if (!ids.length) return;
+  const users = (CRM.cache.users || []).filter(u => Number(u.is_active) === 1);
+  if (!users.length) { toast('No active users to share with', 'err'); return; }
+  const modal = h('div', { class: 'modal-backdrop' }, h('div', { class: 'modal' },
+    h('h3', {}, `🤝 Share ${ids.length} lead${ids.length === 1 ? '' : 's'} with…`),
+    h('label', {}, 'Pick user'),
+    h('select', { id: 'bulk-share-u' }, ...users.map(u => h('option', { value: u.id }, `${u.name} — ${u.role}`))),
+    h('p', { class: 'muted', style: { fontSize: '.82rem', marginTop: '.5rem' } },
+      'In addition to the current primary owner, the picked user will see every selected lead under their My Leads with a 🤝 badge and can fully work it. Status, remarks, calls, and WhatsApp history stay on the lead — only visibility is added.'),
+    h('div', { class: 'actions' },
+      h('button', { class: 'btn', onclick: () => modal.remove() }, 'Cancel'),
+      h('button', { class: 'btn primary', onclick: async () => {
+        const uid = Number($('#bulk-share-u').value);
+        if (!uid) return;
+        try {
+          const r = await api('api_leads_bulkShare', ids, uid);
+          const ok = (r && r.ok) || 0;
+          const skipped = (r && r.skipped) || 0;
+          const errs = (r && r.errors && r.errors.length) || 0;
+          let msg = 'Shared ' + ok + ' lead' + (ok === 1 ? '' : 's');
+          if (skipped) msg += ' · ' + skipped + ' skipped (already shared or no access)';
+          if (errs) msg += ' · ' + errs + ' error' + (errs === 1 ? '' : 's');
+          toast(msg, errs ? 'warn' : 'ok');
+          modal.remove();
+          clearSelection();
+          loadLeads();
+        } catch (e) { toast(e.message || 'err', 'err'); }
+      } }, '🤝 Share')
     )
   ));
   document.body.appendChild(modal);

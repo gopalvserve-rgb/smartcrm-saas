@@ -247,5 +247,10 @@ Background-poll cuts on the APK. Floating-WhatsApp chat dock is now disabled on 
   ('feature', 'Share a lead with a second user (manual + auto)',
    'Until now every lead had exactly one assignee. You can now show the same lead to a second user in their My Leads, with both able to fully work it (change status, add remark, call, WhatsApp). Two ways to set it up. (1) Manual — on any lead modal a new 🤝 + Share button opens a user picker; the picked user instantly sees the lead under their My Leads with a 🤝 badge next to the name. Either side can remove the share with the X on the chip. (2) Automatic — when you create or edit a Campaign there is a new 🤝 Auto-share every new lead in this campaign with picker. Pick a user there and every new lead created under that campaign is automatically shared with them too. The primary owner relationship is unchanged; co-owners are an additive layer. New tables and columns are created automatically on next request (lead_co_owners join table, plus campaigns.auto_share_user_id and sources.auto_share_user_id columns) so no migration is required.',
    '#/leads', '🤝', NOW())
+,
+
+  ('feature', 'Share leads in bulk',
+   'The selection toolbar above the Leads list now has a 🤝 Share button right next to 👤 Assign. Tick the leads you want, click 🤝 Share, pick the second user, hit Share — every selected lead is now visible to that user under their My Leads with the 🤝 badge, and they can fully work all of them. Already-shared leads are silently skipped. Per-lead 🤝 + Share on the modal and the campaign Auto-share dropdown still work the same as before — this just adds a fast path for batches.',
+   '#/leads', '🤝', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
