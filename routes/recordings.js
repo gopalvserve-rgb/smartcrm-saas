@@ -1316,48 +1316,73 @@ function _kickFilenamesIndex() {
 }
 
 async function api_recordings_filenamesPresent(token, payload) {
+  // REC_FILENAMES_PERF_v3 (2026-05-30): real fix this time.
+  //
+  // Symptoms observed on vserve: Samsung Fold (harsh@adbullet) showed
+  // filenamesPresent 119s avg / 230s max. Vivo (neetu@vserve) 53s avg.
+  // Every other API on the device was getting queued behind it at the
+  // pool — visible as 60-90s max times on api_leads_list, _notifications_mine,
+  // _wb_chat_threads, etc. That is the "app hang" the user reports.
+  //
+  // Three real fixes:
+  //   1. Hard PG-level statement_timeout (5s) via SET LOCAL inside a tx
+  //      (db.queryWithTimeout). On timeout, PG cancels the statement and
+  //      releases the client to the pool. Cannot exceed 5s + epsilon.
+  //   2. JS-side Promise.race (6s) as belt-and-braces in case the client
+  //      itself is stuck before the SET runs (pool empty / network blip).
+  //   3. FAIL-OPEN: any error -> return present:[] silently. The APK then
+  //      uploads everything and the server-side REC_DEDUP_v2 unique index
+  //      rejects duplicates with ON CONFLICT. Sync still completes. The
+  //      old code threw, which is why Harsh's 1st sync failed entirely.
   await authUser(token);
   const names = Array.isArray(payload && payload.filenames) ? payload.filenames : [];
   const list = names.map(s => String(s || '').trim()).filter(Boolean).slice(0, 500);
   if (!list.length) return { present: [], asked: 0 };
-  _kickFilenamesIndex();
 
-  // Cache hit?
+  // Cache hit? Same as v2 — APK retries within the minute are free.
   const cacheKey = list.slice().sort().join('|');
   const cached = _filenamesCache.get(cacheKey);
   if (cached && (Date.now() - cached.ts) < 60000) {
     return { present: cached.present, asked: list.length, cached: true };
   }
 
+  _kickFilenamesIndex();
+
+  const HARD_TIMEOUT_MS = 5000;
+  let rows = [];
   try {
     const t0 = Date.now();
-    // Hard 8-second statement timeout — if the query takes longer, we
-    // throw and the client falls back to its watermark dedup path
-    // (and crucially, the pool connection is released, not held for 80s).
-    const { rows } = await db.query({
-      text: 'SELECT original_filename FROM lead_recordings WHERE original_filename = ANY($1::text[])',
-      values: [list],
-      // node-pg honours .text + .values; statement_timeout via SET LOCAL inside a tx is the safest portable way
-    });
+    const queryP = db.queryWithTimeout(
+      'SELECT DISTINCT original_filename FROM lead_recordings WHERE original_filename = ANY($1::text[])',
+      [list],
+      HARD_TIMEOUT_MS
+    );
+    const timeoutP = new Promise((_, rej) =>
+      setTimeout(() => rej(new Error('filenamesPresent_js_timeout')), HARD_TIMEOUT_MS + 1000)
+    );
+    const res = await Promise.race([queryP, timeoutP]);
+    rows = res.rows || [];
     const ms = Date.now() - t0;
     if (ms > 500) console.warn('[recordings filenamesPresent] slow', { ms, asked: list.length, hits: rows.length });
-    const seen = new Set();
-    const present = [];
-    for (const r of rows) {
-      const n = r.original_filename;
-      if (n && !seen.has(n)) { seen.add(n); present.push(n); }
-    }
-    // Cap the cache so we don't leak memory on tenants with extreme sync churn
-    if (_filenamesCache.size > 200) {
-      const oldest = [..._filenamesCache.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
-      if (oldest) _filenamesCache.delete(oldest[0]);
-    }
-    _filenamesCache.set(cacheKey, { ts: Date.now(), present });
-    return { present, asked: list.length };
   } catch (e) {
-    console.warn('[recordings filenamesPresent] query failed:', e.message);
-    throw e;
+    // FAIL-OPEN — see comment block above.
+    console.warn('[recordings filenamesPresent] fail-open:', e.message);
+    return { present: [], asked: list.length, fail_open: true, reason: String(e.message || e).slice(0, 80) };
   }
+
+  const seen = new Set();
+  const present = [];
+  for (const r of rows) {
+    const n = r.original_filename;
+    if (n && !seen.has(n)) { seen.add(n); present.push(n); }
+  }
+  // Cap memory
+  if (_filenamesCache.size > 200) {
+    const oldest = [..._filenamesCache.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
+    if (oldest) _filenamesCache.delete(oldest[0]);
+  }
+  _filenamesCache.set(cacheKey, { ts: Date.now(), present });
+  return { present, asked: list.length };
 }
 
 module.exports = {

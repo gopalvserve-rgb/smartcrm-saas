@@ -609,8 +609,33 @@ async function setConfig(key, value) {
   }
 }
 
+// REC_FILENAMES_PERF_v3 (2026-05-30): hard-timeout query helper.
+// SET LOCAL statement_timeout only persists inside a tx, so we open
+// BEGIN/COMMIT around the bounded query. On timeout PG throws
+// 'canceling statement due to statement timeout' and the client is
+// returned to the pool — guaranteeing this can NEVER pin a connection
+// for more than timeoutMs+epsilon.
+async function queryWithTimeout(sql, params, timeoutMs) {
+  const p = _activePool();
+  const client = await p.connect();
+  let committed = false;
+  try {
+    await client.query('BEGIN');
+    await client.query(`SET LOCAL statement_timeout = ${Math.max(100, Math.floor(Number(timeoutMs) || 5000))}`);
+    const res = await client.query(sql, params);
+    await client.query('COMMIT');
+    committed = true;
+    return res;
+  } finally {
+    if (!committed) {
+      try { await client.query('ROLLBACK'); } catch (_) {}
+    }
+    client.release();
+  }
+}
+
 module.exports = {
-  pool, query,
+  pool, query, queryWithTimeout,
   getAll, findById, findOneBy, findBy,
   insert, update, removeRow,
   getConfig, setConfig, nowIso,
