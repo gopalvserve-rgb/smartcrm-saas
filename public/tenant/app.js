@@ -8470,6 +8470,35 @@ function renderDialerSettings() {
           h('div', { class: 'muted' }, 'The app reads new files from this folder, parses the phone number, and uploads each recording to the matching lead.'),
           h('div', { class: 'actions' },
             h('button', { class: 'btn primary', onclick: () => syncRecordings() }, '🔄 Sync now'),
+            /* REC_AUTOSYNC_TOGGLE_v1 — let the user disable the continuous tick. */
+            (() => {
+              const isOff = (function(){ try { return localStorage.getItem('rec_auto_sync_disabled') === '1'; } catch (_) { return false; } })();
+              return h('button', {
+                class: 'btn' + (isOff ? '' : ' primary'),
+                style: isOff
+                  ? { background: '#fee2e2', borderColor: '#fca5a5', color: '#b91c1c' }
+                  : { background: '#dcfce7', borderColor: '#86efac', color: '#15803d' },
+                title: isOff
+                  ? 'Continuous folder polling is OFF. Recordings will sync once each morning (yesterday\'s files). Tap to re-enable continuous polling.'
+                  : 'Continuous folder polling is ON. The app re-scans the recording folder every 5 minutes (mobile) / 90 seconds (desktop). Tap to disable continuous polling and rely on the morning batch only.',
+                onclick: () => {
+                  try {
+                    const nextOff = !isOff;
+                    localStorage.setItem('rec_auto_sync_disabled', nextOff ? '1' : '0');
+                    if (nextOff) {
+                      if (typeof _recAutoSyncTimer !== 'undefined' && _recAutoSyncTimer) {
+                        clearInterval(_recAutoSyncTimer); _recAutoSyncTimer = null;
+                      }
+                      toast('Auto-sync OFF — recordings will be pushed every morning instead', 'ok');
+                    } else {
+                      toast('Auto-sync ON — folder re-scans every few minutes', 'ok');
+                      try { startRecordingAutoSync(); } catch (_) {}
+                    }
+                    navigateTo('recordings');
+                  } catch (e) { toast(e.message || 'Toggle failed', 'err'); }
+                }
+              }, isOff ? '⏸ Auto-sync OFF (tap to enable)' : '▶ Auto-sync ON (tap to disable)');
+            })(),
             /* REC_DATE_SYNC_v1 — safety-net buttons: pick a day and re-sync everything from it. */
             h('button', { class: 'btn', title: 'Re-scan + upload every recording modified TODAY (since midnight, your phone time).', onclick: () => { const d = new Date(); d.setHours(0,0,0,0); const tomorrow = d.getTime() + 24*3600*1000; toast('Scanning today\u2019s recordings\u2026', 'ok'); syncRecordings({ sinceMs: d.getTime(), untilMs: tomorrow }); } }, '📅 Sync today'),
             h('button', { class: 'btn', title: 'Re-scan + upload every recording from YESTERDAY (midnight to midnight, your phone time).', onclick: () => { const d = new Date(); d.setHours(0,0,0,0); const yest = d.getTime() - 24*3600*1000; toast('Scanning yesterday\u2019s recordings\u2026', 'ok'); syncRecordings({ sinceMs: yest, untilMs: d.getTime() }); } }, '📆 Sync yesterday'),
@@ -28979,13 +29008,53 @@ function _kickRecordingSyncSoon(delayMs, reason) {
     _silentSyncRecordings({ _reason: reason || 'kick' });
   }, Math.max(0, delayMs || 6000));
 }
+/* REC_AUTOSYNC_TOGGLE_v1 — user can disable the continuous tick (which on
+   some OEMs ends up nudging the folder permission until it's revoked) and
+   rely on a single morning batch instead. The morning batch ALSO runs even
+   when auto-sync is ON, as a safety net for missed files. */
+function _recAutoSyncEnabled() {
+  try { return localStorage.getItem('rec_auto_sync_disabled') !== '1'; } catch (_) { return true; }
+}
+async function _runMorningPushIfNeeded(reason) {
+  try {
+    const today = new Date(); today.setHours(0,0,0,0);
+    const targetMs = today.getTime() + 9 * 3600 * 1000; // 9:00 AM local
+    const now = Date.now();
+    const lastKey = 'rec_morning_push_last';
+    const last = Number(localStorage.getItem(lastKey) || 0);
+    // Need to push if: we're past 9 AM AND last push was before today's 9 AM
+    if (now < targetMs) return; // too early today
+    if (last >= targetMs) return; // already pushed today
+    localStorage.setItem(lastKey, String(now));
+    _recDiagLog({ reason: 'morning-push', result: 'start', note: reason || 'auto' });
+    // Pull yesterday's window
+    const yest = today.getTime() - 24 * 3600 * 1000;
+    try {
+      await _silentSyncRecordings({ _reason: 'morning-push', sinceMs: yest, untilMs: today.getTime() });
+      _recDiagLog({ reason: 'morning-push', result: 'ok', note: 'yesterday window synced' });
+    } catch (e) {
+      _recDiagLog({ reason: 'morning-push', result: 'err', note: e.message || String(e) });
+    }
+  } catch (_) {}
+}
 function startRecordingAutoSync() {
   if (!window.LeadCRMNative || typeof LeadCRMNative.listRecordings !== 'function') {
     _recDiagLog({ reason: 'startup', result: 'skip', note: 'browser mode (no LeadCRMNative bridge)' });
     return;
   }
-  _recDiagLog({ reason: 'startup', result: 'ok', note: 'auto-sync timers armed (boot 8s, tick 90s, visibilitychange)' });
+  const enabled = _recAutoSyncEnabled();
+  _recDiagLog({ reason: 'startup', result: 'ok',
+    note: enabled ? 'auto-sync ARMED (boot 8s, tick 5min, visibilitychange)'
+                  : 'auto-sync DISABLED by user — morning push only' });
   if (_recAutoSyncTimer) clearInterval(_recAutoSyncTimer);
+
+  // Always: morning push (once per day) regardless of toggle.
+  // Check on boot, and then every hour so the 9 AM threshold catches.
+  setTimeout(() => _runMorningPushIfNeeded('boot-check'), 12000);
+  setInterval(() => _runMorningPushIfNeeded('hourly-check'), 60 * 60 * 1000);
+
+  if (!enabled) return;  // user disabled continuous polling
+
   setTimeout(() => _silentSyncRecordings({ _reason: 'boot' }), 8000);
   // MOBILE_PERF_v1: 90s on desktop, 5min on APK (WorkManager 15-min + post-call kick already cover periodic sync)
   _recAutoSyncTimer = setInterval(() => _silentSyncRecordings({ _reason: 'tick' }), _IS_APK ? 300_000 : 90_000);
