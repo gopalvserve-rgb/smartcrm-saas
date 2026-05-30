@@ -8522,69 +8522,6 @@ function renderDialerSettings() {
         )
   ));
 
-  // CALL_HISTORY_SYNC_v1 — date-range backfill of the phone's CallLog so
-  // missed/incoming/outgoing call events from before the user installed the
-  // CRM (or before /api/call_event_native was wired up) show up in Recent
-  // Calls / Call Activity reports. Native bridge: LeadCRMNative.importCallLog(sinceMs, untilMs).
-  wrap.appendChild(h('div', { class: 'settings-card' },
-    h('h4', {}, '📞 Call history sync'),
-    h('p', { class: 'muted' },
-      'Backfill incoming, outgoing and missed calls from your phone\'s call log. ' +
-      'Useful right after installing the app so calls before today appear in Recent Calls and the Call Activity report. ' +
-      'Type (incoming / missed / outgoing) is preserved.'),
-    h('div', { class: 'actions' },
-      (() => {
-        function _runCallHistorySync(label, sinceMs, untilMs) {
-          try {
-            if (!window.LeadCRMNative || typeof LeadCRMNative.importCallLog !== 'function') {
-              toast('Update the app to use call history sync', 'warn');
-              return;
-            }
-            toast('Importing ' + label + ' calls\u2026', 'ok');
-            const r = LeadCRMNative.importCallLog(sinceMs || 0, untilMs || Date.now());
-            // Native may return a JSON string with { imported, skipped, total }
-            let parsed = null;
-            try { parsed = (typeof r === 'string') ? JSON.parse(r) : r; } catch (_) {}
-            if (parsed && typeof parsed.imported !== 'undefined') {
-              toast('Imported ' + parsed.imported + ' calls (' + (parsed.skipped || 0) + ' skipped)', 'ok');
-            } else {
-              toast('Call import requested', 'ok');
-            }
-          } catch (e) { toast(e.message || 'Import failed', 'err'); }
-        }
-        const NOW = Date.now();
-        const DAY = 24 * 3600 * 1000;
-        return h('span', {},
-          h('button', { class: 'btn',
-            title: 'Pull the last 7 days of calls (incoming + outgoing + missed) from the phone\'s call log.',
-            onclick: () => _runCallHistorySync('last 7 days', NOW - 7 * DAY, NOW) }, '📞 Last 7 days'),
-          ' ',
-          h('button', { class: 'btn',
-            title: 'Pull the last 30 days of calls (incoming + outgoing + missed) from the phone\'s call log.',
-            onclick: () => _runCallHistorySync('last 30 days', NOW - 30 * DAY, NOW) }, '📞 Last 30 days'),
-          ' ',
-          h('button', { class: 'btn',
-            title: 'Pull the last 3 months of calls (incoming + outgoing + missed).',
-            onclick: () => _runCallHistorySync('last 3 months', NOW - 90 * DAY, NOW) }, '📞 Last 3 months'),
-          ' ',
-          h('button', { class: 'btn',
-            title: 'Pull the last 6 months of calls (incoming + outgoing + missed).',
-            onclick: () => _runCallHistorySync('last 6 months', NOW - 180 * DAY, NOW) }, '📞 Last 6 months'),
-          ' ',
-          h('button', { class: 'btn ghost',
-            title: 'Pull the ENTIRE call log on the phone. May take a minute on devices with thousands of calls.',
-            onclick: async () => {
-              if (!await confirmDialog('Import ALL incoming, outgoing and missed calls from your phone\'s call log? Large devices can take a minute.')) return;
-              _runCallHistorySync('ALL', 0, Date.now());
-            } }, '📞 All calls')
-        );
-      })()
-    ),
-    h('div', { class: 'muted', style: { marginTop: '.4rem', fontSize: '.78rem' } },
-      'Requires READ_CALL_LOG permission (already granted via the permission onboarding). ' +
-      'Calls are sent to the CRM the same way live calls are — each becomes a call_event with type incoming / outgoing / missed and is linked to a matching lead when the phone number matches.')
-  ));
-
   // Filter card
   const includeUnmatched = localStorage.getItem('rec_include_unmatched') === '1';
   wrap.appendChild(h('div', { class: 'settings-card' },
