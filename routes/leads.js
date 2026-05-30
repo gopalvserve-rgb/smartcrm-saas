@@ -2249,6 +2249,7 @@ async function api_leads_pullInfo(token) {
   let availableCount = 0;
   if (inCampaigns) {
     const cids = userCampaigns.map(c => c.id);
+    /* PULL_NODUP_v1 — matches the pull SQL, no is_duplicate gate. */
     const cand = await db.query(
       `SELECT COUNT(*)::int AS n
          FROM leads l
@@ -2257,7 +2258,6 @@ async function api_leads_pullInfo(token) {
         WHERE p.id IS NULL
           AND (l.assigned_to IS NULL OR l.assigned_to = $1)
           AND COALESCE(s.is_final, 0) = 0
-          AND COALESCE(l.is_duplicate, 0) = 0
           AND COALESCE(l.is_hidden, 0) = 0
           AND l.campaign_id = ANY($2::int[])`,
       [Number(me.id), cids]
@@ -2360,6 +2360,10 @@ async function api_leads_pull(token) {
     if (inCampaigns) {
       const cids = userCampaigns.map(c => c.id);
       sel = await client.query(
+        /* PULL_NODUP_v1 — duplicate gate dropped per user ask.
+           Duplicates can now be pulled. Pull is restricted only by:
+           not-already-pulled, unassigned-or-mine, not-final, not-hidden,
+           in-my-campaigns. */
         `SELECT l.id, l.assigned_to
            FROM leads l
            LEFT JOIN lead_pull_log p ON p.lead_id = l.id AND p.user_id = $1
@@ -2367,7 +2371,6 @@ async function api_leads_pull(token) {
           WHERE p.id IS NULL
             AND (l.assigned_to IS NULL OR l.assigned_to = $1)
             AND COALESCE(s.is_final, 0) = 0
-            AND COALESCE(l.is_duplicate, 0) = 0
             AND COALESCE(l.is_hidden, 0) = 0
             AND l.campaign_id = ANY($2::int[])
           ORDER BY l.created_at ${order}, l.id ${order}
@@ -2376,6 +2379,7 @@ async function api_leads_pull(token) {
       );
     } else {
       sel = await client.query(
+        /* PULL_NODUP_v1 — duplicate gate dropped from legacy path too. */
         `SELECT l.id, l.assigned_to
            FROM leads l
            LEFT JOIN lead_pull_log p ON p.lead_id = l.id AND p.user_id = $1
@@ -2383,7 +2387,6 @@ async function api_leads_pull(token) {
           WHERE p.id IS NULL
             AND (l.assigned_to IS NULL OR l.assigned_to = $1)
             AND COALESCE(s.is_final, 0) = 0
-            AND COALESCE(l.is_duplicate, 0) = 0
             AND COALESCE(l.is_hidden, 0) = 0
           ORDER BY l.created_at ${order}, l.id ${order}
           LIMIT $2 FOR UPDATE OF l SKIP LOCKED`,

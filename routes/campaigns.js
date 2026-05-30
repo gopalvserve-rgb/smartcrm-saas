@@ -146,14 +146,13 @@ async function api_campaigns_list(token) {
               WHERE l.campaign_id = c.id
                 AND COALESCE(l.is_duplicate, 0) = 1
             ) AS leads_duplicate,
-           /* leads_pullable = exact match of the pull SQL eligibility gates
-              (excluding the per-user 'already pulled' check, which can't be
-              precomputed at the campaign level). */
+           /* leads_pullable = exact match of pull SQL (PULL_NODUP_v1).
+              Duplicate gate dropped — Pull no longer excludes is_duplicate=1
+              so this count must not either, otherwise admin sees mismatch. */
            (SELECT COUNT(*) FROM leads l
               LEFT JOIN statuses s ON s.id = l.status_id
               WHERE l.campaign_id = c.id
                 AND l.assigned_to IS NULL
-                AND COALESCE(l.is_duplicate, 0) = 0
                 AND COALESCE(l.is_hidden, 0) = 0
                 AND COALESCE(s.is_final, 0) = 0
             ) AS leads_pullable
