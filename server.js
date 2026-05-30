@@ -1734,6 +1734,77 @@ app.get('/api/perf-summary', async (req, res) => {
   }
 });
 
+// PERF_ROOT_v1 — /api/perf-pgactivity
+// Read-only DB-side diagnostic. Returns live pg_stat_activity for the
+// caller's tenant DB, the JS pool stats, indexes on recordings + leads,
+// and the per_tenant_max env value. Lets us see in one shot whether the
+// "slow API" cluster is queries actually running long OR connection-pool
+// wait, and whether the indexes we shipped are present on this DB.
+app.get('/api/perf-pgactivity', async (req, res) => {
+  try {
+    const jwt = require('jsonwebtoken');
+    const _JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
+    const raw = (req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    if (!raw) return res.status(401).json({ error: 'No auth token' });
+    let decoded;
+    try { decoded = jwt.verify(raw, _JWT_SECRET); }
+    catch (e) { return res.status(401).json({ error: 'Invalid or expired token' }); }
+
+    let tenantSlug = decoded && decoded.t ? String(decoded.t) : '';
+    const isSuper = !!(decoded && (decoded.is_super_admin || decoded.super_admin));
+    const askedSlug = String(req.query.slug || '').trim();
+    if (isSuper && askedSlug) tenantSlug = askedSlug;
+    if (!tenantSlug) return res.status(400).json({ error: 'No tenant slug (pass ?slug= as super-admin or use a tenant token)' });
+
+    const t = await tenantPoolMod.findActiveTenant(tenantSlug);
+    if (!t) return res.status(404).json({ error: 'tenant not found: ' + tenantSlug });
+    const pool = tenantPoolMod.poolFor(t);
+    if (!pool) return res.status(500).json({ error: 'no pool for tenant' });
+
+    let activity = [];
+    try {
+      const r = await pool.query(
+        "SELECT pid, EXTRACT(EPOCH FROM (now() - query_start)) AS age_sec, state, wait_event_type, wait_event, LEFT(query, 300) AS query FROM pg_stat_activity WHERE datname = current_database() AND state IS NOT NULL AND state <> 'idle' ORDER BY age_sec DESC NULLS LAST LIMIT 40"
+      );
+      activity = r.rows;
+    } catch (e) { activity = [{ error: 'pg_stat_activity: ' + e.message }]; }
+
+    let conn_summary = [];
+    try {
+      const r = await pool.query(
+        "SELECT state, COUNT(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() GROUP BY state ORDER BY n DESC"
+      );
+      conn_summary = r.rows;
+    } catch (_) {}
+
+    let recordings_indexes = [];
+    let leads_indexes = [];
+    let wa_indexes = [];
+    try { const r = await pool.query("SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'recordings' ORDER BY indexname"); recordings_indexes = r.rows; } catch (_) {}
+    try { const r = await pool.query("SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'leads' ORDER BY indexname"); leads_indexes = r.rows; } catch (_) {}
+    try { const r = await pool.query("SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'whatsapp_messages' ORDER BY indexname"); wa_indexes = r.rows; } catch (_) {}
+
+    let row_counts = {};
+    try {
+      const r = await pool.query("SELECT 'recordings' AS t, COUNT(*)::bigint AS n FROM recordings UNION ALL SELECT 'leads', COUNT(*) FROM leads UNION ALL SELECT 'whatsapp_messages', COUNT(*) FROM whatsapp_messages");
+      r.rows.forEach(row => { row_counts[row.t] = Number(row.n); });
+    } catch (e) { row_counts.error = e.message; }
+
+    return res.json({
+      ok: true,
+      tenant: { slug: t.slug, db_name: t.db_name },
+      env_per_tenant_max: process.env.PG_POOL_PER_TENANT_MAX || null,
+      hardcoded_default_pool: 3,
+      js_pool_stats: tenantPoolMod.getPoolStats(),
+      conn_summary, activity, row_counts,
+      recordings_indexes, leads_indexes, wa_indexes,
+      now: new Date().toISOString()
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // CRM_PERF_v1_APK — receive a performance diagnostic dump from the SPA / APK.
 // Console-logged so it surfaces in Railway logs. Compact 1-line summary plus
 // the full JSON for support inspection. Auth optional — the whole point is
