@@ -33,16 +33,21 @@ const CRM = {
     columns: JSON.parse(localStorage.getItem('crm_cols') || '["name","phone","source","status","stage","assigned","followup","last_change","remark","created"]'),
     filters: JSON.parse(localStorage.getItem('crm_filters') || '{}'),
     showHeader: (function () {
-      // LEADS_FILTER_COLLAPSE_v3 — on mobile, default the status-chip
-      // header to hidden so the user immediately sees the leads list
-      // instead of a wall of pills. Desktop keeps the existing behaviour
-      // (visible unless explicitly hidden). User's explicit choice always
-      // wins via localStorage.
+      /* LEADS_FILTER_CLOSED_DEFAULT_v1 — mobile: ignore localStorage
+         and use window._mobileLeadsFilterOpen as the only source of
+         truth. Without this, an old crm_show_header='1' value kept
+         re-opening the status-chip header on every render. Desktop:
+         unchanged — respect localStorage, default to visible. */
+      var isMobile = false;
+      try { isMobile = (window.innerWidth < 900); } catch (_) {}
+      if (isMobile) {
+        try { localStorage.removeItem('crm_show_header'); } catch (_) {}
+        return !!window._mobileLeadsFilterOpen;
+      }
       var v = localStorage.getItem('crm_show_header');
       if (v === '0') return false;
       if (v === '1') return true;
-      // Unset — fall back to default. Mobile = hidden, desktop = shown.
-      try { return !(window.innerWidth < 900); } catch (_) { return true; }
+      return true;
     })()
   }
 };
