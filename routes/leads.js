@@ -83,6 +83,38 @@ function _isVisible(me, visible, lead) {
   return visible.includes(Number(lead.assigned_to));
 }
 
+// SHARE_LEAD_HOTFIX_v1 (2026-05-30): helpers were missing from prior commit
+// because the original patch script crashed before the disk write.
+// _isVisibleCo extends _isVisible with co-owner matching against a
+// pre-loaded Map<lead_id, Set<user_id>>.
+function _isVisibleCo(me, visible, lead, coOwnersByLead) {
+  if (_isVisible(me, visible, lead)) return true;
+  if (!coOwnersByLead) return false;
+  const set = coOwnersByLead.get(Number(lead.id));
+  if (!set) return false;
+  if (set.has(Number(me.id))) return true;
+  for (const v of visible) { if (set.has(Number(v))) return true; }
+  return false;
+}
+
+// Load every (lead_id, user_id) pair into a Map once per list call.
+// Silently degrades to an empty Map on tenants where the table doesn't
+// exist yet so the Leads page never breaks.
+async function _loadCoOwnerMap() {
+  try {
+    const r = await db.query('SELECT lead_id, user_id FROM lead_co_owners');
+    const m = new Map();
+    for (const row of r.rows) {
+      const k = Number(row.lead_id);
+      if (!m.has(k)) m.set(k, new Set());
+      m.get(k).add(Number(row.user_id));
+    }
+    return m;
+  } catch (_) {
+    return new Map();
+  }
+}
+
 // Duplicate detection
 async function _findDuplicate(payload) {
   // Read duplicate-detection config from the CURRENT tenant's DB. process.env
