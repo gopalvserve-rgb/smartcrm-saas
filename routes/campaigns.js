@@ -325,6 +325,114 @@ async function api_campaigns_delete(token, id) {
   return { ok: true, id: cid, soft_deleted: false };
 }
 
+
+// CAMPAIGN_ATTACH_EXISTING_v1 — backfill existing leads into a campaign.
+// Admin-only. Takes campaign_id + a filter object. Filter supports:
+//   match_mode: 'and' | 'or'   (default 'and')
+//   assigned_to: [<user id>, ..., 'unassigned']    (NULL means unassigned)
+//   status_id:   [<status id>, ...]
+//   source:      ['manual', 'facebook', ...]       (case-insensitive)
+//   also_unassign: bool  (when true, also sets assigned_to = NULL)
+// payload.preview === true returns just the match count (no writes).
+// Without preview, it actually attaches the leads.
+async function api_campaigns_attachExisting(token, payload) {
+  const me = await authUser(token);
+  if (me.role !== 'admin') throw new Error('Admin only');
+  payload = payload || {};
+  const campaignId = Number(payload.campaign_id);
+  if (!campaignId) throw new Error('campaign_id required');
+  const filters = payload.filters || {};
+  const matchMode = String(filters.match_mode || 'and').toLowerCase() === 'or' ? 'OR' : 'AND';
+  const alsoUnassign = !!filters.also_unassign;
+  const preview = !!payload.preview;
+
+  // Confirm the campaign exists & belongs to this tenant
+  const cr = await db.query('SELECT id, name FROM campaigns WHERE id = $1 LIMIT 1', [campaignId]);
+  if (!cr.rowCount) throw new Error('Campaign not found');
+
+  // Build WHERE clauses + params.
+  // $1 is always the campaign_id (used only in the UPDATE, not in WHERE).
+  const conditions = [];
+  const params = [campaignId];
+  let pi = 2;
+
+  // assigned_to: split into "specific user IDs" + "include unassigned"
+  if (Array.isArray(filters.assigned_to) && filters.assigned_to.length) {
+    const wantsUnassigned = filters.assigned_to.some(v =>
+      v === null || v === 'unassigned' || String(v).toLowerCase() === 'unassigned'
+    );
+    const userIds = filters.assigned_to
+      .filter(v => v !== null && v !== 'unassigned' && String(v).toLowerCase() !== 'unassigned')
+      .map(Number).filter(n => Number.isFinite(n) && n > 0);
+    const sub = [];
+    if (userIds.length) {
+      sub.push('l.assigned_to = ANY($' + pi + '::int[])');
+      params.push(userIds);
+      pi++;
+    }
+    if (wantsUnassigned) sub.push('l.assigned_to IS NULL');
+    if (sub.length) conditions.push('(' + sub.join(' OR ') + ')');
+  }
+
+  // status_id: simple ANY()
+  if (Array.isArray(filters.status_id) && filters.status_id.length) {
+    const statusIds = filters.status_id.map(Number).filter(n => Number.isFinite(n) && n > 0);
+    if (statusIds.length) {
+      conditions.push('l.status_id = ANY($' + pi + '::int[])');
+      params.push(statusIds);
+      pi++;
+    }
+  }
+
+  // source: case-insensitive ANY()
+  if (Array.isArray(filters.source) && filters.source.length) {
+    const sources = filters.source
+      .map(v => String(v || '').trim().toLowerCase())
+      .filter(Boolean);
+    if (sources.length) {
+      conditions.push('LOWER(COALESCE(l.source, \'\')) = ANY($' + pi + '::text[])');
+      params.push(sources);
+      pi++;
+    }
+  }
+
+  if (!conditions.length) {
+    throw new Error('Pick at least one condition (Assigned user, Status, or Source)');
+  }
+
+  // Always exclude leads already attached to this campaign so the count is
+  // honest and the UPDATE does no-op writes.
+  conditions.push('(l.campaign_id IS NULL OR l.campaign_id <> $1)');
+
+  const whereClause = conditions.join(' ' + matchMode + ' ');
+
+  if (preview) {
+    // Preview path: COUNT only.
+    const r = await db.query(
+      'SELECT COUNT(*)::int AS n FROM leads l WHERE ' + whereClause,
+      params
+    );
+    return { count: Number((r.rows[0] || {}).n || 0), campaign_id: campaignId };
+  }
+
+  // Apply path: UPDATE. Optionally also clears assigned_to.
+  const setParts = ['campaign_id = $1', 'updated_at = NOW()'];
+  if (alsoUnassign) setParts.push('assigned_to = NULL');
+
+  const r = await db.query(
+    'UPDATE leads l SET ' + setParts.join(', ') +
+    ' WHERE ' + whereClause +
+    ' RETURNING id',
+    params
+  );
+  return {
+    attached: r.rowCount || 0,
+    campaign_id: campaignId,
+    also_unassigned: alsoUnassign,
+    match_mode: matchMode.toLowerCase()
+  };
+}
+
 module.exports = {
   api_campaigns_list,
   api_campaigns_get,
@@ -332,4 +440,5 @@ module.exports = {
   api_campaigns_pause,
   api_campaigns_delete,
   api_campaigns_applyRemoval,
+  api_campaigns_attachExisting, /* CAMPAIGN_ATTACH_EXISTING_v1 */
 };

@@ -19102,6 +19102,129 @@ async function openCampaignEditModal(camp, onSaved) {
   _renderMatchRules();
   body.appendChild(matchWrap);
 
+  // CAMPAIGN_ATTACH_EXISTING_v1 — backfill existing leads into this campaign.
+  // Sits below the future-rules block. Default: skip (only future leads).
+  // When user picks "Existing" or "Both", show a small condition builder
+  // with AND/OR match mode + Assigned-to + Status + Source filters, and
+  // a checkbox to also unassign matching leads (releases them to the
+  // Pull pool — required for On Demand to work on these existing leads).
+  body.appendChild(h('label', { style: { marginTop: '.9rem', fontWeight: 600 } }, 'Apply to which leads?'));
+  body.appendChild(h('div', { class: 'muted', style: { fontSize: '.82rem', marginBottom: '.4rem' } },
+    'The rule above always governs FUTURE leads. Pick whether you also want to backfill EXISTING leads matching a one-time filter.'));
+
+  const _attachWrap = h('div', { id: 'attach-existing-wrap', style: { display: 'grid', gap: '.4rem' } });
+  const _attachModes = [
+    { value: 'future',   label: 'Future leads only (default)' },
+    { value: 'existing', label: 'Existing leads only (one-time backfill)' },
+    { value: 'both',     label: 'Future + existing leads' }
+  ];
+  const _attachRadios = _attachModes.map(m => {
+    const r = h('input', { type: 'radio', name: 'attach-mode', value: m.value });
+    if (m.value === 'future') r.checked = true;
+    return r;
+  });
+  _attachModes.forEach((m, i) => {
+    _attachWrap.appendChild(h('label', { style: { display: 'flex', gap: '.4rem', alignItems: 'center', fontWeight: 'normal' } },
+      _attachRadios[i], h('span', {}, m.label)));
+  });
+  body.appendChild(_attachWrap);
+
+  // Filter section — only visible when existing or both is chosen.
+  const _existFilterWrap = h('div', { style: { display: 'none', background: '#f8fafc', padding: '.6rem .7rem', borderRadius: '8px', marginTop: '.3rem' } });
+
+  // Match mode (AND / OR)
+  const _matchModeRadios = [
+    (() => { const r = h('input', { type: 'radio', name: 'attach-match-mode', value: 'and' }); r.checked = true; return r; })(),
+    h('input', { type: 'radio', name: 'attach-match-mode', value: 'or' })
+  ];
+  _existFilterWrap.appendChild(h('div', { style: { display: 'flex', gap: '1rem', marginBottom: '.5rem' } },
+    h('label', { style: { display: 'flex', gap: '.3rem', alignItems: 'center' } }, _matchModeRadios[0], h('span', {}, 'Match ALL (AND)')),
+    h('label', { style: { display: 'flex', gap: '.3rem', alignItems: 'center' } }, _matchModeRadios[1], h('span', {}, 'Match ANY (OR)'))
+  ));
+
+  // Assigned to multi-select (users + "Unassigned" sentinel)
+  const _assignedSel = h('select', { multiple: 'multiple', size: 5, style: { width: '100%', marginBottom: '.4rem' } },
+    h('option', { value: 'unassigned' }, 'Unassigned'),
+    ...activeUsers.map(u => h('option', { value: String(u.id) }, u.name + ' (' + u.role + ')'))
+  );
+  _existFilterWrap.appendChild(h('div', { style: { fontSize: '.85rem', color: '#475569', marginBottom: '.15rem' } }, 'Assigned to (Ctrl/Cmd+click for multiple)'));
+  _existFilterWrap.appendChild(_assignedSel);
+
+  // Status multi-select
+  const _statusList = (CRM.cache.statuses || []).filter(st => Number(st.is_active) !== 0);
+  const _statusSel = h('select', { multiple: 'multiple', size: 5, style: { width: '100%', marginBottom: '.4rem' } },
+    ..._statusList.map(st => h('option', { value: String(st.id) }, st.name))
+  );
+  _existFilterWrap.appendChild(h('div', { style: { fontSize: '.85rem', color: '#475569', marginBottom: '.15rem' } }, 'Status'));
+  _existFilterWrap.appendChild(_statusSel);
+
+  // Source multi-select
+  const _sourceList = (CRM.cache.sources || []).filter(sc => Number(sc.is_active) !== 0);
+  const _sourceSel = h('select', { multiple: 'multiple', size: 4, style: { width: '100%', marginBottom: '.4rem' } },
+    ..._sourceList.map(sc => h('option', { value: sc.name }, sc.name))
+  );
+  _existFilterWrap.appendChild(h('div', { style: { fontSize: '.85rem', color: '#475569', marginBottom: '.15rem' } }, 'Source'));
+  _existFilterWrap.appendChild(_sourceSel);
+
+  // Also-unassign checkbox
+  const _alsoUnassignCb = h('input', { type: 'checkbox' });
+  _alsoUnassignCb.checked = true;
+  _existFilterWrap.appendChild(h('label', { style: { display: 'flex', gap: '.4rem', alignItems: 'center', fontSize: '.86rem', marginTop: '.3rem' } },
+    _alsoUnassignCb,
+    h('span', {}, 'Also unassign matched leads (release to Pull pool — recommended for On Demand campaigns)')
+  ));
+
+  // Preview button + count display
+  const _previewLine = h('div', { class: 'muted', style: { fontSize: '.82rem', marginTop: '.4rem' } }, '');
+  const _previewBtn = h('button', { type: 'button', class: 'btn sm',
+    onclick: async () => {
+      if (!camp || !camp.id) {
+        _previewLine.textContent = 'Save the campaign first, then re-open to preview the match count.';
+        return;
+      }
+      try {
+        _previewLine.textContent = 'Counting…';
+        const r = await api('api_campaigns_attachExisting', {
+          campaign_id: camp.id,
+          preview: true,
+          filters: _readExistFilters()
+        });
+        _previewLine.textContent = (r.count || 0) + ' lead(s) match these conditions.';
+      } catch (e) { _previewLine.textContent = 'Error: ' + e.message; }
+    } }, '👁 Preview match count');
+  _existFilterWrap.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', marginTop: '.3rem' } }, _previewBtn, _previewLine));
+
+  body.appendChild(_existFilterWrap);
+
+  // Helper to read the filter form into the API payload shape.
+  function _readExistFilters() {
+    const matchMode = (_matchModeRadios.find(r => r.checked) || {}).value || 'and';
+    const assignedTo = Array.from(_assignedSel.selectedOptions).map(o => {
+      if (o.value === 'unassigned') return 'unassigned';
+      return Number(o.value);
+    }).filter(v => v === 'unassigned' || Number.isFinite(v));
+    const statusId = Array.from(_statusSel.selectedOptions).map(o => Number(o.value)).filter(Boolean);
+    const source = Array.from(_sourceSel.selectedOptions).map(o => o.value).filter(Boolean);
+    return {
+      match_mode: matchMode,
+      assigned_to: assignedTo,
+      status_id: statusId,
+      source: source,
+      also_unassign: !!_alsoUnassignCb.checked
+    };
+  }
+  // Expose for the save handler below
+  window._campaignAttachReader = _readExistFilters;
+  window._campaignAttachMode = () => (_attachRadios.find(r => r.checked) || {}).value || 'future';
+
+  // Toggle visibility based on attach-mode radio
+  _attachRadios.forEach(r => {
+    r.addEventListener('change', () => {
+      const mode = (_attachRadios.find(x => x.checked) || {}).value || 'future';
+      _existFilterWrap.style.display = (mode === 'existing' || mode === 'both') ? 'block' : 'none';
+    });
+  });
+
   // Manager
   const managerS = h('select', { style: { width: '100%' } },
     h('option', { value: '' }, '— Choose manager —'),
@@ -19358,9 +19481,31 @@ async function openCampaignEditModal(camp, onSaved) {
           agents
         };
         if (!payload.name) { toast('Name is required', 'err'); return; }
-        await api('api_campaigns_save', payload);
+        const _saveRes = await api('api_campaigns_save', payload);
         if (CRM.cache) CRM.cache.campaigns = null;
-        toast('Saved');
+
+        // CAMPAIGN_ATTACH_EXISTING_v1: if user picked existing/both, run the backfill
+        const _attachMode = (typeof window._campaignAttachMode === 'function') ? window._campaignAttachMode() : 'future';
+        if (_attachMode === 'existing' || _attachMode === 'both') {
+          try {
+            const _savedId = (camp && camp.id) ? camp.id : (_saveRes && _saveRes.id);
+            if (_savedId) {
+              const _attachR = await api('api_campaigns_attachExisting', {
+                campaign_id: _savedId,
+                preview: false,
+                filters: window._campaignAttachReader ? window._campaignAttachReader() : {}
+              });
+              toast('Saved · ' + (_attachR.attached || 0) + ' existing leads attached' +
+                    (_attachR.also_unassigned ? ' & unassigned' : ''));
+            } else {
+              toast('Saved (couldn\'t resolve new campaign id to backfill — re-open to apply)', 'warn');
+            }
+          } catch (e) {
+            toast('Saved campaign but backfill failed: ' + e.message, 'err');
+          }
+        } else {
+          toast('Saved');
+        }
         m.remove();
         if (typeof onSaved === 'function') onSaved();
       } catch (e) { toast(e.message, 'err'); }
