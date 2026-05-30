@@ -2135,7 +2135,8 @@ VIEWS.dashboard = async (view) => {
   // Stamp a fresh render ID, then bail at every await boundary if the
   // ID changed (someone newer is rendering).
   const renderToken = (view.__renderToken = (view.__renderToken || 0) + 1);
-  const _stale = () => view.__renderToken !== renderToken;
+  const _stale = () => view.__renderToken !== renderToken
+    || (String(location.hash || '').replace(/^#\/?/, '').split('?')[0] !== 'dashboard');
   await ensureChartJs();
   if (_stale()) return;
   view.innerHTML = '';
@@ -3747,11 +3748,19 @@ async function openSavedFiltersMenu() {
 async function loadLeads(opts) {
   opts = opts || {};
   // LEADS_SKEL_REMOVE_v2 — kill the skeleton THE MOMENT loadLeads is
-  // invoked, not just on success. If the API errored or hung, v1's
-  // post-await removal never ran. This fires regardless.
+  // invoked, not just on success.
   try {
     const s = document.getElementById('_leads-skel');
     if (s) s.remove();
+  } catch (_) {}
+  // DASH_LEAK_FIX_v2 — a previous dashboard render may have appended widgets
+  // to the #view container (or the hash-change race could fire one mid-search).
+  // Scrub anything that's *not* part of the leads view before re-rendering.
+  try {
+    const v = document.getElementById('view');
+    if (v) {
+      v.querySelectorAll('#dash-grid, .dash-grid, .dash-widget, [data-widget-index], [data-dashboard-card="1"]').forEach(n => n.remove());
+    }
   } catch (_) {}
   const pageSize = Number(localStorage.getItem('crm_page_size') || 25);
   const page = Number(opts.page || CRM._leadsPage || 1);

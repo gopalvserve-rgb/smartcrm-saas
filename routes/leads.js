@@ -493,11 +493,21 @@ async function api_leads_list(token, filters) {
     if (!prev || String(r.created_at) > String(prev.created_at)) remarksByLead[k] = r;
   });
 
+  // CAMPAIGN_NAME_HYDRATE_v1 — pull campaign labels once so every row gets
+  // campaign_name + form_name without an N+1 inside _hydrate.
+  let campaignsById = {};
+  try {
+    const camps = await db.getAll('campaigns');
+    camps.forEach(c => { campaignsById[Number(c.id)] = c; });
+  } catch (_) { /* table may not exist on very old tenants */ }
   const hydrated = rows.map(l => {
     const h = _hydrate(l, usersById, statusesById, productsById, tatByStatusId, finalStatusIds);
     const r = remarksByLead[Number(l.id)];
     h.recent_remark = r ? r.remark : '';
     h.recent_remark_at = r ? r.created_at : '';
+    const c = l.campaign_id ? campaignsById[Number(l.campaign_id)] : null;
+    h.campaign_name = c ? c.name : '';
+    h.form_name = c ? (c.form_name || '') : '';
     return h;
   });
 
