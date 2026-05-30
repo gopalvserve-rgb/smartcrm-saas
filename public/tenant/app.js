@@ -3148,6 +3148,7 @@ const LEAD_COLUMNS = [
   { key: 'followup',    label: 'Follow-up',     default: true },
   { key: 'last_change', label: 'Last change',   default: true },
   { key: 'remark',      label: 'Recent remark', default: true },
+  { key: 'whatsapp_msg', label: 'Last WhatsApp', default: true }, /* LEAD_LIST_WA_v1 */
   { key: 'notes',       label: 'Notes',         default: false },
   { key: 'city',        label: 'City',          default: false },
   { key: 'created',     label: 'Created',       default: true }
@@ -3168,6 +3169,18 @@ VIEWS.leads = async (view) => {
         try { localStorage.setItem('crm_cols', JSON.stringify(cur)); } catch (_) {}
       }
       localStorage.setItem(k, '1');
+    }
+    // LEAD_LIST_WA_v1 — inject 'whatsapp_msg' column once for existing users
+    const wk = '_leadsWaColInjected_v1';
+    if (!localStorage.getItem(wk)) {
+      const cur2 = Array.isArray(CRM.prefs.columns) ? CRM.prefs.columns.slice() : [];
+      if (cur2.length && !cur2.includes('whatsapp_msg')) {
+        const at2 = cur2.indexOf('remark');
+        if (at2 >= 0) cur2.splice(at2 + 1, 0, 'whatsapp_msg'); else cur2.push('whatsapp_msg');
+        CRM.prefs.columns = cur2;
+        try { localStorage.setItem('crm_cols', JSON.stringify(cur2)); } catch (_) {}
+      }
+      localStorage.setItem(wk, '1');
     }
   } catch (_) {}
   const { statuses, sources, users } = CRM.cache;
@@ -4246,6 +4259,17 @@ function renderLeadsMobile(rows) {
       l.recent_remark ? h('div', { class: 'lc-note', title: l.recent_remark },
         '✎  ' + String(l.recent_remark || '')
       ) : null,
+      // LEAD_LIST_WA_v1 — show latest WhatsApp on the mobile card
+      (l.last_wa_text || l.last_wa_at) ? h('div', { class: 'lc-wa', title: l.last_wa_text || '',
+        style: { display: 'flex', gap: '.3rem', alignItems: 'center', fontSize: '.78rem',
+                 color: '#334155', marginTop: '.15rem' } },
+        h('span', { style: { color: ((l.last_wa_direction === 'in' || l.last_wa_direction === 'inbound') ? '#0ea5e9' : '#16a34a'),
+                              fontWeight: 600 } },
+          (l.last_wa_direction === 'in' || l.last_wa_direction === 'inbound') ? '💬↓' : '💬↑'),
+        h('span', { style: { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 } },
+          String(l.last_wa_text || '(media)').slice(0, 80)),
+        l.last_wa_at ? h('span', { class: 'muted', style: { fontSize: '.72rem' } }, fmtDate(l.last_wa_at, 'relative')) : null
+      ) : null,
       // LEADS_ICON_LABELS_v2 (v47): SVG icons; brand colour set on the button.
       h('div', { class: 'lc-actions' },
         digits ? _laItem('call', 'Call',     () => callLead(l), 'btn-call') : null,
@@ -4714,6 +4738,22 @@ function renderCell(col, l, statuses) {
       h('button', { class: 'btn icon', title: 'Add remark', onclick: ev => { ev.stopPropagation(); openRemarkInline(l.id); } }, '💬+'),
       h('button', { class: 'btn icon', title: 'Nurture sequences', onclick: ev => { ev.stopPropagation(); openLeadSequencesModal(l.id, l.name); } }, '🌱')
     );
+    case 'whatsapp_msg': {
+      // LEAD_LIST_WA_v1 — show latest WhatsApp message body (inbound ↓ / outbound ↑)
+      // with a small relative timestamp. Empty cell when the lead has no WA history.
+      if (!l.last_wa_text && !l.last_wa_at) return h('td', { class: 'muted', style: { fontSize: '.78rem' } }, '—');
+      const dir = String(l.last_wa_direction || '').toLowerCase();
+      const arrow = (dir === 'in' || dir === 'inbound') ? '↓' : '↑';
+      const color = (dir === 'in' || dir === 'inbound') ? '#0ea5e9' : '#16a34a';
+      const preview = String(l.last_wa_text || '(media)').slice(0, 80);
+      return h('td', { class: 'cell-wa', style: { maxWidth: '240px' } },
+        h('div', { style: { display: 'flex', gap: '.25rem', alignItems: 'center', flexWrap: 'wrap' } },
+          h('span', { style: { color, fontWeight: 600 } }, arrow),
+          h('span', { title: l.last_wa_text || '', style: { fontSize: '.82rem', color: '#334155', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '180px' } }, preview),
+          l.last_wa_at ? h('span', { class: 'muted', style: { fontSize: '.72rem' } }, fmtDate(l.last_wa_at, 'relative')) : null
+        )
+      );
+    }
     case 'notes': {
       // LEAD_LIST_NOTES_v1 — lead.notes (the long-form sticky note on a lead)
       // shown truncated with a hover tooltip + click-to-edit. Different from

@@ -547,6 +547,26 @@ async function api_leads_list(token, filters) {
     if (!prev || String(r.created_at) > String(prev.created_at)) remarksByLead[k] = r;
   });
 
+  // LEAD_LIST_WA_v1 — latest WhatsApp message per lead (one row per lead).
+  // Single SQL with DISTINCT ON, scoped to the paged lead IDs so it stays
+  // cheap. Returns body + direction + created_at + status. Body is
+  // truncated to 140 chars to keep the payload small for big mobile lists.
+  let waByLead = {};
+  if (_pagedIds.length) {
+    try {
+      const wr = await db.query(
+        `SELECT DISTINCT ON (lead_id) lead_id,
+                LEFT(COALESCE(body, ''), 140) AS body,
+                direction, created_at, status, message_type
+           FROM whatsapp_messages
+          WHERE lead_id = ANY($1::int[])
+          ORDER BY lead_id, created_at DESC`,
+        [_pagedIds]
+      );
+      wr.rows.forEach(r => { waByLead[Number(r.lead_id)] = r; });
+    } catch (_) { /* table may not exist on very old tenants */ }
+  }
+
   // CAMPAIGN_NAME_HYDRATE_v1 — pull campaign labels once so every row gets
   // campaign_name + form_name without an N+1 inside _hydrate.
   let campaignsById = {};
@@ -562,6 +582,13 @@ async function api_leads_list(token, filters) {
     const c = l.campaign_id ? campaignsById[Number(l.campaign_id)] : null;
     h.campaign_name = c ? c.name : '';
     h.form_name = c ? (c.form_name || '') : '';
+    // LEAD_LIST_WA_v1 — attach latest WhatsApp message preview
+    const w = waByLead[Number(l.id)];
+    h.last_wa_text = w ? w.body : '';
+    h.last_wa_at = w ? w.created_at : '';
+    h.last_wa_direction = w ? w.direction : '';
+    h.last_wa_status = w ? w.status : '';
+    h.last_wa_type = w ? w.message_type : '';
     return h;
   });
 
