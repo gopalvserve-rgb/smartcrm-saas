@@ -3593,3 +3593,30 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
   .lc-actions .la-btn.note-btn,
   .lc-actions .la-btn.edit-btn { background: #1e293b !important; }
 }
+
+/* =================================================================
+ * LEADS_BTN_SHRINK_v52 — action buttons -20%
+ * ================================================================= */
+.lc-actions {
+  gap: 6px !important;
+  margin-top: .85rem !important;
+  padding-top: .7rem !important;
+}
+.lc-actions .la-btn,
+.lc-actions .la-item {
+  padding: 7px 3px !important;
+  gap: 4px !important;
+  border-radius: 9px !important;
+}
+.lc-actions .la-btn .la-icon {
+  width: 16px !important;
+  height: 16px !important;
+}
+.lc-actions .la-btn .la-icon svg {
+  width: 14px !important;
+  height: 14px !important;
+}
+.lc-actions .la-btn .la-label {
+  font-size: .55rem !important;
+  letter-spacing: .005em !important;
+}
