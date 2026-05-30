@@ -433,6 +433,159 @@ async function api_campaigns_attachExisting(token, payload) {
   };
 }
 
+
+// CAMPAIGN_PULL_DIAG_v1 — admin-only "why can't this user pull?" inspector.
+// Takes { user_id, campaign_id } and walks every gate of the pull SQL,
+// reporting how many leads survive each step. Returns a clear JSON so
+// the admin (or support engineer) can see in one glance which gate
+// is the blocker — no DevTools acrobatics needed.
+async function api_campaigns_pullDiagnostic(token, payload) {
+  const me = await authUser(token);
+  if (me.role !== 'admin') throw new Error('Admin only');
+  payload = payload || {};
+  const uid = Number(payload.user_id);
+  const cid = Number(payload.campaign_id);
+  if (!uid) throw new Error('user_id required');
+  if (!cid) throw new Error('campaign_id required');
+
+  // The user
+  const ur = await db.query('SELECT id, name, email, role, COALESCE(is_active,1) AS is_active, COALESCE(is_paused,0) AS is_paused FROM users WHERE id = $1', [uid]);
+  if (!ur.rowCount) return { ok: false, error: 'user not found', user_id: uid };
+  const user = ur.rows[0];
+
+  // The campaign
+  const cr = await db.query('SELECT id, name, distribution_mode, COALESCE(is_active,1) AS is_active, pull_batch_size, pull_initial_count, pull_require_old_updated, pull_old_threshold_minutes FROM campaigns WHERE id = $1', [cid]);
+  if (!cr.rowCount) return { ok: false, error: 'campaign not found', campaign_id: cid };
+  const campaign = cr.rows[0];
+
+  // Is the user an active agent on this campaign?
+  const ar = await db.query('SELECT user_id, weight_pct, COALESCE(is_active,1) AS is_active FROM campaign_agents WHERE campaign_id = $1 AND user_id = $2', [cid, uid]);
+  const agent_row = ar.rows[0] || null;
+
+  // Funnel: count of leads at each gate. We replicate the exact WHERE
+  // of api_leads_pull so the diagnostic matches reality 1:1.
+  const counts = {};
+  // Step 0 — leads on this campaign
+  counts.step0_in_campaign = Number((await db.query('SELECT COUNT(*)::int AS n FROM leads WHERE campaign_id = $1', [cid])).rows[0].n);
+  // Step 1 — + unassigned OR assigned to this user
+  counts.step1_unassigned_or_mine = Number((await db.query(
+    'SELECT COUNT(*)::int AS n FROM leads WHERE campaign_id = $1 AND (assigned_to IS NULL OR assigned_to = $2)',
+    [cid, uid]
+  )).rows[0].n);
+  // Step 2 — + status not final
+  counts.step2_status_not_final = Number((await db.query(
+    `SELECT COUNT(*)::int AS n FROM leads l
+       LEFT JOIN statuses s ON s.id = l.status_id
+      WHERE l.campaign_id = $1
+        AND (l.assigned_to IS NULL OR l.assigned_to = $2)
+        AND COALESCE(s.is_final, 0) = 0`,
+    [cid, uid]
+  )).rows[0].n);
+  // Step 3 — + not duplicate
+  counts.step3_not_duplicate = Number((await db.query(
+    `SELECT COUNT(*)::int AS n FROM leads l
+       LEFT JOIN statuses s ON s.id = l.status_id
+      WHERE l.campaign_id = $1
+        AND (l.assigned_to IS NULL OR l.assigned_to = $2)
+        AND COALESCE(s.is_final, 0) = 0
+        AND COALESCE(l.is_duplicate, 0) = 0`,
+    [cid, uid]
+  )).rows[0].n);
+  // Step 4 — + not hidden
+  counts.step4_not_hidden = Number((await db.query(
+    `SELECT COUNT(*)::int AS n FROM leads l
+       LEFT JOIN statuses s ON s.id = l.status_id
+      WHERE l.campaign_id = $1
+        AND (l.assigned_to IS NULL OR l.assigned_to = $2)
+        AND COALESCE(s.is_final, 0) = 0
+        AND COALESCE(l.is_duplicate, 0) = 0
+        AND COALESCE(l.is_hidden, 0) = 0`,
+    [cid, uid]
+  )).rows[0].n);
+  // Step 5 — + not already pulled by this user
+  counts.step5_not_already_pulled = Number((await db.query(
+    `SELECT COUNT(*)::int AS n FROM leads l
+       LEFT JOIN lead_pull_log p ON p.lead_id = l.id AND p.user_id = $2
+       LEFT JOIN statuses s ON s.id = l.status_id
+      WHERE l.campaign_id = $1
+        AND p.id IS NULL
+        AND (l.assigned_to IS NULL OR l.assigned_to = $2)
+        AND COALESCE(s.is_final, 0) = 0
+        AND COALESCE(l.is_duplicate, 0) = 0
+        AND COALESCE(l.is_hidden, 0) = 0`,
+    [cid, uid]
+  )).rows[0].n);
+
+  // Assignee breakdown — who owns the leads tagged to this campaign?
+  let assignee_breakdown = [];
+  try {
+    const r = await db.query(
+      `SELECT COALESCE(u.name, '<<unassigned>>') AS owner, COUNT(l.*)::int AS n
+         FROM leads l LEFT JOIN users u ON u.id = l.assigned_to
+        WHERE l.campaign_id = $1
+        GROUP BY u.name ORDER BY n DESC LIMIT 20`, [cid]);
+    assignee_breakdown = r.rows;
+  } catch (_) {}
+
+  // Status breakdown
+  let status_breakdown = [];
+  try {
+    const r = await db.query(
+      `SELECT COALESCE(s.name, '<<no status>>') AS status, COALESCE(s.is_final,0) AS is_final, COUNT(l.*)::int AS n
+         FROM leads l LEFT JOIN statuses s ON s.id = l.status_id
+        WHERE l.campaign_id = $1
+        GROUP BY s.name, s.is_final ORDER BY n DESC LIMIT 20`, [cid]);
+    status_breakdown = r.rows;
+  } catch (_) {}
+
+  // Pull config
+  let pull_cfg = null;
+  try {
+    const r = await db.query(
+      "SELECT key, value FROM config WHERE key IN ('LEAD_PULL_ENABLED','LEAD_PULL_ENABLED_ROLES','LEAD_PULL_INITIAL_COUNT','LEAD_PULL_SUBSEQUENT_COUNT')"
+    );
+    pull_cfg = {};
+    r.rows.forEach(row => { pull_cfg[row.key] = row.value; });
+  } catch (_) {}
+
+  // Verdict
+  let verdict;
+  if (!agent_row || Number(agent_row.is_active) !== 1) {
+    verdict = 'User is NOT an active agent on this campaign — add them in the campaign editor.';
+  } else if (Number(campaign.is_active) !== 1) {
+    verdict = 'Campaign is paused — un-pause it.';
+  } else if (Number(user.is_paused) === 1) {
+    verdict = 'User is paused — un-pause them in Users tab.';
+  } else if (counts.step5_not_already_pulled > 0) {
+    verdict = 'Pull SHOULD return ' + counts.step5_not_already_pulled + ' leads. If the user still sees 0, check role allow-list and stale-lead block.';
+  } else if (counts.step4_not_hidden > 0 && counts.step5_not_already_pulled === 0) {
+    verdict = 'All ' + counts.step4_not_hidden + ' eligible leads have already been pulled by this user before.';
+  } else if (counts.step3_not_duplicate > 0 && counts.step4_not_hidden === 0) {
+    verdict = 'All eligible leads have is_hidden = 1.';
+  } else if (counts.step2_status_not_final > 0 && counts.step3_not_duplicate === 0) {
+    verdict = 'All eligible leads are flagged as duplicates.';
+  } else if (counts.step1_unassigned_or_mine > 0 && counts.step2_status_not_final === 0) {
+    verdict = 'All leads in the campaign are in a FINAL status (Won/Lost/Junk/Cancelled).';
+  } else if (counts.step0_in_campaign > 0 && counts.step1_unassigned_or_mine === 0) {
+    verdict = 'All ' + counts.step0_in_campaign + ' leads in this campaign are ASSIGNED to someone other than this user. Bulk-unassign them first.';
+  } else if (counts.step0_in_campaign === 0) {
+    verdict = 'No leads have campaign_id = this campaign at all. The attach-existing or auto-attach rule did not write campaign_id on any lead.';
+  } else {
+    verdict = 'Unknown — share this whole payload with engineering.';
+  }
+
+  return {
+    ok: true,
+    user, campaign,
+    agent_row,
+    pull_cfg,
+    counts,
+    assignee_breakdown,
+    status_breakdown,
+    verdict
+  };
+}
+
 module.exports = {
   api_campaigns_list,
   api_campaigns_get,
@@ -441,4 +594,5 @@ module.exports = {
   api_campaigns_delete,
   api_campaigns_applyRemoval,
   api_campaigns_attachExisting, /* CAMPAIGN_ATTACH_EXISTING_v1 */
+  api_campaigns_pullDiagnostic, /* CAMPAIGN_PULL_DIAG_v1 */
 };
