@@ -110,6 +110,7 @@ function _normaliseAgents(rawAgents, mode) {
 
 async function api_campaigns_list(token) {
   await authUser(token);   // any signed-in user can see; visibility is admin-tab gated client-side
+  await _ensureApplyModeColumns();
   const r = await db.query(`
     SELECT c.id, c.name, c.pipeline, c.manager_user_id, c.distribution_mode, c.auto_share_user_id,
            c.pull_batch_size, c.pull_initial_count,

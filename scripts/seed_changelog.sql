@@ -282,5 +282,10 @@ Background-poll cuts on the APK. Floating-WhatsApp chat dock is now disabled on 
   ('fix', '🐛 Apply to which leads now actually saves on edit',
    'On the Campaign editor the radio Future leads only / Existing leads only / Future + existing was saving correctly on the first create but reverting to Future leads only when you reopened the campaign to edit. The UPDATE path was missing the column writes. Reopening any campaign now shows the choice you last saved, plus the filter conditions (assigned-to, status, source, match mode) you picked.',
    '#/campaigns', '🎯', NOW())
+,
+
+  ('fix', '🐛 Campaigns page on older tenants — column does not exist',
+   'On tenants created before today (e.g. smcbroking), opening Campaigns as admin showed "column c.apply_mode does not exist". The new apply_mode / backfill_filters / last_backfilled_at columns hadn''t been added to those tenants'' campaigns table yet. The Campaigns API now adds the missing columns on first call (idempotent ALTER TABLE IF NOT EXISTS) so the page loads everywhere without waiting for the tenant bootstrap migration.',
+   '#/campaigns', '🎯', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
