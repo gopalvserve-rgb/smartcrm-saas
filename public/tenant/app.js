@@ -19040,9 +19040,9 @@ async function adminCampaigns(reload) {
       h('th', {}, 'Mode'),
       h('th', {}, 'Agents'),
       h('th', { title: 'Total leads tagged to this campaign' }, 'Total'),
-      h('th', { style: { color: '#16a34a' }, title: 'Unassigned leads still eligible to pull (assigned_to IS NULL, not final, not hidden)' }, 'Free'),
-      h('th', { style: { color: '#6366f1' }, title: 'Leads assigned to an agent (not final, not hidden)' }, 'Assigned'),
-      h('th', { style: { color: '#64748b' }, title: 'Leads in a FINAL status (Won/Lost/Junk/etc) — no longer pullable' }, 'Final'),
+      h('th', { style: { color: '#16a34a' }, title: 'Leads with no owner — assigned_to IS NULL (in the pull pool)' }, 'Free'),
+      h('th', { style: { color: '#6366f1' }, title: 'Leads owned by an agent — assigned_to IS NOT NULL. Free + Assigned = Total.' }, 'Assigned'),
+      h('th', { style: { color: '#64748b' }, title: 'How many leads are in a status flagged is_final=1 (informational — overlaps with Free / Assigned above)' }, 'Final'),
       h('th', {}, 'Status'),
       h('th', {}, '')
     )

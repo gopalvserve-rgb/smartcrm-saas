@@ -122,21 +122,18 @@ async function api_campaigns_list(token) {
               WHERE ca.campaign_id = c.id AND ca.is_active = 1) AS agent_count,
            (SELECT COUNT(*) FROM leads l
               WHERE l.campaign_id = c.id) AS lead_count,
-           /* CAMPAIGN_LEAD_BREAKDOWN_v1 — split by assignment + finality so
-              admin can see at a glance: how many are free in the pull pool,
-              how many are already owned by an agent, how many are in a final
-              status (no longer pullable). */
+           /* CAMPAIGN_LEAD_BREAKDOWN_v2 — simple mental model:
+              Free + Assigned = Total (no status filter). Final is shown as
+              informational only — how many of those leads happen to be in
+              a status flagged is_final=1. This stops leads with admin-set
+              final statuses (Won/Junk/etc.) from disappearing from Assigned. */
            (SELECT COUNT(*) FROM leads l
               WHERE l.campaign_id = c.id
                 AND l.assigned_to IS NULL
-                AND COALESCE(l.is_hidden, 0) = 0
-                AND l.status_id IN (SELECT id FROM statuses WHERE COALESCE(is_final, 0) = 0)
             ) AS leads_unassigned,
            (SELECT COUNT(*) FROM leads l
               WHERE l.campaign_id = c.id
                 AND l.assigned_to IS NOT NULL
-                AND COALESCE(l.is_hidden, 0) = 0
-                AND l.status_id IN (SELECT id FROM statuses WHERE COALESCE(is_final, 0) = 0)
             ) AS leads_assigned,
            (SELECT COUNT(*) FROM leads l
               WHERE l.campaign_id = c.id
