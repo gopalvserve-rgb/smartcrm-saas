@@ -3744,18 +3744,22 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
  * Targets the mobile lead card (renderLeadsMobile / lead-card).
  * ================================================================= */
 
-/* Status pill — bigger, bolder, sharper drop-shadow. Text colour is now
- * computed in JS (_textOnBg) so admin pale-coloured statuses stay readable.
- * Do NOT hard-set color here — that would beat the inline luminance pick. */
+/* Status pill — bigger, bolder, fully filled with admin's chosen colour.
+ * Text colour is computed in JS (_textOnBg) so pale colours get black text
+ * and dark colours get white text. Do NOT hard-set color OR background here:
+ * the inline style needs to drive the visual. We just lock down padding,
+ * shape, weight, and shadow. */
 .lead-card .lc-status,
 .lc-status {
+  display: inline-block !important;
   font-size: .92rem !important;
   font-weight: 700 !important;
-  padding: 4px 11px !important;
+  padding: 4px 12px !important;
   letter-spacing: .015em !important;
-  line-height: 1.15 !important;
+  line-height: 1.2 !important;
   border-radius: 999px !important;
-  box-shadow: 0 2px 5px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.18) !important;
+  border: 1px solid transparent !important;
+  box-shadow: 0 2px 5px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.20) !important;
 }
 
 /* Action button row — shrink ~30% */

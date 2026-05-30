@@ -4261,7 +4261,15 @@ function renderLeadsMobile(rows) {
         h('div', { class: 'lc-body' },
           h('div', { class: 'lc-head' },
             h('a', { href: '#', class: 'lc-name', onclick: ev => { ev.preventDefault(); openLeadModal(l.id); } }, ((l.shared_with_me || (l.co_owners && l.co_owners.length)) ? '🤝 ' : '') + (l.name || '—')),
-            h('span', { class: 'lc-status', style: { background: statusColor, color: _textOnBg(statusColor), border: '1px solid ' + statusColor } }, l.status_name || '')
+            h('span', {
+              class: 'lc-status',
+              style: {
+                backgroundColor: statusColor,
+                background: statusColor,
+                color: _textOnBg(statusColor),
+                borderColor: statusColor
+              }
+            }, l.status_name || '')
           ),
           // Source + phone in one row
           (srcBadge || l.phone) ? h('div', { class: 'lc-meta' },
