@@ -37,6 +37,23 @@ async function _ensureMatchFilterColumn() {
   }
 }
 
+// CAMPAIGN_APPLY_MODE_SCHEMA_HEAL_v1 — pre-existing tenants don't have
+// apply_mode / backfill_filters / last_backfilled_at yet (added 2026-05-30).
+// Heal defensively on first call so the SELECT doesn't blow up with
+// "column c.apply_mode does not exist" on older tenants like smcbroking.
+let _applyModeEnsured = false;
+async function _ensureApplyModeColumns() {
+  if (_applyModeEnsured) return;
+  try {
+    await db.query(`ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS apply_mode      TEXT  DEFAULT 'future'`);
+    await db.query(`ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS backfill_filters JSONB`);
+    await db.query(`ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS last_backfilled_at TIMESTAMP`);
+    _applyModeEnsured = true;
+  } catch (e) {
+    console.warn('[campaigns] apply_mode column ensure failed:', e.message);
+  }
+}
+
 const VALID_REMOVED = ['pool', 'hidden', 'manager'];
 
 async function _requireAdmin(token) {
@@ -167,6 +184,7 @@ async function api_campaigns_list(token) {
 
 async function api_campaigns_get(token, id) {
   await authUser(token);
+  await _ensureApplyModeColumns();
   const cid = Number(id);
   if (!cid) throw new Error('Campaign id required');
   const c = await db.query('SELECT * FROM campaigns WHERE id = $1', [cid]);
@@ -211,6 +229,7 @@ async function api_campaigns_save(token, payload) {
   const isActive          = p.is_active == null ? 1 : (p.is_active ? 1 : 0);
 
   await _ensureMatchFilterColumn();
+  await _ensureApplyModeColumns();
 
   if (!name)                                 throw new Error('Campaign name required.');
   if (!VALID_MODES.includes(distributionMode))
