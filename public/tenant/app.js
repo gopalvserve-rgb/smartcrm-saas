@@ -4170,8 +4170,7 @@ function renderLeadsMobile(rows) {
       l.is_duplicate ? h('div', { class: 'dup-pill', onclick: () => openDuplicateHistory(l.id) }, '⚠ DUP — see past') : null,
       due ? h('div', { class: 'lc-fu' + (overdue ? ' overdue' : '') }, '⏰  ', fmtDate(l.next_followup_at, 'relative')) : null,
       l.recent_remark ? h('div', { class: 'lc-note', title: l.recent_remark },
-        h('span', { class: 'lc-note-icon' }, '✎'),
-        h('span', { class: 'lc-note-text' }, l.recent_remark)
+        '✎  ' + String(l.recent_remark || '')
       ) : null,
       // LEADS_ICON_LABELS_v2 (v47): SVG icons; brand colour set on the button.
       h('div', { class: 'lc-actions' },
