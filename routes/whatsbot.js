@@ -1533,8 +1533,14 @@ async function api_wb_chat_threads(token, opts) {
   const visible = new Set((await getVisibleUserIds(me)).map(Number));
   const filterPhoneId = (opts && opts.phone_number_id && String(opts.phone_number_id) !== 'all')
     ? String(opts.phone_number_id) : null;
+  // MOBILE_PERF_v1 (2026-05-30): when opts.mobile, pull only the last 300
+  // messages (was 1000) and slice final thread list to opts.limit (default 20).
+  const isMobile = !!(opts && opts.mobile);
+  const mobileMsgScan = 300;
+  const mobileThreadLimit = Math.min(Number(opts && opts.limit) || 20, 50);
+  const scanLimit = isMobile ? mobileMsgScan : 1000;
 
-  // Pull last 1000 messages, group by counterpart. We always select
+  // Pull last N messages, group by counterpart. We always select
   // phone_number_id (added by 2026_05_08_wa_messages_phone_id.sql); on
   // un-migrated tenants the column won't exist yet, so degrade gracefully.
   let rows;
@@ -1544,7 +1550,7 @@ async function api_wb_chat_threads(token, opts) {
               status, read_at, created_at, phone_number_id
          FROM whatsapp_messages
          ORDER BY created_at DESC
-         LIMIT 1000`
+         LIMIT ${scanLimit}`
     );
     rows = r.rows;
   } catch (e) {
@@ -1553,7 +1559,7 @@ async function api_wb_chat_threads(token, opts) {
               status, read_at, created_at
          FROM whatsapp_messages
          ORDER BY created_at DESC
-         LIMIT 1000`
+         LIMIT ${scanLimit}`
     );
     rows = r.rows.map(x => ({ ...x, phone_number_id: null }));
   }
@@ -1640,13 +1646,19 @@ async function api_wb_chat_threads(token, opts) {
     visibleThreads.push(enriched);
   }
   visibleThreads.sort((a, b) => String(b.last_at).localeCompare(String(a.last_at)));
+  // MOBILE_PERF_v1: cap returned threads on mobile. unread_by_phone stays
+  // full so the badge still reflects every inbox the user can see.
+  let outThreads = visibleThreads;
+  if (isMobile) {
+    outThreads = visibleThreads.slice(0, mobileThreadLimit);
+  }
   // Back-compat: legacy SPA expects a bare array. New SPA reads .threads /
   // .unread_by_phone. We return both shapes by attaching the metadata to
   // the array — the array itself iterates as before, and the new fields
   // are present as own properties for callers that ask for them.
-  visibleThreads.unread_by_phone = unreadByPhone;
-  visibleThreads.filter_phone_number_id = filterPhoneId;
-  return visibleThreads;
+  outThreads.unread_by_phone = unreadByPhone;
+  outThreads.filter_phone_number_id = filterPhoneId;
+  return outThreads;
 }
 
 async function api_wb_chat_messages(token, phone) {

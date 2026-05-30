@@ -35,8 +35,12 @@ function _hydrate(row, usersById) {
  * Returns currently-active announcements the calling user has NOT dismissed.
  * Filters out anything past expires_at. Used by the banner on every page.
  */
-async function api_announcements_active(token) {
+async function api_announcements_active(token, opts) {
   const me = await authUser(token);
+  // MOBILE_PERF_v1 (2026-05-30): when client sends {mobile:true} we cap to
+  // the 5 newest active announcements and truncate body to 500 chars.
+  // APK only renders the banner — long HTML body is wasted on 4G.
+  const isMobile = !!(opts && opts.mobile);
   const [rows, dismissals, users] = await Promise.all([
     db.getAll('announcements'),
     db.getAll('announcement_dismissals'),
@@ -50,12 +54,19 @@ async function api_announcements_active(token) {
   const usersById = {};
   users.forEach(u => { usersById[Number(u.id)] = u; });
   const now = new Date();
-  return rows
+  let out = rows
     .filter(r => Number(r.is_active) === 1)
     .filter(r => !dismissedIds.has(Number(r.id)))
     .filter(r => !r.expires_at || new Date(r.expires_at) > now)
     .map(r => _hydrate(r, usersById))
     .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+  if (isMobile) {
+    out = out.slice(0, 5).map(a => ({
+      ...a,
+      body: typeof a.body === 'string' && a.body.length > 500 ? a.body.slice(0, 500) + '…' : a.body
+    }));
+  }
+  return out;
 }
 
 async function api_announcements_dismiss(token, id) {

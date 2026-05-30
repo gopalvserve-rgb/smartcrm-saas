@@ -485,9 +485,37 @@ function _initPerfBadge() {
   window.crmPerf._refreshBadge();
 }
 
+// MOBILE_PERF_v1 (2026-05-30): one-time APK detection. Used to (a) gate
+// background polls and (b) auto-inject { mobile: true } into 4 heavy
+// endpoints so the backend ships a trimmed payload.
+const _IS_APK = (function() {
+  try {
+    if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return true;
+    if (window.Capacitor) return true;
+    if (/Capacitor|CapacitorWebView/i.test(navigator.userAgent || '')) return true;
+  } catch (_) {}
+  return false;
+})();
+try { CRM.isApk = _IS_APK; } catch (_) {}
+// Endpoints that accept a {mobile:true} flag for trimmed responses.
+const _MOBILE_FLAG_FNS = new Set([
+  'api_leads_list', 'api_wb_chat_threads',
+  'api_announcements_active', 'api_notifications_mine'
+]);
+
 async function api(fn, ...args) {
   const _perfStart = performance.now();
   const silent = _SILENT_FNS.has(fn);
+  // MOBILE_PERF_v1: auto-inject mobile flag into the FIRST arg for the
+  // four heavy endpoints. We treat the existing first arg as an opts
+  // object — if it's missing or not an object we create one. Desktop
+  // sends nothing extra. Backends gracefully ignore unknown keys.
+  if (_IS_APK && _MOBILE_FLAG_FNS.has(fn)) {
+    if (args.length === 0) args = [{ mobile: true }];
+    else if (args[0] && typeof args[0] === 'object' && !Array.isArray(args[0])) {
+      args[0] = { ...args[0], mobile: true };
+    }
+  }
   // Skip pre-auth firing for background polls. Real user actions still
   // try the call (and will surface a normal error if the token expired).
   if (!CRM.token && _POLL_OR_OPTIONAL_FNS.has(fn)) {
@@ -647,7 +675,8 @@ async function apiRaw(fn, ...args) {
       // freshly-posted admin announcement appears for already-logged-in users
       // without them needing to refresh.
       refreshAnnouncements();
-      setInterval(() => refreshAnnouncements().catch(() => {}), 60_000);
+      // MOBILE_PERF_v1: 60s on desktop, 10min on APK
+      setInterval(() => refreshAnnouncements().catch(() => {}), _IS_APK ? 600_000 : 60_000);
       // In-app chat notification popup — polls every 10s while the user is
       // anywhere in the CRM. Always starts (the backend endpoint silently
       // refuses for users with chat disabled). Skips popping when the chat
@@ -28241,7 +28270,8 @@ function startRecordingAutoSync() {
   _recDiagLog({ reason: 'startup', result: 'ok', note: 'auto-sync timers armed (boot 8s, tick 90s, visibilitychange)' });
   if (_recAutoSyncTimer) clearInterval(_recAutoSyncTimer);
   setTimeout(() => _silentSyncRecordings({ _reason: 'boot' }), 8000);
-  _recAutoSyncTimer = setInterval(() => _silentSyncRecordings({ _reason: 'tick90s' }), 90_000);
+  // MOBILE_PERF_v1: 90s on desktop, 5min on APK (WorkManager 15-min + post-call kick already cover periodic sync)
+  _recAutoSyncTimer = setInterval(() => _silentSyncRecordings({ _reason: 'tick' }), _IS_APK ? 300_000 : 90_000);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') setTimeout(() => _silentSyncRecordings({ _reason: 'visibility' }), 1500);
   });
@@ -28374,7 +28404,8 @@ let followupPollTimer = null;
 let newLeadPollTimer = null;
 function startFollowupPolling() {
   if (followupPollTimer) clearInterval(followupPollTimer);
-  followupPollTimer = setInterval(refreshNotifs, 60_000);
+  // MOBILE_PERF_v1: 60s on desktop, 5min on APK (FCM push covers follow-up due + new lead + TAT + heat)
+  followupPollTimer = setInterval(refreshNotifs, _IS_APK ? 300_000 : 60_000);
   // Global WA unread poll — independent of the chat tab's own poll so
   // the badge updates even when the user is on Leads / Dashboard.
   if (window._waBadgePoll) clearInterval(window._waBadgePoll);
@@ -28391,10 +28422,12 @@ function startFollowupPolling() {
     } catch (_) { /* silent */ }
   }
   _refreshWaBadge();
-  window._waBadgePoll = setInterval(_refreshWaBadge, 30_000);
+  // MOBILE_PERF_v1: 30s on desktop; skipped on APK (FCM WA inbound push handles this)
+  if (!_IS_APK) window._waBadgePoll = setInterval(_refreshWaBadge, 30_000);
   // Poll for new leads every 30s — fires a popup + toast when one arrives
   if (newLeadPollTimer) clearInterval(newLeadPollTimer);
-  newLeadPollTimer = setInterval(checkNewLeads, 30_000);
+  // MOBILE_PERF_v1: 30s on desktop; skipped on APK (FCM new-lead push handles this)
+  if (!_IS_APK) newLeadPollTimer = setInterval(checkNewLeads, 30_000);
   // Also fire an immediate check so the baseline ID is set
   checkNewLeads();
 }
@@ -28684,7 +28717,8 @@ function startChatNotificationPolling() {
   });
 
   // Poll every 10s (was 15s — tightened for snappier in-app feedback)
-  _chatPollTimer = setInterval(_chatPollOnce, 10_000);
+  // MOBILE_PERF_v1: 10s on desktop, 60s on APK (two endpoints per tick)
+  _chatPollTimer = setInterval(_chatPollOnce, _IS_APK ? 60_000 : 10_000);
 
   // ALSO fire whenever the tab regains focus — covers the case where the
   // user came back from another tab / app and we want to immediately show
@@ -31981,6 +32015,11 @@ try { window.openCreateEnrollmentModal = openCreateEnrollmentModal; window.openM
 // team can read+reply to inbound messages without leaving Leads etc.
 // =====================================================================
 function _initFloatingChat() {
+  // MOBILE_PERF_v1: skip the floating chat dock on APK entirely. The
+  // 8-second poll of api_wb_chat_threads was the chattiest endpoint
+  // on the device — ~7.5 calls/min just from this dock. WhatsApp inbound
+  // already has FCM push and the user can use the dedicated WhatsBot view.
+  if (_IS_APK) return;
   if (document.getElementById('chat-fab')) return;
   if (typeof CRM === 'undefined' || !CRM.user) return;
 

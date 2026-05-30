@@ -15,7 +15,12 @@ const FOLLOWUP_ALLOWED_STATUSES = [
 const _normStatus = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 const FOLLOWUP_ALLOWED_NORM = new Set(FOLLOWUP_ALLOWED_STATUSES.map(_normStatus));
 
-async function api_notifications_mine(token) {
+async function api_notifications_mine(token, opts) {
+  // MOBILE_PERF_v1 (2026-05-30): when opts.mobile, cap each list to 20 rows,
+  // scope remarks to referenced leads only (was full table scan), and cap
+  // unread_notifications to last 7 days (50 rows). Drops payload from
+  // ~200-500KB on busy tenants to ~15-20KB.
+  const isMobile = !!(opts && opts.mobile);
   // NOTIFICATIONS_PERF_v1 (2026-05-29) — was loading EVERY row from
   // followups + leads + users + statuses on every 30s poll. On busy
   // tenants this averaged 14.5s and was a top pool blocker. Now scoped
@@ -118,7 +123,22 @@ async function api_notifications_mine(token) {
 
   // Attach the latest remark per lead — used by the Follow-ups list and the
   // dashboard popup so the user sees context without opening the lead.
-  const allRemarks = await db.getAll('remarks');
+  // MOBILE_PERF_v1: when mobile, scope to referenced leads (and only leads
+  // appearing in items) instead of `db.getAll('remarks')` full-table scan.
+  const itemLeadIds = [...new Set(items.map(it => Number(it.lead_id)).filter(Boolean))];
+  let allRemarks;
+  if (isMobile && itemLeadIds.length) {
+    const r = await db.query(
+      `SELECT DISTINCT ON (lead_id) lead_id, remark, created_at
+         FROM remarks
+        WHERE lead_id = ANY($1::int[])
+        ORDER BY lead_id, created_at DESC`,
+      [itemLeadIds]
+    );
+    allRemarks = r.rows;
+  } else {
+    allRemarks = await db.getAll('remarks');
+  }
   const latestByLead = {};
   allRemarks.forEach(r => {
     const lid = Number(r.lead_id);
@@ -149,9 +169,23 @@ async function api_notifications_mine(token) {
   due_today.sort((a, b) => String(a.due_at).localeCompare(String(b.due_at)));
   upcoming.sort((a, b) => String(a.due_at).localeCompare(String(b.due_at)));
 
-  const notifications = (await db.getAll('notifications'))
-    .filter(n => Number(n.user_id) === Number(me.id))
-    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+  let notifications;
+  if (isMobile) {
+    // MOBILE_PERF_v1: SQL-scope to last 7 days OR unread, cap 50
+    const r = await db.query(
+      `SELECT * FROM notifications
+        WHERE user_id = $1
+          AND (COALESCE(is_read, 0) = 0 OR created_at > NOW() - INTERVAL '7 days')
+        ORDER BY created_at DESC
+        LIMIT 50`,
+      [me.id]
+    );
+    notifications = r.rows;
+  } else {
+    notifications = (await db.getAll('notifications'))
+      .filter(n => Number(n.user_id) === Number(me.id))
+      .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+  }
   const unread_notifications = notifications.filter(n => Number(n.is_read) === 0);
 
   // Today's NEW leads — visible to this user, created today (in IST so the
@@ -169,8 +203,17 @@ async function api_notifications_mine(token) {
     return localDay === localToday;
   });
 
+  // MOBILE_PERF_v1: cap each visible array to 20 rows. Counts stay accurate.
+  const overdueOut   = isMobile ? overdue.slice(0, 20)   : overdue;
+  const dueTodayOut  = isMobile ? due_today.slice(0, 20) : due_today;
+  const upcomingOut  = isMobile ? upcoming.slice(0, 20)  : upcoming;
+  const unreadOut    = isMobile ? unread_notifications.slice(0, 20) : unread_notifications;
+
   return {
-    overdue, due_today, upcoming, unread_notifications,
+    overdue: overdueOut,
+    due_today: dueTodayOut,
+    upcoming: upcomingOut,
+    unread_notifications: unreadOut,
     new_today: new_today_leads.length,
     counts: {
       overdue: overdue.length,

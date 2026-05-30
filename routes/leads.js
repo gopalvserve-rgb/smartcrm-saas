@@ -481,11 +481,30 @@ async function api_leads_list(token, filters) {
   const statusCount = {};
   rows.forEach(l => { const sid = Number(l.status_id) || 0; statusCount[sid] = (statusCount[sid] || 0) + 1; });
 
+  // MOBILE_PERF_v1 (2026-05-30): when filters.mobile, hard-cap page_size to 25 (max 50).
+  // Desktop unchanged.
   const page = Number(filters.page || 1);
-  const pageSize = Math.min(Number(filters.page_size || 100), 500);
+  const _isMobile = !!filters.mobile;
+  const pageSize = _isMobile
+    ? Math.min(Number(filters.page_size || 25), 50)
+    : Math.min(Number(filters.page_size || 100), 500);
   rows = rows.slice((page - 1) * pageSize, page * pageSize);
 
-  const remarks = await db.getAll('remarks');
+  // MOBILE_PERF_v1: scope to paged lead IDs only — avoids full-table scan.
+  const _pagedIds = rows.map(r => Number(r.id)).filter(Boolean);
+  let remarks;
+  if (_isMobile && _pagedIds.length) {
+    const rr = await db.query(
+      `SELECT DISTINCT ON (lead_id) lead_id, remark, created_at
+         FROM remarks
+        WHERE lead_id = ANY($1::int[])
+        ORDER BY lead_id, created_at DESC`,
+      [_pagedIds]
+    );
+    remarks = rr.rows;
+  } else {
+    remarks = await db.getAll('remarks');
+  }
   const remarksByLead = {};
   remarks.forEach(r => {
     const k = Number(r.lead_id);
@@ -518,7 +537,8 @@ async function api_leads_list(token, filters) {
    * because that's the lead being created — not a rep activity.
    */
   try {
-    const ids = hydrated.map(l => Number(l.id)).filter(Boolean);
+    // MOBILE_PERF_v1: skip activity rollup on mobile (badges not rendered on mobile card)
+    const ids = _isMobile ? [] : hydrated.map(l => Number(l.id)).filter(Boolean);
     if (ids.length) {
       const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
       /* LEAD_ACTIVITY_v2 — exclude WhatsApp actions from rep activity counts.
