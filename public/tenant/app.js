@@ -29469,10 +29469,33 @@ async function refreshNotifs() {
   } catch (_) {}
 }
 
-// Track which follow-ups we've already fired the popup for so each new reminder
-// pops exactly once when its time arrives, instead of either spamming or
-// firing only once per session.
-const _firedFollowupIds = new Set();
+// FU_DUE_SPAM_FIX_v1 (2026-05-30) — persist 'already-shown' follow-up ids
+// to localStorage scoped to TODAY so a fresh tab open or app reload does
+// not re-pop the same overdue/due-today list. Reset at midnight via the
+// date-keyed storage key.
+function _fuSeenKey() {
+  const d = new Date();
+  const ymd = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+  return 'crm_fu_popped_' + ymd;
+}
+function _loadFiredFollowupIds() {
+  try {
+    const raw = localStorage.getItem(_fuSeenKey());
+    if (!raw) return new Set();
+    return new Set(JSON.parse(raw));
+  } catch (_) { return new Set(); }
+}
+function _persistFiredFollowupIds(set) {
+  try { localStorage.setItem(_fuSeenKey(), JSON.stringify(Array.from(set))); } catch (_) {}
+  // Clean yesterday's keys so localStorage doesn't grow forever.
+  try {
+    const today = _fuSeenKey();
+    Object.keys(localStorage).forEach(k => {
+      if (k.startsWith('crm_fu_popped_') && k !== today) localStorage.removeItem(k);
+    });
+  } catch (_) {}
+}
+const _firedFollowupIds = _loadFiredFollowupIds();
 let _popupShown = false;
 
 // Track heat alerts already shown in this session so we pop each once.
@@ -29528,6 +29551,8 @@ function popupFollowupDue(d) {
     return true;
   });
   if (!fresh.length) return;
+  /* FU_DUE_SPAM_FIX_v1 — persist so reopening the tab doesn't re-pop. */
+  try { _persistFiredFollowupIds(_firedFollowupIds); } catch (_) {}
 
   // Browser-level Notification (desktop / Android lock screen) — request
   // permission once on first follow-up arrival; subsequent fires use the
