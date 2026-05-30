@@ -19040,9 +19040,11 @@ async function adminCampaigns(reload) {
       h('th', {}, 'Mode'),
       h('th', {}, 'Agents'),
       h('th', { title: 'Total leads tagged to this campaign' }, 'Total'),
-      h('th', { style: { color: '#16a34a' }, title: 'Leads with no owner — assigned_to IS NULL (in the pull pool)' }, 'Free'),
+      h('th', { style: { color: '#16a34a' }, title: 'Leads with no owner — assigned_to IS NULL (raw count, includes duplicates/hidden)' }, 'Free'),
+      h('th', { style: { color: '#0ea5e9', fontWeight: 700 }, title: 'Actually pull-eligible RIGHT NOW: assigned_to IS NULL AND not duplicate AND not hidden AND not in a final status. If this is 0, agents will see Pull 0 leads even if Free is high.' }, 'Pullable'),
       h('th', { style: { color: '#6366f1' }, title: 'Leads owned by an agent — assigned_to IS NOT NULL. Free + Assigned = Total.' }, 'Assigned'),
-      h('th', { style: { color: '#64748b' }, title: 'How many leads are in a status flagged is_final=1 (informational — overlaps with Free / Assigned above)' }, 'Final'),
+      h('th', { style: { color: '#dc2626' }, title: 'Leads flagged is_duplicate = 1 (excluded from Pull). Run "Re-scan duplicates" on Leads page if these are false positives.' }, 'Dup'),
+      h('th', { style: { color: '#64748b' }, title: 'Leads in a status flagged is_final=1 (Won/Lost/Junk/etc) — excluded from Pull.' }, 'Final'),
       h('th', {}, 'Status'),
       h('th', {}, '')
     )
@@ -19058,7 +19060,9 @@ async function adminCampaigns(reload) {
       h('td', {}, String(r.agent_count || 0)),
       h('td', { style: { fontWeight: 600 } }, String(r.lead_count || 0)),
       h('td', { style: { color: Number(r.leads_unassigned) > 0 ? '#16a34a' : '#94a3b8', fontWeight: 600 } }, String(r.leads_unassigned || 0)),
+      h('td', { style: { color: Number(r.leads_pullable) > 0 ? '#0ea5e9' : '#dc2626', fontWeight: 700 } }, String(r.leads_pullable || 0)),
       h('td', { style: { color: '#6366f1' } }, String(r.leads_assigned || 0)),
+      h('td', { style: { color: Number(r.leads_duplicate) > 0 ? '#dc2626' : '#94a3b8', fontWeight: Number(r.leads_duplicate) > 0 ? 600 : 'normal' } }, String(r.leads_duplicate || 0)),
       h('td', { class: 'muted' }, String(r.leads_final || 0)),
       h('td', {},
         Number(r.is_active) === 1

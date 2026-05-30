@@ -122,11 +122,10 @@ async function api_campaigns_list(token) {
               WHERE ca.campaign_id = c.id AND ca.is_active = 1) AS agent_count,
            (SELECT COUNT(*) FROM leads l
               WHERE l.campaign_id = c.id) AS lead_count,
-           /* CAMPAIGN_LEAD_BREAKDOWN_v2 — simple mental model:
-              Free + Assigned = Total (no status filter). Final is shown as
-              informational only — how many of those leads happen to be in
-              a status flagged is_final=1. This stops leads with admin-set
-              final statuses (Won/Junk/etc.) from disappearing from Assigned. */
+           /* CAMPAIGN_LEAD_BREAKDOWN_v3 — Pullable column matches the EXACT
+              gates the pull SQL uses, so admin can see at a glance whether
+              leads are actually pull-eligible or filtered out by duplicate/
+              hidden/final flags. Free is the raw unassigned count for context. */
            (SELECT COUNT(*) FROM leads l
               WHERE l.campaign_id = c.id
                 AND l.assigned_to IS NULL
@@ -142,7 +141,22 @@ async function api_campaigns_list(token) {
            (SELECT COUNT(*) FROM leads l
               WHERE l.campaign_id = c.id
                 AND COALESCE(l.is_hidden, 0) = 1
-            ) AS leads_hidden
+            ) AS leads_hidden,
+           (SELECT COUNT(*) FROM leads l
+              WHERE l.campaign_id = c.id
+                AND COALESCE(l.is_duplicate, 0) = 1
+            ) AS leads_duplicate,
+           /* leads_pullable = exact match of the pull SQL eligibility gates
+              (excluding the per-user 'already pulled' check, which can't be
+              precomputed at the campaign level). */
+           (SELECT COUNT(*) FROM leads l
+              LEFT JOIN statuses s ON s.id = l.status_id
+              WHERE l.campaign_id = c.id
+                AND l.assigned_to IS NULL
+                AND COALESCE(l.is_duplicate, 0) = 0
+                AND COALESCE(l.is_hidden, 0) = 0
+                AND COALESCE(s.is_final, 0) = 0
+            ) AS leads_pullable
       FROM campaigns c
       LEFT JOIN users mu ON mu.id = c.manager_user_id
      ORDER BY c.is_active DESC, c.created_at DESC
