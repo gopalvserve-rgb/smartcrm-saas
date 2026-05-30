@@ -4053,18 +4053,53 @@ const LEAD_ICONS = {
   edit: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>'
 };
 function _laItem(iconKey, label, onclick, extraCls) {
+  // LEADS_REDESIGN_v51: button is the full container — icon + label stacked inside.
   const btn = h('button', {
     type: 'button',
-    class: 'la-btn' + (extraCls ? ' ' + extraCls : ''),
+    class: 'la-btn la-item' + (extraCls ? ' ' + extraCls : ''),
     onclick,
     'aria-label': label,
     title: label
   });
-  btn.innerHTML = LEAD_ICONS[iconKey] || iconKey;
-  return h('div', { class: 'la-item' },
-    btn,
-    h('div', { class: 'la-label' }, label)
-  );
+  const iconWrap = document.createElement('span');
+  iconWrap.className = 'la-icon';
+  iconWrap.innerHTML = LEAD_ICONS[iconKey] || iconKey;
+  btn.appendChild(iconWrap);
+  const lbl = document.createElement('span');
+  lbl.className = 'la-label';
+  lbl.textContent = label;
+  btn.appendChild(lbl);
+  return btn;
+}
+
+// LEADS_REDESIGN_v51: deterministic avatar colour from name/phone — uses our
+// CRM indigo/pink/violet/cyan palette so cards stay on-brand.
+function _avatarColor(seed) {
+  const palette = ['#6366f1','#ec4899','#8b5cf6','#06b6d4','#f59e0b','#10b981','#f97316','#3b82f6'];
+  let h = 0;
+  const s = String(seed || '');
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return palette[h % palette.length];
+}
+function _initials(name) {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '?';
+  const first = (parts[0] || '')[0] || '';
+  const last  = parts.length > 1 ? (parts[parts.length-1] || '')[0] : '';
+  return (first + last).toUpperCase() || '?';
+}
+// Source-icon glyph + label colour — keeps brands recognisable.
+function _sourceBadge(src) {
+  const v = String(src || '').toLowerCase();
+  if (v.includes('facebook') || v === 'fb')          return { icon: '📘', text: src, color: '#1877f2' };
+  if (v.includes('instagram'))                       return { icon: '📸', text: src, color: '#e1306c' };
+  if (v.includes('google') || v.includes('adwords')) return { icon: '🔍', text: src, color: '#4285f4' };
+  if (v.includes('indiamart') || v.includes('im'))   return { icon: '🅸', text: src, color: '#f97316' };
+  if (v.includes('justdial'))                        return { icon: 'J', text: src, color: '#f97316' };
+  if (v.includes('website') || v.includes('web'))    return { icon: '🌐', text: src, color: '#0ea5e9' };
+  if (v.includes('whatsapp') || v.includes('wa'))    return { icon: '💬', text: src, color: '#25d366' };
+  if (v.includes('manual'))                          return { icon: '✋', text: src, color: '#64748b' };
+  return { icon: '🏷', text: src || 'Other', color: '#64748b' };
 }
 
 // LEADS_NUKE_v1: strip any rogue Whitelist/Meet button from older render paths
@@ -4091,26 +4126,44 @@ function renderLeadsMobile(rows) {
   const { statuses } = CRM.cache;
   rows.forEach(l => {
     const digits = String(l.phone || '').replace(/\D/g, '');
-    const statusColor = l.status_color || '#6b7280';
+    const statusColor = l.status_color || '#6366f1';
     const due = l.next_followup_at ? new Date(l.next_followup_at) : null;
     const overdue = due && due < new Date();
     const cardCls = 'lead-card'
       + (l.is_duplicate ? ' row-duplicate' : '')
       + (l.tat_violation ? ' row-tat-violation' : '');
+    // LEADS_REDESIGN_v51: card = avatar (initials) + body (name + status + source + campaign + note + actions)
+    const avatarColor = _avatarColor(l.name || l.phone || l.id);
+    const initials    = _initials(l.name);
+    const srcBadge    = l.source ? _sourceBadge(l.source) : null;
     const card = h('div', { class: cardCls, title: l.tat_violation ? tatViolationTitle(l) : null },
-      h('div', { class: 'lc-head' },
-        h('a', { href: '#', class: 'lc-name', onclick: ev => { ev.preventDefault(); openLeadModal(l.id); } }, l.name || '—'),
-        h('span', { class: 'lc-status', style: { background: statusColor } }, l.status_name || '')
-      ),
-      h('div', { class: 'lc-meta' },
-        l.phone ? h('span', {}, '📞 ', l.phone) : null,
-        l.source ? h('span', {}, '• ', l.source) : null,
-        l.assigned_name ? h('span', {}, '👤 ', l.assigned_name) : null
+      h('div', { class: 'lc-top' },
+        h('div', { class: 'lc-avatar', style: { background: avatarColor } }, initials),
+        h('div', { class: 'lc-body' },
+          h('div', { class: 'lc-head' },
+            h('a', { href: '#', class: 'lc-name', onclick: ev => { ev.preventDefault(); openLeadModal(l.id); } }, l.name || '—'),
+            h('span', { class: 'lc-status', style: { background: statusColor } }, l.status_name || '')
+          ),
+          // Source + phone in one row
+          (srcBadge || l.phone) ? h('div', { class: 'lc-meta' },
+            srcBadge ? h('span', { class: 'src-badge', style: { color: srcBadge.color } }, srcBadge.icon + ' ', srcBadge.text) : null,
+            l.phone ? h('span', { class: 'phone-text' }, '·  ', l.phone) : null
+          ) : null,
+          // Campaign line (only when present) — CRM-brand indigo
+          l.campaign_name ? h('div', { class: 'lc-campaign' },
+            '📣 ', l.campaign_name,
+            l.form_name ? h('span', { class: 'lc-form' }, '  ·  ', l.form_name) : null
+          ) : null,
+          l.assigned_name ? h('div', { class: 'lc-assignee' }, '👤  ', l.assigned_name) : null
+        )
       ),
       l.tat_violation ? h('div', { class: 'tat-pill', title: tatViolationTitle(l) }, '⚠ TAT BREACH — ', tatOverLabel(l)) : null,
       l.is_duplicate ? h('div', { class: 'dup-pill', onclick: () => openDuplicateHistory(l.id) }, '⚠ DUP — see past') : null,
-      due ? h('div', { class: 'lc-fu' + (overdue ? ' overdue' : '') }, '⏰ ' + fmtDate(l.next_followup_at, 'relative')) : null,
-      l.recent_remark ? h('div', { class: 'lc-note', title: l.recent_remark }, '💬 ' + (l.recent_remark || '')) : null,
+      due ? h('div', { class: 'lc-fu' + (overdue ? ' overdue' : '') }, '⏰  ', fmtDate(l.next_followup_at, 'relative')) : null,
+      l.recent_remark ? h('div', { class: 'lc-note', title: l.recent_remark },
+        h('span', { class: 'lc-note-icon' }, '✎'),
+        h('span', { class: 'lc-note-text' }, l.recent_remark)
+      ) : null,
       // LEADS_ICON_LABELS_v2 (v47): SVG icons; brand colour set on the button.
       h('div', { class: 'lc-actions' },
         digits ? _laItem('call', 'Call',     () => callLead(l), 'btn-call') : null,

@@ -3347,3 +3347,249 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
 .lc-actions .la-item {
   align-items: center !important;
 }
+
+/* =================================================================
+ * LEADS_REDESIGN_v51 — match the user's mockup, themed with our CRM
+ * indigo (#6366f1 / #4f46e5) + pink (#ec4899) palette.
+ * Reset earlier overrides where they conflict.
+ * ================================================================= */
+
+.lead-card {
+  border-radius: 18px !important;
+  background: #fff !important;
+  border: 1px solid #ecedf3 !important;
+  border-left: 0 !important;
+  box-shadow: 0 1px 2px rgba(15,23,42,.03), 0 6px 14px -4px rgba(15,23,42,.06) !important;
+  padding: 1.05rem 1.1rem !important;
+  position: relative;
+  overflow: hidden;
+}
+.lead-card::before { display: none !important; } /* drop the v47 left gradient stripe */
+
+/* Top row: avatar + body block */
+.lead-card .lc-top {
+  display: flex !important;
+  gap: 12px !important;
+  align-items: flex-start !important;
+}
+.lead-card .lc-avatar {
+  flex: 0 0 auto;
+  width: 46px; height: 46px;
+  border-radius: 12px;
+  display: grid; place-items: center;
+  color: #fff;
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: .01em;
+  text-transform: uppercase;
+  box-shadow: 0 4px 10px -2px rgba(15,23,42,.18), inset 0 1px 0 rgba(255,255,255,.18);
+}
+.lead-card .lc-body { flex: 1 1 auto; min-width: 0; }
+
+/* Name + status row */
+.lead-card .lc-head {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 10px !important;
+}
+.lead-card .lc-name {
+  font-weight: 800 !important;
+  font-size: 1.08rem !important;
+  color: #0f172a !important;
+  letter-spacing: -.01em !important;
+  text-decoration: none !important;
+  line-height: 1.25 !important;
+}
+.lead-card .lc-status {
+  font-size: .68rem !important;
+  font-weight: 700 !important;
+  text-transform: uppercase !important;
+  letter-spacing: .04em !important;
+  padding: 4px 10px !important;
+  border-radius: 999px !important;
+  background: var(--brand-soft) !important;
+  color: var(--brand-dark) !important;
+  box-shadow: inset 0 0 0 1px rgba(99,102,241,.18) !important;
+  flex: 0 0 auto;
+}
+
+/* Source + phone row */
+.lead-card .lc-meta {
+  font-size: .82rem !important;
+  margin-top: .35rem !important;
+  color: #64748b !important;
+  display: flex !important;
+  gap: 6px !important;
+  align-items: center !important;
+  flex-wrap: wrap !important;
+}
+.lead-card .lc-meta .src-badge {
+  font-weight: 600 !important;
+}
+.lead-card .lc-meta .phone-text {
+  color: #0f172a !important;
+  font-weight: 600 !important;
+}
+
+/* Campaign line — indigo brand */
+.lead-card .lc-campaign {
+  margin-top: .3rem !important;
+  font-size: .8rem !important;
+  font-weight: 600 !important;
+  color: var(--brand-dark) !important;
+  display: flex; align-items: center; gap: 4px;
+}
+.lead-card .lc-campaign .lc-form { color: #8b5cf6; }
+
+.lead-card .lc-assignee {
+  margin-top: .3rem !important;
+  font-size: .8rem !important;
+  color: #64748b !important;
+}
+
+/* Follow-up pill (kept) — amber */
+.lead-card .lc-fu {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  margin-top: .55rem !important;
+  padding: 4px 10px !important;
+  background: var(--warn-soft) !important;
+  color: #92400e !important;
+  border-radius: 999px !important;
+  font-size: .75rem !important;
+  font-weight: 600 !important;
+  width: fit-content !important;
+}
+.lead-card .lc-fu.overdue { background: #fee2e2 !important; color: #b91c1c !important; }
+
+/* Note — amber soft pill, with edit icon left + ellipsis right */
+.lead-card .lc-note {
+  display: flex !important;
+  align-items: center !important;
+  gap: 7px !important;
+  margin-top: .55rem !important;
+  padding: 8px 12px !important;
+  background: var(--warn-soft) !important;
+  border-radius: 10px !important;
+  border-left: 3px solid var(--warn) !important;
+  font-size: .85rem !important;
+  color: #78350f !important;
+  font-weight: 500 !important;
+  line-height: 1.3 !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+.lead-card .lc-note .lc-note-icon {
+  flex: 0 0 auto;
+  color: var(--warn);
+  font-weight: 700;
+}
+.lead-card .lc-note .lc-note-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Action row — 5 card buttons, icon + label inside each. CRM-themed. */
+.lc-actions {
+  display: flex !important;
+  gap: 8px !important;
+  margin-top: 1rem !important;
+  padding-top: .85rem !important;
+  border-top: 1px solid #f1f3f8 !important;
+  flex-wrap: nowrap !important;
+}
+.lc-actions .la-btn,
+.lc-actions .la-item {
+  flex: 1 1 0 !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 5px !important;
+  padding: 9px 4px !important;
+  border-radius: 11px !important;
+  border: 1px solid transparent !important;
+  cursor: pointer !important;
+  transition: transform .12s ease, filter .12s ease !important;
+  width: auto !important;
+  height: auto !important;
+  aspect-ratio: auto !important;
+  min-height: 0 !important;
+  font: 700 .68rem -apple-system, "Segoe UI", Roboto, sans-serif !important;
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+  box-shadow: none !important;
+}
+.lc-actions .la-btn:active { transform: scale(.96) !important; }
+.lc-actions .la-btn .la-icon {
+  display: grid; place-items: center;
+  width: 20px; height: 20px;
+}
+.lc-actions .la-btn .la-icon svg {
+  width: 18px !important; height: 18px !important;
+}
+.lc-actions .la-btn .la-label {
+  font-size: .68rem !important;
+  font-weight: 700 !important;
+  white-space: nowrap !important;
+  letter-spacing: 0 !important;
+}
+
+/* === Variant skins — CRM-brand palette === */
+/* Call: solid indigo (primary action) */
+.lc-actions .la-btn.btn-call {
+  background: var(--brand-dark) !important;
+  color: #fff !important;
+  box-shadow: 0 5px 12px -3px rgba(79,70,229,.45), inset 0 1px 0 rgba(255,255,255,.18) !important;
+}
+.lc-actions .la-btn.btn-call .la-icon svg { color: #fff !important; }
+
+/* WA API: WhatsApp mint soft, green icon (brand recognisability) */
+.lc-actions .la-btn.wa-cloud-btn {
+  background: var(--ok-soft) !important;
+  color: #047857 !important;
+  border-color: #a7f3d0 !important;
+}
+.lc-actions .la-btn.wa-cloud-btn .la-icon svg { color: #25d366 !important; }
+
+/* My WA: WhatsApp dark solid, white icon */
+.lc-actions .la-btn.wa-personal-btn {
+  background: #047857 !important;
+  color: #fff !important;
+  box-shadow: 0 5px 12px -3px rgba(4,120,87,.4), inset 0 1px 0 rgba(255,255,255,.15) !important;
+}
+.lc-actions .la-btn.wa-personal-btn .la-icon svg { color: #fff !important; }
+
+/* Note: clean white card with amber accent */
+.lc-actions .la-btn.note-btn {
+  background: #fff !important;
+  color: #92400e !important;
+  border: 1px solid #fde68a !important;
+}
+.lc-actions .la-btn.note-btn .la-icon svg { color: var(--warn) !important; }
+
+/* Edit: clean white card with indigo accent */
+.lc-actions .la-btn.edit-btn {
+  background: #fff !important;
+  color: var(--brand-dark) !important;
+  border: 1px solid #c7d2fe !important;
+}
+.lc-actions .la-btn.edit-btn .la-icon svg { color: var(--brand-dark) !important; }
+
+/* Dark mode polish */
+@media (prefers-color-scheme: dark) {
+  .lead-card { background: #0f172a !important; border-color: #1e293b !important; }
+  .lead-card .lc-name { color: #f1f5f9 !important; }
+  .lead-card .lc-meta { color: #94a3b8 !important; }
+  .lead-card .lc-meta .phone-text { color: #f1f5f9 !important; }
+  .lead-card .lc-note { background: #422006 !important; color: #fde68a !important; }
+  .lc-actions { border-top-color: #1e293b !important; }
+  .lc-actions .la-btn.note-btn,
+  .lc-actions .la-btn.edit-btn { background: #1e293b !important; }
+}
