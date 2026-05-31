@@ -403,6 +403,41 @@ public class MainActivity extends BridgeActivity {
             }
         }
 
+        // APK_AUTO_UPDATE_v1.3: fire Intent.ACTION_VIEW so Android's browser
+        // downloads the APK and the system package installer handles the rest.
+        // Capacitor WebView can't trigger an in-WebView download for .apk,
+        // so window.location.href / window.open do nothing. This bridge is
+        // the reliable path.
+        @JavascriptInterface
+        public void downloadApk(String url) {
+            if (url == null || url.isEmpty()) return;
+            runOnUiThread(() -> {
+                try {
+                    String full = url;
+                    if (full.startsWith("/")) {
+                        // Resolve relative URLs against the app's origin so the
+                        // browser hits the correct host (crm.smartcrmsolution.com).
+                        String origin = "https://crm.smartcrmsolution.com";
+                        try {
+                            String webUrl = getBridge().getWebView().getUrl();
+                            if (webUrl != null) {
+                                java.net.URL u = new java.net.URL(webUrl);
+                                origin = u.getProtocol() + "://" + u.getHost();
+                                if (u.getPort() > 0) origin += ":" + u.getPort();
+                            }
+                        } catch (Exception ignored) {}
+                        full = origin + url;
+                    }
+                    Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(full));
+                    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(i);
+                    Log.i(TAG, "downloadApk: launched browser for " + full);
+                } catch (Exception e) {
+                    Log.e(TAG, "downloadApk failed: " + e.getMessage());
+                }
+            });
+        }
+
         @JavascriptInterface
         public String getIncomingCardEnabled() {
             try {

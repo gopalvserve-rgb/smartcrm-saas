@@ -542,6 +542,16 @@ function _renderApkUpdateBanner(installedCode, meta) {
   try { document.body.style.paddingTop = (bar.offsetHeight + 'px'); } catch (_) {}
   document.getElementById('apk-update-dl').onclick = () => {
     const url = (meta && meta.url) || '/LeadCRM.apk';
+    // APK_AUTO_UPDATE_v1.3: prefer the native bridge so Android's browser
+    // handles the .apk download. Capacitor WebView swallows direct .apk
+    // navigations, so location.href / window.open do nothing.
+    try {
+      if (window.LeadCRMNative && typeof window.LeadCRMNative.downloadApk === 'function') {
+        window.LeadCRMNative.downloadApk(url);
+        return;
+      }
+    } catch (_) {}
+    try { window.open(url, '_system'); return; } catch (_) {}
     try { window.location.href = url; }
     catch (_) { window.open(url, '_blank'); }
   };
