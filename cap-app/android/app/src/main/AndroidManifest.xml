@@ -92,6 +92,20 @@
             android:turnScreenOn="true"
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <!-- OUTGOING_CARD_v1: sibling Activity for outgoing calls. Same translucent
+             theme + flags so the card overlays the OEM dialer with the customer's
+             name, status, and last remark. Has its own â close button. -->
+        <activity
+            android:name=".OutgoingCallActivity"
+            android:exported="false"
+            android:launchMode="singleInstance"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:showOnLockScreen="true"
+            android:turnScreenOn="true"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
         <activity
             android:name=".PermissionOnboardingActivity"

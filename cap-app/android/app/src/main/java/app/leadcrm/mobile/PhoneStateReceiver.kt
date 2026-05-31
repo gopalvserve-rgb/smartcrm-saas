@@ -129,6 +129,35 @@ class PhoneStateReceiver : BroadcastReceiver() {
             }
             TelephonyManager.EXTRA_STATE_OFFHOOK -> {
                 offhookStartMs = now
+                // OUTGOING_CARD_v1 (2026-05-31): if we transitioned IDLE -> OFFHOOK
+                // (no RINGING in between) this is an outbound call. Try the CallLog
+                // fallback if EXTRA_PHONE_NUMBER wasn't captured by NEW_OUTGOING_CALL,
+                // then launch the OutgoingCallActivity overlay.
+                if (lastState != TelephonyManager.EXTRA_STATE_RINGING) {
+                    var outNumber = lastNumber
+                    if (outNumber.isEmpty()) {
+                        val fromLog = readLastCallLogNumber(ctx, sinceMs = now - 15_000L)
+                        if (fromLog.isNotEmpty()) outNumber = fromLog
+                    }
+                    if (outNumber.isNotEmpty()) {
+                        try {
+                            if (OutgoingCallActivity.isEnabled(ctx)) {
+                                val act = OutgoingCallActivity.newIntent(ctx, outNumber)
+                                act.addFlags(
+                                    Intent.FLAG_ACTIVITY_NEW_TASK
+                                            or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                                            or Intent.FLAG_ACTIVITY_NO_ANIMATION
+                                )
+                                ctx.startActivity(act)
+                                Log.i(TAG, "outgoing card Activity launched for $outNumber")
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "outgoing card launch failed: ${e.message}")
+                        }
+                    } else {
+                        Log.w(TAG, "OFFHOOK (outgoing) but number unavailable - card skipped")
+                    }
+                }
             }
             TelephonyManager.EXTRA_STATE_IDLE -> {
                 // Call has ended — the call log entry is now (or about to be)
