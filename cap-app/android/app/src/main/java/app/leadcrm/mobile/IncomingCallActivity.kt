@@ -78,9 +78,15 @@ class IncomingCallActivity : Activity() {
             return
         }
 
+        // INCOMING_CARD_v2: bring our window to the top above other apps' tasks.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
+            // requestDismissKeyguard if locked - lets the card be seen
+            try {
+                val km = getSystemService(Context.KEYGUARD_SERVICE) as? android.app.KeyguardManager
+                km?.requestDismissKeyguard(this, null)
+            } catch (_: Exception) {}
         } else {
             @Suppress("DEPRECATION")
             window.addFlags(
@@ -90,6 +96,12 @@ class IncomingCallActivity : Activity() {
             )
         }
         window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(0x99000000.toInt()))
+        // Make sure the window is on top even when other apps (dialer) are foreground.
+        window.addFlags(
+            WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
+                    or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+                    or WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+        )
 
         phone = intent?.getStringExtra(EXTRA_PHONE).orEmpty()
 

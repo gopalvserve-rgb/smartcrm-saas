@@ -86,8 +86,11 @@
             android:exported="false"
             android:launchMode="singleInstance"
             android:excludeFromRecents="true"
+            android:noHistory="true"
             android:taskAffinity=""
             android:showOnLockScreen="true"
+            android:turnScreenOn="true"
+            android:configChanges="orientation|screenSize|keyboardHidden"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
         <activity

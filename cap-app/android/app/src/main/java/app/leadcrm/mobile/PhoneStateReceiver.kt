@@ -96,9 +96,30 @@ class PhoneStateReceiver : BroadcastReceiver() {
                 lastNumber = number
                 if (number.isNotEmpty()) {
                     Log.i(TAG, "RINGING from $number → fire incoming_ringing")
-                    // INCOMING_CARD_v1: show the Runo-style card via FSI notification.
-                    // The helper itself checks the kill-switch; safe to call unconditionally.
-                    try { NotificationHelper.showFullScreenForIncoming(ctx, number) } catch (e: Exception) { Log.w(TAG, "incoming card failed: ${e.message}") }
+                    // INCOMING_CARD_v2: launch the Activity DIRECTLY (Truecaller-style).
+                    // FSI alone only auto-launches on lock screen; when screen is on with
+                    // another app foreground (the dialer), Android queues the Activity and
+                    // only shows it when our app comes to front. Direct startActivity is
+                    // the only reliable way to overlay the dialer. We still fire the FSI
+                    // notification below as a fallback (in case Activity start gets blocked
+                    // by an OEM or by background-launch restrictions).
+                    try {
+                        if (IncomingCallActivity.isEnabled(ctx)) {
+                            val act = IncomingCallActivity.newIntent(ctx, number)
+                            // Make sure the Activity always launches as its own task on top.
+                            act.addFlags(
+                                Intent.FLAG_ACTIVITY_NEW_TASK
+                                        or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                                        or Intent.FLAG_ACTIVITY_NO_ANIMATION
+                            )
+                            ctx.startActivity(act)
+                            Log.i(TAG, "incoming card Activity launched directly")
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "direct startActivity failed (${e.message}) - relying on FSI fallback")
+                    }
+                    // FSI notification — still useful as fallback + as the heads-up notification.
+                    try { NotificationHelper.showFullScreenForIncoming(ctx, number) } catch (e: Exception) { Log.w(TAG, "incoming card FSI failed: ${e.message}") }
                     safeCapacitor { CallerIdPlugin.instance?.emitRinging(number) }
                     sendCallEvent(ctx, "incoming_ringing", number, missed = false, durationSec = 0)
                     postNativeAsync(ctx, "incoming_ringing", number, direction = "in", missed = false, durationSec = 0)
