@@ -502,6 +502,54 @@ const _IS_APK = (function() {
   return false;
 })();
 try { CRM.isApk = _IS_APK; } catch (_) {}
+
+// APK_AUTO_UPDATE_v1 (2026-05-31): on APK boot, fetch the server-side version
+// metadata and compare to the installed APK's versionCode. If the server has a
+// newer build, render a yellow banner pinned to the top of the page with a
+// Download button that takes the user to the install flow. No-op on web.
+(async function _apkUpdateCheck() {
+  try {
+    if (!_IS_APK) return;
+    const App = (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) || null;
+    if (!App || !App.getInfo) return;
+    const info = await App.getInfo();              // { version, build, name, id }
+    const installedCode = Number(info.build || 0);
+    if (!installedCode) return;
+    // Cache-busting fetch — same-origin path. Server-relative so it follows the tenant prefix shim.
+    const r = await fetch('/LeadCRM.apk.version.json?_=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) return;
+    const meta = await r.json();
+    const latestCode = Number(meta.versionCode || 0);
+    if (!latestCode || latestCode <= installedCode) return;
+    // Stash for the banner button.
+    try { window.__LATEST_APK_META = meta; window.__INSTALLED_APK_CODE = installedCode; } catch (_) {}
+    _renderApkUpdateBanner(installedCode, meta);
+  } catch (_) { /* network error → silent */ }
+})();
+
+function _renderApkUpdateBanner(installedCode, meta) {
+  if (document.getElementById('apk-update-banner')) return;
+  const bar = document.createElement('div');
+  bar.id = 'apk-update-banner';
+  bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#fef3c7;color:#78350f;border-bottom:1px solid #f59e0b;padding:10px 14px;font:600 14px/1.3 system-ui,sans-serif;display:flex;align-items:center;gap:10px;box-shadow:0 2px 8px rgba(0,0,0,.08);';
+  bar.innerHTML =
+    '<span style="font-size:18px">🆕</span>' +
+    '<span style="flex:1">New version available <span style="font-weight:500;opacity:.75">(' + (meta.versionName || '') + ' · build ' + meta.versionCode + ', you have ' + installedCode + ')</span></span>' +
+    '<button id="apk-update-dl" style="background:#4f46e5;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-weight:700;font-size:14px;cursor:pointer">Download</button>' +
+    '<button id="apk-update-close" aria-label="Close" style="background:transparent;border:none;color:#78350f;font-size:20px;line-height:1;cursor:pointer;padding:4px 8px">×</button>';
+  document.body.appendChild(bar);
+  // Push the rest of the app down so the banner doesn't overlap the topbar.
+  try { document.body.style.paddingTop = (bar.offsetHeight + 'px'); } catch (_) {}
+  document.getElementById('apk-update-dl').onclick = () => {
+    const url = (meta && meta.url) || '/LeadCRM.apk';
+    try { window.location.href = url; }
+    catch (_) { window.open(url, '_blank'); }
+  };
+  document.getElementById('apk-update-close').onclick = () => {
+    try { bar.remove(); document.body.style.paddingTop = ''; } catch (_) {}
+  };
+}
+
 // Endpoints that accept a {mobile:true} flag for trimmed responses.
 const _MOBILE_FLAG_FNS = new Set([
   'api_leads_list', 'api_wb_chat_threads',

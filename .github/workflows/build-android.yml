@@ -73,6 +73,17 @@ jobs:
           keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
           EOF
 
+      - name: APK_AUTO_UPDATE_v1 — bump versionCode from github.run_number
+        run: |
+          # Keep versionName as-is (human readable), bump versionCode so Android
+          # accepts install-over-top as an update. Base 100 keeps us above the
+          # historical hardcoded 11 forever.
+          NEW_CODE=$(( 100 + ${{ github.run_number }} ))
+          echo "Bumping versionCode to $NEW_CODE"
+          sed -i -E "s/versionCode [0-9]+/versionCode $NEW_CODE/" cap-app/android/app/build.gradle
+          grep -E "versionCode|versionName" cap-app/android/app/build.gradle
+          echo "NEW_CODE=$NEW_CODE" >> $GITHUB_ENV
+
       - name: Gradle assembleRelease (signed)
         working-directory: cap-app/android
         run: |
@@ -106,6 +117,20 @@ jobs:
           fi
           $APKSIGNER verify --print-certs public/LeadCRM.apk
 
+      - name: APK_AUTO_UPDATE_v1 — write version metadata JSON
+        run: |
+          NAME=$(grep versionName cap-app/android/app/build.gradle | head -1 | sed -E 's/.*versionName +"?([^"]*)"?.*/\1/')
+          cat > public/LeadCRM.apk.version.json <<EOF
+          {
+            "versionCode": ${{ env.NEW_CODE }},
+            "versionName": "$NAME",
+            "builtAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "sha": "${{ github.sha }}",
+            "url": "/LeadCRM.apk"
+          }
+          EOF
+          cat public/LeadCRM.apk.version.json
+
       - name: Upload APK artifact (downloadable from Actions tab)
         uses: actions/upload-artifact@v4
         with:
@@ -118,7 +143,7 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           # Skip commit if the APK didn't change
-          git add public/LeadCRM.apk
+          git add public/LeadCRM.apk public/LeadCRM.apk.version.json
           if git diff --staged --quiet; then
             echo "No APK change; skipping commit."
             exit 0
