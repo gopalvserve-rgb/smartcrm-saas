@@ -560,20 +560,94 @@ function _renderApkUpdateBanner(installedCode, meta) {
   document.body.appendChild(backdrop);
 
   document.getElementById('apk-update-dl').onclick = () => {
-    const url = (meta && meta.url) || '/LeadCRM.apk';
+    const relUrl = (meta && meta.url) || '/LeadCRM.apk';
+    // Absolute URL so the system browser opens it correctly even if we
+    // got here via a tenant-prefixed page.
+    const fullUrl = relUrl.startsWith('http')
+      ? relUrl
+      : (location.origin + relUrl);
+
+    // Path 1: native bridge (APK build 150+ has this)
+    let bridgeCalled = false;
     try {
       if (window.LeadCRMNative && typeof window.LeadCRMNative.downloadApk === 'function') {
-        window.LeadCRMNative.downloadApk(url);
-        return;
+        window.LeadCRMNative.downloadApk(fullUrl);
+        bridgeCalled = true;
       }
     } catch (_) {}
-    try { window.open(url, '_system'); return; } catch (_) {}
-    try { window.location.href = url; }
-    catch (_) { window.open(url, '_blank'); }
+    if (bridgeCalled) return;
+
+    // Path 2: try an anchor click (some Capacitor configs route _blank to system browser)
+    let anchorTried = false;
+    try {
+      const a = document.createElement('a');
+      a.href = fullUrl;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => a.remove(), 100);
+      anchorTried = true;
+    } catch (_) {}
+
+    // Path 3: Cordova-style _system (only works if InAppBrowser-like shim exists)
+    try { window.open(fullUrl, '_system'); } catch (_) {}
+
+    // Path 4: location.href (web fallback)
+    try { window.location.href = fullUrl; } catch (_) {}
+
+    // Path 5: if none of the above produced a visible result within 800ms,
+    // surface the URL with a Copy button so the user can paste in Chrome.
+    setTimeout(() => {
+      _showApkUpdateFallback(fullUrl);
+    }, 800);
   };
   document.getElementById('apk-update-later').onclick = () => {
     try { sessionStorage.setItem('apk_update_dismissed', String(meta.versionCode)); } catch (_) {}
     try { backdrop.remove(); } catch (_) {}
+  };
+}
+
+
+function _showApkUpdateFallback(url) {
+  if (document.getElementById('apk-update-fallback')) return;
+  const back = document.createElement('div');
+  back.id = 'apk-update-fallback';
+  back.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(15,23,42,.75);display:flex;align-items:center;justify-content:center;padding:20px;font:600 14px/1.4 system-ui,-apple-system,sans-serif;';
+  back.innerHTML =
+    '<div style="background:#fff;border-radius:18px;max-width:380px;width:100%;padding:24px 22px;box-shadow:0 24px 64px rgba(0,0,0,.4);text-align:left;">' +
+      '<div style="font-size:36px;text-align:center;margin-bottom:6px">📲</div>' +
+      '<h2 style="margin:0 0 12px;text-align:center;font-size:20px;font-weight:800;color:#0f172a">One-time install</h2>' +
+      '<p style="margin:0 0 14px;color:#475569;font-size:13px;font-weight:500">Open <b>Chrome</b> on your phone, paste this link, and tap install. After this one update, future updates will install with one tap.</p>' +
+      '<div style="background:#f1f5f9;border:1px solid #cbd5e1;border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:#0f172a;font-family:monospace;word-break:break-all" id="apk-fb-url">' + url + '</div>' +
+      '<button id="apk-fb-copy" style="background:#4f46e5;color:#fff;border:none;border-radius:10px;padding:12px 16px;font-weight:700;font-size:15px;cursor:pointer;width:100%">📋 Copy link</button>' +
+      '<button id="apk-fb-close" style="background:transparent;border:none;color:#64748b;font-size:13px;font-weight:600;cursor:pointer;padding:10px;margin-top:6px;width:100%">Close</button>' +
+    '</div>';
+  document.body.appendChild(back);
+  document.getElementById('apk-fb-copy').onclick = async () => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(url);
+      } else {
+        // Fallback select+copy
+        const span = document.getElementById('apk-fb-url');
+        const range = document.createRange();
+        range.selectNode(span);
+        getSelection().removeAllRanges();
+        getSelection().addRange(range);
+        document.execCommand('copy');
+        getSelection().removeAllRanges();
+      }
+      const btn = document.getElementById('apk-fb-copy');
+      btn.textContent = '✅ Copied — paste in Chrome';
+      btn.style.background = '#10b981';
+    } catch (e) {
+      alert('Copy failed. Long-press the link to copy it manually.');
+    }
+  };
+  document.getElementById('apk-fb-close').onclick = () => {
+    try { back.remove(); } catch (_) {}
   };
 }
 
