@@ -4333,7 +4333,12 @@ function renderLeadsMobile(rows) {
         )
       ),
       l.tat_violation ? h('div', { class: 'tat-pill', title: tatViolationTitle(l) }, '⚠ TAT BREACH — ', tatOverLabel(l)) : null,
-      l.is_duplicate ? h('div', { class: 'dup-pill', onclick: () => openDuplicateHistory(l.id) }, '⚠ DUP — see past') : null,
+      // BULK_AUDIT_HISTORY_v1 — clearer history button on mobile lead card.
+      l.is_duplicate ? h('button', {
+        class: 'btn',
+        style: { padding: '6px 12px', fontSize: '.85rem', background: '#fef3c7', color: '#92400e', borderColor: '#f59e0b', display: 'block', width: '100%', marginTop: '6px' },
+        onclick: ev => { ev.stopPropagation(); openDuplicateHistory(l.id); }
+      }, '🕘 Show past leads for this number') : null,
       due ? h('div', { class: 'lc-fu' + (overdue ? ' overdue' : '') }, '⏰  ', fmtDate(l.next_followup_at, 'relative')) : null,
       l.recent_remark ? h('div', { class: 'lc-note', title: l.recent_remark },
         '✎  ' + String(l.recent_remark || '')
@@ -4706,7 +4711,13 @@ function renderCell(col, l, statuses) {
       return h('td', { class: 'cell-name' },
         h('a', { href: '#', onclick: ev => { ev.preventDefault(); openLeadModal(l.id); } }, l.name || '—'),
         renderHeatChip(l),
-        l.is_duplicate ? h('span', { class: 'dup-pill', title: 'Duplicate — click to see past leads', onclick: ev => { ev.stopPropagation(); ev.preventDefault(); openDuplicateHistory(l.id); } }, 'DUP') : null,
+        // BULK_AUDIT_HISTORY_v1 — clearer history button (replaces tiny DUP pill).
+        l.is_duplicate ? h('button', {
+          class: 'btn',
+          title: 'Click to see all past leads for this phone number',
+          style: { padding: '2px 8px', fontSize: '.72rem', background: '#fef3c7', color: '#92400e', borderColor: '#f59e0b', marginLeft: '.4rem' },
+          onclick: ev => { ev.stopPropagation(); ev.preventDefault(); openDuplicateHistory(l.id); }
+        }, '🕘 Show history') : null,
         // SHARE_BADGE_VISIBLE_v1: 🤝 badge on the lead row when the lead has any co-owners.
         // Visible to everyone (primary owner sees "shared with X"), tooltip lists names.
         (l.co_owners && l.co_owners.length)
@@ -8460,6 +8471,9 @@ function renderDialerSettings() {
     ));
     return wrap;
   }
+
+  // BULK_AUDIT_HISTORY_v1 — Bulk AI Audit card on Recordings settings page.
+  { const bar = _buildBulkAuditBar({ onDone: () => {} }); if (bar) wrap.appendChild(bar); }
 
   // INCOMING_CARD_v1 — Runo-style incoming-call popup toggle (APK only).
   // Default ON. Bridge talks to LeadCRMNative.setIncomingCardEnabled/getIncomingCardEnabled.
@@ -16798,6 +16812,53 @@ async function openSetTargetModal(month, userId, onDone) {
  * Renders KPI cards + per-user table + per-manager rollup + a
  * daily trend chart. Filter by date + optional user picker.
  */
+
+// BULK_AUDIT_HISTORY_v1 — reusable Bulk AI Audit toolbar (used by Call Activity + Recordings settings page)
+function _buildBulkAuditBar(opts) {
+  // Admins + managers only — same gate the Call Insights page uses.
+  if (!['admin','manager'].includes((CRM.user || {}).role)) return null;
+  const onDone = opts && opts.onDone;
+  const bar = h('div', { class: 'card', style: { padding: '.7rem .9rem', margin: '0 0 1rem', display: 'flex', flexWrap: 'wrap', gap: '.5rem', alignItems: 'center', background: '#f1f5f9' } },
+    h('span', { style: { fontWeight: 600 } }, '🤖 Bulk AI Audit'),
+    h('span', { class: 'muted', style: { fontSize: '.82rem' } }, 'Queue many recordings at once.')
+  );
+  const scopeSel = h('select', { class: 'input', style: { maxWidth: '220px' } },
+    h('option', { value: 'unprocessed', selected: 'selected' }, 'All unaudited recordings'),
+    h('option', { value: 'failed' }, 'Previously failed only'),
+    h('option', { value: 'all' }, 'Force re-audit ALL (last 2000)')
+  );
+  const userSel = h('select', { class: 'input', style: { maxWidth: '180px' } },
+    h('option', { value: '' }, 'All reps'),
+    ...((CRM.cache.users || []).map(u => h('option', { value: u.id }, u.name)))
+  );
+  const limitInp = h('input', { class: 'input', type: 'number', min: 1, max: 2000, value: 500, style: { width: '90px' }, title: 'Max number of recordings to process' });
+  const runBtn = h('button', { class: 'btn primary' }, '🚀 Run audit');
+  runBtn.onclick = async () => {
+    const scope = scopeSel.value;
+    if (scope === 'all' && !confirm('Re-audit ALL recordings? This wipes existing summaries and re-runs Gemini on every recording. Can be expensive.')) return;
+    runBtn.disabled = true; runBtn.textContent = '⏳ Queueing…';
+    try {
+      const r = await api('api_recording_bulkAudit', {
+        scope,
+        limit: Number(limitInp.value) || 500,
+        user_id: userSel.value ? Number(userSel.value) : null
+      });
+      if (typeof toast === 'function') toast('✅ Queued ' + r.queued + ' recordings — AI processing in background', 'ok');
+      if (typeof onDone === 'function') setTimeout(onDone, 8000);
+    } catch (e) {
+      if (typeof toast === 'function') toast('⚠ ' + e.message, 'err');
+    } finally {
+      runBtn.disabled = false; runBtn.textContent = '🚀 Run audit';
+    }
+  };
+  bar.appendChild(scopeSel);
+  bar.appendChild(userSel);
+  bar.appendChild(limitInp);
+  bar.appendChild(runBtn);
+  return bar;
+}
+window._buildBulkAuditBar = _buildBulkAuditBar;
+
 VIEWS.callactivity = async (view) => {
   await ensureChartJs();
   view.innerHTML = '';
@@ -16823,6 +16884,8 @@ VIEWS.callactivity = async (view) => {
   );
   view.appendChild(toolbar);
   setTimeout(() => { try { window._attachDatePresets && window._attachDatePresets(_caFrom, _caTo, { key: 'callactivity', apply: () => { try { loadCallActivity(); } catch (_) {} } }); } catch (_) {} }, 0);
+  // BULK_AUDIT_HISTORY_v1 — Bulk AI Audit toolbar (admin/manager only).
+  { const bar = _buildBulkAuditBar({ onDone: () => { try { loadCallActivity(); } catch(_) {} } }); if (bar) view.appendChild(bar); }
 
   view.appendChild(h('div', { id: 'ca-cards', class: 'cards' }));
   view.appendChild(h('div', { class: 'chart-grid' },
