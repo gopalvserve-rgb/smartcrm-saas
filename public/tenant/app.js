@@ -2537,11 +2537,22 @@ VIEWS.dashboard = async (view) => {
   })();
 
   // DASH_CAMP_FILTER_v1 — campaign filter bar (admin/manager only)
+  // DASH_CAMPAIGN_DUP_FIX_v1 (2026-05-31): the api_campaigns_list await below
+  // can interleave with a second VIEWS.dashboard() call (boot + hashchange,
+  // or the filter\'s own onApply re-render). The renderToken check at the top
+  // of the function catches the race at ensureChartJs but NOT here, so both
+  // calls used to append a filter bar. Fix: re-check _stale() after the await
+  // and idempotency-guard by id so a stray double-append still self-heals.
   CRM._dashCampaignIds = CRM._dashCampaignIds || [];
   let _campOpts = CRM.cache.campaigns;
   if (!_campOpts) { try { CRM.cache.campaigns = await api('api_campaigns_list'); _campOpts = CRM.cache.campaigns; } catch (_) { _campOpts = []; } }
+  if (_stale()) return;
+  // Remove any existing filter bar in this view before re-appending - guards
+  // against the rare case where two concurrent renders both got here.
+  const _oldCampBar = view.querySelector('#dash-camp-filter-bar');
+  if (_oldCampBar) _oldCampBar.remove();
   if (_campOpts && _campOpts.length && CRM.user && ['admin','manager','team_leader'].includes(CRM.user.role)) {
-    const filterBar = h('div', { style: { display:'flex', alignItems:'center', gap:'8px', marginBottom:'.7rem', padding:'8px 12px', background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:'10px', flexWrap:'wrap' } });
+    const filterBar = h('div', { id: 'dash-camp-filter-bar', style: { display:'flex', alignItems:'center', gap:'8px', marginBottom:'.7rem', padding:'8px 12px', background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:'10px', flexWrap:'wrap' } });
     filterBar.appendChild(h('span', { style: { fontWeight:600, fontSize:'.85rem', color:'#475569' } }, '🎯 Campaign filter:'));
     // Use existing multiSelectDropdown helper
     const sel = multiSelectDropdown({
