@@ -507,7 +507,7 @@ try { CRM.isApk = _IS_APK; } catch (_) {}
 // metadata and compare to the installed APK's versionCode. If the server has a
 // newer build, render a yellow banner pinned to the top of the page with a
 // Download button that takes the user to the install flow. No-op on web.
-(async function _apkUpdateCheck() {
+window._apkUpdateCheck = async function _apkUpdateCheck() {
   try {
     if (!_IS_APK) return;
     const App = (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) || null;
@@ -525,26 +525,42 @@ try { CRM.isApk = _IS_APK; } catch (_) {}
     try { window.__LATEST_APK_META = meta; window.__INSTALLED_APK_CODE = installedCode; } catch (_) {}
     _renderApkUpdateBanner(installedCode, meta);
   } catch (_) { /* network error → silent */ }
-})();
+};
+// Kick off the first check on script load.
+try { window._apkUpdateCheck(); } catch (_) {}
 
 function _renderApkUpdateBanner(installedCode, meta) {
-  if (document.getElementById('apk-update-banner')) return;
-  const bar = document.createElement('div');
-  bar.id = 'apk-update-banner';
-  bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#fef3c7;color:#78350f;border-bottom:1px solid #f59e0b;padding:10px 14px;font:600 14px/1.3 system-ui,sans-serif;display:flex;align-items:center;gap:10px;box-shadow:0 2px 8px rgba(0,0,0,.08);';
-  bar.innerHTML =
-    '<span style="font-size:18px">🆕</span>' +
-    '<span style="flex:1">New version available <span style="font-weight:500;opacity:.75">(' + (meta.versionName || '') + ' · build ' + meta.versionCode + ', you have ' + installedCode + ')</span></span>' +
-    '<button id="apk-update-dl" style="background:#4f46e5;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-weight:700;font-size:14px;cursor:pointer">Download</button>' +
-    '<button id="apk-update-close" aria-label="Close" style="background:transparent;border:none;color:#78350f;font-size:20px;line-height:1;cursor:pointer;padding:4px 8px">×</button>';
-  document.body.appendChild(bar);
-  // Push the rest of the app down so the banner doesn't overlap the topbar.
-  try { document.body.style.paddingTop = (bar.offsetHeight + 'px'); } catch (_) {}
+  // APK_AUTO_UPDATE_v2 (2026-05-31): a centered modal popup is the right UX
+  // for an app-update prompt - banners get ignored, modals don't. Shows on
+  // app boot AND when the app comes back from background. "Later" dismisses
+  // for this session only; it reappears next launch if a newer build exists.
+  if (document.getElementById('apk-update-modal')) return;
+  try {
+    if (sessionStorage.getItem('apk_update_dismissed') === String(meta.versionCode)) return;
+  } catch (_) {}
+
+  const backdrop = document.createElement('div');
+  backdrop.id = 'apk-update-modal';
+  backdrop.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(15,23,42,.6);display:flex;align-items:center;justify-content:center;padding:20px;font:600 15px/1.4 system-ui,-apple-system,sans-serif;';
+
+  backdrop.innerHTML =
+    '<div style="background:#fff;border-radius:18px;max-width:380px;width:100%;padding:28px 24px 22px;box-shadow:0 24px 64px rgba(0,0,0,.4);text-align:center;animation:apkmodalin .2s ease-out;">' +
+      '<div style="font-size:48px;margin-bottom:8px">🆕</div>' +
+      '<h2 style="margin:0 0 6px;font-size:22px;font-weight:800;color:#0f172a">Update Available</h2>' +
+      '<p style="margin:0 0 18px;color:#475569;font-size:14px;font-weight:500">A newer version of the app is ready.</p>' +
+      '<div style="background:#f1f5f9;border-radius:10px;padding:10px 14px;margin-bottom:20px;font-size:13px;color:#334155;font-weight:600">' +
+        'Latest: ' + (meta.versionName || '') + ' · build ' + meta.versionCode +
+        '<br><span style="opacity:.7;font-weight:500">You have: build ' + installedCode + '</span>' +
+      '</div>' +
+      '<button id="apk-update-dl" style="background:#4f46e5;color:#fff;border:none;border-radius:12px;padding:14px 18px;font-weight:800;font-size:16px;cursor:pointer;width:100%;box-shadow:0 8px 16px rgba(79,70,229,.3)">⬇️ Update Now</button>' +
+      '<button id="apk-update-later" style="background:transparent;border:none;color:#64748b;font-size:14px;font-weight:600;cursor:pointer;padding:12px;margin-top:6px;width:100%">Later</button>' +
+    '</div>' +
+    '<style>@keyframes apkmodalin{from{opacity:0;transform:scale(.92)}to{opacity:1;transform:scale(1)}}</style>';
+
+  document.body.appendChild(backdrop);
+
   document.getElementById('apk-update-dl').onclick = () => {
     const url = (meta && meta.url) || '/LeadCRM.apk';
-    // APK_AUTO_UPDATE_v1.3: prefer the native bridge so Android's browser
-    // handles the .apk download. Capacitor WebView swallows direct .apk
-    // navigations, so location.href / window.open do nothing.
     try {
       if (window.LeadCRMNative && typeof window.LeadCRMNative.downloadApk === 'function') {
         window.LeadCRMNative.downloadApk(url);
@@ -555,10 +571,25 @@ function _renderApkUpdateBanner(installedCode, meta) {
     try { window.location.href = url; }
     catch (_) { window.open(url, '_blank'); }
   };
-  document.getElementById('apk-update-close').onclick = () => {
-    try { bar.remove(); document.body.style.paddingTop = ''; } catch (_) {}
+  document.getElementById('apk-update-later').onclick = () => {
+    try { sessionStorage.setItem('apk_update_dismissed', String(meta.versionCode)); } catch (_) {}
+    try { backdrop.remove(); } catch (_) {}
   };
 }
+
+// APK_AUTO_UPDATE_v2: re-run the check when the app returns from background.
+(function _wireApkUpdateRecheck() {
+  try {
+    if (!_IS_APK) return;
+    const App = (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) || null;
+    if (!App || !App.addListener) return;
+    App.addListener('appStateChange', ev => {
+      if (ev && ev.isActive) {
+        setTimeout(() => { try { window._apkUpdateCheck && window._apkUpdateCheck(); } catch (_) {} }, 800);
+      }
+    });
+  } catch (_) {}
+})();
 
 // Endpoints that accept a {mobile:true} flag for trimmed responses.
 const _MOBILE_FLAG_FNS = new Set([
