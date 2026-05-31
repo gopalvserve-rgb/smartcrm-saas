@@ -147,35 +147,6 @@ function computeCost(inputTokens, outputTokens, settings) {
  *     raw_status:    int|null,
  *   }
  */
-// COPILOT_RETRY_v2 — multi-model fallback ladder. Try a sequence of models
-// rather than just one sibling. Order is "small/cheap first, bigger only
-// if smaller is overloaded". Each model gets its own retry budget.
-function _nextFallbackModel(currentModel, alreadyTried) {
-  const chain = [
-    'gemini-2.5-flash-lite',
-    'gemini-2.5-flash',
-    'gemini-2.0-flash-lite',
-    'gemini-2.0-flash',
-    'gemini-1.5-flash'
-  ];
-  // First try: same family, sibling (cheapest pivot — flash↔flash-lite)
-  if (!alreadyTried.has(currentModel)) {
-    if (currentModel.includes('flash-lite')) {
-      const sib = currentModel.replace('flash-lite', 'flash');
-      if (!alreadyTried.has(sib) && chain.includes(sib)) return sib;
-    } else if (currentModel.includes('flash')) {
-      const sib = currentModel.replace('flash', 'flash-lite');
-      if (!alreadyTried.has(sib) && chain.includes(sib)) return sib;
-    }
-  }
-  // Then walk the chain top to bottom for any model not yet tried
-  for (const m of chain) {
-    if (!alreadyTried.has(m) && m !== currentModel) return m;
-  }
-  return null;
-}
-
-
 async function generate(args) {
   const settings = await loadSettings();
   if (!settings) {
@@ -206,7 +177,36 @@ async function generate(args) {
   }
 
   let resp, json;
-  // Retry-with-backoff for transient errors (503/429). Same logic as
+  
+// COPILOT_RETRY_v2 — multi-model fallback ladder. Try a sequence of models
+// rather than just one sibling. Order is "small/cheap first, bigger only
+// if smaller is overloaded". Each model gets its own retry budget.
+function _nextFallbackModel(currentModel, alreadyTried) {
+  const chain = [
+    'gemini-2.5-flash-lite',
+    'gemini-2.5-flash',
+    'gemini-2.0-flash-lite',
+    'gemini-2.0-flash',
+    'gemini-1.5-flash'
+  ];
+  // First try: same family, sibling (cheapest pivot — flash↔flash-lite)
+  if (!alreadyTried.has(currentModel)) {
+    if (currentModel.includes('flash-lite')) {
+      const sib = currentModel.replace('flash-lite', 'flash');
+      if (!alreadyTried.has(sib) && chain.includes(sib)) return sib;
+    } else if (currentModel.includes('flash')) {
+      const sib = currentModel.replace('flash', 'flash-lite');
+      if (!alreadyTried.has(sib) && chain.includes(sib)) return sib;
+    }
+  }
+  // Then walk the chain top to bottom for any model not yet tried
+  for (const m of chain) {
+    if (!alreadyTried.has(m) && m !== currentModel) return m;
+  }
+  return null;
+}
+
+// Retry-with-backoff for transient errors (503/429). Same logic as
   // generateWithTools — Gemini flash models hiccup at peak, 2-3 retries
   // with exponential delay usually wins, then fall back to sibling model.
   let currentModel = model;
