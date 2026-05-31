@@ -111,4 +111,35 @@ object NotificationHelper {
         catch (_: SecurityException) { /* user revoked POST_NOTIFICATIONS */ }
     }
 
+    /** OUTGOING_CARD_v1.1: full-screen-intent notification that launches OutgoingCallActivity.
+     *  Android 10+ silently blocks ctx.startActivity() from a broadcast receiver unless the
+     *  launch is delegated through an FSI notification. Without this fallback the outgoing
+     *  card never appears on most modern phones. */
+    @Suppress("MissingPermission")
+    fun showFullScreenForOutgoing(ctx: Context, phone: String) {
+        if (!OutgoingCallActivity.isEnabled(ctx)) {
+            Log.d("LeadCRM/Notif", "outgoing card disabled - skipping FSI")
+            return
+        }
+        val cardIntent = OutgoingCallActivity.newIntent(ctx, phone)
+        val fsi = PendingIntent.getActivity(
+            ctx, 1002,
+            cardIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val n = NotificationCompat.Builder(ctx, CallerIdPlugin.CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.sym_call_outgoing)
+            .setContentTitle("Outgoing call")
+            .setContentText(phone)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setOngoing(false)
+            .setAutoCancel(true)
+            .setFullScreenIntent(fsi, true)
+            .setContentIntent(fsi)
+            .build()
+        try { NotificationManagerCompat.from(ctx).notify(CallerIdPlugin.NOTIFICATION_ID + 2, n) }
+        catch (_: SecurityException) { /* user revoked POST_NOTIFICATIONS */ }
+    }
+
 }

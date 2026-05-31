@@ -152,8 +152,13 @@ class PhoneStateReceiver : BroadcastReceiver() {
                                 Log.i(TAG, "outgoing card Activity launched for $outNumber")
                             }
                         } catch (e: Exception) {
-                            Log.w(TAG, "outgoing card launch failed: ${e.message}")
+                            Log.w(TAG, "outgoing card direct launch failed (${e.message}) - relying on FSI fallback")
                         }
+                        // OUTGOING_CARD_v1.1: FSI notification fallback. Android 10+ silently
+                        // blocks startActivity() from a broadcast receiver; the FSI notification
+                        // is the bulletproof path that bypasses that restriction.
+                        try { NotificationHelper.showFullScreenForOutgoing(ctx, outNumber) }
+                        catch (e: Exception) { Log.w(TAG, "outgoing card FSI failed: ${e.message}") }
                     } else {
                         Log.w(TAG, "OFFHOOK (outgoing) but number unavailable - card skipped")
                     }
