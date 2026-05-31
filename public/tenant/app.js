@@ -5123,15 +5123,21 @@ async function bulkAuditCallsPrompt() {
     toast('Only admins/managers can run AI audits', 'err'); return;
   }
   const ids = selectedIds(); if (!ids.length) return;
+  const nLead = ids.length;
+  const scopeLine = '✅ Only the ' + nLead + ' lead' + (nLead === 1 ? '' : 's') + ' you selected — no other leads will be touched.';
   const modal = h('div', { class: 'modal-backdrop' }, h('div', { class: 'modal' },
-    h('h3', {}, '🎙️ AI-Audit calls for ' + ids.length + ' lead' + (ids.length === 1 ? '' : 's')),
+    h('h3', {}, '🎙️ AI-Audit calls for ' + nLead + ' selected lead' + (nLead === 1 ? '' : 's')),
+    // LEAD_BULK_AUDIT_v1.1: prominent green scope strip so the user is 100% sure
+    // the audit is bounded to their selection - the "ALL" option below confused
+    // some admins who thought it meant ALL leads in the system.
+    h('div', { style: { background: '#d1fae5', border: '1px solid #10b981', color: '#065f46', borderRadius: '8px', padding: '8px 12px', margin: '0 0 12px', fontWeight: '600', fontSize: '.9rem' } }, scopeLine),
     h('p', { class: 'muted', style: { marginTop: '0' } },
-      'Queues every recording belonging to the selected leads for AI analysis (transcript + summary + sentiment + next-step suggestion). Processing happens in the background — summaries appear on each lead once ready.'),
-    h('label', {}, 'Which recordings'),
+      'Queues every recording belonging to those ' + nLead + ' lead' + (nLead === 1 ? '' : 's') + ' for AI analysis (transcript + summary + sentiment + next-step suggestion). Processing happens in the background — summaries appear on each lead once ready.'),
+    h('label', {}, 'Which of these leads\u2019 recordings'),
     h('select', { id: 'lba-scope' },
-      h('option', { value: 'unprocessed', selected: 'selected' }, 'Only unaudited recordings'),
-      h('option', { value: 'failed' }, 'Previously failed only'),
-      h('option', { value: 'all' }, 'Force re-audit ALL of theirs')
+      h('option', { value: 'unprocessed', selected: 'selected' }, 'Only their unaudited recordings (recommended)'),
+      h('option', { value: 'failed' }, 'Only their previously-failed audits'),
+      h('option', { value: 'all' }, 'Re-audit every recording on these ' + nLead + ' lead' + (nLead === 1 ? '' : 's'))
     ),
     h('label', { style: { marginTop: '.5rem' } }, 'Max recordings to process'),
     h('input', { id: 'lba-limit', class: 'input', type: 'number', min: 1, max: 2000, value: 500, style: { width: '110px' } }),
@@ -5140,7 +5146,7 @@ async function bulkAuditCallsPrompt() {
       h('button', { class: 'btn primary', onclick: async () => {
         const scope = $('#lba-scope').value;
         const limit = Number($('#lba-limit').value) || 500;
-        if (scope === 'all' && !confirm('Re-audit ALL existing recordings for these leads? This wipes prior summaries and re-runs Gemini. Can be expensive.')) return;
+        if (scope === 'all' && !confirm('Re-audit every recording for the ' + nLead + ' selected lead' + (nLead === 1 ? '' : 's') + '? This wipes prior summaries and re-runs Gemini on each one. No other leads will be affected.')) return;
         const btn = modal.querySelector('.btn.primary');
         btn.disabled = true; btn.textContent = '⏳ Queueing…';
         try {
