@@ -105,6 +105,84 @@ async function api_reports_summary(token, filters) {
  * source, tag, custom field. Centralised so the funnel, daily breakdown, and
  * summary always agree on what's "in scope".
  */
+
+// BULK_AUDIT_HISTORY_v1 (extended) — rule-evaluator shared with Report Builder.
+// Supports the same operators the SPA's ruleBuilderButton emits:
+//   eq | neq | contains | not_contains | starts_with | ends_with
+//   is_empty | is_not_empty | in | not_in
+//   gt | gte | lt | lte | between
+function _rbRuleFieldValue(lead, field, _lookups) {
+  if (!field) return '';
+  // Custom field — look up in extra_json
+  if (field.startsWith('cf_')) {
+    const k = field.slice(3);
+    try {
+      const ex = lead.extra_json ? (typeof lead.extra_json === 'string' ? JSON.parse(lead.extra_json) : lead.extra_json) : {};
+      return ex && ex[k] != null ? String(ex[k]) : '';
+    } catch (_) { return ''; }
+  }
+  // Joined name fields — resolve via lookups
+  if (field === 'status_name') {
+    const st = _lookups.statusesById[Number(lead.status_id)];
+    return st ? String(st.name || '') : '';
+  }
+  if (field === 'product_name') {
+    const pr = _lookups.productsById[Number(lead.product_id)];
+    return pr ? String(pr.name || '') : '';
+  }
+  if (field === 'campaign_name') {
+    const cm = _lookups.campaignsById && _lookups.campaignsById[Number(lead.campaign_id)];
+    return cm ? String(cm.name || '') : '';
+  }
+  if (field === 'assigned_name') {
+    const u = _lookups.usersById[Number(lead.assigned_to)];
+    return u ? String(u.name || '') : '';
+  }
+  // Direct lead column
+  const v = lead[field];
+  return v == null ? '' : String(v);
+}
+
+function _rbApplyRules(leads, rules, lookups) {
+  if (!Array.isArray(rules) || !rules.length) return leads;
+  const _ci = s => String(s || '').toLowerCase();
+  return leads.filter(l => {
+    // AND semantics (same as SPA rule-builder)
+    for (const r of rules) {
+      const op = String(r && r.op || 'eq').toLowerCase();
+      const v = _ci(_rbRuleFieldValue(l, r.field, lookups));
+      const rv = r.value == null ? '' : (Array.isArray(r.value) ? r.value : String(r.value));
+      const rvLower = Array.isArray(rv) ? rv.map(x => _ci(x)) : _ci(rv);
+      let ok;
+      switch (op) {
+        case 'eq':           ok = v === rvLower; break;
+        case 'neq':          ok = v !== rvLower; break;
+        case 'contains':     ok = v.includes(rvLower); break;
+        case 'not_contains': ok = !v.includes(rvLower); break;
+        case 'starts_with':  ok = v.startsWith(rvLower); break;
+        case 'ends_with':    ok = v.endsWith(rvLower); break;
+        case 'is_empty':     ok = !v; break;
+        case 'is_not_empty': ok = !!v; break;
+        case 'in':           ok = Array.isArray(rvLower) ? rvLower.includes(v) : v === rvLower; break;
+        case 'not_in':       ok = Array.isArray(rvLower) ? !rvLower.includes(v) : v !== rvLower; break;
+        case 'gt':           ok = Number(v) >  Number(rvLower); break;
+        case 'gte':          ok = Number(v) >= Number(rvLower); break;
+        case 'lt':           ok = Number(v) <  Number(rvLower); break;
+        case 'lte':          ok = Number(v) <= Number(rvLower); break;
+        case 'between': {
+          const lo = Number(Array.isArray(r.value) ? r.value[0] : r.value);
+          const hi = Number(Array.isArray(r.value) ? r.value[1] : r.value2);
+          ok = Number(v) >= lo && Number(v) <= hi;
+          break;
+        }
+        default: ok = true;
+      }
+      if (!ok) return false;
+    }
+    return true;
+  });
+}
+
 async function _applyReportFilters(rows, filters, users) {
   filters = filters || {};
   if (filters.from) rows = rows.filter(l => _tzDate(l.created_at) >= filters.from);
@@ -1470,6 +1548,22 @@ async function api_reports_pivot(token, payload) {
   const metrics = Array.isArray(p.metrics) ? p.metrics.map(String).filter(Boolean) : ['count'];
   const filters = p.filters || {};
   leads = await _applyReportFilters(leads, filters, users);
+
+  // BULK_AUDIT_HISTORY_v1 (extended) — apply rule-builder rules after the
+  // standard filters. Rules may arrive as payload.rules (top-level, legacy)
+  // or payload.filters.rules (new).
+  const _rbRules = (Array.isArray(filters.rules) && filters.rules) || (Array.isArray(p.rules) && p.rules) || [];
+  if (_rbRules.length) {
+    // Build campaigns lookup (already lazily loaded later, but rules can need it now)
+    let _campaignsById = {};
+    try {
+      const cr2 = await db.query("SELECT id, name FROM campaigns").catch(() => null);
+      if (cr2 && cr2.rows) cr2.rows.forEach(rr => { _campaignsById[Number(rr.id)] = rr; });
+    } catch (_) {}
+    leads = _rbApplyRules(leads, _rbRules, {
+      statusesById, productsById, campaignsById: _campaignsById, usersById
+    });
+  }
 
   if (!rowDims.length) throw new Error('row_dims is required (pass at least one dimension)');
 

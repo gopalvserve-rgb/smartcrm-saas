@@ -18729,16 +18729,34 @@ VIEWS.reportbuilder = async (view) => {
           h('option', { value: '1' }, 'Qualified only'),
           h('option', { value: '0' }, 'Not qualified')
         ),
-        (function(){ const rb = ruleBuilderButton({ label: '+ Filter rule', storageKey: 'crm.reportbuilder.rules.v1',
-          fields: [
-            { id: 'name', label: 'Lead name', type: 'text' },
-            { id: 'phone', label: 'Phone', type: 'text' },
-            { id: 'email', label: 'Email', type: 'text' },
-            { id: 'company', label: 'Company', type: 'text' },
-            { id: 'tag', label: 'Tag', type: 'text' },
-            { id: 'city', label: 'City', type: 'text' },
-            { id: 'state', label: 'State', type: 'text' }
-          ], onChange: () => loadReportBuilder() });
+        // BULK_AUDIT_HISTORY_v1 (extended) — Report Builder rule-builder now includes
+        // source / status / campaign / product / assigned + ALL custom fields,
+        // matching the Leads page filter UX. Backend _applyReportFilters now
+        // honours payload.filters.rules so these rules actually take effect.
+        (function(){
+          const cfFields = (CRM.cache.customFields || []).map(cf => ({
+            id: 'cf_' + cf.name, label: cf.label || cf.name, type: 'text'
+          }));
+          const rb = ruleBuilderButton({ label: '+ Filter rule', storageKey: 'crm.reportbuilder.rules.v1',
+            fields: [
+              { id: 'name',         label: 'Lead name',     type: 'text' },
+              { id: 'phone',        label: 'Phone',         type: 'text' },
+              { id: 'email',        label: 'Email',         type: 'text' },
+              { id: 'whatsapp',     label: 'WhatsApp',      type: 'text' },
+              { id: 'company',      label: 'Company',       type: 'text' },
+              { id: 'source',       label: 'Source',        type: 'text' },
+              { id: 'status_name',  label: 'Status',        type: 'text' },
+              { id: 'product_name', label: 'Product',       type: 'text' },
+              { id: 'campaign_name',label: 'Campaign',      type: 'text' },
+              { id: 'tag',          label: 'Tag',           type: 'text' },
+              { id: 'tags',         label: 'Tags',          type: 'text' },
+              { id: 'city',         label: 'City',          type: 'text' },
+              { id: 'state',        label: 'State',         type: 'text' },
+              { id: 'notes',        label: 'Notes / Remark',type: 'text' },
+              { id: 'value',        label: 'Value',         type: 'number' },
+              { id: 'assigned_name',label: 'Assigned to',   type: 'text' }
+            ].concat(cfFields),
+            onChange: () => loadReportBuilder() });
           rb.id = 'rb-rule-btn'; window._rbRuleBtn = rb; const hold = document.createElement('span'); hold.appendChild(rb); return hold;
         })(),
         h('button', { class: 'btn primary', onclick: loadReportBuilder }, '🔎 Generate'),
@@ -18810,6 +18828,8 @@ function _currentReportBuilderFilters() {
     status_ids:     statusesArr.length ? statusesArr : undefined,
     product_ids:    productsArr.length ? productsArr : undefined,
     sources:        sourcesArr.length ? sourcesArr : undefined,
+    // BULK_AUDIT_HISTORY_v1 (extended) — pass rules under filters.* so the
+    // backend _applyReportFilters can honour them.
     rules: (window._rbRuleBtn && window._rbRuleBtn.getRules) ? window._rbRuleBtn.getRules() : []
   };
 }
