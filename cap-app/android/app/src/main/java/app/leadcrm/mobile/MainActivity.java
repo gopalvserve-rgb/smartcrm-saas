@@ -390,6 +390,30 @@ public class MainActivity extends BridgeActivity {
          * the WebView is paused or the app is killed. JS calls this on
          * every login + on every app boot from the persisted token.
          */
+        // INCOMING_CARD_v1: kill-switch for the Runo-style incoming-call card.
+        // SPA flips this from the Settings page if the card misbehaves.
+        @JavascriptInterface
+        public void setIncomingCardEnabled(boolean enabled) {
+            try {
+                SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+                prefs.edit().putString("incoming_card_enabled", enabled ? "1" : "0").apply();
+                Log.d(TAG, "incoming card -> " + (enabled ? "ON" : "OFF"));
+            } catch (Exception e) {
+                Log.e(TAG, "setIncomingCardEnabled failed: " + e.getMessage());
+            }
+        }
+
+        @JavascriptInterface
+        public String getIncomingCardEnabled() {
+            try {
+                SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+                String v = prefs.getString("incoming_card_enabled", "1");
+                return v == null ? "1" : v;
+            } catch (Exception e) {
+                return "1";
+            }
+        }
+
         @JavascriptInterface
         public void saveCallEventCreds(String apiBase, String token) {
             try {

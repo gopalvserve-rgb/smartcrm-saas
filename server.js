@@ -1491,6 +1491,51 @@ app.post('/api/call_event_native', require('express').json({ limit: '64kb' }), a
   }
 });
 
+// INCOMING_CARD_v1 — lightweight read-only endpoint used by IncomingCallActivity
+// to fetch lead-by-phone for the on-screen card. Same JWT auth + tenant
+// resolution as /api/call_event_native (the slug claim on the JWT lets us
+// pick the right tenant pool fast — no scanning).
+app.get('/api/lookup_lead_native', async (req, res) => {
+  const tenantDb = require('./db/pg');
+  const jwt = require('jsonwebtoken');
+  const _JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
+  try {
+    const raw = (req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    if (!raw) return res.status(401).json({ error: 'No auth token' });
+    let decoded; try { decoded = jwt.verify(raw, _JWT_SECRET); } catch (_) { return res.status(401).json({ error: 'Bad token' }); }
+    const uid = Number(decoded && decoded.id);
+    if (!uid) return res.status(401).json({ error: 'Token has no user id' });
+    let t = null;
+    const slugFromJwt = decoded && (decoded.t || decoded.slug);
+    if (slugFromJwt) {
+      try { t = await tenantPoolMod.findActiveTenant(String(slugFromJwt).toLowerCase()); } catch (_) {}
+    }
+    if (!t) return res.status(404).json({ error: 'No tenant' });
+    const pool = tenantPoolMod.poolFor(t);
+    if (!pool) return res.status(500).json({ error: 'tenant pool unavailable' });
+    const phone = String(req.query.phone || '').slice(0, 32);
+    if (!phone) return res.json({ lead: null });
+    return tenantDb.tenantStorage.run({ pool, tenant: t, slug: t.slug }, async () => {
+      const recRoutes = require('./routes/recordings');
+      let lookup = null;
+      try { lookup = await recRoutes.api_call_lookup(raw, phone); } catch (_) {}
+      if (!lookup || !lookup.match) return res.json({ lead: null });
+      // Shape it down to just the fields the Activity card needs.
+      res.json({
+        lead: {
+          id: lookup.id || 0,
+          name: lookup.name || '',
+          status: lookup.status || '',
+          last_remark: lookup.last_remark || lookup.last_note || ''
+        }
+      });
+    });
+  } catch (e) {
+    console.error('[/api/lookup_lead_native] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // REC_DIAG_PING_v1 — receives status pings from RecordingsBackgroundSyncWorker
 // on the APK. Lets us see in Railway logs exactly what the worker is doing
 // without device-side adb logcat. Auth-optional: the whole point is to

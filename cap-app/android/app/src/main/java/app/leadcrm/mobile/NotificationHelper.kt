@@ -3,6 +3,7 @@ package app.leadcrm.mobile
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
+import android.util.Log
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -80,4 +81,34 @@ object NotificationHelper {
         try { NotificationManagerCompat.from(ctx).notify(CallerIdPlugin.NOTIFICATION_ID, n) }
         catch (_: SecurityException) { }
     }
+
+    /** INCOMING_CARD_v1: full-screen-intent notification that launches IncomingCallActivity.
+     *  Falls back to the same heads-up as showMinimal if the user denied USE_FULL_SCREEN_INTENT. */
+    @Suppress("MissingPermission")
+    fun showFullScreenForIncoming(ctx: Context, phone: String) {
+        if (!IncomingCallActivity.isEnabled(ctx)) {
+            Log.d("LeadCRM/Notif", "incoming card disabled - skipping FSI")
+            return
+        }
+        val cardIntent = IncomingCallActivity.newIntent(ctx, phone)
+        val fsi = PendingIntent.getActivity(
+            ctx, 1001,
+            cardIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val n = NotificationCompat.Builder(ctx, CallerIdPlugin.CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.sym_call_incoming)
+            .setContentTitle("Incoming call")
+            .setContentText(phone)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setOngoing(false)
+            .setAutoCancel(true)
+            .setFullScreenIntent(fsi, true)
+            .setContentIntent(fsi)
+            .build()
+        try { NotificationManagerCompat.from(ctx).notify(CallerIdPlugin.NOTIFICATION_ID + 1, n) }
+        catch (_: SecurityException) { /* user revoked POST_NOTIFICATIONS */ }
+    }
+
 }

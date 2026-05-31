@@ -8461,6 +8461,33 @@ function renderDialerSettings() {
     return wrap;
   }
 
+  // INCOMING_CARD_v1 — Runo-style incoming-call popup toggle (APK only).
+  // Default ON. Bridge talks to LeadCRMNative.setIncomingCardEnabled/getIncomingCardEnabled.
+  if (typeof window !== 'undefined' && window.LeadCRMNative && typeof LeadCRMNative.setIncomingCardEnabled === 'function') {
+    let _incOn = true;
+    try { _incOn = LeadCRMNative.getIncomingCardEnabled() !== '0'; } catch(_) {}
+    wrap.appendChild(h('div', { class: 'settings-card', style: { borderLeft: '4px solid ' + (_incOn ? '#4f46e5' : '#94a3b8') } },
+      h('h4', {}, '📞 Incoming call popup card'),
+      h('p', { class: 'muted', style: { marginBottom: '.6rem' } },
+        _incOn
+          ? 'ON — when a call comes in, a Runo-style card appears over the dialer with the customer name + last remark (or an Add-to-CRM button if the number is new). Tap ✕ to close.'
+          : 'OFF — incoming calls only get a notification, no card popup. Turn ON to see the card with customer info.'),
+      h('label', { class: 'toggle-row', style: { display: 'flex', alignItems: 'center', gap: '.6rem' } },
+        h('input', {
+          type: 'checkbox',
+          checked: _incOn ? 'checked' : null,
+          onchange: ev => {
+            const on = !!ev.target.checked;
+            try { LeadCRMNative.setIncomingCardEnabled(on); } catch(_) {}
+            toast(on ? 'Incoming-call card ON.' : 'Incoming-call card OFF.', 'ok');
+            try { if (typeof navigateTo === 'function') navigateTo('recordings'); else location.reload(); } catch(_) { location.reload(); }
+          }
+        }),
+        h('span', { style: { fontWeight: 600 } }, _incOn ? 'Card is ON' : 'Card is OFF')
+      )
+    ));
+  }
+
   // REC_AUTOSYNC_OFF_BY_DEFAULT_v1 — auto-sync toggle card.
   // Default OFF for everyone. User flips ON per-device if they want background polling.
   // Manual Sync buttons below ALWAYS work regardless of this toggle.

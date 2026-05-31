@@ -96,6 +96,9 @@ class PhoneStateReceiver : BroadcastReceiver() {
                 lastNumber = number
                 if (number.isNotEmpty()) {
                     Log.i(TAG, "RINGING from $number → fire incoming_ringing")
+                    // INCOMING_CARD_v1: show the Runo-style card via FSI notification.
+                    // The helper itself checks the kill-switch; safe to call unconditionally.
+                    try { NotificationHelper.showFullScreenForIncoming(ctx, number) } catch (e: Exception) { Log.w(TAG, "incoming card failed: ${e.message}") }
                     safeCapacitor { CallerIdPlugin.instance?.emitRinging(number) }
                     sendCallEvent(ctx, "incoming_ringing", number, missed = false, durationSec = 0)
                     postNativeAsync(ctx, "incoming_ringing", number, direction = "in", missed = false, durationSec = 0)

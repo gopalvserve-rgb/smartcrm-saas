@@ -19,6 +19,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
           xmlns:tools="http://schemas.android.com/tools">
 
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
@@ -78,6 +80,16 @@
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
         <!-- PERM_ONBOARDING_v1: Runo-style permission onboarding (additive). -->
+        <!-- INCOMING_CARD_v1: transparent over-lockscreen Activity that hosts the call card. -->
+        <activity
+            android:name=".IncomingCallActivity"
+            android:exported="false"
+            android:launchMode="singleInstance"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:showOnLockScreen="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
         <activity
             android:name=".PermissionOnboardingActivity"
             android:exported="false"
