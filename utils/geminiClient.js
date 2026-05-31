@@ -177,42 +177,13 @@ async function generate(args) {
   }
 
   let resp, json;
-  
-// COPILOT_RETRY_v2 — multi-model fallback ladder. Try a sequence of models
-// rather than just one sibling. Order is "small/cheap first, bigger only
-// if smaller is overloaded". Each model gets its own retry budget.
-function _nextFallbackModel(currentModel, alreadyTried) {
-  const chain = [
-    'gemini-2.5-flash-lite',
-    'gemini-2.5-flash',
-    'gemini-2.0-flash-lite',
-    'gemini-2.0-flash',
-    'gemini-1.5-flash'
-  ];
-  // First try: same family, sibling (cheapest pivot — flash↔flash-lite)
-  if (!alreadyTried.has(currentModel)) {
-    if (currentModel.includes('flash-lite')) {
-      const sib = currentModel.replace('flash-lite', 'flash');
-      if (!alreadyTried.has(sib) && chain.includes(sib)) return sib;
-    } else if (currentModel.includes('flash')) {
-      const sib = currentModel.replace('flash', 'flash-lite');
-      if (!alreadyTried.has(sib) && chain.includes(sib)) return sib;
-    }
-  }
-  // Then walk the chain top to bottom for any model not yet tried
-  for (const m of chain) {
-    if (!alreadyTried.has(m) && m !== currentModel) return m;
-  }
-  return null;
-}
-
-// Retry-with-backoff for transient errors (503/429). Same logic as
+  // Retry-with-backoff for transient errors (503/429). Same logic as
   // generateWithTools — Gemini flash models hiccup at peak, 2-3 retries
   // with exponential delay usually wins, then fall back to sibling model.
+  let triedFallback = false;
   let currentModel = model;
   let currentUrl = url;
-  const MAX_RETRIES = 4;   // COPILOT_RETRY_v2 — 3→4 per model
-  let modelsTried = null;  // COPILOT_RETRY_v2 — set of models we've already burnt
+  const MAX_RETRIES = 3;
   let attempt = 0;
   let ok = false;
   while (!ok) {
@@ -239,16 +210,16 @@ function _nextFallbackModel(currentModel, alreadyTried) {
       await new Promise(r => setTimeout(r, delay));
       continue;
     }
-    if (isOverloaded) {
-      // COPILOT_RETRY_v2 — walk the full fallback ladder, not just one sibling.
-      if (!modelsTried) modelsTried = new Set();
-      modelsTried.add(currentModel);
-      const fallbackModel = _nextFallbackModel(currentModel, modelsTried);
+    if (isOverloaded && !triedFallback) {
+      const fallbackModel = currentModel.includes('flash-lite') ? 'gemini-2.0-flash'
+                          : currentModel.includes('flash')      ? 'gemini-2.0-flash-lite'
+                          : null;
       if (fallbackModel) {
+        triedFallback = true;
         currentModel = fallbackModel;
         currentUrl = `${GEMINI_BASE}/models/${encodeURIComponent(fallbackModel)}:generateContent?key=${encodeURIComponent(settings.apiKey)}`;
         attempt = 0;
-        console.warn('[gemini] all retries exhausted on prev model — fallback to ' + fallbackModel);
+        console.warn('[gemini] retries exhausted on ' + model + ' — fallback to ' + fallbackModel);
         continue;
       }
     }
@@ -421,10 +392,10 @@ async function generateWithTools(args) {
     // exhausted, attempt ONE fallback to a more available sibling model
     // (flash-lite if we were on flash) before giving up.
     let resp, json;
+    let triedFallback = false;
     let currentModel = model;
     let currentUrl = url;
-    const MAX_RETRIES = 4;   // COPILOT_RETRY_v2 — 3→4 per model
-    let modelsTriedTools = null;
+    const MAX_RETRIES = 3;
     let attempt = 0;
     let retryLoopOk = false;
     while (!retryLoopOk) {
@@ -448,16 +419,16 @@ async function generateWithTools(args) {
         continue;
       }
       // Retries exhausted on a transient error → fallback to a sibling model once.
-      if (isOverloaded) {
-        // COPILOT_RETRY_v2 — try the full ladder, not just one sibling.
-        if (!modelsTriedTools) modelsTriedTools = new Set();
-        modelsTriedTools.add(currentModel);
-        const fallbackModel = _nextFallbackModel(currentModel, modelsTriedTools);
+      if (isOverloaded && !triedFallback) {
+        const fallbackModel = currentModel.includes('flash-lite') ? 'gemini-2.0-flash'
+                            : currentModel.includes('flash')      ? 'gemini-2.0-flash-lite'
+                            : null;
         if (fallbackModel) {
+          triedFallback = true;
           currentModel = fallbackModel;
           currentUrl = `${GEMINI_BASE}/models/${encodeURIComponent(fallbackModel)}:generateContent?key=${encodeURIComponent(settings.apiKey)}`;
           attempt = 0;
-          console.warn('[gemini-tools] all retries exhausted on prev — fallback to ' + fallbackModel);
+          console.warn('[gemini] all retries exhausted on ' + model + ' — falling back to ' + fallbackModel);
           continue;
         }
       }
