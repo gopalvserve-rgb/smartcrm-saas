@@ -91,8 +91,13 @@ object NotificationHelper {
             return
         }
         val cardIntent = IncomingCallActivity.newIntent(ctx, phone)
+        // CALL_CARD_STALE_PHONE_FIX_v1: derive a unique request code per phone so each
+        // call gets its own PendingIntent. With FLAG_IMMUTABLE, Android caches the
+        // PendingIntent by Intent.filterEquals() (which ignores extras) and the old
+        // phone wins on the second call. Unique requestCode bypasses the cache.
+        val reqCode = ("inc:" + phone).hashCode()
         val fsi = PendingIntent.getActivity(
-            ctx, 1001,
+            ctx, reqCode,
             cardIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -122,8 +127,10 @@ object NotificationHelper {
             return
         }
         val cardIntent = OutgoingCallActivity.newIntent(ctx, phone)
+        // CALL_CARD_STALE_PHONE_FIX_v1: see incoming version above.
+        val reqCode = ("out:" + phone).hashCode()
         val fsi = PendingIntent.getActivity(
-            ctx, 1002,
+            ctx, reqCode,
             cardIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )

@@ -111,6 +111,25 @@ class IncomingCallActivity : Activity() {
         fetchLeadAsync(phone)
     }
 
+
+    /** CALL_CARD_STALE_PHONE_FIX_v1: this Activity is singleInstance, so a second
+     *  call while the previous card is still on screen (within the 45s auto-dismiss
+     *  window) routes to onNewIntent rather than onCreate. Without this override the
+     *  card stays stuck on the previous caller. Re-read the phone, reset the body,
+     *  and re-fetch the lead. */
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        val newPhone = intent?.getStringExtra(EXTRA_PHONE).orEmpty()
+        if (newPhone.isEmpty() || newPhone == phone) return
+        phone = newPhone
+        setIntent(intent)
+        // Reset the auto-dismiss timer for the new call.
+        mainHandler.removeCallbacks(autoDismiss)
+        mainHandler.postDelayed(autoDismiss, AUTO_DISMISS_MS)
+        bodyContainer?.let { renderUnknown(it, looking = true) }
+        fetchLeadAsync(phone)
+    }
+
     override fun onDestroy() {
         mainHandler.removeCallbacks(autoDismiss)
         super.onDestroy()
