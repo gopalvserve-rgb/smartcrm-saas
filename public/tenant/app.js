@@ -10704,6 +10704,8 @@ function kbCard(r, refresh, isAdmin) {
     h('div', { class: 'kb-actions' },
       h('button', { class: 'btn sm', onclick: () => openKbViewModal(r.id) }, '👁 Open'),
       r.url ? h('a', { class: 'btn sm ghost', href: r.url, target: '_blank', rel: 'noopener' }, '🔗 Link') : null,
+      // KB_FILE_UPLOAD_v1: show 📎 chip when the entry has an attached file.
+      r.has_file ? h('a', { class: 'btn sm ghost', title: r.file_name + (r.file_size_bytes ? ' · ' + _kbFmtSize(r.file_size_bytes) : ''), href: _kbFileUrl(r.id, true), target: '_blank', rel: 'noopener' }, '📎 Download') : null,
       r.body ? h('button', { class: 'btn sm ghost', onclick: () => {
         navigator.clipboard?.writeText(r.body).then(() => toast('Copied'));
       }, title: 'Copy body to clipboard' }, '📋 Copy') : null,
@@ -10716,6 +10718,34 @@ function kbCard(r, refresh, isAdmin) {
     )
   );
   return card;
+}
+
+
+// KB_FILE_UPLOAD_v1 helpers (used by card/view/edit) ----------------
+function _kbFmtSize(bytes) {
+  bytes = Number(bytes || 0);
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+function _kbFileEmoji(mime) {
+  const m = String(mime || '').toLowerCase();
+  if (m.includes('pdf')) return '📄';
+  if (m.includes('powerpoint') || m.includes('presentation')) return '📊';
+  if (m.includes('word') || m.includes('document')) return '📝';
+  if (m.includes('sheet') || m.includes('excel')) return '📈';
+  if (m.includes('image')) return '🖼️';
+  if (m.includes('zip') || m.includes('compressed')) return '🗜️';
+  return '📎';
+}
+function _kbFileUrl(id, asDownload) {
+  // Tenant-aware URL. The fetch shim rewrites /api/... but <a href> is a
+  // direct navigation, so we build the absolute tenant path ourselves.
+  // Token in query string so the link opens in a new tab without custom JS.
+  const tok = encodeURIComponent(CRM.token || '');
+  const dl = asDownload ? '&dl=1' : '';
+  const base = window.TENANT_SLUG ? ('/t/' + window.TENANT_SLUG) : '';
+  return base + '/api/kb-file/' + id + '?token=' + tok + dl;
 }
 
 async function openKbViewModal(id) {
@@ -10737,6 +10767,18 @@ async function openKbViewModal(id) {
           h('span', { class: 'muted', style: { fontSize: '.78rem' } }, fmtDate(entry.updated_at))
         ),
         entry.url ? h('p', {}, h('a', { class: 'btn primary', href: entry.url, target: '_blank', rel: 'noopener' }, '🔗 Open external link')) : null,
+        // KB_FILE_UPLOAD_v1: attached-file panel with view + download.
+        entry.has_file ? h('div', { class: 'kb-file-panel', style: { background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '12px 14px', margin: '0 0 12px' } },
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' } },
+            h('span', { style: { fontSize: '28px' } }, _kbFileEmoji(entry.file_mime)),
+            h('div', { style: { flex: '1', minWidth: '160px' } },
+              h('div', { style: { fontWeight: '600', color: '#0f172a' } }, entry.file_name || 'Attached file'),
+              h('div', { class: 'muted', style: { fontSize: '.78rem' } }, (entry.file_mime || '') + (entry.file_size_bytes ? ' · ' + _kbFmtSize(entry.file_size_bytes) : ''))
+            ),
+            h('a', { class: 'btn ghost', href: _kbFileUrl(entry.id, false), target: '_blank', rel: 'noopener' }, '👁 View'),
+            h('a', { class: 'btn primary', href: _kbFileUrl(entry.id, true), target: '_blank', rel: 'noopener', download: entry.file_name || '' }, '⬇️ Download')
+          )
+        ) : null,
         entry.body ? h('div', { class: 'kb-body-full' }, entry.body) : h('p', { class: 'muted' }, '(No body content — use the link above.)'),
         entry.tags ? h('div', { class: 'kb-tags' },
           ...String(entry.tags).split(',').map(t => t.trim()).filter(Boolean)
@@ -10778,6 +10820,29 @@ async function openKbEditModal(id, onSave) {
     selectField('category', 'Category *', entry.category, catOptions),
     selectField('product_id', 'Related product (optional)', entry.product_id || '', productOptions),
     field('url', 'External URL (Drive / Box / YouTube — optional)', entry.url, { full: true }),
+    // KB_FILE_UPLOAD_v1: native file attach. Up to 25 MB. Uploaded after save.
+    (function _kbFileRow() {
+      const row = h('div', { class: 'f-row full' },
+        h('label', {}, 'Attach a file (brochure / PDF / PPT — max 25 MB)'),
+        h('input', { id: 'kb-file-input', class: 'input', type: 'file', accept: '.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.png,.jpg,.jpeg,.gif,.txt' })
+      );
+      if (entry.has_file) {
+        row.appendChild(h('div', { class: 'muted', style: { fontSize: '.82rem', marginTop: '.35rem' } },
+          'Currently attached: ', h('b', {}, entry.file_name || 'file'),
+          entry.file_size_bytes ? ' · ' + _kbFmtSize(entry.file_size_bytes) : '',
+          ' ',
+          h('a', { href: _kbFileUrl(entry.id, true), target: '_blank', rel: 'noopener' }, '⬇️ Download'),
+          ' · ',
+          h('a', { href: '#', onclick: async (ev) => {
+            ev.preventDefault();
+            if (!confirm('Remove the current file from this entry?')) return;
+            try { await api('api_kb_removeFile', entry.id); toast('File removed'); entry.has_file = false; ev.target.parentNode.innerHTML = '(file removed — pick a new one below to replace)'; }
+            catch (e) { toast(e.message, 'err'); }
+          } }, '🗑 Remove')
+        ));
+      }
+      return row;
+    })(),
     field('tags', 'Tags (comma-separated)', entry.tags, { full: true }),
     field('body', 'Body / Content', entry.body, { type: 'textarea', full: true }),
     h('div', { class: 'f-row' },
@@ -10811,7 +10876,23 @@ async function openKbEditModal(id, onSave) {
     };
     if (!payload.title) { toast('Title is required', 'err'); return; }
     try {
-      await api('api_kb_save', payload);
+      const saved = await api('api_kb_save', payload);
+      const entryId = (saved && saved.id) || id;
+      // KB_FILE_UPLOAD_v1: if a new file was picked, upload it now.
+      const fi = document.getElementById('kb-file-input');
+      const file = fi && fi.files && fi.files[0];
+      if (file && entryId) {
+        if (file.size > 25 * 1024 * 1024) { toast('File too large (max 25 MB)', 'err'); return; }
+        toast('Uploading ' + file.name + '…', 'info');
+        const fd = new FormData(); fd.append('file', file);
+        const tok = CRM.token;
+        const r = await fetch('/api/kb-file/' + entryId, {
+          method: 'POST',
+          headers: { 'x-auth-token': tok },
+          body: fd
+        });
+        if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || 'Upload failed (HTTP ' + r.status + ')'); }
+      }
       toast(id ? 'Saved' : 'Created');
       m.remove();
       if (typeof onSave === 'function') onSave();

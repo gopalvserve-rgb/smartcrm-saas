@@ -1110,6 +1110,40 @@ app.get('/config.json', async (req, res) => {
     });
 });
 
+// ============================================================
+// KB_FILE_UPLOAD_v1 (2026-05-31): tenant-aware multipart upload +
+// streaming download for Knowledge Base file attachments. Admin
+// uploads a brochure / PDF / PPT on an entry; any logged-in tenant
+// user can view or download it. Both endpoints are mounted at
+// /api/kb-file/:id — after attachTenant strips /t/<slug>/ they
+// resolve req.tenant + req.tenantPool, so db.* inside the handler
+// targets the right tenant DB.
+// ============================================================
+const _kbUpload = require('multer')({
+  storage: require('multer').memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 }
+});
+
+app.post('/api/kb-file/:id', _kbUpload.single('file'), async (req, res) => {
+  if (!req.tenant || !req.tenantPool) return res.status(404).json({ error: 'No tenant in URL — POST to /t/<slug>/api/kb-file/:id' });
+  const tenantDb = require('./db/pg');
+  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug },
+    async () => {
+      const knowledgeBase = require('./routes/knowledgeBase');
+      return knowledgeBase.expressKbFileUpload(req, res);
+    });
+});
+
+app.get('/api/kb-file/:id', async (req, res) => {
+  if (!req.tenant || !req.tenantPool) return res.status(404).json({ error: 'No tenant in URL' });
+  const tenantDb = require('./db/pg');
+  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug },
+    async () => {
+      const knowledgeBase = require('./routes/knowledgeBase');
+      return knowledgeBase.expressKbFileDownload(req, res);
+    });
+});
+
 // ---- Mobile-app call-recording upload (tenant-scoped multipart) ----
 // Was missing from the SaaS server entirely — mobile app POSTs to
 // /t/<slug>/api/recordings would silently 404 and the 'Sync now' button
