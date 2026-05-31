@@ -3858,6 +3858,7 @@ VIEWS.leads = async (view) => {
     h('button', { class: 'btn sm', onclick: bulkAssignPrompt }, '👤 Assign'),
     h('button', { class: 'btn sm', onclick: bulkSharePrompt, title: 'Share selected leads with another user (both can fully work them)' }, '🤝 Share'),
     h('button', { class: 'btn sm', onclick: bulkStatusPrompt }, '🏷️ Status'),
+    h('button', { class: 'btn sm', onclick: bulkAuditCallsPrompt, title: 'AI-audit every call recording on the selected leads' }, '🎙️ AI Audit Calls'),
     h('button', { class: 'btn sm', onclick: bulkAddTagPrompt }, '🏁 Add tag'),
     h('button', { class: 'btn sm', onclick: bulkCustomFieldPrompt, title: 'Set a custom-field value on every selected lead' }, '🧩 Field'),
     h('button', { class: 'btn sm', onclick: bulkWhatsAppPrompt }, '💬 WhatsApp'),
@@ -5108,6 +5109,50 @@ async function bulkAssignPrompt() {
         try { await api('api_leads_bulkUpdate', ids, { assigned_to: Number($('#bulk-asgn').value) }); toast('Assigned'); modal.remove(); clearSelection(); loadLeads(); }
         catch (e) { toast(e.message, 'err'); }
       } }, 'Assign')
+    )
+  ));
+  document.body.appendChild(modal);
+}
+
+// LEAD_BULK_AUDIT_v1 (2026-05-31): bulk-audit every recording belonging
+// to the selected leads. Calls api_recording_bulkAudit with lead_ids.
+// Audit results show up on the lead modal's Call Insights section and on
+// the main Call Insights / Call Activity reports.
+async function bulkAuditCallsPrompt() {
+  if (!['admin','manager'].includes((CRM.user || {}).role)) {
+    toast('Only admins/managers can run AI audits', 'err'); return;
+  }
+  const ids = selectedIds(); if (!ids.length) return;
+  const modal = h('div', { class: 'modal-backdrop' }, h('div', { class: 'modal' },
+    h('h3', {}, '🎙️ AI-Audit calls for ' + ids.length + ' lead' + (ids.length === 1 ? '' : 's')),
+    h('p', { class: 'muted', style: { marginTop: '0' } },
+      'Queues every recording belonging to the selected leads for AI analysis (transcript + summary + sentiment + next-step suggestion). Processing happens in the background — summaries appear on each lead once ready.'),
+    h('label', {}, 'Which recordings'),
+    h('select', { id: 'lba-scope' },
+      h('option', { value: 'unprocessed', selected: 'selected' }, 'Only unaudited recordings'),
+      h('option', { value: 'failed' }, 'Previously failed only'),
+      h('option', { value: 'all' }, 'Force re-audit ALL of theirs')
+    ),
+    h('label', { style: { marginTop: '.5rem' } }, 'Max recordings to process'),
+    h('input', { id: 'lba-limit', class: 'input', type: 'number', min: 1, max: 2000, value: 500, style: { width: '110px' } }),
+    h('div', { class: 'actions' },
+      h('button', { class: 'btn', onclick: () => modal.remove() }, 'Cancel'),
+      h('button', { class: 'btn primary', onclick: async () => {
+        const scope = $('#lba-scope').value;
+        const limit = Number($('#lba-limit').value) || 500;
+        if (scope === 'all' && !confirm('Re-audit ALL existing recordings for these leads? This wipes prior summaries and re-runs Gemini. Can be expensive.')) return;
+        const btn = modal.querySelector('.btn.primary');
+        btn.disabled = true; btn.textContent = '⏳ Queueing…';
+        try {
+          const r = await api('api_recording_bulkAudit', { lead_ids: ids, scope, limit });
+          toast('✅ Queued ' + (r.queued || 0) + ' recordings for AI audit — summaries appear on each lead once processed', 'ok');
+          modal.remove();
+          clearSelection();
+        } catch (e) {
+          toast('⚠ ' + (e.message || 'audit failed'), 'err');
+          btn.disabled = false; btn.textContent = 'Queue audit';
+        }
+      } }, 'Queue audit')
     )
   ));
   document.body.appendChild(modal);

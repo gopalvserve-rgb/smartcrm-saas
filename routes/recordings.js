@@ -1051,6 +1051,15 @@ async function api_recording_bulkAudit(token, payload) {
     params.push(Number(p.user_id));
     where.push('user_id = $' + params.length);
   }
+  // LEAD_BULK_AUDIT_v1 (2026-05-31): accept a list of lead_ids so the
+  // Leads-page bulk action can target only the selected leads' recordings.
+  if (Array.isArray(p.lead_ids) && p.lead_ids.length) {
+    const cleaned = p.lead_ids.map(x => Number(x)).filter(x => x > 0);
+    if (cleaned.length) {
+      params.push(cleaned);
+      where.push('lead_id = ANY($' + params.length + '::int[])');
+    }
+  }
   if (p.from_date) {
     params.push(p.from_date);
     where.push('created_at >= $' + params.length);
