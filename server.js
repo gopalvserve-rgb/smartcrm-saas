@@ -2680,8 +2680,9 @@ app.get('/LeadCRM.apk', (req, res) => {
 // in-app update banner can compare the installed APK build to the latest
 // one CI just published. The file is written by build-android.yml.
 app.get('/LeadCRM.apk.version.json', (req, res) => {
+  const _fs = require('fs');
   const filePath = path.join(__dirname, 'public', 'LeadCRM.apk.version.json');
-  if (!fs.existsSync(filePath)) {
+  if (!_fs.existsSync(filePath)) {
     return res.status(404).type('json').send({ error: 'version metadata not yet built' });
   }
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
