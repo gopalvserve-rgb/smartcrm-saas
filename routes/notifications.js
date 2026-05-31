@@ -87,9 +87,10 @@ async function api_notifications_mine(token, opts) {
 
   // Collect items (from followups OR from leads.next_followup_at as fallback)
   const items = [];
+  // FU_REMINDER_v2 — admin must NOT see other users' follow-up reminders.
+  // Only the assignee gets reminded (or self-created followup.user_id).
   const isMine = (lead) => {
-    if (me.role === 'admin') return true;
-    return lead && visible.includes(Number(lead.assigned_to));
+    return lead && Number(lead.assigned_to) === Number(me.id);
   };
 
   // From followups table — assigned to me OR for leads I can see

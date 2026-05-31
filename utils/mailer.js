@@ -331,6 +331,50 @@ async function testSmtpAdhoc(to, overrides) {
 }
 
 // ---------- daily morning follow-ups (9 AM) ----------
+
+// FU_REMINDER_v2 — per-user digest pushes at 10:00 IST (yesterday's pending),
+// 13:00 IST (today's pending), 16:00 IST (today's pending).
+// These send PUSH notifications only (not email) and are scoped to each user.
+async function _sendFollowupDigestForScope(scope) {
+  const allUsers = await db.getAll('users');
+  const allFollowups = (await db.getAll('followups')).filter(f => Number(f.is_done) === 0);
+  const todayYmd = new Date().toISOString().slice(0, 10);
+  const yesterdayYmd = (() => { const d = new Date(); d.setDate(d.getDate() - 1); return d.toISOString().slice(0, 10); })();
+  const nowMs = Date.now();
+  let push;
+  try { push = require('../routes/push'); } catch (_) { return { ok: false, skipped: 'push module missing' }; }
+
+  let totalSent = 0;
+  for (const u of allUsers) {
+    if (Number(u.is_active) !== 1) continue;
+    const mine = allFollowups.filter(f => {
+      if (Number(f.user_id) !== Number(u.id)) return false;
+      const due = String(f.due_at || '');
+      if (!due) return false;
+      if (scope === 'yesterday_pending') {
+        return due.slice(0, 10) <= yesterdayYmd && new Date(due).getTime() < nowMs;
+      }
+      if (scope === 'today_pending') {
+        return due.slice(0, 10) === todayYmd && new Date(due).getTime() < nowMs;
+      }
+      return false;
+    });
+    if (mine.length === 0) continue;
+    const title = scope === 'yesterday_pending'
+      ? '📋 Yesterday\'s follow-ups still pending'
+      : '📋 Follow-ups due today, still open';
+    const body = `You have ${mine.length} follow-up${mine.length === 1 ? '' : 's'} pending. Tap to review.`;
+    try {
+      await push.sendPushToUser(u.id, { title, body, url: '/#/followups', tag: 'fu-digest-' + scope + '-' + todayYmd, sticky: false });
+      totalSent++;
+    } catch (e) { console.warn('[fu-digest] push to user', u.id, 'failed:', e.message); }
+  }
+  return { ok: true, sent: totalSent, scope };
+}
+
+async function sendFollowupDigestYesterday() { return _sendFollowupDigestForScope('yesterday_pending'); }
+async function sendFollowupDigestToday()     { return _sendFollowupDigestForScope('today_pending'); }
+
 async function sendMorningFollowups() {
   if (!await _eventEnabled('morning_followups')) return { ok: false, skipped: 'disabled' };
   const today = new Date().toISOString().slice(0, 10);
@@ -543,11 +587,23 @@ function startDailyCron() {
       const adjustedHour = istMin >= 60 ? (istHour + 1) % 24 : istHour;
       const adjustedMin = istMin % 60;
       const stamp = now.toISOString().slice(0, 10);
-      // 9:00 IST → morning followups
-      if (adjustedHour === 9 && adjustedMin === 0 && lastFired !== stamp + ':9') {
-        lastFired = stamp + ':9';
-        const r = await sendMorningFollowups();
-        console.log('[mailer-cron] morning_followups:', JSON.stringify(r));
+      // FU_REMINDER_v2 — 10:00 IST yesterday's pending digest (replaces old 9 AM morning_followups)
+      if (adjustedHour === 10 && adjustedMin === 0 && lastFired !== stamp + ':10') {
+        lastFired = stamp + ':10';
+        const r = await sendFollowupDigestYesterday();
+        console.log('[mailer-cron] fu_digest_yesterday:', JSON.stringify(r));
+      }
+      // FU_REMINDER_v2 — 13:00 IST today's pending digest
+      if (adjustedHour === 13 && adjustedMin === 0 && lastFired !== stamp + ':13') {
+        lastFired = stamp + ':13';
+        const r = await sendFollowupDigestToday();
+        console.log('[mailer-cron] fu_digest_today_midday:', JSON.stringify(r));
+      }
+      // FU_REMINDER_v2 — 16:00 IST today's pending digest
+      if (adjustedHour === 16 && adjustedMin === 0 && lastFired !== stamp + ':16') {
+        lastFired = stamp + ':16';
+        const r = await sendFollowupDigestToday();
+        console.log('[mailer-cron] fu_digest_today_afternoon:', JSON.stringify(r));
       }
       // 19:00 IST → aggregate day-end report (admins/managers)
       if (adjustedHour === 19 && adjustedMin === 0 && lastFired !== stamp + ':19') {
@@ -597,7 +653,7 @@ module.exports = {
    * dispatch HTML emails to arbitrary recipients without needing a templated
    * event row. Keeps existing event-driven flow intact. */
   sendRaw: _sendRaw,
-  sendMorningFollowups, sendDayEndReport, sendDayEndPerRep,
+  sendMorningFollowups, sendDayEndReport, sendDayEndPerRep, sendFollowupDigestYesterday, sendFollowupDigestToday,
   startDailyCron,
   recordLogin
 };

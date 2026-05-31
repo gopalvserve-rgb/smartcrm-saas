@@ -11,7 +11,9 @@
 const db = require('../db/pg');
 let transporter = null;
 let lastRun = 0;
-const REMIND_DEDUPE_MS = 25 * 60 * 1000; // don't re-notify same follow-up inside 25 min
+// FU_REMINDER_v2 — replaced 25-min dedupe with "max N pushes per follow-up per day"
+const FU_MAX_HITS_PER_DAY = Number(process.env.FU_MAX_HITS_PER_DAY || 2);
+const FU_PREDUE_SECS = Number(process.env.FU_PREDUE_SECS || 60);
 
 function _getTransporter() {
   if (transporter) return transporter;
@@ -52,8 +54,9 @@ async function _sendMail(to, subject, html) {
 
 async function _runOnce() {
   const now = Date.now();
-  const remindMin = Number(process.env.FOLLOWUP_REMIND_MIN || 15);
-  const horizon = new Date(now + remindMin * 60_000).toISOString();
+  // FU_REMINDER_v2 — fire ONCE just-before-due. Default 60s pre-due window.
+  // Old default was 15 min which caused early/repeated pings.
+  const horizon = new Date(now + FU_PREDUE_SECS * 1000).toISOString();
 
   const [followups, leads, users, notifications] = await Promise.all([
     db.getAll('followups'), db.getAll('leads'),
@@ -65,17 +68,15 @@ async function _runOnce() {
   const userById = {};
   users.forEach(u => { userById[Number(u.id)] = u; });
 
-  // Build a dedupe map: for each followup_id, the newest reminder notification
-  const recentNotifByFollowup = {};
+  // FU_REMINDER_v2 — count today's hits per follow-up (cap = FU_MAX_HITS_PER_DAY).
+  const todayYmd = new Date().toISOString().slice(0, 10);
+  const hitsTodayByFollowup = {};
   notifications.forEach(n => {
     if (n.type === 'followup_due' && n.link) {
       const match = String(n.link).match(/followup=(\d+)/);
-      if (match) {
+      if (match && String(n.created_at || '').slice(0, 10) === todayYmd) {
         const fid = Number(match[1]);
-        const ts = new Date(n.created_at).getTime();
-        if (!recentNotifByFollowup[fid] || ts > recentNotifByFollowup[fid]) {
-          recentNotifByFollowup[fid] = ts;
-        }
+        hitsTodayByFollowup[fid] = (hitsTodayByFollowup[fid] || 0) + 1;
       }
     }
   });
@@ -86,8 +87,9 @@ async function _runOnce() {
     if (!f.due_at) continue;
     if (String(f.due_at) > horizon) continue;
 
-    const last = recentNotifByFollowup[Number(f.id)] || 0;
-    if (now - last < REMIND_DEDUPE_MS) continue;
+    // FU_REMINDER_v2 — cap per-followup hits per day instead of 25-min dedupe.
+    const hitsToday = hitsTodayByFollowup[Number(f.id)] || 0;
+    if (hitsToday >= FU_MAX_HITS_PER_DAY) continue;
 
     const lead = leadById[Number(f.lead_id)];
     const user = userById[Number(f.user_id)];
