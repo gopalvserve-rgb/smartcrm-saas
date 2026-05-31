@@ -2676,6 +2676,19 @@ app.get('/LeadCRM.apk', (req, res) => {
   });
 });
 
+// APK_AUTO_UPDATE_v1 (2026-05-31): serve the version sidecar JSON so the
+// in-app update banner can compare the installed APK build to the latest
+// one CI just published. The file is written by build-android.yml.
+app.get('/LeadCRM.apk.version.json', (req, res) => {
+  const filePath = path.join(__dirname, 'public', 'LeadCRM.apk.version.json');
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).type('json').send({ error: 'version metadata not yet built' });
+  }
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Content-Type', 'application/json');
+  res.sendFile(filePath);
+});
+
 // ---- Tenant SPA shell ---------------------------------------------
 // Serve the per-tenant CRM SPA. After attachTenant rewrites
 // /t/<slug>/ to /, GET / lands here when there's a tenant on the
