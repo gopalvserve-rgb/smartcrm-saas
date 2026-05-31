@@ -64,6 +64,11 @@ class PhoneStateReceiver : BroadcastReceiver() {
         private const val KEY_TOKEN    = "auth_token"
         private var lastState: String = TelephonyManager.EXTRA_STATE_IDLE
         private var lastNumber: String = ""
+        // CALL_CARD_STALE_v2: timestamp tracks when lastNumber was set.
+        // Used to age out stale numbers between calls so the previous
+        // caller can't leak into the next call's overlay.
+        private var lastNumberSetAt: Long = 0L
+        private const val LASTNUM_TTL_MS = 30_000L
         private var ringStartMs: Long = 0
         private var offhookStartMs: Long = 0
     }
@@ -73,7 +78,10 @@ class PhoneStateReceiver : BroadcastReceiver() {
 
         if (action == "android.intent.action.NEW_OUTGOING_CALL") {
             val n = intent.getStringExtra(Intent.EXTRA_PHONE_NUMBER) ?: ""
-            if (n.isNotEmpty()) lastNumber = n
+            if (n.isNotEmpty()) {
+                lastNumber = n
+                lastNumberSetAt = System.currentTimeMillis()
+            }
             return
         }
 
@@ -82,18 +90,29 @@ class PhoneStateReceiver : BroadcastReceiver() {
         val state = intent.getStringExtra(TelephonyManager.EXTRA_STATE) ?: return
         // EXTRA_INCOMING_NUMBER returns null on Android 10+ — see class doc.
         var number = intent.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER) ?: ""
-        if (number.isEmpty()) number = lastNumber
+        // CALL_CARD_STALE_v2 (2026-05-31): do NOT blindly fall back to
+        // `lastNumber` here — that static companion var holds the previous
+        // call's number on Android 10+, which is exactly what was leaking
+        // into the next call's overlay. Each state branch below now
+        // resolves its own number (RINGING -> CallLog, OFFHOOK outgoing
+        // -> fresh lastNumber within TTL).
         val now = System.currentTimeMillis()
 
         when (state) {
             TelephonyManager.EXTRA_STATE_RINGING -> {
                 ringStartMs = now
-                // Try the call log too (often empty at RINGING but cheap to try)
+                // CALL_CARD_STALE_v2: try CallLog if the broadcast didn't carry
+                // a number. We DO NOT use lastNumber here — it would be the
+                // previous call's number on Android 10+.
                 if (number.isEmpty()) {
                     val fromLog = readLastCallLogNumber(ctx, sinceMs = now - 15_000L)
                     if (fromLog.isNotEmpty()) number = fromLog
                 }
+                // Stamp lastNumber WITH timestamp so the later IDLE branch can
+                // still resolve a missed-call number, but stale values can be
+                // detected and skipped.
                 lastNumber = number
+                lastNumberSetAt = now
                 if (number.isNotEmpty()) {
                     Log.i(TAG, "RINGING from $number → fire incoming_ringing")
                     // INCOMING_CARD_v2: launch the Activity DIRECTLY (Truecaller-style).
@@ -134,7 +153,10 @@ class PhoneStateReceiver : BroadcastReceiver() {
                 // fallback if EXTRA_PHONE_NUMBER wasn't captured by NEW_OUTGOING_CALL,
                 // then launch the OutgoingCallActivity overlay.
                 if (lastState != TelephonyManager.EXTRA_STATE_RINGING) {
-                    var outNumber = lastNumber
+                    // CALL_CARD_STALE_v2: only trust lastNumber if it was set
+                    // by NEW_OUTGOING_CALL within the TTL — otherwise it's
+                    // stale and would show the previous caller.
+                    var outNumber = if (now - lastNumberSetAt <= LASTNUM_TTL_MS) lastNumber else ""
                     if (outNumber.isEmpty()) {
                         val fromLog = readLastCallLogNumber(ctx, sinceMs = now - 15_000L)
                         if (fromLog.isNotEmpty()) outNumber = fromLog
@@ -197,6 +219,10 @@ class PhoneStateReceiver : BroadcastReceiver() {
                 }
                 ringStartMs = 0
                 offhookStartMs = 0
+                // CALL_CARD_STALE_v2: clear the static fallback so the next
+                // call can't accidentally inherit this one's number.
+                lastNumber = ""
+                lastNumberSetAt = 0L
             }
         }
         lastState = state
