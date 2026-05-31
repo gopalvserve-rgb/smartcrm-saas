@@ -1111,6 +1111,98 @@ app.get('/config.json', async (req, res) => {
 });
 
 // ============================================================
+// ============================================================
+// WA_TPL_SAMPLE_UPLOAD_v1 (2026-05-31): host sample media files
+// for WhatsApp template headers. Meta requires a public URL for
+// IMAGE/VIDEO/DOCUMENT header samples — admins would otherwise
+// have to push the file to S3/Drive themselves. The upload is
+// tenant-scoped (so the admin must be logged in) but the SERVE
+// endpoint is public (no auth) because Meta's review crawlers
+// fetch the URL anonymously. A 24-char hex token in the URL keeps
+// the link unguessable.
+// ============================================================
+const _waSampleUpload = require('multer')({
+  storage: require('multer').memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 }
+});
+
+async function _ensureWaSampleTable(pool) {
+  const client = pool ? await pool.connect() : null;
+  try {
+    const q = (sql) => client ? client.query(sql) : require('./db/pg').query(sql);
+    await q('CREATE TABLE IF NOT EXISTS wa_template_samples ('
+      + 'token TEXT PRIMARY KEY,'
+      + 'mime TEXT,'
+      + 'filename TEXT,'
+      + 'bytes BYTEA,'
+      + 'size_bytes BIGINT,'
+      + 'created_by INT,'
+      + 'created_at TIMESTAMP DEFAULT NOW()'
+      + ')');
+  } finally { if (client) client.release(); }
+}
+
+app.post('/api/wa-sample', _waSampleUpload.single('file'), async (req, res) => {
+  if (!req.tenant || !req.tenantPool) return res.status(404).json({ error: 'No tenant in URL' });
+  const tenantDb = require('./db/pg');
+  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug },
+    async () => {
+      try {
+        await _ensureWaSampleTable();
+        const { authUser } = require('./utils/auth');
+        const token = (req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+        const me = await authUser(token);
+        if (me.role !== 'admin') return res.status(403).json({ error: 'Only admin can upload sample files' });
+        if (!req.file) return res.status(400).json({ error: 'file required' });
+        if ((req.file.size || 0) > 25 * 1024 * 1024) return res.status(400).json({ error: 'Max 25 MB' });
+        const crypto = require('crypto');
+        const tk = crypto.randomBytes(12).toString('hex'); // 24-char hex
+        await tenantDb.query(
+          'INSERT INTO wa_template_samples (token, mime, filename, bytes, size_bytes, created_by) VALUES ($1, $2, $3, $4, $5, $6)',
+          [tk, req.file.mimetype || 'application/octet-stream', String(req.file.originalname || 'file').slice(0, 200), req.file.buffer, req.file.size || 0, me.id]
+        );
+        const proto = req.protocol;
+        const host = req.get('host');
+        const slug = req.tenantSlug ? ('/t/' + req.tenantSlug) : '';
+        const publicUrl = proto + '://' + host + slug + '/api/wa-sample/' + tk;
+        res.json({ ok: true, url: publicUrl, token: tk, mime: req.file.mimetype, size_bytes: req.file.size });
+      } catch (e) {
+        console.error('[wa-sample-upload]', e.message);
+        res.status(400).json({ error: e.message });
+      }
+    });
+});
+
+// PUBLIC download — no auth. Random 24-char hex token in the URL
+// keeps it from being guessable. Meta needs to fetch this without
+// any credentials during template review.
+app.get('/api/wa-sample/:token', async (req, res) => {
+  if (!req.tenant || !req.tenantPool) return res.status(404).send('not found');
+  const tenantDb = require('./db/pg');
+  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug },
+    async () => {
+      try {
+        await _ensureWaSampleTable();
+        const tk = String(req.params.token || '').replace(/[^a-f0-9]/gi, '');
+        if (tk.length !== 24) return res.status(400).send('bad token');
+        const r = await tenantDb.query('SELECT mime, filename, bytes FROM wa_template_samples WHERE token = $1 LIMIT 1', [tk]);
+        const row = r.rows[0];
+        if (!row || !row.bytes) return res.status(404).send('not found');
+        let buf = row.bytes;
+        if (!Buffer.isBuffer(buf)) buf = Buffer.from(buf);
+        const safe = String(row.filename || 'file').replace(/[^a-zA-Z0-9._-]/g, '_');
+        res.setHeader('Content-Type', row.mime || 'application/octet-stream');
+        res.setHeader('Content-Length', buf.length);
+        res.setHeader('Content-Disposition', 'inline; filename="' + safe + '"');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.end(buf);
+      } catch (e) {
+        console.error('[wa-sample-dl]', e.message);
+        res.status(500).send('error');
+      }
+    });
+});
+
 // KB_FILE_UPLOAD_v1 (2026-05-31): tenant-aware multipart upload +
 // streaming download for Knowledge Base file attachments. Admin
 // uploads a brochure / PDF / PPT on an entry; any logged-in tenant

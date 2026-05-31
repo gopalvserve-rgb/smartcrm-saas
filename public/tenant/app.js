@@ -14567,14 +14567,47 @@ function openCreateTemplateModal() {
     h('option', { value: 'DOCUMENT' }, 'Document header'));
   const hdrText = h('input', { type: 'text', placeholder: 'Header text \u2014 max 60 chars, can have one {{1}}', style: { width: '100%' }, hidden: 'hidden' });
   const hdrSample = h('input', { type: 'text', placeholder: 'Sample value for {{1}} (only if header has placeholder)', style: { width: '100%' }, hidden: 'hidden' });
-  const hdrUrl = h('input', { type: 'url', placeholder: 'Public sample image/video/doc URL', style: { width: '100%' }, hidden: 'hidden' });
+  const hdrUrl = h('input', { type: 'url', placeholder: 'Public sample image/video/doc URL — or click Upload below', style: { width: '100%' }, hidden: 'hidden' });
+  // WA_TPL_SAMPLE_UPLOAD_v1: file picker + helper so admins don\'t have to
+  // host the sample themselves on S3/Drive. On pick we POST to
+  // /api/wa-sample, receive a public URL, and auto-fill hdrUrl.
+  const hdrFilePick = h('input', { type: 'file', accept: 'image/*,video/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx', style: { display: 'none' } });
+  const hdrFileBtn = h('button', { type: 'button', class: 'btn ghost sm' }, '📎 Or upload a sample file…');
+  const hdrFileNote = h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } },
+    'Meta needs a public URL Whatsapp can fetch for review. Pick a file and we\'ll host it for you.');
+  const hdrFileRow = h('div', { style: { marginTop: '.4rem' }, hidden: 'hidden' }, hdrFileBtn, hdrFilePick, hdrFileNote);
+  hdrFileBtn.onclick = () => hdrFilePick.click();
+  hdrFilePick.onchange = async () => {
+    const f = hdrFilePick.files && hdrFilePick.files[0];
+    if (!f) return;
+    if (f.size > 25 * 1024 * 1024) { toast('File too large (max 25 MB)', 'err'); return; }
+    hdrFileBtn.disabled = true; hdrFileBtn.textContent = '⏳ Uploading ' + f.name + '…';
+    try {
+      const fd = new FormData(); fd.append('file', f);
+      const r = await fetch('/api/wa-sample', {
+        method: 'POST',
+        headers: { 'x-auth-token': CRM.token },
+        body: fd
+      });
+      if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || 'Upload failed (HTTP ' + r.status + ')'); }
+      const j = await r.json();
+      hdrUrl.value = j.url || '';
+      toast('✅ Sample hosted at ' + (j.url || ''), 'ok');
+      hdrFileBtn.textContent = '📎 Replace file (' + f.name + ')';
+    } catch (e) {
+      toast('Upload failed: ' + e.message, 'err');
+      hdrFileBtn.textContent = '📎 Or upload a sample file…';
+    } finally { hdrFileBtn.disabled = false; }
+  };
   function syncHeader() {
     hdrText.hidden = hdrFmt.value !== 'TEXT';
     hdrSample.hidden = hdrFmt.value !== 'TEXT';
-    hdrUrl.hidden = !['IMAGE', 'VIDEO', 'DOCUMENT'].includes(hdrFmt.value);
+    const isMedia = ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(hdrFmt.value);
+    hdrUrl.hidden = !isMedia;
+    hdrFileRow.hidden = !isMedia;
   }
   hdrFmt.addEventListener('change', syncHeader);
-  card.appendChild(h('div', { class: 'field' }, h('label', {}, 'Header'), hdrFmt, hdrText, hdrSample, hdrUrl));
+  card.appendChild(h('div', { class: 'field' }, h('label', {}, 'Header'), hdrFmt, hdrText, hdrSample, hdrUrl, hdrFileRow));
 
   // ---- Body ----
   const bodyArea = h('textarea', { rows: 4, placeholder: 'Hi {{1}}, your order #{{2}} is on the way!', style: { width: '100%' } });
