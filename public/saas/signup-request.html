@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>SmartCRM — Request a new workspace</title>
+  <link rel="stylesheet" href="/saas/landing.css?v=2026-06-01-sr1" />
+  <style>
+    .sr-wrap { max-width: 720px; margin: 2rem auto; padding: 1.5rem; }
+    .sr-card {
+      background: #fff; border: 1px solid #e2e8f0; border-radius: 14px;
+      padding: 1.75rem 1.5rem; box-shadow: 0 6px 28px rgba(15,23,42,0.06);
+    }
+    .sr-card h1 { margin: 0 0 .25rem 0; font-size: 1.5rem; color: #0f172a; }
+    .sr-card p.sub { margin: 0 0 1.5rem 0; color: #64748b; font-size: .95rem; }
+    .sr-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .9rem 1rem; }
+    .sr-grid .full { grid-column: span 2; }
+    @media (max-width: 540px) { .sr-grid { grid-template-columns: 1fr; } .sr-grid .full { grid-column: span 1; } }
+    .sr-grid label {
+      display: block; font-size: .8rem; font-weight: 600; color: #334155;
+      margin-bottom: .25rem; letter-spacing: .01em;
+    }
+    .sr-grid input, .sr-grid select, .sr-grid textarea {
+      width: 100%; padding: .6rem .7rem; border: 1px solid #cbd5e1;
+      border-radius: 8px; font-size: .92rem; font-family: inherit;
+      background: #fff; color: #0f172a; box-sizing: border-box;
+    }
+    .sr-grid input:focus, .sr-grid select:focus, .sr-grid textarea:focus {
+      outline: none; border-color: #4338ca; box-shadow: 0 0 0 3px rgba(67,56,202,0.15);
+    }
+    .sr-grid textarea { min-height: 80px; resize: vertical; }
+    .sr-help { font-size: .75rem; color: #64748b; margin-top: .25rem; }
+    .sr-submit {
+      margin-top: 1.5rem; width: 100%; padding: .85rem 1rem;
+      background: #4338ca; color: #fff; border: 0; border-radius: 10px;
+      font-size: 1rem; font-weight: 600; cursor: pointer;
+    }
+    .sr-submit:disabled { opacity: .6; cursor: not-allowed; }
+    .sr-msg-ok, .sr-msg-err {
+      padding: 1rem; border-radius: 10px; margin-bottom: 1rem;
+      font-size: .95rem; line-height: 1.5;
+    }
+    .sr-msg-ok  { background: #ecfdf5; color: #065f46; border: 1px solid #6ee7b7; }
+    .sr-msg-err { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+    .sr-foot { margin-top: 1rem; font-size: .8rem; color: #94a3b8; text-align: center; }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-dot">🎯</span><b>SmartCRM</b></div>
+    <nav>
+      <a href="/" class="ghost">Home</a>
+    </nav>
+  </header>
+
+  <section class="sr-wrap">
+    <div class="sr-card">
+      <h1>Request a SmartCRM workspace</h1>
+      <p class="sub">Fill in the details below. Our team will review and set up the workspace, then send you login credentials.</p>
+
+      <div id="sr-result"></div>
+
+      <form id="sr-form">
+        <div class="sr-grid">
+          <div>
+            <label>Customer name *</label>
+            <input type="text" name="name" required maxlength="100" autocomplete="name" />
+          </div>
+          <div>
+            <label>Organisation name *</label>
+            <input type="text" name="org_name" required maxlength="200" />
+          </div>
+          <div>
+            <label>Email *</label>
+            <input type="email" name="email" required maxlength="200" autocomplete="email" />
+          </div>
+          <div>
+            <label>Mobile (with country code) *</label>
+            <input type="tel" name="mobile" required maxlength="20" placeholder="+91 98765 43210" />
+          </div>
+          <div>
+            <label>Preferred workspace URL</label>
+            <input type="text" name="desired_slug" maxlength="30" placeholder="e.g. acme-traders" pattern="[a-z][-a-z0-9]{2,29}" />
+            <div class="sr-help">Will become <b>crm.smartcrmsolution.com/t/&lt;slug&gt;</b>. Leave blank — we'll pick one.</div>
+          </div>
+          <div>
+            <label>Package</label>
+            <select name="package_id" id="sr-package">
+              <option value="">— select a plan —</option>
+            </select>
+          </div>
+          <div>
+            <label>Industry pack</label>
+            <select name="industry_pack">
+              <option value="">Generic (default)</option>
+              <option value="education">Education</option>
+              <option value="realestate">Real Estate</option>
+            </select>
+          </div>
+          <div>
+            <label>Your name / who's submitting</label>
+            <input type="text" name="submitted_by" maxlength="100" placeholder="e.g. Rohan, Sales team" />
+          </div>
+          <div class="full">
+            <label>Notes for the admin (optional)</label>
+            <textarea name="notes" maxlength="1000" placeholder="Special requirements, custom pricing, payment terms…"></textarea>
+          </div>
+        </div>
+        <button type="submit" class="sr-submit" id="sr-btn">Submit request</button>
+      </form>
+
+      <p class="sr-foot">By submitting you confirm you have the customer's permission to set up an account on their behalf.</p>
+    </div>
+  </section>
+
+  <script>
+  (function () {
+    const $ = (s) => document.querySelector(s);
+    const result = $('#sr-result');
+    const btn = $('#sr-btn');
+
+    // Load packages
+    fetch('/api/saas', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fn: 'api_saas_sr_publicPackages', args: [] })
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (!d.ok || !Array.isArray(d.result)) return;
+        const sel = $('#sr-package');
+        d.result.forEach(p => {
+          const opt = document.createElement('option');
+          opt.value = p.id;
+          const price = Number(p.base_price_inr || 0);
+          const period = p.is_lifetime ? 'lifetime' : (p.recurring_period + (p.recurring_period_count > 1 ? ' x ' + p.recurring_period_count : ''));
+          opt.textContent = p.name + (price ? ` — ₹${price.toLocaleString('en-IN')} / ${period}` : ' — Free');
+          sel.appendChild(opt);
+        });
+      })
+      .catch(() => {});
+
+    $('#sr-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      result.innerHTML = '';
+      btn.disabled = true;
+      btn.textContent = 'Submitting…';
+      const fd = new FormData(e.target);
+      const payload = {};
+      fd.forEach((v, k) => { payload[k] = v; });
+      try {
+        const r = await fetch('/api/saas-public-signup-request', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await r.json();
+        if (data.error) throw new Error(data.error);
+        result.innerHTML =
+          '<div class="sr-msg-ok"><b>✓ Request received</b><br>' +
+          'We\'ll review the details and email you the login credentials within 1 business day.<br>' +
+          'Reference ID: <code>#' + (data.id || '—') + '</code></div>';
+        e.target.reset();
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      } catch (err) {
+        result.innerHTML = '<div class="sr-msg-err"><b>Submission failed:</b> ' + (err.message || 'Unknown error') + '</div>';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Submit request';
+      }
+    });
+  })();
+  </script>
+</body>
+</html>

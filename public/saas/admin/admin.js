@@ -121,6 +121,7 @@ function renderLogin() {
 const NAV = [
   { id: 'dashboard',     label: '🏠 Dashboard' },
   { id: 'tenants',       label: '🏢 Tenants' },
+  { id: 'signup_requests', label: '🆕 Signup Requests' },   // TENANT_SIGNUP_APPROVAL_v1
   { id: 'packages',      label: '📦 Packages' },
   { id: 'invoices',      label: '🧾 Invoices' },
   { id: 'webhooks',      label: '📡 Webhook Logs' },
@@ -2032,6 +2033,313 @@ async function route() {
   }
 }
 
+
+
+// ============================================================
+// TENANT_SIGNUP_APPROVAL_v1 — Signup Requests view
+// Public form posts to /api/saas-public-signup-request. Super-admin
+// reviews here, edits if needed, then Approve to provision the
+// tenant or Reject with a reason. Approval surfaces the temp
+// password so the operator can WhatsApp/email it to the customer.
+// ============================================================
+VIEWS.signup_requests = async (view) => {
+  view.appendChild(h('h1', {}, '🆕 Signup Requests'));
+
+  // public-form URL helper line
+  const formUrl = location.origin + '/saas/signup-request.html';
+  const urlRow = h('div', {
+    style: {
+      background: '#eef2ff', border: '1px solid #c7d2fe',
+      padding: '.75rem 1rem', borderRadius: '8px',
+      marginBottom: '1rem', display: 'flex', gap: '.75rem',
+      alignItems: 'center', flexWrap: 'wrap', fontSize: '.9rem'
+    }
+  },
+    h('span', {}, '📋 Share this public form URL with assignees:'),
+    h('code', { style: { background: '#fff', padding: '.2rem .5rem', borderRadius: '4px' } }, formUrl),
+    h('button', {
+      class: 'btn sm', onclick: () => {
+        navigator.clipboard.writeText(formUrl);
+        toast('Copied', 'ok');
+      }
+    }, 'Copy'),
+    h('a', { href: formUrl, target: '_blank', class: 'btn sm ghost' }, 'Open ↗')
+  );
+  view.appendChild(urlRow);
+
+  // Filter strip
+  const _filterState = { status: 'pending', q: '' };
+  const reload = async () => {
+    const list = await api('api_saas_sr_list', _filterState);
+    renderTable(list);
+  };
+  const statusSel = h('select', {
+    onchange: ev => { _filterState.status = ev.target.value; reload(); }
+  },
+    h('option', { value: 'pending', selected: true }, 'Pending'),
+    h('option', { value: 'approved' }, 'Approved'),
+    h('option', { value: 'rejected' }, 'Rejected'),
+    h('option', { value: '' }, 'All')
+  );
+  const qInput = h('input', {
+    placeholder: 'Search name / email / org…',
+    style: { padding: '.4rem .6rem', border: '1px solid #cbd5e1', borderRadius: '6px', minWidth: '260px' },
+    oninput: (function () {
+      let _t;
+      return ev => { clearTimeout(_t); _t = setTimeout(() => { _filterState.q = ev.target.value; reload(); }, 300); };
+    })()
+  });
+  view.appendChild(h('div', {
+    style: { display: 'flex', gap: '.6rem', marginBottom: '1rem', alignItems: 'center' }
+  },
+    h('label', { class: 'muted', style: { fontSize: '.85rem' } }, 'Status:'), statusSel,
+    qInput,
+    h('button', { class: 'btn sm ghost', onclick: reload }, '↻ Refresh')
+  ));
+
+  const tableHost = h('div', {});
+  view.appendChild(tableHost);
+
+  function renderTable(rows) {
+    tableHost.innerHTML = '';
+    if (!rows || !rows.length) {
+      tableHost.appendChild(h('div', { class: 'empty' }, 'No signup requests in this view yet.'));
+      return;
+    }
+    const tbl = h('table', { class: 'tbl' });
+    tbl.appendChild(h('thead', {}, h('tr', {},
+      h('th', {}, 'ID'),
+      h('th', {}, 'Submitted'),
+      h('th', {}, 'Customer'),
+      h('th', {}, 'Email / Mobile'),
+      h('th', {}, 'Organisation'),
+      h('th', {}, 'Slug'),
+      h('th', {}, 'Package'),
+      h('th', {}, 'Status'),
+      h('th', {}, 'Actions')
+    )));
+    const tb = h('tbody', {});
+    rows.forEach(r => {
+      const pillColour = r.status === 'pending' ? '#f59e0b'
+        : r.status === 'approved' ? '#16a34a'
+        : '#dc2626';
+      tb.appendChild(h('tr', {},
+        h('td', {}, '#' + r.id),
+        h('td', {}, fmtDate(r.created_at)),
+        h('td', {}, h('b', {}, r.name || '—'),
+          r.submitted_by ? h('div', { class: 'muted', style: { fontSize: '.75rem' } }, 'via ' + r.submitted_by) : ''),
+        h('td', {},
+          h('div', {}, r.email),
+          h('div', { class: 'muted', style: { fontSize: '.78rem' } }, r.mobile || '')
+        ),
+        h('td', {}, r.org_name || ''),
+        h('td', {}, r.desired_slug ? h('code', {}, r.desired_slug) : h('span', { class: 'muted' }, '—')),
+        h('td', {}, r.package_name || h('span', { class: 'muted' }, 'not chosen')),
+        h('td', {}, h('span', {
+          style: {
+            background: pillColour, color: '#fff', padding: '.15rem .55rem',
+            borderRadius: '999px', fontSize: '.75rem', fontWeight: '600'
+          }
+        }, r.status)),
+        h('td', {},
+          h('button', { class: 'btn sm', onclick: () => openSignupRequestModal(r.id, reload) }, 'Review')
+        )
+      ));
+    });
+    tbl.appendChild(tb);
+    tableHost.appendChild(tbl);
+  }
+
+  await reload();
+};
+
+async function openSignupRequestModal(id, onClose) {
+  const row = await api('api_saas_sr_get', id);
+  const packages = await api('api_saas_packages_list', {});
+
+  const m = h('div', { class: 'modal-bd' });
+  const card = h('div', { class: 'modal', style: { maxWidth: '700px', maxHeight: '92vh', overflow: 'auto' } });
+  m.appendChild(card);
+  document.body.appendChild(m);
+
+  function close() {
+    m.remove();
+    if (typeof onClose === 'function') onClose();
+  }
+
+  card.appendChild(h('div', { class: 'modal-head' },
+    h('h3', { style: { margin: 0 } }, '🆕 Signup Request #' + row.id),
+    h('button', { class: 'modal-close', onclick: close, title: 'Close' }, '✕')
+  ));
+
+  const body = h('div', { class: 'modal-body' });
+  card.appendChild(body);
+
+  // ── If already approved: show credentials again
+  if (row.status === 'approved' && row.provisioned_slug) {
+    const loginUrl = location.origin + '/t/' + row.provisioned_slug;
+    body.appendChild(h('div', {
+      style: { background: '#ecfdf5', border: '1px solid #6ee7b7', padding: '1rem', borderRadius: '10px', marginBottom: '1rem' }
+    },
+      h('h4', { style: { margin: '0 0 .5rem 0', color: '#065f46' } }, '✓ Approved — tenant provisioned'),
+      h('div', { style: { display: 'grid', gridTemplateColumns: '110px 1fr', gap: '.4rem .8rem', fontSize: '.9rem' } },
+        h('div', { class: 'muted' }, 'Login URL'),  h('div', {}, h('a', { href: loginUrl, target: '_blank' }, loginUrl)),
+        h('div', { class: 'muted' }, 'Email'),      h('div', {}, h('code', {}, row.email)),
+        h('div', { class: 'muted' }, 'Password'),   h('div', {}, h('code', {}, row.provisioned_password || '(was shown once, not stored)')),
+        h('div', { class: 'muted' }, 'Approved by'), h('div', {}, row.approved_by || ''),
+        h('div', { class: 'muted' }, 'Approved at'), h('div', {}, fmtDate(row.approved_at))
+      ),
+      h('button', {
+        class: 'btn sm', style: { marginTop: '.75rem' },
+        onclick: () => {
+          const txt = `Welcome to SmartCRM!\n\nLogin URL: ${loginUrl}\nEmail: ${row.email}\nPassword: ${row.provisioned_password || ''}`;
+          navigator.clipboard.writeText(txt);
+          toast('Credentials copied', 'ok');
+        }
+      }, '📋 Copy credentials')
+    ));
+  }
+  if (row.status === 'rejected') {
+    body.appendChild(h('div', {
+      style: { background: '#fef2f2', border: '1px solid #fecaca', padding: '.75rem 1rem', borderRadius: '10px', marginBottom: '1rem', color: '#991b1b' }
+    },
+      h('b', {}, '✗ Rejected — '), row.reject_reason || '(no reason given)'
+    ));
+  }
+
+  // ── Editable form
+  const f = h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '.75rem 1rem' } });
+  function field(label, key, type, full, opts) {
+    const wrap = h('div', { style: full ? { gridColumn: 'span 2' } : {} });
+    wrap.appendChild(h('label', { class: 'muted', style: { fontSize: '.75rem', fontWeight: '600' } }, label));
+    let el;
+    if (type === 'textarea') {
+      el = h('textarea', { style: { width: '100%', minHeight: '60px', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px', boxSizing: 'border-box' } });
+    } else if (type === 'select') {
+      el = h('select', { style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px', boxSizing: 'border-box' } },
+        ...(opts || []).map(o => h('option', { value: o.value }, o.label))
+      );
+    } else {
+      el = h('input', { type: type || 'text', style: { width: '100%', padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px', boxSizing: 'border-box' } });
+    }
+    el.value = row[key] == null ? '' : row[key];
+    el.dataset.field = key;
+    if (row.status !== 'pending') el.disabled = true;
+    wrap.appendChild(el);
+    f.appendChild(wrap);
+    return el;
+  }
+  field('Name', 'name');
+  field('Organisation', 'org_name');
+  field('Email', 'email', 'email');
+  field('Mobile', 'mobile');
+  field('Desired slug', 'desired_slug');
+  const pkgOptions = [{ value: '', label: '— pick a package —' }].concat(
+    packages.map(p => ({ value: String(p.id), label: p.name + ' — ₹' + Number(p.base_price_inr || 0).toLocaleString('en-IN') }))
+  );
+  const pkgSel = field('Package', 'package_id', 'select', false, pkgOptions);
+  pkgSel.value = String(row.package_id || '');
+  field('Industry pack', 'industry_pack', 'select', false, [
+    { value: '', label: 'Generic' },
+    { value: 'education', label: 'Education' },
+    { value: 'realestate', label: 'Real Estate' }
+  ]).value = row.industry_pack || '';
+  field('Notes', 'notes', 'textarea', true);
+  body.appendChild(f);
+  body.appendChild(h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '.4rem' } },
+    'Submitted by: ' + (row.submitted_by || 'public form') + (row.ip_address ? ' · IP ' + row.ip_address : '')
+  ));
+
+  // ── Action buttons (only for pending)
+  if (row.status === 'pending') {
+    const actions = h('div', {
+      class: 'modal-foot',
+      style: { display: 'flex', justifyContent: 'flex-end', gap: '.5rem', marginTop: '1.25rem' }
+    });
+    const btnSave = h('button', { class: 'btn sm ghost' }, '💾 Save');
+    const btnReject = h('button', { class: 'btn sm', style: { background: '#fee2e2', color: '#991b1b' } }, '✗ Reject');
+    const btnApprove = h('button', { class: 'btn sm', style: { background: '#16a34a' } }, '✓ Approve & Provision');
+    actions.appendChild(btnSave);
+    actions.appendChild(btnReject);
+    actions.appendChild(btnApprove);
+    body.appendChild(actions);
+
+    function collect() {
+      const out = { id: row.id };
+      f.querySelectorAll('[data-field]').forEach(el => { out[el.dataset.field] = el.value; });
+      return out;
+    }
+    btnSave.onclick = async () => {
+      btnSave.disabled = true;
+      try { await api('api_saas_sr_update', collect()); toast('Saved', 'ok'); }
+      catch (e) { toast(e.message, 'err'); }
+      finally { btnSave.disabled = false; }
+    };
+    btnReject.onclick = async () => {
+      const reason = prompt('Reason for rejection (shown internally):', '');
+      if (reason === null) return;
+      btnReject.disabled = true;
+      try {
+        await api('api_saas_sr_reject', { id: row.id, reason: reason });
+        toast('Rejected', 'ok');
+        close();
+      } catch (e) { toast(e.message, 'err'); btnReject.disabled = false; }
+    };
+    btnApprove.onclick = async () => {
+      if (!confirm('Approve this request? This will create the tenant workspace and generate login credentials.')) return;
+      // Save edits first
+      btnApprove.disabled = true;
+      btnApprove.textContent = 'Provisioning…';
+      try {
+        await api('api_saas_sr_update', collect());
+        const r = await api('api_saas_sr_approve', { id: row.id });
+        toast('Tenant provisioned!', 'ok');
+        // Show credentials in a fresh modal so they're hard to miss
+        showCredentialsModal(r);
+        close();
+      } catch (e) {
+        toast(e.message, 'err');
+        btnApprove.disabled = false;
+        btnApprove.textContent = '✓ Approve & Provision';
+      }
+    };
+  }
+}
+
+function showCredentialsModal(r) {
+  const m = h('div', { class: 'modal-bd' });
+  const card = h('div', { class: 'modal', style: { maxWidth: '520px' } });
+  m.appendChild(card);
+  document.body.appendChild(m);
+  const close = () => m.remove();
+  card.appendChild(h('div', { class: 'modal-head' },
+    h('h3', { style: { margin: 0 } }, '🎉 Tenant provisioned'),
+    h('button', { class: 'modal-close', onclick: close }, '✕')
+  ));
+  const body = h('div', { class: 'modal-body' });
+  card.appendChild(body);
+  body.appendChild(h('p', { class: 'muted', style: { marginTop: 0 } },
+    'These are the login credentials. Copy them now — the password is shown only once in this strong form and is NOT recoverable later.'
+  ));
+  body.appendChild(h('div', { style: { background: '#f1f5f9', padding: '1rem', borderRadius: '8px' } },
+    h('div', { style: { display: 'grid', gridTemplateColumns: '110px 1fr', gap: '.4rem .8rem' } },
+      h('div', { class: 'muted' }, 'Login URL'), h('div', {}, h('a', { href: r.login_url, target: '_blank' }, r.login_url)),
+      h('div', { class: 'muted' }, 'Email'),     h('div', {}, h('code', {}, r.email)),
+      h('div', { class: 'muted' }, 'Password'),  h('div', {}, h('code', {}, r.password || '—'))
+    )
+  ));
+  const composed = `Welcome to SmartCRM!\n\nLogin URL: ${r.login_url}\nEmail: ${r.email}\nPassword: ${r.password || ''}\n\nPlease change your password after first login.`;
+  body.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', marginTop: '1rem' } },
+    h('button', {
+      class: 'btn', onclick: () => { navigator.clipboard.writeText(composed); toast('Copied to clipboard', 'ok'); }
+    }, '📋 Copy welcome message'),
+    h('a', {
+      class: 'btn ghost',
+      href: 'https://wa.me/?text=' + encodeURIComponent(composed),
+      target: '_blank'
+    }, '💬 Share via WhatsApp')
+  ));
+}
 
 /* ============================================================
    Modules toggle modal — flip modules ON/OFF per tenant

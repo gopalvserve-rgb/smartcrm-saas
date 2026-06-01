@@ -2,6 +2,10 @@
 -- Idempotent: only inserts if the title doesn't already exist.
 INSERT INTO changelog (category, title, body, link, icon, created_at)
 SELECT * FROM (VALUES
+  ('feature', '🆕 Tenant Signup Request workflow',
+   'Sales team can collect new-tenant signups via a shareable public form (URL: /saas/signup-request.html). Each submission lands in the new Super-Admin → Signup Requests tab where you can review, edit any field (slug, package, industry pack, notes…), then click Approve to provision the workspace via the existing pipeline. On approval the modal shows the login URL, email and a one-time temporary password ready to copy or share via WhatsApp. Reject with a reason is also supported, and rejected requests can be re-opened.',
+   NULL, '🆕', NOW()),
+
   ('feature', 'What''s New panel',
    'Top-right gift icon now opens a timeline of every CRM update under three tabs: New Feature, Issue Resolved, and Upgrade / Modify. Stored for 1 year.',
    NULL, '🎁', NOW()),

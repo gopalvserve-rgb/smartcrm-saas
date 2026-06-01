@@ -49,6 +49,7 @@ const tenantModules = require('./routes/saas/tenantModules');
 const demoTenant = require('./routes/saas/demoTenant');
 const aiUsageIngest = require('./routes/saas/aiUsageIngest');
 const tickets = require('./routes/saas/tickets');
+const signupRequests = require('./routes/saas/signupRequests'); /* TENANT_SIGNUP_APPROVAL_v1 */
 
 // ---- Industry Packs: load + self-register at boot ----------------
 // Each pack module calls framework.register({...}) on require, populating
@@ -86,7 +87,7 @@ const SAAS_API = {};
   announcements, customReqs, webhookLogs, errorLogs, whatsbotBackfill, applySchema, crashReport,
   aiSettings, aiCosting,
   tenantModules, demoTenant,
-  tickets,
+  tickets, signupRequests, /* TENANT_SIGNUP_APPROVAL_v1 */
   recordingHealth /* DEVICE_DIAG_v1 */
 ].forEach(mod => {
   Object.keys(mod).forEach(k => {
@@ -858,6 +859,11 @@ app.get('/api/saas/brand', async (_req, res) => {
     res.json({ name, tagline, subhead, color, logo, support });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
+// ---- TENANT_SIGNUP_APPROVAL_v1 public submit -----------------
+// Anyone (no auth) can POST to this endpoint to create a tenant
+// signup-request. Super-admin reviews + approves from the SPA.
+app.post('/api/saas-public-signup-request', express.json({ limit: '32kb' }), signupRequests.expressPublicSubmit);
 
 // ---- SaaS API dispatcher --------------------------------------
 function _saasToken(req) {
