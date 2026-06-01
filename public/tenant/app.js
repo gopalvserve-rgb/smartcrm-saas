@@ -19689,6 +19689,25 @@ async function adminCampaigns(reload) {
             } catch (e) { toast(e.message, 'err'); }
           } }, Number(r.is_active) === 1 ? '⏸ Pause' : '▶ Resume'),
         ' ',
+        h('button', { class: 'btn sm', title: 'Return non-final leads to free pool so next pull picks them up fresh',
+          onclick: async () => {
+            // CAMPAIGN_RESET_v1 (2026-06-01)
+            const ok = await confirmDialog(
+              'Reset campaign "' + r.name + '"?\n\n' +
+              'Every lead in this campaign that is NOT in a final status will be:\n' +
+              '  • Un-assigned (back to the free pool)\n' +
+              '  • Made re-pullable (previous-puller log cleared)\n' +
+              '  • Hidden from sales people\u2019s personal lists until they pull again\n\n' +
+              'Leads in final status (Won / Lost / Junk / etc.) are NOT touched.'
+            );
+            if (!ok) return;
+            try {
+              const res = await api('api_campaigns_resetUnclosed', r.id);
+              toast(res.reset_count + ' lead' + (res.reset_count === 1 ? '' : 's') + ' returned to the pool', 'ok');
+              reload();
+            } catch (e) { toast(e.message, 'err'); }
+          } }, '🔄 Reset'),
+        ' ',
         h('button', { class: 'btn sm danger',
           onclick: async () => {
             if (!await confirmDialog(`Delete campaign "${r.name}"?`)) return;

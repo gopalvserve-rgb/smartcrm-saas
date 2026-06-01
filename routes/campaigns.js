@@ -649,6 +649,93 @@ async function api_campaigns_pullDiagnostic(token, payload) {
   };
 }
 
+
+/* ============================================================
+ * CAMPAIGN_RESET_v1 (2026-06-01)
+ *
+ * Admin button on each campaign row. Use case:
+ *   500 leads in a campaign → team called them → 10 reached
+ *   final status, 490 still in-play. The 490 are stuck on the
+ *   agents they were originally assigned to + already in the
+ *   lead_pull_log for those agents (so they wouldn't be re-pulled
+ *   even after un-assign). One click puts them back in the free
+ *   pool ready for the next Start-Calling pull.
+ *
+ * What it does for every lead in the campaign WHERE the status
+ * is NOT is_final=1 (or has no status):
+ *   • assigned_to = NULL  → goes back to "free / unassigned"
+ *   • is_hidden    = 0    → eligible for pull
+ *   • DELETE FROM lead_pull_log WHERE lead_id = …  →
+ *     every previous puller can pull it again
+ *
+ * Leads keep their campaign_id so the next pull of the campaign
+ * picks them up exactly as if they were fresh.
+ *
+ * Status of "final" follows the standard statuses.is_final flag
+ * (Junk / Won / Lost / etc.).
+ * ============================================================ */
+async function api_campaigns_resetUnclosed(token, campaignId) {
+  const me = await authUser(token);
+  if (me.role !== 'admin') throw new Error('Admin only');
+  const cid = Number(campaignId);
+  if (!cid) throw new Error('campaign_id required');
+
+  // Make sure the campaign exists in this tenant.
+  const c = await db.query('SELECT id, name FROM campaigns WHERE id = $1', [cid]);
+  if (!c.rows.length) throw new Error('Campaign not found');
+
+  // 1) Find the lead IDs we'll reset (so we can log the count + scope the pull-log delete).
+  const cand = await db.query(
+    `SELECT l.id
+       FROM leads l
+       LEFT JOIN statuses s ON s.id = l.status_id
+      WHERE l.campaign_id = $1
+        AND COALESCE(s.is_final, 0) = 0`,
+    [cid]
+  );
+  const ids = cand.rows.map(r => Number(r.id));
+  if (!ids.length) {
+    return { ok: true, reset_count: 0, campaign_id: cid, campaign_name: c.rows[0].name };
+  }
+
+  // 2) Wipe assignment + un-hide + bump updated_at in a transaction.
+  // Use the tenant-scoped pool so multi-tenant isolation holds.
+  const pool = (function () {
+    try { const st = db.tenantStorage && db.tenantStorage.getStore(); if (st && st.pool) return st.pool; } catch (_) {}
+    return db.pool;
+  })();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      `UPDATE leads
+          SET assigned_to = NULL,
+              is_hidden   = 0,
+              updated_at  = NOW()
+        WHERE id = ANY($1::int[])`,
+      [ids]
+    );
+    // 3) Drop every previous-puller record so they can re-pull these leads.
+    await client.query(
+      `DELETE FROM lead_pull_log WHERE lead_id = ANY($1::int[])`,
+      [ids]
+    );
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+
+  return {
+    ok: true,
+    reset_count: ids.length,
+    campaign_id: cid,
+    campaign_name: c.rows[0].name
+  };
+}
+
 module.exports = {
   api_campaigns_list,
   api_campaigns_get,
@@ -658,4 +745,5 @@ module.exports = {
   api_campaigns_applyRemoval,
   api_campaigns_attachExisting, /* CAMPAIGN_ATTACH_EXISTING_v1 */
   api_campaigns_pullDiagnostic, /* CAMPAIGN_PULL_DIAG_v1 */
+  api_campaigns_resetUnclosed, /* CAMPAIGN_RESET_v1 */
 };

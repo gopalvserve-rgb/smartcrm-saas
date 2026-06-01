@@ -2,6 +2,10 @@
 -- Idempotent: only inserts if the title doesn't already exist.
 INSERT INTO changelog (category, title, body, link, icon, created_at)
 SELECT * FROM (VALUES
+  ('feature', '🔄 Campaign Reset — recycle non-final leads to the pool',
+   'On the Campaigns page each campaign row now has a 🔄 Reset button (admin only). Use case: you put 500 leads in a campaign, the team called them, 10 reached a final status (Won / Lost / Junk), 490 are still in-play but stuck on the original agents. Click Reset and every non-final lead in that campaign is un-assigned, made re-pullable, and hidden from sales people personal lists until the next pull. Next time anyone clicks Start Calling, those 490 redistribute fresh according to the campaign settings. Leads in a final status are NEVER touched.',
+   '#/campaigns', '🔄', NOW()),
+
   ('feature', '🆕 Tenant Signup Request workflow',
    'Sales team can collect new-tenant signups via a shareable public form (URL: /saas/signup-request.html). Each submission lands in the new Super-Admin → Signup Requests tab where you can review, edit any field (slug, package, industry pack, notes…), then click Approve to provision the workspace via the existing pipeline. On approval the modal shows the login URL, email and a one-time temporary password ready to copy or share via WhatsApp. Reject with a reason is also supported, and rejected requests can be re-opened.',
    NULL, '🆕', NOW()),
