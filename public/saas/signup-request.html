@@ -84,10 +84,21 @@
             <div class="sr-help">Will become <b>crm.smartcrmsolution.com/t/&lt;slug&gt;</b>. Leave blank — we'll pick one.</div>
           </div>
           <div>
-            <label>Package</label>
-            <select name="package_id" id="sr-package">
-              <option value="">— select a plan —</option>
+            <label>Tenure *</label>
+            <select name="desired_tenure" required>
+              <option value="">— select tenure —</option>
+              <option value="month">Monthly</option>
+              <option value="quarter">Quarterly</option>
+              <option value="half_year">Half-yearly (6 months)</option>
+              <option value="year">Yearly</option>
+              <option value="2year">2 years</option>
+              <option value="3year">3 years</option>
+              <option value="lifetime">Lifetime</option>
             </select>
+          </div>
+          <div>
+            <label>How many users? *</label>
+            <input type="number" name="desired_users" required min="1" max="9999" placeholder="e.g. 10" />
           </div>
           <div>
             <label>Industry pack</label>
@@ -118,27 +129,6 @@
     const $ = (s) => document.querySelector(s);
     const result = $('#sr-result');
     const btn = $('#sr-btn');
-
-    // Load packages
-    fetch('/api/saas', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fn: 'api_saas_sr_publicPackages', args: [] })
-    })
-      .then(r => r.json())
-      .then(d => {
-        if (!d.ok || !Array.isArray(d.result)) return;
-        const sel = $('#sr-package');
-        d.result.forEach(p => {
-          const opt = document.createElement('option');
-          opt.value = p.id;
-          const price = Number(p.base_price_inr || 0);
-          const period = p.is_lifetime ? 'lifetime' : (p.recurring_period + (p.recurring_period_count > 1 ? ' x ' + p.recurring_period_count : ''));
-          opt.textContent = p.name + (price ? ` — ₹${price.toLocaleString('en-IN')} / ${period}` : ' — Free');
-          sel.appendChild(opt);
-        });
-      })
-      .catch(() => {});
 
     $('#sr-form').addEventListener('submit', async (e) => {
       e.preventDefault();

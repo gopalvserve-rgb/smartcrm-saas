@@ -34,6 +34,8 @@ async function _ensureSchema() {
       org_name             TEXT NOT NULL,
       desired_slug         TEXT,
       package_id           INTEGER,
+      desired_tenure       TEXT,
+      desired_users        INTEGER,
       industry_pack        TEXT,
       notes                TEXT,
       submitted_by         TEXT,
@@ -53,6 +55,8 @@ async function _ensureSchema() {
   `);
   // best-effort additive heal
   const adds = [
+    'desired_tenure TEXT',
+    'desired_users INTEGER',
     'industry_pack TEXT',
     'notes TEXT',
     'submitted_by TEXT',
@@ -115,6 +119,14 @@ async function api_saas_sr_publicSubmit(_token, payload) {
   const notes   = _str(p.notes, 1000);
   const submittedBy = _str(p.submitted_by, 100);
   const packageId = p.package_id ? Number(p.package_id) : null;
+  const desiredTenure = _str(p.desired_tenure, 20).toLowerCase();
+  const desiredUsersRaw = p.desired_users;
+  const desiredUsers = (desiredUsersRaw == null || desiredUsersRaw === '' || isNaN(Number(desiredUsersRaw)))
+    ? null : Math.max(1, Math.floor(Number(desiredUsersRaw)));
+  const VALID_TENURES = ['month','quarter','half_year','year','2year','3year','lifetime'];
+  if (desiredTenure && !VALID_TENURES.includes(desiredTenure)) {
+    throw new Error('Invalid tenure');
+  }
 
   if (!name)            throw new Error('Name is required');
   if (!_validEmail(email))  throw new Error('Valid email is required');
@@ -140,6 +152,8 @@ async function api_saas_sr_publicSubmit(_token, payload) {
     name, email, mobile, org_name: orgName,
     desired_slug: slug || null,
     package_id: packageId,
+    desired_tenure: desiredTenure || null,
+    desired_users: desiredUsers,
     industry_pack: pack || null,
     notes: notes || null,
     submitted_by: submittedBy || null,
@@ -204,13 +218,17 @@ async function api_saas_sr_update(token, payload) {
   if (row.status !== 'pending') throw new Error('Only pending requests are editable');
 
   const upd = {};
-  ['name','email','mobile','org_name','desired_slug','industry_pack','notes'].forEach(k => {
+  ['name','email','mobile','org_name','desired_slug','desired_tenure','industry_pack','notes'].forEach(k => {
     if (p[k] !== undefined) upd[k] = _str(p[k], 200);
   });
   if (upd.email) upd.email = upd.email.toLowerCase();
   if (upd.desired_slug != null) upd.desired_slug = upd.desired_slug.toLowerCase();
   if (p.package_id !== undefined) {
     upd.package_id = p.package_id ? Number(p.package_id) : null;
+  }
+  if (p.desired_users !== undefined) {
+    const v = p.desired_users;
+    upd.desired_users = (v == null || v === '' || isNaN(Number(v))) ? null : Math.max(1, Math.floor(Number(v)));
   }
   upd.updated_at = new Date().toISOString();
   await control.update('signup_requests', row.id, upd);

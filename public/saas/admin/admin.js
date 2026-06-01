@@ -2114,7 +2114,8 @@ VIEWS.signup_requests = async (view) => {
       h('th', {}, 'Email / Mobile'),
       h('th', {}, 'Organisation'),
       h('th', {}, 'Slug'),
-      h('th', {}, 'Package'),
+      h('th', {}, 'Wants'),
+      h('th', {}, 'Plan picked'),
       h('th', {}, 'Status'),
       h('th', {}, 'Actions')
     )));
@@ -2134,7 +2135,15 @@ VIEWS.signup_requests = async (view) => {
         ),
         h('td', {}, r.org_name || ''),
         h('td', {}, r.desired_slug ? h('code', {}, r.desired_slug) : h('span', { class: 'muted' }, '—')),
-        h('td', {}, r.package_name || h('span', { class: 'muted' }, 'not chosen')),
+        h('td', {},
+          h('div', {}, (function () {
+            const TEN_LABELS = { month:'Monthly', quarter:'Quarterly', half_year:'6-month', year:'Yearly', '2year':'2-year', '3year':'3-year', lifetime:'Lifetime' };
+            return r.desired_tenure ? (TEN_LABELS[r.desired_tenure] || r.desired_tenure) : '—';
+          })()),
+          h('div', { class: 'muted', style: { fontSize: '.75rem' } },
+            r.desired_users ? (r.desired_users + ' users') : 'users not set')
+        ),
+        h('td', {}, r.package_name || h('span', { class: 'muted' }, 'pick on approve')),
         h('td', {}, h('span', {
           style: {
             background: pillColour, color: '#fff', padding: '.15rem .55rem',
@@ -2244,6 +2253,17 @@ async function openSignupRequestModal(id, onClose) {
     { value: 'education', label: 'Education' },
     { value: 'realestate', label: 'Real Estate' }
   ]).value = row.industry_pack || '';
+  field('Desired tenure', 'desired_tenure', 'select', false, [
+    { value: '', label: '— not specified —' },
+    { value: 'month', label: 'Monthly' },
+    { value: 'quarter', label: 'Quarterly' },
+    { value: 'half_year', label: 'Half-yearly (6 months)' },
+    { value: 'year', label: 'Yearly' },
+    { value: '2year', label: '2 years' },
+    { value: '3year', label: '3 years' },
+    { value: 'lifetime', label: 'Lifetime' }
+  ]).value = row.desired_tenure || '';
+  field('Number of users', 'desired_users', 'number');
   field('Notes', 'notes', 'textarea', true);
   body.appendChild(f);
   body.appendChild(h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '.4rem' } },
