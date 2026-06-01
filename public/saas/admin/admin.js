@@ -2137,7 +2137,7 @@ VIEWS.signup_requests = async (view) => {
         h('td', {}, r.desired_slug ? h('code', {}, r.desired_slug) : h('span', { class: 'muted' }, '—')),
         h('td', {},
           h('div', {}, (function () {
-            const TEN_LABELS = { month:'Monthly', quarter:'Quarterly', half_year:'6-month', year:'Yearly', '2year':'2-year', '3year':'3-year', lifetime:'Lifetime' };
+            const TEN_LABELS = { month:'Monthly', quarter:'Quarterly', half_year:'6-month', year:'Yearly', '2year':'2-year', '3year':'3-year' };
             return r.desired_tenure ? (TEN_LABELS[r.desired_tenure] || r.desired_tenure) : '—';
           })()),
           h('div', { class: 'muted', style: { fontSize: '.75rem' } },
@@ -2244,10 +2244,50 @@ async function openSignupRequestModal(id, onClose) {
   field('Mobile', 'mobile');
   field('Desired slug', 'desired_slug');
   const pkgOptions = [{ value: '', label: '— pick a package —' }].concat(
-    packages.map(p => ({ value: String(p.id), label: p.name + ' — ₹' + Number(p.base_price_inr || 0).toLocaleString('en-IN') }))
+    packages.map(p => ({ value: String(p.id), label: p.name + ' — ₹' + Number(p.base_price_inr || 0).toLocaleString('en-IN') + ' / ' + (p.is_lifetime ? 'lifetime' : ((p.recurring_period_count || 1) + ' ' + (p.recurring_period || 'month'))) }))
   );
   const pkgSel = field('Package', 'package_id', 'select', false, pkgOptions);
   pkgSel.value = String(row.package_id || '');
+  // End-date preview — recomputes whenever the package selection changes.
+  const endPreview = h('div', {
+    style: {
+      gridColumn: 'span 2', background: '#f1f5f9', padding: '.6rem .8rem',
+      borderRadius: '6px', fontSize: '.85rem', color: '#334155', marginTop: '.25rem'
+    }
+  }, 'Pick a package to see the end date');
+  function _computeEnd(pkg) {
+    if (!pkg) return null;
+    const d = new Date();
+    if (Number(pkg.is_lifetime) === 1) { d.setFullYear(d.getFullYear() + 99); return d; }
+    const n = Number(pkg.recurring_period_count) || 1;
+    const per = String(pkg.recurring_period || 'month').toLowerCase();
+    if (per === 'year') d.setFullYear(d.getFullYear() + n);
+    else if (per === 'quarter') d.setMonth(d.getMonth() + (3 * n));
+    else if (per === 'week') d.setDate(d.getDate() + (7 * n));
+    else d.setMonth(d.getMonth() + n);
+    return d;
+  }
+  function _refreshEndPreview() {
+    const pkg = packages.find(p => String(p.id) === pkgSel.value);
+    if (!pkg) {
+      endPreview.textContent = 'Pick a package to see the end date';
+      endPreview.style.background = '#f1f5f9';
+      return;
+    }
+    const end = _computeEnd(pkg);
+    const today = new Date();
+    const ms = end - today;
+    const days = Math.round(ms / (1000 * 60 * 60 * 24));
+    const lifetimePkg = Number(pkg.is_lifetime) === 1;
+    endPreview.style.background = '#ecfdf5';
+    endPreview.style.color = '#065f46';
+    endPreview.innerHTML =
+      '<b>✓ ' + (lifetimePkg ? 'Lifetime plan' : 'Valid till: ' + end.toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' })) + '</b>' +
+      (lifetimePkg ? ' — no renewal needed' : ' &nbsp;·&nbsp; ' + days + ' days from today &nbsp;·&nbsp; ₹' + Number(pkg.base_price_inr || 0).toLocaleString('en-IN'));
+  }
+  pkgSel.addEventListener('change', _refreshEndPreview);
+  f.appendChild(endPreview);
+  _refreshEndPreview();
   field('Industry pack', 'industry_pack', 'select', false, [
     { value: '', label: 'Generic' },
     { value: 'education', label: 'Education' },
@@ -2260,8 +2300,7 @@ async function openSignupRequestModal(id, onClose) {
     { value: 'half_year', label: 'Half-yearly (6 months)' },
     { value: 'year', label: 'Yearly' },
     { value: '2year', label: '2 years' },
-    { value: '3year', label: '3 years' },
-    { value: 'lifetime', label: 'Lifetime' }
+    { value: '3year', label: '3 years' }
   ]).value = row.desired_tenure || '';
   field('Number of users', 'desired_users', 'number');
   field('Notes', 'notes', 'textarea', true);
