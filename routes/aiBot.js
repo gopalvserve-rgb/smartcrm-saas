@@ -1445,7 +1445,11 @@ async function _hasCommitSignal(phone) {
     );
     const msgs = (r.rows || []).map(m => ({ dir: m.direction, txt: String(m.body || '').toLowerCase() }));
     // Customer commit signals (THEY said these)
+    // AIBOT_COMMIT_v2 (2026-05-31): expanded list with more decision phrases
+    // (\'not interested\', \'wrong number\', \'do not call\' etc count as decisions too -
+    // bot should also stop following up if the customer has declined).
     const COMMIT_KW_IN = [
+      // Positive commits
       'book demo', 'book a demo', 'book the demo', 'demo booked', 'demo confirmed',
       'schedule call', 'schedule a call', 'call me tomorrow', 'call me at', 'call back tomorrow',
       'callback at', 'call back at', 'fix the meeting', 'meeting scheduled', 'meeting fixed',
@@ -1454,7 +1458,16 @@ async function _hasCommitSignal(phone) {
       'we will go ahead', 'lets proceed', "let's proceed", 'confirmed', 'deal done',
       'order placed', 'i have decided', 'decision taken', 'going with you', 'will sign',
       'ok done', 'ok confirmed', 'thik hai', 'theek hai', 'bana do', 'kal call karo',
-      'kal baat karte', 'kal milte', 'kal milenge', 'subah call', 'morning call'
+      'kal baat karte', 'kal milte', 'kal milenge', 'subah call', 'morning call',
+      // Negative decisions (still a decision - stop following up)
+      'not interested', 'no thanks', 'no thank you', 'not now', 'maybe later',
+      'wrong number', 'wrong person', 'stop messaging', 'stop sending', 'unsubscribe',
+      'do not call', "don't call", 'do not message', "don't message", 'remove me',
+      'mat karo', 'nahi chahiye', 'nahin chahiye', 'mujhe nahi', 'mujhe nahin',
+      // Time-bound future commitments
+      'busy now', 'busy right now', 'in a meeting', 'will call you', 'will get back',
+      "i'll get back", 'will reach out', "i'll reach out", 'circle back', 'later in the week',
+      'next week', 'next month', 'after diwali', 'after holi', 'after the weekend'
     ];
     // Bot / agent acknowledgements
     const COMMIT_KW_OUT = [
@@ -1475,10 +1488,19 @@ async function _hasCommitSignal(phone) {
 async function _scheduleReengage({ settings, phone, leadId, inboundPhoneId }) {
   if (!settings || Number(settings.reengage_enabled) !== 1) return;
   // AIBOT_COMMIT_v1 — skip re-engagement if customer has already committed.
+  // AIBOT_COMMIT_v2 (2026-05-31): when commit detected, ALSO cancel any
+  // pending scheduled rows from earlier inbounds so the 60-min-later worker
+  // doesn\'t fire a stale follow-up at a customer who already booked.
   try {
     const sig = await _hasCommitSignal(phone);
     if (sig.committed) {
       console.log('[reengage] skipped — ' + sig.reason);
+      try {
+        await db.query(
+          `UPDATE ai_reengage_log SET status = 'cancelled', cancelled_reason = $2 WHERE phone = $1 AND status = 'scheduled'`,
+          [String(phone), 'commit detected: ' + sig.reason.slice(0, 150)]
+        );
+      } catch (_) {}
       return;
     }
   } catch (_) {}
@@ -1561,6 +1583,22 @@ async function _reengageTick() {
         await db.query(`UPDATE ai_reengage_log SET status = 'cancelled', cancelled_reason = 'bot disabled re-engagement' WHERE id = $1`, [row.id]);
         continue;
       }
+      // AIBOT_COMMIT_v2 (2026-05-31): defence-in-depth - re-check commit
+      // signal RIGHT BEFORE sending. The scheduler check at submission time
+      // can race with a late commitment (customer messages at minute 55,
+      // worker fires at minute 60). Without this re-check the customer
+      // would receive a stale follow-up despite their commitment.
+      try {
+        const lateSig = await _hasCommitSignal(row.phone);
+        if (lateSig.committed) {
+          await db.query(
+            `UPDATE ai_reengage_log SET status = 'cancelled', cancelled_reason = $2 WHERE id = $1`,
+            [row.id, 'commit detected at send time: ' + (lateSig.reason || '').slice(0, 150)]
+          );
+          console.log('[reengage] id=' + row.id + ' phone=' + row.phone + ' cancelled — ' + lateSig.reason);
+          continue;
+        }
+      } catch (_) { /* fail open - if check errors, send the message rather than block forever */ }
       // Render {{name}} from the lead row (if any)
       let leadName = '';
       if (row.lead_id) {
