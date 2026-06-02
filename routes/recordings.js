@@ -87,24 +87,53 @@ async function _findLeadByPhone(phone) {
 // CALL_LOG_PERF_v1 — module-level config cache. CALLS_AUTOLEAD_*
 // rarely change and were being read on EVERY call event (5 DB hits
 // per dial). Cache for 60 seconds.
-const _autoleadCfg = { at: 0, val: null };
+//
+// SHIPUNCLE_CALL_LEAD_v1 fix (2026-06-02) — CRITICAL multi-tenant bug:
+// the original cache was a single module-level singleton, so the first
+// tenant to populate it won for 60 seconds across the whole Node.js
+// process. Shipuncle's CALLS_AUTOLEAD_INBOUND='0' was being overwritten
+// by vserve's '1' (or any other tenant with the toggle ON), causing
+// incoming calls to auto-create leads despite the checkbox being OFF.
+// Now keyed by tenant dbName resolved from tenantStorage (the same
+// AsyncLocalStorage the rest of the multi-tenant DB layer uses).
+const _autoleadCfgByTenant = new Map();
+function _tenantKey() {
+  try {
+    const s = db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore();
+    if (s && s.pool) {
+      // Pool's connectionParameters carries dbName for tenant-scoped pools.
+      const cp = s.pool.options || s.pool.connectionParameters || {};
+      return String(cp.database || cp.connectionString || s.tenantSlug || '_default');
+    }
+  } catch (_) {}
+  return '_default';
+}
 async function _getAutoleadCfg() {
+  const key = _tenantKey();
   const now = Date.now();
-  if (_autoleadCfg.val && (now - _autoleadCfg.at) < 60000) return _autoleadCfg.val;
+  const hit = _autoleadCfgByTenant.get(key);
+  if (hit && (now - hit.at) < 60000) return hit.val;
   const [mode, inb, out, statusId] = await Promise.all([
     db.getConfig('CALLS_AUTOLEAD_MODE', 'auto'),
     db.getConfig('CALLS_AUTOLEAD_INBOUND', '1'),
     db.getConfig('CALLS_AUTOLEAD_OUTBOUND', '0'),
     db.getConfig('CALLS_AUTOLEAD_STATUS_ID', '0')
   ]);
-  _autoleadCfg.val = {
+  const val = {
     mode: String(mode || 'auto').toLowerCase(),
     inbound: String(inb || '1'),
     outbound: String(out || '0'),
     statusId: Number(statusId) || 0
   };
-  _autoleadCfg.at = now;
-  return _autoleadCfg.val;
+  _autoleadCfgByTenant.set(key, { at: now, val });
+  // Tiny LRU guard — keep at most 200 tenants in the map. We process
+  // ~60 tenants today so this is forward headroom; entries get evicted
+  // FIFO if we ever exceed the cap.
+  if (_autoleadCfgByTenant.size > 200) {
+    const firstKey = _autoleadCfgByTenant.keys().next().value;
+    _autoleadCfgByTenant.delete(firstKey);
+  }
+  return val;
 }
 
 async function api_call_logEvent(token, payload) {
