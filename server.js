@@ -985,6 +985,18 @@ app.get(/^\/t\/[a-z0-9-]+\/?$/, async (req, res, next) => {
 
 app.use(attachTenant);
 
+// INDIAMART_WEBHOOK_LOG_FIX_v4 (2026-06-02) — real root cause.
+// The webhook logger was originally mounted at /hook BEFORE attachTenant
+// (line 110). But the central PHP forwarder dispatches webhooks via
+// /t/<slug>/hook/... — and at line-110-time req.url still has the
+// /t/<slug> prefix, so the /hook middleware never matched. Result: every
+// /hook hit via the forwarder bypassed logging entirely. Mounting again
+// here, AFTER attachTenant has stripped the prefix, makes the middleware
+// fire for both direct /hook/* requests AND forwarded /t/<slug>/hook/*
+// requests (which by this point have been rewritten to /hook/*).
+// The earlier mount stays — it covers any pre-attachTenant /hook traffic.
+app.use('/hook', _webhookLogger.middleware());
+
 // ---- Public /q/:token quotation viewer (tenant-scoped) ----
 app.get('/q/:token', (req, res, next) => {
   if (!req.tenant) return res.status(404).send('Tenant not found');
