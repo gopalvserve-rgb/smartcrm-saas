@@ -2,6 +2,10 @@
 -- Idempotent: only inserts if the title doesn't already exist.
 INSERT INTO changelog (category, title, body, link, icon, created_at)
 SELECT * FROM (VALUES
+  ('feature', '🔔 Mute notifications — per-user master switch',
+   'Settings → Security now has a Notifications card with a simple ON/OFF button. When OFF, every push (new lead, follow-up due, heat alert, WhatsApp inbound, click-to-mobile, etc.) is silenced for that user only — other users are unaffected. Admins finally have a single-click way to go heads-down without uninstalling the app or disabling each tenant feature individually.',
+   '#/admin', '🔔', NOW()),
+
   ('feature', '🔄 Campaign Reset — recycle non-final leads to the pool',
    'On the Campaigns page each campaign row now has a 🔄 Reset button (admin only). Use case: you put 500 leads in a campaign, the team called them, 10 reached a final status (Won / Lost / Junk), 490 are still in-play but stuck on the original agents. Click Reset and every non-final lead in that campaign is un-assigned, made re-pullable, and hidden from sales people personal lists until the next pull. Next time anyone clicks Start Calling, those 490 redistribute fresh according to the campaign settings. Leads in a final status are NEVER touched.',
    '#/campaigns', '🔄', NOW()),

@@ -1464,7 +1464,50 @@ async function openSecurityModal() {
           cpOld.value = ''; cpNew.value = '';
         } catch (e) { toast(e.message, 'err'); }
       } }, 'Update password')
-    )
+    ),
+
+    h('hr', { style: { margin: '18px 0', border: '0', borderTop: '1px solid var(--border-light)' } }),
+
+    /* NOTIF_TOGGLE_v1 — admin (and every user) can silence all push notifications. */
+    (function () {
+      const wrap = h('div', {});
+      wrap.appendChild(h('h4', { style: { margin: '4px 0 8px' } }, '🔔 Notifications'));
+      const state = h('div', {
+        style: {
+          padding: '10px 12px', borderRadius: '6px', display: 'flex',
+          justifyContent: 'space-between', alignItems: 'center', gap: '10px',
+          background: 'var(--bg-alt)', fontWeight: 500
+        }
+      });
+      const label = h('span', {}, 'Loading…');
+      const btn = h('button', { class: 'btn sm primary' }, '…');
+      state.appendChild(label);
+      state.appendChild(btn);
+      wrap.appendChild(state);
+      wrap.appendChild(h('p', { class: 'muted', style: { fontSize: '.78rem', marginTop: '6px' } },
+        'Silences every push (new lead, follow-up due, heat alert, WhatsApp inbound, click-to-mobile, etc.) for just you. Other users are unaffected.'));
+      function paint(enabled) {
+        state.style.background = enabled ? 'var(--ok-soft)' : 'var(--warn-soft)';
+        state.style.color = enabled ? 'var(--ok)' : 'var(--warn)';
+        label.textContent = enabled ? '✓ Notifications are ON' : '🔕 Notifications are OFF';
+        btn.textContent = enabled ? 'Turn OFF' : 'Turn ON';
+        btn.dataset.next = enabled ? '0' : '1';
+      }
+      api('api_user_notifGet')
+        .then(r => paint(Number(r.enabled) !== 0))
+        .catch(e => { label.textContent = 'Error: ' + e.message; });
+      btn.onclick = async () => {
+        btn.disabled = true;
+        try {
+          const next = Number(btn.dataset.next);
+          const r = await api('api_user_notifSet', next);
+          paint(Number(r.enabled) !== 0);
+          toast(Number(r.enabled) ? 'Notifications turned ON' : 'Notifications turned OFF', 'ok');
+        } catch (e) { toast(e.message, 'err'); }
+        finally { btn.disabled = false; }
+      };
+      return wrap;
+    })()
   ));
   document.body.appendChild(modal);
   renderStatus();

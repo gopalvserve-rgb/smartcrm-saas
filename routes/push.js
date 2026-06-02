@@ -139,6 +139,7 @@ async function ensureSchema() {
     // INSERT in api_fcm_register would crash with 'column platform does
     // not exist'. ALTER ADD COLUMN IF NOT EXISTS is idempotent + safe.
     await db.query(`
+      ALTER TABLE users      ADD COLUMN IF NOT EXISTS notifications_enabled SMALLINT NOT NULL DEFAULT 1;
       ALTER TABLE fcm_tokens ADD COLUMN IF NOT EXISTS platform TEXT;
       ALTER TABLE fcm_tokens ADD COLUMN IF NOT EXISTS ua TEXT;
       ALTER TABLE fcm_tokens ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
@@ -412,6 +413,16 @@ async function _sendFcm(userId, payload) {
  * actually happened in the logs.
  */
 async function sendPushToUser(userId, payload) {
+  // NOTIF_TOGGLE_v1 (2026-06-01) — per-user master switch. If the user has
+  // flipped notifications OFF in Settings → Security → Notifications, we
+  // skip every push channel (web + FCM) right here so the entire CRM
+  // respects the choice without each call-site having to remember.
+  try {
+    const u = await db.findById('users', Number(userId));
+    if (u && Number(u.notifications_enabled) === 0) {
+      return { sent: 0, failed: 0, suppressed: true, reason: 'notifications_off' };
+    }
+  } catch (_) {}
   const [web, fcm] = await Promise.all([
     _sendWebPush(userId, payload).catch(e => ({ sent: 0, failed: 0, error: e.message })),
     _sendFcm(userId, payload).catch(e => ({ sent: 0, failed: 0, error: e.message }))
@@ -583,7 +594,35 @@ async function api_push_diag(token) {
   };
 }
 
+
+/* ============================================================
+ * NOTIF_TOGGLE_v1 — per-user master switch for all push paths.
+ *
+ *   api_user_notifGet()       → { enabled: 0|1 }
+ *   api_user_notifSet(enabled)→ { ok, enabled }
+ *
+ * Mute is checked at sendPushToUser() so every existing path
+ * (new-lead, follow-up due, heat alert, WA inbound, click-to-
+ * mobile, etc.) is silenced for the user in one place.
+ * ============================================================ */
+async function api_user_notifGet(token) {
+  const me = await authUser(token);
+  await ensureSchema();
+  const r = await db.query('SELECT notifications_enabled FROM users WHERE id = $1', [me.id]);
+  const v = r.rows[0] ? Number(r.rows[0].notifications_enabled) : 1;
+  return { enabled: v === 0 ? 0 : 1 };
+}
+
+async function api_user_notifSet(token, enabled) {
+  const me = await authUser(token);
+  await ensureSchema();
+  const v = (enabled === 0 || enabled === '0' || enabled === false) ? 0 : 1;
+  await db.query('UPDATE users SET notifications_enabled = $1 WHERE id = $2', [v, me.id]);
+  return { ok: true, enabled: v };
+}
+
 module.exports = {
+  api_user_notifGet, api_user_notifSet, /* NOTIF_TOGGLE_v1 */
   api_push_publicKey, api_push_subscribe, api_push_unsubscribe, api_push_test,
   api_fcm_register, api_fcm_unregister, api_fcm_userDiag,
   api_call_via_mobile,
