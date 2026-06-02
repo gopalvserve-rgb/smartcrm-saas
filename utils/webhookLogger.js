@@ -129,6 +129,7 @@ async function writeRow(req, c, code, respText, durationMs, tenantPool) {
   // setImmediate so we never block the actual response. Errors are
   // swallowed — webhook delivery must not depend on log success.
   setImmediate(async () => {
+    let _diag = { path: c.path, has_tenant_pool: !!tenantPool, has_req_tenant: !!(req && req.tenant), tenant_slug: req && req.tenantSlug };
     try {
       const db = require('../db/pg');
       // INDIAMART_WEBHOOK_LOG_FIX_v1 — use the tenant pool snapshotted at
@@ -169,7 +170,18 @@ async function writeRow(req, c, code, respText, durationMs, tenantPool) {
          )`, [MAX_ROWS]
       );
     } catch (e) {
-      console.warn('[webhook-log] insert failed:', e.message);
+      console.warn('[webhook-log] insert failed:', e.message, 'diag=' + JSON.stringify(_diag));
+      // INDIAMART_WEBHOOK_LOG_FIX_v3 — surface the failure to control.error_logs
+      // so super-admin can see WHY rows aren't landing in tenant webhook_logs.
+      try {
+        const errorLogs = require('../routes/saas/errorLogs');
+        await errorLogs.logError({
+          source: 'webhook-log',
+          severity: 'warn',
+          message: '[webhook-log] insert failed for ' + (c.path || '?') + ': ' + e.message,
+          stack: 'diag=' + JSON.stringify(_diag)
+        });
+      } catch (_) {}
     }
   });
 }
