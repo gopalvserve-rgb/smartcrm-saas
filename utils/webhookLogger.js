@@ -47,7 +47,21 @@ function _redactHeaders(h) {
 function middleware() {
   return function _webhookLogger(req, res, next) {
     const start = Date.now();
-    // Stash the captured body
+    // INDIAMART_WEBHOOK_LOG_FIX_v1 (2026-06-02)
+    // Bug 1: This middleware is mounted on /hook BEFORE bodyParser.json,
+    // so req.body was undefined when we tried to snapshot it here at
+    // request-entry time. Result: every webhook_logs row had body_text=''
+    // — admins saw the row but no payload, so they assumed nothing arrived.
+    // Fix: defer the body snapshot to res.end, by which point body-parser
+    // AND the handler have run.
+    //
+    // Bug 2: writeRow fires through setImmediate from middleware scope —
+    // the tenant AsyncLocalStorage was set BY _runHookAsTenant which ran
+    // AFTER this middleware, so when setImmediate eventually fired we'd
+    // already exited the tenant scope and writes landed on the default
+    // pool. Fix: capture the tenantStorage pool at res.end time (when
+    // _runAsTenant is still on the stack) and pass it explicitly to
+    // writeRow so the row lands in the correct tenant DB.
     const captured = {
       path:   String(req.originalUrl || req.url || '').slice(0, 500),
       method: String(req.method || ''),
@@ -55,7 +69,7 @@ function middleware() {
       user_agent: String(req.headers['user-agent'] || ''),
       headers_json: _safeJson(_redactHeaders(req.headers), MAX_HEADERS),
       query_json:   _safeJson(req.query || {}, 2000),
-      body_text:    _safeJson(req.body, MAX_BODY)
+      body_text:    ''   // populated at res.end below
     };
 
     // Wrap response writers to capture the response payload + code
@@ -76,24 +90,39 @@ function middleware() {
       try {
         if (body && !responseText) responseText = _safeJson(body, MAX_BODY);
         if (!responseCode) responseCode = res.statusCode || 200;
+        // Body parser AND the route handler have now run — snapshot the
+        // parsed body NOW so we record what the sender actually sent.
+        captured.body_text = _safeJson(req.body, MAX_BODY);
       } catch (_) {}
-      writeRow(req, captured, responseCode, responseText, Date.now() - start);
+      // Capture the tenant pool synchronously while still inside the
+      // _runAsTenant scope (which is on the stack right now).
+      let tenantPool = null;
+      try {
+        const _db = require('../db/pg');
+        const _store = _db.tenantStorage && _db.tenantStorage.getStore && _db.tenantStorage.getStore();
+        if (_store && _store.pool) tenantPool = _store.pool;
+      } catch (_) {}
+      writeRow(req, captured, responseCode, responseText, Date.now() - start, tenantPool);
       return origEnd(body, enc);
     };
     next();
   };
 }
 
-async function writeRow(req, c, code, respText, durationMs) {
+async function writeRow(req, c, code, respText, durationMs, tenantPool) {
   // setImmediate so we never block the actual response. Errors are
   // swallowed — webhook delivery must not depend on log success.
   setImmediate(async () => {
     try {
       const db = require('../db/pg');
-      // The tenant pool is set on the AsyncLocalStorage by the tenant
-      // middleware that ran before this. If there's no store, fall back
-      // to the default (single-tenant) pool.
-      await db.query(`
+      // INDIAMART_WEBHOOK_LOG_FIX_v1 — use the tenant pool snapshotted at
+      // res.end time. AsyncLocalStorage is NOT preserved across the
+      // setImmediate boundary here, so we can't rely on
+      // db.tenantStorage.getStore() inside this callback.
+      const _q = tenantPool
+        ? (sql, params) => tenantPool.query(sql, params)
+        : db.query;
+      await _q(`
         CREATE TABLE IF NOT EXISTS webhook_logs (
           id            SERIAL PRIMARY KEY,
           path          TEXT NOT NULL,
@@ -109,16 +138,16 @@ async function writeRow(req, c, code, respText, durationMs) {
           created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
       `);
-      await db.query(`CREATE INDEX IF NOT EXISTS idx_webhook_logs_created ON webhook_logs(created_at DESC)`);
-      await db.query(`CREATE INDEX IF NOT EXISTS idx_webhook_logs_path    ON webhook_logs(path)`);
-      await db.query(
+      await _q(`CREATE INDEX IF NOT EXISTS idx_webhook_logs_created ON webhook_logs(created_at DESC)`);
+      await _q(`CREATE INDEX IF NOT EXISTS idx_webhook_logs_path    ON webhook_logs(path)`);
+      await _q(
         `INSERT INTO webhook_logs (path, method, source_ip, user_agent, headers_json, query_json, body_text, response_code, response_text, duration_ms)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
         [c.path, c.method, c.source_ip, c.user_agent, c.headers_json, c.query_json, c.body_text,
          code || 0, (respText || '').slice(0, MAX_BODY), Number.isFinite(durationMs) ? durationMs : 0]
       );
       // Cap table size — delete oldest rows beyond MAX_ROWS
-      await db.query(
+      await _q(
         `DELETE FROM webhook_logs WHERE id IN (
            SELECT id FROM webhook_logs ORDER BY id DESC OFFSET $1
          )`, [MAX_ROWS]
