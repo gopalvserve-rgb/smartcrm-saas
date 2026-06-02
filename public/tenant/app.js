@@ -824,6 +824,7 @@ async function apiRaw(fn, ...args) {
       }
       renderShell();
       await warmCache();
+      try { await warmCacheNotifPref(); } catch (_) {}
       // Resolve chat access for the current user — admin can disable chat
       // for specific roles. Stored in CRM.access.can_chat so renderShell's
       // nav rendering and gates check it consistently.
@@ -914,6 +915,29 @@ function parseHashView() {
   return m ? m[1] : null;
 }
 
+// NOTIF_TOGGLE_v2 (2026-06-02) ------------------------------------------
+//   CRM._notifEnabled is a client-side cache of users.notifications_enabled.
+//   _notifGuard() is the single chokepoint every in-app popup / chime /
+//   browser-notification should hit before firing. When the user has the
+//   master switch OFF (toggled in Settings → Security → 🔔 Notifications),
+//   every popup the SPA shows is suppressed — matching the server-side
+//   gate at sendPushToUser() in routes/push.js so the experience is
+//   consistent across web push, FCM, AND in-app pop-ups.
+//
+//   Default is "on" if we haven't loaded the flag yet — we'd rather show a
+//   stray notification than silently swallow it before the cache warms.
+//   The cache is refreshed (a) right after login by warmCacheNotifPref()
+//   and (b) every time the user flips the toggle in the Security modal.
+// ------------------------------------------------------------------------
+function _notifGuard() {
+  try { return CRM._notifEnabled !== false; } catch (_) { return true; }
+}
+async function warmCacheNotifPref() {
+  try {
+    const r = await api('api_user_notifGet');
+    CRM._notifEnabled = Number(r && r.enabled) !== 0;
+  } catch (_) { CRM._notifEnabled = true; }
+}
 async function warmCache() {
   const [statuses, sources, products, users, customFields, cfg, mods, brand, packs] = await Promise.all([
     api('api_statuses_list'),
@@ -1494,13 +1518,14 @@ async function openSecurityModal() {
         btn.dataset.next = enabled ? '0' : '1';
       }
       api('api_user_notifGet')
-        .then(r => paint(Number(r.enabled) !== 0))
+        .then(r => { CRM._notifEnabled = Number(r.enabled) !== 0; paint(CRM._notifEnabled); })
         .catch(e => { label.textContent = 'Error: ' + e.message; });
       btn.onclick = async () => {
         btn.disabled = true;
         try {
           const next = Number(btn.dataset.next);
           const r = await api('api_user_notifSet', next);
+          CRM._notifEnabled = Number(r.enabled) !== 0;   /* NOTIF_TOGGLE_v2 */
           paint(Number(r.enabled) !== 0);
           toast(Number(r.enabled) ? 'Notifications turned ON' : 'Notifications turned OFF', 'ok');
         } catch (e) { toast(e.message, 'err'); }
@@ -29789,11 +29814,13 @@ async function checkNewLeads() {
       Object.assign(fresh, { length: 0 });
       reallyFresh.forEach(x => fresh.push(x));
       // Show toast + system notification (if granted) + in-app popup
+      // NOTIF_TOGGLE_v2 — if user has the master switch OFF, fall through silently
+      const _notifyOk = _notifGuard();
       const summary = fresh.length === 1
         ? `🎯 New lead: ${fresh[0].name || fresh[0].phone || 'Unknown'}`
         : `🎯 ${fresh.length} new leads received`;
-      toast(summary);
-      try {
+      if (_notifyOk) toast(summary);
+      if (_notifyOk) try {
         if ('Notification' in window && Notification.permission === 'granted') {
           fresh.slice(0, 3).forEach(l => new Notification('🎯 New lead', {
             body: `${l.name || ''} ${l.phone || ''}\nSource: ${l.source || '—'}`,
@@ -29804,7 +29831,7 @@ async function checkNewLeads() {
           Notification.requestPermission().catch(() => {});
         }
       } catch (_) {}
-      popupNewLeads(fresh);
+      if (_notifyOk) popupNewLeads(fresh);
       // If the user is on the leads page, refresh inline
       if (location.hash === '#/leads' && typeof loadLeads === 'function') {
         loadLeads();
@@ -29815,6 +29842,7 @@ async function checkNewLeads() {
 
 let _newLeadPopupShown = false;
 function popupNewLeads(leads) {
+  if (!_notifGuard()) return;                              /* NOTIF_TOGGLE_v2 */
   if (_newLeadPopupShown) return;
   _newLeadPopupShown = true;
   const close = () => { modal.remove(); _newLeadPopupShown = false; };
@@ -30112,6 +30140,7 @@ let _popupShown = false;
 const _firedHeatAlertIds = new Set();
 let _heatPopupOpen = false;
 function popupHeatAlert(d) {
+  if (!_notifGuard()) return;                              /* NOTIF_TOGGLE_v2 */
   const all = (d.unread_notifications || []).filter(n => String(n.type || '') === 'heat_alert');
   const fresh = all.filter(n => {
     const k = 'h:' + (n.id || (n.title + '|' + n.created_at));
@@ -30151,6 +30180,7 @@ function popupHeatAlert(d) {
   document.body.appendChild(modal);
 }
 function popupFollowupDue(d) {
+  if (!_notifGuard()) return;                              /* NOTIF_TOGGLE_v2 */
   // Filter the urgent items down to ones we have NOT yet shown a popup for.
   // Use the followup id when available, otherwise lead_id+due_at as a stable key.
   const all = [...(d.overdue || []), ...(d.due_today || [])];
