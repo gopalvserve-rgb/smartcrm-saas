@@ -94,13 +94,29 @@ function middleware() {
         // parsed body NOW so we record what the sender actually sent.
         captured.body_text = _safeJson(req.body, MAX_BODY);
       } catch (_) {}
-      // Capture the tenant pool synchronously while still inside the
-      // _runAsTenant scope (which is on the stack right now).
+      // INDIAMART_WEBHOOK_LOG_FIX_v2 (2026-06-02) — switched from
+      // AsyncLocalStorage.getStore() to req.tenant. _runAsTenant in
+      // server.js stamps `req.tenant = t` BEFORE calling the handler
+      // (server.js:329), and req travels through the whole response
+      // lifecycle. By the time res.end fires, req.tenant is set even
+      // though the storage's getStore() returns null inside this wrapper
+      // (likely because res.end is invoked from a different async chain
+      // than the storage.run() callback). Resolve the pool from the
+      // tenant lookup map directly — same pool the request actually used.
       let tenantPool = null;
       try {
-        const _db = require('../db/pg');
-        const _store = _db.tenantStorage && _db.tenantStorage.getStore && _db.tenantStorage.getStore();
-        if (_store && _store.pool) tenantPool = _store.pool;
+        if (req && req.tenant) {
+          const tp = require('./tenantPool');
+          tenantPool = tp.poolFor(req.tenant) || null;
+        }
+        // Fallback: if for some reason req.tenant isn't set, still try
+        // AsyncLocalStorage so non-/hook traffic on tenant subdomains
+        // (which goes through different middleware) still logs correctly.
+        if (!tenantPool) {
+          const _db = require('../db/pg');
+          const _store = _db.tenantStorage && _db.tenantStorage.getStore && _db.tenantStorage.getStore();
+          if (_store && _store.pool) tenantPool = _store.pool;
+        }
       } catch (_) {}
       writeRow(req, captured, responseCode, responseText, Date.now() - start, tenantPool);
       return origEnd(body, enc);
