@@ -22914,15 +22914,44 @@ function openAutomationModal(existing) {
           { value: 'campaign.status_changed',label: '🎯 Campaign · lead status changed' }
         ]),
         selectField('channel', 'Channel *', a.channel, [
-          { value: 'email',    label: 'Email (SMTP)' },
-          { value: 'whatsapp', label: 'WhatsApp' },
-          { value: 'webhook',  label: 'Webhook (POST URL)' }
+          { value: 'email',         label: 'Email (SMTP)' },
+          { value: 'whatsapp',      label: 'WhatsApp' },
+          { value: 'webhook',       label: 'Webhook (POST URL)' },
+          { value: 'reassign_lead', label: '🔄 Reassign lead to user(s)' }   /* AUTOMATION_REASSIGN_v1 */
         ]),
         selectField('recipient', 'Send to', a.recipient, [
           { value: 'lead',     label: 'The lead' },
           { value: 'assignee', label: 'Assigned user' },
           { value: 'admin',    label: 'Admin' }
         ]),
+        // AUTOMATION_REASSIGN_v1 — multi-user target picker for the
+        // Reassign channel. Hidden unless channel === 'reassign_lead'.
+        // The saved value flows back into the same 'recipient' field on
+        // the automation row, formatted as 'users:1,2,3' (or 'user:1' for
+        // single). The backend _reassignLead() parses that format.
+        h('div', { class: 'f-row full', id: 'auto-reassign-row', hidden: true },
+          h('label', {}, 'Reassign to (tick everyone — round-robin distributes across them by fewest leads today)'),
+          h('div', { id: 'auto-reassign-picker', class: 'card',
+            style: { padding: '.5rem .75rem', maxHeight: '220px', overflowY: 'auto',
+                     display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '.25rem' }
+          }, ...(CRM.cache.users || []).map(u => {
+            const preselected = (function () {
+              const raw = String(a.recipient || '').trim();
+              if (raw.startsWith('users:')) {
+                return raw.slice(6).split(',').map(x => Number(x.trim())).includes(Number(u.id));
+              }
+              if (raw.startsWith('user:')) return Number(raw.slice(5)) === Number(u.id);
+              return false;
+            })();
+            return h('label', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', padding: '.25rem .35rem', cursor: 'pointer', borderRadius: '4px' } },
+              h('input', { type: 'checkbox', class: 'reassign-target', value: u.id, checked: preselected ? 'checked' : null }),
+              h('span', {}, u.name),
+              h('span', { class: 'muted', style: { fontSize: '.75rem' } }, ' (' + u.role + ')')
+            );
+          })),
+          h('small', { class: 'muted', style: { display: 'block', marginTop: '.4rem' } },
+            'Previous owner is replaced silently. A remark is added to the lead so admin can see who moved it and when. Paused / inactive users are skipped automatically.')
+        ),
         // AUTOMATION_RULES_v1 (2026-05-28): structured rule-builder for the
         // Condition field. Saves to the SAME wire format the backend already
         // understands: "field=value && field=value && tag:hot". Free-form
@@ -23001,6 +23030,15 @@ function openAutomationModal(existing) {
             // placeholder if there are zero body params.
             if (!template) template = '_';
           }
+          // AUTOMATION_REASSIGN_v1 — collect ticked target users and stuff them
+          // into the recipient field as 'users:1,2,3'. The backend
+          // _reassignLead() parses this exact format.
+          let recipientFinal = recipient;
+          if (channel === 'reassign_lead') {
+            const ids = [...document.querySelectorAll('.reassign-target:checked')].map(c => c.value);
+            if (!ids.length) { toast('Pick at least one user to reassign to', 'err'); return; }
+            recipientFinal = (ids.length === 1 ? 'user:' : 'users:') + ids.join(',');
+          }
           // Friendlier client-side validation
           const missing = [];
           if (!name)     missing.push('Name');
@@ -23010,7 +23048,7 @@ function openAutomationModal(existing) {
           if (channel === 'whatsapp' && !subject.startsWith('template:')) missing.push('WhatsApp template');
           if (missing.length) { toast('Fill in: ' + missing.join(', '), 'err'); return; }
           const payload = { id: a.id, name, event: eventKey, channel,
-            recipient, condition, subject, template, is_active: 1 };
+            recipient: recipientFinal, condition, subject, template, is_active: 1 };
           try { await api('api_automations_save', payload); toast('Saved'); modal.remove(); showAdminTab('automations'); }
           catch (e) { toast(e.message, 'err'); }
         } }, 'Save')
@@ -23051,11 +23089,18 @@ function toggleChannelUI(channel) {
   const wa       = $('#auto-wa-template-row');
   const waVars   = $('#auto-wa-vars-row');
   const tplBody  = $('#auto-template-row');
+  const reass    = $('#auto-reassign-row');         /* AUTOMATION_REASSIGN_v1 */
+  const sendTo   = document.querySelector('#auto-form [name="recipient"]');
   if (sub)     sub.hidden     = channel !== 'email';
   if (wa)      wa.hidden      = channel !== 'whatsapp';
   if (waVars)  waVars.hidden  = channel !== 'whatsapp';
-  // Email channel uses the free-form body textarea; WhatsApp doesn't
-  if (tplBody) tplBody.hidden = channel === 'whatsapp';
+  // Email channel uses the free-form body textarea; WhatsApp doesn't.
+  // Reassign channel doesn't need a message body either.
+  if (tplBody) tplBody.hidden = (channel === 'whatsapp' || channel === 'reassign_lead');
+  if (reass)   reass.hidden   = channel !== 'reassign_lead';
+  // Hide the "Send to" select for the reassign channel — the target is
+  // picked from the multi-user list below instead.
+  if (sendTo && sendTo.closest('.f-row')) sendTo.closest('.f-row').hidden = (channel === 'reassign_lead');
   if (channel === 'whatsapp') loadWATemplates().then(() => renderWaVarsForSelected());
 }
 

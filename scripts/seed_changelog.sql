@@ -2,6 +2,10 @@
 -- Idempotent: only inserts if the title doesn't already exist.
 INSERT INTO changelog (category, title, body, link, icon, created_at)
 SELECT * FROM (VALUES
+  ('feature', '🔄 Auto-reassign lead on status change',
+   'Automations now has a new action channel: 🔄 Reassign lead to user(s). Pick the event (Status changed / Lead created / etc.), set the condition (e.g. status = Interested), then in Channel pick Reassign lead and tick the agent(s) who should receive the lead. Multi-select acts as a round-robin pool — the agent with the fewest leads today wins. Previous owner is replaced silently and an audit remark is added to the lead. Paused / inactive users are skipped automatically. 60-second debounce prevents reassign loops. Live now at Admin → Settings → Automation → Automations.',
+   '#/admin', '🔄', NOW()),
+
   ('feature', '🔔 Mute notifications — per-user master switch',
    'Settings → Security now has a Notifications card with a simple ON/OFF button. When OFF, every push (new lead, follow-up due, heat alert, WhatsApp inbound, click-to-mobile, etc.) is silenced for that user only — other users are unaffected. Admins finally have a single-click way to go heads-down without uninstalling the app or disabling each tenant feature individually.',
    '#/admin', '🔔', NOW()),

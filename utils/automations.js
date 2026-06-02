@@ -46,10 +46,19 @@ async function fire(event, ctx) {
           await _log(a, ctx, 'skipped', _why ? ('rule failed: ' + _why) : 'condition not met');
           continue;
         }
-        const recipient = await _resolveRecipient(a, ctx);
-        if (!recipient) {
-          await _log(a, ctx, 'skipped', 'no recipient');
-          continue;
+        let recipient;
+        if (a.channel === 'reassign_lead') {
+          // AUTOMATION_REASSIGN_v1 — recipient is not an email/phone.
+          // The picked-agent list lives on the automation row (recipient
+          // field stores 'user:123' or 'users:1,2,3'). Validation deferred
+          // to _reassignLead which produces a clear error if mis-configured.
+          recipient = String(a.recipient || '').trim() || '_default';
+        } else {
+          recipient = await _resolveRecipient(a, ctx);
+          if (!recipient) {
+            await _log(a, ctx, 'skipped', 'no recipient');
+            continue;
+          }
         }
         const rendered = _render(a.template, ctx);
         const subject  = _render(a.subject || '', ctx);
@@ -57,6 +66,7 @@ async function fire(event, ctx) {
         if (a.channel === 'email')        result = await _sendEmail(recipient, subject, rendered);
         else if (a.channel === 'whatsapp') result = await _sendWhatsApp(recipient, rendered, ctx, a);
         else if (a.channel === 'webhook')  result = await _sendWebhook(rendered, ctx);
+        else if (a.channel === 'reassign_lead') result = await _reassignLead(a, ctx);   /* AUTOMATION_REASSIGN_v1 */
         else                               result = { ok: false, error: 'unknown channel: ' + a.channel };
 
         await _log(a, ctx, result.ok ? 'sent' : 'failed', result.detail || result.error || '');
@@ -551,5 +561,120 @@ async function _log(a, ctx, status, detail) {
     });
   } catch (_) {}
 }
+
+/* ============================================================
+ * AUTOMATION_REASSIGN_v1 (2026-06-02)
+ *
+ * Reassign action — fires from any event the automation engine knows
+ * about (lead_created, status_changed, lead_assigned, followup_due).
+ *
+ * Recipient string formats accepted (stored on automations.recipient):
+ *   user:<id>            single user — that user becomes the new owner
+ *   users:<id>,<id>,<id> multi-user pool — round-robin by fewest leads
+ *                        created today (same heuristic Auto-assign Rules use)
+ *
+ * Safe defaults the user asked for ('insure no other things disturbed'):
+ *   - Silent replace of previous assigned_to (previous owner loses lead)
+ *   - Adds a remark on the lead so there's an audit trail
+ *   - Skips paused / inactive users from the target pool
+ *   - 60-second recursion guard: if the lead was reassigned by THIS
+ *     automation in the last 60 seconds, skip — prevents loops where
+ *     a reassign triggers status_changed which re-fires the same rule.
+ *   - Bumps updated_at and last_status_change_at left untouched.
+ *
+ * Returns { ok, detail } so the existing _log() path works unchanged.
+ * ============================================================ */
+const _reassignDebounce = new Map();
+async function _reassignLead(a, ctx) {
+  const leadId = ctx && ctx.lead && Number(ctx.lead.id);
+  if (!leadId) return { ok: false, error: 'reassign skipped: no lead in event ctx' };
+
+  // 60s recursion guard, keyed by (automation id, lead id)
+  const dbKey = String(a.id || a.name) + ':' + leadId;
+  const lastFiredAt = _reassignDebounce.get(dbKey) || 0;
+  if (Date.now() - lastFiredAt < 60000) {
+    return { ok: false, error: 'reassign skipped: debounced (fired <60s ago)' };
+  }
+
+  // Parse the target user-id list off the automation's recipient field.
+  const raw = String(a.recipient || '').trim();
+  let ids = [];
+  if (raw.startsWith('users:')) {
+    ids = raw.slice('users:'.length).split(',').map(x => Number(x.trim())).filter(x => x > 0);
+  } else if (raw.startsWith('user:')) {
+    ids = [Number(raw.slice('user:'.length).trim())].filter(x => x > 0);
+  }
+  if (!ids.length) return { ok: false, error: 'reassign skipped: no target user(s) configured (recipient should be "user:<id>" or "users:<id>,<id>")' };
+
+  // Filter out paused / inactive users so we don't park leads on someone on leave.
+  try {
+    const allUsers = await db.getAll('users');
+    const eligible = new Set(allUsers.filter(u =>
+      Number(u.is_active != null ? u.is_active : 1) === 1 &&
+      u.paused_for_leads !== true && Number(u.paused_for_leads) !== 1
+    ).map(u => Number(u.id)));
+    ids = ids.filter(id => eligible.has(Number(id)));
+  } catch (_) {}
+  if (!ids.length) return { ok: false, error: 'reassign skipped: every target user is paused or inactive' };
+
+  // Round-robin: pick the user with the fewest leads created today.
+  let pickedId = ids[0];
+  if (ids.length > 1) {
+    try {
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const r = await db.query(
+        `SELECT assigned_to AS uid, COUNT(*)::int AS c
+           FROM leads
+          WHERE assigned_to = ANY($1::int[])
+            AND created_at >= $2
+          GROUP BY assigned_to`,
+        [ids, today.toISOString()]
+      );
+      const byUser = {};
+      ids.forEach(id => { byUser[id] = 0; });
+      r.rows.forEach(row => { byUser[Number(row.uid)] = Number(row.c) || 0; });
+      // Pick lowest count; tie-break by lowest user id for determinism.
+      ids.sort((a, b) => (byUser[a] - byUser[b]) || (a - b));
+      pickedId = ids[0];
+    } catch (e) {
+      // Fallback to first if the round-robin query bombs.
+      pickedId = ids[0];
+    }
+  }
+
+  // Look up the previous owner (for the audit remark) and the new owner.
+  const lead = await db.findById('leads', leadId);
+  if (!lead) return { ok: false, error: 'reassign skipped: lead ' + leadId + ' not found' };
+  if (Number(lead.assigned_to) === Number(pickedId)) {
+    return { ok: true, detail: 'no-op: lead is already owned by user ' + pickedId };
+  }
+
+  const newOwner  = await db.findById('users', pickedId).catch(() => null);
+  const prevOwner = lead.assigned_to ? await db.findById('users', lead.assigned_to).catch(() => null) : null;
+
+  // The actual write.
+  await db.update('leads', leadId, { assigned_to: pickedId });
+
+  // Audit remark — admin can see who moved this lead and when.
+  try {
+    await db.insert('remarks', {
+      lead_id: leadId,
+      user_id: null,                                  // system action
+      remark: '🔄 Auto-reassigned from ' +
+              (prevOwner ? prevOwner.name : '(unassigned)') +
+              ' → ' + (newOwner ? newOwner.name : ('user ' + pickedId)) +
+              ' by automation "' + (a.name || ('#' + a.id)) + '"'
+    });
+  } catch (_) {}
+
+  _reassignDebounce.set(dbKey, Date.now());
+  return {
+    ok: true,
+    detail: 'reassigned lead ' + leadId + ' from ' +
+            (prevOwner ? prevOwner.name : '(unassigned)') +
+            ' to ' + (newOwner ? newOwner.name : ('user ' + pickedId))
+  };
+}
+
 
 module.exports = { fire };
