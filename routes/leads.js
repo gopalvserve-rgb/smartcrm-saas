@@ -2655,7 +2655,9 @@ async function _foldIntoLead(leadId, payload) {
  */
 async function api_leads_merge(token, payload) {
   const me = await authUser(token);
-  if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin or Manager only');
+  // MERGE_SALES_ALLOW_v1 (2026-06-03): Sales can now merge leads, but only
+  // ones they own / are assigned to / shared with. Admin + Manager + Team
+  // Leader can merge anything they can see (matches _visibleLeads).
   const p = payload || {};
   const target_id = Number(p.target_id);
   const source_ids = (p.source_ids || []).map(Number).filter(n => n && n !== target_id);
@@ -2664,6 +2666,26 @@ async function api_leads_merge(token, payload) {
 
   const target = await db.findById('leads', target_id);
   if (!target) throw new Error('Target lead ' + target_id + ' not found');
+
+  // Sales-role visibility guard: ensure every lead involved is one this
+  // sales user is allowed to touch. Admin/manager/team_leader bypass this.
+  if (me.role === 'sales') {
+    const ownsLead = async (leadId) => {
+      const L = await db.findById('leads', leadId);
+      if (!L) return false;
+      if (Number(L.assigned_to) === Number(me.id)) return true;
+      // co-owners check (SHARE_LEAD_v1)
+      try {
+        const co = await db.getAll('lead_co_owners', { lead_id: leadId });
+        if ((co || []).some(c => Number(c.user_id) === Number(me.id))) return true;
+      } catch (_) {}
+      return false;
+    };
+    if (!(await ownsLead(target_id))) throw new Error('You can only merge leads assigned to you');
+    for (const sid of source_ids) {
+      if (!(await ownsLead(sid))) throw new Error('Lead ' + sid + ' is not assigned to you — only the owner can merge it');
+    }
+  }
 
   // Pull all source rows and field-fold each one onto target (target wins,
   // but blanks come from sources).

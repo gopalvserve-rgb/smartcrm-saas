@@ -330,3 +330,13 @@ FROM (VALUES
    '#/reports', '📊', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
+
+-- MERGE_SALES_ALLOW_v1 (2026-06-03) — Sales can merge their own leads
+INSERT INTO changelog (category, title, body, link, icon, created_at)
+SELECT v.category, v.title, v.body, v.link, v.icon, v.created_at
+FROM (VALUES
+  ('improve', '🔀 Sales reps can now merge their own duplicate leads',
+   'Sales role was blocked from the Leads → Merge action with "Admin or Manager only" — the button was visible but the backend rejected the call. Sales can now use it, scoped to ownership: a sales rep can merge two leads only when BOTH are assigned to them (or shared with them via the co-owner badge). Admin / Manager / Team Leader keep the broader power of merging anything they can see. Helps the team clean up obvious duplicates from their own queue without bothering an admin.',
+   '#/leads', '🔀', NOW())
+) AS v(category, title, body, link, icon, created_at)
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
