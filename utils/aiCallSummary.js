@@ -245,6 +245,12 @@ async function _statusIdByName(name) {
 /** Process a single recording. Idempotent — re-running on a row that's
  * already been processed will overwrite the previous summary. */
 async function processRecording(id) {
+  // AI_HARD_KILL_v1 — same global override as _tick. This guards
+  // direct calls from routes/recordings.js (manual Audit button +
+  // bulk audit) so they also can\'t bypass.
+  if (String(process.env.AI_TRANSCRIPTION_GLOBAL_OFF || '1') === '1') {
+    return { ok: false, skipped: 'global_off', id };
+  }
   const rec = await _loadRecording(id);
   if (!rec) throw new Error('Recording not found: ' + id);
 
@@ -415,6 +421,13 @@ let _workerTimer = null;
 let _processing = false;
 
 async function _tick() {
+  // AI_HARD_KILL_v1 (2026-06-03) — global env-var override. If the Railway
+  // env var AI_TRANSCRIPTION_GLOBAL_OFF is set to '1' (or unset and the
+  // built-in default is OFF), skip the entire tick without even hitting
+  // the DB. This bypasses per-tenant AI_TRANSCRIPTION_ENABLED so a tenant
+  // whose config row is unset (defaulting to ON) can't slip through.
+  // Set AI_TRANSCRIPTION_GLOBAL_OFF=0 on Railway env to re-enable.
+  if (String(process.env.AI_TRANSCRIPTION_GLOBAL_OFF || '1') === '1') return;
   if (_processing) return;
   if (!(await _key()) && !demo.on) return; // No key + not demo — nothing to do
   _processing = true;
