@@ -1344,11 +1344,21 @@ async function leadSourceWebhook(req, res) {
     let items;
     const customMap = await _loadCustomMapping(source);
     if (customMap && Object.keys(customMap).length) {
+      // CUSTOM_MAP_DEFAULTS_FILL_v1 (2026-06-03): tenant's custom mapping
+      // wins where it has a value, but for any field it leaves blank, fall
+      // back to the default mapper. So a tenant who maps just (name, phone)
+      // still gets address/company/notes/source_ref/custom_fields from the
+      // built-in adapter — they don't have to remap everything.
       items = _applyCustomMapping(body, customMap);
-      // Keep source label from the default mapper for nice display
       const defaults = _adaptLeadSourcePayload(source, body);
       items.forEach((item, i) => {
-        if (!item.source && defaults[i] && defaults[i].source) item.source = defaults[i].source;
+        const d = defaults[i] || {};
+        for (const k of Object.keys(d)) {
+          const v = item[k];
+          if (v == null || v === '' || (typeof v === 'object' && Object.keys(v||{}).length === 0)) {
+            item[k] = d[k];
+          }
+        }
       });
     } else {
       items = _adaptLeadSourcePayload(source, body);
