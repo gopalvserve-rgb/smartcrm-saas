@@ -901,17 +901,67 @@ function _adaptLeadSourcePayload(source, body) {
               : (body.RESPONSE && typeof body.RESPONSE === 'object') ? [body.RESPONSE]
               : (body.response && typeof body.response === 'object') ? [body.response]
               : [body];
+    // INDIAMART_FULL_MAP_v1 (2026-06-03): enrich mapping per actual IndiaMART
+    // production payload sample. Phone arrives as '+91-9999999999' or
+    // '0120-1234567' (landlines) — normalize to digits. Address is split
+    // across SENDER_ADDRESS / CITY / STATE / PINCODE / COUNTRY_ISO and
+    // notes should lead with SUBJECT + PRODUCT for context. Everything
+    // else lands in extra_json so nothing is lost.
+    const _imNormPhone = (raw) => {
+      if (!raw) return '';
+      let s = String(raw).replace(/[\s\-()]/g, ''); // strip spaces, hyphens, parens
+      if (s.startsWith('+')) s = s.slice(1);           // drop leading +
+      // collapse leading 0 (landline trunk) when followed by enough digits
+      if (s.length >= 11 && s.startsWith('0')) s = s.slice(1);
+      return s.replace(/[^0-9]/g, '');
+    };
+    const _imJoinAddr = (r) => {
+      const parts = [
+        r.SENDER_ADDRESS || r.sender_address,
+        r.SENDER_CITY    || r.sender_city,
+        r.SENDER_STATE   || r.sender_state,
+        r.SENDER_PINCODE || r.sender_pincode,
+        r.SENDER_COUNTRY_ISO || r.sender_country_iso || r.SENDER_COUNTRY
+      ].filter(x => x && String(x).trim());
+      return parts.join(', ');
+    };
+    const _imNotes = (r) => {
+      const bits = [];
+      const subj = r.SUBJECT || r.subject;
+      const prod = r.QUERY_PRODUCT_NAME || r.query_product_name || r.QUERY_MCAT_NAME;
+      const msg  = r.QUERY_MESSAGE || r.query_message;
+      if (subj) bits.push('Subject: ' + subj);
+      if (prod) bits.push('Product: ' + prod);
+      if (msg)  bits.push(msg);
+      return bits.join('\n');
+    };
     return arr.map(r => ({
       name:       pick(r, ['SENDER_NAME',    'sender_name',    'name',    'NAME']),
-      phone:      pick(r, ['SENDER_MOBILE',  'sender_mobile',  'mobile',  'MOBILE', 'phone']),
+      phone:      _imNormPhone(pick(r, ['SENDER_MOBILE', 'sender_mobile', 'mobile', 'MOBILE', 'phone', 'SENDER_PHONE', 'sender_phone'])),
       email:      pick(r, ['SENDER_EMAIL',   'sender_email',   'email',   'EMAIL']),
       company:    pick(r, ['SENDER_COMPANY', 'sender_company', 'company']),
       city:       pick(r, ['SENDER_CITY',    'sender_city',    'city']),
       state:      pick(r, ['SENDER_STATE',   'sender_state',   'state']),
-      address:    pick(r, ['SENDER_ADDRESS', 'sender_address', 'address']),
-      notes:      pick(r, ['QUERY_MESSAGE',  'query_message',  'message', 'SUBJECT', 'subject']),
+      address:    _imJoinAddr(r),
+      notes:      _imNotes(r),
       source:     'IndiaMART',
-      source_ref: pick(r, ['UNIQUE_QUERY_ID', 'unique_query_id', 'query_id'])
+      source_ref: pick(r, ['UNIQUE_QUERY_ID', 'unique_query_id', 'query_id']),
+      // Stash everything else into extra_json under sensible keys so the
+      // rest of the data isn't lost. These show on the lead's custom-field
+      // panel once the admin creates matching custom fields.
+      custom_fields: {
+        indiamart_subject:        r.SUBJECT || r.subject || '',
+        indiamart_query_time:     r.QUERY_TIME || r.query_time || '',
+        indiamart_query_type:     r.QUERY_TYPE || r.query_type || '',
+        indiamart_mcat:           r.QUERY_MCAT_NAME || r.query_mcat_name || '',
+        indiamart_product:        r.QUERY_PRODUCT_NAME || r.query_product_name || '',
+        indiamart_pincode:        r.SENDER_PINCODE || r.sender_pincode || '',
+        indiamart_country:        r.SENDER_COUNTRY_ISO || r.sender_country_iso || '',
+        indiamart_landline:       _imNormPhone(r.SENDER_PHONE || r.sender_phone || ''),
+        indiamart_mobile_alt:     _imNormPhone(r.SENDER_MOBILE_ALT || r.sender_mobile_alt || ''),
+        indiamart_email_alt:      r.SENDER_EMAIL_ALT || r.sender_email_alt || '',
+        indiamart_call_duration:  r.CALL_DURATION || r.call_duration || ''
+      }
     }));
   }
 
