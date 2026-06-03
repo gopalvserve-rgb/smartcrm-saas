@@ -2890,35 +2890,76 @@ const WIDGET_LIBRARY = {
         return;
       }
       try {
-        const r = await api('api_reports_pivot', { row_dims: ['extra:' + cfKey], metrics: ['count'], filters: {} });
+        // DASH_CF_STATUS_v1 (2026-06-04) — 2D pivot: rows = CF values,
+        // cols = status names. Renders a matrix so e.g. for cf=page you
+        // see each page's lead count broken down by status. The bucket
+        // already has open_count/won_count/lost_count pre-computed for
+        // the headline summary; the cross-tab below gives per-status detail.
+        const r = await api('api_reports_pivot', {
+          row_dims: ['extra:' + cfKey, 'status'],
+          metrics: ['count'],
+          filters: {}
+        });
         const rows = (r && r.rows) || [];
         if (!rows.length) {
           c.appendChild(h('div', { class: 'muted', style: { fontSize: '.85rem' } }, 'No leads with a value in this custom field.'));
           return;
         }
-        const sorted = rows.slice().sort((a,b) => (b.metrics && b.metrics.count || 0) - (a.metrics && a.metrics.count || 0));
-        const max = sorted[0] && sorted[0].metrics && sorted[0].metrics.count || 1;
-        const tbl = h('table', { class: 'tbl', style: { width: '100%', fontSize: '.85rem' } },
+        // Pivot client-side: cfValue -> { statusName -> count, total: N }
+        const matrix = {};
+        const statusSet = new Set();
+        rows.forEach(rw => {
+          const v   = (rw.dims && rw.dims['extra:' + cfKey]) || '(empty)';
+          const st  = (rw.dims && rw.dims.status) || '(none)';
+          const cnt = (rw.metrics && rw.metrics.count) || 0;
+          if (!matrix[v]) matrix[v] = { __total: 0 };
+          matrix[v][st] = (matrix[v][st] || 0) + cnt;
+          matrix[v].__total += cnt;
+          statusSet.add(st);
+        });
+        // Stable status order — use CRM.cache.statuses if available, fallback alpha.
+        let statusList = [];
+        try {
+          const allStatuses = (CRM && CRM.cache && CRM.cache.statuses) || [];
+          statusList = allStatuses.map(s => s.name).filter(n => statusSet.has(n));
+          // Append any status names that aren't in the cached list (e.g. '(none)')
+          Array.from(statusSet).forEach(n => { if (!statusList.includes(n)) statusList.push(n); });
+        } catch (_) { statusList = Array.from(statusSet).sort(); }
+        const sortedValues = Object.keys(matrix).sort((a,b) => matrix[b].__total - matrix[a].__total);
+        const maxTotal = matrix[sortedValues[0]] ? matrix[sortedValues[0]].__total : 1;
+
+        const tbl = h('table', { class: 'tbl', style: { width: '100%', fontSize: '.8rem' } },
           h('thead', {}, h('tr', {},
-            h('th', { style: { textAlign: 'left' } }, cfKey),
-            h('th', { style: { textAlign: 'right' } }, 'Leads'),
-            h('th', { style: {} }, '')
+            h('th', { style: { textAlign: 'left', position: 'sticky', left: '0', background: '#f8fafc', zIndex: 1 } }, cfKey),
+            h('th', { style: { textAlign: 'right', background: '#eef2ff' } }, 'Total'),
+            ...statusList.map(st => h('th', { style: { textAlign: 'right', fontSize: '.72rem', fontWeight: 500 } }, st))
           )),
           h('tbody', {},
-            ...sorted.map(rw => {
-              const val = (rw.dims && rw.dims['extra:' + cfKey]) || '(empty)';
-              const cnt = (rw.metrics && rw.metrics.count) || 0;
-              const pct = Math.round(cnt * 100 / max);
+            ...sortedValues.map(val => {
+              const rec = matrix[val] || {};
+              const total = rec.__total || 0;
+              const pct = Math.round(total * 100 / maxTotal);
               return h('tr', {},
-                h('td', { style: { textAlign: 'left' } }, String(val)),
-                h('td', { style: { textAlign: 'right', fontWeight: 600 } }, String(cnt)),
-                h('td', { style: { width: '40%' } }, h('div', { style: { background: '#dbeafe', height: '14px', width: pct + '%', borderRadius: '3px' } }))
+                h('td', {
+                  style: { textAlign: 'left', position: 'sticky', left: '0', background: '#fff' }
+                },
+                  h('div', { style: { fontWeight: 500 } }, String(val)),
+                  h('div', { style: { background: '#dbeafe', height: '4px', width: pct + '%', borderRadius: '2px', marginTop: '2px' } })
+                ),
+                h('td', { style: { textAlign: 'right', fontWeight: 700, background: '#eef2ff' } }, String(total)),
+                ...statusList.map(st => {
+                  const v = rec[st] || 0;
+                  return h('td', {
+                    style: { textAlign: 'right', color: v ? '#111827' : '#cbd5e1' }
+                  }, String(v));
+                })
               );
             })
           )
         );
-        c.appendChild(h('div', { style: { overflowX: 'auto' } }, tbl));
-        c.appendChild(h('div', { class: 'muted', style: { fontSize: '.72rem', marginTop: '.35rem' } }, '💡 Total ' + sorted.length + ' distinct values · sorted by lead count.'));
+        c.appendChild(h('div', { style: { overflowX: 'auto', maxHeight: '320px' } }, tbl));
+        c.appendChild(h('div', { class: 'muted', style: { fontSize: '.72rem', marginTop: '.35rem' } },
+          '💡 ' + sortedValues.length + ' distinct values × ' + statusList.length + ' statuses · sorted by total.'));
       } catch (e) {
         c.appendChild(h('div', { class: 'muted', style: { color: '#b91c1c', fontSize: '.85rem' } }, 'Failed: ' + e.message));
       }
@@ -18298,10 +18339,108 @@ VIEWS.reports = async (view) => {
       h('div', { class: 'chart-wrap', style: { height: '220px' } }, h('canvas', { id: 'chart-daily' })),
       h('div', { id: 'rep-daily-table', style: { marginTop: '1rem' } })
     ),
-    h('div', { class: 'card card-wide' }, h('h3', {}, 'By user'), h('div', { id: 'rep-by-user' }))
+    h('div', { class: 'card card-wide' }, h('h3', {}, 'By user'), h('div', { id: 'rep-by-user' })),
+    // DASH_CF_STATUS_v1 (2026-06-04) — custom field × status pivot card.
+    // User can pick any active CF (e.g. 'page') and see a matrix of
+    // CF value × status with counts. Renders only when at least one CF exists.
+    h('div', { class: 'card card-wide' },
+      h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '.5rem', flexWrap: 'wrap', marginBottom: '.5rem' } },
+        h('h3', { style: { margin: 0 } }, 'By custom field × status'),
+        h('select', { id: 'rep-cf-pick', style: { minWidth: '180px' }, onchange: () => _loadReportsCfMatrix() },
+          ...(function(){
+            const cfs = ((CRM && CRM.cache && CRM.cache.customFields) || [])
+              .filter(c => Number(c.is_active) !== 0 && c.key);
+            const opts = [h('option', { value: '' }, cfs.length ? 'Pick a custom field…' : 'No custom fields defined')];
+            cfs.forEach(c => opts.push(h('option', { value: c.key }, (c.label || c.key))));
+            return opts;
+          })()
+        )
+      ),
+      h('div', { id: 'rep-cf-matrix', class: 'muted', style: { fontSize: '.85rem' } }, 'Pick a custom field above to see its breakdown by status.')
+    )
   ));
   await loadReports();
 };
+
+// DASH_CF_STATUS_v1 — render the CF × Status matrix for the Reports page.
+// Reuses api_reports_pivot with two row_dims so each bucket is a (cf, status)
+// pair. Pivoted client-side into a matrix table for readability.
+async function _loadReportsCfMatrix() {
+  const cfKey = document.getElementById('rep-cf-pick')?.value || '';
+  const host = document.getElementById('rep-cf-matrix');
+  if (!host) return;
+  host.innerHTML = '';
+  if (!cfKey) {
+    host.appendChild(h('div', { class: 'muted', style: { fontSize: '.85rem' } }, 'Pick a custom field above to see its breakdown by status.'));
+    return;
+  }
+  host.appendChild(h('div', { class: 'muted', style: { fontSize: '.8rem' } }, 'Loading…'));
+  try {
+    const filters = (typeof _currentReportFilters === 'function') ? _currentReportFilters() : {};
+    const r = await api('api_reports_pivot', {
+      row_dims: ['extra:' + cfKey, 'status'],
+      metrics: ['count'],
+      filters: filters
+    });
+    const rows = (r && r.rows) || [];
+    host.innerHTML = '';
+    if (!rows.length) {
+      host.appendChild(h('div', { class: 'muted' }, 'No leads with a value in this custom field.'));
+      return;
+    }
+    const matrix = {};
+    const statusSet = new Set();
+    rows.forEach(rw => {
+      const v   = (rw.dims && rw.dims['extra:' + cfKey]) || '(empty)';
+      const st  = (rw.dims && rw.dims.status) || '(none)';
+      const cnt = (rw.metrics && rw.metrics.count) || 0;
+      if (!matrix[v]) matrix[v] = { __total: 0 };
+      matrix[v][st] = (matrix[v][st] || 0) + cnt;
+      matrix[v].__total += cnt;
+      statusSet.add(st);
+    });
+    let statusList = [];
+    try {
+      const allStatuses = (CRM && CRM.cache && CRM.cache.statuses) || [];
+      statusList = allStatuses.map(s => s.name).filter(n => statusSet.has(n));
+      Array.from(statusSet).forEach(n => { if (!statusList.includes(n)) statusList.push(n); });
+    } catch (_) { statusList = Array.from(statusSet).sort(); }
+    const sortedValues = Object.keys(matrix).sort((a,b) => matrix[b].__total - matrix[a].__total);
+    const maxTotal = matrix[sortedValues[0]] ? matrix[sortedValues[0]].__total : 1;
+    const tbl = h('table', { class: 'tbl', style: { width: '100%', fontSize: '.85rem' } },
+      h('thead', {}, h('tr', {},
+        h('th', { style: { textAlign: 'left', background: '#f8fafc', position: 'sticky', left: '0' } }, cfKey),
+        h('th', { style: { textAlign: 'right', background: '#eef2ff', fontWeight: 700 } }, 'Total'),
+        ...statusList.map(st => h('th', { style: { textAlign: 'right', fontSize: '.78rem', fontWeight: 500, padding: '4px 8px' } }, st))
+      )),
+      h('tbody', {},
+        ...sortedValues.map(val => {
+          const rec = matrix[val] || {};
+          const total = rec.__total || 0;
+          const pct = Math.round(total * 100 / maxTotal);
+          return h('tr', {},
+            h('td', { style: { textAlign: 'left', background: '#fff', position: 'sticky', left: '0' } },
+              h('div', { style: { fontWeight: 500 } }, String(val)),
+              h('div', { style: { background: '#dbeafe', height: '4px', width: pct + '%', borderRadius: '2px', marginTop: '3px' } })
+            ),
+            h('td', { style: { textAlign: 'right', fontWeight: 700, background: '#eef2ff' } }, String(total)),
+            ...statusList.map(st => {
+              const v = rec[st] || 0;
+              return h('td', { style: { textAlign: 'right', color: v ? '#111827' : '#cbd5e1' } }, String(v));
+            })
+          );
+        })
+      )
+    );
+    host.appendChild(h('div', { style: { overflowX: 'auto' } }, tbl));
+    host.appendChild(h('div', { class: 'muted', style: { fontSize: '.72rem', marginTop: '.4rem' } },
+      sortedValues.length + ' distinct values × ' + statusList.length + ' statuses · sorted by total lead count'));
+  } catch (e) {
+    host.innerHTML = '';
+    host.appendChild(h('div', { style: { color: '#b91c1c', fontSize: '.85rem' } }, 'Failed: ' + (e.message || e)));
+  }
+}
+try { window._loadReportsCfMatrix = _loadReportsCfMatrix; } catch (_) {}
 
 /**
  * Read the current report filter bar into a plain object. Centralised so the
