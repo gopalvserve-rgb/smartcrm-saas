@@ -1670,7 +1670,12 @@ app.post('/api/call_event_native', require('express').json({ limit: '64kb' }), a
         direction: req.body && req.body.direction,
         event: req.body && req.body.event,
         duration_s: req.body && req.body.duration_s,
-        missed: req.body && req.body.missed
+        missed: req.body && req.body.missed,
+        // CALL_HISTORY_TIME_FIX_v1 (2026-06-04) — accept the call's real
+        // wall-clock time. Used by APK CallLog bulk import so historical
+        // events aren't all stamped at NOW(). PhoneStateReceiver live posts
+        // can also send this; if omitted, server falls back to NOW().
+        at: req.body && (req.body.at || req.body.started_at || req.body.call_time)
       });
       // Enrich the response with the rich-notification payload so the
       // native PhoneStateReceiver can render a heads-up notification
@@ -3827,6 +3832,84 @@ async function _runCallTodayCleanup() {
 // contend for tenant pools and so this runs AFTER REC_DIRECTION_BACKFILL_v1
 // has already done the 7-day window. This step is the surgical 24h pass.
 setTimeout(() => _runCallTodayCleanup().catch(() => {}), 180_000);
+
+// CALL_HISTORY_BURST_DELETE_v1 (2026-06-04) — APK CallLog bulk import
+// (CALL_HISTORY_SYNC_v2) posted historical entries with created_at=NOW(),
+// so any one tenant ends up with many different phones stamped at the
+// exact same second. The user's screenshot showed 9 calls all at one
+// 10:19:32 am moment on learnimo, with mixed directions and 8 of 9
+// having no duration — classic bulk-import artifact.
+// This pass deletes burst clusters from the last 7 days, defined as:
+//   any (user_id, created_at down-to-second) group containing >= 5
+//   different phone numbers. That signature is impossible for real-time
+//   call posting (no human dials 5 distinct numbers in one second).
+async function _runCallHistoryBurstDelete() {
+  try {
+    const ranAlready = await controlDb.query(
+      "SELECT 1 FROM saas_flags WHERE key = 'call_history_burst_delete_v1' LIMIT 1"
+    ).catch(() => ({ rows: [] }));
+    if (ranAlready.rows && ranAlready.rows.length) {
+      console.log('[call-history-burst-delete] already ran on a prior boot — skipping');
+      return;
+    }
+    try {
+      await controlDb.query(
+        'CREATE TABLE IF NOT EXISTS saas_flags (key TEXT PRIMARY KEY, value TEXT, ran_at TIMESTAMPTZ DEFAULT NOW())'
+      );
+    } catch (_) {}
+    const r = await controlDb.query(
+      "SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500"
+    );
+    const slugs = r.rows.map(x => x.slug);
+    console.log('[call-history-burst-delete] starting — ' + slugs.length + ' tenants');
+    let totalDeleted = 0, totalTenants = 0;
+    for (const slug of slugs) {
+      let t; try { t = await tenantPoolMod.findActiveTenant(slug); } catch (_) { continue; }
+      if (!t) continue;
+      const pool = tenantPoolMod.poolFor(t);
+      if (!pool) continue;
+      try {
+        const u = await pool.query(`
+          WITH bursts AS (
+            SELECT user_id, date_trunc('second', created_at) AS ts
+              FROM call_events
+             WHERE created_at >= NOW() - INTERVAL '7 days'
+             GROUP BY user_id, date_trunc('second', created_at)
+            HAVING COUNT(DISTINCT phone) >= 5
+          )
+          DELETE FROM call_events ce
+           WHERE ce.created_at >= NOW() - INTERVAL '7 days'
+             AND EXISTS (
+               SELECT 1 FROM bursts b
+                WHERE b.user_id = ce.user_id
+                  AND b.ts = date_trunc('second', ce.created_at)
+             )
+             -- Keep rows that have an attached recording — those represent
+             -- real talk time and shouldn't be wiped by a burst-detector.
+             AND ce.recording_id IS NULL
+        `);
+        const n = u.rowCount || 0;
+        if (n > 0) {
+          console.log('[call-history-burst-delete] ' + slug + ' — deleted ' + n + ' burst rows');
+          totalDeleted += n;
+        }
+        totalTenants++;
+      } catch (e) {
+        console.warn('[call-history-burst-delete] ' + slug + ' failed: ' + e.message);
+      }
+    }
+    console.log('[call-history-burst-delete] done — ' + totalDeleted + ' rows across ' + totalTenants + ' tenants');
+    try {
+      await controlDb.query(
+        "INSERT INTO saas_flags (key, value) VALUES ('call_history_burst_delete_v1', $1) ON CONFLICT (key) DO NOTHING",
+        [JSON.stringify({ tenants: totalTenants, rows: totalDeleted })]
+      );
+    } catch (_) {}
+  } catch (e) {
+    console.error('[call-history-burst-delete] failed:', e.message);
+  }
+}
+setTimeout(() => _runCallHistoryBurstDelete().catch(() => {}), 240_000);
 
 
   app.listen(PORT, () => console.log('[boot] SmartCRM SaaS listening on :' + PORT));

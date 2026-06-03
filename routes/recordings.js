@@ -223,6 +223,20 @@ async function api_call_logEvent(token, payload) {
       }
       callEventId = dupId;
     } else {
+      // CALL_HISTORY_TIME_FIX_v1 (2026-06-04) — use caller-supplied wall
+      // clock time when available. Without this, CallLog bulk imports
+      // (APK importCallLog) stamp every historical row at NOW(), making
+      // the Call Activity feed show many calls clustered at one second.
+      let _evCreatedAt = db.nowIso();
+      try {
+        const _s = p.at || p.started_at || p.call_time;
+        if (_s) {
+          const _ms = new Date(_s).getTime();
+          if (!isNaN(_ms) && _ms > 0 && _ms < Date.now() + 60_000) {
+            _evCreatedAt = new Date(_ms).toISOString();
+          }
+        }
+      } catch (_) {}
       callEventId = await db.insert('call_events', {
         lead_id: null,
         user_id: me.id,
@@ -231,7 +245,7 @@ async function api_call_logEvent(token, payload) {
         event: p.event || 'unknown',
         duration_s: Number(p.duration_s) || 0,
         recording_id: p.recording_id || null,
-        created_at: db.nowIso()
+        created_at: _evCreatedAt
       });
     }
   } catch (e) {
