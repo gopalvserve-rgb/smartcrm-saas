@@ -2,6 +2,10 @@
 -- Idempotent: only inserts if the title doesn't already exist.
 INSERT INTO changelog (category, title, body, link, icon, created_at)
 SELECT * FROM (VALUES
+  ('fix', '📞 Call Activity: duplicate-event dedup',
+   'A single incoming call was sometimes appearing as three separate rows in Recent Calls (Incoming + Outgoing + Missed) because the phone receiver has a triple-bridge (Capacitor + intra-app broadcast + native HTTP) and every path inserted its own row. Now the server dedups duplicates within a 12-second window, synchronously refines call_ended direction, and the Recent Calls feed collapses ringing+ended pairs into a single line. One real call = one row.',
+   '#/reports', '📞', NOW()),
+
   ('feature', '🔄 Auto-reassign lead on status change',
    'Automations now has a new action channel: 🔄 Reassign lead to user(s). Pick the event (Status changed / Lead created / etc.), set the condition (e.g. status = Interested), then in Channel pick Reassign lead and tick the agent(s) who should receive the lead. Multi-select acts as a round-robin pool — the agent with the fewest leads today wins. Previous owner is replaced silently and an audit remark is added to the lead. Paused / inactive users are skipped automatically. 60-second debounce prevents reassign loops. Live now at Admin → Settings → Automation → Automations.',
    '#/admin', '🔄', NOW()),
