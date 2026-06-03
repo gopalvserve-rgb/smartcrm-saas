@@ -1555,11 +1555,26 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
           // Dedup: skip if a recording_saved event already exists for this recording_id.
           const _ce = await db.query('SELECT id FROM call_events WHERE recording_id = $1 LIMIT 1', [id]);
           if (!_ce.rows[0]) {
+            // REC_CALLEVENT_TIME_FIX_v1 (2026-06-03) — stamp the call event
+            // with the recording's ACTUAL start time, not the upload moment.
+            // Without this, a backlog sync (e.g. learnimo on 2026-06-03 18:15)
+            // bunches dozens of old recordings under one timestamp and the
+            // Call Activity feed shows "many calls at the same second".
+            let _evCreatedAt = db.nowIso();
+            try {
+              const _s = req.body.started_at;
+              if (_s) {
+                const _ms = new Date(_s).getTime();
+                if (!isNaN(_ms) && _ms > 0 && _ms < Date.now() + 60_000) {
+                  _evCreatedAt = new Date(_ms).toISOString();
+                }
+              }
+            } catch (_) {}
             await db.insert('call_events', {
               lead_id: leadId, user_id: me.id, phone, direction,
               event: 'recording_saved',
               duration_s: Number(req.body.duration_s) || 0,
-              recording_id: id, created_at: db.nowIso()
+              recording_id: id, created_at: _evCreatedAt
             });
           }
         } catch (_) {}
@@ -3462,6 +3477,75 @@ setInterval(() => {
 // Initial pass 45s after boot to let the AI key + DB pools warm up.
 setTimeout(() => _runAiCallSummaryForAllTenants().catch(() => {}), 45_000);
 console.log('[ai-summary] SaaS-aware Gemini call-summary worker started');
+
+
+
+
+// REC_CALLEVENT_TIME_FIX_v1 — one-shot backfill: any historical
+// call_events.created_at that was stamped at upload time gets rewritten
+// to the recording's actual started_at. Gated by a control-DB flag so
+// it runs ONCE across deploys. The UPDATE itself is idempotent (only
+// touches rows where the gap exceeds 60s) so re-runs are safe; the
+// flag is just to avoid the wasted scan on every boot.
+async function _runCallEventTimeBackfill() {
+  try {
+    const ranAlready = await controlDb.query(
+      "SELECT 1 FROM saas_flags WHERE key = 'rec_callevent_time_backfill_v1' LIMIT 1"
+    ).catch(() => ({ rows: [] }));
+    if (ranAlready.rows && ranAlready.rows.length) {
+      console.log('[rec-callevent-backfill] already ran on a prior boot — skipping');
+      return;
+    }
+    // Ensure flags table exists (rare on fresh installs).
+    try {
+      await controlDb.query(
+        'CREATE TABLE IF NOT EXISTS saas_flags (key TEXT PRIMARY KEY, value TEXT, ran_at TIMESTAMPTZ DEFAULT NOW())'
+      );
+    } catch (_) {}
+    const r = await controlDb.query(
+      "SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500"
+    );
+    const slugs = r.rows.map(x => x.slug);
+    console.log('[rec-callevent-backfill] starting — ' + slugs.length + ' tenants');
+    let totalUpdated = 0, totalTenants = 0;
+    for (const slug of slugs) {
+      let t; try { t = await tenantPoolMod.findActiveTenant(slug); } catch (_) { continue; }
+      if (!t) continue;
+      const pool = tenantPoolMod.poolFor(t);
+      if (!pool) continue;
+      try {
+        const u = await pool.query(`
+          UPDATE call_events ce
+             SET created_at = lr.started_at
+            FROM lead_recordings lr
+           WHERE ce.recording_id = lr.id
+             AND ce.event = 'recording_saved'
+             AND lr.started_at IS NOT NULL
+             AND lr.started_at < ce.created_at - INTERVAL '60 seconds'
+        `);
+        const n = u.rowCount || 0;
+        if (n > 0) {
+          console.log('[rec-callevent-backfill] ' + slug + ' — updated ' + n + ' rows');
+          totalUpdated += n;
+        }
+        totalTenants++;
+      } catch (e) {
+        console.warn('[rec-callevent-backfill] ' + slug + ' failed: ' + e.message);
+      }
+    }
+    console.log('[rec-callevent-backfill] done — ' + totalUpdated + ' rows updated across ' + totalTenants + ' tenants');
+    try {
+      await controlDb.query(
+        "INSERT INTO saas_flags (key, value) VALUES ('rec_callevent_time_backfill_v1', $1) ON CONFLICT (key) DO NOTHING",
+        [JSON.stringify({ tenants: totalTenants, rows: totalUpdated })]
+      );
+    } catch (_) {}
+  } catch (e) {
+    console.error('[rec-callevent-backfill] failed:', e.message);
+  }
+}
+// Run 90s after boot so per-tenant pools have warmed up.
+setTimeout(() => _runCallEventTimeBackfill().catch(() => {}), 90_000);
 
 
   app.listen(PORT, () => console.log('[boot] SmartCRM SaaS listening on :' + PORT));
