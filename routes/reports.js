@@ -199,9 +199,32 @@ async function _applyReportFilters(rows, filters, users) {
   } else if (filters.campaign_id) {
     rows = rows.filter(l => Number(l.campaign_id) === Number(filters.campaign_id));
   }
-  if (filters.product_id) rows = rows.filter(l => Number(l.product_id) === Number(filters.product_id));
-  if (filters.source)     rows = rows.filter(l => (l.source || '') === filters.source);
-  if (filters.status_id)  rows = rows.filter(l => Number(l.status_id) === Number(filters.status_id));
+  // REPORT_RULES_HONOR_v1 (2026-06-02) — accept multi-select arrays from
+  // the SPA toolbar AND legacy single-value fields. Previously only the
+  // single-value form was honored, so multi-select filters silently lost
+  // their selections beyond the first.
+  if (Array.isArray(filters.product_ids) && filters.product_ids.length) {
+    const set = new Set(filters.product_ids.map(x => Number(x)));
+    rows = rows.filter(l => set.has(Number(l.product_id)));
+  } else if (filters.product_id) {
+    rows = rows.filter(l => Number(l.product_id) === Number(filters.product_id));
+  }
+  if (Array.isArray(filters.sources) && filters.sources.length) {
+    const set = new Set(filters.sources.map(String));
+    rows = rows.filter(l => set.has(String(l.source || '')));
+  } else if (filters.source) {
+    rows = rows.filter(l => (l.source || '') === filters.source);
+  }
+  if (Array.isArray(filters.status_ids) && filters.status_ids.length) {
+    const set = new Set(filters.status_ids.map(x => Number(x)));
+    rows = rows.filter(l => set.has(Number(l.status_id)));
+  } else if (filters.status_id) {
+    rows = rows.filter(l => Number(l.status_id) === Number(filters.status_id));
+  }
+  if (Array.isArray(filters.scope_user_ids) && filters.scope_user_ids.length) {
+    const set = new Set(filters.scope_user_ids.map(x => Number(x)));
+    rows = rows.filter(l => set.has(Number(l.assigned_to)));
+  }
   // Qualified filter — lead-level boolean. '1' = qualified only, '0' = not
   // qualified. Empty/undefined = no filter (so the default behaviour is the
   // same as before this filter existed).
@@ -221,6 +244,24 @@ async function _applyReportFilters(rows, filters, users) {
         return String(extra[filters.custom_key] || '').toLowerCase() === String(filters.custom_value).toLowerCase();
       } catch (_) { return false; }
     });
+  }
+  // REPORT_RULES_HONOR_v1 — apply rule-builder rules (+/- cf_* custom field
+  // rules, name contains, phone starts_with, etc.). Previously these were
+  // silently dropped — the UI sent them, the backend ignored them.
+  if (Array.isArray(filters.rules) && filters.rules.length) {
+    try {
+      const statuses  = await db.getAll('statuses');
+      const products  = await db.getAll('products');
+      let campaigns = [];
+      try { campaigns = await db.getAll('campaigns'); } catch (_) {}
+      const statusesById = {}; statuses.forEach(s => { statusesById[Number(s.id)] = s; });
+      const productsById = {}; products.forEach(p => { productsById[Number(p.id)] = p; });
+      const campaignsById = {}; campaigns.forEach(c => { campaignsById[Number(c.id)] = c; });
+      const usersById = {}; (users || []).forEach(u => { usersById[Number(u.id)] = u; });
+      rows = _rbApplyRules(rows, filters.rules, { statusesById, productsById, campaignsById, usersById });
+    } catch (e) {
+      console.warn('[reports] rule-builder eval failed:', e.message);
+    }
   }
   return rows;
 }
