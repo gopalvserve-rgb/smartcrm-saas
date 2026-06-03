@@ -1268,7 +1268,20 @@ async function leadSourceWebhook(req, res) {
       return res.status(401).json({ error: 'Invalid API key' });
     }
     const source = String(req.params.source || 'generic').toLowerCase();
-    const body   = req.body || {};
+    let body   = req.body || {};
+
+    // INDIAMART_PAYLOAD_UNWRAP_v1.2 (2026-06-03): IndiaMART real-time Push
+    // wraps every lead as {CODE,STATUS,RESPONSE:{...}}. The default mapper
+    // already handles array-RESPONSE, but when a tenant has a saved custom
+    // mapping, _applyCustomMapping reads the TOP LEVEL — and never sees the
+    // unwrapped record. Solve once for both paths by unwrapping RESPONSE
+    // here, before either mapper runs.
+    if (source === 'indiamart' && body && typeof body === 'object'
+        && body.RESPONSE && typeof body.RESPONSE === 'object'
+        && !Array.isArray(body.RESPONSE)
+        && !body.SENDER_NAME && !body.SENDER_MOBILE) {
+      body = { ...body.RESPONSE, _wrapped_code: body.CODE, _wrapped_status: body.STATUS };
+    }
 
     // Log raw hit for admin diagnostics
     try {
