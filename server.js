@@ -1435,52 +1435,9 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
           const lead = await recRoutes._findLeadByPhone(phone);
           if (lead) leadId = lead.id;
         }
-        // ---- Auto-create-lead policy ----
-        if (!leadId && phone) {
-          const cfgIn   = await db.getConfig('CALLS_AUTOLEAD_INBOUND', '1');
-          const cfgOut  = await db.getConfig('CALLS_AUTOLEAD_OUTBOUND', '0');
-          const cfgStId = Number(await db.getConfig('CALLS_AUTOLEAD_STATUS_ID', '0')) || 0;
-          const isIn  = direction === 'in' || direction === 'missed';
-          const isOut = direction === 'out' || direction === 'outgoing';
-          const allow = (isIn && String(cfgIn) === '1') || (isOut && String(cfgOut) === '1');
-          if (allow) {
-            try {
-              let statusId = null;
-              if (cfgStId) {
-                try { const found = await db.findById('statuses', cfgStId); if (found) statusId = found.id; } catch (_) {}
-              }
-              if (!statusId) {
-                const newSt = await db.findOneBy('statuses', 'name', 'New');
-                statusId = newSt ? newSt.id : null;
-              }
-              const sourceLabel = isIn
-                ? (direction === 'missed' ? 'Missed Call' : 'Inbound Call')
-                : 'Outbound Call';
-              leadId = await db.insert('leads', {
-                name:        phone,
-                phone:       phone,
-                whatsapp:    phone,
-                source:      sourceLabel,
-                source_ref:  'auto-created from call recording sync',
-                status_id:   statusId,
-                assigned_to: me.id,
-                notes:       'Auto-created from ' + sourceLabel.toLowerCase() + ' recording',
-                created_by:  me.id,
-                created_at:  db.nowIso(),
-                updated_at:  db.nowIso(),
-                last_status_change_at: db.nowIso()
-              });
-              autoCreated = true;
-              try {
-                await db.insert('remarks', {
-                  lead_id: leadId, user_id: me.id,
-                  remark: '🎙 Recording arrived from ' + sourceLabel.toLowerCase() + ' · auto-created lead',
-                  status_id: statusId
-                });
-              } catch (_) {}
-            } catch (e) { console.warn('[recordings] auto-create lead failed:', e.message); }
-          }
-        }
+        // CALL_ACTIVITY_UNKNOWN_v1 (2026-06-04) — auto-create-lead REMOVED.
+        // Per user instruction: if no lead matches the recording's phone,
+        // the recording is stored with lead_id=NULL. No phantom leads.
         // Robust MIME — different phones write different formats. Sniff
         // the magic bytes first; fall back to the filename extension; only
         // trust the multipart Content-Type when both above are unavailable.
@@ -1595,30 +1552,101 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
           throw new Error('lead_recordings insert returned no id');
         }
         try {
-          // Dedup: skip if a recording_saved event already exists for this recording_id.
+          // CALL_ACTIVITY_UNKNOWN_v1 (2026-06-04) — three-branch logic:
+          //   A) Empty-phone row exists nearby (Samsung process-death case)
+          //      → UPDATE that row: backfill phone, set direction='unknown',
+          //      attach recording, set duration. The blank '—' row in Call
+          //      Activity is now identified.
+          //   B) Existing row for same phone within +/- 10 min → just attach
+          //      recording_id + duration. Direction stays as-is (don't flip).
+          //   C) Otherwise → INSERT new call_events row with direction=
+          //      'unknown' at the recording's actual started_at. Becomes
+          //      its own Unknown line in Call Activity.
+          // In ALL branches: NEVER touch leads.status_id, NEVER auto-create
+          // lead. If no lead found by phone, lead_id stays NULL.
+          let _evStartedMs = Date.now();
+          try {
+            const _s = req.body.started_at;
+            if (_s) {
+              const _ms = new Date(_s).getTime();
+              if (!isNaN(_ms) && _ms > 0 && _ms < Date.now() + 60_000) _evStartedMs = _ms;
+            }
+          } catch (_) {}
+          const _evIso = new Date(_evStartedMs).toISOString();
+          const _phoneTail = String(phone || '').replace(/\D/g, '').slice(-10);
+          const _dur = Number(req.body.duration_s) || 0;
+
+          // Dedup: skip if this recording is already attached.
           const _ce = await db.query('SELECT id FROM call_events WHERE recording_id = $1 LIMIT 1', [id]);
           if (!_ce.rows[0]) {
-            // REC_CALLEVENT_TIME_FIX_v1 (2026-06-03) — stamp the call event
-            // with the recording's ACTUAL start time, not the upload moment.
-            // Without this, a backlog sync (e.g. learnimo on 2026-06-03 18:15)
-            // bunches dozens of old recordings under one timestamp and the
-            // Call Activity feed shows "many calls at the same second".
-            let _evCreatedAt = db.nowIso();
+            let _handled = false;
+
+            // BRANCH A: empty-phone row for this user within +/- 2 min
+            // (the Samsung blank-number outgoing case)
             try {
-              const _s = req.body.started_at;
-              if (_s) {
-                const _ms = new Date(_s).getTime();
-                if (!isNaN(_ms) && _ms > 0 && _ms < Date.now() + 60_000) {
-                  _evCreatedAt = new Date(_ms).toISOString();
-                }
+              const _emptyRow = await db.query(`
+                SELECT id FROM call_events
+                 WHERE user_id = $1
+                   AND (phone IS NULL OR TRIM(phone) = '')
+                   AND recording_id IS NULL
+                   AND created_at BETWEEN $2::timestamptz - INTERVAL '2 minutes'
+                                      AND $2::timestamptz + INTERVAL '2 minutes'
+                 ORDER BY ABS(EXTRACT(EPOCH FROM (created_at - $2::timestamptz)))
+                 LIMIT 1
+              `, [me.id, _evIso]);
+              if (_emptyRow.rows[0]) {
+                await db.query(
+                  `UPDATE call_events
+                      SET phone = $1,
+                          direction = 'unknown',
+                          recording_id = $2,
+                          duration_s = GREATEST($3::int, COALESCE(duration_s, 0)),
+                          lead_id = COALESCE($4, lead_id)
+                    WHERE id = $5`,
+                  [phone || '', id, _dur, leadId || null, _emptyRow.rows[0].id]
+                );
+                _handled = true;
               }
-            } catch (_) {}
-            await db.insert('call_events', {
-              lead_id: leadId, user_id: me.id, phone, direction,
-              event: 'recording_saved',
-              duration_s: Number(req.body.duration_s) || 0,
-              recording_id: id, created_at: _evCreatedAt
-            });
+            } catch (e) { console.warn('[recordings] branch A (empty-phone backfill) failed:', e.message); }
+
+            // BRANCH B: existing row for SAME phone within +/- 10 min
+            if (!_handled && _phoneTail) {
+              try {
+                const _sameRow = await db.query(`
+                  SELECT id, direction, duration_s FROM call_events
+                   WHERE user_id = $1
+                     AND phone LIKE $2
+                     AND recording_id IS NULL
+                     AND created_at BETWEEN $3::timestamptz - INTERVAL '10 minutes'
+                                        AND $3::timestamptz + INTERVAL '10 minutes'
+                   ORDER BY CASE event WHEN 'call_ended' THEN 1
+                                       WHEN 'incoming_ringing' THEN 2 ELSE 3 END,
+                            ABS(EXTRACT(EPOCH FROM (created_at - $3::timestamptz)))
+                   LIMIT 1
+                `, [me.id, '%' + _phoneTail, _evIso]);
+                if (_sameRow.rows[0]) {
+                  await db.query(
+                    `UPDATE call_events
+                        SET recording_id = $1,
+                            duration_s = GREATEST($2::int, COALESCE(duration_s, 0)),
+                            lead_id = COALESCE($3, lead_id)
+                      WHERE id = $4`,
+                    [id, _dur, leadId || null, _sameRow.rows[0].id]
+                  );
+                  _handled = true;
+                }
+              } catch (e) { console.warn('[recordings] branch B (same-phone attach) failed:', e.message); }
+            }
+
+            // BRANCH C: no matching row — INSERT new row direction='unknown'
+            if (!_handled) {
+              await db.insert('call_events', {
+                lead_id: leadId, user_id: me.id, phone, direction: 'unknown',
+                event: 'recording_saved',
+                duration_s: _dur,
+                recording_id: id, created_at: _evIso
+              });
+            }
           }
         } catch (_) {}
         res.json({ ok: true, id, lead_id: leadId, auto_created: autoCreated });

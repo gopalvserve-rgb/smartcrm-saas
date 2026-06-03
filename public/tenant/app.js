@@ -3165,6 +3165,7 @@ const WIDGET_LIBRARY = {
       const rows = (d.callActivity?.recentCalls || []).slice(0, 10);
       if (!rows.length) { c.appendChild(h('div', { class: 'muted' }, 'No calls yet.')); return; }
       const dirIcon = (r) => {
+        if (r.direction === 'unknown') return '\u2753';
         if (r.direction === 'missed' || (r.direction === 'in' && !r.recording_id && r.event === 'incoming_ringing')) return '\u274C';
         if (r.direction === 'in')  return '\uD83D\uDCF2';
         if (r.direction === 'out') return '\uD83D\uDCDE';
@@ -17627,6 +17628,8 @@ function _caRenderRecent(rowsAll) {
   const fState = window._caFilter;
 
   function _isMissed(r) {
+    // CALL_ACTIVITY_UNKNOWN_v1 — recordings whose direction couldn't be confirmed.
+    if (r.direction === 'unknown') return false;
     return r.direction === 'missed' || (r.direction === 'in' && !r.recording_id && r.event === 'incoming_ringing');
   }
   function _matchDir(r) {
@@ -17717,8 +17720,10 @@ function _caRenderRecent(rowsAll) {
     rows.map(r => {
       const dur = Number(r.rec_duration || r.duration_s) || 0;
       const when = new Date(r.created_at).toLocaleString('en-IN');
-      const direction = (r.direction === 'missed' || (r.direction === 'in' && !r.recording_id && r.event === 'incoming_ringing'))
-        ? 'Missed' : (r.direction === 'in' ? 'Incoming' : (r.direction === 'out' ? 'Outgoing' : (r.direction || '')));
+      const direction = (r.direction === 'unknown')
+        ? 'Unknown'
+        : ((r.direction === 'missed' || (r.direction === 'in' && !r.recording_id && r.event === 'incoming_ringing'))
+            ? 'Missed' : (r.direction === 'in' ? 'Incoming' : (r.direction === 'out' ? 'Outgoing' : (r.direction || ''))));
       const canSelect = !r.lead_id;
       const checked = window._caSelectedIds && window._caSelectedIds.has(r.id);
       return '<tr>' +

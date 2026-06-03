@@ -1202,9 +1202,10 @@ async function api_reports_callActivity(token, filters) {
         -- mis-attributed). 'unknown' last.
         (ARRAY_AGG(direction ORDER BY
           CASE direction
-            WHEN 'missed' THEN 1
-            WHEN 'out'    THEN 2
-            WHEN 'in'     THEN 3
+            WHEN 'missed'  THEN 1
+            WHEN 'out'     THEN 2
+            WHEN 'in'      THEN 3
+            WHEN 'unknown' THEN 4
             ELSE 9
           END
         ))[1] AS direction,
