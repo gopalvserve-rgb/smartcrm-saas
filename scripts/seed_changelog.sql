@@ -320,3 +320,13 @@ FROM (VALUES
    '#/reports', '📊', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
+
+-- REPORT_RULES_HONOR_v1 (2026-06-02) — Reports backend now honors rule-builder rules + multi-select
+INSERT INTO changelog (category, title, body, link, icon, created_at)
+SELECT v.category, v.title, v.body, v.link, v.icon, v.created_at
+FROM (VALUES
+  ('fix', '📊 Reports filter now actually filters (rules + custom fields work end-to-end)',
+   'Two related fixes on the Reports page. (1) The "+ Filter rule" button — including its brand-new custom-field options — was being silently ignored by the backend; only the legacy single-value Status / Product / Source dropdowns were taking effect. Backend now honors every rule the SPA emits, so cf rules (e.g. "Branch contains Mumbai", "Deal Value > 50000") flow through to charts, KPIs, daily breakdown and the per-user table. (2) The multi-select dropdowns (Users / Status / Product / Source) were only honoring the FIRST selected item. Now all selected items are honored — pick 3 statuses and the report aggregates across all 3. Also applied the cf.key fix on Leads + Report Builder filter rules so they read the same custom-field storage key.',
+   '#/reports', '📊', NOW())
+) AS v(category, title, body, link, icon, created_at)
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);

@@ -3641,9 +3641,17 @@ VIEWS.leads = async (view) => {
     // is_empty, is_not_empty, in, not_in, gt/gte/lt/lte/between). The
     // _applyClientRules call in loadLeads already consumes window._leadsRuleBtn.
     (function(){
-      const cfFields = (CRM.cache.customFields || []).map(cf => ({
-        id: 'cf_' + cf.name, label: cf.label || cf.name, type: 'text'
-      }));
+      // RB_CF_FILTER_v1 hotfix (2026-06-02): use cf.key not cf.name —
+      // the lead form writes extra_json[cf.key] (see line 7211/7212), so a
+      // rule emitting cf_<name> doesn't match anything when name differs
+      // from key. Affected every tenant where the two diverged.
+      const cfFields = (CRM.cache.customFields || [])
+        .filter(cf => cf && cf.key)
+        .map(cf => ({
+          id: 'cf_' + cf.key,
+          label: (cf.label || cf.key) + ' (custom)',
+          type: (cf.field_type === 'number' ? 'number' : (cf.field_type === 'date' ? 'date' : 'text'))
+        }));
       const _stageOpts = [
         { id:'fresh', name:'Fresh' }, { id:'attempted', name:'Attempted' },
         { id:'qualified', name:'Qualified' }, { id:'negotiation', name:'Negotiation' },
@@ -19155,9 +19163,14 @@ VIEWS.reportbuilder = async (view) => {
         // matching the Leads page filter UX. Backend _applyReportFilters now
         // honours payload.filters.rules so these rules actually take effect.
         (function(){
-          const cfFields = (CRM.cache.customFields || []).map(cf => ({
-            id: 'cf_' + cf.name, label: cf.label || cf.name, type: 'text'
-          }));
+          // RB_CF_FILTER_v1 hotfix — use cf.key (extra_json storage key), not cf.name.
+          const cfFields = (CRM.cache.customFields || [])
+            .filter(cf => cf && cf.key)
+            .map(cf => ({
+              id: 'cf_' + cf.key,
+              label: (cf.label || cf.key) + ' (custom)',
+              type: (cf.field_type === 'number' ? 'number' : (cf.field_type === 'date' ? 'date' : 'text'))
+            }));
           const rb = ruleBuilderButton({ label: '+ Filter rule', storageKey: 'crm.reportbuilder.rules.v1',
             fields: [
               { id: 'name',         label: 'Lead name',     type: 'text' },
