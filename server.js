@@ -3911,6 +3911,181 @@ async function _runCallHistoryBurstDelete() {
 }
 setTimeout(() => _runCallHistoryBurstDelete().catch(() => {}), 240_000);
 
+// CALL_LAST48H_CLEANUP_v1 (2026-06-04) — re-run every cleanup step with
+// a 48-hour window to catch YESTERDAY's data (the original 24h pass
+// missed cross-midnight rows on tenants like learnimo and vserve where
+// the user did test calls before the cutoff).
+//
+// All six steps in one pass, ordered so each step is safe even if a
+// prior step already ran via the older one-shot tasks:
+//   1. Backfill call_events.created_at from lead_recordings.started_at
+//      where the gap is >60s (covers recording_saved + the new 'at' path).
+//   2. Burst delete (>=5 distinct phones at same created_at second).
+//   3. Delete duplicate dual-bridge posts (same user+phone+event in 12s).
+//   4. Delete orphan incoming_ringing rows paired with call_ended OR
+//      recording_saved.
+//   5. Flip call_ended direction 'out' → 'in' when paired RINGING exists.
+//   6. Flip recording_saved direction 'out' → 'in' when paired RINGING.
+async function _runCallLast48hCleanup() {
+  try {
+    const ranAlready = await controlDb.query(
+      "SELECT 1 FROM saas_flags WHERE key = 'call_last48h_cleanup_v1' LIMIT 1"
+    ).catch(() => ({ rows: [] }));
+    if (ranAlready.rows && ranAlready.rows.length) {
+      console.log('[call-48h-cleanup] already ran on a prior boot — skipping');
+      return;
+    }
+    try {
+      await controlDb.query(
+        'CREATE TABLE IF NOT EXISTS saas_flags (key TEXT PRIMARY KEY, value TEXT, ran_at TIMESTAMPTZ DEFAULT NOW())'
+      );
+    } catch (_) {}
+    const r = await controlDb.query(
+      "SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500"
+    );
+    const slugs = r.rows.map(x => x.slug);
+    console.log('[call-48h-cleanup] starting — ' + slugs.length + ' tenants');
+    let totals = { tenants: 0, time_fixed: 0, burst_del: 0, dup_del: 0, ring_del: 0, ce_flip: 0, rec_flip: 0 };
+    for (const slug of slugs) {
+      let t; try { t = await tenantPoolMod.findActiveTenant(slug); } catch (_) { continue; }
+      if (!t) continue;
+      const pool = tenantPoolMod.poolFor(t);
+      if (!pool) continue;
+      const per = { time_fixed: 0, burst_del: 0, dup_del: 0, ring_del: 0, ce_flip: 0, rec_flip: 0 };
+      try {
+        // Step 1: backfill created_at from recording's started_at
+        const u1 = await pool.query(`
+          UPDATE call_events ce SET created_at = lr.started_at
+            FROM lead_recordings lr
+           WHERE ce.recording_id = lr.id
+             AND ce.created_at >= NOW() - INTERVAL '48 hours'
+             AND lr.started_at IS NOT NULL
+             AND lr.started_at < ce.created_at - INTERVAL '60 seconds'
+        `); per.time_fixed = u1.rowCount || 0;
+
+        // Step 2: burst delete — >=5 distinct phones at same second, no recording
+        const u2 = await pool.query(`
+          WITH bursts AS (
+            SELECT user_id, date_trunc('second', created_at) AS ts
+              FROM call_events
+             WHERE created_at >= NOW() - INTERVAL '48 hours'
+             GROUP BY user_id, date_trunc('second', created_at)
+            HAVING COUNT(DISTINCT phone) >= 5
+          )
+          DELETE FROM call_events ce
+           WHERE ce.created_at >= NOW() - INTERVAL '48 hours'
+             AND ce.recording_id IS NULL
+             AND EXISTS (
+               SELECT 1 FROM bursts b
+                WHERE b.user_id = ce.user_id
+                  AND b.ts = date_trunc('second', ce.created_at)
+             )
+        `); per.burst_del = u2.rowCount || 0;
+
+        // Step 3: dual-bridge duplicate dedup
+        const u3 = await pool.query(`
+          WITH dups AS (
+            SELECT ce.id FROM call_events ce
+              JOIN call_events ce_earlier ON
+                   ce_earlier.user_id = ce.user_id
+               AND ce_earlier.phone   = ce.phone
+               AND ce_earlier.event   = ce.event
+               AND ce_earlier.id      < ce.id
+               AND ce_earlier.created_at >= ce.created_at - INTERVAL '12 seconds'
+             WHERE ce.created_at >= NOW() - INTERVAL '48 hours'
+          )
+          DELETE FROM call_events WHERE id IN (SELECT id FROM dups)
+        `); per.dup_del = u3.rowCount || 0;
+
+        // Step 4: orphan incoming_ringing paired with call_ended OR recording_saved
+        const u4 = await pool.query(`
+          DELETE FROM call_events ce
+           WHERE ce.event = 'incoming_ringing'
+             AND ce.created_at >= NOW() - INTERVAL '48 hours'
+             AND (
+               EXISTS (
+                 SELECT 1 FROM call_events ce2
+                  WHERE ce2.user_id = ce.user_id AND ce2.phone = ce.phone
+                    AND ce2.event = 'call_ended'
+                    AND ce2.created_at BETWEEN ce.created_at AND ce.created_at + INTERVAL '10 minutes'
+               )
+               OR EXISTS (
+                 SELECT 1 FROM call_events ce3
+                  WHERE ce3.user_id = ce.user_id AND ce3.phone = ce.phone
+                    AND ce3.event = 'recording_saved'
+                    AND ce3.created_at BETWEEN ce.created_at - INTERVAL '2 minutes'
+                                           AND ce.created_at + INTERVAL '30 minutes'
+               )
+             )
+        `); per.ring_del = u4.rowCount || 0;
+
+        // Step 5: flip call_ended direction
+        const u5 = await pool.query(`
+          UPDATE call_events ce SET direction = 'in'
+           WHERE ce.event = 'call_ended'
+             AND ce.direction = 'out'
+             AND ce.created_at >= NOW() - INTERVAL '48 hours'
+             AND EXISTS (
+               SELECT 1 FROM call_events ce2
+                WHERE ce2.user_id = ce.user_id AND ce2.phone = ce.phone
+                  AND ce2.event = 'incoming_ringing' AND ce2.direction = 'in'
+                  AND ce2.created_at BETWEEN ce.created_at - INTERVAL '10 minutes'
+                                         AND ce.created_at + INTERVAL '2 minutes'
+             )
+        `); per.ce_flip = u5.rowCount || 0;
+
+        // Step 6: flip recording_saved direction
+        const u6 = await pool.query(`
+          UPDATE call_events ce SET direction = 'in'
+           WHERE ce.event = 'recording_saved'
+             AND ce.direction = 'out'
+             AND ce.created_at >= NOW() - INTERVAL '48 hours'
+             AND EXISTS (
+               SELECT 1 FROM call_events ce2
+                WHERE ce2.user_id = ce.user_id AND ce2.phone = ce.phone
+                  AND ce2.event = 'incoming_ringing' AND ce2.direction = 'in'
+                  AND ce2.created_at BETWEEN ce.created_at - INTERVAL '10 minutes'
+                                         AND ce.created_at + INTERVAL '2 minutes'
+             )
+        `); per.rec_flip = u6.rowCount || 0;
+
+        const sum = per.time_fixed + per.burst_del + per.dup_del + per.ring_del + per.ce_flip + per.rec_flip;
+        if (sum > 0) {
+          console.log('[call-48h-cleanup] ' + slug
+            + ' — time:' + per.time_fixed
+            + ' burst:' + per.burst_del
+            + ' dup:' + per.dup_del
+            + ' ring:' + per.ring_del
+            + ' ce:' + per.ce_flip
+            + ' rec:' + per.rec_flip);
+          totals.time_fixed += per.time_fixed; totals.burst_del += per.burst_del;
+          totals.dup_del += per.dup_del; totals.ring_del += per.ring_del;
+          totals.ce_flip += per.ce_flip; totals.rec_flip += per.rec_flip;
+        }
+        totals.tenants++;
+      } catch (e) {
+        console.warn('[call-48h-cleanup] ' + slug + ' failed: ' + e.message);
+      }
+    }
+    console.log('[call-48h-cleanup] done — '
+      + totals.tenants + ' tenants · '
+      + 'time:' + totals.time_fixed + ' burst:' + totals.burst_del
+      + ' dup:' + totals.dup_del + ' ring:' + totals.ring_del
+      + ' ce:' + totals.ce_flip + ' rec:' + totals.rec_flip);
+    try {
+      await controlDb.query(
+        "INSERT INTO saas_flags (key, value) VALUES ('call_last48h_cleanup_v1', $1) ON CONFLICT (key) DO NOTHING",
+        [JSON.stringify(totals)]
+      );
+    } catch (_) {}
+  } catch (e) {
+    console.error('[call-48h-cleanup] failed:', e.message);
+  }
+}
+// Run 300s after boot — after every other backfill so we're the final
+// pass that catches anything they left behind in the yesterday window.
+setTimeout(() => _runCallLast48hCleanup().catch(() => {}), 300_000);
+
 
   app.listen(PORT, () => console.log('[boot] SmartCRM SaaS listening on :' + PORT));
 }
