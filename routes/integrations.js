@@ -890,6 +890,22 @@ function _adaptLeadSourcePayload(source, body) {
 
   // Ã¢ÂÂÃ¢ÂÂ IndiaMART Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
   if (norm === 'indiamart') {
+    // INDIAMART_PAYLOAD_UNWRAP_v1 (2026-06-03): IndiaMART's real-time Push API
+    // wraps the lead payload as {CODE: 200, RESPONSE: { SENDER_NAME, ... }}
+    // — not the flat sample shown in their docs page. If we detect that shape,
+    // flatten RESPONSE to the top level so the existing field map works.
+    if (r && typeof r === 'object' && r.RESPONSE && typeof r.RESPONSE === 'object'
+        && !r.SENDER_NAME && !r.SENDER_MOBILE) {
+      r = { ...r.RESPONSE, _wrapped_code: r.CODE };
+    }
+    // Some integrations also nest under "lead", "Lead", or "data".
+    for (const k of ['lead', 'Lead', 'data', 'DATA']) {
+      if (r && typeof r === 'object' && r[k] && typeof r[k] === 'object'
+          && !r.SENDER_NAME && !r.SENDER_MOBILE) {
+        r = { ...r[k] };
+        break;
+      }
+    }
     const arr = Array.isArray(body.RESPONSE) ? body.RESPONSE
               : Array.isArray(body.response)  ? body.response
               : [body];
