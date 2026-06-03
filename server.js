@@ -163,6 +163,20 @@ app.get('/', (_req, res) => {
 
 // Diagnostic Ã¢ÂÂ admin-only smoke test that the Railway egress can
 // actually reach a host:port. Helps debug Gmail SMTP timeouts.
+// REC_BACKFILL_DIAG_v1 (2026-06-04) — quick public endpoint to verify
+// whether the call_events backfill / cleanup tasks actually ran on this
+// deploy. Just exposes the saas_flags rows; nothing sensitive.
+app.get('/api/saas/backfill-status', async (_req, res) => {
+  try {
+    const r = await controlDb.query(
+      "SELECT key, value, ran_at FROM saas_flags WHERE key IN ('rec_callevent_time_backfill_v1','rec_direction_backfill_v1','call_today_cleanup_v1') ORDER BY ran_at"
+    );
+    res.json({ ok: true, flags: r.rows });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 app.get('/api/saas/debug/tcp', async (req, res) => {
   const token = (req.headers['x-auth-token'] || req.query.token || '').toString();
   try { await superAdmin.requireFullAdmin(token); }
