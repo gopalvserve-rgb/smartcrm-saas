@@ -18160,13 +18160,27 @@ VIEWS.reports = async (view) => {
       h('option', { value: '0' }, 'Not qualified')
     ),
     h('input', { id: 'rep-tag', placeholder: 'Tag (e.g. vip)', style: { maxWidth: '130px' } }),
-    (function(){ const rb = ruleBuilderButton({ label: '+ Filter rule', storageKey: 'crm.reports.rules.v1',
+    (function(){
+  // REPORT_CF_FILTER_v1 — surface every active custom field as a filter
+  // option so admins can slice reports by their tenant-specific data points
+  // (e.g. "company size", "deal value", "branch"). Backend already
+  // understands cf_<key> rules — they're resolved against leads.extra_json
+  // in routes/reports.js _rbApplyRules.
+  const _repCfFields = ((CRM && CRM.cache && CRM.cache.customFields) || [])
+    .filter(c => Number(c.is_active) !== 0 && c.key)
+    .map(c => ({
+      id: 'cf_' + c.key,
+      label: (c.label || c.key) + ' (custom)',
+      type: (c.type === 'number' ? 'number' : (c.type === 'date' ? 'date' : 'text'))
+    }));
+  const rb = ruleBuilderButton({ label: '+ Filter rule', storageKey: 'crm.reports.rules.v1',
   fields: [
     { id: 'name', label: 'Lead name', type: 'text' },
     { id: 'phone', label: 'Phone', type: 'text' },
     { id: 'email', label: 'Email', type: 'text' },
     { id: 'tag', label: 'Tag', type: 'text' },
-    { id: 'company', label: 'Company', type: 'text' }
+    { id: 'company', label: 'Company', type: 'text' },
+    ..._repCfFields
   ], onChange: () => loadReports() });
   rb.id = 'rep-rule-btn'; window._repRuleBtn = rb; const hold = document.createElement('span'); hold.appendChild(rb); return hold;
 })(),
