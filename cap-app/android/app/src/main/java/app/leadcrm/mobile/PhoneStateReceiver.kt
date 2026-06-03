@@ -386,12 +386,6 @@ class PhoneStateReceiver : BroadcastReceiver() {
                     put("event", event)
                     put("missed", missed)
                     put("duration_s", durationSec)
-                    // CALL_ACTIVITY_REWORK_v1 (2026-06-04) — send actual
-                    // wall-clock time as UTC epoch ms. Server treats this
-                    // as call_events.created_at instead of NOW(), so a
-                    // buffered/retried POST no longer drifts to the
-                    // reconnect moment.
-                    put("at", System.currentTimeMillis())
                 }.toString()
                 conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
                 val code = conn.responseCode

@@ -1189,11 +1189,6 @@ async function api_reports_callActivity(token, filters) {
             -- lead-create as a recording-sync anchor but they shouldn't show
             -- up in the Call Activity totals.
             AND ce.event != 'autodial_requested'
-            -- CALL_ACTIVITY_REWORK_v1 (2026-06-04) — skip rows without a
-            -- phone. Vivo receiver process death leaves rows with valid
-            -- duration but empty phone. These shouldn't show in KPIs or
-            -- Recent Calls — they're not actionable.
-            AND ce.phone IS NOT NULL AND TRIM(ce.phone) != ''
             ${userScopeSql.replace(/user_id/g, 'ce.user_id')}
     ),
     bucketed AS (
@@ -1393,19 +1388,30 @@ async function api_reports_callActivity(token, filters) {
      WHERE ce.created_at >= $1 AND ce.created_at <= $2
            -- CALL_INTENT_EXCLUDE_v1 — hide intent events from Recent Calls too
            AND ce.event != 'autodial_requested'
-           -- CALL_ACTIVITY_REWORK_v1 (2026-06-04) — skip empty-phone rows.
-           AND ce.phone IS NOT NULL AND TRIM(ce.phone) != ''
-           -- CALL_ACTIVITY_REWORK_v1 — hide 'incoming_ringing' rows that
-           -- have a paired call_ended for the same user+phone within 10
-           -- min. We NO LONGER pair with recording_saved (recordings now
-           -- attach to the existing call_ended row directly).
+           -- CALL_RECENT_DEDUP_v2 (2026-06-03) — hide 'incoming_ringing' rows
+           -- that have a paired 'call_ended' OR 'recording_saved' for the
+           -- same user+phone within 10 min (call_ended) / 30 min (recording).
+           -- v1 only paired with call_ended which left answered-call RINGING
+           -- rows orphaned on devices (Samsung/Vivo) whose PhoneStateReceiver
+           -- dies between RINGING and IDLE — the recording is the only proof
+           -- the call was answered, so the recording_saved row is the anchor.
            AND NOT (
-             ce.event = 'incoming_ringing' AND EXISTS (
-               SELECT 1 FROM call_events ce2
-                WHERE ce2.user_id = ce.user_id
-                  AND ce2.phone   = ce.phone
-                  AND ce2.event   = 'call_ended'
-                  AND ce2.created_at BETWEEN ce.created_at AND ce.created_at + INTERVAL '10 minutes'
+             ce.event = 'incoming_ringing' AND (
+               EXISTS (
+                 SELECT 1 FROM call_events ce2
+                  WHERE ce2.user_id = ce.user_id
+                    AND ce2.phone   = ce.phone
+                    AND ce2.event   = 'call_ended'
+                    AND ce2.created_at BETWEEN ce.created_at AND ce.created_at + INTERVAL '10 minutes'
+               )
+               OR EXISTS (
+                 SELECT 1 FROM call_events ce4
+                  WHERE ce4.user_id = ce.user_id
+                    AND ce4.phone   = ce.phone
+                    AND ce4.event   = 'recording_saved'
+                    AND ce4.created_at BETWEEN ce.created_at - INTERVAL '2 minutes'
+                                           AND ce.created_at + INTERVAL '30 minutes'
+               )
              )
            )
            -- CALL_RECENT_DEDUP_v1 — also collapse near-duplicate rows

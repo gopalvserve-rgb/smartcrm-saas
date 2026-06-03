@@ -147,13 +147,6 @@ async function api_call_logEvent(token, payload) {
   const me = await authUser(token);
   const p = payload || {};
   const phoneClean = String(p.phone || '').replace(/^'/, '').trim();
-  // CALL_ACTIVITY_REWORK_v1 (2026-06-04) — never insert a call_events row
-  // with no phone. These leak from receiver process death on Vivo/Samsung
-  // and pollute Call Activity with phantom rows that can't be opened.
-  const _phoneDigitsOnly = phoneClean.replace(/\D/g, '');
-  if (!_phoneDigitsOnly || _phoneDigitsOnly.length < 4) {
-    return { ok: false, queued: false, skipped: 'no_phone', call_event_id: null, lead_id: null, auto_created: false };
-  }
   // Direction we can determine SYNCHRONOUSLY without a DB query.
   let direction = p.direction || '';
   if (!direction) {
