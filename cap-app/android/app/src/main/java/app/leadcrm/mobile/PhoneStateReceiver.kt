@@ -101,6 +101,20 @@ class PhoneStateReceiver : BroadcastReceiver() {
         when (state) {
             TelephonyManager.EXTRA_STATE_RINGING -> {
                 ringStartMs = now
+                // CALL_CARD_DIRECTION_FIX_v1 (2026-06-03): persist a "this call
+                // is incoming" marker in SharedPreferences. The in-memory
+                // companion `lastState` field can be lost when the broadcast
+                // receiver process is killed between RINGING and OFFHOOK
+                // (very common on Samsung/Vivo). When OFFHOOK fires later, we
+                // read this persistent marker — if it's recent, we know the
+                // OFFHOOK is an answered INCOMING call, not an outbound, and
+                // we skip launching OutgoingCallActivity.
+                try {
+                    ctx.getSharedPreferences("call_card_state", Context.MODE_PRIVATE)
+                        .edit()
+                        .putLong("last_ringing_at", now)
+                        .apply()
+                } catch (_: Exception) {}
                 // CALL_CARD_STALE_v2: try CallLog if the broadcast didn't carry
                 // a number. We DO NOT use lastNumber here — it would be the
                 // previous call's number on Android 10+.
@@ -152,7 +166,18 @@ class PhoneStateReceiver : BroadcastReceiver() {
                 // (no RINGING in between) this is an outbound call. Try the CallLog
                 // fallback if EXTRA_PHONE_NUMBER wasn't captured by NEW_OUTGOING_CALL,
                 // then launch the OutgoingCallActivity overlay.
-                if (lastState != TelephonyManager.EXTRA_STATE_RINGING) {
+                // CALL_CARD_DIRECTION_FIX_v1 (2026-06-03): read the persistent
+                // RINGING marker as a SECOND guard. If we saw RINGING within
+                // the last 60 seconds (even if the receiver process died and
+                // restarted, so `lastState` is back to IDLE), this OFFHOOK is
+                // an answered incoming call — DO NOT launch outgoing card.
+                val lastRingingAt = try {
+                    ctx.getSharedPreferences("call_card_state", Context.MODE_PRIVATE)
+                        .getLong("last_ringing_at", 0L)
+                } catch (_: Exception) { 0L }
+                val recentRinging = lastRingingAt > 0 && (now - lastRingingAt) < 60_000L
+
+                if (lastState != TelephonyManager.EXTRA_STATE_RINGING && !recentRinging) {
                     // CALL_CARD_STALE_v2: only trust lastNumber if it was set
                     // by NEW_OUTGOING_CALL within the TTL — otherwise it's
                     // stale and would show the previous caller.
@@ -223,6 +248,14 @@ class PhoneStateReceiver : BroadcastReceiver() {
                 // call can't accidentally inherit this one's number.
                 lastNumber = ""
                 lastNumberSetAt = 0L
+                // CALL_CARD_DIRECTION_FIX_v1: clear the persistent RINGING
+                // marker so a brand-new outbound call later isn't mis-skipped.
+                try {
+                    ctx.getSharedPreferences("call_card_state", Context.MODE_PRIVATE)
+                        .edit()
+                        .remove("last_ringing_at")
+                        .apply()
+                } catch (_: Exception) {}
             }
         }
         lastState = state
