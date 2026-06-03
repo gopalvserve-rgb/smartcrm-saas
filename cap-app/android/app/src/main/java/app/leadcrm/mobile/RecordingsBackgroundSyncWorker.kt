@@ -165,7 +165,7 @@ class RecordingsBackgroundSyncWorker(
             val name = (f.name ?: "recording.m4a")
             val phone = extractPhone(name)
             try {
-                val ok = uploadOne(ctx, f.uri, name, phone, baseUrl, token)
+                val ok = uploadOne(ctx, f.uri, name, phone, baseUrl, token, mod)
                 if (ok) {
                     uploaded++
                     uploadedMap.put(uriKey, nowMs)
@@ -279,7 +279,7 @@ class RecordingsBackgroundSyncWorker(
      * whether the file came from the foreground bridge or this worker.
      */
     private fun uploadOne(ctx: Context, uri: Uri, name: String, phone: String,
-                         baseUrl: String, token: String): Boolean {
+                         baseUrl: String, token: String, fileMs: Long = 0L): Boolean {
         val cr = ctx.contentResolver
         var fname = name
         try {
@@ -312,6 +312,20 @@ class RecordingsBackgroundSyncWorker(
         writePart(out, boundary, "duration_s", "0")
         writePart(out, boundary, "device_path", uri.toString())
         writePart(out, boundary, "source", "bg_worker")
+        // CALL_ACTIVITY_REWORK_v1 (2026-06-04) — emit started_at as an ISO
+        // string with the device's CURRENT TZ offset baked in (e.g.
+        // 2026-06-03T18:46:00+05:30). Server new Date() parses this
+        // unambiguously and stores correct UTC. Source of truth is the
+        // file's lastModified — when the OEM dialer finalised the .m4a.
+        if (fileMs > 0L) {
+            try {
+                val fmt = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", java.util.Locale.US)
+                fmt.timeZone = java.util.TimeZone.getDefault()
+                val iso = fmt.format(java.util.Date(fileMs))
+                writePart(out, boundary, "started_at", iso)
+                writePart(out, boundary, "at", fileMs.toString())
+            } catch (_: Exception) {}
+        }
 
         out.writeBytes("--$boundary\r\n")
         out.writeBytes("Content-Disposition: form-data; name=\"audio\"; filename=\"$fname\"\r\n")
