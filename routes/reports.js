@@ -1388,6 +1388,33 @@ async function api_reports_callActivity(token, filters) {
      WHERE ce.created_at >= $1 AND ce.created_at <= $2
            -- CALL_INTENT_EXCLUDE_v1 — hide intent events from Recent Calls too
            AND ce.event != 'autodial_requested'
+           -- CALL_RECENT_DEDUP_v1 (2026-06-03) — hide 'incoming_ringing' rows
+           -- that have a paired 'call_ended' for the same user+phone within
+           -- 10 minutes. Without this, an answered incoming call shows up
+           -- as TWO lines (a ❌ Missed-ish ringing row + a 📥 Incoming
+           -- call_ended row) because the display formula in app.js renders
+           -- incoming_ringing without a recording as missed.
+           AND NOT (
+             ce.event = 'incoming_ringing' AND EXISTS (
+               SELECT 1 FROM call_events ce2
+                WHERE ce2.user_id = ce.user_id
+                  AND ce2.phone   = ce.phone
+                  AND ce2.event   = 'call_ended'
+                  AND ce2.created_at BETWEEN ce.created_at AND ce.created_at + INTERVAL '10 minutes'
+             )
+           )
+           -- CALL_RECENT_DEDUP_v1 — also collapse near-duplicate rows
+           -- posted by the dual-path bridge (Native HTTP + JS broadcast).
+           -- Keep the EARLIEST row per (user, phone, event) within any
+           -- 12-second sliding window; drop later siblings.
+           AND NOT EXISTS (
+             SELECT 1 FROM call_events ce3
+              WHERE ce3.user_id = ce.user_id
+                AND ce3.phone   = ce.phone
+                AND ce3.event   = ce.event
+                AND ce3.id     < ce.id
+                AND ce3.created_at >= ce.created_at - INTERVAL '12 seconds'
+           )
            ${userScopeSql.replace(/user_id/g, 'ce.user_id')}
      ORDER BY ce.created_at DESC
      LIMIT 200

@@ -156,19 +156,84 @@ async function api_call_logEvent(token, payload) {
   if (p.missed === true || p.missed === 'true' || String(p.missed) === '1') {
     direction = 'missed';
   }
-  // Insert immediately so the event lands even if the worker dies.
+  // CALL_EVENT_DEDUP_v1 (2026-06-03) — the PhoneStateReceiver has a 3-path
+  // bridge: (a) Capacitor emit, (b) intra-app broadcast → WebView JS POST,
+  // (c) direct native HTTP POST. For ONE call this fires THIS endpoint
+  // 2-4 times within ~1s, producing 2-4 rows in call_events. The Recent
+  // Calls feed then renders those as separate INCOMING/OUTGOING/MISSED
+  // lines (per user bug report: one incoming call from +918008719917
+  // showed as in+out+missed). Dedup at insert time:
+  //   * Same (user_id, phone-tail, event) within 12s → don't insert again
+  //   * If new payload has a MORE SPECIFIC direction ('in'/'missed' beats
+  //     'out' beats 'unknown'), update the existing row's direction.
+  // We also synchronously refine the direction for call_ended when the
+  // JS path sends no direction — it would otherwise land as 'out' and
+  // get refined async, but the user already saw it in the meantime.
+  const _dirRank = (d) => {
+    if (d === 'missed') return 3;
+    if (d === 'in')     return 2;
+    if (d === 'out')    return 1;
+    return 0;
+  };
   let callEventId = null;
+  const phoneTail = phoneClean.replace(/\D/g, '').slice(-10);
   try {
-    callEventId = await db.insert('call_events', {
-      lead_id: null,
-      user_id: me.id,
-      phone: phoneClean,
-      direction,
-      event: p.event || 'unknown',
-      duration_s: Number(p.duration_s) || 0,
-      recording_id: p.recording_id || null,
-      created_at: db.nowIso()
-    });
+    // Step A: synchronous direction refinement for call_ended events
+    // that arrived without an explicit direction (this is the JS-bridge
+    // path — line 28946 in app.js sends direction=undefined for
+    // anything other than incoming_ringing). If we already saw an
+    // incoming_ringing on this user+phone in the last 5 min, this is
+    // an answered incoming, not an outgoing.
+    if (!p.direction && p.event === 'call_ended' && phoneTail) {
+      try {
+        const { rows: prev } = await db.query(
+          `SELECT direction, event FROM call_events
+            WHERE user_id = $1
+              AND created_at >= NOW() - INTERVAL '5 minutes'
+              AND phone LIKE $2
+              AND direction IN ('in','missed')
+            ORDER BY created_at DESC LIMIT 1`,
+          [me.id, '%' + phoneTail]
+        );
+        if (prev[0]) direction = prev[0].direction === 'missed' ? 'in' : 'in';
+      } catch (_) {}
+    }
+    // Step B: dedup window — same (user_id, phone-tail, event) within
+    // the last 12s is a duplicate from the dual-path bridge.
+    let dupId = null, dupDirection = null;
+    if (phoneTail) {
+      try {
+        const { rows: dup } = await db.query(
+          `SELECT id, direction FROM call_events
+            WHERE user_id = $1
+              AND created_at >= NOW() - INTERVAL '12 seconds'
+              AND phone LIKE $2
+              AND event = $3
+            ORDER BY created_at DESC LIMIT 1`,
+          [me.id, '%' + phoneTail, p.event || 'unknown']
+        );
+        if (dup[0]) { dupId = dup[0].id; dupDirection = dup[0].direction; }
+      } catch (_) {}
+    }
+    if (dupId) {
+      // Duplicate — return the existing id. If the new payload has a
+      // more specific direction than the stored one, upgrade in place.
+      if (_dirRank(direction) > _dirRank(dupDirection)) {
+        try { await db.update('call_events', dupId, { direction }); } catch (_) {}
+      }
+      callEventId = dupId;
+    } else {
+      callEventId = await db.insert('call_events', {
+        lead_id: null,
+        user_id: me.id,
+        phone: phoneClean,
+        direction,
+        event: p.event || 'unknown',
+        duration_s: Number(p.duration_s) || 0,
+        recording_id: p.recording_id || null,
+        created_at: db.nowIso()
+      });
+    }
   } catch (e) {
     console.warn('[call-event] insert failed:', e.message);
   }
