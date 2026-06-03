@@ -29253,22 +29253,15 @@ function showCallerIdOverlay(m, phoneNumber) {
 }
 
 function promptSaveAsLead(number) {
-  // CALL_CARD_DEDUP_SHEET_v1 (2026-06-03): if the rich incoming-call
-  // overlay (showCallerIdOverlay → id="callerid-overlay") is already on
-  // screen for this call, suppress the legacy "Unknown number / Save as
-  // lead" bottom sheet. The rich card already provides "Open lead /
-  // Dismiss" — showing both is redundant + confusing.
-  try {
-    if (document.getElementById('callerid-overlay')) {
-      console.debug('[promptSaveAsLead] suppressed — rich callerid overlay already visible');
-      return;
-    }
-    // Also bail out if any other "after-call" modal is currently showing.
-    if (document.querySelector('.after-call-modal')) {
-      console.debug('[promptSaveAsLead] suppressed — after-call modal already visible');
-      return;
-    }
-  } catch (_) {}
+  // CALL_CARD_DEDUP_SHEET_v2 (2026-06-03): permanently disabled. The rich
+  // incoming-call overlay (showCallerIdOverlay) handles every code path
+  // now — known leads, unknown numbers, and missed calls. The legacy
+  // bottom "Unknown number / Save as lead" sheet was a duplicate. The
+  // function stays in the file (still called from a few places) but
+  // does nothing — so the bottom sheet never appears.
+  console.debug('[promptSaveAsLead] permanently disabled — rich overlay handles all cases');
+  return;
+  // ---- everything below this point is intentionally unreachable ----
   const modal = h('div', { class: 'modal-backdrop' }, h('div', { class: 'modal' },
     h('div', { class: 'modal-head' }, h('h3', {}, '📞 Unknown number'), h('button', { class: 'btn icon', onclick: () => modal.remove() }, '✕')),
     h('p', {}, 'Incoming/outgoing call with ', h('b', {}, number)),
