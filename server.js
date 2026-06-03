@@ -1353,7 +1353,36 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
           console.warn('[/api/recordings] transcode failed (storing original):', e.message);
         }
         let phone = String(req.body.phone || '').trim();
-        const direction = String(req.body.direction || 'out').toLowerCase();
+        // REC_DIRECTION_INFER_v1 (2026-06-03) — before defaulting to 'out',
+        // look up the most recent incoming_ringing for this user+phone in
+        // the last 10 min. OEM dialer filenames rarely embed direction, so
+        // the APK uploads with no direction; the old default of 'out'
+        // mislabeled inbound recordings as Outgoing in Call Activity.
+        // Pooja TR's learnimo screenshot showed an inbound call with the
+        // recording row tagged Outgoing 0:37 — this fixes it.
+        let direction = String(req.body.direction || '').toLowerCase();
+        if (!direction || direction === 'unknown') {
+          const _phoneRaw = String(req.body.phone || '').replace(/^'/, '').trim();
+          const _tail = _phoneRaw.replace(/\D/g, '').slice(-10);
+          if (_tail) {
+            try {
+              const { authUser } = require('./utils/auth');
+              const _token = (req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+              const _me = await authUser(_token);
+              const _r = await tenantDb.query(
+                `SELECT direction FROM call_events
+                  WHERE user_id = $1
+                    AND created_at >= NOW() - INTERVAL '10 minutes'
+                    AND phone LIKE $2
+                    AND event = 'incoming_ringing'
+                  ORDER BY created_at DESC LIMIT 1`,
+                [_me.id, '%' + _tail]
+              );
+              if (_r.rows[0] && _r.rows[0].direction === 'in') direction = 'in';
+            } catch (_) {}
+          }
+          if (!direction) direction = 'out';
+        }
         const filename = String(req.body.filename || (req.file && req.file.originalname) || '');
         const startedAt = req.body.started_at ? new Date(req.body.started_at) : new Date();
         const lastFourHint = String(req.body.lastfour_hint || '').slice(0, 6);
