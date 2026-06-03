@@ -310,3 +310,13 @@ Background-poll cuts on the APK. Floating-WhatsApp chat dock is now disabled on 
    '#/leads', '🪪', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
+
+-- REPORT_CF_FILTER_v1 (2026-06-02) — custom fields in Reports filter rule-builder
+INSERT INTO changelog (category, title, body, link, icon, created_at)
+SELECT v.category, v.title, v.body, v.link, v.icon, v.created_at
+FROM (VALUES
+  ('improve', '📊 Custom fields are now filterable in Reports',
+   'On the Reports page, the "+ Filter rule" builder now lists every active custom field as a filterable option alongside Lead name / Phone / Email / Tag / Company. So if your team tracks (for example) "company size", "branch", or "deal value" as a custom field, you can now slice the entire Reports view by those values — charts, KPIs, daily breakdown, and the user-wise table all respect the rule. No schema change needed; existing custom-field data is queried straight from the lead record.',
+   '#/reports', '📊', NOW())
+) AS v(category, title, body, link, icon, created_at)
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
