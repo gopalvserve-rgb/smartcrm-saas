@@ -33,6 +33,9 @@ import android.os.Looper;
 import android.provider.OpenableColumns;
 import android.util.Log;
 import android.webkit.JavascriptInterface;
+import android.app.DownloadManager;
+import androidx.core.content.FileProvider;
+import java.io.File;
 import android.webkit.WebView;
 import android.webkit.WebChromeClient;
 import android.webkit.GeolocationPermissions;
@@ -403,11 +406,96 @@ public class MainActivity extends BridgeActivity {
             }
         }
 
-        // APK_AUTO_UPDATE_v1.3: fire Intent.ACTION_VIEW so Android's browser
-        // downloads the APK and the system package installer handles the rest.
-        // Capacitor WebView can't trigger an in-WebView download for .apk,
-        // so window.location.href / window.open do nothing. This bridge is
-        // the reliable path.
+        // APK_AUTO_UPDATE_DIRECT_v1 (2026-06-03): true in-app download + install.
+        // Downloads the APK via DownloadManager (silently, with notification),
+        // then fires the PackageInstaller intent with a FileProvider URI when
+        // complete. User taps "Install" once and the update goes in. No
+        // browser detour, no "copy this URL" fallback. The old downloadApk
+        // (browser launch) stays as a Plan B for very old Android quirks.
+        @JavascriptInterface
+        public void installApk(String url) {
+            if (url == null || url.isEmpty()) return;
+            runOnUiThread(() -> {
+                try {
+                    String full = url;
+                    if (full.startsWith("/")) {
+                        String origin = "https://crm.smartcrmsolution.com";
+                        try {
+                            String webUrl = getBridge().getWebView().getUrl();
+                            if (webUrl != null) {
+                                java.net.URL u = new java.net.URL(webUrl);
+                                origin = u.getProtocol() + "://" + u.getHost();
+                                if (u.getPort() > 0) origin += ":" + u.getPort();
+                            }
+                        } catch (Exception ignored) {}
+                        full = origin + url;
+                    }
+                    // Target file under app-private external dir so we don't
+                    // need WRITE_EXTERNAL_STORAGE on modern Android.
+                    File dir = new File(getExternalFilesDir(null), "apk_updates");
+                    if (!dir.exists()) dir.mkdirs();
+                    File outFile = new File(dir, "update.apk");
+                    if (outFile.exists()) outFile.delete();
+                    final Uri outUri = Uri.fromFile(outFile);
+
+                    DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+                    if (dm == null) {
+                        Log.w(TAG, "installApk: DownloadManager unavailable, falling back to browser");
+                        downloadApk(url);
+                        return;
+                    }
+                    DownloadManager.Request req = new DownloadManager.Request(Uri.parse(full));
+                    req.setTitle("SmartCRM update");
+                    req.setDescription("Downloading new app version…");
+                    req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                    req.setDestinationUri(outUri);
+                    req.setMimeType("application/vnd.android.package-archive");
+                    final long downloadId = dm.enqueue(req);
+                    Log.i(TAG, "installApk: enqueued download id=" + downloadId + " url=" + full);
+
+                    final BroadcastReceiver receiver = new BroadcastReceiver() {
+                        @Override
+                        public void onReceive(Context ctx, Intent intent) {
+                            long id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1);
+                            if (id != downloadId) return;
+                            try { ctx.unregisterReceiver(this); } catch (Exception ignored) {}
+                            launchInstaller(outFile);
+                        }
+                    };
+                    IntentFilter filter = new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE);
+                    if (Build.VERSION.SDK_INT >= 33) {
+                        registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED);
+                    } else {
+                        registerReceiver(receiver, filter);
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "installApk failed: " + e.getMessage());
+                    // Fall back to browser-launch path if anything blew up.
+                    downloadApk(url);
+                }
+            });
+        }
+
+        private void launchInstaller(File apk) {
+            try {
+                Uri apkUri = FileProvider.getUriForFile(
+                        getApplicationContext(),
+                        getPackageName() + ".fileprovider",
+                        apk);
+                Intent installIntent = new Intent(Intent.ACTION_VIEW);
+                installIntent.setDataAndType(apkUri, "application/vnd.android.package-archive");
+                installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(installIntent);
+                Log.i(TAG, "launchInstaller: opened system installer for " + apk.getAbsolutePath());
+            } catch (Exception e) {
+                Log.e(TAG, "launchInstaller failed: " + e.getMessage());
+            }
+        }
+
+        // APK_AUTO_UPDATE_v1.3 (legacy): fire Intent.ACTION_VIEW so Android's
+        // browser downloads the APK. Kept as a fallback for the rare device
+        // where DownloadManager is unusable.
         @JavascriptInterface
         public void downloadApk(String url) {
             if (url == null || url.isEmpty()) return;
@@ -415,8 +503,6 @@ public class MainActivity extends BridgeActivity {
                 try {
                     String full = url;
                     if (full.startsWith("/")) {
-                        // Resolve relative URLs against the app's origin so the
-                        // browser hits the correct host (crm.smartcrmsolution.com).
                         String origin = "https://crm.smartcrmsolution.com";
                         try {
                             String webUrl = getBridge().getWebView().getUrl();

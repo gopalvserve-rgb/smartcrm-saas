@@ -2,4 +2,6 @@
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <external-path name="my_images" path="." />
     <cache-path name="my_cache_images" path="." />
+    <!-- APK_AUTO_UPDATE_DIRECT_v1: expose downloaded .apk files for the installer Intent. -->
+    <external-files-path name="apk_updates" path="apk_updates/" />
 </paths>

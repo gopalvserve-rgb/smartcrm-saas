@@ -173,6 +173,8 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- PERM_ONBOARDING_v1: caller-ID popup needs to draw above other apps. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- APK_AUTO_UPDATE_DIRECT_v1 (2026-06-03): in-app APK download+install. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- PERM_ONBOARDING_v1: sync follow-ups to phone calendar. -->
     <uses-permission android:name="android.permission.READ_CALENDAR" />
     <uses-permission android:name="android.permission.WRITE_CALENDAR" />

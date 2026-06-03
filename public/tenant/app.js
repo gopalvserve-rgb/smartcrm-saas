@@ -567,10 +567,29 @@ function _renderApkUpdateBanner(installedCode, meta) {
       ? relUrl
       : (location.origin + relUrl);
 
-    // Path 1: native bridge (APK build 150+ has this)
+    // APK_AUTO_UPDATE_DIRECT_v1 (2026-06-03): try the in-app installer FIRST.
+    // installApk uses DownloadManager + FileProvider to download silently
+    // and pop the system installer when complete — no browser detour.
     let bridgeCalled = false;
     try {
-      if (window.LeadCRMNative && typeof window.LeadCRMNative.downloadApk === 'function') {
+      if (window.LeadCRMNative && typeof window.LeadCRMNative.installApk === 'function') {
+        window.LeadCRMNative.installApk(fullUrl);
+        bridgeCalled = true;
+        // Replace the modal contents with a friendly "downloading" indicator
+        // so the user knows something's happening (DownloadManager runs in bg).
+        try {
+          backdrop.innerHTML =
+            '<div style="background:#fff;border-radius:18px;max-width:340px;width:100%;padding:32px 24px;box-shadow:0 24px 64px rgba(0,0,0,.4);text-align:center;">' +
+              '<div style="font-size:44px;margin-bottom:10px">⬇️</div>' +
+              '<h2 style="margin:0 0 8px;font-size:20px;font-weight:800;color:#0f172a">Downloading update…</h2>' +
+              '<p style="margin:0;color:#475569;font-size:14px;font-weight:500">When the download finishes, Android will ask you to install. Tap <b>Install</b>.</p>' +
+              '<button id="apk-update-close" style="background:transparent;border:none;color:#64748b;font-size:13px;font-weight:600;cursor:pointer;padding:12px;margin-top:14px">Close</button>' +
+            '</div>';
+          document.getElementById('apk-update-close').onclick = () => { try { backdrop.remove(); } catch (_) {} };
+        } catch (_) {}
+      }
+      // Fallback to OLD bridge (browser launch) for older APK builds.
+      else if (window.LeadCRMNative && typeof window.LeadCRMNative.downloadApk === 'function') {
         window.LeadCRMNative.downloadApk(fullUrl);
         bridgeCalled = true;
       }
