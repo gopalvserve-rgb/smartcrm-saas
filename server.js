@@ -3576,6 +3576,80 @@ async function _runCallEventTimeBackfill() {
 // Run 90s after boot so per-tenant pools have warmed up.
 setTimeout(() => _runCallEventTimeBackfill().catch(() => {}), 90_000);
 
+// REC_DIRECTION_BACKFILL_v1 (2026-06-04) — flip historical recording_saved
+// rows that were defaulted to direction='out' but should have been 'in'.
+// Criterion: a paired incoming_ringing exists for the same user+phone
+// within ±10 min of the recording_saved row. Only affects the last 7 days
+// of data per tenant to keep the scan bounded and conservative.
+// Idempotent: re-running only flips rows that still match the criterion;
+// once flipped to 'in', they won't match the WHERE clause again.
+async function _runRecordingDirectionBackfill() {
+  try {
+    const ranAlready = await controlDb.query(
+      "SELECT 1 FROM saas_flags WHERE key = 'rec_direction_backfill_v1' LIMIT 1"
+    ).catch(() => ({ rows: [] }));
+    if (ranAlready.rows && ranAlready.rows.length) {
+      console.log('[rec-direction-backfill] already ran on a prior boot — skipping');
+      return;
+    }
+    try {
+      await controlDb.query(
+        'CREATE TABLE IF NOT EXISTS saas_flags (key TEXT PRIMARY KEY, value TEXT, ran_at TIMESTAMPTZ DEFAULT NOW())'
+      );
+    } catch (_) {}
+    const r = await controlDb.query(
+      "SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500"
+    );
+    const slugs = r.rows.map(x => x.slug);
+    console.log('[rec-direction-backfill] starting — ' + slugs.length + ' tenants');
+    let totalUpdated = 0, totalTenants = 0;
+    for (const slug of slugs) {
+      let t; try { t = await tenantPoolMod.findActiveTenant(slug); } catch (_) { continue; }
+      if (!t) continue;
+      const pool = tenantPoolMod.poolFor(t);
+      if (!pool) continue;
+      try {
+        const u = await pool.query(`
+          UPDATE call_events ce
+             SET direction = 'in'
+           WHERE ce.event = 'recording_saved'
+             AND ce.direction = 'out'
+             AND ce.created_at >= NOW() - INTERVAL '7 days'
+             AND EXISTS (
+               SELECT 1 FROM call_events ce2
+                WHERE ce2.user_id = ce.user_id
+                  AND ce2.phone   = ce.phone
+                  AND ce2.event   = 'incoming_ringing'
+                  AND ce2.direction = 'in'
+                  AND ce2.created_at BETWEEN ce.created_at - INTERVAL '10 minutes'
+                                         AND ce.created_at + INTERVAL '2 minutes'
+             )
+        `);
+        const n = u.rowCount || 0;
+        if (n > 0) {
+          console.log('[rec-direction-backfill] ' + slug + ' — flipped ' + n + ' rows to direction=in');
+          totalUpdated += n;
+        }
+        totalTenants++;
+      } catch (e) {
+        console.warn('[rec-direction-backfill] ' + slug + ' failed: ' + e.message);
+      }
+    }
+    console.log('[rec-direction-backfill] done — ' + totalUpdated + ' rows flipped across ' + totalTenants + ' tenants');
+    try {
+      await controlDb.query(
+        "INSERT INTO saas_flags (key, value) VALUES ('rec_direction_backfill_v1', $1) ON CONFLICT (key) DO NOTHING",
+        [JSON.stringify({ tenants: totalTenants, rows: totalUpdated })]
+      );
+    } catch (_) {}
+  } catch (e) {
+    console.error('[rec-direction-backfill] failed:', e.message);
+  }
+}
+// Run 120s after boot — 30s after the call-event time backfill, so they
+// don't contend for tenant pools.
+setTimeout(() => _runRecordingDirectionBackfill().catch(() => {}), 120_000);
+
 
   app.listen(PORT, () => console.log('[boot] SmartCRM SaaS listening on :' + PORT));
 }
