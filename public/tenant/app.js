@@ -2837,6 +2837,74 @@ function _renderKpi(card, label, value, klass, icon, href) {
 // responses bundled in `data` (data.summary, data.notifs, data.funnel,
 // data.tat, data.projects, data.teamFu, data.teamTat, data.daily).
 const WIDGET_LIBRARY = {
+  // ----- Custom field breakdown -----
+  // RB_CF_DIMS_v1 (2026-06-03): one widget that pivots the lead population
+  // by any custom field the tenant has defined. The picker shows up in the
+  // widget's Edit modal; admin chooses which CF and the widget renders a
+  // bar chart + sortable table. Re-uses api_reports_pivot under the hood.
+  custom_field_breakdown: { title: 'Custom field · Breakdown', group: 'Custom fields',
+    description: 'Pick any custom field and see leads grouped by its values.',
+    configKeys: ['cf_key'],
+    configRenderer: (card, cfg, onChange) => {
+      const cfs = ((window.CRM && CRM.cache && CRM.cache.customFields) || [])
+        .filter(c => Number(c.is_active) !== 0 && (c.key || c.name));
+      if (!cfs.length) {
+        card.appendChild(h('div', { class: 'muted', style: { fontSize: '.78rem' } }, 'No custom fields defined yet. Add some in Settings → Custom Fields.'));
+        return;
+      }
+      const sel = h('select', { class: 'input', style: { width: '100%' } },
+        h('option', { value: '' }, 'Pick a custom field…'),
+        ...cfs.map(cf => {
+          const k = (cf.key || cf.name);
+          return h('option', { value: k, selected: cfg && cfg.cf_key === k ? 'selected' : null }, (cf.label || k));
+        })
+      );
+      sel.onchange = () => onChange({ cf_key: sel.value });
+      card.appendChild(h('div', { class: 'muted', style: { fontSize: '.72rem', marginBottom: '.3rem' } }, 'Custom field'));
+      card.appendChild(sel);
+    },
+    render: async (c, cfg, _d, w) => {
+      const cfKey = cfg && cfg.cf_key;
+      c.appendChild(h('h3', { style: { margin: '0 0 .5rem' } }, (w.title || 'Custom field breakdown') + (cfKey ? ' · ' + cfKey : '')));
+      if (!cfKey) {
+        c.appendChild(h('div', { class: 'muted', style: { fontSize: '.85rem' } }, 'Click Edit on this widget and pick a custom field.'));
+        return;
+      }
+      try {
+        const r = await api('api_reports_pivot', { row_dims: ['extra:' + cfKey], metrics: ['count'], filters: {} });
+        const rows = (r && r.rows) || [];
+        if (!rows.length) {
+          c.appendChild(h('div', { class: 'muted', style: { fontSize: '.85rem' } }, 'No leads with a value in this custom field.'));
+          return;
+        }
+        const sorted = rows.slice().sort((a,b) => (b.metrics && b.metrics.count || 0) - (a.metrics && a.metrics.count || 0));
+        const max = sorted[0] && sorted[0].metrics && sorted[0].metrics.count || 1;
+        const tbl = h('table', { class: 'tbl', style: { width: '100%', fontSize: '.85rem' } },
+          h('thead', {}, h('tr', {},
+            h('th', { style: { textAlign: 'left' } }, cfKey),
+            h('th', { style: { textAlign: 'right' } }, 'Leads'),
+            h('th', { style: {} }, '')
+          )),
+          h('tbody', {},
+            ...sorted.map(rw => {
+              const val = (rw.dims && rw.dims['extra:' + cfKey]) || '(empty)';
+              const cnt = (rw.metrics && rw.metrics.count) || 0;
+              const pct = Math.round(cnt * 100 / max);
+              return h('tr', {},
+                h('td', { style: { textAlign: 'left' } }, String(val)),
+                h('td', { style: { textAlign: 'right', fontWeight: 600 } }, String(cnt)),
+                h('td', { style: { width: '40%' } }, h('div', { style: { background: '#dbeafe', height: '14px', width: pct + '%', borderRadius: '3px' } }))
+              );
+            })
+          )
+        );
+        c.appendChild(h('div', { style: { overflowX: 'auto' } }, tbl));
+        c.appendChild(h('div', { class: 'muted', style: { fontSize: '.72rem', marginTop: '.35rem' } }, '💡 Total ' + sorted.length + ' distinct values · sorted by lead count.'));
+      } catch (e) {
+        c.appendChild(h('div', { class: 'muted', style: { color: '#b91c1c', fontSize: '.85rem' } }, 'Failed: ' + e.message));
+      }
+    }
+  },
   // ----- User-wise breakdown -----
   // DASH_BY_USER_v1 — leaderboard table of every active user's leads:
   // total, new, open, won, lost. Click a row to drill into that user's
@@ -42363,12 +42431,31 @@ const RB_DIM_CATALOGUE = [
   { key: 'gad_campaignid', label: 'Google Ads Campaign ID', icon: '📣' }
 ];
 
-/* Inject custom-field dimensions dynamically (one per CF on this tenant). */
+/* Inject custom-field dimensions dynamically (one per CF on this tenant).
+ *
+ * RB_CF_DIMS_v1 hardening (2026-06-03): the cf may use `.key` (preferred) or
+ * `.name` as the storage key (some tenants only populate one). Use whichever
+ * is non-empty. Filter inactive CFs. Sort alphabetically by label so the
+ * dropdown stays readable as the tenant adds more CFs.
+ */
 function _rbCFDims() {
   const out = [];
-  ((window.CRM && CRM.cache && CRM.cache.customFields) || []).forEach(cf => {
-    out.push({ key: 'extra:' + cf.key, label: 'Custom · ' + (cf.label || cf.key), icon: '📝' });
+  const cfs = (window.CRM && CRM.cache && CRM.cache.customFields) || [];
+  cfs.forEach(cf => {
+    if (!cf) return;
+    if (Number(cf.is_active) === 0) return;
+    const k = (cf.key && String(cf.key).trim()) || (cf.name && String(cf.name).trim()) || '';
+    if (!k) return;
+    out.push({
+      key: 'extra:' + k,
+      label: 'Custom · ' + (cf.label || k),
+      icon: '📝'
+    });
   });
+  out.sort((a, b) => a.label.localeCompare(b.label));
+  if (!out.length && cfs.length) {
+    console.warn('[RB] tenant has customFields in cache but none usable — first item:', cfs[0]);
+  }
   return out;
 }
 

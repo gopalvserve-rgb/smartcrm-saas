@@ -340,3 +340,13 @@ FROM (VALUES
    '#/leads', '🔀', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
+
+-- RB_CF_DIMS_v1 (2026-06-03) — custom fields in Report Builder + Dashboard
+INSERT INTO changelog (category, title, body, link, icon, created_at)
+SELECT v.category, v.title, v.body, v.link, v.icon, v.created_at
+FROM (VALUES
+  ('improve', '📊 Custom fields in Report Builder rows + new Dashboard widget',
+   'Two improvements that surface your custom fields as analytics dimensions. (1) Report Builder — open the right-side Generate Report panel and the Row dropdown now lists every active custom field (labelled "Custom · <name>") alongside Status / Source / Product / Campaign / City / UTM / GCLID. Pick one and the pivot table groups every lead by that field''s value. Works in any chart type (bar, table, sortable list). Same for Column metrics where applicable. (2) Custom Dashboard — a new "Custom field · Breakdown" widget is in the picker under the "Custom fields" group. Add it to your dashboard, click Edit, pick which custom field to chart, and you get a live bar-chart leaderboard sorted by lead count. Both work for any tenant — no code changes per CF. Hardened: the mapper now falls back to cf.name if cf.key is empty, so older tenants don''t need to remigrate.',
+   '#/report-builder', '📊', NOW())
+) AS v(category, title, body, link, icon, created_at)
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
