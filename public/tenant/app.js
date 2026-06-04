@@ -45364,7 +45364,7 @@ VIEWS.campaignreport = async (view) => {
   const ymd = d => d.toISOString().slice(0, 10);
   const minusDays = n => { const d = new Date(today); d.setDate(d.getDate() - n); return d; };
 
-  let campaigns = [], users = [], products = [], cfFields = [];
+  let campaigns = [], users = [], products = [];
   try { const r = await api('api_campaigns_list'); campaigns = (r && r.campaigns) || r || []; } catch (_) {}
   try { const r = await api('api_users_list'); users = (r && r.users) || r || []; } catch (_) {}
   try {
@@ -45376,10 +45376,6 @@ VIEWS.campaignreport = async (view) => {
       products = (r && r.products) || r || [];
     } catch (_) {}
   }
-  try {
-    const r = await api('api_admin_listCustomFields');
-    cfFields = (r && r.fields) || r || [];
-  } catch (_) {}
 
   const fromI = h('input', { type: 'date', value: saved.from || ymd(minusDays(29)),
     style: { padding: '.35rem' } });
@@ -45420,30 +45416,6 @@ VIEWS.campaignreport = async (view) => {
     onApply: (vals) => { productSelected = vals; apply(); }
   });
 
-  const cfWrap = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } });
-  const cfRows = [];
-  function addCfRow(initKey, initVal) {
-    const keyI = h('select', { style: { padding: '.25rem', minWidth: '120px' } },
-      h('option', { value: '' }, '— field —'),
-      ...cfFields.map(f => {
-        const opt = h('option', { value: 'cf_' + (f.name || f.key || f) },
-          (f.label || f.name || f.key || f));
-        if (initKey && opt.value === initKey) opt.selected = true;
-        return opt;
-      }));
-    const valI = h('input', { type: 'text', value: initVal || '',
-      placeholder: 'contains…', style: { padding: '.25rem', minWidth: '120px' } });
-    const rmBtn = h('button', { class: 'btn sm',
-      onclick: () => { row.remove(); const i = cfRows.indexOf(rec); if (i >= 0) cfRows.splice(i, 1); } }, '✕');
-    const row = h('div', { style: { display: 'flex', gap: '4px', alignItems: 'center' } },
-      keyI, valI, rmBtn);
-    const rec = { keyI, valI, row };
-    cfRows.push(rec);
-    cfWrap.appendChild(row);
-  }
-  (saved.cf_rows || []).forEach(r => addCfRow(r.k, r.v));
-  if (!cfRows.length) addCfRow();
-
   const filterBar = h('div', { class: 'card',
     style: { padding: '.65rem .8rem', marginBottom: '.8rem', background: '#f8fafc' } });
 
@@ -45463,12 +45435,7 @@ VIEWS.campaignreport = async (view) => {
   filterBar.appendChild(h('div', { style: { display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-start' } },
     h('div', {}, h('div', { style: { fontWeight: 600, fontSize: '.8rem' } }, 'Campaigns'), campSel),
     h('div', {}, h('div', { style: { fontWeight: 600, fontSize: '.8rem' } }, 'Users'),     userSel),
-    h('div', {}, h('div', { style: { fontWeight: 600, fontSize: '.8rem' } }, 'Products'),  prodSel),
-    h('div', {}, h('div', { style: { fontWeight: 600, fontSize: '.8rem' } }, 'Custom fields'),
-      cfWrap,
-      h('button', { class: 'btn sm', style: { marginTop: '4px' },
-        onclick: () => addCfRow() }, '+ Add field filter')
-    )
+    h('div', {}, h('div', { style: { fontWeight: 600, fontSize: '.8rem' } }, 'Products'),  prodSel)
   ));
 
   filterBar.appendChild(h('div', { style: { display: 'flex', gap: '6px', marginTop: '.5rem' } },
@@ -45509,21 +45476,15 @@ VIEWS.campaignreport = async (view) => {
     const campaign_ids = campaignSelected.map(Number).filter(Boolean);
     const user_ids     = userSelected.slice();
     const prods        = productSelected.slice();
-    const cf = {};
-    const cfRowsSaved = [];
-    cfRows.forEach(r => {
-      const k = r.keyI.value, v = r.valI.value;
-      if (k && v) { cf[k] = v; cfRowsSaved.push({ k, v }); }
-    });
     const payload = {
-      campaign_ids, user_ids, products: prods, cf,
+      campaign_ids, user_ids, products: prods,
       from: fromI.value || undefined,
       to:   toI.value   || undefined
     };
     try {
       localStorage.setItem(LSKEY, JSON.stringify({
         from: fromI.value, to: toI.value,
-        campaign_ids, user_ids, products: prods, cf_rows: cfRowsSaved
+        campaign_ids, user_ids, products: prods
       }));
     } catch (_) {}
     return payload;
