@@ -20043,7 +20043,10 @@ async function adminCampaigns(reload) {
 
   root.appendChild(h('div', { class: 'row gap', style: { marginBottom: '.75rem' } },
     h('button', { class: 'btn primary', onclick: () => openCampaignEditModal(null, () => reload()) },
-      '+ Create campaign')
+      '+ Create campaign'),
+    /* CAMPAIGN_REPORT_v1 — all-campaigns comparison */
+    h('button', { class: 'btn', onclick: () => openAllCampaignsReportModal() },
+      '📊 All campaigns report')
   ));
 
   if (!rows.length) {
@@ -20096,6 +20099,10 @@ async function adminCampaigns(reload) {
         /* CAMPAIGN_UPLOAD_v1 — per-campaign CSV upload */
         h('button', { class: 'btn sm', title: 'Upload leads as CSV directly into this campaign',
           onclick: () => openCampaignUploadModal(r, () => reload()) }, '📤 Upload'),
+        ' ',
+        /* CAMPAIGN_REPORT_v1 — per-campaign report */
+        h('button', { class: 'btn sm', title: 'View funnel / status / user-wise report for this campaign',
+          onclick: () => openCampaignReportModal(r) }, '📊 Report'),
         ' ',
         h('button', { class: 'btn sm',
           onclick: async () => {
@@ -20166,9 +20173,78 @@ async function openCampaignUploadModal(camp, onDone) {
       'Pick a CSV file'),
     fileI,
     h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } },
-      'Same column structure as Leads → Bulk upload: required name + phone (or whatsapp). '
-      + 'Optional email, source, product, city, etc.')
+      'Same column structure as Leads → Bulk upload. We auto-detect column names.')
   ));
+
+  /* CAMPAIGN_UPLOAD_FORMAT_v1 — show required + optional columns and
+   * give the user a one-click sample CSV so they know exactly what shape
+   * to upload. Same column set the rest of the CRM uses for Leads → Bulk
+   * Upload, with the assign-to column intentionally NOT shown (campaign
+   * distribution handles ownership). */
+  const SAMPLE_REQUIRED = ['name', 'phone'];
+  const SAMPLE_OPTIONAL = ['email', 'whatsapp', 'source', 'product', 'city',
+    'status', 'remark', 'address', 'company', 'tag'];
+  const formatCard = h('div', { class: 'card',
+    style: { padding: '.6rem .75rem', background: '#eef2ff',
+             border: '1px solid #c7d2fe', marginBottom: '.6rem',
+             fontSize: '.8rem', lineHeight: '1.45' } });
+  formatCard.appendChild(h('div', { style: { fontWeight: 600, marginBottom: '.25rem' } },
+    'Required columns'));
+  formatCard.appendChild(h('div', {},
+    h('code', { style: { background: '#fff', padding: '1px 5px', borderRadius: '3px',
+                          marginRight: '4px' } }, 'name'),
+    h('code', { style: { background: '#fff', padding: '1px 5px', borderRadius: '3px',
+                          marginRight: '4px' } }, 'phone'),
+    ' (or ',
+    h('code', { style: { background: '#fff', padding: '1px 5px', borderRadius: '3px' } }, 'whatsapp'),
+    ')'));
+  formatCard.appendChild(h('div', { style: { fontWeight: 600, marginTop: '.4rem', marginBottom: '.25rem' } },
+    'Optional columns (any of these)'));
+  const optWrap = h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '4px' } });
+  SAMPLE_OPTIONAL.forEach(k => optWrap.appendChild(
+    h('code', { style: { background: '#fff', padding: '1px 5px', borderRadius: '3px' } }, k)));
+  formatCard.appendChild(optWrap);
+  formatCard.appendChild(h('div', { style: { fontWeight: 600, marginTop: '.4rem', marginBottom: '.25rem' } },
+    'Custom fields'));
+  formatCard.appendChild(h('div', { class: 'muted' },
+    'Add any custom field as a column with the prefix ',
+    h('code', { style: { background: '#fff', padding: '1px 5px', borderRadius: '3px' } }, 'cf_'),
+    ' — e.g. ',
+    h('code', { style: { background: '#fff', padding: '1px 5px', borderRadius: '3px' } }, 'cf_budget'),
+    ', ',
+    h('code', { style: { background: '#fff', padding: '1px 5px', borderRadius: '3px' } }, 'cf_course'),
+    '.'));
+  formatCard.appendChild(h('div', { class: 'muted',
+      style: { marginTop: '.4rem', fontStyle: 'italic' } },
+    'Note: do NOT include an assigned_to column — leads are routed by this campaign\'s distribution rule.'));
+  const sampleBtnRow = h('div', { style: { marginTop: '.5rem' } },
+    h('button', { class: 'btn sm',
+      onclick: () => {
+        // Build sample CSV: header row + 2 example rows.
+        const headers = SAMPLE_REQUIRED.concat(SAMPLE_OPTIONAL).concat(['cf_budget', 'cf_course']);
+        const sample1 = ['Rahul Kumar', '9876543210', 'rahul@example.com', '9876543210',
+          'Facebook', 'MBA Program', 'Mumbai', 'New',
+          'Asked about EMI options', 'Andheri West', 'TechCorp', 'hot',
+          '500000', 'MBA'];
+        const sample2 = ['Priya Sharma', '9988776655', 'priya@example.com', '',
+          'Google Ads', 'BBA Program', 'Delhi', 'New',
+          'Wants brochure', 'Connaught Place', '', 'warm',
+          '300000', 'BBA'];
+        const esc = v => {
+          const s = String(v == null ? '' : v);
+          return (/[,"\n]/).test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+        };
+        const csv = [headers, sample1, sample2].map(r => r.map(esc).join(',')).join('\n');
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'campaign-upload-sample.csv';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+      } }, '⬇ Download sample CSV'));
+  formatCard.appendChild(sampleBtnRow);
+  body.appendChild(formatCard);
 
   // Preview / summary card (filled after parse)
   const previewCard = h('div', { class: 'card',
@@ -20313,6 +20389,321 @@ async function openCampaignUploadModal(camp, onDone) {
   modal.appendChild(h('div', { class: 'actions', style: { padding: '.5rem 0', borderTop: '1px solid #e5e7eb' } },
     h('button', { class: 'btn', onclick: () => m.remove() }, 'Cancel'),
     confirmBtn));
+
+  m.appendChild(modal);
+  document.body.appendChild(m);
+}
+
+
+
+// ============================================================
+// CAMPAIGN_REPORT_v1 (2026-06-04) — per-campaign report modal.
+// KPIs strip + status-wise + user-wise + source breakdown + simple
+// daily inflow sparkline. Date-range filter at top. Tied to the
+// Campaigns row "📊 Report" button.
+// ============================================================
+async function openCampaignReportModal(camp) {
+  const m = h('div', { class: 'modal-backdrop',
+    onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const modal = h('div', { class: 'modal', style: { maxWidth: '900px' } });
+  modal.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, '📊 ' + (camp.name || 'Campaign') + ' — Report'),
+    h('button', { class: 'btn icon', onclick: () => m.remove() }, '✕')
+  ));
+  const body = h('div', { class: 'modal-body-wrap', style: { padding: '.5rem 0' } });
+
+  // ---- Date range chips ----
+  const today = new Date();
+  const ymd = d => d.toISOString().slice(0, 10);
+  const minusDays = n => { const d = new Date(today); d.setDate(d.getDate() - n); return d; };
+  let curFrom = ymd(minusDays(29));
+  let curTo   = ymd(today);
+
+  const fromI = h('input', { type: 'date', value: curFrom });
+  const toI   = h('input', { type: 'date', value: curTo });
+  const chips = h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap',
+      marginBottom: '.6rem', alignItems: 'center' } },
+    h('span', { class: 'muted' }, 'From:'), fromI,
+    h('span', { class: 'muted' }, 'To:'), toI,
+    h('button', { class: 'btn sm', onclick: () => {
+        fromI.value = ymd(minusDays(6)); toI.value = ymd(today); reload();
+      } }, 'Last 7d'),
+    h('button', { class: 'btn sm', onclick: () => {
+        fromI.value = ymd(minusDays(29)); toI.value = ymd(today); reload();
+      } }, 'Last 30d'),
+    h('button', { class: 'btn sm', onclick: () => {
+        fromI.value = ymd(minusDays(89)); toI.value = ymd(today); reload();
+      } }, 'Last 90d'),
+    h('button', { class: 'btn sm', onclick: () => { fromI.value = ''; toI.value = ''; reload(); } }, 'All time'),
+    h('button', { class: 'btn sm primary', onclick: () => reload() }, 'Apply')
+  );
+  body.appendChild(chips);
+
+  const dataWrap = h('div', { style: { minHeight: '300px' } });
+  body.appendChild(dataWrap);
+  modal.appendChild(body);
+
+  function fmtSecs(s) {
+    s = Number(s) || 0;
+    if (s < 60) return s + 's';
+    if (s < 3600) return Math.round(s / 60) + 'm';
+    if (s < 86400) return Math.round(s / 3600) + 'h';
+    return Math.round(s / 86400) + 'd';
+  }
+
+  function kpi(label, value, color) {
+    return h('div', { style: { flex: '1 0 110px', minWidth: '110px',
+        background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px',
+        padding: '.55rem .7rem' } },
+      h('div', { class: 'muted', style: { fontSize: '.7rem' } }, label),
+      h('div', { style: { fontWeight: 700, fontSize: '1.2rem',
+          color: color || '#0f172a' } }, value));
+  }
+
+  async function reload() {
+    dataWrap.innerHTML = '';
+    dataWrap.appendChild(h('div', { class: 'muted' }, '⏳ Loading…'));
+    let r;
+    try {
+      r = await api('api_campaigns_report', {
+        campaign_id: camp.id,
+        from: fromI.value || undefined,
+        to:   toI.value   || undefined
+      });
+    } catch (e) {
+      dataWrap.innerHTML = '';
+      dataWrap.appendChild(h('div', { style: { color: '#b91c1c' } }, 'Report failed: ' + e.message));
+      return;
+    }
+
+    dataWrap.innerHTML = '';
+    const k = r.kpis || {};
+
+    // KPI strip
+    const kStrip = h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap',
+        marginBottom: '.8rem' } },
+      kpi('Total leads',  k.total,      '#0f172a'),
+      kpi('Assigned',     k.assigned,   '#0369a1'),
+      kpi('Unassigned',   k.unassigned, '#92400e'),
+      kpi('Final',        k.final,      '#0f172a'),
+      kpi('Won',          k.won,        '#15803d'),
+      kpi('Lost',         k.lost,       '#b91c1c'),
+      kpi('Conv %',       (k.conv_pct == null ? 0 : k.conv_pct) + '%', '#7c3aed'),
+      kpi('Avg TAT',      fmtSecs(k.avg_tat_secs), '#0f172a'),
+      kpi('Duplicates',   k.duplicates, '#92400e')
+    );
+    dataWrap.appendChild(kStrip);
+
+    // Status-wise table
+    dataWrap.appendChild(h('h4', { style: { margin: '.6rem 0 .35rem 0' } }, 'Status-wise breakdown'));
+    if (!r.status_rows || !r.status_rows.length) {
+      dataWrap.appendChild(h('div', { class: 'muted' }, 'No status data for this range.'));
+    } else {
+      const tbl = h('table', { class: 'table sm' },
+        h('thead', {}, h('tr', {},
+          h('th', {}, 'Status'),
+          h('th', { style: { textAlign: 'right' } }, 'Count'),
+          h('th', { style: { textAlign: 'right' } }, '% of total'))),
+        h('tbody', {}, ...r.status_rows.map(row => {
+          const pct = (k.total > 0) ? Math.round((row.cnt / k.total) * 1000) / 10 : 0;
+          return h('tr', {},
+            h('td', {}, row.status_name || '—'),
+            h('td', { style: { textAlign: 'right', fontWeight: 600 } }, String(row.cnt)),
+            h('td', { style: { textAlign: 'right' } }, pct + '%'));
+        }))
+      );
+      dataWrap.appendChild(tbl);
+    }
+
+    // User-wise table
+    dataWrap.appendChild(h('h4', { style: { margin: '.6rem 0 .35rem 0' } }, 'User-wise performance'));
+    if (!r.user_rows || !r.user_rows.length) {
+      dataWrap.appendChild(h('div', { class: 'muted' }, 'No assignments yet in this range.'));
+    } else {
+      const tbl = h('table', { class: 'table sm' },
+        h('thead', {}, h('tr', {},
+          h('th', {}, 'User'),
+          h('th', { style: { textAlign: 'right' } }, 'Total'),
+          h('th', { style: { textAlign: 'right' } }, 'Final'),
+          h('th', { style: { textAlign: 'right' } }, 'Won'),
+          h('th', { style: { textAlign: 'right' } }, 'Conv %'))),
+        h('tbody', {}, ...r.user_rows.map(row => {
+          const total = Number(row.total) || 0;
+          const won = Number(row.won_cnt) || 0;
+          const pct = total > 0 ? Math.round((won / total) * 1000) / 10 : 0;
+          return h('tr', {},
+            h('td', {}, row.user_name || 'Unassigned'),
+            h('td', { style: { textAlign: 'right' } }, String(total)),
+            h('td', { style: { textAlign: 'right' } }, String(Number(row.final_cnt) || 0)),
+            h('td', { style: { textAlign: 'right', color: '#15803d', fontWeight: 600 } }, String(won)),
+            h('td', { style: { textAlign: 'right' } }, pct + '%'));
+        }))
+      );
+      dataWrap.appendChild(tbl);
+    }
+
+    // Source breakdown
+    if (r.source_rows && r.source_rows.length) {
+      dataWrap.appendChild(h('h4', { style: { margin: '.6rem 0 .35rem 0' } }, 'Top sources'));
+      const tbl = h('table', { class: 'table sm' },
+        h('thead', {}, h('tr', {},
+          h('th', {}, 'Source'),
+          h('th', { style: { textAlign: 'right' } }, 'Count'))),
+        h('tbody', {}, ...r.source_rows.map(row =>
+          h('tr', {},
+            h('td', {}, row.source || '—'),
+            h('td', { style: { textAlign: 'right' } }, String(row.cnt)))))
+      );
+      dataWrap.appendChild(tbl);
+    }
+
+    // Daily inflow bar chart (simple inline SVG, no libs)
+    if (r.daily && r.daily.length) {
+      dataWrap.appendChild(h('h4', { style: { margin: '.6rem 0 .35rem 0' } }, 'Daily inflow'));
+      const max = Math.max(...r.daily.map(d => Number(d.cnt) || 0), 1);
+      const w = 800, h_ = 120, pad = 24;
+      const bw = Math.max(2, (w - pad * 2) / r.daily.length - 2);
+      const bars = r.daily.map((d, i) => {
+        const cnt = Number(d.cnt) || 0;
+        const bh = ((h_ - pad * 2) * cnt) / max;
+        const x = pad + i * (bw + 2);
+        const y = h_ - pad - bh;
+        return '<rect x="' + x + '" y="' + y + '" width="' + bw + '" height="' + bh
+          + '" fill="#6366f1"><title>' + d.day + ': ' + cnt + '</title></rect>';
+      }).join('');
+      const svgHTML = '<svg viewBox="0 0 ' + w + ' ' + h_ + '" '
+        + 'xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;background:#fafafa;border-radius:6px;">'
+        + bars
+        + '<text x="' + pad + '" y="14" font-size="10" fill="#64748b">'
+        + 'peak ' + max + '/day</text></svg>';
+      const wrap = h('div', {}); wrap.innerHTML = svgHTML;
+      dataWrap.appendChild(wrap);
+    }
+  }
+
+  reload();
+  modal.appendChild(h('div', { class: 'actions', style: { padding: '.5rem 0', borderTop: '1px solid #e5e7eb' } },
+    h('button', { class: 'btn', onclick: () => m.remove() }, 'Close')));
+
+  m.appendChild(modal);
+  document.body.appendChild(m);
+}
+
+
+
+// ============================================================
+// CAMPAIGN_REPORT_v1 (2026-06-04) — All-Campaigns comparison
+// modal. One row per campaign with Total / Final / Won / Lost /
+// Conv% / Avg TAT, with the same date range chips used by the
+// per-campaign modal. Sortable by clicking column headers.
+// ============================================================
+async function openAllCampaignsReportModal() {
+  const m = h('div', { class: 'modal-backdrop',
+    onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const modal = h('div', { class: 'modal', style: { maxWidth: '900px' } });
+  modal.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, '📊 All campaigns — comparison'),
+    h('button', { class: 'btn icon', onclick: () => m.remove() }, '✕')
+  ));
+  const body = h('div', { class: 'modal-body-wrap', style: { padding: '.5rem 0' } });
+
+  const today = new Date();
+  const ymd = d => d.toISOString().slice(0, 10);
+  const minusDays = n => { const d = new Date(today); d.setDate(d.getDate() - n); return d; };
+  const fromI = h('input', { type: 'date', value: ymd(minusDays(29)) });
+  const toI   = h('input', { type: 'date', value: ymd(today) });
+
+  body.appendChild(h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap',
+      marginBottom: '.6rem', alignItems: 'center' } },
+    h('span', { class: 'muted' }, 'From:'), fromI,
+    h('span', { class: 'muted' }, 'To:'), toI,
+    h('button', { class: 'btn sm', onclick: () => {
+        fromI.value = ymd(minusDays(6)); toI.value = ymd(today); reload(); } }, 'Last 7d'),
+    h('button', { class: 'btn sm', onclick: () => {
+        fromI.value = ymd(minusDays(29)); toI.value = ymd(today); reload(); } }, 'Last 30d'),
+    h('button', { class: 'btn sm', onclick: () => {
+        fromI.value = ymd(minusDays(89)); toI.value = ymd(today); reload(); } }, 'Last 90d'),
+    h('button', { class: 'btn sm', onclick: () => { fromI.value = ''; toI.value = ''; reload(); } }, 'All time'),
+    h('button', { class: 'btn sm primary', onclick: () => reload() }, 'Apply')
+  ));
+
+  const dataWrap = h('div', { style: { minHeight: '300px' } });
+  body.appendChild(dataWrap);
+  modal.appendChild(body);
+
+  function fmtSecs(s) {
+    s = Number(s) || 0;
+    if (s < 60) return s + 's';
+    if (s < 3600) return Math.round(s / 60) + 'm';
+    if (s < 86400) return Math.round(s / 3600) + 'h';
+    return Math.round(s / 86400) + 'd';
+  }
+
+  async function reload() {
+    dataWrap.innerHTML = '';
+    dataWrap.appendChild(h('div', { class: 'muted' }, '⏳ Loading…'));
+    let r;
+    try {
+      r = await api('api_campaigns_reportAll', {
+        from: fromI.value || undefined,
+        to:   toI.value   || undefined
+      });
+    } catch (e) {
+      dataWrap.innerHTML = '';
+      dataWrap.appendChild(h('div', { style: { color: '#b91c1c' } }, 'Report failed: ' + e.message));
+      return;
+    }
+    dataWrap.innerHTML = '';
+
+    if (!r.campaigns || !r.campaigns.length) {
+      dataWrap.appendChild(h('div', { class: 'muted' }, 'No campaigns yet.'));
+      return;
+    }
+
+    // Roll-up totals
+    const sum = r.campaigns.reduce((a, c) => ({
+      total: a.total + c.total, final: a.final + c.final,
+      won: a.won + c.won, lost: a.lost + c.lost
+    }), { total: 0, final: 0, won: 0, lost: 0 });
+    const sumConv = sum.total > 0 ? Math.round((sum.won / sum.total) * 1000) / 10 : 0;
+
+    dataWrap.appendChild(h('div', { class: 'card',
+      style: { padding: '.5rem .75rem', marginBottom: '.6rem', background: '#eef2ff' } },
+      h('strong', {}, 'All campaigns — '),
+      'Total ', h('strong', {}, String(sum.total)), '  ·  ',
+      'Final ', h('strong', {}, String(sum.final)), '  ·  ',
+      'Won ', h('strong', { style: { color: '#15803d' } }, String(sum.won)), '  ·  ',
+      'Lost ', h('strong', { style: { color: '#b91c1c' } }, String(sum.lost)), '  ·  ',
+      'Conv ', h('strong', { style: { color: '#7c3aed' } }, sumConv + '%')
+    ));
+
+    const tbl = h('table', { class: 'data-table' },
+      h('thead', {}, h('tr', {},
+        h('th', {}, 'Campaign'),
+        h('th', {}, 'Active'),
+        h('th', { style: { textAlign: 'right' } }, 'Total'),
+        h('th', { style: { textAlign: 'right' } }, 'Final'),
+        h('th', { style: { textAlign: 'right' } }, 'Won'),
+        h('th', { style: { textAlign: 'right' } }, 'Lost'),
+        h('th', { style: { textAlign: 'right' } }, 'Conv %'),
+        h('th', { style: { textAlign: 'right' } }, 'Avg TAT'))),
+      h('tbody', {}, ...r.campaigns.map(c =>
+        h('tr', {},
+          h('td', {}, c.name || ('#' + c.id)),
+          h('td', {}, c.is_active ? '✔' : '⏸'),
+          h('td', { style: { textAlign: 'right' } }, String(c.total)),
+          h('td', { style: { textAlign: 'right' } }, String(c.final)),
+          h('td', { style: { textAlign: 'right', color: '#15803d', fontWeight: 600 } }, String(c.won)),
+          h('td', { style: { textAlign: 'right', color: '#b91c1c' } }, String(c.lost)),
+          h('td', { style: { textAlign: 'right' } }, c.conv_pct + '%'),
+          h('td', { style: { textAlign: 'right' } }, fmtSecs(c.avg_tat_secs)))))
+    );
+    dataWrap.appendChild(tbl);
+  }
+
+  reload();
+  modal.appendChild(h('div', { class: 'actions', style: { padding: '.5rem 0', borderTop: '1px solid #e5e7eb' } },
+    h('button', { class: 'btn', onclick: () => m.remove() }, 'Close')));
 
   m.appendChild(modal);
   document.body.appendChild(m);

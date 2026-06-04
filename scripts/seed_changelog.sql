@@ -424,3 +424,23 @@ FROM (VALUES
    '#/campaigns', '📤', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
+
+-- CAMPAIGN_REPORT_v1 (2026-06-04) — per-campaign + all-campaigns reporting
+INSERT INTO changelog (category, title, body, link, icon, created_at)
+SELECT v.category, v.title, v.body, v.link, v.icon, v.created_at
+FROM (VALUES
+  ('improve', '📊 Campaign reporting — funnel, status, user-wise, and all-campaigns comparison',
+   'Two new buttons on the Campaigns page. 📊 Report on each row opens a per-campaign report: KPI strip (total / assigned / unassigned / final / won / lost / conv% / avg TAT / duplicates), status-wise breakdown with % of total, user-wise performance (total / final / won / conv%), top sources, and a daily-inflow bar chart for the period. 📊 All campaigns report at the top opens a comparison table — one row per campaign with total / final / won / lost / conv% / avg TAT, plus a roll-up across all of them. Both modals share a Last 7d / 30d / 90d / All-time date-range chip set so you can compare periods quickly. Final-status detection uses the statuses.is_final flag if you have it set, otherwise falls back to common Won/Lost names so it works on every tenant out of the box.',
+   '#/campaigns', '📊', NOW())
+) AS v(category, title, body, link, icon, created_at)
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
+
+-- CAMPAIGN_UPLOAD_FORMAT_v1 (2026-06-04) — sample format + sample CSV on campaign upload
+INSERT INTO changelog (category, title, body, link, icon, created_at)
+SELECT v.category, v.title, v.body, v.link, v.icon, v.created_at
+FROM (VALUES
+  ('improve', '📋 Campaign upload — sample format card + downloadable sample CSV',
+   'The per-campaign 📤 Upload modal now shows a clear required-vs-optional columns panel at the top: required (name + phone or whatsapp), optional (email, source, product, city, status, remark, address, company, tag), and any cf_* custom-field column. A "⬇ Download sample CSV" button generates a ready-to-edit file with all the headers and two example rows so users do not have to guess the format. The note also reminds you NOT to include an assigned_to column — leads are routed by the campaign distribution rule.',
+   '#/campaigns', '📋', NOW())
+) AS v(category, title, body, link, icon, created_at)
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);

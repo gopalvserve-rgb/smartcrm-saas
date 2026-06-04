@@ -878,9 +878,245 @@ async function api_campaigns_uploadLeads(token, payload) {
   };
 }
 
+
+
+/* ============================================================
+ * CAMPAIGN_REPORT_v1 (2026-06-04) — reporting APIs
+ *
+ *   api_campaigns_report(token, { campaign_id, from, to })
+ *     -> per-campaign: KPIs + funnel + status-wise + user-wise
+ *        + source/product breakdown + daily inflow.
+ *
+ *   api_campaigns_reportAll(token, { from, to })
+ *     -> all-campaigns comparison: one row per campaign with
+ *        Total / Final / Won / Lost / Conv% / TAT.
+ *
+ * Final-status detection re-uses the same convention the
+ * Campaigns list uses (statuses table.is_final = 1, fallback to
+ * lowercased name matching Won/Lost/Closed/Junk/etc.).
+ * ============================================================ */
+function _normalizeDateRange(p) {
+  const r = {};
+  if (p && p.from) r.from = String(p.from).slice(0, 10);
+  if (p && p.to)   r.to   = String(p.to).slice(0, 10);
+  return r;
+}
+
+async function _finalStatusIdSet() {
+  // Try is_final flag; if column doesn't exist fall back to a name-based
+  // heuristic so older tenants still get a sensible answer.
+  try {
+    const r = await db.query(
+      `SELECT id, name, COALESCE(is_final, 0) AS is_final FROM statuses`);
+    const ids = new Set();
+    const WONNAMES  = ['won','closed won','converted','admission done','booked'];
+    const LOSTNAMES = ['lost','closed lost','junk','dropped','not interested'];
+    for (const s of r.rows) {
+      const n = String(s.name || '').trim().toLowerCase();
+      if (Number(s.is_final) === 1 || WONNAMES.includes(n) || LOSTNAMES.includes(n)) {
+        ids.add(s.id);
+      }
+    }
+    return ids;
+  } catch (_) { return new Set(); }
+}
+
+async function _wonLostNames() {
+  // Coarse heuristic used when statuses table is missing is_final.
+  try {
+    const r = await db.query(`SELECT id, name FROM statuses`);
+    const won = new Set(), lost = new Set();
+    for (const s of r.rows) {
+      const n = String(s.name || '').trim().toLowerCase();
+      if (['won','closed won','converted','admission done','booked'].includes(n)) won.add(s.id);
+      if (['lost','closed lost','junk','dropped','not interested'].includes(n))   lost.add(s.id);
+    }
+    return { won, lost };
+  } catch (_) { return { won: new Set(), lost: new Set() }; }
+}
+
+async function api_campaigns_report(token, payload) {
+  const me = await authUser(token);
+  const p = payload || {};
+  const campaignId = Number(p.campaign_id);
+  if (!campaignId) throw new Error('campaign_id is required');
+  const dr = _normalizeDateRange(p);
+
+  // Fetch campaign meta.
+  const camp = await db.query(`SELECT id, name, is_active FROM campaigns WHERE id = $1`, [campaignId]);
+  if (!camp.rows[0]) throw new Error('Campaign not found');
+
+  const dateClause = (() => {
+    const parts = ['campaign_id = $1'];
+    const params = [campaignId];
+    if (dr.from) { params.push(dr.from); parts.push(`created_at >= $${params.length}::date`); }
+    if (dr.to)   { params.push(dr.to);   parts.push(`created_at <  ($${params.length}::date + INTERVAL '1 day')`); }
+    return { sql: parts.join(' AND '), params };
+  })();
+
+  const finalIds = await _finalStatusIdSet();
+  const { won: wonIds, lost: lostIds } = await _wonLostNames();
+  const finalArr = Array.from(finalIds);
+  const wonArr   = Array.from(wonIds);
+  const lostArr  = Array.from(lostIds);
+
+  // ---- KPIs ----
+  const kpiRow = await db.query(
+    `SELECT
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE assigned_to IS NULL OR assigned_to = '' OR assigned_to::text = '0')::int AS unassigned,
+        COUNT(*) FILTER (WHERE assigned_to IS NOT NULL AND assigned_to <> '' AND assigned_to::text <> '0')::int AS assigned,
+        COUNT(*) FILTER (WHERE status_id = ANY($${dateClause.params.length + 1}::int[]))::int AS final_cnt,
+        COUNT(*) FILTER (WHERE status_id = ANY($${dateClause.params.length + 2}::int[]))::int AS won_cnt,
+        COUNT(*) FILTER (WHERE status_id = ANY($${dateClause.params.length + 3}::int[]))::int AS lost_cnt,
+        COUNT(*) FILTER (WHERE is_duplicate = 1)::int AS duplicates
+     FROM leads WHERE ${dateClause.sql}`,
+    dateClause.params.concat([finalArr, wonArr, lostArr])
+  );
+  const k = kpiRow.rows[0] || {};
+  const total = Number(k.total) || 0;
+  const won = Number(k.won_cnt) || 0;
+
+  // ---- Status-wise breakdown ----
+  const statusRows = await db.query(
+    `SELECT COALESCE(s.name, 'Unset') AS status_name,
+            l.status_id,
+            COUNT(*)::int AS cnt
+       FROM leads l
+       LEFT JOIN statuses s ON s.id = l.status_id
+      WHERE ${dateClause.sql}
+      GROUP BY s.name, l.status_id
+      ORDER BY cnt DESC`,
+    dateClause.params
+  );
+
+  // ---- User-wise breakdown ----
+  let userRows = { rows: [] };
+  try {
+    userRows = await db.query(
+      `SELECT COALESCE(u.full_name, u.username, 'Unassigned') AS user_name,
+              l.assigned_to,
+              COUNT(*)::int AS total,
+              COUNT(*) FILTER (WHERE l.status_id = ANY($${dateClause.params.length + 1}::int[]))::int AS final_cnt,
+              COUNT(*) FILTER (WHERE l.status_id = ANY($${dateClause.params.length + 2}::int[]))::int AS won_cnt
+         FROM leads l
+         LEFT JOIN users u ON u.id::text = l.assigned_to::text
+        WHERE ${dateClause.sql}
+        GROUP BY u.full_name, u.username, l.assigned_to
+        ORDER BY total DESC`,
+      dateClause.params.concat([finalArr, wonArr])
+    );
+  } catch (_) {}
+
+  // ---- Source breakdown ----
+  const sourceRows = await db.query(
+    `SELECT COALESCE(NULLIF(source, ''), 'Unspecified') AS source,
+            COUNT(*)::int AS cnt
+       FROM leads WHERE ${dateClause.sql}
+       GROUP BY source ORDER BY cnt DESC LIMIT 20`,
+    dateClause.params
+  );
+
+  // ---- Daily inflow (last 30 days within range, or full range if shorter) ----
+  let daily = { rows: [] };
+  try {
+    daily = await db.query(
+      `SELECT to_char(date_trunc('day', created_at), 'YYYY-MM-DD') AS day,
+              COUNT(*)::int AS cnt
+         FROM leads WHERE ${dateClause.sql}
+         GROUP BY day ORDER BY day ASC LIMIT 60`,
+      dateClause.params
+    );
+  } catch (_) {}
+
+  // ---- Avg TAT (created_at → final-status row's updated_at) — only over final leads ----
+  let tatSecs = 0;
+  try {
+    const tat = await db.query(
+      `SELECT COALESCE(AVG(EXTRACT(EPOCH FROM (updated_at - created_at))), 0)::bigint AS avg_secs
+         FROM leads
+        WHERE ${dateClause.sql}
+          AND status_id = ANY($${dateClause.params.length + 1}::int[])`,
+      dateClause.params.concat([finalArr])
+    );
+    tatSecs = Number(tat.rows[0] && tat.rows[0].avg_secs) || 0;
+  } catch (_) {}
+
+  return {
+    ok: true,
+    campaign_id: campaignId,
+    campaign_name: camp.rows[0].name,
+    range: dr,
+    kpis: {
+      total,
+      unassigned: Number(k.unassigned) || 0,
+      assigned:   Number(k.assigned)   || 0,
+      final:      Number(k.final_cnt)  || 0,
+      won,
+      lost:       Number(k.lost_cnt)   || 0,
+      duplicates: Number(k.duplicates) || 0,
+      conv_pct:   total > 0 ? Math.round((won / total) * 1000) / 10 : 0,
+      avg_tat_secs: tatSecs
+    },
+    status_rows: statusRows.rows,
+    user_rows:   userRows.rows,
+    source_rows: sourceRows.rows,
+    daily:       daily.rows
+  };
+}
+
+async function api_campaigns_reportAll(token, payload) {
+  const me = await authUser(token);
+  const dr = _normalizeDateRange(payload || {});
+
+  const finalIds = await _finalStatusIdSet();
+  const { won: wonIds, lost: lostIds } = await _wonLostNames();
+  const finalArr = Array.from(finalIds);
+  const wonArr   = Array.from(wonIds);
+  const lostArr  = Array.from(lostIds);
+
+  const camps = await db.query(`SELECT id, name, is_active FROM campaigns ORDER BY id DESC`);
+
+  const out = [];
+  for (const c of camps.rows) {
+    const parts = ['campaign_id = $1'];
+    const params = [c.id];
+    if (dr.from) { params.push(dr.from); parts.push(`created_at >= $${params.length}::date`); }
+    if (dr.to)   { params.push(dr.to);   parts.push(`created_at <  ($${params.length}::date + INTERVAL '1 day')`); }
+
+    const r = await db.query(
+      `SELECT COUNT(*)::int AS total,
+              COUNT(*) FILTER (WHERE status_id = ANY($${params.length + 1}::int[]))::int AS final_cnt,
+              COUNT(*) FILTER (WHERE status_id = ANY($${params.length + 2}::int[]))::int AS won_cnt,
+              COUNT(*) FILTER (WHERE status_id = ANY($${params.length + 3}::int[]))::int AS lost_cnt,
+              COALESCE(AVG(EXTRACT(EPOCH FROM (updated_at - created_at)))
+                       FILTER (WHERE status_id = ANY($${params.length + 1}::int[])), 0)::bigint AS avg_tat_secs
+         FROM leads WHERE ${parts.join(' AND ')}`,
+      params.concat([finalArr, wonArr, lostArr])
+    );
+    const row = r.rows[0] || {};
+    const total = Number(row.total) || 0;
+    const won = Number(row.won_cnt) || 0;
+    out.push({
+      id: c.id,
+      name: c.name,
+      is_active: Number(c.is_active) === 1,
+      total,
+      final:    Number(row.final_cnt) || 0,
+      won,
+      lost:     Number(row.lost_cnt)  || 0,
+      conv_pct: total > 0 ? Math.round((won / total) * 1000) / 10 : 0,
+      avg_tat_secs: Number(row.avg_tat_secs) || 0
+    });
+  }
+  return { ok: true, range: dr, campaigns: out };
+}
+
 module.exports = {
   api_campaigns_list,
   api_campaigns_uploadLeads,   /* CAMPAIGN_UPLOAD_v1 */
+  api_campaigns_report,        /* CAMPAIGN_REPORT_v1 */
+  api_campaigns_reportAll,     /* CAMPAIGN_REPORT_v1 */
   api_campaigns_get,
   api_campaigns_save,
   api_campaigns_pause,
