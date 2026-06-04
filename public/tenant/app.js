@@ -20045,10 +20045,7 @@ async function adminCampaigns(reload) {
 
   root.appendChild(h('div', { class: 'row gap', style: { marginBottom: '.75rem' } },
     h('button', { class: 'btn primary', onclick: () => openCampaignEditModal(null, () => reload()) },
-      '+ Create campaign'),
-    /* CAMPAIGN_REPORT_v1 — all-campaigns comparison */
-    h('button', { class: 'btn', onclick: () => openAllCampaignsReportModal() },
-      '📊 All campaigns report')
+      '+ Create campaign')
   ));
 
   if (!rows.length) {
@@ -20101,10 +20098,6 @@ async function adminCampaigns(reload) {
         /* CAMPAIGN_UPLOAD_v1 — per-campaign CSV upload */
         h('button', { class: 'btn sm', title: 'Upload leads as CSV directly into this campaign',
           onclick: () => openCampaignUploadModal(r, () => reload()) }, '📤 Upload'),
-        ' ',
-        /* CAMPAIGN_REPORT_v1 — per-campaign report */
-        h('button', { class: 'btn sm', title: 'View funnel / status / user-wise report for this campaign',
-          onclick: () => openCampaignReportModal(r) }, '📊 Report'),
         ' ',
         h('button', { class: 'btn sm',
           onclick: async () => {
