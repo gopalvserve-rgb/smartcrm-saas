@@ -43286,6 +43286,29 @@ const RB_DIM_CATALOGUE = [
 function _rbCFDims() {
   const out = [];
   const cfs = (window.CRM && CRM.cache && CRM.cache.customFields) || [];
+
+  // RB_CF_DIMS_v2 (2026-06-04): if the cache hasn't been warmed yet on
+  // this page (happens when the user lands directly on Report Builder,
+  // or the warmCache promise was rejected silently), kick off a one-shot
+  // background fetch and re-render. The picker re-runs _rbAllDims on
+  // every keystroke, so this is safe to call repeatedly — we guard
+  // with a flag so it only fires once.
+  if (!cfs.length && !window._rbCFFetchInflight && window.CRM) {
+    window._rbCFFetchInflight = true;
+    (async () => {
+      try {
+        const fresh = await api('api_customFields_list');
+        if (Array.isArray(fresh) && fresh.length) {
+          window.CRM.cache = window.CRM.cache || {};
+          window.CRM.cache.customFields = fresh;
+          console.info('[RB] custom fields lazy-loaded:', fresh.length);
+          if (typeof _rbReload === 'function') _rbReload();
+        }
+      } catch (e) { console.warn('[RB] CF lazy fetch failed:', e); }
+      finally { window._rbCFFetchInflight = false; }
+    })();
+  }
+
   cfs.forEach(cf => {
     if (!cf) return;
     if (Number(cf.is_active) === 0) return;
