@@ -903,8 +903,6 @@ function _normalizeDateRange(p) {
 }
 
 async function _finalStatusIdSet() {
-  // Try is_final flag; if column doesn't exist fall back to a name-based
-  // heuristic so older tenants still get a sensible answer.
   try {
     const r = await db.query(
       `SELECT id, name, COALESCE(is_final, 0) AS is_final FROM statuses`);
@@ -914,7 +912,9 @@ async function _finalStatusIdSet() {
     for (const s of r.rows) {
       const n = String(s.name || '').trim().toLowerCase();
       if (Number(s.is_final) === 1 || WONNAMES.includes(n) || LOSTNAMES.includes(n)) {
-        ids.add(s.id);
+        // CAMPAIGN_REPORT_v2_FIX_v1: store as STRING so the safe text-side
+        // comparison in SQL matches. leads.status_id is TEXT on most tenants.
+        ids.add(String(s.id));
       }
     }
     return ids;
@@ -922,14 +922,14 @@ async function _finalStatusIdSet() {
 }
 
 async function _wonLostNames() {
-  // Coarse heuristic used when statuses table is missing is_final.
   try {
     const r = await db.query(`SELECT id, name FROM statuses`);
     const won = new Set(), lost = new Set();
     for (const s of r.rows) {
       const n = String(s.name || '').trim().toLowerCase();
-      if (['won','closed won','converted','admission done','booked'].includes(n)) won.add(s.id);
-      if (['lost','closed lost','junk','dropped','not interested'].includes(n))   lost.add(s.id);
+      // CAMPAIGN_REPORT_v2_FIX_v1: store as STRING for text-safe SQL match
+      if (['won','closed won','converted','admission done','booked'].includes(n)) won.add(String(s.id));
+      if (['lost','closed lost','junk','dropped','not interested'].includes(n))   lost.add(String(s.id));
     }
     return { won, lost };
   } catch (_) { return { won: new Set(), lost: new Set() }; }
@@ -966,9 +966,9 @@ async function api_campaigns_report(token, payload) {
         COUNT(*)::int AS total,
         COUNT(*) FILTER (WHERE assigned_to IS NULL OR assigned_to = '' OR assigned_to::text = '0')::int AS unassigned,
         COUNT(*) FILTER (WHERE assigned_to IS NOT NULL AND assigned_to <> '' AND assigned_to::text <> '0')::int AS assigned,
-        COUNT(*) FILTER (WHERE status_id = ANY($${dateClause.params.length + 1}::int[]))::int AS final_cnt,
-        COUNT(*) FILTER (WHERE status_id = ANY($${dateClause.params.length + 2}::int[]))::int AS won_cnt,
-        COUNT(*) FILTER (WHERE status_id = ANY($${dateClause.params.length + 3}::int[]))::int AS lost_cnt,
+        COUNT(*) FILTER (WHERE NULLIF(status_id::text, '') = ANY($${dateClause.params.length + 1}::text[]))::int AS final_cnt,
+        COUNT(*) FILTER (WHERE NULLIF(status_id::text, '') = ANY($${dateClause.params.length + 2}::text[]))::int AS won_cnt,
+        COUNT(*) FILTER (WHERE NULLIF(status_id::text, '') = ANY($${dateClause.params.length + 3}::text[]))::int AS lost_cnt,
         COUNT(*) FILTER (WHERE is_duplicate = 1)::int AS duplicates
      FROM leads WHERE ${dateClause.sql}`,
     dateClause.params.concat([finalArr, wonArr, lostArr])
@@ -997,8 +997,8 @@ async function api_campaigns_report(token, payload) {
       `SELECT COALESCE(u.full_name, u.username, 'Unassigned') AS user_name,
               l.assigned_to,
               COUNT(*)::int AS total,
-              COUNT(*) FILTER (WHERE l.status_id = ANY($${dateClause.params.length + 1}::int[]))::int AS final_cnt,
-              COUNT(*) FILTER (WHERE l.status_id = ANY($${dateClause.params.length + 2}::int[]))::int AS won_cnt
+              COUNT(*) FILTER (WHERE l.NULLIF(status_id::text, '') = ANY($${dateClause.params.length + 1}::text[]))::int AS final_cnt,
+              COUNT(*) FILTER (WHERE l.NULLIF(status_id::text, '') = ANY($${dateClause.params.length + 2}::text[]))::int AS won_cnt
          FROM leads l
          LEFT JOIN users u ON u.id::text = l.assigned_to::text
         WHERE ${dateClause.sql}
@@ -1036,7 +1036,7 @@ async function api_campaigns_report(token, payload) {
       `SELECT COALESCE(AVG(EXTRACT(EPOCH FROM (updated_at - created_at))), 0)::bigint AS avg_secs
          FROM leads
         WHERE ${dateClause.sql}
-          AND status_id = ANY($${dateClause.params.length + 1}::int[])`,
+          AND NULLIF(status_id::text, '') = ANY($${dateClause.params.length + 1}::text[])`,
       dateClause.params.concat([finalArr])
     );
     tatSecs = Number(tat.rows[0] && tat.rows[0].avg_secs) || 0;
@@ -1086,11 +1086,11 @@ async function api_campaigns_reportAll(token, payload) {
 
     const r = await db.query(
       `SELECT COUNT(*)::int AS total,
-              COUNT(*) FILTER (WHERE status_id = ANY($${params.length + 1}::int[]))::int AS final_cnt,
-              COUNT(*) FILTER (WHERE status_id = ANY($${params.length + 2}::int[]))::int AS won_cnt,
-              COUNT(*) FILTER (WHERE status_id = ANY($${params.length + 3}::int[]))::int AS lost_cnt,
+              COUNT(*) FILTER (WHERE NULLIF(status_id::text, '') = ANY($${params.length + 1}::text[]))::int AS final_cnt,
+              COUNT(*) FILTER (WHERE NULLIF(status_id::text, '') = ANY($${params.length + 2}::text[]))::int AS won_cnt,
+              COUNT(*) FILTER (WHERE NULLIF(status_id::text, '') = ANY($${params.length + 3}::text[]))::int AS lost_cnt,
               COALESCE(AVG(EXTRACT(EPOCH FROM (updated_at - created_at)))
-                       FILTER (WHERE status_id = ANY($${params.length + 1}::int[])), 0)::bigint AS avg_tat_secs
+                       FILTER (WHERE NULLIF(status_id::text, '') = ANY($${params.length + 1}::text[])), 0)::bigint AS avg_tat_secs
          FROM leads WHERE ${parts.join(' AND ')}`,
       params.concat([finalArr, wonArr, lostArr])
     );
@@ -1183,9 +1183,9 @@ async function api_campaigns_reportAdvanced(token, payload) {
         COUNT(*)::int AS total,
         COUNT(*) FILTER (WHERE assigned_to IS NULL OR assigned_to = '' OR assigned_to::text = '0')::int AS unassigned,
         COUNT(*) FILTER (WHERE assigned_to IS NOT NULL AND assigned_to <> '' AND assigned_to::text <> '0')::int AS assigned,
-        COUNT(*) FILTER (WHERE status_id = ANY($${baseParams.length + 1}::int[]))::int AS final_cnt,
-        COUNT(*) FILTER (WHERE status_id = ANY($${baseParams.length + 2}::int[]))::int AS won_cnt,
-        COUNT(*) FILTER (WHERE status_id = ANY($${baseParams.length + 3}::int[]))::int AS lost_cnt,
+        COUNT(*) FILTER (WHERE NULLIF(status_id::text, '') = ANY($${baseParams.length + 1}::text[]))::int AS final_cnt,
+        COUNT(*) FILTER (WHERE NULLIF(status_id::text, '') = ANY($${baseParams.length + 2}::text[]))::int AS won_cnt,
+        COUNT(*) FILTER (WHERE NULLIF(status_id::text, '') = ANY($${baseParams.length + 3}::text[]))::int AS lost_cnt,
         COUNT(*) FILTER (WHERE is_duplicate = 1)::int AS duplicates,
         COUNT(*) FILTER (WHERE COALESCE(remark,'') <> '')::int AS contacted_cnt
      FROM leads WHERE ${W}`,
@@ -1231,8 +1231,8 @@ async function api_campaigns_reportAdvanced(token, payload) {
       `SELECT COALESCE(u.full_name, u.username, 'Unassigned') AS user_name,
               l.assigned_to,
               COUNT(*)::int AS total,
-              COUNT(*) FILTER (WHERE l.status_id = ANY($${params.length + 1}::int[]))::int AS final_cnt,
-              COUNT(*) FILTER (WHERE l.status_id = ANY($${params.length + 2}::int[]))::int AS won_cnt
+              COUNT(*) FILTER (WHERE l.NULLIF(status_id::text, '') = ANY($${params.length + 1}::text[]))::int AS final_cnt,
+              COUNT(*) FILTER (WHERE l.NULLIF(status_id::text, '') = ANY($${params.length + 2}::text[]))::int AS won_cnt
          FROM leads l
          LEFT JOIN users u ON u.id::text = l.assigned_to::text
         WHERE ${W}
@@ -1246,7 +1246,7 @@ async function api_campaigns_reportAdvanced(token, payload) {
   const productRows = await db.query(
     `SELECT COALESCE(NULLIF(product, ''), 'Unspecified') AS product,
             COUNT(*)::int AS total,
-            COUNT(*) FILTER (WHERE status_id = ANY($${params.length + 1}::int[]))::int AS won_cnt
+            COUNT(*) FILTER (WHERE NULLIF(status_id::text, '') = ANY($${params.length + 1}::text[]))::int AS won_cnt
        FROM leads WHERE ${W}
        GROUP BY product ORDER BY total DESC LIMIT 25`,
     params.concat([wonArr])
@@ -1266,7 +1266,7 @@ async function api_campaigns_reportAdvanced(token, payload) {
     `SELECT COALESCE(c.name, '#' || l.campaign_id::text) AS campaign_name,
             l.campaign_id,
             COUNT(*)::int AS total,
-            COUNT(*) FILTER (WHERE l.status_id = ANY($${params.length + 1}::int[]))::int AS won_cnt
+            COUNT(*) FILTER (WHERE l.NULLIF(status_id::text, '') = ANY($${params.length + 1}::text[]))::int AS won_cnt
        FROM leads l
        LEFT JOIN campaigns c ON c.id = l.campaign_id
       WHERE ${W}
@@ -1291,7 +1291,7 @@ async function api_campaigns_reportAdvanced(token, payload) {
   try {
     const tat = await db.query(
       `SELECT COALESCE(AVG(EXTRACT(EPOCH FROM (updated_at - created_at))), 0)::bigint AS avg_secs
-         FROM leads WHERE ${W} AND status_id = ANY($${params.length + 1}::int[])`,
+         FROM leads WHERE ${W} AND NULLIF(status_id::text, '') = ANY($${params.length + 1}::text[])`,
       params.concat([finalArr])
     );
     tatSecs = Number(tat.rows[0] && tat.rows[0].avg_secs) || 0;

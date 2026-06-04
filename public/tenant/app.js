@@ -45386,25 +45386,39 @@ VIEWS.campaignreport = async (view) => {
   const toI   = h('input', { type: 'date', value: saved.to || ymd(today),
     style: { padding: '.35rem' } });
 
-  const mkSelect = (items, valueOf, labelOf, savedArr) => {
-    const sel = h('select', { multiple: 'multiple',
-      style: { minWidth: '160px', minHeight: '60px', padding: '.25rem' } });
-    items.forEach(it => {
-      const v = String(valueOf(it));
-      const opt = h('option', { value: v }, labelOf(it));
-      if (Array.isArray(savedArr) && savedArr.map(String).includes(v)) opt.selected = true;
-      sel.appendChild(opt);
-    });
-    return sel;
-  };
-  const campSel = mkSelect(campaigns, c => c.id, c => c.name || ('#' + c.id), saved.campaign_ids);
-  const userSel = mkSelect(users, u => u.id, u => u.full_name || u.username || ('#' + u.id), saved.user_ids);
-  const prodSel = mkSelect(
-    (products && products.length ? products : []).map(p => ({
-      id: p.name || p.title || p.id,
-      label: p.name || p.title || ('#' + p.id)
-    })),
-    p => p.id, p => p.label, saved.products);
+  // CAMPAIGN_REPORT_v2_FIX_v1 — use the CRM-wide multiSelectDropdown helper
+  // so the filters look + behave like every other filter in the app
+  // (checkbox dropdown with Select all / Search / Apply).
+  let campaignSelected = (saved.campaign_ids || []).map(String);
+  let userSelected     = (saved.user_ids     || []).map(String);
+  let productSelected  = (saved.products     || []).map(String);
+
+  const campSel = multiSelectDropdown({
+    label: 'Campaigns',
+    options: (campaigns || []).map(c => ({ id: c.id, name: c.name || ('#' + c.id) })),
+    values: campaignSelected,
+    allLabel: 'All campaigns',
+    onApply: (vals) => { campaignSelected = vals; apply(); }
+  });
+  const userSel = multiSelectDropdown({
+    label: 'Users',
+    options: (users || []).map(u => ({ id: u.id,
+      name: u.full_name || u.username || u.email || ('User #' + u.id) })),
+    values: userSelected,
+    allLabel: 'All users',
+    onApply: (vals) => { userSelected = vals; apply(); }
+  });
+  const prodOpts = (products || []).map(p => {
+    const name = p.name || p.title || p.product_name || ('#' + (p.id || ''));
+    return { id: name, name: name };
+  });
+  const prodSel = multiSelectDropdown({
+    label: 'Products',
+    options: prodOpts,
+    values: productSelected,
+    allLabel: 'All products',
+    onApply: (vals) => { productSelected = vals; apply(); }
+  });
 
   const cfWrap = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } });
   const cfRows = [];
@@ -45462,11 +45476,9 @@ VIEWS.campaignreport = async (view) => {
     h('button', { class: 'btn', onclick: () => {
         localStorage.removeItem(LSKEY);
         fromI.value = ymd(minusDays(29)); toI.value = ymd(today);
-        for (const opt of campSel.options) opt.selected = false;
-        for (const opt of userSel.options) opt.selected = false;
-        for (const opt of prodSel.options) opt.selected = false;
-        cfWrap.innerHTML = ''; cfRows.length = 0; addCfRow();
-        apply();
+        campaignSelected = []; userSelected = []; productSelected = [];
+        // Re-render the dropdown chips by triggering a re-mount of the view
+        VIEWS.campaignreport(view);
       } }, 'Reset filters'),
     h('button', { class: 'btn', onclick: () => downloadCsv() }, '⬇ Download CSV')
   ));
@@ -45494,9 +45506,9 @@ VIEWS.campaignreport = async (view) => {
   }
 
   function readFilters() {
-    const campaign_ids = [...campSel.selectedOptions].map(o => Number(o.value));
-    const user_ids     = [...userSel.selectedOptions].map(o => o.value);
-    const prods        = [...prodSel.selectedOptions].map(o => o.value);
+    const campaign_ids = campaignSelected.map(Number).filter(Boolean);
+    const user_ids     = userSelected.slice();
+    const prods        = productSelected.slice();
     const cf = {};
     const cfRowsSaved = [];
     cfRows.forEach(r => {
