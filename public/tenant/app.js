@@ -43302,7 +43302,7 @@ function _rbCFDims() {
           window.CRM.cache = window.CRM.cache || {};
           window.CRM.cache.customFields = fresh;
           console.info('[RB] custom fields lazy-loaded:', fresh.length);
-          if (typeof _rbReload === 'function') _rbReload();
+          if (typeof _rbRenderRailV4 === 'function') _rbRenderRailV4(); if (typeof _rbReload === 'function') _rbReload();
         }
       } catch (e) { console.warn('[RB] CF lazy fetch failed:', e); }
       finally { window._rbCFFetchInflight = false; }
