@@ -964,12 +964,12 @@ async function api_campaigns_report(token, payload) {
   const kpiRow = await db.query(
     `SELECT
         COUNT(*)::int AS total,
-        COUNT(*) FILTER (WHERE assigned_to IS NULL OR assigned_to = '' OR assigned_to::text = '0')::int AS unassigned,
-        COUNT(*) FILTER (WHERE assigned_to IS NOT NULL AND assigned_to <> '' AND assigned_to::text <> '0')::int AS assigned,
+        COUNT(*) FILTER (WHERE assigned_to IS NULL OR NULLIF(assigned_to::text, '') IS NULL OR assigned_to::text = '0')::int AS unassigned,
+        COUNT(*) FILTER (WHERE assigned_to IS NOT NULL AND NULLIF(assigned_to::text, '') IS NOT NULL AND assigned_to::text <> '0')::int AS assigned,
         COUNT(*) FILTER (WHERE NULLIF(status_id::text, '') = ANY($${dateClause.params.length + 1}::text[]))::int AS final_cnt,
         COUNT(*) FILTER (WHERE NULLIF(status_id::text, '') = ANY($${dateClause.params.length + 2}::text[]))::int AS won_cnt,
         COUNT(*) FILTER (WHERE NULLIF(status_id::text, '') = ANY($${dateClause.params.length + 3}::text[]))::int AS lost_cnt,
-        COUNT(*) FILTER (WHERE is_duplicate = 1)::int AS duplicates
+        COUNT(*) FILTER (WHERE COALESCE(NULLIF(is_duplicate::text,''),'0') = '1')::int AS duplicates
      FROM leads WHERE ${dateClause.sql}`,
     dateClause.params.concat([finalArr, wonArr, lostArr])
   );
@@ -1181,12 +1181,12 @@ async function api_campaigns_reportAdvanced(token, payload) {
   const kpi = await db.query(
     `SELECT
         COUNT(*)::int AS total,
-        COUNT(*) FILTER (WHERE assigned_to IS NULL OR assigned_to = '' OR assigned_to::text = '0')::int AS unassigned,
-        COUNT(*) FILTER (WHERE assigned_to IS NOT NULL AND assigned_to <> '' AND assigned_to::text <> '0')::int AS assigned,
+        COUNT(*) FILTER (WHERE assigned_to IS NULL OR NULLIF(assigned_to::text, '') IS NULL OR assigned_to::text = '0')::int AS unassigned,
+        COUNT(*) FILTER (WHERE assigned_to IS NOT NULL AND NULLIF(assigned_to::text, '') IS NOT NULL AND assigned_to::text <> '0')::int AS assigned,
         COUNT(*) FILTER (WHERE NULLIF(status_id::text, '') = ANY($${baseParams.length + 1}::text[]))::int AS final_cnt,
         COUNT(*) FILTER (WHERE NULLIF(status_id::text, '') = ANY($${baseParams.length + 2}::text[]))::int AS won_cnt,
         COUNT(*) FILTER (WHERE NULLIF(status_id::text, '') = ANY($${baseParams.length + 3}::text[]))::int AS lost_cnt,
-        COUNT(*) FILTER (WHERE is_duplicate = 1)::int AS duplicates,
+        COUNT(*) FILTER (WHERE COALESCE(NULLIF(is_duplicate::text,''),'0') = '1')::int AS duplicates,
         COUNT(*) FILTER (WHERE COALESCE(remark,'') <> '')::int AS contacted_cnt
      FROM leads WHERE ${W}`,
     baseParams.concat([finalArr, wonArr, lostArr])
