@@ -50,6 +50,7 @@ const demoTenant = require('./routes/saas/demoTenant');
 const aiUsageIngest = require('./routes/saas/aiUsageIngest');
 const tickets = require('./routes/saas/tickets');
 const signupRequests = require('./routes/saas/signupRequests'); /* TENANT_SIGNUP_APPROVAL_v1 */
+const financeDashboard = require('./routes/saas/financeDashboard'); /* FIN_DASH_v1 */
 
 // ---- Industry Packs: load + self-register at boot ----------------
 // Each pack module calls framework.register({...}) on require, populating
@@ -88,6 +89,7 @@ const SAAS_API = {};
   aiSettings, aiCosting,
   tenantModules, demoTenant,
   tickets, signupRequests, /* TENANT_SIGNUP_APPROVAL_v1 */
+  financeDashboard, /* FIN_DASH_v1 */
   recordingHealth /* DEVICE_DIAG_v1 */
 ].forEach(mod => {
   Object.keys(mod).forEach(k => {
