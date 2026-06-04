@@ -1253,6 +1253,28 @@ async function api_leads_update(token, id, patch) {
   if (!lead) throw new Error('Not found');
   if (!await _isVisibleOrShared(me, visible, lead)) throw new Error('Forbidden');
 
+  // SALES_REASSIGN_PERM_v1 (2026-06-04) — gate the assigned_to field for
+  // the Sales role. By default Sales cannot reassign leads. Admin can grant
+  // the new permission `leads.reassign_own` to allow Sales to hand a lead
+  // they currently own off to another user. We strip the field silently
+  // (rather than 403) so the rest of the same patch — status change,
+  // remark, follow-up — still saves cleanly.
+  if (me.role === 'sales' && 'assigned_to' in patch
+      && Number(patch.assigned_to) !== Number(lead.assigned_to)) {
+    let allowed_reassign = false;
+    try {
+      const _perms = require('./permissions');
+      const granted = await _perms.can(me, 'leads.reassign_own');
+      // Sales can only reassign leads they currently own (primary owner).
+      const isPrimaryOwner = Number(lead.assigned_to) === Number(me.id);
+      allowed_reassign = !!granted && isPrimaryOwner;
+    } catch (_) {}
+    if (!allowed_reassign) {
+      console.warn('[leads] sales user ' + me.id + ' tried to reassign lead ' + id +
+                   ' (current owner=' + lead.assigned_to + ') without permission — stripped');
+      delete patch.assigned_to;
+    }
+  }
   // Non-admins: silently strip campaign-locked fields from the patch BEFORE
   // we copy values into `allowed`. Defense in depth — frontend also shows
   // these inputs as readonly, but a determined user could still POST to the
@@ -1730,7 +1752,29 @@ async function _autoClearFollowupsOnTerminalStatus(leadId, newStatusId, userId) 
 
 async function api_leads_bulkUpdate(token, leadIds, patch) {
   const me = await authUser(token);
-  if (!['admin', 'manager', 'team_leader'].includes(me.role)) throw new Error('Forbidden');
+  // SALES_REASSIGN_PERM_v1 (2026-06-04) — Sales is now allowed to use the
+  // bulk-assign action, but only if (a) Admin granted leads.reassign_own,
+  // (b) the patch contains ONLY assigned_to (so they can't sneak in a
+  // status / source / product change), and (c) EVERY selected lead is
+  // currently owned by them. The per-lead ownership check happens once
+  // we've validated (a) and (b) — failure on any lead aborts the batch.
+  if (!['admin', 'manager', 'team_leader'].includes(me.role)) {
+    if (me.role !== 'sales') throw new Error('Forbidden');
+    // Sales path.
+    let granted = false;
+    try { granted = await require('./permissions').can(me, 'leads.reassign_own'); } catch (_) {}
+    if (!granted) throw new Error('Reassign permission not granted. Ask your admin to enable it under Permissions.');
+    const patchKeys = Object.keys(patch || {});
+    const onlyAssignedTo = patchKeys.length === 1 && patchKeys[0] === 'assigned_to';
+    if (!onlyAssignedTo) throw new Error('Sales can only bulk-change assignee, not other fields.');
+    for (const lid of (leadIds || [])) {
+      const _l = await db.findById('leads', lid);
+      if (!_l) continue;
+      if (Number(_l.assigned_to) !== Number(me.id)) {
+        throw new Error('You can only reassign leads you own. Lead #' + lid + ' is owned by someone else.');
+      }
+    }
+  }
   const allowed = {};
   ['assigned_to', 'status_id', 'source', 'product_id'].forEach(k => { if (k in patch) allowed[k] = patch[k]; });
   if (patch.status_id) allowed.last_status_change_at = db.nowIso();
