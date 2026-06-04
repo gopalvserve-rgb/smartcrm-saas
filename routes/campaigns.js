@@ -997,8 +997,8 @@ async function api_campaigns_report(token, payload) {
       `SELECT COALESCE(u.full_name, u.username, 'Unassigned') AS user_name,
               l.assigned_to,
               COUNT(*)::int AS total,
-              COUNT(*) FILTER (WHERE l.NULLIF(status_id::text, '') = ANY($${dateClause.params.length + 1}::text[]))::int AS final_cnt,
-              COUNT(*) FILTER (WHERE l.NULLIF(status_id::text, '') = ANY($${dateClause.params.length + 2}::text[]))::int AS won_cnt
+              COUNT(*) FILTER (WHERE NULLIF(l.status_id::text, '') = ANY($${dateClause.params.length + 1}::text[]))::int AS final_cnt,
+              COUNT(*) FILTER (WHERE NULLIF(l.status_id::text, '') = ANY($${dateClause.params.length + 2}::text[]))::int AS won_cnt
          FROM leads l
          LEFT JOIN users u ON u.id::text = l.assigned_to::text
         WHERE ${dateClause.sql}
@@ -1231,8 +1231,8 @@ async function api_campaigns_reportAdvanced(token, payload) {
       `SELECT COALESCE(u.full_name, u.username, 'Unassigned') AS user_name,
               l.assigned_to,
               COUNT(*)::int AS total,
-              COUNT(*) FILTER (WHERE l.NULLIF(status_id::text, '') = ANY($${params.length + 1}::text[]))::int AS final_cnt,
-              COUNT(*) FILTER (WHERE l.NULLIF(status_id::text, '') = ANY($${params.length + 2}::text[]))::int AS won_cnt
+              COUNT(*) FILTER (WHERE NULLIF(l.status_id::text, '') = ANY($${params.length + 1}::text[]))::int AS final_cnt,
+              COUNT(*) FILTER (WHERE NULLIF(l.status_id::text, '') = ANY($${params.length + 2}::text[]))::int AS won_cnt
          FROM leads l
          LEFT JOIN users u ON u.id::text = l.assigned_to::text
         WHERE ${W}
@@ -1266,7 +1266,7 @@ async function api_campaigns_reportAdvanced(token, payload) {
     `SELECT COALESCE(c.name, '#' || l.campaign_id::text) AS campaign_name,
             l.campaign_id,
             COUNT(*)::int AS total,
-            COUNT(*) FILTER (WHERE l.NULLIF(status_id::text, '') = ANY($${params.length + 1}::text[]))::int AS won_cnt
+            COUNT(*) FILTER (WHERE NULLIF(l.status_id::text, '') = ANY($${params.length + 1}::text[]))::int AS won_cnt
        FROM leads l
        LEFT JOIN campaigns c ON c.id::text = l.campaign_id::text
       WHERE ${W}
