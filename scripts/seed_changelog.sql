@@ -364,3 +364,13 @@ FROM (VALUES
    '#/aibot', '🤖', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
+
+-- FIN_DASH_v1 (2026-06-04) — Finance & Business Dashboard (super-admin)
+INSERT INTO changelog (category, title, body, link, icon, created_at)
+SELECT v.category, v.title, v.body, v.link, v.icon, v.created_at
+FROM (VALUES
+  ('new', '💰 Finance & Business Dashboard for super-admin',
+   'A new top-level "Finance" tab in the super-admin panel that answers "how is the business doing?" in one page — no spreadsheet exports, no calendar math. Pulled live from the control DB on every load so the numbers always reflect the current state. What you get: (1) Revenue KPIs — MRR (monthly recurring revenue), ARR, revenue this month vs last month with month-over-month delta %, lifetime collected. (2) Tenant KPIs — total / active / trial / past-due / suspended counts, new signups this month, churned-this-month, expired-this-month, expiring in the next 7 and 30 days. (3) Invoice KPIs — paid lifetime count, pending count + total ₹, overdue count + ₹, failed payments. (4) A 12-month revenue bar chart with per-month hover details. (5) By-package table showing tenant count, active count, ₹/month each, MRR contribution and lifetime collected per plan. (6) "Expiring in 30 days" alert table (≤7 days highlighted red) so renewals don''t slip. (7) Overdue invoices table — which clients owe what, how many days past due. (8) Full tenant-wise sale table with status + search filters, columns: package, status, created, period end, days-to-expiry, ₹/mo, ₹/yr, lifetime ₹, # paid invoices, pending ₹, last paid at. Export the whole table as CSV with one click. MRR math handles every package shape — monthly, quarterly, yearly, with custom period counts (e.g. "every 3 months"); lifetime plans contribute 0 MRR. Only tenants on "active" or "past_due" contribute, so trial tenants don''t inflate the number. Find it under 💰 Finance in the super-admin sidebar.',
+   '#/finance', '💰', NOW())
+) AS v(category, title, body, link, icon, created_at)
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
