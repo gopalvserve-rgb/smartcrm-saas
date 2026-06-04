@@ -18,6 +18,23 @@
  */
 
 const db = require('../db/pg');
+/* CAMPAIGN_REPORT_v2_FIX6 (2026-06-04) — column-existence guard.
+ * Some tenants don't have leads.remark (column was added later as part of
+ * activity tracking). Cache the result of an information_schema lookup so
+ * we can conditionally include "contacted" in the campaign report KPI
+ * without per-request overhead. */
+let _LEADS_HAS_REMARK = null;
+async function _leadsHasRemark() {
+  if (_LEADS_HAS_REMARK !== null) return _LEADS_HAS_REMARK;
+  try {
+    const r = await db.query(
+      `SELECT 1 FROM information_schema.columns
+        WHERE table_name='leads' AND column_name='remark' LIMIT 1`);
+    _LEADS_HAS_REMARK = r.rows.length > 0;
+  } catch (_) { _LEADS_HAS_REMARK = false; }
+  return _LEADS_HAS_REMARK;
+}
+
 const { authUser } = require('../utils/auth');
 const { applyRemovalPolicy } = require('../utils/campaignRemoval');
 
@@ -1177,6 +1194,7 @@ async function api_campaigns_reportAdvanced(token, payload) {
   const W = where.join(' AND ');
 
   // ---- KPIs ----
+  const _HAS_REMARK = await _leadsHasRemark();
   const baseParams = params.slice();
   const kpi = await db.query(
     `SELECT
@@ -1187,7 +1205,7 @@ async function api_campaigns_reportAdvanced(token, payload) {
         COUNT(*) FILTER (WHERE NULLIF(status_id::text, '') = ANY($${baseParams.length + 2}::text[]))::int AS won_cnt,
         COUNT(*) FILTER (WHERE NULLIF(status_id::text, '') = ANY($${baseParams.length + 3}::text[]))::int AS lost_cnt,
         COUNT(*) FILTER (WHERE COALESCE(NULLIF(is_duplicate::text,''),'0') = '1')::int AS duplicates,
-        COUNT(*) FILTER (WHERE COALESCE(remark,'') <> '')::int AS contacted_cnt
+        ${_HAS_REMARK ? "COUNT(*) FILTER (WHERE COALESCE(remark,'') <> '')::int" : '0::int'} AS contacted_cnt
      FROM leads WHERE ${W}`,
     baseParams.concat([finalArr, wonArr, lostArr])
   );
