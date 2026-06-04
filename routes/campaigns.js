@@ -1171,24 +1171,6 @@ async function api_campaigns_reportAdvanced(token, payload) {
     params.push(p.user_ids.map(String));
     where.push(`assigned_to::text = ANY($${params.length}::text[])`);
   }
-  if (Array.isArray(p.products) && p.products.length) {
-    params.push(p.products.map(String));
-    where.push(`(product = ANY($${params.length}::text[])
-                  OR EXISTS (SELECT 1 FROM jsonb_each_text(COALESCE(extra_json,'{}')::jsonb) e
-                              WHERE e.key = 'product' AND e.value = ANY($${params.length}::text[])))`);
-  }
-  if (p.cf && typeof p.cf === 'object') {
-    for (const k of Object.keys(p.cf)) {
-      const val = p.cf[k];
-      if (val == null || val === '') continue;
-      params.push(String(k));
-      const keyIdx = params.length;
-      params.push(String(val));
-      const valIdx = params.length;
-      where.push(`EXISTS (SELECT 1 FROM jsonb_each_text(COALESCE(extra_json,'{}')::jsonb) e
-                          WHERE e.key = $${keyIdx} AND e.value ILIKE '%' || $${valIdx} || '%')`);
-    }
-  }
   if (dr.from) { params.push(dr.from); where.push(`created_at >= $${params.length}::date`); }
   if (dr.to)   { params.push(dr.to);   where.push(`created_at <  ($${params.length}::date + INTERVAL '1 day')`); }
   const W = where.join(' AND ');
@@ -1320,9 +1302,7 @@ async function api_campaigns_reportAdvanced(token, payload) {
     range: dr,
     filters: {
       campaign_ids: p.campaign_ids || [],
-      user_ids:     p.user_ids     || [],
-      products:     p.products     || [],
-      cf:           p.cf           || {}
+      user_ids:     p.user_ids     || []
     },
     kpis: {
       total,

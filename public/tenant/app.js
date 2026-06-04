@@ -45378,39 +45378,26 @@ VIEWS.campaignreport = async (view) => {
   view.innerHTML = '';
   view.appendChild(h('h2', { style: { marginBottom: '.6rem' } }, '\u{1F4CA} Campaign Report'));
   view.appendChild(h('div', { class: 'muted', style: { marginBottom: '.6rem' } },
-    'Analyse performance across one campaign or compare all of them. Pick a date range, filter by users / products / custom fields, and the report rebuilds.'));
+    'Pick a date range and (optionally) filter by Campaign + User. Apply runs the report.'));
 
-  const LSKEY = 'campaignreport_filters_v1';
+  const LSKEY = 'campaignreport_filters_v2';
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(LSKEY) || '{}') || {}; } catch (_) {}
+
   const today = new Date();
   const ymd = d => d.toISOString().slice(0, 10);
   const minusDays = n => { const d = new Date(today); d.setDate(d.getDate() - n); return d; };
 
-  let campaigns = [], users = [], products = [];
+  let campaigns = [], users = [];
   try { const r = await api('api_campaigns_list'); campaigns = (r && r.campaigns) || r || []; } catch (_) {}
   try { const r = await api('api_users_list'); users = (r && r.users) || r || []; } catch (_) {}
-  try {
-    const r = await api('api_admin_listProducts');
-    products = (r && r.products) || r || [];
-  } catch (_) {
-    try {
-      const r = await api('api_products_list');
-      products = (r && r.products) || r || [];
-    } catch (_) {}
-  }
 
+  let campaignSelected = (saved.campaign_ids || []).map(String);
+  let userSelected     = (saved.user_ids     || []).map(String);
   const fromI = h('input', { type: 'date', value: saved.from || ymd(minusDays(29)),
     style: { padding: '.35rem' } });
   const toI   = h('input', { type: 'date', value: saved.to || ymd(today),
     style: { padding: '.35rem' } });
-
-  // CAMPAIGN_REPORT_v2_FIX_v1 — use the CRM-wide multiSelectDropdown helper
-  // so the filters look + behave like every other filter in the app
-  // (checkbox dropdown with Select all / Search / Apply).
-  let campaignSelected = (saved.campaign_ids || []).map(String);
-  let userSelected     = (saved.user_ids     || []).map(String);
-  let productSelected  = (saved.products     || []).map(String);
 
   const campSel = multiSelectDropdown({
     label: 'Campaigns',
@@ -45427,17 +45414,6 @@ VIEWS.campaignreport = async (view) => {
     allLabel: 'All users',
     onApply: (vals) => { userSelected = vals; apply(); }
   });
-  const prodOpts = (products || []).map(p => {
-    const name = p.name || p.title || p.product_name || ('#' + (p.id || ''));
-    return { id: name, name: name };
-  });
-  const prodSel = multiSelectDropdown({
-    label: 'Products',
-    options: prodOpts,
-    values: productSelected,
-    allLabel: 'All products',
-    onApply: (vals) => { productSelected = vals; apply(); }
-  });
 
   const filterBar = h('div', { class: 'card',
     style: { padding: '.65rem .8rem', marginBottom: '.8rem', background: '#f8fafc' } });
@@ -45447,9 +45423,8 @@ VIEWS.campaignreport = async (view) => {
     h('strong', {}, 'Date:'),
     h('button', { class: 'btn sm', onclick: () => { fromI.value = ymd(today);          toI.value = ymd(today); apply(); } }, 'Today'),
     h('button', { class: 'btn sm', onclick: () => { fromI.value = ymd(minusDays(1));   toI.value = ymd(minusDays(1)); apply(); } }, 'Yesterday'),
-    h('button', { class: 'btn sm', onclick: () => { fromI.value = ymd(minusDays(6));   toI.value = ymd(today); apply(); } }, 'Last 7d'),
-    h('button', { class: 'btn sm', onclick: () => { fromI.value = ymd(minusDays(29));  toI.value = ymd(today); apply(); } }, 'Last 30d'),
-    h('button', { class: 'btn sm', onclick: () => { fromI.value = ymd(minusDays(89));  toI.value = ymd(today); apply(); } }, 'Last 90d'),
+    h('button', { class: 'btn sm', onclick: () => { fromI.value = ymd(minusDays(6));   toI.value = ymd(today); apply(); } }, 'Last 7 days'),
+    h('button', { class: 'btn sm', onclick: () => { fromI.value = ymd(minusDays(29));  toI.value = ymd(today); apply(); } }, 'Last 30 days'),
     h('button', { class: 'btn sm', onclick: () => { fromI.value = '';                  toI.value = '';          apply(); } }, 'All time'),
     h('span', { class: 'muted' }, '  From:'), fromI,
     h('span', { class: 'muted' }, 'To:'), toI
@@ -45457,28 +45432,23 @@ VIEWS.campaignreport = async (view) => {
 
   filterBar.appendChild(h('div', { style: { display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-start' } },
     h('div', {}, h('div', { style: { fontWeight: 600, fontSize: '.8rem' } }, 'Campaigns'), campSel),
-    h('div', {}, h('div', { style: { fontWeight: 600, fontSize: '.8rem' } }, 'Users'),     userSel),
-    h('div', {}, h('div', { style: { fontWeight: 600, fontSize: '.8rem' } }, 'Products'),  prodSel)
+    h('div', {}, h('div', { style: { fontWeight: 600, fontSize: '.8rem' } }, 'Users'),     userSel)
   ));
 
   filterBar.appendChild(h('div', { style: { display: 'flex', gap: '6px', marginTop: '.5rem' } },
     h('button', { class: 'btn primary', onclick: () => apply() }, '\u{1F50D} Apply'),
     h('button', { class: 'btn', onclick: () => {
         localStorage.removeItem(LSKEY);
+        campaignSelected = []; userSelected = [];
         fromI.value = ymd(minusDays(29)); toI.value = ymd(today);
-        campaignSelected = []; userSelected = []; productSelected = [];
-        // Re-render the dropdown chips by triggering a re-mount of the view
         VIEWS.campaignreport(view);
-      } }, 'Reset filters'),
-    h('button', { class: 'btn', onclick: () => downloadCsv() }, '⬇ Download CSV')
+      } }, 'Reset filters')
   ));
 
   view.appendChild(filterBar);
 
   const dataWrap = h('div', { style: { minHeight: '300px' } });
   view.appendChild(dataWrap);
-
-  let lastResp = null;
 
   function fmtSecs(s) {
     s = Number(s) || 0;
@@ -45498,16 +45468,14 @@ VIEWS.campaignreport = async (view) => {
   function readFilters() {
     const campaign_ids = campaignSelected.map(Number).filter(Boolean);
     const user_ids     = userSelected.slice();
-    const prods        = productSelected.slice();
     const payload = {
-      campaign_ids, user_ids, products: prods,
+      campaign_ids, user_ids,
       from: fromI.value || undefined,
       to:   toI.value   || undefined
     };
     try {
       localStorage.setItem(LSKEY, JSON.stringify({
-        from: fromI.value, to: toI.value,
-        campaign_ids, user_ids, products: prods
+        from: fromI.value, to: toI.value, campaign_ids, user_ids
       }));
     } catch (_) {}
     return payload;
@@ -45515,7 +45483,7 @@ VIEWS.campaignreport = async (view) => {
 
   async function apply() {
     dataWrap.innerHTML = '';
-    dataWrap.appendChild(h('div', { class: 'muted' }, '⏳ Loading…'));
+    dataWrap.appendChild(h('div', { class: 'muted' }, 'Loading...'));
     let r;
     try { r = await api('api_campaigns_reportAdvanced', readFilters()); }
     catch (e) {
@@ -45523,7 +45491,6 @@ VIEWS.campaignreport = async (view) => {
       dataWrap.appendChild(h('div', { style: { color: '#b91c1c' } }, 'Report failed: ' + e.message));
       return;
     }
-    lastResp = r;
     render(r);
   }
 
@@ -45536,7 +45503,6 @@ VIEWS.campaignreport = async (view) => {
       kpi('Total leads', k.total, '#0f172a'),
       kpi('Assigned',    k.assigned, '#0369a1'),
       kpi('Unassigned',  k.unassigned, '#92400e'),
-      kpi('Contacted',   k.contacted, '#0369a1'),
       kpi('Final',       k.final, '#0f172a'),
       kpi('Won',         k.won, '#15803d'),
       kpi('Lost',        k.lost, '#b91c1c'),
@@ -45581,15 +45547,6 @@ VIEWS.campaignreport = async (view) => {
       { key: 'won_cnt', label: 'Won', right: true, bold: true, color: '#15803d' },
       { key: '_conv', label: 'Conv %', right: true,
         get: row => row.total > 0 ? (Math.round((row.won_cnt / row.total) * 1000) / 10) + '%' : '0%' }
-    ]));
-    grid.appendChild(makeTable('Product-wise', r.product_rows, k.total, [
-      { key: 'product', label: 'Product' },
-      { key: 'total', label: 'Total', right: true },
-      { key: 'won_cnt', label: 'Won', right: true, bold: true, color: '#15803d' }
-    ]));
-    grid.appendChild(makeTable('Source-wise', r.source_rows, k.total, [
-      { key: 'source', label: 'Source' },
-      { key: 'cnt', label: 'Count', right: true, bold: true }
     ]));
     dataWrap.appendChild(grid);
 
@@ -45661,40 +45618,6 @@ VIEWS.campaignreport = async (view) => {
     );
     card.appendChild(tbl);
     return card;
-  }
-
-  function downloadCsv() {
-    if (!lastResp) { alert('Apply filters first.'); return; }
-    const k = lastResp.kpis || {};
-    const lines = [];
-    lines.push(['Campaign Report - Generated at', new Date().toISOString()].join(','));
-    lines.push(['Range', (lastResp.range && lastResp.range.from) || 'all',
-                (lastResp.range && lastResp.range.to)   || 'all'].join(','));
-    lines.push('');
-    lines.push('KPI,Value');
-    Object.keys(k).forEach(key => lines.push([key, k[key]].join(',')));
-    lines.push('');
-    lines.push('Stage,Count,Pct');
-    (lastResp.funnel || []).forEach(f => lines.push([f.stage, f.cnt, f.pct_from_top].join(',')));
-    lines.push('');
-    lines.push('Status,Count');
-    (lastResp.status_rows || []).forEach(s =>
-      lines.push([(s.status_name || '').replace(/,/g, ';'), s.cnt].join(',')));
-    lines.push('');
-    lines.push('User,Total,Final,Won');
-    (lastResp.user_rows || []).forEach(u =>
-      lines.push([(u.user_name || '').replace(/,/g, ';'), u.total, u.final_cnt, u.won_cnt].join(',')));
-    lines.push('');
-    lines.push('Campaign,Total,Won');
-    (lastResp.campaign_rows || []).forEach(c =>
-      lines.push([(c.campaign_name || '').replace(/,/g, ';'), c.total, c.won_cnt].join(',')));
-    const csv = lines.join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'campaign-report-' + new Date().toISOString().slice(0, 10) + '.csv';
-    document.body.appendChild(a); a.click();
-    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
   }
 
   apply();
