@@ -30,6 +30,13 @@ const CATALOG = [
   { key: 'leads.delete',        label: 'Delete leads',     scoped: true },
   { key: 'leads.bulk_edit',     label: 'Bulk edit leads' },
   { key: 'leads.reassign_own',  label: 'Reassign own leads' },   /* SALES_REASSIGN_PERM_v1 */
+  // WA_PERMS_v1 (2026-06-04) — granular WhatsApp delegation toggles so Admin
+  // can grant a manager / team leader / sales the ability to manage Bots,
+  // Templates, Broadcasts, KB without giving them full settings.edit.
+  { key: 'whatsapp.bots.manage',        label: 'Manage WhatsApp Bots (AI Bot + Bot Flows)' },
+  { key: 'whatsapp.templates.manage',   label: 'Manage WhatsApp Templates' },
+  { key: 'whatsapp.broadcasts.manage',  label: 'Manage WhatsApp Broadcasts / Campaigns' },
+  { key: 'whatsapp.kb.manage',          label: 'Manage AI Bot Knowledge Base' },
   { key: 'leads.export',        label: 'Export leads' },
   { key: 'users.view',          label: 'View users' },
   { key: 'users.create',        label: 'Create users' },
@@ -49,6 +56,7 @@ const DEFAULTS = {
   admin: {
     'leads.view': 'global', 'leads.create': 1, 'leads.edit': 'global', 'leads.delete': 'global',
     'leads.bulk_edit': 1, 'leads.export': 1, 'leads.reassign_own': 1,
+    'whatsapp.bots.manage': 1, 'whatsapp.templates.manage': 1, 'whatsapp.broadcasts.manage': 1, 'whatsapp.kb.manage': 1,
     'users.view': 1, 'users.create': 1, 'users.edit': 1, 'users.delete': 1,
     'reports.view': 1, 'settings.edit': 1, 'automations.manage': 1, 'rules.manage': 1,
     'salary.view_team': 1, 'salary.edit': 1, 'attendance.view_team': 1
@@ -56,6 +64,7 @@ const DEFAULTS = {
   manager: {
     'leads.view': 'team', 'leads.create': 1, 'leads.edit': 'team', 'leads.delete': 'team',
     'leads.bulk_edit': 1, 'leads.export': 1, 'leads.reassign_own': 1,
+    'whatsapp.bots.manage': 1, 'whatsapp.templates.manage': 1, 'whatsapp.broadcasts.manage': 1, 'whatsapp.kb.manage': 1,
     'users.view': 1, 'users.create': 1, 'users.edit': 1, 'users.delete': 0,
     'reports.view': 1, 'settings.edit': 0, 'automations.manage': 0, 'rules.manage': 1,
     'salary.view_team': 1, 'salary.edit': 0, 'attendance.view_team': 1
@@ -63,6 +72,7 @@ const DEFAULTS = {
   team_leader: {
     'leads.view': 'team', 'leads.create': 1, 'leads.edit': 'team', 'leads.delete': 'self',
     'leads.bulk_edit': 1, 'leads.export': 1, 'leads.reassign_own': 1,
+    'whatsapp.bots.manage': 0, 'whatsapp.templates.manage': 0, 'whatsapp.broadcasts.manage': 0, 'whatsapp.kb.manage': 0,
     'users.view': 1, 'users.create': 0, 'users.edit': 0, 'users.delete': 0,
     'reports.view': 1, 'settings.edit': 0, 'automations.manage': 0, 'rules.manage': 0,
     'salary.view_team': 0, 'salary.edit': 0, 'attendance.view_team': 1
@@ -70,6 +80,7 @@ const DEFAULTS = {
   sales: {
     'leads.view': 'self', 'leads.create': 1, 'leads.edit': 'self', 'leads.delete': 0,
     'leads.bulk_edit': 0, 'leads.export': 0, 'leads.reassign_own': 0,
+    'whatsapp.bots.manage': 0, 'whatsapp.templates.manage': 0, 'whatsapp.broadcasts.manage': 0, 'whatsapp.kb.manage': 0,
     'users.view': 0, 'users.create': 0, 'users.edit': 0, 'users.delete': 0,
     'reports.view': 0, 'settings.edit': 0, 'automations.manage': 0, 'rules.manage': 0,
     'salary.view_team': 0, 'salary.edit': 0, 'attendance.view_team': 0

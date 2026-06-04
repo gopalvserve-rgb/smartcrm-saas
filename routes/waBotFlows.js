@@ -84,6 +84,15 @@ async function _ensureSchema() {
 // CRUD APIs (auto-mounted by tenantApi.js)
 // =====================================================================
 
+
+// WA_PERMS_v1 (2026-06-04) — check granular WhatsApp permission.
+async function _wpHas(me, key) {
+  if (!me) return false;
+  if (me.role === 'admin') return true;
+  try { return !!(await require('./permissions').can(me, key)); }
+  catch (_) { return false; }
+}
+
 async function api_waflow_list(token) {
   await authUser(token);
   await _ensureSchema();
@@ -105,7 +114,7 @@ async function api_waflow_get(token, id) {
 
 async function api_waflow_save(token, payload) {
   const me = await authUser(token);
-  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  if (!await _wpHas(me, 'whatsapp.bots.manage')) throw new Error('Permission required: Manage WhatsApp Bots');
   await _ensureSchema();
   const p = payload || {};
   const name = String(p.name || '').trim();
@@ -146,7 +155,7 @@ async function api_waflow_save(token, payload) {
 
 async function api_waflow_delete(token, id) {
   const me = await authUser(token);
-  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  if (!await _wpHas(me, 'whatsapp.bots.manage')) throw new Error('Permission required: Manage WhatsApp Bots');
   await _ensureSchema();
   await db.query(`DELETE FROM wa_bot_flows WHERE id = $1`, [Number(id)]);
   return { ok: true };
@@ -154,7 +163,7 @@ async function api_waflow_delete(token, id) {
 
 async function api_waflow_toggle(token, id, active) {
   const me = await authUser(token);
-  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  if (!await _wpHas(me, 'whatsapp.bots.manage')) throw new Error('Permission required: Manage WhatsApp Bots');
   await _ensureSchema();
   await db.query(`UPDATE wa_bot_flows SET is_active=$1, updated_at=NOW() WHERE id=$2`,
     [Number(active) === 1 ? 1 : 0, Number(id)]);
@@ -692,7 +701,7 @@ async function api_waflow_templates_list(token) {
 /** Instantiate a template: create the flow row from the template (inactive). */
 async function api_waflow_templates_create(token, key) {
   const me = await authUser(token);
-  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  if (!await _wpHas(me, 'whatsapp.bots.manage')) throw new Error('Permission required: Manage WhatsApp Bots');
   await _ensureSchema();
   const tpl = FLOW_TEMPLATES.find(t => t.key === key);
   if (!tpl) throw new Error('Unknown template: ' + key);

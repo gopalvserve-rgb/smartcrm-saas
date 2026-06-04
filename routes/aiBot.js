@@ -91,6 +91,16 @@ function _coerceSettings(row) {
   return out;
 }
 
+
+// WA_PERMS_v1 (2026-06-04) — check granular WhatsApp permission. Admin
+// always passes; for other roles consult the role_permissions matrix.
+async function _wpHas(me, key) {
+  if (!me) return false;
+  if (me.role === 'admin') return true;
+  try { return !!(await require('./permissions').can(me, key)); }
+  catch (_) { return false; }
+}
+
 async function api_aibot_settings_get(token, phoneNumberId) {
   const me = await authUser(token);
   await _ensureAiBotColumns();
@@ -403,7 +413,7 @@ async function api_aibot_settings_listAll(token) {
 // Delete a per-phone bot row. Default-fallback row cannot be deleted.
 async function api_aibot_settings_delete(token, phoneNumberId) {
   const me = await authUser(token);
-  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  if (!await _wpHas(me, 'whatsapp.bots.manage')) throw new Error('Permission required: Manage WhatsApp ' + ('whatsapp.bots.manage'.includes('kb') ? 'Knowledge Base' : 'Bots'));
   await _ensureAiBotColumns();
   const phId = phoneNumberId ? String(phoneNumberId) : null;
   if (!phId) throw new Error('Cannot delete the default-fallback bot');
@@ -414,7 +424,7 @@ async function api_aibot_settings_delete(token, phoneNumberId) {
 // Bulk-assign KB doc IDs to a bot (or to global if phone_number_id is empty).
 async function api_aibot_kb_assign_bulk(token, payload) {
   const me = await authUser(token);
-  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  if (!await _wpHas(me, 'whatsapp.kb.manage')) throw new Error('Permission required: Manage WhatsApp ' + ('whatsapp.kb.manage'.includes('kb') ? 'Knowledge Base' : 'Bots'));
   await _ensureAiBotColumns();
   const ids = Array.isArray(payload && payload.doc_ids) ? payload.doc_ids.map(Number).filter(n => Number.isFinite(n) && n > 0) : [];
   const phId = (payload && payload.phone_number_id) ? String(payload.phone_number_id) : null;
@@ -523,7 +533,7 @@ async function api_aibot_kb_list(token, phoneNumberId) {
 
 async function api_aibot_kb_save_text(token, payload) {
   const me = await authUser(token);
-  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  if (!await _wpHas(me, 'whatsapp.kb.manage')) throw new Error('Permission required: Manage WhatsApp ' + ('whatsapp.kb.manage'.includes('kb') ? 'Knowledge Base' : 'Bots'));
   const p = payload || {};
   const id = Number(p.id || 0);
   const title = String(p.title || 'Untitled').slice(0, 200);
@@ -552,14 +562,14 @@ async function api_aibot_kb_save_text(token, payload) {
 
 async function api_aibot_kb_delete(token, id) {
   const me = await authUser(token);
-  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  if (!await _wpHas(me, 'whatsapp.kb.manage')) throw new Error('Permission required: Manage WhatsApp ' + ('whatsapp.kb.manage'.includes('kb') ? 'Knowledge Base' : 'Bots'));
   await db.query(`DELETE FROM ai_kb_documents WHERE id = $1`, [Number(id)]);
   return { ok: true };
 }
 
 async function api_aibot_kb_set_phone(token, id, phoneNumberId) {
   const me = await authUser(token);
-  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  if (!await _wpHas(me, 'whatsapp.kb.manage')) throw new Error('Permission required: Manage WhatsApp ' + ('whatsapp.kb.manage'.includes('kb') ? 'Knowledge Base' : 'Bots'));
   await _ensureAiBotColumns();
   // Accepts: a single string ('__global__'/'default'/null/phoneId), OR an array of phone IDs.
   // Array model: first element becomes primary phone_number_id, rest go into additional_phone_ids.
@@ -584,7 +594,7 @@ async function api_aibot_kb_set_phone(token, id, phoneNumberId) {
 
 async function api_aibot_kb_toggle(token, id, isActive) {
   const me = await authUser(token);
-  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  if (!await _wpHas(me, 'whatsapp.kb.manage')) throw new Error('Permission required: Manage WhatsApp ' + ('whatsapp.kb.manage'.includes('kb') ? 'Knowledge Base' : 'Bots'));
   await db.query(`UPDATE ai_kb_documents SET is_active = $1, updated_at = NOW() WHERE id = $2`, [isActive ? 1 : 0, Number(id)]);
   return { ok: true };
 }
@@ -598,7 +608,7 @@ async function api_aibot_kb_toggle(token, id, isActive) {
  */
 async function api_aibot_kb_crawl_url(token, payload) {
   const me = await authUser(token);
-  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  if (!await _wpHas(me, 'whatsapp.kb.manage')) throw new Error('Permission required: Manage WhatsApp ' + ('whatsapp.kb.manage'.includes('kb') ? 'Knowledge Base' : 'Bots'));
   const p = payload || {};
   const url = String(p.url || '').trim();
   if (!/^https?:\/\//i.test(url)) throw new Error('URL must start with http:// or https://');
@@ -1699,7 +1709,7 @@ const _MAX_KB_ATTACHMENT_BYTES = 16 * 1024 * 1024; // 16 MB — Meta document li
 /** Save a base64-encoded attachment to the KB. */
 async function api_aibot_kb_save_attachment(token, payload) {
   const me = await authUser(token);
-  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  if (!await _wpHas(me, 'whatsapp.kb.manage')) throw new Error('Permission required: Manage WhatsApp ' + ('whatsapp.kb.manage'.includes('kb') ? 'Knowledge Base' : 'Bots'));
   await _ensureAiBotColumns();
   const p = payload || {};
   const title = String(p.title || p.file_name || 'Attachment').slice(0, 200);
@@ -1727,7 +1737,7 @@ async function api_aibot_kb_save_attachment(token, payload) {
 /** Update attachable metadata on an existing KB row (toggle is_attachable / change keywords). */
 async function api_aibot_kb_set_attachment_meta(token, id, payload) {
   const me = await authUser(token);
-  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  if (!await _wpHas(me, 'whatsapp.kb.manage')) throw new Error('Permission required: Manage WhatsApp ' + ('whatsapp.kb.manage'.includes('kb') ? 'Knowledge Base' : 'Bots'));
   await _ensureAiBotColumns();
   const p = payload || {};
   const sets = []; const vals = []; let i = 1;
@@ -2076,7 +2086,7 @@ async function classifyAndAlertOnInbound({ phone, leadId, inboundText, inboundPh
  */
 async function api_aibot_heat_test_alert(token) {
   const me = await authUser(token);
-  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  if (!await _wpHas(me, 'whatsapp.bots.manage')) throw new Error('Permission required: Manage WhatsApp ' + ('whatsapp.bots.manage'.includes('kb') ? 'Knowledge Base' : 'Bots'));
   // Persist an in-app notification + push the same payload the real
   // heat-detection pipeline uses, so behaviour matches end-to-end.
   const title = '🔥🔥 Very hot — test lead';
@@ -2114,7 +2124,7 @@ async function api_aibot_heat_test_alert(token) {
  */
 async function api_aibot_heat_diagnostics(token, opts) {
   const me = await authUser(token);
-  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  if (!await _wpHas(me, 'whatsapp.bots.manage')) throw new Error('Permission required: Manage WhatsApp ' + ('whatsapp.bots.manage'.includes('kb') ? 'Knowledge Base' : 'Bots'));
   await _ensureAiBotColumns();
   const limit = Math.max(1, Math.min(50, Number((opts && opts.limit) || 20)));
 

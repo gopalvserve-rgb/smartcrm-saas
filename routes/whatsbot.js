@@ -240,6 +240,16 @@ async function _graphGet(path, cfg) {
 
 // ---------- Connect Account / Settings ----------------------------
 
+
+// WA_PERMS_v1 (2026-06-04) — check granular WhatsApp permission. Admin
+// always passes; for other roles consult the role_permissions matrix.
+async function _wpHas(me, key) {
+  if (!me) return false;
+  if (me.role === 'admin') return true;
+  try { return !!(await require('./permissions').can(me, key)); }
+  catch (_) { return false; }
+}
+
 async function api_wb_settings_get(token) {
   const me = await authUser(token);
   if (me.role !== 'admin') throw new Error('Admin only');
@@ -794,8 +804,8 @@ function safeJson(s) { try { return JSON.parse(s); } catch (_) { return []; } }
 // minutes for marketing/utility, instantly for authentication).
 async function api_wb_templates_create(token, payload) {
   const me = await authUser(token);
-  if (me.role !== 'admin' && me.role !== 'manager') {
-    throw new Error('Only admins / managers can create templates');
+  if (!await _wpHas(me, 'whatsapp.templates.manage')) {
+    throw new Error('Permission required: Manage WhatsApp Templates');
   }
   const p = payload || {};
   const name = String(p.name || '').toLowerCase().trim();
@@ -948,8 +958,8 @@ function _buildTemplateComponents(p) {
 
 async function api_wb_templates_delete(token, payload) {
   const me = await authUser(token);
-  if (me.role !== 'admin' && me.role !== 'manager') {
-    throw new Error('Only admins / managers can delete templates');
+  if (!await _wpHas(me, 'whatsapp.templates.manage')) {
+    throw new Error('Permission required: Manage WhatsApp Templates');
   }
   const p = payload || {};
   const name = String(p.name || '').toLowerCase().trim();
@@ -2010,6 +2020,7 @@ function safeJsonObj(s) { try { return JSON.parse(s); } catch (_) { return {}; }
 
 async function api_wb_campaigns_create(token, payload) {
   const me = await authUser(token);
+  if (!await _wpHas(me, 'whatsapp.broadcasts.manage')) throw new Error('Permission required: Manage WhatsApp Broadcasts');
   const p = payload || {};
   if (!p.name || !p.template_name) throw new Error('name and template_name required');
 
@@ -2067,7 +2078,7 @@ async function api_wb_campaigns_create(token, payload) {
 
 async function api_wb_campaigns_send_now(token, id) {
   const me = await authUser(token);
-  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin or Manager only');
+  if (!await _wpHas(me, 'whatsapp.broadcasts.manage')) throw new Error('Permission required: Manage WhatsApp Broadcasts');
   const c = await db.findById('wa_campaigns', id);
   if (!c) throw new Error('Campaign not found');
   if (c.status === 'sending') return { ok: true, already: true };
@@ -2079,7 +2090,7 @@ async function api_wb_campaigns_send_now(token, id) {
 
 async function api_wb_campaigns_pause(token, id) {
   const me = await authUser(token);
-  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin or Manager only');
+  if (!await _wpHas(me, 'whatsapp.broadcasts.manage')) throw new Error('Permission required: Manage WhatsApp Broadcasts');
   await db.update('wa_campaigns', id, { status: 'paused' });
   return { ok: true };
 }
