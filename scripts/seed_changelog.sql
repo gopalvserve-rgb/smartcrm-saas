@@ -374,3 +374,13 @@ FROM (VALUES
    '#/finance', '💰', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
+
+-- SALES_REASSIGN_PERM_v1 (2026-06-04) — Admin-controlled Sales reassign-own permission
+INSERT INTO changelog (category, title, body, link, icon, created_at)
+SELECT v.category, v.title, v.body, v.link, v.icon, v.created_at
+FROM (VALUES
+  ('improve', '🔁 New permission: let Sales reps reassign their own leads',
+   'Admin can now decide whether a Sales rep is allowed to hand a lead they own to a teammate. A new toggle "Reassign own leads" appears in Settings → Permissions, in the same matrix where you already grant view/edit/delete scopes. Default is OFF for the Sales role (matches existing behaviour); ON for Admin / Manager / Team leader (they could always do it). When ON, a Sales agent can change the assignee on any lead they are the primary owner of — useful when someone goes on leave and wants to pass active conversations to a colleague without bothering an admin. Guardrails: a Sales agent can NEVER reassign a lead that isn''t theirs (the API rejects with a clear message), can NEVER reassign as a side-effect of editing other fields (the patch is silently scrubbed instead of the whole save failing), and the bulk reassign action on the leads toolbar follows the same rule — the API checks every selected lead is owned by them before letting the batch through. Co-owners via the 🤝 share badge are explicitly not covered — only the primary owner can hand the lead off. Duplicate-and-reassign remains admin/manager/team-leader-only.',
+   '#/admin?tab=permissions', '🔁', NOW())
+) AS v(category, title, body, link, icon, created_at)
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
