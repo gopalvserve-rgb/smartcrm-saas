@@ -394,3 +394,33 @@ FROM (VALUES
    '#/settings', '🔁', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
+
+-- CHAT_AUTO_REASSIGN_v1 (2026-06-04) — WhatsApp chat follows lead reassignment
+INSERT INTO changelog (category, title, body, link, icon, created_at)
+SELECT v.category, v.title, v.body, v.link, v.icon, v.created_at
+FROM (VALUES
+  ('improve', '💬 WhatsApp chats now follow the lead when you reassign',
+   'Until now, reassigning a lead to a new owner moved the lead but the WhatsApp conversation stayed tagged to whoever had it. The new owner could see the lead in their list but the chat thread still belonged to the old user, and inbound notifications went to the wrong inbox. Now: whenever a lead is reassigned — manually via the lead modal, in bulk from the leads toolbar, or automatically by an automation rule — the chat is rewired to the new owner in the same operation. The wa_chat_assignments row is upserted to the new user, and a push notification fires letting them know they just inherited an active chat (only if there has been any WhatsApp activity on that lead in the last 90 days, so we do not spam over silent threads). Works on smartcrm-saas and Stockbox.',
+   '#/whatsbot', '💬', NOW())
+) AS v(category, title, body, link, icon, created_at)
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
+
+-- WA_PERMS_v1 (2026-06-04) — granular WhatsApp permissions
+INSERT INTO changelog (category, title, body, link, icon, created_at)
+SELECT v.category, v.title, v.body, v.link, v.icon, v.created_at
+FROM (VALUES
+  ('improve', '🔑 Admin can now delegate WhatsApp Bots, Templates, Broadcasts and KB',
+   'You no longer need to give a teammate full settings.edit access just to let them build a message bot, register a template, run a broadcast or upload knowledge-base content. Four new permission rows have been added to Settings → Permissions: "Manage WhatsApp Bots", "Manage WhatsApp Templates", "Manage WhatsApp Broadcasts" and "Manage WhatsApp KB". Default ON for Admin and Manager (matches today), default OFF for Team-leader and Sales. Tick the box for any role/user and that user can create + edit + delete the relevant resource without inheriting any other settings power. Applies to smartcrm-saas and Stockbox.',
+   '#/admin?tab=permissions', '🔑', NOW())
+) AS v(category, title, body, link, icon, created_at)
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
+
+-- CAMPAIGN_UPLOAD_v1 (2026-06-04) — per-campaign CSV upload with duplicate preview
+INSERT INTO changelog (category, title, body, link, icon, created_at)
+SELECT v.category, v.title, v.body, v.link, v.icon, v.created_at
+FROM (VALUES
+  ('improve', '📤 Upload leads straight into a campaign — with a duplicate-count preview',
+   'New per-campaign Upload button on the Campaigns page. Click 📤 Upload on any campaign row → pick a CSV (same column layout as Leads → Bulk Upload, the Assign-to column is ignored on purpose so the campaign rule does the distribution) → server scans every row against your existing leads by phone and email and shows you exactly how many are duplicates before anything is inserted. Two policies you can pick: "Skip duplicates" — only the non-matching rows get inserted, or "Add anyway" — every row is inserted and the duplicates are flagged with is_duplicate=1 + duplicate_of=<original lead id> so they show up in the dedupe UI. Either way the new leads land in the campaign''s pool and the campaign''s distribution rule (round-robin / conditional / etc.) routes them to your agents. CSV only, smartcrm-saas only.',
+   '#/campaigns', '📤', NOW())
+) AS v(category, title, body, link, icon, created_at)
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);

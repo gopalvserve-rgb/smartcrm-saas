@@ -117,6 +117,11 @@ async function _loadCoOwnerMap() {
 
 // Duplicate detection
 async function _findDuplicate(payload) {
+  // CAMPAIGN_UPLOAD_v1 — skip when caller has already done its own dup
+  // detection (the per-campaign CSV upload uses its own Set-based scan
+  // so the policy choice (skip/add) is honoured even when the tenant's
+  // global DUPLICATE_POLICY is 'allow').
+  if (payload && payload.__skipDupCheck) return null;
   // Read duplicate-detection config from the CURRENT tenant's DB. process.env
   // is shared across the entire Node process so reading from it produced
   // cross-tenant bleed: whichever tenant called api_admin_setConfig LAST

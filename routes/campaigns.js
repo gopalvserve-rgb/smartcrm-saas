@@ -736,8 +736,151 @@ async function api_campaigns_resetUnclosed(token, campaignId) {
   };
 }
 
+
+
+/* ============================================================
+ * CAMPAIGN_UPLOAD_v1 (2026-06-04) — per-campaign CSV upload with
+ * client-supplied row array, server-side dup preview/scan, and
+ * optional skip-or-add-duplicates policy. The upload reuses the
+ * existing api_leads_bulkCreate path (so campaign distribution
+ * rules fire), but pre-stamps campaign_id on every row and forces
+ * assigned_to='' so the campaign engine routes leads per its
+ * distribution_mode (not the CSV row).
+ *
+ * Modes:
+ *   payload.preview = true   — parse + dup-scan only, no insert
+ *   payload.preview = false  — perform the insert with the chosen
+ *                              duplicate_policy ('skip' | 'add')
+ *
+ * Duplicate handling is intentionally NOT delegated to the tenant's
+ * global DUPLICATE_POLICY config; this upload always honours the
+ * user's choice from the modal regardless of the tenant default.
+ * _findDuplicate in routes/leads.js respects a __skipDupCheck flag
+ * on each row so we can safely add dupes without the global policy
+ * re-rejecting them.
+ * ============================================================ */
+async function api_campaigns_uploadLeads(token, payload) {
+  const me = await authUser(token);
+  if (!['admin', 'manager', 'team_leader'].includes(me.role)) {
+    throw new Error('Admin / manager / team-leader only');
+  }
+  const p = payload || {};
+  const campaignId = Number(p.campaign_id);
+  const rows = Array.isArray(p.rows) ? p.rows : [];
+  const policy = String(p.duplicate_policy || 'skip').toLowerCase();
+  const preview = p.preview === true;
+
+  if (!campaignId) throw new Error('campaign_id is required');
+  if (!rows.length) throw new Error('No rows to upload');
+  if (!['skip', 'add'].includes(policy)) {
+    throw new Error("duplicate_policy must be 'skip' or 'add'");
+  }
+  await _ensureApplyModeColumns();
+
+  // Verify campaign exists & is active.
+  const camp = await db.query(`SELECT id, name, is_active FROM campaigns WHERE id = $1`, [campaignId]);
+  if (!camp.rows[0]) throw new Error('Campaign not found');
+
+  // Build the (phone-digits, email-lower) lookup sets from existing leads
+  // — one query, no per-row round-trip. Big tenants stay sub-second.
+  const dupSet = new Map();   // phoneDigits -> existing lead id
+  const dupEmailSet = new Map(); // emailLower -> existing lead id
+  try {
+    const r = await db.query(`SELECT id, phone, whatsapp, email FROM leads`);
+    for (const row of r.rows) {
+      const ph = String(row.phone || '').replace(/\D/g, '');
+      const wa = String(row.whatsapp || '').replace(/\D/g, '');
+      const em = String(row.email || '').trim().toLowerCase();
+      if (ph) dupSet.set(ph, row.id);
+      if (wa && wa !== ph) dupSet.set(wa, row.id);
+      if (em) dupEmailSet.set(em, row.id);
+    }
+  } catch (_) {}
+
+  // Walk rows once: count parse errors + dup matches + tag each row
+  // with _dupeOfId for the later confirm step.
+  const tagged = [];
+  let dupes = 0, parseErrors = 0;
+  const dupSamples = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = Object.assign({}, rows[i] || {});
+    const phone = String(r.phone || r.mobile || r.whatsapp || '').replace(/\D/g, '');
+    const email = String(r.email || '').trim().toLowerCase();
+    if (!phone && !email && !String(r.name || '').trim()) {
+      parseErrors++;
+      tagged.push({ row: r, dupOfId: null, error: 'row has no phone/email/name' });
+      continue;
+    }
+    let dupOfId = null;
+    if (phone && dupSet.has(phone))  dupOfId = dupSet.get(phone);
+    else if (email && dupEmailSet.has(email)) dupOfId = dupEmailSet.get(email);
+    if (dupOfId) {
+      dupes++;
+      if (dupSamples.length < 5) {
+        dupSamples.push({ name: r.name || '(no name)', phone: phone, email: email, existing_lead_id: dupOfId });
+      }
+    }
+    tagged.push({ row: r, dupOfId, error: null });
+  }
+
+  if (preview) {
+    return {
+      ok: true,
+      total: rows.length,
+      duplicates: dupes,
+      parse_errors: parseErrors,
+      valid: rows.length - parseErrors,
+      dup_samples: dupSamples,
+      campaign_name: camp.rows[0].name
+    };
+  }
+
+  // Confirm path — build the rows we will actually insert.
+  const toInsert = [];
+  let skipped = 0;
+  for (const t of tagged) {
+    if (t.error) { skipped++; continue; }
+    if (t.dupOfId && policy === 'skip') { skipped++; continue; }
+    // Stamp campaign + force-blank assigned_to so the campaign distribution
+    // engine (api_leads_create hook) decides ownership per the rule.
+    const r = Object.assign({}, t.row, {
+      campaign_id: campaignId,
+      assigned_to: '',
+      __skipDupCheck: true   /* honoured by _findDuplicate in routes/leads.js */
+    });
+    // When adding dupes, mark them so they're visible in the dedupe UI.
+    if (t.dupOfId && policy === 'add') {
+      r.is_duplicate = 1;
+      r.duplicate_of = t.dupOfId;
+    }
+    toInsert.push(r);
+  }
+
+  // Reuse api_leads_bulkCreate with assignment.mode='csv' so each row's
+  // assigned_to='' is respected and the campaign engine routes leads.
+  const leads = require('./leads');
+  const result = await leads.api_leads_bulkCreate(token, toInsert, { mode: 'csv' });
+
+  return {
+    ok: true,
+    campaign_id: campaignId,
+    campaign_name: camp.rows[0].name,
+    total: rows.length,
+    parse_errors: parseErrors,
+    duplicates_detected: dupes,
+    duplicate_policy: policy,
+    skipped_duplicates: policy === 'skip' ? dupes : 0,
+    skipped_errors: parseErrors,
+    created: result.created || 0,
+    bulk_errors: (result.errors || []).slice(0, 10),
+    bulk_skipped: result.skipped || 0,
+    assigned_counts: result.assignedCounts || {}
+  };
+}
+
 module.exports = {
   api_campaigns_list,
+  api_campaigns_uploadLeads,   /* CAMPAIGN_UPLOAD_v1 */
   api_campaigns_get,
   api_campaigns_save,
   api_campaigns_pause,

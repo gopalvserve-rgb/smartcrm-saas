@@ -20093,6 +20093,10 @@ async function adminCampaigns(reload) {
         h('button', { class: 'btn sm',
           onclick: () => openCampaignEditModal(r, () => reload()) }, '✎ Edit'),
         ' ',
+        /* CAMPAIGN_UPLOAD_v1 — per-campaign CSV upload */
+        h('button', { class: 'btn sm', title: 'Upload leads as CSV directly into this campaign',
+          onclick: () => openCampaignUploadModal(r, () => reload()) }, '📤 Upload'),
+        ' ',
         h('button', { class: 'btn sm',
           onclick: async () => {
             try {
@@ -20132,6 +20136,186 @@ async function adminCampaigns(reload) {
   table.appendChild(tbody);
   root.appendChild(table);
   return root;
+}
+
+
+
+// ============================================================
+// CAMPAIGN_UPLOAD_v1 (2026-06-04) — per-campaign CSV upload modal.
+// Parses CSV client-side, calls api_campaigns_uploadLeads with
+// preview=true to get a duplicate-count summary, then asks the
+// user to pick a duplicate policy (skip / add) and confirms.
+// Distribution among campaign agents is handled by the backend
+// per the campaign's distribution rule — we just force
+// assigned_to='' so the engine takes over.
+// ============================================================
+async function openCampaignUploadModal(camp, onDone) {
+  const m = h('div', { class: 'modal-backdrop',
+    onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const modal = h('div', { class: 'modal', style: { maxWidth: '640px' } });
+  modal.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, '📤 Upload leads → ' + (camp.name || 'campaign')),
+    h('button', { class: 'btn icon', onclick: () => m.remove() }, '✕')
+  ));
+  const body = h('div', { class: 'modal-body-wrap', style: { padding: '.5rem 0' } });
+
+  // File picker (CSV only)
+  const fileI = h('input', { type: 'file', accept: '.csv,text/csv' });
+  body.appendChild(h('div', { style: { marginBottom: '.6rem' } },
+    h('label', { style: { display: 'block', fontWeight: 600, marginBottom: '.3rem' } },
+      'Pick a CSV file'),
+    fileI,
+    h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } },
+      'Same column structure as Leads → Bulk upload: required name + phone (or whatsapp). '
+      + 'Optional email, source, product, city, etc.')
+  ));
+
+  // Preview / summary card (filled after parse)
+  const previewCard = h('div', { class: 'card',
+    style: { padding: '.75rem', display: 'none', background: '#f8fafc' } });
+  body.appendChild(previewCard);
+
+  // Duplicate-policy chooser (filled after preview, only if dupes detected)
+  const policyWrap = h('div', { style: { marginTop: '.6rem', display: 'none' } });
+  body.appendChild(policyWrap);
+
+  // Status / result line
+  const statusLine = h('div', { style: { marginTop: '.6rem', minHeight: '1.2rem' } });
+  body.appendChild(statusLine);
+
+  modal.appendChild(body);
+
+  let parsedRows = [];
+  let lastPreview = null;
+  const confirmBtn = h('button', { class: 'btn primary', disabled: 'disabled' }, 'Upload to campaign');
+
+  // ---- CSV parser (no external libs — handles quoted fields) ----
+  function parseCSV(text) {
+    const rows = [];
+    let i = 0, field = '', row = [], inQuote = false;
+    while (i < text.length) {
+      const c = text[i];
+      if (inQuote) {
+        if (c === '"' && text[i + 1] === '"') { field += '"'; i += 2; continue; }
+        if (c === '"') { inQuote = false; i++; continue; }
+        field += c; i++; continue;
+      }
+      if (c === '"') { inQuote = true; i++; continue; }
+      if (c === ',') { row.push(field); field = ''; i++; continue; }
+      if (c === '\n' || c === '\r') {
+        if (field !== '' || row.length) { row.push(field); rows.push(row); }
+        field = ''; row = [];
+        if (c === '\r' && text[i + 1] === '\n') i += 2; else i++;
+        continue;
+      }
+      field += c; i++;
+    }
+    if (field !== '' || row.length) { row.push(field); rows.push(row); }
+    return rows;
+  }
+
+  // ---- File change → parse + call preview API ----
+  fileI.onchange = async () => {
+    const f = fileI.files && fileI.files[0];
+    if (!f) return;
+    statusLine.textContent = '⏳ Parsing CSV…';
+    previewCard.style.display = 'none';
+    policyWrap.style.display = 'none';
+    confirmBtn.disabled = true;
+
+    let text;
+    try { text = await f.text(); } catch (e) { statusLine.textContent = 'Could not read file: ' + e.message; return; }
+
+    const matrix = parseCSV(text);
+    if (matrix.length < 2) { statusLine.textContent = 'CSV has no data rows.'; return; }
+    const header = matrix[0].map(h => String(h || '').trim().toLowerCase());
+    parsedRows = matrix.slice(1).map(arr => {
+      const obj = {};
+      header.forEach((k, idx) => { if (k) obj[k] = (arr[idx] != null ? String(arr[idx]).trim() : ''); });
+      return obj;
+    }).filter(r => Object.values(r).some(v => String(v || '').trim() !== ''));
+
+    if (!parsedRows.length) { statusLine.textContent = 'CSV has no usable rows.'; return; }
+
+    statusLine.textContent = '⏳ Scanning ' + parsedRows.length + ' rows for duplicates…';
+
+    let prev;
+    try {
+      prev = await api('api_campaigns_uploadLeads',
+        { campaign_id: camp.id, rows: parsedRows, preview: true });
+    } catch (e) { statusLine.textContent = 'Preview failed: ' + e.message; return; }
+    lastPreview = prev;
+
+    // Render preview card
+    previewCard.innerHTML = '';
+    previewCard.style.display = 'block';
+    previewCard.appendChild(h('div', { style: { fontWeight: 600, marginBottom: '.35rem' } }, 'Preview'));
+    previewCard.appendChild(h('div', {}, 'Total rows: ', h('strong', {}, String(prev.total))));
+    previewCard.appendChild(h('div', { style: { color: prev.duplicates > 0 ? '#92400e' : '#0f172a' } },
+      'Duplicates: ', h('strong', {}, String(prev.duplicates)),
+      prev.duplicates > 0 ? ' (matched by phone or email against existing leads)' : ''));
+    if (prev.parse_errors > 0) {
+      previewCard.appendChild(h('div', { style: { color: '#92400e' } },
+        'Rows with no name/phone/email (will be skipped): ', h('strong', {}, String(prev.parse_errors))));
+    }
+    previewCard.appendChild(h('div', { style: { color: '#0f172a' } },
+      'Valid: ', h('strong', {}, String((prev.total || 0) - (prev.parse_errors || 0)))));
+    if (prev.dup_samples && prev.dup_samples.length) {
+      previewCard.appendChild(h('div', { class: 'muted', style: { marginTop: '.4rem', fontSize: '.78rem' } },
+        'Sample duplicates: ' + prev.dup_samples.map(s => (s.name || s.phone || s.email) + ' → #' + s.existing_lead_id).join(', ')));
+    }
+
+    // If any dupes, show policy chooser. Else hide & default to skip.
+    policyWrap.innerHTML = '';
+    if (prev.duplicates > 0) {
+      const radioSkip = h('input', { type: 'radio', name: 'dup_policy', value: 'skip', checked: 'checked' });
+      const radioAdd  = h('input', { type: 'radio', name: 'dup_policy', value: 'add' });
+      policyWrap.appendChild(h('div', { style: { fontWeight: 600, marginBottom: '.25rem' } },
+        'What to do with the ' + prev.duplicates + ' duplicate(s)?'));
+      policyWrap.appendChild(h('label', { style: { display: 'block', marginBottom: '.2rem' } },
+        radioSkip, ' Skip duplicates — only insert the non-matching rows'));
+      policyWrap.appendChild(h('label', { style: { display: 'block' } },
+        radioAdd, ' Add anyway — insert all rows, flag duplicates so they show in the dedupe UI'));
+      policyWrap.style.display = 'block';
+      policyWrap._getPolicy = () => radioAdd.checked ? 'add' : 'skip';
+    } else {
+      policyWrap.style.display = 'none';
+      policyWrap._getPolicy = () => 'skip';
+    }
+    statusLine.textContent = '';
+    confirmBtn.disabled = false;
+  };
+
+  // ---- Confirm → actual upload ----
+  confirmBtn.onclick = async () => {
+    if (!parsedRows.length) return;
+    const policy = (policyWrap._getPolicy && policyWrap._getPolicy()) || 'skip';
+    confirmBtn.disabled = true;
+    statusLine.textContent = '⏳ Uploading…';
+    try {
+      const r = await api('api_campaigns_uploadLeads', {
+        campaign_id: camp.id,
+        rows: parsedRows,
+        duplicate_policy: policy,
+        preview: false
+      });
+      statusLine.textContent = '✅ ' + (r.created || 0) + ' lead(s) added to ' + (r.campaign_name || 'campaign')
+        + (r.skipped_duplicates ? ' — skipped ' + r.skipped_duplicates + ' duplicate(s)' : '')
+        + (r.skipped_errors ? ' — skipped ' + r.skipped_errors + ' invalid row(s)' : '');
+      toast(r.created + ' lead' + (r.created === 1 ? '' : 's') + ' uploaded to ' + (r.campaign_name || 'campaign'), 'ok');
+      setTimeout(() => { m.remove(); if (typeof onDone === 'function') onDone(); }, 1500);
+    } catch (e) {
+      statusLine.textContent = 'Upload failed: ' + e.message;
+      confirmBtn.disabled = false;
+    }
+  };
+
+  modal.appendChild(h('div', { class: 'actions', style: { padding: '.5rem 0', borderTop: '1px solid #e5e7eb' } },
+    h('button', { class: 'btn', onclick: () => m.remove() }, 'Cancel'),
+    confirmBtn));
+
+  m.appendChild(modal);
+  document.body.appendChild(m);
 }
 
 async function openCampaignEditModal(camp, onSaved) {
