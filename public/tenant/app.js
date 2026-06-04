@@ -18345,6 +18345,24 @@ VIEWS.reports = async (view) => {
       h('div', { id: 'rep-daily-table', style: { marginTop: '1rem' } })
     ),
     h('div', { class: 'card card-wide' }, h('h3', {}, 'By user'), h('div', { id: 'rep-by-user' })),
+    // REPORT_CF_COUNT_TABLE_v1 (2026-06-04) — simple CF value + count
+    // table. Mirrors legacy CRM 'Your Custom Columns in Leads' chart but
+    // in table form. CF picker + sortable list with inline bar chart.
+    h('div', { class: 'card card-wide' },
+      h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '.5rem', flexWrap: 'wrap', marginBottom: '.5rem' } },
+        h('h3', { style: { margin: 0 } }, '📋 Leads by custom field'),
+        h('select', { id: 'rep-cfcount-pick', style: { minWidth: '180px' }, onchange: () => _loadReportsCfCountTable() },
+          ...(function(){
+            const cfs = ((CRM && CRM.cache && CRM.cache.customFields) || [])
+              .filter(c => Number(c.is_active) !== 0 && c.key);
+            const opts = [h('option', { value: '' }, cfs.length ? 'Pick a custom field…' : 'No custom fields defined')];
+            cfs.forEach(c => opts.push(h('option', { value: c.key }, (c.label || c.key))));
+            return opts;
+          })()
+        )
+      ),
+      h('div', { id: 'rep-cfcount-host', class: 'muted', style: { fontSize: '.85rem' } }, 'Pick a custom field above to see lead counts per value.')
+    ),
     // DASH_CF_STATUS_v1 (2026-06-04) — custom field × status pivot card.
     // User can pick any active CF (e.g. 'page') and see a matrix of
     // CF value × status with counts. Renders only when at least one CF exists.
@@ -18446,6 +18464,74 @@ async function _loadReportsCfMatrix() {
   }
 }
 try { window._loadReportsCfMatrix = _loadReportsCfMatrix; } catch (_) {}
+
+// REPORT_CF_COUNT_TABLE_v1 — simple count-only table for a CF.
+async function _loadReportsCfCountTable() {
+  const cfKey = document.getElementById('rep-cfcount-pick')?.value || '';
+  const host = document.getElementById('rep-cfcount-host');
+  if (!host) return;
+  host.innerHTML = '';
+  if (!cfKey) {
+    host.appendChild(h('div', { class: 'muted', style: { fontSize: '.85rem' } }, 'Pick a custom field above to see lead counts per value.'));
+    return;
+  }
+  host.appendChild(h('div', { class: 'muted', style: { fontSize: '.8rem' } }, 'Loading…'));
+  try {
+    const filters = (typeof _currentReportFilters === 'function') ? _currentReportFilters() : {};
+    const r = await api('api_reports_pivot', {
+      row_dims: ['extra:' + cfKey],
+      metrics: ['count'],
+      filters: filters
+    });
+    const rows = (r && r.rows) || [];
+    host.innerHTML = '';
+    if (!rows.length) {
+      host.appendChild(h('div', { class: 'muted' }, 'No leads with a value in this custom field.'));
+      return;
+    }
+    const sorted = rows.slice()
+      .map(rw => ({ val: (rw.dims && rw.dims['extra:' + cfKey]) || '(empty)', cnt: (rw.metrics && rw.metrics.count) || 0 }))
+      .sort((a, b) => b.cnt - a.cnt);
+    const max = sorted[0].cnt || 1;
+    const total = sorted.reduce((s, x) => s + x.cnt, 0);
+    const tbl = h('table', { class: 'tbl', style: { width: '100%', fontSize: '.85rem' } },
+      h('thead', {}, h('tr', {},
+        h('th', { style: { textAlign: 'left' } }, '#'),
+        h('th', { style: { textAlign: 'left' } }, cfKey),
+        h('th', { style: { textAlign: 'right' } }, 'Leads'),
+        h('th', { style: { textAlign: 'right' } }, '%'),
+        h('th', { style: { width: '40%' } }, '')
+      )),
+      h('tbody', {},
+        ...sorted.map((rw, i) => {
+          const pct = total ? Math.round(rw.cnt * 100 / total) : 0;
+          const bar = max ? Math.round(rw.cnt * 100 / max) : 0;
+          return h('tr', {},
+            h('td', { style: { color: '#94a3b8' } }, String(i + 1)),
+            h('td', { style: { textAlign: 'left' } }, String(rw.val)),
+            h('td', { style: { textAlign: 'right', fontWeight: 700 } }, String(rw.cnt)),
+            h('td', { style: { textAlign: 'right', color: '#64748b', fontSize: '.78rem' } }, pct + '%'),
+            h('td', {}, h('div', { style: { background: '#bfdbfe', height: '12px', width: bar + '%', borderRadius: '3px' } }))
+          );
+        }),
+        h('tr', { style: { borderTop: '2px solid #e5e7eb', background: '#f8fafc' } },
+          h('td', {}, ''),
+          h('td', { style: { textAlign: 'left', fontWeight: 700 } }, 'Total'),
+          h('td', { style: { textAlign: 'right', fontWeight: 700 } }, String(total)),
+          h('td', { style: { textAlign: 'right', fontWeight: 700 } }, '100%'),
+          h('td', {}, '')
+        )
+      )
+    );
+    host.appendChild(h('div', { style: { overflowX: 'auto' } }, tbl));
+    host.appendChild(h('div', { class: 'muted', style: { fontSize: '.72rem', marginTop: '.4rem' } },
+      sorted.length + ' distinct values · total ' + total + ' leads · sorted by count'));
+  } catch (e) {
+    host.innerHTML = '';
+    host.appendChild(h('div', { style: { color: '#b91c1c', fontSize: '.85rem' } }, 'Failed: ' + (e.message || e)));
+  }
+}
+try { window._loadReportsCfCountTable = _loadReportsCfCountTable; } catch (_) {}
 
 /**
  * Read the current report filter bar into a plain object. Centralised so the
