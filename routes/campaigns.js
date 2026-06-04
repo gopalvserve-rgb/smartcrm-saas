@@ -1112,9 +1112,226 @@ async function api_campaigns_reportAll(token, payload) {
   return { ok: true, range: dr, campaigns: out };
 }
 
+
+
+/* ============================================================
+ * CAMPAIGN_REPORT_v1.1 (2026-06-04) — full Reports page API.
+ *   api_campaigns_reportAdvanced(token, {
+ *     campaign_ids: [1,2] (optional, null = all),
+ *     user_ids: [10,11]   (optional),
+ *     products: ['MBA','BBA'] (optional, by lead.product or cf_product),
+ *     cf:  { key1: value1, key2: value2 }   (optional, custom-field filters),
+ *     from, to                              (date range)
+ *   }) -> {
+ *     kpis: {...},
+ *     funnel: [{ stage, cnt, pct }],
+ *     status_rows, user_rows, product_rows, source_rows, campaign_rows,
+ *     daily: [{ day, cnt }]
+ *   }
+ * ============================================================ */
+async function api_campaigns_reportAdvanced(token, payload) {
+  const me = await authUser(token);
+  const p = payload || {};
+  const dr = _normalizeDateRange(p);
+
+  const finalIds = await _finalStatusIdSet();
+  const { won: wonIds, lost: lostIds } = await _wonLostNames();
+  const finalArr = Array.from(finalIds);
+  const wonArr   = Array.from(wonIds);
+  const lostArr  = Array.from(lostIds);
+
+  // Build WHERE clause + params dynamically.
+  const where = [];
+  const params = [];
+  // Always restrict to leads that ARE in some campaign — Reports tab is
+  // campaign-specific. (campaign_id IS NOT NULL AND <> 0)
+  where.push(`(campaign_id IS NOT NULL AND campaign_id::int > 0)`);
+  if (Array.isArray(p.campaign_ids) && p.campaign_ids.length) {
+    params.push(p.campaign_ids.map(Number).filter(Boolean));
+    where.push(`campaign_id::int = ANY($${params.length}::int[])`);
+  }
+  if (Array.isArray(p.user_ids) && p.user_ids.length) {
+    params.push(p.user_ids.map(String));
+    where.push(`assigned_to::text = ANY($${params.length}::text[])`);
+  }
+  if (Array.isArray(p.products) && p.products.length) {
+    params.push(p.products.map(String));
+    where.push(`(product = ANY($${params.length}::text[])
+                  OR EXISTS (SELECT 1 FROM jsonb_each_text(COALESCE(extra_json,'{}')::jsonb) e
+                              WHERE e.key = 'product' AND e.value = ANY($${params.length}::text[])))`);
+  }
+  if (p.cf && typeof p.cf === 'object') {
+    for (const k of Object.keys(p.cf)) {
+      const val = p.cf[k];
+      if (val == null || val === '') continue;
+      params.push(String(k));
+      const keyIdx = params.length;
+      params.push(String(val));
+      const valIdx = params.length;
+      where.push(`EXISTS (SELECT 1 FROM jsonb_each_text(COALESCE(extra_json,'{}')::jsonb) e
+                          WHERE e.key = $${keyIdx} AND e.value ILIKE '%' || $${valIdx} || '%')`);
+    }
+  }
+  if (dr.from) { params.push(dr.from); where.push(`created_at >= $${params.length}::date`); }
+  if (dr.to)   { params.push(dr.to);   where.push(`created_at <  ($${params.length}::date + INTERVAL '1 day')`); }
+  const W = where.join(' AND ');
+
+  // ---- KPIs ----
+  const baseParams = params.slice();
+  const kpi = await db.query(
+    `SELECT
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE assigned_to IS NULL OR assigned_to = '' OR assigned_to::text = '0')::int AS unassigned,
+        COUNT(*) FILTER (WHERE assigned_to IS NOT NULL AND assigned_to <> '' AND assigned_to::text <> '0')::int AS assigned,
+        COUNT(*) FILTER (WHERE status_id = ANY($${baseParams.length + 1}::int[]))::int AS final_cnt,
+        COUNT(*) FILTER (WHERE status_id = ANY($${baseParams.length + 2}::int[]))::int AS won_cnt,
+        COUNT(*) FILTER (WHERE status_id = ANY($${baseParams.length + 3}::int[]))::int AS lost_cnt,
+        COUNT(*) FILTER (WHERE is_duplicate = 1)::int AS duplicates,
+        COUNT(*) FILTER (WHERE COALESCE(remark,'') <> '')::int AS contacted_cnt
+     FROM leads WHERE ${W}`,
+    baseParams.concat([finalArr, wonArr, lostArr])
+  );
+  const k = kpi.rows[0] || {};
+  const total = Number(k.total) || 0;
+  const won = Number(k.won_cnt) || 0;
+
+  // ---- Status-wise breakdown ----
+  const statusRows = await db.query(
+    `SELECT COALESCE(s.name, 'Unset') AS status_name,
+            l.status_id,
+            COALESCE(s.display_order, 9999) AS sort_ord,
+            COUNT(*)::int AS cnt
+       FROM leads l
+       LEFT JOIN statuses s ON s.id = l.status_id
+      WHERE ${W}
+      GROUP BY s.name, l.status_id, s.display_order
+      ORDER BY sort_ord ASC, cnt DESC`,
+    params
+  );
+
+  // ---- Funnel (Total → Assigned → Contacted → Final → Won) ----
+  const tot = total;
+  const ass = Number(k.assigned) || 0;
+  const con = Number(k.contacted_cnt) || 0;
+  const fin = Number(k.final_cnt) || 0;
+  const wo  = won;
+  const pct = (a, base) => base > 0 ? Math.round((a / base) * 1000) / 10 : 0;
+  const funnel = [
+    { stage: 'Total leads',  cnt: tot, pct_from_top: 100 },
+    { stage: 'Assigned',     cnt: ass, pct_from_top: pct(ass, tot) },
+    { stage: 'Contacted',    cnt: con, pct_from_top: pct(con, tot) },
+    { stage: 'Final',        cnt: fin, pct_from_top: pct(fin, tot) },
+    { stage: 'Won',          cnt: wo,  pct_from_top: pct(wo, tot) }
+  ];
+
+  // ---- User-wise breakdown ----
+  let userRows = { rows: [] };
+  try {
+    userRows = await db.query(
+      `SELECT COALESCE(u.full_name, u.username, 'Unassigned') AS user_name,
+              l.assigned_to,
+              COUNT(*)::int AS total,
+              COUNT(*) FILTER (WHERE l.status_id = ANY($${params.length + 1}::int[]))::int AS final_cnt,
+              COUNT(*) FILTER (WHERE l.status_id = ANY($${params.length + 2}::int[]))::int AS won_cnt
+         FROM leads l
+         LEFT JOIN users u ON u.id::text = l.assigned_to::text
+        WHERE ${W}
+        GROUP BY u.full_name, u.username, l.assigned_to
+        ORDER BY total DESC`,
+      params.concat([finalArr, wonArr])
+    );
+  } catch (_) {}
+
+  // ---- Product breakdown ----
+  const productRows = await db.query(
+    `SELECT COALESCE(NULLIF(product, ''), 'Unspecified') AS product,
+            COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE status_id = ANY($${params.length + 1}::int[]))::int AS won_cnt
+       FROM leads WHERE ${W}
+       GROUP BY product ORDER BY total DESC LIMIT 25`,
+    params.concat([wonArr])
+  );
+
+  // ---- Source breakdown ----
+  const sourceRows = await db.query(
+    `SELECT COALESCE(NULLIF(source, ''), 'Unspecified') AS source,
+            COUNT(*)::int AS cnt
+       FROM leads WHERE ${W}
+       GROUP BY source ORDER BY cnt DESC LIMIT 20`,
+    params
+  );
+
+  // ---- Campaign-wise breakdown (when filter is all campaigns) ----
+  const campRows = await db.query(
+    `SELECT COALESCE(c.name, '#' || l.campaign_id::text) AS campaign_name,
+            l.campaign_id,
+            COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE l.status_id = ANY($${params.length + 1}::int[]))::int AS won_cnt
+       FROM leads l
+       LEFT JOIN campaigns c ON c.id = l.campaign_id
+      WHERE ${W}
+      GROUP BY c.name, l.campaign_id ORDER BY total DESC LIMIT 50`,
+    params.concat([wonArr])
+  );
+
+  // ---- Daily inflow ----
+  let daily = { rows: [] };
+  try {
+    daily = await db.query(
+      `SELECT to_char(date_trunc('day', created_at), 'YYYY-MM-DD') AS day,
+              COUNT(*)::int AS cnt
+         FROM leads WHERE ${W}
+         GROUP BY day ORDER BY day ASC LIMIT 90`,
+      params
+    );
+  } catch (_) {}
+
+  // ---- Avg TAT ----
+  let tatSecs = 0;
+  try {
+    const tat = await db.query(
+      `SELECT COALESCE(AVG(EXTRACT(EPOCH FROM (updated_at - created_at))), 0)::bigint AS avg_secs
+         FROM leads WHERE ${W} AND status_id = ANY($${params.length + 1}::int[])`,
+      params.concat([finalArr])
+    );
+    tatSecs = Number(tat.rows[0] && tat.rows[0].avg_secs) || 0;
+  } catch (_) {}
+
+  return {
+    ok: true,
+    range: dr,
+    filters: {
+      campaign_ids: p.campaign_ids || [],
+      user_ids:     p.user_ids     || [],
+      products:     p.products     || [],
+      cf:           p.cf           || {}
+    },
+    kpis: {
+      total,
+      unassigned: Number(k.unassigned) || 0,
+      assigned:   ass,
+      contacted:  con,
+      final:      fin,
+      won,
+      lost:       Number(k.lost_cnt) || 0,
+      duplicates: Number(k.duplicates) || 0,
+      conv_pct:   pct(won, total),
+      avg_tat_secs: tatSecs
+    },
+    funnel,
+    status_rows:   statusRows.rows,
+    user_rows:     userRows.rows,
+    product_rows:  productRows.rows,
+    source_rows:   sourceRows.rows,
+    campaign_rows: campRows.rows,
+    daily:         daily.rows
+  };
+}
+
 module.exports = {
   api_campaigns_list,
   api_campaigns_uploadLeads,   /* CAMPAIGN_UPLOAD_v1 */
+  api_campaigns_reportAdvanced, /* CAMPAIGN_REPORT_v1.1 */
   api_campaigns_report,        /* CAMPAIGN_REPORT_v1 */
   api_campaigns_reportAll,     /* CAMPAIGN_REPORT_v1 */
   api_campaigns_get,

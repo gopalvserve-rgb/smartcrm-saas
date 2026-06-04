@@ -1646,7 +1646,9 @@ const NAV_GROUPS = [
     /* LEAD_ACTIVITY_v1 */
     { id: 'activityreport', label: 'Activity report', icon: '📝', roles: ['admin', 'manager', 'team_leader'] },
     /* WA_REPORT_v1 */
-    { id: 'whatsappreport', label: 'WhatsApp report', icon: '💬', roles: ['admin', 'manager', 'team_leader'] }
+    { id: 'whatsappreport', label: 'WhatsApp report', icon: '💬', roles: ['admin', 'manager', 'team_leader'] },
+    /* CAMPAIGN_REPORT_v1.1 */
+    { id: 'campaignreport', label: 'Campaign report', icon: '📊', roles: ['admin', 'manager', 'team_leader'] }
   ] },
   { label: 'Workspace', icon: '💬', items: [
     { id: 'socialinbox', label: 'Social Inbox', icon: '📱', countKey: 'social_unread' },
@@ -45351,4 +45353,361 @@ async function openFbFormMapper() {
     mapWrap.appendChild(saveBtn);
   };
 }
+
+/* ============================================================
+ * CAMPAIGN_REPORT_v2 (2026-06-04) — dedicated Campaign Report page
+ * under Reports section.
+ * ============================================================ */
+VIEWS.campaignreport = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('h2', { style: { marginBottom: '.6rem' } }, '\u{1F4CA} Campaign Report'));
+  view.appendChild(h('div', { class: 'muted', style: { marginBottom: '.6rem' } },
+    'Analyse performance across one campaign or compare all of them. Pick a date range, filter by users / products / custom fields, and the report rebuilds.'));
+
+  const LSKEY = 'campaignreport_filters_v1';
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(LSKEY) || '{}') || {}; } catch (_) {}
+  const today = new Date();
+  const ymd = d => d.toISOString().slice(0, 10);
+  const minusDays = n => { const d = new Date(today); d.setDate(d.getDate() - n); return d; };
+
+  let campaigns = [], users = [], products = [], cfFields = [];
+  try { const r = await api('api_campaigns_list'); campaigns = (r && r.campaigns) || r || []; } catch (_) {}
+  try { const r = await api('api_users_list'); users = (r && r.users) || r || []; } catch (_) {}
+  try {
+    const r = await api('api_admin_listProducts');
+    products = (r && r.products) || r || [];
+  } catch (_) {
+    try {
+      const r = await api('api_products_list');
+      products = (r && r.products) || r || [];
+    } catch (_) {}
+  }
+  try {
+    const r = await api('api_admin_listCustomFields');
+    cfFields = (r && r.fields) || r || [];
+  } catch (_) {}
+
+  const fromI = h('input', { type: 'date', value: saved.from || ymd(minusDays(29)),
+    style: { padding: '.35rem' } });
+  const toI   = h('input', { type: 'date', value: saved.to || ymd(today),
+    style: { padding: '.35rem' } });
+
+  const mkSelect = (items, valueOf, labelOf, savedArr) => {
+    const sel = h('select', { multiple: 'multiple',
+      style: { minWidth: '160px', minHeight: '60px', padding: '.25rem' } });
+    items.forEach(it => {
+      const v = String(valueOf(it));
+      const opt = h('option', { value: v }, labelOf(it));
+      if (Array.isArray(savedArr) && savedArr.map(String).includes(v)) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    return sel;
+  };
+  const campSel = mkSelect(campaigns, c => c.id, c => c.name || ('#' + c.id), saved.campaign_ids);
+  const userSel = mkSelect(users, u => u.id, u => u.full_name || u.username || ('#' + u.id), saved.user_ids);
+  const prodSel = mkSelect(
+    (products && products.length ? products : []).map(p => ({
+      id: p.name || p.title || p.id,
+      label: p.name || p.title || ('#' + p.id)
+    })),
+    p => p.id, p => p.label, saved.products);
+
+  const cfWrap = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } });
+  const cfRows = [];
+  function addCfRow(initKey, initVal) {
+    const keyI = h('select', { style: { padding: '.25rem', minWidth: '120px' } },
+      h('option', { value: '' }, '— field —'),
+      ...cfFields.map(f => {
+        const opt = h('option', { value: 'cf_' + (f.name || f.key || f) },
+          (f.label || f.name || f.key || f));
+        if (initKey && opt.value === initKey) opt.selected = true;
+        return opt;
+      }));
+    const valI = h('input', { type: 'text', value: initVal || '',
+      placeholder: 'contains…', style: { padding: '.25rem', minWidth: '120px' } });
+    const rmBtn = h('button', { class: 'btn sm',
+      onclick: () => { row.remove(); const i = cfRows.indexOf(rec); if (i >= 0) cfRows.splice(i, 1); } }, '✕');
+    const row = h('div', { style: { display: 'flex', gap: '4px', alignItems: 'center' } },
+      keyI, valI, rmBtn);
+    const rec = { keyI, valI, row };
+    cfRows.push(rec);
+    cfWrap.appendChild(row);
+  }
+  (saved.cf_rows || []).forEach(r => addCfRow(r.k, r.v));
+  if (!cfRows.length) addCfRow();
+
+  const filterBar = h('div', { class: 'card',
+    style: { padding: '.65rem .8rem', marginBottom: '.8rem', background: '#f8fafc' } });
+
+  filterBar.appendChild(h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap',
+      alignItems: 'center', marginBottom: '.5rem' } },
+    h('strong', {}, 'Date:'),
+    h('button', { class: 'btn sm', onclick: () => { fromI.value = ymd(today);          toI.value = ymd(today); apply(); } }, 'Today'),
+    h('button', { class: 'btn sm', onclick: () => { fromI.value = ymd(minusDays(1));   toI.value = ymd(minusDays(1)); apply(); } }, 'Yesterday'),
+    h('button', { class: 'btn sm', onclick: () => { fromI.value = ymd(minusDays(6));   toI.value = ymd(today); apply(); } }, 'Last 7d'),
+    h('button', { class: 'btn sm', onclick: () => { fromI.value = ymd(minusDays(29));  toI.value = ymd(today); apply(); } }, 'Last 30d'),
+    h('button', { class: 'btn sm', onclick: () => { fromI.value = ymd(minusDays(89));  toI.value = ymd(today); apply(); } }, 'Last 90d'),
+    h('button', { class: 'btn sm', onclick: () => { fromI.value = '';                  toI.value = '';          apply(); } }, 'All time'),
+    h('span', { class: 'muted' }, '  From:'), fromI,
+    h('span', { class: 'muted' }, 'To:'), toI
+  ));
+
+  filterBar.appendChild(h('div', { style: { display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-start' } },
+    h('div', {}, h('div', { style: { fontWeight: 600, fontSize: '.8rem' } }, 'Campaigns'), campSel),
+    h('div', {}, h('div', { style: { fontWeight: 600, fontSize: '.8rem' } }, 'Users'),     userSel),
+    h('div', {}, h('div', { style: { fontWeight: 600, fontSize: '.8rem' } }, 'Products'),  prodSel),
+    h('div', {}, h('div', { style: { fontWeight: 600, fontSize: '.8rem' } }, 'Custom fields'),
+      cfWrap,
+      h('button', { class: 'btn sm', style: { marginTop: '4px' },
+        onclick: () => addCfRow() }, '+ Add field filter')
+    )
+  ));
+
+  filterBar.appendChild(h('div', { style: { display: 'flex', gap: '6px', marginTop: '.5rem' } },
+    h('button', { class: 'btn primary', onclick: () => apply() }, '\u{1F50D} Apply'),
+    h('button', { class: 'btn', onclick: () => {
+        localStorage.removeItem(LSKEY);
+        fromI.value = ymd(minusDays(29)); toI.value = ymd(today);
+        for (const opt of campSel.options) opt.selected = false;
+        for (const opt of userSel.options) opt.selected = false;
+        for (const opt of prodSel.options) opt.selected = false;
+        cfWrap.innerHTML = ''; cfRows.length = 0; addCfRow();
+        apply();
+      } }, 'Reset filters'),
+    h('button', { class: 'btn', onclick: () => downloadCsv() }, '⬇ Download CSV')
+  ));
+
+  view.appendChild(filterBar);
+
+  const dataWrap = h('div', { style: { minHeight: '300px' } });
+  view.appendChild(dataWrap);
+
+  let lastResp = null;
+
+  function fmtSecs(s) {
+    s = Number(s) || 0;
+    if (s < 60) return s + 's';
+    if (s < 3600) return Math.round(s / 60) + 'm';
+    if (s < 86400) return Math.round(s / 3600) + 'h';
+    return Math.round(s / 86400) + 'd';
+  }
+  function kpi(label, value, color) {
+    return h('div', { style: { flex: '1 0 110px', minWidth: '110px',
+        background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px',
+        padding: '.55rem .7rem' } },
+      h('div', { class: 'muted', style: { fontSize: '.7rem' } }, label),
+      h('div', { style: { fontWeight: 700, fontSize: '1.2rem', color: color || '#0f172a' } }, value));
+  }
+
+  function readFilters() {
+    const campaign_ids = [...campSel.selectedOptions].map(o => Number(o.value));
+    const user_ids     = [...userSel.selectedOptions].map(o => o.value);
+    const prods        = [...prodSel.selectedOptions].map(o => o.value);
+    const cf = {};
+    const cfRowsSaved = [];
+    cfRows.forEach(r => {
+      const k = r.keyI.value, v = r.valI.value;
+      if (k && v) { cf[k] = v; cfRowsSaved.push({ k, v }); }
+    });
+    const payload = {
+      campaign_ids, user_ids, products: prods, cf,
+      from: fromI.value || undefined,
+      to:   toI.value   || undefined
+    };
+    try {
+      localStorage.setItem(LSKEY, JSON.stringify({
+        from: fromI.value, to: toI.value,
+        campaign_ids, user_ids, products: prods, cf_rows: cfRowsSaved
+      }));
+    } catch (_) {}
+    return payload;
+  }
+
+  async function apply() {
+    dataWrap.innerHTML = '';
+    dataWrap.appendChild(h('div', { class: 'muted' }, '⏳ Loading…'));
+    let r;
+    try { r = await api('api_campaigns_reportAdvanced', readFilters()); }
+    catch (e) {
+      dataWrap.innerHTML = '';
+      dataWrap.appendChild(h('div', { style: { color: '#b91c1c' } }, 'Report failed: ' + e.message));
+      return;
+    }
+    lastResp = r;
+    render(r);
+  }
+
+  function render(r) {
+    dataWrap.innerHTML = '';
+    const k = r.kpis || {};
+
+    dataWrap.appendChild(h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap',
+        marginBottom: '.8rem' } },
+      kpi('Total leads', k.total, '#0f172a'),
+      kpi('Assigned',    k.assigned, '#0369a1'),
+      kpi('Unassigned',  k.unassigned, '#92400e'),
+      kpi('Contacted',   k.contacted, '#0369a1'),
+      kpi('Final',       k.final, '#0f172a'),
+      kpi('Won',         k.won, '#15803d'),
+      kpi('Lost',        k.lost, '#b91c1c'),
+      kpi('Conv %',      (k.conv_pct == null ? 0 : k.conv_pct) + '%', '#7c3aed'),
+      kpi('Avg TAT',     fmtSecs(k.avg_tat_secs), '#0f172a'),
+      kpi('Duplicates',  k.duplicates, '#92400e')
+    ));
+
+    if (r.funnel && r.funnel.length) {
+      const fCard = h('div', { class: 'card', style: { padding: '.75rem', marginBottom: '.8rem' } });
+      fCard.appendChild(h('h3', { style: { margin: '0 0 .5rem 0' } }, '\u{1F500} Funnel'));
+      const max = Math.max(...r.funnel.map(f => Number(f.cnt) || 0), 1);
+      const colors = ['#6366f1', '#0369a1', '#0ea5e9', '#7c3aed', '#15803d'];
+      r.funnel.forEach((f, i) => {
+        const pct = max > 0 ? (Number(f.cnt) / max) * 100 : 0;
+        const row = h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' } },
+          h('div', { style: { width: '110px', fontSize: '.85rem' } }, f.stage),
+          h('div', { style: { flex: '1', background: '#f1f5f9', borderRadius: '4px', height: '24px',
+              position: 'relative', overflow: 'hidden' } },
+            h('div', { style: { width: pct.toFixed(1) + '%', height: '100%',
+                background: colors[i % colors.length], transition: 'width .3s' } })),
+          h('div', { style: { width: '110px', textAlign: 'right', fontSize: '.85rem', fontWeight: 600 } },
+            String(f.cnt) + ' (' + (f.pct_from_top == null ? 0 : f.pct_from_top) + '%)'));
+        fCard.appendChild(row);
+      });
+      dataWrap.appendChild(fCard);
+    }
+
+    const grid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(380px,1fr))',
+        gap: '.8rem', marginBottom: '.8rem' } });
+
+    grid.appendChild(makeTable('Status-wise breakdown', r.status_rows, k.total, [
+      { key: 'status_name', label: 'Status' },
+      { key: 'cnt', label: 'Count', right: true, bold: true },
+      { key: '_pct', label: '% of total', right: true,
+        get: row => k.total > 0 ? (Math.round((row.cnt / k.total) * 1000) / 10) + '%' : '0%' }
+    ]));
+    grid.appendChild(makeTable('User-wise performance', r.user_rows, k.total, [
+      { key: 'user_name', label: 'User' },
+      { key: 'total', label: 'Total', right: true },
+      { key: 'final_cnt', label: 'Final', right: true },
+      { key: 'won_cnt', label: 'Won', right: true, bold: true, color: '#15803d' },
+      { key: '_conv', label: 'Conv %', right: true,
+        get: row => row.total > 0 ? (Math.round((row.won_cnt / row.total) * 1000) / 10) + '%' : '0%' }
+    ]));
+    grid.appendChild(makeTable('Product-wise', r.product_rows, k.total, [
+      { key: 'product', label: 'Product' },
+      { key: 'total', label: 'Total', right: true },
+      { key: 'won_cnt', label: 'Won', right: true, bold: true, color: '#15803d' }
+    ]));
+    grid.appendChild(makeTable('Source-wise', r.source_rows, k.total, [
+      { key: 'source', label: 'Source' },
+      { key: 'cnt', label: 'Count', right: true, bold: true }
+    ]));
+    dataWrap.appendChild(grid);
+
+    if (r.campaign_rows && r.campaign_rows.length > 1) {
+      const cCard = h('div', { class: 'card', style: { padding: '.75rem', marginBottom: '.8rem' } });
+      cCard.appendChild(h('h3', { style: { margin: '0 0 .5rem 0' } }, '\u{1F3AF} Campaign-wise comparison'));
+      const tbl = h('table', { class: 'data-table' },
+        h('thead', {}, h('tr', {},
+          h('th', {}, 'Campaign'),
+          h('th', { style: { textAlign: 'right' } }, 'Total'),
+          h('th', { style: { textAlign: 'right' } }, 'Won'),
+          h('th', { style: { textAlign: 'right' } }, 'Conv %'))),
+        h('tbody', {}, ...r.campaign_rows.map(row => {
+          const conv = row.total > 0 ? Math.round((row.won_cnt / row.total) * 1000) / 10 : 0;
+          return h('tr', {},
+            h('td', {}, row.campaign_name),
+            h('td', { style: { textAlign: 'right' } }, String(row.total)),
+            h('td', { style: { textAlign: 'right', color: '#15803d', fontWeight: 600 } }, String(row.won_cnt)),
+            h('td', { style: { textAlign: 'right' } }, conv + '%'));
+        }))
+      );
+      cCard.appendChild(tbl);
+      dataWrap.appendChild(cCard);
+    }
+
+    if (r.daily && r.daily.length) {
+      const dCard = h('div', { class: 'card', style: { padding: '.75rem' } });
+      dCard.appendChild(h('h3', { style: { margin: '0 0 .5rem 0' } }, '\u{1F4C5} Daily inflow'));
+      const max = Math.max(...r.daily.map(d => Number(d.cnt) || 0), 1);
+      const w = 1100, h_ = 160, pad = 28;
+      const bw = Math.max(2, (w - pad * 2) / r.daily.length - 2);
+      const bars = r.daily.map((d, i) => {
+        const cnt = Number(d.cnt) || 0;
+        const bh = ((h_ - pad * 2) * cnt) / max;
+        const x = pad + i * (bw + 2);
+        const y = h_ - pad - bh;
+        return '<rect x="' + x + '" y="' + y + '" width="' + bw + '" height="' + bh
+          + '" fill="#6366f1"><title>' + d.day + ': ' + cnt + '</title></rect>';
+      }).join('');
+      const svgHTML = '<svg viewBox="0 0 ' + w + ' ' + h_ + '" '
+        + 'xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;background:#fafafa;border-radius:6px;">'
+        + bars
+        + '<text x="' + pad + '" y="16" font-size="11" fill="#64748b">peak ' + max + '/day</text></svg>';
+      const wrap = h('div', {}); wrap.innerHTML = svgHTML;
+      dCard.appendChild(wrap);
+      dataWrap.appendChild(dCard);
+    }
+  }
+
+  function makeTable(title, rows, totalForPct, cols) {
+    const card = h('div', { class: 'card', style: { padding: '.75rem' } });
+    card.appendChild(h('h3', { style: { margin: '0 0 .5rem 0' } }, title));
+    if (!rows || !rows.length) {
+      card.appendChild(h('div', { class: 'muted' }, 'No data for this range.'));
+      return card;
+    }
+    const tbl = h('table', { class: 'data-table' },
+      h('thead', {}, h('tr', {}, ...cols.map(c =>
+        h('th', { style: c.right ? { textAlign: 'right' } : {} }, c.label)))),
+      h('tbody', {}, ...rows.map(row =>
+        h('tr', {}, ...cols.map(c => {
+          const val = c.get ? c.get(row) : row[c.key];
+          const style = {};
+          if (c.right) style.textAlign = 'right';
+          if (c.bold)  style.fontWeight = 600;
+          if (c.color) style.color = c.color;
+          return h('td', { style }, val == null ? '—' : String(val));
+        }))))
+    );
+    card.appendChild(tbl);
+    return card;
+  }
+
+  function downloadCsv() {
+    if (!lastResp) { alert('Apply filters first.'); return; }
+    const k = lastResp.kpis || {};
+    const lines = [];
+    lines.push(['Campaign Report - Generated at', new Date().toISOString()].join(','));
+    lines.push(['Range', (lastResp.range && lastResp.range.from) || 'all',
+                (lastResp.range && lastResp.range.to)   || 'all'].join(','));
+    lines.push('');
+    lines.push('KPI,Value');
+    Object.keys(k).forEach(key => lines.push([key, k[key]].join(',')));
+    lines.push('');
+    lines.push('Stage,Count,Pct');
+    (lastResp.funnel || []).forEach(f => lines.push([f.stage, f.cnt, f.pct_from_top].join(',')));
+    lines.push('');
+    lines.push('Status,Count');
+    (lastResp.status_rows || []).forEach(s =>
+      lines.push([(s.status_name || '').replace(/,/g, ';'), s.cnt].join(',')));
+    lines.push('');
+    lines.push('User,Total,Final,Won');
+    (lastResp.user_rows || []).forEach(u =>
+      lines.push([(u.user_name || '').replace(/,/g, ';'), u.total, u.final_cnt, u.won_cnt].join(',')));
+    lines.push('');
+    lines.push('Campaign,Total,Won');
+    (lastResp.campaign_rows || []).forEach(c =>
+      lines.push([(c.campaign_name || '').replace(/,/g, ';'), c.total, c.won_cnt].join(',')));
+    const csv = lines.join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'campaign-report-' + new Date().toISOString().slice(0, 10) + '.csv';
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+  }
+
+  apply();
+};
 

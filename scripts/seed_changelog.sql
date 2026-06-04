@@ -444,3 +444,13 @@ FROM (VALUES
    '#/campaigns', '📋', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
+
+-- CAMPAIGN_REPORT_v2 (2026-06-04) — dedicated Campaign Report page in Reports
+INSERT INTO changelog (category, title, body, link, icon, created_at)
+SELECT v.category, v.title, v.body, v.link, v.icon, v.created_at
+FROM (VALUES
+  ('improve', '📊 New Campaign Report tab under Reports — full filters + funnel + analytics',
+   'Campaign reporting now has its own dedicated page under Reports → Campaign report (separate from the per-row 📊 Report modal on the Campaigns page, which still works as a quick-look). The full page gives you: date chips (Today / Yesterday / Last 7d / Last 30d / Last 90d / All time) plus From/To for any custom range, multi-select filters for Campaigns / Users / Products, an "add as many as you need" Custom-field filter (pick a field, type a value, repeat), and an Apply / Reset / ⬇ Download CSV button row. The output: a 10-tile KPI strip (Total / Assigned / Unassigned / Contacted / Final / Won / Lost / Conv% / Avg TAT / Duplicates), a horizontal funnel chart (Total → Assigned → Contacted → Final → Won) with both absolute counts and % of top, side-by-side tables for Status-wise / User-wise / Product-wise / Source-wise breakdowns, a Campaign-wise comparison table that appears whenever the result contains more than one campaign, and a daily-inflow bar chart for the period. All filter selections persist in localStorage so when you return the next day, your last view is right there. CSV download captures KPIs + funnel + all four tables + campaign comparison in one file.',
+   '#/campaignreport', '📊', NOW())
+) AS v(category, title, body, link, icon, created_at)
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
