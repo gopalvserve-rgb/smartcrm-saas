@@ -25325,6 +25325,22 @@ async function adminRules() {
       h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } },
         'Pulled live from your statuses list. If left as "Default", we use the status named "New" (or the first status if no "New" exists).')
     ));
+    // CALL_DUP_LEAD_v1 (2026-06-04) — what to do when the caller is
+    // already in CRM. Default 'attach' = link the call to the existing
+    // lead. 'duplicate' = create a new lead row marked is_duplicate=1 so
+    // today's call appears as a fresh row in today's leads list.
+    const callDupMode = String(cfg.CALLS_AUTOLEAD_ON_DUPLICATE || 'attach').toLowerCase();
+    const dupSel = h('select', { style: { minWidth: '20rem' } },
+      h('option', { value: 'attach',    selected: callDupMode === 'attach'    ? 'selected' : null }, 'Attach call to the existing lead (default)'),
+      h('option', { value: 'duplicate', selected: callDupMode === 'duplicate' ? 'selected' : null }, 'Create a new duplicate lead row (shows in today\'s list, flagged 🔀 duplicate)')
+    );
+    callCard.appendChild(h('div', { class: 'field', style: { marginTop: '.5rem' } },
+      h('label', {}, 'When the caller is already in CRM'),
+      dupSel,
+      h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } },
+        '\'Attach\' keeps the lead list clean — every call from a repeat caller links to their original lead. ' +
+        '\'Duplicate\' adds a new row every time so reps see today\'s call as a fresh lead (marked as duplicate, linked back to the original).')
+    ));
     callCard.appendChild(h('div', { class: 'field' },
       h('label', {}, 'Minimum call duration to count (seconds)'),
       minInp,
@@ -25339,7 +25355,8 @@ async function adminRules() {
           CALLS_AUTOLEAD_INBOUND:      inChk.checked  ? '1' : '0',
           CALLS_AUTOLEAD_OUTBOUND:     outChk.checked ? '1' : '0',
           CALLS_AUTOLEAD_MIN_SECONDS:  String(Number(minInp.value || 0)),
-          CALLS_AUTOLEAD_STATUS_ID:    stSel.value || ''
+          CALLS_AUTOLEAD_STATUS_ID:    stSel.value || '',
+          CALLS_AUTOLEAD_ON_DUPLICATE: dupSel.value || 'attach' /* CALL_DUP_LEAD_v1 */
         });
         toast('Call → Lead settings saved', 'ok');
       } catch (e) { toast(e.message, 'err'); }

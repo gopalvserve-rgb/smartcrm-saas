@@ -113,17 +113,25 @@ async function _getAutoleadCfg() {
   const now = Date.now();
   const hit = _autoleadCfgByTenant.get(key);
   if (hit && (now - hit.at) < 60000) return hit.val;
-  const [mode, inb, out, statusId] = await Promise.all([
+  const [mode, inb, out, statusId, onDup] = await Promise.all([
     db.getConfig('CALLS_AUTOLEAD_MODE', 'auto'),
     db.getConfig('CALLS_AUTOLEAD_INBOUND', '1'),
     db.getConfig('CALLS_AUTOLEAD_OUTBOUND', '0'),
-    db.getConfig('CALLS_AUTOLEAD_STATUS_ID', '0')
+    db.getConfig('CALLS_AUTOLEAD_STATUS_ID', '0'),
+    // CALL_DUP_LEAD_v1 (2026-06-04) — what to do when a call comes from a
+    // phone that's already in the leads table:
+    //   'attach' (default) — link the call_event to the existing lead, no new row
+    //   'duplicate'        — INSERT a new lead row with is_duplicate=1 and
+    //                        duplicate_of=<existing>.id so today's call appears
+    //                        as a fresh lead in today's list, marked as a dup
+    db.getConfig('CALLS_AUTOLEAD_ON_DUPLICATE', 'attach')
   ]);
   const val = {
     mode: String(mode || 'auto').toLowerCase(),
     inbound: String(inb || '1'),
     outbound: String(out || '0'),
-    statusId: Number(statusId) || 0
+    statusId: Number(statusId) || 0,
+    onDuplicate: String(onDup || 'attach').toLowerCase()
   };
   _autoleadCfgByTenant.set(key, { at: now, val });
   // Tiny LRU guard — keep at most 200 tenants in the map. We process
@@ -309,10 +317,21 @@ async function _processCallEventAsync(me, p, phoneClean, directionInitial, callE
   // (b) the rep can open the lead from notification before the call ends,
   // (c) bot/AI hooks for new leads fire in real time.
   let autoCreatedNow = false;
-  if (!lead && p.phone) {
+  // CALL_DUP_LEAD_v1 (2026-06-04) — if the phone already matches an existing
+  // lead AND the tenant has CALLS_AUTOLEAD_ON_DUPLICATE='duplicate', we still
+  // want to create a fresh lead row so it surfaces in today's list. The new
+  // row is flagged is_duplicate=1 + duplicate_of=<existing>.id; the existing
+  // lead is left untouched. Read the config once up-front so both branches
+  // (no-match + duplicate-mode-on-match) can use it.
+  let _autoleadCfg = null;
+  try { _autoleadCfg = await _getAutoleadCfg(); } catch (_) {}
+  const _dupOfExisting = (lead && p.phone && _autoleadCfg && _autoleadCfg.onDuplicate === 'duplicate')
+    ? Number(lead.id) || null
+    : null;
+  if ((!lead || _dupOfExisting) && p.phone) {
     try {
       // CALL_LOG_PERF_v1 — cached config (60s TTL) instead of 4 DB reads per call.
-      const cfg = await _getAutoleadCfg();
+      const cfg = _autoleadCfg || await _getAutoleadCfg();
       const isInbound  = direction === 'in' || direction === 'missed';
       const isOutbound = direction === 'out' || direction === 'outgoing';
       const allowedByDirection = (isInbound  && cfg.inbound  === '1') ||
@@ -330,20 +349,27 @@ async function _processCallEventAsync(me, p, phoneClean, directionInitial, callE
         }
         const phoneClean = String(p.phone).replace(/^'/, '').trim();
         const sourceLabel = isInbound ? 'Inbound Call' : 'Outbound Call';
+        const _notesSuffix = _dupOfExisting
+          ? ' (duplicate of lead #' + _dupOfExisting + ')'
+          : '';
         const newLeadId = await db.insert('leads', {
           name:        phoneClean,
           phone:       phoneClean,
           whatsapp:    phoneClean,
           source:      sourceLabel,
-          source_ref:  'auto-created on call ring',
+          source_ref:  _dupOfExisting ? 'auto-created on call ring (duplicate)' : 'auto-created on call ring',
           status_id:   statusId,
           assigned_to: me.id,
           notes:       'Auto-created from ' + sourceLabel.toLowerCase() + ' at ' +
-                       new Date().toLocaleString('en-IN'),
+                       new Date().toLocaleString('en-IN') + _notesSuffix,
           created_by:  me.id,
           created_at:  db.nowIso(),
           updated_at:  db.nowIso(),
-          last_status_change_at: db.nowIso()
+          last_status_change_at: db.nowIso(),
+          // CALL_DUP_LEAD_v1 — mark as duplicate when phone matches an
+          // existing lead and tenant opted into duplicate mode.
+          is_duplicate: _dupOfExisting ? 1 : 0,
+          duplicate_of: _dupOfExisting || ''
         });
         try {
           await db.insert('remarks', {
@@ -354,7 +380,7 @@ async function _processCallEventAsync(me, p, phoneClean, directionInitial, callE
         } catch (_) {}
         lead = { id: newLeadId };
         autoCreatedNow = true;
-        console.log('[call-event] auto-created lead', newLeadId, 'for', phoneClean, 'on', direction);
+        console.log('[call-event] auto-created lead', newLeadId, 'for', phoneClean, 'on', direction, _dupOfExisting ? ('(dup of #' + _dupOfExisting + ')') : '');
       }
     } catch (e) { console.warn('[call-event] auto-create failed:', e.message); }
   }
