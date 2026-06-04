@@ -1145,10 +1145,10 @@ async function api_campaigns_reportAdvanced(token, payload) {
   const params = [];
   // Always restrict to leads that ARE in some campaign — Reports tab is
   // campaign-specific. (campaign_id IS NOT NULL AND <> 0)
-  where.push(`(campaign_id IS NOT NULL AND campaign_id::int > 0)`);
+  where.push(`(campaign_id IS NOT NULL AND NULLIF(campaign_id::text, '') IS NOT NULL AND campaign_id::text <> '0')`);
   if (Array.isArray(p.campaign_ids) && p.campaign_ids.length) {
-    params.push(p.campaign_ids.map(Number).filter(Boolean));
-    where.push(`campaign_id::int = ANY($${params.length}::int[])`);
+    params.push(p.campaign_ids.map(String).filter(Boolean));
+    where.push(`campaign_id::text = ANY($${params.length}::text[])`);
   }
   if (Array.isArray(p.user_ids) && p.user_ids.length) {
     params.push(p.user_ids.map(String));
@@ -1268,7 +1268,7 @@ async function api_campaigns_reportAdvanced(token, payload) {
             COUNT(*)::int AS total,
             COUNT(*) FILTER (WHERE l.NULLIF(status_id::text, '') = ANY($${params.length + 1}::text[]))::int AS won_cnt
        FROM leads l
-       LEFT JOIN campaigns c ON c.id = l.campaign_id
+       LEFT JOIN campaigns c ON c.id::text = l.campaign_id::text
       WHERE ${W}
       GROUP BY c.name, l.campaign_id ORDER BY total DESC LIMIT 50`,
     params.concat([wonArr])
