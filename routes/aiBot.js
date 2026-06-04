@@ -1548,14 +1548,40 @@ async function _cancelReengageOnInbound(phone) {
  * Called either from a per-tenant cron OR by the SaaS-wide cron in server.js.
  */
 async function _reengageTick() {
+  // AIBOT_REENGAGE_CLAIM_v1 (2026-06-04) — atomic row claim.
+  //
+  // Old behaviour: SELECT ... WHERE status='scheduled' then UPDATE later.
+  // Bug: if _sendText took > 60s (cron tick interval), or if the saas-wide
+  // cron ran concurrently with a per-tenant cron, the SAME row got picked
+  // up on every subsequent tick, sending the same message every minute.
+  // Symptom (Jun 2026): customer 918637581621 received 5 identical sends
+  // at 06:32, 06:33, 06:34, 06:35, 06:36 — exactly the cron cadence.
+  //
+  // New behaviour: a single UPDATE...RETURNING flips status to 'sending'
+  // INSIDE the same statement that selects the rows. FOR UPDATE SKIP LOCKED
+  // means concurrent ticks can't see the same row. If the worker crashes
+  // mid-send, the row stays 'sending' and never re-fires — preferring
+  // duplicate-silence over duplicate-spam.
   let due = [];
   try {
     const r = await db.query(
-      `SELECT * FROM ai_reengage_log WHERE status = 'scheduled' AND scheduled_for <= NOW() ORDER BY id ASC LIMIT 50`
+      `UPDATE ai_reengage_log
+          SET status = 'sending'
+        WHERE id IN (
+          SELECT id FROM ai_reengage_log
+           WHERE status = 'scheduled' AND scheduled_for <= NOW()
+           ORDER BY id ASC LIMIT 50
+           FOR UPDATE SKIP LOCKED
+        )
+        RETURNING *`
     );
     due = r.rows;
-  } catch (_) { return; }
+  } catch (e) {
+    console.warn('[reengage] claim failed:', e.message);
+    return;
+  }
   if (!due.length) return;
+  console.log('[reengage] tick claimed', due.length, 'row(s):', due.map(r => `${r.id}/${r.phone}`).join(', '));
   const wb = _wb();
   for (const row of due) {
     try {
@@ -1610,6 +1636,27 @@ async function _reengageTick() {
       const msg = String(cfgRow.reengage_message || '')
         .replace(/\{\{\s*name\s*\}\}/g, leadName || 'there')
         .trim() || 'Just checking in — let me know if you need any help.';
+      // AIBOT_REENGAGE_CLAIM_v1 — defence-in-depth runtime cap.
+      // Even if the atomic claim somehow fails or a stray row exists,
+      // never send more than reengage_max_attempts (default 1) reengage
+      // messages to the same phone in the last 24h.
+      try {
+        const cap = Math.max(1, Number(cfgRow.reengage_max_attempts || 1));
+        const d24 = await db.query(
+          `SELECT COUNT(*)::int AS n FROM ai_reengage_log
+            WHERE phone = $1 AND status = 'sent' AND sent_at > NOW() - INTERVAL '24 hours'`,
+          [String(row.phone)]
+        );
+        const recent = Number(d24.rows[0] && d24.rows[0].n) || 0;
+        if (recent >= cap) {
+          await db.query(
+            `UPDATE ai_reengage_log SET status = 'cancelled', cancelled_reason = $2 WHERE id = $1`,
+            [row.id, `daily-cap reached: ${recent}/${cap} in 24h`]
+          );
+          console.log('[reengage] id=' + row.id + ' phone=' + row.phone + ' cancelled — daily cap ' + recent + '/' + cap);
+          continue;
+        }
+      } catch (_) { /* fail open */ }
       // Send via whatsbot using the bot's phone (or default).
       const cfg = row.phone_number_id ? await wb._cfgForPhone(row.phone_number_id).catch(() => wb._cfg()) : await wb._cfg();
       let sendResult = null;
