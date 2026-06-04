@@ -354,3 +354,13 @@ FROM (VALUES
    '#/report-builder', '📊', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
+
+-- AIBOT_REENGAGE_CLAIM_v1 (2026-06-04) — atomic claim fixes duplicate reengage sends
+INSERT INTO changelog (category, title, body, link, icon, created_at)
+SELECT v.category, v.title, v.body, v.link, v.icon, v.created_at
+FROM (VALUES
+  ('fix', '🤖 AI Bot stops sending duplicate re-engagement messages',
+   'A customer was receiving the same re-engagement follow-up message five times in five minutes — one per minute, matching the bot worker''s tick interval exactly. Root cause: the worker picked a "scheduled" row, called Meta to send the message, and only marked the row "sent" once Meta replied. If Meta was slow (which is common during peak hours), the next tick saw the row still in "scheduled" and re-sent the same message. Fix: the worker now claims rows atomically — a single SQL statement flips the row to "sending" the moment it is selected, and FOR UPDATE SKIP LOCKED prevents concurrent ticks from ever seeing the same row. Added defence-in-depth: a hard 24-hour cap of reengage_max_attempts (default 1) per phone, so even an extreme edge case can no longer spam a customer. Every claim batch is now logged for traceability.',
+   '#/aibot', '🤖', NOW())
+) AS v(category, title, body, link, icon, created_at)
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
