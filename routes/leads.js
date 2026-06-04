@@ -1246,6 +1246,92 @@ const CAMPAIGN_LOCKED_FIELDS = [
   'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content'
 ];
 
+
+/**
+ * CHAT_AUTO_REASSIGN_v1 (2026-06-04) — single source of truth for
+ * "the lead just moved to a new owner, push the WA chat over too."
+ * Called from api_leads_update (human edit), api_leads_bulkUpdate
+ * (bulk admin edit), and utils/automations._reassignLead (auto rule).
+ *
+ *   lead       — { id, phone, whatsapp, assigned_to } at minimum
+ *   newOwnerId — the user id taking over (REQUIRED)
+ *   actorId    — who triggered the move (admin id, or null for automations)
+ *   reason     — free text logged in wa_chat_assignments.note
+ *
+ * Behaviour:
+ *   - No-op if newOwnerId is falsy OR equals lead.assigned_to.
+ *   - Walks lead.phone and lead.whatsapp, normalising to digits-only.
+ *     Upserts each (full + last-10-tail variant) into wa_chat_assignments.
+ *   - Fires a dedicated WhatsApp-chat push to the new owner so they
+ *     know "you now own this conversation". Skipped when the new owner
+ *     is the actor (you don't notify yourself).
+ *   - Try/catch wrapped — chat reassign must NEVER break a lead save.
+ */
+async function _reassignChatForLead({ lead, newOwnerId, actorId, reason }) {
+  if (!lead || !newOwnerId) return { ok: false, error: 'missing lead/owner' };
+  if (Number(lead.assigned_to) === Number(newOwnerId)) return { ok: true, skipped: 'same owner' };
+
+  // 1) Walk the lead's phone columns into a deduped variant set.
+  const phones = [lead.phone, lead.whatsapp]
+    .map(p => String(p || '').replace(/\D/g, ''))
+    .filter(Boolean);
+  const variants = new Set();
+  phones.forEach(p => {
+    variants.add(p);
+    if (p.length > 10) variants.add(p.slice(-10));
+  });
+  if (!variants.size) return { ok: true, skipped: 'no phone on lead' };
+
+  // 2) Upsert each phone variant against wa_chat_assignments.
+  let moved = 0;
+  try {
+    for (const ph of variants) {
+      await db.query(
+        `INSERT INTO wa_chat_assignments (phone, assigned_to, assigned_by, assigned_at, note)
+         VALUES ($1, $2, $3, NOW(), $4)
+         ON CONFLICT (phone) DO UPDATE
+            SET assigned_to = EXCLUDED.assigned_to,
+                assigned_by = EXCLUDED.assigned_by,
+                assigned_at = EXCLUDED.assigned_at,
+                note        = EXCLUDED.note`,
+        [ph, Number(newOwnerId), actorId == null ? null : Number(actorId), reason || 'auto-reassigned with lead']
+      );
+      moved++;
+    }
+  } catch (e) {
+    console.warn('[chat-reassign] upsert failed for lead', lead.id, ':', e.message);
+  }
+
+  // 3) Push notification to the new owner — only if there is at least
+  //    one WhatsApp thread for these phones in the recent past (avoid
+  //    spamming the new owner for leads who never chatted).
+  setImmediate(async () => {
+    try {
+      if (Number(actorId) === Number(newOwnerId)) return; // don't notify yourself
+      // Cheap existence check — was there any message on this phone in 90d?
+      const phs = Array.from(variants);
+      const { rows } = await db.query(
+        `SELECT 1 FROM whatsapp_messages
+          WHERE (from_number = ANY($1::text[]) OR to_number = ANY($1::text[]))
+            AND created_at > NOW() - INTERVAL '90 days'
+          LIMIT 1`,
+        [phs]
+      );
+      if (!rows.length) return; // no chat history, no push
+      const push = require('./push');
+      await push.sendPushToUser(Number(newOwnerId), {
+        title: '💬 WhatsApp chat reassigned to you',
+        body:  (lead.name || 'Unknown') + (lead.phone ? ' · ' + lead.phone : ''),
+        url:   '/#/whatsbot?phone=' + encodeURIComponent(phs[0] || ''),
+        tag:   'chat-reassign-' + lead.id,
+        sticky: true
+      });
+    } catch (e) { console.warn('[chat-reassign] push failed:', e.message); }
+  });
+
+  return { ok: true, moved };
+}
+
 async function api_leads_update(token, id, patch) {
   const me = await authUser(token);
   const visible = await getVisibleUserIds(me);
@@ -1467,32 +1553,17 @@ async function api_leads_update(token, id, patch) {
     try { require('../utils/automations').fire('lead_assigned', { lead: Object.assign({}, lead, allowed), user: me }); } catch (_) {}
     try { require('./tat').logAction(id, 'assigned', me.id, { from: lead.assigned_to, to: patch.assigned_to }); } catch (_) {}
 
-    // Reassign any WA chat thread tied to this lead's phone numbers so
-    // the new owner sees the conversation in their inbox. Without this,
-    // the chat stayed pinned to the previous agent's thread list.
-    try {
-      const newOwnerId = Number(patch.assigned_to);
-      const phones = [lead.phone, lead.whatsapp]
-        .map(p => String(p || '').replace(/\D/g, ''))
-        .filter(Boolean);
-      const variants = new Set();
-      phones.forEach(p => {
-        variants.add(p);
-        if (p.length > 10) variants.add(p.slice(-10));
-      });
-      for (const ph of variants) {
-        await db.query(
-          `INSERT INTO wa_chat_assignments (phone, assigned_to, assigned_by, assigned_at, note)
-           VALUES ($1, $2, $3, NOW(), $4)
-           ON CONFLICT (phone) DO UPDATE
-              SET assigned_to = EXCLUDED.assigned_to,
-                  assigned_by = EXCLUDED.assigned_by,
-                  assigned_at = EXCLUDED.assigned_at,
-                  note = EXCLUDED.note`,
-          [ph, newOwnerId, Number(me.id), 'Auto-reassigned with lead']
-        );
-      }
-    } catch (e) { console.warn('[leads] chat reassign skipped:', e.message); }
+    // CHAT_AUTO_REASSIGN_v1 (2026-06-04) — moved to the shared
+    // _reassignChatForLead helper so api_leads_update, api_leads_bulkUpdate
+    // AND the automation engine's reassign action all flow through the
+    // same code path. The helper handles phone-variant flattening, the
+    // wa_chat_assignments upsert, and a chat-specific push notification.
+    await _reassignChatForLead({
+      lead,
+      newOwnerId: Number(patch.assigned_to),
+      actorId:    Number(me.id),
+      reason:     'manual lead reassign'
+    });
     // Direct push to the new assignee — same SMS-style banner the lead-create
     // flow uses. Fire-and-forget so we don't block the response.
     setImmediate(async () => {
@@ -1805,9 +1876,15 @@ async function api_leads_bulkUpdate(token, leadIds, patch) {
       const s = await db.findById('statuses', patch.status_id);
       await db.insert('remarks', { lead_id: id, user_id: me.id, remark: 'Status changed to ' + (s ? s.name : '') + ' (bulk)', status_id: patch.status_id });
     }
-    if (newAssignee && newAssignee !== wasAssignedTo && newAssignee !== Number(me.id)) {
-      if (!reassignedPerUser[newAssignee]) reassignedPerUser[newAssignee] = [];
-      reassignedPerUser[newAssignee].push(lead.name || ('Lead #' + id));
+    if (newAssignee && newAssignee !== wasAssignedTo) {
+      // CHAT_AUTO_REASSIGN_v1 — propagate the bulk reassign onto the
+      // WA chat thread for every selected lead, same as the single-edit
+      // path. Skipped automatically when the new owner is the actor.
+      try { await _reassignChatForLead({ lead, newOwnerId: newAssignee, actorId: Number(me.id), reason: 'bulk lead reassign' }); } catch (_) {}
+      if (newAssignee !== Number(me.id)) {
+        if (!reassignedPerUser[newAssignee]) reassignedPerUser[newAssignee] = [];
+        reassignedPerUser[newAssignee].push(lead.name || ('Lead #' + id));
+      }
     }
     count++;
   }
@@ -3011,5 +3088,6 @@ module.exports = {
   api_leads_merge,
   api_leads_activityTimeline,  /* LEAD_ACTIVITY_v1 */  /* LEAD_MERGE_v1 */
   api_leads_shareWith, api_leads_unshare, api_leads_listCoOwners, api_leads_bulkShare,  /* SHARE_LEAD_v1 */
-  _applyAutoShare
+  _applyAutoShare,
+  _reassignChatForLead   /* CHAT_AUTO_REASSIGN_v1 — used by automations._reassignLead */
 };

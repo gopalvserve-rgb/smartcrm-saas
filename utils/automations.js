@@ -668,6 +668,25 @@ async function _reassignLead(a, ctx) {
   } catch (_) {}
 
   _reassignDebounce.set(dbKey, Date.now());
+
+  // CHAT_AUTO_REASSIGN_v1 (2026-06-04) — propagate the auto-reassign onto
+  // the lead's WhatsApp chat thread so the new owner takes over the
+  // conversation, not just the lead row. Same helper used by manual
+  // single-edit and bulk-edit paths. Fire-and-forget; chat failure
+  // never blocks the automation result.
+  try {
+    const leadsMod = require('../routes/leads');
+    if (typeof leadsMod._reassignChatForLead === 'function') {
+      // Pass the lead BEFORE the update so the helper compares correctly.
+      await leadsMod._reassignChatForLead({
+        lead: { id: leadId, phone: lead.phone, whatsapp: lead.whatsapp, name: lead.name, assigned_to: lead.assigned_to },
+        newOwnerId: pickedId,
+        actorId:    null,                 // automation has no human actor
+        reason:     'automation: ' + (a.name || ('#' + a.id))
+      });
+    }
+  } catch (e) { console.warn('[automation][reassign] chat-reassign failed:', e.message); }
+
   return {
     ok: true,
     detail: 'reassigned lead ' + leadId + ' from ' +
