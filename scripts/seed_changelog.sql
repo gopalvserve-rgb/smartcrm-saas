@@ -384,3 +384,13 @@ FROM (VALUES
    '#/admin?tab=permissions', '🔁', NOW())
 ) AS v(category, title, body, link, icon, created_at)
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
+
+-- CALL_DUP_LEAD_v1 (2026-06-04) — option to add duplicate lead on repeat call
+INSERT INTO changelog (category, title, body, link, icon, created_at)
+SELECT v.category, v.title, v.body, v.link, v.icon, v.created_at
+FROM (VALUES
+  ('improve', '🔁 Auto-create a duplicate lead when a repeat caller rings',
+   'Previously, when an incoming or outgoing call came from a phone that was already in your leads table, the server linked the call to that existing lead and did NOT create a new row. Clean — but the lead doesn''t surface in the Today filter, so reps had to clear filters and search by phone to find it. New option: Settings → Auto-assign → Call → Lead conversion → "When the caller is already in CRM". Two choices: (1) "Attach call to the existing lead (default)" — current behaviour. (2) "Create a new duplicate lead row" — every repeat-caller call adds a fresh row to the leads list, marked is_duplicate=1, with a back-link to the original. The new row appears in today''s leads list with the call''s direction as the source (Inbound Call / Outbound Call) and a note "Auto-created from inbound call at 4:54 pm (duplicate of lead #4321)". The original lead is untouched. Useful for inbound-call-heavy tenants who want reps to triage every call from their own queue regardless of whether the customer has called before. Default stays "attach" — no surprise for existing tenants.',
+   '#/settings', '🔁', NOW())
+) AS v(category, title, body, link, icon, created_at)
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE changelog.title = v.title);
