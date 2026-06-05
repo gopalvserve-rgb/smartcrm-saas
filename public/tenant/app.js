@@ -41230,14 +41230,34 @@ try {
             // its logic without exposing the local function globally.
             h('div', { style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap' } },
               viewId === 'socialads'
-                ? h('button', { class: 'btn primary', onclick: () => {
-                    // Find the ⚙ Ad Accounts button rendered by VIEWS.socialads
-                    // and click it. Falls back to a friendly toast.
+                ? h('button', { class: 'btn primary social-strip-acct-btn', onclick: () => {
+                    // Find the ORIGINAL ⚙ Ad Accounts button rendered by
+                    // VIEWS.socialads and click it. Must EXCLUDE the strip's
+                    // own button (which also contains 'Ad Accounts') and any
+                    // descendant of the strip — otherwise we click ourselves
+                    // in a loop and nothing happens visibly.
                     try {
+                      const strip = view.querySelector('.social-connect-strip');
                       const btns = [...view.querySelectorAll('button')];
-                      const acct = btns.find(b => /Ad Accounts/i.test(b.textContent || ''));
+                      const acct = btns.find(b => {
+                        if (strip && strip.contains(b)) return false;
+                        const t = (b.textContent || '').trim();
+                        // Exact original button text — "⚙ Ad Accounts".
+                        return t === '⚙ Ad Accounts' || /^\s*⚙\s*Ad Accounts\s*$/i.test(t);
+                      });
                       if (acct) { acct.click(); return; }
-                      toast('Ad Accounts button not ready yet — try again in a second.', 'warn');
+                      // Fallback — wait for the view's render to finish, then retry.
+                      setTimeout(() => {
+                        const strip2 = view.querySelector('.social-connect-strip');
+                        const btns2 = [...view.querySelectorAll('button')];
+                        const acct2 = btns2.find(b => {
+                          if (strip2 && strip2.contains(b)) return false;
+                          const t = (b.textContent || '').trim();
+                          return t === '⚙ Ad Accounts' || /^\s*⚙\s*Ad Accounts\s*$/i.test(t);
+                        });
+                        if (acct2) acct2.click();
+                        else toast('Ad Accounts button not found — try hard-refresh (Ctrl+Shift+R).', 'warn');
+                      }, 400);
                     } catch (e) { toast(e.message || 'Failed to open Ad Accounts', 'err'); }
                   } }, '⚙ Manage Ad Accounts')
                 : h('button', { class: 'btn primary', onclick: () => {
