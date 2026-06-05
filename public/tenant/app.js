@@ -40885,16 +40885,20 @@ try {
           api('api_social_ads_alerts')
         ]);
 
-        // Summary cards
+        // Summary cards — SOCIAL_CONNECT_STRIP_FIX_v1: defend against
+        // empty/null fields on tenants that haven't pulled any data yet.
         summaryRow.innerHTML = '';
-        summaryRow.appendChild(kpi('Spend',       summary.current.spend,       summary.delta_pct.spend, true));
-        summaryRow.appendChild(kpi('Impressions', summary.current.impressions, summary.delta_pct.impressions));
-        summaryRow.appendChild(kpi('Clicks',      summary.current.clicks,      summary.delta_pct.clicks));
-        summaryRow.appendChild(kpi('CPC',         '₹' + summary.current.cpc.toFixed(2)));
-        summaryRow.appendChild(kpi('CTR',         summary.current.ctr.toFixed(2) + '%'));
-        summaryRow.appendChild(kpi('Leads',       summary.current.leads,       summary.delta_pct.leads));
-        summaryRow.appendChild(kpi('CPL',         '₹' + summary.current.cpl.toFixed(0)));
-        summaryRow.appendChild(kpi('Results',     summary.current.results,     summary.delta_pct.results));
+        const cur = (summary && summary.current) || {};
+        const dlt = (summary && summary.delta_pct) || {};
+        const _n = v => (v == null || isNaN(Number(v))) ? 0 : Number(v);
+        summaryRow.appendChild(kpi('Spend',       _n(cur.spend),       dlt.spend, true));
+        summaryRow.appendChild(kpi('Impressions', _n(cur.impressions), dlt.impressions));
+        summaryRow.appendChild(kpi('Clicks',      _n(cur.clicks),      dlt.clicks));
+        summaryRow.appendChild(kpi('CPC',         '₹' + _n(cur.cpc).toFixed(2)));
+        summaryRow.appendChild(kpi('CTR',         _n(cur.ctr).toFixed(2) + '%'));
+        summaryRow.appendChild(kpi('Leads',       _n(cur.leads),       dlt.leads));
+        summaryRow.appendChild(kpi('CPL',         '₹' + _n(cur.cpl).toFixed(0)));
+        summaryRow.appendChild(kpi('Results',     _n(cur.results),     dlt.results));
 
         // Alerts
         if (!alerts.length) {
@@ -41187,48 +41191,77 @@ try {
     const original = VIEWS[viewId];
     if (typeof original !== 'function') return;
     VIEWS[viewId] = async function patched(view) {
-      const r = await original.apply(this, arguments);
-      // ALWAYS inject a Connect / Manage strip at the top of every Social
-      // view, regardless of whether any pages are connected. Previously this
-      // was conditional on api_social_pages_list returning empty — admins
-      // who already had pages saw only a tiny 'Manage' link and missed it.
+      // SOCIAL_CONNECT_STRIP_FIX_v1 — inject the Connect strip FIRST,
+      // BEFORE running the original render. The original render can throw
+      // when the underlying data is empty (e.g. ad reports on a tenant
+      // with zero pulled rows), and a throw used to abort the strip
+      // injection — leaving the user with no way to Connect Facebook.
+      function _injectStrip() {
+        try {
+          if (view.querySelector('.social-connect-strip')) return;
+          const strip = h('div', {
+            class: 'social-connect-strip',
+            style: {
+              background: 'linear-gradient(135deg,#fef3c7,#fff7ed)',
+              border: '1px solid #fcd34d',
+              padding: '.7rem 1rem',
+              borderRadius: '8px',
+              marginBottom: '.8rem',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '.6rem',
+              flexWrap: 'wrap'
+            }
+          },
+            h('div', {},
+              h('strong', { style: { color: '#92400e' } }, '🔗 Facebook & Instagram for Social Hub'),
+              h('div', { class: 'muted', style: { fontSize: '.9em', marginTop: '.2rem' } },
+                'Separate from your Lead Sync setup. Click Connect to grant Messenger / IG DM / posts / comments / ads_read on the pages you choose.')
+            ),
+            h('div', { style: { display: 'flex', gap: '.4rem' } },
+              h('button', { class: 'btn primary', onclick: () => {
+                try { if (typeof openSocialConnectModal === 'function') openSocialConnectModal();
+                      else if (window.openSocialConnectModal) window.openSocialConnectModal(); }
+                catch (e) { toast(e.message || 'Connect modal failed', 'err'); }
+              } }, '🔗 Connect / Manage'),
+              h('button', { class: 'btn ghost', onclick: async () => {
+                try {
+                  const pages = await api('api_social_pages_list');
+                  if (!pages.length) toast('No pages connected yet. Click Connect to start.', 'warn');
+                  else toast(pages.length + ' page(s) connected · ' + pages.filter(p => p.instagram_business_id).length + ' IG');
+                } catch (e) { toast(e.message, 'err'); }
+              } }, '👁 Status')
+            )
+          );
+          const pageEl = view.querySelector('.page');
+          if (pageEl) pageEl.insertBefore(strip, pageEl.firstChild);
+          else view.insertBefore(strip, view.firstChild);
+        } catch (_) {}
+      }
+      // Inject immediately so the Connect button is visible even if
+      // the underlying view throws.
+      _injectStrip();
+      let r;
       try {
-        if (view.querySelector('.social-connect-strip')) return r;
-        const strip = h('div', {
-          class: 'social-connect-strip',
-          style: {
-            background: 'linear-gradient(135deg,#fef3c7,#fff7ed)',
-            border: '1px solid #fcd34d',
-            padding: '.7rem 1rem',
-            borderRadius: '8px',
-            marginBottom: '.8rem',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: '.6rem',
-            flexWrap: 'wrap'
-          }
-        },
-          h('div', {},
-            h('strong', { style: { color: '#92400e' } }, '🔗 Facebook & Instagram for Social Hub'),
-            h('div', { class: 'muted', style: { fontSize: '.9em', marginTop: '.2rem' } },
-              'Separate from your Lead Sync setup. Click Connect to grant Messenger / IG DM / posts / comments / ads_read on the pages you choose.')
-          ),
-          h('div', { style: { display: 'flex', gap: '.4rem' } },
-            h('button', { class: 'btn primary', onclick: () => openSocialConnectModal() }, '🔗 Connect / Manage'),
-            h('button', { class: 'btn ghost', onclick: async () => {
-              try {
-                const pages = await api('api_social_pages_list');
-                if (!pages.length) toast('No pages connected yet. Click Connect to start.', 'warn');
-                else toast(pages.length + ' page(s) connected · ' + pages.filter(p => p.instagram_business_id).length + ' IG');
-              } catch (e) { toast(e.message, 'err'); }
-            } }, '👁 Status')
-          )
-        );
-        const pageEl = view.querySelector('.page');
-        if (pageEl) pageEl.insertBefore(strip, pageEl.firstChild);
-        else view.insertBefore(strip, view.firstChild);
-      } catch (_) {}
+        r = await original.apply(this, arguments);
+      } catch (err) {
+        // Render failed — keep the strip + show a friendly empty-state
+        // so the user can still connect Facebook.
+        try {
+          const errBox = h('div', { class: 'error-box', style: { margin: '.8rem 0' } },
+            h('div', {}, '⚠ This page hit an error while loading: ' + (err && err.message || 'unknown')),
+            h('div', { class: 'muted', style: { fontSize: '.85em', marginTop: '.3rem' } },
+              'If you haven\'t connected Facebook yet, click Connect / Manage above. Once pages are connected and data is pulled, this view will populate.')
+          );
+          const pageEl = view.querySelector('.page') || view;
+          pageEl.appendChild(errBox);
+        } catch (_) {}
+        return null;
+      }
+      // Re-inject in case the original render replaced view.innerHTML
+      // and wiped out the strip.
+      _injectStrip();
       return r;
     };
   });
