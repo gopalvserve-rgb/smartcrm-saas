@@ -59,6 +59,8 @@ const CONFIG_KEYS = [
   // BRAND_SIDEBAR = sidebar background. BRAND_TEXT = top/headings text.
   'BRAND_PRIMARY_COLOR', 'BRAND_ACCENT_COLOR', 'BRAND_SIDEBAR_COLOR',
   'BRAND_TEXT_COLOR', 'THEME_MODE',
+  /* GLASS_THEME_v1 — opt-in Premium Glass skin + palette (cream default) */
+  'THEME_SKIN', 'THEME_PALETTE',
   // CRM Copilot — per-user/day question quota (default 50).
   'COPILOT_DAILY_LIMIT_PER_USER',
   // Demo tenant flags — set by the showcase seeder. The SPA reads these

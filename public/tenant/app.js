@@ -1052,6 +1052,17 @@ function applyTenantTheme(cfg) {
     // Theme mode: 'light' | 'dark' | 'auto'.
     const mode = String(cfg.THEME_MODE || 'auto').toLowerCase();
     document.documentElement.setAttribute('data-theme', ['light','dark','auto'].includes(mode) ? mode : 'auto');
+    // GLASS_THEME_v1 — opt-in premium skin. Classic is default.
+    const skin = String(cfg.THEME_SKIN || 'classic').toLowerCase();
+    if (skin === 'glass') {
+      document.documentElement.setAttribute('data-skin', 'glass');
+      const pal = String(cfg.THEME_PALETTE || 'cream').toLowerCase();
+      const VALID_PAL = ['cream','rose','lavender','mint','ocean','peach','sunset','berry','slate'];
+      document.documentElement.setAttribute('data-pal', VALID_PAL.includes(pal) ? pal : 'cream');
+    } else {
+      document.documentElement.removeAttribute('data-skin');
+      document.documentElement.removeAttribute('data-pal');
+    }
   } catch (_) {}
 }
 
@@ -23513,6 +23524,39 @@ async function adminCompany() {
   themeCard.appendChild(row('Heading text', textCol, '#0f172a default'));
   themeCard.appendChild(row('Theme mode', modeSel, 'Auto follows the OS\'s light/dark preference.'));
 
+  // GLASS_THEME_v1 — opt-in Premium Glass skin selector + palette swatches.
+  // Classic remains the default; Glass repaints the whole CRM with a frosted
+  // creamy look and 9 palette options (cream / rose / lavender / mint / ocean /
+  // peach / sunset / berry / slate).
+  const skinSel = h('select', { style: { padding: '.4rem .6rem' } },
+    h('option', { value: 'classic', selected: (cfg.THEME_SKIN || 'classic') === 'classic' ? 'selected' : null }, 'Classic (default)'),
+    h('option', { value: 'glass',   selected: cfg.THEME_SKIN === 'glass' ? 'selected' : null }, '✨ Premium Glass')
+  );
+  themeCard.appendChild(row('Skin', skinSel, 'Premium Glass uses frosted cards + 9 colour palettes.'));
+
+  const _PALS = ['cream','rose','lavender','mint','ocean','peach','sunset','berry','slate'];
+  let _activePal = _PALS.includes(String(cfg.THEME_PALETTE || '').toLowerCase()) ? String(cfg.THEME_PALETTE).toLowerCase() : 'cream';
+  const palWrap = h('div', { class: 'glass-swatches' },
+    ..._PALS.map(p => h('i', { 'data-pal': p, title: p[0].toUpperCase() + p.slice(1), class: (p === _activePal ? 'on' : '') }))
+  );
+  function _refreshPalActive() {
+    Array.from(palWrap.children).forEach(el => el.classList.toggle('on', el.getAttribute('data-pal') === _activePal));
+  }
+  palWrap.addEventListener('click', (ev) => {
+    const i = ev.target.closest('i[data-pal]');
+    if (!i) return;
+    _activePal = i.getAttribute('data-pal');
+    _refreshPalActive();
+    preview();
+  });
+  const palRow = row('Glass palette', palWrap, 'Click a swatch to preview. Saved when you press Save theme.');
+  themeCard.appendChild(palRow);
+  function _syncPalRowVisibility() {
+    palRow.style.display = (skinSel.value === 'glass') ? '' : 'none';
+  }
+  _syncPalRowVisibility();
+  skinSel.addEventListener('change', () => { _syncPalRowVisibility(); preview(); });
+
   // Live preview as user picks colours
   function preview() {
     applyTenantTheme({
@@ -23520,7 +23564,9 @@ async function adminCompany() {
       BRAND_ACCENT_COLOR:  accent.value,
       BRAND_SIDEBAR_COLOR: sidebar.value,
       BRAND_TEXT_COLOR:    textCol.value,
-      THEME_MODE:          modeSel.value
+      THEME_MODE:          modeSel.value,
+      THEME_SKIN:          skinSel.value,
+      THEME_PALETTE:       _activePal
     });
   }
   [primary, accent, sidebar, textCol, modeSel].forEach(el => el.addEventListener('input', preview));
@@ -23531,7 +23577,10 @@ async function adminCompany() {
         const patch = {
           BRAND_PRIMARY_COLOR: primary.value, BRAND_ACCENT_COLOR: accent.value,
           BRAND_SIDEBAR_COLOR: sidebar.value, BRAND_TEXT_COLOR: textCol.value,
-          THEME_MODE: modeSel.value
+          THEME_MODE: modeSel.value,
+          /* GLASS_THEME_v1 */
+          THEME_SKIN: skinSel.value,
+          THEME_PALETTE: _activePal
         };
         await api('api_admin_setConfig', patch);
         // Mirror into the in-memory cache so subsequent renders see the new
