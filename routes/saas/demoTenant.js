@@ -1345,8 +1345,8 @@ async function _seedEducationDemoData(pool, adminUserId, slugOverride) {
       if (paidAmt > 0) {
         await pool.query(
           `INSERT INTO edu_payments (installment_id, enrollment_id, amount, mode, receipt_no, recorded_by)
-           VALUES ($1, $2, $3, 'upi', 'DEMO-TXN-' || $1, $4)`,
-          [iR.rows[0].id, enrollmentId, paidAmt, adminUserId]
+           VALUES ($1, $2, $3, 'upi', $4, $5)`,
+          [iR.rows[0].id, enrollmentId, paidAmt, 'DEMO-TXN-' + iR.rows[0].id, adminUserId]
         );
         payments++;
       }
@@ -1470,8 +1470,8 @@ async function _seedRealEstateDemoData(pool, adminUserId, slugOverride) {
       if (shouldPay) {
         await pool.query(
           `INSERT INTO re_payments (demand_id, booking_id, amount, method, reference, received_by)
-           VALUES ($1, $2, $3, 'bank', 'NEFT-DEMO-' || $1, $4)`,
-          [dR.rows[0].id, bookingId, amt, adminUserId]
+           VALUES ($1, $2, $3, 'bank', $4, $5)`,
+          [dR.rows[0].id, bookingId, amt, 'NEFT-DEMO-' + dR.rows[0].id, adminUserId]
         );
         demandPayments++;
       }
