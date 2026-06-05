@@ -2202,6 +2202,13 @@ async function api_leads_duplicateAndReassign(token, leadId, newAssigneeId) {
     // qualified, qualified_at, qualified_by, last_status_change_at-from-
     // original. Fresh lead, fresh data.
   });
+  // OUTBOUND_WH_FIRE_v1 — fire conditional outbound webhooks (FB/WA/IVR/form/rec/reassign).
+  try {
+    const __obwh_mod = require('./outboundWebhook');
+    if (__obwh_mod && __obwh_mod.fireOutboundWebhooks) {
+      __obwh_mod.fireOutboundWebhooks({ id: newId }).catch(e => console.error('[outboundWebhook] fire failed:', e.message));
+    }
+  } catch (_) {}
           try { await _applyAutoShare(newId, Object.assign({ id: newId, source: payload.source || row.source }, row), me && me.id); } catch (_) {}
 
   // Per product owner: the manual "Duplicate & reassign" flow must leave

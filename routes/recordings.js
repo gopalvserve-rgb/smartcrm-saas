@@ -371,6 +371,13 @@ async function _processCallEventAsync(me, p, phoneClean, directionInitial, callE
           is_duplicate: _dupOfExisting ? 1 : 0,
           duplicate_of: _dupOfExisting || ''
         });
+        // OUTBOUND_WH_FIRE_v1 — fire conditional outbound webhooks (FB/WA/IVR/form/rec/reassign).
+        try {
+          const __obwh_mod = require('./outboundWebhook');
+          if (__obwh_mod && __obwh_mod.fireOutboundWebhooks) {
+            __obwh_mod.fireOutboundWebhooks({ id: newLeadId }).catch(e => console.error('[outboundWebhook] fire failed:', e.message));
+          }
+        } catch (_) {}
         try {
           await db.insert('remarks', {
             lead_id: newLeadId, user_id: me.id,
@@ -503,6 +510,13 @@ async function api_call_events_convertToLeads(token, callEventIds) {
         updated_at:  db.nowIso(),
         last_status_change_at: db.nowIso()
       });
+      // OUTBOUND_WH_FIRE_v1 — fire conditional outbound webhooks (FB/WA/IVR/form/rec/reassign).
+      try {
+        const __obwh_mod = require('./outboundWebhook');
+        if (__obwh_mod && __obwh_mod.fireOutboundWebhooks) {
+          __obwh_mod.fireOutboundWebhooks({ id: newLeadId }).catch(e => console.error('[outboundWebhook] fire failed:', e.message));
+        }
+      } catch (_) {}
       try {
         await db.insert('remarks', {
           lead_id: newLeadId, user_id: me.id,
@@ -932,6 +946,13 @@ async function api_call_handleEnded(token, payload) {
         updated_at:  db.nowIso(),
         last_status_change_at: db.nowIso()
       });
+      // OUTBOUND_WH_FIRE_v1 — fire conditional outbound webhooks (FB/WA/IVR/form/rec/reassign).
+      try {
+        const __obwh_mod = require('./outboundWebhook');
+        if (__obwh_mod && __obwh_mod.fireOutboundWebhooks) {
+          __obwh_mod.fireOutboundWebhooks({ id: createdLeadId }).catch(e => console.error('[outboundWebhook] fire failed:', e.message));
+        }
+      } catch (_) {}
       const icon = isInbound ? '📞' : '📲';
       await db.insert('remarks', {
         lead_id: createdLeadId, user_id: me.id,

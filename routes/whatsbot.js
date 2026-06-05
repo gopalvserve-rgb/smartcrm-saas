@@ -2061,6 +2061,13 @@ async function api_wb_campaigns_create(token, payload) {
             created_at: db.nowIso(),
             updated_at: db.nowIso()
           });
+          // OUTBOUND_WH_FIRE_v1 — fire conditional outbound webhooks (FB/WA/IVR/form/rec/reassign).
+          try {
+            const __obwh_mod = require('./outboundWebhook');
+            if (__obwh_mod && __obwh_mod.fireOutboundWebhooks) {
+              __obwh_mod.fireOutboundWebhooks({ id: newId }).catch(e => console.error('[outboundWebhook] fire failed:', e.message));
+            }
+          } catch (_) {}
           lead = { id: newId, name: row.name || phone, phone, source: 'WA Campaign Upload' };
           phoneToLead.set(phone, lead);
         } catch (e) { continue; }
@@ -2894,6 +2901,13 @@ async function _handleInbound(m, value) {
         assigned_to: chatOwnerForLead || perPhoneOwner || cfg.defaultUser || null, // WA_LEAD_CHATOWNER_v1: existing chat owner wins
         created_at: db.nowIso(), updated_at: db.nowIso()
       });
+      // OUTBOUND_WH_FIRE_v1 — fire conditional outbound webhooks (FB/WA/IVR/form/rec/reassign).
+      try {
+        const __obwh_mod = require('./outboundWebhook');
+        if (__obwh_mod && __obwh_mod.fireOutboundWebhooks) {
+          __obwh_mod.fireOutboundWebhooks({ id: newId }).catch(e => console.error('[outboundWebhook] fire failed:', e.message));
+        }
+      } catch (_) {}
       leadId = newId;
       try { require('./tat').logAction(newId, 'created', null, { source: 'whatsapp_inbound' }); } catch (_) {}
       }  // /WA_PERNUMBER_AUTOLEAD_v1 effective-gate
@@ -3437,6 +3451,13 @@ async function api_wb_thread_convertToLead(token, payload) {
   if (notes) insertPayload.notes = notes;
 
   const newId = await db.insert('leads', insertPayload);
+  // OUTBOUND_WH_FIRE_v1 — fire conditional outbound webhooks (FB/WA/IVR/form/rec/reassign).
+  try {
+    const __obwh_mod = require('./outboundWebhook');
+    if (__obwh_mod && __obwh_mod.fireOutboundWebhooks) {
+      __obwh_mod.fireOutboundWebhooks({ id: newId, insertPayload }).catch(e => console.error('[outboundWebhook] fire failed:', e.message));
+    }
+  } catch (_) {}
 
   // TAT log so the activity tracker sees this lead being born.
   try { require('./tat').logAction(newId, 'created', null, { source: 'whatsapp_manual_convert' }); } catch (_) {}
