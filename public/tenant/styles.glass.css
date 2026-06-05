@@ -686,3 +686,126 @@ html[data-skin="glass"] .member.online .av::before {
   border: 2px solid #1fae72;
 }
 /* end GLASS_THEME_v1.2 */
+
+/* ============================================================
+   GLASS_THEME_v1.3 — preserve colored pills + bigger KPI numbers
+   Bug from v1.0-v1.2: .tag / .badge / .chip got overridden with a
+   gray glass background, blanking out status colors set inline.
+   ============================================================ */
+
+/* Reset the v1 .tag / .badge / .chip override — only style tags
+   that DON'T carry an inline background (i.e. truly generic). */
+html[data-skin="glass"] .tag,
+html[data-skin="glass"] .badge,
+html[data-skin="glass"] .chip {
+  background: transparent;
+  border: 0;
+  padding: inherit;
+  border-radius: inherit;
+  font-weight: inherit;
+}
+html[data-skin="glass"] .tag:not([style*="background"]):not([style*="bg"]),
+html[data-skin="glass"] .chip:not([style*="background"]):not([style*="bg"]),
+html[data-skin="glass"] .badge:not([style*="background"]):not([style*="bg"]) {
+  background: rgba(0,0,0,.045);
+  border: 1px solid var(--g-line);
+  color: var(--g-ink);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-weight: 700;
+}
+
+/* Status pill — preserve --status-color background; only soften shape */
+html[data-skin="glass"] .status-pill {
+  border: 1px solid rgba(255,255,255,.45) !important;
+  box-shadow: 0 4px 10px rgba(0,0,0,.12);
+  border-radius: 999px !important;
+  /* background NOT overridden — keeps var(--status-color) intact */
+}
+
+/* Remove the v1 [class*="status-"] catch-all — it was too broad
+   and applied a white border to every status-* element. We only want
+   it on the explicit .status-pill (already targeted above). */
+html[data-skin="glass"] [class*="status-"]:not(.status-pill):not(.status-chip) {
+  border: revert;
+  box-shadow: revert;
+  border-radius: revert;
+}
+
+/* Status chip variant (e.g. WhatsApp connection states CONNECTED,
+   APPROVED, GREEN, UNKNOWN) — keep their colored backgrounds. */
+html[data-skin="glass"] .status-chip,
+html[data-skin="glass"] .status-chip[style] {
+  border-radius: 999px;
+  box-shadow: 0 3px 8px rgba(0,0,0,.1);
+  /* preserve inline bg colors */
+}
+
+/* ===== Generic Report KPI cards — bigger Sora numbers =====
+   Many report pages use `.card` for KPI tiles with an inline-styled
+   big number child (Activity Report Total/Today/Week/Month, WhatsApp
+   Report Inbound/Outbound/Delivered/etc.). Target the second-level
+   font-size-styled child to upscale the number. */
+html[data-skin="glass"] .card > div[style*="font-size"][style*="font-weight"] {
+  font-family: 'Sora', sans-serif !important;
+  font-size: 2.4rem !important;
+  font-weight: 800 !important;
+  letter-spacing: -1px !important;
+  line-height: 1.05 !important;
+  margin-top: .3rem !important;
+}
+@media (max-width: 600px) {
+  html[data-skin="glass"] .card > div[style*="font-size"][style*="font-weight"] {
+    font-size: 1.9rem !important;
+  }
+}
+
+/* WhatsApp Report KPI strip — Inbound 86 / Outbound 88 / etc.
+   These are small inline-styled cards. Force minimum padding + Sora. */
+html[data-skin="glass"] .card .stat-num,
+html[data-skin="glass"] .card .kpi-num,
+html[data-skin="glass"] .card .wa-stat-num,
+html[data-skin="glass"] .card > strong,
+html[data-skin="glass"] .card > b {
+  font-family: 'Sora', sans-serif !important;
+  font-weight: 800 !important;
+  font-size: 1.7rem !important;
+  line-height: 1.1;
+}
+
+/* Day-wise heatmap cells (Activity Report) — keep their green intensity */
+html[data-skin="glass"] .heatmap-cell,
+html[data-skin="glass"] [class*="heat-"] {
+  /* don't override colors */
+  border-radius: 6px;
+}
+
+/* "OVERDUE 54" big-tile (Dashboard small overdue widget) — keep purple */
+html[data-skin="glass"] .alert-tile,
+html[data-skin="glass"] .overdue-tile { color: #fff !important; }
+
+/* Top-bar count badges (chat 99+, notif 30072) — keep red/dark backgrounds */
+html[data-skin="glass"] .topbar .badge[style*="background"],
+html[data-skin="glass"] header .badge[style*="background"] {
+  color: #fff !important;
+}
+
+/* WhatsApp Connect page table status pills (GREEN/CONNECTED/APPROVED) —
+   these use .tag with inline backgrounds. Now preserved by the
+   :not([style*="background"]) selector above, plus add a subtle border. */
+html[data-skin="glass"] table .tag[style*="background"],
+html[data-skin="glass"] td .tag[style*="background"] {
+  border: 1px solid rgba(255,255,255,.45) !important;
+  box-shadow: 0 3px 8px rgba(0,0,0,.12);
+  border-radius: 999px;
+  padding: 3px 11px;
+  font-weight: 700;
+  font-size: .72rem;
+}
+
+/* "Register" / "Use this" action pills — keep their styled bg */
+html[data-skin="glass"] td .btn[style*="background"],
+html[data-skin="glass"] td .btn.primary {
+  border-radius: 10px;
+}
+/* end GLASS_THEME_v1.3 */
