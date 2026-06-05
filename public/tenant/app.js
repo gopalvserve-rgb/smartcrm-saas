@@ -19206,9 +19206,9 @@ async function openWaDrill(opts) {
   if (!payload.campaign_id && campaignFromUi) payload.campaign_id = campaignFromUi;
 
   const body = h('div', { style: { padding: '.6rem', maxHeight: '60vh', overflow: 'auto' } }, h('div', { class: 'muted' }, 'Loading…'));
-  const modal = h('div', { class: 'modal-overlay', onclick: (e) => { if (e.target === modal) modal.remove(); } },
-    h('div', { class: 'modal-content', style: { width: 'min(720px, 92vw)' } },
-      h('div', { class: 'modal-header' }, h('h3', {}, '🔍 ' + (opts.label || 'Drill-down')), h('button', { class: 'btn ghost', onclick: () => modal.remove() }, '✕')),
+  const modal = h('div', { class: 'modal-backdrop', onclick: (e) => { if (e.target === modal) modal.remove(); } },
+    h('div', { class: 'modal modal-lg' },
+      h('div', { class: 'modal-head' }, h('h3', {}, '🔍 ' + (opts.label || 'Drill-down')), h('button', { class: 'btn icon', onclick: () => modal.remove() }, '✕')),
       body
     )
   );
