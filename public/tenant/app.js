@@ -19114,10 +19114,25 @@ VIEWS.whatsappreport = async (view) => {
   view.appendChild(filterBar);
   setTimeout(() => { try { window._attachDatePresets && window._attachDatePresets(wFrom, wTo, { key: 'whatsappreport', apply: () => { try { loadWaReport(); } catch (_) {} } }); } catch (_) {} }, 0);
 
+  // WA_REPORT_CAMPAIGN_v1 — campaign filter chip
+  const campSel = h('select', { id: 'wa-rep-camp', multiple: false, style: { padding: '.4rem', minWidth: '200px' } },
+    h('option', { value: '' }, 'All campaigns'));
+  try {
+    const camps = await api('api_wb_campaigns_simpleList');
+    (camps || []).forEach(c => campSel.appendChild(h('option', { value: c.id }, c.name)));
+  } catch (_) {}
+  filterBar.insertBefore(h('span', {}, 'Campaign'), filterBar.lastChild);
+  filterBar.insertBefore(campSel, filterBar.lastChild);
+
   view.appendChild(h('div', { id: 'wa-rep-kpi', class: 'cards', style: { marginBottom: '1rem' } }));
   view.appendChild(h('div', { class: 'chart-grid' },
     h('div', { class: 'card' }, h('h3', {}, 'Delivery breakdown'), h('div', { class: 'chart-wrap' }, h('canvas', { id: 'wa-chart-status' }))),
     h('div', { class: 'card card-wide' }, h('h3', {}, 'Daily volume'), h('div', { class: 'chart-wrap', style: { height: '220px' } }, h('canvas', { id: 'wa-chart-daily' })))
+  ));
+  // WA_REPORT_CAMPAIGN_v1 — By Campaign card
+  view.appendChild(h('div', { class: 'card', style: { marginTop: '1rem' } },
+    h('h3', {}, '🎯 By campaign'),
+    h('div', { id: 'wa-rep-by-campaign' })
   ));
   view.appendChild(h('div', { class: 'card', style: { marginTop: '1rem' } },
     h('h3', {}, '👥 By user'),
@@ -19127,16 +19142,59 @@ VIEWS.whatsappreport = async (view) => {
     h('h3', {}, '📮 By template'),
     h('div', { id: 'wa-rep-by-template' })
   ));
+  // WA_REPORT_BUTTON_CLICK_v1 — Button Clicks card
+  view.appendChild(h('div', { class: 'card', style: { marginTop: '1rem' } },
+    h('h3', {}, '👆 Template button clicks'),
+    h('div', { id: 'wa-rep-clicks' })
+  ));
 
   await loadWaReport();
 };
 
+// WA_REPORT_DRILL_v1 — open a modal with the leads behind any cell.
+async function openWaDrill(opts) {
+  const from = (document.getElementById('wa-rep-from') || {}).value || undefined;
+  const to   = (document.getElementById('wa-rep-to')   || {}).value || undefined;
+  const campSel = document.getElementById('wa-rep-camp');
+  const campaignFromUi = campSel && campSel.value ? Number(campSel.value) : undefined;
+  const payload = Object.assign({ from, to }, opts || {});
+  if (!payload.campaign_id && campaignFromUi) payload.campaign_id = campaignFromUi;
+
+  const body = h('div', { style: { padding: '.6rem', maxHeight: '60vh', overflow: 'auto' } }, h('div', { class: 'muted' }, 'Loading…'));
+  const modal = h('div', { class: 'modal-overlay', onclick: (e) => { if (e.target === modal) modal.remove(); } },
+    h('div', { class: 'modal-content', style: { width: 'min(720px, 92vw)' } },
+      h('div', { class: 'modal-header' }, h('h3', {}, '🔍 ' + (opts.label || 'Drill-down')), h('button', { class: 'btn ghost', onclick: () => modal.remove() }, '✕')),
+      body
+    )
+  );
+  document.body.appendChild(modal);
+
+  let rows = [];
+  try { rows = await api('api_reports_whatsapp_drill', payload); } catch (e) { body.innerHTML = '<div class="error-box">' + esc(e.message) + '</div>'; return; }
+  if (!rows.length) { body.innerHTML = '<div class="muted">No matching leads in this date range.</div>'; return; }
+  const tbl = h('table', { class: 'data-table' },
+    h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Phone'), h('th', {}, 'Detail'), h('th', {}, 'When'))),
+    h('tbody', {}, ...rows.map(r => h('tr', { style: { cursor: r.lead_id ? 'pointer' : 'default' },
+      onclick: () => { if (r.lead_id) { modal.remove(); location.hash = '#/chat?leadId=' + r.lead_id; } } },
+      h('td', {}, r.name || '(unknown)'),
+      h('td', {}, r.phone || ''),
+      h('td', {}, r.detail || ''),
+      h('td', {}, r.at ? new Date(r.at).toLocaleString() : '')
+    )))
+  );
+  body.innerHTML = '';
+  body.appendChild(h('div', { class: 'muted', style: { marginBottom: '.4rem', fontSize: '.85rem' } }, 'Click a row → open this lead\'s WhatsApp chat.'));
+  body.appendChild(tbl);
+}
+
 async function loadWaReport() {
   const from = (document.getElementById('wa-rep-from') || {}).value || undefined;
   const to   = (document.getElementById('wa-rep-to')   || {}).value || undefined;
+  const campSel = document.getElementById('wa-rep-camp');
+  const campaign_ids = campSel && campSel.value ? [Number(campSel.value)] : undefined;
   let res;
   try {
-    res = await api('api_reports_whatsapp', { from, to });
+    res = await api('api_reports_whatsapp', { from, to, campaign_ids });
   } catch (e) {
     document.getElementById('wa-rep-kpi').innerHTML = '<div class="error-box">' + esc(e.message || String(e)) + '</div>';
     return;
@@ -19151,11 +19209,20 @@ async function loadWaReport() {
       h('div', { class: 'kpi-value', style: color ? { color } : null }, String(value == null ? '—' : value))
     );
   }
-  kpiEl.appendChild(tile('📥',  'Inbound',  k.inbound, '#0ea5e9'));
-  kpiEl.appendChild(tile('📤', 'Outbound', k.outbound, '#6366f1'));
-  kpiEl.appendChild(tile('✔️', 'Delivered', k.delivered, '#16a34a'));
-  kpiEl.appendChild(tile('👁', 'Read', k.read, '#3b82f6'));
-  kpiEl.appendChild(tile('⚠️', 'Failed', k.failed, '#dc2626'));
+  function dt(emoji, label, value, color, kind) {
+    const el = tile(emoji, label, value, color);
+    if (kind) {
+      el.style.cursor = 'pointer';
+      el.title = 'Click to see leads';
+      el.addEventListener('click', () => openWaDrill({ kind, label }));
+    }
+    return el;
+  }
+  kpiEl.appendChild(dt('📥',  'Inbound',  k.inbound, '#0ea5e9', 'inbound'));
+  kpiEl.appendChild(dt('📤', 'Outbound', k.outbound, '#6366f1', 'outbound'));
+  kpiEl.appendChild(dt('✔️', 'Delivered', k.delivered, '#16a34a', 'delivered'));
+  kpiEl.appendChild(dt('👁', 'Read', k.read, '#3b82f6', 'read'));
+  kpiEl.appendChild(dt('⚠️', 'Failed', k.failed, '#dc2626', 'failed'));
   kpiEl.appendChild(tile('👥', 'Contacts',  k.unique_contacts, '#0f172a'));
   const deliveredPct = k.outbound ? Math.round((k.delivered / k.outbound) * 100) : 0;
   const readPct      = k.outbound ? Math.round((k.read      / k.outbound) * 100) : 0;
@@ -19255,6 +19322,76 @@ async function loadWaReport() {
       }))
     );
     byTplEl.appendChild(tbl);
+  }
+
+  // WA_REPORT_CAMPAIGN_v1 — render by-campaign
+  const byCampEl = document.getElementById('wa-rep-by-campaign');
+  if (byCampEl) {
+    byCampEl.innerHTML = '';
+    const cRows = res.by_campaign || [];
+    if (!cRows.length) {
+      byCampEl.appendChild(h('div', { class: 'muted', style: { padding: '.5rem' } }, 'No campaign-tagged messages in this date range. Send a WhatsApp Campaign to populate this.'));
+    } else {
+      const tbl = h('table', { class: 'data-table' },
+        h('thead', {}, h('tr', {},
+          h('th', {}, 'Campaign'),
+          h('th', {}, 'Template'),
+          h('th', {}, 'Sent'),
+          h('th', {}, 'Delivered'),
+          h('th', {}, 'Read'),
+          h('th', {}, 'Failed'),
+          h('th', {}, 'Clicked')
+        )),
+        h('tbody', {}, ...cRows.map(r => {
+          function clickCell(n, kind) {
+            return h('td', { style: { cursor: 'pointer', textDecoration: 'underline dotted', color: '#4f46e5' },
+              onclick: () => openWaDrill({ kind, campaign_id: r.campaign_id, label: r.campaign_name + ' — ' + kind }) }, String(n || 0));
+          }
+          return h('tr', {},
+            h('td', { style: { fontWeight: 600 } }, r.campaign_name),
+            h('td', {}, r.template),
+            clickCell(r.sent_total, 'outbound'),
+            clickCell(r.delivered, 'delivered'),
+            clickCell(r.read, 'read'),
+            clickCell(r.failed, 'failed'),
+            clickCell(r.clicked, 'clicked')
+          );
+        }))
+      );
+      byCampEl.appendChild(tbl);
+    }
+  }
+
+  // WA_REPORT_BUTTON_CLICK_v1 — render button clicks card
+  const clicksEl = document.getElementById('wa-rep-clicks');
+  if (clicksEl) {
+    clicksEl.innerHTML = '<div class="muted">Loading…</div>';
+    try {
+      const clickRows = await api('api_reports_whatsapp_buttonClicks', { from, to, campaign_id: campaign_ids && campaign_ids[0] });
+      clicksEl.innerHTML = '';
+      if (!clickRows || !clickRows.length) {
+        clicksEl.appendChild(h('div', { class: 'muted', style: { padding: '.5rem' } }, 'No button clicks in this date range. (Requires templates with Quick Reply or URL buttons.)'));
+      } else {
+        const tbl = h('table', { class: 'data-table' },
+          h('thead', {}, h('tr', {},
+            h('th', {}, 'Campaign'),
+            h('th', {}, 'Template'),
+            h('th', {}, 'Button'),
+            h('th', {}, 'Clicks'),
+            h('th', {}, 'Unique clickers')
+          )),
+          h('tbody', {}, ...clickRows.map(r => h('tr', {},
+            h('td', {}, r.campaign_name),
+            h('td', {}, r.template_name),
+            h('td', {}, r.button),
+            h('td', { style: { cursor: 'pointer', textDecoration: 'underline dotted', color: '#4f46e5' },
+              onclick: () => openWaDrill({ kind: 'clicked', campaign_id: r.campaign_id, button: r.button, label: 'Clicked: ' + r.button }) }, String(r.clicks)),
+            h('td', {}, String(r.unique_clickers))
+          )))
+        );
+        clicksEl.appendChild(tbl);
+      }
+    } catch (e) { clicksEl.innerHTML = '<div class="error-box">' + esc(e.message) + '</div>'; }
   }
 }
 

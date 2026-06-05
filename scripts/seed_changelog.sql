@@ -1,8 +1,8 @@
 INSERT INTO control.changelog (title, body, kind, ship_date, is_published)
 VALUES (
-  'SALES_REASSIGN_USERLIST_v1',
-  'Sales users with the Reassign-own-leads permission now actually see other users in the Lead "Assigned To" dropdown. Previously the dropdown only listed the sales user themselves (hierarchy-scoped) so there was nobody to reassign to. The write-side guard still ensures Sales can only reassign leads they currently own.',
-  'fix',
+  'WA Report v2 — campaigns, button clicks, drill-down',
+  'WhatsApp Report upgraded: 1) Campaign filter chip + new "By campaign" card with per-campaign sent/delivered/read/failed/clicked. 2) "Template button clicks" card — see who clicked each Quick Reply / URL button, per campaign. 3) Every numeric cell (KPI tiles, By Campaign rows, Button Click counts) is now clickable — opens a list of the underlying leads. Click a row in that list → opens that lead''s WhatsApp chat. Campaigns are now stamped on every outbound WA message so attribution survives reporting.',
+  'feature',
   CURRENT_DATE,
   1
 )

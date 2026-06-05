@@ -1964,6 +1964,9 @@ async function api_reports_whatsapp(token, filters) {
   const args = [];
   if (from) { args.push(from); where += ` AND DATE(created_at AT TIME ZONE '${tz}') >= $${args.length}`; }
   if (to)   { args.push(to);   where += ` AND DATE(created_at AT TIME ZONE '${tz}') <= $${args.length}`; }
+  // WA_REPORT_CAMPAIGN_v1 — optional campaign filter
+  const campIds = Array.isArray(f.campaign_ids) ? f.campaign_ids.map(Number).filter(Boolean) : [];
+  if (campIds.length) { args.push(campIds); where += ` AND campaign_id = ANY($${args.length}::int[])`; }
 
   // 1. KPI tiles + status donut
   let inbound = 0, outbound = 0;
@@ -2066,10 +2069,58 @@ async function api_reports_whatsapp(token, filters) {
     }));
   } catch (e) { console.warn('[wa report daily]', e.message); }
 
+  // WA_REPORT_CAMPAIGN_v1 — per-campaign breakdown
+  let byCampaign = [];
+  try {
+    const r = await db.query(
+      `SELECT
+         m.campaign_id,
+         c.name AS campaign_name,
+         c.template_name AS campaign_template,
+         COUNT(*) FILTER (WHERE m.direction = 'out')::int                          AS sent_total,
+         COUNT(*) FILTER (WHERE m.direction = 'out' AND m.status = 'delivered')::int AS delivered,
+         COUNT(*) FILTER (WHERE m.direction = 'out' AND m.status = 'read')::int      AS read,
+         COUNT(*) FILTER (WHERE m.direction = 'out' AND m.status = 'failed')::int    AS failed
+       FROM whatsapp_messages m
+       LEFT JOIN wa_campaigns c ON c.id = m.campaign_id
+       ${where.replace(/created_at/g, 'm.created_at')} AND m.campaign_id IS NOT NULL
+       GROUP BY m.campaign_id, c.name, c.template_name
+       ORDER BY sent_total DESC NULLS LAST
+       LIMIT 100`,
+      args
+    );
+    // Tack on click counts per campaign
+    const cids = r.rows.map(x => x.campaign_id).filter(Boolean);
+    const clickByCid = new Map();
+    if (cids.length) {
+      try {
+        const cr = await db.query(
+          `SELECT campaign_id, COUNT(*)::int AS clicks
+             FROM wa_button_clicks
+            WHERE campaign_id = ANY($1::int[])
+            GROUP BY campaign_id`,
+          [cids]
+        );
+        cr.rows.forEach(x => clickByCid.set(Number(x.campaign_id), Number(x.clicks) || 0));
+      } catch (_) {}
+    }
+    byCampaign = r.rows.map(row => ({
+      campaign_id: Number(row.campaign_id),
+      campaign_name: row.campaign_name || ('Campaign #' + row.campaign_id),
+      template: row.campaign_template || '',
+      sent_total: Number(row.sent_total) || 0,
+      delivered: Number(row.delivered) || 0,
+      read: Number(row.read) || 0,
+      failed: Number(row.failed) || 0,
+      clicked: clickByCid.get(Number(row.campaign_id)) || 0
+    }));
+  } catch (e) { console.warn('[wa report byCampaign]', e.message); }
+
   return {
     kpi: { inbound, outbound, sent, delivered, read, failed, unique_contacts: uniqueContacts },
     by_user: byUser,
     by_template: byTemplate,
+    by_campaign: byCampaign,
     daily
   };
 }

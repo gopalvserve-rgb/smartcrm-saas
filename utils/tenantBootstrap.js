@@ -234,6 +234,36 @@ const SCHEMA_MIGRATIONS = [
     ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS backfill_filters JSONB;
     ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS last_backfilled_at TIMESTAMP;
   ` },
+
+  // WA_CAMPAIGN_EXCEL_v1 + WA_REPORT_CAMPAIGN_v1 + WA_REPORT_BUTTON_CLICK_v1
+  // ----
+  // - wa_campaign_targets gets a JSON vars column so per-recipient
+  //   variable substitution (Excel uploads) survives across the queue.
+  // - whatsapp_messages gets a campaign_id tag so the WA Report can
+  //   slice by campaign and the drill-down can list per-campaign leads.
+  // - wa_button_clicks is the new table that records inbound button
+  //   replies attributed to the most-recent campaign for that phone.
+  { name: '2026_06_05_wa_campaign_excel_and_report', sql: `
+    ALTER TABLE wa_campaign_targets ADD COLUMN IF NOT EXISTS vars_json JSONB;
+    ALTER TABLE whatsapp_messages   ADD COLUMN IF NOT EXISTS campaign_id INTEGER;
+    CREATE INDEX IF NOT EXISTS idx_wa_msgs_campaign ON whatsapp_messages(campaign_id) WHERE campaign_id IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS wa_button_clicks (
+      id            SERIAL PRIMARY KEY,
+      campaign_id   INTEGER,
+      lead_id       INTEGER,
+      phone         TEXT NOT NULL,
+      button_payload TEXT,
+      button_title  TEXT,
+      button_index  INTEGER,
+      template_name TEXT,
+      wa_message_id TEXT,
+      clicked_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_wa_btn_clicks_campaign ON wa_button_clicks(campaign_id);
+    CREATE INDEX IF NOT EXISTS idx_wa_btn_clicks_lead     ON wa_button_clicks(lead_id);
+    CREATE INDEX IF NOT EXISTS idx_wa_btn_clicks_phone    ON wa_button_clicks(phone);
+  ` },
 ];
 
 /**

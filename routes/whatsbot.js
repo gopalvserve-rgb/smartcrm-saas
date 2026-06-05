@@ -979,7 +979,7 @@ async function api_wb_templates_delete(token, payload) {
 
 // ---------- Send a single template (used by chat + bots + campaigns) ----
 
-async function _sendTemplate({ to, templateName, language, variables, imageUrl, leadId, userId, fromPhoneNumberId }, cfg) {
+async function _sendTemplate({ to, templateName, language, variables, imageUrl, leadId, userId, fromPhoneNumberId, campaignId }, cfg) {
   // If a specific from-phone is requested, swap cfg in-place so the
   // _graphPost call below uses that phone's token + phone_number_id.
   if (fromPhoneNumberId) cfg = await _cfgForPhone(fromPhoneNumberId);
@@ -1024,14 +1024,15 @@ async function _sendTemplate({ to, templateName, language, variables, imageUrl, 
 
   try {
     await db.query(
-      `INSERT INTO whatsapp_messages (lead_id, user_id, direction, from_number, to_number, body, wa_message_id, status, message_type, template_name, error_text, media_url, phone_number_id)
-       VALUES ($1, $2, 'out', $3, $4, $5, $6, $7, 'template', $8, $9, $10, $11)`,
+      `INSERT INTO whatsapp_messages (lead_id, user_id, direction, from_number, to_number, body, wa_message_id, status, message_type, template_name, error_text, media_url, phone_number_id, campaign_id)
+       VALUES ($1, $2, 'out', $3, $4, $5, $6, $7, 'template', $8, $9, $10, $11, $12)`,
       [
         leadId || null, userId || null,
         c.phoneId, body.to, preview, waMsgId,
         r.body?.error ? 'failed' : 'sent',
         templateName, errorText, imageUrl || null,
-        c.phoneId || null
+        c.phoneId || null,
+        campaignId || null
       ]
     );
     // Lead activity timeline log
@@ -2025,9 +2026,53 @@ async function api_wb_campaigns_create(token, payload) {
   if (!p.name || !p.template_name) throw new Error('name and template_name required');
 
   // Resolve recipients NOW so we can compute total + queue them in wa_campaign_targets
+  // WA_CAMPAIGN_EXCEL_v1 — payload.uploaded_rows is an array of
+  //   { phone, name, var1, var2, var3 } objects supplied by the SPA
+  //   Excel parser. Each row that doesn't match an existing lead by
+  //   phone gets a freshly-created lead with source='WA Campaign Upload'.
+  //   Rows that DO match an existing lead reuse that lead.
   const filter = p.filter || {};
   let leads = [];
-  if (filter.lead_ids && filter.lead_ids.length) {
+  let perTargetVars = new Map(); // phone-digits -> { var1, var2, var3 }
+  if (Array.isArray(p.uploaded_rows) && p.uploaded_rows.length) {
+    // Build lead lookup once
+    const phoneToLead = new Map();
+    try {
+      const r = await db.query(`SELECT id, name, phone, whatsapp, source FROM leads`);
+      for (const l of r.rows) {
+        const ph = String(l.phone || '').replace(/\D/g, '');
+        const wa = String(l.whatsapp || '').replace(/\D/g, '');
+        if (ph) phoneToLead.set(ph, l);
+        if (wa && wa !== ph) phoneToLead.set(wa, l);
+      }
+    } catch (_) {}
+    for (const row of p.uploaded_rows) {
+      const phone = String(row.phone || row.mobile || '').replace(/\D/g, '');
+      if (!phone) continue;
+      let lead = phoneToLead.get(phone);
+      if (!lead) {
+        // Auto-create lead — minimal record so reports + chat work.
+        try {
+          const newId = await db.insert('leads', {
+            name: row.name || phone,
+            phone: phone,
+            whatsapp: phone,
+            source: 'WA Campaign Upload',
+            created_at: db.nowIso(),
+            updated_at: db.nowIso()
+          });
+          lead = { id: newId, name: row.name || phone, phone, source: 'WA Campaign Upload' };
+          phoneToLead.set(phone, lead);
+        } catch (e) { continue; }
+      }
+      leads.push(lead);
+      perTargetVars.set(phone, {
+        var1: String(row.var1 || ''),
+        var2: String(row.var2 || ''),
+        var3: String(row.var3 || '')
+      });
+    }
+  } else if (filter.lead_ids && filter.lead_ids.length) {
     const ld = await db.query(`SELECT id, name, phone, source FROM leads WHERE id = ANY($1::int[])`, [filter.lead_ids.map(Number)]);
     leads = ld.rows;
   } else {
@@ -2065,11 +2110,14 @@ async function api_wb_campaigns_create(token, payload) {
 
   // Materialise per-recipient rows
   for (const l of leads) {
+    const phone = String(l.phone || '').replace(/\D/g, '');
+    const vars = perTargetVars.get(phone) || null;
     await db.insert('wa_campaign_targets', {
       campaign_id: campaignId,
-      lead_id: l.id, phone: String(l.phone || '').replace(/\D/g, ''),
+      lead_id: l.id, phone,
       name: l.name || '',
-      status: 'queued', created_at: db.nowIso()
+      status: 'queued', created_at: db.nowIso(),
+      vars_json: vars ? JSON.stringify(vars) : null
     });
   }
 
@@ -2251,10 +2299,17 @@ async function _campaignTick() {
       try {
         // Render variables — replace @{lead_field} placeholders with actual values
         const lead = t.lead_id ? await db.findById('leads', t.lead_id) : null;
-        const renderedVars = (variables || []).map(v => _renderMerge(v.value || '', lead, t));
+        // WA_CAMPAIGN_EXCEL_v1 — if Excel upload populated per-recipient
+        // vars_json {var1, var2, var3} prefer those over template merges.
+        let perVars = null;
+        try { perVars = t.vars_json ? (typeof t.vars_json === 'string' ? JSON.parse(t.vars_json) : t.vars_json) : null; } catch (_) {}
+        const renderedVars = perVars
+          ? [perVars.var1 || '', perVars.var2 || '', perVars.var3 || ''].filter(v => v !== undefined)
+          : (variables || []).map(v => _renderMerge(v.value || '', lead, t));
         const r = await _sendTemplate({
           to: t.phone, templateName: camp.template_name, language: camp.template_language,
-          variables: renderedVars, imageUrl: camp.image_url || null
+          variables: renderedVars, imageUrl: camp.image_url || null,
+          leadId: t.lead_id, campaignId: camp.id
         }, cfg);
         if (r.body?.error) {
           await db.update('wa_campaign_targets', t.id, { status: 'failed', error: r.body.error.message, sent_at: db.nowIso() });
@@ -2684,8 +2739,12 @@ async function _handleInbound(m, value) {
   if (m.type === 'text') text = m.text?.body || '';
   else if (m.type === 'interactive') {
     text = m.interactive?.button_reply?.title || m.interactive?.list_reply?.title || JSON.stringify(m.interactive || {});
+    // WA_REPORT_BUTTON_CLICK_v1 — capture button reply against most-recent
+    // campaign sent to this phone in the last 7 days. Fire and forget.
+    try { _recordButtonClick(from, m).catch(() => {}); } catch (_) {}
   } else if (m.type === 'button') {
     text = m.button?.text || '';
+    try { _recordButtonClick(from, m).catch(() => {}); } catch (_) {}
   } else if (['image', 'audio', 'video', 'document'].includes(m.type)) {
     text = m[m.type]?.caption || '';
     mediaId = m[m.type]?.id || null;
@@ -3403,6 +3462,212 @@ async function api_wb_thread_convertToLead(token, payload) {
   return { ok: true, lead_id: newId, already_linked: false, messages_backfilled: backfilled };
 }
 
+
+// ─────────────────────────────────────────────────────────────────
+// WA_REPORT_BUTTON_CLICK_v1 — record an inbound button reply against
+// the most recent template/campaign sent to that phone within the
+// last 7 days. Schema added in tenantBootstrap migration
+// 2026_06_05_wa_campaign_excel_and_report.
+// ─────────────────────────────────────────────────────────────────
+async function _recordButtonClick(fromDigits, m) {
+  const phone = String(fromDigits || '').replace(/\D/g, '');
+  if (!phone) return;
+  // Pull the title/payload + button index from the WhatsApp payload.
+  let payload = '', title = '', idx = null;
+  if (m.type === 'interactive') {
+    payload = m.interactive?.button_reply?.id || m.interactive?.list_reply?.id || '';
+    title   = m.interactive?.button_reply?.title || m.interactive?.list_reply?.title || '';
+  } else if (m.type === 'button') {
+    payload = m.button?.payload || '';
+    title   = m.button?.text || '';
+  } else return;
+
+  // Find the most recent outbound template sent to this phone in the last 7 days
+  // and read its campaign_id/template_name.
+  let leadId = null, campaignId = null, templateName = null, waMsgId = null;
+  try {
+    const r = await db.query(
+      `SELECT id, lead_id, campaign_id, template_name, wa_message_id
+         FROM whatsapp_messages
+        WHERE direction = 'out'
+          AND to_number = $1
+          AND created_at >= NOW() - INTERVAL '7 days'
+          AND template_name IS NOT NULL
+        ORDER BY created_at DESC
+        LIMIT 1`,
+      [phone]
+    );
+    if (r.rows[0]) {
+      leadId = r.rows[0].lead_id || null;
+      campaignId = r.rows[0].campaign_id || null;
+      templateName = r.rows[0].template_name || null;
+      waMsgId = r.rows[0].wa_message_id || null;
+    }
+  } catch (_) {}
+
+  // Try to figure out the button position (0-indexed). For interactive button_reply,
+  // the id often encodes the index; otherwise leave NULL.
+  if (payload) {
+    const m1 = String(payload).match(/(\d+)$/);
+    if (m1) idx = Number(m1[1]);
+  }
+
+  try {
+    await db.query(
+      `INSERT INTO wa_button_clicks (campaign_id, lead_id, phone, button_payload, button_title, button_index, template_name, wa_message_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [campaignId, leadId, phone, payload, title, idx, templateName, waMsgId]
+    );
+  } catch (e) {
+    console.warn('[wa-btn-click] insert failed:', e.message);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// WA_REPORT_CAMPAIGN_v1 — campaigns_list (lite, for filter dropdown)
+// ─────────────────────────────────────────────────────────────────
+async function api_wb_campaigns_simpleList(token) {
+  await authUser(token);
+  try {
+    const r = await db.query(
+      `SELECT id, name, template_name, status, created_at
+         FROM wa_campaigns
+        ORDER BY id DESC LIMIT 500`
+    );
+    return r.rows;
+  } catch (_) { return []; }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// WA_REPORT_BUTTON_CLICK_v1 — counts per campaign + per button.
+// ─────────────────────────────────────────────────────────────────
+async function api_reports_whatsapp_buttonClicks(token, filters) {
+  const me = await authUser(token);
+  if (!(me.role === 'admin' || me.role === 'manager' || me.role === 'team_leader')) throw new Error('Forbidden');
+  const f = filters || {};
+  const tz = process.env.REPORT_TZ || 'Asia/Kolkata';
+  const args = [];
+  let where = ' WHERE 1=1';
+  if (f.from) { args.push(f.from); where += ` AND DATE(clicked_at AT TIME ZONE '${tz}') >= $${args.length}`; }
+  if (f.to)   { args.push(f.to);   where += ` AND DATE(clicked_at AT TIME ZONE '${tz}') <= $${args.length}`; }
+  if (f.campaign_id) { args.push(Number(f.campaign_id)); where += ` AND campaign_id = $${args.length}`; }
+
+  let rows = [];
+  try {
+    const r = await db.query(
+      `SELECT campaign_id, COALESCE(button_title, button_payload, '(unknown)') AS button,
+              COUNT(*)::int AS clicks,
+              COUNT(DISTINCT phone)::int AS unique_clickers
+         FROM wa_button_clicks
+         ${where}
+        GROUP BY campaign_id, COALESCE(button_title, button_payload, '(unknown)')
+        ORDER BY clicks DESC
+        LIMIT 200`,
+      args
+    );
+    rows = r.rows;
+  } catch (_) {}
+  // Join campaign names
+  const ids = [...new Set(rows.map(r => r.campaign_id).filter(Boolean))];
+  let campMap = new Map();
+  if (ids.length) {
+    try {
+      const cr = await db.query(`SELECT id, name, template_name FROM wa_campaigns WHERE id = ANY($1::int[])`, [ids]);
+      cr.rows.forEach(c => campMap.set(c.id, c));
+    } catch (_) {}
+  }
+  return rows.map(r => ({
+    campaign_id: r.campaign_id,
+    campaign_name: r.campaign_id ? (campMap.get(r.campaign_id)?.name || ('Campaign #' + r.campaign_id)) : '(unattributed)',
+    template_name: r.campaign_id ? (campMap.get(r.campaign_id)?.template_name || '') : '',
+    button: r.button,
+    clicks: Number(r.clicks) || 0,
+    unique_clickers: Number(r.unique_clickers) || 0
+  }));
+}
+
+// ─────────────────────────────────────────────────────────────────
+// WA_REPORT_DRILL_v1 — turn any numeric cell into a lead list.
+// payload.kind ∈ 'sent'|'delivered'|'read'|'failed'|'inbound'|'clicked'
+// optional payload.campaign_id, payload.user_id, payload.template_name,
+//          payload.button (title)
+// Returns up to 500 leads with name+phone+last_at + the matching
+// whatsapp_message_id when relevant so the SPA can deep-link to chat.
+// ─────────────────────────────────────────────────────────────────
+async function api_reports_whatsapp_drill(token, payload) {
+  const me = await authUser(token);
+  if (!(me.role === 'admin' || me.role === 'manager' || me.role === 'team_leader')) throw new Error('Forbidden');
+  const p = payload || {};
+  const kind = String(p.kind || 'sent').toLowerCase();
+  const tz = process.env.REPORT_TZ || 'Asia/Kolkata';
+  const args = [];
+  let where = ' WHERE 1=1';
+  if (p.from) { args.push(p.from); where += ` AND DATE(m.created_at AT TIME ZONE '${tz}') >= $${args.length}`; }
+  if (p.to)   { args.push(p.to);   where += ` AND DATE(m.created_at AT TIME ZONE '${tz}') <= $${args.length}`; }
+  if (p.campaign_id) { args.push(Number(p.campaign_id)); where += ` AND m.campaign_id = $${args.length}`; }
+  if (p.user_id)     { args.push(Number(p.user_id));     where += ` AND m.user_id = $${args.length}`; }
+  if (p.template_name) { args.push(String(p.template_name)); where += ` AND m.template_name = $${args.length}`; }
+
+  if (kind === 'clicked') {
+    // Drill into wa_button_clicks
+    const a2 = []; let w2 = ' WHERE 1=1';
+    if (p.from) { a2.push(p.from); w2 += ` AND DATE(c.clicked_at AT TIME ZONE '${tz}') >= $${a2.length}`; }
+    if (p.to)   { a2.push(p.to);   w2 += ` AND DATE(c.clicked_at AT TIME ZONE '${tz}') <= $${a2.length}`; }
+    if (p.campaign_id) { a2.push(Number(p.campaign_id)); w2 += ` AND c.campaign_id = $${a2.length}`; }
+    if (p.button) { a2.push(String(p.button)); w2 += ` AND COALESCE(c.button_title, c.button_payload) = $${a2.length}`; }
+    let rows = [];
+    try {
+      const r = await db.query(
+        `SELECT c.lead_id, c.phone, c.button_title AS button, c.clicked_at AS at,
+                l.name AS lead_name
+           FROM wa_button_clicks c
+           LEFT JOIN leads l ON l.id = c.lead_id
+           ${w2}
+          ORDER BY c.clicked_at DESC
+          LIMIT 500`,
+        a2
+      );
+      rows = r.rows;
+    } catch (_) {}
+    return rows.map(r => ({
+      lead_id: r.lead_id, name: r.lead_name || '(unknown)', phone: r.phone,
+      detail: r.button, at: r.at
+    }));
+  }
+
+  // Direction + status mapping
+  let directionFilter = '';
+  if (kind === 'inbound') directionFilter = " AND m.direction = 'in'";
+  else if (kind === 'outbound') directionFilter = " AND m.direction = 'out'";
+  else if (kind === 'sent')      directionFilter = " AND m.direction = 'out' AND m.status = 'sent'";
+  else if (kind === 'delivered') directionFilter = " AND m.direction = 'out' AND m.status = 'delivered'";
+  else if (kind === 'read')      directionFilter = " AND m.direction = 'out' AND m.status = 'read'";
+  else if (kind === 'failed')    directionFilter = " AND m.direction = 'out' AND m.status = 'failed'";
+
+  let rows = [];
+  try {
+    const r = await db.query(
+      `SELECT m.lead_id, m.id AS wa_msg_id, m.created_at AS at,
+              m.from_number, m.to_number, m.template_name,
+              l.name AS lead_name, l.phone AS lead_phone
+         FROM whatsapp_messages m
+         LEFT JOIN leads l ON l.id = m.lead_id
+         ${where} ${directionFilter}
+        ORDER BY m.created_at DESC
+        LIMIT 500`,
+      args
+    );
+    rows = r.rows;
+  } catch (_) {}
+  return rows.map(r => ({
+    lead_id: r.lead_id,
+    name: r.lead_name || '(unknown)',
+    phone: r.lead_phone || (kind === 'inbound' ? r.from_number : r.to_number) || '',
+    detail: r.template_name || '',
+    at: r.at
+  }));
+}
+
 module.exports = {
   // Settings
   api_wb_settings_get, api_wb_settings_save, api_wb_connect_verify, api_wb_disconnect,
@@ -3436,5 +3701,8 @@ module.exports = {
   // and for routes/aiBot.js auto-reply path.
   _uploadMediaToWhatsApp, _cfg, _cfgForPhone, _sendText, _sendInteractiveButtons, _sendMedia, _graphPost,
   api_wb_whitelist_list, api_wb_whitelist_add, api_wb_whitelist_remove,
-  api_wb_thread_convertToLead
+  api_wb_thread_convertToLead,
+  api_wb_campaigns_simpleList,
+  api_reports_whatsapp_buttonClicks,
+  api_reports_whatsapp_drill
 };
