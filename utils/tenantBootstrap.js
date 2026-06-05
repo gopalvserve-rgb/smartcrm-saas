@@ -264,6 +264,15 @@ const SCHEMA_MIGRATIONS = [
     CREATE INDEX IF NOT EXISTS idx_wa_btn_clicks_lead     ON wa_button_clicks(lead_id);
     CREATE INDEX IF NOT EXISTS idx_wa_btn_clicks_phone    ON wa_button_clicks(phone);
   ` },
+
+  // 2026-06-05 — Extend wa_button_clicks with `source` so AI Bot /
+  // Bot Flow button taps can be distinguished from template/campaign
+  // button taps in the WA Report. Default 'campaign' for old rows.
+  { name: '2026_06_05_wa_button_clicks_source', sql: `
+    ALTER TABLE wa_button_clicks ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'campaign';
+    UPDATE wa_button_clicks SET source = 'campaign' WHERE source IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_wa_btn_clicks_source ON wa_button_clicks(source);
+  ` },
 ];
 
 /**

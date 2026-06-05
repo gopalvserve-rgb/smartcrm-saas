@@ -3482,17 +3482,20 @@ async function _recordButtonClick(fromDigits, m) {
     title   = m.button?.text || '';
   } else return;
 
-  // Find the most recent outbound template sent to this phone in the last 7 days
-  // and read its campaign_id/template_name.
+  // Two-stage attribution lookup:
+  //  1) First try TEMPLATE messages (campaign/template button taps)
+  //  2) If no template match, fall back to BOT-sent interactive_buttons
+  //     so AI Bot quick-replies + Bot Flow button taps get tracked too.
   let leadId = null, campaignId = null, templateName = null, waMsgId = null;
+  let source = 'campaign';
   try {
     const r = await db.query(
-      `SELECT id, lead_id, campaign_id, template_name, wa_message_id
+      `SELECT id, lead_id, campaign_id, template_name, wa_message_id, message_type
          FROM whatsapp_messages
         WHERE direction = 'out'
           AND to_number = $1
           AND created_at >= NOW() - INTERVAL '7 days'
-          AND template_name IS NOT NULL
+          AND (template_name IS NOT NULL OR message_type = 'interactive_buttons')
         ORDER BY created_at DESC
         LIMIT 1`,
       [phone]
@@ -3502,6 +3505,13 @@ async function _recordButtonClick(fromDigits, m) {
       campaignId = r.rows[0].campaign_id || null;
       templateName = r.rows[0].template_name || null;
       waMsgId = r.rows[0].wa_message_id || null;
+      // Classify source — if it's an interactive_buttons row with no
+      // template_name, it was sent by the AI Bot or a Bot Flow node.
+      if (!templateName && r.rows[0].message_type === 'interactive_buttons') {
+        source = 'bot';
+      } else {
+        source = 'campaign';
+      }
     }
   } catch (_) {}
 
@@ -3514,9 +3524,9 @@ async function _recordButtonClick(fromDigits, m) {
 
   try {
     await db.query(
-      `INSERT INTO wa_button_clicks (campaign_id, lead_id, phone, button_payload, button_title, button_index, template_name, wa_message_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [campaignId, leadId, phone, payload, title, idx, templateName, waMsgId]
+      `INSERT INTO wa_button_clicks (campaign_id, lead_id, phone, button_payload, button_title, button_index, template_name, wa_message_id, source)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [campaignId, leadId, phone, payload, title, idx, templateName, waMsgId, source]
     );
   } catch (e) {
     console.warn('[wa-btn-click] insert failed:', e.message);

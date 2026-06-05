@@ -16482,6 +16482,27 @@ async function wbChat() {
     if (openPhone) renderActiveThread(false).catch(() => {});
   }, 15000);
 
+  // WA_REPORT_DRILL_v2 — if the URL hash carries ?phone=… (deep-link
+  // from the WA Report drill), auto-select that thread once threads
+  // have loaded. We retry a few times because the thread list call
+  // races with our mount.
+  try {
+    const hashQs = (location.hash.split('?')[1] || '');
+    const params = new URLSearchParams(hashQs);
+    const wantPhone = (params.get('phone') || '').replace(/\D/g, '');
+    if (wantPhone) {
+      let tries = 0;
+      const t = setInterval(() => {
+        tries++;
+        // Did the thread list render a row for this phone?
+        const row = [...left.querySelectorAll('.wb-chat-row')].find(r =>
+          (r.textContent || '').replace(/\D/g, '').indexOf(wantPhone) !== -1);
+        if (row) { clearInterval(t); try { openThread(wantPhone); } catch (_) {} }
+        else if (tries > 8) { clearInterval(t); try { openThread(wantPhone); } catch (_) {} }
+      }, 400);
+    }
+  } catch (_) {}
+
   return wrap;
 }
 
@@ -19196,8 +19217,17 @@ VIEWS.whatsappreport = async (view) => {
   await loadWaReport();
 };
 
-// WA_REPORT_DRILL_v1 — open a modal with the leads behind any cell.
+// WA_REPORT_DRILL_v2 — inline drill panel rendered on the WA Report page
+// (replaces the modal). Big KPI strip at the top, full-width data table
+// below, with a Back-to-report button. Clicking a lead row opens that
+// lead's WhatsApp chat at #/whatsbot/chat?phone=<digits>&lead=<id>.
 async function openWaDrill(opts) {
+  const view = document.querySelector('main.main') || document.querySelector('main') || document.body;
+  // Stash the current report DOM so we can restore it via the Back button.
+  if (!window._waDrillSaved) {
+    window._waDrillSaved = view.innerHTML;
+  }
+
   const from = (document.getElementById('wa-rep-from') || {}).value || undefined;
   const to   = (document.getElementById('wa-rep-to')   || {}).value || undefined;
   const campSel = document.getElementById('wa-rep-camp');
@@ -19205,31 +19235,122 @@ async function openWaDrill(opts) {
   const payload = Object.assign({ from, to }, opts || {});
   if (!payload.campaign_id && campaignFromUi) payload.campaign_id = campaignFromUi;
 
-  const body = h('div', { style: { padding: '.6rem', maxHeight: '60vh', overflow: 'auto' } }, h('div', { class: 'muted' }, 'Loading…'));
-  const modal = h('div', { class: 'modal-backdrop', onclick: (e) => { if (e.target === modal) modal.remove(); } },
-    h('div', { class: 'modal modal-lg' },
-      h('div', { class: 'modal-head' }, h('h3', {}, '🔍 ' + (opts.label || 'Drill-down')), h('button', { class: 'btn icon', onclick: () => modal.remove() }, '✕')),
-      body
-    )
-  );
-  document.body.appendChild(modal);
+  // Build the inline drill page.
+  view.innerHTML = '';
+  const wrap = h('div', { class: 'wa-drill-page' });
+
+  // Back button + title
+  const backBtn = h('button', { class: 'btn ghost', style: { marginBottom: '.8rem' }, onclick: () => {
+    if (window._waDrillSaved) {
+      view.innerHTML = window._waDrillSaved;
+      window._waDrillSaved = null;
+      // Re-render report contents so dynamic cards repopulate.
+      try { loadWaReport(); } catch (_) {}
+    } else {
+      location.hash = '#/whatsappreport';
+    }
+  } }, '\u2190 Back to WhatsApp Report');
+  wrap.appendChild(backBtn);
+
+  wrap.appendChild(h('h2', { style: { margin: '0 0 1rem 0' } }, '\ud83d\udd0d ' + (opts.label || 'Drill-down')));
+
+  // KPI strip — populated after data fetches
+  const kpiStrip = h('div', { class: 'wa-drill-kpis', style: {
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+    gap: '.8rem', marginBottom: '1.2rem'
+  } });
+  wrap.appendChild(kpiStrip);
+
+  // Filter row + table container
+  const searchBox = h('input', { type: 'text', placeholder: 'Search name or phone\u2026', style: {
+    padding: '.5rem .7rem', minWidth: '260px', borderRadius: '6px', border: '1px solid #d1d5db'
+  } });
+  const tblWrap = h('div', { class: 'card', style: { padding: 0, overflow: 'auto' } });
+  wrap.appendChild(h('div', { style: { display: 'flex', gap: '.6rem', marginBottom: '.6rem', alignItems: 'center' } },
+    h('span', { class: 'muted', style: { fontSize: '.82rem' } }, 'Click any row to open this lead\u2019s WhatsApp chat.'),
+    h('span', { style: { marginLeft: 'auto' } }),
+    searchBox
+  ));
+  wrap.appendChild(tblWrap);
+
+  tblWrap.innerHTML = '<div class="muted" style="padding:1rem">Loading\u2026</div>';
+  view.appendChild(wrap);
 
   let rows = [];
-  try { rows = await api('api_reports_whatsapp_drill', payload); } catch (e) { body.innerHTML = '<div class="error-box">' + esc(e.message) + '</div>'; return; }
-  if (!rows.length) { body.innerHTML = '<div class="muted">No matching leads in this date range.</div>'; return; }
-  const tbl = h('table', { class: 'data-table' },
-    h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Phone'), h('th', {}, 'Detail'), h('th', {}, 'When'))),
-    h('tbody', {}, ...rows.map(r => h('tr', { style: { cursor: r.lead_id ? 'pointer' : 'default' },
-      onclick: () => { if (r.lead_id) { modal.remove(); location.hash = '#/chat?leadId=' + r.lead_id; } } },
-      h('td', {}, r.name || '(unknown)'),
-      h('td', {}, r.phone || ''),
-      h('td', {}, r.detail || ''),
-      h('td', {}, r.at ? new Date(r.at).toLocaleString() : '')
-    )))
-  );
-  body.innerHTML = '';
-  body.appendChild(h('div', { class: 'muted', style: { marginBottom: '.4rem', fontSize: '.85rem' } }, 'Click a row → open this lead\'s WhatsApp chat.'));
-  body.appendChild(tbl);
+  try { rows = await api('api_reports_whatsapp_drill', payload); }
+  catch (e) { tblWrap.innerHTML = '<div class="error-box" style="margin:1rem">' + esc(e.message) + '</div>'; return; }
+
+  // Compute KPI cards from the result set.
+  const total = rows.length;
+  const uniquePhones = new Set(rows.map(r => r.phone)).size;
+  const leadsCount = rows.filter(r => r.lead_id).length;
+  const kpiDefs = [
+    { label: 'Total', value: total, accent: '#3b82f6' },
+    { label: 'Unique contacts', value: uniquePhones, accent: '#10b981' },
+    { label: 'Matched leads', value: leadsCount, accent: '#f59e0b' },
+    { label: 'Unmatched', value: total - leadsCount, accent: '#94a3b8' }
+  ];
+  kpiDefs.forEach(k => kpiStrip.appendChild(h('div', { style: {
+    background: '#fff', border: '1px solid #e5e7eb', borderLeft: '4px solid ' + k.accent,
+    borderRadius: '8px', padding: '.8rem 1rem', boxShadow: '0 1px 2px rgba(0,0,0,.04)'
+  } },
+    h('div', { class: 'muted', style: { fontSize: '.78rem', textTransform: 'uppercase', letterSpacing: '.04em' } }, k.label),
+    h('div', { style: { fontSize: '1.6rem', fontWeight: 700, marginTop: '.2rem' } }, String(k.value))
+  )));
+
+  // Render the data table.
+  function renderRows(filterText) {
+    const q = (filterText || '').toLowerCase().trim();
+    const filtered = q ? rows.filter(r =>
+      (r.name || '').toLowerCase().includes(q) ||
+      (r.phone || '').toLowerCase().includes(q)
+    ) : rows;
+    tblWrap.innerHTML = '';
+    if (!filtered.length) {
+      tblWrap.innerHTML = '<div class="muted" style="padding:1rem">No matching rows.</div>';
+      return;
+    }
+    const tbl = h('table', { class: 'data-table', style: { width: '100%' } },
+      h('thead', {}, h('tr', {},
+        h('th', { style: { width: '40px' } }, '#'),
+        h('th', {}, 'Name'),
+        h('th', {}, 'Phone'),
+        h('th', {}, 'Detail'),
+        h('th', {}, 'When'),
+        h('th', { style: { width: '120px' } }, 'Action'))),
+      h('tbody', {}, ...filtered.map((r, i) => {
+        const tr = h('tr', { style: { cursor: r.phone ? 'pointer' : 'default' },
+          onclick: () => goToLeadChat(r)
+        },
+          h('td', {}, String(i + 1)),
+          h('td', {}, r.name || '(unknown)'),
+          h('td', {}, r.phone ? '+' + String(r.phone).replace(/^\+/, '') : ''),
+          h('td', { style: { maxWidth: '320px', whiteSpace: 'normal' } }, r.detail || ''),
+          h('td', {}, r.at ? new Date(r.at).toLocaleString() : ''),
+          h('td', {},
+            r.phone ? h('button', { class: 'btn sm', style: { background: '#16a34a', color: '#fff', borderColor: '#16a34a' },
+              onclick: ev => { ev.stopPropagation(); goToLeadChat(r); } }, '\ud83d\udcac Chat') : ''
+          )
+        );
+        return tr;
+      }))
+    );
+    tblWrap.appendChild(tbl);
+  }
+  function goToLeadChat(r) {
+    const phone = (r.phone || '').replace(/\D/g, '');
+    if (!phone && !r.lead_id) return;
+    // Open the WhatsApp chat view + auto-select this thread via ?phone=
+    // (wbChat reads the hash on mount). Lead id is passed as a hint
+    // so the active thread can be highlighted even if the phone match
+    // is fuzzy.
+    const qp = [];
+    if (phone)   qp.push('phone=' + encodeURIComponent(phone));
+    if (r.lead_id) qp.push('lead=' + encodeURIComponent(r.lead_id));
+    location.hash = '#/whatsbot/chat' + (qp.length ? '?' + qp.join('&') : '');
+  }
+  renderRows('');
+  searchBox.addEventListener('input', () => renderRows(searchBox.value));
 }
 
 async function loadWaReport() {
