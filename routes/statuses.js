@@ -8,14 +8,25 @@ const { authUser } = require('../utils/auth');
 // consistently across all tenants and packs.
 const PIPE_STAGES = ['fresh', 'attempted', 'qualified', 'negotiation', 'proposal', 'won', 'lost'];
 
-let _healed = false;
+// PIPELINE_STAGE_HEAL_PERTENANT_v1 (2026-06-04): the previous
+// implementation cached `_healed = true` at module level, which meant
+// the very first tenant to hit api_statuses_save would flip the flag
+// and every OTHER tenant in the same Node process would then skip the
+// ALTER. Cross-tenant pool design + module-level state == bad.
+//
+// Fix: always run the ALTER. It's idempotent (IF NOT EXISTS), the cost
+// is negligible compared to the round-trip you're already paying for,
+// and it self-heals every tenant that hits this route.
+//
+// Returns true if the column now exists (or already did), false if the
+// ALTER threw — in which case callers must strip `stage` from payloads.
 async function _heal() {
-  if (_healed) return;
   try {
     await db.query(`ALTER TABLE statuses ADD COLUMN IF NOT EXISTS stage TEXT`);
-    _healed = true;
+    return true;
   } catch (e) {
     console.warn('[statuses] stage column heal failed:', e.message);
+    return false;
   }
 }
 
@@ -28,14 +39,19 @@ async function api_statuses_save(token, s) {
   const me = await authUser(token);
   if (me.role !== 'admin') throw new Error('Admin only');
   if (!s.name) throw new Error('name required');
-  await _heal();
+  const haveStage = await _heal();
   const payload = {
     name: s.name,
     color: s.color || '#6b7280',
     sort_order: Number(s.sort_order) || 10,
-    is_final: Number(s.is_final) || 0,
-    stage: PIPE_STAGES.includes(String(s.stage || '').toLowerCase()) ? String(s.stage).toLowerCase() : null
+    is_final: Number(s.is_final) || 0
   };
+  // Only include `stage` if the column actually exists on this tenant.
+  if (haveStage) {
+    payload.stage = PIPE_STAGES.includes(String(s.stage || '').toLowerCase())
+      ? String(s.stage).toLowerCase()
+      : null;
+  }
   if (s.id) {
     await db.update('statuses', s.id, payload);
     // PIPELINE_STAGE_SAVE_FIX_v1 — belt-and-braces: write `stage` via raw
