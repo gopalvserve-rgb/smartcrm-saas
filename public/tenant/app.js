@@ -15432,6 +15432,49 @@ function openCampaignModal(templates) {
   form.appendChild(selectField('assigned_to', 'Filter — assignee', '',
     [{ value: '', label: 'Any' }, ...users.map(u => ({ value: u.id, label: u.name }))]));
   form.appendChild(field('tag', 'Filter — tag', ''));
+
+  // WA_CAMPAIGN_EXCEL_v1 — Direct number upload
+  let _campExcelRows = null;
+  const excelInfo = h('div', { class: 'muted', style: { fontSize: '.82rem' } }, 'No Excel uploaded. Optional — campaign will use the filter above if Excel is empty.');
+  const excelBox = h('div', { class: 'f-row full', style: { background: '#f8fafc', border: '1px dashed #cbd5e1', borderRadius: '8px', padding: '.6rem', margin: '.4rem 0' } },
+    h('label', { style: { fontWeight: 600, marginBottom: '.3rem', display: 'block' } }, '📊 Or upload Excel of recipients'),
+    h('div', { style: { display: 'flex', gap: '.4rem', alignItems: 'center', flexWrap: 'wrap' } },
+      h('input', { type: 'file', accept: '.xlsx,.xls,.csv', id: 'cm-excel', style: { flex: '1', minWidth: '200px' },
+        onchange: async (ev) => {
+          const f = ev.target.files[0]; if (!f) return;
+          try {
+            await ensureXLSX();
+            const buf = await f.arrayBuffer();
+            const wb = window.XLSX.read(buf, { type: 'array' });
+            const sheet = wb.Sheets[wb.SheetNames[0]];
+            const rows = window.XLSX.utils.sheet_to_json(sheet, { defval: '' });
+            const mapped = rows.map(r => {
+              const get = (k) => { for (const kk of Object.keys(r)) { if (String(kk).toLowerCase().trim() === k) return r[kk]; } return ''; };
+              return { phone: String(get('phone') || get('mobile') || ''), name: String(get('name') || ''), var1: String(get('var1') || ''), var2: String(get('var2') || ''), var3: String(get('var3') || '') };
+            }).filter(r => r.phone);
+            _campExcelRows = mapped;
+            excelInfo.textContent = '✓ ' + mapped.length + ' recipients ready. Filter above will be ignored.';
+            excelInfo.style.color = '#16a34a';
+          } catch (e) { toast('Excel parse failed: ' + e.message, 'err'); }
+        } }),
+      h('button', { type: 'button', class: 'btn ghost', onclick: () => {
+        // Sample template download — uses SheetJS
+        ensureXLSX().then(() => {
+          const ws = window.XLSX.utils.json_to_sheet([
+            { phone: '919876543210', name: 'Sample Name', var1: 'Variable 1 value', var2: 'Variable 2 value', var3: 'Variable 3 value' }
+          ]);
+          const wb = window.XLSX.utils.book_new();
+          window.XLSX.utils.book_append_sheet(wb, ws, 'Recipients');
+          window.XLSX.writeFile(wb, 'wa-campaign-template.xlsx');
+        });
+      } }, '⬇️ Download template')),
+    excelInfo,
+    h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.3rem' } },
+      'Columns: phone (required), name, var1, var2, var3. Variables map to template {{1}} {{2}} {{3}}. Phones not in your Leads table are auto-added with source "WA Campaign Upload".')
+  );
+  form.appendChild(excelBox);
+  form._getExcelRows = () => _campExcelRows;
+
   // Variables block
   const varsBox = h('div', { class: 'f-row full', id: 'cm-vars' });
   form.appendChild(varsBox);
@@ -15469,11 +15512,13 @@ function openCampaignModal(templates) {
         assigned_to: form.assigned_to.value || undefined,
         tag: form.tag.value || undefined
       };
+      const uploaded_rows = (typeof form._getExcelRows === 'function') ? form._getExcelRows() : null;
       try {
         const r = await api('api_wb_campaigns_create', {
           name: form.name.value,
           template_name: name, template_language: lang || 'en_US',
           variables, filter,
+          uploaded_rows: uploaded_rows && uploaded_rows.length ? uploaded_rows : undefined,
           scheduled_at: form.scheduled_at.value ? new Date(form.scheduled_at.value).toISOString() : null,
           send_now: form.send_now.checked ? 1 : 0
         });

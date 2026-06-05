@@ -1,7 +1,7 @@
 INSERT INTO control.changelog (title, body, kind, ship_date, is_published)
 VALUES (
-  'WA Report v2 — campaigns, button clicks, drill-down',
-  'WhatsApp Report upgraded: 1) Campaign filter chip + new "By campaign" card with per-campaign sent/delivered/read/failed/clicked. 2) "Template button clicks" card — see who clicked each Quick Reply / URL button, per campaign. 3) Every numeric cell (KPI tiles, By Campaign rows, Button Click counts) is now clickable — opens a list of the underlying leads. Click a row in that list → opens that lead''s WhatsApp chat. Campaigns are now stamped on every outbound WA message so attribution survives reporting.',
+  'WA Campaign — direct Excel upload',
+  'New "Upload Excel of recipients" section on the WhatsApp Campaign creator. Drop an .xlsx / .csv with columns phone, name, var1, var2, var3 — phones not already in Leads are auto-created with source "WA Campaign Upload", and var1/var2/var3 flow into the template variables for each recipient. A "Download template" button gives a pre-filled sample file.',
   'feature',
   CURRENT_DATE,
   1
