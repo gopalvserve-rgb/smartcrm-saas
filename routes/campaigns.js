@@ -1196,16 +1196,19 @@ async function api_campaigns_reportAdvanced(token, payload) {
   const won = Number(k.won_cnt) || 0;
 
   // ---- Status-wise breakdown ----
+  // CAMPAIGN_REPORT_v3_CLEAN — only reference statuses columns that exist
+  // on every tenant (id, name). display_order/sort fields don't exist on
+  // vserve and similar; ordering by cnt DESC is fine — gives the most
+  // common statuses at the top which is what the user actually wants.
   const statusRows = await db.query(
     `SELECT COALESCE(s.name, 'Unset') AS status_name,
             l.status_id,
-            COALESCE(s.display_order, 9999) AS sort_ord,
             COUNT(*)::int AS cnt
        FROM leads l
        LEFT JOIN statuses s ON s.id = l.status_id
       WHERE ${W}
-      GROUP BY s.name, l.status_id, s.display_order
-      ORDER BY sort_ord ASC, cnt DESC`,
+      GROUP BY s.name, l.status_id
+      ORDER BY cnt DESC`,
     params
   );
 
