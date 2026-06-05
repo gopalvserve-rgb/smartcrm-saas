@@ -230,9 +230,13 @@ async function expressOAuthCallbackSocial(req, res) {
     return res.send(`
       <html><head><title>Connected</title></head><body style="font-family:system-ui;padding:2rem;max-width:540px;margin:0 auto;text-align:center">
         <h2>✅ Facebook connected for Social Hub</h2>
-        <p>Pages connected: <b>${r.pages_connected}</b><br>Instagram accounts linked: <b>${r.ig_accounts}</b></p>
+        <p>
+          Pages connected: <b>${r.pages_connected}</b><br>
+          Instagram accounts linked: <b>${r.ig_accounts}</b><br>
+          Ad accounts discovered: <b>${r.ad_accounts || 0}</b>
+        </p>
         <p class="muted">You can close this tab and go back to the CRM.</p>
-        <script>setTimeout(()=>{ try { window.close(); } catch (_) {} }, 2000)</script>
+        <script>setTimeout(()=>{ try { window.close(); } catch (_) {} }, 2500)</script>
       </body></html>
     `);
   } catch (e) {
