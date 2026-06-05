@@ -3561,22 +3561,46 @@ async function api_reports_whatsapp_buttonClicks(token, filters) {
   if (f.from) { args.push(f.from); where += ` AND DATE(clicked_at AT TIME ZONE '${tz}') >= $${args.length}`; }
   if (f.to)   { args.push(f.to);   where += ` AND DATE(clicked_at AT TIME ZONE '${tz}') <= $${args.length}`; }
   if (f.campaign_id) { args.push(Number(f.campaign_id)); where += ` AND campaign_id = $${args.length}`; }
+  // WA_BOT_BTN_v1 — narrow to campaign|bot when requested.
+  if (f.source && (f.source === 'bot' || f.source === 'campaign')) {
+    args.push(f.source); where += ` AND COALESCE(source, 'campaign') = $${args.length}`;
+  }
 
   let rows = [];
   try {
     const r = await db.query(
-      `SELECT campaign_id, COALESCE(button_title, button_payload, '(unknown)') AS button,
+      `SELECT campaign_id, COALESCE(source, 'campaign') AS source,
+              COALESCE(button_title, button_payload, '(unknown)') AS button,
               COUNT(*)::int AS clicks,
               COUNT(DISTINCT phone)::int AS unique_clickers
          FROM wa_button_clicks
          ${where}
-        GROUP BY campaign_id, COALESCE(button_title, button_payload, '(unknown)')
+        GROUP BY campaign_id, COALESCE(source, 'campaign'),
+                 COALESCE(button_title, button_payload, '(unknown)')
         ORDER BY clicks DESC
         LIMIT 200`,
       args
     );
     rows = r.rows;
-  } catch (_) {}
+  } catch (_) {
+    // Fall back to no-source query for tenants where the source column
+    // migration hasn't run yet (race with first request after deploy).
+    try {
+      const r2 = await db.query(
+        `SELECT campaign_id, 'campaign'::text AS source,
+                COALESCE(button_title, button_payload, '(unknown)') AS button,
+                COUNT(*)::int AS clicks,
+                COUNT(DISTINCT phone)::int AS unique_clickers
+           FROM wa_button_clicks
+           ${where.replace(/AND COALESCE\(source[^$]+\$\d+/g, '')}
+          GROUP BY campaign_id, COALESCE(button_title, button_payload, '(unknown)')
+          ORDER BY clicks DESC
+          LIMIT 200`,
+        args.filter((_, i) => !(f.source && i === args.length - 1))
+      );
+      rows = r2.rows;
+    } catch (_) {}
+  }
   // Join campaign names
   const ids = [...new Set(rows.map(r => r.campaign_id).filter(Boolean))];
   let campMap = new Map();
@@ -3590,6 +3614,7 @@ async function api_reports_whatsapp_buttonClicks(token, filters) {
     campaign_id: r.campaign_id,
     campaign_name: r.campaign_id ? (campMap.get(r.campaign_id)?.name || ('Campaign #' + r.campaign_id)) : '(unattributed)',
     template_name: r.campaign_id ? (campMap.get(r.campaign_id)?.template_name || '') : '',
+    source: r.source || 'campaign',
     button: r.button,
     clicks: Number(r.clicks) || 0,
     unique_clickers: Number(r.unique_clickers) || 0
@@ -3625,6 +3650,10 @@ async function api_reports_whatsapp_drill(token, payload) {
     if (p.to)   { a2.push(p.to);   w2 += ` AND DATE(c.clicked_at AT TIME ZONE '${tz}') <= $${a2.length}`; }
     if (p.campaign_id) { a2.push(Number(p.campaign_id)); w2 += ` AND c.campaign_id = $${a2.length}`; }
     if (p.button) { a2.push(String(p.button)); w2 += ` AND COALESCE(c.button_title, c.button_payload) = $${a2.length}`; }
+    // WA_BOT_BTN_v1 — narrow the drill to bot|campaign clicks if requested.
+    if (p.source && (p.source === 'bot' || p.source === 'campaign')) {
+      a2.push(p.source); w2 += ` AND COALESCE(c.source, 'campaign') = $${a2.length}`;
+    }
     let rows = [];
     try {
       const r = await db.query(

@@ -19208,10 +19208,15 @@ VIEWS.whatsappreport = async (view) => {
     h('h3', {}, '📮 By template'),
     h('div', { id: 'wa-rep-by-template' })
   ));
-  // WA_REPORT_BUTTON_CLICK_v1 — Button Clicks card
+  // WA_REPORT_BUTTON_CLICK_v1 — Template button clicks
   view.appendChild(h('div', { class: 'card', style: { marginTop: '1rem' } },
-    h('h3', {}, '👆 Template button clicks'),
+    h('h3', {}, '👆 Template / campaign button clicks'),
     h('div', { id: 'wa-rep-clicks' })
+  ));
+  // WA_BOT_BTN_v1 — Bot button clicks (AI Bot + Bot Flow)
+  view.appendChild(h('div', { class: 'card', style: { marginTop: '1rem' } },
+    h('h3', {}, '🤖 Bot button clicks (AI Bot + Bot Flow)'),
+    h('div', { id: 'wa-rep-bot-clicks' })
   ));
 
   await loadWaReport();
@@ -19528,36 +19533,46 @@ async function loadWaReport() {
     }
   }
 
-  // WA_REPORT_BUTTON_CLICK_v1 — render button clicks card
-  const clicksEl = document.getElementById('wa-rep-clicks');
-  if (clicksEl) {
-    clicksEl.innerHTML = '<div class="muted">Loading…</div>';
-    try {
-      const clickRows = await api('api_reports_whatsapp_buttonClicks', { from, to, campaign_id: campaign_ids && campaign_ids[0] });
-      clicksEl.innerHTML = '';
-      if (!clickRows || !clickRows.length) {
-        clicksEl.appendChild(h('div', { class: 'muted', style: { padding: '.5rem' } }, 'No button clicks in this date range. (Requires templates with Quick Reply or URL buttons.)'));
-      } else {
-        const tbl = h('table', { class: 'data-table' },
-          h('thead', {}, h('tr', {},
-            h('th', {}, 'Campaign'),
-            h('th', {}, 'Template'),
-            h('th', {}, 'Button'),
-            h('th', {}, 'Clicks'),
-            h('th', {}, 'Unique clickers')
-          )),
-          h('tbody', {}, ...clickRows.map(r => h('tr', {},
-            h('td', {}, r.campaign_name),
-            h('td', {}, r.template_name),
-            h('td', {}, r.button),
-            h('td', { style: { cursor: 'pointer', textDecoration: 'underline dotted', color: '#4f46e5' },
-              onclick: () => openWaDrill({ kind: 'clicked', campaign_id: r.campaign_id, button: r.button, label: 'Clicked: ' + r.button }) }, String(r.clicks)),
-            h('td', {}, String(r.unique_clickers))
-          )))
-        );
-        clicksEl.appendChild(tbl);
-      }
-    } catch (e) { clicksEl.innerHTML = '<div class="error-box">' + esc(e.message) + '</div>'; }
+  // WA_REPORT_BUTTON_CLICK_v1 + WA_BOT_BTN_v1 — render BOTH cards from
+  // one API call (the endpoint now returns a `source` field per row).
+  const clicksEl    = document.getElementById('wa-rep-clicks');
+  const botClicksEl = document.getElementById('wa-rep-bot-clicks');
+  function _renderClickRows(target, rows, opts) {
+    target.innerHTML = '';
+    if (!rows || !rows.length) {
+      target.appendChild(h('div', { class: 'muted', style: { padding: '.5rem' } }, opts.empty));
+      return;
+    }
+    const headerCols = opts.kind === 'bot'
+      ? [h('th', {}, 'Button'), h('th', {}, 'Clicks'), h('th', {}, 'Unique clickers')]
+      : [h('th', {}, 'Campaign'), h('th', {}, 'Template'), h('th', {}, 'Button'), h('th', {}, 'Clicks'), h('th', {}, 'Unique clickers')];
+    const bodyRows = rows.map(r => {
+      const clicksCell = h('td', { style: { cursor: 'pointer', textDecoration: 'underline dotted', color: '#4f46e5' },
+        onclick: () => openWaDrill({ kind: 'clicked', campaign_id: r.campaign_id, button: r.button,
+          source: opts.kind === 'bot' ? 'bot' : 'campaign',
+          label: (opts.kind === 'bot' ? '🤖 Bot click: ' : 'Clicked: ') + r.button }) }, String(r.clicks));
+      return opts.kind === 'bot'
+        ? h('tr', {}, h('td', {}, r.button), clicksCell, h('td', {}, String(r.unique_clickers)))
+        : h('tr', {}, h('td', {}, r.campaign_name), h('td', {}, r.template_name), h('td', {}, r.button), clicksCell, h('td', {}, String(r.unique_clickers)));
+    });
+    target.appendChild(h('table', { class: 'data-table' },
+      h('thead', {}, h('tr', {}, ...headerCols)),
+      h('tbody', {}, ...bodyRows)
+    ));
+  }
+  if (clicksEl) clicksEl.innerHTML = '<div class="muted">Loading…</div>';
+  if (botClicksEl) botClicksEl.innerHTML = '<div class="muted">Loading…</div>';
+  try {
+    const clickRows = await api('api_reports_whatsapp_buttonClicks', { from, to, campaign_id: campaign_ids && campaign_ids[0] });
+    const campaignRows = (clickRows || []).filter(r => (r.source || 'campaign') === 'campaign');
+    const botRows      = (clickRows || []).filter(r => r.source === 'bot');
+    if (clicksEl) _renderClickRows(clicksEl, campaignRows, { kind: 'campaign',
+      empty: 'No template/campaign button clicks in this date range. (Requires templates with Quick Reply or URL buttons.)' });
+    if (botClicksEl) _renderClickRows(botClicksEl, botRows, { kind: 'bot',
+      empty: 'No bot button clicks in this date range. (Tracked when customers tap AI Bot quick-replies or Bot Flow buttons.)' });
+  } catch (e) {
+    if (clicksEl)    clicksEl.innerHTML    = '<div class="error-box">' + esc(e.message) + '</div>';
+    if (botClicksEl) botClicksEl.innerHTML = '<div class="error-box">' + esc(e.message) + '</div>';
   }
 }
 
