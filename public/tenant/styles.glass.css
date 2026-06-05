@@ -517,3 +517,172 @@ html[data-skin="glass"] .team-member-card {
   border-radius: 18px;
 }
 /* end GLASS_THEME_v1.1 */
+
+/* ============================================================
+   GLASS_THEME_v1.2 — uniform card treatment, bigger numbers
+   inside stage/closure tiles, and inner-card differentiation.
+   ============================================================ */
+
+/* Nested card inside a glass card (Sale Closure Stages, etc.) — use a
+   lighter "inset tile" look so glass-on-glass doesn't dilute. */
+html[data-skin="glass"] .card .card,
+html[data-skin="glass"] .panel .card,
+html[data-skin="glass"] .card.clickable {
+  background: rgba(0,0,0,.035) !important;
+  border: 1px solid var(--g-line) !important;
+  border-radius: 16px !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+html[data-skin="glass"] .card .card:hover,
+html[data-skin="glass"] .card.clickable:hover {
+  background: rgba(0,0,0,.06) !important;
+  transform: none !important;
+}
+
+/* Make inline-styled number values inside cards big + Sora.
+   The dashboard stage tiles use inline style with font-size 1.05rem;
+   our glass theme bumps them through a generic descendant rule that
+   targets any number-only flex child. */
+html[data-skin="glass"] .card.clickable > div:nth-child(2),
+html[data-skin="glass"] .card .card > div:nth-child(2) {
+  font-family: 'Sora', sans-serif !important;
+  font-size: 2.2rem !important;
+  font-weight: 800 !important;
+  letter-spacing: -1px !important;
+  line-height: 1 !important;
+  margin-top: .25rem;
+}
+html[data-skin="glass"] .card.clickable > div:nth-child(1),
+html[data-skin="glass"] .card .card > div:nth-child(1) {
+  font-family: 'Plus Jakarta Sans', sans-serif !important;
+  font-size: .72rem !important;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  font-weight: 700;
+  color: var(--g-soft) !important;
+}
+
+/* Follow-ups list rows */
+html[data-skin="glass"] .fu,
+html[data-skin="glass"] .followup-row,
+html[data-skin="glass"] .fu-row {
+  background: rgba(0,0,0,.025);
+  border-radius: 14px;
+  margin-bottom: .35rem;
+  padding: .5rem .6rem;
+  border: 1px solid var(--g-line);
+}
+
+/* Top Callers / Top Performers empty state — bigger heading + Sora */
+html[data-skin="glass"] .empty,
+html[data-skin="glass"] .empty-state {
+  color: var(--g-ink);
+  font-family: 'Plus Jakarta Sans', sans-serif;
+}
+html[data-skin="glass"] .empty .t,
+html[data-skin="glass"] .empty h3,
+html[data-skin="glass"] .empty h4 {
+  font-family: 'Sora', sans-serif !important;
+  font-weight: 800 !important;
+  color: var(--g-ink) !important;
+}
+
+/* Section headings inside cards (e.g. "Leads by Status", "Top Callers") */
+html[data-skin="glass"] .card h3,
+html[data-skin="glass"] .card h4 {
+  font-family: 'Sora', sans-serif !important;
+  font-weight: 800 !important;
+  font-size: 1.05rem !important;
+  letter-spacing: -.2px;
+  color: var(--g-ink) !important;
+}
+
+/* "View board →" / "See all →" right-side action button */
+html[data-skin="glass"] .card .btn.sm.ghost,
+html[data-skin="glass"] .card .btn.ghost {
+  background: rgba(0,0,0,.045) !important;
+  border: 1px solid var(--g-line) !important;
+  color: var(--g-ink) !important;
+  font-weight: 700;
+  border-radius: 10px;
+  padding: 4px 11px;
+  backdrop-filter: none;
+}
+
+/* Total / "45 total" pills at top-right of donut/bar widgets */
+html[data-skin="glass"] .badge.total,
+html[data-skin="glass"] .card .total-pill,
+html[data-skin="glass"] .card .total-badge {
+  background: rgba(0,0,0,.05) !important;
+  border: 1px solid var(--g-line) !important;
+  color: var(--g-soft) !important;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 5px 13px;
+  font-size: .78rem;
+}
+
+/* Phone-call icon button (round teal-blue) at row end */
+html[data-skin="glass"] .call-btn,
+html[data-skin="glass"] .fu .call,
+html[data-skin="glass"] .icon-btn-call {
+  background: linear-gradient(135deg, #23a78f, #5fb0c4) !important;
+  color: #fff !important;
+  width: 36px !important; height: 36px !important;
+  border-radius: 50% !important;
+  border: 0;
+  box-shadow: 0 6px 14px rgba(35,167,143,.35);
+}
+
+/* "in 13h" / "in 1d" pill timestamps */
+html[data-skin="glass"] .fu .tm,
+html[data-skin="glass"] .followup-row .tm,
+html[data-skin="glass"] .pill-time {
+  background: rgba(0,0,0,.04) !important;
+  border: 1px solid var(--g-line);
+  color: var(--g-ink) !important;
+  font-weight: 700;
+  border-radius: 10px;
+  padding: 5px 11px;
+}
+
+/* Bar / Donut chart wrappers — explicit transparent background */
+html[data-skin="glass"] .chart-wrap,
+html[data-skin="glass"] .donut-wrap,
+html[data-skin="glass"] .canvas-wrap { background: transparent !important; }
+
+/* Progress bars (Sale Closure top bar with blue/green/orange segments) */
+html[data-skin="glass"] .progress-bar,
+html[data-skin="glass"] .progress {
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(0,0,0,.05);
+}
+
+/* Live Team Status outer card — guaranteed glass */
+html[data-skin="glass"] .team-live,
+html[data-skin="glass"] .team-live-widget,
+html[data-skin="glass"] .live-team-card {
+  background: var(--g-tile-bg) !important;
+  border: 1px solid var(--g-card-border);
+  border-radius: 22px;
+  box-shadow: var(--g-card-shadow);
+  backdrop-filter: var(--g-blur);
+  -webkit-backdrop-filter: var(--g-blur);
+  padding: 1.1rem 1.2rem;
+}
+
+/* "Live Team Status" pulse dot */
+html[data-skin="glass"] .live-dot {
+  background: #1fae72 !important;
+  box-shadow: 0 0 0 5px rgba(31,174,114,.2), 0 0 12px #1fae72;
+}
+
+/* Members ring around avatars (online indicator) */
+html[data-skin="glass"] .avatar.online::before,
+html[data-skin="glass"] .member.online .av::before {
+  border: 2px solid #1fae72;
+}
+/* end GLASS_THEME_v1.2 */
