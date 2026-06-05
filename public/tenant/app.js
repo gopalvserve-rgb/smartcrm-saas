@@ -41231,28 +41231,56 @@ try {
             h('div', { style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap' } },
               viewId === 'socialads'
                 ? h('button', { class: 'btn primary social-strip-acct-btn',
-                    title: 'Re-runs Facebook login (silent if your session is fresh) and auto-discovers all ad accounts you have access to.',
-                    onclick: () => {
-                      // SOCIAL_AUTO_PULL_AD_ACCOUNTS_v1 — primary action on Ad
-                      // Reports is to (re-)connect Facebook. The Connect flow
-                      // now auto-pulls /me/adaccounts so ad accounts populate
-                      // without manual act_<id> entry. Falls back to clicking
-                      // the original ⚙ Ad Accounts button if the modal helper
-                      // isn't available.
+                    title: 'Triggers FB login (silent if scopes already granted) and auto-discovers all ad accounts you have access to. Skips the Pages modal.',
+                    onclick: async () => {
+                      // SOCIAL_AUTO_PULL_AD_ACCOUNTS_v1.1 — on Ad Reports we
+                      // skip the Pages modal entirely. Directly invoke FB Login
+                      // with the same scopes the Pages flow uses, then call
+                      // api_social_fb_connect (which now also stores ad accounts),
+                      // then open the Ad Accounts modal so the user immediately
+                      // sees the auto-discovered list.
+                      const stripBtn = view.querySelector('.social-strip-acct-btn');
                       try {
-                        if (typeof openSocialConnectModal === 'function') return openSocialConnectModal();
-                        if (window.openSocialConnectModal) return window.openSocialConnectModal();
-                        // Last-resort fallback — click the toolbar ⚙ Ad Accounts button.
-                        const strip = view.querySelector('.social-connect-strip');
-                        const btns = [...view.querySelectorAll('button')];
-                        const acct = btns.find(b => {
-                          if (strip && strip.contains(b)) return false;
-                          const t = (b.textContent || '').trim();
-                          return t === '⚙ Ad Accounts';
+                        if (stripBtn) { stripBtn.disabled = true; stripBtn.textContent = '⏳ Opening Facebook…'; }
+                        const fbAppId = '965594974738358';
+                        const FB = await _ensureFbSdk(fbAppId);
+                        await new Promise((resolve, reject) => {
+                          FB.login(async (resp) => {
+                            if (!resp || !resp.authResponse || !resp.authResponse.accessToken) {
+                              reject(new Error(resp && resp.status === 'unknown' ? 'Cancelled' : 'No token'));
+                              return;
+                            }
+                            try {
+                              const r = await api('api_social_fb_connect', resp.authResponse.accessToken);
+                              toast('Connected ' + r.pages_connected + ' page(s)' + (r.ig_accounts ? ' · ' + r.ig_accounts + ' IG' : '') + (r.ad_accounts ? ' · ' + r.ad_accounts + ' ad account(s)' : ''));
+                              // Auto-open the Ad Accounts modal so the user sees
+                              // the freshly-discovered accounts immediately.
+                              setTimeout(() => {
+                                try {
+                                  const strip = view.querySelector('.social-connect-strip');
+                                  const btns = [...view.querySelectorAll('button')];
+                                  const acct = btns.find(b => {
+                                    if (strip && strip.contains(b)) return false;
+                                    return (b.textContent || '').trim() === '⚙ Ad Accounts';
+                                  });
+                                  if (acct) acct.click();
+                                } catch (_) {}
+                              }, 300);
+                              resolve();
+                            } catch (e) { toast(e.message, 'err'); reject(e); }
+                          }, { scope: SOCIAL_SCOPES, auth_type: 'rerequest', return_scopes: true });
                         });
-                        if (acct) acct.click();
-                        else toast('Connect modal not ready — hard-refresh (Ctrl+Shift+R).', 'warn');
-                      } catch (e) { toast(e.message || 'Failed to open Connect modal', 'err'); }
+                      } catch (e) {
+                        // FB SDK failed (popup blocked / extension blocked) → OAuth redirect fallback
+                        try {
+                          const r = await api('api_social_fb_oauth_url', location.origin);
+                          location.href = r.auth_url;
+                        } catch (e2) {
+                          toast(e.message || 'Connect failed', 'err');
+                        }
+                      } finally {
+                        if (stripBtn) { stripBtn.disabled = false; stripBtn.textContent = '🔗 Re-sync from Facebook'; }
+                      }
                     } }, '🔗 Re-sync from Facebook')
                 : h('button', { class: 'btn primary', onclick: () => {
                     try { if (typeof openSocialConnectModal === 'function') openSocialConnectModal();
