@@ -4,11 +4,28 @@ const { authUser, hashPassword, getVisibleUserIds } = require('../utils/auth');
 async function api_users_list(token) {
   const me = await authUser(token);
   const visible = await getVisibleUserIds(me);
+  // SALES_REASSIGN_USERLIST_v1 (2026-06-05) — Sales normally only sees
+  // themselves (getVisibleUserIds is hierarchy-scoped). But the Lead
+  // edit modal's Assigned To dropdown is populated from this list, so
+  // when Admin grants leads.reassign_own the dropdown was still empty.
+  // Workaround: if caller is Sales AND has reassign_own, treat every
+  // active user as visible so the dropdown can render reassignment
+  // targets. The write-side guard (routes/leads.js api_leads_update +
+  // api_leads_bulkUpdate) still enforces that Sales can only reassign
+  // leads they currently own.
+  let extraVisible = null;
+  try {
+    if (me.role === 'sales') {
+      const _perms = require('./permissions');
+      const granted = await _perms.can(me, 'leads.reassign_own');
+      if (granted) extraVisible = true;
+    }
+  } catch (_) {}
   const all = await db.getAll('users');
   const byId = {};
   all.forEach(u => { byId[Number(u.id)] = u; });
   return all
-    .filter(u => visible.includes(Number(u.id)))
+    .filter(u => extraVisible ? Number(u.is_active) === 1 : visible.includes(Number(u.id)))
     .map(u => ({
       id: u.id, name: u.name, email: u.email, phone: u.phone,
       role: u.role, parent_id: u.parent_id,
