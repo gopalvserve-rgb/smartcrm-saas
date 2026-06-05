@@ -61,6 +61,20 @@ const SCHEMA_MIGRATIONS = [
   ` },
 
   // ─────────────────────────────────────────────────────────────
+  // PIPELINE_STAGE_HEAL_BOOTSTRAP_v1 (2026-06-04)
+  // statuses.stage was added by PIPELINE_STAGE_v1 but the column heal
+  // lived only inside routes/statuses.js gated by a module-level flag
+  // that leaked across tenants in the same process. New tenants got
+  // "column stage does not exist" the first time they tried to add a
+  // status. Doing it here as part of the bootstrap runner means EVERY
+  // tenant gets the column proactively on first connect — no per-call
+  // heal needed.
+  // ─────────────────────────────────────────────────────────────
+  { name: '2026_06_statuses_stage', sql: `
+    ALTER TABLE statuses ADD COLUMN IF NOT EXISTS stage TEXT;
+  ` },
+
+  // ─────────────────────────────────────────────────────────────
   // Products + Quotations
   // ─────────────────────────────────────────────────────────────
   { name: '2026_05_products_gst_image', sql: `
