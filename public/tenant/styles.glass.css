@@ -716,3 +716,96 @@ html[data-skin="glass"] .status-pill {
   box-shadow: 0 3px 8px rgba(0,0,0,.15);
 }
 /* end GLASS_THEME_v1.4 */
+
+/* ============================================================
+   GLASS_THEME_v1.5 — proper KPI gradients via semantic classes.
+   Previous nth-child rules didn't match because each widget is
+   wrapped, so .stat is rarely a direct nth-child of dash-grid.
+   The SPA uses .stat.accent / .ok / .warn / .err — target those.
+   ============================================================ */
+
+/* Reset the v1.0 nth-child stack — they were no-ops; keep the
+   universal .stat treatment (shape + overlay sheen) and let the
+   semantic-class rules below pick the actual colour. */
+html[data-skin="glass"] .stat {
+  position: relative;
+  overflow: hidden;
+  border-radius: 24px !important;
+  padding: 1.5rem 1.4rem !important;
+  min-height: 130px;
+  border: 1px solid rgba(255,255,255,.45);
+  box-shadow: 0 24px 50px rgba(28,24,36,.24),
+              0 4px 12px rgba(28,24,36,.1),
+              inset 0 1px 0 rgba(255,255,255,.65);
+  color: #fff !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  justify-content: space-between;
+  background: linear-gradient(125deg, #f2b89c 0%, #ec9a92 34%, #d97f9a 62%, #a86fa6 100%) !important;
+}
+html[data-skin="glass"] .stat::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(157deg, rgba(255,255,255,.42) 0%, rgba(255,255,255,.12) 26%, rgba(255,255,255,0) 46%);
+}
+/* Layout inside .stat */
+html[data-skin="glass"] .stat .stat-icon {
+  position: absolute !important;
+  top: 16px; right: 18px;
+  font-size: 1.6rem !important;
+  width: auto !important;
+  opacity: .9;
+}
+html[data-skin="glass"] .stat .stat-body { width: 100%; }
+html[data-skin="glass"] .stat .stat-label {
+  font-family: 'Plus Jakarta Sans', sans-serif !important;
+  font-size: .72rem !important;
+  text-transform: uppercase !important;
+  letter-spacing: .12em !important;
+  font-weight: 800 !important;
+  color: rgba(255,255,255,.95) !important;
+  text-shadow: 0 1px 4px rgba(0,0,0,.25);
+}
+html[data-skin="glass"] .stat .stat-value {
+  font-family: 'Sora', sans-serif !important;
+  font-size: 3rem !important;
+  font-weight: 800 !important;
+  letter-spacing: -1.5px !important;
+  line-height: 1 !important;
+  color: #fff !important;
+  -webkit-text-fill-color: #fff !important;
+  text-shadow: 0 2px 12px rgba(0,0,0,.4), 0 0 28px rgba(255,255,255,.28) !important;
+  margin-top: auto;
+}
+@media (max-width: 600px) {
+  html[data-skin="glass"] .stat .stat-value { font-size: 2.4rem !important; }
+  html[data-skin="glass"] .stat { padding: 1.1rem !important; min-height: 110px; }
+}
+
+/* Semantic-class colour overrides — these match how the SPA renders
+   each KPI (Total Leads / New Today / Qualified = 'accent', Won = 'ok',
+   Due Today = 'warn', Overdue = 'err'). Higher specificity than the
+   default .stat rule above so they win. */
+html[data-skin="glass"] .stat.accent {
+  background: radial-gradient(135% 135% at 32% 22%, #c6b4e6 0%, #a98fd0 44%, #7e63ad 74%, #52447a 100%) !important;
+}
+html[data-skin="glass"] .stat.ok {
+  background: radial-gradient(135% 135% at 32% 22%, #a9d8bb 0%, #7cc09a 44%, #4f9c78 74%, #356a52 100%) !important;
+}
+html[data-skin="glass"] .stat.warn {
+  background: linear-gradient(135deg, #e8b083 0%, #d98f5e 42%, #c2703f 74%, #7a4524 100%) !important;
+}
+html[data-skin="glass"] .stat.err {
+  background: linear-gradient(125deg, #f2b89c 0%, #ec9a92 34%, #d97f9a 62%, #a86fa6 100%) !important;
+}
+
+/* "Customise this dashboard" / Add widget pill should NOT get the
+   stat colours when it inadvertently inherits stat class somewhere. */
+html[data-skin="glass"] .stat .stat-value[style*="color"] {
+  /* don't let the original .stat.ok .stat-value { color: var(--ok) }
+     rule from styles.css repaint our white text */
+  color: #fff !important;
+  -webkit-text-fill-color: #fff !important;
+}
+/* end GLASS_THEME_v1.5 */
