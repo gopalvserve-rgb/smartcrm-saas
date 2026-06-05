@@ -41215,16 +41215,45 @@ try {
             }
           },
             h('div', {},
-              h('strong', { style: { color: '#92400e' } }, '🔗 Facebook & Instagram for Social Hub'),
+              h('strong', { style: { color: '#92400e' } },
+                viewId === 'socialads' ? '📈 Ad Reports setup' : '🔗 Facebook & Instagram for Social Hub'),
               h('div', { class: 'muted', style: { fontSize: '.9em', marginTop: '.2rem' } },
-                'Separate from your Lead Sync setup. Click Connect to grant Messenger / IG DM / posts / comments / ads_read on the pages you choose.')
+                viewId === 'socialads'
+                  ? 'Add an Ad Account ID (e.g. act_127899269764650) below, then click Pull from Meta. Pages connection is separate — manage that under Inbox / Comments / Publish.'
+                  : 'Separate from your Lead Sync setup. Click Connect to grant Messenger / IG DM / posts / comments / ads_read on the pages you choose.')
             ),
-            h('div', { style: { display: 'flex', gap: '.4rem' } },
-              h('button', { class: 'btn primary', onclick: () => {
-                try { if (typeof openSocialConnectModal === 'function') openSocialConnectModal();
-                      else if (window.openSocialConnectModal) window.openSocialConnectModal(); }
-                catch (e) { toast(e.message || 'Connect modal failed', 'err'); }
-              } }, '🔗 Connect / Manage'),
+            // SOCIAL_CONNECT_STRIP_FIX_v1.1 — on Ad Reports view, the
+            // PRIMARY action is to manage AD ACCOUNTS (not Pages). The
+            // ⚙ Ad Accounts button already lives in the view's toolbar
+            // (openAccountsModal is closure-scoped inside VIEWS.socialads),
+            // so we route the click to that existing button so we reuse
+            // its logic without exposing the local function globally.
+            h('div', { style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap' } },
+              viewId === 'socialads'
+                ? h('button', { class: 'btn primary', onclick: () => {
+                    // Find the ⚙ Ad Accounts button rendered by VIEWS.socialads
+                    // and click it. Falls back to a friendly toast.
+                    try {
+                      const btns = [...view.querySelectorAll('button')];
+                      const acct = btns.find(b => /Ad Accounts/i.test(b.textContent || ''));
+                      if (acct) { acct.click(); return; }
+                      toast('Ad Accounts button not ready yet — try again in a second.', 'warn');
+                    } catch (e) { toast(e.message || 'Failed to open Ad Accounts', 'err'); }
+                  } }, '⚙ Manage Ad Accounts')
+                : h('button', { class: 'btn primary', onclick: () => {
+                    try { if (typeof openSocialConnectModal === 'function') openSocialConnectModal();
+                          else if (window.openSocialConnectModal) window.openSocialConnectModal(); }
+                    catch (e) { toast(e.message || 'Connect modal failed', 'err'); }
+                  } }, '🔗 Connect / Manage'),
+              // Secondary: on socialads, expose the Pages modal too in
+              // case the user needs to top up token scopes (ads_read).
+              viewId === 'socialads'
+                ? h('button', { class: 'btn ghost', onclick: () => {
+                    try { if (typeof openSocialConnectModal === 'function') openSocialConnectModal();
+                          else if (window.openSocialConnectModal) window.openSocialConnectModal(); }
+                    catch (e) { toast(e.message || 'Connect modal failed', 'err'); }
+                  } }, '🔗 Manage Pages')
+                : null,
               h('button', { class: 'btn ghost', onclick: async () => {
                 try {
                   const pages = await api('api_social_pages_list');
