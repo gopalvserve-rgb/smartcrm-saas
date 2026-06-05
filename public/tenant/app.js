@@ -16482,19 +16482,40 @@ async function wbChat() {
     if (openPhone) renderActiveThread(false).catch(() => {});
   }, 15000);
 
-  // WA_REPORT_DRILL_v2 — if the URL hash carries ?phone=… (deep-link
-  // from the WA Report drill), auto-select that thread once threads
-  // have loaded. We retry a few times because the thread list call
-  // races with our mount.
+  // WA_REPORT_DRILL_v2 — if a phone was stashed for auto-open (from
+  // the WA Report drill, lead modal, or any other source), open that
+  // thread once the thread list has rendered. Reads from THREE sources
+  // so we don't lose the target to a router quirk:
+  //   1. window._wbPendingOpen — set by the calling code just before nav
+  //   2. sessionStorage 'wbPendingOpen' — survives a page reload
+  //   3. ?phone= in the URL hash — last-resort deep-link
   try {
-    const hashQs = (location.hash.split('?')[1] || '');
-    const params = new URLSearchParams(hashQs);
-    const wantPhone = (params.get('phone') || '').replace(/\D/g, '');
+    let wantPhone = '';
+    if (window._wbPendingOpen && window._wbPendingOpen.phone) {
+      wantPhone = String(window._wbPendingOpen.phone).replace(/\D/g, '');
+      window._wbPendingOpen = null; // consume once
+    }
+    if (!wantPhone) {
+      try {
+        const s = sessionStorage.getItem('wbPendingOpen');
+        if (s) {
+          const j = JSON.parse(s);
+          if (j && j.phone && (Date.now() - (j.ts || 0)) < 30000) {
+            wantPhone = String(j.phone).replace(/\D/g, '');
+          }
+          sessionStorage.removeItem('wbPendingOpen');
+        }
+      } catch (_) {}
+    }
+    if (!wantPhone) {
+      const hashQs = (location.hash.split('?')[1] || '');
+      const params = new URLSearchParams(hashQs);
+      wantPhone = (params.get('phone') || '').replace(/\D/g, '');
+    }
     if (wantPhone) {
       let tries = 0;
       const t = setInterval(() => {
         tries++;
-        // Did the thread list render a row for this phone?
         const row = [...left.querySelectorAll('.wb-chat-row')].find(r =>
           (r.textContent || '').replace(/\D/g, '').indexOf(wantPhone) !== -1);
         if (row) { clearInterval(t); try { openThread(wantPhone); } catch (_) {} }
@@ -19345,14 +19366,16 @@ async function openWaDrill(opts) {
   function goToLeadChat(r) {
     const phone = (r.phone || '').replace(/\D/g, '');
     if (!phone && !r.lead_id) return;
-    // Open the WhatsApp chat view + auto-select this thread via ?phone=
-    // (wbChat reads the hash on mount). Lead id is passed as a hint
-    // so the active thread can be highlighted even if the phone match
-    // is fuzzy.
-    const qp = [];
-    if (phone)   qp.push('phone=' + encodeURIComponent(phone));
-    if (r.lead_id) qp.push('lead=' + encodeURIComponent(r.lead_id));
-    location.hash = '#/whatsbot/chat' + (qp.length ? '?' + qp.join('&') : '');
+    // Stash the target in a global the wbChat view auto-reads on mount.
+    // (URL params got swallowed by the scroll-reset / hashchange dance —
+    // a window-scoped handoff is the reliable way.)
+    window._wbPendingOpen = { phone, lead_id: r.lead_id || null, ts: Date.now() };
+    try { sessionStorage.setItem('wbPendingOpen', JSON.stringify(window._wbPendingOpen)); } catch (_) {}
+    // Drop saved drill state so Back button works after we navigate.
+    window._waDrillSaved = null;
+    // Set hash AND call navigateTo directly — belt + braces.
+    try { location.hash = '#/whatsbot/chat'; } catch (_) {}
+    try { if (typeof navigateTo === 'function') navigateTo('whatsbot'); } catch (_) {}
   }
   renderRows('');
   searchBox.addEventListener('input', () => renderRows(searchBox.value));
