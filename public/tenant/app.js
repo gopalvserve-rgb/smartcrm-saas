@@ -41161,7 +41161,7 @@ try {
                 }
                 try {
                   const r = await api('api_social_fb_connect', resp.authResponse.accessToken);
-                  toast('Connected ' + r.pages_connected + ' page(s)' + (r.ig_accounts ? ' · ' + r.ig_accounts + ' IG' : ''));
+                  toast('Connected ' + r.pages_connected + ' page(s)' + (r.ig_accounts ? ' · ' + r.ig_accounts + ' IG' : '') + (r.ad_accounts ? ' · ' + r.ad_accounts + ' ad account(s)' : ''));
                   refresh();
                   resolve();
                 } catch (e) { toast(e.message, 'err'); reject(e); }
@@ -41230,36 +41230,30 @@ try {
             // its logic without exposing the local function globally.
             h('div', { style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap' } },
               viewId === 'socialads'
-                ? h('button', { class: 'btn primary social-strip-acct-btn', onclick: () => {
-                    // Find the ORIGINAL ⚙ Ad Accounts button rendered by
-                    // VIEWS.socialads and click it. Must EXCLUDE the strip's
-                    // own button (which also contains 'Ad Accounts') and any
-                    // descendant of the strip — otherwise we click ourselves
-                    // in a loop and nothing happens visibly.
-                    try {
-                      const strip = view.querySelector('.social-connect-strip');
-                      const btns = [...view.querySelectorAll('button')];
-                      const acct = btns.find(b => {
-                        if (strip && strip.contains(b)) return false;
-                        const t = (b.textContent || '').trim();
-                        // Exact original button text — "⚙ Ad Accounts".
-                        return t === '⚙ Ad Accounts' || /^\s*⚙\s*Ad Accounts\s*$/i.test(t);
-                      });
-                      if (acct) { acct.click(); return; }
-                      // Fallback — wait for the view's render to finish, then retry.
-                      setTimeout(() => {
-                        const strip2 = view.querySelector('.social-connect-strip');
-                        const btns2 = [...view.querySelectorAll('button')];
-                        const acct2 = btns2.find(b => {
-                          if (strip2 && strip2.contains(b)) return false;
+                ? h('button', { class: 'btn primary social-strip-acct-btn',
+                    title: 'Re-runs Facebook login (silent if your session is fresh) and auto-discovers all ad accounts you have access to.',
+                    onclick: () => {
+                      // SOCIAL_AUTO_PULL_AD_ACCOUNTS_v1 — primary action on Ad
+                      // Reports is to (re-)connect Facebook. The Connect flow
+                      // now auto-pulls /me/adaccounts so ad accounts populate
+                      // without manual act_<id> entry. Falls back to clicking
+                      // the original ⚙ Ad Accounts button if the modal helper
+                      // isn't available.
+                      try {
+                        if (typeof openSocialConnectModal === 'function') return openSocialConnectModal();
+                        if (window.openSocialConnectModal) return window.openSocialConnectModal();
+                        // Last-resort fallback — click the toolbar ⚙ Ad Accounts button.
+                        const strip = view.querySelector('.social-connect-strip');
+                        const btns = [...view.querySelectorAll('button')];
+                        const acct = btns.find(b => {
+                          if (strip && strip.contains(b)) return false;
                           const t = (b.textContent || '').trim();
-                          return t === '⚙ Ad Accounts' || /^\s*⚙\s*Ad Accounts\s*$/i.test(t);
+                          return t === '⚙ Ad Accounts';
                         });
-                        if (acct2) acct2.click();
-                        else toast('Ad Accounts button not found — try hard-refresh (Ctrl+Shift+R).', 'warn');
-                      }, 400);
-                    } catch (e) { toast(e.message || 'Failed to open Ad Accounts', 'err'); }
-                  } }, '⚙ Manage Ad Accounts')
+                        if (acct) acct.click();
+                        else toast('Connect modal not ready — hard-refresh (Ctrl+Shift+R).', 'warn');
+                      } catch (e) { toast(e.message || 'Failed to open Connect modal', 'err'); }
+                    } }, '🔗 Re-sync from Facebook')
                 : h('button', { class: 'btn primary', onclick: () => {
                     try { if (typeof openSocialConnectModal === 'function') openSocialConnectModal();
                           else if (window.openSocialConnectModal) window.openSocialConnectModal(); }
