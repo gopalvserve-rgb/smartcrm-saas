@@ -36,24 +36,36 @@ const _slugCache = new Map();      // slug -> { tenant row, expiresAt }
 const SLUG_TTL_MS = 30 * 1000;     // 30s — long enough to be hot, short enough that suspends/upgrades are picked up quickly
 
 // Evict the least-recently-used pool when we exceed POOL_LRU_MAX.
+// FB_OAUTH_POOL_FIX_v1 (2026-06-05) — Previous version called p.end() on
+// the LRU pool even if a long-running request (e.g. FB OAuth callback,
+// which makes several 1-3s Graph API calls between db writes) was still
+// holding it. node-pg throws "Cannot use a pool after calling end on
+// the pool" on any query that lands after end(). Result: connect-FB
+// callback's setConfig('META_USER_TOKEN') after fetchAllPages failed,
+// pages got persisted with empty access_token, and Subscribe failed.
+// Fix: only evict pools with NO active or pending clients. If every
+// candidate is busy we just stay slightly above POOL_LRU_MAX until a
+// pool goes idle — far better than killing live work.
 function _evictIfNeeded() {
   if (_pools.size <= POOL_LRU_MAX) return;
-  // Find the oldest entry
-  let oldestKey = null;
-  let oldestTs = Infinity;
-  for (const [k, ts] of _poolLastUsed.entries()) {
-    if (ts < oldestTs) { oldestTs = ts; oldestKey = k; }
+  // Sort candidates by LRU
+  const sorted = [..._poolLastUsed.entries()].sort((a, b) => a[1] - b[1]);
+  for (const [key] of sorted) {
+    const p = _pools.get(key);
+    if (!p) { _poolLastUsed.delete(key); continue; }
+    // pg.Pool exposes totalCount (open clients) + waitingCount (queued
+    // requests). If either is > 0 a query is in-flight — skip this one.
+    const busy = (p.totalCount > 0) || (p.waitingCount > 0);
+    if (busy) continue;
+    _pools.delete(key);
+    _poolLastUsed.delete(key);
+    try { p.end().catch(() => {}); } catch (_) {}
+    console.log('[tenant-pool] LRU evicted', key, 'cache size now', _pools.size);
+    if (_pools.size <= POOL_LRU_MAX) return;
   }
-  if (oldestKey) {
-    const p = _pools.get(oldestKey);
-    _pools.delete(oldestKey);
-    _poolLastUsed.delete(oldestKey);
-    if (p) {
-      // end() is async but we don't await — request handlers using this
-      // exact tenant right now will finish; new requests grab a fresh pool.
-      try { p.end().catch(() => {}); } catch (_) {}
-    }
-    console.log('[tenant-pool] LRU evicted', oldestKey, 'cache size now', _pools.size);
+  // All pools busy — log once so we know to bump POOL_LRU_MAX if this happens often.
+  if (_pools.size > POOL_LRU_MAX + 5) {
+    console.warn('[tenant-pool] LRU at', _pools.size, '— all pools busy, deferring eviction');
   }
 }
 
