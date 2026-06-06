@@ -3305,29 +3305,77 @@ const WIDGET_LIBRARY = {
 
   // ----- Big panels -----
   funnel_pipeline: { title: 'Pipeline funnel', group: 'Pipeline',
-    render: (c, _cfg, d, w) => {
-      c.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.6rem' } },
-        h('h3', { style: { margin: 0 } }, w.title || '📈 Pipeline funnel'),
-        h('a', { href: '#/reports', class: 'btn sm ghost' }, 'Full report →')));
-      const rows = (d.funnel || []).filter(s => Number(s.is_final) !== 1)
-        .sort((a, b) => (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0));
-      if (!rows.length) { c.appendChild(h('p', { class: 'muted' }, 'No pipeline data yet.')); return; }
-      const total = rows.reduce((n, s) => n + Number(s._c || s.count || 0), 0);
-      const top = Math.max(...rows.map(s => Number(s._c || s.count || 0)), 1);
-      const fEl = h('div', { class: 'funnel' });
-      rows.forEach(s => {
-        const cnt = Number(s._c || s.count || 0);
-        const pct = top ? (cnt / top) * 100 : 0;
-        const conv = total ? Math.round((cnt / total) * 100) : 0;
-        fEl.appendChild(h('div', { class: 'funnel-row' },
-          h('div', { class: 'funnel-label', style: { minWidth: '160px' } }, s.status || '—'),
-          h('div', { style: { flex: 1, background: '#f1f5f9', borderRadius: '8px', height: '24px' } },
-            h('div', { style: { width: pct + '%', height: '100%', background: s.color || '#6366f1', borderRadius: '8px' } })),
-          h('div', { style: { minWidth: '80px', textAlign: 'right', fontWeight: 600 } }, String(cnt)),
-          h('div', { class: 'muted', style: { minWidth: '50px', textAlign: 'right', fontSize: '.8rem' } }, conv + '%')
-        ));
-      });
-      c.appendChild(fEl);
+    description: 'Funnel grouped by universal stage with KPI strip + Won/Lost cards.',
+    render: async (c, _cfg, _d, w) => {
+      c.appendChild(h('h3', { style: { margin:'0 0 .6rem' } }, w.title || '\u{1F4C8} Sales pipeline'));
+      const body = h('div', {});
+      c.appendChild(body);
+      try {
+        const r = await api('api_pipeline_funnel', {});
+        const k = r.kpis || {};
+        // Compact KPI row
+        const kpis = h('div', { style: { display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:'.4rem', marginBottom:'.7rem' } });
+        function kp(lab, val, sub) {
+          return h('div', { style: { background:'#eff6ff', border:'1px solid #dbeafe', borderRadius:'8px', padding:'.45rem .55rem' } },
+            h('div', { style: { fontSize:'.62rem', color:'#1e40af' } }, lab),
+            h('div', { style: { fontSize:'1.05rem', fontWeight:700, color:'#0f172a' } }, val),
+            h('div', { style: { fontSize:'.62rem', color:'#64748b' } }, sub)
+          );
+        }
+        kpis.appendChild(kp('LEADS', String(k.total_leads || 0), 'in pipeline'));
+        kpis.appendChild(kp('VALUE', _formatInr(k.open_value || 0), 'wt ' + _formatInr(k.weighted_value || 0)));
+        kpis.appendChild(kp('WIN', (k.win_rate || 0) + '%', 'won/closed'));
+        kpis.appendChild(kp('CYCLE', k.avg_cycle_days != null ? (k.avg_cycle_days + 'd') : '\u2014', 'avg'));
+        body.appendChild(kpis);
+
+        // Compact bands
+        const bands = r.bands || [];
+        const maxCount = Math.max(1, ...bands.map(b => b.count || 0));
+        const funnel = h('div', { style: { padding:'.3rem 0' } });
+        bands.forEach((b, i) => {
+          const tw = Math.max(30, Math.round(85 - i * 12));
+          const bgColor = _FUNNEL_BAND_COLORS[i] || _FUNNEL_BAND_COLORS[_FUNNEL_BAND_COLORS.length - 1];
+          const tc = _FUNNEL_BAND_TEXT[i] || '#fff';
+          const trap = h('div', {
+            style: { width: tw + '%', margin:'0 auto', height:'42px', background:bgColor, clipPath:'polygon(8% 0, 92% 0, 100% 100%, 0% 100%)', display:'flex', alignItems:'center', justifyContent:'center', color: tc, cursor:'pointer', fontSize:'.78rem', fontWeight:600 },
+            onclick: () => { location.hash = '#/leads?stage=' + b.id; }
+          }, b.label + ' \u00B7 ' + b.count);
+          const row = h('div', { style: { display:'flex', alignItems:'center', gap:'.4rem', marginBottom:'.3rem' } },
+            h('div', { style: { flex:1 } }, trap),
+            h('div', { style: { width:'90px', fontSize:'.72rem', color:'#0f172a' } },
+              h('div', { style: { fontWeight:700 } }, b.count + ' leads'),
+              h('div', { style: { fontSize:'.66rem', color:'#64748b' } }, _formatInr(b.value))
+            )
+          );
+          funnel.appendChild(row);
+        });
+        body.appendChild(funnel);
+
+        // Won/Lost compact
+        const won = r.won || { count:0, value:0 };
+        const lost = r.lost || { count:0, value:0 };
+        const wl = h('div', { style: { display:'grid', gridTemplateColumns:'1fr 1fr', gap:'.4rem', marginTop:'.5rem' } },
+          h('div', { style: { background:'#dcfce7', border:'1px solid #bbf7d0', borderRadius:'8px', padding:'.4rem .55rem', display:'flex', alignItems:'center', gap:'.4rem', cursor:'pointer' },
+            onclick: () => { location.hash = '#/leads?stage=won'; } },
+            h('div', { style: { width:'24px', height:'24px', borderRadius:'6px', background:'#86efac', color:'#14532d', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'.85rem', fontWeight:700 } }, '\u2713'),
+            h('div', { style: { flex:1 } },
+              h('div', { style: { fontWeight:700, color:'#14532d', fontSize:'.78rem' } }, 'Won \u00B7 ' + won.count),
+              h('div', { style: { fontSize:'.65rem', color:'#16a34a' } }, _formatInr(won.value))
+            )
+          ),
+          h('div', { style: { background:'#fee2e2', border:'1px solid #fecaca', borderRadius:'8px', padding:'.4rem .55rem', display:'flex', alignItems:'center', gap:'.4rem', cursor:'pointer' },
+            onclick: () => { location.hash = '#/leads?stage=lost'; } },
+            h('div', { style: { width:'24px', height:'24px', borderRadius:'6px', background:'#fca5a5', color:'#7f1d1d', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'.85rem', fontWeight:700 } }, '\u2715'),
+            h('div', { style: { flex:1 } },
+              h('div', { style: { fontWeight:700, color:'#7f1d1d', fontSize:'.78rem' } }, 'Lost \u00B7 ' + lost.count),
+              h('div', { style: { fontSize:'.65rem', color:'#dc2626' } }, _formatInr(lost.value))
+            )
+          )
+        );
+        body.appendChild(wl);
+      } catch (e) {
+        body.appendChild(h('div', { class: 'muted', style: { padding:'.5rem' } }, 'Could not load funnel: ' + e.message));
+      }
     }
   },
   tat_alerts: { title: 'TAT alerts (L1 / L2 / L3)', group: 'TAT',
