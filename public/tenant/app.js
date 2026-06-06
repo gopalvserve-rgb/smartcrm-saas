@@ -25475,7 +25475,13 @@ function openAutomationModal(existing) {
           if (!name)     missing.push('Name');
           if (!eventKey) missing.push('Event');
           if (!channel)  missing.push('Channel');
-          if (channel === 'email' && !template) missing.push('Email body');
+          // AUTOMATION_CHANNEL_RENDER_FIX_v1 — if user left email body empty,
+          // fall back to the same placeholder text shown in the textarea
+          // instead of blocking save. Users were confused by the gray
+          // placeholder (looks like a value but isn't).
+          if (channel === 'email' && !template) {
+            template = 'Hi {{lead.name}}, your status is now {{new_status.name}}. We\'ll get back to you shortly.';
+          }
           if (channel === 'whatsapp' && !subject.startsWith('template:')) missing.push('WhatsApp template');
           if (missing.length) { toast('Fill in: ' + missing.join(', '), 'err'); return; }
           const payload = { id: a.id, name, event: eventKey, channel,
