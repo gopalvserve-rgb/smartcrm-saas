@@ -3208,10 +3208,26 @@ const WIDGET_LIBRARY = {
     }
   },
   call_activity_recent: { title: 'Call Activity · Recent calls', group: 'Calls',
-    render: (c, _cfg, d, w) => {
+    render: async (c, _cfg, d, w) => {
       c.appendChild(h('h3', {}, w.title || '\uD83D\uDCDE Recent calls'));
-      const rows = (d.callActivity?.recentCalls || []).slice(0, 10);
-      if (!rows.length) { c.appendChild(h('div', { class: 'muted' }, 'No calls yet.')); return; }
+      // CALL_RECENT_FETCH_FIX_v1 — bundled `d.callActivity` may be missing
+      // because the shared fetch errored or the dashboard date filter
+      // narrowed the window to a day with no calls. Self-fetch with the
+      // server's default (last 30 days) so this widget always shows
+      // SOMETHING actionable, and surface any error inline.
+      let rows = (d.callActivity && d.callActivity.recentCalls) || [];
+      if (!rows.length) {
+        try {
+          // No-filter call → server defaults to last 30 days, all visible users
+          const fresh = await api('api_reports_callActivity', {});
+          rows = (fresh && fresh.recentCalls) || [];
+        } catch (e) {
+          c.appendChild(h('div', { class: 'error-box', style: { fontSize: '.78rem' } }, 'Could not load: ' + e.message));
+          return;
+        }
+      }
+      rows = rows.slice(0, 10);
+      if (!rows.length) { c.appendChild(h('div', { class: 'muted' }, 'No calls in the last 30 days.')); return; }
       const dirIcon = (r) => {
         if (r.direction === 'unknown') return '\u2753';
         if (r.direction === 'missed' || (r.direction === 'in' && !r.recording_id && r.event === 'incoming_ringing')) return '\u274C';
