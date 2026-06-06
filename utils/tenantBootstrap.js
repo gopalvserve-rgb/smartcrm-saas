@@ -137,7 +137,21 @@ const SCHEMA_MIGRATIONS = [
     -- Per-user toggle for auto AI call-summary processing. ON by default
     -- so existing tenants keep their current behaviour. Admin can flip
     -- to 0 for any user to skip auto-audit (manual button still works).
-    ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_audit_enabled INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_audit_enabled INTEGER NOT NULL DEFAULT 0;
+  ` },
+  // AI_AUDIT_HARD_OFF_v2 (2026-06-06): explicit, irreversible policy —
+  // AI Call Audit is OFF by default for every user, every tenant, going
+  // forward. Original migration above defaulted ON which crept costs up
+  // and was switched OFF after admin asked twice. This migration:
+  //   1. Forces the column default to 0 so any new user row created from
+  //      this point forward starts with ai_audit_enabled = 0.
+  //   2. UPDATEs every existing user row to 0, regardless of prior state.
+  //   3. Runs exactly once per tenant (tracked in _tenant_migrations) so
+  //      admin can still toggle individual users back ON afterwards
+  //      without this migration re-flipping them.
+  { name: '2026_06_users_ai_audit_hard_off_v2', sql: `
+    ALTER TABLE users ALTER COLUMN ai_audit_enabled SET DEFAULT 0;
+    UPDATE users SET ai_audit_enabled = 0;
   ` },
     { name: '2026_05_webhook_logs_table', sql: `
     CREATE TABLE IF NOT EXISTS webhook_logs (

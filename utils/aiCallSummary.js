@@ -444,7 +444,7 @@ async function _tick() {
          LEFT JOIN users u ON u.id = r.user_id
         WHERE r.ai_processed_at IS NULL
           AND (r.ai_error IS NULL OR r.ai_error = '')
-          AND COALESCE(u.ai_audit_enabled, 1) = 1
+          AND COALESCE(u.ai_audit_enabled, 0) = 1
         ORDER BY r.created_at ASC
         LIMIT 5`
     );

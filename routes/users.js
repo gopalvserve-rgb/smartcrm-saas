@@ -38,7 +38,7 @@ async function api_users_list(token) {
       calendly_url: u.calendly_url || '',
       autodial_on: Number(u.autodial_on != null ? u.autodial_on : 1) ? 1 : 0,
       paused_for_leads: !!u.paused_for_leads,
-      ai_audit_enabled: Number(u.ai_audit_enabled != null ? u.ai_audit_enabled : 1) ? 1 : 0
+      ai_audit_enabled: Number(u.ai_audit_enabled != null ? u.ai_audit_enabled : 0) ? 1 : 0
     }));
 }
 
@@ -306,7 +306,7 @@ async function api_users_setAiAudit(token, userId, enabled) {
   if (!id) throw new Error('userId required');
   // Defensive: ensure the column exists (covers tenants whose bootstrap
   // hasn't run for some reason).
-  try { await db.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_audit_enabled INTEGER NOT NULL DEFAULT 1'); } catch (_) {}
+  try { await db.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_audit_enabled INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
   await db.query('UPDATE users SET ai_audit_enabled = $1 WHERE id = $2', [enabled ? 1 : 0, id]);
   return { ok: true, user_id: id, ai_audit_enabled: enabled ? 1 : 0 };
 }
