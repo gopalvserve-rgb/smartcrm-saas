@@ -1663,11 +1663,15 @@ const NAV_GROUPS = [
     /* CAMPAIGN_REPORT_v1.1 */
     { id: 'campaignreport', label: 'Campaign report', icon: '📊', roles: ['admin', 'manager', 'team_leader'] }
   ] },
+  /* META_MODULE_v1 Phase C — extract Marketing into its own group above
+   * Workspace so Ads Manager and FB/IG features are easy to find. */
+  { label: 'Marketing', icon: '📣', items: [
+    { id: 'socialads',      label: 'Ads Manager',          icon: '📊' },
+    { id: 'socialinbox',    label: 'Facebook & Instagram', icon: '💬', countKey: 'social_unread' },
+    { id: 'socialcomments', label: 'Comments',             icon: '💭', countKey: 'social_unreplied' },
+    { id: 'socialpublish',  label: 'Post Publisher',       icon: '📤' }
+  ] },
   { label: 'Workspace', icon: '💬', items: [
-    { id: 'socialinbox', label: 'Social Inbox', icon: '📱', countKey: 'social_unread' },
-    { id: 'socialcomments', label: 'Social Comments', icon: '💭', countKey: 'social_unreplied' },
-    { id: 'socialpublish',  label: 'Social Publisher', icon: '🚀' },
-    { id: 'socialads',      label: 'Ad Reports', icon: '📈' },
     { id: 'whatsbot',   label: 'WhatsBot',   icon: '💬' },
     { id: 'aibot',      label: 'AI Bot',     icon: '🤖', roles: ['admin', 'manager'] },
     { id: 'quotations', label: 'Quotations', icon: '📄' },
@@ -23931,6 +23935,173 @@ function importGmailLeads() {
     } }, '📋 Copy script'));
   }
 
+  // ──────────────────────────────────────────────────────────────
+  // META_MODULE_v1 Phase A — Meta Ads Manager + Facebook & Instagram
+  // standalone connection cards. Both reuse the existing
+  // /api/social_fb_connect + /api/social_pages backend (Social Phase
+  // S1–S4) — this is a UI-only polish to make them discoverable.
+  // ──────────────────────────────────────────────────────────────
+  let _socialState = { pages: [], adAccounts: [] };
+  try {
+    const r = await api('api_social_pages').catch(() => null);
+    if (r && Array.isArray(r)) _socialState.pages = r;
+    else if (r && r.pages) _socialState.pages = r.pages || [];
+    if (r && r.ad_accounts) _socialState.adAccounts = r.ad_accounts || [];
+  } catch (_) {}
+
+  function _metaPill(text, bg, color) {
+    return h('span', { style: { background: bg, color, fontSize: '.7rem', fontWeight: 600, padding: '.18rem .55rem', borderRadius: '999px', marginLeft: '.5rem' } }, text);
+  }
+
+  // ---- Card 1: Meta Ads Manager ----
+  const metaAdsConnected = _socialState.adAccounts && _socialState.adAccounts.length > 0;
+  const adsCard = h('div', { class: 'card', style: { padding: '0', marginTop: '1.5rem', overflow: 'hidden', border: '1px solid #1f2937' } });
+  adsCard.appendChild(h('div', { style: { padding: '1rem 1.1rem', display: 'flex', alignItems: 'center', gap: '.8rem', borderBottom: '1px solid #1f2937' } },
+    h('div', { style: { width: '44px', height: '44px', borderRadius: '12px', background: 'linear-gradient(135deg,#3b82f6,#6366f1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '1.2rem' } }, '📣'),
+    h('div', { style: { flex: '1 1 auto' } },
+      h('div', { style: { display: 'flex', alignItems: 'center' } },
+        h('strong', { style: { fontSize: '1.05rem' } }, 'Meta Ads Manager'),
+        _metaPill('Marketing API', '#0f172a', '#cbd5e1')),
+      h('div', { class: 'muted', style: { fontSize: '.82rem', marginTop: '.15rem' } },
+        'Create, publish & monitor Facebook and Instagram ad campaigns')
+    ),
+    h('span', { style: { fontSize: '.75rem', fontWeight: 600, padding: '.35rem .8rem', borderRadius: '999px',
+        background: metaAdsConnected ? '#dcfce7' : '#fee2e2',
+        color: metaAdsConnected ? '#15803d' : '#991b1b',
+        border: '1px solid ' + (metaAdsConnected ? '#86efac' : '#fecaca') } },
+      metaAdsConnected ? '✓ Connected' : '× Not Connected')
+  ));
+
+  if (metaAdsConnected) {
+    const acct = _socialState.adAccounts[0] || {};
+    adsCard.appendChild(h('div', { style: { padding: '.85rem 1.1rem', display: 'flex', flexDirection: 'column', gap: '.35rem' } },
+      h('div', { style: { fontSize: '.85rem' } },
+        h('span', { style: { color: '#a78bfa', fontWeight: 600 } }, '◉ Business: '),
+        h('strong', {}, acct.business_name || acct.name || '—')),
+      h('div', { style: { fontSize: '.85rem' } },
+        h('span', { class: 'muted' }, 'Ad Account: '),
+        h('code', { style: { fontFamily: 'monospace' } }, acct.account_id || acct.id || '—'))
+    ));
+    adsCard.appendChild(h('div', { style: { padding: '.85rem 1.1rem', display: 'flex', gap: '.5rem', borderTop: '1px solid #1f2937' } },
+      h('button', { class: 'btn', style: { flex: 1 }, onclick: async () => {
+        if (!confirm('Reconnect Meta? You\'ll be redirected to Facebook to re-authorize.')) return;
+        try {
+          const r = await api('api_social_fb_oauth_url', location.origin);
+          location.href = r.auth_url;
+        } catch (e) { toast(e.message, 'err'); }
+      } }, '🔗 Reconnect'),
+      h('button', { class: 'btn danger', onclick: async () => {
+        if (!confirm('Disconnect Meta Ads Manager? Ad reports will stop syncing.')) return;
+        try { await api('api_social_fb_disconnect'); toast('Disconnected', 'ok'); showAdminTab('integrations'); }
+        catch (e) { toast(e.message, 'err'); }
+      } }, 'Disconnect')
+    ));
+  } else {
+    adsCard.appendChild(h('div', { style: { padding: '1.1rem', textAlign: 'center' } },
+      h('button', { class: 'btn primary', style: { padding: '.6rem 1.2rem' }, onclick: async () => {
+        try {
+          const r = await api('api_social_fb_oauth_url', location.origin);
+          location.href = r.auth_url;
+        } catch (e) { toast(e.message, 'err'); }
+      } }, '🔗 Connect with Facebook')
+    ));
+  }
+
+  // Sandbox Mode row
+  adsCard.appendChild(h('div', { style: { padding: '.7rem 1.1rem', borderTop: '1px solid #1f2937', background: '#0a1124', display: 'flex', alignItems: 'center', gap: '.6rem', fontSize: '.82rem' } },
+    h('span', { style: { background: '#92400e', color: '#fde68a', padding: '.15rem .55rem', borderRadius: '999px', fontWeight: 600, fontSize: '.7rem' } }, '🛠 Sandbox Mode'),
+    h('span', { style: { flex: 1, color: '#cbd5e1' } }, 'Connect manually using a Meta sandbox access token & ad account.'),
+    h('button', { class: 'btn sm', onclick: () => {
+      const tok = prompt('Paste Sandbox access token:');
+      if (!tok) return;
+      const acct = prompt('Paste Ad Account ID (act_xxxxxxxxxxxxx):');
+      if (!acct) return;
+      api('api_social_ads_sandboxConnect', { access_token: tok, ad_account_id: acct })
+        .then(() => { toast('Sandbox connected', 'ok'); showAdminTab('integrations'); })
+        .catch(e => toast(e.message, 'err'));
+    } }, 'Show Form')
+  ));
+
+  // Connected pages section
+  const connectedPages = _socialState.pages.filter(p => Number(p.is_active) === 1 || Number(p.enabled) === 1 || p.is_active === undefined);
+  adsCard.appendChild(h('div', { style: { padding: '.7rem 1.1rem', borderTop: '1px solid #1f2937', display: 'flex', alignItems: 'center', gap: '.6rem' } },
+    h('span', {}, '📣'),
+    h('strong', { style: { flex: '0 0 auto' } }, 'Ad Manager Connected Pages'),
+    h('span', { class: 'muted', style: { fontSize: '.78rem', flex: 1 } }, 'Enable a page to allow campaigns to publish on it.'),
+    h('span', { style: { background: '#0f172a', border: '1px solid #1f2937', color: '#a78bfa', padding: '.18rem .55rem', borderRadius: '999px', fontWeight: 600, fontSize: '.72rem' } }, connectedPages.length + '/' + (_socialState.pages.length || connectedPages.length) + ' Enabled')
+  ));
+  if (_socialState.pages.length === 0) {
+    adsCard.appendChild(h('div', { style: { padding: '.7rem 1.1rem', color: '#94a3b8', fontSize: '.85rem' } }, 'No pages yet — connect with Facebook to add them.'));
+  } else {
+    _socialState.pages.forEach(p => {
+      const isEnabled = Number(p.is_active) === 1 || Number(p.enabled) === 1 || p.is_active === undefined;
+      adsCard.appendChild(h('div', { style: { padding: '.6rem 1.1rem', borderTop: '1px solid #1f2937', display: 'flex', alignItems: 'center', gap: '.7rem' } },
+        h('div', { style: { width: '32px', height: '32px', borderRadius: '8px', background: '#1e3a8a', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#bfdbfe' } }, 'f'),
+        h('div', { style: { flex: '1 1 auto' } },
+          h('div', { style: { fontWeight: 600 } }, p.name || p.page_name || '—'),
+          p.ig_username ? h('div', { style: { fontSize: '.78rem', color: '#f472b6' } }, '◉ @' + p.ig_username) : null),
+        h('span', { style: { background: isEnabled ? '#064e3b' : '#0f172a', color: isEnabled ? '#6ee7b7' : '#94a3b8', padding: '.18rem .55rem', borderRadius: '999px', fontSize: '.72rem', fontWeight: 600 } }, isEnabled ? '✓ Eligible' : 'Disabled'),
+        h('button', { class: 'btn sm', onclick: async () => {
+          try { await api('api_social_page_toggle', { page_id: p.id || p.page_id, enabled: !isEnabled }); toast(isEnabled ? 'Disabled' : 'Enabled', 'ok'); showAdminTab('integrations'); }
+          catch (e) { toast(e.message, 'err'); }
+        } }, isEnabled ? 'Disable' : 'Enable')
+      ));
+    });
+  }
+  wrap.appendChild(adsCard);
+
+  // ---- Card 2: Facebook & Instagram (Messaging) ----
+  const msgConnected = connectedPages.length > 0;
+  const msgCard = h('div', { class: 'card', style: { padding: '0', marginTop: '1.25rem', overflow: 'hidden', border: '1px solid #1f2937' } });
+  msgCard.appendChild(h('div', { style: { padding: '1rem 1.1rem', display: 'flex', alignItems: 'center', gap: '.8rem', borderBottom: '1px solid #1f2937' } },
+    h('div', { style: { width: '44px', height: '44px', borderRadius: '12px', background: 'linear-gradient(135deg,#f472b6,#a855f7,#3b82f6)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '1.2rem' } }, 'f'),
+    h('div', { style: { flex: '1 1 auto' } },
+      h('div', { style: { display: 'flex', alignItems: 'center' } },
+        h('strong', { style: { fontSize: '1.05rem' } }, 'Facebook & Instagram'),
+        _metaPill('Messaging', '#0f172a', '#cbd5e1')),
+      h('div', { class: 'muted', style: { fontSize: '.82rem', marginTop: '.15rem' } },
+        'Connect Facebook Pages and Instagram Business accounts to receive DMs')
+    ),
+    h('span', { style: { fontSize: '.75rem', fontWeight: 600, padding: '.35rem .8rem', borderRadius: '999px',
+        background: msgConnected ? '#dcfce7' : '#0f172a',
+        color: msgConnected ? '#15803d' : '#94a3b8',
+        border: '1px solid ' + (msgConnected ? '#86efac' : '#1f2937') } },
+      msgConnected ? '✓ Connected' : 'Not Connected')
+  ));
+  msgCard.appendChild(h('div', { style: { padding: '1rem 1.1rem' } },
+    h('button', { class: 'btn', onclick: async () => {
+      try {
+        const r = await api('api_social_fb_oauth_url', location.origin);
+        location.href = r.auth_url;
+      } catch (e) { toast(e.message, 'err'); }
+    } }, '🔗 Connect with Facebook')
+  ));
+  if (connectedPages.length === 0) {
+    msgCard.appendChild(h('div', { style: { padding: '2rem 1.1rem', margin: '0 1.1rem 1.1rem', textAlign: 'center', border: '1px dashed #1f2937', borderRadius: '10px' } },
+      h('div', { style: { fontSize: '2rem', marginBottom: '.5rem' } }, '📘'),
+      h('div', { style: { fontWeight: 600, marginBottom: '.3rem' } }, 'No Pages Connected'),
+      h('div', { class: 'muted', style: { fontSize: '.85rem', marginBottom: '.85rem', maxWidth: '380px', margin: '0 auto .85rem' } },
+        'Connect your Facebook Pages and Instagram accounts to receive and manage messages.'),
+      h('button', { class: 'btn primary', onclick: async () => {
+        try {
+          const r = await api('api_social_fb_oauth_url', location.origin);
+          location.href = r.auth_url;
+        } catch (e) { toast(e.message, 'err'); }
+      } }, '🔗 Connect with Facebook')
+    ));
+  } else {
+    connectedPages.forEach(p => {
+      msgCard.appendChild(h('div', { style: { padding: '.7rem 1.1rem', borderTop: '1px solid #1f2937', display: 'flex', alignItems: 'center', gap: '.7rem' } },
+        h('div', { style: { width: '32px', height: '32px', borderRadius: '8px', background: '#1e3a8a', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#bfdbfe' } }, 'f'),
+        h('div', { style: { flex: '1 1 auto' } },
+          h('div', { style: { fontWeight: 600 } }, p.name || p.page_name || '—'),
+          p.ig_username ? h('div', { style: { fontSize: '.78rem', color: '#f472b6' } }, '◉ @' + p.ig_username) : null),
+        h('span', { style: { background: '#064e3b', color: '#6ee7b7', padding: '.18rem .55rem', borderRadius: '999px', fontSize: '.72rem', fontWeight: 600 } }, '✓ Connected')
+      ));
+    });
+  }
+  wrap.appendChild(msgCard);
+
   return wrap;
 }
 
@@ -42049,7 +42220,54 @@ try {
 (function socialAdsUI() {
   if (typeof VIEWS === 'undefined' || typeof h !== 'function') return;
 
+  // META_MODULE_v1 Phase D — show modal with required Meta scopes when
+  // a FB connect attempt fails with a permission error. Admin can compare
+  // the listed scopes against their Meta app's permission dashboard.
+  function _showMetaPermModal(errMsg) {
+    const required = [
+      { scope: 'ads_management',           used: 'Create / edit / pause campaigns' },
+      { scope: 'ads_read',                 used: 'Read campaign performance + insights' },
+      { scope: 'business_management',      used: 'List ad accounts under the business' },
+      { scope: 'pages_show_list',          used: 'Pick which Pages to connect' },
+      { scope: 'pages_read_engagement',    used: 'Read comments + reactions on posts' },
+      { scope: 'pages_manage_metadata',    used: 'Subscribe page webhooks' },
+      { scope: 'pages_manage_posts',       used: 'Publish posts to the Page' },
+      { scope: 'pages_messaging',          used: 'Send / receive Messenger DMs' },
+      { scope: 'pages_read_user_content',  used: 'Read user-generated comments' },
+      { scope: 'instagram_basic',          used: 'List linked Instagram accounts' },
+      { scope: 'instagram_manage_messages',used: 'Send / receive Instagram DMs' },
+      { scope: 'instagram_manage_comments',used: 'Reply to Instagram comments' },
+      { scope: 'instagram_content_publish',used: 'Publish posts to Instagram' }
+    ];
+    const m = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+    const body = h('div', { class: 'modal', style: { maxWidth: '640px' } },
+      h('div', { class: 'modal-head' }, h('h3', {}, '🔐 Meta Connect failed — permission required'),
+        h('button', { class: 'btn icon', onclick: () => m.remove() }, '✕')),
+      h('div', { class: 'modal-body-wrap', style: { padding: '.75rem 1rem' } },
+        h('div', { class: 'error-box', style: { marginBottom: '.75rem' } },
+          h('b', {}, 'Meta said:'), ' ', errMsg),
+        h('p', { class: 'muted', style: { fontSize: '.88rem', marginBottom: '.7rem' } },
+          'Cross-check that EVERY scope below is approved / requested in your Meta app permission dashboard:'),
+        h('div', { style: { display: 'grid', gap: '.4rem' } },
+          ...required.map(r => h('div', { style: { display: 'flex', gap: '.6rem', padding: '.45rem .6rem', background: '#0f172a', border: '1px solid #1f2937', borderRadius: '8px' } },
+            h('code', { style: { color: '#a78bfa', fontWeight: 700, minWidth: '215px' } }, r.scope),
+            h('span', { style: { color: '#cbd5e1', fontSize: '.85rem' } }, '— ' + r.used)))
+        ),
+        h('div', { style: { marginTop: '.85rem', display: 'flex', gap: '.5rem' } },
+          h('a', { class: 'btn', target: '_blank', href: 'https://developers.facebook.com/apps/' }, '🔗 Open Meta app dashboard'),
+          h('button', { class: 'btn primary', onclick: () => m.remove() }, 'Got it')
+        )
+      )
+    );
+    m.appendChild(body);
+    document.body.appendChild(m);
+  }
+
   VIEWS.socialads = async (view) => {
+    /* META_MODULE_v1 Phase B — header polish to match Ads Manager design:
+     *   - Purple icon + "Ads Manager" + last-synced subtitle
+     *   - Refresh / Meta Business Suite / Export All CSV / + Create buttons
+     *   - Period selector + ⚙ Ad Accounts kept (moved to a compact row) */
     view.innerHTML = '';
     const wrap = h('div', { class:'page' });
 
@@ -42066,9 +42284,46 @@ try {
     } }, '🔄 Pull from Meta');
     const acctBtn = h('button', { class:'btn', onclick: () => openAccountsModal(render) }, '⚙ Ad Accounts');
 
-    wrap.appendChild(h('div', { style:{ display:'flex', alignItems:'center', gap:'.6rem', marginBottom:'.8rem', flexWrap:'wrap' } },
-      h('h2', { style:{ margin:0, flex:'1 1 auto' } }, '📈 Ad Reports'),
-      h('label', {}, 'Period: '), daysSel, pullBtn, acctBtn
+    // ── Polished header row ──────────────────────────────────────
+    const _lastSync = new Date().toLocaleTimeString('en-IN', { hour12: false });
+    const refreshBtn = h('button', { class:'btn', onclick: () => render() }, '🔁 Refresh');
+    const businessBtn = h('a', { class:'btn', href: 'https://business.facebook.com/adsmanager/', target: '_blank', rel: 'noopener' }, '🔗 Meta Business Suite');
+    const exportBtn = h('button', { class:'btn', onclick: async () => {
+      try {
+        const camps = await api('api_social_ads_campaigns', { days: Number(daysSel.value) });
+        const rows = [['Campaign','Status','Spend','Impressions','Clicks','CTR','CPC','Results']];
+        (camps||[]).forEach(c => rows.push([
+          c.name || c.campaign_id, c.status || '',
+          c.spend || 0, c.impressions || 0, c.clicks || 0,
+          c.ctr || 0, c.cpc || 0, c.results || 0
+        ]));
+        const csv = rows.map(r => r.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',')).join('\n');
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'ads-campaigns-' + new Date().toISOString().slice(0,10) + '.csv';
+        a.click();
+      } catch (e) { toast('Export failed: ' + e.message, 'err'); }
+    } }, '⬇ Export All CSV');
+    const createBtn = h('button', { class:'btn primary', onclick: () => {
+      // Open Meta Ads Manager campaign-create page in a new tab. Inline creation
+      // requires Marketing API CREATE permissions which most tenants don't have
+      // yet — deep-linking is the safe MVP.
+      window.open('https://business.facebook.com/adsmanager/manage/campaigns?act=', '_blank', 'noopener');
+    } }, '+ Create');
+
+    wrap.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.8rem', marginBottom: '1rem', flexWrap: 'wrap' } },
+      h('div', { style: { width: '54px', height: '54px', borderRadius: '14px', background: 'linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '1.5rem', flex: 'none', boxShadow: '0 4px 12px rgba(99,102,241,.25)' } }, '📊'),
+      h('div', { style: { flex: '1 1 auto', minWidth: '180px' } },
+        h('h2', { style: { margin: 0, fontSize: '1.5rem' } }, 'Ads Manager'),
+        h('div', { style: { fontSize: '.78rem', color: '#64748b', marginTop: '.15rem' } }, '🕒 Last synced: ' + _lastSync)
+      ),
+      refreshBtn, businessBtn, exportBtn, createBtn
+    ));
+
+    // Compact period row below header
+    wrap.appendChild(h('div', { style:{ display:'flex', alignItems:'center', gap:'.5rem', marginBottom:'.8rem', flexWrap:'wrap' } },
+      h('label', { class: 'muted', style: { fontSize: '.85rem' } }, 'Period: '), daysSel, pullBtn, acctBtn
     ));
 
     const summaryRow = h('div', { style:{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))', gap:'.7rem', marginBottom:'1rem' } });
@@ -42084,15 +42339,20 @@ try {
 
     daysSel.onchange = () => render();
 
-    function kpi(label, value, deltaPct, currency) {
+    function kpi(label, value, deltaPct, currency, icon, iconColor) {
+      // META_MODULE_v1 Phase B — KPI tile matches Ads Manager design:
+      // small colored icon + uppercase label + big bold value + delta hint
       const delta = Number(deltaPct);
       const arrow = delta > 0 ? '▲' : (delta < 0 ? '▼' : '·');
-      const color = delta > 5 ? '#16a34a' : (delta < -5 ? '#dc2626' : '#6b7280');
-      const dispVal = (currency ? '₹' : '') + (typeof value === 'number' ? value.toLocaleString('en-IN', { maximumFractionDigits: 0 }) : value);
-      return h('div', { class:'card', style:{ padding:'.7rem' } },
-        h('div', { class:'muted', style:{ fontSize:'.85em' } }, label),
-        h('div', { style:{ fontSize:'1.4em', fontWeight:'bold', margin:'.2rem 0' } }, dispVal),
-        deltaPct != null ? h('div', { style:{ color, fontSize:'.85em' } }, arrow + ' ' + Math.abs(delta).toFixed(1) + '% vs previous') : null
+      const dcolor = delta > 5 ? '#16a34a' : (delta < -5 ? '#dc2626' : '#6b7280');
+      const dispVal = (currency ? '$' : '') + (typeof value === 'number' ? value.toLocaleString('en-IN', { maximumFractionDigits: currency ? 2 : 0 }) : value);
+      return h('div', { class:'card', style:{ padding:'.85rem 1rem', border: '1px solid #1f2937', background: '#0f172a' } },
+        h('div', { style:{ display:'flex', alignItems:'center', gap:'.4rem', color: iconColor || '#a78bfa', fontSize: '.7rem', fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase' } },
+          icon ? h('span', { style: { fontSize: '.95rem' } }, icon) : null,
+          label
+        ),
+        h('div', { style:{ fontSize:'1.7rem', fontWeight:800, margin:'.35rem 0 .1rem', color: '#f8fafc', lineHeight: 1.05 } }, dispVal),
+        deltaPct != null ? h('div', { style:{ color: dcolor, fontSize:'.72rem' } }, arrow + ' ' + Math.abs(delta).toFixed(1) + '% vs previous') : null
       );
     }
 
@@ -42111,14 +42371,15 @@ try {
 
         // Summary cards
         summaryRow.innerHTML = '';
-        summaryRow.appendChild(kpi('Spend',       summary.current.spend,       summary.delta_pct.spend, true));
-        summaryRow.appendChild(kpi('Impressions', summary.current.impressions, summary.delta_pct.impressions));
-        summaryRow.appendChild(kpi('Clicks',      summary.current.clicks,      summary.delta_pct.clicks));
-        summaryRow.appendChild(kpi('CPC',         '₹' + summary.current.cpc.toFixed(2)));
-        summaryRow.appendChild(kpi('CTR',         summary.current.ctr.toFixed(2) + '%'));
-        summaryRow.appendChild(kpi('Leads',       summary.current.leads,       summary.delta_pct.leads));
-        summaryRow.appendChild(kpi('CPL',         '₹' + summary.current.cpl.toFixed(0)));
-        summaryRow.appendChild(kpi('Results',     summary.current.results,     summary.delta_pct.results));
+        // META_MODULE_v1 Phase B — match the Ads Manager 6-tile KPI strip:
+        // Spend (30d) / Impressions / Clicks / Reach / CTR / Avg CPC
+        const reach = summary.current.reach != null ? summary.current.reach : (summary.current.unique_clicks || 0);
+        summaryRow.appendChild(kpi('Spend (30d)',  summary.current.spend,       summary.delta_pct.spend, true, '$', '#22c55e'));
+        summaryRow.appendChild(kpi('Impressions',  summary.current.impressions, summary.delta_pct.impressions, false, '👁', '#3b82f6'));
+        summaryRow.appendChild(kpi('Clicks',       summary.current.clicks,      summary.delta_pct.clicks, false, '🖱', '#a855f7'));
+        summaryRow.appendChild(kpi('Reach',        reach,                       summary.delta_pct.reach, false, '👥', '#ec4899'));
+        summaryRow.appendChild(kpi('CTR',          summary.current.ctr.toFixed(2) + '%', null, false, '📊', '#f59e0b'));
+        summaryRow.appendChild(kpi('Avg CPC',      '$' + summary.current.cpc.toFixed(2), null, false, '$', '#06b6d4'));
 
         // Alerts
         if (!alerts.length) {
@@ -42487,12 +42748,20 @@ try {
                           }, { scope: SOCIAL_SCOPES, auth_type: 'rerequest', return_scopes: true });
                         });
                       } catch (e) {
-                        // FB SDK failed (popup blocked / extension blocked) → OAuth redirect fallback
+                        // META_MODULE_v1 Phase D — surface required scopes when FB
+                        // connect fails so admin can cross-check Meta app perms.
+                        const msg = (e && e.message) || 'Connect failed';
+                        const isPermErr = /scope|permission|denied|insufficient|approval/i.test(msg);
+                        if (isPermErr) {
+                          _showMetaPermModal(msg);
+                          return;
+                        }
+                        // Otherwise try OAuth redirect fallback
                         try {
                           const r = await api('api_social_fb_oauth_url', location.origin);
                           location.href = r.auth_url;
                         } catch (e2) {
-                          toast(e.message || 'Connect failed', 'err');
+                          toast(msg, 'err');
                         }
                       } finally {
                         if (stripBtn) { stripBtn.disabled = false; stripBtn.textContent = '🔗 Re-sync from Facebook'; }

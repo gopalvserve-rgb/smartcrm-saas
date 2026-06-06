@@ -52,3 +52,12 @@ SELECT 'fix',
        '📱',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Dashboard mobile UI — fixed donut, funnel, Sale Closure Stages overflow');
+
+-- 2026-06-07 META_MODULE_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'Meta Ads Manager + Facebook & Instagram polished',
+       'New Marketing sidebar group surfaces Ads Manager, Facebook & Instagram DMs, Comments, and Post Publisher. Settings → Integrations now shows two clear cards for Meta Ads Manager (Marketing API badge, Sandbox Mode form, per-Page enable toggles, Reconnect/Disconnect) and Facebook & Instagram messaging (No Pages Connected empty state + Connect with Facebook). Ads Manager page polished with header buttons (Refresh, Meta Business Suite, Export All CSV, + Create) and 6-tile KPI strip (Spend, Impressions, Clicks, Reach, CTR, Avg CPC). When Meta connect fails with a permission error, a modal lists every required scope so admins can cross-check the Meta app dashboard.',
+       '📣',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Meta Ads Manager + Facebook & Instagram polished');
