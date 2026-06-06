@@ -3415,8 +3415,14 @@ const WIDGET_LIBRARY = {
       setTimeout(() => {
         const rows = (d.summary?.by_status || []).filter(x => x.c > 0);
         if (!rows.length) return;
+        // DASH_MOBILE_FIX_v1 — on phone-sized viewports the right-side
+        // legend overflows the card and pushes the donut off-screen.
+        // Move the legend below the chart on mobile so the donut takes
+        // the full card width.
+        const isMobile = window.matchMedia && window.matchMedia('(max-width: 780px)').matches;
+        const legendPos = isMobile ? 'bottom' : 'right';
         makeChart(id, 'doughnut', rows.map(x => x.status), rows.map(x => x.c), rows.map(x => x.color), {
-          plugins: { legend: { position: 'right', labels: { boxWidth: 12, padding: 8, font: { size: 11 } } } },
+          plugins: { legend: { position: legendPos, labels: { boxWidth: 12, padding: 8, font: { size: 11 } } } },
           cutout: '60%'
         });
       }, 50);
@@ -3549,10 +3555,16 @@ const WIDGET_LIBRARY = {
         for (let i = 1; i < widths.length; i++) widths[i] = Math.min(widths[i], widths[i-1] - 2);
         const bottoms = widths.map((wv, i) => i < widths.length - 1 ? widths[i+1] : Math.max(MIN_W - 4, wv - 5));
 
+        // DASH_MOBILE_FIX_v1 — on phone-width viewports, drop the right
+        // side label panel entirely; count + value go into the band itself.
+        // The right-side "230px reserved + 90px gap" was forcing the whole
+        // SVG to render at ~860px wide; on a 360px phone the funnel shrunk
+        // until the labels were unreadable / clipped.
+        const IS_MOBILE = !!(window.matchMedia && window.matchMedia('(max-width: 780px)').matches);
         const BAND_H = 62;
         const F_W   = 540;
-        const RIGHT = 230;
-        const TOTAL_W = F_W + 90 + RIGHT;
+        const RIGHT = IS_MOBILE ? 0 : 230;
+        const TOTAL_W = IS_MOBILE ? F_W : (F_W + 90 + RIGHT);
         const F_H = BAND_H * bands.length;
         const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
         svg.setAttribute('viewBox', '0 0 ' + TOTAL_W + ' ' + F_H);
@@ -3627,28 +3639,32 @@ const WIDGET_LIBRARY = {
           sub.textContent = b.count + ' leads · ' + (Number(b.pct_of_total) || 0) + '%';
           svg.appendChild(sub);
 
-          // Dashed connector + right side label
-          const yMid = yT + BAND_H / 2;
-          const connector = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-          connector.setAttribute('x1', F_W); connector.setAttribute('y1', yMid);
-          connector.setAttribute('x2', F_W + 80); connector.setAttribute('y2', yMid);
-          connector.setAttribute('stroke', '#94a3b8'); connector.setAttribute('stroke-width', '1.4');
-          connector.setAttribute('stroke-dasharray', '4 4'); connector.setAttribute('opacity', '.7');
-          svg.appendChild(connector);
-          const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-          dot.setAttribute('cx', F_W + 80); dot.setAttribute('cy', yMid); dot.setAttribute('r', '4.5');
-          dot.setAttribute('fill', gradPalette[Math.min(i, gradPalette.length - 1)][1]);
-          svg.appendChild(dot);
-          const rT = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-          rT.setAttribute('x', F_W + 95); rT.setAttribute('y', yMid - 3);
-          rT.setAttribute('fill', '#0f172a'); rT.setAttribute('font-weight', '700'); rT.setAttribute('font-size', '13');
-          rT.textContent = b.count + ' leads';
-          svg.appendChild(rT);
-          const rS = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-          rS.setAttribute('x', F_W + 95); rS.setAttribute('y', yMid + 12);
-          rS.setAttribute('fill', '#64748b'); rS.setAttribute('font-size', '11');
-          rS.textContent = _formatInr(b.value || 0) + (b.advance_pct != null && i < bands.length - 1 ? (' · ' + b.advance_pct + '% advance') : '');
-          svg.appendChild(rS);
+          // Dashed connector + right side label — DESKTOP ONLY.
+          // On mobile (IS_MOBILE) we skip this since the band already shows
+          // label + count; the right panel doesn't fit on a phone width.
+          if (!IS_MOBILE) {
+            const yMid = yT + BAND_H / 2;
+            const connector = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            connector.setAttribute('x1', F_W); connector.setAttribute('y1', yMid);
+            connector.setAttribute('x2', F_W + 80); connector.setAttribute('y2', yMid);
+            connector.setAttribute('stroke', '#94a3b8'); connector.setAttribute('stroke-width', '1.4');
+            connector.setAttribute('stroke-dasharray', '4 4'); connector.setAttribute('opacity', '.7');
+            svg.appendChild(connector);
+            const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+            dot.setAttribute('cx', F_W + 80); dot.setAttribute('cy', yMid); dot.setAttribute('r', '4.5');
+            dot.setAttribute('fill', gradPalette[Math.min(i, gradPalette.length - 1)][1]);
+            svg.appendChild(dot);
+            const rT = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            rT.setAttribute('x', F_W + 95); rT.setAttribute('y', yMid - 3);
+            rT.setAttribute('fill', '#0f172a'); rT.setAttribute('font-weight', '700'); rT.setAttribute('font-size', '13');
+            rT.textContent = b.count + ' leads';
+            svg.appendChild(rT);
+            const rS = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            rS.setAttribute('x', F_W + 95); rS.setAttribute('y', yMid + 12);
+            rS.setAttribute('fill', '#64748b'); rS.setAttribute('font-size', '11');
+            rS.textContent = _formatInr(b.value || 0) + (b.advance_pct != null && i < bands.length - 1 ? (' · ' + b.advance_pct + '% advance') : '');
+            svg.appendChild(rS);
+          }
         });
         const wrap = h('div', { style: { display: 'flex', justifyContent: 'center', margin: '.3rem 0' } });
         wrap.appendChild(svg);
@@ -3736,7 +3752,10 @@ const WIDGET_LIBRARY = {
           style: { flex: col.leads.length, background: col.stage.color || COLORS[i % COLORS.length], minWidth: '4px' } }));
       });
       c.appendChild(bar);
-      const sg = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '.5rem' } });
+      // DASH_MOBILE_FIX_v1 — minmax 160px forced 3-col on narrow phones
+      // which clipped the rightmost card. 135px lets 2 columns fit on a
+      // ~380px viewport; desktop still gets 4+ columns.
+      const sg = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(135px, 1fr))', gap: '.5rem' } });
       board.forEach((col, i) => {
         const color = col.stage.color || COLORS[i % COLORS.length];
         sg.appendChild(h('div', { class: 'card clickable',

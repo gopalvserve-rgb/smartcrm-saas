@@ -43,3 +43,12 @@ SELECT 'fix',
        '🐛',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Campaign Report — fixed "column created_at is ambiguous" error');
+
+-- 2026-06-06 DASH_MOBILE_FIX_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'fix',
+       'Dashboard mobile UI — fixed donut, funnel, Sale Closure Stages overflow',
+       'Three mobile dashboard fixes: (1) Distribution by status donut no longer pushed off-screen — legend moves below the chart on phones. (2) Sales pipeline funnel no longer clipped — right-side label panel is dropped on phones, count + value go inline in each band. (3) Sale Final Closure Stages cards now wrap to 2 columns on phones instead of getting clipped off the right edge.',
+       '📱',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Dashboard mobile UI — fixed donut, funnel, Sale Closure Stages overflow');
