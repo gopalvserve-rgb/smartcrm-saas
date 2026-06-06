@@ -2833,23 +2833,31 @@ VIEWS.dashboard = async (view) => {
 };
 
 // Default layout used when the user hasn't customised yet.
+// DASHBOARD_REDESIGN_v1 Phase 2 (2026-06-06) — 2-page structure per Gopal's sketch.
+// Page 1: User Online | Lead Totals · Followup counts · Followup tabbed |
+//         Status chart · Employee chart | Sale Stages | Employee FU count · Source chart
+// Page 2: Caller-wise · Caller dialing | WA msgs · Remarks | Pipeline | WA report · TAT mini
 const DEFAULT_DASH_LAYOUT = [
-  { id: 'def-team-live',    type: 'team_live_status', size: 'wide' },
-  { id: 'def-kpi-total',    type: 'kpi_total_leads',  size: 'small' },
-  { id: 'def-kpi-new',      type: 'kpi_new_today',    size: 'small' },
-  { id: 'def-kpi-won',      type: 'kpi_won',          size: 'small' },
-  { id: 'def-kpi-due',      type: 'kpi_due_today',    size: 'small' },
-  { id: 'def-kpi-overdue',  type: 'kpi_overdue',      size: 'small' },
-  { id: 'def-followups',    type: 'followups_panel',  size: 'medium' },
-  { id: 'def-status',       type: 'chart_status',     size: 'medium' },
-  { id: 'def-funnel',       type: 'funnel_pipeline',  size: 'wide'   },
-  { id: 'def-tat',          type: 'tat_alerts',       size: 'wide'   },
-  { id: 'def-call-sum',     type: 'call_activity_summary', size: 'medium' },
-  { id: 'def-call-top',     type: 'call_activity_topusers', size: 'medium' },
-  { id: 'def-call-rec',     type: 'call_activity_recent', size: 'wide'   },
-  { id: 'def-by-user',      type: 'leads_by_user',     size: 'wide'   },
-  { id: 'def-projects',     type: 'project_stages',   size: 'wide'   },
-  { id: 'def-source',       type: 'chart_source',     size: 'wide'   }
+  // ---------- Page 1 ----------
+  { id: 'def-team-live',     type: 'team_live_status',       size: 'wide'   },
+  { id: 'def-kpi-total',     type: 'kpi_total_leads',        size: 'small'  },
+  { id: 'def-kpi-new',       type: 'kpi_new_today',          size: 'small'  },
+  { id: 'def-kpi-won',       type: 'kpi_won',                size: 'small'  },
+  { id: 'def-fu-counts',     type: 'followup_counts_by_user',size: 'medium' },
+  { id: 'def-fu-tabbed',     type: 'followup_tabbed_panel',  size: 'medium' },
+  { id: 'def-status',        type: 'chart_status',           size: 'medium' },
+  { id: 'def-by-user',       type: 'leads_by_user',          size: 'medium' },
+  { id: 'def-projects',      type: 'project_stages',         size: 'wide'   },
+  { id: 'def-fu-emp',        type: 'followup_counts_employee', size: 'medium' },
+  { id: 'def-source',        type: 'chart_source',           size: 'medium' },
+  // ---------- Page 2 ----------
+  { id: 'def-caller-wise',   type: 'caller_wise_leads',      size: 'medium' },
+  { id: 'def-caller-dial',   type: 'caller_dialing_report',  size: 'medium' },
+  { id: 'def-wa-feed',       type: 'last_wa_messages',       size: 'medium' },
+  { id: 'def-remarks-feed',  type: 'last_remarks',           size: 'medium' },
+  { id: 'def-funnel',        type: 'funnel_pipeline',        size: 'wide'   },
+  { id: 'def-wa-mini',       type: 'wa_report_mini',         size: 'medium' },
+  { id: 'def-tat-mini',      type: 'tat_violation_mini',     size: 'medium' }
 ];
 
 // Lightweight KPI helper used by every kpi_* widget.
@@ -3439,7 +3447,254 @@ const WIDGET_LIBRARY = {
             h('div', { style: { fontSize: '1.4rem', fontWeight: 700 } }, String(totals.qualified || 0)))));
       } catch (e) { c.appendChild(h('div', { class: 'error-box' }, e.message)); }
     }
-  }
+  },
+
+  // ----- DASHBOARD_REDESIGN_v1 Phase 2 — 7 widgets backed by routes/dashboardWidgets.js -----
+  // All seven honour CRM._dashRange (the global date chip) so they refresh when the user
+  // changes the from/to inputs at the top of the dashboard.
+  followup_counts_by_user: { title: 'Follow-ups · By user (Due/Overdue/Upcoming)', group: 'Follow-ups',
+    description: 'Per-employee Due Today / Overdue / Upcoming follow-up counts. Honours the global date filter.',
+    render: async (c, _cfg, _d, w) => {
+      c.appendChild(h('h3', { style: { margin: '0 0 .4rem' } }, w.title || '📅 Follow-ups by user'));
+      const body = h('div', {}, h('div', { class: 'muted' }, 'Loading…'));
+      c.appendChild(body);
+      const r = CRM._dashRange || {};
+      try {
+        const rows = await api('api_dashboard_followupCountsByUser', { from: r.from || '', to: r.to || '', tab: 'due_today' });
+        body.innerHTML = '';
+        if (!Array.isArray(rows) || !rows.length) { body.appendChild(h('div', { class: 'muted' }, 'No open follow-ups.')); return; }
+        const tbl = h('table', { class: 'data', style: { width: '100%' } },
+          h('thead', {}, h('tr', {}, h('th', {}, 'User'), h('th', { style: { textAlign: 'right' } }, 'Due'), h('th', { style: { textAlign: 'right', color: '#ef4444' } }, 'Overdue'), h('th', { style: { textAlign: 'right' } }, 'Upcoming'))),
+          h('tbody', {}, ...rows.map(r => h('tr', {},
+            h('td', {}, r.name || ('User #' + r.user_id)),
+            h('td', { style: { textAlign: 'right' } }, String(r.due_today)),
+            h('td', { style: { textAlign: 'right', color: r.overdue ? '#ef4444' : '' } }, String(r.overdue)),
+            h('td', { style: { textAlign: 'right', color: '#64748b' } }, String(r.upcoming)))))
+        );
+        body.appendChild(tbl);
+      } catch (e) { body.innerHTML = ''; body.appendChild(h('div', { class: 'error-box' }, e.message)); }
+    }
+  },
+
+  followup_tabbed_panel: { title: 'Follow-ups · Tabbed (Due/Overdue/Upcoming)', group: 'Follow-ups',
+    description: 'Three-tab panel — switch between Due Today, Overdue, Upcoming.',
+    render: async (c, _cfg, _d, w) => {
+      c.appendChild(h('h3', { style: { margin: '0 0 .4rem' } }, w.title || '🗂️ Follow-ups (tabbed)'));
+      const tabs = h('div', { style: { display: 'flex', gap: '.3rem', marginBottom: '.4rem' } });
+      const body = h('div', {});
+      c.appendChild(tabs); c.appendChild(body);
+      let currentTab = 'due_today';
+      const r = CRM._dashRange || {};
+      let cache = null;
+      const fetchOnce = async () => {
+        if (cache) return cache;
+        cache = await api('api_dashboard_followupCountsByUser', { from: r.from || '', to: r.to || '', tab: currentTab });
+        return cache;
+      };
+      const renderTab = async () => {
+        body.innerHTML = '<div class="muted">Loading…</div>';
+        const rows = await fetchOnce();
+        const tabKey = currentTab;
+        body.innerHTML = '';
+        const sorted = (rows || []).slice().sort((a, b) => (b[tabKey] || 0) - (a[tabKey] || 0)).filter(r => (r[tabKey] || 0) > 0);
+        if (!sorted.length) { body.appendChild(h('div', { class: 'muted' }, 'Nothing in this tab.')); return; }
+        body.appendChild(h('table', { class: 'data', style: { width: '100%' } },
+          h('thead', {}, h('tr', {}, h('th', {}, 'User'), h('th', { style: { textAlign: 'right' } }, 'Count'))),
+          h('tbody', {}, ...sorted.map(r => h('tr', {}, h('td', {}, r.name || ''), h('td', { style: { textAlign: 'right' } }, String(r[tabKey] || 0)))))));
+      };
+      const tabBtn = (label, key, color) => {
+        const b = h('button', { class: 'btn ' + (currentTab === key ? '' : 'btn-secondary'), style: { fontSize: '.78rem', padding: '.3rem .6rem' } }, label);
+        b.onclick = () => { currentTab = key; Array.from(tabs.children).forEach(x => x.classList.add('btn-secondary')); b.classList.remove('btn-secondary'); renderTab(); };
+        return b;
+      };
+      tabs.appendChild(tabBtn('Due today', 'due_today'));
+      tabs.appendChild(tabBtn('Overdue',  'overdue'));
+      tabs.appendChild(tabBtn('Upcoming', 'upcoming'));
+      try { await renderTab(); }
+      catch (e) { body.innerHTML = ''; body.appendChild(h('div', { class: 'error-box' }, e.message)); }
+    }
+  },
+
+  followup_counts_employee: { title: 'Follow-ups · Employee count', group: 'Follow-ups',
+    description: 'Bar-style summary of open follow-ups per employee.',
+    render: async (c, _cfg, _d, w) => {
+      c.appendChild(h('h3', { style: { margin: '0 0 .4rem' } }, w.title || '👥 Employee follow-up count'));
+      const body = h('div', {}, h('div', { class: 'muted' }, 'Loading…'));
+      c.appendChild(body);
+      const r = CRM._dashRange || {};
+      try {
+        const rows = await api('api_dashboard_followupCountsByUser', { from: r.from || '', to: r.to || '' });
+        body.innerHTML = '';
+        if (!Array.isArray(rows) || !rows.length) { body.appendChild(h('div', { class: 'muted' }, 'No follow-ups open.')); return; }
+        const max = Math.max(...rows.map(r => (r.due_today + r.overdue + r.upcoming) || 0)) || 1;
+        rows.slice(0, 12).forEach(r => {
+          const total = r.due_today + r.overdue + r.upcoming;
+          const row = h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', margin: '.25rem 0' } },
+            h('div', { style: { width: '100px', fontSize: '.8rem' } }, r.name || ''),
+            h('div', { style: { flex: 1, background: '#f1f5f9', borderRadius: '4px', overflow: 'hidden', height: '14px', position: 'relative' } },
+              h('div', { style: { width: ((total / max) * 100) + '%', height: '100%', background: 'linear-gradient(90deg, #6366f1, #8b5cf6)' } })),
+            h('div', { style: { width: '36px', textAlign: 'right', fontWeight: 600, fontSize: '.8rem' } }, String(total)));
+          body.appendChild(row);
+        });
+      } catch (e) { body.innerHTML = ''; body.appendChild(h('div', { class: 'error-box' }, e.message)); }
+    }
+  },
+
+  caller_wise_leads: { title: 'Caller-wise leads', group: 'Page 2',
+    description: 'Assignee-wise lead totals (new / open / won / lost) over the date range.',
+    render: async (c, _cfg, _d, w) => {
+      c.appendChild(h('h3', { style: { margin: '0 0 .4rem' } }, w.title || '🧑‍💼 Caller-wise leads'));
+      const body = h('div', {}, h('div', { class: 'muted' }, 'Loading…'));
+      c.appendChild(body);
+      const r = CRM._dashRange || {};
+      try {
+        const rows = await api('api_dashboard_callerWiseLeads', { from: r.from || '', to: r.to || '' });
+        body.innerHTML = '';
+        if (!Array.isArray(rows) || !rows.length) { body.appendChild(h('div', { class: 'muted' }, 'No leads in range.')); return; }
+        const tbl = h('table', { class: 'data', style: { width: '100%' } },
+          h('thead', {}, h('tr', {}, h('th', {}, 'User'), h('th', { style: { textAlign: 'right' } }, 'Total'), h('th', { style: { textAlign: 'right' } }, 'New'), h('th', { style: { textAlign: 'right' } }, 'Open'), h('th', { style: { textAlign: 'right', color: '#10b981' } }, 'Won'), h('th', { style: { textAlign: 'right', color: '#ef4444' } }, 'Lost'))),
+          h('tbody', {}, ...rows.map(r => h('tr', {},
+            h('td', {}, r.name || ''),
+            h('td', { style: { textAlign: 'right', fontWeight: 600 } }, String(r.total)),
+            h('td', { style: { textAlign: 'right' } }, String(r.new_count)),
+            h('td', { style: { textAlign: 'right' } }, String(r.open_count)),
+            h('td', { style: { textAlign: 'right', color: r.won_count ? '#10b981' : '' } }, String(r.won_count)),
+            h('td', { style: { textAlign: 'right', color: r.lost_count ? '#ef4444' : '' } }, String(r.lost_count)))))
+        );
+        body.appendChild(tbl);
+      } catch (e) { body.innerHTML = ''; body.appendChild(h('div', { class: 'error-box' }, e.message)); }
+    }
+  },
+
+  caller_dialing_report: { title: 'Caller dialing report', group: 'Page 2',
+    description: 'Per-user call activity (incoming / outgoing / missed / talk-time).',
+    render: async (c, _cfg, _d, w) => {
+      c.appendChild(h('h3', { style: { margin: '0 0 .4rem' } }, w.title || '📞 Caller dialing report'));
+      const body = h('div', {}, h('div', { class: 'muted' }, 'Loading…'));
+      c.appendChild(body);
+      const r = CRM._dashRange || {};
+      const hum = (s) => { s = Number(s) || 0; const h_ = Math.floor(s/3600), m = Math.floor((s%3600)/60), ss = s%60; return h_ ? (h_+'h '+m+'m') : (m ? (m+'m') : (ss+'s')); };
+      try {
+        const rows = await api('api_dashboard_callerDialingReport', { from: r.from || '', to: r.to || '' });
+        body.innerHTML = '';
+        if (!Array.isArray(rows) || !rows.length) { body.appendChild(h('div', { class: 'muted' }, 'No calls in range.')); return; }
+        const tbl = h('table', { class: 'data', style: { width: '100%' } },
+          h('thead', {}, h('tr', {}, h('th', {}, 'User'), h('th', { style: { textAlign: 'right' } }, 'Total'), h('th', { style: { textAlign: 'right', color: '#2563eb' } }, 'In'), h('th', { style: { textAlign: 'right', color: '#10b981' } }, 'Out'), h('th', { style: { textAlign: 'right', color: '#ef4444' } }, 'Missed'), h('th', { style: { textAlign: 'right' } }, 'Talk'))),
+          h('tbody', {}, ...rows.slice(0, 15).map(r => h('tr', {},
+            h('td', {}, r.name || ''),
+            h('td', { style: { textAlign: 'right', fontWeight: 600 } }, String(r.total_calls)),
+            h('td', { style: { textAlign: 'right' } }, String(r.incoming)),
+            h('td', { style: { textAlign: 'right' } }, String(r.outgoing)),
+            h('td', { style: { textAlign: 'right' } }, String(r.missed)),
+            h('td', { style: { textAlign: 'right', color: '#64748b' } }, hum(r.total_talk_s)))))
+        );
+        body.appendChild(tbl);
+      } catch (e) { body.innerHTML = ''; body.appendChild(h('div', { class: 'error-box' }, e.message)); }
+    }
+  },
+
+  last_wa_messages: { title: 'Latest WhatsApp messages', group: 'Page 2',
+    description: 'Most recent inbound WhatsApp messages. Admin sees tenant-wide, employees see their own assigned leads.',
+    render: async (c, _cfg, _d, w) => {
+      c.appendChild(h('h3', { style: { margin: '0 0 .4rem' } }, w.title || '💬 Latest WhatsApp messages'));
+      const body = h('div', {}, h('div', { class: 'muted' }, 'Loading…'));
+      c.appendChild(body);
+      const r = CRM._dashRange || {};
+      try {
+        const rows = await api('api_dashboard_lastWaMessages', { from: r.from || '', to: r.to || '', limit: 5 });
+        body.innerHTML = '';
+        if (!Array.isArray(rows) || !rows.length) { body.appendChild(h('div', { class: 'muted' }, 'No inbound messages.')); return; }
+        rows.forEach(m => {
+          const t = m.created_at ? new Date(m.created_at).toLocaleString() : '';
+          const row = h('div', { style: { padding: '.45rem .5rem', borderBottom: '1px solid #f1f5f9', cursor: m.lead_id ? 'pointer' : 'default' } },
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+              h('div', { style: { fontWeight: 600, fontSize: '.85rem' } }, m.lead_name || m.from_number || 'Unknown'),
+              h('div', { class: 'muted', style: { fontSize: '.7rem' } }, t)),
+            h('div', { style: { fontSize: '.8rem', color: '#475569', marginTop: '.2rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, m.body || ('[' + m.message_type + ']')));
+          if (m.lead_id) row.onclick = () => { location.hash = '#/leads?open=' + m.lead_id; };
+          body.appendChild(row);
+        });
+      } catch (e) { body.innerHTML = ''; body.appendChild(h('div', { class: 'error-box' }, e.message)); }
+    }
+  },
+
+  last_remarks: { title: 'Latest remarks', group: 'Page 2',
+    description: 'Most recent lead remarks. Admin sees tenant-wide, employees see only their assigned leads.',
+    render: async (c, _cfg, _d, w) => {
+      c.appendChild(h('h3', { style: { margin: '0 0 .4rem' } }, w.title || '📝 Latest remarks'));
+      const body = h('div', {}, h('div', { class: 'muted' }, 'Loading…'));
+      c.appendChild(body);
+      const r = CRM._dashRange || {};
+      try {
+        const rows = await api('api_dashboard_lastRemarks', { from: r.from || '', to: r.to || '', limit: 5 });
+        body.innerHTML = '';
+        if (!Array.isArray(rows) || !rows.length) { body.appendChild(h('div', { class: 'muted' }, 'No remarks.')); return; }
+        rows.forEach(m => {
+          const t = m.created_at ? new Date(m.created_at).toLocaleString() : '';
+          const row = h('div', { style: { padding: '.45rem .5rem', borderBottom: '1px solid #f1f5f9', cursor: m.lead_id ? 'pointer' : 'default' } },
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+              h('div', { style: { fontWeight: 600, fontSize: '.85rem' } }, (m.lead_name || 'Lead') + (m.author_name ? ' · ' + m.author_name : '')),
+              h('div', { class: 'muted', style: { fontSize: '.7rem' } }, t)),
+            h('div', { style: { fontSize: '.8rem', color: '#475569', marginTop: '.2rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, m.remark || ''));
+          if (m.lead_id) row.onclick = () => { location.hash = '#/leads?open=' + m.lead_id; };
+          body.appendChild(row);
+        });
+      } catch (e) { body.innerHTML = ''; body.appendChild(h('div', { class: 'error-box' }, e.message)); }
+    }
+  },
+
+  wa_report_mini: { title: 'WhatsApp report (mini)', group: 'Page 2',
+    description: 'Sent / Delivered / Read / Failed counts over the date range.',
+    render: async (c, _cfg, _d, w) => {
+      c.appendChild(h('h3', { style: { margin: '0 0 .4rem' } }, w.title || '📊 WhatsApp report'));
+      const body = h('div', {}, h('div', { class: 'muted' }, 'Loading…'));
+      c.appendChild(body);
+      const r = CRM._dashRange || {};
+      try {
+        const d = await api('api_dashboard_waReportMini', { from: r.from || '', to: r.to || '' });
+        body.innerHTML = '';
+        const grid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: '.5rem' } });
+        const tile = (label, val, color) => h('div', { style: { padding: '.55rem .6rem', border: '1px solid #e2e8f0', borderRadius: '8px' } },
+          h('div', { class: 'muted', style: { fontSize: '.72rem' } }, label),
+          h('div', { style: { fontSize: '1.4rem', fontWeight: 700, color: color || '' } }, String(val))
+        );
+        grid.appendChild(tile('Sent',      d.sent,      '#2563eb'));
+        grid.appendChild(tile('Delivered', d.delivered, '#0891b2'));
+        grid.appendChild(tile('Read',      d.read,      '#10b981'));
+        grid.appendChild(tile('Failed',    d.failed,    '#ef4444'));
+        body.appendChild(grid);
+      } catch (e) { body.innerHTML = ''; body.appendChild(h('div', { class: 'error-box' }, e.message)); }
+    }
+  },
+
+  tat_violation_mini: { title: 'TAT violation (mini)', group: 'Page 2',
+    description: 'Open TAT breaches with top-5 employees by open count.',
+    render: async (c, _cfg, _d, w) => {
+      c.appendChild(h('h3', { style: { margin: '0 0 .4rem' } }, w.title || '⏱️ TAT violations'));
+      const body = h('div', {}, h('div', { class: 'muted' }, 'Loading…'));
+      c.appendChild(body);
+      const r = CRM._dashRange || {};
+      try {
+        const d = await api('api_dashboard_tatViolationMini', { from: r.from || '', to: r.to || '' });
+        body.innerHTML = '';
+        const head = h('div', { style: { display: 'flex', alignItems: 'baseline', gap: '.5rem', marginBottom: '.4rem' } },
+          h('div', { style: { fontSize: '2rem', fontWeight: 700, color: d.open_total ? '#ef4444' : '#64748b' } }, String(d.open_total || 0)),
+          h('div', { class: 'muted', style: { fontSize: '.78rem' } }, 'open · ' + (d.triggered_in_range || 0) + ' triggered in range'));
+        body.appendChild(head);
+        if (Array.isArray(d.by_user) && d.by_user.length) {
+          body.appendChild(h('div', { class: 'muted', style: { fontSize: '.7rem', textTransform: 'uppercase', marginBottom: '.2rem' } }, 'Top employees'));
+          d.by_user.forEach(u => {
+            body.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', fontSize: '.82rem', padding: '.2rem 0' } },
+              h('div', {}, u.name),
+              h('div', { style: { fontWeight: 600 } }, String(u.open_count))));
+          });
+        } else if (!d.open_total) {
+          body.appendChild(h('div', { class: 'muted' }, 'No open breaches. 🎉'));
+        }
+      } catch (e) { body.innerHTML = ''; body.appendChild(h('div', { class: 'error-box' }, e.message)); }
+    }
+  },
+
 };
 
 // "+ Add widget" picker modal — lists every WIDGET_LIBRARY entry grouped by `group`.
