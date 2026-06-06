@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>SmartCRM Tutorial — Learn every feature in 5 modules</title>
+<meta name="description" content="Step-by-step interactive guide to SmartCRM: onboarding, lead lifecycle, WhatsApp, automation & AI, daily operations. Built for your team." />
+<style>
+:root{
+  --navy:#1E2761;
+  --indigo:#3a4694;
+  --ice:#CADCFC;
+  --bg:#f6f7fb;
+  --card:#ffffff;
+  --ink:#111827;
+  --muted:#5b6478;
+  --line:#e6e9f2;
+  --accent:#10b981;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{font-family:'Calibri','Segoe UI',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--ink);line-height:1.55;font-size:15.5px;-webkit-font-smoothing:antialiased}
+a{color:var(--indigo);text-decoration:none}
+h1,h2,h3,h4{font-family:Georgia,'Cambria',serif;font-weight:700;letter-spacing:-.01em;margin:0 0 .35em}
+h1{font-size:34px;line-height:1.15}
+h2{font-size:26px;line-height:1.2}
+h3{font-size:19px;line-height:1.25}
+
+.topbar{position:sticky;top:0;z-index:50;background:var(--navy);color:#fff;display:flex;align-items:center;justify-content:space-between;padding:11px 22px;box-shadow:0 1px 0 rgba(0,0,0,.06)}
+.topbar .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:17px}
+.topbar .brand-dot{display:inline-grid;place-items:center;width:30px;height:30px;border-radius:8px;background:var(--ice);color:var(--navy);font-size:17px}
+.topbar nav{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.topbar nav a{color:#fff;opacity:.85;padding:6px 12px;border-radius:8px;font-size:14px;font-weight:600}
+.topbar nav a:hover{opacity:1;background:rgba(255,255,255,.1)}
+.topbar nav a.cta{background:var(--accent);opacity:1}
+
+.shell{display:grid;grid-template-columns:280px 1fr;max-width:1340px;margin:0 auto;padding:0}
+
+.sidebar{position:sticky;top:54px;align-self:start;max-height:calc(100vh - 54px);overflow:auto;padding:22px 14px 60px;border-right:1px solid var(--line);background:#fff}
+.sidebar h4{font-family:'Calibri',sans-serif;font-size:11px;letter-spacing:.12em;color:var(--muted);text-transform:uppercase;margin:18px 8px 6px}
+.sidebar .mod-link{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:9px;color:var(--ink);font-weight:600;font-size:14.5px}
+.sidebar .mod-link .ico{width:28px;height:28px;display:grid;place-items:center;background:var(--ice);color:var(--navy);border-radius:7px;font-size:15px;flex:none}
+.sidebar .mod-link:hover{background:#f0f3fb}
+.sidebar .mod-link.active{background:var(--navy);color:#fff}
+.sidebar .mod-link.active .ico{background:rgba(255,255,255,.18);color:#fff}
+.sidebar .step{display:block;padding:5px 10px 5px 48px;font-size:13.5px;color:var(--muted);border-radius:7px}
+.sidebar .step:hover{background:#f0f3fb;color:var(--ink)}
+.sidebar .step .num{display:inline-block;width:24px;color:#9aa3b8;font-weight:600;font-size:12px}
+
+.main{padding:32px 36px 80px;min-width:0}
+
+.hero{background:linear-gradient(135deg,var(--navy) 0%,#2a3576 50%,var(--indigo) 100%);color:#fff;padding:42px 36px;border-radius:16px;margin-bottom:32px;position:relative;overflow:hidden}
+.hero::after{content:"";position:absolute;right:-60px;top:-60px;width:280px;height:280px;border-radius:50%;background:rgba(255,255,255,.06)}
+.hero .eyebrow{font-size:12px;letter-spacing:.2em;font-weight:700;opacity:.8;text-transform:uppercase;margin-bottom:14px}
+.hero h1{color:#fff;font-size:42px;margin-bottom:14px;position:relative;z-index:1}
+.hero p{font-size:17px;max-width:680px;margin:0 0 22px;opacity:.92;position:relative;z-index:1}
+.hero .pills{display:flex;flex-wrap:wrap;gap:10px;position:relative;z-index:1}
+.hero .pills a{background:rgba(255,255,255,.14);color:#fff;padding:7px 14px;border-radius:999px;font-size:13px;font-weight:600;backdrop-filter:blur(4px)}
+.hero .pills a:hover{background:rgba(255,255,255,.24)}
+
+.module-cover{margin:48px 0 26px;padding:28px;background:#fff;border:1px solid var(--line);border-radius:14px;display:flex;align-items:center;gap:22px}
+.module-cover .num-circle{width:74px;height:74px;border-radius:50%;background:var(--navy);color:#fff;display:grid;place-items:center;font-family:Georgia,serif;font-size:30px;font-weight:700;flex:none;box-shadow:0 8px 18px rgba(30,39,97,.25)}
+.module-cover .num-circle small{display:block;font-size:9px;letter-spacing:.18em;opacity:.7;font-family:Calibri,sans-serif;margin-top:-2px}
+.module-cover .meta{flex:1;min-width:0}
+.module-cover .meta .eyebrow{color:var(--indigo);font-size:11px;letter-spacing:.18em;font-weight:700;text-transform:uppercase;margin-bottom:5px}
+.module-cover h2{margin:0 0 6px;color:var(--navy);font-size:28px}
+.module-cover .sub{color:var(--muted);font-size:14px;font-weight:600;margin-bottom:9px}
+.module-cover .desc{color:var(--ink);font-size:14.5px;line-height:1.55}
+
+.slide-card{background:var(--card);border:1px solid var(--line);border-radius:13px;overflow:hidden;margin:18px 0 28px;box-shadow:0 1px 3px rgba(20,30,80,.04)}
+.slide-head{padding:14px 20px;display:flex;align-items:center;justify-content:space-between;gap:14px;border-bottom:1px solid var(--line);background:#fafbff}
+.slide-head .step-tag{font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;font-weight:700;color:var(--indigo)}
+.slide-head .num{font-size:12px;color:var(--muted);font-weight:600}
+.slide-img-wrap{padding:0;background:#0f1530}
+.slide-img-wrap img{display:block;width:100%;height:auto}
+
+.recap-card{margin-top:44px;padding:36px 32px;background:linear-gradient(120deg,#10b981,#059669);color:#fff;border-radius:16px}
+.recap-card h2{color:#fff;font-size:30px;margin-bottom:14px}
+.recap-card p{font-size:16px;max-width:680px;line-height:1.6;margin-bottom:18px;opacity:.95}
+.recap-card .actions{display:flex;flex-wrap:wrap;gap:10px}
+.recap-card .actions a{background:#fff;color:#065f46;padding:11px 22px;border-radius:10px;font-weight:700;font-size:14px}
+.recap-card .actions a.ghost{background:rgba(255,255,255,.16);color:#fff}
+
+footer.bottom{padding:30px 0;text-align:center;color:var(--muted);font-size:13px;border-top:1px solid var(--line);margin-top:60px}
+footer.bottom a{font-weight:600}
+
+.print-btn{display:none}
+
+@media print{
+  .topbar,.sidebar,.print-btn,.hero .pills{display:none !important}
+  .shell{grid-template-columns:1fr;display:block}
+  .main{padding:0}
+  .slide-card{break-inside:avoid;page-break-inside:avoid}
+  body{background:#fff}
+}
+
+/* Mobile */
+@media (max-width:900px){
+  .shell{grid-template-columns:1fr}
+  .sidebar{position:relative;top:0;max-height:none;overflow:visible;border-right:none;border-bottom:1px solid var(--line);padding:14px 12px}
+  .sidebar .mod-link{font-size:14px}
+  .main{padding:18px 14px 60px}
+  .hero{padding:28px 22px;border-radius:12px}
+  .hero h1{font-size:28px}
+  .hero p{font-size:14.5px}
+  .module-cover{padding:18px;gap:14px}
+  .module-cover .num-circle{width:56px;height:56px;font-size:22px}
+  .module-cover h2{font-size:22px}
+  .topbar nav a{padding:5px 9px;font-size:12.5px}
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand"><span class="brand-dot">🎯</span> SmartCRM Tutorial</div>
+  <nav>
+    <a href="/saas/">Home</a>
+    <a href="/saas/#pricing">Pricing</a>
+    <a href="javascript:window.print()">Print PDF</a>
+    <a href="/app" class="cta">Open CRM →</a>
+  </nav>
+</header>
+
+<div class="shell">
+
+<aside class="sidebar">
+  <h4>Course</h4>
+  <a class="mod-link active" href="#top"><span class="ico">📖</span> Overview</a>
+  <h4>Module 1</h4>
+  <a class="mod-link" href="#m1"><span class="ico">🚀</span> Onboarding Basics</a>
+  <a class="step" href="#slide-2"><span class="num">1.</span> Step 1</a>
+  <a class="step" href="#slide-3"><span class="num">2.</span> Users &amp; Roles</a>
+  <a class="step" href="#slide-6"><span class="num">3.</span> Step 3</a>
+  <a class="step" href="#slide-9"><span class="num">4.</span> Step 4</a>
+  <a class="step" href="#slide-12"><span class="num">5.</span> Step 5</a>
+  <a class="step" href="#slide-15"><span class="num">6.</span> Step 6</a>
+  <h4>Module 2</h4>
+  <a class="mod-link" href="#m2"><span class="ico">🎯</span> Lead Lifecycle</a>
+  <a class="step" href="#slide-23"><span class="num">1.</span> Leads Page</a>
+  <a class="step" href="#slide-24"><span class="num">2.</span> Add A Lead</a>
+  <a class="step" href="#slide-25"><span class="num">3.</span> Bulk Import</a>
+  <a class="step" href="#slide-27"><span class="num">4.</span> Filter &amp; Search</a>
+  <a class="step" href="#slide-28"><span class="num">5.</span> Bulk Actions</a>
+  <a class="step" href="#slide-29"><span class="num">6.</span> Multi-Phone</a>
+  <a class="step" href="#slide-30"><span class="num">7.</span> Re-Assign &amp; Share</a>
+  <h4>Module 3</h4>
+  <a class="mod-link" href="#m3"><span class="ico">💬</span> WhatsApp Business</a>
+  <a class="step" href="#slide-33"><span class="num">1.</span> Connect</a>
+  <a class="step" href="#slide-34"><span class="num">2.</span> Chat</a>
+  <a class="step" href="#slide-35"><span class="num">3.</span> Bulk Campaign</a>
+  <a class="step" href="#slide-36"><span class="num">4.</span> Bot Flows</a>
+  <h4>Module 4</h4>
+  <a class="mod-link" href="#m4"><span class="ico">🤖</span> Automation &amp; AI</a>
+  <a class="step" href="#slide-38"><span class="num">1.</span> Auto-Assign</a>
+  <a class="step" href="#slide-39"><span class="num">2.</span> Automations</a>
+  <a class="step" href="#slide-40"><span class="num">3.</span> Lead Nurturing</a>
+  <a class="step" href="#slide-41"><span class="num">4.</span> Google Calendar</a>
+  <a class="step" href="#slide-42"><span class="num">5.</span> Ai Bot</a>
+  <a class="step" href="#slide-43"><span class="num">6.</span> Ai Call Audit</a>
+  <a class="step" href="#slide-44"><span class="num">7.</span> Crm Copilot</a>
+  <a class="step" href="#slide-45"><span class="num">8.</span> Tat Report</a>
+  <h4>Module 5</h4>
+  <a class="mod-link" href="#m5"><span class="ico">⚡</span> Daily Operations</a>
+  <a class="step" href="#slide-48"><span class="num">1.</span> Company Details</a>
+  <a class="step" href="#slide-49"><span class="num">2.</span> Products</a>
+  <a class="step" href="#slide-50"><span class="num">3.</span> Quotations</a>
+  <a class="step" href="#slide-51"><span class="num">4.</span> Call Activity</a>
+  <a class="step" href="#slide-52"><span class="num">5.</span> Recordings</a>
+  <a class="step" href="#slide-53"><span class="num">6.</span> Attendance</a>
+  <a class="step" href="#slide-54"><span class="num">7.</span> App Download</a>
+  <h4>Finish</h4>
+  <a class="mod-link" href="#complete"><span class="ico">✓</span> Course Complete</a>
+</aside>
+
+<main class="main" id="top">
+  <section class="hero">
+    <div class="eyebrow">SmartCRM — Client Training</div>
+    <h1>Learn every feature of SmartCRM in 5 short modules</h1>
+    <p>Step-by-step screens cover everything from first login to AI-powered call audits. Built so a brand-new team member can ramp in one afternoon.</p>
+    <div class="pills">
+      <a href="#m1">🚀 Onboarding</a>
+      <a href="#m2">🎯 Lead Lifecycle</a>
+      <a href="#m3">💬 WhatsApp</a>
+      <a href="#m4">🤖 Automation &amp; AI</a>
+      <a href="#m5">⚡ Daily Ops</a>
+    </div>
+  </section>
+
+  <section id="m1" class="module-cover">
+    <div class="num-circle">1<small>/5</small></div>
+    <div class="meta">
+      <div class="eyebrow">Module 1 · 🚀</div>
+      <h2>Onboarding Basics</h2>
+      <div class="sub">Login • Users • Statuses • Sources • Tags • Custom Fields</div>
+      <div class="desc">Set up your CRM in 6 quick steps. Get every base config right so the rest of the tutorial makes sense.</div>
+    </div>
+  </section>
+
+  <article class="slide-card" id="slide-2">
+    <div class="slide-head"><span class="step-tag">STEP 1</span><span class="num">Slide 2 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-02.png" alt="MODULE 1 · STEP 1" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-3">
+    <div class="slide-head"><span class="step-tag">STEP 2 · USERS &amp; ROLES</span><span class="num">Slide 3 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-03.png" alt="MODULE 1 · STEP 2 · USERS &amp; ROLES" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-4">
+    <div class="slide-head"><span class="step-tag">STEP 2 · USERS &amp; ROLES</span><span class="num">Slide 4 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-04.png" alt="MODULE 1 · STEP 2 · USERS &amp; ROLES" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-5">
+    <div class="slide-head"><span class="step-tag">STEP 2 · USERS &amp; ROLES</span><span class="num">Slide 5 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-05.png" alt="MODULE 1 · STEP 2 · USERS &amp; ROLES" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-6">
+    <div class="slide-head"><span class="step-tag">STEP 3</span><span class="num">Slide 6 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-06.png" alt="MODULE 1 · STEP 3" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-7">
+    <div class="slide-head"><span class="step-tag">STEP 3 · STATUSES</span><span class="num">Slide 7 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-07.png" alt="MODULE 1 · STEP 3 · STATUSES" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-8">
+    <div class="slide-head"><span class="step-tag">STEP 3 · STATUSES</span><span class="num">Slide 8 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-08.png" alt="MODULE 1 · STEP 3 · STATUSES" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-9">
+    <div class="slide-head"><span class="step-tag">STEP 4</span><span class="num">Slide 9 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-09.png" alt="MODULE 1 · STEP 4" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-10">
+    <div class="slide-head"><span class="step-tag">STEP 4 · SOURCES</span><span class="num">Slide 10 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-10.png" alt="MODULE 1 · STEP 4 · SOURCES" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-11">
+    <div class="slide-head"><span class="step-tag">STEP 4 · SOURCES</span><span class="num">Slide 11 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-11.png" alt="MODULE 1 · STEP 4 · SOURCES" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-12">
+    <div class="slide-head"><span class="step-tag">STEP 5</span><span class="num">Slide 12 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-12.png" alt="MODULE 1 · STEP 5" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-13">
+    <div class="slide-head"><span class="step-tag">STEP 5 · TAGS</span><span class="num">Slide 13 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-13.png" alt="MODULE 1 · STEP 5 · TAGS" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-14">
+    <div class="slide-head"><span class="step-tag">STEP 5 · TAGS</span><span class="num">Slide 14 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-14.png" alt="MODULE 1 · STEP 5 · TAGS" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-15">
+    <div class="slide-head"><span class="step-tag">STEP 6</span><span class="num">Slide 15 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-15.png" alt="MODULE 1 · STEP 6" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-16">
+    <div class="slide-head"><span class="step-tag">STEP 6 · CUSTOM FIELDS</span><span class="num">Slide 16 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-16.png" alt="MODULE 1 · STEP 6 · CUSTOM FIELDS" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-17">
+    <div class="slide-head"><span class="step-tag">STEP 6 · CUSTOM FIELDS</span><span class="num">Slide 17 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-17.png" alt="MODULE 1 · STEP 6 · CUSTOM FIELDS" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-18">
+    <div class="slide-head"><span class="step-tag">STEP 6 · CUSTOM FIELDS</span><span class="num">Slide 18 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-18.png" alt="MODULE 1 · STEP 6 · CUSTOM FIELDS" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-19">
+    <div class="slide-head"><span class="step-tag">STEP 6 · CUSTOM FIELDS</span><span class="num">Slide 19 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-19.png" alt="MODULE 1 · STEP 6 · CUSTOM FIELDS" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-20">
+    <div class="slide-head"><span class="step-tag">STEP 6 · CUSTOM FIELDS</span><span class="num">Slide 20 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-20.png" alt="MODULE 1 · STEP 6 · CUSTOM FIELDS" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-21">
+    <div class="slide-head"><span class="step-tag">RECAP</span><span class="num">Slide 21 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-21.png" alt="MODULE 1 · RECAP" loading="lazy" /></div>
+  </article>
+
+  <section id="m2" class="module-cover">
+    <div class="num-circle">2<small>/5</small></div>
+    <div class="meta">
+      <div class="eyebrow">Module 2 · 🎯</div>
+      <h2>Lead Lifecycle</h2>
+      <div class="sub">Add • Import • Filter • Bulk Edit • Multi-phone • Reassign</div>
+      <div class="desc">Everything you do with a lead between "captured" and "sold" lives here.</div>
+    </div>
+  </section>
+
+  <article class="slide-card" id="slide-23">
+    <div class="slide-head"><span class="step-tag">STEP 1 · LEADS PAGE</span><span class="num">Slide 23 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-23.png" alt="MODULE 2 · STEP 1 · LEADS PAGE" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-24">
+    <div class="slide-head"><span class="step-tag">STEP 2 · ADD A LEAD</span><span class="num">Slide 24 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-24.png" alt="MODULE 2 · STEP 2 · ADD A LEAD" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-25">
+    <div class="slide-head"><span class="step-tag">STEP 3 · BULK IMPORT</span><span class="num">Slide 25 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-25.png" alt="MODULE 2 · STEP 3 · BULK IMPORT" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-26">
+    <div class="slide-head"><span class="step-tag">STEP 3 · BULK IMPORT</span><span class="num">Slide 26 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-26.png" alt="MODULE 2 · STEP 3 · BULK IMPORT" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-27">
+    <div class="slide-head"><span class="step-tag">STEP 4 · FILTER &amp; SEARCH</span><span class="num">Slide 27 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-27.png" alt="MODULE 2 · STEP 4 · FILTER &amp; SEARCH" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-28">
+    <div class="slide-head"><span class="step-tag">STEP 5 · BULK ACTIONS</span><span class="num">Slide 28 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-28.png" alt="MODULE 2 · STEP 5 · BULK ACTIONS" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-29">
+    <div class="slide-head"><span class="step-tag">STEP 6 · MULTI-PHONE</span><span class="num">Slide 29 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-29.png" alt="MODULE 2 · STEP 6 · MULTI-PHONE" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-30">
+    <div class="slide-head"><span class="step-tag">STEP 7 · RE-ASSIGN &amp; SHARE</span><span class="num">Slide 30 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-30.png" alt="MODULE 2 · STEP 7 · RE-ASSIGN &amp; SHARE" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-31">
+    <div class="slide-head"><span class="step-tag">RECAP</span><span class="num">Slide 31 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-31.png" alt="MODULE 2 · RECAP" loading="lazy" /></div>
+  </article>
+
+  <section id="m3" class="module-cover">
+    <div class="num-circle">3<small>/5</small></div>
+    <div class="meta">
+      <div class="eyebrow">Module 3 · 💬</div>
+      <h2>WhatsApp Business</h2>
+      <div class="sub">Connect • Chat • Campaigns • Bot Flows</div>
+      <div class="desc">Plug in your Meta Business account and start sending — one-to-one or in bulk.</div>
+    </div>
+  </section>
+
+  <article class="slide-card" id="slide-33">
+    <div class="slide-head"><span class="step-tag">STEP 1 · CONNECT</span><span class="num">Slide 33 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-33.png" alt="MODULE 3 · STEP 1 · CONNECT" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-34">
+    <div class="slide-head"><span class="step-tag">STEP 2 · CHAT</span><span class="num">Slide 34 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-34.png" alt="MODULE 3 · STEP 2 · CHAT" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-35">
+    <div class="slide-head"><span class="step-tag">STEP 3 · BULK CAMPAIGN</span><span class="num">Slide 35 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-35.png" alt="MODULE 3 · STEP 3 · BULK CAMPAIGN" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-36">
+    <div class="slide-head"><span class="step-tag">STEP 4 · BOT FLOWS</span><span class="num">Slide 36 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-36.png" alt="MODULE 3 · STEP 4 · BOT FLOWS" loading="lazy" /></div>
+  </article>
+
+  <section id="m4" class="module-cover">
+    <div class="num-circle">4<small>/5</small></div>
+    <div class="meta">
+      <div class="eyebrow">Module 4 · 🤖</div>
+      <h2>Automation &amp; AI</h2>
+      <div class="sub">Auto-assign • Automations • Nurturing • Calendar • AI Bot • AI Audit • Copilot • TAT</div>
+      <div class="desc">Turn on the autopilot. Lead routing, nurturing, AI replies, call audits, response-time tracking.</div>
+    </div>
+  </section>
+
+  <article class="slide-card" id="slide-38">
+    <div class="slide-head"><span class="step-tag">STEP 1 · AUTO-ASSIGN</span><span class="num">Slide 38 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-38.png" alt="MODULE 4 · STEP 1 · AUTO-ASSIGN" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-39">
+    <div class="slide-head"><span class="step-tag">STEP 2 · AUTOMATIONS</span><span class="num">Slide 39 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-39.png" alt="MODULE 4 · STEP 2 · AUTOMATIONS" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-40">
+    <div class="slide-head"><span class="step-tag">STEP 3 · LEAD NURTURING</span><span class="num">Slide 40 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-40.png" alt="MODULE 4 · STEP 3 · LEAD NURTURING" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-41">
+    <div class="slide-head"><span class="step-tag">STEP 4 · GOOGLE CALENDAR</span><span class="num">Slide 41 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-41.png" alt="MODULE 4 · STEP 4 · GOOGLE CALENDAR" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-42">
+    <div class="slide-head"><span class="step-tag">STEP 5 · AI BOT</span><span class="num">Slide 42 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-42.png" alt="MODULE 4 · STEP 5 · AI BOT" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-43">
+    <div class="slide-head"><span class="step-tag">STEP 6 · AI CALL AUDIT</span><span class="num">Slide 43 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-43.png" alt="MODULE 4 · STEP 6 · AI CALL AUDIT" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-44">
+    <div class="slide-head"><span class="step-tag">STEP 7 · CRM COPILOT</span><span class="num">Slide 44 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-44.png" alt="MODULE 4 · STEP 7 · CRM COPILOT" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-45">
+    <div class="slide-head"><span class="step-tag">STEP 8 · TAT REPORT</span><span class="num">Slide 45 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-45.png" alt="MODULE 4 · STEP 8 · TAT REPORT" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-46">
+    <div class="slide-head"><span class="step-tag">RECAP</span><span class="num">Slide 46 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-46.png" alt="MODULE 4 · RECAP" loading="lazy" /></div>
+  </article>
+
+  <section id="m5" class="module-cover">
+    <div class="num-circle">5<small>/5</small></div>
+    <div class="meta">
+      <div class="eyebrow">Module 5 · ⚡</div>
+      <h2>Daily Operations</h2>
+      <div class="sub">Company • Products • Quotations • Call Activity • Recordings • Attendance • App Download</div>
+      <div class="desc">The day-to-day toolkit your team uses every shift.</div>
+    </div>
+  </section>
+
+  <article class="slide-card" id="slide-48">
+    <div class="slide-head"><span class="step-tag">STEP 1 · COMPANY DETAILS</span><span class="num">Slide 48 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-48.png" alt="MODULE 5 · STEP 1 · COMPANY DETAILS" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-49">
+    <div class="slide-head"><span class="step-tag">STEP 2 · PRODUCTS</span><span class="num">Slide 49 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-49.png" alt="MODULE 5 · STEP 2 · PRODUCTS" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-50">
+    <div class="slide-head"><span class="step-tag">STEP 3 · QUOTATIONS</span><span class="num">Slide 50 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-50.png" alt="MODULE 5 · STEP 3 · QUOTATIONS" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-51">
+    <div class="slide-head"><span class="step-tag">STEP 4 · CALL ACTIVITY</span><span class="num">Slide 51 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-51.png" alt="MODULE 5 · STEP 4 · CALL ACTIVITY" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-52">
+    <div class="slide-head"><span class="step-tag">STEP 5 · RECORDINGS</span><span class="num">Slide 52 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-52.png" alt="MODULE 5 · STEP 5 · RECORDINGS" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-53">
+    <div class="slide-head"><span class="step-tag">STEP 6 · ATTENDANCE</span><span class="num">Slide 53 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-53.png" alt="MODULE 5 · STEP 6 · ATTENDANCE" loading="lazy" /></div>
+  </article>
+  <article class="slide-card" id="slide-54">
+    <div class="slide-head"><span class="step-tag">STEP 7 · APP DOWNLOAD</span><span class="num">Slide 54 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-54.png" alt="MODULE 5 · STEP 7 · APP DOWNLOAD" loading="lazy" /></div>
+  </article>
+
+  <section id="complete" class="recap-card">
+    <h2>🎉 You finished the SmartCRM tutorial</h2>
+    <p>Your team has now covered every core feature — from onboarding all the way to AI-powered call audits and daily mobile attendance. Open the CRM and start putting it to work.</p>
+    <div class="actions">
+      <a href="/app">Open SmartCRM →</a>
+      <a href="javascript:window.print()" class="ghost">Save as PDF</a>
+      <a href="/saas/" class="ghost">Back to homepage</a>
+    </div>
+  </section>
+
+  <article class="slide-card">
+    <div class="slide-head"><span class="step-tag">COURSE COMPLETE</span><span class="num">Slide 55 / 55</span></div>
+    <div class="slide-img-wrap"><img src="slides/slide-55.png" alt="Course Complete" loading="lazy" /></div>
+  </article>
+
+</main>
+</div>
+
+<footer class="bottom">
+  © 2026 SmartCRM Solution · Need help? <a href="mailto:support@smartcrmsolution.com">support@smartcrmsolution.com</a> · <a href="/app">Open the CRM</a>
+</footer>
+
+<script>
+// Highlight the active sidebar module on scroll
+(function(){
+  const links = document.querySelectorAll('.sidebar .mod-link');
+  const sections = ['top','m1','m2','m3','m4','m5','complete'].map(id => document.getElementById(id));
+  function onScroll(){
+    let active = 'top';
+    const fold = window.scrollY + 140;
+    sections.forEach(s => { if (s && s.offsetTop <= fold) active = s.id; });
+    links.forEach(l => {
+      const href = l.getAttribute('href').replace('#','');
+      l.classList.toggle('active', href === active);
+    });
+  }
+  window.addEventListener('scroll', onScroll, {passive:true});
+  onScroll();
+})();
+</script>
+</body>
+</html>

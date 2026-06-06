@@ -1708,6 +1708,8 @@ const NAV_GROUPS = [
   // SPA hits /api/saas (not /api) through sapi(), unlike the rest of the
   // CRM which targets /api.
   { label: 'Help & Support', icon: '🎫', items: [
+    /* TUTORIAL_PAGE_v1 — opens the public /tutorial page in a new tab */
+    { id: 'tutorial', label: 'SmartCRM Tutorial', icon: '📚' },
     { id: 'kbvideos', label: 'Video Tutorials', icon: '🎬' },
     { id: 'tickets',  label: 'Support Tickets', icon: '🎫' }
   ] }
@@ -42791,6 +42793,22 @@ function _fmtTs(ts) {
 // KB_VIDEOS_v2 (2026-05-21) — Simple iframe embed of the live knowledge-base
 // page on smartcrmsolution.com. Avoids hardcoding the video list in the SPA so
 // new videos added on the marketing site appear instantly.
+VIEWS.tutorial = async (view) => {
+  // TUTORIAL_PAGE_v1 — open the standalone tutorial page in a new tab.
+  // Doesn't render inside the SPA; the page is much better full-screen
+  // (it has its own sidebar nav for the 55 slides).
+  try { window.open('/tutorial/', '_blank', 'noopener'); } catch (e) {}
+  view.innerHTML = '<div style="padding:40px;text-align:center;color:#5b6478">' +
+    '<div style="font-size:48px;margin-bottom:10px">📚</div>' +
+    '<h2 style="font-family:Georgia,serif;margin:0 0 8px;color:#1E2761">SmartCRM Tutorial</h2>' +
+    '<p style="max-width:520px;margin:0 auto 22px">The tutorial opened in a new tab. ' +
+    'If it didn\'t, your browser may have blocked the popup.</p>' +
+    '<a href="/tutorial/" target="_blank" rel="noopener" ' +
+    'style="display:inline-block;padding:12px 26px;background:#1E2761;color:#fff;' +
+    'border-radius:10px;font-weight:600;text-decoration:none">Open Tutorial →</a>' +
+    '</div>';
+};
+
 VIEWS.kbvideos = async (view) => {
   view.innerHTML = '';
   const KB_URL = 'https://smartcrmsolution.com/home/smart-crm-plan/knowledge-base.php';

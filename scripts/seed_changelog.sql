@@ -16,3 +16,12 @@ SELECT 'modify',
        '🛑',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Recording auto-sync disabled');
+
+-- 2026-06-06 TUTORIAL_PAGE_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'SmartCRM Tutorial — built-in client training page',
+       'New 5-module interactive tutorial covering every CRM feature: Onboarding · Lead Lifecycle · WhatsApp · Automation & AI · Daily Operations. Open it from Help & Support → SmartCRM Tutorial, or share the public link /tutorial with new team members. Print-to-PDF works in one click.',
+       '📚',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'SmartCRM Tutorial — built-in client training page');

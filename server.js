@@ -154,6 +154,19 @@ const _staticOpts = {
   }
 };
 app.use('/saas', express.static(path.join(__dirname, 'public', 'saas'), _staticOpts));
+// TUTORIAL_PAGE_v1 — Public client-training tutorial. Single static folder,
+// no auth, intentionally cacheable. Surfaced in Help & Support sidebar +
+// landing-page nav.
+app.use('/tutorial', express.static(path.join(__dirname, 'public', 'tutorial'), {
+  maxAge: '1h',
+  setHeaders(res, filePath) {
+    if (/\.html?$/i.test(filePath)) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    } else {
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+    }
+  }
+}));
 app.get('/app', (_req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.sendFile(path.join(__dirname, 'public', 'saas', 'app', 'index.html'));
