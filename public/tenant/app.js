@@ -20966,6 +20966,7 @@ VIEWS.admin = async (view) => {
       { id: 'integrations', label: '🧩 Integrations' },
       { id: 'outwh',       label: '🚀 Outbound Webhooks' },
       { id: 'gconvexp',     label: '📈 Google Ads Export', roles: ['admin', 'manager'] },
+      { id: 'gcalintg',     label: '📅 Google Calendar' },
       { id: 'qrforms',      label: '📲 QR Lead Forms' },
       { id: 'forms',        label: '📝 Forms' },
       { id: 'pages',        label: '🌐 Landing Pages' },
@@ -21078,6 +21079,7 @@ async function showAdminTab(id) {
     if (id === 'integrations') body.replaceChildren(await adminIntegrations());
     if (id === 'outwh') body.replaceChildren(await adminOutboundWebhooks());
     if (id === 'gconvexp') body.replaceChildren(await adminGoogleConvExport());
+    if (id === 'gcalintg') body.replaceChildren(await adminGoogleCalendarTab());
     if (id === 'qrforms')     body.replaceChildren(await adminQrForms());
     if (id === 'whlogs')      body.replaceChildren(await adminWebhookLogs());
     if (id === 'recdiag')     body.replaceChildren(await adminRecordingDiag());
@@ -21092,6 +21094,91 @@ async function showAdminTab(id) {
 }
 
 
+
+// ----------------------------------------------------------------
+// GCAL_PATH_A_v1 — Settings → Google Calendar (self-serve Connect)
+// ----------------------------------------------------------------
+async function adminGoogleCalendarTab() {
+  const wrap = h('div', { class: 'admin-section' });
+  wrap.appendChild(h('h2', {}, '📅 Google Calendar'));
+  wrap.appendChild(h('div', { class: 'muted', style: { marginBottom: '1rem' } },
+    'Sign in with Google to connect your Calendar to the CRM. Once connected, every follow-up you save on a lead will automatically appear as a Calendar event with a reminder — even on your phone.'));
+
+  let status;
+  try { status = await api('api_gcal_status'); }
+  catch (e) { wrap.appendChild(h('div', { class: 'error-box' }, e.message)); return wrap; }
+
+  const statusCard = h('div', { class: 'card', style: { padding: '1rem', marginBottom: '1rem' } });
+  if (status && status.connected) {
+    statusCard.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.6rem', fontSize: '1.05rem', fontWeight: '600' } },
+      h('span', { style: { color: '#16a34a', fontSize: '1.3rem' } }, '✅'),
+      'Connected as ',
+      h('code', { style: { fontSize: '.95rem' } }, status.email || '(unknown)')));
+    if (status.calendar_id) {
+      statusCard.appendChild(h('div', { class: 'muted', style: { marginTop: '.4rem' } }, 'Default calendar: ' + status.calendar_id));
+    }
+    const disconnect = h('button', { class: 'btn ghost danger', style: { marginTop: '.8rem' }, onclick: async () => {
+      if (!confirm('Disconnect Google Calendar? Existing follow-up events stay on your calendar but new follow-ups will not auto-sync.')) return;
+      try {
+        await api('api_gcal_disconnect');
+        toast('Disconnected', 'ok');
+        showAdminTab('gcalintg');
+      } catch (e) { toast(e.message, 'err'); }
+    } }, '🔌 Disconnect');
+    statusCard.appendChild(disconnect);
+  } else {
+    statusCard.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.6rem', fontSize: '1.05rem', fontWeight: '600' } },
+      h('span', { style: { color: '#dc2626', fontSize: '1.3rem' } }, '○'), 'Not connected'));
+    const btn = h('button', { class: 'btn primary', style: { marginTop: '.8rem', background: '#4285f4', borderColor: '#4285f4' }, onclick: async () => {
+      try {
+        const r = await api('api_gcal_authUrl');
+        window.open(r.url, '_blank', 'width=520,height=640');
+        toast('Approve in the popup, then click Refresh.', 'info');
+      } catch (e) { toast(e.message, 'err'); }
+    } }, '🔗 Sign in with Google');
+    const refresh = h('button', { class: 'btn ghost', style: { marginLeft: '.4rem' }, onclick: () => showAdminTab('gcalintg') }, '🔄 Refresh');
+    statusCard.appendChild(btn);
+    statusCard.appendChild(refresh);
+  }
+  wrap.appendChild(statusCard);
+
+  // Admin-only: tenant-level auto-sync toggle
+  if (CRM.user && CRM.user.role === 'admin') {
+    let toggleState;
+    try { toggleState = await api('api_gcal_autoSyncGet'); } catch (_) { toggleState = { enabled: true }; }
+    const autoCb = h('input', { type: 'checkbox', id: 'gcal-auto' });
+    if (toggleState.enabled) autoCb.checked = true;
+    const autoStatus = h('span', { class: 'muted', style: { marginLeft: '.5rem', fontSize: '.85rem' } });
+    autoCb.onchange = async () => {
+      try { await api('api_gcal_autoSyncToggle', { enabled: !!autoCb.checked }); autoStatus.textContent = '✓ Saved'; setTimeout(() => autoStatus.textContent = '', 2000); }
+      catch (e) { toast(e.message, 'err'); }
+    };
+    wrap.appendChild(h('div', { class: 'card', style: { padding: '1rem', marginBottom: '1rem' } },
+      h('h3', { style: { marginTop: 0 } }, '⚙️ Tenant-wide settings (admin)'),
+      h('label', { for: 'gcal-auto', style: { display: 'flex', alignItems: 'center', gap: '.5rem' } },
+        autoCb, 'Auto-create Google Calendar event when a CRM follow-up date is set'),
+      h('div', { class: 'muted', style: { fontSize: '.82rem', marginTop: '.3rem' } },
+        'When ON, every user who has connected Google Calendar will get follow-up reminders pushed to their calendar (and phone) automatically. Users who have NOT connected are silently skipped.'),
+      autoStatus
+    ));
+  }
+
+  // What you get
+  wrap.appendChild(h('div', { class: 'card', style: { padding: '1rem', background: '#f8fafc' } },
+    h('h3', { style: { marginTop: 0 } }, 'What this connection unlocks'),
+    h('ul', { style: { lineHeight: '1.7' } },
+      h('li', {}, '📅 Every follow-up you save in CRM appears as a Calendar event with a 10-minute pop-up reminder.'),
+      h('li', {}, '🔁 Edit the follow-up date in CRM → the calendar event updates automatically.'),
+      h('li', {}, '🗑 Lead marked Won / Lost → the follow-up event is removed from your calendar.'),
+      h('li', {}, '📱 Reminders ride your phone\'s native Calendar notification — even when CRM is closed.'),
+      h('li', {}, '🎥 Use the existing 📅 Meetings & Google Meet panel on any lead modal to schedule a real meeting + auto-send Meet link via WhatsApp.')
+    ),
+    h('p', { class: 'muted', style: { fontSize: '.82rem', marginTop: '.6rem' } },
+      'Scope requested: calendar.events (create/read/update/delete events you own). We never read other events from your calendar.')
+  ));
+
+  return wrap;
+}
 
 // ----------------------------------------------------------------
 // GOOGLE_CONV_EXPORT_v1 — Settings → Google Ads Export

@@ -1086,6 +1086,7 @@ async function api_leads_create(token, payload) {
   // Sync followup + fire automations
   if (base.next_followup_at) {
     await _syncFollowup(id, base.assigned_to || me.id, base.next_followup_at, '');
+      await _trySyncFollowupToCalendar(id, base.assigned_to || me.id, base.next_followup_at, '');
   }
   try { require('../utils/automations').fire('lead_created', { lead: Object.assign({ id }, base), user: me }); } catch (_) {}
   try { require('./nurture')._tryAutoEnroll('lead_created', { lead: Object.assign({ id }, base), user: me }); } catch (_) {}
@@ -1634,6 +1635,21 @@ async function _assertFollowupSlotFree(me, userId, dueAt, excludeLeadId) {
 }
 
 // Sync helper — creates or updates a followup row when the lead's next_followup_at changes
+
+// GCAL_PATH_A_v1 — auto-sync follow-up due dates to the user's Google Calendar.
+// Lazy require so leads.js doesn't crash if googleCalendar.js is missing.
+async function _trySyncFollowupToCalendar(leadId, userId, dueAt, note) {
+  try {
+    const gcal = require('./googleCalendar');
+    if (!gcal || !gcal.syncFollowupToCalendar) return;
+    const lead = await db.findById('leads', leadId);
+    if (!lead) return;
+    await gcal.syncFollowupToCalendar(lead, dueAt, userId, note);
+  } catch (e) {
+    console.warn('[leads] gcal follow-up sync failed:', e.message);
+  }
+}
+
 async function _syncFollowup(leadId, userId, dueAt, note) {
   const existing = (await db.getAll('followups')).filter(f =>
     Number(f.lead_id) === Number(leadId) && Number(f.is_done) === 0

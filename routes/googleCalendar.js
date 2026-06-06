@@ -197,8 +197,201 @@ async function _getValidAccessToken(userId) {
   return td.access_token;
 }
 
+// ===================================================================
+// GCAL_PATH_A_v1 (2026-06-06)
+// Calendar event CRUD + follow-up auto-sync + my-upcoming-events list.
+// ===================================================================
+
+async function _ensureFollowupSyncTable() {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS google_calendar_followup_sync (
+      lead_id INTEGER PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      google_event_id TEXT NOT NULL,
+      due_at TIMESTAMPTZ,
+      last_synced_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+}
+
+// Tenant-level config: should follow-ups be auto-synced to Calendar?
+async function _gcalAutoSyncEnabled() {
+  try {
+    const v = await db.getConfig('GCAL_AUTO_SYNC_FOLLOWUPS', '1');
+    return v === '1' || v === 'true' || v === 1 || v === true;
+  } catch (_) { return true; }
+}
+
+// Build the event payload for a single follow-up.
+function _buildFollowupEvent(lead, dueAt, note) {
+  const start = new Date(dueAt);
+  const end = new Date(start.getTime() + 30 * 60 * 1000); // +30 min default
+  const isoZ = d => d.toISOString();
+  const name = (lead && lead.name) || 'Lead follow-up';
+  const phone = (lead && lead.phone) || '';
+  const email = (lead && lead.email) || '';
+  const desc = [
+    'CRM follow-up reminder',
+    phone ? 'Phone: ' + phone : null,
+    email ? 'Email: ' + email : null,
+    note ? '\nNote: ' + note : null,
+    '\nLead ID: ' + (lead && lead.id ? lead.id : '?'),
+    'Open in CRM: ' + ((process.env.PUBLIC_BASE_URL || 'https://crm.smartcrmsolution.com').replace(/\/+$/, ''))
+      + '/t/' + ((db._tenantSlug && db._tenantSlug()) || '') + '/#/leads?focus=' + (lead && lead.id ? lead.id : '')
+  ].filter(Boolean).join('\n');
+
+  return {
+    summary: '📞 Follow up: ' + name,
+    description: desc,
+    start: { dateTime: isoZ(start), timeZone: 'Asia/Kolkata' },
+    end:   { dateTime: isoZ(end),   timeZone: 'Asia/Kolkata' },
+    reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 10 }] }
+  };
+}
+
+async function _gcalCreateEvent(userId, payload) {
+  const accessToken = await _getValidAccessToken(userId);
+  const r = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const j = await r.json();
+  if (!r.ok) throw new Error('Google: ' + (j.error?.message || r.status));
+  return j;
+}
+
+async function _gcalUpdateEvent(userId, eventId, payload) {
+  const accessToken = await _getValidAccessToken(userId);
+  const r = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events/' + encodeURIComponent(eventId), {
+    method: 'PATCH',
+    headers: { 'Authorization': 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const j = await r.json();
+  if (!r.ok) throw new Error('Google: ' + (j.error?.message || r.status));
+  return j;
+}
+
+async function _gcalDeleteEvent(userId, eventId) {
+  const accessToken = await _getValidAccessToken(userId);
+  const r = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events/' + encodeURIComponent(eventId), {
+    method: 'DELETE',
+    headers: { 'Authorization': 'Bearer ' + accessToken }
+  });
+  if (!r.ok && r.status !== 410 && r.status !== 404) {
+    const j = await r.json().catch(() => ({}));
+    throw new Error('Google: ' + (j.error?.message || r.status));
+  }
+}
+
+// PUBLIC API the leads.js path calls right after _syncFollowup.
+// Idempotent: on every save it creates (first time) or patches (existing).
+// dueAt=null OR lead status terminal → deletes the event.
+// Errors are swallowed so a Calendar mishap NEVER blocks a CRM save.
+async function syncFollowupToCalendar(lead, dueAt, userId, note) {
+  try {
+    if (!lead || !lead.id) return;
+    const enabled = await _gcalAutoSyncEnabled();
+    if (!enabled) return;
+    await _ensureFollowupSyncTable();
+
+    // Does this user have a Google token?
+    const tokRow = await db.findOneBy('google_calendar_tokens', 'user_id', userId);
+    if (!tokRow || !tokRow.access_token) return; // user hasn't connected — silently skip
+
+    const existing = await db.query(
+      'SELECT * FROM google_calendar_followup_sync WHERE lead_id = $1 LIMIT 1', [lead.id]
+    );
+    const existingRow = existing.rows && existing.rows[0];
+
+    if (!dueAt) {
+      if (existingRow && existingRow.google_event_id) {
+        try { await _gcalDeleteEvent(userId, existingRow.google_event_id); } catch (_) {}
+        try { await db.query('DELETE FROM google_calendar_followup_sync WHERE lead_id = $1', [lead.id]); } catch (_) {}
+      }
+      return;
+    }
+
+    const ev = _buildFollowupEvent(lead, dueAt, note);
+    if (existingRow && existingRow.google_event_id) {
+      try {
+        await _gcalUpdateEvent(userId, existingRow.google_event_id, ev);
+        await db.query('UPDATE google_calendar_followup_sync SET due_at = $1, last_synced_at = NOW() WHERE lead_id = $2',
+          [dueAt, lead.id]);
+        return;
+      } catch (e) {
+        // Event was deleted on Google side. Fall through and recreate.
+        console.warn('[gcal] update failed, recreating:', e.message);
+      }
+    }
+    const created = await _gcalCreateEvent(userId, ev);
+    if (existingRow) {
+      await db.query('UPDATE google_calendar_followup_sync SET user_id = $1, google_event_id = $2, due_at = $3, last_synced_at = NOW() WHERE lead_id = $4',
+        [userId, created.id, dueAt, lead.id]);
+    } else {
+      await db.query('INSERT INTO google_calendar_followup_sync (lead_id, user_id, google_event_id, due_at) VALUES ($1, $2, $3, $4)',
+        [lead.id, userId, created.id, dueAt]);
+    }
+  } catch (e) {
+    console.warn('[gcal] syncFollowupToCalendar failed:', e.message);
+  }
+}
+
+// SPA API: list this user's next 7 days of Google Calendar events.
+async function api_gcal_upcomingEvents(token) {
+  const { authUser } = require('../utils/auth');
+  const me = await authUser(token);
+  await _ensureTable();
+  const tokRow = await db.findOneBy('google_calendar_tokens', 'user_id', me.id);
+  if (!tokRow) return { connected: false, events: [] };
+  let accessToken;
+  try { accessToken = await _getValidAccessToken(me.id); }
+  catch (e) { return { connected: false, events: [], error: e.message }; }
+  const now = new Date();
+  const to = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+  const url = 'https://www.googleapis.com/calendar/v3/calendars/primary/events?'
+    + 'timeMin=' + encodeURIComponent(now.toISOString())
+    + '&timeMax=' + encodeURIComponent(to.toISOString())
+    + '&singleEvents=true&orderBy=startTime&maxResults=20';
+  const r = await fetch(url, { headers: { 'Authorization': 'Bearer ' + accessToken } });
+  const j = await r.json();
+  if (!r.ok) return { connected: true, events: [], error: j.error?.message || 'fetch failed' };
+  const events = (j.items || []).map(e => ({
+    id: e.id,
+    summary: e.summary || '(no title)',
+    start: (e.start && (e.start.dateTime || e.start.date)) || null,
+    end:   (e.end   && (e.end.dateTime   || e.end.date))   || null,
+    location: e.location || null,
+    hangoutLink: e.hangoutLink || null,
+    htmlLink: e.htmlLink || null,
+    attendees: (e.attendees || []).slice(0, 5).map(a => ({ email: a.email, status: a.responseStatus }))
+  }));
+  return { connected: true, events, fetched_at: new Date().toISOString() };
+}
+
+// Tenant admin toggle for auto-sync of follow-ups.
+async function api_gcal_autoSyncToggle(token, payload) {
+  const { authUser } = require('../utils/auth');
+  const me = await authUser(token);
+  if (me.role !== 'admin') throw new Error('Admin only');
+  const v = payload && (payload.enabled === false || payload.enabled === 0 || payload.enabled === 'false') ? '0' : '1';
+  await db.setConfig('GCAL_AUTO_SYNC_FOLLOWUPS', v);
+  return { ok: true, enabled: v === '1' };
+}
+
+async function api_gcal_autoSyncGet(token) {
+  const { authUser } = require('../utils/auth');
+  await authUser(token);
+  const enabled = await _gcalAutoSyncEnabled();
+  return { enabled };
+}
+
 module.exports = {
   api_gcal_status, api_gcal_authUrl, api_gcal_disconnect,
+  api_gcal_upcomingEvents,
+  api_gcal_autoSyncToggle, api_gcal_autoSyncGet,
   expressOAuthCallback,
-  _getValidAccessToken
+  _getValidAccessToken,
+  syncFollowupToCalendar  /* called from routes/leads.js after every follow-up save */
 };
