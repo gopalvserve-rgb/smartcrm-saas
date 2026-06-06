@@ -2481,7 +2481,7 @@ VIEWS.dashboard = async (view) => {
       const has = (t) => widgets.some(w => w.type === t);
       const additions = [];
       if (!has('call_activity_summary')) additions.push({ id: 'auto-call-sum-' + Date.now(), type: 'call_activity_summary', size: 'medium' });
-      if (!has('call_activity_topusers')) additions.push({ id: 'auto-call-top-' + Date.now(), type: 'call_activity_topusers', size: 'medium' });
+      // (call_activity_topusers auto-add removed by DASH_KPI_STRIP_v1)
       if (!has('call_activity_recent')) additions.push({ id: 'auto-call-rec-' + Date.now(), type: 'call_activity_recent', size: 'wide' });
       // TEAM_LIVE_PICKER_MISSING_v1 — also auto-add the live team widget so it
       // shows up without the user having to hunt for it in the picker.
@@ -2511,6 +2511,36 @@ VIEWS.dashboard = async (view) => {
     // existing users whose saved layout pre-dates the redesign. Same pattern
     // as the call-activity auto-add: idempotent, gated on a localStorage key,
     // and persists via api_dashboard_save once.
+    // DASH_KPI_STRIP_v1 — collapse 5 separate KPI cards into 1 kpi_strip,
+    // drop the unwanted Top Callers widget. One-time, gated on v7 key.
+    const injKeyV7 = '_dashKpiStrip_v7_' + ((CRM.user && CRM.user.id) || 'anon');
+    if (!localStorage.getItem(injKeyV7)) {
+      const kpiTypes = new Set(['kpi_total_leads','kpi_new_today','kpi_won','kpi_qualified','kpi_due_today','kpi_overdue']);
+      const hadKpis = widgets.some(w => kpiTypes.has(w.type));
+      const hasStrip = widgets.some(w => w.type === 'kpi_strip');
+      let mutated = false;
+      // 1) Drop call_activity_topusers
+      const beforeCount = widgets.length;
+      widgets = widgets.filter(w => w.type !== 'call_activity_topusers');
+      if (widgets.length !== beforeCount) mutated = true;
+      // 2) Collapse old kpi cards to a single strip
+      if (hadKpis && !hasStrip) {
+        // Find position of the FIRST kpi card; drop the rest; insert strip there
+        const firstIdx = widgets.findIndex(w => kpiTypes.has(w.type));
+        widgets = widgets.filter(w => !kpiTypes.has(w.type));
+        widgets.splice(Math.max(0, firstIdx), 0, { id: 'kpi-strip-' + Date.now(), type: 'kpi_strip', size: 'wide' });
+        mutated = true;
+      } else if (hadKpis && hasStrip) {
+        // Strip already exists — just drop the redundant individual cards
+        widgets = widgets.filter(w => !kpiTypes.has(w.type));
+        mutated = true;
+      }
+      if (mutated) {
+        try { await api('api_dashboard_save', { widgets }); } catch (_) {}
+      }
+      localStorage.setItem(injKeyV7, '1');
+    }
+
     const injKeyV6 = '_dashAutoInjected_v6_dashRedesign_' + ((CRM.user && CRM.user.id) || 'anon');
     if (!localStorage.getItem(injKeyV6)) {
       const has = (t) => widgets.some(w => w.type === t);
@@ -2706,10 +2736,10 @@ VIEWS.dashboard = async (view) => {
   // their slice without further round-trips.
   const usedTypes = new Set(widgets.map(w => w.type));
   const fetchTasks = {};
-  if (['kpi_total_leads','kpi_won','kpi_qualified','chart_status','chart_source','chart_product','daily_volume','leads_by_user'].some(t => usedTypes.has(t))) {
+  if (['kpi_total_leads','kpi_won','kpi_qualified','chart_status','chart_source','chart_product','daily_volume','leads_by_user','kpi_strip'].some(t => usedTypes.has(t))) {
     fetchTasks.summary = api('api_reports_summary', { campaign_ids: CRM._dashCampaignIds, from: CRM._dashRange && CRM._dashRange.from, to: CRM._dashRange && CRM._dashRange.to }).catch(() => null);
   }
-  if (['kpi_new_today','kpi_due_today','kpi_overdue','followups_panel'].some(t => usedTypes.has(t))) {
+  if (['kpi_new_today','kpi_due_today','kpi_overdue','followups_panel','kpi_strip'].some(t => usedTypes.has(t))) {
     fetchTasks.notifs = api('api_notifications_mine').catch(() => null);
   }
   if (usedTypes.has('funnel_pipeline')) {
@@ -2867,9 +2897,7 @@ VIEWS.dashboard = async (view) => {
 const DEFAULT_DASH_LAYOUT = [
   // ---------- Page 1 ----------
   { id: 'def-team-live',     type: 'team_live_status',       size: 'wide'   },
-  { id: 'def-kpi-total',     type: 'kpi_total_leads',        size: 'small'  },
-  { id: 'def-kpi-new',       type: 'kpi_new_today',          size: 'small'  },
-  { id: 'def-kpi-won',       type: 'kpi_won',                size: 'small'  },
+  { id: 'def-kpi-strip',     type: 'kpi_strip',              size: 'wide'   },
   { id: 'def-fu-counts',     type: 'followup_counts_by_user',size: 'medium' },
   { id: 'def-fu-tabbed',     type: 'followup_tabbed_panel',  size: 'medium' },
   { id: 'def-status',        type: 'chart_status',           size: 'medium' },
@@ -3162,6 +3190,39 @@ const WIDGET_LIBRARY = {
     }
   },
   // ----- KPI tiles -----
+  // ----- DASH_KPI_STRIP_v1 — single compact strip with all 5 KPI tiles
+  // Replaces the 5 separate kpi_* cards that each took a whole grid slot.
+  // Renders Total / New today / Won / Due today / Overdue in one row,
+  // matching the pipeline page's KPI strip styling.
+  kpi_strip: { title: 'KPI strip · Lead totals', group: 'KPI',
+    description: 'Compact strip with Total leads, New today, Won, Due today, Overdue — one click jumps to the relevant lead list.',
+    render: (c, _cfg, d, w) => {
+      c.appendChild(h('h3', { style: { margin: '0 0 .55rem' } }, w.title || '🎯 Lead totals'));
+      const s = (d.summary && d.summary.totals) || {};
+      const n = (d.notifs && d.notifs.counts) || {};
+      const grid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '.55rem' } });
+      function tile(label, value, color, icon, href) {
+        const el = h('div', {
+          style: { background: '#fff', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '.65rem .8rem', display: 'flex', alignItems: 'center', gap: '.55rem', cursor: href ? 'pointer' : 'default', transition: 'transform .1s' },
+          onclick: href ? () => { location.hash = href; } : null
+        },
+          h('div', { style: { width: '36px', height: '36px', borderRadius: '8px', background: color + '22', color: color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.05rem', flexShrink: 0 } }, icon),
+          h('div', { style: { flex: 1, minWidth: 0 } },
+            h('div', { style: { fontSize: '.66rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '.02em', lineHeight: 1 } }, label),
+            h('div', { style: { fontSize: '1.4rem', fontWeight: 700, color: '#0f172a', lineHeight: 1.1, marginTop: '.2rem' } }, String(value == null ? 0 : value))
+          )
+        );
+        return el;
+      }
+      grid.appendChild(tile('Total leads', s.total ?? 0,        '#6366f1', '🎯',  '#/leads'));
+      grid.appendChild(tile('New today',   n.new_today ?? 0,    '#8b5cf6', '✨',  '#/leads?filter=new_today'));
+      grid.appendChild(tile('Won',         s.won ?? 0,          '#10b981', '🏆', '#/leads?filter=won'));
+      grid.appendChild(tile('Due today',   n.due_today ?? 0,    '#f59e0b', '📅', '#/followups?tab=due'));
+      grid.appendChild(tile('Overdue',     n.overdue ?? 0,      '#ef4444', '⚠️',  '#/followups?tab=overdue'));
+      c.appendChild(grid);
+    }
+  },
+
   kpi_total_leads: { title: 'KPI · Total leads', group: 'KPI',
     render: (c, _cfg, d) => _renderKpi(c, 'Total leads', d.summary?.totals?.total ?? 0, 'accent', '\ud83c\udfaf', '#/leads') },
   kpi_new_today: { title: 'KPI · New today', group: 'KPI',
