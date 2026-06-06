@@ -20965,6 +20965,7 @@ VIEWS.admin = async (view) => {
       { id: 'api',          label: '🔌 Website API' },
       { id: 'integrations', label: '🧩 Integrations' },
       { id: 'outwh',       label: '🚀 Outbound Webhooks' },
+      { id: 'gconvexp',     label: '📈 Google Ads Export', roles: ['admin', 'manager'] },
       { id: 'qrforms',      label: '📲 QR Lead Forms' },
       { id: 'forms',        label: '📝 Forms' },
       { id: 'pages',        label: '🌐 Landing Pages' },
@@ -21076,6 +21077,7 @@ async function showAdminTab(id) {
     if (id === 'packs')      body.replaceChildren(await adminPacks());
     if (id === 'integrations') body.replaceChildren(await adminIntegrations());
     if (id === 'outwh') body.replaceChildren(await adminOutboundWebhooks());
+    if (id === 'gconvexp') body.replaceChildren(await adminGoogleConvExport());
     if (id === 'qrforms')     body.replaceChildren(await adminQrForms());
     if (id === 'whlogs')      body.replaceChildren(await adminWebhookLogs());
     if (id === 'recdiag')     body.replaceChildren(await adminRecordingDiag());
@@ -21090,6 +21092,198 @@ async function showAdminTab(id) {
 }
 
 
+
+// ----------------------------------------------------------------
+// GOOGLE_CONV_EXPORT_v1 — Settings → Google Ads Export
+// ----------------------------------------------------------------
+async function adminGoogleConvExport() {
+  const wrap = h('div', { class: 'admin-section' });
+  wrap.appendChild(h('h2', {}, '📈 Google Ads Conversion Export'));
+  wrap.appendChild(h('div', { class: 'muted', style: { marginBottom: '.8rem' } },
+    'Push your Google-sourced lead statuses back to Google Ads as offline conversions so the algorithm learns which clicks actually qualify / convert. ' +
+    'Toggle OFF by default. Download the CSV here, then upload it to your Google Sheet (or directly to Google Ads → Conversions → Bulk Upload).'));
+
+  let data;
+  try { data = await api('api_googleConvExport_get'); }
+  catch (e) { wrap.appendChild(h('div', { class: 'error-box' }, e.message)); return wrap; }
+  const settings = data.settings || {};
+  const statuses = data.statuses || [];
+
+  // --- Enable toggle ---
+  const enabledCb = h('input', { type: 'checkbox', id: 'gce-enabled' });
+  if (settings.is_enabled) enabledCb.checked = true;
+  wrap.appendChild(h('div', { class: 'card', style: { padding: '1rem', marginBottom: '1rem' } },
+    h('label', { for: 'gce-enabled', style: { display: 'flex', alignItems: 'center', gap: '.5rem', fontSize: '1.05rem', fontWeight: '600' } },
+      enabledCb, '🟢 Enable Google Ads Conversion Export'),
+    h('div', { class: 'muted', style: { fontSize: '.85rem', marginTop: '.3rem' } },
+      'When OFF, nothing happens. Even the Download button errors politely with "feature is OFF".')
+  ));
+
+  // --- Lookback window ---
+  const lookbackSel = h('select', {},
+    h('option', { value: '7' }, 'Last 7 days'),
+    h('option', { value: '14' }, 'Last 14 days'),
+    h('option', { value: '30' }, 'Last 30 days'),
+    h('option', { value: '60' }, 'Last 60 days'),
+    h('option', { value: '90' }, 'Last 90 days')
+  );
+  lookbackSel.value = String(settings.lookback_days || 7);
+
+  // --- Conversion time mode ---
+  const timeModeSel = h('select', {},
+    h('option', { value: 'end_of_day_ist' }, 'End of day IST (23:59:59) — matches Google Ads daily aggregation'),
+    h('option', { value: 'status_change_actual' }, 'Actual status-change timestamp')
+  );
+  timeModeSel.value = settings.conversion_time_mode || 'end_of_day_ist';
+
+  // --- Source filter ---
+  const sourceInp = h('input', { type: 'text', style: { width: '100%' }, value: settings.source_filter || 'google,google ads,gads,google lead ad' });
+
+  wrap.appendChild(h('div', { class: 'card', style: { padding: '1rem', marginBottom: '1rem' } },
+    h('h3', { style: { marginTop: 0 } }, 'Filters'),
+    h('div', { class: 'field' }, h('label', {}, 'Lookback window'), lookbackSel),
+    h('div', { class: 'field' }, h('label', {}, 'Conversion time'), timeModeSel),
+    h('div', { class: 'field' },
+      h('label', {}, 'Source filter (comma-separated, case-insensitive substring match)'),
+      sourceInp,
+      h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.2rem' } },
+        'Default catches "google", "google ads", "gads", "google lead ad". Add anything else you use as a Google source label.'))
+  ));
+
+  // --- Status → Conversion Name mapping ---
+  const mapWrap = h('div', {});
+  const map = settings.status_map || {};
+  const mapRows = [];
+  function addRow(statusName, convName) {
+    const stSel = h('select', { style: { width: '40%', marginRight: '.4rem' } },
+      h('option', { value: '' }, '— pick status —'),
+      ...statuses.map(s => h('option', { value: s, selected: s === statusName ? 'selected' : null }, s)));
+    const cvInp = h('input', { type: 'text', placeholder: 'Conversion Name (e.g. Qualified)', style: { width: '40%', marginRight: '.4rem' }, value: convName || '' });
+    const rmBtn = h('button', { class: 'btn sm ghost danger', type: 'button' }, '✕');
+    const row = h('div', { style: { display: 'flex', alignItems: 'center', marginBottom: '.4rem' } }, stSel, cvInp, rmBtn);
+    rmBtn.onclick = () => { row.remove(); const i = mapRows.indexOf(entry); if (i >= 0) mapRows.splice(i, 1); };
+    const entry = { row, stSel, cvInp };
+    mapRows.push(entry);
+    mapWrap.appendChild(row);
+  }
+  Object.entries(map).forEach(([k, v]) => addRow(k, v));
+  if (mapRows.length === 0) {
+    // seed defaults if mapping was wiped
+    addRow('Assigned', 'Assigned');
+    addRow('Hot', 'Qualified');
+  }
+  const addMapBtn = h('button', { class: 'btn sm ghost', type: 'button', onclick: () => addRow('', '') }, '+ Add row');
+
+  wrap.appendChild(h('div', { class: 'card', style: { padding: '1rem', marginBottom: '1rem' } },
+    h('h3', { style: { marginTop: 0 } }, 'Status → Conversion Name mapping'),
+    h('div', { class: 'muted', style: { fontSize: '.85rem', marginBottom: '.5rem' } },
+      'Only mapped statuses are exported. Conversion names you use here must exist in Google Ads → Tools → Conversions (each name = a separate trained conversion action).'),
+    mapWrap,
+    addMapBtn
+  ));
+
+  // --- Save + Download buttons ---
+  const saveBtn = h('button', { class: 'btn primary' }, '💾 Save settings');
+  const dlBtn = h('button', { class: 'btn', style: { marginLeft: '.5rem' } }, '📥 Download CSV now');
+  const status = h('div', { class: 'muted', style: { marginLeft: '.8rem', display: 'inline-block' } });
+
+  saveBtn.onclick = async () => {
+    saveBtn.disabled = true; status.textContent = 'Saving…';
+    const mapObj = {};
+    for (const { stSel, cvInp } of mapRows) {
+      const k = (stSel.value || '').trim();
+      const v = (cvInp.value || '').trim();
+      if (k && v) mapObj[k] = v;
+    }
+    try {
+      await api('api_googleConvExport_save', {
+        is_enabled: !!enabledCb.checked,
+        lookback_days: Number(lookbackSel.value) || 7,
+        conversion_time_mode: timeModeSel.value,
+        source_filter: sourceInp.value,
+        status_map: mapObj
+      });
+      status.textContent = '✓ Saved';
+      setTimeout(() => { status.textContent = ''; }, 2500);
+    } catch (e) {
+      status.textContent = '✗ ' + e.message;
+    } finally { saveBtn.disabled = false; }
+  };
+
+  dlBtn.onclick = async () => {
+    dlBtn.disabled = true; status.textContent = 'Generating CSV…';
+    try {
+      const r = await api('api_googleConvExport_download');
+      const blob = new Blob([r.csv || ''], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = r.filename || 'google_conversions.csv';
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+      status.textContent = '✓ ' + r.row_count + ' rows · ' + r.with_gclid + ' with GCLID · ' + r.without_gclid + ' without GCLID' + (r.note ? ' (' + r.note + ')' : '');
+      // Refresh the logs panel
+      try { await renderLogs(); } catch (_) {}
+    } catch (e) {
+      status.textContent = '✗ ' + e.message;
+    } finally { dlBtn.disabled = false; }
+  };
+
+  wrap.appendChild(h('div', { class: 'card', style: { padding: '1rem', marginBottom: '1rem' } }, saveBtn, dlBtn, status));
+
+  // --- Recent exports log ---
+  const logsCard = h('div', { class: 'card', style: { padding: '1rem' } });
+  logsCard.appendChild(h('h3', { style: { marginTop: 0 } }, 'Recent exports'));
+  const logsBody = h('div', {}, h('div', { class: 'muted' }, 'Loading…'));
+  logsCard.appendChild(logsBody);
+  async function renderLogs() {
+    try {
+      const rows = await api('api_googleConvExport_logs');
+      if (!rows || rows.length === 0) {
+        logsBody.replaceChildren(h('div', { class: 'muted' }, 'No exports yet.'));
+        return;
+      }
+      const tbl = h('table', { class: 'data-table' },
+        h('thead', {}, h('tr', {},
+          h('th', {}, 'Downloaded at'),
+          h('th', {}, 'Rows'),
+          h('th', {}, 'With GCLID'),
+          h('th', {}, 'Without GCLID'),
+          h('th', {}, 'Lookback'),
+          h('th', {}, 'File')
+        )),
+        h('tbody', {},
+          ...rows.map(r => h('tr', {},
+            h('td', {}, new Date(r.downloaded_at).toLocaleString()),
+            h('td', {}, String(r.row_count)),
+            h('td', {}, String(r.with_gclid)),
+            h('td', {}, String(r.without_gclid)),
+            h('td', {}, (r.lookback_days || '-') + 'd'),
+            h('td', {}, h('code', { style: { fontSize: '.78rem' } }, r.filename || '-'))
+          ))
+        )
+      );
+      logsBody.replaceChildren(tbl);
+    } catch (e) {
+      logsBody.replaceChildren(h('div', { class: 'error-box' }, e.message));
+    }
+  }
+  renderLogs();
+  wrap.appendChild(logsCard);
+
+  // --- How to use ---
+  wrap.appendChild(h('div', { class: 'card', style: { padding: '1rem', marginTop: '1rem', background: '#f8fafc' } },
+    h('h3', { style: { marginTop: 0 } }, 'How to use'),
+    h('ol', {},
+      h('li', {}, 'Create a Google Sheet (one tab, with the same 7 columns as the downloaded CSV).'),
+      h('li', {}, 'In Google Ads → Tools → Conversions → Settings → Bulk Upload → Linked Sheet, link that Sheet.'),
+      h('li', {}, 'Every day (or weekly), click "Download CSV now" above, then paste the rows into your Sheet.'),
+      h('li', {}, 'Google Ads pulls automatically and feeds the conversion data back to its bidding algorithm.'),
+      h('li', {}, 'Rows with "Without GCLID = Yes" are still useful — Google falls back to phone-match / enhanced conversions for those.')
+    )
+  ));
+
+  return wrap;
+}
 
 // ----------------------------------------------------------------
 // 🎯 Campaigns — admin UI for the campaigns + campaign_agents tables.
