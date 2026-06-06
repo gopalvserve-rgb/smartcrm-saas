@@ -41946,7 +41946,7 @@ try {
                 }
                 try {
                   const r = await api('api_social_fb_connect', resp.authResponse.accessToken);
-                  toast('Connected ' + r.pages_connected + ' page(s)' + (r.ig_accounts ? ' · ' + r.ig_accounts + ' IG' : '') + (r.ad_accounts ? ' · ' + r.ad_accounts + ' ad account(s)' : ''));
+                  toast('Connected ' + r.pages_connected + ' page(s)' + (r.ig_accounts ? ' · ' + r.ig_accounts + ' IG' : ''));
                   refresh();
                   resolve();
                 } catch (e) { toast(e.message, 'err'); reject(e); }

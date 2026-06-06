@@ -306,49 +306,7 @@ async function api_social_fb_connect(token, shortToken, opts) {
     saved++;
   }
 
-  // SOCIAL_AUTO_PULL_AD_ACCOUNTS_v1 — also discover ad accounts the user
-  // has access to, using the SAME long-lived user token. The user already
-  // granted ads_read + business_management at login time, so this call
-  // succeeds with no extra consent screen.
-  let adAccountsSaved = 0;
-  try {
-    await _ensureSchemaS4();
-    const adResp = await fetch(
-      `${GRAPH}/me/adaccounts?fields=id,account_id,name,currency,timezone_name,account_status&access_token=${encodeURIComponent(userToken)}&limit=200`
-    ).then(r => r.json());
-    if (adResp.error) {
-      // Surface but don't fail the entire connect — Pages part already succeeded.
-      console.warn('[social_fb_connect] adaccounts fetch error:', adResp.error.message);
-    } else {
-      for (const a of (adResp.data || [])) {
-        const adId = String(a.id || (a.account_id ? ('act_' + a.account_id) : ''));
-        if (!adId) continue;
-        try {
-          await db.query(`
-            INSERT INTO social_ad_accounts
-              (ad_account_id, name, currency, access_token, is_monitored)
-            VALUES ($1, $2, $3, $4, 1)
-            ON CONFLICT (ad_account_id) DO UPDATE SET
-              name = COALESCE(EXCLUDED.name, social_ad_accounts.name),
-              currency = COALESCE(EXCLUDED.currency, social_ad_accounts.currency),
-              access_token = EXCLUDED.access_token
-          `, [adId, a.name || null, a.currency || null, userToken]);
-          adAccountsSaved++;
-        } catch (e) {
-          console.warn('[social_fb_connect] adaccount upsert failed:', adId, e.message);
-        }
-      }
-    }
-  } catch (e) {
-    console.warn('[social_fb_connect] adaccounts step failed:', e.message);
-  }
-
-  return {
-    ok: true,
-    pages_connected: saved,
-    ig_accounts: pages.filter(p => p.instagram_business_account).length,
-    ad_accounts: adAccountsSaved
-  };
+  return { ok: true, pages_connected: saved, ig_accounts: pages.filter(p => p.instagram_business_account).length };
 }
 
 async function api_social_fb_disconnect(token, pageId) {
