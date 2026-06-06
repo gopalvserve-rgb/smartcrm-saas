@@ -42013,15 +42013,14 @@ try {
             h('div', { style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap' } },
               viewId === 'socialads'
                 ? h('button', { class: 'btn primary social-strip-acct-btn',
-                    title: 'Triggers FB login (silent if scopes already granted) and auto-discovers all ad accounts you have access to. Skips the Pages modal.',
-                    onclick: async () => {
-                      // SOCIAL_AUTO_PULL_AD_ACCOUNTS_v1.1 — on Ad Reports we
-                      // skip the Pages modal entirely. Directly invoke FB Login
-                      // with the same scopes the Pages flow uses, then call
-                      // api_social_fb_connect (which now also stores ad accounts),
-                      // then open the Ad Accounts modal so the user immediately
-                      // sees the auto-discovered list.
-                      const stripBtn = view.querySelector('.social-strip-acct-btn');
+                    title: 'Re-runs Facebook login (silent if your session is fresh) and auto-discovers all ad accounts you have access to.',
+                    onclick: () => {
+                      // SOCIAL_AUTO_PULL_AD_ACCOUNTS_v1 — primary action on Ad
+                      // Reports is to (re-)connect Facebook. The Connect flow
+                      // now auto-pulls /me/adaccounts so ad accounts populate
+                      // without manual act_<id> entry. Falls back to clicking
+                      // the original ⚙ Ad Accounts button if the modal helper
+                      // isn't available.
                       try {
                         if (stripBtn) { stripBtn.disabled = true; stripBtn.textContent = '⏳ Opening Facebook…'; }
                         const fbAppId = '965594974738358';
