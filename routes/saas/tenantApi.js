@@ -48,6 +48,7 @@ const ROUTE_FILES = [
   'customFields',
   'customers',
   'dashboard',
+  'dashboardWidgets',  /* DASHBOARD_REDESIGN_v1 — 7 new widget APIs */
   'fb',
   'hr',
   'integrations',
