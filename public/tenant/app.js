@@ -42014,7 +42014,7 @@ try {
               viewId === 'socialads'
                 ? h('button', { class: 'btn primary social-strip-acct-btn',
                     title: 'Re-runs Facebook login (silent if your session is fresh) and auto-discovers all ad accounts you have access to.',
-                    onclick: () => {
+                    onclick: async () => {
                       // SOCIAL_AUTO_PULL_AD_ACCOUNTS_v1 — primary action on Ad
                       // Reports is to (re-)connect Facebook. The Connect flow
                       // now auto-pulls /me/adaccounts so ad accounts populate
