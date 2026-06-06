@@ -500,13 +500,6 @@ async function expressSubmitForm(req, res) {
       if (!lead.name) lead.name = lead.phone || lead.email || ('Form submission ' + Date.now());
       try {
         leadId = await db.insert('leads', lead);
-        // OUTBOUND_WH_FIRE_v1 — fire conditional outbound webhooks (FB/WA/IVR/form/rec/reassign).
-        try {
-          const __obwh_mod = require('./outboundWebhook');
-          if (__obwh_mod && __obwh_mod.fireOutboundWebhooks) {
-            __obwh_mod.fireOutboundWebhooks({ id: leadId, lead }).catch(e => console.error('[outboundWebhook] fire failed:', e.message));
-          }
-        } catch (_) {}
       } catch (e) {
         console.warn('[/f/submit] lead insert failed:', e.message);
       }

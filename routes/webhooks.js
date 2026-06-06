@@ -575,13 +575,6 @@ async function _createLeadFromWebhook(lead) {
   }
 
   const id = await db.insert('leads', lead);
-  // OUTBOUND_WH_FIRE_v1 — fire conditional outbound webhooks (FB/WA/IVR/form/rec/reassign).
-  try {
-    const __obwh_mod = require('./outboundWebhook');
-    if (__obwh_mod && __obwh_mod.fireOutboundWebhooks) {
-      __obwh_mod.fireOutboundWebhooks({ id: id, lead }).catch(e => console.error('[outboundWebhook] fire failed:', e.message));
-    }
-  } catch (_) {}
 
   if (lead.assigned_to) {
     await db.insert('notifications', {
@@ -680,13 +673,6 @@ async function calendlyEvent(req, res) {
           last_status_change_at: db.nowIso(),
           next_followup_at: startTime || null
         });
-        // OUTBOUND_WH_FIRE_v1 — fire conditional outbound webhooks (FB/WA/IVR/form/rec/reassign).
-        try {
-          const __obwh_mod = require('./outboundWebhook');
-          if (__obwh_mod && __obwh_mod.fireOutboundWebhooks) {
-            __obwh_mod.fireOutboundWebhooks({ id: newLeadId }).catch(e => console.error('[outboundWebhook] fire failed:', e.message));
-          }
-        } catch (_) {}
         lead = await db.findOneBy('leads', 'id', newLeadId);
       } else if (startTime) {
         await db.update('leads', lead.id, {
