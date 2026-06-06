@@ -2506,6 +2506,33 @@ VIEWS.dashboard = async (view) => {
       }
       localStorage.setItem(injKey, '1');
     }
+
+    // DASHBOARD_REDESIGN_v1 Phase 3 — auto-inject Phase 2's 8 new widgets for
+    // existing users whose saved layout pre-dates the redesign. Same pattern
+    // as the call-activity auto-add: idempotent, gated on a localStorage key,
+    // and persists via api_dashboard_save once.
+    const injKeyV6 = '_dashAutoInjected_v6_dashRedesign_' + ((CRM.user && CRM.user.id) || 'anon');
+    if (!localStorage.getItem(injKeyV6)) {
+      const has = (t) => widgets.some(w => w.type === t);
+      const toAdd = [];
+      const want = [
+        ['followup_counts_by_user',  'medium'],
+        ['followup_tabbed_panel',    'medium'],
+        ['followup_counts_employee', 'medium'],
+        ['caller_wise_leads',        'medium'],
+        ['caller_dialing_report',    'medium'],
+        ['last_wa_messages',         'medium'],
+        ['last_remarks',             'medium'],
+        ['wa_report_mini',           'medium'],
+        ['tat_violation_mini',       'medium']
+      ];
+      want.forEach(([t, size]) => { if (!has(t)) toAdd.push({ id: 'auto-redesign-' + t + '-' + Date.now(), type: t, size }); });
+      if (toAdd.length) {
+        widgets = widgets.concat(toAdd);
+        try { await api('api_dashboard_save', { widgets }); } catch (_) {}
+      }
+      localStorage.setItem(injKeyV6, '1');
+    }
   } catch (_) {}
 
   // Header bar with Refresh + "✨ Customize" / "Done"

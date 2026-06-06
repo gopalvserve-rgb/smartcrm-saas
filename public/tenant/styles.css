@@ -3838,3 +3838,23 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
     border-color: #fca5a5 !important; /* red-300 */
   }
 }
+
+/* ========================================================================
+   DASHBOARD_REDESIGN_v1 Phase 3 — Polish
+   Mobile responsiveness for the 8 new dashboard widgets.
+   Tables get smaller padding/font, feed items get tighter spacing.
+======================================================================== */
+@media (max-width: 720px) {
+  /* Tighten the data tables introduced by the new caller-wise/dialing/
+     follow-up widgets so columns don't overflow on a phone viewport. */
+  .card table.data { font-size: 0.78rem; }
+  .card table.data th, .card table.data td { padding: 0.32rem 0.4rem; }
+  /* Slightly shrink the KPI tile typography on the WA Report mini grid */
+  .card div[style*="grid-template-columns"] > div { padding: 0.4rem 0.45rem !important; }
+  /* Title rows on the new widgets — keep one line and ellipsize on phones */
+  .card h3 { font-size: 0.95rem; }
+}
+
+/* Always-on: stop runaway WhatsApp message bodies / remark text from
+   blowing out the card width when the rows are long. */
+.card div[style*="text-overflow: ellipsis"] { max-width: 100%; }
