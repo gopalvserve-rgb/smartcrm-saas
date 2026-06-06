@@ -4169,7 +4169,33 @@ window._waShareUrl = function(phone, text) {
   if (mode === 'app') {
     return 'whatsapp://send?phone=' + dig + (text ? '&text=' + encodeURIComponent(text) : '');
   }
-  return 'https://wa.me/' + dig + (text ? '?text=' + encodeURIComponent(text) : '');
+  // FIX1 (2026-06-06) — switched from wa.me to api.whatsapp.com because the
+  // api.whatsapp.com host is more likely to surface the Android app chooser
+  // when both Personal + Business WhatsApp are installed. wa.me historically
+  // gets bound to whichever app the user first picked "Always" with.
+  return 'https://api.whatsapp.com/send/?phone=' + dig + (text ? '&text=' + encodeURIComponent(text) : '');
+};
+
+// FIX1 — Android intent URL pinned to a specific WhatsApp package.
+// kind = 'personal' | 'business' | 'chooser'
+window._waPinnedIntent = function(phone, text, kind) {
+  const dig = String(phone || '').replace(/\D/g, '');
+  if (!dig) return '';
+  const txt = text ? ('&text=' + encodeURIComponent(text)) : '';
+  if (kind === 'personal') {
+    return 'intent://send/?phone=' + dig + txt + '#Intent;scheme=https;package=com.whatsapp;action=android.intent.action.VIEW;S.browser_fallback_url=' + encodeURIComponent('https://api.whatsapp.com/send/?phone=' + dig + txt) + ';end';
+  }
+  if (kind === 'business') {
+    return 'intent://send/?phone=' + dig + txt + '#Intent;scheme=https;package=com.whatsapp.w4b;action=android.intent.action.VIEW;S.browser_fallback_url=' + encodeURIComponent('https://api.whatsapp.com/send/?phone=' + dig + txt) + ';end';
+  }
+  return 'https://api.whatsapp.com/send/?phone=' + dig + txt;
+};
+window._waOpenPinned = function(phone, text, kind) {
+  const url = window._waPinnedIntent(phone, text, kind);
+  if (!url) return;
+  const a = document.createElement('a');
+  a.href = url; a.style.display = 'none'; document.body.appendChild(a);
+  a.click(); setTimeout(() => a.remove(), 100);
 };
 window._waOpenLink = function(phone, text) {
   // Helper that opens the link in the right way for the picked mode.
@@ -5436,7 +5462,15 @@ function renderLeadsMobile(rows) {
         digits ? _laItem('wa',   'WA API',   () => openInitiateChatModal(l), 'wa-cloud-btn') : null,
         digits ? _laItem('wa',   'My WA',    () => openPersonalWaPicker(l), 'wa-personal-btn') : null,
         _laItem('note', 'Note', () => openRemarkInline(l.id), 'note-btn'),
-        _laItem('edit', 'Edit', () => openLeadModal(l.id), 'edit-btn')
+        _laItem('edit', 'Edit', () => openLeadModal(l.id), 'edit-btn'),
+        // FIX3 (2026-06-06) — admin delete button on the mobile lead card
+        (CRM.user && CRM.user.role === 'admin')
+          ? _laItem('note', 'Delete', async () => {
+              if (!await confirmDialog('Delete lead "' + (l.name || ('#' + l.id)) + '"? This cannot be undone.')) return;
+              try { await api('api_leads_bulkDelete', [l.id]); toast('Deleted'); loadLeads(); }
+              catch (e) { toast(e.message, 'err'); }
+            }, 'delete-btn')
+          : null
       )
     );
     m.appendChild(card);
@@ -15073,9 +15107,11 @@ async function openPersonalWaPicker(lead) {
 
   const modal = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) modal.remove(); } });
   const launch = (text) => {
-    const url = window._waShareUrl(dial, text);
     try { if (lead?.id) api('api_leads_addRemark', lead.id, { remark: '💬 WhatsApp sent (personal): ' + (text || '(blank chat opened)').slice(0, 200) }).catch(() => {}); } catch (_) {}
-    window._waOpenLink(dial, text);
+    // FIX1 — use chooser-friendly URL so Android shows app picker when both
+    // Personal + Business WhatsApp are installed. User can also use the
+    // Personal/Business buttons below to force a specific app.
+    window._waOpenPinned(dial, text, 'chooser');
     modal.remove();
   };
   const list = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '.4rem', maxHeight: '50vh', overflowY: 'auto' } });
@@ -15103,7 +15139,17 @@ async function openPersonalWaPicker(lead) {
       'Pick a template — WhatsApp opens with the message pre-filled, you tap Send. WhatsApp doesn\'t allow third-party apps to send silently from a personal number; if you need automated sending, use the 🟢 WA Template button (Cloud API, business number).'),
     list,
     h('div', { class: 'actions', style: { marginTop: '.75rem', flexWrap: 'wrap', gap: '.4rem' } },
-      h('button', { class: 'btn', onclick: () => launch('') }, 'Open blank chat'),
+      // FIX1 (2026-06-06) — explicit Personal vs Business buttons so users
+      // with both WhatsApp apps installed can pick deterministically.
+      h('button', { class: 'btn', title: 'Open WhatsApp (chooser if both installed)',
+        onclick: () => { try { if (lead && lead.id) api('api_leads_addRemark', lead.id, { remark: '💬 WhatsApp opened (default)' }).catch(() => {}); } catch (_) {} window._waOpenPinned(dial, '', 'chooser'); modal.remove(); }
+      }, '💬 Open blank'),
+      h('button', { class: 'btn', style: { background: '#25D366', color: '#fff' }, title: 'Force open in Personal WhatsApp',
+        onclick: () => { try { if (lead && lead.id) api('api_leads_addRemark', lead.id, { remark: '💬 WhatsApp sent (Personal)' }).catch(() => {}); } catch (_) {} window._waOpenPinned(dial, '', 'personal'); modal.remove(); }
+      }, 'Personal WA'),
+      h('button', { class: 'btn', style: { background: '#0a8055', color: '#fff' }, title: 'Force open in WhatsApp Business',
+        onclick: () => { try { if (lead && lead.id) api('api_leads_addRemark', lead.id, { remark: '💬 WhatsApp sent (Business)' }).catch(() => {}); } catch (_) {} window._waOpenPinned(dial, '', 'business'); modal.remove(); }
+      }, 'Business WA'),
       h('button', { class: 'btn primary', onclick: () => { modal.remove(); openPersonalWaTemplatesModal(); } }, '✎ Manage templates')
     )
   ));
@@ -20147,17 +20193,23 @@ async function loadWaReport() {
       h('tbody', {}, ...userRows.map(r => {
         const dPct = r.sent_total ? Math.round((r.delivered / r.sent_total) * 100) : 0;
         const rPct = r.sent_total ? Math.round((r.read / r.sent_total) * 100) : 0;
+        // FIX5 — clickable cells drill into matching messages
+        const clk = (kind, label) => ({
+          style: { cursor: 'pointer', color: '#2563eb', textDecoration: 'underline dotted' },
+          onclick: () => openWaDrill({ kind, user_id: r.user_id, label: r.name + ' — ' + label })
+        });
         return h('tr', {},
           h('td', {}, r.name),
-          h('td', {}, String(r.sent_total)),
-          h('td', {}, String(r.delivered)),
-          h('td', {}, String(r.read)),
-          h('td', { style: r.failed ? { color: '#dc2626', fontWeight: 600 } : null }, String(r.failed)),
+          h('td', clk('outbound', 'Sent'),    String(r.sent_total)),
+          h('td', clk('delivered', 'Delivered'), String(r.delivered)),
+          h('td', clk('read',      'Read'),      String(r.read)),
+          h('td', Object.assign({ style: Object.assign({ cursor: 'pointer', color: r.failed ? '#dc2626' : '#2563eb', fontWeight: r.failed ? 600 : 400, textDecoration: 'underline dotted' }, {}) }, { onclick: () => openWaDrill({ kind: 'failed', user_id: r.user_id, label: r.name + ' — Failed' }) }), String(r.failed)),
           h('td', {}, dPct + '%'),
           h('td', {}, rPct + '%')
         );
       }))
     );
+    byUserEl.appendChild(h('div', { class: 'muted', style: { fontSize: '.75rem', marginBottom: '.3rem' } }, '💡 Click any number to drill into the matching messages.'));
     byUserEl.appendChild(tbl);
   }
 
@@ -20180,17 +20232,23 @@ async function loadWaReport() {
       h('tbody', {}, ...tplRows.map(r => {
         const dPct = r.sent_total ? Math.round((r.delivered / r.sent_total) * 100) : 0;
         const rPct = r.sent_total ? Math.round((r.read / r.sent_total) * 100) : 0;
+        // FIX5 — clickable cells drill into matching template messages
+        const clk = (kind, label) => ({
+          style: { cursor: 'pointer', color: '#2563eb', textDecoration: 'underline dotted' },
+          onclick: () => openWaDrill({ kind, template_name: r.template, label: r.template + ' — ' + label })
+        });
         return h('tr', {},
-          h('td', {}, r.template),
-          h('td', {}, String(r.sent_total)),
-          h('td', {}, String(r.delivered)),
-          h('td', {}, String(r.read)),
-          h('td', { style: r.failed ? { color: '#dc2626', fontWeight: 600 } : null }, String(r.failed)),
+          h('td', { style: { fontWeight: 600 } }, r.template),
+          h('td', clk('outbound', 'Sent'),    String(r.sent_total)),
+          h('td', clk('delivered', 'Delivered'), String(r.delivered)),
+          h('td', clk('read',      'Read'),      String(r.read)),
+          h('td', Object.assign({ style: { cursor: 'pointer', color: r.failed ? '#dc2626' : '#2563eb', fontWeight: r.failed ? 600 : 400, textDecoration: 'underline dotted' } }, { onclick: () => openWaDrill({ kind: 'failed', template_name: r.template, label: r.template + ' — Failed' }) }), String(r.failed)),
           h('td', {}, dPct + '%'),
           h('td', {}, rPct + '%')
         );
       }))
     );
+    byTplEl.appendChild(h('div', { class: 'muted', style: { fontSize: '.75rem', marginBottom: '.3rem' } }, '💡 Click any number to drill into the matching messages.'));
     byTplEl.appendChild(tbl);
   }
 
@@ -20265,10 +20323,27 @@ async function loadWaReport() {
     const clickRows = await api('api_reports_whatsapp_buttonClicks', { from, to, campaign_id: campaign_ids && campaign_ids[0] });
     const campaignRows = (clickRows || []).filter(r => (r.source || 'campaign') === 'campaign');
     const botRows      = (clickRows || []).filter(r => r.source === 'bot');
-    if (clicksEl) _renderClickRows(clicksEl, campaignRows, { kind: 'campaign',
-      empty: 'No template/campaign button clicks in this date range. (Requires templates with Quick Reply or URL buttons.)' });
-    if (botClicksEl) _renderClickRows(botClicksEl, botRows, { kind: 'bot',
-      empty: 'No bot button clicks in this date range. (Tracked when customers tap AI Bot quick-replies or Bot Flow buttons.)' });
+    // FIX4 (2026-06-06) — when clicks are empty, also fetch the template send
+    // count so the empty-state can differentiate "no templates sent yet" from
+    // "sent but no clicks yet". Both are valid zero-states, but only the
+    // second one means the customer hasn't tapped buttons.
+    let templatesSent = 0;
+    if (!campaignRows.length || !botRows.length) {
+      try {
+        const wa = await api('api_reports_whatsapp', { from, to, campaign_ids });
+        templatesSent = (wa && wa.by_template || []).reduce((a, t) => a + (Number(t.sent_total) || 0), 0);
+      } catch (_) {}
+    }
+    if (clicksEl) {
+      _renderClickRows(clicksEl, campaignRows, { kind: 'campaign',
+        empty: templatesSent
+          ? (templatesSent + ' template message(s) sent in this range but no button clicks recorded yet. Customers either haven\'t tapped a button, or your templates don\'t include Quick Reply / URL buttons. Edit a template under WhatsApp → Templates to add buttons.')
+          : 'No template messages with buttons sent in this date range. Add Quick Reply or URL buttons when creating a WhatsApp template under WhatsApp → Templates.' });
+    }
+    if (botClicksEl) {
+      _renderClickRows(botClicksEl, botRows, { kind: 'bot',
+        empty: 'No bot button clicks in this date range. AI Bot quick-replies + Bot Flow button taps appear here once customers tap them.' });
+    }
   } catch (e) {
     if (clicksEl)    clicksEl.innerHTML    = '<div class="error-box">' + esc(e.message) + '</div>';
     if (botClicksEl) botClicksEl.innerHTML = '<div class="error-box">' + esc(e.message) + '</div>';

@@ -2986,6 +2986,13 @@ async function _applyAutoShare(leadId, lead, actorId) {
 // for the {lead_id, user_id} pair. Falls back silently if table missing.
 async function _isVisibleOrShared(me, visible, lead) {
   if (_isVisible(me, visible, lead)) return true;
+  // MOBILE_FORBIDDEN_FIX_v1 (2026-06-06) — also pass if the lead's creator
+  // is the current user. Mobile users sometimes hit Forbidden when they
+  // created a lead, the lead got reassigned (e.g. via auto-assign rules
+  // or by an admin), and they then try to update its status on mobile
+  // where the lead was still showing in their old list. Creator can
+  // always update their own creations until explicitly de-shared.
+  if (lead.created_by != null && Number(lead.created_by) === Number(me.id)) return true;
   try {
     const r = await db.query(
       'SELECT 1 FROM lead_co_owners WHERE lead_id = $1 AND user_id = ANY($2::int[]) LIMIT 1',

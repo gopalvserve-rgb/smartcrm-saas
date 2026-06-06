@@ -26,7 +26,7 @@ const VALID_WORK_MODES = ['office', 'home', 'on_site'];
 // the schema on first call so existing tenants don't need a manual
 // migration. The flags are read from the `config` table:
 //
-//   ATTENDANCE_REQUIRE_SELFIE   '1' / '0'  (default '0' = off)
+//   ATTENDANCE_REQUIRE_SELFIE   '1' / '0'  (default '1' = ON — FIX_v1)
 //   ATTENDANCE_REQUIRE_METER    '1' / '0'  (default '0' = off)
 //   ATTENDANCE_METER_LABEL      free text (default 'Meter reading')
 //
@@ -49,7 +49,7 @@ async function _ensureAttendanceSelfieCols() {
 
 async function _attRequirements() {
   const [reqSelfie, reqMeter, meterLabel] = await Promise.all([
-    db.getConfig('ATTENDANCE_REQUIRE_SELFIE', '0'),
+    db.getConfig('ATTENDANCE_REQUIRE_SELFIE', '1'),
     db.getConfig('ATTENDANCE_REQUIRE_METER', '0'),
     db.getConfig('ATTENDANCE_METER_LABEL', 'Meter reading')
   ]);
