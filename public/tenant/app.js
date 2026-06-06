@@ -42024,32 +42024,16 @@ try {
                       try {
                         if (stripBtn) { stripBtn.disabled = true; stripBtn.textContent = '⏳ Opening Facebook…'; }
                         const fbAppId = '965594974738358';
-                        // FB_OAUTH_POOL_FIX_v2 / Option B — eagerly preload FB
-                        // SDK before opening any popup so the load doesn't race
-                        // with the browser's popup-suppression heuristic.
-                        let FB;
-                        try { FB = await _ensureFbSdk(fbAppId); }
-                        catch (sdkErr) {
-                          toast('Facebook SDK blocked (likely an extension or popup blocker). Falling back to full-page redirect…', 'warn');
-                          await new Promise(r => setTimeout(r, 1200));
-                          const r = await api('api_social_fb_oauth_url', location.origin);
-                          location.href = r.auth_url;
-                          return;
-                        }
+                        const FB = await _ensureFbSdk(fbAppId);
                         await new Promise((resolve, reject) => {
                           FB.login(async (resp) => {
                             if (!resp || !resp.authResponse || !resp.authResponse.accessToken) {
-                              if (resp && resp.status === 'unknown') {
-                                // Browser blocked the popup, not the user cancelling.
-                                reject(new Error('POPUP_BLOCKED'));
-                              } else {
-                                reject(new Error(resp && resp.status === 'unknown' ? 'Cancelled' : 'Login cancelled or no token'));
-                              }
+                              reject(new Error(resp && resp.status === 'unknown' ? 'Cancelled' : 'No token'));
                               return;
                             }
                             try {
                               const r = await api('api_social_fb_connect', resp.authResponse.accessToken);
-                              toast('Connected ' + r.pages_connected + ' page(s)' + (r.ig_accounts ? ' · ' + r.ig_accounts + ' IG' : '') + (r.ad_accounts ? ' · ' + r.ad_accounts + ' ad account(s)' : '') + (!r.ad_accounts ? ' — no ad accounts auto-discovered; click ⚙ Ad Accounts to add manually if needed' : ''));
+                              toast('Connected ' + r.pages_connected + ' page(s)' + (r.ig_accounts ? ' · ' + r.ig_accounts + ' IG' : '') + (r.ad_accounts ? ' · ' + r.ad_accounts + ' ad account(s)' : ''));
                               // Auto-open the Ad Accounts modal so the user sees
                               // the freshly-discovered accounts immediately.
                               setTimeout(() => {
@@ -42068,11 +42052,7 @@ try {
                           }, { scope: SOCIAL_SCOPES, auth_type: 'rerequest', return_scopes: true });
                         });
                       } catch (e) {
-                        // SDK login itself failed (popup blocked, etc) → OAuth redirect fallback.
-                        if ((e && e.message === 'POPUP_BLOCKED') || /popup|blocked/i.test(e && e.message || '')) {
-                          toast('Popup blocked. Redirecting to Facebook in a new full page…', 'warn');
-                          await new Promise(r => setTimeout(r, 1200));
-                        }
+                        // FB SDK failed (popup blocked / extension blocked) → OAuth redirect fallback
                         try {
                           const r = await api('api_social_fb_oauth_url', location.origin);
                           location.href = r.auth_url;
