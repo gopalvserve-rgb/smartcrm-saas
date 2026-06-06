@@ -224,7 +224,8 @@ class PhoneStateReceiver : BroadcastReceiver() {
                         safeCapacitor { CallerIdPlugin.instance?.emitEnded(finalNumber, 0, missed = true) }
                         sendCallEvent(ctx, "call_ended", finalNumber, missed = true, durationSec = 0)
                         postNativeAsync(ctx, "call_ended", finalNumber, direction = "missed", missed = true, durationSec = 0)
-                        enqueueRecordingBgSync(ctx, "post-missed-call")
+                        // REC_AUTOSYNC_KILL_v1 — disabled post-call recording auto-sync per user request
+                        // enqueueRecordingBgSync(ctx, "post-missed-call")
                     }
                 } else if (lastState == TelephonyManager.EXTRA_STATE_OFFHOOK) {
                     val dur = (now - offhookStartMs) / 1000
@@ -239,7 +240,8 @@ class PhoneStateReceiver : BroadcastReceiver() {
                         // Otherwise the call started via OFFHOOK directly — outbound.
                         val dir = if (ringHappened) "in" else "out"
                         postNativeAsync(ctx, "call_ended", finalNumber, direction = dir, missed = false, durationSec = dur)
-                        enqueueRecordingBgSync(ctx, "post-ended-call")
+                        // REC_AUTOSYNC_KILL_v1 — disabled post-call recording auto-sync per user request
+                        // enqueueRecordingBgSync(ctx, "post-ended-call")
                     }
                 }
                 ringStartMs = 0

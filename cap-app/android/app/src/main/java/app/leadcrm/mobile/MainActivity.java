@@ -85,7 +85,8 @@ public class MainActivity extends BridgeActivity {
         registerCallReceiver();
         getBridge().getWebView().addJavascriptInterface(new LeadCRMBridge(), "LeadCRMNative");
         handleSharedIntent(getIntent());
-        scheduleRecordingBgSync();
+        // REC_AUTOSYNC_KILL_v1 — disabled periodic 15-min WorkManager auto-sync per user request
+        // scheduleRecordingBgSync();
 
         // PERM_ONBOARDING_v1: launch Runo-style permission onboarding on first run
         // or whenever critical perms (battery whitelist / MANAGE_EXTERNAL_STORAGE / recording folder)
@@ -800,7 +801,8 @@ public class MainActivity extends BridgeActivity {
                 .apply();
             Log.i(TAG, "bg-sync creds saved (baseUrl=" + (baseUrl == null ? "?" : baseUrl.replaceAll("token=[^&]*", "token=***")) + ")");
             // Make sure the periodic worker is scheduled (idempotent — KEEP policy).
-            scheduleRecordingBgSync();
+            // REC_AUTOSYNC_KILL_v1 — disabled periodic 15-min WorkManager auto-sync per user request
+            // scheduleRecordingBgSync();
         }
 
         // REC_BG_SYNC_v1 — JS can trigger an immediate scan (e.g. right after

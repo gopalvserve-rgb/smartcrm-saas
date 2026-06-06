@@ -905,8 +905,10 @@ async function apiRaw(fn, ...args) {
       // the day), resume the 30-min location-ping loop so the trail
       // continues from where the previous session left off.
       setTimeout(() => _resumeLocationPingsIfCheckedIn().catch(() => {}), 3000);
-      // Silent background sweep: pick up any missed recordings.
-      setTimeout(() => silentBackgroundSync(), 4000);
+      // REC_AUTOSYNC_KILL_v1 (2026-06-06) — disabled app-launch silent sweep per
+      // user request. Yellow "No NEW recordings since X min ago" toast was firing on every
+      // open. Manual Sync buttons on Recordings page still work.
+      // setTimeout(() => silentBackgroundSync(), 4000);
     } catch (_) { logout(); }
   } else {
     renderLogin();
