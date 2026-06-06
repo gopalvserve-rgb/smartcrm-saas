@@ -61,3 +61,10 @@ SELECT 'feature',
        '📣',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Meta Ads Manager + Facebook & Instagram polished');
+
+-- META_MODULE_v1.1 — fix stuck Loading on /socialads
+INSERT INTO changelog (version, title, body, posted_at)
+VALUES ('meta-module-v1.1', 'Marketing tabs — fixed stuck Loading',
+        'Ads Manager, Facebook & Instagram, Comments and Post Publisher pages now actually load instead of getting stuck at "Loading…" after a fresh Facebook connection. Settings → Integrations Meta Ads card also now correctly counts ad accounts and pages.',
+        NOW())
+ON CONFLICT (version) DO NOTHING;

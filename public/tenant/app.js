@@ -23943,10 +23943,15 @@ function importGmailLeads() {
   // ──────────────────────────────────────────────────────────────
   let _socialState = { pages: [], adAccounts: [] };
   try {
-    const r = await api('api_social_pages').catch(() => null);
-    if (r && Array.isArray(r)) _socialState.pages = r;
-    else if (r && r.pages) _socialState.pages = r.pages || [];
-    if (r && r.ad_accounts) _socialState.adAccounts = r.ad_accounts || [];
+    // META_MODULE_v1.1 — call the actual backend function names. The original
+    // referenced api_social_pages + ad_accounts on the same response, but the
+    // real APIs are api_social_pages_list and api_social_ads_accounts_list.
+    const [pgs, accts] = await Promise.all([
+      api('api_social_pages_list').catch(() => []),
+      api('api_social_ads_accounts_list').catch(() => [])
+    ]);
+    if (Array.isArray(pgs)) _socialState.pages = pgs;
+    if (Array.isArray(accts)) _socialState.adAccounts = accts;
   } catch (_) {}
 
   function _metaPill(text, bg, color) {
@@ -23976,11 +23981,15 @@ function importGmailLeads() {
     const acct = _socialState.adAccounts[0] || {};
     adsCard.appendChild(h('div', { style: { padding: '.85rem 1.1rem', display: 'flex', flexDirection: 'column', gap: '.35rem' } },
       h('div', { style: { fontSize: '.85rem' } },
-        h('span', { style: { color: '#a78bfa', fontWeight: 600 } }, '◉ Business: '),
-        h('strong', {}, acct.business_name || acct.name || '—')),
+        h('span', { style: { color: '#a78bfa', fontWeight: 600 } }, '◉ Account: '),
+        h('strong', {}, acct.name || acct.ad_account_id || '—')),
       h('div', { style: { fontSize: '.85rem' } },
-        h('span', { class: 'muted' }, 'Ad Account: '),
-        h('code', { style: { fontFamily: 'monospace' } }, acct.account_id || acct.id || '—'))
+        h('span', { class: 'muted' }, 'Ad Account ID: '),
+        h('code', { style: { fontFamily: 'monospace' } }, acct.ad_account_id || acct.account_id || acct.id || '—'),
+        acct.currency ? h('span', { class: 'muted', style: { marginLeft: '.5rem' } }, '· ' + acct.currency) : null),
+      _socialState.adAccounts.length > 1
+        ? h('div', { style: { fontSize: '.78rem', color: '#94a3b8' } }, '+ ' + (_socialState.adAccounts.length - 1) + ' more ad account(s) connected')
+        : null
     ));
     adsCard.appendChild(h('div', { style: { padding: '.85rem 1.1rem', display: 'flex', gap: '.5rem', borderTop: '1px solid #1f2937' } },
       h('button', { class: 'btn', style: { flex: 1 }, onclick: async () => {
@@ -24007,20 +24016,9 @@ function importGmailLeads() {
     ));
   }
 
-  // Sandbox Mode row
-  adsCard.appendChild(h('div', { style: { padding: '.7rem 1.1rem', borderTop: '1px solid #1f2937', background: '#0a1124', display: 'flex', alignItems: 'center', gap: '.6rem', fontSize: '.82rem' } },
-    h('span', { style: { background: '#92400e', color: '#fde68a', padding: '.15rem .55rem', borderRadius: '999px', fontWeight: 600, fontSize: '.7rem' } }, '🛠 Sandbox Mode'),
-    h('span', { style: { flex: 1, color: '#cbd5e1' } }, 'Connect manually using a Meta sandbox access token & ad account.'),
-    h('button', { class: 'btn sm', onclick: () => {
-      const tok = prompt('Paste Sandbox access token:');
-      if (!tok) return;
-      const acct = prompt('Paste Ad Account ID (act_xxxxxxxxxxxxx):');
-      if (!acct) return;
-      api('api_social_ads_sandboxConnect', { access_token: tok, ad_account_id: acct })
-        .then(() => { toast('Sandbox connected', 'ok'); showAdminTab('integrations'); })
-        .catch(e => toast(e.message, 'err'));
-    } }, 'Show Form')
-  ));
+  // META_MODULE_v1.1 — Sandbox button removed. The api_social_ads_sandboxConnect
+  // backend function doesn't exist yet — the standard "Connect with Facebook"
+  // button above already handles sandbox tokens transparently via OAuth.
 
   // Connected pages section
   const connectedPages = _socialState.pages.filter(p => Number(p.is_active) === 1 || Number(p.enabled) === 1 || p.is_active === undefined);
@@ -24042,7 +24040,7 @@ function importGmailLeads() {
           p.ig_username ? h('div', { style: { fontSize: '.78rem', color: '#f472b6' } }, '◉ @' + p.ig_username) : null),
         h('span', { style: { background: isEnabled ? '#064e3b' : '#0f172a', color: isEnabled ? '#6ee7b7' : '#94a3b8', padding: '.18rem .55rem', borderRadius: '999px', fontSize: '.72rem', fontWeight: 600 } }, isEnabled ? '✓ Eligible' : 'Disabled'),
         h('button', { class: 'btn sm', onclick: async () => {
-          try { await api('api_social_page_toggle', { page_id: p.id || p.page_id, enabled: !isEnabled }); toast(isEnabled ? 'Disabled' : 'Enabled', 'ok'); showAdminTab('integrations'); }
+          try { await api('api_social_fb_toggleMonitor', { page_id: p.id || p.page_id, monitor: !isEnabled }); toast(isEnabled ? 'Disabled' : 'Enabled', 'ok'); showAdminTab('integrations'); }
           catch (e) { toast(e.message, 'err'); }
         } }, isEnabled ? 'Disable' : 'Enable')
       ));
@@ -42798,44 +42796,24 @@ try {
       // Inject immediately so the Connect button is visible even if
       // the underlying view throws.
       _injectStrip();
+      // META_MODULE_v1.1 — call the original render. The previous code had a
+      // duplicate strip-injection try block that returned early because the
+      // strip we just injected satisfied .social-connect-strip, leaving
+      // every social tab stuck at "Loading…". Now we actually invoke the
+      // original VIEWS.socialads / VIEWS.socialinbox / etc.
       let r;
-      try {
-        if (view.querySelector('.social-connect-strip')) return r;
-        const strip = h('div', {
-          class: 'social-connect-strip',
-          style: {
-            background: 'linear-gradient(135deg,#fef3c7,#fff7ed)',
-            border: '1px solid #fcd34d',
-            padding: '.7rem 1rem',
-            borderRadius: '8px',
-            marginBottom: '.8rem',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: '.6rem',
-            flexWrap: 'wrap'
-          }
-        },
-          h('div', {},
-            h('strong', { style: { color: '#92400e' } }, '🔗 Facebook & Instagram for Social Hub'),
-            h('div', { class: 'muted', style: { fontSize: '.9em', marginTop: '.2rem' } },
-              'Separate from your Lead Sync setup. Click Connect to grant Messenger / IG DM / posts / comments / ads_read on the pages you choose.')
-          ),
-          h('div', { style: { display: 'flex', gap: '.4rem' } },
-            h('button', { class: 'btn primary', onclick: () => openSocialConnectModal() }, '🔗 Connect / Manage'),
-            h('button', { class: 'btn ghost', onclick: async () => {
-              try {
-                const pages = await api('api_social_pages_list');
-                if (!pages.length) toast('No pages connected yet. Click Connect to start.', 'warn');
-                else toast(pages.length + ' page(s) connected · ' + pages.filter(p => p.instagram_business_id).length + ' IG');
-              } catch (e) { toast(e.message, 'err'); }
-            } }, '👁 Status')
-          )
-        );
-        const pageEl = view.querySelector('.page');
-        if (pageEl) pageEl.insertBefore(strip, pageEl.firstChild);
-        else view.insertBefore(strip, view.firstChild);
-      } catch (_) {}
+      try { r = await original.call(this, view); }
+      catch (e) {
+        try {
+          const wrap = view.querySelector('.page') || view;
+          wrap.appendChild(h('div', { class: 'card', style: { padding: '.8rem', background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', marginTop: '.5rem' } },
+            h('strong', {}, '⚠ Could not load this tab: '),
+            h('span', {}, (e && e.message) || 'Unknown error'),
+            h('div', { style: { fontSize: '.85em', marginTop: '.4rem' } }, 'Try Refresh, or click the Connect button above if you have not connected Facebook yet.')
+          ));
+        } catch(_) {}
+        console.error('[social] render failed for', viewId, e);
+      }
       return r;
     };
   });
