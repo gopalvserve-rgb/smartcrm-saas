@@ -3162,6 +3162,12 @@ const WIDGET_LIBRARY = {
         body.appendChild(kpis);
 
         // Compact bands
+        // DASH_MOBILE_FIX_v2 — on phone-sized viewports, drop the 90px right
+        // label column and merge label + count + value INTO the trapezoid
+        // as two lines. The fixed 90px column was forcing the trapezoid
+        // to render wider than the viewport on narrow phones, clipping
+        // the labels off-screen ("New le", "Conta", etc).
+        const _isMobile = !!(window.matchMedia && window.matchMedia('(max-width: 780px)').matches) || (window.innerWidth && window.innerWidth < 780);
         const bands = r.bands || [];
         const maxCount = Math.max(1, ...bands.map(b => b.count || 0));
         const funnel = h('div', { style: { padding:'.3rem 0' } });
@@ -3169,18 +3175,31 @@ const WIDGET_LIBRARY = {
           const tw = Math.max(30, Math.round(85 - i * 12));
           const bgColor = _FUNNEL_BAND_COLORS[i] || _FUNNEL_BAND_COLORS[_FUNNEL_BAND_COLORS.length - 1];
           const tc = _FUNNEL_BAND_TEXT[i] || '#fff';
-          const trap = h('div', {
-            style: { width: tw + '%', margin:'0 auto', height:'42px', background:bgColor, clipPath:'polygon(8% 0, 92% 0, 100% 100%, 0% 100%)', display:'flex', alignItems:'center', justifyContent:'center', color: tc, cursor:'pointer', fontSize:'.78rem', fontWeight:600 },
-            onclick: () => { location.hash = '#/leads?stage=' + b.id; }
-          }, b.label + ' \u00B7 ' + b.count);
-          const row = h('div', { style: { display:'flex', alignItems:'center', gap:'.4rem', marginBottom:'.3rem' } },
-            h('div', { style: { flex:1 } }, trap),
-            h('div', { style: { width:'90px', fontSize:'.72rem', color:'#0f172a' } },
-              h('div', { style: { fontWeight:700 } }, b.count + ' leads'),
-              h('div', { style: { fontSize:'.66rem', color:'#64748b' } }, _formatInr(b.value))
-            )
-          );
-          funnel.appendChild(row);
+          if (_isMobile) {
+            // Phone: single full-width trapezoid with everything inline
+            const trap = h('div', {
+              style: { width: tw + '%', maxWidth: '100%', margin:'0 auto', minHeight:'48px', padding:'.3rem .5rem', boxSizing:'border-box', background:bgColor, clipPath:'polygon(6% 0, 94% 0, 100% 100%, 0% 100%)', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', color: tc, cursor:'pointer', fontWeight:600, lineHeight:1.15 },
+              onclick: () => { location.hash = '#/leads?stage=' + b.id; }
+            },
+              h('div', { style: { fontSize:'.78rem', textAlign:'center', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', maxWidth:'100%' } }, b.label),
+              h('div', { style: { fontSize:'.68rem', opacity:.92, marginTop:'.1rem' } }, b.count + ' leads')
+            );
+            funnel.appendChild(h('div', { style: { marginBottom:'.3rem' } }, trap));
+          } else {
+            // Desktop: trapezoid + right side label column (original layout)
+            const trap = h('div', {
+              style: { width: tw + '%', margin:'0 auto', height:'42px', background:bgColor, clipPath:'polygon(8% 0, 92% 0, 100% 100%, 0% 100%)', display:'flex', alignItems:'center', justifyContent:'center', color: tc, cursor:'pointer', fontSize:'.78rem', fontWeight:600 },
+              onclick: () => { location.hash = '#/leads?stage=' + b.id; }
+            }, b.label + ' \u00B7 ' + b.count);
+            const row = h('div', { style: { display:'flex', alignItems:'center', gap:'.4rem', marginBottom:'.3rem' } },
+              h('div', { style: { flex:1 } }, trap),
+              h('div', { style: { width:'90px', fontSize:'.72rem', color:'#0f172a' } },
+                h('div', { style: { fontWeight:700 } }, b.count + ' leads'),
+                h('div', { style: { fontSize:'.66rem', color:'#64748b' } }, _formatInr(b.value))
+              )
+            );
+            funnel.appendChild(row);
+          }
         });
         body.appendChild(funnel);
 
