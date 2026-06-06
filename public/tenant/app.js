@@ -42000,12 +42000,9 @@ try {
             }
           },
             h('div', {},
-              h('strong', { style: { color: '#92400e' } },
-                viewId === 'socialads' ? '📈 Ad Reports setup' : '🔗 Facebook & Instagram for Social Hub'),
+              h('strong', { style: { color: '#92400e' } }, '🔗 Facebook & Instagram for Social Hub'),
               h('div', { class: 'muted', style: { fontSize: '.9em', marginTop: '.2rem' } },
-                viewId === 'socialads'
-                  ? 'Add an Ad Account ID (e.g. act_127899269764650) below, then click Pull from Meta. Pages connection is separate — manage that under Inbox / Comments / Publish.'
-                  : 'Separate from your Lead Sync setup. Click Connect to grant Messenger / IG DM / posts / comments / ads_read on the pages you choose.')
+                'Separate from your Lead Sync setup. Click Connect to grant Messenger / IG DM / posts / comments / ads_read on the pages you choose.')
             ),
             // SOCIAL_CONNECT_STRIP_FIX_v1.1 — on Ad Reports view, the
             // PRIMARY action is to manage AD ACCOUNTS (not Pages). The
