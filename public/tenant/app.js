@@ -3237,15 +3237,31 @@ const WIDGET_LIBRARY = {
     render: (c, _cfg, d) => _renderKpi(c, 'Overdue', d.notifs?.counts?.overdue ?? 0, 'err', '⚠️', '#/followups?tab=overdue') },
   // ----- Call Activity -----
   call_activity_summary: { title: 'Call Activity · Summary', group: 'Calls',
-    render: (c, _cfg, d, w) => {
+    render: async (c, _cfg, d, w) => {
       c.appendChild(h('h3', {}, w.title || '\uD83D\uDCDE Call activity (last 30 days)'));
       c.appendChild(h('div', { class: 'muted', style: { fontSize: '.85rem', marginBottom: '.4rem' } }, 'Tap to open full report'));
       const body = h('div', { id: 'wcact-' + w.id, style: { cursor: 'pointer' } });
       body.onclick = () => { location.hash = '#/callactivity'; };
       c.appendChild(body);
-      const s = d.callActivity?.summary || null;
+      // CALL_SUMMARY_FETCH_FIX_v1 — bundled fetch uses the dashboard date
+      // chip, which means a 1-day chip would make this widget show only
+      // 1-day numbers while still labelled "last 30 days". To match its
+      // title (and what users expect), self-fetch with NO filters so the
+      // server's default last-30-days window is used. This also recovers
+      // when the shared bundle fetch errored out.
+      let s = d.callActivity && d.callActivity.summary || null;
+      const _dashHasRange = (CRM._dashRange && (CRM._dashRange.from || CRM._dashRange.to));
+      if (!s || _dashHasRange) {
+        try {
+          const fresh = await api('api_reports_callActivity', {});
+          s = fresh && fresh.summary;
+        } catch (e) {
+          body.appendChild(h('div', { class: 'error-box', style: { fontSize: '.78rem' } }, 'Could not load: ' + e.message));
+          return;
+        }
+      }
       if (!s) {
-        body.appendChild(h('div', { class: 'muted' }, 'Loading…'));
+        body.appendChild(h('div', { class: 'muted' }, 'No call data in the last 30 days.'));
         return;
       }
       const fmt = (n) => Number(n) || 0;
