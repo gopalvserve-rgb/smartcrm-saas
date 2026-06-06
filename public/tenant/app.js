@@ -3505,76 +3505,186 @@ const WIDGET_LIBRARY = {
 
   // ----- Big panels -----
   funnel_pipeline: { title: 'Pipeline funnel', group: 'Pipeline',
-    description: 'Funnel grouped by universal stage with KPI strip + Won/Lost cards.',
+    description: 'Sales pipeline funnel with gradient bands, KPI tiles + Won/Lost cards.',
     render: async (c, _cfg, _d, w) => {
-      c.appendChild(h('h3', { style: { margin:'0 0 .6rem' } }, w.title || '\u{1F4C8} Sales pipeline'));
+      c.appendChild(h('h3', { style: { margin:'0 0 .65rem', fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '.4rem' } }, w.title || '📈 Sales pipeline'));
       const body = h('div', {});
       c.appendChild(body);
       try {
         const r = await api('api_pipeline_funnel', {});
         const k = r.kpis || {};
-        // Compact KPI row
-        const kpis = h('div', { style: { display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:'.4rem', marginBottom:'.7rem' } });
-        function kp(lab, val, sub) {
-          return h('div', { style: { background:'#eff6ff', border:'1px solid #dbeafe', borderRadius:'8px', padding:'.45rem .55rem' } },
-            h('div', { style: { fontSize:'.62rem', color:'#1e40af' } }, lab),
-            h('div', { style: { fontSize:'1.05rem', fontWeight:700, color:'#0f172a' } }, val),
-            h('div', { style: { fontSize:'.62rem', color:'#64748b' } }, sub)
+        // === Gradient KPI tiles ===
+        const kpis = h('div', { style: { display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(150px, 1fr))', gap:'.55rem', marginBottom:'.85rem' } });
+        function kp(icon, lab, val, sub, color, bg) {
+          return h('div', { style: { background: bg, border: '2px solid ' + color, borderRadius:'12px', padding:'.7rem .8rem', display: 'flex', alignItems: 'center', gap: '.55rem' } },
+            h('div', { style: { width: '36px', height: '36px', borderRadius: '9px', background: '#fff', color: color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.05rem', flexShrink: 0, boxShadow: 'inset 0 0 0 1px ' + color + '40' } }, icon),
+            h('div', { style: { flex: 1, minWidth: 0 } },
+              h('div', { style: { fontSize: '.62rem', color: color, textTransform: 'uppercase', letterSpacing: '.04em', fontWeight: 700 } }, lab),
+              h('div', { style: { fontSize: '1.4rem', fontWeight: 800, color: '#0f172a', lineHeight: 1.05, marginTop: '.15rem' } }, val),
+              h('div', { style: { fontSize: '.65rem', color: '#64748b', marginTop: '.15rem' } }, sub)
+            )
           );
         }
-        kpis.appendChild(kp('LEADS', String(k.total_leads || 0), 'in pipeline'));
-        kpis.appendChild(kp('VALUE', _formatInr(k.open_value || 0), 'wt ' + _formatInr(k.weighted_value || 0)));
-        kpis.appendChild(kp('WIN', (k.win_rate || 0) + '%', 'won/closed'));
-        kpis.appendChild(kp('CYCLE', k.avg_cycle_days != null ? (k.avg_cycle_days + 'd') : '\u2014', 'avg'));
+        kpis.appendChild(kp('🎯', 'Total leads', String(k.total_leads || 0),                             'in pipeline',                                       '#2563eb', '#eff6ff'));
+        kpis.appendChild(kp('💰', 'Open value',  _formatInr(k.open_value || 0),                          'weighted ' + _formatInr(k.weighted_value || 0),     '#7c3aed', '#f5f3ff'));
+        kpis.appendChild(kp('🏆', 'Win rate',    (k.win_rate || 0) + '%',                                'won vs closed',                                     '#059669', '#ecfdf5'));
+        kpis.appendChild(kp('⏱️', 'Avg cycle',   k.avg_cycle_days != null ? (k.avg_cycle_days + 'd') : '—', 'lead to close',                                  '#d97706', '#fffbeb'));
         body.appendChild(kpis);
 
-        // Compact bands
+        // === Gradient SVG funnel ===
         const bands = r.bands || [];
-        const maxCount = Math.max(1, ...bands.map(b => b.count || 0));
-        const funnel = h('div', { style: { padding:'.3rem 0' } });
-        bands.forEach((b, i) => {
-          const tw = Math.max(30, Math.round(85 - i * 12));
-          const bgColor = _FUNNEL_BAND_COLORS[i] || _FUNNEL_BAND_COLORS[_FUNNEL_BAND_COLORS.length - 1];
-          const tc = _FUNNEL_BAND_TEXT[i] || '#fff';
-          const trap = h('div', {
-            style: { width: tw + '%', margin:'0 auto', height:'42px', background:bgColor, clipPath:'polygon(8% 0, 92% 0, 100% 100%, 0% 100%)', display:'flex', alignItems:'center', justifyContent:'center', color: tc, cursor:'pointer', fontSize:'.78rem', fontWeight:600 },
-            onclick: () => { location.hash = '#/leads?stage=' + b.id; }
-          }, b.label + ' \u00B7 ' + b.count);
-          const row = h('div', { style: { display:'flex', alignItems:'center', gap:'.4rem', marginBottom:'.3rem' } },
-            h('div', { style: { flex:1 } }, trap),
-            h('div', { style: { width:'90px', fontSize:'.72rem', color:'#0f172a' } },
-              h('div', { style: { fontWeight:700 } }, b.count + ' leads'),
-              h('div', { style: { fontSize:'.66rem', color:'#64748b' } }, _formatInr(b.value))
-            )
-          );
-          funnel.appendChild(row);
-        });
-        body.appendChild(funnel);
+        if (!bands.length) {
+          body.appendChild(h('div', { class: 'muted', style: { padding: '1rem', textAlign: 'center' } }, 'No pipeline data yet.'));
+          return;
+        }
+        const total = Number(k.total_leads) || bands.reduce((s, b) => s + (Number(b.count) || 0), 0) || 1;
+        // Width is the % of total per band, floored at 32% so labels stay readable
+        const MIN_W = 32;
+        const widths  = bands.map(b => Math.max(MIN_W, Math.min(100, Number(b.pct_of_total) || (Number(b.count) || 0) / total * 100)));
+        // Force monotonic descent
+        for (let i = 1; i < widths.length; i++) widths[i] = Math.min(widths[i], widths[i-1] - 2);
+        const bottoms = widths.map((wv, i) => i < widths.length - 1 ? widths[i+1] : Math.max(MIN_W - 4, wv - 5));
 
-        // Won/Lost compact
-        const won = r.won || { count:0, value:0 };
-        const lost = r.lost || { count:0, value:0 };
-        const wl = h('div', { style: { display:'grid', gridTemplateColumns:'1fr 1fr', gap:'.4rem', marginTop:'.5rem' } },
-          h('div', { style: { background:'#dcfce7', border:'1px solid #bbf7d0', borderRadius:'8px', padding:'.4rem .55rem', display:'flex', alignItems:'center', gap:'.4rem', cursor:'pointer' },
+        const BAND_H = 62;
+        const F_W   = 540;
+        const RIGHT = 230;
+        const TOTAL_W = F_W + 90 + RIGHT;
+        const F_H = BAND_H * bands.length;
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('viewBox', '0 0 ' + TOTAL_W + ' ' + F_H);
+        svg.setAttribute('width', '100%');
+        svg.setAttribute('style', 'max-width:' + TOTAL_W + 'px; height: auto; display: block;');
+
+        // Defs — one linear gradient per band + a soft drop shadow filter
+        const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+        // Drop shadow
+        const filterId = 'fnFilt-' + w.id;
+        const filter = document.createElementNS('http://www.w3.org/2000/svg', 'filter');
+        filter.setAttribute('id', filterId);
+        filter.setAttribute('x', '-10%'); filter.setAttribute('y', '-10%');
+        filter.setAttribute('width', '120%'); filter.setAttribute('height', '120%');
+        filter.innerHTML = '<feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#000" flood-opacity="0.12"/>';
+        defs.appendChild(filter);
+        // Build a 5-step blue gradient palette (light → dark like the reference)
+        const gradPalette = [
+          ['#dbeafe','#93c5fd'], // light blue
+          ['#bfdbfe','#60a5fa'],
+          ['#93c5fd','#3b82f6'],
+          ['#60a5fa','#2563eb'],
+          ['#3b82f6','#1d4ed8']  // deep blue
+        ];
+        bands.forEach((b, i) => {
+          const stops = gradPalette[Math.min(i, gradPalette.length - 1)];
+          const lg = document.createElementNS('http://www.w3.org/2000/svg', 'linearGradient');
+          lg.setAttribute('id', 'fnGrad-' + w.id + '-' + i);
+          lg.setAttribute('x1', '0'); lg.setAttribute('y1', '0');
+          lg.setAttribute('x2', '0'); lg.setAttribute('y2', '1');
+          lg.innerHTML = '<stop offset="0%" stop-color="' + stops[0] + '"/><stop offset="100%" stop-color="' + stops[1] + '"/>';
+          defs.appendChild(lg);
+        });
+        svg.appendChild(defs);
+
+        function px(p) { return (50 - p / 2) * (F_W / 100); }
+        function pxR(p) { return (50 + p / 2) * (F_W / 100); }
+
+        bands.forEach((b, i) => {
+          const yT = i * BAND_H, yB = (i + 1) * BAND_H;
+          const wT = widths[i], wBv = bottoms[i];
+          const tl = px(wT), tr = pxR(wT), bl = px(wBv), br = pxR(wBv);
+          // The band itself
+          const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          path.setAttribute('d', 'M ' + tl + ' ' + yT + ' L ' + tr + ' ' + yT + ' L ' + br + ' ' + yB + ' L ' + bl + ' ' + yB + ' Z');
+          path.setAttribute('fill', 'url(#fnGrad-' + w.id + '-' + i + ')');
+          path.setAttribute('stroke', '#ffffff'); path.setAttribute('stroke-width', '2');
+          path.setAttribute('filter', 'url(#' + filterId + ')');
+          path.style.cursor = 'pointer';
+          path.addEventListener('mouseenter', () => path.setAttribute('opacity', '.92'));
+          path.addEventListener('mouseleave', () => path.removeAttribute('opacity'));
+          path.addEventListener('click', () => { location.hash = '#/leads?stage=' + b.id; });
+          const ttl = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+          ttl.textContent = b.label + ' · ' + b.count + ' leads · click to open';
+          path.appendChild(ttl);
+          svg.appendChild(path);
+
+          // 2 lines of text inside the band
+          const textColor = i >= 2 ? '#ffffff' : '#1e3a8a';
+          const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          lbl.setAttribute('x', F_W / 2); lbl.setAttribute('y', yT + BAND_H / 2 - 4);
+          lbl.setAttribute('text-anchor', 'middle'); lbl.setAttribute('fill', textColor);
+          lbl.setAttribute('font-weight', '700'); lbl.setAttribute('font-size', '15');
+          lbl.setAttribute('pointer-events', 'none');
+          lbl.textContent = b.label;
+          svg.appendChild(lbl);
+          const sub = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          sub.setAttribute('x', F_W / 2); sub.setAttribute('y', yT + BAND_H / 2 + 14);
+          sub.setAttribute('text-anchor', 'middle'); sub.setAttribute('fill', textColor);
+          sub.setAttribute('font-size', '11'); sub.setAttribute('opacity', '.92');
+          sub.setAttribute('pointer-events', 'none');
+          sub.textContent = b.count + ' leads · ' + (Number(b.pct_of_total) || 0) + '%';
+          svg.appendChild(sub);
+
+          // Dashed connector + right side label
+          const yMid = yT + BAND_H / 2;
+          const connector = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+          connector.setAttribute('x1', F_W); connector.setAttribute('y1', yMid);
+          connector.setAttribute('x2', F_W + 80); connector.setAttribute('y2', yMid);
+          connector.setAttribute('stroke', '#94a3b8'); connector.setAttribute('stroke-width', '1.4');
+          connector.setAttribute('stroke-dasharray', '4 4'); connector.setAttribute('opacity', '.7');
+          svg.appendChild(connector);
+          const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+          dot.setAttribute('cx', F_W + 80); dot.setAttribute('cy', yMid); dot.setAttribute('r', '4.5');
+          dot.setAttribute('fill', gradPalette[Math.min(i, gradPalette.length - 1)][1]);
+          svg.appendChild(dot);
+          const rT = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          rT.setAttribute('x', F_W + 95); rT.setAttribute('y', yMid - 3);
+          rT.setAttribute('fill', '#0f172a'); rT.setAttribute('font-weight', '700'); rT.setAttribute('font-size', '13');
+          rT.textContent = b.count + ' leads';
+          svg.appendChild(rT);
+          const rS = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          rS.setAttribute('x', F_W + 95); rS.setAttribute('y', yMid + 12);
+          rS.setAttribute('fill', '#64748b'); rS.setAttribute('font-size', '11');
+          rS.textContent = _formatInr(b.value || 0) + (b.advance_pct != null && i < bands.length - 1 ? (' · ' + b.advance_pct + '% advance') : '');
+          svg.appendChild(rS);
+        });
+        const wrap = h('div', { style: { display: 'flex', justifyContent: 'center', margin: '.3rem 0' } });
+        wrap.appendChild(svg);
+        body.appendChild(wrap);
+
+        // === Polished Won / Lost cards with win-rate ===
+        const won  = r.won  || { count: 0, value: 0 };
+        const lost = r.lost || { count: 0, value: 0 };
+        const closed = (Number(won.count) || 0) + (Number(lost.count) || 0);
+        const winPct  = closed ? Math.round((won.count  / closed) * 100) : 0;
+        const lostPct = closed ? Math.round((lost.count / closed) * 100) : 0;
+        const wl = h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '.6rem', marginTop: '.85rem' } },
+          h('div', { style: { background: 'linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%)', border: '1px solid #86efac', borderRadius: '12px', padding: '.7rem .85rem', display: 'flex', alignItems: 'center', gap: '.65rem', cursor: 'pointer', boxShadow: '0 1px 2px rgba(22,163,74,.08)' },
             onclick: () => { location.hash = '#/leads?stage=won'; } },
-            h('div', { style: { width:'24px', height:'24px', borderRadius:'6px', background:'#86efac', color:'#14532d', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'.85rem', fontWeight:700 } }, '\u2713'),
-            h('div', { style: { flex:1 } },
-              h('div', { style: { fontWeight:700, color:'#14532d', fontSize:'.78rem' } }, 'Won \u00B7 ' + won.count),
-              h('div', { style: { fontSize:'.65rem', color:'#16a34a' } }, _formatInr(won.value))
+            h('div', { style: { width: '38px', height: '38px', borderRadius: '10px', background: '#fff', color: '#15803d', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.15rem', fontWeight: 800, boxShadow: 'inset 0 0 0 1px #86efac' } }, '✓'),
+            h('div', { style: { flex: 1, minWidth: 0 } },
+              h('div', { style: { fontWeight: 700, color: '#14532d', fontSize: '.9rem' } }, 'Won'),
+              h('div', { style: { fontSize: '.72rem', color: '#15803d' } }, winPct + '% win rate')
+            ),
+            h('div', { style: { textAlign: 'right' } },
+              h('div', { style: { fontWeight: 800, fontSize: '1.4rem', color: '#14532d', lineHeight: 1 } }, String(won.count)),
+              h('div', { style: { fontSize: '.72rem', color: '#16a34a', marginTop: '.2rem' } }, _formatInr(won.value || 0))
             )
           ),
-          h('div', { style: { background:'#fee2e2', border:'1px solid #fecaca', borderRadius:'8px', padding:'.4rem .55rem', display:'flex', alignItems:'center', gap:'.4rem', cursor:'pointer' },
+          h('div', { style: { background: 'linear-gradient(135deg, #fee2e2 0%, #fecaca 100%)', border: '1px solid #fca5a5', borderRadius: '12px', padding: '.7rem .85rem', display: 'flex', alignItems: 'center', gap: '.65rem', cursor: 'pointer', boxShadow: '0 1px 2px rgba(220,38,38,.08)' },
             onclick: () => { location.hash = '#/leads?stage=lost'; } },
-            h('div', { style: { width:'24px', height:'24px', borderRadius:'6px', background:'#fca5a5', color:'#7f1d1d', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'.85rem', fontWeight:700 } }, '\u2715'),
-            h('div', { style: { flex:1 } },
-              h('div', { style: { fontWeight:700, color:'#7f1d1d', fontSize:'.78rem' } }, 'Lost \u00B7 ' + lost.count),
-              h('div', { style: { fontSize:'.65rem', color:'#dc2626' } }, _formatInr(lost.value))
+            h('div', { style: { width: '38px', height: '38px', borderRadius: '10px', background: '#fff', color: '#b91c1c', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.15rem', fontWeight: 800, boxShadow: 'inset 0 0 0 1px #fca5a5' } }, '✕'),
+            h('div', { style: { flex: 1, minWidth: 0 } },
+              h('div', { style: { fontWeight: 700, color: '#7f1d1d', fontSize: '.9rem' } }, 'Lost'),
+              h('div', { style: { fontSize: '.72rem', color: '#b91c1c' } }, lostPct + '% of closed')
+            ),
+            h('div', { style: { textAlign: 'right' } },
+              h('div', { style: { fontWeight: 800, fontSize: '1.4rem', color: '#7f1d1d', lineHeight: 1 } }, String(lost.count)),
+              h('div', { style: { fontSize: '.72rem', color: '#dc2626', marginTop: '.2rem' } }, _formatInr(lost.value || 0))
             )
           )
         );
         body.appendChild(wl);
       } catch (e) {
-        body.appendChild(h('div', { class: 'muted', style: { padding:'.5rem' } }, 'Could not load funnel: ' + e.message));
+        body.appendChild(h('div', { class: 'error-box', style: { fontSize: '.78rem' } }, 'Could not load funnel: ' + e.message));
       }
     }
   },
