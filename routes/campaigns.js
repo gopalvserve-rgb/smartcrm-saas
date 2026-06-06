@@ -1158,21 +1158,24 @@ async function api_campaigns_reportAdvanced(token, payload) {
   const lostArr  = Array.from(lostIds);
 
   // Build WHERE clause + params dynamically.
+  // CAMPAIGN_REPORT_CREATED_AT_AMBIG_FIX_v1 (2026-06-06) — every column
+  // in the shared WHERE clause is now aliased with `l.` so the same W
+  // can be reused across sub-queries that JOIN users/campaigns (both
+  // of which ALSO have a created_at column). Every sub-query below now
+  // uses `FROM leads l` consistently.
   const where = [];
   const params = [];
-  // Always restrict to leads that ARE in some campaign — Reports tab is
-  // campaign-specific. (campaign_id IS NOT NULL AND <> 0)
-  where.push(`(campaign_id IS NOT NULL AND NULLIF(campaign_id::text, '') IS NOT NULL AND campaign_id::text <> '0')`);
+  where.push(`(l.campaign_id IS NOT NULL AND NULLIF(l.campaign_id::text, '') IS NOT NULL AND l.campaign_id::text <> '0')`);
   if (Array.isArray(p.campaign_ids) && p.campaign_ids.length) {
     params.push(p.campaign_ids.map(String).filter(Boolean));
-    where.push(`campaign_id::text = ANY($${params.length}::text[])`);
+    where.push(`l.campaign_id::text = ANY($${params.length}::text[])`);
   }
   if (Array.isArray(p.user_ids) && p.user_ids.length) {
     params.push(p.user_ids.map(String));
-    where.push(`assigned_to::text = ANY($${params.length}::text[])`);
+    where.push(`l.assigned_to::text = ANY($${params.length}::text[])`);
   }
-  if (dr.from) { params.push(dr.from); where.push(`created_at >= $${params.length}::date`); }
-  if (dr.to)   { params.push(dr.to);   where.push(`created_at <  ($${params.length}::date + INTERVAL '1 day')`); }
+  if (dr.from) { params.push(dr.from); where.push(`l.created_at >= $${params.length}::date`); }
+  if (dr.to)   { params.push(dr.to);   where.push(`l.created_at <  ($${params.length}::date + INTERVAL '1 day')`); }
   const W = where.join(' AND ');
 
   // ---- KPIs ----
@@ -1181,14 +1184,14 @@ async function api_campaigns_reportAdvanced(token, payload) {
   const kpi = await db.query(
     `SELECT
         COUNT(*)::int AS total,
-        COUNT(*) FILTER (WHERE assigned_to IS NULL OR NULLIF(assigned_to::text, '') IS NULL OR assigned_to::text = '0')::int AS unassigned,
-        COUNT(*) FILTER (WHERE assigned_to IS NOT NULL AND NULLIF(assigned_to::text, '') IS NOT NULL AND assigned_to::text <> '0')::int AS assigned,
-        COUNT(*) FILTER (WHERE NULLIF(status_id::text, '') = ANY($${baseParams.length + 1}::text[]))::int AS final_cnt,
-        COUNT(*) FILTER (WHERE NULLIF(status_id::text, '') = ANY($${baseParams.length + 2}::text[]))::int AS won_cnt,
-        COUNT(*) FILTER (WHERE NULLIF(status_id::text, '') = ANY($${baseParams.length + 3}::text[]))::int AS lost_cnt,
-        COUNT(*) FILTER (WHERE COALESCE(NULLIF(is_duplicate::text,''),'0') = '1')::int AS duplicates,
-        ${_HAS_REMARK ? "COUNT(*) FILTER (WHERE COALESCE(remark,'') <> '')::int" : '0::int'} AS contacted_cnt
-     FROM leads WHERE ${W}`,
+        COUNT(*) FILTER (WHERE l.assigned_to IS NULL OR NULLIF(l.assigned_to::text, '') IS NULL OR l.assigned_to::text = '0')::int AS unassigned,
+        COUNT(*) FILTER (WHERE l.assigned_to IS NOT NULL AND NULLIF(l.assigned_to::text, '') IS NOT NULL AND l.assigned_to::text <> '0')::int AS assigned,
+        COUNT(*) FILTER (WHERE NULLIF(l.status_id::text, '') = ANY($${baseParams.length + 1}::text[]))::int AS final_cnt,
+        COUNT(*) FILTER (WHERE NULLIF(l.status_id::text, '') = ANY($${baseParams.length + 2}::text[]))::int AS won_cnt,
+        COUNT(*) FILTER (WHERE NULLIF(l.status_id::text, '') = ANY($${baseParams.length + 3}::text[]))::int AS lost_cnt,
+        COUNT(*) FILTER (WHERE COALESCE(NULLIF(l.is_duplicate::text,''),'0') = '1')::int AS duplicates,
+        ${_HAS_REMARK ? "COUNT(*) FILTER (WHERE COALESCE(l.remark,'') <> '')::int" : '0::int'} AS contacted_cnt
+     FROM leads l WHERE ${W}`,
     baseParams.concat([finalArr, wonArr, lostArr])
   );
   const k = kpi.rows[0] || {};
@@ -1247,20 +1250,20 @@ async function api_campaigns_reportAdvanced(token, payload) {
 
   // ---- Product breakdown ----
   const productRows = await db.query(
-    `SELECT COALESCE(NULLIF(product, ''), 'Unspecified') AS product,
+    `SELECT COALESCE(NULLIF(l.product, ''), 'Unspecified') AS product,
             COUNT(*)::int AS total,
-            COUNT(*) FILTER (WHERE NULLIF(status_id::text, '') = ANY($${params.length + 1}::text[]))::int AS won_cnt
-       FROM leads WHERE ${W}
-       GROUP BY product ORDER BY total DESC LIMIT 25`,
+            COUNT(*) FILTER (WHERE NULLIF(l.status_id::text, '') = ANY($${params.length + 1}::text[]))::int AS won_cnt
+       FROM leads l WHERE ${W}
+       GROUP BY l.product ORDER BY total DESC LIMIT 25`,
     params.concat([wonArr])
   );
 
   // ---- Source breakdown ----
   const sourceRows = await db.query(
-    `SELECT COALESCE(NULLIF(source, ''), 'Unspecified') AS source,
+    `SELECT COALESCE(NULLIF(l.source, ''), 'Unspecified') AS source,
             COUNT(*)::int AS cnt
-       FROM leads WHERE ${W}
-       GROUP BY source ORDER BY cnt DESC LIMIT 20`,
+       FROM leads l WHERE ${W}
+       GROUP BY l.source ORDER BY cnt DESC LIMIT 20`,
     params
   );
 
@@ -1281,9 +1284,9 @@ async function api_campaigns_reportAdvanced(token, payload) {
   let daily = { rows: [] };
   try {
     daily = await db.query(
-      `SELECT to_char(date_trunc('day', created_at), 'YYYY-MM-DD') AS day,
+      `SELECT to_char(date_trunc('day', l.created_at), 'YYYY-MM-DD') AS day,
               COUNT(*)::int AS cnt
-         FROM leads WHERE ${W}
+         FROM leads l WHERE ${W}
          GROUP BY day ORDER BY day ASC LIMIT 90`,
       params
     );
@@ -1293,8 +1296,8 @@ async function api_campaigns_reportAdvanced(token, payload) {
   let tatSecs = 0;
   try {
     const tat = await db.query(
-      `SELECT COALESCE(AVG(EXTRACT(EPOCH FROM (updated_at - created_at))), 0)::bigint AS avg_secs
-         FROM leads WHERE ${W} AND NULLIF(status_id::text, '') = ANY($${params.length + 1}::text[])`,
+      `SELECT COALESCE(AVG(EXTRACT(EPOCH FROM (l.updated_at - l.created_at))), 0)::bigint AS avg_secs
+         FROM leads l WHERE ${W} AND NULLIF(l.status_id::text, '') = ANY($${params.length + 1}::text[])`,
       params.concat([finalArr])
     );
     tatSecs = Number(tat.rows[0] && tat.rows[0].avg_secs) || 0;
