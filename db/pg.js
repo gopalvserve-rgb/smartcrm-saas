@@ -446,6 +446,28 @@ const SCHEMA = {
       'success', 'attempted_at', 'retry_count'
     ],
     json: []
+  },
+  // GOOGLE_CONV_EXPORT_v1 / v2 — Google Ads offline conversion export
+  google_conv_export_settings: {
+    columns: [
+      'is_enabled', 'lookback_days', 'status_map_json', 'source_filter',
+      'conversion_time_mode', 'last_downloaded_at',
+      'auto_export_enabled', 'auto_hour_ist', 'last_auto_export_at',
+      'public_token', 'updated_at', 'updated_by'
+    ],
+    json: ['status_map_json']
+  },
+  google_conv_export_log: {
+    columns: [
+      'downloaded_at', 'row_count', 'with_gclid', 'without_gclid',
+      'lookback_days', 'downloaded_by', 'filename'
+    ],
+    json: []
+  },
+  // GCAL_PATH_A_v1 — Google Calendar follow-up sync tracker
+  google_calendar_followup_sync: {
+    columns: ['lead_id', 'user_id', 'google_event_id', 'due_at', 'last_synced_at'],
+    json: []
   }
 };
 
