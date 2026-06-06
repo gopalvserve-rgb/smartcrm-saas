@@ -287,6 +287,18 @@ const SCHEMA_MIGRATIONS = [
     UPDATE wa_button_clicks SET source = 'campaign' WHERE source IS NULL;
     CREATE INDEX IF NOT EXISTS idx_wa_btn_clicks_source ON wa_button_clicks(source);
   ` },
+
+  // ATTENDANCE_OPTIONAL_DEFAULT_v1 (2026-06-06) — flip selfie + meter
+  // requirement OFF for every existing tenant. User reported the
+  // "Meter reading must be a number" validation was blocking real
+  // check-ins on field-staff phones. Going forward both flags are
+  // OFF by default in routes/hr.js too. Admin can re-enable from
+  // Settings → Attendance any time. Runs once per tenant — config
+  // table holds the current value, this UPDATE just resets it.
+  { name: '2026_06_06_attendance_optional_default', sql: `
+    UPDATE config SET value = '0' WHERE key = 'ATTENDANCE_REQUIRE_SELFIE';
+    UPDATE config SET value = '0' WHERE key = 'ATTENDANCE_REQUIRE_METER';
+  ` },
 ];
 
 /**

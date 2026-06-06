@@ -25,3 +25,12 @@ SELECT 'feature',
        '📚',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'SmartCRM Tutorial — built-in client training page');
+
+-- 2026-06-06 ATTENDANCE_OPTIONAL_DEFAULT_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'modify',
+       'Attendance: selfie + meter reading are now optional',
+       'Stopped the "Meter reading must be a number" error blocking field check-ins. Both selfie and meter reading are now OFF by default for every tenant. If you want either compulsory, turn it on from Settings → Attendance. We also loosened meter validation so non-numeric inputs (e.g. "ABC-1234", "123 km") are accepted.',
+       '🟢',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Attendance: selfie + meter reading are now optional');

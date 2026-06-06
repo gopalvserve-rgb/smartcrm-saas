@@ -26,9 +26,15 @@ const VALID_WORK_MODES = ['office', 'home', 'on_site'];
 // the schema on first call so existing tenants don't need a manual
 // migration. The flags are read from the `config` table:
 //
-//   ATTENDANCE_REQUIRE_SELFIE   '1' / '0'  (default '1' = ON — FIX_v1)
+//   ATTENDANCE_REQUIRE_SELFIE   '1' / '0'  (default '0' = off — ATTENDANCE_OPTIONAL_DEFAULT_v1)
 //   ATTENDANCE_REQUIRE_METER    '1' / '0'  (default '0' = off)
 //   ATTENDANCE_METER_LABEL      free text (default 'Meter reading')
+//
+// ATTENDANCE_OPTIONAL_DEFAULT_v1 (2026-06-06) — both flags now default
+// OFF for ALL tenants. The earlier FIX_v1 made selfie compulsory by
+// default which started blocking real check-ins on field-staff phones
+// where the camera permission was flaky. Admin can re-enable from
+// Settings → Attendance any time.
 //
 // Admin can toggle each independently from Settings → Attendance.
 // Photo is sent as a base64 data URL from the SPA; we cap at 1MB to
@@ -48,8 +54,9 @@ async function _ensureAttendanceSelfieCols() {
 }
 
 async function _attRequirements() {
+  // ATTENDANCE_OPTIONAL_DEFAULT_v1 — both flags default OFF. See header.
   const [reqSelfie, reqMeter, meterLabel] = await Promise.all([
-    db.getConfig('ATTENDANCE_REQUIRE_SELFIE', '1'),
+    db.getConfig('ATTENDANCE_REQUIRE_SELFIE', '0'),
     db.getConfig('ATTENDANCE_REQUIRE_METER', '0'),
     db.getConfig('ATTENDANCE_METER_LABEL', 'Meter reading')
   ]);
@@ -90,9 +97,14 @@ function _validSelfie(b64) {
   return s;
 }
 function _validMeter(v) {
+  // ATTENDANCE_OPTIONAL_DEFAULT_v1 — accept any non-empty text up to 20
+  // chars. The "Meter reading" label is generic; tenants use it for
+  // odometer, vehicle ID, machine serial, counter value, anything. The
+  // strict numeric check was rejecting valid inputs like "123 km" or
+  // "ABC-1234" and there's no real downside to free text here.
   if (v == null || v === '') return null;
   const n = String(v).trim();
-  if (!/^[0-9]+(\.[0-9]+)?$/.test(n)) throw new Error('Meter reading must be a number');
+  if (!n) return null;
   return n.slice(0, 20);
 }
 
