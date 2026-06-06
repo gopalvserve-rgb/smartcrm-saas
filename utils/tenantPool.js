@@ -38,22 +38,29 @@ const SLUG_TTL_MS = 30 * 1000;     // 30s — long enough to be hot, short enoug
 // Evict the least-recently-used pool when we exceed POOL_LRU_MAX.
 function _evictIfNeeded() {
   if (_pools.size <= POOL_LRU_MAX) return;
-  // Find the oldest entry
-  let oldestKey = null;
-  let oldestTs = Infinity;
-  for (const [k, ts] of _poolLastUsed.entries()) {
-    if (ts < oldestTs) { oldestTs = ts; oldestKey = k; }
+  // FB_OAUTH_POOL_FIX_v2 — find the oldest entry that is NOT currently busy.
+  // Previously we ended pools mid-OAuth (a long /fb/auth/callback was using
+  // the pool, then a LRU eviction ended it, and the in-flight query crashed
+  // with 'Cannot use a pool after calling end on the pool'). We now skip
+  // any pool that has active clients (totalCount includes in-use + idle,
+  // waitingCount is queued requests — if either is > 0 the pool is in use).
+  const sorted = [..._poolLastUsed.entries()].sort((a, b) => a[1] - b[1]);
+  let evicted = false;
+  for (const [k] of sorted) {
+    const p = _pools.get(k);
+    const busy = p && ((p.totalCount > 0) || (p.waitingCount > 0));
+    if (busy) continue;
+    _pools.delete(k);
+    _poolLastUsed.delete(k);
+    if (p) { try { p.end().catch(() => {}); } catch (_) {} }
+    console.log('[tenant-pool] LRU evicted', k, 'cache size now', _pools.size);
+    evicted = true;
+    break;
   }
-  if (oldestKey) {
-    const p = _pools.get(oldestKey);
-    _pools.delete(oldestKey);
-    _poolLastUsed.delete(oldestKey);
-    if (p) {
-      // end() is async but we don't await — request handlers using this
-      // exact tenant right now will finish; new requests grab a fresh pool.
-      try { p.end().catch(() => {}); } catch (_) {}
-    }
-    console.log('[tenant-pool] LRU evicted', oldestKey, 'cache size now', _pools.size);
+  if (!evicted && _pools.size > POOL_LRU_MAX) {
+    // Every pool is busy — defer eviction; pools are short-lived so
+    // they'll become idle soon. Logging only.
+    console.warn('[tenant-pool] LRU at capacity but every pool is busy — deferring eviction. pools=' + _pools.size);
   }
 }
 
