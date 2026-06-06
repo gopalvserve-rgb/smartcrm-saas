@@ -2931,6 +2931,53 @@ function _renderKpi(card, label, value, klass, icon, href) {
 // render() receives (card, config, data, widget). Use the existing API
 // responses bundled in `data` (data.summary, data.notifs, data.funnel,
 // data.tat, data.projects, data.teamFu, data.teamTat, data.daily).
+
+// DASH_TABLE_POLISH_v1 — shared pill/avatar helpers used by the dashboard
+// table widgets. Attached to window so we can call them from inside the
+// widget renderers without re-declaring.
+(function(){
+  if (window._dashPill) return;
+  // Coloured rounded chip
+  window._dashPill = function(val, color, isStrong) {
+    return h('span', { style: {
+      display: 'inline-block',
+      padding: '.16rem .55rem',
+      borderRadius: '999px',
+      fontWeight: isStrong === false ? 500 : 700,
+      fontSize: '.78rem',
+      background: color + '18',
+      color: color,
+      minWidth: '34px',
+      textAlign: 'center'
+    } }, String(val));
+  };
+  // Tiny user-initial circle
+  window._dashAvatar = function(name) {
+    const n = String(name || '?').trim();
+    const initials = n ? n.split(/\s+/).slice(0,2).map(p => p[0]).join('').toUpperCase() : '?';
+    // Deterministic colour from name
+    let hash = 0; for (let i = 0; i < n.length; i++) hash = ((hash << 5) - hash + n.charCodeAt(i)) | 0;
+    const palette = ['#6366f1','#06b6d4','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#0891b2','#16a34a'];
+    const color = palette[Math.abs(hash) % palette.length];
+    return h('span', { style: {
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+      width: '26px', height: '26px', borderRadius: '50%',
+      background: color + '22', color: color, fontWeight: 700, fontSize: '.7rem',
+      marginRight: '.45rem', verticalAlign: 'middle'
+    } }, initials);
+  };
+  // Build a styled td that wraps content
+  window._dashCell = function(content, opts) {
+    opts = opts || {};
+    return h('td', { style: Object.assign({
+      padding: '.5rem .55rem',
+      borderBottom: '1px solid #f1f5f9',
+      fontSize: '.85rem',
+      textAlign: opts.align || 'left'
+    }, opts.style || {}) }, content);
+  };
+})();
+
 const WIDGET_LIBRARY = {
   // ----- Custom field breakdown -----
   // RB_CF_DIMS_v1 (2026-06-03): one widget that pivots the lead population
@@ -3691,13 +3738,18 @@ const WIDGET_LIBRARY = {
         const rows = await api('api_dashboard_followupCountsByUser', { from: r.from || '', to: r.to || '', tab: 'due_today' });
         body.innerHTML = '';
         if (!Array.isArray(rows) || !rows.length) { body.appendChild(h('div', { class: 'muted' }, 'No open follow-ups.')); return; }
-        const tbl = h('table', { class: 'data', style: { width: '100%' } },
-          h('thead', {}, h('tr', {}, h('th', {}, 'User'), h('th', { style: { textAlign: 'right' } }, 'Due'), h('th', { style: { textAlign: 'right', color: '#ef4444' } }, 'Overdue'), h('th', { style: { textAlign: 'right' } }, 'Upcoming'))),
-          h('tbody', {}, ...rows.map(r => h('tr', {},
-            h('td', {}, r.name || ('User #' + r.user_id)),
-            h('td', { style: { textAlign: 'right' } }, String(r.due_today)),
-            h('td', { style: { textAlign: 'right', color: r.overdue ? '#ef4444' : '' } }, String(r.overdue)),
-            h('td', { style: { textAlign: 'right', color: '#64748b' } }, String(r.upcoming)))))
+        const tbl = h('table', { class: 'data dash-poly', style: { width: '100%' } },
+          h('thead', {}, h('tr', {},
+            h('th', { style: { padding: '.5rem .55rem', fontSize: '.7rem', color: '#64748b', textTransform: 'uppercase', textAlign: 'left' } }, 'User'),
+            h('th', { style: { padding: '.5rem .55rem', fontSize: '.7rem', color: '#d97706', textTransform: 'uppercase', textAlign: 'right' } }, 'Due'),
+            h('th', { style: { padding: '.5rem .55rem', fontSize: '.7rem', color: '#dc2626', textTransform: 'uppercase', textAlign: 'right' } }, 'Overdue'),
+            h('th', { style: { padding: '.5rem .55rem', fontSize: '.7rem', color: '#64748b', textTransform: 'uppercase', textAlign: 'right' } }, 'Upcoming'))),
+          h('tbody', {}, ...rows.map(r => h('tr', { style: { transition: 'background .12s' }, onmouseover: function(){ this.style.background = '#f8fafc'; }, onmouseout: function(){ this.style.background = ''; } },
+            window._dashCell(h('span', {}, window._dashAvatar(r.name), r.name || ('User #' + r.user_id))),
+            window._dashCell(window._dashPill(r.due_today, '#d97706'),    { align: 'right' }),
+            window._dashCell(window._dashPill(r.overdue,   '#dc2626'),    { align: 'right' }),
+            window._dashCell(window._dashPill(r.upcoming,  '#64748b'),    { align: 'right' })
+          )))
         );
         body.appendChild(tbl);
       } catch (e) { body.innerHTML = ''; body.appendChild(h('div', { class: 'error-box' }, e.message)); }
@@ -3726,9 +3778,15 @@ const WIDGET_LIBRARY = {
         body.innerHTML = '';
         const sorted = (rows || []).slice().sort((a, b) => (b[tabKey] || 0) - (a[tabKey] || 0)).filter(r => (r[tabKey] || 0) > 0);
         if (!sorted.length) { body.appendChild(h('div', { class: 'muted' }, 'Nothing in this tab.')); return; }
-        body.appendChild(h('table', { class: 'data', style: { width: '100%' } },
-          h('thead', {}, h('tr', {}, h('th', {}, 'User'), h('th', { style: { textAlign: 'right' } }, 'Count'))),
-          h('tbody', {}, ...sorted.map(r => h('tr', {}, h('td', {}, r.name || ''), h('td', { style: { textAlign: 'right' } }, String(r[tabKey] || 0)))))));
+        const tabColor = tabKey === 'overdue' ? '#dc2626' : tabKey === 'upcoming' ? '#64748b' : '#d97706';
+        body.appendChild(h('table', { class: 'data dash-poly', style: { width: '100%' } },
+          h('thead', {}, h('tr', {},
+            h('th', { style: { padding: '.5rem .55rem', fontSize: '.7rem', color: '#64748b', textTransform: 'uppercase', textAlign: 'left' } }, 'User'),
+            h('th', { style: { padding: '.5rem .55rem', fontSize: '.7rem', color: tabColor, textTransform: 'uppercase', textAlign: 'right' } }, 'Count'))),
+          h('tbody', {}, ...sorted.map(r => h('tr', { style: { transition: 'background .12s' }, onmouseover: function(){ this.style.background = '#f8fafc'; }, onmouseout: function(){ this.style.background = ''; } },
+            window._dashCell(h('span', {}, window._dashAvatar(r.name), r.name || '')),
+            window._dashCell(window._dashPill(r[tabKey] || 0, tabColor), { align: 'right' })
+          )))));
       };
       const tabBtn = (label, key, color) => {
         const b = h('button', { class: 'btn ' + (currentTab === key ? '' : 'btn-secondary'), style: { fontSize: '.78rem', padding: '.3rem .6rem' } }, label);
@@ -3779,15 +3837,22 @@ const WIDGET_LIBRARY = {
         const rows = await api('api_dashboard_callerWiseLeads', { from: r.from || '', to: r.to || '' });
         body.innerHTML = '';
         if (!Array.isArray(rows) || !rows.length) { body.appendChild(h('div', { class: 'muted' }, 'No leads in range.')); return; }
-        const tbl = h('table', { class: 'data', style: { width: '100%' } },
-          h('thead', {}, h('tr', {}, h('th', {}, 'User'), h('th', { style: { textAlign: 'right' } }, 'Total'), h('th', { style: { textAlign: 'right' } }, 'New'), h('th', { style: { textAlign: 'right' } }, 'Open'), h('th', { style: { textAlign: 'right', color: '#10b981' } }, 'Won'), h('th', { style: { textAlign: 'right', color: '#ef4444' } }, 'Lost'))),
-          h('tbody', {}, ...rows.map(r => h('tr', {},
-            h('td', {}, r.name || ''),
-            h('td', { style: { textAlign: 'right', fontWeight: 600 } }, String(r.total)),
-            h('td', { style: { textAlign: 'right' } }, String(r.new_count)),
-            h('td', { style: { textAlign: 'right' } }, String(r.open_count)),
-            h('td', { style: { textAlign: 'right', color: r.won_count ? '#10b981' : '' } }, String(r.won_count)),
-            h('td', { style: { textAlign: 'right', color: r.lost_count ? '#ef4444' : '' } }, String(r.lost_count)))))
+        const tbl = h('table', { class: 'data dash-poly', style: { width: '100%' } },
+          h('thead', {}, h('tr', {},
+            h('th', { style: { padding: '.5rem .55rem', fontSize: '.7rem', color: '#64748b', textTransform: 'uppercase', textAlign: 'left' } }, 'User'),
+            h('th', { style: { padding: '.5rem .55rem', fontSize: '.7rem', color: '#1e40af', textTransform: 'uppercase', textAlign: 'right' } }, 'Total'),
+            h('th', { style: { padding: '.5rem .55rem', fontSize: '.7rem', color: '#3b82f6', textTransform: 'uppercase', textAlign: 'right' } }, 'New'),
+            h('th', { style: { padding: '.5rem .55rem', fontSize: '.7rem', color: '#64748b', textTransform: 'uppercase', textAlign: 'right' } }, 'Open'),
+            h('th', { style: { padding: '.5rem .55rem', fontSize: '.7rem', color: '#10b981', textTransform: 'uppercase', textAlign: 'right' } }, 'Won'),
+            h('th', { style: { padding: '.5rem .55rem', fontSize: '.7rem', color: '#ef4444', textTransform: 'uppercase', textAlign: 'right' } }, 'Lost'))),
+          h('tbody', {}, ...rows.map(r => h('tr', { style: { transition: 'background .12s' }, onmouseover: function(){ this.style.background = '#f8fafc'; }, onmouseout: function(){ this.style.background = ''; } },
+            window._dashCell(h('span', {}, window._dashAvatar(r.name), r.name || '')),
+            window._dashCell(window._dashPill(r.total,      '#1e40af'), { align: 'right' }),
+            window._dashCell(window._dashPill(r.new_count,  '#3b82f6'), { align: 'right' }),
+            window._dashCell(window._dashPill(r.open_count, '#64748b', false), { align: 'right' }),
+            window._dashCell(window._dashPill(r.won_count,  '#10b981'), { align: 'right' }),
+            window._dashCell(window._dashPill(r.lost_count, '#ef4444'), { align: 'right' })
+          )))
         );
         body.appendChild(tbl);
       } catch (e) { body.innerHTML = ''; body.appendChild(h('div', { class: 'error-box' }, e.message)); }
@@ -3806,15 +3871,22 @@ const WIDGET_LIBRARY = {
         const rows = await api('api_dashboard_callerDialingReport', { from: r.from || '', to: r.to || '' });
         body.innerHTML = '';
         if (!Array.isArray(rows) || !rows.length) { body.appendChild(h('div', { class: 'muted' }, 'No calls in range.')); return; }
-        const tbl = h('table', { class: 'data', style: { width: '100%' } },
-          h('thead', {}, h('tr', {}, h('th', {}, 'User'), h('th', { style: { textAlign: 'right' } }, 'Total'), h('th', { style: { textAlign: 'right', color: '#2563eb' } }, 'In'), h('th', { style: { textAlign: 'right', color: '#10b981' } }, 'Out'), h('th', { style: { textAlign: 'right', color: '#ef4444' } }, 'Missed'), h('th', { style: { textAlign: 'right' } }, 'Talk'))),
-          h('tbody', {}, ...rows.slice(0, 15).map(r => h('tr', {},
-            h('td', {}, r.name || ''),
-            h('td', { style: { textAlign: 'right', fontWeight: 600 } }, String(r.total_calls)),
-            h('td', { style: { textAlign: 'right' } }, String(r.incoming)),
-            h('td', { style: { textAlign: 'right' } }, String(r.outgoing)),
-            h('td', { style: { textAlign: 'right' } }, String(r.missed)),
-            h('td', { style: { textAlign: 'right', color: '#64748b' } }, hum(r.total_talk_s)))))
+        const tbl = h('table', { class: 'data dash-poly', style: { width: '100%' } },
+          h('thead', {}, h('tr', {},
+            h('th', { style: { padding: '.5rem .55rem', fontSize: '.7rem', color: '#64748b', textTransform: 'uppercase', textAlign: 'left' } }, 'User'),
+            h('th', { style: { padding: '.5rem .55rem', fontSize: '.7rem', color: '#1e40af', textTransform: 'uppercase', textAlign: 'right' } }, 'Total'),
+            h('th', { style: { padding: '.5rem .55rem', fontSize: '.7rem', color: '#2563eb', textTransform: 'uppercase', textAlign: 'right' } }, 'In'),
+            h('th', { style: { padding: '.5rem .55rem', fontSize: '.7rem', color: '#10b981', textTransform: 'uppercase', textAlign: 'right' } }, 'Out'),
+            h('th', { style: { padding: '.5rem .55rem', fontSize: '.7rem', color: '#ef4444', textTransform: 'uppercase', textAlign: 'right' } }, 'Missed'),
+            h('th', { style: { padding: '.5rem .55rem', fontSize: '.7rem', color: '#64748b', textTransform: 'uppercase', textAlign: 'right' } }, 'Talk'))),
+          h('tbody', {}, ...rows.slice(0, 15).map(r => h('tr', { style: { transition: 'background .12s' }, onmouseover: function(){ this.style.background = '#f8fafc'; }, onmouseout: function(){ this.style.background = ''; } },
+            window._dashCell(h('span', {}, window._dashAvatar(r.name), r.name || '')),
+            window._dashCell(window._dashPill(r.total_calls, '#1e40af'), { align: 'right' }),
+            window._dashCell(window._dashPill(r.incoming,    '#2563eb'), { align: 'right' }),
+            window._dashCell(window._dashPill(r.outgoing,    '#10b981'), { align: 'right' }),
+            window._dashCell(window._dashPill(r.missed,      '#ef4444'), { align: 'right' }),
+            window._dashCell(hum(r.total_talk_s), { align: 'right', style: { color: '#64748b', fontWeight: 600 } })
+          )))
         );
         body.appendChild(tbl);
       } catch (e) { body.innerHTML = ''; body.appendChild(h('div', { class: 'error-box' }, e.message)); }
