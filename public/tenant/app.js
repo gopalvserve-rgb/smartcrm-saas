@@ -21230,6 +21230,103 @@ async function adminGoogleConvExport() {
 
   wrap.appendChild(h('div', { class: 'card', style: { padding: '1rem', marginBottom: '1rem' } }, saveBtn, dlBtn, status));
 
+  // GOOGLE_CONV_EXPORT_v2 — Auto-export schedule + public URL
+  // --- Auto-export ---
+  const autoCb = h('input', { type: 'checkbox', id: 'gce-auto' });
+  if (settings.auto_export_enabled !== false) autoCb.checked = true;
+  const hourSel = h('select', {});
+  for (let i = 0; i < 24; i++) {
+    const lbl = i === 0 ? '12 AM' : i < 12 ? (i + ' AM') : i === 12 ? '12 PM' : ((i - 12) + ' PM');
+    hourSel.appendChild(h('option', { value: String(i) }, lbl + ' IST'));
+  }
+  hourSel.value = String(settings.auto_hour_ist || 22);
+  const autoStatus = h('div', { class: 'muted', style: { marginTop: '.4rem', fontSize: '.85rem' } },
+    settings.last_auto_export_at
+      ? '✓ Last auto-export: ' + new Date(settings.last_auto_export_at).toLocaleString()
+      : 'No auto-export has run yet.');
+
+  const autoCard = h('div', { class: 'card', style: { padding: '1rem', marginBottom: '1rem' } },
+    h('h3', { style: { marginTop: 0 } }, '🤖 Daily auto-export'),
+    h('div', { class: 'muted', style: { fontSize: '.85rem', marginBottom: '.6rem' } },
+      'Server fires the export every day at the chosen IST hour. Files are written to disk and served at the public URL below — Google Ads (or anything that can fetch a URL) can pull from it on its own schedule.'),
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: '.6rem', flexWrap: 'wrap' } },
+      h('label', { for: 'gce-auto', style: { display: 'flex', alignItems: 'center', gap: '.4rem' } },
+        autoCb, 'Enable daily auto-export'),
+      h('span', { class: 'muted' }, 'at'),
+      hourSel),
+    autoStatus
+  );
+  wrap.appendChild(autoCard);
+
+  // --- Public URL ---
+  const urlBox = h('input', { type: 'text', readonly: 'readonly', style: { width: '100%', fontFamily: 'monospace', fontSize: '.82rem' } });
+  const copyBtn = h('button', { class: 'btn sm' }, '📋 Copy');
+  const rotateBtn = h('button', { class: 'btn sm ghost', style: { marginLeft: '.4rem' } }, '🔄 Rotate token');
+  const openBtn = h('button', { class: 'btn sm ghost', style: { marginLeft: '.4rem' } }, '🌐 Open in new tab');
+  copyBtn.onclick = () => {
+    urlBox.select();
+    try { navigator.clipboard.writeText(urlBox.value); copyBtn.textContent = '✓ Copied'; setTimeout(() => copyBtn.textContent = '📋 Copy', 1500); } catch (_) {}
+  };
+  openBtn.onclick = () => { if (urlBox.value) window.open(urlBox.value, '_blank'); };
+  rotateBtn.onclick = async () => {
+    if (!confirm('Rotate the token? The old URL will stop working immediately. Re-paste the new URL into Google Sheets / Google Ads / wherever you use it.')) return;
+    try {
+      await api('api_googleConvExport_rotateToken');
+      await loadUrl();
+      toast('Token rotated', 'ok');
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  const urlCard = h('div', { class: 'card', style: { padding: '1rem', marginBottom: '1rem' } },
+    h('h3', { style: { marginTop: 0 } }, '🔗 Public download URL'),
+    h('div', { class: 'muted', style: { fontSize: '.85rem', marginBottom: '.5rem' } },
+      'Stable, per-tenant URL that always serves the latest CSV. Paste into Google Sheets (=IMPORTDATA), Google Ads bulk-upload URL, curl, or any data tool. Protected by a rotating token.'),
+    h('div', { style: { display: 'flex', gap: '.4rem' } }, urlBox, copyBtn),
+    h('div', { style: { marginTop: '.5rem' } }, rotateBtn, openBtn)
+  );
+  wrap.appendChild(urlCard);
+
+  async function loadUrl() {
+    try {
+      const r = await api('api_googleConvExport_publicUrl');
+      urlBox.value = r.url || '';
+      if (r.last_auto_export_at) {
+        autoStatus.textContent = '✓ Last auto-export: ' + new Date(r.last_auto_export_at).toLocaleString();
+      }
+    } catch (e) {
+      urlBox.value = '(enable the feature + save to generate URL: ' + e.message + ')';
+    }
+  }
+  loadUrl();
+
+  // Update the original Save to include the new auto fields
+  const originalSave = saveBtn.onclick;
+  saveBtn.onclick = async () => {
+    saveBtn.disabled = true; status.textContent = 'Saving…';
+    const mapObj = {};
+    for (const { stSel, cvInp } of mapRows) {
+      const k = (stSel.value || '').trim();
+      const v = (cvInp.value || '').trim();
+      if (k && v) mapObj[k] = v;
+    }
+    try {
+      await api('api_googleConvExport_save', {
+        is_enabled: !!enabledCb.checked,
+        lookback_days: Number(lookbackSel.value) || 7,
+        conversion_time_mode: timeModeSel.value,
+        source_filter: sourceInp.value,
+        status_map: mapObj,
+        auto_export_enabled: !!autoCb.checked,
+        auto_hour_ist: Number(hourSel.value) || 22
+      });
+      status.textContent = '✓ Saved';
+      setTimeout(() => { status.textContent = ''; }, 2500);
+      // Re-load URL in case feature got newly enabled (token gets minted)
+      loadUrl();
+    } catch (e) {
+      status.textContent = '✗ ' + e.message;
+    } finally { saveBtn.disabled = false; }
+  };
+
   // --- Recent exports log ---
   const logsCard = h('div', { class: 'card', style: { padding: '1rem' } });
   logsCard.appendChild(h('h3', { style: { marginTop: 0 } }, 'Recent exports'));
@@ -21273,13 +21370,22 @@ async function adminGoogleConvExport() {
   // --- How to use ---
   wrap.appendChild(h('div', { class: 'card', style: { padding: '1rem', marginTop: '1rem', background: '#f8fafc' } },
     h('h3', { style: { marginTop: 0 } }, 'How to use'),
+    h('p', { style: { fontWeight: '600', marginTop: '.5rem' } }, 'Recommended (fully automated):'),
     h('ol', {},
-      h('li', {}, 'Create a Google Sheet (one tab, with the same 7 columns as the downloaded CSV).'),
-      h('li', {}, 'In Google Ads → Tools → Conversions → Settings → Bulk Upload → Linked Sheet, link that Sheet.'),
-      h('li', {}, 'Every day (or weekly), click "Download CSV now" above, then paste the rows into your Sheet.'),
-      h('li', {}, 'Google Ads pulls automatically and feeds the conversion data back to its bidding algorithm.'),
-      h('li', {}, 'Rows with "Without GCLID = Yes" are still useful — Google falls back to phone-match / enhanced conversions for those.')
-    )
+      h('li', {}, 'Enable the feature + Save. Server starts the daily export at your chosen IST hour.'),
+      h('li', {}, 'Copy the Public URL above.'),
+      h('li', {}, 'In a fresh Google Sheet cell, paste: =IMPORTDATA("THE_URL_ABOVE"). The sheet auto-refreshes the CSV every few hours.'),
+      h('li', {}, 'In Google Ads → Tools → Conversions → Settings → Bulk Upload → Linked Sheet, link that Sheet. Set auto-import to Daily.'),
+      h('li', {}, 'Done. Every night at 10 PM IST (or whatever you set), CRM regenerates the CSV; Sheets re-imports; Google Ads pulls.')
+    ),
+    h('p', { style: { fontWeight: '600', marginTop: '.8rem' } }, 'Manual fallback:'),
+    h('ol', {},
+      h('li', {}, 'Click "Download CSV now" above whenever you want a fresh file.'),
+      h('li', {}, 'Open Google Ads → Tools → Conversions → Settings → Bulk Upload → Upload file.'),
+      h('li', {}, 'Pick the downloaded CSV. Google Ads validates + ingests.')
+    ),
+    h('p', { class: 'muted', style: { fontSize: '.82rem', marginTop: '.8rem' } },
+      'Rows with "Without GCLID = Yes" are still useful — Google falls back to phone-match / enhanced conversions for those. The token in the public URL can be rotated any time (any old links stop working immediately).')
   ));
 
   return wrap;

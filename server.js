@@ -242,6 +242,18 @@ app.post('/api/saas/ticket-attachment',
 );
 app.get('/api/saas/ticket-attachment/:id', tickets.expressAttachmentDownload);
 
+// GOOGLE_CONV_EXPORT_v2 — tenant-scoped public CSV download.
+//   GET /exports/google-conv/<slug>.csv?token=<public_token>
+// Used by Google Ads bulk upload URL pull, Google Sheets =IMPORTDATA(),
+// curl, etc. Auth is via the per-tenant rotating token (NOT a JWT).
+try {
+  const googleConvExport = require('./routes/googleConvExport');
+  if (googleConvExport && googleConvExport.expressPublicDownload) {
+    app.get('/exports/google-conv/:slug.csv', googleConvExport.expressPublicDownload);
+    app.get('/exports/google-conv/:slug',     googleConvExport.expressPublicDownload);
+  }
+} catch (e) { console.warn('[gconv] public route mount failed:', e.message); }
+
 // ---- Tenant-scoped Meta/WhatsApp webhooks + FB OAuth callback -----
 //
 // Facebook only allows ONE OAuth redirect URI per app and ONE webhook
@@ -3342,6 +3354,39 @@ setInterval(() => {
 }, Number(process.env.REENGAGE_INTERVAL_MS || 60_000));
 setTimeout(() => _runReengageForAllTenants().catch(() => {}), 30_000);
 console.log('[reengage] AI bot re-engagement worker started');
+
+// ── GOOGLE_CONV_EXPORT_v2 — daily auto-export per tenant at 22:00 IST ──
+// Walks every active tenant once a minute. Each tenant's tick decides
+// whether to fire (IST hour matches + not already fired today + feature
+// is ON). The CSV is written to disk + served by the public route.
+async function _runGoogleConvForAllTenants() {
+  let rows = [];
+  try {
+    const r = await controlDb.query(
+      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500`
+    );
+    rows = r.rows;
+  } catch (e) { console.warn('[gconv] tenant list failed:', e.message); return; }
+  let gconv;
+  try { gconv = require('./routes/googleConvExport'); } catch (e) { return; }
+  if (!gconv._maybeDailyTickForCurrentTenant) return;
+  for (const row of rows) {
+    let t; try { t = await tenantPoolMod.findActiveTenant(row.slug); } catch (_) { continue; }
+    if (!t) continue;
+    const pool = tenantPoolMod.poolFor(t);
+    if (!pool) continue;
+    try {
+      await tenantDb.tenantStorage.run({ pool, tenant: t, slug: row.slug },
+        () => gconv._maybeDailyTickForCurrentTenant(row.slug)
+      );
+    } catch (e) { console.warn(`[gconv] ${row.slug} tick failed:`, e.message); }
+  }
+}
+setInterval(() => {
+  _runGoogleConvForAllTenants().catch(e => console.error('[gconv] cycle failed:', e.message));
+}, 60_000);
+setTimeout(() => _runGoogleConvForAllTenants().catch(() => {}), 60_000);
+console.log('[gconv] Google Ads conversion export daily worker started');
 
 // ── Background: per-tenant Nurture sequence worker ──────────────────────
 // Picks up nurture_step_runs that are due and dispatches them via the

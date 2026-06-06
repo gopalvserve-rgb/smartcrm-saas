@@ -35,6 +35,11 @@ async function _ensureSchema() {
       updated_by INT
     );
   `);
+  // GOOGLE_CONV_EXPORT_v2 — add auto-export columns (idempotent)
+  await db.query(`ALTER TABLE google_conv_export_settings ADD COLUMN IF NOT EXISTS auto_export_enabled BOOLEAN DEFAULT TRUE;`);
+  await db.query(`ALTER TABLE google_conv_export_settings ADD COLUMN IF NOT EXISTS auto_hour_ist INT DEFAULT 22;`);
+  await db.query(`ALTER TABLE google_conv_export_settings ADD COLUMN IF NOT EXISTS last_auto_export_at TIMESTAMPTZ;`);
+  await db.query(`ALTER TABLE google_conv_export_settings ADD COLUMN IF NOT EXISTS public_token TEXT;`);
   await db.query(`
     CREATE TABLE IF NOT EXISTS google_conv_export_log (
       id SERIAL PRIMARY KEY,
@@ -131,6 +136,10 @@ async function _loadSettings() {
     status_map: statusMap,
     source_filter: row.source_filter || 'google,google ads,gads,google lead ad',
     conversion_time_mode: row.conversion_time_mode || 'end_of_day_ist',
+    auto_export_enabled: row.auto_export_enabled !== false,
+    auto_hour_ist: Number(row.auto_hour_ist) || 22,
+    last_auto_export_at: row.last_auto_export_at || null,
+    public_token: row.public_token || null,
     last_downloaded_at: row.last_downloaded_at || null,
     updated_at: row.updated_at || null
   };
@@ -164,6 +173,8 @@ async function api_googleConvExport_save(token, payload) {
     source_filter: String(p.source_filter || 'google,google ads,gads,google lead ad').trim(),
     conversion_time_mode: ['end_of_day_ist', 'status_change_actual'].includes(p.conversion_time_mode)
       ? p.conversion_time_mode : 'end_of_day_ist',
+    auto_export_enabled: p.auto_export_enabled !== false,
+    auto_hour_ist: Math.max(0, Math.min(23, Number(p.auto_hour_ist) || 22)),
     updated_at: db.nowIso(),
     updated_by: me.id
   };
@@ -305,9 +316,244 @@ async function api_googleConvExport_download(token) {
   };
 }
 
+// ===================================================================
+// GOOGLE_CONV_EXPORT_v2 (2026-06-06) — daily auto-export at 22:00 IST
+// + tenant-scoped public URL so admin can paste it into their Google
+// Sheet (IMPORTRANGE / =IMPORTDATA) or hand it to Google Ads bulk
+// upload.
+// ===================================================================
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+
+// Persistent storage root. Railway volumes mount under /data when
+// configured; falls back to repo root /tmp on free dynos (still works
+// for a daily fresh-export-then-serve flow since we regenerate from
+// scratch every night anyway — disk loss isn't catastrophic).
+function _exportDir() {
+  const root = process.env.GOOGLE_CONV_EXPORT_DIR
+    || (fs.existsSync('/data') ? '/data/google_conv' : path.join(process.cwd(), 'data', 'google_conv'));
+  try { fs.mkdirSync(root, { recursive: true }); } catch (_) {}
+  return root;
+}
+
+function _genToken() {
+  return crypto.randomBytes(24).toString('hex');
+}
+
+function _ensureTokenOnSettings(settings) {
+  return new Promise(async resolve => {
+    if (settings && settings.public_token) return resolve(settings.public_token);
+    const t = _genToken();
+    try {
+      if (settings && settings.id) {
+        await db.update('google_conv_export_settings', settings.id, { public_token: t });
+      }
+    } catch (_) {}
+    resolve(t);
+  });
+}
+
+function _todayInIst() {
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit'
+  });
+  const parts = fmt.formatToParts(new Date());
+  const get = t => (parts.find(p => p.type === t) || {}).value;
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
+
+function _hourMinuteInIst() {
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    hour: '2-digit', minute: '2-digit', hour12: false
+  });
+  const parts = fmt.formatToParts(new Date());
+  const get = t => (parts.find(p => p.type === t) || {}).value;
+  return { hour: Number(get('hour')), minute: Number(get('minute')) };
+}
+
+// Generate the CSV file on disk for a single tenant. Returns the
+// metadata (path, row count, etc.). Caller is responsible for already
+// being inside that tenant's tenantStorage scope so `db.query` etc.
+// hits the right pool.
+async function _runDailyExportForCurrentTenant(slug) {
+  await _ensureSchema();
+  const settings = await _loadSettings();
+  if (!settings.is_enabled) return { skipped: 'feature_off' };
+
+  const token = await _ensureTokenOnSettings(settings);
+  const { rows, withGclid, withoutGclid } = await _buildRows(settings);
+  const csv = _rowsToCsv(rows);
+
+  const today = _todayInIst();
+  const dir = path.join(_exportDir(), slug);
+  try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {}
+  const dailyPath = path.join(dir, `${today}.csv`);
+  const latestPath = path.join(dir, `latest.csv`);
+  try {
+    fs.writeFileSync(dailyPath, csv, 'utf8');
+    fs.writeFileSync(latestPath, csv, 'utf8');
+  } catch (e) {
+    console.warn(`[gconv] write failed for ${slug}:`, e.message);
+    return { error: 'write_failed: ' + e.message };
+  }
+
+  // Log + update last_auto_export_at
+  try {
+    await db.insert('google_conv_export_log', {
+      downloaded_at: db.nowIso(),
+      row_count: rows.length,
+      with_gclid: withGclid,
+      without_gclid: withoutGclid,
+      lookback_days: settings.lookback_days,
+      downloaded_by: null,
+      filename: `auto-${today}.csv`
+    });
+    if (settings.id) {
+      await db.update('google_conv_export_settings', settings.id, {
+        last_auto_export_at: db.nowIso()
+      });
+    }
+  } catch (_) {}
+
+  return {
+    slug, today, dailyPath, latestPath,
+    row_count: rows.length, with_gclid: withGclid, without_gclid: withoutGclid,
+    token
+  };
+}
+
+// Called once per minute by the server.js scheduler — only fires the
+// real per-tenant pass when current IST hour matches auto_hour_ist and
+// last_auto_export_at is not today.
+async function _maybeDailyTickForCurrentTenant(slug) {
+  try {
+    await _ensureSchema();
+    const settings = await _loadSettings();
+    if (!settings.is_enabled) return;
+    const autoEnabled = settings.auto_export_enabled !== false; // default ON when feature is ON
+    if (!autoEnabled) return;
+    const targetHour = Number(settings.auto_hour_ist) || 22;
+    const { hour, minute } = _hourMinuteInIst();
+    if (hour !== targetHour) return;
+    if (minute > 5) return; // only first 5 min of the hour
+    // already exported today?
+    const today = _todayInIst();
+    const lastIso = settings.last_auto_export_at;
+    if (lastIso) {
+      const lastDay = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit'
+      }).format(new Date(lastIso));
+      if (lastDay === today) return;
+    }
+    const result = await _runDailyExportForCurrentTenant(slug);
+    console.log(`[gconv] daily auto-export for ${slug}:`, result);
+  } catch (e) {
+    console.warn(`[gconv] daily tick failed for ${slug}:`, e.message);
+  }
+}
+
+// Express route handler exposed publicly:
+//   GET /exports/google-conv/:slug.csv?token=<public_token>
+// Returns the latest.csv for that tenant if the token matches.
+// Designed for Google Ads bulk-upload URL pull / Google Sheets
+// =IMPORTDATA() / curl / wget.
+async function expressPublicDownload(req, res) {
+  try {
+    const slug = String(req.params.slug || '').replace(/\.csv$/i, '');
+    const token = String(req.query.token || req.query.t || '').trim();
+    if (!slug || !token) return res.status(400).type('text').send('Bad request');
+
+    // Look up the tenant + its settings WITHOUT going through authUser (this is a
+    // tenant-scoped public endpoint guarded by the per-tenant token).
+    const tenantPool = require('../utils/tenantPool');
+    const tenantDb = require('../db/tenantDb');
+    const t = await tenantPool.findActiveTenant(slug);
+    if (!t) return res.status(404).type('text').send('Tenant not found');
+    const pool = tenantPool.poolFor(t);
+    if (!pool) return res.status(503).type('text').send('Tenant unavailable');
+
+    let settings;
+    await tenantDb.tenantStorage.run({ pool, tenant: t, slug }, async () => {
+      try {
+        await _ensureSchema();
+        settings = await _loadSettings();
+      } catch (e) { /* surfaced below */ }
+    });
+    if (!settings) return res.status(500).type('text').send('Settings load failed');
+    if (!settings.is_enabled) return res.status(403).type('text').send('Feature is OFF for this tenant');
+    if (!settings.public_token || settings.public_token !== token) {
+      return res.status(401).type('text').send('Invalid token');
+    }
+
+    const latest = path.join(_exportDir(), slug, 'latest.csv');
+    if (!fs.existsSync(latest)) {
+      // No daily export yet — generate one on the fly so the URL is usable
+      // immediately after enabling the feature. Subsequent reads hit the
+      // file cache.
+      await tenantDb.tenantStorage.run({ pool, tenant: t, slug }, () =>
+        _runDailyExportForCurrentTenant(slug)
+      );
+    }
+    if (!fs.existsSync(latest)) return res.status(404).type('text').send('No export yet');
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `inline; filename="google_conv_${slug}.csv"`);
+    res.setHeader('Cache-Control', 'no-store');
+    fs.createReadStream(latest).pipe(res);
+  } catch (e) {
+    console.error('[gconv] expressPublicDownload error:', e);
+    try { res.status(500).type('text').send('Error: ' + e.message); } catch (_) {}
+  }
+}
+
+// SPA-facing: return the public URL the admin should paste / share.
+async function api_googleConvExport_publicUrl(token) {
+  const me = await authUser(token);
+  if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin / manager only');
+  await _ensureSchema();
+  const settings = await _loadSettings();
+  let publicToken = settings.public_token;
+  if (!publicToken) {
+    publicToken = _genToken();
+    if (settings.id) {
+      try { await db.update('google_conv_export_settings', settings.id, { public_token: publicToken }); } catch (_) {}
+    }
+  }
+  const slug = (db._tenantSlug && db._tenantSlug()) || 'tenant';
+  const base = process.env.PUBLIC_URL_BASE || 'https://crm.smartcrmsolution.com';
+  const url = `${base}/exports/google-conv/${slug}.csv?token=${publicToken}`;
+  return {
+    url,
+    last_auto_export_at: settings.last_auto_export_at,
+    auto_export_enabled: settings.auto_export_enabled !== false,
+    auto_hour_ist: settings.auto_hour_ist || 22,
+    is_enabled: settings.is_enabled
+  };
+}
+
+// SPA-facing: rotate the public token (invalidates the old URL).
+async function api_googleConvExport_rotateToken(token) {
+  const me = await authUser(token);
+  if (me.role !== 'admin') throw new Error('Admin only');
+  await _ensureSchema();
+  const settings = await _loadSettings();
+  const newToken = _genToken();
+  if (settings.id) {
+    await db.update('google_conv_export_settings', settings.id, { public_token: newToken });
+  }
+  return { ok: true, token: newToken };
+}
+
 module.exports = {
   api_googleConvExport_get,
   api_googleConvExport_save,
   api_googleConvExport_logs,
-  api_googleConvExport_download
+  api_googleConvExport_download,
+  api_googleConvExport_publicUrl,
+  api_googleConvExport_rotateToken,
+  _maybeDailyTickForCurrentTenant,
+  _runDailyExportForCurrentTenant,
+  expressPublicDownload
 };
