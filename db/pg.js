@@ -468,6 +468,14 @@ const SCHEMA = {
   google_calendar_followup_sync: {
     columns: ['lead_id', 'user_id', 'google_event_id', 'due_at', 'last_synced_at'],
     json: []
+  },
+  // GMEET_v1 / GCAL_PATH_A_v1 — per-user Google Calendar OAuth tokens
+  google_calendar_tokens: {
+    columns: [
+      'user_id', 'email', 'access_token', 'refresh_token',
+      'expires_at', 'scope', 'calendar_id', 'created_at', 'updated_at'
+    ],
+    json: []
   }
 };
 

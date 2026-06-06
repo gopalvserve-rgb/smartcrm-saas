@@ -11,8 +11,16 @@ async function api_automations_save(token, payload) {
   const me = await authUser(token);
   if (me.role !== 'admin') throw new Error('Admin only');
   const a = payload || {};
-  if (!a.name || !a.event || !a.channel || !a.template) {
-    throw new Error('name, event, channel, template are required');
+  // AUTOMATION_REASSIGN_TPL_FIX (2026-06-06): only require template when
+  // the channel actually sends a message. Channels like 'reassign_lead' /
+  // 'reassign' / 'reassign_lead_to_users' don't need any template.
+  const NO_TEMPLATE_CHANNELS = ['reassign', 'reassign_lead', 'reassign_lead_to_users', 'reassign_to_users', 'reassign_user'];
+  const needsTemplate = !NO_TEMPLATE_CHANNELS.includes(String(a.channel || '').toLowerCase());
+  if (!a.name || !a.event || !a.channel) {
+    throw new Error('name, event, channel are required');
+  }
+  if (needsTemplate && !a.template) {
+    throw new Error('template is required for ' + a.channel + ' channels');
   }
   const row = {
     name: a.name,
@@ -21,7 +29,7 @@ async function api_automations_save(token, payload) {
     channel: a.channel,
     recipient: a.recipient || 'lead',
     subject: a.subject || '',
-    template: a.template,
+    template: a.template || '',
     is_active: a.is_active == null ? 1 : (a.is_active ? 1 : 0)
   };
   if (a.id) { await db.update('automations', a.id, row); return { id: Number(a.id) }; }
