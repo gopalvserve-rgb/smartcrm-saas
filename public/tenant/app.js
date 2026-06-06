@@ -3195,30 +3195,35 @@ const WIDGET_LIBRARY = {
   // Renders Total / New today / Won / Due today / Overdue in one row,
   // matching the pipeline page's KPI strip styling.
   kpi_strip: { title: 'KPI strip · Lead totals', group: 'KPI',
-    description: 'Compact strip with Total leads, New today, Won, Due today, Overdue — one click jumps to the relevant lead list.',
+    description: 'Boxed gradient KPI tiles with icon badge, big number and % of total subtitle.',
     render: (c, _cfg, d, w) => {
-      c.appendChild(h('h3', { style: { margin: '0 0 .55rem' } }, w.title || '🎯 Lead totals'));
-      const s = (d.summary && d.summary.totals) || {};
-      const n = (d.notifs && d.notifs.counts) || {};
-      const grid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '.55rem' } });
-      function tile(label, value, color, icon, href) {
-        const el = h('div', {
-          style: { background: '#fff', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '.65rem .8rem', display: 'flex', alignItems: 'center', gap: '.55rem', cursor: href ? 'pointer' : 'default', transition: 'transform .1s' },
-          onclick: href ? () => { location.hash = href; } : null
+      c.appendChild(h('h3', { style: { margin: '0 0 .65rem', fontSize: '1.05rem' } }, w.title || '🎯 Performance summary'));
+      const sT = (d.summary && d.summary.totals) || {};
+      const nT = (d.notifs && d.notifs.counts) || {};
+      const total = Number(sT.total) || 0;
+      const pct = (v) => total ? ((Number(v) || 0) / total * 100).toFixed(1) + '% of total' : '';
+      const grid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '.6rem' } });
+      function tile(label, value, color, bg, icon, sub, href) {
+        const card = h('div', {
+          style: { background: bg, border: '2px solid ' + color, borderRadius: '12px', padding: '.85rem .9rem', cursor: href ? 'pointer' : 'default', transition: 'transform .12s, box-shadow .12s', boxShadow: '0 1px 2px rgba(0,0,0,.04)' },
+          onclick: href ? () => { location.hash = href; } : null,
+          onmouseover: function(){ this.style.transform = 'translateY(-1px)'; this.style.boxShadow = '0 4px 10px rgba(0,0,0,.06)'; },
+          onmouseout:  function(){ this.style.transform = ''; this.style.boxShadow = '0 1px 2px rgba(0,0,0,.04)'; }
         },
-          h('div', { style: { width: '36px', height: '36px', borderRadius: '8px', background: color + '22', color: color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.05rem', flexShrink: 0 } }, icon),
-          h('div', { style: { flex: 1, minWidth: 0 } },
-            h('div', { style: { fontSize: '.66rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '.02em', lineHeight: 1 } }, label),
-            h('div', { style: { fontSize: '1.4rem', fontWeight: 700, color: '#0f172a', lineHeight: 1.1, marginTop: '.2rem' } }, String(value == null ? 0 : value))
-          )
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: '.55rem' } },
+            h('div', { style: { width: '42px', height: '42px', borderRadius: '10px', background: '#fff', color: color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.15rem', flexShrink: 0, boxShadow: 'inset 0 0 0 1px ' + color + '40' } }, icon),
+            h('div', { style: { fontSize: '.7rem', color: color, textTransform: 'uppercase', letterSpacing: '.04em', fontWeight: 700, lineHeight: 1.15 } }, label)
+          ),
+          h('div', { style: { fontSize: '2.1rem', fontWeight: 800, color: color, marginTop: '.45rem', lineHeight: 1 } }, String(value == null ? 0 : value)),
+          h('div', { style: { fontSize: '.7rem', color: '#64748b', marginTop: '.3rem' } }, sub)
         );
-        return el;
+        return card;
       }
-      grid.appendChild(tile('Total leads', s.total ?? 0,        '#6366f1', '🎯',  '#/leads'));
-      grid.appendChild(tile('New today',   n.new_today ?? 0,    '#8b5cf6', '✨',  '#/leads?filter=new_today'));
-      grid.appendChild(tile('Won',         s.won ?? 0,          '#10b981', '🏆', '#/leads?filter=won'));
-      grid.appendChild(tile('Due today',   n.due_today ?? 0,    '#f59e0b', '📅', '#/followups?tab=due'));
-      grid.appendChild(tile('Overdue',     n.overdue ?? 0,      '#ef4444', '⚠️',  '#/followups?tab=overdue'));
+      grid.appendChild(tile('Total leads', total,              '#2563eb', '#eff6ff', '🎯', '100% of total',     '#/leads'));
+      grid.appendChild(tile('New today',   nT.new_today  || 0, '#16a34a', '#f0fdf4', '✨', pct(nT.new_today),   '#/leads?filter=new_today'));
+      grid.appendChild(tile('Won',         sT.won        || 0, '#059669', '#ecfdf5', '🏆', pct(sT.won),         '#/leads?filter=won'));
+      grid.appendChild(tile('Due today',   nT.due_today  || 0, '#d97706', '#fffbeb', '📅', pct(nT.due_today),   '#/followups?tab=due'));
+      grid.appendChild(tile('Overdue',     nT.overdue    || 0, '#dc2626', '#fef2f2', '⚠️', pct(nT.overdue),     '#/followups?tab=overdue'));
       c.appendChild(grid);
     }
   },
@@ -3351,14 +3356,18 @@ const WIDGET_LIBRARY = {
 
 
   // ----- Charts -----
-  chart_status: { title: 'Chart · Leads by status', group: 'Charts',
+  chart_status: { title: 'Chart · Leads by status (Donut)', group: 'Charts',
     render: (c, _cfg, d, w) => {
-      c.appendChild(h('h3', {}, w.title || '🎯 Leads by status'));
+      c.appendChild(h('h3', { style: { margin: '0 0 .4rem', fontSize: '1.05rem' } }, w.title || '🎯 Distribution by status'));
       const id = 'wc-' + w.id;
-      c.appendChild(h('div', { class: 'chart-wrap' }, h('canvas', { id })));
+      c.appendChild(h('div', { class: 'chart-wrap', style: { minHeight: '260px' } }, h('canvas', { id })));
       setTimeout(() => {
         const rows = (d.summary?.by_status || []).filter(x => x.c > 0);
-        makeChart(id, 'bar', rows.map(x => x.status), rows.map(x => x.c), rows.map(x => x.color));
+        if (!rows.length) return;
+        makeChart(id, 'doughnut', rows.map(x => x.status), rows.map(x => x.c), rows.map(x => x.color), {
+          plugins: { legend: { position: 'right', labels: { boxWidth: 12, padding: 8, font: { size: 11 } } } },
+          cutout: '60%'
+        });
       }, 50);
     }
   },
@@ -3393,6 +3402,57 @@ const WIDGET_LIBRARY = {
         const rows = (d.daily || []);
         makeChart(id, 'line', rows.map(x => x.day), rows.map(x => x.c));
       }, 50);
+    }
+  },
+
+  // DASH_TREND_MULTILINE_v1 — multi-series line chart showing New / Won /
+  // Lost over the last 14 days, matching the reference dashboard look.
+  dash_trend_multiline: { title: 'Chart · Trend (New / Won / Lost)', group: 'Charts',
+    description: 'Multi-line chart showing daily New, Won and Lost lead counts over the last 14 days.',
+    render: async (c, _cfg, _d, w) => {
+      c.appendChild(h('h3', { style: { margin: '0 0 .4rem', fontSize: '1.05rem' } }, w.title || '📈 Trend (last 14 days)'));
+      const id = 'wcml-' + w.id;
+      c.appendChild(h('div', { class: 'chart-wrap', style: { minHeight: '260px' } }, h('canvas', { id })));
+      try {
+        const today = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+        const from  = new Date(today.getTime() - 13 * 86400000);
+        const isoDay = (d) => d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+        const rows = await api('api_reports_daily', { from: isoDay(from), to: isoDay(today) });
+        const dayKeys = [];
+        for (let i = 0; i < 14; i++) dayKeys.push(isoDay(new Date(from.getTime() + i * 86400000)));
+        const byDay = {};
+        (rows || []).forEach(r => { byDay[String(r.day).slice(0,10)] = r; });
+        const newSeries  = dayKeys.map(k => Number((byDay[k] && (byDay[k].c || byDay[k].new || byDay[k].count)) || 0));
+        const wonSeries  = dayKeys.map(k => Number((byDay[k] && byDay[k].won)  || 0));
+        const lostSeries = dayKeys.map(k => Number((byDay[k] && byDay[k].lost) || 0));
+        const shortLabels = dayKeys.map(k => k.slice(5));
+        setTimeout(() => {
+          const ctx = document.getElementById(id);
+          if (!ctx) return;
+          if (ctx._chart) ctx._chart.destroy();
+          ctx._chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+              labels: shortLabels,
+              datasets: [
+                { label: 'New',  data: newSeries,  borderColor: '#2563eb', backgroundColor: '#2563eb22', tension: .3, pointBackgroundColor: '#2563eb', borderWidth: 2 },
+                { label: 'Won',  data: wonSeries,  borderColor: '#10b981', backgroundColor: '#10b98122', tension: .3, pointBackgroundColor: '#10b981', borderWidth: 2 },
+                { label: 'Lost', data: lostSeries, borderColor: '#ef4444', backgroundColor: '#ef444422', tension: .3, pointBackgroundColor: '#ef4444', borderWidth: 2 }
+              ]
+            },
+            options: {
+              responsive: true, maintainAspectRatio: false,
+              plugins: { legend: { position: 'top', labels: { boxWidth: 12, padding: 8, font: { size: 11 } } } },
+              scales: {
+                x: { grid: { display: false }, ticks: { font: { size: 10 } } },
+                y: { grid: { color: '#f3f4f6' }, beginAtZero: true, ticks: { font: { size: 10 } } }
+              }
+            }
+          });
+        }, 50);
+      } catch (e) {
+        c.appendChild(h('div', { class: 'error-box', style: { fontSize: '.78rem' } }, 'Could not load: ' + e.message));
+      }
     }
   },
 
