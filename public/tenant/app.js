@@ -42338,13 +42338,17 @@ try {
     // ─── Period selector + Custom range inputs ───────────────────
     const daysSel = h('select', { style:{ padding:'.4rem .6rem' } },
       h('option', { value:'1' },  'Today'),
+      h('option', { value:'yesterday' }, 'Yesterday'),
       h('option', { value:'7'  }, 'Last 7 days'),
       h('option', { value:'14' }, 'Last 14 days'),
       h('option', { value:'30' }, 'Last 30 days'),
       h('option', { value:'90' }, 'Last 90 days'),
       h('option', { value:'custom' }, '📅 Custom range…')
     );
-    daysSel.value = (rangeState.mode === 'custom') ? 'custom' : String(rangeState.days || 7);
+    // META_ADS_v1.3.1 — support 'yesterday' as a special mode
+    daysSel.value = (rangeState.mode === 'custom') ? 'custom'
+                  : (rangeState.mode === 'yesterday') ? 'yesterday'
+                  : String(rangeState.days || 7);
 
     const _today = () => new Date().toISOString().slice(0,10);
     const _ago = n => new Date(Date.now() - n * 86400000).toISOString().slice(0,10);
@@ -42361,6 +42365,9 @@ try {
       if (v === 'custom') {
         customWrap.style.display = 'inline-flex';
         rangeState = { mode: 'custom', from: fromInp.value, to: toInp.value };
+      } else if (v === 'yesterday') {
+        customWrap.style.display = 'none';
+        rangeState = { mode: 'yesterday' };
       } else {
         customWrap.style.display = 'none';
         rangeState = { mode: 'days', days: Number(v) };
@@ -42376,6 +42383,10 @@ try {
     function _currentFilters() {
       if (rangeState.mode === 'custom') {
         return { from: fromInp.value, to: toInp.value, account_ids: selectedAcctIds };
+      }
+      if (rangeState.mode === 'yesterday') {
+        const y = _ago(1);
+        return { from: y, to: y, account_ids: selectedAcctIds };
       }
       return { days: rangeState.days || 7, account_ids: selectedAcctIds };
     }
