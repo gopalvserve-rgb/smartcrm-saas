@@ -63,6 +63,12 @@ const financeDashboard = require('./routes/saas/financeDashboard'); /* FIN_DASH_
 // the SaaS dispatcher path AND the per-tenant API path.
 require('./routes/packs/education');
 require('./routes/packs/realestate');
+// PACK_PHASE_2_v1 — 2026-06-07
+require('./routes/packs/finance');
+require('./routes/packs/solar');
+require('./routes/packs/manufacturer');
+require('./routes/packs/holiday');
+require('./routes/packs/ecommerce');
 
 // ── Social Post Publisher — fire scheduled posts every minute ──────
 // Runs in-process; idempotent (status='scheduled' rows only).

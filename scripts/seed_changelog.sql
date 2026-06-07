@@ -110,3 +110,10 @@ VALUES ('menu-refactor-v1', 'Sidebar refresh — cleaner categories, search box 
         'Big navigation cleanup. Main sidebar categories are now grouped by workflow: Dashboard, Sales CRM, Calls & Dialer, Marketing & Communication, Reports & Analytics, Products & Inventory, Billing & Accounts, HR & Team Management, Knowledge & Support, and Admin & Settings. Reports stay in one place (Reports & Analytics). Quotations and Sales Closure moved under Sales CRM. Marketing groups Ads Manager, Social, Campaigns, WhatsApp Bot, and AI Assistant. Settings is restructured too — Organization & Access, Lead Setup, Sales & Quotation Setup, Lead Routing, Channels & Integrations, Call & Chat Settings, Automation & SLA, UI & Menu Settings, System Monitoring, and Danger Zone. NEW: Both the main sidebar and Settings have a search box at the top. Type any old or new name (e.g. "WhatsBot", "Due today", "Sources", "Sale Final Closure") and the matching item appears instantly — no need to learn the new names. Existing routes and permissions are unchanged.',
         NOW())
 ON CONFLICT (version) DO NOTHING;
+
+-- PACK_PHASE_2_v1 (2026-06-07) — 5 new industry packs
+INSERT INTO control.changelog (version, title, body, kind, released_at)
+VALUES ('PACK_PHASE_2_v1', '5 new industry packs available',
+        E'Super-admin can now install 5 new industry packs on any tenant:\n• Finance — insurance, loans, investments\n• Solar — rooftop survey, quotes, subsidy\n• Manufacturer — RFQ, production, dispatch\n• Holiday — packages, bookings, itineraries\n• Ecommerce — orders, returns, abandoned carts, loyalty\n\nEach pack seeds industry-specific statuses + custom fields + sample products and exposes a sidebar menu with the most-needed views. Open any tenant in super-admin → Industry Pack → Install.',
+        'feature', NOW())
+ON CONFLICT (version) DO NOTHING;

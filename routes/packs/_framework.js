@@ -170,3 +170,9 @@ module.exports = {
 // Pack files self-register at load time, so requiring them is enough.
 try { require('./education'); } catch (e) { console.warn('[packs] education load:', e.message); }
 try { require('./realestate'); } catch (e) { console.warn('[packs] realestate load:', e.message); }
+// PACK_PHASE_2_v1 — 2026-06-07 — Finance/Solar/Manufacturer/Holiday/Ecommerce
+try { require('./finance');      } catch (e) { console.warn('[packs] finance load:', e.message); }
+try { require('./solar');        } catch (e) { console.warn('[packs] solar load:', e.message); }
+try { require('./manufacturer'); } catch (e) { console.warn('[packs] manufacturer load:', e.message); }
+try { require('./holiday');      } catch (e) { console.warn('[packs] holiday load:', e.message); }
+try { require('./ecommerce');    } catch (e) { console.warn('[packs] ecommerce load:', e.message); }

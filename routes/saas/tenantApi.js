@@ -89,6 +89,12 @@ const ROUTE_FILES = [
   'waWidget',
   'packs/education',
   'packs/realestate',
+  // PACK_PHASE_2_v1 — 2026-06-07
+  'packs/finance',
+  'packs/solar',
+  'packs/manufacturer',
+  'packs/holiday',
+  'packs/ecommerce',
   'social',
   'ivr',
   'compliance',  /* COMPLIANCE_v1 */
