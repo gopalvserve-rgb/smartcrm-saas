@@ -42322,6 +42322,19 @@ try {
     } catch (_) { rangeState = null; }
     if (!rangeState || typeof rangeState !== 'object') rangeState = { mode: 'days', days: 7 };
 
+    // META_ADS_v1.2.1 — alerts collapsed by default; persist preference
+    const LS_ALERTS_OPEN = 'metaAds_alertsOpen_v1';
+    let alertsOpen = false;
+    try {
+      const stored = localStorage.getItem(LS_ALERTS_OPEN);
+      if (stored === '1') alertsOpen = true;
+    } catch (_) {}
+
+    // META_ADS_v1.2.1 — render generation counter. Async fetches that
+    // resolve AFTER a newer render() has started must not append, otherwise
+    // alerts duplicate (a single click on the date filter could race).
+    let _renderGen = 0;
+
     // ─── Period selector + Custom range inputs ───────────────────
     const daysSel = h('select', { style:{ padding:'.4rem .6rem' } },
       h('option', { value:'1' },  'Today'),
@@ -42400,7 +42413,14 @@ try {
       window.open('https://business.facebook.com/adsmanager/manage/campaigns?act=', '_blank', 'noopener');
     } }, '+ Create');
 
-    wrap.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.8rem', marginBottom: '1rem', flexWrap: 'wrap' } },
+    // META_ADS_v1.2.1 — sticky toolbar container so header + Columns btn stay
+    // visible when user scrolls through many campaigns or expands alerts.
+    const stickyBar = h('div', { style: {
+      position: 'sticky', top: '0', zIndex: '20',
+      background: 'var(--bg, #fff)', paddingTop: '.4rem', paddingBottom: '.6rem',
+      marginBottom: '.6rem', borderBottom: '1px solid rgba(99,102,241,.12)'
+    } });
+    stickyBar.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.8rem', flexWrap: 'wrap' } },
       h('div', { style: { width: '54px', height: '54px', borderRadius: '14px', background: 'linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '1.5rem', flex: 'none', boxShadow: '0 4px 12px rgba(99,102,241,.25)' } }, '📊'),
       h('div', { style: { flex: '1 1 auto', minWidth: '180px' } },
         h('h2', { style: { margin: 0, fontSize: '1.5rem' } }, 'Ads Manager'),
@@ -42408,10 +42428,11 @@ try {
       ),
       refreshBtn, businessBtn, exportBtn, colsBtn, createBtn
     ));
+    wrap.appendChild(stickyBar);
 
-    // ── Period + custom range + ad account filter row ─────────────
+    // ── Period + custom range + ad account filter row (inside sticky bar) ──
     const acctFilterBtn = h('button', { class:'btn', onclick: () => openAcctFilter() }, '🏢 All accounts');
-    wrap.appendChild(h('div', { style:{ display:'flex', alignItems:'center', gap:'.5rem', marginBottom:'.8rem', flexWrap:'wrap' } },
+    stickyBar.appendChild(h('div', { style:{ display:'flex', alignItems:'center', gap:'.5rem', marginTop:'.6rem', flexWrap:'wrap' } },
       h('label', { class: 'muted', style: { fontSize: '.85rem' } }, 'Period:'), daysSel,
       customWrap,
       acctFilterBtn,
@@ -42557,6 +42578,10 @@ try {
     }
 
     async function render() {
+      // META_ADS_v1.2.1 — generation counter prevents duplicate appends when
+      // render is called multiple times in quick succession (race between
+      // filter changes, daysSel.onchange, and the initial render() at mount).
+      const myGen = ++_renderGen;
       summaryRow.innerHTML = '';
       alertsCard.innerHTML = '';
       campTable.innerHTML = '';
@@ -42570,7 +42595,10 @@ try {
           api('api_social_ads_alerts')
         ]);
 
-        // ── Summary tiles (6 fixed for now — column picker controls the table only) ─
+        // If a newer render() started while we were fetching, drop this result.
+        if (myGen !== _renderGen) return;
+
+        // ── Summary tiles ─────────────────────────────────────────
         summaryRow.innerHTML = '';
         const reach = summary.current.reach != null ? summary.current.reach : 0;
         summaryRow.appendChild(kpi('Spend',         summary.current.spend,       summary.delta_pct.spend, true, '$', '#22c55e'));
@@ -42580,11 +42608,31 @@ try {
         summaryRow.appendChild(kpi('CTR',           summary.current.ctr.toFixed(2) + '%', null, false, '📊', '#f59e0b'));
         summaryRow.appendChild(kpi('Avg CPC',       '$' + summary.current.cpc.toFixed(2), null, false, '$', '#06b6d4'));
 
-        // ── Alerts ─────────────────────────────────────────────
+        // ── Alerts — collapsed by default; expand on click (v1.2.1) ─────
+        alertsCard.innerHTML = '';
         if (!alerts.length) {
           alertsCard.appendChild(h('div', { class:'muted', style:{ padding:'.7rem' } }, '✅ No active alerts.'));
         } else {
-          alertsCard.appendChild(h('h4', { style:{ margin:'0 0 .5rem 0' } }, '🚨 Alerts'));
+          const unack = alerts.filter(a => Number(a.acknowledged) === 0).length;
+          const headerBar = h('div', {
+            style: { display:'flex', alignItems:'center', justifyContent:'space-between', padding:'.6rem .8rem', cursor:'pointer', background: alertsOpen ? '#fef3c7' : '#fff7ed', borderRadius:'6px', userSelect:'none' }
+          },
+            h('div', { style:{ display:'flex', alignItems:'center', gap:'.5rem' } },
+              h('span', { style:{ fontSize:'1.1rem' } }, '🚨'),
+              h('strong', {}, 'Alerts'),
+              h('span', { style:{ background:'#dc2626', color:'#fff', padding:'.05rem .5rem', borderRadius:'999px', fontSize:'.78rem', fontWeight:'700' } }, String(alerts.length)),
+              unack > 0 ? h('span', { class:'muted', style:{ fontSize:'.82rem' } }, '· ' + unack + ' unacknowledged') : null
+            ),
+            h('span', { style:{ fontSize:'.85rem', color:'#92400e' } }, alertsOpen ? '▲ Hide' : '▼ Show')
+          );
+          const body = h('div', { style:{ display: alertsOpen ? 'block' : 'none', padding:'.4rem .2rem' } });
+          headerBar.onclick = () => {
+            alertsOpen = !alertsOpen;
+            try { localStorage.setItem(LS_ALERTS_OPEN, alertsOpen ? '1' : '0'); } catch (_) {}
+            body.style.display = alertsOpen ? 'block' : 'none';
+            headerBar.lastChild.textContent = alertsOpen ? '▲ Hide' : '▼ Show';
+            headerBar.style.background = alertsOpen ? '#fef3c7' : '#fff7ed';
+          };
           alerts.forEach(a => {
             const colorMap = { warn: '#d97706', error: '#dc2626', info: '#4f46e5' };
             const row = h('div', {
@@ -42595,14 +42643,16 @@ try {
                 h('div', { class:'muted', style:{ fontSize:'.85em' } }, a.message)
               ),
               Number(a.acknowledged) === 0
-                ? h('button', { class:'btn sm', onclick: async () => { try { await api('api_social_ads_alerts_ack', a.id); render(); } catch (e) { toast(e.message, 'err'); } } }, '✓ Ack')
+                ? h('button', { class:'btn sm', onclick: async (e) => { e.stopPropagation(); try { await api('api_social_ads_alerts_ack', a.id); render(); } catch (e2) { toast(e2.message, 'err'); } } }, '✓ Ack')
                 : null
             );
-            alertsCard.appendChild(row);
+            body.appendChild(row);
           });
+          alertsCard.appendChild(headerBar);
+          alertsCard.appendChild(body);
         }
 
-        // ── Campaigns table — dynamic columns ────────────────────
+        // ── Campaigns table — clickable rows for drill-down (v1.2.1) ─────
         campTable.appendChild(h('h4', { style:{ margin:'0 0 .5rem 0' } }, 'Campaign breakdown'));
         if (!campaigns.length) {
           campTable.appendChild(h('div', { class:'empty', style:{ padding:'1.5rem', textAlign:'center' } },
@@ -42618,24 +42668,126 @@ try {
           tbl.appendChild(h('thead', {}, headRow));
           const tb = h('tbody', {});
           campaigns.forEach(c => {
-            const cells = [
-              h('td', {},
-                h('div', { style:{ fontWeight:'600', fontSize:'.88rem' } }, c.ad_account_name || c.ad_account_id),
-                h('div', { class:'muted', style:{ fontSize:'.72em' } }, c.ad_account_id + (c.ad_account_currency ? ' · ' + c.ad_account_currency : ''))
-              ),
-              h('td', {},
-                h('div', { style:{ fontWeight:'600' } }, c.campaign_name || c.campaign_id)
-              ),
-              ...cols.map(col => h('td', {}, fmtCell(c[col.key], col.fmt)))
-            ];
-            tb.appendChild(h('tr', {}, ...cells));
+            const tr = h('tr', { style:{ cursor:'pointer' }, title: 'Click to drill down — see daily breakdown for this campaign' });
+            tr.onclick = () => openCampaignDetail(c);
+            tr.onmouseenter = () => tr.style.background = 'rgba(99,102,241,.06)';
+            tr.onmouseleave = () => tr.style.background = '';
+            tr.appendChild(h('td', {},
+              h('div', { style:{ fontWeight:'600', fontSize:'.88rem' } }, c.ad_account_name || c.ad_account_id),
+              h('div', { class:'muted', style:{ fontSize:'.72em' } }, c.ad_account_id + (c.ad_account_currency ? ' · ' + c.ad_account_currency : ''))
+            ));
+            tr.appendChild(h('td', {},
+              h('div', { style:{ fontWeight:'600', display:'flex', alignItems:'center', gap:'.3rem' } },
+                h('span', {}, c.campaign_name || c.campaign_id),
+                h('span', { style:{ fontSize:'.7em', color:'#6366f1' } }, '▸')
+              )
+            ));
+            cols.forEach(col => tr.appendChild(h('td', {}, fmtCell(c[col.key], col.fmt))));
+            tb.appendChild(tr);
           });
           tbl.appendChild(tb);
           campTable.appendChild(tbl);
         }
       } catch (e) {
+        if (myGen !== _renderGen) return;
         summaryRow.innerHTML = '';
         summaryRow.appendChild(h('div', { class:'error-box' }, e.message));
+      }
+    }
+
+    // ── Campaign drill-down modal (META_ADS_v1.2.1) ─────────────
+    async function openCampaignDetail(camp) {
+      const m = h('div', { class:'modal-backdrop' });
+      const modal = h('div', { class:'modal', style:{ maxWidth:'1100px', maxHeight:'85vh', overflow:'auto' } });
+      modal.appendChild(h('div', { class:'modal-head' },
+        h('div', {},
+          h('h3', { style:{ margin:0 } }, camp.campaign_name || camp.campaign_id),
+          h('div', { class:'muted', style:{ fontSize:'.85em', marginTop:'.2rem' } },
+            (camp.ad_account_name || camp.ad_account_id) + ' · ' + camp.ad_account_id + (camp.ad_account_currency ? ' · ' + camp.ad_account_currency : '')
+          )
+        ),
+        h('button', { class:'btn ghost', onclick: () => m.remove() }, '✕')
+      ));
+      const body = h('div', { class:'modal-body' });
+      body.appendChild(h('div', { class:'loading' }, 'Loading daily breakdown…'));
+      modal.appendChild(body);
+      m.appendChild(modal);
+      document.body.appendChild(m);
+
+      try {
+        const filt = _currentFilters();
+        const args = { campaign_id: camp.campaign_id };
+        if (filt.from && filt.to) { args.from = filt.from; args.to = filt.to; }
+        else if (filt.days) args.days = filt.days;
+        const det = await api('api_social_ads_campaign_detail', args);
+        body.innerHTML = '';
+
+        // Totals strip
+        const totalsRow = h('div', { style:{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px,1fr))', gap:'.5rem', marginBottom:'1rem' } });
+        const kpiTile = (label, val, color) => h('div', { class:'card', style:{ padding:'.6rem .8rem', background:'#0f172a', border:'1px solid #1f2937' } },
+          h('div', { style:{ color: color || '#a78bfa', fontSize:'.7rem', fontWeight:'700', textTransform:'uppercase', letterSpacing:'.04em' } }, label),
+          h('div', { style:{ fontSize:'1.3rem', fontWeight:'800', color:'#f8fafc', marginTop:'.2rem' } }, val)
+        );
+        totalsRow.appendChild(kpiTile('Spend', '₹' + Math.round(det.totals.spend).toLocaleString('en-IN'), '#22c55e'));
+        totalsRow.appendChild(kpiTile('Impressions', det.totals.impressions.toLocaleString('en-IN'), '#3b82f6'));
+        totalsRow.appendChild(kpiTile('Clicks', det.totals.clicks.toLocaleString('en-IN'), '#a855f7'));
+        totalsRow.appendChild(kpiTile('Leads', String(det.totals.leads), '#ec4899'));
+        totalsRow.appendChild(kpiTile('Purchases', String(det.totals.purchases), '#f59e0b'));
+        const roas = det.totals.spend > 0 ? (det.totals.purchase_value / det.totals.spend).toFixed(2) + '×' : '—';
+        totalsRow.appendChild(kpiTile('ROAS', roas, '#06b6d4'));
+        body.appendChild(totalsRow);
+
+        // Daily breakdown table
+        body.appendChild(h('h4', { style:{ margin:'.5rem 0' } }, '📅 Daily breakdown (' + det.period.from + ' → ' + det.period.to + ')'));
+        if (!det.rows.length) {
+          body.appendChild(h('div', { class:'empty', style:{ padding:'1rem', textAlign:'center' } },
+            'No daily data for this campaign in the selected period.'));
+        } else {
+          const tbl = h('table', { class:'tbl', style:{ width:'100%', fontSize:'.85rem' } });
+          tbl.appendChild(h('thead', {}, h('tr', {},
+            h('th', {}, 'Date'),
+            h('th', {}, 'Spend'),
+            h('th', {}, 'Impr.'),
+            h('th', {}, 'Clicks'),
+            h('th', {}, 'CTR'),
+            h('th', {}, 'CPC'),
+            h('th', {}, 'Leads'),
+            h('th', {}, 'CPL'),
+            h('th', {}, 'Purchases'),
+            h('th', {}, 'ROAS'),
+            h('th', {}, 'ATC'),
+            h('th', {}, 'LPV')
+          )));
+          const tb = h('tbody', {});
+          det.rows.forEach(r => {
+            const dateStr = new Date(r.date).toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short' });
+            tb.appendChild(h('tr', {},
+              h('td', {}, dateStr),
+              h('td', {}, '₹' + Math.round(r.spend).toLocaleString('en-IN')),
+              h('td', {}, r.impressions.toLocaleString('en-IN')),
+              h('td', {}, r.clicks.toLocaleString('en-IN')),
+              h('td', {}, r.ctr.toFixed(2) + '%'),
+              h('td', {}, r.cpc > 0 ? '₹' + r.cpc.toFixed(2) : '—'),
+              h('td', {}, String(r.leads || 0)),
+              h('td', {}, r.cpl > 0 ? '₹' + r.cpl.toFixed(0) : '—'),
+              h('td', {}, String(r.purchases || 0)),
+              h('td', {}, r.purchase_roas > 0 ? r.purchase_roas.toFixed(2) + '×' : '—'),
+              h('td', {}, String(r.add_to_carts || 0)),
+              h('td', {}, String(r.landing_page_views || 0))
+            ));
+          });
+          tbl.appendChild(tb);
+          body.appendChild(tbl);
+        }
+
+        // Open in Meta link
+        body.appendChild(h('div', { style:{ marginTop:'1rem', padding:'.6rem', background:'#eff6ff', border:'1px solid #bfdbfe', borderRadius:'6px', display:'flex', alignItems:'center', gap:'.5rem', flexWrap:'wrap' } },
+          h('span', { class:'muted' }, '💡 For ad-set / ad-level breakdown:'),
+          h('a', { class:'btn primary sm', href: 'https://business.facebook.com/adsmanager/manage/ads?act=' + (camp.ad_account_id || '').replace(/^act_/, '') + '&selected_campaign_ids=' + camp.campaign_id, target: '_blank', rel: 'noopener' }, '🔗 Open in Meta Ads Manager')
+        ));
+      } catch (e) {
+        body.innerHTML = '';
+        body.appendChild(h('div', { class:'error-box' }, 'Could not load campaign detail: ' + e.message));
       }
     }
 

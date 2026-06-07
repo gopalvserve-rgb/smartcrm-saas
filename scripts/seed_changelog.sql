@@ -82,3 +82,10 @@ VALUES ('meta-ads-v1.2', 'Ads Manager — filters, custom date, and column picke
         'Ads Manager now lets you (1) filter by one or more ad accounts, (2) pick a custom From/To date range, (3) see the human ad account name on every campaign row, and (4) customize visible columns with 20+ Meta metrics including Purchases, Cost per Purchase, ROAS, Reach, Frequency, ATC, Landing Page Views, ThruPlays, and Messaging Conversations. Click the new "⚙ Columns" button to choose. Click "🏢 All accounts" to filter.',
         NOW())
 ON CONFLICT (version) DO NOTHING;
+
+-- META_ADS_v1.2.1 — alerts collapsed default + sticky toolbar + drill-down + dedup fix
+INSERT INTO changelog (version, title, body, posted_at)
+VALUES ('meta-ads-v1.2.1', 'Ads Manager — drill-down, collapsed alerts, sticky toolbar',
+        'Three improvements: (1) Alerts panel is collapsed by default — click the 🚨 bar to expand/hide; preference persists. (2) Click any campaign row to drill down — a modal opens with daily breakdown showing Spend, Impressions, Clicks, CTR, CPC, Leads, CPL, Purchases, ROAS, ATC and LPV per day. (3) The toolbar (Refresh, Columns, + Create, Period selector) now sticks to the top when you scroll. Also fixed a race condition that caused alerts to render twice on first load.',
+        NOW())
+ON CONFLICT (version) DO NOTHING;

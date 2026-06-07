@@ -1580,6 +1580,85 @@ async function api_social_ads_campaigns(token, filters) {
   });
 }
 
+// META_ADS_v1.2.1 — campaign drill-down: daily breakdown for one campaign
+async function api_social_ads_campaign_detail(token, filters) {
+  await authUser(token);
+  await _ensureSchemaS4();
+  const f = filters || {};
+  if (!f.campaign_id) throw new Error('campaign_id required');
+  const ymd = d => d.toISOString().slice(0,10);
+  let fromStr, toStr;
+  if (f.from && f.to) {
+    fromStr = String(f.from).slice(0,10);
+    toStr   = String(f.to).slice(0,10);
+  } else {
+    const days = Math.min(Math.max(Number(f.days) || 30, 1), 90);
+    const to = new Date();
+    const from = new Date(to.getTime() - (days - 1) * 86400000);
+    fromStr = ymd(from); toStr = ymd(to);
+  }
+  const r = await db.query(`
+    SELECT
+      d.date,
+      d.ad_account_id,
+      COALESCE(a.name, d.ad_account_id) AS ad_account_name,
+      a.currency AS ad_account_currency,
+      d.campaign_id, d.campaign_name,
+      d.spend, d.impressions, d.reach, d.clicks,
+      d.results, d.leads,
+      d.purchases, d.cost_per_purchase, d.purchase_value, d.purchase_roas,
+      d.add_to_carts, d.cost_per_add_to_cart,
+      d.landing_page_views, d.cost_per_landing_page_view,
+      d.frequency, d.thru_plays, d.cost_per_thru_play,
+      d.conversations_started, d.cost_per_conversation,
+      d.inline_link_clicks, d.cost_per_inline_link_click
+    FROM social_ad_daily d
+    LEFT JOIN social_ad_accounts a ON a.ad_account_id = d.ad_account_id
+    WHERE d.campaign_id = $1::text AND d.date BETWEEN $2 AND $3
+    ORDER BY d.date DESC
+  `, [String(f.campaign_id), fromStr, toStr]);
+
+  const rows = (r.rows || []).map(row => ({
+    date: row.date,
+    spend: Number(row.spend) || 0,
+    impressions: Number(row.impressions) || 0,
+    reach: Number(row.reach) || 0,
+    clicks: Number(row.clicks) || 0,
+    leads: Number(row.leads) || 0,
+    purchases: Number(row.purchases) || 0,
+    purchase_value: Number(row.purchase_value) || 0,
+    purchase_roas: Number(row.purchase_roas) || 0,
+    add_to_carts: Number(row.add_to_carts) || 0,
+    landing_page_views: Number(row.landing_page_views) || 0,
+    thru_plays: Number(row.thru_plays) || 0,
+    conversations_started: Number(row.conversations_started) || 0,
+    inline_link_clicks: Number(row.inline_link_clicks) || 0,
+    ctr: Number(row.impressions) > 0 ? (Number(row.clicks) / Number(row.impressions)) * 100 : 0,
+    cpc: Number(row.clicks) > 0 ? Number(row.spend) / Number(row.clicks) : 0,
+    cpl: Number(row.leads) > 0 ? Number(row.spend) / Number(row.leads) : 0,
+    cpm: Number(row.impressions) > 0 ? (Number(row.spend) / Number(row.impressions)) * 1000 : 0
+  }));
+
+  const meta = r.rows[0] || {};
+  return {
+    campaign_id: meta.campaign_id || String(f.campaign_id),
+    campaign_name: meta.campaign_name || '',
+    ad_account_id: meta.ad_account_id || '',
+    ad_account_name: meta.ad_account_name || '',
+    ad_account_currency: meta.ad_account_currency || '',
+    period: { from: fromStr, to: toStr, days: rows.length },
+    rows,
+    totals: {
+      spend: rows.reduce((a,r) => a + r.spend, 0),
+      impressions: rows.reduce((a,r) => a + r.impressions, 0),
+      clicks: rows.reduce((a,r) => a + r.clicks, 0),
+      leads: rows.reduce((a,r) => a + r.leads, 0),
+      purchases: rows.reduce((a,r) => a + r.purchases, 0),
+      purchase_value: rows.reduce((a,r) => a + r.purchase_value, 0)
+    }
+  };
+}
+
 async function api_social_ads_alerts(token) {
   await authUser(token);
   await _ensureSchemaS4();
@@ -1857,6 +1936,7 @@ module.exports = {
   api_social_ads_accounts_delete,
   api_social_ads_pullNow,
   api_social_ads_summary,
+  api_social_ads_campaign_detail,
   api_social_ads_campaigns,
   api_social_ads_alerts,
   api_social_ads_alerts_ack,
