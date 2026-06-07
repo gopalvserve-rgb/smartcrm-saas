@@ -58,6 +58,14 @@ function _splitCsv(s) {
 }
 
 function _flattenCfs(lead) {
+  // OUTBOUND_WH_CF_FIRE_v1 — make CF lookup tolerant of both key forms.
+  // The SPA stores rule keys WITHOUT the cf_ prefix (e.g. {"orderid":"ABC"})
+  // because the cf field-select dropdown uses cf.key as-is. Real leads also
+  // store extra_json keys WITHOUT the cf_ prefix (routes/leads.js strips it
+  // with key.slice(3) at line ~822). The previous code only added
+  // cf_-prefixed keys to the lookup map, so cfs["orderid"] was always
+  // undefined → match silently failed → webhook never fired. Now we store
+  // every extra_json key under BOTH forms so either rule shape works.
   const out = {};
   const tryAdd = (k, v) => {
     if (v == null) return;
@@ -66,12 +74,24 @@ function _flattenCfs(lead) {
   let ej = lead.extra_json;
   if (typeof ej === 'string') { try { ej = JSON.parse(ej); } catch (_) { ej = null; } }
   if (ej && typeof ej === 'object') {
-    Object.keys(ej).forEach(k => { if (k.startsWith('cf_')) tryAdd(k, ej[k]); });
+    Object.keys(ej).forEach(k => {
+      // Store under both the raw key and a cf_-prefixed form
+      tryAdd(k, ej[k]);
+      if (!k.startsWith('cf_')) tryAdd('cf_' + k, ej[k]);
+    });
   }
   if (lead.custom_fields && typeof lead.custom_fields === 'object') {
-    Object.keys(lead.custom_fields).forEach(k => tryAdd('cf_' + k, lead.custom_fields[k]));
+    Object.keys(lead.custom_fields).forEach(k => {
+      tryAdd(k, lead.custom_fields[k]);
+      if (!k.startsWith('cf_')) tryAdd('cf_' + k, lead.custom_fields[k]);
+    });
   }
-  Object.keys(lead).forEach(k => { if (k.startsWith('cf_')) tryAdd(k, lead[k]); });
+  Object.keys(lead).forEach(k => {
+    if (k.startsWith('cf_')) {
+      tryAdd(k, lead[k]);
+      tryAdd(k.slice(3), lead[k]); // also expose unprefixed form
+    }
+  });
   return out;
 }
 
@@ -104,10 +124,22 @@ async function _matchesFilters(webhook, lead) {
       ? v.filter(x => x != null && String(x).trim() !== '').map(x => String(x).trim().toLowerCase())
       : (v != null && String(v).trim() !== '' ? [String(v).trim().toLowerCase()] : []);
     if (wanted.length === 0) continue;
-    const have = cfs[String(k).toLowerCase()];
-    if (have == null) return false;
+    // OUTBOUND_WH_CF_FIRE_v1 — lookup under BOTH the raw rule key and a
+    // cf_-prefixed form. _flattenCfs now mirrors both forms too, so this
+    // is belt-and-suspenders.
+    const kLower = String(k).toLowerCase();
+    let have = cfs[kLower];
+    if (have == null && !kLower.startsWith('cf_')) have = cfs['cf_' + kLower];
+    if (have == null && kLower.startsWith('cf_')) have = cfs[kLower.slice(3)];
+    if (have == null) {
+      console.log('[outboundWebhook] cf rule miss — key', k, 'not in lead. Available cf keys:', Object.keys(cfs).join(','));
+      return false;
+    }
     const haveLower = String(have).trim().toLowerCase();
-    if (!wanted.includes(haveLower)) return false;
+    if (!wanted.includes(haveLower)) {
+      console.log('[outboundWebhook] cf rule value mismatch — key', k, 'wanted one of', wanted, 'got', haveLower);
+      return false;
+    }
   }
   return true;
 }

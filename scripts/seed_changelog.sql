@@ -68,3 +68,10 @@ VALUES ('meta-module-v1.1', 'Marketing tabs — fixed stuck Loading',
         'Ads Manager, Facebook & Instagram, Comments and Post Publisher pages now actually load instead of getting stuck at "Loading…" after a fresh Facebook connection. Settings → Integrations Meta Ads card also now correctly counts ad accounts and pages.',
         NOW())
 ON CONFLICT (version) DO NOTHING;
+
+-- OUTBOUND_WH_CF_FIRE_v1 — webhook with custom field condition not firing
+INSERT INTO changelog (version, title, body, posted_at)
+VALUES ('outbound-wh-cf-fire-v1', 'Outbound Webhooks — custom-field rules now fire',
+        'Fixed bug where webhooks with a custom-field condition would Test successfully but never fire on real lead creation. Cause: rule key and lead extra_json key form did not match (one had cf_ prefix, the other did not). Both forms are now accepted.',
+        NOW())
+ON CONFLICT (version) DO NOTHING;
