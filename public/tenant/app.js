@@ -42556,7 +42556,7 @@ try {
       const delta = Number(deltaPct);
       const arrow = delta > 0 ? '▲' : (delta < 0 ? '▼' : '·');
       const dcolor = delta > 5 ? '#16a34a' : (delta < -5 ? '#dc2626' : '#6b7280');
-      const dispVal = (currency ? '$' : '') + (typeof value === 'number' ? value.toLocaleString('en-IN', { maximumFractionDigits: currency ? 2 : 0 }) : value);
+      const dispVal = (currency ? '₹' : '') + (typeof value === 'number' ? value.toLocaleString('en-IN', { maximumFractionDigits: currency ? 2 : 0 }) : value);
       return h('div', { class:'card', style:{ padding:'.85rem 1rem', border: '1px solid #1f2937', background: '#0f172a' } },
         h('div', { style:{ display:'flex', alignItems:'center', gap:'.4rem', color: iconColor || '#a78bfa', fontSize: '.7rem', fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase' } },
           icon ? h('span', { style: { fontSize: '.95rem' } }, icon) : null,
@@ -42601,12 +42601,12 @@ try {
         // ── Summary tiles ─────────────────────────────────────────
         summaryRow.innerHTML = '';
         const reach = summary.current.reach != null ? summary.current.reach : 0;
-        summaryRow.appendChild(kpi('Spend',         summary.current.spend,       summary.delta_pct.spend, true, '$', '#22c55e'));
+        summaryRow.appendChild(kpi('Spend',         summary.current.spend,       summary.delta_pct.spend, true, '₹', '#22c55e'));
         summaryRow.appendChild(kpi('Impressions',   summary.current.impressions, summary.delta_pct.impressions, false, '👁', '#3b82f6'));
         summaryRow.appendChild(kpi('Clicks',        summary.current.clicks,      summary.delta_pct.clicks, false, '🖱', '#a855f7'));
         summaryRow.appendChild(kpi('Reach',         reach,                       summary.delta_pct.reach, false, '👥', '#ec4899'));
         summaryRow.appendChild(kpi('CTR',           summary.current.ctr.toFixed(2) + '%', null, false, '📊', '#f59e0b'));
-        summaryRow.appendChild(kpi('Avg CPC',       '$' + summary.current.cpc.toFixed(2), null, false, '$', '#06b6d4'));
+        summaryRow.appendChild(kpi('Avg CPC',       '₹' + summary.current.cpc.toFixed(2), null, false, '₹', '#06b6d4'));
 
         // ── Alerts — collapsed by default; expand on click (v1.2.1) ─────
         alertsCard.innerHTML = '';
