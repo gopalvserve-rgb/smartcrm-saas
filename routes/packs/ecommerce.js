@@ -89,8 +89,13 @@ async function install(opts) {
     ['Delivered','#10b981',7],['Return Requested','#ef4444',8],['Refunded','#84cc16',9],
     ['RTO','#dc2626',10]
   ];
+  // PACK_STAGE_TAG_v1 — tag statuses with pack_id for clean industry isolation
+  try { await db.query(`ALTER TABLE statuses ADD COLUMN IF NOT EXISTS pack_id TEXT DEFAULT NULL`); } catch(_){}
+  try { await db.query(`ALTER TABLE lead_custom_fields ADD COLUMN IF NOT EXISTS pack_id TEXT DEFAULT NULL`); } catch(_){}
+  // Deactivate any older non-generic pack statuses to keep pipeline clean
+  try { await db.query(`UPDATE statuses SET is_active=0 WHERE pack_id IS NOT NULL AND pack_id <> $1`, ['ecommerce']); } catch(_){}
   for (const s of STATUSES) {
-    try { await db.query(`INSERT INTO statuses (name,color,sort_order,is_active) VALUES ($1,$2,$3,1) ON CONFLICT (name) DO NOTHING`, s); } catch(_){}
+    try { await db.query(`INSERT INTO statuses (name,color,sort_order,is_active,pack_id) VALUES ($1,$2,$3,1,'ecommerce') ON CONFLICT (name) DO UPDATE SET is_active=1, pack_id=EXCLUDED.pack_id`, s); } catch(_){}
   }
   const CFS = [
     ['order_id','Order ID','text'],
@@ -102,7 +107,7 @@ async function install(opts) {
     ['return_reason','Return Reason','text']
   ];
   for (const cf of CFS) {
-    try { await db.query(`INSERT INTO lead_custom_fields (field_key,label,field_type,is_active) VALUES ($1,$2,$3,1) ON CONFLICT (field_key) DO NOTHING`, cf); } catch(_){}
+    try { await db.query(`INSERT INTO lead_custom_fields (field_key,label,field_type,is_active,pack_id) VALUES ($1,$2,$3,1,'ecommerce') ON CONFLICT (field_key) DO UPDATE SET is_active=1, pack_id=EXCLUDED.pack_id`, cf); } catch(_){}
   }
 }
 async function uninstall() {}

@@ -75,8 +75,13 @@ async function install(opts) {
     ['Material Ordered','#84cc16',7],['Installation In Progress','#eab308',8],
     ['Commissioned','#22c55e',9],['Subsidy Claimed','#16a34a',10]
   ];
+  // PACK_STAGE_TAG_v1 — tag statuses with pack_id for clean industry isolation
+  try { await db.query(`ALTER TABLE statuses ADD COLUMN IF NOT EXISTS pack_id TEXT DEFAULT NULL`); } catch(_){}
+  try { await db.query(`ALTER TABLE lead_custom_fields ADD COLUMN IF NOT EXISTS pack_id TEXT DEFAULT NULL`); } catch(_){}
+  // Deactivate any older non-generic pack statuses to keep pipeline clean
+  try { await db.query(`UPDATE statuses SET is_active=0 WHERE pack_id IS NOT NULL AND pack_id <> $1`, ['solar']); } catch(_){}
   for (const s of STATUSES) {
-    try { await db.query(`INSERT INTO statuses (name,color,sort_order,is_active) VALUES ($1,$2,$3,1) ON CONFLICT (name) DO NOTHING`, s); } catch(_){}
+    try { await db.query(`INSERT INTO statuses (name,color,sort_order,is_active,pack_id) VALUES ($1,$2,$3,1,'solar') ON CONFLICT (name) DO UPDATE SET is_active=1, pack_id=EXCLUDED.pack_id`, s); } catch(_){}
   }
   const CFS = [
     ['rooftop_area','Rooftop area (sqft)','number'],
@@ -87,7 +92,7 @@ async function install(opts) {
     ['discom','DISCOM','text']
   ];
   for (const cf of CFS) {
-    try { await db.query(`INSERT INTO lead_custom_fields (field_key,label,field_type,is_active) VALUES ($1,$2,$3,1) ON CONFLICT (field_key) DO NOTHING`, cf); } catch(_){}
+    try { await db.query(`INSERT INTO lead_custom_fields (field_key,label,field_type,is_active,pack_id) VALUES ($1,$2,$3,1,'solar') ON CONFLICT (field_key) DO UPDATE SET is_active=1, pack_id=EXCLUDED.pack_id`, cf); } catch(_){}
   }
 }
 async function uninstall() {}

@@ -64,12 +64,17 @@ async function install(opts) {
     }
   }
   const STATUSES = [['New Lead','#3b82f6',1],['KYC Pending','#f59e0b',2],['Docs Collected','#8b5cf6',3],['Underwriting','#a855f7',4],['Sanctioned','#10b981',5],['Disbursed','#059669',6],['Renewal Due','#f97316',7],['Lapsed','#ef4444',8]];
+  // PACK_STAGE_TAG_v1 — tag statuses with pack_id for clean industry isolation
+  try { await db.query(`ALTER TABLE statuses ADD COLUMN IF NOT EXISTS pack_id TEXT DEFAULT NULL`); } catch(_){}
+  try { await db.query(`ALTER TABLE lead_custom_fields ADD COLUMN IF NOT EXISTS pack_id TEXT DEFAULT NULL`); } catch(_){}
+  // Deactivate any older non-generic pack statuses to keep pipeline clean
+  try { await db.query(`UPDATE statuses SET is_active=0 WHERE pack_id IS NOT NULL AND pack_id <> $1`, ['finance']); } catch(_){}
   for (const s of STATUSES) {
-    try { await db.query(`INSERT INTO statuses (name,color,sort_order,is_active) VALUES ($1,$2,$3,1) ON CONFLICT (name) DO NOTHING`, s); } catch(_){}
+    try { await db.query(`INSERT INTO statuses (name,color,sort_order,is_active,pack_id) VALUES ($1,$2,$3,1,'finance') ON CONFLICT (name) DO UPDATE SET is_active=1, pack_id=EXCLUDED.pack_id`, s); } catch(_){}
   }
   const CFS = [['pan','PAN Number','text'],['cibil','CIBIL Score','number'],['loan_amount','Loan Amount','number'],['tenure_months','Tenure (months)','number'],['emi_amount','EMI Amount','number'],['policy_type','Policy Type','text'],['premium_amount','Premium Amount','number']];
   for (const cf of CFS) {
-    try { await db.query(`INSERT INTO lead_custom_fields (field_key,label,field_type,is_active) VALUES ($1,$2,$3,1) ON CONFLICT (field_key) DO NOTHING`, cf); } catch(_){}
+    try { await db.query(`INSERT INTO lead_custom_fields (field_key,label,field_type,is_active,pack_id) VALUES ($1,$2,$3,1,'finance') ON CONFLICT (field_key) DO UPDATE SET is_active=1, pack_id=EXCLUDED.pack_id`, cf); } catch(_){}
   }
 }
 async function uninstall() {}
