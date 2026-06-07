@@ -589,6 +589,15 @@ async function _createLeadFromWebhook(lead) {
   }
   // Fire automations for inbound leads
   try { require('../utils/automations').fire('lead_created', { lead: Object.assign({ id }, lead) }); } catch (_) {}
+  // OUTBOUND_WH_FB_FIRE_v1 — fire outbound webhooks for FB Lead Ads / Meta
+  // Lead Ads / generic /hook/leadsource ingest. Previously only /hook/website
+  // and manual creates called fireOutboundWebhooks, so FB leads with custom
+  // field conditions (e.g. cf_page_name=New Shop) never triggered the webhook.
+  try {
+    const { fireOutboundWebhooks } = require('./outboundWebhook');
+    setImmediate(() => fireOutboundWebhooks(Object.assign({ id }, lead))
+      .catch(e => console.error('[outboundWebhook] leadsource fire failed:', e.message)));
+  } catch (_) {}
   return { id, assigned_to: lead.assigned_to || null };
 }
 
