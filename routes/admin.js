@@ -197,6 +197,33 @@ async function api_admin_brand(_token) {
     const db = require('../db/pg');
     const r = await db.query(`SELECT pack_id FROM installed_packs WHERE is_active = 1 ORDER BY installed_at DESC LIMIT 1`);
     if (r && r.rows && r.rows[0]) industryPack = String(r.rows[0].pack_id || '');
+
+    // SHOWCASE_RE_PACK_DIAG_v1 — slug-enforcement: if the active pack
+    // doesn't match the showcase-edu / showcase-re slug pattern, the
+    // wrong pack is installed (usually leftover from prior testing).
+    // Deactivate it and switch to the right one. This used to be a
+    // negative-heal that only worked for the generic case.
+    try {
+      const store = db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore();
+      const slug = store && store.slug ? String(store.slug) : null;
+      let slugExpected = null;
+      if (slug === 'showcase-edu') slugExpected = 'education';
+      else if (slug === 'showcase-re') slugExpected = 'realestate';
+      if (slugExpected && industryPack && industryPack !== slugExpected) {
+        console.log('[admin_brand] slug-enforce: tenant', slug, 'has wrong pack', industryPack, '— switching to', slugExpected);
+        await db.query(`UPDATE installed_packs SET is_active = 0 WHERE is_active = 1`);
+        try {
+          const fw = require('./packs/_framework');
+          await fw.installPack(slugExpected, {});
+          industryPack = slugExpected;
+        } catch (e) {
+          console.warn('[admin_brand] slug-enforce install failed:', e.message);
+          industryPack = '';
+        }
+      }
+    } catch (e) {
+      console.warn('[admin_brand] slug-enforce skipped:', e.message);
+    }
   } catch (_) {}
 
   if (!industryPack) {
