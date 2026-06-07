@@ -1610,112 +1610,104 @@ function showOtpStep(challengeToken, who) {
 // NAV is kept as a flat array (computed from NAV_GROUPS) so existing code
 // that does `NAV.forEach`, `NAV.find`, `mobilePrimary.includes(item.id)`
 // keeps working unchanged.
+// MENU_REFACTOR_v1 — restructured per "CRM Menu and Settings Mapping
+// Alignment" document. Categories + labels follow Tables 3/4/6. Every
+// route id is preserved (backend unchanged). `search` field stores both
+// old + new aliases so the new sidebar search box catches either term.
 const NAV_GROUPS = [
   { label: '', items: [
-    { id: 'dashboard',  label: 'Dashboard',    icon: '📊', pinned: true }
+    { id: 'dashboard',  label: 'Dashboard',    icon: '📊', pinned: true, search: 'dashboard overview summary home' }
   ] },
-  { label: 'Sales', icon: '💼', items: [
-    { id: 'leads',      label: 'Leads',          icon: '🎯' },
-    { id: 'edufees',     label: 'Fee Collection', icon: '💰', roles: ['admin','manager','team_leader'], requiresPack: 'education' },
-    { id: 'edustudents', label: '👥 Students',      icon: '👥', roles: ['admin','manager','team_leader'], requiresPack: 'education' },
-    { id: 'educourses',  label: '📚 Courses',       icon: '📚', roles: ['admin','manager'],                requiresPack: 'education' },
-    { id: 'edudues',     label: '📋 Fee Dues',       icon: '📋', roles: ['admin','manager','team_leader','agent'], requiresPack: 'education' },
-    { id: 'edurevenue',  label: '💎 Revenue',       icon: '💎', roles: ['admin','manager'],                requiresPack: 'education' },
-    { id: 'edureports',   label: '📊 Collection Report', icon: '📊', roles: ['admin','manager'],            requiresPack: 'education' },
-    { id: 'eduattendance', label: '🗓 Attendance',    icon: '🗓', roles: ['admin','manager','team_leader'], requiresPack: 'education' },
-    { id: 'edutests',      label: '📝 Tests & Scores', icon: '📝', roles: ['admin','manager','team_leader'], requiresPack: 'education' },
-    { id: 'educrosssell',  label: '⭐ Cross-Sell',    icon: '⭐', roles: ['admin','manager'],                requiresPack: 'education' },
-    { id: 'reinventory',     label: 'Inventory Board', icon: '🏢', roles: ['admin','manager','team_leader'], requiresPack: 'realestate' },
-    { id: 'rerequirements',  label: 'Buyer Reqs',      icon: '🎯', roles: ['admin','manager','team_leader','agent'], requiresPack: 'realestate' },
-    { id: 'revisits',        label: 'Site Visits',     icon: '📅', roles: ['admin','manager','team_leader','agent'], requiresPack: 'realestate' },
-    { id: 'recpperf',        label: 'Broker Perf',     icon: '👥', roles: ['admin','manager'],                requiresPack: 'realestate' },
-    { id: 'recommissions',   label: 'Commissions',     icon: '💸', roles: ['admin','manager'],                requiresPack: 'realestate' },
-    { id: 'campaigns',  label: 'Campaigns',      icon: '📣', roles: ['admin','manager'] },
-    { id: 'pipeline',   label: 'Pipeline',       icon: '📈' },
-    { id: 'kanban',     label: 'Kanban',         icon: '🗂️' },
-    { id: 'followups',  label: 'Follow-ups',     icon: '🔔' },
-    { id: 'calendar',   label: 'Calendar',       icon: '📅' },
-    { id: 'targets',    label: 'Monthly Target', icon: '🎯' },
-    { id: 'newleads',   label: 'New leads',      icon: '✨', countKey: 'new_today' },
-    { id: 'overdue',    label: 'Overdue',        icon: '⚠️', countKey: 'overdue' },
-    { id: 'duetoday',   label: 'Due today',      icon: '📅', countKey: 'due_today' },
-    { id: 'upcoming',   label: 'Upcoming',       icon: '⏰', countKey: 'upcoming' }
+  { label: 'Sales CRM', icon: '💼', items: [
+    { id: 'leads',      label: 'Leads',                icon: '🎯', search: 'lead enquiry inquiry prospect customer lead new lead' },
+    { id: 'pipeline',   label: 'Pipeline',             icon: '📈', search: 'pipeline funnel stage deal stage lead stage' },
+    { id: 'kanban',     label: 'Kanban Board',         icon: '🗂️', search: 'kanban board stage board card view' },
+    { id: 'followups',  label: 'Follow-ups',           icon: '🔔', search: 'follow up follow-up reminder callback next action' },
+    { id: 'calendar',   label: 'Calendar',             icon: '📅', search: 'calendar meeting schedule appointment' },
+    { id: 'targets',    label: 'Monthly Targets',      icon: '🎯', search: 'target monthly target sales target goal' },
+    { id: 'newleads',   label: 'New Leads',            icon: '✨', countKey: 'new_today', search: 'new leads today fresh lead' },
+    { id: 'overdue',    label: 'Overdue Follow-ups',   icon: '⚠️', countKey: 'overdue',  search: 'overdue pending follow-up missed follow-up' },
+    { id: 'duetoday',   label: 'Due Today',            icon: '📅', countKey: 'due_today', search: 'today due today today follow-up' },
+    { id: 'upcoming',   label: 'Upcoming',             icon: '⏰', countKey: 'upcoming',  search: 'upcoming tomorrow next follow-up' },
+    { id: 'projects',   label: 'Sales Closure',        icon: '🚚', search: 'closure sale closure closed won conversion sale final closure' },
+    { id: 'quotations', label: 'Quotations',           icon: '📄', search: 'quotation quote proposal estimate' },
+    // ---- Education pack (visible only when pack is active) ----
+    { id: 'edufees',     label: 'Fee Collection', icon: '💰', roles: ['admin','manager','team_leader'], requiresPack: 'education', search: 'fees collection education' },
+    { id: 'edustudents', label: '👥 Students',      icon: '👥', roles: ['admin','manager','team_leader'], requiresPack: 'education', search: 'students learners' },
+    { id: 'educourses',  label: '📚 Courses',       icon: '📚', roles: ['admin','manager'],                requiresPack: 'education', search: 'courses programs' },
+    { id: 'edudues',     label: '📋 Fee Dues',       icon: '📋', roles: ['admin','manager','team_leader','agent'], requiresPack: 'education', search: 'dues pending fees' },
+    { id: 'edurevenue',  label: '💎 Revenue',       icon: '💎', roles: ['admin','manager'],                requiresPack: 'education', search: 'revenue income' },
+    { id: 'edureports',   label: '📊 Collection Report', icon: '📊', roles: ['admin','manager'],            requiresPack: 'education', search: 'collection report fee report' },
+    { id: 'eduattendance', label: '🗓 Attendance',    icon: '🗓', roles: ['admin','manager','team_leader'], requiresPack: 'education', search: 'attendance presence' },
+    { id: 'edutests',      label: '📝 Tests & Scores', icon: '📝', roles: ['admin','manager','team_leader'], requiresPack: 'education', search: 'tests scores marks' },
+    { id: 'educrosssell',  label: '⭐ Cross-Sell',    icon: '⭐', roles: ['admin','manager'],                requiresPack: 'education', search: 'cross sell upsell' },
+    // ---- Real Estate pack (visible only when pack is active) ----
+    { id: 'reinventory',     label: 'Inventory Board', icon: '🏢', roles: ['admin','manager','team_leader'], requiresPack: 'realestate', search: 'inventory units property board' },
+    { id: 'rerequirements',  label: 'Buyer Reqs',      icon: '🎯', roles: ['admin','manager','team_leader','agent'], requiresPack: 'realestate', search: 'buyer requirements demands' },
+    { id: 'revisits',        label: 'Site Visits',     icon: '📅', roles: ['admin','manager','team_leader','agent'], requiresPack: 'realestate', search: 'site visit property visit' },
+    { id: 'recpperf',        label: 'Broker Perf',     icon: '👥', roles: ['admin','manager'],                requiresPack: 'realestate', search: 'broker channel partner performance' },
+    { id: 'recommissions',   label: 'Commissions',     icon: '💸', roles: ['admin','manager'],                requiresPack: 'realestate', search: 'commissions payout brokerage' }
   ] },
-  { label: 'Calls', icon: '📞', items: [
-    { id: 'dialer',       label: 'Dialer',        icon: '📞' },
-    { id: 'callinsights', label: 'Call insights', icon: '🎙' },
-    { id: 'callratings',  label: 'Call ratings',  icon: '⭐', roles: ['admin', 'manager', 'team_leader'] },
-    { id: 'aiusage',      label: 'AI usage',      icon: '🤖', roles: ['admin', 'manager'] },
-    { id: 'callactivity', label: 'Call activity', icon: '📞', roles: ['admin', 'manager', 'team_leader'] }
+  { label: 'Calls & Dialer', icon: '📞', items: [
+    { id: 'dialer',       label: 'Dialer',        icon: '📞', search: 'dialer call phone make call' },
+    { id: 'callactivity', label: 'Call Activity', icon: '📞', roles: ['admin', 'manager', 'team_leader'], search: 'call activity call log outgoing incoming missed' },
+    { id: 'callinsights', label: 'Call Insights', icon: '🎙', search: 'insights call analytics call performance' },
+    { id: 'callratings',  label: 'Call Ratings',  icon: '⭐', roles: ['admin', 'manager', 'team_leader'], search: 'rating call rating quality score' },
+    { id: 'aiusage',      label: 'AI Usage',      icon: '🤖', roles: ['admin', 'manager'], search: 'ai usage ai summary call ai ai minutes' }
   ] },
-  { label: 'Catalog', icon: '📦', items: [
-    { id: 'inventory',  label: 'Inventory', icon: '📦' },
-    { id: 'projects',   label: 'Sale Closure',  icon: '🚚' }
+  /* META_MODULE_v1 — Marketing & Communication groups all outbound
+   * channels (Meta ads, Social, WhatsApp Bot, AI Assistant, Campaigns). */
+  { label: 'Marketing & Communication', icon: '📣', items: [
+    { id: 'campaigns',      label: 'Campaigns',            icon: '📣', roles: ['admin','manager'], search: 'campaign campaign list lead campaign source' },
+    { id: 'socialinbox',    label: 'Social Inbox',         icon: '💬', countKey: 'social_unread',    search: 'social inbox inbox messages dm facebook instagram messenger' },
+    { id: 'socialcomments', label: 'Social Comments',      icon: '💭', countKey: 'social_unreplied', search: 'comments social comments replies' },
+    { id: 'socialpublish',  label: 'Social Publisher',     icon: '📤', search: 'publisher post schedule post social post' },
+    { id: 'socialads',      label: 'Ads Manager',          icon: '📊', search: 'ads meta ads facebook ads instagram ads ads manager' },
+    { id: 'whatsbot',       label: 'WhatsApp Bot',         icon: '💬', search: 'whatsapp whatsbot bot whatsapp automation chat' },
+    { id: 'aibot',          label: 'AI Assistant',         icon: '🤖', roles: ['admin', 'manager'], search: 'ai bot assistant chatbot automation' }
   ] },
-  { label: 'Reports', icon: '📉', items: [
-    { id: 'reports',       label: 'Reports',         icon: '📉', roles: ['admin', 'manager', 'team_leader'] },
-    { id: 'reportbuilder', label: 'Report builder',  icon: '🧪', roles: ['admin', 'manager', 'team_leader'] },
-    { id: 'tatreport',     label: 'TAT report',      icon: '⏱️', roles: ['admin', 'manager', 'team_leader'] },
-    /* LEAD_ACTIVITY_v1 */
-    { id: 'activityreport', label: 'Activity report', icon: '📝', roles: ['admin', 'manager', 'team_leader'] },
-    /* WA_REPORT_v1 */
-    { id: 'whatsappreport', label: 'WhatsApp report', icon: '💬', roles: ['admin', 'manager', 'team_leader'] },
-    /* CAMPAIGN_REPORT_v1.1 */
-    { id: 'campaignreport', label: 'Campaign report', icon: '📊', roles: ['admin', 'manager', 'team_leader'] }
+  { label: 'Reports & Analytics', icon: '📉', items: [
+    { id: 'reports',       label: 'Reports Dashboard', icon: '📉', roles: ['admin', 'manager', 'team_leader'], search: 'reports analytics dashboard summary report' },
+    { id: 'reportbuilder', label: 'Report Builder',    icon: '🧪', roles: ['admin', 'manager', 'team_leader'], search: 'builder custom report create report' },
+    { id: 'tatreport',     label: 'TAT Report',        icon: '⏱️', roles: ['admin', 'manager', 'team_leader'], search: 'tat turnaround time response time' },
+    { id: 'activityreport', label: 'Activity Report',  icon: '📝', roles: ['admin', 'manager', 'team_leader'], search: 'activity report user activity work report' },
+    { id: 'whatsappreport', label: 'WhatsApp Report',  icon: '💬', roles: ['admin', 'manager', 'team_leader'], search: 'whatsapp report message report whatsapp analytics' },
+    { id: 'campaignreport', label: 'Campaign Report',  icon: '📊', roles: ['admin', 'manager', 'team_leader'], search: 'campaign report campaign analytics' }
   ] },
-  /* META_MODULE_v1 Phase C — extract Marketing into its own group above
-   * Workspace so Ads Manager and FB/IG features are easy to find. */
-  { label: 'Marketing', icon: '📣', items: [
-    { id: 'socialads',      label: 'Ads Manager',          icon: '📊' },
-    { id: 'socialinbox',    label: 'Facebook & Instagram', icon: '💬', countKey: 'social_unread' },
-    { id: 'socialcomments', label: 'Comments',             icon: '💭', countKey: 'social_unreplied' },
-    { id: 'socialpublish',  label: 'Post Publisher',       icon: '📤' }
+  { label: 'Products & Inventory', icon: '📦', items: [
+    { id: 'inventory',  label: 'Inventory',        icon: '📦', search: 'inventory stock product stock' },
+    { id: 'invItems',   label: 'Items & Services', icon: '📦', module: 'invoicing', search: 'items services product master service master items/services' }
   ] },
-  { label: 'Workspace', icon: '💬', items: [
-    { id: 'whatsbot',   label: 'WhatsBot',   icon: '💬' },
-    { id: 'aibot',      label: 'AI Bot',     icon: '🤖', roles: ['admin', 'manager'] },
-    { id: 'quotations', label: 'Quotations', icon: '📄' },
-    { id: 'knowledge',  label: 'Knowledge',  icon: '📚' },
-    { id: 'teamchat',   label: 'Team chat',  icon: '👥', countKey: 'chat_unread' }
+  // ---- Billing & Accounts (GST Invoicing) — OPT-IN per tenant ----
+  // nav_ids tagged with module: 'invoicing' so the existing module-active
+  // filter hides the entire group unless super-admin enables 'invoicing'.
+  { label: 'Billing & Accounts', icon: '🧾', items: [
+    { id: 'invDashboard', label: 'Invoicing Dashboard',   icon: '📊', module: 'invoicing', search: 'invoice dashboard billing dashboard' },
+    { id: 'invList',      label: 'Invoices',              icon: '🧾', module: 'invoicing', search: 'invoice bill billing tax invoice' },
+    { id: 'invCompanies', label: 'My Companies',          icon: '🏢', module: 'invoicing', search: 'company companies billing entity' },
+    { id: 'invCustomers', label: 'Bill-To Customers',     icon: '👤', module: 'invoicing', search: 'bill to billing customer customer billing' },
+    { id: 'invGstr1',     label: 'GSTR-1 Export',         icon: '📤', module: 'invoicing', search: 'gstr gst gstr-1 gst export' },
+    { id: 'invSettings',  label: 'Billing Settings & T&C', icon: '⚙️', module: 'invoicing', search: 'billing settings terms terms and conditions t&c' }
   ] },
-  { label: 'HR & Me', icon: '🕒', items: [
-    { id: 'tasks',      label: 'Tasks',      icon: '✅' },
-    { id: 'attendance', label: 'Attendance', icon: '🕒' },
-    { id: 'tracking',   label: 'Location tracking', icon: '🗺️' },
-    { id: 'leaves',     label: 'Leaves',     icon: '🏖️' },
-    { id: 'salary',     label: 'Salary',     icon: '💰' },
-    { id: 'bank',       label: 'Bank',       icon: '🏦' }
+  { label: 'HR & Team Management', icon: '🕒', items: [
+    { id: 'tasks',      label: 'Tasks',             icon: '✅', search: 'task tasks to-do work assigned' },
+    { id: 'attendance', label: 'Attendance',        icon: '🕒', search: 'attendance check-in check-out presence' },
+    { id: 'tracking',   label: 'Location Tracking', icon: '🗺️', search: 'location tracking field tracking gps' },
+    { id: 'leaves',     label: 'Leaves',            icon: '🏖️', search: 'leave leaves leave request holiday' },
+    { id: 'salary',     label: 'Salary',            icon: '💰', search: 'salary payroll pay wages' },
+    { id: 'bank',       label: 'Bank',              icon: '🏦', search: 'bank bank details account details' },
+    { id: 'teamchat',   label: 'Team Chat',         icon: '👥', countKey: 'chat_unread', search: 'team chat internal chat message' }
   ] },
-  // ---- Accounts (GST Invoicing) — OPT-IN per tenant ----
-  // nav_ids are tagged with `module: 'invoicing'` so the existing
-  // module-active filter (in renderSidebar) hides the entire group
-  // unless super-admin has flipped the 'invoicing' key on for this
-  // tenant. Backend routes also fail closed with 403.
-  { label: 'Accounts', icon: '🧾', items: [
-    { id: 'invDashboard', label: 'Invoicing Dashboard', icon: '📊', module: 'invoicing' },
-    { id: 'invList',      label: 'Invoices',            icon: '🧾', module: 'invoicing' },
-    { id: 'invCompanies', label: 'My Companies',        icon: '🏢', module: 'invoicing' },
-    { id: 'invCustomers', label: 'Bill-To Customers',   icon: '👤', module: 'invoicing' },
-    { id: 'invItems',     label: 'Items / Services',    icon: '📦', module: 'invoicing' },
-    { id: 'invGstr1',     label: 'GSTR-1 Export',       icon: '📤', module: 'invoicing' },
-    { id: 'invSettings',  label: 'Settings & T&C',      icon: '⚙️', module: 'invoicing' }
+  { label: 'Knowledge & Support', icon: '📚', items: [
+    { id: 'knowledge',  label: 'Knowledge Base',     icon: '📚', search: 'knowledge knowledge base help article faq' },
+    { id: 'tutorial',   label: 'SmartCRM Tutorial',  icon: '📖', search: 'tutorial guide help' },
+    { id: 'kbvideos',   label: 'Video Tutorials',    icon: '🎬', search: 'video tutorial youtube guide' },
+    { id: 'tickets',    label: 'Support Tickets',    icon: '🎫', search: 'support ticket help desk raise issue' }
   ] },
-  { label: 'Admin', icon: '⚙️', items: [
-    { id: 'users', label: 'Users',    icon: '👥', roles: ['admin', 'manager'] },
-    { id: 'admin', label: 'Settings', icon: '⚙️', roles: ['admin'] },
-    /* COMPLIANCE_v1 */
-    { id: 'compliance', label: 'Compliance', icon: '🛡', roles: ['admin', 'manager', 'team_leader'] }
-  ] },
-  // TKT_UI_v1 — Help & Support menu surfaces the cross-tenant ticket system.
-  // Visible to every role so any user can raise a ticket; replies thread
-  // shows in the same view. Tickets live in the SaaS control DB and the
-  // SPA hits /api/saas (not /api) through sapi(), unlike the rest of the
-  // CRM which targets /api.
-  { label: 'Help & Support', icon: '🎫', items: [
-    /* TUTORIAL_PAGE_v1 — opens the public /tutorial page in a new tab */
-    { id: 'tutorial', label: 'SmartCRM Tutorial', icon: '📚' },
-    { id: 'kbvideos', label: 'Video Tutorials', icon: '🎬' },
-    { id: 'tickets',  label: 'Support Tickets', icon: '🎫' }
+  { label: 'Admin & Settings', icon: '⚙️', items: [
+    { id: 'users',      label: 'Users',            icon: '👥', roles: ['admin', 'manager'], search: 'users staff team member role' },
+    { id: 'admin',      label: 'General Settings', icon: '⚙️', roles: ['admin'],            search: 'settings general settings system settings configuration' },
+    { id: 'compliance', label: 'Compliance',       icon: '🛡', roles: ['admin', 'manager', 'team_leader'], search: 'compliance policy legal audit' }
   ] }
 ];
 // Flatten for backwards-compat with anywhere that iterates NAV.
@@ -1826,6 +1818,42 @@ function renderShell() {
       ...tail
     ];
   }
+
+  // MENU_REFACTOR_v1 — main sidebar search box.
+  // Filters all NAV anchors live by label + per-item search aliases
+  // (including old names). Hides groups with 0 matches.
+  const _navSearchWrap = h('div', { class: 'nav-search-wrap', style: { padding: '4px 8px 8px 8px' } });
+  const _navSearchInp = h('input', {
+    type: 'search',
+    placeholder: '🔎 Search menu… (old name OK)',
+    autocomplete: 'off',
+    style: { width: '100%', padding: '6px 10px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.18)', background: 'rgba(255,255,255,0.06)', color: 'inherit', fontSize: '.82rem' }
+  });
+  _navSearchWrap.appendChild(_navSearchInp);
+  nav.appendChild(_navSearchWrap);
+  _navSearchInp.addEventListener('input', () => {
+    const q = _navSearchInp.value.trim().toLowerCase();
+    nav.querySelectorAll('.nav-group, .nav-group-items > a, a[data-view]').forEach(el => {
+      // skip the search wrap itself
+      if (el.closest && el.closest('.nav-search-wrap')) return;
+    });
+    // Walk every nav anchor and every nav-group; show/hide based on match.
+    const allAnchors = nav.querySelectorAll('a[data-view]');
+    allAnchors.forEach(a => {
+      const navId = a.getAttribute('data-view');
+      const item = NAV.find(it => it.id === navId);
+      const hay = ((item && item.label) || a.textContent || '').toLowerCase() + ' ' + (item && item.search ? String(item.search).toLowerCase() : '');
+      const m = !q || hay.includes(q);
+      a.style.display = m ? '' : 'none';
+    });
+    // For each group, hide group entirely if all its items are hidden,
+    // and force-expand groups that have matches so the user sees them.
+    nav.querySelectorAll('.nav-group').forEach(g => {
+      const visible = Array.from(g.querySelectorAll('a[data-view]')).filter(a => a.style.display !== 'none').length;
+      g.style.display = visible ? '' : 'none';
+      if (q && visible) g.classList.remove('collapsed');
+    });
+  });
 
   _orderedGroups.forEach(group => {
     // Build the visible item anchors first so we can skip an empty group.
@@ -20982,68 +21010,77 @@ async function downloadReportBuilderExcel() {
    under .admin-settings-* (admin-settings-shell etc.). */
 VIEWS.admin = async (view) => {
   view.innerHTML = '';
-  // Each group is { title, items:[{id,label}] }. Order = render order in the rail.
+  // MENU_REFACTOR_v1 — Settings restructured per Tables 10/11/13 of the
+  // Menu & Settings Mapping document. IDs preserved (backend unchanged).
+  // `search` field carries old + new aliases (Table 14) so users can find
+  // a setting by either the old name (SMTP, Sources) or the new label.
   const groups = [
-    { title: 'General', items: [
-      { id: 'company',      label: '🏢 Company' },
-      { id: 'permissions',  label: '🔐 Permissions' },
-      { id: 'roles',        label: '📛 Roles' },
-      { id: 'smtp',         label: '✉️ SMTP' },
+    { title: 'Organization & Access', items: [
+      { id: 'company',      label: '🏢 Company Profile', search: 'company profile organization business details branding' },
+      { id: 'roles',        label: '📛 Roles',           search: 'roles user role access role admin role' },
+      { id: 'permissions',  label: '🔐 Permissions',     search: 'permissions access rights module access' },
+      { id: 'smtp',         label: '✉️ SMTP Settings',   search: 'smtp email mail email server sender email' }
     ]},
-    { title: 'Leads', items: [
-      { id: 'sources',      label: '🔍 Sources' },
-      { id: 'statuses',     label: '🟢 Statuses' },
-      { id: 'customfields', label: '➕ Custom Fields' },
-      { id: 'tags',         label: '🏷 Tags' },
-      { id: 'products',     label: '📦 Products' },
-      { id: 'projstages',   label: '🚚 Sale Final Closure Stages' },
-      { id: 'duplicates',   label: '👥 Duplicates' },
-      { id: 'quotation',    label: '📄 Quotation Defaults' },
+    { title: 'Lead Setup', items: [
+      { id: 'sources',      label: '🔍 Lead Sources',        search: 'sources lead source enquiry source campaign source' },
+      { id: 'statuses',     label: '🟢 Lead Statuses',       search: 'statuses lead status stage status lead progress' },
+      { id: 'customfields', label: '➕ Lead Custom Fields',  search: 'custom fields fields lead fields form fields' },
+      { id: 'tags',         label: '🏷 Lead Tags',           search: 'tags label lead tag segmentation' },
+      { id: 'duplicates',   label: '👥 Duplicate Rules',     search: 'duplicates duplicate lead merge duplicate detection' },
+      { id: 'leadcardextras', label: '🪪 Lead Card Fields',  search: 'lead card card fields visible fields card view' }
     ]},
-    { title: 'Routing', items: [
-      { id: 'rules',        label: '⚖️ Auto-assign Rules' },
-      { id: 'campaigns',    label: '🎯 Campaigns' },
-      { id: 'pullleads',    label: '📥 Lead Pull' },
+    { title: 'Sales & Quotation Setup', items: [
+      { id: 'products',     label: '📦 Products / Services',    search: 'products services items product master service master' },
+      { id: 'projstages',   label: '🚚 Sales Closure Stages',   search: 'closure final closure sale final closure won stages' },
+      { id: 'quotation',    label: '📄 Quotation Defaults',     search: 'quotation quote defaults proposal defaults t&c' }
     ]},
-    { title: 'Channels', items: [
-      { id: 'whatsapp',     label: '💬 WhatsApp' },
-      { id: 'fb',           label: '🌍 Facebook' },
-      { id: 'api',          label: '🔌 Website API' },
-      { id: 'integrations', label: '🧩 Integrations' },
-      { id: 'outwh',       label: '🚀 Outbound Webhooks' },
-      { id: 'gconvexp',     label: '📈 Google Ads Export', roles: ['admin', 'manager'] },
-      { id: 'gcalintg',     label: '📅 Google Calendar' },
-      { id: 'qrforms',      label: '📲 QR Lead Forms' },
-      { id: 'forms',        label: '📝 Forms' },
-      { id: 'pages',        label: '🌐 Landing Pages' },
-      { id: 'wawidget',     label: '💚 WhatsApp Chat Widget' },
-      { id: 'packs',        label: '🧩 Industry Packs', roles: ['admin'] },
-      { id: 'whlogs',       label: '📡 Webhook logs' },
-      { id: 'recdiag',      label: '🎧 Recording diagnostics' },
-      { id: 'pendingcalls', label: '📞 Pending calls' },
-      { id: 'chatperm',     label: '💬 Chat permissions' },
-      { id: 'health',       label: '🩺 Backend health' },
+    { title: 'Lead Routing', items: [
+      { id: 'rules',        label: '⚖️ Auto-Assign Rules',   search: 'auto assign assignment assign rules routing' },
+      { id: 'campaigns',    label: '🎯 Campaign Routing',    search: 'campaigns routing campaign campaign assignment' },
+      { id: 'pullleads',    label: '📥 Lead Pull Settings',  search: 'lead pull pull lead claim lead self assign' }
     ]},
-    { title: 'Automation', items: [
-      { id: 'automations',  label: '⚡ Automations' },
-      { id: 'nurture',      label: '🌱 Nurture Sequences' },
-      { id: 'tat',          label: '⏱️ TAT' },
-      { id: 'teamstatuses', label: '👥 Team statuses' },
+    { title: 'Channels & Integrations', items: [
+      { id: 'whatsapp',     label: '💬 WhatsApp',              search: 'whatsapp wa channel' },
+      { id: 'fb',           label: '🌍 Facebook Lead Forms',   search: 'facebook fb leads meta leads instant form' },
+      { id: 'api',          label: '🔌 Website API',           search: 'website api api website leads webhook lead' },
+      { id: 'integrations', label: '🧩 External Integrations', search: 'integrations make zapier pabbly external integrations third party' },
+      { id: 'outwh',        label: '🚀 Outbound Webhooks',     search: 'webhook outbound webhook postback callback url' },
+      { id: 'gconvexp',     label: '📈 Google Ads Export', roles: ['admin', 'manager'], search: 'google ads ads export offline conversion' },
+      { id: 'gcalintg',     label: '📅 Google Calendar',       search: 'google calendar calendar integration meet' },
+      { id: 'qrforms',      label: '📲 QR Lead Forms',         search: 'qr form qr lead scan form' },
+      { id: 'forms',        label: '📝 Forms',                 search: 'forms form builder' },
+      { id: 'pages',        label: '🌐 Landing Pages',         search: 'landing pages page lead capture' },
+      { id: 'wawidget',     label: '💚 WhatsApp Chat Widget',  search: 'whatsapp chat widget site widget embed' },
+      { id: 'packs',        label: '🧩 Industry Packs', roles: ['admin'], search: 'industry packs education real estate vertical' }
     ]},
-    { title: 'Appearance', items: [
-      { id: 'announce',     label: '📢 Announcements' },
-      { id: 'menu',         label: '🧭 Menu visibility' },
-      { id: 'menuorder',    label: '🧭 Menu order' },
-      { id: 'leadcardextras', label: '🪪 Lead card fields' },
+    { title: 'Call & Chat Settings', items: [
+      { id: 'recdiag',      label: '🎧 Call Recording Diagnostics', search: 'recording call recording diagnostics call issue' },
+      { id: 'pendingcalls', label: '📞 Pending Call Queue',         search: 'pending calls missed sync call queue' },
+      { id: 'chatperm',     label: '💬 Chat Permissions',           search: 'chat permissions chat permission whatsapp visibility' }
     ]},
-    { title: 'Danger', items: [
-      { id: 'dangerzone',   label: '🛑 Danger zone' },
+    { title: 'Automation & SLA', items: [
+      { id: 'automations',  label: '⚡ Automations',         search: 'automations automation rules workflow' },
+      { id: 'nurture',      label: '🌱 Nurture Sequences',  search: 'nurture sequences journey drip' },
+      { id: 'tat',          label: '⏱️ TAT / SLA Rules',    search: 'tat sla turnaround time response time' },
+      { id: 'teamstatuses', label: '👥 Team Statuses',       search: 'team statuses team status user status availability' }
     ]},
+    { title: 'UI & Menu Settings', items: [
+      { id: 'announce',     label: '📢 Announcements',  search: 'announcements banner message' },
+      { id: 'menu',         label: '🧭 Menu Visibility', search: 'menu visibility hide menu show menu' },
+      { id: 'menuorder',    label: '🧭 Menu Order',      search: 'menu order sidebar order rearrange' }
+    ]},
+    { title: 'System Monitoring', items: [
+      { id: 'whlogs',       label: '📡 Webhook Logs',  search: 'webhook logs logs delivery logs error logs' },
+      { id: 'health',       label: '🩺 Backend Health', search: 'backend health system health server status diagnostics' }
+    ]},
+    { title: 'Danger Zone', items: [
+      { id: 'dangerzone',   label: '🛑 Danger Zone', search: 'danger delete reset irreversible destructive' }
+    ]}
   ];
 
   const search = h('input', {
     type: 'search', class: 'admin-settings-search',
-    placeholder: 'Search settings…', autocomplete: 'off'
+    placeholder: 'Search settings… (try old name too)', autocomplete: 'off'
   });
 
   const railGroups = groups.map(g => {
@@ -21052,6 +21089,8 @@ VIEWS.admin = async (view) => {
         class: 'admin-settings-item',
         'data-tab': t.id,
         'data-label': t.label.toLowerCase(),
+        // MENU_REFACTOR_v1 — also expose aliases so search finds both old + new names
+        'data-search': (t.label + ' ' + (t.search || '')).toLowerCase(),
         onclick: () => showAdminTab(t.id)
       }, t.label)
     );
@@ -21079,7 +21118,9 @@ VIEWS.admin = async (view) => {
     railGroups.forEach(g => {
       let visible = 0;
       g.items.forEach(it => {
-        const m = !q || it.dataset.label.includes(q);
+        // MENU_REFACTOR_v1 — match against label OR aliases
+        const hay = it.dataset.search || it.dataset.label || '';
+        const m = !q || hay.includes(q);
         it.style.display = m ? '' : 'none';
         if (m) visible++;
       });

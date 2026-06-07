@@ -103,3 +103,10 @@ VALUES ('outbound-wh-v7', 'Outbound Webhooks — Contains / Not equals / Exact o
         'Custom-field rules in Outbound Webhooks now support operators. Each rule row has an operator dropdown next to the field: (1) Equals — case-insensitive match (default, same as before). (2) Exact — case-sensitive exact match. (3) Contains — fires when the field value contains your text anywhere (great for partial matches like "New Shop" matching "New Shop - Delhi"). (4) Not equals — fires only when the field value is NOT in your list. Multiple values per row still work as OR within the chosen operator. Existing rules continue working as Equals.',
         NOW())
 ON CONFLICT (version) DO NOTHING;
+
+-- MENU_REFACTOR_v1 — main + settings sidebar renames, reorder, search
+INSERT INTO changelog (version, title, body, posted_at)
+VALUES ('menu-refactor-v1', 'Sidebar refresh — cleaner categories, search box in both menus',
+        'Big navigation cleanup. Main sidebar categories are now grouped by workflow: Dashboard, Sales CRM, Calls & Dialer, Marketing & Communication, Reports & Analytics, Products & Inventory, Billing & Accounts, HR & Team Management, Knowledge & Support, and Admin & Settings. Reports stay in one place (Reports & Analytics). Quotations and Sales Closure moved under Sales CRM. Marketing groups Ads Manager, Social, Campaigns, WhatsApp Bot, and AI Assistant. Settings is restructured too — Organization & Access, Lead Setup, Sales & Quotation Setup, Lead Routing, Channels & Integrations, Call & Chat Settings, Automation & SLA, UI & Menu Settings, System Monitoring, and Danger Zone. NEW: Both the main sidebar and Settings have a search box at the top. Type any old or new name (e.g. "WhatsBot", "Due today", "Sources", "Sale Final Closure") and the matching item appears instantly — no need to learn the new names. Existing routes and permissions are unchanged.',
+        NOW())
+ON CONFLICT (version) DO NOTHING;
