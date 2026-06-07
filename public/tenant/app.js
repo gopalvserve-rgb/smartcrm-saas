@@ -34805,7 +34805,17 @@ async function _outWhRender(wrap) {
   const tbody = h('tbody', {});
   rows.forEach(r => {
     let cfPretty = '';
-    try { const o = typeof r.cf_filter_json === 'string' ? JSON.parse(r.cf_filter_json||'{}') : (r.cf_filter_json||{}); cfPretty = Object.entries(o).filter(([k,v])=>v).map(([k,v])=>k+'='+v).join(', '); } catch (_) {}
+    try {
+      const o = typeof r.cf_filter_json === 'string' ? JSON.parse(r.cf_filter_json||'{}') : (r.cf_filter_json||{});
+      const OP_SYM = { equals:'=', exact:'==', contains:'~', not_equals:'≠' };
+      cfPretty = Object.entries(o).filter(([k,v])=>v != null).map(([k,v])=>{
+        let op = 'equals', vals = v;
+        if (v && typeof v === 'object' && !Array.isArray(v) && (v.op || v.values)) { op = String(v.op||'equals'); vals = v.values; }
+        const vs = Array.isArray(vals) ? vals.join('|') : String(vals||'');
+        if (!vs) return '';
+        return k + (OP_SYM[op]||'=') + vs;
+      }).filter(Boolean).join(', ');
+    } catch (_) {}
     const filters = [
       r.source_filter ? 'src: ' + r.source_filter : '',
       r.status_filter ? 'sts: ' + r.status_filter : '',
@@ -34963,6 +34973,16 @@ async function _outWhOpenEditor(row, refreshTarget) {
     cfRows.forEach((r, idx) => {
       const rowEl = h('div', { style: { display:'flex', gap:'6px', alignItems:'center', flexWrap:'wrap' } });
       const fieldSel = _cfFieldOptions(r.key);
+      // OUTBOUND_WH_v7 — operator picker
+      const opSel = h('select', { style: { padding:'6px 8px', borderRadius:'6px', border:'1px solid #cbd5e1', background:'#f8fafc', fontSize:'.85rem', flex:'0 0 auto' } });
+      const OPS = [
+        { v:'equals',     label:'Equals' },
+        { v:'exact',      label:'Exact (case-sensitive)' },
+        { v:'contains',   label:'Contains' },
+        { v:'not_equals', label:'Not equals' }
+      ];
+      const curOp = String(r.op || 'equals').toLowerCase();
+      OPS.forEach(o => opSel.appendChild(h('option', { value:o.v, selected: o.v===curOp ? 'selected' : null }, o.label)));
       const valBox = h('div', { style: { flex:'1' } });
       let valInp = _cfValueInput(r.key, r.value);
       valBox.appendChild(valInp);
@@ -34973,28 +34993,49 @@ async function _outWhOpenEditor(row, refreshTarget) {
         valBox.appendChild(valInp);
         r._valBox = valInp;
       };
+      opSel.onchange = () => { r.op = opSel.value; };
       r._fieldSel = fieldSel;
+      r._opSel = opSel;
       r._valBox = valInp;
       const delBtn = h('button', { type:'button', style: { background:'#fee2e2', color:'#7f1d1d', border:'1px solid #fca5a5', borderRadius:'6px', padding:'4px 8px', cursor:'pointer' } }, '✕');
       delBtn.onclick = () => { cfRows.splice(idx, 1); _renderCfRows(); };
       rowEl.appendChild(fieldSel);
-      rowEl.appendChild(h('span', { style: { color:'#64748b', fontSize:'.85rem' } }, '='));
+      rowEl.appendChild(opSel);
       rowEl.appendChild(valBox);
       rowEl.appendChild(delBtn);
       cfWrap.appendChild(rowEl);
     });
     const addBtn = h('button', { type:'button', class:'btn small ghost', style: { alignSelf:'flex-start' } }, '➕ Add custom-field rule');
-    addBtn.onclick = () => { cfRows.push({ key:'', value:'' }); _renderCfRows(); };
+    addBtn.onclick = () => { cfRows.push({ key:'', op:'equals', value:'' }); _renderCfRows(); };
     cfWrap.appendChild(addBtn);
   }
-  Object.keys(cfRulesInit).forEach(k => { if (k && cfRulesInit[k]) cfRows.push({ key: k, value: String(cfRulesInit[k]) }); });
+  Object.keys(cfRulesInit).forEach(k => {
+    if (!k) return;
+    const raw = cfRulesInit[k];
+    // OUTBOUND_WH_v7 — accept new shape {op, values} or legacy string/array
+    let op = 'equals', val = raw;
+    if (raw && typeof raw === 'object' && !Array.isArray(raw) && (raw.op || raw.values)) {
+      op = String(raw.op || 'equals');
+      val = raw.values;
+    }
+    if (val == null || (Array.isArray(val) && val.length === 0) || (typeof val === 'string' && val.trim() === '')) return;
+    cfRows.push({ key: k, op: op, value: Array.isArray(val) ? val : String(val) });
+  });
   _renderCfRows();
   function _collectCfRules() {
+    // OUTBOUND_WH_v7 — emit {op, values} per rule (always array of values)
     const out = {};
     cfRows.forEach(r => {
       const k = r._fieldSel ? r._fieldSel.value : r.key;
-      const v = r._valBox && r._valBox.getValue ? r._valBox.getValue() : (r._valBox ? r._valBox.value : r.value);
-      if (k && v) out[k] = v;
+      const op = r._opSel ? r._opSel.value : (r.op || 'equals');
+      let v = r._valBox && r._valBox.getValue ? r._valBox.getValue() : (r._valBox ? r._valBox.value : r.value);
+      if (!k) return;
+      if (v == null) return;
+      const values = Array.isArray(v)
+        ? v.map(x => String(x).trim()).filter(Boolean)
+        : (String(v).trim() === '' ? [] : [String(v).trim()]);
+      if (values.length === 0) return;
+      out[k] = { op: op, values: values };
     });
     return out;
   }

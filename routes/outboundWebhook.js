@@ -117,27 +117,50 @@ async function _matchesFilters(webhook, lead) {
   if (typeof cfRules === 'string') { try { cfRules = JSON.parse(cfRules); } catch (_) { cfRules = {}; } }
   cfRules = cfRules || {};
   const cfs = _flattenCfs(lead);
-  for (const [k, v] of Object.entries(cfRules)) {
-    // OUTBOUND_WH_v3 — value may be a single string OR an array (OR semantics within one key).
-    // Empty / null / empty-array → no rule on this key.
-    const wanted = Array.isArray(v)
-      ? v.filter(x => x != null && String(x).trim() !== '').map(x => String(x).trim().toLowerCase())
-      : (v != null && String(v).trim() !== '' ? [String(v).trim().toLowerCase()] : []);
-    if (wanted.length === 0) continue;
-    // OUTBOUND_WH_CF_FIRE_v1 — lookup under BOTH the raw rule key and a
-    // cf_-prefixed form. _flattenCfs now mirrors both forms too, so this
-    // is belt-and-suspenders.
+  for (const [k, raw] of Object.entries(cfRules)) {
+    // OUTBOUND_WH_v7 — rule shape is either:
+    //   legacy: "value" | ["v1","v2"]           → treat as op:'equals'
+    //   new:    { op: 'equals'|'exact'|'contains'|'not_equals', values: [...] }
+    let op = 'equals';
+    let rawVals = raw;
+    if (raw && typeof raw === 'object' && !Array.isArray(raw) && (raw.op || raw.values)) {
+      op = String(raw.op || 'equals').toLowerCase();
+      rawVals = raw.values;
+    }
+    const wantedRaw = Array.isArray(rawVals)
+      ? rawVals.filter(x => x != null && String(x).trim() !== '').map(x => String(x).trim())
+      : (rawVals != null && String(rawVals).trim() !== '' ? [String(rawVals).trim()] : []);
+    if (wantedRaw.length === 0) continue;
+    const wantedLower = wantedRaw.map(x => x.toLowerCase());
+
+    // OUTBOUND_WH_CF_FIRE_v1 — lookup under BOTH the raw rule key and cf_-prefixed form.
     const kLower = String(k).toLowerCase();
     let have = cfs[kLower];
     if (have == null && !kLower.startsWith('cf_')) have = cfs['cf_' + kLower];
     if (have == null && kLower.startsWith('cf_')) have = cfs[kLower.slice(3)];
     if (have == null) {
-      console.log('[outboundWebhook] cf rule miss — key', k, 'not in lead. Available cf keys:', Object.keys(cfs).join(','));
+      // for not_equals on a missing field, treat as pass (no value can equal something it isn't)
+      if (op === 'not_equals') continue;
+      console.log('[outboundWebhook] cf rule miss — key', k, 'not in lead. op=' + op + '. Available cf keys:', Object.keys(cfs).join(','));
       return false;
     }
-    const haveLower = String(have).trim().toLowerCase();
-    if (!wanted.includes(haveLower)) {
-      console.log('[outboundWebhook] cf rule value mismatch — key', k, 'wanted one of', wanted, 'got', haveLower);
+    const haveRaw = String(have).trim();
+    const haveLower = haveRaw.toLowerCase();
+
+    let pass = false;
+    if (op === 'contains') {
+      pass = wantedLower.some(w => haveLower.includes(w));
+    } else if (op === 'exact') {
+      // case-sensitive exact match
+      pass = wantedRaw.includes(haveRaw);
+    } else if (op === 'not_equals') {
+      pass = !wantedLower.includes(haveLower);
+    } else {
+      // equals (case-insensitive) — default + legacy behaviour
+      pass = wantedLower.includes(haveLower);
+    }
+    if (!pass) {
+      console.log('[outboundWebhook] cf rule value mismatch — key', k, 'op=' + op, 'wanted', wantedRaw, 'got', haveRaw);
       return false;
     }
   }

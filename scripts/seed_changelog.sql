@@ -96,3 +96,10 @@ VALUES ('meta-ads-v1.3', 'Ads Manager — totals, pivot view, in-app campaign cr
         'Three big additions: (1) Drill-down is now inline — click any campaign row and the daily breakdown expands BELOW it on the same page (no more modal popup). (2) Totals row at the bottom of the campaigns table aggregates spend, impressions, clicks, leads, purchases, ROAS and every other visible metric. (3) Pivot Table view groups campaigns by name with parent "All" totals + per-account sub-rows (auto-enabled when 2+ accounts selected). PLUS: real in-app campaign creation — the + Create button now opens a form where you pick a Name, Objective, Ad Account, Daily Budget, and start Status; the campaign is created directly via Meta Marketing API. First-time use prompts a one-click "Reconnect Facebook" to grant the ads_management permission.',
         NOW())
 ON CONFLICT (version) DO NOTHING;
+
+-- OUTBOUND_WH_v7 — operators on custom-field rules
+INSERT INTO changelog (version, title, body, posted_at)
+VALUES ('outbound-wh-v7', 'Outbound Webhooks — Contains / Not equals / Exact operators on CF rules',
+        'Custom-field rules in Outbound Webhooks now support operators. Each rule row has an operator dropdown next to the field: (1) Equals — case-insensitive match (default, same as before). (2) Exact — case-sensitive exact match. (3) Contains — fires when the field value contains your text anywhere (great for partial matches like "New Shop" matching "New Shop - Delhi"). (4) Not equals — fires only when the field value is NOT in your list. Multiple values per row still work as OR within the chosen operator. Existing rules continue working as Equals.',
+        NOW())
+ON CONFLICT (version) DO NOTHING;
