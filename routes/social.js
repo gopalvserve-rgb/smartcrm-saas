@@ -1071,6 +1071,34 @@ async function _ensureSchemaS4() {
     )
   `);
   try { await db.query(`CREATE INDEX IF NOT EXISTS idx_social_ad_alerts_unack ON social_ad_alerts(created_at DESC) WHERE acknowledged = 0`); } catch (_) {}
+
+  // META_ADS_v1.2 — additional metric columns for richer Meta insights.
+  // Extracted from the `actions` / `cost_per_action_type` / `action_values` /
+  // `purchase_roas` arrays the Marketing API returns. Each ALTER is wrapped
+  // in try so it's safe to re-run (and tolerant of column-already-exists).
+  const _extra = [
+    `purchases NUMERIC(14,2)`,
+    `cost_per_purchase NUMERIC(10,2)`,
+    `purchase_value NUMERIC(14,2)`,
+    `purchase_roas NUMERIC(10,4)`,
+    `add_to_carts NUMERIC(14,2)`,
+    `cost_per_add_to_cart NUMERIC(10,2)`,
+    `landing_page_views NUMERIC(14,2)`,
+    `cost_per_landing_page_view NUMERIC(10,2)`,
+    `frequency NUMERIC(8,2)`,
+    `thru_plays NUMERIC(14,2)`,
+    `cost_per_thru_play NUMERIC(10,2)`,
+    `video_p100_watched NUMERIC(14,2)`,
+    `conversations_started NUMERIC(14,2)`,
+    `cost_per_conversation NUMERIC(10,2)`,
+    `inline_link_clicks NUMERIC(14,2)`,
+    `cost_per_inline_link_click NUMERIC(10,2)`
+  ];
+  for (const def of _extra) {
+    const col = def.split(' ')[0];
+    try { await db.query(`ALTER TABLE social_ad_daily ADD COLUMN IF NOT EXISTS ${def}`); }
+    catch (e) { console.warn('[ads schema] add col', col, 'failed:', e.message); }
+  }
 }
 
 // Ad Account CRUD
@@ -1129,7 +1157,8 @@ async function _pullAdAccountInsights(adAccountId, dateFrom, dateTo) {
   const acct = adAccountId.startsWith('act_') ? adAccountId : ('act_' + adAccountId);
 
   // Get campaign-level insights for the date range
-  const fields = 'campaign_id,campaign_name,date_start,spend,impressions,reach,clicks,ctr,cpc,cpm,actions,cost_per_action_type,objective';
+  // META_ADS_v1.2 — request the wider field set so column picker has data.
+  const fields = 'campaign_id,campaign_name,date_start,spend,impressions,reach,clicks,ctr,cpc,cpm,frequency,actions,cost_per_action_type,action_values,purchase_roas,inline_link_clicks,objective';
   const params = new URLSearchParams({
     level: 'campaign',
     fields,
@@ -1143,25 +1172,57 @@ async function _pullAdAccountInsights(adAccountId, dateFrom, dateTo) {
   const j = await r.json();
   if (j.error) throw new Error('Marketing API: ' + j.error.message);
 
+  // META_ADS_v1.2 — pull purchase / ATC / LPV / video / messaging metrics out
+  // of the actions / action_values / cost_per_action_type / purchase_roas
+  // arrays Meta returns. Each action_type maps to a dedicated column so
+  // SQL aggregation is cheap and the column picker is straightforward.
+  const _sumAction = (arr, types) => {
+    if (!Array.isArray(arr)) return 0;
+    let t = 0;
+    for (const a of arr) if (types.indexOf(a.action_type) >= 0) t += Number(a.value) || 0;
+    return t;
+  };
+  const _avgAction = (arr, types) => {
+    if (!Array.isArray(arr)) return null;
+    let t = 0, c = 0;
+    for (const a of arr) if (types.indexOf(a.action_type) >= 0) { t += Number(a.value) || 0; c++; }
+    return c > 0 ? t / c : null;
+  };
   let saved = 0;
   for (const row of (j.data || [])) {
-    // Extract lead count from actions array if present
-    let leads = 0;
-    let cpl = null;
-    if (Array.isArray(row.actions)) {
-      for (const a of row.actions) {
-        if (a.action_type === 'lead' || a.action_type === 'leadgen.other') {
-          leads += Number(a.value) || 0;
-        }
-      }
+    // Leads (existing behaviour)
+    const leads = _sumAction(row.actions, ['lead', 'leadgen.other', 'onsite_conversion.lead_grouped']);
+    const cpl = _avgAction(row.cost_per_action_type, ['lead', 'leadgen.other', 'onsite_conversion.lead_grouped']);
+
+    // Purchase, Add to Cart, Landing Page View (Pixel + offsite_conversion)
+    const purchases = _sumAction(row.actions, ['purchase', 'offsite_conversion.fb_pixel_purchase', 'omni_purchase']);
+    const cppurch  = _avgAction(row.cost_per_action_type, ['purchase', 'offsite_conversion.fb_pixel_purchase', 'omni_purchase']);
+    const purchVal = _sumAction(row.action_values, ['purchase', 'offsite_conversion.fb_pixel_purchase', 'omni_purchase']);
+    const atc      = _sumAction(row.actions, ['add_to_cart', 'offsite_conversion.fb_pixel_add_to_cart', 'omni_add_to_cart']);
+    const cpatc    = _avgAction(row.cost_per_action_type, ['add_to_cart', 'offsite_conversion.fb_pixel_add_to_cart', 'omni_add_to_cart']);
+    const lpv      = _sumAction(row.actions, ['landing_page_view']);
+    const cplpv    = _avgAction(row.cost_per_action_type, ['landing_page_view']);
+
+    // Video
+    const thruPlays = _sumAction(row.actions, ['video_view', 'video_thruplay_watched_actions']);
+    const cpThru    = _avgAction(row.cost_per_action_type, ['video_view', 'video_thruplay_watched_actions']);
+
+    // Messaging conversations
+    const convs   = _sumAction(row.actions, ['onsite_conversion.messaging_conversation_started_7d', 'onsite_conversion.total_messaging_connection']);
+    const cpConv  = _avgAction(row.cost_per_action_type, ['onsite_conversion.messaging_conversation_started_7d', 'onsite_conversion.total_messaging_connection']);
+
+    // Inline link clicks (sometimes Meta sends as a top-level number, sometimes
+    // in actions only — prefer the top-level if present)
+    const ilc   = row.inline_link_clicks != null ? Number(row.inline_link_clicks) : _sumAction(row.actions, ['link_click']);
+    const cpilc = _avgAction(row.cost_per_action_type, ['link_click']);
+
+    // purchase_roas is an array of {action_type, value} — take the first numeric value
+    let roas = null;
+    if (Array.isArray(row.purchase_roas) && row.purchase_roas.length) {
+      const v = Number(row.purchase_roas[0].value);
+      if (!isNaN(v)) roas = v;
     }
-    if (Array.isArray(row.cost_per_action_type)) {
-      for (const c of row.cost_per_action_type) {
-        if (c.action_type === 'lead' || c.action_type === 'leadgen.other') {
-          cpl = Number(c.value);
-        }
-      }
-    }
+
     const results = leads || (Number(row.clicks) || 0);
     const costPerResult = cpl || (row.cpc != null ? Number(row.cpc) : null);
 
@@ -1170,8 +1231,16 @@ async function _pullAdAccountInsights(adAccountId, dateFrom, dateTo) {
         INSERT INTO social_ad_daily
           (ad_account_id, campaign_id, campaign_name, date,
            spend, impressions, reach, clicks, ctr, cpc, cpm,
-           results, cost_per_result, leads, cost_per_lead, raw)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb)
+           results, cost_per_result, leads, cost_per_lead,
+           purchases, cost_per_purchase, purchase_value, purchase_roas,
+           add_to_carts, cost_per_add_to_cart,
+           landing_page_views, cost_per_landing_page_view,
+           frequency, thru_plays, cost_per_thru_play,
+           conversations_started, cost_per_conversation,
+           inline_link_clicks, cost_per_inline_link_click,
+           raw)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+                $16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31::jsonb)
         ON CONFLICT (ad_account_id, campaign_id, date) DO UPDATE SET
           campaign_name = EXCLUDED.campaign_name,
           spend = EXCLUDED.spend,
@@ -1185,6 +1254,21 @@ async function _pullAdAccountInsights(adAccountId, dateFrom, dateTo) {
           cost_per_result = EXCLUDED.cost_per_result,
           leads = EXCLUDED.leads,
           cost_per_lead = EXCLUDED.cost_per_lead,
+          purchases = EXCLUDED.purchases,
+          cost_per_purchase = EXCLUDED.cost_per_purchase,
+          purchase_value = EXCLUDED.purchase_value,
+          purchase_roas = EXCLUDED.purchase_roas,
+          add_to_carts = EXCLUDED.add_to_carts,
+          cost_per_add_to_cart = EXCLUDED.cost_per_add_to_cart,
+          landing_page_views = EXCLUDED.landing_page_views,
+          cost_per_landing_page_view = EXCLUDED.cost_per_landing_page_view,
+          frequency = EXCLUDED.frequency,
+          thru_plays = EXCLUDED.thru_plays,
+          cost_per_thru_play = EXCLUDED.cost_per_thru_play,
+          conversations_started = EXCLUDED.conversations_started,
+          cost_per_conversation = EXCLUDED.cost_per_conversation,
+          inline_link_clicks = EXCLUDED.inline_link_clicks,
+          cost_per_inline_link_click = EXCLUDED.cost_per_inline_link_click,
           raw = EXCLUDED.raw,
           pulled_at = NOW()
       `, [
@@ -1195,6 +1279,13 @@ async function _pullAdAccountInsights(adAccountId, dateFrom, dateTo) {
         row.cpc != null ? Number(row.cpc) : null,
         row.cpm != null ? Number(row.cpm) : null,
         results, costPerResult, leads, cpl,
+        purchases, cppurch, purchVal, roas,
+        atc, cpatc,
+        lpv, cplpv,
+        row.frequency != null ? Number(row.frequency) : null,
+        thruPlays, cpThru,
+        convs, cpConv,
+        ilc, cpilc,
         JSON.stringify(row)
       ]);
       saved++;
@@ -1209,11 +1300,19 @@ async function api_social_ads_pullNow(token, payload) {
   await authUser(token);
   await _ensureSchemaS4();
   const p = payload || {};
-  const days = Math.min(Math.max(Number(p.days) || 7, 1), 90);
-  const to = new Date();
-  const from = new Date(to.getTime() - (days - 1) * 86400000);
-  const fromStr = from.toISOString().slice(0, 10);
-  const toStr   = to.toISOString().slice(0, 10);
+  // META_ADS_v1.2 — accept explicit from/to in addition to days
+  let fromStr, toStr;
+  if (p.from && p.to) {
+    fromStr = String(p.from).slice(0, 10);
+    toStr   = String(p.to).slice(0, 10);
+  } else {
+    const days = Math.min(Math.max(Number(p.days) || 7, 1), 90);
+    const to = new Date();
+    const from = new Date(to.getTime() - (days - 1) * 86400000);
+    fromStr = from.toISOString().slice(0, 10);
+    toStr   = to.toISOString().slice(0, 10);
+  }
+  const days = Math.round((new Date(toStr) - new Date(fromStr)) / 86400000) + 1;
 
   const accounts = await db.query(
     `SELECT ad_account_id FROM social_ad_accounts WHERE is_monitored = 1`
@@ -1279,99 +1378,206 @@ async function _generateAlerts(forDate) {
 }
 
 // Summary KPIs — totals for a date range + delta vs previous equal range
+// META_ADS_v1.2 — now accepts {from, to, account_ids} filters in addition to {days}
 async function api_social_ads_summary(token, filters) {
   await authUser(token);
   await _ensureSchemaS4();
   const f = filters || {};
-  const days = Math.min(Math.max(Number(f.days) || 7, 1), 90);
-  const to = new Date();
-  const from = new Date(to.getTime() - (days - 1) * 86400000);
-  const prevTo = new Date(from.getTime() - 86400000);
-  const prevFrom = new Date(prevTo.getTime() - (days - 1) * 86400000);
   const ymd = d => d.toISOString().slice(0,10);
+  let fromStr, toStr, days;
+  if (f.from && f.to) {
+    fromStr = String(f.from).slice(0,10);
+    toStr   = String(f.to).slice(0,10);
+    days    = Math.max(1, Math.round((new Date(toStr) - new Date(fromStr)) / 86400000) + 1);
+  } else {
+    days = Math.min(Math.max(Number(f.days) || 7, 1), 90);
+    const to = new Date();
+    const from = new Date(to.getTime() - (days - 1) * 86400000);
+    fromStr = ymd(from); toStr = ymd(to);
+  }
+  const prevToD   = new Date(new Date(fromStr).getTime() - 86400000);
+  const prevFromD = new Date(prevToD.getTime() - (days - 1) * 86400000);
+  const prevFromStr = ymd(prevFromD), prevToStr = ymd(prevToD);
 
-  const cur = await db.query(`
-    SELECT
-      COALESCE(SUM(spend),0)       AS spend,
-      COALESCE(SUM(impressions),0) AS impressions,
-      COALESCE(SUM(clicks),0)      AS clicks,
-      COALESCE(SUM(results),0)     AS results,
-      COALESCE(SUM(leads),0)       AS leads
-    FROM social_ad_daily WHERE date BETWEEN $1 AND $2
-  `, [ymd(from), ymd(to)]);
-  const prev = await db.query(`
-    SELECT
-      COALESCE(SUM(spend),0)       AS spend,
-      COALESCE(SUM(impressions),0) AS impressions,
-      COALESCE(SUM(clicks),0)      AS clicks,
-      COALESCE(SUM(results),0)     AS results,
-      COALESCE(SUM(leads),0)       AS leads
-    FROM social_ad_daily WHERE date BETWEEN $1 AND $2
-  `, [ymd(prevFrom), ymd(prevTo)]);
+  // Optional account filter
+  let acctFilter = '';
+  const args = [fromStr, toStr];
+  if (Array.isArray(f.account_ids) && f.account_ids.length) {
+    const placeholders = f.account_ids.map((_, i) => '$' + (i + 3)).join(',');
+    acctFilter = ` AND ad_account_id IN (${placeholders})`;
+    args.push(...f.account_ids.map(String));
+  }
+
+  const aggCols = `
+      COALESCE(SUM(spend),0)              AS spend,
+      COALESCE(SUM(impressions),0)        AS impressions,
+      COALESCE(SUM(reach),0)              AS reach,
+      COALESCE(SUM(clicks),0)             AS clicks,
+      COALESCE(SUM(results),0)            AS results,
+      COALESCE(SUM(leads),0)              AS leads,
+      COALESCE(SUM(purchases),0)          AS purchases,
+      COALESCE(SUM(purchase_value),0)     AS purchase_value,
+      COALESCE(SUM(add_to_carts),0)       AS add_to_carts,
+      COALESCE(SUM(landing_page_views),0) AS landing_page_views,
+      COALESCE(SUM(thru_plays),0)         AS thru_plays,
+      COALESCE(SUM(conversations_started),0) AS conversations_started,
+      COALESCE(SUM(inline_link_clicks),0) AS inline_link_clicks
+  `;
+  const cur = await db.query(
+    `SELECT ${aggCols} FROM social_ad_daily WHERE date BETWEEN $1 AND $2 ${acctFilter}`,
+    args
+  );
+  const prevArgs = [prevFromStr, prevToStr, ...(args.slice(2))];
+  const prev = await db.query(
+    `SELECT ${aggCols} FROM social_ad_daily WHERE date BETWEEN $1 AND $2 ${acctFilter}`,
+    prevArgs
+  );
 
   const c = cur.rows[0] || {};
   const p = prev.rows[0] || {};
   const pct = (a, b) => (Number(b) > 0 ? ((Number(a) - Number(b)) / Number(b)) * 100 : (Number(a) > 0 ? 100 : 0));
   return {
-    period: { days, from: ymd(from), to: ymd(to) },
+    period: { days, from: fromStr, to: toStr },
     current: {
       spend: Number(c.spend), impressions: Number(c.impressions),
+      reach: Number(c.reach),
       clicks: Number(c.clicks), results: Number(c.results), leads: Number(c.leads),
+      purchases: Number(c.purchases), purchase_value: Number(c.purchase_value),
+      add_to_carts: Number(c.add_to_carts),
+      landing_page_views: Number(c.landing_page_views),
+      thru_plays: Number(c.thru_plays),
+      conversations_started: Number(c.conversations_started),
+      inline_link_clicks: Number(c.inline_link_clicks),
       cpc: Number(c.clicks) > 0 ? Number(c.spend) / Number(c.clicks) : 0,
       cpl: Number(c.leads)  > 0 ? Number(c.spend) / Number(c.leads)  : 0,
-      ctr: Number(c.impressions) > 0 ? (Number(c.clicks) / Number(c.impressions)) * 100 : 0
+      cpm: Number(c.impressions) > 0 ? (Number(c.spend) / Number(c.impressions)) * 1000 : 0,
+      cost_per_purchase: Number(c.purchases) > 0 ? Number(c.spend) / Number(c.purchases) : 0,
+      cost_per_add_to_cart: Number(c.add_to_carts) > 0 ? Number(c.spend) / Number(c.add_to_carts) : 0,
+      cost_per_landing_page_view: Number(c.landing_page_views) > 0 ? Number(c.spend) / Number(c.landing_page_views) : 0,
+      cost_per_thru_play: Number(c.thru_plays) > 0 ? Number(c.spend) / Number(c.thru_plays) : 0,
+      cost_per_conversation: Number(c.conversations_started) > 0 ? Number(c.spend) / Number(c.conversations_started) : 0,
+      cost_per_inline_link_click: Number(c.inline_link_clicks) > 0 ? Number(c.spend) / Number(c.inline_link_clicks) : 0,
+      purchase_roas: Number(c.spend) > 0 ? Number(c.purchase_value) / Number(c.spend) : 0,
+      ctr: Number(c.impressions) > 0 ? (Number(c.clicks) / Number(c.impressions)) * 100 : 0,
+      frequency: Number(c.reach) > 0 ? Number(c.impressions) / Number(c.reach) : 0
     },
     previous: {
       spend: Number(p.spend), impressions: Number(p.impressions),
-      clicks: Number(p.clicks), results: Number(p.results), leads: Number(p.leads)
+      reach: Number(p.reach),
+      clicks: Number(p.clicks), results: Number(p.results), leads: Number(p.leads),
+      purchases: Number(p.purchases), purchase_value: Number(p.purchase_value)
     },
     delta_pct: {
       spend: pct(c.spend, p.spend),
       impressions: pct(c.impressions, p.impressions),
+      reach: pct(c.reach, p.reach),
       clicks: pct(c.clicks, p.clicks),
       results: pct(c.results, p.results),
-      leads: pct(c.leads, p.leads)
+      leads: pct(c.leads, p.leads),
+      purchases: pct(c.purchases, p.purchases),
+      purchase_value: pct(c.purchase_value, p.purchase_value)
     }
   };
 }
 
 // Per-campaign breakdown
+// META_ADS_v1.2 — accepts {from, to, account_ids}, returns ad_account_name from JOIN
+// and the full metric set so the column picker doesn't need extra calls.
 async function api_social_ads_campaigns(token, filters) {
   await authUser(token);
   await _ensureSchemaS4();
   const f = filters || {};
-  const days = Math.min(Math.max(Number(f.days) || 7, 1), 90);
-  const to = new Date();
-  const from = new Date(to.getTime() - (days - 1) * 86400000);
   const ymd = d => d.toISOString().slice(0,10);
+  let fromStr, toStr;
+  if (f.from && f.to) {
+    fromStr = String(f.from).slice(0,10);
+    toStr   = String(f.to).slice(0,10);
+  } else {
+    const days = Math.min(Math.max(Number(f.days) || 7, 1), 90);
+    const to = new Date();
+    const from = new Date(to.getTime() - (days - 1) * 86400000);
+    fromStr = ymd(from); toStr = ymd(to);
+  }
+
+  let acctFilter = '';
+  const args = [fromStr, toStr];
+  if (Array.isArray(f.account_ids) && f.account_ids.length) {
+    const placeholders = f.account_ids.map((_, i) => '$' + (i + 3)).join(',');
+    acctFilter = ` AND d.ad_account_id IN (${placeholders})`;
+    args.push(...f.account_ids.map(String));
+  }
 
   const r = await db.query(`
     SELECT
-      ad_account_id, campaign_id, campaign_name,
-      SUM(spend) AS spend,
-      SUM(impressions) AS impressions,
-      SUM(clicks) AS clicks,
-      SUM(results) AS results,
-      SUM(leads) AS leads,
-      MAX(date) AS last_day
-    FROM social_ad_daily WHERE date BETWEEN $1 AND $2
-    GROUP BY ad_account_id, campaign_id, campaign_name
-    ORDER BY SUM(spend) DESC NULLS LAST
-    LIMIT 200
-  `, [ymd(from), ymd(to)]);
-  return (r.rows || []).map(row => ({
-    ad_account_id: row.ad_account_id,
-    campaign_id: row.campaign_id,
-    campaign_name: row.campaign_name,
-    spend: Number(row.spend),
-    impressions: Number(row.impressions),
-    clicks: Number(row.clicks),
-    results: Number(row.results),
-    leads: Number(row.leads),
-    cpc: Number(row.clicks) > 0 ? Number(row.spend) / Number(row.clicks) : 0,
-    cpl: Number(row.leads)  > 0 ? Number(row.spend) / Number(row.leads)  : 0,
-    last_day: row.last_day
-  }));
+      d.ad_account_id,
+      COALESCE(a.name, d.ad_account_id) AS ad_account_name,
+      a.currency AS ad_account_currency,
+      d.campaign_id, d.campaign_name,
+      SUM(d.spend) AS spend,
+      SUM(d.impressions) AS impressions,
+      SUM(d.reach) AS reach,
+      SUM(d.clicks) AS clicks,
+      SUM(d.results) AS results,
+      SUM(d.leads) AS leads,
+      SUM(d.purchases) AS purchases,
+      SUM(d.purchase_value) AS purchase_value,
+      SUM(d.add_to_carts) AS add_to_carts,
+      SUM(d.landing_page_views) AS landing_page_views,
+      SUM(d.thru_plays) AS thru_plays,
+      SUM(d.conversations_started) AS conversations_started,
+      SUM(d.inline_link_clicks) AS inline_link_clicks,
+      MAX(d.date) AS last_day
+    FROM social_ad_daily d
+    LEFT JOIN social_ad_accounts a ON a.ad_account_id = d.ad_account_id
+    WHERE d.date BETWEEN $1 AND $2 ${acctFilter}
+    GROUP BY d.ad_account_id, a.name, a.currency, d.campaign_id, d.campaign_name
+    ORDER BY SUM(d.spend) DESC NULLS LAST
+    LIMIT 500
+  `, args);
+
+  return (r.rows || []).map(row => {
+    const spend = Number(row.spend) || 0;
+    const impr  = Number(row.impressions) || 0;
+    const clicks = Number(row.clicks) || 0;
+    const reach = Number(row.reach) || 0;
+    const purchases = Number(row.purchases) || 0;
+    const purchVal  = Number(row.purchase_value) || 0;
+    const atc       = Number(row.add_to_carts) || 0;
+    const lpv       = Number(row.landing_page_views) || 0;
+    const thru      = Number(row.thru_plays) || 0;
+    const convs     = Number(row.conversations_started) || 0;
+    const ilc       = Number(row.inline_link_clicks) || 0;
+    const leads     = Number(row.leads) || 0;
+    return {
+      ad_account_id: row.ad_account_id,
+      ad_account_name: row.ad_account_name,
+      ad_account_currency: row.ad_account_currency || '',
+      campaign_id: row.campaign_id,
+      campaign_name: row.campaign_name,
+      spend, impressions: impr, reach, clicks,
+      results: Number(row.results) || 0,
+      leads,
+      purchases, purchase_value: purchVal,
+      add_to_carts: atc,
+      landing_page_views: lpv,
+      thru_plays: thru,
+      conversations_started: convs,
+      inline_link_clicks: ilc,
+      cpc: clicks > 0 ? spend / clicks : 0,
+      cpl: leads  > 0 ? spend / leads  : 0,
+      cpm: impr   > 0 ? (spend / impr) * 1000 : 0,
+      ctr: impr   > 0 ? (clicks / impr) * 100 : 0,
+      frequency: reach > 0 ? impr / reach : 0,
+      cost_per_purchase: purchases > 0 ? spend / purchases : 0,
+      cost_per_add_to_cart: atc > 0 ? spend / atc : 0,
+      cost_per_landing_page_view: lpv > 0 ? spend / lpv : 0,
+      cost_per_thru_play: thru > 0 ? spend / thru : 0,
+      cost_per_conversation: convs > 0 ? spend / convs : 0,
+      cost_per_inline_link_click: ilc > 0 ? spend / ilc : 0,
+      purchase_roas: spend > 0 ? purchVal / spend : 0,
+      last_day: row.last_day
+    };
+  });
 }
 
 async function api_social_ads_alerts(token) {

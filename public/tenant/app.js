@@ -42262,51 +42262,141 @@ try {
   }
 
   VIEWS.socialads = async (view) => {
-    /* META_MODULE_v1 Phase B — header polish to match Ads Manager design:
-     *   - Purple icon + "Ads Manager" + last-synced subtitle
-     *   - Refresh / Meta Business Suite / Export All CSV / + Create buttons
-     *   - Period selector + ⚙ Ad Accounts kept (moved to a compact row) */
+    /* META_ADS_v1.2 — Custom date range + Ad Account filter + Column picker
+     * + AD ACCOUNT column. Keeps the polished header from v1 Phase B. */
     view.innerHTML = '';
     const wrap = h('div', { class:'page' });
 
+    // ─── State (persisted in localStorage so the page remembers picks) ──
+    const LS_COLS_KEY = 'metaAds_visibleCols_v1';
+    const LS_ACCT_KEY = 'metaAds_acctIds_v1';
+    const LS_RANGE_KEY = 'metaAds_range_v1';
+
+    // Catalog of all available columns. `key` matches the field returned by
+    // api_social_ads_campaigns. `fmt` is how to render. Default-visible
+    // columns mirror what the original simple table showed.
+    const COL_CATALOG = [
+      { group: 'Performance', key: 'spend',          label: 'Spend',          fmt: 'currency', default: true },
+      { group: 'Performance', key: 'impressions',    label: 'Impressions',    fmt: 'int',      default: true },
+      { group: 'Performance', key: 'reach',          label: 'Reach',          fmt: 'int' },
+      { group: 'Performance', key: 'frequency',      label: 'Frequency',      fmt: 'dec2' },
+      { group: 'Performance', key: 'cpm',            label: 'CPM',            fmt: 'currency' },
+      { group: 'Engagement',  key: 'clicks',         label: 'Clicks',         fmt: 'int',      default: true },
+      { group: 'Engagement',  key: 'ctr',            label: 'CTR',            fmt: 'percent',  default: true },
+      { group: 'Engagement',  key: 'cpc',            label: 'CPC',            fmt: 'currency', default: true },
+      { group: 'Engagement',  key: 'inline_link_clicks',        label: 'Link Clicks',     fmt: 'int' },
+      { group: 'Engagement',  key: 'cost_per_inline_link_click', label: 'Cost / Link Click', fmt: 'currency' },
+      { group: 'Engagement',  key: 'landing_page_views',         label: 'Landing Page Views', fmt: 'int' },
+      { group: 'Engagement',  key: 'cost_per_landing_page_view', label: 'Cost / LPV',         fmt: 'currency' },
+      { group: 'Conversions', key: 'leads',          label: 'Leads',          fmt: 'int',      default: true },
+      { group: 'Conversions', key: 'cpl',            label: 'CPL',            fmt: 'currency', default: true },
+      { group: 'Conversions', key: 'purchases',      label: 'Purchases',      fmt: 'int' },
+      { group: 'Conversions', key: 'cost_per_purchase', label: 'Cost / Purchase', fmt: 'currency' },
+      { group: 'Conversions', key: 'purchase_value', label: 'Purchase Value', fmt: 'currency' },
+      { group: 'Conversions', key: 'purchase_roas',  label: 'Purchase ROAS',  fmt: 'dec2' },
+      { group: 'Conversions', key: 'add_to_carts',   label: 'Add to Cart',    fmt: 'int' },
+      { group: 'Conversions', key: 'cost_per_add_to_cart', label: 'Cost / ATC', fmt: 'currency' },
+      { group: 'Video',       key: 'thru_plays',     label: 'ThruPlays',      fmt: 'int' },
+      { group: 'Video',       key: 'cost_per_thru_play', label: 'Cost / ThruPlay', fmt: 'currency' },
+      { group: 'Messaging',   key: 'conversations_started', label: 'Conversations Started', fmt: 'int' },
+      { group: 'Messaging',   key: 'cost_per_conversation', label: 'Cost / Conversation',   fmt: 'currency' }
+    ];
+
+    let visibleCols;
+    try {
+      visibleCols = JSON.parse(localStorage.getItem(LS_COLS_KEY) || 'null');
+    } catch (_) { visibleCols = null; }
+    if (!visibleCols || !Array.isArray(visibleCols) || !visibleCols.length) {
+      visibleCols = COL_CATALOG.filter(c => c.default).map(c => c.key);
+    }
+
+    let selectedAcctIds;
+    try {
+      selectedAcctIds = JSON.parse(localStorage.getItem(LS_ACCT_KEY) || '[]');
+    } catch (_) { selectedAcctIds = []; }
+    if (!Array.isArray(selectedAcctIds)) selectedAcctIds = [];
+
+    let rangeState;
+    try {
+      rangeState = JSON.parse(localStorage.getItem(LS_RANGE_KEY) || 'null');
+    } catch (_) { rangeState = null; }
+    if (!rangeState || typeof rangeState !== 'object') rangeState = { mode: 'days', days: 7 };
+
+    // ─── Period selector + Custom range inputs ───────────────────
     const daysSel = h('select', { style:{ padding:'.4rem .6rem' } },
       h('option', { value:'1' },  'Today'),
-      h('option', { value:'7', selected:'selected' }, 'Last 7 days'),
+      h('option', { value:'7'  }, 'Last 7 days'),
       h('option', { value:'14' }, 'Last 14 days'),
       h('option', { value:'30' }, 'Last 30 days'),
-      h('option', { value:'90' }, 'Last 90 days')
+      h('option', { value:'90' }, 'Last 90 days'),
+      h('option', { value:'custom' }, '📅 Custom range…')
     );
+    daysSel.value = (rangeState.mode === 'custom') ? 'custom' : String(rangeState.days || 7);
+
+    const _today = () => new Date().toISOString().slice(0,10);
+    const _ago = n => new Date(Date.now() - n * 86400000).toISOString().slice(0,10);
+    const fromInp = h('input', { type:'date', value: rangeState.from || _ago(29), style:{ padding:'.4rem' } });
+    const toInp   = h('input', { type:'date', value: rangeState.to   || _today(),  style:{ padding:'.4rem' } });
+    const customWrap = h('span', { style:{ display: rangeState.mode === 'custom' ? 'inline-flex' : 'none', gap:'.4rem', alignItems:'center' } },
+      h('span', { class:'muted', style:{ fontSize:'.8rem' } }, 'From'),
+      fromInp,
+      h('span', { class:'muted', style:{ fontSize:'.8rem' } }, 'To'),
+      toInp
+    );
+    daysSel.onchange = () => {
+      const v = daysSel.value;
+      if (v === 'custom') {
+        customWrap.style.display = 'inline-flex';
+        rangeState = { mode: 'custom', from: fromInp.value, to: toInp.value };
+      } else {
+        customWrap.style.display = 'none';
+        rangeState = { mode: 'days', days: Number(v) };
+      }
+      try { localStorage.setItem(LS_RANGE_KEY, JSON.stringify(rangeState)); } catch (_) {}
+      render();
+    };
+    [fromInp, toInp].forEach(el => el.onchange = () => {
+      rangeState = { mode: 'custom', from: fromInp.value, to: toInp.value };
+      try { localStorage.setItem(LS_RANGE_KEY, JSON.stringify(rangeState)); } catch (_) {}
+      render();
+    });
+    function _currentFilters() {
+      if (rangeState.mode === 'custom') {
+        return { from: fromInp.value, to: toInp.value, account_ids: selectedAcctIds };
+      }
+      return { days: rangeState.days || 7, account_ids: selectedAcctIds };
+    }
+
     const pullBtn = h('button', { class:'btn primary', onclick: async () => {
-      try { toast('Fetching from Meta…'); await api('api_social_ads_pullNow', { days: Number(daysSel.value) }); render(); }
+      try { toast('Fetching from Meta…'); await api('api_social_ads_pullNow', _currentFilters()); render(); }
       catch (e) { toast(e.message, 'err'); }
     } }, '🔄 Pull from Meta');
     const acctBtn = h('button', { class:'btn', onclick: () => openAccountsModal(render) }, '⚙ Ad Accounts');
 
-    // ── Polished header row ──────────────────────────────────────
+    // ── Header row ───────────────────────────────────────────────
     const _lastSync = new Date().toLocaleTimeString('en-IN', { hour12: false });
     const refreshBtn = h('button', { class:'btn', onclick: () => render() }, '🔁 Refresh');
     const businessBtn = h('a', { class:'btn', href: 'https://business.facebook.com/adsmanager/', target: '_blank', rel: 'noopener' }, '🔗 Meta Business Suite');
     const exportBtn = h('button', { class:'btn', onclick: async () => {
       try {
-        const camps = await api('api_social_ads_campaigns', { days: Number(daysSel.value) });
-        const rows = [['Campaign','Status','Spend','Impressions','Clicks','CTR','CPC','Results']];
-        (camps||[]).forEach(c => rows.push([
-          c.name || c.campaign_id, c.status || '',
-          c.spend || 0, c.impressions || 0, c.clicks || 0,
-          c.ctr || 0, c.cpc || 0, c.results || 0
+        const camps = await api('api_social_ads_campaigns', _currentFilters());
+        const cols = COL_CATALOG.filter(c => visibleCols.indexOf(c.key) >= 0);
+        const rows = [['Ad Account', 'Campaign', ...cols.map(c => c.label)]];
+        (camps || []).forEach(c => rows.push([
+          c.ad_account_name || c.ad_account_id,
+          c.campaign_name || c.campaign_id,
+          ...cols.map(col => String(c[col.key] != null ? c[col.key] : ''))
         ]));
         const csv = rows.map(r => r.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',')).join('\n');
         const blob = new Blob([csv], { type: 'text/csv' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = 'ads-campaigns-' + new Date().toISOString().slice(0,10) + '.csv';
+        a.download = 'ads-campaigns-' + _today() + '.csv';
         a.click();
       } catch (e) { toast('Export failed: ' + e.message, 'err'); }
     } }, '⬇ Export All CSV');
+    const colsBtn = h('button', { class:'btn', onclick: () => openColumnPicker() }, '⚙ Columns');
     const createBtn = h('button', { class:'btn primary', onclick: () => {
-      // Open Meta Ads Manager campaign-create page in a new tab. Inline creation
-      // requires Marketing API CREATE permissions which most tenants don't have
-      // yet — deep-linking is the safe MVP.
       window.open('https://business.facebook.com/adsmanager/manage/campaigns?act=', '_blank', 'noopener');
     } }, '+ Create');
 
@@ -42316,12 +42406,16 @@ try {
         h('h2', { style: { margin: 0, fontSize: '1.5rem' } }, 'Ads Manager'),
         h('div', { style: { fontSize: '.78rem', color: '#64748b', marginTop: '.15rem' } }, '🕒 Last synced: ' + _lastSync)
       ),
-      refreshBtn, businessBtn, exportBtn, createBtn
+      refreshBtn, businessBtn, exportBtn, colsBtn, createBtn
     ));
 
-    // Compact period row below header
+    // ── Period + custom range + ad account filter row ─────────────
+    const acctFilterBtn = h('button', { class:'btn', onclick: () => openAcctFilter() }, '🏢 All accounts');
     wrap.appendChild(h('div', { style:{ display:'flex', alignItems:'center', gap:'.5rem', marginBottom:'.8rem', flexWrap:'wrap' } },
-      h('label', { class: 'muted', style: { fontSize: '.85rem' } }, 'Period: '), daysSel, pullBtn, acctBtn
+      h('label', { class: 'muted', style: { fontSize: '.85rem' } }, 'Period:'), daysSel,
+      customWrap,
+      acctFilterBtn,
+      pullBtn, acctBtn
     ));
 
     const summaryRow = h('div', { style:{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))', gap:'.7rem', marginBottom:'1rem' } });
@@ -42335,11 +42429,109 @@ try {
 
     view.appendChild(wrap);
 
-    daysSel.onchange = () => render();
+    // ── Account filter modal ─────────────────────────────────────
+    let _acctsCache = null;
+    async function openAcctFilter() {
+      try {
+        if (!_acctsCache) _acctsCache = await api('api_social_ads_accounts_list');
+      } catch (e) { toast(e.message, 'err'); return; }
+      const m = h('div', { class:'modal-backdrop' });
+      const modal = h('div', { class:'modal', style:{ maxWidth:'520px' } });
+      modal.appendChild(h('div', { class:'modal-head' },
+        h('h3', {}, '🏢 Filter by Ad Account'),
+        h('button', { class:'btn ghost', onclick: () => m.remove() }, '✕')
+      ));
+      const body = h('div', { class:'modal-body', style:{ maxHeight:'60vh', overflow:'auto' } });
+      const picks = new Set(selectedAcctIds);
+      const allBox = h('input', { type:'checkbox', checked: picks.size === 0 ? 'checked' : null });
+      body.appendChild(h('label', { style:{ display:'flex', alignItems:'center', gap:'.5rem', padding:'.4rem 0', fontWeight:'600', borderBottom:'1px solid #e5e7eb', marginBottom:'.5rem' } },
+        allBox,
+        h('span', {}, 'All accounts (' + _acctsCache.length + ')')
+      ));
+      allBox.onchange = () => {
+        if (allBox.checked) {
+          picks.clear();
+          [...body.querySelectorAll('input[data-acct]')].forEach(cb => cb.checked = false);
+        }
+      };
+      _acctsCache.forEach(a => {
+        const cb = h('input', { type:'checkbox', 'data-acct': a.ad_account_id, checked: picks.has(a.ad_account_id) ? 'checked' : null });
+        cb.onchange = () => {
+          if (cb.checked) picks.add(a.ad_account_id); else picks.delete(a.ad_account_id);
+          allBox.checked = (picks.size === 0);
+        };
+        body.appendChild(h('label', { style:{ display:'flex', alignItems:'center', gap:'.5rem', padding:'.3rem 0' } },
+          cb, h('span', {}, (a.name || a.ad_account_id) + (a.currency ? ' · ' + a.currency : ''))
+        ));
+      });
+      modal.appendChild(body);
+      modal.appendChild(h('div', { class:'modal-foot' },
+        h('button', { class:'btn ghost', onclick: () => m.remove() }, 'Cancel'),
+        h('button', { class:'btn primary', onclick: () => {
+          selectedAcctIds = Array.from(picks);
+          try { localStorage.setItem(LS_ACCT_KEY, JSON.stringify(selectedAcctIds)); } catch (_) {}
+          acctFilterBtn.textContent = selectedAcctIds.length
+            ? ('🏢 ' + selectedAcctIds.length + ' account' + (selectedAcctIds.length > 1 ? 's' : ''))
+            : '🏢 All accounts';
+          m.remove();
+          render();
+        } }, 'Apply')
+      ));
+      m.appendChild(modal);
+      document.body.appendChild(m);
+    }
+    // Update acct filter button text on initial load
+    if (selectedAcctIds.length) {
+      acctFilterBtn.textContent = '🏢 ' + selectedAcctIds.length + ' account' + (selectedAcctIds.length > 1 ? 's' : '');
+    }
 
+    // ── Column picker modal ─────────────────────────────────────
+    function openColumnPicker() {
+      const m = h('div', { class:'modal-backdrop' });
+      const modal = h('div', { class:'modal', style:{ maxWidth:'720px' } });
+      modal.appendChild(h('div', { class:'modal-head' },
+        h('h3', {}, '⚙ Customize columns'),
+        h('button', { class:'btn ghost', onclick: () => m.remove() }, '✕')
+      ));
+      const body = h('div', { class:'modal-body', style:{ maxHeight:'70vh', overflow:'auto' } });
+      const picks = new Set(visibleCols);
+      const groups = {};
+      COL_CATALOG.forEach(c => { (groups[c.group] = groups[c.group] || []).push(c); });
+      Object.keys(groups).forEach(gName => {
+        body.appendChild(h('h4', { style:{ margin:'.8rem 0 .3rem 0', color:'#6366f1', textTransform:'uppercase', fontSize:'.78rem', letterSpacing:'.05em' } }, gName));
+        const grid = h('div', { style:{ display:'grid', gridTemplateColumns:'repeat(2, 1fr)', gap:'.3rem .8rem' } });
+        groups[gName].forEach(c => {
+          const cb = h('input', { type:'checkbox', 'data-col': c.key, checked: picks.has(c.key) ? 'checked' : null });
+          cb.onchange = () => { if (cb.checked) picks.add(c.key); else picks.delete(c.key); };
+          grid.appendChild(h('label', { style:{ display:'flex', alignItems:'center', gap:'.5rem', padding:'.2rem 0' } }, cb, h('span', {}, c.label)));
+        });
+        body.appendChild(grid);
+      });
+      modal.appendChild(body);
+      modal.appendChild(h('div', { class:'modal-foot' },
+        h('button', { class:'btn ghost', onclick: () => {
+          // Reset to defaults
+          picks.clear();
+          COL_CATALOG.filter(c => c.default).forEach(c => picks.add(c.key));
+          [...modal.querySelectorAll('input[data-col]')].forEach(cb => {
+            cb.checked = picks.has(cb.getAttribute('data-col'));
+          });
+        } }, '↺ Reset to defaults'),
+        h('button', { class:'btn ghost', onclick: () => m.remove() }, 'Cancel'),
+        h('button', { class:'btn primary', onclick: () => {
+          visibleCols = COL_CATALOG.map(c => c.key).filter(k => picks.has(k));
+          if (!visibleCols.length) visibleCols = ['spend','impressions','clicks'];
+          try { localStorage.setItem(LS_COLS_KEY, JSON.stringify(visibleCols)); } catch (_) {}
+          m.remove();
+          render();
+        } }, 'Apply')
+      ));
+      m.appendChild(modal);
+      document.body.appendChild(m);
+    }
+
+    // ── KPI tile factory ────────────────────────────────────────
     function kpi(label, value, deltaPct, currency, icon, iconColor) {
-      // META_MODULE_v1 Phase B — KPI tile matches Ads Manager design:
-      // small colored icon + uppercase label + big bold value + delta hint
       const delta = Number(deltaPct);
       const arrow = delta > 0 ? '▲' : (delta < 0 ? '▼' : '·');
       const dcolor = delta > 5 ? '#16a34a' : (delta < -5 ? '#dc2626' : '#6b7280');
@@ -42350,8 +42542,18 @@ try {
           label
         ),
         h('div', { style:{ fontSize:'1.7rem', fontWeight:800, margin:'.35rem 0 .1rem', color: '#f8fafc', lineHeight: 1.05 } }, dispVal),
-        deltaPct != null ? h('div', { style:{ color: dcolor, fontSize:'.72rem' } }, arrow + ' ' + Math.abs(delta).toFixed(1) + '% vs previous') : null
+        deltaPct != null && !isNaN(delta) ? h('div', { style:{ color: dcolor, fontSize:'.72rem' } }, arrow + ' ' + Math.abs(delta).toFixed(1) + '% vs previous') : null
       );
+    }
+
+    // ── Cell formatter for the campaign table ───────────────────
+    function fmtCell(v, fmt) {
+      if (v == null || v === '' || (typeof v === 'number' && isNaN(v))) return '—';
+      if (fmt === 'currency') return '₹' + Number(v).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+      if (fmt === 'percent')  return Number(v).toFixed(2) + '%';
+      if (fmt === 'dec2')     return Number(v).toFixed(2);
+      if (fmt === 'int')      return Math.round(Number(v)).toLocaleString('en-IN');
+      return String(v);
     }
 
     async function render() {
@@ -42361,25 +42563,24 @@ try {
       summaryRow.appendChild(h('div', { class:'loading' }, 'Loading…'));
 
       try {
+        const filt = _currentFilters();
         const [summary, campaigns, alerts] = await Promise.all([
-          api('api_social_ads_summary',  { days: Number(daysSel.value) }),
-          api('api_social_ads_campaigns', { days: Number(daysSel.value) }),
+          api('api_social_ads_summary',   filt),
+          api('api_social_ads_campaigns', filt),
           api('api_social_ads_alerts')
         ]);
 
-        // Summary cards
+        // ── Summary tiles (6 fixed for now — column picker controls the table only) ─
         summaryRow.innerHTML = '';
-        // META_MODULE_v1 Phase B — match the Ads Manager 6-tile KPI strip:
-        // Spend (30d) / Impressions / Clicks / Reach / CTR / Avg CPC
-        const reach = summary.current.reach != null ? summary.current.reach : (summary.current.unique_clicks || 0);
-        summaryRow.appendChild(kpi('Spend (30d)',  summary.current.spend,       summary.delta_pct.spend, true, '$', '#22c55e'));
-        summaryRow.appendChild(kpi('Impressions',  summary.current.impressions, summary.delta_pct.impressions, false, '👁', '#3b82f6'));
-        summaryRow.appendChild(kpi('Clicks',       summary.current.clicks,      summary.delta_pct.clicks, false, '🖱', '#a855f7'));
-        summaryRow.appendChild(kpi('Reach',        reach,                       summary.delta_pct.reach, false, '👥', '#ec4899'));
-        summaryRow.appendChild(kpi('CTR',          summary.current.ctr.toFixed(2) + '%', null, false, '📊', '#f59e0b'));
-        summaryRow.appendChild(kpi('Avg CPC',      '$' + summary.current.cpc.toFixed(2), null, false, '$', '#06b6d4'));
+        const reach = summary.current.reach != null ? summary.current.reach : 0;
+        summaryRow.appendChild(kpi('Spend',         summary.current.spend,       summary.delta_pct.spend, true, '$', '#22c55e'));
+        summaryRow.appendChild(kpi('Impressions',   summary.current.impressions, summary.delta_pct.impressions, false, '👁', '#3b82f6'));
+        summaryRow.appendChild(kpi('Clicks',        summary.current.clicks,      summary.delta_pct.clicks, false, '🖱', '#a855f7'));
+        summaryRow.appendChild(kpi('Reach',         reach,                       summary.delta_pct.reach, false, '👥', '#ec4899'));
+        summaryRow.appendChild(kpi('CTR',           summary.current.ctr.toFixed(2) + '%', null, false, '📊', '#f59e0b'));
+        summaryRow.appendChild(kpi('Avg CPC',       '$' + summary.current.cpc.toFixed(2), null, false, '$', '#06b6d4'));
 
-        // Alerts
+        // ── Alerts ─────────────────────────────────────────────
         if (!alerts.length) {
           alertsCard.appendChild(h('div', { class:'muted', style:{ padding:'.7rem' } }, '✅ No active alerts.'));
         } else {
@@ -42401,39 +42602,33 @@ try {
           });
         }
 
-        // Campaigns table
+        // ── Campaigns table — dynamic columns ────────────────────
         campTable.appendChild(h('h4', { style:{ margin:'0 0 .5rem 0' } }, 'Campaign breakdown'));
         if (!campaigns.length) {
           campTable.appendChild(h('div', { class:'empty', style:{ padding:'1.5rem', textAlign:'center' } },
             'No campaign data in this period. Click "🔄 Pull from Meta" to fetch.'));
         } else {
+          const cols = COL_CATALOG.filter(c => visibleCols.indexOf(c.key) >= 0);
           const tbl = h('table', { class:'tbl', style:{ width:'100%' } });
-          tbl.appendChild(h('thead', {}, h('tr', {},
+          const headRow = h('tr', {},
+            h('th', {}, 'Ad Account'),
             h('th', {}, 'Campaign'),
-            h('th', {}, 'Spend'),
-            h('th', {}, 'Impr.'),
-            h('th', {}, 'Clicks'),
-            h('th', {}, 'CTR'),
-            h('th', {}, 'CPC'),
-            h('th', {}, 'Leads'),
-            h('th', {}, 'CPL')
-          )));
+            ...cols.map(c => h('th', {}, c.label))
+          );
+          tbl.appendChild(h('thead', {}, headRow));
           const tb = h('tbody', {});
           campaigns.forEach(c => {
-            const ctr = c.impressions > 0 ? (c.clicks / c.impressions * 100).toFixed(2) + '%' : '—';
-            tb.appendChild(h('tr', {},
+            const cells = [
               h('td', {},
-                h('div', { style:{ fontWeight:'600' } }, c.campaign_name || c.campaign_id),
-                h('div', { class:'muted', style:{ fontSize:'.8em' } }, c.ad_account_id)
+                h('div', { style:{ fontWeight:'600', fontSize:'.88rem' } }, c.ad_account_name || c.ad_account_id),
+                h('div', { class:'muted', style:{ fontSize:'.72em' } }, c.ad_account_id + (c.ad_account_currency ? ' · ' + c.ad_account_currency : ''))
               ),
-              h('td', {}, '₹' + Number(c.spend).toLocaleString('en-IN', { maximumFractionDigits: 0 })),
-              h('td', {}, Number(c.impressions).toLocaleString('en-IN')),
-              h('td', {}, Number(c.clicks).toLocaleString('en-IN')),
-              h('td', {}, ctr),
-              h('td', {}, '₹' + Number(c.cpc).toFixed(2)),
-              h('td', {}, c.leads || 0),
-              h('td', {}, c.cpl ? '₹' + Number(c.cpl).toFixed(0) : '—')
-            ));
+              h('td', {},
+                h('div', { style:{ fontWeight:'600' } }, c.campaign_name || c.campaign_id)
+              ),
+              ...cols.map(col => h('td', {}, fmtCell(c[col.key], col.fmt)))
+            ];
+            tb.appendChild(h('tr', {}, ...cells));
           });
           tbl.appendChild(tb);
           campTable.appendChild(tbl);
@@ -42444,7 +42639,10 @@ try {
       }
     }
 
-    async function openAccountsModal(onSave) {
+    // First render
+    render();
+
+        async function openAccountsModal(onSave) {
       const m = h('div', { class:'modal-backdrop' });
       const modal = h('div', { class:'modal' });
       modal.appendChild(h('div', { class:'modal-head' },

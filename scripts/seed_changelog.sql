@@ -75,3 +75,10 @@ VALUES ('outbound-wh-cf-fire-v1', 'Outbound Webhooks — custom-field rules now 
         'Fixed bug where webhooks with a custom-field condition would Test successfully but never fire on real lead creation. Cause: rule key and lead extra_json key form did not match (one had cf_ prefix, the other did not). Both forms are now accepted.',
         NOW())
 ON CONFLICT (version) DO NOTHING;
+
+-- META_ADS_v1.2 — Ad Account filter + Custom date range + Account name column + Column picker
+INSERT INTO changelog (version, title, body, posted_at)
+VALUES ('meta-ads-v1.2', 'Ads Manager — filters, custom date, and column picker',
+        'Ads Manager now lets you (1) filter by one or more ad accounts, (2) pick a custom From/To date range, (3) see the human ad account name on every campaign row, and (4) customize visible columns with 20+ Meta metrics including Purchases, Cost per Purchase, ROAS, Reach, Frequency, ATC, Landing Page Views, ThruPlays, and Messaging Conversations. Click the new "⚙ Columns" button to choose. Click "🏢 All accounts" to filter.',
+        NOW())
+ON CONFLICT (version) DO NOTHING;
