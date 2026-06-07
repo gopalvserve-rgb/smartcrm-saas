@@ -42409,9 +42409,7 @@ try {
       } catch (e) { toast('Export failed: ' + e.message, 'err'); }
     } }, '⬇ Export All CSV');
     const colsBtn = h('button', { class:'btn', onclick: () => openColumnPicker() }, '⚙ Columns');
-    const createBtn = h('button', { class:'btn primary', onclick: () => {
-      window.open('https://business.facebook.com/adsmanager/manage/campaigns?act=', '_blank', 'noopener');
-    } }, '+ Create');
+    const createBtn = h('button', { class:'btn primary', onclick: () => openCreateCampaignModal() }, '+ Create');
 
     // META_ADS_v1.2.1 — sticky toolbar container so header + Columns btn stay
     // visible when user scrolls through many campaigns or expands alerts.
@@ -42551,7 +42549,149 @@ try {
       document.body.appendChild(m);
     }
 
-    // ── KPI tile factory ────────────────────────────────────────
+    // ── Create Campaign modal (META_ADS_v1.3) ──────────────────────
+    async function openCreateCampaignModal() {
+      // Ensure we have ad accounts cached
+      let accts = _acctsCache;
+      if (!accts) {
+        try { accts = await api('api_social_ads_accounts_list'); _acctsCache = accts; }
+        catch (e) { toast(e.message, 'err'); return; }
+      }
+      if (!accts || !accts.length) {
+        toast('No ad accounts connected. Click Connect Facebook first.', 'warn');
+        return;
+      }
+      // Check scopes — if missing ads_management, show Reconnect CTA
+      let scopeInfo = { has_ads_management: false };
+      try { scopeInfo = await api('api_social_ads_checkScopes'); } catch (_) {}
+      let objectives = [
+        { value: 'OUTCOME_LEADS',         label: 'Leads' },
+        { value: 'OUTCOME_SALES',         label: 'Sales (purchases)' },
+        { value: 'OUTCOME_TRAFFIC',       label: 'Traffic (website / clicks)' },
+        { value: 'OUTCOME_AWARENESS',     label: 'Awareness (reach / impressions)' },
+        { value: 'OUTCOME_ENGAGEMENT',    label: 'Engagement (post / page / messaging)' },
+        { value: 'OUTCOME_APP_PROMOTION', label: 'App promotion' }
+      ];
+      try { const o = await api('api_social_ads_objectives'); if (Array.isArray(o) && o.length) objectives = o; } catch (_) {}
+
+      const m = h('div', { class:'modal-backdrop' });
+      const modal = h('div', { class:'modal', style:{ maxWidth:'620px' } });
+      modal.appendChild(h('div', { class:'modal-head' },
+        h('h3', {}, '🚀 Create Campaign'),
+        h('button', { class:'btn ghost', onclick: () => m.remove() }, '✕')
+      ));
+      const body = h('div', { class:'modal-body' });
+
+      // Scope warning banner if needed
+      if (!scopeInfo.has_ads_management) {
+        const warn = h('div', { style:{ background:'#fef3c7', border:'1px solid #fcd34d', padding:'.7rem', borderRadius:'8px', marginBottom:'1rem' } },
+          h('div', { style:{ fontWeight:600, color:'#92400e', marginBottom:'.3rem' } }, '⚠ Your Facebook connection is missing the ads_management permission'),
+          h('div', { style:{ fontSize:'.85em', color:'#92400e', marginBottom:'.5rem' } },
+            'Click Reconnect to grant SmartCRM permission to create campaigns on your behalf. ' +
+            'Your existing ad reports and other Meta features will keep working — only adds new permissions.'),
+          h('button', { class:'btn primary sm', onclick: async () => {
+            try {
+              if (!window.FB) {
+                const fbAppId = '965594974738358';
+                await _ensureFbSdk(fbAppId);
+              }
+              window.FB.login(async (resp) => {
+                if (!resp || !resp.authResponse || !resp.authResponse.accessToken) {
+                  toast('Reconnect cancelled', 'warn'); return;
+                }
+                try {
+                  await api('api_social_fb_connect', resp.authResponse.accessToken);
+                  toast('Facebook reconnected with new permissions', 'ok');
+                  warn.remove();
+                  // Re-check scopes
+                  try { const sc = await api('api_social_ads_checkScopes'); scopeInfo = sc; } catch (_) {}
+                } catch (e) { toast(e.message, 'err'); }
+              }, { scope: SOCIAL_SCOPES, auth_type: 'rerequest', return_scopes: true });
+            } catch (e) { toast(e.message, 'err'); }
+          } }, '🔄 Reconnect Facebook')
+        );
+        body.appendChild(warn);
+      }
+
+      // Form
+      const inpName = h('input', { type:'text', placeholder:'e.g. Diwali Sale 2026', style:{ width:'100%' } });
+      const selObj = h('select', { style:{ width:'100%' } },
+        ...objectives.map(o => h('option', { value: o.value }, o.label))
+      );
+      const selAcct = h('select', { style:{ width:'100%' } },
+        ...accts.map(a => h('option', { value: a.ad_account_id }, (a.name || a.ad_account_id) + (a.currency ? ' · ' + a.currency : '')))
+      );
+      const inpBudget = h('input', { type:'number', min:'100', step:'10', placeholder:'500', style:{ width:'100%' } });
+      const selStatus = h('select', { style:{ width:'100%' } },
+        h('option', { value:'PAUSED', selected: 'selected' }, '⏸ Paused (recommended — review before going live)'),
+        h('option', { value:'ACTIVE' }, '▶ Active (start spending immediately)')
+      );
+
+      const field = (label, sub, el) => h('div', { style:{ marginBottom:'1rem' } },
+        h('label', { style:{ fontWeight:600, display:'block', marginBottom:'.2rem' } }, label),
+        sub ? h('div', { class:'muted', style:{ fontSize:'.8em', marginBottom:'.3rem' } }, sub) : null,
+        el
+      );
+      body.appendChild(field('Campaign Name *', 'Pick a memorable name — visible only in Meta Ads Manager', inpName));
+      body.appendChild(field('Objective *', 'What outcome should Meta optimize for?', selObj));
+      body.appendChild(field('Ad Account *', 'Which connected account to bill', selAcct));
+      body.appendChild(field('Daily Budget (₹)', 'Minimum ₹100/day. Leave empty to set later in Meta.', inpBudget));
+      body.appendChild(field('Start Status', 'Paused = safe — add ad sets and creatives, then turn on.', selStatus));
+
+      body.appendChild(h('div', { class:'muted', style:{ fontSize:'.82em', padding:'.6rem', background:'#eff6ff', border:'1px solid #bfdbfe', borderRadius:'6px' } },
+        'ℹ This creates the Campaign object only. After creation, you\'ll get a link to add Ad Sets (audience, placement) and Ad Creatives (image, copy, CTA) in Meta Ads Manager. Full in-app ad-set + creative builder coming in v1.4.'));
+
+      modal.appendChild(body);
+
+      const submitBtn = h('button', { class:'btn primary' }, '🚀 Create Campaign');
+      submitBtn.onclick = async () => {
+        const name = inpName.value.trim();
+        if (!name) { toast('Campaign name required', 'warn'); inpName.focus(); return; }
+        if (!scopeInfo.has_ads_management) {
+          toast('Reconnect Facebook first to enable campaign creation', 'warn');
+          return;
+        }
+        submitBtn.disabled = true; submitBtn.textContent = '⏳ Creating…';
+        try {
+          const r = await api('api_social_ads_createCampaign', {
+            name,
+            objective: selObj.value,
+            ad_account_id: selAcct.value,
+            daily_budget: inpBudget.value ? Number(inpBudget.value) : null,
+            status: selStatus.value
+          });
+          body.innerHTML = '';
+          body.appendChild(h('div', { style:{ background:'#dcfce7', border:'1px solid #86efac', padding:'1rem', borderRadius:'8px' } },
+            h('h4', { style:{ margin:'0 0 .5rem 0', color:'#166534' } }, '✅ Campaign created'),
+            h('div', { style:{ marginBottom:'.4rem' } }, h('strong', {}, 'Name: '), r.name),
+            h('div', { style:{ marginBottom:'.4rem' } }, h('strong', {}, 'Campaign ID: '), h('code', {}, r.campaign_id)),
+            h('div', { style:{ marginBottom:'.4rem' } }, h('strong', {}, 'Status: '), r.status),
+            h('div', { class:'muted', style:{ marginTop:'.8rem', fontSize:'.85em' } },
+              'Next step: add Ad Sets (audience, placement, schedule) and Ad Creatives (image, headline, body, CTA) in Meta Ads Manager.')
+          ));
+          modal.querySelector('.modal-foot').innerHTML = '';
+          modal.querySelector('.modal-foot').appendChild(h('a', { class:'btn primary', href: r.ads_url, target:'_blank', rel:'noopener' }, '🔗 Add Ad Sets & Creatives in Meta'));
+          modal.querySelector('.modal-foot').appendChild(h('button', { class:'btn ghost', onclick: () => { m.remove(); render(); } }, 'Close'));
+        } catch (e) {
+          submitBtn.disabled = false; submitBtn.textContent = '🚀 Create Campaign';
+          if (String(e.message).startsWith('NEEDS_RECONNECT')) {
+            toast('Reconnect Facebook to enable campaign creation', 'warn');
+            scopeInfo.has_ads_management = false;
+          } else {
+            toast(e.message, 'err');
+          }
+        }
+      };
+
+      modal.appendChild(h('div', { class:'modal-foot' },
+        h('button', { class:'btn ghost', onclick: () => m.remove() }, 'Cancel'),
+        submitBtn
+      ));
+      m.appendChild(modal);
+      document.body.appendChild(m);
+    }
+
+        // ── KPI tile factory ────────────────────────────────────────
     function kpi(label, value, deltaPct, currency, icon, iconColor) {
       const delta = Number(deltaPct);
       const arrow = delta > 0 ? '▲' : (delta < 0 ? '▼' : '·');
@@ -42652,39 +42792,230 @@ try {
           alertsCard.appendChild(body);
         }
 
-        // ── Campaigns table — clickable rows for drill-down (v1.2.1) ─────
-        campTable.appendChild(h('h4', { style:{ margin:'0 0 .5rem 0' } }, 'Campaign breakdown'));
+        // ── Campaigns table — Pivot/Flat + Totals + Inline drill-down (v1.3) ─────
+        // Build header with view-mode toggle
+        const acctCount = new Set(campaigns.map(c => c.ad_account_id)).size;
+        const LS_VIEWMODE = 'metaAds_viewMode_v1';
+        let viewMode;
+        try { viewMode = localStorage.getItem(LS_VIEWMODE); } catch (_) { viewMode = null; }
+        if (!viewMode || (viewMode !== 'pivot' && viewMode !== 'flat')) {
+          viewMode = acctCount > 1 ? 'pivot' : 'flat';
+        }
+        const headerBar = h('div', { style:{ display:'flex', alignItems:'center', justifyContent:'space-between', margin:'0 0 .5rem 0', flexWrap:'wrap', gap:'.5rem' } });
+        headerBar.appendChild(h('h4', { style:{ margin:0 } }, 'Campaign breakdown'));
+        const modeBtn = h('button', { class:'btn sm', style:{ fontSize:'.82rem' } },
+          viewMode === 'pivot' ? '📊 Pivot Table ▾' : '📋 Flat List ▾');
+        modeBtn.onclick = () => {
+          viewMode = (viewMode === 'pivot' ? 'flat' : 'pivot');
+          try { localStorage.setItem(LS_VIEWMODE, viewMode); } catch (_) {}
+          render();
+        };
+        const colsPill = h('span', { class:'btn sm ghost', style:{ fontSize:'.78rem', cursor:'pointer' }, onclick: openColumnPicker },
+          '📊 Showing ' + visibleCols.length + ' of ' + COL_CATALOG.length + ' columns · ⚙ Customize');
+        headerBar.appendChild(h('div', { style:{ display:'flex', gap:'.4rem', alignItems:'center', flexWrap:'wrap' } }, colsPill, modeBtn));
+        campTable.appendChild(headerBar);
+
         if (!campaigns.length) {
           campTable.appendChild(h('div', { class:'empty', style:{ padding:'1.5rem', textAlign:'center' } },
             'No campaign data in this period. Click "🔄 Pull from Meta" to fetch.'));
         } else {
           const cols = COL_CATALOG.filter(c => visibleCols.indexOf(c.key) >= 0);
           const tbl = h('table', { class:'tbl', style:{ width:'100%' } });
-          const headRow = h('tr', {},
+          tbl.appendChild(h('thead', {}, h('tr', {},
             h('th', {}, 'Ad Account'),
             h('th', {}, 'Campaign'),
             ...cols.map(c => h('th', {}, c.label))
-          );
-          tbl.appendChild(h('thead', {}, headRow));
+          )));
           const tb = h('tbody', {});
-          campaigns.forEach(c => {
-            const tr = h('tr', { style:{ cursor:'pointer' }, title: 'Click to drill down — see daily breakdown for this campaign' });
-            tr.onclick = () => openCampaignDetail(c);
-            tr.onmouseenter = () => tr.style.background = 'rgba(99,102,241,.06)';
-            tr.onmouseleave = () => tr.style.background = '';
-            tr.appendChild(h('td', {},
-              h('div', { style:{ fontWeight:'600', fontSize:'.88rem' } }, c.ad_account_name || c.ad_account_id),
-              h('div', { class:'muted', style:{ fontSize:'.72em' } }, c.ad_account_id + (c.ad_account_currency ? ' · ' + c.ad_account_currency : ''))
+
+          // Aggregator: sums + weighted averages
+          function _aggregate(rows) {
+            const out = { ad_account_id: '', ad_account_name: '', campaign_id: '', campaign_name: '' };
+            // Sum-style metrics
+            ['spend','impressions','reach','clicks','leads','results',
+             'purchases','purchase_value','add_to_carts','landing_page_views',
+             'thru_plays','conversations_started','inline_link_clicks']
+              .forEach(k => out[k] = rows.reduce((a, r) => a + (Number(r[k])||0), 0));
+            // Rate metrics — derive from raw totals
+            out.ctr = out.impressions > 0 ? (out.clicks / out.impressions) * 100 : 0;
+            out.cpc = out.clicks > 0 ? out.spend / out.clicks : 0;
+            out.cpl = out.leads > 0 ? out.spend / out.leads : 0;
+            out.cpm = out.impressions > 0 ? (out.spend / out.impressions) * 1000 : 0;
+            out.frequency = out.reach > 0 ? out.impressions / out.reach : 0;
+            out.cost_per_purchase = out.purchases > 0 ? out.spend / out.purchases : 0;
+            out.purchase_roas = out.spend > 0 ? out.purchase_value / out.spend : 0;
+            out.cost_per_add_to_cart = out.add_to_carts > 0 ? out.spend / out.add_to_carts : 0;
+            out.cost_per_landing_page_view = out.landing_page_views > 0 ? out.spend / out.landing_page_views : 0;
+            out.cost_per_thru_play = out.thru_plays > 0 ? out.spend / out.thru_plays : 0;
+            out.cost_per_conversation = out.conversations_started > 0 ? out.spend / out.conversations_started : 0;
+            out.cost_per_inline_link_click = out.inline_link_clicks > 0 ? out.spend / out.inline_link_clicks : 0;
+            return out;
+          }
+
+          // Renders ONE row + an inline drill-down expansion <tr>
+          const _expandedKeys = new Set();
+          function _renderRow(rowData, opts) {
+            opts = opts || {};
+            const drillKey = rowData.campaign_id + '|' + (rowData.ad_account_id || '*');
+            const tr = h('tr', {
+              style: {
+                cursor: opts.allowDrill ? 'pointer' : 'default',
+                background: opts.indent ? 'rgba(0,0,0,.02)' : '',
+                fontWeight: opts.bold ? '600' : '400'
+              },
+              title: opts.allowDrill ? 'Click to drill down — see daily breakdown for this campaign' : ''
+            });
+            if (opts.allowDrill) {
+              tr.onmouseenter = () => tr.style.background = 'rgba(99,102,241,.06)';
+              tr.onmouseleave = () => tr.style.background = opts.indent ? 'rgba(0,0,0,.02)' : '';
+              tr.onclick = (e) => {
+                if (e.target.tagName === 'A' || e.target.tagName === 'BUTTON') return;
+                if (_expandedKeys.has(drillKey)) {
+                  _expandedKeys.delete(drillKey);
+                  const next = tr.nextElementSibling;
+                  if (next && next.classList.contains('drill-row')) next.remove();
+                } else {
+                  _expandedKeys.add(drillKey);
+                  _injectDrillRow(tr, rowData, opts.colspan);
+                }
+              };
+            }
+            tr.appendChild(h('td', {
+              style: { paddingLeft: opts.indent ? '2rem' : '' }
+            },
+              h('div', { style:{ fontWeight:'600', fontSize:'.86rem' } }, rowData.ad_account_name || rowData.ad_account_id || '(All accounts)'),
+              rowData.ad_account_id ? h('div', { class:'muted', style:{ fontSize:'.7em' } }, rowData.ad_account_id) : null
             ));
             tr.appendChild(h('td', {},
-              h('div', { style:{ fontWeight:'600', display:'flex', alignItems:'center', gap:'.3rem' } },
-                h('span', {}, c.campaign_name || c.campaign_id),
-                h('span', { style:{ fontSize:'.7em', color:'#6366f1' } }, '▸')
+              h('div', { style:{ fontWeight: opts.bold ? '700' : '600' } },
+                rowData.campaign_name || rowData.campaign_id || '—',
+                opts.allowDrill ? h('span', { style:{ fontSize:'.7em', color:'#6366f1', marginLeft:'.3rem' } }, _expandedKeys.has(drillKey) ? '▾' : '▸') : null
               )
             ));
-            cols.forEach(col => tr.appendChild(h('td', {}, fmtCell(c[col.key], col.fmt))));
-            tb.appendChild(tr);
-          });
+            cols.forEach(col => tr.appendChild(h('td', {}, fmtCell(rowData[col.key], col.fmt))));
+            return tr;
+          }
+
+          async function _injectDrillRow(afterTr, rowData, colspan) {
+            const drillTr = h('tr', { class: 'drill-row' });
+            const drillTd = h('td', { colspan: String(colspan) , style:{ padding:0, background:'#0f172a', color:'#e2e8f0', borderTop:'2px solid #6366f1' } });
+            const wrap = h('div', { style:{ padding:'1rem 1.2rem' } });
+            wrap.appendChild(h('div', { class:'loading' }, 'Loading daily breakdown…'));
+            drillTd.appendChild(wrap);
+            drillTr.appendChild(drillTd);
+            afterTr.parentNode.insertBefore(drillTr, afterTr.nextSibling);
+
+            try {
+              const filt2 = _currentFilters();
+              const args = { campaign_id: rowData.campaign_id };
+              if (filt2.from && filt2.to) { args.from = filt2.from; args.to = filt2.to; }
+              else if (filt2.days) args.days = filt2.days;
+              const det = await api('api_social_ads_campaign_detail', args);
+              wrap.innerHTML = '';
+
+              // Header
+              wrap.appendChild(h('div', { style:{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'.6rem', flexWrap:'wrap', gap:'.5rem' } },
+                h('h4', { style:{ margin:0, color:'#f8fafc' } }, '📅 Daily breakdown · ' + det.period.from + ' → ' + det.period.to),
+                h('a', { class:'btn primary sm', href: 'https://business.facebook.com/adsmanager/manage/ads?act=' + (rowData.ad_account_id || '').replace(/^act_/, '') + '&selected_campaign_ids=' + rowData.campaign_id, target:'_blank', rel:'noopener' }, '🔗 Open in Meta Ads Manager')
+              ));
+
+              // Mini KPI strip
+              const totalsRow = h('div', { style:{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(120px, 1fr))', gap:'.4rem', marginBottom:'.6rem' } });
+              const kpiTile = (label, val, color) => h('div', { style:{ padding:'.45rem .65rem', background:'rgba(255,255,255,.05)', borderRadius:'6px' } },
+                h('div', { style:{ color: color || '#a78bfa', fontSize:'.62rem', fontWeight:'700', textTransform:'uppercase' } }, label),
+                h('div', { style:{ fontSize:'1.05rem', fontWeight:'700', color:'#f8fafc', marginTop:'.15rem' } }, val)
+              );
+              const _roas = det.totals.spend > 0 ? (det.totals.purchase_value / det.totals.spend).toFixed(2) + '×' : '—';
+              totalsRow.appendChild(kpiTile('Spend',     '₹' + Math.round(det.totals.spend).toLocaleString('en-IN'), '#22c55e'));
+              totalsRow.appendChild(kpiTile('Impr.',     det.totals.impressions.toLocaleString('en-IN'), '#3b82f6'));
+              totalsRow.appendChild(kpiTile('Clicks',    det.totals.clicks.toLocaleString('en-IN'), '#a855f7'));
+              totalsRow.appendChild(kpiTile('Leads',     String(det.totals.leads), '#ec4899'));
+              totalsRow.appendChild(kpiTile('Purchases', String(det.totals.purchases), '#f59e0b'));
+              totalsRow.appendChild(kpiTile('ROAS',      _roas, '#06b6d4'));
+              wrap.appendChild(totalsRow);
+
+              if (!det.rows.length) {
+                wrap.appendChild(h('div', { class:'muted', style:{ padding:'.7rem', textAlign:'center' } },
+                  'No daily data for this campaign in the selected period.'));
+              } else {
+                const dt = h('table', { class:'tbl', style:{ width:'100%', fontSize:'.82rem' } });
+                dt.appendChild(h('thead', {}, h('tr', {},
+                  h('th', {}, 'Date'), h('th', {}, 'Spend'), h('th', {}, 'Impr.'),
+                  h('th', {}, 'Clicks'), h('th', {}, 'CTR'), h('th', {}, 'CPC'),
+                  h('th', {}, 'Leads'), h('th', {}, 'CPL'),
+                  h('th', {}, 'Purchases'), h('th', {}, 'ROAS'),
+                  h('th', {}, 'ATC'), h('th', {}, 'LPV')
+                )));
+                const dtb = h('tbody', {});
+                det.rows.forEach(r => {
+                  const dateStr = new Date(r.date).toLocaleDateString('en-IN', { weekday:'short', day:'2-digit', month:'short' });
+                  dtb.appendChild(h('tr', {},
+                    h('td', {}, dateStr),
+                    h('td', {}, '₹' + Math.round(r.spend).toLocaleString('en-IN')),
+                    h('td', {}, r.impressions.toLocaleString('en-IN')),
+                    h('td', {}, r.clicks.toLocaleString('en-IN')),
+                    h('td', {}, r.ctr.toFixed(2) + '%'),
+                    h('td', {}, r.cpc > 0 ? '₹' + r.cpc.toFixed(2) : '—'),
+                    h('td', {}, String(r.leads || 0)),
+                    h('td', {}, r.cpl > 0 ? '₹' + r.cpl.toFixed(0) : '—'),
+                    h('td', {}, String(r.purchases || 0)),
+                    h('td', {}, r.purchase_roas > 0 ? r.purchase_roas.toFixed(2) + '×' : '—'),
+                    h('td', {}, String(r.add_to_carts || 0)),
+                    h('td', {}, String(r.landing_page_views || 0))
+                  ));
+                });
+                dt.appendChild(dtb);
+                wrap.appendChild(dt);
+              }
+            } catch (e) {
+              wrap.innerHTML = '';
+              wrap.appendChild(h('div', { class:'error-box' }, 'Could not load campaign detail: ' + e.message));
+            }
+          }
+
+          const totalColspan = cols.length + 2; // Ad Account + Campaign + N metric cols
+
+          if (viewMode === 'pivot' && acctCount > 1) {
+            // Group campaigns by campaign_name, then break down per account
+            const groups = {};
+            campaigns.forEach(c => {
+              const key = (c.campaign_name || c.campaign_id || '—').toLowerCase();
+              (groups[key] = groups[key] || []).push(c);
+            });
+            // Sort groups by total spend desc
+            const sortedKeys = Object.keys(groups).sort((a, b) =>
+              groups[b].reduce((s,r)=>s+r.spend,0) - groups[a].reduce((s,r)=>s+r.spend,0));
+            sortedKeys.forEach(key => {
+              const rows = groups[key];
+              if (rows.length === 1) {
+                tb.appendChild(_renderRow(rows[0], { allowDrill: true, colspan: totalColspan }));
+              } else {
+                // Parent "All" row
+                const parent = _aggregate(rows);
+                parent.ad_account_id = '';
+                parent.ad_account_name = 'All';
+                parent.campaign_id = rows[0].campaign_id;
+                parent.campaign_name = rows[0].campaign_name;
+                tb.appendChild(_renderRow(parent, { allowDrill: true, bold: true, colspan: totalColspan }));
+                // Per-account children
+                rows.forEach(r => tb.appendChild(_renderRow(r, { allowDrill: true, indent: true, colspan: totalColspan })));
+              }
+            });
+          } else {
+            campaigns.forEach(c => tb.appendChild(_renderRow(c, { allowDrill: true, colspan: totalColspan })));
+          }
+
+          // ── Totals row (sticky-style — bold + background) ──
+          const totalsAgg = _aggregate(campaigns);
+          totalsAgg.campaign_name = 'Total results';
+          totalsAgg.ad_account_name = String(campaigns.length) + ' campaigns';
+          totalsAgg.ad_account_id = '';
+          const totalsTr = h('tr', { style:{ borderTop:'2px solid #6366f1', background:'#0f172a', color:'#f8fafc', fontWeight:'700' } });
+          totalsTr.appendChild(h('td', { style:{ color:'#f8fafc' } }, totalsAgg.ad_account_name));
+          totalsTr.appendChild(h('td', { style:{ color:'#f8fafc', fontWeight:'700' } }, totalsAgg.campaign_name));
+          cols.forEach(col => totalsTr.appendChild(h('td', { style:{ color:'#f8fafc' } }, fmtCell(totalsAgg[col.key], col.fmt))));
+          tb.appendChild(totalsTr);
+
           tbl.appendChild(tb);
           campTable.appendChild(tbl);
         }
@@ -42895,12 +43226,15 @@ try {
     return _fbSdkLoading;
   }
 
+  // META_ADS_v1.3 — added ads_management + pages_manage_ads so the Create
+  // Campaign modal can actually POST to Meta Marketing API. Users with a
+  // pre-v1.3 token must reconnect to upgrade their scope set.
   const SOCIAL_SCOPES = [
     'pages_show_list','pages_read_engagement','pages_manage_metadata',
     'pages_messaging','pages_manage_posts','pages_manage_engagement',
     'pages_read_user_content','instagram_basic','instagram_manage_messages',
     'instagram_manage_comments','instagram_content_publish',
-    'ads_read','business_management'
+    'ads_read','ads_management','pages_manage_ads','business_management'
   ].join(',');
 
   async function openSocialConnectModal() {

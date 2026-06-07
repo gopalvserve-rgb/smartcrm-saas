@@ -89,3 +89,10 @@ VALUES ('meta-ads-v1.2.1', 'Ads Manager — drill-down, collapsed alerts, sticky
         'Three improvements: (1) Alerts panel is collapsed by default — click the 🚨 bar to expand/hide; preference persists. (2) Click any campaign row to drill down — a modal opens with daily breakdown showing Spend, Impressions, Clicks, CTR, CPC, Leads, CPL, Purchases, ROAS, ATC and LPV per day. (3) The toolbar (Refresh, Columns, + Create, Period selector) now sticks to the top when you scroll. Also fixed a race condition that caused alerts to render twice on first load.',
         NOW())
 ON CONFLICT (version) DO NOTHING;
+
+-- META_ADS_v1.3 — inline drill-down + totals row + pivot view + campaign creation
+INSERT INTO changelog (version, title, body, posted_at)
+VALUES ('meta-ads-v1.3', 'Ads Manager — totals, pivot view, in-app campaign creation',
+        'Three big additions: (1) Drill-down is now inline — click any campaign row and the daily breakdown expands BELOW it on the same page (no more modal popup). (2) Totals row at the bottom of the campaigns table aggregates spend, impressions, clicks, leads, purchases, ROAS and every other visible metric. (3) Pivot Table view groups campaigns by name with parent "All" totals + per-account sub-rows (auto-enabled when 2+ accounts selected). PLUS: real in-app campaign creation — the + Create button now opens a form where you pick a Name, Objective, Ad Account, Daily Budget, and start Status; the campaign is created directly via Meta Marketing API. First-time use prompts a one-click "Reconnect Facebook" to grant the ads_management permission.',
+        NOW())
+ON CONFLICT (version) DO NOTHING;
