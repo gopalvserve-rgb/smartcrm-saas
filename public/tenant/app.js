@@ -48342,3 +48342,230 @@ VIEWS.campaignreport = async (view) => {
   apply();
 };
 
+
+// ===========================================================================
+// PACK_VIEWS_v1 — 2026-06-07 — SPA views for Finance/Solar/Mfg/Holiday/Ecommerce
+// ===========================================================================
+// Each pack's primary sidebar item now renders a real table view that calls
+// the pack's api_* function and shows the seeded dummy data.
+
+function _packIndPill(text, color) {
+  return h('span', { style: {
+    background: color + '22', color: color, padding: '2px 8px',
+    borderRadius: '4px', fontSize: '.72em', fontWeight: 600, textTransform: 'uppercase'
+  } }, text);
+}
+
+function _packFmtINR(n) { return '₹' + Number(n || 0).toLocaleString('en-IN'); }
+
+// ---- FINANCE: Policies ----
+VIEWS.finpolicies = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('h2', {}, '📋 Policies & Loans'));
+  view.appendChild(h('p', { class: 'muted' }, 'Issued policies, sanctioned loans, premium schedule, and renewals.'));
+  let data;
+  try {
+    // get latest 50 policies across all leads
+    const leads = await api('api_leads_list', { limit: 50 });
+    const allPolicies = [];
+    for (const l of (leads.leads || []).slice(0, 30)) {
+      try {
+        const r = await api('api_fin_policy_byLead', { lead_id: l.id });
+        (r.policies || []).forEach(p => { p._lead = l; allPolicies.push(p); });
+      } catch (_) {}
+    }
+    data = { policies: allPolicies };
+  } catch (e) { view.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+  if (!data.policies.length) {
+    view.appendChild(h('div', { class: 'muted', style: { padding: '1rem' } }, 'No policies yet. Open a lead → 🏦 Finance panel to issue a policy.'));
+    return;
+  }
+  const tbl = h('table', { class: 'mini-table' },
+    h('thead', {}, h('tr', {},
+      h('th', {}, 'Policy #'),
+      h('th', {}, 'Lead'),
+      h('th', {}, 'Product'),
+      h('th', {}, 'Type'),
+      h('th', {}, 'Amount'),
+      h('th', {}, 'EMI/Premium'),
+      h('th', {}, 'Status')
+    )),
+    h('tbody', {}, data.policies.map(p => h('tr', {},
+      h('td', {}, h('strong', {}, p.policy_no || '—')),
+      h('td', {}, p._lead && p._lead.name || '—'),
+      h('td', {}, p.product_name || '—'),
+      h('td', {}, p.product_category || '—'),
+      h('td', {}, _packFmtINR(p.sanctioned_amount || p.sum_assured)),
+      h('td', {}, _packFmtINR(p.emi_amount || p.premium_amount) + ' ' + (p.premium_frequency === 'monthly' ? '/mo' : '/yr')),
+      h('td', {}, _packIndPill(p.status, p.status === 'disbursed' ? '#10b981' : (p.status === 'sanctioned' ? '#3b82f6' : '#f59e0b')))
+    )))
+  );
+  view.appendChild(tbl);
+};
+
+// ---- SOLAR: Site Surveys ----
+VIEWS.solarsites = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('h2', {}, '🏠 Site Surveys'));
+  view.appendChild(h('p', { class: 'muted' }, 'Rooftop surveys, monthly bills, and KW required for solar installations.'));
+  let data;
+  try {
+    const leads = await api('api_leads_list', { limit: 50 });
+    const sites = [];
+    for (const l of (leads.leads || []).slice(0, 30)) {
+      try { const r = await api('api_solar_site_byLead', { lead_id: l.id });
+        (r.sites || []).forEach(s => { s._lead = l; sites.push(s); });
+      } catch (_) {}
+    }
+    data = { sites };
+  } catch (e) { view.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+  if (!data.sites.length) { view.appendChild(h('div', { class: 'muted', style: { padding: '1rem' } }, 'No site surveys yet.')); return; }
+  const tbl = h('table', { class: 'mini-table' },
+    h('thead', {}, h('tr', {},
+      h('th', {}, 'Lead'), h('th', {}, 'Address'), h('th', {}, 'Rooftop (sqft)'),
+      h('th', {}, 'Monthly Bill'), h('th', {}, 'DISCOM'),
+      h('th', {}, 'Survey')
+    )),
+    h('tbody', {}, data.sites.map(s => h('tr', {},
+      h('td', {}, s._lead && s._lead.name || '—'),
+      h('td', {}, (s.address || '—') + (s.state ? ', ' + s.state : '')),
+      h('td', {}, Number(s.rooftop_area_sqft).toLocaleString('en-IN')),
+      h('td', {}, _packFmtINR(s.monthly_bill_inr)),
+      h('td', {}, s.discom || '—'),
+      h('td', {}, s.survey_done ? _packIndPill('Done ✓', '#10b981') : _packIndPill('Pending', '#f59e0b'))
+    )))
+  );
+  view.appendChild(tbl);
+};
+
+// ---- MANUFACTURER: RFQ Inbox ----
+VIEWS.mfgrfq = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('h2', {}, '📨 RFQ Inbox'));
+  view.appendChild(h('p', { class: 'muted' }, 'Incoming RFQs and quote tracking for B2B manufacturing.'));
+  let data;
+  try {
+    const leads = await api('api_leads_list', { limit: 50 });
+    const rfqs = [];
+    for (const l of (leads.leads || []).slice(0, 30)) {
+      try { const r = await api('api_mfg_inquiry_byLead', { lead_id: l.id });
+        (r.inquiries || []).forEach(q => { q._lead = l; rfqs.push(q); });
+      } catch (_) {}
+    }
+    data = { rfqs };
+  } catch (e) { view.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+  if (!data.rfqs.length) { view.appendChild(h('div', { class: 'muted', style: { padding: '1rem' } }, 'No RFQs yet.')); return; }
+  const tbl = h('table', { class: 'mini-table' },
+    h('thead', {}, h('tr', {},
+      h('th', {}, 'RFQ #'), h('th', {}, 'Lead'), h('th', {}, 'Spec'),
+      h('th', {}, 'Qty'), h('th', {}, 'Material'),
+      h('th', {}, 'Deliver By'), h('th', {}, 'Status')
+    )),
+    h('tbody', {}, data.rfqs.map(r => h('tr', {},
+      h('td', {}, h('strong', {}, r.rfq_no || '—')),
+      h('td', {}, r._lead && r._lead.name || '—'),
+      h('td', {}, (r.product_specs || '').slice(0, 30)),
+      h('td', {}, Number(r.quantity).toLocaleString('en-IN')),
+      h('td', {}, r.material_grade || '—'),
+      h('td', {}, r.expected_delivery_date || '—'),
+      h('td', {}, _packIndPill(r.status, r.status === 'quoted' ? '#10b981' : '#f59e0b'))
+    )))
+  );
+  view.appendChild(tbl);
+};
+
+// ---- HOLIDAY: Bookings ----
+VIEWS.tourbookings = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('h2', {}, '📅 Holiday Bookings'));
+  view.appendChild(h('p', { class: 'muted' }, 'Confirmed tour bookings with travel dates, PAX, and payment status.'));
+  let data;
+  try {
+    const leads = await api('api_leads_list', { limit: 50 });
+    const bookings = [];
+    for (const l of (leads.leads || []).slice(0, 30)) {
+      try { const r = await api('api_tour_booking_byLead', { lead_id: l.id });
+        (r.bookings || []).forEach(b => { b._lead = l; bookings.push(b); });
+      } catch (_) {}
+    }
+    data = { bookings };
+  } catch (e) { view.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+  if (!data.bookings.length) { view.appendChild(h('div', { class: 'muted', style: { padding: '1rem' } }, 'No bookings yet.')); return; }
+  const tbl = h('table', { class: 'mini-table' },
+    h('thead', {}, h('tr', {},
+      h('th', {}, 'Booking #'), h('th', {}, 'Lead'), h('th', {}, 'Destination'),
+      h('th', {}, 'Dates'), h('th', {}, 'PAX'),
+      h('th', {}, 'Total'), h('th', {}, 'Balance'), h('th', {}, 'Status')
+    )),
+    h('tbody', {}, data.bookings.map(b => h('tr', {},
+      h('td', {}, h('strong', {}, b.booking_no || '—')),
+      h('td', {}, b._lead && b._lead.name || '—'),
+      h('td', {}, b.destination || b.package_name || '—'),
+      h('td', {}, (b.travel_start_date || '?') + ' → ' + (b.travel_end_date || '?')),
+      h('td', {}, (b.pax_adults || 0) + 'A ' + (b.pax_children || 0) + 'C'),
+      h('td', {}, _packFmtINR(b.total_amount)),
+      h('td', { style: { fontWeight: 600, color: Number(b.balance_amount) > 0 ? '#dc2626' : '#16a34a' } }, _packFmtINR(b.balance_amount)),
+      h('td', {}, _packIndPill(b.status, b.status === 'confirmed' ? '#10b981' : '#f59e0b'))
+    )))
+  );
+  view.appendChild(tbl);
+};
+
+// ---- ECOMMERCE: Orders ----
+VIEWS.ecorders = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('h2', {}, '📦 Orders'));
+  view.appendChild(h('p', { class: 'muted' }, 'All ecommerce orders with shipping, payment status, and tracking.'));
+  let data;
+  try {
+    const leads = await api('api_leads_list', { limit: 50 });
+    const orders = [];
+    for (const l of (leads.leads || []).slice(0, 30)) {
+      try { const r = await api('api_ec_order_byLead', { lead_id: l.id });
+        (r.orders || []).forEach(o => { o._lead = l; orders.push(o); });
+      } catch (_) {}
+    }
+    data = { orders };
+  } catch (e) { view.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+  if (!data.orders.length) { view.appendChild(h('div', { class: 'muted', style: { padding: '1rem' } }, 'No orders yet.')); return; }
+  const STATUS_COLOR = { delivered:'#10b981', shipped:'#a855f7', packed:'#06b6d4', placed:'#3b82f6', returned:'#ef4444', refunded:'#84cc16' };
+  const tbl = h('table', { class: 'mini-table' },
+    h('thead', {}, h('tr', {},
+      h('th', {}, 'Order ID'), h('th', {}, 'Customer'), h('th', {}, 'Items'),
+      h('th', {}, 'Total'), h('th', {}, 'Payment'),
+      h('th', {}, 'Courier'), h('th', {}, 'AWB'), h('th', {}, 'Status')
+    )),
+    h('tbody', {}, data.orders.map(o => {
+      const itemDesc = (o.items || []).map(i => i.qty + 'x ' + (i.name || i.sku)).join(', ');
+      return h('tr', {},
+        h('td', {}, h('strong', {}, o.order_id || '—')),
+        h('td', {}, o._lead && o._lead.name || '—'),
+        h('td', {}, itemDesc || '—'),
+        h('td', {}, _packFmtINR(o.order_value)),
+        h('td', {}, _packIndPill(o.payment_status, o.payment_status === 'paid' ? '#10b981' : '#f59e0b')),
+        h('td', {}, o.courier_partner || '—'),
+        h('td', {}, o.awb || '—'),
+        h('td', {}, _packIndPill(o.status, STATUS_COLOR[o.status] || '#6b7280'))
+      );
+    }))
+  );
+  view.appendChild(tbl);
+};
+
+// Stub views — other pack sidebar items show "coming soon" instead of nothing.
+['finpremiums', 'finclaims', 'finrenewals',
+ 'solarquotes', 'solarinstalls', 'solarsubsidies', 'solaramc',
+ 'mfgproduction', 'mfgdispatch', 'mfgreceivables',
+ 'tourpackages', 'tourupcoming', 'tourvouchers',
+ 'eccarts', 'ecreturns', 'ecloyalty'].forEach(id => {
+  if (!VIEWS[id]) {
+    VIEWS[id] = async (view) => {
+      view.innerHTML = '';
+      view.appendChild(h('h2', {}, 'Industry Pack'));
+      view.appendChild(h('div', { class: 'card', style: { padding: '1.5rem', textAlign: 'center' } },
+        h('p', {}, '🚧 This pack-specific view is being built.'),
+        h('p', { class: 'muted' }, 'Backend APIs and dummy data are already available — call them directly while we ship the polished UI.')
+      ));
+    };
+  }
+});
