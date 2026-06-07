@@ -43693,7 +43693,7 @@ try {
               copyBtn(info.callback_url, 'URL')
             ),
             h('div', { style:{ fontFamily:'monospace', fontSize:'.84rem', background:'#fff', padding:'.4rem .6rem', borderRadius:'4px', marginBottom:'.3rem', display:'flex', alignItems:'center' } },
-              h('span', { style:{ flex:1 } }, '🔑 Verify Token: ' + (info.verify_token || h('em', { style:{ color:'#dc2626' } }, '(NOT SET — open Settings → Integrations → set META_VERIFY_TOKEN)'))),
+              h('span', { style:{ flex:1 } }, '🔑 Verify Token: ', (info.verify_token ? info.verify_token : h('em', { style:{ color:'#dc2626' } }, '(NOT SET — open Settings → Channels & Integrations → Facebook Lead Forms → set Verify Token)'))),
               info.verify_token ? copyBtn(info.verify_token, 'token') : null
             ),
             h('div', { style:{ fontFamily:'monospace', fontSize:'.84rem', background:'#fff', padding:'.4rem .6rem', borderRadius:'4px', marginBottom:'.5rem' } },
