@@ -1659,6 +1659,90 @@ async function api_social_ads_campaign_detail(token, filters) {
   };
 }
 
+// META_ADS_v1.3 — campaign create via Meta Marketing API.
+// Requires the user's token to have ads_management scope (in addition to ads_read).
+async function api_social_ads_checkScopes(token) {
+  await authUser(token);
+  await _ensureSchemaS4();
+  // Pick any monitored ad account's token to introspect
+  const r = await db.query(`SELECT access_token FROM social_ad_accounts WHERE is_monitored = 1 LIMIT 1`);
+  const tok = r.rows[0] && r.rows[0].access_token;
+  if (!tok) return { connected: false, scopes: [], has_ads_management: false };
+  try {
+    const u = `${GRAPH}/debug_token?input_token=${encodeURIComponent(tok)}&access_token=${encodeURIComponent(tok)}`;
+    const j = await (await fetch(u)).json();
+    const scopes = (j && j.data && Array.isArray(j.data.scopes)) ? j.data.scopes : [];
+    return {
+      connected: true,
+      scopes,
+      has_ads_management: scopes.indexOf('ads_management') >= 0,
+      has_pages_manage_ads: scopes.indexOf('pages_manage_ads') >= 0
+    };
+  } catch (e) {
+    return { connected: true, scopes: [], has_ads_management: false, error: e.message };
+  }
+}
+
+async function api_social_ads_createCampaign(token, payload) {
+  await authUser(token);
+  await _ensureSchemaS4();
+  const p = payload || {};
+  if (!p.name) throw new Error('Campaign name required');
+  if (!p.ad_account_id) throw new Error('Ad account required');
+  if (!p.objective) throw new Error('Objective required (e.g. OUTCOME_LEADS)');
+  const acct = String(p.ad_account_id).startsWith('act_') ? p.ad_account_id : ('act_' + p.ad_account_id);
+  const tokR = await db.query(`SELECT access_token FROM social_ad_accounts WHERE ad_account_id = $1`, [acct]);
+  const accessToken = tokR.rows[0] && tokR.rows[0].access_token;
+  if (!accessToken) throw new Error('No access token for ' + acct + ' — reconnect Facebook');
+
+  const body = new URLSearchParams({
+    name: String(p.name).trim(),
+    objective: String(p.objective).trim().toUpperCase(),
+    status: (String(p.status || 'PAUSED').toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'PAUSED'),
+    special_ad_categories: JSON.stringify(Array.isArray(p.special_ad_categories) ? p.special_ad_categories : []),
+    access_token: accessToken
+  });
+  if (p.daily_budget) {
+    // Meta wants minor units (paise for INR). User enters rupees, we multiply by 100.
+    body.set('daily_budget', String(Math.round(Number(p.daily_budget) * 100)));
+  }
+  if (p.lifetime_budget) {
+    body.set('lifetime_budget', String(Math.round(Number(p.lifetime_budget) * 100)));
+  }
+  const url = `${GRAPH}/${acct}/campaigns`;
+  const r = await fetch(url, { method: 'POST', body });
+  const j = await r.json();
+  if (j.error) {
+    const e = j.error;
+    if (/permission|scope|ads_management/i.test(e.message || '')) {
+      throw new Error('NEEDS_RECONNECT: Your Facebook connection is missing the ads_management permission. Reconnect Facebook to enable campaign creation.');
+    }
+    throw new Error('Marketing API: ' + (e.message || JSON.stringify(e)));
+  }
+  return {
+    ok: true,
+    campaign_id: j.id,
+    ad_account_id: acct,
+    name: p.name,
+    objective: p.objective,
+    status: p.status || 'PAUSED',
+    edit_url: `https://business.facebook.com/adsmanager/manage/campaigns/edit?act=${acct.replace(/^act_/,'')}&selected_campaign_ids=${j.id}`,
+    ads_url:  `https://business.facebook.com/adsmanager/manage/ads?act=${acct.replace(/^act_/,'')}&selected_campaign_ids=${j.id}`
+  };
+}
+
+async function api_social_ads_objectives(token) {
+  await authUser(token);
+  return [
+    { value: 'OUTCOME_LEADS',         label: 'Leads' },
+    { value: 'OUTCOME_SALES',         label: 'Sales (purchases)' },
+    { value: 'OUTCOME_TRAFFIC',       label: 'Traffic (website / clicks)' },
+    { value: 'OUTCOME_AWARENESS',     label: 'Awareness (reach / impressions)' },
+    { value: 'OUTCOME_ENGAGEMENT',    label: 'Engagement (post / page / messaging)' },
+    { value: 'OUTCOME_APP_PROMOTION', label: 'App promotion' }
+  ];
+}
+
 async function api_social_ads_alerts(token) {
   await authUser(token);
   await _ensureSchemaS4();
