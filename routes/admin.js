@@ -169,7 +169,7 @@ async function api_admin_brand(_token) {
       const db2 = require('../db/pg');
       const store = db2.tenantStorage && db2.tenantStorage.getStore && db2.tenantStorage.getStore();
       const slug = store && store.slug ? String(store.slug) : null;
-      if (slug && slug !== 'showcase-edu' && slug !== 'showcase-re') {
+      if (slug && slug !== 'showcase-edu' && slug !== 'showcase-re' && slug !== 'showcase-finance' && slug !== 'showcase-solar' && slug !== 'showcase-mfg' && slug !== 'showcase-holiday' && slug !== 'showcase-ecommerce') {
         const control = require('../control/db');
         const ar = await control.query(
           `SELECT detail FROM audit_log
@@ -209,6 +209,12 @@ async function api_admin_brand(_token) {
       let slugExpected = null;
       if (slug === 'showcase-edu') slugExpected = 'education';
       else if (slug === 'showcase-re') slugExpected = 'realestate';
+      // PACK_PHASE_2_v1 — 2026-06-07
+      else if (slug === 'showcase-finance') slugExpected = 'finance';
+      else if (slug === 'showcase-solar') slugExpected = 'solar';
+      else if (slug === 'showcase-mfg') slugExpected = 'manufacturer';
+      else if (slug === 'showcase-holiday') slugExpected = 'holiday';
+      else if (slug === 'showcase-ecommerce') slugExpected = 'ecommerce';
       if (slugExpected && industryPack && industryPack !== slugExpected) {
         console.log('[admin_brand] slug-enforce: tenant', slug, 'has wrong pack', industryPack, '— switching to', slugExpected);
         await db.query(`UPDATE installed_packs SET is_active = 0 WHERE is_active = 1`);

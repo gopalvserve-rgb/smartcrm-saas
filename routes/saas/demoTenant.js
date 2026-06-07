@@ -62,6 +62,41 @@ const INDUSTRY_SHOWCASES = {
     password: 'Showcase@123',
     org_name: 'Skyline Developers (Demo)',
     pack: 'realestate'
+  },
+  finance: {
+    slug: 'showcase-finance',
+    email: 'demo-finance@smartcrm.in',
+    password: 'Showcase@123',
+    org_name: 'TrustBridge Financial Services (Demo)',
+    pack: 'finance'
+  },
+  solar: {
+    slug: 'showcase-solar',
+    email: 'demo-solar@smartcrm.in',
+    password: 'Showcase@123',
+    org_name: 'SunBright Solar Solutions (Demo)',
+    pack: 'solar'
+  },
+  manufacturer: {
+    slug: 'showcase-mfg',
+    email: 'demo-mfg@smartcrm.in',
+    password: 'Showcase@123',
+    org_name: 'Precision Industries Pvt Ltd (Demo)',
+    pack: 'manufacturer'
+  },
+  holiday: {
+    slug: 'showcase-holiday',
+    email: 'demo-holiday@smartcrm.in',
+    password: 'Showcase@123',
+    org_name: 'WanderWise Travel & Tours (Demo)',
+    pack: 'holiday'
+  },
+  ecommerce: {
+    slug: 'showcase-ecommerce',
+    email: 'demo-ecommerce@smartcrm.in',
+    password: 'Showcase@123',
+    org_name: 'KartFlow D2C Store (Demo)',
+    pack: 'ecommerce'
   }
 };
 const DEMO_ORG_NAME = 'SmartCRM Showcase Co.';
@@ -1582,9 +1617,435 @@ async function api_saas_demo_seedRealEstatePack(token) {
   };
 }
 
+
+
+// ─────────────────────────────────────────────────────────────────
+// PACK_PHASE_2_v1 — 5 new showcase packs (Finance/Solar/Mfg/Holiday/Ecommerce)
+// Each helper: installs pack, then seeds a handful of pack-specific
+// transactions linked to the base demo leads.
+// ─────────────────────────────────────────────────────────────────
+
+async function _seedFinanceDemoData(pool, adminUserId, slugOverride) {
+  const slug = slugOverride || 'showcase-finance';
+  await db.tenantStorage.run({ pool, slug }, async () => {
+    const fw = require('../packs/_framework');
+    require('../packs/finance');
+    await fw.installPack('finance', { userId: adminUserId });
+  });
+  // Pull product + lead refs
+  const prods = await pool.query(`SELECT id, name, category FROM fin_products ORDER BY id LIMIT 4`);
+  const leads = await pool.query(`SELECT id, name FROM leads ORDER BY id LIMIT 12`);
+  let policies = 0, premiums = 0, claims = 0;
+  // Create 8 policies (4 loans + 4 insurance), each with auto premium schedule
+  for (let i = 0; i < Math.min(8, leads.rows.length); i++) {
+    const lead = leads.rows[i];
+    const prod = prods.rows[i % prods.rows.length];
+    const isLoan = prod.category === 'loan';
+    const policyNo = `${isLoan ? 'LN' : 'POL'}-2026-${1000 + i}`;
+    const tenure = isLoan ? 60 : 12;
+    const sumAssured = isLoan ? 0 : 500000 + i * 200000;
+    const sanctioned = isLoan ? 500000 + i * 100000 : 0;
+    const emi = isLoan ? Math.round(sanctioned * 0.022) : 0;
+    const premium = isLoan ? 0 : Math.round(sumAssured * 0.01);
+    const startDate = new Date(); startDate.setMonth(startDate.getMonth() - i);
+    const maturityDate = new Date(startDate); maturityDate.setMonth(maturityDate.getMonth() + tenure);
+    const polR = await pool.query(
+      `INSERT INTO fin_policies (lead_id,product_id,policy_no,sum_assured,sanctioned_amount,disbursed_amount,tenure_months,interest_rate,emi_amount,premium_amount,premium_frequency,start_date,maturity_date,status,pan,cibil,created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id`,
+      [lead.id, prod.id, policyNo, sumAssured, sanctioned, isLoan ? sanctioned : 0,
+       tenure, isLoan ? 9.5 : 0, emi, premium,
+       isLoan ? 'monthly' : 'annual',
+       startDate.toISOString().slice(0,10), maturityDate.toISOString().slice(0,10),
+       isLoan ? 'disbursed' : 'sanctioned',
+       'ABCDE' + (1000 + i) + 'F', 720 + i * 8, adminUserId]
+    );
+    policies++;
+    // Auto-create premium schedule (3-5 installments)
+    const freq = isLoan ? 1 : 12;
+    const count = isLoan ? 5 : 3;
+    for (let j = 0; j < count; j++) {
+      const due = new Date(startDate); due.setMonth(due.getMonth() + j * freq);
+      const paid = j < count - 1; // last one pending
+      await pool.query(
+        `INSERT INTO fin_premiums (policy_id,seq,due_date,amount,status,paid_at,paid_amount,payment_mode)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [polR.rows[0].id, j+1, due.toISOString().slice(0,10),
+         isLoan ? emi : premium,
+         paid ? 'paid' : 'pending',
+         paid ? new Date() : null,
+         paid ? (isLoan ? emi : premium) : 0,
+         paid ? 'NEFT' : '']
+      );
+      premiums++;
+    }
+  }
+  // 2 sample claims
+  for (let i = 0; i < 2; i++) {
+    await pool.query(
+      `INSERT INTO fin_claims (lead_id,claim_no,claim_type,incident_date,claim_amount,approved_amount,status,docs_status,notes)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [leads.rows[i].id, `CLM-2026-${100+i}`, 'Hospitalization',
+       new Date().toISOString().slice(0,10),
+       50000 + i * 25000, i === 0 ? 45000 : 0,
+       i === 0 ? 'approved' : 'under_review',
+       i === 0 ? 'complete' : 'pending',
+       i === 0 ? 'Discharge summary submitted' : 'Awaiting bill copies']
+    );
+    claims++;
+  }
+  return { policies, premiums, claims };
+}
+
+async function _seedSolarDemoData(pool, adminUserId, slugOverride) {
+  const slug = slugOverride || 'showcase-solar';
+  await db.tenantStorage.run({ pool, slug }, async () => {
+    const fw = require('../packs/_framework');
+    require('../packs/solar');
+    await fw.installPack('solar', { userId: adminUserId });
+  });
+  const leads = await pool.query(`SELECT id, name FROM leads ORDER BY id LIMIT 10`);
+  const STATES = ['Maharashtra','Karnataka','Gujarat','Tamil Nadu','Delhi'];
+  const DISCOMS = ['MSEDCL','BESCOM','DGVCL','TANGEDCO','BSES Rajdhani'];
+  let sites = 0, quotes = 0, installs = 0, subsidies = 0;
+  for (let i = 0; i < Math.min(8, leads.rows.length); i++) {
+    const lead = leads.rows[i];
+    const kw = 3 + i;
+    const rooftop = 200 + i * 50;
+    const bill = 4000 + i * 1500;
+    const siteR = await pool.query(
+      `INSERT INTO solar_sites (lead_id,address,pincode,state,rooftop_area_sqft,monthly_bill_inr,monthly_units_kwh,roof_type,shadow_pct,discom,sanctioned_load_kw,survey_done,survey_at,survey_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
+      [lead.id, `Plot ${100+i}, Sector ${10+i}`, '4' + (10000+i),
+       STATES[i % STATES.length], rooftop, bill, Math.round(bill / 8),
+       'rcc', 5 + i, DISCOMS[i % DISCOMS.length], 5,
+       i < 6 ? 1 : 0, i < 6 ? new Date() : null, i < 6 ? adminUserId : null]
+    );
+    sites++;
+    if (i < 6) {
+      const ratePerKw = 55000;
+      const subtotal = kw * ratePerKw;
+      const gst = subtotal * 0.138;
+      const total = subtotal + gst;
+      const subsidyEst = Math.min(78000, kw * 14588);
+      await pool.query(
+        `INSERT INTO solar_quotes (lead_id,site_id,quote_no,system_kw,panel_brand,panel_count,inverter_brand,structure_type,on_grid,rate_per_kw,subtotal,gst,total,subsidy_estimated,valid_till,status,created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+        [lead.id, siteR.rows[0].id, `Q-2026-${500+i}`, kw,
+         'Adani Solar', kw * 3, 'Growatt', 'standard', 1, ratePerKw,
+         subtotal, gst, total, subsidyEst,
+         new Date(Date.now() + 30 * 86400000).toISOString().slice(0,10),
+         i < 4 ? 'sent' : 'draft', adminUserId]
+      );
+      quotes++;
+    }
+    if (i < 3) {
+      const startD = new Date(); startD.setDate(startD.getDate() - 60 + i * 15);
+      const endD = new Date(startD); endD.setDate(endD.getDate() + 7);
+      const commD = new Date(endD); commD.setDate(commD.getDate() + 14);
+      await pool.query(
+        `INSERT INTO solar_installations (lead_id,system_kw,material_ordered_at,material_delivered_at,installation_start,installation_end,net_meter_applied_at,net_meter_installed_at,commissioned_at,installer_name,status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        [lead.id, kw, startD.toISOString().slice(0,10), startD.toISOString().slice(0,10),
+         startD.toISOString().slice(0,10), endD.toISOString().slice(0,10),
+         endD.toISOString().slice(0,10), commD.toISOString().slice(0,10),
+         i === 0 ? commD.toISOString().slice(0,10) : null,
+         'Local Installer Pvt Ltd', i === 0 ? 'commissioned' : 'in_progress']
+      );
+      installs++;
+      if (i === 0) {
+        await pool.query(
+          `INSERT INTO solar_subsidies (lead_id,dso_app_no,subsidy_amount,application_at,status,notes)
+           VALUES ($1,$2,$3,$4,$5,$6)`,
+          [lead.id, `DSO-2026-${800+i}`, 14588 * kw,
+           endD.toISOString().slice(0,10), 'applied', 'Awaiting DISCOM approval']
+        );
+        subsidies++;
+      }
+    }
+  }
+  return { sites, quotes, installs, subsidies };
+}
+
+async function _seedManufacturerDemoData(pool, adminUserId, slugOverride) {
+  const slug = slugOverride || 'showcase-mfg';
+  await db.tenantStorage.run({ pool, slug }, async () => {
+    const fw = require('../packs/_framework');
+    require('../packs/manufacturer');
+    await fw.installPack('manufacturer', { userId: adminUserId });
+  });
+  const leads = await pool.query(`SELECT id, name FROM leads ORDER BY id LIMIT 10`);
+  const ITEMS_SAMPLES = [
+    [{name:'Bolt M10', qty:1000, rate:8.5}, {name:'Nut M10', qty:1000, rate:4.2}],
+    [{name:'CNC Bracket', qty:500, rate:120}],
+    [{name:'Steel Plate 6mm', qty:50, rate:850}, {name:'Welding rod', qty:200, rate:25}],
+    [{name:'Aluminum profile', qty:300, rate:175}]
+  ];
+  let rfqs = 0, quotes = 0, orders = 0, prods = 0, dispatches = 0;
+  for (let i = 0; i < Math.min(8, leads.rows.length); i++) {
+    const lead = leads.rows[i];
+    const inqR = await pool.query(
+      `INSERT INTO mfg_inquiries (lead_id,rfq_no,product_specs,quantity,material_grade,expected_delivery_date,payment_terms,shipping_terms,status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+      [lead.id, `RFQ-2026-${300+i}`,
+       'Custom steel components per drawing', 500 + i * 100,
+       'IS 2062 E250', new Date(Date.now() + (30 + i * 7) * 86400000).toISOString().slice(0,10),
+       '30% advance, 70% on dispatch', 'Ex-Works',
+       i < 4 ? 'quoted' : 'received']
+    );
+    rfqs++;
+    if (i < 6) {
+      const items = ITEMS_SAMPLES[i % ITEMS_SAMPLES.length];
+      const subtotal = items.reduce((s, x) => s + x.qty * x.rate, 0);
+      const gst = subtotal * 0.18;
+      const total = subtotal + gst;
+      const qR = await pool.query(
+        `INSERT INTO mfg_quotes (lead_id,inquiry_id,quote_no,items_json,subtotal,gst,total,hsn_code,payment_terms,delivery_terms,valid_till,status,created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+        [lead.id, inqR.rows[0].id, `Q-2026-${500+i}`, JSON.stringify(items),
+         subtotal, gst, total, '7308',
+         '30% advance, 70% on dispatch', 'Ex-Works Mumbai',
+         new Date(Date.now() + 15 * 86400000).toISOString().slice(0,10),
+         i < 4 ? 'sent' : 'draft', adminUserId]
+      );
+      quotes++;
+      if (i < 4) {
+        const advance = total * 0.3;
+        const balance = total - advance;
+        const oR = await pool.query(
+          `INSERT INTO mfg_orders (lead_id,quote_id,po_number,po_date,order_value,advance_amount,balance_amount,delivery_date,status,payment_status)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+          [lead.id, qR.rows[0].id, `PO-${5000+i}`,
+           new Date(Date.now() - i * 5 * 86400000).toISOString().slice(0,10),
+           total, advance, balance,
+           new Date(Date.now() + 30 * 86400000).toISOString().slice(0,10),
+           i < 2 ? 'in_production' : 'received',
+           i === 0 ? 'partial' : 'unpaid']
+        );
+        orders++;
+        if (i < 2) {
+          await pool.query(
+            `INSERT INTO mfg_production (order_id,work_order_no,start_date,expected_end_date,qc_status,status,progress_pct)
+             VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+            [oR.rows[0].id, `WO-${7000+i}`,
+             new Date().toISOString().slice(0,10),
+             new Date(Date.now() + 20 * 86400000).toISOString().slice(0,10),
+             'pending', 'in_progress', 30 + i * 35]
+          );
+          prods++;
+        }
+        if (i === 0) {
+          await pool.query(
+            `INSERT INTO mfg_dispatches (order_id,dispatch_no,dispatch_date,courier,awb,invoice_no,invoice_amount,eway_bill,vehicle_no,status)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+            [oR.rows[0].id, `DSP-${9000+i}`,
+             new Date().toISOString().slice(0,10),
+             'VRL Logistics', 'AWB' + (40000+i),
+             `INV-${i+100}`, total, 'EWB' + (50000+i), 'MH-12-AB-1234',
+             'dispatched']
+          );
+          dispatches++;
+        }
+      }
+    }
+  }
+  return { rfqs, quotes, orders, production: prods, dispatches };
+}
+
+async function _seedHolidayDemoData(pool, adminUserId, slugOverride) {
+  const slug = slugOverride || 'showcase-holiday';
+  await db.tenantStorage.run({ pool, slug }, async () => {
+    const fw = require('../packs/_framework');
+    require('../packs/holiday');
+    await fw.installPack('holiday', { userId: adminUserId });
+  });
+  // Packages already seeded by install()
+  const pkgs = await pool.query(`SELECT id, name, base_price_per_adult FROM tour_packages ORDER BY id LIMIT 4`);
+  const leads = await pool.query(`SELECT id, name FROM leads ORDER BY id LIMIT 12`);
+  let bookings = 0, itin = 0, payments = 0, vouchers = 0;
+  for (let i = 0; i < Math.min(8, leads.rows.length); i++) {
+    const lead = leads.rows[i];
+    const pkg = pkgs.rows[i % pkgs.rows.length];
+    const adults = 2 + (i % 3);
+    const children = i % 2;
+    const totalAmount = adults * Number(pkg.base_price_per_adult) + children * 5000;
+    const advance = Math.round(totalAmount * 0.3);
+    const travelStart = new Date(Date.now() + (30 + i * 7) * 86400000);
+    const travelEnd = new Date(travelStart); travelEnd.setDate(travelEnd.getDate() + 5);
+    const bR = await pool.query(
+      `INSERT INTO tour_bookings (lead_id,package_id,booking_no,destination,travel_start_date,travel_end_date,pax_adults,pax_children,total_amount,advance_amount,balance_amount,visa_status,docs_status,status,created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
+      [lead.id, pkg.id, `BK-2026-${600+i}`, pkg.name,
+       travelStart.toISOString().slice(0,10), travelEnd.toISOString().slice(0,10),
+       adults, children, totalAmount, advance, totalAmount - advance,
+       i % 2 === 0 ? 'approved' : 'not_required',
+       i < 5 ? 'complete' : 'pending',
+       i < 6 ? 'confirmed' : 'in_progress', adminUserId]
+    );
+    bookings++;
+    // 3-day itinerary sample
+    const days = [
+      ['Arrival + Welcome dinner', 'Beachfront resort check-in', 'Dinner'],
+      ['Sightseeing + Local market', 'Same hotel', 'Breakfast + Lunch'],
+      ['Departure', 'Checkout', 'Breakfast']
+    ];
+    for (let d = 0; d < 3; d++) {
+      const dt = new Date(travelStart); dt.setDate(dt.getDate() + d);
+      await pool.query(
+        `INSERT INTO tour_itineraries (booking_id,day_no,date,title,activities,hotel_name,meals,transport)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [bR.rows[0].id, d+1, dt.toISOString().slice(0,10),
+         `Day ${d+1} — ${pkg.name.split(' ')[0]}`, days[d][0], days[d][1], days[d][2],
+         d === 0 ? 'Airport pickup' : (d === 2 ? 'Airport drop' : 'Private cab')]
+      );
+      itin++;
+    }
+    // Advance payment
+    await pool.query(
+      `INSERT INTO tour_payments (booking_id,amount,payment_mode,payment_ref,payment_type,created_by)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [bR.rows[0].id, advance, 'UPI', `TXN${100000+i}`, 'advance', adminUserId]
+    );
+    payments++;
+    if (i < 3) {
+      await pool.query(
+        `INSERT INTO tour_vouchers (booking_id,voucher_type,voucher_no,vendor,valid_from,valid_till,amount)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [bR.rows[0].id, 'hotel', `HV-${800+i}`, 'BookingPartner.com',
+         travelStart.toISOString().slice(0,10), travelEnd.toISOString().slice(0,10),
+         totalAmount * 0.5]
+      );
+      vouchers++;
+    }
+  }
+  return { bookings, itineraries: itin, payments, vouchers };
+}
+
+async function _seedEcommerceDemoData(pool, adminUserId, slugOverride) {
+  const slug = slugOverride || 'showcase-ecommerce';
+  await db.tenantStorage.run({ pool, slug }, async () => {
+    const fw = require('../packs/_framework');
+    require('../packs/ecommerce');
+    await fw.installPack('ecommerce', { userId: adminUserId });
+  });
+  // Products already seeded by install
+  const prods = await pool.query(`SELECT id, sku, name, sale_price FROM ec_products ORDER BY id LIMIT 4`);
+  const leads = await pool.query(`SELECT id, name, phone FROM leads ORDER BY id LIMIT 15`);
+  const COURIERS = ['Delhivery','Blue Dart','Xpressbees','Shadowfax'];
+  const STATUSES = ['delivered','shipped','packed','placed'];
+  let orders = 0, returns = 0, carts = 0;
+  for (let i = 0; i < Math.min(10, leads.rows.length); i++) {
+    const lead = leads.rows[i];
+    const prod = prods.rows[i % prods.rows.length];
+    const qty = 1 + (i % 3);
+    const items = [{ sku: prod.sku, name: prod.name, qty, price: Number(prod.sale_price) }];
+    const subtotal = qty * Number(prod.sale_price);
+    const orderValue = subtotal + 49;  // shipping ₹49
+    const placedAt = new Date(Date.now() - (i * 3 + 1) * 86400000);
+    const status = STATUSES[Math.min(Math.floor(i / 3), STATUSES.length - 1)];
+    const oR = await pool.query(
+      `INSERT INTO ec_orders (lead_id,order_id,items_json,subtotal,discount,shipping,tax,order_value,payment_mode,payment_status,shipping_address,pincode,state,courier_partner,awb,tracking_url,placed_at,shipped_at,delivered_at,status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING id`,
+      [lead.id, `ORD-2026-${10000+i}`, JSON.stringify(items),
+       subtotal, 0, 49, 0, orderValue,
+       i % 3 === 0 ? 'cod' : 'prepaid',
+       (status === 'delivered' || status === 'shipped') ? 'paid' : 'unpaid',
+       `Flat ${i+1}, Sector ${(i%20)+1}`, '400' + (100+i), 'Maharashtra',
+       COURIERS[i % COURIERS.length], 'AWB' + (60000+i),
+       `https://track.example.com/AWB${60000+i}`,
+       placedAt,
+       (status !== 'placed') ? new Date(placedAt.getTime() + 86400000) : null,
+       status === 'delivered' ? new Date(placedAt.getTime() + 3 * 86400000) : null,
+       status]
+    );
+    orders++;
+    // Loyalty auto-bumped by trigger? No — pack does it in api_ec_order_create.
+    // Replicate manually for demo seed.
+    await pool.query(
+      `INSERT INTO ec_loyalty (lead_id, points, lifetime_value, order_count, last_order_at)
+       VALUES ($1, $2, $3, 1, NOW())
+       ON CONFLICT (lead_id) DO UPDATE SET
+         points = ec_loyalty.points + EXCLUDED.points,
+         lifetime_value = ec_loyalty.lifetime_value + EXCLUDED.lifetime_value,
+         order_count = ec_loyalty.order_count + 1,
+         last_order_at = NOW(),
+         tier = CASE
+           WHEN ec_loyalty.lifetime_value + EXCLUDED.lifetime_value >= 50000 THEN 'gold'
+           WHEN ec_loyalty.lifetime_value + EXCLUDED.lifetime_value >= 15000 THEN 'silver'
+           ELSE 'bronze' END,
+         updated_at = NOW()`,
+      [lead.id, Math.floor(orderValue / 100), orderValue]
+    );
+    if (i === 0 || i === 4) {
+      await pool.query(
+        `INSERT INTO ec_returns (order_id,lead_id,return_no,items_json,return_reason,refund_amount,refund_status,refund_mode,pickup_awb,status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        [oR.rows[0].id, lead.id, `RET-2026-${700+i}`, JSON.stringify(items),
+         i === 0 ? 'Size too small' : 'Defective product',
+         orderValue, i === 0 ? 'refunded' : 'pending', 'UPI',
+         'PAWB' + (70000+i), i === 0 ? 'refunded' : 'received']
+      );
+      returns++;
+    }
+  }
+  // Abandoned carts
+  for (let i = 10; i < Math.min(15, leads.rows.length); i++) {
+    const lead = leads.rows[i];
+    const prod = prods.rows[i % prods.rows.length];
+    const items = [{ sku: prod.sku, name: prod.name, qty: 1 + (i%2), price: Number(prod.sale_price) }];
+    const value = items.reduce((s,x)=>s+x.qty*x.price,0);
+    await pool.query(
+      `INSERT INTO ec_abandoned_carts (lead_id, cart_id, items_json, cart_value, abandoned_at, status)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [lead.id, `CART-2026-${800+i}`, JSON.stringify(items), value,
+       new Date(Date.now() - (i - 9) * 3600000), 'abandoned']
+    );
+    carts++;
+  }
+  return { orders, returns, abandoned_carts: carts };
+}
+
+// ─────────────────────────────────────────────────────────────────
+// API wrappers — super-admin entry points
+// ─────────────────────────────────────────────────────────────────
+
+async function _genericPackSeed(token, packKey, seedFn) {
+  const me = await requireSuperAdmin(token);
+  const conf = INDUSTRY_SHOWCASES[packKey];
+  const tenant = await _findOrCreateDemoTenant(me.id, me.email, conf);
+  const pool = tenantPool.poolFor(tenant);
+  if (!pool) throw new Error('Could not connect to demo tenant DB');
+  const adminUserId = await _resetAdminPassword(pool, conf.email, conf.password);
+  const baseSummary = await _wipeAndSeed(pool, adminUserId);
+  const packSummary = await seedFn(pool, adminUserId, conf.slug);
+  const summary = Object.assign({}, baseSummary && baseSummary.counts || {}, packSummary || {});
+  const baseUrl = (process.env.PUBLIC_BASE_URL || 'https://crm.smartcrmsolution.com').replace(/\/+$/, '');
+  const url = `${baseUrl}/t/${tenant.slug}/`;
+  await control.insert('audit_log', {
+    actor_type: 'super_admin', actor_id: me.id, actor_email: me.email,
+    tenant_id: tenant.id, event: `tenant.demo_seeded_${packKey}`,
+    detail: JSON.stringify(summary)
+  });
+  return {
+    ok: true, slug: tenant.slug, url,
+    email: conf.email, password: conf.password,
+    pack: packKey, counts: summary
+  };
+}
+
+async function api_saas_demo_seedFinancePack(token)      { return _genericPackSeed(token, 'finance',      _seedFinanceDemoData); }
+async function api_saas_demo_seedSolarPack(token)        { return _genericPackSeed(token, 'solar',        _seedSolarDemoData); }
+async function api_saas_demo_seedManufacturerPack(token) { return _genericPackSeed(token, 'manufacturer', _seedManufacturerDemoData); }
+async function api_saas_demo_seedHolidayPack(token)      { return _genericPackSeed(token, 'holiday',      _seedHolidayDemoData); }
+async function api_saas_demo_seedEcommercePack(token)    { return _genericPackSeed(token, 'ecommerce',    _seedEcommerceDemoData); }
+
 module.exports = {
   api_saas_demo_seed,
   api_saas_demo_snapshot,
   api_saas_demo_seedEducationPack,
-  api_saas_demo_seedRealEstatePack
+  api_saas_demo_seedRealEstatePack,
+  api_saas_demo_seedFinancePack,
+  api_saas_demo_seedSolarPack,
+  api_saas_demo_seedManufacturerPack,
+  api_saas_demo_seedHolidayPack,
+  api_saas_demo_seedEcommercePack
 };
