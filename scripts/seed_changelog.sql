@@ -169,3 +169,12 @@ SELECT 'fix',
        '🟢',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'WhatsApp Business launcher — visible-failure detection (v3)');
+
+-- 2026-06-08 WA_PKG_FIX_v4
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'fix',
+       'WhatsApp Business launcher — use Capacitor App.openUrl + last-resort chooser (v4)',
+       'v3 still couldn''t reliably pin to WhatsApp Business because Capacitor''s WebView silently rejects intent:// URLs on some OEM Android builds. v4 now uses Capacitor.Plugins.App.openUrl (bypasses WebView entirely → goes straight to Android''s intent system), with window.open(_system) and location.href as fallbacks. If all package-pinned attempts still fail, the last resort is to open the default WhatsApp chooser URL so the user always lands SOMEWHERE — plus a helpful toast: "couldn''t be pinned. To always use Business WA, set it as Android default in Settings → Apps → Default apps."',
+       '🟢',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'WhatsApp Business launcher — use Capacitor App.openUrl + last-resort chooser (v4)');

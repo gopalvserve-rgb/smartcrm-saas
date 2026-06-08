@@ -4278,7 +4278,9 @@ window._waPinnedIntent = function(phone, text, kind) {
   return arr[0] || '';
 };
 window._waOpenPinned = function(phone, text, kind) {
-  /* WA_PKG_FIX_v3 — visible-failure detection + clipboard fallback.
+  /* WA_PKG_FIX_v4 — use Capacitor App.openUrl when available (bypasses WebView
+     intent interception), then fall back to window.open(_system), then
+     location.href. If everything fails, clipboard + toast. */
      Tries each candidate URL in succession via location.href. If the WhatsApp
      app launches, document goes hidden (visibilitychange fires) and we stop.
      If nothing launches within ~2s the page is still visible, so we copy the
@@ -4294,16 +4296,33 @@ window._waOpenPinned = function(phone, text, kind) {
   };
   document.addEventListener('visibilitychange', onHidden);
 
-  try {
-    window.location.href = candidates[0];
-  } catch (_) { /* try anchor in catch below */ }
+  // Helper: try to fire ONE URL through the most reliable channel available.
+  // Capacitor App.openUrl explicitly delegates to Android's intent system
+  // (Intent.parseUri + startActivity) without involving the WebView's
+  // shouldOverrideUrlLoading, which on some OEM builds swallows intent://.
+  function fireOne(url) {
+    const App = (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) || null;
+    if (App && App.openUrl) {
+      try {
+        App.openUrl({ url }).catch(() => { /* probably no matching activity */ });
+        return;
+      } catch (_) { /* fall through */ }
+    }
+    // window.open(_system) tells Capacitor to use the OS handler, not the WebView
+    try {
+      const w = window.open(url, '_system');
+      if (w) return;
+    } catch (_) { /* fall through */ }
+    // Final fallback: top-level navigation
+    try { window.location.href = url; } catch (_) {}
+  }
 
-  // Some OEMs absorb intent:// silently. After 1.2s, if still visible, try the
-  // 2nd and 3rd candidates one-by-one.
+  // Try candidate[0] immediately; advance to subsequent candidates if still visible.
+  fireOne(candidates[0]);
   let idx = 1;
   function tryNext() {
     if (opened || idx >= candidates.length) return finish();
-    try { window.location.href = candidates[idx]; } catch (_) {}
+    fireOne(candidates[idx]);
     idx += 1;
     setTimeout(tryNext, 600);
   }
@@ -4312,21 +4331,24 @@ window._waOpenPinned = function(phone, text, kind) {
   function finish() {
     document.removeEventListener('visibilitychange', onHidden);
     if (opened) return;
-    // Nothing opened — likely the target WhatsApp app isn't installed.
-    // Copy phone+text to clipboard so user can paste into the right app.
+    // Nothing opened. Last resort — open the chooser URL via _system so the user
+    // at least lands SOMEWHERE in WhatsApp (with the default app), and copy the
+    // message to clipboard for safety.
     const label = kind === 'business' ? 'WhatsApp Business'
                 : kind === 'personal' ? 'WhatsApp' : 'WhatsApp';
     const dig = String(phone || '').replace(/\D/g, '');
     const clip = '+' + dig + (text ? '\n' + text : '');
+    try { navigator.clipboard.writeText(clip); } catch (_) {}
+    // Try one last URL — the unconstrained chooser link. Capacitor will hand
+    // this off cleanly to whichever WhatsApp is the Android default.
     try {
-      navigator.clipboard.writeText(clip);
-      if (typeof toast === 'function') {
-        toast(label + ' did not open. Number + message copied to clipboard — paste into the app.', 'err');
-      }
-    } catch (_) {
-      if (typeof toast === 'function') {
-        toast(label + ' did not open. Make sure the app is installed.', 'err');
-      }
+      const App = (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) || null;
+      const chooserUrl = 'https://api.whatsapp.com/send/?phone=' + dig + (text ? '&text=' + encodeURIComponent(text) : '');
+      if (App && App.openUrl) { App.openUrl({ url: chooserUrl }).catch(() => {}); }
+      else { window.open(chooserUrl, '_system'); }
+    } catch (_) {}
+    if (typeof toast === 'function') {
+      toast(label + ' couldn\'t be pinned. Opened default WhatsApp instead — message copied to clipboard if you need to paste. To always use ' + label + ', set it as the default in Android Settings → Apps → Default apps.', 'err');
     }
   }
   // Hard cap — if neither visibility change nor candidate exhaustion fires.
