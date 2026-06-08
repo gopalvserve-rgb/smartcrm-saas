@@ -196,3 +196,12 @@ SELECT 'feature',
        '📊',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Google Ads Conversion Export — push to Google Sheet');
+
+-- 2026-06-09 GCONV_SHEETS_BUG_FIX_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'fix',
+       'Google Sheet push — fix "No Sheet URL configured" error after save',
+       'When you saved a Sheet URL on Google Ads Conversion Export and then clicked Push Now, the server would throw "No Sheet URL configured" even though the URL was correctly saved in the database. Root cause: _loadSettings() was reading the row from DB but stripping the sheet_url / sheet_tab / sheet_push_enabled columns out of the returned object. Now fixed — Push Now works first try after saving.',
+       '🔧',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Google Sheet push — fix "No Sheet URL configured" error after save');

@@ -148,6 +148,13 @@ async function _loadSettings() {
     last_auto_export_at: row.last_auto_export_at || null,
     public_token: row.public_token || null,
     last_downloaded_at: row.last_downloaded_at || null,
+    /* GCONV_SHEETS_BUG_FIX_v1 — these were silently dropped, causing pushSheet to always throw 'No Sheet URL configured' */
+    sheet_url: row.sheet_url || '',
+    sheet_tab: row.sheet_tab || 'Conversions',
+    sheet_push_enabled: row.sheet_push_enabled === true || row.sheet_push_enabled === 1 || String(row.sheet_push_enabled) === 'true',
+    last_sheet_push_at: row.last_sheet_push_at || null,
+    last_sheet_push_rows: row.last_sheet_push_rows || null,
+    last_sheet_push_error: row.last_sheet_push_error || null,
     updated_at: row.updated_at || null
   };
 }
