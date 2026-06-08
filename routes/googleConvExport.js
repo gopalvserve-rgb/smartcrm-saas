@@ -148,6 +148,7 @@ async function _loadSettings() {
 async function api_googleConvExport_get(token) {
   const me = await authUser(token);
   if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin / manager only');
+  await _ensureSchema();  /* GCONV_SCHEMA_HEAL_v1 — was missing; new tenants saw 'relation google_conv_export_settings does not exist' on first page open */
   const settings = await _loadSettings();
   let statuses = [];
   let sources = [];
@@ -280,6 +281,7 @@ function _rowsToCsv(rows) {
 async function api_googleConvExport_download(token) {
   const me = await authUser(token);
   if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin / manager only');
+  await _ensureSchema();  /* GCONV_SCHEMA_HEAL_v1 */
   const settings = await _loadSettings();
   if (!settings.is_enabled) throw new Error('Google Ads Conversion Export is OFF. Enable it in Settings → Integrations first.');
   const { rows, withGclid, withoutGclid } = await _buildRows(settings);
