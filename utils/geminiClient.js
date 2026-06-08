@@ -233,13 +233,39 @@ async function generate(args) {
   // currentModel may have been swapped if we fell back — reflect in returned record
   if (currentModel !== model) model = currentModel;
 
-  // Extract reply text
+  // Extract reply text — SC_GEMINI_PARSE_v1 (2026-06-08)
+  // Old parser only read p.text and silently produced empty strings on Gemini
+  // 2.5 Flash Lite responses where text lives in nested shapes (functionCall
+  // args, codeExecutionResult, multi-part). This caused Stockbox + Celeste
+  // bots (which route Gemini through this proxy) to "send" empty WhatsApp
+  // messages that Meta dropped. New parser tries every shape + logs the raw
+  // parts when extraction is still empty so we can debug future variants.
   let text = '';
   let finishReason = null;
   try {
     const cand = (json.candidates || [])[0] || {};
     finishReason = cand.finishReason || null;
-    text = (cand.content?.parts || []).map(p => p.text || '').join('').trim();
+    const parts = (cand.content && cand.content.parts) || [];
+    text = parts.map(p => {
+      if (!p || typeof p !== 'object') return '';
+      if (typeof p.text === 'string' && p.text) return p.text;
+      if (p.executableCode && typeof p.executableCode.code === 'string') return p.executableCode.code;
+      if (p.codeExecutionResult && typeof p.codeExecutionResult.output === 'string') return p.codeExecutionResult.output;
+      if (p.functionCall && p.functionCall.args && typeof p.functionCall.args.response === 'string') return p.functionCall.args.response;
+      if (p.functionResponse && p.functionResponse.response) {
+        const r = p.functionResponse.response;
+        if (typeof r === 'string') return r;
+        if (r && typeof r.text === 'string') return r.text;
+        if (r && typeof r.content === 'string') return r.content;
+      }
+      return '';
+    }).filter(Boolean).join('').trim();
+    if (!text && (json.usageMetadata && Number(json.usageMetadata.candidatesTokenCount || 0) > 0)) {
+      try {
+        console.warn('[gemini-parse-empty] proxy finish=' + (finishReason || '-'),
+          'parts=' + JSON.stringify(parts).slice(0, 600));
+      } catch (_) {}
+    }
   } catch (_) {}
 
   const usage = json.usageMetadata || {};
