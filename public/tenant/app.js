@@ -15196,12 +15196,47 @@ async function openPersonalWaPicker(lead) {
   try { templates = await api('api_personalWa_list'); } catch (_) {}
 
   const modal = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) modal.remove(); } });
+  /* WA_TARGET_PICKER_v1 — user complained: 'if user wants Business WA, how does he choose a template?'
+     Old flow had templates open the default chooser, and the 3 Personal/Business/Blank buttons sent
+     EMPTY text. Now: target picker chips at top (Default / Personal / Business), persisted in
+     localStorage, and tapping ANY template fires it into the selected target app. */
+  let target = (function () {
+    const stored = localStorage.getItem('crm_personal_wa_target');
+    return ['chooser', 'personal', 'business'].includes(stored) ? stored : 'chooser';
+  })();
+  const targetChips = h('div', { style: { display: 'flex', gap: '.4rem', marginBottom: '.75rem', flexWrap: 'wrap' } });
+  function renderChips() {
+    targetChips.innerHTML = '';
+    const items = [
+      { kind: 'chooser',  label: '💬 Default',     hint: 'Android asks which WhatsApp to use' },
+      { kind: 'personal', label: '🟢 Personal',    hint: 'Force open in WhatsApp', color: '#25D366' },
+      { kind: 'business', label: '🟢 Business',    hint: 'Force open in WhatsApp Business', color: '#0a8055' }
+    ];
+    items.forEach(it => {
+      const active = target === it.kind;
+      targetChips.appendChild(h('button', {
+        class: 'btn',
+        title: it.hint,
+        style: {
+          background: active ? (it.color || '#4f46e5') : 'transparent',
+          color: active ? '#fff' : (it.color || 'inherit'),
+          border: '1px solid ' + (it.color || '#cbd5e1'),
+          fontWeight: active ? 600 : 400
+        },
+        onclick: () => {
+          target = it.kind;
+          try { localStorage.setItem('crm_personal_wa_target', target); } catch (_) {}
+          renderChips();
+        }
+      }, it.label));
+    });
+  }
+  renderChips();
+
   const launch = (text) => {
-    try { if (lead?.id) api('api_leads_addRemark', lead.id, { remark: '💬 WhatsApp sent (personal): ' + (text || '(blank chat opened)').slice(0, 200) }).catch(() => {}); } catch (_) {}
-    // FIX1 — use chooser-friendly URL so Android shows app picker when both
-    // Personal + Business WhatsApp are installed. User can also use the
-    // Personal/Business buttons below to force a specific app.
-    window._waOpenPinned(dial, text, 'chooser');
+    const tag = target === 'business' ? 'Business' : target === 'personal' ? 'Personal' : 'Default';
+    try { if (lead?.id) api('api_leads_addRemark', lead.id, { remark: '💬 WhatsApp sent (' + tag + '): ' + (text || '(blank chat opened)').slice(0, 200) }).catch(() => {}); } catch (_) {}
+    window._waOpenPinned(dial, text, target);
     modal.remove();
   };
   const list = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '.4rem', maxHeight: '50vh', overflowY: 'auto' } });
@@ -15225,21 +15260,14 @@ async function openPersonalWaPicker(lead) {
       h('h3', {}, '💬 Send WhatsApp from your number'),
       h('button', { class: 'btn icon', onclick: () => modal.remove() }, '✕')
     ),
-    h('p', { class: 'muted', style: { fontSize: '.8rem', margin: '0 0 .75rem' } },
-      'Pick a template — WhatsApp opens with the message pre-filled, you tap Send. WhatsApp doesn\'t allow third-party apps to send silently from a personal number; if you need automated sending, use the 🟢 WA Template button (Cloud API, business number).'),
+    h('p', { class: 'muted', style: { fontSize: '.8rem', margin: '0 0 .5rem' } },
+      'Step 1 — Pick which WhatsApp to open. Step 2 — Tap a template (or "Open blank" below). The message opens pre-filled; you tap Send inside WhatsApp.'),
+    targetChips,
     list,
-    h('div', { class: 'actions', style: { marginTop: '.75rem', flexWrap: 'wrap', gap: '.4rem' } },
-      // FIX1 (2026-06-06) — explicit Personal vs Business buttons so users
-      // with both WhatsApp apps installed can pick deterministically.
-      h('button', { class: 'btn', title: 'Open WhatsApp (chooser if both installed)',
-        onclick: () => { try { if (lead && lead.id) api('api_leads_addRemark', lead.id, { remark: '💬 WhatsApp opened (default)' }).catch(() => {}); } catch (_) {} window._waOpenPinned(dial, '', 'chooser'); modal.remove(); }
+    h('div', { class: 'actions', style: { marginTop: '.75rem', display: 'flex', gap: '.4rem', flexWrap: 'wrap' } },
+      h('button', { class: 'btn', title: 'Open WhatsApp with no message — selected target above',
+        onclick: () => launch('')
       }, '💬 Open blank'),
-      h('button', { class: 'btn', style: { background: '#25D366', color: '#fff' }, title: 'Force open in Personal WhatsApp',
-        onclick: () => { try { if (lead && lead.id) api('api_leads_addRemark', lead.id, { remark: '💬 WhatsApp sent (Personal)' }).catch(() => {}); } catch (_) {} window._waOpenPinned(dial, '', 'personal'); modal.remove(); }
-      }, 'Personal WA'),
-      h('button', { class: 'btn', style: { background: '#0a8055', color: '#fff' }, title: 'Force open in WhatsApp Business',
-        onclick: () => { try { if (lead && lead.id) api('api_leads_addRemark', lead.id, { remark: '💬 WhatsApp sent (Business)' }).catch(() => {}); } catch (_) {} window._waOpenPinned(dial, '', 'business'); modal.remove(); }
-      }, 'Business WA'),
       h('button', { class: 'btn primary', onclick: () => { modal.remove(); openPersonalWaTemplatesModal(); } }, '✎ Manage templates')
     )
   ));

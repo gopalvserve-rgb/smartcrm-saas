@@ -151,3 +151,12 @@ SELECT 'fix',
        '🟢',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'WhatsApp Business button — v2 fix (Personal/Business routing)');
+
+-- 2026-06-08 WA_TARGET_PICKER_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'WhatsApp picker — choose template AND app together',
+       'On the mobile lead card''s 💬 button: you can now pick whether to open Default WhatsApp, Personal, or Business — and THEN tap a template. The template fires straight into the chosen app, pre-filled and ready to send. Previously, the Personal/Business buttons sent empty text, and the template list always used the system default. Your choice is remembered for next time.',
+       '🟢',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'WhatsApp picker — choose template AND app together');
