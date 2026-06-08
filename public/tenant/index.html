@@ -121,7 +121,7 @@
     //   1. Exchanges the ssl token for a regular tenant JWT (api_auth_ssoLogin)
     //   2. Strips ?ssl= from the URL bar so it isn't kept in history
     //   3. THEN loads app.js so the boot code reads the freshly-written
-    //      token from localStorage. (Static <script src="/app.js?v=2026-06-07-dash-mobile-css-v1" defer>
+    //      token from localStorage. (Static <script src="/app.js?v=2026-06-08-leadcard-ui-restore-v1" defer>
     //      would race against the async exchange and the user would land
     //      on the login screen instead of being signed in.)
     (async function bootstrap() {
@@ -162,7 +162,7 @@
         // Wait for DOMContentLoaded before injecting scripts.
         function injectSpaScripts() {
           var s = document.createElement('script');
-          s.src = 'app.js?v=2026-06-07-dash-mobile-css-v1';
+          s.src = 'app.js?v=2026-06-08-leadcard-ui-restore-v1';
           document.body.appendChild(s);
           var c = document.createElement('script');
           c.src = 'caller-id-native.js?v=2026-05-24-tokenkey';
@@ -193,49 +193,13 @@
     @keyframes fadeIn { from{opacity:0} to{opacity:1} }
     #ios-howto-overlay { animation: fadeIn .25s ease-out }
 
-    /* DASH_MOBILE_CSS_v1 — 2026-06-07 — hard-cap every dashboard widget at
-       viewport width on mobile so SVG funnels, donut charts, KPI strips,
-       and Sale Closure Stage cards never overflow. User on Capacitor APK
-       was seeing the old JS bundle without DASH_MOBILE_FIX_v1, so the
-       defensive CSS layer must work even when the JS hasn't been updated. */
-    @media (max-width: 720px) {
-      /* All cards inside the dashboard view: clip overflow, full width */
-      #view .card, #view section.card, #view div.card {
-        max-width: 100% !important;
-        overflow-x: hidden !important;
-        box-sizing: border-box !important;
-      }
-      /* SVG charts: force scale to container width regardless of viewBox */
-      #view .card svg, #view section.card svg {
-        max-width: 100% !important;
-        height: auto !important;
-        width: 100% !important;
-      }
-      /* Closure-stage grid: 1 column instead of 3, full width per card */
-      #view div[style*="grid-template-columns"][style*="repeat"] {
-        grid-template-columns: 1fr !important;
-        gap: .5rem !important;
-      }
-      /* KPI strips: 2 columns max instead of auto-fit-220 */
-      #view div[style*="minmax(150px"], #view div[style*="minmax(220px"],
-      #view div[style*="minmax(180px"], #view div[style*="minmax(200px"] {
-        grid-template-columns: 1fr 1fr !important;
-        gap: .4rem !important;
-      }
-      /* Donut + funnel + any chart container: never exceed screen */
-      #view canvas { max-width: 100% !important; height: auto !important; }
-      /* Tables: horizontal scroll if too wide */
-      #view table { display: block; overflow-x: auto; max-width: 100% !important; }
-    }
-    /* Phone width specifically (< 480px) — even tighter */
-    @media (max-width: 480px) {
-      #view div[style*="minmax(150px"], #view div[style*="minmax(220px"],
-      #view div[style*="minmax(180px"], #view div[style*="minmax(200px"] {
-        grid-template-columns: 1fr !important;
-      }
-      #view .card { padding: .65rem !important; }
-      #view .card h3 { font-size: .95rem !important; }
-    }
+    /* LEADCARD_UI_RESTORE_v1 — 2026-06-08 — DASH_MOBILE_CSS_v1 was reverted.
+       Its broad selectors (#view .card svg / #view div[style*="grid-template-columns"]
+       / #view div[style*="minmax(...)"]) collapsed the mobile lead-card action
+       buttons + status pills because they matched ANY descendant of #view.
+       Dashboard widget mobile fit is handled in JS (DASH_MOBILE_FIX_v1/v2);
+       if mobile widgets overflow again, fix at the widget level, not via a
+       wildcard sweep. */
   </style>
   <div id="ios-install-hint" style="display:none;position:fixed;bottom:4.5rem;left:1rem;right:1rem;z-index:99999;background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);color:#fff;padding:1rem;border-radius:16px;box-shadow:0 16px 48px rgba(0,0,0,.4);font:14px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;border:1px solid rgba(99,102,241,.4)">
     <button id="ios-install-close" aria-label="Dismiss" style="position:absolute;top:.4rem;right:.4rem;background:transparent;border:none;color:rgba(255,255,255,.6);font-size:1.1rem;width:28px;height:28px;border-radius:50%;cursor:pointer;line-height:1">×</button>
