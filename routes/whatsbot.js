@@ -824,7 +824,7 @@ async function api_wb_templates_create(token, payload) {
     throw new Error('WhatsApp not configured. Settings \u2192 WhatsBot \u2192 Connect Account first.');
   }
 
-  const components = _buildTemplateComponents(p);
+  const components = await _buildTemplateComponents(p, cfg);  /* WA_TPL_META_UPLOAD_v1 */
   if (!components.find(c => c.type === 'BODY')) {
     throw new Error('Template must have a BODY component with non-empty text.');
   }
@@ -876,7 +876,57 @@ async function api_wb_templates_create(token, payload) {
   };
 }
 
-function _buildTemplateComponents(p) {
+
+/* WA_TPL_META_UPLOAD_v1 — Meta Resumable Upload API helper.
+   Meta's template-create endpoint refuses public URLs in example.header_handle.
+   It needs an opaque upload handle (e.g. "4::aW1...:ARZ...") obtained by:
+     1) POST {GRAPH}/{APP_ID}/uploads?file_length=...&file_type=... → returns {id}
+     2) POST {GRAPH}/{id} with raw bytes + Authorization: OAuth {token} → returns {h}
+   We feed it the file fetched from the CRM's own /api/wa-sample/<token> URL. */
+async function _uploadSampleToMeta(publicUrl, cfg, fmt) {
+  if (!cfg || !cfg.token) throw new Error('WhatsApp token missing — cannot upload sample to Meta');
+  // 1) Pull the bytes from our own sample-store URL
+  const fileRes = await fetch(publicUrl);
+  if (!fileRes.ok) throw new Error('Could not read sample file (HTTP ' + fileRes.status + ')');
+  const buf = Buffer.from(await fileRes.arrayBuffer());
+  if (!buf.length) throw new Error('Sample file is empty');
+  let mime = (fileRes.headers.get('content-type') || '').split(';')[0].trim();
+  if (!mime) {
+    mime = fmt === 'IMAGE'   ? 'image/jpeg'
+         : fmt === 'VIDEO'   ? 'video/mp4'
+         :                     'application/pdf';
+  }
+  // 2) Start the upload session — uses the WABA access token against our platform App ID
+  const appId = PLATFORM_FB_APP_ID;
+  const startUrl = `${GRAPH}/${appId}/uploads?file_length=${buf.length}`
+                 + `&file_type=${encodeURIComponent(mime)}`
+                 + `&access_token=${encodeURIComponent(cfg.token)}`;
+  const startRes = await fetch(startUrl, { method: 'POST' });
+  const startJson = await startRes.json().catch(() => ({}));
+  if (startJson.error) {
+    throw new Error('Meta upload session failed: ' + (startJson.error.error_user_msg || startJson.error.message));
+  }
+  const sessionId = startJson.id;
+  if (!sessionId) throw new Error('Meta upload session returned no id');
+  // 3) Stream the bytes
+  const uploadRes = await fetch(`${GRAPH}/${sessionId}`, {
+    method: 'POST',
+    headers: {
+      'Authorization': 'OAuth ' + cfg.token,
+      'file_offset': '0',
+      'Content-Type': mime
+    },
+    body: buf
+  });
+  const uploadJson = await uploadRes.json().catch(() => ({}));
+  if (uploadJson.error) {
+    throw new Error('Meta sample upload failed: ' + (uploadJson.error.error_user_msg || uploadJson.error.message));
+  }
+  if (!uploadJson.h) throw new Error('Meta upload returned no handle');
+  return uploadJson.h;
+}
+
+async function _buildTemplateComponents(p, cfg) {  /* WA_TPL_META_UPLOAD_v1 — async so we can resumable-upload media to Meta */
   const out = [];
   // HEADER
   if (p.header && p.header.format && String(p.header.format).toUpperCase() !== 'NONE') {
@@ -893,9 +943,16 @@ function _buildTemplateComponents(p) {
       if (placeholders > 0) comp.example = { header_text: sample.map(String) };
       out.push(comp);
     } else if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(fmt)) {
-      const url = String(p.header.sample_url || '').trim();
-      if (!url) throw new Error('A sample ' + fmt.toLowerCase() + ' URL is required for media headers.');
-      out.push({ type: 'HEADER', format: fmt, example: { header_handle: [url] } });
+      /* WA_TPL_META_UPLOAD_v1 — Meta requires an upload handle from their
+         Resumable Upload API, NOT a public URL. We accept either a CRM-hosted
+         sample_url OR a pre-obtained sample_handle. */
+      let handle = String(p.header.sample_handle || '').trim();
+      if (!handle) {
+        const url = String(p.header.sample_url || '').trim();
+        if (!url) throw new Error('A sample ' + fmt.toLowerCase() + ' file is required for media headers.');
+        handle = await _uploadSampleToMeta(url, cfg, fmt);
+      }
+      out.push({ type: 'HEADER', format: fmt, example: { header_handle: [handle] } });
     }
   }
   // BODY

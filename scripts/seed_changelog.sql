@@ -124,3 +124,12 @@ VALUES ('SHOWCASE_PHASE_2_v1', '5 new showcase demo tenants with dummy data',
         E'Super-admin can now spin up 5 new fully-populated demo tenants from the Demo Seeder panel:\n• showcase-finance — TrustBridge Financial Services (8 policies, claims, premium schedule)\n• showcase-solar — SunBright Solar Solutions (6 site surveys, 6 quotes, 3 installations)\n• showcase-mfg — Precision Industries (8 RFQs, 4 production orders, 1 dispatch)\n• showcase-holiday — WanderWise Travel (8 bookings, day-wise itineraries, vouchers)\n• showcase-ecommerce — KartFlow D2C Store (10 orders, returns, 5 abandoned carts, loyalty tiers)\n\nEach demo tenant: shared admin login (demo-finance@smartcrm.in / Showcase@123 etc), seeded leads + users + statuses + custom fields + 30-day pack-specific transactions.',
         'feature', NOW())
 ON CONFLICT (version) DO NOTHING;
+
+-- 2026-06-08 WA_TPL_META_UPLOAD_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'fix',
+       'WhatsApp template — image/PDF/video header upload fixed',
+       'Creating a WhatsApp message template with an Image, PDF or Video header now works. The CRM uploads your sample file through Meta''s Resumable Upload API and sends the proper handle (previously we sent our own public URL and Meta rejected it with a "sample not provided" error).',
+       '🖼️',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'WhatsApp template — image/PDF/video header upload fixed');
