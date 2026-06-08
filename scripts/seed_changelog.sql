@@ -205,3 +205,12 @@ SELECT 'fix',
        '🔧',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Google Sheet push — fix "No Sheet URL configured" error after save');
+
+-- 2026-06-09 GCONV_SHEETS_AUTOSAVE_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'fix',
+       'Google Sheet push — Push Now button now auto-saves your Sheet URL first',
+       'There was no separate Save button inside the Google Sheet card, which made it confusing — clicking Push Now would error with "No Sheet URL configured" because the URL had not been saved yet. Now Push Now silently saves the Sheet URL, tab name, and auto-push toggle FIRST, then pushes. Just paste your sheet URL and click Push Now — no extra step.',
+       '🔧',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Google Sheet push — Push Now button now auto-saves your Sheet URL first');

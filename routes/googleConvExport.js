@@ -189,15 +189,20 @@ async function api_googleConvExport_save(token, payload) {
     try { statusMap = JSON.parse(statusMap); } catch (_) { throw new Error('status_map must be valid JSON'); }
   }
   statusMap = statusMap || {};
+  /* GCONV_SHEETS_PARTIAL_SAVE_v1 — every field is now partial-save aware. If the SPA omits a key,
+     we leave it alone in the DB instead of resetting it to a default. This lets the Sheet card
+     auto-save just {sheet_url, sheet_tab, sheet_push_enabled} on Push Now without wiping is_enabled
+     or status_map. */
   const row = {
-    is_enabled: !!p.is_enabled,
-    lookback_days: Math.max(1, Math.min(180, Number(p.lookback_days) || 7)),
-    status_map_json: JSON.stringify(statusMap),
-    source_filter: String(p.source_filter || 'google,google ads,gads,google lead ad').trim(),
-    conversion_time_mode: ['end_of_day_ist', 'status_change_actual'].includes(p.conversion_time_mode)
-      ? p.conversion_time_mode : 'end_of_day_ist',
-    auto_export_enabled: p.auto_export_enabled !== false,
-    auto_hour_ist: Math.max(0, Math.min(23, Number(p.auto_hour_ist) || 22)),
+    is_enabled: typeof p.is_enabled === 'boolean' ? p.is_enabled : undefined,
+    lookback_days: p.lookback_days !== undefined ? Math.max(1, Math.min(180, Number(p.lookback_days) || 7)) : undefined,
+    status_map_json: (p.status_map !== undefined || typeof payload?.status_map === 'object') ? JSON.stringify(statusMap) : undefined,
+    source_filter: p.source_filter !== undefined ? String(p.source_filter || 'google,google ads,gads,google lead ad').trim() : undefined,
+    conversion_time_mode: p.conversion_time_mode !== undefined
+      ? (['end_of_day_ist', 'status_change_actual'].includes(p.conversion_time_mode) ? p.conversion_time_mode : 'end_of_day_ist')
+      : undefined,
+    auto_export_enabled: typeof p.auto_export_enabled === 'boolean' ? p.auto_export_enabled : undefined,
+    auto_hour_ist: p.auto_hour_ist !== undefined ? Math.max(0, Math.min(23, Number(p.auto_hour_ist) || 22)) : undefined,
     /* GCONV_SHEETS_v1 — Google Sheet push target */
     sheet_url: p.sheet_url !== undefined ? String(p.sheet_url || '').trim() : undefined,
     sheet_tab: p.sheet_tab !== undefined ? (String(p.sheet_tab || '').trim() || 'Conversions') : undefined,

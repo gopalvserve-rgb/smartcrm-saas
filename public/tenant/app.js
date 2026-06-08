@@ -21602,6 +21602,17 @@ async function adminGoogleConvExport() {
     pushBtn.disabled = true;
     pushStatus.textContent = 'Pushing…'; pushStatus.style.color = '#64748b';
     try {
+      /* GCONV_SHEETS_AUTOSAVE_v1 — auto-persist the current Sheet URL + tab + push toggle BEFORE pushing,
+         so the user doesn't have to remember to click the outer Save settings button first. */
+      const _url = (sheetUrlInp.value || '').trim();
+      if (!_url) throw new Error('Paste a Google Sheet URL in the box above first.');
+      try {
+        await api('api_googleConvExport_save', {
+          sheet_url: _url,
+          sheet_tab: (sheetTabInp.value || '').trim() || 'Conversions',
+          sheet_push_enabled: !!sheetPushCb.checked
+        });
+      } catch (saveErr) { throw new Error('Could not save Sheet URL: ' + saveErr.message); }
       const r = await api('api_googleConvExport_pushSheet');
       pushStatus.textContent = '✓ Pushed ' + r.rows + ' rows (with GCLID: ' + r.with_gclid + ', without: ' + r.without_gclid + ')';
       pushStatus.style.color = '#15803d';
