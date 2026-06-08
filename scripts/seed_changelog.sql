@@ -178,3 +178,12 @@ SELECT 'fix',
        '🟢',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'WhatsApp Business launcher — use Capacitor App.openUrl + last-resort chooser (v4)');
+
+-- 2026-06-08 SHOWCASE_PACK_VISIBILITY_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'Industry packs — Finance / Solar / Mfg / Travel / Ecommerce overview pages',
+       'Showcase tenants with the Finance / Solar / Manufacturer / Holiday / Ecommerce pack now show a dedicated Overview page in the sidebar with KPI tiles pulled from the live pack APIs (sanctioned amount, quotes sent, RFQs open, bookings confirmed, orders 30d, etc). Previously these showcases looked identical to a Generic tenant. Full per-entity CRUD UIs ship in the next round.',
+       '🎯',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Industry packs — Finance / Solar / Mfg / Travel / Ecommerce overview pages');

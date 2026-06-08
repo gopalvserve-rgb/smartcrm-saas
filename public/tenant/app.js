@@ -1646,7 +1646,21 @@ const NAV_GROUPS = [
     { id: 'rerequirements',  label: 'Buyer Reqs',      icon: '🎯', roles: ['admin','manager','team_leader','agent'], requiresPack: 'realestate', search: 'buyer requirements demands' },
     { id: 'revisits',        label: 'Site Visits',     icon: '📅', roles: ['admin','manager','team_leader','agent'], requiresPack: 'realestate', search: 'site visit property visit' },
     { id: 'recpperf',        label: 'Broker Perf',     icon: '👥', roles: ['admin','manager'],                requiresPack: 'realestate', search: 'broker channel partner performance' },
-    { id: 'recommissions',   label: 'Commissions',     icon: '💸', roles: ['admin','manager'],                requiresPack: 'realestate', search: 'commissions payout brokerage' }
+    { id: 'recommissions',   label: 'Commissions',     icon: '💸', roles: ['admin','manager'],                requiresPack: 'realestate', search: 'commissions payout brokerage' },
+    /* SHOWCASE_PACK_VISIBILITY_v1 — Phase 1: one overview item per Finance / Solar /
+       Manufacturer / Holiday / Ecommerce pack. Each routes to VIEWS.pack<X> which
+       calls the existing api_<pack>_summary endpoint and shows KPI tiles + a
+       "pack is active" banner. Full per-entity CRUD comes later. */
+    // ---- Finance pack ----
+    { id: 'packfinance',  label: 'Finance Overview',  icon: '🏦', roles: ['admin','manager','team_leader'], requiresPack: 'finance', search: 'finance insurance loan policy premium claim' },
+    // ---- Solar pack ----
+    { id: 'packsolar',    label: 'Solar Overview',    icon: '☀️', roles: ['admin','manager','team_leader'], requiresPack: 'solar', search: 'solar rooftop site quote installation subsidy amc' },
+    // ---- Manufacturer pack ----
+    { id: 'packmfg',      label: 'Manufacturer Overview', icon: '🏭', roles: ['admin','manager','team_leader'], requiresPack: 'manufacturer', search: 'manufacturer factory rfq quote order production dispatch' },
+    // ---- Holiday & Travel pack ----
+    { id: 'packholiday',  label: 'Travel Overview',   icon: '✈️', roles: ['admin','manager','team_leader'], requiresPack: 'holiday', search: 'travel holiday booking package itinerary voucher' },
+    // ---- Ecommerce pack ----
+    { id: 'packecommerce', label: 'Ecommerce Overview', icon: '🛒', roles: ['admin','manager','team_leader'], requiresPack: 'ecommerce', search: 'ecommerce order return cart loyalty d2c' }
   ] },
   { label: 'Calls & Dialer', icon: '📞', items: [
     { id: 'dialer',       label: 'Dialer',        icon: '📞', search: 'dialer call phone make call' },
@@ -38685,6 +38699,142 @@ VIEWS.recommissions = async (view) => {
     }))
   );
   view.appendChild(tbl);
+};
+
+// ─────────────────────────────────────────────────────────────────────
+// SHOWCASE_PACK_VISIBILITY_v1 — Per-pack Overview pages.
+// Calls the existing api_<pack>_summary endpoint and renders KPI tiles
+// + a "what this pack offers" banner. Phase 1 of pack SPA work; full
+// per-entity CRUD comes later.
+// ─────────────────────────────────────────────────────────────────────
+
+function _packKpiTile(label, value, hint) {
+  return h('div', {
+    class: 'card',
+    style: {
+      padding: '1rem', minWidth: '170px', flex: '1',
+      background: 'linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%)',
+      border: '1px solid #e2e8f0', borderRadius: '10px'
+    }
+  },
+    h('div', { class: 'muted', style: { fontSize: '.78rem', textTransform: 'uppercase', letterSpacing: '0.04em' } }, label),
+    h('div', { style: { fontSize: '1.7rem', fontWeight: 700, marginTop: '.3rem', color: '#1e293b' } }, value),
+    hint ? h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.2rem' } }, hint) : null
+  );
+}
+
+function _packBanner(name, blurb, features) {
+  return h('div', {
+    class: 'card',
+    style: {
+      padding: '1rem 1.2rem', marginBottom: '1rem',
+      background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
+      color: '#fff', border: 'none', borderRadius: '10px'
+    }
+  },
+    h('div', { style: { fontSize: '.78rem', opacity: 0.8, textTransform: 'uppercase', letterSpacing: '0.06em' } }, 'Active Industry Pack'),
+    h('div', { style: { fontSize: '1.4rem', fontWeight: 700, margin: '.2rem 0' } }, name),
+    h('div', { style: { fontSize: '.92rem', opacity: 0.95 } }, blurb),
+    features ? h('div', { style: { fontSize: '.82rem', opacity: 0.85, marginTop: '.5rem' } }, '✓ ' + features.join('   ✓ ')) : null
+  );
+}
+
+function _money(v) { return '₹' + Number(v || 0).toLocaleString('en-IN'); }
+
+VIEWS.packfinance = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('h2', {}, '🏦 Finance — Overview'));
+  view.appendChild(_packBanner('Finance Pack',
+    'Insurance / loan / investment workflow — products, policies, premium schedules, claims, renewals.',
+    ['Policies', 'Premiums', 'Claims', 'Renewals']));
+  let s;
+  try { s = await api('api_fin_summary'); } catch (e) { view.appendChild(h('p', { class: 'muted' }, 'Could not load summary: ' + e.message)); return; }
+  view.appendChild(h('div', { style: { display: 'flex', gap: '.8rem', flexWrap: 'wrap', marginBottom: '1rem' } },
+    _packKpiTile('Sanctioned', _money(s.sanctioned?.amount), (s.sanctioned?.count || 0) + ' policies'),
+    _packKpiTile('Disbursed', _money(s.disbursed?.amount), 'paid out'),
+    _packKpiTile('Due in 30 days', _money(s.premium_due_30d?.amount), (s.premium_due_30d?.count || 0) + ' premiums'),
+    _packKpiTile('Overdue', _money(s.overdue?.amount), (s.overdue?.count || 0) + ' premiums'),
+    _packKpiTile('Open Claims', String(s.claims_open || 0), 'awaiting settlement'),
+    _packKpiTile('Renewals in 60d', String(s.renewals_60d || 0), 'expiring soon')
+  ));
+  view.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+    'Full CRUD pages for Products / Policies / Premiums / Claims / Renewals are coming next. The backend APIs are already live (see lead-modal panels).'));
+};
+
+VIEWS.packsolar = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('h2', {}, '☀️ Solar — Overview'));
+  view.appendChild(_packBanner('Solar Pack',
+    'Rooftop / utility solar — site survey, quote builder, installation tracker, subsidy + AMC.',
+    ['Sites', 'Quotes', 'Installations', 'Subsidies', 'AMC']));
+  let s;
+  try { s = await api('api_solar_summary'); } catch (e) { view.appendChild(h('p', { class: 'muted' }, 'Could not load summary: ' + e.message)); return; }
+  view.appendChild(h('div', { style: { display: 'flex', gap: '.8rem', flexWrap: 'wrap', marginBottom: '1rem' } },
+    _packKpiTile('Total Sites', String(s.sites?.total || 0), (s.sites?.surveyed || 0) + ' surveyed'),
+    _packKpiTile('Quotes Sent', String(s.quotes_sent?.count || 0), _money(s.quotes_sent?.value)),
+    _packKpiTile('Commissioned', String(s.commissioned?.count || 0), Number(s.commissioned?.kw || 0).toFixed(1) + ' kW total'),
+    _packKpiTile('Subsidy Pending', String(s.subsidy_pending?.count || 0), _money(s.subsidy_pending?.amount)),
+    _packKpiTile('AMC Visits Due (30d)', String(s.amc_due_30d || 0), 'next 30 days')
+  ));
+  view.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+    'Full CRUD pages for Site Survey / Quotes / Installations / Subsidies / AMC are coming next.'));
+};
+
+VIEWS.packmfg = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('h2', {}, '🏭 Manufacturer — Overview'));
+  view.appendChild(_packBanner('Manufacturer Pack',
+    'B2B manufacturing — RFQ inbox, quote builder, PO + production, dispatch + receivables.',
+    ['RFQ', 'Quotes', 'Orders', 'Production', 'Dispatches']));
+  let s;
+  try { s = await api('api_mfg_summary'); } catch (e) { view.appendChild(h('p', { class: 'muted' }, 'Could not load summary: ' + e.message)); return; }
+  view.appendChild(h('div', { style: { display: 'flex', gap: '.8rem', flexWrap: 'wrap', marginBottom: '1rem' } },
+    _packKpiTile('Open RFQs', String(s.rfqs_open || 0), 'awaiting quote'),
+    _packKpiTile('Quotes Sent', String(s.quotes_sent?.count || 0), _money(s.quotes_sent?.value)),
+    _packKpiTile('In Production', String(s.in_production || 0), 'work orders active'),
+    _packKpiTile('Dispatched (30d)', String(s.dispatched_30d?.count || 0), _money(s.dispatched_30d?.value)),
+    _packKpiTile('Receivables', _money(s.receivables), 'outstanding')
+  ));
+  view.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+    'Full CRUD pages for RFQ Inbox / Quotes / Orders / Production / Dispatches are coming next.'));
+};
+
+VIEWS.packholiday = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('h2', {}, '✈️ Travel & Holiday — Overview'));
+  view.appendChild(_packBanner('Holiday & Travel Pack',
+    'Travel agency — package catalog, bookings, itinerary builder, payments, vouchers.',
+    ['Packages', 'Bookings', 'Itineraries', 'Payments', 'Vouchers']));
+  let s;
+  try { s = await api('api_tour_summary'); } catch (e) { view.appendChild(h('p', { class: 'muted' }, 'Could not load summary: ' + e.message)); return; }
+  view.appendChild(h('div', { style: { display: 'flex', gap: '.8rem', flexWrap: 'wrap', marginBottom: '1rem' } },
+    _packKpiTile('Confirmed Bookings', String(s.confirmed?.count || 0), _money(s.confirmed?.value)),
+    _packKpiTile('Travel in 30d', String(s.upcoming_30d || 0), 'starting soon'),
+    _packKpiTile('In Trip Now', String(s.in_trip || 0), 'currently travelling'),
+    _packKpiTile('Receivables', _money(s.receivables), 'balance amount'),
+    _packKpiTile('Visa Pending', String(s.visa_pending || 0), 'awaiting approval')
+  ));
+  view.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+    'Full CRUD pages for Package Catalog / Bookings / Itineraries / Payment Ledger / Vouchers are coming next.'));
+};
+
+VIEWS.packecommerce = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('h2', {}, '🛒 Ecommerce — Overview'));
+  view.appendChild(_packBanner('Ecommerce Pack',
+    'D2C / online store — product catalog, orders, returns, abandoned-cart recovery, loyalty tiers.',
+    ['Products', 'Orders', 'Returns', 'Carts', 'Loyalty']));
+  let s;
+  try { s = await api('api_ec_summary'); } catch (e) { view.appendChild(h('p', { class: 'muted' }, 'Could not load summary: ' + e.message)); return; }
+  view.appendChild(h('div', { style: { display: 'flex', gap: '.8rem', flexWrap: 'wrap', marginBottom: '1rem' } },
+    _packKpiTile('Orders (30d)', String(s.orders_30d?.count || 0), _money(s.orders_30d?.value)),
+    _packKpiTile('Fulfilment Pending', String(s.fulfillment_pending || 0), 'to ship'),
+    _packKpiTile('Abandoned Carts (7d)', String(s.abandoned_carts_7d?.count || 0), _money(s.abandoned_carts_7d?.value) + ' lost value'),
+    _packKpiTile('Open Returns', String(s.returns_open?.count || 0), _money(s.returns_open?.refund_pending) + ' refund pending'),
+    _packKpiTile('Gold Members', String(s.gold_members || 0), 'top loyalty tier')
+  ));
+  view.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+    'Full CRUD pages for Catalog / Orders / Returns / Abandoned Carts / Loyalty are coming next.'));
 };
 
 async function openMarkCommissionPaidModal(r, onDone) {
