@@ -160,3 +160,12 @@ SELECT 'feature',
        '🟢',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'WhatsApp picker — choose template AND app together');
+
+-- 2026-06-08 WA_PKG_FIX_v3
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'fix',
+       'WhatsApp Business launcher — visible-failure detection (v3)',
+       'When tapping Business + a template, sometimes nothing happened at all. Reason: certain Android WebView builds silently swallow intent:// URLs that don''t match a perfect filter. v3 now tries THREE different URL formats (whatsapp://, https://api.whatsapp.com/send, https://wa.me) in succession, and if WhatsApp still doesn''t open within ~2s, copies the phone+message to your clipboard and tells you so you can paste it manually.',
+       '🟢',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'WhatsApp Business launcher — visible-failure detection (v3)');

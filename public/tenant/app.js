@@ -4252,40 +4252,85 @@ window._waShareUrl = function(phone, text) {
 
 // FIX1 — Android intent URL pinned to a specific WhatsApp package.
 // kind = 'personal' | 'business' | 'chooser'
-window._waPinnedIntent = function(phone, text, kind) {
+/* WA_PKG_FIX_v3 — return MULTIPLE intent URL candidates per target, since
+   different Android versions / OEM WebView builds resolve intent filters
+   differently. _waOpenPinned will try them in order. */
+window._waPinnedIntentCandidates = function(phone, text, kind) {
   const dig = String(phone || '').replace(/\D/g, '');
-  if (!dig) return '';
+  if (!dig) return [];
   const txt = text ? ('&text=' + encodeURIComponent(text)) : '';
-  if (kind === 'personal') {
-    /* WA_PKG_FIX_v2 — v1 used scheme=whatsapp which Business app may not register
-       for the bare 'send' host. Switching to api.whatsapp.com host which BOTH apps
-       definitively register intent filters for. Also drop browser_fallback_url —
-       without it, a package= miss FAILS LOUDLY instead of silently opening Personal. */
-    return 'intent://api.whatsapp.com/send?phone=' + dig + txt + '#Intent;scheme=https;package=com.whatsapp;action=android.intent.action.VIEW;end';
+  if (kind === 'chooser') {
+    return ['https://api.whatsapp.com/send/?phone=' + dig + txt];
   }
-  if (kind === 'business') {
-    /* WA_PKG_FIX_v2 — api.whatsapp.com host (Business registers this for sure) +
-       no fallback URL so a missing Business app errors visibly rather than
-       silently opening Personal. See Personal branch. */
-    return 'intent://api.whatsapp.com/send?phone=' + dig + txt + '#Intent;scheme=https;package=com.whatsapp.w4b;action=android.intent.action.VIEW;end';
-  }
-  return 'https://api.whatsapp.com/send/?phone=' + dig + txt;
+  const pkg = (kind === 'business') ? 'com.whatsapp.w4b' : 'com.whatsapp';
+  return [
+    // Candidate 1: whatsapp:// scheme — most direct, both apps register it
+    'intent://send?phone=' + dig + txt + '#Intent;scheme=whatsapp;package=' + pkg + ';action=android.intent.action.VIEW;end',
+    // Candidate 2: api.whatsapp.com host (HTTPS) — Meta canonical deep link
+    'intent://api.whatsapp.com/send?phone=' + dig + txt + '#Intent;scheme=https;package=' + pkg + ';action=android.intent.action.VIEW;end',
+    // Candidate 3: wa.me — universal short link, both apps register
+    'intent://wa.me/' + dig + (text ? '?text=' + encodeURIComponent(text) : '') + '#Intent;scheme=https;package=' + pkg + ';action=android.intent.action.VIEW;end'
+  ];
+};
+// Backwards-compat wrapper for any code that still calls _waPinnedIntent.
+window._waPinnedIntent = function(phone, text, kind) {
+  const arr = window._waPinnedIntentCandidates(phone, text, kind);
+  return arr[0] || '';
 };
 window._waOpenPinned = function(phone, text, kind) {
-  /* WA_PKG_FIX_v2 — was using a hidden anchor click which Capacitor's WebView
-     sometimes intercepts as a regular navigation and strips the intent://
-     scheme. window.location.href is reliably forwarded to Android's
-     shouldOverrideUrlLoading which parses + dispatches the intent. */
-  const url = window._waPinnedIntent(phone, text, kind);
-  if (!url) return;
+  /* WA_PKG_FIX_v3 — visible-failure detection + clipboard fallback.
+     Tries each candidate URL in succession via location.href. If the WhatsApp
+     app launches, document goes hidden (visibilitychange fires) and we stop.
+     If nothing launches within ~2s the page is still visible, so we copy the
+     phone+text to the clipboard and toast the user — no more silent failure. */
+  const candidates = (window._waPinnedIntentCandidates
+    ? window._waPinnedIntentCandidates(phone, text, kind)
+    : [window._waPinnedIntent(phone, text, kind)]).filter(Boolean);
+  if (!candidates.length) return;
+
+  let opened = false;
+  const onHidden = () => {
+    if (document.visibilityState === 'hidden') opened = true;
+  };
+  document.addEventListener('visibilitychange', onHidden);
+
   try {
-    window.location.href = url;
-  } catch (_) {
-    // Last-resort fallback for non-WebView browsers.
-    const a = document.createElement('a');
-    a.href = url; a.style.display = 'none'; document.body.appendChild(a);
-    a.click(); setTimeout(() => a.remove(), 100);
+    window.location.href = candidates[0];
+  } catch (_) { /* try anchor in catch below */ }
+
+  // Some OEMs absorb intent:// silently. After 1.2s, if still visible, try the
+  // 2nd and 3rd candidates one-by-one.
+  let idx = 1;
+  function tryNext() {
+    if (opened || idx >= candidates.length) return finish();
+    try { window.location.href = candidates[idx]; } catch (_) {}
+    idx += 1;
+    setTimeout(tryNext, 600);
   }
+  setTimeout(tryNext, 1200);
+
+  function finish() {
+    document.removeEventListener('visibilitychange', onHidden);
+    if (opened) return;
+    // Nothing opened — likely the target WhatsApp app isn't installed.
+    // Copy phone+text to clipboard so user can paste into the right app.
+    const label = kind === 'business' ? 'WhatsApp Business'
+                : kind === 'personal' ? 'WhatsApp' : 'WhatsApp';
+    const dig = String(phone || '').replace(/\D/g, '');
+    const clip = '+' + dig + (text ? '\n' + text : '');
+    try {
+      navigator.clipboard.writeText(clip);
+      if (typeof toast === 'function') {
+        toast(label + ' did not open. Number + message copied to clipboard — paste into the app.', 'err');
+      }
+    } catch (_) {
+      if (typeof toast === 'function') {
+        toast(label + ' did not open. Make sure the app is installed.', 'err');
+      }
+    }
+  }
+  // Hard cap — if neither visibility change nor candidate exhaustion fires.
+  setTimeout(finish, 3500);
 };
 window._waOpenLink = function(phone, text) {
   // Helper that opens the link in the right way for the picked mode.
