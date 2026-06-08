@@ -4257,10 +4257,15 @@ window._waPinnedIntent = function(phone, text, kind) {
   if (!dig) return '';
   const txt = text ? ('&text=' + encodeURIComponent(text)) : '';
   if (kind === 'personal') {
-    return 'intent://send/?phone=' + dig + txt + '#Intent;scheme=https;package=com.whatsapp;action=android.intent.action.VIEW;S.browser_fallback_url=' + encodeURIComponent('https://api.whatsapp.com/send/?phone=' + dig + txt) + ';end';
+    /* WA_PKG_FIX_v1 — was scheme=https + host send/, which matched no WA intent filter
+       so Android always used the browser_fallback_url and opened whichever WhatsApp
+       was the system default. Switched to whatsapp://send (registered by both apps)
+       so the package= constraint actually pins to com.whatsapp. */
+    return 'intent://send?phone=' + dig + txt + '#Intent;scheme=whatsapp;package=com.whatsapp;action=android.intent.action.VIEW;S.browser_fallback_url=' + encodeURIComponent('https://api.whatsapp.com/send/?phone=' + dig + txt) + ';end';
   }
   if (kind === 'business') {
-    return 'intent://send/?phone=' + dig + txt + '#Intent;scheme=https;package=com.whatsapp.w4b;action=android.intent.action.VIEW;S.browser_fallback_url=' + encodeURIComponent('https://api.whatsapp.com/send/?phone=' + dig + txt) + ';end';
+    /* WA_PKG_FIX_v1 — see Personal branch above. Same fix, com.whatsapp.w4b target. */
+    return 'intent://send?phone=' + dig + txt + '#Intent;scheme=whatsapp;package=com.whatsapp.w4b;action=android.intent.action.VIEW;S.browser_fallback_url=' + encodeURIComponent('https://api.whatsapp.com/send/?phone=' + dig + txt) + ';end';
   }
   return 'https://api.whatsapp.com/send/?phone=' + dig + txt;
 };

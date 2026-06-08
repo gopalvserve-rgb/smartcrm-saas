@@ -133,3 +133,12 @@ SELECT 'fix',
        '🖼️',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'WhatsApp template — image/PDF/video header upload fixed');
+
+-- 2026-06-08 WA_PKG_FIX_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'fix',
+       'WhatsApp — Business WA button now actually opens Business app',
+       'On the mobile lead card, tapping "Business WA" was still opening Personal WhatsApp. The Android intent URL wasn''t matching either app''s manifest filter, so it fell back to the public URL and opened whichever WA was your system default. Fixed — Business WA now reliably routes to com.whatsapp.w4b and Personal WA to com.whatsapp.',
+       '🟢',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'WhatsApp — Business WA button now actually opens Business app');
