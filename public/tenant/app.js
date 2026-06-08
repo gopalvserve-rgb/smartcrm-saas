@@ -4257,24 +4257,35 @@ window._waPinnedIntent = function(phone, text, kind) {
   if (!dig) return '';
   const txt = text ? ('&text=' + encodeURIComponent(text)) : '';
   if (kind === 'personal') {
-    /* WA_PKG_FIX_v1 — was scheme=https + host send/, which matched no WA intent filter
-       so Android always used the browser_fallback_url and opened whichever WhatsApp
-       was the system default. Switched to whatsapp://send (registered by both apps)
-       so the package= constraint actually pins to com.whatsapp. */
-    return 'intent://send?phone=' + dig + txt + '#Intent;scheme=whatsapp;package=com.whatsapp;action=android.intent.action.VIEW;S.browser_fallback_url=' + encodeURIComponent('https://api.whatsapp.com/send/?phone=' + dig + txt) + ';end';
+    /* WA_PKG_FIX_v2 — v1 used scheme=whatsapp which Business app may not register
+       for the bare 'send' host. Switching to api.whatsapp.com host which BOTH apps
+       definitively register intent filters for. Also drop browser_fallback_url —
+       without it, a package= miss FAILS LOUDLY instead of silently opening Personal. */
+    return 'intent://api.whatsapp.com/send?phone=' + dig + txt + '#Intent;scheme=https;package=com.whatsapp;action=android.intent.action.VIEW;end';
   }
   if (kind === 'business') {
-    /* WA_PKG_FIX_v1 — see Personal branch above. Same fix, com.whatsapp.w4b target. */
-    return 'intent://send?phone=' + dig + txt + '#Intent;scheme=whatsapp;package=com.whatsapp.w4b;action=android.intent.action.VIEW;S.browser_fallback_url=' + encodeURIComponent('https://api.whatsapp.com/send/?phone=' + dig + txt) + ';end';
+    /* WA_PKG_FIX_v2 — api.whatsapp.com host (Business registers this for sure) +
+       no fallback URL so a missing Business app errors visibly rather than
+       silently opening Personal. See Personal branch. */
+    return 'intent://api.whatsapp.com/send?phone=' + dig + txt + '#Intent;scheme=https;package=com.whatsapp.w4b;action=android.intent.action.VIEW;end';
   }
   return 'https://api.whatsapp.com/send/?phone=' + dig + txt;
 };
 window._waOpenPinned = function(phone, text, kind) {
+  /* WA_PKG_FIX_v2 — was using a hidden anchor click which Capacitor's WebView
+     sometimes intercepts as a regular navigation and strips the intent://
+     scheme. window.location.href is reliably forwarded to Android's
+     shouldOverrideUrlLoading which parses + dispatches the intent. */
   const url = window._waPinnedIntent(phone, text, kind);
   if (!url) return;
-  const a = document.createElement('a');
-  a.href = url; a.style.display = 'none'; document.body.appendChild(a);
-  a.click(); setTimeout(() => a.remove(), 100);
+  try {
+    window.location.href = url;
+  } catch (_) {
+    // Last-resort fallback for non-WebView browsers.
+    const a = document.createElement('a');
+    a.href = url; a.style.display = 'none'; document.body.appendChild(a);
+    a.click(); setTimeout(() => a.remove(), 100);
+  }
 };
 window._waOpenLink = function(phone, text) {
   // Helper that opens the link in the right way for the picked mode.

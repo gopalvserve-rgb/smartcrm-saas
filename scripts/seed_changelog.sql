@@ -142,3 +142,12 @@ SELECT 'fix',
        '🟢',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'WhatsApp — Business WA button now actually opens Business app');
+
+-- 2026-06-08 WA_PKG_FIX_v2
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'fix',
+       'WhatsApp Business button — v2 fix (Personal/Business routing)',
+       'v1 still didn''t reliably route the "Business WA" button to WhatsApp Business. v2 switches to api.whatsapp.com — the URL host both apps definitively register — drops the silent fallback URL (so a missing Business app errors visibly instead of opening Personal), and uses location.href instead of an anchor click (Capacitor WebView sometimes intercepts anchor clicks before the intent system sees them).',
+       '🟢',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'WhatsApp Business button — v2 fix (Personal/Business routing)');
