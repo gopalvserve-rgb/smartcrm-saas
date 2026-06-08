@@ -446,6 +446,43 @@ app.get('/saas/google/callback', async (req, res) => {
   return _runAsTenant(slug, req, res, handler);
 });
 
+/* GCONV_SHEETS_v1 — Super-admin one-time OAuth setup for the shared
+   Google account that pushes conversion data to every tenant's Sheet.
+   Anyone with the SUPER_ADMIN_SHEETS_KEY can authorize. */
+app.get('/saas/sheets/connect', async (req, res) => {
+  try {
+    const key = String(req.query.key || '').trim();
+    const expected = process.env.SUPER_ADMIN_SHEETS_KEY || process.env.SUPER_ADMIN_KEY || '';
+    if (!expected) return res.status(500).type('html').send('<h2>SUPER_ADMIN_SHEETS_KEY not set on Railway</h2>');
+    if (key !== expected) return res.status(403).type('html').send('<h2>Forbidden — pass ?key=&lt;SUPER_ADMIN_SHEETS_KEY&gt;</h2>');
+    const sm = require('./utils/googleSheetsMaster');
+    const url = sm.getAuthUrl('sheets-master');
+    res.redirect(url);
+  } catch (e) {
+    res.status(500).type('html').send('<h2>Failed to start OAuth: ' + e.message + '</h2>');
+  }
+});
+
+app.get('/saas/sheets/callback', async (req, res) => {
+  try {
+    const code = String(req.query.code || '').trim();
+    if (!code) return res.status(400).type('html').send('<h2>Missing code</h2>');
+    const sm = require('./utils/googleSheetsMaster');
+    const result = await sm.exchangeCodeAndSave(code);
+    res.type('html').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Sheets Connected</title>
+<style>body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;text-align:center;padding:3rem 1.5rem;color:#0f172a;background:#f8fafc}
+.box{background:#fff;border-radius:12px;padding:2rem;max-width:480px;margin:0 auto;box-shadow:0 8px 24px rgba(15,23,42,.08)}
+.ok{font-size:3rem}.muted{color:#64748b;font-size:.85rem;margin-top:1rem}</style></head>
+<body><div class="box"><div class="ok">✅</div>
+<h2>Google Sheets master connected</h2>
+<p>Account: <b>${result.email || 'unknown'}</b></p>
+<p class="muted">Every tenant can now point a Google Sheet at this account.<br>Tell tenants to share their Sheet with <b>${result.email}</b> (Editor access).</p>
+</div></body></html>`);
+  } catch (e) {
+    res.status(500).type('html').send('<h2>OAuth callback failed: ' + e.message + '</h2>');
+  }
+});
+
 // ---- Meta Lead Ads webhook (one URL for all tenants) ------------
 //
 // FB calls these in two flavours:

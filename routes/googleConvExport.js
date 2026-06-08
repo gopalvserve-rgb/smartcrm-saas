@@ -40,6 +40,13 @@ async function _ensureSchema() {
   await db.query(`ALTER TABLE google_conv_export_settings ADD COLUMN IF NOT EXISTS auto_hour_ist INT DEFAULT 22;`);
   await db.query(`ALTER TABLE google_conv_export_settings ADD COLUMN IF NOT EXISTS last_auto_export_at TIMESTAMPTZ;`);
   await db.query(`ALTER TABLE google_conv_export_settings ADD COLUMN IF NOT EXISTS public_token TEXT;`);
+  /* GCONV_SHEETS_v1 — Google Sheet push fields */
+  await db.query(`ALTER TABLE google_conv_export_settings ADD COLUMN IF NOT EXISTS sheet_url TEXT;`);
+  await db.query(`ALTER TABLE google_conv_export_settings ADD COLUMN IF NOT EXISTS sheet_tab TEXT DEFAULT 'Conversions';`);
+  await db.query(`ALTER TABLE google_conv_export_settings ADD COLUMN IF NOT EXISTS sheet_push_enabled BOOLEAN DEFAULT FALSE;`);
+  await db.query(`ALTER TABLE google_conv_export_settings ADD COLUMN IF NOT EXISTS last_sheet_push_at TIMESTAMPTZ;`);
+  await db.query(`ALTER TABLE google_conv_export_settings ADD COLUMN IF NOT EXISTS last_sheet_push_rows INT;`);
+  await db.query(`ALTER TABLE google_conv_export_settings ADD COLUMN IF NOT EXISTS last_sheet_push_error TEXT;`);
   await db.query(`
     CREATE TABLE IF NOT EXISTS google_conv_export_log (
       id SERIAL PRIMARY KEY,
@@ -154,7 +161,15 @@ async function api_googleConvExport_get(token) {
   let sources = [];
   try { statuses = (await db.getAll('statuses')).map(s => s.name).filter(Boolean); } catch (_) {}
   try { sources  = (await db.getAll('sources')).map(s => s.name).filter(Boolean); } catch (_) {}
-  return { settings, statuses, sources };
+  /* GCONV_SHEETS_v1 — surface the master Sheets account so the SPA can show
+     "Share your Sheet with X" + a clear "not connected yet" warning. */
+  let sheets_master = null;
+  try {
+    const sm = require('../utils/googleSheetsMaster');
+    const row = await sm.getMasterRow();
+    sheets_master = row ? { connected: true, email: row.user_email, connected_at: row.connected_at } : { connected: false };
+  } catch (e) { sheets_master = { connected: false, error: e.message }; }
+  return { settings, statuses, sources, sheets_master };
 }
 
 async function api_googleConvExport_save(token, payload) {
@@ -176,9 +191,15 @@ async function api_googleConvExport_save(token, payload) {
       ? p.conversion_time_mode : 'end_of_day_ist',
     auto_export_enabled: p.auto_export_enabled !== false,
     auto_hour_ist: Math.max(0, Math.min(23, Number(p.auto_hour_ist) || 22)),
+    /* GCONV_SHEETS_v1 — Google Sheet push target */
+    sheet_url: p.sheet_url !== undefined ? String(p.sheet_url || '').trim() : undefined,
+    sheet_tab: p.sheet_tab !== undefined ? (String(p.sheet_tab || '').trim() || 'Conversions') : undefined,
+    sheet_push_enabled: typeof p.sheet_push_enabled === 'boolean' ? p.sheet_push_enabled : undefined,
     updated_at: db.nowIso(),
     updated_by: me.id
   };
+  // Drop undefined keys so db.update doesn't NULL them
+  Object.keys(row).forEach(k => { if (row[k] === undefined) delete row[k]; });
   const existing = await db.getAll('google_conv_export_settings');
   if (existing && existing[0]) {
     await db.update('google_conv_export_settings', existing[0].id, row);
@@ -419,6 +440,17 @@ async function _runDailyExportForCurrentTenant(slug) {
     }
   } catch (_) {}
 
+  /* GCONV_SHEETS_v1 — also push to Google Sheet if configured. Errors are
+     caught + stamped on settings; they don't break the CSV path. */
+  try {
+    if (settings.sheet_push_enabled && settings.sheet_url) {
+      await _pushToSheet(settings, null);
+      console.log(`[gconv] daily sheet push OK for ${slug}`);
+    }
+  } catch (e) {
+    console.warn(`[gconv] daily sheet push FAILED for ${slug}:`, e.message);
+  }
+
   return {
     slug, today, dailyPath, latestPath,
     row_count: rows.length, with_gclid: withGclid, without_gclid: withoutGclid,
@@ -548,11 +580,81 @@ async function api_googleConvExport_rotateToken(token) {
   return { ok: true, token: newToken };
 }
 
+/* GCONV_SHEETS_v1 — build the same 7-column rows as the CSV path, then write
+   them to the tenant's chosen Google Sheet via the shared master account. */
+async function _pushToSheet(settings, userId) {
+  const sm = require('../utils/googleSheetsMaster');
+  const sheetId = sm.parseSheetId(settings.sheet_url);
+  if (!sheetId) throw new Error('Sheet URL is missing or unrecognised. Paste the full https://docs.google.com/spreadsheets/d/<ID>/edit URL.');
+  const tab = String(settings.sheet_tab || 'Conversions').trim() || 'Conversions';
+  const { rows, withGclid, withoutGclid } = await _buildRows(settings);
+  // Header row matches Google Ads' Offline Conversion Import spec
+  const header = ['Google Click ID', 'Conversion Name', 'Conversion Time', 'Lead ID', 'Campaign ID', 'Mobile', 'Without GCLID'];
+  const values2d = [header].concat(rows.map(r => [
+    r.gclid || '', r.conversion_name, r.conversion_time,
+    String(r.lead_id || ''), r.campaign_id || '', r.mobile || '', r.without_gclid || ''
+  ]));
+  let result;
+  try {
+    result = await sm.writeSheet(sheetId, tab, values2d);
+  } catch (e) {
+    // Stamp the error on settings so the SPA shows what went wrong
+    const existing = await db.getAll('google_conv_export_settings');
+    if (existing && existing[0]) {
+      try {
+        await db.update('google_conv_export_settings', existing[0].id, {
+          last_sheet_push_error: String(e.message || e).slice(0, 500),
+          updated_at: db.nowIso()
+        });
+      } catch (_) {}
+    }
+    throw e;
+  }
+  // Success — stamp last_sheet_push_at + row count, clear any prior error
+  const existing = await db.getAll('google_conv_export_settings');
+  if (existing && existing[0]) {
+    try {
+      await db.update('google_conv_export_settings', existing[0].id, {
+        last_sheet_push_at: db.nowIso(),
+        last_sheet_push_rows: rows.length,
+        last_sheet_push_error: null,
+        updated_at: db.nowIso()
+      });
+    } catch (_) {}
+  }
+  // Best-effort log row
+  try {
+    await db.insert('google_conv_export_log', {
+      downloaded_at: db.nowIso(),
+      row_count: rows.length,
+      with_gclid: withGclid,
+      without_gclid: withoutGclid,
+      lookback_days: settings.lookback_days,
+      downloaded_by: userId || null,
+      filename: '[Sheet] ' + sheetId + ' / ' + tab
+    });
+  } catch (_) {}
+  return { ok: true, rows: rows.length, with_gclid: withGclid, without_gclid: withoutGclid, sheet_id: sheetId, tab };
+}
+
+/* SPA-facing: admin clicks "Push to Sheet now". */
+async function api_googleConvExport_pushSheet(token) {
+  const me = await authUser(token);
+  if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin / manager only');
+  await _ensureSchema();
+  const settings = await _loadSettings();
+  if (!settings.is_enabled) throw new Error('Google Ads Conversion Export is OFF. Enable it first.');
+  if (!settings.sheet_url) throw new Error('No Sheet URL configured. Paste your Sheet URL in the Google Sheet section first.');
+  return _pushToSheet(settings, me.id);
+}
+
+
 module.exports = {
   api_googleConvExport_get,
   api_googleConvExport_save,
   api_googleConvExport_logs,
   api_googleConvExport_download,
+  api_googleConvExport_pushSheet,  /* GCONV_SHEETS_v1 */
   api_googleConvExport_publicUrl,
   api_googleConvExport_rotateToken,
   _maybeDailyTickForCurrentTenant,

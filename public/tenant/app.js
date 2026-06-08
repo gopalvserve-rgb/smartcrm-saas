@@ -21585,6 +21585,79 @@ async function adminGoogleConvExport() {
   );
   wrap.appendChild(urlCard);
 
+  /* GCONV_SHEETS_v1 — Google Sheet push card */
+  const sm = (data && data.sheets_master) || {};
+  const sheetUrlInp = h('input', { type: 'text', placeholder: 'https://docs.google.com/spreadsheets/d/<ID>/edit',
+    style: { width: '100%', padding: '.5rem', fontSize: '.9rem', border: '1px solid #cbd5e1', borderRadius: '6px' } });
+  sheetUrlInp.value = settings.sheet_url || '';
+  const sheetTabInp = h('input', { type: 'text', placeholder: 'Conversions',
+    style: { padding: '.5rem', fontSize: '.9rem', border: '1px solid #cbd5e1', borderRadius: '6px', maxWidth: '180px' } });
+  sheetTabInp.value = settings.sheet_tab || 'Conversions';
+  const sheetPushCb = h('input', { type: 'checkbox' });
+  sheetPushCb.checked = !!settings.sheet_push_enabled;
+
+  const pushBtn = h('button', { class: 'btn primary' }, '📤 Push now to Sheet');
+  const pushStatus = h('span', { style: { marginLeft: '.5rem', fontSize: '.85rem' } });
+  pushBtn.onclick = async () => {
+    pushBtn.disabled = true;
+    pushStatus.textContent = 'Pushing…'; pushStatus.style.color = '#64748b';
+    try {
+      const r = await api('api_googleConvExport_pushSheet');
+      pushStatus.textContent = '✓ Pushed ' + r.rows + ' rows (with GCLID: ' + r.with_gclid + ', without: ' + r.without_gclid + ')';
+      pushStatus.style.color = '#15803d';
+    } catch (e) {
+      pushStatus.textContent = '✗ ' + e.message;
+      pushStatus.style.color = '#b91c1c';
+    } finally {
+      pushBtn.disabled = false;
+    }
+  };
+
+  const shareEmail = (sm.connected && sm.email) ? sm.email : 'sales@smartcrmsolution.com';
+  const emailCopy = h('button', { class: 'btn', style: { fontSize: '.78rem' } }, '📋 Copy');
+  emailCopy.onclick = () => { navigator.clipboard.writeText(shareEmail); toast('Email copied', 'ok'); };
+
+  const masterStatus = sm.connected
+    ? h('div', { style: { fontSize: '.82rem', color: '#15803d', marginTop: '.3rem' } },
+        '✓ Master Google account connected: ' + sm.email)
+    : h('div', { style: { fontSize: '.82rem', color: '#b91c1c', marginTop: '.3rem', padding: '.5rem', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '6px' } },
+        '⚠ Master Google Sheets account not connected yet. Super-admin must visit /saas/sheets/connect to authorize before any push works.');
+
+  const lastPushLine = settings.last_sheet_push_at
+    ? h('div', { class: 'muted', style: { fontSize: '.82rem', marginTop: '.5rem' } },
+        '✓ Last push: ' + new Date(settings.last_sheet_push_at).toLocaleString()
+        + (settings.last_sheet_push_rows != null ? ' · ' + settings.last_sheet_push_rows + ' rows' : ''))
+    : null;
+  const lastErrLine = settings.last_sheet_push_error
+    ? h('div', { style: { fontSize: '.82rem', marginTop: '.5rem', color: '#b91c1c', padding: '.4rem', background: '#fef2f2', borderRadius: '4px' } },
+        '✗ Last error: ' + settings.last_sheet_push_error)
+    : null;
+
+  const sheetCard = h('div', { class: 'card', style: { padding: '1rem', marginBottom: '1rem' } },
+    h('h3', { style: { marginTop: 0 } }, '📊 Push to Google Sheet'),
+    h('div', { class: 'muted', style: { fontSize: '.85rem', marginBottom: '.6rem' } },
+      'Send the same 7-column data to a Google Sheet you own. Useful if your team wants to see / edit / share the data, or if Google Ads should pull directly from a Sheet URL.'),
+    h('div', { style: { background: '#eff6ff', border: '1px solid #bfdbfe', padding: '.6rem .75rem', borderRadius: '6px', marginBottom: '.75rem', fontSize: '.86rem' } },
+      h('b', {}, 'Step 1 — share your Sheet with this email (Editor access): '),
+      h('code', { style: { background: '#fff', padding: '.15rem .4rem', borderRadius: '4px', fontWeight: 600 } }, shareEmail),
+      ' ', emailCopy,
+      masterStatus
+    ),
+    h('label', { style: { display: 'block', fontWeight: 600, marginBottom: '.2rem' } }, 'Step 2 — Sheet URL'),
+    sheetUrlInp,
+    h('div', { style: { display: 'flex', gap: '.75rem', marginTop: '.5rem', alignItems: 'flex-end' } },
+      h('label', { style: { display: 'block' } },
+        h('div', { style: { fontWeight: 600, marginBottom: '.2rem', fontSize: '.85rem' } }, 'Tab name'),
+        sheetTabInp),
+      h('label', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', marginLeft: 'auto' } },
+        sheetPushCb, h('span', { style: { fontSize: '.88rem' } }, 'Auto-push daily with the CSV worker'))
+    ),
+    h('div', { style: { marginTop: '.75rem' } }, pushBtn, pushStatus),
+    lastPushLine,
+    lastErrLine
+  );
+  wrap.appendChild(sheetCard);
+
   async function loadUrl() {
     try {
       const r = await api('api_googleConvExport_publicUrl');
@@ -21616,7 +21689,11 @@ async function adminGoogleConvExport() {
         source_filter: sourceInp.value,
         status_map: mapObj,
         auto_export_enabled: !!autoCb.checked,
-        auto_hour_ist: Number(hourSel.value) || 22
+        auto_hour_ist: Number(hourSel.value) || 22,
+        /* GCONV_SHEETS_v1 */
+        sheet_url: sheetUrlInp.value,
+        sheet_tab: sheetTabInp.value,
+        sheet_push_enabled: !!sheetPushCb.checked
       });
       status.textContent = '✓ Saved';
       setTimeout(() => { status.textContent = ''; }, 2500);

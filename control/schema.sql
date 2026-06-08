@@ -457,3 +457,17 @@ CREATE TABLE IF NOT EXISTS changelog (
 );
 CREATE INDEX IF NOT EXISTS idx_changelog_created ON changelog(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_changelog_category ON changelog(category);
+
+-- GCONV_SHEETS_v1 — single shared Google account that pushes conversion data
+-- to every tenant's chosen Sheet. One-row table; user_email and refresh_token
+-- captured during super-admin OAuth flow (sales@smartcrmsolution.com).
+CREATE TABLE IF NOT EXISTS google_sheets_master (
+  id              SERIAL PRIMARY KEY,
+  user_email      TEXT NOT NULL,
+  access_token    TEXT NOT NULL,
+  refresh_token   TEXT,
+  expires_at      TIMESTAMPTZ,
+  scope           TEXT,
+  connected_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

@@ -187,3 +187,12 @@ SELECT 'feature',
        '🎯',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Industry packs — Finance / Solar / Mfg / Travel / Ecommerce overview pages');
+
+-- 2026-06-08 GCONV_SHEETS_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'Google Ads Conversion Export — push to Google Sheet',
+       'In addition to the CSV download / public URL, you can now push the same 7-column conversion data straight to a Google Sheet you own. Share your Sheet (Editor access) with sales@smartcrmsolution.com, paste the URL on Settings → Google Ads Export, and either click Push Now or enable Auto-push so the daily worker writes to it nightly. Google Ads can pull from the same Sheet URL — no CSV middleman needed.',
+       '📊',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Google Ads Conversion Export — push to Google Sheet');
