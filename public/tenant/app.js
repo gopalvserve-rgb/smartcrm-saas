@@ -28453,6 +28453,7 @@ VIEWS.users = async (view) => {
         h('th', {}, 'Department'),
         h('th', { title: 'Pause sends ZERO future leads to this user. Existing leads stay assigned. Click to toggle.' }, 'Lead routing'),
         h('th', { title: 'When OFF, the AI Call Audit worker SKIPS this user\'s recordings during the automatic 60s tick. Manual 🤖 AI Audit button on each recording still works.' }, 'AI audit'),
+        h('th', { title: 'Inactive users CANNOT log in. Their leads stay assigned. Click to toggle.' }, 'Active'),
         h('th', {})
       )),
       h('tbody', {}, ...users.map(u => h('tr', { style: u.paused_for_leads ? { background: '#fffbeb' } : {} },
@@ -28527,6 +28528,45 @@ VIEWS.users = async (view) => {
                 toast(next ? 'AI audit enabled for ' + u.name : 'AI audit disabled for ' + u.name, 'ok');
                 navigateTo('users');
               } catch (e) { toast(e.message, 'err'); btn.disabled = false; btn.textContent = isOn ? '🤖 ON' : '⛔ OFF'; }
+            };
+            return btn;
+          })()
+        ),
+        /* USER_ACTIVE_TOGGLE_v1 — admin-only Active/Inactive toggle. Inactive users cannot log in. */
+        h('td', {},
+          (() => {
+            const active = Number(u.is_active != null ? u.is_active : 1) === 1;
+            if (!['admin','manager'].includes(me.role)) {
+              return h('span', { class: 'muted', style: { fontSize: '.78rem' } }, active ? '🟢 Active' : '🔴 Inactive');
+            }
+            const isSelf = Number(u.id) === Number(me.id);
+            const btn = h('button', {
+              class: 'btn small ghost',
+              title: isSelf ? 'You cannot deactivate yourself' : (active ? 'Click to deactivate — user will be blocked from logging in' : 'Click to reactivate — user will be able to log in again'),
+              disabled: isSelf,
+              style: {
+                background: active ? '#ecfdf5' : '#fef2f2',
+                color: active ? '#065f46' : '#991b1b',
+                border: '1px solid ' + (active ? '#10b981' : '#ef4444'),
+                fontWeight: 600, padding: '.2rem .6rem', borderRadius: '999px', whiteSpace: 'nowrap',
+                opacity: isSelf ? 0.4 : 1
+              }
+            }, active ? '🟢 Active' : '🔴 Inactive');
+            btn.onclick = async (ev) => {
+              ev.stopPropagation();
+              if (isSelf) return;
+              const next = active ? 0 : 1;
+              const verb = next ? 'REACTIVATE' : 'DEACTIVATE';
+              if (!confirm(verb + ' ' + u.name + '?\n\n' + (next
+                ? 'They will be able to log in again. Their leads stay assigned.'
+                : 'They will be blocked from logging in immediately. Their leads stay assigned to them — re-assign first if needed.'))) return;
+              btn.disabled = true; btn.textContent = '⏳';
+              try {
+                await api('api_users_save', { id: u.id, is_active: next });
+                u.is_active = next;
+                toast(next ? u.name + ' reactivated' : u.name + ' deactivated', 'ok');
+                navigateTo('users');
+              } catch (e) { toast(e.message, 'err'); btn.disabled = false; btn.textContent = active ? '🟢 Active' : '🔴 Inactive'; }
             };
             return btn;
           })()

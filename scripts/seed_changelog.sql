@@ -214,3 +214,12 @@ SELECT 'fix',
        '🔧',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Google Sheet push — Push Now button now auto-saves your Sheet URL first');
+
+-- 2026-06-09 USER_ACTIVE_TOGGLE_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'Users page — deactivate / reactivate a user without deleting them',
+       'New Active column on Settings → Users with a 🟢 Active / 🔴 Inactive toggle button. Admins and managers can deactivate a team member to instantly block their login — their leads stay assigned (re-assign first if needed). Click again to reactivate. You cannot deactivate yourself.',
+       '🛡️',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Users page — deactivate / reactivate a user without deleting them');
