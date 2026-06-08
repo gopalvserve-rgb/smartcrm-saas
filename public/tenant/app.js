@@ -4280,11 +4280,12 @@ window._waPinnedIntent = function(phone, text, kind) {
 window._waOpenPinned = function(phone, text, kind) {
   /* WA_PKG_FIX_v4 — use Capacitor App.openUrl when available (bypasses WebView
      intent interception), then fall back to window.open(_system), then
-     location.href. If everything fails, clipboard + toast. */
-     Tries each candidate URL in succession via location.href. If the WhatsApp
-     app launches, document goes hidden (visibilitychange fires) and we stop.
-     If nothing launches within ~2s the page is still visible, so we copy the
-     phone+text to the clipboard and toast the user — no more silent failure. */
+     location.href. If everything fails, fire chooser URL + clipboard + toast.
+     Tries each candidate URL in succession. If the WhatsApp app launches,
+     document goes hidden (visibilitychange fires) and we stop. If nothing
+     launches within ~2s the page is still visible, so we copy the phone+text
+     to the clipboard, fire the chooser URL as guaranteed last-resort, and
+     toast the user explaining how to set the Android default. */
   const candidates = (window._waPinnedIntentCandidates
     ? window._waPinnedIntentCandidates(phone, text, kind)
     : [window._waPinnedIntent(phone, text, kind)]).filter(Boolean);
