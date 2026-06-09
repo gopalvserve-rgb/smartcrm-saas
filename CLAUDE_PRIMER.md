@@ -216,7 +216,7 @@ These are **standing orders** — don't re-do or undo them:
 - **No emojis in files** unless explicitly requested (but emojis ARE used heavily in CRM UI strings already — keep that consistency).
 - **AI Call Audit OFF by default** — task #930 still pending; don't enable globally.
 - **`MEMORY_KB_UPDATE` (2026-06-10)** — Every new user prompt, update memory and/or this primer with anything newly learned (modules, permission rules, schema bumps, deferred work, bug patterns). Don't wait to be asked. See `memory_kb_update_protocol.md`.
-- **`TEAM_LIVE_PERMS_v1` (2026-06-10)** — Live Team Status dashboard widget is admin-only for the team grid. Non-admins (managers, team leaders, sales, employees, custom roles with hierarchy_level > 0) see only their own row. Backend filter in `routes/team.js` `api_team_liveStatus`. Don't loosen without explicit confirmation.
+- **`TEAM_LIVE_PERMS_v2` (2026-06-10)** — Live Team Status visibility is controlled by the role permissions matrix (Settings → Permissions row **"View Live Team Status (whole team)"**, key `dashboard.team_live_status`). Admins always pass. Defaults: admin/manager/team_leader = ON, sales = OFF, custom roles = OFF. Backend lookup in `routes/team.js` calls `_perms.can(me, 'dashboard.team_live_status')`. Catalog + DEFAULTS live in `routes/permissions.js`. When the user reports "X widget needs a permission", add it to the CATALOG + DEFAULTS — the Permissions UI auto-renders new rows.
 
 ---
 
@@ -253,9 +253,4 @@ These are **standing orders** — don't re-do or undo them:
 ### "User wants to port feature from smartcrm-saas to Celeste/Stockbox"
 1. Clone the destination repo (PAT path above).
 2. Diff the relevant SPA section + route file.
-3. Watch for: single-tenant routes don't have `tenantStorage`, modal CSS class names sometimes diverge, cache key location differs (`public/index.html` not `public/tenant/index.html`).
-4. Bump cache key + add changelog row + push.
-
-### "Railway hasn't deployed"
-1. Open Railway dashboard for the relevant project (`intuitive-charm` for smartcrm-saas).
-2. Check Deplo
+3. Watch for: single-tenant routes don't have `tenantStorage`, modal CSS class names sometimes diverge, 
