@@ -223,3 +223,12 @@ SELECT 'feature',
        '🛡️',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Users page — deactivate / reactivate a user without deleting them');
+
+-- 2026-06-09 GCONV_SHEETS_SCHEMA_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'fix',
+       'Google Sheet push — actually save the Sheet URL to the database (root-cause fix)',
+       'Previous fixes all guessed at the symptom. The real bug: db/pg.js has a hardcoded SCHEMA cache that lists which columns each table accepts. The Sheet push columns (sheet_url, sheet_tab, sheet_push_enabled, etc.) were added to Postgres via ALTER TABLE but never added to this in-memory cache. So every db.update silently dropped them BEFORE the SQL was even built. The save endpoint returned OK, the column never changed, and Push Now read sheet_url=null and threw the error. Now fixed by adding the 6 sheet_* columns to the SCHEMA registry.',
+       '🛠️',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Google Sheet push — actually save the Sheet URL to the database (root-cause fix)');

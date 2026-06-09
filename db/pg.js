@@ -453,7 +453,11 @@ const SCHEMA = {
       'is_enabled', 'lookback_days', 'status_map_json', 'source_filter',
       'conversion_time_mode', 'last_downloaded_at',
       'auto_export_enabled', 'auto_hour_ist', 'last_auto_export_at',
-      'public_token', 'updated_at', 'updated_by'
+      'public_token', 'updated_at', 'updated_by',
+      /* GCONV_SHEETS_SCHEMA_v1 — _serialize was silently dropping these on every save,
+         which is why pushSheet kept reading sheet_url=null and throwing 'No Sheet URL configured'. */
+      'sheet_url', 'sheet_tab', 'sheet_push_enabled',
+      'last_sheet_push_at', 'last_sheet_push_rows', 'last_sheet_push_error'
     ],
     json: ['status_map_json']
   },
