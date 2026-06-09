@@ -268,3 +268,12 @@ SELECT 'fix',
        '💬',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'WhatsApp chat — "Business" now actually opens WhatsApp Business (not your personal WhatsApp)');
+
+-- 2026-06-09 LEAD_CARD_STACK_HEAD_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'fix',
+       'Lead cards — long names no longer cut off ("Sid…", "Khu…")',
+       'On the mobile Leads list, a lead with a long status (e.g. "CALL NOT CONNECTED") used to squeeze the name on the same row until it was chopped to "Sid…" or "Khu…". The name and the status pill now stack: the full name gets its own line (never truncated) and the status badge sits on the line just below it. Cards also got a little more padding so the two-line header has room to breathe.',
+       '🪪',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Lead cards — long names no longer cut off ("Sid…", "Khu…")');

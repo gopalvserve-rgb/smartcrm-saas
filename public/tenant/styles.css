@@ -3858,3 +3858,47 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
 /* Always-on: stop runaway WhatsApp message bodies / remark text from
    blowing out the card width when the rows are long. */
 .card div[style*="text-overflow: ellipsis"] { max-width: 100%; }
+
+/* =================================================================
+ * LEAD_CARD_STACK_HEAD_v1 (2026-06-09)
+ *   Problem: name + status pill sat on ONE row (.lc-head was a
+ *   space-between flex). With the avatar eating ~58px on the left and
+ *   the status pill set to flex:0 0 auto at .92rem uppercase
+ *   ("CALL NOT CONNECTED"), the pill won the row and the name was
+ *   crushed to "Sid…" / "Khu…".
+ *   Fix: stack the head vertically — name on its own line (full body
+ *   width, never truncated), status pill on the line below it. Also
+ *   give the card a touch more breathing room.
+ *   This block is last in the file on purpose so it wins the cascade
+ *   over the v51 .lead-card .lc-head rule above.
+ * ================================================================= */
+.lead-card .lc-head {
+  flex-direction: column !important;
+  align-items: flex-start !important;
+  justify-content: flex-start !important;
+  gap: .5rem !important;
+}
+.lead-card .lc-name {
+  width: 100% !important;
+  min-width: 0 !important;
+  white-space: normal !important;     /* allow the full name to show */
+  overflow: visible !important;
+  text-overflow: clip !important;
+  word-break: break-word !important;
+  font-size: 1.12rem !important;
+  line-height: 1.3 !important;
+}
+.lead-card .lc-status,
+.lc-status {
+  align-self: flex-start !important;  /* size to content on its own line */
+  max-width: 100% !important;
+  white-space: normal !important;
+  word-break: break-word !important;
+}
+/* A little more room now that the head is two lines. */
+@media (max-width: 900px) {
+  .lead-card,
+  .leads-mobile .lead-card {
+    padding: 1.15rem 1.2rem !important;
+  }
+}
