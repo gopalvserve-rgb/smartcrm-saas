@@ -259,3 +259,12 @@ SELECT 'fix',
        '📤',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Initiate Chat — image/video/PDF upload now works for media-header templates');
+
+-- 2026-06-09 WA_APP_TARGET_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'fix',
+       'WhatsApp chat — "Business" now actually opens WhatsApp Business (not your personal WhatsApp)',
+       'When a phone had BOTH WhatsApp and WhatsApp Business installed, picking the 🟢 Business target in the chat picker still opened your personal WhatsApp. Root cause: the app tried to pin the target with an Android intent:// link fired through the web bridge, but that bridge parses the link with Uri.parse() and silently dropped the ";package=" hint — so Android just used whichever WhatsApp was the default. The Android app now opens the chosen app through a native handler that sets the package explicitly (com.whatsapp.w4b for Business, com.whatsapp for Personal). If the chosen app is not installed, you now get a clear message instead of the wrong app opening. NOTE: requires updating to the latest app version (Settings → Get app → Update) — the fix is in the native app, not just the web build.',
+       '💬',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'WhatsApp chat — "Business" now actually opens WhatsApp Business (not your personal WhatsApp)');

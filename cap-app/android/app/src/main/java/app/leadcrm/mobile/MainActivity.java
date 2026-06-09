@@ -818,6 +818,70 @@ public class MainActivity extends BridgeActivity {
                 Log.w(TAG, "runBgSyncNow failed: " + e.getMessage());
             }
         }
+
+        // ============================================================
+        // WA_APP_TARGET_v1 (2026-06-09): open a WhatsApp chat in a
+        // SPECIFIC installed app — Personal (com.whatsapp) vs Business
+        // (com.whatsapp.w4b).
+        //
+        // WHY THIS EXISTS: the pure-JS path (intent:// URLs fired through
+        // Capacitor App.openUrl) could never enforce the package, because
+        // @capacitor/app openUrl parses the URL with Uri.parse(), NOT
+        // Intent.parseUri(URI_INTENT_SCHEME). So the ";package=..." hint
+        // was silently dropped and Android opened whichever WhatsApp is
+        // the default handler (almost always Personal). On phones with
+        // BOTH apps installed, picking "Business" still opened Personal.
+        //
+        // Here we build the ACTION_VIEW intent ourselves and call
+        // setPackage() explicitly, which DOES force the chosen app. The
+        // <queries> entries in AndroidManifest.xml grant package
+        // visibility so this resolves on Android 11+.
+        //
+        // kind = "business" | "personal". callback(ok, detail) lets JS
+        // fall back gracefully (e.g. targeted app not installed).
+        // ============================================================
+        @JavascriptInterface
+        public void openWhatsApp(String phone, String text, String kind, String callback) {
+            final String cb = callback == null ? "" : callback;
+            runOnUiThread(() -> {
+                try {
+                    String digits = phone == null ? "" : phone.replaceAll("[^0-9]", "");
+                    if (digits.isEmpty()) { invokeJsCallback(cb, false, "no_phone"); return; }
+                    String pkg = "business".equalsIgnoreCase(kind) ? "com.whatsapp.w4b" : "com.whatsapp";
+                    String encText = "";
+                    try {
+                        if (text != null && !text.isEmpty())
+                            encText = java.net.URLEncoder.encode(text, "UTF-8");
+                    } catch (Exception ignored) {}
+                    // Try the canonical deep links in order — different
+                    // WhatsApp builds register different ones.
+                    String[] urls = new String[] {
+                        "https://api.whatsapp.com/send?phone=" + digits + (encText.isEmpty() ? "" : "&text=" + encText),
+                        "https://wa.me/" + digits + (encText.isEmpty() ? "" : "?text=" + encText),
+                        "whatsapp://send?phone=" + digits + (encText.isEmpty() ? "" : "&text=" + encText)
+                    };
+                    for (String u : urls) {
+                        try {
+                            Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(u));
+                            i.setPackage(pkg);                       // <-- forces Personal vs Business
+                            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                            startActivity(i);
+                            Log.i(TAG, "openWhatsApp -> " + pkg + " via " + u);
+                            invokeJsCallback(cb, true, pkg);
+                            return;
+                        } catch (Exception inner) {
+                            // No activity for this URL in that package — try next candidate.
+                        }
+                    }
+                    // None resolved — the targeted app isn't installed.
+                    Log.w(TAG, "openWhatsApp: " + pkg + " not installed / no activity");
+                    invokeJsCallback(cb, false, "not_installed");
+                } catch (Exception e) {
+                    Log.e(TAG, "openWhatsApp failed: " + e.getMessage());
+                    invokeJsCallback(cb, false, e.getMessage() == null ? "error" : e.getMessage());
+                }
+            });
+        }
     }
 
     /** Schedule the recordings background sync to run every ~15 min (Android minimum). */

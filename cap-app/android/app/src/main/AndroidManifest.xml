@@ -194,6 +194,12 @@
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="whatsapp" />
         </intent>
+        <!-- WA_APP_TARGET_v1: explicit package visibility so the native
+             LeadCRMNative.openWhatsApp bridge can setPackage() to force
+             the Personal vs Business app on Android 11+ (package-visibility
+             filtering otherwise hides these and startActivity throws). -->
+        <package android:name="com.whatsapp" />
+        <package android:name="com.whatsapp.w4b" />
         <!-- Email (mailto) -->
         <intent>
             <action android:name="android.intent.action.SENDTO" />

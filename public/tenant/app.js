@@ -4300,6 +4300,33 @@ window._waOpenPinned = function(phone, text, kind) {
      launches within ~2s the page is still visible, so we copy the phone+text
      to the clipboard, fire the chooser URL as guaranteed last-resort, and
      toast the user explaining how to set the Android default. */
+  // WA_APP_TARGET_v1 (2026-06-09) — when running inside the Android APK,
+  // hand off to the native LeadCRMNative.openWhatsApp bridge, which sets the
+  // intent package explicitly (com.whatsapp.w4b for Business, com.whatsapp for
+  // Personal). The JS-only intent:// candidates below CANNOT enforce the
+  // package — Capacitor App.openUrl parses with Uri.parse (not Intent.parseUri),
+  // so ";package=" was dropped and Android opened the default (Personal) app.
+  // The bridge reliably opens the chosen app; only browsers fall through to the
+  // legacy intent:// path.
+  try {
+    if ((kind === 'business' || kind === 'personal')
+        && window.LeadCRMNative && typeof window.LeadCRMNative.openWhatsApp === 'function') {
+      window.__waPinnedCb = function(ok, detail) {
+        if (ok) return;
+        // Targeted app not installed (or no activity). Tell the user plainly
+        // instead of silently opening the wrong app.
+        var label = kind === 'business' ? 'WhatsApp Business' : 'WhatsApp';
+        if (detail === 'not_installed' && typeof toast === 'function') {
+          toast(label + ' is not installed on this phone. Install it (or pick the other option) to chat from that number.', 'err');
+        } else if (typeof toast === 'function') {
+          toast('Could not open ' + label + ' (' + (detail || 'error') + ').', 'err');
+        }
+      };
+      window.LeadCRMNative.openWhatsApp(String(phone || ''), String(text || ''), kind, '__waPinnedCb');
+      return;
+    }
+  } catch (_) { /* fall through to the browser intent:// path */ }
+
   const candidates = (window._waPinnedIntentCandidates
     ? window._waPinnedIntentCandidates(phone, text, kind)
     : [window._waPinnedIntent(phone, text, kind)]).filter(Boolean);
