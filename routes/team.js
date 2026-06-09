@@ -31,9 +31,31 @@ async function _safe(fn, fallback) {
  * Optional payload: { only_active: true }.
  */
 async function api_team_liveStatus(token, _payload) {
-  await authUser(token);
+  // TEAM_LIVE_PERMS_v1 (2026-06-10) — Live Team Status visibility:
+  //   - admin                         → sees every active user
+  //   - custom role w/ hierarchy 0    → admin-equivalent, sees every user
+  //   - every other role (managers,
+  //     team leaders, sales,
+  //     employees, custom levels 1+)  → sees ONLY their own row
+  //
+  // This is intentionally stricter than getVisibleUserIds (which
+  // surfaces team hierarchies). The product decision is that the
+  // dashboard widget should never reveal another caller's break /
+  // on-call / on-task state to a non-admin teammate.
+  const me = await authUser(token);
 
-  const users = (await db.getAll('users') || []).filter(u => Number(u.is_active) !== 0);
+  let _isAdminLike = (me.role === 'admin');
+  if (!_isAdminLike) {
+    try {
+      const _r = await db.findOneBy('roles', 'key', me.role).catch(() => null);
+      if (_r && Number(_r.hierarchy_level) === 0) _isAdminLike = true;
+    } catch (_) {}
+  }
+
+  let users = (await db.getAll('users') || []).filter(u => Number(u.is_active) !== 0);
+  if (!_isAdminLike) {
+    users = users.filter(u => Number(u.id) === Number(me.id));
+  }
   // Today's date in IST so we don't bleed into yesterday on midnight rollover.
   const istNow = new Date(Date.now() + (5.5 * 3600 * 1000));
   const todayIso = istNow.toISOString().slice(0, 10);

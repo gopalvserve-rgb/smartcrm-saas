@@ -277,3 +277,12 @@ SELECT 'fix',
        '🪪',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Lead cards — long names no longer cut off ("Sid…", "Khu…")');
+
+-- 2026-06-10 TEAM_LIVE_PERMS_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'security',
+       'Live Team Status — agents now see only their own row',
+       'The Live Team Status panel on the dashboard used to show everyone — on-call, on-break, last-call time — to every logged-in user. From this release, only admins (and admin-equivalent custom roles) see the full team grid. Every other user — managers, team leaders, sales, employees, custom roles — now sees only their own row, and the summary chip counters reflect just that one row. Your task picker and ☕ break toggle still work exactly as before. No setting to change — the rule is applied per role at sign-in.',
+       '🔒',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Live Team Status — agents now see only their own row');
