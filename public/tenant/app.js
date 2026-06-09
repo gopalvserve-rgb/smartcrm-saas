@@ -16796,8 +16796,12 @@ function buildWaCompose(phone, onSent, opts) {
  * 24-hour window or any other Meta error.
  */
 async function openWaTemplatePicker(phone, onSent) {
+  /* WA_TPL_SEND_v1 (2026-06-09) — rebuilt to support category filter +
+     per-template Send form that asks for image/PDF when header_type
+     requires it + inputs for body params. Plain text-only templates with
+     no params still send in one click. */
   const m = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
-  const card = h('div', { class: 'modal', style: { maxWidth: '560px' } },
+  const card = h('div', { class: 'modal', style: { maxWidth: '640px', maxHeight: '85vh', overflow: 'auto' } },
     h('div', { class: 'modal-head' },
       h('h3', {}, '📋 Send a template to ', phone),
       h('button', { class: 'btn icon', onclick: () => m.remove() }, '✕')
@@ -16805,6 +16809,16 @@ async function openWaTemplatePicker(phone, onSent) {
   );
   const body = h('div', { class: 'modal-body-wrap', style: { padding: '.25rem 0' } });
   body.appendChild(h('p', { class: 'muted' }, 'Pre-approved templates can be sent any time — even outside the 24-hour reply window.'));
+
+  /* Category filter chips */
+  const filterRow = h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '.4rem', marginBottom: '.6rem' } });
+  body.appendChild(filterRow);
+
+  /* Search input */
+  const searchInp = h('input', { type: 'search', placeholder: '🔍 Search by name…',
+    style: { width: '100%', padding: '.4rem .6rem', marginBottom: '.6rem', border: '1px solid #cbd5e1', borderRadius: '6px' } });
+  body.appendChild(searchInp);
+
   const listEl = h('div', { class: 'wb-tpl-list' });
   body.appendChild(listEl);
   card.appendChild(body);
@@ -16823,26 +16837,190 @@ async function openWaTemplatePicker(phone, onSent) {
       'No approved templates yet. Go to ', h('b', {}, 'WhatsBot → Templates'), ' to sync from Meta or create one.'));
     return;
   }
-  approved.forEach(t => {
-    const row = h('div', { class: 'wb-tpl-row' },
-      h('div', {},
-        h('b', {}, t.name),
-        h('span', { class: 'muted' }, ' · ' + (t.language || 'en') + ' · ' + (t.category || ''))
-      ),
-      h('button', { class: 'btn sm primary' }, 'Send')
-    );
-    row.querySelector('button').onclick = async () => {
-      try {
-        await api('api_wb_initiate_chat', {
-          phone, template_name: t.name, template_language: t.language || 'en_US', variables: []
-        });
-        toast('✓ Template sent');
-        m.remove();
-        if (typeof onSent === 'function') onSent();
-      } catch (e) { toast(e.message, 'err'); }
+
+  /* Build category set from actual templates */
+  const cats = Array.from(new Set(approved.map(t => String(t.category || '').toUpperCase()).filter(Boolean))).sort();
+  let activeFilter = 'ALL';
+  let activeSearch = '';
+  const catLabel = (c) => ({ MARKETING: '📢 Marketing', UTILITY: '🔔 Utility', AUTHENTICATION: '🔐 Authentication' }[c] || c);
+  const _drawFilters = () => {
+    filterRow.innerHTML = '';
+    const _chip = (label, value) => {
+      const isActive = activeFilter === value;
+      const c = h('button', { class: 'btn sm',
+        style: {
+          background: isActive ? '#4f46e5' : '#fff',
+          color: isActive ? '#fff' : '#1e293b',
+          border: '1px solid ' + (isActive ? '#4f46e5' : '#cbd5e1'),
+          padding: '.2rem .7rem', borderRadius: '999px', fontWeight: 600, fontSize: '.78rem', cursor: 'pointer'
+        }
+      }, label);
+      c.onclick = () => { activeFilter = value; _drawFilters(); _renderList(); };
+      return c;
     };
-    listEl.appendChild(row);
-  });
+    filterRow.appendChild(_chip('All (' + approved.length + ')', 'ALL'));
+    cats.forEach(c => {
+      const count = approved.filter(t => String(t.category || '').toUpperCase() === c).length;
+      filterRow.appendChild(_chip(catLabel(c) + ' (' + count + ')', c));
+    });
+  };
+
+  /* Header type → label helper */
+  const hdrLabel = (t) => {
+    const ht = String(t.header_type || '').toUpperCase();
+    if (ht === 'IMAGE')    return '🖼️ Image header';
+    if (ht === 'VIDEO')    return '🎥 Video header';
+    if (ht === 'DOCUMENT') return '📄 Document header';
+    if (ht === 'TEXT')     return '🅰️ Text header';
+    return '';
+  };
+  const _bodyParamCount = (t) => {
+    const params = (t.body_params || t.params || []);
+    if (Array.isArray(params)) return params.length;
+    const bt = String(t.body_text || '');
+    return (bt.match(/\{\{\d+\}\}/g) || []).length;
+  };
+  const _needsMediaUpload = (t) => ['IMAGE','VIDEO','DOCUMENT'].includes(String(t.header_type || '').toUpperCase());
+
+  const _renderList = () => {
+    listEl.innerHTML = '';
+    const filtered = approved.filter(t => {
+      const cat = String(t.category || '').toUpperCase();
+      if (activeFilter !== 'ALL' && cat !== activeFilter) return false;
+      if (activeSearch && !String(t.name).toLowerCase().includes(activeSearch.toLowerCase())) return false;
+      return true;
+    });
+    if (!filtered.length) {
+      listEl.appendChild(h('p', { class: 'muted', style: { textAlign: 'center', padding: '1rem' } }, 'No templates match this filter.'));
+      return;
+    }
+    filtered.forEach(t => {
+      const needsMedia = _needsMediaUpload(t);
+      const paramCount = _bodyParamCount(t);
+      const hasExtra = needsMedia || paramCount > 0;
+      const catTag = String(t.category || '').toUpperCase();
+      const catColor = catTag === 'MARKETING' ? '#7c3aed' : catTag === 'UTILITY' ? '#0891b2' : catTag === 'AUTHENTICATION' ? '#059669' : '#64748b';
+      const row = h('div', { class: 'wb-tpl-row',
+        style: { borderBottom: '1px solid #e2e8f0', padding: '.6rem .2rem' } },
+        h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '.5rem', flexWrap: 'wrap' } },
+          h('div', { style: { flex: '1', minWidth: '200px' } },
+            h('div', {}, h('b', {}, t.name),
+              catTag ? h('span', {
+                style: { marginLeft: '.4rem', fontSize: '.66rem', background: catColor, color: '#fff', padding: '1px 6px', borderRadius: '4px', fontWeight: 600 }
+              }, catLabel(catTag)) : null
+            ),
+            h('div', { class: 'muted', style: { fontSize: '.72rem', marginTop: '.15rem' } },
+              (t.language || 'en') + (hdrLabel(t) ? ' · ' + hdrLabel(t) : '') + (paramCount > 0 ? ' · {{' + paramCount + '}} variables' : '')
+            ),
+            t.body_text ? h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.2rem', whiteSpace: 'pre-wrap' } },
+              String(t.body_text).slice(0, 100) + (t.body_text.length > 100 ? '…' : '')
+            ) : null
+          ),
+          h('button', { class: 'btn sm primary' }, hasExtra ? 'Send →' : 'Send')
+        )
+      );
+      const formSlot = h('div', { style: { marginTop: '.5rem', display: 'none', background: '#f8fafc', padding: '.6rem', borderRadius: '6px' } });
+      row.appendChild(formSlot);
+
+      row.querySelector('button').onclick = async () => {
+        if (!hasExtra) {
+          /* Plain template — instant send, original behaviour */
+          try {
+            await api('api_wb_initiate_chat', {
+              phone, template_name: t.name, template_language: t.language || 'en_US', variables: []
+            });
+            toast('✓ Template sent');
+            m.remove();
+            if (typeof onSent === 'function') onSent();
+          } catch (e) { toast(e.message, 'err'); }
+          return;
+        }
+        /* Build the per-template Send form inline */
+        if (formSlot.style.display === 'block') { formSlot.style.display = 'none'; return; }
+        formSlot.style.display = 'block';
+        formSlot.innerHTML = '';
+
+        /* Media upload field for IMAGE / VIDEO / DOCUMENT header */
+        let mediaUrl = '';
+        let mediaInput = null;
+        if (needsMedia) {
+          const ht = String(t.header_type || '').toUpperCase();
+          const acceptMap = { IMAGE: 'image/*', VIDEO: 'video/*', DOCUMENT: '.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx' };
+          formSlot.appendChild(h('div', { style: { fontWeight: 600, marginBottom: '.3rem' } }, hdrLabel(t) + ' (required)'));
+          const filePick = h('input', { type: 'file', accept: acceptMap[ht] || '*/*', style: { width: '100%', marginBottom: '.4rem' } });
+          mediaInput = filePick;
+          const urlInp = h('input', { type: 'url', placeholder: 'Or paste a public URL', style: { width: '100%', padding: '.3rem', border: '1px solid #cbd5e1', borderRadius: '4px', fontSize: '.78rem' } });
+          const uploadNote = h('div', { class: 'muted', style: { fontSize: '.72rem', marginTop: '.25rem' } }, 'Pick a file (we host it for you) OR paste a public URL.');
+          filePick.onchange = async () => {
+            const f = filePick.files && filePick.files[0];
+            if (!f) return;
+            if (f.size > 25 * 1024 * 1024) { toast('File too large (max 25 MB)', 'err'); return; }
+            uploadNote.textContent = '⏳ Uploading ' + f.name + '…';
+            try {
+              const fd = new FormData(); fd.append('file', f);
+              const r = await fetch('/api/wa-sample', { method: 'POST', headers: { 'x-auth-token': CRM.token }, body: fd });
+              if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || 'Upload failed (HTTP ' + r.status + ')'); }
+              const j = await r.json();
+              urlInp.value = j.url || '';
+              mediaUrl = j.url || '';
+              uploadNote.innerHTML = '✓ Hosted at <code style="font-size:.7rem">' + (j.url || '') + '</code>';
+            } catch (e) {
+              toast('Upload failed: ' + e.message, 'err');
+              uploadNote.textContent = 'Pick a file (we host it for you) OR paste a public URL.';
+            }
+          };
+          urlInp.addEventListener('input', () => { mediaUrl = urlInp.value || ''; });
+          formSlot.appendChild(filePick);
+          formSlot.appendChild(urlInp);
+          formSlot.appendChild(uploadNote);
+        }
+
+        /* Body variable inputs */
+        const varInputs = [];
+        if (paramCount > 0) {
+          formSlot.appendChild(h('div', { style: { fontWeight: 600, margin: '.6rem 0 .3rem' } }, 'Body variables'));
+          for (let i = 0; i < paramCount; i++) {
+            const inp = h('input', { type: 'text', placeholder: 'Value for {{' + (i + 1) + '}}',
+              style: { width: '100%', padding: '.3rem', border: '1px solid #cbd5e1', borderRadius: '4px', marginBottom: '.3rem', fontSize: '.82rem' } });
+            varInputs.push(inp);
+            formSlot.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.4rem' } },
+              h('span', { class: 'muted', style: { minWidth: '40px', fontSize: '.72rem' } }, '{{' + (i + 1) + '}}'),
+              inp
+            ));
+          }
+        }
+
+        const sendBtn = h('button', { class: 'btn primary', style: { marginTop: '.5rem', width: '100%' } }, '📤 Send template');
+        sendBtn.onclick = async () => {
+          if (needsMedia && !mediaUrl) { toast('Please upload an image/file or paste a URL for the header', 'err'); return; }
+          for (let i = 0; i < varInputs.length; i++) {
+            if (!varInputs[i].value.trim()) { toast('Please fill {{' + (i + 1) + '}}', 'err'); return; }
+          }
+          sendBtn.disabled = true; sendBtn.textContent = '⏳ Sending…';
+          try {
+            const payload = {
+              phone, template_name: t.name, template_language: t.language || 'en_US',
+              variables: varInputs.map(inp => inp.value)
+            };
+            if (mediaUrl) payload.image_url = mediaUrl;  /* backend handles IMAGE/VIDEO/DOCUMENT under the imageUrl param */
+            await api('api_wb_initiate_chat', payload);
+            toast('✓ Template sent');
+            m.remove();
+            if (typeof onSent === 'function') onSent();
+          } catch (e) {
+            toast(e.message, 'err');
+            sendBtn.disabled = false; sendBtn.textContent = '📤 Send template';
+          }
+        };
+        formSlot.appendChild(sendBtn);
+      };
+      listEl.appendChild(row);
+    });
+  };
+
+  searchInp.addEventListener('input', () => { activeSearch = searchInp.value || ''; _renderList(); });
+  _drawFilters();
+  _renderList();
 }
 
 /**

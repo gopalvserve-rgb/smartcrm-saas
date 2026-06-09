@@ -241,3 +241,12 @@ SELECT 'fix',
        '🔧',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Call → Lead settings now auto-save the moment you toggle them');
+
+-- 2026-06-09 WA_TPL_SEND_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'Send a template — now with category filter + image/PDF upload + body variables',
+       'The "📋 Send template" modal on every WhatsApp chat compose box used to be a flat one-click list — image-header templates failed at Meta because the SPA never asked for an image, and there was no way to scope the list to Marketing-only or Utility-only. Now: (1) Filter chips at top — All / 📢 Marketing / 🔔 Utility / 🔐 Authentication with live counts. (2) Search by name. (3) Per-template Send opens an inline form for any template that has an image/video/document header (upload a file and we host it for you, OR paste a public URL) AND collects body variables {{1}}, {{2}}… as text inputs. (4) Plain text-only templates still send in one click — no extra friction. Backend now also handles VIDEO and DOCUMENT header types correctly (was hardcoded to image, causing Meta rejections).',
+       '📤',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Send a template — now with category filter + image/PDF upload + body variables');

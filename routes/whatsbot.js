@@ -1041,10 +1041,32 @@ async function _sendTemplate({ to, templateName, language, variables, imageUrl, 
   // _graphPost call below uses that phone's token + phone_number_id.
   if (fromPhoneNumberId) cfg = await _cfgForPhone(fromPhoneNumberId);
   const c = cfg || await _cfg();
-  // Components: BODY variables + optional HEADER image
+  // Components: BODY variables + optional HEADER (IMAGE / VIDEO / DOCUMENT)
+  // WA_TPL_SEND_v1 (2026-06-09) — was hardcoded to type:'image', so VIDEO/
+  // DOCUMENT-header templates failed at Meta. Look up the template and use
+  // the right header parameter shape.
   const components = [];
   if (imageUrl) {
-    components.push({ type: 'header', parameters: [{ type: 'image', image: { link: imageUrl } }] });
+    let _hdrType = 'IMAGE';
+    let _docFilename = null;
+    try {
+      const _tpl = await db.findOneBy('wa_templates', 'name', templateName);
+      if (_tpl && _tpl.header_type) _hdrType = String(_tpl.header_type).toUpperCase();
+    } catch (_) {}
+    let _param;
+    if (_hdrType === 'VIDEO') {
+      _param = { type: 'video', video: { link: imageUrl } };
+    } else if (_hdrType === 'DOCUMENT') {
+      try {
+        const u = new URL(imageUrl);
+        const last = String(u.pathname || '').split('/').pop() || 'document';
+        _docFilename = last.includes('.') ? last : 'document.pdf';
+      } catch (_) { _docFilename = 'document.pdf'; }
+      _param = { type: 'document', document: { link: imageUrl, filename: _docFilename } };
+    } else {
+      _param = { type: 'image', image: { link: imageUrl } };
+    }
+    components.push({ type: 'header', parameters: [_param] });
   }
   if (Array.isArray(variables) && variables.length) {
     components.push({
