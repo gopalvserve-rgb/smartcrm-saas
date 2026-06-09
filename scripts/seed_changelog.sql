@@ -286,3 +286,12 @@ SELECT 'security',
        '🔒',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Live Team Status — agents now see only their own row');
+
+-- 2026-06-10 TEAM_LIVE_PERMS_v2
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'Live Team Status — now controlled from the Permissions matrix',
+       'The earlier release locked the dashboard ''Live Team Status'' widget so only admins could see the whole team grid. That decision is now controllable per role. Go to Settings → Permissions → and look for the new row ''View Live Team Status (whole team)''. Default: admin / manager / team leader = ON · sales = OFF (sales agents only see their own row + their own summary counters). Custom roles default to OFF — flip them on if you want that role to see the team. Same matrix, same Save button, no other change.',
+       '🔐',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Live Team Status — now controlled from the Permissions matrix');

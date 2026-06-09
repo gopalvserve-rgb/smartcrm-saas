@@ -21,6 +21,7 @@
 
 const db = require('../db/pg');
 const { authUser } = require('../utils/auth');
+const _perms = require('./permissions');
 
 async function _safe(fn, fallback) {
   try { return await fn(); } catch (_) { return fallback; }
@@ -44,16 +45,25 @@ async function api_team_liveStatus(token, _payload) {
   // on-call / on-task state to a non-admin teammate.
   const me = await authUser(token);
 
-  let _isAdminLike = (me.role === 'admin');
-  if (!_isAdminLike) {
+  // TEAM_LIVE_PERMS_v2 (2026-06-10) — read from the role permissions matrix
+  // (Settings → Permissions → 'View Live Team Status (whole team)').
+  //   - granted  → see all active users (team grid)
+  //   - revoked  → see only their own row + summary counts only themselves
+  // Admins always pass (the permissions module enforces that). Custom roles
+  // with hierarchy_level=0 are admin-equivalent in getVisibleUserIds, but
+  // here we always defer to the matrix so the admin's Permissions screen
+  // is the single source of truth.
+  let _seeWholeTeam = false;
+  if (me.role === 'admin') {
+    _seeWholeTeam = true;
+  } else {
     try {
-      const _r = await db.findOneBy('roles', 'key', me.role).catch(() => null);
-      if (_r && Number(_r.hierarchy_level) === 0) _isAdminLike = true;
-    } catch (_) {}
+      _seeWholeTeam = !!(await _perms.can(me, 'dashboard.team_live_status'));
+    } catch (_) { _seeWholeTeam = false; }
   }
 
   let users = (await db.getAll('users') || []).filter(u => Number(u.is_active) !== 0);
-  if (!_isAdminLike) {
+  if (!_seeWholeTeam) {
     users = users.filter(u => Number(u.id) === Number(me.id));
   }
   // Today's date in IST so we don't bleed into yesterday on midnight rollover.
