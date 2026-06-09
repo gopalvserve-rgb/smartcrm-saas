@@ -250,3 +250,12 @@ SELECT 'feature',
        '📤',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Send a template — now with category filter + image/PDF upload + body variables');
+
+-- 2026-06-09 WA_TPL_SEND_INITIATE_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'fix',
+       'Initiate Chat — image/video/PDF upload now works for media-header templates',
+       'The Initiate Chat modal (opened by clicking the 🟢 WhatsApp icon on a lead row) was missing an upload field for templates with an image/video/document header. Picking a template like "bag (gu)" showed "Currently, the variable is not available for this template" — and clicking Send produced a broken message at Meta because no header URL was supplied. Now picking a media-header template opens an inline file picker + URL input (we host the file for you via /api/wa-sample), validates that a URL is present before Send, and passes it to the backend as image_url. Backend was already extended yesterday to route IMAGE / VIDEO / DOCUMENT to the correct Meta parameter shape.',
+       '📤',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Initiate Chat — image/video/PDF upload now works for media-header templates');

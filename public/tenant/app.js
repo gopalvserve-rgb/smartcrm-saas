@@ -16262,19 +16262,67 @@ async function openInitiateChatModal(lead) {
     previewBox.appendChild(card);
   }
 
+  /* WA_TPL_SEND_INITIATE_v1 (2026-06-09) — track the uploaded media URL
+     for IMAGE/VIDEO/DOCUMENT-header templates so it can be passed as
+     image_url in the send payload. Without this, image-header templates
+     get sent with an empty header → Meta rejects them or sends broken. */
+  let currentMediaUrl = '';
   function setTemplate(combo) {
     const [name, lang] = String(combo || '').split('||');
     const t = approved.find(x => x.name === name && x.language === lang);
     currentTpl = t || null;
+    currentMediaUrl = '';
     varsBody.innerHTML = '';
     if (!t) {
       sendBtn.disabled = 'disabled';
       refreshPreview();
       return;
     }
+    /* WA_TPL_SEND_INITIATE_v1 — if header is IMAGE / VIDEO / DOCUMENT, show
+       a file picker + URL input. Use header_type from the row (set by sync)
+       and fall back to inspecting components_json shape. */
+    const _components = t.components || [];
+    const _hdrComp = Array.isArray(_components) ? _components.find(c => (c && (c.type || '').toUpperCase()) === 'HEADER') : null;
+    const _hdrFmt = String(_hdrComp?.format || t.header_type || '').toUpperCase();
+    const _isMediaHdr = ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(_hdrFmt);
+    if (_isMediaHdr) {
+      const acceptMap = { IMAGE: 'image/*', VIDEO: 'video/*', DOCUMENT: '.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx' };
+      const hdrLabelMap = { IMAGE: '🖼️ Image header', VIDEO: '🎥 Video header', DOCUMENT: '📄 Document header' };
+      const mediaWrap = h('div', { style: { padding: '.5rem', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '6px', marginBottom: '.6rem' } });
+      mediaWrap.appendChild(h('div', { style: { fontWeight: 600, marginBottom: '.3rem' } }, hdrLabelMap[_hdrFmt] + ' — required'));
+      const filePick = h('input', { type: 'file', accept: acceptMap[_hdrFmt] || '*/*', style: { width: '100%', marginBottom: '.3rem' } });
+      const urlInp = h('input', { type: 'url', class: 'tpl-media-url', placeholder: 'Or paste a public URL…', style: { width: '100%', padding: '.3rem', border: '1px solid #cbd5e1', borderRadius: '4px', fontSize: '.78rem' } });
+      const uploadNote = h('div', { class: 'muted', style: { fontSize: '.7rem', marginTop: '.25rem' } }, 'Pick a file (we host it for you) OR paste a public URL Meta can fetch.');
+      filePick.onchange = async () => {
+        const f = filePick.files && filePick.files[0];
+        if (!f) return;
+        if (f.size > 25 * 1024 * 1024) { toast('File too large (max 25 MB)', 'err'); return; }
+        uploadNote.textContent = '⏳ Uploading ' + f.name + '…';
+        try {
+          const fd = new FormData(); fd.append('file', f);
+          const r = await fetch('/api/wa-sample', { method: 'POST', headers: { 'x-auth-token': CRM.token }, body: fd });
+          if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || 'Upload failed (HTTP ' + r.status + ')'); }
+          const j = await r.json();
+          urlInp.value = j.url || '';
+          currentMediaUrl = j.url || '';
+          uploadNote.innerHTML = '✓ Hosted: <code style="font-size:.68rem">' + (j.url || '') + '</code>';
+          refreshPreview();
+        } catch (e) {
+          toast('Upload failed: ' + e.message, 'err');
+          uploadNote.textContent = 'Pick a file (we host it for you) OR paste a public URL Meta can fetch.';
+        }
+      };
+      urlInp.addEventListener('input', () => { currentMediaUrl = urlInp.value || ''; refreshPreview(); });
+      mediaWrap.appendChild(filePick);
+      mediaWrap.appendChild(urlInp);
+      mediaWrap.appendChild(uploadNote);
+      varsBody.appendChild(mediaWrap);
+    }
     if (!t.body_params) {
-      varsBody.appendChild(h('div', { class: 'muted', style: { padding: '.75rem' } },
-        'Currently, the variable is not available for this template.'));
+      if (!_isMediaHdr) {
+        varsBody.appendChild(h('div', { class: 'muted', style: { padding: '.75rem' } },
+          'Currently, the variable is not available for this template.'));
+      }
     } else {
       for (let i = 0; i < t.body_params; i++) {
         varsBody.appendChild(h('div', { style: { marginBottom: '.5rem' } },
@@ -16290,18 +16338,29 @@ async function openInitiateChatModal(lead) {
 
   sendBtn.addEventListener('click', async () => {
     if (!currentTpl) return;
+    /* WA_TPL_SEND_INITIATE_v1 — block send if this is a media-header template
+       but no URL was supplied (otherwise Meta will reject the message). */
+    const _comps = currentTpl.components || [];
+    const _hdrComp = Array.isArray(_comps) ? _comps.find(c => (c && (c.type || '').toUpperCase()) === 'HEADER') : null;
+    const _hdrFmt = String(_hdrComp?.format || currentTpl.header_type || '').toUpperCase();
+    if (['IMAGE','VIDEO','DOCUMENT'].includes(_hdrFmt) && !currentMediaUrl) {
+      toast('Please upload an image/file or paste a URL for the header', 'err');
+      return;
+    }
     const variables = [...varsBody.querySelectorAll('input.var-input')].map(i => i.value);
     sendBtn.disabled = 'disabled';
     sendBtn.textContent = 'Sending…';
     try {
-      await api('api_wb_initiate_chat', {
+      const _payload = {
         lead_id: lead?.id,
         phone,
         template_name: currentTpl.name,
         template_language: currentTpl.language,
         variables,
         from_phone_number_id: initPicker.value || undefined
-      });
+      };
+      if (currentMediaUrl) _payload.image_url = currentMediaUrl;
+      await api('api_wb_initiate_chat', _payload);
       toast('Sent — view delivery status in WhatsBot → Chat');
       m.remove();
     } catch (e) {
