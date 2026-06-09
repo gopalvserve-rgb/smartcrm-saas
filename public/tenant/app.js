@@ -27906,22 +27906,57 @@ async function adminRules() {
       h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } },
         '0 = create on every call (incl. missed). 5 = the rep must answer for at least 5 seconds before a lead is created — useful to avoid spam-dial leads.')
     ));
-    const callSaveBtn = h('button', { class: 'btn primary', style: { marginTop: '.5rem' } }, '💾 Save call → lead settings');
-    callSaveBtn.onclick = async () => {
-      callSaveBtn.disabled = true;
+    /* SC_CALL_LEAD_AUTOSAVE_v1 — sa-palss-prop bug: admins unchecked the box but
+       never clicked the dedicated card-level Save button, so the DB never updated
+       and incoming calls kept auto-creating leads. Auto-save every change with a
+       clear status indicator + still expose a manual Save button as belt-and-braces. */
+    const callStatusBadge = h('span', {
+      style: { marginLeft: '.6rem', fontSize: '.82rem', color: '#15803d', fontWeight: 600 }
+    }, '✓ Auto-save enabled');
+
+    let _callSaveTimer = null;
+    const _saveCallCfgNow = async (origin) => {
       try {
+        callStatusBadge.style.color = '#64748b';
+        callStatusBadge.textContent = '⏳ Saving…';
         await api('api_admin_setConfig', {
           CALLS_AUTOLEAD_INBOUND:      inChk.checked  ? '1' : '0',
           CALLS_AUTOLEAD_OUTBOUND:     outChk.checked ? '1' : '0',
           CALLS_AUTOLEAD_MIN_SECONDS:  String(Number(minInp.value || 0)),
           CALLS_AUTOLEAD_STATUS_ID:    stSel.value || '',
-          CALLS_AUTOLEAD_ON_DUPLICATE: dupSel.value || 'attach' /* CALL_DUP_LEAD_v1 */
+          CALLS_AUTOLEAD_ON_DUPLICATE: dupSel.value || 'attach'
         });
-        toast('Call → Lead settings saved', 'ok');
-      } catch (e) { toast(e.message, 'err'); }
+        callStatusBadge.style.color = '#15803d';
+        callStatusBadge.textContent = '✓ Saved · ' + new Date().toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false });
+        if (origin === 'manual') toast('Call → Lead settings saved', 'ok');
+      } catch (e) {
+        callStatusBadge.style.color = '#b91c1c';
+        callStatusBadge.textContent = '✗ Save failed: ' + e.message;
+        toast('Save failed: ' + e.message, 'err');
+      }
+    };
+    const _scheduleCallCfgSave = () => {
+      callStatusBadge.style.color = '#b45309';
+      callStatusBadge.textContent = '⏳ Unsaved changes…';
+      if (_callSaveTimer) clearTimeout(_callSaveTimer);
+      _callSaveTimer = setTimeout(() => _saveCallCfgNow('auto'), 350);
+    };
+    // Wire auto-save to every control on this card
+    inChk.addEventListener('change',  _scheduleCallCfgSave);
+    outChk.addEventListener('change', _scheduleCallCfgSave);
+    minInp.addEventListener('input',  _scheduleCallCfgSave);
+    stSel.addEventListener('change',  _scheduleCallCfgSave);
+    dupSel.addEventListener('change', _scheduleCallCfgSave);
+
+    const callSaveBtn = h('button', { class: 'btn primary', style: { marginTop: '.5rem' } }, '💾 Save now');
+    callSaveBtn.onclick = async () => {
+      callSaveBtn.disabled = true;
+      try { await _saveCallCfgNow('manual'); }
       finally { callSaveBtn.disabled = false; }
     };
-    callCard.appendChild(callSaveBtn);
+    callCard.appendChild(h('div', { style: { marginTop: '.5rem', display: 'flex', alignItems: 'center', flexWrap: 'wrap' } },
+      callSaveBtn, callStatusBadge
+    ));
     wrap.appendChild(callCard);
   } catch (_) { /* config endpoint missing — older deploy, skip silently */ }
 

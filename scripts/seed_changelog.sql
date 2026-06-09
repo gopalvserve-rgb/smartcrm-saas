@@ -232,3 +232,12 @@ SELECT 'fix',
        '🛠️',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Google Sheet push — actually save the Sheet URL to the database (root-cause fix)');
+
+-- 2026-06-09 SC_CALL_LEAD_AUTOSAVE_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'fix',
+       'Call → Lead settings now auto-save the moment you toggle them',
+       'The "Convert incoming/outgoing calls into leads" checkboxes had their own dedicated card-level Save button. Admins who unchecked the boxes but forgot to click that specific Save button kept getting incoming calls auto-converted to leads — because the UI changed but the DB did not. Now every change on the Call → Lead card auto-saves within 350ms and shows a clear ✓ Saved · HH:MM:SS indicator. The 60-second in-memory cache is also busted server-side the instant the config changes, so the new value takes effect on the very next call — not up to a minute later.',
+       '🔧',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Call → Lead settings now auto-save the moment you toggle them');

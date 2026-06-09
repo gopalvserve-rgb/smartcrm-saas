@@ -381,6 +381,17 @@ async function api_admin_setConfig(token, keyOrPatch, maybeValue) {
     await db.setConfig(k, v || '');
     saved.push(k);
   }
+  /* SC_CALL_LEAD_AUTOSAVE_v1 — bust the in-memory 60s autolead cache the
+     instant any CALLS_AUTOLEAD_* key changes, so the new value takes effect
+     on the very next call instead of up to a minute later. */
+  if (saved.some(k => k.startsWith('CALLS_AUTOLEAD_'))) {
+    try {
+      const rec = require('./recordings');
+      if (rec && typeof rec._clearAutoleadCfgCache === 'function') {
+        rec._clearAutoleadCfgCache();
+      }
+    } catch (_) {}
+  }
   return { ok: true, saved };
 }
 // Legacy alias — older frontend called api_admin_saveConfig(patch)

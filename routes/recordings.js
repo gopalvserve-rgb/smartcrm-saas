@@ -144,6 +144,15 @@ async function _getAutoleadCfg() {
   return val;
 }
 
+/* SC_CALL_LEAD_AUTOSAVE_v1 — exported so api_admin_setConfig can invalidate
+   THIS tenant's entry the instant CALLS_AUTOLEAD_* changes, otherwise the
+   admin sees the new value land in DB but the next 60s of calls still use
+   the cached '1' and silently auto-create leads. */
+function _clearAutoleadCfgCache() {
+  const key = _tenantKey();
+  _autoleadCfgByTenant.delete(key);
+}
+
 async function api_call_logEvent(token, payload) {
   // CALL_LOG_PERF_v1 — Harsh's call_logEvent calls were taking up to 12.6
   // minutes average, blocking every other API behind them. Refactored to:
@@ -1529,6 +1538,7 @@ async function api_recordings_filenamesPresent(token, payload) {
 }
 
 module.exports = {
+  _clearAutoleadCfgCache,  /* SC_CALL_LEAD_AUTOSAVE_v1 */
   api_call_logEvent, api_call_events_pending, api_call_events_convertToLeads,
   api_call_hasRecentEvent,
   api_call_lookup,
