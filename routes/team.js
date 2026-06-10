@@ -53,18 +53,14 @@ async function api_team_liveStatus(token, _payload) {
   // with hierarchy_level=0 are admin-equivalent in getVisibleUserIds, but
   // here we always defer to the matrix so the admin's Permissions screen
   // is the single source of truth.
-  let _seeWholeTeam = false;
-  if (me.role === 'admin') {
-    _seeWholeTeam = true;
-  } else {
-    try {
-      _seeWholeTeam = !!(await _perms.can(me, 'dashboard.team_live_status'));
-    } catch (_) { _seeWholeTeam = false; }
-  }
+  // DASHBOARD_SCOPE_v1 — scope to users the requester may see per team hierarchy.
+  // teamStatusUserIds returns: null=all (admin), [ids] for everyone else.
+  const _allowedIds = await _perms.teamStatusUserIds(me);
 
   let users = (await db.getAll('users') || []).filter(u => Number(u.is_active) !== 0);
-  if (!_seeWholeTeam) {
-    users = users.filter(u => Number(u.id) === Number(me.id));
+  if (_allowedIds !== null) {
+    const _allow = new Set(_allowedIds.map(Number));
+    users = users.filter(u => _allow.has(Number(u.id)));
   }
   // Today's date in IST so we don't bleed into yesterday on midnight rollover.
   const istNow = new Date(Date.now() + (5.5 * 3600 * 1000));
