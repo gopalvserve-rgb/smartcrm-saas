@@ -71,8 +71,15 @@ async function api_reports_summary(token, filters) {
     return s && s.name === 'New';
   }).length;
 
+  // DASHBOARD_SCOPE_v1 — compute visibleSet FIRST so byUser is also scoped.
+  // Previously byUser was built before visibleSet existed, leaving it with a
+  // no-op filter that iterated ALL users. Moved the getVisibleUserIds call up
+  // so byUser, byManager, byTeamLeader, and scope_options all share one set.
+  const visible = await getVisibleUserIds(me);
+  const visibleSet = new Set(visible.map(Number));
+
   const byUser = users
-    .filter(u => users.find(uu => Number(uu.id) === Number(u.id)))
+    .filter(u => visibleSet.has(Number(u.id)))
     .map(u => {
       const mine = rows.filter(l => Number(l.assigned_to) === Number(u.id));
       return {
@@ -84,13 +91,6 @@ async function api_reports_summary(token, filters) {
         lost: mine.filter(l => statuses.find(s => Number(s.id) === Number(l.status_id) && s.name === 'Lost')).length
       };
     }).filter(x => x.total > 0);
-
-  // DASHBOARD_SCOPE_v1 — restrict byManager, byTeamLeader, and scope_options
-  // to only the users the requester is allowed to see. Without this, every
-  // role (including sales) received the full org's user list, leaking names
-  // and IDs even though the underlying lead data was already scoped correctly.
-  const visible = await getVisibleUserIds(me);
-  const visibleSet = new Set(visible.map(Number));
 
   const byManager = users
     .filter(u => u.role === 'manager' && visibleSet.has(Number(u.id)))
