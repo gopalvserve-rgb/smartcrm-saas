@@ -4517,10 +4517,20 @@ VIEWS.leads = async (view) => {
   // some users reported filters not applying despite the JS being correct.
   // addEventListener is more robust than .onchange (nothing can clobber it).
   const applyFilters = () => { CRM._leadsPage = 1; loadLeads({ page: 1 }); };
+  // FILTER_HIGHLIGHT_A_v1 — tint a <select> blue when its value is non-default (non-empty).
+  const _paintSelect = (sel) => {
+    if (!sel) return;
+    const active = sel.value !== '' && sel.value !== (sel.options[0] && sel.options[0].value);
+    sel.style.background  = active ? '#E6F1FB' : '';
+    sel.style.borderColor = active ? '#378ADD' : '';
+    sel.style.color       = active ? '#0C447C' : '';
+    sel.style.fontWeight  = active ? '600'     : '';
+  };
   const wireFilter = (sel) => {
     if (!sel) return sel;
-    sel.addEventListener('change', applyFilters);
-    sel.addEventListener('input', applyFilters); // Android WebView fallback
+    sel.addEventListener('change', () => { _paintSelect(sel); applyFilters(); });
+    sel.addEventListener('input',  () => { _paintSelect(sel); applyFilters(); }); // Android WebView fallback
+    _paintSelect(sel); // paint on mount if a saved filter is already active
     return sel;
   };
   let _searchTimer = null;
@@ -8621,6 +8631,13 @@ function multiSelectDropdown({ id, label, options, values, onApply, allLabel }) 
   btn.style.cssText = 'min-width: 9rem; max-width: 16rem; text-align: left; display: inline-flex; align-items: center; gap: .35rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
   function renderBtn() {
     btn.innerHTML = '';
+    const active = values.length > 0;
+    // FILTER_HIGHLIGHT_A_v1 \u2014 blue tint when a non-default value is selected
+    btn.style.background   = active ? '#E6F1FB' : '';
+    btn.style.borderColor  = active ? '#378ADD' : '';
+    btn.style.borderWidth  = active ? '1.5px'   : '';
+    btn.style.color        = active ? '#0C447C' : '';
+    btn.style.fontWeight   = active ? '600'     : '';
     const lbl = document.createElement('span');
     lbl.style.cssText = 'flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
     if (!values.length) {
@@ -8632,6 +8649,7 @@ function multiSelectDropdown({ id, label, options, values, onApply, allLabel }) 
       lbl.textContent = (label ? label + ': ' : '');
       const cnt = document.createElement('span');
       cnt.className = 'ms-count';
+      cnt.style.cssText = 'background:#185FA5;color:#fff;border-radius:999px;padding:.05rem .4rem;font-size:.72rem;font-weight:700;margin-left:.2rem;';
       cnt.textContent = values.length;
       btn.appendChild(lbl);
       btn.appendChild(cnt);
@@ -49388,31 +49406,4 @@ VIEWS.ecorders = async (view) => {
         h('td', {}, h('strong', {}, o.order_id || '—')),
         h('td', {}, o._lead && o._lead.name || '—'),
         h('td', {}, itemDesc || '—'),
-        h('td', {}, _packFmtINR(o.order_value)),
-        h('td', {}, _packIndPill(o.payment_status, o.payment_status === 'paid' ? '#10b981' : '#f59e0b')),
-        h('td', {}, o.courier_partner || '—'),
-        h('td', {}, o.awb || '—'),
-        h('td', {}, _packIndPill(o.status, STATUS_COLOR[o.status] || '#6b7280'))
-      );
-    }))
-  );
-  view.appendChild(tbl);
-};
-
-// Stub views — other pack sidebar items show "coming soon" instead of nothing.
-['finpremiums', 'finclaims', 'finrenewals',
- 'solarquotes', 'solarinstalls', 'solarsubsidies', 'solaramc',
- 'mfgproduction', 'mfgdispatch', 'mfgreceivables',
- 'tourpackages', 'tourupcoming', 'tourvouchers',
- 'eccarts', 'ecreturns', 'ecloyalty'].forEach(id => {
-  if (!VIEWS[id]) {
-    VIEWS[id] = async (view) => {
-      view.innerHTML = '';
-      view.appendChild(h('h2', {}, 'Industry Pack'));
-      view.appendChild(h('div', { class: 'card', style: { padding: '1.5rem', textAlign: 'center' } },
-        h('p', {}, '🚧 This pack-specific view is being built.'),
-        h('p', { class: 'muted' }, 'Backend APIs and dummy data are already available — call them directly while we ship the polished UI.')
-      ));
-    };
-  }
-});
+        h('td', {}, _packFmtINR(o.order_
