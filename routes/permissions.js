@@ -21,7 +21,7 @@
  *   attendance.view_team
  */
 const db = require('../db/pg');
-const { authUser } = require('../utils/auth');
+const { authUser, getVisibleUserIds } = require('../utils/auth');
 
 const CATALOG = [
   { key: 'leads.view',          label: 'View leads',       scoped: true },
@@ -150,4 +150,32 @@ function _scopeAllows(grantedScope, opts) {
   return false;
 }
 
-module.exports = { api_permissions_get, api_permissions_save, can, CATALOG, DEFAULTS };
+/**
+ * teamStatusUserIds(me) — returns the set of user IDs the caller is allowed
+ * to see in the Live Team Status widget.
+ *
+ *   admin (or any role that can() returns truthy for team_live_status
+ *   with no explicit revocation) → null  (caller sees ALL active users)
+ *
+ *   role with dashboard.team_live_status granted → getVisibleUserIds(me)
+ *   (manager sees team tree, team_leader sees reports, etc.)
+ *
+ *   role with permission revoked / not granted → [me.id]  (self only)
+ *
+ * Returning null instead of "all IDs" lets callers skip a potentially
+ * large set comparison for admins.
+ */
+async function teamStatusUserIds(me) {
+  if (!me) return [];
+  if (me.role === 'admin') return null; // admin sees all
+  try {
+    const granted = await can(me, 'dashboard.team_live_status');
+    if (granted) {
+      const ids = await getVisibleUserIds(me);
+      return ids.map(Number);
+    }
+  } catch (_) { /* fall through to self-only */ }
+  return [Number(me.id)];
+}
+
+module.exports = { api_permissions_get, api_permissions_save, can, CATALOG, DEFAULTS, teamStatusUserIds };
