@@ -547,10 +547,69 @@ async function api_wb_connect_verify(token) {
 async function api_wb_disconnect(token) {
   const me = await authUser(token);
   if (me.role !== 'admin') throw new Error('Admin only');
+
+  // Read credentials BEFORE clearing them — needed for Meta + forwarder calls below.
+  const wabaId      = await db.getConfig('WHATSAPP_BUSINESS_ACCOUNT_ID', '');
+  const accessToken = await db.getConfig('WHATSAPP_ACCESS_TOKEN', '');
+  const phoneId     = await db.getConfig('WHATSAPP_PHONE_NUMBER_ID', '');
+
+  // Step 1 — Revoke WABA subscription on Meta so they stop pushing events.
+  if (wabaId && accessToken) {
+    try {
+      await fetch(`https://graph.facebook.com/v19.0/${wabaId}/subscribed_apps`, {
+        method:  'DELETE',
+        headers: { Authorization: 'Bearer ' + accessToken }
+      });
+    } catch (e) {
+      console.warn('[wb_disconnect] Meta unsubscribe failed (non-fatal):', e.message);
+    }
+  }
+
+  // Step 2 — Deregister from central forwarder so it stops routing to this tenant.
+  if (phoneId) {
+    await _deregisterWithCentralForwarder(phoneId);
+  }
+
+  // Step 3 — Clear legacy config keys.
   await db.setConfig('WHATSAPP_BUSINESS_ACCOUNT_ID', '');
   await db.setConfig('WHATSAPP_ACCESS_TOKEN', '');
   await db.setConfig('WHATSAPP_PHONE_NUMBER_ID', '');
+
+  // Step 4 — Deactivate all wa_phones rows so the webhook guard stops accepting messages.
+  try {
+    await db.query(`UPDATE wa_phones SET is_active = 0, updated_at = NOW()`);
+  } catch (e) {
+    console.warn('[wb_disconnect] wa_phones deactivation failed (non-fatal):', e.message);
+  }
+
   return { ok: true };
+}
+
+/**
+ * Deregister a phone_number_id from the central forwarder. Silently skipped
+ * when FORWARDER_REGISTER_URL / FORWARDER_REGISTER_SECRET are not set.
+ */
+async function _deregisterWithCentralForwarder(phoneNumberId) {
+  const url    = process.env.FORWARDER_REGISTER_URL || '';
+  const secret = process.env.FORWARDER_REGISTER_SECRET || '';
+  if (!url || !secret) return { ok: false, error: 'Forwarder env vars not configured' };
+  try {
+    const r = await fetch(url, {
+      method:  'DELETE',
+      headers: {
+        'Content-Type':      'application/json',
+        'X-Register-Secret': secret
+      },
+      body: JSON.stringify({ phone_number_id: String(phoneNumberId) })
+    });
+    const txt = await r.text();
+    if (r.status >= 200 && r.status < 300) return { ok: true };
+    console.warn('[forwarder] deregister HTTP', r.status, txt.slice(0, 200));
+    return { ok: false, error: 'HTTP ' + r.status };
+  } catch (e) {
+    console.warn('[forwarder] deregister failed (non-fatal):', e.message);
+    return { ok: false, error: e.message };
+  }
 }
 
 /**
@@ -3261,6 +3320,14 @@ async function api_wa_phones_delete(token, id) {
   if (!pid) throw new Error('Phone id required');
   const row = await db.query('SELECT phone_number_id, is_default FROM wa_phones WHERE id = $1', [pid]);
   if (!row.rows.length) throw new Error('Phone not found');
+
+  const deletedPhoneId = String(row.rows[0].phone_number_id || '');
+
+  // Deregister this phone from the central forwarder BEFORE deleting the row.
+  if (deletedPhoneId) {
+    await _deregisterWithCentralForwarder(deletedPhoneId);
+  }
+
   await db.query('DELETE FROM wa_phones WHERE id = $1', [pid]);
   // If we deleted the default, promote any other active phone to default.
   if (Number(row.rows[0].is_default) === 1) {
