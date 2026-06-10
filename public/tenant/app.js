@@ -2356,10 +2356,11 @@ async function openChangelogModal() {
     function paint(activeId) {
       Object.entries(chipBtns).forEach(([id, b]) => {
         const on = id === activeId;
-        b.style.background = on ? '#4f46e5' : '#fff';
+        b.style.background = on ? '#185FA5' : '#fff';
         b.style.color      = on ? '#fff'    : '#0f172a';
-        b.style.borderColor = on ? '#4f46e5' : '#cbd5e1';
+        b.style.borderColor = on ? '#185FA5' : '#cbd5e1';
         b.style.fontWeight  = on ? '600'    : '500';
+        b.style.boxShadow   = on ? '0 0 0 2px #B5D4F4' : 'none';
       });
     }
     function makeChip(p) {
@@ -8632,7 +8633,7 @@ function multiSelectDropdown({ id, label, options, values, onApply, allLabel }) 
   function renderBtn() {
     btn.innerHTML = '';
     const active = values.length > 0;
-    // FILTER_HIGHLIGHT_A_v1 \u2014 blue tint when a non-default value is selected
+    // FILTER_HIGHLIGHT_A_v1 — blue tint when a non-default value is selected
     btn.style.background   = active ? '#E6F1FB' : '';
     btn.style.borderColor  = active ? '#378ADD' : '';
     btn.style.borderWidth  = active ? '1.5px'   : '';
@@ -49406,4 +49407,31 @@ VIEWS.ecorders = async (view) => {
         h('td', {}, h('strong', {}, o.order_id || '—')),
         h('td', {}, o._lead && o._lead.name || '—'),
         h('td', {}, itemDesc || '—'),
-        h('td', {}, _packFmtINR(o.order_
+        h('td', {}, _packFmtINR(o.order_value)),
+        h('td', {}, _packIndPill(o.payment_status, o.payment_status === 'paid' ? '#10b981' : '#f59e0b')),
+        h('td', {}, o.courier_partner || '—'),
+        h('td', {}, o.awb || '—'),
+        h('td', {}, _packIndPill(o.status, STATUS_COLOR[o.status] || '#6b7280'))
+      );
+    }))
+  );
+  view.appendChild(tbl);
+};
+
+// Stub views — other pack sidebar items show "coming soon" instead of nothing.
+['finpremiums', 'finclaims', 'finrenewals',
+ 'solarquotes', 'solarinstalls', 'solarsubsidies', 'solaramc',
+ 'mfgproduction', 'mfgdispatch', 'mfgreceivables',
+ 'tourpackages', 'tourupcoming', 'tourvouchers',
+ 'eccarts', 'ecreturns', 'ecloyalty'].forEach(id => {
+  if (!VIEWS[id]) {
+    VIEWS[id] = async (view) => {
+      view.innerHTML = '';
+      view.appendChild(h('h2', {}, 'Industry Pack'));
+      view.appendChild(h('div', { class: 'card', style: { padding: '1.5rem', textAlign: 'center' } },
+        h('p', {}, '🚧 This pack-specific view is being built.'),
+        h('p', { class: 'muted' }, 'Backend APIs and dummy data are already available — call them directly while we ship the polished UI.')
+      ));
+    };
+  }
+});
