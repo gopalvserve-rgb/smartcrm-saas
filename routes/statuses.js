@@ -1,5 +1,5 @@
 const db = require('../db/pg');
-const { authUser } = require('../utils/auth');
+const { authUser, getVisibleUserIds } = require('../utils/auth');
 
 // PIPELINE_STAGE_v1 (2026-05-28) — universal pipeline stage every status
 // can be linked to. Lets the admin map their tenant-specific status names
@@ -95,16 +95,18 @@ async function api_pipeline_funnel(token, payload) {
   const stageByStatusId = {};
   statuses.forEach(st => { if (st.stage) stageByStatusId[Number(st.id)] = st.stage; });
 
-  // Visible-leads scope
+  // DASHBOARD_SCOPE_v1 — replace brittle manual role checks with
+  // getVisibleUserIds(), the same helper used by every other scoped endpoint.
+  // Old code only handled 4 hardcoded role strings; any custom role fell
+  // through with zero scope SQL and saw ALL leads (fail-open). Also fixes
+  // managers who were scoped only 1 level deep instead of the full subtree.
   let scopeSql = '';
   const args = [];
   let ai = 1;
-  if (me.role === 'sales' || me.role === 'employee') {
-    scopeSql += ` AND assigned_to = $${ai++}`;
-    args.push(me.id);
-  } else if (me.role === 'team_leader' || me.role === 'manager') {
-    scopeSql += ` AND (assigned_to = $${ai} OR assigned_to IN (SELECT id FROM users WHERE parent_id = $${ai}))`;
-    args.push(me.id); ai++;
+  if (me.role !== 'admin') {
+    const visible = await getVisibleUserIds(me);
+    scopeSql += ` AND assigned_to = ANY($${ai++}::int[])`;
+    args.push(visible.map(Number));
   }
   if (p.from) { scopeSql += ` AND created_at >= $${ai++}::timestamptz`; args.push(p.from); }
   if (p.to)   { scopeSql += ` AND created_at <= $${ai++}::timestamptz`; args.push(p.to); }
