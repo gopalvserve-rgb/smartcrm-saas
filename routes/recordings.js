@@ -126,10 +126,22 @@ async function _getAutoleadCfg() {
     //                        as a fresh lead in today's list, marked as a dup
     db.getConfig('CALLS_AUTOLEAD_ON_DUPLICATE', 'attach')
   ]);
+  // CALL_LEAD_EMPTYSTR_FIX_v1 (2026-06-10) — trinetra / sa-palss-prop bug:
+  // older save paths left CALLS_AUTOLEAD_INBOUND='' in the config table.
+  // The previous `String(inb || '1')` fallback treated '' as falsy and
+  // flipped it back to '1' (the original default-on), so the cache said
+  // "create leads" while the SPA showed the checkbox OFF (because the
+  // SPA's `String('') === '1'` correctly read it as not-enabled). The
+  // result: incoming calls auto-created leads despite the unchecked UI.
+  // Read the config explicitly now — ONLY the literal '1' enables it.
+  // Empty string, null, '0', anything else  →  OFF.
+  // (Path #3 — api_call_event_native's direct getConfig read — already
+  // had the right comparison `String(cfgIn) === '1'`; only this cache
+  // assembly was leaking the trap.)
   const val = {
     mode: String(mode || 'auto').toLowerCase(),
-    inbound: String(inb || '1'),
-    outbound: String(out || '0'),
+    inbound:  (String(inb)  === '1') ? '1' : '0',
+    outbound: (String(out)  === '1') ? '1' : '0',
     statusId: Number(statusId) || 0,
     onDuplicate: String(onDup || 'attach').toLowerCase()
   };

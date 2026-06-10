@@ -304,3 +304,12 @@ SELECT 'feature',
        '🔢',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Quotations — line items now numbered (1, 2, 3, …)');
+
+-- 2026-06-10 CALL_LEAD_EMPTYSTR_FIX_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'fix',
+       'Incoming calls — auto-create lead toggle now fully respected (empty-string trap)',
+       'Some tenants saw incoming calls still creating new leads even when "Convert incoming calls into leads" was unchecked in Settings. Root cause: an older save path stored an empty string in the config instead of the literal "0". The 60-second per-tenant config cache treated the empty string as a falsy value and silently fell back to the default "on" state, so calls kept creating leads while the UI correctly showed the box as off. The cache now reads the value literally — only "1" means on, everything else (including empty) means off. No setting to change — fix takes effect on the very next call. If you still see auto-creation after the fix, toggle the box once and click Save now to overwrite the legacy value.',
+       '📞',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Incoming calls — auto-create lead toggle now fully respected (empty-string trap)');
