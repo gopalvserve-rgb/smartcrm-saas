@@ -127,7 +127,8 @@ async function api_projectStages_board(token, filters) {
    * we bucket by stage. Stages remain the same; only lead lists change.
    * 'stalled_only' surfaces stuck cards; useful for managers. */
   const filtered = leads.filter(l => {
-    if (!(me.role === 'admin' || me.role === 'manager' || visible.includes(Number(l.assigned_to)))) return false;
+    // DASHBOARD_SCOPE_v1 — admin visible=all IDs; manager visible=team IDs only.
+    if (!(me.role === 'admin' || visible.includes(Number(l.assigned_to)))) return false;
 
     // Date — uses project_stage_started_at (when the lead entered closure).
     // Falls back to lead.created_at if started_at missing.
