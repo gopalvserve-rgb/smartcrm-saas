@@ -182,6 +182,14 @@ CREATE TABLE IF NOT EXISTS leaves (
   approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='leaves' AND column_name='leave_type') THEN
+    ALTER TABLE leaves ADD COLUMN leave_type TEXT NOT NULL DEFAULT 'casual';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='leaves' AND column_name='half_day') THEN
+    ALTER TABLE leaves ADD COLUMN half_day BOOLEAN NOT NULL DEFAULT FALSE;
+  END IF;
+END $$;
 
 -- ---- tasks --------------------------------------------------
 CREATE TABLE IF NOT EXISTS tasks (
@@ -506,14 +514,6 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS reference_1_relation  TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS reference_2_name      TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS reference_2_phone     TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS reference_2_relation  TEXT;
-
--- Pause incoming leads for this user. Independent of is_active (which
--- gates login). When paused_for_leads = TRUE, every future-lead routing
--- decision skips the user: auto-assign rules, campaign distribution
--- (round_robin / equal / percentage / conditional / on_demand pull),
--- WhatsApp inbound auto-routing, bulk-assign loops. Existing leads stay
--- with the user; un-pausing simply resumes future routing.
-ALTER TABLE users ADD COLUMN IF NOT EXISTS paused_for_leads BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- Cached approved templates from Meta (refreshed periodically)
 CREATE TABLE IF NOT EXISTS wa_templates (
@@ -1382,159 +1382,32 @@ CREATE TABLE IF NOT EXISTS quotation_items (
 );
 CREATE INDEX IF NOT EXISTS idx_qitems_quote ON quotation_items(quotation_id, position);
 
+-- v9 (2026-05-17): idempotent recording uploads.
+-- The /api/recordings handler computes a dedup_key from device_path or
+-- (started_at_minute, size_bytes) so that hitting "Re-sync All" multiple
+-- times never produces duplicate rows. Self-healed at upload time too.
+ALTER TABLE lead_recordings ADD COLUMN IF NOT EXISTS dedup_key TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_lead_rec_user_dedup
+  ON lead_recordings(user_id, dedup_key) WHERE dedup_key IS NOT NULL;
 
--- ============================================================
--- Lead-source field mapping (2026-05-09)
--- ============================================================
--- Per-source override table. The default _adaptLeadSourcePayload
--- mappers in routes/integrations.js are still applied as a fallback,
--- but if a row exists here for a given source, its mapping takes
--- precedence.
+-- ===================================================================
+-- Merge Leads (2026-05-17) — soft-delete of the absorbed (loser) lead.
+-- ===================================================================
+-- When two leads are merged, the survivor keeps id; the loser keeps its
+-- row for audit but is hidden from every active-leads query via
+-- (merged_into IS NULL). All child rows (remarks, followups, recordings,
+-- whatsapp_messages, pack tables, etc.) are repointed to the survivor
+-- inside a transactional api_leads_merge — see routes/leads.js.
 --
--- mapping JSONB format: { "<incoming_key>": "<crm_field>", ... }
---   <crm_field> can be: name | phone | email | company | city | state |
---                       address | source | source_ref | notes | product |
---                       value | tags | cf_<custom_key>
---
--- last_payload JSONB stores the most recent received payload so the
--- mapping UI can show real keys the operator can drag-and-map.
-
-CREATE TABLE IF NOT EXISTS lead_source_mapping (
-  source        TEXT PRIMARY KEY,
-  mapping       JSONB NOT NULL DEFAULT '{}'::jsonb,
-  last_payload  JSONB,
-  last_seen_at  TIMESTAMPTZ,
-  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-
--- ============================================================
--- One-time data migration (2026-05-09)
--- Lower AI Bot kb_max_chars from the old 60000 default to 8000
--- for tenants who never explicitly customised it. Cuts input
--- token cost ~85% with negligible answer-quality loss.
--- Idempotent: only matches rows still at the old default.
--- ============================================================
-DO $$
-BEGIN
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'ai_bot_settings') THEN
-    UPDATE ai_bot_settings
-       SET kb_max_chars = 8000,
-           updated_at   = NOW()
-     WHERE kb_max_chars = 60000;
-  END IF;
-END $$;
-
-
--- ============================================================
--- 2026-05-10: AI Bot per-number scoping
--- Empty list (default) = bot replies on every connected number.
--- Non-empty list = bot only auto-replies when the inbound's
--- phone_number_id is in the list.
--- ============================================================
-ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS active_phone_number_ids JSONB NOT NULL DEFAULT '[]'::jsonb;
-
-
--- ============================================================
--- 2026-05-10: WhatsApp Bot Flows (visual canvas builder)
--- Each tenant can define multiple guided flows triggered by
--- inbound keyword. Engine in routes/waBotFlows.js advances
--- a session per (phone, flow) until the customer reaches an
--- end / handoff / ai_handoff node.
--- ============================================================
-CREATE TABLE IF NOT EXISTS wa_bot_flows (
-  id            SERIAL PRIMARY KEY,
-  name          TEXT NOT NULL,
-  description   TEXT,
-  trigger       TEXT,
-  trigger_match TEXT NOT NULL DEFAULT 'exact',
-  is_active     INTEGER NOT NULL DEFAULT 0,
-  priority      INTEGER NOT NULL DEFAULT 100,
-  nodes         JSONB NOT NULL DEFAULT '[]'::jsonb,
-  start_node_id TEXT,
-  created_by    INTEGER,
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS wa_bot_flow_sessions (
-  id              SERIAL PRIMARY KEY,
-  phone           TEXT NOT NULL,
-  phone_number_id TEXT,
-  flow_id         INTEGER NOT NULL REFERENCES wa_bot_flows(id) ON DELETE CASCADE,
-  current_node_id TEXT NOT NULL,
-  vars            JSONB NOT NULL DEFAULT '{}'::jsonb,
-  lead_id         INTEGER,
-  started_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  last_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  is_completed    INTEGER NOT NULL DEFAULT 0,
-  UNIQUE (phone)
-);
-CREATE INDEX IF NOT EXISTS idx_wa_bot_flow_sessions_phone ON wa_bot_flow_sessions(phone);
-
-
--- ============================================================
--- 2026-05-10: Per-number AI Bot configs
--- One row per WhatsApp number that wants its own training. The
--- legacy id=1 row keeps phone_number_id = NULL and acts as the
--- fallback when an inbound arrives on a phone with no specific
--- config. Partial unique index lets multiple per-phone rows
--- coexist while preventing duplicates per phone.
--- ============================================================
-ALTER TABLE ai_bot_settings ADD COLUMN IF NOT EXISTS phone_number_id TEXT;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_bot_settings_phone
-  ON ai_bot_settings(phone_number_id) WHERE phone_number_id IS NOT NULL;
-
-
--- ============================================================
--- 2026-05-10: KB doc per-phone scoping
--- NULL = global (every bot reads it). Specific phone_number_id =
--- only that phone's bot reads it. Lets a tenant with multiple
--- businesses keep their KBs separate per number.
--- ============================================================
-ALTER TABLE ai_kb_documents ADD COLUMN IF NOT EXISTS phone_number_id TEXT;
-CREATE INDEX IF NOT EXISTS idx_ai_kb_documents_phone ON ai_kb_documents(phone_number_id);
-
--- ============================================================
--- IVR / Cloud Calling integration (2026-05-17)
--- ============================================================
--- Per-tenant config rows for any IVR vendor (Exotel, MyOperator,
--- Knowlarity, Tata Tele, Servetel, Ozonetel, Twilio, or Generic).
--- Inbound webhook URL: /t/<slug>/hook/ivr/<vendor_key>?secret=<webhook_secret>
--- Outbound click-to-call dispatched via the vendor's API by routes/ivr.js.
-CREATE TABLE IF NOT EXISTS ivr_configs (
-  id                SERIAL PRIMARY KEY,
-  vendor_key        TEXT NOT NULL,
-  display_name      TEXT NOT NULL,
-  is_active         INTEGER NOT NULL DEFAULT 1,
-  is_default        INTEGER NOT NULL DEFAULT 0,
-  api_base_url      TEXT,
-  account_sid       TEXT,
-  api_key           TEXT,
-  api_token         TEXT,
-  caller_id         TEXT,
-  webhook_secret    TEXT,
-  field_mapping     JSONB,
-  auto_create_lead  INTEGER NOT NULL DEFAULT 1,
-  default_status_id INTEGER REFERENCES statuses(id) ON DELETE SET NULL,
-  notes             TEXT,
-  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_ivr_active ON ivr_configs(is_active);
-CREATE INDEX IF NOT EXISTS idx_ivr_vendor ON ivr_configs(vendor_key);
-
-ALTER TABLE users ADD COLUMN IF NOT EXISTS ivr_agent_id  TEXT;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS ivr_extension TEXT;
-
-ALTER TABLE call_events ADD COLUMN IF NOT EXISTS ivr_call_id   TEXT;
-ALTER TABLE call_events ADD COLUMN IF NOT EXISTS ivr_vendor    TEXT;
-ALTER TABLE call_events ADD COLUMN IF NOT EXISTS recording_url TEXT;
-
--- PROMISE_TRACK_v1 (2026-05-18) — promised vs actual callback tracking
-ALTER TABLE lead_recordings ADD COLUMN IF NOT EXISTS committed_callback_at TIMESTAMPTZ;
-ALTER TABLE lead_recordings ADD COLUMN IF NOT EXISTS actual_followup_at    TIMESTAMPTZ;
-ALTER TABLE lead_recordings ADD COLUMN IF NOT EXISTS callback_gap_minutes  INTEGER;
+-- merged_into is a plain BIGINT (no FK) for symmetry with the existing
+-- duplicate_of column. If the survivor ever gets hard-deleted, the
+-- loser's merged_into becomes a dangling pointer — that's fine, the
+-- loser will still be filtered out (the column is non-null either way).
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS merged_into BIGINT;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS merged_at   TIMESTAMPTZ;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS merged_by   INTEGER;
+CREATE INDEX IF NOT EXISTS idx_leads_merged_into
+  ON leads(merged_into) WHERE merged_into IS NOT NULL;
 -- ============================================================
 -- Invoicing (GST) — per-tenant migration
 -- ============================================================
@@ -1744,11 +1617,4 @@ CREATE TABLE IF NOT EXISTS inv_audit_log (
   id          SERIAL PRIMARY KEY,
   user_id     INTEGER,
   user_email  TEXT,
-  action      TEXT NOT NULL,         -- invoice.create | invoice.cancel | payment.add | ...
-  entity      TEXT NOT NULL,         -- invoice | payment | company | customer | item
-  entity_id   INTEGER,
-  detail      JSONB,
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_inv_audit_entity ON inv_audit_log(entity, entity_id);
-CREATE INDEX IF NOT EXISTS idx_inv_audit_created ON inv_audit_log(created_at DESC);
+  action      T
