@@ -350,14 +350,19 @@ async function api_leaves_mine(token) {
   return rows;
 }
 
+const _VALID_LEAVE_TYPES = new Set(['casual', 'sick', 'earned', 'unpaid']);
 async function api_leaves_apply(token, leave) {
   const me = await authUser(token);
   if (!leave.from_date || !leave.to_date) throw new Error('Dates required');
+  const leave_type = _VALID_LEAVE_TYPES.has(leave.leave_type) ? leave.leave_type : 'casual';
+  const half_day   = leave.half_day === true || leave.half_day === 'true';
   const id = await db.insert('leaves', {
     user_id: me.id,
     from_date: leave.from_date,
-    to_date: leave.to_date,
-    reason: leave.reason || '',
+    to_date:   half_day ? leave.from_date : leave.to_date,
+    reason:    leave.reason || '',
+    leave_type,
+    half_day,
     status: 'pending',
     created_at: db.nowIso()
   });
@@ -1468,10 +1473,4 @@ module.exports = {
   api_leaves_mine, api_leaves_apply, api_leaves_pending, api_leaves_decide, api_leaves_all,
   api_tasks_list, api_tasks_save, api_tasks_complete, api_tasks_doneToday,
   api_salary_mine, api_salary_list, api_salary_save,
-  api_salary_bulkSave, api_salary_report, api_salary_payslip,
-  api_bank_mine, api_bank_save, api_bank_list,
-  api_location_ping, api_location_trail,
-  api_tracking_dayTrail, api_tracking_teamLive,
-  api_reimburse_policy, api_reimburse_policy_save,
-  api_reimburse_monthly, api_reimburse_teamMonth, api_reimburse_markPaid
-};
+  api_salary_bulkS
