@@ -3291,7 +3291,7 @@ const WIDGET_LIBRARY = {
         if (aborted) return;
         try {
           const r = await api('api_team_liveStatus', {});
-          _renderTeamLiveCompact(body, _scopeTeamData(r));
+          _renderTeamLiveCompact(body, r);
         } catch (e) {
           body.innerHTML = '<div class="muted" style="padding:.4rem">Could not load team status.</div>';
         }
@@ -4431,9 +4431,7 @@ const LEAD_COLUMNS = [
   { key: 'notes',       label: 'Notes',         default: false },
   { key: 'city',        label: 'City',          default: false },
   { key: 'created',     label: 'Created',       default: true },
-  /* LEAD_LIST_UPDATED_v1 — last-updated timestamp column. Off by default; admins
-     who want it can switch it on from the column picker. Renders date + time
-     just like Created, so users can see when the row was last touched. */
+  /* LEAD_LIST_UPDATED_v1 — last-updated timestamp column. Off by default. */
   { key: 'updated',     label: 'Last Updated',  default: false }
 ];
 
@@ -6187,6 +6185,20 @@ function renderCell(col, l, statuses) {
       return h('td', { class: 'cell-notes', style: { maxWidth: '260px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: txt ? 'pointer' : 'default' }, title: txt || '(no notes)', onclick: ev => { ev.stopPropagation(); openLeadModal(l.id); } }, preview);
     }
     case 'city':    return h('td', {}, l.city || '');
+    case 'updated': {
+      /* LEAD_LIST_UPDATED_v1 — last time the row was touched. Falls back
+         to last_status_change_at then created_at when updated_at is null. */
+      const _u = l.updated_at || l.last_status_change_at || l.created_at;
+      const _d2 = _u ? new Date(_u) : null;
+      if (!_d2 || isNaN(_d2.getTime())) return h('td', { class: 'muted' }, '');
+      const _dateStr2 = _d2.toLocaleDateString();
+      const _timeStr2 = _d2.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const _rel = (typeof fmtDate === 'function') ? fmtDate(_u, 'relative') : '';
+      return h('td', { class: 'muted', style: { whiteSpace: 'nowrap' }, title: _rel },
+        h('div', {}, _dateStr2),
+        h('div', { style: { fontSize: '.74rem', opacity: '.75' } }, _timeStr2)
+      );
+    }
     case 'created': {
       // Two-line cell: date on top, time below in muted/smaller. Keeps the
       // column compact while surfacing the time the lead came in — useful
@@ -6196,24 +6208,6 @@ function renderCell(col, l, statuses) {
       const _dateStr = _d.toLocaleDateString();
       const _timeStr = _d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       return h('td', { class: 'muted', style: { whiteSpace: 'nowrap' } },
-        h('div', {}, _dateStr),
-        h('div', { style: { fontSize: '.74rem', opacity: '.75' } }, _timeStr)
-      );
-    }
-    case 'updated': {
-      /* LEAD_LIST_UPDATED_v1 — last time the row was touched.
-         Mirrors the Created cell's layout (date on top, time below muted)
-         and shows a relative "x ago" hint as the cell tooltip. Falls back
-         to last_status_change_at then created_at when updated_at is null —
-         matches the sort fallback in routes/leads.js so the column never
-         renders blank for legacy rows that pre-date the column. */
-      const _u = l.updated_at || l.last_status_change_at || l.created_at;
-      const _d = _u ? new Date(_u) : null;
-      if (!_d || isNaN(_d.getTime())) return h('td', { class: 'muted' }, '');
-      const _dateStr = _d.toLocaleDateString();
-      const _timeStr = _d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const _rel = (typeof fmtDate === 'function') ? fmtDate(_u, 'relative') : '';
-      return h('td', { class: 'muted', style: { whiteSpace: 'nowrap' }, title: _rel },
         h('div', {}, _dateStr),
         h('div', { style: { fontSize: '.74rem', opacity: '.75' } }, _timeStr)
       );
@@ -11464,28 +11458,26 @@ async function renderFollowupSection(view, key) {
  */
 async function renderNewTodayLeads(view) {
   view.innerHTML = '';
-  // NEW_HEADER_ALL_v1 — header ✨ New chip surfaces ALL leads with
-  // status="New", not just today's arrivals. Resolve the "New" status
-  // id from the warmed status cache and filter by status_id.
+  // NEW_HEADER_ALL_v1 — surface ALL leads with status='New', any date.
   if (!CRM.cache || !CRM.cache.statuses) {
     try { await warmCache(); } catch (_) {}
   }
-  const statuses = (CRM.cache && CRM.cache.statuses) || [];
-  const _newStatus = statuses.find(s => String(s.name || '').trim().toLowerCase() === 'new')
-                 || statuses.find(s => String(s.name || '').trim().toLowerCase().startsWith('new '));
-  const _newStatusId = _newStatus ? Number(_newStatus.id) : null;
+  const _stsAll = (CRM.cache && CRM.cache.statuses) || [];
+  const _newSt = _stsAll.find(s => String(s.name || '').trim().toLowerCase() === 'new')
+              || _stsAll.find(s => String(s.name || '').trim().toLowerCase().startsWith('new '));
+  const _newStId = _newSt ? Number(_newSt.id) : null;
   let rows = [];
   try {
     const payload = { page_size: 500 };
-    if (_newStatusId) payload.status_id = _newStatusId;
+    if (_newStId) payload.status_id = _newStId;
     const r = await api('api_leads_list', payload);
     rows = (r && r.leads) || (r && r.rows) || [];
   } catch (e) { /* fall through */ }
   const wrap = h('div', { class: 'card' },
     h('h3', {}, '✨ All new leads ', h('span', { class: 'chip-count accent' }, rows.length))
   );
-  if (!_newStatusId) {
-    wrap.appendChild(h('p', { class: 'muted' }, "No status named 'New' is configured. Add one under Settings → Statuses, or change the header chip behaviour."));
+  if (!_newStId) {
+    wrap.appendChild(h('p', { class: 'muted' }, "No status named 'New' is configured."));
     view.appendChild(wrap);
     return;
   }
@@ -11494,11 +11486,14 @@ async function renderNewTodayLeads(view) {
     view.appendChild(wrap);
     return;
   }
+  // Surface a small TAT-breach summary at the top so the rep can see
+  // at a glance how many of today's leads are already past their stage
+  // threshold (rare on day-of, but possible for short thresholds).
   const breachCount = rows.filter(l => l && l.tat_violation).length;
   if (breachCount > 0) {
     wrap.appendChild(h('div', { class: 'tat-banner' },
-      '⚠ ', h('b', {}, breachCount), ' new lead',
-      breachCount === 1 ? ' is' : 's are', ' already past TAT — action immediately.'));
+      '⚠ ', h('b', {}, breachCount), ' of today’s leads ',
+      breachCount === 1 ? 'is' : 'are', ' already past TAT — action immediately.'));
   }
   wrap.appendChild(h('div', { class: 'table-wrap' }, h('table', {},
     h('thead', {}, h('tr', {},
@@ -12755,15 +12750,13 @@ async function openQuotationModal(qid, prefillLead) {
 
   function recompute() {
     let subtotal = 0;
-    [...itemsWrap.querySelectorAll('.q-item')].forEach((row, idx) => {
+    [...itemsWrap.querySelectorAll('.q-item')].forEach(row => {
       const qty = Number(row.querySelector('[data-k=qty]').value || 0);
       const price = Number(row.querySelector('[data-k=price]').value || 0);
       const dp = Number(row.querySelector('[data-k=disc]').value || 0);
       const gross = qty * price;
       const line = gross - (gross * dp / 100);
       row.querySelector('[data-k=amt]').textContent = '₹' + line.toFixed(2);
-      // Update S.No on each row
-      if (row._sno) row._sno.textContent = String(idx + 1);
       subtotal += line;
     });
     const dPct = Number(discInp.value || 0);
@@ -12841,16 +12834,13 @@ async function openQuotationModal(qid, prefillLead) {
     const qty  = h('input', { 'data-k': 'qty',   type: 'number', value: it.quantity || 1, step: '0.001', min: 0, style: { width: '100%', minWidth: '70px', padding: '4px 6px', textAlign: 'right' } });
     const pr   = h('input', { 'data-k': 'price', type: 'number', value: it.unit_price || 0, step: '0.01', min: 0, style: { width: '100%' } });
     const dp   = h('input', { 'data-k': 'disc',  type: 'number', value: it.discount_pct || 0, step: '0.01', min: 0, max: 100, style: { width: '100%' } });
-    const gst  = h('input', { 'data-k': 'gst',   type: 'number', value: it.gst_pct || 0, step: '0.01', min: 0, max: 100, style: { width: '100%' } });
     const amt  = h('div', { 'data-k': 'amt', style: { textAlign: 'right', fontFamily: 'monospace' } }, '₹0.00');
     const del  = h('button', { class: 'btn xs ghost danger', type: 'button', onclick: () => { row.remove(); recompute(); } }, '✕');
-    [qty, pr, dp, gst].forEach(el => el.addEventListener('input', recompute));
-    row._desc = desc; row._qty = qty; row._pr = pr; row._dp = dp; row._gst = gst;
+    [qty, pr, dp].forEach(el => el.addEventListener('input', recompute));
+    row._desc = desc; row._qty = qty; row._pr = pr; row._dp = dp;
     row._prodSel = prodSel;
     row._imageUrl = initialImg || null;
-    const sno = h('div', { style: { textAlign: 'center', fontWeight: 600, color: '#64748b' } }, '—');
-    row._sno = sno;
-    row.appendChild(sno); row.appendChild(imgWrap); row.appendChild(prodSel); row.appendChild(desc); row.appendChild(qty); row.appendChild(pr); row.appendChild(dp); row.appendChild(gst); row.appendChild(amt); row.appendChild(del);
+    row.appendChild(imgWrap); row.appendChild(prodSel); row.appendChild(desc); row.appendChild(qty); row.appendChild(pr); row.appendChild(dp); row.appendChild(amt); row.appendChild(del);
     // QUOTE_FULLPAGE_v1: insertBefore the add-button so new rows land
     // ABOVE it and the button stays anchored at the bottom of the list.
     if (addBtn && addBtn.parentNode === itemsWrap) itemsWrap.insertBefore(row, addBtn);
@@ -12859,8 +12849,8 @@ async function openQuotationModal(qid, prefillLead) {
     return row;
   }
   // Header row
-  itemsWrap.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '32px 48px 1fr 1.5fr 1.2fr 1.1fr .8fr .8fr 1.1fr 28px', gap: '.4rem', fontSize: '.78rem', color: '#64748b', marginBottom: '.3rem', fontWeight: 600 } },
-    h('div', { style: { textAlign: 'center' } }, 'S.No'), h('div', {}, 'Image'), h('div', {}, 'Product'), h('div', {}, 'Description'), h('div', {}, 'Qty'), h('div', {}, 'Unit price'), h('div', {}, 'Disc %'), h('div', {}, 'GST%'),
+  itemsWrap.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '48px 1fr 1.5fr 1.2fr 1.1fr .9fr 1.1fr 28px', gap: '.4rem', fontSize: '.78rem', color: '#64748b', marginBottom: '.3rem', fontWeight: 600 } },
+    h('div', {}, 'Image'), h('div', {}, 'Product'), h('div', {}, 'Description'), h('div', {}, 'Qty'), h('div', {}, 'Unit price'), h('div', {}, 'Disc %'),
     h('div', { style: { textAlign: 'right' } }, 'Amount'), h('div', {})
   ));
   // QUOTE_FULLPAGE_v1: create addBtn FIRST so addItem can insertBefore it.
@@ -12961,10 +12951,8 @@ async function openQuotationModal(qid, prefillLead) {
         quantity: Number(row._qty.value || 0),
         unit_price: Number(row._pr.value || 0),
         discount_pct: Number(row._dp.value || 0),
-        gst_pct: Number(row._gst.value || 0),
         product_id: pid,
-        product_image_url: sendImg,
-        hsn_sac: ''
+        product_image_url: sendImg
       };
     }).filter(it => it.description);
     try {
@@ -28150,14 +28138,10 @@ async function adminRules() {
     wrap.appendChild(aiCard);
 
     // ---- Call → Lead conversion (mobile app caller-id) ----
-    // CALL_LEAD_DEFAULT_OFF_v1 — flipped both defaults from ON to OFF.
-    // Admin must actively opt in; a tenant with NULL config never silently
-    // auto-creates leads from inbound calls. NULL-heal autosave fires
-    // further down so the DB row gets written to '0' on first load.
+    // CALL_LEAD_DEFAULT_OFF_v1 — default flipped to '0'. Admin must opt in.
     const callIn  = String(cfg.CALLS_AUTOLEAD_INBOUND  == null ? '0' : cfg.CALLS_AUTOLEAD_INBOUND ) === '1';
+    const _callInWasNull = cfg.CALLS_AUTOLEAD_INBOUND == null;
     const callOut = String(cfg.CALLS_AUTOLEAD_OUTBOUND == null ? '0' : cfg.CALLS_AUTOLEAD_OUTBOUND) === '1';
-    const _callInWasNull  = cfg.CALLS_AUTOLEAD_INBOUND  == null;
-    const _callOutWasNull = cfg.CALLS_AUTOLEAD_OUTBOUND == null;
     const callMin = Number(cfg.CALLS_AUTOLEAD_MIN_SECONDS || 5);
     const callStId = String(cfg.CALLS_AUTOLEAD_STATUS_ID || '');
     let _statuses = [];
@@ -28167,7 +28151,7 @@ async function adminRules() {
     callCard.appendChild(h('p', { class: 'muted' },
       'When a rep using the mobile app gets a call (or makes one) from a number that\'s ',
       h('b', {}, 'not yet in the CRM'),
-      ", auto-create a lead with the chosen status. Both inbound and outbound are OFF by default — tick the boxes below to opt in. Even with these OFF, every call still appears in Call Activity; you can convert any of them to a lead manually from there."
+      ', auto-create a lead with the chosen status. Inbound is ON by default; outbound is OFF (most outbound calls are to known leads already).'
     ));
 
     const inChk = h('input', { type: 'checkbox', checked: callIn ? 'checked' : null });
@@ -28266,16 +28250,6 @@ async function adminRules() {
       callSaveBtn, callStatusBadge
     ));
     wrap.appendChild(callCard);
-
-    /* CALL_LEAD_DEFAULT_OFF_v1 — NULL-heal autosave on load.
-       If either CALLS_AUTOLEAD_INBOUND or CALLS_AUTOLEAD_OUTBOUND were
-       NULL when this page loaded, the UI defaults to UNCHECKED but the
-       backend still defaults to whatever the config helper returns.
-       Persist an explicit '0' to the DB once so admin's UI state matches
-       the server's behaviour permanently — no more NULL/default drift. */
-    if (_callInWasNull || _callOutWasNull) {
-      setTimeout(() => { try { _saveCallCfgNow('heal'); } catch (_) {} }, 800);
-    }
   } catch (_) { /* config endpoint missing — older deploy, skip silently */ }
 
   const rules = await api('api_rules_list');
@@ -28557,28 +28531,6 @@ const TEAM_STATE_META = {
 };
 const TEAM_STATE_ORDER = ['on_call','on_task','wrapping_up','on_break','idle','checked_out','logged_out','never_logged_in'];
 
-/* TEAM_STATUS_SCOPE_v1 (client) — only render live-status rows for users the
- * requester is mapped to. CRM.cache.users is already server-scoped via
- * getVisibleUserIds (admin=all, manager/team_leader=subtree, sales=self), so
- * filtering against it mirrors the backend mapping with no extra fetch.
- * Fails CLOSED to self-only if the roster hasn't loaded yet, so the widget
- * never momentarily flashes the whole org. NOTE: this is defense-in-depth —
- * authoritative enforcement belongs in the api_team_liveStatus handler
- * (see TEAM_STATUS_PERMISSION_PATCH.md), since unscoped data would still be
- * visible in the browser network tab without that server-side patch. */
-function _scopeTeamData(data) {
-  try {
-    if (!data || !Array.isArray(data.users)) return data;
-    const roster = (CRM.cache && Array.isArray(CRM.cache.users)) ? CRM.cache.users : [];
-    const allow = new Set(roster.map(u => Number(u.id)));
-    if (CRM.user && CRM.user.id != null) allow.add(Number(CRM.user.id)); // always see self
-    const users = data.users.filter(u => allow.has(Number(u.id)));
-    const summary = {};
-    users.forEach(u => { summary[u.state] = (summary[u.state] || 0) + 1; });
-    return Object.assign({}, data, { users: users, summary: summary });
-  } catch (_) { return data; }
-}
-
 function _initials(name) {
   return String(name || '?').trim().split(/\s+/).slice(0, 2).map(p => p[0] || '').join('').toUpperCase() || '?';
 }
@@ -28777,7 +28729,7 @@ VIEWS.teamlive = async (view) => {
   window._tlvRefresh = async () => {
     try {
       const r = await api('api_team_liveStatus', {});
-      lastData = _scopeTeamData(r);
+      lastData = r;
       _applyClientFilter();
     } catch (e) {
       body.innerHTML = '';
@@ -37371,6 +37323,105 @@ function _initFloatingChat() {
   window._toggleChatDock = () => fab.click();
 }
 
+// ============================================================
+// MOBILE_WA_FAB_v1 (2026-06-10) — Floating WhatsApp button for mobile.
+// The desktop floating chat dock (_initFloatingChat) is intentionally
+// skipped on the APK because of its 8s thread-list poll (perf killer
+// on cheap phones). But users still want a one-tap WhatsApp shortcut.
+// This is a lightweight FAB — no polling, no dock, just a draggable
+// green button that navigates to the WhatsBot view (in-CRM inbox).
+// Mirrors the Copilot ✨ FAB pattern: bottom-left default (Copilot is
+// bottom-right), drag-to-reposition, position persisted per-device.
+// ============================================================
+function _initMobileWaFab() {
+  if (document.getElementById('wa-mobile-fab')) return;
+  if (typeof CRM === 'undefined' || !CRM.user) return;
+  // Only render on mobile / APK — the desktop already has _initFloatingChat
+  // covering this need with a full chat dock.
+  let isMobile = false;
+  try { isMobile = (window.innerWidth < 900); } catch (_) {}
+  if (!_IS_APK && !isMobile) return;
+
+  const fab = document.createElement('button');
+  fab.id = 'wa-mobile-fab';
+  fab.title = 'WhatsApp inbox — drag to reposition, tap to open';
+  fab.style.cssText = `
+    position: fixed; bottom: 84px; left: 16px;
+    width: 56px; height: 56px; border-radius: 50%;
+    border: none; cursor: grab; z-index: 9988;
+    background: linear-gradient(135deg, #25d366 0%, #128c7e 100%);
+    color: #fff; font-size: 28px;
+    box-shadow: 0 6px 20px rgba(37, 211, 102, 0.5);
+    display: flex; align-items: center; justify-content: center;
+    touch-action: none; user-select: none;
+  `;
+  // Inline SVG WhatsApp glyph (white on green) — same shape Meta uses.
+  fab.innerHTML = '<svg width="30" height="30" viewBox="0 0 32 32" fill="#fff" xmlns="http://www.w3.org/2000/svg"><path d="M16 .8C7.6.8.8 7.6.8 16c0 2.7.7 5.3 2 7.6L.8 31.2l7.8-2c2.2 1.2 4.7 1.8 7.4 1.8 8.4 0 15.2-6.8 15.2-15.2S24.4.8 16 .8zm0 27.6c-2.4 0-4.6-.6-6.6-1.8l-.5-.3-4.6 1.2 1.2-4.5-.3-.5C4 20.5 3.2 18.3 3.2 16 3.2 9 9 3.2 16 3.2S28.8 9 28.8 16 23 28.4 16 28.4zm7.3-9.6c-.4-.2-2.4-1.2-2.8-1.3-.4-.1-.6-.2-.9.2-.3.4-1 1.3-1.3 1.5-.2.3-.5.3-.9.1-.4-.2-1.7-.6-3.3-2-1.2-1.1-2-2.4-2.2-2.8-.2-.4 0-.6.2-.8.2-.2.4-.5.5-.7.2-.2.2-.4.4-.6.1-.3 0-.5 0-.7-.1-.2-.9-2.1-1.2-2.9-.3-.8-.6-.7-.9-.7h-.7c-.3 0-.7.1-1 .5-.3.4-1.3 1.3-1.3 3.1 0 1.9 1.3 3.6 1.5 3.9.2.3 2.6 4 6.4 5.6.9.4 1.6.6 2.1.8.9.3 1.7.2 2.4.1.7-.1 2.4-1 2.7-1.9.3-1 .3-1.8.2-1.9-.1-.2-.4-.3-.8-.4z"/></svg>';
+  fab.dataset.positioned = '';
+
+  // Restore saved position (proportional to viewport so it scales).
+  try {
+    const raw = localStorage.getItem('crm.waMobileFab.pos');
+    if (raw) {
+      const p = JSON.parse(raw);
+      const W = window.innerWidth, H = window.innerHeight;
+      const leftPx = Math.max(8, Math.min(W - 64, Math.round((p.leftPct || 0) * W)));
+      const topPx  = Math.max(8, Math.min(H - 64, Math.round((p.topPct  || 0) * H)));
+      fab.style.left   = leftPx + 'px';
+      fab.style.top    = topPx  + 'px';
+      fab.style.right  = 'auto';
+      fab.style.bottom = 'auto';
+      fab.dataset.positioned = 'user';
+    }
+  } catch (_) {}
+
+  // Drag handlers — pointer events so it works on touch + mouse.
+  let dragging = false, dragMoved = false, sx = 0, sy = 0, sLeft = 0, sTop = 0;
+  fab.addEventListener('pointerdown', (e) => {
+    dragging = true; dragMoved = false;
+    const r = fab.getBoundingClientRect();
+    sLeft = r.left; sTop = r.top; sx = e.clientX; sy = e.clientY;
+    fab.setPointerCapture(e.pointerId);
+    fab.style.cursor = 'grabbing';
+  });
+  fab.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const dx = e.clientX - sx, dy = e.clientY - sy;
+    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) dragMoved = true;
+    const W = window.innerWidth, H = window.innerHeight;
+    const nl = Math.max(8, Math.min(W - 64, sLeft + dx));
+    const nt = Math.max(8, Math.min(H - 64, sTop  + dy));
+    fab.style.left = nl + 'px';
+    fab.style.top  = nt + 'px';
+    fab.style.right = 'auto';
+    fab.style.bottom = 'auto';
+    fab.dataset.positioned = 'user';
+  });
+  fab.addEventListener('pointerup', (e) => {
+    if (!dragging) return;
+    dragging = false;
+    fab.style.cursor = 'grab';
+    if (dragMoved) {
+      const r = fab.getBoundingClientRect();
+      try {
+        localStorage.setItem('crm.waMobileFab.pos', JSON.stringify({
+          leftPct: r.left / window.innerWidth,
+          topPct:  r.top  / window.innerHeight
+        }));
+      } catch (_) {}
+    } else {
+      // Tap → navigate to in-CRM WhatsApp inbox
+      try {
+        if (typeof navigateTo === 'function') navigateTo('whatsbot');
+        else location.hash = '#/whatsbot';
+      } catch (_) { location.hash = '#/whatsbot'; }
+    }
+  });
+  fab.addEventListener('pointercancel', () => { dragging = false; fab.style.cursor = 'grab'; });
+
+  document.body.appendChild(fab);
+}
+
 // DASH_STICKY_v2 — pinned floating dashboard widget(s). Tenant can pin
 // up to 4 widgets at once, each as its own draggable + resizable card.
 // Each pin remembers its own type, position, size, date filter scope,
@@ -37951,7 +38002,7 @@ function _initStickyWidget() {
   function start() {
     let n = 0;
     const t = setInterval(() => {
-      if (typeof CRM !== 'undefined' && CRM.user) { _initCrmCopilot(); _initFloatingChat(); _initStickyWidget(); _initChangelog(); _initNewFeaturesTour(); _initPerfBadge(); clearInterval(t); }
+      if (typeof CRM !== 'undefined' && CRM.user) { _initCrmCopilot(); _initFloatingChat(); _initMobileWaFab(); _initStickyWidget(); _initChangelog(); _initNewFeaturesTour(); _initPerfBadge(); clearInterval(t); }
       else if (++n > 120) clearInterval(t);
     }, 500);
   }
@@ -49332,4 +49383,36 @@ VIEWS.ecorders = async (view) => {
       h('th', {}, 'Courier'), h('th', {}, 'AWB'), h('th', {}, 'Status')
     )),
     h('tbody', {}, data.orders.map(o => {
-      const itemDesc = (o.items || []).map(i => i.qty + 'x ' + (i.name || i.sku
+      const itemDesc = (o.items || []).map(i => i.qty + 'x ' + (i.name || i.sku)).join(', ');
+      return h('tr', {},
+        h('td', {}, h('strong', {}, o.order_id || '—')),
+        h('td', {}, o._lead && o._lead.name || '—'),
+        h('td', {}, itemDesc || '—'),
+        h('td', {}, _packFmtINR(o.order_value)),
+        h('td', {}, _packIndPill(o.payment_status, o.payment_status === 'paid' ? '#10b981' : '#f59e0b')),
+        h('td', {}, o.courier_partner || '—'),
+        h('td', {}, o.awb || '—'),
+        h('td', {}, _packIndPill(o.status, STATUS_COLOR[o.status] || '#6b7280'))
+      );
+    }))
+  );
+  view.appendChild(tbl);
+};
+
+// Stub views — other pack sidebar items show "coming soon" instead of nothing.
+['finpremiums', 'finclaims', 'finrenewals',
+ 'solarquotes', 'solarinstalls', 'solarsubsidies', 'solaramc',
+ 'mfgproduction', 'mfgdispatch', 'mfgreceivables',
+ 'tourpackages', 'tourupcoming', 'tourvouchers',
+ 'eccarts', 'ecreturns', 'ecloyalty'].forEach(id => {
+  if (!VIEWS[id]) {
+    VIEWS[id] = async (view) => {
+      view.innerHTML = '';
+      view.appendChild(h('h2', {}, 'Industry Pack'));
+      view.appendChild(h('div', { class: 'card', style: { padding: '1.5rem', textAlign: 'center' } },
+        h('p', {}, '🚧 This pack-specific view is being built.'),
+        h('p', { class: 'muted' }, 'Backend APIs and dummy data are already available — call them directly while we ship the polished UI.')
+      ));
+    };
+  }
+});
