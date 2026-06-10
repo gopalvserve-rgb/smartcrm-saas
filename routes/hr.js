@@ -1473,4 +1473,10 @@ module.exports = {
   api_leaves_mine, api_leaves_apply, api_leaves_pending, api_leaves_decide, api_leaves_all,
   api_tasks_list, api_tasks_save, api_tasks_complete, api_tasks_doneToday,
   api_salary_mine, api_salary_list, api_salary_save,
-  api_salary_bulkS
+  api_salary_bulkSave, api_salary_report, api_salary_payslip,
+  api_bank_mine, api_bank_save, api_bank_list,
+  api_location_ping, api_location_trail,
+  api_tracking_dayTrail, api_tracking_teamLive,
+  api_reimburse_policy, api_reimburse_policy_save,
+  api_reimburse_monthly, api_reimburse_teamMonth, api_reimburse_markPaid
+};
