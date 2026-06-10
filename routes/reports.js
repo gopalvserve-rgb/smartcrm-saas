@@ -741,12 +741,18 @@ async function api_reports_callRatingByUser(token, filters) {
   if (filters.to)   { where.push(`lr.created_at <= $${p++}`); params.push(filters.to);   }
   if (filters.userId) { where.push(`lr.user_id = $${p++}`); params.push(Number(filters.userId)); }
 
-  // Visibility scope
-  if (me.role === 'sales' || me.role === 'employee') {
-    where.push(`lr.user_id = $${p++}`); params.push(me.id);
+  // DASHBOARD_SCOPE_v1 — Visibility scope for call ratings.
+  if (me.role === 'admin') {
+    // admin sees all — no WHERE added
+  } else if (me.role === 'manager') {
+    const mgrVisible = await getVisibleUserIds(me);
+    where.push(`lr.user_id = ANY($${p++})`); params.push(mgrVisible);
   } else if (me.role === 'team_leader') {
     where.push(`(lr.user_id = $${p} OR lr.user_id IN (SELECT id FROM users WHERE parent_id = $${p}))`);
     params.push(me.id); p++;
+  } else {
+    // sales, employee, custom roles — own data only
+    where.push(`lr.user_id = $${p++}`); params.push(me.id);
   }
 
   const sql = `
