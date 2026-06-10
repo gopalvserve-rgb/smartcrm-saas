@@ -37264,6 +37264,105 @@ function _initFloatingChat() {
   window._toggleChatDock = () => fab.click();
 }
 
+// ============================================================
+// MOBILE_WA_FAB_v1 (2026-06-10) — Floating WhatsApp button for mobile.
+// The desktop floating chat dock (_initFloatingChat) is intentionally
+// skipped on the APK because of its 8s thread-list poll (perf killer
+// on cheap phones). But users still want a one-tap WhatsApp shortcut.
+// This is a lightweight FAB — no polling, no dock, just a draggable
+// green button that navigates to the WhatsBot view (in-CRM inbox).
+// Mirrors the Copilot ✨ FAB pattern: bottom-left default (Copilot is
+// bottom-right), drag-to-reposition, position persisted per-device.
+// ============================================================
+function _initMobileWaFab() {
+  if (document.getElementById('wa-mobile-fab')) return;
+  if (typeof CRM === 'undefined' || !CRM.user) return;
+  // Only render on mobile / APK — the desktop already has _initFloatingChat
+  // covering this need with a full chat dock.
+  let isMobile = false;
+  try { isMobile = (window.innerWidth < 900); } catch (_) {}
+  if (!_IS_APK && !isMobile) return;
+
+  const fab = document.createElement('button');
+  fab.id = 'wa-mobile-fab';
+  fab.title = 'WhatsApp inbox — drag to reposition, tap to open';
+  fab.style.cssText = `
+    position: fixed; bottom: 84px; left: 16px;
+    width: 56px; height: 56px; border-radius: 50%;
+    border: none; cursor: grab; z-index: 9988;
+    background: linear-gradient(135deg, #25d366 0%, #128c7e 100%);
+    color: #fff; font-size: 28px;
+    box-shadow: 0 6px 20px rgba(37, 211, 102, 0.5);
+    display: flex; align-items: center; justify-content: center;
+    touch-action: none; user-select: none;
+  `;
+  // Inline SVG WhatsApp glyph (white on green) — same shape Meta uses.
+  fab.innerHTML = '<svg width="30" height="30" viewBox="0 0 32 32" fill="#fff" xmlns="http://www.w3.org/2000/svg"><path d="M16 .8C7.6.8.8 7.6.8 16c0 2.7.7 5.3 2 7.6L.8 31.2l7.8-2c2.2 1.2 4.7 1.8 7.4 1.8 8.4 0 15.2-6.8 15.2-15.2S24.4.8 16 .8zm0 27.6c-2.4 0-4.6-.6-6.6-1.8l-.5-.3-4.6 1.2 1.2-4.5-.3-.5C4 20.5 3.2 18.3 3.2 16 3.2 9 9 3.2 16 3.2S28.8 9 28.8 16 23 28.4 16 28.4zm7.3-9.6c-.4-.2-2.4-1.2-2.8-1.3-.4-.1-.6-.2-.9.2-.3.4-1 1.3-1.3 1.5-.2.3-.5.3-.9.1-.4-.2-1.7-.6-3.3-2-1.2-1.1-2-2.4-2.2-2.8-.2-.4 0-.6.2-.8.2-.2.4-.5.5-.7.2-.2.2-.4.4-.6.1-.3 0-.5 0-.7-.1-.2-.9-2.1-1.2-2.9-.3-.8-.6-.7-.9-.7h-.7c-.3 0-.7.1-1 .5-.3.4-1.3 1.3-1.3 3.1 0 1.9 1.3 3.6 1.5 3.9.2.3 2.6 4 6.4 5.6.9.4 1.6.6 2.1.8.9.3 1.7.2 2.4.1.7-.1 2.4-1 2.7-1.9.3-1 .3-1.8.2-1.9-.1-.2-.4-.3-.8-.4z"/></svg>';
+  fab.dataset.positioned = '';
+
+  // Restore saved position (proportional to viewport so it scales).
+  try {
+    const raw = localStorage.getItem('crm.waMobileFab.pos');
+    if (raw) {
+      const p = JSON.parse(raw);
+      const W = window.innerWidth, H = window.innerHeight;
+      const leftPx = Math.max(8, Math.min(W - 64, Math.round((p.leftPct || 0) * W)));
+      const topPx  = Math.max(8, Math.min(H - 64, Math.round((p.topPct  || 0) * H)));
+      fab.style.left   = leftPx + 'px';
+      fab.style.top    = topPx  + 'px';
+      fab.style.right  = 'auto';
+      fab.style.bottom = 'auto';
+      fab.dataset.positioned = 'user';
+    }
+  } catch (_) {}
+
+  // Drag handlers — pointer events so it works on touch + mouse.
+  let dragging = false, dragMoved = false, sx = 0, sy = 0, sLeft = 0, sTop = 0;
+  fab.addEventListener('pointerdown', (e) => {
+    dragging = true; dragMoved = false;
+    const r = fab.getBoundingClientRect();
+    sLeft = r.left; sTop = r.top; sx = e.clientX; sy = e.clientY;
+    fab.setPointerCapture(e.pointerId);
+    fab.style.cursor = 'grabbing';
+  });
+  fab.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const dx = e.clientX - sx, dy = e.clientY - sy;
+    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) dragMoved = true;
+    const W = window.innerWidth, H = window.innerHeight;
+    const nl = Math.max(8, Math.min(W - 64, sLeft + dx));
+    const nt = Math.max(8, Math.min(H - 64, sTop  + dy));
+    fab.style.left = nl + 'px';
+    fab.style.top  = nt + 'px';
+    fab.style.right = 'auto';
+    fab.style.bottom = 'auto';
+    fab.dataset.positioned = 'user';
+  });
+  fab.addEventListener('pointerup', (e) => {
+    if (!dragging) return;
+    dragging = false;
+    fab.style.cursor = 'grab';
+    if (dragMoved) {
+      const r = fab.getBoundingClientRect();
+      try {
+        localStorage.setItem('crm.waMobileFab.pos', JSON.stringify({
+          leftPct: r.left / window.innerWidth,
+          topPct:  r.top  / window.innerHeight
+        }));
+      } catch (_) {}
+    } else {
+      // Tap → navigate to in-CRM WhatsApp inbox
+      try {
+        if (typeof navigateTo === 'function') navigateTo('whatsbot');
+        else location.hash = '#/whatsbot';
+      } catch (_) { location.hash = '#/whatsbot'; }
+    }
+  });
+  fab.addEventListener('pointercancel', () => { dragging = false; fab.style.cursor = 'grab'; });
+
+  document.body.appendChild(fab);
+}
+
 // DASH_STICKY_v2 — pinned floating dashboard widget(s). Tenant can pin
 // up to 4 widgets at once, each as its own draggable + resizable card.
 // Each pin remembers its own type, position, size, date filter scope,
@@ -37844,7 +37943,7 @@ function _initStickyWidget() {
   function start() {
     let n = 0;
     const t = setInterval(() => {
-      if (typeof CRM !== 'undefined' && CRM.user) { _initCrmCopilot(); _initFloatingChat(); _initStickyWidget(); _initChangelog(); _initNewFeaturesTour(); _initPerfBadge(); clearInterval(t); }
+      if (typeof CRM !== 'undefined' && CRM.user) { _initCrmCopilot(); _initFloatingChat(); _initMobileWaFab(); _initStickyWidget(); _initChangelog(); _initNewFeaturesTour(); _initPerfBadge(); clearInterval(t); }
       else if (++n > 120) clearInterval(t);
     }, 500);
   }

@@ -313,3 +313,12 @@ SELECT 'fix',
        '📞',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Incoming calls — auto-create lead toggle now fully respected (empty-string trap)');
+
+-- 2026-06-10 MOBILE_WA_FAB_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'Mobile app — floating WhatsApp button on every screen',
+       'Open the WhatsApp inbox from anywhere in the mobile app with a single tap. A green floating WhatsApp button now sits on every screen of the mobile / APK version (lower-left corner by default, alongside the Copilot sparkle on the lower-right). Tap it once to jump to the WhatsApp Bot view and start chatting with leads. Long-press and drag to move it wherever you like — the position is remembered per device. Doesn''t affect desktop, where the existing floating chat dock continues to handle the same job.',
+       '💬',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Mobile app — floating WhatsApp button on every screen');
