@@ -295,3 +295,12 @@ SELECT 'feature',
        '🔐',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Live Team Status — now controlled from the Permissions matrix');
+
+-- 2026-06-10 QUOTE_SNO_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'Quotations — line items now numbered (1, 2, 3, …)',
+       'When a quote has multiple products it was easy to lose track of which row was which, especially on the printed PDF version. We''ve added a small S.No column on the very left of the items table — every product now gets a running number (1, 2, 3, …) in front of it. The PDF download path already had numbering. No setting to change — every new render of an existing or new quote shows the column.',
+       '🔢',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Quotations — line items now numbered (1, 2, 3, …)');

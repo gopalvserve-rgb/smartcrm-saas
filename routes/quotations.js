@@ -453,7 +453,8 @@ async function _renderHtml(quotation, items, brandConfig) {
   const _sizeKey = (brandConfig && brandConfig.QUOTATION_PRODUCT_IMAGE_SIZE) || 'large';
   const _sizes = { hidden: 0, small: 60, medium: 110, large: 180, xl: 260 };
   const _imgPx = Number.isFinite(_sizes[_sizeKey]) ? _sizes[_sizeKey] : _sizes.large;
-  const itemsHtml = items.map(it => {
+  // QUOTE_SNO_v1 (2026-06-10) — number each line item in a leading S.No column
+  const itemsHtml = items.map((it, _i) => {
     const img = (it.product_image_url && _imgPx > 0)
       ? `<div style="text-align:center;margin-bottom:6px"><img src="${_esc(it.product_image_url)}" alt="" style="max-width:${_imgPx}px;max-height:${_imgPx}px;width:auto;height:auto;object-fit:contain;border-radius:6px;border:1px solid #e2e8f0;background:#fff;padding:4px;display:inline-block"/></div>`
       : '';
@@ -462,6 +463,7 @@ async function _renderHtml(quotation, items, brandConfig) {
       : `<td style="text-align:right">—</td>`;
     return `
     <tr>
+      <td style="text-align:center;vertical-align:top;font-weight:600;color:#475569">${_i + 1}</td>
       <td>${img}<div style="font-weight:500;line-height:1.4">${_esc(it.description)}</div></td>
       <td style="text-align:right">${Number(it.quantity || 0)}</td>
       <td style="text-align:right">${fmt(it.unit_price)}</td>
@@ -541,6 +543,7 @@ async function _renderHtml(quotation, items, brandConfig) {
   </div>
   <table class="items">
     <thead><tr>
+      <th style="text-align:center;width:42px">S.No</th>
       <th>Description</th>
       <th style="text-align:right">Qty</th>
       <th style="text-align:right">Unit price</th>
@@ -548,7 +551,7 @@ async function _renderHtml(quotation, items, brandConfig) {
       <th style="text-align:right">GST</th>
       <th style="text-align:right">Amount</th>
     </tr></thead>
-    <tbody>${itemsHtml || '<tr><td colspan="6" style="text-align:center;color:#94a3b8">No line items</td></tr>'}</tbody>
+    <tbody>${itemsHtml || '<tr><td colspan="7" style="text-align:center;color:#94a3b8">No line items</td></tr>'}</tbody>
   </table>
   <div class="totals">
     <div><span>Subtotal</span><span>${fmt(q.subtotal)}</span></div>
