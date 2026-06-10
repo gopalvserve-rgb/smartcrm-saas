@@ -63,6 +63,9 @@ User wants modals to **only** close via Close button (avoids losing typed data).
 ### 3.4 Per-tenant config cache (60s TTL) in `routes/recordings.js`
 `_autoleadCfgByTenant` caches CALLS_AUTOLEAD_* for 60 seconds **keyed by tenant dbName** (was a singleton, fixed in SHIPUNCLE_CALL_LEAD_v1). When you add a config-mutating endpoint, **bust the cache** — see `_clearAutoleadCfgCache` exported from recordings.js, called by `api_admin_setConfig` in routes/admin.js. SC_CALL_LEAD_AUTOSAVE_v1.
 
+### 3.4b The empty-string config trap — DON'T use `String(v || 'default')`
+Older save paths sometimes wrote `""` to the config table when the SPA sent `false`/`0`/`undefined`. Reading code like `String(inb || '1')` flips `""` back to `'1'` (the default) — even though the user explicitly saved OFF. **SPA shows OFF, backend behaves as ON.** Bit us twice (Shipuncle 2026-06-02, then trinetra/sa-palss-prop 2026-06-10). **Always read config booleans with explicit comparison**: `(String(inb) === '1') ? '1' : '0'`. Never the `|| 'default'` fallback. Same trap applies to `Number(v) || default` (since `Number('')` is `0`). CALL_LEAD_EMPTYSTR_FIX_v1.
+
 ### 3.5 Save buttons that users miss
 Cards with their own dedicated `💾 Save` button are forgotten by admins who think toggling = saving. **Prefer auto-save on `onchange`** with a clear `✓ Saved · HH:MM:SS` indicator. Keep a manual Save button as belt-and-braces. The Google Conv Export Sheet card and the Call→Lead card both got rebuilt this way.
 
@@ -253,4 +256,21 @@ These are **standing orders** — don't re-do or undo them:
 ### "User wants to port feature from smartcrm-saas to Celeste/Stockbox"
 1. Clone the destination repo (PAT path above).
 2. Diff the relevant SPA section + route file.
-3. Watch for: single-tenant routes don't have `tenantStorage`, modal CSS class names sometimes diverge, 
+3. Watch for: single-tenant routes don't have `tenantStorage`, modal CSS class names sometimes diverge, cache key location differs (`public/index.html` not `public/tenant/index.html`).
+4. Bump cache key + add changelog row + push.
+
+### "Railway hasn't deployed"
+1. Open Railway dashboard for the relevant project (`intuitive-charm` for smartcrm-saas).
+2. Check Deployments tab — failed builds show up red.
+3. Common: orphan comment text causing JS syntax error (HOTFIX v4 pattern). Run `node --check public/tenant/app.js` locally before committing.
+
+---
+
+## 15. How to use this doc
+
+- **At session start:** read this file (and only this file) to bootstrap.
+- **When you learn something new** that future-you should know: edit this doc and commit it.
+- **When this doc disagrees with the actual code:** trust the code, then fix this doc.
+- **When this doc gets too long:** split a section into its own deep doc and link to it from here.
+
+That's it. Go.
