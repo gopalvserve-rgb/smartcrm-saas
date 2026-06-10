@@ -115,7 +115,7 @@ async function _getAutoleadCfg() {
   if (hit && (now - hit.at) < 60000) return hit.val;
   const [mode, inb, out, statusId, onDup] = await Promise.all([
     db.getConfig('CALLS_AUTOLEAD_MODE', 'auto'),
-    db.getConfig('CALLS_AUTOLEAD_INBOUND', '1'),
+    db.getConfig('CALLS_AUTOLEAD_INBOUND', '0'),
     db.getConfig('CALLS_AUTOLEAD_OUTBOUND', '0'),
     db.getConfig('CALLS_AUTOLEAD_STATUS_ID', '0'),
     // CALL_DUP_LEAD_v1 (2026-06-04) — what to do when a call comes from a
@@ -329,7 +329,7 @@ async function _processCallEventAsync(me, p, phoneClean, directionInitial, callE
   // ---- Auto-create-lead the MOMENT a call rings ----
   // Driven by the same tenant config the recording-upload handler uses,
   // so the policy stays consistent:
-  //   CALLS_AUTOLEAD_INBOUND   '1' / '0'  (default '1')
+  //   CALLS_AUTOLEAD_INBOUND   '1' / '0'  (default '0' — admin must opt in)
   //   CALLS_AUTOLEAD_OUTBOUND  '1' / '0'  (default '0')
   //   CALLS_AUTOLEAD_STATUS_ID numeric id (defaults to 'New' status)
   // Previously this only ran on recording upload — minutes after the call
@@ -773,11 +773,12 @@ async function api_call_lookup(token, phone) {
     // config the recording-upload handler uses.
     let willAutoCreate = false;
     try {
-      const cfgIn  = await db.getConfig('CALLS_AUTOLEAD_INBOUND',  '1');
-      const cfgOut = await db.getConfig('CALLS_AUTOLEAD_OUTBOUND', '0');
+      // CALL_LEAD_DEFAULT_OFF_v1 — go through the shared helper so all
+      // call → lead paths agree, with fail-safe '0' defaults when DB is NULL.
+      const cfg = await _getAutoleadCfg();
       // We don't know the call direction at lookup time (this is fired on ring),
       // so 'will auto-create' = either inbound OR outbound is enabled.
-      willAutoCreate = String(cfgIn) === '1' || String(cfgOut) === '1';
+      willAutoCreate = String(cfg.inbound) === '1' || String(cfg.outbound) === '1';
     } catch (_) {}
     return { match: false, phone, will_auto_create: willAutoCreate };
   }
@@ -901,13 +902,13 @@ async function api_call_handleEnded(token, payload) {
 
   // ---- Auto-create-lead policy ----
   // Driven by tenant config (Settings → Mobile app → Call → Lead conversion).
-  //   CALLS_AUTOLEAD_INBOUND   '1' / '0'  (default '1' — inbound creates leads)
+  //   CALLS_AUTOLEAD_INBOUND   '1' / '0'  (default '0' — admin must opt in)
   //   CALLS_AUTOLEAD_OUTBOUND  '1' / '0'  (default '0' — outbound stays manual)
   //   CALLS_AUTOLEAD_MIN_SECONDS  number  (default 5; 0 = create even for missed)
   //   CALLS_AUTOLEAD_STATUS_ID  numeric id (defaults to the 'New' status)
   // The mobile app sends direction = 'in' | 'out' | 'missed'. We treat
   // 'missed' as inbound for the YES/NO setting so YES catches missed too.
-  const cfgIn   = await db.getConfig('CALLS_AUTOLEAD_INBOUND', '1');
+  const cfgIn   = await db.getConfig('CALLS_AUTOLEAD_INBOUND', '0');
   const cfgOut  = await db.getConfig('CALLS_AUTOLEAD_OUTBOUND', '0');
   const cfgMin  = Number(await db.getConfig('CALLS_AUTOLEAD_MIN_SECONDS', '5')) || 0;
   const cfgStId = Number(await db.getConfig('CALLS_AUTOLEAD_STATUS_ID', '0')) || 0;
@@ -1394,7 +1395,7 @@ async function api_recording_selftest(token) {
 
   // Phase: check auto-create-lead policy config.
   try {
-    const cfgIn  = await db.getConfig('CALLS_AUTOLEAD_INBOUND', '1');
+    const cfgIn  = await db.getConfig('CALLS_AUTOLEAD_INBOUND', '0');
     const cfgOut = await db.getConfig('CALLS_AUTOLEAD_OUTBOUND', '0');
     _info('autolead_config', 'CALLS_AUTOLEAD_INBOUND=' + cfgIn + ' · CALLS_AUTOLEAD_OUTBOUND=' + cfgOut + ' — unmatched recordings auto-create a lead when the matching flag is "1"');
   } catch (e) { _info('autolead_config', 'config read failed: ' + e.message); }

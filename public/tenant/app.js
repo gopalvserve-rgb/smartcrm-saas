@@ -4430,7 +4430,9 @@ const LEAD_COLUMNS = [
   { key: 'whatsapp_msg', label: 'Last WhatsApp', default: true }, /* LEAD_LIST_WA_v1 */
   { key: 'notes',       label: 'Notes',         default: false },
   { key: 'city',        label: 'City',          default: false },
-  { key: 'created',     label: 'Created',       default: true }
+  { key: 'created',     label: 'Created',       default: true },
+  /* LEAD_LIST_UPDATED_v1 — last-updated timestamp column. Off by default. */
+  { key: 'updated',     label: 'Last Updated',  default: false }
 ];
 
 VIEWS.leads = async (view) => {
@@ -6183,6 +6185,20 @@ function renderCell(col, l, statuses) {
       return h('td', { class: 'cell-notes', style: { maxWidth: '260px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: txt ? 'pointer' : 'default' }, title: txt || '(no notes)', onclick: ev => { ev.stopPropagation(); openLeadModal(l.id); } }, preview);
     }
     case 'city':    return h('td', {}, l.city || '');
+    case 'updated': {
+      /* LEAD_LIST_UPDATED_v1 — last time the row was touched. Falls back
+         to last_status_change_at then created_at when updated_at is null. */
+      const _u = l.updated_at || l.last_status_change_at || l.created_at;
+      const _d2 = _u ? new Date(_u) : null;
+      if (!_d2 || isNaN(_d2.getTime())) return h('td', { class: 'muted' }, '');
+      const _dateStr2 = _d2.toLocaleDateString();
+      const _timeStr2 = _d2.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const _rel = (typeof fmtDate === 'function') ? fmtDate(_u, 'relative') : '';
+      return h('td', { class: 'muted', style: { whiteSpace: 'nowrap' }, title: _rel },
+        h('div', {}, _dateStr2),
+        h('div', { style: { fontSize: '.74rem', opacity: '.75' } }, _timeStr2)
+      );
+    }
     case 'created': {
       // Two-line cell: date on top, time below in muted/smaller. Keeps the
       // column compact while surfacing the time the lead came in — useful
@@ -11442,21 +11458,31 @@ async function renderFollowupSection(view, key) {
  */
 async function renderNewTodayLeads(view) {
   view.innerHTML = '';
-  // IST today, formatted YYYY-MM-DD
-  const tzFmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' });
-  const today = tzFmt.format(new Date());
-  // Fetch leads filtered by created_at = today on the server.
+  // NEW_HEADER_ALL_v1 — surface ALL leads with status='New', any date.
+  if (!CRM.cache || !CRM.cache.statuses) {
+    try { await warmCache(); } catch (_) {}
+  }
+  const _stsAll = (CRM.cache && CRM.cache.statuses) || [];
+  const _newSt = _stsAll.find(s => String(s.name || '').trim().toLowerCase() === 'new')
+              || _stsAll.find(s => String(s.name || '').trim().toLowerCase().startsWith('new '));
+  const _newStId = _newSt ? Number(_newSt.id) : null;
   let rows = [];
   try {
-    const r = await api('api_leads_list', { from: today, to: today, page_size: 500 });
-    // api_leads_list returns { leads: [...], total, status_count, page, page_size }
+    const payload = { page_size: 500 };
+    if (_newStId) payload.status_id = _newStId;
+    const r = await api('api_leads_list', payload);
     rows = (r && r.leads) || (r && r.rows) || [];
   } catch (e) { /* fall through */ }
   const wrap = h('div', { class: 'card' },
-    h('h3', {}, '✨ New leads today ', h('span', { class: 'chip-count accent' }, rows.length))
+    h('h3', {}, '✨ All new leads ', h('span', { class: 'chip-count accent' }, rows.length))
   );
+  if (!_newStId) {
+    wrap.appendChild(h('p', { class: 'muted' }, "No status named 'New' is configured."));
+    view.appendChild(wrap);
+    return;
+  }
   if (!rows.length) {
-    wrap.appendChild(h('p', { class: 'muted' }, 'No new leads yet today.'));
+    wrap.appendChild(h('p', { class: 'muted' }, 'No leads in the New status right now.'));
     view.appendChild(wrap);
     return;
   }
@@ -28112,7 +28138,9 @@ async function adminRules() {
     wrap.appendChild(aiCard);
 
     // ---- Call → Lead conversion (mobile app caller-id) ----
-    const callIn  = String(cfg.CALLS_AUTOLEAD_INBOUND  == null ? '1' : cfg.CALLS_AUTOLEAD_INBOUND ) === '1';
+    // CALL_LEAD_DEFAULT_OFF_v1 — default flipped to '0'. Admin must opt in.
+    const callIn  = String(cfg.CALLS_AUTOLEAD_INBOUND  == null ? '0' : cfg.CALLS_AUTOLEAD_INBOUND ) === '1';
+    const _callInWasNull = cfg.CALLS_AUTOLEAD_INBOUND == null;
     const callOut = String(cfg.CALLS_AUTOLEAD_OUTBOUND == null ? '0' : cfg.CALLS_AUTOLEAD_OUTBOUND) === '1';
     const callMin = Number(cfg.CALLS_AUTOLEAD_MIN_SECONDS || 5);
     const callStId = String(cfg.CALLS_AUTOLEAD_STATUS_ID || '');
