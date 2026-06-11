@@ -412,6 +412,39 @@ const TOOLS = [
       due_at:     { type: 'string', description: 'ISO date or natural string like "2026-06-12 14:00". Required.' },
       note:       { type: 'string' }
     }, required: ['due_at'] }
+  },
+  { name: 'bulk_edit_custom_field',
+    description: "BULK EDIT: set a custom field value on multiple EXISTING leads matching a filter. Use when admin says 'set Company GST to Pending for all Meta leads', 'mark Source Type as Direct for all New leads', 'bulk update custom field X to Y'. Acts on existing leads NOW.",
+    parameters: { type: 'object', properties: {
+      cf_key:        { type: 'string', description: 'Custom field key (the storage key, e.g. company_gst).' },
+      cf_value:      { type: 'string', description: 'New value to set.' },
+      filter_status: { type: 'string' },
+      filter_source: { type: 'string' },
+      filter_from:   { type: 'string' },
+      filter_to:     { type: 'string' }
+    }, required: ['cf_key', 'cf_value'] }
+  },
+  { name: 'bulk_add_tag',
+    description: "BULK ACTION: add a tag to multiple EXISTING leads matching a filter. Use when admin says 'tag all Meta leads as hot', 'add tag VIP to all leads from Pallabhi', 'mark these as priority'. Tag must already exist in tag library.",
+    parameters: { type: 'object', properties: {
+      tag_name:      { type: 'string', description: 'Tag to add (e.g. hot, vip, priority). Case-insensitive.' },
+      filter_status: { type: 'string' },
+      filter_source: { type: 'string' },
+      filter_owner:  { type: 'string', description: 'Lead owner name to filter by.' },
+      filter_from:   { type: 'string' },
+      filter_to:     { type: 'string' }
+    }, required: ['tag_name'] }
+  },
+  { name: 'bulk_assign_campaign',
+    description: "BULK ACTION: assign multiple EXISTING leads to a campaign. Use when admin says 'add all New Meta leads to campaign Q3 push', 'put these leads in campaign X', 'attach all unassigned leads to campaign Meta Drive'.",
+    parameters: { type: 'object', properties: {
+      campaign_name: { type: 'string' },
+      filter_status: { type: 'string' },
+      filter_source: { type: 'string' },
+      filter_owner:  { type: 'string' },
+      filter_from:   { type: 'string' },
+      filter_to:     { type: 'string' }
+    }, required: ['campaign_name'] }
   }
 
 ];
@@ -482,6 +515,9 @@ const ACTION_TOOLS = new Set([
   'set_tat_rule',
   'create_campaign',
   'set_lead_followup',
+  'bulk_edit_custom_field',
+  'bulk_add_tag',
+  'bulk_assign_campaign',
 ]);
 
 async function _actionsEnabled() {
@@ -727,6 +763,98 @@ async function _buildPreview(toolName, args, ctx) {
       { label: 'Note', value: a.note || '—' },
     ];
     explain = (lead && due) ? 'Got it. Here is the follow-up I will schedule:' : 'Missing required info — please retry.';
+  }
+  else if (toolName === 'bulk_edit_custom_field') {
+    const params = []; let where = '1=1';
+    if (a.filter_status) {
+      const sid = await _resolveStatusId(a.filter_status);
+      if (sid) { params.push(sid); where += ` AND status_id = $${params.length}`; }
+    }
+    if (a.filter_source) { params.push(a.filter_source); where += ` AND LOWER(source) = LOWER($${params.length})`; }
+    if (a.filter_from)   { params.push(new Date(a.filter_from).toISOString()); where += ` AND created_at >= $${params.length}`; }
+    if (a.filter_to)     { params.push(new Date(new Date(a.filter_to).getTime() + 86400000).toISOString()); where += ` AND created_at < $${params.length}`; }
+    let count = 0;
+    try { const r = await db.query(`SELECT COUNT(*)::int AS c FROM leads WHERE ${where}`, params); count = Number(r.rows[0]?.c || 0); } catch (_) {}
+    const key = String(a.cf_key || '').toLowerCase().replace(/[^a-z0-9_]/g, '_');
+    title = 'Bulk edit custom field';
+    rows = [
+      { label: 'Matches', value: count.toLocaleString('en-IN') + ' lead(s)' },
+      { label: 'Filter', value: [
+          a.filter_status ? 'status = ' + a.filter_status : null,
+          a.filter_source ? 'source = ' + a.filter_source : null,
+          a.filter_from ? 'from ' + a.filter_from : null,
+          a.filter_to ? 'to ' + a.filter_to : null,
+        ].filter(Boolean).join(' / ') || 'ALL leads' },
+      { label: 'Field', value: key || '(missing)' },
+      { label: 'New value', value: a.cf_value || '(empty)' },
+    ];
+    explain = (count === 0) ? 'No leads match — nothing to update.' : 'Got it. Here is the bulk custom-field edit I will run:';
+  }
+  else if (toolName === 'bulk_add_tag') {
+    const params = []; let where = '1=1';
+    if (a.filter_status) {
+      const sid = await _resolveStatusId(a.filter_status);
+      if (sid) { params.push(sid); where += ` AND status_id = $${params.length}`; }
+    }
+    if (a.filter_source) { params.push(a.filter_source); where += ` AND LOWER(source) = LOWER($${params.length})`; }
+    if (a.filter_owner) {
+      const [u] = await _resolveUsersByName([a.filter_owner]);
+      if (u && u.id) { params.push(u.id); where += ` AND assigned_to = $${params.length}`; }
+    }
+    if (a.filter_from)   { params.push(new Date(a.filter_from).toISOString()); where += ` AND created_at >= $${params.length}`; }
+    if (a.filter_to)     { params.push(new Date(new Date(a.filter_to).getTime() + 86400000).toISOString()); where += ` AND created_at < $${params.length}`; }
+    let count = 0;
+    try { const r = await db.query(`SELECT COUNT(*)::int AS c FROM leads WHERE ${where}`, params); count = Number(r.rows[0]?.c || 0); } catch (_) {}
+    const tagName = String(a.tag_name || '').trim();
+    let tagExists = false;
+    try { const r = await db.query(`SELECT 1 FROM tag_library WHERE LOWER(name) = LOWER($1) LIMIT 1`, [tagName]); tagExists = r.rowCount > 0; } catch (_) {}
+    title = 'Bulk add tag';
+    rows = [
+      { label: 'Matches', value: count.toLocaleString('en-IN') + ' lead(s)' },
+      { label: 'Filter', value: [
+          a.filter_status ? 'status = ' + a.filter_status : null,
+          a.filter_source ? 'source = ' + a.filter_source : null,
+          a.filter_owner ? 'owner = ' + a.filter_owner : null,
+          a.filter_from ? 'from ' + a.filter_from : null,
+          a.filter_to ? 'to ' + a.filter_to : null,
+        ].filter(Boolean).join(' / ') || 'ALL leads' },
+      { label: 'Tag', value: tagExists ? tagName : ('⚠ "' + tagName + '" not in tag library — add it to Settings → Tags first') },
+    ];
+    explain = (!tagExists || count === 0) ? (!tagExists ? 'Tag not found in library.' : 'No leads match — nothing to tag.') : 'Got it. Here is the bulk tag action I will run:';
+  }
+  else if (toolName === 'bulk_assign_campaign') {
+    let campId = null, campName = null;
+    try {
+      const r = await db.query(`SELECT id, name FROM campaigns WHERE LOWER(name) = LOWER($1) LIMIT 1`, [String(a.campaign_name || '').trim()]);
+      if (r.rows[0]) { campId = r.rows[0].id; campName = r.rows[0].name; }
+    } catch (_) {}
+    const params = []; let where = '1=1';
+    if (a.filter_status) {
+      const sid = await _resolveStatusId(a.filter_status);
+      if (sid) { params.push(sid); where += ` AND status_id = $${params.length}`; }
+    }
+    if (a.filter_source) { params.push(a.filter_source); where += ` AND LOWER(source) = LOWER($${params.length})`; }
+    if (a.filter_owner) {
+      const [u] = await _resolveUsersByName([a.filter_owner]);
+      if (u && u.id) { params.push(u.id); where += ` AND assigned_to = $${params.length}`; }
+    }
+    if (a.filter_from)   { params.push(new Date(a.filter_from).toISOString()); where += ` AND created_at >= $${params.length}`; }
+    if (a.filter_to)     { params.push(new Date(new Date(a.filter_to).getTime() + 86400000).toISOString()); where += ` AND created_at < $${params.length}`; }
+    let count = 0;
+    try { const r = await db.query(`SELECT COUNT(*)::int AS c FROM leads WHERE ${where}`, params); count = Number(r.rows[0]?.c || 0); } catch (_) {}
+    title = 'Bulk assign to campaign';
+    rows = [
+      { label: 'Matches', value: count.toLocaleString('en-IN') + ' lead(s)' },
+      { label: 'Filter', value: [
+          a.filter_status ? 'status = ' + a.filter_status : null,
+          a.filter_source ? 'source = ' + a.filter_source : null,
+          a.filter_owner ? 'owner = ' + a.filter_owner : null,
+          a.filter_from ? 'from ' + a.filter_from : null,
+          a.filter_to ? 'to ' + a.filter_to : null,
+        ].filter(Boolean).join(' / ') || 'ALL leads' },
+      { label: 'Campaign', value: campId ? (campName + ' (#' + campId + ')') : ('⚠ "' + a.campaign_name + '" not found') },
+    ];
+    explain = (!campId || count === 0) ? (!campId ? 'Campaign not found.' : 'No leads match — nothing to assign.') : 'Got it. Here is the bulk campaign assignment I will run:';
   }
   else {
     return { _refuse: 'Unknown action tool: ' + toolName };
@@ -996,6 +1124,79 @@ async function _executePendingAction(row, ctx) {
     });
     await db.query(`UPDATE leads SET next_followup_at = $1 WHERE id = $2`, [due.toISOString(), leadId]);
     return { ok: true, followup_id: id, message: 'Follow-up scheduled for lead #' + leadId + ' on ' + due.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) + '.' };
+  }
+
+  if (tool === 'bulk_edit_custom_field') {
+    const key = String(a.cf_key || '').toLowerCase().replace(/[^a-z0-9_]/g, '_');
+    if (!key) throw new Error('cf_key required');
+    const params = []; let where = '1=1';
+    if (a.filter_status) {
+      const sid = await _resolveStatusId(a.filter_status);
+      if (sid) { params.push(sid); where += ` AND status_id = $${params.length}`; }
+    }
+    if (a.filter_source) { params.push(a.filter_source); where += ` AND LOWER(source) = LOWER($${params.length})`; }
+    if (a.filter_from)   { params.push(new Date(a.filter_from).toISOString()); where += ` AND created_at >= $${params.length}`; }
+    if (a.filter_to)     { params.push(new Date(new Date(a.filter_to).getTime() + 86400000).toISOString()); where += ` AND created_at < $${params.length}`; }
+    const lr = await db.query(`SELECT id, extra_json FROM leads WHERE ${where}`, params);
+    let n = 0;
+    for (const ld of lr.rows) {
+      let curr = {};
+      try { curr = ld.extra_json ? JSON.parse(ld.extra_json) : {}; } catch (_) {}
+      curr[key] = String(a.cf_value == null ? '' : a.cf_value);
+      await db.update('leads', ld.id, { extra_json: JSON.stringify(curr) });
+      n++;
+    }
+    return { ok: true, updated: n, message: 'Custom field "' + key + '" set to "' + a.cf_value + '" on ' + n + ' lead(s).' };
+  }
+
+  if (tool === 'bulk_add_tag') {
+    const tagName = String(a.tag_name || '').trim();
+    if (!tagName) throw new Error('tag_name required');
+    const tr = await db.query(`SELECT name FROM tag_library WHERE LOWER(name) = LOWER($1) LIMIT 1`, [tagName]);
+    if (!tr.rows[0]) throw new Error('Tag "' + tagName + '" not found. Add it under Settings → Tags first.');
+    const canonical = tr.rows[0].name;
+    const params = []; let where = '1=1';
+    if (a.filter_status) {
+      const sid = await _resolveStatusId(a.filter_status);
+      if (sid) { params.push(sid); where += ` AND status_id = $${params.length}`; }
+    }
+    if (a.filter_source) { params.push(a.filter_source); where += ` AND LOWER(source) = LOWER($${params.length})`; }
+    if (a.filter_owner) {
+      const [u] = await _resolveUsersByName([a.filter_owner]);
+      if (u && u.id) { params.push(u.id); where += ` AND assigned_to = $${params.length}`; }
+    }
+    if (a.filter_from)   { params.push(new Date(a.filter_from).toISOString()); where += ` AND created_at >= $${params.length}`; }
+    if (a.filter_to)     { params.push(new Date(new Date(a.filter_to).getTime() + 86400000).toISOString()); where += ` AND created_at < $${params.length}`; }
+    const lr = await db.query(`SELECT id, tags FROM leads WHERE ${where}`, params);
+    let n = 0;
+    for (const ld of lr.rows) {
+      const existing = String(ld.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+      if (existing.some(t => t.toLowerCase() === canonical.toLowerCase())) continue;
+      existing.push(canonical);
+      await db.update('leads', ld.id, { tags: existing.join(',') });
+      n++;
+    }
+    return { ok: true, tagged: n, message: 'Tag "' + canonical + '" added to ' + n + ' lead(s) (skipped any that already had it).' };
+  }
+
+  if (tool === 'bulk_assign_campaign') {
+    const cr = await db.query(`SELECT id, name FROM campaigns WHERE LOWER(name) = LOWER($1) LIMIT 1`, [String(a.campaign_name || '').trim()]);
+    if (!cr.rows[0]) throw new Error('Campaign "' + a.campaign_name + '" not found');
+    const campId = cr.rows[0].id;
+    const params = [campId]; let where = '1=1';
+    if (a.filter_status) {
+      const sid = await _resolveStatusId(a.filter_status);
+      if (sid) { params.push(sid); where += ` AND status_id = $${params.length}`; }
+    }
+    if (a.filter_source) { params.push(a.filter_source); where += ` AND LOWER(source) = LOWER($${params.length})`; }
+    if (a.filter_owner) {
+      const [u] = await _resolveUsersByName([a.filter_owner]);
+      if (u && u.id) { params.push(u.id); where += ` AND assigned_to = $${params.length}`; }
+    }
+    if (a.filter_from)   { params.push(new Date(a.filter_from).toISOString()); where += ` AND created_at >= $${params.length}`; }
+    if (a.filter_to)     { params.push(new Date(new Date(a.filter_to).getTime() + 86400000).toISOString()); where += ` AND created_at < $${params.length}`; }
+    const r = await db.query(`UPDATE leads SET campaign_id = $1 WHERE ${where} RETURNING id`, params);
+    return { ok: true, assigned: r.rowCount, message: r.rowCount + ' lead(s) assigned to campaign "' + cr.rows[0].name + '".' };
   }
 
   throw new Error('Unknown tool: ' + tool);
