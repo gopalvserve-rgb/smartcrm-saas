@@ -547,28 +547,33 @@ async function _executePendingAction(row, ctx) {
   const a    = row.args_json || {};
 
   if (tool === 'create_autoassign_rule') {
+    // SCHEMA_FIX_v1: real lead-routing table is `assignment_rules`
+    // (single-condition: field/operator/value/assigned_to/priority).
+    // The SPA's Settings -> Auto-Assign Rules tab reads from THIS table,
+    // not the ghost `auto_assign_rules` we used earlier.
     const assignees = await _resolveUsersByName(a.assignees);
     const ids       = assignees.filter(u => u.id).map(u => u.id);
     if (!ids.length) throw new Error('No valid assignees');
-    const dist  = (a.distribution || 'round_robin').toLowerCase();
-    const cond  = {};
-    if (a.when_source) cond.source = a.when_source;
-    if (a.when_status) cond.status = a.when_status;
-    await db.query(`CREATE TABLE IF NOT EXISTS auto_assign_rules (
-      id            SERIAL PRIMARY KEY,
-      name          TEXT NOT NULL,
-      conditions    JSONB NOT NULL DEFAULT '{}'::jsonb,
-      user_ids      JSONB NOT NULL DEFAULT '[]'::jsonb,
-      distribution  TEXT NOT NULL DEFAULT 'round_robin',
-      is_active     INTEGER NOT NULL DEFAULT 1,
-      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )`).catch(() => {});
-    const r = await db.query(
-      `INSERT INTO auto_assign_rules (name, conditions, user_ids, distribution, is_active)
-       VALUES ($1, $2::jsonb, $3::jsonb, $4, 1) RETURNING id`,
-      [ a.name || 'Untitled rule', JSON.stringify(cond), JSON.stringify(ids), dist ]
-    );
-    return { ok: true, rule_id: r.rows[0].id, message: 'Rule active. Next matching lead routes via ' + dist.replace('_', '-') + '.' };
+    // Pick the primary condition. Schema only supports ONE field/op/value
+    // per rule — multi-condition would need a separate rule per condition.
+    let field, operator, value;
+    if (a.when_source)      { field = 'source'; operator = 'contains'; value = String(a.when_source); }
+    else if (a.when_status) { field = 'status'; operator = 'equals';   value = String(a.when_status); }
+    else                    { field = 'name';   operator = 'is_not_empty'; value = ''; }
+    const payload = {
+      name: a.name || 'Untitled rule',
+      field, operator, value,
+      assigned_to: ids.join(','),
+      priority: 100,
+      is_active: 1
+    };
+    const id = await db.insert('assignment_rules', payload);
+    const names = assignees.filter(u => u.id).map(u => u.name).join(' / ');
+    return {
+      ok: true,
+      rule_id: id,
+      message: 'Rule active. Matching leads route to ' + names + ' (round-robin if multiple).'
+    };
   }
 
   if (tool === 'reassign_leads_bulk') {
