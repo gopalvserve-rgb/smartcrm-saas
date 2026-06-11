@@ -147,7 +147,24 @@ function computeCost(inputTokens, outputTokens, settings) {
  *     raw_status:    int|null,
  *   }
  */
+// SHOWCASE_AI_KILL_v1 — read the CURRENT tenant's config (db is tenant-scoped
+// via attachTenant middleware) and short-circuit AI calls on showcase/demo
+// tenants so prospects clicking "AI Audit", Copilot, Quick Note, etc never
+// burn Gemini money. Set per tenant via config key DEMO_TENANT=1.
+const db = require('../db/pg');
+async function _isDemoTenant() {
+  try {
+    const r = await db.findOneBy('config', 'key', 'DEMO_TENANT').catch(() => null);
+    return r && String(r.value) === '1';
+  } catch (_) { return false; }
+}
+
 async function generate(args) {
+  if (await _isDemoTenant()) {
+    return { ok: false, text: '', model: '', input_tokens: 0, output_tokens: 0,
+             cost_usd: 0, cost_inr_real: 0, cost_inr_billed: 0,
+             finish_reason: null, error: 'AI features are disabled on showcase / demo tenants to control cost.', raw_status: null };
+  }
   const settings = await loadSettings();
   if (!settings) {
     return { ok: false, text: '', model: '', input_tokens: 0, output_tokens: 0,
@@ -349,6 +366,11 @@ async function logUsage({ tenant_slug, tenant_id, call_kind, phone, lead_id, wa_
  *            tools_called: [{ name, args, result }], error }
  */
 async function generateWithTools(args) {
+  if (await _isDemoTenant()) {
+    return { ok: false, text: '', model: '', input_tokens: 0, output_tokens: 0,
+             cost_usd: 0, cost_inr_real: 0, cost_inr_billed: 0,
+             tools_called: [], error: 'AI features are disabled on showcase / demo tenants to control cost.' };
+  }
   const settings = await loadSettings();
   if (!settings) {
     return { ok: false, text: '', model: '', input_tokens: 0, output_tokens: 0,
