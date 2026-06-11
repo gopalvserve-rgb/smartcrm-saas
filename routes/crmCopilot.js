@@ -533,6 +533,12 @@ async function _runActionTool(name, args, ctx) {
   if (!await _actionsEnabled()) {
     return { _refuse: 'Copilot write actions are in beta and not yet enabled for this tenant. Contact support to opt in.' };
   }
+  // CP_ACT_v1 SECURITY: admin-only — Copilot write actions touch tenant
+  // config (rules, statuses, sources, bulk lead reassignment). Sales and
+  // manager users get a polite refuse so they can't escalate via Copilot.
+  if (ctx.userRole !== 'admin') {
+    return { _refuse: 'This change can only be made by an admin. Please ask an admin to do it for you.' };
+  }
   return _buildPreview(name, args, ctx);
 }
 
@@ -1834,6 +1840,7 @@ async function api_copilot_confirm(token, confirm_token) {
   await _ensureTables();
   if (!confirm_token) throw new Error('confirm_token required');
   if (!await _actionsEnabled()) throw new Error('Copilot write actions are not enabled for this tenant.');
+  if (me.role !== 'admin') throw new Error('This change can only be confirmed by an admin.');
   const r = await db.query(
     `SELECT * FROM copilot_actions WHERE confirm_token = $1 AND user_id = $2 LIMIT 1`,
     [confirm_token, me.id]
