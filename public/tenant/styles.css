@@ -3910,3 +3910,27 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
     padding: 1.15rem 1.2rem !important;
   }
 }
+
+/* QNOTE_v1 — AI Quick Note row button + slash autocomplete + modal styling. */
+.ai-qnote-btn {
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #ec4899 100%) !important;
+  color: #fff !important;
+  border: none !important;
+  border-radius: 6px !important;
+  padding: 3px 8px !important;
+  font-size: 14px !important;
+  box-shadow: 0 1px 4px rgba(139, 92, 246, .35) !important;
+  transition: transform .12s, box-shadow .12s !important;
+  position: relative !important;
+}
+.ai-qnote-btn:hover {
+  transform: translateY(-1px) scale(1.05) !important;
+  box-shadow: 0 3px 10px rgba(139, 92, 246, .55) !important;
+}
+.qn-spark { display: inline-block; animation: qn-twinkle 2.2s infinite; }
+@keyframes qn-twinkle {
+  0%, 100% { transform: rotate(0) scale(1); }
+  50%      { transform: rotate(15deg) scale(1.15); }
+}
+.qn-slash-menu { z-index: 9999 !important; }
+.qn-slash-item { user-select: none; }

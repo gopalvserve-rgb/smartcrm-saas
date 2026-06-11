@@ -799,6 +799,11 @@ async function apiRaw(fn, ...args) {
   try {
     const r = await fetch('/config.json');
     if (r.ok) CRM.config = Object.assign(CRM.config, await r.json());
+    // QNOTE_v1 — lazy-fetch tenant gate for the AI Quick Note row icon.
+    try {
+      const qn = await api('api_leads_quickNote_status').catch(() => null);
+      if (qn && qn.enabled) CRM.config.QNOTE_ENABLED = 1;
+    } catch (_) {}
   } catch (_) {}
   // Apply tenant theme as EARLY as possible — before login screen renders
   // and before warmCache. Public api_admin_brand returns brand colours
@@ -6083,13 +6088,19 @@ function renderCell(col, l, statuses) {
           class: 'btn icon', title: 'Send WhatsApp from my number — pick a template',
           onclick: ev => { ev.stopPropagation(); openPersonalWaPicker(l); }
         }, '💬') : null,
-        // Calendly meeting link — opens WhatsApp with the rep's
-        // booking page pre-filled. Only shows if the rep has set
-        // a Calendly URL on their profile.
-        digits ? h('button', {
-          class: 'btn icon', title: 'Send Calendly meeting link via WhatsApp',
-          onclick: ev => { ev.stopPropagation(); sendCalendlyLink(l); }
-        }, '📅') : null
+        // QNOTE_v1 — ✨ AI Quick Note button. Shown only when tenant has
+        // COPILOT_ACTIONS_ENABLED=1 (vserve beta gate). On other tenants
+        // the legacy 📅 Calendly button stays so nothing breaks.
+        digits ? ((CRM.config && CRM.config.QNOTE_ENABLED)
+          ? h('button', {
+              class: 'btn icon ai-qnote-btn', title: 'AI Quick Note — type status + remark + follow-up time',
+              onclick: ev => { ev.stopPropagation(); openQuickNoteInline(l); }
+            }, '✨')
+          : h('button', {
+              class: 'btn icon', title: 'Send Calendly meeting link via WhatsApp',
+              onclick: ev => { ev.stopPropagation(); sendCalendlyLink(l); }
+            }, '📅')
+        ) : null
       );
     }
     case 'email':    return h('td', {}, l.email || '');
@@ -9718,6 +9729,173 @@ function remarksBlock(rs, leadId) {
   return h('div', { class: 'remarks-block' },
     h('h4', {}, 'Remarks'), list, textarea, btn
   );
+}
+
+// QNOTE_v1 — AI Quick Note inline modal.
+//   Opens a small input on each lead row. User types like a chat:
+//     "/Follow up call 3pm tomorrow he is interested"
+//   Slash-command shows status autocomplete from tenant statuses.
+//   AI parses time + remark via api_leads_quickNote.
+//   Reuses the same modal-backdrop styling as openRemarkInline so it
+//   feels native.
+async function openQuickNoteInline(lead) {
+  const statuses = (CRM.cache && CRM.cache.statuses) || [];
+  let pickedStatus = null;        // {id, name, color}
+  let menuOpen = false;
+  let menuActiveIdx = 0;
+
+  // ---- DOM scaffold ----
+  const chipWrap = h('div', { class: 'qn-chip-wrap', style: {
+    display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px',
+    background: '#fff', border: '1.5px solid #c7d2fe', borderRadius: '8px',
+    padding: '8px 10px', minHeight: '44px', position: 'relative'
+  }});
+  const input = h('input', { type: 'text', id: 'qn-input',
+    placeholder: 'Type / for status, then say what happened. e.g. follow up call 3pm tomorrow',
+    style: { flex: '1', minWidth: '160px', border: 'none', outline: 'none',
+             fontSize: '14px', padding: '4px 0', fontFamily: 'inherit', background: 'transparent' },
+    autocomplete: 'off'
+  });
+  const slashMenu = h('div', { class: 'qn-slash-menu', style: {
+    position: 'absolute', top: '100%', left: '0', right: '0',
+    maxWidth: '320px', background: '#fff', border: '1px solid #e2e8f0',
+    borderRadius: '8px', boxShadow: '0 8px 24px rgba(15,23,42,.15)',
+    marginTop: '4px', zIndex: '10', maxHeight: '220px', overflowY: 'auto',
+    display: 'none'
+  }});
+  chipWrap.appendChild(input);
+  chipWrap.appendChild(slashMenu);
+
+  const hint = h('div', { style: { fontSize: '11px', color: '#64748b', marginTop: '8px' } },
+    '⌨ Press ', h('kbd', { style: { background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: '4px', padding: '1px 6px', fontFamily: 'monospace', fontSize: '11px' } }, '/'),
+    ' for status · mention a time, or we\'ll use ', h('b', {}, '10:00 AM'), ' as default.'
+  );
+
+  const saveBtn = h('button', { class: 'btn primary', disabled: 'disabled' }, '✨ Save');
+  const cancelBtn = h('button', { class: 'btn' }, 'Cancel');
+  const statusLine = h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '6px' } }, '');
+
+  const modal = h('div', { class: 'modal-backdrop' }, h('div', { class: 'modal', style: { maxWidth: '520px' } },
+    h('h3', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+      h('span', { class: 'qn-spark' }, '✨'),
+      ' AI Quick Note — ',
+      h('span', { class: 'muted', style: { fontSize: '13px', fontWeight: 'normal' } }, lead.name || ('Lead #' + lead.id))
+    ),
+    chipWrap,
+    hint,
+    statusLine,
+    h('div', { class: 'actions', style: { marginTop: '12px' } }, cancelBtn, saveBtn)
+  ));
+
+  cancelBtn.onclick = () => modal.remove();
+
+  function updateSaveEnabled() {
+    const hasText = input.value.trim().length > 0;
+    saveBtn.disabled = !(pickedStatus || hasText) ? 'disabled' : null;
+  }
+
+  function renderChip() {
+    // Remove any existing chip and the input's left padding
+    const existing = chipWrap.querySelector('.qn-chip');
+    if (existing) existing.remove();
+    if (!pickedStatus) return;
+    const chip = h('span', { class: 'qn-chip', style: {
+      display: 'inline-flex', alignItems: 'center', gap: '5px',
+      background: pickedStatus.color || '#6366f1', color: '#fff',
+      padding: '3px 10px', borderRadius: '999px', fontSize: '12px', fontWeight: '600'
+    }},
+      pickedStatus.name,
+      h('span', { style: { cursor: 'pointer', opacity: '.85' },
+        onclick: ev => { ev.stopPropagation(); pickedStatus = null; renderChip(); updateSaveEnabled(); }
+      }, '×')
+    );
+    chipWrap.insertBefore(chip, input);
+  }
+
+  function showSlashMenu(filter) {
+    const matches = statuses.filter(s => !filter || String(s.name).toLowerCase().includes(filter));
+    if (!matches.length) { slashMenu.style.display = 'none'; menuOpen = false; return; }
+    slashMenu.innerHTML = '';
+    slashMenu.appendChild(h('div', { style: { fontSize: '10.5px', color: '#64748b', padding: '6px 12px', textTransform: 'uppercase', letterSpacing: '.04em', background: '#f8fafc' } },
+      '↑↓ navigate · Enter to pick · ' + matches.length + ' status' + (matches.length > 1 ? 'es' : '')));
+    matches.forEach((s, i) => {
+      const item = h('div', {
+        class: 'qn-slash-item' + (i === 0 ? ' active' : ''),
+        style: { padding: '8px 12px', cursor: 'pointer', display: 'flex',
+                 alignItems: 'center', gap: '8px', fontSize: '13px',
+                 borderBottom: i === matches.length - 1 ? 'none' : '1px solid #f1f5f9',
+                 background: i === 0 ? '#eef2ff' : '#fff' },
+        onclick: () => { pickedStatus = { id: s.id, name: s.name, color: s.color || '#6366f1' };
+                         input.value = ''; slashMenu.style.display = 'none'; menuOpen = false;
+                         renderChip(); updateSaveEnabled(); input.focus(); }
+      },
+        h('span', { style: { width: '10px', height: '10px', borderRadius: '50%', background: s.color || '#94a3b8' } }),
+        h('span', {}, s.name)
+      );
+      slashMenu.appendChild(item);
+    });
+    slashMenu.style.display = 'block';
+    menuOpen = true;
+    menuActiveIdx = 0;
+  }
+
+  function moveMenuActive(dir) {
+    const items = slashMenu.querySelectorAll('.qn-slash-item');
+    if (!items.length) return;
+    items[menuActiveIdx].classList.remove('active');
+    items[menuActiveIdx].style.background = '#fff';
+    menuActiveIdx = (menuActiveIdx + dir + items.length) % items.length;
+    items[menuActiveIdx].classList.add('active');
+    items[menuActiveIdx].style.background = '#eef2ff';
+    items[menuActiveIdx].scrollIntoView({ block: 'nearest' });
+  }
+
+  input.addEventListener('input', () => {
+    const v = input.value;
+    if (!pickedStatus && v.startsWith('/')) {
+      showSlashMenu(v.slice(1).toLowerCase().trim());
+    } else if (menuOpen) {
+      slashMenu.style.display = 'none'; menuOpen = false;
+    }
+    updateSaveEnabled();
+  });
+
+  input.addEventListener('keydown', (e) => {
+    if (menuOpen) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); moveMenuActive(1); return; }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); moveMenuActive(-1); return; }
+      if (e.key === 'Enter')     { e.preventDefault(); slashMenu.querySelectorAll('.qn-slash-item')[menuActiveIdx].click(); return; }
+      if (e.key === 'Escape')    { slashMenu.style.display = 'none'; menuOpen = false; return; }
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (!saveBtn.disabled) saveBtn.click();
+    } else if (e.key === 'Backspace' && input.value === '' && pickedStatus) {
+      e.preventDefault();
+      pickedStatus = null; renderChip(); updateSaveEnabled();
+    }
+  });
+
+  saveBtn.onclick = async () => {
+    saveBtn.disabled = 'disabled';
+    statusLine.textContent = '🤖 Saving…';
+    try {
+      const r = await api('api_leads_quickNote', {
+        lead_id: lead.id,
+        text: input.value.trim(),
+        picked_status_id: pickedStatus ? pickedStatus.id : null
+      });
+      toast(r.message || '✓ Saved', 'ok');
+      modal.remove();
+      if (typeof loadLeads === 'function') loadLeads();
+    } catch (e) {
+      statusLine.textContent = '';
+      saveBtn.disabled = null;
+      toast(e.message || 'Failed', 'err');
+    }
+  };
+
+  document.body.appendChild(modal);
+  setTimeout(() => input.focus(), 50);
 }
 
 async function openRemarkInline(leadId) {
