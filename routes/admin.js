@@ -63,6 +63,7 @@ const CONFIG_KEYS = [
   'THEME_SKIN', 'THEME_PALETTE',
   // CRM Copilot — per-user/day question quota (default 50).
   'COPILOT_DAILY_LIMIT_PER_USER',
+  'COPILOT_ACTIONS_ENABLED',  // CP_ACT_v1 vserve-only beta gate
   // Demo tenant flags — set by the showcase seeder. The SPA reads these
   // to enable the in-app tour and the 📚 floating button.
   'DEMO_TENANT', 'DEMO_TOUR_ENABLED',
