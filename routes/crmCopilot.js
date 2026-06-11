@@ -317,7 +317,7 @@ const TOOLS = [
     }, required: ['name', 'assignees'] }
   },
   { name: 'reassign_leads_bulk',
-    description: "ONE-TIME action: transfer existing leads to a user or split among users. Use when user says 'transfer', 'move', 'reassign these', 'give them to', 'distribute X to Y and Z'. Do NOT use this when user wants a standing rule for future leads - that's create_autoassign_rule.",
+    description: "ONE-TIME action: transfer LEAD OWNERSHIP from one user to another (or split among users). Use ONLY when the target is a PERSON / USER NAME. Trigger phrases: 'transfer to Amit', 'move to Rohan', 'reassign these to Pallabhi', 'give them to Neetu', 'distribute to Amit and Rohan'. Do NOT use this for STATUS CHANGES — phrases like 'change to Contacted', 'NP to Not Reachable', 'mark as Closed', 'all X to Y where Y is a status' belong to change_lead_status_bulk. Do NOT use for standing rules — that's create_autoassign_rule.",
     parameters: { type: 'object', properties: {
       filter_source: { type: 'string' }, filter_status: { type: 'string' },
       filter_from:   { type: 'string', description: 'YYYY-MM-DD' },
@@ -359,7 +359,7 @@ const TOOLS = [
     }, required: ['current_name'] }
   },
   { name: 'change_lead_status_bulk',
-    description: "ONE-TIME action: change the status of EXISTING leads matching a filter. Use when admin says 'change all New leads to Contacted', 'set Meta leads to In-Progress'. Acts on existing leads NOW only.",
+    description: "ONE-TIME action: change STATUS on existing leads matching a filter. Use whenever the target value is a STATUS NAME (not a user). Strong trigger patterns: 'change X to Y', 'mark X as Y', 'NP to Not Reachable', 'today's NP to Closed', 'all New leads to Contacted', 'set Meta leads to In-Progress', 'move all X status to Y status'. If the phrase 'X to Y' has Y as a status name (Not Reachable, Closed, Contacted, In-Progress, Junk, Hot, Cold, Won, Lost, Follow Up, NP, etc.), this is the correct tool — NOT reassign_leads_bulk (which is only for changing the assigned USER). Date filters supported: 'today', 'yesterday', specific dates.",
     parameters: { type: 'object', properties: {
       to_status:     { type: 'string' },
       from_status:   { type: 'string' },
@@ -2246,14 +2246,31 @@ async function api_copilot_ask(token, message, history) {
   const cpActBlock = actionsOn ? `
 
 WRITE ACTIONS (beta - enabled for this tenant):
-You can SET UP RULES and RUN OPERATIONS using the write tools (create_autoassign_rule, reassign_leads_bulk, create_status, create_source).
-- NEVER ask the user for confirmation yourself. The SYSTEM always shows a preview card with a Confirm button after you call the tool. Act decisively with sensible defaults.
-- INTENT CLASSIFICATION:
-  * "set up rule", "auto assign", "always", "going forward", "from now on", "any X lead should go to Y" => use create_autoassign_rule (no existing leads touched).
-  * "transfer", "move", "reassign these", "give them to", "distribute X to Y and Z" => use reassign_leads_bulk (acts on existing leads NOW).
-  * If ambiguous, prefer create_autoassign_rule (safer - doesn't disturb existing data).
-- Pick sensible defaults without asking: distribution=round_robin, scope=future. If user said "round robin" / "least loaded" / "50/50", honor it. If two users share a first name, pick the one whose role/team matches context.
-- When you call a write tool the result will contain {_preview: true, ...}. Write ONE short acknowledgement sentence like "Got it - here's the rule I'll set up:" then STOP. The SPA renders the preview card below your text and adds the Confirm button. DO NOT enumerate preview rows yourself.` : `
+You can SET UP RULES and RUN OPERATIONS using these write tools. NEVER ask the user for confirmation yourself — the SYSTEM always shows a preview card with a Confirm button after you call any write tool. Act decisively with sensible defaults.
+
+INTENT CLASSIFICATION — pick the correct tool by reading what TYPE of target the user named:
+- Target = a USER NAME (person) → reassign_leads_bulk. Phrases: "transfer to Amit", "move to Rohan", "give them to Pallabhi", "distribute to Amit and Rohan".
+- Target = a STATUS NAME → change_lead_status_bulk. Phrases: "change X to Y", "mark as Y", "NP to Not Reachable", "today's leads all NP to not reachable", "all New to Contacted". CRITICAL: if Y is a status (Not Reachable, Closed, Won, Lost, NP, Follow Up, Junk, Hot, Cold, etc.), this is the right tool — never reassign_leads_bulk.
+- Target = a TAG → bulk_add_tag. Phrases: "tag as hot", "mark as VIP", "add tag priority to all Meta leads".
+- Target = a CUSTOM FIELD value → bulk_edit_custom_field. Phrases: "set Company GST to Pending for all", "update custom field X to Y".
+- Target = a CAMPAIGN → bulk_assign_campaign. Phrases: "add to campaign Q3 push", "put in campaign Meta Drive".
+- "set up rule" / "auto assign" / "going forward" / "from now on" / "any future X" → create_autoassign_rule (FUTURE only).
+- "add user" / "create user" / "invite X as sales" → create_user.
+- "add status X" / "create status" → create_status. "rename status X" / "change color of status" → update_status.
+- "add source X" → create_source. "add product X" → create_product. "add custom field X" → create_custom_field.
+- "create campaign X" → create_campaign.
+- "set TAT for X to Y hours" → set_tat_rule.
+- "set follow-up for lead X to Y" / "remind me about lead X" → set_lead_followup.
+
+DISAMBIGUATION RULES:
+- "X to Y" pattern: look at Y. If Y is a person → reassign. If Y is a status → change_lead_status_bulk. If Y is a tag → bulk_add_tag.
+- If the user says "today's leads" or "today's X" — pass filter_from = today's date.
+- If ambiguous between standing-rule vs one-time, prefer the SAFER one (standing rule, which doesn't touch existing leads).
+- Status names are often short ("NP", "FU", "Hot", "Won") — these are NOT user names. Pattern: lowercase abbreviations or 2-3 word descriptors map to status, full proper nouns (Amit, Rohan, Pallabhi) map to users.
+
+Pick sensible defaults without asking: distribution=round_robin, scope=future. Honor user's stated preference if given.
+
+When you call a write tool the result will contain {_preview: true, ...}. Write ONE short acknowledgement sentence like "Got it - here's the change I'll make:" then STOP. The SPA renders the preview card below your text with the Confirm button. DO NOT enumerate preview rows yourself.` : `
 
 WRITE ACTIONS are NOT enabled for this tenant. If the user asks to create a rule, reassign leads, add a status, etc, politely tell them write-actions are in private beta and not yet enabled here.`;
   const system = `You are the CRM data assistant for ${company}.${cpActBlock}
