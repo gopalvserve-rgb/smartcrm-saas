@@ -34014,6 +34014,17 @@ function _initCrmCopilot() {
     try {
       const raw = localStorage.getItem('crm.copilotFab.pos');
       if (!raw) return;
+      // COPILOT_FAB_MOBILE_v1: on mobile/APK, IGNORE any saved drag position
+      // and let the responsive CSS default place it above the bottom nav.
+      // Desktop-stored positions don't translate to small screens — they often
+      // push the button off-screen or behind the topbar.
+      const isMobile = window.innerWidth < 780;
+      if (isMobile) {
+        fab.style.left = ''; fab.style.top = '';
+        fab.style.right = ''; fab.style.bottom = '';
+        fab.dataset.positioned = '';
+        return;
+      }
       const p = JSON.parse(raw);
       const W = window.innerWidth, H = window.innerHeight;
       // Position is stored as {leftPct, topPct} so it scales with viewport.

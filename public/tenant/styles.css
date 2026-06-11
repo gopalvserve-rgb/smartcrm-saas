@@ -2707,15 +2707,21 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
    Mobile: lift Copilot FAB above the bottom nav
    ========================================================== */
 @media (max-width: 780px) {
-  /* Bottom nav is ~60–72px tall (incl. safe-area). FAB sits at 88px
-     so it clears the nav with a comfortable gap. Same idea for the
-     drawer when it's open. */
+  /* COPILOT_FAB_MOBILE_v1 — FAB MUST be visible on mobile + APK.
+     Bottom nav (z-index 100) sits at ~60-72px incl. safe-area.
+     FAB sits at 88px+ so it clears it with a comfortable gap.
+     z-index lifted to 10001 to defeat any stacking context. */
   #copilot-fab {
+    display: flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
     bottom: calc(72px + env(safe-area-inset-bottom, 0px) + 12px) !important;
     right: 14px !important;
-    width: 50px !important;
-    height: 50px !important;
-    font-size: 20px !important;
+    width: 52px !important;
+    height: 52px !important;
+    font-size: 22px !important;
+    z-index: 10001 !important;
+    box-shadow: 0 8px 24px rgba(99,102,241,.55) !important;
   }
   #copilot-drawer {
     bottom: calc(72px + env(safe-area-inset-bottom, 0px) + 76px) !important;
@@ -2724,6 +2730,7 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
     width: auto !important;
     max-width: none !important;
     height: min(70vh, calc(100vh - 200px)) !important;
+    z-index: 10002 !important;
   }
   /* If a 📚 KB FAB is also present, lift it the same way and stagger
      it above the Copilot button. */
@@ -2731,6 +2738,7 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
   .copilot-secondary-fab {
     bottom: calc(72px + env(safe-area-inset-bottom, 0px) + 70px) !important;
     right: 14px !important;
+    z-index: 10001 !important;
   }
 }
 
