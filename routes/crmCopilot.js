@@ -28,7 +28,7 @@
 'use strict';
 
 const db = require('../db/pg');
-const { authUser } = require('../utils/auth');
+const { authUser, hashPassword } = require('../utils/auth');
 const gemini = require('../utils/geminiClient');
 const setupGuide = require('../utils/setupGuide');
 
@@ -337,6 +337,81 @@ const TOOLS = [
   { name: 'create_source',
     description: "Create a new lead source. Use when user says 'add source X', 'create new source called Y'.",
     parameters: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] }
+  },
+  { name: 'create_user',
+    description: "Create a new CRM user (employee). Use when admin says 'add user', 'create user', 'add employee', 'invite X as sales rep'. The system generates a secure 12-char password and surfaces it ONCE in the success message so admin can share it.",
+    parameters: { type: 'object', properties: {
+      name:  { type: 'string' },
+      email: { type: 'string' },
+      role:  { type: 'string', description: 'admin | manager | sales. Default sales.' },
+      phone: { type: 'string' },
+      department:  { type: 'string' },
+      designation: { type: 'string' }
+    }, required: ['name', 'email'] }
+  },
+  { name: 'update_status',
+    description: "Update an EXISTING lead status — rename, change color, or mark as terminal. Use when admin says 'rename status X to Y', 'change color of X to red', 'make X a final status'.",
+    parameters: { type: 'object', properties: {
+      current_name: { type: 'string' },
+      new_name:     { type: 'string' },
+      color:        { type: 'string' },
+      is_final:     { type: 'boolean' }
+    }, required: ['current_name'] }
+  },
+  { name: 'change_lead_status_bulk',
+    description: "ONE-TIME action: change the status of EXISTING leads matching a filter. Use when admin says 'change all New leads to Contacted', 'set Meta leads to In-Progress'. Acts on existing leads NOW only.",
+    parameters: { type: 'object', properties: {
+      to_status:     { type: 'string' },
+      from_status:   { type: 'string' },
+      filter_source: { type: 'string' },
+      filter_from:   { type: 'string' },
+      filter_to:     { type: 'string' }
+    }, required: ['to_status'] }
+  },
+  { name: 'create_product',
+    description: "Add a new product to the catalog. Use when admin says 'add product', 'create product called X', 'new product X at price Y'.",
+    parameters: { type: 'object', properties: {
+      name:        { type: 'string' },
+      description: { type: 'string' },
+      price:       { type: 'number' },
+      gst_pct:     { type: 'number', description: 'GST % (0-100). Default 0.' }
+    }, required: ['name'] }
+  },
+  { name: 'create_custom_field',
+    description: "Add a new custom field to leads. Use when admin says 'add custom field', 'create custom field for X', 'add a field called Company GST'.",
+    parameters: { type: 'object', properties: {
+      label:        { type: 'string', description: 'Display label, e.g. "Company GST"' },
+      key:          { type: 'string', description: 'Storage key (lowercase, underscores). Auto-generated from label if missing.' },
+      field_type:   { type: 'string', description: 'text | number | dropdown | date | boolean. Default text.' },
+      options:      { type: 'array', items: { type: 'string' }, description: 'For dropdown fields' },
+      is_required:  { type: 'boolean' },
+      show_in_list: { type: 'boolean' }
+    }, required: ['label'] }
+  },
+  { name: 'set_tat_rule',
+    description: "Set or update the TAT (turnaround time) threshold for a lead status. Use when admin says 'set TAT for X to N hours/minutes', 'change TAT of Follow Up to 24 hours'.",
+    parameters: { type: 'object', properties: {
+      status_name: { type: 'string' },
+      minutes:     { type: 'number', description: 'Threshold in minutes. Use 60 for 1 hour, 1440 for 1 day.' },
+      is_active:   { type: 'boolean', description: 'Whether the threshold is enabled. Default true.' }
+    }, required: ['status_name', 'minutes'] }
+  },
+  { name: 'create_campaign',
+    description: "Create a new campaign for organizing leads. Use when admin says 'create campaign', 'add campaign called X', 'new campaign for Meta leads'.",
+    parameters: { type: 'object', properties: {
+      name:              { type: 'string' },
+      distribution_mode: { type: 'string', description: 'on_demand | round_robin | conditional. Default on_demand.' },
+      manager_name:      { type: 'string', description: 'Manager user name. Optional.' }
+    }, required: ['name'] }
+  },
+  { name: 'set_lead_followup',
+    description: "Set a follow-up date for a specific lead. Use when admin says 'set follow-up for lead X to tomorrow', 'remind me about Amit on Friday', 'schedule follow-up with lead 42'.",
+    parameters: { type: 'object', properties: {
+      lead_id:    { type: 'number', description: 'Lead ID. Either lead_id OR lead_phone required.' },
+      lead_phone: { type: 'string', description: 'Lead phone to match. Optional alternative to lead_id.' },
+      due_at:     { type: 'string', description: 'ISO date or natural string like "2026-06-12 14:00". Required.' },
+      note:       { type: 'string' }
+    }, required: ['due_at'] }
   }
 
 ];
@@ -399,6 +474,14 @@ const ACTION_TOOLS = new Set([
   'reassign_leads_bulk',
   'create_status',
   'create_source',
+  'create_user',
+  'update_status',
+  'change_lead_status_bulk',
+  'create_product',
+  'create_custom_field',
+  'set_tat_rule',
+  'create_campaign',
+  'set_lead_followup',
 ]);
 
 async function _actionsEnabled() {
@@ -508,6 +591,142 @@ async function _buildPreview(toolName, args, ctx) {
     title = 'New lead source';
     rows = [{ label: 'Name', value: a.name || '(missing)' }];
     explain = 'Got it. Here is the source I will add:';
+  }
+  else if (toolName === 'create_user') {
+    const role = String(a.role || 'sales').toLowerCase();
+    title = 'New CRM user';
+    rows = [
+      { label: 'Name', value: a.name || '(missing)' },
+      { label: 'Email', value: a.email || '(missing)' },
+      { label: 'Role', value: role },
+      { label: 'Phone', value: a.phone || '—' },
+      { label: 'Department', value: a.department || '—' },
+      { label: 'Designation', value: a.designation || '—' },
+      { label: 'Password', value: 'auto-generated (shown after Confirm)' },
+    ];
+    explain = 'Got it. Here is the user I will add:';
+  }
+  else if (toolName === 'update_status') {
+    const cur = String(a.current_name || '').trim();
+    let existing = null;
+    try {
+      const r = await db.query(`SELECT id, name, color, is_final FROM statuses WHERE LOWER(name) = LOWER($1) LIMIT 1`, [cur]);
+      existing = r.rows[0] || null;
+    } catch (_) {}
+    title = 'Update lead status';
+    if (!existing) {
+      rows = [{ label: 'Find', value: '⚠ No status named "' + cur + '" exists.' }];
+    } else {
+      rows = [
+        { label: 'Current', value: existing.name + ' (id ' + existing.id + ')' },
+        { label: 'Rename', value: a.new_name && a.new_name !== existing.name ? ('→ ' + a.new_name) : '(no change)' },
+        { label: 'Color', value: a.color ? ('→ ' + a.color) : ('keep ' + (existing.color || '#6b7280')) },
+        { label: 'Terminal', value: typeof a.is_final === 'boolean' ? ('→ ' + (a.is_final ? 'Yes' : 'No')) : ('keep ' + (Number(existing.is_final) ? 'Yes' : 'No')) },
+      ];
+    }
+    explain = existing ? 'Got it. Here are the changes I will apply:' : 'No matching status found — please check the name.';
+  }
+  else if (toolName === 'change_lead_status_bulk') {
+    const toName = String(a.to_status || '').trim();
+    let toSid = null;
+    try { toSid = await _resolveStatusId(toName); } catch (_) {}
+    const params = [];
+    let where = '1=1';
+    if (a.from_status) {
+      const fSid = await _resolveStatusId(a.from_status);
+      if (fSid) { params.push(fSid); where += ` AND status_id = $${params.length}`; }
+    }
+    if (a.filter_source) { params.push(a.filter_source); where += ` AND LOWER(source) = LOWER($${params.length})`; }
+    if (a.filter_from)   { params.push(new Date(a.filter_from).toISOString()); where += ` AND created_at >= $${params.length}`; }
+    if (a.filter_to)     { params.push(new Date(new Date(a.filter_to).getTime() + 86400000).toISOString()); where += ` AND created_at < $${params.length}`; }
+    let count = 0;
+    try {
+      const r = await db.query(`SELECT COUNT(*)::int AS c FROM leads WHERE ${where}`, params);
+      count = Number(r.rows[0]?.c || 0);
+    } catch (_) {}
+    title = 'Bulk change lead status';
+    rows = [
+      { label: 'Matches', value: count.toLocaleString('en-IN') + ' lead(s)' },
+      { label: 'From filter', value: [
+          a.from_status ? 'status = ' + a.from_status : null,
+          a.filter_source ? 'source = ' + a.filter_source : null,
+          a.filter_from ? 'from ' + a.filter_from : null,
+          a.filter_to ? 'to ' + a.filter_to : null,
+        ].filter(Boolean).join(' / ') || 'ALL leads' },
+      { label: 'New status', value: toSid ? toName : ('⚠ "' + toName + '" does not exist as a status') },
+    ];
+    explain = (!toSid || count === 0)
+      ? (!toSid ? 'Target status not found.' : 'No leads match — nothing to change.')
+      : 'Got it. Here is the bulk update I will run:';
+  }
+  else if (toolName === 'create_product') {
+    title = 'New product';
+    rows = [
+      { label: 'Name', value: a.name || '(missing)' },
+      { label: 'Description', value: a.description || '—' },
+      { label: 'Price', value: '₹' + (Number(a.price) || 0).toLocaleString('en-IN') },
+      { label: 'GST', value: (Number(a.gst_pct) || 0) + '%' },
+    ];
+    explain = 'Got it. Here is the product I will add:';
+  }
+  else if (toolName === 'create_custom_field') {
+    const label = String(a.label || '').trim();
+    const key = String(a.key || label).toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '');
+    title = 'New custom field';
+    rows = [
+      { label: 'Label', value: label || '(missing)' },
+      { label: 'Key (storage)', value: key || '(invalid)' },
+      { label: 'Type', value: a.field_type || 'text' },
+      { label: 'Options', value: Array.isArray(a.options) && a.options.length ? a.options.join(' | ') : '—' },
+      { label: 'Required', value: a.is_required ? 'Yes' : 'No' },
+      { label: 'Show in list', value: a.show_in_list ? 'Yes' : 'No' },
+    ];
+    explain = 'Got it. Here is the custom field I will add:';
+  }
+  else if (toolName === 'set_tat_rule') {
+    const sName = String(a.status_name || '').trim();
+    let sid = null;
+    try { sid = await _resolveStatusId(sName); } catch (_) {}
+    const mins = Math.max(1, Number(a.minutes) || 0);
+    const hours = (mins / 60).toFixed(1);
+    title = 'Set TAT threshold';
+    rows = [
+      { label: 'Status', value: sid ? sName : '⚠ "' + sName + '" not found' },
+      { label: 'Threshold', value: mins + ' minutes (~' + hours + ' hours)' },
+      { label: 'Active', value: (a.is_active === false) ? 'No' : 'Yes' },
+    ];
+    explain = sid ? 'Got it. Here is the TAT rule I will save:' : 'Status not found — please check the name.';
+  }
+  else if (toolName === 'create_campaign') {
+    let mgrId = null, mgrName = null;
+    if (a.manager_name) {
+      const [u] = await _resolveUsersByName([a.manager_name]);
+      if (u && u.id) { mgrId = u.id; mgrName = u.name; }
+    }
+    title = 'New campaign';
+    rows = [
+      { label: 'Name', value: a.name || '(missing)' },
+      { label: 'Distribution', value: (a.distribution_mode || 'on_demand').replace('_', ' ') },
+      { label: 'Manager', value: mgrName || (a.manager_name ? '⚠ "' + a.manager_name + '" not found' : '— (none)') },
+    ];
+    explain = 'Got it. Here is the campaign I will create:';
+  }
+  else if (toolName === 'set_lead_followup') {
+    let lead = null;
+    if (a.lead_id) {
+      try { const r = await db.query(`SELECT id, name, phone FROM leads WHERE id = $1 LIMIT 1`, [Number(a.lead_id)]); lead = r.rows[0] || null; } catch (_) {}
+    } else if (a.lead_phone) {
+      try { const r = await db.query(`SELECT id, name, phone FROM leads WHERE phone LIKE '%' || $1 || '%' LIMIT 1`, [String(a.lead_phone).replace(/\D/g, '').slice(-10)]); lead = r.rows[0] || null; } catch (_) {}
+    }
+    let due = null;
+    try { due = new Date(a.due_at); if (isNaN(due.getTime())) due = null; } catch (_) {}
+    title = 'Set follow-up reminder';
+    rows = [
+      { label: 'Lead', value: lead ? (lead.name + ' · ' + lead.phone + ' (id ' + lead.id + ')') : '⚠ Lead not found' },
+      { label: 'Due', value: due ? due.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : '⚠ Invalid date "' + a.due_at + '"' },
+      { label: 'Note', value: a.note || '—' },
+    ];
+    explain = (lead && due) ? 'Got it. Here is the follow-up I will schedule:' : 'Missing required info — please retry.';
   }
   else {
     return { _refuse: 'Unknown action tool: ' + toolName };
@@ -635,6 +854,148 @@ async function _executePendingAction(row, ctx) {
       name, color: '#6b7280', sort_order: nextSort, is_active: 1
     });
     return { ok: true, source_id: id, message: 'Source "' + name + '" added.' };
+  }
+
+  if (tool === 'create_user') {
+    const name = String(a.name || '').trim();
+    const email = String(a.email || '').toLowerCase().trim();
+    const role = String(a.role || 'sales').toLowerCase();
+    if (!name || !email) throw new Error('Name and email required');
+    if (!['admin', 'manager', 'sales'].includes(role)) throw new Error('Role must be admin / manager / sales');
+    if (await db.findOneBy('users', 'email', email)) throw new Error('Email already registered');
+    const alpha = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+    let pw = '';
+    for (let i = 0; i < 12; i++) pw += alpha[Math.floor(Math.random() * alpha.length)];
+    const id = await db.insert('users', {
+      name, email, phone: a.phone || '',
+      password_hash: hashPassword(pw), role,
+      parent_id: ctx.userId,
+      department: a.department || '',
+      designation: a.designation || '',
+      is_active: 1
+    });
+    return { ok: true, user_id: id,
+      message: 'User "' + name + '" created.\n\nLogin email: ' + email + '\nTemporary password: ' + pw + '\n\nShare this password securely. The user can change it after first login.' };
+  }
+
+  if (tool === 'update_status') {
+    const cur = String(a.current_name || '').trim();
+    const r = await db.query(`SELECT id, name, color, is_final FROM statuses WHERE LOWER(name) = LOWER($1) LIMIT 1`, [cur]);
+    const existing = r.rows[0];
+    if (!existing) throw new Error('Status "' + cur + '" not found');
+    const patch = {};
+    if (a.new_name && a.new_name !== existing.name) patch.name = String(a.new_name).trim();
+    if (a.color) patch.color = String(a.color);
+    if (typeof a.is_final === 'boolean') patch.is_final = a.is_final ? 1 : 0;
+    if (!Object.keys(patch).length) return { ok: true, status_id: existing.id, message: 'No changes to apply.' };
+    await db.update('statuses', existing.id, patch);
+    return { ok: true, status_id: existing.id, message: 'Status updated: ' + Object.keys(patch).map(k => k + '=' + patch[k]).join(', ') + '.' };
+  }
+
+  if (tool === 'change_lead_status_bulk') {
+    const toName = String(a.to_status || '').trim();
+    const toSid = await _resolveStatusId(toName);
+    if (!toSid) throw new Error('Target status "' + toName + '" not found');
+    const params = [toSid];
+    let where = '1=1';
+    if (a.from_status) {
+      const fSid = await _resolveStatusId(a.from_status);
+      if (fSid) { params.push(fSid); where += ` AND status_id = $${params.length}`; }
+    }
+    if (a.filter_source) { params.push(a.filter_source); where += ` AND LOWER(source) = LOWER($${params.length})`; }
+    if (a.filter_from)   { params.push(new Date(a.filter_from).toISOString()); where += ` AND created_at >= $${params.length}`; }
+    if (a.filter_to)     { params.push(new Date(new Date(a.filter_to).getTime() + 86400000).toISOString()); where += ` AND created_at < $${params.length}`; }
+    const r = await db.query(`UPDATE leads SET status_id = $1, last_status_change_at = NOW() WHERE ${where} RETURNING id`, params);
+    return { ok: true, updated: r.rowCount, message: 'Status changed for ' + r.rowCount + ' lead(s) → ' + toName + '.' };
+  }
+
+  if (tool === 'create_product') {
+    const name = String(a.name || '').trim();
+    if (!name) throw new Error('Name required');
+    const id = await db.insert('products', {
+      name,
+      description: a.description || '',
+      price: Number(a.price) || 0,
+      gst_pct: Math.max(0, Math.min(100, Number(a.gst_pct) || 0)),
+      is_active: 1
+    });
+    return { ok: true, product_id: id, message: 'Product "' + name + '" added.' };
+  }
+
+  if (tool === 'create_custom_field') {
+    const label = String(a.label || '').trim();
+    if (!label) throw new Error('Label required');
+    const key = String(a.key || label).toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '');
+    if (!key) throw new Error('Could not derive valid key');
+    if (await db.findOneBy('custom_fields', 'key', key)) throw new Error('Field key already exists: ' + key);
+    const id = await db.insert('custom_fields', {
+      key, label,
+      field_type: a.field_type || 'text',
+      options: Array.isArray(a.options) ? a.options.join('|') : '',
+      sort_order: 0,
+      show_in_list: a.show_in_list ? 1 : 0,
+      is_required: a.is_required ? 1 : 0,
+      is_active: 1
+    });
+    return { ok: true, field_id: id, message: 'Custom field "' + label + '" (key: ' + key + ') added.' };
+  }
+
+  if (tool === 'set_tat_rule') {
+    const sName = String(a.status_name || '').trim();
+    const sid = await _resolveStatusId(sName);
+    if (!sid) throw new Error('Status "' + sName + '" not found');
+    const minutes = Math.max(1, Number(a.minutes) || 60);
+    const isAct = (a.is_active === false) ? 0 : 1;
+    const existing = (await db.getAll('tat_thresholds')).find(r => Number(r.status_id) === sid);
+    if (existing) {
+      await db.update('tat_thresholds', existing.id, { threshold_minutes: minutes, is_active: isAct, updated_at: db.nowIso() });
+      return { ok: true, threshold_id: existing.id, message: 'TAT for "' + sName + '" updated to ' + minutes + ' minutes.' };
+    }
+    const id = await db.insert('tat_thresholds', { status_id: sid, threshold_minutes: minutes, is_active: isAct, updated_at: db.nowIso() });
+    return { ok: true, threshold_id: id, message: 'TAT rule created: "' + sName + '" → ' + minutes + ' minutes.' };
+  }
+
+  if (tool === 'create_campaign') {
+    const name = String(a.name || '').trim();
+    if (!name) throw new Error('Name required');
+    let mgrId = null;
+    if (a.manager_name) {
+      const [u] = await _resolveUsersByName([a.manager_name]);
+      if (u && u.id) mgrId = u.id;
+    }
+    const id = await db.insert('campaigns', {
+      name,
+      distribution_mode: a.distribution_mode || 'on_demand',
+      manager_user_id: mgrId,
+      is_active: 1
+    });
+    return { ok: true, campaign_id: id, message: 'Campaign "' + name + '" created.' };
+  }
+
+  if (tool === 'set_lead_followup') {
+    let leadId = a.lead_id ? Number(a.lead_id) : null;
+    if (!leadId && a.lead_phone) {
+      const r = await db.query(`SELECT id FROM leads WHERE phone LIKE '%' || $1 || '%' LIMIT 1`, [String(a.lead_phone).replace(/\D/g, '').slice(-10)]);
+      leadId = r.rows[0]?.id || null;
+    }
+    if (!leadId) throw new Error('Lead not found — provide lead_id or lead_phone');
+    const due = new Date(a.due_at);
+    if (isNaN(due.getTime())) throw new Error('Invalid due date');
+    // Clear any other pending followups (lead-level convention)
+    const existing = (await db.getAll('followups')).filter(f =>
+      Number(f.lead_id) === leadId && Number(f.is_done) === 0);
+    for (const f of existing) {
+      await db.update('followups', f.id, { is_done: 1, done_at: db.nowIso() });
+    }
+    const id = await db.insert('followups', {
+      lead_id: leadId,
+      user_id: ctx.userId,
+      due_at: due.toISOString(),
+      note: a.note || '',
+      is_done: 0
+    });
+    await db.query(`UPDATE leads SET next_followup_at = $1 WHERE id = $2`, [due.toISOString(), leadId]);
+    return { ok: true, followup_id: id, message: 'Follow-up scheduled for lead #' + leadId + ' on ' + due.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) + '.' };
   }
 
   throw new Error('Unknown tool: ' + tool);
