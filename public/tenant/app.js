@@ -39486,6 +39486,255 @@ function packRealEstateBookingBlock(leadId) {
   return wrap;
 }
 
+// PACK_UI_GAP_v1 — Universal lead-modal panel for Solar / Finance / Manufacturer /
+// Holiday / Ecommerce packs. Each shows the lead's pack-specific data inline so
+// showcase demos actually look different from Generic. Built as one helper so
+// future packs can hook in with one line.
+function _genericPackPanel(opts) {
+  // opts: { packId, icon, title, leadId, fetcher, render, emptyCta }
+  const wrap = h('div', { class: 'pack-block pack-block-' + opts.packId,
+    style: { marginTop: '1rem', borderTop: '1px solid #e5e7eb', paddingTop: '1rem' } },
+    h('h4', { style: { margin: '0 0 .5rem 0' } }, opts.icon + ' ' + opts.title)
+  );
+  const inner = h('div', {}, h('div', { class: 'muted' }, 'Loading…'));
+  wrap.appendChild(inner);
+  opts.fetcher(opts.leadId).then(r => {
+    inner.innerHTML = '';
+    inner.appendChild(opts.render(r));
+  }).catch(e => {
+    inner.innerHTML = '';
+    if (/not active|not configured|unknown function/i.test(String(e.message || ''))) {
+      wrap.style.display = 'none';
+      return;
+    }
+    inner.appendChild(h('div', { class: 'muted' }, 'Could not load: ' + (e.message || e)));
+  });
+  return wrap;
+}
+function _packKV(label, val, color) {
+  return h('div', { style: { display: 'inline-block', marginRight: '12px', fontSize: '12.5px' } },
+    h('span', { class: 'muted', style: { fontSize: '11px' } }, label + ': '),
+    h('b', { style: { color: color || '#0f172a' } }, val || '—')
+  );
+}
+function _packTable(headers, rows) {
+  if (!rows || !rows.length) return h('div', { class: 'muted', style: { padding: '.5rem 0', fontSize: '13px' } }, 'No records yet.');
+  return h('table', { class: 'mini-table', style: { fontSize: '12.5px', width: '100%' } },
+    h('thead', {}, h('tr', {}, ...headers.map(hh => h('th', {}, hh)))),
+    h('tbody', {}, ...rows.map(r => h('tr', {}, ...r.map(c => h('td', {}, c)))))
+  );
+}
+function _packINR(v) { return '₹' + Number(v || 0).toLocaleString('en-IN'); }
+
+// ---- SOLAR lead panel ----
+function packSolarLeadBlock(leadId) {
+  return _genericPackPanel({
+    packId: 'solar', icon: '☀️', title: 'Solar — Sites & Quotes', leadId,
+    fetcher: async (id) => {
+      const [sites, quotes, install] = await Promise.all([
+        api('api_solar_site_byLead', { lead_id: id }).catch(() => ({sites:[]})),
+        api('api_solar_quote_byLead', { lead_id: id }).catch(() => ({quotes:[]})),
+        api('api_solar_install_byLead', { lead_id: id }).catch(() => ({installations:[]}))
+      ]);
+      return { sites: sites.sites || [], quotes: quotes.quotes || [], installs: install.installations || [] };
+    },
+    render: (r) => {
+      const root = h('div', {});
+      const s = r.sites[0];
+      if (s) {
+        root.appendChild(h('div', { style: { marginBottom: '8px' } },
+          _packKV('Roof', (s.rooftop_area_sqft || 0) + ' sqft'),
+          _packKV('Bill', _packINR(s.monthly_bill_inr) + '/mo'),
+          _packKV('Load', (s.sanctioned_load_kw || 0) + ' kW'),
+          _packKV('DISCOM', s.discom),
+          _packKV('Survey', s.survey_done ? '✓ Done' : 'Pending', s.survey_done ? '#16a34a' : '#f59e0b')
+        ));
+      } else {
+        root.appendChild(h('div', { class: 'muted', style: { padding: '4px 0' } }, 'No site survey yet.'));
+      }
+      if (r.quotes.length) {
+        root.appendChild(h('div', { style: { fontWeight: 600, fontSize: '12px', marginTop: '8px', marginBottom: '4px' } }, 'Quotes:'));
+        root.appendChild(_packTable(['Quote #', 'kW', 'Panels', 'Total', 'Status'],
+          r.quotes.map(q => [q.quote_no || '—', q.system_kw, q.panel_count, _packINR(q.total), q.status])));
+      }
+      if (r.installs.length) {
+        root.appendChild(h('div', { style: { fontWeight: 600, fontSize: '12px', marginTop: '8px', marginBottom: '4px' } }, 'Installations:'));
+        root.appendChild(_packTable(['#', 'kW', 'Status', 'Commissioned'],
+          r.installs.map(i => [i.id, i.system_kw, i.status, i.commissioned_at ? String(i.commissioned_at).slice(0,10) : '—'])));
+      }
+      return root;
+    }
+  });
+}
+
+// ---- FINANCE lead panel ----
+function packFinanceLeadBlock(leadId) {
+  return _genericPackPanel({
+    packId: 'finance', icon: '🏦', title: 'Finance — Policies & Premiums', leadId,
+    fetcher: async (id) => {
+      const [pol, due] = await Promise.all([
+        api('api_fin_policy_byLead', { lead_id: id }).catch(() => ({policies:[], premiums:[]})),
+        api('api_fin_renewal_due', { lead_id: id }).catch(() => ({renewals:[]}))
+      ]);
+      return { policies: pol.policies || [], premiums: pol.premiums || [], renewals: due.renewals || [] };
+    },
+    render: (r) => {
+      const root = h('div', {});
+      if (r.policies.length) {
+        root.appendChild(_packTable(
+          ['Policy #', 'Product', 'Sum Assured', 'EMI/Premium', 'Status'],
+          r.policies.map(p => [
+            p.policy_no || '—', p.product_name || '—',
+            _packINR(p.sanctioned_amount || p.sum_assured),
+            _packINR(p.emi_amount || p.premium_amount) + (p.premium_frequency === 'monthly' ? '/mo' : '/yr'),
+            p.status
+          ])
+        ));
+      } else {
+        root.appendChild(h('div', { class: 'muted', style: { padding: '4px 0' } }, 'No policies yet.'));
+      }
+      if (r.renewals.length) {
+        root.appendChild(h('div', { style: { fontWeight: 600, fontSize: '12px', marginTop: '8px', marginBottom: '4px', color: '#f59e0b' } }, '⚠ Renewals due:'));
+        root.appendChild(_packTable(['Policy', 'Due Date', 'Premium'],
+          r.renewals.map(rn => [rn.policy_no, rn.renewal_due_at ? String(rn.renewal_due_at).slice(0,10) : '—', _packINR(rn.premium_amount)])));
+      }
+      return root;
+    }
+  });
+}
+
+// ---- MANUFACTURER lead panel ----
+function packMfgLeadBlock(leadId) {
+  return _genericPackPanel({
+    packId: 'mfg', icon: '🏭', title: 'Manufacturer — RFQ / Orders / Production', leadId,
+    fetcher: async (id) => {
+      const [rfq, qte, ord] = await Promise.all([
+        api('api_mfg_inquiry_byLead', { lead_id: id }).catch(() => ({inquiries:[]})),
+        api('api_mfg_quote_byLead', { lead_id: id }).catch(() => ({quotes:[]})),
+        api('api_mfg_order_byLead', { lead_id: id }).catch(() => ({orders:[]}))
+      ]);
+      return { rfqs: rfq.inquiries || [], quotes: qte.quotes || [], orders: ord.orders || [] };
+    },
+    render: (r) => {
+      const root = h('div', {});
+      if (r.rfqs.length) {
+        root.appendChild(h('div', { style: { fontWeight: 600, fontSize: '12px', marginBottom: '4px' } }, 'RFQs:'));
+        root.appendChild(_packTable(['RFQ #', 'Spec', 'Qty', 'Material', 'Deliver By', 'Status'],
+          r.rfqs.map(q => [q.rfq_no || '—', (q.product_specs || '').slice(0,28), q.quantity, q.material_grade, q.expected_delivery_date || '—', q.status])));
+      }
+      if (r.quotes.length) {
+        root.appendChild(h('div', { style: { fontWeight: 600, fontSize: '12px', marginTop: '8px', marginBottom: '4px' } }, 'Quotes:'));
+        root.appendChild(_packTable(['Quote #', 'Value', 'Margin %', 'Valid Till', 'Status'],
+          r.quotes.map(q => [q.quote_no || '—', _packINR(q.total_value), Number(q.margin_pct || 0).toFixed(1) + '%', q.valid_till || '—', q.status])));
+      }
+      if (r.orders.length) {
+        root.appendChild(h('div', { style: { fontWeight: 600, fontSize: '12px', marginTop: '8px', marginBottom: '4px' } }, 'Orders:'));
+        root.appendChild(_packTable(['PO #', 'Value', 'Stage', 'Delivery'],
+          r.orders.map(o => [o.po_number || '—', _packINR(o.total_value), o.stage || '—', o.delivery_date || '—'])));
+      }
+      if (!r.rfqs.length && !r.quotes.length && !r.orders.length) root.appendChild(h('div', { class: 'muted', style: { padding: '4px 0' } }, 'No RFQs/quotes/orders yet.'));
+      return root;
+    }
+  });
+}
+
+// ---- HOLIDAY/TRAVEL lead panel ----
+function packHolidayLeadBlock(leadId) {
+  return _genericPackPanel({
+    packId: 'holiday', icon: '✈️', title: 'Travel — Bookings & Itineraries', leadId,
+    fetcher: async (id) => {
+      const b = await api('api_tour_booking_byLead', { lead_id: id }).catch(() => ({bookings:[], itineraries:[]}));
+      return { bookings: b.bookings || [], itineraries: b.itineraries || [] };
+    },
+    render: (r) => {
+      const root = h('div', {});
+      if (r.bookings.length) {
+        root.appendChild(_packTable(['Booking #', 'Destination', 'PAX', 'Travel', 'Total', 'Paid', 'Status'],
+          r.bookings.map(b => [
+            b.booking_no || '—', b.destination || '—',
+            (b.pax_adults || 0) + 'A+' + (b.pax_children || 0) + 'C',
+            b.travel_start_date || '—',
+            _packINR(b.total_amount), _packINR(b.paid_amount), b.status
+          ])
+        ));
+      } else {
+        root.appendChild(h('div', { class: 'muted', style: { padding: '4px 0' } }, 'No bookings yet.'));
+      }
+      return root;
+    }
+  });
+}
+
+// ---- ECOMMERCE lead panel ----
+function packEcomLeadBlock(leadId) {
+  return _genericPackPanel({
+    packId: 'ecom', icon: '🛒', title: 'Ecommerce — Orders / Cart / Returns', leadId,
+    fetcher: async (id) => {
+      const [orders, cart, ret] = await Promise.all([
+        api('api_ec_order_byLead', { lead_id: id }).catch(() => ({orders:[]})),
+        api('api_ec_cart_byLead', { lead_id: id }).catch(() => ({carts:[]})),
+        api('api_ec_return_byLead', { lead_id: id }).catch(() => ({returns:[]}))
+      ]);
+      return { orders: orders.orders || [], carts: cart.carts || [], returns: ret.returns || [] };
+    },
+    render: (r) => {
+      const root = h('div', {});
+      if (r.orders.length) {
+        root.appendChild(h('div', { style: { fontWeight: 600, fontSize: '12px', marginBottom: '4px' } }, 'Orders:'));
+        root.appendChild(_packTable(['Order #', 'Items', 'Total', 'Fulfillment', 'Payment'],
+          r.orders.map(o => [o.order_no || '—', o.item_count || '—', _packINR(o.total_amount), o.fulfillment_status || '—', o.payment_status || '—'])));
+      }
+      if (r.carts.length) {
+        root.appendChild(h('div', { style: { fontWeight: 600, fontSize: '12px', marginTop: '8px', marginBottom: '4px', color: '#f59e0b' } }, 'Abandoned carts:'));
+        root.appendChild(_packTable(['Items', 'Value', 'Abandoned'],
+          r.carts.map(c => [c.item_count || '—', _packINR(c.cart_value), c.abandoned_at ? String(c.abandoned_at).slice(0,10) : '—'])));
+      }
+      if (r.returns.length) {
+        root.appendChild(h('div', { style: { fontWeight: 600, fontSize: '12px', marginTop: '8px', marginBottom: '4px' } }, 'Returns:'));
+        root.appendChild(_packTable(['Order', 'Reason', 'Refund', 'Status'],
+          r.returns.map(rt => [rt.order_no || '—', (rt.reason || '').slice(0, 30), _packINR(rt.refund_amount), rt.status])));
+      }
+      if (!r.orders.length && !r.carts.length && !r.returns.length) root.appendChild(h('div', { class: 'muted', style: { padding: '4px 0' } }, 'No orders/carts/returns yet.'));
+      return root;
+    }
+  });
+}
+
+// Wire all 5 pack panels into the lead modal — same monkey-patch pattern as RE.
+(function _wireAllPackLeadPanels() {
+  if (typeof openLeadModal !== 'function') return;
+  const _orig = openLeadModal;
+  const PACK_FACTORIES = [
+    { packId: 'solar',        factory: packSolarLeadBlock,    cls: 'pack-block-solar' },
+    { packId: 'finance',      factory: packFinanceLeadBlock,  cls: 'pack-block-finance' },
+    { packId: 'manufacturer', factory: packMfgLeadBlock,      cls: 'pack-block-mfg' },
+    { packId: 'holiday',      factory: packHolidayLeadBlock,  cls: 'pack-block-holiday' },
+    { packId: 'ecommerce',    factory: packEcomLeadBlock,     cls: 'pack-block-ecom' }
+  ];
+  window.openLeadModal = async function patchedOpenLeadModal_withPacks(id) {
+    const r = await _orig.apply(this, arguments);
+    if (id) {
+      setTimeout(async () => {
+        try {
+          const installed = (CRM.installedPacks instanceof Set) ? CRM.installedPacks : new Set();
+          const body = document.querySelector('.modal-backdrop:last-of-type .modal');
+          if (!body) return;
+          for (const pf of PACK_FACTORIES) {
+            if (!installed.has(pf.packId)) continue;
+            if (body.querySelector('.' + pf.cls)) continue;
+            const panel = pf.factory(id);
+            panel.classList.add(pf.cls);
+            const actions = body.querySelector('.actions');
+            if (actions) body.insertBefore(panel, actions);
+            else body.appendChild(panel);
+          }
+        } catch (_) {}
+      }, 220);
+    }
+    return r;
+  };
+})();
+
 // Hook the booking panel into the lead modal — runs once on load.
 // We monkey-patch openLeadModal to inject the panel after render.
 (function _wireRealEstateLeadPanel() {
