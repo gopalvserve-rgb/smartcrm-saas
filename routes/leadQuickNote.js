@@ -232,16 +232,27 @@ async function api_leads_quickNote(token, payload) {
     await leadsRoute.api_leads_update(token, leadId, patch);
   }
 
-  // Remark — always add if text was non-empty (separate API so it gets
-  // its own row in remarks + activity log)
+  // Remark — write directly to the remarks table so we don't depend on
+  // the cross-route call (which silently failed when status_id was empty).
+  // QNOTE_v2_FIX (2026-06-12)
   let remarkText = null;
   if (text) {
     remarkText = (parsed.remark && parsed.remark.trim()) ? parsed.remark.trim() : text;
     try {
-      await leadsRoute.api_leads_addRemark(token, leadId, { remark: '✨ ' + remarkText });
+      await db.insert('remarks', {
+        lead_id: leadId,
+        user_id: me.id,
+        remark: '✨ ' + remarkText,
+        status_id: statusUsed ? statusUsed.id : null
+      });
+      // Also log to the lead activity timeline so the ✨ entry appears there
+      try {
+        await require('./tat').logAction(leadId, 'remark', me.id, {
+          remark: remarkText.slice(0, 200), via: 'quick_note', source_text: text.slice(0, 240)
+        });
+      } catch (_) {}
     } catch (e) {
-      // Don't fail the whole call if remark insert fails (e.g. column oddity)
-      console.warn('[leadQuickNote] addRemark failed:', e.message);
+      console.warn('[leadQuickNote] direct remark insert failed:', e.message);
     }
   }
 

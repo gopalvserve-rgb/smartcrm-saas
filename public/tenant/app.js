@@ -9739,7 +9739,18 @@ function remarksBlock(rs, leadId) {
 //   Reuses the same modal-backdrop styling as openRemarkInline so it
 //   feels native.
 async function openQuickNoteInline(lead) {
-  const statuses = (CRM.cache && CRM.cache.statuses) || [];
+  // QNOTE_v2_FIX — fetch fresh if cache is empty (cache wasn't warming
+  // before the row buttons were rendered on first paint).
+  let statuses = (CRM.cache && CRM.cache.statuses) || [];
+  if (!statuses.length) {
+    try {
+      const fresh = await api('api_statuses_list');
+      if (Array.isArray(fresh) && fresh.length) {
+        statuses = fresh;
+        if (CRM.cache) CRM.cache.statuses = fresh;
+      }
+    } catch (e) { console.warn('[qnote] status fetch:', e.message); }
+  }
   let pickedStatus = null;        // {id, name, color}
   let menuOpen = false;
   let menuActiveIdx = 0;
@@ -9852,8 +9863,11 @@ async function openQuickNoteInline(lead) {
 
   input.addEventListener('input', () => {
     const v = input.value;
-    if (!pickedStatus && v.startsWith('/')) {
-      showSlashMenu(v.slice(1).toLowerCase().trim());
+    // QNOTE_v2_FIX — trigger on '/' even with leading space, and even if a
+    // chip is already picked (user can swap status).
+    const tv = v.trimStart();
+    if (tv.startsWith('/')) {
+      showSlashMenu(tv.slice(1).toLowerCase().trim());
     } else if (menuOpen) {
       slashMenu.style.display = 'none'; menuOpen = false;
     }
