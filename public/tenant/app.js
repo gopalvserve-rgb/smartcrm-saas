@@ -12801,6 +12801,7 @@ async function openQuotationModal(qid, prefillLead) {
         value: String(p.id),
         'data-price': String(p.price || p.unit_price || 0),
         'data-name':  String(p.name || ''),
+        'data-description': String(p.description || ''),
         selected: seed && Number(seed.product_id) === Number(p.id) ? 'selected' : null
       }, (p.name || ('Product #' + p.id)) + (p.price ? '  \u2014 \u20b9' + Number(p.price).toLocaleString('en-IN') : '')))
     );
@@ -12835,19 +12836,41 @@ async function openQuotationModal(qid, prefillLead) {
     const imgPh = h('div', { style: { fontSize: '.65rem', color: '#94a3b8', display: initialImg ? 'none' : 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%' }}, '📦');
     imgWrap.appendChild(imgEl); imgWrap.appendChild(imgPh);
     const desc = h('input', { type: 'text', placeholder: 'Description', value: it.description || '', style: { width: '100%' } });
+    // QUOTE_PRODUCT_DESC_SYNC_v1 — on product CHANGE, refresh desc/price from
+    // the new product, unless the user manually edited those fields. We
+    // track the last auto-filled values on the row; if the current value
+    // still matches the last auto-fill, it's safe to overwrite.
     prodSel.onchange = () => {
       const opt = prodSel.options[prodSel.selectedIndex];
-      // Update image thumbnail on product change
+      // Update image thumbnail on product change (always)
       const url = _imgUrlForRow(it, prodSel.value);
       if (url) { imgEl.src = url; imgEl.style.display = 'block'; imgPh.style.display = 'none'; }
       else     { imgEl.style.display = 'none';  imgPh.style.display = 'flex'; }
-      // Remember URL on the row so save() can persist it.
       row._imageUrl = url;
-      if (!opt || !opt.value) return;
-      const name = opt.getAttribute('data-name') || '';
-      const price = Number(opt.getAttribute('data-price') || 0);
-      if (name && !desc.value.trim()) desc.value = name;
-      if (price && Number(pr.value || 0) === 0) pr.value = String(price);
+      if (!opt || !opt.value) {
+        // User cleared the product — leave manual values alone.
+        return;
+      }
+      const name      = opt.getAttribute('data-name')        || '';
+      const prodDesc  = opt.getAttribute('data-description') || '';
+      const price     = Number(opt.getAttribute('data-price') || 0);
+      // Prefer the product's stored description; fall back to the name.
+      const newDesc = prodDesc.trim() ? prodDesc : name;
+      const curDesc = (desc.value || '').trim();
+      const lastDesc = (row._lastAutoDesc || '').trim();
+      // Update description if: empty, OR matches the previous auto-fill
+      // (user hasn't manually edited it). This stops the old product's
+      // description from sticking when the user picks a different product.
+      if (newDesc && (!curDesc || curDesc === lastDesc)) {
+        desc.value = newDesc;
+        row._lastAutoDesc = newDesc;
+      }
+      const curPrice  = Number(pr.value || 0);
+      const lastPrice = Number(row._lastAutoPrice || 0);
+      if (price && (curPrice === 0 || curPrice === lastPrice)) {
+        pr.value = String(price);
+        row._lastAutoPrice = price;
+      }
       recompute();
     };
     const qty  = h('input', { 'data-k': 'qty',   type: 'number', value: it.quantity || 1, step: '0.001', min: 0, style: { width: '100%', minWidth: '70px', padding: '4px 6px', textAlign: 'right' } });
@@ -12859,6 +12882,11 @@ async function openQuotationModal(qid, prefillLead) {
     row._desc = desc; row._qty = qty; row._pr = pr; row._dp = dp;
     row._prodSel = prodSel;
     row._imageUrl = initialImg || null;
+    // QUOTE_PRODUCT_DESC_SYNC_v1 — initialise last-auto-fill markers.
+    // Empty by default so an existing seed value (loaded from a saved
+    // quote) is treated as user-edited and won't be clobbered.
+    row._lastAutoDesc  = '';
+    row._lastAutoPrice = 0;
     row.appendChild(imgWrap); row.appendChild(prodSel); row.appendChild(desc); row.appendChild(qty); row.appendChild(pr); row.appendChild(dp); row.appendChild(amt); row.appendChild(del);
     // QUOTE_FULLPAGE_v1: insertBefore the add-button so new rows land
     // ABOVE it and the button stays anchored at the bottom of the list.
