@@ -2031,6 +2031,12 @@ async function _resolveDailyLimit() {
     const n = Number(v);
     if (!Number.isNaN(n) && n > 0) limit = n;
   } catch (_) {}
+  // SHOWCASE_AI_v2 — hard-cap Copilot at 30 per user per day on demo tenants
+  // so a prospect mashing the Ask CRM box during a demo can't burn budget.
+  try {
+    const demo = await db.findOneBy('config', 'key', 'DEMO_TENANT').catch(() => null);
+    if (demo && String(demo.value) === '1') limit = Math.min(limit, 30);
+  } catch (_) {}
   return limit;
 }
 async function _todaysCount(userId) {
@@ -2350,6 +2356,7 @@ IMPORTANT RULES:
   })).filter(h => h.text) : [];
 
   const result = await gemini.generateWithTools({
+    feature: 'copilot',  // SHOWCASE_AI_v2 — allowed on demo tenants
     system, history: hist, prompt: text,
     tools: TOOLS,
     runTool: (name, args) => _runTool(name, args, ctx),

@@ -1236,6 +1236,7 @@ async function maybeReplyToInbound({ phone, leadId, inboundText, inboundPhoneId,
   }
 
   const result = await gemini.generate({
+    feature: 'ai_bot',  // SHOWCASE_AI_v2 — allowed on demo tenants
     system, history, prompt,
     model: settings.model_override || null,
     maxOutputTokens: 500

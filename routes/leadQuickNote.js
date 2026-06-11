@@ -163,6 +163,7 @@ async function api_leads_quickNote(token, payload) {
     let resp;
     try {
       resp = await geminiClient.generate({
+        feature: 'quick_note',  // SHOWCASE_AI_v2 — allowed on demo tenants
         system: systemPrompt,
         prompt: text,
         model: 'gemini-2.5-flash-lite',     // cheapest, fastest, JSON-friendly

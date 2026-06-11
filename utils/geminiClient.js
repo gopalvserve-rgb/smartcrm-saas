@@ -147,10 +147,12 @@ function computeCost(inputTokens, outputTokens, settings) {
  *     raw_status:    int|null,
  *   }
  */
-// SHOWCASE_AI_KILL_v1 — read the CURRENT tenant's config (db is tenant-scoped
-// via attachTenant middleware) and short-circuit AI calls on showcase/demo
-// tenants so prospects clicking "AI Audit", Copilot, Quick Note, etc never
-// burn Gemini money. Set per tenant via config key DEMO_TENANT=1.
+// SHOWCASE_AI_v2 — feature-aware kill switch for demo tenants.
+//   Copilot, Quick Note, AI Bot reply: ALLOWED (Copilot daily quota enforced
+//   upstream by crmCopilot.js — set COPILOT_DAILY_LIMIT_PER_USER=30 on
+//   showcase tenants).
+//   AI Call Audit / Call Summary / Hot-Lead Detect: BLOCKED so prospects
+//   clicking "Audit" on a demo recording can't burn money.
 const db = require('../db/pg');
 async function _isDemoTenant() {
   try {
@@ -158,13 +160,24 @@ async function _isDemoTenant() {
     return r && String(r.value) === '1';
   } catch (_) { return false; }
 }
+// Features allowed on demo tenants. Everything else is blocked.
+const DEMO_ALLOWED_FEATURES = new Set([
+  'copilot', 'copilot_ask', 'crm_copilot',
+  'quick_note', 'lead_quicknote',
+  'ai_bot', 'whatsbot', 'aibot_reply'
+]);
+async function _demoBlocked(args) {
+  if (!(await _isDemoTenant())) return null;
+  const feature = String((args && args.feature) || '').toLowerCase();
+  if (DEMO_ALLOWED_FEATURES.has(feature)) return null;     // allow
+  return { ok: false, text: '', model: '', input_tokens: 0, output_tokens: 0,
+           cost_usd: 0, cost_inr_real: 0, cost_inr_billed: 0,
+           finish_reason: null, error: 'AI Audit / Summary is disabled on showcase / demo tenants. Copilot and Quick Note still work (limited to 30 / day).', raw_status: null };
+}
 
 async function generate(args) {
-  if (await _isDemoTenant()) {
-    return { ok: false, text: '', model: '', input_tokens: 0, output_tokens: 0,
-             cost_usd: 0, cost_inr_real: 0, cost_inr_billed: 0,
-             finish_reason: null, error: 'AI features are disabled on showcase / demo tenants to control cost.', raw_status: null };
-  }
+  const blocked = await _demoBlocked(args);
+  if (blocked) return blocked;
   const settings = await loadSettings();
   if (!settings) {
     return { ok: false, text: '', model: '', input_tokens: 0, output_tokens: 0,
@@ -366,10 +379,17 @@ async function logUsage({ tenant_slug, tenant_id, call_kind, phone, lead_id, wa_
  *            tools_called: [{ name, args, result }], error }
  */
 async function generateWithTools(args) {
+  // Copilot calls this; pass feature='copilot' so it's allowed on demo tenants.
+  // If caller forgot the feature label and we're on a demo tenant, default
+  // to allow (Copilot is the primary user of this method — block-by-default
+  // here would break Copilot when the label is missed).
   if (await _isDemoTenant()) {
-    return { ok: false, text: '', model: '', input_tokens: 0, output_tokens: 0,
-             cost_usd: 0, cost_inr_real: 0, cost_inr_billed: 0,
-             tools_called: [], error: 'AI features are disabled on showcase / demo tenants to control cost.' };
+    const feature = String((args && args.feature) || 'copilot').toLowerCase();
+    if (!DEMO_ALLOWED_FEATURES.has(feature)) {
+      return { ok: false, text: '', model: '', input_tokens: 0, output_tokens: 0,
+               cost_usd: 0, cost_inr_real: 0, cost_inr_billed: 0,
+               tools_called: [], error: 'This AI feature is disabled on showcase / demo tenants.' };
+    }
   }
   const settings = await loadSettings();
   if (!settings) {
