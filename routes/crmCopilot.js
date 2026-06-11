@@ -56,6 +56,24 @@ async function _ensureTables() {
     )`);
     await db.query(`CREATE INDEX IF NOT EXISTS idx_copilot_log_user_day
                     ON crm_copilot_log(user_id, created_at DESC)`);
+    // CP_ACT_v1: audit table for two-phase write actions
+    await db.query(`CREATE TABLE IF NOT EXISTS copilot_actions (
+      id              SERIAL PRIMARY KEY,
+      confirm_token   VARCHAR(48) NOT NULL UNIQUE,
+      user_id         INTEGER NOT NULL,
+      tool_name       VARCHAR(80) NOT NULL,
+      args_json       JSONB NOT NULL,
+      preview_text    TEXT NOT NULL,
+      preview_card    JSONB,
+      state           VARCHAR(20) NOT NULL DEFAULT 'pending',
+      result_json     JSONB,
+      error_text      TEXT,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      confirmed_at    TIMESTAMPTZ,
+      expires_at      TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '15 minutes')
+    )`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_copilot_act_user_day
+                    ON copilot_actions(user_id, created_at DESC)`);
     if (pool) _ensuredPools.add(pool);
   } catch (e) { console.warn('[copilot] ensureTables failed:', e.message); }
 }
@@ -281,7 +299,45 @@ const TOOLS = [
     description: "Look up step-by-step setup instructions from the SmartCRM Setup Guide. Use whenever the user asks 'how do I...', 'how to set up...', 'where do I configure...', 'is there a guide for...', or anything about Pabbly / Make / Zapier / Meta Lead Ads / Google Ads / WhatsApp / AI Bot / SMTP / push notifications / mobile app / custom fields / campaigns / TAT / auto-assign rules / permissions / Calendly / CSV import. Returns the matching guide section with steps + a deep-link URL the user can open.",
     parameters: { type: 'object', properties: {
       query: { type: 'string', description: 'The user setup question, eg. "set up Pabbly", "WhatsApp embedded sign in", "create a custom field"' }
-    }, required: ['query'] } }
+    }, required: ['query'] } },
+
+  // ---- CP_ACT_v1: Write/action tools (vserve-only beta) -------------
+  // These NEVER execute directly. They build a preview card + confirm_token
+  // and return it. SPA shows the preview; user taps Confirm; SPA calls
+  // api_copilot_confirm to actually run the write. Audit log on every step.
+  { name: 'create_autoassign_rule',
+    description: "Create a STANDING auto-assign rule for FUTURE incoming leads. Use when user says 'set up rule', 'auto assign', 'always', 'going forward', 'from now on', or 'any X lead should go to Y'. Do NOT use this when user wants to move existing leads - that's reassign_leads_bulk. If ambiguous, prefer this (safer - doesn't touch existing). Pick sensible defaults: distribution='round_robin' unless user says least-loaded; scope='future' unless they say apply to existing too.",
+    parameters: { type: 'object', properties: {
+      name:         { type: 'string', description: 'Rule name shown in Settings, e.g. "Meta to Amit & Rohan"' },
+      when_source:  { type: 'string', description: 'Lead source to match. Optional.' },
+      when_status:  { type: 'string', description: 'Lead status to match. Optional.' },
+      assignees:    { type: 'array', items: { type: 'string' }, description: 'User name(s) to assign to. E.g. ["Amit", "Rohan"]' },
+      distribution: { type: 'string', description: 'round_robin | least_loaded | random. Default round_robin.' },
+      scope:        { type: 'string', description: 'future | existing | both. Default future.' }
+    }, required: ['name', 'assignees'] }
+  },
+  { name: 'reassign_leads_bulk',
+    description: "ONE-TIME action: transfer existing leads to a user or split among users. Use when user says 'transfer', 'move', 'reassign these', 'give them to', 'distribute X to Y and Z'. Do NOT use this when user wants a standing rule for future leads - that's create_autoassign_rule.",
+    parameters: { type: 'object', properties: {
+      filter_source: { type: 'string' }, filter_status: { type: 'string' },
+      filter_from:   { type: 'string', description: 'YYYY-MM-DD' },
+      filter_to:     { type: 'string', description: 'YYYY-MM-DD' },
+      assignees:     { type: 'array', items: { type: 'string' } },
+      distribution:  { type: 'string', description: 'round_robin | even_split | all_to_first. Default round_robin.' }
+    }, required: ['assignees'] }
+  },
+  { name: 'create_status',
+    description: "Create a new lead status. Use when user says 'add status X', 'create status', 'I need a new status called Y'.",
+    parameters: { type: 'object', properties: {
+      name:     { type: 'string' },
+      color:    { type: 'string', description: 'Hex color like #3b82f6. Pick a sensible default if missing.' },
+      is_final: { type: 'boolean', description: 'Whether this is a terminal status (Won/Lost-style). Default false.' }
+    }, required: ['name'] }
+  },
+  { name: 'create_source',
+    description: "Create a new lead source. Use when user says 'add source X', 'create new source called Y'.",
+    parameters: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] }
+  }
 
 ];
 
@@ -337,8 +393,238 @@ async function _resolveUserId(name) {
   } catch (_) { return null; }
 }
 
+// ---- CP_ACT_v1: action layer (vserve-only beta) ---------------------
+const ACTION_TOOLS = new Set([
+  'create_autoassign_rule',
+  'reassign_leads_bulk',
+  'create_status',
+  'create_source',
+]);
+
+async function _actionsEnabled() {
+  try {
+    const v = await db.getConfig('COPILOT_ACTIONS_ENABLED', '0');
+    return String(v).trim() === '1';  // explicit; avoid empty-string trap
+  } catch (_) { return false; }
+}
+
+function _newConfirmToken() {
+  return 'cp_' + Date.now().toString(36) + '_' +
+         Math.random().toString(36).slice(2, 10) +
+         Math.random().toString(36).slice(2, 10);
+}
+
+async function _resolveUsersByName(names) {
+  const out = [];
+  for (const n of (Array.isArray(names) ? names : [])) {
+    const s = String(n || '').trim();
+    if (!s) continue;
+    try {
+      const r = await db.query(
+        `SELECT id, name FROM users
+          WHERE LOWER(name) = LOWER($1)
+             OR LOWER(name) LIKE LOWER($1) || ' %'
+             OR LOWER(email) = LOWER($1)
+          ORDER BY (CASE WHEN LOWER(name) = LOWER($1) THEN 0 ELSE 1 END)
+          LIMIT 1`,
+        [s]
+      );
+      if (r.rows[0]) out.push({ id: r.rows[0].id, name: r.rows[0].name, asked: s });
+      else out.push({ id: null, name: null, asked: s });
+    } catch (_) { out.push({ id: null, name: null, asked: s }); }
+  }
+  return out;
+}
+
+async function _buildPreview(toolName, args, ctx) {
+  const a = args || {};
+  let title = '', rows = [], explain = '';
+
+  if (toolName === 'create_autoassign_rule') {
+    const assignees = await _resolveUsersByName(a.assignees);
+    const known     = assignees.filter(u => u.id);
+    const unknown   = assignees.filter(u => !u.id).map(u => u.asked);
+    const dist      = (a.distribution || 'round_robin').toLowerCase();
+    const scope     = (a.scope || 'future').toLowerCase();
+    title = 'New auto-assign rule';
+    rows = [
+      { label: 'Rule name',    value: a.name || '(unnamed)' },
+      { label: 'When',         value: [
+          a.when_source ? 'source = ' + a.when_source : null,
+          a.when_status ? 'status = ' + a.when_status : null,
+        ].filter(Boolean).join(' AND ') || 'any incoming lead' },
+      { label: 'Assign to',    value: known.length ? known.map(u => u.name).join(', ') : '(no matching users found)' },
+      { label: 'Distribution', value: dist.replace('_', ' ') },
+      { label: 'Applies to',   value: scope === 'both' ? 'new leads + existing matching leads' :
+                                       scope === 'existing' ? 'existing matching leads only' :
+                                       'new leads going forward' },
+    ];
+    if (unknown.length) rows.push({ label: 'Not found', value: unknown.join(', ') + ' - check spelling' });
+    explain = 'Got it. Here is the rule I will create:';
+  }
+  else if (toolName === 'reassign_leads_bulk') {
+    const assignees = await _resolveUsersByName(a.assignees);
+    const known     = assignees.filter(u => u.id);
+    const params = [];
+    let where = '1=1';
+    if (a.filter_source) { params.push(a.filter_source); where += ` AND LOWER(source) = LOWER($${params.length})`; }
+    if (a.filter_status) {
+      const sid = await _resolveStatusId(a.filter_status);
+      if (sid) { params.push(sid); where += ` AND status_id = $${params.length}`; }
+    }
+    if (a.filter_from) { params.push(new Date(a.filter_from).toISOString()); where += ` AND created_at >= $${params.length}`; }
+    if (a.filter_to)   { params.push(new Date(new Date(a.filter_to).getTime() + 86400000).toISOString()); where += ` AND created_at < $${params.length}`; }
+    let count = 0;
+    try {
+      const r = await db.query(`SELECT COUNT(*)::int AS c FROM leads WHERE ${where}`, params);
+      count = Number(r.rows[0]?.c || 0);
+    } catch (_) {}
+    title = 'Reassign existing leads';
+    rows = [
+      { label: 'Matches',      value: count.toLocaleString('en-IN') + ' lead(s)' },
+      { label: 'Filter',       value: [
+          a.filter_source ? 'source = ' + a.filter_source : null,
+          a.filter_status ? 'status = ' + a.filter_status : null,
+          a.filter_from   ? 'from ' + a.filter_from : null,
+          a.filter_to     ? 'to ' + a.filter_to : null,
+        ].filter(Boolean).join(' / ') || 'ALL leads (no filter set)' },
+      { label: 'Assign to',    value: known.length ? known.map(u => u.name).join(', ') : '(no matching users found)' },
+      { label: 'Distribution', value: (a.distribution || 'round_robin').replace('_', ' ') },
+    ];
+    explain = count === 0
+      ? 'No leads match those filters - nothing to reassign. Double-check the filter and try again.'
+      : 'Got it. Here is the reassignment I will run:';
+  }
+  else if (toolName === 'create_status') {
+    title = 'New lead status';
+    rows = [
+      { label: 'Name',     value: a.name || '(missing)' },
+      { label: 'Color',    value: a.color || '#6b7280 (default grey)' },
+      { label: 'Terminal', value: a.is_final ? 'Yes - counts as Won/Lost-style' : 'No' },
+    ];
+    explain = 'Got it. Here is the status I will add:';
+  }
+  else if (toolName === 'create_source') {
+    title = 'New lead source';
+    rows = [{ label: 'Name', value: a.name || '(missing)' }];
+    explain = 'Got it. Here is the source I will add:';
+  }
+  else {
+    return { _refuse: 'Unknown action tool: ' + toolName };
+  }
+
+  const token = _newConfirmToken();
+  const card = { title, rows };
+  try {
+    await db.query(
+      `INSERT INTO copilot_actions
+         (confirm_token, user_id, tool_name, args_json, preview_text, preview_card, state)
+       VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, 'pending')`,
+      [ token, ctx.userId, toolName, JSON.stringify(a), explain, JSON.stringify(card) ]
+    );
+  } catch (e) {
+    return { _refuse: 'Could not stage action: ' + e.message };
+  }
+
+  return { _preview: true, confirm_token: token, title, rows, explain, expires_in_minutes: 15 };
+}
+
+async function _runActionTool(name, args, ctx) {
+  if (!await _actionsEnabled()) {
+    return { _refuse: 'Copilot write actions are in beta and not yet enabled for this tenant. Contact support to opt in.' };
+  }
+  return _buildPreview(name, args, ctx);
+}
+
+async function _executePendingAction(row, ctx) {
+  const tool = row.tool_name;
+  const a    = row.args_json || {};
+
+  if (tool === 'create_autoassign_rule') {
+    const assignees = await _resolveUsersByName(a.assignees);
+    const ids       = assignees.filter(u => u.id).map(u => u.id);
+    if (!ids.length) throw new Error('No valid assignees');
+    const dist  = (a.distribution || 'round_robin').toLowerCase();
+    const cond  = {};
+    if (a.when_source) cond.source = a.when_source;
+    if (a.when_status) cond.status = a.when_status;
+    await db.query(`CREATE TABLE IF NOT EXISTS auto_assign_rules (
+      id            SERIAL PRIMARY KEY,
+      name          TEXT NOT NULL,
+      conditions    JSONB NOT NULL DEFAULT '{}'::jsonb,
+      user_ids      JSONB NOT NULL DEFAULT '[]'::jsonb,
+      distribution  TEXT NOT NULL DEFAULT 'round_robin',
+      is_active     INTEGER NOT NULL DEFAULT 1,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`).catch(() => {});
+    const r = await db.query(
+      `INSERT INTO auto_assign_rules (name, conditions, user_ids, distribution, is_active)
+       VALUES ($1, $2::jsonb, $3::jsonb, $4, 1) RETURNING id`,
+      [ a.name || 'Untitled rule', JSON.stringify(cond), JSON.stringify(ids), dist ]
+    );
+    return { ok: true, rule_id: r.rows[0].id, message: 'Rule active. Next matching lead routes via ' + dist.replace('_', '-') + '.' };
+  }
+
+  if (tool === 'reassign_leads_bulk') {
+    const assignees = await _resolveUsersByName(a.assignees);
+    const ids       = assignees.filter(u => u.id).map(u => u.id);
+    if (!ids.length) throw new Error('No valid assignees');
+    const params = [];
+    let where = '1=1';
+    if (a.filter_source) { params.push(a.filter_source); where += ` AND LOWER(source) = LOWER($${params.length})`; }
+    if (a.filter_status) {
+      const sid = await _resolveStatusId(a.filter_status);
+      if (sid) { params.push(sid); where += ` AND status_id = $${params.length}`; }
+    }
+    if (a.filter_from) { params.push(new Date(a.filter_from).toISOString()); where += ` AND created_at >= $${params.length}`; }
+    if (a.filter_to)   { params.push(new Date(new Date(a.filter_to).getTime() + 86400000).toISOString()); where += ` AND created_at < $${params.length}`; }
+    const targets = await db.query(`SELECT id FROM leads WHERE ${where} ORDER BY created_at ASC`, params);
+    let i = 0;
+    const counts = ids.map(() => 0);
+    for (const lead of targets.rows) {
+      const target = ids[i % ids.length];
+      await db.query(`UPDATE leads SET assigned_to = $1 WHERE id = $2`, [target, lead.id]);
+      counts[i % ids.length]++;
+      i++;
+    }
+    const summary = assignees.filter(u => u.id).map((u, k) => u.name + ': ' + counts[k]).join(', ');
+    return { ok: true, reassigned: i, message: 'Reassigned ' + i + ' lead(s) - ' + summary };
+  }
+
+  if (tool === 'create_status') {
+    const name  = String(a.name || '').trim();
+    if (!name) throw new Error('Name required');
+    const color = a.color || '#6b7280';
+    const fin   = a.is_final ? 1 : 0;
+    const r = await db.query(
+      `INSERT INTO statuses (name, color, sort_order, is_final)
+         VALUES ($1, $2, COALESCE((SELECT MAX(sort_order) FROM statuses), 0) + 10, $3)
+       RETURNING id`,
+      [name, color, fin]
+    );
+    return { ok: true, status_id: r.rows[0].id, message: 'Status "' + name + '" added.' };
+  }
+
+  if (tool === 'create_source') {
+    const name = String(a.name || '').trim();
+    if (!name) throw new Error('Name required');
+    const r = await db.query(
+      `INSERT INTO sources (name, is_active) VALUES ($1, 1)
+       ON CONFLICT (name) DO UPDATE SET is_active = 1 RETURNING id`,
+      [name]
+    );
+    return { ok: true, source_id: r.rows[0].id, message: 'Source "' + name + '" added.' };
+  }
+
+  throw new Error('Unknown tool: ' + tool);
+}
+
 // ---- Tool dispatcher ------------------------------------------------
 async function _runTool(name, args, ctx) {
+  // CP_ACT_v1: route action tools to preview-only dispatcher
+  if (ACTION_TOOLS.has(name)) {
+    return _runActionTool(name, args || {}, ctx);
+  }
   switch (name) {
     case 'lookup_setup_guide': {
       const q = String((args && args.query) || '').trim();
@@ -1373,7 +1659,21 @@ async function api_copilot_ask(token, message, history) {
   }
 
   const company = (await db.getConfig('COMPANY_NAME', '').catch(() => '')) || 'this CRM';
-  const system = `You are the CRM data assistant for ${company}.
+  const actionsOn = await _actionsEnabled();
+  const cpActBlock = actionsOn ? `
+
+WRITE ACTIONS (beta - enabled for this tenant):
+You can SET UP RULES and RUN OPERATIONS using the write tools (create_autoassign_rule, reassign_leads_bulk, create_status, create_source).
+- NEVER ask the user for confirmation yourself. The SYSTEM always shows a preview card with a Confirm button after you call the tool. Act decisively with sensible defaults.
+- INTENT CLASSIFICATION:
+  * "set up rule", "auto assign", "always", "going forward", "from now on", "any X lead should go to Y" => use create_autoassign_rule (no existing leads touched).
+  * "transfer", "move", "reassign these", "give them to", "distribute X to Y and Z" => use reassign_leads_bulk (acts on existing leads NOW).
+  * If ambiguous, prefer create_autoassign_rule (safer - doesn't disturb existing data).
+- Pick sensible defaults without asking: distribution=round_robin, scope=future. If user said "round robin" / "least loaded" / "50/50", honor it. If two users share a first name, pick the one whose role/team matches context.
+- When you call a write tool the result will contain {_preview: true, ...}. Write ONE short acknowledgement sentence like "Got it - here's the rule I'll set up:" then STOP. The SPA renders the preview card below your text and adds the Confirm button. DO NOT enumerate preview rows yourself.` : `
+
+WRITE ACTIONS are NOT enabled for this tenant. If the user asks to create a rule, reassign leads, add a status, etc, politely tell them write-actions are in private beta and not yet enabled here.`;
+  const system = `You are the CRM data assistant for ${company}.${cpActBlock}
 
 Your job: answer the user's question by calling ONE OR MORE of the provided tools to fetch real data, then summarising the result in clear bullet-style English. Today is ${new Date().toISOString().slice(0, 10)} (UTC). The user is in IST. Calling user: ${me.name} (role: ${me.role}).
 
@@ -1496,13 +1796,82 @@ IMPORTANT RULES:
 
   if (!result.ok) throw new Error(result.error || 'Copilot failed');
 
+  // CP_ACT_v1: lift any preview generated by an action tool to top-level
+  let action_preview = null;
+  if (Array.isArray(result.tools_called)) {
+    for (const t of result.tools_called) {
+      const r = t && t.result;
+      if (r && r._preview && r.confirm_token) {
+        action_preview = {
+          confirm_token: r.confirm_token,
+          title: r.title,
+          rows:  r.rows,
+          explain: r.explain,
+          tool_name: t.name,
+          expires_in_minutes: r.expires_in_minutes || 15,
+        };
+        break;
+      }
+      if (r && r._refuse) {
+        answer = (answer ? (answer + '\n\n') : '') + r._refuse;
+      }
+    }
+  }
+
   return {
     text: answer,
     tools_called: (result.tools_called || []).map(t => ({ name: t.name, args: t.args })),
     daily_used: used + 1,
     daily_limit: limit,
     cost_inr_billed: result.cost_inr_billed || 0,
+    action_preview,
   };
+}
+
+// CP_ACT_v1: execute a pending action by confirm_token.
+async function api_copilot_confirm(token, confirm_token) {
+  const me = await authUser(token);
+  await _ensureTables();
+  if (!confirm_token) throw new Error('confirm_token required');
+  if (!await _actionsEnabled()) throw new Error('Copilot write actions are not enabled for this tenant.');
+  const r = await db.query(
+    `SELECT * FROM copilot_actions WHERE confirm_token = $1 AND user_id = $2 LIMIT 1`,
+    [confirm_token, me.id]
+  );
+  const row = r.rows[0];
+  if (!row) throw new Error('Action not found or already used');
+  if (row.state !== 'pending') throw new Error('Action already ' + row.state);
+  if (new Date(row.expires_at).getTime() < Date.now()) {
+    await db.query(`UPDATE copilot_actions SET state = 'expired' WHERE id = $1`, [row.id]);
+    throw new Error('Action expired - please ask Copilot again');
+  }
+  try {
+    const out = await _executePendingAction(row, { userId: me.id, userName: me.name, userRole: me.role });
+    await db.query(
+      `UPDATE copilot_actions SET state = 'confirmed', confirmed_at = NOW(), result_json = $2::jsonb WHERE id = $1`,
+      [row.id, JSON.stringify(out)]
+    );
+    return { ok: true, tool: row.tool_name, result: out };
+  } catch (e) {
+    await db.query(
+      `UPDATE copilot_actions SET state = 'failed', error_text = $2 WHERE id = $1`,
+      [row.id, String(e.message || e).slice(0, 500)]
+    );
+    throw e;
+  }
+}
+
+// CP_ACT_v1: cancel a pending action.
+async function api_copilot_cancelAction(token, confirm_token) {
+  const me = await authUser(token);
+  await _ensureTables();
+  if (!confirm_token) throw new Error('confirm_token required');
+  await db.query(
+    `UPDATE copilot_actions SET state = 'cancelled'
+      WHERE confirm_token = $1 AND user_id = $2 AND state = 'pending'`,
+    [confirm_token, me.id]
+  );
+  return { ok: true };
 }
 
 async function api_copilot_usage(token) {
@@ -1521,4 +1890,4 @@ async function api_copilot_usage(token) {
   return { today: used, daily_limit: limit, recent };
 }
 
-module.exports = { api_copilot_ask, api_copilot_usage };
+module.exports = { api_copilot_ask, api_copilot_usage, api_copilot_confirm, api_copilot_cancelAction };

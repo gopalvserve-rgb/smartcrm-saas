@@ -34397,6 +34397,11 @@ function _renderCopilotDrawer() {
         thinking.appendChild(h('div', { style: { fontSize: '.7rem', color: '#64748b', marginTop: '.4rem' } },
           'Tools used: ' + r.tools_called.map(t => t.name).join(', ')));
       }
+      // CP_ACT_v1: render preview card if Copilot proposed a write action
+      if (r.action_preview && r.action_preview.confirm_token) {
+        const card = _copilotPreviewCard(r.action_preview, log, history);
+        log.appendChild(card);
+      }
       const q2 = document.getElementById('copilot-quota');
       if (q2) q2.textContent = (r.daily_used || 0) + ' / ' + (r.daily_limit || 50) + ' questions used today';
     } catch (e) {
@@ -34436,6 +34441,79 @@ function _copilotMsg(role, text) {
     }
   }, h('div', { class: 'copilot-text' }, text));
   return wrap;
+}
+
+// CP_ACT_v1: render an action preview card with a single Confirm button.
+// This is the safety gate before any Copilot write hits the DB.
+function _copilotPreviewCard(preview, log, history) {
+  const rows = (preview.rows || []).map(r =>
+    h('div', { style: { display: 'flex', gap: '.5rem', padding: '.35rem 0', borderBottom: '1px dashed #f1f5f9', fontSize: '.85rem' } },
+      h('div', { style: { color: '#64748b', minWidth: '120px', fontWeight: '500' } }, r.label),
+      h('div', { style: { color: '#0f172a', flex: 1 } }, String(r.value || ''))
+    )
+  );
+
+  const status = h('div', { style: { fontSize: '.8rem', color: '#64748b', marginTop: '.5rem' } }, '');
+
+  const confirmBtn = h('button', {
+    class: 'btn primary',
+    style: { padding: '.5rem 1.1rem', borderRadius: '8px', fontWeight: '600' },
+    onclick: async () => {
+      confirmBtn.disabled = true; cancelLink.style.display = 'none';
+      status.textContent = 'Working…';
+      try {
+        const out = await api('api_copilot_confirm', preview.confirm_token);
+        const msg = (out && out.result && out.result.message) || 'Done.';
+        status.innerHTML = '';
+        status.appendChild(h('div', { style: { color: '#059669', fontWeight: '600' } }, '✓ ' + msg));
+        confirmBtn.style.display = 'none';
+        history.push({ role: 'model', text: '✓ ' + msg });
+      } catch (e) {
+        status.textContent = '';
+        status.appendChild(h('div', { style: { color: '#dc2626' } }, '⚠ ' + e.message));
+        confirmBtn.disabled = false;
+        cancelLink.style.display = 'inline';
+      }
+      log.scrollTop = log.scrollHeight;
+    }
+  }, '✓ Confirm');
+
+  const cancelLink = h('a', {
+    href: '#',
+    style: { fontSize: '.85rem', color: '#64748b', textDecoration: 'underline', marginLeft: '.75rem', cursor: 'pointer' },
+    onclick: async (ev) => {
+      ev.preventDefault();
+      try { await api('api_copilot_cancelAction', preview.confirm_token); } catch (_) {}
+      status.innerHTML = '';
+      status.appendChild(h('div', { style: { color: '#64748b' } }, 'Cancelled.'));
+      confirmBtn.style.display = 'none';
+      cancelLink.style.display = 'none';
+      history.push({ role: 'model', text: 'Cancelled.' });
+    }
+  }, 'cancel');
+
+  return h('div', {
+    class: 'copilot-msg preview-card',
+    style: {
+      alignSelf: 'flex-start',
+      background: '#f8fafc',
+      border: '1px solid #cbd5e1',
+      borderLeft: '3px solid #6366f1',
+      padding: '.75rem .9rem',
+      borderRadius: '12px',
+      maxWidth: '92%',
+      marginTop: '.25rem',
+      boxShadow: '0 2px 8px rgba(15,23,42,.06)',
+    }
+  },
+    h('div', { style: { fontSize: '.82rem', fontWeight: '700', color: '#4338ca', marginBottom: '.4rem', letterSpacing: '.02em' } }, (preview.title || 'Action preview').toUpperCase()),
+    ...rows,
+    h('div', { style: { display: 'flex', alignItems: 'center', marginTop: '.7rem' } },
+      confirmBtn,
+      cancelLink
+    ),
+    status
+  );
 }
 
 // Boot the FAB on every page load. Polls until CRM.user is hydrated.
