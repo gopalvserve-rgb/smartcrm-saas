@@ -2,6 +2,15 @@ const db = require('../db/pg');
 const { authUser, getVisibleUserIds } = require('../utils/auth');
 const { assignLeadToCampaign } = require('../utils/campaignAssigner');
 
+// TZ_IST_DATE_v1: convert any UTC timestamp to IST (UTC+5:30) date string
+// so that date-range filters (Today / Yesterday / etc.) computed in the
+// browser's local time (IST) match correctly against stored UTC timestamps.
+function _istDate(ts) {
+  const d = new Date(ts);
+  if (isNaN(d)) return String(ts).slice(0, 10);
+  return new Date(d.getTime() + 330 * 60 * 1000).toISOString().slice(0, 10);
+}
+
 function _parseExtra(lead) {
   if (!lead) return {};
   try {
@@ -452,8 +461,8 @@ async function api_leads_list(token, filters) {
   } else if (filters.qualified === '0' || filters.qualified === 'unqualified') {
     rows = rows.filter(l => Number(l.qualified) !== 1);
   }
-  if (filters.from)        rows = rows.filter(l => String(l.created_at).slice(0, 10) >= filters.from);
-  if (filters.to)          rows = rows.filter(l => String(l.created_at).slice(0, 10) <= filters.to);
+  if (filters.from)        rows = rows.filter(l => _istDate(l.created_at) >= filters.from);
+  if (filters.to)          rows = rows.filter(l => _istDate(l.created_at) <= filters.to);
   if (filters.q) {
     const q = String(filters.q).toLowerCase();
     rows = rows.filter(l =>
@@ -465,8 +474,8 @@ async function api_leads_list(token, filters) {
     );
   }
   if (filters.followup === 'today') {
-    const today = new Date().toISOString().slice(0, 10);
-    rows = rows.filter(l => String(l.next_followup_at || '').slice(0, 10) === today);
+    const today = _istDate(new Date());
+    rows = rows.filter(l => l.next_followup_at && _istDate(l.next_followup_at) === today);
   } else if (filters.followup === 'overdue') {
     const now = new Date().toISOString();
     rows = rows.filter(l => l.next_followup_at && String(l.next_followup_at) < now);
