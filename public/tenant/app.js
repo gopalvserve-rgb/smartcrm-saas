@@ -34246,7 +34246,7 @@ function _renderCopilotDrawer() {
   // Pre-load quota
   api('api_copilot_usage').then(r => {
     const q = document.getElementById('copilot-quota');
-    if (q) q.textContent = (r.today || 0) + ' / ' + (r.daily_limit || 50) + ' questions used today';
+    if (q) q.textContent = (r.daily_used || r.today || 0) + ' / ' + (r.daily_limit || 50) + ' questions · \u20B9' + (Number(r.cost_inr_today || 0).toFixed(2)) + ' · ' + (Number(r.tokens_in_today || 0) + Number(r.tokens_out_today || 0)).toLocaleString('en-IN') + ' tokens today';
   }).catch(() => {});
 
   // ── Preset quick-action chips ─────────────────────────────────
@@ -34403,7 +34403,7 @@ function _renderCopilotDrawer() {
         log.appendChild(card);
       }
       const q2 = document.getElementById('copilot-quota');
-      if (q2) q2.textContent = (r.daily_used || 0) + ' / ' + (r.daily_limit || 50) + ' questions used today';
+      if (q2) q2.textContent = (r.daily_used || r.today || 0) + ' / ' + (r.daily_limit || 50) + ' questions · \u20B9' + (Number(r.cost_inr_today || 0).toFixed(2)) + ' · ' + (Number(r.tokens_in_today || 0) + Number(r.tokens_out_today || 0)).toLocaleString('en-IN') + ' tokens today';
     } catch (e) {
       thinking.querySelector('.copilot-text').textContent = '⚠ ' + e.message;
       thinking.classList.remove('copilot-thinking');

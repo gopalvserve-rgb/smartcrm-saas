@@ -603,28 +603,38 @@ async function _executePendingAction(row, ctx) {
   }
 
   if (tool === 'create_status') {
-    const name  = String(a.name || '').trim();
+    const name = String(a.name || '').trim();
     if (!name) throw new Error('Name required');
-    const color = a.color || '#6b7280';
-    const fin   = a.is_final ? 1 : 0;
-    const r = await db.query(
-      `INSERT INTO statuses (name, color, sort_order, is_final)
-         VALUES ($1, $2, COALESCE((SELECT MAX(sort_order) FROM statuses), 0) + 10, $3)
-       RETURNING id`,
-      [name, color, fin]
-    );
-    return { ok: true, status_id: r.rows[0].id, message: 'Status "' + name + '" added.' };
+    // Use same payload shape as api_statuses_save so the SPA list-render matches.
+    let nextSort = 10;
+    try { const r = await db.query('SELECT COALESCE(MAX(sort_order),0)+10 AS s FROM statuses'); nextSort = Number(r.rows[0]?.s) || 10; } catch (_) {}
+    const id = await db.insert('statuses', {
+      name,
+      color: a.color || '#6b7280',
+      sort_order: nextSort,
+      is_final: a.is_final ? 1 : 0
+    });
+    return { ok: true, status_id: id, message: 'Status "' + name + '" added.' };
   }
 
   if (tool === 'create_source') {
     const name = String(a.name || '').trim();
     if (!name) throw new Error('Name required');
-    const r = await db.query(
-      `INSERT INTO sources (name, is_active) VALUES ($1, 1)
-       ON CONFLICT (name) DO UPDATE SET is_active = 1 RETURNING id`,
-      [name]
-    );
-    return { ok: true, source_id: r.rows[0].id, message: 'Source "' + name + '" added.' };
+    // Match api_sources_save payload so the SPA list shows it correctly.
+    let nextSort = 0;
+    try { const r = await db.query('SELECT COALESCE(MAX(sort_order),0)+10 AS s FROM sources'); nextSort = Number(r.rows[0]?.s) || 0; } catch (_) {}
+    // Reactivate if already exists (soft-deleted)
+    try {
+      const existing = await db.findOneBy('sources', 'name', name);
+      if (existing) {
+        await db.update('sources', existing.id, { is_active: 1 });
+        return { ok: true, source_id: existing.id, message: 'Source "' + name + '" reactivated.' };
+      }
+    } catch (_) {}
+    const id = await db.insert('sources', {
+      name, color: '#6b7280', sort_order: nextSort, is_active: 1
+    });
+    return { ok: true, source_id: id, message: 'Source "' + name + '" added.' };
   }
 
   throw new Error('Unknown tool: ' + tool);
@@ -1829,12 +1839,32 @@ IMPORTANT RULES:
     }
   }
 
+  // Roll up today's totals so the SPA header meter updates after each ask.
+  let costInrToday = 0, tokensInToday = 0, tokensOutToday = 0;
+  try {
+    const t = _todayBounds();
+    const r = await db.query(
+      `SELECT COALESCE(SUM(cost_inr_billed),0)::numeric AS cost,
+              COALESCE(SUM(input_tokens),0)::int  AS tin,
+              COALESCE(SUM(output_tokens),0)::int AS tout
+         FROM crm_copilot_log
+        WHERE user_id = $1 AND created_at >= $2 AND created_at < $3`,
+      [me.id, t.from, t.to]
+    );
+    costInrToday   = Number(r.rows[0]?.cost) || 0;
+    tokensInToday  = Number(r.rows[0]?.tin)  || 0;
+    tokensOutToday = Number(r.rows[0]?.tout) || 0;
+  } catch (_) {}
+
   return {
     text: answer,
     tools_called: (result.tools_called || []).map(t => ({ name: t.name, args: t.args })),
     daily_used: used + 1,
     daily_limit: limit,
     cost_inr_billed: result.cost_inr_billed || 0,
+    cost_inr_today: costInrToday,
+    tokens_in_today: tokensInToday,
+    tokens_out_today: tokensOutToday,
     action_preview,
   };
 }
@@ -1899,7 +1929,25 @@ async function api_copilot_usage(token) {
     );
     recent = r.rows;
   } catch (_) {}
-  return { today: used, daily_limit: limit, recent };
+  // Daily token + cost rollup for the Copilot header meter (CP_ACT_v1)
+  let tokensInToday = 0, tokensOutToday = 0, costInrToday = 0;
+  try {
+    const t = _todayBounds();
+    const r = await db.query(
+      `SELECT COALESCE(SUM(input_tokens),0)::int  AS tin,
+              COALESCE(SUM(output_tokens),0)::int AS tout,
+              COALESCE(SUM(cost_inr_billed),0)::numeric AS cost
+         FROM crm_copilot_log
+        WHERE user_id = $1 AND created_at >= $2 AND created_at < $3`,
+      [me.id, t.from, t.to]
+    );
+    tokensInToday  = Number(r.rows[0]?.tin)  || 0;
+    tokensOutToday = Number(r.rows[0]?.tout) || 0;
+    costInrToday   = Number(r.rows[0]?.cost) || 0;
+  } catch (_) {}
+  return { today: used, daily_limit: limit, recent,
+           tokens_in_today: tokensInToday, tokens_out_today: tokensOutToday,
+           cost_inr_today: costInrToday };
 }
 
 module.exports = { api_copilot_ask, api_copilot_usage, api_copilot_confirm, api_copilot_cancelAction };
