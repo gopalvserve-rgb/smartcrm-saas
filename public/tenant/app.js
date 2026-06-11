@@ -34243,10 +34243,38 @@ function _renderCopilotDrawer() {
     '\u2022 What\'s on my plate today?'
   ));
 
-  // Pre-load quota
+  // Pre-load quota + render recent history (CP_ACT_v1 hotfix v3)
   api('api_copilot_usage').then(r => {
     const q = document.getElementById('copilot-quota');
     if (q) q.textContent = (r.daily_used || r.today || 0) + ' / ' + (r.daily_limit || 50) + ' questions · \u20B9' + (Number(r.cost_inr_today || 0).toFixed(2)) + ' · ' + (Number(r.tokens_in_today || 0) + Number(r.tokens_out_today || 0)).toLocaleString('en-IN') + ' tokens today';
+    // Render recent conversations as a collapsible block at the top.
+    const recent = Array.isArray(r.recent) ? r.recent.slice(0, 10).reverse() : [];
+    if (recent.length) {
+      const hdr = h('div', {
+        id: 'copilot-history-hdr',
+        style: { textAlign: 'center', fontSize: '.7rem', color: '#64748b', padding: '.4rem .75rem', borderBottom: '1px dashed #cbd5e1', marginBottom: '.4rem', cursor: 'pointer', userSelect: 'none' }
+      }, '▼ Show earlier conversations (' + recent.length + ')');
+      const histWrap = h('div', { id: 'copilot-history-wrap', style: { display: 'none', flexDirection: 'column', gap: '.4rem', marginBottom: '.4rem' } });
+      recent.forEach(row => {
+        if (row.question && !/\[object/.test(String(row.question))) {
+          histWrap.appendChild(_copilotMsg('user', row.question));
+        }
+        if (row.answer) {
+          histWrap.appendChild(_copilotMsg('model', row.answer));
+        }
+      });
+      hdr.onclick = () => {
+        const open = histWrap.style.display !== 'none';
+        histWrap.style.display = open ? 'none' : 'flex';
+        hdr.textContent = open
+          ? '▼ Show earlier conversations (' + recent.length + ')'
+          : '▲ Hide earlier conversations';
+        if (!open) log.scrollTop = 0;
+      };
+      // Insert BEFORE the welcome card (which is currently first child).
+      log.insertBefore(histWrap, log.firstChild);
+      log.insertBefore(hdr, log.firstChild);
+    }
   }).catch(() => {});
 
   // ── Preset quick-action chips ─────────────────────────────────
