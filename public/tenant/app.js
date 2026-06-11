@@ -9312,7 +9312,11 @@ function actionTimelineBlock(leadId) {
       } else if (r.action_type === 'followup_set') {
         sub = m.due_at ? ('Due ' + fmtDate(m.due_at)) : null;
       } else if (r.action_type === 'assigned') {
-        sub = (m.from && m.to) ? ('User #' + m.from + ' → #' + m.to) : null;
+        // REASSIGN_LOG_v1 — prefer human names if backend wrote them.
+        // Falls back to "User #N" for old rows that only have ids.
+        const fromTxt = m.from_user_name || (m.from_user_id || m.from ? ('User #' + (m.from_user_id || m.from)) : '—');
+        const toTxt   = m.to_user_name   || (m.to_user_id   || m.to   ? ('User #' + (m.to_user_id   || m.to))   : '—');
+        sub = fromTxt + ' → ' + toTxt + (m.bulk ? ' (bulk)' : '');
       } else if (r.action_type === 'whatsapp_out') {
         sub = (m.template ? '[Template: ' + m.template + '] ' : '') + (m.preview || '');
         if (m.error) sub += ' ⚠ ' + m.error;

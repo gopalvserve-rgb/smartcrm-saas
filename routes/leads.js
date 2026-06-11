@@ -1566,7 +1566,18 @@ async function api_leads_update(token, id, patch) {
 
   if (assigneeChanged) {
     try { require('../utils/automations').fire('lead_assigned', { lead: Object.assign({}, lead, allowed), user: me }); } catch (_) {}
-    try { require('./tat').logAction(id, 'assigned', me.id, { from: lead.assigned_to, to: patch.assigned_to }); } catch (_) {}
+    // REASSIGN_LOG_v1 — enrich with names so the activity timeline reads
+    // human-friendly ("DOMBIVLI MIGA → THANE MIGA") instead of "User #5 → #7".
+    try {
+      let fromName = null, toName = null;
+      try { const u = lead.assigned_to ? await db.findById('users', lead.assigned_to) : null; fromName = u ? u.name : null; } catch (_) {}
+      try { const u = patch.assigned_to ? await db.findById('users', patch.assigned_to) : null; toName = u ? u.name : null; } catch (_) {}
+      require('./tat').logAction(id, 'assigned', me.id, {
+        from: lead.assigned_to, to: patch.assigned_to,
+        from_user_id: lead.assigned_to, to_user_id: patch.assigned_to,
+        from_user_name: fromName, to_user_name: toName
+      });
+    } catch (_) {}
 
     // CHAT_AUTO_REASSIGN_v1 (2026-06-04) — moved to the shared
     // _reassignChatForLead helper so api_leads_update, api_leads_bulkUpdate
@@ -1911,6 +1922,21 @@ async function api_leads_bulkUpdate(token, leadIds, patch) {
       // WA chat thread for every selected lead, same as the single-edit
       // path. Skipped automatically when the new owner is the actor.
       try { await _reassignChatForLead({ lead, newOwnerId: newAssignee, actorId: Number(me.id), reason: 'bulk lead reassign' }); } catch (_) {}
+      // REASSIGN_LOG_v1 — log the assignment change to the activity timeline
+      // so users can see who used to own this lead. Without this, an admin's
+      // bulk reassign looks like a visibility leak ("why is X's old activity
+      // on Y's lead?").
+      try {
+        let fromName = null, toName = null;
+        try { const u = wasAssignedTo ? await db.findById('users', wasAssignedTo) : null; fromName = u ? u.name : null; } catch (_) {}
+        try { const u = await db.findById('users', newAssignee); toName = u ? u.name : null; } catch (_) {}
+        await require('./tat').logAction(id, 'assigned', me.id, {
+          from: wasAssignedTo, to: newAssignee,
+          from_user_id: wasAssignedTo, to_user_id: newAssignee,
+          from_user_name: fromName, to_user_name: toName,
+          bulk: 1
+        });
+      } catch (_) {}
       if (newAssignee !== Number(me.id)) {
         if (!reassignedPerUser[newAssignee]) reassignedPerUser[newAssignee] = [];
         reassignedPerUser[newAssignee].push(lead.name || ('Lead #' + id));
