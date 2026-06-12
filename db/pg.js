@@ -491,9 +491,10 @@ const SCHEMA = {
       'last_verified_at', 'last_verify_error',
       'last_event_at', 'last_event_error', 'last_batch_day',
       'capi_access_token',
+      'crm_event_set_id', 'crm_access_token', 'crm_stage_map_json', 'crm_is_enabled',
       'updated_at', 'updated_by'
     ],
-    json: ['status_event_map_json']
+    json: ['status_event_map_json', 'crm_stage_map_json']
   },
   meta_capi_events_log: {
     columns: [

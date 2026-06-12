@@ -55,6 +55,10 @@ async function _ensureSchema() {
       default_currency        TEXT DEFAULT 'INR',
       test_event_code         TEXT,
       capi_access_token       TEXT,
+      crm_event_set_id        TEXT,
+      crm_access_token        TEXT,
+      crm_stage_map_json      JSONB DEFAULT '{}'::jsonb,
+      crm_is_enabled          BOOLEAN DEFAULT FALSE,
       last_verified_at        TIMESTAMPTZ,
       last_verify_error       TEXT,
       last_event_at           TIMESTAMPTZ,
@@ -66,6 +70,10 @@ async function _ensureSchema() {
   `);
   await db.query(`ALTER TABLE meta_capi_settings ADD COLUMN IF NOT EXISTS last_batch_day TEXT;`);
   await db.query(`ALTER TABLE meta_capi_settings ADD COLUMN IF NOT EXISTS capi_access_token TEXT;`);
+  await db.query(`ALTER TABLE meta_capi_settings ADD COLUMN IF NOT EXISTS crm_event_set_id TEXT;`);
+  await db.query(`ALTER TABLE meta_capi_settings ADD COLUMN IF NOT EXISTS crm_access_token TEXT;`);
+  await db.query(`ALTER TABLE meta_capi_settings ADD COLUMN IF NOT EXISTS crm_stage_map_json JSONB DEFAULT '{}'::jsonb;`);
+  await db.query(`ALTER TABLE meta_capi_settings ADD COLUMN IF NOT EXISTS crm_is_enabled BOOLEAN DEFAULT FALSE;`)
   await db.query(`
     CREATE TABLE IF NOT EXISTS meta_capi_events_log (
       id              SERIAL PRIMARY KEY,
@@ -179,6 +187,13 @@ async function _loadSettings() {
       : {};
   } catch (_) {}
   s.status_event_map = map;
+  let crmMap = {};
+  try {
+    crmMap = s.crm_stage_map_json
+      ? (typeof s.crm_stage_map_json === 'string' ? JSON.parse(s.crm_stage_map_json) : s.crm_stage_map_json)
+      : {};
+  } catch (_) {}
+  s.crm_stage_map = crmMap;
   return s;
 }
 
@@ -205,6 +220,11 @@ async function api_meta_capi_settings_get(token) {
       test_event_code:     s.test_event_code || '',
       capi_access_token:   s.capi_access_token ? '••• saved (paste new to replace)' : '',
       has_capi_token:      !!s.capi_access_token,
+      crm_is_enabled:      !!s.crm_is_enabled,
+      crm_event_set_id:    s.crm_event_set_id || '',
+      crm_access_token:    s.crm_access_token ? '••• saved (paste new to replace)' : '',
+      has_crm_token:       !!s.crm_access_token,
+      crm_stage_map:       s.crm_stage_map || {},
       last_verified_at:    s.last_verified_at,
       last_verify_error:   s.last_verify_error,
       last_event_at:       s.last_event_at,
@@ -212,7 +232,8 @@ async function api_meta_capi_settings_get(token) {
     },
     fb_connected: hasFb,
     event_names: ['Purchase', 'Lead', 'Schedule', 'CompleteRegistration',
-                  'Contact', 'SubmitApplication', 'StartTrial']
+                  'Contact', 'SubmitApplication', 'StartTrial'],
+    crm_stages: ['new', 'working', 'qualified', 'disqualified', 'converted']
   };
 }
 
@@ -238,6 +259,14 @@ async function api_meta_capi_settings_save(token, payload) {
     capi_access_token:   (p.capi_access_token !== undefined && String(p.capi_access_token).indexOf('•••') < 0)
                          ? String(p.capi_access_token || '').trim()
                          : s.capi_access_token,
+    crm_is_enabled:      p.crm_is_enabled === undefined ? s.crm_is_enabled : !!p.crm_is_enabled,
+    crm_event_set_id:    p.crm_event_set_id !== undefined ? String(p.crm_event_set_id || '').trim() : s.crm_event_set_id,
+    crm_access_token:    (p.crm_access_token !== undefined && String(p.crm_access_token).indexOf('•••') < 0)
+                         ? String(p.crm_access_token || '').trim()
+                         : s.crm_access_token,
+    crm_stage_map_json:  p.crm_stage_map !== undefined
+                         ? JSON.stringify(p.crm_stage_map || {})
+                         : (s.crm_stage_map_json || '{}'),
     updated_at:          db.nowIso(),
     updated_by:          me.id
   };
@@ -366,6 +395,64 @@ async function _dispatch(s, tok, eventBody, leadId, statusId, eventName, eventId
   return { ok: dispatchStatus === 'sent', dispatchStatus, httpStatus, responseText };
 }
 
+
+// META_CAPI_CRM_MODE_v1 — fire LeadCrmStageChanged event to a separate
+// CRM dataset (Lead Ads optimisation). Only fires when:
+//   1. CRM mode is enabled with its own event_set_id + access_token
+//   2. The lead has an fb leadgen_id (came from FB Lead Ads)
+//   3. The new status maps to one of Meta's 5 stages
+async function _sendCrmStageChange(s, lead, statusId, when) {
+  if (!s.crm_is_enabled || !s.crm_event_set_id || !s.crm_access_token) return;
+  const stage = (s.crm_stage_map || {})[String(statusId)];
+  if (!stage) return;
+  // Extract leadgen_id from meta_json (set by /hook/meta and other FB paths)
+  let leadgenId = null;
+  try {
+    const m = lead.meta_json
+      ? (typeof lead.meta_json === 'string' ? JSON.parse(lead.meta_json) : lead.meta_json)
+      : {};
+    leadgenId = m.leadgen_id || m.lead_id || null;
+  } catch (_) {}
+  if (!leadgenId) return; // CRM-mode only applies to Lead Ad leads
+  const eventTime = when || new Date();
+  const eventId = 'crmstage_' + lead.id + '_' + statusId + '_' + Math.floor(eventTime.getTime() / 1000);
+  const eventBody = {
+    event_name: 'LeadCrmStageChanged',
+    event_time: Math.floor(eventTime.getTime() / 1000),
+    event_id: eventId,
+    action_source: 'system_generated',
+    lead_event_source: 'SmartCRM',
+    user_data: { lead_id: String(leadgenId) },
+    custom_data: { lead_event_stage: String(stage).toLowerCase() }
+  };
+  const url = 'https://graph.facebook.com/v20.0/' + encodeURIComponent(s.crm_event_set_id) +
+              '/events?access_token=' + encodeURIComponent(s.crm_access_token);
+  const fetch = require('node-fetch');
+  let dispatchStatus = 'queued', httpStatus = 0, responseText = '';
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: [eventBody] })
+    });
+    httpStatus = resp.status;
+    responseText = await resp.text();
+    dispatchStatus = (resp.ok && !/"error"/i.test(responseText)) ? 'sent' : 'failed';
+  } catch (e) {
+    dispatchStatus = 'failed';
+    responseText = 'Network: ' + e.message;
+  }
+  try {
+    await db.query(
+      `INSERT INTO meta_capi_events_log
+         (lead_id, status_id, event_name, event_time, event_id, dispatch_status, http_status, response_text, payload_json)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (event_id) DO NOTHING`,
+      [lead.id, statusId, 'LeadCrmStageChanged:' + stage, eventTime, eventId, dispatchStatus, httpStatus, responseText.slice(0, 2000), JSON.stringify(eventBody)]
+    );
+  } catch (_) {}
+}
+
 async function _sendForLead(s, tok, lead, statusId, eventName, when) {
   const eventTime = when || new Date();
   const eventId = 'crm_' + lead.id + '_' + statusId + '_' + Math.floor(eventTime.getTime() / 1000);
@@ -383,7 +470,10 @@ async function _sendForLead(s, tok, lead, statusId, eventName, when) {
     user_data: userData,
     ...(Object.keys(customData).length ? { custom_data: customData } : {})
   };
-  return await _dispatch(s, tok, eventBody, lead.id, statusId, eventName, eventId, eventTime);
+  const result = await _dispatch(s, tok, eventBody, lead.id, statusId, eventName, eventId, eventTime);
+  // META_CAPI_CRM_MODE_v1 — also fire CRM stage event (if configured + applicable)
+  try { await _sendCrmStageChange(s, lead, statusId, eventTime); } catch (e) { console.warn('[meta-capi] CRM stage send failed:', e.message); }
+  return result;
 }
 
 async function api_meta_capi_send_lead(token, payload) {

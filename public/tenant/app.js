@@ -22436,6 +22436,68 @@ async function adminMetaCapi() {
   wrap.appendChild(verifyBtn);
   wrap.appendChild(verifyResult);
 
+  // ═════════════ CRM MODE (Lead Ads optimisation) — second data source ═════════════
+  // META_CAPI_CRM_MODE_v1 — for tenants who ALSO want to push lead-stage
+  // changes to a Meta 'CRM' data source. Fires LeadCrmStageChanged events
+  // with the 5-stage enum for leads that came from FB Lead Ads. Optional.
+  const crmEnabledCb = h('input', { type: 'checkbox', checked: cfg.crm_is_enabled ? 'checked' : null });
+  const crmEventSetInp = h('input', { type: 'text', value: cfg.crm_event_set_id || '',
+    placeholder: 'e.g. 1234567890123456', style: { fontFamily: 'monospace', minWidth: '320px' } });
+  const crmTokenInp = h('input', { type: 'password', value: cfg.crm_access_token || '',
+    placeholder: cfg.has_crm_token ? 'Saved — paste new to replace' : 'EAA...',
+    style: { fontFamily: 'monospace', minWidth: '320px', width: '100%', maxWidth: '500px' } });
+
+  const crmCard = h('details', { style: { marginTop: '1.5rem',
+    background: '#fef3c7', borderRadius: '12px', border: '1px solid #f59e0b',
+    padding: '.85rem 1.1rem' } });
+  crmCard.appendChild(h('summary', { style: { cursor: 'pointer', fontWeight: '700', color: '#78350f', fontSize: '.95rem' } },
+    '🟨 Also enable CRM mode (Lead Ads optimisation) — optional'));
+  crmCard.appendChild(h('p', { style: { fontSize: '.83rem', color: '#92400e', marginTop: '.5rem' } },
+    'For tenants running FB Lead Ads campaigns. Meta uses these lead-stage updates to find more "Won-like" leads. ',
+    'Connect a separate ',
+    h('b', {}, 'CRM data source'),
+    ' in Events Manager (the CRM radio option, not Offline) and paste its Event Set ID + Access Token below. ',
+    'Only fires for leads that came from FB Lead Ads (we use the leadgen_id we captured on intake).'));
+
+  crmCard.appendChild(h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', margin: '.75rem 0 .5rem' } },
+    crmEnabledCb, h('b', {}, 'Enable CRM lifecycle push')));
+
+  crmCard.appendChild(h('div', { style: { marginTop: '.5rem' } },
+    h('label', { style: { fontWeight: '600', display: 'block', marginBottom: '.25rem', fontSize: '.85rem' } }, 'CRM Event Set ID'),
+    crmEventSetInp
+  ));
+  crmCard.appendChild(h('div', { style: { marginTop: '.5rem' } },
+    h('label', { style: { fontWeight: '600', display: 'block', marginBottom: '.25rem', fontSize: '.85rem' } }, 'CRM Access Token'),
+    crmTokenInp
+  ));
+
+  // Stage mapping (5 fixed stages)
+  crmCard.appendChild(h('h4', { style: { marginTop: '1rem', color: '#78350f' } }, 'Status → CRM stage mapping'));
+  crmCard.appendChild(h('p', { style: { fontSize: '.78rem', color: '#92400e' } },
+    'Meta only accepts these 5 stages. Pick which CRM status maps to which Meta stage.'));
+  const crmStages = data.crm_stages || ['new', 'working', 'qualified', 'disqualified', 'converted'];
+  const crmMapBody = h('tbody', {});
+  const currCrmMap = cfg.crm_stage_map || {};
+  const autoCrmStage = (st) => {
+    const n = String(st.name || '').toLowerCase();
+    if (n.includes('won') || n.includes('closed') || n.includes('token')) return 'converted';
+    if (n.includes('junk') || n.includes('lost') || n.includes('spam') || n.includes('disqualif')) return 'disqualified';
+    if (n.includes('hot') || n.includes('qualif') || n.includes('demo')) return 'qualified';
+    if (n.includes('follow') || n.includes('contact') || n.includes('visit')) return 'working';
+    if (n.includes('new')) return 'new';
+    return '';
+  };
+  // statuses is loaded a few lines below — store the placeholder and fill it after
+  const crmMapTable = h('table', { class: 'mini-table',
+    style: { width: '100%', maxWidth: '560px', borderCollapse: 'collapse', fontSize: '.85rem' } },
+    h('thead', {}, h('tr', {},
+      h('th', { style: { textAlign: 'left', padding: '.4rem .5rem' } }, 'Lead status'),
+      h('th', { style: { textAlign: 'left', padding: '.4rem .5rem' } }, 'CRM stage'))),
+    crmMapBody);
+  crmCard.appendChild(crmMapTable);
+
+  wrap.appendChild(crmCard);
+
   // ── Status → Event mapping ──
   let statuses = []; try { statuses = (await api('api_statuses_list')) || []; } catch (_) {}
   if (!Array.isArray(statuses) && statuses.rows) statuses = statuses.rows;
@@ -22473,6 +22535,21 @@ async function adminMetaCapi() {
           background: st.color || '#94a3b8', marginRight: '.5rem', verticalAlign: 'middle' } }),
         st.name),
       h('td', { style: { padding: '.4rem .5rem' } }, sel)
+    ));
+  });
+  // META_CAPI_CRM_MODE_v1 — populate CRM stage mapping table now that statuses are loaded
+  statuses.forEach(st => {
+    const current = currCrmMap[String(st.id)] || autoCrmStage(st);
+    const sel = h('select', { 'data-crm-status-id': st.id },
+      h('option', { value: '' }, '— Skip —'),
+      ...crmStages.map(stg => h('option', { value: stg, selected: stg === current ? 'selected' : null }, stg))
+    );
+    crmMapBody.appendChild(h('tr', {},
+      h('td', { style: { padding: '.35rem .5rem' } },
+        h('span', { style: { display: 'inline-block', width: '10px', height: '10px', borderRadius: '50%',
+          background: st.color || '#94a3b8', marginRight: '.5rem', verticalAlign: 'middle' } }),
+        st.name),
+      h('td', { style: { padding: '.35rem .5rem' } }, sel)
     ));
   });
   wrap.appendChild(h('table', { class: 'mini-table',
@@ -22523,10 +22600,19 @@ async function adminMetaCapi() {
       if (sel.value) map[String(sid)] = sel.value;
     });
     try {
+      const crmMap = {};
+      crmMapBody.querySelectorAll('select[data-crm-status-id]').forEach(sel => {
+        const sid = sel.dataset.crmStatusId;
+        if (sel.value) crmMap[String(sid)] = sel.value;
+      });
       await api('api_meta_capi_settings_save', {
         is_enabled: enabledCb.checked,
         event_set_id: eventSetInp.value,
         capi_access_token: capiTokenInp.value,
+        crm_is_enabled: crmEnabledCb.checked,
+        crm_event_set_id: crmEventSetInp.value,
+        crm_access_token: crmTokenInp.value,
+        crm_stage_map: crmMap,
         status_event_map: map,
         include_phone: phoneCb.checked,
         include_email: emailCb.checked,
