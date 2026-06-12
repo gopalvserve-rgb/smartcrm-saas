@@ -120,15 +120,33 @@ function _normEmail(e) {
 }
 
 async function _getFbAccessToken() {
+  // META_CAPI_TOKEN_FALLBACK_v1 (2026-06-12) — tenants connect FB pages via
+  // routes/social.js OAuth which stores per-page tokens in social_pages.
+  // The Ads-Manager-only connection (routes/social.js api_social_ads_*)
+  // sometimes leaves social_ad_accounts.access_token NULL because the
+  // user token isn't always passed through. Try both tables so the CAPI
+  // tab works as long as ANY FB OAuth has completed on this tenant.
   try {
-    const r = await db.query(
+    const r1 = await db.query(
       `SELECT access_token FROM social_ad_accounts
         WHERE access_token IS NOT NULL AND access_token <> ''
         ORDER BY is_monitored DESC, added_at DESC LIMIT 1`
     );
-    const tok = r && r.rows && r.rows[0] && r.rows[0].access_token;
-    return tok ? String(tok) : null;
-  } catch (_) { return null; }
+    const t1 = r1 && r1.rows && r1.rows[0] && r1.rows[0].access_token;
+    if (t1) return String(t1);
+  } catch (_) {}
+  // Fall back to page tokens — they carry the full granted scopes
+  // (including ads_management if the user accepted) and work for CAPI.
+  try {
+    const r2 = await db.query(
+      `SELECT access_token FROM social_pages
+        WHERE access_token IS NOT NULL AND access_token <> ''
+        ORDER BY is_monitored DESC LIMIT 1`
+    );
+    const t2 = r2 && r2.rows && r2.rows[0] && r2.rows[0].access_token;
+    if (t2) return String(t2);
+  } catch (_) {}
+  return null;
 }
 
 async function _loadSettings() {
