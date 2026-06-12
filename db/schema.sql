@@ -1617,4 +1617,11 @@ CREATE TABLE IF NOT EXISTS inv_audit_log (
   id          SERIAL PRIMARY KEY,
   user_id     INTEGER,
   user_email  TEXT,
-  action      T
+    action      TEXT NOT NULL,         -- invoice.create | invoice.cancel | payment.add | ...
+  entity      TEXT NOT NULL,         -- invoice | payment | company | customer | item
+  entity_id   INTEGER,
+  detail      JSONB,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_inv_audit_entity ON inv_audit_log(entity, entity_id);
+CREATE INDEX IF NOT EXISTS idx_inv_audit_created ON inv_audit_log(created_at DESC);
