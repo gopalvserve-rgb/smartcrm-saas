@@ -228,9 +228,34 @@ async function api_leads_quickNote(token, payload) {
   }
 
   // ----- Apply via existing leads API so all hooks fire normally -----
+  // QNOTE_CLASH_FIX_v1 (2026-06-12) — if the patch includes a follow-up time
+  // that clashes with another lead's existing follow-up slot, api_leads_update
+  // throws "Follow-up clash...". Rather than fail the whole Quick Note save
+  // (and lose the rep's remark + status update), we DROP the offending
+  // next_followup_at, retry the update with just status, and append the
+  // clash warning to the final message so the rep knows to pick a new time.
   const leadsRoute = require('./leads');
+  let clashWarning = null;
   if (Object.keys(patch).length > 0) {
-    await leadsRoute.api_leads_update(token, leadId, patch);
+    try {
+      await leadsRoute.api_leads_update(token, leadId, patch);
+    } catch (e) {
+      const msg = String(e && e.message || '');
+      if (/follow-?up clash/i.test(msg) && patch.next_followup_at) {
+        clashWarning = msg.replace(/^Follow-up clash:\s*/i, '');
+        // Strip the conflicting follow-up time and retry — status + remark
+        // should still land even if the time slot is taken.
+        delete patch.next_followup_at;
+        followupISO = null;
+        usedDefaultTime = false;
+        if (Object.keys(patch).length > 0) {
+          try { await leadsRoute.api_leads_update(token, leadId, patch); }
+          catch (e2) { throw e2; }
+        }
+      } else {
+        throw e;
+      }
+    }
   }
 
   // Remark — write directly to the remarks table so we don't depend on
@@ -272,6 +297,10 @@ async function api_leads_quickNote(token, payload) {
   let message = '✓ Saved' + (parts.length ? ' — ' + parts.join(' · ') : '');
   if (usedDefaultTime) {
     message += '. Set 10:00 AM since no time was given.';
+  }
+  // QNOTE_CLASH_FIX_v1 — warn the rep the follow-up time wasn't applied
+  if (clashWarning) {
+    message += ' ⚠ Follow-up time NOT set: ' + clashWarning;
   }
 
   return {
