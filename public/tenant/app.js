@@ -22667,32 +22667,172 @@ async function adminMetaCapi() {
     wrap.appendChild(statsCard);
   } catch (_) {}
 
-  // ── Recent events log ──
-  try {
-    const log = await api('api_meta_capi_events_log', { limit: 20 });
-    const rows = log.rows || [];
-    if (rows.length) {
-      wrap.appendChild(h('h3', { style: { marginTop: '1.5rem' } }, 'Recent events (last 20)'));
-      const tbl = h('table', { class: 'mini-table', style: { width: '100%', fontSize: '.82rem' } },
-        h('thead', {}, h('tr', {},
-          h('th', {}, 'When'), h('th', {}, 'Lead'), h('th', {}, 'Event'),
-          h('th', {}, 'Status'), h('th', {}, 'Details')
-        )),
-        h('tbody', {}, ...rows.map(r => h('tr', {
-          style: { background: r.dispatch_status === 'sent' ? '' : '#fef2f2' }
-        },
-          h('td', {}, fmtDate(r.event_time || r.created_at, 'relative')),
-          h('td', {}, '#' + (r.lead_id || '—')),
-          h('td', {}, r.event_name || '—'),
-          h('td', {}, r.dispatch_status === 'sent' ? '✓ Sent' : '✗ ' + (r.dispatch_status || '')),
-          h('td', { style: { fontSize: '.72rem', color: '#64748b', maxWidth: '320px',
-            overflow: 'hidden', textOverflow: 'ellipsis' } },
-            (r.response_text || '').slice(0, 80))
-        )))
-      );
-      wrap.appendChild(tbl);
+  // ── Recent events log (META_CAPI_LOG_VIEWER_v1) ─────────────────────────
+  // Shows every event the worker / status-change hook attempted, with:
+  //   - Day-range chips (1 / 3 / 7 days)
+  //   - Status filter chips (All / Sent / Failed / Queued)
+  //   - Summary count line
+  //   - Lead name + phone for human-friendly rows
+  //   - Click a row to expand and inspect the full payload + response
+  //   - Refresh button
+  // Default is 3 days because the user specifically wanted a log to debug
+  // what's happening over the last few days.
+  const logSection = h('div', { style: { marginTop: '1.5rem' } });
+  logSection.appendChild(h('h3', { style: { marginTop: 0 } }, '📋 Event log'));
+  logSection.appendChild(h('p', { class: 'muted', style: { fontSize: '.83rem', marginTop: '-.5rem' } },
+    'Every conversion event we attempted to send to Meta, with the response. ' +
+    'Click a row to see the exact payload we sent.'));
+
+  const logState = { since: 3, status: 'all' };
+  const logToolbar = h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '.4rem',
+    margin: '.5rem 0', alignItems: 'center' } });
+  const logSummary = h('div', { class: 'muted', style: { fontSize: '.78rem', marginLeft: 'auto' } });
+  const logBody = h('div', {});
+
+  const chipBtn = (label, isActive, onClick) => h('button', {
+    type: 'button',
+    style: {
+      padding: '.25rem .65rem',
+      borderRadius: '999px',
+      border: '1px solid ' + (isActive ? '#4f46e5' : '#cbd5e1'),
+      background: isActive ? '#4f46e5' : '#fff',
+      color: isActive ? '#fff' : '#475569',
+      fontSize: '.78rem',
+      cursor: 'pointer'
+    },
+    onclick: onClick
+  }, label);
+
+  async function _renderLog() {
+    logBody.replaceChildren(h('div', { class: 'muted', style: { padding: '.75rem' } }, 'Loading…'));
+    let data;
+    try {
+      data = await api('api_meta_capi_events_log', { since_days: logState.since, status: logState.status, limit: 300 });
+    } catch (e) {
+      logBody.replaceChildren(h('div', { style: { color: '#991b1b', padding: '.5rem' } }, '✗ ' + e.message));
+      return;
     }
-  } catch (_) {}
+    const rows = data.rows || [];
+    const sum = data.summary || {};
+    logSummary.textContent = 'Window: ' + (data.since_days || logState.since) + 'd  ·  ' +
+      'Total ' + (sum.total || 0) + '  ·  ✓ ' + (sum.sent || 0) +
+      '  ·  ✗ ' + (sum.failed || 0) + '  ·  ⏳ ' + (sum.queued || 0);
+
+    if (!rows.length) {
+      logBody.replaceChildren(h('div', { class: 'muted', style: { padding: '.85rem',
+        textAlign: 'center', background: '#f8fafc', borderRadius: '8px' } },
+        'No events in this window. As lead statuses change, events will appear here.'));
+      return;
+    }
+
+    const _fmtTime = (iso) => {
+      try {
+        const d = new Date(iso);
+        return d.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+      } catch (_) { return iso || '—'; }
+    };
+    const _statusPill = (st) => {
+      const colors = {
+        sent:   ['#065f46', '#d1fae5', '✓ Sent'],
+        failed: ['#991b1b', '#fee2e2', '✗ Failed'],
+        queued: ['#92400e', '#fef3c7', '⏳ Queued']
+      };
+      const [fg, bg, lbl] = colors[st] || ['#475569', '#e2e8f0', st || '—'];
+      return h('span', { style: { padding: '.1rem .5rem', borderRadius: '999px',
+        background: bg, color: fg, fontSize: '.7rem', fontWeight: '600' } }, lbl);
+    };
+
+    const tbl = h('table', { class: 'mini-table', style: { width: '100%', fontSize: '.82rem' } },
+      h('thead', {}, h('tr', {},
+        h('th', { style: { textAlign: 'left' } }, 'When'),
+        h('th', { style: { textAlign: 'left' } }, 'Lead'),
+        h('th', { style: { textAlign: 'left' } }, 'Event'),
+        h('th', { style: { textAlign: 'left' } }, 'Status'),
+        h('th', { style: { textAlign: 'left' } }, 'HTTP'),
+        h('th', { style: { textAlign: 'left' } }, 'Response / error')
+      )),
+      h('tbody', {}, ...rows.map(r => {
+        const leadText = r.lead_name ? (r.lead_name + (r.lead_phone ? ' · ' + r.lead_phone : ''))
+                                     : ('Lead #' + (r.lead_id || '—'));
+        const detailRow = h('tr', { style: { display: 'none', background: '#f8fafc' } },
+          h('td', { colspan: '6', style: { padding: '.75rem' } })
+        );
+        const detailCell = detailRow.firstChild;
+        const expander = h('tr', { style: {
+          cursor: 'pointer',
+          background: r.dispatch_status === 'sent' ? '' : '#fef2f2'
+        }, onclick: () => {
+          if (detailRow.style.display === 'none') {
+            // Lazily build the expanded panel on first open
+            if (!detailCell.dataset.built) {
+              const payloadStr = (() => {
+                try {
+                  const obj = r.payload_json
+                    ? (typeof r.payload_json === 'string' ? JSON.parse(r.payload_json) : r.payload_json)
+                    : null;
+                  return obj ? JSON.stringify(obj, null, 2) : '(no payload captured)';
+                } catch (_) { return String(r.payload_json || '(no payload)'); }
+              })();
+              detailCell.appendChild(h('div', { style: { display: 'grid', gap: '.65rem' } },
+                h('div', {},
+                  h('b', {}, 'Event ID: '),
+                  h('code', { style: { fontSize: '.75rem' } }, r.event_id || '(none)')),
+                h('div', {},
+                  h('b', {}, 'Sent to Meta:'),
+                  h('pre', { style: { background: '#0f172a', color: '#e2e8f0',
+                    padding: '.75rem', borderRadius: '6px', fontSize: '.7rem',
+                    overflow: 'auto', maxHeight: '300px', margin: '.25rem 0 0' } }, payloadStr)),
+                h('div', {},
+                  h('b', {}, 'Response: '),
+                  h('div', { style: { background: '#fff', padding: '.5rem',
+                    borderRadius: '6px', fontSize: '.75rem', whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word', border: '1px solid #e2e8f0', marginTop: '.25rem' } },
+                    r.response_text || '(empty)'))
+              ));
+              detailCell.dataset.built = '1';
+            }
+            detailRow.style.display = '';
+          } else {
+            detailRow.style.display = 'none';
+          }
+        } },
+          h('td', {}, _fmtTime(r.created_at)),
+          h('td', { style: { maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap' } }, leadText),
+          h('td', {}, r.event_name || '—'),
+          h('td', {}, _statusPill(r.dispatch_status)),
+          h('td', {}, r.http_status || '—'),
+          h('td', { style: { fontSize: '.72rem', color: '#64748b', maxWidth: '320px',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+            (r.response_text || '').slice(0, 100))
+        );
+        return [expander, detailRow];
+      }).flat())
+    );
+    logBody.replaceChildren(tbl);
+  }
+
+  const _rebuildToolbar = () => {
+    logToolbar.replaceChildren(
+      h('span', { style: { fontSize: '.78rem', color: '#475569', marginRight: '.25rem' } }, 'Range:'),
+      chipBtn('1 day',  logState.since === 1, () => { logState.since = 1; _rebuildToolbar(); _renderLog(); }),
+      chipBtn('3 days', logState.since === 3, () => { logState.since = 3; _rebuildToolbar(); _renderLog(); }),
+      chipBtn('7 days', logState.since === 7, () => { logState.since = 7; _rebuildToolbar(); _renderLog(); }),
+      h('span', { style: { fontSize: '.78rem', color: '#475569', margin: '0 .25rem 0 .75rem' } }, 'Status:'),
+      chipBtn('All',    logState.status === 'all',    () => { logState.status = 'all';    _rebuildToolbar(); _renderLog(); }),
+      chipBtn('Sent',   logState.status === 'sent',   () => { logState.status = 'sent';   _rebuildToolbar(); _renderLog(); }),
+      chipBtn('Failed', logState.status === 'failed', () => { logState.status = 'failed'; _rebuildToolbar(); _renderLog(); }),
+      h('button', { type: 'button', onclick: _renderLog,
+        style: { padding: '.25rem .75rem', borderRadius: '6px', border: '1px solid #cbd5e1',
+          background: '#fff', cursor: 'pointer', fontSize: '.78rem', marginLeft: '.5rem' } }, '🔄 Refresh'),
+      logSummary
+    );
+  };
+  _rebuildToolbar();
+  logSection.appendChild(logToolbar);
+  logSection.appendChild(logBody);
+  wrap.appendChild(logSection);
+  _renderLog().catch(() => {});
 
   // ── Setup instructions accordion ──
   wrap.appendChild(h('details', { style: { marginTop: '1.5rem' } },

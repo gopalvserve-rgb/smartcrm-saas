@@ -607,14 +607,46 @@ async function api_meta_capi_events_log(token, payload) {
   const me = await authUser(token);
   if (me.role !== 'admin') throw new Error('Admin only');
   await _ensureSchema();
-  const limit = Math.min(200, Math.max(10, Number((payload && payload.limit) || 50)));
+  const limit     = Math.min(500, Math.max(10, Number((payload && payload.limit) || 200)));
+  const sinceDays = Math.min(30, Math.max(1, Number((payload && payload.since_days) || 3)));
+  const since = new Date(Date.now() - sinceDays * 86400e3);
+  // Optional dispatch_status filter ('sent' | 'failed' | 'all')
+  const wantStatus = (payload && payload.status) || 'all';
+  let where = 'created_at >= $1';
+  const params = [since.toISOString()];
+  if (wantStatus === 'sent' || wantStatus === 'failed') {
+    where += ' AND dispatch_status = $2';
+    params.push(wantStatus);
+  }
+  // META_CAPI_LOG_VIEWER_v1 — include the payload_json so we can show what was
+  // actually sent to Meta, plus joined lead name+phone for human-readable rows.
   const r = await db.query(
-    `SELECT id, lead_id, status_id, event_name, event_time, event_id,
-            dispatch_status, http_status, response_text, created_at
-       FROM meta_capi_events_log
-       ORDER BY created_at DESC LIMIT $1`, [limit]
+    `SELECT l.id, l.lead_id, l.status_id, l.event_name, l.event_time, l.event_id,
+            l.dispatch_status, l.http_status, l.response_text, l.payload_json,
+            l.created_at,
+            ld.name AS lead_name, ld.phone AS lead_phone
+       FROM meta_capi_events_log l
+       LEFT JOIN leads ld ON ld.id = l.lead_id
+       WHERE ${where}
+       ORDER BY l.created_at DESC LIMIT $${params.length + 1}`,
+    [...params, limit]
   );
-  return { rows: r.rows };
+  // Summary counts within the window for the SPA header.
+  const counts = await db.query(
+    `SELECT
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE dispatch_status='sent')::int   AS sent,
+        COUNT(*) FILTER (WHERE dispatch_status='failed')::int AS failed,
+        COUNT(*) FILTER (WHERE dispatch_status='queued')::int AS queued
+       FROM meta_capi_events_log
+       WHERE created_at >= $1`, [since.toISOString()]
+  );
+  return {
+    rows: r.rows,
+    summary: counts.rows[0] || { total: 0, sent: 0, failed: 0, queued: 0 },
+    since_days: sinceDays,
+    window_from: since.toISOString()
+  };
 }
 
 async function api_meta_capi_stats(token) {

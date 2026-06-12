@@ -353,3 +353,12 @@ SELECT 'improvement',
        '🎯',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Meta Conversions API — perfect Lead Ad matching');
+
+-- 2026-06-12 META_CAPI_LOG_VIEWER_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'Meta Conversions API — Event log viewer',
+       'A new Event Log section now sits at the bottom of Settings → Meta Conversions API. See every conversion event we attempted to send to Meta over the last 1, 3 or 7 days, filter by Sent / Failed / Queued, and click any row to expand and see the exact payload + Meta''s response. Great for debugging when a status change does not produce the expected ad-platform conversion.',
+       '📋',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Meta Conversions API — Event log viewer');
