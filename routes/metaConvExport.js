@@ -30,12 +30,16 @@ const db = require('../db/pg');
 const { authUser } = require('../utils/auth');
 
 // ============================================================================
-// Schema  — idempotent on every tenant boot
+// Schema  — idempotent on every tenant boot.
+// META_CAPI_SCHEMA_FIX_v2 (2026-06-12) — previously kept a per-tenant Set to
+// skip the CREATE on subsequent calls, but db._tenantSlug doesn't exist in
+// this version of pg.js, so every tenant collided on the 'default' key.
+// First tenant to call _ensureSchema created the tables in ITS db; every
+// other tenant skipped CREATE and then errored "relation does not exist".
+// Fix: drop the dedup. CREATE TABLE IF NOT EXISTS is a single round-trip
+// and Postgres no-ops after the first call — totally fine to run every entry.
 // ============================================================================
-const _schemaReady = new Set();
 async function _ensureSchema() {
-  const tenant = (db._tenantSlug && db._tenantSlug()) || 'default';
-  if (_schemaReady.has(tenant)) return;
   await db.query(`
     CREATE TABLE IF NOT EXISTS meta_capi_settings (
       id                      SERIAL PRIMARY KEY,
@@ -95,7 +99,6 @@ async function _ensureSchema() {
       });
     }
   } catch (_) {}
-  _schemaReady.add(tenant);
 }
 
 // ============================================================================
