@@ -3379,7 +3379,64 @@ VIEWS.deviceHealthUser = async function (view, slug, userId, userName) {
 VIEWS.finance = async (view) => {
   view.appendChild(h('h1', {}, '💰 Finance & Business'));
 
-  // Top action bar
+  // FIN_DASH_DATE_v1 — date-range state (default: this month). Reload all
+  // sections when changed.
+  const RANGES = [
+    ['today',       'Today'],
+    ['yesterday',   'Yesterday'],
+    ['this_week',   'This week'],
+    ['this_month',  'This month'],
+    ['last_month',  'Last month'],
+    ['last_7',      'Last 7d'],
+    ['last_30',     'Last 30d'],
+    ['last_90',     'Last 90d'],
+    ['this_quarter','This quarter'],
+    ['this_year',   'This year'],
+    ['last_year',   'Last year'],
+    ['all',         'All time']
+  ];
+  let _finRange = { range: 'this_month' };
+  function _rangePayload() { return Object.assign({}, _finRange); }
+
+  // Date-range picker card (chips + custom From/To inputs)
+  const rangeCard = h('div', { class: 'card', style: { padding: '.85rem 1rem' } });
+  rangeCard.appendChild(h('div', { style: { fontWeight: '600', marginBottom: '.5rem', fontSize: '.9rem', color: '#475569' } }, '📅 Date range'));
+  const chipRow = h('div', { style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap', alignItems: 'center' } });
+  RANGES.forEach(([tok, lbl]) => {
+    const btn = h('button', { 'data-range': tok, class: 'btn' + (tok === 'this_month' ? ' primary' : ' ghost'),
+      style: { padding: '.35rem .75rem', fontSize: '.82rem', borderRadius: '999px' },
+      onclick: () => {
+        _finRange = { range: tok };
+        Array.from(chipRow.querySelectorAll('button[data-range]')).forEach(b => {
+          b.className = 'btn ' + (b.dataset.range === tok ? 'primary' : 'ghost');
+          b.style.padding = '.35rem .75rem'; b.style.fontSize = '.82rem'; b.style.borderRadius = '999px';
+        });
+        if (typeof refreshAll === 'function') refreshAll();
+      } }, lbl);
+    chipRow.appendChild(btn);
+  });
+  // Custom from/to inputs
+  const fromInp = h('input', { type: 'date', style: { padding: '.3rem .5rem', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '.82rem' } });
+  const toInp   = h('input', { type: 'date', style: { padding: '.3rem .5rem', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '.82rem' } });
+  const applyBtn = h('button', { class: 'btn primary',
+    style: { padding: '.35rem .75rem', fontSize: '.82rem', borderRadius: '6px' },
+    onclick: () => {
+      if (!fromInp.value || !toInp.value) { alert('Pick both From and To dates'); return; }
+      _finRange = { range: 'custom', from: fromInp.value, to: toInp.value };
+      Array.from(chipRow.querySelectorAll('button[data-range]')).forEach(b => {
+        b.className = 'btn ghost'; b.style.padding = '.35rem .75rem'; b.style.fontSize = '.82rem'; b.style.borderRadius = '999px';
+      });
+      if (typeof refreshAll === 'function') refreshAll();
+    } }, 'Apply');
+  chipRow.appendChild(h('span', { class: 'muted', style: { marginLeft: '.75rem', fontSize: '.78rem' } }, '· Custom:'));
+  chipRow.appendChild(fromInp);
+  chipRow.appendChild(h('span', { style: { color: '#64748b' } }, '→'));
+  chipRow.appendChild(toInp);
+  chipRow.appendChild(applyBtn);
+  rangeCard.appendChild(chipRow);
+  view.appendChild(rangeCard);
+
+  // Action bar
   const refreshBtn = h('button', { class: 'btn ghost' }, '↻ Refresh');
   const exportBtn  = h('button', { class: 'btn ghost', style: { marginLeft: '.5rem' } }, '📥 Export tenants CSV');
   view.appendChild(h('div', { class: 'card', style: { display: 'flex', gap: '.5rem', alignItems: 'center', flexWrap: 'wrap' } },
@@ -3402,15 +3459,21 @@ VIEWS.finance = async (view) => {
   view.appendChild(salesCard);
 
   function kpi(label, value, hint, color) {
+    // FIN_DASH_DATE_v1 — larger, clearer KPI cards
     return h('div', { style: {
-      padding: '.75rem .9rem',
-      background: (color || '#f1f5f9'),
-      borderRadius: '10px',
-      border: '1px solid rgba(0,0,0,.04)'
+      padding: '1rem 1.1rem',
+      background: (color || '#f8fafc'),
+      borderRadius: '12px',
+      border: '1px solid rgba(15,23,42,.07)',
+      boxShadow: '0 1px 2px rgba(15,23,42,.03)',
+      minHeight: '90px',
+      display: 'flex',
+      flexDirection: 'column',
+      justifyContent: 'space-between'
     } },
-      h('div', { class: 'muted', style: { fontSize: '.7rem', textTransform: 'uppercase', letterSpacing: '.04em' } }, label),
-      h('div', { style: { fontSize: '1.3rem', fontWeight: '700', marginTop: '.15rem' } }, value),
-      hint ? h('div', { class: 'muted', style: { fontSize: '.72rem', marginTop: '.15rem' } }, hint) : null
+      h('div', { style: { fontSize: '.72rem', textTransform: 'uppercase', letterSpacing: '.05em', color: '#64748b', fontWeight: '600' } }, label),
+      h('div', { style: { fontSize: '1.7rem', fontWeight: '800', color: '#0f172a', lineHeight: '1.1', margin: '.35rem 0 .1rem' } }, value),
+      hint ? h('div', { style: { fontSize: '.74rem', color: '#475569', fontWeight: '500' } }, hint) : null
     );
   }
 
@@ -3419,19 +3482,24 @@ VIEWS.finance = async (view) => {
     kpiCard.innerHTML = '';
     kpiCard.appendChild(h('div', { class: 'muted' }, 'Loading overview…'));
     let d;
-    try { d = await api('api_saas_finance_overview'); }
+    try { d = await api('api_saas_finance_overview', _rangePayload()); }
     catch (e) { kpiCard.innerHTML = ''; kpiCard.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
     kpiCard.innerHTML = '';
 
     kpiCard.appendChild(h('h2', { style: { marginTop: 0 } }, 'Revenue'));
     const revGrid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '.75rem' } });
     const r = d.revenue;
-    const momTxt = r.mom_pct == null ? 'no prior month' :
-      (r.mom_pct >= 0 ? '▲ ' : '▼ ') + Math.abs(r.mom_pct).toFixed(1) + '% vs last month';
+    const periodLabel = (d.period && d.period.label) ? d.period.label : 'This month';
+    const pctVal = (r.delta_pct != null ? r.delta_pct : r.mom_pct);
+    const deltaTxt = pctVal == null ? 'no prior period to compare' :
+      (pctVal >= 0 ? '▲ ' : '▼ ') + Math.abs(pctVal).toFixed(1) + '% vs prior ' + periodLabel.toLowerCase();
+    const periodPaid = (r.period_paid != null ? r.period_paid : r.this_month);
+    const prevPaid   = (r.prev_paid   != null ? r.prev_paid   : r.last_month);
     revGrid.appendChild(kpi('MRR',  fmtRupees(r.mrr),  r.paying_tenants + ' paying tenants', '#ecfdf5'));
-    revGrid.appendChild(kpi('ARR',  fmtRupees(r.arr),  null, '#ecfdf5'));
-    revGrid.appendChild(kpi('This month (paid)', fmtRupees(r.this_month), momTxt, '#eff6ff'));
-    revGrid.appendChild(kpi('Last month (paid)', fmtRupees(r.last_month), null, '#eff6ff'));
+    revGrid.appendChild(kpi('ARR',  fmtRupees(r.arr),  '12 × MRR projection', '#ecfdf5'));
+    revGrid.appendChild(kpi(periodLabel + ' (paid)', fmtRupees(periodPaid), deltaTxt,
+      pctVal != null && pctVal < 0 ? '#fef2f2' : '#eff6ff'));
+    revGrid.appendChild(kpi('Prior ' + periodLabel.toLowerCase(), fmtRupees(prevPaid), 'previous comparable window', '#f1f5f9'));
     revGrid.appendChild(kpi('Lifetime collected', fmtRupees(r.lifetime_paid), 'all paid invoices', '#fefce8'));
     kpiCard.appendChild(revGrid);
 
@@ -3678,6 +3746,7 @@ VIEWS.finance = async (view) => {
   };
 
   // ---- Refresh everything -----------------------------------------
+  function refreshAll() { try { loadOverview(); loadChart(); loadPackages(); loadExpiring(); loadOverdue(); loadSales && loadSales(); } catch(_){} }
   refreshBtn.onclick = () => Promise.all([loadOverview(), loadChart(), loadPackages(), loadExpiring(), loadOverdue(), loadSales()]);
   // Initial parallel load
   loadOverview(); loadChart(); loadPackages(); loadExpiring(); loadOverdue(); loadSales();

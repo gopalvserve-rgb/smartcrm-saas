@@ -44,8 +44,9 @@ function _monthlyFromPackage(pkg) {
 }
 
 // ---- 1. Overview KPI cards ------------------------------------------
-async function api_saas_finance_overview(token) {
+async function api_saas_finance_overview(token, payload) {
   await requireSuperAdmin(token);
+  const _rng = _resolveRange(payload);
 
   const tRes = await control.query(`
     SELECT t.id, t.slug, t.org_name, t.status, t.created_at,
@@ -58,8 +59,13 @@ async function api_saas_finance_overview(token) {
   const tenants = tRes.rows;
 
   const now    = new Date();
+  // Period boundaries for revenue (driven by date-range picker)
+  const periodStart = _rng.from;
+  const periodEnd   = _rng.to;
+  const prevStart   = _rng.prevFrom;
+  const prevEnd     = _rng.prevTo;
+  // Calendar-month boundaries — kept for tenant-cohort metrics (new this month, churned)
   const monStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const lastMonStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
   const monEnd   = new Date(now.getFullYear(), now.getMonth() + 1, 1);
   const in7      = new Date(now.getTime() + 7  * 86400e3);
   const in30     = new Date(now.getTime() + 30 * 86400e3);
@@ -112,8 +118,8 @@ async function api_saas_finance_overview(token) {
   const invRes = await control.query(`
     SELECT
       COALESCE(SUM(CASE WHEN status = 'paid' THEN total_inr ELSE 0 END), 0)::numeric        AS lifetime_paid,
-      COALESCE(SUM(CASE WHEN status = 'paid' AND paid_at >= $1 AND paid_at < $2 THEN total_inr ELSE 0 END), 0)::numeric AS this_month_paid,
-      COALESCE(SUM(CASE WHEN status = 'paid' AND paid_at >= $3 AND paid_at < $1 THEN total_inr ELSE 0 END), 0)::numeric AS last_month_paid,
+      COALESCE(SUM(CASE WHEN status = 'paid' AND paid_at >= $1 AND paid_at < $2 THEN total_inr ELSE 0 END), 0)::numeric AS period_paid,
+      COALESCE(SUM(CASE WHEN status = 'paid' AND paid_at >= $3 AND paid_at < $4 THEN total_inr ELSE 0 END), 0)::numeric AS prev_period_paid,
       COUNT(*) FILTER (WHERE status = 'paid')::int    AS paid_count,
       COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_count,
       COALESCE(SUM(CASE WHEN status = 'pending' THEN total_inr ELSE 0 END), 0)::numeric     AS pending_total,
@@ -121,22 +127,34 @@ async function api_saas_finance_overview(token) {
       COALESCE(SUM(CASE WHEN status = 'pending' AND period_end < NOW() THEN total_inr ELSE 0 END), 0)::numeric AS overdue_total,
       COUNT(*) FILTER (WHERE status = 'failed')::int  AS failed_count
     FROM invoices
-  `, [monStart, monEnd, lastMonStart]);
+  `, [periodStart, periodEnd, prevStart, prevEnd]);
   const inv = invRes.rows[0] || {};
 
-  const thisMo = _safeNum(inv.this_month_paid);
-  const lastMo = _safeNum(inv.last_month_paid);
-  const momPct = lastMo > 0 ? ((thisMo - lastMo) / lastMo) * 100 : null;
+  const periodPaid = _safeNum(inv.period_paid);
+  const prevPaid   = _safeNum(inv.prev_period_paid);
+  const deltaPct = prevPaid > 0 ? ((periodPaid - prevPaid) / prevPaid) * 100 : null;
 
   return {
     generated_at: now.toISOString(),
+    period: {
+      from:  periodStart.toISOString(),
+      to:    periodEnd.toISOString(),
+      label: _rng.label,
+      token: _rng.token,
+      prev_from: prevStart.toISOString(),
+      prev_to:   prevEnd.toISOString()
+    },
     revenue: {
       mrr:           Math.round(mrr * 100) / 100,
       arr:           Math.round(mrr * 12 * 100) / 100,
       lifetime_paid: _safeNum(inv.lifetime_paid),
-      this_month:    thisMo,
-      last_month:    lastMo,
-      mom_pct:       momPct == null ? null : Math.round(momPct * 10) / 10,
+      period_paid:   periodPaid,
+      prev_paid:     prevPaid,
+      delta_pct:     deltaPct == null ? null : Math.round(deltaPct * 10) / 10,
+      // back-compat fields so anything reading the old keys still works
+      this_month:    periodPaid,
+      last_month:    prevPaid,
+      mom_pct:       deltaPct == null ? null : Math.round(deltaPct * 10) / 10,
       paying_tenants: totalRecurringTenants
     },
     tenants: {
@@ -335,6 +353,66 @@ async function api_saas_finance_overdueInvoices(token) {
       overdue_days: overdueDays
     };
   }) };
+}
+
+
+// FIN_DASH_DATE_v1 (2026-06-12) — Resolve a date-range token + optional
+// custom from/to into concrete UTC Date boundaries used by every API in
+// this module. Tokens: today | yesterday | this_week | this_month |
+// last_month | this_quarter | this_year | last_year | last_7 | last_30 |
+// last_90 | all | custom. IST-based (UTC+5:30) so "Today" matches the
+// operator's calendar day, not midnight UTC.
+function _resolveRange(payload) {
+  const p = payload || {};
+  const token = String(p.range || p.preset || 'this_month').toLowerCase();
+  const IST_OFFSET = 5.5 * 3600 * 1000;
+  const nowIst = new Date(Date.now() + IST_OFFSET);
+  const y = nowIst.getUTCFullYear();
+  const m = nowIst.getUTCMonth();
+  const d = nowIst.getUTCDate();
+  function ist(yr, mo, da) { return new Date(Date.UTC(yr, mo, da) - IST_OFFSET); }
+  function midnightIstNext(date) {
+    const t = new Date(date.getTime() + IST_OFFSET);
+    return new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate() + 1) - IST_OFFSET);
+  }
+  let from, to, label;
+  switch (token) {
+    case 'today':       from = ist(y, m, d);         to = ist(y, m, d + 1);  label = 'Today'; break;
+    case 'yesterday':   from = ist(y, m, d - 1);     to = ist(y, m, d);      label = 'Yesterday'; break;
+    case 'this_week': {
+      const dow = (new Date(Date.UTC(y, m, d)).getUTCDay() + 6) % 7; // Mon=0
+      from = ist(y, m, d - dow); to = ist(y, m, d + 1); label = 'This week'; break;
+    }
+    case 'last_7':      from = ist(y, m, d - 6);     to = ist(y, m, d + 1);  label = 'Last 7 days'; break;
+    case 'last_30':     from = ist(y, m, d - 29);    to = ist(y, m, d + 1);  label = 'Last 30 days'; break;
+    case 'last_90':     from = ist(y, m, d - 89);    to = ist(y, m, d + 1);  label = 'Last 90 days'; break;
+    case 'last_month':  from = ist(y, m - 1, 1);     to = ist(y, m, 1);      label = 'Last month'; break;
+    case 'this_quarter': {
+      const qm = Math.floor(m / 3) * 3;
+      from = ist(y, qm, 1); to = ist(y, qm + 3, 1); label = 'This quarter'; break;
+    }
+    case 'this_year':   from = ist(y, 0, 1);         to = ist(y + 1, 0, 1);  label = 'This year'; break;
+    case 'last_year':   from = ist(y - 1, 0, 1);     to = ist(y, 0, 1);      label = 'Last year'; break;
+    case 'all':         from = new Date(2020, 0, 1); to = ist(y, m, d + 1);  label = 'All time'; break;
+    case 'custom': {
+      const fd = p.from ? new Date(p.from) : null;
+      const td = p.to   ? new Date(p.to)   : null;
+      if (fd && !isNaN(fd.getTime()) && td && !isNaN(td.getTime())) {
+        from = fd; to = midnightIstNext(td); // inclusive upper bound
+        label = 'Custom: ' + fd.toISOString().slice(0,10) + ' \u2192 ' + td.toISOString().slice(0,10);
+      } else {
+        from = ist(y, m, 1); to = ist(y, m + 1, 1); label = 'This month';
+      }
+      break;
+    }
+    case 'this_month':
+    default:            from = ist(y, m, 1);         to = ist(y, m + 1, 1);  label = 'This month';
+  }
+  // Previous comparable window (same length, immediately before `from`)
+  const len = to.getTime() - from.getTime();
+  const prevFrom = new Date(from.getTime() - len);
+  const prevTo   = from;
+  return { from, to, prevFrom, prevTo, label, token };
 }
 
 module.exports = {
