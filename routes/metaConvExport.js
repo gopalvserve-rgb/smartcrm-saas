@@ -354,6 +354,19 @@ function _buildUserData(s, lead) {
     if (lead.country) ud.country = [_sha256(lead.country)];
     if (lead.pincode) ud.zp = [_sha256(lead.pincode)];
   }
+  // META_CAPI_LEADGEN_ID_v1 — perfect Lead Ad matching via leadgen_id.
+  // FB Lead Ads → /hook/meta saves leadgen_id into lead.meta_json. Including
+  // it in user_data lets Meta tie the conversion directly to the specific
+  // Lead Ad form click — better than PII-only matching, and removes the
+  // need for the CRM data source (which is gated behind Meta's partner
+  // program and unavailable to most tenants).
+  try {
+    const m = lead.meta_json
+      ? (typeof lead.meta_json === 'string' ? JSON.parse(lead.meta_json) : lead.meta_json)
+      : {};
+    const leadgenId = m.leadgen_id || m.lead_id;
+    if (leadgenId) ud.lead_id = String(leadgenId);
+  } catch (_) {}
   if (lead.fbclid) ud.fbc = ['fb.1.' + Math.floor(Date.now() / 1000) + '.' + lead.fbclid];
   return ud;
 }

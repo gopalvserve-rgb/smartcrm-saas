@@ -344,3 +344,12 @@ SELECT 'feature',
        '🏖️',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'HR Leaves — Leave Type and Half Day options');
+
+-- 2026-06-12 META_CAPI_LEADGEN_ID_v1 + META_CAPI_HIDE_CRM_MODE_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'improvement',
+       'Meta Conversions API — perfect Lead Ad matching',
+       'When you fire a conversion event for a lead that originated from a Facebook Lead Ad, we now include the exact leadgen_id alongside the hashed phone/email. Meta uses this to tie the conversion directly back to the Lead Ad form click — much stronger optimisation signal than PII-only matching, equivalent to what the CRM data source would provide. The separate yellow "CRM mode" card has been removed from the Settings → Meta Conversions API page because Meta gates that data source behind their CRM Partner Program (only ~30 platforms allowed), which means most tenants can''t complete the setup. The Offline data source now delivers the same benefit on its own.',
+       '🎯',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Meta Conversions API — perfect Lead Ad matching');

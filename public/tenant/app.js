@@ -22496,7 +22496,16 @@ async function adminMetaCapi() {
     crmMapBody);
   crmCard.appendChild(crmMapTable);
 
-  wrap.appendChild(crmCard);
+  // META_CAPI_HIDE_CRM_MODE_v1 — CRM data source in Meta Events Manager is
+  // gated behind their CRM Partner Program (only ~30 platforms whitelisted).
+  // Tenants who pick the CRM radio option are forced to choose a "partner"
+  // and SmartCRM isn't on that list — they can't complete the setup. So we
+  // hide the yellow card to avoid sending them down a dead end. The Offline
+  // data source achieves the same FB-Lead-Ad optimisation thanks to
+  // leadgen_id matching (META_CAPI_LEADGEN_ID_v1). Backend columns + save
+  // payload are kept intact so any previously-saved CRM settings round-trip
+  // safely if we ever re-enable this.
+  // wrap.appendChild(crmCard); // hidden by design
 
   // ── Status → Event mapping ──
   let statuses = []; try { statuses = (await api('api_statuses_list')) || []; } catch (_) {}
