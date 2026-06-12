@@ -3934,3 +3934,15 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
 }
 .qn-slash-menu { z-index: 9999 !important; }
 .qn-slash-item { user-select: none; }
+
+/* QNOTE_MOBILE_v1 — mobile lead-card AI Note button gets the gradient too,
+   but respects la-btn sizing so it slots cleanly into the icon-label row. */
+.la-btn.ai-qnote-btn {
+  padding: 6px 4px !important;
+  font-size: 12px !important;
+  border-radius: 8px !important;
+}
+.la-btn.ai-qnote-btn .la-icon { color: #fff !important; }
+.la-btn.ai-qnote-btn .la-label { color: #fff !important; font-weight: 600 !important; }
+.la-btn.ai-qnote-btn:hover { transform: translateY(-1px) !important; }
+
