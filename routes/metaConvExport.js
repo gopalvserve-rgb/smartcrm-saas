@@ -120,12 +120,27 @@ function _normEmail(e) {
 }
 
 async function _getFbAccessToken() {
-  // META_CAPI_TOKEN_FALLBACK_v1 (2026-06-12) — tenants connect FB pages via
-  // routes/social.js OAuth which stores per-page tokens in social_pages.
-  // The Ads-Manager-only connection (routes/social.js api_social_ads_*)
-  // sometimes leaves social_ad_accounts.access_token NULL because the
-  // user token isn't always passed through. Try both tables so the CAPI
-  // tab works as long as ANY FB OAuth has completed on this tenant.
+  // META_CAPI_TOKEN_FALLBACK_v2 (2026-06-12) — there are THREE places a FB
+  // token may live, depending on which integration flow the tenant used:
+  //   1. config.META_USER_TOKEN — long-lived USER token from Lead Ads
+  //      OAuth (routes/fb.js). Has ads_management + business_management
+  //      scopes. THIS IS THE BEST CAPI TOKEN.
+  //   2. config.META_PAGES_LIST — JSON list of pages with per-page tokens
+  //      (also Lead Ads flow).
+  //   3. social_ad_accounts.access_token / social_pages.access_token —
+  //      from the Social Phase OAuth (routes/social.js) for messenger/
+  //      comments/ads reporting.
+  // Try them in order so CAPI works regardless of how the tenant connected.
+  try {
+    const uTok = await db.getConfig('META_USER_TOKEN', '');
+    if (uTok && String(uTok).length > 10) return String(uTok);
+  } catch (_) {}
+  try {
+    const raw = await db.getConfig('META_PAGES_LIST', '');
+    const list = raw ? JSON.parse(raw) : [];
+    const withTok = (list || []).find(p => p && p.access_token);
+    if (withTok && withTok.access_token) return String(withTok.access_token);
+  } catch (_) {}
   try {
     const r1 = await db.query(
       `SELECT access_token FROM social_ad_accounts
@@ -135,8 +150,6 @@ async function _getFbAccessToken() {
     const t1 = r1 && r1.rows && r1.rows[0] && r1.rows[0].access_token;
     if (t1) return String(t1);
   } catch (_) {}
-  // Fall back to page tokens — they carry the full granted scopes
-  // (including ads_management if the user accepted) and work for CAPI.
   try {
     const r2 = await db.query(
       `SELECT access_token FROM social_pages
