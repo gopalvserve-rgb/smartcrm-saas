@@ -787,15 +787,45 @@ function _apiDocsHtml(host) {
   </div>
   <p style="color:#94a3b8;margin-bottom:1rem">Accepts a lead submission from your website contact form. Creates or updates a lead in your SmartCRM workspace.</p>
 
-  <h3>Request fields</h3>
+  <h3>Built-in fields (no setup required)</h3>
+  <table>
+    <tr><th>Field</th><th>Aliases / Notes</th></tr>
+    <tr><td><b>name</b></td><td>Contact's full name</td></tr>
+    <tr><td><b>email</b></td><td>Contact's email</td></tr>
+    <tr><td><b>phone</b></td><td>Aliases: <code>mobile</code></td></tr>
+    <tr><td><b>whatsapp</b></td><td>WhatsApp number (defaults to phone if omitted)</td></tr>
+    <tr><td><b>source</b></td><td>Aliases: <code>lead_source</code> · <code>leadsource</code> · <code>origin</code> · <code>channel</code> · <code>source_name</code> · <code>referrer</code></td></tr>
+    <tr><td><b>source_ref</b></td><td>External reference / source ID</td></tr>
+    <tr><td><b>product</b></td><td>Product / service of interest</td></tr>
+    <tr><td><b>notes</b></td><td>Aliases: <code>message</code></td></tr>
+    <tr><td><b>city, state, country</b></td><td>Address fields</td></tr>
+    <tr><td><b>company, address</b></td><td>Company name + full address</td></tr>
+    <tr><td><b>pincode</b></td><td>Aliases: <code>zip</code></td></tr>
+    <tr><td><b>tags</b></td><td>Array <code>["hot","follow-up"]</code> or CSV <code>"hot,follow-up"</code> · alias <code>labels</code></td></tr>
+    <tr><td><b>value</b></td><td>Deal value (number)</td></tr>
+    <tr><td><b>currency</b></td><td>INR / USD / etc</td></tr>
+    <tr><td><b>next_followup_at</b></td><td>ISO date for first follow-up</td></tr>
+    <tr><td><b>Google Ads attribution</b></td><td><code>gclid</code> · <code>gad_campaignid</code> · <code>campaign_id</code> · <code>campaign_name</code> · <code>network</code> · <code>keyword</code> · <code>adgroupid</code> · <code>matchtype</code> · <code>device</code> · <code>placement</code> · <code>adposition</code> · <code>landing_page</code></td></tr>
+    <tr><td><b>UTM tags</b></td><td><code>utm_source</code> · <code>utm_medium</code> · <code>utm_campaign</code> · <code>utm_term</code> · <code>utm_content</code></td></tr>
+    <tr><td><b>meta</b></td><td>Any nested JSON object — saved verbatim to meta_json</td></tr>
+  </table>
+
+  <h3 style="margin-top:1.5rem">📌 Custom fields (your own columns)</h3>
+  <div class="note" style="background:#fef3c7;border-color:#f59e0b;color:#78350f">
+    <b>Step 1:</b> Go to <b>Settings → Custom Fields</b> and create the field first (e.g. <code>travel_plan</code>, <code>fblid</code>, <code>interested_in_kashmir</code>). The <i>Key</i> you enter there is what the webhook recognises.<br><br>
+    <b>Step 2:</b> Send the value in any ONE of these three ways:
+    <ul style="margin:.5rem 0 0 1.25rem">
+      <li><code>"travel_plan": "Next Month"</code> — top-level, using the custom-field key as-is</li>
+      <li><code>"cf_travel_plan": "Next Month"</code> — with <code>cf_</code> prefix (recommended for Make / Zapier / Pabbly)</li>
+      <li><code>"extra": { "travel_plan": "Next Month" }</code> — nested under <code>extra</code></li>
+    </ul>
+    All three land in the lead's <code>extra_json</code> and show up on the lead-modal Custom Fields panel + are filterable in the Leads page and Report Builder.
+  </div>
+
+  <h3 style="margin-top:1rem">Auth fields</h3>
   <table>
     <tr><th>Field</th><th>Type</th><th>Description</th></tr>
-    <tr><td>name</td><td>string</td><td>Contact's full name</td></tr>
-    <tr><td>email</td><td>string</td><td>Contact's email address</td></tr>
-    <tr><td>phone</td><td>string</td><td>Phone number (optional)</td></tr>
-    <tr><td>message</td><td>string</td><td>Message or notes (optional)</td></tr>
-    <tr><td>source</td><td>string</td><td>Lead source label (optional)</td></tr>
-    <tr><td>api_key</td><td>string</td><td>Your API key (if not sent via header)</td></tr>
+    <tr><td>api_key</td><td>string</td><td>Your API key (if not sent via X-API-Key header)</td></tr>
   </table>
 
   <h3>Examples</h3>
@@ -807,6 +837,7 @@ function _apiDocsHtml(host) {
   </div>
 
   <div id="wb-json" class="tab-pane active">
+    <p style="color:#94a3b8;margin-bottom:.5rem">Basic example:</p>
     <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code>curl -X POST ${safe(host)}/hook/website \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your_key_here" \
@@ -817,6 +848,29 @@ function _apiDocsHtml(host) {
     "message": "Interested in the enterprise plan",
     "source":  "website"
   }'</code></pre>
+
+    <p style="color:#94a3b8;margin:1rem 0 .5rem">Full example with Google Ads attribution + custom fields:</p>
+    <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code>curl -X POST ${safe(host)}/hook/website \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your_key_here" \
+  -d '{
+    "name":          "AKEEL AHMED",
+    "email":         "akeel@example.com",
+    "phone":         "9610552233",
+    "message":       "Interested in Kashmir trip",
+    "source":        "Google Ads",
+
+    "campaign_id":   "23930980060",
+    "campaign_name": "Kashmir_packages",
+    "gclid":         "CjwKCAjwuanRBhBSEiwAY5y6V...",
+    "landing_page":  "https://kudostrips.com/?campaign=23930980060",
+
+    "cf_travel_plan":            "Next Month",
+    "cf_product_name":           "Kashmir_packages",
+    "cf_interested_in_kashmir":  "Yes",
+    "cf_fblid":                  "N/A"
+  }'</code></pre>
+    <p style="color:#94a3b8;font-size:.85rem;margin-top:.5rem">⚠ Create <code>travel_plan</code>, <code>product_name</code>, <code>interested_in_kashmir</code>, <code>fblid</code> in <b>Settings → Custom Fields</b> first — otherwise the webhook will silently drop them.</p>
   </div>
 
   <div id="wb-form" class="tab-pane">
