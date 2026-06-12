@@ -9008,10 +9008,42 @@ function ruleBuilderButton({ fields, label, storageKey, onChange }) {
  * Used as a CLIENT-side post-filter so backend doesn't need to understand
  * every operator.
  */
+// LEADS_RULE_CF_NCONTAINS_v1 — read custom-field values from extra_json
+// (where lead forms / CSV upload / website API write them) AND meta_json
+// (where FB Lead Ads / Pabbly / Make.com sometimes land them) when the rule
+// field is a custom field with the 'cf_' prefix. Without this fallback the
+// rule sees undefined on every row, so 'does not contain X' matched
+// every row (including the ones that DO contain X) — the bug user hit
+// when filtering Page Name does not contain New Shop on the test tenant.
+function _ruleRowValue(row, field) {
+  // Top-level column wins (e.g. name, phone, status_name, source).
+  if (row && Object.prototype.hasOwnProperty.call(row, field) && row[field] != null) {
+    return row[field];
+  }
+  // Custom fields are stored under the un-prefixed key inside extra_json /
+  // meta_json. The rule builder emits ids like 'cf_page_name'.
+  if (field && field.indexOf('cf_') === 0) {
+    const key = field.slice(3);
+    const _read = (raw) => {
+      if (!raw) return undefined;
+      try {
+        const obj = (typeof raw === 'string') ? JSON.parse(raw) : raw;
+        if (obj && Object.prototype.hasOwnProperty.call(obj, key) && obj[key] != null) return obj[key];
+      } catch (_) {}
+      return undefined;
+    };
+    let v = _read(row.extra_json);
+    if (v == null) v = _read(row.meta_json);
+    if (v == null && row.extra && Object.prototype.hasOwnProperty.call(row.extra, key)) v = row.extra[key];
+    if (v != null) return v;
+  }
+  return undefined;
+}
+
 function _applyClientRules(row, rules) {
   if (!Array.isArray(rules) || rules.length === 0) return true;
   for (const r of rules) {
-    const v = row[r.field];
+    const v = _ruleRowValue(row, r.field);
     const sv = (v == null) ? '' : String(v).toLowerCase();
     const cmp = (r.value == null) ? '' : (Array.isArray(r.value) ? r.value.map(x => String(x).toLowerCase()) : String(r.value).toLowerCase());
     let pass = true;

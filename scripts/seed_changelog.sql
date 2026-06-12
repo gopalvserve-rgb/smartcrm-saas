@@ -362,3 +362,12 @@ SELECT 'feature',
        '📋',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Meta Conversions API — Event log viewer');
+
+-- 2026-06-12 LEADS_RULE_CF_NCONTAINS_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'fix',
+       'Lead filter rules — custom-field operators now work',
+       'The Leads page Filter Rule modal (+ Filter rule button) now correctly evaluates rules built on custom fields. Previously a rule like "Page Name does not contain New Shop" silently let every lead through because the value was being read from the wrong place. The filter now reads the custom-field value from extra_json (lead form / CSV upload / website API), meta_json (Facebook Lead Ads), and the legacy extra map — whichever has the value — so equals / not equals / contains / does not contain / starts with / ends with / is empty / is not empty all work consistently on custom fields the same way they already worked on built-in columns.',
+       '🔍',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Lead filter rules — custom-field operators now work');
