@@ -480,6 +480,26 @@ const SCHEMA = {
       'expires_at', 'scope', 'calendar_id', 'created_at', 'updated_at'
     ],
     json: []
+  },
+  // META_CAPI_v1 — Meta Conversions API offline events (FRI 2026-06-12)
+  meta_capi_settings: {
+    columns: [
+      'is_enabled', 'event_set_id', 'status_event_map_json',
+      'include_phone', 'include_email', 'include_external_id',
+      'include_name', 'include_address',
+      'action_source', 'default_currency', 'test_event_code',
+      'last_verified_at', 'last_verify_error',
+      'last_event_at', 'last_event_error', 'last_batch_day',
+      'updated_at', 'updated_by'
+    ],
+    json: ['status_event_map_json']
+  },
+  meta_capi_events_log: {
+    columns: [
+      'lead_id', 'status_id', 'event_name', 'event_time', 'event_id',
+      'dispatch_status', 'http_status', 'response_text', 'payload_json'
+    ],
+    json: ['payload_json']
   }
 };
 
