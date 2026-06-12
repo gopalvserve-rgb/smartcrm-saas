@@ -490,6 +490,7 @@ const SCHEMA = {
       'action_source', 'default_currency', 'test_event_code',
       'last_verified_at', 'last_verify_error',
       'last_event_at', 'last_event_error', 'last_batch_day',
+      'capi_access_token',
       'updated_at', 'updated_by'
     ],
     json: ['status_event_map_json']

@@ -22394,13 +22394,37 @@ async function adminMetaCapi() {
       'Get it from business.facebook.com → Events Manager → Data Sources → CRM (Offline) → Settings → Offline Event Set ID.')
   ));
 
+  // META_CAPI_DEDICATED_TOKEN_v1 — paste the never-expiring CAPI Access Token
+  // from Events Manager. Recommended over reusing the FB OAuth token.
+  const capiTokenInp = h('input', {
+    type: 'password', value: cfg.capi_access_token || '',
+    placeholder: cfg.has_capi_token ? 'Saved — paste a new one to replace' : 'EAA...',
+    style: { fontFamily: 'monospace', minWidth: '360px', width: '100%', maxWidth: '500px' }
+  });
+  wrap.appendChild(h('div', { style: { marginTop: '1rem',
+    padding: '.85rem 1rem', background: '#eff6ff', borderRadius: '10px',
+    border: '1px solid #93c5fd' } },
+    h('label', { style: { fontWeight: '700', display: 'block', marginBottom: '.35rem', color: '#1e3a8a' } },
+      '🔑 CAPI Access Token (recommended)'),
+    h('div', { class: 'muted', style: { fontSize: '.8rem', marginBottom: '.5rem', color: '#1e40af' } },
+      'In Events Manager → your CRM data source → Settings → ',
+      h('b', {}, 'Generate Access Token'),
+      ' → copy and paste here. This token ',
+      h('b', {}, 'never expires'),
+      ' and is scoped only to send events to this Event Set. If empty, we fall back to your FB OAuth connection.'),
+    capiTokenInp
+  ));
+
   // ── Verify button ──
   const verifyBtn = h('button', { class: 'btn ghost', style: { marginTop: '.5rem' } }, '🔌 Verify connection');
   const verifyResult = h('div', { style: { marginTop: '.5rem', fontSize: '.85rem' } });
   verifyBtn.onclick = async () => {
     verifyResult.textContent = 'Verifying…';
     try {
-      await api('api_meta_capi_settings_save', { event_set_id: eventSetInp.value });
+      await api('api_meta_capi_settings_save', {
+        event_set_id: eventSetInp.value,
+        capi_access_token: capiTokenInp.value
+      });
       const r = await api('api_meta_capi_verify');
       verifyResult.textContent = '✓ Verified! Meta accepted ' + (r.events_received || 1) + ' test event(s).';
       verifyResult.style.color = '#065f46';
@@ -22502,6 +22526,7 @@ async function adminMetaCapi() {
       await api('api_meta_capi_settings_save', {
         is_enabled: enabledCb.checked,
         event_set_id: eventSetInp.value,
+        capi_access_token: capiTokenInp.value,
         status_event_map: map,
         include_phone: phoneCb.checked,
         include_email: emailCb.checked,

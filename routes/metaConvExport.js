@@ -54,6 +54,7 @@ async function _ensureSchema() {
       action_source           TEXT DEFAULT 'system_generated',
       default_currency        TEXT DEFAULT 'INR',
       test_event_code         TEXT,
+      capi_access_token       TEXT,
       last_verified_at        TIMESTAMPTZ,
       last_verify_error       TEXT,
       last_event_at           TIMESTAMPTZ,
@@ -64,6 +65,7 @@ async function _ensureSchema() {
     );
   `);
   await db.query(`ALTER TABLE meta_capi_settings ADD COLUMN IF NOT EXISTS last_batch_day TEXT;`);
+  await db.query(`ALTER TABLE meta_capi_settings ADD COLUMN IF NOT EXISTS capi_access_token TEXT;`);
   await db.query(`
     CREATE TABLE IF NOT EXISTS meta_capi_events_log (
       id              SERIAL PRIMARY KEY,
@@ -120,17 +122,16 @@ function _normEmail(e) {
 }
 
 async function _getFbAccessToken() {
-  // META_CAPI_TOKEN_FALLBACK_v2 (2026-06-12) — there are THREE places a FB
-  // token may live, depending on which integration flow the tenant used:
-  //   1. config.META_USER_TOKEN — long-lived USER token from Lead Ads
-  //      OAuth (routes/fb.js). Has ads_management + business_management
-  //      scopes. THIS IS THE BEST CAPI TOKEN.
-  //   2. config.META_PAGES_LIST — JSON list of pages with per-page tokens
-  //      (also Lead Ads flow).
-  //   3. social_ad_accounts.access_token / social_pages.access_token —
-  //      from the Social Phase OAuth (routes/social.js) for messenger/
-  //      comments/ads reporting.
-  // Try them in order so CAPI works regardless of how the tenant connected.
+  // META_CAPI_DEDICATED_TOKEN_v1 (2026-06-12) — prefer the per-Event-Set
+  // CAPI Access Token (generated in Meta Events Manager → Settings →
+  // Generate Access Token). That token NEVER expires and is scoped only
+  // to send events to that one Event Set — Meta's recommended path.
+  try {
+    const all = await db.getAll('meta_capi_settings');
+    const cTok = all && all[0] && all[0].capi_access_token;
+    if (cTok && String(cTok).length > 10) return String(cTok);
+  } catch (_) {}
+  // Fall back to FB OAuth tokens in order of preference:
   try {
     const uTok = await db.getConfig('META_USER_TOKEN', '');
     if (uTok && String(uTok).length > 10) return String(uTok);
@@ -202,6 +203,8 @@ async function api_meta_capi_settings_get(token) {
       action_source:       s.action_source || 'system_generated',
       default_currency:    s.default_currency || 'INR',
       test_event_code:     s.test_event_code || '',
+      capi_access_token:   s.capi_access_token ? '••• saved (paste new to replace)' : '',
+      has_capi_token:      !!s.capi_access_token,
       last_verified_at:    s.last_verified_at,
       last_verify_error:   s.last_verify_error,
       last_event_at:       s.last_event_at,
@@ -232,6 +235,9 @@ async function api_meta_capi_settings_save(token, payload) {
     include_address:     p.include_address === undefined ? s.include_address : !!p.include_address,
     default_currency:    p.default_currency !== undefined ? String(p.default_currency || 'INR').trim().toUpperCase() : s.default_currency,
     test_event_code:     p.test_event_code !== undefined ? String(p.test_event_code || '').trim() : s.test_event_code,
+    capi_access_token:   (p.capi_access_token !== undefined && String(p.capi_access_token).indexOf('•••') < 0)
+                         ? String(p.capi_access_token || '').trim()
+                         : s.capi_access_token,
     updated_at:          db.nowIso(),
     updated_by:          me.id
   };
