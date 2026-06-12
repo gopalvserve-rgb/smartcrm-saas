@@ -21711,6 +21711,7 @@ VIEWS.admin = async (view) => {
       { id: 'integrations', label: '🧩 External Integrations', search: 'integrations make zapier pabbly external integrations third party' },
       { id: 'outwh',        label: '🚀 Outbound Webhooks',     search: 'webhook outbound webhook postback callback url' },
       { id: 'gconvexp',     label: '📈 Google Ads Export', roles: ['admin', 'manager'], search: 'google ads ads export offline conversion' },
+      { id: 'metacapi',     label: '🎯 Meta Conversions API', roles: ['admin'], search: 'meta facebook conversions api offline events capi' },
       { id: 'gcalintg',     label: '📅 Google Calendar',       search: 'google calendar calendar integration meet' },
       { id: 'qrforms',      label: '📲 QR Lead Forms',         search: 'qr form qr lead scan form' },
       { id: 'forms',        label: '📝 Forms',                 search: 'forms form builder' },
@@ -21831,6 +21832,7 @@ async function showAdminTab(id) {
     if (id === 'integrations') body.replaceChildren(await adminIntegrations());
     if (id === 'outwh') body.replaceChildren(await adminOutboundWebhooks());
     if (id === 'gconvexp') body.replaceChildren(await adminGoogleConvExport());
+    if (id === 'metacapi') body.replaceChildren(await adminMetaCapi());
     if (id === 'gcalintg') body.replaceChildren(await adminGoogleCalendarTab());
     if (id === 'qrforms')     body.replaceChildren(await adminQrForms());
     if (id === 'whlogs')      body.replaceChildren(await adminWebhookLogs());
@@ -22345,6 +22347,250 @@ const CAMPAIGN_REMOVED_ACTIONS = [
   { value: 'manager', label: 'Reassign to campaign manager',
     desc:  "Their open leads are handed to the manager set on the campaign." }
 ];
+
+
+// ============================================================================
+// META_CAPI_v1 (2026-06-12) — Settings → Meta Conversions API tab.
+// Reuses the FB connection token (no new OAuth). Tenant pastes Event Set ID,
+// picks which statuses count as conversions, picks Meta event name per status,
+// toggles ON. Real-time dispatch fires automatically on every status change.
+// ============================================================================
+async function adminMetaCapi() {
+  const wrap = h('div', { class: 'card' });
+  wrap.appendChild(h('h2', {}, '🎯 Meta Conversions API'));
+  wrap.appendChild(h('p', { class: 'muted' },
+    'Push your CRM conversions back to Meta so your ad campaigns optimise on actual closed deals, not just lead-form submissions. Uses the Facebook connection from the Meta Ads Manager tab — no new tokens needed.'));
+
+  let data; try { data = await api('api_meta_capi_settings_get'); }
+  catch (e) { wrap.appendChild(h('div', { class: 'error-box' }, e.message)); return wrap; }
+  const cfg = data.settings;
+  const eventNames = data.event_names || ['Purchase', 'Lead', 'Schedule', 'CompleteRegistration'];
+
+  // ── FB connection status banner ──
+  if (!data.fb_connected) {
+    wrap.appendChild(h('div', {
+      style: { background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b',
+               padding: '.75rem 1rem', borderRadius: '8px', margin: '.5rem 0' } },
+      h('b', {}, '⚠ Facebook is not connected. '),
+      'Go to Settings → Meta Ads Manager and connect first. Then come back here.'));
+  } else {
+    wrap.appendChild(h('div', {
+      style: { background: '#ecfdf5', border: '1px solid #6ee7b7', color: '#065f46',
+               padding: '.5rem .85rem', borderRadius: '8px', margin: '.5rem 0', fontSize: '.85rem' } },
+      '✓ Using existing Facebook connection. No extra OAuth needed.'));
+  }
+
+  // ── Enable + Event Set ID ──
+  const enabledCb = h('input', { type: 'checkbox', checked: cfg.is_enabled ? 'checked' : null });
+  wrap.appendChild(h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', margin: '1rem 0 .5rem 0' } },
+    enabledCb, h('b', {}, '🟢 Enable Meta Conversions API push')));
+
+  const eventSetInp = h('input', { type: 'text', value: cfg.event_set_id || '',
+    placeholder: 'e.g. 1234567890123456', style: { fontFamily: 'monospace', minWidth: '320px' } });
+  wrap.appendChild(h('div', { style: { marginTop: '.5rem' } },
+    h('label', { style: { fontWeight: '600', display: 'block', marginBottom: '.25rem' } }, '📍 Offline Event Set ID'),
+    eventSetInp,
+    h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } },
+      'Get it from business.facebook.com → Events Manager → Data Sources → CRM (Offline) → Settings → Offline Event Set ID.')
+  ));
+
+  // ── Verify button ──
+  const verifyBtn = h('button', { class: 'btn ghost', style: { marginTop: '.5rem' } }, '🔌 Verify connection');
+  const verifyResult = h('div', { style: { marginTop: '.5rem', fontSize: '.85rem' } });
+  verifyBtn.onclick = async () => {
+    verifyResult.textContent = 'Verifying…';
+    try {
+      await api('api_meta_capi_settings_save', { event_set_id: eventSetInp.value });
+      const r = await api('api_meta_capi_verify');
+      verifyResult.textContent = '✓ Verified! Meta accepted ' + (r.events_received || 1) + ' test event(s).';
+      verifyResult.style.color = '#065f46';
+    } catch (e) {
+      verifyResult.textContent = '✗ ' + e.message;
+      verifyResult.style.color = '#991b1b';
+    }
+  };
+  wrap.appendChild(verifyBtn);
+  wrap.appendChild(verifyResult);
+
+  // ── Status → Event mapping ──
+  let statuses = []; try { statuses = (await api('api_statuses_list')) || []; } catch (_) {}
+  if (!Array.isArray(statuses) && statuses.rows) statuses = statuses.rows;
+
+  wrap.appendChild(h('h3', { style: { marginTop: '1.5rem' } }, 'Status → Conversion event mapping'));
+  wrap.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+    'For each lead status that counts as a conversion, pick the Meta event name to send. Only mapped statuses fire — others are skipped.'));
+
+  const mapBody = h('tbody', {});
+  const currMap = cfg.status_event_map || {};
+  // Auto-suggest Won/Token Received/Closed
+  const autoMap = (st) => {
+    const n = String(st.name || '').toLowerCase();
+    if (n.includes('won') || n.includes('closed') || n.includes('booked')) return 'Purchase';
+    if (n.includes('token') || n.includes('paid')) return 'Purchase';
+    if (n.includes('demo') || n.includes('visit') || n.includes('meeting')) return 'Schedule';
+    if (n.includes('qualified') || n.includes('hot')) return 'Lead';
+    return '';
+  };
+  statuses.forEach(st => {
+    const current = currMap[String(st.id)] || '';
+    const sel = h('select', { 'data-status-id': st.id },
+      h('option', { value: '' }, '— Skip —'),
+      ...eventNames.map(en => h('option', { value: en, selected: en === current ? 'selected' : null }, en))
+    );
+    if (!current) {
+      const suggest = autoMap(st);
+      if (suggest) {
+        Array.from(sel.options).forEach(o => { if (o.value === suggest) o.selected = true; });
+      }
+    }
+    mapBody.appendChild(h('tr', {},
+      h('td', { style: { padding: '.4rem .5rem' } },
+        h('span', { style: { display: 'inline-block', width: '12px', height: '12px', borderRadius: '50%',
+          background: st.color || '#94a3b8', marginRight: '.5rem', verticalAlign: 'middle' } }),
+        st.name),
+      h('td', { style: { padding: '.4rem .5rem' } }, sel)
+    ));
+  });
+  wrap.appendChild(h('table', { class: 'mini-table',
+    style: { width: '100%', maxWidth: '560px', borderCollapse: 'collapse' } },
+    h('thead', {}, h('tr', {},
+      h('th', { style: { textAlign: 'left', padding: '.4rem .5rem' } }, 'Lead status'),
+      h('th', { style: { textAlign: 'left', padding: '.4rem .5rem' } }, 'Meta event'))),
+    mapBody));
+
+  // ── Customer-match data toggles ──
+  wrap.appendChild(h('h3', { style: { marginTop: '1.5rem' } }, 'Customer match data (SHA-256 hashed)'));
+  wrap.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem' } },
+    'All values are hashed before they leave the CRM. The more signals you send, the better Meta\'s match rate.'));
+  const phoneCb = h('input', { type: 'checkbox', checked: cfg.include_phone !== false ? 'checked' : null });
+  const emailCb = h('input', { type: 'checkbox', checked: cfg.include_email !== false ? 'checked' : null });
+  const extIdCb = h('input', { type: 'checkbox', checked: cfg.include_external_id !== false ? 'checked' : null });
+  const nameCb  = h('input', { type: 'checkbox', checked: cfg.include_name ? 'checked' : null });
+  const addrCb  = h('input', { type: 'checkbox', checked: cfg.include_address ? 'checked' : null });
+  const wrapCb = (cb, label) => h('label', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', padding: '.25rem 0' } }, cb, label);
+  wrap.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '.25rem 1rem', marginTop: '.5rem' } },
+    wrapCb(phoneCb, '📱 Phone (strongest signal)'),
+    wrapCb(emailCb, '✉ Email'),
+    wrapCb(extIdCb, '🆔 External ID (lead.id)'),
+    wrapCb(nameCb,  '👤 First + Last name'),
+    wrapCb(addrCb,  '📍 City / State / Pincode')
+  ));
+
+  // ── Test event code (optional) ──
+  const testCodeInp = h('input', { type: 'text', value: cfg.test_event_code || '',
+    placeholder: 'e.g. TEST12345', style: { fontFamily: 'monospace', maxWidth: '220px' } });
+  wrap.appendChild(h('div', { style: { marginTop: '1rem' } },
+    h('label', { style: { fontWeight: '600', display: 'block', marginBottom: '.25rem' } }, '🧪 Test event code (optional)'),
+    testCodeInp,
+    h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.25rem' } },
+      'Paste a Test Event Code from Events Manager → Test Events tab if you want events tagged as test (won\'t count toward optimisation).')
+  ));
+
+  // ── Save + test buttons ──
+  const saveBtn = h('button', { class: 'btn primary', style: { marginTop: '1rem' } }, '💾 Save settings');
+  const testEventBtn = h('button', { class: 'btn ghost', style: { marginTop: '1rem', marginLeft: '.5rem' } }, '🚀 Send test event');
+  const saveStatus = h('span', { style: { marginLeft: '.75rem', fontSize: '.85rem' } });
+
+  saveBtn.onclick = async () => {
+    saveStatus.textContent = 'Saving…'; saveStatus.style.color = '#475569';
+    const map = {};
+    mapBody.querySelectorAll('select[data-status-id]').forEach(sel => {
+      const sid = sel.dataset.statusId;
+      if (sel.value) map[String(sid)] = sel.value;
+    });
+    try {
+      await api('api_meta_capi_settings_save', {
+        is_enabled: enabledCb.checked,
+        event_set_id: eventSetInp.value,
+        status_event_map: map,
+        include_phone: phoneCb.checked,
+        include_email: emailCb.checked,
+        include_external_id: extIdCb.checked,
+        include_name: nameCb.checked,
+        include_address: addrCb.checked,
+        test_event_code: testCodeInp.value
+      });
+      saveStatus.textContent = '✓ Saved'; saveStatus.style.color = '#065f46';
+    } catch (e) { saveStatus.textContent = '✗ ' + e.message; saveStatus.style.color = '#991b1b'; }
+  };
+  testEventBtn.onclick = async () => {
+    saveStatus.textContent = 'Sending test event…'; saveStatus.style.color = '#475569';
+    try {
+      const r = await api('api_meta_capi_test_event');
+      saveStatus.textContent = r.ok ? '✓ Test event sent! Check Events Manager → Test Events tab.'
+                                     : '✗ Test event failed: ' + (r.responseText || '').slice(0, 100);
+      saveStatus.style.color = r.ok ? '#065f46' : '#991b1b';
+    } catch (e) { saveStatus.textContent = '✗ ' + e.message; saveStatus.style.color = '#991b1b'; }
+  };
+  wrap.appendChild(h('div', {}, saveBtn, testEventBtn, saveStatus));
+
+  // ── Live stats card ──
+  try {
+    const stats = await api('api_meta_capi_stats');
+    const statsCard = h('div', { style: { marginTop: '1.5rem', padding: '1rem',
+      background: '#f8fafc', borderRadius: '10px', border: '1px solid #e2e8f0' } });
+    statsCard.appendChild(h('h3', { style: { marginTop: 0 } }, '📊 Live stats'));
+    const tile = (label, val) => h('div', { style: { display: 'inline-block', marginRight: '1.5rem' } },
+      h('div', { class: 'muted', style: { fontSize: '.72rem' } }, label),
+      h('div', { style: { fontSize: '1.4rem', fontWeight: '700' } }, String(val)));
+    statsCard.appendChild(h('div', {},
+      tile('Today', stats.today_sent),
+      tile('Last 7 days', stats.week_sent),
+      tile('Lifetime', stats.lifetime_sent),
+      tile('Failed (7d)', stats.week_failed)
+    ));
+    if (stats.last_event) {
+      statsCard.appendChild(h('div', { class: 'muted', style: { marginTop: '.5rem', fontSize: '.82rem' } },
+        '⏱ Last event: Lead #' + stats.last_event.lead_id + ' → ' + stats.last_event.event_name +
+        ' · ' + fmtDate(stats.last_event.event_time, 'relative')));
+    }
+    wrap.appendChild(statsCard);
+  } catch (_) {}
+
+  // ── Recent events log ──
+  try {
+    const log = await api('api_meta_capi_events_log', { limit: 20 });
+    const rows = log.rows || [];
+    if (rows.length) {
+      wrap.appendChild(h('h3', { style: { marginTop: '1.5rem' } }, 'Recent events (last 20)'));
+      const tbl = h('table', { class: 'mini-table', style: { width: '100%', fontSize: '.82rem' } },
+        h('thead', {}, h('tr', {},
+          h('th', {}, 'When'), h('th', {}, 'Lead'), h('th', {}, 'Event'),
+          h('th', {}, 'Status'), h('th', {}, 'Details')
+        )),
+        h('tbody', {}, ...rows.map(r => h('tr', {
+          style: { background: r.dispatch_status === 'sent' ? '' : '#fef2f2' }
+        },
+          h('td', {}, fmtDate(r.event_time || r.created_at, 'relative')),
+          h('td', {}, '#' + (r.lead_id || '—')),
+          h('td', {}, r.event_name || '—'),
+          h('td', {}, r.dispatch_status === 'sent' ? '✓ Sent' : '✗ ' + (r.dispatch_status || '')),
+          h('td', { style: { fontSize: '.72rem', color: '#64748b', maxWidth: '320px',
+            overflow: 'hidden', textOverflow: 'ellipsis' } },
+            (r.response_text || '').slice(0, 80))
+        )))
+      );
+      wrap.appendChild(tbl);
+    }
+  } catch (_) {}
+
+  // ── Setup instructions accordion ──
+  wrap.appendChild(h('details', { style: { marginTop: '1.5rem' } },
+    h('summary', { style: { cursor: 'pointer', fontWeight: '600' } }, '📖 How to set up (one-time, 5 minutes)'),
+    h('ol', { style: { paddingLeft: '1.25rem', marginTop: '.5rem' } },
+      h('li', {}, 'Go to ', h('a', { href: 'https://business.facebook.com/events_manager', target: '_blank' }, 'business.facebook.com/events_manager'), '.'),
+      h('li', {}, 'Click ', h('b', {}, 'Connect Data Sources'), ' → choose ', h('b', {}, 'CRM'), ' → click ', h('b', {}, 'Connect'), '.'),
+      h('li', {}, 'Give the data source a name (e.g. "SmartCRM Offline") → accept Meta\'s data-use terms.'),
+      h('li', {}, 'On the new data source page, click ', h('b', {}, 'Settings'), ' → copy the long ', h('b', {}, 'Offline Event Set ID'), ' (a 15-16 digit number).'),
+      h('li', {}, 'Paste it into the field above ↑ and click ', h('b', {}, 'Verify connection'), '.'),
+      h('li', {}, 'Pick which lead statuses count as conversions (e.g. Won = Purchase, Demo Done = Schedule).'),
+      h('li', {}, 'Turn ON the enable toggle, click Save, and you\'re done. Future status changes will fire to Meta in real-time.'),
+      h('li', {}, 'Optional: in your ad campaigns, set the optimisation goal to ', h('b', {}, 'Purchase'), ' or ', h('b', {}, 'Lead'), ' (matching the event names you mapped) so Meta starts optimising on real conversions.')
+    )
+  ));
+
+  return wrap;
+}
 
 async function adminCampaigns(reload) {
   if (typeof reload !== 'function') reload = () => reload();

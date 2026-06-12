@@ -106,6 +106,7 @@ const ROUTE_FILES = [
   'team',            /* TEAM_LIVE_STATUS_v1 — Live Team Status panel + Break toggle */
   'changelog',       /* CHANGELOG_v1 — What's New / changelog feed */
   'googleConvExport', /* GOOGLE_CONV_EXPORT_v1 — Google Ads offline-conversion CSV export */
+  'metaConvExport',   /* META_CAPI_v1 — Meta Conversions API offline events */
   'leadQuickNote',   /* QNOTE_v1 — AI Quick Note row action (vserve beta) */
 ];
 

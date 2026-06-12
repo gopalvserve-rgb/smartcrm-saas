@@ -1511,6 +1511,10 @@ async function api_leads_update(token, id, patch) {
     }
     // TAT — write stage log + close any open violation for this lead
     try { await require('./tat').logStageChange(id, lead.status_id, patch.status_id, me.id); } catch (_) {}
+    // META_CAPI_v1 — real-time push to Meta Conversions API on status change
+    try {
+      require('./metaConvExport').maybeDispatchOnStatusChange(id, patch.status_id, lead.status_id, me.id);
+    } catch (_) {}
     // Stamp last_status_change_at so the TAT worker knows when this lead entered the new stage
     try { await db.update('leads', id, { last_status_change_at: db.nowIso() }); } catch (_) {}
   }

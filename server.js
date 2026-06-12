@@ -3498,6 +3498,40 @@ setInterval(() => {
 setTimeout(() => _runGoogleConvForAllTenants().catch(() => {}), 60_000);
 console.log('[gconv] Google Ads conversion export daily worker started');
 
+// ── META_CAPI_v1 — daily 10pm IST per-tenant Meta Conversions API tick ──
+// Mirrors the Google CSV path. Each tenant tick decides whether to fire
+// (IST hour=22 + not already today + feature is ON). Real-time dispatch
+// already runs via routes/leads.js status-change hook — this catches any
+// events the real-time path missed (network errors, server restarts).
+async function _runMetaCapiForAllTenants() {
+  let rows = [];
+  try {
+    const r = await controlDb.query(
+      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500`
+    );
+    rows = r.rows;
+  } catch (e) { console.warn('[meta-capi] tenant list failed:', e.message); return; }
+  let mcapi;
+  try { mcapi = require('./routes/metaConvExport'); } catch (e) { return; }
+  if (!mcapi._maybeDailyTickForCurrentTenant) return;
+  for (const row of rows) {
+    let t; try { t = await tenantPoolMod.findActiveTenant(row.slug); } catch (_) { continue; }
+    if (!t) continue;
+    const pool = tenantPoolMod.poolFor(t);
+    if (!pool) continue;
+    try {
+      await tenantDb.tenantStorage.run({ pool, tenant: t, slug: row.slug },
+        () => mcapi._maybeDailyTickForCurrentTenant(row.slug)
+      );
+    } catch (e) { console.warn(`[meta-capi] ${row.slug} tick failed:`, e.message); }
+  }
+}
+setInterval(() => {
+  _runMetaCapiForAllTenants().catch(e => console.error('[meta-capi] cycle failed:', e.message));
+}, 60_000);
+setTimeout(() => _runMetaCapiForAllTenants().catch(() => {}), 90_000);
+console.log('[meta-capi] Meta Conversions API daily worker started');
+
 // ── Background: per-tenant Nurture sequence worker ──────────────────────
 // Picks up nurture_step_runs that are due and dispatches them via the
 // channel-appropriate send path (WA template / email / AI bot). Exit
