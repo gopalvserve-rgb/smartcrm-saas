@@ -5691,20 +5691,33 @@ function renderLeadsTable(rows) {
     });
     CRM._focusShowAll = CRM._focusShowAll || {};
     let anyShown = false;
-    buckets.forEach(b => {
+    buckets.forEach((b, idx) => {
       const list = grouped[b.id.toLowerCase()] || [];
       if (!list.length) return;
+      // P1.11 — spacer row BETWEEN buckets so sections feel visually separated
+      if (anyShown) {
+        tbody.appendChild(h('tr', { class: 'bucket-gap' },
+          h('td', { colspan: totalCols, style: { padding: '0', height: '18px', background: '#fff', border: '0' } })
+        ));
+      }
       anyShown = true;
-      // Bucket header row spans all columns
+      // P1.11 — bucket header: strong left rail + bottom underline that matches row tints
       const hdrTd = h('td', {
         colspan: totalCols,
-        style: { background: b.bg, padding: '10px 14px', borderTop: '4px solid ' + b.color, borderBottom: '1px solid #e2e8f0' }
+        style: {
+          background: b.bg,
+          padding: '14px 18px',
+          borderLeft: '6px solid ' + b.color,
+          borderTop: '1px solid ' + b.color + '55',
+          borderRight: '1px solid ' + b.color + '33',
+          borderBottom: '2px solid ' + b.color
+        }
       },
-        h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
-          h('span', { style: { fontSize: '1.05rem' } }, b.icon),
-          h('span', { style: { fontWeight: '700', color: b.color, fontSize: '.95rem' } }, b.label),
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px' } },
+          h('span', { style: { fontSize: '1.25rem', lineHeight: '1' } }, b.icon),
+          h('span', { style: { fontWeight: '800', color: b.color, fontSize: '1.05rem', letterSpacing: '.2px' } }, b.label),
           h('span', {
-            style: { background: b.pillBg, color: b.color, padding: '2px 10px', borderRadius: '999px', fontSize: '.72rem', fontWeight: '600', border: '1px solid ' + b.color + '66' }
+            style: { background: b.pillBg, color: b.color, padding: '3px 12px', borderRadius: '999px', fontSize: '.75rem', fontWeight: '700', border: '1.5px solid ' + b.color + '88' }
           }, list.length + ' Leads')
         )
       );
@@ -5722,9 +5735,13 @@ function renderLeadsTable(rows) {
           renderLeadsTable(rows);
         };
         tbody.appendChild(h('tr', { class: 'bucket-more' },
-          h('td', { colspan: totalCols, style: { textAlign: 'center', padding: '10px', background: '#fafafa', borderBottom: '1px solid #e2e8f0' } }, moreLink)
+          h('td', { colspan: totalCols, style: { textAlign: 'center', padding: '10px', background: b.bg, borderLeft: '6px solid ' + b.color, borderRight: '1px solid ' + b.color + '33' } }, moreLink)
         ));
       }
+      // P1.11 — bucket FOOTER bar closes the section visually
+      tbody.appendChild(h('tr', { class: 'bucket-end' },
+        h('td', { colspan: totalCols, style: { padding: '0', height: '4px', background: b.color, opacity: '.45', border: '0' } })
+      ));
     });
     // Show an "Invalid: N hidden" footnote if there are Invalid rows
     const invCount = (grouped['invalid'] || []).length;
