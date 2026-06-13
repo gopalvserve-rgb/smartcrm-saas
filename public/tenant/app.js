@@ -5670,6 +5670,7 @@ function renderLeadsTable(rows) {
     );
   }
   const _mode = (CRM.prefs && CRM.prefs.viewMode) || 'normal';
+  const _focusCards = [];
   if (!rows.length) {
     tbody.appendChild(h('tr', {}, h('td', { colspan: activeCols.length + extraCols.length + 2, class: 'empty' }, 'No leads match your filters.')));
   } else if (_mode === 'focus') {
@@ -5691,27 +5692,26 @@ function renderLeadsTable(rows) {
     });
     CRM._focusShowAll = CRM._focusShowAll || {};
     let anyShown = false;
+    // P1.13 — render each bucket as a SEPARATE tbody (card). CSS gives the rounded edges + shadow.
     buckets.forEach((b, idx) => {
       const list = grouped[b.id.toLowerCase()] || [];
       if (!list.length) return;
-      // P1.12 — light spacer row BETWEEN buckets (single white row, no borders)
+      // Spacer tbody between buckets
       if (anyShown) {
-        tbody.appendChild(h('tr', { class: 'bucket-gap' },
-          h('td', { colspan: totalCols, style: { padding: '0', height: '14px', background: '#fff', border: '0', boxShadow: 'none' } })
-        ));
+        const gap = h('tbody', { class: 'ls-bucket-gap' },
+          h('tr', {}, h('td', { colspan: totalCols }))
+        );
+        _focusCards.push(gap);
       }
       anyShown = true;
-      // P1.12 — clean header band: left rail + colored bottom underline ONLY (no right/top borders)
+      // One tbody per bucket — gets a card look via CSS
+      const card = h('tbody', { class: 'ls-bucket-card ls-bucket-' + b.id.toLowerCase(), style: { '--ls-bucket-bg': b.bg } });
+      // Header row (sits as first row inside the card)
       const hdrTd = h('td', {
         colspan: totalCols,
         style: {
           background: b.bg,
-          padding: '12px 16px',
-          boxShadow: 'inset 5px 0 0 0 ' + b.color,
-          borderBottom: '2px solid ' + b.color,
-          borderTop: '0',
-          borderLeft: '0',
-          borderRight: '0'
+          boxShadow: 'inset 5px 0 0 0 ' + b.color
         }
       },
         h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
@@ -5722,9 +5722,10 @@ function renderLeadsTable(rows) {
           }, list.length + ' Leads')
         )
       );
-      tbody.appendChild(h('tr', { class: 'bucket-hdr', style: { background: b.bg } }, hdrTd));
+      card.appendChild(h('tr', { class: 'bucket-hdr' }, hdrTd));
+      // Data rows
       const cap = CRM._focusShowAll[b.id] ? list.length : FOCUS_PER_BUCKET;
-      list.slice(0, cap).forEach(l => tbody.appendChild(_buildLeadRow(l)));
+      list.slice(0, cap).forEach(l => card.appendChild(_buildLeadRow(l)));
       if (list.length > FOCUS_PER_BUCKET && !CRM._focusShowAll[b.id]) {
         const remaining = list.length - FOCUS_PER_BUCKET;
         const moreLink = h('a', {
@@ -5735,10 +5736,11 @@ function renderLeadsTable(rows) {
           CRM._focusShowAll[b.id] = true;
           renderLeadsTable(rows);
         };
-        tbody.appendChild(h('tr', { class: 'bucket-more' },
-          h('td', { colspan: totalCols, style: { textAlign: 'center', padding: '10px', background: '#fafafa', borderBottom: '1px solid #e2e8f0' } }, moreLink)
+        card.appendChild(h('tr', { class: 'bucket-more' },
+          h('td', { colspan: totalCols, style: { textAlign: 'center', padding: '10px', background: '#fafafa' } }, moreLink)
         ));
       }
+      _focusCards.push(card);
     });
     // Show an "Invalid: N hidden" footnote if there are Invalid rows
     const invCount = (grouped['invalid'] || []).length;
@@ -5755,6 +5757,9 @@ function renderLeadsTable(rows) {
   }
   tbl.innerHTML = '';
   tbl.append(thead, tbody);
+  if (_focusCards.length) _focusCards.forEach(c => tbl.appendChild(c));
+  // P1.13 — toggle focus-mode class on body so CSS card styles apply
+  try { document.body.classList.toggle('focus-mode', _mode === 'focus'); } catch(_) {}
 
   $$('select[data-lead-status]', tbl).forEach(sel =>
     sel.addEventListener('change', async () => {
