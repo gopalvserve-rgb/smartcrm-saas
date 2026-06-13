@@ -3988,63 +3988,72 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
    Each bucket renders inside its own <tbody class="ls-bucket-card ls-bucket-{id}">
    Visual goal: distinct rounded card per bucket with shadow and clear gap.
    ============================================================ */
-body.view-leads .ls-bucket-card { display: table-row-group; }
+body.focus-mode .ls-bucket-card { display: table-row-group; }
 /* Gap between buckets via spacer tbody */
-body.view-leads .ls-bucket-gap td { padding: 0 !important; height: 16px !important; background: transparent !important; border: 0 !important; }
+body.focus-mode .ls-bucket-gap td { padding: 0 !important; height: 16px !important; background: transparent !important; border: 0 !important; }
 /* Header row inside the card */
-body.view-leads .ls-bucket-card .bucket-hdr td {
+body.focus-mode .ls-bucket-card .bucket-hdr td {
   padding: 14px 18px !important;
   border-top: 0 !important;
   border-bottom: 1px solid rgba(0,0,0,0.06) !important;
   font-weight: 700;
 }
 /* Card-style: shadow on first/last row of each bucket via border-radius + box-shadow */
-body.view-leads .ls-bucket-card > tr:first-child > td:first-child {
+body.focus-mode .ls-bucket-card > tr:first-child > td:first-child {
   border-top-left-radius: 14px !important;
 }
-body.view-leads .ls-bucket-card > tr:first-child > td:last-child {
+body.focus-mode .ls-bucket-card > tr:first-child > td:last-child {
   border-top-right-radius: 14px !important;
 }
-body.view-leads .ls-bucket-card > tr:last-child > td:first-child {
+body.focus-mode .ls-bucket-card > tr:last-child > td:first-child {
   border-bottom-left-radius: 14px !important;
 }
-body.view-leads .ls-bucket-card > tr:last-child > td:last-child {
+body.focus-mode .ls-bucket-card > tr:last-child > td:last-child {
   border-bottom-right-radius: 14px !important;
 }
 /* Soft card outline: outer border via cell box-shadow on the first column */
-body.view-leads .ls-bucket-card > tr > td {
+body.focus-mode .ls-bucket-card > tr > td {
   background-color: #fff;
 }
-body.view-leads .ls-bucket-card .bucket-hdr td { background-color: var(--ls-bucket-bg, #f8f8f8) !important; }
-body.view-leads .ls-bucket-card > tr > td:first-child {
+body.focus-mode .ls-bucket-card .bucket-hdr td { background-color: var(--ls-bucket-bg, #f8f8f8) !important; }
+body.focus-mode .ls-bucket-card > tr > td:first-child {
   box-shadow: inset 1px 0 0 0 #e5e7eb;
 }
-body.view-leads .ls-bucket-card > tr > td:last-child {
+body.focus-mode .ls-bucket-card > tr > td:last-child {
   box-shadow: inset -1px 0 0 0 #e5e7eb;
 }
-body.view-leads .ls-bucket-card > tr:first-child > td {
+body.focus-mode .ls-bucket-card > tr:first-child > td {
   box-shadow: inset 0 1px 0 0 #e5e7eb;
 }
-body.view-leads .ls-bucket-card > tr:first-child > td:first-child {
+body.focus-mode .ls-bucket-card > tr:first-child > td:first-child {
   box-shadow: inset 1px 1px 0 0 #e5e7eb;
 }
-body.view-leads .ls-bucket-card > tr:first-child > td:last-child {
+body.focus-mode .ls-bucket-card > tr:first-child > td:last-child {
   box-shadow: inset -1px 1px 0 0 #e5e7eb;
 }
-body.view-leads .ls-bucket-card > tr:last-child > td {
+body.focus-mode .ls-bucket-card > tr:last-child > td {
   box-shadow: inset 0 -1px 0 0 #e5e7eb, 0 3px 6px -2px rgba(0,0,0,0.08);
 }
-body.view-leads .ls-bucket-card > tr:last-child > td:first-child {
+body.focus-mode .ls-bucket-card > tr:last-child > td:first-child {
   box-shadow: inset 1px -1px 0 0 #e5e7eb, 0 3px 6px -2px rgba(0,0,0,0.08);
 }
-body.view-leads .ls-bucket-card > tr:last-child > td:last-child {
+body.focus-mode .ls-bucket-card > tr:last-child > td:last-child {
   box-shadow: inset -1px -1px 0 0 #e5e7eb, 0 3px 6px -2px rgba(0,0,0,0.08);
 }
 /* Override the per-row left-rail in Focus so it doesn't fight the card */
-body.view-leads.focus-mode tr.ls-row.ls-hot,
-body.view-leads.focus-mode tr.ls-row.ls-warm,
-body.view-leads.focus-mode tr.ls-row.ls-nurture,
-body.view-leads.focus-mode tr.ls-row.ls-cold,
-body.view-leads.focus-mode tr.ls-row.ls-invalid {
+body.focus-mode tr.ls-row.ls-hot,
+body.focus-mode tr.ls-row.ls-warm,
+body.focus-mode tr.ls-row.ls-nurture,
+body.focus-mode tr.ls-row.ls-cold,
+body.focus-mode tr.ls-row.ls-invalid {
   box-shadow: none !important;
+}
+
+/* P1.13.1 — border-collapse must be separate for border-radius on cells to render */
+body.focus-mode table.lead-list-tbl,
+body.focus-mode #leads-tbl,
+body.focus-mode #leads-table,
+body.focus-mode table.leads-tbl {
+  border-collapse: separate !important;
+  border-spacing: 0 !important;
 }
