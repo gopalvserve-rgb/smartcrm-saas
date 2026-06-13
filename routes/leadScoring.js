@@ -661,10 +661,18 @@ async function recomputeLeadScore(leadId, triggerEvent) {
   let _statusFloor = 0;
   let _statusForceCat = null;
   if (_sn) {
-    if (/not\s*interested|junk|spam|fake|invalid|lost|dnd|do\s*not\s*call|wrong\s*number/.test(_sn)) {
+    // P1.10 — Closed-won statuses (deal already won, no longer needs sales push)
+    // are excluded from Hot/Warm buckets. They get forced to Invalid (hidden in
+    // Focus mode) so they don't crowd the working-leads view. Switch to Normal
+    // mode + filter by status to find them.
+    if (/\bwon\b|sale\s*done|sale\s*final|closure|token\s*received|^paid$|\bpaid\b|enroll|booked/.test(_sn)) {
       _statusForceCat = 'Invalid';
       score = 0;
-    } else if (/payment\s*link|paid|enroll|booked|won|sale\s*done|sale\s*final|closure|token\s*received/.test(_sn)) {
+    } else if (/not\s*interested|junk|spam|fake|invalid|lost|dnd|do\s*not\s*call|wrong\s*number/.test(_sn)) {
+      _statusForceCat = 'Invalid';
+      score = 0;
+    } else if (/payment\s*link/.test(_sn)) {
+      // Payment Link sent = still an active prospect (link sent, awaiting payment)
       _statusFloor = Math.max(score, settings.hot_threshold + 5);  // ~85
     } else if (/demo\s*done|proposal\s*sent|quote\s*sent|quotation\s*sent|site\s*visit\s*done|visit\s*done|emi/.test(_sn)) {
       _statusFloor = Math.max(score, settings.hot_threshold);       // ~80
