@@ -4827,6 +4827,63 @@ VIEWS.leads = async (view) => {
       wrap.appendChild(pop);
       return wrap;
     })(),
+    // LEAD_SCORING_v1 P1.9 — Mode dropdown: Normal (flat list) vs Focus (grouped
+    // by Smart Score bucket). Persists in CRM.prefs.viewMode + localStorage.
+    (function(){
+      // Hydrate from localStorage on first read
+      if (!CRM.prefs) CRM.prefs = {};
+      if (!CRM.prefs.viewMode) {
+        try { CRM.prefs.viewMode = localStorage.getItem('crm_view_mode') || 'normal'; } catch(_){ CRM.prefs.viewMode = 'normal'; }
+      }
+      const wrap = h('div', { style: { position: 'relative', display: 'inline-block' } });
+      const labelFor = (m) => m === 'focus' ? '\ud83c\udfaf Focus' : '\ud83d\udccb Normal';
+      const cur = CRM.prefs.viewMode;
+      const btn = h('button', {
+        type: 'button',
+        id: 'f-mode-btn',
+        style: { padding: '6px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', background: cur === 'focus' ? '#eef2ff' : '#fff', color: cur === 'focus' ? '#4338ca' : '#334155', cursor: 'pointer', fontSize: '.85rem', fontWeight: cur === 'focus' ? '600' : '400' }
+      }, labelFor(cur));
+      const pop = h('div', {
+        style: { display: 'none', position: 'absolute', top: 'calc(100% + 6px)', left: '0', zIndex: '99', minWidth: '240px', padding: '6px', background: '#fff', border: '1px solid #e2e8f0', borderRadius: '10px', boxShadow: '0 8px 24px rgba(15,23,42,.12)' }
+      });
+      const modes = [
+        { id: 'normal', icon: '\ud83d\udccb', label: 'Normal', desc: 'Flat list of leads (current view)' },
+        { id: 'focus',  icon: '\ud83c\udfaf', label: 'Focus',  desc: 'Grouped by Hot / Warm / Nurture / Cold' }
+      ];
+      modes.forEach(m => {
+        const row = h('div', {
+          style: { padding: '8px 10px', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px', background: CRM.prefs.viewMode === m.id ? '#eef2ff' : 'transparent' }
+        },
+          h('span', { style: { fontSize: '1.1rem' } }, m.icon),
+          h('div', { style: { display: 'flex', flexDirection: 'column', flex: '1' } },
+            h('span', { style: { fontSize: '.85rem', fontWeight: '600', color: '#334155' } }, m.label),
+            h('span', { style: { fontSize: '.7rem', color: '#64748b' } }, m.desc)
+          ),
+          CRM.prefs.viewMode === m.id ? h('span', { style: { color: '#6366f1', fontWeight: '700' } }, '\u2713') : null
+        );
+        row.onclick = () => {
+          CRM.prefs.viewMode = m.id;
+          try { localStorage.setItem('crm_view_mode', m.id); } catch(_){}
+          // Refresh button label + state
+          btn.textContent = labelFor(m.id);
+          btn.style.background = m.id === 'focus' ? '#eef2ff' : '#fff';
+          btn.style.color = m.id === 'focus' ? '#4338ca' : '#334155';
+          btn.style.fontWeight = m.id === 'focus' ? '600' : '400';
+          pop.style.display = 'none';
+          // For Focus mode, bump page size to 500 so all buckets are well-represented
+          if (m.id === 'focus' && CRM._pageSize < 500) { CRM._oldPageSize = CRM._pageSize; CRM._pageSize = 500; }
+          else if (m.id === 'normal' && CRM._oldPageSize) { CRM._pageSize = CRM._oldPageSize; CRM._oldPageSize = null; }
+          CRM._leadsPage = 1;
+          loadLeads({ page: 1 });
+        };
+        pop.appendChild(row);
+      });
+      btn.onclick = (ev) => { ev.stopPropagation(); pop.style.display = pop.style.display === 'block' ? 'none' : 'block'; };
+      document.addEventListener('click', (ev) => { if (!wrap.contains(ev.target)) pop.style.display = 'none'; });
+      wrap.appendChild(btn);
+      wrap.appendChild(pop);
+      return wrap;
+    })(),
     wireFilter(selectOpts('f-followup', [{ id: '', name: 'All follow-ups' }, { id: 'today', name: 'Due today' }, { id: 'overdue', name: 'Overdue' }], CRM.prefs.filters.followup)),
     wireFilter(selectOpts('f-qualified', [
       { id: '',  name: 'Any qualified' },
@@ -5585,36 +5642,102 @@ function renderLeadsTable(rows) {
     )
   );
   const tbody = h('tbody', {});
+  // LEAD_SCORING_v1 P1.9 — helper: build one lead row identical to Normal mode.
+  function _buildLeadRow(l) {
+    const _smartCat = String(l.smart_category || '').toLowerCase();
+    const _scoreCls = _smartCat ? ('ls-row ls-' + _smartCat) : '';
+    const rowCls = [
+      l.is_duplicate ? 'row-duplicate' : '',
+      l.tat_violation ? 'row-tat-violation' : '',
+      _scoreCls
+    ].filter(Boolean).join(' ');
+    return h('tr', { class: rowCls, title: l.tat_violation ? tatViolationTitle(l) : null },
+      h('td', { class: 'td-check' }, h('input', { type: 'checkbox', class: 'row-check', 'data-id': l.id, onclick: onRowCheck })),
+      ...activeCols.map(col => renderCell(col, l, statuses)),
+      ...extraCols.map(f => h('td', {}, (l.extra && l.extra[f.key]) || '')),
+      h('td', { class: 'td-actions', style: { whiteSpace: 'nowrap' } },
+        h('button', { class: 'btn sm ghost', title: 'Edit lead', onclick: () => openLeadModal(l.id) }, '\u270e'),
+        l.phone ? h('button', {
+          class: 'btn sm ghost', title: 'Whitelist this number (skip future auto-lead) + delete this lead',
+          style: { color: '#b91c1c', marginLeft: '.2rem' },
+          onclick: async (ev) => {
+            ev.stopPropagation();
+            const ok = await whitelistLeadPhone(l);
+            if (ok) loadLeads();
+          }
+        }, '\ud83d\udeab') : null
+      )
+    );
+  }
+  const _mode = (CRM.prefs && CRM.prefs.viewMode) || 'normal';
   if (!rows.length) {
     tbody.appendChild(h('tr', {}, h('td', { colspan: activeCols.length + extraCols.length + 2, class: 'empty' }, 'No leads match your filters.')));
-  } else {
+  } else if (_mode === 'focus') {
+    // LEAD_SCORING_v1 P1.9 — Focus mode: group by smart_category into 4 sections
+    // (Hot / Warm / Nurture / Cold). Invalid hidden. Same row content as Normal.
+    const FOCUS_PER_BUCKET = 50;
+    const buckets = [
+      { id: 'Hot',     icon: '\ud83d\udd25', label: 'Hot Leads',     color: '#E24B4A', bg: '#FCEBEB', pillBg: '#fff' },
+      { id: 'Warm',    icon: '\ud83c\udf3f', label: 'Warm Leads',    color: '#EF9F27', bg: '#FAEEDA', pillBg: '#fff' },
+      { id: 'Nurture', icon: '\ud83c\udf31', label: 'Nurture Leads', color: '#1D9E75', bg: '#F0F9F4', pillBg: '#fff' },
+      { id: 'Cold',    icon: '\u2744\ufe0f',  label: 'Cold Leads',    color: '#378ADD', bg: '#F1F6FB', pillBg: '#fff' }
+    ];
+    const totalCols = 1 + activeCols.length + extraCols.length + 1;
+    const grouped = {};
     rows.forEach(l => {
-      // LEAD_SCORING_v1 P1.5 — add bucket class so CSS can shade the row.
-      const _smartCat = String(l.smart_category || '').toLowerCase();
-      const _scoreCls = _smartCat ? ('ls-row ls-' + _smartCat) : '';
-      const rowCls = [
-        l.is_duplicate ? 'row-duplicate' : '',
-        l.tat_violation ? 'row-tat-violation' : '',
-        _scoreCls
-      ].filter(Boolean).join(' ');
-      tbody.appendChild(h('tr', { class: rowCls, title: l.tat_violation ? tatViolationTitle(l) : null },
-        h('td', { class: 'td-check' }, h('input', { type: 'checkbox', class: 'row-check', 'data-id': l.id, onclick: onRowCheck })),
-        ...activeCols.map(col => renderCell(col, l, statuses)),
-        ...extraCols.map(f => h('td', {}, (l.extra && l.extra[f.key]) || '')),
-        h('td', { class: 'td-actions', style: { whiteSpace: 'nowrap' } },
-          h('button', { class: 'btn sm ghost', title: 'Edit lead', onclick: () => openLeadModal(l.id) }, '\u270e'),
-          l.phone ? h('button', {
-            class: 'btn sm ghost', title: 'Whitelist this number (skip future auto-lead) + delete this lead',
-            style: { color: '#b91c1c', marginLeft: '.2rem' },
-            onclick: async (ev) => {
-              ev.stopPropagation();
-              const ok = await whitelistLeadPhone(l);
-              if (ok) loadLeads();
-            }
-          }, '\ud83d\udeab') : null
-        )
-      ));
+      const k = String(l.smart_category || '').toLowerCase();
+      if (!grouped[k]) grouped[k] = [];
+      grouped[k].push(l);
     });
+    CRM._focusShowAll = CRM._focusShowAll || {};
+    let anyShown = false;
+    buckets.forEach(b => {
+      const list = grouped[b.id.toLowerCase()] || [];
+      if (!list.length) return;
+      anyShown = true;
+      // Bucket header row spans all columns
+      const hdrTd = h('td', {
+        colspan: totalCols,
+        style: { background: b.bg, padding: '10px 14px', borderTop: '4px solid ' + b.color, borderBottom: '1px solid #e2e8f0' }
+      },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
+          h('span', { style: { fontSize: '1.05rem' } }, b.icon),
+          h('span', { style: { fontWeight: '700', color: b.color, fontSize: '.95rem' } }, b.label),
+          h('span', {
+            style: { background: b.pillBg, color: b.color, padding: '2px 10px', borderRadius: '999px', fontSize: '.72rem', fontWeight: '600', border: '1px solid ' + b.color + '66' }
+          }, list.length + ' Leads')
+        )
+      );
+      tbody.appendChild(h('tr', { class: 'bucket-hdr', style: { background: b.bg } }, hdrTd));
+      const cap = CRM._focusShowAll[b.id] ? list.length : FOCUS_PER_BUCKET;
+      list.slice(0, cap).forEach(l => tbody.appendChild(_buildLeadRow(l)));
+      if (list.length > FOCUS_PER_BUCKET && !CRM._focusShowAll[b.id]) {
+        const remaining = list.length - FOCUS_PER_BUCKET;
+        const moreLink = h('a', {
+          href: 'javascript:void(0)',
+          style: { color: b.color, fontWeight: '600', fontSize: '.78rem', textDecoration: 'none' }
+        }, '\u2193 Show ' + remaining + ' more ' + b.label.replace(' Leads', '') + ' leads');
+        moreLink.onclick = () => {
+          CRM._focusShowAll[b.id] = true;
+          renderLeadsTable(rows);
+        };
+        tbody.appendChild(h('tr', { class: 'bucket-more' },
+          h('td', { colspan: totalCols, style: { textAlign: 'center', padding: '10px', background: '#fafafa', borderBottom: '1px solid #e2e8f0' } }, moreLink)
+        ));
+      }
+    });
+    // Show an "Invalid: N hidden" footnote if there are Invalid rows
+    const invCount = (grouped['invalid'] || []).length;
+    if (anyShown && invCount > 0) {
+      tbody.appendChild(h('tr', { class: 'bucket-info' },
+        h('td', { colspan: totalCols, style: { textAlign: 'center', padding: '8px', background: '#fafafa', color: '#94a3b8', fontSize: '.72rem' } }, invCount + ' Invalid lead(s) hidden in Focus mode')
+      ));
+    }
+    if (!anyShown) {
+      tbody.appendChild(h('tr', {}, h('td', { colspan: totalCols, class: 'empty' }, 'No scored leads on this page. Switch to Normal mode to see all leads.')));
+    }
+  } else {
+    rows.forEach(l => { tbody.appendChild(_buildLeadRow(l)); });
   }
   tbl.innerHTML = '';
   tbl.append(thead, tbody);

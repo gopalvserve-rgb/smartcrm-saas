@@ -443,3 +443,12 @@ SELECT 'ls-v1-p18b',
        '🎯',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Smart Score filter — now a single compact dropdown');
+
+-- LEAD_SCORING_v1 P1.9 — Focus mode
+INSERT INTO changelog (version, title, body, icon, created_at)
+SELECT 'ls-v1-p19',
+       'Focus mode on the Leads page — group leads by Smart Score',
+       'A new Mode dropdown next to the Score filter. Stay in Normal (the flat list you already use) or switch to Focus, which keeps every column exactly the same but splits the rows into four colour-coded sections: Hot, Warm, Nurture, Cold. Each section has its own header bar with a count pill. All your filters — date, status, source, tag, campaign, custom field, score range — still apply across every section. Invalid leads are hidden in Focus mode. Up to 50 rows per section, with a Show more link to load the rest. Selecting checkboxes across sections still feeds the existing bulk-action toolbar.',
+       '🎯',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Focus mode on the Leads page — group leads by Smart Score');
