@@ -17677,12 +17677,20 @@ async function wbChat() {
             '👤 ' + t.assigned_name + (t.assignment_explicit ? '' : ' · auto')
           )
         : h('span', { class: 'wb-row-agent unassigned' }, '👤 Unassigned');
+      // WA_CHAT_FIRSTLAST_v1 — show First/Last contact dates per number
+      const _fmtFull = v => v ? new Date(v).toLocaleString([], { day: '2-digit', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
       const row = h('div', { class: 'wb-chat-row' + (t.phone === openPhone ? ' active' : ''), onclick: () => openThread(t.phone) },
         h('div', {}, h('b', {}, t.lead_name || t.phone), t.unread ? h('span', { class: 'wb-unread' }, t.unread) : null),
         h('div', { class: 'muted', style: { fontSize: '.78rem' } }, t.phone),
         ownerLabel,
         h('div', { class: 'muted', style: { fontSize: '.78rem', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, t.last_message_type === 'text' ? t.last_message : ('[' + t.last_message_type + ']')),
-        h('div', { class: 'muted', style: { fontSize: '.7rem' } }, fmtDate(t.last_at, 'relative'))
+        h('div', { class: 'muted', style: { fontSize: '.7rem' } }, fmtDate(t.last_at, 'relative')),
+        // First + Last connected timestamps — shown on every thread row
+        h('div', { style: { fontSize: '.68rem', color: '#64748b', marginTop: '4px', display: 'flex', gap: '8px', flexWrap: 'wrap' },
+                   title: 'First contact: ' + _fmtFull(t.first_at) + '\nLast contact: ' + _fmtFull(t.last_at) },
+          h('span', { style: { color: '#16a34a' } }, '🟢 First: ' + _fmtFull(t.first_at)),
+          h('span', { style: { color: '#3b82f6' } }, '🔵 Last: ' + _fmtFull(t.last_at))
+        )
       );
       left.appendChild(row);
     });

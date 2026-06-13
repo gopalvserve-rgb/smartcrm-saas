@@ -1753,6 +1753,34 @@ async function api_wb_chat_threads(token, opts) {
     delete t.last_outbound_phone_id;
   }
 
+  // WA_CHAT_FIRSTLAST_v1 — pull MIN(created_at) per counter-party so the
+  // SPA can show 'first contact' alongside 'last activity'. The scan window
+  // above only sees the most recent N messages, so we go straight to the
+  // table here for the earliest timestamp.
+  try {
+    const phoneSet = [...threads.keys()];
+    if (phoneSet.length) {
+      const firstRes = await db.query(
+        `SELECT counter, MIN(created_at) AS first_at FROM (
+           SELECT from_number AS counter, created_at FROM whatsapp_messages
+             WHERE from_number = ANY($1::text[]) AND direction = 'in'
+           UNION ALL
+           SELECT to_number AS counter, created_at FROM whatsapp_messages
+             WHERE to_number = ANY($1::text[]) AND direction = 'out'
+         ) x GROUP BY counter`,
+        [phoneSet]
+      );
+      const firstByPhone = {};
+      firstRes.rows.forEach(r => { firstByPhone[String(r.counter)] = r.first_at; });
+      for (const t of threads.values()) {
+        t.first_at = firstByPhone[String(t.phone)] || t.last_at;
+      }
+    }
+  } catch (e) {
+    // Non-fatal — fall back to last_at being the only timestamp available
+    for (const t of threads.values()) { if (!t.first_at) t.first_at = t.last_at; }
+  }
+
   // Hydrate with lead name + assignee, then drop threads the user can't see.
   const leadIds = [...new Set([...threads.values()].map(t => t.lead_id).filter(Boolean))];
   let leadById = {};
