@@ -404,8 +404,47 @@ VIEWS.tenants = async (view) => {
     }, '🛠 Re-apply schema')
   ));
   let list;
-  try { list = await api('api_saas_tenants_list', {}); }
-  catch (e) { view.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+  let dbVol = null;
+  try {
+    const [tl, vol] = await Promise.all([
+      api('api_saas_tenants_list', {}),
+      api('api_saas_dbVolume_summary').catch(() => null)
+    ]);
+    list = tl;
+    dbVol = vol;
+  } catch (e) { view.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+
+  // DB_VOLUME_v1 — top banner showing total disk usage + per-tenant lookup map
+  let _sizeMap = new Map();
+  if (dbVol && dbVol.tenants) {
+    dbVol.tenants.forEach(t => _sizeMap.set(t.slug, t));
+    const pct = dbVol.percent_full;
+    const colour = pct >= 90 ? '#dc2626' : pct >= 75 ? '#f59e0b' : '#16a34a';
+    const bg = pct >= 90 ? '#fee2e2' : pct >= 75 ? '#fef3c7' : '#ecfdf5';
+    view.appendChild(h('div', {
+      style: {
+        background: bg, border: '1px solid ' + colour, borderRadius: '10px',
+        padding: '12px 16px', marginBottom: '14px',
+        display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap'
+      }
+    },
+      h('span', { style: { fontSize: '1.3rem' }}, pct >= 90 ? '🚨' : pct >= 75 ? '⚠️' : '💾'),
+      h('div', { style: { flex: '1' }},
+        h('div', { style: { fontWeight: '700', color: colour }},
+          'Postgres volume: ' + dbVol.used_pretty + ' / ' + dbVol.capacity_gb + ' GB used (' + pct.toFixed(1) + '%)'
+        ),
+        h('div', { style: { fontSize: '.78rem', color: '#475569', marginTop: '2px' }},
+          dbVol.db_count + ' databases · Free: ' + dbVol.free_pretty + ' · Control: ' + dbVol.control_pretty +
+          (dbVol.other_bytes > 0 ? ' · Other: ' + dbVol.other_pretty : '') +
+          '  (set RAILWAY_PG_VOLUME_GB env var to match your Railway plan)'
+        )
+      ),
+      // Progress bar
+      h('div', { style: { width: '180px', height: '10px', background: '#fff', border: '1px solid '+colour, borderRadius: '999px', overflow: 'hidden' }},
+        h('div', { style: { width: Math.min(100, pct) + '%', height: '100%', background: colour }})
+      )
+    ));
+  }
   if (!list.length) {
     view.appendChild(h('div', { class: 'empty' }, 'No tenants yet. Click "+ Create tenant" to add one manually, or wait for a paid signup to come through Cashfree.'));
     return;
@@ -416,7 +455,20 @@ VIEWS.tenants = async (view) => {
       h('th', {}, 'Plan'), h('th', {}, 'Status'), h('th', {}, 'Period ends'), h('th', {}, '')
     )),
     h('tbody', {}, ...list.map(t => h('tr', {},
-      h('td', {}, h('b', {}, t.org_name)),
+      h('td', {},
+        h('b', {}, t.org_name),
+        // DB_VOLUME_v1 — show per-tenant disk usage under the name
+        (function() {
+          const s = _sizeMap.get(t.slug);
+          if (!s) return null;
+          const p = s.percent_of_volume;
+          const c = p >= 10 ? '#dc2626' : p >= 5 ? '#f59e0b' : '#16a34a';
+          return h('div', {
+            style: { fontSize: '.72rem', color: c, marginTop: '2px', fontWeight: '600' },
+            title: 'Database ' + s.db_name + ' uses ' + s.pretty + ' (' + p + '% of volume, ' + s.percent_of_used + '% of used)'
+          }, '💾 ' + s.pretty + ' · ' + p + '%');
+        })()
+      ),
       h('td', {}, h('a', { href: '/t/' + t.slug, target: '_blank' }, '/t/' + t.slug)),
       h('td', { class: 'muted' }, t.contact_email),
       h('td', {}, t.package_name || '—'),

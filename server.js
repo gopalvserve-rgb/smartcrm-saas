@@ -45,6 +45,7 @@ const crashReport = require('./routes/saas/crashReport');
 const aiSettings = require('./routes/saas/aiSettings');
 const aiCosting  = require('./routes/saas/aiCosting');
 const recordingHealth = require('./routes/saas/recordingHealth'); /* DEVICE_DIAG_v1 */
+const dbVolume = require('./routes/saas/dbVolume');
 const tenantModules = require('./routes/saas/tenantModules');
 const demoTenant = require('./routes/saas/demoTenant');
 const aiUsageIngest = require('./routes/saas/aiUsageIngest');
@@ -96,7 +97,8 @@ const SAAS_API = {};
   tenantModules, demoTenant,
   tickets, signupRequests, /* TENANT_SIGNUP_APPROVAL_v1 */
   financeDashboard, /* FIN_DASH_v1 */
-  recordingHealth /* DEVICE_DIAG_v1 */
+  recordingHealth, /* DEVICE_DIAG_v1 */
+  dbVolume /* DB_VOLUME_v1 */
 ].forEach(mod => {
   Object.keys(mod).forEach(k => {
     if (typeof mod[k] === 'function' && k.startsWith('api_saas_')) SAAS_API[k] = mod[k];
