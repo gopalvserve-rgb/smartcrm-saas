@@ -371,3 +371,12 @@ SELECT 'fix',
        '🔍',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Lead filter rules — custom-field operators now work');
+
+-- 2026-06-12 WMS_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'Webhook Mapping Studio — see what comes in, transform values, test',
+       'The Field Mapping screen is now a 3-tab Webhook Mapping Studio. The Field Mapping tab keeps the existing key→CRM field configuration. The new Value Rules tab lets you transform values without code — e.g. "IF page_name contains New Shop THEN set Source = Meta". Rules support equals / not equals / contains / regex / starts with / ends with / is one of / is empty etc., evaluated top-down with first-match-wins per target field. The new Live Payloads tab shows the last 30 webhooks that arrived, lets you expand the JSON, and adds one-click + Map and Rule buttons on every key so you no longer guess the field names. A 🧪 Test button runs your current mapping + rules end-to-end against any real payload and shows a before/after preview with green-highlighted changes. Works for Website API, Pabbly, Make.com, IndiaMART, Facebook Lead Ads and every other connected webhook source.',
+       '🛠',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Webhook Mapping Studio — see what comes in, transform values, test');

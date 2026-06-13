@@ -722,7 +722,95 @@ async function _ensureLeadSourceMappingTable() {
       last_seen_at  TIMESTAMPTZ,
       updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
+    // WMS_v1 — value_rules JSONB column for per-target-field value
+    // transformation. Format: [{ field, op, src_key, src_value, set_value }]
+    await db.query(`ALTER TABLE lead_source_mapping ADD COLUMN IF NOT EXISTS value_rules JSONB NOT NULL DEFAULT '[]'::jsonb`);
   } catch (_) {}
+}
+
+// WMS_v1 — value-transformation rule engine.
+//
+// Rules are stored on lead_source_mapping.value_rules as an array. Each rule:
+//   { field, op, src_key, src_value, set_value }
+//
+// During ingest we:
+//   1. Read the raw incoming body
+//   2. For each rule, check if (body[src_key] OP src_value) is true
+//   3. If so, override item[field] = set_value
+//   4. First match wins per field (rules earlier in the list have priority)
+//
+// Operators: equals / not_equals / contains / not_contains / starts_with /
+// ends_with / regex / is_empty / is_not_empty / is_one_of (set_value
+// comma-separated).
+//
+// Special src_key '*' means "match always" — used to set a default value
+// at the end of the rule list.
+async function _loadValueRules(source) {
+  try {
+    const r = await db.query(`SELECT value_rules FROM lead_source_mapping WHERE source = $1`, [String(source).toLowerCase()]);
+    const raw = r.rows[0] && r.rows[0].value_rules;
+    if (!raw) return [];
+    const arr = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return Array.isArray(arr) ? arr : [];
+  } catch (_) { return []; }
+}
+
+function _readKey(obj, key) {
+  if (!obj || typeof obj !== 'object') return undefined;
+  if (Object.prototype.hasOwnProperty.call(obj, key)) return obj[key];
+  // Dot-notation support: "form.title" → obj.form.title
+  if (key.indexOf('.') !== -1) {
+    return key.split('.').reduce((acc, part) => (acc != null && typeof acc === 'object') ? acc[part] : undefined, obj);
+  }
+  // Case-insensitive fallback
+  const lc = String(key).toLowerCase();
+  for (const k of Object.keys(obj)) {
+    if (k.toLowerCase() === lc) return obj[k];
+  }
+  return undefined;
+}
+
+function _evalValueRule(rule, body) {
+  if (!rule || !rule.field) return false;
+  const op = String(rule.op || 'equals').toLowerCase();
+  const src = String(rule.src_key || '');
+  // Wildcard '*' = always match (used for defaults).
+  if (src === '*') return true;
+  const incoming = _readKey(body, src);
+  const sv = incoming == null ? '' : String(incoming).toLowerCase();
+  const cmp = rule.src_value == null ? '' : String(rule.src_value).toLowerCase();
+  switch (op) {
+    case 'equals':       return sv === cmp;
+    case 'not_equals':   return sv !== cmp;
+    case 'contains':     return cmp && sv.includes(cmp);
+    case 'not_contains': return !cmp || !sv.includes(cmp);
+    case 'starts_with':  return cmp && sv.startsWith(cmp);
+    case 'ends_with':    return cmp && sv.endsWith(cmp);
+    case 'is_empty':     return !sv;
+    case 'is_not_empty': return !!sv;
+    case 'is_one_of': {
+      const opts = String(rule.src_value || '').toLowerCase().split(/[,|;]/).map(t => t.trim()).filter(Boolean);
+      return opts.includes(sv);
+    }
+    case 'regex': {
+      try { return new RegExp(rule.src_value, 'i').test(sv); } catch (_) { return false; }
+    }
+    default: return false;
+  }
+}
+
+function _applyValueRules(item, body, rules) {
+  if (!Array.isArray(rules) || rules.length === 0) return item;
+  const out = Object.assign({}, item);
+  const setFields = new Set();
+  for (const rule of rules) {
+    if (!rule || !rule.field || setFields.has(rule.field)) continue;
+    if (_evalValueRule(rule, body)) {
+      out[rule.field] = rule.set_value == null ? '' : String(rule.set_value);
+      setFields.add(rule.field);
+    }
+  }
+  return out;
 }
 
 async function _loadCustomMapping(source) {
@@ -812,6 +900,19 @@ async function api_integrations_mapping_get(token, source) {
     console.warn('[integrations.mapping_get] custom_fields lookup failed:', e.message);
   }
 
+  // WMS_v1 — pull value_rules too. Tolerate the column not existing on
+  // older tenant DBs (defensive — _ensureLeadSourceMappingTable adds it
+  // but it might not have run yet during the very first request).
+  let valueRules = [];
+  try {
+    const vr = await db.query(`SELECT value_rules FROM lead_source_mapping WHERE source = $1`, [norm]);
+    const raw = vr.rows[0] && vr.rows[0].value_rules;
+    if (raw) {
+      const arr = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      valueRules = Array.isArray(arr) ? arr : [];
+    }
+  } catch (_) {}
+
   return {
     source: norm,
     mapping: row ? (typeof row.mapping === 'string' ? JSON.parse(row.mapping) : row.mapping) : {},
@@ -819,7 +920,8 @@ async function api_integrations_mapping_get(token, source) {
     last_seen_at: row ? row.last_seen_at : null,
     known_keys: KNOWN_KEYS_BY_SOURCE[norm] || KNOWN_KEYS_BY_SOURCE.generic,
     crm_fields: CRM_FIELDS,
-    custom_fields: customFields
+    custom_fields: customFields,
+    value_rules: valueRules
   };
 }
 
@@ -864,19 +966,155 @@ async function api_integrations_mapping_save(token, source, mapping) {
   await _ensureLeadSourceMappingTable();
   const norm = String(source || '').toLowerCase();
   if (!norm) throw new Error('source required');
-  const map = (mapping && typeof mapping === 'object') ? mapping : {};
+  // WMS_v1 — accept either { mapping, value_rules } (new shape) OR just
+  // the mapping object (legacy). Detect by presence of mapping key.
+  let mapObj = mapping;
+  let valueRules = null;
+  if (mapping && typeof mapping === 'object' &&
+      (Object.prototype.hasOwnProperty.call(mapping, 'mapping') ||
+       Object.prototype.hasOwnProperty.call(mapping, 'value_rules'))) {
+    mapObj = mapping.mapping || {};
+    valueRules = Array.isArray(mapping.value_rules) ? mapping.value_rules : null;
+  }
+  const map = (mapObj && typeof mapObj === 'object') ? mapObj : {};
   // Strip empty entries
   const clean = {};
   Object.keys(map).forEach(k => {
     if (k && map[k]) clean[String(k)] = String(map[k]);
   });
-  await db.query(
-    `INSERT INTO lead_source_mapping (source, mapping, updated_at)
-     VALUES ($1, $2::jsonb, NOW())
-     ON CONFLICT (source) DO UPDATE SET mapping = EXCLUDED.mapping, updated_at = NOW()`,
-    [norm, JSON.stringify(clean)]
-  );
-  return { ok: true, source: norm, mapping: clean };
+  // Clean value rules: drop ones without field. Keep order intact (first-match-wins).
+  let cleanRules = null;
+  if (valueRules) {
+    cleanRules = valueRules
+      .filter(r => r && r.field && r.op)
+      .map(r => ({
+        field: String(r.field),
+        op: String(r.op),
+        src_key: r.src_key ? String(r.src_key) : '',
+        src_value: r.src_value == null ? '' : String(r.src_value),
+        set_value: r.set_value == null ? '' : String(r.set_value)
+      }));
+  }
+  if (cleanRules !== null) {
+    await db.query(
+      `INSERT INTO lead_source_mapping (source, mapping, value_rules, updated_at)
+       VALUES ($1, $2::jsonb, $3::jsonb, NOW())
+       ON CONFLICT (source) DO UPDATE
+         SET mapping = EXCLUDED.mapping,
+             value_rules = EXCLUDED.value_rules,
+             updated_at = NOW()`,
+      [norm, JSON.stringify(clean), JSON.stringify(cleanRules)]
+    );
+  } else {
+    await db.query(
+      `INSERT INTO lead_source_mapping (source, mapping, updated_at)
+       VALUES ($1, $2::jsonb, NOW())
+       ON CONFLICT (source) DO UPDATE SET mapping = EXCLUDED.mapping, updated_at = NOW()`,
+      [norm, JSON.stringify(clean)]
+    );
+  }
+  return { ok: true, source: norm, mapping: clean, value_rules: cleanRules || [] };
+}
+
+// WMS_v1 Phase 1 — Live Payloads Inspector.
+// Returns the last N webhook hits that PROBABLY arrived for this source.
+// We match against webhook_logs.path containing the source identifier OR
+// the parsed body referencing it. Falls back to showing ALL recent hits
+// when no specific match (so admins can still see something useful).
+async function api_integrations_payloads_recent(token, source) {
+  const me = await authUser(token);
+  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  const norm = String(source || '').toLowerCase();
+  let rows = [];
+  try {
+    // Strategy 1: path contains source token
+    const sourceTok = norm.split(':')[0]; // facebook:<form_id> → 'facebook'
+    const r = await db.query(
+      `SELECT id, path, method, source_ip, response_code, duration_ms, created_at,
+              LEFT(body_text, 20000) AS body_text
+         FROM webhook_logs
+         WHERE path ILIKE $1 OR path ILIKE $2 OR body_text ILIKE $3
+         ORDER BY id DESC LIMIT 30`,
+      ['%hook/' + sourceTok + '%', '%hook/leadsource/' + sourceTok + '%', '%"' + sourceTok + '"%']
+    );
+    rows = r.rows || [];
+    // Fallback — if nothing matches, show the most recent 30 anyway so the
+    // admin always sees SOMETHING. Useful for the 'website' source where
+    // many integrations land on the same /hook/website endpoint.
+    if (!rows.length) {
+      const r2 = await db.query(
+        `SELECT id, path, method, source_ip, response_code, duration_ms, created_at,
+                LEFT(body_text, 20000) AS body_text
+           FROM webhook_logs
+           ORDER BY id DESC LIMIT 30`);
+      rows = r2.rows || [];
+    }
+  } catch (_) {
+    return { rows: [], note: 'webhook_logs table missing — no inbound hooks received yet.' };
+  }
+  return { rows };
+}
+
+// WMS_v1 Phase 3 — Test mode.
+// Applies the saved mapping + value rules to a provided body and returns
+// the resulting lead-shaped object. The caller passes either an explicit
+// body or the id of a webhook_logs row. Does NOT save anything.
+async function api_integrations_mapping_test(token, source, opts) {
+  const me = await authUser(token);
+  if (me.role !== 'admin' && me.role !== 'manager') throw new Error('Admin/manager only');
+  await _ensureLeadSourceMappingTable();
+  const norm = String(source || '').toLowerCase();
+  let body = (opts && opts.body) || null;
+  if (!body && opts && opts.log_id) {
+    try {
+      const r = await db.query(`SELECT body_text FROM webhook_logs WHERE id = $1`, [Number(opts.log_id)]);
+      const bt = r.rows[0] && r.rows[0].body_text;
+      if (bt) {
+        try { body = JSON.parse(bt); }
+        catch (_) {
+          // Form-urlencoded fallback
+          const params = new URLSearchParams(bt);
+          body = {};
+          for (const [k, v] of params) body[k] = v;
+        }
+      }
+    } catch (_) {}
+  }
+  if (!body || typeof body !== 'object') {
+    return { error: 'No payload — supply opts.body or opts.log_id (and check the log row has body_text).' };
+  }
+  const customMap = await _loadCustomMapping(norm);
+  let items;
+  if (customMap && Object.keys(customMap).length) {
+    items = _applyCustomMapping(body, customMap);
+    const defaults = _adaptLeadSourcePayload(norm, body);
+    items.forEach((item, i) => {
+      const d = defaults[i] || {};
+      for (const k of Object.keys(d)) {
+        const v = item[k];
+        if (v == null || v === '' || (typeof v === 'object' && Object.keys(v||{}).length === 0)) {
+          item[k] = d[k];
+        }
+      }
+    });
+  } else {
+    items = _adaptLeadSourcePayload(norm, body);
+  }
+  const valueRules = await _loadValueRules(norm);
+  const beforeRules = items.map(it => Object.assign({}, it));
+  if (valueRules.length) {
+    items = items.map(it => _applyValueRules(it, body, valueRules));
+  }
+  // Diff per field
+  const diffs = items.map((after, i) => {
+    const before = beforeRules[i] || {};
+    const fields = {};
+    new Set([...Object.keys(before), ...Object.keys(after)]).forEach(k => {
+      fields[k] = { before: before[k], after: after[k], changed: before[k] !== after[k] };
+    });
+    return fields;
+  });
+  return { ok: true, source: norm, body, items, diffs, rules_applied: valueRules.length };
 }
 
 function _adaptLeadSourcePayload(source, body) {
@@ -1364,6 +1602,17 @@ async function leadSourceWebhook(req, res) {
       items = _adaptLeadSourcePayload(source, body);
     }
 
+    // WMS_v1 — apply tenant-configured value transformation rules. These
+    // override specific fields (e.g. force source='Meta' when page_name
+    // contains 'New Shop'). Evaluated against the ORIGINAL body so admins
+    // can match on any incoming key, not just the ones that got mapped.
+    try {
+      const valueRules = await _loadValueRules(source);
+      if (valueRules.length) {
+        items = items.map(it => _applyValueRules(it, body, valueRules));
+      }
+    } catch (e) { console.warn('[integrations.value_rules] apply failed:', e.message); }
+
     // Preserve custom fields from the original body across all adapters.
     // Per-source adapters only project standard fields (name, phone, ...)
     // so cf_<key> aliases and a custom_fields:{...} object would otherwise
@@ -1780,6 +2029,7 @@ async function api_integrations_csvImport(token, payload) {
 module.exports = {
   api_integrations_mapping_get, api_integrations_mapping_listFB,
   api_integrations_mapping_save,
+  api_integrations_payloads_recent, api_integrations_mapping_test,
   api_integrations_csvImport,
   // Sheet sync
   runDueSheetSyncs,

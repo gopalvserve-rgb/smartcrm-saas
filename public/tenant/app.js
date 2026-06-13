@@ -39347,15 +39347,16 @@ async function _renderTourStep() {
 // 🗺 Source field mapping modal — per-source JSON-key -> CRM-field
 // ============================================================
 async function openSourceMappingModal(sourceId, sourceLabel) {
+  // WMS_v1 — Webhook Mapping Studio. 3 tabs: Field Mapping, Value Rules,
+  // Live Payloads. Plus a 🧪 Test button that runs the saved config
+  // against a real recent webhook payload.
   const m = h('div', { class: 'modal-backdrop' });
-  const card = h('div', { class: 'modal', style: { maxWidth: '700px' } });
+  const card = h('div', { class: 'modal', style: { maxWidth: '880px' } });
   card.appendChild(h('div', { class: 'modal-head' },
-    h('h3', {}, '🗺 Field mapping — ' + sourceLabel),
+    h('h3', {}, '🛠 Webhook Mapping Studio — ' + sourceLabel),
     h('button', { class: 'x', onclick: () => m.remove() }, '✕')
   ));
   const body = h('div', { class: 'modal-body-wrap', style: { padding: '.25rem 0' } });
-  body.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem', marginTop: 0 } },
-    'Pick which CRM field each incoming JSON key should populate. Saved mapping wins over the built-in defaults. Leave a row blank to use the default.'));
   const loading = h('div', { class: 'muted' }, 'Loading saved mapping…');
   body.appendChild(loading);
   card.appendChild(body); m.appendChild(card); document.body.appendChild(m);
@@ -39364,6 +39365,49 @@ async function openSourceMappingModal(sourceId, sourceLabel) {
   try { data = await api('api_integrations_mapping_get', sourceId); }
   catch (e) { loading.textContent = '❌ ' + e.message; return; }
   loading.remove();
+
+  // Tab strip
+  const tabs = h('div', { style: { display: 'flex', gap: '.4rem', borderBottom: '1px solid #e2e8f0',
+    marginBottom: '.75rem', flexWrap: 'wrap' } });
+  const panes = { map: h('div', {}), rules: h('div', {}), payloads: h('div', {}) };
+  Object.values(panes).forEach(p => { p.style.display = 'none'; });
+  const _tabBtn = (id, label) => {
+    const b = h('button', { type: 'button', style: {
+      padding: '.45rem .85rem', border: 'none', borderBottom: '3px solid transparent',
+      background: 'transparent', cursor: 'pointer', fontSize: '.88rem', fontWeight: '600',
+      color: '#64748b'
+    }, onclick: () => _showTab(id) }, label);
+    b.dataset.tab = id;
+    return b;
+  };
+  tabs.appendChild(_tabBtn('map', '📥 Field Mapping'));
+  tabs.appendChild(_tabBtn('rules', '🔀 Value Rules'));
+  tabs.appendChild(_tabBtn('payloads', '👁 Live Payloads'));
+  body.appendChild(tabs);
+  Object.values(panes).forEach(p => body.appendChild(p));
+  function _showTab(id) {
+    Object.entries(panes).forEach(([k, p]) => { p.style.display = (k === id) ? '' : 'none'; });
+    tabs.querySelectorAll('button').forEach(b => {
+      const active = b.dataset.tab === id;
+      b.style.borderBottomColor = active ? '#4f46e5' : 'transparent';
+      b.style.color = active ? '#4f46e5' : '#64748b';
+    });
+  }
+
+  // ============================================================
+  // TAB 1: 📥 Field Mapping (existing behaviour, refactored)
+  // ============================================================
+  panes.map.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem', marginTop: 0 } },
+    'Pick which CRM field each incoming JSON key should populate. Saved mapping wins over the built-in defaults.'));
+
+  if (data.last_payload) {
+    const det = h('details', { style: { marginBottom: '.6rem' } });
+    det.appendChild(h('summary', { class: 'muted', style: { cursor: 'pointer', fontSize: '.85rem' } },
+      '📥 Last received payload (' + (data.last_seen_at ? new Date(data.last_seen_at).toLocaleString() : 'unknown') + ')'));
+    det.appendChild(h('pre', { style: { background: '#0f172a', color: '#e2e8f0', padding: '.6rem', borderRadius: '6px', fontSize: '.78rem', maxHeight: '180px', overflow: 'auto' } },
+      JSON.stringify(data.last_payload, null, 2)));
+    panes.map.appendChild(det);
+  }
 
   if (data.last_payload) {
     const det = h('details', { style: { marginBottom: '.6rem' } });
@@ -39382,10 +39426,9 @@ async function openSourceMappingModal(sourceId, sourceLabel) {
       if (!knownKeys.includes(k) && !extraKeys.includes(k) && typeof top[k] !== 'object') extraKeys.push(k);
     });
   }
-  const allKeys = knownKeys.concat(extraKeys);
+  let allKeys = knownKeys.concat(extraKeys);
   const saved = data.mapping || {};
   const crmFields = data.crm_fields || ['name','phone','email','company','city','state','source','source_ref','notes','product','value','tags'];
-  // CFMAP_v1 — custom fields from tenant DB (cf_<key> + label).
   const customFields = Array.isArray(data.custom_fields) ? data.custom_fields : [];
   const selectByKey = {};
 
@@ -39430,32 +39473,309 @@ async function openSourceMappingModal(sourceId, sourceLabel) {
     ));
   });
   table.appendChild(tbody);
-  body.appendChild(table);
+  panes.map.appendChild(table);
+
+  // Helper to add a row to the mapping table (also reused by Live Payloads tab)
+  function _addMapRow(key, targetField) {
+    if (selectByKey[key]) {
+      // Already there — just scroll to it
+      _showTab('map');
+      const tr = selectByKey[key].closest('tr');
+      if (tr) tr.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      return;
+    }
+    const sel = _buildMapSelect(targetField || '');
+    selectByKey[key] = sel;
+    tbody.appendChild(h('tr', {},
+      h('td', {}, h('code', {}, key)),
+      h('td', {}, sel)
+    ));
+    allKeys.push(key);
+  }
 
   const customKeyInp = h('input', { placeholder: 'Add another incoming key (optional)', style: { width: '60%' } });
-  // CFMAP_v1 — adder row also uses the optgroup'd select so admins can map
-  // a brand-new incoming key directly to a custom field.
   const customFieldSel = _buildMapSelect('');
-  // Override placeholder to make the empty option more obvious here.
   if (customFieldSel.firstChild) customFieldSel.firstChild.textContent = '— pick CRM field —';
   customFieldSel.style.width = '36%';
-  body.appendChild(h('div', { style: { display: 'flex', gap: '.4rem', alignItems: 'center', marginTop: '.6rem' } },
+  panes.map.appendChild(h('div', { style: { display: 'flex', gap: '.4rem', alignItems: 'center', marginTop: '.6rem' } },
     customKeyInp, customFieldSel,
     h('button', { class: 'btn sm', onclick: () => {
       if (!customKeyInp.value.trim() || !customFieldSel.value) { toast('Pick a key + field', 'err'); return; }
-      const sel = _buildMapSelect(customFieldSel.value);
-      selectByKey[customKeyInp.value.trim()] = sel;
-      tbody.appendChild(h('tr', {},
-        h('td', {}, h('code', {}, customKeyInp.value.trim())),
-        h('td', {}, sel)
-      ));
+      _addMapRow(customKeyInp.value.trim(), customFieldSel.value);
       customKeyInp.value = ''; customFieldSel.value = '';
     } }, '+ Add')
   ));
 
+  // ============================================================
+  // TAB 2: 🔀 Value Rules
+  // ============================================================
+  panes.rules.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem', marginTop: 0 } },
+    'When does each CRM field get a specific value? Rules are checked in order from top — first match wins per field. Use these to override the field map output (e.g. set source="Meta" when page_name contains "New Shop").'));
+
+  const ruleOps = [
+    { id: 'equals',       label: 'equals' },
+    { id: 'not_equals',   label: 'not equals' },
+    { id: 'contains',     label: 'contains' },
+    { id: 'not_contains', label: 'does not contain' },
+    { id: 'starts_with',  label: 'starts with' },
+    { id: 'ends_with',    label: 'ends with' },
+    { id: 'is_one_of',    label: 'is one of (comma-separated)' },
+    { id: 'is_empty',     label: 'is empty' },
+    { id: 'is_not_empty', label: 'has any value' },
+    { id: 'regex',        label: 'matches regex' }
+  ];
+  // Target CRM field options — core + cf_*
+  const ruleTargetOpts = (() => {
+    const out = [];
+    crmFields.forEach(f => out.push({ value: f, label: f }));
+    customFields.forEach(cf => out.push({ value: cf.key, label: cf.label + ' (' + cf.key + ')' }));
+    return out;
+  })();
+  let ruleState = (data.value_rules || []).slice();
+  const rulesTable = h('table', { class: 'mini-table', style: { width: '100%', fontSize: '.82rem' } });
+  rulesTable.appendChild(h('thead', {}, h('tr', {},
+    h('th', { style: { width: '34px' } }, '#'),
+    h('th', {}, 'IF (incoming key)'),
+    h('th', {}, 'operator'),
+    h('th', {}, 'value'),
+    h('th', {}, 'THEN set CRM field'),
+    h('th', {}, '='),
+    h('th', { style: { width: '90px' } }, 'actions')
+  )));
+  const rulesBody = h('tbody', {});
+  rulesTable.appendChild(rulesBody);
+  panes.rules.appendChild(rulesTable);
+
+  function _renderRules() {
+    rulesBody.innerHTML = '';
+    if (!ruleState.length) {
+      rulesBody.appendChild(h('tr', {}, h('td', { colspan: 7, class: 'muted', style: { textAlign: 'center', padding: '.75rem' } },
+        'No rules yet. Click + Add rule to create one. Example: IF page_name contains "New Shop" THEN set source = "Meta".')));
+      return;
+    }
+    ruleState.forEach((r, idx) => {
+      const srcKeyInp = h('input', { value: r.src_key || '', placeholder: 'e.g. page_name',
+        style: { width: '140px', fontSize: '.78rem' },
+        oninput: () => { r.src_key = srcKeyInp.value; } });
+      const opSel = h('select', { style: { fontSize: '.78rem' },
+        onchange: () => { r.op = opSel.value; _renderRules(); } },
+        ...ruleOps.map(op => h('option', { value: op.id, selected: r.op === op.id ? 'selected' : null }, op.label))
+      );
+      const valInp = h('input', { value: r.src_value || '', placeholder: 'value',
+        style: { width: '130px', fontSize: '.78rem' },
+        oninput: () => { r.src_value = valInp.value; } });
+      // Hide value input for empty/not-empty ops
+      if (r.op === 'is_empty' || r.op === 'is_not_empty') valInp.disabled = true;
+      const targetSel = h('select', { style: { fontSize: '.78rem' },
+        onchange: () => { r.field = targetSel.value; } },
+        h('option', { value: '' }, '— field —'),
+        ...ruleTargetOpts.map(o => h('option', { value: o.value, selected: r.field === o.value ? 'selected' : null }, o.label))
+      );
+      const setValInp = h('input', { value: r.set_value || '', placeholder: 'literal',
+        style: { width: '110px', fontSize: '.78rem' },
+        oninput: () => { r.set_value = setValInp.value; } });
+      const upBtn = h('button', { class: 'btn ghost sm', title: 'Move up', onclick: () => {
+        if (idx === 0) return;
+        ruleState.splice(idx - 1, 0, ruleState.splice(idx, 1)[0]);
+        _renderRules();
+      } }, '↑');
+      const dnBtn = h('button', { class: 'btn ghost sm', title: 'Move down', onclick: () => {
+        if (idx === ruleState.length - 1) return;
+        ruleState.splice(idx + 1, 0, ruleState.splice(idx, 1)[0]);
+        _renderRules();
+      } }, '↓');
+      const delBtn = h('button', { class: 'btn ghost sm', title: 'Delete', onclick: () => {
+        ruleState.splice(idx, 1); _renderRules();
+      } }, '🗑');
+      rulesBody.appendChild(h('tr', {},
+        h('td', { class: 'muted' }, String(idx + 1)),
+        h('td', {}, srcKeyInp),
+        h('td', {}, opSel),
+        h('td', {}, valInp),
+        h('td', {}, targetSel),
+        h('td', {}, setValInp),
+        h('td', {}, upBtn, dnBtn, delBtn)
+      ));
+    });
+  }
+  _renderRules();
+  panes.rules.appendChild(h('div', { style: { marginTop: '.5rem' } },
+    h('button', { class: 'btn sm', onclick: () => {
+      ruleState.push({ field: '', op: 'equals', src_key: '', src_value: '', set_value: '' });
+      _renderRules();
+    } }, '+ Add rule')
+  ));
+  panes.rules.appendChild(h('details', { style: { marginTop: '.75rem' } },
+    h('summary', { class: 'muted', style: { cursor: 'pointer', fontSize: '.82rem' } }, '📖 Quick reference'),
+    h('div', { style: { fontSize: '.78rem', color: '#475569', marginTop: '.4rem', lineHeight: '1.6' } },
+      h('div', {}, '• ', h('b', {}, 'IF key'), ' — the field name as it arrives in the webhook payload (dot-notation supported, e.g. ', h('code', {}, 'form.title'), ').'),
+      h('div', {}, '• Use ', h('code', {}, '*'), ' as the IF key to match always (handy at the bottom as a default).'),
+      h('div', {}, '• ', h('b', {}, 'THEN set'), ' — the CRM field to override (Source, Status name, custom field, etc.). Use cf_<key> for custom fields.'),
+      h('div', {}, '• Rules are evaluated top-down. First rule that matches per target field wins, the rest are skipped for that field.')
+    )
+  ));
+
+  // ============================================================
+  // TAB 3: 👁 Live Payloads
+  // ============================================================
+  panes.payloads.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem', marginTop: 0 } },
+    'Every recent webhook that landed on this CRM. Click + Map to wire any key into Field Mapping, or 🧪 Test to dry-run mapping + rules against that payload.'));
+  const payloadsLoading = h('div', { class: 'muted', style: { padding: '.5rem' } }, 'Loading recent payloads…');
+  panes.payloads.appendChild(payloadsLoading);
+
+  let payloadsResp = null;
+  api('api_integrations_payloads_recent', sourceId)
+    .then(r => { payloadsResp = r; _renderPayloads(); })
+    .catch(e => { payloadsLoading.textContent = '❌ ' + e.message; });
+
+  function _flatten(obj, prefix, out) {
+    out = out || {};
+    if (!obj || typeof obj !== 'object') return out;
+    Object.keys(obj).forEach(k => {
+      const v = obj[k];
+      const key = prefix ? prefix + '.' + k : k;
+      if (v && typeof v === 'object' && !Array.isArray(v)) {
+        _flatten(v, key, out);
+      } else {
+        out[key] = (Array.isArray(v) ? JSON.stringify(v) : (v == null ? '' : String(v)));
+      }
+    });
+    return out;
+  }
+
+  function _renderPayloads() {
+    payloadsLoading.remove();
+    const list = h('div', {});
+    panes.payloads.appendChild(list);
+    const rows = (payloadsResp && payloadsResp.rows) || [];
+    if (!rows.length) {
+      list.appendChild(h('div', { class: 'muted', style: { padding: '.85rem', textAlign: 'center',
+        background: '#f8fafc', borderRadius: '8px' } }, payloadsResp && payloadsResp.note
+        ? payloadsResp.note
+        : 'No recent payloads. Send a test webhook and reload.'));
+      return;
+    }
+    rows.forEach(row => {
+      let parsed = null;
+      try { parsed = JSON.parse(row.body_text); }
+      catch (_) {
+        try {
+          const p = new URLSearchParams(row.body_text);
+          parsed = {};
+          for (const [k, v] of p) parsed[k] = v;
+          if (!Object.keys(parsed).length) parsed = null;
+        } catch (_) {}
+      }
+      const status = Number(row.response_code) >= 200 && Number(row.response_code) < 300 ? '✓' : '✗';
+      const dt = row.created_at ? new Date(row.created_at).toLocaleString() : '';
+      const head = h('summary', { style: { cursor: 'pointer', fontSize: '.82rem', padding: '.4rem' } },
+        h('span', { style: { fontWeight: '600' } }, status + ' ' + dt),
+        h('span', { class: 'muted', style: { marginLeft: '.5rem' } }, row.path),
+        h('span', { class: 'muted', style: { marginLeft: '.5rem' } }, 'HTTP ' + (row.response_code || '?'))
+      );
+      const det = h('details', { style: { borderBottom: '1px solid #e2e8f0', padding: '.25rem 0' } });
+      det.appendChild(head);
+      const content = h('div', { style: { padding: '.5rem .75rem .85rem' } });
+      det.appendChild(content);
+
+      if (parsed && typeof parsed === 'object') {
+        const flat = _flatten(parsed);
+        const keys = Object.keys(flat);
+        if (keys.length) {
+          const tbl = h('table', { class: 'mini-table', style: { width: '100%', fontSize: '.78rem' } });
+          tbl.appendChild(h('thead', {}, h('tr', {},
+            h('th', { style: { width: '40%' } }, 'Key'), h('th', {}, 'Value'), h('th', { style: { width: '160px' } }, 'Map to')
+          )));
+          const tb = h('tbody', {});
+          keys.forEach(k => {
+            const mapBtn = h('button', { class: 'btn ghost sm', title: 'Add to Field Mapping',
+              onclick: () => { _addMapRow(k, ''); _showTab('map'); toast('Key added to Field Mapping — pick a CRM field', 'ok'); } },
+              '+ Map');
+            const ruleBtn = h('button', { class: 'btn ghost sm', title: 'Use in a Value Rule',
+              style: { marginLeft: '.25rem' },
+              onclick: () => { ruleState.push({ field: '', op: 'equals', src_key: k, src_value: String(flat[k] || ''), set_value: '' }); _renderRules(); _showTab('rules'); toast('Rule scaffolded — pick the target field', 'ok'); } },
+              '🔀 Rule');
+            tb.appendChild(h('tr', {},
+              h('td', {}, h('code', {}, k)),
+              h('td', { style: { wordBreak: 'break-word', maxWidth: '300px' } }, String(flat[k]).slice(0, 200)),
+              h('td', {}, mapBtn, ruleBtn)
+            ));
+          });
+          tbl.appendChild(tb);
+          content.appendChild(tbl);
+        }
+      }
+      content.appendChild(h('details', {},
+        h('summary', { class: 'muted', style: { cursor: 'pointer', fontSize: '.75rem', marginTop: '.5rem' } }, 'Raw body'),
+        h('pre', { style: { background: '#0f172a', color: '#e2e8f0', padding: '.5rem', borderRadius: '6px',
+          fontSize: '.7rem', maxHeight: '220px', overflow: 'auto', marginTop: '.25rem' } },
+          row.body_text || '(empty)')
+      ));
+      const testBtn = h('button', { class: 'btn sm', style: { marginTop: '.5rem' },
+        onclick: () => _runTest({ log_id: row.id }) }, '🧪 Test mapping + rules against this payload');
+      content.appendChild(testBtn);
+      list.appendChild(det);
+    });
+  }
+
+  // ============================================================
+  // 🧪 Test runner — shared dialog
+  // ============================================================
+  async function _runTest(opts) {
+    // Save in-memory state first so test uses the CURRENT (unsaved) config
+    const mapping = {};
+    Object.keys(selectByKey).forEach(k => { const v = selectByKey[k].value; if (v) mapping[k] = v; });
+    try {
+      await api('api_integrations_mapping_save', sourceId, { mapping, value_rules: ruleState });
+    } catch (e) { toast('Save before test failed: ' + e.message, 'err'); return; }
+    let r;
+    try { r = await api('api_integrations_mapping_test', sourceId, opts); }
+    catch (e) { toast('Test failed: ' + e.message, 'err'); return; }
+    if (r && r.error) { toast(r.error, 'err'); return; }
+    // Render result modal
+    const t = h('div', { class: 'modal-backdrop' });
+    const tc = h('div', { class: 'modal', style: { maxWidth: '680px' } });
+    tc.appendChild(h('div', { class: 'modal-head' },
+      h('h3', {}, '🧪 Test result'),
+      h('button', { class: 'x', onclick: () => t.remove() }, '✕')
+    ));
+    const tb = h('div', { class: 'modal-body-wrap' });
+    tb.appendChild(h('p', { class: 'muted', style: { fontSize: '.82rem' } },
+      r.rules_applied + ' value rule(s) considered · ' + (r.items || []).length + ' lead(s) produced. Green = changed by a rule.'));
+    (r.items || []).forEach((item, i) => {
+      const diff = (r.diffs && r.diffs[i]) || {};
+      const tbl = h('table', { class: 'mini-table', style: { width: '100%', fontSize: '.78rem', marginBottom: '.5rem' } });
+      tbl.appendChild(h('thead', {}, h('tr', {},
+        h('th', {}, 'Field'), h('th', {}, 'Before rules'), h('th', {}, 'After rules')
+      )));
+      const tbb = h('tbody', {});
+      Object.keys(item).forEach(k => {
+        const d = diff[k] || {};
+        const after = (d.after == null) ? '' : String(d.after);
+        const before = (d.before == null) ? '' : String(d.before);
+        const changed = d.changed;
+        tbb.appendChild(h('tr', { style: { background: changed ? '#dcfce7' : '' } },
+          h('td', {}, h('code', {}, k)),
+          h('td', { class: 'muted' }, before),
+          h('td', { style: { fontWeight: changed ? '700' : '400' } }, after)
+        ));
+      });
+      tbl.appendChild(tbb);
+      tb.appendChild(h('h4', { style: { margin: '.5rem 0 .25rem' } }, '📋 Lead ' + (i + 1)));
+      tb.appendChild(tbl);
+    });
+    tc.appendChild(tb); t.appendChild(tc); document.body.appendChild(t);
+  }
+
+  // ============================================================
+  // Footer — Test + Save buttons (shared across tabs)
+  // ============================================================
   const status = h('div', { style: { fontSize: '.85rem', marginTop: '.6rem' } });
-  body.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', justifyContent: 'flex-end', marginTop: '1rem' } },
+  body.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', justifyContent: 'flex-end',
+    marginTop: '1rem', borderTop: '1px solid #e2e8f0', paddingTop: '.75rem' } },
     h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Cancel'),
+    h('button', { class: 'btn ghost', title: 'Run current mapping + rules against the most recent payload',
+      onclick: () => _runTest({}) }, '🧪 Test with last payload'),
     h('button', { class: 'btn primary', onclick: async () => {
       const mapping = {};
       Object.keys(selectByKey).forEach(k => {
@@ -39463,13 +39783,16 @@ async function openSourceMappingModal(sourceId, sourceLabel) {
         if (v) mapping[k] = v;
       });
       try {
-        await api('api_integrations_mapping_save', sourceId, mapping);
+        await api('api_integrations_mapping_save', sourceId, { mapping, value_rules: ruleState });
         status.textContent = '✅ Saved'; status.style.color = '#16a34a';
         setTimeout(() => m.remove(), 700);
       } catch (e) { status.textContent = '❌ ' + e.message; status.style.color = '#dc2626'; }
-    } }, '💾 Save mapping'),
+    } }, '💾 Save'),
     status
   ));
+
+  // Default to first tab
+  _showTab('map');
 }
 
 // Push diagnostic — paste 'await window.checkPushDiag()' in the Chrome
