@@ -434,3 +434,12 @@ SELECT 'ls-v1-p17',
        '🎯',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Smart Score anchored to lead status');
+
+-- LEAD_SCORING_v1 P1.8b
+INSERT INTO changelog (version, title, body, icon, created_at)
+SELECT 'ls-v1-p18b',
+       'Smart Score filter — now a single compact dropdown',
+       'Replaced the five-chip score filter strip with one tidy "🎯 Score" dropdown. Open it to multi-select Hot / Warm / Nurture / Cold / Invalid and set a minimum score. The button shows what is active at a glance, the filter row gets a lot of space back, and clicking Clear inside the dropdown wipes both bucket and min-score in one shot. Backend filter logic unchanged — just a tighter UI.',
+       '🎯',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Smart Score filter — now a single compact dropdown');

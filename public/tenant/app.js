@@ -4683,47 +4683,112 @@ VIEWS.leads = async (view) => {
       refreshHeatBtn();
       return heatBtn;
     })(),
-    // LEAD_SCORING_v1 P1.5 — Smart Score bucket filter chips + 0-100 range slider.
-    // Stored in CRM.prefs.filters.smart_categories (array) + smart_score_min/max.
+    // LEAD_SCORING_v1 P1.8b — Compact Smart Score dropdown.
+    // Replaces the 5-chip strip + inline slider that was eating filter space.
+    // A single button "🎯 Score" opens a popover with the 5 bucket checkboxes
+    // and the min-score slider. Persists to CRM.prefs.filters.smart_categories
+    // + smart_score_min, exactly like the chip version, so the backend filter
+    // path is unchanged. Closes on outside click.
     (function(){
-      const wrap = h('div', { id: 'f-smart', class: 'ls-chip-bar', style: { padding: '4px 6px', borderRadius: '8px', background: '#fafafa', border: '1px solid #ececec' } });
-      const f = CRM.prefs.filters; f.smart_categories = f.smart_categories || [];
+      const f = CRM.prefs.filters;
+      f.smart_categories = Array.isArray(f.smart_categories) ? f.smart_categories : [];
       const buckets = [
         { id: 'Hot',     icon: '🔥', label: 'Hot' },
-        { id: 'Warm',    icon: '🟠', label: 'Warm' },
+        { id: 'Warm',    icon: '🌿', label: 'Warm' },
         { id: 'Nurture', icon: '🌱', label: 'Nurture' },
         { id: 'Cold',    icon: '❄️', label: 'Cold' },
         { id: 'Invalid', icon: '🚫', label: 'Invalid' }
       ];
-      wrap.appendChild(h('span', { style: { fontSize: '.72rem', color: '#64748b', marginRight: '2px' } }, '🎯 Score'));
+      const wrap = h('div', { id: 'f-smart-wrap', style: { position: 'relative', display: 'inline-block' } });
+      const btnLabel = () => {
+        const parts = [];
+        if (f.smart_categories.length) parts.push(f.smart_categories.length === 1 ? f.smart_categories[0] : (f.smart_categories.length + ' buckets'));
+        if (Number(f.smart_score_min || 0) > 0) parts.push('≥' + Number(f.smart_score_min));
+        return parts.length ? '🎯 ' + parts.join(' · ') : '🎯 Score';
+      };
+      const btn = h('button', {
+        type: 'button',
+        id: 'f-smart-btn',
+        style: { padding: '6px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', background: '#fff', cursor: 'pointer', fontSize: '.85rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }
+      }, btnLabel());
+      // active accent when any filter is set
+      const refreshBtn = () => {
+        btn.textContent = btnLabel();
+        const isOn = f.smart_categories.length > 0 || Number(f.smart_score_min || 0) > 0;
+        btn.style.background = isOn ? '#eef2ff' : '#fff';
+        btn.style.borderColor = isOn ? '#6366f1' : '#cbd5e1';
+        btn.style.color = isOn ? '#4338ca' : '#334155';
+        btn.style.fontWeight = isOn ? '600' : '400';
+      };
+      refreshBtn();
+      const pop = h('div', {
+        id: 'f-smart-pop',
+        style: { display: 'none', position: 'absolute', top: 'calc(100% + 6px)', left: '0', zIndex: '99', minWidth: '230px', padding: '10px 12px', background: '#fff', border: '1px solid #e2e8f0', borderRadius: '10px', boxShadow: '0 8px 24px rgba(15,23,42,.12)' }
+      });
+      // Header row with Clear
+      const hdr = h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' } });
+      hdr.appendChild(h('span', { style: { fontSize: '.72rem', color: '#64748b', fontWeight: '600' } }, 'Smart Score'));
+      const clearLink = h('a', { href: 'javascript:void(0)', style: { fontSize: '.7rem', color: '#6366f1' } }, 'Clear');
+      clearLink.onclick = (ev) => {
+        ev.preventDefault();
+        f.smart_categories.length = 0;
+        f.smart_score_min = 0;
+        pop.querySelectorAll('input[type=checkbox]').forEach(c => { c.checked = false; });
+        const r = pop.querySelector('input[type=range]'); if (r) r.value = '0';
+        const o = pop.querySelector('.f-smart-min-out'); if (o) o.textContent = '0';
+        refreshBtn();
+        CRM._leadsPage = 1; loadLeads({ page: 1 });
+      };
+      hdr.appendChild(clearLink);
+      pop.appendChild(hdr);
+      // Bucket checkboxes
       buckets.forEach(b => {
-        const isOn = f.smart_categories.includes(b.id);
-        const chip = h('span', { class: 'ls-chip ls-chip-' + b.id.toLowerCase() + (isOn ? ' active' : '') }, b.icon + ' ' + b.label);
-        chip.onclick = () => {
+        const row = h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0', cursor: 'pointer', fontSize: '.85rem' } });
+        const cb = h('input', { type: 'checkbox' });
+        cb.checked = f.smart_categories.includes(b.id);
+        cb.onchange = () => {
           const cur = f.smart_categories;
           const i = cur.indexOf(b.id);
-          if (i >= 0) cur.splice(i, 1); else cur.push(b.id);
-          chip.classList.toggle('active');
+          if (cb.checked && i < 0) cur.push(b.id);
+          else if (!cb.checked && i >= 0) cur.splice(i, 1);
+          refreshBtn();
           CRM._leadsPage = 1; loadLeads({ page: 1 });
         };
-        wrap.appendChild(chip);
+        row.appendChild(cb);
+        row.appendChild(h('span', null, b.icon + ' ' + b.label));
+        pop.appendChild(row);
       });
-      // Score range slider (min only — max defaults to 100). Simple, fits the toolbar.
-      const sliderWrap = h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px', marginLeft: '8px' } });
-      const lbl = h('span', { style: { fontSize: '.72rem', color: '#64748b' } }, 'Min ≥');
-      const out = h('span', { style: { fontSize: '.72rem', fontWeight: '600', color: '#475569', minWidth: '20px', textAlign: 'right' } }, String(Number(f.smart_score_min || 0)));
-      const rng = h('input', { type: 'range', min: '0', max: '100', step: '5', value: String(Number(f.smart_score_min || 0)), style: { width: '110px', verticalAlign: 'middle' } });
+      // Min score slider
+      const sliderRow = h('div', { style: { marginTop: '8px', paddingTop: '8px', borderTop: '1px solid #f1f5f9' } });
+      sliderRow.appendChild(h('div', { style: { fontSize: '.72rem', color: '#64748b', marginBottom: '4px' } }, 'Min score ≥'));
+      const sliderInner = h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } });
+      const rng = h('input', { type: 'range', min: '0', max: '100', step: '5', value: String(Number(f.smart_score_min || 0)), style: { flex: '1' } });
+      const out = h('span', { class: 'f-smart-min-out', style: { fontSize: '.8rem', fontWeight: '600', color: '#475569', minWidth: '24px', textAlign: 'right' } }, String(Number(f.smart_score_min || 0)));
       let _rngTimer;
       rng.oninput = () => { out.textContent = rng.value; };
       rng.onchange = () => {
         clearTimeout(_rngTimer);
         _rngTimer = setTimeout(() => {
           f.smart_score_min = Number(rng.value) || 0;
+          refreshBtn();
           CRM._leadsPage = 1; loadLeads({ page: 1 });
         }, 120);
       };
-      sliderWrap.appendChild(lbl); sliderWrap.appendChild(rng); sliderWrap.appendChild(out);
-      wrap.appendChild(sliderWrap);
+      sliderInner.appendChild(rng); sliderInner.appendChild(out);
+      sliderRow.appendChild(sliderInner);
+      pop.appendChild(sliderRow);
+      // Toggle on button click
+      btn.onclick = (ev) => {
+        ev.stopPropagation();
+        pop.style.display = pop.style.display === 'block' ? 'none' : 'block';
+      };
+      // Outside-click close
+      const docClose = (ev) => {
+        if (!wrap.contains(ev.target)) pop.style.display = 'none';
+      };
+      document.addEventListener('click', docClose);
+      wrap.appendChild(btn);
+      wrap.appendChild(pop);
       return wrap;
     })(),
     wireFilter(selectOpts('f-followup', [{ id: '', name: 'All follow-ups' }, { id: 'today', name: 'Due today' }, { id: 'overdue', name: 'Overdue' }], CRM.prefs.filters.followup)),
