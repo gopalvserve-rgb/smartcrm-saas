@@ -651,10 +651,40 @@ async function recomputeLeadScore(leadId, triggerEvent) {
   const totalRaw = buckets.source + buckets.fit + buckets.engagement + buckets.communication
                  + buckets.application + buckets.negative - decay;
 
-  const score = Math.max(0, Math.min(100, totalRaw));
+  let score = Math.max(0, Math.min(100, totalRaw));
+
+  // LEAD_SCORING_v1 P1.7 — status-anchored floor. Bucket inference adds points
+  // but small values can't cross 80/60/40 thresholds alone. Anchor pure-status
+  // signal to a guaranteed minimum score AND force category so the listing
+  // matches what salespeople expect: "Sale Done" must be Hot, full stop.
+  const _sn = String(lead.status_name || '').toLowerCase();
+  let _statusFloor = 0;
+  let _statusForceCat = null;
+  if (_sn) {
+    if (/not\s*interested|junk|spam|fake|invalid|lost|dnd|do\s*not\s*call|wrong\s*number/.test(_sn)) {
+      _statusForceCat = 'Invalid';
+      score = 0;
+    } else if (/payment\s*link|paid|enroll|booked|won|sale\s*done|sale\s*final|closure|token\s*received/.test(_sn)) {
+      _statusFloor = Math.max(score, settings.hot_threshold + 5);  // ~85
+    } else if (/demo\s*done|proposal\s*sent|quote\s*sent|quotation\s*sent|site\s*visit\s*done|visit\s*done|emi/.test(_sn)) {
+      _statusFloor = Math.max(score, settings.hot_threshold);       // ~80
+    } else if (/negotiation|negotiating/.test(_sn)) {
+      _statusFloor = Math.max(score, settings.warm_threshold + 5);  // ~65
+    } else if (/demo\s*sched|demo\s*book|meeting\s*sched|site\s*visit\s*sched|site\s*visit\s*plan|visit\s*plan|callback/.test(_sn)) {
+      _statusFloor = Math.max(score, settings.warm_threshold);      // ~60
+    } else if (/qualified|interested|warm|hot/.test(_sn)) {
+      _statusFloor = Math.max(score, settings.warm_threshold - 5);  // ~55
+    } else if (/follow\s*up|follow-up/.test(_sn)) {
+      _statusFloor = Math.max(score, settings.nurture_threshold + 5); // ~45
+    } else if (/not\s*pick|not\s*reach|unreach|no\s*answer/.test(_sn)) {
+      _statusFloor = Math.max(score, 20);                           // Cold (≥ Cold)
+    }
+    if (_statusFloor > score) score = _statusFloor;
+  }
 
   let category;
-  if (score <= 0) category = 'Invalid';
+  if (_statusForceCat) category = _statusForceCat;
+  else if (score <= 0) category = 'Invalid';
   else if (score >= settings.hot_threshold) category = 'Hot';
   else if (score >= settings.warm_threshold) category = 'Warm';
   else if (score >= settings.nurture_threshold) category = 'Nurture';

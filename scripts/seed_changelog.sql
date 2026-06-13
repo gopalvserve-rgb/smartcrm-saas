@@ -425,3 +425,12 @@ SELECT 'ls-v1-p16',
        '🎯',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Smart Score now infers from lead status');
+
+-- LEAD_SCORING_v1 P1.7
+INSERT INTO changelog (version, title, body, icon, created_at)
+SELECT 'ls-v1-p17',
+       'Smart Score anchored to lead status',
+       'Status now sets a guaranteed score floor: Sale Done / Payment Link / Booked → Hot, Demo Done / Proposal Sent / Site Visit Done → Hot, Negotiation → Warm+, Demo Scheduled / Site Visit Planned → Warm, Qualified / Interested → Warm-, Follow Up → Nurture+. Not Interested / Junk / Lost → forced Invalid (score 0). Inference output now matches sales-team expectations. Backfill again to refresh existing leads.',
+       '🎯',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Smart Score anchored to lead status');
