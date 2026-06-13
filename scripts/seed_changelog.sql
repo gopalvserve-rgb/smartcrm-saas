@@ -407,3 +407,12 @@ SELECT 'ls-v1-p1',
        '🎯',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Smart Lead Scoring — every lead gets a Hot/Warm/Cold score automatically');
+
+-- LEAD_SCORING_v1 P1.5
+INSERT INTO changelog (version, title, body, icon, created_at)
+SELECT 'ls-v1-p15',
+       'Smart Lead Scoring — see scores on the Leads page',
+       'Lead rows are now shaded by Smart Score bucket — Hot, Warm, Nurture, Cold each get their own colour wash + a thick left rail so the right leads stand out at a glance. A new Smart Score column shows the 0–100 score with a coloured bucket chip. The filter toolbar gains five Score chips (Hot / Warm / Nurture / Cold / Invalid — multi-select) and a Score ≥ slider so you can say "show me everyone above 70". A new sort option "🎯 Score — highest first" lets reps work the strongest leads first. Only renders when Lead Scoring is enabled.',
+       '🎯',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Smart Lead Scoring — see scores on the Leads page');

@@ -4453,7 +4453,9 @@ const LEAD_COLUMNS = [
   { key: 'city',        label: 'City',          default: false },
   { key: 'created',     label: 'Created',       default: true },
   /* LEAD_LIST_UPDATED_v1 — last-updated timestamp column. Off by default. */
-  { key: 'updated',     label: 'Last Updated',  default: false }
+  { key: 'updated',     label: 'Last Updated',  default: false },
+  /* LEAD_SCORING_v1 P1.5 — Smart Score column. On by default when Lead Scoring is enabled. */
+  { key: 'smart_score', label: 'Smart Score',   default: true }
 ];
 
 VIEWS.leads = async (view) => {
@@ -4681,6 +4683,49 @@ VIEWS.leads = async (view) => {
       refreshHeatBtn();
       return heatBtn;
     })(),
+    // LEAD_SCORING_v1 P1.5 — Smart Score bucket filter chips + 0-100 range slider.
+    // Stored in CRM.prefs.filters.smart_categories (array) + smart_score_min/max.
+    (function(){
+      const wrap = h('div', { id: 'f-smart', class: 'ls-chip-bar', style: { padding: '4px 6px', borderRadius: '8px', background: '#fafafa', border: '1px solid #ececec' } });
+      const f = CRM.prefs.filters; f.smart_categories = f.smart_categories || [];
+      const buckets = [
+        { id: 'Hot',     icon: '🔥', label: 'Hot' },
+        { id: 'Warm',    icon: '🟠', label: 'Warm' },
+        { id: 'Nurture', icon: '🌱', label: 'Nurture' },
+        { id: 'Cold',    icon: '❄️', label: 'Cold' },
+        { id: 'Invalid', icon: '🚫', label: 'Invalid' }
+      ];
+      wrap.appendChild(h('span', { style: { fontSize: '.72rem', color: '#64748b', marginRight: '2px' } }, '🎯 Score'));
+      buckets.forEach(b => {
+        const isOn = f.smart_categories.includes(b.id);
+        const chip = h('span', { class: 'ls-chip ls-chip-' + b.id.toLowerCase() + (isOn ? ' active' : '') }, b.icon + ' ' + b.label);
+        chip.onclick = () => {
+          const cur = f.smart_categories;
+          const i = cur.indexOf(b.id);
+          if (i >= 0) cur.splice(i, 1); else cur.push(b.id);
+          chip.classList.toggle('active');
+          CRM._leadsPage = 1; loadLeads({ page: 1 });
+        };
+        wrap.appendChild(chip);
+      });
+      // Score range slider (min only — max defaults to 100). Simple, fits the toolbar.
+      const sliderWrap = h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px', marginLeft: '8px' } });
+      const lbl = h('span', { style: { fontSize: '.72rem', color: '#64748b' } }, 'Min ≥');
+      const out = h('span', { style: { fontSize: '.72rem', fontWeight: '600', color: '#475569', minWidth: '20px', textAlign: 'right' } }, String(Number(f.smart_score_min || 0)));
+      const rng = h('input', { type: 'range', min: '0', max: '100', step: '5', value: String(Number(f.smart_score_min || 0)), style: { width: '110px', verticalAlign: 'middle' } });
+      let _rngTimer;
+      rng.oninput = () => { out.textContent = rng.value; };
+      rng.onchange = () => {
+        clearTimeout(_rngTimer);
+        _rngTimer = setTimeout(() => {
+          f.smart_score_min = Number(rng.value) || 0;
+          CRM._leadsPage = 1; loadLeads({ page: 1 });
+        }, 120);
+      };
+      sliderWrap.appendChild(lbl); sliderWrap.appendChild(rng); sliderWrap.appendChild(out);
+      wrap.appendChild(sliderWrap);
+      return wrap;
+    })(),
     wireFilter(selectOpts('f-followup', [{ id: '', name: 'All follow-ups' }, { id: 'today', name: 'Due today' }, { id: 'overdue', name: 'Overdue' }], CRM.prefs.filters.followup)),
     wireFilter(selectOpts('f-qualified', [
       { id: '',  name: 'Any qualified' },
@@ -4699,7 +4744,10 @@ VIEWS.leads = async (view) => {
       { id: 'created_desc', name: '🆕 Created — newest first' },
       { id: 'created_asc',  name: '⏳ Created — oldest first' },
       { id: 'updated_desc', name: '✏️ Updated — newest first' },
-      { id: 'updated_asc',  name: '⏳ Updated — oldest first' }
+      { id: 'updated_asc',  name: '⏳ Updated — oldest first' },
+      /* LEAD_SCORING_v1 P1.5 — sort by Smart Score. */
+      { id: 'score_desc',   name: '🎯 Score — highest first' },
+      { id: 'score_asc',    name: '🎯 Score — lowest first' }
     ], CRM.prefs.filters.sort || 'created_desc')),
     // PIPELINE_STAGE_v1_LEADS_RULES — advanced rule builder with full
     // operator set (eq, neq, contains, not_contains, starts_with, ends_with,
@@ -5254,6 +5302,11 @@ async function loadLeads(opts) {
     sort:        $('#f-sort')?.value || undefined,
     from:        $('#f-from')?.value || undefined,
     to:          $('#f-to')?.value || undefined,
+    /* LEAD_SCORING_v1 P1.5 — smart-category multi-select + smart_score range. */
+    smart_categories: (CRM.prefs.filters.smart_categories && CRM.prefs.filters.smart_categories.length)
+                      ? CRM.prefs.filters.smart_categories : undefined,
+    smart_score_min:  Number(CRM.prefs.filters.smart_score_min || 0) > 0
+                      ? Number(CRM.prefs.filters.smart_score_min) : undefined,
     page,
     page_size:   pageSize
   };
@@ -5435,9 +5488,13 @@ function renderLeadsTable(rows) {
     tbody.appendChild(h('tr', {}, h('td', { colspan: activeCols.length + extraCols.length + 2, class: 'empty' }, 'No leads match your filters.')));
   } else {
     rows.forEach(l => {
+      // LEAD_SCORING_v1 P1.5 — add bucket class so CSS can shade the row.
+      const _smartCat = String(l.smart_category || '').toLowerCase();
+      const _scoreCls = _smartCat ? ('ls-row ls-' + _smartCat) : '';
       const rowCls = [
         l.is_duplicate ? 'row-duplicate' : '',
-        l.tat_violation ? 'row-tat-violation' : ''
+        l.tat_violation ? 'row-tat-violation' : '',
+        _scoreCls
       ].filter(Boolean).join(' ');
       tbody.appendChild(h('tr', { class: rowCls, title: l.tat_violation ? tatViolationTitle(l) : null },
         h('td', { class: 'td-check' }, h('input', { type: 'checkbox', class: 'row-check', 'data-id': l.id, onclick: onRowCheck })),
@@ -6248,6 +6305,34 @@ function renderCell(col, l, statuses) {
       return h('td', { class: 'cell-notes', style: { maxWidth: '260px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: txt ? 'pointer' : 'default' }, title: txt || '(no notes)', onclick: ev => { ev.stopPropagation(); openLeadModal(l.id); } }, preview);
     }
     case 'city':    return h('td', {}, l.city || '');
+    case 'smart_score': {
+      /* LEAD_SCORING_v1 P1.5 — Smart Score column. Filled bucket chip
+         + bucket name. Empty cell with subtle dash when lead is unscored. */
+      const _sc  = Number(l.smart_score || 0);
+      const _cat = String(l.smart_category || '').toLowerCase();
+      if (!_cat) {
+        return h('td', { class: 'muted', style: { textAlign: 'center', opacity: '.45' } }, '–');
+      }
+      const _palette = {
+        hot:     { bg: '#E24B4A', label: 'Hot',     dark: '#791F1F' },
+        warm:    { bg: '#EF9F27', label: 'Warm',    dark: '#633806' },
+        nurture: { bg: '#1D9E75', label: 'Nurture', dark: '#085041' },
+        cold:    { bg: '#378ADD', label: 'Cold',    dark: '#0C447C' },
+        invalid: { bg: '#888780', label: 'Invalid', dark: '#444441' }
+      };
+      const _p = _palette[_cat] || _palette.cold;
+      return h('td', { class: 'cell-smart-score', style: { whiteSpace: 'nowrap' }, title: 'Smart Score ' + _sc + ' / 100 — ' + _p.label + (l.score_reason ? '\n' + l.score_reason : '') },
+        h('span', {
+          style: {
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            minWidth: '34px', height: '22px', padding: '0 8px',
+            background: _p.bg, color: '#fff',
+            borderRadius: '999px', fontWeight: '600', fontSize: '.85rem'
+          }
+        }, String(_sc)),
+        h('span', { style: { marginLeft: '6px', fontSize: '.74rem', color: _p.dark, fontWeight: '500' } }, _p.label)
+      );
+    }
     case 'updated': {
       /* LEAD_LIST_UPDATED_v1 — last time the row was touched. Falls back
          to last_status_change_at then created_at when updated_at is null. */

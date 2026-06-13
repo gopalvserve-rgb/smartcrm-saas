@@ -628,6 +628,42 @@ tbody tr.row-tat-violation {
   box-shadow: inset 4px 0 0 0 #dc2626;
 }
 tbody tr.row-tat-violation:hover { background: #fee2e2; }
+/* LEAD_SCORING_v1 P1.5 — Variant 4 row shading: per-bucket wash + thick
+   left rail. Loud Hot/Warm; quiet Nurture/Cold so most-of-list doesn't
+   become a rainbow. Status pills inside the row get a white bg so they
+   stay legible on the coloured row. */
+tbody tr.ls-row > td { transition: background .12s ease; }
+tbody tr.ls-hot     { background: #FCEBEB; box-shadow: inset 5px 0 0 0 #E24B4A; }
+tbody tr.ls-hot:hover    { background: #f8d7d7; }
+tbody tr.ls-warm    { background: #FAEEDA; box-shadow: inset 5px 0 0 0 #EF9F27; }
+tbody tr.ls-warm:hover   { background: #f4dfb8; }
+tbody tr.ls-nurture { background: #F0F9F4; box-shadow: inset 5px 0 0 0 #1D9E75; }
+tbody tr.ls-nurture:hover{ background: #e1f1e6; }
+tbody tr.ls-cold    { background: #F1F6FB; box-shadow: inset 5px 0 0 0 #378ADD; }
+tbody tr.ls-cold:hover   { background: #e3eef8; }
+tbody tr.ls-invalid { background: #F1EFE8; box-shadow: inset 5px 0 0 0 #888780; opacity: .82; }
+tbody tr.ls-invalid:hover{ background: #e4e1d6; }
+/* TAT violation still wins over score wash — re-apply after .ls-* rules. */
+tbody tr.row-tat-violation { background: #fef2f2; box-shadow: inset 5px 0 0 0 #dc2626; }
+tbody tr.row-tat-violation:hover { background: #fee2e2; }
+
+/* Smart Score filter chips — match the high-intent dashboard palette. */
+.ls-chip-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ls-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 10px; border-radius: 999px; cursor: pointer;
+  font-size: .75rem; font-weight: 500; user-select: none;
+  border: 1px solid var(--border-light); background: #fff; color: #475569;
+  transition: transform .08s ease;
+}
+.ls-chip:hover { background: #f8fafc; }
+.ls-chip.active { transform: translateY(-1px); }
+.ls-chip.ls-chip-hot.active     { background: #FCEBEB; color: #791F1F; border-color: #E24B4A; }
+.ls-chip.ls-chip-warm.active    { background: #FAEEDA; color: #633806; border-color: #EF9F27; }
+.ls-chip.ls-chip-nurture.active { background: #E1F5EE; color: #085041; border-color: #1D9E75; }
+.ls-chip.ls-chip-cold.active    { background: #E6F1FB; color: #0C447C; border-color: #378ADD; }
+.ls-chip.ls-chip-invalid.active { background: #F1EFE8; color: #444441; border-color: #888780; }
+
 .empty { text-align: center; color: var(--muted); padding: 2rem; }
 .th-check, .td-check { width: 38px; }
 .td-actions { text-align: right; width: 40px; }

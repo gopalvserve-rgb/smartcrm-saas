@@ -487,6 +487,21 @@ async function api_leads_list(token, filters) {
   if (filters.duplicate === 'only')        rows = rows.filter(l => Number(l.is_duplicate) === 1);
   else if (filters.duplicate === 'unique') rows = rows.filter(l => Number(l.is_duplicate) !== 1);
 
+  // LEAD_SCORING_v1 P1.5 — smart_category multi-select + smart_score range filter.
+  if (Array.isArray(filters.smart_categories) && filters.smart_categories.length) {
+    const set = new Set(filters.smart_categories.map(c => String(c || '').toLowerCase()));
+    rows = rows.filter(l => set.has(String(l.smart_category || '').toLowerCase()));
+  }
+  const _smin = filters.smart_score_min, _smax = filters.smart_score_max;
+  if (_smin !== undefined && _smin !== null && _smin !== '' && !isNaN(Number(_smin))) {
+    const n = Number(_smin);
+    rows = rows.filter(l => Number(l.smart_score || 0) >= n);
+  }
+  if (_smax !== undefined && _smax !== null && _smax !== '' && !isNaN(Number(_smax))) {
+    const n = Number(_smax);
+    rows = rows.filter(l => Number(l.smart_score || 0) <= n);
+  }
+
   // Custom-field filter: filters.cf = { '<fieldKey>': '<substring>' }
   // Match is case-insensitive substring against the parsed extra_json.
   // Empty / missing field on the lead → no match (so the filter actually
@@ -515,6 +530,11 @@ async function api_leads_list(token, filters) {
   const _key = (l) => {
     if (sort.startsWith('updated')) {
       return String(l.updated_at || l.last_status_change_at || l.created_at || '');
+    }
+    if (sort.startsWith('score')) {
+      // LEAD_SCORING_v1 P1.5 — sort by smart_score (0 for unscored).
+      // Pad to 4 digits so numeric compare works on strings.
+      return String(Number(l.smart_score || 0)).padStart(4, '0');
     }
     return String(l.created_at || '');
   };
