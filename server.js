@@ -770,7 +770,7 @@ function _apiDocsHtml(host) {
 <p style="color:#94a3b8">Pass the key using <strong>any one</strong> of these methods:</p>
 <table>
   <tr><th>Method</th><th>Example</th></tr>
-  <tr><td>Header</td><td><code>X-API-Key: your_key_here</code></td></tr>
+  <tr><td>Header</td><td><code>x-api-key: your_key_here</code></td></tr>
   <tr><td>Bearer token</td><td><code>Authorization: Bearer your_key_here</code></td></tr>
   <tr><td>Body field</td><td><code>api_key=your_key_here</code></td></tr>
   <tr><td>Query string</td><td><code>?api_key=your_key_here</code></td></tr>
@@ -825,7 +825,7 @@ function _apiDocsHtml(host) {
   <h3 style="margin-top:1rem">Auth fields</h3>
   <table>
     <tr><th>Field</th><th>Type</th><th>Description</th></tr>
-    <tr><td>api_key</td><td>string</td><td>Your API key (if not sent via X-API-Key header)</td></tr>
+    <tr><td>api_key</td><td>string</td><td>Your API key (if not sent via x-api-key header)</td></tr>
   </table>
 
   <h3>Examples</h3>
@@ -840,7 +840,7 @@ function _apiDocsHtml(host) {
     <p style="color:#94a3b8;margin-bottom:.5rem">Basic example:</p>
     <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code>curl -X POST ${safe(host)}/hook/website \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your_key_here" \
+  -H "x-api-key: your_key_here" \
   -d '{
     "name":    "Priya Sharma",
     "email":   "priya@example.com",
@@ -852,7 +852,7 @@ function _apiDocsHtml(host) {
     <p style="color:#94a3b8;margin:1rem 0 .5rem">Full example with Google Ads attribution + custom fields:</p>
     <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code>curl -X POST ${safe(host)}/hook/website \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your_key_here" \
+  -H "x-api-key: your_key_here" \
   -d '{
     "name":          "AKEEL AHMED",
     "email":         "akeel@example.com",
@@ -876,7 +876,7 @@ function _apiDocsHtml(host) {
   <div id="wb-form" class="tab-pane">
     <div class="note">Ã¢ÂÂ Supported Ã¢ÂÂ you can POST standard HTML form data directly to this endpoint. No JSON.stringify needed.</div>
     <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code>curl -X POST ${safe(host)}/hook/website \
-  -H "X-API-Key: your_key_here" \
+  -H "x-api-key: your_key_here" \
   --data-urlencode "name=Priya Sharma" \
   --data-urlencode "email=priya@example.com" \
   --data-urlencode "phone=+91 98765 43210" \
@@ -929,7 +929,7 @@ function _apiDocsHtml(host) {
   <div id="ot-json" class="tab-pane active">
     <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code>curl -X POST ${safe(host)}/hook/other \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your_key_here" \
+  -H "x-api-key: your_key_here" \
   -d '{ "event": "form_submit", "data": { "page": "/contact" } }'</code></pre>
   </div>
   <div id="ot-form" class="tab-pane">
