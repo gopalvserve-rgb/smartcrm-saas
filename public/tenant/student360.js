@@ -27,11 +27,11 @@
 (function () {
   'use strict';
 
-  // ── helpers ───────────────────────────────────────────────────────────
-  const h = window.h;
-  const esc = window.esc || (s => String(s ?? ''));
-  const api = window.api;
-  const fmtDate = window.fmtDate || (s => s ? new Date(s).toLocaleDateString() : '');
+  // ── helpers (lazy — student360.js may load before app.js so capture by reference, not value)
+  function h() { return window.h.apply(this, arguments); }
+  function esc(v) { return (window.esc || (x => String(x ?? '')))(v); }
+  function api() { return window.api.apply(this, arguments); }
+  function fmtDate(v, o) { return (window.fmtDate || (x => x ? new Date(x).toLocaleDateString() : ''))(v, o); }
 
   function toast(msg, kind) {
     if (typeof window.toast === 'function') return window.toast(msg, kind);
@@ -769,11 +769,25 @@
 
   // ── public entrypoint ─────────────────────────────────────────────────
   window.openStudent360 = async function (leadId) {
+    console.log('[STU360] openStudent360 called with leadId=', leadId);
     if (!leadId) {
       // Falling back to regular new-lead modal for "+ New Lead" clicks
       if (typeof window._origOpenLeadModal === 'function') return window._origOpenLeadModal();
       return;
     }
+    if (!window.h || !window.api) {
+      alert('Student 360 cannot load yet — try refreshing the page.');
+      return;
+    }
+    try {
+      return await _openStudent360Inner(leadId);
+    } catch (err) {
+      console.error('[STU360] error', err);
+      alert('Student 360 error: ' + (err && err.message || err));
+    }
+  };
+
+  async function _openStudent360Inner(leadId) {
     const overlay = h('div', { class: 'modal-backdrop',
       onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) overlay.remove(); } });
     const wrap = h('div', { class: 'modal modal-xl', style: {
@@ -793,7 +807,7 @@
     const d = await _load(leadId);
     if (!d) { overlay.remove(); return; }
     _rebuild();
-  };
+  }
 
   // ── delegate openLeadModal when industry pack === 'education' ─────────
   function _maybeDelegate() {
