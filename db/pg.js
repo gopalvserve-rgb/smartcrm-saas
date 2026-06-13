@@ -502,7 +502,61 @@ const SCHEMA = {
       'dispatch_status', 'http_status', 'response_text', 'payload_json'
     ],
     json: ['payload_json']
+  }  ,
+  // STU360_LIVE_v1 — Student 360 view tables
+  student_profile_extras: {
+    columns: ['lead_id','dob','gender','blood_group','photo_url','address',
+              'emergency_contact','hostel_room','enrollment_no','batch_code',
+              'academic_year','grade_level','language_pref','bio',
+              'risk_score','risk_factors_json','last_recomputed_at',
+              'created_at','updated_at'],
+    json: ['risk_factors_json']
+  },
+  student_skills: {
+    columns: ['lead_id','name','level','category','color','added_at'],
+    json: []
+  },
+  student_mentors: {
+    columns: ['lead_id','mentor_user_id','mentor_name','role','since','created_at'],
+    json: []
+  },
+  student_goals: {
+    columns: ['lead_id','goal_text','target_date','progress','status','created_at'],
+    json: []
+  },
+  student_family: {
+    columns: ['lead_id','name','relation','phone','email','is_primary','is_emergency','created_at'],
+    json: []
+  },
+  student_achievements: {
+    columns: ['lead_id','title','awarded_on','icon','description','category','created_at'],
+    json: []
+  },
+  student_docs: {
+    columns: ['lead_id','name','url','category','verified','uploaded_by','uploaded_at'],
+    json: []
+  },
+  student_schedule: {
+    columns: ['lead_id','day_of_week','time_start','time_end','course_id','course_name','room','type','created_at'],
+    json: []
+  },
+  student_assignments: {
+    columns: ['lead_id','title','course_id','due_date','status','score','max_score','submitted_at','feedback','created_at'],
+    json: []
+  },
+  student_scholarships: {
+    columns: ['lead_id','name','amount','status','awarded_at','valid_until','created_at'],
+    json: []
+  },
+  student_engagement: {
+    columns: ['lead_id','day','hours_studied','sessions','source','created_at'],
+    json: []
+  },
+  student_communications: {
+    columns: ['lead_id','channel','direction','summary','at','ref_id'],
+    json: []
   }
+
 };
 
 function _schema(table) {

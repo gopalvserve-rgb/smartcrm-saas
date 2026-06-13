@@ -108,6 +108,7 @@ const ROUTE_FILES = [
   'googleConvExport', /* GOOGLE_CONV_EXPORT_v1 — Google Ads offline-conversion CSV export */
   'metaConvExport',   /* META_CAPI_v1 — Meta Conversions API offline events */
   'leadQuickNote',   /* QNOTE_v1 — AI Quick Note row action (vserve beta) */
+  'packs/student360', /* STU360_LIVE_v1 — Student 360 view for Education pack */
 ];
 
 const API = {};

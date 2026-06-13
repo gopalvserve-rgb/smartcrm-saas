@@ -380,3 +380,12 @@ SELECT 'feature',
        '🛠',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Webhook Mapping Studio — see what comes in, transform values, test');
+
+-- 2026-06-13 STU360_LIVE_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'Student 360 — full single-page view for every student (Education pack)',
+       'Education-pack tenants now get a brand-new Student 360 view whenever they click a lead. The standard Lead modal is replaced with a rich single-screen profile covering everything you need to manage a student: a hero with photo + risk score + 4 KPI tiles (Attendance, Avg Score, Fee Due, Study Hours), an AI insight banner that calls out what needs attention, the pre-enrolment Lead History journey funnel, full Profile (DOB, blood group, address, emergency, enrollment #, batch, grade, language…), Courses + Fees (every enrollment with the installment schedule and overdue highlights), Attendance heatmap of the last 60 days, Test Scores with auto-graded %, Assignments tracker with status pills, weekly Schedule grid, Skills cloud, Scholarships, Family + Mentors + Goals + Achievements + a verified Documents Vault, and a Communications hub for the last 100 touchpoints. Every section is inline-editable via mini-modals. Backed by 12 new student_* tables that are created automatically on first open; the Recompute button derives the risk score from real attendance, assignment, fee and engagement data. Generic, Real Estate, and other packs see no change — they stay on the standard lead modal.',
+       '🎓',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Student 360 — full single-page view for every student (Education pack)');
