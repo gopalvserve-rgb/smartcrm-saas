@@ -41010,11 +41010,15 @@ VIEWS.edustudents = async (view) => {
         h('tbody', {},
           ...rows.map(s => h('tr', { style: Number(s.overdue) > 0 ? { background:'#fef2f2' } : {} },
             h('td', {},
-              // STU360_LIVE_v1: clickable student name → opens Student 360
+              // STU360_LIVE_v1a: clickable student name → opens Student 360 directly (no delegation dependency)
               h('div', {
                 style:{ fontWeight:600, color:'#4f46e5', cursor:'pointer', textDecoration:'underline dotted' },
                 title: 'Open Student 360',
-                onclick: () => { if (s.lead_id) openLeadModal(s.lead_id); }
+                onclick: () => {
+                  if (!s.lead_id) return;
+                  if (typeof window.openStudent360 === 'function') return window.openStudent360(s.lead_id);
+                  return openLeadModal(s.lead_id);
+                }
               }, s.student_name || '—'),
               s.phone ? h('div', { class:'muted', style:{ fontSize:'.75em' } }, s.phone) : null
             ),
@@ -41033,7 +41037,10 @@ VIEWS.edustudents = async (view) => {
               Number(s.overdue) > 0 ? h('span', { style:{ marginLeft:'.3rem', background:'#fee2e2', color:'#991b1b', padding:'1px 5px', borderRadius:'3px', fontSize:'.7em' } }, 'OVERDUE') : null
             ),
             h('td', {},
-              h('button', { class:'btn sm primary', onclick: () => openLeadModal(s.lead_id) }, '💰 Collect Fee')
+              h('button', { class:'btn sm primary', onclick: () => {
+                if (typeof window.openStudent360 === 'function') return window.openStudent360(s.lead_id);
+                return openLeadModal(s.lead_id);
+              } }, '💰 Collect Fee')
             )
           ))
         )
