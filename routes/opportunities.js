@@ -345,14 +345,15 @@ async function api_opp_save(token, payload) {
         expected_close_date = $9, actual_close_date = $10,
         closed_won = $11, closed_lost = $12, lost_reason = $13,
         source = $14, campaign_id = $15, description = $16,
-        next_followup_at = $17, meta_json = $18, updated_at = NOW()
-      WHERE id = $19`,
+        next_followup_at = $17, meta_json = $18, product_id = $19, updated_at = NOW()
+      WHERE id = $20`,
       [p.name, p.opportunity_type_id || null, pipeline_id, stage_id,
        p.owner_user_id || null, p.amount || 0, p.currency || 'INR', probability,
        p.expected_close_date || null, actualCloseDate,
        closedWon, closedLost, p.lost_reason || null,
        p.source || null, p.campaign_id || null, p.description || null,
        p.next_followup_at || null, p.meta_json ? JSON.stringify(p.meta_json) : null,
+       p.product_id || null,
        p.id]);
     return { ok: true, id: p.id };
   } else {
@@ -364,13 +365,14 @@ async function api_opp_save(token, payload) {
       (lead_id, name, opportunity_type_id, pipeline_id, stage_id, owner_user_id,
        amount, currency, probability, expected_close_date, actual_close_date,
        closed_won, closed_lost, lost_reason, source, campaign_id, description,
-       next_followup_at, meta_json, created_by)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+       next_followup_at, meta_json, product_id, created_by)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
       RETURNING id`,
       [p.lead_id, p.name, p.opportunity_type_id || null, pipeline_id, stage_id, p.owner_user_id || me.id,
        p.amount || 0, p.currency || 'INR', probability, p.expected_close_date || null, actualCloseDate,
        closedWon, closedLost, p.lost_reason || null, p.source || null, p.campaign_id || null, p.description || null,
-       p.next_followup_at || null, p.meta_json ? JSON.stringify(p.meta_json) : null, me.id]);
+       p.next_followup_at || null, p.meta_json ? JSON.stringify(p.meta_json) : null,
+       p.product_id || null, me.id]);
     const oppId = r.rows[0].id;
     // Initial stage history row
     await db.query(`INSERT INTO opportunity_stage_history (opportunity_id, from_stage_id, to_stage_id, changed_by, note)

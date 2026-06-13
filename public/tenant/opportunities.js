@@ -51,7 +51,7 @@
   function _isEnabled() { return _enabledCache === true; }
 
   // ── Cache pipelines + users so render is instant ──
-  const _cache = { pipelines: null, users: null, types: null };
+  const _cache = { pipelines: null, users: null, types: null, products: null };
   async function _warm() {
     try {
       if (!_cache.pipelines) {
@@ -65,6 +65,12 @@
           const ulist = await _api('api_users_list').catch(() => []);
           _cache.users = Array.isArray(ulist) ? ulist : (ulist && ulist.rows ? ulist.rows : []);
         } catch (_) { _cache.users = []; }
+      }
+      if (!_cache.products) {
+        try {
+          const plist = await _api('api_products_list').catch(() => []);
+          _cache.products = Array.isArray(plist) ? plist : (plist && plist.rows ? plist.rows : []);
+        } catch (_) { _cache.products = []; }
       }
     } catch (e) { console.warn('[opp] warm failed', e); }
   }
@@ -94,7 +100,7 @@
     addBtn.className = 'btn primary sm';
     addBtn.style.cssText = 'padding:6px 14px;font-size:.85rem';
     addBtn.textContent = '+ New Opportunity';
-    addBtn.onclick = () => _openOppEditor(leadId, null, pipelines, users, types, defaultPipeline, () => _renderPanelInto(panel, leadId));
+    addBtn.onclick = () => _openOppEditor(leadId, null, pipelines, users, types, defaultPipeline, () => _renderPanelInto(panel, leadId), _cache.products || []);
     header.appendChild(addBtn);
     panel.appendChild(header);
 
@@ -136,6 +142,7 @@
     const meta = document.createElement('div');
     meta.style.cssText = 'font-size:.82rem;color:#475569;margin-top:6px;display:flex;flex-wrap:wrap;gap:14px';
     meta.innerHTML = '<span>💰 <b style="color:#0f172a">' + _fmtMoney(o.amount) + '</b></span>'
+      + (o.product_name ? '<span>📦 <b>' + _esc(o.product_name) + '</b></span>' : '')
       + '<span>👤 ' + _esc(o.owner_name || 'Unassigned') + '</span>'
       + '<span>📈 ' + _esc(o.pipeline_name || 'Default') + '</span>'
       + (o.expected_close_date ? '<span>🎯 Close by ' + _fmtDate(o.expected_close_date) + '</span>' : '')
@@ -159,7 +166,7 @@
     editBtn.className = 'btn ghost sm';
     editBtn.style.cssText = 'padding:4px 10px;font-size:.78rem';
     editBtn.textContent = '✎ Edit';
-    editBtn.onclick = () => _openOppEditor(o.lead_id, o, pipelines, users, types, null, refresh);
+    editBtn.onclick = () => _openOppEditor(o.lead_id, o, pipelines, users, types, null, refresh, _cache.products || []);
     right.appendChild(editBtn);
 
     if (!isClosed) {
@@ -223,7 +230,8 @@
   }
 
   // ── Editor: inline form rendered into a backdrop modal ──
-  function _openOppEditor(leadId, opp, pipelines, users, types, defaultPipeline, onSaved) {
+  function _openOppEditor(leadId, opp, pipelines, users, types, defaultPipeline, onSaved, products) {
+    products = products || [];
     const isEdit = !!(opp && opp.id);
     const pipeline_id = (opp && opp.pipeline_id) || (defaultPipeline && defaultPipeline.id) || (pipelines[0] && pipelines[0].id);
     const pipeline = pipelines.find(p => Number(p.id) === Number(pipeline_id)) || pipelines[0];
@@ -256,6 +264,11 @@
       + '    <select id="oppOwner" style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;font-size:.9rem"><option value="">— Unassigned —</option>'
       + users.map(u => '<option value="' + u.id + '"' + ((opp && Number(opp.owner_user_id) === Number(u.id)) ? ' selected' : '') + '>' + _esc(u.name || u.email) + '</option>').join('')
       + '    </select></div></div>'
+      + '<div><label style="font-size:.85rem;font-weight:600;color:#334155;display:block;margin-bottom:4px">Product</label>'
+      + '<select id="oppProduct" style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;font-size:.9rem">'
+      + '<option value="">— None / Multi-product (use Description) —</option>'
+      + products.map(pr => '<option value="' + pr.id + '" data-price="' + (Number(pr.price) || 0) + '"' + ((opp && Number(opp.product_id) === Number(pr.id)) ? ' selected' : '') + '>' + _esc(pr.name) + (Number(pr.price) ? ' — ₹' + (Number(pr.price)).toLocaleString('en-IN') : '') + '</option>').join('')
+      + '</select></div>'
       + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">'
       + '  <div><label style="font-size:.85rem;font-weight:600;color:#334155;display:block;margin-bottom:4px">Pipeline</label>'
       + '    <select id="oppPipeline" style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:6px;font-size:.9rem">'
@@ -284,6 +297,15 @@
     modal.querySelector('#oppClose').onclick = closeBackdrop;
     modal.querySelector('#oppCancel').onclick = closeBackdrop;
 
+    // When product changes, auto-fill amount with product's price (only if amount empty)
+    modal.querySelector('#oppProduct').onchange = function () {
+      const selOpt = this.options[this.selectedIndex];
+      const price = Number(selOpt && selOpt.getAttribute('data-price')) || 0;
+      const amountInput = modal.querySelector('#oppAmount');
+      if (price > 0 && (!amountInput.value || Number(amountInput.value) === 0)) {
+        amountInput.value = price;
+      }
+    };
     // Re-populate stages when pipeline changes
     modal.querySelector('#oppPipeline').onchange = function () {
       const newPipe = pipelines.find(p => Number(p.id) === Number(this.value));
@@ -299,6 +321,7 @@
         name: name,
         opportunity_type_id: modal.querySelector('#oppType').value ? Number(modal.querySelector('#oppType').value) : null,
         owner_user_id: modal.querySelector('#oppOwner').value ? Number(modal.querySelector('#oppOwner').value) : null,
+        product_id: modal.querySelector('#oppProduct').value ? Number(modal.querySelector('#oppProduct').value) : null,
         pipeline_id: Number(modal.querySelector('#oppPipeline').value),
         stage_id: Number(modal.querySelector('#oppStage').value),
         amount: Number(modal.querySelector('#oppAmount').value || 0),

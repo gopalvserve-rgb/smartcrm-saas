@@ -570,7 +570,7 @@ const SCHEMA = {
     json: []
   },
   opportunities: {
-    columns: ['lead_id','name','opportunity_type_id','pipeline_id','stage_id','owner_user_id','amount','currency','probability','expected_close_date','actual_close_date','closed_won','closed_lost','lost_reason','source','campaign_id','description','next_followup_at','meta_json','created_by','created_at','updated_at'],
+    columns: ['lead_id','name','opportunity_type_id','pipeline_id','stage_id','owner_user_id','amount','currency','probability','expected_close_date','actual_close_date','closed_won','closed_lost','lost_reason','source','campaign_id','description','next_followup_at','meta_json','product_id','created_by','created_at','updated_at'],
     json: ['meta_json']
   },
   opportunity_stage_history: {
