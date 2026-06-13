@@ -41010,7 +41010,12 @@ VIEWS.edustudents = async (view) => {
         h('tbody', {},
           ...rows.map(s => h('tr', { style: Number(s.overdue) > 0 ? { background:'#fef2f2' } : {} },
             h('td', {},
-              h('div', { style:{ fontWeight:600 } }, s.student_name || '—'),
+              // STU360_LIVE_v1: clickable student name → opens Student 360
+              h('div', {
+                style:{ fontWeight:600, color:'#4f46e5', cursor:'pointer', textDecoration:'underline dotted' },
+                title: 'Open Student 360',
+                onclick: () => { if (s.lead_id) openLeadModal(s.lead_id); }
+              }, s.student_name || '—'),
               s.phone ? h('div', { class:'muted', style:{ fontSize:'.75em' } }, s.phone) : null
             ),
             h('td', {},
