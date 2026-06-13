@@ -218,12 +218,12 @@
   function _renderTabs() {
     const tabs = [
       { id: 'overview', label: '🎯 Overview' },
-      { id: 'journey', label: '🔍 Lead Journey' },
       { id: 'fees', label: '💰 Fees' },
       { id: 'academics', label: '📚 Academics' },
       { id: 'engagement', label: '🔥 Engagement' },
       { id: 'family', label: '👨‍👩‍👧 Family' },
-      { id: 'comms', label: '💬 Communications' }
+      { id: 'comms', label: '💬 Communications' },
+      { id: 'journey', label: '🔍 Lead Journey' }
     ];
     return h('div', { style: {
       position: 'sticky', top: '78px', zIndex: 40, background: '#fff',
@@ -231,11 +231,17 @@
       display: 'flex', gap: '4px', overflowX: 'auto', whiteSpace: 'nowrap'
     } },
       tabs.map(t => h('a', {
-        href: '#stu360_' + t.id,
+        href: 'javascript:void(0)',
+        'data-tab': t.id,
         style: {
           padding: '10px 14px', fontSize: '12px', fontWeight: '600',
           color: '#64748b', textDecoration: 'none', borderBottom: '2px solid transparent',
-          transition: 'all 0.15s'
+          transition: 'all 0.15s', cursor: 'pointer', userSelect: 'none'
+        },
+        onclick: (ev) => {
+          ev.preventDefault(); ev.stopPropagation();
+          const target = document.getElementById('stu360_' + t.id);
+          if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
         },
         onmouseover: (ev) => { ev.target.style.color = '#4f46e5'; ev.target.style.borderColor = '#4f46e5'; },
         onmouseout: (ev) => { ev.target.style.color = '#64748b'; ev.target.style.borderColor = 'transparent'; }
@@ -713,12 +719,12 @@
     VIEW_EL.appendChild(_renderHero(D));
     const container = h('div', { style: { padding: '0 20px 40px', maxWidth: '1400px', margin: '0 auto' } },
       _renderProfile(),
-      _renderJourney(),
       _renderFees(D),
       _renderAcademics(),
       _renderEngagement(),
       _renderFamily(),
-      _renderComms()
+      _renderComms(),
+      _renderJourney()  // STU360_PAGE_v2_FIX2: moved Lead Journey to bottom per user request
     );
     VIEW_EL.appendChild(container);
   }
