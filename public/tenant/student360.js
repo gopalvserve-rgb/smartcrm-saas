@@ -152,10 +152,20 @@
       });
       return n > 0 ? Math.round(sum / n) : null;
     })();
+    // Fee Due = ALL unpaid outstanding (covers 'due' + 'overdue' + anything not 'paid')
     const feeDue = (DATA.installments || []).reduce((acc, i) => {
-      if (i.status === 'due') acc += Number(i.amount || 0) - Number(i.paid_amount || 0);
+      if ((i.status || '').toLowerCase() !== 'paid') {
+        acc += Number(i.amount || 0) - Number(i.paid_amount || 0);
+      }
       return acc;
     }, 0);
+    const feePaid = (DATA.installments || []).reduce((acc, i) => acc + Number(i.paid_amount || 0), 0);
+    const feeBilled = (DATA.enrollments || []).reduce((acc, e) => acc + Number(e.total_amount || 0), 0);
+    const overdueCount = (DATA.installments || []).filter(i => {
+      if ((i.status || '').toLowerCase() === 'paid') return false;
+      return i.due_date && new Date(i.due_date) < new Date();
+    }).length;
+    DATA._derivedFees = { feeDue, feePaid, feeBilled, overdueCount };
     const engHrs = (DATA.engagement || []).reduce((s, e) => s + Number(e.hours_studied || 0), 0);
 
     const photo = P.photo_url
@@ -260,45 +270,97 @@
     return h('button', { class: 'btn icon sm', onclick: onClick, title: 'Edit' }, '✎');
   }
 
-  // ── Lead History (pre-enrolment) ──────────────────────────────────────
+  // ── Lead History (pre-enrolment + post-enrolment milestones) ──────────
   function _renderLeadHistory() {
     const created = DATA.lead.created_at;
     const acts = DATA.activity || [];
+    const enrolls = DATA.enrollments || [];
+    const firstEnroll = enrolls.length ? enrolls[enrolls.length - 1] : null;  // earliest = last in DESC order
+    const insts = DATA.installments || [];
+    const paidInsts = insts.filter(i => (i.status || '').toLowerCase() === 'paid');
+    const lastPayment = paidInsts.length ? paidInsts[paidInsts.length - 1] : null;
+
+    // Build the timeline events
+    const events = [];
+    events.push({ at: created, label: '🆕 Lead created', source: DATA.lead.source || 'Direct' });
+    if (firstEnroll) {
+      events.push({
+        at: firstEnroll.created_at || firstEnroll.start_date,
+        label: '🎓 Enrolled — ' + (firstEnroll.course_name || firstEnroll.plan_name || 'Course'),
+        amount: '₹' + Number(firstEnroll.total_amount || 0).toLocaleString('en-IN')
+      });
+    }
+    paidInsts.forEach(p => {
+      events.push({
+        at: p.paid_at || p.created_at,
+        label: '💰 Installment #' + p.seq + ' paid',
+        amount: '₹' + Number(p.paid_amount || 0).toLocaleString('en-IN')
+      });
+    });
+    // Sort chronologically
+    events.sort((a, b) => new Date(a.at) - new Date(b.at));
+
     const stages = ['New', 'Contacted', 'Qualified', 'Demo', 'Proposal', 'Enrolled'];
-    return _section('🔍 Lead History', null,
+    const currentStage = firstEnroll ? 5 : 0;  // Enrolled if has enrollment, else stuck at New
+
+    return _section('🔍 Lead Journey', null,
       h('div', {},
         // funnel chip strip
         h('div', { style: { display: 'flex', gap: '4px', marginBottom: '14px', overflowX: 'auto' } },
           stages.map((s, i) =>
             h('div', { style: {
-              flex: '1', minWidth: '90px', padding: '6px 8px',
-              background: i === stages.length - 1 ? '#16a34a' : '#e0e7ff',
-              color: i === stages.length - 1 ? '#fff' : '#3730a3',
-              borderRadius: '4px', textAlign: 'center', fontSize: '11px', fontWeight: '700'
+              flex: '1', minWidth: '90px', padding: '8px 6px',
+              background: i <= currentStage ? '#16a34a' : '#e0e7ff',
+              color: i <= currentStage ? '#fff' : '#3730a3',
+              borderRadius: '6px', textAlign: 'center', fontSize: '11px', fontWeight: '700'
             } }, (i+1) + '. ' + s)
           )
         ),
-        h('div', { style: { fontSize: '12px', color: '#64748b', marginBottom: '8px' } },
-          'Source: ' + esc(DATA.lead.source || 'Direct') +
-          ' • Created: ' + fmtDate(created) +
-          ' • ' + acts.length + ' activity events'
+        // Summary line
+        h('div', { style: { fontSize: '12px', color: '#64748b', marginBottom: '10px', padding: '8px 10px', background: '#f8fafc', borderRadius: '6px' } },
+          h('span', { style: { fontWeight: '700', color: '#0f172a' } }, '📍 Source: '),
+          esc(DATA.lead.source || 'Direct'),
+          h('span', { style: { margin: '0 8px', color: '#cbd5e1' } }, '•'),
+          h('span', { style: { fontWeight: '700', color: '#0f172a' } }, 'Created: '),
+          fmtDate(created),
+          firstEnroll ? [
+            h('span', { style: { margin: '0 8px', color: '#cbd5e1' } }, '•'),
+            h('span', { style: { fontWeight: '700', color: '#16a34a' } }, '🎓 Enrolled: '),
+            fmtDate(firstEnroll.created_at || firstEnroll.start_date, 'short')
+          ] : null
         ),
-        // recent activity table
+        // Milestone timeline (vertical)
+        events.length > 0
+          ? h('div', { style: { borderLeft: '2px solid #e2e8f0', paddingLeft: '14px', marginLeft: '6px' } },
+              events.map(ev =>
+                h('div', { style: { position: 'relative', marginBottom: '10px' } },
+                  h('div', { style: { position: 'absolute', left: '-21px', top: '4px', width: '12px', height: '12px',
+                    borderRadius: '50%', background: '#3b82f6', border: '2px solid #fff', boxShadow: '0 0 0 2px #3b82f6' } }),
+                  h('div', { style: { fontSize: '11px', color: '#64748b' } }, fmtDate(ev.at)),
+                  h('div', { style: { fontSize: '13px', fontWeight: '600', marginTop: '2px' } },
+                    ev.label + (ev.amount ? ' — ' + ev.amount : '') + (ev.source ? ' from ' + ev.source : ''))
+                )
+              )
+            )
+          : null,
+        // Recent activity table (collapsed)
         acts.length
-          ? h('div', { style: { maxHeight: '180px', overflowY: 'auto', borderTop: '1px solid #e2e8f0', marginTop: '8px' } },
-              h('table', { style: { width: '100%', fontSize: '12px' } },
+          ? h('details', { style: { marginTop: '10px' } },
+              h('summary', { style: { cursor: 'pointer', fontSize: '11px', color: '#64748b', fontWeight: '600' } },
+                '▸ Show ' + acts.length + ' detailed activity events'),
+              h('table', { style: { width: '100%', fontSize: '12px', marginTop: '6px' } },
                 h('tbody', {},
-                  acts.slice(0, 8).map(a =>
+                  acts.slice(0, 20).map(a =>
                     h('tr', {},
-                      h('td', { style: { padding: '6px', color: '#64748b', whiteSpace: 'nowrap' } }, fmtDate(a.at, 'relative')),
-                      h('td', { style: { padding: '6px', fontWeight: '600' } }, esc(a.activity_type || '')),
-                      h('td', { style: { padding: '6px', color: '#475569' } }, esc((a.detail || '').slice(0, 80)))
+                      h('td', { style: { padding: '4px 6px', color: '#64748b', whiteSpace: 'nowrap' } }, fmtDate(a.at, 'relative')),
+                      h('td', { style: { padding: '4px 6px', fontWeight: '600' } }, esc(a.activity_type || a.action_type || '')),
+                      h('td', { style: { padding: '4px 6px', color: '#475569' } }, esc((a.detail || a.summary || '').slice(0, 80)))
                     )
                   )
                 )
               )
             )
-          : h('div', { style: { color: '#94a3b8', fontSize: '12px' } }, 'No activity logged yet')
+          : null
       )
     );
   }
@@ -355,38 +417,84 @@
   function _renderCoursesFees() {
     const enrolls = DATA.enrollments || [];
     const insts = DATA.installments || [];
+    const D = DATA._derivedFees || { feeBilled: 0, feePaid: 0, feeDue: 0, overdueCount: 0 };
+    const _money = v => '₹' + Number(v || 0).toLocaleString('en-IN');
+    // Billed / Paid / Pending mini summary
+    const summary = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: '8px', marginBottom: '12px' } },
+      h('div', { style: { padding: '10px 12px', background: '#f8fafc', borderRadius: '8px', borderLeft: '3px solid #3b82f6' } },
+        h('div', { style: { fontSize: '10px', color: '#64748b', fontWeight: '600', textTransform: 'uppercase' } }, 'Total Billed'),
+        h('div', { style: { fontSize: '16px', fontWeight: '700', marginTop: '2px' } }, _money(D.feeBilled))),
+      h('div', { style: { padding: '10px 12px', background: '#f0fdf4', borderRadius: '8px', borderLeft: '3px solid #16a34a' } },
+        h('div', { style: { fontSize: '10px', color: '#15803d', fontWeight: '600', textTransform: 'uppercase' } }, 'Paid'),
+        h('div', { style: { fontSize: '16px', fontWeight: '700', marginTop: '2px', color: '#16a34a' } }, _money(D.feePaid))),
+      h('div', { style: { padding: '10px 12px', background: D.feeDue > 0 ? '#fef2f2' : '#f0fdf4', borderRadius: '8px',
+                          borderLeft: '3px solid ' + (D.feeDue > 0 ? '#dc2626' : '#16a34a') } },
+        h('div', { style: { fontSize: '10px', color: D.feeDue > 0 ? '#991b1b' : '#15803d', fontWeight: '600', textTransform: 'uppercase' } }, 'Pending'),
+        h('div', { style: { fontSize: '16px', fontWeight: '700', marginTop: '2px', color: D.feeDue > 0 ? '#dc2626' : '#16a34a' } }, _money(D.feeDue) + (D.overdueCount ? '  ⚠' : '')))
+    );
+
     return _section('📚 Courses & Fees', null,
       h('div', {},
+        summary,
         enrolls.length === 0
           ? h('div', { style: { color: '#94a3b8', fontSize: '12px' } }, 'No enrollments yet — use the Education pack 💰 Fees tab to enrol.')
           : enrolls.map(e =>
-              h('div', { style: { padding: '10px', background: '#f8fafc', borderRadius: '6px', marginBottom: '8px' } },
-                h('div', { style: { fontWeight: '700', fontSize: '13px' } }, e.course_name || e.plan_name || 'Course'),
-                h('div', { style: { fontSize: '11px', color: '#64748b' } },
-                  'Total ₹' + Number(e.total_amount || 0).toLocaleString('en-IN') +
-                  ' • Status: ' + (e.status || 'active'))
-              )
-            ),
-        insts.length > 0
-          ? h('table', { style: { width: '100%', fontSize: '12px', marginTop: '8px' } },
-              h('thead', {},
-                h('tr', {},
-                  ['#', 'Due', 'Amount', 'Paid', 'Status'].map(k => h('th', { style: { textAlign: 'left', padding: '6px', borderBottom: '1px solid #e2e8f0', color: '#64748b' } }, k))
-                )
-              ),
-              h('tbody', {},
-                insts.map(i =>
-                  h('tr', {},
-                    h('td', { style: { padding: '6px' } }, i.seq),
-                    h('td', { style: { padding: '6px' } }, fmtDate(i.due_date, 'short')),
-                    h('td', { style: { padding: '6px' } }, '₹' + Number(i.amount).toLocaleString('en-IN')),
-                    h('td', { style: { padding: '6px' } }, '₹' + Number(i.paid_amount).toLocaleString('en-IN')),
-                    h('td', { style: { padding: '6px' } }, _pill(i.status, i.status === 'paid' ? '#16a34a' : i.status === 'due' && new Date(i.due_date) < new Date() ? '#dc2626' : '#f59e0b'))
+              h('div', { style: { padding: '12px', background: '#f8fafc', borderRadius: '8px', marginBottom: '8px' } },
+                h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+                  h('div', {},
+                    h('div', { style: { fontWeight: '700', fontSize: '14px' } }, e.course_name || e.plan_name || 'Course'),
+                    h('div', { style: { fontSize: '11px', color: '#64748b', marginTop: '2px' } },
+                      (e.batch_name ? '🎓 ' + e.batch_name + '  •  ' : '') +
+                      (e.start_date ? 'Enrolled ' + fmtDate(e.start_date, 'short') : 'Enrolled ' + fmtDate(e.created_at, 'short')))
+                  ),
+                  h('div', { style: { textAlign: 'right' } },
+                    h('div', { style: { fontWeight: '700', fontSize: '14px' } }, _money(e.total_amount)),
+                    _pill(e.status || 'active', e.status === 'cancelled' ? '#94a3b8' : e.status === 'completed' ? '#16a34a' : '#3b82f6')
                   )
                 )
               )
+            ),
+        // Installment timeline — always show if any rows exist
+        insts.length > 0
+          ? h('div', { style: { marginTop: '8px' } },
+              h('div', { style: { fontSize: '11px', color: '#64748b', fontWeight: '600', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.3px' } },
+                '📅 Installment Timeline (' + insts.length + ')'),
+              h('table', { style: { width: '100%', fontSize: '12px', borderCollapse: 'collapse' } },
+                h('thead', {},
+                  h('tr', {},
+                    ['#', 'Due Date', 'Amount', 'Paid', 'Outstanding', 'Status', ''].map(k =>
+                      h('th', { style: { textAlign: 'left', padding: '6px', borderBottom: '1px solid #e2e8f0', color: '#64748b', fontSize: '10px', textTransform: 'uppercase' } }, k))
+                  )
+                ),
+                h('tbody', {},
+                  insts.map(i => {
+                    const isOverdue = (i.status || '').toLowerCase() !== 'paid' && i.due_date && new Date(i.due_date) < new Date();
+                    const out = Number(i.amount || 0) - Number(i.paid_amount || 0);
+                    const statusColor = (i.status === 'paid') ? '#16a34a' : isOverdue ? '#dc2626' : '#f59e0b';
+                    const statusText = (i.status === 'paid') ? 'PAID' : isOverdue ? 'OVERDUE' : 'DUE';
+                    return h('tr', { style: isOverdue ? { background: '#fef2f2' } : {} },
+                      h('td', { style: { padding: '6px', fontWeight: '600' } }, i.seq),
+                      h('td', { style: { padding: '6px' } }, fmtDate(i.due_date, 'short')),
+                      h('td', { style: { padding: '6px' } }, _money(i.amount)),
+                      h('td', { style: { padding: '6px', color: '#16a34a' } }, _money(i.paid_amount)),
+                      h('td', { style: { padding: '6px', fontWeight: '600', color: out > 0 ? '#dc2626' : '#16a34a' } }, _money(out)),
+                      h('td', { style: { padding: '6px' } }, _pill(statusText, statusColor)),
+                      h('td', { style: { padding: '6px' } },
+                        out > 0 ? h('button', { class: 'btn sm', style: { padding: '2px 8px', fontSize: '10px' },
+                          onclick: async () => {
+                            if (!confirm('Mark installment #' + i.seq + ' as PAID (₹' + Number(out).toLocaleString('en-IN') + ')?')) return;
+                            try {
+                              await api('api_edu_installment_markPaid', { id: i.id, amount: out });
+                              await _refresh();
+                            } catch (e) { alert(e.message || 'Mark paid failed'); }
+                          } }, '✍ Mark Paid') : null
+                      )
+                    );
+                  })
+                )
+              )
             )
-          : null
+          : h('div', { style: { color: '#94a3b8', fontSize: '12px', fontStyle: 'italic', marginTop: '8px' } }, 'No installment schedule generated yet.')
       )
     );
   }
