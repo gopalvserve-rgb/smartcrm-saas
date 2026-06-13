@@ -109,6 +109,7 @@ const ROUTE_FILES = [
   'metaConvExport',   /* META_CAPI_v1 — Meta Conversions API offline events */
   'leadQuickNote',   /* QNOTE_v1 — AI Quick Note row action (vserve beta) */
   'packs/student360', /* STU360_LIVE_v1 — Student 360 view for Education pack */
+  'opportunities',    /* OPPORTUNITIES_v1 — multi-opportunity + multi-pipeline */
 ];
 
 const API = {};

@@ -299,6 +299,78 @@ const SCHEMA_MIGRATIONS = [
     UPDATE config SET value = '0' WHERE key = 'ATTENDANCE_REQUIRE_SELFIE';
     UPDATE config SET value = '0' WHERE key = 'ATTENDANCE_REQUIRE_METER';
   ` },
+
+  // ─────────────────────────────────────────────────────────────
+  // OPPORTUNITIES_v1 (2026-06-13) — multi-opportunity + multi-pipeline
+  // Tables are also created idempotently from inside routes/opportunities.js
+  // (_ensureSchema). We mirror them here so the first connect provisions
+  // them up-front even if no opportunities API is hit.
+  // ─────────────────────────────────────────────────────────────
+  { name: '2026_06_13_opportunities_tables', sql: `
+    CREATE TABLE IF NOT EXISTS opportunity_types (
+      id SERIAL PRIMARY KEY, name TEXT NOT NULL, default_pipeline_id INTEGER,
+      default_amount NUMERIC(12,2) DEFAULT 0, default_probability INTEGER DEFAULT 0,
+      default_close_days INTEGER DEFAULT 30, icon TEXT NOT NULL DEFAULT '💼',
+      color TEXT NOT NULL DEFAULT '#3b82f6', is_active INTEGER NOT NULL DEFAULT 1,
+      sort_order INTEGER DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS pipelines (
+      id SERIAL PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+      is_default INTEGER NOT NULL DEFAULT 0, is_active INTEGER NOT NULL DEFAULT 1,
+      sort_order INTEGER DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS pipeline_stages (
+      id SERIAL PRIMARY KEY, pipeline_id INTEGER NOT NULL, name TEXT NOT NULL,
+      sort_order INTEGER NOT NULL, win_probability INTEGER DEFAULT 0,
+      is_terminal_win INTEGER NOT NULL DEFAULT 0, is_terminal_loss INTEGER NOT NULL DEFAULT 0,
+      expected_days INTEGER DEFAULT 7, color TEXT, icon TEXT,
+      is_active INTEGER NOT NULL DEFAULT 1, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_pipeline_stages_pipeline ON pipeline_stages(pipeline_id, sort_order);
+    CREATE TABLE IF NOT EXISTS opportunities (
+      id SERIAL PRIMARY KEY, lead_id INTEGER NOT NULL, name TEXT NOT NULL,
+      opportunity_type_id INTEGER, pipeline_id INTEGER NOT NULL, stage_id INTEGER NOT NULL,
+      owner_user_id INTEGER, amount NUMERIC(12,2) DEFAULT 0, currency TEXT NOT NULL DEFAULT 'INR',
+      probability INTEGER DEFAULT 0, expected_close_date DATE, actual_close_date DATE,
+      closed_won INTEGER NOT NULL DEFAULT 0, closed_lost INTEGER NOT NULL DEFAULT 0,
+      lost_reason TEXT, source TEXT, campaign_id INTEGER, description TEXT,
+      next_followup_at TIMESTAMPTZ, meta_json JSONB, created_by INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_opportunities_lead ON opportunities(lead_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_opportunities_owner_stage ON opportunities(owner_user_id, stage_id);
+    CREATE INDEX IF NOT EXISTS idx_opportunities_pipeline_stage ON opportunities(pipeline_id, stage_id);
+    CREATE TABLE IF NOT EXISTS opportunity_stage_history (
+      id SERIAL PRIMARY KEY, opportunity_id INTEGER NOT NULL,
+      from_stage_id INTEGER, to_stage_id INTEGER NOT NULL,
+      duration_in_prev_stage_s INTEGER, changed_by INTEGER, note TEXT,
+      changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_opp_stage_hist_opp ON opportunity_stage_history(opportunity_id, changed_at);
+    CREATE TABLE IF NOT EXISTS opportunity_line_items (
+      id SERIAL PRIMARY KEY, opportunity_id INTEGER NOT NULL, product_id INTEGER,
+      description TEXT, qty NUMERIC(10,2) DEFAULT 1, unit_price NUMERIC(12,2) DEFAULT 0,
+      discount_pct NUMERIC(5,2) DEFAULT 0, gst_pct NUMERIC(5,2) DEFAULT 0,
+      line_total NUMERIC(12,2) DEFAULT 0, sort_order INTEGER DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_opp_line_opp ON opportunity_line_items(opportunity_id);
+    CREATE TABLE IF NOT EXISTS opportunity_activities (
+      id SERIAL PRIMARY KEY, opportunity_id INTEGER NOT NULL, user_id INTEGER,
+      activity_type TEXT NOT NULL, summary TEXT, scheduled_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ, outcome TEXT, duration_min INTEGER, meta_json JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_opp_act_opp ON opportunity_activities(opportunity_id, created_at DESC);
+    CREATE TABLE IF NOT EXISTS opportunity_docs (
+      id SERIAL PRIMARY KEY, opportunity_id INTEGER NOT NULL, name TEXT NOT NULL,
+      url TEXT NOT NULL DEFAULT '', category TEXT NOT NULL DEFAULT '',
+      uploaded_by INTEGER, uploaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_opp_docs_opp ON opportunity_docs(opportunity_id);
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS opp_count INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE statuses ADD COLUMN IF NOT EXISTS creates_opportunity INTEGER NOT NULL DEFAULT 0;
+  ` },
 ];
 
 /**

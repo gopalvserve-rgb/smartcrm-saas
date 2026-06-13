@@ -389,3 +389,12 @@ SELECT 'feature',
        '🎓',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Student 360 — full single-page view for every student (Education pack)');
+
+-- 2026-06-13 OPPORTUNITIES_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'Opportunities & Multiple Pipelines — track every deal a lead can give you',
+       'Big release for sales teams that sell more than one thing per customer. Every lead can now have multiple Opportunities — separate deals with their own name, type, owner, amount, expected close date, probability and stage. Each opportunity moves through its own Pipeline, and admins can run multiple pipelines side-by-side (e.g. New Business, Renewal, Upsell, Service Booking, Channel Partner) — each with its own custom stages, win probabilities and terminal Won/Lost rules. Stage changes are auto-logged to a history timeline so you can see exactly how long a deal sat in every stage. Line items (with GST + discounts), activities, documents and won/lost reasons all attach to the opportunity, not the lead. Includes 5 reports — Funnel by stage, Weighted Forecast, Win/Loss with top loss reasons, Velocity (avg time in each stage), and Aging (deals stuck longer than the stage''s expected days). Disabled by default — admins enable per tenant via Settings (OPPORTUNITIES_ENABLED). Your existing single-pipeline workflow keeps working untouched — opportunities are purely additive.',
+       '💼',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Opportunities & Multiple Pipelines — track every deal a lead can give you');

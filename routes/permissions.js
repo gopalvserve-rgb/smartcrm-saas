@@ -139,7 +139,19 @@ const CATALOG = [
   { key: 'automations.manage',  label: 'Automations — Create / Edit rules' },
   { key: 'rules.manage',        label: 'Auto-assign — Manage rules' },
   // ── PERMISSIONS (admin gate) ────────────────────────────────────────
-  { key: 'permissions.manage',  label: 'Permissions — Edit role matrix (admin only)' }
+  { key: 'permissions.manage',  label: 'Permissions — Edit role matrix (admin only)' },
+  // ── OPPORTUNITIES_v1 (2026-06-13) — multi-opportunity + multi-pipeline ──
+  { key: 'opportunities.view',         label: 'Opportunities — View (own + team)' },
+  { key: 'opportunities.view_all',     label: 'Opportunities — View all (org-wide)' },
+  { key: 'opportunities.create',       label: 'Opportunities — Create new' },
+  { key: 'opportunities.edit',         label: 'Opportunities — Edit existing' },
+  { key: 'opportunities.delete',       label: 'Opportunities — Delete' },
+  { key: 'opportunities.change_stage', label: 'Opportunities — Change stage' },
+  { key: 'opportunities.bulk_edit',    label: 'Opportunities — Bulk actions' },
+  { key: 'opportunities.close',        label: 'Opportunities — Close as won/lost' },
+  { key: 'pipelines.manage',           label: 'Pipelines — Create / Edit pipelines + stages' },
+  { key: 'opportunities.types_manage', label: 'Opportunities — Manage opportunity types' },
+  { key: 'opportunities.reports',      label: 'Opportunities — View pipeline reports' }
 ];
 
 // Defaults used when no custom matrix is saved

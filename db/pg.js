@@ -555,6 +555,39 @@ const SCHEMA = {
   student_communications: {
     columns: ['lead_id','channel','direction','summary','at','ref_id'],
     json: []
+  },
+  // OPPORTUNITIES_v1
+  opportunity_types: {
+    columns: ['name','default_pipeline_id','default_amount','default_probability','default_close_days','icon','color','is_active','sort_order','created_at'],
+    json: []
+  },
+  pipelines: {
+    columns: ['name','description','is_default','is_active','sort_order','created_at'],
+    json: []
+  },
+  pipeline_stages: {
+    columns: ['pipeline_id','name','sort_order','win_probability','is_terminal_win','is_terminal_loss','expected_days','color','icon','is_active','created_at'],
+    json: []
+  },
+  opportunities: {
+    columns: ['lead_id','name','opportunity_type_id','pipeline_id','stage_id','owner_user_id','amount','currency','probability','expected_close_date','actual_close_date','closed_won','closed_lost','lost_reason','source','campaign_id','description','next_followup_at','meta_json','created_by','created_at','updated_at'],
+    json: ['meta_json']
+  },
+  opportunity_stage_history: {
+    columns: ['opportunity_id','from_stage_id','to_stage_id','duration_in_prev_stage_s','changed_by','note','changed_at'],
+    json: []
+  },
+  opportunity_line_items: {
+    columns: ['opportunity_id','product_id','description','qty','unit_price','discount_pct','gst_pct','line_total','sort_order'],
+    json: []
+  },
+  opportunity_activities: {
+    columns: ['opportunity_id','user_id','activity_type','summary','scheduled_at','completed_at','outcome','duration_min','meta_json','created_at'],
+    json: ['meta_json']
+  },
+  opportunity_docs: {
+    columns: ['opportunity_id','name','url','category','uploaded_by','uploaded_at'],
+    json: []
   }
 
 };
