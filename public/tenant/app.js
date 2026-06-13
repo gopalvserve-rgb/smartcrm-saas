@@ -4741,19 +4741,17 @@ VIEWS.leads = async (view) => {
       };
       hdr.appendChild(clearLink);
       pop.appendChild(hdr);
-      // Bucket checkboxes
+      // Bucket checkboxes — change handler updates CRM.prefs.filters but does
+      // NOT auto-submit. User must click Apply (added below). This avoids
+      // race conditions where a quick second tick gets lost mid-fetch.
+      const _bucketCbs = [];
       buckets.forEach(b => {
         const row = h('label', { style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0', cursor: 'pointer', fontSize: '.85rem' } });
         const cb = h('input', { type: 'checkbox' });
+        cb.dataset.bucket = b.id;
         cb.checked = f.smart_categories.includes(b.id);
-        cb.onchange = () => {
-          const cur = f.smart_categories;
-          const i = cur.indexOf(b.id);
-          if (cb.checked && i < 0) cur.push(b.id);
-          else if (!cb.checked && i >= 0) cur.splice(i, 1);
-          refreshBtn();
-          CRM._leadsPage = 1; loadLeads({ page: 1 });
-        };
+        cb.onchange = () => { refreshBtn(); };
+        _bucketCbs.push(cb);
         row.appendChild(cb);
         row.appendChild(h('span', null, b.icon + ' ' + b.label));
         pop.appendChild(row);
@@ -4764,19 +4762,34 @@ VIEWS.leads = async (view) => {
       const sliderInner = h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } });
       const rng = h('input', { type: 'range', min: '0', max: '100', step: '5', value: String(Number(f.smart_score_min || 0)), style: { flex: '1' } });
       const out = h('span', { class: 'f-smart-min-out', style: { fontSize: '.8rem', fontWeight: '600', color: '#475569', minWidth: '24px', textAlign: 'right' } }, String(Number(f.smart_score_min || 0)));
-      let _rngTimer;
-      rng.oninput = () => { out.textContent = rng.value; };
-      rng.onchange = () => {
-        clearTimeout(_rngTimer);
-        _rngTimer = setTimeout(() => {
-          f.smart_score_min = Number(rng.value) || 0;
-          refreshBtn();
-          CRM._leadsPage = 1; loadLeads({ page: 1 });
-        }, 120);
-      };
+      rng.oninput = () => { out.textContent = rng.value; refreshBtn(); };
+      rng.onchange = () => { out.textContent = rng.value; refreshBtn(); };
       sliderInner.appendChild(rng); sliderInner.appendChild(out);
       sliderRow.appendChild(sliderInner);
       pop.appendChild(sliderRow);
+      // Apply button — explicit submission. Atomically rebuilds the filter
+      // state from the current checkbox + slider values, then reloads. This
+      // is more reliable than per-control auto-apply (which can race on
+      // quick consecutive ticks).
+      const applyRow = h('div', { style: { marginTop: '10px', paddingTop: '8px', borderTop: '1px solid #f1f5f9', display: 'flex', justifyContent: 'flex-end', gap: '8px' } });
+      const applyBtn = h('button', {
+        type: 'button',
+        style: { padding: '6px 14px', borderRadius: '6px', border: 'none', background: '#6366f1', color: '#fff', cursor: 'pointer', fontSize: '.82rem', fontWeight: '600' }
+      }, 'Apply Filter');
+      applyBtn.onclick = () => {
+        // Rebuild from live DOM state — single source of truth
+        const picked = [];
+        _bucketCbs.forEach(cb => { if (cb.checked) picked.push(cb.dataset.bucket); });
+        f.smart_categories.length = 0;
+        picked.forEach(p => f.smart_categories.push(p));
+        f.smart_score_min = Number(rng.value) || 0;
+        refreshBtn();
+        pop.style.display = 'none';
+        CRM._leadsPage = 1;
+        loadLeads({ page: 1 });
+      };
+      applyRow.appendChild(applyBtn);
+      pop.appendChild(applyRow);
       // Toggle on button click
       btn.onclick = (ev) => {
         ev.stopPropagation();
