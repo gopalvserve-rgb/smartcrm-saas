@@ -806,3 +806,19 @@ module.exports = {
   api_oppReports_funnel, api_oppReports_forecast, api_oppReports_winLoss,
   api_oppReports_velocity, api_oppReports_aging
 };
+
+/**
+ * Lightweight public "is enabled?" check for the SPA.
+ * Reads the OPPORTUNITIES_ENABLED config and returns a flat boolean.
+ * Auth'd so we know the user's tenant.
+ */
+async function api_opportunities_status(token) {
+  await authUser(token);
+  try {
+    const r = await require('../db/pg').findOneBy('config', 'key', 'OPPORTUNITIES_ENABLED').catch(() => null);
+    const v = r ? String(r.value || '').trim() : '';
+    return { enabled: v === '1' };
+  } catch (_) { return { enabled: false }; }
+}
+
+module.exports.api_opportunities_status = api_opportunities_status;

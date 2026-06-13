@@ -804,6 +804,12 @@ async function apiRaw(fn, ...args) {
       const qn = await api('api_leads_quickNote_status').catch(() => null);
       if (qn && qn.enabled) CRM.config.QNOTE_ENABLED = 1;
     } catch (_) {}
+    /* OPPORTUNITIES_v1 — lazy fetch tenant flag so the Lead-modal Opportunities tab
+     * only renders for tenants where Settings → OPPORTUNITIES_ENABLED = 1. */
+    try {
+      const op = await api('api_opportunities_status').catch(() => null);
+      if (op && op.enabled) CRM.config.OPPORTUNITIES_ENABLED = '1';
+    } catch (_) {}
   } catch (_) {}
   // Apply tenant theme as EARLY as possible — before login screen renders
   // and before warmCache. Public api_admin_brand returns brand colours
