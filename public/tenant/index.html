@@ -162,18 +162,23 @@
         // Wait for DOMContentLoaded before injecting scripts.
         function injectSpaScripts() {
           var s = document.createElement('script');
-          s.src = 'app.js?v=2026-06-13-opp-v1-p2d';
+          s.src = 'app.js?v=2026-06-13-ls-v1-p1';
           // STU360_LIVE_v1 — Student 360 view (Education pack only)
           var st = document.createElement('script');
-          st.src = 'student360.js?v=2026-06-13-opp-v1-p2d';
+          st.src = 'student360.js?v=2026-06-13-ls-v1-p1';
           st.defer = true;
           document.body.appendChild(st);
           document.body.appendChild(s);
           // OPPORTUNITIES_v1 P2 — Lead modal Opportunities tab
           var oppJs = document.createElement('script');
-          oppJs.src = 'opportunities.js?v=2026-06-13-opp-v1-p2d';
+          oppJs.src = 'opportunities.js?v=2026-06-13-ls-v1-p1';
           oppJs.defer = true;
           document.body.appendChild(oppJs);
+          // LEAD_SCORING_v1 P1 — Smart Lead Scoring
+          var lsJs = document.createElement('script');
+          lsJs.src = 'leadScoring.js?v=2026-06-13-ls-v1-p1';
+          lsJs.defer = true;
+          document.body.appendChild(lsJs);
           var c = document.createElement('script');
           c.src = 'caller-id-native.js?v=2026-05-24-tokenkey';
           document.body.appendChild(c);

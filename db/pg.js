@@ -588,6 +588,23 @@ const SCHEMA = {
   opportunity_docs: {
     columns: ['opportunity_id','name','url','category','uploaded_by','uploaded_at'],
     json: []
+  },
+  // LEAD_SCORING_v1
+  lead_score_rules: {
+    columns: ['pack','bucket','event_key','label','points','why','is_active','is_admin_override','cap_at_bucket_max','sort_order','created_at','updated_at'],
+    json: []
+  },
+  lead_score_settings: {
+    columns: ['hot_threshold','warm_threshold','nurture_threshold','hot_sla_minutes','warm_sla_minutes','nurture_sla_hours','decay_7d_points','decay_15d_points','decay_30d_points','recompute_on_every_event','is_enabled','updated_at'],
+    json: []
+  },
+  lead_score_log: {
+    columns: ['lead_id','old_score','new_score','delta','trigger_event','breakdown_json','reason_text','changed_by','changed_at'],
+    json: ['breakdown_json']
+  },
+  lead_score_overrides: {
+    columns: ['lead_id','override_category','reason','set_by','set_at','expires_at'],
+    json: []
   }
 
 };

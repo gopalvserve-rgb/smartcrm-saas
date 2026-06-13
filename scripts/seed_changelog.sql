@@ -398,3 +398,12 @@ SELECT 'feature',
        '💼',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Opportunities & Multiple Pipelines — track every deal a lead can give you');
+
+-- LEAD_SCORING_v1 P1
+INSERT INTO changelog (version, title, body, icon, created_at)
+SELECT 'ls-v1-p1',
+       'Smart Lead Scoring — every lead gets a Hot/Warm/Cold score automatically',
+       'A new AI-style scoring engine looks at every lead and assigns a 0–100 Smart Score, bucketed into Hot / Warm / Nurture / Cold / Invalid. It scores six things — Source quality, Fit (industry/budget/role), Engagement (opens, clicks, replies, site visits, attendance), Communication (responsiveness, no-shows, ghosting), Application/Payment intent (tokens, brochure downloads, demo requests), and Negative signals (spam keywords, fake numbers, opt-outs). Includes a universal base layer plus deep per-pack rule sets for Education (parent-meet, fee-talk, application-form, brochure), Real Estate (site-visit booked/done, EOI, token), and Generic (demo, quote, contract). 110+ rules ship pre-seeded — admins can tune weights, thresholds and decay later. Each lead modal shows a Score Card with the live score, category, top contributing factors, and a per-rule breakdown. A new High-Intent Leads dashboard surfaces every Hot lead across the org, sorted by score. Override flow lets admins manually pin a score with reason. Disabled by default — enable per tenant via Settings → Lead Scoring (LEAD_SCORING_ENABLED).',
+       '🎯',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Smart Lead Scoring — every lead gets a Hot/Warm/Cold score automatically');

@@ -1703,6 +1703,8 @@ const NAV_GROUPS = [
     { id: 'reportbuilder', label: 'Report Builder',    icon: '🧪', roles: ['admin', 'manager', 'team_leader'], search: 'builder custom report create report' },
     { id: 'tatreport',     label: 'TAT Report',        icon: '⏱️', roles: ['admin', 'manager', 'team_leader'], search: 'tat turnaround time response time' },
     { id: 'activityreport', label: 'Activity Report',  icon: '📝', roles: ['admin', 'manager', 'team_leader'], search: 'activity report user activity work report' },
+    { id: 'leadscoring',    label: 'High-Intent Leads',  icon: '🎯', search: 'lead scoring hot leads warm leads smart score high intent' },
+    { id: 'leadscoringsettings', label: 'Lead Scoring Settings', icon: '⚙', roles: ['admin', 'manager'], search: 'lead scoring settings thresholds rules' },
     { id: 'whatsappreport', label: 'WhatsApp Report',  icon: '💬', roles: ['admin', 'manager', 'team_leader'], search: 'whatsapp report message report whatsapp analytics' },
     { id: 'campaignreport', label: 'Campaign Report',  icon: '📊', roles: ['admin', 'manager', 'team_leader'], search: 'campaign report campaign analytics' }
   ] },

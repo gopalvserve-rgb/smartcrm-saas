@@ -371,6 +371,55 @@ const SCHEMA_MIGRATIONS = [
     ALTER TABLE leads ADD COLUMN IF NOT EXISTS opp_count INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE statuses ADD COLUMN IF NOT EXISTS creates_opportunity INTEGER NOT NULL DEFAULT 0;
   ` },
+  { name: '2026_06_13_lead_scoring_tables', sql: `
+    CREATE TABLE IF NOT EXISTS lead_score_rules (
+      id SERIAL PRIMARY KEY,
+      code TEXT NOT NULL,
+      bucket TEXT NOT NULL,
+      label TEXT NOT NULL,
+      why TEXT,
+      pack TEXT NOT NULL DEFAULT 'universal',
+      weight INTEGER NOT NULL DEFAULT 0,
+      decay_days INTEGER DEFAULT 0,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      meta_json JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_lsr_pack_bucket ON lead_score_rules(pack, bucket, is_active);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_lsr_code_pack ON lead_score_rules(code, pack);
+    CREATE TABLE IF NOT EXISTS lead_score_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+    CREATE TABLE IF NOT EXISTS lead_score_log (
+      id SERIAL PRIMARY KEY,
+      lead_id INTEGER NOT NULL,
+      old_score INTEGER,
+      new_score INTEGER,
+      old_category TEXT,
+      new_category TEXT,
+      reason TEXT,
+      breakdown_json JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_lsl_lead ON lead_score_log(lead_id, created_at DESC);
+    CREATE TABLE IF NOT EXISTS lead_score_overrides (
+      lead_id INTEGER PRIMARY KEY,
+      pinned_score INTEGER,
+      pinned_category TEXT,
+      reason TEXT,
+      set_by INTEGER,
+      set_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS smart_score INTEGER;
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS smart_category TEXT;
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS score_reason TEXT;
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS score_breakdown_json JSONB;
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS score_updated_at TIMESTAMPTZ;
+    CREATE INDEX IF NOT EXISTS idx_leads_smart_score ON leads(smart_score DESC NULLS LAST);
+    CREATE INDEX IF NOT EXISTS idx_leads_smart_category ON leads(smart_category);
+  ` },
 ];
 
 /**
