@@ -349,9 +349,11 @@
           wrap.className = 'opp-panel-wrap';
           wrap.style.cssText = 'margin:16px 0;background:#fff;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden';
 
-          // Append before .actions footer if present, else at end
+          // Append before .actions footer if present, else at end.
+          // Use actions.parentNode so nesting depth doesnt matter.
           const actions = modalBody.querySelector('.actions');
-          if (actions) modalBody.insertBefore(wrap, actions); else modalBody.appendChild(wrap);
+          if (actions && actions.parentNode) actions.parentNode.insertBefore(wrap, actions);
+          else modalBody.appendChild(wrap);
 
           _renderPanelInto(wrap, id);
         } catch (e) { console.warn('[opp] inject failed', e); }
