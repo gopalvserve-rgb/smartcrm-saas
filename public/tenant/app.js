@@ -5694,30 +5694,31 @@ function renderLeadsTable(rows) {
     buckets.forEach((b, idx) => {
       const list = grouped[b.id.toLowerCase()] || [];
       if (!list.length) return;
-      // P1.11 — spacer row BETWEEN buckets so sections feel visually separated
+      // P1.12 — light spacer row BETWEEN buckets (single white row, no borders)
       if (anyShown) {
         tbody.appendChild(h('tr', { class: 'bucket-gap' },
-          h('td', { colspan: totalCols, style: { padding: '0', height: '18px', background: '#fff', border: '0' } })
+          h('td', { colspan: totalCols, style: { padding: '0', height: '14px', background: '#fff', border: '0', boxShadow: 'none' } })
         ));
       }
       anyShown = true;
-      // P1.11 — bucket header: strong left rail + bottom underline that matches row tints
+      // P1.12 — clean header band: left rail + colored bottom underline ONLY (no right/top borders)
       const hdrTd = h('td', {
         colspan: totalCols,
         style: {
           background: b.bg,
-          padding: '14px 18px',
-          borderLeft: '6px solid ' + b.color,
-          borderTop: '1px solid ' + b.color + '55',
-          borderRight: '1px solid ' + b.color + '33',
-          borderBottom: '2px solid ' + b.color
+          padding: '12px 16px',
+          boxShadow: 'inset 5px 0 0 0 ' + b.color,
+          borderBottom: '2px solid ' + b.color,
+          borderTop: '0',
+          borderLeft: '0',
+          borderRight: '0'
         }
       },
-        h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px' } },
-          h('span', { style: { fontSize: '1.25rem', lineHeight: '1' } }, b.icon),
-          h('span', { style: { fontWeight: '800', color: b.color, fontSize: '1.05rem', letterSpacing: '.2px' } }, b.label),
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
+          h('span', { style: { fontSize: '1.1rem', lineHeight: '1' } }, b.icon),
+          h('span', { style: { fontWeight: '700', color: b.color, fontSize: '.98rem', letterSpacing: '.2px' } }, b.label),
           h('span', {
-            style: { background: b.pillBg, color: b.color, padding: '3px 12px', borderRadius: '999px', fontSize: '.75rem', fontWeight: '700', border: '1.5px solid ' + b.color + '88' }
+            style: { background: '#fff', color: b.color, padding: '2px 10px', borderRadius: '999px', fontSize: '.72rem', fontWeight: '700', border: '1px solid ' + b.color + '66' }
           }, list.length + ' Leads')
         )
       );
@@ -5735,13 +5736,9 @@ function renderLeadsTable(rows) {
           renderLeadsTable(rows);
         };
         tbody.appendChild(h('tr', { class: 'bucket-more' },
-          h('td', { colspan: totalCols, style: { textAlign: 'center', padding: '10px', background: b.bg, borderLeft: '6px solid ' + b.color, borderRight: '1px solid ' + b.color + '33' } }, moreLink)
+          h('td', { colspan: totalCols, style: { textAlign: 'center', padding: '10px', background: '#fafafa', borderBottom: '1px solid #e2e8f0' } }, moreLink)
         ));
       }
-      // P1.11 — bucket FOOTER bar closes the section visually
-      tbody.appendChild(h('tr', { class: 'bucket-end' },
-        h('td', { colspan: totalCols, style: { padding: '0', height: '4px', background: b.color, opacity: '.45', border: '0' } })
-      ));
     });
     // Show an "Invalid: N hidden" footnote if there are Invalid rows
     const invCount = (grouped['invalid'] || []).length;
