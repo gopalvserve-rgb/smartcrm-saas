@@ -401,5 +401,11 @@
   }
 
   // Expose for debugging
-  window.LS_v1 = { recompute: (id) => _api('api_leadScore_recompute', id), probe: _probeEnabled, status: () => _api('api_leadScore_status') };
+  window.LS_v1 = {
+    recompute: (id) => _api('api_leadScore_recompute', id),
+    probe: _probeEnabled,
+    status: () => _api('api_leadScore_status'),
+    renderDashboard: (view) => _renderHotLeadsDashboard(view),
+    renderSettings: (view) => _renderSettings(view),
+  };
 })();

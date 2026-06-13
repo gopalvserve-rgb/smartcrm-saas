@@ -47271,6 +47271,17 @@ VIEWS.student360 = async (view) => {
   ));
 };
 
+// LEAD_SCORING_v1 — High-Intent Leads dashboard + Settings page
+// Delegated to /public/tenant/leadScoring.js (window.LS_v1.renderDashboard / renderSettings).
+VIEWS.leadscoring = async (view) => {
+  if (window.LS_v1 && typeof window.LS_v1.renderDashboard === 'function') return window.LS_v1.renderDashboard(view);
+  view.innerHTML = '<div style="padding:40px;text-align:center;color:#64748b">⏳ Lead Scoring module is loading — refresh in a moment.</div>';
+};
+VIEWS.leadscoringsettings = async (view) => {
+  if (window.LS_v1 && typeof window.LS_v1.renderSettings === 'function') return window.LS_v1.renderSettings(view);
+  view.innerHTML = '<div style="padding:40px;text-align:center;color:#64748b">⏳ Lead Scoring Settings is loading — refresh in a moment.</div>';
+};
+
 VIEWS.activityreport = async (view) => {
   view.innerHTML = '';
   view.appendChild(h('h3', {}, '📝 Activity Report'));
