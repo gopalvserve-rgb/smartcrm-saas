@@ -5041,6 +5041,26 @@ function clearFilters() {
   CRM.prefs.filters = {};
   try { localStorage.setItem('crm_filters', '{}'); } catch (_) {}
   try { localStorage.removeItem('crm_filters_q'); } catch (_) {}
+  // LEADS_RESET_CLEARS_RULES_v1 — rule-builder rules persist in
+  // localStorage under their storageKey. Without wiping them here a
+  // user who clicked Apply on a Custom-field rule (e.g. "Page Name
+  // does not contain New Shop") couldn't escape that rule via Reset —
+  // they had to re-open the modal and manually delete each row.
+  // Wipe all rule-builder slices for every page that uses one.
+  try {
+    [
+      'crm.leads.rules.v1',
+      'crm.pipeline.rules.v1',
+      'crm.followups.rules.v1',
+      'crm.tat.rules.v1',
+      'crm.reports.rules.v1',
+      'crm.reportbuilder.rules.v1'
+    ].forEach(k => { try { localStorage.removeItem(k); } catch (_) {} });
+  } catch (_) {}
+  // Also clear the in-memory rules on the leads rule-button so the
+  // very next loadLeads() call doesn't read stale rules from the
+  // already-rendered button before navigateTo rebuilds the toolbar.
+  try { if (window._leadsRuleBtn && window._leadsRuleBtn.setRules) window._leadsRuleBtn.setRules([]); } catch (_) {}
   CRM._leadsPage = 1;
   toast('Filters cleared', 'ok');
   navigateTo('leads');
