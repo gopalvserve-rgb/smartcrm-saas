@@ -940,6 +940,11 @@ function parseHashView() {
   const m = String(location.hash).match(/^#\/([a-z_-]+)/i);
   return m ? m[1] : null;
 }
+// STU360_PAGE_v2: extract trailing numeric id from hash, e.g. '#/student360/42' → 42
+function parseHashId() {
+  const m = String(location.hash).match(/\/(\d+)(?:\/|$|\?)/);
+  return m ? parseInt(m[1], 10) : null;
+}
 
 // NOTIF_TOGGLE_v2 (2026-06-02) ------------------------------------------
 //   CRM._notifEnabled is a client-side cache of users.notifications_enabled.
@@ -47232,6 +47237,22 @@ try { window._openActivityDrillModal = _openActivityDrillModal; } catch (_) {}
 
 
 /* Manager / admin Activity Report — caller-wise + day-wise grid. */
+/* STU360_PAGE_v2 — Student 360 full-page route.
+ * Reads lead_id from '#/student360/<id>' and delegates to
+ * window.renderStudent360Page (defined in /public/tenant/student360.js).
+ */
+VIEWS.student360 = async (view) => {
+  const leadId = parseHashId();
+  if (typeof window.renderStudent360Page === 'function') {
+    return window.renderStudent360Page(view, leadId);
+  }
+  view.innerHTML = '';
+  view.appendChild(h('div', { style: { padding: '40px', textAlign: 'center', color: '#64748b' } },
+    h('div', { style: { fontSize: '32px', marginBottom: '12px' } }, '⏳'),
+    h('div', {}, 'Student 360 module is loading - refresh in a moment.')
+  ));
+};
+
 VIEWS.activityreport = async (view) => {
   view.innerHTML = '';
   view.appendChild(h('h3', {}, '📝 Activity Report'));
