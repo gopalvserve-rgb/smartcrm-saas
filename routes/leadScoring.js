@@ -685,13 +685,13 @@ async function api_leadScore_hotList(token, opts) {
   const params = [];
   if (opts.category) { params.push(opts.category); where.push(`l.smart_category = $${params.length}`); }
   else { where.push(`l.smart_category IN ('Hot', 'Warm')`); }
-  if (opts.owner === 'mine' || me.role === 'sales') { params.push(me.id); where.push(`l.assigned_user_id = $${params.length}`); }
-  else if (opts.owner_user_id) { params.push(opts.owner_user_id); where.push(`l.assigned_user_id = $${params.length}`); }
+  if (opts.owner === 'mine' || me.role === 'sales') { params.push(me.id); where.push(`l.assigned_to = $${params.length}`); }
+  else if (opts.owner_user_id) { params.push(opts.owner_user_id); where.push(`l.assigned_to = $${params.length}`); }
   const sql = `SELECT l.id, l.name, l.phone, l.source, l.smart_score, l.smart_category, l.score_reason, l.score_updated_at,
                       u.name AS owner_name, s.name AS status_name,
                       (SELECT MAX(created_at) FROM lead_actions WHERE lead_id = l.id) AS last_activity_at
                  FROM leads l
-                 LEFT JOIN users u ON u.id = l.assigned_user_id
+                 LEFT JOIN users u ON u.id = l.assigned_to
                  LEFT JOIN statuses s ON s.id = l.status_id
                 WHERE ${where.join(' AND ')}
                 ORDER BY l.smart_score DESC, l.score_updated_at DESC
