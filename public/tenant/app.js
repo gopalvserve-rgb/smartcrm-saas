@@ -4777,16 +4777,28 @@ VIEWS.leads = async (view) => {
         style: { padding: '6px 14px', borderRadius: '6px', border: 'none', background: '#6366f1', color: '#fff', cursor: 'pointer', fontSize: '.82rem', fontWeight: '600' }
       }, 'Apply Filter');
       applyBtn.onclick = () => {
-        // Rebuild from live DOM state — single source of truth
+        // Rebuild from live DOM state — single source of truth.
+        // P1.8d: write directly to CRM.prefs.filters (not via closure 'f')
+        // so we always hit the live reference even if filter row re-rendered.
         const picked = [];
         _bucketCbs.forEach(cb => { if (cb.checked) picked.push(cb.dataset.bucket); });
-        f.smart_categories.length = 0;
-        picked.forEach(p => f.smart_categories.push(p));
-        f.smart_score_min = Number(rng.value) || 0;
+        const minScore = Number(rng.value) || 0;
+        if (!CRM.prefs.filters) CRM.prefs.filters = {};
+        CRM.prefs.filters.smart_categories = picked;
+        CRM.prefs.filters.smart_score_min = minScore;
+        try { console.log('[SmartScore] apply:', { categories: picked, min: minScore }); } catch(_){}
         refreshBtn();
         pop.style.display = 'none';
         CRM._leadsPage = 1;
         loadLeads({ page: 1 });
+        // Toast so the user knows the apply actually fired.
+        try {
+          const t = h('div', {
+            style: { position: 'fixed', bottom: '20px', left: '50%', transform: 'translateX(-50%)', background: '#1e293b', color: '#fff', padding: '8px 16px', borderRadius: '8px', fontSize: '.85rem', zIndex: '9999', boxShadow: '0 4px 12px rgba(0,0,0,.2)' }
+          }, '🎯 Filter applied: ' + (picked.length ? picked.join(', ') : 'all') + (minScore > 0 ? ' · min ' + minScore : ''));
+          document.body.appendChild(t);
+          setTimeout(() => { try { t.remove(); } catch(_){} }, 1600);
+        } catch(_){}
       };
       applyRow.appendChild(applyBtn);
       pop.appendChild(applyRow);
