@@ -30,13 +30,25 @@
   function _fmtMoney(n) { const v = Number(n) || 0; return '₹' + v.toLocaleString('en-IN', { maximumFractionDigits: 0 }); }
   function _fmtDate(d) { if (!d) return '—'; try { return new Date(d).toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' }); } catch (_) { return d; } }
 
-  function _isEnabled() {
+  // Self-cached flag — populated by _probeEnabled() lazily.
+  let _enabledCache = null;
+  async function _probeEnabled() {
+    if (_enabledCache !== null) return _enabledCache;
     try {
-      const cfg = (window.CRM && window.CRM.config) || {};
-      const v = cfg.OPPORTUNITIES_ENABLED;
-      return v === '1' || v === 1 || v === true || v === 'true';
-    } catch (_) { return false; }
+      // First check CRM.config if the host exposes it
+      if (window.CRM && window.CRM.config && (window.CRM.config.OPPORTUNITIES_ENABLED === '1' || window.CRM.config.OPPORTUNITIES_ENABLED === 1)) {
+        _enabledCache = true; return true;
+      }
+      // Otherwise probe the backend directly
+      if (typeof window.api === 'function') {
+        const r = await window.api('api_opportunities_status').catch(() => null);
+        _enabledCache = !!(r && r.enabled);
+        return _enabledCache;
+      }
+    } catch (_) {}
+    _enabledCache = false; return false;
   }
+  function _isEnabled() { return _enabledCache === true; }
 
   // ── Cache pipelines + users so render is instant ──
   const _cache = { pipelines: null, users: null, types: null };
@@ -324,7 +336,8 @@
       //  - feature flag is on
       //  - this is an existing lead (id present), not a brand-new one
       if (!id) return r;
-      if (!_isEnabled()) return r;
+      const enabled = await _probeEnabled();
+      if (!enabled) return r;
       setTimeout(() => {
         try {
           // Find the most recently opened modal body
@@ -355,5 +368,5 @@
   }
 
   // Expose for manual testing in console
-  window.OPP_v1 = { renderPanelInto: _renderPanelInto, openEditor: _openOppEditor, isEnabled: _isEnabled, warm: _warm };
+  window.OPP_v1 = { renderPanelInto: _renderPanelInto, openEditor: _openOppEditor, isEnabled: _isEnabled, probe: _probeEnabled, warm: _warm };
 })();

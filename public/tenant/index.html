@@ -162,16 +162,16 @@
         // Wait for DOMContentLoaded before injecting scripts.
         function injectSpaScripts() {
           var s = document.createElement('script');
-          s.src = 'app.js?v=2026-06-13-opp-v1-p2';
+          s.src = 'app.js?v=2026-06-13-opp-v1-p2b';
           // STU360_LIVE_v1 — Student 360 view (Education pack only)
           var st = document.createElement('script');
-          st.src = 'student360.js?v=2026-06-13-opp-v1-p2';
+          st.src = 'student360.js?v=2026-06-13-opp-v1-p2b';
           st.defer = true;
           document.body.appendChild(st);
           document.body.appendChild(s);
           // OPPORTUNITIES_v1 P2 — Lead modal Opportunities tab
           var oppJs = document.createElement('script');
-          oppJs.src = 'opportunities.js?v=2026-06-13-opp-v1-p2';
+          oppJs.src = 'opportunities.js?v=2026-06-13-opp-v1-p2b';
           oppJs.defer = true;
           document.body.appendChild(oppJs);
           var c = document.createElement('script');
