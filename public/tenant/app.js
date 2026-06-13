@@ -4802,10 +4802,21 @@ VIEWS.leads = async (view) => {
       };
       applyRow.appendChild(applyBtn);
       pop.appendChild(applyRow);
-      // Toggle on button click
+      // Toggle on button click — and RE-SYNC checkboxes from live state
+      // so reopening the dropdown reflects whatever is actually filtered.
+      // Without this, stale checked-state from initial render produces
+      // surprise multi-bucket results when user ticks one box.
       btn.onclick = (ev) => {
         ev.stopPropagation();
-        pop.style.display = pop.style.display === 'block' ? 'none' : 'block';
+        const opening = pop.style.display !== 'block';
+        if (opening) {
+          const live = Array.isArray(CRM.prefs.filters && CRM.prefs.filters.smart_categories) ? CRM.prefs.filters.smart_categories : [];
+          _bucketCbs.forEach(cb => { cb.checked = live.includes(cb.dataset.bucket); });
+          const liveMin = Number((CRM.prefs.filters && CRM.prefs.filters.smart_score_min) || 0);
+          rng.value = String(liveMin);
+          out.textContent = String(liveMin);
+        }
+        pop.style.display = opening ? 'block' : 'none';
       };
       // Outside-click close
       const docClose = (ev) => {
