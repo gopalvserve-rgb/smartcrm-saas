@@ -937,7 +937,9 @@ async function apiRaw(fn, ...args) {
 })();
 
 function parseHashView() {
-  const m = String(location.hash).match(/^#\/([a-z_-]+)/i);
+  // STU360_PAGE_v2_HOTFIX: regex must allow digits too — view ids like
+  // 'student360' contain numbers; old [a-z_-]+ stopped at the digit.
+  const m = String(location.hash).match(/^#\/([a-z0-9_-]+)/i);
   return m ? m[1] : null;
 }
 // STU360_PAGE_v2: extract trailing numeric id from hash, e.g. '#/student360/42' → 42
