@@ -632,17 +632,37 @@ tbody tr.row-tat-violation:hover { background: #fee2e2; }
    left rail. Loud Hot/Warm; quiet Nurture/Cold so most-of-list doesn't
    become a rainbow. Status pills inside the row get a white bg so they
    stay legible on the coloured row. */
-tbody tr.ls-row > td { transition: background .12s ease; }
-tbody tr.ls-hot     { background: #FCEBEB; box-shadow: inset 5px 0 0 0 #E24B4A; }
-tbody tr.ls-hot:hover    { background: #f8d7d7; }
-tbody tr.ls-warm    { background: #FAEEDA; box-shadow: inset 5px 0 0 0 #EF9F27; }
-tbody tr.ls-warm:hover   { background: #f4dfb8; }
-tbody tr.ls-nurture { background: #F0F9F4; box-shadow: inset 5px 0 0 0 #1D9E75; }
-tbody tr.ls-nurture:hover{ background: #e1f1e6; }
-tbody tr.ls-cold    { background: #F1F6FB; box-shadow: inset 5px 0 0 0 #378ADD; }
-tbody tr.ls-cold:hover   { background: #e3eef8; }
-tbody tr.ls-invalid { background: #F1EFE8; box-shadow: inset 5px 0 0 0 #888780; opacity: .82; }
-tbody tr.ls-invalid:hover{ background: #e4e1d6; }
+/* LEAD_SCORING_v1 P1.8 — Variant 2 row styling. Cells override the tr bg, so
+   apply colour to each td. Rail goes on first td (1st row cell is the checkbox td). */
+tbody tr.ls-row > td { transition: background .12s ease; background: transparent; }
+tbody tr.ls-hot     > td { background: #FCEBEB !important; }
+tbody tr.ls-warm    > td { background: #FAEEDA !important; }
+tbody tr.ls-nurture > td { background: #F0F9F4 !important; }
+tbody tr.ls-cold    > td { background: #F1F6FB !important; }
+tbody tr.ls-invalid > td { background: #F1EFE8 !important; }
+tbody tr.ls-hot:hover     > td { background: #f8d7d7 !important; }
+tbody tr.ls-warm:hover    > td { background: #f4dfb8 !important; }
+tbody tr.ls-nurture:hover > td { background: #e1f1e6 !important; }
+tbody tr.ls-cold:hover    > td { background: #e3eef8 !important; }
+tbody tr.ls-invalid:hover > td { background: #e4e1d6 !important; }
+tbody tr.ls-invalid { opacity: .82; }
+/* Thick left rail on first cell so it survives the td background */
+tbody tr.ls-hot     > td:first-child { box-shadow: inset 5px 0 0 0 #E24B4A; }
+tbody tr.ls-warm    > td:first-child { box-shadow: inset 5px 0 0 0 #EF9F27; }
+tbody tr.ls-nurture > td:first-child { box-shadow: inset 5px 0 0 0 #1D9E75; }
+tbody tr.ls-cold    > td:first-child { box-shadow: inset 5px 0 0 0 #378ADD; }
+tbody tr.ls-invalid > td:first-child { box-shadow: inset 5px 0 0 0 #888780; }
+/* Bucket icon prefix on the Name cell — 2nd <td> after the checkbox cell */
+tbody tr.ls-hot     > td:nth-child(2) > div:first-child::before,
+tbody tr.ls-hot     > td:nth-child(2)::before { content: '🔥 '; }
+tbody tr.ls-warm    > td:nth-child(2) > div:first-child::before,
+tbody tr.ls-warm    > td:nth-child(2)::before { content: '🌿 '; }
+tbody tr.ls-nurture > td:nth-child(2) > div:first-child::before,
+tbody tr.ls-nurture > td:nth-child(2)::before { content: '🌱 '; }
+tbody tr.ls-cold    > td:nth-child(2) > div:first-child::before,
+tbody tr.ls-cold    > td:nth-child(2)::before { content: '❄️ '; }
+tbody tr.ls-invalid > td:nth-child(2) > div:first-child::before,
+tbody tr.ls-invalid > td:nth-child(2)::before { content: '🚫 '; }
 /* TAT violation still wins over score wash — re-apply after .ls-* rules. */
 tbody tr.row-tat-violation { background: #fef2f2; box-shadow: inset 5px 0 0 0 #dc2626; }
 tbody tr.row-tat-violation:hover { background: #fee2e2; }
