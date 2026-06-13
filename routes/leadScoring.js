@@ -595,6 +595,47 @@ async function recomputeLeadScore(leadId, triggerEvent) {
     }
   }
 
+  // LEAD_SCORING_v1 P1.5 — status-name inference so backfill produces sensible
+  // buckets even without lead_actions evidence. Maps the lead's current status
+  // (case-insensitive substring) to bucket bumps. Buyer signals like
+  // "Payment Link", "Demo Done", "Quote Sent" → Application/Engagement (Hot/Warm).
+  // Buyer pushback like "Not Interested", "Junk" → Negative bucket (Invalid/Cold).
+  // Rep activity like "Follow Up", "Demo Scheduled" → Engagement (Warm).
+  // Disabled by leaving status_name blank; admins can override later via rules editor.
+  (function _inferFromStatus(){
+    const sn = String(lead.status_name || '').toLowerCase();
+    if (!sn) return;
+    const bumps = [];
+    // Hot signals — strong buying intent
+    if (/payment\s*link|paid|enroll|booked|won|sale\s*done|sale\s*final|closure/.test(sn)) {
+      bumps.push({ b: 'application', p: 35, label: 'Status: payment / enrolled / booked' });
+    } else if (/demo\s*done|proposal\s*sent|quote\s*sent|quotation\s*sent|site\s*visit\s*done|visit\s*done|token|emi/.test(sn)) {
+      bumps.push({ b: 'application', p: 25, label: 'Status: demo done / proposal / site visit done' });
+    } else if (/negotiation|negotiating/.test(sn)) {
+      bumps.push({ b: 'application', p: 18, label: 'Status: in negotiation' });
+    } else if (/demo\s*sched|demo\s*book|meeting\s*sched|site\s*visit\s*sched|site\s*visit\s*plan|visit\s*plan|callback/.test(sn)) {
+      bumps.push({ b: 'engagement', p: 18, label: 'Status: meeting scheduled' });
+    } else if (/qualified|follow\s*up|follow-up|interested|warm|hot/.test(sn)) {
+      bumps.push({ b: 'engagement', p: 12, label: 'Status: qualified / following up' });
+    } else if (/attempt|contact|connected|reach/.test(sn)) {
+      bumps.push({ b: 'engagement', p: 5, label: 'Status: contact attempted' });
+    } else if (/new|fresh|pending/.test(sn)) {
+      bumps.push({ b: 'engagement', p: 2, label: 'Status: new / fresh lead' });
+    }
+    // Negative signals
+    if (/not\s*interested|junk|spam|fake|invalid|lost|dnd|do\s*not\s*call|wrong\s*number/.test(sn)) {
+      bumps.push({ b: 'negative', p: -60, label: 'Status: not interested / junk / lost' });
+    } else if (/not\s*pick|not\s*reach|unreach|no\s*answer/.test(sn)) {
+      bumps.push({ b: 'communication', p: -15, label: 'Status: not picking up' });
+    } else if (/language\s*problem|language\s*barrier/.test(sn)) {
+      bumps.push({ b: 'communication', p: -20, label: 'Status: language problem' });
+    }
+    for (const x of bumps) {
+      buckets[x.b] = (buckets[x.b] || 0) + x.p;
+      matchedRules.push({ label: x.label, points: x.p, bucket: x.b, why: 'Inferred from current lead status' });
+    }
+  })();
+
   // Cap buckets
   for (const b of Object.keys(buckets)) {
     const cap = BUCKET_CAPS[b];

@@ -416,3 +416,12 @@ SELECT 'ls-v1-p15',
        '🎯',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Smart Lead Scoring — see scores on the Leads page');
+
+-- LEAD_SCORING_v1 P1.6
+INSERT INTO changelog (version, title, body, icon, created_at)
+SELECT 'ls-v1-p16',
+       'Smart Score now infers from lead status',
+       'Earlier the Smart Score only fired when there was tracked event evidence (form fill, WA reply, call answered) — so legacy leads all looked Cold. The engine now also infers from the leads current status: Payment Link / Sale Done / Booked → Hot, Demo Done / Proposal Sent / Site Visit Done → Hot-leaning, Demo Scheduled / Site Visit Planned → Warm, Qualified / Follow Up / Interested → Warm-leaning, Attempted / Connected → Nurture, Not Interested / Junk / Lost → Invalid, Not Picking / Language Problem → score penalty. Re-run backfill once after deploy to refresh all existing leads.',
+       '🎯',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Smart Score now infers from lead status');
