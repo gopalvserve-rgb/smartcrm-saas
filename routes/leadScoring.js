@@ -276,6 +276,32 @@ let _schemaReady = false;
 
 async function _ensureSchema() {
   if (_schemaReady) return;
+  // ---- Heal legacy v1 schema -------------------------------------------------
+  // OPPORTUNITIES_v1 migration originally shipped lead_score_rules/settings/log/overrides
+  // with completely different columns. Drop legacy tables so the canonical schema
+  // below can recreate them. Detection: check for v1-only columns.
+  try {
+    const r1 = await db.query(`SELECT column_name FROM information_schema.columns
+                                WHERE table_name='lead_score_rules' AND column_name='code'`);
+    if (r1.rows.length > 0) { await db.query(`DROP TABLE IF EXISTS lead_score_rules CASCADE`); }
+  } catch (_) {}
+  try {
+    const r2 = await db.query(`SELECT column_name FROM information_schema.columns
+                                WHERE table_name='lead_score_settings' AND column_name='key'`);
+    if (r2.rows.length > 0) { await db.query(`DROP TABLE IF EXISTS lead_score_settings CASCADE`); }
+  } catch (_) {}
+  try {
+    const r3 = await db.query(`SELECT column_name FROM information_schema.columns
+                                WHERE table_name='lead_score_log' AND column_name='created_at' AND column_name NOT IN ('changed_at')`);
+    // v1 log had created_at; the new schema uses changed_at. ALTER ADD COLUMN below handles it
+    // but if old log has NOT NULL constraints we don't want, the ADD will succeed with default.
+  } catch (_) {}
+  try {
+    const r4 = await db.query(`SELECT column_name FROM information_schema.columns
+                                WHERE table_name='lead_score_overrides' AND column_name='pinned_score'`);
+    if (r4.rows.length > 0) { await db.query(`DROP TABLE IF EXISTS lead_score_overrides CASCADE`); }
+  } catch (_) {}
+
   await db.query(`CREATE TABLE IF NOT EXISTS lead_score_rules (
     id SERIAL PRIMARY KEY,
     pack TEXT NOT NULL,
@@ -322,6 +348,17 @@ async function _ensureSchema() {
     changed_by INTEGER,
     changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`);
+  // Heal: legacy lead_score_log shipped with (created_at, reason, breakdown_json) only
+  for (const sql of [
+    `ALTER TABLE lead_score_log ADD COLUMN IF NOT EXISTS delta INTEGER`,
+    `ALTER TABLE lead_score_log ADD COLUMN IF NOT EXISTS trigger_event TEXT`,
+    `ALTER TABLE lead_score_log ADD COLUMN IF NOT EXISTS breakdown_json JSONB`,
+    `ALTER TABLE lead_score_log ADD COLUMN IF NOT EXISTS reason_text TEXT`,
+    `ALTER TABLE lead_score_log ADD COLUMN IF NOT EXISTS changed_by INTEGER`,
+    `ALTER TABLE lead_score_log ADD COLUMN IF NOT EXISTS changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`,
+    `ALTER TABLE lead_score_log ADD COLUMN IF NOT EXISTS new_score INTEGER`,
+    `ALTER TABLE lead_score_log ADD COLUMN IF NOT EXISTS old_score INTEGER`,
+  ]) { try { await db.query(sql); } catch (_) {} }
   await db.query(`CREATE INDEX IF NOT EXISTS idx_lslog_lead ON lead_score_log(lead_id, changed_at DESC)`);
 
   await db.query(`CREATE TABLE IF NOT EXISTS lead_score_overrides (
@@ -332,6 +369,12 @@ async function _ensureSchema() {
     set_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at TIMESTAMPTZ
   )`);
+  // Heal: legacy lead_score_overrides shipped with (pinned_score, pinned_category, set_at) only
+  for (const sql of [
+    `ALTER TABLE lead_score_overrides ADD COLUMN IF NOT EXISTS override_category TEXT`,
+    `ALTER TABLE lead_score_overrides ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ`,
+    `ALTER TABLE lead_score_overrides ADD COLUMN IF NOT EXISTS set_by INTEGER`,
+  ]) { try { await db.query(sql); } catch (_) {} }
 
   // Columns on leads (idempotent)
   for (const sql of [
