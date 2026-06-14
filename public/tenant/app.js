@@ -5908,7 +5908,47 @@ function renderLeadsMobile(rows) {
     return;
   }
   const { statuses } = CRM.cache;
-  rows.forEach(l => {
+
+  // LS_MOBILE_FOCUS_v1 — visible Mode toggle pill at the top of the mobile card
+  // list. The desktop dropdown lives inside the (collapsed-on-mobile) filter
+  // rail and was unreachable for most users on phones. This pill is always
+  // visible and switches between Normal (flat) and Focus (grouped by bucket).
+  try {
+    if (!CRM.prefs) CRM.prefs = {};
+    if (!CRM.prefs.viewMode) {
+      try { CRM.prefs.viewMode = localStorage.getItem('crm_view_mode') || 'normal'; } catch(_) { CRM.prefs.viewMode = 'normal'; }
+    }
+    const _mvm = CRM.prefs.viewMode;
+    const _mkPill = (id, icon, label, active) => {
+      const p = h('button', { type: 'button',
+        style: {
+          flex: '1', padding: '8px 10px', borderRadius: '999px', border: '1px solid ' + (active ? '#6366f1' : '#cbd5e1'),
+          background: active ? '#eef2ff' : '#fff', color: active ? '#4338ca' : '#475569',
+          fontSize: '.82rem', fontWeight: active ? '700' : '500', cursor: 'pointer', whiteSpace: 'nowrap'
+        }
+      }, icon + ' ' + label);
+      p.onclick = () => {
+        if (CRM.prefs.viewMode === id) return;
+        CRM.prefs.viewMode = id;
+        try { localStorage.setItem('crm_view_mode', id); } catch(_) {}
+        if (id === 'focus' && CRM._pageSize < 500) { CRM._oldPageSize = CRM._pageSize; CRM._pageSize = 500; }
+        else if (id === 'normal' && CRM._oldPageSize) { CRM._pageSize = CRM._oldPageSize; CRM._oldPageSize = null; }
+        CRM._leadsPage = 1;
+        loadLeads({ page: 1 });
+      };
+      return p;
+    };
+    const modeBar = h('div', {
+      class: 'ls-mode-bar-mobile',
+      style: { display: 'flex', gap: '8px', padding: '8px 12px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0', position: 'sticky', top: '0', zIndex: '5' }
+    },
+      _mkPill('normal', '\ud83d\udccb', 'Normal', _mvm !== 'focus'),
+      _mkPill('focus',  '\ud83c\udfaf', 'Focus',  _mvm === 'focus')
+    );
+    m.appendChild(modeBar);
+  } catch (_) {}
+
+  function _buildMobileLeadCard(l) {
     const digits = String(l.phone || '').replace(/\D/g, '');
     const statusColor = l.status_color || '#6366f1';
     const due = l.next_followup_at ? new Date(l.next_followup_at) : null;
@@ -6031,8 +6071,90 @@ function renderLeadsMobile(rows) {
           : null
       )
     );
-    m.appendChild(card);
-  });
+    return card;
+  }
+
+  // LS_MOBILE_FOCUS_v1 — Focus mode: group cards by smart_category into 4
+  // bucket sections (Hot/Warm/Nurture/Cold). Invalid hidden. Mirrors the
+  // desktop renderLeadsTable Focus logic, but for card layout.
+  const _mode = (CRM.prefs && CRM.prefs.viewMode) || 'normal';
+  if (_mode === 'focus') {
+    const FOCUS_PER_BUCKET = 50;
+    const buckets = [
+      { id: 'Hot',     icon: '\ud83d\udd25', label: 'Hot Leads',     color: '#E24B4A', bg: '#FCEBEB' },
+      { id: 'Warm',    icon: '\ud83c\udf3f', label: 'Warm Leads',    color: '#EF9F27', bg: '#FAEEDA' },
+      { id: 'Nurture', icon: '\ud83c\udf31', label: 'Nurture Leads', color: '#1D9E75', bg: '#F0F9F4' },
+      { id: 'Cold',    icon: '\u2744\ufe0f', label: 'Cold Leads',    color: '#378ADD', bg: '#F1F6FB' }
+    ];
+    const grouped = {};
+    rows.forEach(l => {
+      const k = String(l.smart_category || '').toLowerCase();
+      if (!grouped[k]) grouped[k] = [];
+      grouped[k].push(l);
+    });
+    CRM._focusShowAllMobile = CRM._focusShowAllMobile || {};
+    let anyShown = false;
+    buckets.forEach(b => {
+      const list = grouped[b.id.toLowerCase()] || [];
+      if (!list.length) return;
+      const wrap = h('div', {
+        class: 'lc-bucket-card ls-mobile-bucket ls-mobile-bucket-' + b.id.toLowerCase(),
+        style: {
+          margin: anyShown ? '14px 8px 0' : '8px 8px 0',
+          borderRadius: '14px',
+          background: '#fff',
+          border: '1px solid ' + b.color + '33',
+          boxShadow: '0 1px 3px rgba(15,23,42,.06)',
+          overflow: 'hidden'
+        }
+      });
+      const hdr = h('div', {
+        style: {
+          display: 'flex', alignItems: 'center', gap: '8px',
+          padding: '10px 12px', background: b.bg,
+          boxShadow: 'inset 4px 0 0 0 ' + b.color
+        }
+      },
+        h('span', { style: { fontSize: '1.05rem', lineHeight: '1' } }, b.icon),
+        h('span', { style: { fontWeight: '700', color: b.color, fontSize: '.92rem', flex: '1' } }, b.label),
+        h('span', {
+          style: { background: '#fff', color: b.color, padding: '2px 10px', borderRadius: '999px', fontSize: '.7rem', fontWeight: '700', border: '1px solid ' + b.color + '66' }
+        }, list.length + ' Leads')
+      );
+      wrap.appendChild(hdr);
+      const inner = h('div', { class: 'lc-bucket-cards', style: { padding: '6px 8px 8px' } });
+      const cap = CRM._focusShowAllMobile[b.id] ? list.length : FOCUS_PER_BUCKET;
+      list.slice(0, cap).forEach(l => inner.appendChild(_buildMobileLeadCard(l)));
+      wrap.appendChild(inner);
+      if (list.length > FOCUS_PER_BUCKET && !CRM._focusShowAllMobile[b.id]) {
+        const remaining = list.length - FOCUS_PER_BUCKET;
+        const more = h('div', {
+          style: { textAlign: 'center', padding: '10px', background: '#fafafa', borderTop: '1px solid #f1f5f9' }
+        },
+          h('a', { href: 'javascript:void(0)',
+            style: { color: b.color, fontWeight: '600', fontSize: '.82rem', textDecoration: 'none' },
+            onclick: () => { CRM._focusShowAllMobile[b.id] = true; renderLeadsMobile(rows); }
+          }, '\u2193 Show ' + remaining + ' more ' + b.label.replace(' Leads', '') + ' leads')
+        );
+        wrap.appendChild(more);
+      }
+      m.appendChild(wrap);
+      anyShown = true;
+    });
+    const invCount = (grouped['invalid'] || []).length;
+    if (anyShown && invCount > 0) {
+      m.appendChild(h('div', {
+        style: { textAlign: 'center', padding: '10px', color: '#94a3b8', fontSize: '.74rem' }
+      }, invCount + ' Invalid lead(s) hidden in Focus mode'));
+    }
+    if (!anyShown) {
+      m.appendChild(h('div', { class: 'empty' }, 'No scored leads on this page. Switch to Normal mode to see all leads.'));
+    }
+    try { _nukeUnwantedLeadButtons(m); } catch (e) {}
+    return;
+  }
+
+  rows.forEach(l => m.appendChild(_buildMobileLeadCard(l)));
   try { _nukeUnwantedLeadButtons(m); } catch (e) {}
 }
 
