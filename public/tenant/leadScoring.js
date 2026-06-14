@@ -43,7 +43,7 @@
   function _scoreBadgeHtml(score, category) {
     if (!score && score !== 0) return '';
     const c = CATEGORY_COLORS[category] || CATEGORY_COLORS.Cold;
-    return `<span style="display:inline-flex;align-items:center;gap:4px;background:${c.bg};color:${c.text};padding:2px 8px;border-radius:99px;font-size:.75rem;font-weight:600" title="AI Rate">🎯 ${score} · ${category || ''}</span>`;
+    return `<span style="display:inline-flex;align-items:center;gap:4px;background:${c.bg};color:${c.text};padding:2px 8px;border-radius:99px;font-size:.75rem;font-weight:600" title="AI Score">🎯 ${score} · ${category || ''}</span>`;
   }
 
   // ── Inject score badge into lead row table ──
@@ -242,7 +242,7 @@
     (async () => {
       const enabled = await _probeEnabled();
       if (!enabled) {
-        view.innerHTML = '<div style="padding:40px;text-align:center;color:#94a3b8"><h2>AI Lead Rating is not enabled</h2><p>An admin must enable AI Lead Rating in Settings before this dashboard is populated.</p></div>';
+        view.innerHTML = '<div style="padding:40px;text-align:center;color:#94a3b8"><h2>AI Lead Scoring is not enabled</h2><p>An admin must enable AI Lead Scoring in Settings before this dashboard is populated.</p></div>';
         return;
       }
       const [status, rows] = await Promise.all([
@@ -257,7 +257,7 @@
       header.innerHTML = `
         <div>
           <div style="font-size:1.4rem;font-weight:800">🎯 High-Intent Leads</div>
-          <div style="font-size:.85rem;opacity:.75;margin-top:2px">Leads ranked by AI Rate — call the top ones first</div>
+          <div style="font-size:.85rem;opacity:.75;margin-top:2px">Leads ranked by AI Score — call the top ones first</div>
         </div>
         <div style="display:flex;gap:16px;text-align:right">
           <div><div style="font-size:1.6rem;font-weight:800;color:#ef4444">${status?.hotCount || 0}</div><div style="font-size:.72rem;opacity:.75">Hot</div></div>
@@ -322,12 +322,12 @@
       const card = document.createElement('div');
       card.style.cssText = 'background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:24px;max-width:800px;margin:20px auto';
       card.innerHTML = `
-        <h2 style="margin:0 0 4px;font-size:1.3rem;color:#0f172a">🎯 AI Lead Rating Settings</h2>
+        <h2 style="margin:0 0 4px;font-size:1.3rem;color:#0f172a">🎯 AI Lead Scoring Settings</h2>
         <p style="margin:0 0 20px;color:#64748b;font-size:.9rem">Configure how leads are scored and prioritized.</p>
 
         <div style="display:flex;align-items:center;gap:12px;padding:12px;background:${status?.enabled ? '#dcfce7' : '#fef3c7'};border-radius:6px;margin-bottom:20px">
           <input type="checkbox" id="lsEnabled" ${status?.enabled ? 'checked' : ''}>
-          <label for="lsEnabled" style="font-weight:600;color:#0f172a;cursor:pointer">Enable AI Lead Rating</label>
+          <label for="lsEnabled" style="font-weight:600;color:#0f172a;cursor:pointer">Enable AI Lead Scoring</label>
           <span style="margin-left:auto;font-size:.78rem;color:#64748b">${status?.ruleCount || 0} rules active · ${status?.hotCount || 0} Hot · ${status?.warmCount || 0} Warm</span>
         </div>
 
