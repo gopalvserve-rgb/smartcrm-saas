@@ -1703,8 +1703,8 @@ const NAV_GROUPS = [
     { id: 'reportbuilder', label: 'Report Builder',    icon: '🧪', roles: ['admin', 'manager', 'team_leader'], search: 'builder custom report create report' },
     { id: 'tatreport',     label: 'TAT Report',        icon: '⏱️', roles: ['admin', 'manager', 'team_leader'], search: 'tat turnaround time response time' },
     { id: 'activityreport', label: 'Activity Report',  icon: '📝', roles: ['admin', 'manager', 'team_leader'], search: 'activity report user activity work report' },
-    { id: 'leadscoring',    label: 'High-Intent Leads',  icon: '🎯', search: 'lead scoring hot leads warm leads smart score high intent' },
-    { id: 'leadscoringsettings', label: 'Lead Scoring Settings', icon: '⚙', roles: ['admin', 'manager'], search: 'lead scoring settings thresholds rules' },
+    { id: 'leadscoring',    label: 'High-Intent Leads',  icon: '🎯', search: 'ai rate ai lead rating hot leads warm leads smart score high intent' },
+    { id: 'leadscoringsettings', label: 'AI Rating Settings', icon: '⚙', roles: ['admin', 'manager'], search: 'ai rate ai lead rating lead scoring settings thresholds rules' },
     { id: 'whatsappreport', label: 'WhatsApp Report',  icon: '💬', roles: ['admin', 'manager', 'team_leader'], search: 'whatsapp report message report whatsapp analytics' },
     { id: 'campaignreport', label: 'Campaign Report',  icon: '📊', roles: ['admin', 'manager', 'team_leader'], search: 'campaign report campaign analytics' }
   ] },
@@ -4455,7 +4455,7 @@ const LEAD_COLUMNS = [
   /* LEAD_LIST_UPDATED_v1 — last-updated timestamp column. Off by default. */
   { key: 'updated',     label: 'Last Updated',  default: false },
   /* LEAD_SCORING_v1 P1.5 — Smart Score column. On by default when Lead Scoring is enabled. */
-  { key: 'smart_score', label: 'Smart Score',   default: true }
+  { key: 'smart_score', label: 'AI Rate',       default: true }
 ];
 
 VIEWS.leads = async (view) => {
@@ -4727,7 +4727,7 @@ VIEWS.leads = async (view) => {
       });
       // Header row with Clear
       const hdr = h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' } });
-      hdr.appendChild(h('span', { style: { fontSize: '.72rem', color: '#64748b', fontWeight: '600' } }, 'Smart Score'));
+      hdr.appendChild(h('span', { style: { fontSize: '.72rem', color: '#64748b', fontWeight: '600' } }, 'AI Rate'));
       const clearLink = h('a', { href: 'javascript:void(0)', style: { fontSize: '.7rem', color: '#6366f1' } }, 'Clear');
       clearLink.onclick = (ev) => {
         ev.preventDefault();
@@ -4786,7 +4786,7 @@ VIEWS.leads = async (view) => {
         if (!CRM.prefs.filters) CRM.prefs.filters = {};
         CRM.prefs.filters.smart_categories = picked;
         CRM.prefs.filters.smart_score_min = minScore;
-        try { console.log('[SmartScore] apply:', { categories: picked, min: minScore }); } catch(_){}
+        try { console.log('[AIRate] apply:', { categories: picked, min: minScore }); } catch(_){}
         refreshBtn();
         pop.style.display = 'none';
         CRM._leadsPage = 1;
@@ -6686,7 +6686,7 @@ function renderCell(col, l, statuses) {
         invalid: { bg: '#888780', label: 'Invalid', dark: '#444441' }
       };
       const _p = _palette[_cat] || _palette.cold;
-      return h('td', { class: 'cell-smart-score', style: { whiteSpace: 'nowrap' }, title: 'Smart Score ' + _sc + ' / 100 — ' + _p.label + (l.score_reason ? '\n' + l.score_reason : '') },
+      return h('td', { class: 'cell-smart-score', style: { whiteSpace: 'nowrap' }, title: 'AI Rate ' + _sc + ' / 100 — ' + _p.label + (l.score_reason ? '\n' + l.score_reason : '') },
         h('span', {
           style: {
             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
@@ -47725,11 +47725,11 @@ VIEWS.student360 = async (view) => {
 // Delegated to /public/tenant/leadScoring.js (window.LS_v1.renderDashboard / renderSettings).
 VIEWS.leadscoring = async (view) => {
   if (window.LS_v1 && typeof window.LS_v1.renderDashboard === 'function') return window.LS_v1.renderDashboard(view);
-  view.innerHTML = '<div style="padding:40px;text-align:center;color:#64748b">⏳ Lead Scoring module is loading — refresh in a moment.</div>';
+  view.innerHTML = '<div style="padding:40px;text-align:center;color:#64748b">⏳ AI Lead Rating module is loading — refresh in a moment.</div>';
 };
 VIEWS.leadscoringsettings = async (view) => {
   if (window.LS_v1 && typeof window.LS_v1.renderSettings === 'function') return window.LS_v1.renderSettings(view);
-  view.innerHTML = '<div style="padding:40px;text-align:center;color:#64748b">⏳ Lead Scoring Settings is loading — refresh in a moment.</div>';
+  view.innerHTML = '<div style="padding:40px;text-align:center;color:#64748b">⏳ AI Rating Settings is loading — refresh in a moment.</div>';
 };
 
 VIEWS.activityreport = async (view) => {

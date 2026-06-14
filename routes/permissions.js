@@ -153,12 +153,12 @@ const CATALOG = [
   { key: 'opportunities.types_manage', label: 'Opportunities — Manage opportunity types' },
   { key: 'opportunities.reports',      label: 'Opportunities — View pipeline reports' },
   // ── LEAD_SCORING_v1 ──
-  { key: 'leadScoring.view',          label: 'Lead Scoring — View scores on leads' },
-  { key: 'leadScoring.view_dashboard', label: 'Lead Scoring — View High-Intent Dashboard' },
-  { key: 'leadScoring.edit_rules',    label: 'Lead Scoring — Edit scoring rules' },
-  { key: 'leadScoring.edit_settings', label: 'Lead Scoring — Edit thresholds & SLA' },
-  { key: 'leadScoring.override',      label: 'Lead Scoring — Manual category override' },
-  { key: 'leadScoring.backfill',      label: 'Lead Scoring — Backfill existing leads' }
+  { key: 'leadScoring.view',          label: 'AI Rate — View on leads' },
+  { key: 'leadScoring.view_dashboard', label: 'AI Rate — View High-Intent Dashboard' },
+  { key: 'leadScoring.edit_rules',    label: 'AI Rate — Edit rating rules' },
+  { key: 'leadScoring.edit_settings', label: 'AI Rate — Edit thresholds & SLA' },
+  { key: 'leadScoring.override',      label: 'AI Rate — Manual category override' },
+  { key: 'leadScoring.backfill',      label: 'AI Rate — Backfill existing leads' }
 ];
 
 // Defaults used when no custom matrix is saved
