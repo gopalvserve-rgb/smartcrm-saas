@@ -46,6 +46,7 @@ const aiSettings = require('./routes/saas/aiSettings');
 const aiCosting  = require('./routes/saas/aiCosting');
 const recordingHealth = require('./routes/saas/recordingHealth'); /* DEVICE_DIAG_v1 */
 const dbVolume = require('./routes/saas/dbVolume');
+const callEventsRepair = require('./routes/saas/callEventsRepair');
 const tenantModules = require('./routes/saas/tenantModules');
 const demoTenant = require('./routes/saas/demoTenant');
 const aiUsageIngest = require('./routes/saas/aiUsageIngest');
@@ -98,7 +99,8 @@ const SAAS_API = {};
   tickets, signupRequests, /* TENANT_SIGNUP_APPROVAL_v1 */
   financeDashboard, /* FIN_DASH_v1 */
   recordingHealth, /* DEVICE_DIAG_v1 */
-  dbVolume /* DB_VOLUME_v1 */
+  dbVolume, /* DB_VOLUME_v1 */
+  callEventsRepair /* CALL_PHONE_REVERSE_BACKFILL_v1 */
 ].forEach(mod => {
   Object.keys(mod).forEach(k => {
     if (typeof mod[k] === 'function' && k.startsWith('api_saas_')) SAAS_API[k] = mod[k];
@@ -1707,16 +1709,22 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
           if (!_ce.rows[0]) {
             let _handled = false;
 
-            // BRANCH A: empty-phone row for this user within +/- 2 min
-            // (the Samsung blank-number outgoing case)
+            // BRANCH A: empty-phone row for this user within +/- 30 min
+            // (the Samsung blank-number outgoing case).
+            // CALL_PHONE_REVERSE_BACKFILL_v1 (2026-06-13) — window widened
+            // from 2 min → 30 min so recordings that sync hours later still
+            // pair with their empty-phone outgoing rows. Direction is set
+            // to 'out' (not 'unknown') when no other call_event nearby has
+            // a definitive direction, since the recording confirms an
+            // outgoing call happened around this time.
             try {
               const _emptyRow = await db.query(`
                 SELECT id FROM call_events
                  WHERE user_id = $1
                    AND (phone IS NULL OR TRIM(phone) = '')
                    AND recording_id IS NULL
-                   AND created_at BETWEEN $2::timestamptz - INTERVAL '2 minutes'
-                                      AND $2::timestamptz + INTERVAL '2 minutes'
+                   AND created_at BETWEEN $2::timestamptz - INTERVAL '30 minutes'
+                                      AND $2::timestamptz + INTERVAL '30 minutes'
                  ORDER BY ABS(EXTRACT(EPOCH FROM (created_at - $2::timestamptz)))
                  LIMIT 1
               `, [me.id, _evIso]);
