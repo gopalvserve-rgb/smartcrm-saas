@@ -4347,6 +4347,13 @@ async function _runCallLast48hCleanup() {
 setTimeout(() => _runCallLast48hCleanup().catch(() => {}), 300_000);
 
 
-  app.listen(PORT, () => console.log('[boot] SmartCRM SaaS listening on :' + PORT));
+  app.listen(PORT, () => {
+    console.log('[boot] SmartCRM SaaS listening on :' + PORT);
+    // COPILOT_v4 — one-shot enable on vserve. Idempotent, non-blocking.
+    try {
+      const { autoEnableOnVserve } = require('./utils/cp4VserveAutoEnable');
+      setTimeout(() => { autoEnableOnVserve().catch(e => console.error('[CP4_AUTOENABLE]', e.message)); }, 5000);
+    } catch (e) { console.warn('[CP4_AUTOENABLE] require failed:', e.message); }
+  });
 }
 boot().catch(e => { console.error('[boot] failed:', e); process.exit(1); });
