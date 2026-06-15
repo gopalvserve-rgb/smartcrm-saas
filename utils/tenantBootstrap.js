@@ -117,6 +117,35 @@ const SCHEMA_MIGRATIONS = [
   ` },
 
   // ─────────────────────────────────────────────────────────────
+  // PAUSED_FOR_LEADS_HEAL_v1 (2026-06-15) — older tenants are missing
+  // users.paused_for_leads + the lead-cap columns and the user-create
+  // form fails with: column "paused_for_leads" of relation "users"
+  // does not exist. Heal them defensively. Also heal autodial_on +
+  // calendly_url and the HR/onboarding columns referenced by users.js.
+  // ─────────────────────────────────────────────────────────────
+  { name: '2026_06_users_lead_pause_and_caps', sql: `
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS paused_for_leads  BOOLEAN     NOT NULL DEFAULT FALSE;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_lead_cap    INTEGER     NOT NULL DEFAULT 0;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS monthly_lead_cap  INTEGER     NOT NULL DEFAULT 0;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS autodial_on       INTEGER     NOT NULL DEFAULT 0;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS calendly_url      TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS father_name             TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS personal_email          TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS address                 TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS aadhaar_number          TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS pan_number              TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS last_company            TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS emergency_contact_name  TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS emergency_contact_phone TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS reference_1_name        TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS reference_1_phone       TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS reference_1_relation    TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS reference_2_name        TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS reference_2_phone       TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS reference_2_relation    TEXT;
+  ` },
+
+  // ─────────────────────────────────────────────────────────────
   // Push subscriptions + FCM tokens (mobile push notifications)
   // ─────────────────────────────────────────────────────────────
   { name: '2026_05_push_subscriptions_table', sql: `
