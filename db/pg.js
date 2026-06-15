@@ -605,6 +605,20 @@ const SCHEMA = {
   lead_score_overrides: {
     columns: ['lead_id','override_category','reason','set_by','set_at','expires_at'],
     json: []
+  },
+
+  // COPILOT_v4 PROACTIVE COACH
+  copilot_signals: {
+    columns: ['user_id','lead_id','signal_kind','severity','title','reason','payload_json','fired_at','dismissed_at','acted_on_at'],
+    json: ['payload_json']
+  },
+  copilot_briefings: {
+    columns: ['user_id','for_date','payload_json','created_at'],
+    json: ['payload_json']
+  },
+  copilot_lead_summaries: {
+    columns: ['lead_id','summary','next_action','draft_msg','payload_json','generated_at'],
+    json: ['payload_json']
   }
 
 };

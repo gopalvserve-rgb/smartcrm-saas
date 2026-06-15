@@ -146,6 +146,50 @@ const SCHEMA_MIGRATIONS = [
   ` },
 
   // ─────────────────────────────────────────────────────────────
+  // COPILOT_v4 PROACTIVE COACH — tables for signal stream + cached
+  // morning briefings + lead AI summaries.
+  // ─────────────────────────────────────────────────────────────
+  { name: '2026_06_copilot_proactive_v1', sql: `
+    CREATE TABLE IF NOT EXISTS copilot_signals (
+      id            SERIAL PRIMARY KEY,
+      user_id       INTEGER NOT NULL,
+      lead_id       INTEGER,
+      signal_kind   TEXT NOT NULL,                  -- hot_score_jump, old_customer_msg, missed_call, promise_overdue, reengage_window, quote_viewed
+      severity      INTEGER NOT NULL DEFAULT 2,     -- 1=info 2=normal 3=urgent
+      title         TEXT,
+      reason        TEXT,
+      payload_json  JSONB,
+      fired_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      dismissed_at  TIMESTAMPTZ,
+      acted_on_at   TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_copilot_signals_user_active
+      ON copilot_signals(user_id, fired_at DESC)
+      WHERE dismissed_at IS NULL AND acted_on_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_copilot_signals_dedup
+      ON copilot_signals(user_id, lead_id, signal_kind, fired_at);
+
+    CREATE TABLE IF NOT EXISTS copilot_briefings (
+      id          SERIAL PRIMARY KEY,
+      user_id     INTEGER NOT NULL,
+      for_date    DATE NOT NULL,
+      payload_json JSONB NOT NULL,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(user_id, for_date)
+    );
+
+    CREATE TABLE IF NOT EXISTS copilot_lead_summaries (
+      id          SERIAL PRIMARY KEY,
+      lead_id     INTEGER NOT NULL UNIQUE,
+      summary     TEXT,
+      next_action TEXT,
+      draft_msg   TEXT,
+      payload_json JSONB,
+      generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  ` },
+
+  // ─────────────────────────────────────────────────────────────
   // LS_ROLLOUT_ALL_v1 (2026-06-15) — flip on AI Lead Scoring engine for
   // every tenant. lead_score_settings is a singleton row (id=1) created
   // by routes/leadScoring.js _ensureSchema with is_enabled=0. This

@@ -111,6 +111,7 @@ const ROUTE_FILES = [
   'packs/student360', /* STU360_LIVE_v1 — Student 360 view for Education pack */
   'opportunities',    /* OPPORTUNITIES_v1 — multi-opportunity + multi-pipeline */
   'leadScoring',      /* LEAD_SCORING_v1 — Smart Lead Scoring */
+  'copilotProactive', /* COPILOT_v4 — Proactive Sales Coach (vserve beta) */
 ];
 
 const API = {};
