@@ -6,12 +6,14 @@
 'use strict';
 
 const db = require('../db/pg');
-const auth = require('../auth/jwt');
+const { authUser } = require('../utils/auth');
 const gemini = (() => { try { return require('../utils/geminiClient'); } catch { return null; } })();
 
 async function _requireUser(token) {
-  const u = await auth.verify(token);
-  if (!u || !u.uid) throw new Error('Not signed in');
+  const u = await authUser(token);
+  if (!u || !(u.uid || u.id)) throw new Error('Not signed in');
+  // Normalize uid (some auth backends return id, others uid)
+  if (!u.uid) u.uid = u.id;
   return u;
 }
 
