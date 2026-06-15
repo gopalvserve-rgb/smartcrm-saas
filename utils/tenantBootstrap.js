@@ -512,6 +512,9 @@ const CONFIG_DEFAULTS = [
   // LS_ROLLOUT_ALL_v1 — AI Lead Scoring ON for every tenant by default.
   // Gates the SPA-visible feature: column, filter, mode toggle, dashboard.
   { key: 'LEAD_SCORING_ENABLED', value: '1' },
+  // QNOTE_ROLLOUT_ALL_v1 — ✨ Quick Note row button ON for every tenant.
+  // Gates the row-level AI note widget (slash menu: /note, /status, /followup).
+  { key: 'AI_QUICKNOTE_ENABLED', value: '1' },
 ];
 
 async function _ensureMigrationsTable(pool) {
