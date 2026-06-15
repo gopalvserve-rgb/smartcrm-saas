@@ -67,11 +67,33 @@ async function api_saas_wl_customers_list(token) {
   const r = await control.query(`
     SELECT c.*,
            (SELECT COUNT(*)::INT FROM wl_invoices i WHERE i.customer_id = c.id AND i.status IN ('pending','sent','overdue')) AS pending_invoices,
-           (SELECT COALESCE(SUM(p.amount),0) FROM wl_payments p WHERE p.customer_id = c.id) AS lifetime_paid_calc
+           (SELECT COALESCE(SUM(p.amount),0) FROM wl_payments p WHERE p.customer_id = c.id) AS lifetime_paid_calc,
+           (SELECT i.due_date FROM wl_invoices i WHERE i.customer_id = c.id AND i.status IN ('pending','sent','overdue') ORDER BY i.due_date ASC LIMIT 1) AS next_unpaid_due_date,
+           (SELECT i.invoice_no FROM wl_invoices i WHERE i.customer_id = c.id AND i.status IN ('pending','sent','overdue') ORDER BY i.due_date ASC LIMIT 1) AS next_unpaid_invoice_no
       FROM wl_customers c
      ORDER BY c.created_at DESC
   `);
-  return r.rows;
+  // Compute scheduled next_due_date — next billing_day occurrence from today (in IST).
+  // If there is already a pending invoice, we surface its due_date as the "real" next due.
+  // Otherwise we project forward from billing_day.
+  const ist = new Date(Date.now() + 5.5 * 3600e3);
+  const year = ist.getUTCFullYear();
+  const month = ist.getUTCMonth();
+  const day = ist.getUTCDate();
+  return r.rows.map(row => {
+    const bd = Math.max(1, Math.min(28, Number(row.billing_day) || 1));
+    let nextDue;
+    if (day < bd) {
+      nextDue = new Date(Date.UTC(year, month, bd));
+    } else {
+      nextDue = new Date(Date.UTC(year, month + 1, bd));
+    }
+    return {
+      ...row,
+      next_due_date: row.next_unpaid_due_date || nextDue.toISOString().slice(0, 10),
+      scheduled_next_due: nextDue.toISOString().slice(0, 10)
+    };
+  });
 }
 
 async function api_saas_wl_customers_get(token, id) {
@@ -245,9 +267,18 @@ function _buildInvoiceMessage({ c, inv, portalUrl, kind }) {
   return lines.join('\n');
 }
 
+/** Internal: send WA for an invoice (no auth check, used by cron + public API). */
+async function _sendWAForInvoice(invoiceId, kind) {
+  return await _doSendWA(Number(invoiceId), kind || 'invoice');
+}
+
 /** Send (or resend) a WhatsApp message about a specific invoice. */
 async function api_saas_wl_invoices_sendWA(token, invoiceId, kind) {
   await requireSuperAdmin(token);
+  return await _doSendWA(Number(invoiceId), kind || 'invoice');
+}
+
+async function _doSendWA(invoiceId, kind) {
   const inv = (await control.query(`SELECT * FROM wl_invoices WHERE id = $1`, [Number(invoiceId)])).rows[0];
   if (!inv) throw new Error('Invoice not found');
   const c = (await control.query(`SELECT * FROM wl_customers WHERE id = $1`, [inv.customer_id])).rows[0];
@@ -395,6 +426,96 @@ async function api_saas_wl_portal_payLink(token, invoiceId) {
   return { ok: true, link, order_id: orderId };
 }
 
+
+// ───────────────────────────────────────────────────────────────────────
+// WL_BILLING_CRON_v1 — daily cron worker
+// Runs once a day around 9am IST. For every active customer whose
+// billing_day equals today's day-of-month, generates a monthly invoice
+// (idempotent — _invoices_generateMonth skips if one already exists for
+// the current period_month) and then auto-sends the invoice via WhatsApp
+// (if WL_WA_PHONE_NUMBER_ID + WL_WA_ACCESS_TOKEN are configured) and
+// email (if SMTP is configured).
+//
+// Manual trigger: api_saas_wl_runBillingCronNow(token, { dryRun? })
+// ───────────────────────────────────────────────────────────────────────
+async function _runBillingForToday(opts) {
+  const dryRun = !!(opts && opts.dryRun);
+  const ist = new Date(Date.now() + 5.5 * 3600e3);
+  const todayDay = ist.getUTCDate();
+  const out = { day: todayDay, due_today: 0, generated: [], sent: [], errors: [] };
+
+  // Pull all active customers whose billing_day == today
+  const r = await control.query(
+    `SELECT * FROM wl_customers WHERE status='active' AND monthly_amount > 0 AND billing_day = $1`,
+    [todayDay]
+  );
+  out.due_today = r.rows.length;
+  if (!r.rows.length) return out;
+
+  if (dryRun) {
+    out.would_invoice = r.rows.map(c => ({ id: c.id, company_name: c.company_name, amount: c.monthly_amount }));
+    return out;
+  }
+
+  // For each due customer: generate this month's invoice + auto-send WA
+  for (const c of r.rows) {
+    try {
+      // Use generateMonth scoped to a single customer (idempotent — skips if exists)
+      // The function is super-admin-gated, but we are running in a trusted context;
+      // call _generateInvoiceForCustomer-equivalent inline so we don't need a token.
+      const month = _monthYYYYMM();
+      const exists = await control.query(
+        `SELECT id FROM wl_invoices WHERE customer_id = $1 AND period_month = $2 LIMIT 1`,
+        [c.id, month]
+      );
+      let invoiceId;
+      if (exists.rows.length) {
+        invoiceId = exists.rows[0].id;
+      } else {
+        const invNo = await _nextInvoiceNumber(month);
+        const due = new Date(ist.getUTCFullYear(), ist.getUTCMonth(), c.billing_day);
+        invoiceId = await control.insert('wl_invoices', {
+          customer_id:  c.id,
+          invoice_no:   invNo,
+          period_month: month,
+          amount:       c.monthly_amount,
+          status:       'pending',
+          due_date:     due.toISOString().slice(0, 10),
+          generated_at: control.nowIso()
+        });
+        await control.query(
+          `UPDATE wl_customers SET balance = balance + $1, updated_at = NOW() WHERE id = $2`,
+          [Number(c.monthly_amount), c.id]
+        );
+        out.generated.push({ customer_id: c.id, invoice_id: invoiceId, invoice_no: invNo, amount: c.monthly_amount });
+      }
+      // Auto-send the invoice WA (kind='invoice')
+      try {
+        if (typeof _sendWAForInvoice === 'function') {
+          await _sendWAForInvoice(invoiceId, 'invoice');
+          await control.query(
+            `UPDATE wl_invoices SET status='sent', sent_at=NOW() WHERE id=$1 AND status='pending'`,
+            [invoiceId]
+          );
+          out.sent.push({ customer_id: c.id, invoice_id: invoiceId });
+        }
+      } catch (sendErr) {
+        out.errors.push({ customer_id: c.id, invoice_id: invoiceId, send_error: sendErr.message });
+      }
+    } catch (e) {
+      out.errors.push({ customer_id: c.id, error: e.message });
+    }
+  }
+  return out;
+}
+
+// Super-admin manual trigger for the cron — useful for testing and for
+// a "Run Billing Now" button on the WL Billing dashboard.
+async function api_saas_wl_runBillingCronNow(token, payload) {
+  await requireSuperAdmin(token);
+  return await _runBillingForToday(payload || {});
+}
+
 module.exports = {
   api_saas_wl_customers_list,
   api_saas_wl_customers_get,
@@ -408,5 +529,7 @@ module.exports = {
   api_saas_wl_settingsGet,
   api_saas_wl_settingsSave,
   api_saas_wl_portal_view,
-  api_saas_wl_portal_payLink
+  api_saas_wl_portal_payLink,
+  api_saas_wl_runBillingCronNow,
+  _runBillingForToday
 };

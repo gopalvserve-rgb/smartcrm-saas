@@ -3539,6 +3539,36 @@ setInterval(() => {
 setTimeout(() => _runGoogleConvForAllTenants().catch(() => {}), 60_000);
 console.log('[gconv] Google Ads conversion export daily worker started');
 
+// ── WL_BILLING_CRON_v1 — daily auto-bill at 9am IST ──
+// Runs once at 9:00 IST. Generates invoices for every active customer
+// whose billing_day == today's day-of-month, then auto-sends the invoice
+// via WhatsApp (uses WL_WA_PHONE_NUMBER_ID + WL_WA_ACCESS_TOKEN).
+// Single-fire guard: tracks last-fired-day in-memory so a process that
+// stays up through 9am only fires once. A restart after 9am won't re-fire
+// because generateMonth is idempotent (skips if invoice exists for the
+// current period_month).
+let _wlBillingLastFiredYMD = null;
+async function _maybeRunWLBillingCron() {
+  try {
+    const ist = new Date(Date.now() + 5.5 * 3600e3);
+    const ymd = ist.toISOString().slice(0, 10);
+    const hourIST = ist.getUTCHours();
+    if (hourIST !== 9) return;
+    if (_wlBillingLastFiredYMD === ymd) return;
+    let wl; try { wl = require('./routes/saas/whiteLabelBilling'); } catch (e) { return; }
+    if (typeof wl._runBillingForToday !== 'function') return;
+    _wlBillingLastFiredYMD = ymd;
+    const out = await wl._runBillingForToday({});
+    console.log('[wl-billing-cron] fired @09 IST — due_today=' + out.due_today +
+                ' generated=' + (out.generated || []).length +
+                ' sent=' + (out.sent || []).length +
+                (out.errors && out.errors.length ? ' errors=' + out.errors.length : ''));
+  } catch (e) { console.warn('[wl-billing-cron]', e.message); }
+}
+setInterval(_maybeRunWLBillingCron, 5 * 60 * 1000);  // every 5 min
+setTimeout(_maybeRunWLBillingCron, 60_000);
+console.log('[wl-billing-cron] WL Billing daily worker started (fires 9am IST)');
+
 // ── META_CAPI_v1 — daily 10pm IST per-tenant Meta Conversions API tick ──
 // Mirrors the Google CSV path. Each tenant tick decides whether to fire
 // (IST hour=22 + not already today + feature is ON). Real-time dispatch

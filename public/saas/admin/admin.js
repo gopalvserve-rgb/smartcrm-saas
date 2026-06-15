@@ -3856,6 +3856,22 @@ VIEWS.wl_billing = async (view) => {
   }
   const actions = h('div', { style: { display: 'flex', gap: '8px', margin: '12px 0', flexWrap: 'wrap' } },
     h('button', { class: 'btn primary', onclick: function(){ _wlOpenCustomerModal(null); } }, '+ Add Customer'),
+    h('button', {
+      class: 'btn',
+      style: { background: '#7c3aed', color: '#fff', border: 0 },
+      title: 'Manually trigger the billing cron (normally runs at 9am IST). Generates invoices for every customer whose billing_day == today, and auto-sends WhatsApp.',
+      onclick: async function() {
+        if (!confirm('Run the billing cron NOW?\n\nFor every active customer whose billing day = today, this will:\n  1. Generate this month\u2019s invoice (if not already)\n  2. Auto-send the invoice via WhatsApp')) return;
+        try {
+          const r = await api('api_saas_wl_runBillingCronNow', {});
+          alert('Billing run complete.\n\nCustomers due today: ' + r.due_today +
+                '\nInvoices generated: ' + (r.generated || []).length +
+                '\nInvoices sent: ' + (r.sent || []).length +
+                ((r.errors && r.errors.length) ? '\nErrors: ' + r.errors.length : ''));
+          navigate('wl_billing');
+        } catch (e) { alert(e.message); }
+      }
+    }, '\u26a1 Run Billing Now'),
     h('button', { class: 'btn', onclick: async function() {
       if (!confirm('Generate this-month invoices for ALL active customers? (Skips customers who already have an invoice for this month.)')) return;
       try {
@@ -3904,7 +3920,11 @@ function _wlCustomerCard(c, wlFmt) {
       h('div', { style: { display: 'flex', gap: '20px', textAlign: 'right', flexWrap: 'wrap' } },
         h('div', {}, h('div', { style: { fontSize: '.68rem', color: '#94a3b8', textTransform: 'uppercase', fontWeight: '600' } }, 'Monthly'), h('div', { style: { fontWeight: '700' } }, wlFmt(c.monthly_amount))),
         h('div', {}, h('div', { style: { fontSize: '.68rem', color: '#94a3b8', textTransform: 'uppercase', fontWeight: '600' } }, 'Paid'),    h('div', { style: { fontWeight: '700', color: '#16a34a' } }, wlFmt(c.total_paid))),
-        h('div', {}, h('div', { style: { fontSize: '.68rem', color: '#94a3b8', textTransform: 'uppercase', fontWeight: '600' } }, 'Balance'), h('div', { style: { fontWeight: '700', color: c.balance > 0 ? '#dc2626' : '#64748b' } }, wlFmt(c.balance)))
+        h('div', {}, h('div', { style: { fontSize: '.68rem', color: '#94a3b8', textTransform: 'uppercase', fontWeight: '600' } }, 'Balance'), h('div', { style: { fontWeight: '700', color: c.balance > 0 ? '#dc2626' : '#64748b' } }, wlFmt(c.balance))),
+        h('div', { title: 'Next invoice generates on this day (per billing_day = ' + c.billing_day + ')' },
+          h('div', { style: { fontSize: '.68rem', color: '#94a3b8', textTransform: 'uppercase', fontWeight: '600' } }, '\ud83d\udcc5 Next Due'),
+          h('div', { style: { fontWeight: '700', color: '#4338ca' } }, c.next_due_date || c.scheduled_next_due || ('Day ' + c.billing_day))
+        )
       )
     ),
     h('div', { style: { display: 'flex', gap: '6px', marginTop: '12px', flexWrap: 'wrap' } },
