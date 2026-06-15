@@ -47,6 +47,7 @@ const aiCosting  = require('./routes/saas/aiCosting');
 const recordingHealth = require('./routes/saas/recordingHealth'); /* DEVICE_DIAG_v1 */
 const dbVolume = require('./routes/saas/dbVolume');
 const callEventsRepair = require('./routes/saas/callEventsRepair');
+const leadScoringRollout = require('./routes/saas/leadScoringRollout');
 const tenantModules = require('./routes/saas/tenantModules');
 const demoTenant = require('./routes/saas/demoTenant');
 const aiUsageIngest = require('./routes/saas/aiUsageIngest');
@@ -100,7 +101,8 @@ const SAAS_API = {};
   financeDashboard, /* FIN_DASH_v1 */
   recordingHealth, /* DEVICE_DIAG_v1 */
   dbVolume, /* DB_VOLUME_v1 */
-  callEventsRepair /* CALL_PHONE_REVERSE_BACKFILL_v1 */
+  callEventsRepair, /* CALL_PHONE_REVERSE_BACKFILL_v1 */
+  leadScoringRollout /* LS_ROLLOUT_ALL_v1 */
 ].forEach(mod => {
   Object.keys(mod).forEach(k => {
     if (typeof mod[k] === 'function' && k.startsWith('api_saas_')) SAAS_API[k] = mod[k];

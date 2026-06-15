@@ -146,6 +146,28 @@ const SCHEMA_MIGRATIONS = [
   ` },
 
   // ─────────────────────────────────────────────────────────────
+  // LS_ROLLOUT_ALL_v1 (2026-06-15) — flip on AI Lead Scoring engine for
+  // every tenant. lead_score_settings is a singleton row (id=1) created
+  // by routes/leadScoring.js _ensureSchema with is_enabled=0. This
+  // migration flips it to 1 so scoring actually runs.
+  //
+  // Guarded with IF EXISTS so it's a no-op on tenants where the
+  // leadScoring schema hasn't been materialised yet (routes/leadScoring.js
+  // will create + auto-enable on first call once the config flag is on).
+  // ─────────────────────────────────────────────────────────────
+  { name: '2026_06_lead_scoring_default_enable', sql: `
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.tables
+         WHERE table_name = 'lead_score_settings'
+      ) THEN
+        UPDATE lead_score_settings SET is_enabled = 1 WHERE id = 1;
+      END IF;
+    END $$;
+  ` },
+
+  // ─────────────────────────────────────────────────────────────
   // Push subscriptions + FCM tokens (mobile push notifications)
   // ─────────────────────────────────────────────────────────────
   { name: '2026_05_push_subscriptions_table', sql: `
@@ -487,6 +509,9 @@ const CONFIG_DEFAULTS = [
   // Meta Coexistence flow ON by default — keeps the WA Business mobile
   // app working alongside the Cloud API on the same number.
   { key: 'WHATSAPP_COEXISTENCE_MODE', value: '1' },
+  // LS_ROLLOUT_ALL_v1 — AI Lead Scoring ON for every tenant by default.
+  // Gates the SPA-visible feature: column, filter, mode toggle, dashboard.
+  { key: 'LEAD_SCORING_ENABLED', value: '1' },
 ];
 
 async function _ensureMigrationsTable(pool) {
