@@ -100,7 +100,8 @@ async function api_saas_wl_customers_save(token, payload) {
     notes:          p.notes || null
   };
   if (p.id) {
-    await control.update('wl_customers', p.id, Object.assign({}, data, { updated_at: control.nowIso() }));
+    // control.update() already appends updated_at=NOW() automatically — passing it in data caused 'multiple assignments to same column updated_at'.
+    await control.update('wl_customers', p.id, data);
     return { id: Number(p.id), ok: true };
   }
   data.portal_token = _portalToken();
