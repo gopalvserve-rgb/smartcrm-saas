@@ -4458,8 +4458,128 @@ const LEAD_COLUMNS = [
   { key: 'smart_score', label: 'AI Score',       default: true }
 ];
 
+// FEATURE_SPOTLIGHT_v1 — 2-slide popup teaching users about the new
+// AI Score column + ✨ AI Quick Note row button. Pops on Leads page,
+// up to 3 times per day per user, only on launch dates 2026-06-15 and
+// 2026-06-16. Won't re-show within 30 minutes of last close. After the
+// 16th it's gone. Skip on mobile (too cramped) and on the Capacitor APK
+// (training-via-modal sucks on phones).
+function _maybeShowFeatureSpotlight() {
+  try {
+    const isMobile = window.matchMedia && window.matchMedia('(max-width: 780px)').matches;
+    if (isMobile) return;
+    const todayIso = new Date().toISOString().slice(0, 10);
+    if (todayIso !== '2026-06-15' && todayIso !== '2026-06-16') return;
+    const dismissed = localStorage.getItem('fspot_v1_dismissed');
+    if (dismissed === '1') return;
+    const lastShown = Number(localStorage.getItem('fspot_v1_last_at') || 0);
+    if (Date.now() - lastShown < 30 * 60 * 1000) return; // 30 min cooldown
+    const countKey = 'fspot_v1_count_' + todayIso;
+    const todayCount = Number(localStorage.getItem(countKey) || 0);
+    if (todayCount >= 3) return; // max 3 per day
+    localStorage.setItem(countKey, String(todayCount + 1));
+    localStorage.setItem('fspot_v1_last_at', String(Date.now()));
+    // Slight delay so it pops after the table paints — less jarring.
+    setTimeout(_renderFeatureSpotlight, 700);
+  } catch (_) {}
+}
+function _renderFeatureSpotlight() {
+  if (document.getElementById('fspot-v1-overlay')) return;
+  let slide = 0;
+  const slides = [
+    {
+      icon: '🎯', tag: 'NEW',
+      title: 'AI Score — call the right leads first',
+      body: 'Every lead now has a 0–100 AI Score and a bucket: Hot 🔥, Warm 🌿, Nurture 🌱, Cold ❄️. ' +
+            'Score is based on engagement, source, status and intent signals.',
+      bullets: [
+        'New <b>AI Score</b> column on the lead list (default ON)',
+        'Filter dropdown — pick one or more buckets, or set a score range',
+        'Sort by score descending to surface the hottest first',
+        'Try <b>🎯 Focus mode</b> — leads grouped into Hot / Warm / Nurture / Cold cards',
+        'High-intent dashboard at <b>Sale → AI Lead Scoring</b>'
+      ]
+    },
+    {
+      icon: '✨', tag: 'NEW',
+      title: 'Quick Note — log everything from one click',
+      body: 'Tap the ✨ button on any lead row to open the AI-powered Quick Note. ' +
+            'Type naturally — the AI figures out what you mean and updates the lead.',
+      bullets: [
+        'Type <b>/note</b> or <b>/remark</b> — adds a remark to the lead',
+        'Type <b>/status</b> — changes the status (e.g. /status follow up)',
+        'Type <b>/followup</b> — sets a follow-up date (e.g. /followup tomorrow 4pm)',
+        'Or just type plain English — the AI parses date, status and remark for you',
+        'No more opening the full lead modal for a 5-second update'
+      ]
+    }
+  ];
+  const overlay = document.createElement('div');
+  overlay.id = 'fspot-v1-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;';
+  const card = document.createElement('div');
+  card.style.cssText = 'background:#fff;border-radius:18px;max-width:540px;width:100%;box-shadow:0 30px 80px rgba(15,23,42,.35);overflow:hidden;font-family:inherit;';
+  function render() {
+    const sl = slides[slide];
+    card.innerHTML =
+      '<div style="background:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);padding:28px 28px 22px;color:#fff;position:relative;">' +
+        '<button id="fspot-close" style="position:absolute;top:14px;right:14px;background:rgba(255,255,255,.2);border:none;color:#fff;width:30px;height:30px;border-radius:50%;cursor:pointer;font-size:16px;">×</button>' +
+        '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">' +
+          '<span style="font-size:38px;line-height:1;">' + sl.icon + '</span>' +
+          '<span style="background:rgba(255,255,255,.22);color:#fff;font-size:.7rem;font-weight:700;letter-spacing:.5px;padding:3px 10px;border-radius:99px;">' + sl.tag + '</span>' +
+        '</div>' +
+        '<h2 style="margin:0;font-size:1.45rem;font-weight:700;color:#fff;">' + sl.title + '</h2>' +
+        '<p style="margin:8px 0 0;color:rgba(255,255,255,.92);font-size:.92rem;line-height:1.45;">' + sl.body + '</p>' +
+      '</div>' +
+      '<div style="padding:22px 28px 18px;">' +
+        '<ul style="margin:0;padding-left:20px;color:#334155;font-size:.9rem;line-height:1.7;">' +
+          sl.bullets.map(b => '<li>' + b + '</li>').join('') +
+        '</ul>' +
+      '</div>' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 28px 22px;border-top:1px solid #f1f5f9;">' +
+        '<div style="display:flex;gap:8px;">' +
+          slides.map(function(_,i){
+            return '<span style="width:8px;height:8px;border-radius:50%;background:' + (i === slide ? '#6366f1' : '#cbd5e1') + ';"></span>';
+          }).join('') +
+        '</div>' +
+        '<div style="display:flex;gap:8px;">' +
+          (slide > 0 ? '<button id="fspot-back" style="padding:8px 16px;border-radius:8px;border:1px solid #cbd5e1;background:#fff;color:#475569;cursor:pointer;font-size:.9rem;">Back</button>' : '') +
+          (slide < slides.length - 1 ?
+            '<button id="fspot-next" style="padding:8px 18px;border-radius:8px;border:none;background:#6366f1;color:#fff;cursor:pointer;font-size:.9rem;font-weight:600;">Next →</button>' :
+            '<button id="fspot-done" style="padding:8px 18px;border-radius:8px;border:none;background:#10b981;color:#fff;cursor:pointer;font-size:.9rem;font-weight:600;">Got it!</button>') +
+        '</div>' +
+      '</div>' +
+      '<div style="text-align:center;padding:0 28px 16px;">' +
+        '<label style="font-size:.78rem;color:#94a3b8;cursor:pointer;display:inline-flex;align-items:center;gap:6px;">' +
+          '<input type="checkbox" id="fspot-never" style="margin:0;"> Don\'t show this again' +
+        '</label>' +
+      '</div>';
+    function close() {
+      try {
+        if (document.getElementById('fspot-never') && document.getElementById('fspot-never').checked) {
+          localStorage.setItem('fspot_v1_dismissed', '1');
+        }
+      } catch (_) {}
+      overlay.remove();
+    }
+    const bClose = card.querySelector('#fspot-close');
+    if (bClose) bClose.onclick = close;
+    const bDone = card.querySelector('#fspot-done');
+    if (bDone) bDone.onclick = close;
+    const bNext = card.querySelector('#fspot-next');
+    if (bNext) bNext.onclick = function(){ slide++; render(); };
+    const bBack = card.querySelector('#fspot-back');
+    if (bBack) bBack.onclick = function(){ slide--; render(); };
+  }
+  render();
+  overlay.appendChild(card);
+  overlay.onclick = function(e){ if (e.target === overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
+}
+
 VIEWS.leads = async (view) => {
   if (!CRM.cache.statuses) await warmCache();
+  _maybeShowFeatureSpotlight();
   // STAGE_COL_AUTOADD_v1 — one-shot: existing users had a saved column list
   // pre-dating the Stage column, so it wasn't appearing. Inject it once.
   try {
