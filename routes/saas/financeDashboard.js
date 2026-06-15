@@ -186,8 +186,13 @@ async function api_saas_finance_overview(token, payload) {
 async function api_saas_finance_tenantSales(token, filters) {
   await requireSuperAdmin(token);
   const f = filters || {};
+  // FIN_DASH_DATE_FIX_v1 (2026-06-15) — honor the date range picker
+  // so per-tenant rows show period_paid + period_paid_count + period_pending
+  // alongside the lifetime totals. Without this the table looked identical
+  // whether the user picked Today, This week, or All time.
+  const _rng = _resolveRange(f);
   const where = [];
-  const params = [];
+  const params = [_rng.from, _rng.to]; // $1, $2 always used by period_* subqueries
   if (f.status)    { params.push(f.status);             where.push(`t.status = $${params.length}`); }
   if (f.package_id){ params.push(Number(f.package_id)); where.push(`t.package_id = $${params.length}`); }
   if (f.q) {
@@ -201,12 +206,14 @@ async function api_saas_finance_tenantSales(token, filters) {
            p.recurring_period, p.recurring_period_count, p.is_lifetime,
            COALESCE((SELECT SUM(total_inr) FROM invoices i WHERE i.tenant_id = t.id AND i.status = 'paid'), 0)::numeric AS lifetime_paid,
            COALESCE((SELECT COUNT(*)       FROM invoices i WHERE i.tenant_id = t.id AND i.status = 'paid'), 0)::int     AS paid_count,
+           COALESCE((SELECT SUM(total_inr) FROM invoices i WHERE i.tenant_id = t.id AND i.status = 'paid' AND paid_at >= $1 AND paid_at < $2), 0)::numeric AS period_paid,
+           COALESCE((SELECT COUNT(*)       FROM invoices i WHERE i.tenant_id = t.id AND i.status = 'paid' AND paid_at >= $1 AND paid_at < $2), 0)::int     AS period_paid_count,
            COALESCE((SELECT SUM(total_inr) FROM invoices i WHERE i.tenant_id = t.id AND i.status = 'pending'), 0)::numeric AS pending_total,
            (SELECT MAX(paid_at) FROM invoices i WHERE i.tenant_id = t.id AND i.status = 'paid') AS last_paid_at
       FROM tenants t
       LEFT JOIN packages p ON p.id = t.package_id
       ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-      ORDER BY lifetime_paid DESC, t.created_at DESC
+      ORDER BY period_paid DESC, lifetime_paid DESC, t.created_at DESC
   `, params);
 
   const now = Date.now();
@@ -224,16 +231,22 @@ async function api_saas_finance_tenantSales(token, filters) {
       status: row.status, package: row.pkg_name || null, package_id: row.pkg_id || null,
       monthly_value: Math.round(monthly * 100) / 100,
       annual_value:  Math.round(monthly * 12 * 100) / 100,
-      lifetime_paid: _safeNum(row.lifetime_paid),
-      paid_count:    _safeNum(row.paid_count),
-      pending_total: _safeNum(row.pending_total),
-      last_paid_at:  row.last_paid_at,
-      created_at:    row.created_at,
+      lifetime_paid:     _safeNum(row.lifetime_paid),
+      paid_count:        _safeNum(row.paid_count),
+      period_paid:       _safeNum(row.period_paid),       // FIN_DASH_DATE_FIX_v1
+      period_paid_count: _safeNum(row.period_paid_count),
+      pending_total:     _safeNum(row.pending_total),
+      last_paid_at:      row.last_paid_at,
+      created_at:        row.created_at,
       current_period_end: row.current_period_end,
-      days_to_expiry: daysToExpiry
+      days_to_expiry:    daysToExpiry
     };
   });
-  return { rows, total: rows.length };
+  return {
+    rows,
+    total: rows.length,
+    period: { from: _rng.from.toISOString(), to: _rng.to.toISOString(), label: _rng.label, token: _rng.token }
+  };
 }
 
 // ---- 3. Revenue by month (last 12) -----------------------------------

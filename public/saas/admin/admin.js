@@ -3464,7 +3464,7 @@ VIEWS.finance = async (view) => {
           b.className = 'btn ' + (b.dataset.range === tok ? 'primary' : 'ghost');
           b.style.padding = '.35rem .75rem'; b.style.fontSize = '.82rem'; b.style.borderRadius = '999px';
         });
-        if (typeof refreshAll === 'function') refreshAll();
+        _updateRangeLabel(); if (typeof refreshAll === 'function') refreshAll();
       } }, lbl);
     chipRow.appendChild(btn);
   });
@@ -3479,7 +3479,7 @@ VIEWS.finance = async (view) => {
       Array.from(chipRow.querySelectorAll('button[data-range]')).forEach(b => {
         b.className = 'btn ghost'; b.style.padding = '.35rem .75rem'; b.style.fontSize = '.82rem'; b.style.borderRadius = '999px';
       });
-      if (typeof refreshAll === 'function') refreshAll();
+      _updateRangeLabel(); if (typeof refreshAll === 'function') refreshAll();
     } }, 'Apply');
   chipRow.appendChild(h('span', { class: 'muted', style: { marginLeft: '.75rem', fontSize: '.78rem' } }, '· Custom:'));
   chipRow.appendChild(fromInp);
@@ -3487,6 +3487,23 @@ VIEWS.finance = async (view) => {
   chipRow.appendChild(toInp);
   chipRow.appendChild(applyBtn);
   rangeCard.appendChild(chipRow);
+  // FIN_DASH_DATE_FIX_v1 — big "Showing: <range>" label so the user can
+  // SEE the active filter at a glance. Updated whenever the chips change.
+  const rangeLabel = h('div', {
+    id: 'fin-range-label',
+    style: { marginTop: '.5rem', fontSize: '.85rem', color: '#4338ca', fontWeight: '600' }
+  }, '\ud83d\udcca Showing: This month');
+  rangeCard.appendChild(rangeLabel);
+  function _updateRangeLabel() {
+    const labels = {
+      today: 'Today', yesterday: 'Yesterday', this_week: 'This week',
+      this_month: 'This month', last_month: 'Last month',
+      last_7: 'Last 7 days', last_30: 'Last 30 days', last_90: 'Last 90 days',
+      this_quarter: 'This quarter', this_year: 'This year', last_year: 'Last year',
+      all: 'All time', custom: 'Custom: ' + (_finRange.from || '') + ' \u2192 ' + (_finRange.to || '')
+    };
+    rangeLabel.textContent = '\ud83d\udcca Showing: ' + (labels[_finRange.range] || _finRange.range);
+  }
   view.appendChild(rangeCard);
 
   // Action bar
@@ -3730,7 +3747,7 @@ VIEWS.finance = async (view) => {
     async function reload() {
       tblWrap.innerHTML = '<div class="muted">Loading…</div>';
       try {
-        const filt = { status: statusSel.value || null, q: qInp.value.trim() || null };
+        const filt = Object.assign({ status: statusSel.value || null, q: qInp.value.trim() || null }, _rangePayload());
         const d = await api('api_saas_finance_tenantSales', filt);
         salesData = d;
         renderTable(d.rows || []);
@@ -3744,6 +3761,8 @@ VIEWS.finance = async (view) => {
           h('th', {}, 'Status'), h('th', {}, 'Created'),
           h('th', {}, 'Period end'), h('th', {}, 'Days'),
           h('th', {}, '₹/mo'), h('th', {}, '₹/yr'),
+          h('th', { style: { background:'#eef2ff', color:'#4338ca' }, title: 'Filtered by selected date range' }, '₹ in period'),
+          h('th', { style: { background:'#eef2ff', color:'#4338ca' }, title: 'Filtered by selected date range' }, '# in period'),
           h('th', {}, 'Lifetime ₹'), h('th', {}, '# paid'),
           h('th', {}, 'Pending ₹'), h('th', {}, 'Last paid'))),
         h('tbody', {}, ...rows.map(r => h('tr', {},
@@ -3763,6 +3782,8 @@ VIEWS.finance = async (view) => {
             r.days_to_expiry == null ? '—' : r.days_to_expiry + 'd'),
           h('td', {}, fmtRupees(r.monthly_value)),
           h('td', {}, fmtRupees(r.annual_value)),
+          h('td', { style: { fontWeight: '700', background: r.period_paid > 0 ? '#eef2ff' : '#f8fafc', color: r.period_paid > 0 ? '#4338ca' : '#94a3b8' } }, fmtRupees(r.period_paid)),
+          h('td', { style: { background: r.period_paid_count > 0 ? '#eef2ff' : '#f8fafc', color: r.period_paid_count > 0 ? '#4338ca' : '#94a3b8' } }, r.period_paid_count || 0),
           h('td', { style: { fontWeight: '600' } }, fmtRupees(r.lifetime_paid)),
           h('td', {}, r.paid_count),
           h('td', { style: { color: r.pending_total > 0 ? '#92400e' : '#94a3b8' } }, fmtRupees(r.pending_total)),
