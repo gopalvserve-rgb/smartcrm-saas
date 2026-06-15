@@ -1474,6 +1474,34 @@ async function api_leads_update(token, id, patch) {
   const assigneeChanged = patch.assigned_to && Number(patch.assigned_to) !== Number(lead.assigned_to);
   if (statusChanged) allowed.last_status_change_at = db.nowIso();
 
+  // QNOTE_STATUS_DIAG_v1 (2026-06-15) — surface a clear error when the SPA
+  // sends a status_id that doesn't exist in this tenant's statuses table.
+  // Without this the UPDATE either silently no-ops (no FK on some tenants)
+  // or returns a cryptic Postgres FK error. Either way the user sees the
+  // pill snap back to the old status with no clue why.
+  if ('status_id' in allowed && allowed.status_id != null && allowed.status_id !== '') {
+    const sid = Number(allowed.status_id);
+    if (Number.isFinite(sid) && sid > 0) {
+      try {
+        const ok = await db.findById('statuses', sid);
+        if (!ok) {
+          console.warn('[leads.update] reject: status_id ' + sid + ' not found in tenant statuses (lead=' + id + ' user=' + me.id + ')');
+          throw new Error('Status id ' + sid + ' does not exist on this tenant. Refresh the page and try again — your status list may be out of date.');
+        }
+      } catch (e) {
+        if (/does not exist on this tenant/.test(e.message)) throw e;
+        // bubble unexpected lookup errors
+        console.warn('[leads.update] status lookup failed:', e.message);
+      }
+    }
+  }
+  // Log every status change so silent failures stop being silent.
+  if (statusChanged) {
+    console.log('[leads.update] status change attempt: lead=' + id +
+                ' from=' + lead.status_id + ' to=' + allowed.status_id +
+                ' user=' + me.id + ' role=' + me.role);
+  }
+
   // Block a rep from scheduling two follow-ups at the same minute. Run
   // BEFORE the lead update so a clash leaves the row untouched.
   if ('next_followup_at' in patch && patch.next_followup_at) {
