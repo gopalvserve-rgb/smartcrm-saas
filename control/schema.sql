@@ -471,3 +471,74 @@ CREATE TABLE IF NOT EXISTS google_sheets_master (
   connected_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- ═══════════════════════════════════════════════════════════
+-- WL_BILLING_v1 (2026-06-15) — White-Label Customer billing.
+-- These are agencies/companies that bought the white-label CRM
+-- from SmartCRM Solution. Completely separate from tenant billing.
+-- ═══════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS wl_customers (
+  id              SERIAL PRIMARY KEY,
+  company_name    TEXT NOT NULL,
+  contact_name    TEXT,
+  phone           TEXT NOT NULL,           -- E.164-ish, used for WhatsApp
+  email           TEXT,
+  product_name    TEXT,                    -- e.g. 'SmartCRM White Label', 'Adbullet CRM'
+  total_users     INTEGER NOT NULL DEFAULT 0,
+  monthly_amount  NUMERIC(12,2) NOT NULL DEFAULT 0,    -- MRR they owe per month
+  total_paid      NUMERIC(12,2) NOT NULL DEFAULT 0,    -- lifetime sum of payments
+  balance         NUMERIC(12,2) NOT NULL DEFAULT 0,    -- current outstanding
+  currency        TEXT NOT NULL DEFAULT 'INR',
+  billing_day     INTEGER NOT NULL DEFAULT 1,          -- 1-28, day of month invoice generates
+  status          TEXT NOT NULL DEFAULT 'active',      -- active|paused|churned
+  portal_token    TEXT UNIQUE NOT NULL,                -- public URL slug for /wl/portal/:token
+  notes           TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_wl_customers_status ON wl_customers(status);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_wl_customers_portal_token ON wl_customers(portal_token);
+
+CREATE TABLE IF NOT EXISTS wl_invoices (
+  id              SERIAL PRIMARY KEY,
+  customer_id     INTEGER NOT NULL REFERENCES wl_customers(id) ON DELETE CASCADE,
+  invoice_no      TEXT UNIQUE NOT NULL,                -- WL-2026-06-0001
+  period_month    TEXT NOT NULL,                       -- '2026-06'
+  amount          NUMERIC(12,2) NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'pending',     -- pending|sent|paid|overdue|void
+  due_date        DATE,
+  cashfree_order_id TEXT,
+  cashfree_link   TEXT,                                -- the Pay Now URL
+  paid_at         TIMESTAMPTZ,
+  generated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  sent_at         TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_wl_inv_customer ON wl_invoices(customer_id, period_month);
+CREATE INDEX IF NOT EXISTS idx_wl_inv_status ON wl_invoices(status);
+
+CREATE TABLE IF NOT EXISTS wl_payments (
+  id              SERIAL PRIMARY KEY,
+  customer_id     INTEGER NOT NULL REFERENCES wl_customers(id) ON DELETE CASCADE,
+  invoice_id      INTEGER REFERENCES wl_invoices(id) ON DELETE SET NULL,
+  amount          NUMERIC(12,2) NOT NULL,
+  paid_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  method          TEXT,                                -- cashfree|bank|upi|cash|other
+  reference       TEXT,                                -- tx id, UTR, etc.
+  notes           TEXT,
+  recorded_by     TEXT,                                -- super-admin email
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_wl_pay_customer ON wl_payments(customer_id);
+
+CREATE TABLE IF NOT EXISTS wl_wa_log (
+  id              SERIAL PRIMARY KEY,
+  customer_id     INTEGER NOT NULL REFERENCES wl_customers(id) ON DELETE CASCADE,
+  invoice_id      INTEGER REFERENCES wl_invoices(id) ON DELETE SET NULL,
+  phone           TEXT NOT NULL,
+  message_body    TEXT,
+  wa_message_id   TEXT,
+  status          TEXT NOT NULL DEFAULT 'sent',        -- sent|failed
+  error           TEXT,
+  sent_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_wl_wa_customer ON wl_wa_log(customer_id);

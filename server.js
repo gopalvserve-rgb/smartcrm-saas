@@ -49,6 +49,7 @@ const dbVolume = require('./routes/saas/dbVolume');
 const callEventsRepair = require('./routes/saas/callEventsRepair');
 const leadScoringRollout = require('./routes/saas/leadScoringRollout');
 const quickNoteRollout = require('./routes/saas/quickNoteRollout');
+const whiteLabelBilling = require('./routes/saas/whiteLabelBilling');
 const tenantModules = require('./routes/saas/tenantModules');
 const demoTenant = require('./routes/saas/demoTenant');
 const aiUsageIngest = require('./routes/saas/aiUsageIngest');
@@ -104,7 +105,8 @@ const SAAS_API = {};
   dbVolume, /* DB_VOLUME_v1 */
   callEventsRepair, /* CALL_PHONE_REVERSE_BACKFILL_v1 */
   leadScoringRollout, /* LS_ROLLOUT_ALL_v1 */
-  quickNoteRollout /* QNOTE_ROLLOUT_ALL_v1 */
+  quickNoteRollout, /* QNOTE_ROLLOUT_ALL_v1 */
+  whiteLabelBilling /* WL_BILLING_v1 */
 ].forEach(mod => {
   Object.keys(mod).forEach(k => {
     if (typeof mod[k] === 'function' && k.startsWith('api_saas_')) SAAS_API[k] = mod[k];
@@ -124,6 +126,31 @@ app.set('trust proxy', 1);
 // Admins can view via 'Settings → Webhook logs' in the SPA.
 const _webhookLogger = require('./utils/webhookLogger');
 app.use('/hook', _webhookLogger.middleware());
+// ─────────────────────────────────────────────────────────────
+// WL_BILLING_v1 public customer portal — no auth, only the random
+// portal_token in the URL grants access. portal HTML + JSON API.
+// ─────────────────────────────────────────────────────────────
+app.get('/wl/portal/:token', (_req, res) => {
+  res.sendFile(require('path').join(__dirname, 'public/wl/portal.html'));
+});
+app.post('/wl/portal-api', express.json(), async (req, res) => {
+  try {
+    const fn = req.body && req.body.fn;
+    const args = (req.body && req.body.args) || [];
+    if (fn === 'view') {
+      const out = await whiteLabelBilling.api_saas_wl_portal_view(args[0]);
+      return res.json(out);
+    }
+    if (fn === 'payLink') {
+      const out = await whiteLabelBilling.api_saas_wl_portal_payLink(args[0], args[1]);
+      return res.json(out);
+    }
+    res.status(400).json({ error: 'Unknown fn' });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 app.post('/hook/cashfree',
   bodyParser.raw({ type: '*/*', limit: '1mb' }),
   cashfreeWebhook.expressWebhook

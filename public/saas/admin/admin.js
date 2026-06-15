@@ -129,6 +129,7 @@ const NAV = [
   { id: 'crashes',       label: '🚨 Crashes' },
   { id: 'ai_costing',    label: '🤖 AI Costing' },
   { id: 'finance',       label: '💰 Finance' },   /* FIN_DASH_v1 */
+  { id: 'wl_billing',    label: '🏷️ White-Label Billing' },   /* WL_BILLING_v1 */
   { id: 'announcements', label: '📣 Updates' },
   { id: 'requirements',  label: '🛠 Custom Requirements' },
   { id: 'tickets',       label: '🎫 Support Tickets' },   // TKT_ADMIN_v1
@@ -3803,3 +3804,282 @@ VIEWS.finance = async (view) => {
   // Initial parallel load
   loadOverview(); loadChart(); loadPackages(); loadExpiring(); loadOverdue(); loadSales();
 };
+
+// ─────────────────────────────────────────────────────────────
+// WL_BILLING_v1 — White-label customer billing tab.
+// ─────────────────────────────────────────────────────────────
+VIEWS.wl_billing = async (view) => {
+  view.innerHTML = '';
+  view.appendChild(h('h1', {}, '🏷️ White-Label Billing'));
+  view.appendChild(h('p', { style: { color: '#64748b', marginTop: '-8px' } },
+    'Track agencies who bought the white-label CRM. Generate monthly invoices, send WhatsApp reminders, and collect payments via Cashfree.'));
+  const summary = await api('api_saas_wl_summary').catch(() => null);
+  const wlFmt = n => '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  if (summary) {
+    const kpis = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: '14px', margin: '16px 0' } });
+    [
+      ['Active customers',     summary.active_customers, '#6366f1'],
+      ['MRR',                  wlFmt(summary.mrr), '#10b981'],
+      ['Outstanding balance',  wlFmt(summary.total_balance), '#dc2626'],
+      ['Lifetime revenue',     wlFmt(summary.lifetime_revenue), '#0ea5e9'],
+      ['Collected this month', wlFmt(summary.this_month_collected), '#16a34a'],
+      ['Pending invoices',     summary.pending_this_month + ' / ' + summary.month, '#f59e0b']
+    ].forEach(function(arr) {
+      const label = arr[0], value = arr[1], color = arr[2];
+      kpis.appendChild(h('div', { style: { background: '#fff', padding: '14px 16px', borderRadius: '12px', boxShadow: '0 1px 3px rgba(15,23,42,.08)', borderLeft: '4px solid ' + color } },
+        h('div', { style: { fontSize: '.72rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '.5px', fontWeight: '600' } }, label),
+        h('div', { style: { fontSize: '1.4rem', fontWeight: '700', marginTop: '4px', color: color } }, value)
+      ));
+    });
+    view.appendChild(kpis);
+  }
+  const actions = h('div', { style: { display: 'flex', gap: '8px', margin: '12px 0', flexWrap: 'wrap' } },
+    h('button', { class: 'btn primary', onclick: function(){ _wlOpenCustomerModal(null); } }, '+ Add Customer'),
+    h('button', { class: 'btn', onclick: async function() {
+      if (!confirm('Generate this-month invoices for ALL active customers? (Skips customers who already have an invoice for this month.)')) return;
+      try {
+        const r = await api('api_saas_wl_invoices_generateMonth', null);
+        alert('Generated ' + r.count + ' invoices for ' + r.month + '. Skipped: ' + r.skipped.length);
+        navigate('wl_billing');
+      } catch (e) { alert(e.message); }
+    } }, 'Generate Monthly Invoices'),
+    h('button', { class: 'btn', onclick: function(){ _wlOpenSettingsModal(); } }, 'WhatsApp Settings')
+  );
+  view.appendChild(actions);
+  const listBox = h('div', { id: 'wl-list', style: { marginTop: '14px' } }, 'Loading customers…');
+  view.appendChild(listBox);
+  try {
+    const customers = await api('api_saas_wl_customers_list');
+    listBox.innerHTML = '';
+    if (!customers.length) {
+      listBox.appendChild(h('div', { style: { padding: '40px', textAlign: 'center', color: '#94a3b8', background: '#fff', borderRadius: '12px' } },
+        'No customers yet. Click "Add Customer" to start.'));
+      return;
+    }
+    customers.forEach(function(c){ listBox.appendChild(_wlCustomerCard(c, wlFmt)); });
+  } catch (e) {
+    listBox.innerHTML = '';
+    listBox.appendChild(h('div', { style: { padding: '20px', background: '#fee2e2', color: '#991b1b', borderRadius: '8px' } }, 'Failed to load: ' + e.message));
+  }
+};
+
+function _wlCustomerCard(c, wlFmt) {
+  const portalUrl = location.origin + '/wl/portal/' + c.portal_token;
+  const borderColor = c.status === 'churned' ? '#94a3b8' : c.balance > 0 ? '#f59e0b' : '#10b981';
+  return h('div', {
+    style: { background: '#fff', borderRadius: '12px', padding: '16px', boxShadow: '0 1px 3px rgba(15,23,42,.08)', marginBottom: '12px', borderLeft: '4px solid ' + borderColor }
+  },
+    h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' } },
+      h('div', { style: { flex: '1', minWidth: '220px' } },
+        h('div', { style: { fontSize: '1.05rem', fontWeight: '700' } }, c.company_name,
+          c.status !== 'active' ? h('span', { style: { fontSize: '.7rem', background: '#f1f5f9', color: '#64748b', padding: '2px 8px', borderRadius: '99px', marginLeft: '8px', fontWeight: '500' } }, c.status) : null
+        ),
+        h('div', { style: { fontSize: '.85rem', color: '#64748b', marginTop: '4px' } },
+          (c.contact_name || '') + (c.contact_name ? ' • ' : '') + c.phone +
+          (c.total_users ? ' • ' + c.total_users + ' users' : '') +
+          ' • ' + (c.product_name || 'CRM')
+        )
+      ),
+      h('div', { style: { display: 'flex', gap: '20px', textAlign: 'right', flexWrap: 'wrap' } },
+        h('div', {}, h('div', { style: { fontSize: '.68rem', color: '#94a3b8', textTransform: 'uppercase', fontWeight: '600' } }, 'Monthly'), h('div', { style: { fontWeight: '700' } }, wlFmt(c.monthly_amount))),
+        h('div', {}, h('div', { style: { fontSize: '.68rem', color: '#94a3b8', textTransform: 'uppercase', fontWeight: '600' } }, 'Paid'),    h('div', { style: { fontWeight: '700', color: '#16a34a' } }, wlFmt(c.total_paid))),
+        h('div', {}, h('div', { style: { fontSize: '.68rem', color: '#94a3b8', textTransform: 'uppercase', fontWeight: '600' } }, 'Balance'), h('div', { style: { fontWeight: '700', color: c.balance > 0 ? '#dc2626' : '#64748b' } }, wlFmt(c.balance)))
+      )
+    ),
+    h('div', { style: { display: 'flex', gap: '6px', marginTop: '12px', flexWrap: 'wrap' } },
+      h('button', { class: 'btn', onclick: function(){ _wlOpenCustomerModal(c); } }, 'Edit'),
+      h('button', { class: 'btn', onclick: function(){ _wlOpenInvoicesModal(c, wlFmt); } }, 'Invoices'),
+      h('button', { class: 'btn', onclick: function(){ _wlOpenPaymentModal(c); } }, 'Record Payment'),
+      h('button', { class: 'btn', onclick: async function() {
+        if (!confirm('Generate this-month invoice for ' + c.company_name + '?')) return;
+        try {
+          const r = await api('api_saas_wl_invoices_generateMonth', Number(c.id));
+          alert(r.count ? 'Invoice generated' : 'Already exists for this month');
+          navigate('wl_billing');
+        } catch (e) { alert(e.message); }
+      } }, 'New Invoice'),
+      h('a', { href: portalUrl, target: '_blank', class: 'btn', style: { textDecoration: 'none', display: 'inline-flex', alignItems: 'center' } }, 'Portal')
+    )
+  );
+}
+
+function _wlOpenCustomerModal(c) {
+  const isEdit = !!c;
+  const f = c || { status: 'active', currency: 'INR', billing_day: 1, monthly_amount: 0 };
+  function inp(label, key, type, opts) {
+    return h('div', { style: { marginBottom: '12px' } },
+      h('label', { style: { display: 'block', fontSize: '.75rem', color: '#64748b', fontWeight: '600', marginBottom: '4px' } }, label),
+      h('input', Object.assign({ type: type || 'text', value: f[key] != null ? f[key] : '', 'data-k': key, style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '8px' } }, opts || {}))
+    );
+  }
+  function sel(label, key, options) {
+    return h('div', { style: { marginBottom: '12px' } },
+      h('label', { style: { display: 'block', fontSize: '.75rem', color: '#64748b', fontWeight: '600', marginBottom: '4px' } }, label),
+      h('select', { 'data-k': key, style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '8px' } },
+        options.map(function(o){ return h('option', { value: o, selected: f[key] === o }, o); }))
+    );
+  }
+  const overlay = h('div', { style: { position: 'fixed', inset: 0, background: 'rgba(15,23,42,.5)', zIndex: '9999', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' } },
+    h('div', { style: { background: '#fff', borderRadius: '14px', maxWidth: '520px', width: '100%', padding: '20px', maxHeight: '90vh', overflowY: 'auto' } },
+      h('h3', { style: { margin: '0 0 14px' } }, isEdit ? 'Edit Customer' : 'New White-Label Customer'),
+      h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' } },
+        inp('Company name *', 'company_name'),
+        inp('Contact name', 'contact_name')
+      ),
+      h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' } },
+        inp('Phone (with +91) *', 'phone'),
+        inp('Email', 'email', 'email')
+      ),
+      inp('Product name (e.g. SmartCRM White Label)', 'product_name'),
+      h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' } },
+        inp('Total users', 'total_users', 'number', { min: '0' }),
+        inp('Monthly ₹', 'monthly_amount', 'number', { min: '0', step: '0.01' }),
+        inp('Billing day (1-28)', 'billing_day', 'number', { min: '1', max: '28' })
+      ),
+      h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' } },
+        inp('Already paid ₹', 'total_paid', 'number', { min: '0', step: '0.01' }),
+        inp('Opening balance ₹', 'balance', 'number', { step: '0.01' }),
+        sel('Status', 'status', ['active', 'paused', 'churned'])
+      ),
+      h('div', { style: { marginBottom: '12px' } },
+        h('label', { style: { display: 'block', fontSize: '.75rem', color: '#64748b', fontWeight: '600', marginBottom: '4px' } }, 'Notes'),
+        h('textarea', { 'data-k': 'notes', rows: '2', style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '8px' } }, f.notes || '')
+      ),
+      h('div', { style: { display: 'flex', gap: '8px', justifyContent: 'flex-end' } },
+        h('button', { class: 'btn', onclick: function(){ overlay.remove(); } }, 'Cancel'),
+        h('button', { class: 'btn primary', onclick: async function() {
+          const payload = isEdit ? { id: c.id } : {};
+          overlay.querySelectorAll('[data-k]').forEach(function(el){ payload[el.dataset.k] = el.value; });
+          try {
+            await api('api_saas_wl_customers_save', payload);
+            overlay.remove();
+            navigate('wl_billing');
+          } catch (e) { alert(e.message); }
+        } }, 'Save')
+      )
+    )
+  );
+  document.body.appendChild(overlay);
+}
+
+async function _wlOpenInvoicesModal(c, wlFmt) {
+  const invoices = await api('api_saas_wl_invoices_listForCustomer', Number(c.id)).catch(function(){ return []; });
+  const portalUrl = location.origin + '/wl/portal/' + c.portal_token;
+  const overlay = h('div', { style: { position: 'fixed', inset: 0, background: 'rgba(15,23,42,.5)', zIndex: '9999', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' } },
+    h('div', { style: { background: '#fff', borderRadius: '14px', maxWidth: '720px', width: '100%', padding: '20px', maxHeight: '90vh', overflowY: 'auto' } },
+      h('h3', { style: { margin: '0 0 6px' } }, c.company_name + ' — Invoices'),
+      h('div', { style: { fontSize: '.8rem', color: '#64748b', marginBottom: '14px' } }, 'Portal: ',
+        h('a', { href: portalUrl, target: '_blank', style: { color: '#6366f1' } }, portalUrl)
+      ),
+      !invoices.length ? h('div', { style: { padding: '20px', textAlign: 'center', color: '#94a3b8' } }, 'No invoices yet.') :
+      h('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: '.85rem' } },
+        h('thead', {}, h('tr', { style: { borderBottom: '1px solid #e2e8f0' } },
+          h('th', { style: { textAlign: 'left', padding: '8px' } }, 'Invoice'),
+          h('th', { style: { textAlign: 'left', padding: '8px' } }, 'Month'),
+          h('th', { style: { textAlign: 'right', padding: '8px' } }, 'Amount'),
+          h('th', { style: { textAlign: 'center', padding: '8px' } }, 'Status'),
+          h('th', { style: { textAlign: 'right', padding: '8px' } }, 'Actions')
+        )),
+        h('tbody', {}, invoices.map(function(i){
+          return h('tr', { style: { borderBottom: '1px solid #f1f5f9' } },
+            h('td', { style: { padding: '8px' } }, i.invoice_no),
+            h('td', { style: { padding: '8px' } }, i.period_month),
+            h('td', { style: { padding: '8px', textAlign: 'right' } }, wlFmt(i.amount)),
+            h('td', { style: { padding: '8px', textAlign: 'center' } }, i.status),
+            h('td', { style: { padding: '8px', textAlign: 'right', whiteSpace: 'nowrap' } },
+              i.status === 'paid' ? h('span', { style: { color: '#16a34a' } }, 'Paid') :
+              h('button', { class: 'btn', style: { fontSize: '.78rem', padding: '4px 8px' }, onclick: async function(e) {
+                e.target.disabled = true; e.target.textContent = 'Sending...';
+                try {
+                  await api('api_saas_wl_invoices_sendWA', Number(i.id), 'invoice');
+                  e.target.textContent = 'Sent';
+                } catch (err) { e.target.disabled = false; e.target.textContent = 'WA Send'; alert(err.message); }
+              } }, 'WA Send')
+            )
+          );
+        }))
+      ),
+      h('div', { style: { display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '14px' } },
+        h('button', { class: 'btn', onclick: function(){ overlay.remove(); } }, 'Close')
+      )
+    )
+  );
+  document.body.appendChild(overlay);
+}
+
+function _wlOpenPaymentModal(c) {
+  const overlay = h('div', { style: { position: 'fixed', inset: 0, background: 'rgba(15,23,42,.5)', zIndex: '9999', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' } },
+    h('div', { style: { background: '#fff', borderRadius: '14px', maxWidth: '460px', width: '100%', padding: '20px' } },
+      h('h3', { style: { margin: '0 0 12px' } }, 'Record Payment'),
+      h('div', { style: { fontSize: '.85rem', color: '#64748b', marginBottom: '14px' } }, c.company_name),
+      h('div', { style: { marginBottom: '10px' } },
+        h('label', { style: { display: 'block', fontSize: '.75rem', color: '#64748b', fontWeight: '600', marginBottom: '4px' } }, 'Amount (₹)'),
+        h('input', { type: 'number', id: 'pay-amt', step: '0.01', min: '0', style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '8px' } })
+      ),
+      h('div', { style: { marginBottom: '10px' } },
+        h('label', { style: { display: 'block', fontSize: '.75rem', color: '#64748b', fontWeight: '600', marginBottom: '4px' } }, 'Method'),
+        h('select', { id: 'pay-method', style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '8px' } },
+          ['bank','upi','cash','cashfree','other'].map(function(m){ return h('option', { value: m }, m); })
+        )
+      ),
+      h('div', { style: { marginBottom: '14px' } },
+        h('label', { style: { display: 'block', fontSize: '.75rem', color: '#64748b', fontWeight: '600', marginBottom: '4px' } }, 'Reference (tx id, UTR)'),
+        h('input', { type: 'text', id: 'pay-ref', style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '8px' } })
+      ),
+      h('div', { style: { display: 'flex', gap: '8px', justifyContent: 'flex-end' } },
+        h('button', { class: 'btn', onclick: function(){ overlay.remove(); } }, 'Cancel'),
+        h('button', { class: 'btn primary', onclick: async function() {
+          const amt = Number(document.getElementById('pay-amt').value);
+          if (!(amt > 0)) { alert('Enter a positive amount'); return; }
+          try {
+            await api('api_saas_wl_invoices_recordPayment', {
+              customer_id: c.id, amount: amt,
+              method:    document.getElementById('pay-method').value,
+              reference: document.getElementById('pay-ref').value
+            });
+            overlay.remove();
+            navigate('wl_billing');
+          } catch (e) { alert(e.message); }
+        } }, 'Record')
+      )
+    )
+  );
+  document.body.appendChild(overlay);
+}
+
+async function _wlOpenSettingsModal() {
+  const cur = await api('api_saas_wl_settingsGet').catch(function(){ return {}; });
+  const overlay = h('div', { style: { position: 'fixed', inset: 0, background: 'rgba(15,23,42,.5)', zIndex: '9999', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' } },
+    h('div', { style: { background: '#fff', borderRadius: '14px', maxWidth: '520px', width: '100%', padding: '20px' } },
+      h('h3', { style: { margin: '0 0 6px' } }, 'White-Label WhatsApp Settings'),
+      h('p', { style: { fontSize: '.8rem', color: '#64748b', marginTop: '0' } }, 'Single WhatsApp Cloud API number that this module uses to send invoices and reminders to all your white-label customers.'),
+      h('div', { style: { marginBottom: '12px' } },
+        h('label', { style: { display: 'block', fontSize: '.75rem', color: '#64748b', fontWeight: '600', marginBottom: '4px' } }, 'WhatsApp phone_number_id'),
+        h('input', { type: 'text', id: 'wl-pid', value: cur.WL_WA_PHONE_NUMBER_ID || '', style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '8px' } })
+      ),
+      h('div', { style: { marginBottom: '12px' } },
+        h('label', { style: { display: 'block', fontSize: '.75rem', color: '#64748b', fontWeight: '600', marginBottom: '4px' } }, 'WhatsApp Access Token ' + (cur.WL_WA_ACCESS_TOKEN_MASKED ? '(current: ' + cur.WL_WA_ACCESS_TOKEN_MASKED + ')' : '')),
+        h('input', { type: 'text', id: 'wl-tok', placeholder: 'Paste fresh token to update', style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '8px' } })
+      ),
+      h('div', { style: { marginBottom: '14px' } },
+        h('label', { style: { display: 'block', fontSize: '.75rem', color: '#64748b', fontWeight: '600', marginBottom: '4px' } }, 'Portal base URL'),
+        h('input', { type: 'text', id: 'wl-base', value: cur.WL_PORTAL_BASE_URL || location.origin, style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '8px' } })
+      ),
+      h('div', { style: { display: 'flex', gap: '8px', justifyContent: 'flex-end' } },
+        h('button', { class: 'btn', onclick: function(){ overlay.remove(); } }, 'Cancel'),
+        h('button', { class: 'btn primary', onclick: async function() {
+          try {
+            await api('api_saas_wl_settingsSave', {
+              WL_WA_PHONE_NUMBER_ID: document.getElementById('wl-pid').value,
+              WL_WA_ACCESS_TOKEN:    document.getElementById('wl-tok').value,
+              WL_PORTAL_BASE_URL:    document.getElementById('wl-base').value
+            });
+            overlay.remove();
+            alert('Saved.');
+          } catch (e) { alert(e.message); }
+        } }, 'Save')
+      )
+    )
+  );
+  document.body.appendChild(overlay);
+}

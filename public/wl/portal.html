@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Account Portal — SmartCRM Solution</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f1f5f9; color: #0f172a; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 24px 20px 80px; }
+  header { background: linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%); color:#fff; padding: 28px 20px; border-radius: 0 0 24px 24px; margin: 0 -20px 24px; box-shadow: 0 8px 24px rgba(99,102,241,.25); }
+  header h1 { margin: 0 0 4px; font-size: 1.4rem; }
+  header .sub { opacity:.9; font-size: .92rem; }
+  .kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 24px; }
+  @media (max-width: 600px) { .kpis { grid-template-columns: 1fr 1fr; } .kpis > div:nth-child(3) { grid-column: 1 / -1; } }
+  .kpi { background: #fff; border-radius: 14px; padding: 16px; box-shadow: 0 2px 6px rgba(15,23,42,.06); }
+  .kpi .label { font-size: .72rem; color: #64748b; text-transform: uppercase; letter-spacing: .5px; font-weight: 600; }
+  .kpi .value { font-size: 1.4rem; font-weight: 700; margin-top: 4px; }
+  .kpi.balance .value { color: #dc2626; }
+  .kpi.paid .value { color: #16a34a; }
+  .card { background: #fff; border-radius: 14px; padding: 20px; box-shadow: 0 2px 6px rgba(15,23,42,.06); margin-bottom: 16px; }
+  .card h3 { margin: 0 0 14px; font-size: 1rem; color: #334155; }
+  table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+  th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid #f1f5f9; }
+  th { color: #64748b; font-size: .72rem; text-transform: uppercase; letter-spacing: .5px; font-weight: 600; }
+  .pill { display: inline-block; padding: 2px 10px; border-radius: 99px; font-size: .72rem; font-weight: 600; }
+  .p-pending { background: #fef3c7; color: #92400e; }
+  .p-sent    { background: #dbeafe; color: #1e40af; }
+  .p-paid    { background: #d1fae5; color: #065f46; }
+  .p-overdue { background: #fee2e2; color: #991b1b; }
+  .pay-btn { background: #16a34a; color: #fff; border: none; padding: 8px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: .85rem; }
+  .pay-btn:hover { background: #15803d; }
+  .pay-btn:disabled { background: #94a3b8; cursor: not-allowed; }
+  .empty { text-align: center; padding: 30px; color: #94a3b8; font-size: .9rem; }
+  .err { background:#fee2e2;color:#991b1b;padding:14px;border-radius:8px;font-size:.9rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1 id="hdrTitle">Loading…</h1>
+    <div class="sub" id="hdrSub"></div>
+  </header>
+  <div id="content"></div>
+</div>
+<script>
+(async function(){
+  const m = location.pathname.match(/\/wl\/portal\/([a-zA-Z0-9]+)/);
+  const token = m ? m[1] : null;
+  if (!token) { document.getElementById('content').innerHTML = '<div class="err">Invalid portal link.</div>'; return; }
+  const fmt = n => '₹' + Number(n||0).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2});
+  async function call(fn, ...args) {
+    const r = await fetch('/wl/portal-api', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ fn, args:[token, ...args] })
+    });
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    return j;
+  }
+  let data;
+  try { data = await call('view'); }
+  catch (e) {
+    document.getElementById('content').innerHTML = '<div class="err">'+ e.message +'</div>';
+    return;
+  }
+  const c = data.customer;
+  document.getElementById('hdrTitle').textContent = c.company_name;
+  document.getElementById('hdrSub').textContent = (c.product_name || '') + (c.total_users ? '  ·  ' + c.total_users + ' users' : '');
+  const root = document.getElementById('content');
+  root.innerHTML = `
+    <div class="kpis">
+      <div class="kpi balance"><div class="label">Outstanding</div><div class="value">${fmt(c.balance)}</div></div>
+      <div class="kpi"><div class="label">Monthly</div><div class="value">${fmt(c.monthly_amount)}</div></div>
+      <div class="kpi paid"><div class="label">Total Paid</div><div class="value">${fmt(c.total_paid)}</div></div>
+    </div>
+    <div class="card">
+      <h3>🧾 Invoices</h3>
+      <div id="invoices"></div>
+    </div>
+    <div class="card">
+      <h3>💰 Payment History</h3>
+      <div id="payments"></div>
+    </div>
+  `;
+  const invBox = document.getElementById('invoices');
+  if (!data.invoices.length) {
+    invBox.innerHTML = '<div class="empty">No invoices yet.</div>';
+  } else {
+    invBox.innerHTML = `<table><thead><tr><th>Invoice</th><th>Month</th><th>Amount</th><th>Status</th><th>Action</th></tr></thead><tbody>
+      ${data.invoices.map(i => `<tr>
+        <td>${i.invoice_no}</td>
+        <td>${i.period_month}</td>
+        <td>${fmt(i.amount)}</td>
+        <td><span class="pill p-${i.status}">${i.status}</span></td>
+        <td>${i.status === 'paid' ? '<span style="color:#16a34a;font-size:.85rem">Paid ✓</span>'
+          : '<button class="pay-btn" data-inv="'+i.id+'">Pay Now</button>'}</td>
+      </tr>`).join('')}
+    </tbody></table>`;
+    invBox.querySelectorAll('.pay-btn').forEach(btn => {
+      btn.onclick = async () => {
+        btn.disabled = true; btn.textContent = 'Opening…';
+        try {
+          const r = await call('payLink', Number(btn.dataset.inv));
+          if (r.paid) { btn.textContent = 'Paid ✓'; return; }
+          if (r.link) location.href = r.link;
+          else { btn.textContent = 'Pay Now'; btn.disabled = false; alert('Could not generate link'); }
+        } catch (e) {
+          btn.textContent = 'Pay Now'; btn.disabled = false;
+          alert(e.message);
+        }
+      };
+    });
+  }
+  const payBox = document.getElementById('payments');
+  if (!data.payments.length) {
+    payBox.innerHTML = '<div class="empty">No payments recorded yet.</div>';
+  } else {
+    payBox.innerHTML = `<table><thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Reference</th></tr></thead><tbody>
+      ${data.payments.map(p => `<tr>
+        <td>${new Date(p.paid_at).toLocaleDateString('en-IN')}</td>
+        <td>${fmt(p.amount)}</td>
+        <td>${p.method || '—'}</td>
+        <td style="font-family:monospace;font-size:.8rem;color:#64748b">${p.reference || '—'}</td>
+      </tr>`).join('')}
+    </tbody></table>`;
+  }
+})();
+</script>
+</body>
+</html>
