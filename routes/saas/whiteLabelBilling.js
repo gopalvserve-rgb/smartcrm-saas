@@ -152,11 +152,15 @@ async function api_saas_wl_invoices_listForCustomer(token, customerId) {
 async function api_saas_wl_invoices_generateMonth(token, customerId) {
   await requireSuperAdmin(token);
   const month = _monthYYYYMM();
-  const where = customerId ? `AND id = $2` : '';
-  const params = customerId ? [month, Number(customerId)] : [month];
+  // WL_BILLING_INV_PARAM_FIX (2026-06-15): SQL was using $2 with a single-
+  // element params array (no $1 referenced), so Postgres failed with
+  // 'could not determine data type of parameter $1'. The `month` is only
+  // used later in the dedup check (separate query), not in this SELECT.
+  // Fix: use $1 to match the actual params array.
   const customers = (await control.query(
     `SELECT * FROM wl_customers
-      WHERE status = 'active' AND monthly_amount > 0 ${where}
+      WHERE status = 'active' AND monthly_amount > 0
+        ${customerId ? 'AND id = $1' : ''}
       ORDER BY id ASC`,
     customerId ? [Number(customerId)] : []
   )).rows;
