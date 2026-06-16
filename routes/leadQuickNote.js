@@ -271,6 +271,25 @@ async function api_leads_quickNote(token, payload) {
         remark: '✨ ' + remarkText,
         status_id: statusUsed ? statusUsed.id : null
       });
+      // QNOTE_NOTES_SYNC_v1 (2026-06-16) — user feedback: when a rep adds
+      // a remark via the AI Quick Note, the remark lands in remarks (and
+      // activity timeline) but the Notes column on the leads list stays
+      // blank. Reps expected the latest note to appear in the Notes col.
+      // Fix: also append the remark to leads.notes (prepend so the
+      // newest is on top, cap to ~4 KB to avoid runaway growth).
+      try {
+        const cur = await db.findById('leads', leadId).catch(() => null);
+        const prev = (cur && cur.notes) ? String(cur.notes) : '';
+        const stamp = new Date().toLocaleString('en-IN', {
+          timeZone: 'Asia/Kolkata',
+          day: '2-digit', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true
+        });
+        const newLine = '✨ ' + stamp + ' — ' + remarkText;
+        const merged = (prev ? newLine + '\n' + prev : newLine).slice(0, 4096);
+        await db.update('leads', leadId, { notes: merged });
+      } catch (e) {
+        console.warn('[leadQuickNote] notes mirror failed:', e.message);
+      }
       // Also log to the lead activity timeline so the ✨ entry appears there
       try {
         await require('./tat').logAction(leadId, 'remark', me.id, {
