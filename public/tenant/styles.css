@@ -3971,16 +3971,30 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
 .qn-slash-menu { z-index: 9999 !important; }
 .qn-slash-item { user-select: none; }
 
-/* QNOTE_MOBILE_v1 — mobile lead-card AI Note button gets the gradient too,
-   but respects la-btn sizing so it slots cleanly into the icon-label row. */
+/* QNOTE_MOBILE_v1.1 (2026-06-16) — user reported faded button. Root cause:
+   .lc-actions .la-btn (specificity 0,2,0) sets defaults that override
+   .la-btn.ai-qnote-btn (also 0,2,0) because it comes later in the cascade.
+   All the sibling variant rules use .lc-actions .la-btn.X (0,3,0).
+   Fix: raise our selector to .lc-actions .la-btn.ai-qnote-btn (0,3,0)
+   so the gradient + white icon/label actually applies on mobile cards.
+   Also force the gradient + visible white SVG icon explicitly. */
+.lc-actions .la-btn.ai-qnote-btn,
 .la-btn.ai-qnote-btn {
-  padding: 6px 4px !important;
-  font-size: 12px !important;
-  border-radius: 8px !important;
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #ec4899 100%) !important;
+  color: #fff !important;
+  border: 1px solid transparent !important;
+  padding: 9px 4px !important;
+  border-radius: 11px !important;
+  box-shadow: 0 5px 12px -3px rgba(139,92,246,.45), inset 0 1px 0 rgba(255,255,255,.18) !important;
 }
+.lc-actions .la-btn.ai-qnote-btn .la-icon,
 .la-btn.ai-qnote-btn .la-icon { color: #fff !important; }
-.la-btn.ai-qnote-btn .la-label { color: #fff !important; font-weight: 600 !important; }
-.la-btn.ai-qnote-btn:hover { transform: translateY(-1px) !important; }
+.lc-actions .la-btn.ai-qnote-btn .la-icon svg,
+.la-btn.ai-qnote-btn .la-icon svg { color: #fff !important; fill: #fff !important; }
+.lc-actions .la-btn.ai-qnote-btn .la-label,
+.la-btn.ai-qnote-btn .la-label { color: #fff !important; font-weight: 700 !important; }
+.lc-actions .la-btn.ai-qnote-btn:hover,
+.la-btn.ai-qnote-btn:hover { transform: translateY(-1px) !important; filter: brightness(1.05) !important; }
 
 
 /* ============================================================
