@@ -19,8 +19,22 @@
       // even though the user was signed in, because we were sending an
       // empty/stale legacy key while the real token lived under the
       // tenant-scoped name.
-      const slug = (location.pathname.match(/^\/t\/([^\/]+)/) || [])[1] || '';
-      const token = (slug && localStorage.getItem('crm_token_' + slug)) || localStorage.getItem('crm_token') || '';
+      // CP4_TOKEN_KEY_FIX_v2 (2026-06-16) — use the SAME resolution order
+      // as app.js's api() helper:
+      //   1. window.CRM.token (in-memory, freshest after login/refresh)
+      //   2. localStorage 'crm_token_<slug>' (per-workspace scoped key)
+      //   3. localStorage 'crm_token' (legacy/global fallback)
+      //   4. window.CRM._slug-derived path as a last-resort
+      let slug = '';
+      try { slug = (window.CRM && window.CRM._slug) || (location.pathname.match(/^\/t\/([^\/]+)/) || [])[1] || ''; } catch (_) {}
+      let token = '';
+      try { token = (window.CRM && window.CRM.token) || ''; } catch (_) {}
+      if (!token && slug) {
+        try { token = localStorage.getItem('crm_token_' + slug) || ''; } catch (_) {}
+      }
+      if (!token) {
+        try { token = localStorage.getItem('crm_token') || ''; } catch (_) {}
+      }
       const path = (location.pathname.match(/^\/t\/[^\/]+/) || [''])[0] || '';
       const body = (args === null) ? { fn, args: [] } : { fn, args: Array.isArray(args) ? args : [args] };
       const res = await fetch(path + '/api', {
@@ -148,8 +162,19 @@
           '</div>'
         );
       } else {
-        const errMsg = (sum && sum.error) ? sum.error : 'Could not generate AI summary right now. Check Gemini API key in Settings.';
-        parts.push('<div style="background:#fff;border-radius:10px;padding:12px 14px;color:#94a3b8;font-style:italic">' + _esc(errMsg) + '</div>');
+        // CP4_FRIENDLY_ERROR_v1 (2026-06-16) — translate the raw backend
+        // error into something a salesperson can act on. Echoing the JWT
+        // error verbatim scares users; explain what to do instead.
+        let rawErr = (sum && sum.error) ? String(sum.error) : '';
+        let friendly;
+        if (/Invalid or expired token|No token|Not signed in/i.test(rawErr)) {
+          friendly = '⚠ Your session may have refreshed. Please reload this page and try again.';
+        } else if (rawErr) {
+          friendly = rawErr;
+        } else {
+          friendly = 'Could not generate AI summary right now. Check Gemini API key in Settings.';
+        }
+        parts.push('<div style="background:#fff;border-radius:10px;padding:12px 14px;color:#94a3b8;font-style:italic">' + _esc(friendly) + '</div>');
       }
 
       // Section 2: Next action
