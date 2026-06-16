@@ -36,7 +36,16 @@
         try { token = localStorage.getItem('crm_token') || ''; } catch (_) {}
       }
       const path = (location.pathname.match(/^\/t\/[^\/]+/) || [''])[0] || '';
-      const body = (args === null) ? { fn, args: [] } : { fn, args: Array.isArray(args) ? args : [args] };
+      // CP4_TOKEN_POSITIONAL_FIX_v3 (2026-06-17) — the tenant dispatcher
+      // (routes/saas/tenantApi.js:280) ignores HTTP headers and reads the
+      // token from args[0] only. The earlier "header-only" approach made
+      // every api_copilot_* call look unauthenticated → "Invalid or
+      // expired token" → "Your session may have refreshed" friendly
+      // message. Mirror what public/tenant/app.js's api() helper does:
+      // prepend the token to the args array. Headers stay too; they're
+      // harmless.
+      const callArgs = (args === null) ? [] : (Array.isArray(args) ? args : [args]);
+      const body = { fn, args: [token, ...callArgs] };
       const res = await fetch(path + '/api', {
         method: 'POST',
         headers: {
