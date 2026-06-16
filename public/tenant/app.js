@@ -10480,7 +10480,21 @@ async function openQuickNoteInline(lead) {
                  borderBottom: i === matches.length - 1 ? 'none' : '1px solid #f1f5f9',
                  background: i === 0 ? '#eef2ff' : '#fff' },
         onclick: () => { pickedStatus = { id: s.id, name: s.name, color: s.color || '#6366f1' };
-                         input.value = ''; slashMenu.style.display = 'none'; menuOpen = false;
+                         // QNOTE_v3_FIX — remove only the '/foo' fragment, keep the rest of the note intact.
+                         try {
+                           const cur = input.value || '';
+                           const lastSlash = cur.lastIndexOf('/');
+                           if (lastSlash >= 0) {
+                             const before = cur.slice(0, lastSlash).replace(/\s+$/, '');
+                             // Drop everything from '/' to next whitespace (or end of string)
+                             const afterSegment = cur.slice(lastSlash + 1);
+                             const tail = afterSegment.replace(/^[^\s]*/, '');
+                             input.value = (before + ' ' + tail).replace(/\s+/g, ' ').trim();
+                           } else {
+                             input.value = '';
+                           }
+                         } catch (_) { input.value = ''; }
+                         slashMenu.style.display = 'none'; menuOpen = false;
                          renderChip(); updateSaveEnabled(); input.focus(); }
       },
         h('span', { style: { width: '10px', height: '10px', borderRadius: '50%', background: s.color || '#94a3b8' } }),
@@ -10506,12 +10520,25 @@ async function openQuickNoteInline(lead) {
 
   input.addEventListener('input', () => {
     const v = input.value;
-    // QNOTE_v2_FIX — trigger on '/' even with leading space, and even if a
-    // chip is already picked (user can swap status).
-    const tv = v.trimStart();
-    if (tv.startsWith('/')) {
-      showSlashMenu(tv.slice(1).toLowerCase().trim());
-    } else if (menuOpen) {
+    // QNOTE_v3_FIX (2026-06-16) — allow '/' ANYWHERE in the input, not just
+    // at the start. User wanted to type the note first then hit '/' at the
+    // end to pick a status. Find the LAST '/' that's at start or preceded
+    // by whitespace (so URLs like http:// don't trigger).
+    const lastSlash = v.lastIndexOf('/');
+    let opened = false;
+    if (lastSlash >= 0) {
+      const prefixOK = lastSlash === 0 || /\s/.test(v.charAt(lastSlash - 1));
+      // Anything after the slash up to next whitespace is the filter
+      const tail = v.slice(lastSlash + 1);
+      const filter = tail.split(/\s/)[0].toLowerCase().trim();
+      // Only show menu if filter has 0-25 chars and no space immediately after '/'
+      // (so '/foo bar' filters by 'foo', '/ ' closes menu)
+      if (prefixOK && tail.length < 30 && !/^\s/.test(tail)) {
+        showSlashMenu(filter);
+        opened = true;
+      }
+    }
+    if (!opened && menuOpen) {
       slashMenu.style.display = 'none'; menuOpen = false;
     }
     updateSaveEnabled();

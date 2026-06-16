@@ -126,7 +126,15 @@ async function api_leads_quickNote(token, payload) {
   }
   const p = payload || {};
   const leadId = Number(p.lead_id);
-  const text = String(p.text || '').trim();
+  // QNOTE_v3_FIX (2026-06-16) — input cleanup:
+  //   1) strip trailing '/' that user typed to trigger status menu but
+  //      didn't actually pick (would confuse Gemini's parse).
+  //   2) normalize "12 :00 pm" -> "12:00 pm" (extra space between hour
+  //      and ':' breaks Gemini's time detection).
+  let _rawText = String(p.text || '').trim();
+  _rawText = _rawText.replace(/\/+\s*$/, '').trim();
+  _rawText = _rawText.replace(/(\d{1,2})\s+(:)\s*(\d{2})/g, '$1:$3');
+  const text = _rawText;
   const pickedStatusId = p.picked_status_id ? Number(p.picked_status_id) : null;
 
   if (!leadId) throw new Error('lead_id required');
@@ -199,6 +207,29 @@ async function api_leads_quickNote(token, payload) {
   }
 
   // ----- Build the patch (slash status wins over Gemini hint) -----
+  // QNOTE_v3_FIX (2026-06-16) — added a keyword fallback. If Gemini
+  // missed the status_hint but the rep clearly typed "follow up", "call
+  // back", "not pick", etc., match to an existing status by keyword.
+  const _statusKeywordMap = [
+    { kw: ['follow up', 'followup', 'call back', 'callback'], target: 'follow' },
+    { kw: ['not pick', 'not picked', 'no answer', 'no response'], target: 'not pick' },
+    { kw: ['interested', 'qualified'], target: 'qualified' },
+    { kw: ['not interested', 'not int'], target: 'not interested' },
+    { kw: ['junk', 'spam', 'fake'], target: 'junk' },
+    { kw: ['won', 'closed', 'deal done', 'converted'], target: 'won' },
+    { kw: ['lost'], target: 'lost' },
+    { kw: ['proposal', 'quote sent', 'sent quote'], target: 'proposal' }
+  ];
+  function _keywordStatusGuess() {
+    const lower = String(text || '').toLowerCase();
+    for (const ent of _statusKeywordMap) {
+      if (ent.kw.some(k => lower.includes(k))) {
+        const hit = _resolveStatusByName(statuses, ent.target);
+        if (hit) return hit;
+      }
+    }
+    return null;
+  }
   const patch = {};
   let statusUsed = null;
   if (pickedStatusId) {
@@ -213,17 +244,58 @@ async function api_leads_quickNote(token, payload) {
       patch.status_id = matched.id;
       statusUsed = matched;
     }
+  } else {
+    const guess = _keywordStatusGuess();
+    if (guess) { patch.status_id = guess.id; statusUsed = guess; }
   }
 
   // Follow-up
   let usedDefaultTime = false;
   let followupISO = null;
+  // QNOTE_v3_FIX — local fallback time parser if Gemini returned null.
+  // Handles: "12 pm today", "3pm tomorrow", "5:30 pm today", "tomorrow 10am"
+  function _localTimeParse(txt) {
+    const lower = String(txt || '').toLowerCase();
+    const today = lower.includes('today');
+    const tomorrow = lower.includes('tomorrow') || lower.includes('tmrw');
+    if (!today && !tomorrow) return null;
+    // h(:mm)?\s*(am|pm)
+    const m = lower.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/);
+    let hh = 10, mm = 0;
+    if (m) {
+      hh = Number(m[1]); mm = Number(m[2] || 0);
+      if (m[3] === 'pm' && hh < 12) hh += 12;
+      if (m[3] === 'am' && hh === 12) hh = 0;
+    } else {
+      // 24h form like "14:30"
+      const m2 = lower.match(/\b(\d{1,2}):(\d{2})\b/);
+      if (m2) { hh = Number(m2[1]); mm = Number(m2[2]); }
+    }
+    const nowIst = new Date(Date.now() + 5.5 * 3600 * 1000);
+    const base = new Date(nowIst.getTime() + (tomorrow ? 24 * 3600 * 1000 : 0));
+    const yyyy = base.getUTCFullYear();
+    const mo = String(base.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(base.getUTCDate()).padStart(2, '0');
+    const hhStr = String(hh).padStart(2, '0');
+    const mmStr = String(mm).padStart(2, '0');
+    return `${yyyy}-${mo}-${dd}T${hhStr}:${mmStr}:00+05:30`;
+  }
   if (parsed.followup_at) {
     const d = new Date(parsed.followup_at);
     if (!isNaN(d.getTime()) && d.getTime() > Date.now() - 60_000) {
       followupISO = d.toISOString();
       patch.next_followup_at = followupISO;
       usedDefaultTime = !!parsed.followup_time_was_default;
+    }
+  }
+  if (!followupISO && text) {
+    const localIso = _localTimeParse(text);
+    if (localIso) {
+      const d = new Date(localIso);
+      if (!isNaN(d.getTime()) && d.getTime() > Date.now() - 60_000) {
+        followupISO = d.toISOString();
+        patch.next_followup_at = followupISO;
+      }
     }
   }
 
