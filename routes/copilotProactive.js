@@ -351,7 +351,10 @@ No preamble. Output ONLY the JSON object.`;
 // ── PHASE 3 — Signals list / dismiss / act ────────────────────────────
 async function api_copilot_signals_list(token, payload) {
   const u = await _requireUser(token);
-  if (!await _enabled()) return { ok: true, signals: [], chips: [] };
+  // CP4_BACKEND_GATE_DROP (2026-06-16): same as briefing/summary —
+  // the SPA already gates on brand.COPILOT_PROACTIVE_ENABLED before
+  // polling this. The broken backend gate was returning empty signals
+  // even on vserve where the flag is set, hiding the 🔔 badge.
   const limit = Math.min(20, Number((payload && payload.limit) || 12));
 
   try {
