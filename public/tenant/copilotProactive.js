@@ -365,11 +365,17 @@
 
   // ── Signal badge ───────────────────────────────────────────────
   let _signalPoll = null;
+  // CP4_CLEANUP_v1 (2026-06-17) — the floating 🔔 signal badge is
+  // retired. The same signals now live inside the Copilot drawer
+  // (auto-opened once per day with the Day Summary bubble) and the
+  // existing app.js #btn-notif covers in-app notifications. A second
+  // top-right bell was just visual clutter. Function preserved as a
+  // no-op so anything that still calls it stays safe.
   async function refreshSignals() {
-    if (!_enabled()) return;
-    const data = await _api('api_copilot_signals_list', { limit: 12 });
-    if (!data || !data.ok) return;
-    _renderBadge((data.signals || []).length, data.signals || []);
+    const stale = document.getElementById('cp4-signal-badge');
+    if (stale) stale.remove();
+    const sheet = document.getElementById('cp4-signal-sheet');
+    if (sheet) sheet.remove();
   }
   function _renderBadge(count, signals) {
     let badge = document.getElementById('cp4-signal-badge');
@@ -581,39 +587,38 @@
   }
   window.coachOpenLeadSummary = _renderLeadSummaryOverlay;
 
-  // Inject a sparkle button into lead-listing rows. We watch for
-  // anything with data-id under any table or card whose parent looks
-  // like the leads list. Safe even if the SPA re-renders frequently
-  // — we mark rows we've already touched with data-cp4-injected.
+  // LEAD_AI_HUB_v4 (2026-06-17) — inject a sparkle ✨ button onto
+  // every lead-listing row. The previous selector targeted
+  // tr[data-id] but the actual DOM (see public/tenant/app.js
+  // _buildLeadRow ~line 5806) puts the lead id on the row's
+  // checkbox: <input type="checkbox" class="row-check" data-id="..">.
+  // We climb from the checkbox up to its <tr>, then drop the button
+  // into <td class="td-actions"> at the end of the row.
   function _injectListingButtons() {
     if (!_enabled()) return;
-    // Multiple selector strategies because app.js may use td or card
-    // patterns depending on desktop vs mobile.
-    const rows = document.querySelectorAll(
-      '#leads-tbody tr[data-id], .lc-card[data-id], [data-lead-id], .lead-card[data-id]'
-    );
-    rows.forEach(row => {
-      if (row.getAttribute('data-cp4-injected') === '1') return;
-      // Look for the actions cell / actions container in this row.
-      // Different render paths put it in different spots, so try a
-      // few in order and fall back to the row itself.
-      const actionCell = row.querySelector('td:last-child') ||
-                         row.querySelector('.lc-actions') ||
-                         row.querySelector('.actions') || row;
-      const leadId = row.getAttribute('data-id') || row.getAttribute('data-lead-id');
+    const checkboxes = document.querySelectorAll('input.row-check[data-id]');
+    checkboxes.forEach(cb => {
+      const tr = cb.closest('tr');
+      if (!tr) return;
+      if (tr.getAttribute('data-cp4-injected') === '1') return;
+      const leadId = cb.getAttribute('data-id');
       if (!leadId) return;
+      // Action cell is td.td-actions (the rightmost td in _buildLeadRow).
+      // Fall back to the last td in the row if the class isn't present.
+      const actionCell = tr.querySelector('td.td-actions') || tr.lastElementChild;
+      if (!actionCell) return;
       const btn = document.createElement('button');
       btn.className = 'btn sm cp4-aibtn';
       btn.title = 'AI Summary for this lead';
-      btn.innerHTML = '✨';
-      btn.style.cssText = 'background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;border:0;border-radius:6px;padding:3px 8px;cursor:pointer;font-size:.85rem;margin-left:4px;line-height:1';
+      btn.innerHTML = '✨ AI';
+      btn.style.cssText = 'background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;border:0;border-radius:6px;padding:3px 9px;cursor:pointer;font-size:.78rem;font-weight:600;margin-left:4px;line-height:1.4;vertical-align:middle';
       btn.onclick = (e) => {
         e.preventDefault();
         e.stopPropagation();
         _renderLeadSummaryOverlay(Number(leadId));
       };
       actionCell.appendChild(btn);
-      row.setAttribute('data-cp4-injected', '1');
+      tr.setAttribute('data-cp4-injected', '1');
     });
   }
 
