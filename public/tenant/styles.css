@@ -2782,12 +2782,21 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
     right: 14px !important;
     z-index: 10001 !important;
   }
+  /* TOUR_FAB_MOVE_LEFT_v1 (2026-06-16) — user reported the orange 📚
+     showcase-tour FAB on the bottom-RIGHT confused them on mobile (they
+     mistook it for the Add-Lead button). Move it to bottom-LEFT and let
+     the Add-Lead "+" sit higher up. */
+  #tour-fab {
+    left: 14px !important;
+    right: auto !important;
+    bottom: calc(72px + env(safe-area-inset-bottom, 0px) + 16px) !important;
+  }
   /* LEAD_ADD_FAB_MOBILE_v1 (2026-06-16) — Add-Lead "+" floating action
-     button shown on mobile only. Sits at bottom-LEFT so it never
-     conflicts with the Copilot ✨ FAB on the right or the bottom-nav. */
+     button shown on mobile only. Sits at bottom-LEFT but stacked ABOVE
+     the showcase-tour FAB. */
   #lead-add-fab-mobile {
     position: fixed !important;
-    bottom: calc(72px + env(safe-area-inset-bottom, 0px) + 16px) !important;
+    bottom: calc(72px + env(safe-area-inset-bottom, 0px) + 84px) !important;
     left: 14px !important;
     width: 56px !important;
     height: 56px !important;
