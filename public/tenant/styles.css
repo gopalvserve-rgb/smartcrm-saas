@@ -2768,9 +2768,15 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
     height: min(70vh, calc(100vh - 200px)) !important;
     z-index: 10002 !important;
   }
-  /* If a 📚 KB FAB is also present, lift it the same way and stagger
-     it above the Copilot button. */
-  #kb-fab,
+  /* KB_FAB_HIDE_MOBILE_v1 (2026-06-16) — hide the 📚 Knowledge Base
+     floating button on mobile. It overlapped the right-edge action
+     buttons (Delete) on lead cards. KB is still reachable from the
+     sidebar nav and the bottom-nav "More" menu, so no functionality
+     is lost on mobile. .copilot-secondary-fab retains its lift in
+     case any secondary FAB shows up. */
+  #kb-fab {
+    display: none !important;
+  }
   .copilot-secondary-fab {
     bottom: calc(72px + env(safe-area-inset-bottom, 0px) + 70px) !important;
     right: 14px !important;
