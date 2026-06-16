@@ -439,9 +439,42 @@
     return html;
   }
 
-  function _renderDaySummaryPanel(data) {
-    const old = document.getElementById('cp4-daysum-overlay');
-    if (old) old.remove();
+  // CP4_DAYSUM_v2 (2026-06-17) — instead of a centered popup, we now
+  // open the Copilot floating drawer (which holds the chat history)
+  // and append the day summary as a "model" message bubble. The user
+  // explicitly asked for the items to live inside Copilot, not in a
+  // separate overlay.
+  function _waitForEl(selector, timeoutMs) {
+    return new Promise(resolve => {
+      const have = document.querySelector(selector);
+      if (have) return resolve(have);
+      const t0 = Date.now();
+      const obs = new MutationObserver(() => {
+        const el = document.querySelector(selector);
+        if (el) { obs.disconnect(); resolve(el); }
+        else if (Date.now() - t0 > (timeoutMs || 4000)) { obs.disconnect(); resolve(null); }
+      });
+      obs.observe(document.body, { childList: true, subtree: true });
+      setTimeout(() => { obs.disconnect(); resolve(document.querySelector(selector)); }, timeoutMs || 4000);
+    });
+  }
+
+  async function _showDaySummaryInCopilot(data) {
+    // Bail if the Copilot FAB never mounted on this page (rare race).
+    const fab = await _waitForEl('#copilot-fab', 5000);
+    if (!fab) return false;
+
+    // If the drawer isn't open yet, click the FAB to open it. Then wait
+    // for #copilot-log to render. The drawer is removed on every close,
+    // so checking for the drawer is the right "is open" signal.
+    let drawer = document.getElementById('copilot-drawer');
+    if (!drawer) {
+      try { fab.click(); } catch (_) {}
+      drawer = await _waitForEl('#copilot-drawer', 3000);
+    }
+    const log = await _waitForEl('#copilot-log', 3000);
+    if (!log) return false;
+
     const items = Array.isArray(data && data.items) ? data.items : [];
     const buckets = { old_customer_msg: [], followup_due: [], hot_score_jump: [], other: [] };
     items.forEach(it => { (buckets[it.kind] || buckets.other).push(it); });
@@ -452,39 +485,38 @@
     const hot = buckets.hot_score_jump.concat(buckets.other);
     if (hot.length) sections.push(_groupCard('🔥', '#ef4444', 'Hot leads needing attention', hot));
 
-    const overlay = document.createElement('div');
-    overlay.id = 'cp4-daysum-overlay';
-    overlay.style.cssText = 'position:fixed;inset:0;z-index:9998;background:rgba(15,23,42,.55);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:20px;animation:cp4DsFadeIn .25s ease';
-    overlay.innerHTML =
-      '<style>@keyframes cp4DsFadeIn{from{opacity:0}to{opacity:1}}@keyframes cp4DsSlideUp{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}</style>' +
-      '<div style="background:#fff;border-radius:16px;max-width:560px;width:100%;max-height:90vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.35);animation:cp4DsSlideUp .3s ease">' +
-        '<div style="padding:18px 22px;display:flex;align-items:center;justify-content:space-between;gap:12px;background:linear-gradient(135deg,#4f46e5 0%,#7c3aed 100%);color:#fff;border-radius:16px 16px 0 0;position:sticky;top:0;z-index:1">' +
-          '<div style="flex:1;min-width:0">' +
-            '<div style="font-size:.78rem;opacity:.88">🤖 Copilot</div>' +
-            '<div style="font-size:1.15rem;font-weight:700;margin-top:2px">' + _esc(data.greeting || 'Your day at a glance') + '</div>' +
-            '<div style="font-size:.78rem;opacity:.85;margin-top:2px">' + items.length + ' thing' + (items.length === 1 ? '' : 's') + ' to focus on today</div>' +
-          '</div>' +
-          '<button id="cp4-daysum-close" style="background:rgba(255,255,255,.2);border:0;color:#fff;width:34px;height:34px;border-radius:50%;cursor:pointer;font-size:1.3rem;line-height:1;flex-shrink:0">×</button>' +
+    // Build the message bubble styled like a Copilot "model" message
+    // (white background, left-aligned, slight shadow) but a touch
+    // wider so the grouped cards breathe.
+    const bubble = document.createElement('div');
+    bubble.className = 'copilot-msg model cp4-daysum-bubble';
+    bubble.style.cssText = 'align-self:flex-start;background:#fff;color:#0f172a;padding:12px 14px;border-radius:12px;max-width:95%;font-size:.86rem;line-height:1.4;box-shadow:0 1px 2px rgba(15,23,42,.08);border:1px solid #e2e8f0;display:flex;flex-direction:column;gap:10px;width:100%';
+    bubble.innerHTML =
+      '<div style="display:flex;align-items:center;gap:8px;padding-bottom:8px;border-bottom:1px solid #f1f5f9">' +
+        '<div style="font-size:1.1rem">🤖</div>' +
+        '<div style="flex:1;min-width:0">' +
+          '<div style="font-weight:700;font-size:.92rem;color:#1e1b4b">' + _esc(data.greeting || 'Day Summary') + '</div>' +
+          '<div style="font-size:.72rem;color:#64748b">' + items.length + ' thing' + (items.length === 1 ? '' : 's') + ' to focus on today</div>' +
         '</div>' +
-        '<div style="padding:18px 22px;display:flex;flex-direction:column;gap:14px">' +
-          (sections.length ? sections.join('') : '<div style="text-align:center;color:#64748b;padding:30px 16px"><div style="font-size:2rem">✨</div><div style="margin-top:6px">Nothing urgent right now. Have a productive day.</div></div>') +
-        '</div>' +
-      '</div>';
-    document.body.appendChild(overlay);
+      '</div>' +
+      (sections.length
+        ? sections.join('')
+        : '<div style="text-align:center;color:#64748b;padding:14px 8px"><div style="font-size:1.4rem">✨</div><div style="margin-top:4px">Nothing urgent right now.</div></div>');
 
-    overlay.querySelector('#cp4-daysum-close').onclick = () => overlay.remove();
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-    overlay.querySelectorAll('[data-cp4-ds-lead]').forEach(btn => btn.onclick = e => {
+    log.appendChild(bubble);
+    log.scrollTop = log.scrollHeight;
+
+    // Wire per-item Open buttons in the bubble.
+    bubble.querySelectorAll('[data-cp4-ds-lead]').forEach(btn => btn.onclick = e => {
       e.stopPropagation();
       const lid = btn.getAttribute('data-cp4-ds-lead');
       const sid = btn.getAttribute('data-cp4-ds-sig');
       if (sid) _api('api_copilot_signal_act', { id: Number(sid) });
-      if (lid && Number(lid)) {
-        overlay.remove();
-        location.hash = '#/leads/' + lid;
-      }
+      if (lid && Number(lid)) location.hash = '#/leads/' + lid;
     });
+    return true;
   }
+
 
   async function _maybeShowDaySummary() {
     if (!_enabled()) return;
@@ -498,7 +530,7 @@
     const data = await _api('api_copilot_briefing', { force: false });
     if (!data || !data.ok) return;
     if (!data.items || !data.items.length) return; // mark-shown above means we won't re-poll today
-    _renderDaySummaryPanel(data);
+    _showDaySummaryInCopilot(data);
   }
 
   async function init() {
