@@ -6,11 +6,25 @@
 (function(){
   'use strict';
 
-  function _enabled() {
+  // CP4_BRAND_GATE_FIX (2026-06-15): app.js doesn't expose window.CRM.brand —
+  // brand is a closure-local in warmCache(). Our old `_enabled()` read
+  // window.CRM.brand.COPILOT_PROACTIVE_ENABLED which was always undefined,
+  // so even with the flag set to '1' on the tenant DB nothing rendered.
+  // Fix: fetch api_admin_brand once at init, cache the result.
+  let _cachedEnabled = null;  // null = not yet checked, true/false after check
+  async function _fetchEnabledOnce() {
+    if (_cachedEnabled !== null) return _cachedEnabled;
     try {
-      const b = (window.CRM && window.CRM.brand) || {};
-      return String(b.COPILOT_PROACTIVE_ENABLED || '') === '1';
-    } catch { return false; }
+      const r = await _api('api_admin_brand', null);
+      const v = (r && r.COPILOT_PROACTIVE_ENABLED) || '';
+      _cachedEnabled = String(v) === '1';
+    } catch { _cachedEnabled = false; }
+    return _cachedEnabled;
+  }
+  function _enabled() {
+    // Synchronous accessor — returns the cached value (or false if not
+    // yet fetched). Init kicks off the fetch before any widget renders.
+    return _cachedEnabled === true;
   }
 
   async function _api(fn, args) {
@@ -244,7 +258,8 @@
   function _esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
 
   // ── Init ────────────────────────────────────────────────────────
-  function init() {
+  async function init() {
+    await _fetchEnabledOnce();
     if (!_enabled()) return;
     window.addEventListener('hashchange', _onHash);
     setTimeout(_onHash, 800);
