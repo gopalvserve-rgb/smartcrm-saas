@@ -1767,6 +1767,19 @@ async function api_leads_addRemark(token, leadId, payload) {
   if (p.status_id) leadPatch.status_id = p.status_id;
   if (p.next_followup_at) leadPatch.next_followup_at = p.next_followup_at;
   if (p.status_id && Number(p.status_id) !== priorStatus) leadPatch.last_status_change_at = db.nowIso();
+  // QNOTE_NOTES_SYNC_v2 (2026-06-16) — user feedback "Still same issue":
+  // mirror EVERY remark (not just QNote) into leads.notes so the Notes
+  // column on the leads list / Notes field on the lead modal always
+  // reflects the most-recent rep activity. Prepend with IST timestamp.
+  try {
+    const prev = (lead && lead.notes) ? String(lead.notes) : '';
+    const stamp = new Date().toLocaleString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      day: '2-digit', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true
+    });
+    const newLine = '📝 ' + stamp + ' — ' + String(p.remark).slice(0, 500);
+    leadPatch.notes = (prev ? newLine + '\n' + prev : newLine).slice(0, 4096);
+  } catch (_) {}
   await db.update('leads', leadId, leadPatch);
   if (p.next_followup_at) {
     await db.insert('followups', {
