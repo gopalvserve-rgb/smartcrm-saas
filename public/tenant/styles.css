@@ -2782,6 +2782,42 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
     right: 14px !important;
     z-index: 10001 !important;
   }
+  /* LEAD_ADD_FAB_MOBILE_v1 (2026-06-16) — Add-Lead "+" floating action
+     button shown on mobile only. Sits at bottom-LEFT so it never
+     conflicts with the Copilot ✨ FAB on the right or the bottom-nav. */
+  #lead-add-fab-mobile {
+    position: fixed !important;
+    bottom: calc(72px + env(safe-area-inset-bottom, 0px) + 16px) !important;
+    left: 14px !important;
+    width: 56px !important;
+    height: 56px !important;
+    border-radius: 50% !important;
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%) !important;
+    color: #fff !important;
+    border: none !important;
+    font-size: 28px !important;
+    line-height: 1 !important;
+    font-weight: 700 !important;
+    box-shadow: 0 8px 24px rgba(99, 102, 241, .55) !important;
+    z-index: 10001 !important;
+    cursor: pointer !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    padding: 0 !important;
+  }
+  #lead-add-fab-mobile:active {
+    transform: scale(0.94);
+    box-shadow: 0 4px 12px rgba(99, 102, 241, .55) !important;
+  }
+}
+
+/* On DESKTOP (>780px) the "+ New Lead" toolbar button is always visible,
+   so hide the mobile FAB completely. */
+@media (min-width: 781px) {
+  #lead-add-fab-mobile {
+    display: none !important;
+  }
 }
 
 

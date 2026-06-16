@@ -5129,6 +5129,33 @@ VIEWS.leads = async (view) => {
     h('button', { class: 'btn primary', onclick: () => openLeadModal() }, '+ New Lead')
   );
 
+  // LEAD_ADD_FAB_MOBILE_v1 (2026-06-16) — the toolbar above (which holds
+  // the desktop '+ New Lead' button) gets collapsed under the Filters
+  // toggle on mobile, hiding the add-lead action. Inject a small "+"
+  // floating action button into <body> that's only visible on mobile
+  // (CSS in styles.css). Tapping opens the same lead modal. The button
+  // is removed whenever the user navigates away from /#/leads so it
+  // doesn't bleed into Dashboard / Follow-ups / etc.
+  try {
+    if (!document.getElementById('lead-add-fab-mobile')) {
+      const fab = h('button', {
+        id: 'lead-add-fab-mobile',
+        title: 'Add new lead',
+        'aria-label': 'Add new lead',
+        onclick: () => openLeadModal()
+      }, '+');
+      document.body.appendChild(fab);
+    }
+    if (!window._leadAddFabHashGuard) {
+      window._leadAddFabHashGuard = true;
+      window.addEventListener('hashchange', () => {
+        const onLeads = /^#\/?leads(\/|$|\?)/.test(location.hash || '');
+        const el = document.getElementById('lead-add-fab-mobile');
+        if (el && !onLeads) el.remove();
+      });
+    }
+  } catch (_) {}
+
   // LEADS_FILTER_COLLAPSE_v2 — on mobile the filter toolbar fills the
   // entire viewport before any leads are visible. Wrap it in a one-line
   // toggle so the list shows immediately and filters are an explicit
