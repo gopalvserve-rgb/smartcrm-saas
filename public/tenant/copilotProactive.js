@@ -162,11 +162,31 @@
 
       const parts = [];
 
-      // Section 1: Summary
+      // LEAD_AI_HUB_v2 (2026-06-17) — Section 1a: Last Activity recap.
+      // This is built from real DB facts (last remark, follow-up,
+      // last incoming WA, last call) so the rep sees the source-of-truth
+      // even when Gemini fails. Render each bullet on its own line.
+      if (sum && sum.ok && sum.last_activity_line) {
+        const lines = String(sum.last_activity_line).split(/\n+/).filter(Boolean);
+        if (lines.length) {
+          let inner = '';
+          lines.forEach(ln => {
+            inner += '<div style="color:#1e1b4b;font-size:.85rem;line-height:1.45;padding:3px 0">' + _esc(ln) + '</div>';
+          });
+          parts.push(
+            '<div style="background:#fff;border-radius:10px;padding:10px 14px;border-left:3px solid #0ea5e9">' +
+              '<div style="font-size:.7rem;color:#0ea5e9;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">📋 LAST ACTIVITY</div>' +
+              inner +
+            '</div>'
+          );
+        }
+      }
+
+      // Section 1b: AI Summary
       if (sum && sum.ok && sum.summary) {
         parts.push(
           '<div style="background:#fff;border-radius:10px;padding:12px 14px;border-left:3px solid #6366f1">' +
-            '<div style="font-size:.7rem;color:#6366f1;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">📝 SUMMARY</div>' +
+            '<div style="font-size:.7rem;color:#6366f1;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">📝 AI SUMMARY</div>' +
             '<div style="color:#1e1b4b;font-size:.9rem;line-height:1.5">' + _esc(sum.summary) + '</div>' +
           '</div>'
         );
@@ -196,8 +216,11 @@
         );
       }
 
-      // Section 3: Draft message (with copy + WA send)
-      if (sum && sum.ok && sum.draft_msg) {
+      // LEAD_AI_HUB_v2 — Section 3: Draft message ONLY when backend
+      // says show_draft=true (incoming WA in last 48h unanswered). The
+      // earlier behaviour showed a message even when not relevant,
+      // which made it look like the recommended next step.
+      if (sum && sum.ok && sum.draft_msg && sum.show_draft) {
         parts.push(
           '<div style="background:#fff;border-radius:10px;padding:12px 14px;border-left:3px solid #10b981">' +
             '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:8px;flex-wrap:wrap">' +
