@@ -399,20 +399,103 @@
     });
   }
 
-  function _onHash() {
+  // CP4_DAYSUM_v1 (2026-06-17) — the inline purple "Good evening,
+  // N things to focus on today" banner has been retired. The same
+  // signals are now consolidated into a once-per-day Copilot-style
+  // overlay (see _renderDaySummaryPanel / _maybeShowDaySummary).
+  // We keep renderBriefing() defined but unreferenced so other call
+  // sites that might import it don't blow up; the overlay is the
+  // canonical surface now.
+  function _onHash() { /* no-op — banner retired in CP4_DAYSUM_v1 */ }
+
+  // Slide a Copilot-style overlay in once per calendar day per tenant.
+  // Groups items by kind: 📥 unanswered WhatsApps, ⏰ follow-ups due,
+  // 🔥 hot leads needing attention.
+  function _groupCard(icon, color, label, items) {
+    let html = '<div style="margin-top:4px"><div style="font-size:.72rem;color:' + color + ';font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">' + icon + ' ' + _esc(label) + ' (' + items.length + ')</div>';
+    items.forEach(it => {
+      html += '<div style="background:#f8fafc;border-left:3px solid ' + color + ';border-radius:8px;padding:10px 12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:10px">';
+      html += '<div style="flex:1;min-width:0"><div style="font-weight:600;color:#0f172a;font-size:.88rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + _esc(it.title || '') + '</div>';
+      html += '<div style="font-size:.78rem;color:#64748b;margin-top:2px">' + _esc(it.reason || '') + '</div></div>';
+      html += '<button data-cp4-ds-lead="' + (it.lead_id || '') + '" data-cp4-ds-sig="' + (it.signal_id || it.id || '') + '" style="background:#fff;border:1px solid ' + color + ';color:' + color + ';padding:5px 12px;border-radius:7px;cursor:pointer;font-size:.78rem;font-weight:600;white-space:nowrap">' + _esc(it.action_label || 'Open') + '</button>';
+      html += '</div>';
+    });
+    html += '</div>';
+    return html;
+  }
+
+  function _renderDaySummaryPanel(data) {
+    const old = document.getElementById('cp4-daysum-overlay');
+    if (old) old.remove();
+    const items = Array.isArray(data && data.items) ? data.items : [];
+    const buckets = { old_customer_msg: [], followup_due: [], hot_score_jump: [], other: [] };
+    items.forEach(it => { (buckets[it.kind] || buckets.other).push(it); });
+
+    const sections = [];
+    if (buckets.old_customer_msg.length) sections.push(_groupCard('📥', '#10b981', 'Unanswered WhatsApp', buckets.old_customer_msg));
+    if (buckets.followup_due.length)     sections.push(_groupCard('⏰', '#f59e0b', 'Follow-ups due today', buckets.followup_due));
+    const hot = buckets.hot_score_jump.concat(buckets.other);
+    if (hot.length) sections.push(_groupCard('🔥', '#ef4444', 'Hot leads needing attention', hot));
+
+    const overlay = document.createElement('div');
+    overlay.id = 'cp4-daysum-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:9998;background:rgba(15,23,42,.55);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:20px;animation:cp4DsFadeIn .25s ease';
+    overlay.innerHTML =
+      '<style>@keyframes cp4DsFadeIn{from{opacity:0}to{opacity:1}}@keyframes cp4DsSlideUp{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}</style>' +
+      '<div style="background:#fff;border-radius:16px;max-width:560px;width:100%;max-height:90vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.35);animation:cp4DsSlideUp .3s ease">' +
+        '<div style="padding:18px 22px;display:flex;align-items:center;justify-content:space-between;gap:12px;background:linear-gradient(135deg,#4f46e5 0%,#7c3aed 100%);color:#fff;border-radius:16px 16px 0 0;position:sticky;top:0;z-index:1">' +
+          '<div style="flex:1;min-width:0">' +
+            '<div style="font-size:.78rem;opacity:.88">🤖 Copilot</div>' +
+            '<div style="font-size:1.15rem;font-weight:700;margin-top:2px">' + _esc(data.greeting || 'Your day at a glance') + '</div>' +
+            '<div style="font-size:.78rem;opacity:.85;margin-top:2px">' + items.length + ' thing' + (items.length === 1 ? '' : 's') + ' to focus on today</div>' +
+          '</div>' +
+          '<button id="cp4-daysum-close" style="background:rgba(255,255,255,.2);border:0;color:#fff;width:34px;height:34px;border-radius:50%;cursor:pointer;font-size:1.3rem;line-height:1;flex-shrink:0">×</button>' +
+        '</div>' +
+        '<div style="padding:18px 22px;display:flex;flex-direction:column;gap:14px">' +
+          (sections.length ? sections.join('') : '<div style="text-align:center;color:#64748b;padding:30px 16px"><div style="font-size:2rem">✨</div><div style="margin-top:6px">Nothing urgent right now. Have a productive day.</div></div>') +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+
+    overlay.querySelector('#cp4-daysum-close').onclick = () => overlay.remove();
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    overlay.querySelectorAll('[data-cp4-ds-lead]').forEach(btn => btn.onclick = e => {
+      e.stopPropagation();
+      const lid = btn.getAttribute('data-cp4-ds-lead');
+      const sid = btn.getAttribute('data-cp4-ds-sig');
+      if (sid) _api('api_copilot_signal_act', { id: Number(sid) });
+      if (lid && Number(lid)) {
+        overlay.remove();
+        location.hash = '#/leads/' + lid;
+      }
+    });
+  }
+
+  async function _maybeShowDaySummary() {
     if (!_enabled()) return;
-    const h = location.hash || '';
-    if (h === '' || h === '#/' || h === '#/dashboard') setTimeout(() => renderBriefing(false), 400);
+    let slug = '';
+    try { slug = (window.CRM && window.CRM._slug) || (location.pathname.match(/^\/t\/([^\/]+)/) || [])[1] || ''; } catch (_) {}
+    const d = new Date();
+    const ymd = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    const key = 'cp4_daysum_' + slug + '_' + ymd;
+    try { if (localStorage.getItem(key) === '1') return; } catch (_) {}
+    try { localStorage.setItem(key, '1'); } catch (_) {}
+    const data = await _api('api_copilot_briefing', { force: false });
+    if (!data || !data.ok) return;
+    if (!data.items || !data.items.length) return; // mark-shown above means we won't re-poll today
+    _renderDaySummaryPanel(data);
   }
 
   async function init() {
     await _fetchEnabledOnce();
     if (!_enabled()) return;
     _patchLeadModalOpen();
-    window.addEventListener('hashchange', _onHash);
-    setTimeout(_onHash, 800);
     refreshSignals();
     _signalPoll = setInterval(refreshSignals, 90000);
+    // CP4_DAYSUM_v1 — wait for the SPA shell to settle before
+    // popping the overlay. 1500ms is enough that the user sees the
+    // CRM render first; the overlay slides in over the top.
+    setTimeout(_maybeShowDaySummary, 1500);
   }
 
   if (document.readyState === 'loading') {
