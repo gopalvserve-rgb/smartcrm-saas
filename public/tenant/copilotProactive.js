@@ -136,7 +136,8 @@
           '</div>'
         );
       } else {
-        parts.push('<div style="background:#fff;border-radius:10px;padding:12px 14px;color:#94a3b8;font-style:italic">AI Coach not enabled on this tenant. Ask the admin to flip COPILOT_PROACTIVE_ENABLED.</div>');
+        const errMsg = (sum && sum.error) ? sum.error : 'Could not generate AI summary right now. Check Gemini API key in Settings.';
+        parts.push('<div style="background:#fff;border-radius:10px;padding:12px 14px;color:#94a3b8;font-style:italic">' + _esc(errMsg) + '</div>');
       }
 
       // Section 2: Next action

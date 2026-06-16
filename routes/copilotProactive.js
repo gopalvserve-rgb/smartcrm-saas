@@ -171,8 +171,6 @@ async function _persistSignals(userId, signals) {
 // ── PHASE 1 — Morning Briefing ───────────────────────────────────────
 async function api_copilot_briefing(token, payload) {
   const u = await _requireUser(token);
-  if (!await _enabled()) return { ok: false, error: 'Proactive Coach not enabled on this tenant.', items: [] };
-
   const date = (payload && payload.date) || _todayIST();
   const force = !!(payload && payload.force);
 
@@ -239,7 +237,11 @@ async function api_copilot_briefing(token, payload) {
 // ── PHASE 2 — Lead AI Summary ────────────────────────────────────────
 async function api_copilot_lead_summary(token, payload) {
   await _requireUser(token);
-  if (!await _enabled()) return { ok: false, error: 'Proactive Coach not enabled.' };
+  // CP4_BACKEND_GATE_DROP (2026-06-16): the SPA gates on
+  // brand.COPILOT_PROACTIVE_ENABLED before calling this — a second
+  // backend gate via db.query was silently catching errors when
+  // tenantStorage context was lost and returning {ok:false}, blocking
+  // the feature even when the flag was set.
   const leadId = Number(payload && payload.lead_id);
   if (!leadId) return { ok: false, error: 'lead_id required' };
   const force = !!(payload && payload.force);
@@ -392,7 +394,6 @@ async function api_copilot_signal_act(token, payload) {
 // ── PHASE 5 — End-of-day recap ───────────────────────────────────────
 async function api_copilot_eod_recap(token, payload) {
   const u = await _requireUser(token);
-  if (!await _enabled()) return { ok: false, error: 'Proactive Coach not enabled.' };
   const today = (payload && payload.date) || _todayIST();
 
   let plan = null;
