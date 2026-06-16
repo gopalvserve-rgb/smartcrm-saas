@@ -12,12 +12,24 @@
   async function _api(fn, args) {
     args = args == null ? null : args;
     try {
-      const token = localStorage.getItem('crm_token') || '';
+      // CP4_TOKEN_KEY_FIX_v1 (2026-06-16) — read the scoped per-tenant
+      // token first (e.g. 'crm_token_vserve'), falling back to the legacy
+      // 'crm_token'. Mirrors what public/tenant/app.js does. Without
+      // this, every api_copilot_* call returned 'Invalid or expired token'
+      // even though the user was signed in, because we were sending an
+      // empty/stale legacy key while the real token lived under the
+      // tenant-scoped name.
+      const slug = (location.pathname.match(/^\/t\/([^\/]+)/) || [])[1] || '';
+      const token = (slug && localStorage.getItem('crm_token_' + slug)) || localStorage.getItem('crm_token') || '';
       const path = (location.pathname.match(/^\/t\/[^\/]+/) || [''])[0] || '';
       const body = (args === null) ? { fn, args: [] } : { fn, args: Array.isArray(args) ? args : [args] };
       const res = await fetch(path + '/api', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-auth-token': token },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-auth-token': token,
+          'Authorization': 'Bearer ' + token
+        },
         body: JSON.stringify(body)
       });
       const j = await res.json();
