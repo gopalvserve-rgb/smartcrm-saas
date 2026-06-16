@@ -98,7 +98,7 @@ async function _detectSignals(userId) {
         FROM call_events ce
         LEFT JOIN leads l ON l.id = ce.lead_id
        WHERE ce.direction = 'in'
-         AND COALESCE(ce.duration_seconds, 0) = 0
+         AND COALESCE(ce.duration_s, 0) = 0
          AND ce.created_at > NOW() - INTERVAL '24 hours'
          AND (l.assigned_to = $1)
        ORDER BY ce.created_at DESC
@@ -258,22 +258,20 @@ async function api_copilot_briefing(token, payload) {
 // ── PHASE 2 — Lead AI Summary ────────────────────────────────────────
 async function api_copilot_lead_summary(token, payload) {
   await _requireUser(token);
-  // CP4_BACKEND_GATE_DROP (2026-06-16): SPA gates on
-  // brand.COPILOT_PROACTIVE_ENABLED before calling this.
   const leadId = Number(payload && payload.lead_id);
   if (!leadId) return { ok: false, error: 'lead_id required' };
   const force = !!(payload && payload.force);
 
-  // ── LEAD_AI_HUB_v2 (2026-06-17) — gather rich context BEFORE the
-  // cache check, so cached responses still get a fresh "last activity"
-  // line built from current lead state. The Gemini text is cached;
-  // the surrounding facts are not.
+  // ── LEAD_AI_HUB_v3 (2026-06-17) — every fact below is pulled
+  // fresh, even on cache hits, so the activity recap and the missed-
+  // follow-up alarm are always accurate. Only the 3 Gemini text
+  // fields are cached (30 min).
   let lead = null;
   try {
     const r = await db.query(`
       SELECT l.id, l.name, l.phone, l.source, l.created_at, l.updated_at,
              l.smart_score, l.smart_category, l.score_reason,
-             l.next_followup_at, l.notes,
+             l.next_followup_at, l.last_status_change_at, l.notes,
              s.name AS status_name
         FROM leads l LEFT JOIN statuses s ON s.id = l.status_id
        WHERE l.id = $1 LIMIT 1`, [leadId]);
@@ -281,9 +279,7 @@ async function api_copilot_lead_summary(token, payload) {
   } catch {}
   if (!lead) return { ok: false, error: 'Lead not found' };
 
-  // Latest remark (joined with author) — what the rep actually wrote
-  // most recently. Different from leads.notes which is the bulk text
-  // field. Sales actually relies on this.
+  // Latest remark with author — the rep's own most recent note.
   let lastRemark = null;
   try {
     const r = await db.query(`
@@ -293,67 +289,160 @@ async function api_copilot_lead_summary(token, payload) {
     lastRemark = r.rows[0] || null;
   } catch {}
 
-  // Last INCOMING WhatsApp specifically — for "Has the customer said
-  // something we haven't answered?" detection. Also pull a small recent
-  // window mixed for Gemini context.
+  // LAST INCOMING TEXT — skip empty/sticker/"Unsupported" entries
+  // so we surface the actual most recent message the customer typed.
   let lastInWa = null;
-  let recentMsgs = [];
+  try {
+    const r = await db.query(`
+      SELECT body, created_at FROM whatsapp_messages
+       WHERE lead_id = $1 AND direction = 'in'
+         AND COALESCE(body, '') <> ''
+         AND body NOT ILIKE '%unsupported%'
+         AND body NOT ILIKE '%sticker%'
+       ORDER BY created_at DESC LIMIT 1`, [leadId]);
+    lastInWa = r.rows[0] || null;
+  } catch {}
+
+  // Also pull the very-most-recent inbound (any kind) to detect
+  // sticker/media replies the customer DID send recently.
+  let lastInAny = null;
   try {
     const r = await db.query(`
       SELECT body, created_at FROM whatsapp_messages
        WHERE lead_id = $1 AND direction = 'in'
        ORDER BY created_at DESC LIMIT 1`, [leadId]);
-    lastInWa = r.rows[0] || null;
+    lastInAny = r.rows[0] || null;
   } catch {}
+
+  // Recent thread for Gemini context.
+  let recentMsgs = [];
   try {
     const r = await db.query(`
       SELECT direction, body, created_at FROM whatsapp_messages
-       WHERE lead_id = $1 ORDER BY created_at DESC LIMIT 6`, [leadId]);
+       WHERE lead_id = $1 AND COALESCE(body, '') <> ''
+       ORDER BY created_at DESC LIMIT 8`, [leadId]);
     recentMsgs = r.rows.reverse();
   } catch {}
 
-  // Last call WITH agent name and full IST timestamp.
-  let lastCall = null;
+  // LAST CALL ATTEMPT — most recent row regardless of duration.
+  // We classify: connected (duration > 30s), short (<30s), missed (0s
+  // or direction='missed'). This tells the rep "you tried to call X
+  // hours ago but it didn't connect" — a fact the previous version
+  // hid because it only looked at completed calls.
+  let lastCallAttempt = null;
   try {
     const r = await db.query(`
-      SELECT ce.direction, ce.duration_seconds, ce.created_at, u.name AS agent_name
+      SELECT ce.direction, ce.event, ce.duration_s, ce.created_at,
+             u.name AS agent_name
         FROM call_events ce LEFT JOIN users u ON u.id = ce.user_id
-       WHERE ce.lead_id = $1 ORDER BY ce.created_at DESC LIMIT 1`, [leadId]);
-    lastCall = r.rows[0] || null;
+       WHERE ce.lead_id = $1
+       ORDER BY ce.created_at DESC LIMIT 1`, [leadId]);
+    lastCallAttempt = r.rows[0] || null;
   } catch {}
 
-  // Build the "Last activity" recap line — rendered by the frontend
-  // verbatim at the top of the Summary section. Compact, IST-formatted.
+  // LAST CONNECTED CALL — most recent with real duration.
+  let lastCallConnected = null;
+  try {
+    const r = await db.query(`
+      SELECT ce.direction, ce.duration_s, ce.created_at,
+             u.name AS agent_name
+        FROM call_events ce LEFT JOIN users u ON u.id = ce.user_id
+       WHERE ce.lead_id = $1 AND COALESCE(ce.duration_s, 0) > 0
+       ORDER BY ce.created_at DESC LIMIT 1`, [leadId]);
+    lastCallConnected = r.rows[0] || null;
+  } catch {}
+
+  // MISSED FOLLOW-UP detection. Fire when:
+  //   - next_followup_at is in the past
+  //   - AND no remark or call_event has happened since the due time
+  //   - AND status didn't change since the due time
+  let missedFollowup = null;
+  if (lead.next_followup_at) {
+    const dueAt = new Date(lead.next_followup_at);
+    if (dueAt.getTime() < Date.now()) {
+      let acted = false;
+      try {
+        const r = await db.query(`
+          SELECT 1 FROM remarks WHERE lead_id = $1 AND created_at > $2 LIMIT 1`,
+          [leadId, lead.next_followup_at]);
+        if (r.rows.length) acted = true;
+      } catch {}
+      if (!acted) {
+        try {
+          const r = await db.query(`
+            SELECT 1 FROM call_events WHERE lead_id = $1 AND created_at > $2 LIMIT 1`,
+            [leadId, lead.next_followup_at]);
+          if (r.rows.length) acted = true;
+        } catch {}
+      }
+      if (!acted && lead.last_status_change_at &&
+          new Date(lead.last_status_change_at).getTime() > dueAt.getTime()) {
+        acted = true;
+      }
+      if (!acted) {
+        const hrs = _hoursAgo(dueAt);
+        missedFollowup = {
+          due_at: lead.next_followup_at,
+          due_at_ist: _istWhen(lead.next_followup_at),
+          hours_overdue: hrs,
+          ago: _agoLabel(dueAt)
+        };
+      }
+    }
+  }
+
+  // Build the structured "last activity" recap that the UI renders
+  // verbatim. Each bullet is one fact.
   const activityBits = [];
+  if (missedFollowup) {
+    activityBits.push('🔴 MISSED FOLLOW-UP — due ' + missedFollowup.due_at_ist
+      + ' (' + missedFollowup.ago + '). No call, no remark, no status change since.');
+  }
+  if (lead.smart_score != null) {
+    const cat = lead.smart_category || '';
+    activityBits.push('🌡 Lead score: ' + lead.smart_score + '/100'
+      + (cat ? ' (' + cat + ')' : '')
+      + (lead.score_reason ? ' — ' + String(lead.score_reason).slice(0, 140) : ''));
+  }
   if (lastRemark) {
     activityBits.push('💬 Last remark by ' + (lastRemark.by_name || 'someone')
       + ' (' + _agoLabel(lastRemark.created_at) + '): "'
-      + String(lastRemark.remark || '').slice(0, 140) + '"');
+      + String(lastRemark.remark || '').slice(0, 160) + '"');
   }
-  if (lead.next_followup_at) {
+  if (lead.next_followup_at && !missedFollowup) {
     activityBits.push('⏰ Next follow-up: ' + _istWhen(lead.next_followup_at));
   }
+  // Two separate WA bullets when relevant
   if (lastInWa) {
-    activityBits.push('📥 Last WhatsApp from customer ('
+    activityBits.push('📥 Last customer message ('
       + _agoLabel(lastInWa.created_at) + '): "'
-      + String(lastInWa.body || '').slice(0, 140) + '"');
+      + String(lastInWa.body || '').slice(0, 200) + '"');
+  } else if (lastInAny) {
+    activityBits.push('📥 Last inbound from customer ('
+      + _agoLabel(lastInAny.created_at) + '): (media / non-text — no caption)');
   }
-  if (lastCall) {
-    const dur = Number(lastCall.duration_seconds || 0);
-    const durTxt = dur >= 60 ? Math.floor(dur / 60) + 'm ' + (dur % 60) + 's' : dur + 's';
-    activityBits.push('📞 Last call: ' + (lastCall.agent_name || 'unknown')
-      + ' ' + (lastCall.direction === 'in' ? 'received' : 'made') + ', '
-      + durTxt + ' (' + _agoLabel(lastCall.created_at) + ')');
+  // Call: prefer last attempt; show connected separately if different
+  if (lastCallAttempt) {
+    const dur = Number(lastCallAttempt.duration_s || 0);
+    const isMissed = (lastCallAttempt.direction === 'missed') || dur === 0;
+    const isShort = dur > 0 && dur < 30;
+    const status = isMissed ? 'NOT CONNECTED' : (isShort ? 'short ' + dur + 's' : Math.floor(dur / 60) + 'm ' + (dur % 60) + 's');
+    activityBits.push('📞 Last call ATTEMPT: ' + (lastCallAttempt.agent_name || 'someone')
+      + ' ' + (lastCallAttempt.direction === 'in' ? 'received call' : (lastCallAttempt.direction === 'missed' ? 'missed' : 'called'))
+      + ' — ' + status + ' (' + _agoLabel(lastCallAttempt.created_at) + ')');
+    if (lastCallConnected && lastCallAttempt.created_at !== lastCallConnected.created_at) {
+      const cdur = Number(lastCallConnected.duration_s || 0);
+      activityBits.push('   └ Last actually CONNECTED: ' + (lastCallConnected.agent_name || '?')
+        + ' · ' + Math.floor(cdur / 60) + 'm ' + (cdur % 60) + 's · '
+        + _agoLabel(lastCallConnected.created_at));
+    }
   }
   const lastActivityLine = activityBits.join('\n');
 
-  // The draft-message section should only appear when there's an actual
-  // unanswered incoming WA in the last 48 hours. Otherwise the rep is
-  // not in a "reply now" state and we shouldn't suggest a chat reply.
+  // Draft suggested only when an unanswered text from customer is fresh.
   const showDraft = !!(lastInWa && _hoursAgo(lastInWa.created_at) < 48);
 
-  // Cache check — return early WITH fresh activity line, even if the
-  // Gemini text was cached up to 30 min.
+  // Cache check — return with FRESH activity facts even when Gemini text is cached.
   if (!force) {
     try {
       const c = await db.query(`
@@ -369,35 +458,61 @@ async function api_copilot_lead_summary(token, payload) {
           draft_msg: showDraft ? row.draft_msg : '',
           show_draft: showDraft,
           last_activity_line: lastActivityLine,
+          missed_followup: missedFollowup,
+          smart_score: lead.smart_score,
+          smart_category: lead.smart_category,
           generated_at: row.generated_at
         };
       }
     } catch {}
   }
 
-  // Build the Gemini prompt context
+  // Build the Gemini context — verbose, factual, instructive.
   const ctxLines = [
-    `Lead: ${_safeName(lead.name)} (${lead.phone || '?'})`,
-    `Status: ${lead.status_name || '?'}, Source: ${lead.source || '?'}`,
-    lead.smart_category ? `AI Score: ${lead.smart_score}/100 (${lead.smart_category}). ${lead.score_reason || ''}` : '',
-    `Created ${_daysAgo(lead.created_at)}d ago, last updated ${_daysAgo(lead.updated_at)}d ago.`,
-    lead.next_followup_at ? `Next follow-up scheduled: ${_istWhen(lead.next_followup_at)}` : 'No follow-up scheduled.',
-    lastRemark ? `LATEST REMARK by ${lastRemark.by_name || 'rep'} (${_agoLabel(lastRemark.created_at)}): "${String(lastRemark.remark || '').slice(0, 250)}"` : '',
-    lead.notes ? `Lead notes field: ${String(lead.notes).slice(0, 300)}` : '',
-    lastCall ? `Last call: ${lastCall.agent_name || 'unknown agent'} ${lastCall.direction === 'in' ? 'received' : 'made'}, ${lastCall.duration_seconds || 0}s, ${_agoLabel(lastCall.created_at)}` : 'No call activity logged.',
-    lastInWa ? `LAST INCOMING WHATSAPP (${_agoLabel(lastInWa.created_at)}): "${String(lastInWa.body || '').slice(0, 250)}"` : 'No incoming WhatsApp from customer.'
-  ].filter(Boolean);
-
+    `Lead: ${_safeName(lead.name)} (phone: ${lead.phone || 'unknown'})`,
+    `Status: ${lead.status_name || 'unknown'}, Source: ${lead.source || 'unknown'}`,
+    `Lead AI Score: ${lead.smart_score || 'n/a'}/100 (${lead.smart_category || 'uncategorised'}). ${lead.score_reason || ''}`,
+    `Created ${_daysAgo(lead.created_at)}d ago, last touched ${_daysAgo(lead.updated_at)}d ago.`
+  ];
+  if (missedFollowup) {
+    ctxLines.push('🚨 MISSED FOLLOW-UP: was scheduled for ' + missedFollowup.due_at_ist
+      + ' (' + missedFollowup.hours_overdue + 'h overdue). The rep DID NOT take action — no call, no remark, no status change since the due time. This is a P0 problem you MUST call out.');
+  } else if (lead.next_followup_at) {
+    ctxLines.push('Next follow-up scheduled: ' + _istWhen(lead.next_followup_at));
+  } else {
+    ctxLines.push('No follow-up scheduled.');
+  }
+  if (lastRemark) {
+    ctxLines.push(`Latest rep remark by ${lastRemark.by_name || 'rep'} (${_agoLabel(lastRemark.created_at)}): "${String(lastRemark.remark || '').slice(0, 250)}"`);
+  }
+  if (lead.notes) {
+    ctxLines.push(`Lead notes field: ${String(lead.notes).slice(0, 250)}`);
+  }
+  if (lastCallAttempt) {
+    const dur = Number(lastCallAttempt.duration_s || 0);
+    const isMissed = (lastCallAttempt.direction === 'missed') || dur === 0;
+    ctxLines.push(`Last call attempt by ${lastCallAttempt.agent_name || 'agent'}: ${isMissed ? 'NOT CONNECTED' : dur + 's connected'} (${_agoLabel(lastCallAttempt.created_at)})`);
+  } else {
+    ctxLines.push('No call activity logged for this lead.');
+  }
+  if (lastInWa) {
+    ctxLines.push(`LATEST INCOMING WHATSAPP from customer (${_agoLabel(lastInWa.created_at)}): "${String(lastInWa.body || '').slice(0, 300)}"`);
+  } else if (lastInAny) {
+    ctxLines.push(`Customer's latest inbound was media/sticker only (${_agoLabel(lastInAny.created_at)}) — no text to quote.`);
+  } else {
+    ctxLines.push('No incoming WhatsApp from customer.');
+  }
   if (recentMsgs.length) {
     ctxLines.push('Recent WhatsApp thread:');
-    recentMsgs.forEach(m => ctxLines.push(`  ${m.direction === 'in' ? 'Customer' : 'Rep'}: ${String(m.body || '').slice(0, 120)}`));
+    recentMsgs.forEach(m => ctxLines.push(`  ${m.direction === 'in' ? 'Customer' : 'Rep'}: ${String(m.body || '').slice(0, 140)}`));
   }
 
-  const system = `You are a no-nonsense sales coach for an Indian sales rep. Read the lead context and respond with STRICT JSON exactly in this shape:
+  const system = `You are a tough, factual sales coach for an Indian sales rep.
+RULES — output STRICT JSON only, exactly this shape:
 {
-  "summary": "2-3 sentences in plain English. MUST mention the current status, the latest remark (who and what), and either the next follow-up time OR the last customer message. Be concrete and factual. No marketing fluff, no greetings.",
-  "next_action": "ONE concrete action with a SPECIFIC verb and timing. Example: 'Call now — customer asked about pricing 2h ago and we haven't replied'. Example: 'Confirm Friday delivery via WhatsApp'. DO NOT write a message to the customer here. DO NOT say 'follow up' without a reason. Use IST times.",
-  "draft_msg": "Optional short WhatsApp draft (1-2 sentences in the rep's voice) for the customer. Only fill this if there is an incoming WhatsApp from the customer in the last 48 hours that has not been replied to. Otherwise return empty string."
+  "summary": "2-3 sentences. MUST include: the AI score (X/100, category), the current status, the latest remark in quotes, AND either the missed follow-up alarm OR the next scheduled follow-up datetime OR a direct quote of the latest customer message. No greetings, no marketing fluff. Be specific with names and IST times.",
+  "next_action": "ONE concrete action with a verb and timing. If a MISSED FOLLOW-UP alarm is present in the context, the next action MUST start with 'Call now — you missed the follow-up at <time>'. Otherwise use the freshest unanswered signal. NEVER write a chat message in this field. NEVER say 'follow up soon' without specifics.",
+  "draft_msg": "Optional. 1-2 sentence WhatsApp draft for the customer. Only fill if there is an unanswered text from the customer in the last 48 hours. Otherwise return empty string."
 }
 No preamble. Output ONLY the JSON object.`;
 
@@ -406,7 +521,7 @@ No preamble. Output ONLY the JSON object.`;
     try {
       const res = await gemini.generate({
         prompt: ctxLines.join('\n'),
-        system, temperature: 0.4, maxOutputTokens: 400,
+        system, temperature: 0.35, maxOutputTokens: 450,
         model: 'gemini-2.5-flash-lite'
       });
       if (res && res.ok && res.text) {
@@ -423,13 +538,18 @@ No preamble. Output ONLY the JSON object.`;
     } catch (e) {}
   }
 
-  // Deterministic fallback if Gemini is unreachable / mis-configured.
+  // Deterministic fallback when Gemini is down.
   if (!summary) {
-    summary = `${lead.smart_category || 'Lead'} from ${lead.source || 'unknown source'}, currently "${lead.status_name || '?'}".`
+    const scoreTxt = lead.smart_score != null ? `Score ${lead.smart_score}/100 (${lead.smart_category || '?'})` : '';
+    summary = `${scoreTxt}. Status: ${lead.status_name || '?'}.`
       + (lastRemark ? ` Latest remark: "${String(lastRemark.remark || '').slice(0, 100)}".` : '');
-    nextAction = lead.next_followup_at
-      ? `Follow up at ${_istWhen(lead.next_followup_at)}.`
-      : 'Set a next-step follow-up — no follow-up date is scheduled.';
+    if (missedFollowup) {
+      nextAction = `Call now — you missed the follow-up at ${missedFollowup.due_at_ist} (${missedFollowup.hours_overdue}h overdue). No action taken since.`;
+    } else if (lead.next_followup_at) {
+      nextAction = `Follow up at ${_istWhen(lead.next_followup_at)}.`;
+    } else {
+      nextAction = 'Schedule a follow-up — no next step on calendar.';
+    }
     draftMsg = showDraft
       ? `Hi ${(lead.name || '').split(' ')[0] || 'there'}, just saw your message — getting back to you shortly.`
       : '';
@@ -450,6 +570,9 @@ No preamble. Output ONLY the JSON object.`;
     draft_msg: showDraft ? (draftMsg || '') : '',
     show_draft: showDraft,
     last_activity_line: lastActivityLine,
+    missed_followup: missedFollowup,
+    smart_score: lead.smart_score,
+    smart_category: lead.smart_category,
     generated_at: new Date().toISOString()
   };
 }
@@ -563,8 +686,8 @@ async function api_copilot_lead_timeline(token, payload) {
     for (const row of r.rows) events.push({ kind: 'wa', at: row.created_at, dir: row.direction, text: row.body, media: row.media_type });
   } catch {}
   try {
-    const r = await db.query(`SELECT direction, duration_seconds, recording_url, created_at FROM call_events WHERE lead_id=$1 ORDER BY created_at DESC LIMIT 30`, [leadId]);
-    for (const row of r.rows) events.push({ kind: 'call', at: row.created_at, dir: row.direction, duration: row.duration_seconds, recording: row.recording_url });
+    const r = await db.query(`SELECT direction, duration_s, recording_url, created_at FROM call_events WHERE lead_id=$1 ORDER BY created_at DESC LIMIT 30`, [leadId]);
+    for (const row of r.rows) events.push({ kind: 'call', at: row.created_at, dir: row.direction, duration: row.duration_s, recording: row.recording_url });
   } catch {}
   try {
     const r = await db.query(`SELECT body, created_by_name, created_at FROM remarks WHERE lead_id=$1 ORDER BY created_at DESC LIMIT 30`, [leadId]);

@@ -162,6 +162,21 @@
 
       const parts = [];
 
+      // LEAD_AI_HUB_v3 (2026-06-17) — Section 0: MISSED FOLLOW-UP
+      // alarm renders as a bright red banner ABOVE everything else
+      // when the lead has a follow-up due in the past and no action
+      // was taken since. This is the single most actionable thing the
+      // rep needs to see.
+      if (sum && sum.ok && sum.missed_followup) {
+        const mf = sum.missed_followup;
+        parts.push(
+          '<div style="background:#fef2f2;border:2px solid #fecaca;border-left:4px solid #dc2626;border-radius:10px;padding:12px 14px">' +
+            '<div style="font-size:.72rem;color:#dc2626;font-weight:800;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">🚨 MISSED FOLLOW-UP</div>' +
+            '<div style="color:#7f1d1d;font-size:.9rem;line-height:1.45;font-weight:600">Due at ' + _esc(mf.due_at_ist || '') + ' — ' + Math.max(1, Number(mf.hours_overdue || 0)) + 'h overdue, no action taken since.</div>' +
+          '</div>'
+        );
+      }
+
       // LEAD_AI_HUB_v2 (2026-06-17) — Section 1a: Last Activity recap.
       // This is built from real DB facts (last remark, follow-up,
       // last incoming WA, last call) so the rep sees the source-of-truth
@@ -496,6 +511,90 @@
     // popping the overlay. 1500ms is enough that the user sees the
     // CRM render first; the overlay slides in over the top.
     setTimeout(_maybeShowDaySummary, 1500);
+    // LEAD_AI_HUB_v3 — sprinkle the ✨ AI Summary button onto
+    // every lead row on the listing page.
+    setTimeout(_startListingObserver, 600);
+  }
+
+  // LEAD_AI_HUB_v3 — public entry point: any code can call
+  // window.coachOpenLeadSummary(leadId) to open the AI Hub overlay
+  // for that lead without needing the modal to be open. Used by the
+  // listing-page sparkle button and could be called from anywhere.
+  async function _renderLeadSummaryOverlay(leadId) {
+    const old = document.getElementById('cp4-lead-overlay');
+    if (old) old.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'cp4-lead-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(15,23,42,.55);backdrop-filter:blur(4px);display:flex;align-items:flex-start;justify-content:center;padding:30px 16px;overflow:auto';
+    overlay.innerHTML =
+      '<div style="background:#fff;border-radius:16px;max-width:620px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.35);overflow:hidden">' +
+        '<div style="padding:14px 18px;display:flex;align-items:center;justify-content:space-between;gap:12px;background:linear-gradient(135deg,#4f46e5 0%,#7c3aed 100%);color:#fff;position:sticky;top:0;z-index:1">' +
+          '<div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0">' +
+            '<div style="font-size:1.4rem">✨</div>' +
+            '<div><div style="font-weight:700;font-size:1rem">AI Lead Summary</div><div style="font-size:.75rem;opacity:.85">Lead #' + leadId + '</div></div>' +
+          '</div>' +
+          '<button id="cp4-lead-overlay-close" style="background:rgba(255,255,255,.2);border:0;color:#fff;width:32px;height:32px;border-radius:50%;cursor:pointer;font-size:1.2rem">×</button>' +
+        '</div>' +
+        '<div id="cp4-lead-overlay-body" style="padding:16px 18px"></div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+    overlay.querySelector('#cp4-lead-overlay-close').onclick = () => overlay.remove();
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+    const body = overlay.querySelector('#cp4-lead-overlay-body');
+    // Reuse _renderLeadAiHub by faking a "modal body" structure with
+    // a .modal-head sentinel so it injects into the right place.
+    body.innerHTML = '<div class="modal-head" style="display:none"></div>';
+    await _renderLeadAiHub(body, Number(leadId));
+  }
+  window.coachOpenLeadSummary = _renderLeadSummaryOverlay;
+
+  // Inject a sparkle button into lead-listing rows. We watch for
+  // anything with data-id under any table or card whose parent looks
+  // like the leads list. Safe even if the SPA re-renders frequently
+  // — we mark rows we've already touched with data-cp4-injected.
+  function _injectListingButtons() {
+    if (!_enabled()) return;
+    // Multiple selector strategies because app.js may use td or card
+    // patterns depending on desktop vs mobile.
+    const rows = document.querySelectorAll(
+      '#leads-tbody tr[data-id], .lc-card[data-id], [data-lead-id], .lead-card[data-id]'
+    );
+    rows.forEach(row => {
+      if (row.getAttribute('data-cp4-injected') === '1') return;
+      // Look for the actions cell / actions container in this row.
+      // Different render paths put it in different spots, so try a
+      // few in order and fall back to the row itself.
+      const actionCell = row.querySelector('td:last-child') ||
+                         row.querySelector('.lc-actions') ||
+                         row.querySelector('.actions') || row;
+      const leadId = row.getAttribute('data-id') || row.getAttribute('data-lead-id');
+      if (!leadId) return;
+      const btn = document.createElement('button');
+      btn.className = 'btn sm cp4-aibtn';
+      btn.title = 'AI Summary for this lead';
+      btn.innerHTML = '✨';
+      btn.style.cssText = 'background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;border:0;border-radius:6px;padding:3px 8px;cursor:pointer;font-size:.85rem;margin-left:4px;line-height:1';
+      btn.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        _renderLeadSummaryOverlay(Number(leadId));
+      };
+      actionCell.appendChild(btn);
+      row.setAttribute('data-cp4-injected', '1');
+    });
+  }
+
+  // Observe DOM mutations and re-run the injector. The leads list
+  // re-renders on filter/sort changes; the observer covers that case
+  // without us having to hook into the SPA's view-render lifecycle.
+  function _startListingObserver() {
+    if (!_enabled()) return;
+    try { _injectListingButtons(); } catch {}
+    const obs = new MutationObserver(() => {
+      try { _injectListingButtons(); } catch {}
+    });
+    obs.observe(document.body, { childList: true, subtree: true });
   }
 
   if (document.readyState === 'loading') {
