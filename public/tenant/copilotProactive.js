@@ -538,12 +538,29 @@
   let _drawerObs = null;
   let _autoOpenFired = false;
 
-  function _todayKey() {
+  // CP4_DAYSUM_v5 (2026-06-17) — flip from per-DAY (localStorage)
+  // to per-SESSION (sessionStorage). User feedback was that the bubble
+  // showed only ONCE per day, which felt too rare. With sessionStorage
+  // the auto-open + bubble fire on every fresh browser session and
+  // stay quiet during the same session's refresh/nav.
+  function _sessionKey() {
     let slug = '';
     try { slug = (window.CRM && window.CRM._slug) || (location.pathname.match(/^\/t\/([^\/]+)/) || [])[1] || ''; } catch (_) {}
-    const d = new Date();
-    const ymd = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-    return 'cp4_daysum_v3_' + slug + '_' + ymd;
+    return 'cp4_daysum_sess_' + slug;
+  }
+  function _flagGet() {
+    try { return sessionStorage.getItem(_sessionKey()) === '1'; } catch (_) { return false; }
+  }
+  function _flagSet() {
+    try { sessionStorage.setItem(_sessionKey(), '1'); } catch (_) {}
+  }
+  function _flagClear() {
+    try { sessionStorage.removeItem(_sessionKey()); } catch (_) {}
+    try {
+      // Also wipe legacy localStorage day-flags from older versions
+      // so they don't keep blocking after upgrade.
+      Object.keys(localStorage).forEach(k => { if (k.indexOf('cp4_daysum_') === 0) localStorage.removeItem(k); });
+    } catch (_) {}
   }
 
   async function _injectDaySummaryIntoDrawer(drawer) {
@@ -551,8 +568,7 @@
     if (!drawer) return;
     if (drawer.getAttribute('data-cp4-injected') === '1') return;
 
-    const key = _todayKey();
-    try { if (localStorage.getItem(key) === '1') return; } catch (_) {}
+    if (_flagGet()) return;
 
     // Wait for the drawer's log container to render.
     const log = await _waitForEl('#copilot-log', 3000);
@@ -602,7 +618,7 @@
       if (lid && Number(lid)) location.hash = '#/leads/' + lid;
     });
 
-    try { localStorage.setItem(key, '1'); } catch (_) {}
+    _flagSet();
   }
 
   function _startDrawerObserver() {
@@ -628,19 +644,49 @@
     _drawerObs.observe(document.body, { childList: true, subtree: false });
   }
 
+  // CP4_DAYSUM_v5 — persistent FAB observer. Instead of a one-shot
+  // _waitForEl with an 8s timeout (which silently gave up on slow
+  // boots), we observe the DOM continuously until either:
+  //   (a) the FAB appears → click it, mark session flag will be set
+  //       by _injectDaySummaryIntoDrawer after the bubble lands
+  //   (b) the drawer appears (user opened it themselves) → no-op,
+  //       the drawer observer will inject
+  //   (c) the session flag gets set (we showed the bubble) → stop
+  let _autoOpenObs = null;
   async function _maybeAutoOpenCopilot() {
     if (!_enabled()) return;
     if (_autoOpenFired) return;
-    _autoOpenFired = true;
-    // Skip if today's flag is already set OR drawer is already open.
-    try { if (localStorage.getItem(_todayKey()) === '1') return; } catch (_) {}
-    if (document.getElementById('copilot-drawer')) return;
-    const fab = await _waitForEl('#copilot-fab', 8000);
-    if (!fab) return;
-    if (document.getElementById('copilot-drawer')) return; // user opened it in the meantime
-    try { fab.click(); } catch (_) {}
-    // Once it opens, _startDrawerObserver's MutationObserver fires
-    // and injects the bubble — no further action needed here.
+    if (_flagGet()) return;
+    if (document.getElementById('copilot-drawer')) {
+      // Drawer already open at boot — drawer observer will handle inject.
+      return;
+    }
+    const tryClick = () => {
+      if (_autoOpenFired) return true;
+      if (_flagGet()) { _autoOpenFired = true; return true; }
+      if (document.getElementById('copilot-drawer')) {
+        _autoOpenFired = true;
+        return true;
+      }
+      const fab = document.getElementById('copilot-fab');
+      if (fab) {
+        _autoOpenFired = true;
+        try { fab.click(); } catch (_) {}
+        return true;
+      }
+      return false;
+    };
+    if (tryClick()) return;
+    // FAB not ready — observe and click as soon as it shows up.
+    _autoOpenObs = new MutationObserver(() => {
+      if (tryClick()) {
+        try { _autoOpenObs && _autoOpenObs.disconnect(); } catch (_) {}
+        _autoOpenObs = null;
+      }
+    });
+    _autoOpenObs.observe(document.body, { childList: true, subtree: true });
+    // Safety: stop observing after 60s so we don't run forever.
+    setTimeout(() => { try { _autoOpenObs && _autoOpenObs.disconnect(); } catch (_) {} _autoOpenObs = null; }, 60000);
   }
 
   // Kept for backward compat — any older code that called this still
@@ -655,11 +701,13 @@
   // → clears today's flag, resets injection markers, opens Copilot.
   window.coachReset = function () {
     try {
-      Object.keys(localStorage).forEach(k => { if (k.indexOf('cp4_daysum_') === 0) localStorage.removeItem(k); });
+      _flagClear();
       _autoOpenFired = false;
+      try { _autoOpenObs && _autoOpenObs.disconnect(); } catch (_) {}
+      _autoOpenObs = null;
       const d = document.getElementById('copilot-drawer');
       if (d) d.removeAttribute('data-cp4-injected');
-      console.log('[coach] flag cleared, re-firing…');
+      console.log('[coach] CP4_DAYSUM_v5 — flag cleared, re-firing auto-open…');
       _startDrawerObserver();
       _maybeAutoOpenCopilot();
     } catch (e) { console.error('[coach] reset failed', e); }
