@@ -524,20 +524,55 @@
   }
 
 
+  // CP4_DAYSUM_v3 (2026-06-17) — TWO bugs fixed:
+  //   1. The "already shown today" localStorage flag was being set
+  //      BEFORE attempting to render. If the render failed (Copilot
+  //      FAB hadn't mounted yet, _api errored, etc.) the user was
+  //      silently locked out until tomorrow.
+  //   2. When the briefing had zero items we returned without
+  //      showing anything. The user explicitly asked for the auto
+  //      Copilot message every visit — show the greeting + "all
+  //      caught up" message instead of skipping.
+  //   3. Use a fresh flag key (cp4_daysum_v3_) so stale flags from
+  //      buggy older versions don't keep blocking today's pop.
   async function _maybeShowDaySummary() {
     if (!_enabled()) return;
     let slug = '';
     try { slug = (window.CRM && window.CRM._slug) || (location.pathname.match(/^\/t\/([^\/]+)/) || [])[1] || ''; } catch (_) {}
     const d = new Date();
     const ymd = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-    const key = 'cp4_daysum_' + slug + '_' + ymd;
+    const key = 'cp4_daysum_v3_' + slug + '_' + ymd;
     try { if (localStorage.getItem(key) === '1') return; } catch (_) {}
-    try { localStorage.setItem(key, '1'); } catch (_) {}
+
     const data = await _api('api_copilot_briefing', { force: false });
-    if (!data || !data.ok) return;
-    if (!data.items || !data.items.length) return; // mark-shown above means we won't re-poll today
-    _showDaySummaryInCopilot(data);
+    if (!data || !data.ok) return; // try again on next page nav
+
+    // Show even when items.length === 0 — the greeting + "all caught up"
+    // is the value: it tells the rep we *did* check.
+    const shown = await _showDaySummaryInCopilot(data);
+
+    // Only mark the flag once we actually showed the bubble. If the
+    // Copilot FAB wasn't ready, we'll retry on the next page nav.
+    if (shown) {
+      try { localStorage.setItem(key, '1'); } catch (_) {}
+    }
   }
+
+  // Manual reset / instant test helper. From DevTools console run:
+  //   coachReset()
+  // → clears today's flag and re-fires the auto-open immediately.
+  window.coachReset = function () {
+    try {
+      let slug = '';
+      try { slug = (window.CRM && window.CRM._slug) || (location.pathname.match(/^\/t\/([^\/]+)/) || [])[1] || ''; } catch (_) {}
+      const d = new Date();
+      const ymd = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+      // clear both old and new style keys so any lingering flag dies
+      Object.keys(localStorage).forEach(k => { if (k.indexOf('cp4_daysum_') === 0) localStorage.removeItem(k); });
+      console.log('[coach] day-summary flag cleared, re-running…');
+      _maybeShowDaySummary();
+    } catch (e) { console.error('[coach] reset failed', e); }
+  };
 
   async function init() {
     await _fetchEnabledOnce();
