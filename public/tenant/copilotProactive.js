@@ -587,13 +587,21 @@
   }
   window.coachOpenLeadSummary = _renderLeadSummaryOverlay;
 
-  // LEAD_AI_HUB_v4 (2026-06-17) — inject a sparkle ✨ button onto
-  // every lead-listing row. The previous selector targeted
-  // tr[data-id] but the actual DOM (see public/tenant/app.js
-  // _buildLeadRow ~line 5806) puts the lead id on the row's
-  // checkbox: <input type="checkbox" class="row-check" data-id="..">.
-  // We climb from the checkbox up to its <tr>, then drop the button
-  // into <td class="td-actions"> at the end of the row.
+  // LEAD_AI_HUB_v5 (2026-06-17) — inject a sparkle ✨ AI button into
+  // the NAME cell (first <td> after td-check) so it's always visible
+  // next to the lead name. The previous attempt put it in td.td-actions
+  // which is rightmost and gets scrolled off-screen on wide column
+  // layouts (the user couldn't see it because their visible columns
+  // ended at COUNTRY).
+  //
+  // The actual DOM (per public/tenant/app.js _buildLeadRow):
+  //   <tr>
+  //     <td class="td-check"><input class="row-check" data-id="N"/></td>
+  //     <td>{NAME col cell}</td>          ← we inject here
+  //     <td>{PHONE col cell}</td>
+  //     ...
+  //     <td class="td-actions">{✎ etc}</td>
+  // The Name cell is the FIRST <td> that isn't td-check.
   function _injectListingButtons() {
     if (!_enabled()) return;
     const checkboxes = document.querySelectorAll('input.row-check[data-id]');
@@ -603,21 +611,31 @@
       if (tr.getAttribute('data-cp4-injected') === '1') return;
       const leadId = cb.getAttribute('data-id');
       if (!leadId) return;
-      // Action cell is td.td-actions (the rightmost td in _buildLeadRow).
-      // Fall back to the last td in the row if the class isn't present.
-      const actionCell = tr.querySelector('td.td-actions') || tr.lastElementChild;
-      if (!actionCell) return;
+
+      // Find the first td that isn't the checkbox cell — that's the
+      // visible name/first column for this row. Skip td.td-check.
+      let nameCell = null;
+      for (const td of tr.children) {
+        if (td.tagName !== 'TD') continue;
+        if (td.classList.contains('td-check')) continue;
+        nameCell = td;
+        break;
+      }
+      if (!nameCell) return;
+
       const btn = document.createElement('button');
-      btn.className = 'btn sm cp4-aibtn';
-      btn.title = 'AI Summary for this lead';
+      btn.className = 'btn cp4-aibtn';
+      btn.title = 'Generate AI Summary for this lead';
       btn.innerHTML = '✨ AI';
-      btn.style.cssText = 'background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;border:0;border-radius:6px;padding:3px 9px;cursor:pointer;font-size:.78rem;font-weight:600;margin-left:4px;line-height:1.4;vertical-align:middle';
+      btn.style.cssText = 'background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;border:0;border-radius:6px;padding:3px 8px;cursor:pointer;font-size:.72rem;font-weight:700;margin-left:6px;line-height:1.3;vertical-align:middle;box-shadow:0 1px 3px rgba(99,102,241,.4);letter-spacing:.3px;display:inline-block';
       btn.onclick = (e) => {
         e.preventDefault();
         e.stopPropagation();
         _renderLeadSummaryOverlay(Number(leadId));
       };
-      actionCell.appendChild(btn);
+      // Append at END of name cell so it sits to the right of the
+      // lead name (after any "Show history" pill / "Very hot" badge).
+      nameCell.appendChild(btn);
       tr.setAttribute('data-cp4-injected', '1');
     });
   }
