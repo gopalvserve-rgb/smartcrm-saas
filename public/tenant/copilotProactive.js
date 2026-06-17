@@ -524,53 +524,144 @@
   }
 
 
-  // CP4_DAYSUM_v3 (2026-06-17) — TWO bugs fixed:
-  //   1. The "already shown today" localStorage flag was being set
-  //      BEFORE attempting to render. If the render failed (Copilot
-  //      FAB hadn't mounted yet, _api errored, etc.) the user was
-  //      silently locked out until tomorrow.
-  //   2. When the briefing had zero items we returned without
-  //      showing anything. The user explicitly asked for the auto
-  //      Copilot message every visit — show the greeting + "all
-  //      caught up" message instead of skipping.
-  //   3. Use a fresh flag key (cp4_daysum_v3_) so stale flags from
-  //      buggy older versions don't keep blocking today's pop.
-  async function _maybeShowDaySummary() {
-    if (!_enabled()) return;
+  // CP4_DAYSUM_v4 (2026-06-17) — bulletproof drawer-mount injection.
+  // Previous versions only fired _maybeShowDaySummary once 1.5s after
+  // init. Two failure modes:
+  //   (a) Copilot FAB still booting → injection timed out silently
+  //   (b) User closed + reopened drawer → fresh drawer has no bubble
+  //       because the appended node died with the old drawer.
+  // Fix: MutationObserver on document.body watches for any
+  // #copilot-drawer being added. Each time one mounts, if today's
+  // flag isn't set, inject a fresh bubble. Robust whether the drawer
+  // is opened automatically by us or manually by the user.
+
+  let _drawerObs = null;
+  let _autoOpenFired = false;
+
+  function _todayKey() {
     let slug = '';
     try { slug = (window.CRM && window.CRM._slug) || (location.pathname.match(/^\/t\/([^\/]+)/) || [])[1] || ''; } catch (_) {}
     const d = new Date();
     const ymd = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-    const key = 'cp4_daysum_v3_' + slug + '_' + ymd;
+    return 'cp4_daysum_v3_' + slug + '_' + ymd;
+  }
+
+  async function _injectDaySummaryIntoDrawer(drawer) {
+    if (!_enabled()) return;
+    if (!drawer) return;
+    if (drawer.getAttribute('data-cp4-injected') === '1') return;
+
+    const key = _todayKey();
     try { if (localStorage.getItem(key) === '1') return; } catch (_) {}
 
+    // Wait for the drawer's log container to render.
+    const log = await _waitForEl('#copilot-log', 3000);
+    if (!log) return;
+    if (drawer.getAttribute('data-cp4-injected') === '1') return;
+    drawer.setAttribute('data-cp4-injected', '1');
+
     const data = await _api('api_copilot_briefing', { force: false });
-    if (!data || !data.ok) return; // try again on next page nav
-
-    // Show even when items.length === 0 — the greeting + "all caught up"
-    // is the value: it tells the rep we *did* check.
-    const shown = await _showDaySummaryInCopilot(data);
-
-    // Only mark the flag once we actually showed the bubble. If the
-    // Copilot FAB wasn't ready, we'll retry on the next page nav.
-    if (shown) {
-      try { localStorage.setItem(key, '1'); } catch (_) {}
+    if (!data || !data.ok) {
+      drawer.removeAttribute('data-cp4-injected'); // allow retry on next mount
+      return;
     }
+
+    const items = Array.isArray(data && data.items) ? data.items : [];
+    const buckets = { old_customer_msg: [], followup_due: [], hot_score_jump: [], other: [] };
+    items.forEach(it => { (buckets[it.kind] || buckets.other).push(it); });
+
+    const sections = [];
+    if (buckets.old_customer_msg.length) sections.push(_groupCard('📥', '#10b981', 'Unanswered WhatsApp', buckets.old_customer_msg));
+    if (buckets.followup_due.length)     sections.push(_groupCard('⏰', '#f59e0b', 'Follow-ups due today', buckets.followup_due));
+    const hot = buckets.hot_score_jump.concat(buckets.other);
+    if (hot.length) sections.push(_groupCard('🔥', '#ef4444', 'Hot leads needing attention', hot));
+
+    const bubble = document.createElement('div');
+    bubble.className = 'copilot-msg model cp4-daysum-bubble';
+    bubble.style.cssText = 'align-self:flex-start;background:#fff;color:#0f172a;padding:12px 14px;border-radius:12px;max-width:100%;font-size:.86rem;line-height:1.4;box-shadow:0 1px 2px rgba(15,23,42,.08);border:1px solid #e2e8f0;display:flex;flex-direction:column;gap:10px;width:100%';
+    bubble.innerHTML =
+      '<div style="display:flex;align-items:center;gap:8px;padding-bottom:8px;border-bottom:1px solid #f1f5f9">' +
+        '<div style="font-size:1.1rem">🤖</div>' +
+        '<div style="flex:1;min-width:0">' +
+          '<div style="font-weight:700;font-size:.92rem;color:#1e1b4b">' + _esc(data.greeting || 'Day Summary') + '</div>' +
+          '<div style="font-size:.72rem;color:#64748b">' + items.length + ' thing' + (items.length === 1 ? '' : 's') + ' to focus on today</div>' +
+        '</div>' +
+      '</div>' +
+      (sections.length
+        ? sections.join('')
+        : '<div style="text-align:center;color:#64748b;padding:14px 8px"><div style="font-size:1.4rem">✨</div><div style="margin-top:4px">Nothing urgent right now. Have a productive day.</div></div>');
+
+    log.appendChild(bubble);
+    log.scrollTop = log.scrollHeight;
+
+    bubble.querySelectorAll('[data-cp4-ds-lead]').forEach(btn => btn.onclick = e => {
+      e.stopPropagation();
+      const lid = btn.getAttribute('data-cp4-ds-lead');
+      const sid = btn.getAttribute('data-cp4-ds-sig');
+      if (sid) _api('api_copilot_signal_act', { id: Number(sid) });
+      if (lid && Number(lid)) location.hash = '#/leads/' + lid;
+    });
+
+    try { localStorage.setItem(key, '1'); } catch (_) {}
+  }
+
+  function _startDrawerObserver() {
+    if (!_enabled()) return;
+    if (_drawerObs) return;
+    // First-shot: if drawer already exists, inject immediately.
+    const existing = document.getElementById('copilot-drawer');
+    if (existing) _injectDaySummaryIntoDrawer(existing);
+    _drawerObs = new MutationObserver((muts) => {
+      for (const m of muts) {
+        for (const node of m.addedNodes) {
+          if (node.nodeType === 1) {
+            if (node.id === 'copilot-drawer') {
+              _injectDaySummaryIntoDrawer(node);
+            } else if (node.querySelector) {
+              const inner = node.querySelector('#copilot-drawer');
+              if (inner) _injectDaySummaryIntoDrawer(inner);
+            }
+          }
+        }
+      }
+    });
+    _drawerObs.observe(document.body, { childList: true, subtree: false });
+  }
+
+  async function _maybeAutoOpenCopilot() {
+    if (!_enabled()) return;
+    if (_autoOpenFired) return;
+    _autoOpenFired = true;
+    // Skip if today's flag is already set OR drawer is already open.
+    try { if (localStorage.getItem(_todayKey()) === '1') return; } catch (_) {}
+    if (document.getElementById('copilot-drawer')) return;
+    const fab = await _waitForEl('#copilot-fab', 8000);
+    if (!fab) return;
+    if (document.getElementById('copilot-drawer')) return; // user opened it in the meantime
+    try { fab.click(); } catch (_) {}
+    // Once it opens, _startDrawerObserver's MutationObserver fires
+    // and injects the bubble — no further action needed here.
+  }
+
+  // Kept for backward compat — any older code that called this still
+  // works; now it just delegates to the new auto-open + observer flow.
+  async function _maybeShowDaySummary() {
+    _startDrawerObserver();
+    _maybeAutoOpenCopilot();
   }
 
   // Manual reset / instant test helper. From DevTools console run:
   //   coachReset()
-  // → clears today's flag and re-fires the auto-open immediately.
+  // → clears today's flag, resets injection markers, opens Copilot.
   window.coachReset = function () {
     try {
-      let slug = '';
-      try { slug = (window.CRM && window.CRM._slug) || (location.pathname.match(/^\/t\/([^\/]+)/) || [])[1] || ''; } catch (_) {}
-      const d = new Date();
-      const ymd = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-      // clear both old and new style keys so any lingering flag dies
       Object.keys(localStorage).forEach(k => { if (k.indexOf('cp4_daysum_') === 0) localStorage.removeItem(k); });
-      console.log('[coach] day-summary flag cleared, re-running…');
-      _maybeShowDaySummary();
+      _autoOpenFired = false;
+      const d = document.getElementById('copilot-drawer');
+      if (d) d.removeAttribute('data-cp4-injected');
+      console.log('[coach] flag cleared, re-firing…');
+      _startDrawerObserver();
+      _maybeAutoOpenCopilot();
     } catch (e) { console.error('[coach] reset failed', e); }
   };
 
