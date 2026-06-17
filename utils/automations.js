@@ -617,29 +617,36 @@ async function _reassignLead(a, ctx) {
   } catch (_) {}
   if (!ids.length) return { ok: false, error: 'reassign skipped: every target user is paused or inactive' };
 
-  // Round-robin: pick the user with the fewest leads created today.
+  // AUTOMATION_ROUND_ROBIN_v1 (2026-06-17) — TRUE round-robin.
+  // Previous implementation was "fewest-loaded today" which biased
+  // toward whoever happened to have a slow morning. User asked for
+  // strict round-robin: cycle through the ticked pool one at a time
+  // in order, regardless of how many other leads each user has.
+  //
+  // State is one INTEGER column on the automations row,
+  // last_picked_user_id, added via idempotent ALTER in db/schema.sql.
+  // Pick algorithm:
+  //   1. Read last_picked_user_id for this rule.
+  //   2. Find its index in the current eligible pool (after
+  //      paused/inactive filtering).
+  //   3. Pick the user at (idx + 1) mod pool.length — the next in
+  //      rotation. If last_picked isn't in the current pool (was
+  //      paused / removed from the rule / first run), start at
+  //      pool[0].
+  //   4. Persist the new pickedId back into last_picked_user_id.
+  //
+  // Pool order = order of user IDs in the recipient string. The SPA
+  // saves users in the order they appear in the checkbox grid, so
+  // rotation order is stable and predictable.
   let pickedId = ids[0];
   if (ids.length > 1) {
+    let lastPicked = 0;
     try {
-      const today = new Date(); today.setHours(0, 0, 0, 0);
-      const r = await db.query(
-        `SELECT assigned_to AS uid, COUNT(*)::int AS c
-           FROM leads
-          WHERE assigned_to = ANY($1::int[])
-            AND created_at >= $2
-          GROUP BY assigned_to`,
-        [ids, today.toISOString()]
-      );
-      const byUser = {};
-      ids.forEach(id => { byUser[id] = 0; });
-      r.rows.forEach(row => { byUser[Number(row.uid)] = Number(row.c) || 0; });
-      // Pick lowest count; tie-break by lowest user id for determinism.
-      ids.sort((a, b) => (byUser[a] - byUser[b]) || (a - b));
-      pickedId = ids[0];
-    } catch (e) {
-      // Fallback to first if the round-robin query bombs.
-      pickedId = ids[0];
-    }
+      const r = await db.query(`SELECT last_picked_user_id FROM automations WHERE id = $1`, [a.id]);
+      lastPicked = Number(r.rows[0] && r.rows[0].last_picked_user_id) || 0;
+    } catch (_) {}
+    const idx = ids.indexOf(lastPicked);
+    pickedId = idx >= 0 ? ids[(idx + 1) % ids.length] : ids[0];
   }
 
   // Look up the previous owner (for the audit remark) and the new owner.
@@ -654,6 +661,13 @@ async function _reassignLead(a, ctx) {
 
   // The actual write.
   await db.update('leads', leadId, { assigned_to: pickedId });
+
+  // AUTOMATION_ROUND_ROBIN_v1 — persist the picked user so the NEXT
+  // fire of this same rule advances to the next position. Wrapped in
+  // try/catch so a write failure doesn't abort the reassign.
+  try {
+    await db.query(`UPDATE automations SET last_picked_user_id = $1 WHERE id = $2`, [pickedId, a.id]);
+  } catch (_) {}
 
   // Audit remark — admin can see who moved this lead and when.
   try {

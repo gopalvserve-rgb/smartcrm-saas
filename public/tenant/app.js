@@ -27571,7 +27571,7 @@ function openAutomationModal(existing) {
         // the automation row, formatted as 'users:1,2,3' (or 'user:1' for
         // single). The backend _reassignLead() parses that format.
         h('div', { class: 'f-row full', id: 'auto-reassign-row', hidden: true },
-          h('label', {}, 'Reassign to (tick everyone — round-robin distributes across them by fewest leads today)'),
+          h('label', {}, 'Reassign to (tick everyone — round-robin cycles through them in order, one lead each turn)'),
           h('div', { id: 'auto-reassign-picker', class: 'card',
             style: { padding: '.5rem .75rem', maxHeight: '220px', overflowY: 'auto',
                      display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '.25rem' }

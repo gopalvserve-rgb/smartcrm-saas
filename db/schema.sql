@@ -1625,3 +1625,8 @@ CREATE TABLE IF NOT EXISTS inv_audit_log (
 );
 CREATE INDEX IF NOT EXISTS idx_inv_audit_entity ON inv_audit_log(entity, entity_id);
 CREATE INDEX IF NOT EXISTS idx_inv_audit_created ON inv_audit_log(created_at DESC);
+
+-- AUTOMATION_ROUND_ROBIN_v1 (2026-06-17) — true round-robin in reassign
+-- automations. Stores the most recently picked user id per rule so the
+-- next fire advances to the next position in the recipient pool.
+ALTER TABLE automations ADD COLUMN IF NOT EXISTS last_picked_user_id INTEGER;
