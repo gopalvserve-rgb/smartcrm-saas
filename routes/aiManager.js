@@ -1173,6 +1173,764 @@ async function api_aiManager_managerDigest(token) {
   return { period: 'last_7_days', overall, top_performers: top, needs_attention: bottom, users: sc.rows };
 }
 
+
+/* ════════════════════════════ PHASE 4 — COMPLETE FEATURE SET ════════════════════════════ */
+/* Closes every gap from the user's full spec. Adds: 10 new detectors,
+ * 5-level escalation routing with team-leader + admin push, EOD prompt
+ * collector, daily plan auto-push, admin NL Q&A, real-time alerts feed,
+ * extended rule parser (12+ patterns), sales-process violations. */
+
+const _pushModule = (() => { try { return require('./push'); } catch (_) { return null; } })();
+
+async function _notifyUser(userId, title, body, url) {
+  if (!_pushModule || !_pushModule.sendPushToUser) return false;
+  try { await _pushModule.sendPushToUser(userId, { title, body, url, tag: 'aimgr-' + Date.now() }); return true; }
+  catch (_) { return false; }
+}
+
+async function _findAdmins() {
+  try {
+    const r = await db.query(`SELECT id FROM users WHERE LOWER(role) IN ('admin','manager') AND COALESCE(is_active, 1) = 1`);
+    return r.rows.map(x => x.id);
+  } catch (_) { return []; }
+}
+
+async function _findTeamLeader(userId) {
+  try {
+    const u = await db.query(`SELECT manager_id, reports_to FROM users WHERE id = $1`, [userId]);
+    if (!u.rows.length) return null;
+    return u.rows[0].manager_id || u.rows[0].reports_to || null;
+  } catch (_) { return null; }
+}
+
+/* Real-time alerts feed — shared inbox the admin SPA polls every 60s */
+async function _ensureAlertsSchema() {
+  try {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS ai_manager_realtime_alerts (
+        id            SERIAL PRIMARY KEY,
+        alert_type    TEXT NOT NULL,
+        severity      TEXT NOT NULL DEFAULT 'medium',
+        user_id       INTEGER,
+        lead_id       INTEGER,
+        title         TEXT NOT NULL,
+        body          TEXT,
+        meta_json     JSONB,
+        created_at    TIMESTAMPTZ DEFAULT NOW(),
+        acked_at      TIMESTAMPTZ,
+        acked_by      INTEGER
+      )`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_aimgr_alerts_unack ON ai_manager_realtime_alerts(created_at DESC) WHERE acked_at IS NULL`);
+  } catch (_) {}
+}
+
+async function _pushAlert(opts) {
+  await _ensureAlertsSchema();
+  try {
+    await db.query(
+      `INSERT INTO ai_manager_realtime_alerts (alert_type, severity, user_id, lead_id, title, body, meta_json)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [opts.type, opts.severity || 'medium', opts.user_id || null, opts.lead_id || null,
+       opts.title, opts.body || '', JSON.stringify(opts.meta || {})]
+    );
+  } catch (_) {}
+}
+
+/* ───── Enhanced 5-level escalation ───── */
+async function _runEscalation(violation) {
+  const level = await _bumpEscalation(violation.user_id, violation.violation_type);
+  let actionTaken = 'reminder';
+  try {
+    if (level >= 3) {
+      const tl = await _findTeamLeader(violation.user_id);
+      if (tl) {
+        await _notifyUser(tl, '⚠️ Team Member Violation',
+          `${violation.violation_type} repeated by your team member. Review needed.`,
+          '#/aimanager');
+        actionTaken = 'team_leader_alerted';
+      }
+    }
+    if (level >= 4) {
+      const admins = await _findAdmins();
+      for (const aid of admins) {
+        await _notifyUser(aid, '🚨 Admin Alert',
+          `Repeat violation: ${violation.violation_type}. Level ${level}/5.`,
+          '#/aimanager');
+      }
+      actionTaken = 'admin_alerted';
+    }
+    if (level >= 5) {
+      await _pushAlert({
+        type: 'level5_repeat', severity: 'high',
+        user_id: violation.user_id, lead_id: violation.lead_id || null,
+        title: 'Level 5 repeat violation',
+        body: `${violation.violation_type} flagged in weekly digest`,
+        meta: { level }
+      });
+      actionTaken = 'weekly_flagged';
+    }
+  } catch (_) {}
+  return { level, actionTaken };
+}
+
+/* ───── Extended rule parser (Section 2.1 — all 7 rule types) ───── */
+const _localParseRule_v1 = _localParseRule;
+function _localParseRuleExt(nl) {
+  const t = String(nl || '').toLowerCase();
+
+  /* Try v1 first */
+  const v1 = _localParseRule_v1(nl);
+  if (v1) return v1;
+
+  /* Hot lead handling */
+  let m = t.match(/hot lead.*?(?:no|without).*?(?:call|contact).*?(\d+)\s*(?:min|minute|hour|hr)/);
+  if (m) {
+    const mins = /hour|hr/.test(m[0]) ? Number(m[1]) * 60 : Number(m[1]);
+    return { conditions: { type: 'hot_lead_inactive', threshold_minutes: mins },
+      action: { type: 'nudge', message: 'Hot lead needs immediate attention.' },
+      severity: 'high', confidence: 0.8 };
+  }
+
+  /* Remark quality + mandatory next FU */
+  if (/(remark.*(?:quality|mandatory|valid|substantive)|next follow.?up.*(?:mandatory|required|must))/i.test(t)) {
+    return { conditions: { type: 'remark_quality_required' },
+      action: { type: 'nudge', message: 'Add a proper remark and set next follow-up.' },
+      severity: 'medium', confidence: 0.75 };
+  }
+
+  /* Interested without quotation/demo */
+  if (/interested.*(?:no|without|missing).*(?:quotation|quote|demo|proposal)/i.test(t)) {
+    return { conditions: { type: 'interested_no_action' },
+      action: { type: 'nudge', message: 'Interested lead has no quotation/demo. Send one.' },
+      severity: 'high', confidence: 0.8 };
+  }
+
+  /* Escalation after N violations */
+  m = t.match(/escalat[a-z]*.*?(\d+)\s*(?:violat|miss|fail)/);
+  if (m) {
+    return { conditions: { type: 'escalation_threshold', repeat_count: Number(m[1]) },
+      action: { type: 'escalate', message: 'Repeated violations — escalate.' },
+      severity: 'high', confidence: 0.75 };
+  }
+
+  /* WhatsApp reply within X min */
+  m = t.match(/(?:whatsapp|wa).*?repl[a-z]+.*?(\d+)\s*(?:min|minute)/);
+  if (m) {
+    return { conditions: { type: 'wa_reply_sla', threshold_minutes: Number(m[1]) },
+      action: { type: 'nudge', message: 'Customer WhatsApp reply pending too long.' },
+      severity: 'high', confidence: 0.8 };
+  }
+
+  /* Lost lead must have reason */
+  if (/lost lead.*?(?:reason|why|valid)/i.test(t)) {
+    return { conditions: { type: 'lost_no_reason' },
+      action: { type: 'nudge', message: 'Lost lead must have a reason.' },
+      severity: 'medium', confidence: 0.7 };
+  }
+
+  return null;
+}
+/* Override */
+function _localParseRule(nl) { return _localParseRuleExt(nl); }
+
+/* ════════════ Detector: Interested-no-quotation/demo (Sales Process) ═════════════ */
+async function detectInterestedNoAction() {
+  if (!await _isEnabled()) return { interested_no_action: 0 };
+  const sql = `
+    SELECT l.id AS lead_id, l.assigned_to AS user_id, l.name AS lead_name
+    FROM leads l
+    JOIN statuses s ON s.id = l.status_id
+    WHERE LOWER(s.name) LIKE '%interested%'
+      AND l.assigned_to IS NOT NULL
+      AND l.updated_at < NOW() - INTERVAL '24 hours'
+      AND NOT EXISTS (SELECT 1 FROM quotations q WHERE q.lead_id = l.id)
+      AND NOT EXISTS (
+        SELECT 1 FROM ai_manager_violations v
+        WHERE v.lead_id = l.id AND v.violation_type = 'interested_no_action'
+          AND v.detected_at >= NOW() - INTERVAL '24 hours'
+      )
+    LIMIT 30`;
+  let rows = [];
+  try { rows = (await db.query(sql)).rows; } catch (_) { return { interested_no_action: 0 }; }
+  let n = 0;
+  for (const row of rows) {
+    const v = await db.query(
+      `INSERT INTO ai_manager_violations
+        (user_id, violation_type, lead_id, expected_action, actual_status, ai_action, escalation_lvl)
+       VALUES ($1, 'interested_no_action', $2, 'Send quotation or schedule demo', 'Interested 24h+, no quotation', 'nudge_sent', 2) RETURNING id`,
+      [row.user_id, row.lead_id]
+    );
+    await db.query(
+      `INSERT INTO ai_manager_reason_prompts (violation_id, user_id, prompt_text)
+       VALUES ($1, $2, $3)`,
+      [v.rows[0].id, row.user_id,
+       `Lead "${(row.lead_name || '').slice(0, 30)}" is Interested 24h+ with no quotation. Send one now or explain.`]
+    );
+    await _pushAlert({ type: 'interested_no_action', severity: 'high', user_id: row.user_id, lead_id: row.lead_id,
+      title: 'Interested lead waiting', body: `${row.lead_name || 'Lead'} — no quotation yet` });
+    await _runEscalation({ user_id: row.user_id, violation_type: 'interested_no_action', lead_id: row.lead_id });
+    n++;
+  }
+  return { interested_no_action: n };
+}
+
+/* ════════════ Detector: FU due — pre-due reminder (Section 2.4) ═════════════ */
+async function detectFuPreDue() {
+  if (!await _isEnabled()) return { fu_predue: 0 };
+  /* FU due in next 30 min, not yet reminded today */
+  const sql = `
+    SELECT l.id AS lead_id, l.assigned_to AS user_id, l.name AS lead_name, l.next_followup_at
+    FROM leads l
+    WHERE l.assigned_to IS NOT NULL
+      AND l.next_followup_at IS NOT NULL
+      AND l.next_followup_at BETWEEN NOW() AND NOW() + INTERVAL '30 minutes'
+      AND NOT EXISTS (
+        SELECT 1 FROM ai_manager_violations v
+        WHERE v.lead_id = l.id AND v.violation_type = 'fu_predue_reminder'
+          AND v.detected_at >= NOW() - INTERVAL '1 hour'
+      )
+    LIMIT 20`;
+  let rows = [];
+  try { rows = (await db.query(sql)).rows; } catch (_) { return { fu_predue: 0 }; }
+  let n = 0;
+  for (const row of rows) {
+    await db.query(
+      `INSERT INTO ai_manager_violations
+        (user_id, violation_type, lead_id, expected_action, actual_status, ai_action, escalation_lvl)
+       VALUES ($1, 'fu_predue_reminder', $2, 'Follow up before due time', 'FU coming in <30min', 'reminder', 1)`,
+      [row.user_id, row.lead_id]
+    );
+    await _notifyUser(row.user_id, '⏰ Follow-up coming up', `${row.lead_name || 'Lead'} in 30 min`, `#/leads/${row.lead_id}`);
+    n++;
+  }
+  return { fu_predue: n };
+}
+
+/* ════════════ Detector: FU done but no call recorded (fake activity v2) ═════════════ */
+async function detectFuDoneNoCall() {
+  if (!await _isEnabled()) return { fu_done_no_call: 0 };
+  const sql = `
+    SELECT l.id AS lead_id, l.assigned_to AS user_id, l.name AS lead_name
+    FROM leads l
+    WHERE COALESCE(l.is_followup_done, 0) = 1
+      AND l.followup_done_at IS NOT NULL
+      AND l.followup_done_at >= NOW() - INTERVAL '2 hours'
+      AND l.assigned_to IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM call_events ce
+        WHERE ce.lead_id = l.id AND ce.created_at >= l.followup_done_at - INTERVAL '30 minutes'
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM ai_manager_violations v
+        WHERE v.lead_id = l.id AND v.violation_type = 'fu_done_no_call'
+          AND v.detected_at >= NOW() - INTERVAL '6 hours'
+      )
+    LIMIT 30`;
+  let rows = [];
+  try { rows = (await db.query(sql)).rows; } catch (_) { return { fu_done_no_call: 0 }; }
+  let n = 0;
+  for (const row of rows) {
+    const v = await db.query(
+      `INSERT INTO ai_manager_violations
+        (user_id, violation_type, lead_id, expected_action, actual_status, ai_action, escalation_lvl)
+       VALUES ($1, 'fu_done_no_call', $2, 'Call before marking FU done', 'FU marked done, no call event', 'flagged', 2) RETURNING id`,
+      [row.user_id, row.lead_id]
+    );
+    await db.query(
+      `INSERT INTO ai_manager_reason_prompts (violation_id, user_id, prompt_text) VALUES ($1, $2, $3)`,
+      [v.rows[0].id, row.user_id, `You marked follow-up done for ${row.lead_name || 'a lead'} without a call event. Explain.`]
+    );
+    await _runEscalation({ user_id: row.user_id, violation_type: 'fu_done_no_call', lead_id: row.lead_id });
+    n++;
+  }
+  return { fu_done_no_call: n };
+}
+
+/* ════════════ Detector: Repeated short calls (fake activity v2) ═════════════ */
+async function detectRepeatedShortCalls() {
+  if (!await _isEnabled()) return { short_calls: 0 };
+  /* 3+ calls < 10 sec in last hour by same user */
+  const sql = `
+    SELECT user_id, COUNT(*) AS cnt
+    FROM call_events
+    WHERE created_at >= NOW() - INTERVAL '1 hour'
+      AND COALESCE(duration_seconds, duration_s, 0) BETWEEN 1 AND 9
+      AND user_id IS NOT NULL
+    GROUP BY user_id HAVING COUNT(*) >= 3`;
+  let rows = [];
+  try { rows = (await db.query(sql)).rows; } catch (_) { return { short_calls: 0 }; }
+  let n = 0;
+  for (const row of rows) {
+    const dup = await db.query(
+      `SELECT id FROM ai_manager_violations WHERE user_id = $1 AND violation_type = 'short_call_pattern' AND detected_at >= NOW() - INTERVAL '2 hours' LIMIT 1`,
+      [row.user_id]
+    );
+    if (dup.rows.length) continue;
+    const v = await db.query(
+      `INSERT INTO ai_manager_violations
+        (user_id, violation_type, expected_action, actual_status, ai_action, escalation_lvl)
+       VALUES ($1, 'short_call_pattern', 'Make real connect calls', $2, 'flagged', 2) RETURNING id`,
+      [row.user_id, `${row.cnt} calls under 10 seconds in last hour`]
+    );
+    await db.query(
+      `INSERT INTO ai_manager_reason_prompts (violation_id, user_id, prompt_text) VALUES ($1, $2, $3)`,
+      [v.rows[0].id, row.user_id, `You made ${row.cnt} calls under 10 seconds in the last hour. Please explain.`]
+    );
+    await _runEscalation({ user_id: row.user_id, violation_type: 'short_call_pattern' });
+    n++;
+  }
+  return { short_calls: n };
+}
+
+/* ════════════ Detector: Copied remarks across leads ═════════════ */
+async function detectCopiedRemarks() {
+  if (!await _isEnabled()) return { copied: 0 };
+  /* Same notes text used on 3+ leads by same user in last 24h */
+  const sql = `
+    SELECT l.assigned_to AS user_id, COUNT(DISTINCT l.id) AS lead_count, LEFT(l.notes, 80) AS sample
+    FROM leads l
+    WHERE l.notes IS NOT NULL
+      AND LENGTH(l.notes) BETWEEN 5 AND 100
+      AND l.updated_at >= NOW() - INTERVAL '24 hours'
+      AND l.assigned_to IS NOT NULL
+    GROUP BY l.assigned_to, LEFT(l.notes, 80)
+    HAVING COUNT(DISTINCT l.id) >= 3
+    LIMIT 20`;
+  let rows = [];
+  try { rows = (await db.query(sql)).rows; } catch (_) { return { copied: 0 }; }
+  let n = 0;
+  for (const row of rows) {
+    const dup = await db.query(
+      `SELECT id FROM ai_manager_violations WHERE user_id = $1 AND violation_type = 'copied_remark' AND detected_at >= NOW() - INTERVAL '12 hours' LIMIT 1`,
+      [row.user_id]
+    );
+    if (dup.rows.length) continue;
+    const v = await db.query(
+      `INSERT INTO ai_manager_violations
+        (user_id, violation_type, expected_action, actual_status, ai_action, escalation_lvl)
+       VALUES ($1, 'copied_remark', 'Write unique remarks per lead', $2, 'flagged', 2) RETURNING id`,
+      [row.user_id, `Same remark "${row.sample}" on ${row.lead_count} leads in 24h`]
+    );
+    await db.query(
+      `INSERT INTO ai_manager_reason_prompts (violation_id, user_id, prompt_text) VALUES ($1, $2, $3)`,
+      [v.rows[0].id, row.user_id, `You used the same remark on ${row.lead_count} different leads. Add specific notes per lead.`]
+    );
+    await _runEscalation({ user_id: row.user_id, violation_type: 'copied_remark' });
+    n++;
+  }
+  return { copied: n };
+}
+
+/* ════════════ Detector: Hot → Cold demotion without call ═════════════ */
+async function detectHotToColdDemotion() {
+  if (!await _isEnabled()) return { hot_to_cold: 0 };
+  /* Lead smart_category was Hot in last 24h, now Cold, no call between */
+  const sql = `
+    SELECT id AS lead_id, assigned_to AS user_id, name AS lead_name
+    FROM leads
+    WHERE smart_category = 'Cold'
+      AND score_updated_at >= NOW() - INTERVAL '24 hours'
+      AND assigned_to IS NOT NULL
+      AND smart_score < 30
+      AND NOT EXISTS (
+        SELECT 1 FROM call_events ce
+        WHERE ce.lead_id = leads.id AND ce.created_at >= NOW() - INTERVAL '24 hours'
+          AND COALESCE(ce.duration_seconds, ce.duration_s, 0) > 20
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM ai_manager_violations v
+        WHERE v.lead_id = leads.id AND v.violation_type = 'hot_to_cold' AND v.detected_at >= NOW() - INTERVAL '48 hours'
+      )
+    LIMIT 20`;
+  let rows = [];
+  try { rows = (await db.query(sql)).rows; } catch (_) { return { hot_to_cold: 0 }; }
+  let n = 0;
+  for (const row of rows) {
+    await db.query(
+      `INSERT INTO ai_manager_violations
+        (user_id, violation_type, lead_id, expected_action, actual_status, ai_action, escalation_lvl)
+       VALUES ($1, 'hot_to_cold', $2, 'Re-engage before lead cools off', 'Lead cooled without contact', 'flagged', 2)`,
+      [row.user_id, row.lead_id]
+    );
+    n++;
+  }
+  return { hot_to_cold: n };
+}
+
+/* ════════════ Detector: Lost lead with no reason ═════════════ */
+async function detectLostNoReason() {
+  if (!await _isEnabled()) return { lost_no_reason: 0 };
+  const sql = `
+    SELECT l.id AS lead_id, l.assigned_to AS user_id, l.name AS lead_name
+    FROM leads l
+    WHERE COALESCE(l.is_lost, 0) = 1
+      AND (l.lost_reason IS NULL OR TRIM(l.lost_reason) = '')
+      AND l.updated_at >= NOW() - INTERVAL '24 hours'
+      AND l.assigned_to IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM ai_manager_violations v
+        WHERE v.lead_id = l.id AND v.violation_type = 'lost_no_reason'
+      )
+    LIMIT 30`;
+  let rows = [];
+  try { rows = (await db.query(sql)).rows; } catch (_) { return { lost_no_reason: 0 }; }
+  let n = 0;
+  for (const row of rows) {
+    const v = await db.query(
+      `INSERT INTO ai_manager_violations
+        (user_id, violation_type, lead_id, expected_action, actual_status, ai_action, escalation_lvl)
+       VALUES ($1, 'lost_no_reason', $2, 'Add lost reason', 'Marked lost, no reason given', 'nudge_sent', 1) RETURNING id`,
+      [row.user_id, row.lead_id]
+    );
+    await db.query(
+      `INSERT INTO ai_manager_reason_prompts (violation_id, user_id, prompt_text) VALUES ($1, $2, $3)`,
+      [v.rows[0].id, row.user_id, `Lead "${(row.lead_name || '').slice(0, 30)}" marked Lost with no reason. Why?`]
+    );
+    n++;
+  }
+  return { lost_no_reason: n };
+}
+
+/* ════════════ Detector: Quoted but no follow-up (payment stage stale) ═════════════ */
+async function detectQuotedNoFu() {
+  if (!await _isEnabled()) return { quoted_no_fu: 0 };
+  const sql = `
+    SELECT DISTINCT l.id AS lead_id, l.assigned_to AS user_id, l.name AS lead_name
+    FROM leads l
+    JOIN quotations q ON q.lead_id = l.id
+    WHERE q.created_at >= NOW() - INTERVAL '7 days'
+      AND q.created_at < NOW() - INTERVAL '2 days'
+      AND l.next_followup_at IS NULL
+      AND l.assigned_to IS NOT NULL
+      AND COALESCE(l.is_won, 0) = 0 AND COALESCE(l.is_lost, 0) = 0
+      AND NOT EXISTS (
+        SELECT 1 FROM ai_manager_violations v
+        WHERE v.lead_id = l.id AND v.violation_type = 'quoted_no_fu' AND v.detected_at >= NOW() - INTERVAL '24 hours'
+      )
+    LIMIT 30`;
+  let rows = [];
+  try { rows = (await db.query(sql)).rows; } catch (_) { return { quoted_no_fu: 0 }; }
+  let n = 0;
+  for (const row of rows) {
+    const v = await db.query(
+      `INSERT INTO ai_manager_violations
+        (user_id, violation_type, lead_id, expected_action, actual_status, ai_action, escalation_lvl)
+       VALUES ($1, 'quoted_no_fu', $2, 'Follow up on sent quotation', 'Quote sent 2-7d ago, no next FU', 'nudge_sent', 2) RETURNING id`,
+      [row.user_id, row.lead_id]
+    );
+    await db.query(
+      `INSERT INTO ai_manager_reason_prompts (violation_id, user_id, prompt_text) VALUES ($1, $2, $3)`,
+      [v.rows[0].id, row.user_id, `You sent a quotation to "${(row.lead_name || '').slice(0, 30)}" but no follow-up set. Schedule one.`]
+    );
+    await _runEscalation({ user_id: row.user_id, violation_type: 'quoted_no_fu', lead_id: row.lead_id });
+    n++;
+  }
+  return { quoted_no_fu: n };
+}
+
+/* ════════════ Detector: Min daily calls not met (afternoon check) ═════════════ */
+async function detectMinDailyCalls() {
+  if (!await _isEnabled()) return { min_calls: 0 };
+  /* Only fire after 3pm IST */
+  const hr = new Date(Date.now() + 5.5 * 3600e3).getUTCHours();
+  if (hr < 15) return { min_calls: 0 };
+  /* Look for any active rule with min_daily_calls */
+  const rules = (await db.query(
+    `SELECT conditions FROM ai_manager_rules WHERE is_active = TRUE AND conditions->>'type' = 'min_daily_calls' LIMIT 1`
+  )).rows;
+  if (!rules.length) return { min_calls: 0 };
+  const target = Number(rules[0].conditions.threshold || 20);
+  const sql = `
+    SELECT u.id AS user_id, u.name, COUNT(ce.id) AS calls_today
+    FROM users u
+    LEFT JOIN call_events ce ON ce.user_id = u.id AND ce.created_at::date = CURRENT_DATE AND ce.direction = 'out'
+    WHERE COALESCE(u.is_active, 1) = 1 AND LOWER(u.role) IN ('sales','team_leader')
+    GROUP BY u.id, u.name
+    HAVING COUNT(ce.id) < $1`;
+  let rows = [];
+  try { rows = (await db.query(sql, [target])).rows; } catch (_) { return { min_calls: 0 }; }
+  let n = 0;
+  for (const row of rows) {
+    const dup = await db.query(
+      `SELECT id FROM ai_manager_violations WHERE user_id = $1 AND violation_type = 'min_calls_low' AND detected_at::date = CURRENT_DATE LIMIT 1`,
+      [row.user_id]
+    );
+    if (dup.rows.length) continue;
+    await db.query(
+      `INSERT INTO ai_manager_violations
+        (user_id, violation_type, expected_action, actual_status, ai_action, escalation_lvl)
+       VALUES ($1, 'min_calls_low', $2, $3, 'nudge_sent', 1)`,
+      [row.user_id, `Make ${target} calls per day`, `Only ${row.calls_today}/${target} today`]
+    );
+    await _notifyUser(row.user_id, '📞 Call target', `You've made ${row.calls_today}/${target} calls today.`, '#/leads');
+    n++;
+  }
+  return { min_calls: n };
+}
+
+/* ════════════ EOD prompt collector ═════════════ */
+async function _ensureEodSchema() {
+  try {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS ai_manager_eod_responses (
+        id            SERIAL PRIMARY KEY,
+        user_id       INTEGER NOT NULL,
+        for_date      DATE NOT NULL,
+        wins_text     TEXT,
+        blockers_text TEXT,
+        tomorrow_plan TEXT,
+        submitted_at  TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(user_id, for_date)
+      )`);
+  } catch (_) {}
+}
+
+async function runEodPromptDispatch() {
+  if (!await _isEnabled()) return { skipped: true };
+  await _ensureEodSchema();
+  /* Find users whose eod_prompt_time matches current hour:min (IST). Default 7pm. */
+  const now = new Date(Date.now() + 5.5 * 3600e3);
+  const hh = now.getUTCHours(), mm = now.getUTCMinutes();
+  let users = [];
+  try {
+    users = (await db.query(
+      `SELECT id FROM users
+       WHERE COALESCE(is_active, 1) = 1
+         AND LOWER(role) IN ('sales','team_leader','manager')
+         AND (
+           (eod_prompt_time IS NOT NULL AND EXTRACT(HOUR FROM eod_prompt_time) = $1 AND EXTRACT(MINUTE FROM eod_prompt_time) BETWEEN $2 - 2 AND $2 + 2)
+           OR
+           (eod_prompt_time IS NULL AND $1 = 19 AND $2 BETWEEN 0 AND 4)
+         )`,
+      [hh, mm]
+    )).rows;
+  } catch (_) { return { eod: 0 }; }
+  let n = 0;
+  for (const u of users) {
+    const dup = await db.query(
+      `SELECT id FROM ai_manager_reason_prompts WHERE user_id = $1 AND prompt_text LIKE 'EOD:%' AND created_at::date = CURRENT_DATE LIMIT 1`,
+      [u.id]
+    );
+    if (dup.rows.length) continue;
+    /* Use prompt queue for the EOD ask */
+    const v = await db.query(
+      `INSERT INTO ai_manager_violations (user_id, violation_type, expected_action, actual_status, ai_action, escalation_lvl)
+       VALUES ($1, 'eod_summary', 'End-of-day summary', 'EOD prompt sent', 'prompt', 1) RETURNING id`,
+      [u.id]
+    );
+    await db.query(
+      `INSERT INTO ai_manager_reason_prompts (violation_id, user_id, prompt_text) VALUES ($1, $2, $3)`,
+      [v.rows[0].id, u.id, `EOD: How was your day? Share wins, blockers, and plan for tomorrow.`]
+    );
+    await _notifyUser(u.id, '🌙 End of day update', 'Please share today\'s wins, blockers, and tomorrow plan.', '#/aimanager');
+    n++;
+  }
+  return { eod: n };
+}
+
+/* ════════════ Daily plan auto-push (SOD) ═════════════ */
+async function runDailyPlanDispatch() {
+  if (!await _isEnabled()) return { skipped: true };
+  /* 9am IST default */
+  const now = new Date(Date.now() + 5.5 * 3600e3);
+  const hh = now.getUTCHours(), mm = now.getUTCMinutes();
+  if (!(hh === 9 && mm < 4)) return { skipped: true };
+  let users = [];
+  try {
+    users = (await db.query(
+      `SELECT id, name FROM users WHERE COALESCE(is_active, 1) = 1 AND LOWER(role) IN ('sales','team_leader','manager')`
+    )).rows;
+  } catch (_) { return { dispatched: 0 }; }
+  let n = 0;
+  for (const u of users) {
+    /* Build their plan: FU due today + hot leads */
+    const planSql = `
+      SELECT
+        (SELECT COUNT(*) FROM leads WHERE assigned_to = $1 AND next_followup_at::date = CURRENT_DATE) AS fu_today,
+        (SELECT COUNT(*) FROM leads WHERE assigned_to = $1 AND smart_category = 'Hot' AND COALESCE(is_won,0)=0 AND COALESCE(is_lost,0)=0) AS hot_leads,
+        (SELECT COUNT(*) FROM leads WHERE assigned_to = $1 AND smart_category = 'Warm' AND COALESCE(is_won,0)=0 AND COALESCE(is_lost,0)=0) AS warm_leads`;
+    let plan = {};
+    try { plan = (await db.query(planSql, [u.id])).rows[0] || {}; } catch (_) {}
+    const total = (Number(plan.fu_today) || 0) + (Number(plan.hot_leads) || 0);
+    if (total === 0) continue;
+    await _notifyUser(u.id, '☀️ Good morning, ' + (u.name || '').split(' ')[0],
+      `Today: ${plan.fu_today || 0} FU + ${plan.hot_leads || 0} Hot + ${plan.warm_leads || 0} Warm`,
+      '#/leads');
+    n++;
+  }
+  return { dispatched: n };
+}
+
+/* ════════════ Admin NL Q&A ═════════════ */
+async function api_aiManager_ask(token, payload) {
+  await _ensureSchema();
+  const me = await authUser(token);
+  if (!['admin','manager'].includes((me.role || '').toLowerCase()) && !me.is_admin) {
+    return { error: 'admin only' };
+  }
+  const q = String(payload && payload.question || '').trim();
+  if (!q) return { error: 'question required' };
+  const ql = q.toLowerCase();
+  /* Cheap pattern routing — no LLM cost for common asks */
+  if (/idle|who.*idle/.test(ql)) {
+    const r = await db.query(
+      `SELECT u.name, EXTRACT(EPOCH FROM (NOW() - i.last_heartbeat_at))/60 AS idle_min
+       FROM user_idle_state i JOIN users u ON u.id = i.user_id
+       WHERE i.last_heartbeat_at >= NOW() - INTERVAL '4 hours'
+         AND (i.last_meaningful_activity_at IS NULL OR i.last_meaningful_activity_at < NOW() - INTERVAL '15 minutes')
+       ORDER BY idle_min DESC LIMIT 20`
+    );
+    return { answer_type: 'idle_users', rows: r.rows.map(x => ({ name: x.name, idle_minutes: Math.round(x.idle_min || 0) })) };
+  }
+  if (/overdue.*follow|fu.*overdue|missed.*follow/.test(ql)) {
+    const r = await db.query(
+      `SELECT u.name AS owner, COUNT(*) AS count FROM leads l JOIN users u ON u.id = l.assigned_to
+       WHERE l.next_followup_at < NOW() AND COALESCE(l.is_followup_done, 0) = 0
+       GROUP BY u.name ORDER BY count DESC LIMIT 20`
+    );
+    return { answer_type: 'overdue_followups', rows: r.rows };
+  }
+  if (/hot lead.*pending|which hot|pending hot/.test(ql)) {
+    const r = await db.query(
+      `SELECT l.id, l.name, u.name AS owner, l.smart_score FROM leads l LEFT JOIN users u ON u.id = l.assigned_to
+       WHERE l.smart_category = 'Hot' AND l.updated_at < NOW() - INTERVAL '1 day'
+       ORDER BY l.smart_score DESC NULLS LAST LIMIT 20`
+    );
+    return { answer_type: 'pending_hot', rows: r.rows };
+  }
+  if (/today.*summary|team.*today|activity today/.test(ql)) {
+    const r = await db.query(
+      `SELECT u.name,
+        COUNT(DISTINCT ce.id) FILTER (WHERE ce.created_at::date = CURRENT_DATE) AS calls,
+        COUNT(DISTINCT v.id) FILTER (WHERE v.detected_at::date = CURRENT_DATE) AS violations
+       FROM users u
+       LEFT JOIN call_events ce ON ce.user_id = u.id
+       LEFT JOIN ai_manager_violations v ON v.user_id = u.id
+       WHERE COALESCE(u.is_active, 1) = 1 GROUP BY u.id, u.name ORDER BY calls DESC`
+    );
+    return { answer_type: 'team_today', rows: r.rows };
+  }
+  if (/who.*not.*call|new lead.*not contact|sla miss/.test(ql)) {
+    const r = await db.query(
+      `SELECT u.name AS owner, COUNT(*) AS count
+       FROM leads l JOIN users u ON u.id = l.assigned_to
+       WHERE l.created_at >= NOW() - INTERVAL '1 day'
+         AND NOT EXISTS (SELECT 1 FROM call_events ce WHERE ce.lead_id = l.id)
+       GROUP BY u.name ORDER BY count DESC`
+    );
+    return { answer_type: 'new_no_call', rows: r.rows };
+  }
+  /* Fallback: try Gemini */
+  try {
+    const gemini = require('../utils/geminiClient');
+    if (gemini && gemini.generate) {
+      const prompt = `You are an AI sales admin. Answer this admin question in 1-2 short lines, no SQL: "${q}". If you need data, say what.`;
+      const r = await gemini.generate({ prompt, maxTokens: 120 });
+      if (r && r.ok) return { answer_type: 'llm', text: r.text };
+    }
+  } catch (_) {}
+  return { answer_type: 'unrecognized', text: 'Try: "who is idle", "overdue follow-ups", "pending hot leads", "today\'s summary", "who has not called new leads".' };
+}
+
+/* ════════════ Real-time alerts feed ═════════════ */
+async function api_aiManager_alerts(token, opts) {
+  await _ensureSchema();
+  await _ensureAlertsSchema();
+  await authUser(token);
+  opts = opts || {};
+  const limit = Math.min(Number(opts.limit || 50), 200);
+  const r = await db.query(
+    `SELECT a.*, u.name AS user_name, l.name AS lead_name
+     FROM ai_manager_realtime_alerts a
+     LEFT JOIN users u ON u.id = a.user_id
+     LEFT JOIN leads l ON l.id = a.lead_id
+     ORDER BY a.created_at DESC LIMIT $1`, [limit]
+  );
+  return { alerts: r.rows };
+}
+
+async function api_aiManager_alert_ack(token, payload) {
+  await _ensureSchema();
+  await _ensureAlertsSchema();
+  const me = await authUser(token);
+  const id = Number(payload && payload.id);
+  if (!id) return { error: 'id required' };
+  await db.query(`UPDATE ai_manager_realtime_alerts SET acked_at = NOW(), acked_by = $1 WHERE id = $2`, [me.id, id]);
+  return { ok: true };
+}
+
+/* ════════════ EOD response submit ═════════════ */
+async function api_aiManager_eod_submit(token, payload) {
+  await _ensureSchema();
+  await _ensureEodSchema();
+  const me = await authUser(token);
+  payload = payload || {};
+  const today = _today();
+  await db.query(
+    `INSERT INTO ai_manager_eod_responses (user_id, for_date, wins_text, blockers_text, tomorrow_plan)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (user_id, for_date) DO UPDATE SET
+       wins_text = EXCLUDED.wins_text, blockers_text = EXCLUDED.blockers_text,
+       tomorrow_plan = EXCLUDED.tomorrow_plan, submitted_at = NOW()`,
+    [me.id, today, payload.wins || '', payload.blockers || '', payload.tomorrow || '']
+  );
+  /* Mark any open EOD prompts as responded */
+  try {
+    await db.query(
+      `UPDATE ai_manager_reason_prompts SET responded_at = NOW(),
+         response_text = $2
+       WHERE user_id = $1 AND prompt_text LIKE 'EOD:%' AND responded_at IS NULL`,
+      [me.id, `Wins: ${payload.wins || ''} | Blockers: ${payload.blockers || ''} | Tomorrow: ${payload.tomorrow || ''}`]
+    );
+  } catch (_) {}
+  return { ok: true };
+}
+
+async function api_aiManager_eod_summary(token, opts) {
+  await _ensureSchema(); await _ensureEodSchema();
+  await authUser(token);
+  opts = opts || {};
+  const day = String(opts.date || _today());
+  const r = await db.query(
+    `SELECT e.*, u.name AS user_name
+     FROM ai_manager_eod_responses e JOIN users u ON u.id = e.user_id
+     WHERE e.for_date = $1 ORDER BY e.submitted_at DESC`, [day]
+  );
+  return { date: day, responses: r.rows };
+}
+
+/* ════════════ Override runDetectionCycle to include Phase 4 detectors ═════════════ */
+async function runDetectionCycle() {
+  try {
+    if (!await _isEnabled()) return { skipped: true };
+    await _ensureSchema();
+    const results = {};
+    /* Phase 1 */
+    results.idle = await detectIdleUsers().catch(e => ({ err: e.message }));
+    results.sla = await detectNewLeadSlaMiss().catch(e => ({ err: e.message }));
+    /* Phase 2 */
+    results.fake = await detectFakeActivity().catch(e => ({ err: e.message }));
+    results.wa = await detectWaIgnoredReplies().catch(e => ({ err: e.message }));
+    /* Phase 4 */
+    results.interested_no_action = await detectInterestedNoAction().catch(e => ({ err: e.message }));
+    results.fu_predue = await detectFuPreDue().catch(e => ({ err: e.message }));
+    results.fu_done_no_call = await detectFuDoneNoCall().catch(e => ({ err: e.message }));
+    results.short_calls = await detectRepeatedShortCalls().catch(e => ({ err: e.message }));
+    results.copied_remarks = await detectCopiedRemarks().catch(e => ({ err: e.message }));
+    results.hot_to_cold = await detectHotToColdDemotion().catch(e => ({ err: e.message }));
+    results.lost_no_reason = await detectLostNoReason().catch(e => ({ err: e.message }));
+    results.quoted_no_fu = await detectQuotedNoFu().catch(e => ({ err: e.message }));
+    results.min_calls = await detectMinDailyCalls().catch(e => ({ err: e.message }));
+    /* Time-based dispatches */
+    results.daily_plan = await runDailyPlanDispatch().catch(e => ({ err: e.message }));
+    results.eod = await runEodPromptDispatch().catch(e => ({ err: e.message }));
+    return { ok: true, ...results };
+  } catch (e) {
+    console.error('[AI_MGR_CYCLE_v4]', e.message);
+    return { error: e.message };
+  }
+}
+
 module.exports = {
   _ensureSchema,
   runDetectionCycle,
@@ -1201,4 +1959,19 @@ module.exports = {
   checkRemarkQuality,
   recomputeScorecard,
   generateCoachingDigest,
+  api_aiManager_ask,
+  api_aiManager_alerts,
+  api_aiManager_alert_ack,
+  api_aiManager_eod_submit,
+  api_aiManager_eod_summary,
+  detectInterestedNoAction,
+  detectFuPreDue,
+  detectFuDoneNoCall,
+  detectRepeatedShortCalls,
+  detectCopiedRemarks,
+  detectHotToColdDemotion,
+  detectLostNoReason,
+  detectQuotedNoFu,
+  runEodPromptDispatch,
+  runDailyPlanDispatch,
 };

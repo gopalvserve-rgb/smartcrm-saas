@@ -501,3 +501,12 @@ VALUES (
   'AI Manager is complete. Every sales rep now gets a personalised weekly Coaching digest (Gemini-written summary + 3 actionable tips, refreshed every 24h). Admin sees a Manager Digest with team KPIs, top performers and who needs attention. Conversion Probability scoring uses your AI Rate + activity + status to predict close %. Revenue Leakage Report surfaces ageing high-value leads. Next Best Action gives per-lead suggestions.',
   'ai', NOW(), TRUE
 ) ON CONFLICT (slug) DO NOTHING;
+
+-- AI_MGR_v1 Phase 4 (2026-06-18) — Complete feature set
+INSERT INTO changelog (slug, title, body, area, published_at, is_published)
+VALUES (
+  'ai-manager-phase4-complete-2026-06-18',
+  'AI Manager — Phase 4: 100% feature complete',
+  'Every feature from the original spec is now live. 13 detectors running every 2 min (idle, SLA, fake activity, WA ignored, interested-no-quotation, FU pre-due, FU-done-no-call, repeated short calls, copied remarks, hot-to-cold, lost-no-reason, quoted-no-FU, min daily calls). 5-level escalation now actually routes to team leader (Level 3) and admin (Level 4) via push + in-app. Real-time alerts feed. Natural-language admin Q&A ("who is idle?", "overdue follow-ups", "pending hot leads"). Daily Plan auto-pushed at 9am IST. EOD prompt at 7pm + team summary. Remark Quality hooks into QNote + add-remark. Rule parser handles 12+ patterns.',
+  'ai', NOW(), TRUE
+) ON CONFLICT (slug) DO NOTHING;

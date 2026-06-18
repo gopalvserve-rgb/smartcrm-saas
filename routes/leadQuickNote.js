@@ -343,6 +343,13 @@ async function api_leads_quickNote(token, payload) {
         remark: '✨ ' + remarkText,
         status_id: statusUsed ? statusUsed.id : null
       });
+  try {
+    const aimgr = require('./aiManager');
+    if (aimgr && aimgr.checkRemarkQuality) {
+      aimgr.checkRemarkQuality({ userId: me.id, leadId: Number(p.lead_id || p.id), remarkText: String(p.text || p.remark || '') }).catch(() => {});
+    }
+  } catch (_) {}
+
       // QNOTE_NOTES_SYNC_v1 (2026-06-16) — user feedback: when a rep adds
       // a remark via the AI Quick Note, the remark lands in remarks (and
       // activity timeline) but the Notes column on the leads list stays

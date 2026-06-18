@@ -47941,11 +47941,14 @@ VIEWS.aimanager = async (view) => {
   const tabs = [
     { id: 'rules',      label: '🎯 Rules' },
     { id: 'violations', label: '🚨 Violations' },
+    { id: 'alerts',     label: '🔔 Live Alerts' },
+    { id: 'ask',        label: '💬 Ask AI' },
     { id: 'reports',    label: '📊 Reports' },
     { id: 'risk',       label: '⚠️ Lead Risk' },
     { id: 'scorecard',  label: '🏆 Scorecard' },
     { id: 'coaching',   label: '🎓 Coaching' },
-    { id: 'digest',     label: '📋 Manager Digest' }
+    { id: 'digest',     label: '📋 Manager Digest' },
+    { id: 'eod',        label: '🌙 EOD' }
   ];
 
   function renderTabs(active) {
@@ -47970,6 +47973,9 @@ VIEWS.aimanager = async (view) => {
       else if (id === 'scorecard') await renderScorecard();
       else if (id === 'coaching') await renderCoaching();
       else if (id === 'digest') await renderDigest();
+      else if (id === 'alerts') await renderAlerts();
+      else if (id === 'ask') await renderAsk();
+      else if (id === 'eod') await renderEod();
     } catch (e) {
       body.innerHTML = '<div style="padding:20px;background:#fef2f2;color:#991b1b;border-radius:10px">Error: ' + (e.message || String(e)) + '</div>';
     }
@@ -48273,6 +48279,132 @@ VIEWS.aimanager = async (view) => {
     cols.appendChild(side('🥇 Top performers', r.top_performers, '#10b981'));
     cols.appendChild(side('⚠️ Needs attention', r.needs_attention, '#dc2626'));
     body.appendChild(cols);
+  }
+
+
+  /* ---------- LIVE ALERTS TAB ---------- */
+  async function renderAlerts() {
+    body.innerHTML = '<div style="padding:20px;text-align:center;color:#94a3b8">Loading alerts…</div>';
+    const r = await api('api_aiManager_alerts');
+    body.innerHTML = '';
+    if (!r.alerts || !r.alerts.length) {
+      body.innerHTML = '<div style="padding:30px;text-align:center;color:#94a3b8;background:#f0fdf4;border-radius:10px;border:1px solid #bbf7d0">✓ No live alerts. All clear.</div>';
+      return;
+    }
+    const head = document.createElement('div');
+    head.style.cssText = 'background:#fff;border-radius:12px;padding:14px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.06);display:flex;justify-content:space-between;align-items:center';
+    head.innerHTML = '<div><div style="font-size:16px;font-weight:600">🔔 Real-time alerts ('+r.alerts.length+')</div><div style="font-size:12px;color:#64748b">Polls every 60s. Click Ack to clear.</div></div>';
+    body.appendChild(head);
+    const list = document.createElement('div');
+    list.style.cssText = 'display:flex;flex-direction:column;gap:8px';
+    for (const a of r.alerts) {
+      const card = document.createElement('div');
+      const sev = a.severity === 'high' ? '#dc2626' : a.severity === 'medium' ? '#f59e0b' : '#64748b';
+      card.style.cssText = 'background:#fff;border-radius:10px;padding:12px;display:flex;justify-content:space-between;align-items:center;border-left:4px solid '+sev+';box-shadow:0 1px 2px rgba(0,0,0,.04);'+(a.acked_at?'opacity:.5':'');
+      card.innerHTML = '<div style="flex:1"><div style="font-weight:600;color:#0f172a;font-size:14px">'+esc(a.title)+'</div><div style="font-size:13px;color:#475569;margin-top:2px">'+esc(a.body||'')+'</div><div style="font-size:11px;color:#94a3b8;margin-top:4px">'+(a.user_name?'👤 '+esc(a.user_name)+' · ':'')+(a.lead_name?'🎯 '+esc(a.lead_name)+' · ':'')+new Date(a.created_at).toLocaleString()+'</div></div>'+(!a.acked_at?'<button data-cp-ack="'+a.id+'" style="background:#4f46e5;color:#fff;border:0;padding:6px 14px;border-radius:7px;cursor:pointer;font-size:12px;font-weight:600">Ack</button>':'<span style="color:#10b981;font-size:12px">✓ acked</span>');
+      list.appendChild(card);
+    }
+    body.appendChild(list);
+    list.querySelectorAll('[data-cp-ack]').forEach(btn => btn.onclick = async (ev) => {
+      ev.stopPropagation();
+      await api('api_aiManager_alert_ack', { id: Number(btn.getAttribute('data-cp-ack')) });
+      renderAlerts();
+    });
+  }
+
+  /* ---------- ASK AI TAB (Admin NL Q&A) ---------- */
+  async function renderAsk() {
+    body.innerHTML = '';
+    const head = document.createElement('div');
+    head.style.cssText = 'background:linear-gradient(135deg,#0ea5e9,#06b6d4);color:#fff;border-radius:12px;padding:18px;margin-bottom:16px';
+    head.innerHTML = '<div style="font-size:18px;font-weight:600">💬 Ask AI Manager</div><div style="font-size:13px;opacity:.9;margin-top:4px">Examples: "Who is idle now?" · "Overdue follow-ups?" · "Pending hot leads?" · "Today\'s summary?" · "Who hasn\'t called new leads?"</div>';
+    body.appendChild(head);
+    const inputWrap = document.createElement('div');
+    inputWrap.style.cssText = 'background:#fff;border-radius:12px;padding:14px;margin-bottom:16px;display:flex;gap:8px;box-shadow:0 1px 3px rgba(0,0,0,.06)';
+    inputWrap.innerHTML = '<input type="text" id="amgr-ask-q" placeholder="Ask anything about your team…" style="flex:1;padding:10px 14px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px"/><button id="amgr-ask-go" style="background:#0ea5e9;color:#fff;border:0;padding:10px 20px;border-radius:8px;cursor:pointer;font-weight:600">Ask</button>';
+    body.appendChild(inputWrap);
+    const out = document.createElement('div');
+    out.id = 'amgr-ask-out';
+    body.appendChild(out);
+    const goAsk = async () => {
+      const q = document.getElementById('amgr-ask-q').value.trim();
+      if (!q) return;
+      out.innerHTML = '<div style="padding:20px;text-align:center;color:#94a3b8">Thinking…</div>';
+      const r = await api('api_aiManager_ask', { question: q });
+      out.innerHTML = '';
+      const card = document.createElement('div');
+      card.style.cssText = 'background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.06)';
+      if (r.text) {
+        card.innerHTML = '<div style="font-size:14px;color:#0f172a;line-height:1.6">'+esc(r.text)+'</div>';
+      } else if (r.rows && r.rows.length) {
+        const cols = Object.keys(r.rows[0]);
+        let html = '<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:#f1f5f9;color:#475569;font-weight:600">';
+        cols.forEach(c => html += '<th style="padding:8px;text-align:left;text-transform:capitalize">'+esc(c.replace(/_/g, ' '))+'</th>');
+        html += '</tr></thead><tbody>';
+        r.rows.forEach(row => {
+          html += '<tr style="border-top:1px solid #e2e8f0">';
+          cols.forEach(c => html += '<td style="padding:8px;color:#0f172a">'+esc(String(row[c] == null ? '-' : row[c]))+'</td>');
+          html += '</tr>';
+        });
+        html += '</tbody></table>';
+        card.innerHTML = html;
+      } else {
+        card.innerHTML = '<div style="color:#94a3b8;text-align:center">No results.</div>';
+      }
+      out.appendChild(card);
+    };
+    document.getElementById('amgr-ask-go').onclick = goAsk;
+    document.getElementById('amgr-ask-q').onkeydown = e => { if (e.key === 'Enter') goAsk(); };
+  }
+
+  /* ---------- EOD TAB ---------- */
+  async function renderEod() {
+    body.innerHTML = '<div style="padding:20px;text-align:center;color:#94a3b8">Loading EOD…</div>';
+    const r = await api('api_aiManager_eod_summary');
+    body.innerHTML = '';
+    const head = document.createElement('div');
+    head.style.cssText = 'background:linear-gradient(135deg,#7c3aed,#ec4899);color:#fff;border-radius:12px;padding:18px;margin-bottom:16px';
+    head.innerHTML = '<div style="font-size:18px;font-weight:600">🌙 End-of-Day Updates — '+esc(r.date)+'</div><div style="font-size:13px;opacity:.9;margin-top:4px">Auto-collected from each rep at their EOD time.</div>';
+    body.appendChild(head);
+    /* Submit my own */
+    const submit = document.createElement('div');
+    submit.style.cssText = 'background:#fff;border-radius:12px;padding:16px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.06)';
+    submit.innerHTML = '<div style="font-weight:600;color:#0f172a;margin-bottom:10px">Submit your EOD</div>'+
+      '<textarea id="eod-wins" placeholder="What went well today?" style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;margin-bottom:8px;font-size:13px" rows="2"></textarea>'+
+      '<textarea id="eod-blockers" placeholder="Any blockers?" style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;margin-bottom:8px;font-size:13px" rows="2"></textarea>'+
+      '<textarea id="eod-tomorrow" placeholder="Plan for tomorrow" style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;margin-bottom:8px;font-size:13px" rows="2"></textarea>'+
+      '<button id="eod-submit" style="background:#7c3aed;color:#fff;border:0;padding:8px 16px;border-radius:7px;cursor:pointer;font-weight:600">Submit</button>';
+    body.appendChild(submit);
+    document.getElementById('eod-submit').onclick = async () => {
+      await api('api_aiManager_eod_submit', {
+        wins: document.getElementById('eod-wins').value,
+        blockers: document.getElementById('eod-blockers').value,
+        tomorrow: document.getElementById('eod-tomorrow').value
+      });
+      toast('EOD saved');
+      renderEod();
+    };
+    /* Team summaries */
+    if (!r.responses || !r.responses.length) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'padding:30px;text-align:center;color:#94a3b8;background:#f8fafc;border-radius:10px';
+      empty.textContent = 'No EOD responses yet today.';
+      body.appendChild(empty);
+      return;
+    }
+    const heading = document.createElement('div');
+    heading.style.cssText = 'font-size:13px;color:#64748b;font-weight:600;margin-bottom:8px;text-transform:uppercase';
+    heading.textContent = 'Team responses (' + r.responses.length + ')';
+    body.appendChild(heading);
+    for (const e of r.responses) {
+      const c = document.createElement('div');
+      c.style.cssText = 'background:#fff;border-radius:10px;padding:14px;margin-bottom:8px;box-shadow:0 1px 2px rgba(0,0,0,.04)';
+      c.innerHTML = '<div style="font-weight:600;color:#0f172a;margin-bottom:8px">'+esc(e.user_name||'?')+'</div>'+
+        (e.wins_text?'<div style="font-size:13px;color:#059669;margin-bottom:4px">✓ Wins: '+esc(e.wins_text)+'</div>':'')+
+        (e.blockers_text?'<div style="font-size:13px;color:#dc2626;margin-bottom:4px">⚠️ Blockers: '+esc(e.blockers_text)+'</div>':'')+
+        (e.tomorrow_plan?'<div style="font-size:13px;color:#475569">→ Tomorrow: '+esc(e.tomorrow_plan)+'</div>':'');
+      body.appendChild(c);
+    }
   }
 
   switchTab('rules');
