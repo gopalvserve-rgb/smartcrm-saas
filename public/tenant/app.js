@@ -48046,6 +48046,75 @@ VIEWS.aimanager = async (view) => {
       } catch (e) { $msg.textContent = 'Save failed: ' + e.message; }
     };
 
+    /* ---------- BUILT-IN MONITORS PANEL ---------- */
+    const monCard = document.createElement('div');
+    monCard.style.cssText = 'background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:18px;margin-bottom:20px';
+    monCard.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <div style="font-size:15px;font-weight:700;color:#0f172a">🛡 Built-in Monitors</div>
+        <div style="font-size:11px;color:#64748b">13 checks · toggle any off to pause</div>
+      </div>
+      <div style="font-size:12px;color:#64748b;margin-bottom:14px">These run automatically every 2 minutes. Toggle individual checks off if you don't want them flagging your team.</div>
+      <div id="aimgr-monitors-list" style="display:grid;grid-template-columns:1fr;gap:8px"></div>`;
+    body.appendChild(monCard);
+    const monList = monCard.querySelector('#aimgr-monitors-list');
+
+    async function loadMonitors() {
+      monList.innerHTML = '<div style="padding:12px;text-align:center;color:#94a3b8;font-size:13px">Loading monitors…</div>';
+      try {
+        const r = await api('api_aiManager_monitors_list');
+        monList.innerHTML = '';
+        const sevColor = { high: '#dc2626', medium: '#d97706', low: '#0891b2' };
+        const sevBg = { high: '#fef2f2', medium: '#fffbeb', low: '#ecfeff' };
+        (r.monitors || []).forEach(m => {
+          const row = document.createElement('div');
+          row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 13px;border:1px solid #e2e8f0;border-radius:10px;background:' + (m.enabled ? '#fff' : '#f8fafc');
+          row.innerHTML = `
+            <div style="flex:1;min-width:0">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+                <div style="font-weight:600;color:#0f172a;font-size:13px">${esc(m.title)}</div>
+                <span style="font-size:10px;font-weight:700;padding:2px 6px;border-radius:99px;background:${sevBg[m.severity]||'#f1f5f9'};color:${sevColor[m.severity]||'#475569'};text-transform:uppercase">${esc(m.severity)}</span>
+              </div>
+              <div style="font-size:12px;color:#64748b">${esc(m.desc)}</div>
+            </div>
+            <label style="position:relative;display:inline-block;width:46px;height:24px;cursor:pointer;flex-shrink:0">
+              <input type="checkbox" data-mon="${esc(m.id)}" ${m.enabled?'checked':''} style="opacity:0;width:0;height:0">
+              <span data-track="${esc(m.id)}" style="position:absolute;top:0;left:0;right:0;bottom:0;background:${m.enabled?'#10b981':'#cbd5e1'};border-radius:24px;transition:.2s"></span>
+              <span data-thumb="${esc(m.id)}" style="position:absolute;top:2px;left:${m.enabled?'24px':'2px'};width:20px;height:20px;background:#fff;border-radius:50%;transition:.2s;box-shadow:0 1px 3px rgba(0,0,0,.2)"></span>
+            </label>`;
+          monList.appendChild(row);
+        });
+        monList.querySelectorAll('input[data-mon]').forEach(inp => {
+          inp.onchange = async () => {
+            const id = inp.dataset.mon;
+            const enabled = inp.checked;
+            const track = monList.querySelector(`[data-track="${id}"]`);
+            const thumb = monList.querySelector(`[data-thumb="${id}"]`);
+            const rowDiv = inp.closest('label').parentElement;
+            track.style.background = enabled ? '#10b981' : '#cbd5e1';
+            thumb.style.left = enabled ? '24px' : '2px';
+            if (rowDiv) rowDiv.style.background = enabled ? '#fff' : '#f8fafc';
+            try { await api('api_aiManager_monitors_toggle', { id, enabled }); }
+            catch (e) {
+              inp.checked = !enabled;
+              track.style.background = !enabled ? '#10b981' : '#cbd5e1';
+              thumb.style.left = !enabled ? '24px' : '2px';
+              if (typeof toast === 'function') toast('Failed: ' + e.message, 'err');
+            }
+          };
+        });
+      } catch (e) {
+        monList.innerHTML = '<div style="padding:12px;background:#fef2f2;color:#991b1b;border-radius:8px;font-size:13px">' + esc(e.message) + '</div>';
+      }
+    }
+    loadMonitors();
+
+    /* ---------- USER-DEFINED RULES LIST ---------- */
+    const userRulesHeader = document.createElement('div');
+    userRulesHeader.style.cssText = 'font-size:15px;font-weight:700;color:#0f172a;margin:8px 0 10px';
+    userRulesHeader.textContent = '📝 Your Custom Rules';
+    body.appendChild(userRulesHeader);
+
     const listWrap = document.createElement('div');
     body.appendChild(listWrap);
     async function loadList() {
@@ -48053,7 +48122,7 @@ VIEWS.aimanager = async (view) => {
       try {
         const r = await api('api_aiManager_rules_list');
         if (!r.rules || !r.rules.length) {
-          listWrap.innerHTML = '<div style="padding:30px;text-align:center;color:#94a3b8;background:#f8fafc;border-radius:10px">No rules yet. Add one above.</div>';
+          listWrap.innerHTML = '<div style="padding:24px;text-align:center;color:#94a3b8;background:#f8fafc;border-radius:10px;font-size:13px">No custom rules yet. The 13 built-in monitors above are running by default.</div>';
           return;
         }
         listWrap.innerHTML = '';

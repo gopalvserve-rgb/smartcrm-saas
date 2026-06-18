@@ -1899,29 +1899,78 @@ async function api_aiManager_eod_summary(token, opts) {
   return { date: day, responses: r.rows };
 }
 
+
+/* ════════════ BUILT-IN MONITOR REGISTRY ═════════════
+ * 13 hard-coded detectors. Admin can toggle each ON/OFF via SPA.
+ * State lives in `config` table with key AI_MGR_MON_<id>; default
+ * = ON for everything when row is absent. */
+const _MONITORS = [
+  { id: 'idle',                title: 'Idle User Detection',           desc: 'Nudges users who are logged in but inactive during working hours.', severity: 'medium' },
+  { id: 'new_lead_sla',        title: 'New Lead Response SLA',         desc: 'Flags leads not contacted within N minutes of assignment.',          severity: 'high' },
+  { id: 'fake_activity',       title: 'Fake Activity (status no call)', desc: 'Catches status changes with no call event in the prior 15 min.',    severity: 'high' },
+  { id: 'wa_ignored',          title: 'WhatsApp Ignored Reply',        desc: 'Customer replied 30+ min ago, no outbound reply from the user.',     severity: 'high' },
+  { id: 'interested_no_action',title: 'Interested → No Quotation',     desc: 'Lead in Interested status 24h+ with no quotation sent.',             severity: 'high' },
+  { id: 'fu_predue',           title: 'Follow-up Pre-due Reminder',    desc: 'Pings the user 30 min before each follow-up due time.',              severity: 'low' },
+  { id: 'fu_done_no_call',     title: 'Follow-up Done But No Call',    desc: 'FU marked done without a call event — possible fake activity.',      severity: 'medium' },
+  { id: 'short_calls',         title: 'Repeated Short Calls',          desc: '3+ calls under 10 seconds in the last hour — pattern flag.',         severity: 'medium' },
+  { id: 'copied_remarks',      title: 'Copied Remarks Across Leads',   desc: 'Same remark text on 3+ different leads in 24h.',                     severity: 'medium' },
+  { id: 'hot_to_cold',         title: 'Hot → Cold Demotion No Contact',desc: 'AI Rate fell from Hot to Cold without a connect call.',              severity: 'medium' },
+  { id: 'lost_no_reason',      title: 'Lost Lead Without Reason',      desc: 'Lead marked Lost but lost_reason is empty.',                         severity: 'low' },
+  { id: 'quoted_no_fu',        title: 'Quoted But No Follow-up',       desc: 'Quotation sent 2-7 days ago, next_followup_at not set.',             severity: 'high' },
+  { id: 'min_calls',           title: 'Min Daily Calls Not Met',       desc: 'After 3pm IST, flags users below the daily call target rule.',       severity: 'medium' }
+];
+
+async function _isMonitorEnabled(id) {
+  try {
+    const v = await db.getConfig('AI_MGR_MON_' + id, '');
+    if (v === '' || v === null || v === undefined) return true;  /* default ON */
+    return String(v) === '1';
+  } catch (_) { return true; }
+}
+
+async function api_aiManager_monitors_list(token) {
+  await _ensureSchema();
+  await authUser(token);
+  const out = [];
+  for (const m of _MONITORS) {
+    const enabled = await _isMonitorEnabled(m.id);
+    out.push({ ...m, enabled });
+  }
+  return { monitors: out };
+}
+
+async function api_aiManager_monitors_toggle(token, payload) {
+  await _ensureSchema();
+  await authUser(token);
+  payload = payload || {};
+  const id = String(payload.id || '');
+  if (!id || !_MONITORS.find(m => m.id === id)) return { error: 'unknown monitor id' };
+  const enabled = payload.enabled === true || String(payload.enabled) === '1';
+  await db.setConfig('AI_MGR_MON_' + id, enabled ? '1' : '0');
+  return { ok: true, id, enabled };
+}
+
 /* ════════════ Override runDetectionCycle to include Phase 4 detectors ═════════════ */
 async function runDetectionCycle() {
   try {
     if (!await _isEnabled()) return { skipped: true };
     await _ensureSchema();
     const results = {};
-    /* Phase 1 */
-    results.idle = await detectIdleUsers().catch(e => ({ err: e.message }));
-    results.sla = await detectNewLeadSlaMiss().catch(e => ({ err: e.message }));
-    /* Phase 2 */
-    results.fake = await detectFakeActivity().catch(e => ({ err: e.message }));
-    results.wa = await detectWaIgnoredReplies().catch(e => ({ err: e.message }));
-    /* Phase 4 */
-    results.interested_no_action = await detectInterestedNoAction().catch(e => ({ err: e.message }));
-    results.fu_predue = await detectFuPreDue().catch(e => ({ err: e.message }));
-    results.fu_done_no_call = await detectFuDoneNoCall().catch(e => ({ err: e.message }));
-    results.short_calls = await detectRepeatedShortCalls().catch(e => ({ err: e.message }));
-    results.copied_remarks = await detectCopiedRemarks().catch(e => ({ err: e.message }));
-    results.hot_to_cold = await detectHotToColdDemotion().catch(e => ({ err: e.message }));
-    results.lost_no_reason = await detectLostNoReason().catch(e => ({ err: e.message }));
-    results.quoted_no_fu = await detectQuotedNoFu().catch(e => ({ err: e.message }));
-    results.min_calls = await detectMinDailyCalls().catch(e => ({ err: e.message }));
-    /* Time-based dispatches */
+    const runIf = async (id, fn) => (await _isMonitorEnabled(id)) ? fn().catch(e => ({ err: e.message })) : { skipped: 'disabled' };
+    results.idle                 = await runIf('idle',                 detectIdleUsers);
+    results.new_lead_sla         = await runIf('new_lead_sla',         detectNewLeadSlaMiss);
+    results.fake_activity        = await runIf('fake_activity',        detectFakeActivity);
+    results.wa_ignored           = await runIf('wa_ignored',           detectWaIgnoredReplies);
+    results.interested_no_action = await runIf('interested_no_action', detectInterestedNoAction);
+    results.fu_predue            = await runIf('fu_predue',            detectFuPreDue);
+    results.fu_done_no_call      = await runIf('fu_done_no_call',      detectFuDoneNoCall);
+    results.short_calls          = await runIf('short_calls',          detectRepeatedShortCalls);
+    results.copied_remarks       = await runIf('copied_remarks',       detectCopiedRemarks);
+    results.hot_to_cold          = await runIf('hot_to_cold',          detectHotToColdDemotion);
+    results.lost_no_reason       = await runIf('lost_no_reason',       detectLostNoReason);
+    results.quoted_no_fu         = await runIf('quoted_no_fu',         detectQuotedNoFu);
+    results.min_calls            = await runIf('min_calls',            detectMinDailyCalls);
+    /* Time-based dispatches (not gated by monitor toggles) */
     results.daily_plan = await runDailyPlanDispatch().catch(e => ({ err: e.message }));
     results.eod = await runEodPromptDispatch().catch(e => ({ err: e.message }));
     return { ok: true, ...results };
@@ -1964,6 +2013,8 @@ module.exports = {
   api_aiManager_alert_ack,
   api_aiManager_eod_submit,
   api_aiManager_eod_summary,
+  api_aiManager_monitors_list,
+  api_aiManager_monitors_toggle,
   detectInterestedNoAction,
   detectFuPreDue,
   detectFuDoneNoCall,
