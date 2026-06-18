@@ -452,3 +452,14 @@ SELECT 'ls-v1-p19',
        '🎯',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Focus mode on the Leads page — group leads by Smart Score');
+
+-- LS_SCHEMA_FIX_v1 (2026-06-18) — AI Score column showed "–" on every lead
+INSERT INTO changelog (slug, title, body, area, published_at, is_published)
+VALUES (
+  'ls-schema-fix-v1-2026-06-18',
+  'AI Score column now shows real values',
+  'Fixed: the AI Score column on the Leads page was blank for every lead. Root cause was that the database SCHEMA cache didn''t include the smart_score / smart_category columns, so they were silently stripped from every lead-list query. Scores were being computed and stored correctly all along — they just weren''t being read back. Now every lead row shows its 0–100 AI Score and Hot/Warm/Cold bucket.',
+  'leads',
+  NOW(),
+  TRUE
+) ON CONFLICT (slug) DO NOTHING;

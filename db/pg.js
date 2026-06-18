@@ -109,8 +109,11 @@ const SCHEMA = {
               'address', 'city', 'state', 'pincode', 'country', 'company',
               'value', 'currency', 'meta_json', 'extra_json',
               'budget_max', 'requirement_type', 'requirement_notes',
-              'project_stage_id', 'project_stage_started_at'],
-    json: ['meta_json', 'extra_json']
+              'project_stage_id', 'project_stage_started_at',
+              /* LS_v1 — surface AI Score data on /api/leads_list reads */
+              'smart_score', 'smart_category', 'score_reason',
+              'score_breakdown_json', 'score_updated_at'],
+    json: ['meta_json', 'extra_json', 'score_breakdown_json']
   },
   project_stages: {
     columns: ['name', 'description', 'sort_order', 'expected_days',
