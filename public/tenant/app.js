@@ -47956,6 +47956,7 @@ VIEWS.aimanager = async (view) => {
 
   const tabs = [
     { id: 'rules',      label: '🎯 Rules' },
+    { id: 'hours',      label: '⏰ Working Hours' },
     { id: 'violations', label: '🚨 Violations' },
     { id: 'alerts',     label: '🔔 Live Alerts' },
     { id: 'ask',        label: '💬 Ask AI' },
@@ -47992,6 +47993,7 @@ VIEWS.aimanager = async (view) => {
       else if (id === 'alerts') await renderAlerts();
       else if (id === 'ask') await renderAsk();
       else if (id === 'eod') await renderEod();
+      else if (id === 'hours') await renderHours();
     } catch (e) {
       body.innerHTML = '<div style="padding:20px;background:#fef2f2;color:#991b1b;border-radius:10px">Error: ' + (e.message || String(e)) + '</div>';
     }
@@ -48421,6 +48423,105 @@ VIEWS.aimanager = async (view) => {
         (e.tomorrow_plan?'<div style="font-size:13px;color:#475569">→ Tomorrow: '+esc(e.tomorrow_plan)+'</div>':'');
       body.appendChild(c);
     }
+  }
+
+
+  /* ---------- WORKING HOURS TAB ---------- */
+  async function renderHours() {
+    body.innerHTML = '<div style="padding:20px;text-align:center;color:#94a3b8">Loading users…</div>';
+    const users = await api('api_users_list').catch(() => []);
+    body.innerHTML = '';
+    const head = document.createElement('div');
+    head.style.cssText = 'background:linear-gradient(135deg,#0ea5e9,#0284c7);color:#fff;border-radius:12px;padding:18px;margin-bottom:16px';
+    head.innerHTML = '<div style="font-size:18px;font-weight:600">⏰ Working Hours</div><div style="font-size:13px;opacity:.9;margin-top:6px">Set per-user start &amp; end time. AI Manager will only monitor (idle detection, FU SLA, min calls) during these hours. Leave blank to monitor 24×7. Default if blank is 9:00–19:00 IST.</div>';
+    body.appendChild(head);
+
+    /* Bulk-apply card */
+    const bulk = document.createElement('div');
+    bulk.style.cssText = 'background:#fff;border-radius:12px;padding:14px;margin-bottom:16px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;box-shadow:0 1px 3px rgba(0,0,0,.06)';
+    bulk.innerHTML =
+      '<div style="font-weight:600;color:#0f172a">Apply to all users:</div>'+
+      '<label style="font-size:13px;color:#475569">Start <input id="amgr-bulk-start" type="time" value="09:00" style="padding:6px;border:1px solid #cbd5e1;border-radius:6px"></label>'+
+      '<label style="font-size:13px;color:#475569">End <input id="amgr-bulk-end" type="time" value="19:00" style="padding:6px;border:1px solid #cbd5e1;border-radius:6px"></label>'+
+      '<label style="font-size:13px;color:#475569">EOD prompt <input id="amgr-bulk-eod" type="time" value="19:30" style="padding:6px;border:1px solid #cbd5e1;border-radius:6px"></label>'+
+      '<button id="amgr-bulk-apply" style="background:#10b981;color:#fff;border:0;padding:8px 16px;border-radius:7px;cursor:pointer;font-weight:600">Apply to all</button>';
+    body.appendChild(bulk);
+
+    const grid = document.createElement('div');
+    grid.style.cssText = 'background:#fff;border-radius:12px;padding:0;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.06)';
+    let html = '<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:#f1f5f9;color:#475569;font-weight:600;text-align:left">'+
+      '<th style="padding:10px">User</th>'+
+      '<th style="padding:10px">Role</th>'+
+      '<th style="padding:10px">Start</th>'+
+      '<th style="padding:10px">End</th>'+
+      '<th style="padding:10px">EOD prompt</th>'+
+      '<th style="padding:10px">Action</th></tr></thead><tbody>';
+    const list = Array.isArray(users) ? users : (users && users.users) || [];
+    /* Fetch each user's schedule */
+    for (const u of list) {
+      let sched = {};
+      try { sched = await api('api_aiManager_userSchedule_get', { user_id: u.id }) || {}; } catch (_) {}
+      const fmtT = t => t ? String(t).slice(0,5) : '';
+      html += '<tr style="border-top:1px solid #e2e8f0" data-uid="'+u.id+'">'+
+        '<td style="padding:10px;color:#0f172a;font-weight:600">'+esc(u.name||'?')+'</td>'+
+        '<td style="padding:10px;color:#64748b">'+esc(u.role||'-')+'</td>'+
+        '<td style="padding:10px"><input type="time" value="'+fmtT(sched.working_hours_start)+'" data-f="start" style="padding:6px;border:1px solid #cbd5e1;border-radius:5px"></td>'+
+        '<td style="padding:10px"><input type="time" value="'+fmtT(sched.working_hours_end)+'" data-f="end" style="padding:6px;border:1px solid #cbd5e1;border-radius:5px"></td>'+
+        '<td style="padding:10px"><input type="time" value="'+fmtT(sched.eod_prompt_time)+'" data-f="eod" style="padding:6px;border:1px solid #cbd5e1;border-radius:5px"></td>'+
+        '<td style="padding:10px"><button data-save="'+u.id+'" style="background:#4f46e5;color:#fff;border:0;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600">Save</button></td>'+
+      '</tr>';
+    }
+    html += '</tbody></table>';
+    grid.innerHTML = html;
+    body.appendChild(grid);
+
+    /* Save handlers */
+    grid.querySelectorAll('button[data-save]').forEach(btn => {
+      btn.onclick = async () => {
+        const uid = Number(btn.getAttribute('data-save'));
+        const row = btn.closest('tr');
+        const start = row.querySelector('input[data-f="start"]').value;
+        const end = row.querySelector('input[data-f="end"]').value;
+        const eod = row.querySelector('input[data-f="eod"]').value;
+        btn.textContent = 'Saving…'; btn.disabled = true;
+        try {
+          await api('api_aiManager_userSchedule_save', {
+            user_id: uid,
+            working_hours_start: start || null,
+            working_hours_end: end || null,
+            eod_prompt_time: eod || null
+          });
+          btn.textContent = '✓ Saved';
+          setTimeout(() => { btn.textContent = 'Save'; btn.disabled = false; }, 1500);
+        } catch (e) {
+          btn.textContent = 'Failed';
+          setTimeout(() => { btn.textContent = 'Save'; btn.disabled = false; }, 2000);
+        }
+      };
+    });
+
+    /* Bulk apply */
+    document.getElementById('amgr-bulk-apply').onclick = async () => {
+      const s = document.getElementById('amgr-bulk-start').value;
+      const e = document.getElementById('amgr-bulk-end').value;
+      const eod = document.getElementById('amgr-bulk-eod').value;
+      const btn = document.getElementById('amgr-bulk-apply');
+      btn.textContent = 'Applying…'; btn.disabled = true;
+      let okCount = 0;
+      for (const u of list) {
+        try {
+          await api('api_aiManager_userSchedule_save', {
+            user_id: u.id,
+            working_hours_start: s || null,
+            working_hours_end: e || null,
+            eod_prompt_time: eod || null
+          });
+          okCount++;
+        } catch (_) {}
+      }
+      btn.textContent = '✓ Applied to ' + okCount + ' users';
+      setTimeout(() => { renderHours(); }, 1200);
+    };
   }
 
   switchTab('rules');
