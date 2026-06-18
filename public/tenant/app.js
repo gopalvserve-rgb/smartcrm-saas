@@ -48616,45 +48616,114 @@ VIEWS.aimanager = async (view) => {
     try { await api('api_aiManager_heartbeat', { meaningful, action_type: meaningful ? 'user_action' : 'idle' }); } catch (_) {}
   }, 30_000);
 
-  /* Reason popup: poll every 90s. If a prompt is open, show a non-dismissable modal.
-   * User must type a reason and submit. */
+  /* AI_MGR_NOTIF_v2: silent top-right slide-in (NOT a blocking modal).
+   * Mirrors a manager tap on shoulder — warning copy + directive + Acknowledge/Snooze/Reason.
+   * Auto-fades after 45s if user does nothing (escalation still ticks server-side). */
+  const SHOWN_KEY = '_aimgrShown';   /* in-memory: prompt ids already surfaced in this session */
+  window[SHOWN_KEY] = window[SHOWN_KEY] || new Set();
+  const SNOOZED_UNTIL = '_aimgrSnoozedUntil';  /* localStorage epoch */
+
   setInterval(async () => {
     if (!isEnabled()) return;
-    if (document.querySelector('#aimgr-reason-modal')) return;
     if (!window.api) return;
+    if (document.hidden) return;
+    /* Snooze window — user tapped "Snooze 15m" */
+    try {
+      const snoozedUntil = Number(localStorage.getItem(SNOOZED_UNTIL) || 0);
+      if (snoozedUntil && snoozedUntil > Date.now()) return;
+    } catch (_) {}
+    if (document.querySelectorAll('.aimgr-notif').length >= 3) return;  /* never stack >3 */
     try {
       const r = await api('api_aiManager_prompts_open');
-      const p = (r.prompts || [])[0];
-      if (!p) return;
-      showReasonModal(p);
+      for (const p of (r.prompts || [])) {
+        if (window[SHOWN_KEY].has(p.id)) continue;
+        window[SHOWN_KEY].add(p.id);
+        showNotification(p);
+        await new Promise(res => setTimeout(res, 600));  /* stagger so multiple don't slam in */
+      }
     } catch (_) {}
   }, 90_000);
 
-  function showReasonModal(p) {
-    const back = document.createElement('div');
-    back.id = 'aimgr-reason-modal';
-    back.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px';
-    back.innerHTML = `
-      <div style="background:#fff;border-radius:16px;max-width:480px;width:100%;padding:24px;box-shadow:0 20px 50px rgba(0,0,0,.3)">
-        <div style="font-size:20px;font-weight:700;color:#0f172a;margin-bottom:8px">🧑‍💼 AI Manager wants to know</div>
-        <div style="color:#475569;font-size:14px;margin-bottom:14px">${String(p.prompt_text||'').replace(/[<>]/g,'')}</div>
-        <textarea id="aimgr-reason-input" rows="3" placeholder="Type your reason (required)..." style="width:100%;border:1px solid #cbd5e1;border-radius:10px;padding:10px 12px;font:inherit;font-size:14px;resize:vertical"></textarea>
-        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
-          <button id="aimgr-reason-submit" style="padding:10px 18px;background:#4f46e5;color:#fff;border:0;border-radius:8px;font-weight:600;cursor:pointer">Submit reason</button>
+  function showNotification(p) {
+    const d = p.directive || { severity: 'info', title: 'AI Manager', headline: p.prompt_text || '', action: '' };
+    const palette = {
+      urgent:  { bg: '#fef2f2', bd: '#fecaca', accent: '#dc2626', icon: '⚠' },  /* warning sign */
+      warning: { bg: '#fffbeb', bd: '#fde68a', accent: '#d97706', icon: '⚠' },
+      info:    { bg: '#eff6ff', bd: '#bfdbfe', accent: '#2563eb', icon: 'ℹ' }   /* info i */
+    }[d.severity || 'info'];
+
+    const esc = (t) => String(t || '').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+
+    const card = document.createElement('div');
+    card.className = 'aimgr-notif';
+    const existing = document.querySelectorAll('.aimgr-notif').length;
+    card.style.cssText = `
+      position:fixed; top:${20 + existing * 12}px; right:20px;
+      width:380px; max-width:calc(100vw - 32px);
+      background:${palette.bg}; border:1.5px solid ${palette.bd};
+      border-left:5px solid ${palette.accent};
+      border-radius:12px; padding:14px 16px;
+      box-shadow:0 10px 30px rgba(0,0,0,.15);
+      z-index:99990;
+      transform:translateX(440px); transition:transform .35s ease, opacity .25s ease;
+      font:13px/1.45 system-ui,-apple-system,'Segoe UI',sans-serif;
+    `;
+    card.innerHTML = `
+      <div style="display:flex;align-items:flex-start;gap:10px">
+        <div style="font-size:20px;color:${palette.accent};line-height:1;flex-shrink:0;margin-top:1px">${palette.icon}</div>
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <div style="font-weight:700;color:${palette.accent};font-size:13px;text-transform:uppercase;letter-spacing:.3px">${esc(d.title)}</div>
+            <button data-close style="background:transparent;border:0;color:#94a3b8;cursor:pointer;font-size:18px;line-height:1;padding:0 2px">&times;</button>
+          </div>
+          <div style="color:#0f172a;font-size:13px;margin-bottom:6px;line-height:1.5">${esc(d.headline)}</div>
+          ${ d.action ? `<div style="color:${palette.accent};font-size:12px;font-weight:600;margin-bottom:10px">→ ${esc(d.action)}</div>` : '' }
+          <div style="display:flex;flex-wrap:wrap;gap:6px">
+            <button data-act="ack"     style="padding:6px 12px;background:${palette.accent};color:#fff;border:0;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">Got it</button>
+            <button data-act="snooze"  style="padding:6px 12px;background:transparent;color:#475569;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;cursor:pointer">Snooze 15m</button>
+            <button data-act="reason"  style="padding:6px 12px;background:transparent;color:#475569;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;cursor:pointer">Add reason</button>
+          </div>
+          <div data-reason-wrap style="display:none;margin-top:10px">
+            <textarea data-reason placeholder="Type a short reason..." style="width:100%;border:1px solid #cbd5e1;border-radius:6px;padding:7px 10px;font:inherit;font-size:12px;resize:vertical;min-height:50px"></textarea>
+            <button data-reason-submit style="margin-top:6px;padding:6px 14px;background:${palette.accent};color:#fff;border:0;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">Submit</button>
+          </div>
         </div>
-        <div id="aimgr-reason-msg" style="font-size:12px;color:#dc2626;margin-top:8px"></div>
       </div>`;
-    document.body.appendChild(back);
-    back.querySelector('#aimgr-reason-submit').onclick = async () => {
-      const reason = back.querySelector('#aimgr-reason-input').value.trim();
-      if (!reason || reason.length < 5) { back.querySelector('#aimgr-reason-msg').textContent = 'Please type at least 5 characters.'; return; }
-      try {
-        await api('api_aiManager_prompts_respond', { id: p.id, reason });
-        back.remove();
-      } catch (e) {
-        back.querySelector('#aimgr-reason-msg').textContent = 'Save failed: ' + e.message;
-      }
+    document.body.appendChild(card);
+    requestAnimationFrame(() => { card.style.transform = 'translateX(0)'; });
+
+    const dismiss = () => {
+      card.style.transform = 'translateX(440px)';
+      card.style.opacity = '0';
+      setTimeout(() => card.remove(), 350);
     };
+
+    card.querySelector('[data-close]').onclick = dismiss;
+
+    card.querySelector('[data-act="ack"]').onclick = async () => {
+      try { await api('api_aiManager_prompts_respond', { id: p.id, reason: '[ACK] Acknowledged — will act now.' }); } catch (_) {}
+      dismiss();
+    };
+
+    card.querySelector('[data-act="snooze"]').onclick = () => {
+      try { localStorage.setItem(SNOOZED_UNTIL, String(Date.now() + 15 * 60_000)); } catch (_) {}
+      dismiss();
+    };
+
+    card.querySelector('[data-act="reason"]').onclick = () => {
+      card.querySelector('[data-reason-wrap]').style.display = 'block';
+      card.querySelector('[data-reason]').focus();
+    };
+
+    card.querySelector('[data-reason-submit]').onclick = async () => {
+      const reason = card.querySelector('[data-reason]').value.trim();
+      if (reason.length < 3) { card.querySelector('[data-reason]').style.borderColor = palette.accent; return; }
+      try { await api('api_aiManager_prompts_respond', { id: p.id, reason }); } catch (_) {}
+      dismiss();
+    };
+
+    /* Auto-dismiss after 45s (escalation still ticks server-side via api_aiManager_alerts) */
+    setTimeout(() => { if (document.body.contains(card)) dismiss(); }, 45_000);
   }
 })();
 

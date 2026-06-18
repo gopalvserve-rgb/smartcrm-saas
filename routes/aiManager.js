@@ -517,12 +517,46 @@ async function api_aiManager_violations_ack(token, payload) {
  * shows a modal asking the user to type a reason; reason saved via
  * api_aiManager_prompts_respond().
  */
+/* DIRECTIVE TEMPLATES — manager-style "you should do X next" copy per violation type.
+ * Server-side so we can tune the language without an SPA deploy. */
+const _DIRECTIVES = {
+  idle:                 { severity: 'warning', icon: 'WARN', title: 'You have been idle',          headline: 'No activity logged in the last {actual}. Pick up a hot lead now — start with a call or send a WhatsApp.', action: 'Open a Hot lead and call.' },
+  new_lead_sla:         { severity: 'urgent',  icon: 'URGENT', title: 'New lead waiting for you',  headline: 'Lead {lead} was assigned {actual} ago. SLA is {expected}. Call now before it goes cold.',                  action: 'Call this lead immediately.' },
+  fake_activity:        { severity: 'urgent',  icon: 'URGENT', title: 'Status change without a call', headline: 'You moved {lead} to a new status, but no call event was recorded in the last 15 min. Update your records or actually make the call.', action: 'Add the call event or revert the status.' },
+  wa_ignored:           { severity: 'urgent',  icon: 'URGENT', title: 'Customer is waiting',       headline: '{lead} replied {actual} ago. Respond now — every minute hurts conversion.',                                  action: 'Open the WhatsApp thread and reply.' },
+  interested_no_action: { severity: 'warning', icon: 'WARN', title: 'Interested lead needs a quote', headline: '{lead} is at "Interested" for {actual} but no quotation sent yet. Send the quote today.',                action: 'Open the lead and create a quotation.' },
+  fu_predue:            { severity: 'info',    icon: 'INFO', title: 'Follow-up coming up',          headline: 'Follow-up for {lead} is due in 30 min. Get ready — pull up notes and dial.',                                action: 'Review the lead before the call.' },
+  fu_done_no_call:      { severity: 'warning', icon: 'WARN', title: 'Follow-up marked done — but no call', headline: 'You marked the FU for {lead} done, but there is no call event. Did you actually call? Update properly.', action: 'Confirm the call happened or undo the FU.' },
+  short_calls:          { severity: 'warning', icon: 'WARN', title: 'Too many short calls',        headline: 'You made 3+ calls under 10 seconds in the last hour. That looks like dial-and-drop — talk to your team leader.', action: 'Slow down and have real conversations.' },
+  copied_remarks:       { severity: 'warning', icon: 'WARN', title: 'Same remark across leads',    headline: 'You pasted the same remark on 3+ different leads in the last 24h. Write specific notes per lead.',           action: 'Edit each remark with real context.' },
+  hot_to_cold:          { severity: 'warning', icon: 'WARN', title: 'Hot lead dropped to Cold',    headline: 'AI Rate of {lead} fell from Hot to Cold without a connect call. Reach out before you lose them.',            action: 'Call this lead today.' },
+  lost_no_reason:       { severity: 'info',    icon: 'INFO', title: 'Lost lead missing reason',    headline: 'You marked {lead} as Lost but no reason was given. Add a lost reason so we can learn from it.',             action: 'Open the lead and fill in lost_reason.' },
+  quoted_no_fu:         { severity: 'urgent',  icon: 'URGENT', title: 'Quote sent — no follow-up scheduled', headline: 'You sent a quote to {lead} {actual} ago. Set a follow-up date now or you will forget.',           action: 'Set next_followup_at on this lead.' },
+  min_calls:            { severity: 'warning', icon: 'WARN', title: 'Daily call target behind',    headline: 'You are at {actual} calls today. Target is {expected}. Push 5-10 more before EOD.',                          action: 'Open Recent Calls and dial.' }
+};
+
+function _renderDirective(type, vrow) {
+  const tmpl = _DIRECTIVES[type] || { severity: 'info', icon: 'INFO', title: 'AI Manager flagged this', headline: 'Check the violations tab for details.', action: '' };
+  const lead = vrow.lead_name ? '"' + vrow.lead_name + '"' : 'a lead';
+  const expected = vrow.expected || '';
+  const actual = vrow.actual || '';
+  const fill = (s) => String(s || '').replace(/{lead}/g, lead).replace(/{expected}/g, expected).replace(/{actual}/g, actual);
+  return {
+    severity: tmpl.severity,
+    icon: tmpl.icon,
+    title: fill(tmpl.title),
+    headline: fill(tmpl.headline),
+    action: fill(tmpl.action)
+  };
+}
+
 async function api_aiManager_prompts_open(token) {
   await _ensureSchema();
   const me = await authUser(token);
   const r = await db.query(
     `SELECT p.id, p.violation_id, p.prompt_text, p.created_at,
-            v.violation_type, v.lead_id, l.name AS lead_name
+            v.violation_type, v.lead_id, l.name AS lead_name,
+            v.expected, v.actual, v.escalation_level
      FROM ai_manager_reason_prompts p
      JOIN ai_manager_violations v ON v.id = p.violation_id
      LEFT JOIN leads l ON l.id = v.lead_id
@@ -531,7 +565,9 @@ async function api_aiManager_prompts_open(token) {
      ORDER BY p.created_at DESC LIMIT 5`,
     [me.id]
   );
-  return { prompts: r.rows };
+  /* Attach computed directive per prompt so SPA can render manager-style copy */
+  const prompts = r.rows.map(row => ({ ...row, directive: _renderDirective(row.violation_type, row) }));
+  return { prompts };
 }
 
 async function api_aiManager_prompts_respond(token, payload) {
