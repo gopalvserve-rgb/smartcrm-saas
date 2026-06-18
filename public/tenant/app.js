@@ -47910,9 +47910,23 @@ VIEWS.leadscoringsettings = async (view) => {
 
 /* AI_MGR_v1 — Phase 1+ — Rules / Violations / Reports tabs + heartbeat + reason modal */
 VIEWS.aimanager = async (view) => {
-  const brand = window.CRM && window.CRM.brand || {};
-  const enabled = String(brand.AI_MANAGER_ENABLED || '') === '1';
+  let brand = window.CRM && window.CRM.brand || {};
+  let enabled = String(brand.AI_MANAGER_ENABLED || '') === '1';
   view.innerHTML = '';
+
+  /* SELF-HEAL: if brand cache is stale, re-fetch once and retry the check.
+   * This solves the "not enabled on this workspace" false-negative that
+   * happens when the SPA loaded its brand snapshot before the flag flip. */
+  if (!enabled) {
+    try {
+      const fresh = await api('api_admin_brand');
+      if (fresh && fresh.AI_MANAGER_ENABLED) {
+        window.CRM.brand = Object.assign(window.CRM.brand || {}, fresh);
+        brand = window.CRM.brand;
+        enabled = String(brand.AI_MANAGER_ENABLED || '') === '1';
+      }
+    } catch (_) {}
+  }
 
   if (!enabled) {
     view.innerHTML = '<div style="padding:40px;text-align:center;color:#64748b">AI Manager is not enabled on this workspace.</div>';
