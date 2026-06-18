@@ -48054,7 +48054,7 @@ VIEWS.aimanager = async (view) => {
         <div style="font-size:15px;font-weight:700;color:#0f172a">🛡 Built-in Monitors</div>
         <div style="font-size:11px;color:#64748b">13 checks · toggle any off to pause</div>
       </div>
-      <div style="font-size:12px;color:#64748b;margin-bottom:14px">These run automatically every 2 minutes. Toggle individual checks off if you don't want them flagging your team.</div>
+      <div style="font-size:12px;color:#64748b;margin-bottom:14px">These run automatically every 15 minutes. Toggle individual checks off if you don't want them flagging your team.</div>
       <div id="aimgr-monitors-list" style="display:grid;grid-template-columns:1fr;gap:8px"></div>`;
     body.appendChild(monCard);
     const monList = monCard.querySelector('#aimgr-monitors-list');
@@ -48160,7 +48160,7 @@ VIEWS.aimanager = async (view) => {
     const r = await api('api_aiManager_violations_list', { limit: 200 });
     body.innerHTML = '';
     if (!r.violations || !r.violations.length) {
-      body.innerHTML = '<div style="padding:30px;text-align:center;color:#94a3b8;background:#f8fafc;border-radius:10px">✅ No violations yet. The detection cycle runs every 2 minutes.</div>';
+      body.innerHTML = '<div style="padding:30px;text-align:center;color:#94a3b8;background:#f8fafc;border-radius:10px">✅ No violations yet. The detection cycle runs every 15 minutes.</div>';
       return;
     }
     const table = document.createElement('table');

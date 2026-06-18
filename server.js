@@ -3560,9 +3560,10 @@ async function _runAiManagerForAllTenants() {
     } catch (e) { /* silent — single tenant failure shouldnt break cycle */ }
   }
 }
+/* AI_MGR_CYCLE_v2: 15-minute interval (was 2 min) — less DB pressure, less alert spam */
 setInterval(() => {
   _runAiManagerForAllTenants().catch(e => console.error('[ai_mgr] cycle failed:', e.message));
-}, 120_000);
+}, 900_000);
 setTimeout(() => _runAiManagerForAllTenants().catch(() => {}), 90_000);
 
 async function _runAiManagerCoachingForAllTenants() {
