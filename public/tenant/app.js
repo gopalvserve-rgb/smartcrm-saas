@@ -47910,26 +47910,28 @@ VIEWS.leadscoringsettings = async (view) => {
 
 /* AI_MGR_v1 — Phase 1+ — Rules / Violations / Reports tabs + heartbeat + reason modal */
 VIEWS.aimanager = async (view) => {
-  let brand = window.CRM && window.CRM.brand || {};
-  let enabled = String(brand.AI_MANAGER_ENABLED || '') === '1';
   view.innerHTML = '';
 
-  /* SELF-HEAL: if brand cache is stale, re-fetch once and retry the check.
-   * This solves the "not enabled on this workspace" false-negative that
-   * happens when the SPA loaded its brand snapshot before the flag flip. */
-  if (!enabled) {
+  /* BACKEND IS SOURCE OF TRUTH: hit api_aiManager_status. If the backend
+   * says enabled, render the tabs. If it returns enabled=false or errors,
+   * THEN show the not-enabled message. This avoids the stale-brand-cache
+   * false-negative entirely. */
+  let backendOk = false;
+  try {
+    const st = await api('api_aiManager_status');
+    backendOk = !!(st && st.enabled);
+    /* Also refresh brand cache so other views (sidebar gate) update */
     try {
       const fresh = await api('api_admin_brand');
       if (fresh && fresh.AI_MANAGER_ENABLED) {
+        window.CRM = window.CRM || {};
         window.CRM.brand = Object.assign(window.CRM.brand || {}, fresh);
-        brand = window.CRM.brand;
-        enabled = String(brand.AI_MANAGER_ENABLED || '') === '1';
       }
     } catch (_) {}
-  }
+  } catch (_) {}
 
-  if (!enabled) {
-    view.innerHTML = '<div style="padding:40px;text-align:center;color:#64748b">AI Manager is not enabled on this workspace.</div>';
+  if (!backendOk) {
+    view.innerHTML = '<div style="padding:40px;text-align:center;color:#64748b">AI Manager is not enabled on this workspace.<br/><br/><button onclick="location.reload()" style="background:#4f46e5;color:#fff;border:0;padding:8px 16px;border-radius:6px;cursor:pointer">Reload</button></div>';
     return;
   }
 
