@@ -95,7 +95,9 @@ const SCHEMA = {
               'totp_secret', 'totp_enabled', 'totp_verified_at',
               'daily_lead_cap', 'monthly_lead_cap',
               'calendly_url', 'calendly_webhook_token',
-              'paused_for_leads'],
+              'paused_for_leads',
+              /* AI_MGR_v1 — per-user working hours + EOD prompt time */
+              'working_hours_start', 'working_hours_end', 'eod_prompt_time', 'timezone'],
     json: []
   },
   leads: {
@@ -610,6 +612,43 @@ const SCHEMA = {
     json: []
   },
 
+  /* AI_MGR_v1 — virtual admin/supervisor (Phase 0 scaffolding) */
+  ai_manager_rules: {
+    columns: ['name', 'nl_text', 'conditions', 'action', 'severity',
+              'is_active', 'parsed_by', 'confidence',
+              'created_by', 'created_at', 'updated_at'],
+    json: ['conditions', 'action']
+  },
+  ai_manager_violations: {
+    columns: ['rule_id', 'user_id', 'violation_type', 'lead_id',
+              'detected_at', 'expected_action', 'actual_status',
+              'ai_action', 'user_reason', 'escalation_lvl',
+              'reviewed_at', 'reviewed_by', 'metadata'],
+    json: ['metadata']
+  },
+  ai_manager_escalations: {
+    columns: ['user_id', 'violation_type', 'current_level',
+              'repeat_count', 'last_violation_at', 'reset_at'],
+    json: []
+  },
+  ai_manager_reason_prompts: {
+    columns: ['violation_id', 'user_id', 'prompt_text', 'created_at',
+              'responded_at', 'response_text', 'expired_at'],
+    json: []
+  },
+  user_idle_state: {
+    columns: ['user_id', 'last_heartbeat_at', 'last_meaningful_action_at',
+              'last_action_type', 'idle_since', 'last_nudge_at',
+              'nudge_count_today'],
+    json: []
+  },
+  user_scorecard_daily: {
+    columns: ['user_id', 'score_date', 'total_calls', 'connected_calls',
+              'fu_completed', 'fu_missed', 'avg_response_min',
+              'remark_quality_pct', 'idle_minutes', 'violation_count',
+              'score', 'score_breakdown', 'created_at'],
+    json: ['score_breakdown']
+  },
   // COPILOT_v4 PROACTIVE COACH
   copilot_signals: {
     columns: ['user_id','lead_id','signal_kind','severity','title','reason','payload_json','fired_at','dismissed_at','acted_on_at'],

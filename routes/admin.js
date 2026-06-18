@@ -68,6 +68,7 @@ const CONFIG_KEYS = [
   'LEAD_SCORING_ENABLED',     // LEAD_SCORING_v1 — Smart Lead Scoring engine
   'AI_QUICKNOTE_ENABLED',     // QNOTE_v1 — 2728 Quick Note row button
   'COPILOT_PROACTIVE_ENABLED',// COPILOT_v4 — Proactive Sales Coach (vserve beta)
+  'AI_MANAGER_ENABLED',      // AI_MGR_v1 — virtual admin/supervisor (vserve beta)
   // Demo tenant flags — set by the showcase seeder. The SPA reads these
   // to enable the in-app tour and the 📚 floating button.
   'DEMO_TENANT', 'DEMO_TOUR_ENABLED',
@@ -304,7 +305,8 @@ async function api_admin_brand(_token) {
     // so every role's SPA can decide whether to render the Morning
     // Briefing card, Lead AI Summary panel, signal badge, and proactive
     // chips. Same vserve-beta carve-out as COPILOT_ACTIONS / QNOTE.
-    COPILOT_PROACTIVE_ENABLED: cfg.COPILOT_PROACTIVE_ENABLED || ''
+    COPILOT_PROACTIVE_ENABLED: cfg.COPILOT_PROACTIVE_ENABLED || '',
+    AI_MANAGER_ENABLED: cfg.AI_MANAGER_ENABLED || ''
   };
 }
 

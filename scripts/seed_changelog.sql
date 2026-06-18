@@ -463,3 +463,14 @@ VALUES (
   NOW(),
   TRUE
 ) ON CONFLICT (slug) DO NOTHING;
+
+-- AI_MGR_v1 Phase 0 (2026-06-18) — foundation only, no user-facing change yet
+INSERT INTO changelog (slug, title, body, area, published_at, is_published)
+VALUES (
+  'ai-manager-phase0-foundation-2026-06-18',
+  'AI Manager — Phase 0 foundation (beta, Vserve only)',
+  'Installed the foundation for AI Manager — your virtual CRM admin and sales supervisor. Phase 0 ships the database schema (6 new tables), config flag, route scaffolding, and an empty sidebar tab. Detection logic, rule builder, idle detection, and nudges ship in Phase 1. Currently enabled only on Vserve as a beta. Full plan: AI_MANAGER_v1_BUILD_PLAN.md.',
+  'ai',
+  NOW(),
+  TRUE
+) ON CONFLICT (slug) DO NOTHING;

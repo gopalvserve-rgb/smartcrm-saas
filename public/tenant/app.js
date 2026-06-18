@@ -1705,6 +1705,7 @@ const NAV_GROUPS = [
     { id: 'activityreport', label: 'Activity Report',  icon: '📝', roles: ['admin', 'manager', 'team_leader'], search: 'activity report user activity work report' },
     { id: 'leadscoring',    label: 'High-Intent Leads',  icon: '🎯', search: 'ai score ai lead rating hot leads warm leads smart score high intent' },
     { id: 'leadscoringsettings', label: 'AI Scoring Settings', icon: '⚙', roles: ['admin', 'manager'], search: 'ai score ai lead rating lead scoring settings thresholds rules' },
+    { id: 'aimanager',       label: 'AI Manager',         icon: '🧑‍💼', roles: ['admin', 'manager'], brandFlag: 'AI_MANAGER_ENABLED', search: 'ai manager virtual admin supervisor violations rules idle nudge accountability' },
     { id: 'whatsappreport', label: 'WhatsApp Report',  icon: '💬', roles: ['admin', 'manager', 'team_leader'], search: 'whatsapp report message report whatsapp analytics' },
     { id: 'campaignreport', label: 'Campaign Report',  icon: '📊', roles: ['admin', 'manager', 'team_leader'], search: 'campaign report campaign analytics' }
   ] },
@@ -47904,6 +47905,58 @@ VIEWS.leadscoring = async (view) => {
 VIEWS.leadscoringsettings = async (view) => {
   if (window.LS_v1 && typeof window.LS_v1.renderSettings === 'function') return window.LS_v1.renderSettings(view);
   view.innerHTML = '<div style="padding:40px;text-align:center;color:#64748b">⏳ AI Scoring Settings is loading — refresh in a moment.</div>';
+};
+
+
+/* AI_MGR_v1 — Phase 0 placeholder. Real tabs render in Phase 1. */
+VIEWS.aimanager = async (view) => {
+  const brand = window.CRM && window.CRM.brand || {};
+  const enabled = String(brand.AI_MANAGER_ENABLED || '') === '1';
+  view.innerHTML = '';
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'padding:24px;max-width:900px;margin:0 auto';
+  wrap.innerHTML = `
+    <div style="background:linear-gradient(135deg,#4f46e5 0%,#7c3aed 100%);color:#fff;padding:28px;border-radius:16px;margin-bottom:24px">
+      <div style="font-size:13px;opacity:.85;margin-bottom:8px">🧑‍💼 BETA · Phase 0</div>
+      <div style="font-size:28px;font-weight:700;margin-bottom:6px">AI Manager</div>
+      <div style="font-size:15px;opacity:.95">Your virtual CRM admin and sales supervisor. Monitors activity, detects rule violations, nudges users to act, asks for reasons, and reports to management.</div>
+    </div>
+    <div style="background:#fff;border-radius:14px;padding:24px;box-shadow:0 1px 3px rgba(0,0,0,.06)">
+      <div style="font-size:20px;font-weight:600;margin-bottom:16px;color:#0f172a">${enabled ? '✓ Foundation Ready' : '⚠ Not Enabled For This Tenant'}</div>
+      <div style="color:#475569;line-height:1.7;font-size:14px">
+        Phase 0 (this commit) installs the database schema, config flag, and route scaffolding.
+        Detection logic ships in Phase 1.
+      </div>
+      <div style="margin-top:20px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+        <div style="background:#f1f5f9;padding:14px;border-radius:10px">
+          <div style="font-size:12px;color:#64748b;margin-bottom:4px">Phase 1 — MVP</div>
+          <div style="font-size:13px;color:#0f172a">Rule Builder · Idle Detection · SLA Tracker · Daily Plan · Daily Report</div>
+        </div>
+        <div style="background:#f1f5f9;padding:14px;border-radius:10px">
+          <div style="font-size:12px;color:#64748b;margin-bottom:4px">Phase 2 — Advanced</div>
+          <div style="font-size:13px;color:#0f172a">Remark Quality · Fake Activity · WA Monitoring · Lead Risk · Escalation · Scorecard</div>
+        </div>
+        <div style="background:#f1f5f9;padding:14px;border-radius:10px">
+          <div style="font-size:12px;color:#64748b;margin-bottom:4px">Phase 3 — Coaching</div>
+          <div style="font-size:13px;color:#0f172a">Sales coaching · Call insights · Conversion probability · Revenue leakage</div>
+        </div>
+      </div>
+    </div>`;
+  view.appendChild(wrap);
+
+  /* Probe status to confirm wiring */
+  try {
+    const r = await api('api_aiManager_status');
+    const probe = document.createElement('div');
+    probe.style.cssText = 'margin-top:14px;padding:14px;background:#ecfdf5;border:1px solid #10b981;border-radius:10px;font-size:13px;color:#065f46;font-family:monospace';
+    probe.textContent = 'STATUS PROBE: ' + JSON.stringify(r);
+    wrap.appendChild(probe);
+  } catch (e) {
+    const probe = document.createElement('div');
+    probe.style.cssText = 'margin-top:14px;padding:14px;background:#fef2f2;border:1px solid #ef4444;border-radius:10px;font-size:13px;color:#991b1b;font-family:monospace';
+    probe.textContent = 'STATUS PROBE FAILED: ' + (e.message || String(e));
+    wrap.appendChild(probe);
+  }
 };
 
 VIEWS.activityreport = async (view) => {
