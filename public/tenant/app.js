@@ -47908,56 +47908,291 @@ VIEWS.leadscoringsettings = async (view) => {
 };
 
 
-/* AI_MGR_v1 — Phase 0 placeholder. Real tabs render in Phase 1. */
+/* AI_MGR_v1 — Phase 1+ — Rules / Violations / Reports tabs + heartbeat + reason modal */
 VIEWS.aimanager = async (view) => {
   const brand = window.CRM && window.CRM.brand || {};
   const enabled = String(brand.AI_MANAGER_ENABLED || '') === '1';
   view.innerHTML = '';
-  const wrap = document.createElement('div');
-  wrap.style.cssText = 'padding:24px;max-width:900px;margin:0 auto';
-  wrap.innerHTML = `
-    <div style="background:linear-gradient(135deg,#4f46e5 0%,#7c3aed 100%);color:#fff;padding:28px;border-radius:16px;margin-bottom:24px">
-      <div style="font-size:13px;opacity:.85;margin-bottom:8px">🧑‍💼 BETA · Phase 0</div>
-      <div style="font-size:28px;font-weight:700;margin-bottom:6px">AI Manager</div>
-      <div style="font-size:15px;opacity:.95">Your virtual CRM admin and sales supervisor. Monitors activity, detects rule violations, nudges users to act, asks for reasons, and reports to management.</div>
-    </div>
-    <div style="background:#fff;border-radius:14px;padding:24px;box-shadow:0 1px 3px rgba(0,0,0,.06)">
-      <div style="font-size:20px;font-weight:600;margin-bottom:16px;color:#0f172a">${enabled ? '✓ Foundation Ready' : '⚠ Not Enabled For This Tenant'}</div>
-      <div style="color:#475569;line-height:1.7;font-size:14px">
-        Phase 0 (this commit) installs the database schema, config flag, and route scaffolding.
-        Detection logic ships in Phase 1.
-      </div>
-      <div style="margin-top:20px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
-        <div style="background:#f1f5f9;padding:14px;border-radius:10px">
-          <div style="font-size:12px;color:#64748b;margin-bottom:4px">Phase 1 — MVP</div>
-          <div style="font-size:13px;color:#0f172a">Rule Builder · Idle Detection · SLA Tracker · Daily Plan · Daily Report</div>
-        </div>
-        <div style="background:#f1f5f9;padding:14px;border-radius:10px">
-          <div style="font-size:12px;color:#64748b;margin-bottom:4px">Phase 2 — Advanced</div>
-          <div style="font-size:13px;color:#0f172a">Remark Quality · Fake Activity · WA Monitoring · Lead Risk · Escalation · Scorecard</div>
-        </div>
-        <div style="background:#f1f5f9;padding:14px;border-radius:10px">
-          <div style="font-size:12px;color:#64748b;margin-bottom:4px">Phase 3 — Coaching</div>
-          <div style="font-size:13px;color:#0f172a">Sales coaching · Call insights · Conversion probability · Revenue leakage</div>
-        </div>
-      </div>
-    </div>`;
-  view.appendChild(wrap);
 
-  /* Probe status to confirm wiring */
-  try {
-    const r = await api('api_aiManager_status');
-    const probe = document.createElement('div');
-    probe.style.cssText = 'margin-top:14px;padding:14px;background:#ecfdf5;border:1px solid #10b981;border-radius:10px;font-size:13px;color:#065f46;font-family:monospace';
-    probe.textContent = 'STATUS PROBE: ' + JSON.stringify(r);
-    wrap.appendChild(probe);
-  } catch (e) {
-    const probe = document.createElement('div');
-    probe.style.cssText = 'margin-top:14px;padding:14px;background:#fef2f2;border:1px solid #ef4444;border-radius:10px;font-size:13px;color:#991b1b;font-family:monospace';
-    probe.textContent = 'STATUS PROBE FAILED: ' + (e.message || String(e));
-    wrap.appendChild(probe);
+  if (!enabled) {
+    view.innerHTML = '<div style="padding:40px;text-align:center;color:#64748b">AI Manager is not enabled on this workspace.</div>';
+    return;
   }
+
+  const root = document.createElement('div');
+  root.style.cssText = 'padding:20px;max-width:1200px;margin:0 auto';
+  view.appendChild(root);
+
+  /* Header */
+  const header = document.createElement('div');
+  header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;gap:12px;flex-wrap:wrap';
+  header.innerHTML = `
+    <div>
+      <div style="font-size:24px;font-weight:700;color:#0f172a">🧑‍💼 AI Manager</div>
+      <div style="font-size:13px;color:#64748b">Virtual admin · monitors activity, detects violations, reports to management</div>
+    </div>
+    <div id="aimgr-tabs" style="display:flex;gap:4px;background:#f1f5f9;padding:4px;border-radius:10px"></div>`;
+  root.appendChild(header);
+
+  const tabsEl = header.querySelector('#aimgr-tabs');
+  const body   = document.createElement('div');
+  root.appendChild(body);
+
+  const tabs = [
+    { id: 'rules',      label: '🎯 Rules' },
+    { id: 'violations', label: '🚨 Violations' },
+    { id: 'reports',    label: '📊 Reports' }
+  ];
+
+  function renderTabs(active) {
+    tabsEl.innerHTML = '';
+    tabs.forEach(t => {
+      const b = document.createElement('button');
+      b.textContent = t.label;
+      b.style.cssText = `padding:8px 14px;border:0;background:${t.id===active?'#fff':'transparent'};color:${t.id===active?'#4f46e5':'#475569'};border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;${t.id===active?'box-shadow:0 1px 3px rgba(0,0,0,.08)':''}`;
+      b.onclick = () => switchTab(t.id);
+      tabsEl.appendChild(b);
+    });
+  }
+
+  async function switchTab(id) {
+    renderTabs(id);
+    body.innerHTML = '<div style="padding:40px;text-align:center;color:#94a3b8">Loading…</div>';
+    try {
+      if (id === 'rules') await renderRules();
+      else if (id === 'violations') await renderViolations();
+      else await renderReports();
+    } catch (e) {
+      body.innerHTML = '<div style="padding:20px;background:#fef2f2;color:#991b1b;border-radius:10px">Error: ' + (e.message || String(e)) + '</div>';
+    }
+  }
+
+  /* ---------- RULES TAB ---------- */
+  async function renderRules() {
+    body.innerHTML = '';
+    /* Add-rule card */
+    const addCard = document.createElement('div');
+    addCard.style.cssText = 'background:linear-gradient(135deg,#4f46e5 0%,#7c3aed 100%);color:#fff;padding:20px;border-radius:14px;margin-bottom:20px';
+    addCard.innerHTML = `
+      <div style="font-size:16px;font-weight:600;margin-bottom:8px">✨ Add a new rule (plain English)</div>
+      <div style="font-size:13px;opacity:.85;margin-bottom:12px">Example: "If a user is idle for more than 20 minutes during working hours, alert the team leader after 3 violations."</div>
+      <textarea id="aimgr-nl" rows="2" placeholder="Type a rule..." style="width:100%;border:0;border-radius:10px;padding:10px 12px;font:inherit;font-size:14px;color:#0f172a;resize:vertical"></textarea>
+      <div style="display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap">
+        <button id="aimgr-preview" style="padding:9px 16px;background:rgba(255,255,255,.95);color:#4f46e5;border:0;border-radius:8px;font-weight:600;cursor:pointer">Preview</button>
+        <button id="aimgr-save" style="padding:9px 16px;background:#10b981;color:#fff;border:0;border-radius:8px;font-weight:600;cursor:pointer">Save Rule</button>
+        <span id="aimgr-msg" style="font-size:12px;opacity:.95"></span>
+      </div>
+      <div id="aimgr-parsed" style="margin-top:12px;display:none;background:rgba(0,0,0,.18);padding:12px;border-radius:10px;font-family:monospace;font-size:12px"></div>`;
+    body.appendChild(addCard);
+
+    const $nl = addCard.querySelector('#aimgr-nl');
+    const $msg = addCard.querySelector('#aimgr-msg');
+    const $parsed = addCard.querySelector('#aimgr-parsed');
+    let lastParsed = null;
+
+    addCard.querySelector('#aimgr-preview').onclick = async () => {
+      const t = ($nl.value || '').trim();
+      if (!t) { $msg.textContent = 'Type a rule first.'; return; }
+      $msg.textContent = 'Parsing…';
+      try {
+        const r = await api('api_aiManager_rules_parse', { nl_text: t });
+        lastParsed = r.parsed;
+        $parsed.style.display = 'block';
+        $parsed.textContent = JSON.stringify(r.parsed, null, 2);
+        $msg.textContent = 'Parsed by ' + (r.parsed.parsed_by||'?') + ' (confidence ' + (r.parsed.confidence||0).toFixed(2) + ')';
+      } catch (e) { $msg.textContent = 'Parse failed: ' + e.message; }
+    };
+    addCard.querySelector('#aimgr-save').onclick = async () => {
+      const t = ($nl.value || '').trim();
+      if (!t) { $msg.textContent = 'Type a rule first.'; return; }
+      $msg.textContent = 'Saving…';
+      try {
+        await api('api_aiManager_rules_save', { nl_text: t, parsed: lastParsed });
+        $msg.textContent = '✓ Saved!';
+        $nl.value = ''; lastParsed = null; $parsed.style.display = 'none';
+        setTimeout(loadList, 300);
+      } catch (e) { $msg.textContent = 'Save failed: ' + e.message; }
+    };
+
+    const listWrap = document.createElement('div');
+    body.appendChild(listWrap);
+    async function loadList() {
+      listWrap.innerHTML = '<div style="padding:20px;text-align:center;color:#94a3b8">Loading rules…</div>';
+      try {
+        const r = await api('api_aiManager_rules_list');
+        if (!r.rules || !r.rules.length) {
+          listWrap.innerHTML = '<div style="padding:30px;text-align:center;color:#94a3b8;background:#f8fafc;border-radius:10px">No rules yet. Add one above.</div>';
+          return;
+        }
+        listWrap.innerHTML = '';
+        for (const ru of r.rules) {
+          const c = document.createElement('div');
+          c.style.cssText = 'background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;gap:12px';
+          const tcond = (ru.conditions && ru.conditions.type) || 'custom';
+          const thr = (ru.conditions && ru.conditions.threshold_minutes) || (ru.conditions && ru.conditions.threshold) || '?';
+          c.innerHTML = `
+            <div style="flex:1;min-width:0">
+              <div style="font-weight:600;color:#0f172a;font-size:14px;margin-bottom:3px">${esc(ru.name)}</div>
+              <div style="font-size:12px;color:#64748b;margin-bottom:5px">${esc(ru.nl_text || '')}</div>
+              <div style="font-size:11px;color:#475569"><span style="background:#eef2ff;color:#4f46e5;padding:2px 7px;border-radius:99px;margin-right:6px">${esc(tcond)} · ${esc(String(thr))}</span><span style="background:#fef3c7;color:#92400e;padding:2px 7px;border-radius:99px;margin-right:6px">${esc(ru.severity || 'medium')}</span><span style="color:#64748b">parsed by ${esc(ru.parsed_by||'?')}</span></div>
+            </div>
+            <div style="display:flex;gap:6px;flex-shrink:0">
+              <button data-toggle="${ru.id}" style="padding:6px 10px;background:${ru.is_active?'#10b981':'#94a3b8'};color:#fff;border:0;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">${ru.is_active?'Active':'Off'}</button>
+              <button data-del="${ru.id}" style="padding:6px 10px;background:#fee;color:#dc2626;border:0;border-radius:6px;font-size:12px;cursor:pointer">Delete</button>
+            </div>`;
+          listWrap.appendChild(c);
+        }
+        listWrap.querySelectorAll('[data-toggle]').forEach(b => {
+          b.onclick = async () => { await api('api_aiManager_rules_toggle', { id: Number(b.dataset.toggle) }); loadList(); };
+        });
+        listWrap.querySelectorAll('[data-del]').forEach(b => {
+          b.onclick = async () => { if (confirm('Delete this rule?')) { await api('api_aiManager_rules_delete', { id: Number(b.dataset.del) }); loadList(); } };
+        });
+      } catch (e) { listWrap.innerHTML = '<div style="padding:14px;background:#fef2f2;color:#991b1b;border-radius:8px">' + e.message + '</div>'; }
+    }
+    loadList();
+  }
+
+  /* ---------- VIOLATIONS TAB ---------- */
+  async function renderViolations() {
+    body.innerHTML = '<div style="padding:20px;text-align:center;color:#94a3b8">Loading violations…</div>';
+    const r = await api('api_aiManager_violations_list', { limit: 200 });
+    body.innerHTML = '';
+    if (!r.violations || !r.violations.length) {
+      body.innerHTML = '<div style="padding:30px;text-align:center;color:#94a3b8;background:#f8fafc;border-radius:10px">✅ No violations yet. The detection cycle runs every 2 minutes.</div>';
+      return;
+    }
+    const table = document.createElement('table');
+    table.style.cssText = 'width:100%;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.06);border-collapse:collapse';
+    table.innerHTML = `<thead><tr style="background:#f1f5f9;color:#475569;font-size:12px;font-weight:600;text-align:left">
+      <th style="padding:10px">User</th><th style="padding:10px">Type</th><th style="padding:10px">Lead</th><th style="padding:10px">Expected</th><th style="padding:10px">Actual</th><th style="padding:10px">Reason</th><th style="padding:10px">When</th><th style="padding:10px"></th></tr></thead>`;
+    const tb = document.createElement('tbody');
+    table.appendChild(tb);
+    for (const v of r.violations) {
+      const tr = document.createElement('tr');
+      tr.style.cssText = 'border-top:1px solid #e2e8f0;font-size:13px';
+      const t = new Date(v.detected_at);
+      const typeColor = v.violation_type === 'idle' ? '#f59e0b' : v.violation_type === 'sla_miss' ? '#dc2626' : '#4f46e5';
+      tr.innerHTML = `
+        <td style="padding:10px;color:#0f172a">${esc(v.user_name||'?')}</td>
+        <td style="padding:10px"><span style="background:${typeColor}22;color:${typeColor};padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600">${esc(v.violation_type)}</span></td>
+        <td style="padding:10px;color:#475569">${esc(v.lead_name||'-')}</td>
+        <td style="padding:10px;color:#64748b;font-size:12px">${esc(v.expected_action||'')}</td>
+        <td style="padding:10px;color:#64748b;font-size:12px">${esc(v.actual_status||'')}</td>
+        <td style="padding:10px;color:${v.user_reason?'#0f172a':'#94a3b8'};font-size:12px;font-style:${v.user_reason?'normal':'italic'}">${esc(v.user_reason||'(no reason yet)')}</td>
+        <td style="padding:10px;color:#64748b;font-size:11px">${t.toLocaleString('en-IN',{timeZone:'Asia/Kolkata',hour:'2-digit',minute:'2-digit',day:'2-digit',month:'short'})}</td>
+        <td style="padding:10px">${v.reviewed_at?'<span style=\"color:#10b981;font-size:11px\">✓ reviewed</span>':'<button data-ack=\"'+v.id+'\" style=\"padding:4px 10px;background:#eef2ff;color:#4f46e5;border:0;border-radius:6px;font-size:11px;cursor:pointer\">Mark reviewed</button>'}</td>`;
+      tb.appendChild(tr);
+    }
+    body.appendChild(table);
+    body.querySelectorAll('[data-ack]').forEach(b => {
+      b.onclick = async () => { await api('api_aiManager_violations_ack', { id: Number(b.dataset.ack) }); renderViolations(); };
+    });
+  }
+
+  /* ---------- REPORTS TAB ---------- */
+  async function renderReports() {
+    body.innerHTML = '<div style="padding:20px;text-align:center;color:#94a3b8">Loading report…</div>';
+    const r = await api('api_aiManager_dailyReport');
+    body.innerHTML = '';
+    const head = document.createElement('div');
+    head.style.cssText = 'background:#fff;border-radius:12px;padding:16px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,.06)';
+    head.innerHTML = `<div style="font-size:16px;font-weight:600;color:#0f172a">Daily Activity — ${esc(r.date)}</div><div style="font-size:13px;color:#64748b">Per-user calls, follow-ups, and violations for the selected day.</div>`;
+    body.appendChild(head);
+    if (!r.rows || !r.rows.length) {
+      body.appendChild(Object.assign(document.createElement('div'), { innerHTML: '<div style="padding:20px;text-align:center;color:#94a3b8;background:#f8fafc;border-radius:10px">No data for this date.</div>' }));
+      return;
+    }
+    const table = document.createElement('table');
+    table.style.cssText = 'width:100%;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.06);border-collapse:collapse';
+    table.innerHTML = `<thead><tr style="background:#f1f5f9;color:#475569;font-size:12px;font-weight:600;text-align:left">
+      <th style="padding:10px">User</th><th style="padding:10px">Calls</th><th style="padding:10px">Connected</th><th style="padding:10px">FU Due</th><th style="padding:10px">FU Done</th><th style="padding:10px">Violations</th><th style="padding:10px">Status</th></tr></thead>`;
+    const tb = document.createElement('tbody');
+    for (const u of r.rows) {
+      const tr = document.createElement('tr');
+      tr.style.cssText = 'border-top:1px solid #e2e8f0;font-size:13px';
+      const vCol = (u.violation_count||0) > 0 ? '#dc2626' : '#10b981';
+      tr.innerHTML = `
+        <td style="padding:10px;color:#0f172a;font-weight:500">${esc(u.name||'?')}</td>
+        <td style="padding:10px;color:#475569">${u.total_calls||0}</td>
+        <td style="padding:10px;color:#475569">${u.connected_calls||0}</td>
+        <td style="padding:10px;color:#475569">${u.fu_due||0}</td>
+        <td style="padding:10px;color:#475569">${u.fu_done||0}</td>
+        <td style="padding:10px;color:${vCol};font-weight:600">${u.violation_count||0}</td>
+        <td style="padding:10px">${u.got_nudge_today?'<span style=\"font-size:11px;color:#f59e0b\">⚠️ Nudged</span>':'<span style=\"font-size:11px;color:#10b981\">✓ Active</span>'}</td>`;
+      tb.appendChild(tr);
+    }
+    table.appendChild(tb);
+    body.appendChild(table);
+  }
+
+  /* ---------- HELPER esc ---------- */
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, m => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m])); }
+
+  switchTab('rules');
 };
+
+/* AI_MGR — heartbeat + reason popup, runs everywhere (not only on the AI Manager page). */
+(function aiMgrInit() {
+  if (window._aiMgrInited) return;
+  window._aiMgrInited = true;
+
+  function isEnabled() { return String((window.CRM && window.CRM.brand && window.CRM.brand.AI_MANAGER_ENABLED) || '') === '1'; }
+
+  /* Heartbeat: ping every 30s while tab is visible. Mark "meaningful=false"
+   * unless we just observed a meaningful action. Meaningful actions are
+   * announced via custom event window.dispatchEvent(new CustomEvent('crm:action', {detail:{type:'call|remark|status|quote'}})). */
+  let lastMeaningful = 0;
+  window.addEventListener('crm:action', () => { lastMeaningful = Date.now(); });
+  setInterval(async () => {
+    if (!isEnabled()) return;
+    if (document.hidden) return;
+    if (!window.api) return;
+    const meaningful = (Date.now() - lastMeaningful) < 60_000;
+    try { await api('api_aiManager_heartbeat', { meaningful, action_type: meaningful ? 'user_action' : 'idle' }); } catch (_) {}
+  }, 30_000);
+
+  /* Reason popup: poll every 90s. If a prompt is open, show a non-dismissable modal.
+   * User must type a reason and submit. */
+  setInterval(async () => {
+    if (!isEnabled()) return;
+    if (document.querySelector('#aimgr-reason-modal')) return;
+    if (!window.api) return;
+    try {
+      const r = await api('api_aiManager_prompts_open');
+      const p = (r.prompts || [])[0];
+      if (!p) return;
+      showReasonModal(p);
+    } catch (_) {}
+  }, 90_000);
+
+  function showReasonModal(p) {
+    const back = document.createElement('div');
+    back.id = 'aimgr-reason-modal';
+    back.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px';
+    back.innerHTML = `
+      <div style="background:#fff;border-radius:16px;max-width:480px;width:100%;padding:24px;box-shadow:0 20px 50px rgba(0,0,0,.3)">
+        <div style="font-size:20px;font-weight:700;color:#0f172a;margin-bottom:8px">🧑‍💼 AI Manager wants to know</div>
+        <div style="color:#475569;font-size:14px;margin-bottom:14px">${String(p.prompt_text||'').replace(/[<>]/g,'')}</div>
+        <textarea id="aimgr-reason-input" rows="3" placeholder="Type your reason (required)..." style="width:100%;border:1px solid #cbd5e1;border-radius:10px;padding:10px 12px;font:inherit;font-size:14px;resize:vertical"></textarea>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
+          <button id="aimgr-reason-submit" style="padding:10px 18px;background:#4f46e5;color:#fff;border:0;border-radius:8px;font-weight:600;cursor:pointer">Submit reason</button>
+        </div>
+        <div id="aimgr-reason-msg" style="font-size:12px;color:#dc2626;margin-top:8px"></div>
+      </div>`;
+    document.body.appendChild(back);
+    back.querySelector('#aimgr-reason-submit').onclick = async () => {
+      const reason = back.querySelector('#aimgr-reason-input').value.trim();
+      if (!reason || reason.length < 5) { back.querySelector('#aimgr-reason-msg').textContent = 'Please type at least 5 characters.'; return; }
+      try {
+        await api('api_aiManager_prompts_respond', { id: p.id, reason });
+        back.remove();
+      } catch (e) {
+        back.querySelector('#aimgr-reason-msg').textContent = 'Save failed: ' + e.message;
+      }
+    };
+  }
+})();
 
 VIEWS.activityreport = async (view) => {
   view.innerHTML = '';

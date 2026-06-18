@@ -3539,6 +3539,33 @@ setInterval(() => {
 setTimeout(() => _runGoogleConvForAllTenants().catch(() => {}), 60_000);
 console.log('[gconv] Google Ads conversion export daily worker started');
 
+// ── AI_MGR_v1 — detection cycle every 2 minutes per tenant ──
+async function _runAiManagerForAllTenants() {
+  const tenantDb = require('./db/pg');
+  const tenantPool = require('./utils/tenantPool');
+  const control = require('./control/db');
+  const aiMgr = require('./routes/aiManager');
+  let tenants;
+  try {
+    tenants = (await control.query(`SELECT id, slug, org_name, db_name, status FROM tenants WHERE status='active'`)).rows;
+  } catch (e) { console.warn('[ai_mgr] tenant list failed:', e.message); return; }
+  for (const row of tenants) {
+    try {
+      const pool = tenantPool.poolFor(row);
+      if (!pool) continue;
+      const t = { id: row.id, slug: row.slug, org_name: row.org_name, db_name: row.db_name };
+      await tenantDb.tenantStorage.run({ pool, tenant: t, slug: row.slug },
+        () => aiMgr.runDetectionCycle()
+      );
+    } catch (e) { /* silent — single tenant failure shouldnt break cycle */ }
+  }
+}
+setInterval(() => {
+  _runAiManagerForAllTenants().catch(e => console.error('[ai_mgr] cycle failed:', e.message));
+}, 120_000);
+setTimeout(() => _runAiManagerForAllTenants().catch(() => {}), 90_000);
+console.log('[ai_mgr] AI Manager detection cycle started (every 2 min)');
+
 // ── WL_BILLING_CRON_v1 — daily auto-bill at 9am IST ──
 // Runs once at 9:00 IST. Generates invoices for every active customer
 // whose billing_day == today's day-of-month, then auto-sends the invoice

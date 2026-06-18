@@ -474,3 +474,12 @@ VALUES (
   NOW(),
   TRUE
 ) ON CONFLICT (slug) DO NOTHING;
+
+-- AI_MGR_v1 Phase 1 (2026-06-18) — MVP
+INSERT INTO changelog (slug, title, body, area, published_at, is_published)
+VALUES (
+  'ai-manager-phase1-mvp-2026-06-18',
+  'AI Manager — Phase 1 MVP shipped',
+  'AI Manager Phase 1 is live (Vserve beta). Type rules in plain English ("If a user is idle for more than 20 minutes during working hours, ask the team leader"), the system parses them with Gemini. A detection cycle runs every 2 minutes catching idle users and new-lead SLA misses; users get an in-app "Ask Reason" popup demanding an explanation. Three tabs in the AI Manager sidebar: Rules / Violations / Reports.',
+  'ai', NOW(), TRUE
+) ON CONFLICT (slug) DO NOTHING;
