@@ -671,6 +671,277 @@ async function api_aiManager_dailyReport(token, opts) {
   return { date: day, rows: r.rows };
 }
 
+
+/* ════════════════════════════ PHASE 2 — ADVANCED DETECTION ════════════════════════════ */
+
+/* 7.1 — Remark Quality.  Local heuristic (cheap), optional Gemini classify. */
+function _classifyRemarkLocal(text) {
+  const t = String(text || '').trim().toLowerCase();
+  if (!t) return { quality: 'blank',  reason: 'empty' };
+  if (t.length < 4) return { quality: 'weak', reason: 'too_short' };
+  const weakSet = ['ok', 'done', 'call later', 'will call', 'noted', 'na', 'n/a', 'nothing', 'cool', 'yes', 'no'];
+  if (weakSet.includes(t)) return { quality: 'weak', reason: 'generic_phrase' };
+  if (/^(call|talk|spoke|will|follow)[\s\.,]{0,2}$/.test(t)) return { quality: 'weak', reason: 'truncated' };
+  return { quality: 'valid', reason: 'ok' };
+}
+
+/* Hook (call from routes/leads.js api_leads_addRemark or QNote save).
+ * Inserts a violation if remark is blank/weak. */
+async function checkRemarkQuality({ userId, leadId, remarkText }) {
+  if (!await _isEnabled()) return { skipped: true };
+  await _ensureSchema();
+  const c = _classifyRemarkLocal(remarkText);
+  if (c.quality === 'valid') return c;
+  /* Find a remark-quality rule (or use defaults) */
+  const ru = (await db.query(
+    `SELECT id FROM ai_manager_rules WHERE is_active = TRUE AND conditions->>'type' IN ('remark_quality','custom') LIMIT 1`
+  )).rows[0];
+  const v = await db.query(
+    `INSERT INTO ai_manager_violations
+      (rule_id, user_id, violation_type, lead_id, expected_action, actual_status, ai_action, escalation_lvl, metadata)
+     VALUES ($1, $2, 'weak_remark', $3, 'Add a substantive remark with client response + next step', $4, 'reminder_sent', 1, $5)
+     RETURNING id`,
+    [ru ? ru.id : null, userId, leadId, 'Remark classified ' + c.quality + ': "' + String(remarkText).slice(0, 40) + '"', JSON.stringify(c)]
+  );
+  await db.query(
+    `INSERT INTO ai_manager_reason_prompts (violation_id, user_id, prompt_text)
+     VALUES ($1, $2, $3)`,
+    [v.rows[0].id, userId, 'Your last remark was flagged as "' + c.quality + '". Please update with the actual client response and next action.']
+  );
+  return c;
+}
+
+/* 7.2 — Fake activity detection. SQL pattern matches.
+ * Runs as part of the cron cycle (called from runDetectionCycle below). */
+async function detectFakeActivity() {
+  if (!await _isEnabled()) return { fake: 0 };
+
+  /* Pattern A: Status changed but no call event on that lead in last hour. */
+  const sqlA = `
+    SELECT l.id AS lead_id, l.assigned_to AS user_id
+    FROM leads l
+    WHERE l.last_status_change_at >= NOW() - INTERVAL '1 hour'
+      AND l.assigned_to IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM call_events ce WHERE ce.lead_id = l.id AND ce.created_at >= l.last_status_change_at - INTERVAL '15 minutes'
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM ai_manager_violations v WHERE v.lead_id = l.id AND v.violation_type = 'fake_activity' AND v.detected_at >= NOW() - INTERVAL '6 hours'
+      )
+    LIMIT 30`;
+  let aRows = [];
+  try { aRows = (await db.query(sqlA)).rows; } catch (_) { /* tables may not exist */ }
+  let count = 0;
+  for (const row of aRows) {
+    const v = await db.query(
+      `INSERT INTO ai_manager_violations
+        (user_id, violation_type, lead_id, expected_action, actual_status, ai_action, escalation_lvl)
+       VALUES ($1, 'fake_activity', $2, 'Make a call before changing status', 'Status changed without call event', 'flagged', 2)
+       RETURNING id`,
+      [row.user_id, row.lead_id]
+    );
+    await db.query(
+      `INSERT INTO ai_manager_reason_prompts (violation_id, user_id, prompt_text)
+       VALUES ($1, $2, $3)`,
+      [v.rows[0].id, row.user_id, 'You changed a lead status without a recorded call. Please explain or add the missing call.']
+    );
+    count++;
+  }
+  return { fake: count };
+}
+
+/* 7.3 — WhatsApp reply monitoring. */
+async function detectWaIgnoredReplies() {
+  if (!await _isEnabled()) return { wa: 0 };
+  /* Inbound message from client without an outbound reply within X min,
+   * lead owner gets notified. */
+  const threshold = 30; /* minutes */
+  const sql = `
+    SELECT m.lead_id, l.assigned_to AS user_id, l.name AS lead_name
+    FROM whatsapp_messages m
+    JOIN leads l ON l.id = m.lead_id
+    WHERE m.direction = 'in'
+      AND m.created_at >= NOW() - INTERVAL '6 hours'
+      AND m.created_at < NOW() - (INTERVAL '1 minute' * $1)
+      AND l.assigned_to IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM whatsapp_messages m2
+        WHERE m2.lead_id = m.lead_id AND m2.direction = 'out' AND m2.created_at > m.created_at
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM ai_manager_violations v
+        WHERE v.lead_id = m.lead_id AND v.violation_type = 'wa_ignored'
+          AND v.detected_at >= NOW() - INTERVAL '6 hours'
+      )
+    LIMIT 30`;
+  let rows = [];
+  try { rows = (await db.query(sql, [threshold])).rows; } catch (_) { return { wa: 0 }; }
+  let count = 0;
+  for (const row of rows) {
+    const v = await db.query(
+      `INSERT INTO ai_manager_violations
+        (user_id, violation_type, lead_id, expected_action, actual_status, ai_action, escalation_lvl)
+       VALUES ($1, 'wa_ignored', $2, 'Reply to WhatsApp message', 'Client replied ' || $3 || '+ min ago, no response', 'nudge_sent', 1)
+       RETURNING id`,
+      [row.user_id, row.lead_id, threshold]
+    );
+    await db.query(
+      `INSERT INTO ai_manager_reason_prompts (violation_id, user_id, prompt_text)
+       VALUES ($1, $2, $3)`,
+      [v.rows[0].id, row.user_id, 'Client "' + (row.lead_name || '').slice(0, 30) + '" replied on WhatsApp ' + threshold + '+ minutes ago. Please reply now.']
+    );
+    count++;
+  }
+  return { wa: count };
+}
+
+/* 7.4 — Lead Risk Report endpoint */
+async function api_aiManager_leadRisk(token) {
+  await _ensureSchema();
+  await authUser(token);
+  const sql = `
+    WITH risks AS (
+      /* Interested but no follow-up */
+      SELECT id, name, assigned_to, 'interested_no_fu' AS reason, 'high' AS severity
+      FROM leads
+      WHERE LOWER(COALESCE(status_id::text, '')) IN (SELECT id::text FROM statuses WHERE LOWER(name) LIKE '%interested%' OR LOWER(name) LIKE '%hot%')
+        AND next_followup_at IS NULL
+      UNION ALL
+      /* Hot AI Rate but no recent action */
+      SELECT id, name, assigned_to, 'hot_inactive' AS reason, 'high' AS severity
+      FROM leads
+      WHERE smart_category = 'Hot' AND updated_at < NOW() - INTERVAL '2 days'
+      UNION ALL
+      /* Ageing leads with no follow-up */
+      SELECT id, name, assigned_to, 'ageing_no_fu' AS reason, 'medium' AS severity
+      FROM leads
+      WHERE updated_at < NOW() - INTERVAL '7 days'
+        AND next_followup_at IS NULL
+        AND (smart_category IS NULL OR smart_category NOT IN ('Cold','Invalid'))
+    )
+    SELECT r.id AS lead_id, r.name AS lead_name, r.reason, r.severity, u.name AS owner
+    FROM risks r LEFT JOIN users u ON u.id = r.assigned_to
+    LIMIT 200`;
+  let r;
+  try { r = await db.query(sql); }
+  catch (e) { return { risks: [], err: e.message }; }
+  return { risks: r.rows };
+}
+
+/* 7.5 — 5-Level Escalation Engine.
+ * Called after every violation insert (above functions can call this
+ * to bump escalation level if user repeats same violation type). */
+async function _bumpEscalation(userId, violationType) {
+  const r = await db.query(
+    `INSERT INTO ai_manager_escalations (user_id, violation_type, current_level, repeat_count, last_violation_at)
+     VALUES ($1, $2, 1, 1, NOW())
+     ON CONFLICT (user_id, violation_type) DO UPDATE SET
+       repeat_count = ai_manager_escalations.repeat_count + 1,
+       last_violation_at = NOW(),
+       current_level = LEAST(5, ai_manager_escalations.current_level + (CASE WHEN ai_manager_escalations.repeat_count >= 2 THEN 1 ELSE 0 END))
+     RETURNING current_level`,
+    [userId, violationType]
+  );
+  return r.rows[0].current_level;
+}
+
+/* 7.6 — Performance Scorecard.  Run nightly or on-demand. */
+async function recomputeScorecard(scoreDate) {
+  const day = scoreDate || _today();
+  const sql = `
+    INSERT INTO user_scorecard_daily
+      (user_id, score_date, total_calls, connected_calls, fu_completed, fu_missed,
+       avg_response_min, remark_quality_pct, idle_minutes, violation_count, score, score_breakdown)
+    SELECT
+      u.id,
+      $1::date,
+      COALESCE(c.total_calls, 0),
+      COALESCE(c.connected_calls, 0),
+      COALESCE(f.fu_done, 0),
+      COALESCE(f.fu_due, 0) - COALESCE(f.fu_done, 0),
+      NULL::real,
+      NULL::real,
+      0,
+      COALESCE(v.cnt, 0),
+      LEAST(100, GREATEST(0,
+        (25 * LEAST(1.0, COALESCE(c.total_calls, 0)::real / 30))::int +
+        (25 * LEAST(1.0, COALESCE(f.fu_done, 0)::real / GREATEST(1, COALESCE(f.fu_due, 1))))::int +
+        (20 * LEAST(1.0, COALESCE(c.connected_calls, 0)::real / GREATEST(1, COALESCE(c.total_calls, 1))))::int +
+        15 +
+        (15 - LEAST(15, COALESCE(v.cnt, 0) * 3))
+      )),
+      jsonb_build_object('calls_pct', LEAST(100, COALESCE(c.total_calls, 0) * 3),
+                         'fu_pct',    LEAST(100, COALESCE(f.fu_done, 0) * 10),
+                         'violations', COALESCE(v.cnt, 0))
+    FROM users u
+    LEFT JOIN (
+      SELECT user_id, COUNT(*) AS total_calls,
+             COUNT(*) FILTER (WHERE COALESCE(duration_seconds, 0) > 0) AS connected_calls
+      FROM call_events WHERE created_at::date = $1 GROUP BY user_id
+    ) c ON c.user_id = u.id
+    LEFT JOIN (
+      SELECT assigned_to AS user_id,
+             COUNT(*) FILTER (WHERE next_followup_at::date = $1) AS fu_due,
+             COUNT(*) FILTER (WHERE next_followup_at::date = $1 AND COALESCE(is_followup_done, 0) = 1) AS fu_done
+      FROM leads GROUP BY assigned_to
+    ) f ON f.user_id = u.id
+    LEFT JOIN (
+      SELECT user_id, COUNT(*) AS cnt FROM ai_manager_violations
+      WHERE detected_at::date = $1 GROUP BY user_id
+    ) v ON v.user_id = u.id
+    WHERE COALESCE(u.is_active, 1) = 1 AND u.role IN ('sales', 'team_leader', 'manager')
+    ON CONFLICT (user_id, score_date) DO UPDATE SET
+      total_calls = EXCLUDED.total_calls,
+      connected_calls = EXCLUDED.connected_calls,
+      fu_completed = EXCLUDED.fu_completed,
+      fu_missed = EXCLUDED.fu_missed,
+      violation_count = EXCLUDED.violation_count,
+      score = EXCLUDED.score,
+      score_breakdown = EXCLUDED.score_breakdown`;
+  try {
+    await db.query(sql, [day]);
+    return { ok: true, date: day };
+  } catch (e) {
+    return { error: e.message, date: day };
+  }
+}
+
+async function api_aiManager_scorecard(token, opts) {
+  await _ensureSchema();
+  await authUser(token);
+  opts = opts || {};
+  const day = String(opts.date || _today());
+  /* Lazy refresh */
+  await recomputeScorecard(day);
+  const r = await db.query(
+    `SELECT s.user_id, u.name, s.score, s.total_calls, s.connected_calls,
+            s.fu_completed, s.fu_missed, s.violation_count, s.score_breakdown
+     FROM user_scorecard_daily s
+     JOIN users u ON u.id = s.user_id
+     WHERE s.score_date = $1
+     ORDER BY s.score DESC NULLS LAST`,
+    [day]
+  );
+  return { date: day, scorecards: r.rows };
+}
+
+/* Override the original runDetectionCycle to add Phase 2 detectors */
+const _runDetectionCycle_phase1 = runDetectionCycle;
+async function runDetectionCycle() {
+  try {
+    if (!await _isEnabled()) return { skipped: true };
+    await _ensureSchema();
+    const idle = await detectIdleUsers().catch(e => ({ err: e.message }));
+    const sla  = await detectNewLeadSlaMiss().catch(e => ({ err: e.message }));
+    const fake = await detectFakeActivity().catch(e => ({ err: e.message }));
+    const wa   = await detectWaIgnoredReplies().catch(e => ({ err: e.message }));
+    return { ok: true, idle, sla, fake, wa };
+  } catch (e) {
+    console.error('[AI_MGR_CYCLE]', e.message);
+    return { error: e.message };
+  }
+}
+
 module.exports = {
   _ensureSchema,
   runDetectionCycle,
@@ -689,4 +960,8 @@ module.exports = {
   api_aiManager_userSchedule_save,
   api_aiManager_dailyPlan,
   api_aiManager_dailyReport,
+  api_aiManager_leadRisk,
+  api_aiManager_scorecard,
+  checkRemarkQuality,
+  recomputeScorecard,
 };

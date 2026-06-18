@@ -1080,6 +1080,15 @@ async function api_leads_create(token, payload) {
         remark: '⛔ Auto-assignment skipped: ' + _capWarning + '. Lead left unassigned for manual review.',
         status_id: ''
       });
+  /* AI_MGR_v1 Phase 2 — remark quality check (fire-and-forget) */
+  try {
+    const aimgr = require('./aiManager');
+    if (aimgr && aimgr.checkRemarkQuality) {
+      aimgr.checkRemarkQuality({ userId: me.id, leadId: Number(p.lead_id || p.id), remarkText: String(p.remark || p.text || '') })
+        .catch(() => {});
+    }
+  } catch (_) {}
+
     } catch (_) {}
   }
 

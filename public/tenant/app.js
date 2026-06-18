@@ -47941,7 +47941,9 @@ VIEWS.aimanager = async (view) => {
   const tabs = [
     { id: 'rules',      label: '🎯 Rules' },
     { id: 'violations', label: '🚨 Violations' },
-    { id: 'reports',    label: '📊 Reports' }
+    { id: 'reports',    label: '📊 Reports' },
+    { id: 'risk',       label: '⚠️ Lead Risk' },
+    { id: 'scorecard',  label: '🏆 Scorecard' }
   ];
 
   function renderTabs(active) {
@@ -47961,7 +47963,9 @@ VIEWS.aimanager = async (view) => {
     try {
       if (id === 'rules') await renderRules();
       else if (id === 'violations') await renderViolations();
-      else await renderReports();
+      else if (id === 'reports') await renderReports();
+      else if (id === 'risk') await renderRisk();
+      else if (id === 'scorecard') await renderScorecard();
     } catch (e) {
       body.innerHTML = '<div style="padding:20px;background:#fef2f2;color:#991b1b;border-radius:10px">Error: ' + (e.message || String(e)) + '</div>';
     }
@@ -48128,6 +48132,64 @@ VIEWS.aimanager = async (view) => {
 
   /* ---------- HELPER esc ---------- */
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, m => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m])); }
+
+
+  /* ---------- LEAD RISK TAB ---------- */
+  async function renderRisk() {
+    body.innerHTML = '<div style="padding:20px;text-align:center;color:#94a3b8">Loading lead risk…</div>';
+    const r = await api('api_aiManager_leadRisk');
+    body.innerHTML = '';
+    if (!r.risks || !r.risks.length) {
+      body.innerHTML = '<div style="padding:30px;text-align:center;color:#94a3b8;background:#f8fafc;border-radius:10px">No risky leads detected.</div>';
+      return;
+    }
+    const head = document.createElement('div');
+    head.style.cssText = 'background:#fff;border-radius:12px;padding:14px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.06)';
+    head.innerHTML = '<div style="font-size:16px;font-weight:600;color:#0f172a">' + r.risks.length + ' leads at risk</div><div style="font-size:13px;color:#64748b">Interested without follow-up · hot but inactive · ageing without next action</div>';
+    body.appendChild(head);
+    const table = document.createElement('table');
+    table.style.cssText = 'width:100%;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.06);border-collapse:collapse';
+    table.innerHTML = '<thead><tr style="background:#f1f5f9;color:#475569;font-size:12px;font-weight:600;text-align:left"><th style="padding:10px">Lead</th><th style="padding:10px">Owner</th><th style="padding:10px">Reason</th><th style="padding:10px">Severity</th></tr></thead>';
+    const tb = document.createElement('tbody');
+    for (const x of r.risks) {
+      const tr = document.createElement('tr');
+      const sevColor = x.severity === 'high' ? '#dc2626' : '#f59e0b';
+      tr.style.cssText = 'border-top:1px solid #e2e8f0;font-size:13px';
+      tr.innerHTML = '<td style="padding:10px;color:#0f172a"><a href="#/leads?lead='+x.lead_id+'" style="color:#4f46e5;text-decoration:none">'+esc(x.lead_name||'?')+'</a></td>'+
+        '<td style="padding:10px;color:#475569">'+esc(x.owner||'-')+'</td>'+
+        '<td style="padding:10px;color:#64748b;font-size:12px">'+esc(x.reason)+'</td>'+
+        '<td style="padding:10px"><span style="background:'+sevColor+'22;color:'+sevColor+';padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600">'+esc(x.severity)+'</span></td>';
+      tb.appendChild(tr);
+    }
+    table.appendChild(tb);
+    body.appendChild(table);
+  }
+
+  /* ---------- SCORECARD TAB ---------- */
+  async function renderScorecard() {
+    body.innerHTML = '<div style="padding:20px;text-align:center;color:#94a3b8">Computing scorecard…</div>';
+    const r = await api('api_aiManager_scorecard');
+    body.innerHTML = '';
+    if (!r.scorecards || !r.scorecards.length) {
+      body.innerHTML = '<div style="padding:30px;text-align:center;color:#94a3b8;background:#f8fafc;border-radius:10px">No data yet for ' + esc(r.date) + '. Scores compute as users work.</div>';
+      return;
+    }
+    const head = document.createElement('div');
+    head.style.cssText = 'background:#fff;border-radius:12px;padding:14px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.06)';
+    head.innerHTML = '<div style="font-size:16px;font-weight:600;color:#0f172a">Performance Scorecard — ' + esc(r.date) + '</div><div style="font-size:13px;color:#64748b">Score = 25% calls + 25% follow-up rate + 20% connect rate + 15% baseline − violations penalty</div>';
+    body.appendChild(head);
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill, minmax(260px, 1fr));gap:12px';
+    for (const sc of r.scorecards) {
+      const card = document.createElement('div');
+      const scoreColor = (sc.score||0) >= 80 ? '#10b981' : (sc.score||0) >= 60 ? '#3b82f6' : (sc.score||0) >= 40 ? '#f59e0b' : '#dc2626';
+      card.style.cssText = 'background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.06)';
+      card.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div style="font-weight:600;color:#0f172a">'+esc(sc.name||'?')+'</div><div style="background:'+scoreColor+';color:#fff;padding:6px 14px;border-radius:99px;font-weight:700;font-size:18px">'+(sc.score||0)+'</div></div>'+
+        '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px;font-size:12px;color:#64748b"><div>📞 Calls: <b style="color:#0f172a">'+(sc.total_calls||0)+'</b></div><div>✓ Connected: <b style="color:#0f172a">'+(sc.connected_calls||0)+'</b></div><div>📅 FU done: <b style="color:#0f172a">'+(sc.fu_completed||0)+'</b></div><div>❌ FU miss: <b style="color:#dc2626">'+(sc.fu_missed||0)+'</b></div><div style="grid-column:1/-1">🚨 Violations: <b style="color:'+((sc.violation_count||0)>0?'#dc2626':'#10b981')+'">'+(sc.violation_count||0)+'</b></div></div>';
+      grid.appendChild(card);
+    }
+    body.appendChild(grid);
+  }
 
   switchTab('rules');
 };

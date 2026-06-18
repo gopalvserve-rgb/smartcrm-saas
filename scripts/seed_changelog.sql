@@ -483,3 +483,12 @@ VALUES (
   'AI Manager Phase 1 is live (Vserve beta). Type rules in plain English ("If a user is idle for more than 20 minutes during working hours, ask the team leader"), the system parses them with Gemini. A detection cycle runs every 2 minutes catching idle users and new-lead SLA misses; users get an in-app "Ask Reason" popup demanding an explanation. Three tabs in the AI Manager sidebar: Rules / Violations / Reports.',
   'ai', NOW(), TRUE
 ) ON CONFLICT (slug) DO NOTHING;
+
+-- AI_MGR_v1 Phase 2 (2026-06-18) — Advanced detection
+INSERT INTO changelog (slug, title, body, area, published_at, is_published)
+VALUES (
+  'ai-manager-phase2-advanced-2026-06-18',
+  'AI Manager — Phase 2 Advanced Detection',
+  'AI Manager now catches the trickier slip-ups: weak/blank remarks ("ok", "done", "call later"), fake activity (status changed without a real call), ignored WhatsApp replies (>30 min), and ageing high-value leads. Two new tabs in the AI Manager sidebar — Lead Risk (which interested/hot leads are slipping) and 🏆 Scorecard (daily 0-100 score per user combining calls, follow-ups, connect rate, and violations). 5-level escalation tracker now bumps repeat offenders automatically.',
+  'ai', NOW(), TRUE
+) ON CONFLICT (slug) DO NOTHING;
