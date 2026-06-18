@@ -631,6 +631,10 @@ const SCHEMA = {
               'repeat_count', 'last_violation_at', 'reset_at'],
     json: []
   },
+  ai_manager_coaching: {
+    columns: ['id', 'user_id', 'week_start_date', 'summary', 'recommendations', 'score_trend', 'generated_at'],
+    json: ['recommendations', 'score_trend']
+  },
   ai_manager_reason_prompts: {
     columns: ['violation_id', 'user_id', 'prompt_text', 'created_at',
               'responded_at', 'response_text', 'expired_at'],

@@ -47943,7 +47943,9 @@ VIEWS.aimanager = async (view) => {
     { id: 'violations', label: '🚨 Violations' },
     { id: 'reports',    label: '📊 Reports' },
     { id: 'risk',       label: '⚠️ Lead Risk' },
-    { id: 'scorecard',  label: '🏆 Scorecard' }
+    { id: 'scorecard',  label: '🏆 Scorecard' },
+    { id: 'coaching',   label: '🎓 Coaching' },
+    { id: 'digest',     label: '📋 Manager Digest' }
   ];
 
   function renderTabs(active) {
@@ -47966,6 +47968,8 @@ VIEWS.aimanager = async (view) => {
       else if (id === 'reports') await renderReports();
       else if (id === 'risk') await renderRisk();
       else if (id === 'scorecard') await renderScorecard();
+      else if (id === 'coaching') await renderCoaching();
+      else if (id === 'digest') await renderDigest();
     } catch (e) {
       body.innerHTML = '<div style="padding:20px;background:#fef2f2;color:#991b1b;border-radius:10px">Error: ' + (e.message || String(e)) + '</div>';
     }
@@ -48189,6 +48193,86 @@ VIEWS.aimanager = async (view) => {
       grid.appendChild(card);
     }
     body.appendChild(grid);
+  }
+
+
+  /* ---------- COACHING TAB ---------- */
+  async function renderCoaching() {
+    body.innerHTML = '<div style="padding:20px;text-align:center;color:#94a3b8">Loading your coaching digest…</div>';
+    const r = await api('api_aiManager_coaching');
+    body.innerHTML = '';
+    const head = document.createElement('div');
+    head.style.cssText = 'background:linear-gradient(135deg,#7c3aed,#4f46e5);color:#fff;border-radius:12px;padding:18px;margin-bottom:16px';
+    head.innerHTML = '<div style="font-size:18px;font-weight:600">🎓 AI Coaching — This Week</div><div style="font-size:13px;opacity:.85;margin-top:4px">Personalised feedback generated weekly from your activity + violations + scorecard trend.</div>';
+    body.appendChild(head);
+    if (!r.coaching) {
+      body.innerHTML += '<div style="padding:30px;text-align:center;color:#94a3b8;background:#f8fafc;border-radius:10px">Coaching digest not generated yet. It refreshes automatically every 6 hours.</div>';
+      return;
+    }
+    const c = r.coaching;
+    const summary = document.createElement('div');
+    summary.style.cssText = 'background:#fff;border-radius:12px;padding:16px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.06);border-left:4px solid #4f46e5';
+    summary.innerHTML = '<div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Summary</div><div style="font-size:15px;color:#0f172a;line-height:1.5">'+esc(c.summary || '')+'</div>';
+    body.appendChild(summary);
+    const tips = document.createElement('div');
+    tips.style.cssText = 'background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.06)';
+    let tipHtml = '<div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Recommendations</div>';
+    (c.recommendations || []).forEach((t, i) => {
+      tipHtml += '<div style="display:flex;gap:10px;padding:10px 0;border-top:'+(i===0?'none':'1px solid #f1f5f9')+'"><div style="background:#4f46e5;color:#fff;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;flex-shrink:0">'+(i+1)+'</div><div style="font-size:14px;color:#334155;line-height:1.5">'+esc(t)+'</div></div>';
+    });
+    tips.innerHTML = tipHtml;
+    body.appendChild(tips);
+  }
+
+  /* ---------- MANAGER DIGEST TAB ---------- */
+  async function renderDigest() {
+    body.innerHTML = '<div style="padding:20px;text-align:center;color:#94a3b8">Loading team digest…</div>';
+    const r = await api('api_aiManager_managerDigest');
+    body.innerHTML = '';
+    const head = document.createElement('div');
+    head.style.cssText = 'background:linear-gradient(135deg,#0ea5e9,#0284c7);color:#fff;border-radius:12px;padding:18px;margin-bottom:16px';
+    head.innerHTML = '<div style="font-size:18px;font-weight:600">📋 Team Digest — Last 7 days</div>';
+    body.appendChild(head);
+    if (!r.overall) {
+      body.innerHTML += '<div style="padding:30px;text-align:center;color:#94a3b8;background:#f8fafc;border-radius:10px">No data yet.</div>';
+      return;
+    }
+    const o = r.overall;
+    /* KPI strip */
+    const kpis = [
+      { label: 'Team size', val: o.team_size, color: '#3b82f6' },
+      { label: 'Avg score', val: o.avg_score + '/100', color: '#10b981' },
+      { label: 'Calls (7d)', val: o.total_calls, color: '#8b5cf6' },
+      { label: 'FU done', val: o.fu_done, color: '#0ea5e9' },
+      { label: 'FU missed', val: o.fu_miss, color: o.fu_miss > 0 ? '#ef4444' : '#94a3b8' },
+      { label: 'Violations', val: o.violations, color: o.violations > 0 ? '#dc2626' : '#10b981' }
+    ];
+    const kpiGrid = document.createElement('div');
+    kpiGrid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:10px;margin-bottom:16px';
+    for (const k of kpis) {
+      const c = document.createElement('div');
+      c.style.cssText = 'background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 3px rgba(0,0,0,.06);border-top:3px solid '+k.color;
+      c.innerHTML = '<div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.5px">'+k.label+'</div><div style="font-size:22px;font-weight:700;color:#0f172a;margin-top:4px">'+k.val+'</div>';
+      kpiGrid.appendChild(c);
+    }
+    body.appendChild(kpiGrid);
+    /* Top + Bottom */
+    const cols = document.createElement('div');
+    cols.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:12px';
+    function side(title, list, color) {
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.06)';
+      let html = '<div style="font-size:12px;color:'+color+';font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">'+title+'</div>';
+      (list || []).forEach(x => {
+        html += '<div style="display:flex;justify-content:space-between;padding:8px 0;border-top:1px solid #f1f5f9"><div style="font-size:14px;color:#0f172a">'+esc(x.name||'?')+'</div><div style="font-weight:700;color:'+color+'">'+x.score+'</div></div>';
+      });
+      if (!list || !list.length) html += '<div style="color:#94a3b8;font-size:13px">—</div>';
+      wrap.innerHTML = html;
+      return wrap;
+    }
+    cols.appendChild(side('🥇 Top performers', r.top_performers, '#10b981'));
+    cols.appendChild(side('⚠️ Needs attention', r.needs_attention, '#dc2626'));
+    body.appendChild(cols);
   }
 
   switchTab('rules');

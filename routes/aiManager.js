@@ -114,6 +114,19 @@ async function _ensureSchema() {
       UNIQUE(user_id, score_date)
     )`);
 
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS ai_manager_coaching (
+      id           SERIAL PRIMARY KEY,
+      user_id      INTEGER NOT NULL,
+      week_start_date DATE NOT NULL,
+      summary      TEXT,
+      recommendations JSONB,
+      score_trend  JSONB,
+      generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(user_id, week_start_date)
+    )`);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_aimgr_coach_user ON ai_manager_coaching(user_id)`);
+
   const userCols = [
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS working_hours_start TIME`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS working_hours_end TIME`,
@@ -942,6 +955,224 @@ async function runDetectionCycle() {
   }
 }
 
+
+/* ════════════════════════════ PHASE 3 — AI COACHING ════════════════════════════ */
+
+/* 8.1 — Weekly coaching digest per user.
+ * Pulls last 7 days of scorecards + violations + top wins, asks Gemini
+ * to write 3 bullet points of coaching feedback. */
+async function generateCoachingDigest(userId) {
+  if (!await _isEnabled()) return { skipped: true };
+  await _ensureSchema();
+  /* Pull last 7 scorecards */
+  const sc = await db.query(
+    `SELECT score_date, score, total_calls, connected_calls, fu_completed, fu_missed, violation_count
+     FROM user_scorecard_daily WHERE user_id = $1 AND score_date >= CURRENT_DATE - INTERVAL '7 days'
+     ORDER BY score_date DESC`, [userId]
+  );
+  const v = await db.query(
+    `SELECT violation_type, COUNT(*) AS cnt FROM ai_manager_violations
+     WHERE user_id = $1 AND detected_at >= NOW() - INTERVAL '7 days'
+     GROUP BY violation_type ORDER BY cnt DESC LIMIT 5`, [userId]
+  );
+  const u = await db.query(`SELECT name FROM users WHERE id = $1`, [userId]);
+  const userName = u.rows[0] ? u.rows[0].name : 'User';
+
+  /* Fallback (no LLM): simple template */
+  let summary = '';
+  let recommendations = [];
+  const last = sc.rows[0] || {};
+  const avgScore = sc.rows.length ? Math.round(sc.rows.reduce((s, r) => s + (r.score || 0), 0) / sc.rows.length) : 0;
+  const totalCalls = sc.rows.reduce((s, r) => s + (r.total_calls || 0), 0);
+  const totalFu = sc.rows.reduce((s, r) => s + (r.fu_completed || 0), 0);
+  const totalMiss = sc.rows.reduce((s, r) => s + (r.fu_missed || 0), 0);
+
+  try {
+    const gemini = require('../utils/geminiClient');
+    if (gemini && gemini.generate) {
+      const prompt = 'You are an AI sales coach. Write a SHORT (3 bullet points, < 60 words total) ' +
+        'coaching message for ' + userName + ' based on their weekly performance:\n\n' +
+        'Avg score: ' + avgScore + '/100\n' +
+        'Total calls (7d): ' + totalCalls + '\n' +
+        'Follow-ups completed: ' + totalFu + ' done, ' + totalMiss + ' missed\n' +
+        'Top violations: ' + v.rows.map(r => r.violation_type + ' (' + r.cnt + ')').join(', ') + '\n\n' +
+        'Return JSON: {"summary":"one-line praise/observation","tips":["tip1","tip2","tip3"]}';
+      const r = await gemini.generate({ prompt, maxTokens: 200 });
+      if (r && r.ok && r.text) {
+        const m = r.text.match(/\{[\s\S]*\}/);
+        if (m) {
+          try {
+            const j = JSON.parse(m[0]);
+            summary = String(j.summary || '');
+            recommendations = Array.isArray(j.tips) ? j.tips.slice(0, 5) : [];
+          } catch (_) {}
+        }
+      }
+    }
+  } catch (_) {}
+
+  if (!summary) {
+    summary = avgScore >= 70 ? 'Strong week overall — keep the momentum.' : avgScore >= 50 ? 'Mixed week — opportunity to lift performance.' : 'Tough week — focus on the basics next week.';
+    recommendations = [];
+    if (totalMiss > totalFu) recommendations.push('Close out follow-ups before adding new ones — too many missed this week.');
+    if (totalCalls < 50) recommendations.push('Increase outbound call volume; aim for 15+ calls per day.');
+    if (v.rows.length) recommendations.push('Address recurring violations: ' + v.rows[0].violation_type + '.');
+    if (!recommendations.length) recommendations.push('Keep building on consistent activity.');
+  }
+
+  await db.query(
+    `INSERT INTO ai_manager_coaching (user_id, week_start_date, summary, recommendations, score_trend)
+     VALUES ($1, DATE_TRUNC('week', CURRENT_DATE)::date, $2, $3, $4)
+     ON CONFLICT (user_id, week_start_date) DO UPDATE SET
+       summary = EXCLUDED.summary,
+       recommendations = EXCLUDED.recommendations,
+       score_trend = EXCLUDED.score_trend,
+       generated_at = NOW()`,
+    [userId, summary, JSON.stringify(recommendations), JSON.stringify(sc.rows)]
+  );
+  return { ok: true, summary, recommendations };
+}
+
+async function api_aiManager_coaching(token, opts) {
+  await _ensureSchema();
+  const me = await authUser(token);
+  opts = opts || {};
+  const userId = opts.user_id || me.id;
+  /* Lazy refresh if missing or older than 6h */
+  const ex = await db.query(
+    `SELECT * FROM ai_manager_coaching WHERE user_id = $1
+     AND week_start_date = DATE_TRUNC('week', CURRENT_DATE)::date`, [userId]
+  );
+  if (!ex.rows.length || (Date.now() - new Date(ex.rows[0].generated_at).getTime()) > 6 * 3600 * 1000) {
+    await generateCoachingDigest(userId);
+  }
+  const r = await db.query(
+    `SELECT c.*, u.name AS user_name FROM ai_manager_coaching c
+     JOIN users u ON u.id = c.user_id
+     WHERE c.user_id = $1 AND c.week_start_date = DATE_TRUNC('week', CURRENT_DATE)::date`, [userId]
+  );
+  if (!r.rows.length) return { coaching: null };
+  const row = r.rows[0];
+  return {
+    coaching: {
+      user_id: row.user_id,
+      user_name: row.user_name,
+      week_start: row.week_start_date,
+      summary: row.summary,
+      recommendations: typeof row.recommendations === 'string' ? JSON.parse(row.recommendations) : row.recommendations,
+      score_trend: typeof row.score_trend === 'string' ? JSON.parse(row.score_trend) : row.score_trend,
+      generated_at: row.generated_at
+    }
+  };
+}
+
+/* 8.2 — Conversion probability (rule-based, no LLM). 0-100 score per
+ * lead derived from existing AI Rate + activity + status + ageing. */
+async function api_aiManager_conversionProb(token, opts) {
+  await _ensureSchema();
+  await authUser(token);
+  opts = opts || {};
+  const limit = Math.min(Number(opts.limit || 100), 500);
+  const sql = `
+    SELECT l.id, l.name, l.assigned_to, u.name AS owner,
+      l.smart_score, l.smart_category,
+      (
+        COALESCE(l.smart_score, 30) * 0.5 +
+        CASE WHEN l.next_followup_at IS NOT NULL THEN 15 ELSE 0 END +
+        CASE WHEN l.updated_at >= NOW() - INTERVAL '3 days' THEN 15 ELSE 0 END +
+        CASE WHEN l.smart_category = 'Hot' THEN 20 WHEN l.smart_category = 'Warm' THEN 10 ELSE 0 END
+      ) AS conv_pct
+    FROM leads l LEFT JOIN users u ON u.id = l.assigned_to
+    WHERE COALESCE(l.is_won, 0) = 0
+    ORDER BY conv_pct DESC NULLS LAST LIMIT $1`;
+  let r;
+  try { r = await db.query(sql, [limit]); }
+  catch (e) { return { leads: [], err: e.message }; }
+  const leads = r.rows.map(row => ({
+    id: row.id, name: row.name, owner: row.owner,
+    smart_score: row.smart_score, smart_category: row.smart_category,
+    conversion_pct: Math.min(100, Math.round(row.conv_pct || 0))
+  }));
+  return { leads };
+}
+
+/* 8.3 — Revenue Leakage Report. Ageing high-value + stale interested. */
+async function api_aiManager_revenueLeak(token) {
+  await _ensureSchema();
+  await authUser(token);
+  const sql = `
+    SELECT l.id AS lead_id, l.name AS lead_name, u.name AS owner,
+      l.updated_at,
+      COALESCE(EXTRACT(DAY FROM (NOW() - l.updated_at)), 0)::int AS days_stale,
+      CASE
+        WHEN COALESCE(l.smart_score, 0) >= 70 AND l.updated_at < NOW() - INTERVAL '5 days' THEN 'high_value_stale'
+        WHEN l.smart_category = 'Hot' AND l.next_followup_at IS NULL THEN 'hot_no_fu'
+        WHEN l.updated_at < NOW() - INTERVAL '14 days' AND COALESCE(l.is_won, 0) = 0 AND COALESCE(l.is_lost, 0) = 0 THEN 'ageing_open'
+        ELSE NULL
+      END AS leakage_reason
+    FROM leads l LEFT JOIN users u ON u.id = l.assigned_to
+    WHERE COALESCE(l.is_won, 0) = 0 AND COALESCE(l.is_lost, 0) = 0
+    LIMIT 500`;
+  let r;
+  try { r = await db.query(sql); }
+  catch (e) { return { leaks: [], err: e.message }; }
+  const leaks = r.rows.filter(x => x.leakage_reason);
+  return { leaks };
+}
+
+/* 8.4 — Auto Task Suggestions (per lead, rule-based). */
+async function api_aiManager_nextBestAction(token, opts) {
+  await _ensureSchema();
+  await authUser(token);
+  opts = opts || {};
+  const leadId = Number(opts.lead_id);
+  if (!leadId) return { error: 'lead_id required' };
+  const l = await db.query(`SELECT * FROM leads WHERE id = $1`, [leadId]);
+  if (!l.rows.length) return { error: 'not_found' };
+  const lead = l.rows[0];
+  const suggestions = [];
+  if (lead.smart_category === 'Hot') {
+    if (!lead.next_followup_at) suggestions.push({ priority: 'high', action: 'Set a follow-up within 24h — this lead is Hot.' });
+    suggestions.push({ priority: 'high', action: 'Call now — Hot leads convert when contacted within an hour.' });
+  }
+  if (!lead.next_followup_at) suggestions.push({ priority: 'medium', action: 'Add a next follow-up date.' });
+  if (!lead.notes || String(lead.notes).length < 20) suggestions.push({ priority: 'medium', action: 'Add detailed remarks — current notes are sparse.' });
+  if (lead.updated_at && (Date.now() - new Date(lead.updated_at).getTime()) > 7 * 24 * 3600 * 1000) {
+    suggestions.push({ priority: 'high', action: 'Lead has been silent 7+ days — send a re-engagement message.' });
+  }
+  if (!suggestions.length) suggestions.push({ priority: 'low', action: 'Lead is on track — keep monitoring.' });
+  return { lead_id: leadId, suggestions };
+}
+
+/* 8.5 — Manager weekly digest (admin view). */
+async function api_aiManager_managerDigest(token) {
+  await _ensureSchema();
+  await authUser(token);
+  /* Pull team averages */
+  const sc = await db.query(
+    `SELECT u.id, u.name,
+       AVG(s.score) AS avg_score, SUM(s.total_calls) AS total_calls,
+       SUM(s.fu_completed) AS fu_done, SUM(s.fu_missed) AS fu_miss,
+       SUM(s.violation_count) AS violations
+     FROM users u
+     LEFT JOIN user_scorecard_daily s ON s.user_id = u.id
+       AND s.score_date >= CURRENT_DATE - INTERVAL '7 days'
+     WHERE COALESCE(u.is_active, 1) = 1 AND u.role IN ('sales', 'team_leader')
+     GROUP BY u.id, u.name ORDER BY avg_score DESC NULLS LAST`
+  );
+  const overall = {
+    team_size: sc.rows.length,
+    total_calls: sc.rows.reduce((s, r) => s + Number(r.total_calls || 0), 0),
+    fu_done: sc.rows.reduce((s, r) => s + Number(r.fu_done || 0), 0),
+    fu_miss: sc.rows.reduce((s, r) => s + Number(r.fu_miss || 0), 0),
+    violations: sc.rows.reduce((s, r) => s + Number(r.violations || 0), 0),
+    avg_score: sc.rows.length ? Math.round(sc.rows.reduce((s, r) => s + Number(r.avg_score || 0), 0) / sc.rows.length) : 0
+  };
+  const top = sc.rows.slice(0, 3).map(r => ({ name: r.name, score: Math.round(Number(r.avg_score || 0)) }));
+  const bottom = sc.rows.slice(-3).reverse().map(r => ({ name: r.name, score: Math.round(Number(r.avg_score || 0)) }));
+  return { period: 'last_7_days', overall, top_performers: top, needs_attention: bottom, users: sc.rows };
+}
+
 module.exports = {
   _ensureSchema,
   runDetectionCycle,
@@ -962,6 +1193,12 @@ module.exports = {
   api_aiManager_dailyReport,
   api_aiManager_leadRisk,
   api_aiManager_scorecard,
+  api_aiManager_coaching,
+  api_aiManager_conversionProb,
+  api_aiManager_revenueLeak,
+  api_aiManager_nextBestAction,
+  api_aiManager_managerDigest,
   checkRemarkQuality,
   recomputeScorecard,
+  generateCoachingDigest,
 };

@@ -3564,6 +3564,26 @@ setInterval(() => {
   _runAiManagerForAllTenants().catch(e => console.error('[ai_mgr] cycle failed:', e.message));
 }, 120_000);
 setTimeout(() => _runAiManagerForAllTenants().catch(() => {}), 90_000);
+
+async function _runAiManagerCoachingForAllTenants() {
+  try {
+    const aiMgr = require('./routes/aiManager');
+    if (!aiMgr || !aiMgr.generateCoachingDigest) return;
+    const cr = await ctlPool.query("SELECT id, slug FROM tenants WHERE COALESCE(is_active, true)=true");
+    for (const t of cr.rows) {
+      try {
+        await tenantStorage.run({ slug: t.slug, tenantId: t.id }, async () => {
+          const users = await db.query("SELECT id FROM users WHERE COALESCE(is_active, 1)=1 AND role IN ('sales','team_leader','manager')");
+          for (const u of users.rows) {
+            await aiMgr.generateCoachingDigest(u.id).catch(() => {});
+          }
+        });
+      } catch (e) { console.error('[AI_MGR_COACH]', t.slug, e.message); }
+    }
+  } catch (e) { console.error('[AI_MGR_COACH_BOOT]', e.message); }
+}
+/* Weekly coaching: every 24h. Per-user per-week row idempotent. */
+setInterval(() => _runAiManagerCoachingForAllTenants().catch(() => {}), 86400_000);
 console.log('[ai_mgr] AI Manager detection cycle started (every 2 min)');
 
 // ── WL_BILLING_CRON_v1 — daily auto-bill at 9am IST ──

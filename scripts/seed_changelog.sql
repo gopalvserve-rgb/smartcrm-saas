@@ -492,3 +492,12 @@ VALUES (
   'AI Manager now catches the trickier slip-ups: weak/blank remarks ("ok", "done", "call later"), fake activity (status changed without a real call), ignored WhatsApp replies (>30 min), and ageing high-value leads. Two new tabs in the AI Manager sidebar — Lead Risk (which interested/hot leads are slipping) and 🏆 Scorecard (daily 0-100 score per user combining calls, follow-ups, connect rate, and violations). 5-level escalation tracker now bumps repeat offenders automatically.',
   'ai', NOW(), TRUE
 ) ON CONFLICT (slug) DO NOTHING;
+
+-- AI_MGR_v1 Phase 3 (2026-06-18) — AI Coaching
+INSERT INTO changelog (slug, title, body, area, published_at, is_published)
+VALUES (
+  'ai-manager-phase3-coaching-2026-06-18',
+  'AI Manager — Phase 3 AI Coaching',
+  'AI Manager is complete. Every sales rep now gets a personalised weekly Coaching digest (Gemini-written summary + 3 actionable tips, refreshed every 24h). Admin sees a Manager Digest with team KPIs, top performers and who needs attention. Conversion Probability scoring uses your AI Rate + activity + status to predict close %. Revenue Leakage Report surfaces ageing high-value leads. Next Best Action gives per-lead suggestions.',
+  'ai', NOW(), TRUE
+) ON CONFLICT (slug) DO NOTHING;
