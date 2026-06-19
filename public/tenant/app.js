@@ -912,6 +912,11 @@ async function apiRaw(fn, ...args) {
       // live before they go hunting. See maybeShowFirstRunTour() near
       // the bottom of this file.
       setTimeout(() => maybeShowFirstRunTour().catch(() => {}), 1800);
+      // AI_ASSIST_TUTORIAL_POPUP_v1 — once-per-day intro to AI Assist on the
+      // Edit Lead modal. Only fires when COPILOT_PROACTIVE_ENABLED is set
+      // (true for every tenant post AI_ASSIST_ROLLOUT_v1). Skipped if the
+      // user has dismissed it today or snoozed for a week.
+      setTimeout(() => maybeShowAiAssistDailyTutorial().catch(() => {}), 4500);
       // If user is already checked in today (came back to app later in
       // the day), resume the 30-min location-ping loop so the trail
       // continues from where the previous session left off.
@@ -35465,6 +35470,155 @@ window.restartProductTour = function () {
   try { localStorage.removeItem('crm_tour_seen_v1'); } catch (_) {}
   return maybeShowFirstRunTour(true);
 };
+
+/* ========================================================================== */
+/* AI_ASSIST_TUTORIAL_POPUP_v1 (2026-06-20)                                     */
+/* ========================================================================== */
+/* Once-per-user-per-day intro popup that explains the AI Assist panel at the   */
+/* top of the Edit Lead modal — Last Activity / AI Summary / Next Best Action / */
+/* Refresh. Fires after first login of the day; respects a 7-day snooze button. */
+/*                                                                              */
+/* Skipped if:                                                                  */
+/*   - tenant doesn't have COPILOT_PROACTIVE_ENABLED (it's the gate that hides  */
+/*     the panel itself, so showing a tutorial for a hidden feature is silly)   */
+/*   - user has already seen it today (per-user key)                            */
+/*   - user clicked "Don't show for a week" within the past 7 days              */
+/*   - another modal is already open (don't crowd UX)                           */
+/*                                                                              */
+/* Force-show during dev:                                                       */
+/*   localStorage.removeItem('crm_ai_assist_tut_' + CRM.user.id);               */
+/*   localStorage.removeItem('crm_ai_assist_tut_snooze');                       */
+/*   maybeShowAiAssistDailyTutorial(true);                                      */
+async function maybeShowAiAssistDailyTutorial(forceShow) {
+  try {
+    if (!window.CRM || !CRM.user || !CRM.user.id) return;
+    // Gate: only on tenants where the AI Assist panel is actually enabled.
+    const brand = (window.CRM && CRM.brand) || {};
+    if (!forceShow && String(brand.COPILOT_PROACTIVE_ENABLED || '') !== '1') return;
+    // Don't pile on top of another modal.
+    if (!forceShow && document.querySelector('.modal-backdrop, .modal-bd, .crm-tour-overlay')) return;
+
+    const uid = String(CRM.user.id);
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const seenKey   = 'crm_ai_assist_tut_' + uid;
+    const snoozeKey = 'crm_ai_assist_tut_snooze_' + uid;
+    if (!forceShow) {
+      // Already shown today?
+      if (localStorage.getItem(seenKey) === today) return;
+      // Snoozed for a week?
+      const snoozeUntil = Number(localStorage.getItem(snoozeKey) || 0);
+      if (snoozeUntil && Date.now() < snoozeUntil) return;
+    }
+
+    // Mark as seen for today regardless of how user dismisses — we only
+    // want one prompt per calendar day.
+    try { localStorage.setItem(seenKey, today); } catch (_) {}
+
+    const modal = document.createElement('div');
+    modal.className = 'modal-backdrop';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;z-index:9999;padding:1rem;';
+    modal.addEventListener('click', ev => { if (ev.target === modal) modal.remove(); });
+
+    const card = document.createElement('div');
+    card.style.cssText = 'background:#fff;max-width:520px;width:100%;border-radius:16px;box-shadow:0 25px 60px rgba(15,23,42,.35);overflow:hidden;animation:aiAssistPopIn .25s ease-out;';
+
+    // ── Header — same gradient as the live AI Assist panel ────────────────
+    const header = document.createElement('div');
+    header.style.cssText = 'background:linear-gradient(135deg,#ede9fe 0%,#f5f3ff 50%,#fef3c7 100%);padding:1.4rem 1.4rem 1.1rem;position:relative;';
+    header.innerHTML =
+      '<div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.35rem;">' +
+        '<div style="width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,#8b5cf6,#6366f1);display:flex;align-items:center;justify-content:center;font-size:1.5rem;">✨</div>' +
+        '<div>' +
+          '<div style="font-size:1.15rem;font-weight:700;color:#3730a3;">Meet AI Assist</div>' +
+          '<div style="font-size:.78rem;color:#6d28d9;">Powered by AI Coach • New feature</div>' +
+        '</div>' +
+      '</div>' +
+      '<button type="button" class="ai-assist-tut-close" aria-label="Close" ' +
+        'style="position:absolute;top:.85rem;right:.85rem;background:rgba(255,255,255,.7);border:none;width:30px;height:30px;border-radius:8px;font-size:1.1rem;cursor:pointer;color:#475569;">✕</button>';
+    card.appendChild(header);
+
+    // ── Body — describe the 3 sections of the live panel ──────────────────
+    const body = document.createElement('div');
+    body.style.cssText = 'padding:1.1rem 1.4rem 1.4rem;color:#1e293b;';
+    body.innerHTML =
+      '<p style="margin:0 0 1rem;font-size:.92rem;line-height:1.5;color:#475569;">' +
+        'When you open a lead, you’ll now see a smart summary at the top of the form — no need to scroll through history to figure out what’s going on.' +
+      '</p>' +
+      '<div style="display:flex;flex-direction:column;gap:.7rem;">' +
+        // Last Activity
+        '<div style="display:flex;gap:.7rem;align-items:flex-start;padding:.7rem .8rem;background:#f0fdfa;border-left:3px solid #14b8a6;border-radius:8px;">' +
+          '<div style="font-size:1.2rem;">📑</div>' +
+          '<div>' +
+            '<div style="font-weight:600;font-size:.88rem;color:#0f766e;">LAST ACTIVITY</div>' +
+            '<div style="font-size:.82rem;color:#475569;margin-top:.15rem;">What happened most recently — score changes, latest customer message, missed follow-up.</div>' +
+          '</div>' +
+        '</div>' +
+        // AI Summary
+        '<div style="display:flex;gap:.7rem;align-items:flex-start;padding:.7rem .8rem;background:#f5f3ff;border-left:3px solid #8b5cf6;border-radius:8px;">' +
+          '<div style="font-size:1.2rem;">🧠</div>' +
+          '<div>' +
+            '<div style="font-weight:600;font-size:.88rem;color:#5b21b6;">AI SUMMARY</div>' +
+            '<div style="font-size:.82rem;color:#475569;margin-top:.15rem;">A one-line read on where the lead stands — score, status, last message in plain English.</div>' +
+          '</div>' +
+        '</div>' +
+        // Next Best Action
+        '<div style="display:flex;gap:.7rem;align-items:flex-start;padding:.7rem .8rem;background:#fff1f2;border-left:3px solid #f43f5e;border-radius:8px;">' +
+          '<div style="font-size:1.2rem;">🎯</div>' +
+          '<div>' +
+            '<div style="font-weight:600;font-size:.88rem;color:#be123c;">NEXT BEST ACTION</div>' +
+            '<div style="font-size:.82rem;color:#475569;margin-top:.15rem;">What to do next — call now, send proposal, follow up tomorrow. No more guesswork.</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      '<p style="margin:1rem 0 0;font-size:.78rem;color:#64748b;">' +
+        '💡 Tip: hit <b>↻ Refresh</b> on the panel to regenerate after you update the lead.' +
+      '</p>';
+    card.appendChild(body);
+
+    // ── Footer — Got it + Snooze 7 days ───────────────────────────────────
+    const footer = document.createElement('div');
+    footer.style.cssText = 'padding:0 1.4rem 1.2rem;display:flex;justify-content:space-between;align-items:center;gap:.5rem;';
+    footer.innerHTML =
+      '<button type="button" class="ai-assist-tut-snooze" ' +
+        'style="background:none;border:none;color:#64748b;font-size:.8rem;cursor:pointer;text-decoration:underline;">Don’t show for 7 days</button>' +
+      '<button type="button" class="ai-assist-tut-ok" ' +
+        'style="background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;border:none;padding:.55rem 1.4rem;border-radius:8px;font-weight:600;font-size:.92rem;cursor:pointer;box-shadow:0 4px 12px rgba(99,102,241,.3);">Got it 👍</button>';
+    card.appendChild(footer);
+
+    // Inject the keyframes once
+    if (!document.getElementById('ai-assist-tut-css')) {
+      const s = document.createElement('style');
+      s.id = 'ai-assist-tut-css';
+      s.textContent = '@keyframes aiAssistPopIn{from{opacity:0;transform:scale(.92) translateY(8px);}to{opacity:1;transform:scale(1) translateY(0);}}';
+      document.head.appendChild(s);
+    }
+
+    modal.appendChild(card);
+    document.body.appendChild(modal);
+
+    // Wire up the three close paths
+    card.querySelector('.ai-assist-tut-close').addEventListener('click', () => modal.remove());
+    card.querySelector('.ai-assist-tut-ok').addEventListener('click', () => modal.remove());
+    card.querySelector('.ai-assist-tut-snooze').addEventListener('click', () => {
+      try {
+        const sevenDays = 7 * 24 * 60 * 60 * 1000;
+        localStorage.setItem(snoozeKey, String(Date.now() + sevenDays));
+      } catch (_) {}
+      modal.remove();
+    });
+  } catch (e) {
+    console.warn('[AI_ASSIST_TUT] failed:', e && e.message);
+  }
+}
+window.restartAiAssistTutorial = function () {
+  try {
+    const uid = String((CRM.user && CRM.user.id) || '');
+    localStorage.removeItem('crm_ai_assist_tut_' + uid);
+    localStorage.removeItem('crm_ai_assist_tut_snooze_' + uid);
+  } catch (_) {}
+  return maybeShowAiAssistDailyTutorial(true);
+};
+/* ========================================================================== */
 
 async function _initWhatsappTopbar() {
   const btn = document.getElementById('btn-whatsapp');

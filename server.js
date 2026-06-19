@@ -49,6 +49,7 @@ const dbVolume = require('./routes/saas/dbVolume');
 const callEventsRepair = require('./routes/saas/callEventsRepair');
 const leadScoringRollout = require('./routes/saas/leadScoringRollout');
 const quickNoteRollout = require('./routes/saas/quickNoteRollout');
+const copilotProactiveRollout = require('./routes/saas/copilotProactiveRollout'); /* AI_ASSIST_ROLLOUT_v1 */
 const whiteLabelBilling = require('./routes/saas/whiteLabelBilling');
 const tenantModules = require('./routes/saas/tenantModules');
 const demoTenant = require('./routes/saas/demoTenant');
@@ -106,6 +107,7 @@ const SAAS_API = {};
   callEventsRepair, /* CALL_PHONE_REVERSE_BACKFILL_v1 */
   leadScoringRollout, /* LS_ROLLOUT_ALL_v1 */
   quickNoteRollout, /* QNOTE_ROLLOUT_ALL_v1 */
+  copilotProactiveRollout, /* AI_ASSIST_ROLLOUT_v1 */
   whiteLabelBilling /* WL_BILLING_v1 */
 ].forEach(mod => {
   Object.keys(mod).forEach(k => {
@@ -4476,6 +4478,15 @@ setTimeout(() => _runCallLast48hCleanup().catch(() => {}), 300_000);
       const { autoEnableOnVserve: aiMgrAutoEnable } = require('./utils/aiManagerVserveAutoEnable');
       setTimeout(() => { aiMgrAutoEnable().catch(e => console.error('[AI_MGR_AUTOENABLE]', e.message)); }, 6000);
     } catch (e) { console.warn('[AI_MGR_AUTOENABLE] require failed:', e.message); }
+    // AI_ASSIST_ROLLOUT_v1 — bulk-enable Proactive AI Assist (lead summary
+    // panel at top of Edit Lead modal) on EVERY existing tenant. Mirrors
+    // LS_ROLLOUT_ALL_v1 / QNOTE_ROLLOUT_ALL_v1. Idempotent — only writes
+    // the flag for tenants that don't already have it. New tenants get it
+    // via tenantBootstrap CONFIG_DEFAULTS.
+    try {
+      const { autoRolloutAtBoot: cpProactiveRollout } = require('./routes/saas/copilotProactiveRollout');
+      setTimeout(() => { cpProactiveRollout().catch(e => console.error('[AI_ASSIST_ROLLOUT]', e.message)); }, 8000);
+    } catch (e) { console.warn('[AI_ASSIST_ROLLOUT] require failed:', e.message); }
   });
 }
 boot().catch(e => { console.error('[boot] failed:', e); process.exit(1); });

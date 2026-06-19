@@ -559,6 +559,10 @@ const CONFIG_DEFAULTS = [
   // QNOTE_ROLLOUT_ALL_v1 — ✨ Quick Note row button ON for every tenant.
   // Gates the row-level AI note widget (slash menu: /note, /status, /followup).
   { key: 'AI_QUICKNOTE_ENABLED', value: '1' },
+  // AI_ASSIST_ROLLOUT_v1 (2026-06-20) — Proactive AI Assist (lead summary
+  // panel at top of Edit Lead: Last Activity / AI Summary / Next Best Action)
+  // ON for every tenant. Backend is the COPILOT_v4 / Proactive Coach engine.
+  { key: 'COPILOT_PROACTIVE_ENABLED', value: '1' },
 ];
 
 async function _ensureMigrationsTable(pool) {

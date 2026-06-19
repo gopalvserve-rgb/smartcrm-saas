@@ -528,3 +528,12 @@ SELECT 'modify',
        '💬',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'WhatsApp Chats — Recent / History tabs + 10x more threads');
+
+-- 2026-06-20 AI_ASSIST_ROLLOUT_v1 + AI_ASSIST_TUTORIAL_POPUP_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'AI Assist — now on every tenant',
+       'The smart Lead summary panel (Last Activity, AI Summary, Next Best Action) that was previously vserve-only is now active on every CRM. Open any lead to see it at the top of the Edit Lead modal. A friendly intro popup appears once-per-day on your first morning login until you click "Got it" — or snooze it for 7 days.',
+       '✨',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'AI Assist — now on every tenant');
