@@ -519,3 +519,12 @@ SELECT 'modify',
        '🎨',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Edit Lead form — new top-of-modal layout');
+
+-- 2026-06-20 WA_THREADS_SCAN_v1 + WA_THREADS_TABS_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'modify',
+       'WhatsApp Chats — Recent / History tabs + 10x more threads',
+       'The WhatsApp Chats list now opens with two tabs — Recent (last 30 days) and History (older) — so you can find that old conversation without scrolling forever. Under the hood we also raised the thread-scan window from 1,000 to 10,000 messages, which means tenants with high inbound volume will see every thread they used to lose. Active tab is remembered across reloads.',
+       '💬',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'WhatsApp Chats — Recent / History tabs + 10x more threads');

@@ -1687,30 +1687,75 @@ async function api_wb_chat_threads(token, opts) {
   const isMobile = !!(opts && opts.mobile);
   const mobileMsgScan = 300;
   const mobileThreadLimit = Math.min(Number(opts && opts.limit) || 20, 50);
-  const scanLimit = isMobile ? mobileMsgScan : 1000;
+  // WA_THREADS_SCAN_v1 (2026-06-20):
+  //   - bumped default scan window 1000 → 10000 so tenants with active
+  //     inbound traffic don't lose visibility on older threads.
+  //   - new opts.show_all path uses DISTINCT ON (counter_party) over the
+  //     entire whatsapp_messages table — one row per phone, no cap.
+  //     Slower for huge tables but guarantees no thread is hidden.
+  //   - mobile still hard-limited (mobileMsgScan) for battery / wire size.
+  const showAll = !!(opts && opts.show_all) && !isMobile;
+  const scanLimit = isMobile ? mobileMsgScan : 10000;
 
-  // Pull last N messages, group by counterpart. We always select
-  // phone_number_id (added by 2026_05_08_wa_messages_phone_id.sql); on
-  // un-migrated tenants the column won't exist yet, so degrade gracefully.
+  // Pull last N messages (or one row per counter-party when show_all=1),
+  // group by counterpart. We always select phone_number_id (added by
+  // 2026_05_08_wa_messages_phone_id.sql); on un-migrated tenants the
+  // column won't exist yet, so degrade gracefully.
   let rows;
   try {
-    const r = await db.query(
-      `SELECT id, lead_id, direction, from_number, to_number, body, message_type,
-              status, read_at, created_at, phone_number_id
-         FROM whatsapp_messages
-         ORDER BY created_at DESC
-         LIMIT ${scanLimit}`
-    );
-    rows = r.rows;
+    if (showAll) {
+      // One row per counter-party — most recent message wins. No cap.
+      const r = await db.query(
+        `SELECT DISTINCT ON (counter)
+                id, lead_id, direction, from_number, to_number, body, message_type,
+                status, read_at, created_at, phone_number_id, counter
+           FROM (
+             SELECT id, lead_id, direction, from_number, to_number, body, message_type,
+                    status, read_at, created_at, phone_number_id,
+                    CASE WHEN direction = 'in' THEN from_number ELSE to_number END AS counter
+               FROM whatsapp_messages
+              WHERE COALESCE(CASE WHEN direction = 'in' THEN from_number ELSE to_number END, '') <> ''
+           ) x
+           ORDER BY counter, created_at DESC`
+      );
+      rows = r.rows.map(({ counter, ...rest }) => rest);
+    } else {
+      const r = await db.query(
+        `SELECT id, lead_id, direction, from_number, to_number, body, message_type,
+                status, read_at, created_at, phone_number_id
+           FROM whatsapp_messages
+           ORDER BY created_at DESC
+           LIMIT ${scanLimit}`
+      );
+      rows = r.rows;
+    }
   } catch (e) {
-    const r = await db.query(
-      `SELECT id, lead_id, direction, from_number, to_number, body, message_type,
-              status, read_at, created_at
-         FROM whatsapp_messages
-         ORDER BY created_at DESC
-         LIMIT ${scanLimit}`
-    );
-    rows = r.rows.map(x => ({ ...x, phone_number_id: null }));
+    // Legacy tenants without phone_number_id column — fall back without it.
+    if (showAll) {
+      const r = await db.query(
+        `SELECT DISTINCT ON (counter)
+                id, lead_id, direction, from_number, to_number, body, message_type,
+                status, read_at, created_at, counter
+           FROM (
+             SELECT id, lead_id, direction, from_number, to_number, body, message_type,
+                    status, read_at, created_at,
+                    CASE WHEN direction = 'in' THEN from_number ELSE to_number END AS counter
+               FROM whatsapp_messages
+              WHERE COALESCE(CASE WHEN direction = 'in' THEN from_number ELSE to_number END, '') <> ''
+           ) x
+           ORDER BY counter, created_at DESC`
+      );
+      rows = r.rows.map(({ counter, ...rest }) => ({ ...rest, phone_number_id: null }));
+    } else {
+      const r = await db.query(
+        `SELECT id, lead_id, direction, from_number, to_number, body, message_type,
+                status, read_at, created_at
+           FROM whatsapp_messages
+           ORDER BY created_at DESC
+           LIMIT ${scanLimit}`
+      );
+      rows = r.rows.map(x => ({ ...x, phone_number_id: null }));
+    }
   }
   // Default fallback for rows where phone_number_id is NULL (legacy
   // pre-migration data) — assume the tenant default. Means historical
