@@ -510,3 +510,12 @@ VALUES (
   'Every feature from the original spec is now live. 13 detectors running every 2 min (idle, SLA, fake activity, WA ignored, interested-no-quotation, FU pre-due, FU-done-no-call, repeated short calls, copied remarks, hot-to-cold, lost-no-reason, quoted-no-FU, min daily calls). 5-level escalation now actually routes to team leader (Level 3) and admin (Level 4) via push + in-app. Real-time alerts feed. Natural-language admin Q&A ("who is idle?", "overdue follow-ups", "pending hot leads"). Daily Plan auto-pushed at 9am IST. EOD prompt at 7pm + team summary. Remark Quality hooks into QNote + add-remark. Rule parser handles 12+ patterns.',
   'ai', NOW(), TRUE
 ) ON CONFLICT (slug) DO NOTHING;
+
+-- 2026-06-20 LEAD_MODAL_REDESIGN_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'modify',
+       'Edit Lead form — new top-of-modal layout',
+       'Opening a lead now puts Name, Phone, Status, Next follow-up and a Remark box right at the top — each with a coloured dot so the essentials jump out. Type what happened on the call into the Remark box and it lands in the Notes column and remark timeline automatically. Every other field still sits below, unchanged.',
+       '🎨',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Edit Lead form — new top-of-modal layout');
