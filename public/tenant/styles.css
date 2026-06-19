@@ -878,6 +878,86 @@ tbody tr.row-tat-violation:hover { background: #fee2e2; }
 .f-row.full { grid-column: 1 / -1; }
 .f-row label { margin: 0 0 .2rem; }
 
+/* LEAD_MODAL_REDESIGN_v1 — top-of-modal priority fields (Name, Phone, Status,
+   Next follow-up, Remark). Soft tinted card + coloured-dot prefix on the label
+   + accent left border so the rep's eye lands on them first. */
+.f-row--priority {
+  background: linear-gradient(180deg, #faf7ff 0%, #fdfcff 100%);
+  border: 1px solid #e9e2ff;
+  border-left: 3px solid #8b5cf6;
+  border-radius: 8px;
+  padding: .55rem .7rem .6rem;
+}
+.f-row--priority label {
+  font-weight: 600;
+  font-size: .82rem;
+  color: #4c1d95;
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  letter-spacing: .01em;
+}
+.f-row--priority .fr-dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: #8b5cf6;
+  box-shadow: 0 0 0 2px rgba(139, 92, 246, .18);
+}
+.f-row--priority input,
+.f-row--priority select,
+.f-row--priority textarea {
+  background: #ffffff;
+  border: 1px solid #d8cfff;
+  border-radius: 6px;
+  padding: .42rem .55rem;
+  font-size: .92rem;
+}
+.f-row--priority input:focus,
+.f-row--priority select:focus,
+.f-row--priority textarea:focus {
+  outline: none;
+  border-color: #8b5cf6;
+  box-shadow: 0 0 0 3px rgba(139, 92, 246, .18);
+}
+/* Teal variant — Next follow-up */
+.f-row--p-teal {
+  background: linear-gradient(180deg, #f0fdfa 0%, #fafefd 100%);
+  border-color: #cbf2ec;
+  border-left-color: #14b8a6;
+}
+.f-row--p-teal label { color: #134e4a; }
+.f-row--p-teal .fr-dot {
+  background: #14b8a6;
+  box-shadow: 0 0 0 2px rgba(20, 184, 166, .18);
+}
+.f-row--p-teal input, .f-row--p-teal select { border-color: #b9eae3; }
+.f-row--p-teal input:focus, .f-row--p-teal select:focus {
+  border-color: #14b8a6;
+  box-shadow: 0 0 0 3px rgba(20, 184, 166, .18);
+}
+/* Orange variant — Remark (full-width) */
+.f-row--p-orange {
+  background: linear-gradient(180deg, #fff7ed 0%, #fffaf3 100%);
+  border-color: #fde2c4;
+  border-left-color: #f59e0b;
+}
+.f-row--p-orange label { color: #92400e; }
+.f-row--p-orange .fr-dot {
+  background: #f59e0b;
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, .18);
+}
+.f-row--p-orange textarea {
+  min-height: 64px;
+  border-color: #fcd9a8;
+  resize: vertical;
+}
+.f-row--p-orange textarea::placeholder { color: #b78d4a; font-style: italic; }
+.f-row--p-orange textarea:focus {
+  border-color: #f59e0b;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, .18);
+}
+
 /* Remarks */
 .remarks-block { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--border-light); }
 .remarks-block h4 { margin: 0 0 .5rem; }

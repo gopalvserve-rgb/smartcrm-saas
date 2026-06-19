@@ -8522,18 +8522,26 @@ async function openLeadModal(id) {
 
   const form = h('form', { id: 'lead-form', class: 'form-grid' });
   form.append(
-    field('name', 'Name *', lead.name, { required: true }),
-    field('phone', 'Phone *', lead.phone, { required: true }),
+    // LEAD_MODAL_REDESIGN_v1 — top-of-modal essentials with coloured-dot priority styling.
+    // Row 1: Name + Phone (purple). Row 2: Status + Next follow-up (purple + teal).
+    // Row 3: Remark — full-width (orange) — fires api_leads_addRemark on save.
+    field('name', 'Name *', lead.name, { required: true, priority: 'purple' }),
+    field('phone', 'Phone *', lead.phone, { required: true, priority: 'purple' }),
+    selectField('status_id', 'Status', lead.status_id, statuses.map(s => ({ value: s.id, label: s.name })), { id: 'lead-status', priority: 'purple' }),
+    field('next_followup_at', 'Next follow-up', isoToLocalDtInput(lead.next_followup_at), { type: 'datetime-local', id: 'lead-fu', priority: 'teal' }),
+    field('inline_remark', 'Remark — what happened?', '', {
+      type: 'textarea', full: true, priority: 'orange',
+      placeholder: 'Optional — what happened on this call / contact? (saved with the lead update)'
+    }),
+    // Rest of the fields (below the priority block)
     field('whatsapp', 'WhatsApp', lead.whatsapp || lead.phone),
     field('email', 'Email', lead.email, { type: 'email' }),
     selectField('source', 'Source', lead.source, sources.map(s => s.name)),
     selectField('product_id', 'Product', lead.product_id, [{ value: '', label: '—' }, ...products.map(p => ({ value: p.id, label: p.name }))]),
-    selectField('status_id', 'Status', lead.status_id, statuses.map(s => ({ value: s.id, label: s.name })), { id: 'lead-status' }),
     selectField('assigned_to', 'Assigned To', lead.assigned_to, users.map(u => ({ value: u.id, label: u.name }))),
     selectField('campaign_id', '🎯 Campaign', lead.campaign_id || '',
       [{ value: '', label: '— None —' }].concat(campaigns.map(c => ({ value: c.id, label: c.name })))),
     tagsInput(lead.tags, tagLibrary, isAdmin),
-    field('next_followup_at', 'Next follow-up', isoToLocalDtInput(lead.next_followup_at), { type: 'datetime-local', id: 'lead-fu' }),
     field('city', 'City', lead.city),
     qualifiedToggle(lead),
     // Inventory matching inputs — used by api_inventory_match. Reps fill
@@ -9021,8 +9029,22 @@ async function openLeadModal(id) {
       extra
     };
     try {
+      let _savedId = id;
       if (id) await api('api_leads_update', id, payload);
-      else    await api('api_leads_create', payload);
+      else {
+        const _r = await api('api_leads_create', payload);
+        _savedId = _r && (_r.id || (_r.lead && _r.lead.id)) || _savedId;
+      }
+      // LEAD_MODAL_REDESIGN_v1 — if the user typed something in the
+      // "Remark — what happened?" inline field, fire api_leads_addRemark
+      // so it lands in the Notes column AND the remark timeline. Silent
+      // on failure — the main save already succeeded.
+      try {
+        const _inlineRemark = (fd.get('inline_remark') || '').toString().trim();
+        if (_inlineRemark && _savedId) {
+          api('api_leads_addRemark', Number(_savedId), { remark: _inlineRemark }).catch(() => {});
+        }
+      } catch (_) {}
       toast(id ? 'Saved' : 'Created');
       // Lead edit submit → kick a silent recording sweep. Reps usually
       // open the lead to log an update right after a call, so this is
@@ -9233,10 +9255,17 @@ function field(name, label, value, opts = {}) {
   const attrs = Object.assign({ name, value: value ?? '' },
     opts.type && opts.type !== 'textarea' ? { type: opts.type } : {},
     opts.required ? { required: true } : {},
+    opts.placeholder ? { placeholder: opts.placeholder } : {},
     opts.id ? { id: opts.id } : {});
   const el = h(tag, attrs);
   if (opts.type === 'textarea') el.textContent = value ?? '';
-  return h('div', { class: opts.full ? 'f-row full' : 'f-row' }, h('label', {}, label), el);
+  // LEAD_MODAL_REDESIGN_v1 — priority field gets coloured-dot label + accent border
+  let _cls = opts.full ? 'f-row full' : 'f-row';
+  if (opts.priority) _cls += ' f-row--priority f-row--p-' + opts.priority;
+  const _labelChildren = opts.priority
+    ? [h('span', { class: 'fr-dot' }), label]
+    : [label];
+  return h('div', { class: _cls }, h('label', {}, ..._labelChildren), el);
 }
 function selectField(name, label, value, options, opts = {}) {
   const selAttrs = { name };
@@ -9248,7 +9277,13 @@ function selectField(name, label, value, options, opts = {}) {
       return h('option', { value: v, selected: String(value) === String(v) ? 'selected' : null }, t);
     })
   );
-  return h('div', { class: opts.full ? 'f-row full' : 'f-row' }, h('label', {}, label), sel);
+  // LEAD_MODAL_REDESIGN_v1 — priority styling for the top-priority dropdowns
+  let _cls = opts.full ? 'f-row full' : 'f-row';
+  if (opts.priority) _cls += ' f-row--priority f-row--p-' + opts.priority;
+  const _labelChildren = opts.priority
+    ? [h('span', { class: 'fr-dot' }), label]
+    : [label];
+  return h('div', { class: _cls }, h('label', {}, ..._labelChildren), sel);
 }
 function selectOpts(id, items, value) {
   return h('select', { id },
