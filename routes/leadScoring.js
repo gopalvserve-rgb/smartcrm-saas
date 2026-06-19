@@ -907,8 +907,90 @@ async function api_leadScore_backfill(token, opts) {
   return { ok: true, processed: leads.length, scored: done, errors };
 }
 
+/* ════════════════════════════════════════════════════════════════════
+ *  AI_SCORE_AUTOFIRE_v1 (2026-06-20) — Hook + sweep layer
+ *  ────────────────────────────────────────────────────────────────────
+ *  Layer 1: fire-and-forget hook called inline from every lead-event
+ *  path (create/update/status/remark/call/wa).
+ *
+ *  Layer 2: 30-min per-tenant sweep that catches any drift the hooks
+ *  missed and applies time-decay re-scoring.
+ *
+ *  Both are no-op when LS_ENABLED config isn't '1' so existing rollout
+ *  flags still gate the work. Both use try/catch so a scoring failure
+ *  NEVER bubbles up and breaks the caller (lead save / WA inbound / etc).
+ * ════════════════════════════════════════════════════════════════════ */
+
+let _lastFireAt = new Map();       /* in-process per-(leadId,event) debounce */
+const _DEBOUNCE_MS = 30_000;       /* same lead+event within 30s → skip */
+const _SWEEP_BATCH = 200;          /* cap per tenant per cycle */
+
+/** fireScoreAsync(leadId, eventKey) — call from anywhere inline.
+ *  Schedules a setImmediate recompute, deduped within 30s, swallowed errors.
+ *  Returns immediately. NEVER throws. */
+function fireScoreAsync(leadId, eventKey) {
+  try {
+    if (!leadId) return;
+    const id = Number(leadId);
+    if (!id || id <= 0) return;
+    const key = id + ':' + (eventKey || 'unknown');
+    const now = Date.now();
+    const prev = _lastFireAt.get(key) || 0;
+    if (now - prev < _DEBOUNCE_MS) return;  /* recent same trigger → skip */
+    _lastFireAt.set(key, now);
+    /* Bound the dedup map at 5000 entries so it can't grow forever */
+    if (_lastFireAt.size > 5000) {
+      const it = _lastFireAt.keys();
+      for (let i = 0; i < 1000; i++) _lastFireAt.delete(it.next().value);
+    }
+    setImmediate(async () => {
+      try {
+        await _ensureSchema();
+        const settings = await _getSettings();
+        if (!settings.is_enabled) return;
+        await recomputeLeadScore(id, eventKey || 'auto_hook');
+      } catch (e) {
+        console.warn('[ai-score] fireScoreAsync failed for lead', id, ':', e.message);
+      }
+    });
+  } catch (_) { /* never throw to caller */ }
+}
+
+/** runSweep() — sweep this tenant's recently-modified leads.
+ *  Picks leads where the score row is missing OR older than leads.updated_at
+ *  OR older than 24h. Caps at _SWEEP_BATCH leads per tenant per cycle so
+ *  big tenants don't hammer the DB pool. */
+async function runSweep() {
+  try {
+    await _ensureSchema();
+    const settings = await _getSettings();
+    if (!settings.is_enabled) return { skipped: true };
+    /* Pick stale leads — has updates AFTER last score OR no score yet. */
+    const { rows } = await db.query(
+      `SELECT id FROM leads
+        WHERE (score_updated_at IS NULL
+            OR score_updated_at < COALESCE(updated_at, created_at)
+            OR score_updated_at < NOW() - INTERVAL '24 hours')
+          AND created_at > NOW() - INTERVAL '180 days'
+        ORDER BY COALESCE(updated_at, created_at) DESC
+        LIMIT $1`,
+      [_SWEEP_BATCH]
+    );
+    let scored = 0, errors = 0;
+    for (const r of rows) {
+      try { await recomputeLeadScore(r.id, 'sweep'); scored++; }
+      catch (_) { errors++; }
+    }
+    return { ok: true, scanned: rows.length, scored, errors };
+  } catch (e) {
+    console.warn('[ai-score] runSweep failed:', e.message);
+    return { error: e.message };
+  }
+}
+
 module.exports = {
   _ensureSchema, recomputeLeadScore,
+  fireScoreAsync, runSweep,  /* AI_SCORE_AUTOFIRE_v1 */
   api_leadScore_get, api_leadScore_recompute, api_leadScore_hotList,
   api_leadScore_rules_list, api_leadScore_rules_save, api_leadScore_rules_reset,
   api_leadScore_settings_get, api_leadScore_settings_save,

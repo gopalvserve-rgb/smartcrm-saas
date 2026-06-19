@@ -3073,6 +3073,8 @@ async function _handleInbound(m, value) {
        VALUES ($1, 'in', $2, $3, $4, $5, 'received', $6, $7, $8)`,
       [leadId, from, to, text, m.id || null, mtype, mediaId, inboundPhoneId]
     );
+    // AI_SCORE_AUTOFIRE_v1 — re-score on inbound WA (signals high intent)
+    if (leadId) { try { require('./leadScoring').fireScoreAsync(Number(leadId), 'wa_inbound'); } catch (_) {} }
     if (leadId) {
       try {
         require('./tat').logAction(leadId, 'whatsapp_in', null, {

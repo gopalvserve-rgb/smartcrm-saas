@@ -413,6 +413,9 @@ async function api_leads_quickNote(token, payload) {
     via: geminiSucceeded ? 'gemini' : (text ? 'fallback' : 'manual'),
     message
   };
+
+  // AI_SCORE_AUTOFIRE_v1 — re-score after quick note (status / remark via ✨)
+  try { require('./leadScoring').fireScoreAsync(Number((payload && payload.lead_id) || (payload && payload.leadId)), 'qnote_save'); } catch (_) {}
 }
 
 module.exports = { api_leads_quickNote, api_leads_quickNote_status };

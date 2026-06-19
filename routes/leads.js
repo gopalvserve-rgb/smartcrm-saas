@@ -1053,6 +1053,9 @@ async function api_leads_create(token, payload) {
     });
   } catch (_) { /* module not loaded */ }
 
+  // AI_SCORE_AUTOFIRE_v1 — re-score new lead
+  try { require('./leadScoring').fireScoreAsync(id, 'lead_created'); } catch (_) {}
+
   // Backfill: link any existing orphan recordings (lead_id is null) that
   // were uploaded BEFORE this lead was created. Match by last-10-digit
   // phone — same logic recordings.js uses on upload. Best-effort, never
@@ -1670,6 +1673,9 @@ async function api_leads_update(token, id, patch) {
     });
   }
   return { ok: true };
+
+  // AI_SCORE_AUTOFIRE_v1 — re-score after lead update (fires for status/field changes)
+  try { require('./leadScoring').fireScoreAsync(Number(id), 'lead_updated'); } catch (_) {}
 }
 
 /**
@@ -1815,6 +1821,9 @@ async function api_leads_addRemark(token, leadId, payload) {
     } catch (_) {}
   }
   return { ok: true };
+
+  // AI_SCORE_AUTOFIRE_v1 — re-score after a remark (remark text triggers content rules)
+  try { require('./leadScoring').fireScoreAsync(Number(leadId), 'remark_added'); } catch (_) {}
 }
 
 async function api_leads_pipeline(token) {

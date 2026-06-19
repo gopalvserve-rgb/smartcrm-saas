@@ -3474,6 +3474,45 @@ setInterval(() => {
 // Initial run after boot settles
 setTimeout(() => _runReminderForAllTenants().catch(() => {}), 15_000);
 console.log('[reminders] SaaS-aware follow-up scheduler started');
+
+// ── AI_SCORE_AUTOFIRE_v1 — per-tenant background sweep (30 min) ──────
+// Catches lead-score drift the inline hooks may have missed and applies
+// time-decay scoring. Runs runSweep() inside each tenant's pool context.
+async function _runLeadScoringForAllTenants() {
+  let rows = [];
+  try {
+    const r = await controlDb.query(
+      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500`
+    );
+    rows = r.rows;
+  } catch (e) { console.warn('[ai-score] tenant list failed:', e.message); return; }
+  const leadScoring = require('./routes/leadScoring');
+  let totalScored = 0, totalErrors = 0, tenantsRun = 0;
+  for (const row of rows) {
+    let t; try { t = await tenantPoolMod.findActiveTenant(row.slug); } catch (_) { continue; }
+    if (!t) continue;
+    const pool = tenantPoolMod.poolFor(t);
+    if (!pool) continue;
+    try {
+      const res = await tenantDb.tenantStorage.run({ pool, tenant: t, slug: row.slug },
+        () => leadScoring.runSweep()
+      );
+      if (res && res.scored) {
+        totalScored += res.scored;
+        totalErrors += (res.errors || 0);
+        tenantsRun++;
+      }
+    } catch (e) { console.warn('[ai-score] ' + row.slug + ' sweep failed:', e.message); }
+  }
+  if (totalScored > 0) {
+    console.log('[ai-score] sweep done — ' + totalScored + ' leads scored across ' + tenantsRun + ' tenants (' + totalErrors + ' errors)');
+  }
+}
+setInterval(() => {
+  _runLeadScoringForAllTenants().catch(e => console.error('[ai-score] cycle failed:', e.message));
+}, 30 * 60_000);
+setTimeout(() => _runLeadScoringForAllTenants().catch(() => {}), 120_000);
+console.log('[ai-score] AI_SCORE_AUTOFIRE_v1 — sweep every 30 min, first run in 2 min');
 // ── Background: per-tenant AI re-engagement worker ───────────────────────
 // Walks every active tenant and sends scheduled soft-follow-up pings the
 // AI bot has queued (when a customer goes silent after a bot reply).

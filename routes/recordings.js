@@ -410,6 +410,8 @@ async function _processCallEventAsync(me, p, phoneClean, directionInitial, callE
   // the call_event row we inserted at the start.
   if (lead && callEventId) {
     try { await db.update('call_events', callEventId, { lead_id: lead.id }); } catch (_) {}
+    // AI_SCORE_AUTOFIRE_v1 — re-score lead after a call is linked
+    try { require('./leadScoring').fireScoreAsync(Number(lead.id), 'call_linked'); } catch (_) {}
   }
 }
 
