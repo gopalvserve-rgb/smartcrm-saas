@@ -1687,7 +1687,9 @@ async function api_wb_chat_threads(token, opts) {
   const isMobile = !!(opts && opts.mobile);
   const mobileMsgScan = 300;
   const mobileThreadLimit = Math.min(Number(opts && opts.limit) || 20, 50);
-  const scanLimit = isMobile ? mobileMsgScan : 1000;
+  // WA_THREADS_v2 (2026-06-20): non-mobile scan window 1000 → 10000 so high-volume
+  // tenants don't lose visibility on older threads inside the most recent 1k rows.
+  const scanLimit = isMobile ? mobileMsgScan : 10000;
 
   // Pull last N messages, group by counterpart. We always select
   // phone_number_id (added by 2026_05_08_wa_messages_phone_id.sql); on

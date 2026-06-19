@@ -537,3 +537,12 @@ SELECT 'feature',
        '✨',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'AI Assist — now on every tenant');
+
+-- 2026-06-20 WA_THREADS_v2
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'WhatsApp Chats — Recent / Historic tabs + 10× more threads',
+       'The Chats list now splits into two tabs: Recent (last 30 days) and Historic (older). Switch between them to keep your active inbox uncluttered while still being able to dig up old conversations. Under the hood, the message scan window jumped from 1,000 to 10,000 — so tenants with heavy inbound volume can see every thread, not just yesterday''s.',
+       '💬',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'WhatsApp Chats — Recent / Historic tabs + 10× more threads');

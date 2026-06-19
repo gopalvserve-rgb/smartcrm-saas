@@ -18148,10 +18148,12 @@ async function wbChat() {
   // so polling can decide whether to redraw.
   let openPhone = null;
   let openFingerprint = '';
-  let lastThreadsFingerprint = '';
+  // WA_THREADS_v2 — init to null (not '') so the first-mount render doesn't
+  // get skipped when filtered is empty (which produces fp === '').
+  let lastThreadsFingerprint = null;
 
   function _threadFingerprint(threads) {
-    return threads.map(t => `${t.phone}|${t.last_at}|${t.unread}|${t.assigned_to || 0}|${t.phone_number_id || ''}|${agentFilterId || ''}|${statusFilter || ''}|${searchQuery || ''}|${inboxPhoneId || ''}`).join(';');
+    return threads.map(t => `${t.phone}|${t.last_at}|${t.unread}|${t.assigned_to || 0}|${t.phone_number_id || ''}|${agentFilterId || ''}|${statusFilter || ''}|${searchQuery || ''}|${inboxPhoneId || ''}|${activeTab || ''}`).join(';');
   }
   // Admin / manager filter — when non-null, threads are limited to chats
   // assigned to that user. Persisted on `wbChat`'s closure so the filter
@@ -18175,6 +18177,13 @@ async function wbChat() {
   // polling re-renders because it's bundled into _threadFingerprint
   // above (so a query change forces a redraw).
   let searchQuery = '';
+
+  // WA_THREADS_v2 — Recent (last 30d) / Historic tabs.
+  // Persisted in localStorage so the choice sticks across reloads.
+  let activeTab = 'recent';
+  try { activeTab = localStorage.getItem('crm.wb.activeTab') || 'recent'; } catch (_) {}
+  const _TAB_CUTOFF_DAYS = 30;
+
   function _msgFingerprint(msgs) {
     return msgs.map(m => `${m.id}|${m.status || ''}|${m.read_at || ''}|${m.delivered_at || ''}`).join(';');
   }
@@ -18222,8 +18231,20 @@ async function wbChat() {
       });
     }
 
+    // WA_THREADS_v2 — split into Recent (last 30 days) / Historic buckets
+    // BEFORE the final view filter so tab counts reflect the post-search pool.
+    // Threads with no last_at bucket under Recent (defensive — shouldn't happen).
+    const _cutoffMs = Date.now() - _TAB_CUTOFF_DAYS * 24 * 60 * 60 * 1000;
+    const _recentList   = filtered.filter(t => !t.last_at || new Date(t.last_at).getTime() >= _cutoffMs);
+    const _historicList = filtered.filter(t =>  t.last_at && new Date(t.last_at).getTime() <  _cutoffMs);
+    const _recentCount   = _recentList.length;
+    const _historicCount = _historicList.length;
+    filtered = (activeTab === 'historic') ? _historicList : _recentList;
+
     const fp = _threadFingerprint(filtered);
-    if (fp === lastThreadsFingerprint) return; // No change — preserve scroll
+    // WA_THREADS_v2 — only skip on UNCHANGED state. Never skip the very first
+    // render (lastThreadsFingerprint===null) — that was the blank-page bug.
+    if (lastThreadsFingerprint !== null && fp === lastThreadsFingerprint) return;
     lastThreadsFingerprint = fp;
 
     // Lazily fetch the user roster the FIRST time the list renders so we
@@ -18269,6 +18290,39 @@ async function wbChat() {
       };
       left.appendChild(inboxSel);
     }
+
+    // ---- WA_THREADS_v2 — Recent / Historic tab strip ----
+    // Recent = chats with activity in the last 30 days. Historic = older.
+    const _tabStrip = h('div', { class: 'wb-tab-strip',
+      style: { display: 'flex', gap: '.25rem', marginBottom: '.5rem', borderBottom: '1px solid var(--border, #e5e7eb)' } });
+    function _mkTab(key, label, count) {
+      const isActive = activeTab === key;
+      return h('button', {
+        type: 'button',
+        class: 'wb-tab' + (isActive ? ' active' : ''),
+        style: {
+          flex: 1,
+          padding: '.45rem .35rem',
+          background: isActive ? '#eef2ff' : 'transparent',
+          color: isActive ? '#3730a3' : '#475569',
+          border: 'none',
+          borderBottom: isActive ? '2px solid #4f46e5' : '2px solid transparent',
+          fontWeight: isActive ? '600' : '500',
+          fontSize: '.82rem',
+          cursor: 'pointer'
+        },
+        onclick: () => {
+          if (activeTab === key) return;
+          activeTab = key;
+          try { localStorage.setItem('crm.wb.activeTab', activeTab); } catch (_) {}
+          lastThreadsFingerprint = null;
+          renderThreadList();
+        }
+      }, label + '  ', h('span', { style: { color: isActive ? '#4f46e5' : '#94a3b8', fontWeight: '600' } }, '(' + count + ')'));
+    }
+    _tabStrip.appendChild(_mkTab('recent',   '🕒 Recent',   _recentCount));
+    _tabStrip.appendChild(_mkTab('historic', '📜 Historic', _historicCount));
+    left.appendChild(_tabStrip);
 
     // ---- Search box (above the agent filter) ----
     // Debounced 200ms so each keystroke doesn't burn a re-render. The
@@ -18340,8 +18394,12 @@ async function wbChat() {
     left.appendChild(statusSel);
 
     if (!filtered.length) {
-      left.appendChild(h('p', { class: 'muted' },
-        agentFilterId ? 'No chats assigned to this agent.' : 'No conversations yet. Inbound WhatsApp messages will appear here automatically.'));
+      const _empty = agentFilterId
+        ? 'No chats assigned to this agent.'
+        : activeTab === 'historic'
+          ? 'No chats older than ' + _TAB_CUTOFF_DAYS + ' days. Switch to Recent to see active conversations.'
+          : 'No conversations yet. Inbound WhatsApp messages will appear here automatically.';
+      left.appendChild(h('p', { class: 'muted' }, _empty));
       return;
     }
     filtered.forEach(t => {
