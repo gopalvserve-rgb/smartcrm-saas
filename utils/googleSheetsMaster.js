@@ -127,16 +127,41 @@ function parseSheetId(urlOrId) {
   return '';
 }
 
+async function _firstTabTitle(spreadsheetId, token) {
+  /* Resolve the FIRST visible tab title of the spreadsheet — we use this
+   * when the configured tab does not exist, so we never silently spawn a
+   * new tab (GCONV_SHEET_TAB_FIX_v1, 2026-06-19). */
+  try {
+    const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets.properties.title`, {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    const j = await r.json();
+    const t = j && j.sheets && j.sheets[0] && j.sheets[0].properties && j.sheets[0].properties.title;
+    return t || 'Sheet1';
+  } catch (_) { return 'Sheet1'; }
+}
+
+async function _tabExists(spreadsheetId, token, name) {
+  try {
+    const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets.properties.title`, {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    const j = await r.json();
+    if (!j || !j.sheets) return false;
+    return j.sheets.some(s => s.properties && s.properties.title === name);
+  } catch (_) { return false; }
+}
+
 async function writeSheet(spreadsheetId, tabName, values2d) {
   const token = await getValidAccessToken();
-  const tab = String(tabName || 'Conversions').trim() || 'Conversions';
-  try {
-    await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`, {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ requests: [{ addSheet: { properties: { title: tab } } }] })
-    });
-  } catch (_) {}
+  /* GCONV_SHEET_TAB_FIX_v1: default to 'Sheet1' (Google's universal first-tab name).
+   * If the requested tab does not exist, fall back to whatever IS the first tab.
+   * Never auto-create — that produced ghost "Conversions" tabs in customer sheets. */
+  let tab = String(tabName || 'Sheet1').trim() || 'Sheet1';
+  const exists = await _tabExists(spreadsheetId, token, tab);
+  if (!exists) {
+    tab = await _firstTabTitle(spreadsheetId, token);
+  }
   await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(tab)}:clear`, {
     method: 'POST',
     headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },

@@ -42,7 +42,9 @@ async function _ensureSchema() {
   await db.query(`ALTER TABLE google_conv_export_settings ADD COLUMN IF NOT EXISTS public_token TEXT;`);
   /* GCONV_SHEETS_v1 — Google Sheet push fields */
   await db.query(`ALTER TABLE google_conv_export_settings ADD COLUMN IF NOT EXISTS sheet_url TEXT;`);
-  await db.query(`ALTER TABLE google_conv_export_settings ADD COLUMN IF NOT EXISTS sheet_tab TEXT DEFAULT 'Conversions';`);
+  await db.query(`ALTER TABLE google_conv_export_settings ADD COLUMN IF NOT EXISTS sheet_tab TEXT DEFAULT 'Sheet1';`);
+  /* GCONV_SHEET_TAB_FIX_v1: one-time migrate stale 'Conversions' default → 'Sheet1' */
+  try { await db.query("UPDATE google_conv_export_settings SET sheet_tab = 'Sheet1' WHERE sheet_tab = 'Conversions' OR sheet_tab IS NULL OR sheet_tab = '';"); } catch (_) {}
   await db.query(`ALTER TABLE google_conv_export_settings ADD COLUMN IF NOT EXISTS sheet_push_enabled BOOLEAN DEFAULT FALSE;`);
   await db.query(`ALTER TABLE google_conv_export_settings ADD COLUMN IF NOT EXISTS last_sheet_push_at TIMESTAMPTZ;`);
   await db.query(`ALTER TABLE google_conv_export_settings ADD COLUMN IF NOT EXISTS last_sheet_push_rows INT;`);
@@ -150,7 +152,7 @@ async function _loadSettings() {
     last_downloaded_at: row.last_downloaded_at || null,
     /* GCONV_SHEETS_BUG_FIX_v1 — these were silently dropped, causing pushSheet to always throw 'No Sheet URL configured' */
     sheet_url: row.sheet_url || '',
-    sheet_tab: row.sheet_tab || 'Conversions',
+    sheet_tab: row.sheet_tab || 'Sheet1',
     sheet_push_enabled: row.sheet_push_enabled === true || row.sheet_push_enabled === 1 || String(row.sheet_push_enabled) === 'true',
     last_sheet_push_at: row.last_sheet_push_at || null,
     last_sheet_push_rows: row.last_sheet_push_rows || null,
@@ -205,7 +207,7 @@ async function api_googleConvExport_save(token, payload) {
     auto_hour_ist: p.auto_hour_ist !== undefined ? Math.max(0, Math.min(23, Number(p.auto_hour_ist) || 22)) : undefined,
     /* GCONV_SHEETS_v1 — Google Sheet push target */
     sheet_url: p.sheet_url !== undefined ? String(p.sheet_url || '').trim() : undefined,
-    sheet_tab: p.sheet_tab !== undefined ? (String(p.sheet_tab || '').trim() || 'Conversions') : undefined,
+    sheet_tab: p.sheet_tab !== undefined ? (String(p.sheet_tab || '').trim() || 'Sheet1') : undefined,
     sheet_push_enabled: typeof p.sheet_push_enabled === 'boolean' ? p.sheet_push_enabled : undefined,
     updated_at: db.nowIso(),
     updated_by: me.id
@@ -598,7 +600,7 @@ async function _pushToSheet(settings, userId) {
   const sm = require('../utils/googleSheetsMaster');
   const sheetId = sm.parseSheetId(settings.sheet_url);
   if (!sheetId) throw new Error('Sheet URL is missing or unrecognised. Paste the full https://docs.google.com/spreadsheets/d/<ID>/edit URL.');
-  const tab = String(settings.sheet_tab || 'Conversions').trim() || 'Conversions';
+  const tab = String(settings.sheet_tab || 'Sheet1').trim() || 'Sheet1';
   const { rows, withGclid, withoutGclid } = await _buildRows(settings);
   // Header row matches Google Ads' Offline Conversion Import spec
   const header = ['Google Click ID', 'Conversion Name', 'Conversion Time', 'Lead ID', 'Campaign ID', 'Mobile', 'Without GCLID'];
