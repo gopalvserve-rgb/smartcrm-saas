@@ -546,3 +546,12 @@ SELECT 'feature',
        '💬',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'WhatsApp Chats — Recent / Historic tabs + 10× more threads');
+
+-- 2026-06-20 AI_ASSIST_ADMIN_TOGGLE_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'AI Assist — on/off toggle for tenant admins',
+       'Admins can now turn the AI Assist (Lead Diagnosis) panel ON or OFF for their whole CRM from Settings → AI Features → AI Assist. Disabling hides the smart summary at the top of the Edit Lead modal for all users — no AI data is lost, just the panel is hidden. Re-enable any time. Changes apply on the next page reload.',
+       '🎛️',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'AI Assist — on/off toggle for tenant admins');

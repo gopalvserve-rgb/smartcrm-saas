@@ -22478,6 +22478,9 @@ VIEWS.admin = async (view) => {
   // `search` field carries old + new aliases (Table 14) so users can find
   // a setting by either the old name (SMTP, Sources) or the new label.
   const groups = [
+    { title: 'AI Features', items: [
+      { id: 'aifeatures',   label: '✨ AI Assist (Lead Diagnosis)', search: 'ai assist lead diagnosis copilot proactive coach summary next best action' }
+    ]},
     { title: 'Organization & Access', items: [
       { id: 'company',      label: '🏢 Company Profile', search: 'company profile organization business details branding' },
       { id: 'roles',        label: '📛 Roles',           search: 'roles user role access role admin role' },
@@ -22600,6 +22603,7 @@ async function showAdminTab(id) {
   const body = $('#admin-body');
   body.innerHTML = '<div class="loading">Loading…</div>';
   try {
+    if (id === 'aifeatures')  body.replaceChildren(await adminAIFeatures());
     if (id === 'company')     body.replaceChildren(await adminCompany());
     if (id === 'api')         body.replaceChildren(await adminApi());
     if (id === 'automations') body.replaceChildren(await adminAutomations());
@@ -25012,6 +25016,111 @@ async function adminMenuOrder() {
   ));
 
   return root;
+}
+
+/* ============================================================================
+ * AI_ASSIST_ADMIN_TOGGLE_v1 — tenant-admin enable/disable for the AI Assist
+ * (Proactive Sales Coach) lead-summary panel.
+ *
+ * Flag: COPILOT_PROACTIVE_ENABLED ('1' or '' / '0').
+ * Saved via api_admin_setConfig — already on the CONFIG_KEYS allowlist.
+ * SPA picks up the new value on next page load (brand cache is per-session).
+ * ============================================================================ */
+async function adminAIFeatures() {
+  const cfg = await api('api_admin_getConfig').catch(() => ({}));
+  const isOn = String((cfg && cfg.COPILOT_PROACTIVE_ENABLED) || '') === '1';
+
+  const wrap = h('div', { class: 'admin-content' });
+  wrap.appendChild(h('h2', { style: { marginTop: 0 } }, '✨ AI Features'));
+
+  // ──────── AI Assist (Lead Diagnosis) card ────────
+  const card = h('div', {
+    class: 'card',
+    style: {
+      padding: '1.2rem 1.4rem', marginBottom: '1rem', borderRadius: '12px',
+      border: '1px solid #e9e2ff',
+      background: 'linear-gradient(180deg,#faf7ff 0%,#ffffff 70%)'
+    }
+  });
+
+  // Header
+  card.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.65rem', marginBottom: '.4rem' } },
+    h('div', { style: { width: '36px', height: '36px', borderRadius: '10px', background: 'linear-gradient(135deg,#8b5cf6,#6366f1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.2rem' } }, '✨'),
+    h('div', {},
+      h('div', { style: { fontWeight: 700, fontSize: '1.05rem', color: '#3730a3' } }, 'AI Assist — Lead Diagnosis'),
+      h('div', { style: { fontSize: '.78rem', color: '#6d28d9' } }, 'Smart summary panel at the top of every Edit Lead modal')
+    )
+  ));
+
+  // Description
+  card.appendChild(h('p', { style: { margin: '.4rem 0 .9rem', fontSize: '.88rem', color: '#475569', lineHeight: 1.55 } },
+    'When ON, opening a lead shows three coloured bands at the top of the form:'));
+  card.appendChild(h('ul', { style: { margin: '0 0 1rem 1.1rem', padding: 0, fontSize: '.85rem', color: '#475569', lineHeight: 1.6 } },
+    h('li', {}, h('b', { style: { color: '#0f766e' } }, 'Last Activity'), ' — score changes, latest customer message, missed follow-up.'),
+    h('li', {}, h('b', { style: { color: '#5b21b6' } }, 'AI Summary'), ' — one-line read on where the lead stands in plain English.'),
+    h('li', {}, h('b', { style: { color: '#be123c' } }, 'Next Best Action'), ' — what to do next (call now, send proposal, follow up tomorrow).')
+  ));
+
+  // Radio group
+  const grpId = 'aif-copilot-proactive';
+  const rOn = h('input', { type: 'radio', name: grpId, value: '1', id: grpId + '-on' });
+  const rOff = h('input', { type: 'radio', name: grpId, value: '0', id: grpId + '-off' });
+  if (isOn) rOn.checked = true; else rOff.checked = true;
+  // Setting `checked` on the element above works only the first time it's attached;
+  // mirror via attribute for safety.
+  if (isOn) rOn.setAttribute('checked', 'checked'); else rOff.setAttribute('checked', 'checked');
+
+  const optStyle = { display: 'flex', alignItems: 'center', gap: '.5rem', padding: '.6rem .75rem', border: '1px solid #e5e7eb', borderRadius: '8px', cursor: 'pointer', flex: 1, background: '#fff' };
+  card.appendChild(h('div', { style: { display: 'flex', gap: '.6rem', marginBottom: '1rem' } },
+    h('label', { for: grpId + '-on', style: optStyle },
+      rOn,
+      h('div', {},
+        h('div', { style: { fontWeight: 600, color: '#0f172a' } }, '🟢 Enabled'),
+        h('div', { style: { fontSize: '.74rem', color: '#64748b' } }, 'Show AI Assist on every lead')
+      )
+    ),
+    h('label', { for: grpId + '-off', style: optStyle },
+      rOff,
+      h('div', {},
+        h('div', { style: { fontWeight: 600, color: '#0f172a' } }, '⚪ Disabled'),
+        h('div', { style: { fontSize: '.74rem', color: '#64748b' } }, 'Hide AI Assist for all users')
+      )
+    )
+  ));
+
+  // Save button + status note
+  const statusLine = h('div', { style: { fontSize: '.78rem', color: '#64748b', marginTop: '.4rem', minHeight: '1.1em' } }, '');
+  const saveBtn = h('button', {
+    type: 'button', class: 'btn primary',
+    style: { padding: '.55rem 1.4rem', borderRadius: '8px', fontWeight: 600 },
+    onclick: async () => {
+      const newVal = (document.getElementById(grpId + '-on').checked) ? '1' : '';
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving…';
+      try {
+        await api('api_admin_setConfig', { COPILOT_PROACTIVE_ENABLED: newVal });
+        statusLine.textContent = '✅ Saved. Reload the page (or ask users to refresh) for the change to take effect.';
+        statusLine.style.color = '#047857';
+        toast(newVal === '1' ? 'AI Assist enabled' : 'AI Assist disabled', 'ok');
+      } catch (e) {
+        statusLine.textContent = '❌ Save failed: ' + (e && e.message || e);
+        statusLine.style.color = '#b91c1c';
+        toast('Save failed: ' + e.message, 'err');
+      } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save';
+      }
+    }
+  }, 'Save');
+
+  card.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.6rem' } }, saveBtn, statusLine));
+
+  // Footnote
+  card.appendChild(h('p', { class: 'muted', style: { fontSize: '.74rem', marginTop: '1rem', marginBottom: 0 } },
+    '💡 Tip: disabling this does NOT delete any AI data — it only hides the panel from users. Re-enable any time. Changes apply on the next page reload.'));
+
+  wrap.appendChild(card);
+  return wrap;
 }
 
 async function adminPullLeads() {
