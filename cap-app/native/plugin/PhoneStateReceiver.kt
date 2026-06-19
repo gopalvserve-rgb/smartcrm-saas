@@ -46,6 +46,9 @@ class PhoneStateReceiver : BroadcastReceiver() {
         private var lastState: String = TelephonyManager.EXTRA_STATE_IDLE
         private var lastNumber: String = ""
         private var ringStartMs: Long = 0
+        // CALL_DIRECTION_FIX_v1 — stamped on NEW_OUTGOING_CALL, used to disambiguate
+        // outbound vs inbound at OFFHOOK→IDLE. Reset to 0 after each call.
+        private var outgoingCallTime: Long = 0
         private var offhookStartMs: Long = 0
     }
 
@@ -53,8 +56,14 @@ class PhoneStateReceiver : BroadcastReceiver() {
         val action = intent.action ?: return
 
         if (action == "android.intent.action.NEW_OUTGOING_CALL") {
+            // CALL_DIRECTION_FIX_v1 (2026-06-19): also stamp outgoingCallTime so
+            // OFFHOOK→IDLE can correctly infer direction = "out". Without this,
+            // every call_ended on this user was hardcoded direction = "in",
+            // which caused outgoing rows to land with wrong direction and
+            // (since lastNumber sometimes empty on Vivo/Oppo) empty phone.
             val n = intent.getStringExtra(Intent.EXTRA_PHONE_NUMBER) ?: ""
             if (n.isNotEmpty()) lastNumber = n
+            outgoingCallTime = System.currentTimeMillis()
             return
         }
 
@@ -87,17 +96,26 @@ class PhoneStateReceiver : BroadcastReceiver() {
                     postNativeAsync(ctx, "call_ended", lastNumber, direction = "missed", missed = true, durationSec = 0)
                 } else if (lastState == TelephonyManager.EXTRA_STATE_OFFHOOK) {
                     val dur = (now - offhookStartMs) / 1000
-                    Log.i(TAG, "ENDED call with $lastNumber after ${dur}s → fire call_ended")
+                    // CALL_DIRECTION_FIX_v1 (2026-06-19) — infer direction from what
+                    // we actually observed earlier in this call:
+                    //   - NEW_OUTGOING_CALL more recent than RINGING → outbound
+                    //   - RINGING seen → inbound (OFFHOOK can only follow RINGING for inbound)
+                    //   - Neither (silent OEM path) → fall back to "in" (legacy)
+                    val ringRecent = ringStartMs > 0 && ringStartMs > outgoingCallTime
+                    val outgoingRecent = outgoingCallTime > 0 && outgoingCallTime > ringStartMs
+                    val direction = when {
+                        outgoingRecent -> "out"
+                        ringRecent     -> "in"
+                        else           -> "in"  // legacy fallback
+                    }
+                    Log.i(TAG, "ENDED call with $lastNumber after ${dur}s (direction=$direction) → fire call_ended")
                     safeCapacitor { CallerIdPlugin.instance?.emitEnded(lastNumber, dur, missed = false) }
                     sendCallEvent(ctx, "call_ended", lastNumber, missed = false, durationSec = dur)
-                    // direction unknown at this layer — outbound calls flow through here too.
-                    // Fall back to 'in' for inbound completed (we know last RINGING happened
-                    // because OFFHOOK can only come after RINGING for inbound) — but to be
-                    // safe leave as null so the server's default kicks in.
-                    postNativeAsync(ctx, "call_ended", lastNumber, direction = "in", missed = false, durationSec = dur)
+                    postNativeAsync(ctx, "call_ended", lastNumber, direction = direction, missed = false, durationSec = dur)
                 }
                 ringStartMs = 0
                 offhookStartMs = 0
+                outgoingCallTime = 0
             }
         }
         lastState = state
