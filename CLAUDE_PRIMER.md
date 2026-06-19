@@ -209,6 +209,11 @@ Tenants run on the same Railway service, isolated by Postgres DB.
 
 ---
 
+### Recent ships (2026-06-20)
+- **`LEAD_MODAL_REDESIGN_v1`** — Edit Lead form now opens with Name+Phone (purple), Status+Follow-up (purple+teal), Remark full-width (orange) on top, then the rest. `field()` and `selectField()` in `public/tenant/app.js` accept `opts.priority = 'purple'|'teal'|'orange'`. New inline `inline_remark` textarea fires `api_leads_addRemark` on save. CSS in styles.css under `.f-row--priority` / `.f-row--p-*`. Cache key: `2026-06-20-lead-modal-redesign`. Commits 60c3807 + 5a13a17.
+- **`AI_SCORE_AUTOFIRE_v1`** — AI Score now fires on lead_created, lead_updated, remark_added, qnote_save, call_linked, wa_inbound + 30-min sweep worker for safety net. Hooks in routes/leads.js, leadQuickNote.js, recordings.js, whatsbot.js + worker in server.js. Pattern mirrors `_runReminderForAllTenants`.
+- **`CALL_DIRECTION_FIX_v1`** — APK PhoneStateReceiver now tracks `outgoingCallTime` so OFFHOOK→IDLE direction inference works on Vivo/Oppo where NEW_OUTGOING_CALL fires but had no down-stream effect. Ported from Celeste. APK pinned at versionCode 157 in `public/LeadCRM.apk.version.json` — user sideloads on vserve test phone manually, do NOT bump to push update to all users.
+
 ## 12. Stuff the user has explicitly told me
 
 These are **standing orders** — don't re-do or undo them:
@@ -218,6 +223,7 @@ These are **standing orders** — don't re-do or undo them:
 - **`Don't do anything 1st tell me`** — when investigating bugs, REPORT first and wait for confirmation before making changes.
 - **No emojis in files** unless explicitly requested (but emojis ARE used heavily in CRM UI strings already — keep that consistency).
 - **AI Call Audit OFF by default** — task #930 still pending; don't enable globally.
+- **APK auto-update is GATED** — `public/LeadCRM.apk.version.json` must stay at versionCode 157 unless user explicitly says push the update. CI auto-bumps to next number after every push; pin it back with `[skip ci]` commit if needed. User wants to manually sideload on vserve test phone before everyone gets prompted.
 - **`MEMORY_KB_UPDATE` (2026-06-10)** — Every new user prompt, update memory and/or this primer with anything newly learned (modules, permission rules, schema bumps, deferred work, bug patterns). Don't wait to be asked. See `memory_kb_update_protocol.md`.
 - **`TEAM_LIVE_PERMS_v2` (2026-06-10)** — Live Team Status visibility is controlled by the role permissions matrix (Settings → Permissions row **"View Live Team Status (whole team)"**, key `dashboard.team_live_status`). Admins always pass. Defaults: admin/manager/team_leader = ON, sales = OFF, custom roles = OFF. Backend lookup in `routes/team.js` calls `_perms.can(me, 'dashboard.team_live_status')`. Catalog + DEFAULTS live in `routes/permissions.js`. When the user reports "X widget needs a permission", add it to the CATALOG + DEFAULTS — the Permissions UI auto-renders new rows.
 
