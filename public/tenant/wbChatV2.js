@@ -70,7 +70,9 @@
     aiScore: null,
     activity: [],
     me: null,
+    filterAssignee: null,
     templates: null,
+    aiSummary: null,
     statusById: {},
     userById: {}
   };
@@ -161,7 +163,7 @@
   function injectStyles() {
     if (document.getElementById('wbv2-styles')) return;
     const css = `
-.wbv2-shell { display: grid; grid-template-columns: 340px 1fr 340px; height: calc(100vh - 56px); background: #ffffff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #2a3942; }
+.wbv2-shell { display: grid; grid-template-columns: 340px 1fr 340px; height: calc(100vh - 130px); min-height: 600px; background: #ffffff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #2a3942; border: 1px solid #e9edef; border-radius: 8px; overflow: hidden; }
 @media (max-width: 1280px) { .wbv2-shell { grid-template-columns: 300px 1fr 320px; } }
 @media (max-width: 1100px) { .wbv2-shell { grid-template-columns: 280px 1fr; } .wbv2-lead { display: none; } }
 
@@ -388,15 +390,24 @@
     if (!host) return;
     host.innerHTML = '';
 
-    // Header
-    const brand = (window.CRM && CRM.brand) || {};
+    // Header — try CRM.brand, CRM._earlyBrand, then fall back to placeholder.
+    // Both objects may exist depending on whether warmCache has finished.
+    const brand = (function () {
+      const c = (window.CRM || {});
+      const b1 = c.brand || {};
+      const b2 = c._earlyBrand || {};
+      return Object.assign({}, b2, b1);   // b1 wins if both set
+    })();
+    const name  = brand.COMPANY_NAME || 'WhatsApp Inbox';
+    const phone = brand.COMPANY_PHONE || '';
+    const logoChar = (name || 'C').trim().charAt(0).toUpperCase();
     host.appendChild(h('div', { class: 'wbv2-th-head' },
       h('div', { class: 'brand' },
         h('div', { class: 'b-info' },
-          h('div', { class: 'b-logo' }, (brand.COMPANY_NAME || 'C')[0].toUpperCase()),
+          h('div', { class: 'b-logo' }, logoChar),
           h('div', null,
-            h('div', { class: 'b-name' }, brand.COMPANY_NAME || 'WhatsApp'),
-            h('div', { class: 'b-num' }, brand.COMPANY_PHONE || ''))),
+            h('div', { class: 'b-name' }, name),
+            h('div', { class: 'b-num' }, phone))),
         h('div', null,
           h('span', { class: 'ico', title: 'Refresh', onclick: () => loadThreads() }, '↻'),
           h('span', { class: 'ico', title: 'Menu' }, '⋮')))));
@@ -409,12 +420,21 @@
           value: S.search,
           oninput: (e) => { S.search = e.target.value; renderThreadList(); } }))));
 
-    // Filter pills
+    // Filter pills + assignee selector (single-select)
     const unreadCount = (S.threadsRaw || []).filter(t => Number(t.unread_count || 0) > 0).length;
-    host.appendChild(h('div', { class: 'wbv2-pills' },
+    const usersForFilter = S.users.length ? S.users : ((window.CRM && CRM.cache && CRM.cache.users) || []);
+    const pillsRow = h('div', { class: 'wbv2-pills' },
       pill('All', 'all'),
       pill('Unread', 'unread', unreadCount > 0 ? unreadCount : null),
-      pill('Mine', 'mine')));
+      pill('Mine', 'mine'));
+    // Assignee select (populates from cached users; multi-tenant safe)
+    const asSel = h('select', {
+      style: { padding: '5px 10px', background: 'white', color: '#54656f', border: '1px solid #e9edef', borderRadius: '18px', fontSize: '11px', cursor: 'pointer', outline: 'none' },
+      onchange: (e) => { S.filterAssignee = e.target.value || null; renderThreadList(); }
+    }, h('option', { value: '' }, '👤 Anyone'),
+       ...usersForFilter.map(u => h('option', { value: u.id, selected: String(S.filterAssignee) === String(u.id) ? 'selected' : null }, u.name)));
+    pillsRow.appendChild(asSel);
+    host.appendChild(pillsRow);
 
     // Recent / History tabs
     host.appendChild(h('div', { class: 'wbv2-tabs' },
@@ -456,6 +476,7 @@
       }
       if (S.filter === 'unread' && !Number(t.unread_count || 0)) return false;
       if (S.filter === 'mine' && meId && Number(t.assigned_to || 0) !== Number(meId)) return false;
+      if (S.filterAssignee && Number(t.assigned_to || 0) !== Number(S.filterAssignee)) return false;
       if (q) {
         const hay = ((t.lead_name || '') + ' ' + (t.phone || '') + ' ' + (t.last_message || '')).toLowerCase();
         if (hay.indexOf(q) < 0) return false;
@@ -557,7 +578,10 @@
       h('button', { class: 'btn',
         onclick: openAssigneePopup }, '👤 ' + (t.assigned_name || 'Unassigned'), ' ▾'),
       h('div', { class: 'ico', title: 'Search' }, '🔍'),
-      h('div', { class: 'ico', title: 'More', onclick: () => { try { window.location.hash = '#/lead/' + S.activeLeadId; } catch(_){}} }, '⋮')));
+      h('div', { class: 'ico', title: 'Open lead', onclick: () => {
+        if (typeof window.openLeadModal === 'function') { try { window.openLeadModal(S.activeLeadId); return; } catch (_) {} }
+        try { window.location.hash = '#/leads'; setTimeout(() => { try { window.openLeadModal && window.openLeadModal(S.activeLeadId); } catch (_) {} }, 500); } catch (_) {}
+      } }, '⋮')));
 
     // sub-state bar
     const stats = S.lead ? '· ' + (S.lead.call_count || 0) + ' calls · ' + (S.messages.length) + ' msgs' : '';
@@ -846,7 +870,13 @@
       h('div', { class: 'crt' }, 'Created ' + fmtRelative(l.created_at)),
       h('div', { class: 'acts' },
         h('button', { class: 'btn-call', onclick: () => { try { window.openCallModal && window.openCallModal(l.id); } catch (_) { window.location.href = 'tel:' + l.phone; } } }, '📞 Call'),
-        h('button', { class: 'btn-view', onclick: () => { try { window.location.hash = '#/lead/' + l.id; } catch (_) {} } }, '👁 View'))));
+        h('button', { class: 'btn-view', onclick: () => {
+          if (typeof window.openLeadModal === 'function') {
+            try { window.openLeadModal(l.id); return; } catch (_) {}
+          }
+          // Fallback: open leads view + try a delayed openLeadModal call
+          try { window.location.hash = '#/leads'; setTimeout(() => { try { window.openLeadModal && window.openLeadModal(l.id); } catch (_) {} }, 500); } catch (_) {}
+        } }, '👁 View'))));
 
     // Quick-edit panel — Status (dropdown) + Next Follow-up Date (datetime) + Assigned To (dropdown)
     const curStatus = S.statusById[l.status_id];
@@ -925,7 +955,7 @@
     if (Array.isArray(S.activity) && S.activity.length) {
       const top = S.activity.slice(0, 6);
       const sec = h('div', { class: 'wbv2-sec' },
-        h('div', { class: 'lab' }, h('span', null, '📊 Recent Activity'), S.activity.length > 6 ? h('span', { class: 'tog', onclick: () => { try { window.location.hash = '#/lead/' + l.id; } catch (_) {} } }, 'View all ' + S.activity.length + ' →') : null));
+        h('div', { class: 'lab' }, h('span', null, '📊 Recent Activity'), S.activity.length > 6 ? h('span', { class: 'tog', onclick: () => { if (typeof window.openLeadModal === 'function') { try { window.openLeadModal(l.id); return; } catch (_) {} } try { window.location.hash = '#/leads'; setTimeout(() => { try { window.openLeadModal && window.openLeadModal(l.id); } catch (_) {} }, 500); } catch (_) {} } }, 'View all ' + S.activity.length + ' →') : null));
       top.forEach(ev => sec.appendChild(activityRow(ev)));
       host.appendChild(sec);
     }
@@ -1029,18 +1059,21 @@
   }
 
   /* ---------- entry point ---------- */
-  async function render() {
+  /**
+   * Returns the DOM element representing the 3-column WhatsApp chat shell.
+   * Caller (legacy wbChat() in app.js) mounts it inside #wb-body, preserving
+   * the parent sub-tab navigation (Connect / Templates / Bot Flows / etc).
+   * Data loading happens asynchronously after the element is returned.
+   */
+  function render() {
     injectStyles();
-
-    // Try to find a mount container
-    const view = $('#view') || document.querySelector('main') || $('body');
-    if (!view) return;
-    view.innerHTML = '';
-    view.appendChild(shell());
-
-    // Load me + threads in parallel
-    try { S.me = await api('api_me').catch(() => null); } catch (_) {}
-    await loadThreads();
+    const root = shell();
+    // Defer data loads so the shell mounts first (caller does replaceChildren).
+    setTimeout(async () => {
+      try { S.me = await api('api_me').catch(() => null); } catch (_) {}
+      try { await loadThreads(); } catch (_) {}
+    }, 0);
+    return root;
   }
 
   window.WB_CHAT_V2 = { render };
