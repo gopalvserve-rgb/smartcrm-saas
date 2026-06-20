@@ -312,6 +312,7 @@ async function detectIdleUsers() {
        VALUES ($1, $2, $3)`,
       [v.rows[0].id, u.user_id, promptText]
     );
+    _pushPromptToUser(u.user_id, '🕒 AI Manager: idle nudge', promptText);
     /* Mark nudge sent */
     await db.query(
       `UPDATE user_idle_state SET last_nudge_at = NOW(), nudge_count_today = COALESCE(nudge_count_today,0) + 1
@@ -370,6 +371,7 @@ async function detectNewLeadSlaMiss() {
        VALUES ($1, $2, $3)`,
       [v.rows[0].id, row.user_id, `New lead "${(row.name || '').slice(0, 40)}" was assigned ${threshold}+ minutes ago and not yet called.`]
     );
+    _pushPromptToUser(row.user_id, '⚠️ AI Manager: new lead waiting', `Call "${(row.name || '').slice(0, 40)}" — assigned ${threshold}+ min ago.`);
     count++;
   }
   return { sla: count };
@@ -757,6 +759,7 @@ async function checkRemarkQuality({ userId, leadId, remarkText }) {
      VALUES ($1, $2, $3)`,
     [v.rows[0].id, userId, 'Your last remark was flagged as "' + c.quality + '". Please update with the actual client response and next action.']
   );
+  _pushPromptToUser(userId, '✍️ AI Manager: remark quality', 'Last remark flagged "' + c.quality + '" — please add details.');
   return c;
 }
 
@@ -794,6 +797,7 @@ async function detectFakeActivity() {
        VALUES ($1, $2, $3)`,
       [v.rows[0].id, row.user_id, 'You changed a lead status without a recorded call. Please explain or add the missing call.']
     );
+    _pushPromptToUser(row.user_id, '🚨 AI Manager: status change without call', 'Lead status changed but no call recorded — please explain.');
     count++;
   }
   return { fake: count };
@@ -839,6 +843,7 @@ async function detectWaIgnoredReplies() {
        VALUES ($1, $2, $3)`,
       [v.rows[0].id, row.user_id, 'Client "' + (row.lead_name || '').slice(0, 30) + '" replied on WhatsApp ' + threshold + '+ minutes ago. Please reply now.']
     );
+    _pushPromptToUser(row.user_id, '💬 AI Manager: WhatsApp waiting', 'Client "' + (row.lead_name || '').slice(0, 30) + '" replied ' + threshold + '+ min ago.');
     count++;
   }
   return { wa: count };
@@ -1224,6 +1229,22 @@ async function _notifyUser(userId, title, body, url) {
   catch (_) { return false; }
 }
 
+/* AI_MGR_PUSH_NOTIFY_v1 (2026-06-20) — collapsed-tag push so phone shows
+ * one badge per rep at a time instead of 17. URL deeplinks to the AI
+ * Manager prompts inbox so a tap opens the queue immediately.
+ * Fire-and-forget — never block the detection cycle. */
+function _pushPromptToUser(userId, title, body) {
+  if (!_pushModule || !_pushModule.sendPushToUser || !userId) return;
+  try {
+    _pushModule.sendPushToUser(Number(userId), {
+      title: title || '👋 AI Manager has a note for you',
+      body:  String(body || '').slice(0, 220),
+      url:   '#/aimanager',
+      tag:   'aimgr-prompt-' + Number(userId)
+    }).catch(() => {});
+  } catch (_) { /* never throw out of detection cycle */ }
+}
+
 async function _findAdmins() {
   try {
     const r = await db.query(`SELECT id FROM users WHERE LOWER(role) IN ('admin','manager') AND COALESCE(is_active, 1) = 1`);
@@ -1402,6 +1423,7 @@ async function detectInterestedNoAction() {
       [v.rows[0].id, row.user_id,
        `Lead "${(row.lead_name || '').slice(0, 30)}" is Interested 24h+ with no quotation. Send one now or explain.`]
     );
+    _pushPromptToUser(row.user_id, '🔥 AI Manager: hot lead waiting', `"${(row.lead_name || '').slice(0, 30)}" interested 24h+ — send quotation.`);
     await _pushAlert({ type: 'interested_no_action', severity: 'high', user_id: row.user_id, lead_id: row.lead_id,
       title: 'Interested lead waiting', body: `${row.lead_name || 'Lead'} — no quotation yet` });
     await _runEscalation({ user_id: row.user_id, violation_type: 'interested_no_action', lead_id: row.lead_id });
@@ -1476,6 +1498,7 @@ async function detectFuDoneNoCall() {
       `INSERT INTO ai_manager_reason_prompts (violation_id, user_id, prompt_text) VALUES ($1, $2, $3)`,
       [v.rows[0].id, row.user_id, `You marked follow-up done for ${row.lead_name || 'a lead'} without a call event. Explain.`]
     );
+    _pushPromptToUser(row.user_id, '☎️ AI Manager: follow-up without call', `${row.lead_name || 'A lead'} marked done — no call recorded.`);
     await _runEscalation({ user_id: row.user_id, violation_type: 'fu_done_no_call', lead_id: row.lead_id });
     n++;
   }
@@ -1512,6 +1535,7 @@ async function detectRepeatedShortCalls() {
       `INSERT INTO ai_manager_reason_prompts (violation_id, user_id, prompt_text) VALUES ($1, $2, $3)`,
       [v.rows[0].id, row.user_id, `You made ${row.cnt} calls under 10 seconds in the last hour. Please explain.`]
     );
+    _pushPromptToUser(row.user_id, '📞 AI Manager: short-call pattern', `${row.cnt} calls under 10s in the last hour — please explain.`);
     await _runEscalation({ user_id: row.user_id, violation_type: 'short_call_pattern' });
     n++;
   }
@@ -1551,6 +1575,7 @@ async function detectCopiedRemarks() {
       `INSERT INTO ai_manager_reason_prompts (violation_id, user_id, prompt_text) VALUES ($1, $2, $3)`,
       [v.rows[0].id, row.user_id, `You used the same remark on ${row.lead_count} different leads. Add specific notes per lead.`]
     );
+    _pushPromptToUser(row.user_id, '📝 AI Manager: copy-paste remarks', `Same remark used on ${row.lead_count} leads — add specifics.`);
     await _runEscalation({ user_id: row.user_id, violation_type: 'copied_remark' });
     n++;
   }
@@ -1622,6 +1647,7 @@ async function detectLostNoReason() {
       `INSERT INTO ai_manager_reason_prompts (violation_id, user_id, prompt_text) VALUES ($1, $2, $3)`,
       [v.rows[0].id, row.user_id, `Lead "${(row.lead_name || '').slice(0, 30)}" marked Lost with no reason. Why?`]
     );
+    _pushPromptToUser(row.user_id, '❓ AI Manager: lost without reason', `"${(row.lead_name || '').slice(0, 30)}" marked Lost — why?`);
     n++;
   }
   return { lost_no_reason: n };
@@ -1658,6 +1684,7 @@ async function detectQuotedNoFu() {
       `INSERT INTO ai_manager_reason_prompts (violation_id, user_id, prompt_text) VALUES ($1, $2, $3)`,
       [v.rows[0].id, row.user_id, `You sent a quotation to "${(row.lead_name || '').slice(0, 30)}" but no follow-up set. Schedule one.`]
     );
+    _pushPromptToUser(row.user_id, '📄 AI Manager: quote without follow-up', `Quote sent to "${(row.lead_name || '').slice(0, 30)}" — schedule a follow-up.`);
     await _runEscalation({ user_id: row.user_id, violation_type: 'quoted_no_fu', lead_id: row.lead_id });
     n++;
   }

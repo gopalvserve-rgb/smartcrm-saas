@@ -555,3 +555,12 @@ SELECT 'feature',
        '🎛️',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'AI Assist — on/off toggle for tenant admins');
+
+-- 2026-06-20 AI_MGR_PUSH_NOTIFY_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'fix',
+       'AI Manager — phone notifications when prompts fire',
+       'Sales reps now get a phone push notification the moment an AI Manager prompt is created (idle nudge, new-lead SLA miss, WA reply waiting, hot lead waiting, copy-paste remarks, etc). Before this fix, prompts only showed up if the rep happened to be looking at the CRM browser tab — so 127 of them piled up unanswered on vserve. Tapping the notification opens the AI Manager prompts inbox directly.',
+       '🔔',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'AI Manager — phone notifications when prompts fire');
