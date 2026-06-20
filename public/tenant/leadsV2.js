@@ -1002,7 +1002,8 @@ tr:hover .lv2-actions { opacity: 1; }
           h('button', { class: 'lv2-act call', title: 'Click-to-Call', onclick: () => doCall(l) }, '📞'),
           h('button', { class: 'lv2-act sim', title: 'Mobile SIM', onclick: () => doSim(l) }, '📱'),
           h('button', { class: 'lv2-act wa', title: 'WhatsApp Web', onclick: () => doWaWeb(l) }, '💬'),
-          h('button', { class: 'lv2-act api', title: 'WA Cloud API', onclick: () => doWaApi(l) }, '✨'),
+          h('button', { class: 'lv2-act api', title: 'Send via WhatsApp Cloud API (SmartCRM chat)', onclick: () => doWaApi(l) },
+            h('span', { html: '<svg width="13" height="13" viewBox="0 0 32 32" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M16 0C7.2 0 0 7.2 0 16c0 2.8.7 5.5 2.1 7.9L0 32l8.3-2.2c2.3 1.3 4.9 1.9 7.7 1.9 8.8 0 16-7.2 16-16S24.8 0 16 0zm0 29.3c-2.5 0-4.9-.7-7-1.9l-.5-.3-5.2 1.4 1.4-5.1-.3-.5C3.2 20.7 2.7 18.4 2.7 16 2.7 8.7 8.7 2.7 16 2.7s13.3 6 13.3 13.3-6 13.3-13.3 13.3zm7.3-9.9c-.4-.2-2.4-1.2-2.7-1.3-.4-.1-.6-.2-.9.2-.3.4-1 1.3-1.2 1.5-.2.2-.4.3-.8.1-2.4-1.2-3.9-2.1-5.5-4.8-.4-.7.4-.7 1.2-2.2.1-.2.1-.5 0-.7-.1-.2-.9-2.2-1.3-3-.3-.8-.7-.7-.9-.7-.2 0-.5 0-.8 0-.3 0-.7.1-1.1.5-.4.4-1.4 1.4-1.4 3.4 0 2 1.5 3.9 1.7 4.2.2.3 2.9 4.5 7.1 6.3 2.6 1.1 3.6 1.2 4.9 1 .8-.1 2.4-1 2.7-1.9.3-1 .3-1.8.2-1.9 0-.2-.3-.3-.7-.5z"/></svg>', style: { display: 'inline-flex' } })),
           h('button', { class: 'lv2-act ai', title: 'AI Lead Hub', onclick: () => aiHub(l) }, '🤖'),
           h('button', { class: 'lv2-act copy', title: 'Copy phone', onclick: () => doCopy(l) }, '📋')))));
     tr.appendChild(h('td', null, h('span', { class: 'lv2-muted' }, l.source || '—')));
@@ -1094,7 +1095,7 @@ tr:hover .lv2-actions { opacity: 1; }
         h('span', { class: 'ic' }, '💬'), 'WA Web'),
       h('button', { onclick: () => doWaApi(l), title: 'WhatsApp Cloud API — send via SmartCRM',
         style: { background: 'linear-gradient(135deg, #dcfce7, #bbf7d0)', color: '#15803d', borderColor: '#86efac' } },
-        h('span', { class: 'ic' }, '✨'), 'WA API'),
+        h('span', { class: 'ic', html: '<svg width="13" height="13" viewBox="0 0 32 32" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M16 0C7.2 0 0 7.2 0 16c0 2.8.7 5.5 2.1 7.9L0 32l8.3-2.2c2.3 1.3 4.9 1.9 7.7 1.9 8.8 0 16-7.2 16-16S24.8 0 16 0zm0 29.3c-2.5 0-4.9-.7-7-1.9l-.5-.3-5.2 1.4 1.4-5.1-.3-.5C3.2 20.7 2.7 18.4 2.7 16 2.7 8.7 8.7 2.7 16 2.7s13.3 6 13.3 13.3-6 13.3-13.3 13.3zm7.3-9.9c-.4-.2-2.4-1.2-2.7-1.3-.4-.1-.6-.2-.9.2-.3.4-1 1.3-1.2 1.5-.2.2-.4.3-.8.1-2.4-1.2-3.9-2.1-5.5-4.8-.4-.7.4-.7 1.2-2.2.1-.2.1-.5 0-.7-.1-.2-.9-2.2-1.3-3-.3-.8-.7-.7-.9-.7-.2 0-.5 0-.8 0-.3 0-.7.1-1.1.5-.4.4-1.4 1.4-1.4 3.4 0 2 1.5 3.9 1.7 4.2.2.3 2.9 4.5 7.1 6.3 2.6 1.1 3.6 1.2 4.9 1 .8-.1 2.4-1 2.7-1.9.3-1 .3-1.8.2-1.9 0-.2-.3-.3-.7-.5z"/></svg>', style: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center' } }), 'WA API'),
       h('button', { onclick: () => doQuotation(l), title: 'Create or send a quotation',
         style: { background: 'linear-gradient(135deg, #fef3c7, #fde68a)', color: '#92400e', borderColor: '#fde68a' } },
         h('span', { class: 'ic' }, '📋'), 'Quotation'),
