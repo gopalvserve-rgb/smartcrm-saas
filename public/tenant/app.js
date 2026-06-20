@@ -4589,8 +4589,48 @@ function _renderFeatureSpotlight() {
 }
 
 VIEWS.leads = async (view) => {
+  // LEADS_VIEW_V2 (2026-06-21) — when flag is on AND user has picked a non-
+  // classic style, delegate to leadsV2 module. Otherwise fall through to
+  // the existing legacy renderer below (untouched).
+  try {
+    const cfg = (CRM && (CRM.brand || CRM._earlyBrand)) || {};
+    const flagOn = String(cfg.LEADS_VIEW_V2_ENABLED || '') === '1';
+    if (flagOn && window.LEADS_V2) {
+      const style = window.LEADS_V2.getStyle();
+      if (style === 'modern' || style === 'inbox') {
+        view.innerHTML = '';
+        // Tiny header with the style toggle so the user can flip back
+        const head = h('div', { style: { padding: '12px 16px', background: 'white', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px' } },
+            h('h1', { style: { fontSize: '17px', fontWeight: '700', margin: 0 } }, '📋 Leads'),
+            window.LEADS_V2.createToggle((newStyle) => {
+              // Re-render in place
+              try { window.LEADS_V2.closeSlideOver && window.LEADS_V2.closeSlideOver(); } catch (_) {}
+              VIEWS.leads(view);
+            })));
+        view.appendChild(head);
+        if (style === 'modern') return await window.LEADS_V2.renderModern(view);
+        if (style === 'inbox')  return await window.LEADS_V2.renderInbox(view);
+      }
+    }
+  } catch (e) { console.warn('[LEADS_V2] delegator failed, falling back to classic:', e.message); }
+
   if (!CRM.cache.statuses) await warmCache();
   _maybeShowFeatureSpotlight();
+  // LEADS_VIEW_V2 — show style toggle even on Classic so user can switch out
+  try {
+    const cfg = (CRM && (CRM.brand || CRM._earlyBrand)) || {};
+    if (String(cfg.LEADS_VIEW_V2_ENABLED || '') === '1' && window.LEADS_V2) {
+      const tg = h('div', { style: { padding: '8px 16px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: '12px', justifyContent: 'flex-end' } },
+        h('span', { style: { fontSize: '11px', color: '#64748b' } }, 'View style:'),
+        window.LEADS_V2.createToggle((newStyle) => {
+          try { window.LEADS_V2.closeSlideOver && window.LEADS_V2.closeSlideOver(); } catch (_) {}
+          VIEWS.leads(view);
+        }));
+      view.innerHTML = '';
+      view.appendChild(tg);
+    }
+  } catch (_) {}
   // STAGE_COL_AUTOADD_v1 — one-shot: existing users had a saved column list
   // pre-dating the Stage column, so it wasn't appearing. Inject it once.
   try {

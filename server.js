@@ -4553,6 +4553,9 @@ setTimeout(() => _runCallLast48hCleanup().catch(() => {}), 300_000);
       // WB_CHAT_V2 — auto-enable 3-column WhatsApp chat on vserve only
       const { autoEnableOnVserve: wbV2AutoEnable } = require('./utils/wbChatV2VserveAutoEnable');
       setTimeout(() => { wbV2AutoEnable().catch(e => console.error('[WB_CHAT_V2_AUTOENABLE]', e.message)); }, 6000);
+      // LEADS_VIEW_V2 — auto-enable Modern + Inbox view styles on vserve
+      const { autoEnableOnVserve: lvV2AutoEnable } = require('./utils/leadsViewV2VserveAutoEnable');
+      setTimeout(() => { lvV2AutoEnable().catch(e => console.error('[LEADS_VIEW_V2_AUTOENABLE]', e.message)); }, 7000);
     } catch (e) { console.warn('[CP4_AUTOENABLE] require failed:', e.message); }
     // AI_MGR_v1 — one-shot enable on vserve. Idempotent, non-blocking.
     try {

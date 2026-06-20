@@ -69,6 +69,7 @@ const CONFIG_KEYS = [
   'AI_QUICKNOTE_ENABLED',     // QNOTE_v1 — 2728 Quick Note row button
   'COPILOT_PROACTIVE_ENABLED',// COPILOT_v4 — Proactive Sales Coach (vserve beta)
   'WB_CHAT_V2_ENABLED',      // WB_CHAT_v2 — redesigned 3-column WhatsApp chat (vserve beta)
+  'LEADS_VIEW_V2_ENABLED',   // LEADS_VIEW_v2 — Modern + Inbox view styles (vserve beta)
   'AI_MANAGER_ENABLED',      // AI_MGR_v1 — virtual admin/supervisor (vserve beta)
   'DEMO_REMINDER_ENABLED',   // DEMO_REMINDER_v1 — per-rep demo WA reminder
   'DEMO_REMINDER_SETTINGS',  // DEMO_REMINDER_v1 — JSON config (statuses, template, tone, ...)
@@ -349,6 +350,7 @@ async function api_admin_brand(_token) {
     // chips. Same vserve-beta carve-out as COPILOT_ACTIONS / QNOTE.
     COPILOT_PROACTIVE_ENABLED: cfg.COPILOT_PROACTIVE_ENABLED || '',
     WB_CHAT_V2_ENABLED:        cfg.WB_CHAT_V2_ENABLED        || '',
+    LEADS_VIEW_V2_ENABLED:     cfg.LEADS_VIEW_V2_ENABLED     || '',
     AI_MANAGER_ENABLED: cfg.AI_MANAGER_ENABLED || '',
     DEMO_REMINDER_ENABLED: cfg.DEMO_REMINDER_ENABLED || '',
     DEMO_REMINDER_SETTINGS: cfg.DEMO_REMINDER_SETTINGS || ''
