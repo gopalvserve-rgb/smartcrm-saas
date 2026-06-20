@@ -1351,11 +1351,56 @@ tr:hover .lv2-actions { opacity: 1; }
         const tl = await api('api_copilot_lead_timeline', { lead_id: l.id, limit: 30 }).catch(() => null);
         let events = (tl && Array.isArray(tl.events)) ? tl.events : (Array.isArray(tl) ? tl : []);
 
-        // v2.8 — REMOVED: the phone-based WA fallback was pulling content
-        // from cross-lead messages (e.g. SmartCRM marketing templates sent
-        // to the same phone via other channels). Show 'No WhatsApp
-        // messages yet' instead of wrong content. We only trust events
-        // that came from api_copilot_lead_timeline (lead_id filtered).
+        // v2.8 — REMOVED phone-based WA fallback (was pulling cross-lead
+        // content). We only trust events from api_copilot_lead_timeline
+        // (lead_id filtered).
+
+        // v2.9 — call_events.recording_url is often EMPTY even when the
+        // call has a recording attached via call_events.recording_id →
+        // lead_recordings table. Fetch lead-scoped recordings via
+        // api_my_recordings and match to call events by lead_id + closest
+        // created_at timestamp. The recording playback URL is
+        // /api/recordings/<id>/audio (tenant-resolved server-side).
+        try {
+          const recs = await api('api_my_recordings', 500).catch(() => []);
+          const recList = Array.isArray(recs) ? recs : (recs && (recs.rows || recs.recordings)) || [];
+          const leadRecs = recList.filter(r => Number(r.lead_id) === Number(l.id));
+          if (leadRecs.length) {
+            // Walk through call events and attach the closest recording
+            const usedRecs = new Set();
+            events.filter(ev => ev.kind === 'call' && !ev.recording).forEach(ev => {
+              const callTs = new Date(ev.at).getTime();
+              let best = null; let bestDiff = Infinity;
+              leadRecs.forEach(rec => {
+                if (usedRecs.has(rec.id)) return;
+                const recTs = new Date(rec.created_at).getTime();
+                const diff = Math.abs(callTs - recTs);
+                // Only consider recordings within 10 minutes of the call event
+                if (diff < bestDiff && diff < 10 * 60 * 1000) { best = rec; bestDiff = diff; }
+              });
+              if (best) {
+                usedRecs.add(best.id);
+                ev.recording = '/api/recordings/' + best.id + '/audio';
+                ev.recording_id = best.id;
+                if (!ev.duration && best.duration_s) ev.duration = best.duration_s;
+              }
+            });
+            // For any RECORDINGS that don't match any call event, emit a
+            // synthetic 'call' event so they appear in the timeline.
+            leadRecs.filter(r => !usedRecs.has(r.id)).slice(0, 5).forEach(r => {
+              events.push({
+                kind: 'call',
+                at: r.created_at,
+                dir: r.direction || 'out',
+                duration: r.duration_s,
+                recording: '/api/recordings/' + r.id + '/audio',
+                recording_id: r.id
+              });
+            });
+            // Re-sort newest first
+            events.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+          }
+        } catch (e) { console.warn('[LEADS_V2] recordings lookup failed:', e.message); }
 
 
         // Last WA
