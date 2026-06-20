@@ -71,6 +71,8 @@
     activity: [],
     me: null,
     filterAssignee: null,
+    filterPhoneId: null,
+    phones: [],
     templates: null,
     aiSummary: null,
     statusById: {},
@@ -420,21 +422,36 @@
           value: S.search,
           oninput: (e) => { S.search = e.target.value; renderThreadList(); } }))));
 
-    // Filter pills + assignee selector (single-select)
+    // Filter pills + assignee + phone selectors
     const unreadCount = (S.threadsRaw || []).filter(t => Number(t.unread_count || 0) > 0).length;
     const usersForFilter = S.users.length ? S.users : ((window.CRM && CRM.cache && CRM.cache.users) || []);
+    const phonesForFilter = S.phones || [];
+
     const pillsRow = h('div', { class: 'wbv2-pills' },
       pill('All', 'all'),
       pill('Unread', 'unread', unreadCount > 0 ? unreadCount : null),
       pill('Mine', 'mine'));
-    // Assignee select (populates from cached users; multi-tenant safe)
-    const asSel = h('select', {
-      style: { padding: '5px 10px', background: 'white', color: '#54656f', border: '1px solid #e9edef', borderRadius: '18px', fontSize: '11px', cursor: 'pointer', outline: 'none' },
-      onchange: (e) => { S.filterAssignee = e.target.value || null; renderThreadList(); }
-    }, h('option', { value: '' }, '👤 Anyone'),
-       ...usersForFilter.map(u => h('option', { value: u.id, selected: String(S.filterAssignee) === String(u.id) ? 'selected' : null }, u.name)));
-    pillsRow.appendChild(asSel);
     host.appendChild(pillsRow);
+
+    // Second row: dropdowns for Agent + Phone Number — gives a clean two-tier
+    // filter without overflowing the narrow left panel.
+    const dropRow = h('div', { class: 'wbv2-pills', style: { paddingTop: '0' } });
+    const selStyle = { padding: '6px 10px', background: 'white', color: '#54656f', border: '1px solid #e9edef', borderRadius: '8px', fontSize: '11px', cursor: 'pointer', outline: 'none', flex: '1', minWidth: '0' };
+    const asSel = h('select', {
+      style: selStyle,
+      title: 'Filter by assigned agent',
+      onchange: (e) => { S.filterAssignee = e.target.value || null; renderThreadList(); }
+    }, h('option', { value: '' }, '👤 All agents (' + usersForFilter.length + ')'),
+       ...usersForFilter.map(u => h('option', { value: u.id, selected: String(S.filterAssignee) === String(u.id) ? 'selected' : null }, u.name)));
+    const phSel = h('select', {
+      style: selStyle,
+      title: 'Filter by WhatsApp phone number',
+      onchange: (e) => { S.filterPhoneId = e.target.value || null; renderThreadList(); }
+    }, h('option', { value: '' }, '📱 All numbers (' + phonesForFilter.length + ')'),
+       ...phonesForFilter.map(p => h('option', { value: p.id, selected: String(S.filterPhoneId) === String(p.id) ? 'selected' : null }, (p.verified_name || p.display_phone_number || p.id).slice(0, 20))));
+    dropRow.appendChild(asSel);
+    dropRow.appendChild(phSel);
+    host.appendChild(dropRow);
 
     // Recent / History tabs
     host.appendChild(h('div', { class: 'wbv2-tabs' },
@@ -477,6 +494,7 @@
       if (S.filter === 'unread' && !Number(t.unread_count || 0)) return false;
       if (S.filter === 'mine' && meId && Number(t.assigned_to || 0) !== Number(meId)) return false;
       if (S.filterAssignee && Number(t.assigned_to || 0) !== Number(S.filterAssignee)) return false;
+      if (S.filterPhoneId && String(t.phone_number_id || '') !== String(S.filterPhoneId)) return false;
       if (q) {
         const hay = ((t.lead_name || '') + ' ' + (t.phone || '') + ' ' + (t.last_message || '')).toLowerCase();
         if (hay.indexOf(q) < 0) return false;
@@ -1071,7 +1089,13 @@
     // Defer data loads so the shell mounts first (caller does replaceChildren).
     setTimeout(async () => {
       try { S.me = await api('api_me').catch(() => null); } catch (_) {}
+      // Eagerly load users + phones so the pills-row dropdowns have options
+      // on first render (don't wait for the user to click a thread).
+      try { S.users  = await api('api_users_list').catch(() => []) || []; } catch (_) {}
+      try { S.phones = await api('api_wb_phones_list').catch(() => []) || []; } catch (_) {}
       try { await loadThreads(); } catch (_) {}
+      // Re-render pills row now that users + phones are in
+      try { renderThreads(); } catch (_) {}
     }, 0);
     return root;
   }
