@@ -1065,7 +1065,18 @@ tr:hover .lv2-actions { opacity: 1; }
             h('button', { class: 'lv2-act copy', title: 'Copy phone', onclick: () => doCopy(l) }, '📋')))));
     }
     if (vc.has('source')) tr.appendChild(h('td', null, h('span', { class: 'lv2-muted' }, l.source || '—')));
-    if (vc.has('status')) tr.appendChild(h('td', null, h('div', { class: 'lv2-status' }, h('span', { class: 'lv2-dot ' + stat }), h('span', { class: 'lv2-stext' }, l.status_name || '—'))));
+    if (vc.has('status')) {
+      tr.appendChild(h('td', { onclick: (e) => e.stopPropagation() },
+        h('div', { class: 'lv2-status', style: { cursor: 'pointer', padding: '4px 8px', borderRadius: '5px', display: 'inline-flex' },
+          title: 'Click to change status',
+          onmouseenter: function () { this.style.background = '#f1f5f9'; },
+          onmouseleave: function () { this.style.background = 'transparent'; },
+          onclick: (e) => { e.stopPropagation(); openStatusPicker(e.currentTarget, l); }
+        },
+          h('span', { class: 'lv2-dot ' + stat }),
+          h('span', { class: 'lv2-stext' }, l.status_name || '—'),
+          h('span', { style: { color: '#cbd5e1', marginLeft: '4px', fontSize: '10px' } }, '▾'))));
+    }
     if (vc.has('owner'))  tr.appendChild(h('td', null, l.assigned_name ? h('div', { class: 'lv2-namecell' }, h('div', { class: 'lv2-av s', style: { background: avColor(l.assigned_name) } }, initials(l.assigned_name)), h('span', { style: { fontSize: '12px' } }, l.assigned_name)) : h('span', { class: 'lv2-muted' }, '—')));
     if (vc.has('score')) {
       const reason = l.score_reason || l.smart_reason || '';
@@ -1093,6 +1104,53 @@ tr:hover .lv2-actions { opacity: 1; }
     if (bucket === 'warm') return 'Warm — push for demo or call this week';
     if (bucket === 'cold') return 'Cold — send welcome template + call attempt in 4h';
     return 'New — send welcome template + schedule call today';
+  }
+
+  function openStatusPicker(anchorEl, lead) {
+    _closePopovers();
+    try {
+      const r = anchorEl.getBoundingClientRect();
+      const pop = h('div', { class: 'lv2-popover', style: {
+        position: 'fixed', top: (r.bottom + 4) + 'px', left: Math.max(8, r.left) + 'px',
+        background: 'white', border: '1px solid #e2e8f0', borderRadius: '8px',
+        boxShadow: '0 8px 24px rgba(0,0,0,.12)', padding: '6px', minWidth: '180px',
+        maxHeight: '320px', overflowY: 'auto', zIndex: '9999'
+      } });
+      pop.appendChild(h('div', { style: { fontSize: '10px', fontWeight: '700', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '.4px', padding: '4px 8px 6px' } }, 'Change status'));
+      (Array.isArray(S.statuses) ? S.statuses : []).forEach(s => {
+        const isCurrent = Number(s.id) === Number(lead.status_id);
+        const sc = statusClass(s.name);
+        pop.appendChild(h('div', {
+          style: {
+            display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 10px',
+            cursor: 'pointer', borderRadius: '5px', fontSize: '12px',
+            background: isCurrent ? '#eef2ff' : 'transparent',
+            color: isCurrent ? '#4338ca' : '#0f172a',
+            fontWeight: isCurrent ? '600' : '500'
+          },
+          onmouseover: function () { if (!isCurrent) this.style.background = '#f8fafc'; },
+          onmouseout:  function () { if (!isCurrent) this.style.background = 'transparent'; },
+          onclick: async () => {
+            _closePopovers();
+            try {
+              await api('api_leads_update', lead.id, { status_id: s.id });
+              lead.status_id = s.id;
+              lead.status_name = s.name;
+              toast('Status: ' + s.name, 'ok');
+              rerenderRows();
+            } catch (e) { toast(e.message, 'err'); }
+          }
+        },
+          h('span', { class: 'lv2-dot ' + sc, style: { width: '6px', height: '6px', borderRadius: '50%', display: 'inline-block' } }),
+          h('span', null, s.name),
+          isCurrent ? h('span', { style: { marginLeft: 'auto', color: '#4338ca', fontSize: '11px' } }, '✓') : null));
+      });
+      document.body.appendChild(pop);
+      setTimeout(() => {
+        const off = (e) => { if (!pop.contains(e.target)) { _closePopovers(); document.removeEventListener('click', off); } };
+        document.addEventListener('click', off);
+      }, 50);
+    } catch (e) { console.warn('[LEADS_V2] openStatusPicker failed:', e.message); }
   }
 
   let _scoreTipEl = null;
