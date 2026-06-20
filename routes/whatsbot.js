@@ -734,22 +734,95 @@ async function api_wb_webhook_status(token, clientOrigin) {
 async function api_wb_webhook_subscribe(token) {
   const me = await authUser(token);
   if (me.role !== 'admin') throw new Error('Admin only');
+
+  // WA_COEX_FIELDS_v2 (2026-06-20) — subscribe EVERY connected WABA, not
+  // just the default one. Diagnosed via Vserve Activity #23632: a single
+  // tenant can have phones spread across multiple WABAs. v1 only updated
+  // the cfg.wabaId WABA, leaving other WABAs on Meta's default field set
+  // (no smb_message_echoes) so mobile-app sends from those phones never
+  // sync.
+  //
+  // Build a set of (wabaId, accessToken) pairs:
+  //   1. Distinct (business_account_id, access_token) from wa_phones
+  //   2. Plus the legacy default from _cfg() as a safety net for tenants
+  //      without wa_phones rows. De-dup so we never POST twice to the
+  //      same WABA.
+
+  const wabaMap = new Map();   // key = wabaId, value = access_token
+  try {
+    const r = await db.query(
+      `SELECT DISTINCT business_account_id, access_token
+         FROM wa_phones
+        WHERE is_active = 1
+          AND business_account_id IS NOT NULL
+          AND business_account_id <> ''
+          AND access_token IS NOT NULL
+          AND access_token <> ''`);
+    (r.rows || []).forEach(row => {
+      if (!wabaMap.has(row.business_account_id)) {
+        wabaMap.set(row.business_account_id, row.access_token);
+      }
+    });
+  } catch (_) {
+    // wa_phones may be missing on un-migrated tenants — fall through to cfg
+  }
   const cfg = await _cfg();
-  if (!cfg.token || !cfg.wabaId) throw new Error('Connect WhatsApp first.');
-  // WA_COEX_FIELDS_v1 (2026-06-20) — explicit subscribed_fields.
-  // Click this button after deploy to upgrade an existing tenant's
-  // WABA subscription so smb_message_echoes events start flowing.
-  const r = await _graphPost(`${cfg.wabaId}/subscribed_apps`, {
-    subscribed_fields: WA_SUBSCRIBE_FIELDS
-  }, cfg);
-  if (r.body?.error) throw new Error(r.body.error.message);
-  await _logActivity({
-    category: 'chat', name: 'webhook_subscribe',
-    response_code: r.status,
-    request: { wabaId: cfg.wabaId, subscribed_fields: WA_SUBSCRIBE_FIELDS },
-    response: r.body
-  });
-  return { ok: true, body: r.body, subscribed_fields: WA_SUBSCRIBE_FIELDS };
+  if (cfg.wabaId && cfg.token && !wabaMap.has(cfg.wabaId)) {
+    wabaMap.set(cfg.wabaId, cfg.token);
+  }
+
+  if (!wabaMap.size) throw new Error('Connect WhatsApp first.');
+
+  const results = [];
+  let failedCount = 0;
+  for (const [wabaId, accessToken] of wabaMap.entries()) {
+    try {
+      const fetchRes = await fetch(`${GRAPH}/${wabaId}/subscribed_apps`, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subscribed_fields: WA_SUBSCRIBE_FIELDS })
+      });
+      const j = await fetchRes.json().catch(() => ({}));
+      const ok = fetchRes.ok && j && (j.success === true || !j.error);
+      if (!ok) failedCount++;
+      results.push({
+        wabaId,
+        ok,
+        response_code: fetchRes.status,
+        error: j && j.error ? j.error.message : null,
+        success: j && j.success === true
+      });
+      // Per-WABA audit row so admins can see which WABA succeeded / failed.
+      try {
+        await _logActivity({
+          category: 'chat', name: 'webhook_subscribe',
+          response_code: fetchRes.status,
+          request: { wabaId, subscribed_fields: WA_SUBSCRIBE_FIELDS },
+          response: j
+        });
+      } catch (_) {}
+    } catch (e) {
+      failedCount++;
+      results.push({ wabaId, ok: false, error: e.message });
+      try {
+        await _logActivity({
+          category: 'chat', name: 'webhook_subscribe_fail',
+          response_code: 0,
+          request: { wabaId },
+          response: { error: e.message }
+        });
+      } catch (_) {}
+    }
+  }
+
+  return {
+    ok: failedCount === 0,
+    wabas_total: wabaMap.size,
+    wabas_succeeded: wabaMap.size - failedCount,
+    wabas_failed: failedCount,
+    subscribed_fields: WA_SUBSCRIBE_FIELDS,
+    results
+  };
 }
 
 async function api_wb_phones_list(token) {
