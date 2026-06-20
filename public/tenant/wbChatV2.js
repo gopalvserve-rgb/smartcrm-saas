@@ -571,28 +571,19 @@
     host.appendChild(body);
     renderMessages(body);
 
-    // 24h closed window?
-    if (isClosedWindow(S.messages)) {
-      host.appendChild(h('div', { class: 'wbv2-closed' },
-        h('div', { class: 'title' }, '🕐 This conversation window is closed'),
-        h('div', { class: 'desc' },
-          'WhatsApp closes chat 24h after customer\'s last message. To re-engage:',
-          h('br', null),
-          '① Send a message from your WhatsApp Business App on your phone',
-          h('br', null),
-          '② Or send a chargeable template'),
-        h('div', { class: 'acts' },
-          h('button', { class: 'btn-now', onclick: () => toast('Open WA Business app on your phone', 'ok') }, '💬 Chat now'),
-          h('button', { class: 'btn-tpl', onclick: openTemplatePicker }, '📋 Select Template'))));
-    } else {
-      host.appendChild(h('div', { class: 'wbv2-composer' },
-        h('div', { class: 'ico', title: 'Emoji' }, '😊'),
-        h('div', { class: 'ico', title: 'Attach' }, '📎'),
-        h('input', { id: 'wbv2-msg-input', placeholder: 'Type a message',
-          onkeydown: (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } } }),
-        h('div', { class: 'ico', title: 'Voice' }, '🎤'),
-        h('button', { class: 'send', onclick: sendMessage, title: 'Send' }, '➤')));
-    }
+    // v1.3 (2026-06-20) — closed-window banner removed per user feedback.
+    // Composer is always on with full toolbar: emoji, attach (image / video /
+    // document), template picker, text, voice, send. The 24h Meta restriction
+    // surfaces only when Meta rejects a non-template send — we toast the error
+    // and prompt the user to send a template instead, but we never block the UI.
+    host.appendChild(h('div', { class: 'wbv2-composer' },
+      h('div', { class: 'ico', title: 'Emoji', onclick: () => toast('Emoji picker coming soon', 'ok') }, '😊'),
+      h('div', { class: 'ico', title: 'Attach a file', onclick: openAttachMenu }, '📎'),
+      h('div', { class: 'ico', title: 'Send a template', onclick: openTemplatePicker }, '📋'),
+      h('input', { id: 'wbv2-msg-input', placeholder: 'Type a message',
+        onkeydown: (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } } }),
+      h('div', { class: 'ico', title: 'Voice note coming soon', onclick: () => toast('Voice notes coming soon', 'ok') }, '🎤'),
+      h('button', { class: 'send', onclick: sendMessage, title: 'Send' }, '➤')));
 
     // scroll to bottom
     setTimeout(() => { body.scrollTop = body.scrollHeight; }, 50);
@@ -677,6 +668,74 @@
       toast('Send failed: ' + e.message, 'err');
     }
   }
+  /* v1.3 — Attach menu: image, video, document */
+  function openAttachMenu() {
+    if (!S.activeThread) return;
+    const bg = h('div', { class: 'wbv2-modal-bg', onclick: (e) => { if (e.target === bg) bg.remove(); } },
+      h('div', { class: 'wbv2-modal', style: { minWidth: '320px' } },
+        h('h3', null, '📎 Attach a file'),
+        h('div', { style: { display: 'grid', gap: '8px', marginTop: '8px' } },
+          attachOption('🖼  Image', 'image/*', 'image'),
+          attachOption('🎬  Video', 'video/*', 'video'),
+          attachOption('📎  Document', '*/*', 'document')),
+        h('div', { class: 'acts' },
+          h('button', { class: 'btn-cancel', onclick: () => bg.remove() }, 'Cancel'))));
+    document.body.appendChild(bg);
+    function attachOption(label, accept, mediaType) {
+      return h('button', {
+        style: { padding: '14px 16px', background: '#f8f9fa', border: '1px solid #e9edef', borderRadius: '10px', fontSize: '14px', cursor: 'pointer', textAlign: 'left', display: 'flex', alignItems: 'center', gap: '10px' },
+        onmouseover: function () { this.style.background = '#eef9f4'; this.style.borderColor = '#bbf7d0'; },
+        onmouseout:  function () { this.style.background = '#f8f9fa'; this.style.borderColor = '#e9edef'; },
+        onclick: () => { bg.remove(); pickFile(accept, mediaType); }
+      }, label);
+    }
+  }
+  function pickFile(accept, mediaType) {
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = accept;
+    inp.style.display = 'none';
+    inp.onchange = async () => {
+      const f = inp.files && inp.files[0];
+      if (!f) { try { document.body.removeChild(inp); } catch (_) {} return; }
+      try { document.body.removeChild(inp); } catch (_) {}
+      await uploadAndSend(f, mediaType);
+    };
+    document.body.appendChild(inp);
+    inp.click();
+  }
+  async function uploadAndSend(file, mediaType) {
+    const t = S.activeThread;
+    if (!t) return;
+    const sizeMB = (file.size / 1024 / 1024).toFixed(1);
+    toast('Uploading ' + file.name + ' (' + sizeMB + ' MB)…', 'ok');
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      // Match existing app.js wbChat upload path — no tenant prefix needed;
+      // server middleware resolves tenant from the request.
+      const r = await fetch('/api/wa/upload', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + _tok() },
+        body: fd
+      });
+      const j = await r.json();
+      if (!r.ok || j.error) throw new Error(j.error || ('upload failed (HTTP ' + r.status + ')'));
+      // Now send via api_wb_chat_send with media_id
+      await api('api_wb_chat_send', {
+        phone: t.phone,
+        media_id: j.wa_media_id,
+        media_type: mediaType,
+        filename: j.filename || file.name,
+        text: ''
+      });
+      toast('Sent ' + (file.name || mediaType), 'ok');
+      setTimeout(() => loadMessages(t), 800);
+    } catch (e) {
+      toast('Send failed: ' + e.message, 'err');
+    }
+  }
+
   async function openTemplatePicker() {
     try {
       if (!S.templates) S.templates = await api('api_wb_templates_list').catch(() => []);
