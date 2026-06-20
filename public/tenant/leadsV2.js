@@ -81,6 +81,7 @@
     // v1.3 — Focus mode (hide chrome) + collapsibles + saved views
     focusMode: localStorage.getItem('crm.lv2.focus') === '1',
     chipsCollapsed: localStorage.getItem('crm.lv2.chipsCollapsed') !== '0',  // collapsed by default
+    filtersCollapsed: localStorage.getItem('crm.lv2.filtersCollapsed') !== '0',  // collapsed by default
     visibleFilters: (function(){ try { return JSON.parse(localStorage.getItem('crm.lv2.visibleFilters')) || ['status','source','owner','score','tag','campaign','followup','qualified']; } catch(_) { return ['status','source','owner','score','tag','campaign','followup','qualified']; } })(),
     savedViews: (function(){ try { return JSON.parse(localStorage.getItem('crm.lv2.savedViews')) || []; } catch(_) { return []; } })()
   };
@@ -475,6 +476,17 @@ tr:hover .lv2-actions { opacity: 1; }
       h('span', { style: { background: isActive ? 'white' : '#e2e8f0', color: '#64748b', fontSize: '9px', fontWeight: '700', padding: '1px 5px', borderRadius: '8px' } }, String(count)));
   }
 
+  function countActiveFilters() {
+    let n = 0;
+    if (S.search) n++;
+    if (S.fDatePreset || S.fDateFrom || S.fDateTo) n++;
+    ['fStatus','fSource','fOwner','fScore','fTag','fCampaign'].forEach(k => { if (Array.isArray(S[k]) && S[k].length) n++; });
+    if (S.fFollowup) n++;
+    if (S.fQualified) n++;
+    if (S.statusChip && S.statusChip !== 'all') n++;
+    return n;
+  }
+
   function applyDatePreset(preset) {
     S.fDatePreset = preset;
     const now = new Date();
@@ -488,8 +500,22 @@ tr:hover .lv2-actions { opacity: 1; }
 
   function buildFilterBar(onChange) {
     try {
+    // v2.1 — collapsible. Tiny header with active-filter count + chevron;
+    // body only renders when filtersCollapsed=false.
+    const outer = h('div', { style: { background: '#ffffff', borderBottom: '1px solid #e2e8f0' } });
+    const activeCount = countActiveFilters();
+    const head = h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 14px', cursor: 'pointer', userSelect: 'none' },
+      onclick: () => { S.filtersCollapsed = !S.filtersCollapsed; try { localStorage.setItem('crm.lv2.filtersCollapsed', S.filtersCollapsed ? '1' : '0'); } catch(_){} if (onChange) onChange(); }
+    },
+      h('span', { style: { fontSize: '10.5px', fontWeight: '600', color: '#64748b', textTransform: 'uppercase', letterSpacing: '.4px' } },
+        (S.filtersCollapsed ? '▸' : '▾') + ' 🔍 Filters' + (activeCount ? ' (' + activeCount + ' active)' : '')),
+      h('span', { style: { fontSize: '10px', color: '#94a3b8' } },
+        S.filtersCollapsed ? 'Click to expand' : 'Click to collapse'));
+    outer.appendChild(head);
+    if (S.filtersCollapsed) return outer;
+
     // Returns a comprehensive filter row with ALL filters wired to S + onChange.
-    const wrap = h('div', { style: { padding: '10px 14px', background: '#ffffff', borderBottom: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: '8px' } });
+    const wrap = h('div', { style: { padding: '6px 14px 10px', display: 'flex', flexDirection: 'column', gap: '8px' } });
 
     // Row 1: search + date presets + From/To
     const row1 = h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' } });
@@ -598,7 +624,8 @@ tr:hover .lv2-actions { opacity: 1; }
     row2.appendChild(right);
     wrap.appendChild(row2);
 
-    return wrap;
+    outer.appendChild(wrap);
+    return outer;
     } catch (e) {
       console.error('[LEADS_V2] buildFilterBar failed:', e);
       return h('div', { style: { padding: '6px 14px', color: '#c04444', fontSize: '11px' } }, 'Filter bar error: ' + e.message);
