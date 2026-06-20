@@ -213,6 +213,18 @@ tr:hover .lv2-actions { opacity: 1; }
 .lv2-scorecell { display: flex; align-items: center; gap: 8px; }
 .lv2-scorenum { font-size: 13px; font-weight: 700; }
 .lv2-scorenum.hot { color: #b91c1c; } .lv2-scorenum.warm { color: #b45309; } .lv2-scorenum.cold { color: #1e40af; }
+/* v1.9 — Bold score chip + row bucket accent (no more sparkline) */
+.lv2-scorechip { font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 12px; letter-spacing: .3px; white-space: nowrap; display: inline-block; }
+.lv2-scorechip.hot  { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+.lv2-scorechip.warm { background: #fffbeb; color: #b45309; border: 1px solid #fde68a; }
+.lv2-scorechip.cold { background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe; }
+.lv2-modern tbody tr.bucket-hot  td.sticky-l { box-shadow: inset 3px 0 0 #ef4444; }
+.lv2-modern tbody tr.bucket-warm td.sticky-l { box-shadow: inset 3px 0 0 #f59e0b; }
+.lv2-modern tbody tr.bucket-cold td.sticky-l { box-shadow: inset 3px 0 0 #3b82f6; }
+.lv2-modern tbody tr.bucket-hot:hover  td { background: #fff5f5; }
+.lv2-modern tbody tr.bucket-hot:hover  td.sticky-l { background: #fff5f5; }
+.lv2-modern tbody tr.bucket-warm:hover td { background: #fffbeb; }
+.lv2-modern tbody tr.bucket-warm:hover td.sticky-l { background: #fffbeb; }
 
 .lv2-aisum { font-size: 11.5px; color: #6b21a8; max-width: 240px; line-height: 1.3; }
 .lv2-aisum::before { content: '✨ '; }
@@ -939,7 +951,7 @@ tr:hover .lv2-actions { opacity: 1; }
     const score = Number(l.smart_score || 0);
     const bucket = scoreBucket(score);
     const isSelected = S.selectedId === l.id;
-    const tr = h('tr', { class: isSelected ? 'selected' : '', onclick: () => openSlideOver(l) });
+    const tr = h('tr', { class: (isSelected ? 'selected ' : '') + (bucket ? 'bucket-' + bucket : ''), onclick: () => openSlideOver(l) });
     tr.appendChild(h('td', { class: 'sticky-l', onclick: (e) => e.stopPropagation() }, h('input', { type: 'checkbox' })));
     tr.appendChild(h('td', { class: 'sticky-l', style: { left: '36px' } },
       h('div', { class: 'lv2-namecell' },
@@ -962,7 +974,7 @@ tr:hover .lv2-actions { opacity: 1; }
     tr.appendChild(h('td', null, h('span', { class: 'lv2-muted' }, l.source || '—')));
     tr.appendChild(h('td', null, h('div', { class: 'lv2-status' }, h('span', { class: 'lv2-dot ' + stat }), h('span', { class: 'lv2-stext' }, l.status_name || '—'))));
     tr.appendChild(h('td', null, l.assigned_name ? h('div', { class: 'lv2-namecell' }, h('div', { class: 'lv2-av s', style: { background: avColor(l.assigned_name) } }, initials(l.assigned_name)), h('span', { style: { fontSize: '12px' } }, l.assigned_name)) : h('span', { class: 'lv2-muted' }, '—')));
-    tr.appendChild(h('td', null, h('div', { class: 'lv2-scorecell' }, h('span', { class: 'lv2-scorenum ' + bucket }, score ? String(score) : '—'), score ? h('span', { html: sparkSvg(score) }) : null)));
+    tr.appendChild(h('td', null, score ? h('span', { class: 'lv2-scorechip ' + bucket }, String(score) + ' · ' + bucket.toUpperCase()) : h('span', { class: 'lv2-muted' }, '—')));
     tr.appendChild(h('td', null, h('div', { class: 'lv2-aisum' }, aiHint(l))));
     tr.appendChild(h('td', null, h('span', { class: 'lv2-muted' }, fmtRel(l.last_activity_at || l.updated_at))));
     tr.appendChild(h('td', null, h('span', { class: 'lv2-muted' }, fmtRel(l.created_at))));
