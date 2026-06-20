@@ -1351,37 +1351,12 @@ tr:hover .lv2-actions { opacity: 1; }
         const tl = await api('api_copilot_lead_timeline', { lead_id: l.id, limit: 30 }).catch(() => null);
         let events = (tl && Array.isArray(tl.events)) ? tl.events : (Array.isArray(tl) ? tl : []);
 
-        // v2.5 — FALLBACK: if timeline has no WA events but lead has a
-        // phone, hit api_wb_chat_messages directly. This catches cases
-        // where WA messages exist in the DB but aren't linked to lead_id
-        // (auto-capture phone-format mismatches etc).
-        const hasWa = events.some(ev => ev.kind === 'wa');
-        if (!hasWa && l.phone) {
-          try {
-            const wa = await api('api_wb_chat_messages', l.phone).catch(() => null);
-            const arr = Array.isArray(wa) ? wa : (wa && (wa.messages || wa.rows)) || [];
-            if (arr.length) {
-              arr.slice(0, 20).forEach(m => {
-                events.push({
-                  kind: 'wa',
-                  at: m.created_at || m.timestamp || m.ts,
-                  dir: m.direction || (m.from_number === l.phone ? 'in' : 'out'),
-                  text: m.body || m.text || ('[' + (m.message_type || 'media') + ']'),
-                  media: m.message_type
-                });
-              });
-              // Re-sort newest first
-              events.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
-            }
-          } catch (_) {}
-        }
+        // v2.8 — REMOVED: the phone-based WA fallback was pulling content
+        // from cross-lead messages (e.g. SmartCRM marketing templates sent
+        // to the same phone via other channels). Show 'No WhatsApp
+        // messages yet' instead of wrong content. We only trust events
+        // that came from api_copilot_lead_timeline (lead_id filtered).
 
-        // v2.5 — also include the lead's stored notes as a 'remark' fallback
-        // event when the timeline is sparse
-        if (events.length < 3 && l.notes) {
-          events.push({ kind: 'remark', at: l.updated_at || l.created_at, text: String(l.notes).slice(0, 200), by: l.assigned_name || '' });
-          events.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
-        }
 
         // Last WA
         const lastWa = events.find(ev => ev.kind === 'wa');
