@@ -3580,6 +3580,73 @@ setInterval(() => {
 setTimeout(() => _runGoogleConvForAllTenants().catch(() => {}), 60_000);
 console.log('[gconv] Google Ads conversion export daily worker started');
 
+// ── DEMO_REMINDER_v1 — morning batch (10 AM IST) + every-10-min pre-30 sweep ──
+async function _runDemoReminderMorningForAllTenants() {
+  const tenantDb = require('./db/pg');
+  const tenantPool = require('./utils/tenantPool');
+  const control = require('./control/db');
+  const dr = require('./routes/demoReminders');
+  let tenants;
+  try {
+    tenants = (await control.query(`SELECT id, slug, org_name, db_name, status FROM tenants WHERE status='active'`)).rows;
+  } catch (_) { return; }
+  for (const row of tenants) {
+    try {
+      const pool = tenantPool.poolFor(row);
+      if (!pool) continue;
+      const t = { id: row.id, slug: row.slug, org_name: row.org_name, db_name: row.db_name };
+      await tenantDb.tenantStorage.run({ pool, tenant: t, slug: row.slug },
+        () => dr.dropMorningCardsForTenant()
+      );
+    } catch (_) {}
+  }
+}
+async function _runDemoReminderPreSweepForAllTenants() {
+  const tenantDb = require('./db/pg');
+  const tenantPool = require('./utils/tenantPool');
+  const control = require('./control/db');
+  const dr = require('./routes/demoReminders');
+  let tenants;
+  try {
+    tenants = (await control.query(`SELECT id, slug, org_name, db_name, status FROM tenants WHERE status='active'`)).rows;
+  } catch (_) { return; }
+  for (const row of tenants) {
+    try {
+      const pool = tenantPool.poolFor(row);
+      if (!pool) continue;
+      const t = { id: row.id, slug: row.slug, org_name: row.org_name, db_name: row.db_name };
+      await tenantDb.tenantStorage.run({ pool, tenant: t, slug: row.slug },
+        () => dr.dropPreDemoCardsForTenant()
+      );
+    } catch (_) {}
+  }
+}
+/* Morning batch — fire at next 10 AM IST then every 24h. */
+function _scheduleDemoReminderMorning() {
+  const now = new Date();
+  // Compute next 10:00 AM IST.
+  const istNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  const next = new Date(istNow);
+  next.setHours(10, 0, 0, 0);
+  if (next <= istNow) next.setDate(next.getDate() + 1);
+  // Convert back to actual ms by computing offset.
+  const offsetMs = next.getTime() - istNow.getTime();
+  const wait = Math.max(1000, offsetMs);
+  setTimeout(() => {
+    _runDemoReminderMorningForAllTenants().catch(e => console.error('[demo_rem] morning', e.message));
+    setInterval(() => {
+      _runDemoReminderMorningForAllTenants().catch(e => console.error('[demo_rem] morning', e.message));
+    }, 24 * 60 * 60 * 1000);
+  }, wait);
+  console.log('[demo_rem] morning batch scheduled — next run in ' + Math.round(wait / 60000) + ' min (10 AM IST)');
+}
+/* Pre-30 sweep — every 10 minutes. */
+setInterval(() => {
+  _runDemoReminderPreSweepForAllTenants().catch(e => console.error('[demo_rem] pre-sweep', e.message));
+}, 10 * 60 * 1000);
+setTimeout(() => { _runDemoReminderPreSweepForAllTenants().catch(() => {}); }, 120_000);
+_scheduleDemoReminderMorning();
+
 // ── AI_MGR_v1 — detection cycle every 2 minutes per tenant ──
 async function _runAiManagerForAllTenants() {
   const tenantDb = require('./db/pg');
@@ -4478,6 +4545,11 @@ setTimeout(() => _runCallLast48hCleanup().catch(() => {}), 300_000);
       const { autoEnableOnVserve: aiMgrAutoEnable } = require('./utils/aiManagerVserveAutoEnable');
       setTimeout(() => { aiMgrAutoEnable().catch(e => console.error('[AI_MGR_AUTOENABLE]', e.message)); }, 6000);
     } catch (e) { console.warn('[AI_MGR_AUTOENABLE] require failed:', e.message); }
+    // DEMO_REMINDER_v1 — one-shot enable on vserve. Idempotent, non-blocking.
+    try {
+      const { autoEnableOnVserve: drAutoEnable } = require('./utils/demoReminderVserveAutoEnable');
+      setTimeout(() => { drAutoEnable().catch(e => console.error('[DEMO_REM_AUTOENABLE]', e.message)); }, 7000);
+    } catch (e) { console.warn('[DEMO_REM_AUTOENABLE] require failed:', e.message); }
     // AI_ASSIST_ROLLOUT_v1 — bulk-enable Proactive AI Assist (lead summary
     // panel at top of Edit Lead modal) on EVERY existing tenant. Mirrors
     // LS_ROLLOUT_ALL_v1 / QNOTE_ROLLOUT_ALL_v1. Idempotent — only writes

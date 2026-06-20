@@ -22479,7 +22479,8 @@ VIEWS.admin = async (view) => {
   // a setting by either the old name (SMTP, Sources) or the new label.
   const groups = [
     { title: 'AI Features', items: [
-      { id: 'aifeatures',   label: '✨ AI Assist (Lead Diagnosis)', search: 'ai assist lead diagnosis copilot proactive coach summary next best action' }
+      { id: 'aifeatures',   label: '✨ AI Assist (Lead Diagnosis)', search: 'ai assist lead diagnosis copilot proactive coach summary next best action' },
+      { id: 'demoreminder', label: '📅 Demo Reminders',            search: 'demo reminder whatsapp morning batch pre demo follow up' }
     ]},
     { title: 'Organization & Access', items: [
       { id: 'company',      label: '🏢 Company Profile', search: 'company profile organization business details branding' },
@@ -22604,6 +22605,7 @@ async function showAdminTab(id) {
   body.innerHTML = '<div class="loading">Loading…</div>';
   try {
     if (id === 'aifeatures')  body.replaceChildren(await adminAIFeatures());
+    if (id === 'demoreminder') body.replaceChildren(await adminDemoReminder());
     if (id === 'company')     body.replaceChildren(await adminCompany());
     if (id === 'api')         body.replaceChildren(await adminApi());
     if (id === 'automations') body.replaceChildren(await adminAutomations());
@@ -25118,6 +25120,107 @@ async function adminAIFeatures() {
   // Footnote
   card.appendChild(h('p', { class: 'muted', style: { fontSize: '.74rem', marginTop: '1rem', marginBottom: 0 } },
     '💡 Tip: disabling this does NOT delete any AI data — it only hides the panel from users. Re-enable any time. Changes apply on the next page reload.'));
+
+  wrap.appendChild(card);
+  return wrap;
+}
+
+/* ============================================================================
+ * DEMO_REMINDER_v1 — Settings → AI Features → Demo Reminders
+ * Admin picks which statuses count as "demo scheduled", template name, tone.
+ * ============================================================================ */
+async function adminDemoReminder() {
+  const [cfg, statuses, templates] = await Promise.all([
+    api('api_demoReminder_settingsGet').catch(() => ({})),
+    api('api_statuses_list').catch(() => []),
+    api('api_wb_templates_list').catch(() => [])
+  ]);
+
+  const wrap = h('div', { class: 'admin-content' });
+  wrap.appendChild(h('h2', { style: { marginTop: 0 } }, '📅 Demo Reminders'));
+  wrap.appendChild(h('p', { class: 'muted', style: { marginTop: 0 } },
+    'Auto-remind reps about their demos via WhatsApp — morning batch at the time you pick + 30 minutes before each demo. Each rep approves their own batch in Copilot.'));
+
+  const card = h('div', { class: 'card', style: { padding: '1.2rem 1.4rem', marginBottom: '1rem', borderRadius: '12px', background: 'linear-gradient(180deg,#fff7ed 0%,#fff 70%)', border: '1px solid #fed7aa' } });
+
+  // Enabled toggle
+  const enabledCb = h('input', { type: 'checkbox' });
+  if (cfg.enabled) enabledCb.checked = true;
+  card.appendChild(h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', fontWeight: 600, marginBottom: '1rem' } },
+    enabledCb, h('span', {}, '🟢 Enable Demo Reminders for this tenant')));
+
+  // Status multi-select (which statuses count as "demo scheduled")
+  card.appendChild(h('div', { style: { fontWeight: 600, marginTop: '.6rem' } }, '📌 Statuses that count as "demo scheduled"'));
+  card.appendChild(h('p', { class: 'muted', style: { fontSize: '.8rem', marginTop: '.2rem' } },
+    'When a lead is in any of these statuses AND has a next_followup_at today, it counts as a demo.'));
+  const statusGrid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '.4rem', marginTop: '.5rem' } });
+  const cur = new Set((cfg.statusIds || []).map(Number));
+  (statuses || []).forEach(s => {
+    const cb = h('input', { type: 'checkbox', value: String(s.id), 'data-status-cb': '1' });
+    if (cur.has(Number(s.id))) cb.checked = true;
+    statusGrid.appendChild(h('label', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', padding: '.3rem .5rem', border: '1px solid #e5e7eb', borderRadius: '6px', cursor: 'pointer', fontSize: '.85rem' } },
+      cb, h('span', {}, s.name)));
+  });
+  card.appendChild(statusGrid);
+
+  // Time row + template + tone
+  const morningInp = h('input', { type: 'time', value: cfg.morningTimeIst || '10:00', style: { padding: '.35rem' } });
+  const preMinSel = h('select', {}, ...['15','30','45','60'].map(v => h('option', { value: v, selected: String(cfg.preLeadMinutes||30)===v?'selected':null }, v + ' min')));
+  const tplSel = h('select', {}, h('option', { value: '' }, '— choose a template —'),
+    ...((templates || []).map(t => h('option', { value: t.name, selected: cfg.templateName===t.name?'selected':null }, t.name + (t.language?' ('+t.language+')':'')))));
+  const toneSel = h('select', {},
+    h('option', { value: 'friendly',  selected: (cfg.aiTone||'friendly')==='friendly' ?'selected':null }, '😊 Friendly'),
+    h('option', { value: 'formal',    selected: (cfg.aiTone||'friendly')==='formal'   ?'selected':null }, '👔 Formal'),
+    h('option', { value: 'concise',   selected: (cfg.aiTone||'friendly')==='concise'  ?'selected':null }, '✂️ Concise')
+  );
+
+  const grid = h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginTop: '1.2rem' } },
+    h('label', { style: { display: 'flex', flexDirection: 'column', gap: '.25rem' } },
+      h('span', { style: { fontWeight: 600, fontSize: '.85rem' } }, '☀️ Morning batch time (IST)'), morningInp),
+    h('label', { style: { display: 'flex', flexDirection: 'column', gap: '.25rem' } },
+      h('span', { style: { fontWeight: 600, fontSize: '.85rem' } }, '⏰ Pre-demo reminder lead time'), preMinSel),
+    h('label', { style: { display: 'flex', flexDirection: 'column', gap: '.25rem' } },
+      h('span', { style: { fontWeight: 600, fontSize: '.85rem' } }, '💬 Template (used when WA 24h window closed)'), tplSel),
+    h('label', { style: { display: 'flex', flexDirection: 'column', gap: '.25rem' } },
+      h('span', { style: { fontWeight: 600, fontSize: '.85rem' } }, '🎨 AI tone (used when window open)'), toneSel),
+  );
+  card.appendChild(grid);
+
+  // Save
+  const statusLine = h('div', { style: { fontSize: '.78rem', color: '#64748b', marginTop: '.8rem', minHeight: '1.1em' } }, '');
+  const saveBtn = h('button', {
+    type: 'button', class: 'btn primary',
+    style: { padding: '.55rem 1.4rem', borderRadius: '8px', fontWeight: 600, marginTop: '1rem' },
+    onclick: async () => {
+      const statusIds = Array.from(statusGrid.querySelectorAll('[data-status-cb]:checked')).map(cb => Number(cb.value));
+      const payload = {
+        enabled: !!enabledCb.checked,
+        status_ids: statusIds,
+        morning_time_ist: morningInp.value || '10:00',
+        pre_lead_minutes: Number(preMinSel.value) || 30,
+        template_name: tplSel.value || '',
+        ai_tone: toneSel.value || 'friendly'
+      };
+      saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
+      try {
+        await api('api_demoReminder_settingsSet', payload);
+        statusLine.textContent = '✅ Saved. Workers pick up the change on next cycle (within 10 min for pre-30; at 10 AM IST tomorrow for morning batch).';
+        statusLine.style.color = '#047857';
+        toast('Saved', 'ok');
+      } catch (e) {
+        statusLine.textContent = '❌ ' + (e && e.message || e);
+        statusLine.style.color = '#b91c1c';
+        toast('Save failed: ' + e.message, 'err');
+      } finally { saveBtn.disabled = false; saveBtn.textContent = 'Save'; }
+    }
+  }, 'Save');
+
+  card.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.6rem' } }, saveBtn, statusLine));
+
+  card.appendChild(h('p', { class: 'muted', style: { fontSize: '.75rem', marginTop: '1.2rem' } },
+    '💡 Reps see their own demos in Copilot — admin doesn\'t approve other reps\' batches. ' +
+    'If the WA 24h window is closed (no inbound from customer in 24h), the system uses your template. ' +
+    'If open, AI composes a polite custom message in your chosen tone.'));
 
   wrap.appendChild(card);
   return wrap;
@@ -35731,6 +35834,191 @@ window.restartAiAssistTutorial = function () {
   } catch (_) {}
   return maybeShowAiAssistDailyTutorial(true);
 };
+/* ========================================================================== */
+
+/* ========================================================================== */
+/* DEMO_REMINDER_v1 — per-rep Copilot card for today's demos                   */
+/* ========================================================================== */
+(function demoReminderInit() {
+  if (window._demoReminderInited) return;
+  window._demoReminderInited = true;
+
+  function _isEnabled() {
+    // Backend enforces; SPA just polls. Skip on showcase / disabled tenants
+    // by checking brand if the flag is exposed there.
+    return !!(window.CRM && CRM.user && CRM.user.id);
+  }
+
+  /* Fetch any pending cards. Called on first SPA boot + every 5 min. */
+  async function fetchAndRender() {
+    if (!_isEnabled() || !window.api) return;
+    if (document.hidden) return;
+    let r;
+    try { r = await api('api_demoReminder_pendingCards'); }
+    catch (_) { return; }
+    const cards = (r && r.cards) || [];
+    if (!cards.length) return;
+    // De-dup: don't re-render if card.id already on screen.
+    const shown = new Set(Array.from(document.querySelectorAll('[data-demo-card-id]')).map(el => el.dataset.demoCardId));
+    cards.forEach(c => { if (!shown.has(String(c.id))) renderCard(c); });
+  }
+
+  function renderCard(card) {
+    const wrap = document.createElement('div');
+    wrap.className = 'demo-reminder-card';
+    wrap.dataset.demoCardId = String(card.id);
+    const existing = document.querySelectorAll('.demo-reminder-card').length;
+    wrap.style.cssText = [
+      'position:fixed', 'top:' + (80 + existing * 16) + 'px', 'right:20px',
+      'width:420px', 'max-width:calc(100vw - 32px)',
+      'background:linear-gradient(180deg,#fff7ed 0%,#fff 70%)',
+      'border:1.5px solid #fed7aa', 'border-left:5px solid #f97316',
+      'border-radius:12px', 'box-shadow:0 12px 32px rgba(15,23,42,.18)',
+      'padding:1rem 1.1rem', 'z-index:9998', 'font-family:inherit'
+    ].join(';');
+
+    const payload = card.payload_json || [];
+    const isPre30 = card.card_type === 'pre_30min';
+    const headLine = isPre30
+      ? '⏰ 30 min to ' + (payload[0] && payload[0].lead_name || 'your next demo')
+      : '☀️ You have ' + payload.length + ' demos today';
+
+    const head = document.createElement('div');
+    head.style.cssText = 'display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:.5rem';
+    head.innerHTML = '<div style="font-weight:700;color:#9a3412;font-size:1rem">' + esc(headLine) + '</div>' +
+      '<button type="button" class="dr-close" aria-label="Close" style="background:transparent;border:none;cursor:pointer;font-size:1.1rem;color:#64748b">✕</button>';
+    wrap.appendChild(head);
+
+    const body = document.createElement('div');
+    body.style.cssText = 'font-size:.85rem;color:#475569;margin-bottom:.7rem;line-height:1.45';
+    if (isPre30) {
+      const p = payload[0] || {};
+      const fmt = p.demo_at ? new Date(p.demo_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' }) : '';
+      body.innerHTML = 'Demo at <b>' + esc(fmt) + '</b><br/>' +
+        'Copilot has a polite reminder ready — preview before sending.';
+    } else {
+      body.innerHTML = 'Shall I send a polite "see you today" reminder?<br/>' +
+        payload.slice(0, 6).map(p => {
+          const t = p.demo_at ? new Date(p.demo_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' }) : '';
+          return '&nbsp;&nbsp;• ' + esc(t) + ' — <b>' + esc(p.lead_name || '') + '</b>' + (p.has_phone ? '' : ' <span style="color:#dc2626">📱 no phone</span>');
+        }).join('<br/>');
+      if (payload.length > 6) body.innerHTML += '<br/>&nbsp;&nbsp;… and ' + (payload.length - 6) + ' more';
+    }
+    wrap.appendChild(body);
+
+    // Buttons
+    const btns = document.createElement('div');
+    btns.style.cssText = 'display:flex;gap:.5rem;flex-wrap:wrap';
+    const previewBtn = document.createElement('button');
+    previewBtn.type = 'button'; previewBtn.className = 'btn sm';
+    previewBtn.style.cssText = 'background:#fff;border:1px solid #fdba74;color:#9a3412;font-weight:600;padding:.4rem .8rem;border-radius:6px;cursor:pointer';
+    previewBtn.textContent = '👁 Preview';
+    previewBtn.addEventListener('click', () => openPreviewModal(card));
+
+    const confirmBtn = document.createElement('button');
+    confirmBtn.type = 'button'; confirmBtn.className = 'btn sm';
+    confirmBtn.style.cssText = 'background:linear-gradient(135deg,#f97316,#ea580c);color:#fff;border:none;padding:.4rem .9rem;border-radius:6px;cursor:pointer;font-weight:600';
+    confirmBtn.textContent = isPre30 ? 'Send now' : 'Send all';
+    confirmBtn.addEventListener('click', () => sendBatch(card, null, wrap));
+
+    const skipBtn = document.createElement('button');
+    skipBtn.type = 'button'; skipBtn.className = 'btn sm';
+    skipBtn.style.cssText = 'background:transparent;border:none;color:#64748b;padding:.4rem .8rem;cursor:pointer;font-size:.85rem';
+    skipBtn.textContent = 'Skip';
+    skipBtn.addEventListener('click', () => dismiss(card.id, wrap));
+
+    btns.appendChild(previewBtn); btns.appendChild(confirmBtn); btns.appendChild(skipBtn);
+    wrap.appendChild(btns);
+
+    wrap.querySelector('.dr-close').addEventListener('click', () => dismiss(card.id, wrap));
+    document.body.appendChild(wrap);
+  }
+
+  async function openPreviewModal(card) {
+    const reminderType = card.card_type;
+    let preview;
+    try { preview = await api('api_demoReminder_previewBatch', { reminder_type: reminderType }); }
+    catch (e) { toast('Preview failed: ' + e.message, 'err'); return; }
+    const previews = (preview && preview.previews) || [];
+    if (!previews.length) { toast('No demos to send', 'ok'); return; }
+
+    const modal = document.createElement('div');
+    modal.className = 'modal-backdrop';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;z-index:9999;padding:1rem';
+    modal.addEventListener('click', ev => { if (ev.target === modal) modal.remove(); });
+    const card2 = document.createElement('div');
+    card2.style.cssText = 'background:#fff;max-width:640px;width:100%;max-height:85vh;overflow-y:auto;border-radius:14px;box-shadow:0 25px 60px rgba(15,23,42,.35);padding:1.2rem 1.4rem';
+    card2.innerHTML = '<h3 style="margin:0 0 .8rem;color:#9a3412">📅 Demo reminder preview</h3>';
+
+    const list = document.createElement('div');
+    list.style.cssText = 'display:flex;flex-direction:column;gap:.7rem;margin-top:.5rem';
+    const selected = new Set(previews.map(p => p.lead_id));
+    previews.forEach(p => {
+      const row = document.createElement('div');
+      row.style.cssText = 'border:1px solid #e5e7eb;border-radius:10px;padding:.6rem .8rem;background:' + (p.window_state==='open'?'#f0fdfa':'#fff7ed');
+      const cb = document.createElement('input'); cb.type='checkbox'; cb.checked=true;
+      cb.addEventListener('change', () => { if (cb.checked) selected.add(p.lead_id); else selected.delete(p.lead_id); });
+      const head = document.createElement('label');
+      head.style.cssText = 'display:flex;align-items:center;gap:.5rem;font-weight:600;color:#0f172a;cursor:pointer';
+      head.appendChild(cb);
+      const fmt = p.demo_at ? new Date(p.demo_at).toLocaleString('en-IN', { hour:'2-digit', minute:'2-digit', hour12: true, timeZone: 'Asia/Kolkata' }) : '';
+      const win = p.window_state === 'open' ? '<span style="color:#0f766e;font-size:.72rem">🟢 window OPEN — AI message</span>' : '<span style="color:#9a3412;font-size:.72rem">🟠 window CLOSED — template</span>';
+      head.insertAdjacentHTML('beforeend', '<span>' + esc(p.lead_name || '') + '</span> · <span style="color:#475569;font-weight:400">' + esc(fmt) + '</span> · ' + win);
+      row.appendChild(head);
+      const draft = document.createElement('div');
+      draft.style.cssText = 'margin-top:.4rem;padding:.4rem .6rem;background:#fff;border-radius:6px;font-size:.85rem;color:#1e293b;line-height:1.45;border:1px dashed #e5e7eb';
+      draft.textContent = p.draft_text || '';
+      row.appendChild(draft);
+      if (!p.has_phone) {
+        const warn = document.createElement('div'); warn.style.cssText='color:#dc2626;font-size:.78rem;margin-top:.3rem'; warn.textContent='📱 No phone — will be skipped';
+        row.appendChild(warn);
+        cb.disabled = true; cb.checked = false; selected.delete(p.lead_id);
+      }
+      list.appendChild(row);
+    });
+    card2.appendChild(list);
+
+    const foot = document.createElement('div');
+    foot.style.cssText = 'display:flex;justify-content:flex-end;gap:.5rem;margin-top:1rem;padding-top:.7rem;border-top:1px solid #e5e7eb';
+    const cancel = document.createElement('button'); cancel.textContent='Cancel';
+    cancel.style.cssText = 'background:transparent;border:none;color:#64748b;padding:.5rem 1rem;cursor:pointer';
+    cancel.addEventListener('click', () => modal.remove());
+    const send = document.createElement('button'); send.textContent='Send selected';
+    send.style.cssText = 'background:linear-gradient(135deg,#f97316,#ea580c);color:#fff;border:none;padding:.5rem 1.2rem;border-radius:6px;cursor:pointer;font-weight:600';
+    send.addEventListener('click', async () => {
+      modal.remove();
+      const node = document.querySelector('[data-demo-card-id="' + card.id + '"]');
+      await sendBatch(card, Array.from(selected), node);
+    });
+    foot.appendChild(cancel); foot.appendChild(send);
+    card2.appendChild(foot);
+    modal.appendChild(card2);
+    document.body.appendChild(modal);
+  }
+
+  async function sendBatch(card, leadIds, cardNode) {
+    try {
+      const r = await api('api_demoReminder_sendBatch', {
+        reminder_type: card.card_type,
+        lead_ids: leadIds || undefined,
+        card_id: card.id
+      });
+      toast('Sent ' + (r.sent || 0) + ' of ' + (r.total || 0), 'ok');
+      if (cardNode) cardNode.remove();
+    } catch (e) {
+      toast('Send failed: ' + (e && e.message), 'err');
+    }
+  }
+
+  async function dismiss(cardId, cardNode) {
+    try { await api('api_demoReminder_dismissCard', { card_id: cardId }); } catch (_) {}
+    if (cardNode) cardNode.remove();
+  }
+
+  // First-login fetch (3s after boot) + every 5 minutes.
+  setTimeout(() => { fetchAndRender().catch(() => {}); }, 3000);
+  setInterval(() => { fetchAndRender().catch(() => {}); }, 300_000);
+})();
 /* ========================================================================== */
 
 async function _initWhatsappTopbar() {

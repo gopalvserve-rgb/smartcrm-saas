@@ -69,6 +69,8 @@ const CONFIG_KEYS = [
   'AI_QUICKNOTE_ENABLED',     // QNOTE_v1 — 2728 Quick Note row button
   'COPILOT_PROACTIVE_ENABLED',// COPILOT_v4 — Proactive Sales Coach (vserve beta)
   'AI_MANAGER_ENABLED',      // AI_MGR_v1 — virtual admin/supervisor (vserve beta)
+  'DEMO_REMINDER_ENABLED',   // DEMO_REMINDER_v1 — per-rep demo WA reminder
+  'DEMO_REMINDER_SETTINGS',  // DEMO_REMINDER_v1 — JSON config (statuses, template, tone, ...)
   // Demo tenant flags — set by the showcase seeder. The SPA reads these
   // to enable the in-app tour and the 📚 floating button.
   'DEMO_TENANT', 'DEMO_TOUR_ENABLED',
@@ -306,7 +308,9 @@ async function api_admin_brand(_token) {
     // Briefing card, Lead AI Summary panel, signal badge, and proactive
     // chips. Same vserve-beta carve-out as COPILOT_ACTIONS / QNOTE.
     COPILOT_PROACTIVE_ENABLED: cfg.COPILOT_PROACTIVE_ENABLED || '',
-    AI_MANAGER_ENABLED: cfg.AI_MANAGER_ENABLED || ''
+    AI_MANAGER_ENABLED: cfg.AI_MANAGER_ENABLED || '',
+    DEMO_REMINDER_ENABLED: cfg.DEMO_REMINDER_ENABLED || '',
+    DEMO_REMINDER_SETTINGS: cfg.DEMO_REMINDER_SETTINGS || ''
   };
 }
 

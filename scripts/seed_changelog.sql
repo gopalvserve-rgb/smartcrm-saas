@@ -564,3 +564,12 @@ SELECT 'fix',
        '🔔',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'AI Manager — phone notifications when prompts fire');
+
+-- 2026-06-20 DEMO_REMINDER_v1 (vserve beta)
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'Copilot Demo Reminders (beta on vserve)',
+       'Every morning at 10 AM IST, each sales rep gets a Copilot card listing today''s demos with a one-tap "Send WhatsApp reminders to all" button. 30 minutes before each demo, the rep also gets a single-row reminder with a polite message draft. If the customer has not replied on WhatsApp in 24 hours, an approved template is used; if they have, AI composes a custom message in the tone you pick. Admin sets which statuses count as "demo scheduled" and the template name in Settings → AI Features → Demo Reminders.',
+       '📅',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Copilot Demo Reminders (beta on vserve)');

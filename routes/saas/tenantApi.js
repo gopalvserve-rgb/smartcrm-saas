@@ -77,6 +77,7 @@ const ROUTE_FILES = [
   'whatsapp',
   'whatsbot',
   'aiBot',
+  'demoReminders', /* DEMO_REMINDER_v1 — per-rep demo WhatsApp reminders */
   'quotations',
   'invoicing',
   'modules',
