@@ -292,12 +292,24 @@ tr:hover .lv2-actions { opacity: 1; }
               : (Array.isArray(leads) ? leads
               : (leads && Array.isArray(leads.rows)) ? leads.rows
               : []);
-      console.log('[LEADS_V2] loaded', S.leads.length, 'leads · statuses:', (statuses||[]).length, '· users:', (users||[]).length);
-      S.statuses = statuses || [];
-      S.users = users || [];
-      S.sources = sources || [];
-      S.tags = tags || [];
-      S.campaigns = campaigns || [];
+      console.log('[LEADS_V2] loaded', S.leads.length, 'leads · statuses:', S.statuses.length, '· users:', S.users.length, '· sources:', S.sources.length, '· tags:', S.tags.length, '· campaigns:', S.campaigns.length);
+      // Shape-tolerant unwrap: each endpoint may return an array directly,
+      // an object with .rows / .items / .leads / .campaigns / etc., or null.
+      const _asArray = (v, key) => {
+        if (Array.isArray(v)) return v;
+        if (v && typeof v === 'object') {
+          if (Array.isArray(v[key])) return v[key];
+          if (Array.isArray(v.rows)) return v.rows;
+          if (Array.isArray(v.items)) return v.items;
+          if (Array.isArray(v.list)) return v.list;
+        }
+        return [];
+      };
+      S.statuses  = _asArray(statuses,  'statuses');
+      S.users     = _asArray(users,     'users');
+      S.sources   = _asArray(sources,   'sources');
+      S.tags      = _asArray(tags,      'tags');
+      S.campaigns = _asArray(campaigns, 'campaigns');
     } catch (e) {
       toast('Could not load leads: ' + e.message, 'err');
     }
@@ -382,22 +394,26 @@ tr:hover .lv2-actions { opacity: 1; }
 
   /* ---------- shared status chips + filter bar (used by Modern + Inbox) ---------- */
   function buildStatusChipBar(onChange) {
-    // Mirror Classic's status chips: counts per status_name across S.leads
-    const counts = {};
-    (S.leads || []).forEach(l => {
-      const k = l.status_name || 'No status';
-      counts[k] = (counts[k] || 0) + 1;
-    });
-    const bar = h('div', {
-      class: 'lv2-statuschips',
-      style: { display: 'flex', gap: '6px', padding: '8px 14px', background: '#ffffff', borderBottom: '1px solid #e2e8f0', overflowX: 'auto', flexWrap: 'wrap' }
-    });
-    bar.appendChild(makeStatusChip('all', 'All', S.leads.length, onChange));
-    (S.statuses || []).forEach(s => {
-      const c = counts[s.name] || 0;
-      bar.appendChild(makeStatusChip(s.name, s.name, c, onChange));
-    });
-    return bar;
+    try {
+      const counts = {};
+      (Array.isArray(S.leads) ? S.leads : []).forEach(l => {
+        const k = l.status_name || 'No status';
+        counts[k] = (counts[k] || 0) + 1;
+      });
+      const bar = h('div', {
+        class: 'lv2-statuschips',
+        style: { display: 'flex', gap: '6px', padding: '8px 14px', background: '#ffffff', borderBottom: '1px solid #e2e8f0', overflowX: 'auto', flexWrap: 'wrap' }
+      });
+      bar.appendChild(makeStatusChip('all', 'All', S.leads.length, onChange));
+      (Array.isArray(S.statuses) ? S.statuses : []).forEach(s => {
+        const c = counts[s.name] || 0;
+        bar.appendChild(makeStatusChip(s.name, s.name, c, onChange));
+      });
+      return bar;
+    } catch (e) {
+      console.error('[LEADS_V2] buildStatusChipBar failed:', e);
+      return h('div', { style: { padding: '6px 14px', color: '#c04444', fontSize: '11px' } }, 'Status chips error: ' + e.message);
+    }
   }
   function makeStatusChip(key, label, count, onChange) {
     const isActive = S.statusChip === key;
@@ -420,6 +436,7 @@ tr:hover .lv2-actions { opacity: 1; }
   }
 
   function buildFilterBar(onChange) {
+    try {
     // Returns a comprehensive filter row with ALL filters wired to S + onChange.
     const wrap = h('div', { style: { padding: '10px 14px', background: '#ffffff', borderBottom: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: '8px' } });
 
@@ -440,11 +457,14 @@ tr:hover .lv2-actions { opacity: 1; }
       h('input', { type: 'date', value: S.fDateTo, style: { padding: '4px 6px', border: '1px solid #e2e8f0', borderRadius: '5px', fontSize: '11px' },
         onchange: (e) => { S.fDateTo = e.target.value; if (onChange) onChange(); } })));
     // Status dropdown
-    row1.appendChild(filterSelect('🎯', 'Status', S.fStatus, [['', 'Any status']].concat((S.statuses || []).map(s => [s.id, s.name])),
+    row1.appendChild(filterSelect('🎯', 'Status', S.fStatus, [['', 'Any status']].concat((Array.isArray(S.statuses) ? S.statuses : []).map(s => [s.id, s.name])),
       (v) => { S.fStatus = v; if (onChange) onChange(); }));
     // Source dropdown
     const srcOpts = [['', 'Any source']];
-    (S.sources || []).forEach(s => srcOpts.push([s.name || s, s.name || s]));
+    (Array.isArray(S.sources) ? S.sources : []).forEach(s => {
+      const name = (typeof s === 'string') ? s : (s && (s.name || s.label || s.value)) || '';
+      if (name) srcOpts.push([name, name]);
+    });
     // Also derive from leads if api_sources_list is empty
     if (srcOpts.length === 1) {
       const seen = new Set();
@@ -452,7 +472,7 @@ tr:hover .lv2-actions { opacity: 1; }
     }
     row1.appendChild(filterSelect('🏷', 'Source', S.fSource, srcOpts, (v) => { S.fSource = v; if (onChange) onChange(); }));
     // Owner dropdown
-    row1.appendChild(filterSelect('👤', 'Owner', S.fOwner, [['', 'Any owner']].concat((S.users || []).map(u => [u.id, u.name])),
+    row1.appendChild(filterSelect('👤', 'Owner', S.fOwner, [['', 'Any owner']].concat((Array.isArray(S.users) ? S.users : []).map(u => [u.id, u.name])),
       (v) => { S.fOwner = v; if (onChange) onChange(); }));
     // AI Score
     row1.appendChild(filterSelect('🤖', 'AI Score', S.fScore, [['', 'Any score'], ['hot', '🔥 Hot (80+)'], ['warm', '☀️ Warm (50-79)'], ['cold', '🧊 Cold (1-49)']],
@@ -462,10 +482,17 @@ tr:hover .lv2-actions { opacity: 1; }
     // Row 2: tag + campaign + followup + qualified + reset
     const row2 = h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' } });
     const tagOpts = [['', 'Any tag']];
-    (S.tags || []).forEach(t => tagOpts.push([t, t]));
+    (Array.isArray(S.tags) ? S.tags : []).forEach(t => {
+      const name = (typeof t === 'string') ? t : (t && (t.name || t.tag || t.value)) || '';
+      if (name) tagOpts.push([name, name]);
+    });
     row2.appendChild(filterSelect('🔖', 'Tag', S.fTag, tagOpts, (v) => { S.fTag = v; if (onChange) onChange(); }));
     const cmpOpts = [['', 'Any campaign']];
-    (S.campaigns || []).forEach(c => cmpOpts.push([c.id || c.name, c.name || c]));
+    (Array.isArray(S.campaigns) ? S.campaigns : []).forEach(c => {
+      const id = (c && (c.id || c.campaign_id)) || (typeof c === 'string' ? c : '');
+      const name = (typeof c === 'string') ? c : (c && (c.name || c.title || c.label)) || '';
+      if (name) cmpOpts.push([id || name, name]);
+    });
     row2.appendChild(filterSelect('📣', 'Campaign', S.fCampaign, cmpOpts, (v) => { S.fCampaign = v; if (onChange) onChange(); }));
     row2.appendChild(filterSelect('⏰', 'Follow-up', S.fFollowup, [['', 'All follow-ups'], ['overdue', '⚠ Overdue'], ['today', '📅 Due today'], ['week', '📆 This week'], ['none', '— No follow-up'] ],
       (v) => { S.fFollowup = v; if (onChange) onChange(); }));
@@ -489,6 +516,10 @@ tr:hover .lv2-actions { opacity: 1; }
     wrap.appendChild(row2);
 
     return wrap;
+    } catch (e) {
+      console.error('[LEADS_V2] buildFilterBar failed:', e);
+      return h('div', { style: { padding: '6px 14px', color: '#c04444', fontSize: '11px' } }, 'Filter bar error: ' + e.message);
+    }
   }
   function filterSelect(icon, lab, val, opts, onChange) {
     const sel = h('select', {
