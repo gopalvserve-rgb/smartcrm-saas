@@ -811,7 +811,16 @@
       S.users = users || [];
       S.statusById = {}; S.statuses.forEach(s => { S.statusById[s.id] = s; });
       S.userById = {};   S.users.forEach(u => { S.userById[u.id] = u; });
-      S.aiScore = aiScore || null;
+      // AI Score lives under .lead.smart_score (api_leadScore_get response)
+      S.aiScore = (aiScore && aiScore.lead) ? aiScore.lead : aiScore;
+      // Activity timeline (WA + calls + remarks + score changes — see api_copilot_lead_timeline)
+      // The Promise.all destructure above doesn't capture it, so re-extract.
+      try {
+        const tl = await api('api_copilot_lead_timeline', { lead_id: leadId, limit: 30 }).catch(() => null);
+        S.activity = (tl && Array.isArray(tl.events)) ? tl.events : (Array.isArray(tl) ? tl : []);
+      } catch (_) { S.activity = []; }
+      // AI Summary — reset cache on lead switch (lazy fetch on user click)
+      S.aiSummary = null;
       renderLead();
     } catch (e) {
       const c = $('#wbv2-lead');
@@ -881,17 +890,60 @@
     host.appendChild(h('div', { class: 'wbv2-addnote' },
       h('button', { onclick: openAddNote }, '📝 Add Note / Remark')));
 
-    // AI Score
-    if (S.aiScore && Number(S.aiScore.score)) {
-      const sc = Number(S.aiScore.score);
-      const bucket = sc >= 80 ? '🔥 HOT LEAD' : sc >= 50 ? '☀️ WARM LEAD' : '🧊 COLD LEAD';
+    // AI Score (api_leadScore_get returns under .lead with smart_score / smart_category)
+    const score = S.aiScore ? Number(S.aiScore.smart_score || S.aiScore.score || 0) : 0;
+    if (score > 0) {
+      const cat = String(S.aiScore.smart_category || '').toLowerCase();
+      const label = cat === 'hot' ? '🔥 HOT LEAD' : cat === 'warm' ? '☀️ WARM LEAD' : cat === 'cold' ? '🧊 COLD LEAD' : (score >= 80 ? '🔥 HOT LEAD' : score >= 50 ? '☀️ WARM LEAD' : '🧊 COLD LEAD');
       host.appendChild(h('div', { class: 'wbv2-sec' },
         h('div', { class: 'lab' }, '🤖 AI Score'),
         h('div', { class: 'wbv2-ai' },
-          h('div', { class: 'score' }, String(sc)),
+          h('div', { class: 'score' }, String(score)),
           h('div', { class: 'meta' },
-            h('b', null, bucket),
-            h('div', null, S.aiScore.reason || S.aiScore.summary || '')))));
+            h('b', null, label),
+            h('div', null, S.aiScore.score_reason || S.aiScore.reason || '')))));
+    }
+
+    // AI Summary — button that fetches api_copilot_lead_summary on click
+    host.appendChild(h('div', { class: 'wbv2-sec' },
+      h('div', { class: 'lab' }, '✨ AI Summary'),
+      S.aiSummary
+        ? h('div', { style: { padding: '10px 12px', background: 'linear-gradient(135deg, #f0f4ff 0%, #fff8f0 100%)', border: '1px solid #d4dffd', borderRadius: '10px', fontSize: '12px', color: '#1e293b', lineHeight: '1.5', whiteSpace: 'pre-wrap' } }, S.aiSummary)
+        : h('button', {
+            style: { width: '100%', padding: '10px 14px', background: 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)', color: 'white', border: 'none', borderRadius: '10px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' },
+            onclick: async function () {
+              this.disabled = true; this.textContent = '⏳ Asking AI…';
+              try {
+                const r = await api('api_copilot_lead_summary', { lead_id: l.id });
+                S.aiSummary = (r && (r.summary || r.text || r.body)) || 'No summary returned.';
+                renderLead();
+              } catch (e) { this.disabled = false; this.textContent = '✨ Generate AI Summary'; toast(e.message, 'err'); }
+            }
+          }, '✨ Generate AI Summary')));
+
+    // Recent Activity timeline (WA + calls + remarks + score changes)
+    if (Array.isArray(S.activity) && S.activity.length) {
+      const top = S.activity.slice(0, 6);
+      const sec = h('div', { class: 'wbv2-sec' },
+        h('div', { class: 'lab' }, h('span', null, '📊 Recent Activity'), S.activity.length > 6 ? h('span', { class: 'tog', onclick: () => { try { window.location.hash = '#/lead/' + l.id; } catch (_) {} } }, 'View all ' + S.activity.length + ' →') : null));
+      top.forEach(ev => sec.appendChild(activityRow(ev)));
+      host.appendChild(sec);
+    }
+
+    // Last Call card (most recent call event with optional recording link)
+    const calls = (S.activity || []).filter(ev => ev.kind === 'call');
+    if (calls.length) {
+      const c = calls[0];
+      const dirLabel = c.dir === 'in' ? '📞 Incoming' : c.dir === 'out' ? '📞 Outgoing' : c.dir === 'missed' ? '📵 Missed' : '📞 Call';
+      const durLabel = c.duration ? Math.floor(c.duration / 60) + 'm ' + (c.duration % 60) + 's' : '';
+      host.appendChild(h('div', { class: 'wbv2-sec' },
+        h('div', { class: 'lab' }, '📞 Last Call'),
+        h('div', { style: { padding: '10px 12px', background: '#f8f9fa', borderRadius: '10px', border: '1px solid #e9edef' } },
+          h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' } },
+            h('b', { style: { fontSize: '12.5px' } }, dirLabel + (durLabel ? ' · ' + durLabel : '')),
+            h('span', { style: { fontSize: '10px', color: '#8696a0' } }, fmtRelative(c.at))),
+          c.recording ? h('audio', { controls: 'controls', src: c.recording, style: { width: '100%', marginTop: '8px', height: '32px' } }) :
+                        h('div', { style: { fontSize: '11px', color: '#8696a0', marginTop: '4px' } }, 'No recording attached'))));
     }
 
     // Notes — uses leads.notes (single timestamped field) for now
@@ -935,6 +987,33 @@
     document.body.appendChild(bg);
     setTimeout(() => $('#wbv2-note-input').focus(), 50);
   }
+  function activityRow(ev) {
+    const k = ev.kind || '';
+    const ico = k === 'wa'     ? (ev.dir === 'in' ? '💬' : '💚')
+              : k === 'call'   ? (ev.dir === 'missed' ? '📵' : '📞')
+              : k === 'remark' ? '📝'
+              : k === 'score'  ? '🎯'
+              : k === 'status' ? '🏷'
+              : '•';
+    const who = k === 'wa' ? (ev.dir === 'in' ? 'WhatsApp received' : 'WhatsApp sent')
+              : k === 'call' ? (ev.dir === 'in' ? 'Call incoming' : ev.dir === 'out' ? 'Call outgoing' : ev.dir === 'missed' ? 'Call missed' : 'Call')
+              : k === 'remark' ? 'Note added' + (ev.by ? ' · ' + ev.by : '')
+              : k === 'score' ? 'AI Score changed (' + (ev.old_score || 0) + ' → ' + (ev.new_score || 0) + ')'
+              : (ev.label || ev.kind || 'Activity');
+    const detail = k === 'wa' ? String(ev.text || '').slice(0, 70)
+                 : k === 'call' ? (ev.duration ? Math.floor(ev.duration/60)+'m '+(ev.duration%60)+'s' : 'no duration') + (ev.recording ? ' · ▶ rec' : '')
+                 : k === 'remark' ? String(ev.text || '').slice(0, 70)
+                 : k === 'score' ? (ev.reason_text || ev.trigger_event || '')
+                 : '';
+    return h('div', { class: 'wbv2-act' },
+      h('div', { class: 'ico' }, ico),
+      h('div', { class: 'b' },
+        h('div', { class: 'h' },
+          h('span', { class: 'who' }, who),
+          h('span', { class: 'w' }, fmtRelative(ev.at))),
+        detail ? h('div', { class: 'd' }, detail) : null));
+  }
+
   function reloadActiveThread() {
     // refresh thread list so latest status/owner reflects in left panel
     if (S.activeThread) {
