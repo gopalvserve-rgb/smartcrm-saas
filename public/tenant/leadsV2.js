@@ -148,7 +148,7 @@
 .lv2-toggle button.active { background: white; color: #0f172a; font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.06); }
 
 /* ===== MODERN (A3) STYLES ===== */
-.lv2-modern { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; margin-top: 10px; }
+.lv2-modern { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; margin-top: 10px; display: flex; flex-direction: column; height: calc(100vh - 100px); }
 .lv2-modern .health { display: grid; grid-template-columns: repeat(5, 1fr); padding: 14px 18px; border-bottom: 1px solid #e2e8f0; background: linear-gradient(to bottom, #fafbfc, #ffffff); }
 .lv2-modern .hcell { padding: 0 16px; border-right: 1px solid #f1f5f9; }
 .lv2-modern .hcell:first-child { padding-left: 0; }
@@ -173,7 +173,7 @@
 .lv2-modern .qchip:hover { border-color: #6366f1; color: #4f46e5; }
 .lv2-modern .qchip.active { background: #eef2ff; border-color: #c7d2fe; color: #4338ca; font-weight: 600; }
 
-.lv2-modern .tbl-wrap { max-height: calc(100vh - 380px); overflow: auto; background: white; }
+.lv2-modern .tbl-wrap { flex: 1; overflow: auto; background: white; min-height: 0; }
 .lv2-modern table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; }
 .lv2-modern thead th { position: sticky; top: 0; background: #fafbfc; padding: 9px 12px; text-align: left; font-weight: 600; color: #64748b; font-size: 10.5px; text-transform: uppercase; letter-spacing: .4px; border-bottom: 1px solid #e2e8f0; white-space: nowrap; z-index: 5; }
 .lv2-modern thead th.sticky-l { position: sticky; left: 0; background: #fafbfc; z-index: 10; border-right: 1px solid #f1f5f9; }
