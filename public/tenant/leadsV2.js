@@ -233,6 +233,13 @@ tr:hover .lv2-actions { opacity: 1; }
 
 /* SLIDE-OVER detail panel */
 .lv2-slideover { position: fixed; top: 56px; right: 0; width: 460px; height: calc(100vh - 56px); background: white; border-left: 1px solid #e2e8f0; box-shadow: -10px 0 30px rgba(0,0,0,.06); z-index: 990; display: flex; flex-direction: column; animation: lv2slide .2s ease-out; }
+.lv2-slideover.bucket-hot  { border-left: 4px solid #ef4444; }
+.lv2-slideover.bucket-warm { border-left: 4px solid #f59e0b; }
+.lv2-slideover.bucket-cold { border-left: 4px solid #3b82f6; }
+.lv2-slideover .lv2-so-head.bucket-hot  { background: linear-gradient(to bottom, #fef2f2, white); }
+.lv2-slideover .lv2-so-head.bucket-warm { background: linear-gradient(to bottom, #fffbeb, white); }
+.lv2-slideover .lv2-so-head.bucket-cold { background: linear-gradient(to bottom, #eff6ff, white); }
+@keyframes lv2spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 @keyframes lv2slide { from { transform: translateX(100%); } to { transform: translateX(0); } }
 .lv2-so-head { padding: 16px 20px; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; gap: 12px; }
 .lv2-so-head .lv2-av { width: 44px; height: 44px; border-radius: 12px; font-size: 16px; }
@@ -997,12 +1004,16 @@ tr:hover .lv2-actions { opacity: 1; }
   function openSlideOver(l) {
     S.selectedId = l.id;
     closeSlideOver();
-    const so = h('aside', { class: 'lv2-slideover', id: 'lv2-slideover' });
+    const score = Number(l.smart_score || 0);
+    const bucket = score >= 80 ? 'hot' : score >= 50 ? 'warm' : score > 0 ? 'cold' : '';
+    const bucketLab = bucket === 'hot' ? '🔥 HOT' : bucket === 'warm' ? '☀️ WARM' : bucket === 'cold' ? '🧊 COLD' : '';
+    const so = h('aside', { class: 'lv2-slideover bucket-' + (bucket || 'none'), id: 'lv2-slideover' });
     const name = l.name || l.phone || '—';
-    so.appendChild(h('div', { class: 'lv2-so-head' },
+    so.appendChild(h('div', { class: 'lv2-so-head bucket-' + (bucket || 'none') },
       h('div', { class: 'lv2-av', style: { background: avColor(name) } }, initials(name)),
       h('div', { class: 'info' },
-        h('div', { class: 'name' }, name),
+        h('div', { class: 'name' }, name,
+          bucket ? h('span', { class: 'lv2-scorechip ' + bucket, style: { marginLeft: '8px', fontSize: '10px', verticalAlign: 'middle' } }, score + ' · ' + bucketLab) : null),
         h('div', { class: 'sub' }, (l.phone ? '📞 ' + l.phone : '') + (l.email ? ' · 📧 ' + l.email : '') + ' · created ' + fmtRel(l.created_at))),
       h('div', { class: 'x', onclick: closeSlideOver }, '✕')));
 
@@ -1031,42 +1042,92 @@ tr:hover .lv2-actions { opacity: 1; }
       h('h3', null, '✨ AI Suggested Next Step'),
       h('div', { class: 'txt' }, aiHint(l))));
 
-    // AI Summary placeholder — fetched async
+    // AI Summary card — AUTO-fetches on open
     body.appendChild(h('div', { class: 'lv2-so-card', id: 'lv2-so-aisum',
       style: { background: 'linear-gradient(135deg, #f0f4ff 0%, #faf5ff 100%)', borderColor: '#c7d2fe' } },
       h('h3', { style: { color: '#4338ca' } }, '🤖 AI Summary'),
-      h('button', { id: 'lv2-so-aisum-btn',
-        style: { width: '100%', padding: '8px', background: 'linear-gradient(135deg, #6366f1, #a855f7)', color: 'white', border: 'none', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' },
-        onclick: async function () {
-          this.disabled = true; this.textContent = '⏳ Asking AI…';
-          try {
-            const r = await api('api_copilot_lead_summary', { lead_id: l.id });
-            const text = (r && (r.summary || r.text || r.body)) || 'No summary returned.';
-            const host = document.getElementById('lv2-so-aisum');
-            if (host) host.innerHTML = '';
-            if (host) {
-              host.appendChild(h('h3', { style: { color: '#4338ca' } }, '🤖 AI Summary'));
-              host.appendChild(h('div', { style: { fontSize: '12px', color: '#1e293b', lineHeight: '1.5', whiteSpace: 'pre-wrap' } }, text));
-            }
-          } catch (e) {
-            this.disabled = false;
-            this.textContent = '✨ Generate AI Summary';
-            toast(e.message, 'err');
-          }
-        }
-      }, '✨ Generate AI Summary')));
+      h('div', { id: 'lv2-so-aisum-body', style: { fontSize: '12px', color: '#64748b', lineHeight: '1.5' } },
+        h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px' } },
+          h('span', { style: { width: '12px', height: '12px', border: '2px solid #c7d2fe', borderTopColor: '#6366f1', borderRadius: '50%', display: 'inline-block', animation: 'lv2spin 0.7s linear infinite' } }),
+          '✨ Generating AI summary…'))));
 
-    // Details
-    body.appendChild(h('div', { class: 'lv2-so-card' },
-      h('h3', null, '📍 Details'),
-      h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'Owner'), h('span', { class: 'v' }, l.assigned_name || '—')),
-      h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'Status'), h('span', { class: 'v' }, l.status_name || '—')),
+    // QUICK EDIT card — compact inline controls for Status / Follow-up / Owner / Add Note
+    const inputStyle = { padding: '4px 8px', background: 'white', border: '1px solid #e2e8f0', borderRadius: '5px', fontSize: '11.5px', color: '#0f172a', outline: 'none', width: '100%', boxSizing: 'border-box' };
+    const labStyle = { fontSize: '9.5px', fontWeight: '700', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '.3px', marginBottom: '3px', display: 'block' };
+
+    body.appendChild(h('div', { class: 'lv2-so-card', style: { padding: '10px 12px' } },
+      h('h3', { style: { margin: '0 0 8px' } }, '⚡ Quick Edit'),
+      // Status dropdown
+      h('div', { style: { marginBottom: '8px' } },
+        h('span', { style: labStyle }, '🎯 Status'),
+        (() => {
+          const sel = h('select', {
+            style: inputStyle,
+            onchange: async (e) => {
+              const v = Number(e.target.value);
+              try { await api('api_leads_update', l.id, { status_id: v }); l.status_id = v; const newSt = (S.statuses || []).find(s => Number(s.id) === v); l.status_name = newSt ? newSt.name : l.status_name; toast('Status updated', 'ok'); rerenderRows(); } catch (err) { toast(err.message, 'err'); }
+            }
+          });
+          (Array.isArray(S.statuses) ? S.statuses : []).forEach(s => sel.appendChild(h('option', { value: s.id, selected: Number(s.id) === Number(l.status_id) ? 'selected' : null }, s.name)));
+          return sel;
+        })()),
+      // Next Follow-up Date
+      h('div', { style: { marginBottom: '8px' } },
+        h('span', { style: labStyle }, '⏰ Next Follow-up'),
+        h('input', {
+          type: 'datetime-local',
+          value: l.next_followup_at ? (function(d){ const pad = n => String(n).padStart(2,'0'); return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes()); })(new Date(l.next_followup_at)) : '',
+          style: inputStyle,
+          onchange: async (e) => {
+            const iso = e.target.value ? new Date(e.target.value).toISOString() : null;
+            try { await api('api_leads_update', l.id, { next_followup_at: iso }); l.next_followup_at = iso; toast('Follow-up updated', 'ok'); rerenderRows(); } catch (err) { toast(err.message, 'err'); }
+          }
+        })),
+      // Owner dropdown
+      h('div', { style: { marginBottom: '8px' } },
+        h('span', { style: labStyle }, '👤 Owner'),
+        (() => {
+          const sel = h('select', {
+            style: inputStyle,
+            onchange: async (e) => {
+              const v = e.target.value ? Number(e.target.value) : null;
+              try { await api('api_leads_update', l.id, { assigned_to: v }); l.assigned_to = v; const u = (S.users || []).find(u => Number(u.id) === v); l.assigned_name = u ? u.name : null; toast('Reassigned', 'ok'); rerenderRows(); } catch (err) { toast(err.message, 'err'); }
+            }
+          });
+          sel.appendChild(h('option', { value: '' }, '— Unassigned —'));
+          (Array.isArray(S.users) ? S.users : []).forEach(u => sel.appendChild(h('option', { value: u.id, selected: Number(u.id) === Number(l.assigned_to) ? 'selected' : null }, u.name)));
+          return sel;
+        })()),
+      // Add Note inline
+      h('div', { style: { marginBottom: '0' } },
+        h('span', { style: labStyle }, '📝 Add Note / Remark'),
+        h('div', { style: { display: 'flex', gap: '4px' } },
+          h('input', { id: 'lv2-so-note-' + l.id, placeholder: 'Type and Enter to save…',
+            style: inputStyle,
+            onkeydown: async (e) => {
+              if (e.key !== 'Enter') return;
+              const txt = String(e.target.value || '').trim();
+              if (!txt) return;
+              try { await api('api_leads_addRemark', l.id, { remark: txt }); e.target.value = ''; l.notes = (txt + ' — ' + (l.notes || '')).slice(0, 5000); toast('Note added', 'ok'); rerenderRows(); openSlideOver(l); } catch (err) { toast(err.message, 'err'); }
+            } }),
+          h('button', {
+            style: { padding: '4px 10px', background: '#6366f1', color: 'white', border: 'none', borderRadius: '5px', fontSize: '11px', cursor: 'pointer', fontWeight: '600' },
+            onclick: async () => {
+              const inp = document.getElementById('lv2-so-note-' + l.id);
+              const txt = String(inp && inp.value || '').trim();
+              if (!txt) return;
+              try { await api('api_leads_addRemark', l.id, { remark: txt }); inp.value = ''; toast('Note added', 'ok'); openSlideOver(l); rerenderRows(); } catch (err) { toast(err.message, 'err'); }
+            }
+          }, 'Save')))));
+
+    // DETAILS card — read-only condensed view of remaining fields
+    body.appendChild(h('div', { class: 'lv2-so-card', style: { padding: '10px 12px' } },
+      h('h3', { style: { margin: '0 0 6px' } }, '📍 Other Details'),
       h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'Source'), h('span', { class: 'v' }, l.source || '—')),
-      h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'Follow-up'), h('span', { class: 'v' }, l.next_followup_at ? new Date(l.next_followup_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—')),
       h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'AI Score'), h('span', { class: 'v' }, (l.smart_score || 0) + ' · ' + (l.smart_category || '—'))),
-      l.email ? h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'Email'), h('span', { class: 'v', style: { fontSize: '11px' } }, l.email)) : null,
+      l.email ? h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'Email'), h('span', { class: 'v', style: { fontSize: '10.5px' } }, l.email)) : null,
       l.city ? h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'City'), h('span', { class: 'v' }, l.city)) : null,
-      l.tags ? h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'Tags'), h('span', { class: 'v', style: { fontSize: '11px' } }, l.tags)) : null,
+      l.tags ? h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'Tags'), h('span', { class: 'v', style: { fontSize: '10.5px' } }, l.tags)) : null,
       l.product_name ? h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'Product'), h('span', { class: 'v' }, l.product_name)) : null));
 
     // Notes
@@ -1081,7 +1142,27 @@ tr:hover .lv2-actions { opacity: 1; }
     body.appendChild(h('div', { id: 'lv2-so-lastcall', class: 'lv2-so-card' }, h('h3', null, '📞 Last Call'), h('div', { style: { fontSize: '11.5px', color: '#94a3b8' } }, 'Loading…')));
     body.appendChild(h('div', { id: 'lv2-so-activity', class: 'lv2-so-card' }, h('h3', null, '📊 Recent Activity'), h('div', { style: { fontSize: '11.5px', color: '#94a3b8' } }, 'Loading…')));
 
-    // ---- Async load — timeline drives Last WA + Last Call + Activity ----
+    // ---- Async load — AI Summary + timeline in parallel ----
+    setTimeout(async () => {
+      try {
+        const r = await api('api_copilot_lead_summary', { lead_id: l.id }).catch(() => null);
+        const text = (r && (r.summary || r.text || r.body)) || null;
+        const host = document.getElementById('lv2-so-aisum-body');
+        if (host) {
+          host.innerHTML = '';
+          if (text) {
+            host.style.color = '#1e293b';
+            host.appendChild(h('div', { style: { whiteSpace: 'pre-wrap', fontSize: '12px', lineHeight: '1.5' } }, text));
+          } else {
+            host.appendChild(h('div', { style: { color: '#94a3b8' } }, 'No AI summary available'));
+          }
+        }
+      } catch (e) {
+        const host = document.getElementById('lv2-so-aisum-body');
+        if (host) { host.innerHTML = ''; host.appendChild(h('div', { style: { color: '#c04444' } }, 'AI summary failed: ' + e.message)); }
+      }
+    }, 0);
+
     setTimeout(async () => {
       try {
         const tl = await api('api_copilot_lead_timeline', { lead_id: l.id, limit: 30 }).catch(() => null);
@@ -1121,6 +1202,38 @@ tr:hover .lv2-actions { opacity: 1; }
             if (lastCall.recording) {
               callHost.appendChild(h('audio', { controls: 'controls', src: lastCall.recording,
                 style: { width: '100%', marginTop: '8px', height: '32px' } }));
+              const auditId = 'lv2-audit-' + l.id;
+              callHost.appendChild(h('div', { id: auditId, style: { marginTop: '8px' } },
+                h('button', {
+                  style: { width: '100%', padding: '5px 10px', background: 'linear-gradient(135deg, #ede9fe, #faf5ff)', color: '#6d28d9', border: '1px solid #ddd6fe', borderRadius: '5px', fontSize: '11px', cursor: 'pointer', fontWeight: '600' },
+                  onclick: async function () {
+                    this.disabled = true; this.textContent = '⏳ Auditing…';
+                    try {
+                      const recId = lastCall.recording_id || lastCall.id;
+                      if (!recId) { this.textContent = '⚠ No recording id'; return; }
+                      const r = await api('api_recording_aiSummary', recId);
+                      const host = document.getElementById(auditId);
+                      if (!host) return;
+                      host.innerHTML = '';
+                      if (r && r.status === 'pending') {
+                        host.appendChild(h('div', { style: { fontSize: '11px', color: '#92400e', padding: '6px 8px', background: '#fef3c7', borderRadius: '5px' } }, '⏳ Still processing — retry in a minute'));
+                      } else if (r && r.status === 'failed') {
+                        host.appendChild(h('div', { style: { fontSize: '11px', color: '#b91c1c', padding: '6px 8px', background: '#fef2f2', borderRadius: '5px' } }, '⚠ AI audit failed: ' + (r.error || 'unknown')));
+                      } else {
+                        host.appendChild(h('div', { style: { fontSize: '10px', fontWeight: '700', color: '#6d28d9', textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: '5px' } }, '✨ AI Audit'));
+                        if (r && r.summary) host.appendChild(h('div', { style: { fontSize: '11.5px', color: '#1e293b', lineHeight: '1.45', whiteSpace: 'pre-wrap', background: 'linear-gradient(135deg, #faf5ff, #f0f4ff)', padding: '6px 8px', borderRadius: '5px', border: '1px solid #ddd6fe' } }, r.summary));
+                        if (r && r.key_insight) host.appendChild(h('div', { style: { fontSize: '10.5px', color: '#475569', marginTop: '4px' } }, '💡 ' + r.key_insight));
+                        if (r && Array.isArray(r.action_items) && r.action_items.length) {
+                          host.appendChild(h('div', { style: { fontSize: '10.5px', color: '#475569', marginTop: '4px' } },
+                            h('b', null, 'Actions: '), r.action_items.slice(0,3).join(' · ')));
+                        }
+                      }
+                    } catch (e) {
+                      this.disabled = false; this.textContent = '✨ AI Audit recording';
+                      toast(e.message, 'err');
+                    }
+                  }
+                }, '✨ AI Audit recording')));
             } else {
               callHost.appendChild(h('div', { style: { fontSize: '11px', color: '#94a3b8', marginTop: '4px' } }, 'No recording attached'));
             }
