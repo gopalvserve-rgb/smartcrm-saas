@@ -45,6 +45,8 @@ function _monthlyFromPackage(pkg) {
 
 // ---- 1. Overview KPI cards ------------------------------------------
 async function api_saas_finance_overview(token, payload) {
+  const _me = await requireSuperAdmin(token);
+  await require('./saasPermissions').requirePerm(_me, 'finance.view');
   await requireSuperAdmin(token);
   const _rng = _resolveRange(payload);
 

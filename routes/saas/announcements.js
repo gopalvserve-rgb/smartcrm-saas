@@ -18,6 +18,8 @@ async function api_saas_announcements_listAdmin(token) {
 }
 
 async function api_saas_announcements_save(token, payload) {
+  const _me = await requireSuperAdmin(token);
+  await require('./saasPermissions').requirePerm(_me, 'announcements.manage');
   await requireFullAdmin(token);
   const p = payload || {};
   if (!p.title || !p.body) throw new Error('Title and body are required');
@@ -38,6 +40,8 @@ async function api_saas_announcements_save(token, payload) {
 }
 
 async function api_saas_announcements_delete(token, id) {
+  const _me = await requireSuperAdmin(token);
+  await require('./saasPermissions').requirePerm(_me, 'announcements.manage');
   await requireFullAdmin(token);
   await control.update('platform_announcements', id, { is_active: 0 });
   return { ok: true };

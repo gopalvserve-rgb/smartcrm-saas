@@ -63,6 +63,8 @@ const SETTING_KEYS = [
 ];
 
 async function api_saas_settings_get(token) {
+  const _me = await requireSuperAdmin(token);
+  await require('./saasPermissions').requirePerm(_me, 'settings.edit');
   await requireFullAdmin(token);
   const r = await control.query(`SELECT key, value FROM saas_settings`);
   const stored = {};
@@ -79,6 +81,7 @@ async function api_saas_settings_get(token) {
 
 async function api_saas_settings_save(token, payload) {
   const me = await requireFullAdmin(token);
+  await require('./saasPermissions').requirePerm(me, 'settings.edit');
   const p = payload || {};
   const allowed = new Set(SETTING_KEYS.map(s => s.key));
   let changed = 0;

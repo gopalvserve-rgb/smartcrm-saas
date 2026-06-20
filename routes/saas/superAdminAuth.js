@@ -29,11 +29,11 @@ async function authSuperAdmin(token) {
 }
 
 async function requireSuperAdmin(token) {
-  const sa = await authSuperAdmin(token);
-  if (sa.role !== 'admin' && sa.role !== 'assistant') {
-    throw new Error('Insufficient permissions');
-  }
-  return sa;
+  // SUPER_ADMIN_PERMS_v2 (2026-06-20) — any active super-admin is allowed
+  // through the door; per-permission enforcement is layered on top via
+  // requirePerm(...) calls inside each endpoint. This lets viewers reach
+  // their own /me + a few read-only endpoints they actually need.
+  return authSuperAdmin(token);
 }
 
 async function requireFullAdmin(token) {
@@ -61,7 +61,18 @@ async function api_saas_admin_login(_token, payload) {
 
 async function api_saas_admin_me(token) {
   const sa = await authSuperAdmin(token);
-  return { id: sa.id, name: sa.name, email: sa.email, role: sa.role };
+  // SUPER_ADMIN_PERMS_v2 — fold the effective grants for the caller's
+  // role into the response so the SPA can filter NAV items + early-out
+  // forbidden views without a second round-trip.
+  let grants = {};
+  try {
+    const perms = require('./saasPermissions');
+    const all = await perms.api_saas_perms_get(token);
+    grants = (all && all.matrix && all.matrix[sa.role]) || {};
+  } catch (e) {
+    console.warn('[api_saas_admin_me] grants fetch failed:', e.message);
+  }
+  return { id: sa.id, name: sa.name, email: sa.email, role: sa.role, grants };
 }
 
 // ---- API: list super-admins (Super Assistants tab) -------------

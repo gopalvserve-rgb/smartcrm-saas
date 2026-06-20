@@ -147,6 +147,8 @@ function expressClientErrorEndpoint(req, res) {
 
 /* ---------- Super-admin API --------------------------------------- */
 async function api_saas_errorLogs_list(token, filters) {
+  const _me = await requireSuperAdmin(token);
+  await require('./saasPermissions').requirePerm(_me, 'errors.view');
   await requireSuperAdmin(token);
   const f = filters || {};
   const where = []; const params = [];
@@ -192,6 +194,7 @@ async function api_saas_errorLogs_get(token, id) {
 
 async function api_saas_errorLogs_resolve(token, id, note) {
   const sa = await requireSuperAdmin(token);
+  await require('./saasPermissions').requirePerm(sa, 'errors.resolve');
   await control.query(
     `UPDATE error_logs
         SET resolved = 1,
@@ -220,6 +223,8 @@ async function api_saas_errorLogs_resolveAll(token, filters) {
 }
 
 async function api_saas_errorLogs_reopen(token, id) {
+  const _me = await requireSuperAdmin(token);
+  await require('./saasPermissions').requirePerm(_me, 'errors.resolve');
   await requireSuperAdmin(token);
   await control.query(
     `UPDATE error_logs

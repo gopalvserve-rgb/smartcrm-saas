@@ -19,6 +19,8 @@ const { seedTenantKnowledgeBase } = require('./kbSeed');
 const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
 
 async function api_saas_tenants_list(token, filters) {
+  const _me = await requireSuperAdmin(token);
+  await require('./saasPermissions').requirePerm(_me, 'tenants.view');
   await requireSuperAdmin(token);
   const f = filters || {};
   const where = [];
@@ -52,6 +54,8 @@ async function api_saas_tenants_get(token, id) {
 
 async function api_saas_tenants_changePackage(token, payload) {
   const me = await requireSuperAdmin(token);
+  await require('./saasPermissions').requirePerm(me, 'tenants.edit');
+  await require('./saasPermissions').requirePerm(me, 'tenants.view');
   const p = payload || {};
   const tenant = await control.findById('tenants', p.tenant_id);
   if (!tenant) throw new Error('Tenant not found');
@@ -69,6 +73,7 @@ async function api_saas_tenants_changePackage(token, payload) {
 
 async function api_saas_tenants_suspend(token, id) {
   const me = await requireSuperAdmin(token);
+  await require('./saasPermissions').requirePerm(me, 'tenants.suspend');
   const t = await control.findById('tenants', id);
   if (!t) throw new Error('Tenant not found');
   await control.update('tenants', id, { status: 'suspended' });
@@ -82,6 +87,7 @@ async function api_saas_tenants_suspend(token, id) {
 
 async function api_saas_tenants_restore(token, id) {
   const me = await requireSuperAdmin(token);
+  await require('./saasPermissions').requirePerm(me, 'tenants.suspend');
   const t = await control.findById('tenants', id);
   if (!t) throw new Error('Tenant not found');
   await control.update('tenants', id, { status: 'active', pending_delete_at: null });
@@ -148,6 +154,7 @@ async function api_saas_tenants_setModules(token, payload) {
  */
 async function api_saas_tenants_createManual(token, payload) {
   const me = await requireFullAdmin(token);
+  await require('./saasPermissions').requirePerm(me, 'tenants.add');
   const p = payload || {};
 
   // ---- Validation -----------------------------------------------
@@ -1017,6 +1024,8 @@ async function api_saas_tenants_setAiRecording(token, payload) {
 // TENANT_PARTIAL_PAY_v1 (2026-06-20) — total outstanding across all
 // tenants. Sums (total - paid) for active tenants only.
 async function api_saas_dashboard_outstanding(token) {
+  const _me = await requireSuperAdmin(token);
+  await require('./saasPermissions').requirePerm(_me, 'dashboard.view');
   await requireSuperAdmin(token);
   const r = await control.query(`
     SELECT COALESCE(SUM(

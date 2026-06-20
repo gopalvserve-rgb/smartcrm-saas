@@ -11,6 +11,8 @@ const control = require('../../control/db');
 const { requireSuperAdmin } = require('./superAdminAuth');
 
 async function api_saas_webhookLogs_list(token, filters) {
+  const _me = await requireSuperAdmin(token);
+  await require('./saasPermissions').requirePerm(_me, 'webhooks.view');
   await requireSuperAdmin(token);
   const f = filters || {};
   const where = []; const params = [];
@@ -33,6 +35,8 @@ async function api_saas_webhookLogs_list(token, filters) {
 }
 
 async function api_saas_webhookLogs_get(token, id) {
+  const _me = await requireSuperAdmin(token);
+  await require('./saasPermissions').requirePerm(_me, 'webhooks.view');
   await requireSuperAdmin(token);
   return control.findById('cashfree_webhook_logs', id);
 }

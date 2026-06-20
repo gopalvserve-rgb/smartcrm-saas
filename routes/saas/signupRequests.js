@@ -181,6 +181,8 @@ async function api_saas_sr_publicSubmit(_token, payload) {
 
 /* ───────── ADMIN: list ───────── */
 async function api_saas_sr_list(token, filters) {
+  const _me = await requireSuperAdmin(token);
+  await require('./saasPermissions').requirePerm(_me, 'signup_req.view');
   await requireSuperAdmin(token);
   await _ensureSchema();
   const f = filters || {};
@@ -204,6 +206,8 @@ async function api_saas_sr_list(token, filters) {
 
 /* ───────── ADMIN: count pending (for sidebar badge) ───────── */
 async function api_saas_sr_pendingCount(token) {
+  const _me = await requireSuperAdmin(token);
+  await require('./saasPermissions').requirePerm(_me, 'signup_req.view');
   await requireSuperAdmin(token);
   await _ensureSchema();
   const r = await control.query(`SELECT COUNT(*)::int AS n FROM signup_requests WHERE status='pending'`);
@@ -220,6 +224,8 @@ async function api_saas_sr_get(token, id) {
 /* ───────── ADMIN: edit before approval ───────── */
 async function api_saas_sr_update(token, payload) {
   const me = await requireSuperAdmin(token);
+  await require('./saasPermissions').requirePerm(me, 'signup_req.edit');
+  await require('./saasPermissions').requirePerm(me, 'signup_req.view');
   await _ensureSchema();
   const p = payload || {};
   const row = await control.findById('signup_requests', p.id);
@@ -265,6 +271,7 @@ async function api_saas_sr_update(token, payload) {
 /* ───────── ADMIN: approve → provision tenant ───────── */
 async function api_saas_sr_approve(token, payload) {
   const me = await requireSuperAdmin(token);
+  await require('./saasPermissions').requirePerm(me, 'signup_req.approve');
   await _ensureSchema();
   const p = payload || {};
   const row = await control.findById('signup_requests', p.id);
@@ -386,6 +393,7 @@ async function api_saas_sr_approve(token, payload) {
 /* ───────── ADMIN: reject ───────── */
 async function api_saas_sr_reject(token, payload) {
   const me = await requireSuperAdmin(token);
+  await require('./saasPermissions').requirePerm(me, 'signup_req.reject');
   await _ensureSchema();
   const p = payload || {};
   const row = await control.findById('signup_requests', p.id);
@@ -409,6 +417,7 @@ async function api_saas_sr_reject(token, payload) {
 /* ───────── ADMIN: re-open a rejected one ───────── */
 async function api_saas_sr_reopen(token, payload) {
   const me = await requireSuperAdmin(token);
+  await require('./saasPermissions').requirePerm(me, 'signup_req.edit');
   await _ensureSchema();
   const p = payload || {};
   const row = await control.findById('signup_requests', p.id);

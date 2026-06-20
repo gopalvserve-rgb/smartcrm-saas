@@ -10,6 +10,8 @@ const control = require('../../control/db');
 const { requireSuperAdmin } = require('./superAdminAuth');
 
 async function api_saas_invoices_list(token, filters) {
+  const _me = await requireSuperAdmin(token);
+  await require('./saasPermissions').requirePerm(_me, 'invoices.view');
   await requireSuperAdmin(token);
   const f = filters || {};
   const where = [];
@@ -30,6 +32,8 @@ async function api_saas_invoices_list(token, filters) {
 }
 
 async function api_saas_invoices_get(token, id) {
+  const _me = await requireSuperAdmin(token);
+  await require('./saasPermissions').requirePerm(_me, 'invoices.view');
   await requireSuperAdmin(token);
   const r = await control.query(
     `SELECT i.*, t.slug, t.org_name, t.contact_email, t.contact_name,
@@ -45,6 +49,7 @@ async function api_saas_invoices_get(token, id) {
 
 async function api_saas_invoices_markPaid(token, id) {
   const me = await requireSuperAdmin(token);
+  await require('./saasPermissions').requirePerm(me, 'invoices.mark_paid');
   const inv = await control.findById('invoices', id);
   if (!inv) throw new Error('Invoice not found');
   if (inv.status === 'paid') return { ok: true };
@@ -59,6 +64,7 @@ async function api_saas_invoices_markPaid(token, id) {
 
 async function api_saas_invoices_void(token, id) {
   const me = await requireSuperAdmin(token);
+  await require('./saasPermissions').requirePerm(me, 'invoices.void');
   const inv = await control.findById('invoices', id);
   if (!inv) throw new Error('Invoice not found');
   await control.update('invoices', id, { status: 'void' });
@@ -86,6 +92,7 @@ async function api_saas_invoices_void(token, id) {
  */
 async function api_saas_invoices_create(token, payload) {
   const me = await requireSuperAdmin(token);
+  await require('./saasPermissions').requirePerm(me, 'invoices.add');
   const p = payload || {};
   const tenantId = Number(p.tenant_id);
   if (!tenantId) throw new Error('Tenant is required');
