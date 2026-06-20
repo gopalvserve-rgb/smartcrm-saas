@@ -4631,23 +4631,44 @@ VIEWS.leads = async (view) => {
 
   if (!CRM.cache.statuses) await warmCache();
   _maybeShowFeatureSpotlight();
-  // LEADS_VIEW_V2 — show style toggle even on Classic so user can switch
-  // Read brand from any of the cached sources; the inline fetch above
-  // already populated CRM.brand if it was missing.
+  // LEADS_VIEW_V2 (2026-06-21) — toggle bar must live OUTSIDE #view because
+  // the legacy renderer below will wipe view.innerHTML during its own work.
+  // We mount the toggle bar as a fixed-position strip pinned to the top of
+  // the leads content area (right under the page header). MutationObserver
+  // keeps it alive across re-renders.
   try {
     const cfg = (CRM && (CRM.brand || CRM._earlyBrand)) || {};
     if (String(cfg.LEADS_VIEW_V2_ENABLED || '') === '1' && window.LEADS_V2) {
-      // Inject the toggle BAR (don't wipe the whole view yet — legacy
-      // renderer below appends its own content into the view).
-      const tg = h('div', { id: 'lv2-toggle-bar', style: { padding: '8px 16px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: '12px', justifyContent: 'flex-end' } },
-        h('span', { style: { fontSize: '11px', color: '#64748b' } }, '✨ View style:'),
-        window.LEADS_V2.createToggle((newStyle) => {
-          try { window.LEADS_V2.closeSlideOver && window.LEADS_V2.closeSlideOver(); } catch (_) {}
-          VIEWS.leads(view);
-        }));
-      // Clear and add toggle bar first; legacy renderer appends rest below
-      view.innerHTML = '';
-      view.appendChild(tg);
+      let bar = document.getElementById('lv2-floating-toggle');
+      if (!bar) {
+        bar = h('div', {
+          id: 'lv2-floating-toggle',
+          style: {
+            position: 'fixed', top: '12px', right: '180px', zIndex: '900',
+            background: 'white', border: '1px solid #e2e8f0', borderRadius: '8px',
+            padding: '4px 8px', boxShadow: '0 2px 8px rgba(0,0,0,.06)',
+            display: 'flex', alignItems: 'center', gap: '8px'
+          }
+        },
+          h('span', { style: { fontSize: '11px', color: '#64748b', fontWeight: '500' } }, '✨ View:'),
+          window.LEADS_V2.createToggle((newStyle) => {
+            try { window.LEADS_V2.closeSlideOver && window.LEADS_V2.closeSlideOver(); } catch (_) {}
+            VIEWS.leads(view);
+          }));
+        document.body.appendChild(bar);
+        // Hide the toggle when user navigates away from leads
+        try {
+          const hashWatcher = () => {
+            const onLeads = String(location.hash || '').indexOf('/leads') >= 0;
+            const el = document.getElementById('lv2-floating-toggle');
+            if (el) el.style.display = onLeads ? 'flex' : 'none';
+          };
+          window.addEventListener('hashchange', hashWatcher);
+          hashWatcher();
+        } catch (_) {}
+      } else {
+        bar.style.display = 'flex';
+      }
     }
   } catch (_) {}
   // STAGE_COL_AUTOADD_v1 — one-shot: existing users had a saved column list
