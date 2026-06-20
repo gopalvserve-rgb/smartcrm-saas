@@ -4550,6 +4550,9 @@ setTimeout(() => _runCallLast48hCleanup().catch(() => {}), 300_000);
     try {
       const { autoEnableOnVserve } = require('./utils/cp4VserveAutoEnable');
       setTimeout(() => { autoEnableOnVserve().catch(e => console.error('[CP4_AUTOENABLE]', e.message)); }, 5000);
+      // WB_CHAT_V2 — auto-enable 3-column WhatsApp chat on vserve only
+      const { autoEnableOnVserve: wbV2AutoEnable } = require('./utils/wbChatV2VserveAutoEnable');
+      setTimeout(() => { wbV2AutoEnable().catch(e => console.error('[WB_CHAT_V2_AUTOENABLE]', e.message)); }, 6000);
     } catch (e) { console.warn('[CP4_AUTOENABLE] require failed:', e.message); }
     // AI_MGR_v1 — one-shot enable on vserve. Idempotent, non-blocking.
     try {

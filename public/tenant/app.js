@@ -18218,6 +18218,17 @@ function waMediaTypeFor(mime) {
 }
 
 async function wbChat() {
+  // WB_CHAT_V2 (2026-06-20) — if v2 is enabled for this tenant + bundle is
+  // loaded, delegate to the redesigned 3-column UI. The legacy path below
+  // remains as a fallback so a brand outage doesn't break anyone.
+  try {
+    const brand = (window.CRM && CRM.brand) || {};
+    if (String(brand.WB_CHAT_V2_ENABLED || '') === '1' &&
+        window.WB_CHAT_V2 && typeof window.WB_CHAT_V2.render === 'function') {
+      return window.WB_CHAT_V2.render();
+    }
+  } catch (_) { /* fall through to legacy */ }
+
   // Kill any previous timers if wbChat is mounted twice (e.g. tab reopened).
   if (window._wbChatTimers) {
     clearInterval(window._wbChatTimers.threadList);
