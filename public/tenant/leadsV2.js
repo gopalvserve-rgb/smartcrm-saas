@@ -999,10 +999,18 @@ tr:hover .lv2-actions { opacity: 1; }
     document.body.appendChild(so);
 
     // ---- Synchronous (immediate) content ----
-    // Quick actions
-    body.appendChild(h('div', { class: 'lv2-so-quick' },
-      h('button', { onclick: () => doCall(l) }, h('span', { class: 'ic' }, '📞'), 'Call'),
-      h('button', { onclick: () => doWaApi(l) }, h('span', { class: 'ic' }, '💬'), 'WA'),
+    // Quick actions — v1.8: Call / WA Web / WA API / Quotation / Note / Open
+    body.appendChild(h('div', { class: 'lv2-so-quick', style: { gridTemplateColumns: 'repeat(3, 1fr)' } },
+      h('button', { onclick: () => doCall(l), title: 'Click-to-Call (web telephony)' },
+        h('span', { class: 'ic' }, '📞'), 'Call'),
+      h('button', { onclick: () => doWaWeb(l), title: 'WhatsApp Web (wa.me link)' },
+        h('span', { class: 'ic' }, '💬'), 'WA Web'),
+      h('button', { onclick: () => doWaApi(l), title: 'WhatsApp Cloud API — send via SmartCRM',
+        style: { background: 'linear-gradient(135deg, #dcfce7, #bbf7d0)', color: '#15803d', borderColor: '#86efac' } },
+        h('span', { class: 'ic' }, '✨'), 'WA API'),
+      h('button', { onclick: () => doQuotation(l), title: 'Create or send a quotation',
+        style: { background: 'linear-gradient(135deg, #fef3c7, #fde68a)', color: '#92400e', borderColor: '#fde68a' } },
+        h('span', { class: 'ic' }, '📋'), 'Quotation'),
       h('button', { onclick: () => doAddNote(l) }, h('span', { class: 'ic' }, '📝'), 'Note'),
       h('button', { onclick: () => doViewFull(l) }, h('span', { class: 'ic' }, '👁'), 'Open')));
 
@@ -1159,6 +1167,21 @@ tr:hover .lv2-actions { opacity: 1; }
 
   /* ---------- actions ---------- */
   function doCall(l) { try { if (window.openCallModal) return window.openCallModal(l.id); } catch (_) {} window.location.href = 'tel:' + (l.phone || ''); }
+  function doQuotation(l) {
+    try {
+      if (typeof window.openQuotationModal === 'function') {
+        return window.openQuotationModal(null, l);
+      }
+    } catch (_) {}
+    // Fallback — open lead modal then user picks Quotations tab
+    try {
+      if (typeof window.openLeadModal === 'function') {
+        window.openLeadModal(l.id);
+        return;
+      }
+    } catch (_) {}
+    toast('Quotation modal not available in this build', 'err');
+  }
   function doSim(l) { window.location.href = 'tel:' + (l.phone || ''); }
   function doWaWeb(l) { const ph = String(l.phone || '').replace(/\D/g, ''); window.open('https://wa.me/' + ph, '_blank'); }
   function doWaApi(l) { try { window.location.hash = '#/whatsbot/chat'; setTimeout(() => { try { window.openLeadModal && window.openLeadModal(l.id); } catch(_){} }, 400); } catch (_) {} }
