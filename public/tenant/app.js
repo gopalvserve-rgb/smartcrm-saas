@@ -18221,9 +18221,24 @@ async function wbChat() {
   // WB_CHAT_V2 (2026-06-20) — if v2 is enabled for this tenant + bundle is
   // loaded, delegate to the redesigned 3-column UI. The legacy path below
   // remains as a fallback so a brand outage doesn't break anyone.
+  //
+  // The brand flag may live on CRM.brand (set by warmCache) OR CRM._earlyBrand
+  // (set by an earlier api_admin_brand fetch) depending on which finished
+  // first. If neither is populated yet, fetch once and cache. Cache via
+  // CRM._wbV2Checked so we don't refetch on every tab switch.
   try {
-    const brand = (window.CRM && CRM.brand) || {};
-    if (String(brand.WB_CHAT_V2_ENABLED || '') === '1' &&
+    let cfg = (CRM && (CRM.brand || CRM._earlyBrand)) || {};
+    if (!cfg.WB_CHAT_V2_ENABLED && !CRM._wbV2Checked) {
+      try {
+        const fresh = await api('api_admin_brand').catch(() => null);
+        if (fresh) {
+          CRM.brand = Object.assign(CRM.brand || {}, fresh);
+          cfg = CRM.brand;
+        }
+      } catch (_) {}
+      CRM._wbV2Checked = true;
+    }
+    if (String(cfg.WB_CHAT_V2_ENABLED || '') === '1' &&
         window.WB_CHAT_V2 && typeof window.WB_CHAT_V2.render === 'function') {
       return window.WB_CHAT_V2.render();
     }
