@@ -1946,6 +1946,102 @@ VIEWS.admins = async (view) => {
     h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '.6rem' } },
       '💡 Add a teammate below with the right role — they can sign in at /admin/ with their email + password.')
   ));
+
+  // SUPER_ADMIN_PERMS_v1 (2026-06-20) — module-wise permissions matrix.
+  // Each row is one permission, columns are the 3 roles, checkboxes set
+  // grant. 'Reset to defaults' wipes per-role customisations.
+  const permsHost = h('div', { class: 'card',
+    style: { padding: '1rem 1.2rem', marginBottom: '.8rem', borderLeft: '4px solid #10b981' } },
+    h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '.6rem' } },
+      h('h3', { style: { margin: 0 } }, '🧩 Module permissions (per role)'),
+      h('span', { class: 'muted', style: { fontSize: '.8rem' } }, 'Tick a box to grant — untick to deny')
+    ),
+    h('div', { class: 'muted', style: { fontSize: '.8rem', marginBottom: '.7rem' } },
+      'Configure exactly what each role can do, module-by-module. Defaults: admin gets everything; assistant gets operational tasks; viewer is read-only. Click ' +
+      h('b', {}, 'Save').outerHTML + ' to apply.'),
+    h('div', { id: 'perms-grid' }, 'Loading…'),
+    h('div', { style: { display: 'flex', gap: '.5rem', marginTop: '.8rem', flexWrap: 'wrap' } },
+      h('button', { id: 'perms-save', class: 'btn primary' }, '💾 Save permissions'),
+      h('button', { id: 'perms-reset-assistant', class: 'btn ghost' }, '↺ Reset assistant to default'),
+      h('button', { id: 'perms-reset-viewer',    class: 'btn ghost' }, '↺ Reset viewer to default')
+    )
+  );
+  view.appendChild(permsHost);
+
+  // Fetch + render the matrix
+  (async () => {
+    let res;
+    try { res = await api('api_saas_perms_get'); }
+    catch (e) { permsHost.querySelector('#perms-grid').innerHTML = '<div class="error-box">' + e.message + '</div>'; return; }
+
+    const roles = res.roles || ['admin', 'assistant', 'viewer'];
+    const matrix = JSON.parse(JSON.stringify(res.matrix || {}));
+    roles.forEach(r => { if (!matrix[r]) matrix[r] = {}; });
+
+    const wrap = permsHost.querySelector('#perms-grid');
+    wrap.innerHTML = '';
+    const table = h('table', { class: 'mini-table',
+      style: { width: '100%', fontSize: '.83rem', borderCollapse: 'collapse' } });
+    const thead = h('thead', {}, h('tr', {},
+      h('th', { style: { textAlign: 'left', padding: '.45rem .5rem', borderBottom: '1px solid #cbd5e1' } }, 'Permission'),
+      ...roles.map(r => h('th', { style: { textAlign: 'center', padding: '.45rem .5rem', borderBottom: '1px solid #cbd5e1', width: '90px' } }, r))
+    ));
+    table.appendChild(thead);
+    const tbody = h('tbody', {});
+    Object.entries(res.grouped || {}).forEach(([mod, perms]) => {
+      // Module header row
+      tbody.appendChild(h('tr', { style: { background: '#f1f5f9' } },
+        h('td', { colspan: roles.length + 1,
+          style: { fontWeight: 700, color: '#334155', padding: '.45rem .6rem', fontSize: '.8rem',
+                   textTransform: 'uppercase', letterSpacing: '.04em' } }, mod)
+      ));
+      perms.forEach(p => {
+        const tr = h('tr', {});
+        tr.appendChild(h('td', { style: { padding: '.35rem .6rem', color: '#0f172a' } }, p.label,
+          h('div', { class: 'muted', style: { fontSize: '.7rem', fontFamily: 'monospace' } }, p.key)
+        ));
+        roles.forEach(role => {
+          const granted = Number((matrix[role] || {})[p.key]) === 1;
+          const cb = h('input', {
+            type: 'checkbox', 'data-role': role, 'data-perm': p.key,
+            checked: granted ? 'checked' : null,
+            disabled: role === 'admin' ? 'disabled' : null,  // 'admin' is always full
+            title: role === 'admin' ? 'admin always has full access' : 'tick to grant'
+          });
+          tr.appendChild(h('td', { style: { textAlign: 'center', padding: '.3rem' } }, cb));
+        });
+        tbody.appendChild(tr);
+      });
+    });
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+
+    // Save
+    permsHost.querySelector('#perms-save').onclick = async () => {
+      const out = {};
+      table.querySelectorAll('input[type=checkbox][data-role][data-perm]').forEach(cb => {
+        const role = cb.dataset.role;
+        const perm = cb.dataset.perm;
+        if (role === 'admin') return; // admin is always full — never override
+        if (!out[role]) out[role] = {};
+        out[role][perm] = cb.checked ? 1 : 0;
+      });
+      try {
+        const r = await api('api_saas_perms_save', { matrix: out });
+        toast('✓ ' + r.saved + ' permissions saved', 'ok');
+      } catch (e) { toast(e.message, 'err'); }
+    };
+    permsHost.querySelector('#perms-reset-assistant').onclick = async () => {
+      if (!confirm('Reset assistant role to its default permissions?')) return;
+      try { await api('api_saas_perms_reset', { role: 'assistant' }); toast('✓ Reset', 'ok'); navigate('admins'); }
+      catch (e) { toast(e.message, 'err'); }
+    };
+    permsHost.querySelector('#perms-reset-viewer').onclick = async () => {
+      if (!confirm('Reset viewer role to its default permissions?')) return;
+      try { await api('api_saas_perms_reset', { role: 'viewer' }); toast('✓ Reset', 'ok'); navigate('admins'); }
+      catch (e) { toast(e.message, 'err'); }
+    };
+  })();
   let list;
   try { list = await api('api_saas_admin_list'); }
   catch (e) { view.appendChild(h('div', { class: 'error-box' }, e.message)); return; }

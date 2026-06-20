@@ -33,6 +33,7 @@ const packages = require('./routes/saas/packages');
 const signup = require('./routes/saas/signup');
 const tenants = require('./routes/saas/tenants');
 const invoices = require('./routes/saas/invoices');
+const saasPermissions = require('./routes/saas/saasPermissions');   // SUPER_ADMIN_PERMS_v1
 const settings = require('./routes/saas/saasSettings');
 const announcements = require('./routes/saas/announcements');
 const customReqs = require('./routes/saas/customRequirements');
@@ -108,7 +109,8 @@ const SAAS_API = {};
   leadScoringRollout, /* LS_ROLLOUT_ALL_v1 */
   quickNoteRollout, /* QNOTE_ROLLOUT_ALL_v1 */
   copilotProactiveRollout, /* AI_ASSIST_ROLLOUT_v1 */
-  whiteLabelBilling /* WL_BILLING_v1 */
+  whiteLabelBilling, /* WL_BILLING_v1 */
+  saasPermissions /* SUPER_ADMIN_PERMS_v1 */
 ].forEach(mod => {
   Object.keys(mod).forEach(k => {
     if (typeof mod[k] === 'function' && k.startsWith('api_saas_')) SAAS_API[k] = mod[k];

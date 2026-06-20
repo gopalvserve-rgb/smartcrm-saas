@@ -560,3 +560,19 @@ ALTER TABLE signup_requests ADD COLUMN IF NOT EXISTS payment_status     TEXT;   
 ALTER TABLE signup_requests ADD COLUMN IF NOT EXISTS total_amount_inr   NUMERIC(12,2);
 ALTER TABLE signup_requests ADD COLUMN IF NOT EXISTS amount_paid_inr    NUMERIC(12,2);
 ALTER TABLE signup_requests ADD COLUMN IF NOT EXISTS next_payment_at    TIMESTAMPTZ;
+
+-- SUPER_ADMIN_PERMS_v1 (2026-06-20) — module-wise permission matrix
+-- mirroring the tenant-CRM role_permissions pattern. Each row is one
+-- (role, permission) grant. Absence = use catalog default. NOTE:
+-- enforcement is wired in routes/saas/*.js via the can() helper in
+-- routes/saas/saasPermissions.js — endpoints opt in one by one.
+CREATE TABLE IF NOT EXISTS super_admin_role_permissions (
+  id              SERIAL PRIMARY KEY,
+  role            TEXT NOT NULL,
+  permission      TEXT NOT NULL,
+  is_granted      INTEGER NOT NULL DEFAULT 0,
+  updated_by      TEXT,
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (role, permission)
+);
+CREATE INDEX IF NOT EXISTS idx_sa_role_perms_role ON super_admin_role_permissions(role);
