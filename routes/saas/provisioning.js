@@ -280,6 +280,24 @@ async function provisionFromSignup(signupId) {
     });
   } catch (e) { console.warn('[provisioning] welcome email failed:', e.message); }
 
+  // TENANT_BILLING_NOTIFY_v1 (2026-06-20) — also send the same creds via
+  // WhatsApp using Vserve's WABA. APK link included in both channels.
+  try {
+    const wa = require('../../utils/saasWaSender');
+    const apkUrl = (process.env.PUBLIC_BASE_URL || baseUrl || '') + '/LeadCRM.apk';
+    const msg = '🎉 Welcome to SmartCRM, ' + (signup.name || '') + '!\n\n' +
+      'Your ' + (pkg.name || 'workspace') + ' account is live.\n\n' +
+      '🔗 Login: ' + loginUrl + '\n' +
+      '📧 Email: ' + signup.email + '\n' +
+      '🔑 Password: ' + oneTimePassword + '\n\n' +
+      '📱 Mobile app: ' + apkUrl + '\n\n' +
+      'Please change your password on first login (Settings → Security).\n\n— Team SmartCRM';
+    if (signup.mobile) {
+      const r = await wa.sendText(signup.mobile, msg);
+      if (!r.ok) console.warn('[provisioning] welcome WA failed:', r.error);
+    }
+  } catch (e) { console.warn('[provisioning] welcome WA error:', e.message); }
+
   return {
     tenant_id: tenantId, slug, db_name: dbName, invoice_id: invoiceId,
     login_url: loginUrl, email: signup.email, password: oneTimePassword
@@ -302,6 +320,7 @@ function _computePeriodEnd(start, pkg) {
 }
 
 function _welcomeEmailHtml({ name, orgName, loginUrl, email, password, packageName }) {
+  const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'https://crm.smartcrmsolution.com';
   return `
   <div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;max-width:560px;margin:0 auto;padding:1.5rem;color:#0f172a">
     <h2 style="margin:0 0 1rem 0">Welcome to SmartCRM, ${escape(name)} 🎉</h2>
@@ -315,6 +334,10 @@ function _welcomeEmailHtml({ name, orgName, loginUrl, email, password, packageNa
       <code style="background:#fff;padding:.3rem .6rem;border-radius:4px">${escape(password)}</code>
     </div>
     <p style="font-size:.9rem;color:#475569">For your security, please change this password the first time you log in (Settings → Security).</p>
+    <div style="background:#eef2ff;padding:.85rem 1rem;border-radius:8px;margin:1rem 0">
+      <div style="font-size:.85rem;color:#475569;margin-bottom:.4rem">📱 Mobile app (Android APK)</div>
+      <a href="${(typeof PUBLIC_BASE_URL === 'string' ? PUBLIC_BASE_URL : '') + '/LeadCRM.apk'}" style="color:#4338ca;font-weight:600">Download LeadCRM.apk</a>
+    </div>
     <p style="font-size:.85rem;color:#94a3b8;margin-top:2rem">— The SmartCRM team</p>
   </div>`;
 }

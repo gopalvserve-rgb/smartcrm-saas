@@ -34,7 +34,9 @@ async function api_saas_tenants_list(token, filters) {
   const sql = `
     SELECT t.*, p.name AS package_name, p.base_price_inr,
            (SELECT COUNT(*) FROM invoices i WHERE i.tenant_id = t.id AND i.status = 'paid') AS paid_invoice_count,
-           (SELECT MAX(created_at) FROM invoices i WHERE i.tenant_id = t.id) AS last_invoice_at
+           (SELECT MAX(created_at) FROM invoices i WHERE i.tenant_id = t.id) AS last_invoice_at,
+           -- TENANT_PARTIAL_PAY_v1 — derived balance shown on tenant list
+           COALESCE(t.total_amount_inr, 0) - COALESCE(t.amount_paid_inr, 0) AS pending_balance_inr
       FROM tenants t
       LEFT JOIN packages p ON p.id = t.package_id
      ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
@@ -1011,10 +1013,32 @@ async function api_saas_tenants_setAiRecording(token, payload) {
   return { ok: true, slug: t.slug, enabled: enabled === '1' };
 }
 
+
+// TENANT_PARTIAL_PAY_v1 (2026-06-20) — total outstanding across all
+// tenants. Sums (total - paid) for active tenants only.
+async function api_saas_dashboard_outstanding(token) {
+  await requireSuperAdmin(token);
+  const r = await control.query(`
+    SELECT COALESCE(SUM(
+      GREATEST(0, COALESCE(total_amount_inr, 0) - COALESCE(amount_paid_inr, 0))
+    ), 0)::numeric AS total_outstanding_inr,
+    COUNT(*) FILTER (
+      WHERE COALESCE(total_amount_inr, 0) > COALESCE(amount_paid_inr, 0)
+    )::int AS tenants_with_balance
+      FROM tenants
+     WHERE COALESCE(status, '') NOT IN ('deleted', 'pending_delete')`);
+  const row = r.rows && r.rows[0] || {};
+  return {
+    total_outstanding_inr: Number(row.total_outstanding_inr || 0),
+    tenants_with_balance:  Number(row.tenants_with_balance  || 0)
+  };
+}
+
 module.exports = {
   api_saas_tenants_list,
   api_saas_tenants_get,
   api_saas_tenants_createManual,
+  api_saas_dashboard_outstanding,  /* TENANT_PARTIAL_PAY_v1 */
   api_saas_tenants_changePackage,
   api_saas_tenants_suspend,
   api_saas_tenants_restore,

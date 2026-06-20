@@ -3580,6 +3580,15 @@ setInterval(() => {
 setTimeout(() => _runGoogleConvForAllTenants().catch(() => {}), 60_000);
 console.log('[gconv] Google Ads conversion export daily worker started');
 
+// ── TENANT_BILLING_NOTIFY_v1 — overdue balance reminder sweep (every 6h)
+try {
+  const billingRem = require('./routes/saas/billingReminders');
+  // First run 1 min after boot so we don't slow down startup, then every 6h.
+  setTimeout(() => { billingRem.runOverdueSweep().catch(e => console.error('[billing_rem]', e.message)); }, 60_000);
+  setInterval(() => { billingRem.runOverdueSweep().catch(e => console.error('[billing_rem]', e.message)); }, 6 * 3600 * 1000);
+  console.log('[billing_rem] sweep scheduled — first run in 60s, then every 6 hours');
+} catch (e) { console.warn('[billing_rem] scheduler skipped:', e.message); }
+
 // ── DEMO_REMINDER_v1 — morning batch (10 AM IST) + every-10-min pre-30 sweep ──
 async function _runDemoReminderMorningForAllTenants() {
   const tenantDb = require('./db/pg');

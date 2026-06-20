@@ -162,15 +162,19 @@ VIEWS.dashboard = async (view) => {
   view.appendChild(h('h1', {}, 'Dashboard'));
   let stats;
   try {
-    const [pkgs, tenants, invoices] = await Promise.all([
+    const [pkgs, tenants, invoices, outs] = await Promise.all([
       api('api_saas_packages_list'),
       api('api_saas_tenants_list', {}),
-      api('api_saas_invoices_list', {})
+      api('api_saas_invoices_list', {}),
+      // TENANT_PARTIAL_PAY_v1 — outstanding balance sum
+      api('api_saas_dashboard_outstanding').catch(() => ({ total_outstanding_inr: 0, tenants_with_balance: 0 }))
     ]);
     const activeT = tenants.filter(t => t.status === 'active' || t.status === 'trial').length;
     const paidInvCount = invoices.filter(i => i.status === 'paid').length;
     const mrr = invoices.filter(i => i.status === 'paid').reduce((s, i) => s + Number(i.total_inr || 0), 0);
-    stats = { pkgs: pkgs.length, tenants: tenants.length, activeT, paidInvCount, mrr };
+    stats = { pkgs: pkgs.length, tenants: tenants.length, activeT, paidInvCount, mrr,
+              outstanding: outs.total_outstanding_inr || 0,
+              tenantsBal: outs.tenants_with_balance  || 0 };
   } catch (e) { view.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
 
   const card = (label, value, sub) => h('div', { class: 'card', style: { flex: 1, minWidth: '200px' } },
@@ -178,11 +182,25 @@ VIEWS.dashboard = async (view) => {
     h('div', { style: { fontSize: '1.8rem', fontWeight: '700', margin: '.4rem 0 .2rem' } }, value),
     sub ? h('div', { class: 'muted', style: { fontSize: '.85rem' } }, sub) : null
   );
+  // TENANT_PARTIAL_PAY_v1 — outstanding amount tile rendered in warning
+  // colours so it sticks out compared to the all-paid revenue tile.
+  const outstandingCard = h('div', { class: 'card',
+    style: { flex: 1, minWidth: '200px', borderLeft: '4px solid ' + (stats.outstanding > 0 ? '#d97706' : '#10b981') } },
+    h('div', { class: 'muted', style: { fontSize: '.78rem', textTransform: 'uppercase', letterSpacing: '.04em' } }, 'Outstanding amount'),
+    h('div', { style: { fontSize: '1.8rem', fontWeight: '700', margin: '.4rem 0 .2rem',
+                        color: stats.outstanding > 0 ? '#b45309' : '#0f172a' } },
+      fmtRupees(stats.outstanding)),
+    h('div', { class: 'muted', style: { fontSize: '.85rem' } },
+      stats.tenantsBal > 0
+        ? stats.tenantsBal + ' tenant' + (stats.tenantsBal === 1 ? '' : 's') + ' with balance'
+        : 'All clear')
+  );
   view.appendChild(h('div', { style: { display: 'flex', gap: '1rem', flexWrap: 'wrap' } },
     card('Active tenants', stats.activeT, stats.tenants + ' total'),
     card('Packages', stats.pkgs, 'in catalogue'),
     card('Paid invoices', stats.paidInvCount, 'all-time'),
-    card('Revenue', fmtRupees(stats.mrr), 'all-time paid')
+    card('Revenue', fmtRupees(stats.mrr), 'all-time paid'),
+    outstandingCard
   ));
 };
 
@@ -453,7 +471,8 @@ VIEWS.tenants = async (view) => {
   const tbl = h('table', {},
     h('thead', {}, h('tr', {},
       h('th', {}, 'Org'), h('th', {}, 'Slug'), h('th', {}, 'Email'),
-      h('th', {}, 'Plan'), h('th', {}, 'Status'), h('th', {}, 'Period ends'), h('th', {}, '')
+      h('th', {}, 'Plan'), h('th', {}, 'Status'), h('th', {}, 'Balance'),
+      h('th', {}, 'Period ends'), h('th', {}, ''  )
     )),
     h('tbody', {}, ...list.map(t => h('tr', {},
       h('td', {},
@@ -474,6 +493,15 @@ VIEWS.tenants = async (view) => {
       h('td', { class: 'muted' }, t.contact_email),
       h('td', {}, t.package_name || '—'),
       h('td', {}, h('span', { class: 'tag ' + (t.status === 'active' ? 'ok' : t.status === 'pending_delete' ? 'err' : 'warn') }, t.status)),
+      // TENANT_PARTIAL_PAY_v1 — Pending balance column (amber when > 0)
+      (function () {
+        const bal = Number(t.pending_balance_inr) || 0;
+        if (bal <= 0) return h('td', { class: 'muted', style: { fontSize: '.82em' } }, '—');
+        return h('td', { style: { fontWeight: 600, color: '#b45309' },
+          title: 'Total ₹' + Number(t.total_amount_inr || 0).toLocaleString('en-IN') +
+                 ' · Paid ₹' + Number(t.amount_paid_inr || 0).toLocaleString('en-IN') },
+          '₹' + bal.toLocaleString('en-IN'));
+      })(),
       h('td', { class: 'muted' }, fmtDate(t.current_period_end)),
       h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } },
         // Open the tenant workspace in a new window with a short-lived

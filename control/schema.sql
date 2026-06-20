@@ -550,3 +550,6 @@ ALTER TABLE tenants ADD COLUMN IF NOT EXISTS total_amount_inr            NUMERIC
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS amount_paid_inr             NUMERIC(12,2);
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS payment_reminder_at         TIMESTAMPTZ;
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS balance_banner_dismissed_at TIMESTAMPTZ;
+
+-- TENANT_BILLING_NOTIFY_v1 (2026-06-20) — billing-reminder cron support.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS last_reminder_sent_at TIMESTAMPTZ;
