@@ -4593,9 +4593,62 @@ VIEWS.leads = async (view) => {
   // classic style, delegate to leadsV2 module. Otherwise fall through to
   // the existing legacy renderer below (untouched).
   //
-  // Brand flag may live on CRM.brand (set by warmCache) OR CRM._earlyBrand
-  // (set by an earlier api_admin_brand fetch). If neither is populated yet,
-  // fetch once and cache. Same fix pattern as WB_CHAT_V2.
+  // v2: Mount floating toggle FIRST so it appears regardless of which
+  // style is active. renderModern/renderInbox wipe view.innerHTML — but
+  // the floating toggle lives on document.body so it survives.
+  try {
+    let cfg = (CRM && (CRM.brand || CRM._earlyBrand)) || {};
+    if (!cfg.LEADS_VIEW_V2_ENABLED && !CRM._lv2Checked) {
+      try {
+        const fresh = await api('api_admin_brand').catch(() => null);
+        if (fresh) { CRM.brand = Object.assign(CRM.brand || {}, fresh); cfg = CRM.brand; }
+      } catch (_) {}
+      CRM._lv2Checked = true;
+    }
+    if (String(cfg.LEADS_VIEW_V2_ENABLED || '') === '1' && window.LEADS_V2) {
+      let bar = document.getElementById('lv2-floating-toggle');
+      if (!bar) {
+        bar = h('div', {
+          id: 'lv2-floating-toggle',
+          style: {
+            position: 'fixed', top: '12px', right: '180px', zIndex: '900',
+            background: 'white', border: '1px solid #e2e8f0', borderRadius: '8px',
+            padding: '4px 8px', boxShadow: '0 2px 8px rgba(0,0,0,.06)',
+            display: 'flex', alignItems: 'center', gap: '8px'
+          }
+        },
+          h('span', { style: { fontSize: '11px', color: '#64748b', fontWeight: '500' } }, '✨ View:'),
+          window.LEADS_V2.createToggle((newStyle) => {
+            try { window.LEADS_V2.closeSlideOver && window.LEADS_V2.closeSlideOver(); } catch (_) {}
+            VIEWS.leads(view);
+          }));
+        document.body.appendChild(bar);
+        try {
+          const hashWatcher = () => {
+            const onLeads = String(location.hash || '').indexOf('/leads') >= 0;
+            const el = document.getElementById('lv2-floating-toggle');
+            if (el) el.style.display = onLeads ? 'flex' : 'none';
+          };
+          window.addEventListener('hashchange', hashWatcher);
+          hashWatcher();
+        } catch (_) {}
+      } else {
+        bar.style.display = 'flex';
+        // Rebuild toggle buttons so the active style highlight is up-to-date
+        try {
+          const inner = bar.querySelector('.lv2-toggle');
+          if (inner) {
+            const fresh = window.LEADS_V2.createToggle((newStyle) => {
+              try { window.LEADS_V2.closeSlideOver && window.LEADS_V2.closeSlideOver(); } catch (_) {}
+              VIEWS.leads(view);
+            });
+            inner.replaceWith(fresh);
+          }
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
+
   try {
     let cfg = (CRM && (CRM.brand || CRM._earlyBrand)) || {};
     if (!cfg.LEADS_VIEW_V2_ENABLED && !CRM._lv2Checked) {
@@ -4631,46 +4684,7 @@ VIEWS.leads = async (view) => {
 
   if (!CRM.cache.statuses) await warmCache();
   _maybeShowFeatureSpotlight();
-  // LEADS_VIEW_V2 (2026-06-21) — toggle bar must live OUTSIDE #view because
-  // the legacy renderer below will wipe view.innerHTML during its own work.
-  // We mount the toggle bar as a fixed-position strip pinned to the top of
-  // the leads content area (right under the page header). MutationObserver
-  // keeps it alive across re-renders.
-  try {
-    const cfg = (CRM && (CRM.brand || CRM._earlyBrand)) || {};
-    if (String(cfg.LEADS_VIEW_V2_ENABLED || '') === '1' && window.LEADS_V2) {
-      let bar = document.getElementById('lv2-floating-toggle');
-      if (!bar) {
-        bar = h('div', {
-          id: 'lv2-floating-toggle',
-          style: {
-            position: 'fixed', top: '12px', right: '180px', zIndex: '900',
-            background: 'white', border: '1px solid #e2e8f0', borderRadius: '8px',
-            padding: '4px 8px', boxShadow: '0 2px 8px rgba(0,0,0,.06)',
-            display: 'flex', alignItems: 'center', gap: '8px'
-          }
-        },
-          h('span', { style: { fontSize: '11px', color: '#64748b', fontWeight: '500' } }, '✨ View:'),
-          window.LEADS_V2.createToggle((newStyle) => {
-            try { window.LEADS_V2.closeSlideOver && window.LEADS_V2.closeSlideOver(); } catch (_) {}
-            VIEWS.leads(view);
-          }));
-        document.body.appendChild(bar);
-        // Hide the toggle when user navigates away from leads
-        try {
-          const hashWatcher = () => {
-            const onLeads = String(location.hash || '').indexOf('/leads') >= 0;
-            const el = document.getElementById('lv2-floating-toggle');
-            if (el) el.style.display = onLeads ? 'flex' : 'none';
-          };
-          window.addEventListener('hashchange', hashWatcher);
-          hashWatcher();
-        } catch (_) {}
-      } else {
-        bar.style.display = 'flex';
-      }
-    }
-  } catch (_) {}
+  // LEADS_VIEW_V2 — floating toggle already mounted at top of this function
   // STAGE_COL_AUTOADD_v1 — one-shot: existing users had a saved column list
   // pre-dating the Stage column, so it wasn't appearing. Inject it once.
   try {
