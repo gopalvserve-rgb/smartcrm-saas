@@ -52,9 +52,25 @@
 
   /* ---------- state ---------- */
   const S = {
-    leads: [], statuses: [], users: [],
+    leads: [], statuses: [], users: [], sources: [], tags: [], campaigns: [],
+    // Quick chip filter
     filter: 'all',
+    // Status segment chip (the row of NEW/NP/FOLLOWUP/etc at the top)
+    statusChip: 'all',
+    // Search string
     search: '',
+    // Multi-select dropdown filters
+    fStatus: '',     // single status_id or ''
+    fSource: '',     // single source or ''
+    fOwner:  '',     // single user_id or ''
+    fTag:    '',
+    fCampaign: '',
+    fScore:  '',     // 'hot' | 'warm' | 'cold' | ''
+    fFollowup: '',   // 'overdue' | 'today' | 'week' | 'none' | ''
+    fQualified: '',  // 'yes' | 'no' | ''
+    fDateFrom: '',
+    fDateTo: '',
+    // Active row in detail panel
     selectedId: null,
     style: 'classic'
   };
@@ -262,10 +278,13 @@ tr:hover .lv2-actions { opacity: 1; }
   /* ---------- data load ---------- */
   async function load() {
     try {
-      const [leads, statuses, users] = await Promise.all([
-        api('api_leads_list', { page_size: 200 }).catch(() => []),
+      const [leads, statuses, users, sources, tags, campaigns] = await Promise.all([
+        api('api_leads_list', { page_size: 500 }).catch(() => []),
         api('api_statuses_list').catch(() => []),
-        api('api_users_list').catch(() => [])
+        api('api_users_list').catch(() => []),
+        api('api_sources_list').catch(() => []),
+        api('api_leads_distinctTags').catch(() => []),
+        api('api_campaigns_list').catch(() => [])
       ]);
       // api_leads_list returns { leads, total, page, page_size, status_count }
       // — handle that shape PLUS fall back to direct array / .rows for safety.
@@ -276,6 +295,9 @@ tr:hover .lv2-actions { opacity: 1; }
       console.log('[LEADS_V2] loaded', S.leads.length, 'leads · statuses:', (statuses||[]).length, '· users:', (users||[]).length);
       S.statuses = statuses || [];
       S.users = users || [];
+      S.sources = sources || [];
+      S.tags = tags || [];
+      S.campaigns = campaigns || [];
     } catch (e) {
       toast('Could not load leads: ' + e.message, 'err');
     }
@@ -284,26 +306,200 @@ tr:hover .lv2-actions { opacity: 1; }
   function filtered() {
     const meId = (window.CRM && CRM.user && CRM.user.id) || null;
     const q = String(S.search || '').toLowerCase().trim();
+    const now = new Date();
+    const today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const weekEnd = new Date(today0); weekEnd.setDate(weekEnd.getDate() + 7);
     return (S.leads || []).filter(l => {
+      // Quick chip
       if (S.filter === 'hot' && Number(l.smart_score || 0) < 80) return false;
       if (S.filter === 'overdue') {
         if (!l.next_followup_at) return false;
-        if (new Date(l.next_followup_at) > new Date()) return false;
+        if (new Date(l.next_followup_at) > now) return false;
       }
       if (S.filter === 'today') {
         if (!l.next_followup_at) return false;
         const d = new Date(l.next_followup_at);
-        const n = new Date();
-        if (d.toDateString() !== n.toDateString()) return false;
+        if (d.toDateString() !== now.toDateString()) return false;
       }
       if (S.filter === 'mine' && meId && Number(l.assigned_to) !== Number(meId)) return false;
       if (S.filter === 'new' && !/new|fresh/i.test(l.status_name || '')) return false;
+      // Status chip row (matches Classic chips)
+      if (S.statusChip && S.statusChip !== 'all') {
+        const sn = String(l.status_name || '').toLowerCase();
+        const target = String(S.statusChip).toLowerCase();
+        if (sn !== target) return false;
+      }
+      // Status dropdown (id)
+      if (S.fStatus && String(l.status_id) !== String(S.fStatus)) return false;
+      // Source
+      if (S.fSource && String(l.source || '').toLowerCase() !== String(S.fSource).toLowerCase()) return false;
+      // Owner
+      if (S.fOwner && String(l.assigned_to || '') !== String(S.fOwner)) return false;
+      // Tag (substring match against comma-separated tags)
+      if (S.fTag) {
+        const t = String(l.tags || '').toLowerCase();
+        if (t.indexOf(String(S.fTag).toLowerCase()) < 0) return false;
+      }
+      // Campaign
+      if (S.fCampaign && String(l.campaign_id || l.campaign_name || '').toLowerCase().indexOf(String(S.fCampaign).toLowerCase()) < 0) return false;
+      // AI Score bucket
+      if (S.fScore) {
+        const sc = Number(l.smart_score || 0);
+        const bucket = sc >= 80 ? 'hot' : sc >= 50 ? 'warm' : sc > 0 ? 'cold' : '';
+        if (bucket !== S.fScore) return false;
+      }
+      // Follow-up state
+      if (S.fFollowup === 'overdue') {
+        if (!l.next_followup_at) return false;
+        if (new Date(l.next_followup_at) > now) return false;
+      } else if (S.fFollowup === 'today') {
+        if (!l.next_followup_at) return false;
+        if (new Date(l.next_followup_at).toDateString() !== now.toDateString()) return false;
+      } else if (S.fFollowup === 'week') {
+        if (!l.next_followup_at) return false;
+        const d = new Date(l.next_followup_at);
+        if (d < today0 || d > weekEnd) return false;
+      } else if (S.fFollowup === 'none') {
+        if (l.next_followup_at) return false;
+      }
+      // Qualified
+      if (S.fQualified === 'yes' && !l.qualified) return false;
+      if (S.fQualified === 'no' && l.qualified) return false;
+      // Date range (created_at)
+      if (S.fDateFrom && new Date(l.created_at) < new Date(S.fDateFrom)) return false;
+      if (S.fDateTo) {
+        const dTo = new Date(S.fDateTo); dTo.setHours(23, 59, 59);
+        if (new Date(l.created_at) > dTo) return false;
+      }
+      // Search
       if (q) {
-        const hay = ((l.name || '') + ' ' + (l.phone || '') + ' ' + (l.email || '') + ' ' + (l.notes || '')).toLowerCase();
+        const hay = ((l.name || '') + ' ' + (l.phone || '') + ' ' + (l.email || '') + ' ' + (l.notes || '') + ' ' + (l.tags || '')).toLowerCase();
         if (hay.indexOf(q) < 0) return false;
       }
       return true;
     });
+  }
+
+  /* ---------- shared status chips + filter bar (used by Modern + Inbox) ---------- */
+  function buildStatusChipBar(onChange) {
+    // Mirror Classic's status chips: counts per status_name across S.leads
+    const counts = {};
+    (S.leads || []).forEach(l => {
+      const k = l.status_name || 'No status';
+      counts[k] = (counts[k] || 0) + 1;
+    });
+    const bar = h('div', {
+      class: 'lv2-statuschips',
+      style: { display: 'flex', gap: '6px', padding: '8px 14px', background: '#ffffff', borderBottom: '1px solid #e2e8f0', overflowX: 'auto', flexWrap: 'wrap' }
+    });
+    bar.appendChild(makeStatusChip('all', 'All', S.leads.length, onChange));
+    (S.statuses || []).forEach(s => {
+      const c = counts[s.name] || 0;
+      bar.appendChild(makeStatusChip(s.name, s.name, c, onChange));
+    });
+    return bar;
+  }
+  function makeStatusChip(key, label, count, onChange) {
+    const isActive = S.statusChip === key;
+    const sc = statusClass(label);
+    return h('span', {
+      style: {
+        padding: '4px 10px', borderRadius: '14px', fontSize: '11.5px',
+        cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '5px',
+        background: isActive ? '#eef2ff' : '#f8fafc',
+        border: '1px solid ' + (isActive ? '#c7d2fe' : '#e2e8f0'),
+        color: isActive ? '#4338ca' : '#475569',
+        fontWeight: isActive ? '600' : '500',
+        whiteSpace: 'nowrap'
+      },
+      onclick: () => { S.statusChip = key; if (onChange) onChange(); }
+    },
+      h('span', { class: 'lv2-dot ' + sc, style: { width: '6px', height: '6px', borderRadius: '50%', display: 'inline-block' } }),
+      label,
+      h('span', { style: { background: isActive ? 'white' : '#e2e8f0', color: '#64748b', fontSize: '9px', fontWeight: '700', padding: '1px 5px', borderRadius: '8px' } }, String(count)));
+  }
+
+  function buildFilterBar(onChange) {
+    // Returns a comprehensive filter row with ALL filters wired to S + onChange.
+    const wrap = h('div', { style: { padding: '10px 14px', background: '#ffffff', borderBottom: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: '8px' } });
+
+    // Row 1: search + date range + status + source + owner + score
+    const row1 = h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' } });
+    // Search
+    row1.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '7px', padding: '5px 11px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px', minWidth: '220px', flex: '1', maxWidth: '320px' } },
+      h('span', { style: { color: '#94a3b8' } }, '🔍'),
+      h('input', { placeholder: 'Search name, phone, email, notes…', value: S.search,
+        style: { border: 'none', background: 'transparent', outline: 'none', fontSize: '12.5px', flex: '1', color: '#0f172a' },
+        oninput: (e) => { S.search = e.target.value; if (onChange) onChange(); } })));
+    // Date range
+    row1.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '4px' } },
+      h('span', { style: { fontSize: '11px', color: '#64748b' } }, '📅 From'),
+      h('input', { type: 'date', value: S.fDateFrom, style: { padding: '4px 6px', border: '1px solid #e2e8f0', borderRadius: '5px', fontSize: '11px' },
+        onchange: (e) => { S.fDateFrom = e.target.value; if (onChange) onChange(); } }),
+      h('span', { style: { fontSize: '11px', color: '#64748b' } }, 'To'),
+      h('input', { type: 'date', value: S.fDateTo, style: { padding: '4px 6px', border: '1px solid #e2e8f0', borderRadius: '5px', fontSize: '11px' },
+        onchange: (e) => { S.fDateTo = e.target.value; if (onChange) onChange(); } })));
+    // Status dropdown
+    row1.appendChild(filterSelect('🎯', 'Status', S.fStatus, [['', 'Any status']].concat((S.statuses || []).map(s => [s.id, s.name])),
+      (v) => { S.fStatus = v; if (onChange) onChange(); }));
+    // Source dropdown
+    const srcOpts = [['', 'Any source']];
+    (S.sources || []).forEach(s => srcOpts.push([s.name || s, s.name || s]));
+    // Also derive from leads if api_sources_list is empty
+    if (srcOpts.length === 1) {
+      const seen = new Set();
+      (S.leads || []).forEach(l => { if (l.source && !seen.has(l.source)) { seen.add(l.source); srcOpts.push([l.source, l.source]); } });
+    }
+    row1.appendChild(filterSelect('🏷', 'Source', S.fSource, srcOpts, (v) => { S.fSource = v; if (onChange) onChange(); }));
+    // Owner dropdown
+    row1.appendChild(filterSelect('👤', 'Owner', S.fOwner, [['', 'Any owner']].concat((S.users || []).map(u => [u.id, u.name])),
+      (v) => { S.fOwner = v; if (onChange) onChange(); }));
+    // AI Score
+    row1.appendChild(filterSelect('🤖', 'AI Score', S.fScore, [['', 'Any score'], ['hot', '🔥 Hot (80+)'], ['warm', '☀️ Warm (50-79)'], ['cold', '🧊 Cold (1-49)']],
+      (v) => { S.fScore = v; if (onChange) onChange(); }));
+    wrap.appendChild(row1);
+
+    // Row 2: tag + campaign + followup + qualified + reset
+    const row2 = h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' } });
+    const tagOpts = [['', 'Any tag']];
+    (S.tags || []).forEach(t => tagOpts.push([t, t]));
+    row2.appendChild(filterSelect('🔖', 'Tag', S.fTag, tagOpts, (v) => { S.fTag = v; if (onChange) onChange(); }));
+    const cmpOpts = [['', 'Any campaign']];
+    (S.campaigns || []).forEach(c => cmpOpts.push([c.id || c.name, c.name || c]));
+    row2.appendChild(filterSelect('📣', 'Campaign', S.fCampaign, cmpOpts, (v) => { S.fCampaign = v; if (onChange) onChange(); }));
+    row2.appendChild(filterSelect('⏰', 'Follow-up', S.fFollowup, [['', 'All follow-ups'], ['overdue', '⚠ Overdue'], ['today', '📅 Due today'], ['week', '📆 This week'], ['none', '— No follow-up'] ],
+      (v) => { S.fFollowup = v; if (onChange) onChange(); }));
+    row2.appendChild(filterSelect('✅', 'Qualified', S.fQualified, [['', 'Any qualified'], ['yes', '✓ Qualified'], ['no', '✗ Not qualified']],
+      (v) => { S.fQualified = v; if (onChange) onChange(); }));
+
+    // Reset
+    row2.appendChild(h('button', {
+      style: { padding: '5px 10px', background: 'white', border: '1px solid #e2e8f0', borderRadius: '6px', fontSize: '11.5px', cursor: 'pointer', color: '#64748b', marginLeft: 'auto' },
+      onclick: () => {
+        S.statusChip = 'all'; S.search = ''; S.fStatus = ''; S.fSource = ''; S.fOwner = '';
+        S.fTag = ''; S.fCampaign = ''; S.fScore = ''; S.fFollowup = ''; S.fQualified = '';
+        S.fDateFrom = ''; S.fDateTo = ''; S.filter = 'all';
+        if (onChange) onChange();
+      }
+    }, '↻ Reset filters'));
+    // Count info
+    const matched = filtered().length;
+    row2.appendChild(h('span', { style: { fontSize: '11px', color: '#94a3b8', whiteSpace: 'nowrap' } },
+      'Showing ' + matched + ' of ' + (S.leads || []).length));
+    wrap.appendChild(row2);
+
+    return wrap;
+  }
+  function filterSelect(icon, lab, val, opts, onChange) {
+    const sel = h('select', {
+      style: { padding: '4px 8px', background: 'white', border: '1px solid #e2e8f0', borderRadius: '14px', fontSize: '11.5px', color: val ? '#4338ca' : '#475569', cursor: 'pointer', outline: 'none', maxWidth: '160px', fontWeight: val ? '600' : '500' },
+      onchange: (e) => onChange(e.target.value)
+    });
+    opts.forEach(([v, lab2]) => sel.appendChild(h('option', { value: v, selected: String(v) === String(val) ? 'selected' : null }, lab2)));
+    // Prepend label icon — wrap in a flex container
+    return h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '3px' } },
+      h('span', { style: { fontSize: '11px', color: '#94a3b8' } }, icon),
+      sel);
   }
 
   /* ====================================================================
@@ -331,25 +527,14 @@ tr:hover .lv2-actions { opacity: 1; }
       hcell('🆕 New', newCnt, '', false, '#15803d')
     ));
 
-    // Toolbar
-    const toolbar = h('div', { class: 'toolbar' },
-      h('div', { class: 'search' },
-        h('span', { style: { color: '#94a3b8' } }, '🔍'),
-        h('input', { placeholder: 'Search name, phone, email, notes…', value: S.search,
-          oninput: (e) => { S.search = e.target.value; rerenderRows(); } })),
-      h('button', { class: 'fpill active', title: 'Filtered to last 7 days' }, '📅 Last 7 days'),
-      h('button', { class: 'fpill' }, '👤 Owner ▾'),
-      h('button', { class: 'fpill' }, '🏷 Source ▾'),
-      h('button', { class: 'fpill' }, '🤖 Score ▾'),
-      h('button', { class: 'fpill' }, '＋ Add filter'),
-      h('div', { class: 'right' },
-        h('button', { class: 'btn', onclick: load }, '↻ Refresh'),
-        h('button', { class: 'btn' }, '↓ Export'),
-        h('button', { class: 'btn' }, '＋ New Lead'))
-    );
-    wrap.appendChild(toolbar);
+    // Status chip row (matches Classic chips)
+    const onFilterChange = () => { rerenderRows(); };
+    wrap.appendChild(buildStatusChipBar(onFilterChange));
 
-    // Quick chips
+    // Full filter bar (search + date range + status + source + owner + score + tag + campaign + followup + qualified)
+    wrap.appendChild(buildFilterBar(onFilterChange));
+
+    // Quick chips (kept for fast slicing)
     const qchips = h('div', { class: 'qchips' });
     const chips = [['all','All','📋',total],['hot','🔥 Hot','',hot],['overdue','⏰ Overdue','',overdue],['today','📅 Due today','',0],['mine','⭐ Mine','',mine],['new','🆕 New','',newCnt]];
     chips.forEach(([key, label, ic, count]) => {
@@ -358,6 +543,11 @@ tr:hover .lv2-actions { opacity: 1; }
         onclick: () => { S.filter = key; renderModern(view); }
       }, label, count ? h('span', { style: { background: '#e2e8f0', color: '#475569', padding: '1px 5px', borderRadius: '8px', fontSize: '9px', fontWeight: '700' } }, String(count)) : null));
     });
+    // + Refresh / Export / New
+    qchips.appendChild(h('div', { style: { marginLeft: 'auto', display: 'flex', gap: '4px' } },
+      h('button', { class: 'qchip', onclick: load }, '↻ Refresh'),
+      h('button', { class: 'qchip' }, '↓ Export'),
+      h('button', { class: 'qchip', style: { background: '#1e293b', color: 'white', borderColor: '#1e293b' } }, '＋ New Lead')));
     wrap.appendChild(qchips);
 
     // Table
@@ -531,6 +721,7 @@ tr:hover .lv2-actions { opacity: 1; }
         h('span', { style: { color: '#64748b' } }, '🔍'),
         h('input', { placeholder: 'Search…', value: S.search, oninput: (e) => { S.search = e.target.value; rerenderInboxRows(); } }))));
 
+    // Quick views (chip slicer)
     const views = h('div', { class: 'lv2-inbox-views' });
     [['all','All'],['hot','🔥 Hot'],['overdue','⏰ Overdue'],['today','📅 Today'],['mine','⭐ Mine'],['new','🆕 New']].forEach(([k, lab]) => {
       views.appendChild(h('div', {
@@ -539,6 +730,12 @@ tr:hover .lv2-actions { opacity: 1; }
       }, lab));
     });
     list.appendChild(views);
+
+    // FULL filter bar (status / source / owner / score / tag / campaign / followup / qualified)
+    // Render inside the inbox list panel so user filters lead-list, detail stays in place.
+    const onFilterChange = () => { rerenderInboxRows(); };
+    list.appendChild(buildStatusChipBar(onFilterChange));
+    list.appendChild(buildFilterBar(onFilterChange));
 
     const rowsHost = h('div', { class: 'lv2-inbox-rows', id: 'lv2-inbox-rows' });
     list.appendChild(rowsHost);
