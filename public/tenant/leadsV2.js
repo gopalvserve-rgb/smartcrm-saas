@@ -60,19 +60,26 @@
     // Search string
     search: '',
     // Multi-select dropdown filters
-    fStatus: '',     // single status_id or ''
-    fSource: '',     // single source or ''
-    fOwner:  '',     // single user_id or ''
-    fTag:    '',
-    fCampaign: '',
-    fScore:  '',     // 'hot' | 'warm' | 'cold' | ''
-    fFollowup: '',   // 'overdue' | 'today' | 'week' | 'none' | ''
-    fQualified: '',  // 'yes' | 'no' | ''
+    // v1.3 — multi-select filters (arrays); empty array = no filter
+    fStatus: [],     // array of status_ids
+    fSource: [],     // array of source names
+    fOwner:  [],     // array of user_ids
+    fTag:    [],
+    fCampaign: [],
+    fScore:  [],     // ['hot','warm','cold']
+    fFollowup: '',   // single: 'overdue' | 'today' | 'week' | 'none' | ''
+    fQualified: '',  // single: 'yes' | 'no' | ''
     fDateFrom: '',
     fDateTo: '',
+    fDatePreset: '', // 'today' | 'yesterday' | '7d' | '30d' | 'all' | ''
     // Active row in detail panel
     selectedId: null,
-    style: 'classic'
+    style: 'classic',
+    // v1.3 — Focus mode (hide chrome) + collapsibles + saved views
+    focusMode: localStorage.getItem('crm.lv2.focus') === '1',
+    chipsCollapsed: localStorage.getItem('crm.lv2.chipsCollapsed') !== '0',  // collapsed by default
+    visibleFilters: (function(){ try { return JSON.parse(localStorage.getItem('crm.lv2.visibleFilters')) || ['status','source','owner','score','tag','campaign','followup','qualified']; } catch(_) { return ['status','source','owner','score','tag','campaign','followup','qualified']; } })(),
+    savedViews: (function(){ try { return JSON.parse(localStorage.getItem('crm.lv2.savedViews')) || []; } catch(_) { return []; } })()
   };
 
   /* ---------- helpers ---------- */
@@ -341,24 +348,26 @@ tr:hover .lv2-actions { opacity: 1; }
         const target = String(S.statusChip).toLowerCase();
         if (sn !== target) return false;
       }
-      // Status dropdown (id)
-      if (S.fStatus && String(l.status_id) !== String(S.fStatus)) return false;
-      // Source
-      if (S.fSource && String(l.source || '').toLowerCase() !== String(S.fSource).toLowerCase()) return false;
-      // Owner
-      if (S.fOwner && String(l.assigned_to || '') !== String(S.fOwner)) return false;
-      // Tag (substring match against comma-separated tags)
-      if (S.fTag) {
-        const t = String(l.tags || '').toLowerCase();
-        if (t.indexOf(String(S.fTag).toLowerCase()) < 0) return false;
+      // v1.3 — array filters: match if ANY selected value matches
+      const hasAny = (arr) => Array.isArray(arr) && arr.length > 0;
+      if (hasAny(S.fStatus) && !S.fStatus.map(String).includes(String(l.status_id))) return false;
+      if (hasAny(S.fSource)) {
+        const sn = String(l.source || '').toLowerCase();
+        if (!S.fSource.map(s => String(s).toLowerCase()).includes(sn)) return false;
       }
-      // Campaign
-      if (S.fCampaign && String(l.campaign_id || l.campaign_name || '').toLowerCase().indexOf(String(S.fCampaign).toLowerCase()) < 0) return false;
-      // AI Score bucket
-      if (S.fScore) {
+      if (hasAny(S.fOwner) && !S.fOwner.map(String).includes(String(l.assigned_to))) return false;
+      if (hasAny(S.fTag)) {
+        const t = String(l.tags || '').toLowerCase();
+        if (!S.fTag.some(tag => t.indexOf(String(tag).toLowerCase()) >= 0)) return false;
+      }
+      if (hasAny(S.fCampaign)) {
+        const cv = String(l.campaign_id || l.campaign_name || '').toLowerCase();
+        if (!S.fCampaign.some(c => cv.indexOf(String(c).toLowerCase()) >= 0)) return false;
+      }
+      if (hasAny(S.fScore)) {
         const sc = Number(l.smart_score || 0);
         const bucket = sc >= 80 ? 'hot' : sc >= 50 ? 'warm' : sc > 0 ? 'cold' : '';
-        if (bucket !== S.fScore) return false;
+        if (!S.fScore.includes(bucket)) return false;
       }
       // Follow-up state
       if (S.fFollowup === 'overdue') {
@@ -400,16 +409,25 @@ tr:hover .lv2-actions { opacity: 1; }
         const k = l.status_name || 'No status';
         counts[k] = (counts[k] || 0) + 1;
       });
-      const bar = h('div', {
-        class: 'lv2-statuschips',
-        style: { display: 'flex', gap: '6px', padding: '8px 14px', background: '#ffffff', borderBottom: '1px solid #e2e8f0', overflowX: 'auto', flexWrap: 'wrap' }
-      });
-      bar.appendChild(makeStatusChip('all', 'All', S.leads.length, onChange));
-      (Array.isArray(S.statuses) ? S.statuses : []).forEach(s => {
-        const c = counts[s.name] || 0;
-        bar.appendChild(makeStatusChip(s.name, s.name, c, onChange));
-      });
-      return bar;
+      // v1.3 — collapsible: tiny header + chevron; body hidden if S.chipsCollapsed
+      const wrap = h('div', { class: 'lv2-chipswrap', style: { background: '#ffffff', borderBottom: '1px solid #e2e8f0' } });
+      const head = h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 14px', cursor: 'pointer', userSelect: 'none' },
+        onclick: () => { S.chipsCollapsed = !S.chipsCollapsed; try { localStorage.setItem('crm.lv2.chipsCollapsed', S.chipsCollapsed ? '1' : '0'); } catch(_){} if (onChange) onChange(); }
+      },
+        h('span', { style: { fontSize: '10.5px', fontWeight: '600', color: '#64748b', textTransform: 'uppercase', letterSpacing: '.4px' } },
+          (S.chipsCollapsed ? '▸' : '▾') + ' Status segments' + (S.statusChip !== 'all' ? ' · ' + S.statusChip : '')),
+        h('span', { style: { fontSize: '10px', color: '#94a3b8' } }, S.chipsCollapsed ? 'Click to expand' : 'Click to collapse'));
+      wrap.appendChild(head);
+      if (!S.chipsCollapsed) {
+        const bar = h('div', { class: 'lv2-statuschips', style: { display: 'flex', gap: '6px', padding: '0 14px 8px', overflowX: 'auto', flexWrap: 'wrap' } });
+        bar.appendChild(makeStatusChip('all', 'All', S.leads.length, onChange));
+        (Array.isArray(S.statuses) ? S.statuses : []).forEach(s => {
+          const c = counts[s.name] || 0;
+          bar.appendChild(makeStatusChip(s.name, s.name, c, onChange));
+        });
+        wrap.appendChild(bar);
+      }
+      return wrap;
     } catch (e) {
       console.error('[LEADS_V2] buildStatusChipBar failed:', e);
       return h('div', { style: { padding: '6px 14px', color: '#c04444', fontSize: '11px' } }, 'Status chips error: ' + e.message);
@@ -435,84 +453,127 @@ tr:hover .lv2-actions { opacity: 1; }
       h('span', { style: { background: isActive ? 'white' : '#e2e8f0', color: '#64748b', fontSize: '9px', fontWeight: '700', padding: '1px 5px', borderRadius: '8px' } }, String(count)));
   }
 
+  function applyDatePreset(preset) {
+    S.fDatePreset = preset;
+    const now = new Date();
+    const fmt = (d) => d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+    if (preset === 'today') { S.fDateFrom = fmt(now); S.fDateTo = fmt(now); }
+    else if (preset === 'yesterday') { const y = new Date(now); y.setDate(y.getDate()-1); S.fDateFrom = fmt(y); S.fDateTo = fmt(y); }
+    else if (preset === '7d') { const f = new Date(now); f.setDate(f.getDate()-7); S.fDateFrom = fmt(f); S.fDateTo = fmt(now); }
+    else if (preset === '30d') { const f = new Date(now); f.setDate(f.getDate()-30); S.fDateFrom = fmt(f); S.fDateTo = fmt(now); }
+    else { S.fDateFrom = ''; S.fDateTo = ''; }
+  }
+
   function buildFilterBar(onChange) {
     try {
     // Returns a comprehensive filter row with ALL filters wired to S + onChange.
     const wrap = h('div', { style: { padding: '10px 14px', background: '#ffffff', borderBottom: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: '8px' } });
 
-    // Row 1: search + date range + status + source + owner + score
+    // Row 1: search + date presets + From/To
     const row1 = h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' } });
-    // Search
     row1.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '7px', padding: '5px 11px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px', minWidth: '220px', flex: '1', maxWidth: '320px' } },
       h('span', { style: { color: '#94a3b8' } }, '🔍'),
       h('input', { placeholder: 'Search name, phone, email, notes…', value: S.search,
         style: { border: 'none', background: 'transparent', outline: 'none', fontSize: '12.5px', flex: '1', color: '#0f172a' },
         oninput: (e) => { S.search = e.target.value; if (onChange) onChange(); } })));
-    // Date range
-    row1.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '4px' } },
-      h('span', { style: { fontSize: '11px', color: '#64748b' } }, '📅 From'),
-      h('input', { type: 'date', value: S.fDateFrom, style: { padding: '4px 6px', border: '1px solid #e2e8f0', borderRadius: '5px', fontSize: '11px' },
-        onchange: (e) => { S.fDateFrom = e.target.value; if (onChange) onChange(); } }),
-      h('span', { style: { fontSize: '11px', color: '#64748b' } }, 'To'),
-      h('input', { type: 'date', value: S.fDateTo, style: { padding: '4px 6px', border: '1px solid #e2e8f0', borderRadius: '5px', fontSize: '11px' },
-        onchange: (e) => { S.fDateTo = e.target.value; if (onChange) onChange(); } })));
-    // Status dropdown
-    row1.appendChild(filterSelect('🎯', 'Status', S.fStatus, [['', 'Any status']].concat((Array.isArray(S.statuses) ? S.statuses : []).map(s => [s.id, s.name])),
-      (v) => { S.fStatus = v; if (onChange) onChange(); }));
-    // Source dropdown
-    const srcOpts = [['', 'Any source']];
-    (Array.isArray(S.sources) ? S.sources : []).forEach(s => {
-      const name = (typeof s === 'string') ? s : (s && (s.name || s.label || s.value)) || '';
-      if (name) srcOpts.push([name, name]);
+    // Date preset pills
+    const datePresets = [['today','Today'],['yesterday','Yesterday'],['7d','Last 7d'],['30d','Last 30d'],['all','All']];
+    datePresets.forEach(([k, lab]) => {
+      const isActive = S.fDatePreset === k;
+      row1.appendChild(h('button', {
+        style: { padding: '4px 10px', background: isActive ? '#eef2ff' : 'white', border: '1px solid ' + (isActive ? '#c7d2fe' : '#e2e8f0'), borderRadius: '14px', fontSize: '11px', cursor: 'pointer', color: isActive ? '#4338ca' : '#64748b', fontWeight: isActive ? '600' : '500' },
+        onclick: () => { applyDatePreset(k); if (onChange) onChange(); }
+      }, lab));
     });
-    // Also derive from leads if api_sources_list is empty
-    if (srcOpts.length === 1) {
-      const seen = new Set();
-      (S.leads || []).forEach(l => { if (l.source && !seen.has(l.source)) { seen.add(l.source); srcOpts.push([l.source, l.source]); } });
-    }
-    row1.appendChild(filterSelect('🏷', 'Source', S.fSource, srcOpts, (v) => { S.fSource = v; if (onChange) onChange(); }));
-    // Owner dropdown
-    row1.appendChild(filterSelect('👤', 'Owner', S.fOwner, [['', 'Any owner']].concat((Array.isArray(S.users) ? S.users : []).map(u => [u.id, u.name])),
-      (v) => { S.fOwner = v; if (onChange) onChange(); }));
-    // AI Score
-    row1.appendChild(filterSelect('🤖', 'AI Score', S.fScore, [['', 'Any score'], ['hot', '🔥 Hot (80+)'], ['warm', '☀️ Warm (50-79)'], ['cold', '🧊 Cold (1-49)']],
-      (v) => { S.fScore = v; if (onChange) onChange(); }));
+    // Custom range
+    row1.appendChild(h('span', { style: { fontSize: '11px', color: '#94a3b8', marginLeft: '6px' } }, 'or'));
+    row1.appendChild(h('input', { type: 'date', value: S.fDateFrom, title: 'From date',
+      style: { padding: '4px 6px', border: '1px solid #e2e8f0', borderRadius: '5px', fontSize: '11px' },
+      onchange: (e) => { S.fDateFrom = e.target.value; S.fDatePreset = ''; if (onChange) onChange(); } }));
+    row1.appendChild(h('span', { style: { fontSize: '11px', color: '#64748b' } }, '→'));
+    row1.appendChild(h('input', { type: 'date', value: S.fDateTo, title: 'To date',
+      style: { padding: '4px 6px', border: '1px solid #e2e8f0', borderRadius: '5px', fontSize: '11px' },
+      onchange: (e) => { S.fDateTo = e.target.value; S.fDatePreset = ''; if (onChange) onChange(); } }));
     wrap.appendChild(row1);
 
-    // Row 2: tag + campaign + followup + qualified + reset
+    // Row 2: multi-select filter chips (only the ones in visibleFilters)
     const row2 = h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' } });
-    const tagOpts = [['', 'Any tag']];
+
+    // helper to add a multi-select filter chip
+    const visFilters = Array.isArray(S.visibleFilters) ? S.visibleFilters : [];
+    const addMulti = (key, icon, label, opts, stateKey) => {
+      if (!visFilters.includes(key)) return;
+      const selectedCount = Array.isArray(S[stateKey]) ? S[stateKey].length : 0;
+      const chipLabel = selectedCount ? (label + ': ' + selectedCount + ' selected') : (icon + ' ' + label);
+      row2.appendChild(h('button', {
+        style: { padding: '5px 10px', background: selectedCount ? '#eef2ff' : 'white', border: '1px solid ' + (selectedCount ? '#c7d2fe' : '#e2e8f0'), borderRadius: '14px', fontSize: '11.5px', cursor: 'pointer', color: selectedCount ? '#4338ca' : '#64748b', fontWeight: selectedCount ? '600' : '500', display: 'inline-flex', alignItems: 'center', gap: '4px' },
+        onclick: (ev) => openMultiSelectPopover(ev.currentTarget, label, opts, S[stateKey] || [], (sel) => { S[stateKey] = sel; if (onChange) onChange(); })
+      }, chipLabel, h('span', { style: { color: '#94a3b8' } }, '▾')));
+    };
+
+    // Build option arrays
+    const statusOpts = (Array.isArray(S.statuses) ? S.statuses : []).map(s => [s.id, s.name]);
+    const srcSet = new Set();
+    (Array.isArray(S.sources) ? S.sources : []).forEach(s => {
+      const name = (typeof s === 'string') ? s : (s && (s.name || s.label || s.value)) || '';
+      if (name) srcSet.add(name);
+    });
+    (S.leads || []).forEach(l => { if (l.source) srcSet.add(l.source); });
+    const srcOpts = Array.from(srcSet).map(s => [s, s]);
+    const ownerOpts = (Array.isArray(S.users) ? S.users : []).map(u => [u.id, u.name]);
+    const scoreOpts = [['hot', '🔥 Hot (80+)'], ['warm', '☀️ Warm (50-79)'], ['cold', '🧊 Cold (1-49)']];
+    const tagOpts = [];
     (Array.isArray(S.tags) ? S.tags : []).forEach(t => {
       const name = (typeof t === 'string') ? t : (t && (t.name || t.tag || t.value)) || '';
       if (name) tagOpts.push([name, name]);
     });
-    row2.appendChild(filterSelect('🔖', 'Tag', S.fTag, tagOpts, (v) => { S.fTag = v; if (onChange) onChange(); }));
-    const cmpOpts = [['', 'Any campaign']];
+    const cmpOpts = [];
     (Array.isArray(S.campaigns) ? S.campaigns : []).forEach(c => {
       const id = (c && (c.id || c.campaign_id)) || (typeof c === 'string' ? c : '');
       const name = (typeof c === 'string') ? c : (c && (c.name || c.title || c.label)) || '';
       if (name) cmpOpts.push([id || name, name]);
     });
-    row2.appendChild(filterSelect('📣', 'Campaign', S.fCampaign, cmpOpts, (v) => { S.fCampaign = v; if (onChange) onChange(); }));
-    row2.appendChild(filterSelect('⏰', 'Follow-up', S.fFollowup, [['', 'All follow-ups'], ['overdue', '⚠ Overdue'], ['today', '📅 Due today'], ['week', '📆 This week'], ['none', '— No follow-up'] ],
-      (v) => { S.fFollowup = v; if (onChange) onChange(); }));
-    row2.appendChild(filterSelect('✅', 'Qualified', S.fQualified, [['', 'Any qualified'], ['yes', '✓ Qualified'], ['no', '✗ Not qualified']],
-      (v) => { S.fQualified = v; if (onChange) onChange(); }));
 
-    // Reset
-    row2.appendChild(h('button', {
-      style: { padding: '5px 10px', background: 'white', border: '1px solid #e2e8f0', borderRadius: '6px', fontSize: '11.5px', cursor: 'pointer', color: '#64748b', marginLeft: 'auto' },
+    addMulti('status',   '🎯', 'Status',   statusOpts, 'fStatus');
+    addMulti('source',   '🏷', 'Source',   srcOpts,    'fSource');
+    addMulti('owner',    '👤', 'Owner',    ownerOpts,  'fOwner');
+    addMulti('score',    '🤖', 'AI Score', scoreOpts,  'fScore');
+    addMulti('tag',      '🔖', 'Tag',      tagOpts,    'fTag');
+    addMulti('campaign', '📣', 'Campaign', cmpOpts,    'fCampaign');
+
+    // Single-select follow-up + qualified (keep as small selects)
+    if (visFilters.includes('followup')) {
+      row2.appendChild(filterSelect('⏰', 'Follow-up', S.fFollowup, [['', 'All follow-ups'], ['overdue', '⚠ Overdue'], ['today', '📅 Due today'], ['week', '📆 This week'], ['none', '— No follow-up'] ],
+        (v) => { S.fFollowup = v; if (onChange) onChange(); }));
+    }
+    if (visFilters.includes('qualified')) {
+      row2.appendChild(filterSelect('✅', 'Qualified', S.fQualified, [['', 'Any qualified'], ['yes', '✓ Qualified'], ['no', '✗ Not qualified']],
+        (v) => { S.fQualified = v; if (onChange) onChange(); }));
+    }
+
+    // Right-side actions: Customize filters, Save view, Reset, count
+    const right = h('div', { style: { marginLeft: 'auto', display: 'flex', gap: '6px', alignItems: 'center' } });
+    right.appendChild(h('button', {
+      style: { padding: '5px 10px', background: 'white', border: '1px solid #e2e8f0', borderRadius: '6px', fontSize: '11.5px', cursor: 'pointer', color: '#64748b' },
+      onclick: (ev) => openCustomizeFiltersPopover(ev.currentTarget, onChange)
+    }, '👁 Customize'));
+    right.appendChild(h('button', {
+      style: { padding: '5px 10px', background: 'white', border: '1px solid #e2e8f0', borderRadius: '6px', fontSize: '11.5px', cursor: 'pointer', color: '#64748b' },
+      onclick: () => openSavedViewsPopover(onChange)
+    }, '⭐ Views (' + (S.savedViews||[]).length + ')'));
+    right.appendChild(h('button', {
+      style: { padding: '5px 10px', background: 'white', border: '1px solid #e2e8f0', borderRadius: '6px', fontSize: '11.5px', cursor: 'pointer', color: '#64748b' },
       onclick: () => {
-        S.statusChip = 'all'; S.search = ''; S.fStatus = ''; S.fSource = ''; S.fOwner = '';
-        S.fTag = ''; S.fCampaign = ''; S.fScore = ''; S.fFollowup = ''; S.fQualified = '';
-        S.fDateFrom = ''; S.fDateTo = ''; S.filter = 'all';
+        S.statusChip = 'all'; S.search = ''; S.fStatus = []; S.fSource = []; S.fOwner = [];
+        S.fTag = []; S.fCampaign = []; S.fScore = []; S.fFollowup = ''; S.fQualified = '';
+        S.fDateFrom = ''; S.fDateTo = ''; S.fDatePreset = ''; S.filter = 'all';
         if (onChange) onChange();
       }
-    }, '↻ Reset filters'));
-    // Count info
+    }, '↻ Reset'));
     const matched = filtered().length;
-    row2.appendChild(h('span', { style: { fontSize: '11px', color: '#94a3b8', whiteSpace: 'nowrap' } },
-      'Showing ' + matched + ' of ' + (S.leads || []).length));
+    right.appendChild(h('span', { style: { fontSize: '11px', color: '#94a3b8', whiteSpace: 'nowrap' } },
+      matched + ' / ' + (S.leads || []).length));
+    row2.appendChild(right);
     wrap.appendChild(row2);
 
     return wrap;
@@ -533,6 +594,158 @@ tr:hover .lv2-actions { opacity: 1; }
       sel);
   }
 
+  /* ===== v1.3 popovers — multi-select, customize-filters, saved-views ===== */
+  function _closePopovers() {
+    document.querySelectorAll('.lv2-popover').forEach(p => p.remove());
+  }
+  function openMultiSelectPopover(anchorEl, title, opts, currentSelected, onApply) {
+    _closePopovers();
+    const r = anchorEl.getBoundingClientRect();
+    const sel = new Set((currentSelected || []).map(String));
+    const pop = h('div', { class: 'lv2-popover', style: {
+      position: 'fixed', top: (r.bottom + 4) + 'px', left: r.left + 'px',
+      background: 'white', border: '1px solid #e2e8f0', borderRadius: '8px',
+      boxShadow: '0 10px 30px rgba(0,0,0,.12)', padding: '8px', minWidth: '240px', maxWidth: '320px',
+      maxHeight: '360px', overflowY: 'auto', zIndex: '10000'
+    } });
+    pop.appendChild(h('div', { style: { fontSize: '11px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase', padding: '4px 6px 8px' } }, title));
+    // Select all / Clear
+    pop.appendChild(h('div', { style: { display: 'flex', gap: '6px', padding: '0 6px 8px', borderBottom: '1px solid #f1f5f9', marginBottom: '4px' } },
+      h('button', { style: { padding: '3px 8px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '4px', fontSize: '10px', cursor: 'pointer', color: '#64748b' },
+        onclick: () => { opts.forEach(([v]) => sel.add(String(v))); rebuild(); } }, '✓ All'),
+      h('button', { style: { padding: '3px 8px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '4px', fontSize: '10px', cursor: 'pointer', color: '#64748b' },
+        onclick: () => { sel.clear(); rebuild(); } }, '✗ None')));
+    const listEl = h('div');
+    pop.appendChild(listEl);
+    function rebuild() {
+      listEl.innerHTML = '';
+      if (!opts.length) {
+        listEl.appendChild(h('div', { style: { padding: '12px', color: '#94a3b8', fontSize: '11px', textAlign: 'center' } }, 'No options'));
+      }
+      opts.forEach(([v, label]) => {
+        const k = String(v);
+        const checked = sel.has(k);
+        listEl.appendChild(h('label', {
+          style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 6px', cursor: 'pointer', fontSize: '12.5px', borderRadius: '4px' },
+          onmouseover: function () { this.style.background = '#f8fafc'; },
+          onmouseout:  function () { this.style.background = ''; }
+        },
+          h('input', { type: 'checkbox', checked: checked ? 'checked' : null, style: { accentColor: '#5e6ad2' },
+            onchange: (e) => { if (e.target.checked) sel.add(k); else sel.delete(k); } }),
+          h('span', null, label)));
+      });
+    }
+    rebuild();
+    // Apply / Cancel
+    pop.appendChild(h('div', { style: { display: 'flex', gap: '6px', padding: '8px 6px 4px', borderTop: '1px solid #f1f5f9', marginTop: '4px' } },
+      h('button', { style: { flex: '1', padding: '5px 10px', background: '#1e293b', color: 'white', border: 'none', borderRadius: '5px', fontSize: '11px', cursor: 'pointer', fontWeight: '600' },
+        onclick: () => { onApply(Array.from(sel)); _closePopovers(); } }, 'Apply'),
+      h('button', { style: { padding: '5px 10px', background: 'white', color: '#64748b', border: '1px solid #e2e8f0', borderRadius: '5px', fontSize: '11px', cursor: 'pointer' },
+        onclick: _closePopovers }, 'Cancel')));
+    document.body.appendChild(pop);
+    // Click-outside to close
+    setTimeout(() => {
+      const off = (e) => { if (!pop.contains(e.target)) { _closePopovers(); document.removeEventListener('click', off); } };
+      document.addEventListener('click', off);
+    }, 50);
+  }
+
+  function openCustomizeFiltersPopover(anchorEl, onChange) {
+    _closePopovers();
+    const r = anchorEl.getBoundingClientRect();
+    const allFilters = [
+      ['status',    '🎯 Status'],
+      ['source',    '🏷 Source'],
+      ['owner',     '👤 Owner'],
+      ['score',     '🤖 AI Score'],
+      ['tag',       '🔖 Tag'],
+      ['campaign',  '📣 Campaign'],
+      ['followup',  '⏰ Follow-up'],
+      ['qualified', '✅ Qualified']
+    ];
+    const visible = new Set(Array.isArray(S.visibleFilters) ? S.visibleFilters : []);
+    const pop = h('div', { class: 'lv2-popover', style: {
+      position: 'fixed', top: (r.bottom + 4) + 'px', right: '24px',
+      background: 'white', border: '1px solid #e2e8f0', borderRadius: '8px',
+      boxShadow: '0 10px 30px rgba(0,0,0,.12)', padding: '10px', minWidth: '220px', zIndex: '10000'
+    } });
+    pop.appendChild(h('div', { style: { fontSize: '11px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase', padding: '0 4px 8px' } }, 'Visible filters'));
+    allFilters.forEach(([k, lab]) => {
+      pop.appendChild(h('label', {
+        style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 4px', cursor: 'pointer', fontSize: '12px' }
+      },
+        h('input', { type: 'checkbox', checked: visible.has(k) ? 'checked' : null, style: { accentColor: '#5e6ad2' },
+          onchange: (e) => {
+            if (e.target.checked) visible.add(k); else visible.delete(k);
+            S.visibleFilters = Array.from(visible);
+            try { localStorage.setItem('crm.lv2.visibleFilters', JSON.stringify(S.visibleFilters)); } catch(_){}
+            if (onChange) onChange();
+          } }),
+        h('span', null, lab)));
+    });
+    document.body.appendChild(pop);
+    setTimeout(() => {
+      const off = (e) => { if (!pop.contains(e.target)) { _closePopovers(); document.removeEventListener('click', off); } };
+      document.addEventListener('click', off);
+    }, 50);
+  }
+
+  function openSavedViewsPopover(onChange) {
+    _closePopovers();
+    const pop = h('div', { class: 'lv2-popover', style: {
+      position: 'fixed', top: '90px', right: '24px',
+      background: 'white', border: '1px solid #e2e8f0', borderRadius: '8px',
+      boxShadow: '0 10px 30px rgba(0,0,0,.12)', padding: '10px', minWidth: '260px', zIndex: '10000'
+    } });
+    pop.appendChild(h('div', { style: { fontSize: '11px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase', padding: '0 4px 8px' } }, 'Saved Views'));
+    const views = Array.isArray(S.savedViews) ? S.savedViews : [];
+    if (!views.length) {
+      pop.appendChild(h('div', { style: { padding: '12px', fontSize: '11px', color: '#94a3b8', textAlign: 'center' } }, 'No saved views yet'));
+    } else {
+      views.forEach((v, i) => {
+        pop.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 4px', borderBottom: '1px solid #f1f5f9' } },
+          h('button', { style: { flex: '1', padding: '5px 8px', background: 'white', border: '1px solid #e2e8f0', borderRadius: '5px', fontSize: '11.5px', cursor: 'pointer', color: '#475569', textAlign: 'left' },
+            onclick: () => {
+              Object.assign(S, v.state);
+              try { localStorage.setItem('crm.lv2.lastView', v.name); } catch(_){}
+              _closePopovers();
+              if (onChange) onChange();
+            } }, '⭐ ' + v.name),
+          h('button', { style: { padding: '5px 8px', background: 'white', border: '1px solid #fecaca', color: '#b91c1c', borderRadius: '5px', fontSize: '10px', cursor: 'pointer' },
+            onclick: () => {
+              S.savedViews.splice(i, 1);
+              try { localStorage.setItem('crm.lv2.savedViews', JSON.stringify(S.savedViews)); } catch(_){}
+              _closePopovers();
+              openSavedViewsPopover(onChange);
+            } }, '✕')));
+      });
+    }
+    // + Save current
+    pop.appendChild(h('button', {
+      style: { width: '100%', padding: '7px', background: '#1e293b', color: 'white', border: 'none', borderRadius: '5px', fontSize: '11px', cursor: 'pointer', fontWeight: '600', marginTop: '8px' },
+      onclick: () => {
+        const name = (prompt('Name this view:') || '').trim();
+        if (!name) return;
+        const state = {
+          statusChip: S.statusChip, search: S.search, filter: S.filter,
+          fStatus: S.fStatus, fSource: S.fSource, fOwner: S.fOwner, fTag: S.fTag,
+          fCampaign: S.fCampaign, fScore: S.fScore, fFollowup: S.fFollowup, fQualified: S.fQualified,
+          fDateFrom: S.fDateFrom, fDateTo: S.fDateTo, fDatePreset: S.fDatePreset
+        };
+        S.savedViews = (S.savedViews || []).filter(v => v.name !== name);
+        S.savedViews.push({ name, state });
+        try { localStorage.setItem('crm.lv2.savedViews', JSON.stringify(S.savedViews)); } catch(_){}
+        _closePopovers();
+        if (onChange) onChange();
+      }
+    }, '＋ Save current view'));
+    document.body.appendChild(pop);
+    setTimeout(() => {
+      const off = (e) => { if (!pop.contains(e.target)) { _closePopovers(); document.removeEventListener('click', off); } };
+      document.addEventListener('click', off);
+    }, 50);
+  }
+
   /* ====================================================================
    * MODERN (A3) RENDERER — full table with AI columns + slide-over panel
    * ==================================================================*/
@@ -549,23 +762,41 @@ tr:hover .lv2-actions { opacity: 1; }
 
     const wrap = h('div', { class: 'lv2-modern' });
 
-    // Health hero
-    wrap.appendChild(h('div', { class: 'health' },
-      hcell('Total', total, '↑ Synced', false),
-      hcell('🔥 Hot', hot, hot ? '↑ ' + hot + ' to call' : '—', false, '#b91c1c'),
-      hcell('⏰ Overdue', overdue, overdue ? '↓ Action!' : '✓ Clean', !!overdue, '#f59e0b'),
-      hcell('⭐ Mine', mine, '', false),
-      hcell('🆕 New', newCnt, '', false, '#15803d')
-    ));
+    // v1.3 — compact micro stats (80% smaller than before); Focus mode hides entirely
+    if (!S.focusMode) {
+      const micro = h('div', { style: { display: 'flex', gap: '14px', padding: '6px 14px', background: '#fafbfc', borderBottom: '1px solid #f1f5f9', fontSize: '11px', alignItems: 'center' } },
+        miniStat('Total', total, '#0f172a'),
+        miniStat('🔥 Hot', hot, '#b91c1c'),
+        miniStat('⏰ Overdue', overdue, '#f59e0b'),
+        miniStat('⭐ Mine', mine, '#0f172a'),
+        miniStat('🆕 New', newCnt, '#15803d'),
+        h('span', { style: { marginLeft: 'auto', fontSize: '10px', color: '#94a3b8' } }, 'Synced 2m ago'),
+        // Focus toggle right side
+        h('button', {
+          style: { padding: '4px 10px', background: 'white', border: '1px solid #e2e8f0', borderRadius: '14px', fontSize: '11px', cursor: 'pointer', color: '#64748b', fontWeight: '500' },
+          title: 'Hide chrome (Focus mode)',
+          onclick: () => { S.focusMode = true; try { localStorage.setItem('crm.lv2.focus', '1'); } catch(_){} renderModern(view); }
+        }, '🎯 Focus mode'));
+      wrap.appendChild(micro);
+    } else {
+      // Tiny strip with EXIT focus button only
+      const strip = h('div', { style: { display: 'flex', gap: '14px', padding: '4px 14px', background: '#fef3c7', borderBottom: '1px solid #fde68a', fontSize: '11px', alignItems: 'center', justifyContent: 'space-between' } },
+        h('span', { style: { color: '#92400e', fontWeight: '600' } }, '🎯 Focus mode active · ' + total + ' leads loaded'),
+        h('button', {
+          style: { padding: '4px 10px', background: 'white', border: '1px solid #fde68a', borderRadius: '14px', fontSize: '11px', cursor: 'pointer', color: '#92400e', fontWeight: '600' },
+          onclick: () => { S.focusMode = false; try { localStorage.setItem('crm.lv2.focus', '0'); } catch(_){} renderModern(view); }
+        }, '✕ Exit Focus'));
+      wrap.appendChild(strip);
+    }
 
-    // Status chip row (matches Classic chips)
+    // Status chip row (matches Classic chips) — hidden in Focus mode
     const onFilterChange = () => { rerenderRows(); };
-    wrap.appendChild(buildStatusChipBar(onFilterChange));
+    if (!S.focusMode) wrap.appendChild(buildStatusChipBar(onFilterChange));
 
-    // Full filter bar (search + date range + status + source + owner + score + tag + campaign + followup + qualified)
+    // Full filter bar — always visible (the user's main tool)
     wrap.appendChild(buildFilterBar(onFilterChange));
 
-    // Quick chips (kept for fast slicing)
+    // Quick chips — hidden in Focus mode
     const qchips = h('div', { class: 'qchips' });
     const chips = [['all','All','📋',total],['hot','🔥 Hot','',hot],['overdue','⏰ Overdue','',overdue],['today','📅 Due today','',0],['mine','⭐ Mine','',mine],['new','🆕 New','',newCnt]];
     chips.forEach(([key, label, ic, count]) => {
@@ -579,7 +810,7 @@ tr:hover .lv2-actions { opacity: 1; }
       h('button', { class: 'qchip', onclick: load }, '↻ Refresh'),
       h('button', { class: 'qchip' }, '↓ Export'),
       h('button', { class: 'qchip', style: { background: '#1e293b', color: 'white', borderColor: '#1e293b' } }, '＋ New Lead')));
-    wrap.appendChild(qchips);
+    if (!S.focusMode) wrap.appendChild(qchips);
 
     // Table
     const tblWrap = h('div', { class: 'tbl-wrap', id: 'lv2-tbl-wrap' });
@@ -594,6 +825,12 @@ tr:hover .lv2-actions { opacity: 1; }
       h('div', { class: 'lab' }, lab),
       h('div', { class: 'val', style: color ? { color } : null }, String(val).toLocaleString ? Number(val).toLocaleString('en-IN') : val),
       ch ? h('div', { class: 'ch' + (isDn ? ' dn' : '') }, ch) : null);
+  }
+  function miniStat(label, val, color) {
+    return h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px' } },
+      h('span', { style: { color: '#64748b' } }, label),
+      h('b', { style: { color: color || '#0f172a', fontSize: '12px', fontWeight: '700' } },
+        Number(val).toLocaleString('en-IN')));
   }
   function rerenderRows() {
     const w = $('#lv2-tbl-wrap');
