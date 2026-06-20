@@ -4592,19 +4592,33 @@ VIEWS.leads = async (view) => {
   // LEADS_VIEW_V2 (2026-06-21) — when flag is on AND user has picked a non-
   // classic style, delegate to leadsV2 module. Otherwise fall through to
   // the existing legacy renderer below (untouched).
+  //
+  // Brand flag may live on CRM.brand (set by warmCache) OR CRM._earlyBrand
+  // (set by an earlier api_admin_brand fetch). If neither is populated yet,
+  // fetch once and cache. Same fix pattern as WB_CHAT_V2.
   try {
-    const cfg = (CRM && (CRM.brand || CRM._earlyBrand)) || {};
+    let cfg = (CRM && (CRM.brand || CRM._earlyBrand)) || {};
+    if (!cfg.LEADS_VIEW_V2_ENABLED && !CRM._lv2Checked) {
+      try {
+        const fresh = await api('api_admin_brand').catch(() => null);
+        if (fresh) {
+          CRM.brand = Object.assign(CRM.brand || {}, fresh);
+          cfg = CRM.brand;
+        }
+      } catch (_) {}
+      CRM._lv2Checked = true;
+    }
     const flagOn = String(cfg.LEADS_VIEW_V2_ENABLED || '') === '1';
+    console.log('[LEADS_V2] delegator check — flag:', cfg.LEADS_VIEW_V2_ENABLED, 'module:', typeof window.LEADS_V2);
     if (flagOn && window.LEADS_V2) {
       const style = window.LEADS_V2.getStyle();
+      console.log('[LEADS_V2] style preference:', style);
       if (style === 'modern' || style === 'inbox') {
         view.innerHTML = '';
-        // Tiny header with the style toggle so the user can flip back
         const head = h('div', { style: { padding: '12px 16px', background: 'white', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
           h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px' } },
             h('h1', { style: { fontSize: '17px', fontWeight: '700', margin: 0 } }, '📋 Leads'),
             window.LEADS_V2.createToggle((newStyle) => {
-              // Re-render in place
               try { window.LEADS_V2.closeSlideOver && window.LEADS_V2.closeSlideOver(); } catch (_) {}
               VIEWS.leads(view);
             })));
@@ -4617,16 +4631,21 @@ VIEWS.leads = async (view) => {
 
   if (!CRM.cache.statuses) await warmCache();
   _maybeShowFeatureSpotlight();
-  // LEADS_VIEW_V2 — show style toggle even on Classic so user can switch out
+  // LEADS_VIEW_V2 — show style toggle even on Classic so user can switch
+  // Read brand from any of the cached sources; the inline fetch above
+  // already populated CRM.brand if it was missing.
   try {
     const cfg = (CRM && (CRM.brand || CRM._earlyBrand)) || {};
     if (String(cfg.LEADS_VIEW_V2_ENABLED || '') === '1' && window.LEADS_V2) {
-      const tg = h('div', { style: { padding: '8px 16px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: '12px', justifyContent: 'flex-end' } },
-        h('span', { style: { fontSize: '11px', color: '#64748b' } }, 'View style:'),
+      // Inject the toggle BAR (don't wipe the whole view yet — legacy
+      // renderer below appends its own content into the view).
+      const tg = h('div', { id: 'lv2-toggle-bar', style: { padding: '8px 16px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: '12px', justifyContent: 'flex-end' } },
+        h('span', { style: { fontSize: '11px', color: '#64748b' } }, '✨ View style:'),
         window.LEADS_V2.createToggle((newStyle) => {
           try { window.LEADS_V2.closeSlideOver && window.LEADS_V2.closeSlideOver(); } catch (_) {}
           VIEWS.leads(view);
         }));
+      // Clear and add toggle bar first; legacy renderer appends rest below
       view.innerHTML = '';
       view.appendChild(tg);
     }
