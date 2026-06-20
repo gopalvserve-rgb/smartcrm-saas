@@ -471,10 +471,10 @@ tr:hover .lv2-actions { opacity: 1; }
 
     // Row 1: search + date presets + From/To
     const row1 = h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' } });
-    row1.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '7px', padding: '5px 11px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px', minWidth: '220px', flex: '1', maxWidth: '320px' } },
-      h('span', { style: { color: '#94a3b8' } }, '🔍'),
-      h('input', { placeholder: 'Search name, phone, email, notes…', value: S.search,
-        style: { border: 'none', background: 'transparent', outline: 'none', fontSize: '12.5px', flex: '1', color: '#0f172a' },
+    row1.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 10px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px', minWidth: '200px', maxWidth: '260px', flex: '0 0 260px', boxSizing: 'border-box' } },
+      h('span', { style: { color: '#94a3b8', fontSize: '12px' } }, '🔍'),
+      h('input', { placeholder: 'Search name, phone, email…', value: S.search,
+        style: { border: 'none', background: 'transparent', outline: 'none', fontSize: '12px', width: '100%', minWidth: '0', color: '#0f172a' },
         oninput: (e) => { S.search = e.target.value; if (onChange) onChange(); } })));
     // Date preset pills
     const datePresets = [['today','Today'],['yesterday','Yesterday'],['7d','Last 7d'],['30d','Last 30d'],['all','All']];
@@ -486,13 +486,13 @@ tr:hover .lv2-actions { opacity: 1; }
       }, lab));
     });
     // Custom range
-    row1.appendChild(h('span', { style: { fontSize: '11px', color: '#94a3b8', marginLeft: '6px' } }, 'or'));
+    row1.appendChild(h('span', { style: { fontSize: '11px', color: '#94a3b8', margin: '0 4px' } }, 'or'));
     row1.appendChild(h('input', { type: 'date', value: S.fDateFrom, title: 'From date',
-      style: { padding: '4px 6px', border: '1px solid #e2e8f0', borderRadius: '5px', fontSize: '11px' },
+      style: { padding: '4px 6px', border: '1px solid #e2e8f0', borderRadius: '5px', fontSize: '11px', width: '130px', flex: '0 0 130px', boxSizing: 'border-box' },
       onchange: (e) => { S.fDateFrom = e.target.value; S.fDatePreset = ''; if (onChange) onChange(); } }));
-    row1.appendChild(h('span', { style: { fontSize: '11px', color: '#64748b' } }, '→'));
+    row1.appendChild(h('span', { style: { fontSize: '11px', color: '#64748b', margin: '0 2px' } }, '→'));
     row1.appendChild(h('input', { type: 'date', value: S.fDateTo, title: 'To date',
-      style: { padding: '4px 6px', border: '1px solid #e2e8f0', borderRadius: '5px', fontSize: '11px' },
+      style: { padding: '4px 6px', border: '1px solid #e2e8f0', borderRadius: '5px', fontSize: '11px', width: '130px', flex: '0 0 130px', boxSizing: 'border-box' },
       onchange: (e) => { S.fDateTo = e.target.value; S.fDatePreset = ''; if (onChange) onChange(); } }));
     wrap.appendChild(row1);
 
