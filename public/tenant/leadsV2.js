@@ -72,6 +72,9 @@
     fDateFrom: '',
     fDateTo: '',
     fDatePreset: '', // 'today' | 'yesterday' | '7d' | '30d' | 'all' | ''
+    // v1.5 — pagination
+    page: 1,
+    pageSize: Number(localStorage.getItem('crm.lv2.pageSize')) || 25,
     // Active row in detail panel
     selectedId: null,
     style: 'classic',
@@ -790,7 +793,8 @@ tr:hover .lv2-actions { opacity: 1; }
     }
 
     // Status chip row (matches Classic chips) — hidden in Focus mode
-    const onFilterChange = () => { rerenderRows(); };
+    // v1.5 — full re-render so filter bar (count, active pills, date inputs) reflects state
+    const onFilterChange = () => { S.page = 1; renderModern(view); };
     if (!S.focusMode) wrap.appendChild(buildStatusChipBar(onFilterChange));
 
     // Full filter bar — always visible (the user's main tool)
@@ -840,6 +844,14 @@ tr:hover .lv2-actions { opacity: 1; }
   }
   function renderModernTable() {
     const rows = filtered();
+    const pageSize = Number(S.pageSize) || 25;
+    const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+    if (S.page > totalPages) S.page = totalPages;
+    if (S.page < 1) S.page = 1;
+    const startIdx = (S.page - 1) * pageSize;
+    const pageRows = rows.slice(startIdx, startIdx + pageSize);
+
+    const container = h('div');
     const tbl = h('table');
     const thead = h('thead', null, h('tr', null,
       h('th', { class: 'sticky-l', style: { width: '36px' } }, h('input', { type: 'checkbox' })),
@@ -855,10 +867,66 @@ tr:hover .lv2-actions { opacity: 1; }
     ));
     tbl.appendChild(thead);
     const tbody = h('tbody');
-    rows.slice(0, 100).forEach(l => tbody.appendChild(renderModernRow(l)));
-    tbl.appendChild(tbody);
+    pageRows.forEach(l => tbody.appendChild(renderModernRow(l)));
     if (!rows.length) tbody.appendChild(h('tr', null, h('td', { colspan: 10, style: { padding: '40px', textAlign: 'center', color: '#94a3b8' } }, 'No leads match your filter.')));
-    return tbl;
+    tbl.appendChild(tbody);
+    container.appendChild(tbl);
+
+    // Pagination bar
+    container.appendChild(renderPagination(rows.length, totalPages));
+    return container;
+  }
+
+  function renderPagination(totalRows, totalPages) {
+    const bar = h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 16px', background: '#fafbfc', borderTop: '1px solid #e2e8f0', fontSize: '11.5px', color: '#64748b', position: 'sticky', bottom: '0' } });
+    // Left — count + page size
+    const left = h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px' } },
+      h('span', null, 'Showing ' + ((S.page - 1) * S.pageSize + 1) + '–' + Math.min(totalRows, S.page * S.pageSize) + ' of ' + totalRows));
+    const sizeSel = h('select', {
+      style: { padding: '3px 8px', border: '1px solid #e2e8f0', borderRadius: '4px', fontSize: '11px', background: 'white', cursor: 'pointer' },
+      onchange: (e) => {
+        S.pageSize = Number(e.target.value) || 25;
+        try { localStorage.setItem('crm.lv2.pageSize', String(S.pageSize)); } catch(_){}
+        S.page = 1;
+        rerenderRows();
+      }
+    });
+    [25, 50, 100, 200, 500].forEach(n => sizeSel.appendChild(h('option', { value: n, selected: n === S.pageSize ? 'selected' : null }, n + ' per page')));
+    left.appendChild(sizeSel);
+    bar.appendChild(left);
+
+    // Right — page nav
+    const right = h('div', { style: { display: 'flex', alignItems: 'center', gap: '4px' } });
+    const pageBtn = (lab, p, disabled, isActive) => h('button', {
+      style: {
+        padding: '4px 10px',
+        background: isActive ? '#1e293b' : 'white',
+        color: isActive ? 'white' : (disabled ? '#cbd5e1' : '#475569'),
+        border: '1px solid ' + (isActive ? '#1e293b' : '#e2e8f0'),
+        borderRadius: '5px',
+        fontSize: '11px',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        minWidth: '28px',
+        fontWeight: isActive ? '600' : '500',
+        opacity: disabled ? '0.5' : '1'
+      },
+      onclick: disabled ? null : () => { S.page = p; rerenderRows(); }
+    }, lab);
+    right.appendChild(pageBtn('«', 1, S.page === 1));
+    right.appendChild(pageBtn('‹', Math.max(1, S.page - 1), S.page === 1));
+    // Page numbers — show window of 5 around current
+    const winStart = Math.max(1, S.page - 2);
+    const winEnd = Math.min(totalPages, winStart + 4);
+    if (winStart > 1) right.appendChild(h('span', { style: { padding: '0 4px', color: '#94a3b8' } }, '…'));
+    for (let p = winStart; p <= winEnd; p++) {
+      right.appendChild(pageBtn(String(p), p, false, p === S.page));
+    }
+    if (winEnd < totalPages) right.appendChild(h('span', { style: { padding: '0 4px', color: '#94a3b8' } }, '…'));
+    right.appendChild(pageBtn('›', Math.min(totalPages, S.page + 1), S.page === totalPages));
+    right.appendChild(pageBtn('»', totalPages, S.page === totalPages));
+    right.appendChild(h('span', { style: { fontSize: '11px', color: '#94a3b8', marginLeft: '8px' } }, 'Page ' + S.page + ' / ' + totalPages));
+    bar.appendChild(right);
+    return bar;
   }
   function renderModernRow(l) {
     const name = l.name || l.phone || '—';
@@ -1001,7 +1069,8 @@ tr:hover .lv2-actions { opacity: 1; }
 
     // FULL filter bar (status / source / owner / score / tag / campaign / followup / qualified)
     // Render inside the inbox list panel so user filters lead-list, detail stays in place.
-    const onFilterChange = () => { rerenderInboxRows(); };
+    // v1.5 — full re-render so filter UI updates too
+    const onFilterChange = () => { S.page = 1; renderInbox(view); };
     list.appendChild(buildStatusChipBar(onFilterChange));
     list.appendChild(buildFilterBar(onFilterChange));
 
