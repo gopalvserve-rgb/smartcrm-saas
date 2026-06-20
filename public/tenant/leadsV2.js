@@ -82,6 +82,7 @@
     focusMode: localStorage.getItem('crm.lv2.focus') === '1',
     chipsCollapsed: localStorage.getItem('crm.lv2.chipsCollapsed') !== '0',  // collapsed by default
     filtersCollapsed: localStorage.getItem('crm.lv2.filtersCollapsed') !== '0',  // collapsed by default
+    visibleColumns: (function(){ try { return JSON.parse(localStorage.getItem('crm.lv2.visibleColumns')) || ['phone','source','status','owner','score','aistep','activity','created']; } catch(_) { return ['phone','source','status','owner','score','aistep','activity','created']; } })(),
     visibleFilters: (function(){ try { return JSON.parse(localStorage.getItem('crm.lv2.visibleFilters')) || ['status','source','owner','score','tag','campaign','followup','qualified']; } catch(_) { return ['status','source','owner','score','tag','campaign','followup','qualified']; } })(),
     savedViews: (function(){ try { return JSON.parse(localStorage.getItem('crm.lv2.savedViews')) || []; } catch(_) { return []; } })()
   };
@@ -604,7 +605,11 @@ tr:hover .lv2-actions { opacity: 1; }
     right.appendChild(h('button', {
       style: { padding: '5px 10px', background: 'white', border: '1px solid #e2e8f0', borderRadius: '6px', fontSize: '11.5px', cursor: 'pointer', color: '#64748b' },
       onclick: (ev) => openCustomizeFiltersPopover(ev.currentTarget, onChange)
-    }, '👁 Customize'));
+    }, '👁 Filters'));
+    right.appendChild(h('button', {
+      style: { padding: '5px 10px', background: 'white', border: '1px solid #e2e8f0', borderRadius: '6px', fontSize: '11.5px', cursor: 'pointer', color: '#64748b' },
+      onclick: (ev) => openCustomizeColumnsPopover(ev.currentTarget, onChange)
+    }, '📊 Columns'));
     right.appendChild(h('button', {
       style: { padding: '5px 10px', background: 'white', border: '1px solid #e2e8f0', borderRadius: '6px', fontSize: '11.5px', cursor: 'pointer', color: '#64748b' },
       onclick: () => openSavedViewsPopover(onChange)
@@ -732,6 +737,52 @@ tr:hover .lv2-actions { opacity: 1; }
           } }),
         h('span', null, lab)));
     });
+    document.body.appendChild(pop);
+    setTimeout(() => {
+      const off = (e) => { if (!pop.contains(e.target)) { _closePopovers(); document.removeEventListener('click', off); } };
+      document.addEventListener('click', off);
+    }, 50);
+  }
+
+  function openCustomizeColumnsPopover(anchorEl, onChange) {
+    _closePopovers();
+    const r = anchorEl.getBoundingClientRect();
+    const allCols = [
+      ['phone',    '📞 Phone & actions'],
+      ['source',   '🏷 Source'],
+      ['status',   '🎯 Status'],
+      ['owner',    '👤 Owner'],
+      ['score',    '🤖 AI Score'],
+      ['aistep',   '✨ AI Next Step'],
+      ['activity', '🕒 Activity'],
+      ['created',  '🗓 Created']
+    ];
+    const visible = new Set(Array.isArray(S.visibleColumns) ? S.visibleColumns : []);
+    const pop = h('div', { class: 'lv2-popover', style: {
+      position: 'fixed', top: (r.bottom + 4) + 'px', right: '24px',
+      background: 'white', border: '1px solid #e2e8f0', borderRadius: '8px',
+      boxShadow: '0 10px 30px rgba(0,0,0,.12)', padding: '10px', minWidth: '240px', zIndex: '10000'
+    } });
+    pop.appendChild(h('div', { style: { fontSize: '11px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase', padding: '0 4px 8px' } }, 'Visible columns'));
+    pop.appendChild(h('div', { style: { fontSize: '10px', color: '#94a3b8', padding: '0 4px 6px', borderBottom: '1px solid #f1f5f9', marginBottom: '4px' } }, 'Checkbox + Name are always visible.'));
+    allCols.forEach(([k, lab]) => {
+      pop.appendChild(h('label', {
+        style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 4px', cursor: 'pointer', fontSize: '12px' }
+      },
+        h('input', { type: 'checkbox', checked: visible.has(k) ? 'checked' : null, style: { accentColor: '#5e6ad2' },
+          onchange: (e) => {
+            if (e.target.checked) visible.add(k); else visible.delete(k);
+            S.visibleColumns = Array.from(visible);
+            try { localStorage.setItem('crm.lv2.visibleColumns', JSON.stringify(S.visibleColumns)); } catch(_){}
+            if (onChange) onChange();
+          } }),
+        h('span', null, lab)));
+    });
+    pop.appendChild(h('div', { style: { display: 'flex', gap: '6px', padding: '8px 4px 4px', borderTop: '1px solid #f1f5f9', marginTop: '4px' } },
+      h('button', { style: { flex: '1', padding: '5px 8px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '5px', fontSize: '11px', cursor: 'pointer', color: '#475569' },
+        onclick: () => { allCols.forEach(([k]) => visible.add(k)); S.visibleColumns = Array.from(visible); try { localStorage.setItem('crm.lv2.visibleColumns', JSON.stringify(S.visibleColumns)); } catch(_){} _closePopovers(); if (onChange) onChange(); } }, '✓ Show all'),
+      h('button', { style: { flex: '1', padding: '5px 8px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '5px', fontSize: '11px', cursor: 'pointer', color: '#475569' },
+        onclick: () => { visible.clear(); S.visibleColumns = []; try { localStorage.setItem('crm.lv2.visibleColumns', JSON.stringify([])); } catch(_){} _closePopovers(); if (onChange) onChange(); } }, '✗ Hide all')));
     document.body.appendChild(pop);
     setTimeout(() => {
       const off = (e) => { if (!pop.contains(e.target)) { _closePopovers(); document.removeEventListener('click', off); } };
@@ -904,22 +955,26 @@ tr:hover .lv2-actions { opacity: 1; }
 
     const container = h('div');
     const tbl = h('table');
-    const thead = h('thead', null, h('tr', null,
+    const vc = new Set(Array.isArray(S.visibleColumns) ? S.visibleColumns : []);
+    const headerRow = h('tr', null,
       h('th', { class: 'sticky-l', style: { width: '36px' } }, h('input', { type: 'checkbox' })),
-      h('th', { class: 'sticky-l', style: { left: '36px' } }, 'Name'),
-      h('th', null, 'Phone & actions'),
-      h('th', null, 'Source'),
-      h('th', null, 'Status'),
-      h('th', null, 'Owner'),
-      h('th', null, '🤖 AI Score'),
-      h('th', null, '✨ AI Next Step'),
-      h('th', null, 'Activity'),
-      h('th', null, 'Created')
-    ));
+      h('th', { class: 'sticky-l', style: { left: '36px' } }, 'Name'));
+    if (vc.has('phone'))    headerRow.appendChild(h('th', null, 'Phone & actions'));
+    if (vc.has('source'))   headerRow.appendChild(h('th', null, 'Source'));
+    if (vc.has('status'))   headerRow.appendChild(h('th', null, 'Status'));
+    if (vc.has('owner'))    headerRow.appendChild(h('th', null, 'Owner'));
+    if (vc.has('score'))    headerRow.appendChild(h('th', null, '🤖 AI Score'));
+    if (vc.has('aistep'))   headerRow.appendChild(h('th', null, '✨ AI Next Step'));
+    if (vc.has('activity')) headerRow.appendChild(h('th', null, 'Activity'));
+    if (vc.has('created'))  headerRow.appendChild(h('th', null, 'Created'));
+    const thead = h('thead', null, headerRow);
     tbl.appendChild(thead);
     const tbody = h('tbody');
     pageRows.forEach(l => tbody.appendChild(renderModernRow(l)));
-    if (!rows.length) tbody.appendChild(h('tr', null, h('td', { colspan: 10, style: { padding: '40px', textAlign: 'center', color: '#94a3b8' } }, 'No leads match your filter.')));
+    if (!rows.length) {
+      const totalCols = 2 + (Array.isArray(S.visibleColumns) ? S.visibleColumns.length : 8);
+      tbody.appendChild(h('tr', null, h('td', { colspan: totalCols, style: { padding: '40px', textAlign: 'center', color: '#94a3b8' } }, 'No leads match your filter.')));
+    }
     tbl.appendChild(tbody);
     container.appendChild(tbl);
 
@@ -986,6 +1041,7 @@ tr:hover .lv2-actions { opacity: 1; }
     const bucket = scoreBucket(score);
     const isSelected = S.selectedId === l.id;
     const tr = h('tr', { class: (isSelected ? 'selected ' : '') + (bucket ? 'bucket-' + bucket : ''), onclick: () => openSlideOver(l) });
+    const vc = new Set(Array.isArray(S.visibleColumns) ? S.visibleColumns : []);
     tr.appendChild(h('td', { class: 'sticky-l', onclick: (e) => e.stopPropagation() }, h('input', { type: 'checkbox' })));
     tr.appendChild(h('td', { class: 'sticky-l', style: { left: '36px' } },
       h('div', { class: 'lv2-namecell' },
@@ -995,31 +1051,35 @@ tr:hover .lv2-actions { opacity: 1; }
           h('div', { class: 'lv2-badges' },
             h('span', { class: 'lv2-badge ai', title: 'AI Hub', onclick: (e) => { e.stopPropagation(); aiHub(l); } }, '✨ AI'),
             score >= 80 ? h('span', { class: 'lv2-badge fire' }, '🔥 HOT') : null)))));
-    tr.appendChild(h('td', null,
-      h('div', { class: 'lv2-phonecell' },
-        h('span', { class: 'lv2-ph' }, l.phone || '—'),
-        h('div', { class: 'lv2-actions', onclick: (e) => e.stopPropagation() },
-          h('button', { class: 'lv2-act call', title: 'Click-to-Call', onclick: () => doCall(l) }, '📞'),
-          h('button', { class: 'lv2-act sim', title: 'Mobile SIM', onclick: () => doSim(l) }, '📱'),
-          h('button', { class: 'lv2-act wa', title: 'WhatsApp Web', onclick: () => doWaWeb(l) }, '💬'),
-          h('button', { class: 'lv2-act api', title: 'Send via WhatsApp Cloud API (SmartCRM chat)', onclick: () => doWaApi(l) },
-            h('span', { html: '<svg width="13" height="13" viewBox="0 0 32 32" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M16 0C7.2 0 0 7.2 0 16c0 2.8.7 5.5 2.1 7.9L0 32l8.3-2.2c2.3 1.3 4.9 1.9 7.7 1.9 8.8 0 16-7.2 16-16S24.8 0 16 0zm0 29.3c-2.5 0-4.9-.7-7-1.9l-.5-.3-5.2 1.4 1.4-5.1-.3-.5C3.2 20.7 2.7 18.4 2.7 16 2.7 8.7 8.7 2.7 16 2.7s13.3 6 13.3 13.3-6 13.3-13.3 13.3zm7.3-9.9c-.4-.2-2.4-1.2-2.7-1.3-.4-.1-.6-.2-.9.2-.3.4-1 1.3-1.2 1.5-.2.2-.4.3-.8.1-2.4-1.2-3.9-2.1-5.5-4.8-.4-.7.4-.7 1.2-2.2.1-.2.1-.5 0-.7-.1-.2-.9-2.2-1.3-3-.3-.8-.7-.7-.9-.7-.2 0-.5 0-.8 0-.3 0-.7.1-1.1.5-.4.4-1.4 1.4-1.4 3.4 0 2 1.5 3.9 1.7 4.2.2.3 2.9 4.5 7.1 6.3 2.6 1.1 3.6 1.2 4.9 1 .8-.1 2.4-1 2.7-1.9.3-1 .3-1.8.2-1.9 0-.2-.3-.3-.7-.5z"/></svg>', style: { display: 'inline-flex' } })),
-          h('button', { class: 'lv2-act ai', title: 'AI Lead Hub', onclick: () => aiHub(l) }, '🤖'),
-          h('button', { class: 'lv2-act copy', title: 'Copy phone', onclick: () => doCopy(l) }, '📋')))));
-    tr.appendChild(h('td', null, h('span', { class: 'lv2-muted' }, l.source || '—')));
-    tr.appendChild(h('td', null, h('div', { class: 'lv2-status' }, h('span', { class: 'lv2-dot ' + stat }), h('span', { class: 'lv2-stext' }, l.status_name || '—'))));
-    tr.appendChild(h('td', null, l.assigned_name ? h('div', { class: 'lv2-namecell' }, h('div', { class: 'lv2-av s', style: { background: avColor(l.assigned_name) } }, initials(l.assigned_name)), h('span', { style: { fontSize: '12px' } }, l.assigned_name)) : h('span', { class: 'lv2-muted' }, '—')));
-    const reason = l.score_reason || l.smart_reason || '';
-    const tipText = score
-      ? ('AI Score: ' + score + ' · ' + bucket.toUpperCase() + (reason ? '\n\nWhy:\n' + reason : '\n\n(No reason recorded)'))
-      : 'No AI score yet';
-    tr.appendChild(h('td', null,
-      score
-        ? h('span', { class: 'lv2-scorechip ' + bucket, title: tipText, onmouseenter: (e) => showScoreTip(e.currentTarget, l) }, String(score) + ' · ' + bucket.toUpperCase())
-        : h('span', { class: 'lv2-muted', title: tipText }, '—')));
-    tr.appendChild(h('td', null, h('div', { class: 'lv2-aisum' }, aiHint(l))));
-    tr.appendChild(h('td', null, h('span', { class: 'lv2-muted' }, fmtRel(l.last_activity_at || l.updated_at))));
-    tr.appendChild(h('td', null, h('span', { class: 'lv2-muted' }, fmtRel(l.created_at))));
+    if (vc.has('phone')) {
+      tr.appendChild(h('td', null,
+        h('div', { class: 'lv2-phonecell' },
+          h('span', { class: 'lv2-ph' }, l.phone || '—'),
+          h('div', { class: 'lv2-actions', onclick: (e) => e.stopPropagation() },
+            h('button', { class: 'lv2-act call', title: 'Click-to-Call', onclick: () => doCall(l) }, '📞'),
+            h('button', { class: 'lv2-act sim', title: 'Mobile SIM', onclick: () => doSim(l) }, '📱'),
+            h('button', { class: 'lv2-act wa', title: 'WhatsApp Web', onclick: () => doWaWeb(l) }, '💬'),
+            h('button', { class: 'lv2-act api', title: 'Send via WhatsApp Cloud API (SmartCRM chat)', onclick: () => doWaApi(l) },
+              h('span', { html: '<svg width="13" height="13" viewBox="0 0 32 32" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M16 0C7.2 0 0 7.2 0 16c0 2.8.7 5.5 2.1 7.9L0 32l8.3-2.2c2.3 1.3 4.9 1.9 7.7 1.9 8.8 0 16-7.2 16-16S24.8 0 16 0zm0 29.3c-2.5 0-4.9-.7-7-1.9l-.5-.3-5.2 1.4 1.4-5.1-.3-.5C3.2 20.7 2.7 18.4 2.7 16 2.7 8.7 8.7 2.7 16 2.7s13.3 6 13.3 13.3-6 13.3-13.3 13.3zm7.3-9.9c-.4-.2-2.4-1.2-2.7-1.3-.4-.1-.6-.2-.9.2-.3.4-1 1.3-1.2 1.5-.2.2-.4.3-.8.1-2.4-1.2-3.9-2.1-5.5-4.8-.4-.7.4-.7 1.2-2.2.1-.2.1-.5 0-.7-.1-.2-.9-2.2-1.3-3-.3-.8-.7-.7-.9-.7-.2 0-.5 0-.8 0-.3 0-.7.1-1.1.5-.4.4-1.4 1.4-1.4 3.4 0 2 1.5 3.9 1.7 4.2.2.3 2.9 4.5 7.1 6.3 2.6 1.1 3.6 1.2 4.9 1 .8-.1 2.4-1 2.7-1.9.3-1 .3-1.8.2-1.9 0-.2-.3-.3-.7-.5z"/></svg>', style: { display: 'inline-flex' } })),
+            h('button', { class: 'lv2-act ai', title: 'AI Lead Hub', onclick: () => aiHub(l) }, '🤖'),
+            h('button', { class: 'lv2-act copy', title: 'Copy phone', onclick: () => doCopy(l) }, '📋')))));
+    }
+    if (vc.has('source')) tr.appendChild(h('td', null, h('span', { class: 'lv2-muted' }, l.source || '—')));
+    if (vc.has('status')) tr.appendChild(h('td', null, h('div', { class: 'lv2-status' }, h('span', { class: 'lv2-dot ' + stat }), h('span', { class: 'lv2-stext' }, l.status_name || '—'))));
+    if (vc.has('owner'))  tr.appendChild(h('td', null, l.assigned_name ? h('div', { class: 'lv2-namecell' }, h('div', { class: 'lv2-av s', style: { background: avColor(l.assigned_name) } }, initials(l.assigned_name)), h('span', { style: { fontSize: '12px' } }, l.assigned_name)) : h('span', { class: 'lv2-muted' }, '—')));
+    if (vc.has('score')) {
+      const reason = l.score_reason || l.smart_reason || '';
+      const tipText = score
+        ? ('AI Score: ' + score + ' · ' + bucket.toUpperCase() + (reason ? '\n\nWhy:\n' + reason : '\n\n(No reason recorded)'))
+        : 'No AI score yet';
+      tr.appendChild(h('td', null,
+        score
+          ? h('span', { class: 'lv2-scorechip ' + bucket, title: tipText, onmouseenter: (e) => showScoreTip(e.currentTarget, l) }, String(score) + ' · ' + bucket.toUpperCase())
+          : h('span', { class: 'lv2-muted', title: tipText }, '—')));
+    }
+    if (vc.has('aistep'))   tr.appendChild(h('td', null, h('div', { class: 'lv2-aisum' }, aiHint(l))));
+    if (vc.has('activity')) tr.appendChild(h('td', null, h('span', { class: 'lv2-muted' }, fmtRel(l.last_activity_at || l.updated_at))));
+    if (vc.has('created'))  tr.appendChild(h('td', null, h('span', { class: 'lv2-muted' }, fmtRel(l.created_at))));
     return tr;
   }
   function aiHint(l) {
