@@ -748,14 +748,21 @@ tr:hover .lv2-actions { opacity: 1; }
     _closePopovers();
     const r = anchorEl.getBoundingClientRect();
     const allCols = [
-      ['phone',    '📞 Phone & actions'],
-      ['source',   '🏷 Source'],
-      ['status',   '🎯 Status'],
-      ['owner',    '👤 Owner'],
-      ['score',    '🤖 AI Score'],
-      ['aistep',   '✨ AI Next Step'],
-      ['activity', '🕒 Activity'],
-      ['created',  '🗓 Created']
+      ['phone',     '📞 Phone & actions'],
+      ['source',    '🏷 Source'],
+      ['status',    '🎯 Status'],
+      ['owner',     '👤 Owner'],
+      ['score',     '🤖 AI Score'],
+      ['aistep',    '✨ AI Next Step'],
+      ['followup',  '⏰ Next Follow-up'],
+      ['lastwa',    '💬 Last WhatsApp'],
+      ['notes',     '📝 Notes / Remark'],
+      ['email',     '📧 Email'],
+      ['tags',      '🔖 Tags'],
+      ['city',      '🗺 City'],
+      ['product',   '📦 Product'],
+      ['activity',  '🕒 Last activity'],
+      ['created',   '🗓 Created']
     ];
     const visible = new Set(Array.isArray(S.visibleColumns) ? S.visibleColumns : []);
     const pop = h('div', { class: 'lv2-popover', style: {
@@ -965,6 +972,13 @@ tr:hover .lv2-actions { opacity: 1; }
     if (vc.has('owner'))    headerRow.appendChild(h('th', null, 'Owner'));
     if (vc.has('score'))    headerRow.appendChild(h('th', null, '🤖 AI Score'));
     if (vc.has('aistep'))   headerRow.appendChild(h('th', null, '✨ AI Next Step'));
+    if (vc.has('followup')) headerRow.appendChild(h('th', null, '⏰ Follow-up'));
+    if (vc.has('lastwa'))   headerRow.appendChild(h('th', null, '💬 Last WhatsApp'));
+    if (vc.has('notes'))    headerRow.appendChild(h('th', null, '📝 Notes'));
+    if (vc.has('email'))    headerRow.appendChild(h('th', null, '📧 Email'));
+    if (vc.has('tags'))     headerRow.appendChild(h('th', null, '🔖 Tags'));
+    if (vc.has('city'))     headerRow.appendChild(h('th', null, '🗺 City'));
+    if (vc.has('product'))  headerRow.appendChild(h('th', null, '📦 Product'));
     if (vc.has('activity')) headerRow.appendChild(h('th', null, 'Activity'));
     if (vc.has('created'))  headerRow.appendChild(h('th', null, 'Created'));
     const thead = h('thead', null, headerRow);
@@ -1089,6 +1103,19 @@ tr:hover .lv2-actions { opacity: 1; }
           : h('span', { class: 'lv2-muted', title: tipText }, '—')));
     }
     if (vc.has('aistep'))   tr.appendChild(h('td', null, h('div', { class: 'lv2-aisum' }, aiHint(l))));
+    if (vc.has('followup')) {
+      const overdue = l.next_followup_at && new Date(l.next_followup_at) < new Date();
+      tr.appendChild(h('td', null, l.next_followup_at
+        ? h('span', { style: { fontSize: '11.5px', color: overdue ? '#b91c1c' : '#0f172a', fontWeight: overdue ? '600' : '500' } },
+            '📅 ' + new Date(l.next_followup_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }))
+        : h('span', { class: 'lv2-muted' }, '—')));
+    }
+    if (vc.has('lastwa'))   tr.appendChild(h('td', null, h('span', { class: 'lv2-muted', style: { maxWidth: '200px', display: 'inline-block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', verticalAlign: 'middle' }, title: l.last_wa_message || l.last_wa_body || '' }, l.last_wa_message || l.last_wa_body || '—')));
+    if (vc.has('notes'))    tr.appendChild(h('td', null, h('span', { class: 'lv2-muted', style: { maxWidth: '220px', display: 'inline-block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', verticalAlign: 'middle' }, title: l.notes || '' }, String(l.notes || '—').slice(0, 60))));
+    if (vc.has('email'))    tr.appendChild(h('td', null, h('span', { class: 'lv2-muted', style: { fontSize: '11px' } }, l.email || '—')));
+    if (vc.has('tags'))     tr.appendChild(h('td', null, h('span', { class: 'lv2-muted', style: { fontSize: '11px' } }, l.tags || '—')));
+    if (vc.has('city'))     tr.appendChild(h('td', null, h('span', { class: 'lv2-muted' }, l.city || '—')));
+    if (vc.has('product'))  tr.appendChild(h('td', null, h('span', { class: 'lv2-muted' }, l.product_name || '—')));
     if (vc.has('activity')) tr.appendChild(h('td', null, h('span', { class: 'lv2-muted' }, fmtRel(l.last_activity_at || l.updated_at))));
     if (vc.has('created'))  tr.appendChild(h('td', null, h('span', { class: 'lv2-muted' }, fmtRel(l.created_at))));
     return tr;
