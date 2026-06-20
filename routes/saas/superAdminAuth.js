@@ -53,9 +53,26 @@ async function api_saas_admin_login(_token, payload) {
   const ok = bcrypt.compareSync(password, sa.password_hash);
   if (!ok) throw new Error('Invalid credentials');
   await control.update('super_admins', sa.id, { last_login_at: control.nowIso() });
+  // SUPER_ADMIN_PERMS_v3 (2026-06-20) — bug: v2 login response only sent
+  // {id,name,email,role} so APP.user.grants was undefined on the very
+  // first render after login. _canSee() then returned false for every
+  // NAV item with requiresPerm → blank sidebar for assistant/viewer.
+  // Fold the role's effective grants into the response so the SPA can
+  // gate the NAV correctly on the FIRST render without a second
+  // round-trip. api_saas_admin_me already does this and remains the
+  // source of truth on page-reload.
+  let grants = {};
+  try {
+    const perms = require('./saasPermissions');
+    const tok = signToken(sa); // matrix loader needs to verify a token
+    const all = await perms.api_saas_perms_get(tok);
+    grants = (all && all.matrix && all.matrix[sa.role]) || {};
+  } catch (e) {
+    console.warn('[api_saas_admin_login] grants fetch failed:', e.message);
+  }
   return {
     token: signToken(sa),
-    user: { id: sa.id, name: sa.name, email: sa.email, role: sa.role }
+    user: { id: sa.id, name: sa.name, email: sa.email, role: sa.role, grants }
   };
 }
 
