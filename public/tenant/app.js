@@ -5386,7 +5386,13 @@ VIEWS.leads = async (view) => {
   // Pagination footer placeholder (loadLeads populates it)
   view.appendChild(h('div', { id: 'leads-pagination', class: 'pagination-bar' }));
   // Mobile FAB
-  view.appendChild(h('button', { class: 'fab', onclick: () => openLeadModal(), title: 'New lead' }, '+'));
+  // LEADS_FAB_DRAGGABLE_v1 (2026-06-20) — '+ New Lead' FAB is now
+  // draggable. Same pointer-events pattern as wa-mobile-fab. Persists
+  // position per-user via localStorage as proportional pct so it
+  // scales when the viewport changes (rotation / different device).
+  const _newLeadFab = h('button', { class: 'fab', onclick: () => openLeadModal(), title: 'New lead — hold and drag to move' }, '+');
+  view.appendChild(_newLeadFab);
+  if (typeof _makeFabDraggable === 'function') _makeFabDraggable(_newLeadFab, 'crm.leadsFab.pos');
 
   CRM._leadsPage = 1;
   await loadLeads({ page: 1 });
@@ -5400,6 +5406,83 @@ VIEWS.leads = async (view) => {
     if (s) s.remove();
   } catch (_) {}
 };
+
+
+/* LEADS_FAB_DRAGGABLE_v1 (2026-06-20) — reusable drag helper for any
+ * floating button. Attach with: _makeFabDraggable(fabEl, 'crm.xxx.pos').
+ * Persists position as proportional leftPct/topPct so it survives
+ * viewport changes. Suppresses click when the user dragged.
+ * Mirrors the bespoke handlers in chat-fab / wa-mobile-fab. */
+function _makeFabDraggable(fab, storageKey) {
+  if (!fab) return;
+  fab.style.cursor = 'grab';
+  fab.style.touchAction = 'none';
+  fab.dataset.positioned = '';
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (raw) {
+      const p = JSON.parse(raw);
+      const W = window.innerWidth, H = window.innerHeight;
+      const leftPx = Math.max(8, Math.min(W - 64, Math.round((p.leftPct || 0) * W)));
+      const topPx  = Math.max(8, Math.min(H - 64, Math.round((p.topPct  || 0) * H)));
+      fab.style.left   = leftPx + 'px';
+      fab.style.top    = topPx + 'px';
+      fab.style.right  = 'auto';
+      fab.style.bottom = 'auto';
+      fab.dataset.positioned = 'user';
+    }
+  } catch (_) {}
+  let dragging = false, dragMoved = false, sx = 0, sy = 0, sLeft = 0, sTop = 0, pid = null;
+  fab.addEventListener('pointerdown', (e) => {
+    if (e.button !== undefined && e.button !== 0) return;
+    dragging = true; dragMoved = false; pid = e.pointerId;
+    const r = fab.getBoundingClientRect();
+    sLeft = r.left; sTop = r.top; sx = e.clientX; sy = e.clientY;
+    try { fab.setPointerCapture(e.pointerId); } catch (_) {}
+    fab.style.cursor = 'grabbing';
+  });
+  fab.addEventListener('pointermove', (e) => {
+    if (!dragging || e.pointerId !== pid) return;
+    const dx = e.clientX - sx, dy = e.clientY - sy;
+    if (!dragMoved && (Math.abs(dx) > 5 || Math.abs(dy) > 5)) dragMoved = true;
+    if (dragMoved) {
+      e.preventDefault();
+      const W = window.innerWidth, H = window.innerHeight;
+      const nl = Math.max(8, Math.min(W - 64, sLeft + dx));
+      const nt = Math.max(8, Math.min(H - 64, sTop  + dy));
+      fab.style.left = nl + 'px';
+      fab.style.top  = nt + 'px';
+      fab.style.right  = 'auto';
+      fab.style.bottom = 'auto';
+      fab.dataset.positioned = 'user';
+    }
+  });
+  function _endDrag(e) {
+    if (!dragging) return;
+    if (e && pid != null && e.pointerId !== pid) return;
+    const wasDrag = dragMoved;
+    dragging = false;
+    try { pid != null && fab.releasePointerCapture(pid); } catch (_) {}
+    pid = null;
+    fab.style.cursor = 'grab';
+    if (wasDrag) {
+      const r = fab.getBoundingClientRect();
+      const W = window.innerWidth, H = window.innerHeight;
+      try {
+        localStorage.setItem(storageKey, JSON.stringify({
+          leftPct: r.left / W, topPct: r.top / H
+        }));
+      } catch (_) {}
+      // Swallow the click that follows a drag so it doesn't fire
+      // openLeadModal when the user just moved the FAB.
+      const stopClick = (ev) => { ev.stopPropagation(); ev.preventDefault(); fab.removeEventListener('click', stopClick, true); };
+      fab.addEventListener('click', stopClick, true);
+      setTimeout(() => { try { fab.removeEventListener('click', stopClick, true); } catch (_) {} }, 350);
+    }
+  }
+  fab.addEventListener('pointerup', _endDrag);
+  fab.addEventListener('pointercancel', _endDrag);
+}
 
 function toggleHeader(show) {
   CRM.prefs.showHeader = show;
