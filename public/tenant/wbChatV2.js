@@ -177,8 +177,10 @@
 .wbv2-th-head .b-logo { width: 32px; height: 32px; border-radius: 50%; background: #00a884; color: white; display: grid; place-items: center; font-weight: 700; font-size: 14px; flex-shrink: 0; }
 .wbv2-th-head .b-name { font-weight: 600; font-size: 14px; color: #111b21; }
 .wbv2-th-head .b-num { font-size: 11px; color: #667781; }
-.wbv2-th-head .ico { width: 32px; height: 32px; display: grid; place-items: center; cursor: pointer; color: #54656f; border-radius: 50%; font-size: 14px; }
+.wbv2-th-head .ico { width: 32px; height: 32px; display: grid; place-items: center; cursor: pointer; color: #54656f; border-radius: 50%; font-size: 14px; user-select: none; }
 .wbv2-th-head .ico:hover { background: #e9edef; }
+.wbv2-th-head .ico.spinning { animation: wbv2-spin 0.7s linear infinite; color: #00a884; }
+@keyframes wbv2-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
 .wbv2-search { padding: 8px 12px; background: white; }
 .wbv2-search .box { display: flex; align-items: center; gap: 10px; padding: 7px 14px; background: #f0f2f5; border-radius: 8px; }
@@ -411,7 +413,26 @@
             h('div', { class: 'b-name' }, name),
             h('div', { class: 'b-num' }, phone))),
         h('div', null,
-          h('span', { class: 'ico', title: 'Refresh', onclick: () => loadThreads() }, '↻'),
+          h('span', {
+            class: 'ico', id: 'wbv2-refresh-btn', title: 'Refresh conversations',
+            onclick: async (ev) => {
+              const btn = ev.currentTarget;
+              if (btn.classList.contains('spinning')) return;
+              btn.classList.add('spinning');
+              try {
+                await loadThreads();
+                if (S.activeThread) {
+                  try { await loadMessages(S.activeThread); } catch (_) {}
+                  try { await loadLead(S.activeLeadId); } catch (_) {}
+                }
+                toast('✓ Refreshed (' + (S.threadsRaw || []).length + ' conversations)', 'ok');
+              } catch (e) {
+                toast('Refresh failed: ' + e.message, 'err');
+              } finally {
+                try { (document.getElementById('wbv2-refresh-btn') || btn).classList.remove('spinning'); } catch (_) {}
+              }
+            }
+          }, '↻'),
           h('span', { class: 'ico', title: 'Menu' }, '⋮')))));
 
     // Search
