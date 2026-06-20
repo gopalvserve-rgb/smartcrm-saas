@@ -756,6 +756,11 @@ tr:hover .lv2-actions { opacity: 1; }
     injectStyles();
     if (!S.leads.length) await load();
 
+    // v1.6 — clear view to prevent duplicate-render stacking when called from
+    // onFilterChange (which previously appended ANOTHER full modern view
+    // BELOW the existing one — visible bug in user screenshot).
+    view.innerHTML = '';
+
     const meId = (window.CRM && CRM.user && CRM.user.id) || null;
     const total = S.leads.length;
     const hot = S.leads.filter(l => Number(l.smart_score || 0) >= 80).length;
@@ -1047,6 +1052,9 @@ tr:hover .lv2-actions { opacity: 1; }
   async function renderInbox(view) {
     injectStyles();
     if (!S.leads.length) await load();
+
+    // v1.6 — clear view to prevent duplicate-render stacking
+    view.innerHTML = '';
 
     const wrap = h('div', { class: 'lv2-inbox' });
     const list = h('div', { class: 'lv2-inbox-list' });
