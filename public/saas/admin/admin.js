@@ -119,24 +119,42 @@ function renderLogin() {
 
 // ---------- Shell ----------------------------------------------
 const NAV = [
-  { id: 'dashboard',     label: '🏠 Dashboard' },
-  { id: 'tenants',       label: '🏢 Tenants' },
-  { id: 'signup_requests', label: '🆕 Signup Requests' },   // TENANT_SIGNUP_APPROVAL_v1
-  { id: 'packages',      label: '📦 Packages' },
-  { id: 'invoices',      label: '🧾 Invoices' },
-  { id: 'webhooks',      label: '📡 Webhook Logs' },
-  { id: 'errors',        label: '🐞 Errors' },
-  { id: 'crashes',       label: '🚨 Crashes' },
-  { id: 'ai_costing',    label: '🤖 AI Costing' },
-  { id: 'finance',       label: '💰 Finance' },   /* FIN_DASH_v1 */
-  { id: 'wl_billing',    label: '🏷️ White-Label Billing' },   /* WL_BILLING_v1 */
-  { id: 'announcements', label: '📣 Updates' },
-  { id: 'requirements',  label: '🛠 Custom Requirements' },
-  { id: 'tickets',       label: '🎫 Support Tickets' },   // TKT_ADMIN_v1
-  { id: 'admins',        label: '👥 Roles & Permissions' },
-  { id: 'device_health', label: '📱 Device Health' },  /* DEVICE_DIAG_v1 */
-  { id: 'settings',      label: '⚙️ Settings' }
+  // SUPER_ADMIN_PERMS_v2 (2026-06-20) — each item gates on its requiresPerm key.
+  { id: 'dashboard',     label: '🏠 Dashboard',          requiresPerm: 'dashboard.view' },
+  { id: 'tenants',       label: '🏢 Tenants',            requiresPerm: 'tenants.view' },
+  { id: 'signup_requests', label: '🆕 Signup Requests',  requiresPerm: 'signup_req.view' },
+  { id: 'packages',      label: '📦 Packages',           requiresPerm: 'packages.view' },
+  { id: 'invoices',      label: '🧾 Invoices',           requiresPerm: 'invoices.view' },
+  { id: 'webhooks',      label: '📡 Webhook Logs',       requiresPerm: 'webhooks.view' },
+  { id: 'errors',        label: '🐞 Errors',             requiresPerm: 'errors.view' },
+  { id: 'crashes',       label: '🚨 Crashes',            requiresPerm: 'crashes.view' },
+  { id: 'ai_costing',    label: '🤖 AI Costing',         requiresPerm: 'ai_costing.view' },
+  { id: 'finance',       label: '💰 Finance',            requiresPerm: 'finance.view' },     /* FIN_DASH_v1 */
+  { id: 'wl_billing',    label: '🏷️ White-Label Billing', requiresPerm: 'wl_billing.view' },  /* WL_BILLING_v1 */
+  { id: 'announcements', label: '📣 Updates',            requiresPerm: 'announcements.view' },
+  { id: 'requirements',  label: '🛠 Custom Requirements', requiresPerm: 'requirements.view' },
+  { id: 'tickets',       label: '🎫 Support Tickets',    requiresPerm: 'tickets.view' },     // TKT_ADMIN_v1
+  { id: 'admins',        label: '👥 Roles & Permissions', requiresPerm: 'admins.view' },
+  { id: 'device_health', label: '📱 Device Health',      requiresPerm: 'device_health.view' },
+  { id: 'settings',      label: '⚙️ Settings',           requiresPerm: 'settings.edit' }
 ];
+
+
+// SUPER_ADMIN_PERMS_v2 (2026-06-20) — frontend gate. Returns true iff
+// the logged-in super-admin's grants include the NAV item's requiresPerm.
+// 'admin' role always has full access. Default-deny on missing grants
+// (except for admins) keeps the UI safe by default.
+function _canSee(navItem) {
+  if (!navItem || !navItem.requiresPerm) return true;
+  if (!APP.user) return false;
+  if (APP.user.role === 'admin') return true;
+  const g = APP.user.grants || {};
+  return Number(g[navItem.requiresPerm]) === 1;
+}
+function _firstAllowedView() {
+  for (const n of NAV) if (_canSee(n)) return n.id;
+  return 'admins';
+}
 
 function renderShell() {
   const root = $('#app');
@@ -145,14 +163,23 @@ function renderShell() {
   root.appendChild(h('div', { class: 'shell' },
     h('aside', { class: 'sidebar' },
       h('div', { class: 'brand' }, '🎯 SmartCRM'),
-      h('nav', { id: 'nav' }, ...NAV.map(n => h('a', { 'data-view': n.id, onclick: () => navigate(n.id) }, n.label))),
+      h('nav', { id: 'nav' }, ...NAV
+        .filter(n => _canSee(n))
+        .map(n => h('a', { 'data-view': n.id, onclick: () => navigate(n.id) }, n.label))),
       h('div', { class: 'footer' }, APP.user ? APP.user.name + ' · ' + APP.user.role : '', h('br'), h('a', { onclick: logout, style: { cursor: 'pointer', color: '#94a3b8' } }, 'Logout'))
     ),
     h('main', { class: 'main', id: 'view' })
   ));
 }
 
-function navigate(id) { location.hash = '#/' + id; }
+function navigate(id) {
+  const item = NAV.find(n => n.id === id);
+  if (item && !_canSee(item)) {
+    try { toast('You don\'t have access to ' + item.label, 'err'); } catch (_) {}
+    id = _firstAllowedView();
+  }
+  location.hash = '#/' + id;
+}
 function logout() { localStorage.removeItem('saas_admin_token'); APP.token = ''; APP.user = null; location.reload(); }
 
 // ---------- Views ----------------------------------------------
