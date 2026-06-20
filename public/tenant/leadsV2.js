@@ -1008,7 +1008,14 @@ tr:hover .lv2-actions { opacity: 1; }
     tr.appendChild(h('td', null, h('span', { class: 'lv2-muted' }, l.source || '—')));
     tr.appendChild(h('td', null, h('div', { class: 'lv2-status' }, h('span', { class: 'lv2-dot ' + stat }), h('span', { class: 'lv2-stext' }, l.status_name || '—'))));
     tr.appendChild(h('td', null, l.assigned_name ? h('div', { class: 'lv2-namecell' }, h('div', { class: 'lv2-av s', style: { background: avColor(l.assigned_name) } }, initials(l.assigned_name)), h('span', { style: { fontSize: '12px' } }, l.assigned_name)) : h('span', { class: 'lv2-muted' }, '—')));
-    tr.appendChild(h('td', null, score ? h('span', { class: 'lv2-scorechip ' + bucket }, String(score) + ' · ' + bucket.toUpperCase()) : h('span', { class: 'lv2-muted' }, '—')));
+    const reason = l.score_reason || l.smart_reason || '';
+    const tipText = score
+      ? ('AI Score: ' + score + ' · ' + bucket.toUpperCase() + (reason ? '\n\nWhy:\n' + reason : '\n\n(No reason recorded)'))
+      : 'No AI score yet';
+    tr.appendChild(h('td', null,
+      score
+        ? h('span', { class: 'lv2-scorechip ' + bucket, title: tipText, onmouseenter: (e) => showScoreTip(e.currentTarget, l) }, String(score) + ' · ' + bucket.toUpperCase())
+        : h('span', { class: 'lv2-muted', title: tipText }, '—')));
     tr.appendChild(h('td', null, h('div', { class: 'lv2-aisum' }, aiHint(l))));
     tr.appendChild(h('td', null, h('span', { class: 'lv2-muted' }, fmtRel(l.last_activity_at || l.updated_at))));
     tr.appendChild(h('td', null, h('span', { class: 'lv2-muted' }, fmtRel(l.created_at))));
@@ -1027,6 +1034,35 @@ tr:hover .lv2-actions { opacity: 1; }
     return 'New — send welcome template + schedule call today';
   }
 
+  let _scoreTipEl = null;
+  function showScoreTip(el, lead) {
+    try {
+      if (_scoreTipEl) { _scoreTipEl.remove(); _scoreTipEl = null; }
+      const score = Number(lead.smart_score || 0);
+      const bucket = score >= 80 ? 'hot' : score >= 50 ? 'warm' : score > 0 ? 'cold' : '';
+      const reason = lead.score_reason || lead.smart_reason || '';
+      if (!score && !reason) return;
+      const r = el.getBoundingClientRect();
+      const tip = h('div', {
+        style: {
+          position: 'fixed', top: (r.bottom + 6) + 'px', left: Math.max(8, r.left - 100) + 'px',
+          background: 'white', border: '1px solid #e2e8f0', borderRadius: '8px',
+          boxShadow: '0 8px 24px rgba(0,0,0,.12)', padding: '10px 12px',
+          fontSize: '11.5px', color: '#1e293b', maxWidth: '320px', zIndex: '9999',
+          lineHeight: '1.5'
+        }
+      },
+        h('div', { style: { fontWeight: '700', marginBottom: '4px', color: bucket === 'hot' ? '#b91c1c' : bucket === 'warm' ? '#b45309' : '#1e40af' } },
+          (bucket === 'hot' ? '🔥' : bucket === 'warm' ? '☀️' : '🧊') + ' AI Score ' + score + ' · ' + bucket.toUpperCase()),
+        h('div', { style: { fontSize: '10px', color: '#64748b', textTransform: 'uppercase', letterSpacing: '.3px', fontWeight: '700', marginTop: '6px', marginBottom: '4px' } }, '✨ Why AI tagged this:'),
+        h('div', { style: { whiteSpace: 'pre-wrap', color: '#475569' } }, reason || 'No reason recorded — recompute the score to refresh.'));
+      document.body.appendChild(tip);
+      _scoreTipEl = tip;
+      const off = () => { if (_scoreTipEl) { _scoreTipEl.remove(); _scoreTipEl = null; } el.removeEventListener('mouseleave', off); };
+      el.addEventListener('mouseleave', off);
+    } catch (e) { console.warn('[LEADS_V2] showScoreTip failed:', e.message); }
+  }
+
   /* ---------- slide-over (v1.7 — rich with timeline / AI summary / last WA / last call + recording) ---------- */
   function openSlideOver(l) {
     S.selectedId = l.id;
@@ -1040,7 +1076,8 @@ tr:hover .lv2-actions { opacity: 1; }
       h('div', { class: 'lv2-av', style: { background: avColor(name) } }, initials(name)),
       h('div', { class: 'info' },
         h('div', { class: 'name' }, name,
-          bucket ? h('span', { class: 'lv2-scorechip ' + bucket, style: { marginLeft: '8px', fontSize: '10px', verticalAlign: 'middle' } }, score + ' · ' + bucketLab) : null),
+          bucket ? h('span', { class: 'lv2-scorechip ' + bucket, style: { marginLeft: '8px', fontSize: '10px', verticalAlign: 'middle', cursor: 'help' },
+            title: 'AI Score: ' + score + ' · ' + bucketLab + (l.score_reason ? '\n\nWhy:\n' + l.score_reason : '') }, score + ' · ' + bucketLab) : null),
         h('div', { class: 'sub' }, (l.phone ? '📞 ' + l.phone : '') + (l.email ? ' · 📧 ' + l.email : '') + ' · created ' + fmtRel(l.created_at))),
       h('div', { class: 'x', onclick: closeSlideOver }, '✕')));
 
