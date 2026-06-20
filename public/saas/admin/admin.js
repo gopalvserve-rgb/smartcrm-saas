@@ -133,7 +133,7 @@ const NAV = [
   { id: 'announcements', label: '📣 Updates' },
   { id: 'requirements',  label: '🛠 Custom Requirements' },
   { id: 'tickets',       label: '🎫 Support Tickets' },   // TKT_ADMIN_v1
-  { id: 'admins',        label: '👥 Super Assistants' },
+  { id: 'admins',        label: '👥 Roles & Permissions' },
   { id: 'device_health', label: '📱 Device Health' },  /* DEVICE_DIAG_v1 */
   { id: 'settings',      label: '⚙️ Settings' }
 ];
@@ -1147,12 +1147,118 @@ async function openShowcaseDemoModal() {
   }
 }
 
+
+// INVOICE_CREATE_v1 (2026-06-20) — manual invoice creator.
+async function _openInvoiceCreate() {
+  let tenants = [];
+  try { tenants = await api('api_saas_tenants_list', {}); } catch (e) { toast(e.message, 'err'); return; }
+
+  const m = h('div', { class: 'modal-bd' });
+  const card = h('div', { class: 'modal', style: { maxWidth: '560px' } });
+  card.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, '+ Create invoice'),
+    h('button', { class: 'x', onclick: () => m.remove() }, '✕')
+  ));
+  const body = h('div', { class: 'modal-body' });
+  body.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem', marginTop: 0 } },
+    'Use this to send a partial invoice, a one-off add-on charge, or any custom-amount invoice. Issuing a new invoice does NOT change the tenant\'s plan.'));
+
+  const f = h('form', { onsubmit: ev => { ev.preventDefault(); _submitInvoiceCreate(f, m); } });
+  const field = (lbl, inp) => h('div', { style: { marginBottom: '.55rem' } },
+    h('label', { style: { display: 'block', fontSize: '.78rem', marginBottom: '.2rem', color: '#475569' } }, lbl), inp);
+
+  const tenantSel = h('select', { name: 'tenant_id', required: true, style: { width: '100%' } },
+    h('option', { value: '' }, '— pick a tenant —'),
+    ...tenants.map(t => h('option', { value: t.id }, t.org_name + ' (/t/' + t.slug + ')'))
+  );
+  f.appendChild(field('Tenant *', tenantSel));
+  f.appendChild(field('Description *', h('input', { name: 'description', required: true,
+    placeholder: 'e.g. 50% balance for FY26-27 subscription', style: { width: '100%' } })));
+
+  const subInp = h('input', { name: 'subtotal_inr', type: 'number', step: '0.01', min: '0', placeholder: '0.00', style: { width: '100%' } });
+  const taxInp = h('input', { name: 'tax_inr',      type: 'number', step: '0.01', min: '0', placeholder: '0.00', style: { width: '100%' } });
+  const totInp = h('input', { name: 'total_inr',    type: 'number', step: '0.01', min: '0', placeholder: 'auto = subtotal + tax', style: { width: '100%' } });
+  function _recalc() {
+    if (totInp._userTouched) return;
+    const s = Number(subInp.value) || 0;
+    const t = Number(taxInp.value) || 0;
+    if (s > 0 || t > 0) totInp.value = (s + t).toFixed(2);
+  }
+  subInp.addEventListener('input', _recalc);
+  taxInp.addEventListener('input', _recalc);
+  totInp.addEventListener('input', () => { totInp._userTouched = totInp.value !== ''; });
+
+  f.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '.55rem' } },
+    field('Subtotal (₹)', subInp), field('Tax (₹)', taxInp)));
+  f.appendChild(field('Total (₹) *', totInp));
+
+  f.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '.55rem' } },
+    field('Period start (optional)', h('input', { name: 'period_start', type: 'date', style: { width: '100%' } })),
+    field('Period end (optional)',   h('input', { name: 'period_end',   type: 'date', style: { width: '100%' } }))
+  ));
+  f.appendChild(field('Notes (internal)', h('textarea', { name: 'notes', rows: '2', style: { width: '100%' } })));
+
+  const partialChk = h('input', { type: 'checkbox', name: 'partial_label' });
+  const markPaidChk = h('input', { type: 'checkbox', name: 'mark_paid' });
+  const notifyChk = h('input', { type: 'checkbox', name: 'notify_customer', checked: true });
+  f.appendChild(h('label', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', fontSize: '.85rem', marginTop: '.45rem' } },
+    partialChk, h('span', {}, 'This is a partial invoice (label as such in customer notification)')));
+  f.appendChild(h('label', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', fontSize: '.85rem', marginTop: '.3rem' } },
+    markPaidChk, h('span', {}, 'Mark as paid immediately (e.g. paid via bank transfer)')));
+  f.appendChild(h('label', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', fontSize: '.85rem', marginTop: '.3rem' } },
+    notifyChk, h('span', {}, 'Send invoice to customer via email + WhatsApp')));
+
+  f.appendChild(h('button', { type: 'submit', class: 'btn primary', id: 'invc-btn', style: { marginTop: '.9rem', width: '100%' } }, 'Create invoice'));
+  body.appendChild(f);
+  card.appendChild(body);
+  m.appendChild(card);
+  document.body.appendChild(m);
+}
+
+async function _submitInvoiceCreate(form, modal) {
+  const btn = form.querySelector('#invc-btn');
+  btn.disabled = true; btn.textContent = 'Creating…';
+  const fd = new FormData(form);
+  const payload = {
+    tenant_id: Number(fd.get('tenant_id')),
+    description: (fd.get('description') || '').toString().trim(),
+    subtotal_inr: Number(fd.get('subtotal_inr') || 0) || 0,
+    tax_inr:      Number(fd.get('tax_inr')      || 0) || 0,
+    total_inr:    Number(fd.get('total_inr')    || 0) || 0,
+    period_start: (fd.get('period_start') || '').toString().trim() || null,
+    period_end:   (fd.get('period_end')   || '').toString().trim() || null,
+    notes:        (fd.get('notes') || '').toString().trim() || null,
+    partial_label:    fd.get('partial_label')    === 'on',
+    mark_paid:        fd.get('mark_paid')        === 'on',
+    notify_customer:  fd.get('notify_customer')  === 'on'
+  };
+  try {
+    const r = await api('api_saas_invoices_create', payload);
+    let msg = '✓ ' + r.number + ' created (₹' + Number(r.total_inr).toLocaleString('en-IN') + ')';
+    if (payload.notify_customer) {
+      if (r.notify && r.notify.email_sent) msg += ' · 📧 sent';
+      if (r.notify && r.notify.wa_sent)    msg += ' · 💬 WA sent';
+    }
+    toast(msg, 'ok');
+    modal.remove();
+    navigate('invoices');
+  } catch (e) {
+    toast(e.message, 'err');
+    btn.disabled = false; btn.textContent = 'Create invoice';
+  }
+}
+
 VIEWS.invoices = async (view) => {
-  view.appendChild(h('h1', {}, 'Invoices'));
+  view.appendChild(h('div', { class: 'toolbar' },
+    h('h1', {}, 'Invoices'),
+    // INVOICE_CREATE_v1 — manual invoice creator (for partial invoices,
+    // one-off charges, replacement invoices after a void, etc.)
+    h('button', { class: 'btn', onclick: () => _openInvoiceCreate() }, '+ Create invoice')
+  ));
   let list;
   try { list = await api('api_saas_invoices_list', {}); }
   catch (e) { view.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
-  if (!list.length) { view.appendChild(h('div', { class: 'empty' }, 'No invoices yet.')); return; }
+  if (!list.length) { view.appendChild(h('div', { class: 'empty' }, 'No invoices yet. Click "+ Create invoice" to add one manually.')); return; }
   const tbl = h('table', {},
     h('thead', {}, h('tr', {},
       h('th', {}, 'Number'), h('th', {}, 'Org'), h('th', {}, 'Plan'),
@@ -1799,8 +1905,32 @@ VIEWS.requirements = async (view) => {
 
 VIEWS.admins = async (view) => {
   view.appendChild(h('div', { class: 'toolbar' },
-    h('h1', {}, 'Super Assistants'),
+    h('h1', {}, 'Roles & Permissions'),
     h('button', { class: 'btn', onclick: () => editAdmin({}) }, '+ New admin')
+  ));
+
+  // ROLES_RENAME_v1 (2026-06-20) — explain what each role can do so the
+  // permissions question stops being a guessing game. Pulled straight
+  // from utils/saas/superAdminAuth.js requireFullAdmin / requireSuperAdmin.
+  view.appendChild(h('div', { class: 'card',
+    style: { padding: '1rem 1.2rem', marginBottom: '.8rem', borderLeft: '4px solid #6366f1' } },
+    h('h3', { style: { margin: '0 0 .6rem' } }, '🔐 Roles defined in this system'),
+    h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '.7rem' } },
+      h('div', { style: { background: '#eef2ff', padding: '.65rem .8rem', borderRadius: '8px' } },
+        h('div', { style: { fontWeight: 700, color: '#3730a3' } }, '👑 admin'),
+        h('div', { style: { fontSize: '.82rem', color: '#475569', marginTop: '.2rem' } },
+          'Full access. Can create / suspend / delete tenants, manage packages, approve signup requests, manage other super-admins, mark invoices paid, void, create.')),
+      h('div', { style: { background: '#fef3c7', padding: '.65rem .8rem', borderRadius: '8px' } },
+        h('div', { style: { fontWeight: 700, color: '#92400e' } }, '🛠 assistant'),
+        h('div', { style: { fontSize: '.82rem', color: '#475569', marginTop: '.2rem' } },
+          'Operational tasks. Can view tenants, approve signup requests, mark invoices paid, view dashboards. Cannot delete tenants or manage other admins.')),
+      h('div', { style: { background: '#dbeafe', padding: '.65rem .8rem', borderRadius: '8px' } },
+        h('div', { style: { fontWeight: 700, color: '#1e40af' } }, '👁 viewer'),
+        h('div', { style: { fontSize: '.82rem', color: '#475569', marginTop: '.2rem' } },
+          'Read-only. Can browse the dashboard, tenants, invoices, packages. Cannot make any changes.'))
+    ),
+    h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '.6rem' } },
+      '💡 Add a teammate below with the right role — they can sign in at /admin/ with their email + password.')
   ));
   let list;
   try { list = await api('api_saas_admin_list'); }

@@ -70,9 +70,122 @@ async function api_saas_invoices_void(token, id) {
   return { ok: true };
 }
 
+
+/**
+ * INVOICE_CREATE_v1 (2026-06-20) — manual invoice. Use cases:
+ *   • Send a partial invoice to a tenant who's paying in instalments.
+ *   • Bill a one-off add-on (extra users, premium support, training).
+ *   • Replace a voided invoice with a corrected one.
+ *
+ * Required: tenant_id, description, total_inr (or subtotal + tax).
+ * Optional: tax_inr, period_start, period_end, notes, mark_paid,
+ *           notify_customer (sends email + WA via existing pipeline).
+ *
+ * Generates a unique invoice number INV-YYYY-NNNNNN by counting
+ * existing invoices in the current calendar year + 1.
+ */
+async function api_saas_invoices_create(token, payload) {
+  const me = await requireSuperAdmin(token);
+  const p = payload || {};
+  const tenantId = Number(p.tenant_id);
+  if (!tenantId) throw new Error('Tenant is required');
+
+  const tenant = await control.findById('tenants', tenantId);
+  if (!tenant) throw new Error('Tenant not found');
+
+  const description = String(p.description || '').trim();
+  if (!description) throw new Error('Description is required');
+
+  const subtotal = Math.max(0, Number(p.subtotal_inr) || 0);
+  const tax      = Math.max(0, Number(p.tax_inr)      || 0);
+  let total      = Number(p.total_inr);
+  if (total == null || isNaN(total) || total < 0) total = subtotal + tax;
+  if (total <= 0) throw new Error('Invoice total must be > 0');
+
+  // Generate a unique invoice number for the current year.
+  const year = new Date().getFullYear();
+  const r0 = await control.query(
+    `SELECT COUNT(*)::int AS n FROM invoices WHERE number LIKE $1`,
+    ['INV-' + year + '-%']);
+  const next = (Number(r0.rows[0] && r0.rows[0].n) || 0) + 1;
+  const number = 'INV-' + year + '-' + String(next).padStart(6, '0');
+
+  const _validDate = (s) => s && /^\d{4}-\d{2}-\d{2}/.test(String(s));
+
+  const row = {
+    tenant_id:    tenantId,
+    number,
+    package_id:   p.package_id ? Number(p.package_id) : (tenant.package_id || null),
+    description,
+    subtotal_inr: subtotal,
+    tax_inr:      tax,
+    total_inr:    total,
+    period_start: _validDate(p.period_start) ? p.period_start : null,
+    period_end:   _validDate(p.period_end)   ? p.period_end   : null,
+    status:       p.mark_paid ? 'paid' : 'pending',
+    paid_at:      p.mark_paid ? control.nowIso() : null,
+    notes:        p.notes ? String(p.notes).trim() : null
+  };
+  const id = await control.insert('invoices', row);
+
+  await control.insert('audit_log', {
+    actor_type: 'super_admin', actor_id: me.id, actor_email: me.email,
+    tenant_id: tenantId, event: 'invoice.created_manually',
+    detail: JSON.stringify({ invoice_id: id, number, total, mark_paid: !!p.mark_paid,
+                              partial: !!p.partial_label })
+  });
+
+  // Optional: notify the customer via email + WhatsApp using the
+  // existing saasMailer + saasWaSender pipelines we set up earlier.
+  let notify = { email_sent: false, wa_sent: false };
+  if (p.notify_customer) {
+    try {
+      const mailer = require('./saasMailer');
+      const subject = '🧾 New invoice ' + number + ' — ₹' + total.toLocaleString('en-IN') +
+                      (p.partial_label ? ' (partial payment)' : '');
+      const html = '<div style="font-family:-apple-system,Segoe UI,sans-serif;max-width:560px;margin:0 auto;padding:1.5rem;color:#0f172a">' +
+        '<h2 style="margin:0 0 1rem 0">Hi ' + _esc(tenant.contact_name || '') + ',</h2>' +
+        '<p>A new invoice for <b>' + _esc(tenant.org_name || '') + '</b> has been generated.</p>' +
+        '<div style="background:#f1f5f9;padding:1rem;border-radius:8px;margin:1.25rem 0">' +
+          '<div style="font-size:.85rem;color:#475569">Invoice number</div>' +
+          '<div style="font-weight:700;font-family:monospace">' + _esc(number) + '</div>' +
+          '<div style="font-size:.85rem;color:#475569;margin-top:.7rem">Description</div>' +
+          '<div style="font-weight:600">' + _esc(description) + '</div>' +
+          '<div style="font-size:.85rem;color:#475569;margin-top:.7rem">Amount</div>' +
+          '<div style="font-size:1.4rem;font-weight:800;color:#0f172a">₹' + total.toLocaleString('en-IN') + '</div>' +
+        '</div>' +
+        '<p style="font-size:.9rem">' + (p.mark_paid
+          ? 'This invoice has been marked as paid.'
+          : 'Please make the payment at your earliest convenience. Reply for payment options.') + '</p>' +
+        '<p style="font-size:.85rem;color:#94a3b8;margin-top:2rem">— Team SmartCRM</p>' +
+      '</div>';
+      await mailer.sendMail({ to: tenant.contact_email, subject, html });
+      notify.email_sent = true;
+    } catch (e) { console.warn('[invoice_create] email failed:', e.message); }
+    try {
+      const wa = require('../../utils/saasWaSender');
+      const msg = 'Hi ' + (tenant.contact_name || '') + ',\n\n' +
+        'A new invoice has been generated for *' + (tenant.org_name || '') + '*.\n\n' +
+        '🧾 Invoice: *' + number + '*\n' +
+        '📋 Description: ' + description + '\n' +
+        '💰 Amount: *₹' + total.toLocaleString('en-IN') + '*\n\n' +
+        (p.mark_paid ? 'This invoice has been marked as paid.' :
+          'Please clear the amount at your earliest convenience. Reply to this message if you need payment options.') +
+        '\n\n— Team SmartCRM';
+      const r1 = await wa.sendText(tenant.contact_mobile, msg);
+      notify.wa_sent = !!r1.ok;
+      if (!r1.ok) console.warn('[invoice_create] WA failed:', r1.error);
+    } catch (e) { console.warn('[invoice_create] WA error:', e.message); }
+  }
+  return { ok: true, id, number, total_inr: total, notify };
+}
+
+function _esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
 module.exports = {
   api_saas_invoices_list,
   api_saas_invoices_get,
+  api_saas_invoices_create,  /* INVOICE_CREATE_v1 */
   api_saas_invoices_markPaid,
   api_saas_invoices_void
 };
