@@ -267,7 +267,13 @@ tr:hover .lv2-actions { opacity: 1; }
         api('api_statuses_list').catch(() => []),
         api('api_users_list').catch(() => [])
       ]);
-      S.leads = (Array.isArray(leads) ? leads : (leads && leads.rows) || []);
+      // api_leads_list returns { leads, total, page, page_size, status_count }
+      // — handle that shape PLUS fall back to direct array / .rows for safety.
+      S.leads = (leads && Array.isArray(leads.leads)) ? leads.leads
+              : (Array.isArray(leads) ? leads
+              : (leads && Array.isArray(leads.rows)) ? leads.rows
+              : []);
+      console.log('[LEADS_V2] loaded', S.leads.length, 'leads · statuses:', (statuses||[]).length, '· users:', (users||[]).length);
       S.statuses = statuses || [];
       S.users = users || [];
     } catch (e) {
