@@ -22,6 +22,19 @@ const { authUser, getVisibleUserIds } = require('../utils/auth');
 
 const GRAPH = 'https://graph.facebook.com/v19.0';
 
+// WA_COEX_FIELDS_v1 (2026-06-20) — the full webhook field set we want
+// Meta to push for every connected WABA. Without smb_message_echoes
+// the agent-side mobile-app sends never reach our webhook even though
+// the handler at _handleEcho is built. smb_app_state_sync covers
+// Coexistence state transitions (pause/resume on the mobile side).
+const WA_SUBSCRIBE_FIELDS = [
+  'messages',                          // inbound + statuses
+  'message_template_status_update',    // template approval changes
+  'phone_number_quality_update',       // quality rating changes
+  'smb_message_echoes',                // Coexistence outbound echo (THE FIX)
+  'smb_app_state_sync'                 // Coexistence app-state events
+];
+
 // ---------- Platform-wide Facebook credentials -----------------------
 // These are the SAME for every tenant/client on the platform — they are the
 // CRM vendor's Meta Developer App, not the client's. Clients only press
@@ -412,11 +425,17 @@ async function api_wb_emb_signin(token, code, phoneNumberId, wabaId, opts) {
   }
 
   // Subscribe the WABA to webhooks (so inbound messages reach our /hook)
+  // WA_COEX_FIELDS_v1 (2026-06-20) — explicit subscribed_fields including
+  // smb_message_echoes. Without it Meta only sends 'messages' +
+  // 'message_template_status_update' by default → agent's mobile-app
+  // outbound never syncs to CRM (the dispatcher + _handleEcho at
+  // whatsbot.js:2734/2806 are correct but the payload never arrives).
   let subscribeOk = true; let subscribeErr = '';
   try {
     const sub = await fetch(`${GRAPH}/${wabaId}/subscribed_apps`, {
       method: 'POST',
-      headers: { Authorization: 'Bearer ' + accessToken, 'Content-Type': 'application/json' }
+      headers: { Authorization: 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subscribed_fields: WA_SUBSCRIBE_FIELDS })
     });
     const sj = await sub.json();
     if (sj.error) { subscribeOk = false; subscribeErr = sj.error.message; }
@@ -717,10 +736,20 @@ async function api_wb_webhook_subscribe(token) {
   if (me.role !== 'admin') throw new Error('Admin only');
   const cfg = await _cfg();
   if (!cfg.token || !cfg.wabaId) throw new Error('Connect WhatsApp first.');
-  const r = await _graphPost(`${cfg.wabaId}/subscribed_apps`, {}, cfg);
+  // WA_COEX_FIELDS_v1 (2026-06-20) — explicit subscribed_fields.
+  // Click this button after deploy to upgrade an existing tenant's
+  // WABA subscription so smb_message_echoes events start flowing.
+  const r = await _graphPost(`${cfg.wabaId}/subscribed_apps`, {
+    subscribed_fields: WA_SUBSCRIBE_FIELDS
+  }, cfg);
   if (r.body?.error) throw new Error(r.body.error.message);
-  await _logActivity({ category: 'chat', name: 'webhook_subscribe', response_code: r.status, request: { wabaId: cfg.wabaId }, response: r.body });
-  return { ok: true, body: r.body };
+  await _logActivity({
+    category: 'chat', name: 'webhook_subscribe',
+    response_code: r.status,
+    request: { wabaId: cfg.wabaId, subscribed_fields: WA_SUBSCRIBE_FIELDS },
+    response: r.body
+  });
+  return { ok: true, body: r.body, subscribed_fields: WA_SUBSCRIBE_FIELDS };
 }
 
 async function api_wb_phones_list(token) {
