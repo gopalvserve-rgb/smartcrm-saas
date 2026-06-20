@@ -2453,6 +2453,16 @@ async function openSignupRequestModal(id, onClose) {
     { value: '3year', label: '3 years' }
   ]).value = row.desired_tenure || '';
   field('Number of users', 'desired_users', 'number');
+  // SIGNUP_REQUEST_v2 — payment fields shown in the edit modal so admin
+  // can correct or fill in if the customer didn't.
+  field('Payment status', 'payment_status', 'select', false, [
+    { value: '', label: '— not specified —' },
+    { value: 'fully_paid', label: 'Fully paid' },
+    { value: 'partial',    label: 'Partial paid' }
+  ]).value = row.payment_status || '';
+  field('Total amount (₹)',     'total_amount_inr', 'number');
+  field('Amount paid so far (₹)','amount_paid_inr',  'number');
+  field('Next payment due date','next_payment_at',  'date');
   field('Notes', 'notes', 'textarea', true);
   body.appendChild(f);
   body.appendChild(h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '.4rem' } },

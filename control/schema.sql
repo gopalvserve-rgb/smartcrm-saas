@@ -553,3 +553,10 @@ ALTER TABLE tenants ADD COLUMN IF NOT EXISTS balance_banner_dismissed_at TIMESTA
 
 -- TENANT_BILLING_NOTIFY_v1 (2026-06-20) — billing-reminder cron support.
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS last_reminder_sent_at TIMESTAMPTZ;
+
+-- SIGNUP_REQUEST_v2 (2026-06-20) — payment status on signup_requests.
+-- Carried into tenants on approve.
+ALTER TABLE signup_requests ADD COLUMN IF NOT EXISTS payment_status     TEXT;        -- 'fully_paid' | 'partial'
+ALTER TABLE signup_requests ADD COLUMN IF NOT EXISTS total_amount_inr   NUMERIC(12,2);
+ALTER TABLE signup_requests ADD COLUMN IF NOT EXISTS amount_paid_inr    NUMERIC(12,2);
+ALTER TABLE signup_requests ADD COLUMN IF NOT EXISTS next_payment_at    TIMESTAMPTZ;

@@ -69,7 +69,12 @@ async function _ensureSchema() {
     'reject_reason TEXT',
     'approved_at TIMESTAMPTZ',
     'approved_by TEXT',
-    'updated_at TIMESTAMPTZ DEFAULT NOW()'
+    'updated_at TIMESTAMPTZ DEFAULT NOW()',
+    // SIGNUP_REQUEST_v2 (2026-06-20)
+    'payment_status TEXT',
+    'total_amount_inr NUMERIC(12,2)',
+    'amount_paid_inr NUMERIC(12,2)',
+    'next_payment_at TIMESTAMPTZ'
   ];
   for (const a of adds) {
     const col = a.split(' ')[0];
@@ -160,7 +165,11 @@ async function api_saas_sr_publicSubmit(_token, payload) {
     ip_address: _str(p._ip, 80) || null,
     ua: _str(p._ua, 300) || null,
     status: 'pending'
-  });
+  ,
+    payment_status:    _str(payload.payment_status, 20) || null,
+    total_amount_inr:  (payload.total_amount_inr  == null || payload.total_amount_inr  === '' || isNaN(Number(payload.total_amount_inr)))  ? null : Math.max(0, Number(payload.total_amount_inr)),
+    amount_paid_inr:   (payload.amount_paid_inr   == null || payload.amount_paid_inr   === '' || isNaN(Number(payload.amount_paid_inr)))   ? null : Math.max(0, Number(payload.amount_paid_inr)),
+    next_payment_at:   (payload.next_payment_at && /^\d{4}-\d{2}-\d{2}/.test(payload.next_payment_at)) ? payload.next_payment_at : null});
   try {
     await control.insert('audit_log', {
       actor_type: 'public', event: 'signup_request.submitted',
@@ -218,9 +227,21 @@ async function api_saas_sr_update(token, payload) {
   if (row.status !== 'pending') throw new Error('Only pending requests are editable');
 
   const upd = {};
-  ['name','email','mobile','org_name','desired_slug','desired_tenure','industry_pack','notes'].forEach(k => {
+  ['name','email','mobile','org_name','desired_slug','desired_tenure','industry_pack','notes','payment_status'].forEach(k => {
     if (p[k] !== undefined) upd[k] = _str(p[k], 200);
   });
+  // SIGNUP_REQUEST_v2 — numeric + date fields handled with their own parsers
+  if (p.total_amount_inr !== undefined) {
+    const v = p.total_amount_inr;
+    upd.total_amount_inr = (v == null || v === '' || isNaN(Number(v))) ? null : Math.max(0, Number(v));
+  }
+  if (p.amount_paid_inr !== undefined) {
+    const v = p.amount_paid_inr;
+    upd.amount_paid_inr = (v == null || v === '' || isNaN(Number(v))) ? null : Math.max(0, Number(v));
+  }
+  if (p.next_payment_at !== undefined) {
+    upd.next_payment_at = (p.next_payment_at && /^\d{4}-\d{2}-\d{2}/.test(p.next_payment_at)) ? p.next_payment_at : null;
+  }
   if (upd.email) upd.email = upd.email.toLowerCase();
   if (upd.desired_slug != null) upd.desired_slug = upd.desired_slug.toLowerCase();
   if (p.package_id !== undefined) {
@@ -307,6 +328,30 @@ async function api_saas_sr_approve(token, payload) {
       [prov.tenant_id]
     );
   } catch (_) {}
+
+  // SIGNUP_REQUEST_v2 (2026-06-20) — propagate billing fields onto the
+  // tenant row so the existing billingReminders cron + dashboard tile +
+  // tenant-list balance column all pick this up immediately. Skips
+  // silently if no payment info was captured.
+  try {
+    const t  = row.total_amount_inr  != null ? Number(row.total_amount_inr)  : null;
+    const ap = row.amount_paid_inr   != null ? Number(row.amount_paid_inr)   : null;
+    const rd = row.next_payment_at   || null;
+    const rm = row.notes             || null;
+    if (t != null || ap != null || rd || rm) {
+      await control.query(`
+        UPDATE tenants
+           SET admin_remarks       = COALESCE($1, admin_remarks),
+               total_amount_inr    = COALESCE($2, total_amount_inr),
+               amount_paid_inr     = COALESCE($3, amount_paid_inr),
+               payment_reminder_at = COALESCE($4::timestamptz, payment_reminder_at),
+               updated_at          = NOW()
+         WHERE id = $5`,
+        [rm, t, ap, rd, prov.tenant_id]);
+    }
+  } catch (e) {
+    console.warn('[signup_req approve] billing propagate failed (non-fatal):', e.message);
+  }
 
   // Mark signup_request approved + stash credentials so SPA can show again
   await control.update('signup_requests', row.id, {

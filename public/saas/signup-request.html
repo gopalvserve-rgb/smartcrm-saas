@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>SmartCRM — Request a new workspace</title>
-  <link rel="stylesheet" href="/saas/landing.css?v=2026-06-01-sr1" />
+  <link rel="stylesheet" href="/saas/landing.css?v=2026-06-20-sr2" />
   <style>
     .sr-wrap { max-width: 720px; margin: 2rem auto; padding: 1.5rem; }
     .sr-card {
@@ -85,7 +85,7 @@
           </div>
           <div>
             <label>Tenure *</label>
-            <select name="desired_tenure" required>
+            <select name="desired_tenure" id="sr-tenure" required>
               <option value="">— select tenure —</option>
               <option value="month">Monthly</option>
               <option value="quarter">Quarterly</option>
@@ -94,10 +94,37 @@
               <option value="2year">2 years</option>
               <option value="3year">3 years</option>
             </select>
+            <div id="sr-tenure-end" class="sr-help" style="margin-top:.35rem">Pick a tenure to see the end date</div>
           </div>
           <div>
             <label>How many users? *</label>
             <input type="number" name="desired_users" required min="1" max="9999" placeholder="e.g. 10" />
+          </div>
+          <!-- SIGNUP_REQUEST_v2 — Payment fields -->
+          <div class="full">
+            <label>Payment status *</label>
+            <div style="display:flex;gap:1rem;margin-top:.3rem">
+              <label style="display:flex;align-items:center;gap:.35rem;font-weight:500;font-size:.9rem;cursor:pointer">
+                <input type="radio" name="payment_status" value="fully_paid" checked /> Fully paid
+              </label>
+              <label style="display:flex;align-items:center;gap:.35rem;font-weight:500;font-size:.9rem;cursor:pointer">
+                <input type="radio" name="payment_status" value="partial" /> Partial paid
+              </label>
+            </div>
+          </div>
+          <div>
+            <label>Total amount (₹)</label>
+            <input type="number" name="total_amount_inr" min="0" step="0.01" placeholder="e.g. 24000" />
+          </div>
+          <div>
+            <label>Amount paid so far (₹)</label>
+            <input type="number" name="amount_paid_inr" min="0" step="0.01" placeholder="e.g. 12000 (50%)" />
+            <div id="sr-balance" class="sr-help" style="margin-top:.35rem"></div>
+          </div>
+          <div class="full" id="sr-partial-only" style="display:none">
+            <label>Next payment due date</label>
+            <input type="date" name="next_payment_at" />
+            <div class="sr-help">When the balance is due. We'll send the customer a polite reminder by email + WhatsApp once it crosses + 7 days, weekly thereafter until paid.</div>
           </div>
           <div>
             <label>Your name / who's submitting</label>
@@ -120,6 +147,65 @@
     const $ = (s) => document.querySelector(s);
     const result = $('#sr-result');
     const btn = $('#sr-btn');
+
+    /* SIGNUP_REQUEST_v2 — live tenure → end-date preview. Mirrors the
+       package-end calc in the super-admin SPA so the customer sees the
+       same date the admin will see when reviewing the request. */
+    const tenureSel = document.getElementById('sr-tenure');
+    const tenureOut = document.getElementById('sr-tenure-end');
+    function _addTenure(t) {
+      const d = new Date();
+      switch (t) {
+        case 'month':     d.setMonth(d.getMonth() + 1);  return d;
+        case 'quarter':   d.setMonth(d.getMonth() + 3);  return d;
+        case 'half_year': d.setMonth(d.getMonth() + 6);  return d;
+        case 'year':      d.setFullYear(d.getFullYear() + 1);  return d;
+        case '2year':     d.setFullYear(d.getFullYear() + 2);  return d;
+        case '3year':     d.setFullYear(d.getFullYear() + 3);  return d;
+      }
+      return null;
+    }
+    function _refreshTenure() {
+      const end = _addTenure(tenureSel.value);
+      if (!end) { tenureOut.textContent = 'Pick a tenure to see the end date'; tenureOut.style.color = '#64748b'; return; }
+      const days = Math.round((end - new Date()) / 86400000);
+      tenureOut.innerHTML = '<b>Ends on ' +
+        end.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) +
+        '</b> · ' + days + ' days from today';
+      tenureOut.style.color = '#065f46';
+    }
+    tenureSel.addEventListener('change', _refreshTenure);
+
+    /* SIGNUP_REQUEST_v2 — partial-payment toggle + live balance */
+    const totalInp = document.querySelector('input[name=total_amount_inr]');
+    const paidInp  = document.querySelector('input[name=amount_paid_inr]');
+    const balOut   = document.getElementById('sr-balance');
+    const partialBlock = document.getElementById('sr-partial-only');
+    const nextDateInp  = document.querySelector('input[name=next_payment_at]');
+    function _refreshBalance() {
+      const t = Number(totalInp.value);
+      const p = Number(paidInp.value);
+      if (!isFinite(t) || t <= 0) { balOut.textContent = ''; return; }
+      const pp  = isFinite(p) ? p : 0;
+      const bal = Math.max(0, t - pp);
+      const pct = t > 0 ? Math.round((pp / t) * 100) : 0;
+      if (bal === 0) {
+        balOut.innerHTML = '<span style="color:#065f46"><b>Fully paid</b> (100%)</span>';
+      } else {
+        balOut.innerHTML = '<span style="color:#92400e"><b>Balance ₹' + bal.toLocaleString('en-IN') +
+          '</b> · ' + pct + '% paid</span>';
+      }
+    }
+    totalInp.addEventListener('input', _refreshBalance);
+    paidInp.addEventListener('input', _refreshBalance);
+    document.querySelectorAll('input[name=payment_status]').forEach(r => {
+      r.addEventListener('change', () => {
+        const isPartial = r.value === 'partial' && r.checked;
+        partialBlock.style.display = isPartial ? '' : 'none';
+        if (isPartial) nextDateInp.required = true;
+        else { nextDateInp.required = false; nextDateInp.value = ''; }
+      });
+    });
 
     $('#sr-form').addEventListener('submit', async (e) => {
       e.preventDefault();
