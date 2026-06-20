@@ -487,6 +487,20 @@ VIEWS.tenants = async (view) => {
             style: { fontSize: '.72rem', color: c, marginTop: '2px', fontWeight: '600' },
             title: 'Database ' + s.db_name + ' uses ' + s.pretty + ' (' + p + '% of volume, ' + s.percent_of_used + '% of used)'
           }, '💾 ' + s.pretty + ' · ' + p + '%');
+        })(),
+        // TENANT_REMARKS_VISIBLE_v1 (2026-06-20) — show admin remarks
+        // under the org name. Full text on hover; first ~80 chars
+        // visible inline so admin can skim the listing.
+        (function () {
+          const r = String(t.admin_remarks || '').trim();
+          if (!r) return null;
+          const short = r.length > 80 ? r.slice(0, 80) + '…' : r;
+          return h('div', {
+            style: { fontSize: '.72rem', color: '#475569', marginTop: '3px',
+                     fontStyle: 'italic', maxWidth: '380px',
+                     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+            title: r
+          }, '📝 ' + short);
         })()
       ),
       h('td', {}, h('a', { href: '/t/' + t.slug, target: '_blank' }, '/t/' + t.slug)),
