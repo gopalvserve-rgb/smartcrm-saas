@@ -981,7 +981,7 @@ tr:hover .lv2-actions { opacity: 1; }
     return 'New — send welcome template + schedule call today';
   }
 
-  /* ---------- slide-over ---------- */
+  /* ---------- slide-over (v1.7 — rich with timeline / AI summary / last WA / last call + recording) ---------- */
   function openSlideOver(l) {
     S.selectedId = l.id;
     closeSlideOver();
@@ -994,34 +994,162 @@ tr:hover .lv2-actions { opacity: 1; }
         h('div', { class: 'sub' }, (l.phone ? '📞 ' + l.phone : '') + (l.email ? ' · 📧 ' + l.email : '') + ' · created ' + fmtRel(l.created_at))),
       h('div', { class: 'x', onclick: closeSlideOver }, '✕')));
 
-    so.appendChild(h('div', { class: 'lv2-so-body' },
-      // Quick actions
-      h('div', { class: 'lv2-so-quick' },
-        h('button', { onclick: () => doCall(l) }, h('span', { class: 'ic' }, '📞'), 'Call'),
-        h('button', { onclick: () => doWaApi(l) }, h('span', { class: 'ic' }, '💬'), 'WA'),
-        h('button', { onclick: () => doAddNote(l) }, h('span', { class: 'ic' }, '📝'), 'Note'),
-        h('button', { onclick: () => doViewFull(l) }, h('span', { class: 'ic' }, '👁'), 'Open')),
-
-      // AI Next Step
-      h('div', { class: 'lv2-so-card ai' },
-        h('h3', null, '✨ AI Suggested Next Step'),
-        h('div', { class: 'txt' }, aiHint(l))),
-
-      // Details
-      h('div', { class: 'lv2-so-card' },
-        h('h3', null, '📍 Details'),
-        h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'Owner'), h('span', { class: 'v' }, l.assigned_name || '—')),
-        h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'Status'), h('span', { class: 'v' }, l.status_name || '—')),
-        h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'Source'), h('span', { class: 'v' }, l.source || '—')),
-        h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'Follow-up'), h('span', { class: 'v' }, l.next_followup_at ? new Date(l.next_followup_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—')),
-        h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'AI Score'), h('span', { class: 'v' }, (l.smart_score || 0) + ' · ' + (l.smart_category || '—')))),
-
-      // Notes
-      l.notes ? h('div', { class: 'lv2-so-card' },
-        h('h3', null, '📝 Notes / Remarks'),
-        h('div', { style: { fontSize: '12px', whiteSpace: 'pre-wrap', color: '#475569', lineHeight: '1.5' } }, String(l.notes).slice(0, 800))) : null
-    ));
+    const body = h('div', { class: 'lv2-so-body', id: 'lv2-so-body' });
+    so.appendChild(body);
     document.body.appendChild(so);
+
+    // ---- Synchronous (immediate) content ----
+    // Quick actions
+    body.appendChild(h('div', { class: 'lv2-so-quick' },
+      h('button', { onclick: () => doCall(l) }, h('span', { class: 'ic' }, '📞'), 'Call'),
+      h('button', { onclick: () => doWaApi(l) }, h('span', { class: 'ic' }, '💬'), 'WA'),
+      h('button', { onclick: () => doAddNote(l) }, h('span', { class: 'ic' }, '📝'), 'Note'),
+      h('button', { onclick: () => doViewFull(l) }, h('span', { class: 'ic' }, '👁'), 'Open')));
+
+    // AI Suggested Next Step (heuristic — instant)
+    body.appendChild(h('div', { class: 'lv2-so-card ai' },
+      h('h3', null, '✨ AI Suggested Next Step'),
+      h('div', { class: 'txt' }, aiHint(l))));
+
+    // AI Summary placeholder — fetched async
+    body.appendChild(h('div', { class: 'lv2-so-card', id: 'lv2-so-aisum',
+      style: { background: 'linear-gradient(135deg, #f0f4ff 0%, #faf5ff 100%)', borderColor: '#c7d2fe' } },
+      h('h3', { style: { color: '#4338ca' } }, '🤖 AI Summary'),
+      h('button', { id: 'lv2-so-aisum-btn',
+        style: { width: '100%', padding: '8px', background: 'linear-gradient(135deg, #6366f1, #a855f7)', color: 'white', border: 'none', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' },
+        onclick: async function () {
+          this.disabled = true; this.textContent = '⏳ Asking AI…';
+          try {
+            const r = await api('api_copilot_lead_summary', { lead_id: l.id });
+            const text = (r && (r.summary || r.text || r.body)) || 'No summary returned.';
+            const host = document.getElementById('lv2-so-aisum');
+            if (host) host.innerHTML = '';
+            if (host) {
+              host.appendChild(h('h3', { style: { color: '#4338ca' } }, '🤖 AI Summary'));
+              host.appendChild(h('div', { style: { fontSize: '12px', color: '#1e293b', lineHeight: '1.5', whiteSpace: 'pre-wrap' } }, text));
+            }
+          } catch (e) {
+            this.disabled = false;
+            this.textContent = '✨ Generate AI Summary';
+            toast(e.message, 'err');
+          }
+        }
+      }, '✨ Generate AI Summary')));
+
+    // Details
+    body.appendChild(h('div', { class: 'lv2-so-card' },
+      h('h3', null, '📍 Details'),
+      h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'Owner'), h('span', { class: 'v' }, l.assigned_name || '—')),
+      h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'Status'), h('span', { class: 'v' }, l.status_name || '—')),
+      h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'Source'), h('span', { class: 'v' }, l.source || '—')),
+      h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'Follow-up'), h('span', { class: 'v' }, l.next_followup_at ? new Date(l.next_followup_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—')),
+      h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'AI Score'), h('span', { class: 'v' }, (l.smart_score || 0) + ' · ' + (l.smart_category || '—'))),
+      l.email ? h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'Email'), h('span', { class: 'v', style: { fontSize: '11px' } }, l.email)) : null,
+      l.city ? h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'City'), h('span', { class: 'v' }, l.city)) : null,
+      l.tags ? h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'Tags'), h('span', { class: 'v', style: { fontSize: '11px' } }, l.tags)) : null,
+      l.product_name ? h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'Product'), h('span', { class: 'v' }, l.product_name)) : null));
+
+    // Notes
+    if (l.notes) {
+      body.appendChild(h('div', { class: 'lv2-so-card' },
+        h('h3', null, '📝 Notes / Remarks'),
+        h('div', { style: { fontSize: '12px', whiteSpace: 'pre-wrap', color: '#475569', lineHeight: '1.5', maxHeight: '160px', overflowY: 'auto' } }, String(l.notes).slice(0, 2000))));
+    }
+
+    // Placeholders for async sections
+    body.appendChild(h('div', { id: 'lv2-so-lastwa',  class: 'lv2-so-card' }, h('h3', null, '💬 Last WhatsApp'), h('div', { style: { fontSize: '11.5px', color: '#94a3b8' } }, 'Loading…')));
+    body.appendChild(h('div', { id: 'lv2-so-lastcall', class: 'lv2-so-card' }, h('h3', null, '📞 Last Call'), h('div', { style: { fontSize: '11.5px', color: '#94a3b8' } }, 'Loading…')));
+    body.appendChild(h('div', { id: 'lv2-so-activity', class: 'lv2-so-card' }, h('h3', null, '📊 Recent Activity'), h('div', { style: { fontSize: '11.5px', color: '#94a3b8' } }, 'Loading…')));
+
+    // ---- Async load — timeline drives Last WA + Last Call + Activity ----
+    setTimeout(async () => {
+      try {
+        const tl = await api('api_copilot_lead_timeline', { lead_id: l.id, limit: 30 }).catch(() => null);
+        const events = (tl && Array.isArray(tl.events)) ? tl.events : (Array.isArray(tl) ? tl : []);
+
+        // Last WA
+        const lastWa = events.find(ev => ev.kind === 'wa');
+        const waHost = document.getElementById('lv2-so-lastwa');
+        if (waHost) {
+          waHost.innerHTML = '';
+          waHost.appendChild(h('h3', null, '💬 Last WhatsApp'));
+          if (!lastWa) {
+            waHost.appendChild(h('div', { style: { fontSize: '11.5px', color: '#94a3b8' } }, 'No WhatsApp messages yet'));
+          } else {
+            const dirLabel = lastWa.dir === 'in' ? '⬅ Received' : '➡ Sent';
+            waHost.appendChild(h('div', { style: { fontSize: '11px', color: '#64748b', marginBottom: '4px' } },
+              dirLabel + ' · ' + fmtRel(lastWa.at)));
+            waHost.appendChild(h('div', { style: { fontSize: '12.5px', color: '#1e293b', whiteSpace: 'pre-wrap', background: '#f8fafc', padding: '8px 10px', borderRadius: '6px', borderLeft: '3px solid ' + (lastWa.dir === 'in' ? '#3b82f6' : '#10b981'), maxHeight: '120px', overflowY: 'auto' } },
+              String(lastWa.text || '(media)').slice(0, 400)));
+          }
+        }
+
+        // Last Call
+        const lastCall = events.find(ev => ev.kind === 'call');
+        const callHost = document.getElementById('lv2-so-lastcall');
+        if (callHost) {
+          callHost.innerHTML = '';
+          callHost.appendChild(h('h3', null, '📞 Last Call'));
+          if (!lastCall) {
+            callHost.appendChild(h('div', { style: { fontSize: '11.5px', color: '#94a3b8' } }, 'No calls yet'));
+          } else {
+            const dirLabel = lastCall.dir === 'in' ? '📞 Incoming' : lastCall.dir === 'out' ? '📞 Outgoing' : lastCall.dir === 'missed' ? '📵 Missed' : '📞 Call';
+            const durLabel = lastCall.duration ? Math.floor(lastCall.duration / 60) + 'm ' + (lastCall.duration % 60) + 's' : 'no duration';
+            callHost.appendChild(h('div', { style: { fontSize: '12px', color: '#1e293b', fontWeight: '600' } },
+              dirLabel + ' · ' + durLabel));
+            callHost.appendChild(h('div', { style: { fontSize: '10px', color: '#94a3b8', marginTop: '2px' } }, fmtRel(lastCall.at)));
+            if (lastCall.recording) {
+              callHost.appendChild(h('audio', { controls: 'controls', src: lastCall.recording,
+                style: { width: '100%', marginTop: '8px', height: '32px' } }));
+            } else {
+              callHost.appendChild(h('div', { style: { fontSize: '11px', color: '#94a3b8', marginTop: '4px' } }, 'No recording attached'));
+            }
+          }
+        }
+
+        // Activity timeline (top 8)
+        const actHost = document.getElementById('lv2-so-activity');
+        if (actHost) {
+          actHost.innerHTML = '';
+          actHost.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' } },
+            h('h3', { style: { margin: '0' } }, '📊 Recent Activity'),
+            events.length > 8 ? h('a', { style: { fontSize: '10px', color: '#6366f1', cursor: 'pointer', textDecoration: 'none' }, onclick: () => doViewFull(l) }, 'View all ' + events.length + ' →') : null));
+          if (!events.length) {
+            actHost.appendChild(h('div', { style: { fontSize: '11.5px', color: '#94a3b8' } }, 'No activity yet'));
+          } else {
+            events.slice(0, 8).forEach(ev => actHost.appendChild(buildActRow(ev)));
+          }
+        }
+      } catch (e) {
+        console.warn('[LEADS_V2] slide-over timeline load failed:', e.message);
+      }
+    }, 0);
+  }
+
+  function buildActRow(ev) {
+    const k = ev.kind || '';
+    const ico = k === 'wa'     ? (ev.dir === 'in' ? '💬' : '💚')
+              : k === 'call'   ? (ev.dir === 'missed' ? '📵' : '📞')
+              : k === 'remark' ? '📝'
+              : k === 'score'  ? '🎯'
+              : '•';
+    const who = k === 'wa'     ? (ev.dir === 'in' ? 'WhatsApp received' : 'WhatsApp sent')
+              : k === 'call'   ? (ev.dir === 'in' ? 'Call incoming' : ev.dir === 'out' ? 'Call outgoing' : ev.dir === 'missed' ? 'Call missed' : 'Call')
+              : k === 'remark' ? ('Note' + (ev.by ? ' · ' + ev.by : ''))
+              : k === 'score'  ? ('AI Score ' + (ev.old_score || 0) + ' → ' + (ev.new_score || 0))
+              : (ev.label || ev.kind || 'Activity');
+    const detail = k === 'wa'     ? String(ev.text || '').slice(0, 70)
+                 : k === 'call'   ? ((ev.duration ? Math.floor(ev.duration/60)+'m '+(ev.duration%60)+'s' : 'no duration') + (ev.recording ? ' · ▶' : ''))
+                 : k === 'remark' ? String(ev.text || '').slice(0, 70)
+                 : k === 'score'  ? (ev.reason_text || ev.trigger_event || '')
+                 : '';
+    return h('div', { style: { display: 'flex', gap: '8px', padding: '7px 0', borderBottom: '1px solid #f1f5f9', fontSize: '11.5px' } },
+      h('div', { style: { width: '24px', height: '24px', borderRadius: '50%', background: '#f1f5f9', display: 'grid', placeItems: 'center', fontSize: '11px', flexShrink: '0' } }, ico),
+      h('div', { style: { flex: '1', minWidth: '0' } },
+        h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: '6px' } },
+          h('span', { style: { fontWeight: '600', color: '#0f172a' } }, who),
+          h('span', { style: { fontSize: '10px', color: '#94a3b8' } }, fmtRel(ev.at))),
+        detail ? h('div', { style: { color: '#64748b', marginTop: '2px' } }, detail) : null));
   }
   function closeSlideOver() {
     const ex = document.getElementById('lv2-slideover');
