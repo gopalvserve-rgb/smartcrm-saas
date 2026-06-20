@@ -168,6 +168,24 @@ async function api_saas_tenants_createManual(token, payload) {
   const pkg = await control.findById('packages', packageId);
   if (!pkg) throw new Error('Package not found');
 
+  // TENANT_PARTIAL_PAY_v1 (2026-06-20) — capture admin remarks +
+  // partial payment + balance reminder date from the form. All
+  // optional; blanks fall through to NULL on the tenants row.
+  const adminRemarks   = String(p.admin_remarks || '').trim() || null;
+  const totalAmountRaw = p.total_amount_inr;
+  const paidAmountRaw  = p.amount_paid_inr;
+  const reminderDate   = String(p.payment_reminder_at || '').trim();   // YYYY-MM-DD
+  const totalAmountInr = (totalAmountRaw == null || totalAmountRaw === '' || isNaN(Number(totalAmountRaw)))
+    ? null : Math.max(0, Number(totalAmountRaw));
+  const amountPaidInr  = (paidAmountRaw == null || paidAmountRaw === '' || isNaN(Number(paidAmountRaw)))
+    ? null : Math.max(0, Number(paidAmountRaw));
+  if (reminderDate && !/^\d{4}-\d{2}-\d{2}$/.test(reminderDate)) {
+    throw new Error('payment_reminder_at must be YYYY-MM-DD');
+  }
+  if (totalAmountInr != null && amountPaidInr != null && amountPaidInr > totalAmountInr) {
+    throw new Error('Amount paid cannot exceed total amount');
+  }
+
   // Optional industry pack — installed AFTER provisioning, inside the tenant
   // DB scope. Empty string = Generic (no pack).
   const industryPack = String(p.industry_pack || '').trim().toLowerCase();
@@ -270,6 +288,23 @@ async function api_saas_tenants_createManual(token, payload) {
     } catch (e) {
       console.warn('[createManual] user-cap apply failed (non-fatal):', e.message);
     }
+  }
+
+  // TENANT_PARTIAL_PAY_v1 — persist remarks + partial payment + reminder.
+  // Wrapped in try/catch so a non-fatal write doesn't abort provisioning.
+  try {
+    await control.query(`
+      UPDATE tenants
+         SET admin_remarks       = COALESCE($1, admin_remarks),
+             total_amount_inr    = COALESCE($2, total_amount_inr),
+             amount_paid_inr     = COALESCE($3, amount_paid_inr),
+             payment_reminder_at = COALESCE($4::timestamptz, payment_reminder_at),
+             updated_at          = NOW()
+       WHERE id = $5`,
+      [adminRemarks, totalAmountInr, amountPaidInr,
+       reminderDate ? reminderDate : null, prov.tenant_id]);
+  } catch (e) {
+    console.warn('[createManual] partial-pay write failed (non-fatal):', e.message);
   }
 
   // ---- 4. Audit trail -----------------------------------------

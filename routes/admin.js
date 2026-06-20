@@ -281,6 +281,45 @@ async function api_admin_brand(_token) {
     } catch (_) {}
   }
 
+  // TENANT_PARTIAL_PAY_v1 (2026-06-20) — surface partial-payment status
+  // to the tenant SPA so it can render an overdue-balance banner.
+  let billing = {
+    BILLING_TOTAL_INR: null, BILLING_PAID_INR: null,
+    BILLING_BALANCE_INR: null, BILLING_REMINDER_AT: null,
+    BILLING_BALANCE_OVERDUE: false
+  };
+  try {
+    const db3 = require('../db/pg');
+    const store3 = db3.tenantStorage && db3.tenantStorage.getStore && db3.tenantStorage.getStore();
+    const slug3 = store3 && store3.slug ? String(store3.slug) : null;
+    if (slug3) {
+      const control3 = require('../control/db');
+      const tr = await control3.query(
+        `SELECT total_amount_inr, amount_paid_inr, payment_reminder_at,
+                balance_banner_dismissed_at
+           FROM tenants WHERE slug = $1 LIMIT 1`, [slug3]);
+      const row = tr && tr.rows && tr.rows[0];
+      if (row) {
+        const total = Number(row.total_amount_inr) || 0;
+        const paid  = Number(row.amount_paid_inr)  || 0;
+        const bal   = total > 0 ? Math.max(0, total - paid) : 0;
+        billing.BILLING_TOTAL_INR   = total > 0 ? total : null;
+        billing.BILLING_PAID_INR    = total > 0 ? paid  : null;
+        billing.BILLING_BALANCE_INR = total > 0 ? bal   : null;
+        billing.BILLING_REMINDER_AT = row.payment_reminder_at
+          ? new Date(row.payment_reminder_at).toISOString() : null;
+        if (row.payment_reminder_at && bal > 0) {
+          const dueMs = new Date(row.payment_reminder_at).getTime() + 7 * 86400000;
+          const dismissedMs = row.balance_banner_dismissed_at
+            ? new Date(row.balance_banner_dismissed_at).getTime() : 0;
+          if (Date.now() >= dueMs && (!dismissedMs || dismissedMs < dueMs)) {
+            billing.BILLING_BALANCE_OVERDUE = true;
+          }
+        }
+      }
+    }
+  } catch (e) { console.warn('[admin_brand] billing fetch failed:', e.message); }
+
   return {
     BRAND_PRIMARY_COLOR:  cfg.BRAND_PRIMARY_COLOR  || '',
     BRAND_ACCENT_COLOR:   cfg.BRAND_ACCENT_COLOR   || '',
@@ -311,6 +350,9 @@ async function api_admin_brand(_token) {
     AI_MANAGER_ENABLED: cfg.AI_MANAGER_ENABLED || '',
     DEMO_REMINDER_ENABLED: cfg.DEMO_REMINDER_ENABLED || '',
     DEMO_REMINDER_SETTINGS: cfg.DEMO_REMINDER_SETTINGS || ''
+  ,
+    // TENANT_PARTIAL_PAY_v1 — billing fields
+    ...billing
   };
 }
 

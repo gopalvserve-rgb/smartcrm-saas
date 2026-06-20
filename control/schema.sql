@@ -542,3 +542,11 @@ CREATE TABLE IF NOT EXISTS wl_wa_log (
   sent_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_wl_wa_customer ON wl_wa_log(customer_id);
+
+-- TENANT_PARTIAL_PAY_v1 (2026-06-20) — super-admin remarks + partial
+-- payment tracking + balance reminder. All idempotent.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS admin_remarks               TEXT;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS total_amount_inr            NUMERIC(12,2);
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS amount_paid_inr             NUMERIC(12,2);
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS payment_reminder_at         TIMESTAMPTZ;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS balance_banner_dismissed_at TIMESTAMPTZ;

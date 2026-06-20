@@ -852,6 +852,33 @@ async function apiRaw(fn, ...args) {
       } catch (_) {
         if (!(CRM.installedPacks instanceof Set)) CRM.installedPacks = new Set();
       }
+      // TENANT_PARTIAL_PAY_v1 (2026-06-20) — overdue-balance banner.
+      // If api_admin_brand says BILLING_BALANCE_OVERDUE, render a fixed
+      // banner at the very top of the page. Reps see it, admins see it,
+      // because billing applies to the tenant as a whole.
+      try {
+        if (brand && brand.BILLING_BALANCE_OVERDUE && !document.getElementById('tenant-balance-banner')) {
+          const bal = Number(brand.BILLING_BALANCE_INR) || 0;
+          const banner = document.createElement('div');
+          banner.id = 'tenant-balance-banner';
+          banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:linear-gradient(135deg,#dc2626 0%,#b91c1c 100%);color:#fff;padding:.55rem .9rem;font:600 .85rem -apple-system,Segoe UI,Roboto,sans-serif;display:flex;align-items:center;gap:.8rem;box-shadow:0 2px 8px rgba(0,0,0,.2)';
+          banner.innerHTML = '<span style="font-size:1.2rem">⚠️</span>' +
+            '<span style="flex:1">Please make your balance amount of <b>₹' +
+            bal.toLocaleString('en-IN') + '</b>' +
+            (brand.BILLING_REMINDER_AT ? ' (was due on ' +
+              new Date(brand.BILLING_REMINDER_AT).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) +
+              ')' : '') + '. Contact your SmartCRM account manager.</span>' +
+            '<button id="tenant-balance-banner-close" style="background:rgba(255,255,255,.18);border:0;color:#fff;width:24px;height:24px;border-radius:50%;cursor:pointer;font-size:.95rem;line-height:1" title="Dismiss until next reload">×</button>';
+          document.body.appendChild(banner);
+          // Push the rest of the page down so the banner doesn't cover the topbar
+          document.body.style.paddingTop = (banner.offsetHeight) + 'px';
+          banner.querySelector('#tenant-balance-banner-close').onclick = () => {
+            banner.remove();
+            document.body.style.paddingTop = '';
+          };
+        }
+      } catch (_) {}
+
       renderShell();
       await warmCache();
       try { await warmCacheNotifPref(); } catch (_) {}

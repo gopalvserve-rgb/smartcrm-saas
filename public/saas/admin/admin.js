@@ -689,6 +689,69 @@ async function openCreateTenant() {
   );
   form.appendChild(field('Package *', pkgSel));
 
+  /* --- TENANT_PARTIAL_PAY_v1 (2026-06-20) --- Remarks + Partial Payment ---
+     Two new sections the super-admin uses when onboarding a tenant with
+     deferred payment:
+       - Admin remarks: free-text note saved on the tenant row, visible
+         later in the tenant detail screen.
+       - Partial payment: total amount, amount paid, auto-computed
+         balance, and the reminder date. When today >= reminder + 7d
+         and balance > 0, the tenant SPA shows a "make your balance" banner. */
+  const remarksTa = h('textarea', { name: 'admin_remarks', rows: '2',
+    placeholder: 'e.g. Onboarded by Priya. 50% advance paid via UPI on 20 Jun. Balance due before site visit.',
+    style: { width: '100%', padding: '.4rem .55rem', fontFamily: 'inherit', fontSize: '.85rem' } });
+  form.appendChild(field('📝 My remarks (super-admin only — not visible to tenant)', remarksTa));
+
+  const totalInp = h('input', { name: 'total_amount_inr', type: 'number', step: '0.01', min: '0',
+    placeholder: '— leave blank for full price —', style: { width: '100%' } });
+  const paidInp  = h('input', { name: 'amount_paid_inr',  type: 'number', step: '0.01', min: '0',
+    placeholder: 'e.g. half of the total', style: { width: '100%' } });
+  const balPrev  = h('div', { id: 'create-tenant-balance-preview',
+    style: { padding: '.45rem .7rem', background: '#f1f5f9', borderRadius: '6px',
+             fontSize: '.85rem', color: '#0f172a', marginTop: '.25rem' } },
+    'Balance auto-fills when both totals are entered');
+  const remindInp = h('input', { name: 'payment_reminder_at', type: 'date', value: '', style: { width: '100%' } });
+
+  function _refreshBalance() {
+    const t = Number(totalInp.value); const p = Number(paidInp.value);
+    if (!isFinite(t) || t <= 0) {
+      balPrev.textContent = 'Enter Total Amount to compute Balance';
+      balPrev.style.background = '#f1f5f9';
+      return;
+    }
+    const pp = isFinite(p) ? p : 0;
+    const bal = Math.max(0, t - pp);
+    const pct = t > 0 ? Math.round((pp / t) * 100) : 0;
+    if (bal === 0) {
+      balPrev.innerHTML = '<b>Fully paid</b> · ₹' + t.toLocaleString('en-IN') + ' (100%)';
+      balPrev.style.background = '#d1fae5';
+    } else {
+      balPrev.innerHTML = '<b>Balance ₹' + bal.toLocaleString('en-IN') + '</b> · ' +
+        pct + '% paid · ₹' + pp.toLocaleString('en-IN') + ' / ₹' + t.toLocaleString('en-IN');
+      balPrev.style.background = '#fef3c7';
+    }
+  }
+  totalInp.addEventListener('input', _refreshBalance);
+  paidInp.addEventListener('input', _refreshBalance);
+
+  const payCard = h('div', { style: { border: '1px solid #cbd5e1', borderRadius: '6px',
+    padding: '.6rem .7rem', background: '#fafafa', marginBottom: '.6rem' } },
+    h('div', { style: { fontWeight: 600, fontSize: '.78rem', marginBottom: '.3rem', color: '#475569' } },
+      '💰 Partial payment (optional — leave blank if paying full upfront)'),
+    h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '.4rem' } },
+      h('div', {}, h('label', { style: { fontSize: '.72rem', color: '#64748b' } }, 'Total amount (₹)'), totalInp),
+      h('div', {}, h('label', { style: { fontSize: '.72rem', color: '#64748b' } }, 'Amount paid now (₹)'), paidInp)
+    ),
+    balPrev,
+    h('div', { style: { marginTop: '.5rem' } },
+      h('label', { style: { fontSize: '.72rem', color: '#64748b' } }, 'Payment reminder date (next instalment due)'),
+      remindInp,
+      h('div', { class: 'muted', style: { fontSize: '.7rem', marginTop: '.2rem' } },
+        'When this date + 7 days passes and balance > 0, the tenant sees a banner: "Please make your balance amount".')
+    )
+  );
+  form.appendChild(payCard);
+
   /* --- BILL_PLAN_PICKER_v1 (2026-05-23) ---
      Start Date + Amount Override + live Validity-ends-on display.
      - Start Date defaults to today; super-admin can backdate.
@@ -872,7 +935,12 @@ async function _submitCreateTenant(form, pkgs, modal) {
     // CREATE_TENANT_USERS_v1 — user cap + extra-user pricing
     user_cap: (() => { const v = (fd.get('user_cap') || '').toString().trim(); return v === '' ? null : Math.max(0, Math.floor(Number(v) || 0)); })(),
     user_extra_charge_inr: Math.max(0, Number((fd.get('user_extra_charge_inr') || '0').toString().trim()) || 0),
-    user_extra_charge_period: (fd.get('user_extra_charge_period') || 'month').toString().trim()
+    user_extra_charge_period: (fd.get('user_extra_charge_period') || 'month').toString().trim(),
+    // TENANT_PARTIAL_PAY_v1 — remarks + partial-pay fields
+    admin_remarks: (fd.get('admin_remarks') || '').toString().trim() || null,
+    total_amount_inr: (() => { const v = (fd.get('total_amount_inr') || '').toString().trim(); return v === '' ? null : Number(v); })(),
+    amount_paid_inr:  (() => { const v = (fd.get('amount_paid_inr')  || '').toString().trim(); return v === '' ? null : Number(v); })(),
+    payment_reminder_at: (fd.get('payment_reminder_at') || '').toString().trim() || null
   };
   try {
     const r = await api('api_saas_tenants_createManual', payload);
