@@ -938,6 +938,14 @@
     host.appendChild(h('div', { class: 'wbv2-addnote' },
       h('button', { onclick: openAddNote }, '📝 Add Note / Remark')));
 
+    // Notes — v1.7 moved here (right below Add Note action) per user request.
+    // Renders leads.notes (single rolling field maintained by api_leads_addRemark).
+    if (l.notes) {
+      host.appendChild(h('div', { class: 'wbv2-sec' },
+        h('div', { class: 'lab' }, h('span', null, '📝 Notes / Remarks')),
+        h('div', { class: 'wbv2-note', style: { whiteSpace: 'pre-wrap', maxHeight: '180px', overflowY: 'auto' } }, String(l.notes).slice(0, 2000))));
+    }
+
     // AI Score (api_leadScore_get returns under .lead with smart_score / smart_category)
     const score = S.aiScore ? Number(S.aiScore.smart_score || S.aiScore.score || 0) : 0;
     if (score > 0) {
@@ -994,12 +1002,7 @@
                         h('div', { style: { fontSize: '11px', color: '#8696a0', marginTop: '4px' } }, 'No recording attached'))));
     }
 
-    // Notes — uses leads.notes (single timestamped field) for now
-    if (l.notes) {
-      host.appendChild(h('div', { class: 'wbv2-sec' },
-        h('div', { class: 'lab' }, h('span', null, '📝 Notes')),
-        h('div', { class: 'wbv2-note', style: { whiteSpace: 'pre-wrap' } }, String(l.notes).slice(0, 600))));
-    }
+
 
     // Lead info / custom fields
     const kv = [];
