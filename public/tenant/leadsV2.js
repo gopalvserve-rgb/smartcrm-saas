@@ -213,7 +213,7 @@
 .lv2-badge.fire { background: linear-gradient(135deg, #fee2e2, #fef3c7); color: #b91c1c; }
 
 .lv2-phonecell { display: flex; align-items: center; gap: 6px; }
-.lv2-ph { font-family: "SF Mono", Monaco, Consolas, monospace; font-size: 12px; color: #0f172a; }
+.lv2-ph { font-family: "SF Mono", Monaco, Consolas, monospace; font-size: 14px; font-weight: 500; color: #0f172a; letter-spacing: .2px; }
 .lv2-actions { display: flex; gap: 1px; opacity: .4; transition: opacity .15s; }
 tr:hover .lv2-actions { opacity: 1; }
 .lv2-act { width: 24px; height: 24px; border: none; background: transparent; border-radius: 5px; cursor: pointer; color: #64748b; font-size: 12px; display: grid; place-items: center; }
@@ -226,9 +226,9 @@ tr:hover .lv2-actions { opacity: 1; }
 .lv2-act.copy:hover { background: #f1f5f9; color: #0f172a; }
 
 .lv2-status { display: flex; align-items: center; gap: 6px; cursor: pointer; }
-.lv2-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+.lv2-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .lv2-dot.new { background: #22c55e; } .lv2-dot.hot { background: #ef4444; } .lv2-dot.warm { background: #f59e0b; } .lv2-dot.cold { background: #3b82f6; } .lv2-dot.demo { background: #a855f7; } .lv2-dot.proposal { background: #06b6d4; } .lv2-dot.done { background: #10b981; } .lv2-dot.lost { background: #6b7280; } .lv2-dot.fresh { background: #22c55e; }
-.lv2-stext { font-size: 12px; color: #475569; }
+.lv2-stext { font-size: 14px; font-weight: 500; color: #1e293b; }
 
 .lv2-scorecell { display: flex; align-items: center; gap: 8px; }
 .lv2-scorenum { font-size: 13px; font-weight: 700; }
