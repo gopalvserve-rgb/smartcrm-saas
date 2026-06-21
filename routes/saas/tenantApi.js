@@ -522,9 +522,107 @@ async function api_packs_uninstall(token, packId) {
   const fw = require('../packs/_framework');
   return fw.uninstallPack(String(packId || ''), { userId: me.id });
 }
+
+// PACK_STAGES_v1 (2026-06-21) — Admin one-click to apply the pack's
+// business-specific stages, removing generic ones that aren't in use.
+// Stages NOT in the pack's whitelist that have ZERO leads attached
+// are DELETED. Stages WITH leads are kept (cannot delete safely) but
+// pushed to the bottom of the list. The pack's own stages are
+// re-seeded (no-op if already present) and given sort_order 1..N so
+// they appear first.
+async function api_packs_resetStagesToPackDefaults(token, packId) {
+  const { authUser } = require('../../utils/auth');
+  const me = await authUser(token);
+  if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin only');
+  const db = require('../../db/pg');
+  const packPath = '../packs/' + String(packId || '').replace(/[^a-z0-9_-]/gi, '');
+  // Each pack file defines its own STAGES. Hardcode the two we ship.
+  const PACK_STAGES = {
+    education: [
+      { name: 'Inquiry',     color: '#3b82f6' },
+      { name: 'Demo Booked', color: '#06b6d4' },
+      { name: 'Demo Done',   color: '#8b5cf6' },
+      { name: 'Enrolled',    color: '#f59e0b' },
+      { name: 'Fee Paid',    color: '#10b981', is_final: 1 },
+      { name: 'Lapsed',      color: '#6b7280', is_final: 1 }
+    ],
+    realestate: [
+      { name: 'New Lead',                color: '#a855f7' },
+      { name: 'Lead Captured',           color: '#3b82f6' },
+      { name: 'Assigned',                color: '#06b6d4' },
+      { name: 'In Follow-up',            color: '#22c55e' },
+      { name: 'Presentation Done',       color: '#f59e0b' },
+      { name: 'Site Visit Fixed',        color: '#ec4899' },
+      { name: 'Site Visit Done',         color: '#0ea5e9' },
+      { name: 'Offer Given',             color: '#f97316' },
+      { name: 'Booked',                  color: '#16a34a' },
+      { name: 'Documents Collected',     color: '#8b5cf6' },
+      { name: 'Commission In Progress',  color: '#0284c7' },
+      { name: 'Paid',                    color: '#15803d', is_final: 1 }
+    ]
+  };
+  const stages = PACK_STAGES[String(packId || '').toLowerCase()];
+  if (!stages) throw new Error('No pack stages defined for ' + packId);
+
+  // Re-seed pack stages (idempotent: insert if absent, otherwise update sort_order + color)
+  for (let i = 0; i < stages.length; i++) {
+    const s = stages[i];
+    const found = await db.query(`SELECT id FROM statuses WHERE LOWER(name)=LOWER($1) LIMIT 1`, [s.name]);
+    if (found.rows.length) {
+      await db.query(
+        `UPDATE statuses SET sort_order = $1, color = $2, is_final = $3 WHERE id = $4`,
+        [i + 1, s.color, s.is_final ? 1 : 0, found.rows[0].id]
+      );
+    } else {
+      await db.query(
+        `INSERT INTO statuses (name, sort_order, color, is_final) VALUES ($1, $2, $3, $4)`,
+        [s.name, i + 1, s.color, s.is_final ? 1 : 0]
+      );
+    }
+  }
+
+  // Find generic stages (anything NOT in the pack whitelist) and DELETE the
+  // ones with zero leads attached. Keep the ones in use — those get pushed
+  // to the bottom (sort_order 100+).
+  const keep = stages.map(s => s.name.toLowerCase());
+  const all = await db.query(`SELECT id, name FROM statuses`);
+  const removed = []; const kept_with_leads = [];
+  let bottomOrder = 100;
+  for (const row of all.rows) {
+    if (keep.includes(String(row.name).toLowerCase())) continue;
+    // Safety: only delete if zero leads use it
+    const useCount = await db.query(`SELECT COUNT(*)::int AS c FROM leads WHERE status_id = $1`, [row.id]);
+    if (Number(useCount.rows[0].c) === 0) {
+      try {
+        await db.query(`DELETE FROM statuses WHERE id = $1`, [row.id]);
+        removed.push(row.name);
+      } catch (e) {
+        // If FK constraint somewhere else stops the delete, just push it to bottom
+        await db.query(`UPDATE statuses SET sort_order = $1 WHERE id = $2`, [bottomOrder++, row.id]);
+        kept_with_leads.push({ name: row.name, reason: 'fk_constraint' });
+      }
+    } else {
+      await db.query(`UPDATE statuses SET sort_order = $1 WHERE id = $2`, [bottomOrder++, row.id]);
+      kept_with_leads.push({ name: row.name, lead_count: Number(useCount.rows[0].c) });
+    }
+  }
+
+  return {
+    ok: true,
+    pack: packId,
+    seeded: stages.length,
+    deleted_generic: removed,
+    kept_legacy: kept_with_leads,
+    message: 'Stages re-applied. Pack stages occupy positions 1-' + stages.length + '. ' +
+             removed.length + ' unused generic stage(s) removed. ' +
+             kept_with_leads.length + ' legacy stage(s) kept at bottom (still has leads).'
+  };
+}
+
 API.api_packs_listAvailable = api_packs_listAvailable;
 API.api_packs_listInstalled = api_packs_listInstalled;
 API.api_packs_install       = api_packs_install;
 API.api_packs_uninstall     = api_packs_uninstall;
+API.api_packs_resetStagesToPackDefaults = api_packs_resetStagesToPackDefaults;
 
 module.exports = { expressHandler };
