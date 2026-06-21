@@ -80,8 +80,12 @@
     style: 'classic',
     // v1.3 — Focus mode (hide chrome) + collapsibles + saved views
     focusMode: localStorage.getItem('crm.lv2.focus') === '1',
-    chipsCollapsed: localStorage.getItem('crm.lv2.chipsCollapsed') !== '0',  // collapsed by default
-    filtersCollapsed: localStorage.getItem('crm.lv2.filtersCollapsed') !== '0',  // collapsed by default
+    // v3.7 — both collapsed by default. Use sessionStorage so a page
+    // refresh ALWAYS starts collapsed (only stays open within the same
+    // tab session), matching user expectation that headers auto-close
+    // on refresh / new page.
+    chipsCollapsed: sessionStorage.getItem('crm.lv2.chipsCollapsed') !== '0',
+    filtersCollapsed: sessionStorage.getItem('crm.lv2.filtersCollapsed') !== '0',
     visibleColumns: (function(){ try { return JSON.parse(localStorage.getItem('crm.lv2.visibleColumns')) || ['phone','source','status','owner','score','aistep','activity','created']; } catch(_) { return ['phone','source','status','owner','score','aistep','activity','created']; } })(),
     visibleFilters: (function(){ try { return JSON.parse(localStorage.getItem('crm.lv2.visibleFilters')) || ['status','source','owner','score','tag','campaign','followup','qualified']; } catch(_) { return ['status','source','owner','score','tag','campaign','followup','qualified']; } })(),
     savedViews: (function(){ try { return JSON.parse(localStorage.getItem('crm.lv2.savedViews')) || []; } catch(_) { return []; } })()
@@ -462,7 +466,7 @@ tr:hover .lv2-actions { opacity: 1; }
       // v1.3 — collapsible: tiny header + chevron; body hidden if S.chipsCollapsed
       const wrap = h('div', { class: 'lv2-chipswrap', style: { background: '#ffffff', borderBottom: '1px solid #e2e8f0' } });
       const head = h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 14px', cursor: 'pointer', userSelect: 'none' },
-        onclick: () => { S.chipsCollapsed = !S.chipsCollapsed; try { localStorage.setItem('crm.lv2.chipsCollapsed', S.chipsCollapsed ? '1' : '0'); } catch(_){} if (onChange) onChange(); }
+        onclick: () => { S.chipsCollapsed = !S.chipsCollapsed; try { sessionStorage.setItem('crm.lv2.chipsCollapsed', S.chipsCollapsed ? '1' : '0'); } catch(_){} if (onChange) onChange(); }
       },
         h('span', { style: { fontSize: '10.5px', fontWeight: '600', color: '#64748b', textTransform: 'uppercase', letterSpacing: '.4px' } },
           (S.chipsCollapsed ? '▸' : '▾') + ' Status segments' + (S.statusChip !== 'all' ? ' · ' + S.statusChip : '')),
@@ -488,13 +492,14 @@ tr:hover .lv2-actions { opacity: 1; }
     const sc = statusClass(label);
     return h('span', {
       style: {
-        padding: '4px 10px', borderRadius: '14px', fontSize: '11.5px',
+        padding: '4px 12px', borderRadius: '14px', fontSize: '11.5px',
         cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '5px',
-        background: isActive ? '#eef2ff' : '#f8fafc',
-        border: '1px solid ' + (isActive ? '#c7d2fe' : '#e2e8f0'),
-        color: isActive ? '#4338ca' : '#475569',
-        fontWeight: isActive ? '600' : '500',
-        whiteSpace: 'nowrap'
+        background: isActive ? '#4338ca' : '#f8fafc',
+        border: '1px solid ' + (isActive ? '#4338ca' : '#e2e8f0'),
+        color: isActive ? 'white' : '#475569',
+        fontWeight: isActive ? '700' : '500',
+        whiteSpace: 'nowrap',
+        boxShadow: isActive ? '0 1px 3px rgba(67,56,202,.3)' : 'none'
       },
       onclick: () => { S.statusChip = key; if (onChange) onChange(); }
     },
@@ -532,7 +537,7 @@ tr:hover .lv2-actions { opacity: 1; }
     const outer = h('div', { style: { background: '#ffffff', borderBottom: '1px solid #e2e8f0' } });
     const activeCount = countActiveFilters();
     const head = h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 14px', cursor: 'pointer', userSelect: 'none' },
-      onclick: () => { S.filtersCollapsed = !S.filtersCollapsed; try { localStorage.setItem('crm.lv2.filtersCollapsed', S.filtersCollapsed ? '1' : '0'); } catch(_){} if (onChange) onChange(); }
+      onclick: () => { S.filtersCollapsed = !S.filtersCollapsed; try { sessionStorage.setItem('crm.lv2.filtersCollapsed', S.filtersCollapsed ? '1' : '0'); } catch(_){} if (onChange) onChange(); }
     },
       h('span', { style: { fontSize: '10.5px', fontWeight: '600', color: '#64748b', textTransform: 'uppercase', letterSpacing: '.4px' } },
         (S.filtersCollapsed ? '▸' : '▾') + ' 🔍 Filters' + (activeCount ? ' (' + activeCount + ' active)' : '')),
@@ -556,7 +561,15 @@ tr:hover .lv2-actions { opacity: 1; }
     datePresets.forEach(([k, lab]) => {
       const isActive = S.fDatePreset === k;
       row1.appendChild(h('button', {
-        style: { padding: '4px 10px', background: isActive ? '#eef2ff' : 'white', border: '1px solid ' + (isActive ? '#c7d2fe' : '#e2e8f0'), borderRadius: '14px', fontSize: '11px', cursor: 'pointer', color: isActive ? '#4338ca' : '#64748b', fontWeight: isActive ? '600' : '500' },
+        style: {
+          padding: '4px 12px',
+          background: isActive ? '#4338ca' : 'white',
+          color: isActive ? 'white' : '#64748b',
+          border: '1px solid ' + (isActive ? '#4338ca' : '#e2e8f0'),
+          borderRadius: '14px', fontSize: '11px', cursor: 'pointer',
+          fontWeight: isActive ? '700' : '500',
+          boxShadow: isActive ? '0 1px 3px rgba(67,56,202,.3)' : 'none'
+        },
         onclick: () => { applyDatePreset(k); if (onChange) onChange(); }
       }, lab));
     });
@@ -581,9 +594,18 @@ tr:hover .lv2-actions { opacity: 1; }
       const selectedCount = Array.isArray(S[stateKey]) ? S[stateKey].length : 0;
       const chipLabel = selectedCount ? (label + ': ' + selectedCount + ' selected') : (icon + ' ' + label);
       row2.appendChild(h('button', {
-        style: { padding: '5px 10px', background: selectedCount ? '#eef2ff' : 'white', border: '1px solid ' + (selectedCount ? '#c7d2fe' : '#e2e8f0'), borderRadius: '14px', fontSize: '11.5px', cursor: 'pointer', color: selectedCount ? '#4338ca' : '#64748b', fontWeight: selectedCount ? '600' : '500', display: 'inline-flex', alignItems: 'center', gap: '4px' },
+        style: {
+          padding: '5px 12px',
+          background: selectedCount ? '#4338ca' : 'white',
+          color: selectedCount ? 'white' : '#64748b',
+          border: '1px solid ' + (selectedCount ? '#4338ca' : '#e2e8f0'),
+          borderRadius: '14px', fontSize: '11.5px', cursor: 'pointer',
+          fontWeight: selectedCount ? '700' : '500',
+          display: 'inline-flex', alignItems: 'center', gap: '5px',
+          boxShadow: selectedCount ? '0 1px 3px rgba(67,56,202,.3)' : 'none'
+        },
         onclick: (ev) => openMultiSelectPopover(ev.currentTarget, label, opts, S[stateKey] || [], (sel) => { S[stateKey] = sel; if (onChange) onChange(); })
-      }, chipLabel, h('span', { style: { color: '#94a3b8' } }, '▾')));
+      }, chipLabel, h('span', { style: { color: selectedCount ? 'rgba(255,255,255,.7)' : '#94a3b8' } }, '▾')));
     };
 
     // Build option arrays
@@ -663,8 +685,17 @@ tr:hover .lv2-actions { opacity: 1; }
     }
   }
   function filterSelect(icon, lab, val, opts, onChange) {
+    // v3.7 — active state: indigo background + white-ish bg + bold border
     const sel = h('select', {
-      style: { padding: '4px 8px', background: 'white', border: '1px solid #e2e8f0', borderRadius: '14px', fontSize: '11.5px', color: val ? '#4338ca' : '#475569', cursor: 'pointer', outline: 'none', maxWidth: '160px', fontWeight: val ? '600' : '500' },
+      style: {
+        padding: '4px 10px',
+        background: val ? '#4338ca' : 'white',
+        color: val ? 'white' : '#475569',
+        border: '1px solid ' + (val ? '#4338ca' : '#e2e8f0'),
+        borderRadius: '14px', fontSize: '11.5px', cursor: 'pointer', outline: 'none',
+        maxWidth: '160px', fontWeight: val ? '700' : '500',
+        boxShadow: val ? '0 1px 3px rgba(67,56,202,.3)' : 'none'
+      },
       onchange: (e) => onChange(e.target.value)
     });
     opts.forEach(([v, lab2]) => sel.appendChild(h('option', { value: v, selected: String(v) === String(val) ? 'selected' : null }, lab2)));
@@ -1584,14 +1615,18 @@ tr:hover .lv2-actions { opacity: 1; }
         // Activity timeline (top 8)
         const actHost = document.getElementById('lv2-so-activity');
         if (actHost) {
+          // v3.7 — hide kind='score' events; only show real activity
+          // (call/wa/remark/status). Score changes are visible via the
+          // AI Score chip's hover tooltip already.
+          const realEvents = events.filter(ev => ev && ev.kind !== 'score');
           actHost.innerHTML = '';
           actHost.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' } },
             h('h3', { style: { margin: '0' } }, '📊 Recent Activity'),
-            events.length > 8 ? h('a', { style: { fontSize: '10px', color: '#6366f1', cursor: 'pointer', textDecoration: 'none' }, onclick: () => doViewFull(l) }, 'View all ' + events.length + ' →') : null));
-          if (!events.length) {
+            realEvents.length > 8 ? h('a', { style: { fontSize: '10px', color: '#6366f1', cursor: 'pointer', textDecoration: 'none' }, onclick: () => doViewFull(l) }, 'View all ' + realEvents.length + ' →') : null));
+          if (!realEvents.length) {
             actHost.appendChild(h('div', { style: { fontSize: '11.5px', color: '#94a3b8' } }, 'No activity yet'));
           } else {
-            events.slice(0, 8).forEach(ev => actHost.appendChild(buildActRow(ev)));
+            realEvents.slice(0, 8).forEach(ev => actHost.appendChild(buildActRow(ev)));
           }
         }
       } catch (e) {
