@@ -1075,7 +1075,7 @@ tr:hover .lv2-actions { opacity: 1; }
             h('button', { class: 'lv2-act wa', title: 'WhatsApp Web', onclick: () => doWaWeb(l) }, '💬'),
             h('button', { class: 'lv2-act api', title: 'Send via WhatsApp Cloud API (SmartCRM chat)', onclick: () => doWaApi(l) },
               h('span', { html: '<svg width="13" height="13" viewBox="0 0 32 32" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M16 0C7.2 0 0 7.2 0 16c0 2.8.7 5.5 2.1 7.9L0 32l8.3-2.2c2.3 1.3 4.9 1.9 7.7 1.9 8.8 0 16-7.2 16-16S24.8 0 16 0zm0 29.3c-2.5 0-4.9-.7-7-1.9l-.5-.3-5.2 1.4 1.4-5.1-.3-.5C3.2 20.7 2.7 18.4 2.7 16 2.7 8.7 8.7 2.7 16 2.7s13.3 6 13.3 13.3-6 13.3-13.3 13.3zm7.3-9.9c-.4-.2-2.4-1.2-2.7-1.3-.4-.1-.6-.2-.9.2-.3.4-1 1.3-1.2 1.5-.2.2-.4.3-.8.1-2.4-1.2-3.9-2.1-5.5-4.8-.4-.7.4-.7 1.2-2.2.1-.2.1-.5 0-.7-.1-.2-.9-2.2-1.3-3-.3-.8-.7-.7-.9-.7-.2 0-.5 0-.8 0-.3 0-.7.1-1.1.5-.4.4-1.4 1.4-1.4 3.4 0 2 1.5 3.9 1.7 4.2.2.3 2.9 4.5 7.1 6.3 2.6 1.1 3.6 1.2 4.9 1 .8-.1 2.4-1 2.7-1.9.3-1 .3-1.8.2-1.9 0-.2-.3-.3-.7-.5z"/></svg>', style: { display: 'inline-flex' } })),
-            h('button', { class: 'lv2-act ai', title: 'AI Lead Hub', onclick: () => aiHub(l) }, '🤖'),
+            h('button', { class: 'lv2-act ai', title: 'AI Quick Note — type status + remark + follow-up time', onclick: () => aiQuickNote(l) }, '🤖'),
             h('button', { class: 'lv2-act copy', title: 'Copy phone', onclick: () => doCopy(l) }, '📋')))));
     }
     if (vc.has('source')) tr.appendChild(h('td', null, h('span', { class: 'lv2-muted' }, l.source || '—')));
@@ -1597,10 +1597,7 @@ tr:hover .lv2-actions { opacity: 1; }
   function doWaWeb(l) { const ph = String(l.phone || '').replace(/\D/g, ''); window.open('https://wa.me/' + ph, '_blank'); }
   function doWaApi(l) { try { window.location.hash = '#/whatsbot/chat'; setTimeout(() => { try { window.openLeadModal && window.openLeadModal(l.id); } catch(_){} }, 400); } catch (_) {} }
   function aiHub(l) {
-    // Open the AI Hub overlay — matches Classic theme behavior.
-    // copilotProactive.js exposes window.coachOpenLeadSummary(leadId)
-    // which renders the lead AI hub (chat + summary + next steps) in
-    // a full-screen overlay.
+    // Open the AI Hub overlay — used by the ✨ AI badge on the name.
     try {
       if (typeof window.coachOpenLeadSummary === 'function') {
         return window.coachOpenLeadSummary(l.id);
@@ -1611,9 +1608,19 @@ tr:hover .lv2-actions { opacity: 1; }
         return window.LEAD_AI_HUB.open(l.id);
       }
     } catch (_) {}
-    // Last fallback — open the lead modal (the patched openLeadModal
-    // injects the AI Hub at the top of the modal body).
     doViewFull(l);
+  }
+  function aiQuickNote(l) {
+    // v3.3 — matches the Classic row's AI button behavior.
+    // openQuickNoteInline lets the user type status + remark +
+    // follow-up time and AI parses it into structured fields.
+    try {
+      if (typeof window.openQuickNoteInline === 'function') {
+        return window.openQuickNoteInline(l);
+      }
+    } catch (_) {}
+    // Fallback chain: AI Hub overlay → lead modal
+    aiHub(l);
   }
   function doCopy(l) { try { navigator.clipboard.writeText(l.phone || ''); toast('Phone copied', 'ok'); } catch (_) {} }
   function doAddNote(l) { doViewFull(l); }
