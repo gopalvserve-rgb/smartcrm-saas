@@ -218,6 +218,9 @@
 .wbv2-row:hover { background: #f5f6f6; }
 .wbv2-row.active { background: #f0f2f5; }
 .wbv2-row .top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.wbv2-chip-status { font-size: 10px !important; padding: 3px 9px !important; letter-spacing: .3px; }
+.wbv2-chip-empty { background: #f1f5f9 !important; color: #94a3b8 !important; text-transform: none !important; font-weight: 500 !important; font-style: italic; }
+
 .wbv2-row .owner { font-size: 10px; color: #667781; white-space: nowrap; }
 .wbv2-row .body { display: flex; align-items: center; gap: 10px; }
 .wbv2-row .av { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; color: white; font-weight: 600; font-size: 14px; flex-shrink: 0; }
@@ -594,11 +597,25 @@
       return;
     }
 
+    // v2.2 — backfill status_name from S.statusById when the API response
+    // didn't include it (some threads come back with only status_id).
+    rows.forEach(function (t) {
+      if (!t.status_name && t.status_id && S.statusById && S.statusById[t.status_id]) {
+        t.status_name = S.statusById[t.status_id].name;
+        t.status_color = S.statusById[t.status_id].color || t.status_color;
+      }
+    });
     rows.forEach(t => listEl.appendChild(rowEl(t)));
   }
   function rowEl(t) {
     const name = t.lead_name || t.profile_name || t.phone || '—';
-    const statusName = t.status_name || '';
+    // v2.2 — second-chance backfill in case the first pre-pass missed
+    let statusName = t.status_name || '';
+    let statusColor = t.status_color || '';
+    if (!statusName && t.status_id && S.statusById && S.statusById[t.status_id]) {
+      statusName  = S.statusById[t.status_id].name || '';
+      statusColor = S.statusById[t.status_id].color || statusColor;
+    }
     const sc = statusClass(statusName);
     const ownerName = t.assigned_name || t.user_name || '';
     const source = t.source || t.lead_source || '';
@@ -617,12 +634,22 @@
 
     // v2.0 — green pulse highlight when a NEW inbound msg just arrived
     const isNew = !!(S._newSince && S._newSince[t.lead_id]);
+    // v2.2 — status chip uses actual status.color when present; falls back to
+    // heuristic class colors. ALWAYS renders so the user can see it on every row.
+    const statusStyle = statusColor ? {
+      background: _hexLight(statusColor),
+      color: statusColor,
+      border: '1px solid ' + _hexLight(statusColor, 0.7)
+    } : null;
+    const statusChip = statusName
+      ? h('span', { class: 'wbv2-chip wbv2-chip-status ' + sc, style: statusStyle, title: 'Status: ' + statusName }, statusName)
+      : h('span', { class: 'wbv2-chip wbv2-chip-status wbv2-chip-empty', title: 'No status set' }, '— No status —');
     return h('div', {
       class: 'wbv2-row' + (isActive ? ' active' : '') + (isNew && !isActive ? ' new-msg' : ''),
       onclick: () => activateThread(t)
     },
       h('div', { class: 'top' },
-        statusName ? h('span', { class: 'wbv2-chip ' + sc }, statusName) : h('span', null),
+        statusChip,
         ownerName ? h('span', { class: 'owner' }, ownerName) : null),
       h('div', { class: 'body' },
         h('div', { class: 'av', style: { background: avatarColor(name) } }, initials(name)),
@@ -634,6 +661,19 @@
           h('span', { class: 'when' }, fmtRelative(t.last_activity_at || t.last_msg_at || t.updated_at)),
           unread > 0 ? h('span', { class: 'unread' }, String(unread)) :
             (bucket ? h('span', { class: 'ai ' + bucket }, String(score)) : null))));
+  }
+  // v2.2 — hex → light pastel for chip backgrounds (alpha 1=palest, 0.7=border)
+  function _hexLight(hex, alpha) {
+    if (!hex || hex[0] !== '#') return hex;
+    try {
+      const h6 = hex.length === 4 ? '#' + hex[1]+hex[1]+hex[2]+hex[2]+hex[3]+hex[3] : hex;
+      const r = parseInt(h6.slice(1, 3), 16);
+      const g = parseInt(h6.slice(3, 5), 16);
+      const b = parseInt(h6.slice(5, 7), 16);
+      const a = (alpha === undefined ? 0.85 : alpha);
+      const mix = function (c) { return Math.round(c + (255 - c) * a); };
+      return 'rgb(' + mix(r) + ',' + mix(g) + ',' + mix(b) + ')';
+    } catch (_) { return hex; }
   }
   async function activateThread(t) {
     S.activeLeadId = t.lead_id;
@@ -1296,10 +1336,15 @@
     // Defer data loads so the shell mounts first (caller does replaceChildren).
     setTimeout(async () => {
       try { S.me = await api('api_me').catch(() => null); } catch (_) {}
-      // Eagerly load users + phones so the pills-row dropdowns have options
-      // on first render (don't wait for the user to click a thread).
       try { S.users  = await api('api_users_list').catch(() => []) || []; } catch (_) {}
       try { S.phones = await api('api_wb_phones_list').catch(() => []) || []; } catch (_) {}
+      // v2.2 — eagerly load statuses so thread rows can backfill status_name
+      // from status_id on first paint (without waiting for a lead click).
+      try {
+        S.statuses = await api('api_statuses_list').catch(() => []) || [];
+        S.statusById = {}; S.statuses.forEach(function (s) { S.statusById[s.id] = s; });
+        if ((S.threadsRaw || []).length) renderThreads();
+      } catch (_) {}
       try { await loadThreads(); } catch (_) {}
       // Re-render pills row now that users + phones are in
       try { renderThreads(); } catch (_) {}
