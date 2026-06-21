@@ -934,6 +934,9 @@ async function api_reports_callActivity(token, filters) {
 
   // Visibility scope — admin/super_admin see all; managers see self+team; reps see self.
   let userScopeSql = '';
+  // CALL_ACTIVITY_LEAD_ONLY_v1 — when '1', hide personal calls (lead_id IS NULL)
+  const _leadOnly = await _callActivityLeadOnly();
+  const leadOnlyClause = _leadOnly ? "AND ce.lead_id IS NOT NULL" : '';
   const params = [fromIso, toIso];
   let p = 3;
   if (me.role === 'sales' || me.role === 'employee') {
