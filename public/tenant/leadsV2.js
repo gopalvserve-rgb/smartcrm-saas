@@ -207,11 +207,38 @@
 .lv2-av.s { width: 22px; height: 22px; font-size: 9px; }
 .lv2-namestack { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .lv2-nm { font-weight: 500; color: #0f172a; font-size: 13px; }
+/* v3.14 — broader theme application: header, hero, chips, buttons */
+/* Emerald */
+.lv2-theme-emerald .lv2-hero { background: linear-gradient(135deg, #ecfdf5, #ffffff) !important; }
+.lv2-theme-emerald .lv2-hero .num { color: #047857 !important; }
+.lv2-theme-emerald .lv2-namestack .lv2-nm { color: #064e3b; }
+.lv2-theme-emerald .lv2-scorechip.warm { background: #ecfdf5 !important; color: #047857 !important; border-color: #a7f3d0 !important; }
+.lv2-theme-emerald .qchip.active, .lv2-theme-emerald .qchip-status.active { background: #10b981 !important; color: white !important; border-color: #10b981 !important; }
+.lv2-theme-emerald .lv2-act.ai  { background: linear-gradient(135deg, #047857, #059669) !important; color: white !important; }
+.lv2-theme-emerald .lv2-av { box-shadow: 0 0 0 2px #d1fae5 inset; }
+/* Sunset */
+.lv2-theme-sunset .lv2-hero { background: linear-gradient(135deg, #fff7ed, #ffffff) !important; }
+.lv2-theme-sunset .lv2-hero .num { color: #c2410c !important; }
+.lv2-theme-sunset .lv2-namestack .lv2-nm { color: #7c2d12; }
+.lv2-theme-sunset .lv2-scorechip.hot { background: #fed7aa !important; color: #9a3412 !important; border-color: #fb923c !important; }
+.lv2-theme-sunset .lv2-scorechip.warm { background: #fef3c7 !important; color: #92400e !important; border-color: #fcd34d !important; }
+.lv2-theme-sunset .lv2-act.ai  { background: linear-gradient(135deg, #c2410c, #ea580c) !important; color: white !important; }
+.lv2-theme-sunset .lv2-av { box-shadow: 0 0 0 2px #fed7aa inset; }
+/* Rose */
+.lv2-theme-rose .lv2-hero { background: linear-gradient(135deg, #fff1f2, #ffffff) !important; }
+.lv2-theme-rose .lv2-hero .num { color: #be123c !important; }
+.lv2-theme-rose .lv2-namestack .lv2-nm { color: #881337; }
+.lv2-theme-rose .lv2-scorechip.hot { background: #ffe4e6 !important; color: #9f1239 !important; border-color: #fda4af !important; }
+.lv2-theme-rose .lv2-scorechip.warm { background: #fef2f2 !important; color: #b91c1c !important; border-color: #fecaca !important; }
+.lv2-theme-rose .lv2-av { box-shadow: 0 0 0 2px #ffe4e6 inset; }
+/* Mono */
+.lv2-theme-mono .lv2-hero { background: #f8fafc !important; }
+.lv2-theme-mono .lv2-hero .num { color: #0f172a !important; }
+.lv2-theme-mono .lv2-av { box-shadow: 0 0 0 2px #e2e8f0 inset; filter: grayscale(.4); }
 /* v3.12 — Color theme variants. Default is indigo (unchanged). */
 .lv2-theme-emerald tr.bucket-hot { background: #ecfdf5 !important; }
 .lv2-theme-emerald tr.bucket-warm { background: #f0fdf4 !important; }
 .lv2-theme-emerald .lv2-scorechip.hot { background: #d1fae5 !important; color: #065f46 !important; border-color: #6ee7b7 !important; }
-.lv2-theme-emerald .qchip.active { background: #10b981 !important; color: white !important; border-color: #10b981 !important; }
 .lv2-theme-emerald .lv2-act.api { background: linear-gradient(135deg, #10b981, #34d399) !important; color: white !important; }
 .lv2-theme-sunset tr.bucket-hot { background: #fff7ed !important; }
 .lv2-theme-sunset tr.bucket-warm { background: #fefce8 !important; }
@@ -404,7 +431,7 @@ tr:hover .lv2-actions { opacity: 1; }
           const t = byPhone[k];
           if (!t) return;
           const msg = String(t.last_message || t.last_message_preview || '').trim();
-          const isAutoTemplate = /^Auto Lead Capture/i.test(msg) || msg.length > 220;
+          const isAutoTemplate = /Auto Lead Capture/i.test(msg) || msg.length > 220;
           const hasRealConvo = (t.last_direction === 'in') || Number(t.unread || t.unread_count || 0) > 0 || !isAutoTemplate;
           if (hasRealConvo && msg) {
             l.last_wa_message = msg;
@@ -1008,6 +1035,42 @@ tr:hover .lv2-actions { opacity: 1; }
     // v1.5 — full re-render so filter bar (count, active pills, date inputs) reflects state
     const onFilterChange = () => { S.page = 1; renderModern(view); };
     if (!S.focusMode) wrap.appendChild(buildStatusChipBar(onFilterChange));
+    // v3.14 — Focus mode: render Hot / Warm / Nurture sections that respect current filters
+    if (S.focusMode) {
+      const rows = filtered();
+      const hot     = rows.filter(l => Number(l.smart_score || 0) >= 80);
+      const warm    = rows.filter(l => { const s = Number(l.smart_score || 0); return s >= 50 && s < 80; });
+      const nurture = rows.filter(l => Number(l.smart_score || 0) < 50);
+      const buildSection = (title, list, accent) => {
+        if (!list.length) return null;
+        const sec = h('div', { style: { marginBottom: '16px', background: 'white', borderRadius: '12px', border: '1px solid #e2e8f0', overflow: 'hidden' } });
+        sec.appendChild(h('div', {
+          style: { padding: '10px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: accent.bg, color: accent.fg, fontSize: '13px', fontWeight: '700' }
+        },
+          h('span', null, accent.emoji + ' ' + title),
+          h('span', { style: { background: 'rgba(255,255,255,.6)', padding: '2px 8px', borderRadius: '10px', fontSize: '11px' } }, list.length + ' leads')));
+        const tbl = h('table', { class: 'lv2-tbl' });
+        const tbody = h('tbody');
+        list.slice(0, 20).forEach(l => tbody.appendChild(renderModernRow(l)));
+        tbl.appendChild(tbody);
+        sec.appendChild(tbl);
+        if (list.length > 20) sec.appendChild(h('div', { style: { padding: '8px 14px', textAlign: 'center', fontSize: '11px', color: '#94a3b8', borderTop: '1px solid #f1f5f9' } }, 'Showing 20 of ' + list.length + ' — exit focus mode to see all'));
+        return sec;
+      };
+      const focusWrap = h('div', { style: { padding: '0 14px' } });
+      const hotSec = buildSection('Hot leads — act NOW', hot, { emoji: '🔥', bg: '#fef2f2', fg: '#b91c1c' });
+      const warmSec = buildSection('Warm leads — push this week', warm, { emoji: '✨', bg: '#fffbeb', fg: '#b45309' });
+      const nurSec = buildSection('Nurture — keep warm', nurture, { emoji: '❄️', bg: '#eff6ff', fg: '#1e40af' });
+      if (hotSec) focusWrap.appendChild(hotSec);
+      if (warmSec) focusWrap.appendChild(warmSec);
+      if (nurSec) focusWrap.appendChild(nurSec);
+      if (!hot.length && !warm.length && !nurture.length) {
+        focusWrap.appendChild(h('div', { style: { padding: '40px', textAlign: 'center', color: '#94a3b8' } }, 'No leads match your current filters'));
+      }
+      wrap.appendChild(focusWrap);
+      view.appendChild(wrap);
+      return;  // skip the regular table render
+    }
 
     // Full filter bar — always visible (the user's main tool)
     wrap.appendChild(buildFilterBar(onFilterChange));
@@ -1199,6 +1262,8 @@ tr:hover .lv2-actions { opacity: 1; }
       h('button', { style: bulkBtn(), title: 'Assign to user', onclick: () => bulkAction('assign') }, '👤 Assign'),
       h('button', { style: bulkBtn(), title: 'Change status', onclick: () => bulkAction('status') }, '🎯 Status'),
       h('button', { style: bulkBtn(), title: 'Add tag', onclick: () => bulkAction('tag') }, '🔖 Tag'),
+      h('button', { style: bulkBtn(), title: 'Share with user', onclick: () => bulkAction('share') }, '🤝 Share'),
+      h('button', { style: bulkBtn(), title: 'Send WA template via API', onclick: () => bulkAction('waapi') }, '💬 WA API'),
       h('button', { style: bulkBtn(), title: 'Export CSV', onclick: () => bulkAction('export') }, '↓ Export'),
       h('button', { style: bulkBtn('danger'), title: 'Delete', onclick: () => bulkAction('delete') }, '🗑 Delete'),
       h('button', { style: { background: 'transparent', color: '#94a3b8', border: 'none', cursor: 'pointer', fontSize: '18px', padding: '0 4px' }, title: 'Clear selection', onclick: () => { S.bulkSel.clear(); document.querySelectorAll('input[type=checkbox]').forEach(c => c.checked = false); renderBulkBar(); } }, '✕')
@@ -1212,14 +1277,23 @@ tr:hover .lv2-actions { opacity: 1; }
       fontSize: '12px', fontWeight: '600'
     };
   }
+  // v3.14 — Show a small modal with a real <select> instead of prompt()
+  function _bulkModal(title, body, onSubmit) {
+    const ov = h('div', { style: { position: 'fixed', inset: '0', background: 'rgba(15,23,42,.5)', zIndex: '99999', display: 'flex', alignItems: 'center', justifyContent: 'center' }, onclick: (e) => { if (e.target === ov) ov.remove(); } });
+    const card = h('div', { style: { background: 'white', borderRadius: '12px', padding: '20px', minWidth: '340px', maxWidth: '440px', boxShadow: '0 25px 60px rgba(0,0,0,.3)' } },
+      h('h3', { style: { margin: '0 0 14px', fontSize: '15px', color: '#0f172a' } }, title),
+      body,
+      h('div', { style: { display: 'flex', gap: '8px', marginTop: '16px', justifyContent: 'flex-end' } },
+        h('button', { style: { padding: '8px 16px', background: 'white', border: '1px solid #cbd5e1', borderRadius: '6px', cursor: 'pointer', fontSize: '13px' }, onclick: () => ov.remove() }, 'Cancel'),
+        h('button', { style: { padding: '8px 16px', background: '#0f172a', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: '600' }, onclick: () => { onSubmit(); ov.remove(); } }, 'Apply')));
+    ov.appendChild(card); document.body.appendChild(ov);
+  }
+
   function bulkAction(action) {
     const ids = Array.from(S.bulkSel || []);
     if (!ids.length) return;
-    // Delegate to Classic's bulk-action handlers when available — they
-    // already have full UI for assign/status/tag/delete prompts.
     try {
       if (action === 'export') {
-        // Simple CSV export of selected leads
         const headers = ['Name','Phone','Email','Status','Owner','Source'];
         const rows = ids.map(id => {
           const l = (S.leads || []).find(x => Number(x.id) === Number(id)) || {};
@@ -1232,22 +1306,57 @@ tr:hover .lv2-actions { opacity: 1; }
         setTimeout(() => URL.revokeObjectURL(url), 1000);
         return;
       }
-      if (window.CRM && typeof window.CRM.bulkAction === 'function') {
-        window.CRM.bulkAction(ids, action); return;
-      }
-      // Fallback prompts
       if (action === 'assign') {
-        const userId = prompt('Assign to user ID (or pick from Classic view):'); if (!userId) return;
-        Promise.all(ids.map(id => api('api_leads_update', { id: id, assigned_to: Number(userId) }))).then(() => { toast('✓ Assigned ' + ids.length + ' leads', 'ok'); S.bulkSel.clear(); load(); }).catch(e => toast(e.message, 'err'));
-      } else if (action === 'status') {
-        const statusId = prompt('Status ID:'); if (!statusId) return;
-        Promise.all(ids.map(id => api('api_leads_update', { id: id, status_id: Number(statusId) }))).then(() => { toast('✓ Updated ' + ids.length, 'ok'); S.bulkSel.clear(); load(); }).catch(e => toast(e.message, 'err'));
-      } else if (action === 'tag') {
-        const tag = prompt('Tag to add:'); if (!tag) return;
-        Promise.all(ids.map(id => api('api_leads_addTag', { lead_id: id, tag: tag }).catch(()=>{}))).then(() => { toast('✓ Tagged ' + ids.length, 'ok'); S.bulkSel.clear(); load(); });
-      } else if (action === 'delete') {
+        const sel = h('select', { style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' } },
+          h('option', { value: '' }, '— Select user —'),
+          ...(S.users || []).map(u => h('option', { value: u.id }, u.name)));
+        _bulkModal('Assign ' + ids.length + ' leads', sel, () => {
+          const uid = sel.value; if (!uid) return;
+          api('api_leads_bulkUpdate', ids, { assigned_to: Number(uid) }).then(() => { toast('✓ Assigned ' + ids.length + ' leads', 'ok'); S.bulkSel.clear(); load(); renderBulkBar(); }).catch(e => toast(e.message, 'err'));
+        });
+        return;
+      }
+      if (action === 'status') {
+        const sel = h('select', { style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' } },
+          h('option', { value: '' }, '— Select status —'),
+          ...(S.statuses || []).map(s => h('option', { value: s.id }, s.name)));
+        _bulkModal('Change status for ' + ids.length + ' leads', sel, () => {
+          const sid = sel.value; if (!sid) return;
+          api('api_leads_bulkUpdate', ids, { status_id: Number(sid) }).then(() => { toast('✓ Updated ' + ids.length + ' leads', 'ok'); S.bulkSel.clear(); load(); renderBulkBar(); }).catch(e => toast(e.message, 'err'));
+        });
+        return;
+      }
+      if (action === 'tag') {
+        const inp = h('input', { type: 'text', placeholder: 'Tag name', style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' } });
+        _bulkModal('Add tag to ' + ids.length + ' leads', inp, () => {
+          const tag = String(inp.value || '').trim(); if (!tag) return;
+          api('api_leads_bulkUpdate', ids, { add_tag: tag }).catch(() =>
+            Promise.all(ids.map(id => api('api_leads_addTag', { lead_id: id, tag: tag }).catch(()=>{})))).then(() => { toast('✓ Tagged ' + ids.length + ' leads', 'ok'); S.bulkSel.clear(); load(); renderBulkBar(); });
+        });
+        return;
+      }
+      if (action === 'share') {
+        const sel = h('select', { style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' } },
+          h('option', { value: '' }, '— Select user to share with —'),
+          ...(S.users || []).map(u => h('option', { value: u.id }, u.name)));
+        _bulkModal('Share ' + ids.length + ' leads with…', sel, () => {
+          const uid = sel.value; if (!uid) return;
+          api('api_leads_bulkShare', ids, Number(uid)).then(() => { toast('✓ Shared ' + ids.length + ' leads', 'ok'); S.bulkSel.clear(); load(); renderBulkBar(); }).catch(e => toast(e.message, 'err'));
+        });
+        return;
+      }
+      if (action === 'waapi') {
+        // Best-effort: queue a WA template send by opening Classic's bulk WA flow.
+        if (window.CRM && typeof window.CRM.bulkSendWaTemplate === 'function') {
+          window.CRM.bulkSendWaTemplate(ids); return;
+        }
+        toast('WA API bulk send — please use Classic view\'s "Send WA Template" for now', 'err');
+        return;
+      }
+      if (action === 'delete') {
         if (!confirm('Delete ' + ids.length + ' leads? This cannot be undone.')) return;
-        Promise.all(ids.map(id => api('api_leads_delete', id))).then(() => { toast('✓ Deleted ' + ids.length, 'ok'); S.bulkSel.clear(); load(); }).catch(e => toast(e.message, 'err'));
+        api('api_leads_bulkDelete', ids).then(() => { toast('✓ Deleted ' + ids.length + ' leads', 'ok'); S.bulkSel.clear(); load(); renderBulkBar(); }).catch(e => toast(e.message, 'err'));
+        return;
       }
     } catch (e) { toast(e.message, 'err'); }
   }
@@ -1372,15 +1481,15 @@ tr:hover .lv2-actions { opacity: 1; }
             '📅 ' + new Date(l.next_followup_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }))
         : h('span', { class: 'lv2-muted' }, '—')));
     }
-    // v3.13 — Apply 'auto-template' filter at render time too (last_wa_text
-    // from the leads API isn't filtered). Hide anything that starts with
-    // 'Auto Lead Capture' or is >220 chars — both signal it's the system
-    // welcome template, not a real customer reply.
+    // v3.14 — broader filter: 'Auto Lead Capture' may have bullet/whitespace
+    // prefix ('• Auto Lead Capture …'), or appear inside the body. Strip
+    // common leading punctuation before testing, AND test 'contains'.
     if (vc.has('lastwa')) {
       let waMsg = l.last_wa_message || l.last_wa_text || '';
       if (waMsg) {
-        const trimmed = String(waMsg).trim();
-        if (/^Auto Lead Capture/i.test(trimmed) || trimmed.length > 220) waMsg = '';
+        const raw = String(waMsg).trim();
+        const stripped = raw.replace(/^[\s•·*\-—:]+/, '').trim();
+        if (/Auto Lead Capture/i.test(raw) || stripped.length > 220) waMsg = '';
       }
       const waDir = l.last_wa_direction || '';
       const arrow = waDir === 'in' ? '⬅ ' : waDir === 'out' ? '➡ ' : '';
