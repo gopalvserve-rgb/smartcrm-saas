@@ -236,7 +236,9 @@
 .wbv2-new-pill { background: linear-gradient(135deg, #ef4444, #f97316); color: white; font-size: 9px; font-weight: 800; padding: 2px 8px; border-radius: 10px; letter-spacing: .5px; text-transform: uppercase; box-shadow: 0 1px 4px rgba(239,68,68,.5); animation: wbv2-newpill-bounce 1.2s ease-in-out infinite; white-space: nowrap; }
 @keyframes wbv2-newpill-bounce { 0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239,68,68,.5); } 50% { transform: scale(1.08); box-shadow: 0 0 0 4px rgba(239,68,68,0); } }
 .wbv2-row.new-msg .name { color: #991b1b; font-weight: 700; }
-.wbv2-row .unread { background: #00a884; color: white; font-size: 10px; padding: 1px 7px; border-radius: 10px; font-weight: 600; min-width: 18px; text-align: center; }
+.wbv2-row .unread { background: #00a884; color: white; font-size: 11px; padding: 3px 8px; border-radius: 10px; font-weight: 700; min-width: 22px; text-align: center; box-shadow: 0 1px 3px rgba(0,168,132,.4); }
+.wbv2-av-dot { position: absolute; top: -2px; right: -2px; width: 14px; height: 14px; background: #ef4444; border: 2px solid white; border-radius: 50%; box-shadow: 0 1px 3px rgba(239,68,68,.5); animation: wbv2-newpill-bounce 1.5s ease-in-out infinite; pointer-events: none; z-index: 2; }
+
 .wbv2-row .ai { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 8px; }
 .wbv2-row .ai.hot  { background: #fde7e7; color: #c04444; }
 .wbv2-row .ai.warm { background: #fff4e0; color: #b88217; }
@@ -675,7 +677,14 @@
         statusChip,
         ownerName ? h('span', { class: 'owner' }, ownerName) : null),
       h('div', { class: 'body' },
-        h('div', { class: 'av', style: { background: avatarColor(name) } }, initials(name)),
+        h('div', { class: 'av', style: { background: avatarColor(name), position: 'relative' } },
+          initials(name),
+          // v2.7 — small red dot overlay on avatar when there's any unread/new.
+          // This is the at-a-glance signal — impossible to miss.
+          (unread > 0 || isNew) ? h('span', {
+            class: 'wbv2-av-dot',
+            title: isNew ? 'New message just arrived' : (unread + ' unread')
+          }) : null),
         h('div', { class: 'text' },
           h('div', { class: 'name' }, name),
           h('div', { class: 'preview' }, (previewIcon + (preview || ' ')).slice(0, 80)),
@@ -684,9 +693,13 @@
           h('span', { class: 'when' }, fmtRelative(t.last_activity_at || t.last_msg_at || t.updated_at)),
           // v2.5 — NEW pill takes priority when a fresh inbound just arrived.
           // Persistent pulse so the user spots it even at a glance.
+          // v2.7 — disambiguate from the status='New' pill at top-left:
+          //   - '📩 NEW MSG' pill when a fresh inbound just arrived
+          //   - '📩 N' green chip when there are unread messages
+          //   - score bucket chip otherwise
           isNew
-            ? h('span', { class: 'wbv2-new-pill', title: 'New message just arrived' }, '\u26a1 NEW')
-            : (unread > 0 ? h('span', { class: 'unread' }, String(unread)) :
+            ? h('span', { class: 'wbv2-new-pill', title: 'New message just arrived' }, '\ud83d\udce9 NEW MSG')
+            : (unread > 0 ? h('span', { class: 'unread', title: unread + ' unread message' + (unread === 1 ? '' : 's') }, '\ud83d\udce9 ' + String(unread)) :
                 (bucket ? h('span', { class: 'ai ' + bucket }, String(score)) : null)))));
   }
   // v2.2 — hex → light pastel for chip backgrounds (alpha 1=palest, 0.7=border)
