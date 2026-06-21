@@ -590,25 +590,14 @@
     // last_activity_at desc. Without this an old thread with new
     // unread messages could be 50 rows down because timestamp wasn't
     // updated by the WA webhook handler.
-    // v2.11 — Sort tiers ensure NEWEST always on top:
-    //   1. Just-arrived inbound (poll diff catches it)
-    //   2. Any unread (more unread above lower count)
-    //   3. Most recent activity timestamp (API's t.last_at is
-    //      authoritative — falls back through last_activity_at,
-    //      last_msg_at, updated_at, created_at for safety).
+    // v2.12 — STRICT NEWEST-FIRST sort, matching WhatsApp's own behavior.
+    // A thread that just received a new message MUST appear at #1, regardless
+    // of how many older threads have higher unread counts. Unread count is
+    // shown as a chip but never reorders the list.
+    const _ts = function (t) {
+      return new Date(t.last_at || t.last_activity_at || t.last_msg_at || t.updated_at || t.created_at || 0).getTime();
+    };
     const _sortedSrc = (S.threadsRaw || []).slice().sort(function (a, b) {
-      const aU = Number(a.unread || a.unread_count || 0);
-      const bU = Number(b.unread || b.unread_count || 0);
-      const aNew = (S._newSince && S._newSince[a.lead_id]) ? 1 : 0;
-      const bNew = (S._newSince && S._newSince[b.lead_id]) ? 1 : 0;
-      // Tier 1: 'just arrived' wins
-      if (aNew !== bNew) return bNew - aNew;
-      // Tier 2: thread with more unread on top
-      if (aU !== bU) return bU - aU;
-      // Tier 3: most recent activity (try every plausible timestamp field)
-      const _ts = function (t) {
-        return new Date(t.last_at || t.last_activity_at || t.last_msg_at || t.updated_at || t.created_at || 0).getTime();
-      };
       return _ts(b) - _ts(a);
     });
     let rows = _sortedSrc.filter(t => {
