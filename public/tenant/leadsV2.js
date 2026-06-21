@@ -1567,13 +1567,40 @@ tr:hover .lv2-actions { opacity: 1; }
             callHost.appendChild(h('div', { style: { fontSize: '11.5px', color: '#94a3b8' } }, 'No calls yet'));
           } else {
             const dirLabel = lastCall.dir === 'in' ? '📞 Incoming' : lastCall.dir === 'out' ? '📞 Outgoing' : lastCall.dir === 'missed' ? '📵 Missed' : '📞 Call';
-            const durLabel = lastCall.duration ? Math.floor(lastCall.duration / 60) + 'm ' + (lastCall.duration % 60) + 's' : 'no duration';
+            const dSec = Number(lastCall.duration || 0);
+            const durLabel = dSec
+              ? (dSec >= 3600 ? (Math.floor(dSec/3600)+'h ' + Math.floor((dSec%3600)/60) + 'm') : (Math.floor(dSec / 60) + 'm ' + (dSec % 60) + 's'))
+              : 'no duration';
+            // v3.9 — absolute date + time + relative for the LAST CALL header
+            function _fmtDT(iso) {
+              if (!iso) return '';
+              const d = new Date(iso); if (isNaN(d)) return String(iso);
+              const datePart = d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+              const timePart = d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true });
+              return datePart + ' · ' + timePart;
+            }
             callHost.appendChild(h('div', { style: { fontSize: '12px', color: '#1e293b', fontWeight: '600' } },
               dirLabel + ' · ' + durLabel));
-            callHost.appendChild(h('div', { style: { fontSize: '10px', color: '#94a3b8', marginTop: '2px' } }, fmtRel(lastCall.at)));
+            callHost.appendChild(h('div', { style: { fontSize: '10.5px', color: '#475569', marginTop: '3px', fontWeight: '500' } },
+              '🕐 ' + _fmtDT(lastCall.at) + ' ',
+              h('span', { style: { color: '#94a3b8', fontWeight: '400' } }, '(' + fmtRel(lastCall.at) + ' ago)')));
             if (lastCall.recording) {
-              callHost.appendChild(h('audio', { controls: 'controls', src: lastCall.recording,
-                style: { width: '100%', marginTop: '8px', height: '32px' } }));
+              // v3.9 — build authenticated playback URL.
+              // /api/recordings/:id/audio requires (a) tenant slug prefix when
+              // served via /t/<slug>/ and (b) ?token=<crm_token> for auth.
+              // Without these the <audio> element silently 401s and Play stays at 0:00/0:00.
+              let _recUrl = lastCall.recording;
+              try {
+                const _slug = (typeof window !== 'undefined' && window.TENANT_SLUG) ? window.TENANT_SLUG : '';
+                const _tok = (typeof window !== 'undefined' && (window.CRM && window.CRM.token)) ? window.CRM.token : '';
+                // Strip any existing tenant prefix, then re-add it from window.TENANT_SLUG
+                let _path = _recUrl.replace(/^\/t\/[^/]+/, '');
+                if (!_path.startsWith('/')) _path = '/' + _path;
+                _recUrl = (_slug ? '/t/' + _slug : '') + _path + (_tok ? (_path.indexOf('?') >= 0 ? '&' : '?') + 'token=' + encodeURIComponent(_tok) : '');
+              } catch (_) {}
+              const _audioEl = h('audio', { controls: 'controls', src: _recUrl, preload: 'metadata',
+                style: { width: '100%', marginTop: '8px', height: '32px' } });
+              callHost.appendChild(_audioEl);
               const auditId = 'lv2-audit-' + l.id;
               callHost.appendChild(h('div', { id: auditId, style: { marginTop: '8px' } },
                 h('button', {
