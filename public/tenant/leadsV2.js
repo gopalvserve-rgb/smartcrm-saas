@@ -133,6 +133,18 @@
     if (sec < 7 * 86400) return Math.floor(sec / 86400) + 'd';
     return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
   }
+  // v3.10 — Standard date+time+relative format: "20 Jun, 2:58 PM (1d)"
+  // Used everywhere we need user-friendly absolute timestamps. The
+  // relative part keeps the at-a-glance recency, the absolute part
+  // gives precision when scanning columns or hovering rows.
+  function fmtDateTimeRel(iso) {
+    if (!iso) return '';
+    const d = new Date(iso); if (isNaN(d)) return String(iso);
+    const datePart = d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+    const timePart = d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true });
+    const rel = fmtRel(iso);
+    return datePart + ', ' + timePart + (rel ? ' (' + rel + ')' : '');
+  }
   function sparkSvg(score) {
     score = Number(score || 0);
     const bucket = scoreBucket(score);
@@ -1202,8 +1214,16 @@ tr:hover .lv2-actions { opacity: 1; }
     if (vc.has('tags'))     tr.appendChild(h('td', null, h('span', { class: 'lv2-muted', style: { fontSize: '11px' } }, l.tags || '—')));
     if (vc.has('city'))     tr.appendChild(h('td', null, h('span', { class: 'lv2-muted' }, l.city || '—')));
     if (vc.has('product'))  tr.appendChild(h('td', null, h('span', { class: 'lv2-muted' }, l.product_name || '—')));
-    if (vc.has('activity')) tr.appendChild(h('td', null, h('span', { class: 'lv2-muted' }, fmtRel(l.last_activity_at || l.updated_at))));
-    if (vc.has('created'))  tr.appendChild(h('td', null, h('span', { class: 'lv2-muted' }, fmtRel(l.created_at))));
+    // v3.10 — Activity + Created columns show full date+time+relative:
+    // "20 Jun, 2:58 PM (1d)". Title attr also lets user hover to see
+    // year + seconds for absolute precision.
+    if (vc.has('activity')) {
+      const aIso = l.last_activity_at || l.updated_at;
+      tr.appendChild(h('td', null, h('span', { class: 'lv2-muted', title: aIso ? new Date(aIso).toLocaleString('en-IN') : '' }, fmtDateTimeRel(aIso))));
+    }
+    if (vc.has('created'))  {
+      tr.appendChild(h('td', null, h('span', { class: 'lv2-muted', title: l.created_at ? new Date(l.created_at).toLocaleString('en-IN') : '' }, fmtDateTimeRel(l.created_at))));
+    }
     return tr;
   }
   function aiHint(l) {
@@ -1310,7 +1330,7 @@ tr:hover .lv2-actions { opacity: 1; }
         h('div', { class: 'name' }, name,
           bucket ? h('span', { class: 'lv2-scorechip ' + bucket, style: { marginLeft: '8px', fontSize: '10px', verticalAlign: 'middle', cursor: 'help' },
             title: 'AI Score: ' + score + ' · ' + bucketLab + (l.score_reason ? '\n\nWhy:\n' + l.score_reason : '') }, score + ' · ' + bucketLab) : null),
-        h('div', { class: 'sub' }, (l.phone ? '📞 ' + l.phone : '') + (l.email ? ' · 📧 ' + l.email : '') + ' · created ' + fmtRel(l.created_at))),
+        h('div', { class: 'sub' }, (l.phone ? '📞 ' + l.phone : '') + (l.email ? ' · 📧 ' + l.email : '') + ' · created ' + fmtDateTimeRel(l.created_at))),
       h('div', { class: 'x', onclick: closeSlideOver }, '✕')));
 
     const body = h('div', { class: 'lv2-so-body', id: 'lv2-so-body' });
@@ -1551,7 +1571,7 @@ tr:hover .lv2-actions { opacity: 1; }
           } else {
             const dirLabel = lastWa.dir === 'in' ? '⬅ Received' : '➡ Sent';
             waHost.appendChild(h('div', { style: { fontSize: '11px', color: '#64748b', marginBottom: '4px' } },
-              dirLabel + ' · ' + fmtRel(lastWa.at)));
+              dirLabel + ' · ' + fmtDateTimeRel(lastWa.at)));
             waHost.appendChild(h('div', { style: { fontSize: '12.5px', color: '#1e293b', whiteSpace: 'pre-wrap', background: '#f8fafc', padding: '8px 10px', borderRadius: '6px', borderLeft: '3px solid ' + (lastWa.dir === 'in' ? '#3b82f6' : '#10b981'), maxHeight: '120px', overflowY: 'auto' } },
               String(lastWa.text || '(media)').slice(0, 400)));
           }
@@ -1706,7 +1726,7 @@ tr:hover .lv2-actions { opacity: 1; }
       h('div', { style: { flex: '1', minWidth: '0' } },
         h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: '6px' } },
           h('span', { style: { fontWeight: '600', color: '#0f172a' } }, who),
-          h('span', { style: { fontSize: '10px', color: '#94a3b8' } }, fmtRel(ev.at))),
+          h('span', { style: { fontSize: '10px', color: '#94a3b8' }, title: ev.at ? new Date(ev.at).toLocaleString('en-IN') : '' }, fmtDateTimeRel(ev.at))),
         detail ? h('div', { style: { color: '#64748b', marginTop: '2px' } }, detail) : null));
   }
   function closeSlideOver() {
@@ -1876,7 +1896,7 @@ tr:hover .lv2-actions { opacity: 1; }
       h('div', { class: 'top' },
         h('div', { class: 'lv2-av s', style: { background: avColor(name) } }, initials(name)),
         h('span', { class: 'nm' }, name),
-        h('span', { class: 'when' }, fmtRel(l.last_activity_at || l.created_at))),
+        h('span', { class: 'when', title: (l.last_activity_at || l.created_at) ? new Date(l.last_activity_at || l.created_at).toLocaleString('en-IN') : '' }, fmtRel(l.last_activity_at || l.created_at))),
       h('div', { class: 'meta' },
         h('span', { class: 'stagetag ' + stat }, (l.status_name || 'New').slice(0, 18)),
         h('span', null, (l.assigned_name || 'Unassigned') + (l.source ? ' · ' + l.source : ''))),
