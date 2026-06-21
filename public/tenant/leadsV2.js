@@ -1099,14 +1099,32 @@ tr:hover .lv2-actions { opacity: 1; }
     // owner, source, search, status_id) still apply. Empty buckets show
     // a clear empty state instead of being hidden.
     if (S.focusMode) {
-      // Snapshot + temporarily clear the score-based statusChip so all 3
-      // buckets populate. Then restore after.
-      const _savedChip = S.statusChip;
+      // v3.17 — Snapshot + temporarily clear ALL score-based filters so all 3
+      // buckets populate. Restore after. Three signals are score-based and
+      // would otherwise strip warm/nurture BEFORE the bucket split:
+      //   - S.statusChip ('hot' | 'warm' | 'cold')
+      //   - S.filter ('hot' quick-chip — filtered() line: if S.filter==='hot' && score<80 return false)
+      //   - S.fScore ['hot','warm','cold'] multi-select chip
+      // Date / owner / source / specific status_id / qualified / followup
+      // are NOT score-based, so they stay active.
+      const _savedChip   = S.statusChip;
+      const _savedFilter = S.filter;
+      const _savedScore  = S.fScore;
       if (_savedChip === 'hot' || _savedChip === 'warm' || _savedChip === 'cold' || _savedChip === 'nurture') {
         S.statusChip = 'all';
       }
+      if (_savedFilter === 'hot') {
+        S.filter = 'all';
+      }
+      // Clear multi-select score filter too
+      if (Array.isArray(_savedScore) && _savedScore.length) {
+        S.fScore = [];
+      }
       const rows = filtered();
-      S.statusChip = _savedChip; // restore
+      S.statusChip = _savedChip;  // restore
+      S.filter     = _savedFilter;
+      S.fScore     = _savedScore;
+      console.log('[LEADS_V2] focus mode: rows=' + rows.length + ' (after bypassing score-based filters)');
 
       // Sort within each bucket: highest score first
       const sortByScore = (a, b) => Number(b.smart_score || 0) - Number(a.smart_score || 0);
