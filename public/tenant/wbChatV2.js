@@ -411,11 +411,11 @@
   function _wbv2DiffNew(prevList, newList) {
     try {
       const prevMap = {};
-      (prevList || []).forEach(function (t) { prevMap[t.lead_id] = Number(t.unread_count || 0); });
+      (prevList || []).forEach(function (t) { prevMap[t.lead_id] = Number(t.unread || t.unread_count || 0); });
       const newSince = S._newSince || {};
       (newList || []).forEach(function (t) {
         const prevU = prevMap[t.lead_id] || 0;
-        const nowU  = Number(t.unread_count || 0);
+        const nowU  = Number(t.unread || t.unread_count || 0);
         if (nowU > prevU) newSince[t.lead_id] = Date.now();
       });
       S._newSince = newSince;
@@ -524,7 +524,7 @@
           oninput: (e) => { S.search = e.target.value; renderThreadList(); } }))));
 
     // Filter pills + assignee + phone selectors
-    const unreadCount = (S.threadsRaw || []).filter(t => Number(t.unread_count || 0) > 0).length;
+    const unreadCount = (S.threadsRaw || []).filter(t => Number(t.unread || t.unread_count || 0) > 0).length;
     const usersForFilter = S.users.length ? S.users : ((window.CRM && CRM.cache && CRM.cache.users) || []);
     const phonesForFilter = S.phones || [];
 
@@ -591,8 +591,8 @@
     // unread messages could be 50 rows down because timestamp wasn't
     // updated by the WA webhook handler.
     const _sortedSrc = (S.threadsRaw || []).slice().sort(function (a, b) {
-      const aU = Number(a.unread_count || 0);
-      const bU = Number(b.unread_count || 0);
+      const aU = Number(a.unread || a.unread_count || 0);
+      const bU = Number(b.unread || b.unread_count || 0);
       const aNew = (S._newSince && S._newSince[a.lead_id]) ? 1 : 0;
       const bNew = (S._newSince && S._newSince[b.lead_id]) ? 1 : 0;
       // Tier 1: green-pulse "just arrived" wins
@@ -610,7 +610,7 @@
         const age = now - new Date(last).getTime();
         if (age > cutoffMs) return false;
       }
-      if (S.filter === 'unread' && !Number(t.unread_count || 0)) return false;
+      if (S.filter === 'unread' && !Number(t.unread || t.unread_count || 0)) return false;
       if (S.filter === 'mine' && meId && Number(t.assigned_to || 0) !== Number(meId)) return false;
       if (S.filterAssignee && Number(t.assigned_to || 0) !== Number(S.filterAssignee)) return false;
       if (S.filterPhoneId && String(t.phone_number_id || '') !== String(S.filterPhoneId)) return false;
@@ -655,7 +655,7 @@
                      : t.last_message_type === 'video'    ? '🎬 '
                      : t.last_message_type === 'document' ? '📎 '
                      : '';
-    const unread = Number(t.unread_count || 0);
+    const unread = Number(t.unread || t.unread_count || 0);
     const score  = Number(t.ai_score || 0);
     const bucket = score >= 80 ? 'hot' : score >= 50 ? 'warm' : score > 0 ? 'cold' : '';
 
