@@ -1286,12 +1286,25 @@ async function api_leads_create(token, payload) {
 //     tracking depends on)
 // Admin can change them — for legitimate corrections after talking to the
 // customer.
-const CAMPAIGN_LOCKED_FIELDS = [
-  'name', 'phone', 'whatsapp', 'email',
+// Pure-attribution fields — admin-only. These are critical for
+// Google/Meta ads conversion tracking and must never be changed by
+// anyone below admin, regardless of leads.edit permission.
+const ATTRIBUTION_LOCKED_FIELDS = [
   'source', 'source_ref',
   'gclid', 'gad_campaignid',
   'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content'
 ];
+// PII fields — locked by default for non-admins (protects against reps
+// "fixing" typos the customer actually typed), BUT unlocked when the
+// user has the `leads.edit` permission with global/team/self scope.
+// 2026-06-21 (LEADS_EDIT_PII_v1): tenant-granted leads.edit perm now
+// actually lets users edit name/phone/whatsapp/email. Previously this
+// list was named CAMPAIGN_LOCKED_FIELDS and stripped these fields
+// silently for every non-admin even when leads.edit was granted.
+const PII_FIELDS = ['name', 'phone', 'whatsapp', 'email'];
+// Back-compat alias — old code path that still references this name
+// gets the strict union (admin-only behaviour preserved).
+const CAMPAIGN_LOCKED_FIELDS = [...PII_FIELDS, ...ATTRIBUTION_LOCKED_FIELDS];
 
 
 /**
@@ -1413,19 +1426,48 @@ async function api_leads_update(token, id, patch) {
   // these inputs as readonly, but a determined user could still POST to the
   // API directly. The strip here is the source of truth.
   if (me.role !== 'admin') {
-    const blocked = [];
-    for (const f of CAMPAIGN_LOCKED_FIELDS) {
+    // Strip ATTRIBUTION fields silently — these are admin-only always.
+    const blockedAttr = [];
+    for (const f of ATTRIBUTION_LOCKED_FIELDS) {
       if (f in patch && String(patch[f] || '') !== String(lead[f] || '')) {
-        blocked.push(f);
+        blockedAttr.push(f);
         delete patch[f];
       }
     }
-    if (blocked.length > 0) {
-      // Don't fail the whole save — just record it. The legitimate edits in
-      // the same patch (status, follow-up, notes) should still succeed.
+    if (blockedAttr.length > 0) {
       console.warn(
-        `[leads] non-admin user ${me.id} (${me.role}) tried to change locked campaign fields on lead ${id}: ${blocked.join(', ')} — ignored`
+        `[leads] non-admin user ${me.id} (${me.role}) tried to change attribution-locked fields on lead ${id}: ${blockedAttr.join(', ')} — ignored`
       );
+    }
+    // LEADS_EDIT_PII_v1 (2026-06-21) — PII fields (name/phone/whatsapp/email)
+    // are now unlocked when the user has the leads.edit permission. Falls
+    // back to the old behaviour (strip silently) when the perm isn't granted.
+    // This honours the tenant admin's intent when they grant leads.edit.
+    let canEditPii = false;
+    try {
+      const _perms = require('./permissions');
+      // Any scope (self/team/global) counts — if the admin granted leads.edit
+      // at all, the user can change PII on leads they can see (visibility was
+      // already enforced above by _isVisibleOrShared).
+      const scope = await _perms.can(me, 'leads.edit');
+      canEditPii = !!scope;
+    } catch (e) {
+      // permissions module unavailable on very old tenants — keep strict default
+      canEditPii = false;
+    }
+    if (!canEditPii) {
+      const blockedPii = [];
+      for (const f of PII_FIELDS) {
+        if (f in patch && String(patch[f] || '') !== String(lead[f] || '')) {
+          blockedPii.push(f);
+          delete patch[f];
+        }
+      }
+      if (blockedPii.length > 0) {
+        console.warn(
+          `[leads] user ${me.id} (${me.role}) tried to change PII fields without leads.edit on lead ${id}: ${blockedPii.join(', ')} — ignored. Grant leads.edit in Settings to allow.`
+        );
+      }
     }
   }
 
