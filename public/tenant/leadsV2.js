@@ -207,6 +207,24 @@
 .lv2-av.s { width: 22px; height: 22px; font-size: 9px; }
 .lv2-namestack { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .lv2-nm { font-weight: 500; color: #0f172a; font-size: 13px; }
+/* v3.12 — Color theme variants. Default is indigo (unchanged). */
+.lv2-theme-emerald tr.bucket-hot { background: #ecfdf5 !important; }
+.lv2-theme-emerald tr.bucket-warm { background: #f0fdf4 !important; }
+.lv2-theme-emerald .lv2-scorechip.hot { background: #d1fae5 !important; color: #065f46 !important; border-color: #6ee7b7 !important; }
+.lv2-theme-emerald .qchip.active { background: #10b981 !important; color: white !important; border-color: #10b981 !important; }
+.lv2-theme-emerald .lv2-act.api { background: linear-gradient(135deg, #10b981, #34d399) !important; color: white !important; }
+.lv2-theme-sunset tr.bucket-hot { background: #fff7ed !important; }
+.lv2-theme-sunset tr.bucket-warm { background: #fefce8 !important; }
+.lv2-theme-sunset .qchip.active { background: #f97316 !important; color: white !important; border-color: #f97316 !important; }
+.lv2-theme-sunset .lv2-act.api { background: linear-gradient(135deg, #f97316, #fb923c) !important; color: white !important; }
+.lv2-theme-rose tr.bucket-hot { background: #fef2f2 !important; }
+.lv2-theme-rose tr.bucket-warm { background: #fff1f2 !important; }
+.lv2-theme-rose .qchip.active { background: #e11d48 !important; color: white !important; border-color: #e11d48 !important; }
+.lv2-theme-rose .lv2-act.api { background: linear-gradient(135deg, #e11d48, #f43f5e) !important; color: white !important; }
+.lv2-theme-mono tr.bucket-hot, .lv2-theme-mono tr.bucket-warm, .lv2-theme-mono tr.bucket-cold { background: white !important; }
+.lv2-theme-mono .lv2-scorechip.hot, .lv2-theme-mono .lv2-scorechip.warm, .lv2-theme-mono .lv2-scorechip.cold { background: #f1f5f9 !important; color: #0f172a !important; border-color: #cbd5e1 !important; }
+.lv2-theme-mono .qchip.active { background: #0f172a !important; color: white !important; border-color: #0f172a !important; }
+.lv2-theme-mono .lv2-act.api, .lv2-theme-mono .lv2-act.ai { background: #0f172a !important; color: white !important; }
 .lv2-badges { display: flex; gap: 3px; align-items: center; }
 .lv2-badge { font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 3px; }
 .lv2-badge.ai { background: linear-gradient(135deg, #fef3c7, #fde68a); color: #92400e; cursor: pointer; }
@@ -372,13 +390,24 @@ tr:hover .lv2-actions { opacity: 1; }
           const k = String(t.phone).replace(/\D/g, '').slice(-10);
           if (!byPhone[k]) byPhone[k] = t;
         });
+        // v3.12 — Only surface ACTUAL WhatsApp conversation, not the auto-sent
+        // welcome template. Three rules: (a) only attach if customer was last to
+        // message (last_direction='in') OR there are unread messages, OR
+        // (b) the last message body doesn't look like an auto-template (short
+        // & doesn't start with 'Auto Lead Capture'). Otherwise leave the
+        // column blank — user wants 'blank when there is no WhatsApp'.
         S.leads.forEach(function (l) {
           if (!l.phone) return;
           const k = String(l.phone).replace(/\D/g, '').slice(-10);
           const t = byPhone[k];
-          if (t) {
-            l.last_wa_message = t.last_message || t.last_message_preview || '';
-            l.last_wa_at = t.last_activity_at || t.last_msg_at || t.updated_at;
+          if (!t) return;
+          const msg = String(t.last_message || t.last_message_preview || '').trim();
+          const isAutoTemplate = /^Auto Lead Capture/i.test(msg) || msg.length > 220;
+          const hasRealConvo = (t.last_direction === 'in') || Number(t.unread || t.unread_count || 0) > 0 || !isAutoTemplate;
+          if (hasRealConvo && msg) {
+            l.last_wa_message = msg;
+            l.last_wa_at = t.last_at || t.last_activity_at || t.last_msg_at || t.updated_at;
+            l.last_wa_direction = t.last_direction || '';
           }
         });
         console.log('[LEADS_V2] joined', arr.length, 'WA threads onto', S.leads.length, 'leads');
@@ -989,9 +1018,36 @@ tr:hover .lv2-actions { opacity: 1; }
     });
     // + Refresh / Export / New
     qchips.appendChild(h('div', { style: { marginLeft: 'auto', display: 'flex', gap: '4px' } },
+      // v3.12 — Theme color combo switcher
+      (function () {
+        const themes = [
+          { key: 'default', label: '🌊 Default (Indigo)', body: 'lv2-theme-default' },
+          { key: 'emerald', label: '🌿 Emerald',           body: 'lv2-theme-emerald' },
+          { key: 'sunset',  label: '🌅 Sunset',            body: 'lv2-theme-sunset' },
+          { key: 'rose',    label: '🌹 Rose',              body: 'lv2-theme-rose' },
+          { key: 'mono',    label: '◯ Mono (B/W)',         body: 'lv2-theme-mono' }
+        ];
+        const current = localStorage.getItem('crm.lv2.theme') || 'default';
+        const _applyTheme = (k) => {
+          themes.forEach(t => document.body.classList.remove(t.body));
+          const found = themes.find(t => t.key === k) || themes[0];
+          document.body.classList.add(found.body);
+          try { localStorage.setItem('crm.lv2.theme', k); } catch (_) {}
+        };
+        _applyTheme(current);
+        const sel = h('select', {
+          class: 'qchip',
+          style: { padding: '4px 8px', cursor: 'pointer', fontSize: '11px', background: 'white', border: '1px solid #e2e8f0', borderRadius: '14px' },
+          title: 'Color theme',
+          onchange: (e) => _applyTheme(e.target.value)
+        }, ...themes.map(t => h('option', { value: t.key, selected: t.key === current ? 'selected' : null }, t.label)));
+        return sel;
+      })(),
       h('button', { class: 'qchip', onclick: load }, '↻ Refresh'),
       h('button', { class: 'qchip' }, '↓ Export'),
-      h('button', { class: 'qchip', style: { background: '#1e293b', color: 'white', borderColor: '#1e293b' } }, '＋ New Lead')));
+      h('button', { class: 'qchip', style: { background: '#1e293b', color: 'white', borderColor: '#1e293b', cursor: 'pointer' },
+        onclick: () => { try { if (typeof window.openLeadModal === 'function') window.openLeadModal(); else toast('New Lead modal not available', 'err'); } catch (e) { toast('Could not open: ' + e.message, 'err'); } }
+      }, '＋ New Lead')));
     if (!S.focusMode) wrap.appendChild(qchips);
 
     // Table
@@ -1229,7 +1285,17 @@ tr:hover .lv2-actions { opacity: 1; }
             '📅 ' + new Date(l.next_followup_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }))
         : h('span', { class: 'lv2-muted' }, '—')));
     }
-    if (vc.has('lastwa'))   tr.appendChild(h('td', null, h('span', { class: 'lv2-muted', style: { maxWidth: '200px', display: 'inline-block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', verticalAlign: 'middle' }, title: l.last_wa_message || l.last_wa_body || '' }, l.last_wa_message || l.last_wa_body || '—')));
+    // v3.12 — Use ONLY the WA join result; never fall back to lead.notes/source.
+    // Show '—' when there's no real WA (blank per user request).
+    if (vc.has('lastwa')) {
+      const waMsg = l.last_wa_message || l.last_wa_text || '';
+      const waDir = l.last_wa_direction || '';
+      const arrow = waDir === 'in' ? '⬅ ' : waDir === 'out' ? '➡ ' : '';
+      tr.appendChild(h('td', null,
+        waMsg
+          ? h('span', { class: 'lv2-muted', style: { maxWidth: '200px', display: 'inline-block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', verticalAlign: 'middle', color: waDir === 'in' ? '#15803d' : '#475569' }, title: arrow + waMsg }, arrow + waMsg)
+          : h('span', { class: 'lv2-muted', style: { color: '#cbd5e1' } }, '—')));
+    }
     if (vc.has('notes'))    tr.appendChild(h('td', null, h('span', { class: 'lv2-muted', style: { maxWidth: '220px', display: 'inline-block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', verticalAlign: 'middle' }, title: l.notes || '' }, String(l.notes || '—').slice(0, 60))));
     if (vc.has('email'))    tr.appendChild(h('td', null, h('span', { class: 'lv2-muted', style: { fontSize: '11px' } }, l.email || '—')));
     if (vc.has('tags'))     tr.appendChild(h('td', null, h('span', { class: 'lv2-muted', style: { fontSize: '11px' } }, l.tags || '—')));
