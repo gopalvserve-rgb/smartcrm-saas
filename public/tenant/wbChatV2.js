@@ -94,6 +94,21 @@
     }
     return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
   }
+  // v2.1 — Standard date+time+relative format: '20 Jun, 2:58 PM (1d)'
+  function fmtDateTimeRel(iso) {
+    if (!iso) return '';
+    const d = new Date(iso); if (isNaN(d)) return String(iso);
+    const datePart = d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+    const timePart = d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true });
+    const sec = Math.floor((Date.now() - d) / 1000);
+    let rel = '';
+    if (sec < 60) rel = 'just now';
+    else if (sec < 3600) rel = Math.floor(sec / 60) + 'm';
+    else if (sec < 86400) rel = Math.floor(sec / 3600) + 'h';
+    else if (sec < 7 * 86400) rel = Math.floor(sec / 86400) + 'd';
+    else { const days = Math.floor(sec / 86400); rel = days + 'd'; }
+    return datePart + ', ' + timePart + (rel ? ' (' + rel + ')' : '');
+  }
   function fmtFullDateTime(iso) {
     if (!iso) return '';
     const d = new Date(iso); if (isNaN(d)) return '';
@@ -930,11 +945,61 @@
       S.userById = {};   S.users.forEach(u => { S.userById[u.id] = u; });
       // AI Score lives under .lead.smart_score (api_leadScore_get response)
       S.aiScore = (aiScore && aiScore.lead) ? aiScore.lead : aiScore;
-      // Activity timeline (WA + calls + remarks + score changes — see api_copilot_lead_timeline)
-      // The Promise.all destructure above doesn't capture it, so re-extract.
+      // v2.1 — Pull activity from MULTIPLE sources so the timeline is
+      // never empty: copilot timeline + remarks + recordings (with
+      // duration). The copilot timeline alone can be score-only on
+      // leads that never had a call/WA/remark, which left the panel
+      // looking blank to the user.
       try {
-        const tl = await api('api_copilot_lead_timeline', { lead_id: leadId, limit: 30 }).catch(() => null);
-        S.activity = (tl && Array.isArray(tl.events)) ? tl.events : (Array.isArray(tl) ? tl : []);
+        const [tl, remarks, recs] = await Promise.all([
+          api('api_copilot_lead_timeline', { lead_id: leadId, limit: 50 }).catch(function () { return null; }),
+          api('api_leads_remarks', leadId).catch(function () { return null; }),
+          api('api_my_recordings', 200).catch(function () { return null; })
+        ]);
+        const tlEvents = (tl && Array.isArray(tl.events)) ? tl.events : (Array.isArray(tl) ? tl : []);
+        const rmList   = Array.isArray(remarks) ? remarks : (remarks && (remarks.rows || remarks.remarks)) || [];
+        const recList  = Array.isArray(recs) ? recs : (recs && (recs.rows || recs.recordings)) || [];
+        const leadRecs = recList.filter(function (r) { return Number(r.lead_id) === Number(leadId); });
+        const merged = tlEvents.slice();
+        // Add remarks not yet represented in timeline (dedupe by created_at + text)
+        const tlRemarkKey = {};
+        tlEvents.filter(function (ev) { return ev.kind === 'remark'; }).forEach(function (ev) {
+          tlRemarkKey[(ev.at || '') + '|' + String(ev.text || '').slice(0, 40)] = true;
+        });
+        rmList.forEach(function (r) {
+          const at = r.created_at || r.at || r.ts;
+          const text = r.remark || r.text || r.note || '';
+          if (!tlRemarkKey[(at || '') + '|' + String(text).slice(0, 40)]) {
+            merged.push({ kind: 'remark', at: at, text: text, by: r.created_by_name || r.user_name || r.author || '' });
+          }
+        });
+        // Attach recordings to call events when within 10min, else emit synthetic call rows
+        const usedRecs = {};
+        merged.filter(function (ev) { return ev.kind === 'call' && !ev.recording; }).forEach(function (ev) {
+          const callTs = new Date(ev.at).getTime();
+          let best = null; let bestDiff = Infinity;
+          leadRecs.forEach(function (rec) {
+            if (usedRecs[rec.id]) return;
+            const recTs = new Date(rec.created_at).getTime();
+            const diff = Math.abs(callTs - recTs);
+            if (diff < bestDiff && diff < 10 * 60 * 1000) { best = rec; bestDiff = diff; }
+          });
+          if (best) {
+            usedRecs[best.id] = true;
+            ev.recording = '/api/recordings/' + best.id + '/audio';
+            ev.recording_id = best.id;
+            if (!ev.duration && best.duration_s) ev.duration = best.duration_s;
+          }
+        });
+        leadRecs.filter(function (r) { return !usedRecs[r.id]; }).slice(0, 10).forEach(function (r) {
+          merged.push({
+            kind: 'call', at: r.created_at, dir: r.direction || 'out',
+            duration: r.duration_s, recording: '/api/recordings/' + r.id + '/audio',
+            recording_id: r.id
+          });
+        });
+        merged.sort(function (a, b) { return new Date(b.at).getTime() - new Date(a.at).getTime(); });
+        S.activity = merged;
       } catch (_) { S.activity = []; }
       // AI Summary — v2.0 auto-fires on lead open (no button click required)
       S.aiSummary = null;
@@ -1072,20 +1137,26 @@
               }
             }, S.aiSummaryError ? '✨ Retry AI Summary' : '✨ Generate AI Summary')));
 
-    // Recent Activity (v2.0 — hide kind='score'; show ALL in scrollable container)
-    if (Array.isArray(S.activity) && S.activity.length) {
-      const realEvents = S.activity.filter(function (ev) { return ev && ev.kind !== 'score'; });
-      if (realEvents.length) {
-        const sec = h('div', { class: 'wbv2-sec' },
-          h('div', { class: 'lab', style: { position: 'sticky', top: '0', background: 'white', zIndex: '2', borderBottom: '1px solid #f1f5f9', paddingBottom: '4px' } },
-            h('span', null, '📊 Recent Activity'),
-            h('span', { style: { fontSize: '10px', fontWeight: '500', color: '#94a3b8', marginLeft: '4px' } }, '(' + realEvents.length + ')'),
-            h('span', { class: 'tog', onclick: function () { if (typeof window.openLeadModal === 'function') { try { window.openLeadModal(l.id); return; } catch (_) {} } try { window.location.hash = '#/leads'; setTimeout(function () { try { window.openLeadModal && window.openLeadModal(l.id); } catch (_) {} }, 500); } catch (_) {} } }, 'View full →')));
-        const list = h('div', { style: { maxHeight: '260px', overflowY: 'auto', overflowX: 'hidden', paddingRight: '4px', marginRight: '-4px' } });
+    // Recent Activity (v2.1 — ALWAYS show with scrollable container; empty state when no events)
+    {
+      const realEvents = Array.isArray(S.activity)
+        ? S.activity.filter(function (ev) { return ev && ev.kind !== 'score'; })
+        : [];
+      const sec = h('div', { class: 'wbv2-sec' },
+        h('div', { class: 'lab', style: { position: 'sticky', top: '0', background: 'white', zIndex: '2', borderBottom: '1px solid #f1f5f9', paddingBottom: '4px' } },
+          h('span', null, '📊 Recent Activity'),
+          h('span', { style: { fontSize: '10px', fontWeight: '500', color: '#94a3b8', marginLeft: '4px' } }, '(' + realEvents.length + ')'),
+          realEvents.length
+            ? h('span', { class: 'tog', onclick: function () { if (typeof window.openLeadModal === 'function') { try { window.openLeadModal(l.id); return; } catch (_) {} } try { window.location.hash = '#/leads'; setTimeout(function () { try { window.openLeadModal && window.openLeadModal(l.id); } catch (_) {} }, 500); } catch (_) {} } }, 'View full →')
+            : null));
+      if (!realEvents.length) {
+        sec.appendChild(h('div', { style: { padding: '12px', textAlign: 'center', color: '#94a3b8', fontSize: '12px', background: '#f8fafc', borderRadius: '8px', marginTop: '6px' } }, 'No call / WhatsApp / note activity yet'));
+      } else {
+        const list = h('div', { style: { maxHeight: '320px', overflowY: 'auto', overflowX: 'hidden', paddingRight: '4px', marginRight: '-4px' } });
         realEvents.forEach(function (ev) { list.appendChild(activityRow(ev)); });
         sec.appendChild(list);
-        host.appendChild(sec);
       }
+      host.appendChild(sec);
     }
 
     // Last Call card (most recent call event with optional recording link)
@@ -1143,28 +1214,59 @@
   function activityRow(ev) {
     const k = ev.kind || '';
     const ico = k === 'wa'     ? (ev.dir === 'in' ? '💬' : '💚')
-              : k === 'call'   ? (ev.dir === 'missed' ? '📵' : '📞')
+              : k === 'call'   ? (ev.dir === 'missed' ? '📵' : ev.dir === 'in' ? '📥' : '📤')
               : k === 'remark' ? '📝'
               : k === 'score'  ? '🎯'
-              : k === 'status' ? '🏷'
+              : k === 'status' ? '🏷️'
+              : k === 'followup' ? '⏰'
+              : k === 'assign' ? '👤'
               : '•';
     const who = k === 'wa' ? (ev.dir === 'in' ? 'WhatsApp received' : 'WhatsApp sent')
               : k === 'call' ? (ev.dir === 'in' ? 'Call incoming' : ev.dir === 'out' ? 'Call outgoing' : ev.dir === 'missed' ? 'Call missed' : 'Call')
-              : k === 'remark' ? 'Note added' + (ev.by ? ' · ' + ev.by : '')
+              : k === 'remark' ? 'Remark added' + (ev.by ? ' · ' + ev.by : '')
+              : k === 'status' ? 'Status changed' + (ev.new_status ? ' → ' + ev.new_status : (ev.label ? ' → ' + ev.label : ''))
+              : k === 'followup' ? 'Follow-up ' + (ev.action || 'updated')
+              : k === 'assign' ? 'Reassigned' + (ev.new_owner ? ' → ' + ev.new_owner : '')
               : k === 'score' ? 'AI Score changed (' + (ev.old_score || 0) + ' → ' + (ev.new_score || 0) + ')'
               : (ev.label || ev.kind || 'Activity');
-    const detail = k === 'wa' ? String(ev.text || '').slice(0, 70)
-                 : k === 'call' ? (ev.duration ? Math.floor(ev.duration/60)+'m '+(ev.duration%60)+'s' : 'no duration') + (ev.recording ? ' · ▶ rec' : '')
-                 : k === 'remark' ? String(ev.text || '').slice(0, 70)
-                 : k === 'score' ? (ev.reason_text || ev.trigger_event || '')
-                 : '';
+    // v2.1 — rich call detail: 'Talk 1m 14s' + ▶ Play button when there's a recording
+    let detail = null;
+    if (k === 'call') {
+      const dSec = Number(ev.duration || 0);
+      const talk = dSec ? 'Talk ' + (dSec >= 3600 ? (Math.floor(dSec/3600)+'h '+Math.floor((dSec%3600)/60)+'m') : (Math.floor(dSec/60)+'m '+(dSec%60)+'s')) : 'no duration';
+      const bits = [h('span', null, talk)];
+      if (ev.recording) {
+        bits.push(h('span', null, ' · '));
+        bits.push(h('a', {
+          href: 'javascript:void(0)',
+          style: { color: '#6366f1', cursor: 'pointer', fontWeight: '600' },
+          onclick: function () {
+            try {
+              const slug = (window.TENANT_SLUG ? '/t/' + window.TENANT_SLUG : '');
+              const tok  = (window.CRM && CRM.token) ? CRM.token : '';
+              let path = String(ev.recording || '').replace(/^\/t\/[^/]+/, '');
+              if (!path.startsWith('/')) path = '/' + path;
+              const url = slug + path + (tok ? (path.indexOf('?') >= 0 ? '&' : '?') + 'token=' + encodeURIComponent(tok) : '');
+              const a = new Audio(url); a.play().catch(function (e) { toast('Cannot play: ' + e.message, 'err'); });
+            } catch (e) { toast('Play failed: ' + e.message, 'err'); }
+          }
+        }, '▶ Play'));
+      }
+      detail = h('div', { class: 'd' }, bits);
+    } else if (k === 'wa' || k === 'remark') {
+      detail = h('div', { class: 'd' }, String(ev.text || '').slice(0, 140));
+    } else if (k === 'status') {
+      detail = ev.old_status ? h('div', { class: 'd' }, 'was: ' + ev.old_status) : null;
+    } else if (k === 'score') {
+      detail = h('div', { class: 'd' }, ev.reason_text || ev.trigger_event || '');
+    }
     return h('div', { class: 'wbv2-act' },
       h('div', { class: 'ico' }, ico),
       h('div', { class: 'b' },
         h('div', { class: 'h' },
           h('span', { class: 'who' }, who),
-          h('span', { class: 'w' }, fmtRelative(ev.at))),
-        detail ? h('div', { class: 'd' }, detail) : null));
+          h('span', { class: 'w', title: ev.at ? new Date(ev.at).toLocaleString('en-IN') : '' }, fmtDateTimeRel(ev.at))),
+        detail));
   }
 
   function reloadActiveThread() {
