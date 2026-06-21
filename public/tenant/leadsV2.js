@@ -207,53 +207,106 @@
 .lv2-av.s { width: 22px; height: 22px; font-size: 9px; }
 .lv2-namestack { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .lv2-nm { font-weight: 500; color: #0f172a; font-size: 13px; }
-/* v3.14 — broader theme application: header, hero, chips, buttons */
-/* Emerald */
-.lv2-theme-emerald .lv2-hero { background: linear-gradient(135deg, #ecfdf5, #ffffff) !important; }
-.lv2-theme-emerald .lv2-hero .num { color: #047857 !important; }
-.lv2-theme-emerald .lv2-namestack .lv2-nm { color: #064e3b; }
-.lv2-theme-emerald .lv2-scorechip.warm { background: #ecfdf5 !important; color: #047857 !important; border-color: #a7f3d0 !important; }
-.lv2-theme-emerald .qchip.active, .lv2-theme-emerald .qchip-status.active { background: #10b981 !important; color: white !important; border-color: #10b981 !important; }
-.lv2-theme-emerald .lv2-act.ai  { background: linear-gradient(135deg, #047857, #059669) !important; color: white !important; }
-.lv2-theme-emerald .lv2-av { box-shadow: 0 0 0 2px #d1fae5 inset; }
-/* Sunset */
-.lv2-theme-sunset .lv2-hero { background: linear-gradient(135deg, #fff7ed, #ffffff) !important; }
-.lv2-theme-sunset .lv2-hero .num { color: #c2410c !important; }
-.lv2-theme-sunset .lv2-namestack .lv2-nm { color: #7c2d12; }
-.lv2-theme-sunset .lv2-scorechip.hot { background: #fed7aa !important; color: #9a3412 !important; border-color: #fb923c !important; }
-.lv2-theme-sunset .lv2-scorechip.warm { background: #fef3c7 !important; color: #92400e !important; border-color: #fcd34d !important; }
-.lv2-theme-sunset .lv2-act.ai  { background: linear-gradient(135deg, #c2410c, #ea580c) !important; color: white !important; }
-.lv2-theme-sunset .lv2-av { box-shadow: 0 0 0 2px #fed7aa inset; }
-/* Rose */
-.lv2-theme-rose .lv2-hero { background: linear-gradient(135deg, #fff1f2, #ffffff) !important; }
-.lv2-theme-rose .lv2-hero .num { color: #be123c !important; }
-.lv2-theme-rose .lv2-namestack .lv2-nm { color: #881337; }
-.lv2-theme-rose .lv2-scorechip.hot { background: #ffe4e6 !important; color: #9f1239 !important; border-color: #fda4af !important; }
-.lv2-theme-rose .lv2-scorechip.warm { background: #fef2f2 !important; color: #b91c1c !important; border-color: #fecaca !important; }
-.lv2-theme-rose .lv2-av { box-shadow: 0 0 0 2px #ffe4e6 inset; }
-/* Mono */
-.lv2-theme-mono .lv2-hero { background: #f8fafc !important; }
-.lv2-theme-mono .lv2-hero .num { color: #0f172a !important; }
-.lv2-theme-mono .lv2-av { box-shadow: 0 0 0 2px #e2e8f0 inset; filter: grayscale(.4); }
-/* v3.12 — Color theme variants. Default is indigo (unchanged). */
-.lv2-theme-emerald tr.bucket-hot { background: #ecfdf5 !important; }
-.lv2-theme-emerald tr.bucket-warm { background: #f0fdf4 !important; }
-.lv2-theme-emerald .lv2-scorechip.hot { background: #d1fae5 !important; color: #065f46 !important; border-color: #6ee7b7 !important; }
-.lv2-theme-emerald .lv2-act.api { background: linear-gradient(135deg, #10b981, #34d399) !important; color: white !important; }
-.lv2-theme-sunset tr.bucket-hot { background: #fff7ed !important; }
-.lv2-theme-sunset tr.bucket-warm { background: #fefce8 !important; }
-.lv2-theme-sunset .qchip.active { background: #f97316 !important; color: white !important; border-color: #f97316 !important; }
-.lv2-theme-sunset .lv2-act.api { background: linear-gradient(135deg, #f97316, #fb923c) !important; color: white !important; }
-.lv2-theme-rose tr.bucket-hot { background: #fef2f2 !important; }
-.lv2-theme-rose tr.bucket-warm { background: #fff1f2 !important; }
-.lv2-theme-rose .qchip.active { background: #e11d48 !important; color: white !important; border-color: #e11d48 !important; }
-.lv2-theme-rose .lv2-act.api { background: linear-gradient(135deg, #e11d48, #f43f5e) !important; color: white !important; }
-.lv2-theme-mono tr.bucket-hot, .lv2-theme-mono tr.bucket-warm, .lv2-theme-mono tr.bucket-cold { background: white !important; }
-.lv2-theme-mono .lv2-scorechip.hot, .lv2-theme-mono .lv2-scorechip.warm, .lv2-theme-mono .lv2-scorechip.cold { background: #f1f5f9 !important; color: #0f172a !important; border-color: #cbd5e1 !important; }
-.lv2-theme-mono .qchip.active { background: #0f172a !important; color: white !important; border-color: #0f172a !important; }
-.lv2-theme-mono .lv2-act.api, .lv2-theme-mono .lv2-act.ai { background: #0f172a !important; color: white !important; }
-/* v3.13 — Bulk action bar animation */
-@keyframes lv2-bulk-pop { from { transform: translate(-50%, 20px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
+/* v3.15 — DRAMATIC theme system. Each theme repaints: page bg, hero card,
+   table header, avatars (rings), name color, status pills, score chips, row
+   bucket tints, hover states, qchip active, filter pills, bulk bar accent,
+   action button gradients. Theme switch transitions over 0.25s. */
+
+/* Universal smooth transition on theme-affected props */
+.lv2-wrap, .lv2-hero, .lv2-tbl tr, .lv2-av, .lv2-scorechip, .qchip, .lv2-act,
+.lv2-tbl thead th, .lv2-namestack .lv2-nm {
+  transition: background-color 0.25s ease, color 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease !important;
+}
+
+/* ═══════════════════════ EMERALD ═══════════════════════ */
+body.lv2-theme-emerald .lv2-wrap { background: linear-gradient(180deg, #f0fdf4 0%, #ffffff 200px) !important; }
+body.lv2-theme-emerald .lv2-hero { background: linear-gradient(135deg, #d1fae5, #ecfdf5, #ffffff) !important; border-color: #6ee7b7 !important; }
+body.lv2-theme-emerald .lv2-hero .num { color: #047857 !important; }
+body.lv2-theme-emerald .lv2-hero .lab { color: #065f46 !important; }
+body.lv2-theme-emerald .lv2-tbl thead th { background: linear-gradient(180deg, #d1fae5, #ecfdf5) !important; color: #065f46 !important; border-bottom: 2px solid #10b981 !important; }
+body.lv2-theme-emerald .lv2-namestack .lv2-nm { color: #064e3b !important; }
+body.lv2-theme-emerald .lv2-tbl tr.bucket-hot { background: linear-gradient(90deg, #ecfdf5, transparent) !important; border-left: 3px solid #10b981 !important; }
+body.lv2-theme-emerald .lv2-tbl tr.bucket-warm { background: linear-gradient(90deg, #f0fdf4, transparent) !important; }
+body.lv2-theme-emerald .lv2-tbl tr:hover { background: #d1fae5 !important; }
+body.lv2-theme-emerald .lv2-scorechip.hot { background: #10b981 !important; color: white !important; border-color: #047857 !important; }
+body.lv2-theme-emerald .lv2-scorechip.warm { background: #6ee7b7 !important; color: #065f46 !important; border-color: #10b981 !important; }
+body.lv2-theme-emerald .lv2-scorechip.cold { background: #ecfdf5 !important; color: #047857 !important; border-color: #a7f3d0 !important; }
+body.lv2-theme-emerald .qchip.active { background: linear-gradient(135deg, #10b981, #34d399) !important; color: white !important; border-color: #10b981 !important; box-shadow: 0 2px 8px rgba(16,185,129,.4) !important; }
+body.lv2-theme-emerald .lv2-act.api { background: linear-gradient(135deg, #10b981, #34d399) !important; color: white !important; box-shadow: 0 1px 3px rgba(16,185,129,.4) !important; }
+body.lv2-theme-emerald .lv2-act.ai { background: linear-gradient(135deg, #047857, #059669) !important; color: white !important; }
+body.lv2-theme-emerald .lv2-av { box-shadow: 0 0 0 3px #d1fae5 !important; }
+body.lv2-theme-emerald #lv2-bulkbar { background: linear-gradient(135deg, #047857, #065f46) !important; box-shadow: 0 10px 30px rgba(4,120,87,.4) !important; }
+
+/* ═══════════════════════ SUNSET ═══════════════════════ */
+body.lv2-theme-sunset .lv2-wrap { background: linear-gradient(180deg, #fff7ed 0%, #ffffff 200px) !important; }
+body.lv2-theme-sunset .lv2-hero { background: linear-gradient(135deg, #fed7aa, #fff7ed, #ffffff) !important; border-color: #fb923c !important; }
+body.lv2-theme-sunset .lv2-hero .num { color: #c2410c !important; }
+body.lv2-theme-sunset .lv2-hero .lab { color: #9a3412 !important; }
+body.lv2-theme-sunset .lv2-tbl thead th { background: linear-gradient(180deg, #fed7aa, #fff7ed) !important; color: #9a3412 !important; border-bottom: 2px solid #f97316 !important; }
+body.lv2-theme-sunset .lv2-namestack .lv2-nm { color: #7c2d12 !important; }
+body.lv2-theme-sunset .lv2-tbl tr.bucket-hot { background: linear-gradient(90deg, #ffedd5, transparent) !important; border-left: 3px solid #f97316 !important; }
+body.lv2-theme-sunset .lv2-tbl tr.bucket-warm { background: linear-gradient(90deg, #fff7ed, transparent) !important; }
+body.lv2-theme-sunset .lv2-tbl tr:hover { background: #fed7aa !important; }
+body.lv2-theme-sunset .lv2-scorechip.hot { background: #f97316 !important; color: white !important; border-color: #c2410c !important; }
+body.lv2-theme-sunset .lv2-scorechip.warm { background: #fdba74 !important; color: #9a3412 !important; border-color: #fb923c !important; }
+body.lv2-theme-sunset .lv2-scorechip.cold { background: #fff7ed !important; color: #c2410c !important; border-color: #fed7aa !important; }
+body.lv2-theme-sunset .qchip.active { background: linear-gradient(135deg, #f97316, #fb923c) !important; color: white !important; border-color: #f97316 !important; box-shadow: 0 2px 8px rgba(249,115,22,.4) !important; }
+body.lv2-theme-sunset .lv2-act.api { background: linear-gradient(135deg, #f97316, #fb923c) !important; color: white !important; }
+body.lv2-theme-sunset .lv2-act.ai { background: linear-gradient(135deg, #c2410c, #ea580c) !important; color: white !important; }
+body.lv2-theme-sunset .lv2-av { box-shadow: 0 0 0 3px #fed7aa !important; }
+body.lv2-theme-sunset #lv2-bulkbar { background: linear-gradient(135deg, #c2410c, #9a3412) !important; box-shadow: 0 10px 30px rgba(194,65,12,.4) !important; }
+
+/* ═══════════════════════ ROSE ═══════════════════════ */
+body.lv2-theme-rose .lv2-wrap { background: linear-gradient(180deg, #fff1f2 0%, #ffffff 200px) !important; }
+body.lv2-theme-rose .lv2-hero { background: linear-gradient(135deg, #fecdd3, #fff1f2, #ffffff) !important; border-color: #fb7185 !important; }
+body.lv2-theme-rose .lv2-hero .num { color: #be123c !important; }
+body.lv2-theme-rose .lv2-hero .lab { color: #9f1239 !important; }
+body.lv2-theme-rose .lv2-tbl thead th { background: linear-gradient(180deg, #fecdd3, #fff1f2) !important; color: #9f1239 !important; border-bottom: 2px solid #e11d48 !important; }
+body.lv2-theme-rose .lv2-namestack .lv2-nm { color: #881337 !important; }
+body.lv2-theme-rose .lv2-tbl tr.bucket-hot { background: linear-gradient(90deg, #ffe4e6, transparent) !important; border-left: 3px solid #e11d48 !important; }
+body.lv2-theme-rose .lv2-tbl tr.bucket-warm { background: linear-gradient(90deg, #fff1f2, transparent) !important; }
+body.lv2-theme-rose .lv2-tbl tr:hover { background: #fecdd3 !important; }
+body.lv2-theme-rose .lv2-scorechip.hot { background: #e11d48 !important; color: white !important; border-color: #9f1239 !important; }
+body.lv2-theme-rose .lv2-scorechip.warm { background: #fda4af !important; color: #9f1239 !important; border-color: #fb7185 !important; }
+body.lv2-theme-rose .lv2-scorechip.cold { background: #fff1f2 !important; color: #be123c !important; border-color: #fecdd3 !important; }
+body.lv2-theme-rose .qchip.active { background: linear-gradient(135deg, #e11d48, #f43f5e) !important; color: white !important; border-color: #e11d48 !important; box-shadow: 0 2px 8px rgba(225,29,72,.4) !important; }
+body.lv2-theme-rose .lv2-act.api { background: linear-gradient(135deg, #e11d48, #f43f5e) !important; color: white !important; }
+body.lv2-theme-rose .lv2-act.ai { background: linear-gradient(135deg, #9f1239, #be123c) !important; color: white !important; }
+body.lv2-theme-rose .lv2-av { box-shadow: 0 0 0 3px #ffe4e6 !important; }
+body.lv2-theme-rose #lv2-bulkbar { background: linear-gradient(135deg, #be123c, #881337) !important; box-shadow: 0 10px 30px rgba(190,18,60,.4) !important; }
+
+/* ═══════════════════════ MONO ═══════════════════════ */
+body.lv2-theme-mono .lv2-wrap { background: #f8fafc !important; }
+body.lv2-theme-mono .lv2-hero { background: linear-gradient(135deg, #e2e8f0, #f8fafc, #ffffff) !important; border-color: #94a3b8 !important; }
+body.lv2-theme-mono .lv2-hero .num { color: #0f172a !important; }
+body.lv2-theme-mono .lv2-hero .lab { color: #475569 !important; }
+body.lv2-theme-mono .lv2-tbl thead th { background: linear-gradient(180deg, #e2e8f0, #f1f5f9) !important; color: #0f172a !important; border-bottom: 2px solid #0f172a !important; }
+body.lv2-theme-mono .lv2-namestack .lv2-nm { color: #0f172a !important; font-weight: 600; }
+body.lv2-theme-mono .lv2-tbl tr.bucket-hot, body.lv2-theme-mono .lv2-tbl tr.bucket-warm, body.lv2-theme-mono .lv2-tbl tr.bucket-cold { background: white !important; }
+body.lv2-theme-mono .lv2-tbl tr.bucket-hot { border-left: 3px solid #0f172a !important; }
+body.lv2-theme-mono .lv2-tbl tr:hover { background: #f1f5f9 !important; }
+body.lv2-theme-mono .lv2-scorechip.hot, body.lv2-theme-mono .lv2-scorechip.warm, body.lv2-theme-mono .lv2-scorechip.cold { background: #f1f5f9 !important; color: #0f172a !important; border-color: #cbd5e1 !important; }
+body.lv2-theme-mono .qchip.active { background: #0f172a !important; color: white !important; border-color: #0f172a !important; box-shadow: 0 2px 8px rgba(15,23,42,.4) !important; }
+body.lv2-theme-mono .lv2-act.api { background: #0f172a !important; color: white !important; }
+body.lv2-theme-mono .lv2-act.ai { background: #334155 !important; color: white !important; }
+body.lv2-theme-mono .lv2-av { box-shadow: 0 0 0 3px #e2e8f0 !important; filter: grayscale(.5); }
+body.lv2-theme-mono #lv2-bulkbar { background: #0f172a !important; }
+
+/* ═══════════════════════ DEFAULT (Indigo) — explicit so theme switch always wins ═══════════════════════ */
+body.lv2-theme-default .lv2-wrap { background: linear-gradient(180deg, #eef2ff 0%, #ffffff 200px) !important; }
+body.lv2-theme-default .lv2-hero { background: linear-gradient(135deg, #ddd6fe, #eef2ff, #ffffff) !important; border-color: #a5b4fc !important; }
+body.lv2-theme-default .lv2-hero .num { color: #4338ca !important; }
+body.lv2-theme-default .lv2-tbl thead th { background: linear-gradient(180deg, #ddd6fe, #eef2ff) !important; color: #3730a3 !important; border-bottom: 2px solid #6366f1 !important; }
+body.lv2-theme-default .lv2-namestack .lv2-nm { color: #1e1b4b !important; }
+body.lv2-theme-default .lv2-tbl tr.bucket-hot { background: linear-gradient(90deg, #eef2ff, transparent) !important; border-left: 3px solid #6366f1 !important; }
+body.lv2-theme-default .lv2-tbl tr:hover { background: #ede9fe !important; }
+body.lv2-theme-default .lv2-scorechip.hot { background: #6366f1 !important; color: white !important; border-color: #4338ca !important; }
+body.lv2-theme-default .qchip.active { background: linear-gradient(135deg, #4338ca, #6366f1) !important; color: white !important; border-color: #4338ca !important; box-shadow: 0 2px 8px rgba(67,56,202,.4) !important; }
+body.lv2-theme-default .lv2-act.api { background: linear-gradient(135deg, #4338ca, #6366f1) !important; color: white !important; }
+body.lv2-theme-default .lv2-act.ai { background: linear-gradient(135deg, #3730a3, #4338ca) !important; color: white !important; }
+body.lv2-theme-default .lv2-av { box-shadow: 0 0 0 3px #ddd6fe !important; }
+body.lv2-theme-default #lv2-bulkbar { background: linear-gradient(135deg, #4338ca, #3730a3) !important; box-shadow: 0 10px 30px rgba(67,56,202,.4) !important; }
+
 .lv2-badges { display: flex; gap: 3px; align-items: center; }
 .lv2-badge { font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 3px; }
 .lv2-badge.ai { background: linear-gradient(135deg, #fef3c7, #fde68a); color: #92400e; cursor: pointer; }
@@ -786,12 +839,16 @@ tr:hover .lv2-actions { opacity: 1; }
     _closePopovers();
     const r = anchorEl.getBoundingClientRect();
     const sel = new Set((currentSelected || []).map(String));
-    const pop = h('div', { class: 'lv2-popover', style: {
-      position: 'fixed', top: (r.bottom + 4) + 'px', left: r.left + 'px',
-      background: 'white', border: '1px solid #e2e8f0', borderRadius: '8px',
-      boxShadow: '0 10px 30px rgba(0,0,0,.12)', padding: '8px', minWidth: '240px', maxWidth: '320px',
-      maxHeight: '360px', overflowY: 'auto', zIndex: '10000'
-    } });
+    const pop = h('div', {
+      class: 'lv2-popover',
+      onclick: (e) => e.stopPropagation(),  // v3.15 — clicks inside the popover never bubble out
+      style: {
+        position: 'fixed', top: (r.bottom + 4) + 'px', left: r.left + 'px',
+        background: 'white', border: '1px solid #e2e8f0', borderRadius: '8px',
+        boxShadow: '0 10px 30px rgba(0,0,0,.12)', padding: '8px', minWidth: '240px', maxWidth: '320px',
+        maxHeight: '360px', overflowY: 'auto', zIndex: '10000'
+      }
+    });
     pop.appendChild(h('div', { style: { fontSize: '11px', fontWeight: '700', color: '#64748b', textTransform: 'uppercase', padding: '4px 6px 8px' } }, title));
     // Select all / Clear
     pop.appendChild(h('div', { style: { display: 'flex', gap: '6px', padding: '0 6px 8px', borderBottom: '1px solid #f1f5f9', marginBottom: '4px' } },
@@ -823,9 +880,9 @@ tr:hover .lv2-actions { opacity: 1; }
     // Apply / Cancel
     pop.appendChild(h('div', { style: { display: 'flex', gap: '6px', padding: '8px 6px 4px', borderTop: '1px solid #f1f5f9', marginTop: '4px' } },
       h('button', { style: { flex: '1', padding: '5px 10px', background: '#1e293b', color: 'white', border: 'none', borderRadius: '5px', fontSize: '11px', cursor: 'pointer', fontWeight: '600' },
-        onclick: () => { onApply(Array.from(sel)); _closePopovers(); } }, 'Apply'),
+        onclick: (ev) => { ev.stopPropagation(); const arr = Array.from(sel); console.log('[LEADS_V2] filter applied:', title, arr); onApply(arr); _closePopovers(); } }, 'Apply'),
       h('button', { style: { padding: '5px 10px', background: 'white', color: '#64748b', border: '1px solid #e2e8f0', borderRadius: '5px', fontSize: '11px', cursor: 'pointer' },
-        onclick: _closePopovers }, 'Cancel')));
+        onclick: (ev) => { ev.stopPropagation(); _closePopovers(); } }, 'Cancel')));
     document.body.appendChild(pop);
     // Click-outside to close
     setTimeout(() => {
