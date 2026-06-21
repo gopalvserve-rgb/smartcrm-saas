@@ -231,11 +231,12 @@
 .wbv2-row .right { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; }
 .wbv2-row .when { font-size: 11px; color: #667781; white-space: nowrap; }
 @keyframes wbv2-spin { to { transform: rotate(360deg); } }
-@keyframes wbv2-pulse-new { 0%, 100% { box-shadow: inset 4px 0 0 0 #ef4444, 0 0 0 0 rgba(239,68,68,.4); } 50% { box-shadow: inset 4px 0 0 0 #ef4444, 0 0 0 4px rgba(239,68,68,0); } }
-.wbv2-row.new-msg { background: linear-gradient(90deg, #fee2e2 0%, #fff7ed 60%); border-left: 4px solid #ef4444 !important; animation: wbv2-pulse-new 1.4s ease-in-out infinite; }
+@keyframes wbv2-pulse-new { 0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,.4); } 50% { box-shadow: 0 0 0 4px rgba(239,68,68,0); } }
+/* v2.9 — keep the row visually unchanged; avatar dot + NEW MSG pill + count badge carry the signal. */
+.wbv2-row.new-msg { background: #ffffff; border-left: none; animation: none; }
 .wbv2-new-pill { background: linear-gradient(135deg, #ef4444, #f97316); color: white; font-size: 9px; font-weight: 800; padding: 2px 8px; border-radius: 10px; letter-spacing: .5px; text-transform: uppercase; box-shadow: 0 1px 4px rgba(239,68,68,.5); animation: wbv2-newpill-bounce 1.2s ease-in-out infinite; white-space: nowrap; }
 @keyframes wbv2-newpill-bounce { 0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239,68,68,.5); } 50% { transform: scale(1.08); box-shadow: 0 0 0 4px rgba(239,68,68,0); } }
-.wbv2-row.new-msg .name { color: #991b1b; font-weight: 700; }
+.wbv2-row.new-msg .name { color: #111b21; font-weight: 600; }
 .wbv2-row .unread { background: #00a884; color: white; font-size: 11px; padding: 3px 8px; border-radius: 10px; font-weight: 700; min-width: 22px; text-align: center; box-shadow: 0 1px 3px rgba(0,168,132,.4); }
 .wbv2-av-dot { position: absolute; top: -2px; right: -2px; width: 14px; height: 14px; background: #ef4444; border: 2px solid white; border-radius: 50%; box-shadow: 0 1px 3px rgba(239,68,68,.5); animation: wbv2-newpill-bounce 1.5s ease-in-out infinite; pointer-events: none; z-index: 2; }
 .wbv2-av-dot.wbv2-av-dot-green { background: #00a884 !important; box-shadow: 0 1px 3px rgba(0,168,132,.5) !important; animation: none; }

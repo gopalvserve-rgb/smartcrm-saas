@@ -1128,7 +1128,13 @@ tr:hover .lv2-actions { opacity: 1; }
     tr.appendChild(h('td', { class: 'sticky-l', onclick: (e) => e.stopPropagation() }, h('input', { type: 'checkbox' })));
     tr.appendChild(h('td', { class: 'sticky-l', style: { left: '36px' } },
       h('div', { class: 'lv2-namecell' },
-        h('div', { class: 'lv2-av', style: { background: avColor(name) } }, initials(name)),
+        h('div', { class: 'lv2-av', style: { background: avColor(name), position: 'relative' } },
+          initials(name),
+          // v3.12 — green dot overlay when customer was last to WhatsApp
+          (l.last_wa_direction === 'in') ? h('span', {
+            style: { position: 'absolute', top: '-2px', right: '-2px', width: '10px', height: '10px', background: '#22c55e', border: '2px solid white', borderRadius: '50%', boxShadow: '0 1px 2px rgba(34,197,94,.5)' },
+            title: 'Customer was last to WhatsApp — needs your reply'
+          }) : null),
         h('div', { class: 'lv2-namestack' },
           h('span', { class: 'lv2-nm' }, name),
           // v3.6 — Heat chip from WA AI Bot (cold/warm/hot/very_hot/on_fire) +
@@ -1153,6 +1159,21 @@ tr:hover .lv2-actions { opacity: 1; }
             } else if (score >= 80) {
               // Fallback: if no heat_label but smart_score is hot, show HOT
               badges.push(h('span', { class: 'lv2-badge fire' }, '🔥 HOT'));
+            }
+            // v3.12 — WhatsApp 'customer waiting for reply' indicator.
+            // Shows a small green WhatsApp pill on the lead row whenever the
+            // LAST WA message in that thread was inbound (customer was the
+            // last to message). Mirrors what WA Inbox shows. Tooltip carries
+            // the preview text + timestamp for at-a-glance context.
+            if (l.last_wa_direction === 'in' && l.last_wa_at) {
+              const wasAt = new Date(l.last_wa_at);
+              const tip = '💬 New WhatsApp from customer · ' + (wasAt.toLocaleString('en-IN') || '') +
+                          (l.last_wa_text ? '\n\n"' + String(l.last_wa_text).slice(0, 120) + '"' : '');
+              badges.push(h('button', {
+                title: tip,
+                style: { padding: '2px 8px', fontSize: '10px', fontWeight: '700', background: '#dcfce7', color: '#15803d', border: '1px solid #86efac', borderRadius: '10px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '3px' },
+                onclick: (e) => { e.stopPropagation(); try { (window.openDuplicateHistory || function(){})(l.id); } catch (_) {} /* open slide-over */ try { openSlideOver(l); } catch (_) {} }
+              }, '💬 NEW WA'));
             }
             if (l.is_duplicate) {
               badges.push(h('button', {
