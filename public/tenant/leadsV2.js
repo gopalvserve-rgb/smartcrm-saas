@@ -1618,15 +1618,37 @@ tr:hover .lv2-actions { opacity: 1; }
           // v3.7 — hide kind='score' events; only show real activity
           // (call/wa/remark/status). Score changes are visible via the
           // AI Score chip's hover tooltip already.
+          // v3.8 — show ALL events in a scrollable container instead of capping at 8.
           const realEvents = events.filter(ev => ev && ev.kind !== 'score');
           actHost.innerHTML = '';
-          actHost.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' } },
-            h('h3', { style: { margin: '0' } }, '📊 Recent Activity'),
-            realEvents.length > 8 ? h('a', { style: { fontSize: '10px', color: '#6366f1', cursor: 'pointer', textDecoration: 'none' }, onclick: () => doViewFull(l) }, 'View all ' + realEvents.length + ' →') : null));
+          // Sticky header so the count + 'View full timeline' link stays
+          // visible while the user scrolls through many events.
+          actHost.appendChild(h('div', {
+            style: {
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              marginBottom: '8px', position: 'sticky', top: '0',
+              background: 'white', paddingBottom: '6px', zIndex: '2',
+              borderBottom: realEvents.length ? '1px solid #f1f5f9' : 'none'
+            }
+          },
+            h('h3', { style: { margin: '0', display: 'inline-flex', alignItems: 'center', gap: '6px' } },
+              '📊 Recent Activity',
+              realEvents.length ? h('span', { style: { fontSize: '10px', fontWeight: '500', color: '#94a3b8' } }, '(' + realEvents.length + ')') : null
+            ),
+            realEvents.length ? h('a', { style: { fontSize: '10px', color: '#6366f1', cursor: 'pointer', textDecoration: 'none' }, onclick: () => doViewFull(l) }, 'View full timeline →') : null));
           if (!realEvents.length) {
             actHost.appendChild(h('div', { style: { fontSize: '11.5px', color: '#94a3b8' } }, 'No activity yet'));
           } else {
-            realEvents.slice(0, 8).forEach(ev => actHost.appendChild(buildActRow(ev)));
+            // Scrollable list — caps height ~280px (~8 rows visible) and
+            // lets the user scroll to see the rest. No artificial cap.
+            const list = h('div', {
+              style: {
+                maxHeight: '280px', overflowY: 'auto', overflowX: 'hidden',
+                paddingRight: '4px', marginRight: '-4px'
+              }
+            });
+            realEvents.forEach(ev => list.appendChild(buildActRow(ev)));
+            actHost.appendChild(list);
           }
         }
       } catch (e) {
