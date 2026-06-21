@@ -1088,8 +1088,38 @@ tr:hover .lv2-actions { opacity: 1; }
         h('div', { class: 'lv2-av', style: { background: avColor(name) } }, initials(name)),
         h('div', { class: 'lv2-namestack' },
           h('span', { class: 'lv2-nm' }, name),
-          // v3.4 — ✨ AI badge removed per user; only show fire badge for HOT leads
-          score >= 80 ? h('div', { class: 'lv2-badges' }, h('span', { class: 'lv2-badge fire' }, '🔥 HOT')) : null))));
+          // v3.6 — Heat chip from WA AI Bot (cold/warm/hot/very_hot/on_fire) +
+          // Show history button when lead is_duplicate. Both mirror Classic.
+          (function () {
+            const badges = [];
+            const heatMap = {
+              cold:     { emoji: '❄️',     bg: '#dbeafe', fg: '#1e40af', label: 'Cold' },
+              warm:     { emoji: '✨',     bg: '#fef3c7', fg: '#92400e', label: 'Warm' },
+              hot:      { emoji: '🔥',     bg: '#fed7aa', fg: '#9a3412', label: 'Hot' },
+              very_hot: { emoji: '🔥🔥',   bg: '#fecaca', fg: '#991b1b', label: 'Very hot' },
+              on_fire:  { emoji: '🔥🔥🔥', bg: '#fca5a5', fg: '#7f1d1d', label: 'ON FIRE' }
+            };
+            if (l.heat_label && heatMap[l.heat_label]) {
+              const m = heatMap[l.heat_label];
+              const action = l.heat_action_required ? ' · ' + String(l.heat_action_required).replace(/_/g, ' ') : '';
+              const tip = 'AI Bot Heat ' + (l.heat_score || 0) + '/100 — ' + (l.heat_signal || m.label) + action;
+              badges.push(h('span', {
+                style: { display: 'inline-flex', alignItems: 'center', gap: '3px', padding: '2px 8px', borderRadius: '10px', background: m.bg, color: m.fg, fontWeight: '700', fontSize: '10px', cursor: 'help' },
+                title: tip
+              }, m.emoji + ' ' + m.label));
+            } else if (score >= 80) {
+              // Fallback: if no heat_label but smart_score is hot, show HOT
+              badges.push(h('span', { class: 'lv2-badge fire' }, '🔥 HOT'));
+            }
+            if (l.is_duplicate) {
+              badges.push(h('button', {
+                title: 'Click to see all past leads for this phone number',
+                style: { padding: '1px 7px', fontSize: '9px', fontWeight: '700', background: '#fef3c7', color: '#92400e', border: '1px solid #f59e0b', borderRadius: '4px', cursor: 'pointer' },
+                onclick: (e) => { e.stopPropagation(); try { (window.openDuplicateHistory || function(){})(l.id); } catch (_) {} }
+              }, '🕘 Show history'));
+            }
+            return badges.length ? h('div', { class: 'lv2-badges', style: { display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap', marginTop: '2px' } }, ...badges) : null;
+          })()))));
     if (vc.has('phone')) {
       tr.appendChild(h('td', null,
         h('div', { class: 'lv2-phonecell' },
