@@ -1092,38 +1092,59 @@ tr:hover .lv2-actions { opacity: 1; }
     // v1.5 — full re-render so filter bar (count, active pills, date inputs) reflects state
     const onFilterChange = () => { S.page = 1; renderModern(view); };
     if (!S.focusMode) wrap.appendChild(buildStatusChipBar(onFilterChange));
-    // v3.14 — Focus mode: render Hot / Warm / Nurture sections that respect current filters
+    // v3.16 — Focus mode: ALWAYS show Hot/Warm/Nurture sections.
+    // Bypass the score-based statusChip ('hot'/'warm' chip) so all three
+    // buckets remain visible even when a status chip is active — focus
+    // mode is meant to categorize ACROSS scores. Other filters (date,
+    // owner, source, search, status_id) still apply. Empty buckets show
+    // a clear empty state instead of being hidden.
     if (S.focusMode) {
+      // Snapshot + temporarily clear the score-based statusChip so all 3
+      // buckets populate. Then restore after.
+      const _savedChip = S.statusChip;
+      if (_savedChip === 'hot' || _savedChip === 'warm' || _savedChip === 'cold' || _savedChip === 'nurture') {
+        S.statusChip = 'all';
+      }
       const rows = filtered();
-      const hot     = rows.filter(l => Number(l.smart_score || 0) >= 80);
-      const warm    = rows.filter(l => { const s = Number(l.smart_score || 0); return s >= 50 && s < 80; });
-      const nurture = rows.filter(l => Number(l.smart_score || 0) < 50);
-      const buildSection = (title, list, accent) => {
-        if (!list.length) return null;
-        const sec = h('div', { style: { marginBottom: '16px', background: 'white', borderRadius: '12px', border: '1px solid #e2e8f0', overflow: 'hidden' } });
+      S.statusChip = _savedChip; // restore
+
+      // Sort within each bucket: highest score first
+      const sortByScore = (a, b) => Number(b.smart_score || 0) - Number(a.smart_score || 0);
+      const hot     = rows.filter(l => Number(l.smart_score || 0) >= 80).sort(sortByScore);
+      const warm    = rows.filter(l => { const s = Number(l.smart_score || 0); return s >= 50 && s < 80; }).sort(sortByScore);
+      const nurture = rows.filter(l => Number(l.smart_score || 0) < 50).sort(sortByScore);
+
+      const buildSection = (title, hint, list, accent) => {
+        // v3.16 — ALWAYS render the section, even when empty, so the user
+        // sees the full Hot → Warm → Nurture funnel structure.
+        const sec = h('div', { style: { marginBottom: '16px', background: 'white', borderRadius: '12px', border: '1px solid ' + accent.border, overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,.04)' } });
         sec.appendChild(h('div', {
-          style: { padding: '10px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: accent.bg, color: accent.fg, fontSize: '13px', fontWeight: '700' }
+          style: { padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: accent.bg, color: accent.fg, fontSize: '14px', fontWeight: '700' }
         },
-          h('span', null, accent.emoji + ' ' + title),
-          h('span', { style: { background: 'rgba(255,255,255,.6)', padding: '2px 8px', borderRadius: '10px', fontSize: '11px' } }, list.length + ' leads')));
-        const tbl = h('table', { class: 'lv2-tbl' });
-        const tbody = h('tbody');
-        list.slice(0, 20).forEach(l => tbody.appendChild(renderModernRow(l)));
-        tbl.appendChild(tbody);
-        sec.appendChild(tbl);
-        if (list.length > 20) sec.appendChild(h('div', { style: { padding: '8px 14px', textAlign: 'center', fontSize: '11px', color: '#94a3b8', borderTop: '1px solid #f1f5f9' } }, 'Showing 20 of ' + list.length + ' — exit focus mode to see all'));
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
+            h('span', { style: { fontSize: '18px' } }, accent.emoji),
+            h('span', null, title),
+            h('span', { style: { fontSize: '11px', fontWeight: '500', opacity: '.85' } }, '· ' + hint)),
+          h('span', { style: { background: 'rgba(255,255,255,.7)', padding: '3px 10px', borderRadius: '12px', fontSize: '12px', fontWeight: '700' } }, list.length + ' lead' + (list.length === 1 ? '' : 's'))));
+        if (!list.length) {
+          sec.appendChild(h('div', { style: { padding: '24px', textAlign: 'center', color: '#94a3b8', fontSize: '12px' } },
+            'No leads in this bucket match your current filters'));
+        } else {
+          const tbl = h('table', { class: 'lv2-tbl' });
+          const tbody = h('tbody');
+          // Up to 25 rows per section (was 20). User can exit focus mode for more.
+          list.slice(0, 25).forEach(l => tbody.appendChild(renderModernRow(l)));
+          tbl.appendChild(tbody);
+          sec.appendChild(tbl);
+          if (list.length > 25) sec.appendChild(h('div', { style: { padding: '8px 14px', textAlign: 'center', fontSize: '11px', color: '#94a3b8', borderTop: '1px solid #f1f5f9' } },
+            'Showing top 25 of ' + list.length + ' (highest-score first) — exit focus mode to see all'));
+        }
         return sec;
       };
-      const focusWrap = h('div', { style: { padding: '0 14px' } });
-      const hotSec = buildSection('Hot leads — act NOW', hot, { emoji: '🔥', bg: '#fef2f2', fg: '#b91c1c' });
-      const warmSec = buildSection('Warm leads — push this week', warm, { emoji: '✨', bg: '#fffbeb', fg: '#b45309' });
-      const nurSec = buildSection('Nurture — keep warm', nurture, { emoji: '❄️', bg: '#eff6ff', fg: '#1e40af' });
-      if (hotSec) focusWrap.appendChild(hotSec);
-      if (warmSec) focusWrap.appendChild(warmSec);
-      if (nurSec) focusWrap.appendChild(nurSec);
-      if (!hot.length && !warm.length && !nurture.length) {
-        focusWrap.appendChild(h('div', { style: { padding: '40px', textAlign: 'center', color: '#94a3b8' } }, 'No leads match your current filters'));
-      }
+      const focusWrap = h('div', { style: { padding: '0 14px 14px' } });
+      focusWrap.appendChild(buildSection('Hot leads',     'act NOW',          hot,     { emoji: '🔥', bg: '#fef2f2', fg: '#b91c1c', border: '#fecaca' }));
+      focusWrap.appendChild(buildSection('Warm leads',    'push this week',   warm,    { emoji: '☀️', bg: '#fffbeb', fg: '#b45309', border: '#fde68a' }));
+      focusWrap.appendChild(buildSection('Nurture leads', 'keep warm',        nurture, { emoji: '❄️', bg: '#eff6ff', fg: '#1e40af', border: '#bfdbfe' }));
       wrap.appendChild(focusWrap);
       view.appendChild(wrap);
       return;  // skip the regular table render
