@@ -35062,27 +35062,120 @@ function startFollowupPolling() {
     try {
       const threads = await api('api_wb_chat_threads', { phone_number_id: 'all' });
       let total = 0;
-      // FIX: API returns 'unread_count' not 'unread'. The badge was
-      // always 0 because of this field name mismatch. Read both
-      // defensively so we're future-proof if the API ever renames.
-      (threads || []).forEach(t => { total += Number(t.unread_count || t.unread || 0); });
+      // API returns the unread int under 'unread' (route returns
+      // outThreads with .unread on every thread). Read both
+      // defensively in case the field is ever renamed.
+      const arr = Array.isArray(threads) ? threads : (threads && (threads.threads || threads.rows)) || [];
+      arr.forEach(t => { total += Number(t.unread || t.unread_count || 0); });
       const badge = document.getElementById('wa-notif-count');
+      const sidebarItem = document.querySelector('.sidebar a[href="#/whatsbot"]')
+                       || document.querySelector('.sidebar [data-route="whatsbot"]')
+                       || document.querySelector('a[href*="whatsbot"].sidebar-item');
       if (badge) {
         badge.textContent = total > 99 ? '99+' : String(total);
         badge.hidden = total === 0;
-        // Add a subtle pulse animation when there's a NEW unread count
-        // higher than the last snapshot so the badge feels "alive".
+        // v2.4 — much louder visual when unread > 0:
+        //   - RED background (was green, which read as "OK / good")
+        //   - persistent pulse while count > 0 (not just one-shot on increase)
+        //   - bigger font, bolder, slight bounce
+        if (total > 0) {
+          badge.classList.add('wa-badge-on');
+        } else {
+          badge.classList.remove('wa-badge-on');
+        }
         if (!window._waLastTotal) window._waLastTotal = 0;
-        if (total > window._waLastTotal) {
+        const arrived = total > window._waLastTotal;
+        if (arrived) {
+          // Big bounce on increase
           try {
-            badge.style.animation = 'none';
-            // force reflow
-            void badge.offsetWidth;
-            badge.style.animation = 'wa-badge-pop .6s ease-out 2';
+            badge.style.animation = 'none'; void badge.offsetWidth;
+            badge.style.animation = 'wa-badge-bounce .6s ease-out 2, wa-badge-pulse 1.4s ease-in-out infinite .6s';
+          } catch (_) {}
+          // Detect WHICH thread is new and toast its name
+          try {
+            const prevMap = window._waPrevUnreadMap || {};
+            const newMap = {};
+            const newArrivals = [];
+            arr.forEach(t => {
+              const prev = Number(prevMap[t.lead_id || t.phone] || 0);
+              const cur  = Number(t.unread || t.unread_count || 0);
+              newMap[t.lead_id || t.phone] = cur;
+              if (cur > prev) newArrivals.push({
+                name: t.lead_name || t.profile_name || t.phone || '—',
+                added: cur - prev,
+                phone: t.phone, lead_id: t.lead_id
+              });
+            });
+            window._waPrevUnreadMap = newMap;
+            // Only toast on subsequent polls (not on first ever, to
+            // avoid 50 toasts at session start).
+            if (window._waPrevUnreadMapInitialized && newArrivals.length) {
+              newArrivals.slice(0, 3).forEach(na => {
+                try {
+                  if (typeof toast === 'function') {
+                    toast('💬 New WhatsApp from ' + na.name, 'ok');
+                  }
+                } catch (_) {}
+              });
+              if (newArrivals.length > 3) {
+                try { toast('💬 +' + (newArrivals.length - 3) + ' more new chats', 'ok'); } catch (_) {}
+              }
+              // Optional ping sound (very short, low volume)
+              try {
+                if (!window._waPingAudio) {
+                  // Inline tiny beep via WebAudio so we don't need an asset
+                  window._waPlayPing = function () {
+                    try {
+                      const AC = window.AudioContext || window.webkitAudioContext;
+                      if (!AC) return;
+                      const ctx = new AC();
+                      const o = ctx.createOscillator();
+                      const g = ctx.createGain();
+                      o.type = 'sine'; o.frequency.value = 880;
+                      g.gain.value = 0.08;
+                      o.connect(g); g.connect(ctx.destination);
+                      o.start(); o.stop(ctx.currentTime + 0.12);
+                      setTimeout(() => { try { ctx.close(); } catch (_) {} }, 300);
+                    } catch (_) {}
+                  };
+                  window._waPingAudio = true;
+                }
+                if (typeof window._waPlayPing === 'function') window._waPlayPing();
+              } catch (_) {}
+              // Browser tab title flash so people on another tab notice
+              try {
+                if (!window._waOrigTitle) window._waOrigTitle = document.title;
+                document.title = '(' + total + ') 💬 New WA — ' + window._waOrigTitle;
+                if (window._waTitleTimer) clearTimeout(window._waTitleTimer);
+                window._waTitleTimer = setTimeout(() => { document.title = window._waOrigTitle; }, 8000);
+              } catch (_) {}
+            }
+            window._waPrevUnreadMapInitialized = true;
           } catch (_) {}
         }
         window._waLastTotal = total;
       }
+      // Mirror the badge onto the sidebar WhatsApp nav item if present.
+      // Many users keep the left sidebar collapsed and only see the icons,
+      // so a small red dot there is a second clear signal.
+      try {
+        if (sidebarItem) {
+          let dot = sidebarItem.querySelector('.wa-nav-dot');
+          if (total > 0) {
+            if (!dot) {
+              dot = document.createElement('span');
+              dot.className = 'wa-nav-dot';
+              dot.title = total + ' unread WhatsApp message' + (total === 1 ? '' : 's');
+              sidebarItem.style.position = sidebarItem.style.position || 'relative';
+              sidebarItem.appendChild(dot);
+            }
+            dot.textContent = total > 99 ? '99+' : String(total);
+            dot.title = total + ' unread WhatsApp message' + (total === 1 ? '' : 's');
+          } else if (dot) {
+            dot.remove();
+          }
+        }
+      } catch (_) {}
       // Expose globally so wbChatV2's auto-poll can trigger an instant
       // refresh whenever it pulls new threads (no 30s lag).
       window._refreshWaBadge = _refreshWaBadge;

@@ -3869,7 +3869,13 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
   .topbar-chip[href="#/upcoming"] { display: none !important; }
   /* Surface the WhatsApp chat icon — was a faint ghost button, now green */
   @keyframes wa-badge-pop { 0% { transform: scale(1); } 50% { transform: scale(1.4); } 100% { transform: scale(1); } }
-#wa-notif-count { transition: background .2s ease; }
+@keyframes wa-badge-bounce { 0%, 100% { transform: translateY(0) scale(1); } 30% { transform: translateY(-4px) scale(1.5); } 60% { transform: translateY(0) scale(1.2); } }
+@keyframes wa-badge-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,.65); } 50% { box-shadow: 0 0 0 8px rgba(239,68,68,0); } }
+#wa-notif-count { transition: background .2s ease, color .2s ease; font-weight: 800 !important; font-size: 11px !important; min-width: 18px; text-align: center; padding: 2px 6px !important; border-radius: 10px; }
+/* v2.4 — when unread > 0, force RED background + persistent pulse */
+#wa-notif-count.wa-badge-on { background: #ef4444 !important; color: white !important; animation: wa-badge-pulse 1.4s ease-in-out infinite; }
+/* Sidebar WhatsApp nav red dot (mirrors topbar badge) */
+.wa-nav-dot { position: absolute; top: 6px; right: 6px; background: #ef4444; color: white; font-size: 9px; font-weight: 800; padding: 1px 5px; border-radius: 9px; min-width: 14px; text-align: center; line-height: 1.2; animation: wa-badge-pulse 1.4s ease-in-out infinite; pointer-events: none; }
 #btn-wa-notif {
     background: #25d366 !important;
     color: #fff !important;
