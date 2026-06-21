@@ -678,24 +678,87 @@ async function api_copilot_lead_timeline(token, payload) {
   await _requireUser(token);
   const leadId = Number(payload && payload.lead_id);
   if (!leadId) return { ok: false, error: 'lead_id required' };
-  const limit = Math.min(80, Number((payload && payload.limit) || 50));
+  const limit = Math.min(120, Number((payload && payload.limit) || 80));
   const events = [];
 
+  // WhatsApp messages — message_type, not media_type (older schema flips).
   try {
-    const r = await db.query(`SELECT direction, body, media_type, created_at FROM whatsapp_messages WHERE lead_id=$1 ORDER BY created_at DESC LIMIT 30`, [leadId]);
-    for (const row of r.rows) events.push({ kind: 'wa', at: row.created_at, dir: row.direction, text: row.body, media: row.media_type });
+    const r = await db.query(`SELECT direction, body, message_type, created_at FROM whatsapp_messages WHERE lead_id=$1 ORDER BY created_at DESC LIMIT 50`, [leadId]);
+    for (const row of r.rows) events.push({ kind: 'wa', at: row.created_at, dir: row.direction, text: row.body, media: row.message_type });
   } catch {}
+  // Calls — recording is via recording_id (FK to lead_recordings), not recording_url.
+  // Resolve to /api/recordings/<id>/audio path so client can wire the Play button.
   try {
-    const r = await db.query(`SELECT direction, duration_s, recording_url, created_at FROM call_events WHERE lead_id=$1 ORDER BY created_at DESC LIMIT 30`, [leadId]);
-    for (const row of r.rows) events.push({ kind: 'call', at: row.created_at, dir: row.direction, duration: row.duration_s, recording: row.recording_url });
+    const r = await db.query(
+      `SELECT ce.direction, ce.duration_s, ce.recording_id, ce.event, ce.created_at,
+              u.name AS by_name
+         FROM call_events ce
+         LEFT JOIN users u ON u.id = ce.user_id
+         WHERE ce.lead_id=$1
+         ORDER BY ce.created_at DESC LIMIT 50`, [leadId]);
+    for (const row of r.rows) events.push({
+      kind: 'call', at: row.created_at, dir: row.direction,
+      duration: row.duration_s, event: row.event, by: row.by_name,
+      recording_id: row.recording_id,
+      recording: row.recording_id ? ('/api/recordings/' + row.recording_id + '/audio') : null
+    });
   } catch {}
+  // Remarks — schema column is 'remark' (not 'body'). JOIN users for the author.
   try {
-    const r = await db.query(`SELECT body, created_by_name, created_at FROM remarks WHERE lead_id=$1 ORDER BY created_at DESC LIMIT 30`, [leadId]);
-    for (const row of r.rows) events.push({ kind: 'remark', at: row.created_at, text: row.body, by: row.created_by_name });
+    const r = await db.query(
+      `SELECT rm.remark, rm.created_at, rm.status_id, u.name AS by_name
+         FROM remarks rm LEFT JOIN users u ON u.id = rm.user_id
+         WHERE rm.lead_id=$1 ORDER BY rm.created_at DESC LIMIT 50`, [leadId]);
+    for (const row of r.rows) events.push({
+      kind: 'remark', at: row.created_at, text: row.remark, by: row.by_name
+    });
   } catch {}
+  // Status changes — from lead_stage_log. JOIN statuses twice for from/to names + users for actor.
+  try {
+    const r = await db.query(
+      `SELECT lsl.from_status_id, lsl.to_status_id, lsl.duration_s, lsl.created_at,
+              sf.name AS from_name, st.name AS to_name, u.name AS by_name
+         FROM lead_stage_log lsl
+         LEFT JOIN statuses sf ON sf.id = lsl.from_status_id
+         LEFT JOIN statuses st ON st.id = lsl.to_status_id
+         LEFT JOIN users u ON u.id = lsl.user_id
+         WHERE lsl.lead_id=$1 ORDER BY lsl.created_at DESC LIMIT 30`, [leadId]);
+    for (const row of r.rows) events.push({
+      kind: 'status', at: row.created_at,
+      old_status: row.from_name, new_status: row.to_name,
+      by: row.by_name, time_in_prev: row.duration_s
+    });
+  } catch {}
+  // Follow-ups — both the set-event and any reschedule/complete are useful.
+  try {
+    const r = await db.query(
+      `SELECT f.due_at, f.note, f.is_done, f.created_at, u.name AS by_name
+         FROM followups f LEFT JOIN users u ON u.id = f.user_id
+         WHERE f.lead_id=$1 ORDER BY f.created_at DESC LIMIT 20`, [leadId]);
+    for (const row of r.rows) events.push({
+      kind: 'followup', at: row.created_at,
+      action: row.is_done ? 'completed' : 'scheduled',
+      due_at: row.due_at, text: row.note, by: row.by_name
+    });
+  } catch {}
+  // Lead actions catch-all (created / assigned / etc) — surface anything the
+  // explicit queries above missed.
+  try {
+    const r = await db.query(
+      `SELECT la.action_type, la.meta_json, la.created_at, u.name AS by_name
+         FROM lead_actions la LEFT JOIN users u ON u.id = la.user_id
+         WHERE la.lead_id=$1 AND la.action_type NOT IN ('status_change','remark','call')
+         ORDER BY la.created_at DESC LIMIT 20`, [leadId]);
+    for (const row of r.rows) events.push({
+      kind: row.action_type === 'assigned' ? 'assign' :
+            row.action_type === 'created'  ? 'created' : 'action',
+      at: row.created_at, label: row.action_type, by: row.by_name, meta: row.meta_json
+    });
+  } catch {}
+  // Score log (kept for compatibility; client filters this kind out of UI feeds).
   try {
     const r = await db.query(`SELECT old_score, new_score, delta, trigger_event, reason_text, changed_at FROM lead_score_log WHERE lead_id=$1 ORDER BY changed_at DESC LIMIT 20`, [leadId]);
-    for (const row of r.rows) events.push({ kind: 'score', at: row.changed_at, old: row.old_score, new: row.new_score, delta: row.delta, why: row.reason_text });
+    for (const row of r.rows) events.push({ kind: 'score', at: row.changed_at, old_score: row.old_score, new_score: row.new_score, delta: row.delta, reason_text: row.reason_text, trigger_event: row.trigger_event });
   } catch {}
 
   events.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
