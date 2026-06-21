@@ -1182,8 +1182,16 @@ tr:hover .lv2-actions { opacity: 1; }
     });
     // + Refresh / Export / New
     qchips.appendChild(h('div', { style: { marginLeft: 'auto', display: 'flex', gap: '4px' } },
-      // v3.13 — Compact theme switcher: small swatches palette
+      // v3.18 — Theme switcher is DESKTOP-ONLY. Hide on mobile screens.
       (function () {
+        const _isMobile = (typeof window !== 'undefined') && (
+          window.matchMedia && window.matchMedia('(max-width: 768px)').matches
+          || window.innerWidth < 768
+          || /Mobi|Android/i.test(navigator.userAgent || '')
+        );
+        // Still apply the saved theme on mobile (so colors are consistent
+        // if the user later opens on desktop), but don't render the
+        // picker UI. Return null so the toolbar layout is unaffected.
         const themes = [
           { key: 'default', color: '#4338ca', body: 'lv2-theme-default', label: 'Indigo' },
           { key: 'emerald', color: '#10b981', body: 'lv2-theme-emerald', label: 'Emerald' },
@@ -1199,6 +1207,9 @@ tr:hover .lv2-actions { opacity: 1; }
           try { localStorage.setItem('crm.lv2.theme', k); } catch (_) {}
         };
         _applyTheme(current);
+        // v3.18 — bail out on mobile AFTER applying the saved theme so
+        // colors stay consistent, but the picker UI is hidden.
+        if (_isMobile) return null;
         const swatchRow = h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 8px', background: 'white', border: '1px solid #e2e8f0', borderRadius: '14px' }, title: 'Theme — click a color to change' });
         swatchRow.appendChild(h('span', { style: { fontSize: '10px', color: '#94a3b8', marginRight: '2px' } }, '🎨'));
         themes.forEach(t => {
