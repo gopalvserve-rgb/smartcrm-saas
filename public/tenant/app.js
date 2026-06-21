@@ -1671,8 +1671,8 @@ const NAV_GROUPS = [
     { id: 'educrosssell',  label: '⭐ Cross-Sell',    icon: '⭐', roles: ['admin','manager'],                requiresPack: 'education', search: 'cross sell upsell' },
     // ---- Real Estate pack (visible only when pack is active) ----
     { id: 'reinventory',     label: 'Inventory Board', icon: '🏢', roles: ['admin','manager','team_leader'], requiresPack: 'realestate', search: 'inventory units property board' },
-    { id: 'rerequirements',  label: 'Buyer Reqs',      icon: '🎯', roles: ['admin','manager','team_leader','agent'], requiresPack: 'realestate', search: 'buyer requirements demands' },
-    { id: 'revisits',        label: 'Site Visits',     icon: '📅', roles: ['admin','manager','team_leader','agent'], requiresPack: 'realestate', search: 'site visit property visit' },
+    { id: 'rerequirements',  label: 'Buyer Reqs',      icon: '🎯', roles: ['admin','manager','team_leader','agent','sales'], requiresPack: 'realestate', search: 'buyer requirements demands' },
+    { id: 'revisits',        label: 'Site Visits',     icon: '📅', roles: ['admin','manager','team_leader','agent','sales'], requiresPack: 'realestate', search: 'site visit property visit' },
     { id: 'recpperf',        label: 'Broker Perf',     icon: '👥', roles: ['admin','manager'],                requiresPack: 'realestate', search: 'broker channel partner performance' },
     { id: 'recommissions',   label: 'Commissions',     icon: '💸', roles: ['admin','manager'],                requiresPack: 'realestate', search: 'commissions payout brokerage' },
     /* SHOWCASE_PACK_VISIBILITY_v1 — Phase 1: one overview item per Finance / Solar /

@@ -48,6 +48,10 @@ const CONFIG_KEYS = [
   // '1' = create a lead from each call when no existing match; '0' = skip.
   // CALLS_AUTOLEAD_STATUS_ID = id of the status to apply (falls back to 'New').
   'CALLS_AUTOLEAD_INBOUND', 'CALLS_AUTOLEAD_OUTBOUND', 'CALLS_AUTOLEAD_STATUS_ID',
+  // CALL_ACTIVITY_LEAD_ONLY_v1 (2026-06-21) — when '1', the Call Activity
+  // report + Recent Calls list filter out call_events where lead_id IS NULL
+  // (personal calls that never matched a CRM lead). Default '0' = show all.
+  'CALL_ACTIVITY_LEAD_ONLY',
   // CALL_DUP_LEAD_v1 — 'attach' (link to existing) | 'duplicate' (new is_duplicate row)
   'CALLS_AUTOLEAD_ON_DUPLICATE',
   // Auto vs Manual mode for call-to-lead creation. 'auto' (default) creates

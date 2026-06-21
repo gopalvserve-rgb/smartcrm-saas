@@ -1,4 +1,14 @@
 const db = require('../db/pg');
+
+// CALL_ACTIVITY_LEAD_ONLY_v1 — when '1', skip personal (non-CRM-lead) calls
+// from the Call Activity report + Recent Calls list. Cached per request.
+async function _callActivityLeadOnly() {
+  try {
+    const cfg = await db.getConfig('CALL_ACTIVITY_LEAD_ONLY');
+    return String(cfg || '') === '1';
+  } catch (_) { return false; }
+}
+
 const { authUser, getVisibleUserIds } = require('../utils/auth');
 
 // Timezone the user thinks of "today" in. Server runs UTC on Railway but
@@ -958,10 +968,9 @@ async function api_reports_callActivity(token, filters) {
       WHERE ce.created_at >= $1 AND ce.created_at <= $2
             -- CALL_INTENT_EXCLUDE_v1 (2026-05-21): exclude push-notification
             -- "intent" events like autodial_requested / dial_requested that
-            -- never resulted in an actual call. These were pre-inserted on
-            -- lead-create as a recording-sync anchor but they shouldn't show
-            -- up in the Call Activity totals.
+            -- never resulted in an actual call.
             AND ce.event != 'autodial_requested'
+            ${leadOnlyClause}
             ${userScopeSql.replace(/user_id/g, 'ce.user_id')}
     ),
     bucketed AS (
@@ -1162,6 +1171,7 @@ async function api_reports_callActivity(token, filters) {
      WHERE ce.created_at >= $1 AND ce.created_at <= $2
            -- CALL_INTENT_EXCLUDE_v1 — hide intent events from Recent Calls too
            AND ce.event != 'autodial_requested'
+           ${leadOnlyClause}
            -- CALL_RECENT_DEDUP_v2 (2026-06-03) — hide 'incoming_ringing' rows
            -- that have a paired 'call_ended' OR 'recording_saved' for the
            -- same user+phone within 10 min (call_ended) / 30 min (recording).
