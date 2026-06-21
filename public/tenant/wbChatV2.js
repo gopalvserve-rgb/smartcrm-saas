@@ -212,6 +212,10 @@
 .wbv2-row .source { display: inline-block; font-size: 9px; font-weight: 600; padding: 1px 6px; border-radius: 8px; background: #f0f2f5; color: #54656f; margin-top: 3px; }
 .wbv2-row .right { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; }
 .wbv2-row .when { font-size: 11px; color: #667781; white-space: nowrap; }
+@keyframes wbv2-spin { to { transform: rotate(360deg); } }
+@keyframes wbv2-pulse-new { 0%, 100% { box-shadow: 0 0 0 0 rgba(16,185,129,.5); } 50% { box-shadow: 0 0 0 6px rgba(16,185,129,0); } }
+.wbv2-row.new-msg { background: linear-gradient(90deg, #ecfdf5 0%, #ffffff 60%); border-left: 3px solid #10b981; animation: wbv2-pulse-new 1.8s ease-out 2; }
+.wbv2-row.new-msg .name { color: #065f46; font-weight: 700; }
 .wbv2-row .unread { background: #00a884; color: white; font-size: 10px; padding: 1px 7px; border-radius: 10px; font-weight: 600; min-width: 18px; text-align: center; }
 .wbv2-row .ai { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 8px; }
 .wbv2-row .ai.hot  { background: #fde7e7; color: #c04444; }
@@ -377,12 +381,59 @@
   }
 
   /* ---------- LEFT — threads ---------- */
+  // v2.0 — flag any thread whose unread_count went UP between polls
+  function _wbv2DiffNew(prevList, newList) {
+    try {
+      const prevMap = {};
+      (prevList || []).forEach(function (t) { prevMap[t.lead_id] = Number(t.unread_count || 0); });
+      const newSince = S._newSince || {};
+      (newList || []).forEach(function (t) {
+        const prevU = prevMap[t.lead_id] || 0;
+        const nowU  = Number(t.unread_count || 0);
+        if (nowU > prevU) newSince[t.lead_id] = Date.now();
+      });
+      S._newSince = newSince;
+    } catch (_) {}
+  }
   async function loadThreads() {
     try {
       const tenantBrand = (window.CRM && CRM.brand) || {};
       const opts = { scanLimit: 10000, show_all: true };
       const list = await api('api_wb_chat_threads', opts);
+      const _prev = S.threadsRaw || [];
       S.threadsRaw = Array.isArray(list) ? list : [];
+      _wbv2DiffNew(_prev, S.threadsRaw);
+      // v2.0 — install silent auto-poll once. Refreshes thread list +
+      // active chat every 20s so reps don't need to click Refresh.
+      if (!S._wbv2_poller) {
+        S._wbv2_poller = setInterval(async function () {
+          try {
+            const opts2 = { scanLimit: 10000, show_all: true };
+            const list2 = await api('api_wb_chat_threads', opts2).catch(function () { return null; });
+            if (Array.isArray(list2)) {
+              const _prev2 = S.threadsRaw || [];
+              S.threadsRaw = list2;
+              _wbv2DiffNew(_prev2, S.threadsRaw);
+              renderThreads();
+            }
+            if (S.activeThread && S.activeThread.phone) {
+              const r2 = await api('api_wb_chat_messages', S.activeThread.phone).catch(function () { return null; });
+              const fresh = Array.isArray(r2) ? r2 : (r2 && r2.messages) || [];
+              if (fresh.length && fresh.length !== S.messages.length) {
+                S.messages = fresh;
+                renderChat();
+              }
+            }
+          } catch (_) { /* silent */ }
+        }, 20000);
+        try {
+          window.addEventListener('hashchange', function () {
+            if (!String(location.hash || '').includes('whatsbot') && S._wbv2_poller) {
+              clearInterval(S._wbv2_poller); S._wbv2_poller = null;
+            }
+          });
+        } catch (_) {}
+      }
       renderThreads();
     } catch (e) {
       const c = $('#wbv2-threads');
@@ -549,8 +600,10 @@
 
     const isActive = S.activeLeadId && Number(S.activeLeadId) === Number(t.lead_id);
 
+    // v2.0 — green pulse highlight when a NEW inbound msg just arrived
+    const isNew = !!(S._newSince && S._newSince[t.lead_id]);
     return h('div', {
-      class: 'wbv2-row' + (isActive ? ' active' : ''),
+      class: 'wbv2-row' + (isActive ? ' active' : '') + (isNew && !isActive ? ' new-msg' : ''),
       onclick: () => activateThread(t)
     },
       h('div', { class: 'top' },
@@ -570,6 +623,7 @@
   async function activateThread(t) {
     S.activeLeadId = t.lead_id;
     S.activeThread = t;
+    if (S._newSince && S._newSince[t.lead_id]) delete S._newSince[t.lead_id];
     S.lead = null; S.messages = []; S.aiScore = null; S.activity = [];
     renderThreadList();              // re-render to show active state
     renderChat();                    // shows loading
@@ -882,9 +936,23 @@
         const tl = await api('api_copilot_lead_timeline', { lead_id: leadId, limit: 30 }).catch(() => null);
         S.activity = (tl && Array.isArray(tl.events)) ? tl.events : (Array.isArray(tl) ? tl : []);
       } catch (_) { S.activity = []; }
-      // AI Summary — reset cache on lead switch (lazy fetch on user click)
+      // AI Summary — v2.0 auto-fires on lead open (no button click required)
       S.aiSummary = null;
+      S.aiSummaryLoading = true;
+      S.aiSummaryError = null;
       renderLead();
+      api('api_copilot_lead_summary', { lead_id: leadId }).then(function (r) {
+        if (Number(S.activeLeadId) !== Number(leadId)) return;
+        S.aiSummary = (r && (r.summary || r.text || r.body)) || '(no summary returned)';
+        S.aiSummaryLoading = false;
+        renderLead();
+      }).catch(function (e) {
+        if (Number(S.activeLeadId) !== Number(leadId)) return;
+        S.aiSummary = null;
+        S.aiSummaryLoading = false;
+        S.aiSummaryError = (e && e.message) || 'AI summary failed';
+        renderLead();
+      });
     } catch (e) {
       const c = $('#wbv2-lead');
       if (c) { c.innerHTML = ''; c.appendChild(h('div', { class: 'wbv2-l-empty', style: { color: '#c04444' } }, 'Could not load lead: ' + e.message)); }
@@ -981,30 +1049,43 @@
             h('div', null, S.aiScore.score_reason || S.aiScore.reason || '')))));
     }
 
-    // AI Summary — button that fetches api_copilot_lead_summary on click
+    // AI Summary — v2.0 auto-fires on lead open
     host.appendChild(h('div', { class: 'wbv2-sec' },
       h('div', { class: 'lab' }, '✨ AI Summary'),
       S.aiSummary
         ? h('div', { style: { padding: '10px 12px', background: 'linear-gradient(135deg, #f0f4ff 0%, #fff8f0 100%)', border: '1px solid #d4dffd', borderRadius: '10px', fontSize: '12px', color: '#1e293b', lineHeight: '1.5', whiteSpace: 'pre-wrap' } }, S.aiSummary)
-        : h('button', {
-            style: { width: '100%', padding: '10px 14px', background: 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)', color: 'white', border: 'none', borderRadius: '10px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' },
-            onclick: async function () {
-              this.disabled = true; this.textContent = '⏳ Asking AI…';
-              try {
-                const r = await api('api_copilot_lead_summary', { lead_id: l.id });
-                S.aiSummary = (r && (r.summary || r.text || r.body)) || 'No summary returned.';
-                renderLead();
-              } catch (e) { this.disabled = false; this.textContent = '✨ Generate AI Summary'; toast(e.message, 'err'); }
-            }
-          }, '✨ Generate AI Summary')));
+        : S.aiSummaryLoading
+          ? h('div', { style: { padding: '10px 12px', background: 'linear-gradient(135deg, #f0f4ff 0%, #fff8f0 100%)', border: '1px solid #d4dffd', borderRadius: '10px', fontSize: '12px', color: '#6366f1', display: 'flex', alignItems: 'center', gap: '8px' } },
+              h('span', { style: { display: 'inline-block', width: '12px', height: '12px', border: '2px solid #c7d2fe', borderTopColor: '#6366f1', borderRadius: '50%', animation: 'wbv2-spin 0.7s linear infinite' } }),
+              '⏳ Generating summary…')
+          : h('button', {
+              style: { width: '100%', padding: '10px 14px', background: 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)', color: 'white', border: 'none', borderRadius: '10px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' },
+              onclick: async function () {
+                this.disabled = true; this.textContent = '⏳ Asking AI…';
+                S.aiSummaryLoading = true;
+                try {
+                  const r = await api('api_copilot_lead_summary', { lead_id: l.id });
+                  S.aiSummary = (r && (r.summary || r.text || r.body)) || 'No summary returned.';
+                  S.aiSummaryLoading = false;
+                  renderLead();
+                } catch (e) { S.aiSummaryLoading = false; this.disabled = false; this.textContent = S.aiSummaryError ? '✨ Retry AI Summary' : '✨ Generate AI Summary'; toast(e.message, 'err'); }
+              }
+            }, S.aiSummaryError ? '✨ Retry AI Summary' : '✨ Generate AI Summary')));
 
-    // Recent Activity timeline (WA + calls + remarks + score changes)
+    // Recent Activity (v2.0 — hide kind='score'; show ALL in scrollable container)
     if (Array.isArray(S.activity) && S.activity.length) {
-      const top = S.activity.slice(0, 6);
-      const sec = h('div', { class: 'wbv2-sec' },
-        h('div', { class: 'lab' }, h('span', null, '📊 Recent Activity'), S.activity.length > 6 ? h('span', { class: 'tog', onclick: () => { if (typeof window.openLeadModal === 'function') { try { window.openLeadModal(l.id); return; } catch (_) {} } try { window.location.hash = '#/leads'; setTimeout(() => { try { window.openLeadModal && window.openLeadModal(l.id); } catch (_) {} }, 500); } catch (_) {} } }, 'View all ' + S.activity.length + ' →') : null));
-      top.forEach(ev => sec.appendChild(activityRow(ev)));
-      host.appendChild(sec);
+      const realEvents = S.activity.filter(function (ev) { return ev && ev.kind !== 'score'; });
+      if (realEvents.length) {
+        const sec = h('div', { class: 'wbv2-sec' },
+          h('div', { class: 'lab', style: { position: 'sticky', top: '0', background: 'white', zIndex: '2', borderBottom: '1px solid #f1f5f9', paddingBottom: '4px' } },
+            h('span', null, '📊 Recent Activity'),
+            h('span', { style: { fontSize: '10px', fontWeight: '500', color: '#94a3b8', marginLeft: '4px' } }, '(' + realEvents.length + ')'),
+            h('span', { class: 'tog', onclick: function () { if (typeof window.openLeadModal === 'function') { try { window.openLeadModal(l.id); return; } catch (_) {} } try { window.location.hash = '#/leads'; setTimeout(function () { try { window.openLeadModal && window.openLeadModal(l.id); } catch (_) {} }, 500); } catch (_) {} } }, 'View full →')));
+        const list = h('div', { style: { maxHeight: '260px', overflowY: 'auto', overflowX: 'hidden', paddingRight: '4px', marginRight: '-4px' } });
+        realEvents.forEach(function (ev) { list.appendChild(activityRow(ev)); });
+        sec.appendChild(list);
+        host.appendChild(sec);
+      }
     }
 
     // Last Call card (most recent call event with optional recording link)
