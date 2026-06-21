@@ -218,7 +218,7 @@
 .wbv2-row:hover { background: #f5f6f6; }
 .wbv2-row.active { background: #f0f2f5; }
 .wbv2-row .top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
-.wbv2-chip-status { font-size: 10px !important; padding: 3px 9px !important; letter-spacing: .3px; }
+.wbv2-chip-status { font-size: 6px !important; padding: 2px 5px !important; letter-spacing: .2px; line-height: 1.4; }
 .wbv2-chip-empty { background: #f1f5f9 !important; color: #94a3b8 !important; text-transform: none !important; font-weight: 500 !important; font-style: italic; }
 
 .wbv2-row .owner { font-size: 10px; color: #667781; white-space: nowrap; }
