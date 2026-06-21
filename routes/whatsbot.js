@@ -1834,6 +1834,11 @@ async function api_wb_chat_threads(token, opts) {
         last_message: m.body || '',
         last_message_type: m.message_type || 'text',
         last_at: m.created_at,
+        // v2.8 — capture the direction of the most-recent message
+        // (rows are DESC by created_at so this IS the latest one).
+        // The client uses last_direction='in' as the green-dot signal
+        // so 'customer waiting for response' shows even when unread=0.
+        last_direction: m.direction || null,
         unread: 0,
         // Most-recent inbound phone_number_id wins (auto-route replies);
         // if no inbound exists yet we fall back to the most recent
