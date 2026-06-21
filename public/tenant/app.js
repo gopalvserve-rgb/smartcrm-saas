@@ -35062,12 +35062,30 @@ function startFollowupPolling() {
     try {
       const threads = await api('api_wb_chat_threads', { phone_number_id: 'all' });
       let total = 0;
-      (threads || []).forEach(t => { total += Number(t.unread) || 0; });
+      // FIX: API returns 'unread_count' not 'unread'. The badge was
+      // always 0 because of this field name mismatch. Read both
+      // defensively so we're future-proof if the API ever renames.
+      (threads || []).forEach(t => { total += Number(t.unread_count || t.unread || 0); });
       const badge = document.getElementById('wa-notif-count');
       if (badge) {
         badge.textContent = total > 99 ? '99+' : String(total);
         badge.hidden = total === 0;
+        // Add a subtle pulse animation when there's a NEW unread count
+        // higher than the last snapshot so the badge feels "alive".
+        if (!window._waLastTotal) window._waLastTotal = 0;
+        if (total > window._waLastTotal) {
+          try {
+            badge.style.animation = 'none';
+            // force reflow
+            void badge.offsetWidth;
+            badge.style.animation = 'wa-badge-pop .6s ease-out 2';
+          } catch (_) {}
+        }
+        window._waLastTotal = total;
       }
+      // Expose globally so wbChatV2's auto-poll can trigger an instant
+      // refresh whenever it pulls new threads (no 30s lag).
+      window._refreshWaBadge = _refreshWaBadge;
     } catch (_) { /* silent */ }
   }
   _refreshWaBadge();

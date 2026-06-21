@@ -3868,7 +3868,9 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
   .topbar-chip[href="#/duetoday"],
   .topbar-chip[href="#/upcoming"] { display: none !important; }
   /* Surface the WhatsApp chat icon — was a faint ghost button, now green */
-  #btn-wa-notif {
+  @keyframes wa-badge-pop { 0% { transform: scale(1); } 50% { transform: scale(1.4); } 100% { transform: scale(1); } }
+#wa-notif-count { transition: background .2s ease; }
+#btn-wa-notif {
     background: #25d366 !important;
     color: #fff !important;
     border-radius: 8px !important;

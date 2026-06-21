@@ -433,6 +433,9 @@
               S.threadsRaw = list2;
               _wbv2DiffNew(_prev2, S.threadsRaw);
               renderThreads();
+              // v2.3 — also nudge the global topbar badge so the
+              // 💬 unread count updates instantly when on the WA tab.
+              try { if (typeof window._refreshWaBadge === 'function') window._refreshWaBadge(); } catch (_) {}
             }
             if (S.activeThread && S.activeThread.phone) {
               const r2 = await api('api_wb_chat_messages', S.activeThread.phone).catch(function () { return null; });
@@ -575,7 +578,25 @@
     const meId = (S.me && S.me.id) || null;
     const q = String(S.search || '').toLowerCase().trim();
 
-    let rows = (S.threadsRaw || []).filter(t => {
+    // v2.3 — Sort: unread/new threads ALWAYS bubble to top, then by
+    // last_activity_at desc. Without this an old thread with new
+    // unread messages could be 50 rows down because timestamp wasn't
+    // updated by the WA webhook handler.
+    const _sortedSrc = (S.threadsRaw || []).slice().sort(function (a, b) {
+      const aU = Number(a.unread_count || 0);
+      const bU = Number(b.unread_count || 0);
+      const aNew = (S._newSince && S._newSince[a.lead_id]) ? 1 : 0;
+      const bNew = (S._newSince && S._newSince[b.lead_id]) ? 1 : 0;
+      // Tier 1: green-pulse "just arrived" wins
+      if (aNew !== bNew) return bNew - aNew;
+      // Tier 2: thread with more unread on top
+      if (aU !== bU) return bU - aU;
+      // Tier 3: most recent activity
+      const aT = new Date(a.last_activity_at || a.last_msg_at || a.updated_at || 0).getTime();
+      const bT = new Date(b.last_activity_at || b.last_msg_at || b.updated_at || 0).getTime();
+      return bT - aT;
+    });
+    let rows = _sortedSrc.filter(t => {
       const last = t.last_activity_at || t.last_msg_at || t.updated_at;
       if (last) {
         const age = now - new Date(last).getTime();
