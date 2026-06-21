@@ -590,19 +590,26 @@
     // last_activity_at desc. Without this an old thread with new
     // unread messages could be 50 rows down because timestamp wasn't
     // updated by the WA webhook handler.
+    // v2.11 — Sort tiers ensure NEWEST always on top:
+    //   1. Just-arrived inbound (poll diff catches it)
+    //   2. Any unread (more unread above lower count)
+    //   3. Most recent activity timestamp (API's t.last_at is
+    //      authoritative — falls back through last_activity_at,
+    //      last_msg_at, updated_at, created_at for safety).
     const _sortedSrc = (S.threadsRaw || []).slice().sort(function (a, b) {
       const aU = Number(a.unread || a.unread_count || 0);
       const bU = Number(b.unread || b.unread_count || 0);
       const aNew = (S._newSince && S._newSince[a.lead_id]) ? 1 : 0;
       const bNew = (S._newSince && S._newSince[b.lead_id]) ? 1 : 0;
-      // Tier 1: green-pulse "just arrived" wins
+      // Tier 1: 'just arrived' wins
       if (aNew !== bNew) return bNew - aNew;
       // Tier 2: thread with more unread on top
       if (aU !== bU) return bU - aU;
-      // Tier 3: most recent activity
-      const aT = new Date(a.last_activity_at || a.last_msg_at || a.updated_at || 0).getTime();
-      const bT = new Date(b.last_activity_at || b.last_msg_at || b.updated_at || 0).getTime();
-      return bT - aT;
+      // Tier 3: most recent activity (try every plausible timestamp field)
+      const _ts = function (t) {
+        return new Date(t.last_at || t.last_activity_at || t.last_msg_at || t.updated_at || t.created_at || 0).getTime();
+      };
+      return _ts(b) - _ts(a);
     });
     let rows = _sortedSrc.filter(t => {
       const last = t.last_activity_at || t.last_msg_at || t.updated_at;
@@ -701,16 +708,14 @@
           h('span', { class: 'when' }, fmtRelative(t.last_activity_at || t.last_msg_at || t.updated_at)),
           // v2.5 — NEW pill takes priority when a fresh inbound just arrived.
           // Persistent pulse so the user spots it even at a glance.
-          // v2.8 — WhatsApp-style indicator hierarchy:
-          //   1) Just-arrived NEW MSG pill (caught by poll diff)
-          //   2) Unread count chip (green pill with envelope)
-          //   3) Customer last-to-message — green dot (no count, but signals 'waiting')
-          //   4) Score bucket chip — neutral fallback
-          isNew
-            ? h('span', { class: 'wbv2-new-pill', title: 'New message just arrived' }, '\ud83d\udce9 NEW MSG')
-            : (unread > 0 ? h('span', { class: 'unread', title: unread + ' unread message' + (unread === 1 ? '' : 's') }, '\ud83d\udce9 ' + String(unread)) :
-                (t.last_direction === 'in' ? h('span', { class: 'wbv2-waiting-dot', title: 'Customer was last to message — needs your reply' }, '\u25cf') :
-                  (bucket ? h('span', { class: 'ai ' + bucket }, String(score)) : null))))));
+          // v2.11 — User asked to remove the orange '📩 NEW MSG' pill.
+          // Keep only: green count chip when unread > 0, green dot when
+          // customer was last to message, otherwise the score bucket.
+          // 'Just arrived' state still bubbles to the top via the sort.
+          unread > 0
+            ? h('span', { class: 'unread', title: unread + ' unread message' + (unread === 1 ? '' : 's') }, '\ud83d\udce9 ' + String(unread))
+            : (t.last_direction === 'in' ? h('span', { class: 'wbv2-waiting-dot', title: 'Customer was last to message — needs your reply' }, '\u25cf') :
+                (bucket ? h('span', { class: 'ai ' + bucket }, String(score)) : null)))));
   }
   // v2.2 — hex → light pastel for chip backgrounds (alpha 1=palest, 0.7=border)
   function _hexLight(hex, alpha) {
