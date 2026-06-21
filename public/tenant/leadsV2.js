@@ -225,6 +225,8 @@
 .lv2-theme-mono .lv2-scorechip.hot, .lv2-theme-mono .lv2-scorechip.warm, .lv2-theme-mono .lv2-scorechip.cold { background: #f1f5f9 !important; color: #0f172a !important; border-color: #cbd5e1 !important; }
 .lv2-theme-mono .qchip.active { background: #0f172a !important; color: white !important; border-color: #0f172a !important; }
 .lv2-theme-mono .lv2-act.api, .lv2-theme-mono .lv2-act.ai { background: #0f172a !important; color: white !important; }
+/* v3.13 — Bulk action bar animation */
+@keyframes lv2-bulk-pop { from { transform: translate(-50%, 20px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
 .lv2-badges { display: flex; gap: 3px; align-items: center; }
 .lv2-badge { font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 3px; }
 .lv2-badge.ai { background: linear-gradient(135deg, #fef3c7, #fde68a); color: #92400e; cursor: pointer; }
@@ -645,7 +647,10 @@ tr:hover .lv2-actions { opacity: 1; }
           display: 'inline-flex', alignItems: 'center', gap: '5px',
           boxShadow: selectedCount ? '0 1px 3px rgba(67,56,202,.3)' : 'none'
         },
-        onclick: (ev) => openMultiSelectPopover(ev.currentTarget, label, opts, S[stateKey] || [], (sel) => { S[stateKey] = sel; if (onChange) onChange(); })
+        // v3.13 — stop propagation so the document-level click-outside
+        // handler inside openMultiSelectPopover doesn't fire on the
+        // same click that opened it.
+        onclick: (ev) => { ev.stopPropagation(); openMultiSelectPopover(ev.currentTarget, label, opts, S[stateKey] || [], (sel) => { S[stateKey] = sel; if (onChange) onChange(); }); }
       }, chipLabel, h('span', { style: { color: selectedCount ? 'rgba(255,255,255,.7)' : '#94a3b8' } }, '▾')));
     };
 
@@ -1018,14 +1023,14 @@ tr:hover .lv2-actions { opacity: 1; }
     });
     // + Refresh / Export / New
     qchips.appendChild(h('div', { style: { marginLeft: 'auto', display: 'flex', gap: '4px' } },
-      // v3.12 — Theme color combo switcher
+      // v3.13 — Compact theme switcher: small swatches palette
       (function () {
         const themes = [
-          { key: 'default', label: '🌊 Default (Indigo)', body: 'lv2-theme-default' },
-          { key: 'emerald', label: '🌿 Emerald',           body: 'lv2-theme-emerald' },
-          { key: 'sunset',  label: '🌅 Sunset',            body: 'lv2-theme-sunset' },
-          { key: 'rose',    label: '🌹 Rose',              body: 'lv2-theme-rose' },
-          { key: 'mono',    label: '◯ Mono (B/W)',         body: 'lv2-theme-mono' }
+          { key: 'default', color: '#4338ca', body: 'lv2-theme-default', label: 'Indigo' },
+          { key: 'emerald', color: '#10b981', body: 'lv2-theme-emerald', label: 'Emerald' },
+          { key: 'sunset',  color: '#f97316', body: 'lv2-theme-sunset',  label: 'Sunset' },
+          { key: 'rose',    color: '#e11d48', body: 'lv2-theme-rose',    label: 'Rose' },
+          { key: 'mono',    color: '#0f172a', body: 'lv2-theme-mono',    label: 'Mono' }
         ];
         const current = localStorage.getItem('crm.lv2.theme') || 'default';
         const _applyTheme = (k) => {
@@ -1035,13 +1040,16 @@ tr:hover .lv2-actions { opacity: 1; }
           try { localStorage.setItem('crm.lv2.theme', k); } catch (_) {}
         };
         _applyTheme(current);
-        const sel = h('select', {
-          class: 'qchip',
-          style: { padding: '4px 8px', cursor: 'pointer', fontSize: '11px', background: 'white', border: '1px solid #e2e8f0', borderRadius: '14px' },
-          title: 'Color theme',
-          onchange: (e) => _applyTheme(e.target.value)
-        }, ...themes.map(t => h('option', { value: t.key, selected: t.key === current ? 'selected' : null }, t.label)));
-        return sel;
+        const swatchRow = h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 8px', background: 'white', border: '1px solid #e2e8f0', borderRadius: '14px' }, title: 'Theme — click a color to change' });
+        swatchRow.appendChild(h('span', { style: { fontSize: '10px', color: '#94a3b8', marginRight: '2px' } }, '🎨'));
+        themes.forEach(t => {
+          swatchRow.appendChild(h('button', {
+            title: t.label,
+            style: { width: '14px', height: '14px', borderRadius: '50%', background: t.color, border: t.key === current ? '2px solid #1e293b' : '2px solid transparent', cursor: 'pointer', padding: '0', boxShadow: t.key === current ? '0 0 0 1px white inset' : 'none' },
+            onclick: (e) => { e.stopPropagation(); _applyTheme(t.key); /* repaint swatch borders */ setTimeout(load, 0); }
+          }));
+        });
+        return swatchRow;
       })(),
       h('button', { class: 'qchip', onclick: load }, '↻ Refresh'),
       h('button', { class: 'qchip' }, '↓ Export'),
@@ -1173,6 +1181,77 @@ tr:hover .lv2-actions { opacity: 1; }
     bar.appendChild(right);
     return bar;
   }
+  // v3.13 — Bulk action bar that slides up from bottom when any leads selected.
+  function renderBulkBar() {
+    const existing = document.getElementById('lv2-bulkbar');
+    const sel = S.bulkSel || new Set();
+    const count = sel.size;
+    if (existing) existing.remove();
+    if (!count) return;
+    const bar = h('div', { id: 'lv2-bulkbar', style: {
+      position: 'fixed', left: '50%', bottom: '20px', transform: 'translateX(-50%)',
+      background: '#0f172a', color: 'white', padding: '10px 16px', borderRadius: '40px',
+      boxShadow: '0 10px 30px rgba(0,0,0,.25)', zIndex: '9999',
+      display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13px', fontWeight: '600',
+      animation: 'lv2-bulk-pop .25s ease-out'
+    } },
+      h('span', { style: { background: '#1e293b', padding: '4px 10px', borderRadius: '12px', fontSize: '12px' } }, String(count) + ' selected'),
+      h('button', { style: bulkBtn(), title: 'Assign to user', onclick: () => bulkAction('assign') }, '👤 Assign'),
+      h('button', { style: bulkBtn(), title: 'Change status', onclick: () => bulkAction('status') }, '🎯 Status'),
+      h('button', { style: bulkBtn(), title: 'Add tag', onclick: () => bulkAction('tag') }, '🔖 Tag'),
+      h('button', { style: bulkBtn(), title: 'Export CSV', onclick: () => bulkAction('export') }, '↓ Export'),
+      h('button', { style: bulkBtn('danger'), title: 'Delete', onclick: () => bulkAction('delete') }, '🗑 Delete'),
+      h('button', { style: { background: 'transparent', color: '#94a3b8', border: 'none', cursor: 'pointer', fontSize: '18px', padding: '0 4px' }, title: 'Clear selection', onclick: () => { S.bulkSel.clear(); document.querySelectorAll('input[type=checkbox]').forEach(c => c.checked = false); renderBulkBar(); } }, '✕')
+    );
+    document.body.appendChild(bar);
+  }
+  function bulkBtn(kind) {
+    return {
+      background: kind === 'danger' ? '#dc2626' : '#334155', color: 'white',
+      border: 'none', borderRadius: '20px', padding: '6px 12px', cursor: 'pointer',
+      fontSize: '12px', fontWeight: '600'
+    };
+  }
+  function bulkAction(action) {
+    const ids = Array.from(S.bulkSel || []);
+    if (!ids.length) return;
+    // Delegate to Classic's bulk-action handlers when available — they
+    // already have full UI for assign/status/tag/delete prompts.
+    try {
+      if (action === 'export') {
+        // Simple CSV export of selected leads
+        const headers = ['Name','Phone','Email','Status','Owner','Source'];
+        const rows = ids.map(id => {
+          const l = (S.leads || []).find(x => Number(x.id) === Number(id)) || {};
+          return [l.name||'', l.phone||'', l.email||'', l.status_name||'', l.assigned_name||'', l.source||''].map(v => '"' + String(v).replace(/"/g,'""') + '"').join(',');
+        });
+        const csv = headers.join(',') + '\n' + rows.join('\n');
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = 'leads-selected-' + ids.length + '.csv'; a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        return;
+      }
+      if (window.CRM && typeof window.CRM.bulkAction === 'function') {
+        window.CRM.bulkAction(ids, action); return;
+      }
+      // Fallback prompts
+      if (action === 'assign') {
+        const userId = prompt('Assign to user ID (or pick from Classic view):'); if (!userId) return;
+        Promise.all(ids.map(id => api('api_leads_update', { id: id, assigned_to: Number(userId) }))).then(() => { toast('✓ Assigned ' + ids.length + ' leads', 'ok'); S.bulkSel.clear(); load(); }).catch(e => toast(e.message, 'err'));
+      } else if (action === 'status') {
+        const statusId = prompt('Status ID:'); if (!statusId) return;
+        Promise.all(ids.map(id => api('api_leads_update', { id: id, status_id: Number(statusId) }))).then(() => { toast('✓ Updated ' + ids.length, 'ok'); S.bulkSel.clear(); load(); }).catch(e => toast(e.message, 'err'));
+      } else if (action === 'tag') {
+        const tag = prompt('Tag to add:'); if (!tag) return;
+        Promise.all(ids.map(id => api('api_leads_addTag', { lead_id: id, tag: tag }).catch(()=>{}))).then(() => { toast('✓ Tagged ' + ids.length, 'ok'); S.bulkSel.clear(); load(); });
+      } else if (action === 'delete') {
+        if (!confirm('Delete ' + ids.length + ' leads? This cannot be undone.')) return;
+        Promise.all(ids.map(id => api('api_leads_delete', id))).then(() => { toast('✓ Deleted ' + ids.length, 'ok'); S.bulkSel.clear(); load(); }).catch(e => toast(e.message, 'err'));
+      }
+    } catch (e) { toast(e.message, 'err'); }
+  }
+
   function renderModernRow(l) {
     const name = l.name || l.phone || '—';
     const stat = statusClass(l.status_name);
@@ -1181,7 +1260,15 @@ tr:hover .lv2-actions { opacity: 1; }
     const isSelected = S.selectedId === l.id;
     const tr = h('tr', { class: (isSelected ? 'selected ' : '') + (bucket ? 'bucket-' + bucket : ''), onclick: () => openSlideOver(l) });
     const vc = new Set(Array.isArray(S.visibleColumns) ? S.visibleColumns : []);
-    tr.appendChild(h('td', { class: 'sticky-l', onclick: (e) => e.stopPropagation() }, h('input', { type: 'checkbox' })));
+    // v3.13 — checkbox now wires to S.bulkSel set + repaints bulk bar
+    if (!S.bulkSel) S.bulkSel = new Set();
+    const isInBulk = S.bulkSel.has(l.id);
+    tr.appendChild(h('td', { class: 'sticky-l', onclick: (e) => e.stopPropagation() },
+      h('input', { type: 'checkbox', checked: isInBulk ? 'checked' : null,
+        onchange: (e) => {
+          if (e.target.checked) S.bulkSel.add(l.id); else S.bulkSel.delete(l.id);
+          renderBulkBar();
+        } })));
     tr.appendChild(h('td', { class: 'sticky-l', style: { left: '36px' } },
       h('div', { class: 'lv2-namecell' },
         h('div', { class: 'lv2-av', style: { background: avColor(name), position: 'relative' } },
@@ -1285,10 +1372,16 @@ tr:hover .lv2-actions { opacity: 1; }
             '📅 ' + new Date(l.next_followup_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }))
         : h('span', { class: 'lv2-muted' }, '—')));
     }
-    // v3.12 — Use ONLY the WA join result; never fall back to lead.notes/source.
-    // Show '—' when there's no real WA (blank per user request).
+    // v3.13 — Apply 'auto-template' filter at render time too (last_wa_text
+    // from the leads API isn't filtered). Hide anything that starts with
+    // 'Auto Lead Capture' or is >220 chars — both signal it's the system
+    // welcome template, not a real customer reply.
     if (vc.has('lastwa')) {
-      const waMsg = l.last_wa_message || l.last_wa_text || '';
+      let waMsg = l.last_wa_message || l.last_wa_text || '';
+      if (waMsg) {
+        const trimmed = String(waMsg).trim();
+        if (/^Auto Lead Capture/i.test(trimmed) || trimmed.length > 220) waMsg = '';
+      }
       const waDir = l.last_wa_direction || '';
       const arrow = waDir === 'in' ? '⬅ ' : waDir === 'out' ? '➡ ' : '';
       tr.appendChild(h('td', null,
