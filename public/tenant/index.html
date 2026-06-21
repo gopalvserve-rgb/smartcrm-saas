@@ -121,7 +121,7 @@
     //   1. Exchanges the ssl token for a regular tenant JWT (api_auth_ssoLogin)
     //   2. Strips ?ssl= from the URL bar so it isn't kept in history
     //   3. THEN loads app.js so the boot code reads the freshly-written
-    //      token from localStorage. (Static <script src="/app.js?v=2026-06-21-wbv2-v212" defer>
+    //      token from localStorage. (Static <script src="/app.js?v=2026-06-21-wbv2-v213" defer>
     //      would race against the async exchange and the user would land
     //      on the login screen instead of being signed in.)
     (async function bootstrap() {
@@ -162,7 +162,7 @@
         // Wait for DOMContentLoaded before injecting scripts.
         function injectSpaScripts() {
           var s = document.createElement('script');
-          s.src = 'app.js?v=2026-06-21-wbv2-v212';
+          s.src = 'app.js?v=2026-06-21-wbv2-v213';
           // STU360_LIVE_v1 — Student 360 view (Education pack only)
           var st = document.createElement('script');
           st.src = 'student360.js?v=2026-06-13-ls-v1-p113cb';
@@ -175,12 +175,12 @@
             // WB_CHAT_V2 — load redesigned 3-column WA chat module right after Copilot
             try {
               const wb = document.createElement('script');
-              wb.src = 'wbChatV2.js?v=2026-06-21-wbv2-v212';
+              wb.src = 'wbChatV2.js?v=2026-06-21-wbv2-v213';
               wb.defer = true;
               document.body.appendChild(wb);
               // LEADS_VIEW_V2 — Modern + Inbox view styles for leads page
               const lv = document.createElement('script');
-              lv.src = 'leadsV2.js?v=2026-06-21-wbv2-v212';
+              lv.src = 'leadsV2.js?v=2026-06-21-wbv2-v213';
               lv.defer = true;
               document.body.appendChild(lv);
             } catch (_) {}

@@ -582,7 +582,13 @@
     listEl.innerHTML = '';
 
     const now = Date.now();
-    const cutoffMs = (S.tab === 'recent' ? 7 : 30) * 86400 * 1000;
+    // v2.13 — 'All' filter shows EVERY thread regardless of Recent(7d)/History(30d)
+    // tab cutoff. Tab only constrains the date window when a more selective filter
+    // (unread/mine/assignee/phone) is active — at which point the cutoff is helpful
+    // to keep the list focused.
+    const cutoffMs = (S.filter === 'all')
+      ? Number.POSITIVE_INFINITY
+      : (S.tab === 'recent' ? 7 : 30) * 86400 * 1000;
     const meId = (S.me && S.me.id) || null;
     const q = String(S.search || '').toLowerCase().trim();
 
