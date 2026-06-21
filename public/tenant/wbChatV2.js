@@ -231,9 +231,11 @@
 .wbv2-row .right { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; }
 .wbv2-row .when { font-size: 11px; color: #667781; white-space: nowrap; }
 @keyframes wbv2-spin { to { transform: rotate(360deg); } }
-@keyframes wbv2-pulse-new { 0%, 100% { box-shadow: 0 0 0 0 rgba(16,185,129,.5); } 50% { box-shadow: 0 0 0 6px rgba(16,185,129,0); } }
-.wbv2-row.new-msg { background: linear-gradient(90deg, #ecfdf5 0%, #ffffff 60%); border-left: 3px solid #10b981; animation: wbv2-pulse-new 1.8s ease-out 2; }
-.wbv2-row.new-msg .name { color: #065f46; font-weight: 700; }
+@keyframes wbv2-pulse-new { 0%, 100% { box-shadow: inset 4px 0 0 0 #ef4444, 0 0 0 0 rgba(239,68,68,.4); } 50% { box-shadow: inset 4px 0 0 0 #ef4444, 0 0 0 4px rgba(239,68,68,0); } }
+.wbv2-row.new-msg { background: linear-gradient(90deg, #fee2e2 0%, #fff7ed 60%); border-left: 4px solid #ef4444 !important; animation: wbv2-pulse-new 1.4s ease-in-out infinite; }
+.wbv2-new-pill { background: linear-gradient(135deg, #ef4444, #f97316); color: white; font-size: 9px; font-weight: 800; padding: 2px 8px; border-radius: 10px; letter-spacing: .5px; text-transform: uppercase; box-shadow: 0 1px 4px rgba(239,68,68,.5); animation: wbv2-newpill-bounce 1.2s ease-in-out infinite; white-space: nowrap; }
+@keyframes wbv2-newpill-bounce { 0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239,68,68,.5); } 50% { transform: scale(1.08); box-shadow: 0 0 0 4px rgba(239,68,68,0); } }
+.wbv2-row.new-msg .name { color: #991b1b; font-weight: 700; }
 .wbv2-row .unread { background: #00a884; color: white; font-size: 10px; padding: 1px 7px; border-radius: 10px; font-weight: 600; min-width: 18px; text-align: center; }
 .wbv2-row .ai { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 8px; }
 .wbv2-row .ai.hot  { background: #fde7e7; color: #c04444; }
@@ -680,8 +682,12 @@
           source ? h('span', { class: 'source' }, source.toUpperCase().slice(0, 12)) : null),
         h('div', { class: 'right' },
           h('span', { class: 'when' }, fmtRelative(t.last_activity_at || t.last_msg_at || t.updated_at)),
-          unread > 0 ? h('span', { class: 'unread' }, String(unread)) :
-            (bucket ? h('span', { class: 'ai ' + bucket }, String(score)) : null))));
+          // v2.5 — NEW pill takes priority when a fresh inbound just arrived.
+          // Persistent pulse so the user spots it even at a glance.
+          isNew
+            ? h('span', { class: 'wbv2-new-pill', title: 'New message just arrived' }, '\u26a1 NEW')
+            : (unread > 0 ? h('span', { class: 'unread' }, String(unread)) :
+                (bucket ? h('span', { class: 'ai ' + bucket }, String(score)) : null)))));
   }
   // v2.2 — hex → light pastel for chip backgrounds (alpha 1=palest, 0.7=border)
   function _hexLight(hex, alpha) {

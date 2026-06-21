@@ -1889,7 +1889,7 @@ async function api_wb_chat_threads(token, opts) {
   const leadIds = [...new Set([...threads.values()].map(t => t.lead_id).filter(Boolean))];
   let leadById = {};
   if (leadIds.length) {
-    const ld = await db.query(`SELECT id, name, assigned_to FROM leads WHERE id = ANY($1::int[])`, [leadIds]);
+    const ld = await db.query(`SELECT id, name, assigned_to, status_id FROM leads WHERE id = ANY($1::int[])`, [leadIds]);
     ld.rows.forEach(l => { leadById[l.id] = l; });
   }
   const phones = [...threads.keys()];
@@ -1914,6 +1914,10 @@ async function api_wb_chat_threads(token, opts) {
     const enriched = {
       ...t,
       lead_name: lead ? (lead.name || '') : '',
+      // v2.5 — expose status_id so the client can resolve name/color via
+      // its statuses cache (S.statusById). Without this every thread
+      // rendered as '— No status —'.
+      status_id: lead ? (lead.status_id || null) : null,
       assigned_to: ownerId,
       assigned_name: ownerId && usersById[ownerId] ? usersById[ownerId].name : '',
       assignment_explicit: !!(exp && exp.assigned_to)
