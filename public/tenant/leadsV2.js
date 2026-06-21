@@ -141,6 +141,8 @@
 
   /* ---------- styles (injected once) ---------- */
   function injectStyles() {
+    // v3.4 — clean up any stale Ask-AI pill from previous versions
+    try { var ex = document.getElementById('lv2-ai-drawer'); if (ex) ex.remove(); } catch (_) {}
     if (document.getElementById('lv2-styles')) return;
     const css = `
 .lv2-toggle { display: inline-flex; background: #f1f5f9; border-radius: 8px; padding: 3px; gap: 1px; margin: 0 8px; }
@@ -341,6 +343,30 @@ tr:hover .lv2-actions { opacity: 1; }
       S.sources   = _asArray(sources,   'sources');
       S.tags      = _asArray(tags,      'tags');
       S.campaigns = _asArray(campaigns, 'campaigns');
+
+      // v3.4 — populate last_wa_message per lead by joining
+      // api_wb_chat_threads (phone-keyed) so the Last WhatsApp column
+      // shows real data instead of '—'.
+      try {
+        const threads = await api('api_wb_chat_threads', { scanLimit: 10000, show_all: true }).catch(() => []);
+        const arr = _asArray(threads, 'threads');
+        const byPhone = {};
+        arr.forEach(function (t) {
+          if (!t.phone) return;
+          const k = String(t.phone).replace(/\D/g, '').slice(-10);
+          if (!byPhone[k]) byPhone[k] = t;
+        });
+        S.leads.forEach(function (l) {
+          if (!l.phone) return;
+          const k = String(l.phone).replace(/\D/g, '').slice(-10);
+          const t = byPhone[k];
+          if (t) {
+            l.last_wa_message = t.last_message || t.last_message_preview || '';
+            l.last_wa_at = t.last_activity_at || t.last_msg_at || t.updated_at;
+          }
+        });
+        console.log('[LEADS_V2] joined', arr.length, 'WA threads onto', S.leads.length, 'leads');
+      } catch (e) { console.warn('[LEADS_V2] WA thread join failed:', e.message); }
     } catch (e) {
       toast('Could not load leads: ' + e.message, 'err');
     }
@@ -931,7 +957,7 @@ tr:hover .lv2-actions { opacity: 1; }
     wrap.appendChild(tblWrap);
 
     view.appendChild(wrap);
-    mountAiDrawer();
+    // v3.4 — Ask AI floating pill removed per user request
   }
   function hcell(lab, val, ch, isDn, color) {
     return h('div', { class: 'hcell' },
@@ -1062,9 +1088,8 @@ tr:hover .lv2-actions { opacity: 1; }
         h('div', { class: 'lv2-av', style: { background: avColor(name) } }, initials(name)),
         h('div', { class: 'lv2-namestack' },
           h('span', { class: 'lv2-nm' }, name),
-          h('div', { class: 'lv2-badges' },
-            h('span', { class: 'lv2-badge ai', title: 'AI Hub', onclick: (e) => { e.stopPropagation(); aiHub(l); } }, '✨ AI'),
-            score >= 80 ? h('span', { class: 'lv2-badge fire' }, '🔥 HOT') : null)))));
+          // v3.4 — ✨ AI badge removed per user; only show fire badge for HOT leads
+          score >= 80 ? h('div', { class: 'lv2-badges' }, h('span', { class: 'lv2-badge fire' }, '🔥 HOT')) : null))));
     if (vc.has('phone')) {
       tr.appendChild(h('td', null,
         h('div', { class: 'lv2-phonecell' },
@@ -1680,7 +1705,7 @@ tr:hover .lv2-actions { opacity: 1; }
     view.appendChild(wrap);
 
     rerenderInboxRows();
-    mountAiDrawer();
+    // v3.4 — Ask AI floating pill removed per user request
   }
   function rerenderInboxRows() {
     const host = $('#lv2-inbox-rows');
