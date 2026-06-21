@@ -5245,11 +5245,16 @@ VIEWS.leads = async (view) => {
     if (!document.getElementById('lead-add-fab-mobile')) {
       const fab = h('button', {
         id: 'lead-add-fab-mobile',
-        title: 'Add new lead',
+        title: 'Add new lead — hold and drag to move',
         'aria-label': 'Add new lead',
         onclick: () => openLeadModal()
       }, '+');
       document.body.appendChild(fab);
+      // LEADS_FAB_DRAGGABLE_v2 — also make the mobile FAB draggable so
+      // users can move it out of the way on small screens.
+      if (typeof _makeFabDraggable === 'function') {
+        try { _makeFabDraggable(fab, 'crm.leadsFabMobile.pos'); } catch (_) {}
+      }
     }
     if (!window._leadAddFabHashGuard) {
       window._leadAddFabHashGuard = true;
