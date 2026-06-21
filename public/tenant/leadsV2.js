@@ -1639,13 +1639,44 @@ tr:hover .lv2-actions { opacity: 1; }
     // v3.3 — matches the Classic row's AI button behavior.
     // openQuickNoteInline lets the user type status + remark +
     // follow-up time and AI parses it into structured fields.
+    if (typeof window.openQuickNoteInline !== 'function') {
+      // Fallback chain: AI Hub overlay → lead modal
+      return aiHub(l);
+    }
     try {
-      if (typeof window.openQuickNoteInline === 'function') {
-        return window.openQuickNoteInline(l);
+      window.openQuickNoteInline(l);
+    } catch (e) {
+      return aiHub(l);
+    }
+
+    // v3.5 — openQuickNoteInline calls loadLeads() on success, which is
+    // the CLASSIC-view refresher and does nothing in Modern. Watch for
+    // the modal to close (user clicked Save and got a toast), then
+    // refresh the leads list + re-render so status/follow-up/notes
+    // changes show up immediately.
+    let wasOpen = false;
+    const checkInt = setInterval(() => {
+      const open = !!document.querySelector('.modal-backdrop .qn-spark');
+      if (open) { wasOpen = true; return; }
+      if (wasOpen) {
+        clearInterval(checkInt);
+        // Modal closed — refresh leads + re-render the active style
+        (async () => {
+          try {
+            await load();
+            try { rerenderRows(); } catch (_) {}
+            try { rerenderInboxRows && rerenderInboxRows(); } catch (_) {}
+            // If the modal was opened from the slide-over, also refresh it
+            if (S.selectedId && document.getElementById('lv2-slideover')) {
+              const fresh = (S.leads || []).find(x => Number(x.id) === Number(S.selectedId));
+              if (fresh) openSlideOver(fresh);
+            }
+          } catch (e) { console.warn('[LEADS_V2] post-quicknote refresh failed:', e.message); }
+        })();
       }
-    } catch (_) {}
-    // Fallback chain: AI Hub overlay → lead modal
-    aiHub(l);
+    }, 400);
+    // Safety: stop polling after 90s (user might have left the page)
+    setTimeout(() => clearInterval(checkInt), 90000);
   }
   function doCopy(l) { try { navigator.clipboard.writeText(l.phone || ''); toast('Phone copied', 'ok'); } catch (_) {} }
   function doAddNote(l) { doViewFull(l); }
