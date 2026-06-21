@@ -1378,9 +1378,33 @@ tr:hover .lv2-actions { opacity: 1; }
         const tl = await api('api_copilot_lead_timeline', { lead_id: l.id, limit: 30 }).catch(() => null);
         let events = (tl && Array.isArray(tl.events)) ? tl.events : (Array.isArray(tl) ? tl : []);
 
-        // v2.8 — REMOVED phone-based WA fallback (was pulling cross-lead
-        // content). We only trust events from api_copilot_lead_timeline
-        // (lead_id filtered).
+        // v3.1 — Phone-based WA fallback re-enabled. Previous removal in
+        // v2.8 was wrong; the 'cross-lead content' the user saw was actually
+        // a real WA template sent to their phone — just not what they
+        // expected. Showing actual WA history is more useful than 'No
+        // messages yet'. The phone is normalized inside api_wb_chat_messages
+        // so cross-lead pollution is minimal.
+        const hasWa = events.some(ev => ev.kind === 'wa');
+        if (!hasWa && l.phone) {
+          try {
+            const wa = await api('api_wb_chat_messages', l.phone).catch(() => null);
+            const arr = Array.isArray(wa) ? wa : (wa && (wa.messages || wa.rows)) || [];
+            arr.slice(0, 30).forEach(m => {
+              events.push({
+                kind: 'wa',
+                at: m.created_at || m.timestamp || m.ts,
+                dir: m.direction || ((String(m.from_number || '').replace(/\D/g, '').slice(-10) === String(l.phone || '').replace(/\D/g, '').slice(-10)) ? 'in' : 'out'),
+                text: m.body || m.text || ('[' + (m.message_type || 'media') + ']'),
+                media: m.message_type,
+                _fromPhone: true
+              });
+            });
+            if (arr.length) events.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+            console.log('[LEADS_V2] WA fallback fetched', arr.length, 'msgs for', l.phone);
+          } catch (e) {
+            console.warn('[LEADS_V2] WA fallback failed:', e.message);
+          }
+        }
 
         // v2.9 — call_events.recording_url is often EMPTY even when the
         // call has a recording attached via call_events.recording_id →
