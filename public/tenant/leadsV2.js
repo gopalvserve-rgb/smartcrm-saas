@@ -1596,7 +1596,25 @@ tr:hover .lv2-actions { opacity: 1; }
   function doSim(l) { window.location.href = 'tel:' + (l.phone || ''); }
   function doWaWeb(l) { const ph = String(l.phone || '').replace(/\D/g, ''); window.open('https://wa.me/' + ph, '_blank'); }
   function doWaApi(l) { try { window.location.hash = '#/whatsbot/chat'; setTimeout(() => { try { window.openLeadModal && window.openLeadModal(l.id); } catch(_){} }, 400); } catch (_) {} }
-  function aiHub(l) { try { if (window.LEAD_AI_HUB && window.LEAD_AI_HUB.open) return window.LEAD_AI_HUB.open(l.id); } catch (_) {} doViewFull(l); }
+  function aiHub(l) {
+    // Open the AI Hub overlay — matches Classic theme behavior.
+    // copilotProactive.js exposes window.coachOpenLeadSummary(leadId)
+    // which renders the lead AI hub (chat + summary + next steps) in
+    // a full-screen overlay.
+    try {
+      if (typeof window.coachOpenLeadSummary === 'function') {
+        return window.coachOpenLeadSummary(l.id);
+      }
+    } catch (_) {}
+    try {
+      if (window.LEAD_AI_HUB && typeof window.LEAD_AI_HUB.open === 'function') {
+        return window.LEAD_AI_HUB.open(l.id);
+      }
+    } catch (_) {}
+    // Last fallback — open the lead modal (the patched openLeadModal
+    // injects the AI Hub at the top of the modal body).
+    doViewFull(l);
+  }
   function doCopy(l) { try { navigator.clipboard.writeText(l.phone || ''); toast('Phone copied', 'ok'); } catch (_) {} }
   function doAddNote(l) { doViewFull(l); }
   function doViewFull(l) { try { window.openLeadModal && window.openLeadModal(l.id); } catch (_) {} }
