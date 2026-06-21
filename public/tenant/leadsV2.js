@@ -1150,19 +1150,47 @@ tr:hover .lv2-actions { opacity: 1; }
         } else {
           const tbl = h('table', { class: 'lv2-tbl' });
           const tbody = h('tbody');
-          // Up to 25 rows per section (was 20). User can exit focus mode for more.
-          list.slice(0, 25).forEach(l => tbody.appendChild(renderModernRow(l)));
+          // v3.19 — Cap at 8 rows per section so all 3 sections fit in the viewport
+          // without scrolling. User exits focus mode for the full table.
+          list.slice(0, 8).forEach(l => tbody.appendChild(renderModernRow(l)));
           tbl.appendChild(tbody);
           sec.appendChild(tbl);
-          if (list.length > 25) sec.appendChild(h('div', { style: { padding: '8px 14px', textAlign: 'center', fontSize: '11px', color: '#94a3b8', borderTop: '1px solid #f1f5f9' } },
-            'Showing top 25 of ' + list.length + ' (highest-score first) — exit focus mode to see all'));
+          if (list.length > 8) sec.appendChild(h('div', { style: { padding: '8px 14px', textAlign: 'center', fontSize: '11px', color: '#94a3b8', borderTop: '1px solid #f1f5f9' } },
+            'Showing top 8 of ' + list.length + ' (highest-score first) — exit focus mode to see all'));
         }
         return sec;
       };
       const focusWrap = h('div', { style: { padding: '0 14px 14px' } });
-      focusWrap.appendChild(buildSection('Hot leads',     'act NOW',          hot,     { emoji: '🔥', bg: '#fef2f2', fg: '#b91c1c', border: '#fecaca' }));
-      focusWrap.appendChild(buildSection('Warm leads',    'push this week',   warm,    { emoji: '☀️', bg: '#fffbeb', fg: '#b45309', border: '#fde68a' }));
-      focusWrap.appendChild(buildSection('Nurture leads', 'keep warm',        nurture, { emoji: '❄️', bg: '#eff6ff', fg: '#1e40af', border: '#bfdbfe' }));
+      // v3.19 — sticky summary bar at the top showing all 3 bucket counts.
+      // Makes it impossible to miss that Warm/Nurture exist below the fold,
+      // and each is clickable to jump to that section.
+      const _scrollTo = (id) => { const el = document.getElementById(id); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+      focusWrap.appendChild(h('div', {
+        style: { position: 'sticky', top: '0', zIndex: '50', display: 'flex', gap: '8px', padding: '8px 0', background: 'white', borderBottom: '1px solid #e2e8f0', marginBottom: '12px', flexWrap: 'wrap' }
+      },
+        h('button', {
+          style: { padding: '8px 14px', background: '#fef2f2', color: '#b91c1c', border: '1px solid #fecaca', borderRadius: '8px', fontSize: '12px', fontWeight: '700', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' },
+          onclick: () => _scrollTo('lv2-focus-hot')
+        }, '🔥 Hot ', h('span', { style: { background: '#b91c1c', color: 'white', padding: '2px 8px', borderRadius: '10px', fontSize: '11px' } }, String(hot.length))),
+        h('button', {
+          style: { padding: '8px 14px', background: '#fffbeb', color: '#b45309', border: '1px solid #fde68a', borderRadius: '8px', fontSize: '12px', fontWeight: '700', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' },
+          onclick: () => _scrollTo('lv2-focus-warm')
+        }, '☀️ Warm ', h('span', { style: { background: '#b45309', color: 'white', padding: '2px 8px', borderRadius: '10px', fontSize: '11px' } }, String(warm.length))),
+        h('button', {
+          style: { padding: '8px 14px', background: '#eff6ff', color: '#1e40af', border: '1px solid #bfdbfe', borderRadius: '8px', fontSize: '12px', fontWeight: '700', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' },
+          onclick: () => _scrollTo('lv2-focus-nurture')
+        }, '❄️ Nurture ', h('span', { style: { background: '#1e40af', color: 'white', padding: '2px 8px', borderRadius: '10px', fontSize: '11px' } }, String(nurture.length))),
+        h('span', { style: { marginLeft: 'auto', fontSize: '11px', color: '#94a3b8', alignSelf: 'center' } }, 'Click a bucket to jump · top 8 each shown')));
+      // Wrap each buildSection result with the anchor id so the summary buttons can scroll to them.
+      const _hotSec = buildSection('Hot leads',     'act NOW',          hot,     { emoji: '🔥', bg: '#fef2f2', fg: '#b91c1c', border: '#fecaca' });
+      if (_hotSec) _hotSec.id = 'lv2-focus-hot';
+      focusWrap.appendChild(_hotSec);
+      const _warmSec = buildSection('Warm leads',    'push this week',   warm,    { emoji: '☀️', bg: '#fffbeb', fg: '#b45309', border: '#fde68a' });
+      if (_warmSec) _warmSec.id = 'lv2-focus-warm';
+      focusWrap.appendChild(_warmSec);
+      const _nurSec = buildSection('Nurture leads', 'keep warm',        nurture, { emoji: '❄️', bg: '#eff6ff', fg: '#1e40af', border: '#bfdbfe' });
+      if (_nurSec) _nurSec.id = 'lv2-focus-nurture';
+      focusWrap.appendChild(_nurSec);
       wrap.appendChild(focusWrap);
       view.appendChild(wrap);
       return;  // skip the regular table render
