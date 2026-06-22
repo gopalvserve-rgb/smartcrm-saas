@@ -148,11 +148,12 @@ async function api_aibot_settings_get(token, phoneNumberId) {
     is_admin: me.role === 'admin' || me.role === 'manager',
     global,
     available_modes: [
-      { id: 'always',      label: 'Always reply' },
-      { id: 'after_hours', label: 'After business hours only' },
-      { id: 'keyword',     label: 'Only when keyword matches' },
-      { id: 'manual',      label: 'Draft replies for agent approval' },
-      { id: 'phone_only',  label: 'Only on selected phone numbers' },
+      { id: 'always',              label: 'Always reply' },
+      { id: 'business_hours_only', label: 'Only during business hours' },
+      { id: 'after_hours',         label: 'Only after business hours' },
+      { id: 'keyword',             label: 'Only when keyword matches' },
+      { id: 'manual',              label: 'Draft replies for agent approval' },
+      { id: 'phone_only',          label: 'Only on selected phone numbers' },
     ]
   };
 }
@@ -821,9 +822,15 @@ async function _shouldSuppress(settings, phone, inboundText, inboundPhoneId, ten
     if (kws.length === 0 || !kws.some(k => t.includes(k))) return 'no trigger keyword';
   }
 
-  // after_hours mode
+  // after_hours mode — bot ONLY replies AFTER business hours
   if (modes.includes('after_hours') && !modes.includes('always')) {
     if (!_isAfterHours(settings.business_hours)) return 'inside business hours';
+  }
+  // AI_BOT_GATES_v1 (2026-06-21) — business_hours_only mode: bot ONLY replies
+  // DURING business hours. Inverse of after_hours. The 'always' override
+  // beats this just like it beats after_hours.
+  if (modes.includes('business_hours_only') && !modes.includes('always')) {
+    if (_isAfterHours(settings.business_hours)) return 'outside business hours';
   }
 
   // ALWAYS-ON GUARD: if any human agent replied in the last 30 minutes,
@@ -832,14 +839,24 @@ async function _shouldSuppress(settings, phone, inboundText, inboundPhoneId, ten
   // resume_after_idle_seconds settings so the bot never steps on a live
   // human conversation. Window is intentionally short — within 30 min of
   // the last agent reply is a strong signal someone's at the keyboard.
+  // AI_BOT_GATES_v1 (2026-06-21) — phone normalization. The user's
+  // inbound 'phone' is digits-only (callers strip non-digits). But
+  // saved to_number/from_number columns vary in format (some rows
+  // store '+91...', some bare digits, some include spaces). Compare
+  // both sides via regexp_replace so format drift can't defeat the
+  // gate. Right-pad to handle India 12-digit (91+10) vs 10-digit too.
+  const _phoneTail = String(phone || '').replace(/\D/g, '').slice(-10);
   try {
     const r = await db.query(
       `SELECT 1 FROM whatsapp_messages
         WHERE direction = 'out' AND user_id IS NOT NULL
-          AND (to_number = $1 OR from_number = $1)
+          AND (
+            RIGHT(regexp_replace(to_number,   '[^0-9]', '', 'g'), 10) = $1
+            OR RIGHT(regexp_replace(from_number, '[^0-9]', '', 'g'), 10) = $1
+          )
           AND created_at > NOW() - INTERVAL '30 minutes'
         LIMIT 1`,
-      [phone]
+      [_phoneTail]
     );
     if (r.rows.length) return 'human actively chatting (last 30 min)';
   } catch (_) { /* if the table query errors, fall through to other checks */ }
@@ -856,12 +873,33 @@ async function _shouldSuppress(settings, phone, inboundText, inboundPhoneId, ten
   // (a) takes precedence so the user can turn the bot fully off when
   //     a human agent picks up a thread.
   if (Number(settings.pause_after_human_handoff) === 1) {
+    // AI_BOT_GATES_v1 — same normalization as the 30-min guard above.
+    // Plus: count rows where user_id IS NULL but a Coexistence echo
+    // marker exists (best-effort detection: wa_message_id starts with
+    // the Coexistence prefix, OR a comment-marker in body). For tenants
+    // not on Coexistence, this falls back cleanly to user_id-only.
     const r = await db.query(
       `SELECT 1 FROM whatsapp_messages
-        WHERE direction = 'out' AND user_id IS NOT NULL
-          AND (to_number = $1 OR from_number = $1)
+        WHERE direction = 'out'
+          AND (
+            user_id IS NOT NULL
+            -- Coexistence echo: Meta-originated outbound rows have
+            -- user_id NULL but a wa_message_id starting with 'wamid.'
+            -- AND were inserted via _handleEcho (no template_name).
+            OR (
+              user_id IS NULL
+              AND wa_message_id IS NOT NULL
+              AND wa_message_id LIKE 'wamid.%'
+              AND template_name IS NULL
+              AND created_at > NOW() - INTERVAL '24 hours'
+            )
+          )
+          AND (
+            RIGHT(regexp_replace(to_number,   '[^0-9]', '', 'g'), 10) = $1
+            OR RIGHT(regexp_replace(from_number, '[^0-9]', '', 'g'), 10) = $1
+          )
         LIMIT 1`,
-      [phone]
+      [_phoneTail]
     );
     if (r.rows.length) return 'human agent has taken over this thread';
   }
@@ -872,10 +910,13 @@ async function _shouldSuppress(settings, phone, inboundText, inboundPhoneId, ten
     const r = await db.query(
       `SELECT 1 FROM whatsapp_messages
         WHERE direction = 'out' AND user_id IS NOT NULL
-          AND (to_number = $1 OR from_number = $1)
+          AND (
+            RIGHT(regexp_replace(to_number,   '[^0-9]', '', 'g'), 10) = $1
+            OR RIGHT(regexp_replace(from_number, '[^0-9]', '', 'g'), 10) = $1
+          )
           AND created_at > NOW() - ($2 || ' seconds')::interval
         LIMIT 1`,
-      [phone, String(idleSec)]
+      [_phoneTail, String(idleSec)]
     );
     if (r.rows.length) return 'human agent recently active';
   }
