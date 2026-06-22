@@ -4786,7 +4786,7 @@ VIEWS.leads = async (view) => {
     clearTimeout(_searchTimer);
     _searchTimer = setTimeout(applyFilters, 350);
   };
-  const searchInput = h('input', { id: 'f-q', placeholder: 'Search name / phone / email…', class: 'flex', value: CRM.prefs.filters.q || '' });
+  const searchInput = h('input', { id: 'f-q', placeholder: 'Search name / phone / email / remark / tag / city / campaign…', class: 'flex', value: CRM.prefs.filters.q || '' });
   searchInput.addEventListener('input', debouncedSearch);
   searchInput.addEventListener('keydown', ev => { if (ev.key === 'Enter') applyFilters(); });
   // Date-range filter — filters.from / filters.to are honoured by
@@ -12327,7 +12327,7 @@ VIEWS.kanban = async (view) => {
   // ---- Toolbar (mirrors the leads-list filter set) ---------------------
   const search = h('input', {
     id: 'kb-q', class: 'flex',
-    placeholder: 'Search name / phone / email…',
+    placeholder: 'Search name / phone / email / remark / tag / city / campaign…',
     value: filters.q || ''
   });
   let searchTimer;

@@ -569,9 +569,27 @@ tr:hover .lv2-actions { opacity: 1; }
         const dTo = new Date(S.fDateTo); dTo.setHours(23, 59, 59);
         if (new Date(l.created_at) > dTo) return false;
       }
-      // Search
+      // Search — LEADS_SEARCH_WIDEN_v1 (2026-06-21): widened to remark,
+      // city, state, company, address, source, campaign and description.
       if (q) {
-        const hay = ((l.name || '') + ' ' + (l.phone || '') + ' ' + (l.email || '') + ' ' + (l.notes || '') + ' ' + (l.tags || '')).toLowerCase();
+        const hay = (
+          (l.name || '') + ' ' +
+          (l.phone || '') + ' ' +
+          (l.whatsapp || '') + ' ' +
+          (l.email || '') + ' ' +
+          (l.notes || '') + ' ' +
+          (l.recent_remark || '') + ' ' +
+          (l.tags || '') + ' ' +
+          (l.description || '') + ' ' +
+          (l.city || '') + ' ' +
+          (l.state || '') + ' ' +
+          (l.company || '') + ' ' +
+          (l.address || '') + ' ' +
+          (l.source || '') + ' ' +
+          (l.campaign_name || '') + ' ' +
+          (l.campaign_id || '') + ' ' +
+          (l.form_name || '')
+        ).toLowerCase();
         if (hay.indexOf(q) < 0) return false;
       }
       return true;
@@ -676,7 +694,7 @@ tr:hover .lv2-actions { opacity: 1; }
     const row1 = h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' } });
     row1.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 10px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px', minWidth: '200px', maxWidth: '260px', flex: '0 0 260px', boxSizing: 'border-box' } },
       h('span', { style: { color: '#94a3b8', fontSize: '12px' } }, '🔍'),
-      h('input', { placeholder: 'Search name, phone, email…', value: S.search,
+      h('input', { placeholder: 'Search name, phone, email, remark, tag, city, campaign…', value: S.search,
         style: { border: 'none', background: 'transparent', outline: 'none', fontSize: '12px', width: '100%', minWidth: '0', color: '#0f172a' },
         oninput: (e) => { S.search = e.target.value; if (onChange) onChange(); } })));
     // Date preset pills

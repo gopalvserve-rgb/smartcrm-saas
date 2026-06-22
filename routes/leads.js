@@ -464,13 +464,27 @@ async function api_leads_list(token, filters) {
   if (filters.from)        rows = rows.filter(l => _istDate(l.created_at) >= filters.from);
   if (filters.to)          rows = rows.filter(l => _istDate(l.created_at) <= filters.to);
   if (filters.q) {
+    // LEADS_SEARCH_WIDEN_v1 (2026-06-21) — user wanted search to also hit
+    // remark, tag, description, city, campaign name and campaign id.
+    // Cast everything to lowercased string then substring-match.
     const q = String(filters.q).toLowerCase();
     rows = rows.filter(l =>
       String(l.name || '').toLowerCase().includes(q) ||
       String(l.email || '').toLowerCase().includes(q) ||
       String(l.phone || '').toLowerCase().includes(q) ||
       String(l.whatsapp || '').toLowerCase().includes(q) ||
-      String(l.notes || '').toLowerCase().includes(q)
+      String(l.notes || '').toLowerCase().includes(q) ||
+      String(l.recent_remark || '').toLowerCase().includes(q) ||
+      String(l.tags || '').toLowerCase().includes(q) ||
+      String(l.description || '').toLowerCase().includes(q) ||
+      String(l.city || '').toLowerCase().includes(q) ||
+      String(l.state || '').toLowerCase().includes(q) ||
+      String(l.company || '').toLowerCase().includes(q) ||
+      String(l.address || '').toLowerCase().includes(q) ||
+      String(l.source || '').toLowerCase().includes(q) ||
+      String(l.campaign_name || '').toLowerCase().includes(q) ||
+      String(l.campaign_id || '').toLowerCase().includes(q) ||
+      String(l.form_name || '').toLowerCase().includes(q)
     );
   }
   if (filters.followup === 'today') {
