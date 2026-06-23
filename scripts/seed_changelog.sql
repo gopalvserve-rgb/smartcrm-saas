@@ -591,3 +591,12 @@ SELECT 'feature',
        '🔄',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Lead Pool — one-click batch pull');
+
+-- 2026-06-24 LEADS_VIEW_V2_ROLLOUT_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'New Modern leads theme for everyone',
+       'The Leads page now has a ✨ View switcher in the top-right with three styles: Classic (the familiar table), Modern (a cleaner card-style layout) and Inbox. Pick whichever you like — your choice is remembered on each device. Previously a vserve-only beta, now available on every workspace.',
+       '✨',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'New Modern leads theme for everyone');

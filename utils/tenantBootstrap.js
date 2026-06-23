@@ -583,6 +583,8 @@ const CONFIG_DEFAULTS = [
   // panel at top of Edit Lead: Last Activity / AI Summary / Next Best Action)
   // ON for every tenant. Backend is the COPILOT_v4 / Proactive Coach engine.
   { key: 'COPILOT_PROACTIVE_ENABLED', value: '1' },
+  // LEADS_VIEW_V2_ROLLOUT_v1 — 'Modern' leads theme available on every new tenant.
+  { key: 'LEADS_VIEW_V2_ENABLED', value: '1' },
 ];
 
 async function _ensureMigrationsTable(pool) {
