@@ -991,6 +991,18 @@ async function _executePendingAction(row, ctx) {
     if (!name || !email) throw new Error('Name and email required');
     if (!['admin', 'manager', 'sales'].includes(role)) throw new Error('Role must be admin / manager / sales');
     if (await db.findOneBy('users', 'email', email)) throw new Error('Email already registered');
+    // USER_QUOTA_v2 (2026-06-21) — Copilot create_user must respect the
+    // tenant's user cap. Same gate as api_users_create.
+    try {
+      const store = (db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore());
+      if (store && store.tenant) {
+        const { requireQuota } = require('../utils/quota');
+        await requireQuota(store.tenant, 'users');
+      }
+    } catch (e) {
+      if (e && e.quotaExceeded) throw e;
+      console.warn('[crmCopilot create_user] quota check failed (allowing):', e && e.message);
+    }
     const alpha = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
     let pw = '';
     for (let i = 0; i < 12; i++) pw += alpha[Math.floor(Math.random() * alpha.length)];

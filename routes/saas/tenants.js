@@ -980,6 +980,41 @@ async function api_saas_tenants_addUser(token, payload) {
   const dup = await pool.query(`SELECT id FROM users WHERE LOWER(email) = $1 LIMIT 1`, [email]);
   if (dup.rows.length) throw new Error('A user with this email already exists in tenant ' + slug);
 
+  // USER_QUOTA_v2 (2026-06-21) — even super-admin must respect the cap.
+  // To override, super-admin should bump tenants.user_cap first (via the
+  // Set User Plan modal) then re-add. Hard error keeps billing honest.
+  // Pass payload.force=true to bypass the check (e.g. for emergencies);
+  // logs the override in audit_log so it's traceable.
+  if (!p.force) {
+    try {
+      // Count current active users; compute effective cap (override || base)
+      const userCountRow = await pool.query(`SELECT COUNT(*)::int AS c FROM users WHERE COALESCE(is_active, 1) = 1`);
+      const used = Number(userCountRow.rows[0].c) || 0;
+      let baseCap = null;
+      if (t.package_id) {
+        const pkg = await control.findById('packages', t.package_id);
+        if (pkg) {
+          const q = (typeof pkg.quotas === 'string') ? JSON.parse(pkg.quotas || '{}') : (pkg.quotas || {});
+          if (q.users && q.users.limit != null) baseCap = Number(q.users.limit);
+        }
+      }
+      const overrideCap = (t.user_cap != null && t.user_cap !== '') ? Number(t.user_cap) : null;
+      const effectiveCap = (overrideCap != null) ? overrideCap : baseCap;
+      if (effectiveCap != null && effectiveCap !== -1 && used + 1 > effectiveCap) {
+        const err = new Error(
+          `Tenant '${slug}' is at user cap: ${used} of ${effectiveCap} used. ` +
+          `Bump the user cap (Set User Plan modal) or pass force=true to override.`
+        );
+        err.quotaExceeded = true;
+        err.usage = { used, limit: effectiveCap };
+        throw err;
+      }
+    } catch (capErr) {
+      if (capErr && capErr.quotaExceeded) throw capErr;
+      console.warn('[saas/tenants addUser] cap check failed (allowing):', capErr && capErr.message);
+    }
+  }
+
   const hash = _bcrypt.hashSync(password, 10);
   const ins = await pool.query(
     `INSERT INTO users (name, email, phone, password_hash, role, is_active, monthly_cost_inr, created_at)
@@ -987,6 +1022,9 @@ async function api_saas_tenants_addUser(token, payload) {
     [name, email, phone, hash, role, monthlyCost]
   );
   const userId = ins.rows[0]?.id;
+  if (p.force) {
+    console.warn('[saas/tenants addUser] super-admin override (force=true) for', slug, 'new user:', email);
+  }
 
   await control.insert('audit_log', {
     actor_type: 'super_admin', actor_id: me.id, actor_email: me.email,
