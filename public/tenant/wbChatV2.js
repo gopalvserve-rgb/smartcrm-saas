@@ -879,7 +879,7 @@
     if (!t) return;
     inp.value = '';
     try {
-      await api('api_wb_chat_send', { to: t.phone, text });
+      await api('api_wb_chat_send', { phone: t.phone, text });
       // Optimistic append + reload from server
       S.messages.push({ direction: 'out', body: text, created_at: new Date().toISOString(), status: 'sent', user_name: (S.me && S.me.name) || 'You' });
       renderChat();
@@ -985,7 +985,7 @@
     const t = S.activeThread;
     if (!t) return;
     try {
-      await api('api_wb_chat_send', { to: t.phone, templateName: tpl.name || tpl.template_name, templateLanguage: tpl.language });
+      await api('api_wb_chat_send', { phone: t.phone, templateName: tpl.name || tpl.template_name, templateLanguage: tpl.language });
       toast('Template sent', 'ok');
       setTimeout(() => loadMessages(t), 800);
     } catch (e) { toast('Template send failed: ' + e.message, 'err'); }
