@@ -600,3 +600,12 @@ SELECT 'feature',
        '✨',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'New Modern leads theme for everyone');
+
+-- 2026-06-24 WA_SENDER_PICK_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'WhatsApp inbox — see & choose the sending number',
+       'In the WhatsApp inbox the chat header now shows which of your numbers a conversation is on ("on +91…"), and a "Sending from" line above the message box shows the number your reply will go from. If you have more than one WhatsApp number connected, you can switch the sending number from there before replying. Replies default to the number the customer originally messaged.',
+       '📤',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'WhatsApp inbox — see & choose the sending number');

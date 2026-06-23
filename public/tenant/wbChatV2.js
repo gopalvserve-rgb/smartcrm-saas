@@ -73,6 +73,7 @@
     filterAssignee: null,
     filterPhoneId: null,
     phones: [],
+    sendFromId: null,   /* WA_SENDER_PICK_v1 — which OUR number outbound goes from */
     templates: null,
     aiSummary: null,
     statusById: {},
@@ -728,6 +729,7 @@
   async function activateThread(t) {
     S.activeLeadId = t.lead_id;
     S.activeThread = t;
+    S.sendFromId = t.phone_number_id || S.sendFromId || ((S.phones[0] && S.phones[0].id) || null);
     if (S._newSince && S._newSince[t.lead_id]) delete S._newSince[t.lead_id];
     S.lead = null; S.messages = []; S.aiScore = null; S.activity = [];
     renderThreadList();              // re-render to show active state
@@ -746,6 +748,11 @@
       const c = $('#wbv2-chat');
       if (c) { c.innerHTML = ''; c.appendChild(h('div', { class: 'wbv2-c-empty', style: { color: '#c04444' } }, 'Could not load chat: ' + e.message)); }
     }
+  }
+  function phoneLabel(id) {
+    if (!id) return '';
+    var p = (S.phones || []).find(function (x) { return String(x.id) === String(id); });
+    return p ? (p.display_phone_number || p.verified_name || ('ID ' + id)) : ('ID ' + id);
   }
   function renderChat() {
     const host = $('#wbv2-chat');
@@ -768,7 +775,8 @@
         h('div', { class: 'nw' },
           h('div', { class: 'nm' }, name),
           h('div', { class: 'sub' }, (t.phone ? '+' + String(t.phone).replace(/^\+?/, '') : '') +
-                                      (t.last_activity_at ? ' · last seen ' + fmtRelative(t.last_activity_at) : ''))),
+                                      (t.last_activity_at ? ' · last seen ' + fmtRelative(t.last_activity_at) : '') +
+                                      (phoneLabel(t.phone_number_id) ? ' · on ' + phoneLabel(t.phone_number_id) : ''))),
         h('span', { class: 'wbv2-tat ' + (tatMs == null ? 'ok' : tatChipClass(tatMs)) },
           '⚡ ' + (tatMs == null ? '0m' : tatLabel(tatMs)) + ' TAT')),
       h('button', { class: 'btn', title: 'Mark as resolved (UI flag)',
@@ -798,6 +806,31 @@
     // document), template picker, text, voice, send. The 24h Meta restriction
     // surfaces only when Meta rejects a non-template send — we toast the error
     // and prompt the user to send a template instead, but we never block the UI.
+    // WA_SENDER_PICK_v1 — show which OUR number this reply goes from, and let
+    // the agent switch it when more than one number is connected.
+    (function () {
+      var phones = S.phones || [];
+      var cur = String(S.sendFromId || t.phone_number_id || '');
+      var control;
+      if (phones.length > 1) {
+        control = h('select', {
+          id: 'wbv2-sendfrom',
+          style: { fontSize: '11px', padding: '2px 6px', border: '1px solid #cbd5e1', borderRadius: '4px', maxWidth: '240px' },
+          onchange: function (e) { S.sendFromId = e.target.value || null; }
+        }, ...phones.map(function (p) {
+          return h('option', { value: p.id, selected: String(p.id) === cur ? 'selected' : null },
+            (p.display_phone_number || p.verified_name || ('ID ' + p.id)) +
+            (String(p.id) === String(t.phone_number_id || '') ? ' (incoming)' : ''));
+        }));
+      } else {
+        control = h('span', { style: { fontSize: '11px', color: '#6366f1', fontWeight: '600' } },
+          phoneLabel(cur) || 'default number');
+      }
+      host.appendChild(h('div', {
+        style: { display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 12px',
+                 background: '#fafbfc', borderTop: '1px solid #eef0f2', fontSize: '11px', color: '#64748b' }
+      }, h('span', null, '📤 Sending from:'), control));
+    })();
     host.appendChild(h('div', { class: 'wbv2-composer' },
       h('div', { class: 'ico', title: 'Emoji', onclick: () => toast('Emoji picker coming soon', 'ok') }, '😊'),
       h('div', { class: 'ico', title: 'Attach a file', onclick: openAttachMenu }, '📎'),
@@ -879,7 +912,7 @@
     if (!t) return;
     inp.value = '';
     try {
-      await api('api_wb_chat_send', { phone: t.phone, text });
+      await api('api_wb_chat_send', { phone: t.phone, text, from_phone_number_id: S.sendFromId || t.phone_number_id || undefined });
       // Optimistic append + reload from server
       S.messages.push({ direction: 'out', body: text, created_at: new Date().toISOString(), status: 'sent', user_name: (S.me && S.me.name) || 'You' });
       renderChat();
@@ -949,7 +982,8 @@
         media_id: j.wa_media_id,
         media_type: mediaType,
         filename: j.filename || file.name,
-        text: ''
+        text: '',
+        from_phone_number_id: S.sendFromId || t.phone_number_id || undefined
       });
       toast('Sent ' + (file.name || mediaType), 'ok');
       setTimeout(() => loadMessages(t), 800);
@@ -985,7 +1019,7 @@
     const t = S.activeThread;
     if (!t) return;
     try {
-      await api('api_wb_chat_send', { phone: t.phone, templateName: tpl.name || tpl.template_name, templateLanguage: tpl.language });
+      await api('api_wb_chat_send', { phone: t.phone, templateName: tpl.name || tpl.template_name, templateLanguage: tpl.language, from_phone_number_id: S.sendFromId || t.phone_number_id || undefined });
       toast('Template sent', 'ok');
       setTimeout(() => loadMessages(t), 800);
     } catch (e) { toast('Template send failed: ' + e.message, 'err'); }
