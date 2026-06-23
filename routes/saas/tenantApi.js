@@ -378,6 +378,14 @@ async function expressHandler(req, res) {
     }
     return res.json({ ok: true, result });
   } catch (e) {
+    // USER_QUOTA_v1 — quota errors get HTTP 402 (Payment Required) so the
+    // SPA can show a 'plan limit reached' modal instead of a red toast.
+    if (e && e.quotaExceeded) {
+      console.warn('[tenantApi] quota exceeded:', fn, e.message);
+      return res.status(402).json({
+        error: e.message, quotaExceeded: true, metric: e.metric, usage: e.usage
+      });
+    }
     const isUserError = /not signed in|invalid.*token|expired|forbidden|required|already/i
       .test(String(e.message || ''));
     const status = /not signed in|invalid.*token|expired/i.test(e.message) ? 401 : 400;

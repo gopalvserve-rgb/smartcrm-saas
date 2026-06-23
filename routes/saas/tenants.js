@@ -772,6 +772,59 @@ async function api_saas_tenants_getUserPlan(token, slug) {
   };
 }
 
+/** USER_QUOTA_v1 (2026-06-21) — audit endpoint: list every active tenant
+ *  whose current user count exceeds its effective cap.
+ *  Returns: [{ slug, org_name, package_name, base_cap, override_cap,
+ *              effective_cap, current_users, extra_users, extra_charge_inr }]
+ */
+async function api_saas_tenants_userCapAudit(token) {
+  await requireSuperAdmin(token);
+  await _ensureUserCapColumns();
+  const tenants = await control.query(
+    `SELECT t.id, t.slug, t.org_name, t.status, t.package_id, t.user_cap,
+            t.user_extra_charge_inr, p.name AS package_name, p.quotas
+       FROM tenants t LEFT JOIN packages p ON p.id = t.package_id
+      WHERE t.status NOT IN ('deleted', 'pending_delete')
+      ORDER BY t.org_name ASC`
+  );
+  const out = [];
+  for (const t of tenants.rows) {
+    let baseCap = null;
+    try {
+      const q = (typeof t.quotas === 'string') ? JSON.parse(t.quotas) : (t.quotas || {});
+      if (q.users && q.users.limit != null) baseCap = Number(q.users.limit);
+    } catch (_) {}
+    const overrideCap = (t.user_cap != null && t.user_cap !== '') ? Number(t.user_cap) : null;
+    const effectiveCap = (overrideCap != null) ? overrideCap : baseCap;
+    if (effectiveCap == null || effectiveCap === -1) continue; // unlimited tenant
+    let userCount = 0;
+    const pool = tenantPool.poolFor(t);
+    if (!pool) continue;
+    try {
+      const r = await pool.query(`SELECT COUNT(*)::int AS c FROM users WHERE COALESCE(is_active, 1) = 1`);
+      userCount = Number(r.rows[0].c) || 0;
+    } catch (_) { continue; }
+    const extra = Math.max(0, userCount - effectiveCap);
+    if (extra <= 0) continue;
+    out.push({
+      slug: t.slug,
+      org_name: t.org_name,
+      status: t.status,
+      package_name: t.package_name || '',
+      base_cap: baseCap,
+      override_cap: overrideCap,
+      effective_cap: effectiveCap,
+      current_users: userCount,
+      extra_users: extra,
+      extra_charge_inr_per_user: Number(t.user_extra_charge_inr || 0),
+      pending_charge_inr: extra * Number(t.user_extra_charge_inr || 0)
+    });
+  }
+  // Sort by most-over first
+  out.sort((a, b) => b.extra_users - a.extra_users);
+  return { over_cap: out, total_over: out.length };
+}
+
 /** ADMIN_USER_CAP_v1 — update tenant cap + extra-user charge. */
 async function api_saas_tenants_setUserPlan(token, payload) {
   const me = await requireFullAdmin(token);
@@ -1063,6 +1116,7 @@ module.exports = {
   api_saas_tenants_addUser,
   api_saas_tenants_updateUserCost,
   api_saas_tenants_getUserPlan,
+  api_saas_tenants_userCapAudit,
   api_saas_tenants_setUserPlan,
   api_saas_tenants_chargeExtraUsers,
   api_saas_tenants_getAiRecording,

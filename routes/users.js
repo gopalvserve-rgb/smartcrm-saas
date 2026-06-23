@@ -50,6 +50,20 @@ async function api_users_create(token, payload) {
   if (await db.findOneBy('users', 'email', String(p.email).toLowerCase().trim())) {
     throw new Error('Email already registered');
   }
+  // USER_QUOTA_v1 (2026-06-21) — enforce the per-tenant user cap. The
+  // limit pulls from tenants.user_cap if set, else packages.quotas.users.limit.
+  // No-op for the control-plane / single-tenant fallback.
+  try {
+    const store = (db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore());
+    if (store && store.tenant) {
+      const { requireQuota } = require('../utils/quota');
+      await requireQuota(store.tenant, 'users');
+    }
+  } catch (e) {
+    if (e && e.quotaExceeded) throw e;
+    // Any other error (control-plane unreachable, etc.) — log but don't block
+    console.warn('[users] quota check failed (allowing create):', e && e.message);
+  }
   const id = await db.insert('users', {
     name: p.name,
     email: String(p.email).toLowerCase().trim(),

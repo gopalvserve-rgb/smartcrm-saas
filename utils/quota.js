@@ -93,7 +93,19 @@ const COUNTERS = {
  * we know there's no ceiling).
  */
 async function _getQuotaForMetric(tenant, metric) {
-  if (!tenant || !tenant.package_id) return null;
+  if (!tenant) return null;
+  // USER_QUOTA_v1 (2026-06-21) — for the 'users' metric, the per-tenant
+  // override on tenants.user_cap WINS over the package quota. Allows
+  // the super-admin to bump a Starter plan from 3 → 8 seats for one
+  // tenant without changing the package shared by everyone else. A
+  // null/undefined user_cap means "use package".
+  if (metric === 'users' && tenant.user_cap != null && tenant.user_cap !== '') {
+    const overrideLimit = Number(tenant.user_cap);
+    if (Number.isFinite(overrideLimit) && overrideLimit !== -1) {
+      return { limit: Math.max(0, overrideLimit), period: 'one_time' };
+    }
+  }
+  if (!tenant.package_id) return null;
   const pkg = await control.findById('packages', tenant.package_id);
   if (!pkg) return null;
   let q = pkg.quotas;
