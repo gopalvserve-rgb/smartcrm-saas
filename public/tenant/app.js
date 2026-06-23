@@ -1697,6 +1697,13 @@ const NAV_GROUPS = [
     { id: 'callratings',  label: 'Call Ratings',  icon: '⭐', roles: ['admin', 'manager', 'team_leader'], search: 'rating call rating quality score' },
     { id: 'aiusage',      label: 'AI Usage',      icon: '🤖', roles: ['admin', 'manager'], search: 'ai usage ai summary call ai ai minutes' }
   ] },
+  /* AICALL_v1 — FexCall AI: VAPI-powered outbound voice campaigns. */
+  { label: 'FexCall AI', icon: '🎙️', items: [
+    { id: 'aicallDashboard', label: 'Dashboard',  icon: '📊', search: 'fexcall ai dashboard call volume outcomes',                            brandFlag: 'AI_CALL_ENABLED' },
+    { id: 'aicallCampaigns', label: 'Campaigns',  icon: '📣', roles: ['admin','manager','team_leader'], search: 'fexcall ai campaign csv outbound voice', brandFlag: 'AI_CALL_ENABLED' },
+    { id: 'aicallLogs',      label: 'Call Logs',  icon: '📋', search: 'fexcall ai call logs transcripts recordings',                          brandFlag: 'AI_CALL_ENABLED' },
+    { id: 'aicallSettings',  label: 'Settings',   icon: '⚙️', roles: ['admin','manager'],              search: 'fexcall ai settings vapi api key provider' }
+  ] },
   /* META_MODULE_v1 — Marketing & Communication groups all outbound
    * channels (Meta ads, Social, WhatsApp Bot, AI Assistant, Campaigns). */
   { label: 'Marketing & Communication', icon: '📣', items: [
@@ -14272,6 +14279,173 @@ async function openQuotationModal(qid, prefillLead) {
 // reply path, KB ingestion (PDF/DOCX/URL), trigger modes, and
 // per-tenant usage view are wired in Phase A2 onwards.
 // ============================================================
+VIEWS.aicallDashboard = async (view) => {
+  const wrap = h('div', { style: { padding: '1.5rem' } });
+  wrap.appendChild(h('h2', { style: { marginTop: 0 } }, '🎙️ FexCall AI — Dashboard'));
+  wrap.appendChild(h('p', { class: 'muted' }, 'Overview of your AI calling activity, recent calls, and campaign performance.'));
+  wrap.appendChild(h('div', { class: 'card', style: { padding: '2rem', textAlign: 'center', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '10px', marginTop: '1rem' } },
+    h('div', { style: { fontSize: '2rem' } }, '🚧'),
+    h('h3', { style: { margin: '.5rem 0' } }, 'Coming next'),
+    h('p', { class: 'muted', style: { maxWidth: '460px', margin: '0 auto' } },
+      'KPI tiles (Total / Inbound / Outbound calls · Cost this month · Leads generated · Success rate) and the 30-day call-volume chart will land here once Phase 2 ships. For now, configure your VAPI keys in '),
+    h('a', { href: '#/aicallSettings', style: { fontWeight: 600, color: '#0369a1' } }, 'Settings →')));
+  view.appendChild(wrap);
+};
+VIEWS.aicallCampaigns = async (view) => {
+  const wrap = h('div', { style: { padding: '1.5rem' } });
+  wrap.appendChild(h('h2', { style: { marginTop: 0 } }, '📣 FexCall AI — Campaigns'));
+  wrap.appendChild(h('p', { class: 'muted' }, 'Bulk AI voice campaigns over uploaded contact lists.'));
+  wrap.appendChild(h('div', { class: 'card', style: { padding: '2rem', textAlign: 'center', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '10px', marginTop: '1rem' } },
+    h('div', { style: { fontSize: '2rem' } }, '🚧'),
+    h('h3', { style: { margin: '.5rem 0' } }, 'Coming in Phase 2'),
+    h('p', { class: 'muted' }, 'CSV upload → choose assistant → schedule → launch. Real-time progress + answered/total counts. First save your VAPI key in '),
+    h('a', { href: '#/aicallSettings', style: { fontWeight: 600, color: '#0369a1' } }, 'Settings →')));
+  view.appendChild(wrap);
+};
+VIEWS.aicallLogs = async (view) => {
+  const wrap = h('div', { style: { padding: '1.5rem' } });
+  wrap.appendChild(h('h2', { style: { marginTop: 0 } }, '📋 FexCall AI — Call Logs'));
+  wrap.appendChild(h('p', { class: 'muted' }, 'Detailed call logs with transcripts, recordings and AI analysis.'));
+  wrap.appendChild(h('div', { class: 'card', style: { padding: '2rem', textAlign: 'center', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '10px', marginTop: '1rem' } },
+    h('div', { style: { fontSize: '2rem' } }, '🚧'),
+    h('h3', { style: { margin: '.5rem 0' } }, 'Coming in Phase 3'),
+    h('p', { class: 'muted' }, 'Each VAPI call → row with To, From, duration, ended-reason, cost. Click any row → AI Analysis · Summary · Transcript · Performance tabs + audio player.')));
+  view.appendChild(wrap);
+};
+VIEWS.aicallSettings = async (view) => {
+  view.innerHTML = '';
+  const wrap = h('div', { style: { padding: '1.5rem', maxWidth: '900px' } });
+  wrap.appendChild(h('h2', { style: { marginTop: 0 } }, '⚙️ FexCall AI — Settings'));
+  wrap.appendChild(h('p', { class: 'muted' }, 'Connect your Vapi.ai account. SmartCRM uses this to place outbound AI calls + receive inbound transcripts. Get your keys from your Vapi dashboard → API Keys.'));
+
+  // Load current settings
+  let s = {};
+  try { s = await api('api_aicall_settings_get'); } catch (e) { toast('Could not load settings: ' + e.message, 'err'); return; }
+
+  // ──────────── General card ────────────
+  const enabledChk = h('input', { type: 'checkbox', checked: s.enabled ? 'checked' : null });
+  const general = h('div', { class: 'card', style: { padding: '1.25rem', marginTop: '1rem', background: 'white', border: '1px solid #e2e8f0', borderRadius: '10px' } },
+    h('h3', { style: { margin: '0 0 .75rem' } }, '🟢 Module'),
+    h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', fontSize: '14px' } },
+      enabledChk,
+      h('span', null, 'Enable FexCall AI for this workspace')),
+    h('p', { class: 'muted', style: { fontSize: '12px', margin: '.5rem 0 0' } },
+      'When ON, the FexCall AI menu items appear in the sidebar for everyone. Reload the page after enabling.')
+  );
+
+  // ──────────── VAPI Credentials card ────────────
+  const privInp = h('input', {
+    type: 'password', name: 'private_key',
+    placeholder: s.has_private_key ? s.private_key_masked : 'sk-... (paste your Private API Key)',
+    autocomplete: 'off',
+    style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontFamily: 'monospace', fontSize: '13px' }
+  });
+  const pubInp = h('input', {
+    type: 'text', name: 'public_key',
+    placeholder: '(optional — only for browser-based voice calls)',
+    value: s.public_key || '',
+    autocomplete: 'off',
+    style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontFamily: 'monospace', fontSize: '13px' }
+  });
+  const vapiCard = h('div', { class: 'card', style: { padding: '1.25rem', marginTop: '1rem', background: 'white', border: '1px solid #e2e8f0', borderRadius: '10px' } },
+    h('h3', { style: { margin: '0 0 .25rem' } }, '🔑 Vapi.ai Credentials'),
+    h('p', { class: 'muted', style: { fontSize: '12px', margin: '0 0 1rem' } },
+      'Find these in your ',
+      h('a', { href: 'https://dashboard.vapi.ai/account', target: '_blank', style: { color: '#4338ca', textDecoration: 'underline' } }, 'Vapi dashboard → API Keys'),
+      '. The Private key is the Bearer token used for server calls. The Public key is only required if you build browser-based web calls.'
+    ),
+    h('label', { style: { display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '.3rem', color: '#0f172a' } }, 'Private API Key *'),
+    privInp,
+    s.has_private_key ? h('p', { style: { fontSize: '11.5px', color: '#15803d', margin: '.25rem 0 .75rem' } }, '✓ Private key is set (' + s.private_key_masked + ') — leave blank to keep, paste new to replace, type "clear" to remove')
+                      : h('p', { style: { fontSize: '11.5px', color: '#b45309', margin: '.25rem 0 .75rem' } }, '⚠ No private key saved yet — outbound AI calls will not work until this is set'),
+
+    h('label', { style: { display: 'block', fontSize: '13px', fontWeight: 600, margin: '.5rem 0 .3rem', color: '#0f172a' } }, 'Public Key', h('span', { class: 'muted', style: { fontWeight: 400 } }, ' (optional)')),
+    pubInp
+  );
+
+  // ──────────── Post-call defaults card ────────────
+  const srcInp = h('input', { type: 'text', value: s.default_source || 'AI Call Assistant',
+    style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' } });
+  const statInp = h('input', { type: 'text', value: s.default_status || '',
+    placeholder: 'e.g. AI Follow-up Required',
+    style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' } });
+  const defaultsCard = h('div', { class: 'card', style: { padding: '1.25rem', marginTop: '1rem', background: 'white', border: '1px solid #e2e8f0', borderRadius: '10px' } },
+    h('h3', { style: { margin: '0 0 .25rem' } }, '🎯 Post-call defaults'),
+    h('p', { class: 'muted', style: { fontSize: '12px', margin: '0 0 .8rem' } }, 'Applied to leads created from AI calls when the AI doesn\'t determine values dynamically.'),
+    h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' } },
+      h('div', null,
+        h('label', { style: { display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '.3rem' } }, 'Lead Source'),
+        srcInp),
+      h('div', null,
+        h('label', { style: { display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '.3rem' } }, 'Fallback Lead Status'),
+        statInp))
+  );
+
+  // ──────────── Action buttons ────────────
+  const testBtn = h('button', { type: 'button', class: 'btn',
+    style: { padding: '8px 18px', background: 'white', border: '1px solid #cbd5e1', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 } },
+    '🔌 Test connection');
+  const saveBtn = h('button', { type: 'button', class: 'btn primary',
+    style: { padding: '8px 18px', background: '#0f172a', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 } },
+    '💾 Save settings');
+  const status = h('span', { style: { fontSize: '12.5px', marginLeft: 'auto', color: '#64748b' } }, '');
+
+  testBtn.onclick = async function () {
+    testBtn.disabled = true; testBtn.textContent = '⏳ Testing…';
+    status.style.color = '#64748b'; status.textContent = '';
+    try {
+      const r = await api('api_aicall_test_connection');
+      if (r && r.ok) {
+        status.style.color = '#15803d';
+        status.textContent = '✓ ' + (r.message || 'Connected to VAPI');
+      } else {
+        status.style.color = '#dc2626';
+        status.textContent = '✗ ' + (r.error || 'Connection failed');
+      }
+    } catch (e) {
+      status.style.color = '#dc2626';
+      status.textContent = '✗ ' + e.message;
+    }
+    testBtn.disabled = false; testBtn.textContent = '🔌 Test connection';
+  };
+  saveBtn.onclick = async function () {
+    saveBtn.disabled = true; saveBtn.textContent = '⏳ Saving…';
+    try {
+      const payload = {
+        enabled: enabledChk.checked,
+        provider: 'vapi',
+        public_key: pubInp.value,
+        default_source: srcInp.value,
+        default_status: statInp.value
+      };
+      const pv = String(privInp.value || '').trim();
+      if (pv && !pv.startsWith('••••')) {
+        // Allow user to clear by typing "clear"
+        payload.private_key = (pv.toLowerCase() === 'clear') ? '' : pv;
+      }
+      await api('api_aicall_settings_save', payload);
+      status.style.color = '#15803d'; status.textContent = '✓ Saved';
+      toast('FexCall AI settings saved', 'ok');
+      // Reload the page so the side-nav reflects the enabled flag
+      setTimeout(() => VIEWS.aicallSettings(view), 600);
+    } catch (e) {
+      status.style.color = '#dc2626';
+      status.textContent = '✗ ' + e.message;
+      toast('Save failed: ' + e.message, 'err');
+    }
+    saveBtn.disabled = false; saveBtn.textContent = '💾 Save settings';
+  };
+
+  const actions = h('div', { style: { display: 'flex', alignItems: 'center', gap: '.75rem', marginTop: '1.25rem' } },
+    saveBtn, testBtn, status);
+
+  wrap.appendChild(general);
+  wrap.appendChild(vapiCard);
+  wrap.appendChild(defaultsCard);
+  wrap.appendChild(actions);
+  view.appendChild(wrap);
+};
+
 VIEWS.aibot = async (view) => {
   view.innerHTML = '';
   const tabs = [

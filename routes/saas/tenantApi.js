@@ -114,6 +114,7 @@ const ROUTE_FILES = [
   'leadScoring',      /* LEAD_SCORING_v1 — Smart Lead Scoring */
   'copilotProactive', /* COPILOT_v4 — Proactive Sales Coach (vserve beta) */
   'aiManager',        /* AI_MGR_v1 — virtual admin/supervisor (vserve beta) */
+  'aiCall',           /* AICALL_v1 — FexCall AI: VAPI integration (Phase 1) */
 ];
 
 const API = {};
