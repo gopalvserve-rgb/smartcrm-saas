@@ -857,6 +857,20 @@ async function apiRaw(fn, ...args) {
       // is over'). Notifications now go via email + WhatsApp from a
       // server-side cron in routes/saas/billingReminders.js (separate
       // commit). Tenant SPA stays clean.
+      // LEAD_POOL_v1 — load the permission matrix BEFORE renderShell so the
+      // sidebar's per-permission nav gating (CRM.can) works on first paint.
+      // api_permissions_get is callable by any logged-in user (full
+      // role→permission matrix). admin is always allowed.
+      try {
+        const _pm = await api('api_permissions_get');
+        CRM.permMatrix = (_pm && _pm.matrix) || {};
+      } catch (_) { CRM.permMatrix = {}; }
+      CRM.can = (perm) => {
+        if (!CRM.user) return false;
+        if (CRM.user.role === 'admin') return true;
+        const v = (CRM.permMatrix && CRM.permMatrix[CRM.user.role] || {})[perm];
+        return v === 1 || v === true || v === 'self' || v === 'team' || v === 'global';
+      };
       renderShell();
       await warmCache();
       try { await warmCacheNotifPref(); } catch (_) {}
@@ -871,21 +885,6 @@ async function apiRaw(fn, ...args) {
       } catch (_) {
         CRM.access = Object.assign(CRM.access || {}, { can_chat: true });
       }
-      // LEAD_POOL_v1 — load the permission matrix so nav gating + the Pool
-      // view can check the current user's effective permissions client-side.
-      // api_permissions_get is callable by any logged-in user (returns the
-      // full role→permission matrix). CRM.can(perm) reads the row for this
-      // user's role; admin is always allowed.
-      try {
-        const _pm = await api('api_permissions_get');
-        CRM.permMatrix = (_pm && _pm.matrix) || {};
-      } catch (_) { CRM.permMatrix = {}; }
-      CRM.can = (perm) => {
-        if (!CRM.user) return false;
-        if (CRM.user.role === 'admin') return true;
-        const v = (CRM.permMatrix && CRM.permMatrix[CRM.user.role] || {})[perm];
-        return v === 1 || v === true || v === 'self' || v === 'team' || v === 'global';
-      };
       navigateTo(parseHashView() || 'dashboard');
       startFollowupPolling();
       startRecordingAutoSync();
