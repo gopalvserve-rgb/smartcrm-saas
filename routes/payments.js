@@ -38,12 +38,83 @@ async function _requireAdmin(token) {
   if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin or Manager only');
   return me;
 }
+// PAYMENTS_v1.1 (2026-06-23) — idempotent schema bootstrap.
+// schema.sql changes don't auto-apply to existing tenant DBs; this
+// ensures tables exist on first call. Runs once per process per tenant
+// (cached on the pool object).
+const _schemaEnsured = new WeakSet();
+async function _ensureSchema() {
+  let pool = null;
+  try {
+    const store = db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore();
+    pool = store && store.pool;
+  } catch (_) {}
+  if (pool && _schemaEnsured.has(pool)) return;
+  try {
+    await db.query(`CREATE TABLE IF NOT EXISTS payment_links (
+      id                     SERIAL PRIMARY KEY,
+      gateway                TEXT NOT NULL,
+      gateway_mode           TEXT NOT NULL DEFAULT 'live',
+      gateway_link_id        TEXT,
+      gateway_short_url      TEXT,
+      link_id_custom         TEXT,
+      link_type              TEXT NOT NULL DEFAULT 'one_time_all',
+      description            TEXT NOT NULL DEFAULT '',
+      amount_inr             NUMERIC(10,2) NOT NULL DEFAULT 0,
+      currency               TEXT NOT NULL DEFAULT 'INR',
+      allow_partial          INTEGER NOT NULL DEFAULT 0,
+      min_partial_inr        NUMERIC(10,2),
+      customer_phone         TEXT,
+      customer_email         TEXT,
+      customer_name          TEXT,
+      send_sms               INTEGER NOT NULL DEFAULT 0,
+      send_whatsapp          INTEGER NOT NULL DEFAULT 0,
+      send_email             INTEGER NOT NULL DEFAULT 0,
+      allow_invoice_download INTEGER NOT NULL DEFAULT 0,
+      expire_at              TIMESTAMPTZ,
+      redirect_url           TEXT,
+      thank_you_message      TEXT,
+      terms_conditions       TEXT,
+      status                 TEXT NOT NULL DEFAULT 'created',
+      amount_paid_inr        NUMERIC(10,2) NOT NULL DEFAULT 0,
+      paid_txn_count         INTEGER NOT NULL DEFAULT 0,
+      paid_at                TIMESTAMPTZ,
+      payment_mode           TEXT,
+      lead_id                INTEGER,
+      created_by             INTEGER,
+      created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      meta_json              JSONB
+    )`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_payment_links_status  ON payment_links(status)`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_payment_links_phone   ON payment_links(customer_phone)`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_payment_links_created ON payment_links(created_at DESC)`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_payment_links_lead    ON payment_links(lead_id)`);
+    await db.query(`CREATE TABLE IF NOT EXISTS payment_link_txns (
+      id              SERIAL PRIMARY KEY,
+      link_id         INTEGER NOT NULL REFERENCES payment_links(id) ON DELETE CASCADE,
+      gateway_txn_id  TEXT NOT NULL,
+      amount_inr      NUMERIC(10,2) NOT NULL,
+      status          TEXT NOT NULL,
+      payment_mode    TEXT,
+      paid_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      raw_json        JSONB
+    )`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_payment_txns_link ON payment_link_txns(link_id)`);
+    await db.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_txns_gtxn ON payment_link_txns(gateway_txn_id)`);
+    if (pool) _schemaEnsured.add(pool);
+  } catch (e) {
+    console.warn('[payments] _ensureSchema failed:', e.message);
+  }
+}
+
 async function _fetch() {
   return (typeof globalThis.fetch === 'function') ? globalThis.fetch : (await import('node-fetch')).default;
 }
 
 // ═══════════════ Settings ═══════════════
 async function api_payments_settings_get(token) {
+  await _ensureSchema();
   await _requireAdmin(token);
   const [active, cfId, cfSec, cfMode, rzId, rzSec, rzMode] = await Promise.all([
     _cfg('PAYMENTS_ACTIVE_GATEWAY'),
@@ -67,6 +138,7 @@ async function api_payments_settings_get(token) {
   };
 }
 async function api_payments_settings_save(token, payload) {
+  await _ensureSchema();
   await _requireAdmin(token);
   const p = payload || {};
   const writes = [];
@@ -97,6 +169,7 @@ async function api_payments_settings_save(token, payload) {
 
 // Hit gateway with a tiny GET to confirm creds work
 async function api_payments_test_connection(token, gateway) {
+  await _ensureSchema();
   await _requireAdmin(token);
   const gw = String(gateway || '').toLowerCase();
   if (gw === 'cashfree') {
@@ -229,6 +302,7 @@ async function _razorpayCreateLink(opts) {
 
 // ═══════════════ Payment Links ═══════════════
 async function api_payments_link_create(token, payload) {
+  await _ensureSchema();
   const me = await _requireAdmin(token);
   const p = payload || {};
   if (!p.amount_inr || Number(p.amount_inr) <= 0) throw new Error('amount_inr is required and must be > 0');
@@ -291,6 +365,7 @@ async function api_payments_link_create(token, payload) {
 }
 
 async function api_payments_link_list(token, filters) {
+  await _ensureSchema();
   await _requireAdmin(token);
   const f = filters || {};
   const where = [];
@@ -322,10 +397,12 @@ async function api_payments_link_list(token, filters) {
   return r.rows;
 }
 async function api_payments_link_get(token, id) {
+  await _ensureSchema();
   await _requireAdmin(token);
   return await db.findById('payment_links', id);
 }
 async function api_payments_link_cancel(token, id) {
+  await _ensureSchema();
   await _requireAdmin(token);
   if (!id) throw new Error('id required');
   await db.update('payment_links', id, { status: 'cancelled', updated_at: db.nowIso() });
@@ -334,6 +411,7 @@ async function api_payments_link_cancel(token, id) {
 
 // Re-share the same payment link via WA / SMS / email
 async function api_payments_link_send(token, payload) {
+  await _ensureSchema();
   await _requireAdmin(token);
   const p = payload || {};
   if (!p.id) throw new Error('id required');
@@ -374,6 +452,7 @@ async function api_payments_link_send(token, payload) {
 
 // ═══════════════ Customers (aggregate) ═══════════════
 async function api_payments_customers_list(token, filters) {
+  await _ensureSchema();
   await _requireAdmin(token);
   const f = filters || {};
   const params = [];

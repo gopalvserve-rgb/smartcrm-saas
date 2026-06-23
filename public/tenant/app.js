@@ -14511,7 +14511,7 @@ VIEWS.paymentLinks = async (view) => {
   }
   function openCreateLinkModal(viewArg) {
     const ov = h('div', { style: { position: 'fixed', inset: 0, background: 'rgba(15,23,42,.55)', zIndex: 99999, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', overflowY: 'auto', padding: '2rem 0' }, onclick: (e) => { if (e.target === ov) ov.remove(); } });
-    const card = h('div', { style: { background: 'white', borderRadius: '12px', width: '520px', maxWidth: '90vw', padding: 0, boxShadow: '0 25px 60px rgba(0,0,0,.3)' } });
+    const card = h('div', { style: { background: 'white', borderRadius: '12px', width: '760px', maxWidth: '95vw', padding: 0, boxShadow: '0 25px 60px rgba(0,0,0,.3)' } });
     card.appendChild(h('div', { style: { padding: '14px 18px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
       h('h3', { style: { margin: 0 } }, 'Create Payment Link'),
       h('button', { style: { background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '20px' }, onclick: () => ov.remove() }, '×')));
@@ -14533,31 +14533,46 @@ VIEWS.paymentLinks = async (view) => {
     body.appendChild(_field('Amount (INR) *', '', amtInp));
     const partialChk = h('input', { type: 'checkbox' });
     body.appendChild(h('label', { style: { display: 'flex', gap: '.5rem', padding: '6px 0', fontSize: '13px' } }, partialChk, 'Allow Partial Payment'));
-    body.appendChild(h('h4', { style: { margin: '1rem 0 .25rem' } }, 'Customer Details'));
-    const phInp = h('input', { type: 'tel', placeholder: 'Enter phone number', style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' } });
-    body.appendChild(_field('Phone Number *', '', phInp));
+    body.appendChild(h('h4', { style: { margin: '1.25rem 0 .25rem' } }, 'Customer Details'));
+    body.appendChild(h('p', { class: 'muted', style: { fontSize: '12px', margin: 0 } }, 'The customer will receive the payment link to the phone number and email ID.'));
+    const phInp = h('input', { type: 'tel', placeholder: '+91 phone number', style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' } });
+    const nmInp = h('input', { type: 'text', placeholder: 'eg: Ashok Kumar', style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' } });
+    const emInp = h('input', { type: 'email', placeholder: 'eg: ashok.kumar@gmail.com', style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' } });
     const smsChk = h('input', { type: 'checkbox' });
     const waChk = h('input', { type: 'checkbox', checked: 'checked' });
-    body.appendChild(h('label', { style: { display: 'flex', gap: '.5rem', padding: '4px 0', fontSize: '13px' } }, smsChk, 'Send SMS'));
-    body.appendChild(h('label', { style: { display: 'flex', gap: '.5rem', padding: '4px 0', fontSize: '13px' } }, waChk, 'Send WhatsApp'));
-    const emInp = h('input', { type: 'email', placeholder: 'eg: ashok.kumar@gmail.com', style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' } });
-    body.appendChild(_field('Email ID (optional)', '', emInp));
     const emChk = h('input', { type: 'checkbox' });
-    body.appendChild(h('label', { style: { display: 'flex', gap: '.5rem', padding: '4px 0', fontSize: '13px' } }, emChk, 'Send Email'));
-    const nmInp = h('input', { type: 'text', placeholder: 'eg: Ashok Kumar', style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' } });
-    body.appendChild(_field('Name (optional)', '', nmInp));
+    body.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '.75rem' } },
+      h('div', null,
+        h('label', { style: { display: 'block', fontSize: '12.5px', fontWeight: 700, marginBottom: '.25rem' } }, 'Phone Number *'), phInp,
+        h('div', { style: { display: 'flex', gap: '14px', marginTop: '6px' } },
+          h('label', { style: { display: 'flex', gap: '.4rem', fontSize: '12.5px', cursor: 'pointer' } }, smsChk, 'Send SMS'),
+          h('label', { style: { display: 'flex', gap: '.4rem', fontSize: '12.5px', cursor: 'pointer' } }, waChk, 'Send WhatsApp'))),
+      h('div', null,
+        h('label', { style: { display: 'block', fontSize: '12.5px', fontWeight: 700, marginBottom: '.25rem' } }, 'Name (optional)'), nmInp)
+    ));
+    body.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px', marginTop: '.75rem' } },
+      h('div', null,
+        h('label', { style: { display: 'block', fontSize: '12.5px', fontWeight: 700, marginBottom: '.25rem' } }, 'Email ID (optional)'), emInp,
+        h('label', { style: { display: 'flex', gap: '.4rem', fontSize: '12.5px', cursor: 'pointer', marginTop: '6px' } }, emChk, 'Send Email')),
+      h('div')
+    ));
     let moreOpen = false;
     const moreCard = h('div', { style: { display: 'none', marginTop: '.5rem' } });
     const linkIdInp = h('input', { type: 'text', placeholder: 'eg: Abc123', maxlength: '50', style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' } });
-    moreCard.appendChild(_field('Link ID (optional)', 'Maximum 50 characters allowed', linkIdInp));
     const redirectInp = h('input', { type: 'url', placeholder: 'eg: https://www.example.com', style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' } });
-    moreCard.appendChild(_field('Redirect URL (optional)', '', redirectInp));
+    moreCard.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' } },
+      h('div', null, h('label', { style: { display: 'block', fontSize: '12.5px', fontWeight: 700, marginBottom: '.25rem' } }, 'Link ID (optional)'), linkIdInp,
+        h('div', { class: 'muted', style: { fontSize: '11px', marginTop: '4px' } }, 'Maximum 50 characters allowed')),
+      h('div', null, h('label', { style: { display: 'block', fontSize: '12.5px', fontWeight: 700, marginBottom: '.25rem' } }, 'Redirect URL (optional)'), redirectInp)
+    ));
     const thanksInp = h('input', { type: 'text', placeholder: 'Thank you for your payment!', style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' } });
-    moreCard.appendChild(_field('Thank you message (optional)', '', thanksInp));
+    const exInp = h('input', { type: 'datetime-local', style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' } });
+    moreCard.appendChild(h('div', { style: { display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px', marginTop: '.75rem' } },
+      h('div', null, h('label', { style: { display: 'block', fontSize: '12.5px', fontWeight: 700, marginBottom: '.25rem' } }, 'Thank you message (optional)'), thanksInp),
+      h('div', null, h('label', { style: { display: 'block', fontSize: '12.5px', fontWeight: 700, marginBottom: '.25rem' } }, 'Link Expiry (optional)'), exInp)
+    ));
     const tcInp = h('textarea', { rows: 2, placeholder: 'We reserve the right to charge interest on overdue amounts', style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px', fontFamily: 'inherit', resize: 'vertical' } });
     moreCard.appendChild(_field('Terms & Conditions (optional)', '', tcInp));
-    const exInp = h('input', { type: 'datetime-local', style: { padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' } });
-    moreCard.appendChild(_field('Link Expiry (optional)', 'Leave blank for default', exInp));
     const moreToggle = h('div', {
       style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px', marginTop: '.75rem', background: '#f8fafc', borderRadius: '8px', cursor: 'pointer' },
       onclick: () => { moreOpen = !moreOpen; moreCard.style.display = moreOpen ? 'block' : 'none'; }
