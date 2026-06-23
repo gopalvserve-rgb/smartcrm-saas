@@ -1790,10 +1790,10 @@ function canSeePoolNav() {
     if (CRM.user.role === 'admin') return true;
     var enabled = CRM.brand && String(CRM.brand.POOL_ENABLED) === '1';
     if (!enabled) return false;
-    if (CRM.can && (CRM.can('pool.view') || CRM.can('pool.pull'))) return true;
-    var ids = String((CRM.brand && CRM.brand.POOL_PULL_USER_IDS) || '')
-      .split(',').map(function (x) { return Number(String(x).trim()); }).filter(Boolean);
-    return ids.indexOf(Number(CRM.user.id)) >= 0;
+    // LEAD_POOL_v2 — show to any user who has a pull rule.
+    var rules = [];
+    try { rules = JSON.parse((CRM.brand && CRM.brand.POOL_PULL_RULES) || '[]') || []; } catch (e) { rules = []; }
+    return rules.some(function (r) { return Number(r.user_id) === Number(CRM.user.id); });
   } catch (e) { return false; }
 }
 
@@ -49117,26 +49117,17 @@ VIEWS.leadpool = async (view) => {
   view.innerHTML = '';
   const isAdmin = CRM.user && CRM.user.role === 'admin';
   const esc = x => String(x == null ? '' : x).replace(/</g, '&lt;');
-  const poolAllowMe = () => {
-    try {
-      const ids = String((CRM.brand && CRM.brand.POOL_PULL_USER_IDS) || '').split(',').map(x => Number(String(x).trim())).filter(Boolean);
-      return CRM.user && ids.indexOf(Number(CRM.user.id)) >= 0;
-    } catch (e) { return false; }
-  };
-  const canPull = isAdmin || (CRM.can && CRM.can('pool.pull')) || poolAllowMe();
-  const canView = isAdmin || (CRM.can && CRM.can('pool.view')) || poolAllowMe();
 
   const root = document.createElement('div');
-  root.style.cssText = 'padding:20px;max-width:1100px;margin:0 auto';
+  root.style.cssText = 'padding:20px;max-width:920px;margin:0 auto';
   view.appendChild(root);
 
   const header = document.createElement('div');
   header.style.cssText = 'margin-bottom:16px';
   header.innerHTML = '<div style="font-size:24px;font-weight:700;color:#0f172a">🔄 Lead Pool</div>'
-    + '<div style="font-size:13px;color:#64748b">Leads released into the shared pool by status. Pull a lead to co-own it — the original owner keeps it too.</div>';
+    + '<div style="font-size:13px;color:#64748b">Leads in the chosen statuses are pooled for recycling. Click Pull to receive a batch of leads — they are shared with you (the original owner keeps them too).</div>';
   root.appendChild(header);
 
-  // reloadPool is wired after the browse section is built; settings save calls it.
   let reloadPool = async () => {};
 
   // ---- Admin config panel ----
@@ -49157,134 +49148,120 @@ VIEWS.leadpool = async (view) => {
     if (!users.length) { try { users = (await api('api_users_list')) || []; } catch (_) {} }
     users = users.filter(u => u.role !== 'admin'); // admins can always pull
 
-    let cfg = { enabled: false, status_ids: [], pull_user_ids: [] };
+    let cfg = { enabled: false, status_ids: [], rules: [] };
     try { cfg = await api('api_pool_config_get'); } catch (e) { body.textContent = 'Could not load settings: ' + e.message; }
 
     const markSaved = () => { savedEl.style.color = '#16a34a'; const t = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }); savedEl.textContent = '✓ Saved · ' + t; };
     const save = async () => {
       const enabled = body.querySelector('#pool-enabled').checked;
       const ids = Array.from(body.querySelectorAll('.pool-st:checked')).map(c => Number(c.value));
-      const uids = Array.from(body.querySelectorAll('.pool-usr:checked')).map(c => Number(c.value));
+      const rules = [];
+      body.querySelectorAll('.pool-usr-row').forEach(rowEl => {
+        const chk = rowEl.querySelector('.pool-usr');
+        const cnt = rowEl.querySelector('.pool-usr-count');
+        if (chk && chk.checked) rules.push({ user_id: Number(chk.value), count: Math.max(1, Number(cnt.value) || 1) });
+      });
       try {
-        const res = await api('api_pool_config_save', { enabled: enabled, status_ids: ids, pull_user_ids: uids });
+        const res = await api('api_pool_config_save', { enabled: enabled, status_ids: ids, rules: rules });
         markSaved();
-        CRM.brand = Object.assign(CRM.brand || {}, { POOL_ENABLED: enabled ? '1' : '0', POOL_PULL_USER_IDS: (res && res.pull_user_ids || uids).join(',') });
+        CRM.brand = Object.assign(CRM.brand || {}, { POOL_ENABLED: enabled ? '1' : '0', POOL_PULL_RULES: JSON.stringify((res && res.rules) || rules) });
         await reloadPool();
       } catch (e) { savedEl.style.color = '#dc2626'; savedEl.textContent = '✕ ' + e.message; }
     };
 
     const selSt = new Set((cfg.status_ids || []).map(Number));
-    const selUsr = new Set((cfg.pull_user_ids || []).map(Number));
+    const ruleMap = {}; (cfg.rules || []).forEach(r => { ruleMap[Number(r.user_id)] = Number(r.count); });
     body.innerHTML =
         '<label style="display:flex;align-items:center;gap:8px;margin-bottom:14px;cursor:pointer">'
       + '<input type="checkbox" id="pool-enabled" ' + (cfg.enabled ? 'checked' : '') + '/>'
       + '<span style="font-weight:600;color:#0f172a">Enable Lead Pool for this workspace</span></label>'
-      + '<div style="font-size:12px;color:#64748b;margin-bottom:6px;font-weight:600">1. Statuses that release a lead into the pool</div>'
-      + '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px">'
-      + statuses.map(s => '<label style="display:flex;align-items:center;gap:6px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:6px 10px;cursor:pointer">'
-          + '<input type="checkbox" class="pool-st" value="' + s.id + '" ' + (selSt.has(Number(s.id)) ? 'checked' : '') + '/>'
-          + '<span style="font-size:13px;color:#334155">' + esc(s.name) + '</span></label>').join('')
+      + '<div style="font-size:12px;color:#64748b;margin-bottom:6px;font-weight:600">1. Statuses that put a lead into the pool</div>'
+      + '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px">'
+      + statuses.map(sx => '<label style="display:flex;align-items:center;gap:6px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:6px 10px;cursor:pointer">'
+          + '<input type="checkbox" class="pool-st" value="' + sx.id + '" ' + (selSt.has(Number(sx.id)) ? 'checked' : '') + '/>'
+          + '<span style="font-size:13px;color:#334155">' + esc(sx.name) + '</span></label>').join('')
       + '</div>'
-      + '<div style="font-size:12px;color:#64748b;margin-bottom:6px;font-weight:600">2. Employees allowed to pull from the pool</div>'
-      + '<div style="font-size:11px;color:#94a3b8;margin-bottom:6px">Tick the people who may claim leads. (Admins and managers can already pull. Leave all unticked to rely only on role permissions.)</div>'
-      + '<div style="display:flex;flex-wrap:wrap;gap:8px">'
-      + (users.length ? users.map(u => '<label style="display:flex;align-items:center;gap:6px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:6px 10px;cursor:pointer">'
-          + '<input type="checkbox" class="pool-usr" value="' + u.id + '" ' + (selUsr.has(Number(u.id)) ? 'checked' : '') + '/>'
-          + '<span style="font-size:13px;color:#334155">' + esc(u.name) + ' <span style="color:#94a3b8">· ' + esc(u.role) + '</span></span></label>').join('')
-          : '<span style="font-size:12px;color:#94a3b8">No non-admin users found.</span>')
+      + '<div style="font-size:12px;color:#64748b;margin-bottom:6px;font-weight:600">2. Who can pull, and how many leads per pull</div>'
+      + '<div style="font-size:11px;color:#94a3b8;margin-bottom:8px">Tick a user and set how many leads they receive each time they click Pull.</div>'
+      + '<div style="display:flex;flex-direction:column;gap:6px">'
+      + (users.length ? users.map(u => {
+          const on = ruleMap[Number(u.id)] != null;
+          const cnt = on ? ruleMap[Number(u.id)] : 10;
+          return '<div class="pool-usr-row" style="display:flex;align-items:center;gap:10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:6px 10px">'
+            + '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;flex:1">'
+            + '<input type="checkbox" class="pool-usr" value="' + u.id + '" ' + (on ? 'checked' : '') + '/>'
+            + '<span style="font-size:13px;color:#334155">' + esc(u.name) + ' <span style="color:#94a3b8">· ' + esc(u.role) + '</span></span></label>'
+            + '<span style="font-size:12px;color:#64748b">leads / pull:</span>'
+            + '<input type="number" class="pool-usr-count" min="1" max="500" value="' + cnt + '" style="width:64px;padding:4px 6px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px"/>'
+            + '</div>';
+        }).join('')
+        : '<span style="font-size:12px;color:#94a3b8">No non-admin users found.</span>')
       + '</div>';
+
     body.querySelector('#pool-enabled').addEventListener('change', save);
     body.querySelectorAll('.pool-st').forEach(c => c.addEventListener('change', save));
     body.querySelectorAll('.pool-usr').forEach(c => c.addEventListener('change', save));
-    // Explicit Save button (settings also auto-save on each change).
+    body.querySelectorAll('.pool-usr-count').forEach(c => c.addEventListener('change', save));
     const saveBtn = document.createElement('button');
     saveBtn.textContent = '💾 Save settings';
-    saveBtn.style.cssText = 'margin-top:12px;background:#4f46e5;color:#fff;border:0;padding:8px 18px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600';
+    saveBtn.style.cssText = 'margin-top:14px;background:#4f46e5;color:#fff;border:0;padding:8px 18px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600';
     saveBtn.onclick = async () => { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; await save(); saveBtn.disabled = false; saveBtn.textContent = '💾 Save settings'; toast('Pool settings saved', 'ok'); };
     body.appendChild(saveBtn);
   }
 
-  // ---- Browse + pull ----
-  const poolWrap = document.createElement('div');
-  root.appendChild(poolWrap);
-  if (!canView) {
-    poolWrap.innerHTML = '<div style="padding:24px;text-align:center;color:#64748b;background:#fff;border:1px solid #e2e8f0;border-radius:12px">You don\'t have access to browse the pool. Ask your admin to add you under <b>Pool Settings → Employees allowed to pull</b>.</div>';
-    return;
-  }
+  // ---- User pull panel: COUNT + single Pull button (no lead list) ----
+  const panel = document.createElement('div');
+  panel.style.cssText = 'background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:24px';
+  root.appendChild(panel);
 
-  const summaryEl = document.createElement('div');
-  summaryEl.style.cssText = 'display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px';
-  poolWrap.appendChild(summaryEl);
-  const listEl = document.createElement('div');
-  poolWrap.appendChild(listEl);
-  let activeDate = null;
-
-  const renderList = async () => {
-    listEl.innerHTML = '<div style="padding:20px;color:#94a3b8">Loading leads…</div>';
-    let res;
-    try { res = await api('api_pool_list', activeDate ? { date: activeDate } : {}); }
-    catch (e) { listEl.innerHTML = '<div style="padding:20px;color:#dc2626">' + e.message + '</div>'; return; }
-    if (!res.enabled) { listEl.innerHTML = '<div style="padding:24px;text-align:center;color:#64748b;background:#fff;border:1px solid #e2e8f0;border-radius:12px">Lead Pool is not enabled yet' + (isAdmin ? ' — turn it on above.' : '.') + '</div>'; return; }
-    const rows = res.rows || [];
-    if (!rows.length) { listEl.innerHTML = '<div style="padding:24px;text-align:center;color:#64748b;background:#fff;border:1px solid #e2e8f0;border-radius:12px">No leads available to pull' + (activeDate ? ' for ' + activeDate : '') + '.</div>'; return; }
-    const table = document.createElement('table');
-    table.style.cssText = 'width:100%;border-collapse:collapse;background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden';
-    table.innerHTML = '<thead><tr style="background:#f8fafc;text-align:left">'
-      + '<th style="padding:10px 12px;font-size:12px;color:#64748b">Name</th>'
-      + '<th style="padding:10px 12px;font-size:12px;color:#64748b">Phone</th>'
-      + '<th style="padding:10px 12px;font-size:12px;color:#64748b">Status</th>'
-      + '<th style="padding:10px 12px;font-size:12px;color:#64748b">Original owner</th>'
-      + '<th style="padding:10px 12px;font-size:12px;color:#64748b">In pool since</th>'
-      + '<th style="padding:10px 12px"></th></tr></thead><tbody></tbody>';
-    const tb = table.querySelector('tbody');
-    rows.forEach(r => {
-      const tr = document.createElement('tr');
-      tr.style.cssText = 'border-top:1px solid #f1f5f9';
-      tr.innerHTML = '<td style="padding:10px 12px;font-size:13px;color:#0f172a;font-weight:600">' + (esc(r.name) || '—') + '</td>'
-        + '<td style="padding:10px 12px;font-size:13px;color:#334155">' + (esc(r.phone) || '—') + '</td>'
-        + '<td style="padding:10px 12px;font-size:13px;color:#334155">' + (esc(r.status_name) || '—') + '</td>'
-        + '<td style="padding:10px 12px;font-size:13px;color:#334155">' + (esc(r.owner_name) || 'Unassigned') + '</td>'
-        + '<td style="padding:10px 12px;font-size:12px;color:#64748b">' + (esc(r.pool_entered) || '—') + '</td>'
-        + '<td style="padding:10px 12px;text-align:right"></td>';
-      const cell = tr.lastElementChild;
-      if (Number(r.is_mine) === 1) {
-        cell.innerHTML = '<span style="font-size:12px;color:#94a3b8">your lead</span>';
-      } else if (Number(r.already_pulled) === 1) {
-        cell.innerHTML = '<span style="font-size:12px;color:#16a34a">✓ pulled</span>';
-      } else if (canPull) {
-        const btn = document.createElement('button');
-        btn.textContent = '⤵ Pull';
-        btn.style.cssText = 'background:#4f46e5;color:#fff;border:0;padding:6px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600';
-        btn.onclick = async () => {
-          btn.disabled = true; btn.textContent = 'Pulling…';
-          try { await api('api_pool_pull', r.id); toast('Lead pulled — it is now shared with you', 'ok'); btn.outerHTML = '<span style=\'font-size:12px;color:#16a34a\'>✓ pulled</span>'; refreshSummary(); }
-          catch (e) { btn.disabled = false; btn.textContent = '⤵ Pull'; toast(e.message, 'err'); }
-        };
-        cell.appendChild(btn);
-      } else { cell.innerHTML = '<span style="font-size:12px;color:#94a3b8">view only</span>'; }
-      tb.appendChild(tr);
-    });
-    listEl.innerHTML = '';
-    listEl.appendChild(table);
-  };
-
-  const refreshSummary = async () => {
+  const renderPanel = async () => {
+    panel.innerHTML = '<div style="padding:8px;color:#94a3b8">Loading pool…</div>';
     let sm;
-    try { sm = await api('api_pool_summary'); } catch (e) { summaryEl.innerHTML = ''; return; }
-    if (!sm.enabled) { summaryEl.innerHTML = ''; return; }
-    const card = (label, count, dateVal, active) => '<button data-date="' + (dateVal == null ? '' : dateVal) + '" class="pool-date-card" style="cursor:pointer;border:1px solid ' + (active ? '#4f46e5' : '#e2e8f0') + ';background:' + (active ? '#eef2ff' : '#fff') + ';border-radius:10px;padding:10px 14px;text-align:left;min-width:110px">'
-      + '<div style="font-size:20px;font-weight:700;color:#4f46e5">' + count + '</div>'
-      + '<div style="font-size:11px;color:#64748b">' + label + '</div></button>';
-    let html = card('All available', sm.total, '', activeDate === null);
-    (sm.by_date || []).forEach(d => { html += card(d.date, d.count, d.date, activeDate === d.date); });
-    summaryEl.innerHTML = html;
-    summaryEl.querySelectorAll('.pool-date-card').forEach(b => b.onclick = () => {
-      const dv = b.getAttribute('data-date'); activeDate = dv === '' ? null : dv; refreshSummary(); renderList();
-    });
+    try { sm = await api('api_pool_summary'); }
+    catch (e) {
+      panel.innerHTML = '<div style="text-align:center;color:#64748b;padding:16px">' +
+        (/forbidden/i.test(e.message) ? 'You are not set up to pull from the pool. Ask your admin to add you under Pool Settings.' : esc(e.message)) + '</div>';
+      return;
+    }
+    if (!sm.enabled) {
+      panel.innerHTML = '<div style="text-align:center;color:#64748b;padding:16px">Lead Pool is not enabled yet' + (isAdmin ? ' — turn it on above.' : '.') + '</div>';
+      return;
+    }
+    const total = Number(sm.total || 0);
+    const myCount = Number(sm.my_count || 0);
+    const dateCards = (sm.by_date || []).map(d =>
+      '<div style="border:1px solid #e2e8f0;background:#f8fafc;border-radius:10px;padding:8px 14px;min-width:104px">'
+      + '<div style="font-size:18px;font-weight:700;color:#4f46e5">' + d.count + '</div>'
+      + '<div style="font-size:11px;color:#64748b">' + d.date + '</div></div>').join('');
+
+    panel.innerHTML =
+        '<div style="text-align:center;margin-bottom:16px">'
+      + '<div style="font-size:46px;font-weight:800;color:#4f46e5;line-height:1">' + total + '</div>'
+      + '<div style="font-size:13px;color:#64748b;margin-top:4px">leads available to pull</div></div>'
+      + (dateCards ? '<div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-bottom:18px">' + dateCards + '</div>' : '')
+      + '<div style="text-align:center">'
+      + '<button id="pool-pull-btn" ' + ((total <= 0 || myCount <= 0) ? 'disabled' : '') + ' style="background:' + ((total <= 0 || myCount <= 0) ? '#cbd5e1' : '#4f46e5') + ';color:#fff;border:0;padding:12px 28px;border-radius:10px;font-size:15px;font-weight:700;cursor:' + ((total <= 0 || myCount <= 0) ? 'not-allowed' : 'pointer') + '">⤵ Pull ' + (myCount > 0 ? myCount + ' lead' + (myCount === 1 ? '' : 's') : 'leads') + '</button>'
+      + '<div style="font-size:11px;color:#94a3b8;margin-top:8px">'
+      + (myCount <= 0 ? 'Your pull count is not set — ask your admin.' : 'You get ' + myCount + ' lead' + (myCount === 1 ? '' : 's') + ' per pull · newest first · shared with you')
+      + '</div></div>';
+
+    const btn = panel.querySelector('#pool-pull-btn');
+    if (btn && !btn.disabled) {
+      btn.onclick = async () => {
+        btn.disabled = true; btn.textContent = 'Pulling…';
+        try {
+          const res = await api('api_pool_pull');
+          const n = Number(res.pulled_count || 0);
+          if (n > 0) toast('Pulled ' + n + ' lead' + (n === 1 ? '' : 's') + ' into your list', 'ok');
+          else toast(res.reason || 'No leads available to pull right now', 'err');
+        } catch (e) { toast(e.message, 'err'); }
+        await renderPanel();
+      };
+    }
   };
 
-  reloadPool = async () => { await refreshSummary(); await renderList(); };
-  await reloadPool();
+  reloadPool = renderPanel;
+  await renderPanel();
 };
 
 

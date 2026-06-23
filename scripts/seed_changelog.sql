@@ -582,3 +582,12 @@ SELECT 'feature',
        '🔄',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Lead Pool — recycle leads by status');
+
+-- 2026-06-23 LEAD_POOL_v2
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'Lead Pool — one-click batch pull',
+       'The Lead Pool now works as a recycling pool. In Lead Pool -> Pool Settings an admin picks which statuses pool a lead (e.g. NP), then picks each user and how many leads they get per pull (e.g. Rep A = 5, Rep B = 10). Allowed users just see a live count of available leads and one Pull button — clicking hands them their batch of the newest pooled leads, shared with them (the original owner keeps them too). No browsing or picking individual leads. A lead stays in the pool until its status changes off a pool status.',
+       '🔄',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Lead Pool — one-click batch pull');
