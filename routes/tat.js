@@ -123,12 +123,36 @@ async function api_lead_actions(token, leadId) {
        ORDER BY a.created_at ASC, a.id ASC`,
     [Number(leadId)]
   );
-  return rows.map(r => ({
+  const out = rows.map(r => ({
     id: r.id, lead_id: r.lead_id, action_type: r.action_type,
     user_id: r.user_id, user_name: r.user_name || '',
     meta: typeof r.meta_json === 'string' ? safeJson(r.meta_json) : (r.meta_json || {}),
     created_at: r.created_at
   }));
+  // CALL_TIMELINE_v1 — merge call activity (call_events) into the lead
+  // timeline so Classic View shows calls alongside status/remark/etc.
+  // Calls are stored in their own table and were never in lead_actions.
+  try {
+    const ce = await db.query(
+      `SELECT c.id, c.user_id, c.phone, c.direction, c.event, c.duration_s, c.recording_id, c.created_at,
+              u.name AS user_name
+         FROM call_events c
+         LEFT JOIN users u ON u.id = c.user_id
+        WHERE c.lead_id = $1
+        ORDER BY c.created_at ASC`,
+      [Number(leadId)]
+    );
+    ce.rows.forEach(r => out.push({
+      id: 'call_' + r.id, lead_id: Number(leadId), action_type: 'call',
+      user_id: r.user_id, user_name: r.user_name || '',
+      meta: { direction: r.direction || '', event: r.event || '',
+              duration_s: Number(r.duration_s) || 0, phone: r.phone || '',
+              recording_id: r.recording_id || null },
+      created_at: r.created_at
+    }));
+    out.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+  } catch (e) { /* call_events optional — never break the timeline */ }
+  return out;
 }
 function safeJson(s) { try { return JSON.parse(s); } catch (_) { return {}; } }
 

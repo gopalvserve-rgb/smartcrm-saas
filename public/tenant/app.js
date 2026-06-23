@@ -10267,6 +10267,12 @@ function actionTimelineBlock(leadId) {
         sub = m.to_status_id || m.from_status_id ? ('Status #' + (m.from_status_id || '?') + ' → #' + (m.to_status_id || '?')) : null;
       } else if (r.action_type === 'remark') {
         sub = m.remark || null;
+      } else if (r.action_type === 'call') {
+        // CALL_TIMELINE_v1 — direction + duration + number
+        const _dir = m.direction === 'in' ? 'Incoming' : (m.direction === 'missed' ? 'Missed' : 'Outgoing');
+        const _ds = Number(m.duration_s) || 0;
+        const _dur = _ds > 0 ? (' · ' + (_ds >= 60 ? Math.floor(_ds / 60) + 'm ' + (_ds % 60) + 's' : _ds + 's')) : '';
+        sub = _dir + ' call' + _dur + (m.phone ? ' · ' + m.phone : '') + (m.recording_id ? ' · 🎙 recorded' : '');
       } else if (r.action_type === 'followup_set') {
         sub = m.due_at ? ('Due ' + fmtDate(m.due_at)) : null;
       } else if (r.action_type === 'assigned') {
