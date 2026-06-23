@@ -573,3 +573,12 @@ SELECT 'feature',
        '📅',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Copilot Demo Reminders (beta on vserve)');
+
+-- 2026-06-23 LEAD_POOL_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'Lead Pool — recycle leads by status',
+       'New "Lead Pool" page under Sales CRM. An admin picks which statuses (e.g. NP) release a lead into a shared pool from Lead Pool → Pool Settings. The moment a lead is set to a pool status it drops into the pool — the original owner keeps the lead and sees it as before. Users granted "Lead Pool — Pull" can browse the pool, see a date-wise count of available leads, and pull any lead to start working it. Pulling makes them a co-owner (🤝): the original owner keeps the lead too, and the pull is logged. Grant pool access per role in Settings → Permissions (pool.view / pool.pull).',
+       '🔄',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Lead Pool — recycle leads by status');

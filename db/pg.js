@@ -114,7 +114,9 @@ const SCHEMA = {
               'project_stage_id', 'project_stage_started_at',
               /* LS_v1 — surface AI Score data on /api/leads_list reads */
               'smart_score', 'smart_category', 'score_reason',
-              'score_breakdown_json', 'score_updated_at'],
+              'score_breakdown_json', 'score_updated_at',
+              /* LEAD_POOL_v1 — Free Pool / status-released pool membership */
+              'in_pool', 'pool_entered_at', 'pool_origin_status_id', 'pool_origin_user_id'],
     json: ['meta_json', 'extra_json', 'score_breakdown_json']
   },
   project_stages: {

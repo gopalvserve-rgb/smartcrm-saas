@@ -871,6 +871,21 @@ async function apiRaw(fn, ...args) {
       } catch (_) {
         CRM.access = Object.assign(CRM.access || {}, { can_chat: true });
       }
+      // LEAD_POOL_v1 — load the permission matrix so nav gating + the Pool
+      // view can check the current user's effective permissions client-side.
+      // api_permissions_get is callable by any logged-in user (returns the
+      // full role→permission matrix). CRM.can(perm) reads the row for this
+      // user's role; admin is always allowed.
+      try {
+        const _pm = await api('api_permissions_get');
+        CRM.permMatrix = (_pm && _pm.matrix) || {};
+      } catch (_) { CRM.permMatrix = {}; }
+      CRM.can = (perm) => {
+        if (!CRM.user) return false;
+        if (CRM.user.role === 'admin') return true;
+        const v = (CRM.permMatrix && CRM.permMatrix[CRM.user.role] || {})[perm];
+        return v === 1 || v === true || v === 'self' || v === 'team' || v === 'global';
+      };
       navigateTo(parseHashView() || 'dashboard');
       startFollowupPolling();
       startRecordingAutoSync();
@@ -1651,6 +1666,7 @@ const NAV_GROUPS = [
     { id: 'pipeline',   label: 'Pipeline',             icon: '📈', search: 'pipeline funnel stage deal stage lead stage' },
     { id: 'kanban',     label: 'Kanban Board',         icon: '🗂️', search: 'kanban board stage board card view' },
     { id: 'followups',  label: 'Follow-ups',           icon: '🔔', search: 'follow up follow-up reminder callback next action' },
+    { id: 'leadpool',   label: 'Lead Pool',            icon: '🔄', perm: 'pool.view', requiresBrandFlag: 'POOL_ENABLED', search: 'pool free pool recycle recycled leads claim pull np shared pool' },
     { id: 'calendar',   label: 'Calendar',             icon: '📅', search: 'calendar meeting schedule appointment' },
     { id: 'targets',    label: 'Monthly Targets',      icon: '🎯', search: 'target monthly target sales target goal' },
     { id: 'newleads',   label: 'New Leads',            icon: '✨', countKey: 'new_today', search: 'new leads today fresh lead' },
@@ -1825,6 +1841,9 @@ function renderShell() {
   const _navAnchor = (item) => {
     if (item.roles && !item.roles.includes(CRM.user.role)) return null;
     if (hiddenNavIds.includes(item.id)) return null;
+    /* LEAD_POOL_v1 — per-permission + per-tenant brand-flag gating */
+    if (item.perm && !(CRM.can && CRM.can(item.perm))) return null;
+    if (item.requiresBrandFlag && !(CRM.brand && String(CRM.brand[item.requiresBrandFlag]) === '1')) return null;
     if (item.id === 'teamchat' && CRM.access && CRM.access.can_chat === false) return null;
     // Industry-pack gate — only show pack-specific items when the pack
     // is installed for THIS tenant. CRM.installedPacks is populated at
@@ -1952,6 +1971,8 @@ function renderShell() {
   NAV.forEach(item => {
     if (item.roles && !item.roles.includes(CRM.user.role)) return;
     if (hiddenNavIds.includes(item.id)) return;
+    if (item.perm && !(CRM.can && CRM.can(item.perm))) return;
+    if (item.requiresBrandFlag && !(CRM.brand && String(CRM.brand[item.requiresBrandFlag]) === '1')) return;
     if (item.id === 'teamchat' && CRM.access && CRM.access.can_chat === false) return;
     if (item.requiresPack) {
       const installed = (CRM.installedPacks instanceof Set) ? CRM.installedPacks : new Set();
@@ -2052,6 +2073,8 @@ function showMobileMore() {
         ...NAV.filter(item => {
           if (item.roles && !item.roles.includes(CRM.user.role)) return false;
           if (item.id === 'teamchat' && CRM.access && CRM.access.can_chat === false) return false;
+          if (item.perm && !(CRM.can && CRM.can(item.perm))) return false;
+          if (item.requiresBrandFlag && !(CRM.brand && String(CRM.brand[item.requiresBrandFlag]) === '1')) return false;
           // PACK_MENU_MOBILE_v1 (2026-05-29) — mirror the sidebar's
           // requiresPack gate. Without this, Education and Real Estate
           // pack items (Fee Collection, Students, Courses, Inventory Board,
@@ -49065,6 +49088,151 @@ VIEWS.leadscoringsettings = async (view) => {
   if (window.LS_v1 && typeof window.LS_v1.renderSettings === 'function') return window.LS_v1.renderSettings(view);
   view.innerHTML = '<div style="padding:40px;text-align:center;color:#64748b">⏳ AI Scoring Settings is loading — refresh in a moment.</div>';
 };
+
+/* ─────────────────────────────────────────────────────────────────
+ * LEAD_POOL_v1 — Free Pool: status-released SHARED lead pool.
+ * Admin picks pool statuses (panel below, admin-only). Leads set to a
+ * pool status drop in here. Users with pool.pull claim a lead → become
+ * a co-owner (original owner keeps it). Date-wise counts up top.
+ * ───────────────────────────────────────────────────────────────── */
+VIEWS.leadpool = async (view) => {
+  view.innerHTML = '';
+  const isAdmin = CRM.user && CRM.user.role === 'admin';
+  const canPull = !!(CRM.can && CRM.can('pool.pull'));
+  const esc = x => String(x == null ? '' : x).replace(/</g, '&lt;');
+
+  const root = document.createElement('div');
+  root.style.cssText = 'padding:20px;max-width:1100px;margin:0 auto';
+  view.appendChild(root);
+
+  const header = document.createElement('div');
+  header.style.cssText = 'margin-bottom:16px';
+  header.innerHTML = '<div style="font-size:24px;font-weight:700;color:#0f172a">🔄 Lead Pool</div>'
+    + '<div style="font-size:13px;color:#64748b">Leads released into the shared pool by status. Pull a lead to co-own it — the original owner keeps it too.</div>';
+  root.appendChild(header);
+
+  // ---- Admin config panel ----
+  if (isAdmin) {
+    const cfgCard = document.createElement('div');
+    cfgCard.style.cssText = 'background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:18px';
+    cfgCard.innerHTML = '<div style="font-weight:700;color:#0f172a;margin-bottom:4px">⚙️ Pool Settings '
+      + '<span style="font-weight:400;color:#94a3b8;font-size:12px">(admin only)</span></div>'
+      + '<div style="font-size:12px;color:#64748b;margin-bottom:12px">Pick which statuses release a lead into the pool. A lead enters the pool the instant it is set to one of these.</div>'
+      + '<div id="pool-cfg-body" style="color:#64748b;font-size:13px">Loading…</div>'
+      + '<div id="pool-cfg-saved" style="font-size:12px;color:#16a34a;margin-top:8px;min-height:16px"></div>';
+    root.appendChild(cfgCard);
+    const body = cfgCard.querySelector('#pool-cfg-body');
+    const savedEl = cfgCard.querySelector('#pool-cfg-saved');
+    let statuses = (CRM.cache && CRM.cache.statuses) || [];
+    if (!statuses.length) { try { statuses = (await api('api_statuses_list')) || []; } catch (_) {} }
+    let cfg = { enabled: false, status_ids: [] };
+    try { cfg = await api('api_pool_config_get'); } catch (e) { body.textContent = 'Could not load settings: ' + e.message; }
+
+    const markSaved = () => { savedEl.style.color = '#16a34a'; const t = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }); savedEl.textContent = '✓ Saved · ' + t; };
+    const save = async () => {
+      const enabled = body.querySelector('#pool-enabled').checked;
+      const ids = Array.from(body.querySelectorAll('.pool-st:checked')).map(c => Number(c.value));
+      try {
+        await api('api_pool_config_save', { enabled: enabled, status_ids: ids });
+        markSaved();
+        CRM.brand = Object.assign(CRM.brand || {}, { POOL_ENABLED: enabled ? '1' : '0' });
+      } catch (e) { savedEl.style.color = '#dc2626'; savedEl.textContent = '✕ ' + e.message; }
+    };
+    const selSet = new Set((cfg.status_ids || []).map(Number));
+    body.innerHTML = '<label style="display:flex;align-items:center;gap:8px;margin-bottom:12px;cursor:pointer">'
+      + '<input type="checkbox" id="pool-enabled" ' + (cfg.enabled ? 'checked' : '') + '/>'
+      + '<span style="font-weight:600;color:#0f172a">Enable Lead Pool for this workspace</span></label>'
+      + '<div style="font-size:12px;color:#64748b;margin-bottom:6px">Pool statuses:</div>'
+      + '<div style="display:flex;flex-wrap:wrap;gap:8px">'
+      + statuses.map(s => '<label style="display:flex;align-items:center;gap:6px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:6px 10px;cursor:pointer">'
+          + '<input type="checkbox" class="pool-st" value="' + s.id + '" ' + (selSet.has(Number(s.id)) ? 'checked' : '') + '/>'
+          + '<span style="font-size:13px;color:#334155">' + esc(s.name) + '</span></label>').join('')
+      + '</div>';
+    body.querySelector('#pool-enabled').addEventListener('change', save);
+    body.querySelectorAll('.pool-st').forEach(c => c.addEventListener('change', save));
+  }
+
+  // ---- Browse + pull (needs pool.view) ----
+  const poolWrap = document.createElement('div');
+  root.appendChild(poolWrap);
+  if (!(CRM.can && CRM.can('pool.view'))) {
+    poolWrap.innerHTML = '<div style="padding:24px;text-align:center;color:#64748b;background:#fff;border:1px solid #e2e8f0;border-radius:12px">You don\'t have access to browse the pool. Ask your admin to grant <b>Lead Pool — View</b>.</div>';
+    return;
+  }
+
+  const summaryEl = document.createElement('div');
+  summaryEl.style.cssText = 'display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px';
+  poolWrap.appendChild(summaryEl);
+  const listEl = document.createElement('div');
+  poolWrap.appendChild(listEl);
+  let activeDate = null;
+
+  const renderList = async () => {
+    listEl.innerHTML = '<div style="padding:20px;color:#94a3b8">Loading leads…</div>';
+    let res;
+    try { res = await api('api_pool_list', activeDate ? { date: activeDate } : {}); }
+    catch (e) { listEl.innerHTML = '<div style="padding:20px;color:#dc2626">' + e.message + '</div>'; return; }
+    if (!res.enabled) { listEl.innerHTML = '<div style="padding:24px;text-align:center;color:#64748b;background:#fff;border:1px solid #e2e8f0;border-radius:12px">Lead Pool is not enabled yet' + (isAdmin ? ' — turn it on above.' : '.') + '</div>'; return; }
+    const rows = res.rows || [];
+    if (!rows.length) { listEl.innerHTML = '<div style="padding:24px;text-align:center;color:#64748b;background:#fff;border:1px solid #e2e8f0;border-radius:12px">No leads available to pull' + (activeDate ? ' for ' + activeDate : '') + '.</div>'; return; }
+    const table = document.createElement('table');
+    table.style.cssText = 'width:100%;border-collapse:collapse;background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden';
+    table.innerHTML = '<thead><tr style="background:#f8fafc;text-align:left">'
+      + '<th style="padding:10px 12px;font-size:12px;color:#64748b">Name</th>'
+      + '<th style="padding:10px 12px;font-size:12px;color:#64748b">Phone</th>'
+      + '<th style="padding:10px 12px;font-size:12px;color:#64748b">Status</th>'
+      + '<th style="padding:10px 12px;font-size:12px;color:#64748b">Original owner</th>'
+      + '<th style="padding:10px 12px;font-size:12px;color:#64748b">In pool since</th>'
+      + '<th style="padding:10px 12px"></th></tr></thead><tbody></tbody>';
+    const tb = table.querySelector('tbody');
+    rows.forEach(r => {
+      const tr = document.createElement('tr');
+      tr.style.cssText = 'border-top:1px solid #f1f5f9';
+      tr.innerHTML = '<td style="padding:10px 12px;font-size:13px;color:#0f172a;font-weight:600">' + (esc(r.name) || '—') + '</td>'
+        + '<td style="padding:10px 12px;font-size:13px;color:#334155">' + (esc(r.phone) || '—') + '</td>'
+        + '<td style="padding:10px 12px;font-size:13px;color:#334155">' + (esc(r.status_name) || '—') + '</td>'
+        + '<td style="padding:10px 12px;font-size:13px;color:#334155">' + (esc(r.owner_name) || 'Unassigned') + '</td>'
+        + '<td style="padding:10px 12px;font-size:12px;color:#64748b">' + (esc(r.pool_entered) || '—') + '</td>'
+        + '<td style="padding:10px 12px;text-align:right"></td>';
+      const cell = tr.lastElementChild;
+      if (canPull) {
+        const btn = document.createElement('button');
+        btn.textContent = '⤵ Pull';
+        btn.style.cssText = 'background:#4f46e5;color:#fff;border:0;padding:6px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600';
+        btn.onclick = async () => {
+          btn.disabled = true; btn.textContent = 'Pulling…';
+          try { await api('api_pool_pull', r.id); toast('Lead pulled — it is now shared with you', 'ok'); tr.remove(); refreshSummary(); }
+          catch (e) { btn.disabled = false; btn.textContent = '⤵ Pull'; toast(e.message, 'err'); }
+        };
+        cell.appendChild(btn);
+      } else {
+        cell.innerHTML = '<span style="font-size:12px;color:#94a3b8">view only</span>';
+      }
+      tb.appendChild(tr);
+    });
+    listEl.innerHTML = '';
+    listEl.appendChild(table);
+  };
+
+  const refreshSummary = async () => {
+    let sm;
+    try { sm = await api('api_pool_summary'); } catch (e) { summaryEl.innerHTML = ''; return; }
+    if (!sm.enabled) { summaryEl.innerHTML = ''; return; }
+    const card = (label, count, dateVal, active) => '<button data-date="' + (dateVal == null ? '' : dateVal) + '" class="pool-date-card" style="cursor:pointer;border:1px solid ' + (active ? '#4f46e5' : '#e2e8f0') + ';background:' + (active ? '#eef2ff' : '#fff') + ';border-radius:10px;padding:10px 14px;text-align:left;min-width:110px">'
+      + '<div style="font-size:20px;font-weight:700;color:#4f46e5">' + count + '</div>'
+      + '<div style="font-size:11px;color:#64748b">' + label + '</div></button>';
+    let html = card('All available', sm.total, '', activeDate === null);
+    (sm.by_date || []).forEach(d => { html += card(d.date, d.count, d.date, activeDate === d.date); });
+    summaryEl.innerHTML = html;
+    summaryEl.querySelectorAll('.pool-date-card').forEach(b => b.onclick = () => {
+      const dv = b.getAttribute('data-date'); activeDate = dv === '' ? null : dv; refreshSummary(); renderList();
+    });
+  };
+
+  await refreshSummary();
+  await renderList();
+};
+
 
 
 /* AI_MGR_v1 — Phase 1+ — Rules / Violations / Reports tabs + heartbeat + reason modal */

@@ -1627,6 +1627,8 @@ async function api_leads_update(token, id, patch) {
     }
     // TAT — write stage log + close any open violation for this lead
     try { await require('./tat').logStageChange(id, lead.status_id, patch.status_id, me.id); } catch (_) {}
+    // LEAD_POOL_v1 — release into / remove from the Free Pool on status change
+    try { await require('./pool').applyPoolTransition(id, lead, patch.status_id, me); } catch (_) {}
     // META_CAPI_v1 — real-time push to Meta Conversions API on status change
     try {
       require('./metaConvExport').maybeDispatchOnStatusChange(id, patch.status_id, lead.status_id, me.id);
@@ -1864,6 +1866,10 @@ async function api_leads_addRemark(token, leadId, payload) {
     await tat.logAction(leadId, 'remark', me.id, { remark: String(p.remark).slice(0, 200) });
     if (p.status_id && Number(p.status_id) !== priorStatus) {
       await tat.logStageChange(leadId, priorStatus, Number(p.status_id), me.id);
+    }
+    // LEAD_POOL_v1 — release into / remove from the Free Pool on status change
+    if (p.status_id && Number(p.status_id) !== priorStatus) {
+      try { await require('./pool').applyPoolTransition(leadId, lead, p.status_id, me); } catch (_) {}
     }
     if (p.next_followup_at) {
       await tat.logAction(leadId, 'followup_set', me.id, { due_at: p.next_followup_at });

@@ -542,6 +542,26 @@ const SCHEMA_MIGRATIONS = [
     ALTER TABLE leads ADD COLUMN IF NOT EXISTS score_updated_at TIMESTAMPTZ;
     CREATE INDEX IF NOT EXISTS idx_leads_smart_score ON leads(smart_score DESC) WHERE smart_score > 0;
   ` },
+
+  // ─────────────────────────────────────────────────────────────
+  // LEAD_POOL_v1 (2026-06-23) — "Free Pool" / status-released lead pool.
+  // When a lead is set to an admin-chosen status (e.g. NP), it drops into
+  // a shared pool. Authorised users pull leads from the pool and become
+  // CO-OWNERS (original owner keeps the lead — shared model). Pull audit
+  // + co-ownership both live in the existing lead_co_owners table
+  // (source='pool_pull'); these columns only track pool membership.
+  //   in_pool                1 = currently sitting in the pool
+  //   pool_entered_at        when it entered (drives the date-wise count)
+  //   pool_origin_status_id  which status released it
+  //   pool_origin_user_id    the original owner at release time
+  // ─────────────────────────────────────────────────────────────
+  { name: '2026_06_23_lead_pool_v1', sql: `
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS in_pool INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS pool_entered_at TIMESTAMPTZ;
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS pool_origin_status_id INTEGER;
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS pool_origin_user_id INTEGER;
+    CREATE INDEX IF NOT EXISTS idx_leads_in_pool ON leads(in_pool, pool_entered_at) WHERE in_pool = 1;
+  ` },
 ];
 
 /**
