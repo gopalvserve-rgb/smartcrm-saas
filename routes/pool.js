@@ -123,20 +123,24 @@ async function api_pool_config_save(token, payload) {
 }
 
 // ── pool browse: date-wise summary ───────────────────────────────────
+// Membership is LIVE: a lead is in the pool iff its CURRENT status is a
+// pool status. This means existing NP/etc leads show up immediately — no
+// need to re-mark them. "In pool since" = last_status_change_at.
 async function api_pool_summary(token) {
   const me = await authUser(token);
   if (!await _canViewPool(me)) throw new Error('Forbidden');
   await _ensureSchema();
   if (!await _poolEnabled()) return { enabled: false, total: 0, by_date: [] };
+  const poolIds = await _poolStatusIds();
+  if (!poolIds.length) return { enabled: true, total: 0, by_date: [] };
   const r = await db.query(
-    `SELECT to_char((l.pool_entered_at AT TIME ZONE 'Asia/Kolkata')::date, 'YYYY-MM-DD') AS d,
+    `SELECT to_char((COALESCE(l.last_status_change_at, l.updated_at, l.created_at) AT TIME ZONE 'Asia/Kolkata')::date, 'YYYY-MM-DD') AS d,
             COUNT(*)::int AS n
        FROM leads l
-      WHERE l.in_pool = 1 AND COALESCE(l.is_hidden,0) = 0
-        AND (l.assigned_to IS NULL OR l.assigned_to <> $1)
-        AND NOT EXISTS (SELECT 1 FROM lead_co_owners co WHERE co.lead_id = l.id AND co.user_id = $1)
+      WHERE l.status_id = ANY($1::int[]) AND COALESCE(l.is_hidden,0) = 0
+        AND NOT EXISTS (SELECT 1 FROM lead_co_owners co WHERE co.lead_id = l.id AND co.user_id = $2)
       GROUP BY d ORDER BY d DESC`,
-    [Number(me.id)]
+    [poolIds, Number(me.id)]
   );
   const by_date = r.rows.map(x => ({ date: x.d, count: Number(x.n) }));
   return { enabled: true, total: by_date.reduce((a, b) => a + b.count, 0), by_date };
@@ -148,26 +152,28 @@ async function api_pool_list(token, filters) {
   if (!await _canViewPool(me)) throw new Error('Forbidden');
   await _ensureSchema();
   if (!await _poolEnabled()) return { enabled: false, rows: [] };
+  const poolIds = await _poolStatusIds();
+  if (!poolIds.length) return { enabled: true, rows: [] };
   filters = filters || {};
-  const params = [Number(me.id)];
+  const params = [Number(me.id), poolIds];
   let dateClause = '';
   if (filters.date) {
     params.push(String(filters.date));
-    dateClause = ` AND to_char((l.pool_entered_at AT TIME ZONE 'Asia/Kolkata')::date, 'YYYY-MM-DD') = $${params.length}`;
+    dateClause = ` AND to_char((COALESCE(l.last_status_change_at, l.updated_at, l.created_at) AT TIME ZONE 'Asia/Kolkata')::date, 'YYYY-MM-DD') = $${params.length}`;
   }
-  const limit = Math.min(Number(filters.limit) || 500, 2000);
+  const limit = Math.min(Number(filters.limit) || 1000, 5000);
   const r = await db.query(
     `SELECT l.id, l.name, l.phone, l.status_id, l.assigned_to,
-            to_char((l.pool_entered_at AT TIME ZONE 'Asia/Kolkata'), 'YYYY-MM-DD HH24:MI') AS pool_entered,
-            s.name AS status_name, ow.name AS owner_name
+            to_char((COALESCE(l.last_status_change_at, l.updated_at, l.created_at) AT TIME ZONE 'Asia/Kolkata'), 'YYYY-MM-DD HH24:MI') AS pool_entered,
+            s.name AS status_name, ow.name AS owner_name,
+            CASE WHEN l.assigned_to = $1 THEN 1 ELSE 0 END AS is_mine,
+            CASE WHEN EXISTS (SELECT 1 FROM lead_co_owners co WHERE co.lead_id = l.id AND co.user_id = $1) THEN 1 ELSE 0 END AS already_pulled
        FROM leads l
        LEFT JOIN statuses s ON s.id = l.status_id
        LEFT JOIN users ow   ON ow.id = l.assigned_to
-      WHERE l.in_pool = 1 AND COALESCE(l.is_hidden,0) = 0
-        AND (l.assigned_to IS NULL OR l.assigned_to <> $1)
-        AND NOT EXISTS (SELECT 1 FROM lead_co_owners co WHERE co.lead_id = l.id AND co.user_id = $1)
+      WHERE l.status_id = ANY($2::int[]) AND COALESCE(l.is_hidden,0) = 0
         ${dateClause}
-      ORDER BY l.pool_entered_at DESC, l.id DESC
+      ORDER BY COALESCE(l.last_status_change_at, l.updated_at, l.created_at) DESC, l.id DESC
       LIMIT ${limit}`,
     params
   );
@@ -182,7 +188,8 @@ async function api_pool_pull(token, leadId) {
   if (!await _poolEnabled()) throw new Error('Lead Pool is disabled by admin');
   const lead = await db.findById('leads', leadId);
   if (!lead) throw new Error('Lead not found');
-  if (Number(lead.in_pool) !== 1) throw new Error('This lead is no longer in the pool');
+  const poolIds = await _poolStatusIds();
+  if (!poolIds.includes(Number(lead.status_id))) throw new Error('This lead is no longer in the pool');
   if (lead.assigned_to != null && Number(lead.assigned_to) === Number(me.id)) throw new Error('This lead is already yours');
 
   await db.query(

@@ -49196,6 +49196,12 @@ VIEWS.leadpool = async (view) => {
     body.querySelector('#pool-enabled').addEventListener('change', save);
     body.querySelectorAll('.pool-st').forEach(c => c.addEventListener('change', save));
     body.querySelectorAll('.pool-usr').forEach(c => c.addEventListener('change', save));
+    // Explicit Save button (settings also auto-save on each change).
+    const saveBtn = document.createElement('button');
+    saveBtn.textContent = '💾 Save settings';
+    saveBtn.style.cssText = 'margin-top:12px;background:#4f46e5;color:#fff;border:0;padding:8px 18px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600';
+    saveBtn.onclick = async () => { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; await save(); saveBtn.disabled = false; saveBtn.textContent = '💾 Save settings'; toast('Pool settings saved', 'ok'); };
+    body.appendChild(saveBtn);
   }
 
   // ---- Browse + pull ----
@@ -49241,13 +49247,17 @@ VIEWS.leadpool = async (view) => {
         + '<td style="padding:10px 12px;font-size:12px;color:#64748b">' + (esc(r.pool_entered) || '—') + '</td>'
         + '<td style="padding:10px 12px;text-align:right"></td>';
       const cell = tr.lastElementChild;
-      if (canPull) {
+      if (Number(r.is_mine) === 1) {
+        cell.innerHTML = '<span style="font-size:12px;color:#94a3b8">your lead</span>';
+      } else if (Number(r.already_pulled) === 1) {
+        cell.innerHTML = '<span style="font-size:12px;color:#16a34a">✓ pulled</span>';
+      } else if (canPull) {
         const btn = document.createElement('button');
         btn.textContent = '⤵ Pull';
         btn.style.cssText = 'background:#4f46e5;color:#fff;border:0;padding:6px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600';
         btn.onclick = async () => {
           btn.disabled = true; btn.textContent = 'Pulling…';
-          try { await api('api_pool_pull', r.id); toast('Lead pulled — it is now shared with you', 'ok'); tr.remove(); refreshSummary(); }
+          try { await api('api_pool_pull', r.id); toast('Lead pulled — it is now shared with you', 'ok'); btn.outerHTML = '<span style=\'font-size:12px;color:#16a34a\'>✓ pulled</span>'; refreshSummary(); }
           catch (e) { btn.disabled = false; btn.textContent = '⤵ Pull'; toast(e.message, 'err'); }
         };
         cell.appendChild(btn);
