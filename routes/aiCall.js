@@ -137,3 +137,153 @@ module.exports = {
   api_aicall_settings_save,
   api_aicall_test_connection
 };
+
+// ════════════════════════════════════════════════════════════════════
+// AICALL_v1 Phase 2 — VAPI passthrough proxies
+// Every endpoint below loads the saved VAPI_PRIVATE_API_KEY, makes the
+// HTTPS call to api.vapi.ai with Bearer auth, and returns the JSON body.
+// No data is mirrored locally — Vapi is the source of truth for now.
+// Later phases will store call_log rows + webhook handlers locally.
+// ════════════════════════════════════════════════════════════════════
+
+async function _vapiKey() {
+  const key = await _cfg('VAPI_PRIVATE_API_KEY');
+  if (!key) throw new Error('VAPI key not set. Go to FexCall AI → Settings and save your Private API Key first.');
+  return key;
+}
+
+async function _vapi(method, path, body) {
+  const key = await _vapiKey();
+  const fetch = (typeof globalThis.fetch === 'function')
+    ? globalThis.fetch
+    : (await import('node-fetch')).default;
+  const opts = {
+    method,
+    headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' }
+  };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const r = await fetch('https://api.vapi.ai' + path, opts);
+  let payload = null;
+  try { payload = await r.json(); } catch (_) { payload = null; }
+  if (!r.ok) {
+    const msg = (payload && (payload.message || payload.error)) ||
+                ('VAPI ' + method + ' ' + path + ' returned HTTP ' + r.status);
+    const err = new Error(Array.isArray(msg) ? msg.join('; ') : String(msg));
+    err.status = r.status;
+    err.vapiBody = payload;
+    throw err;
+  }
+  return payload;
+}
+
+// ─── Phone Numbers ─────────────────────────────────────────────────
+async function api_aicall_phones_list(token) {
+  await _requireAdmin(token);
+  const list = await _vapi('GET', '/phone-number');
+  return Array.isArray(list) ? list : [];
+}
+async function api_aicall_phones_get(token, id) {
+  await _requireAdmin(token);
+  if (!id) throw new Error('id required');
+  return await _vapi('GET', '/phone-number/' + encodeURIComponent(id));
+}
+async function api_aicall_phones_create(token, payload) {
+  await _requireAdmin(token);
+  if (!payload || !payload.provider) throw new Error('provider required (vapi | twilio | byo-phone-number | sip-trunk)');
+  return await _vapi('POST', '/phone-number', payload);
+}
+async function api_aicall_phones_update(token, payload) {
+  await _requireAdmin(token);
+  if (!payload || !payload.id) throw new Error('id required');
+  const id = payload.id;
+  const body = Object.assign({}, payload);
+  delete body.id;
+  return await _vapi('PATCH', '/phone-number/' + encodeURIComponent(id), body);
+}
+async function api_aicall_phones_delete(token, id) {
+  await _requireAdmin(token);
+  if (!id) throw new Error('id required');
+  return await _vapi('DELETE', '/phone-number/' + encodeURIComponent(id));
+}
+
+// ─── Assistants ────────────────────────────────────────────────────
+async function api_aicall_assistants_list(token) {
+  await _requireAdmin(token);
+  const list = await _vapi('GET', '/assistant');
+  return Array.isArray(list) ? list : [];
+}
+async function api_aicall_assistants_get(token, id) {
+  await _requireAdmin(token);
+  if (!id) throw new Error('id required');
+  return await _vapi('GET', '/assistant/' + encodeURIComponent(id));
+}
+async function api_aicall_assistants_create(token, payload) {
+  await _requireAdmin(token);
+  if (!payload || !payload.name) throw new Error('name required');
+  return await _vapi('POST', '/assistant', payload);
+}
+async function api_aicall_assistants_update(token, payload) {
+  await _requireAdmin(token);
+  if (!payload || !payload.id) throw new Error('id required');
+  const id = payload.id;
+  const body = Object.assign({}, payload);
+  delete body.id;
+  return await _vapi('PATCH', '/assistant/' + encodeURIComponent(id), body);
+}
+async function api_aicall_assistants_delete(token, id) {
+  await _requireAdmin(token);
+  if (!id) throw new Error('id required');
+  return await _vapi('DELETE', '/assistant/' + encodeURIComponent(id));
+}
+
+// Persist the default outbound assistant id in tenant config so the
+// Direct Call button + Lead Call button can pre-select it.
+async function api_aicall_default_assistant_set(token, payload) {
+  await _requireAdmin(token);
+  const id = String((payload && payload.assistant_id) || '').trim();
+  await db.setConfig('AI_CALL_DEFAULT_ASSISTANT_ID', id);
+  return { ok: true };
+}
+async function api_aicall_default_assistant_get(token) {
+  await _requireAdmin(token);
+  const id = await _cfg('AI_CALL_DEFAULT_ASSISTANT_ID');
+  return { assistant_id: id || '' };
+}
+
+// ─── Knowledge Base (files + named KBs) ────────────────────────────
+async function api_aicall_kb_files_list(token) {
+  await _requireAdmin(token);
+  const list = await _vapi('GET', '/file');
+  return Array.isArray(list) ? list : [];
+}
+async function api_aicall_kb_file_delete(token, id) {
+  await _requireAdmin(token);
+  if (!id) throw new Error('id required');
+  return await _vapi('DELETE', '/file/' + encodeURIComponent(id));
+}
+async function api_aicall_kb_list(token) {
+  await _requireAdmin(token);
+  const list = await _vapi('GET', '/knowledge-base');
+  return Array.isArray(list) ? list : [];
+}
+async function api_aicall_kb_create(token, payload) {
+  await _requireAdmin(token);
+  if (!payload || !payload.name) throw new Error('name required');
+  return await _vapi('POST', '/knowledge-base', payload);
+}
+async function api_aicall_kb_delete(token, id) {
+  await _requireAdmin(token);
+  if (!id) throw new Error('id required');
+  return await _vapi('DELETE', '/knowledge-base/' + encodeURIComponent(id));
+}
+
+// Export Phase 2 additions on the same module.exports object
+Object.assign(module.exports, {
+  api_aicall_phones_list, api_aicall_phones_get, api_aicall_phones_create,
+  api_aicall_phones_update, api_aicall_phones_delete,
+  api_aicall_assistants_list, api_aicall_assistants_get, api_aicall_assistants_create,
+  api_aicall_assistants_update, api_aicall_assistants_delete,
+  api_aicall_default_assistant_set, api_aicall_default_assistant_get,
+  api_aicall_kb_files_list, api_aicall_kb_file_delete,
+  api_aicall_kb_list, api_aicall_kb_create, api_aicall_kb_delete
+});

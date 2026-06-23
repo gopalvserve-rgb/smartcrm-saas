@@ -1702,6 +1702,7 @@ const NAV_GROUPS = [
     { id: 'aicallDashboard', label: 'Dashboard',  icon: '📊', search: 'fexcall ai dashboard call volume outcomes',                            brandFlag: 'AI_CALL_ENABLED' },
     { id: 'aicallCampaigns', label: 'Campaigns',  icon: '📣', roles: ['admin','manager','team_leader'], search: 'fexcall ai campaign csv outbound voice', brandFlag: 'AI_CALL_ENABLED' },
     { id: 'aicallLogs',      label: 'Call Logs',  icon: '📋', search: 'fexcall ai call logs transcripts recordings',                          brandFlag: 'AI_CALL_ENABLED' },
+    { id: 'aicallVapi',      label: 'VAPI AI',    icon: '🎙️', roles: ['admin','manager'],              search: 'fexcall ai vapi phone numbers assistants knowledge base', brandFlag: 'AI_CALL_ENABLED' },
     { id: 'aicallSettings',  label: 'Settings',   icon: '⚙️', roles: ['admin','manager'],              search: 'fexcall ai settings vapi api key provider' }
   ] },
   /* META_MODULE_v1 — Marketing & Communication groups all outbound
@@ -14312,6 +14313,22 @@ VIEWS.aicallLogs = async (view) => {
     h('p', { class: 'muted' }, 'Each VAPI call → row with To, From, duration, ended-reason, cost. Click any row → AI Analysis · Summary · Transcript · Performance tabs + audio player.')));
   view.appendChild(wrap);
 };
+VIEWS.aicallVapi = async (view) => {
+  view.innerHTML = '';
+  // Lazy-wait for the standalone module to load if needed
+  let _tries = 0;
+  while (!window.AICALL_VAPI && _tries < 20) {
+    await new Promise(r => setTimeout(r, 100));
+    _tries++;
+  }
+  if (window.AICALL_VAPI && typeof window.AICALL_VAPI.render === 'function') {
+    window.AICALL_VAPI.render(view);
+  } else {
+    view.appendChild(h('div', { style: { padding: '2rem', textAlign: 'center', color: '#dc2626' } },
+      '⚠ VAPI AI module failed to load. Hard-refresh (Ctrl+Shift+R).'));
+  }
+};
+
 VIEWS.aicallSettings = async (view) => {
   view.innerHTML = '';
   const wrap = h('div', { style: { padding: '1.5rem', maxWidth: '900px' } });
