@@ -1746,6 +1746,12 @@ const NAV_GROUPS = [
     { id: 'inventory',  label: 'Inventory',        icon: '📦', search: 'inventory stock product stock' },
     { id: 'invItems',   label: 'Items & Services', icon: '📦', module: 'invoicing', search: 'items services product master service master items/services' }
   ] },
+  /* PAYMENTS_v1 — Cashfree + Razorpay payment links */
+  { label: 'Payments', icon: '💳', items: [
+    { id: 'paymentLinks',     label: 'Payment Links',  icon: '🔗', search: 'payment link cashfree razorpay collect money pay' },
+    { id: 'paymentCustomers', label: 'Customers',      icon: '👥', roles: ['admin','manager','team_leader'], search: 'payment customers paying customers active spenders' },
+    { id: 'paymentSettings',  label: 'Settings',       icon: '⚙️', roles: ['admin','manager'], search: 'payment settings gateway cashfree razorpay api keys' }
+  ] },
   // ---- Billing & Accounts (GST Invoicing) — OPT-IN per tenant ----
   // nav_ids tagged with module: 'invoicing' so the existing module-active
   // filter hides the entire group unless super-admin enables 'invoicing'.
@@ -14360,6 +14366,276 @@ VIEWS.aicallLogs = async (view) => {
     h('p', { class: 'muted' }, 'Each VAPI call → row with To, From, duration, ended-reason, cost. Click any row → AI Analysis · Summary · Transcript · Performance tabs + audio player.')));
   view.appendChild(wrap);
 };
+VIEWS.paymentSettings = async (view) => {
+  view.innerHTML = '';
+  const w = document.createElement('div'); w.style.padding = '1.5rem';
+  w.appendChild(h('h2', { style: { marginTop: 0 } }, '💳 Payments — Settings'));
+  w.appendChild(h('p', { class: 'muted' }, 'Connect Cashfree or Razorpay. Only the active gateway is used when creating payment links.'));
+  let s = {};
+  try { s = await api('api_payments_settings_get'); } catch (e) { toast('Could not load: ' + e.message, 'err'); return; }
+  const cfRadio = h('input', { type: 'radio', name: 'pgw', value: 'cashfree', checked: s.active_gateway === 'cashfree' ? 'checked' : null });
+  const rzRadio = h('input', { type: 'radio', name: 'pgw', value: 'razorpay', checked: s.active_gateway === 'razorpay' ? 'checked' : null });
+  const noRadio = h('input', { type: 'radio', name: 'pgw', value: '',         checked: !s.active_gateway ? 'checked' : null });
+  w.appendChild(h('div', { class: 'card', style: { padding: '1.25rem', marginTop: '1rem', background: 'white', border: '1px solid #e2e8f0', borderRadius: '10px' } },
+    h('h3', { style: { margin: '0 0 .25rem' } }, '⚡ Active Gateway'),
+    h('p', { class: 'muted', style: { fontSize: '12px', marginTop: 0 } }, 'Pick which gateway processes new payment links.'),
+    h('label', { style: { display: 'flex', gap: '.5rem', padding: '6px 0' } }, cfRadio, 'Cashfree'),
+    h('label', { style: { display: 'flex', gap: '.5rem', padding: '6px 0' } }, rzRadio, 'Razorpay'),
+    h('label', { style: { display: 'flex', gap: '.5rem', padding: '6px 0' } }, noRadio, h('span', { class: 'muted' }, 'None'))
+  ));
+  function buildGwCard(name, label, key1Label, key1Val, key1Ph, key2Has, key2Mask, mode) {
+    const k1 = h('input', { type: 'text', value: key1Val || '', placeholder: key1Ph, style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontFamily: 'monospace', fontSize: '13px' } });
+    const k2 = h('input', { type: 'password', placeholder: key2Has ? key2Mask : (key1Label.includes('App') ? 'CF Secret Key' : 'Razorpay Key Secret'), autocomplete: 'off',
+      style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontFamily: 'monospace', fontSize: '13px' } });
+    const modeSel = h('select', { style: { padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '6px' } },
+      h('option', { value: 'live', selected: mode === 'live' ? 'selected' : null }, 'LIVE'),
+      h('option', { value: 'test', selected: mode === 'test' ? 'selected' : null }, 'TEST'));
+    const status = h('span', { style: { marginLeft: 'auto', fontSize: '12.5px' } });
+    const testBtn = h('button', { class: 'btn', style: { padding: '6px 12px', cursor: 'pointer' } }, '🔌 Test ' + label);
+    testBtn.onclick = async function () {
+      testBtn.disabled = true; status.style.color = '#64748b'; status.textContent = 'Testing…';
+      try { const r = await api('api_payments_test_connection', name); status.style.color = r.ok ? '#15803d' : '#dc2626'; status.textContent = (r.ok ? '✓ ' : '✗ ') + (r.message || r.error); }
+      catch (e) { status.style.color = '#dc2626'; status.textContent = '✗ ' + e.message; }
+      testBtn.disabled = false;
+    };
+    const card = h('div', { class: 'card', style: { padding: '1.25rem', marginTop: '1rem', background: 'white', border: '1px solid #e2e8f0', borderRadius: '10px' } },
+      h('h3', { style: { margin: '0 0 .25rem' } }, (name === 'cashfree' ? '🟣 ' : '🔵 ') + label + ' Credentials'),
+      h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '.75rem' } },
+        h('div', null, h('label', { style: { fontSize: '12px', fontWeight: 700 } }, key1Label + ' *'), k1),
+        h('div', null, h('label', { style: { fontSize: '12px', fontWeight: 700 } }, 'Secret *'), k2)),
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: '.75rem', marginTop: '.75rem' } },
+        h('label', { style: { fontSize: '12px', fontWeight: 700 } }, 'Mode:'), modeSel, testBtn, status));
+    return { card, k1, k2, modeSel };
+  }
+  const cf = buildGwCard('cashfree', 'Cashfree', 'App ID', s.cashfree.app_id, 'CF Application ID', s.cashfree.has_secret, s.cashfree.secret_masked, s.cashfree.mode);
+  const rz = buildGwCard('razorpay', 'Razorpay', 'Key ID', s.razorpay.key_id, 'rzp_live_xxx', s.razorpay.has_secret, s.razorpay.secret_masked, s.razorpay.mode);
+  w.appendChild(cf.card); w.appendChild(rz.card);
+  const saveStatus = h('span', { style: { marginLeft: 'auto', fontSize: '12.5px' } });
+  const saveBtn = h('button', { class: 'btn primary', style: { padding: '8px 20px', background: '#0f172a', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 700 } }, '💾 Save Settings');
+  saveBtn.onclick = async function () {
+    saveBtn.disabled = true; saveBtn.textContent = '⏳ Saving…';
+    try {
+      const activeRadio = document.querySelector('input[name=pgw]:checked');
+      const payload = {
+        active_gateway: activeRadio ? activeRadio.value : '',
+        cashfree: { app_id: cf.k1.value, mode: cf.modeSel.value },
+        razorpay: { key_id: rz.k1.value, mode: rz.modeSel.value }
+      };
+      const cfV = String(cf.k2.value || '').trim();
+      if (cfV && !cfV.startsWith('••••')) payload.cashfree.secret_key = (cfV.toLowerCase() === 'clear') ? '' : cfV;
+      const rzV = String(rz.k2.value || '').trim();
+      if (rzV && !rzV.startsWith('••••')) payload.razorpay.key_secret = (rzV.toLowerCase() === 'clear') ? '' : rzV;
+      await api('api_payments_settings_save', payload);
+      saveStatus.style.color = '#15803d'; saveStatus.textContent = '✓ Saved';
+      toast('Payments settings saved', 'ok');
+      setTimeout(() => VIEWS.paymentSettings(view), 600);
+    } catch (e) { saveStatus.style.color = '#dc2626'; saveStatus.textContent = '✗ ' + e.message; toast('Save failed: ' + e.message, 'err'); }
+    saveBtn.disabled = false; saveBtn.textContent = '💾 Save Settings';
+  };
+  w.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.75rem', marginTop: '1.25rem' } }, saveBtn, saveStatus));
+  view.appendChild(w);
+};
+
+VIEWS.paymentLinks = async (view) => {
+  view.innerHTML = '';
+  const wrap = h('div', { style: { padding: '1.5rem' } });
+  wrap.appendChild(h('h2', { style: { marginTop: 0 } }, '🔗 Payment Links'));
+  wrap.appendChild(h('p', { class: 'muted' }, 'Create and manage payment links for your customers.'));
+  const _S = window._paymentLinksState = window._paymentLinksState || { range: 'today', status: '', phone: '', q: '' };
+  const _fmt = (iso) => { if (!iso) return '—'; try { return new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true }); } catch (_) { return iso; } };
+  const rangeSel = h('select', { style: { padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '20px', fontSize: '13px' } },
+    ['today','last7','last30','all'].map(v => h('option', { value: v, selected: _S.range === v ? 'selected' : null }, v === 'today' ? 'Today' : v === 'last7' ? 'Last 7 days' : v === 'last30' ? 'Last 30 days' : 'All time')));
+  const statusSel = h('select', { style: { padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '20px', fontSize: '13px' } },
+    ['','created','paid','partial','cancelled','expired'].map(v => h('option', { value: v, selected: _S.status === v ? 'selected' : null }, v === '' ? 'Any status' : v.charAt(0).toUpperCase() + v.slice(1))));
+  const phoneInp = h('input', { type: 'text', placeholder: 'Phone', value: _S.phone || '', style: { padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '20px', fontSize: '13px', width: '140px' } });
+  const qInp = h('input', { type: 'text', placeholder: 'Search description / email / name', value: _S.q || '', style: { padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '20px', fontSize: '13px', width: '280px' } });
+  wrap.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', marginTop: '.75rem' } },
+    rangeSel, statusSel, phoneInp, qInp,
+    h('button', { class: 'btn', style: { padding: '6px 14px', cursor: 'pointer' }, onclick: () => loadList() }, '🔄 Refresh'),
+    h('div', { style: { marginLeft: 'auto' } },
+      h('button', { class: 'btn primary', style: { padding: '8px 18px', background: '#0f172a', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 },
+        onclick: () => openCreateLinkModal(view) }, '+ Create Payment Link'))
+  ));
+  [rangeSel, statusSel].forEach(el => el.onchange = () => loadList());
+  [phoneInp, qInp].forEach(el => el.onkeyup = (e) => { if (e.key === 'Enter') loadList(); });
+  const listHost = h('div', { style: { marginTop: '1rem', background: 'white', border: '1px solid #e2e8f0', borderRadius: '12px', minHeight: '320px' } });
+  wrap.appendChild(listHost); view.appendChild(wrap);
+  function _statusBadge(status, paid) {
+    const cfg = ({ created: { bg: '#fef3c7', fg: '#92400e', label: 'Pending' }, partial: { bg: '#dbeafe', fg: '#1e40af', label: 'Partial' }, paid: { bg: '#dcfce7', fg: '#166534', label: 'Paid' }, cancelled: { bg: '#fee2e2', fg: '#991b1b', label: 'Cancelled' }, expired: { bg: '#f1f5f9', fg: '#475569', label: 'Expired' } })[status] || { bg: '#f1f5f9', fg: '#475569', label: status };
+    const sub = (status === 'partial') ? ' (₹' + Number(paid || 0).toLocaleString('en-IN') + ')' : '';
+    return h('span', { style: { background: cfg.bg, color: cfg.fg, padding: '2px 10px', borderRadius: '10px', fontSize: '11px', fontWeight: 700 } }, cfg.label + sub);
+  }
+  function _iconBtn(color) {
+    return { background: 'transparent', border: '1px solid #e2e8f0', color: color, borderRadius: '6px', padding: '4px 8px', cursor: 'pointer', marginRight: '4px', fontSize: '15px' };
+  }
+  async function loadList() {
+    _S.range = rangeSel.value; _S.status = statusSel.value; _S.phone = phoneInp.value.trim(); _S.q = qInp.value.trim();
+    listHost.innerHTML = '<div class="muted" style="padding:2rem;text-align:center">⏳ Loading…</div>';
+    try {
+      const rows = await api('api_payments_link_list', _S);
+      listHost.innerHTML = '';
+      if (!rows.length) {
+        listHost.appendChild(h('div', { style: { padding: '3rem', textAlign: 'center' } },
+          h('div', { style: { fontSize: '3rem' } }, '👻'),
+          h('div', { style: { fontWeight: 700, marginTop: '.5rem' } }, 'No payment links yet'),
+          h('div', { class: 'muted', style: { marginTop: '.25rem' } }, 'Create and send payment links instantly to your customers and collect payments.')));
+        return;
+      }
+      const tbl = h('table', { style: { width: '100%', borderCollapse: 'collapse' } },
+        h('thead', null, h('tr', { style: { background: '#f8fafc' } },
+          ['Created', 'Link ID', 'Description', 'Amount', 'Customer', 'Status', 'Send', ''].map(c => h('th', { style: { textAlign: 'left', padding: '10px', fontSize: '11px', textTransform: 'uppercase', color: '#64748b', borderBottom: '1px solid #e2e8f0' } }, c)))),
+        h('tbody', null, ...rows.map(r => h('tr', { style: { borderTop: '1px solid #f1f5f9' } },
+          h('td', { style: { padding: '10px', fontSize: '12.5px' } }, _fmt(r.created_at)),
+          h('td', { style: { padding: '10px', fontSize: '12px', fontFamily: 'monospace' } }, r.link_id_custom || (r.gateway_link_id || '').slice(0, 14) + '…'),
+          h('td', { style: { padding: '10px', fontSize: '13px' } }, String(r.description || '').slice(0, 50)),
+          h('td', { style: { padding: '10px', fontSize: '13px', fontWeight: 600 } }, '₹' + Number(r.amount_inr || 0).toLocaleString('en-IN')),
+          h('td', { style: { padding: '10px', fontSize: '12.5px' } },
+            h('div', null, r.customer_name || '—'),
+            h('div', { class: 'muted', style: { fontSize: '11px' } }, '+91 ' + String(r.customer_phone || '').replace(/\D/g, '').slice(-10))),
+          h('td', { style: { padding: '10px' } }, _statusBadge(r.status, r.amount_paid_inr)),
+          h('td', { style: { padding: '10px' } },
+            h('button', { title: 'Send via WhatsApp', style: _iconBtn('#16a34a'),
+              onclick: async () => { try { await api('api_payments_link_send', { id: r.id, channel: 'whatsapp' }); toast('Sent on WhatsApp', 'ok'); } catch (e) { toast(e.message, 'err'); } } }, '💬'),
+            h('button', { title: 'Send via Email', style: _iconBtn('#1e40af'),
+              onclick: async () => { try { await api('api_payments_link_send', { id: r.id, channel: 'email' }); toast('Email sent', 'ok'); } catch (e) { toast(e.message, 'err'); } } }, '✉️'),
+            h('button', { title: 'Copy link', style: _iconBtn('#475569'),
+              onclick: () => { try { navigator.clipboard.writeText(r.gateway_short_url || ''); toast('Copied', 'ok'); } catch (_) {} } }, '📋')),
+          h('td', { style: { padding: '10px' } },
+            h('a', { href: r.gateway_short_url, target: '_blank', style: { color: '#4338ca', textDecoration: 'none', fontSize: '12px' } }, 'Open ↗'))
+        ))));
+      listHost.appendChild(tbl);
+    } catch (e) {
+      listHost.innerHTML = '';
+      listHost.appendChild(h('div', { style: { padding: '1rem', color: '#dc2626' } }, '⚠ ' + e.message));
+    }
+  }
+  function openCreateLinkModal(viewArg) {
+    const ov = h('div', { style: { position: 'fixed', inset: 0, background: 'rgba(15,23,42,.55)', zIndex: 99999, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', overflowY: 'auto', padding: '2rem 0' }, onclick: (e) => { if (e.target === ov) ov.remove(); } });
+    const card = h('div', { style: { background: 'white', borderRadius: '12px', width: '520px', maxWidth: '90vw', padding: 0, boxShadow: '0 25px 60px rgba(0,0,0,.3)' } });
+    card.appendChild(h('div', { style: { padding: '14px 18px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' } },
+      h('h3', { style: { margin: 0 } }, 'Create Payment Link'),
+      h('button', { style: { background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '20px' }, onclick: () => ov.remove() }, '×')));
+    const body = h('div', { style: { padding: '14px 18px', maxHeight: '70vh', overflowY: 'auto' } });
+    const _field = (label, hint, inp) => h('div', { style: { marginTop: '.75rem' } },
+      h('label', { style: { display: 'block', fontSize: '12.5px', fontWeight: 700, marginBottom: '.25rem' } }, label),
+      hint ? h('div', { class: 'muted', style: { fontSize: '11px', marginBottom: '.25rem' } }, hint) : null, inp);
+    body.appendChild(h('h4', { style: { margin: '0 0 .25rem' } }, 'Link Details'));
+    body.appendChild(h('div', { style: { fontSize: '13px', fontWeight: 700, marginTop: '.75rem' } }, 'Payment link type'));
+    const typeOne = h('input', { type: 'radio', name: 'plt', value: 'one_time_all', checked: 'checked' });
+    const typeUpi = h('input', { type: 'radio', name: 'plt', value: 'one_time_upi' });
+    const typeSub = h('input', { type: 'radio', name: 'plt', value: 'subscription' });
+    body.appendChild(h('label', { style: { display: 'flex', gap: '.5rem', padding: '4px 0' } }, typeOne, 'One-time (All methods)'));
+    body.appendChild(h('label', { style: { display: 'flex', gap: '.5rem', padding: '4px 0' } }, typeUpi, 'One-time (UPI only)'));
+    body.appendChild(h('label', { style: { display: 'flex', gap: '.5rem', padding: '4px 0', color: '#94a3b8' } }, typeSub, h('span', null, 'Subscription ', h('span', { style: { fontSize: '11px' } }, '(Phase 2)'))));
+    const descInp = h('textarea', { placeholder: 'Write a description', rows: 2, style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px', resize: 'vertical', fontFamily: 'inherit' } });
+    body.appendChild(_field('Payment Reason', 'Displays in the email / checkout page · Max 500 characters', descInp));
+    const amtInp = h('input', { type: 'number', step: '0.01', min: '0', placeholder: '0.00', style: { padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px', width: '180px' } });
+    body.appendChild(_field('Amount (INR) *', '', amtInp));
+    const partialChk = h('input', { type: 'checkbox' });
+    body.appendChild(h('label', { style: { display: 'flex', gap: '.5rem', padding: '6px 0', fontSize: '13px' } }, partialChk, 'Allow Partial Payment'));
+    body.appendChild(h('h4', { style: { margin: '1rem 0 .25rem' } }, 'Customer Details'));
+    const phInp = h('input', { type: 'tel', placeholder: 'Enter phone number', style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' } });
+    body.appendChild(_field('Phone Number *', '', phInp));
+    const smsChk = h('input', { type: 'checkbox' });
+    const waChk = h('input', { type: 'checkbox', checked: 'checked' });
+    body.appendChild(h('label', { style: { display: 'flex', gap: '.5rem', padding: '4px 0', fontSize: '13px' } }, smsChk, 'Send SMS'));
+    body.appendChild(h('label', { style: { display: 'flex', gap: '.5rem', padding: '4px 0', fontSize: '13px' } }, waChk, 'Send WhatsApp'));
+    const emInp = h('input', { type: 'email', placeholder: 'eg: ashok.kumar@gmail.com', style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' } });
+    body.appendChild(_field('Email ID (optional)', '', emInp));
+    const emChk = h('input', { type: 'checkbox' });
+    body.appendChild(h('label', { style: { display: 'flex', gap: '.5rem', padding: '4px 0', fontSize: '13px' } }, emChk, 'Send Email'));
+    const nmInp = h('input', { type: 'text', placeholder: 'eg: Ashok Kumar', style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' } });
+    body.appendChild(_field('Name (optional)', '', nmInp));
+    let moreOpen = false;
+    const moreCard = h('div', { style: { display: 'none', marginTop: '.5rem' } });
+    const linkIdInp = h('input', { type: 'text', placeholder: 'eg: Abc123', maxlength: '50', style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' } });
+    moreCard.appendChild(_field('Link ID (optional)', 'Maximum 50 characters allowed', linkIdInp));
+    const redirectInp = h('input', { type: 'url', placeholder: 'eg: https://www.example.com', style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' } });
+    moreCard.appendChild(_field('Redirect URL (optional)', '', redirectInp));
+    const thanksInp = h('input', { type: 'text', placeholder: 'Thank you for your payment!', style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' } });
+    moreCard.appendChild(_field('Thank you message (optional)', '', thanksInp));
+    const tcInp = h('textarea', { rows: 2, placeholder: 'We reserve the right to charge interest on overdue amounts', style: { width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px', fontFamily: 'inherit', resize: 'vertical' } });
+    moreCard.appendChild(_field('Terms & Conditions (optional)', '', tcInp));
+    const exInp = h('input', { type: 'datetime-local', style: { padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' } });
+    moreCard.appendChild(_field('Link Expiry (optional)', 'Leave blank for default', exInp));
+    const moreToggle = h('div', {
+      style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px', marginTop: '.75rem', background: '#f8fafc', borderRadius: '8px', cursor: 'pointer' },
+      onclick: () => { moreOpen = !moreOpen; moreCard.style.display = moreOpen ? 'block' : 'none'; }
+    }, h('strong', null, 'More Options'), h('span', { style: { fontSize: '18px', color: '#64748b' } }, '⌄'));
+    body.appendChild(moreToggle); body.appendChild(moreCard);
+    card.appendChild(body);
+    const status = h('span', { style: { marginRight: 'auto', fontSize: '12.5px' } });
+    const cancelBtn = h('button', { class: 'btn', style: { padding: '8px 18px', cursor: 'pointer', background: 'white', border: '1px solid #cbd5e1', borderRadius: '6px', color: '#4338ca', fontWeight: 600 }, onclick: () => ov.remove() }, 'Cancel');
+    const createBtn = h('button', { class: 'btn primary', style: { padding: '8px 22px', background: '#6d28d9', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 700 } }, 'Create');
+    createBtn.onclick = async function () {
+      const ph = String(phInp.value || '').replace(/\D/g, '');
+      if (!amtInp.value || Number(amtInp.value) <= 0) { toast('Amount must be > 0', 'err'); return; }
+      if (!ph) { toast('Phone number is required', 'err'); return; }
+      createBtn.disabled = true; createBtn.textContent = '⏳ Creating…';
+      try {
+        const typeRadio = document.querySelector('input[name=plt]:checked');
+        const payload = {
+          link_type: typeRadio ? typeRadio.value : 'one_time_all',
+          description: descInp.value, amount_inr: Number(amtInp.value),
+          allow_partial: partialChk.checked,
+          customer_phone: ph, customer_email: emInp.value || null, customer_name: nmInp.value || null,
+          send_sms: smsChk.checked, send_whatsapp: waChk.checked, send_email: emChk.checked,
+          link_id_custom: linkIdInp.value || null,
+          redirect_url: redirectInp.value || null, thank_you_message: thanksInp.value || null, terms_conditions: tcInp.value || null,
+          expire_at: exInp.value ? new Date(exInp.value).toISOString() : null
+        };
+        const r = await api('api_payments_link_create', payload);
+        toast('Payment link created · ' + (r.short_url || 'ok'), 'ok');
+        ov.remove(); VIEWS.paymentLinks(viewArg);
+      } catch (e) { status.style.color = '#dc2626'; status.textContent = '✗ ' + e.message; createBtn.disabled = false; createBtn.textContent = 'Create'; }
+    };
+    card.appendChild(h('div', { style: { padding: '14px 18px', borderTop: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: '.5rem' } }, status, cancelBtn, createBtn));
+    ov.appendChild(card); document.body.appendChild(ov);
+  }
+  await loadList();
+};
+
+VIEWS.paymentCustomers = async (view) => {
+  view.innerHTML = '';
+  const wrap = h('div', { style: { padding: '1.5rem' } });
+  wrap.appendChild(h('h2', { style: { marginTop: 0 } }, '👥 Customers — Active'));
+  wrap.appendChild(h('p', { class: 'muted' }, 'Customers who have successfully transacted in the selected time range'));
+  const rangeSel = h('select', { style: { padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '20px', fontSize: '13px', marginTop: '.75rem' } },
+    ['last7','last30','all'].map(v => h('option', { value: v }, v === 'last7' ? 'Last 7 days' : v === 'last30' ? 'Last 30 days' : 'All time')));
+  wrap.appendChild(h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center' } }, rangeSel,
+    h('button', { class: 'btn', style: { padding: '6px 14px', cursor: 'pointer' }, onclick: () => load() }, '🔄 Refresh')));
+  const host = h('div', { style: { marginTop: '1rem', background: 'white', border: '1px solid #e2e8f0', borderRadius: '12px', minHeight: '320px' } });
+  wrap.appendChild(host); view.appendChild(wrap);
+  const _fmt = (iso) => { if (!iso) return '—'; try { return new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true }); } catch (_) { return iso; } };
+  rangeSel.onchange = () => load();
+  async function load() {
+    host.innerHTML = '<div class="muted" style="padding:2rem;text-align:center">⏳ Loading…</div>';
+    try {
+      const rows = await api('api_payments_customers_list', { range: rangeSel.value });
+      host.innerHTML = '';
+      if (!rows.length) {
+        host.appendChild(h('div', { style: { padding: '3rem', textAlign: 'center' } },
+          h('div', { style: { fontSize: '3rem' } }, '👻'),
+          h('div', { style: { fontWeight: 700, marginTop: '.5rem' } }, 'No paying customers yet')));
+        return;
+      }
+      const tbl = h('table', { style: { width: '100%', borderCollapse: 'collapse' } },
+        h('thead', null, h('tr', { style: { background: '#f8fafc' } },
+          ['Phone No.', 'Latest Email', 'Total Spends', 'Total Paid Txns', 'Last Transacted At', 'Preferred Mode'].map(c => h('th', { style: { textAlign: 'left', padding: '10px', fontSize: '11px', textTransform: 'uppercase', color: '#64748b', borderBottom: '1px solid #e2e8f0' } }, c)))),
+        h('tbody', null, ...rows.map(r => h('tr', { style: { borderTop: '1px solid #f1f5f9' } },
+          h('td', { style: { padding: '12px', fontFamily: 'monospace', fontSize: '13px' } }, '+91 ' + String(r.phone || '').slice(-10)),
+          h('td', { style: { padding: '12px', fontSize: '13px', color: '#64748b' } }, r.latest_email || '—'),
+          h('td', { style: { padding: '12px', fontWeight: 600 } }, '₹ ' + Number(r.total_spends || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })),
+          h('td', { style: { padding: '12px' } }, Number(r.total_paid_txns || 0)),
+          h('td', { style: { padding: '12px', fontSize: '12.5px' } }, _fmt(r.last_transacted_at)),
+          h('td', { style: { padding: '12px', fontSize: '12.5px', fontWeight: 600 } }, r.preferred_mode || '—')
+        ))));
+      host.appendChild(tbl);
+    } catch (e) { host.innerHTML = ''; host.appendChild(h('div', { style: { padding: '1rem', color: '#dc2626' } }, '⚠ ' + e.message)); }
+  }
+  await load();
+};
+
 VIEWS.aicallVapi = async (view) => {
   view.innerHTML = '';
   // Lazy-wait for the standalone module to load if needed

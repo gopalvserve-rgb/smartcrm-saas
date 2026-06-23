@@ -116,6 +116,7 @@ const ROUTE_FILES = [
   'aiManager',        /* AI_MGR_v1 — virtual admin/supervisor (vserve beta) */
   'aiCall',           /* AICALL_v1 — FexCall AI: VAPI integration (Phase 1) */
   'pool',             /* LEAD_POOL_v1 — Free Pool / status-released lead pool */
+  'payments',         /* PAYMENTS_v1 — Cashfree + Razorpay payment links */
 ];
 
 const API = {};
