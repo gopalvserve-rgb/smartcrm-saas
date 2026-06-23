@@ -73,7 +73,7 @@ const CONFIG_KEYS = [
   // POOL_ENABLED: '1' shows the Lead Pool feature for this tenant.
   // POOL_STATUS_IDS: CSV of status_ids that release a lead into the pool
   //   the moment it's set (e.g. "7,12" for NP + Lost).
-  'POOL_ENABLED', 'POOL_STATUS_IDS',
+  'POOL_ENABLED', 'POOL_STATUS_IDS', 'POOL_PULL_USER_IDS',
   'LEAD_SCORING_ENABLED',     // LEAD_SCORING_v1 — Smart Lead Scoring engine
   'AI_QUICKNOTE_ENABLED',     // QNOTE_v1 — 2728 Quick Note row button
   'COPILOT_PROACTIVE_ENABLED',// COPILOT_v4 — Proactive Sales Coach (vserve beta)
@@ -368,6 +368,7 @@ async function api_admin_brand(_token) {
     LEADS_VIEW_V2_ENABLED:     cfg.LEADS_VIEW_V2_ENABLED     || '',
     AI_MANAGER_ENABLED: cfg.AI_MANAGER_ENABLED || '',
     POOL_ENABLED: cfg.POOL_ENABLED || '',   /* LEAD_POOL_v1 — gate the Lead Pool menu */
+    POOL_PULL_USER_IDS: cfg.POOL_PULL_USER_IDS || '',  /* LEAD_POOL_v1 — per-user pull allow-list (SPA nav gate) */
     DEMO_REMINDER_ENABLED: cfg.DEMO_REMINDER_ENABLED || '',
     DEMO_REMINDER_SETTINGS: cfg.DEMO_REMINDER_SETTINGS || ''
   ,

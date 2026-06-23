@@ -1665,7 +1665,7 @@ const NAV_GROUPS = [
     { id: 'pipeline',   label: 'Pipeline',             icon: '📈', search: 'pipeline funnel stage deal stage lead stage' },
     { id: 'kanban',     label: 'Kanban Board',         icon: '🗂️', search: 'kanban board stage board card view' },
     { id: 'followups',  label: 'Follow-ups',           icon: '🔔', search: 'follow up follow-up reminder callback next action' },
-    { id: 'leadpool',   label: 'Lead Pool',            icon: '🔄', perm: 'pool.view', requiresBrandFlag: 'POOL_ENABLED', search: 'pool free pool recycle recycled leads claim pull np shared pool' },
+    { id: 'leadpool',   label: 'Lead Pool',            icon: '🔄', search: 'pool free pool recycle recycled leads claim pull np shared pool' },
     { id: 'calendar',   label: 'Calendar',             icon: '📅', search: 'calendar meeting schedule appointment' },
     { id: 'targets',    label: 'Monthly Targets',      icon: '🎯', search: 'target monthly target sales target goal' },
     { id: 'newleads',   label: 'New Leads',            icon: '✨', countKey: 'new_today', search: 'new leads today fresh lead' },
@@ -1781,6 +1781,22 @@ const NAV_GROUPS = [
 // Flatten for backwards-compat with anywhere that iterates NAV.
 const NAV = NAV_GROUPS.flatMap(g => g.items);
 
+// LEAD_POOL_v1 — who sees the Lead Pool sidebar item: admin always; others
+// only when the feature is enabled AND they have pool.view/pool.pull OR are
+// in the admin's per-user pull allow-list (POOL_PULL_USER_IDS on brand).
+function canSeePoolNav() {
+  try {
+    if (!CRM.user) return false;
+    if (CRM.user.role === 'admin') return true;
+    var enabled = CRM.brand && String(CRM.brand.POOL_ENABLED) === '1';
+    if (!enabled) return false;
+    if (CRM.can && (CRM.can('pool.view') || CRM.can('pool.pull'))) return true;
+    var ids = String((CRM.brand && CRM.brand.POOL_PULL_USER_IDS) || '')
+      .split(',').map(function (x) { return Number(String(x).trim()); }).filter(Boolean);
+    return ids.indexOf(Number(CRM.user.id)) >= 0;
+  } catch (e) { return false; }
+}
+
 function renderShell() {
   const initials = (CRM.user.name || '?').split(/\s+/).map(s => s[0]).slice(0, 2).join('').toUpperCase();
   $('#app').innerHTML = `
@@ -1841,6 +1857,7 @@ function renderShell() {
     if (item.roles && !item.roles.includes(CRM.user.role)) return null;
     if (hiddenNavIds.includes(item.id)) return null;
     /* LEAD_POOL_v1 — per-permission + per-tenant brand-flag gating */
+    if (item.id === 'leadpool' && !canSeePoolNav()) return null;
     if (item.perm && !(CRM.can && CRM.can(item.perm))) return null;
     if (item.requiresBrandFlag && !(CRM.user && CRM.user.role === 'admin') && !(CRM.brand && String(CRM.brand[item.requiresBrandFlag]) === '1')) return null;
     if (item.id === 'teamchat' && CRM.access && CRM.access.can_chat === false) return null;
@@ -1971,6 +1988,7 @@ function renderShell() {
     if (item.roles && !item.roles.includes(CRM.user.role)) return;
     if (hiddenNavIds.includes(item.id)) return;
     if (item.perm && !(CRM.can && CRM.can(item.perm))) return;
+    if (item.id === 'leadpool' && !canSeePoolNav()) return;
     if (item.requiresBrandFlag && !(CRM.user && CRM.user.role === 'admin') && !(CRM.brand && String(CRM.brand[item.requiresBrandFlag]) === '1')) return;
     if (item.id === 'teamchat' && CRM.access && CRM.access.can_chat === false) return;
     if (item.requiresPack) {
@@ -2073,6 +2091,7 @@ function showMobileMore() {
           if (item.roles && !item.roles.includes(CRM.user.role)) return false;
           if (item.id === 'teamchat' && CRM.access && CRM.access.can_chat === false) return false;
           if (item.perm && !(CRM.can && CRM.can(item.perm))) return false;
+          if (item.id === 'leadpool' && !canSeePoolNav()) return false;
           if (item.requiresBrandFlag && !(CRM.user && CRM.user.role === 'admin') && !(CRM.brand && String(CRM.brand[item.requiresBrandFlag]) === '1')) return false;
           // PACK_MENU_MOBILE_v1 (2026-05-29) — mirror the sidebar's
           // requiresPack gate. Without this, Education and Real Estate
@@ -49097,8 +49116,15 @@ VIEWS.leadscoringsettings = async (view) => {
 VIEWS.leadpool = async (view) => {
   view.innerHTML = '';
   const isAdmin = CRM.user && CRM.user.role === 'admin';
-  const canPull = !!(CRM.can && CRM.can('pool.pull'));
   const esc = x => String(x == null ? '' : x).replace(/</g, '&lt;');
+  const poolAllowMe = () => {
+    try {
+      const ids = String((CRM.brand && CRM.brand.POOL_PULL_USER_IDS) || '').split(',').map(x => Number(String(x).trim())).filter(Boolean);
+      return CRM.user && ids.indexOf(Number(CRM.user.id)) >= 0;
+    } catch (e) { return false; }
+  };
+  const canPull = isAdmin || (CRM.can && CRM.can('pool.pull')) || poolAllowMe();
+  const canView = isAdmin || (CRM.can && CRM.can('pool.view')) || poolAllowMe();
 
   const root = document.createElement('div');
   root.style.cssText = 'padding:20px;max-width:1100px;margin:0 auto';
@@ -49110,52 +49136,73 @@ VIEWS.leadpool = async (view) => {
     + '<div style="font-size:13px;color:#64748b">Leads released into the shared pool by status. Pull a lead to co-own it — the original owner keeps it too.</div>';
   root.appendChild(header);
 
+  // reloadPool is wired after the browse section is built; settings save calls it.
+  let reloadPool = async () => {};
+
   // ---- Admin config panel ----
   if (isAdmin) {
     const cfgCard = document.createElement('div');
     cfgCard.style.cssText = 'background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:18px';
     cfgCard.innerHTML = '<div style="font-weight:700;color:#0f172a;margin-bottom:4px">⚙️ Pool Settings '
-      + '<span style="font-weight:400;color:#94a3b8;font-size:12px">(admin only)</span></div>'
-      + '<div style="font-size:12px;color:#64748b;margin-bottom:12px">Pick which statuses release a lead into the pool. A lead enters the pool the instant it is set to one of these.</div>'
+      + '<span style="font-weight:400;color:#94a3b8;font-size:12px">(admin only · changes save automatically)</span></div>'
       + '<div id="pool-cfg-body" style="color:#64748b;font-size:13px">Loading…</div>'
       + '<div id="pool-cfg-saved" style="font-size:12px;color:#16a34a;margin-top:8px;min-height:16px"></div>';
     root.appendChild(cfgCard);
     const body = cfgCard.querySelector('#pool-cfg-body');
     const savedEl = cfgCard.querySelector('#pool-cfg-saved');
+
     let statuses = (CRM.cache && CRM.cache.statuses) || [];
     if (!statuses.length) { try { statuses = (await api('api_statuses_list')) || []; } catch (_) {} }
-    let cfg = { enabled: false, status_ids: [] };
+    let users = (CRM.cache && CRM.cache.users) || [];
+    if (!users.length) { try { users = (await api('api_users_list')) || []; } catch (_) {} }
+    users = users.filter(u => u.role !== 'admin'); // admins can always pull
+
+    let cfg = { enabled: false, status_ids: [], pull_user_ids: [] };
     try { cfg = await api('api_pool_config_get'); } catch (e) { body.textContent = 'Could not load settings: ' + e.message; }
 
     const markSaved = () => { savedEl.style.color = '#16a34a'; const t = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }); savedEl.textContent = '✓ Saved · ' + t; };
     const save = async () => {
       const enabled = body.querySelector('#pool-enabled').checked;
       const ids = Array.from(body.querySelectorAll('.pool-st:checked')).map(c => Number(c.value));
+      const uids = Array.from(body.querySelectorAll('.pool-usr:checked')).map(c => Number(c.value));
       try {
-        await api('api_pool_config_save', { enabled: enabled, status_ids: ids });
+        const res = await api('api_pool_config_save', { enabled: enabled, status_ids: ids, pull_user_ids: uids });
         markSaved();
-        CRM.brand = Object.assign(CRM.brand || {}, { POOL_ENABLED: enabled ? '1' : '0' });
+        CRM.brand = Object.assign(CRM.brand || {}, { POOL_ENABLED: enabled ? '1' : '0', POOL_PULL_USER_IDS: (res && res.pull_user_ids || uids).join(',') });
+        await reloadPool();
       } catch (e) { savedEl.style.color = '#dc2626'; savedEl.textContent = '✕ ' + e.message; }
     };
-    const selSet = new Set((cfg.status_ids || []).map(Number));
-    body.innerHTML = '<label style="display:flex;align-items:center;gap:8px;margin-bottom:12px;cursor:pointer">'
+
+    const selSt = new Set((cfg.status_ids || []).map(Number));
+    const selUsr = new Set((cfg.pull_user_ids || []).map(Number));
+    body.innerHTML =
+        '<label style="display:flex;align-items:center;gap:8px;margin-bottom:14px;cursor:pointer">'
       + '<input type="checkbox" id="pool-enabled" ' + (cfg.enabled ? 'checked' : '') + '/>'
       + '<span style="font-weight:600;color:#0f172a">Enable Lead Pool for this workspace</span></label>'
-      + '<div style="font-size:12px;color:#64748b;margin-bottom:6px">Pool statuses:</div>'
-      + '<div style="display:flex;flex-wrap:wrap;gap:8px">'
+      + '<div style="font-size:12px;color:#64748b;margin-bottom:6px;font-weight:600">1. Statuses that release a lead into the pool</div>'
+      + '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px">'
       + statuses.map(s => '<label style="display:flex;align-items:center;gap:6px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:6px 10px;cursor:pointer">'
-          + '<input type="checkbox" class="pool-st" value="' + s.id + '" ' + (selSet.has(Number(s.id)) ? 'checked' : '') + '/>'
+          + '<input type="checkbox" class="pool-st" value="' + s.id + '" ' + (selSt.has(Number(s.id)) ? 'checked' : '') + '/>'
           + '<span style="font-size:13px;color:#334155">' + esc(s.name) + '</span></label>').join('')
+      + '</div>'
+      + '<div style="font-size:12px;color:#64748b;margin-bottom:6px;font-weight:600">2. Employees allowed to pull from the pool</div>'
+      + '<div style="font-size:11px;color:#94a3b8;margin-bottom:6px">Tick the people who may claim leads. (Admins and managers can already pull. Leave all unticked to rely only on role permissions.)</div>'
+      + '<div style="display:flex;flex-wrap:wrap;gap:8px">'
+      + (users.length ? users.map(u => '<label style="display:flex;align-items:center;gap:6px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:6px 10px;cursor:pointer">'
+          + '<input type="checkbox" class="pool-usr" value="' + u.id + '" ' + (selUsr.has(Number(u.id)) ? 'checked' : '') + '/>'
+          + '<span style="font-size:13px;color:#334155">' + esc(u.name) + ' <span style="color:#94a3b8">· ' + esc(u.role) + '</span></span></label>').join('')
+          : '<span style="font-size:12px;color:#94a3b8">No non-admin users found.</span>')
       + '</div>';
     body.querySelector('#pool-enabled').addEventListener('change', save);
     body.querySelectorAll('.pool-st').forEach(c => c.addEventListener('change', save));
+    body.querySelectorAll('.pool-usr').forEach(c => c.addEventListener('change', save));
   }
 
-  // ---- Browse + pull (needs pool.view) ----
+  // ---- Browse + pull ----
   const poolWrap = document.createElement('div');
   root.appendChild(poolWrap);
-  if (!(CRM.can && CRM.can('pool.view'))) {
-    poolWrap.innerHTML = '<div style="padding:24px;text-align:center;color:#64748b;background:#fff;border:1px solid #e2e8f0;border-radius:12px">You don\'t have access to browse the pool. Ask your admin to grant <b>Lead Pool — View</b>.</div>';
+  if (!canView) {
+    poolWrap.innerHTML = '<div style="padding:24px;text-align:center;color:#64748b;background:#fff;border:1px solid #e2e8f0;border-radius:12px">You don\'t have access to browse the pool. Ask your admin to add you under <b>Pool Settings → Employees allowed to pull</b>.</div>';
     return;
   }
 
@@ -49204,9 +49251,7 @@ VIEWS.leadpool = async (view) => {
           catch (e) { btn.disabled = false; btn.textContent = '⤵ Pull'; toast(e.message, 'err'); }
         };
         cell.appendChild(btn);
-      } else {
-        cell.innerHTML = '<span style="font-size:12px;color:#94a3b8">view only</span>';
-      }
+      } else { cell.innerHTML = '<span style="font-size:12px;color:#94a3b8">view only</span>'; }
       tb.appendChild(tr);
     });
     listEl.innerHTML = '';
@@ -49228,8 +49273,8 @@ VIEWS.leadpool = async (view) => {
     });
   };
 
-  await refreshSummary();
-  await renderList();
+  reloadPool = async () => { await refreshSummary(); await renderList(); };
+  await reloadPool();
 };
 
 
