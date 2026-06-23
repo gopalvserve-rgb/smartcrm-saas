@@ -1843,7 +1843,7 @@ function renderShell() {
     if (hiddenNavIds.includes(item.id)) return null;
     /* LEAD_POOL_v1 — per-permission + per-tenant brand-flag gating */
     if (item.perm && !(CRM.can && CRM.can(item.perm))) return null;
-    if (item.requiresBrandFlag && !(CRM.brand && String(CRM.brand[item.requiresBrandFlag]) === '1')) return null;
+    if (item.requiresBrandFlag && !(CRM.user && CRM.user.role === 'admin') && !(CRM.brand && String(CRM.brand[item.requiresBrandFlag]) === '1')) return null;
     if (item.id === 'teamchat' && CRM.access && CRM.access.can_chat === false) return null;
     // Industry-pack gate — only show pack-specific items when the pack
     // is installed for THIS tenant. CRM.installedPacks is populated at
@@ -1972,7 +1972,7 @@ function renderShell() {
     if (item.roles && !item.roles.includes(CRM.user.role)) return;
     if (hiddenNavIds.includes(item.id)) return;
     if (item.perm && !(CRM.can && CRM.can(item.perm))) return;
-    if (item.requiresBrandFlag && !(CRM.brand && String(CRM.brand[item.requiresBrandFlag]) === '1')) return;
+    if (item.requiresBrandFlag && !(CRM.user && CRM.user.role === 'admin') && !(CRM.brand && String(CRM.brand[item.requiresBrandFlag]) === '1')) return;
     if (item.id === 'teamchat' && CRM.access && CRM.access.can_chat === false) return;
     if (item.requiresPack) {
       const installed = (CRM.installedPacks instanceof Set) ? CRM.installedPacks : new Set();
@@ -2074,7 +2074,7 @@ function showMobileMore() {
           if (item.roles && !item.roles.includes(CRM.user.role)) return false;
           if (item.id === 'teamchat' && CRM.access && CRM.access.can_chat === false) return false;
           if (item.perm && !(CRM.can && CRM.can(item.perm))) return false;
-          if (item.requiresBrandFlag && !(CRM.brand && String(CRM.brand[item.requiresBrandFlag]) === '1')) return false;
+          if (item.requiresBrandFlag && !(CRM.user && CRM.user.role === 'admin') && !(CRM.brand && String(CRM.brand[item.requiresBrandFlag]) === '1')) return false;
           // PACK_MENU_MOBILE_v1 (2026-05-29) — mirror the sidebar's
           // requiresPack gate. Without this, Education and Real Estate
           // pack items (Fee Collection, Students, Courses, Inventory Board,
