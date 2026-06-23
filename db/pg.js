@@ -667,8 +667,23 @@ const SCHEMA = {
   copilot_lead_summaries: {
     columns: ['lead_id','summary','next_action','draft_msg','payload_json','generated_at'],
     json: ['payload_json']
-  }
-
+  },
+  payment_links: {
+    columns: ['gateway', 'gateway_mode', 'gateway_link_id', 'gateway_short_url',
+              'link_id_custom', 'link_type', 'description', 'amount_inr', 'currency',
+              'allow_partial', 'min_partial_inr',
+              'customer_phone', 'customer_email', 'customer_name',
+              'send_sms', 'send_whatsapp', 'send_email', 'allow_invoice_download',
+              'expire_at', 'redirect_url', 'thank_you_message', 'terms_conditions',
+              'status', 'amount_paid_inr', 'paid_txn_count', 'paid_at', 'payment_mode',
+              'lead_id', 'created_by', 'created_at', 'updated_at', 'meta_json'],
+    json: ['meta_json']
+  },
+  payment_link_txns: {
+    columns: ['link_id', 'gateway_txn_id', 'amount_inr', 'status', 'payment_mode',
+              'paid_at', 'raw_json'],
+    json: ['raw_json']
+  },
 };
 
 function _schema(table) {

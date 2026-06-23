@@ -1630,3 +1630,59 @@ CREATE INDEX IF NOT EXISTS idx_inv_audit_created ON inv_audit_log(created_at DES
 -- automations. Stores the most recently picked user id per rule so the
 -- next fire advances to the next position in the recipient pool.
 ALTER TABLE automations ADD COLUMN IF NOT EXISTS last_picked_user_id INTEGER;
+
+-- ════════════════════════════════════════════════════════════════════
+-- PAYMENTS_v1 (2026-06-23) — Cashfree + Razorpay payment links
+-- ════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS payment_links (
+  id                     SERIAL PRIMARY KEY,
+  gateway                TEXT NOT NULL,                 -- 'cashfree' | 'razorpay'
+  gateway_mode           TEXT NOT NULL DEFAULT 'live',  -- 'live' | 'test'
+  gateway_link_id        TEXT,                          -- cf_link_id or plink_xxx
+  gateway_short_url      TEXT,                          -- shareable URL
+  link_id_custom         TEXT,                          -- admin-provided slug (max 50 chars)
+  link_type              TEXT NOT NULL DEFAULT 'one_time_all', -- one_time_all | one_time_upi | subscription
+  description            TEXT NOT NULL DEFAULT '',
+  amount_inr             NUMERIC(10,2) NOT NULL DEFAULT 0,
+  currency               TEXT NOT NULL DEFAULT 'INR',
+  allow_partial          INTEGER NOT NULL DEFAULT 0,
+  min_partial_inr        NUMERIC(10,2),
+  customer_phone         TEXT,
+  customer_email         TEXT,
+  customer_name          TEXT,
+  send_sms               INTEGER NOT NULL DEFAULT 0,
+  send_whatsapp          INTEGER NOT NULL DEFAULT 0,
+  send_email             INTEGER NOT NULL DEFAULT 0,
+  allow_invoice_download INTEGER NOT NULL DEFAULT 0,
+  expire_at              TIMESTAMPTZ,
+  redirect_url           TEXT,
+  thank_you_message      TEXT,
+  terms_conditions       TEXT,
+  status                 TEXT NOT NULL DEFAULT 'created', -- created | partial | paid | expired | cancelled
+  amount_paid_inr        NUMERIC(10,2) NOT NULL DEFAULT 0,
+  paid_txn_count         INTEGER NOT NULL DEFAULT 0,
+  paid_at                TIMESTAMPTZ,
+  payment_mode           TEXT,                          -- UPI | CREDIT_CARD | NET_BANKING | WALLET | etc
+  lead_id                INTEGER REFERENCES leads(id) ON DELETE SET NULL,
+  created_by             INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  meta_json              JSONB
+);
+CREATE INDEX IF NOT EXISTS idx_payment_links_status ON payment_links(status);
+CREATE INDEX IF NOT EXISTS idx_payment_links_phone  ON payment_links(customer_phone);
+CREATE INDEX IF NOT EXISTS idx_payment_links_created ON payment_links(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_payment_links_lead   ON payment_links(lead_id);
+
+CREATE TABLE IF NOT EXISTS payment_link_txns (
+  id              SERIAL PRIMARY KEY,
+  link_id         INTEGER NOT NULL REFERENCES payment_links(id) ON DELETE CASCADE,
+  gateway_txn_id  TEXT NOT NULL,
+  amount_inr      NUMERIC(10,2) NOT NULL,
+  status          TEXT NOT NULL,                       -- success | failed | pending
+  payment_mode    TEXT,
+  paid_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  raw_json        JSONB
+);
+CREATE INDEX IF NOT EXISTS idx_payment_txns_link ON payment_link_txns(link_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_txns_gtxn ON payment_link_txns(gateway_txn_id);
