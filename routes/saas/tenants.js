@@ -33,18 +33,55 @@ async function api_saas_tenants_list(token, filters) {
     params.push(f.status);
     where.push(`t.status = $${params.length}`);
   }
+  // SAAS_ADMIN_USERCOLS_v1 (2026-06-21) — also pull p.quotas so we can
+  // compute the effective user cap right here.
   const sql = `
-    SELECT t.*, p.name AS package_name, p.base_price_inr,
+    SELECT t.*, p.name AS package_name, p.base_price_inr, p.quotas AS package_quotas,
            (SELECT COUNT(*) FROM invoices i WHERE i.tenant_id = t.id AND i.status = 'paid') AS paid_invoice_count,
            (SELECT MAX(created_at) FROM invoices i WHERE i.tenant_id = t.id) AS last_invoice_at,
-           -- TENANT_PARTIAL_PAY_v1 — derived balance shown on tenant list
            COALESCE(t.total_amount_inr, 0) - COALESCE(t.amount_paid_inr, 0) AS pending_balance_inr
       FROM tenants t
       LEFT JOIN packages p ON p.id = t.package_id
      ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
      ORDER BY t.id DESC LIMIT 500`;
   const r = await control.query(sql, params);
-  return r.rows;
+  const rows = r.rows;
+
+  // SAAS_ADMIN_USERCOLS_v1 — enrich each row with:
+  //   user_cap_effective: package base cap, overridden by tenants.user_cap
+  //   user_count_active : active users in the tenant DB (skipped for non-running tenants)
+  // Done in parallel for speed (Promise.all over 63 tenants is ~150ms).
+  await Promise.all(rows.map(async (t) => {
+    // Effective cap from override → package
+    let baseCap = null;
+    try {
+      const q = (typeof t.package_quotas === 'string') ? JSON.parse(t.package_quotas || '{}') : (t.package_quotas || {});
+      if (q && q.users && q.users.limit != null) baseCap = Number(q.users.limit);
+    } catch (_) {}
+    const overrideCap = (t.user_cap != null && t.user_cap !== '') ? Number(t.user_cap) : null;
+    t.user_cap_effective = (overrideCap != null) ? overrideCap : baseCap;
+    t.user_cap_source = (overrideCap != null) ? 'override' : (baseCap != null ? 'package' : 'none');
+
+    // Active user count from tenant DB. Skip suspended/deleted tenants
+    // (their pool may not be connectable).
+    if (t.status === 'deleted' || t.status === 'pending_delete' || t.status === 'suspended') {
+      t.user_count_active = null;
+      return;
+    }
+    try {
+      const pool = tenantPool.poolFor(t);
+      if (pool) {
+        const ur = await pool.query(`SELECT COUNT(*)::int AS c FROM users WHERE COALESCE(is_active, 1) = 1`);
+        t.user_count_active = Number(ur.rows[0].c) || 0;
+      } else {
+        t.user_count_active = null;
+      }
+    } catch (_) {
+      t.user_count_active = null;
+    }
+  }));
+
+  return rows;
 }
 
 async function api_saas_tenants_get(token, id) {

@@ -498,7 +498,9 @@ VIEWS.tenants = async (view) => {
   const tbl = h('table', {},
     h('thead', {}, h('tr', {},
       h('th', {}, 'Org'), h('th', {}, 'Slug'), h('th', {}, 'Email'),
-      h('th', {}, 'Plan'), h('th', {}, 'Status'), h('th', {}, 'Balance'),
+      h('th', {}, 'Plan'),
+      h('th', { title: 'Allocated users (cap) — created users in tenant DB' }, 'Users'),
+      h('th', {}, 'Status'), h('th', {}, 'Balance'),
       h('th', {}, 'Period ends'), h('th', {}, ''  )
     )),
     h('tbody', {}, ...list.map(t => h('tr', {},
@@ -533,6 +535,33 @@ VIEWS.tenants = async (view) => {
       h('td', {}, h('a', { href: '/t/' + t.slug, target: '_blank' }, '/t/' + t.slug)),
       h('td', { class: 'muted' }, t.contact_email),
       h('td', {}, t.package_name || '—'),
+      // SAAS_ADMIN_USERCOLS_v1 — Allocated / Created with overage badge
+      (function () {
+        const cap = t.user_cap_effective;
+        const cur = t.user_count_active;
+        if (cap == null && cur == null) {
+          return h('td', { class: 'muted', style: { fontSize: '.82em' } }, '—');
+        }
+        const capStr = (cap == null) ? '∞' : (cap === -1 ? '∞' : String(cap));
+        const curStr = (cur == null) ? '?' : String(cur);
+        const over   = (cap != null && cap !== -1 && cur != null && cur > cap);
+        const at_cap = (cap != null && cap !== -1 && cur != null && cur === cap);
+        const colour = over ? '#dc2626' : at_cap ? '#b45309' : '#475569';
+        const titleBits = ['Allocated (cap): ' + capStr];
+        titleBits.push('Created (active): ' + curStr);
+        if (cap != null && cap !== -1 && cur != null) titleBits.push(over ? ('Over by ' + (cur - cap)) : ('Remaining: ' + (cap - cur)));
+        if (t.user_cap_source === 'override') titleBits.push('Source: per-tenant override (tenants.user_cap)');
+        else if (t.user_cap_source === 'package') titleBits.push('Source: package quota');
+        return h('td', {
+          title: titleBits.join('\n'),
+          style: { fontWeight: 600, color: colour, whiteSpace: 'nowrap', fontSize: '.85em' }
+        },
+          curStr + ' / ' + capStr,
+          over ? h('span', {
+            style: { marginLeft: '6px', background: '#fee2e2', color: '#991b1b', padding: '1px 6px', borderRadius: '8px', fontSize: '.7em', fontWeight: 700 }
+          }, '+' + (cur - cap) + ' OVER') : null
+        );
+      })(),
       h('td', {}, h('span', { class: 'tag ' + (t.status === 'active' ? 'ok' : t.status === 'pending_delete' ? 'err' : 'warn') }, t.status)),
       // TENANT_PARTIAL_PAY_v1 — Pending balance column (amber when > 0)
       (function () {
