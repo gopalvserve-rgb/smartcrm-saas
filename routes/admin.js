@@ -80,7 +80,7 @@ const CONFIG_KEYS = [
   'WB_CHAT_V2_ENABLED',      // WB_CHAT_v2 — redesigned 3-column WhatsApp chat (vserve beta)
   'LEADS_VIEW_V2_ENABLED',   // LEADS_VIEW_v2 — Modern + Inbox view styles (vserve beta)
   'AI_MANAGER_ENABLED',      // AI_MGR_v1 — virtual admin/supervisor (vserve beta)
-  'AI_CALL_ENABLED',         // AICALL_v1 — FexCall AI master switch (VAPI)
+  'AI_CALL_ENABLED',         // AICALL_v1 — Smart Call AI master switch (VAPI)
   'AI_CALL_PROVIDER',        // AICALL_v1 — 'vapi' (only provider for Phase 1)
   'VAPI_PRIVATE_API_KEY',    // AICALL_v1 — VAPI Bearer token for server calls
   'VAPI_PUBLIC_KEY',         // AICALL_v1 — VAPI public key for web SDK

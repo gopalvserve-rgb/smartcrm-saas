@@ -1,5 +1,5 @@
 /**
- * routes/aiCall.js — AICALL_v1 (FexCall AI / VAPI integration)
+ * routes/aiCall.js — AICALL_v1 (Smart Call AI / VAPI integration)
  *
  * Phase 1 surface:
  *   api_aicall_settings_get    — read VAPI config (keys redacted)
@@ -148,7 +148,7 @@ module.exports = {
 
 async function _vapiKey() {
   const key = await _cfg('VAPI_PRIVATE_API_KEY');
-  if (!key) throw new Error('VAPI key not set. Go to FexCall AI → Settings and save your Private API Key first.');
+  if (!key) throw new Error('VAPI key not set. Go to Smart Call AI → Settings and save your Private API Key first.');
   return key;
 }
 

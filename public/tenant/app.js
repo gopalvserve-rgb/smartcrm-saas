@@ -1712,13 +1712,13 @@ const NAV_GROUPS = [
     { id: 'callratings',  label: 'Call Ratings',  icon: '⭐', roles: ['admin', 'manager', 'team_leader'], search: 'rating call rating quality score' },
     { id: 'aiusage',      label: 'AI Usage',      icon: '🤖', roles: ['admin', 'manager'], search: 'ai usage ai summary call ai ai minutes' }
   ] },
-  /* AICALL_v1 — FexCall AI: VAPI-powered outbound voice campaigns. */
-  { label: 'FexCall AI', icon: '🎙️', items: [
-    { id: 'aicallDashboard', label: 'Dashboard',  icon: '📊', search: 'fexcall ai dashboard call volume outcomes',                            brandFlag: 'AI_CALL_ENABLED' },
-    { id: 'aicallCampaigns', label: 'Campaigns',  icon: '📣', roles: ['admin','manager','team_leader'], search: 'fexcall ai campaign csv outbound voice', brandFlag: 'AI_CALL_ENABLED' },
-    { id: 'aicallLogs',      label: 'Call Logs',  icon: '📋', search: 'fexcall ai call logs transcripts recordings',                          brandFlag: 'AI_CALL_ENABLED' },
-    { id: 'aicallVapi',      label: 'VAPI AI',    icon: '🎙️', roles: ['admin','manager'],              search: 'fexcall ai vapi phone numbers assistants knowledge base', brandFlag: 'AI_CALL_ENABLED' },
-    { id: 'aicallSettings',  label: 'Settings',   icon: '⚙️', roles: ['admin','manager'],              search: 'fexcall ai settings vapi api key provider' }
+  /* AICALL_v1 — Smart Call AI: VAPI-powered outbound voice campaigns. */
+  { label: 'Smart Call AI', icon: '🎙️', items: [
+    { id: 'aicallDashboard', label: 'Dashboard',  icon: '📊', search: 'smart call ai smartcall dashboard call volume outcomes',                            brandFlag: 'AI_CALL_ENABLED' },
+    { id: 'aicallCampaigns', label: 'Campaigns',  icon: '📣', roles: ['admin','manager','team_leader'], search: 'smart call ai smartcall campaign csv outbound voice', brandFlag: 'AI_CALL_ENABLED' },
+    { id: 'aicallLogs',      label: 'Call Logs',  icon: '📋', search: 'smart call ai smartcall call logs transcripts recordings',                          brandFlag: 'AI_CALL_ENABLED' },
+    { id: 'aicallVapi',      label: 'VAPI AI',    icon: '🎙️', roles: ['admin','manager'],              search: 'smart call ai smartcall vapi phone numbers assistants knowledge base', brandFlag: 'AI_CALL_ENABLED' },
+    { id: 'aicallSettings',  label: 'Settings',   icon: '⚙️', roles: ['admin','manager'],              search: 'smart call ai smartcall settings vapi api key provider' }
   ] },
   /* META_MODULE_v1 — Marketing & Communication groups all outbound
    * channels (Meta ads, Social, WhatsApp Bot, AI Assistant, Campaigns). */
@@ -14329,7 +14329,7 @@ async function openQuotationModal(qid, prefillLead) {
 // ============================================================
 VIEWS.aicallDashboard = async (view) => {
   const wrap = h('div', { style: { padding: '1.5rem' } });
-  wrap.appendChild(h('h2', { style: { marginTop: 0 } }, '🎙️ FexCall AI — Dashboard'));
+  wrap.appendChild(h('h2', { style: { marginTop: 0 } }, '🎙️ Smart Call AI — Dashboard'));
   wrap.appendChild(h('p', { class: 'muted' }, 'Overview of your AI calling activity, recent calls, and campaign performance.'));
   wrap.appendChild(h('div', { class: 'card', style: { padding: '2rem', textAlign: 'center', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '10px', marginTop: '1rem' } },
     h('div', { style: { fontSize: '2rem' } }, '🚧'),
@@ -14341,7 +14341,7 @@ VIEWS.aicallDashboard = async (view) => {
 };
 VIEWS.aicallCampaigns = async (view) => {
   const wrap = h('div', { style: { padding: '1.5rem' } });
-  wrap.appendChild(h('h2', { style: { marginTop: 0 } }, '📣 FexCall AI — Campaigns'));
+  wrap.appendChild(h('h2', { style: { marginTop: 0 } }, '📣 Smart Call AI — Campaigns'));
   wrap.appendChild(h('p', { class: 'muted' }, 'Bulk AI voice campaigns over uploaded contact lists.'));
   wrap.appendChild(h('div', { class: 'card', style: { padding: '2rem', textAlign: 'center', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '10px', marginTop: '1rem' } },
     h('div', { style: { fontSize: '2rem' } }, '🚧'),
@@ -14352,7 +14352,7 @@ VIEWS.aicallCampaigns = async (view) => {
 };
 VIEWS.aicallLogs = async (view) => {
   const wrap = h('div', { style: { padding: '1.5rem' } });
-  wrap.appendChild(h('h2', { style: { marginTop: 0 } }, '📋 FexCall AI — Call Logs'));
+  wrap.appendChild(h('h2', { style: { marginTop: 0 } }, '📋 Smart Call AI — Call Logs'));
   wrap.appendChild(h('p', { class: 'muted' }, 'Detailed call logs with transcripts, recordings and AI analysis.'));
   wrap.appendChild(h('div', { class: 'card', style: { padding: '2rem', textAlign: 'center', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '10px', marginTop: '1rem' } },
     h('div', { style: { fontSize: '2rem' } }, '🚧'),
@@ -14379,7 +14379,7 @@ VIEWS.aicallVapi = async (view) => {
 VIEWS.aicallSettings = async (view) => {
   view.innerHTML = '';
   const wrap = h('div', { style: { padding: '1.5rem', maxWidth: '900px' } });
-  wrap.appendChild(h('h2', { style: { marginTop: 0 } }, '⚙️ FexCall AI — Settings'));
+  wrap.appendChild(h('h2', { style: { marginTop: 0 } }, '⚙️ Smart Call AI — Settings'));
   wrap.appendChild(h('p', { class: 'muted' }, 'Connect your Vapi.ai account. SmartCRM uses this to place outbound AI calls + receive inbound transcripts. Get your keys from your Vapi dashboard → API Keys.'));
 
   // Load current settings
@@ -14392,9 +14392,9 @@ VIEWS.aicallSettings = async (view) => {
     h('h3', { style: { margin: '0 0 .75rem' } }, '🟢 Module'),
     h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', fontSize: '14px' } },
       enabledChk,
-      h('span', null, 'Enable FexCall AI for this workspace')),
+      h('span', null, 'Enable Smart Call AI for this workspace')),
     h('p', { class: 'muted', style: { fontSize: '12px', margin: '.5rem 0 0' } },
-      'When ON, the FexCall AI menu items appear in the sidebar for everyone. Reload the page after enabling.')
+      'When ON, the Smart Call AI menu items appear in the sidebar for everyone. Reload the page after enabling.')
   );
 
   // ──────────── VAPI Credentials card ────────────
@@ -14489,7 +14489,7 @@ VIEWS.aicallSettings = async (view) => {
       }
       await api('api_aicall_settings_save', payload);
       status.style.color = '#15803d'; status.textContent = '✓ Saved';
-      toast('FexCall AI settings saved', 'ok');
+      toast('Smart Call AI settings saved', 'ok');
       // Reload the page so the side-nav reflects the enabled flag
       setTimeout(() => VIEWS.aicallSettings(view), 600);
     } catch (e) {
