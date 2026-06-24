@@ -98,6 +98,33 @@ function toast(msg, kind = 'ok') {
 function fmtRupees(n) { return '₹' + Number(n || 0).toLocaleString('en-IN'); }
 function fmtDate(s) { if (!s) return ''; const d = new Date(s); return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }); }
 
+// EXPORT_CSV_v1 — generic CSV export. Includes EVERY column present across
+// all rows (union of keys), JSON-stringifies objects, escapes quotes/commas/
+// newlines, prepends a UTF-8 BOM so Excel opens it cleanly.
+function _csvTs() { return new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-'); }
+function exportCsv(filename, rows) {
+  rows = Array.isArray(rows) ? rows : [];
+  if (!rows.length) { toast('Nothing to export', 'err'); return; }
+  const cols = []; const seen = new Set();
+  rows.forEach(r => Object.keys(r || {}).forEach(k => { if (!seen.has(k)) { seen.add(k); cols.push(k); } }));
+  const esc = (v) => {
+    if (v == null) return '';
+    if (typeof v === 'object') { try { v = JSON.stringify(v); } catch (_) { v = String(v); } }
+    v = String(v);
+    return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+  };
+  const lines = [cols.join(',')];
+  rows.forEach(r => lines.push(cols.map(c => esc(r ? r[c] : '')).join(',')));
+  const csv = '\ufeff' + lines.join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+  toast('Exported ' + rows.length + ' rows (' + cols.length + ' columns)');
+}
+
 // ---------- Login ----------------------------------------------
 function renderLogin() {
   const root = $('#app');
@@ -428,6 +455,7 @@ VIEWS.tenants = async (view) => {
   view.appendChild(h('div', { class: 'toolbar' },
     h('h1', {}, 'Tenants'),
     h('button', { class: 'btn primary', onclick: () => openCreateTenant() }, '+ Create tenant'),
+    h('button', { class: 'btn ghost', style: { marginLeft: '.5rem' }, title: 'Download all tenants as CSV (every column)', onclick: () => exportCsv('tenants-' + _csvTs() + '.csv', list) }, '\u2b07 Export CSV'),
     // 🌟 One-click showcase demo: creates (or refreshes) a 'showcase'
     // tenant pre-loaded with leads, products, recordings (with fake AI),
     // quotations, etc. so we can hand prospects a working URL.
@@ -2982,9 +3010,13 @@ VIEWS.tickets = async (view) => {
   const onlyUnassigned = h('label', { style: { display: 'inline-flex', gap: '.3rem', alignItems: 'center' } },
     h('input', { type: 'checkbox', id: 'tk-unassigned' }), 'Unassigned only'
   );
+  // EXPORT_CSV_v1 — export the currently-filtered tickets (every column).
+  let _lastTickets = [];
+  const exportBtn = h('button', { class: 'btn ghost', title: 'Download these tickets as CSV (every column)',
+    onclick: () => exportCsv('tickets-' + _csvTs() + '.csv', _lastTickets) }, '\u2b07 Export CSV');
 
   view.appendChild(h('div', { class: 'toolbar', style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap', alignItems: 'center', margin: '1rem 0' } },
-    statusSel, prioSel, catSel, onlyUnassigned, searchIn, refreshBtn
+    statusSel, prioSel, catSel, onlyUnassigned, searchIn, refreshBtn, exportBtn
   ));
 
   const statsRow = h('div', { id: 'tk-stats', style: { display: 'flex', gap: '.75rem', flexWrap: 'wrap', marginBottom: '1rem' } });
@@ -3008,6 +3040,7 @@ VIEWS.tickets = async (view) => {
       tableWrap.appendChild(h('div', { class: 'error-box' }, '⚠ ' + e.message));
       return;
     }
+    _lastTickets = (res && res.tickets) || [];
     // Stats cards
     statsRow.innerHTML = '';
     const s = res.stats || {};
