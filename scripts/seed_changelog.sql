@@ -681,3 +681,12 @@ SELECT 'fix',
        '🤖',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'AI Bot replies failing — retired Gemini model');
+
+-- 2026-06-24 MANUAL_BOT_PAUSE_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'Pause the AI bot on a chat with one tap',
+       'In the WhatsApp inbox, each conversation now has a "🤖 Bot on" button in the chat header. Tap it to pause the AI bot on that chat so you can take over — choose 15 minutes, 1 hour, or until you resume. The button shows "⏸ Bot paused · Xm" with the time remaining, and the bot auto-resumes when the window ends (or tap Resume now). This replaces guessing whether a human took over — the bot only pauses when you tell it to.',
+       '🤖',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Pause the AI bot on a chat with one tap');

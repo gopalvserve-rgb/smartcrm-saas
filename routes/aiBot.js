@@ -853,6 +853,21 @@ async function _shouldSuppress(settings, phone, inboundText, inboundPhoneId, ten
   // both sides via regexp_replace so format drift can't defeat the
   // gate. Right-pad to handle India 12-digit (91+10) vs 10-digit too.
   const _phoneTail = String(phone || '').replace(/\D/g, '').slice(-10);
+  // MANUAL_BOT_PAUSE_v1 — an agent tapped "Pause bot" on this conversation.
+  // Skip while the pause window is active (it auto-clears when it expires).
+  // Checked here (before the human-handoff queries) so a paused thread is a
+  // cheap, deterministic no-op. Never a false positive — only set by a human.
+  try {
+    const _pz = await db.query(
+      `SELECT EXTRACT(EPOCH FROM (paused_until - NOW()))::int AS secs
+         FROM wa_bot_pauses WHERE phone = $1 AND paused_until > NOW() LIMIT 1`,
+      [_phoneTail]
+    );
+    if (_pz.rows.length) {
+      const _m = Math.max(1, Math.ceil((Number(_pz.rows[0].secs) || 0) / 60));
+      return 'paused by agent (' + _m + 'm left)';
+    }
+  } catch (_) { /* table may not exist yet — treat as not paused */ }
   try {
     const r = await db.query(
       `SELECT 1 FROM whatsapp_messages

@@ -555,6 +555,15 @@ const SCHEMA_MIGRATIONS = [
   //   pool_origin_status_id  which status released it
   //   pool_origin_user_id    the original owner at release time
   // ─────────────────────────────────────────────────────────────
+  // MANUAL_BOT_PAUSE_v1 (2026-06-24) — per-conversation AI-bot pause window.
+  { name: '2026_06_24_wa_bot_pauses', sql: `
+    CREATE TABLE IF NOT EXISTS wa_bot_pauses (
+      phone         TEXT PRIMARY KEY,
+      paused_until  TIMESTAMPTZ NOT NULL,
+      paused_by     INTEGER,
+      paused_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  ` },
   { name: '2026_06_23_lead_pool_v1', sql: `
     ALTER TABLE leads ADD COLUMN IF NOT EXISTS in_pool INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE leads ADD COLUMN IF NOT EXISTS pool_entered_at TIMESTAMPTZ;

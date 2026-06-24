@@ -3996,6 +3996,66 @@ async function api_reports_whatsapp_drill(token, payload) {
   }));
 }
 
+/* ───────── MANUAL_BOT_PAUSE_v1 — agent pauses the AI bot on one chat ─────────
+   Tapping "Pause bot" in the WhatsApp inbox writes a row here keyed by the
+   customer's last-10 phone digits (same key the bot's suppress check uses).
+   The bot skips the thread until paused_until passes — then auto-resumes. */
+async function _ensureBotPauseTable() {
+  try {
+    await db.query(`CREATE TABLE IF NOT EXISTS wa_bot_pauses (
+      phone         TEXT PRIMARY KEY,
+      paused_until  TIMESTAMPTZ NOT NULL,
+      paused_by     INTEGER,
+      paused_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  } catch (_) {}
+}
+function _phoneTail10(p) { return String(p || '').replace(/\D/g, '').slice(-10); }
+
+async function api_wb_botPause(token, payload) {
+  const me = await authUser(token);
+  await _ensureBotPauseTable();
+  const p = payload || {};
+  const tail = _phoneTail10(p.phone);
+  if (!tail) throw new Error('phone required');
+  let mins = Number(p.minutes);
+  if (!Number.isFinite(mins)) mins = 15;            // default 15 min
+  const until = (mins <= 0)                          // 0 / negative = until resumed
+    ? new Date(Date.now() + 100 * 365 * 24 * 3600 * 1000)
+    : new Date(Date.now() + mins * 60 * 1000);
+  await db.query(
+    `INSERT INTO wa_bot_pauses (phone, paused_until, paused_by, paused_at)
+     VALUES ($1, $2, $3, NOW())
+     ON CONFLICT (phone) DO UPDATE
+       SET paused_until = EXCLUDED.paused_until, paused_by = EXCLUDED.paused_by, paused_at = NOW()`,
+    [tail, until.toISOString(), me.id]
+  );
+  return { ok: true, paused_until: until.toISOString(), minutes: mins };
+}
+async function api_wb_botResume(token, payload) {
+  await authUser(token);
+  await _ensureBotPauseTable();
+  const tail = _phoneTail10(payload && payload.phone);
+  if (!tail) throw new Error('phone required');
+  await db.query(`DELETE FROM wa_bot_pauses WHERE phone = $1`, [tail]);
+  return { ok: true };
+}
+async function api_wb_botPauseStatus(token, phone) {
+  await authUser(token);
+  await _ensureBotPauseTable();
+  const tail = _phoneTail10(phone);
+  if (!tail) return { paused: false };
+  const r = await db.query(
+    `SELECT paused_until, EXTRACT(EPOCH FROM (paused_until - NOW()))::int AS secs
+       FROM wa_bot_pauses WHERE phone = $1 AND paused_until > NOW() LIMIT 1`,
+    [tail]
+  );
+  if (!r.rows.length) return { paused: false };
+  const secs = Number(r.rows[0].secs) || 0;
+  return { paused: true, paused_until: r.rows[0].paused_until, seconds_left: secs,
+           minutes_left: Math.max(1, Math.ceil(secs / 60)) };
+}
+
 module.exports = {
   // Settings
   api_wb_settings_get, api_wb_settings_save, api_wb_connect_verify, api_wb_disconnect,
@@ -4007,6 +4067,7 @@ module.exports = {
   api_wb_templates_sync, api_wb_templates_list, api_wb_templates_create, api_wb_templates_delete,
   // Chat
   api_wb_chat_threads, api_wb_chat_messages, api_wb_chat_send, api_wb_initiate_chat,
+  api_wb_botPause, api_wb_botResume, api_wb_botPauseStatus,
   api_wb_chat_assign, api_wb_chat_assignments_list,
   api_wb_assign_settings_get, api_wb_assign_settings_save,
   // Bots
