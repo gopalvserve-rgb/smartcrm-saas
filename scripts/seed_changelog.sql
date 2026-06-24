@@ -636,3 +636,12 @@ SELECT 'feature',
        '🏦',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Finance pack: loan DSA tools + insurance renewals');
+
+-- 2026-06-24 CA_LEAD_ONLY_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'Call Activity: show CRM-lead calls only',
+       'Call Activity now has a "📋 CRM leads only" toggle in the toolbar. Turn it on to hide personal / unknown-number calls and see only calls matched to a CRM lead. Each user can flip it for their own view; admins get a "Set as default" button to make it the default for the whole workspace.',
+       '📞',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Call Activity: show CRM-lead calls only');

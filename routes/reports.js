@@ -934,8 +934,13 @@ async function api_reports_callActivity(token, filters) {
 
   // Visibility scope — admin/super_admin see all; managers see self+team; reps see self.
   let userScopeSql = '';
-  // CALL_ACTIVITY_LEAD_ONLY_v1 — when '1', hide personal calls (lead_id IS NULL)
-  const _leadOnly = await _callActivityLeadOnly();
+  // CALL_ACTIVITY_LEAD_ONLY_v1 — tenant config is the default; an explicit
+  // filters.lead_only ('1'/'0') from the per-view toggle overrides it so a
+  // user can switch their own Call Activity view without changing the default.
+  let _leadOnly;
+  if (filters.lead_only === '1' || filters.lead_only === 1 || filters.lead_only === true) _leadOnly = true;
+  else if (filters.lead_only === '0' || filters.lead_only === 0 || filters.lead_only === false) _leadOnly = false;
+  else _leadOnly = await _callActivityLeadOnly();
   const leadOnlyClause = _leadOnly ? "AND ce.lead_id IS NOT NULL" : '';
   const params = [fromIso, toIso];
   let p = 3;

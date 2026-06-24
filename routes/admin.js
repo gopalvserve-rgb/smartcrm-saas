@@ -368,6 +368,7 @@ async function api_admin_brand(_token) {
     LEADS_VIEW_V2_ENABLED:     cfg.LEADS_VIEW_V2_ENABLED     || '',
     AI_MANAGER_ENABLED: cfg.AI_MANAGER_ENABLED || '',
     POOL_ENABLED: cfg.POOL_ENABLED || '',   /* LEAD_POOL_v1 — gate the Lead Pool menu */
+    CALL_ACTIVITY_LEAD_ONLY: cfg.CALL_ACTIVITY_LEAD_ONLY || '',  /* CA_LEAD_ONLY — Call Activity default filter */
     POOL_PULL_USER_IDS: cfg.POOL_PULL_USER_IDS || '',  /* LEAD_POOL_v1 — per-user pull allow-list (SPA nav gate) */
     POOL_PULL_RULES: cfg.POOL_PULL_RULES || '',  /* LEAD_POOL_v2 — JSON [{user_id,count}] per-user batch rules (SPA nav gate) */
     DEMO_REMINDER_ENABLED: cfg.DEMO_REMINDER_ENABLED || '',

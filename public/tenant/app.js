@@ -20516,6 +20516,26 @@ VIEWS.callactivity = async (view) => {
     h('button', { class: 'btn primary', onclick: () => loadCallActivity() }, '🔎 Apply'),
     h('button', { class: 'btn', onclick: () => downloadCallActivityCsv() }, '⬇️ CSV')
   );
+  // CA_LEAD_ONLY — per-view filter: show only calls matched to a CRM lead.
+  // Defaults to the tenant setting (CRM.brand.CALL_ACTIVITY_LEAD_ONLY); admins
+  // can save the current choice as the workspace default.
+  const _caLeadOnlyChk = h('input', { type: 'checkbox', id: 'ca-leadonly',
+    checked: (CRM.brand && String(CRM.brand.CALL_ACTIVITY_LEAD_ONLY) === '1') ? 'checked' : null,
+    onchange: () => loadCallActivity() });
+  const _caLeadOnlyWrap = h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: '.35rem', fontSize: '.85rem', marginLeft: '.6rem' }, title: 'Hide personal / unknown-number calls — show only calls matched to a CRM lead' },
+    _caLeadOnlyChk, h('span', {}, '📋 CRM leads only'));
+  toolbar.appendChild(_caLeadOnlyWrap);
+  if (CRM.user && CRM.user.role === 'admin') {
+    toolbar.appendChild(h('button', { class: 'btn ghost', style: { fontSize: '.8rem' },
+      title: 'Make the current CRM-leads-only choice the default for everyone in this workspace',
+      onclick: async () => {
+        const v = _caLeadOnlyChk.checked ? '1' : '0';
+        try { await api('api_admin_setConfig', { key: 'CALL_ACTIVITY_LEAD_ONLY', value: v });
+          CRM.brand = Object.assign(CRM.brand || {}, { CALL_ACTIVITY_LEAD_ONLY: v });
+          toast('Saved as workspace default', 'ok');
+        } catch (e) { toast(e.message, 'err'); }
+      } }, '💾 Set as default'));
+  }
   view.appendChild(toolbar);
   setTimeout(() => { try { window._attachDatePresets && window._attachDatePresets(_caFrom, _caTo, { key: 'callactivity', apply: () => { try { loadCallActivity(); } catch (_) {} } }); } catch (_) {} }, 0);
   // BULK_AUDIT_HISTORY_v1 — Bulk AI Audit toolbar (admin/manager only).
@@ -20573,6 +20593,8 @@ async function loadCallActivity() {
   if (from)   filters.from = from + 'T00:00:00';
   if (to)     filters.to   = to   + 'T23:59:59';
   if (userId) filters.userId = Number(userId);
+  const _lo = document.getElementById('ca-leadonly');
+  if (_lo) filters.lead_only = _lo.checked ? '1' : '0';
 
   const cards = $('#ca-cards');
   if (cards) cards.innerHTML = '<div class="loading">Loading…</div>';
