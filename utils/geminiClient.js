@@ -30,6 +30,26 @@ const { decryptString } = require('./aiCrypto');
 
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 
+// AIBOT_MODEL_FIX_v1 (2026-06-24) — Google retired several Gemini model IDs
+// ("This model models/gemini-2.0-flash is no longer available"). Bots whose
+// model_override (or the overload-fallback) pointed at a dead model failed to
+// reply. Rewrite any retired model name to a current equivalent at call time
+// so replies keep working regardless of what's stored on the bot.
+const _MODEL_ALIASES = {
+  'gemini-2.0-flash':         'gemini-2.5-flash',
+  'gemini-2.0-pro':           'gemini-2.5-pro',
+  'gemini-1.5-flash':         'gemini-2.5-flash',
+  'gemini-1.5-flash-latest':  'gemini-2.5-flash',
+  'gemini-1.5-pro':           'gemini-2.5-pro',
+  'gemini-1.5-pro-latest':    'gemini-2.5-pro',
+  'gemini-pro':               'gemini-2.5-flash',
+  'gemini-1.0-pro':           'gemini-2.5-flash'
+};
+function _normModel(m) {
+  const k = String(m || '').trim().replace(/^models\//, '');
+  return _MODEL_ALIASES[k] || k;
+}
+
 let _settingsCache = null;
 let _settingsCachedAt = 0;
 const SETTINGS_TTL_MS = 60 * 1000;
@@ -184,7 +204,7 @@ async function generate(args) {
              cost_usd: 0, cost_inr_real: 0, cost_inr_billed: 0,
              finish_reason: null, error: 'AI is not configured (missing or disabled).', raw_status: null };
   }
-  const model = String(args.model || settings.defaultModel);
+  const model = _normModel(String(args.model || settings.defaultModel));
   const url = `${GEMINI_BASE}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(settings.apiKey)}`;
 
   const contents = [];
@@ -241,8 +261,8 @@ async function generate(args) {
       continue;
     }
     if (isOverloaded && !triedFallback) {
-      const fallbackModel = currentModel.includes('flash-lite') ? 'gemini-2.0-flash'
-                          : currentModel.includes('flash')      ? 'gemini-2.0-flash-lite'
+      const fallbackModel = currentModel.includes('flash-lite') ? 'gemini-2.5-flash'
+                          : currentModel.includes('flash')      ? 'gemini-2.5-flash-lite'
                           : null;
       if (fallbackModel) {
         triedFallback = true;
@@ -397,7 +417,7 @@ async function generateWithTools(args) {
              cost_usd: 0, cost_inr_real: 0, cost_inr_billed: 0,
              tools_called: [], error: 'AI is not configured.' };
   }
-  const model = String(args.model || settings.defaultModel);
+  const model = _normModel(String(args.model || settings.defaultModel));
   const url = `${GEMINI_BASE}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(settings.apiKey)}`;
   const tools = (args.tools && args.tools.length)
     ? [{ functionDeclarations: args.tools }]
@@ -462,8 +482,8 @@ async function generateWithTools(args) {
       }
       // Retries exhausted on a transient error → fallback to a sibling model once.
       if (isOverloaded && !triedFallback) {
-        const fallbackModel = currentModel.includes('flash-lite') ? 'gemini-2.0-flash'
-                            : currentModel.includes('flash')      ? 'gemini-2.0-flash-lite'
+        const fallbackModel = currentModel.includes('flash-lite') ? 'gemini-2.5-flash'
+                            : currentModel.includes('flash')      ? 'gemini-2.5-flash-lite'
                             : null;
         if (fallbackModel) {
           triedFallback = true;

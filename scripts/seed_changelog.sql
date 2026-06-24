@@ -672,3 +672,12 @@ SELECT 'fix',
        '🤖',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'After-hours bot no longer muted by daytime agent chats');
+
+-- 2026-06-24 AIBOT_MODEL_FIX_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'fix',
+       'AI Bot replies failing — retired Gemini model',
+       'Some AI Bot replies were failing with "model gemini-2.0-flash is no longer available" because Google retired that model and a few bots (and the overload-fallback) still pointed at it. The system now automatically rewrites any retired Gemini model name to a current equivalent (e.g. gemini-2.0-flash → gemini-2.5-flash) at send time, so the bot replies again without you needing to change anything.',
+       '🤖',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'AI Bot replies failing — retired Gemini model');
