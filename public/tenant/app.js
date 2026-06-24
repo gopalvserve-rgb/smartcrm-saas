@@ -42599,40 +42599,144 @@ function packSolarLeadBlock(leadId) {
   });
 }
 
-// ---- FINANCE lead panel ----
+// ---- FINANCE lead panel (FIN_PACK_v2 — interactive loan file) ----
 function packFinanceLeadBlock(leadId) {
-  return _genericPackPanel({
-    packId: 'finance', icon: '🏦', title: 'Finance — Policies & Premiums', leadId,
-    fetcher: async (id) => {
-      const [pol, due] = await Promise.all([
-        api('api_fin_policy_byLead', { lead_id: id }).catch(() => ({policies:[], premiums:[]})),
-        api('api_fin_renewal_due', { lead_id: id }).catch(() => ({renewals:[]}))
+  const wrap = h('div', { class: 'pack-block pack-block-finance', style: { marginTop: '1rem', borderTop: '1px solid #e5e7eb', paddingTop: '1rem' } },
+    h('h4', { style: { margin: '0 0 .5rem 0' } }, '🏦 Finance — Loan File'));
+  const inner = h('div', {}, h('div', { class: 'muted' }, 'Loading…'));
+  wrap.appendChild(inner);
+
+  const _sec = (t, c) => h('div', { style: { fontWeight: 600, fontSize: '12px', marginTop: '12px', marginBottom: '4px', color: c || '#0f172a' } }, t);
+  const _chip = (txt, color) => h('span', { style: { display: 'inline-block', padding: '1px 7px', borderRadius: '10px', fontSize: '11px', fontWeight: 600, color: '#fff', background: color } }, txt);
+  const LENDER_STATUSES = ['submitted', 'login', 'approved', 'rejected', 'disbursed'];
+  const LENDER_COLOR = { submitted: '#3b82f6', login: '#8b5cf6', approved: '#10b981', rejected: '#ef4444', disbursed: '#059669' };
+  const DOC_NEXT = { pending: 'received', received: 'verified', verified: 'pending' };
+  const DOC_COLOR = { pending: '#f59e0b', received: '#3b82f6', verified: '#10b981' };
+
+  async function reload() {
+    let d;
+    try {
+      const [pol, lend, comm, docs, due] = await Promise.all([
+        api('api_fin_policy_byLead', { lead_id: leadId }).catch(() => ({ policies: [] })),
+        api('api_fin_lender_byLead', { lead_id: leadId }).catch(() => ({ submissions: [] })),
+        api('api_fin_commission_byLead', { lead_id: leadId }).catch(() => ({ commissions: [] })),
+        api('api_fin_doc_byLead', { lead_id: leadId }).catch(() => ({ docs: [] })),
+        api('api_fin_renewal_due', { lead_id: leadId }).catch(() => ({ renewals: [] }))
       ]);
-      return { policies: pol.policies || [], premiums: pol.premiums || [], renewals: due.renewals || [] };
-    },
-    render: (r) => {
-      const root = h('div', {});
-      if (r.policies.length) {
-        root.appendChild(_packTable(
-          ['Policy #', 'Product', 'Sum Assured', 'EMI/Premium', 'Status'],
-          r.policies.map(p => [
-            p.policy_no || '—', p.product_name || '—',
-            _packINR(p.sanctioned_amount || p.sum_assured),
-            _packINR(p.emi_amount || p.premium_amount) + (p.premium_frequency === 'monthly' ? '/mo' : '/yr'),
-            p.status
-          ])
-        ));
-      } else {
-        root.appendChild(h('div', { class: 'muted', style: { padding: '4px 0' } }, 'No policies yet.'));
-      }
-      if (r.renewals.length) {
-        root.appendChild(h('div', { style: { fontWeight: 600, fontSize: '12px', marginTop: '8px', marginBottom: '4px', color: '#f59e0b' } }, '⚠ Renewals due:'));
-        root.appendChild(_packTable(['Policy', 'Due Date', 'Premium'],
-          r.renewals.map(rn => [rn.policy_no, rn.renewal_due_at ? String(rn.renewal_due_at).slice(0,10) : '—', _packINR(rn.premium_amount)])));
-      }
-      return root;
+      d = { policies: pol.policies || [], submissions: lend.submissions || [], commissions: comm.commissions || [], docs: docs.docs || [], renewals: due.renewals || [] };
+    } catch (e) {
+      if (/not active|not configured|unknown function/i.test(String(e.message || ''))) { wrap.style.display = 'none'; return; }
+      inner.innerHTML = ''; inner.appendChild(h('div', { class: 'muted' }, 'Could not load: ' + (e.message || e))); return;
     }
-  });
+    inner.innerHTML = ''; inner.appendChild(renderAll(d));
+  }
+
+  function renderAll(d) {
+    const root = h('div', {});
+
+    // ---- Policies ----
+    if (d.policies.length) {
+      root.appendChild(_packTable(['Policy #', 'Product', 'Sanctioned', 'EMI/Premium', 'Status'],
+        d.policies.map(p => [p.policy_no || '—', p.product_name || '—', _packINR(p.sanctioned_amount || p.sum_assured),
+          _packINR(p.emi_amount || p.premium_amount) + (p.premium_frequency === 'monthly' ? '/mo' : '/yr'), p.status])));
+    }
+
+    // ---- Multi-lender submissions ----
+    root.appendChild(_sec('🏦 Lender submissions'));
+    if (d.submissions.length) {
+      const tbl = h('table', { class: 'pack-table', style: { width: '100%', fontSize: '12px', borderCollapse: 'collapse' } });
+      tbl.appendChild(h('thead', {}, h('tr', {}, ...['Lender', 'Amount', 'ROI', 'Ref', 'Status', ''].map(x => h('th', { style: { textAlign: 'left', padding: '3px 6px', color: '#64748b' } }, x)))));
+      const tb = h('tbody', {});
+      d.submissions.forEach(sub => {
+        const sel = h('select', { style: { fontSize: '11px', padding: '1px 3px' }, onchange: async () => {
+          try { await api('api_fin_lender_update', { id: sub.id, status: sel.value }); toast('Updated', 'ok'); reload(); } catch (e) { toast(e.message, 'err'); }
+        } }, ...LENDER_STATUSES.map(st => h('option', { value: st, selected: sub.status === st ? 'selected' : null }, st)));
+        const del = h('button', { class: 'btn icon', style: { fontSize: '11px' }, title: 'Remove', onclick: async () => { try { await api('api_fin_lender_delete', { id: sub.id }); reload(); } catch (e) { toast(e.message, 'err'); } } }, '✕');
+        tb.appendChild(h('tr', {},
+          h('td', { style: { padding: '3px 6px', fontWeight: 600 } }, sub.lender_name),
+          h('td', { style: { padding: '3px 6px' } }, _packINR(sub.loan_amount)),
+          h('td', { style: { padding: '3px 6px' } }, (Number(sub.roi) || 0) + '%'),
+          h('td', { style: { padding: '3px 6px' } }, sub.ref_no || '—'),
+          h('td', { style: { padding: '3px 6px' } }, sel),
+          h('td', { style: { padding: '3px 6px', textAlign: 'right' } }, del)));
+      });
+      tbl.appendChild(tb); root.appendChild(tbl);
+    } else { root.appendChild(h('div', { class: 'muted', style: { fontSize: '12px' } }, 'No lender submissions yet.')); }
+    // add-lender inline form
+    const lName = h('input', { placeholder: 'Lender / bank', style: { fontSize: '11px', padding: '2px 5px', width: '120px' } });
+    const lAmt = h('input', { type: 'number', placeholder: 'Amount', style: { fontSize: '11px', padding: '2px 5px', width: '90px' } });
+    const lRoi = h('input', { type: 'number', step: '0.01', placeholder: 'ROI%', style: { fontSize: '11px', padding: '2px 5px', width: '60px' } });
+    const lRef = h('input', { placeholder: 'Ref no', style: { fontSize: '11px', padding: '2px 5px', width: '80px' } });
+    root.appendChild(h('div', { style: { display: 'flex', gap: '4px', marginTop: '4px', flexWrap: 'wrap', alignItems: 'center' } },
+      lName, lAmt, lRoi, lRef,
+      h('button', { class: 'btn ghost', style: { fontSize: '11px', padding: '2px 8px' }, onclick: async () => {
+        if (!lName.value.trim()) { toast('Lender name required', 'err'); return; }
+        try { await api('api_fin_lender_add', { lead_id: leadId, lender_name: lName.value.trim(), loan_amount: Number(lAmt.value) || 0, roi: Number(lRoi.value) || 0, ref_no: lRef.value.trim() }); toast('Lender added', 'ok'); reload(); } catch (e) { toast(e.message, 'err'); }
+      } }, '➕ Submit to lender')));
+
+    // ---- Commission / payout ----
+    root.appendChild(_sec('💰 Commission / payout'));
+    if (d.commissions.length) {
+      const tbl = h('table', { style: { width: '100%', fontSize: '12px', borderCollapse: 'collapse' } });
+      tbl.appendChild(h('thead', {}, h('tr', {}, ...['Lender', 'Disbursed', '%', 'Commission', 'Payout', ''].map(x => h('th', { style: { textAlign: 'left', padding: '3px 6px', color: '#64748b' } }, x)))));
+      const tb = h('tbody', {});
+      d.commissions.forEach(c => {
+        const payBtn = c.payout_status === 'received'
+          ? _chip('received ' + (c.received_at ? String(c.received_at).slice(0, 10) : ''), '#10b981')
+          : h('button', { class: 'btn ghost', style: { fontSize: '11px', padding: '1px 6px' }, onclick: async () => { try { await api('api_fin_commission_update', { id: c.id, payout_status: 'received' }); toast('Marked received', 'ok'); reload(); } catch (e) { toast(e.message, 'err'); } } }, 'Mark received');
+        const del = h('button', { class: 'btn icon', style: { fontSize: '11px' }, onclick: async () => { try { await api('api_fin_commission_delete', { id: c.id }); reload(); } catch (e) { toast(e.message, 'err'); } } }, '✕');
+        tb.appendChild(h('tr', {},
+          h('td', { style: { padding: '3px 6px' } }, c.lender_name || '—'),
+          h('td', { style: { padding: '3px 6px' } }, _packINR(c.disbursed_amount)),
+          h('td', { style: { padding: '3px 6px' } }, (Number(c.commission_pct) || 0) + '%'),
+          h('td', { style: { padding: '3px 6px', fontWeight: 600 } }, _packINR(c.commission_amount)),
+          h('td', { style: { padding: '3px 6px' } }, payBtn),
+          h('td', { style: { padding: '3px 6px', textAlign: 'right' } }, del)));
+      });
+      tbl.appendChild(tb); root.appendChild(tbl);
+    } else { root.appendChild(h('div', { class: 'muted', style: { fontSize: '12px' } }, 'No commission entries yet.')); }
+    const cLend = h('input', { placeholder: 'Lender', style: { fontSize: '11px', padding: '2px 5px', width: '110px' } });
+    const cDisb = h('input', { type: 'number', placeholder: 'Disbursed', style: { fontSize: '11px', padding: '2px 5px', width: '90px' } });
+    const cPct = h('input', { type: 'number', step: '0.01', placeholder: '%', style: { fontSize: '11px', padding: '2px 5px', width: '55px' } });
+    root.appendChild(h('div', { style: { display: 'flex', gap: '4px', marginTop: '4px', flexWrap: 'wrap', alignItems: 'center' } },
+      cLend, cDisb, cPct,
+      h('button', { class: 'btn ghost', style: { fontSize: '11px', padding: '2px 8px' }, onclick: async () => {
+        try { const r = await api('api_fin_commission_add', { lead_id: leadId, lender_name: cLend.value.trim(), disbursed_amount: Number(cDisb.value) || 0, commission_pct: Number(cPct.value) || 0 }); toast('Commission ' + _packINR(r.commission_amount) + ' added', 'ok'); reload(); } catch (e) { toast(e.message, 'err'); }
+      } }, '➕ Add commission')));
+
+    // ---- Document checklist ----
+    root.appendChild(_sec('📁 Document checklist'));
+    const dl = h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '6px' } });
+    d.docs.forEach(doc => {
+      const chip = h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '5px', padding: '3px 8px', borderRadius: '14px', fontSize: '11.5px', cursor: 'pointer', background: '#fff', border: '1px solid ' + DOC_COLOR[doc.status] },
+        title: 'Click to cycle status', onclick: async () => { try { await api('api_fin_doc_setStatus', { id: doc.id, status: DOC_NEXT[doc.status] || 'pending' }); reload(); } catch (e) { toast(e.message, 'err'); } } },
+        h('span', { style: { width: '8px', height: '8px', borderRadius: '50%', background: DOC_COLOR[doc.status] } }),
+        h('span', {}, doc.doc_name),
+        h('span', { style: { color: DOC_COLOR[doc.status], fontWeight: 600 } }, doc.status));
+      dl.appendChild(chip);
+    });
+    root.appendChild(dl);
+    const dName = h('input', { placeholder: 'Add document…', style: { fontSize: '11px', padding: '2px 5px', width: '150px' } });
+    root.appendChild(h('div', { style: { display: 'flex', gap: '4px', marginTop: '6px' } },
+      dName,
+      h('button', { class: 'btn ghost', style: { fontSize: '11px', padding: '2px 8px' }, onclick: async () => { if (!dName.value.trim()) return; try { await api('api_fin_doc_add', { lead_id: leadId, doc_name: dName.value.trim() }); reload(); } catch (e) { toast(e.message, 'err'); } } }, '➕ Add doc')));
+
+    // ---- Renewals (insurance) ----
+    if (d.renewals.length) {
+      root.appendChild(_sec('🔄 Renewals due', '#f59e0b'));
+      d.renewals.forEach(rn => {
+        if (Number(rn.lead_id) !== Number(leadId)) return;
+        root.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', marginBottom: '3px' } },
+          h('span', {}, (rn.policy_no || 'Policy') + ' · due ' + (rn.maturity_date ? String(rn.maturity_date).slice(0, 10) : '—') + ' · ' + _packINR(rn.premium_amount)),
+          h('button', { class: 'btn ghost', style: { fontSize: '11px', padding: '1px 8px' }, onclick: async () => { try { const r = await api('api_fin_renewal_markRenewed', { id: rn.id }); toast(r.renewed_id ? 'Renewed → new policy created' : 'Marked renewed', 'ok'); reload(); } catch (e) { toast(e.message, 'err'); } } }, '🔄 Renew')));
+      });
+    }
+
+    return root;
+  }
+
+  reload();
+  return wrap;
 }
 
 // ---- MANUFACTURER lead panel ----
@@ -42981,7 +43085,10 @@ VIEWS.packfinance = async (view) => {
     _packKpiTile('Due in 30 days', _money(s.premium_due_30d?.amount), (s.premium_due_30d?.count || 0) + ' premiums'),
     _packKpiTile('Overdue', _money(s.overdue?.amount), (s.overdue?.count || 0) + ' premiums'),
     _packKpiTile('Open Claims', String(s.claims_open || 0), 'awaiting settlement'),
-    _packKpiTile('Renewals in 60d', String(s.renewals_60d || 0), 'expiring soon')
+    _packKpiTile('Renewals in 60d', String(s.renewals_60d || 0), 'expiring soon'),
+    _packKpiTile('Commission pending', _money(s.commission_pending?.amount), (s.commission_pending?.count || 0) + ' payouts'),
+    _packKpiTile('Commission received', _money(s.commission_received?.amount), 'paid out'),
+    _packKpiTile('Lender files active', String(s.lender_active || 0), 'in submission')
   ));
   view.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem' } },
     'Full CRUD pages for Products / Policies / Premiums / Claims / Renewals are coming next. The backend APIs are already live (see lead-modal panels).'));

@@ -627,3 +627,12 @@ SELECT 'feature',
        '🧾',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Create items while making an invoice');
+
+-- 2026-06-24 FIN_PACK_v2
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'Finance pack: loan DSA tools + insurance renewals',
+       'The Finance pack now has loan-DSA tooling on every lead (Finance — Loan File panel): a multi-lender submission tracker (submit one file to several banks and track each one as submitted/login/approved/rejected/disbursed with ROI & ref no), a commission/payout tracker (commission % auto-calculated, mark payout received), and a loan document checklist (KYC/income/property docs with pending/received/verified). Insurance renewals now support one-click "Renew" which marks the policy renewed and auto-creates the next-period policy with a fresh premium schedule. New rollups on the Finance Overview show commission pending/received and active lender files.',
+       '🏦',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Finance pack: loan DSA tools + insurance renewals');

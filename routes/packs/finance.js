@@ -47,6 +47,30 @@ async function _ensureSchema() {
     docs_status TEXT NOT NULL DEFAULT 'pending', notes TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
   await db.query(`CREATE INDEX IF NOT EXISTS fin_claims_lead_idx ON fin_claims(lead_id)`);
+  // FIN_PACK_v2 — loan-DSA: multi-lender submission, commission/payout, doc checklist
+  await db.query(`CREATE TABLE IF NOT EXISTS fin_lender_submissions (
+    id SERIAL PRIMARY KEY, lead_id INTEGER NOT NULL, policy_id INTEGER,
+    lender_name TEXT NOT NULL DEFAULT '', loan_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+    roi NUMERIC(5,2) NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'submitted',  -- submitted | login | approved | rejected | disbursed
+    ref_no TEXT NOT NULL DEFAULT '', remarks TEXT NOT NULL DEFAULT '',
+    submitted_at DATE NOT NULL DEFAULT CURRENT_DATE, decided_at DATE,
+    created_by INTEGER, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+  await db.query(`CREATE INDEX IF NOT EXISTS fin_lender_lead_idx ON fin_lender_submissions(lead_id)`);
+  await db.query(`CREATE TABLE IF NOT EXISTS fin_commissions (
+    id SERIAL PRIMARY KEY, lead_id INTEGER NOT NULL, policy_id INTEGER,
+    lender_name TEXT NOT NULL DEFAULT '', disbursed_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+    commission_pct NUMERIC(5,2) NOT NULL DEFAULT 0, commission_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+    payout_status TEXT NOT NULL DEFAULT 'pending',  -- pending | received
+    received_at DATE, notes TEXT NOT NULL DEFAULT '',
+    created_by INTEGER, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+  await db.query(`CREATE INDEX IF NOT EXISTS fin_commissions_lead_idx ON fin_commissions(lead_id)`);
+  await db.query(`CREATE TABLE IF NOT EXISTS fin_doc_checklist (
+    id SERIAL PRIMARY KEY, lead_id INTEGER NOT NULL, doc_name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',  -- pending | received | verified
+    notes TEXT NOT NULL DEFAULT '', sort_order INTEGER NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+  await db.query(`CREATE INDEX IF NOT EXISTS fin_doc_lead_idx ON fin_doc_checklist(lead_id)`);
 }
 
 async function install(opts) {
@@ -175,10 +199,118 @@ async function api_fin_renewal_due(token, payload) {
   return { renewals: r.rows };
 }
 async function api_fin_renewal_markRenewed(token, payload) {
-  await authUser(token);
-  await db.query(`UPDATE fin_policies SET status='renewed' WHERE id=$1`, [(payload&&payload.id)||0]);
+  const me = await authUser(token); await _ensureSchema();
+  const p = payload || {}; const id = Number(p.id) || 0;
+  if (!id) throw new Error('policy id required');
+  const old = (await db.query(`SELECT * FROM fin_policies WHERE id=$1`, [id])).rows[0];
+  if (!old) throw new Error('Policy not found');
+  await db.query(`UPDATE fin_policies SET status='renewed' WHERE id=$1`, [id]);
+  // FIN_PACK_v2 — one-click renewal: clone into a fresh policy for the next
+  // period (start = old maturity, maturity = +tenure or +1yr) + new premium
+  // schedule, unless the caller opts out.
+  if (p.create_next === false) return { ok: true, renewed_id: null };
+  const tenure = Number(old.tenure_months) || 12;
+  const start = old.maturity_date ? new Date(old.maturity_date) : new Date();
+  const mat = new Date(start); mat.setMonth(mat.getMonth() + tenure);
+  const np = {
+    lead_id: old.lead_id, product_id: old.product_id, policy_no: p.new_policy_no || '',
+    sum_assured: old.sum_assured, sanctioned_amount: old.sanctioned_amount, disbursed_amount: old.disbursed_amount,
+    tenure_months: tenure, interest_rate: old.interest_rate, emi_amount: old.emi_amount,
+    premium_amount: p.new_premium_amount != null ? Number(p.new_premium_amount) : old.premium_amount,
+    premium_frequency: old.premium_frequency, start_date: start.toISOString().slice(0,10),
+    maturity_date: mat.toISOString().slice(0,10), status: 'sanctioned', pan: old.pan, cibil: old.cibil,
+    notes: 'Renewal of policy #' + id
+  };
+  const r = await db.query(`INSERT INTO fin_policies (lead_id,product_id,policy_no,sum_assured,sanctioned_amount,disbursed_amount,tenure_months,interest_rate,emi_amount,premium_amount,premium_frequency,start_date,maturity_date,status,pan,cibil,notes,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id`,
+    [np.lead_id,np.product_id,np.policy_no,np.sum_assured,np.sanctioned_amount,np.disbursed_amount,np.tenure_months,np.interest_rate,np.emi_amount,np.premium_amount,np.premium_frequency,np.start_date,np.maturity_date,np.status,np.pan,np.cibil,np.notes,me.id]);
+  await _genPremiumSchedule(r.rows[0].id, np);
+  return { ok: true, renewed_id: r.rows[0].id };
+}
+
+// ── FIN_PACK_v2: Multi-lender submission tracker ─────────────────────
+async function api_fin_lender_add(token, payload) {
+  const me = await authUser(token); await _ensureSchema();
+  const p = payload || {}; if (!p.lead_id) throw new Error('lead_id required');
+  if (!p.lender_name) throw new Error('lender_name required');
+  const r = await db.query(`INSERT INTO fin_lender_submissions (lead_id,policy_id,lender_name,loan_amount,roi,status,ref_no,remarks,submitted_at,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($9,CURRENT_DATE),$10) RETURNING id`,
+    [p.lead_id,p.policy_id||null,p.lender_name,p.loan_amount||0,p.roi||0,p.status||'submitted',p.ref_no||'',p.remarks||'',p.submitted_at||null,me.id]);
+  return { ok: true, id: r.rows[0].id };
+}
+async function api_fin_lender_byLead(token, payload) {
+  await authUser(token); await _ensureSchema();
+  const r = await db.query(`SELECT * FROM fin_lender_submissions WHERE lead_id=$1 ORDER BY submitted_at DESC, id DESC`, [(payload&&payload.lead_id)||0]);
+  return { submissions: r.rows };
+}
+async function api_fin_lender_update(token, payload) {
+  await authUser(token); const p = payload || {}; if (!p.id) throw new Error('submission id required');
+  const decided = ['approved','rejected','disbursed'].includes(String(p.status||'')) ;
+  await db.query(`UPDATE fin_lender_submissions SET lender_name=COALESCE($1,lender_name), loan_amount=COALESCE($2,loan_amount), roi=COALESCE($3,roi), status=COALESCE($4,status), ref_no=COALESCE($5,ref_no), remarks=COALESCE($6,remarks), decided_at=CASE WHEN $7 AND decided_at IS NULL THEN CURRENT_DATE ELSE decided_at END WHERE id=$8`,
+    [p.lender_name!=null?p.lender_name:null, p.loan_amount!=null?p.loan_amount:null, p.roi!=null?p.roi:null, p.status||null, p.ref_no!=null?p.ref_no:null, p.remarks!=null?p.remarks:null, decided, p.id]);
   return { ok: true };
 }
+async function api_fin_lender_delete(token, payload) {
+  await authUser(token); await db.query(`DELETE FROM fin_lender_submissions WHERE id=$1`, [(payload&&payload.id)||0]);
+  return { ok: true };
+}
+
+// ── FIN_PACK_v2: Commission / payout tracker ─────────────────────────
+async function api_fin_commission_add(token, payload) {
+  const me = await authUser(token); await _ensureSchema();
+  const p = payload || {}; if (!p.lead_id) throw new Error('lead_id required');
+  const disb = Number(p.disbursed_amount||0); const pct = Number(p.commission_pct||0);
+  const amt = (p.commission_amount != null && p.commission_amount !== '') ? Number(p.commission_amount) : Math.round(disb*pct)/100;
+  const r = await db.query(`INSERT INTO fin_commissions (lead_id,policy_id,lender_name,disbursed_amount,commission_pct,commission_amount,payout_status,received_at,notes,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+    [p.lead_id,p.policy_id||null,p.lender_name||'',disb,pct,amt,p.payout_status||'pending',p.received_at||null,p.notes||'',me.id]);
+  return { ok: true, id: r.rows[0].id, commission_amount: amt };
+}
+async function api_fin_commission_byLead(token, payload) {
+  await authUser(token); await _ensureSchema();
+  const r = await db.query(`SELECT * FROM fin_commissions WHERE lead_id=$1 ORDER BY created_at DESC`, [(payload&&payload.lead_id)||0]);
+  return { commissions: r.rows };
+}
+async function api_fin_commission_update(token, payload) {
+  await authUser(token); const p = payload || {}; if (!p.id) throw new Error('commission id required');
+  const recv = String(p.payout_status||'')==='received';
+  await db.query(`UPDATE fin_commissions SET disbursed_amount=COALESCE($1,disbursed_amount), commission_pct=COALESCE($2,commission_pct), commission_amount=COALESCE($3,commission_amount), payout_status=COALESCE($4,payout_status), received_at=CASE WHEN $5 AND received_at IS NULL THEN CURRENT_DATE ELSE received_at END, notes=COALESCE($6,notes) WHERE id=$7`,
+    [p.disbursed_amount!=null?p.disbursed_amount:null, p.commission_pct!=null?p.commission_pct:null, p.commission_amount!=null?p.commission_amount:null, p.payout_status||null, recv, p.notes!=null?p.notes:null, p.id]);
+  return { ok: true };
+}
+async function api_fin_commission_delete(token, payload) {
+  await authUser(token); await db.query(`DELETE FROM fin_commissions WHERE id=$1`, [(payload&&payload.id)||0]);
+  return { ok: true };
+}
+
+// ── FIN_PACK_v2: Loan document checklist ─────────────────────────────
+const DEFAULT_LOAN_DOCS = ['PAN Card','Aadhaar Card','Passport-size Photograph','Bank Statement (6 months)','Salary Slips (3 months)','Form 16 / ITR','Address Proof','Property / Collateral Documents'];
+async function api_fin_doc_byLead(token, payload) {
+  await authUser(token); await _ensureSchema();
+  const leadId = (payload&&payload.lead_id)||0; if (!leadId) throw new Error('lead_id required');
+  let r = await db.query(`SELECT * FROM fin_doc_checklist WHERE lead_id=$1 ORDER BY sort_order, id`, [leadId]);
+  if (!r.rows.length) {
+    for (let i=0;i<DEFAULT_LOAN_DOCS.length;i++) {
+      await db.query(`INSERT INTO fin_doc_checklist (lead_id,doc_name,sort_order) VALUES ($1,$2,$3)`, [leadId, DEFAULT_LOAN_DOCS[i], i]);
+    }
+    r = await db.query(`SELECT * FROM fin_doc_checklist WHERE lead_id=$1 ORDER BY sort_order, id`, [leadId]);
+  }
+  return { docs: r.rows };
+}
+async function api_fin_doc_setStatus(token, payload) {
+  await authUser(token); const p = payload || {}; if (!p.id) throw new Error('doc id required');
+  await db.query(`UPDATE fin_doc_checklist SET status=COALESCE($1,status), notes=COALESCE($2,notes), updated_at=NOW() WHERE id=$3`,
+    [p.status||null, p.notes!=null?p.notes:null, p.id]);
+  return { ok: true };
+}
+async function api_fin_doc_add(token, payload) {
+  await authUser(token); await _ensureSchema();
+  const p = payload || {}; if (!p.lead_id||!p.doc_name) throw new Error('lead_id and doc_name required');
+  const r = await db.query(`INSERT INTO fin_doc_checklist (lead_id,doc_name,sort_order) VALUES ($1,$2,COALESCE((SELECT MAX(sort_order)+1 FROM fin_doc_checklist WHERE lead_id=$1),0)) RETURNING id`, [p.lead_id,p.doc_name]);
+  return { ok: true, id: r.rows[0].id };
+}
+async function api_fin_doc_delete(token, payload) {
+  await authUser(token); await db.query(`DELETE FROM fin_doc_checklist WHERE id=$1`, [(payload&&payload.id)||0]);
+  return { ok: true };
+}
+
 async function api_fin_summary(token) {
   await authUser(token); await _ensureSchema();
   const sanctioned = await db.query(`SELECT COALESCE(SUM(sanctioned_amount),0) AS amt, COUNT(*)::int AS cnt FROM fin_policies WHERE status IN ('sanctioned','disbursed','renewed')`);
@@ -187,7 +319,14 @@ async function api_fin_summary(token) {
   const overdue    = await db.query(`SELECT COUNT(*)::int AS cnt, COALESCE(SUM(amount),0) AS amt FROM fin_premiums WHERE status='pending' AND due_date < CURRENT_DATE`);
   const claimsOpen = await db.query(`SELECT COUNT(*)::int AS cnt FROM fin_claims WHERE status NOT IN ('settled','rejected','cancelled')`);
   const renewals30 = await db.query(`SELECT COUNT(*)::int AS cnt FROM fin_policies WHERE maturity_date IS NOT NULL AND status NOT IN ('cancelled','lapsed','renewed') AND maturity_date <= CURRENT_DATE + INTERVAL '60 days'`);
+  // FIN_PACK_v2 — commission + lender pipeline rollups
+  const commPending  = await db.query(`SELECT COUNT(*)::int AS cnt, COALESCE(SUM(commission_amount),0) AS amt FROM fin_commissions WHERE payout_status='pending'`);
+  const commReceived = await db.query(`SELECT COALESCE(SUM(commission_amount),0) AS amt FROM fin_commissions WHERE payout_status='received'`);
+  const lenderActive = await db.query(`SELECT COUNT(*)::int AS cnt FROM fin_lender_submissions WHERE status IN ('submitted','login','approved')`);
   return {
+    commission_pending: { count: commPending.rows[0].cnt, amount: Number(commPending.rows[0].amt) },
+    commission_received: { amount: Number(commReceived.rows[0].amt) },
+    lender_active: lenderActive.rows[0].cnt,
     sanctioned: { count: sanctioned.rows[0].cnt, amount: Number(sanctioned.rows[0].amt) },
     disbursed: { amount: Number(disbursed.rows[0].amt) },
     premium_due_30d: { count: dueSoon.rows[0].cnt, amount: Number(dueSoon.rows[0].amt) },
@@ -201,7 +340,7 @@ framework.register({
   id: PACK_ID, name: 'Finance', industry: 'finance',
   summary: 'Insurance / loan / investment workflow — products, policies, premium schedules, claims, renewals.',
   version: '1.0.0',
-  features: ['Product catalog (insurance / loan / SIP)','Per-lead policy issuance + auto premium schedule','Premium due tracker (15 / 7 / 1 days)','Claim tracker with docs status','Renewal due tracker','8 Finance statuses + 7 custom fields seeded'],
+  features: ['Product catalog (insurance / loan / SIP)','Per-lead policy issuance + auto premium schedule','Premium due tracker (15 / 7 / 1 days)','Claim tracker with docs status','Renewal due tracker + one-click renew','Multi-lender submission tracker','Commission / payout tracker','Loan document checklist','8 Finance statuses + 7 custom fields seeded'],
   nav_items: [
     { id: 'finpolicies', label: '📋 Policies', icon: '📋' },
     { id: 'finpremiums', label: '💸 Premium Due', icon: '💸' },
@@ -218,5 +357,8 @@ module.exports = {
   api_fin_premium_markPaid, api_fin_premium_upcomingDue,
   api_fin_claim_create, api_fin_claim_byLead, api_fin_claim_update,
   api_fin_renewal_due, api_fin_renewal_markRenewed,
+  api_fin_lender_add, api_fin_lender_byLead, api_fin_lender_update, api_fin_lender_delete,
+  api_fin_commission_add, api_fin_commission_byLead, api_fin_commission_update, api_fin_commission_delete,
+  api_fin_doc_byLead, api_fin_doc_setStatus, api_fin_doc_add, api_fin_doc_delete,
   api_fin_summary
 };
