@@ -882,6 +882,9 @@ async function api_saas_tenants_setUserPlan(token, payload) {
     `UPDATE tenants SET user_cap = $1, user_extra_charge_inr = $2, user_extra_charge_period = $3, updated_at = NOW() WHERE id = $4`,
     [cap, extraInr, period, t.id]
   );
+  // USER_QUOTA_HARDEN_v1 — bust the 30s tenant-row cache so the new cap is
+  // enforced on the very next user-create instead of up to 30s later.
+  try { require('../../utils/tenantPool').invalidateSlug(t.slug); } catch (_) {}
 
   await control.insert('audit_log', {
     actor_type: 'super_admin', actor_id: me.id, actor_email: me.email,

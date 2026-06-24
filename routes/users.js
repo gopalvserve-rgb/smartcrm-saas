@@ -55,9 +55,24 @@ async function api_users_create(token, payload) {
   // No-op for the control-plane / single-tenant fallback.
   try {
     const store = (db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore());
-    if (store && store.tenant) {
-      const { requireQuota } = require('../utils/quota');
-      await requireQuota(store.tenant, 'users');
+    if (store && (store.slug || store.tenant)) {
+      // USER_QUOTA_HARDEN_v1 — read the LIVE tenant row from the control DB
+      // for the cap check. The store.tenant is a 30s-cached row, so a cap the
+      // super-admin just set would otherwise look unenforced until the cache
+      // expired. Falls back to the cached row if control DB is unreachable.
+      let tenantForQuota = store.tenant || null;
+      try {
+        const control = require('../control/db');
+        const slug = store.slug || (store.tenant && store.tenant.slug);
+        if (slug) {
+          const fresh = await control.findOneBy('tenants', 'slug', slug);
+          if (fresh) tenantForQuota = fresh;
+        }
+      } catch (_) { /* keep cached row */ }
+      if (tenantForQuota) {
+        const { requireQuota } = require('../utils/quota');
+        await requireQuota(tenantForQuota, 'users');
+      }
     }
   } catch (e) {
     if (e && e.quotaExceeded) throw e;
