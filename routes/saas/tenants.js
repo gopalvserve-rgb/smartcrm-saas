@@ -1174,7 +1174,36 @@ async function api_saas_dashboard_outstanding(token) {
   };
 }
 
+async function api_saas_tenants_update(token, payload) {
+  // TENANT_EDIT_v1 — super-admin edit of tenant comments + contact fields.
+  const me = await requireSuperAdmin(token);
+  const p = payload || {};
+  const id = Number(p.id);
+  if (!id) throw new Error('tenant id required');
+  const tr = await control.query('SELECT id, slug FROM tenants WHERE id = $1', [id]);
+  const t = tr.rows[0];
+  if (!t) throw new Error('Tenant not found');
+  const ALLOW = ['admin_remarks', 'contact_name', 'contact_email', 'contact_mobile', 'org_name'];
+  const sets = []; const vals = []; let i = 1;
+  for (const k of ALLOW) {
+    if (p[k] !== undefined) { sets.push(`${k} = $${i++}`); vals.push((p[k] === '' || p[k] == null) ? null : String(p[k]).trim()); }
+  }
+  if (!sets.length) return { ok: true, nochange: true };
+  vals.push(id);
+  await control.query(`UPDATE tenants SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $${i}`, vals);
+  try { require('../../utils/tenantPool').invalidateSlug(t.slug); } catch (_) {}
+  try {
+    await control.insert('audit_log', {
+      actor_type: 'super_admin', actor_id: me.id, actor_email: me.email,
+      tenant_id: id, event: 'tenant.updated',
+      detail: JSON.stringify({ slug: t.slug, fields: sets.map(x => x.split(' = ')[0]) })
+    });
+  } catch (_) {}
+  return { ok: true };
+}
+
 module.exports = {
+  api_saas_tenants_update,
   api_saas_tenants_list,
   api_saas_tenants_get,
   api_saas_tenants_createManual,

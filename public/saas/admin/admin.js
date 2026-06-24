@@ -316,7 +316,7 @@ VIEWS.packages = async (view) => {
     }}, '\ud83d\udd04 Backfill FB Registry')
   );
   view.appendChild(fbBackfillBar);
-    view.appendChild(h('div', { class: 'card', style: { padding: 0 } }, tbl));
+    view.appendChild(tbl);
 };
 
 function editPackage(p) {
@@ -528,145 +528,9 @@ VIEWS.tenants = async (view) => {
     view.appendChild(h('div', { class: 'empty' }, 'No tenants yet. Click "+ Create tenant" to add one manually, or wait for a paid signup to come through Cashfree.'));
     return;
   }
-  const tbl = h('table', {},
-    h('thead', {}, h('tr', {},
-      h('th', {}, 'Org'), h('th', {}, 'Slug'), h('th', {}, 'Email'),
-      h('th', {}, 'Plan'),
-      h('th', { title: 'Allocated users (cap) — created users in tenant DB' }, 'Users'),
-      h('th', {}, 'Status'), h('th', {}, 'Balance'),
-      h('th', {}, 'Period ends'), h('th', {}, ''  )
-    )),
-    h('tbody', {}, ...list.map(t => h('tr', {},
-      h('td', {},
-        h('b', {}, t.org_name),
-        // DB_VOLUME_v1 — show per-tenant disk usage under the name
-        (function() {
-          const s = _sizeMap.get(t.slug);
-          if (!s) return null;
-          const p = s.percent_of_volume;
-          const c = p >= 10 ? '#dc2626' : p >= 5 ? '#f59e0b' : '#16a34a';
-          return h('div', {
-            style: { fontSize: '.72rem', color: c, marginTop: '2px', fontWeight: '600' },
-            title: 'Database ' + s.db_name + ' uses ' + s.pretty + ' (' + p + '% of volume, ' + s.percent_of_used + '% of used)'
-          }, '💾 ' + s.pretty + ' · ' + p + '%');
-        })(),
-        // TENANT_REMARKS_VISIBLE_v1 (2026-06-20) — show admin remarks
-        // under the org name. Full text on hover; first ~80 chars
-        // visible inline so admin can skim the listing.
-        (function () {
-          const r = String(t.admin_remarks || '').trim();
-          if (!r) return null;
-          const short = r.length > 80 ? r.slice(0, 80) + '…' : r;
-          return h('div', {
-            style: { fontSize: '.72rem', color: '#475569', marginTop: '3px',
-                     fontStyle: 'italic', maxWidth: '380px',
-                     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-            title: r
-          }, '📝 ' + short);
-        })()
-      ),
-      h('td', {}, h('a', { href: '/t/' + t.slug, target: '_blank' }, '/t/' + t.slug)),
-      h('td', { class: 'muted' }, t.contact_email),
-      h('td', {}, t.package_name || '—'),
-      // SAAS_ADMIN_USERCOLS_v1 — Allocated / Created with overage badge
-      (function () {
-        const cap = t.user_cap_effective;
-        const cur = t.user_count_active;
-        if (cap == null && cur == null) {
-          return h('td', { class: 'muted', style: { fontSize: '.82em' } }, '—');
-        }
-        const capStr = (cap == null) ? '∞' : (cap === -1 ? '∞' : String(cap));
-        const curStr = (cur == null) ? '?' : String(cur);
-        const over   = (cap != null && cap !== -1 && cur != null && cur > cap);
-        const at_cap = (cap != null && cap !== -1 && cur != null && cur === cap);
-        const colour = over ? '#dc2626' : at_cap ? '#b45309' : '#475569';
-        const titleBits = ['Allocated (cap): ' + capStr];
-        titleBits.push('Created (active): ' + curStr);
-        if (cap != null && cap !== -1 && cur != null) titleBits.push(over ? ('Over by ' + (cur - cap)) : ('Remaining: ' + (cap - cur)));
-        if (t.user_cap_source === 'override') titleBits.push('Source: per-tenant override (tenants.user_cap)');
-        else if (t.user_cap_source === 'package') titleBits.push('Source: package quota');
-        return h('td', {
-          title: titleBits.join('\n'),
-          style: { fontWeight: 600, color: colour, whiteSpace: 'nowrap', fontSize: '.85em' }
-        },
-          curStr + ' / ' + capStr,
-          over ? h('span', {
-            style: { marginLeft: '6px', background: '#fee2e2', color: '#991b1b', padding: '1px 6px', borderRadius: '8px', fontSize: '.7em', fontWeight: 700 }
-          }, '+' + (cur - cap) + ' OVER') : null
-        );
-      })(),
-      h('td', {}, h('span', { class: 'tag ' + (t.status === 'active' ? 'ok' : t.status === 'pending_delete' ? 'err' : 'warn') }, t.status)),
-      // TENANT_PARTIAL_PAY_v1 — Pending balance column (amber when > 0)
-      (function () {
-        const bal = Number(t.pending_balance_inr) || 0;
-        if (bal <= 0) return h('td', { class: 'muted', style: { fontSize: '.82em' } }, '—');
-        return h('td', { style: { fontWeight: 600, color: '#b45309' },
-          title: 'Total ₹' + Number(t.total_amount_inr || 0).toLocaleString('en-IN') +
-                 ' · Paid ₹' + Number(t.amount_paid_inr || 0).toLocaleString('en-IN') },
-          '₹' + bal.toLocaleString('en-IN'));
-      })(),
-      h('td', { class: 'muted' }, fmtDate(t.current_period_end)),
-      h('td', { style: { textAlign: 'right', whiteSpace: 'nowrap' } },
-        // Open the tenant workspace in a new window with a short-lived
-        // sudo token. Disabled for non-active tenants — there's no
-        // working session to drop into. Audit-logged on every click.
-        (t.status === 'active' || t.status === 'trial' || t.status === 'pending_delete')
-          ? h('button', {
-              class: 'btn xs', style: { marginRight: '.3rem' },
-              title: 'Open this workspace in a new window, signed in as the tenant admin (5-min magic link, audit-logged)',
-              onclick: () => loginAsTenant(t)
-            }, '🔓 Login as ↗')
-          : null,
-        // Reset the tenant admin password — generates a fresh password,
-        // updates the user row in the tenant DB, and shows the plaintext
-        // ONCE so the super-admin can copy + share with the tenant.
-        (t.status === 'active' || t.status === 'trial' || t.status === 'pending_delete')
-          ? h('button', {
-              class: 'btn xs', style: { marginRight: '.3rem', background: '#fef3c7', borderColor: '#f59e0b', color: '#92400e' },
-              title: 'Reset the password for this tenant admin user. New password is shown ONCE.',
-              onclick: () => resetTenantAdminPassword(t)
-            }, '🔑 Reset password')
-          : null,
-        // Re-seed help articles: refreshes the system-seeded knowledge-base
-        // entries (those tagged `system-seed`). Tenant admins keep any
-        // articles they've authored themselves. Useful when we ship new
-        // default articles and want to roll them out to existing tenants.
-        (t.status === 'active' || t.status === 'trial' || t.status === 'pending_delete')
-          ? h('button', {
-              class: 'btn ghost xs', style: { marginRight: '.3rem' },
-              title: 'Re-seed default help articles in this tenant\'s Knowledge tab. Admin-authored articles are preserved.',
-              onclick: async () => {
-                if (!confirm('Re-seed default help articles for ' + (t.org_name || t.slug) + '?\n\nThis replaces the system-seeded articles only — anything the tenant\'s admin has added will be left alone.')) return;
-                try {
-                  const r = await api('api_saas_tenants_reseedKb', t.id);
-                  toast('Re-seeded ' + r.articles + ' articles for ' + (t.org_name || t.slug));
-                } catch (e) { toast('Re-seed failed: ' + e.message, 'err'); }
-              }
-            }, '📚 Re-seed help')
-          : null,
-        h('button', { class: 'btn ghost xs', title: 'Toggle modules ON/OFF for this tenant',
-          onclick: () => openModulesModal(t)
-        }, '\ud83e\udde9 Modules'),
-        // PACK_RETROFIT_v1 — install / switch industry pack on existing tenant.
-        h('button', { class: 'btn ghost xs', title: 'Install or switch industry pack (Education / Real Estate / Generic)',
-          onclick: () => openInstallPackModal(t)
-        }, '\ud83c\udfd7\ufe0f Pack'),
-        // ADMIN_ADD_USER_v1 — manage users + per-user pricing for this tenant
-        h('button', { class: 'btn ghost xs', title: 'Add users + set per-user monthly cost',
-          onclick: () => openTenantUsersModal(t)
-        }, '\ud83d\udc64 Users'),
-        // ADMIN_AI_RECORDING_TOGGLE_v1 — flip AI Call Summary on/off for this tenant
-        h('button', {
-          class: 'btn ghost xs',
-          title: 'Toggle AI Call Summary (recording transcription) on/off',
-          onclick: () => openAiRecordingModal(t)
-        }, '\ud83c\udf99\ufe0f AI Rec'),
-        t.status === 'active'
-          ? h('button', { class: 'btn ghost xs', onclick: async () => { await api('api_saas_tenants_suspend', t.id); navigate('tenants'); } }, 'Suspend')
-          : h('button', { class: 'btn ghost xs', onclick: async () => { await api('api_saas_tenants_restore', t.id); navigate('tenants'); } }, 'Restore')
-      )
-    )))
-  );
+  // TENANT_CARDS_v1 — responsive card grid (no horizontal scroll)
+  const tbl = h('div', { style: { display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(330px, 1fr))', gap:'12px' } },
+    ...list.map(t => renderTenantCard(t, _sizeMap)));
   // FB_REGISTRY_BACKFILL_v1 — one-click sync all tenant FB pages into central registry
   const fbBackfillBar = h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', marginBottom: '.6rem', padding: '.5rem .7rem', background: '#fef3c7', borderRadius: '8px', border: '1px solid #fde68a' }},
     h('span', { style: { fontSize: '.85rem' }}, '\ud83d\udce1 FB Lead Ads central registry:'),
@@ -706,6 +570,94 @@ VIEWS.tenants = async (view) => {
  * inside the click handler) so popup blockers don't kick in, then
  * navigate it to the magic-link URL once the API call returns.
  */
+// TENANT_CARDS_v1 — card listing + details/edit modal (no horizontal scroll)
+function _tenantStatusBadge(status) {
+  const map = { active:'#16a34a', trial:'#0891b2', past_due:'#d97706', suspended:'#dc2626', pending_payment:'#9333ea', pending_delete:'#dc2626', deleted:'#6b7280' };
+  const c = map[status] || '#6b7280';
+  return h('span', { style:{ background:c, color:'#fff', fontSize:'.66rem', fontWeight:'700', padding:'2px 8px', borderRadius:'10px', textTransform:'uppercase', letterSpacing:'.03em', whiteSpace:'nowrap' } }, status || '—');
+}
+function renderTenantCard(t, sizeMap) {
+  const _row = (label, val, color) => h('div', { style:{ display:'flex', justifyContent:'space-between', gap:'8px', fontSize:'.8rem', padding:'2px 0' } },
+    h('span', { style:{ color:'#64748b' } }, label),
+    h('span', { style:{ fontWeight:'600', color: color||'#0f172a', textAlign:'right', wordBreak:'break-word' } }, val));
+  const capEff = (t.user_cap_effective == null || t.user_cap_effective === '') ? null : Number(t.user_cap_effective);
+  const usedRaw = (t.user_count_active == null) ? null : Number(t.user_count_active);
+  const used = usedRaw == null ? '—' : usedRaw;
+  const usersTxt = capEff == null ? (used + ' / ∞') : (used + ' / ' + capEff);
+  const usersOver = (capEff != null && usedRaw != null && usedRaw > capEff);
+  const usersAt = (capEff != null && usedRaw != null && usedRaw === capEff);
+  const bal = Number(t.pending_balance_inr) || 0;
+  const sz = sizeMap.get(t.slug);
+  const isLive = (t.status === 'active' || t.status === 'trial' || t.status === 'pending_delete');
+  const actions = h('div', { style:{ display:'flex', flexWrap:'wrap', gap:'5px', marginTop:'10px', paddingTop:'8px', borderTop:'1px solid #f1f5f9' } },
+    h('button', { class:'btn xs', style:{ background:'#6366f1', color:'#fff' }, onclick:()=>openTenantDetailsModal(t) }, '✏️ Details / Edit'),
+    isLive ? h('button', { class:'btn xs', onclick:()=>loginAsTenant(t) }, '🔓 Login ↗') : null,
+    isLive ? h('button', { class:'btn xs', style:{ background:'#fef3c7', borderColor:'#f59e0b', color:'#92400e' }, onclick:()=>resetTenantAdminPassword(t) }, '🔑 Password') : null,
+    h('button', { class:'btn ghost xs', onclick:()=>openModulesModal(t) }, '🧩 Modules'),
+    h('button', { class:'btn ghost xs', onclick:()=>openInstallPackModal(t) }, '🏗️ Pack'),
+    h('button', { class:'btn ghost xs', onclick:()=>openTenantUsersModal(t) }, '👤 Users'),
+    h('button', { class:'btn ghost xs', onclick:()=>openAiRecordingModal(t) }, '🎙️ AI Rec'),
+    t.status === 'active'
+      ? h('button', { class:'btn ghost xs', onclick: async()=>{ await api('api_saas_tenants_suspend', t.id); navigate('tenants'); } }, 'Suspend')
+      : h('button', { class:'btn ghost xs', onclick: async()=>{ await api('api_saas_tenants_restore', t.id); navigate('tenants'); } }, 'Restore')
+  );
+  return h('div', { style:{ background:'#fff', border:'1px solid '+(usersOver?'#fca5a5':'#e2e8f0'), borderRadius:'12px', padding:'14px', boxShadow:'0 1px 2px rgba(0,0,0,.04)' } },
+    h('div', { style:{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:'8px', marginBottom:'8px' } },
+      h('div', { style:{ minWidth:'0' } },
+        h('div', { style:{ fontWeight:'700', fontSize:'1rem', color:'#0f172a', wordBreak:'break-word' } }, t.org_name || t.slug),
+        h('div', { style:{ fontSize:'.74rem', color:'#94a3b8' } }, '/' + t.slug)),
+      _tenantStatusBadge(t.status)),
+    _row('Email', t.contact_email || '—'),
+    _row('Plan', t.package_name || '—'),
+    _row('Users', usersTxt, usersOver ? '#dc2626' : (usersAt ? '#d97706' : '#0f172a')),
+    bal > 0 ? _row('Balance due', '₹' + bal.toLocaleString('en-IN'), '#b45309') : null,
+    _row('Period ends', fmtDate(t.current_period_end) || '—'),
+    sz ? _row('DB size', sz.pretty + ' · ' + sz.percent_of_volume + '%') : null,
+    (String(t.admin_remarks||'').trim()) ? h('div', { style:{ marginTop:'8px', padding:'6px 8px', background:'#fffbeb', border:'1px solid #fde68a', borderRadius:'8px', fontSize:'.76rem', color:'#78350f', whiteSpace:'pre-wrap', wordBreak:'break-word' } }, '📝 ' + String(t.admin_remarks).trim()) : null,
+    actions);
+}
+async function openTenantDetailsModal(t) {
+  const m = h('div', { class:'modal-bd' });
+  const card = h('div', { class:'modal', style:{ maxWidth:'740px', maxHeight:'88vh', overflow:'auto' } });
+  m.appendChild(card); document.body.appendChild(m);
+  card.appendChild(h('h3', { style:{ marginTop:'0' } }, '✏️ ' + (t.org_name || t.slug)));
+  const fld = (label, val, ta) => {
+    const inp = ta ? h('textarea', { rows:'3', style:{ width:'100%' } }, val==null?'':String(val))
+                   : h('input', { value: val==null?'':String(val), style:{ width:'100%' } });
+    return { wrap: h('div', { style:{ marginBottom:'8px' } }, h('label', { style:{ fontSize:'.78rem', color:'#64748b', display:'block', marginBottom:'2px' } }, label), inp), inp };
+  };
+  const fOrg = fld('Organisation name', t.org_name);
+  const fName = fld('Contact name', t.contact_name);
+  const fEmail = fld('Contact email', t.contact_email);
+  const fMobile = fld('Contact mobile', t.contact_mobile);
+  const fRemarks = fld('📝 Comments / remarks', t.admin_remarks, true);
+  card.appendChild(h('div', { style:{ background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:'10px', padding:'12px', marginBottom:'12px' } },
+    h('div', { style:{ fontWeight:'700', marginBottom:'8px' } }, 'Edit'),
+    fOrg.wrap, fName.wrap, fEmail.wrap, fMobile.wrap, fRemarks.wrap));
+  const saveBtn = h('button', { class:'btn primary' }, '💾 Save changes');
+  saveBtn.onclick = async () => {
+    saveBtn.disabled = true;
+    try {
+      await api('api_saas_tenants_update', { id: t.id, org_name: fOrg.inp.value, contact_name: fName.inp.value, contact_email: fEmail.inp.value, contact_mobile: fMobile.inp.value, admin_remarks: fRemarks.inp.value });
+      toast('Saved'); m.remove(); navigate('tenants');
+    } catch (e) { toast(e.message, 'err'); saveBtn.disabled = false; }
+  };
+  card.appendChild(saveBtn);
+  card.appendChild(h('h4', { style:{ margin:'16px 0 6px' } }, 'Complete data'));
+  let full = t;
+  try { const r = await api('api_saas_tenants_get', t.id); if (r && typeof r === 'object') full = Object.assign({}, t, r); } catch (_) {}
+  const grid = h('div', { style:{ display:'grid', gridTemplateColumns:'170px 1fr', gap:'2px 10px', fontSize:'.78rem' } });
+  Object.keys(full).sort().forEach(k => {
+    if (/password|secret|token/i.test(k)) return;
+    let v = full[k];
+    if (v && typeof v === 'object') { try { v = JSON.stringify(v); } catch (_) { v = String(v); } }
+    grid.appendChild(h('div', { style:{ color:'#64748b', fontWeight:'600', wordBreak:'break-word' } }, k));
+    grid.appendChild(h('div', { style:{ wordBreak:'break-word', color:'#0f172a' } }, v==null?'—':String(v)));
+  });
+  card.appendChild(grid);
+  card.appendChild(h('div', { style:{ textAlign:'right', marginTop:'12px' } }, h('button', { class:'btn ghost', onclick:()=>m.remove() }, 'Close')));
+}
+
 async function resetTenantAdminPassword(t) {
   const email = prompt('Reset password for which user email? (leave blank for tenant contact email "' + (t.contact_email || 'unknown') + '")', '');
   if (email === null) return;
