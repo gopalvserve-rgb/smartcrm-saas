@@ -85,7 +85,11 @@ async function update(table, id, data) {
   const cols = Object.keys(data);
   if (!cols.length) return;
   const sets = cols.map((c, i) => `${c} = $${i + 1}`).join(', ');
-  const sql = `UPDATE ${table} SET ${sets}, updated_at = NOW() WHERE id = $${cols.length + 1}`;
+  // SR_UPDATED_AT_FIX_v1 — only auto-stamp updated_at when the caller didn't
+  // already supply it. Passing it explicitly (e.g. signup-request save/approve)
+  // AND auto-appending caused "multiple assignments to column updated_at".
+  const autoTs = cols.includes('updated_at') ? '' : ', updated_at = NOW()';
+  const sql = `UPDATE ${table} SET ${sets}${autoTs} WHERE id = $${cols.length + 1}`;
   await query(sql, [...cols.map(c => data[c]), id]);
 }
 
