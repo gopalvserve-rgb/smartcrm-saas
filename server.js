@@ -1600,6 +1600,14 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
           const lead = await recRoutes._findLeadByPhone(phone);
           if (lead) leadId = lead.id;
         }
+        // CALL_CAPTURE_LEAD_ONLY_v1 — opt-in (default OFF). When ON, don't
+        // store recordings for calls that don't match a CRM lead. OFF →
+        // recordings behave exactly as before for every tenant.
+        try {
+          if (!leadId && String(await db.getConfig('CALL_CAPTURE_LEAD_ONLY', '0')) === '1') {
+            return res.json({ ok: true, skipped: true, capture: 'skipped', stored: false });
+          }
+        } catch (_) {}
         // CALL_ACTIVITY_UNKNOWN_v1 (2026-06-04) — auto-create-lead REMOVED.
         // Per user instruction: if no lead matches the recording's phone,
         // the recording is stored with lead_id=NULL. No phantom leads.

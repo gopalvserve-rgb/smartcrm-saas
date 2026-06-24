@@ -52,6 +52,9 @@ const CONFIG_KEYS = [
   // report + Recent Calls list filter out call_events where lead_id IS NULL
   // (personal calls that never matched a CRM lead). Default '0' = show all.
   'CALL_ACTIVITY_LEAD_ONLY',
+  // CALL_CAPTURE_LEAD_ONLY_v1 — opt-in: only CAPTURE/store calls matched to
+  // an existing CRM lead (drops personal/unknown calls at ingestion).
+  'CALL_CAPTURE_LEAD_ONLY',
   // CALL_DUP_LEAD_v1 — 'attach' (link to existing) | 'duplicate' (new is_duplicate row)
   'CALLS_AUTOLEAD_ON_DUPLICATE',
   // Auto vs Manual mode for call-to-lead creation. 'auto' (default) creates
@@ -369,6 +372,7 @@ async function api_admin_brand(_token) {
     AI_MANAGER_ENABLED: cfg.AI_MANAGER_ENABLED || '',
     POOL_ENABLED: cfg.POOL_ENABLED || '',   /* LEAD_POOL_v1 — gate the Lead Pool menu */
     CALL_ACTIVITY_LEAD_ONLY: cfg.CALL_ACTIVITY_LEAD_ONLY || '',  /* CA_LEAD_ONLY — Call Activity default filter */
+    CALL_CAPTURE_LEAD_ONLY: cfg.CALL_CAPTURE_LEAD_ONLY || '',  /* CALL_CAPTURE_LEAD_ONLY — capture gate */
     POOL_PULL_USER_IDS: cfg.POOL_PULL_USER_IDS || '',  /* LEAD_POOL_v1 — per-user pull allow-list (SPA nav gate) */
     POOL_PULL_RULES: cfg.POOL_PULL_RULES || '',  /* LEAD_POOL_v2 — JSON [{user_id,count}] per-user batch rules (SPA nav gate) */
     DEMO_REMINDER_ENABLED: cfg.DEMO_REMINDER_ENABLED || '',
@@ -465,7 +469,7 @@ async function api_admin_setConfig(token, keyOrPatch, maybeValue) {
   /* SC_CALL_LEAD_AUTOSAVE_v1 — bust the in-memory 60s autolead cache the
      instant any CALLS_AUTOLEAD_* key changes, so the new value takes effect
      on the very next call instead of up to a minute later. */
-  if (saved.some(k => k.startsWith('CALLS_AUTOLEAD_'))) {
+  if (saved.some(k => k.startsWith('CALLS_AUTOLEAD_') || k === 'CALL_CAPTURE_LEAD_ONLY')) {
     try {
       const rec = require('./recordings');
       if (rec && typeof rec._clearAutoleadCfgCache === 'function') {

@@ -113,7 +113,7 @@ async function _getAutoleadCfg() {
   const now = Date.now();
   const hit = _autoleadCfgByTenant.get(key);
   if (hit && (now - hit.at) < 60000) return hit.val;
-  const [mode, inb, out, statusId, onDup] = await Promise.all([
+  const [mode, inb, out, statusId, onDup, capLeadOnly] = await Promise.all([
     db.getConfig('CALLS_AUTOLEAD_MODE', 'auto'),
     db.getConfig('CALLS_AUTOLEAD_INBOUND', '0'),
     db.getConfig('CALLS_AUTOLEAD_OUTBOUND', '0'),
@@ -124,7 +124,10 @@ async function _getAutoleadCfg() {
     //   'duplicate'        — INSERT a new lead row with is_duplicate=1 and
     //                        duplicate_of=<existing>.id so today's call appears
     //                        as a fresh lead in today's list, marked as a dup
-    db.getConfig('CALLS_AUTOLEAD_ON_DUPLICATE', 'attach')
+    db.getConfig('CALLS_AUTOLEAD_ON_DUPLICATE', 'attach'),
+    // CALL_CAPTURE_LEAD_ONLY_v1 — opt-in: only capture calls matched to an
+    // EXISTING CRM lead. Default '0' = capture everything (unchanged).
+    db.getConfig('CALL_CAPTURE_LEAD_ONLY', '0')
   ]);
   // CALL_LEAD_EMPTYSTR_FIX_v1 (2026-06-10) — trinetra / sa-palss-prop bug:
   // older save paths left CALLS_AUTOLEAD_INBOUND='' in the config table.
@@ -143,7 +146,8 @@ async function _getAutoleadCfg() {
     inbound:  (String(inb)  === '1') ? '1' : '0',
     outbound: (String(out)  === '1') ? '1' : '0',
     statusId: Number(statusId) || 0,
-    onDuplicate: String(onDup || 'attach').toLowerCase()
+    onDuplicate: String(onDup || 'attach').toLowerCase(),
+    captureLeadOnly: (String(capLeadOnly) === '1') ? '1' : '0'
   };
   _autoleadCfgByTenant.set(key, { at: now, val });
   // Tiny LRU guard — keep at most 200 tenants in the map. We process
@@ -206,6 +210,19 @@ async function api_call_logEvent(token, payload) {
   };
   let callEventId = null;
   const phoneTail = phoneClean.replace(/\D/g, '').slice(-10);
+  // CALL_CAPTURE_LEAD_ONLY_v1 — opt-in (default OFF). When ON, only capture
+  // calls matched to an EXISTING CRM lead; personal/unknown calls are dropped
+  // (never stored). OFF → zero change for everyone else.
+  let _capMatchLead = null;
+  try {
+    const _capCfg = await _getAutoleadCfg();
+    if (_capCfg && _capCfg.captureLeadOnly === '1') {
+      _capMatchLead = await _findLeadByPhone(phoneClean);
+      if (!_capMatchLead) {
+        return { ok: true, queued: false, skipped: true, capture: 'skipped', call_event_id: null, lead_id: null, auto_created: false };
+      }
+    }
+  } catch (_) {}
   try {
     // Step A: synchronous direction refinement for call_ended events
     // that arrived without an explicit direction (this is the JS-bridge
@@ -267,7 +284,7 @@ async function api_call_logEvent(token, payload) {
         }
       } catch (_) {}
       callEventId = await db.insert('call_events', {
-        lead_id: null,
+        lead_id: (_capMatchLead ? _capMatchLead.id : null),
         user_id: me.id,
         phone: phoneClean,
         direction,
@@ -899,6 +916,14 @@ async function api_call_handleEnded(token, payload) {
   const event = direction === 'missed' ? 'missed' : (duration > 0 ? 'ended' : 'no_answer');
 
   const lead = await _findLeadByPhone(p.phone);
+  // CALL_CAPTURE_LEAD_ONLY_v1 — opt-in: drop non-CRM-lead calls entirely
+  // (no auto-create, no call_event). OFF → unchanged.
+  try {
+    const _capCfg = await _getAutoleadCfg();
+    if (_capCfg && _capCfg.captureLeadOnly === '1' && !lead) {
+      return { ok: true, skipped: true, capture: 'skipped', lead_id: null, auto_created: false };
+    }
+  } catch (_) {}
   let createdLeadId = null;
   let createdFollowupId = null;
 

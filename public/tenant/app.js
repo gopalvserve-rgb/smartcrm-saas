@@ -20535,6 +20535,23 @@ VIEWS.callactivity = async (view) => {
           toast('Saved as workspace default', 'ok');
         } catch (e) { toast(e.message, 'err'); }
       } }, '💾 Set as default'));
+    // CALL_CAPTURE_LEAD_ONLY — admin-only, tenant-wide capture gate. When ON,
+    // the system stops STORING personal/unknown calls (and their recordings)
+    // entirely — only calls matched to a CRM lead are captured. Forward-only.
+    const _capChk = h('input', { type: 'checkbox', id: 'ca-capture-leadonly',
+      checked: (CRM.brand && String(CRM.brand.CALL_CAPTURE_LEAD_ONLY) === '1') ? 'checked' : null,
+      onchange: async () => {
+        const v = _capChk.checked ? '1' : '0';
+        try {
+          await api('api_admin_setConfig', { key: 'CALL_CAPTURE_LEAD_ONLY', value: v });
+          CRM.brand = Object.assign(CRM.brand || {}, { CALL_CAPTURE_LEAD_ONLY: v });
+          toast(v === '1' ? 'Now capturing CRM-lead calls only — personal calls won\'t be stored' : 'Capturing all calls', 'ok');
+        } catch (e) { _capChk.checked = !_capChk.checked; toast(e.message, 'err'); }
+      } });
+    toolbar.appendChild(h('label', {
+      style: { display: 'inline-flex', alignItems: 'center', gap: '.35rem', fontSize: '.82rem', marginLeft: '.6rem', color: '#b45309' },
+      title: 'When ON, only calls (and recordings) matching an existing CRM lead are stored. Personal / unknown-number calls are never captured. Applies to new calls going forward. Default OFF — does not affect other tenants.' },
+      _capChk, h('span', {}, '🔒 Capture CRM-lead calls only')));
   }
   view.appendChild(toolbar);
   setTimeout(() => { try { window._attachDatePresets && window._attachDatePresets(_caFrom, _caTo, { key: 'callactivity', apply: () => { try { loadCallActivity(); } catch (_) {} } }); } catch (_) {} }, 0);

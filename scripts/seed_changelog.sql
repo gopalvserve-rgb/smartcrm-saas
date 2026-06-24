@@ -645,3 +645,12 @@ SELECT 'feature',
        '📞',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Call Activity: show CRM-lead calls only');
+
+-- 2026-06-24 CALL_CAPTURE_LEAD_ONLY_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'Capture CRM-lead calls only (privacy)',
+       'New admin option on the Call Activity page: "🔒 Capture CRM-lead calls only". When turned on, the CRM stops storing personal / unknown-number calls (and their recordings) entirely — only calls that match an existing CRM lead are captured. It applies to new calls going forward and is OFF by default, so nothing changes unless you switch it on. Different from the per-view "CRM leads only" filter, which only hides calls in the report while still storing them.',
+       '🔒',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Capture CRM-lead calls only (privacy)');
