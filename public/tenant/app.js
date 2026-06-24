@@ -15561,16 +15561,32 @@ async function _aibotSettingsView(currentPhId) {
   wrap.appendChild(qrCard);
 
   // ---- reply modes ----
+  // AIBOT_TIMING_RADIO_v1 — timing modes are mutually exclusive, so render them
+  // as a single radio choice (removes the old "Always wins over the others"
+  // confusion). keyword / manual / phone_only stay as optional checkboxes.
+  const TIMING_IDS = ['always', 'business_hours_only', 'after_hours'];
+  const TIMING_HINT = {
+    always: 'Bot answers every chat, 24×7.',
+    business_hours_only: 'Bot answers ONLY during your business hours (set below).',
+    after_hours: 'Bot answers ONLY after business hours — when your team is offline.'
+  };
+  const timingModes = data.available_modes.filter(m => TIMING_IDS.includes(m.id));
+  const otherModes  = data.available_modes.filter(m => !TIMING_IDS.includes(m.id));
+  const _curTiming  = (s.reply_modes || []).find(x => TIMING_IDS.includes(x)) || 'always';
+  const timingRadios = {};
   const modeChks = {};
-  data.available_modes.forEach(m => {
-    modeChks[m.id] = h('input', { type: 'checkbox', checked: (s.reply_modes || []).includes(m.id) ? 'checked' : null });
-  });
   const modeCard = h('div', { class: 'card' },
     h('h3', { style: { marginTop: 0 } }, 'When should the bot reply?'),
-    h('p', { class: 'muted', style: { fontSize: '.85rem' } }, 'Pick any combination. The bot replies when at least one mode allows it. "Always reply" wins over the others.'),
-    ...data.available_modes.map(m => h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', padding: '.3rem 0' } },
-      modeChks[m.id], h('span', {}, m.label)
-    ))
+    h('p', { class: 'muted', style: { fontSize: '.85rem' } }, 'Choose ONE timing. For "during" / "after business hours", set your Business Hours further down so the bot knows your window.'),
+    ...timingModes.map(m => h('label', { style: { display: 'flex', alignItems: 'flex-start', gap: '.5rem', padding: '.4rem 0', cursor: 'pointer' } },
+      (timingRadios[m.id] = h('input', { type: 'radio', name: 'bot-timing', value: m.id, checked: _curTiming === m.id ? 'checked' : null })),
+      h('div', {}, h('div', { style: { fontWeight: '600' } }, m.label),
+        h('div', { class: 'muted', style: { fontSize: '.78rem' } }, TIMING_HINT[m.id] || '')))),
+    (otherModes.length ? h('div', { style: { borderTop: '1px solid var(--border)', marginTop: '.5rem', paddingTop: '.5rem' } },
+      h('div', { class: 'muted', style: { fontSize: '.8rem', marginBottom: '.3rem' } }, 'Extra conditions (optional):'),
+      ...otherModes.map(m => h('label', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', padding: '.25rem 0' } },
+        (modeChks[m.id] = h('input', { type: 'checkbox', checked: (s.reply_modes || []).includes(m.id) ? 'checked' : null })),
+        h('span', {}, m.label)))) : null)
   );
   wrap.appendChild(modeCard);
 
@@ -15867,7 +15883,11 @@ async function _aibotSettingsView(currentPhId) {
       bot_name: botName.value, business_name: bizName.value,
       language: Object.keys(langChks).filter(k => langChks[k].checked).join('+') || 'en',
       system_prompt: sysPrompt.value,
-      reply_modes: data.available_modes.filter(m => modeChks[m.id].checked).map(m => m.id),
+      reply_modes: (function () {
+        const t = Object.keys(timingRadios).find(id => timingRadios[id].checked) || 'always';
+        const others = Object.keys(modeChks).filter(id => modeChks[id].checked);
+        return [t].concat(others);
+      })(),
       active_phone_number_ids: Object.entries(phoneChkMap).filter(([id, c]) => c.checked).map(([id]) => id),
       business_hours: {
         tz: bh.tz || 'Asia/Kolkata',

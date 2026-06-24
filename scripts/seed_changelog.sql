@@ -654,3 +654,12 @@ SELECT 'feature',
        '🔒',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Capture CRM-lead calls only (privacy)');
+
+-- 2026-06-24 AIBOT_AFTERHOURS_FIX_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'fix',
+       'AI Bot — after-hours replies now work + clearer timing',
+       'Fixed: a bot set to "Only after business hours" could stay silent if its Business Hours weren''t fully filled in — it now falls back to a sensible window (Mon–Fri 9–7, your timezone) so after-hours replies actually fire. Also simplified the "When should the bot reply?" setting: timing is now a single choice — Anytime (24×7), Only during business hours, or Only after business hours — instead of confusing checkboxes where "Always" silently overrode the rest. Keyword / number / draft-approval options remain as optional extras.',
+       '🤖',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'AI Bot — after-hours replies now work + clearer timing');

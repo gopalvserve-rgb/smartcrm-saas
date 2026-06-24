@@ -935,21 +935,28 @@ async function _shouldSuppress(settings, phone, inboundText, inboundPhoneId, ten
 }
 
 function _isAfterHours(bh) {
-  if (!bh || typeof bh !== 'object') return false;
+  // AIBOT_AFTERHOURS_FIX_v1 — be robust to missing / partial business_hours.
+  // Previously a missing start/end (or no config) made this return false
+  // (= "inside hours"), which silenced an "Only after business hours" bot
+  // 24/7. Now we fall back to sensible defaults (Mon–Fri 09:00–19:00 IST) so
+  // the after-hours bot always has a real window to work against.
   try {
+    bh = (bh && typeof bh === 'object') ? bh : {};
     const tz = bh.tz || 'Asia/Kolkata';
     const now = new Date();
-    // Get the day-of-week + HH:MM in the configured timezone.
     const fmt = new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
     const parts = fmt.formatToParts(now).reduce((a, p) => { a[p.type] = p.value; return a; }, {});
     const dayMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
     const dow = dayMap[parts.weekday];
-    const hhmm = (parts.hour || '00') + ':' + (parts.minute || '00');
-    const days = Array.isArray(bh.days) ? bh.days.map(Number) : [1,2,3,4,5];
-    if (!days.includes(dow)) return true;        // weekend → after hours
-    if (bh.start && hhmm < String(bh.start)) return true;
-    if (bh.end   && hhmm >= String(bh.end))  return true;
-    return false;
+    let hh = parts.hour || '00'; if (hh === '24') hh = '00';
+    const hhmm = hh + ':' + (parts.minute || '00');
+    const days  = (Array.isArray(bh.days) && bh.days.length) ? bh.days.map(Number) : [1,2,3,4,5];
+    const start = (bh.start && /^\d{1,2}:\d{2}$/.test(String(bh.start))) ? String(bh.start).padStart(5,'0') : '09:00';
+    const end   = (bh.end   && /^\d{1,2}:\d{2}$/.test(String(bh.end)))   ? String(bh.end).padStart(5,'0')   : '19:00';
+    if (!days.includes(dow)) return true;        // non-working day → after hours
+    if (hhmm < start) return true;               // before opening → after hours
+    if (hhmm >= end)  return true;               // at/after closing → after hours
+    return false;                                // inside business hours
   } catch (_) { return false; }
 }
 
