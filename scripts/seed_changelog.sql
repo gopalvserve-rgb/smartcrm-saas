@@ -618,3 +618,12 @@ SELECT 'feature',
        '📄',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Proforma Invoice support');
+
+-- 2026-06-24 INV_INLINE_ITEM_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'Create items while making an invoice',
+       'In the invoice line items, the item dropdown now has a "➕ Create new item…" option. Pick it to add a reusable item (name, HSN/SAC, unit, default rate, GST%) on the spot — it saves to your item master and is filled into the line automatically. The Document Type chooser (Tax Invoice / Proforma Invoice) is now a clearly highlighted bar at the top of the invoice form.',
+       '🧾',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Create items while making an invoice');

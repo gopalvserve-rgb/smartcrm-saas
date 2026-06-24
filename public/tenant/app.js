@@ -52456,7 +52456,6 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
       });
 
       top.appendChild(_field('Seller (Your Company)', compSel));
-      top.appendChild(_field('Document Type', docTypeSel));
       top.appendChild(_field('Customer (existing)', custSel));
       top.appendChild(_field('Bill-To Name *', custName));
       top.appendChild(_field('Customer GSTIN', custGstin, 'Leave blank for B2C'));
@@ -52466,6 +52465,12 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
       top.appendChild(_field('Ship-To Address', _ta('ship_to_address', invoice ? invoice.ship_to_address : '', 2)));
       top.appendChild(_field('Invoice Date', invDate));
       top.appendChild(_field('Due Date', dueDate));
+      // PROFORMA_v1 — prominent Document Type chooser at the very top.
+      docTypeSel.style.cssText = 'padding:.5rem .6rem;font-size:.95rem;font-weight:600;border:1px solid #c7d2fe;border-radius:8px;min-width:220px';
+      body.appendChild(h('div', { style:{ display:'flex', alignItems:'center', gap:'.6rem', padding:'.7rem .8rem', marginBottom:'.8rem', background:'#eef2ff', border:'1px solid #c7d2fe', borderRadius:'10px' } },
+        h('span', { style:{ fontWeight:700, color:'#3730a3' } }, '📑 Document Type:'),
+        docTypeSel,
+        h('span', { style:{ fontSize:'.78rem', color:'#6366f1' } }, '(Proforma uses a separate PI- series & is excluded from GST filing)')));
       body.appendChild(top);
 
       // Line items
@@ -52523,9 +52528,28 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
         lines.forEach((ln, idx) => {
           const tr = h('tr', { style: { borderBottom:'1px solid #f1f5f9' } });
 
-          const itemSel = _sel('item', [{ value:'', label:'— pick item —' }].concat(items.map(it => ({ value: it.id, label: it.name }))), ln.item_id || '');
+          const itemSel = _sel('item', [{ value:'', label:'— pick item —' }, { value:'__new__', label:'➕ Create new item…' }].concat(items.map(it => ({ value: it.id, label: it.name }))), ln.item_id || '');
           itemSel.style.fontSize = '.78rem';
           itemSel.addEventListener('change', () => {
+            if (itemSel.value === '__new__') {
+              // INV_INLINE_ITEM_v1 — create a reusable item without leaving the invoice.
+              itemSel.value = ln.item_id || '';
+              openItem(null, async () => {
+                try {
+                  const fresh = await api('api_invoicing_items_list');
+                  items.length = 0; (fresh || []).forEach(x => items.push(x));
+                  const newest = items.reduce((a, b) => (Number(b.id) > Number((a && a.id) || 0) ? b : a), null);
+                  if (newest) {
+                    ln.item_id = newest.id;
+                    ln.description = newest.name + (newest.description ? ' — ' + newest.description : '');
+                    ln.hsn_sac = newest.hsn_sac || ''; ln.unit = newest.unit || 'PCS';
+                    ln.rate = Number(newest.rate) || 0; ln.gst_pct = Number(newest.gst_pct) || 0;
+                  }
+                  renderLines(); recompute();
+                } catch (e) { toast(e.message, 'err'); }
+              });
+              return;
+            }
             const it = items.find(x => String(x.id) === String(itemSel.value));
             if (!it) return;
             ln.item_id = it.id;
