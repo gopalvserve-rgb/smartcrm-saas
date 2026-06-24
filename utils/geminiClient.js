@@ -36,14 +36,19 @@ const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 // reply. Rewrite any retired model name to a current equivalent at call time
 // so replies keep working regardless of what's stored on the bot.
 const _MODEL_ALIASES = {
-  'gemini-2.0-flash':         'gemini-2.5-flash',
-  'gemini-2.0-pro':           'gemini-2.5-pro',
-  'gemini-1.5-flash':         'gemini-2.5-flash',
-  'gemini-1.5-flash-latest':  'gemini-2.5-flash',
-  'gemini-1.5-pro':           'gemini-2.5-pro',
-  'gemini-1.5-pro-latest':    'gemini-2.5-pro',
-  'gemini-pro':               'gemini-2.5-flash',
-  'gemini-1.0-pro':           'gemini-2.5-flash'
+  // Retired Gemini IDs → vserve's proven-working model. gemini-2.5-flash is
+  // not available on this API key, so we map to gemini-2.0-flash-lite (the
+  // default that replies successfully today).
+  'gemini-2.0-flash':         'gemini-2.0-flash-lite',
+  'gemini-2.0-pro':           'gemini-2.0-flash-lite',
+  'gemini-1.5-flash':         'gemini-2.0-flash-lite',
+  'gemini-1.5-flash-latest':  'gemini-2.0-flash-lite',
+  'gemini-1.5-pro':           'gemini-2.0-flash-lite',
+  'gemini-1.5-pro-latest':    'gemini-2.0-flash-lite',
+  'gemini-pro':               'gemini-2.0-flash-lite',
+  'gemini-1.0-pro':           'gemini-2.0-flash-lite',
+  'gemini-2.5-flash':         'gemini-2.0-flash-lite',
+  'gemini-2.5-pro':           'gemini-2.0-flash-lite'
 };
 function _normModel(m) {
   const k = String(m || '').trim().replace(/^models\//, '');
@@ -261,8 +266,8 @@ async function generate(args) {
       continue;
     }
     if (isOverloaded && !triedFallback) {
-      const fallbackModel = currentModel.includes('flash-lite') ? 'gemini-2.5-flash'
-                          : currentModel.includes('flash')      ? 'gemini-2.5-flash-lite'
+      const fallbackModel = currentModel.includes('flash-lite') ? 'gemini-2.0-flash-lite'
+                          : currentModel.includes('flash')      ? 'gemini-2.0-flash-lite'
                           : null;
       if (fallbackModel) {
         triedFallback = true;
@@ -482,8 +487,8 @@ async function generateWithTools(args) {
       }
       // Retries exhausted on a transient error → fallback to a sibling model once.
       if (isOverloaded && !triedFallback) {
-        const fallbackModel = currentModel.includes('flash-lite') ? 'gemini-2.5-flash'
-                            : currentModel.includes('flash')      ? 'gemini-2.5-flash-lite'
+        const fallbackModel = currentModel.includes('flash-lite') ? 'gemini-2.0-flash-lite'
+                            : currentModel.includes('flash')      ? 'gemini-2.0-flash-lite'
                             : null;
         if (fallbackModel) {
           triedFallback = true;
