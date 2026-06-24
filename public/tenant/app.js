@@ -1330,12 +1330,19 @@ function renderLogin() {
   // Demo tenants get their credentials pre-filled so visitors can just
   // click Sign in. Detected via the slug — the showcase seeder always
   // uses 'showcase'. Add more demo slugs to this list as needed.
-  const isDemoTenant = String(window.TENANT_SLUG || '').toLowerCase() === 'showcase';
-  const demoEmail    = isDemoTenant ? 'demo@smartcrm.in'   : '';
+  // DEMO_LOGIN_ALLSHOWCASE_v1 — every showcase tenant (showcase, showcase-edu,
+  // showcase-holiday, …) is a demo: detect the whole family, derive its demo
+  // email from the slug suffix, and SHOW the credentials on the page so anyone
+  // can log in instantly. Demo password is the same for all: Showcase@123.
+  const _slugLc = String(window.TENANT_SLUG || '').toLowerCase();
+  const _demoMatch = _slugLc.match(/^showcase(?:-([a-z0-9]+))?$/);
+  const isDemoTenant = !!_demoMatch;
+  const demoEmail    = isDemoTenant ? ('demo' + (_demoMatch[1] ? '-' + _demoMatch[1] : '') + '@smartcrm.in') : '';
   const demoPassword = isDemoTenant ? 'Showcase@123'       : '';
   const demoBanner   = isDemoTenant
-    ? `<div style="margin:.75rem 0;padding:.6rem .8rem;background:#eef2ff;border:1px solid #c7d2fe;border-radius:8px;font-size:.82rem;color:#3730a3;text-align:left">
-         <b>👋 Demo workspace</b> — credentials are pre-filled. Just click <b>Sign in</b>.
+    ? `<div style="margin:.75rem 0;padding:.7rem .9rem;background:#eef2ff;border:1px solid #c7d2fe;border-radius:8px;font-size:.82rem;color:#3730a3;text-align:left">
+         <b>👋 Demo workspace</b> — credentials are pre-filled, just click <b>Sign in</b>.
+         <div style="margin-top:.4rem;font-size:.8rem">📧 <b>${esc(demoEmail)}</b><br/>🔑 <b>${esc(demoPassword)}</b></div>
        </div>` : '';
   app.innerHTML = `
     <div class="login-screen">
