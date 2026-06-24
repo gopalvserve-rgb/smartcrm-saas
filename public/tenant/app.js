@@ -52395,7 +52395,8 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
       if (!rows.length) tb.appendChild(h('tr', {}, h('td', { colspan:7, style:{padding:'1rem',textAlign:'center',color:'#94a3b8'} }, 'No invoices match the filters.')));
       rows.forEach(r => {
         const tr = h('tr', { style: { borderTop:'1px solid #f1f5f9' } });
-        tr.appendChild(h('td', { style:{padding:'.5rem .7rem',fontWeight:600,cursor:'pointer'}, onclick:() => openInvoiceModal(r.id) }, r.invoice_no));
+        tr.appendChild(h('td', { style:{padding:'.5rem .7rem',fontWeight:600,cursor:'pointer'}, onclick:() => openInvoiceModal(r.id) }, r.invoice_no,
+          (r.doc_type === 'proforma') ? h('span', { style:{ marginLeft:'.4rem', background:'#fef3c7', color:'#92400e', padding:'1px 6px', borderRadius:'4px', fontSize:'.68rem', fontWeight:700, verticalAlign:'middle' } }, 'PROFORMA') : null));
         tr.appendChild(h('td', { style:{padding:'.5rem .7rem'} }, fmtDt(r.invoice_date)));
         tr.appendChild(h('td', { style:{padding:'.5rem .7rem'} }, r.customer_name));
         tr.appendChild(h('td', { style:{padding:'.5rem .7rem',textAlign:'right'} }, fmtINR(r.total)));
@@ -52430,6 +52431,9 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
     const m = _modal(invoice ? `Edit ${invoice.invoice_no}` : 'New Invoice', (body, close) => {
       const top = h('div', { style: { display:'grid', gridTemplateColumns:'1fr 1fr', gap:'.8rem' } });
       const compSel = _sel('company_id', companies.map(c => ({ value:c.id, label:c.name + (c.gstin ? ' • ' + c.gstin : '') })), invoice ? invoice.company_id : (companies.find(c => c.is_default) || companies[0]).id);
+      // PROFORMA_v1 — document type. Fixed once an invoice exists (number already issued).
+      const docTypeSel = _sel('doc_type', [{ value:'tax', label:'🧾 Tax Invoice' }, { value:'proforma', label:'📄 Proforma Invoice' }], invoice ? (invoice.doc_type || 'tax') : 'tax');
+      if (invoice) docTypeSel.disabled = true;
       const custSel = _sel('customer_id', [{ value:'', label:'— pick / type a name below —' }].concat(customers.map(c => ({ value:c.id, label:c.name + (c.gstin ? ' • ' + c.gstin : '') }))), invoice ? invoice.customer_id : '');
       const custName  = _txt('customer_name',  invoice ? invoice.customer_name : '');
       const custGstin = _txt('customer_gstin', invoice ? invoice.customer_gstin : '');
@@ -52452,6 +52456,7 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
       });
 
       top.appendChild(_field('Seller (Your Company)', compSel));
+      top.appendChild(_field('Document Type', docTypeSel));
       top.appendChild(_field('Customer (existing)', custSel));
       top.appendChild(_field('Bill-To Name *', custName));
       top.appendChild(_field('Customer GSTIN', custGstin, 'Leave blank for B2C'));
@@ -52594,6 +52599,7 @@ try { window.openSheetSyncMappingEditor = openSheetSyncMappingEditor; } catch (_
             place_of_supply: (body.querySelector('input[name="place_of_supply"]') || {}).value || '',
             bill_to_address: billTo.value,
             ship_to_address: (body.querySelector('textarea[name="ship_to_address"]') || {}).value || '',
+            doc_type: docTypeSel.value,
             invoice_date: invDate.value, due_date: dueDate.value || null,
             discount: Number(discount.value)||0,
             notes: notes.value, terms: terms.value,

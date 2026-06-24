@@ -609,3 +609,12 @@ SELECT 'feature',
        '📤',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'WhatsApp inbox — see & choose the sending number');
+
+-- 2026-06-24 PROFORMA_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'Proforma Invoice support',
+       'You can now create a Proforma Invoice. In Accounts -> Invoices -> New Invoice, pick "Proforma Invoice" under Document Type. Proforma invoices use a separate PI- number series (so your tax-invoice numbering stays unbroken), print with a "PROFORMA INVOICE / Not a tax invoice" heading, and are excluded from GSTR-1. Tax Invoice remains the default.',
+       '📄',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Proforma Invoice support');

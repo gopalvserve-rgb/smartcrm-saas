@@ -104,6 +104,8 @@ async function _ensureTables() {
   } catch (_) {
     await _runInlineMigration();
   }
+  // PROFORMA_v1 — invoice document type ('tax' | 'proforma'). Idempotent.
+  try { await db.query(`ALTER TABLE invoices_inv ADD COLUMN IF NOT EXISTS doc_type TEXT NOT NULL DEFAULT 'tax'`); } catch (_) {}
   if (pool) _ensuredPools.add(pool);
 }
 
@@ -406,7 +408,7 @@ async function api_invoicing_invoices_list(token, opts) {
   const limit = Math.min(Number(opts.limit) || 200, 1000);
   const r = await db.query(
     `SELECT id, invoice_no, invoice_date, company_id, company_name,
-            customer_id, customer_name, total, amount_paid, paid_status, status
+            customer_id, customer_name, total, amount_paid, paid_status, status, doc_type
        FROM invoices_inv ${where}
        ORDER BY invoice_date DESC, id DESC
        LIMIT ${limit}`,
@@ -445,6 +447,7 @@ async function api_invoicing_invoices_save(token, payload) {
   const { user } = await _ctx(token);
   payload = payload || {};
   if (!payload.company_id) throw new Error('Seller company is required');
+  const docType = (payload.doc_type === 'proforma') ? 'proforma' : 'tax';  // PROFORMA_v1
 
   // Snapshot seller / customer
   const company = (await db.query(`SELECT * FROM inv_companies WHERE id=$1`, [Number(payload.company_id)])).rows[0];
@@ -507,9 +510,17 @@ async function api_invoicing_invoices_save(token, payload) {
     } else {
       // INSERT new — allocate number atomically
       const status = (payload.status === 'draft') ? 'draft' : 'finalized';
-      invoiceNo = (status === 'draft')
-        ? 'DRAFT-' + Date.now().toString(36).toUpperCase()
-        : await _allocateInvoiceNumber(client, Number(payload.company_id));
+      if (status === 'draft') {
+        invoiceNo = 'DRAFT-' + Date.now().toString(36).toUpperCase();
+      } else if (docType === 'proforma') {
+        // PROFORMA_v1 — separate PI- series so the legal tax-invoice
+        // sequence stays unbroken. Lock the company row to serialise.
+        await client.query(`SELECT id FROM inv_companies WHERE id=$1 FOR UPDATE`, [Number(payload.company_id)]);
+        const pc = (await client.query(`SELECT COUNT(*)::int AS c FROM invoices_inv WHERE company_id=$1 AND doc_type='proforma'`, [Number(payload.company_id)])).rows[0];
+        invoiceNo = 'PI-' + pad((Number(pc.c) || 0) + 1, 5);
+      } else {
+        invoiceNo = await _allocateInvoiceNumber(client, Number(payload.company_id));
+      }
       const ins = await client.query(`
         INSERT INTO invoices_inv (
           invoice_no, invoice_date, due_date, company_id, customer_id,
@@ -517,10 +528,10 @@ async function api_invoicing_invoices_save(token, payload) {
           bill_to_address, ship_to_address, place_of_supply,
           company_name, company_gstin, company_state,
           subtotal, discount, cgst, sgst, igst, cess, round_off, total, amount_in_words,
-          status, paid_status, amount_paid, notes, terms, is_reverse_charge, created_by
+          status, paid_status, amount_paid, notes, terms, is_reverse_charge, created_by, doc_type
         ) VALUES (
           $1,$2,$3,$4,$5, $6,$7,$8,$9, $10,$11,$12, $13,$14,$15,
-          $16,$17,$18,$19,$20,$21,$22,$23,$24, $25,$26,$27,$28,$29,$30,$31
+          $16,$17,$18,$19,$20,$21,$22,$23,$24, $25,$26,$27,$28,$29,$30,$31,$32
         ) RETURNING id
       `, [
         invoiceNo, payload.invoice_date || new Date().toISOString().slice(0,10), payload.due_date || null,
@@ -538,7 +549,7 @@ async function api_invoicing_invoices_save(token, payload) {
         s(payload.notes || company.default_notes || settings.default_notes || ''),
         s(payload.terms || company.default_terms || settings.default_terms || ''),
         payload.is_reverse_charge ? 1 : 0,
-        user.id
+        user.id, docType
       ]);
       id = ins.rows[0].id;
     }
@@ -686,7 +697,8 @@ async function api_invoicing_invoices_pdf_html(token, id) {
       <div>${inv.company_gstin ? '<b>GSTIN:</b> ' + esc(inv.company_gstin) : ''}${company.state ? '  •  State: ' + esc(company.state) : ''}</div>
     </div>
     <div class="title-block">
-      <h2>TAX INVOICE</h2>
+      <h2>${(inv.doc_type === 'proforma') ? 'PROFORMA INVOICE' : 'TAX INVOICE'}</h2>
+      ${(inv.doc_type === 'proforma') ? '<div class="meta" style="color:#b45309;font-weight:600">Not a tax invoice</div>' : ''}
       <div class="meta"><b>${esc(inv.invoice_no)}</b></div>
       <div class="meta">Date: ${dt(inv.invoice_date)}</div>
       ${inv.due_date ? `<div class="meta">Due: ${dt(inv.due_date)}</div>` : ''}
@@ -822,6 +834,7 @@ async function _gstr1Data(companyId, from, to) {
     WHERE i.company_id = $1
       AND i.invoice_date >= $2
       AND i.invoice_date <= $3
+      AND COALESCE(i.doc_type,'tax') <> 'proforma'
     GROUP BY i.id
     ORDER BY i.invoice_date, i.id
   `, [Number(companyId), from, to]);
@@ -831,6 +844,7 @@ async function _gstr1Data(companyId, from, to) {
     FROM invoice_lines_inv l
     JOIN invoices_inv i ON i.id = l.invoice_id
     WHERE i.company_id = $1 AND i.invoice_date BETWEEN $2 AND $3 AND i.status <> 'cancelled'
+      AND COALESCE(i.doc_type,'tax') <> 'proforma'
     ORDER BY i.invoice_date, i.id, l.line_no
   `, [Number(companyId), from, to]);
 
