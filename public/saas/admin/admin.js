@@ -74,11 +74,16 @@ window.addEventListener('unhandledrejection', ev => {
   } catch (_) {}
 });
 
-async function api(fn, args) {
+async function api(fn, ...args) {
+  // MODULES_SAVE_FIX_v1 — forward ALL positional args, not just the first.
+  // Previously `api(fn, args)` dropped everything after the 2nd param, so
+  // multi-arg calls like api('api_saas_tenant_modules_set', t.id, keys)
+  // sent module_keys=undefined → server wrote modules_json=NULL (silently
+  // resetting modules). Single-object callers are unaffected ([obj] either way).
   const r = await fetch('/api/saas', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-auth-token': APP.token },
-    body: JSON.stringify({ fn, args: args ? [args] : [] })
+    body: JSON.stringify({ fn, args })
   });
   const j = await r.json();
   if (!r.ok || j.error) throw new Error(j.error || 'API error');
