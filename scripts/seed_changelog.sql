@@ -663,3 +663,12 @@ SELECT 'fix',
        '🤖',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'AI Bot — after-hours replies now work + clearer timing');
+
+-- 2026-06-24 AIBOT_AFTERHOURS_HANDOFF_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'fix',
+       'After-hours bot no longer muted by daytime agent chats',
+       'When the bot is set to "Only after business hours", it was being silenced by the human-handoff guard — if any agent had messaged that customer earlier (default window 24 hours), the bot stayed quiet even at night. Now, while it is genuinely after hours, the bot ignores those daytime-agent guards (the whole point is to cover when the team is offline) and only respects a short 30-minute "someone is actively chatting" safety. You can see exactly why any message was skipped in the AI Bot Activity log (suppressed reason).',
+       '🤖',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'After-hours bot no longer muted by daytime agent chats');

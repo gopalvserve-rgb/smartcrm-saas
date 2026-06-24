@@ -808,6 +808,13 @@ async function _shouldSuppress(settings, phone, inboundText, inboundPhoneId, ten
 
   // phone_only mode
   const modes = Array.isArray(settings.reply_modes) ? settings.reply_modes : ['always'];
+  // AIBOT_AFTERHOURS_HANDOFF_v1 — when the bot is in 'after_hours' mode AND it
+  // is currently after hours, the team is offline by definition. So the
+  // daytime human-handoff guards (sticky pause + long idle-resume window,
+  // default 24h) must NOT mute the bot — otherwise an agent who chatted a
+  // customer during the day silences the after-hours bot all night. We keep
+  // the short 30-min "actively chatting right now" guard for safety.
+  const _afterHoursActive = modes.includes('after_hours') && !modes.includes('always') && _isAfterHours(settings.business_hours);
   if (modes.includes('phone_only')) {
     const allowed = (settings.active_phone_number_ids || []).map(String);
     if (allowed.length && inboundPhoneId && !allowed.includes(String(inboundPhoneId))) {
@@ -872,7 +879,7 @@ async function _shouldSuppress(settings, phone, inboundText, inboundPhoneId, ten
   //  (b) idle-resume — within the last resume_after_idle_seconds window.
   // (a) takes precedence so the user can turn the bot fully off when
   //     a human agent picks up a thread.
-  if (Number(settings.pause_after_human_handoff) === 1) {
+  if (Number(settings.pause_after_human_handoff) === 1 && !_afterHoursActive) {
     // AI_BOT_GATES_v1 — same normalization as the 30-min guard above.
     // Plus: count rows where user_id IS NULL but a Coexistence echo
     // marker exists (best-effort detection: wa_message_id starts with
@@ -906,7 +913,7 @@ async function _shouldSuppress(settings, phone, inboundText, inboundPhoneId, ten
   const idleSec = settings.resume_after_idle_seconds != null && Number(settings.resume_after_idle_seconds) >= 0
     ? Math.max(0, Number(settings.resume_after_idle_seconds))
     : Math.max(0, Number(settings.resume_after_idle_minutes || 1440)) * 60;
-  if (idleSec > 0) {
+  if (idleSec > 0 && !_afterHoursActive) {
     const r = await db.query(
       `SELECT 1 FROM whatsapp_messages
         WHERE direction = 'out' AND user_id IS NOT NULL
