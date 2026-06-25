@@ -604,6 +604,9 @@ const CONFIG_DEFAULTS = [
   { key: 'COPILOT_PROACTIVE_ENABLED', value: '1' },
   // LEADS_VIEW_V2_ROLLOUT_v1 — 'Modern' leads theme available on every new tenant.
   { key: 'LEADS_VIEW_V2_ENABLED', value: '1' },
+  // REC_RETENTION_v1 — auto-delete call recordings after 30 days by default.
+  // A daily all-tenant cron purges lead_recordings older than this. '0' disables.
+  { key: 'RECORDING_RETENTION_DAYS', value: '30' },
 ];
 
 async function _ensureMigrationsTable(pool) {

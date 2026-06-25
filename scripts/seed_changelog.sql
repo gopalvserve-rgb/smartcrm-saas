@@ -708,3 +708,12 @@ SELECT 'feature',
        '🏢',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Tenants page: summary, filter, list view + billing edit');
+
+-- 2026-06-25 REC_RETENTION_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'Call recordings auto-delete after 30 days',
+       'To save storage, call recordings are now automatically deleted after 30 days. A nightly job removes recordings older than the limit across the workspace, and the Call Activity page shows a notice of the current retention window. Admins can change the number of days (or set 0 to keep recordings forever) from the Call Activity page.',
+       '🗑',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Call recordings auto-delete after 30 days');

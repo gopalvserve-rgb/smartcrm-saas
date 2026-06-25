@@ -55,6 +55,9 @@ const CONFIG_KEYS = [
   // CALL_CAPTURE_LEAD_ONLY_v1 — opt-in: only CAPTURE/store calls matched to
   // an existing CRM lead (drops personal/unknown calls at ingestion).
   'CALL_CAPTURE_LEAD_ONLY',
+  // REC_RETENTION_v1 — auto-delete call recordings older than N days (default 30).
+  // '0' (or blank) disables the cron for this tenant.
+  'RECORDING_RETENTION_DAYS',
   // CALL_DUP_LEAD_v1 — 'attach' (link to existing) | 'duplicate' (new is_duplicate row)
   'CALLS_AUTOLEAD_ON_DUPLICATE',
   // Auto vs Manual mode for call-to-lead creation. 'auto' (default) creates
@@ -373,6 +376,7 @@ async function api_admin_brand(_token) {
     POOL_ENABLED: cfg.POOL_ENABLED || '',   /* LEAD_POOL_v1 — gate the Lead Pool menu */
     CALL_ACTIVITY_LEAD_ONLY: cfg.CALL_ACTIVITY_LEAD_ONLY || '',  /* CA_LEAD_ONLY — Call Activity default filter */
     CALL_CAPTURE_LEAD_ONLY: cfg.CALL_CAPTURE_LEAD_ONLY || '',  /* CALL_CAPTURE_LEAD_ONLY — capture gate */
+    RECORDING_RETENTION_DAYS: cfg.RECORDING_RETENTION_DAYS || '',  /* REC_RETENTION_v1 — auto-delete recordings after N days (blank=30 default) */
     POOL_PULL_USER_IDS: cfg.POOL_PULL_USER_IDS || '',  /* LEAD_POOL_v1 — per-user pull allow-list (SPA nav gate) */
     POOL_PULL_RULES: cfg.POOL_PULL_RULES || '',  /* LEAD_POOL_v2 — JSON [{user_id,count}] per-user batch rules (SPA nav gate) */
     DEMO_REMINDER_ENABLED: cfg.DEMO_REMINDER_ENABLED || '',

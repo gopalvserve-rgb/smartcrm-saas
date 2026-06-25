@@ -3721,6 +3721,62 @@ async function _runAiManagerCoachingForAllTenants() {
 setInterval(() => _runAiManagerCoachingForAllTenants().catch(() => {}), 86400_000);
 console.log('[ai_mgr] AI Manager detection cycle started (every 2 min)');
 
+// ── REC_RETENTION_v1 — auto-delete call recordings older than N days ──
+// Daily all-tenant sweep. Each tenant's RECORDING_RETENTION_DAYS config
+// (default 30; '0'/blank disables) decides the cutoff. Full delete of the
+// lead_recordings row (audio + transcript + AI summary), per product decision.
+async function _runRecordingRetentionForAllTenants() {
+  const control = require('./control/db');
+  const tenantPool = require('./utils/tenantPool');
+  let tenants;
+  try {
+    tenants = (await control.query(
+      "SELECT id, slug, org_name, db_name FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 1000"
+    )).rows;
+  } catch (e) { console.warn('[rec-retention] tenant list failed:', e.message); return; }
+  let totalDeleted = 0, tenantsHit = 0;
+  for (const row of tenants) {
+    const pool = tenantPool.poolFor(row);
+    if (!pool) continue;
+    try {
+      // Per-tenant retention days. Default 30. Explicit '0' / negative / blank-as-0 disables.
+      let days = 30;
+      try {
+        const c = await pool.query("SELECT value FROM config WHERE key = 'RECORDING_RETENTION_DAYS' LIMIT 1");
+        if (c.rows.length) {
+          const v = String(c.rows[0].value == null ? '' : c.rows[0].value).trim();
+          if (v !== '') { const n = Number(v); if (Number.isFinite(n)) days = n; }
+        }
+      } catch (_) {}
+      if (!(days > 0)) continue;  // disabled for this tenant
+      const del = await pool.query(
+        'DELETE FROM lead_recordings WHERE created_at < NOW() - make_interval(days => $1)',
+        [Math.floor(days)]
+      );
+      const n = del.rowCount || 0;
+      if (n > 0) {
+        totalDeleted += n; tenantsHit++;
+        console.log('[rec-retention] ' + row.slug + ': deleted ' + n + ' recording(s) older than ' + days + 'd');
+      }
+    } catch (e) { console.warn('[rec-retention] ' + row.slug + ' failed:', e.message); }
+  }
+  console.log('[rec-retention] sweep done — deleted ' + totalDeleted + ' recording(s) across ' + tenantsHit + ' tenant(s)');
+}
+/* Run at the next 3 AM IST, then every 24h. Plus a one-off boot sweep. */
+function _scheduleRecordingRetention() {
+  const istNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  const next = new Date(istNow); next.setHours(3, 0, 0, 0);
+  if (next <= istNow) next.setDate(next.getDate() + 1);
+  const wait = Math.max(1000, next.getTime() - istNow.getTime());
+  setTimeout(() => {
+    _runRecordingRetentionForAllTenants().catch(e => console.error('[rec-retention]', e.message));
+    setInterval(() => { _runRecordingRetentionForAllTenants().catch(e => console.error('[rec-retention]', e.message)); }, 24 * 60 * 60 * 1000);
+  }, wait);
+  console.log('[rec-retention] scheduled — next run in ' + Math.round(wait / 60000) + ' min (3 AM IST)');
+}
+setTimeout(() => { _runRecordingRetentionForAllTenants().catch(() => {}); }, 180_000);
+_scheduleRecordingRetention();
+
 // ── WL_BILLING_CRON_v1 — daily auto-bill at 9am IST ──
 // Runs once at 9:00 IST. Generates invoices for every active customer
 // whose billing_day == today's day-of-month, then auto-sends the invoice

@@ -20565,6 +20565,21 @@ VIEWS.callactivity = async (view) => {
   await ensureChartJs();
   view.innerHTML = '';
   const { users = [] } = CRM.cache;
+  // REC_RETENTION_v1 — auto-delete window note + admin control.
+  let _retNoteEl = null;
+  const _retDays = () => {
+    const v = (CRM.brand && CRM.brand.RECORDING_RETENTION_DAYS);
+    const t = (v == null ? '' : String(v)).trim();
+    if (t === '') return 30;
+    const n = Number(t); return Number.isFinite(n) ? n : 30;
+  };
+  const _retText = () => {
+    const d = _retDays();
+    return d > 0
+      ? '\uD83D\uDDD1 Call recordings are automatically deleted after ' + d + ' days to save storage. Applies to everyone in this workspace.'
+      : '\uD83D\uDDD1 Auto-delete is off — call recordings are kept indefinitely.';
+  };
+  const _paintRetNote = () => { if (_retNoteEl) _retNoteEl.textContent = _retText(); };
 
   // Default range: last 30 days
   const today = new Date();
@@ -20620,8 +20635,28 @@ VIEWS.callactivity = async (view) => {
       style: { display: 'inline-flex', alignItems: 'center', gap: '.35rem', fontSize: '.82rem', marginLeft: '.6rem', color: '#b45309' },
       title: 'When ON, only calls (and recordings) matching an existing CRM lead are stored. Personal / unknown-number calls are never captured. Applies to new calls going forward. Default OFF — does not affect other tenants.' },
       _capChk, h('span', {}, '🔒 Capture CRM-lead calls only')));
+    // REC_RETENTION_v1 — admin sets the auto-delete window (days). 0 = keep forever.
+    const _retInp = h('input', { type: 'number', min: '0', step: '1', style: { width: '60px', marginLeft: '.3rem' },
+      value: String(_retDays()) });
+    const _retSave = h('button', { class: 'btn ghost', style: { fontSize: '.8rem' },
+      title: 'Recordings older than this many days are automatically deleted every night. 0 = keep forever.',
+      onclick: async () => {
+        const v = String(Math.max(0, Math.floor(Number(_retInp.value) || 0)));
+        try {
+          await api('api_admin_setConfig', { key: 'RECORDING_RETENTION_DAYS', value: v });
+          CRM.brand = Object.assign(CRM.brand || {}, { RECORDING_RETENTION_DAYS: v });
+          _paintRetNote();
+          toast(Number(v) > 0 ? ('Recordings auto-delete after ' + v + ' days') : 'Auto-delete disabled (kept forever)', 'ok');
+        } catch (e) { toast(e.message, 'err'); }
+      } }, '💾 Save');
+    toolbar.appendChild(h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: '.25rem', fontSize: '.82rem', marginLeft: '.6rem', color: '#475569' },
+      title: 'Auto-delete call recordings older than N days' },
+      h('span', {}, '🗑 Auto-delete after'), _retInp, h('span', {}, 'days'), _retSave));
   }
   view.appendChild(toolbar);
+  // REC_RETENTION_v1 — visible notice for ALL users.
+  _retNoteEl = h('span', {}, _retText());
+  view.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', fontSize: '.82rem', color: '#64748b', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '7px 11px', margin: '0 0 10px' } }, _retNoteEl));
   setTimeout(() => { try { window._attachDatePresets && window._attachDatePresets(_caFrom, _caTo, { key: 'callactivity', apply: () => { try { loadCallActivity(); } catch (_) {} } }); } catch (_) {} }, 0);
   // BULK_AUDIT_HISTORY_v1 — Bulk AI Audit toolbar (admin/manager only).
   { const bar = _buildBulkAuditBar({ onDone: () => { try { loadCallActivity(); } catch(_) {} } }); if (bar) view.appendChild(bar); }
