@@ -690,11 +690,3 @@ SELECT 'feature',
        '🤖',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Pause the AI bot on a chat with one tap');
-
-INSERT INTO changelog (category, title, body, icon, created_at)
-SELECT 'fix',
-       'Fixed "Please enter a number" error when saving a lead',
-       'Some reps could not save a lead — clicking Save did nothing and a "Please enter a number" tooltip appeared, even after they filled in the number field they could see. This happened when a required number field further down (or inside a collapsed section) of the Edit Lead form was still empty, and the browser blocked the save without clearly showing which field was the problem. The form now shows a clear message naming the exact field that still needs to be filled, and jumps to it — so saving works as expected.',
-       '✅',
-       now()
-WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Fixed "Please enter a number" error when saving a lead');

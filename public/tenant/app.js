@@ -8775,14 +8775,6 @@ async function openLeadModal(id) {
   renderExtraPhones();
 
   const form = h('form', { id: 'lead-form', class: 'form-grid' });
-  // LEADSAVE_NUMVALID_FIX_v1 — turn OFF native HTML5 validation. A required
-  // number custom field that's empty made Firefox throw a cryptic "Please
-  // enter a number" bubble pointing at an off-screen/collapsed field, so the
-  // rep saw the error even after filling the number they could see and Save
-  // silently did nothing. The submit handler below already runs its own JS
-  // validation (clear toast + focus) which honours the admin / dead-end-status
-  // exemptions — that is now the single source of truth.
-  form.noValidate = true;
   form.append(
     // LEAD_MODAL_REDESIGN_v1 — top-of-modal essentials with coloured-dot priority styling.
     // Row 1: Name + Phone (purple). Row 2: Status + Next follow-up (purple + teal).
@@ -9165,22 +9157,6 @@ async function openLeadModal(id) {
 
   form.addEventListener('submit', async ev => {
     ev.preventDefault();
-
-    // LEADSAVE_NUMVALID_FIX_v1 — with native validation off (form.noValidate),
-    // enforce the two core fields in JS so a blank name/phone can't slip
-    // through. Clear toast + focus, same UX as the custom-field checks below.
-    const _nameVal = (form.querySelector('[name="name"]')?.value || '').trim();
-    if (!_nameVal) {
-      toast('Name is required', 'err');
-      form.querySelector('[name="name"]')?.focus();
-      return;
-    }
-    const _phoneVal = (form.querySelector('[name="phone"]')?.value || '').trim();
-    if (!_phoneVal) {
-      toast('Phone is required', 'err');
-      form.querySelector('[name="phone"]')?.focus();
-      return;
-    }
 
     // Status = "Follow Up" requires next_followup_at — both date AND time.
     const statusName = selectedStatusName();
