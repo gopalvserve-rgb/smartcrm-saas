@@ -156,6 +156,17 @@ const SCHEMA_MIGRATIONS = [
   ` },
 
   // ─────────────────────────────────────────────────────────────
+  // R2_RECORDINGS_v1 (2026-06-25) — store call recordings in Cloudflare
+  // R2 (zero-egress) instead of Postgres bytea. r2_key = object key when
+  // the audio lives in R2 (audio_bytes then NULL). NULL r2_key = legacy
+  // Postgres-stored row (until the backfill sweep migrates it).
+  // ─────────────────────────────────────────────────────────────
+  { name: '2026_06_25_lead_recordings_r2_key', sql: `
+    ALTER TABLE lead_recordings ADD COLUMN IF NOT EXISTS r2_key TEXT;
+    CREATE INDEX IF NOT EXISTS idx_lead_rec_r2_pending ON lead_recordings(id) WHERE r2_key IS NULL AND audio_bytes IS NOT NULL;
+  ` },
+
+  // ─────────────────────────────────────────────────────────────
   // COPILOT_v4 PROACTIVE COACH — tables for signal stream + cached
   // morning briefings + lead AI summaries.
   // ─────────────────────────────────────────────────────────────

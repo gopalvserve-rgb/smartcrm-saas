@@ -1684,6 +1684,26 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
             });
           }
         } catch (_) {}
+        // R2_RECORDINGS_v1 — when R2 is configured, push the audio to R2
+        // (zero-egress object storage) and store only the key in Postgres.
+        // audio_bytes stays NULL for R2-backed rows. Any R2 failure falls
+        // back to storing the bytes in Postgres so uploads never break.
+        let _audioForDb = req.file.buffer;
+        let _r2Key = null;
+        try {
+          const _r2 = require('./utils/r2');
+          if (_r2.isEnabled()) {
+            const _store = db.tenantStorage.getStore && db.tenantStorage.getStore();
+            const _slug = (_store && _store.slug) || 'tenant';
+            const _ext = (_finalMime && _finalMime.indexOf('mpeg') !== -1) ? 'mp3'
+                       : (_finalMime && _finalMime.indexOf('mp4') !== -1) ? 'm4a'
+                       : (_finalMime && _finalMime.indexOf('wav') !== -1) ? 'wav' : 'audio';
+            const _key = 'rec/' + _slug + '/' + Date.now() + '-' + Math.random().toString(36).slice(2, 10) + '.' + _ext;
+            await _r2.putObject(_key, req.file.buffer, _finalMime);
+            _r2Key = _key;
+            _audioForDb = null;   // freed from Postgres — lives in R2
+          }
+        } catch (e) { console.warn('[/api/recordings] R2 upload failed, storing in Postgres:', e.message); _r2Key = null; _audioForDb = req.file.buffer; }
         // Fresh upload — INSERT with ON CONFLICT for race safety.
         try {
           // REC_FILENAME_DEDUP_v1 (2026-05-20) — also store original_filename so
@@ -1691,15 +1711,16 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
           // relying on the device_path which changes on reinstall.
           try { await db.query('ALTER TABLE lead_recordings ADD COLUMN IF NOT EXISTS original_filename TEXT'); } catch (_) {}
           try { await db.query('CREATE INDEX IF NOT EXISTS idx_lead_rec_filename ON lead_recordings(original_filename) WHERE original_filename IS NOT NULL'); } catch (_) {}
+          try { await db.query('ALTER TABLE lead_recordings ADD COLUMN IF NOT EXISTS r2_key TEXT'); } catch (_) {}
           const _ins = await db.query(
             `INSERT INTO lead_recordings
-               (lead_id, user_id, phone, direction, duration_s, device_path, mime_type, size_bytes, audio_bytes, started_at, created_at, dedup_key, original_filename)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+               (lead_id, user_id, phone, direction, duration_s, device_path, mime_type, size_bytes, audio_bytes, started_at, created_at, dedup_key, original_filename, r2_key)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
              ON CONFLICT (user_id, dedup_key) DO NOTHING
              RETURNING id`,
             [leadId, me.id, phone, direction, Number(req.body.duration_s) || 0,
-             _devicePath, _finalMime, (req.file.size||0), req.file.buffer,
-             req.body.started_at || db.nowIso(), db.nowIso(), _dedupKey, filename || null]
+             _devicePath, _finalMime, (req.file.size||0), _audioForDb,
+             req.body.started_at || db.nowIso(), db.nowIso(), _dedupKey, filename || null, _r2Key]
           );
           id = _ins.rows[0] ? _ins.rows[0].id : null;
         } catch (e) {
@@ -2639,7 +2660,7 @@ app.get('/api/recordings/:id/audio', async (req, res, next) => {
         const token = req.query.token || req.headers['x-auth-token'] || '';
         await authUser(token);
         const r = await tenantDb.query(
-          `SELECT mime_type, audio_bytes FROM lead_recordings WHERE id = $1`,
+          `SELECT mime_type, audio_bytes, r2_key FROM lead_recordings WHERE id = $1`,
           [Number(req.params.id)]
         );
         const row = r.rows[0];
@@ -2661,6 +2682,21 @@ app.get('/api/recordings/:id/audio', async (req, res, next) => {
             recent_recording_ids: visibleIds,
             hint: 'If tenant_resolved is wrong, log out + back in. If recent_recording_ids is empty, no recordings have synced for this tenant.'
           });
+        }
+        // R2_RECORDINGS_v1 — if this recording lives in R2, hand the browser
+        // a short-lived presigned URL and 302-redirect. The audio bytes then
+        // come straight from Cloudflare (zero Railway egress), never through
+        // this process. Falls through to Postgres streaming if R2 is off or
+        // the presign fails for any reason.
+        if (row.r2_key) {
+          try {
+            const _r2 = require('./utils/r2');
+            if (_r2.isEnabled()) {
+              const _url = await _r2.presignGet(row.r2_key, 600);
+              res.setHeader('Cache-Control', 'private, max-age=300');
+              return res.redirect(302, _url);
+            }
+          } catch (e) { console.warn('[/audio] R2 presign failed, falling back:', e.message); }
         }
         // Buffer.from is a no-op when audio_bytes already IS a Buffer (pg
         // returns bytea as Buffer); it normalises if some driver path
@@ -3749,11 +3785,19 @@ async function _runRecordingRetentionForAllTenants() {
         }
       } catch (_) {}
       if (!(days > 0)) continue;  // disabled for this tenant
+      // R2_RECORDINGS_v1 — DELETE returns the R2 keys so we can purge the
+      // objects from Cloudflare too (otherwise they'd linger + cost storage).
       const del = await pool.query(
-        'DELETE FROM lead_recordings WHERE created_at < NOW() - make_interval(days => $1)',
+        'DELETE FROM lead_recordings WHERE created_at < NOW() - make_interval(days => $1) RETURNING r2_key',
         [Math.floor(days)]
       );
       const n = del.rowCount || 0;
+      try {
+        const _r2 = require('./utils/r2');
+        if (_r2.isEnabled()) {
+          for (const dr of del.rows) { if (dr.r2_key) await _r2.deleteObject(dr.r2_key); }
+        }
+      } catch (_) {}
       if (n > 0) {
         totalDeleted += n; tenantsHit++;
         console.log('[rec-retention] ' + row.slug + ': deleted ' + n + ' recording(s) older than ' + days + 'd');
@@ -3776,6 +3820,59 @@ function _scheduleRecordingRetention() {
 }
 setTimeout(() => { _runRecordingRetentionForAllTenants().catch(() => {}); }, 180_000);
 _scheduleRecordingRetention();
+
+// ── R2_RECORDINGS_v1 — background backfill: migrate legacy Postgres-stored
+// recordings into R2 in small batches so the move is gradual + safe (no
+// boot-time mega-job, no request timeouts). Only runs when R2 is configured.
+async function _runR2BackfillSweep() {
+  let _r2; try { _r2 = require('./utils/r2'); } catch (_) { return; }
+  if (!_r2.isEnabled()) return;
+  const control = require('./control/db');
+  const tenantPool = require('./utils/tenantPool');
+  let tenants;
+  try {
+    tenants = (await control.query(
+      "SELECT id, slug, org_name, db_name FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 1000"
+    )).rows;
+  } catch (_) { return; }
+  let migrated = 0;
+  for (const row of tenants) {
+    const pool = tenantPool.poolFor(row);
+    if (!pool) continue;
+    try {
+      const batch = await pool.query(
+        "SELECT id, mime_type, audio_bytes FROM lead_recordings WHERE r2_key IS NULL AND audio_bytes IS NOT NULL ORDER BY id ASC LIMIT 25"
+      );
+      for (const rec of batch.rows) {
+        let buf = rec.audio_bytes;
+        if (!buf) continue;
+        if (!Buffer.isBuffer(buf)) buf = Buffer.from(buf);
+        if (buf.length === 0) continue;
+        let mime = rec.mime_type || 'audio/mp4';
+        // Legacy AMR/3GP rows were transcoded lazily on play (which reads
+        // audio_bytes). Once in R2 we redirect before that path, so
+        // transcode NOW to keep them browser-playable.
+        try {
+          const _tx = require('./utils/audioTranscode');
+          if (_tx.needsTranscode(buf)) {
+            const _mp3 = await _tx.transcodeToMp3(buf);
+            if (_mp3 && _mp3.length > 0) { buf = _mp3; mime = 'audio/mpeg'; }
+          }
+        } catch (_) {}
+        const ext = mime.indexOf('mpeg') !== -1 ? 'mp3' : mime.indexOf('mp4') !== -1 ? 'm4a' : mime.indexOf('wav') !== -1 ? 'wav' : 'audio';
+        const key = 'rec/' + (row.slug || 'tenant') + '/backfill-' + rec.id + '-' + Date.now() + '.' + ext;
+        try {
+          await _r2.putObject(key, buf, mime);
+          await pool.query('UPDATE lead_recordings SET r2_key = $1, audio_bytes = NULL, mime_type = $2, size_bytes = $3 WHERE id = $4', [key, mime, buf.length, rec.id]);
+          migrated++;
+        } catch (e) { console.warn('[r2-backfill] ' + row.slug + ' rec ' + rec.id + ' failed:', e.message); }
+      }
+    } catch (e) { console.warn('[r2-backfill] ' + row.slug + ' batch failed:', e.message); }
+  }
+  if (migrated > 0) console.log('[r2-backfill] migrated ' + migrated + ' recording(s) to R2 this tick');
+}
+setTimeout(() => { _runR2BackfillSweep().catch(() => {}); }, 240_000);          // first run ~4 min after boot
+setInterval(() => { _runR2BackfillSweep().catch(e => console.error('[r2-backfill]', e.message)); }, 60_000);  // then every minute
 
 // ── WL_BILLING_CRON_v1 — daily auto-bill at 9am IST ──
 // Runs once at 9:00 IST. Generates invoices for every active customer

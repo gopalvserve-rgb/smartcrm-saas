@@ -266,7 +266,7 @@ const SCHEMA = {
   },
   lead_recordings: {
     columns: ['lead_id', 'user_id', 'phone', 'direction', 'duration_s',
-              'device_path', 'mime_type', 'size_bytes', 'audio_bytes',
+              'device_path', 'mime_type', 'size_bytes', 'audio_bytes', 'r2_key',
               'started_at', 'created_at',
               'transcript', 'summary', 'action_items', 'sentiment',
               'suggested_status_id', 'next_followup_days', 'key_insight',

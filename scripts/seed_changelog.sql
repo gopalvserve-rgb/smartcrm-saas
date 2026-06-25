@@ -717,3 +717,12 @@ SELECT 'feature',
        '🗑',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Call recordings auto-delete after 30 days');
+
+-- 2026-06-25 R2_RECORDINGS_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'improvement',
+       'Faster, cheaper call-recording storage',
+       'Call recordings are now stored in zero-egress object storage and streamed straight to your browser, which cuts hosting bandwidth costs and speeds up playback. Existing recordings are migrated automatically in the background. No change to how you record or play calls.',
+       '🎙️',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Faster, cheaper call-recording storage');
