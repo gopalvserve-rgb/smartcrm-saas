@@ -48,7 +48,13 @@ const _MODEL_ALIASES = {
   'gemini-pro':               'gemini-2.0-flash-lite',
   'gemini-1.0-pro':           'gemini-2.0-flash-lite',
   'gemini-2.5-flash':         'gemini-2.0-flash-lite',
-  'gemini-2.5-pro':           'gemini-2.0-flash-lite'
+  'gemini-2.5-flash-lite':    'gemini-2.0-flash-lite',
+  // LEAD_AI_SUMMARY_GEMINI_v1 (2026-06-25) — copilotProactive.js requested
+  // 'gemini-2.5-flash-lite' which had no alias entry, so it leaked through
+  // unmapped and Google rejected it as unavailable. Lead AI Summary fell
+  // back to the deterministic template for every lead.
+  'gemini-2.5-pro':           'gemini-2.0-flash-lite',
+  'gemini-2.5-pro-latest':    'gemini-2.0-flash-lite'
 };
 function _normModel(m) {
   const k = String(m || '').trim().replace(/^models\//, '');

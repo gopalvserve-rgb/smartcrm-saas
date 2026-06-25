@@ -521,8 +521,12 @@ No preamble. Output ONLY the JSON object.`;
     try {
       const res = await gemini.generate({
         prompt: ctxLines.join('\n'),
+        // LEAD_AI_SUMMARY_GEMINI_v1 (2026-06-25) — model swapped from
+        // 'gemini-2.5-flash-lite' (which Google rejected as unavailable
+        // on this API key) to the proven-working default. Alias map
+        // also covers it, this is belt-and-braces.
         system, temperature: 0.35, maxOutputTokens: 450,
-        model: 'gemini-2.5-flash-lite'
+        model: 'gemini-2.0-flash-lite'
       });
       if (res && res.ok && res.text) {
         const m = res.text.match(/\{[\s\S]*\}/);
@@ -534,8 +538,17 @@ No preamble. Output ONLY the JSON object.`;
         }
         try { await gemini.logUsage({ feature: 'copilot_lead_summary', model: res.model,
               input_tokens: res.input_tokens, output_tokens: res.output_tokens, cost_usd: res.cost_usd }); } catch {}
+      } else if (res && !res.ok) {
+        // LEAD_AI_SUMMARY_GEMINI_v1 — was silently catching here, hiding model-
+        // unavailable + auth + quota failures so the deterministic fallback
+        // looked like the AI summary. Log it so future regressions surface.
+        console.warn('[copilot_lead_summary] Gemini returned not-ok:',
+          (res && res.error) || 'unknown', '— falling back to deterministic summary');
       }
-    } catch (e) {}
+    } catch (e) {
+      console.warn('[copilot_lead_summary] Gemini call threw:', e && e.message,
+        '— falling back to deterministic summary');
+    }
   }
 
   // Deterministic fallback when Gemini is down.
