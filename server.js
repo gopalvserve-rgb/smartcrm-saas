@@ -1604,7 +1604,12 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
         // store recordings for calls that don't match a CRM lead. OFF →
         // recordings behave exactly as before for every tenant.
         try {
-          if (!leadId && String(await db.getConfig('CALL_CAPTURE_LEAD_ONLY', '0')) === '1') {
+          // CALL_CAPTURE_LEAD_ONLY_USER_v1 — drop the recording when there's no
+          // CRM-lead match AND capture-lead-only is active: tenant-wide admin
+          // switch ON *or* this uploading user opted in (users.capture_lead_only).
+          const _capTenant = String(await db.getConfig('CALL_CAPTURE_LEAD_ONLY', '0')) === '1';
+          const _capUser   = me && Number(me.capture_lead_only) === 1;
+          if (!leadId && (_capTenant || _capUser)) {
             return res.json({ ok: true, skipped: true, capture: 'skipped', stored: false });
           }
         } catch (_) {}

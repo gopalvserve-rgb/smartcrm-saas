@@ -216,7 +216,10 @@ async function api_call_logEvent(token, payload) {
   let _capMatchLead = null;
   try {
     const _capCfg = await _getAutoleadCfg();
-    if (_capCfg && _capCfg.captureLeadOnly === '1') {
+    // CALL_CAPTURE_LEAD_ONLY_USER_v1 — active if the tenant-wide admin switch
+    // is ON *or* THIS calling user opted in for themselves (users.capture_lead_only).
+    const _capActive = (_capCfg && _capCfg.captureLeadOnly === '1') || (me && Number(me.capture_lead_only) === 1);
+    if (_capActive) {
       _capMatchLead = await _findLeadByPhone(phoneClean);
       if (!_capMatchLead) {
         return { ok: true, queued: false, skipped: true, capture: 'skipped', call_event_id: null, lead_id: null, auto_created: false };
@@ -920,7 +923,9 @@ async function api_call_handleEnded(token, payload) {
   // (no auto-create, no call_event). OFF → unchanged.
   try {
     const _capCfg = await _getAutoleadCfg();
-    if (_capCfg && _capCfg.captureLeadOnly === '1' && !lead) {
+    // CALL_CAPTURE_LEAD_ONLY_USER_v1 — tenant admin switch OR this user's own opt-in.
+    const _capActive = (_capCfg && _capCfg.captureLeadOnly === '1') || (me && Number(me.capture_lead_only) === 1);
+    if (_capActive && !lead) {
       return { ok: true, skipped: true, capture: 'skipped', lead_id: null, auto_created: false };
     }
   } catch (_) {}

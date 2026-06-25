@@ -690,3 +690,12 @@ SELECT 'feature',
        '🤖',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Pause the AI bot on a chat with one tap');
+
+-- 2026-06-25 CALL_CAPTURE_LEAD_ONLY_USER_v1
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'Capture only your CRM-lead calls (per-user)',
+       'You can now choose, from Settings → Security, to capture only your CRM-lead calls. When ON, your calls to numbers that aren''t a CRM lead — and their recordings — aren''t captured at all. It''s your own setting and affects only you; other users'' calls are unchanged. This is separate from the workspace-wide admin switch on the Call Activity page.',
+       '📞',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Capture only your CRM-lead calls (per-user)');

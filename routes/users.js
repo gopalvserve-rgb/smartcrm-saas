@@ -165,9 +165,9 @@ async function api_users_update(token, id, patch) {
 async function api_users_updateSelf(token, patch) {
   const me = await authUser(token);
   const allowed = {};
-  ['name', 'phone', 'photo_url', 'calendly_url', 'autodial_on'].forEach(k => {
+  ['name', 'phone', 'photo_url', 'calendly_url', 'autodial_on', 'capture_lead_only'].forEach(k => {
     if (k in patch) {
-      allowed[k] = (k === 'autodial_on') ? (patch[k] ? 1 : 0) : patch[k];
+      allowed[k] = (k === 'autodial_on' || k === 'capture_lead_only') ? (patch[k] ? 1 : 0) : patch[k];
     }
   });
   await db.update('users', me.id, allowed);

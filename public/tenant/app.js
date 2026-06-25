@@ -1613,6 +1613,47 @@ async function openSecurityModal() {
         finally { btn.disabled = false; }
       };
       return wrap;
+    })(),
+
+    h('hr', { style: { margin: '18px 0', border: '0', borderTop: '1px solid var(--border-light)' } }),
+
+    /* CALL_CAPTURE_LEAD_ONLY_USER_v1 — per-user opt-in: capture only MY CRM-lead calls. */
+    (function () {
+      const wrap = h('div', {});
+      wrap.appendChild(h('h4', { style: { margin: '4px 0 8px' } }, '\uD83D\uDCDE Capture only my CRM-lead calls'));
+      const state = h('div', {
+        style: {
+          padding: '10px 12px', borderRadius: '6px', display: 'flex',
+          justifyContent: 'space-between', alignItems: 'center', gap: '10px',
+          background: 'var(--bg-alt)', fontWeight: 500
+        }
+      });
+      const label = h('span', {}, 'Loading\u2026');
+      const btn = h('button', { class: 'btn sm primary' }, '\u2026');
+      state.appendChild(label); state.appendChild(btn);
+      wrap.appendChild(state);
+      wrap.appendChild(h('p', { class: 'muted', style: { fontSize: '.78rem', marginTop: '6px' } },
+        'When ON, your calls to numbers that aren\u2019t a CRM lead \u2014 and their recordings \u2014 aren\u2019t captured at all. Affects only you; other users\u2019 calls are unchanged.'));
+      function paint(enabled) {
+        state.style.background = enabled ? 'var(--ok-soft)' : 'var(--bg-alt)';
+        state.style.color = enabled ? 'var(--ok)' : '';
+        label.textContent = enabled ? '\u2713 Capturing only my CRM-lead calls' : 'Capturing all my calls';
+        btn.textContent = enabled ? 'Turn OFF' : 'Turn ON';
+        btn.dataset.next = enabled ? '0' : '1';
+      }
+      paint(Number(me.capture_lead_only) === 1);
+      btn.onclick = async () => {
+        btn.disabled = true;
+        try {
+          const next = Number(btn.dataset.next);
+          await api('api_users_updateSelf', { capture_lead_only: next });
+          me.capture_lead_only = next;
+          paint(next === 1);
+          toast(next ? 'On \u2014 only your CRM-lead calls will be captured' : 'Off \u2014 all your calls will be captured', 'ok');
+        } catch (e) { toast(e.message, 'err'); }
+        finally { btn.disabled = false; }
+      };
+      return wrap;
     })()
   ));
   document.body.appendChild(modal);

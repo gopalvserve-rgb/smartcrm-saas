@@ -146,6 +146,16 @@ const SCHEMA_MIGRATIONS = [
   ` },
 
   // ─────────────────────────────────────────────────────────────
+  // CALL_CAPTURE_LEAD_ONLY_USER_v1 (2026-06-25) — per-user opt-in:
+  // each user can choose, from Settings → Security, to capture ONLY
+  // their CRM-lead calls (personal/unknown calls dropped at ingestion).
+  // Independent of the tenant-wide CALL_CAPTURE_LEAD_ONLY admin switch.
+  // ─────────────────────────────────────────────────────────────
+  { name: '2026_06_25_users_capture_lead_only', sql: `
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS capture_lead_only INTEGER NOT NULL DEFAULT 0;
+  ` },
+
+  // ─────────────────────────────────────────────────────────────
   // COPILOT_v4 PROACTIVE COACH — tables for signal stream + cached
   // morning briefings + lead AI summaries.
   // ─────────────────────────────────────────────────────────────

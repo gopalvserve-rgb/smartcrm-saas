@@ -96,6 +96,8 @@ const SCHEMA = {
               'daily_lead_cap', 'monthly_lead_cap',
               'calendly_url', 'calendly_webhook_token',
               'paused_for_leads',
+              /* CALL_CAPTURE_LEAD_ONLY_USER_v1 — per-user capture-only-CRM-calls opt-in */
+              'capture_lead_only',
               /* AI_MGR_v1 — per-user working hours + EOD prompt time */
               'working_hours_start', 'working_hours_end', 'eod_prompt_time', 'timezone'],
     json: []

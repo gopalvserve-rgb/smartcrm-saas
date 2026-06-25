@@ -104,7 +104,9 @@ async function api_me(token) {
     role: user.role, parent_id: user.parent_id,
     department: user.department, photo_url: user.photo_url,
     totp_enabled: Number(user.totp_enabled) === 1,
-    calendly_url: user.calendly_url || ''
+    calendly_url: user.calendly_url || '',
+    // CALL_CAPTURE_LEAD_ONLY_USER_v1 — per-user 'capture only my CRM-lead calls'
+    capture_lead_only: Number(user.capture_lead_only) === 1 ? 1 : 0
   };
 }
 
