@@ -528,9 +528,9 @@ VIEWS.tenants = async (view) => {
     view.appendChild(h('div', { class: 'empty' }, 'No tenants yet. Click "+ Create tenant" to add one manually, or wait for a paid signup to come through Cashfree.'));
     return;
   }
-  // TENANT_CARDS_v1 — responsive card grid (no horizontal scroll)
-  const tbl = h('div', { style: { display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(330px, 1fr))', gap:'12px' } },
-    ...list.map(t => renderTenantCard(t, _sizeMap)));
+  // TENANT_LIST_v2 — summary strip + filter + card/list toggle. The grid/table
+  // is (re)built inside paint() so filtering & view switching are instant.
+  const _origList = list;
   // FB_REGISTRY_BACKFILL_v1 — one-click sync all tenant FB pages into central registry
   const fbBackfillBar = h('div', { style: { display: 'flex', gap: '.5rem', alignItems: 'center', marginBottom: '.6rem', padding: '.5rem .7rem', background: '#fef3c7', borderRadius: '8px', border: '1px solid #fde68a' }},
     h('span', { style: { fontSize: '.85rem' }}, '\ud83d\udce1 FB Lead Ads central registry:'),
@@ -560,9 +560,101 @@ VIEWS.tenants = async (view) => {
       finally { btn.disabled = false; btn.textContent = '\ud83d\udd04 Backfill FB Registry'; }
     }}, '\ud83d\udd04 Backfill FB Registry')
   );
+  // ---- #7 Summary strip ----------------------------------------------------
+  const _todayKey = new Date().toLocaleDateString('en-CA');
+  const _cnt = {
+    total: _origList.length,
+    active: _origList.filter(t => t.status === 'active').length,
+    suspended: _origList.filter(t => t.status === 'suspended').length,
+    today: _origList.filter(t => { try { return new Date(t.created_at).toLocaleDateString('en-CA') === _todayKey; } catch (_) { return false; } }).length
+  };
+  const kpi = (label, val, color) => h('div', { style:{ flex:'1', minWidth:'120px', background:'#fff', border:'1px solid #e2e8f0', borderRadius:'10px', padding:'10px 14px' } },
+    h('div', { style:{ fontSize:'1.5rem', fontWeight:'800', color: color||'#0f172a' } }, String(val)),
+    h('div', { style:{ fontSize:'.74rem', color:'#64748b', fontWeight:'600', textTransform:'uppercase', letterSpacing:'.03em' } }, label));
+  view.appendChild(h('div', { style:{ display:'flex', gap:'10px', flexWrap:'wrap', marginBottom:'12px' } },
+    kpi('Registered today', _cnt.today, '#0891b2'),
+    kpi('Total active', _cnt.active, '#16a34a'),
+    kpi('Total suspended', _cnt.suspended, '#dc2626'),
+    kpi('Total tenants', _cnt.total)));
+
+  // ---- #5 Filter bar + #6 view toggle -------------------------------------
+  const _f = { q:'', status:'' };
+  let _viewMode = (function(){ try { return localStorage.getItem('saas.tenantView') || 'card'; } catch(_) { return 'card'; } })();
+  const qInp = h('input', { type:'search', placeholder:'Search org / slug / email…', style:{ flex:'1', minWidth:'180px', padding:'.4rem .6rem', border:'1px solid #cbd5e1', borderRadius:'8px' } });
+  const STATUSES = ['', 'active', 'trial', 'past_due', 'suspended', 'pending_payment', 'pending_delete', 'deleted'];
+  const stSel = h('select', { style:{ padding:'.4rem .6rem', border:'1px solid #cbd5e1', borderRadius:'8px' } },
+    ...STATUSES.map(v => h('option', { value:v }, v === '' ? 'All statuses' : v)));
+  const countLbl = h('span', { class:'muted', style:{ fontSize:'.78rem', whiteSpace:'nowrap' } }, '');
+  const cardBtn = h('button', { class:'btn xs' }, '▦ Cards');
+  const listBtn = h('button', { class:'btn xs' }, '☰ List');
+  const paintToggle = () => {
+    cardBtn.style.background = _viewMode==='card' ? '#6366f1' : ''; cardBtn.style.color = _viewMode==='card' ? '#fff' : '';
+    listBtn.style.background = _viewMode==='list' ? '#6366f1' : ''; listBtn.style.color = _viewMode==='list' ? '#fff' : '';
+  };
+  cardBtn.onclick = () => { _viewMode='card'; try{localStorage.setItem('saas.tenantView','card');}catch(_){ } paintToggle(); paint(); };
+  listBtn.onclick = () => { _viewMode='list'; try{localStorage.setItem('saas.tenantView','list');}catch(_){ } paintToggle(); paint(); };
+  view.appendChild(h('div', { style:{ display:'flex', gap:'8px', alignItems:'center', flexWrap:'wrap', marginBottom:'10px' } },
+    qInp, stSel, countLbl, h('span', { style:{ flex:'1' } }), cardBtn, listBtn));
+
   view.appendChild(fbBackfillBar);
-    view.appendChild(h('div', { class: 'card', style: { padding: 0 } }, tbl));
+  const host = h('div', {});
+  view.appendChild(host);
+
+  function _applyFilter() {
+    const q = _f.q.trim().toLowerCase();
+    return _origList.filter(t => {
+      if (_f.status && t.status !== _f.status) return false;
+      if (q) {
+        const hay = ((t.org_name||'') + ' ' + (t.slug||'') + ' ' + (t.contact_email||'')).toLowerCase();
+        if (hay.indexOf(q) === -1) return false;
+      }
+      return true;
+    });
+  }
+  function paint() {
+    const rows = _applyFilter();
+    countLbl.textContent = 'Showing ' + rows.length + ' of ' + _origList.length;
+    host.innerHTML = '';
+    if (!rows.length) { host.appendChild(h('div', { class:'empty' }, 'No tenants match the filter.')); return; }
+    if (_viewMode === 'list') {
+      host.appendChild(h('div', { class:'card', style:{ padding:'0', overflowX:'auto' } }, _tenantListTable(rows, _sizeMap)));
+    } else {
+      host.appendChild(h('div', { style:{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(330px, 1fr))', gap:'12px' } },
+        ...rows.map(t => renderTenantCard(t, _sizeMap))));
+    }
+  }
+  qInp.oninput = () => { _f.q = qInp.value; paint(); };
+  stSel.onchange = () => { _f.status = stSel.value; paint(); };
+  paintToggle(); paint();
 };
+
+// TENANT_LIST_v2 — compact table (list view) builder.
+function _tenantListTable(rows, sizeMap) {
+  const th = (txt) => h('th', { style:{ textAlign:'left', padding:'8px 10px', fontSize:'.72rem', textTransform:'uppercase', letterSpacing:'.03em', color:'#64748b', borderBottom:'1px solid #e2e8f0', whiteSpace:'nowrap' } }, txt);
+  const td = (kids, style) => h('td', { style: Object.assign({ padding:'8px 10px', fontSize:'.82rem', borderBottom:'1px solid #f1f5f9', verticalAlign:'top' }, style||{}) }, kids);
+  const body = rows.map(t => {
+    const capEff = (t.user_cap_effective == null || t.user_cap_effective === '') ? null : Number(t.user_cap_effective);
+    const usedRaw = (t.user_count_active == null) ? null : Number(t.user_count_active);
+    const usersTxt = (usedRaw==null?'—':usedRaw) + ' / ' + (capEff==null?'∞':capEff);
+    const usersOver = (capEff != null && usedRaw != null && usedRaw > capEff);
+    const bal = Number(t.pending_balance_inr) || 0;
+    const isLive = (t.status === 'active' || t.status === 'trial' || t.status === 'pending_delete');
+    return h('tr', {},
+      td([ h('div', { style:{ fontWeight:'700', color:'#0f172a' } }, t.org_name || t.slug),
+           h('div', { style:{ fontSize:'.72rem', color:'#94a3b8' } }, '/' + t.slug) ]),
+      td(_tenantStatusBadge(t.status)),
+      td(t.package_name || '—'),
+      td(usersTxt, { color: usersOver ? '#dc2626' : '#0f172a', fontWeight: usersOver ? '700' : '400', whiteSpace:'nowrap' }),
+      td(bal > 0 ? ('₹' + bal.toLocaleString('en-IN')) : '—', { color: bal>0?'#b45309':'#94a3b8', whiteSpace:'nowrap' }),
+      td(fmtDate(t.current_period_end) || '—', { whiteSpace:'nowrap' }),
+      td(h('div', { style:{ display:'flex', gap:'5px', flexWrap:'wrap' } },
+          h('button', { class:'btn xs', style:{ background:'#6366f1', color:'#fff' }, onclick:()=>openTenantDetailsModal(t) }, '✏️ Edit'),
+          isLive ? h('button', { class:'btn xs', onclick:()=>loginAsTenant(t) }, '🔓 Login ↗') : null)));
+  });
+  return h('table', { style:{ width:'100%', borderCollapse:'collapse', minWidth:'720px' } },
+    h('thead', {}, h('tr', {}, th('Tenant'), th('Status'), th('Plan'), th('Users'), th('Balance'), th('Period ends'), th('Actions'))),
+    h('tbody', {}, ...body));
+}
 
 /**
  * Open the tenant workspace in a new window with a short-lived
@@ -617,6 +709,8 @@ function renderTenantCard(t, sizeMap) {
     actions);
 }
 async function openTenantDetailsModal(t) {
+  let _pkgs = [];
+  try { _pkgs = await api('api_saas_packages_list'); } catch (_) {}
   const m = h('div', { class:'modal-bd' });
   const card = h('div', { class:'modal', style:{ maxWidth:'740px', maxHeight:'88vh', overflow:'auto' } });
   m.appendChild(card); document.body.appendChild(m);
@@ -634,11 +728,67 @@ async function openTenantDetailsModal(t) {
   card.appendChild(h('div', { style:{ background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:'10px', padding:'12px', marginBottom:'12px' } },
     h('div', { style:{ fontWeight:'700', marginBottom:'8px' } }, 'Edit'),
     fOrg.wrap, fName.wrap, fEmail.wrap, fMobile.wrap, fRemarks.wrap));
+
+  // TENANT_EDIT_BILLING_v1 — Billing + Plan section in the edit modal.
+  const numFld = (label, val) => {
+    const inp = h('input', { type:'number', min:'0', step:'1', value: (val==null||val==='')?'':String(val), style:{ width:'100%' } });
+    return { wrap: h('div', { style:{ marginBottom:'8px' } }, h('label', { style:{ fontSize:'.78rem', color:'#64748b', display:'block', marginBottom:'2px' } }, label), inp), inp };
+  };
+  const dateFld = (label, val) => {
+    const d = val ? String(val).slice(0,10) : '';
+    const inp = h('input', { type:'date', value:d, style:{ width:'100%' } });
+    return { wrap: h('div', { style:{ marginBottom:'8px' } }, h('label', { style:{ fontSize:'.78rem', color:'#64748b', display:'block', marginBottom:'2px' } }, label), inp), inp };
+  };
+  const pkgSel = h('select', { style:{ width:'100%' } },
+    h('option', { value:'' }, '— keep current —'),
+    ..._pkgs.map(pk => h('option', { value:String(pk.id), ...(Number(pk.id)===Number(t.package_id)?{selected:'selected'}:{}) },
+      (pk.name || ('Package #'+pk.id)) + (pk.base_price_inr!=null ? ('  (₹'+Number(pk.base_price_inr).toLocaleString('en-IN')+')') : ''))));
+  const fPkgWrap = h('div', { style:{ marginBottom:'8px' } }, h('label', { style:{ fontSize:'.78rem', color:'#64748b', display:'block', marginBottom:'2px' } }, 'Plan / package'), pkgSel);
+  const fCap   = numFld('User cap (seats) — blank = use plan default', t.user_cap);
+  const fTotal = numFld('Total amount (₹)', t.total_amount_inr);
+  const fPaid  = numFld('Amount paid (₹)', t.amount_paid_inr);
+  const fRemind= dateFld('Payment reminder / next due date', t.payment_reminder_at);
+  const balEl = h('div', { style:{ fontSize:'.82rem', fontWeight:'700', color:'#b45309', padding:'4px 0' } }, '');
+  const paintBal = () => {
+    const tot = Number(fTotal.inp.value)||0, pd = Number(fPaid.inp.value)||0;
+    const bal = Math.max(0, tot - pd);
+    balEl.textContent = 'Pending balance: ₹' + bal.toLocaleString('en-IN');
+    balEl.style.color = bal>0 ? '#b45309' : '#16a34a';
+  };
+  fTotal.inp.oninput = paintBal; fPaid.inp.oninput = paintBal; paintBal();
+  card.appendChild(h('div', { style:{ background:'#f0f9ff', border:'1px solid #bae6fd', borderRadius:'10px', padding:'12px', marginBottom:'12px' } },
+    h('div', { style:{ fontWeight:'700', marginBottom:'8px' } }, '💳 Billing & plan'),
+    fPkgWrap, fCap.wrap, fTotal.wrap, fPaid.wrap, fRemind.wrap, balEl));
+
   const saveBtn = h('button', { class:'btn primary' }, '💾 Save changes');
   saveBtn.onclick = async () => {
     saveBtn.disabled = true;
     try {
-      await api('api_saas_tenants_update', { id: t.id, org_name: fOrg.inp.value, contact_name: fName.inp.value, contact_email: fEmail.inp.value, contact_mobile: fMobile.inp.value, admin_remarks: fRemarks.inp.value });
+      // 1) contact + billing columns (plain writes)
+      await api('api_saas_tenants_update', {
+        id: t.id,
+        org_name: fOrg.inp.value, contact_name: fName.inp.value,
+        contact_email: fEmail.inp.value, contact_mobile: fMobile.inp.value,
+        admin_remarks: fRemarks.inp.value,
+        total_amount_inr: fTotal.inp.value === '' ? '' : Number(fTotal.inp.value),
+        amount_paid_inr:  fPaid.inp.value  === '' ? '' : Number(fPaid.inp.value),
+        payment_reminder_at: fRemind.inp.value || ''
+      });
+      // 2) plan change (uses dedicated endpoint so module logic + audit fire)
+      const newPkg = pkgSel.value ? Number(pkgSel.value) : null;
+      if (newPkg && Number(newPkg) !== Number(t.package_id)) {
+        await api('api_saas_tenants_changePackage', { tenant_id: t.id, package_id: newPkg });
+      }
+      // 3) user cap (dedicated endpoint; preserve existing extra-charge settings)
+      const curCap = (t.user_cap==null||t.user_cap==='') ? '' : String(t.user_cap);
+      if (String(fCap.inp.value) !== curCap) {
+        await api('api_saas_tenants_setUserPlan', {
+          slug: t.slug,
+          cap: fCap.inp.value === '' ? '' : Number(fCap.inp.value),
+          extra_inr: Number(t.user_extra_charge_inr) || 0,
+          period: t.user_extra_charge_period || 'month'
+        });
+      }
       toast('Saved'); m.remove(); navigate('tenants');
     } catch (e) { toast(e.message, 'err'); saveBtn.disabled = false; }
   };

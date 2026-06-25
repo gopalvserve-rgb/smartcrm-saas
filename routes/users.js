@@ -158,6 +158,29 @@ async function api_users_update(token, id, patch) {
     if ('paused_for_leads' in p) allowed.paused_for_leads = (p.paused_for_leads === true || Number(p.paused_for_leads) === 1);
   }
   if (p.password) allowed.password_hash = hashPassword(p.password);
+  // USER_QUOTA_REACTIVATE_v1 — re-activating a soft-deleted user takes a seat,
+  // so re-check the tenant user cap (same gate as create) before flipping
+  // is_active 0 -> 1. Skip when the value isn't actually changing to active.
+  if ('is_active' in allowed && (allowed.is_active === 1 || allowed.is_active === true)) {
+    try {
+      const target = await db.findById('users', id);
+      if (target && Number(target.is_active) !== 1) {
+        const store = (db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore());
+        if (store && (store.slug || store.tenant)) {
+          let tenantForQuota = store.tenant || null;
+          try {
+            const control = require('../control/db');
+            const slug = store.slug || (store.tenant && store.tenant.slug);
+            if (slug) { const fresh = await control.findOneBy('tenants', 'slug', slug); if (fresh) tenantForQuota = fresh; }
+          } catch (_) {}
+          if (tenantForQuota) { const { requireQuota } = require('../utils/quota'); await requireQuota(tenantForQuota, 'users'); }
+        }
+      }
+    } catch (e) {
+      if (e && e.quotaExceeded) throw e;
+      console.warn('[users] reactivate quota check failed (allowing):', e && e.message);
+    }
+  }
   await db.update('users', id, allowed);
   return { ok: true };
 }

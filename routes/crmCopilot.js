@@ -995,9 +995,19 @@ async function _executePendingAction(row, ctx) {
     // tenant's user cap. Same gate as api_users_create.
     try {
       const store = (db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore());
-      if (store && store.tenant) {
-        const { requireQuota } = require('../utils/quota');
-        await requireQuota(store.tenant, 'users');
+      if (store && (store.slug || store.tenant)) {
+        // USER_QUOTA_HARDEN_v1 parity — read the LIVE control-DB tenant row so a
+        // just-changed cap is enforced immediately (store.tenant is 30s-cached).
+        let tenantForQuota = store.tenant || null;
+        try {
+          const control = require('../control/db');
+          const slug = store.slug || (store.tenant && store.tenant.slug);
+          if (slug) { const fresh = await control.findOneBy('tenants', 'slug', slug); if (fresh) tenantForQuota = fresh; }
+        } catch (_) {}
+        if (tenantForQuota) {
+          const { requireQuota } = require('../utils/quota');
+          await requireQuota(tenantForQuota, 'users');
+        }
       }
     } catch (e) {
       if (e && e.quotaExceeded) throw e;

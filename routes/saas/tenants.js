@@ -1184,9 +1184,25 @@ async function api_saas_tenants_update(token, payload) {
   const t = tr.rows[0];
   if (!t) throw new Error('Tenant not found');
   const ALLOW = ['admin_remarks', 'contact_name', 'contact_email', 'contact_mobile', 'org_name'];
+  // TENANT_EDIT_BILLING_v1 — also allow plain billing columns from the edit
+  // modal. Numbers + a date; coerced separately from the text fields above.
+  const NUM_FIELDS  = ['total_amount_inr', 'amount_paid_inr'];
+  const DATE_FIELDS = ['payment_reminder_at'];
   const sets = []; const vals = []; let i = 1;
   for (const k of ALLOW) {
     if (p[k] !== undefined) { sets.push(`${k} = $${i++}`); vals.push((p[k] === '' || p[k] == null) ? null : String(p[k]).trim()); }
+  }
+  for (const k of NUM_FIELDS) {
+    if (p[k] !== undefined) {
+      const v = (p[k] === '' || p[k] == null) ? null : Math.max(0, Number(p[k]));
+      sets.push(`${k} = $${i++}`); vals.push(Number.isFinite(v) ? v : null);
+    }
+  }
+  for (const k of DATE_FIELDS) {
+    if (p[k] !== undefined) {
+      const v = (p[k] === '' || p[k] == null) ? null : String(p[k]).trim();
+      sets.push(`${k} = $${i++}::timestamptz`); vals.push(v);
+    }
   }
   if (!sets.length) return { ok: true, nochange: true };
   vals.push(id);

@@ -699,3 +699,12 @@ SELECT 'feature',
        '📞',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Capture only your CRM-lead calls (per-user)');
+
+-- 2026-06-25 TENANT_LIST_v2 + TENANT_EDIT_BILLING_v1 (super-admin)
+INSERT INTO changelog (category, title, body, icon, created_at)
+SELECT 'feature',
+       'Tenants page: summary, filter, list view + billing edit',
+       'The super-admin Tenants page now has a summary strip (Registered today / Total active / Total suspended / Total), a search + status filter, and a Cards/List view toggle that remembers your choice. The tenant Edit modal now lets you change billing (total amount, amount paid with auto pending balance, payment reminder date) and the plan (package + user cap) in one place.',
+       '🏢',
+       now()
+WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Tenants page: summary, filter, list view + billing edit');
