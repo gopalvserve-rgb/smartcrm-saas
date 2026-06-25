@@ -686,6 +686,10 @@ const SCHEMA = {
               'paid_at', 'raw_json'],
     json: ['raw_json']
   },
+  sub_statuses: {  // SUB_STATUS_v1 — Vserve beta: optional 2nd-level dropdown per parent status
+    columns: ['parent_status_id', 'name', 'color', 'sort_order',
+              'is_active', 'is_required', 'created_at', 'updated_at']
+  },
 };
 
 function _schema(table) {

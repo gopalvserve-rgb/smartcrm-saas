@@ -84,6 +84,7 @@ const CONFIG_KEYS = [
   'AI_QUICKNOTE_ENABLED',     // QNOTE_v1 — 2728 Quick Note row button
   'COPILOT_PROACTIVE_ENABLED',// COPILOT_v4 — Proactive Sales Coach (vserve beta)
   'WB_CHAT_V2_ENABLED',      // WB_CHAT_v2 — redesigned 3-column WhatsApp chat (vserve beta)
+  'SUB_STATUS_ENABLED',      // SUB_STATUS_v1 — sub-statuses under each lead status (vserve beta)
   'LEADS_VIEW_V2_ENABLED',   // LEADS_VIEW_v2 — Modern + Inbox view styles (vserve beta)
   'AI_MANAGER_ENABLED',      // AI_MGR_v1 — virtual admin/supervisor (vserve beta)
   'AI_CALL_ENABLED',         // AICALL_v1 — Smart Call AI master switch (VAPI)

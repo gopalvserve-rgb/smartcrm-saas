@@ -53,6 +53,9 @@ async function _lookups() {
 function _hydrate(l, usersById, statusesById, productsById, tatByStatusId, finalStatusIds) {
   const u = usersById[Number(l.assigned_to)];
   const s = statusesById[Number(l.status_id)];
+  // SUB_STATUS_v1 — surface sub_status_id raw; UI populates the name
+  // by looking it up in the loaded list (api_subStatuses_list).
+  // Server-side name join is added on top in api_leads_list batch.
   const p = productsById[Number(l.product_id)];
   const out = Object.assign({}, l, {
     assigned_name: u ? u.name : '',
@@ -633,6 +636,13 @@ async function api_leads_list(token, filters) {
     const camps = await db.getAll('campaigns');
     camps.forEach(c => { campaignsById[Number(c.id)] = c; });
   } catch (_) { /* table may not exist on very old tenants */ }
+  // SUB_STATUS_v1 — batch-load active sub_statuses once and attach name to each lead.
+  let subStatusesById = {};
+  try {
+    const r = await db.query(`SELECT id, name, color FROM sub_statuses WHERE COALESCE(is_active, 1) = 1`);
+    r.rows.forEach(ss => { subStatusesById[Number(ss.id)] = ss; });
+  } catch (_) { /* sub_statuses table may not exist yet on tenants without the flag */ }
+
   const hydrated = rows.map(l => {
     const h = _hydrate(l, usersById, statusesById, productsById, tatByStatusId, finalStatusIds);
     const r = remarksByLead[Number(l.id)];
@@ -656,6 +666,9 @@ async function api_leads_list(token, filters) {
       status: m.status || '',
       type: m.message_type || ''
     }));
+    h.sub_status_id = l.sub_status_id || null;
+    h.sub_status_name = subStatusesById[Number(l.sub_status_id)] ? subStatusesById[Number(l.sub_status_id)].name : '';
+    h.sub_status_color = subStatusesById[Number(l.sub_status_id)] ? subStatusesById[Number(l.sub_status_id)].color : '';
     return h;
   });
 
@@ -1486,7 +1499,7 @@ async function api_leads_update(token, id, patch) {
   }
 
   const allowed = {};
-  ['name', 'email', 'phone', 'whatsapp', 'product_id', 'status_id', 'assigned_to',
+  ['name', 'email', 'phone', 'whatsapp', 'product_id', 'status_id', 'sub_status_id', 'assigned_to',
    'city', 'state', 'pincode', 'country', 'company', 'address',
    'notes', 'next_followup_at', 'tags', 'source', 'source_ref',
    'value', 'currency', 'qualified', 'campaign_id', 'is_hidden',

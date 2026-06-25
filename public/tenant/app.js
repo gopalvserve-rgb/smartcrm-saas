@@ -8823,6 +8823,8 @@ async function openLeadModal(id) {
     field('name', 'Name *', lead.name, { required: true, priority: 'purple' }),
     field('phone', 'Phone *', lead.phone, { required: true, priority: 'purple' }),
     selectField('status_id', 'Status', lead.status_id, statuses.map(s => ({ value: s.id, label: s.name })), { id: 'lead-status', priority: 'purple' }),
+    // SUB_STATUS_v1 — placeholder for the sub-status dropdown; populated below when SUB_STATUS_ENABLED='1'.
+    h('div', { id: 'lead-sub-status-slot', style: { display: 'none' } }),
     field('next_followup_at', 'Next follow-up', isoToLocalDtInput(lead.next_followup_at), { type: 'datetime-local', id: 'lead-fu', priority: 'teal' }),
     field('inline_remark', 'Remark — what happened?', '', {
       type: 'textarea', full: true, priority: 'orange',
@@ -9195,6 +9197,40 @@ async function openLeadModal(id) {
   const _statusSel = form.querySelector('[name="status_id"]');
   if (_statusSel) _statusSel.addEventListener('change', syncRequiredFromStatus);
   syncRequiredFromStatus();
+
+  // SUB_STATUS_v1 — populate the sub-status dropdown when the user picks a parent
+  // status. Cached per lead-modal session. The slot div was inserted right under
+  // the Status field by the SUB_STATUS_v1 patch.
+  try {
+    const _ssEnabled = String((CRM.cfg || {}).SUB_STATUS_ENABLED || '') === '1';
+    if (_ssEnabled) {
+      const _slot = form.querySelector('#lead-sub-status-slot');
+      const _statusSel = form.querySelector('#lead-status');
+      let _ssCache = null;
+      const _renderSub = async (parentId, currentSubId) => {
+        if (!_slot) return;
+        _slot.innerHTML = '';
+        if (!parentId) { _slot.style.display = 'none'; return; }
+        if (!_ssCache) { try { _ssCache = await api('api_subStatuses_list') || []; } catch (_) { _ssCache = []; } }
+        const mine = (_ssCache || []).filter(ss => Number(ss.parent_status_id) === Number(parentId) && Number(ss.is_active) === 1);
+        if (!mine.length) { _slot.style.display = 'none'; return; }
+        _slot.style.display = '';
+        const lbl = document.createElement('label');
+        lbl.style.gridColumn = 'span 6';
+        lbl.innerHTML = '<span style="color:#7c3aed;font-weight:600">Sub-status</span> <span class="muted" style="font-weight:400">(optional)</span>';
+        const sel = document.createElement('select');
+        sel.name = 'sub_status_id';
+        sel.style.width = '100%';
+        sel.innerHTML = '<option value="">— none —</option>' +
+          mine.map(ss => `<option value="${ss.id}"${Number(currentSubId) === Number(ss.id) ? ' selected' : ''}>${(ss.name||'').replace(/[<>&"]/g,'')}</option>`).join('');
+        lbl.appendChild(document.createElement('br'));
+        lbl.appendChild(sel);
+        _slot.appendChild(lbl);
+      };
+      _renderSub(lead && lead.status_id, lead && lead.sub_status_id);
+      if (_statusSel) _statusSel.addEventListener('change', () => _renderSub(_statusSel.value, null));
+    }
+  } catch (e) { console.warn('[SUB_STATUS_v1] slot init', e && e.message); }
 
   form.addEventListener('submit', async ev => {
     ev.preventDefault();
@@ -30280,6 +30316,84 @@ async function adminStatuses() {
     h('label', { class: 'cb' }, h('input', { name: 'fi', type: 'checkbox' }), ' Final'),
     h('button', { type: 'submit', class: 'btn primary' }, '+ Add status')
   ));
+
+  // SUB_STATUS_v1 — vserve beta: expandable sub-statuses panel per parent status.
+  // Only shown when SUB_STATUS_ENABLED config is '1'.
+  try {
+    const cfg = (CRM.cfg || {});
+    const ssEnabled = String(cfg.SUB_STATUS_ENABLED || '') === '1';
+    if (ssEnabled) {
+      const ssCard = h('div', { class: 'card', style: { marginTop: '1rem' } },
+        h('h4', {}, '🧩 Sub-statuses ',
+          h('span', { class: 'muted', style: { fontWeight: '400', fontSize: '12px' } },
+            '(optional 2nd-level dropdown shown to reps after they pick a parent status)')
+        )
+      );
+      let _allSubs = [];
+      try { _allSubs = await api('api_subStatuses_list') || []; } catch (_) { _allSubs = []; }
+      statuses.forEach(parent => {
+        const mine = _allSubs.filter(ss => Number(ss.parent_status_id) === Number(parent.id));
+        const wrap = h('details', { style: { marginTop: '.5rem', padding: '.5rem', border: '1px dashed #d1d5db', borderRadius: '8px' } },
+          h('summary', { style: { cursor: 'pointer', fontWeight: '600' } },
+            parent.name, ' ',
+            h('span', { class: 'muted', style: { fontWeight: '400' } }, `(${mine.length} sub-statuses)`)
+          )
+        );
+        const tbl = h('table', { class: 'mini-table', style: { marginTop: '.5rem' } },
+          h('thead', {}, h('tr', {},
+            h('th', {}, 'Name'),
+            h('th', {}, 'Color'),
+            h('th', {}, 'Order'),
+            h('th', {})
+          )),
+          h('tbody', {}, ...mine.map(ss => h('tr', {},
+            h('td', {}, h('input', { value: ss.name, 'data-id': ss.id, 'data-field': 'name', style: { width: '180px' } })),
+            h('td', {}, h('input', { type: 'color', value: ss.color || '#9ca3af', 'data-id': ss.id, 'data-field': 'color' })),
+            h('td', {}, h('input', { type: 'number', value: ss.sort_order || 100, style: { width: '70px' }, 'data-id': ss.id, 'data-field': 'sort_order' })),
+            h('td', {},
+              h('button', { class: 'btn sm', onclick: async () => {
+                const patch = { id: ss.id, parent_status_id: parent.id };
+                $$(`[data-id="${ss.id}"]`, tbl).forEach(inp => {
+                  const f = inp.dataset.field;
+                  patch[f] = inp.type === 'number' ? Number(inp.value) : inp.value;
+                });
+                try { await api('api_subStatuses_save', patch); toast('Saved'); } catch (e) { toast(e.message, 'err'); }
+              } }, '💾'),
+              h('button', { class: 'btn sm danger', onclick: async () => {
+                if (!await confirmDialog(`Delete sub-status "${ss.name}"?`)) return;
+                try { await api('api_subStatuses_delete', ss.id); toast('Deleted'); showAdminTab('statuses'); }
+                catch (e) { toast(e.message, 'err'); }
+              } }, '✕')
+            )
+          )))
+        );
+        wrap.appendChild(tbl);
+        const addForm = h('form', { class: 'inline-form', style: { marginTop: '.4rem' }, onsubmit: async ev => {
+          ev.preventDefault();
+          const f = ev.target;
+          try {
+            await api('api_subStatuses_save', {
+              parent_status_id: parent.id,
+              name: f.n.value,
+              color: f.c.value,
+              sort_order: Number(f.o.value) || 100
+            });
+            toast('Sub-status added');
+            showAdminTab('statuses');
+          } catch (e) { toast(e.message, 'err'); }
+        }},
+          h('input', { name: 'n', placeholder: 'Sub-status name (e.g. Price too high)', required: true, style: { flex: '1', minWidth: '220px' } }),
+          h('input', { name: 'c', type: 'color', value: parent.color || '#6366f1' }),
+          h('input', { name: 'o', type: 'number', placeholder: 'Order', value: 100, style: { width: '70px' } }),
+          h('button', { type: 'submit', class: 'btn primary sm' }, '+ Add sub-status')
+        );
+        wrap.appendChild(addForm);
+        ssCard.appendChild(wrap);
+      });
+      card.appendChild(ssCard);
+    }
+  } catch (e) { console.warn('[SUB_STATUS_v1] admin panel render skipped', e && e.message); }
+
   return card;
 }
 /**

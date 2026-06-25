@@ -4724,6 +4724,9 @@ setTimeout(() => _runCallLast48hCleanup().catch(() => {}), 300_000);
       // LEADS_VIEW_V2 — auto-enable Modern + Inbox view styles on vserve
       const { autoEnableOnVserve: lvV2AutoEnable } = require('./utils/leadsViewV2VserveAutoEnable');
       setTimeout(() => { lvV2AutoEnable().catch(e => console.error('[LEADS_VIEW_V2_AUTOENABLE]', e.message)); }, 7000);
+      // SUB_STATUS_v1 — vserve-only beta of optional sub-statuses under each parent status
+      const { autoEnableOnVserve: subStatusAutoEnable } = require('./utils/subStatusVserveAutoEnable');
+      setTimeout(() => { subStatusAutoEnable().catch(e => console.error('[SUB_STATUS_AUTOENABLE]', e.message)); }, 8000);
     } catch (e) { console.warn('[CP4_AUTOENABLE] require failed:', e.message); }
     // AI_MGR_v1 — one-shot enable on vserve. Idempotent, non-blocking.
     try {
