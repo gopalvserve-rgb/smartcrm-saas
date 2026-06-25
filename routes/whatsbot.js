@@ -4045,14 +4045,27 @@ async function api_wb_botPauseStatus(token, phone) {
   await _ensureBotPauseTable();
   const tail = _phoneTail10(phone);
   if (!tail) return { paused: false };
+  // BOT_PAUSE_FOREVER_v1 (2026-06-25) — bigint cast so 'pause forever'
+  // (paused_until = NOW() + 100 years ~= 3.15B seconds) doesn't overflow
+  // pg int4 (max 2.147B). Previously the query threw 'integer out of range'
+  // on forever-paused threads, so the client saw no row and rendered
+  // 'Bot on' — making it look like the pause never persisted.
   const r = await db.query(
-    `SELECT paused_until, EXTRACT(EPOCH FROM (paused_until - NOW()))::int AS secs
+    `SELECT paused_until, EXTRACT(EPOCH FROM (paused_until - NOW()))::bigint AS secs
        FROM wa_bot_pauses WHERE phone = $1 AND paused_until > NOW() LIMIT 1`,
     [tail]
   );
   if (!r.rows.length) return { paused: false };
   const secs = Number(r.rows[0].secs) || 0;
-  return { paused: true, paused_until: r.rows[0].paused_until, seconds_left: secs,
+  // Anything > 1 year in the future is treated as 'forever'. The client
+  // renders 'Bot paused · forever' instead of an absurd minute count.
+  const ONE_YEAR_SEC = 365 * 24 * 3600;
+  if (secs > ONE_YEAR_SEC) {
+    return { paused: true, paused_until: r.rows[0].paused_until, forever: true,
+             seconds_left: secs, minutes_left: null };
+  }
+  return { paused: true, paused_until: r.rows[0].paused_until, forever: false,
+           seconds_left: secs,
            minutes_left: Math.max(1, Math.ceil(secs / 60)) };
 }
 

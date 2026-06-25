@@ -799,7 +799,7 @@
           title: paused ? ('AI bot is paused on this chat (' + mleft + 'm left). Click to manage / resume.')
                         : 'Pause the AI bot on this chat so you can take over',
           onclick: (ev) => openBotPauseMenu(ev.currentTarget)
-        }, paused ? ('⏸ Bot paused · ' + mleft + 'm') : '🤖 Bot on');
+        }, paused ? ('⏸ Bot paused · ' + (S.botPause && S.botPause.forever ? 'forever' : (mleft + 'm'))) : '🤖 Bot on');
       })(),
       h('button', { class: 'btn',
         onclick: openAssigneePopup }, '👤 ' + (t.assigned_name || 'Unassigned'), ' ▾'),
@@ -928,7 +928,7 @@
     const t = S.activeThread; if (!t) return;
     try {
       const r = await api('api_wb_botPause', { phone: t.phone, minutes: minutes });
-      S.botPause = { paused: true, minutes_left: (minutes <= 0 ? null : minutes), paused_until: r.paused_until };
+      S.botPause = { paused: true, forever: minutes <= 0, minutes_left: (minutes <= 0 ? null : minutes), paused_until: r.paused_until };
       toast(minutes <= 0 ? 'Bot paused until you resume' : ('Bot paused for ' + minutes + ' min'), 'ok');
       renderChat();
     } catch (e) { toast('Could not pause: ' + e.message, 'err'); }
@@ -951,7 +951,7 @@
       onmouseover: function () { this.style.background = '#f1f5f9'; }, onmouseout: function () { this.style.background = ''; },
       onclick: () => { bg.remove(); fn(); } }, label);
     menu.appendChild(h('div', { style: { fontSize: '11px', color: '#94a3b8', padding: '4px 10px 6px' } },
-      paused ? ('Bot is paused' + (S.botPause.minutes_left ? ' · ' + S.botPause.minutes_left + 'm left' : '')) : 'Pause the AI bot on this chat'));
+      paused ? ('Bot is paused' + (S.botPause.forever ? ' until you resume' : (S.botPause.minutes_left ? ' · ' + S.botPause.minutes_left + 'm left' : ''))) : 'Pause the AI bot on this chat'));
     if (paused) {
       menu.appendChild(item('▶ Resume bot now', _resumeBot));
       menu.appendChild(item('⏸ Extend 15 min', () => _setBotPause(15)));
