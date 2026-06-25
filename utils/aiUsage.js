@@ -200,7 +200,7 @@ async function api_reports_aiUsage(token, filters) {
     by_user,
     by_day,
     pricing: {
-      model: 'gemini-2.5-flash-lite',
+      model: 'gemini-3.1-flash-lite',
       input_usd_per_m:  GEMINI_INPUT_USD_PER_M,
       output_usd_per_m: GEMINI_OUTPUT_USD_PER_M,
       audio_tokens_per_second: AUDIO_TOKENS_PER_SECOND,
@@ -250,7 +250,7 @@ async function api_reports_aiCostEstimator(token, opts) {
     per_minute_inr_billable: round(totalInrBillable / Math.max(1, minutes)),
     per_call_inr_billable:   round(totalInrBillable / Math.max(1, calls)),
     pricing: {
-      model: 'gemini-2.5-flash-lite',
+      model: 'gemini-3.1-flash-lite',
       input_usd_per_m:  GEMINI_INPUT_USD_PER_M,
       output_usd_per_m: GEMINI_OUTPUT_USD_PER_M,
       audio_tokens_per_second: AUDIO_TOKENS_PER_SECOND,

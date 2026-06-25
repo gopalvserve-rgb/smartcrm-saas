@@ -13,7 +13,7 @@
  *     body: {
  *       tenant_slug:     'stockbox' | 'celeste' | ...      // required
  *       call_kind:       'reply' | 'copilot' | ...
- *       model:           'gemini-2.5-flash-lite'
+ *       model:           'gemini-3.1-flash-lite'
  *       input_tokens:    Number
  *       output_tokens:   Number
  *       cost_usd:        Number

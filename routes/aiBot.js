@@ -126,7 +126,7 @@ async function api_aibot_settings_get(token, phoneNumberId) {
   } catch (_) { row = null; }
 
   // Pull global activation status (super-admin can globally disable)
-  let global = { is_active: false, default_model: 'gemini-2.0-flash-lite' };
+  let global = { is_active: false, default_model: 'gemini-3.1-flash-lite' };
   try {
     const g = await control.query(`SELECT is_active, gemini_default_model FROM ai_settings WHERE id = 1`);
     if (g.rows[0]) {

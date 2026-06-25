@@ -758,7 +758,7 @@ async function _wipeAndSeed(pool, adminUserId) {
           ($1, $2, $3, $4, $5, $6, 'audio/mp4', $7, $8,
            $9, $9,
            $10, $11, $12, $13, $14, $15, $16,
-           $9, 'gemini-2.5-flash-lite (demo)',
+           $9, 'gemini-3.1-flash-lite (demo)',
            $17, $2, $18, $9, $19)
          RETURNING id`,
         [
@@ -993,7 +993,7 @@ async function _wipeAndSeed(pool, adminUserId) {
           await pool.query(
             `INSERT INTO ai_chat_log (phone, lead_id, reply_text, model, mode_used, status,
                                       input_tokens, output_tokens, cost_inr_billed, phone_number_id, created_at)
-             VALUES ($1, $2, $3, 'gemini-2.0-flash-lite', 'always', 'sent', $4, $5, $6, $7, $8)`,
+             VALUES ($1, $2, $3, 'gemini-3.1-flash-lite', 'always', 'sent', $4, $5, $6, $7, $8)`,
             [phone, lead.id, m.body, 120 + Math.floor(Math.random() * 80), 50 + Math.floor(Math.random() * 60), 0.025, s.phone, ts]
           );
           _aiLogsInserted++;

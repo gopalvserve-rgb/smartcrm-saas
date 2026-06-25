@@ -174,7 +174,7 @@ async function api_leads_quickNote(token, payload) {
         feature: 'quick_note',  // SHOWCASE_AI_v2 — allowed on demo tenants
         system: systemPrompt,
         prompt: text,
-        model: 'gemini-2.5-flash-lite',     // cheapest, fastest, JSON-friendly
+        model: 'gemini-3.1-flash-lite',     // cheapest, fastest, JSON-friendly
         maxOutputTokens: 250,
         temperature: 0.2,
       });

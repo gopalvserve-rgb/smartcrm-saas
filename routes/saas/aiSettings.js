@@ -5,7 +5,7 @@
  *
  * Stored in control.ai_settings (one singleton row, id = 1):
  *   - gemini_api_key_enc    — AES-256-GCM encrypted; never returned plaintext
- *   - gemini_default_model  — e.g. 'gemini-2.0-flash-lite'
+ *   - gemini_default_model  — e.g. 'gemini-3.1-flash-lite'
  *   - price_input/output_usd_per_m — current Google list prices
  *   - exchange_rate_inr     — USD → INR
  *   - markup_pct            — added to real INR before billing tenants
@@ -34,12 +34,9 @@ const { encryptString, decryptString, maskKey } = require('../../utils/aiCrypto'
 // Allowed defaults — these are SUGGESTED models; you can paste any value
 // the Gemini API accepts. Used by the UI to populate a dropdown.
 const SUGGESTED_MODELS = [
-  'gemini-2.0-flash-lite',  // cheapest, default
-  'gemini-2.0-flash',
-  'gemini-2.5-flash-lite',
-  'gemini-2.5-flash',
-  'gemini-1.5-flash',
-  'gemini-1.5-flash-8b',
+  'gemini-3.1-flash-lite',  // current default — cheapest + JSON-friendly
+  'gemini-3.1-flash',
+  'gemini-3.1-pro',
 ];
 
 async function _ensureRow() {
@@ -69,7 +66,7 @@ async function api_saas_ai_settings_get(token) {
     key_preview:             maskKey(effectiveKey),
     db_key_set:              !!realKey,
     env_key_set:             !!envKey,
-    gemini_default_model:    row.gemini_default_model    || 'gemini-2.0-flash-lite',
+    gemini_default_model:    row.gemini_default_model    || 'gemini-3.1-flash-lite',
     gemini_embedding_model:  row.gemini_embedding_model  || 'text-embedding-004',
     price_input_usd_per_m:   Number(row.price_input_usd_per_m  || 0.075),
     price_output_usd_per_m:  Number(row.price_output_usd_per_m || 0.30),

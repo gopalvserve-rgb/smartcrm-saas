@@ -33,7 +33,7 @@ const db = require('../db/pg');
 let demo = { on: false };
 try { demo = require('./demoGuard'); } catch (_) { /* not in demo build */ }
 
-const GEMINI_MODEL = 'gemini-2.5-flash-lite';
+const GEMINI_MODEL = 'gemini-3.1-flash-lite';
 const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta';
 
 // ----- Cost model (Gemini 2.5 Flash Lite, audio in / text out) -----

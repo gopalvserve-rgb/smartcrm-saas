@@ -522,11 +522,11 @@ No preamble. Output ONLY the JSON object.`;
       const res = await gemini.generate({
         prompt: ctxLines.join('\n'),
         // LEAD_AI_SUMMARY_GEMINI_v1 (2026-06-25) — model swapped from
-        // 'gemini-2.5-flash-lite' (which Google rejected as unavailable
+        // 'gemini-3.1-flash-lite' (which Google rejected as unavailable
         // on this API key) to the proven-working default. Alias map
         // also covers it, this is belt-and-braces.
         system, temperature: 0.35, maxOutputTokens: 450,
-        model: 'gemini-2.0-flash-lite'
+        model: 'gemini-3.1-flash-lite'
       });
       if (res && res.ok && res.text) {
         const m = res.text.match(/\{[\s\S]*\}/);

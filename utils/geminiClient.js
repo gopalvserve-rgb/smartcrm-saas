@@ -36,25 +36,26 @@ const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 // reply. Rewrite any retired model name to a current equivalent at call time
 // so replies keep working regardless of what's stored on the bot.
 const _MODEL_ALIASES = {
-  // Retired Gemini IDs → vserve's proven-working model. gemini-2.5-flash is
-  // not available on this API key, so we map to gemini-2.0-flash-lite (the
-  // default that replies successfully today).
-  'gemini-2.0-flash':         'gemini-2.0-flash-lite',
-  'gemini-2.0-pro':           'gemini-2.0-flash-lite',
-  'gemini-1.5-flash':         'gemini-2.0-flash-lite',
-  'gemini-1.5-flash-latest':  'gemini-2.0-flash-lite',
-  'gemini-1.5-pro':           'gemini-2.0-flash-lite',
-  'gemini-1.5-pro-latest':    'gemini-2.0-flash-lite',
-  'gemini-pro':               'gemini-2.0-flash-lite',
-  'gemini-1.0-pro':           'gemini-2.0-flash-lite',
-  'gemini-2.5-flash':         'gemini-2.0-flash-lite',
-  'gemini-2.5-flash-lite':    'gemini-2.0-flash-lite',
-  // LEAD_AI_SUMMARY_GEMINI_v1 (2026-06-25) — copilotProactive.js requested
-  // 'gemini-2.5-flash-lite' which had no alias entry, so it leaked through
-  // unmapped and Google rejected it as unavailable. Lead AI Summary fell
-  // back to the deterministic template for every lead.
-  'gemini-2.5-pro':           'gemini-2.0-flash-lite',
-  'gemini-2.5-pro-latest':    'gemini-2.0-flash-lite'
+  // GEMINI_MODEL_UPGRADE_v1 (2026-06-25) — gemini-2.0-flash-lite is now ALSO
+  // retired (bot AI replies stopped). Every legacy/retired ID maps to
+  // gemini-3.1-flash-lite — current cheap+fast+JSON-friendly tier.
+  'gemini-2.0-flash':         'gemini-3.1-flash-lite',
+  'gemini-3.1-flash-lite':    'gemini-3.1-flash-lite',
+  'gemini-2.0-pro':           'gemini-3.1-flash-lite',
+  'gemini-1.5-flash':         'gemini-3.1-flash-lite',
+  'gemini-1.5-flash-latest':  'gemini-3.1-flash-lite',
+  'gemini-1.5-flash-8b':      'gemini-3.1-flash-lite',
+  'gemini-1.5-pro':           'gemini-3.1-flash-lite',
+  'gemini-1.5-pro-latest':    'gemini-3.1-flash-lite',
+  'gemini-pro':               'gemini-3.1-flash-lite',
+  'gemini-1.0-pro':           'gemini-3.1-flash-lite',
+  'gemini-2.5-flash':         'gemini-3.1-flash-lite',
+  'gemini-2.5-flash-lite':    'gemini-3.1-flash-lite',
+  'gemini-2.5-pro':           'gemini-3.1-flash-lite',
+  'gemini-2.5-pro-latest':    'gemini-3.1-flash-lite',
+  'gemini-3.0-flash':         'gemini-3.1-flash-lite',
+  'gemini-3.0-flash-lite':    'gemini-3.1-flash-lite',
+  'gemini-3.0-pro':           'gemini-3.1-flash-lite'
 };
 function _normModel(m) {
   const k = String(m || '').trim().replace(/^models\//, '');
@@ -121,7 +122,7 @@ async function loadSettings(force) {
   _settingsCache = {
     apiKey,
     keySource,
-    defaultModel:        (row && row.gemini_default_model)   || 'gemini-2.0-flash-lite',
+    defaultModel:        (row && row.gemini_default_model)   || 'gemini-3.1-flash-lite',
     embeddingModel:      (row && row.gemini_embedding_model) || 'text-embedding-004',
     priceInputPerM:      Number((row && row.price_input_usd_per_m)  || 0.075),
     priceOutputPerM:     Number((row && row.price_output_usd_per_m) || 0.30),
@@ -272,8 +273,8 @@ async function generate(args) {
       continue;
     }
     if (isOverloaded && !triedFallback) {
-      const fallbackModel = currentModel.includes('flash-lite') ? 'gemini-2.0-flash-lite'
-                          : currentModel.includes('flash')      ? 'gemini-2.0-flash-lite'
+      const fallbackModel = currentModel.includes('flash-lite') ? 'gemini-3.1-flash-lite'
+                          : currentModel.includes('flash')      ? 'gemini-3.1-flash-lite'
                           : null;
       if (fallbackModel) {
         triedFallback = true;
@@ -493,8 +494,8 @@ async function generateWithTools(args) {
       }
       // Retries exhausted on a transient error → fallback to a sibling model once.
       if (isOverloaded && !triedFallback) {
-        const fallbackModel = currentModel.includes('flash-lite') ? 'gemini-2.0-flash-lite'
-                            : currentModel.includes('flash')      ? 'gemini-2.0-flash-lite'
+        const fallbackModel = currentModel.includes('flash-lite') ? 'gemini-3.1-flash-lite'
+                            : currentModel.includes('flash')      ? 'gemini-3.1-flash-lite'
                             : null;
         if (fallbackModel) {
           triedFallback = true;
