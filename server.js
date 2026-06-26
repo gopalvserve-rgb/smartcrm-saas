@@ -4055,12 +4055,16 @@ async function _runEduRemindersForAllTenants() {
         () => worker.tick()
       );
     } catch (e) { console.warn(`[eduReminder] ${row.slug} tick failed:`, e.message); }
+    // PERF_FIX_v6 (2026-06-26) — yield between tenants so the cron doesn't
+    // burst-acquire 60 pool connections at once and exhaust PG.
+    await new Promise(res => setTimeout(res, 250));
   }
 }
 setInterval(() => {
   _runEduRemindersForAllTenants().catch(e => console.error('[eduReminder] cycle failed:', e.message));
 }, Number(process.env.EDU_REMINDER_INTERVAL_MS || 60 * 60_000));   // hourly
-setTimeout(() => _runEduRemindersForAllTenants().catch(() => {}), 90_000);
+// PERF_FIX_v6 — staggered to 5 min past the hour
+setTimeout(() => _runEduRemindersForAllTenants().catch(() => {}), 5 * 60_000);
 console.log('[eduReminder] worker started — hourly tick');
 
 // ── Background: per-tenant Real Estate demand-letter reminder worker ──
@@ -4085,12 +4089,15 @@ async function _runReRemindersForAllTenants() {
         () => worker.tick()
       );
     } catch (e) { console.warn(`[reReminder] ${row.slug} tick failed:`, e.message); }
+    // PERF_FIX_v6 — yield between tenants
+    await new Promise(res => setTimeout(res, 250));
   }
 }
 setInterval(() => {
   _runReRemindersForAllTenants().catch(e => console.error('[reReminder] cycle failed:', e.message));
 }, Number(process.env.RE_REMINDER_INTERVAL_MS || 60 * 60_000));   // hourly
-setTimeout(() => _runReRemindersForAllTenants().catch(() => {}), 120_000);
+// PERF_FIX_v6 — staggered to 25 min past the hour (20 min after Edu)
+setTimeout(() => _runReRemindersForAllTenants().catch(() => {}), 25 * 60_000);
 console.log('[reReminder] Real Estate demand-letter worker started — hourly tick');
 
 
@@ -4124,12 +4131,15 @@ async function _runComplianceScanForAllTenants() {
         }
       });
     } catch (e) { console.warn('[compliance] ' + row.slug + ' scan failed:', e.message); }
+    // PERF_FIX_v6 — yield between tenants
+    await new Promise(res => setTimeout(res, 250));
   }
 }
 setInterval(() => {
   _runComplianceScanForAllTenants().catch(e => console.error('[compliance] cycle failed:', e.message));
 }, Number(process.env.COMPLIANCE_INTERVAL_MS || 60 * 60_000));   // hourly
-setTimeout(() => _runComplianceScanForAllTenants().catch(() => {}), 180_000);
+// PERF_FIX_v6 — staggered to 45 min past the hour (20 min after RE)
+setTimeout(() => _runComplianceScanForAllTenants().catch(() => {}), 45 * 60_000);
 console.log('[compliance] daily violation scan worker started — hourly tick');
 
 
