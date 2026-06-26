@@ -726,3 +726,10 @@ SELECT 'improvement',
        '🎙️',
        now()
 WHERE NOT EXISTS (SELECT 1 FROM changelog WHERE title = 'Faster, cheaper call-recording storage');
+
+-- PERF_FIX_v7 (2026-06-26)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('PERF_FIX_v7', 'Background sweeps tightened',
+ 'AI Manager detection + weekly coaching now run for Vserve only (allowlist gate); Google Conv export defaults to the test tenant only. Super-admin can opt-in other tenants via Settings → Performance.',
+ 'super_admin', NOW())
+ON CONFLICT DO NOTHING;

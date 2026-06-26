@@ -3651,7 +3651,8 @@ async function _sweepAllow(key, defaultCsv) {
 async function _runGoogleConvForAllTenants() {
   // PERF_FIX_v2 — only iterate tenants in the allowlist (default: vserve only).
   // Edit saas_settings.SWEEP_GCONV_TENANTS (CSV of slugs) via super-admin UI.
-  const allow = await _sweepAllow('SWEEP_GCONV_TENANTS', 'vserve');
+  // PERF_FIX_v7: default-allow only the 'test' tenant (was 'vserve').
+  const allow = await _sweepAllow('SWEEP_GCONV_TENANTS', 'test');
   if (allow.size === 0) return;
   let rows = [];
   try {
@@ -3764,9 +3765,16 @@ async function _runAiManagerForAllTenants() {
   const tenantPool = require('./utils/tenantPool');
   const control = require('./control/db');
   const aiMgr = require('./routes/aiManager');
+  // PERF_FIX_v7 — only iterate tenants in the allowlist (default: vserve only).
+  // Edit saas_settings.SWEEP_AIMGR_TENANTS (CSV of slugs) via super-admin UI.
+  const allow = await _sweepAllow('SWEEP_AIMGR_TENANTS', 'vserve');
+  if (allow.size === 0) return;
   let tenants;
   try {
-    tenants = (await control.query(`SELECT id, slug, org_name, db_name, status FROM tenants WHERE status='active'`)).rows;
+    tenants = (await control.query(
+      `SELECT id, slug, org_name, db_name, status FROM tenants WHERE status='active' AND slug = ANY($1::text[])`,
+      [Array.from(allow)]
+    )).rows;
   } catch (e) { console.warn('[ai_mgr] tenant list failed:', e.message); return; }
   for (const row of tenants) {
     try {
@@ -3789,7 +3797,14 @@ async function _runAiManagerCoachingForAllTenants() {
   try {
     const aiMgr = require('./routes/aiManager');
     if (!aiMgr || !aiMgr.generateCoachingDigest) return;
-    const cr = await ctlPool.query("SELECT id, slug FROM tenants WHERE COALESCE(is_active, true)=true");
+    // PERF_FIX_v7 — only iterate tenants in the allowlist (default: vserve only).
+    // Edit saas_settings.SWEEP_AIMGR_COACH_TENANTS (CSV of slugs) via super-admin UI.
+    const allow = await _sweepAllow('SWEEP_AIMGR_COACH_TENANTS', 'vserve');
+    if (allow.size === 0) return;
+    const cr = await ctlPool.query(
+      "SELECT id, slug FROM tenants WHERE COALESCE(is_active, true)=true AND slug = ANY($1::text[])",
+      [Array.from(allow)]
+    );
     for (const t of cr.rows) {
       try {
         await tenantStorage.run({ slug: t.slug, tenantId: t.id }, async () => {
