@@ -733,3 +733,10 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'AI Manager detection + weekly coaching now run for Vserve only (allowlist gate); Google Conv export defaults to the test tenant only. Super-admin can opt-in other tenants via Settings → Performance.',
  'super_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+-- PERF_FIX_v8 (2026-06-26)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('PERF_FIX_v8', 'R2 recording backfill paused',
+ 'The R2 backfill sweep that migrates legacy Postgres-stored recordings to R2 is now PAUSED by default (was running every 15 min across every tenant). Playback of legacy recordings still works via the Postgres fallback. Super-admin can opt-in a tenant via Settings → Performance → SWEEP_R2BACKFILL_TENANTS when ready to migrate.',
+ 'super_admin', NOW())
+ON CONFLICT DO NOTHING;

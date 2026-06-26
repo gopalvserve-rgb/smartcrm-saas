@@ -3891,12 +3891,19 @@ _scheduleRecordingRetention();
 async function _runR2BackfillSweep() {
   let _r2; try { _r2 = require('./utils/r2'); } catch (_) { return; }
   if (!_r2.isEnabled()) return;
+  // PERF_FIX_v8 (2026-06-26) — gated by allowlist. Empty default = PAUSED.
+  // Edit saas_settings.SWEEP_R2BACKFILL_TENANTS (CSV of slugs) via super-admin
+  // UI when ready to migrate legacy Postgres-stored recordings to R2 for a
+  // specific tenant. Playback of unmigrated rows still works via PG fallback.
+  const allow = await _sweepAllow('SWEEP_R2BACKFILL_TENANTS', '');
+  if (allow.size === 0) return;
   const control = require('./control/db');
   const tenantPool = require('./utils/tenantPool');
   let tenants;
   try {
     tenants = (await control.query(
-      "SELECT id, slug, org_name, db_name FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 1000"
+      "SELECT id, slug, org_name, db_name FROM tenants WHERE status IN ('active','trial','past_due') AND slug = ANY($1::text[]) ORDER BY id ASC LIMIT 1000",
+      [Array.from(allow)]
     )).rows;
   } catch (_) { return; }
   let migrated = 0;
