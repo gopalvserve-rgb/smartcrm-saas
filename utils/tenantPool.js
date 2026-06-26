@@ -27,14 +27,14 @@ const control = require('../control/db');
 // Net effect: 25 tenants × max 3 = 75 connections + control pool max 10 =
 // 85 connections total, safely under Postgres limits even on small plans.
 
-// POOL_FIX_v1 (2026-06-25) — defaults bumped to handle >50 tenants without
-// 'pool exhausted' errors on login:
-//   POOL_PER_TENANT_MAX 3 → 2 (most tenants have 1-2 concurrent users; 2 is enough)
-//   POOL_LRU_MAX        25 → 50 (cache twice as many warm pools)
-//   Net: 50 × 2 = 100 conn + 5 control = 105, fits Railway Pro PG (200).
-//   On Hobby (100 max), set env PG_POOL_LRU_MAX=40 PG_POOL_PER_TENANT_MAX=2.
-const POOL_PER_TENANT_MAX = Number(process.env.PG_POOL_PER_TENANT_MAX || 2);
-const POOL_LRU_MAX        = Number(process.env.PG_POOL_LRU_MAX || 50);
+// POOL_FIX_v2 (2026-06-25) — bje tenant's AI Bot page fires ~20 parallel
+// API calls on load. With per-tenant max=2 those queued behind 2 slots
+// and the SPA showed 30-130s response times. Bump back to 3 (matches
+// pre-POOL_FIX_v1) but keep LRU at 60 so more tenants stay warm.
+//   Net: 60 × 3 = 180 + 5 control = 185, fits Railway Pro PG (200).
+//   On Hobby (100 max), set env PG_POOL_LRU_MAX=30 PG_POOL_PER_TENANT_MAX=2.
+const POOL_PER_TENANT_MAX = Number(process.env.PG_POOL_PER_TENANT_MAX || 3);
+const POOL_LRU_MAX        = Number(process.env.PG_POOL_LRU_MAX || 60);
 
 const _pools = new Map();          // db_name -> pg.Pool
 const _poolLastUsed = new Map();   // db_name -> ts (for LRU eviction)

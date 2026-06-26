@@ -116,6 +116,9 @@ async function autoRolloutAtBoot() {
       const r = await _rolloutTenant(t);
       if (r.config_set) enabled++;
       else errors++;
+      // POOL_FIX_v2 (2026-06-25) — yield between tenants so the rollout
+      // doesn't grab N pool connections simultaneously and starve live traffic.
+      await new Promise(res => setTimeout(res, 250));
     }
     console.log(`[LEADS_VIEW_V2_ROLLOUT] boot rollout — scanned:${tenants.length} alreadyOn:${alreadyOn} enabled:${enabled} errors:${errors}`);
   } catch (e) {
