@@ -16,7 +16,7 @@
  *   - hint  : small grey help text under the input
  */
 const control = require('../../control/db');
-const { requireFullAdmin } = require('./superAdminAuth');
+const { requireFullAdmin, requireSuperAdmin } = require('./superAdminAuth');
 const saasMailer = require('./saasMailer');
 
 const SETTING_KEYS = [
