@@ -27,8 +27,14 @@ const control = require('../control/db');
 // Net effect: 25 tenants × max 3 = 75 connections + control pool max 10 =
 // 85 connections total, safely under Postgres limits even on small plans.
 
-const POOL_PER_TENANT_MAX = Number(process.env.PG_POOL_PER_TENANT_MAX || 3);
-const POOL_LRU_MAX        = Number(process.env.PG_POOL_LRU_MAX || 25);
+// POOL_FIX_v1 (2026-06-25) — defaults bumped to handle >50 tenants without
+// 'pool exhausted' errors on login:
+//   POOL_PER_TENANT_MAX 3 → 2 (most tenants have 1-2 concurrent users; 2 is enough)
+//   POOL_LRU_MAX        25 → 50 (cache twice as many warm pools)
+//   Net: 50 × 2 = 100 conn + 5 control = 105, fits Railway Pro PG (200).
+//   On Hobby (100 max), set env PG_POOL_LRU_MAX=40 PG_POOL_PER_TENANT_MAX=2.
+const POOL_PER_TENANT_MAX = Number(process.env.PG_POOL_PER_TENANT_MAX || 2);
+const POOL_LRU_MAX        = Number(process.env.PG_POOL_LRU_MAX || 50);
 
 const _pools = new Map();          // db_name -> pg.Pool
 const _poolLastUsed = new Map();   // db_name -> ts (for LRU eviction)
@@ -94,7 +100,10 @@ function poolFor(tenant) {
     ssl: /sslmode=require|railway|neon|supabase|render/i.test(url) ? { rejectUnauthorized: false } : false,
     max: POOL_PER_TENANT_MAX,
     idleTimeoutMillis: 10_000,
-    connectionTimeoutMillis: 5_000
+    // POOL_FIX_v1 — bumped 5s → 12s. Was timing out on login when PG was
+    // momentarily saturated by background sweeps; 12s gives the LRU enough
+    // breathing room to evict an idle pool and recover.
+    connectionTimeoutMillis: 12_000
   });
   p.on('error', err => console.error('[tenant-db]', tenant.slug, 'pool error:', err.message));
   _pools.set(tenant.db_name, p);
