@@ -142,6 +142,11 @@ async function _seedTenantAdmin(dbName, signup) {
     max: 1
   });
   try {
+    // SIGNUP_FIX_v1 (2026-06-26) — normalise email to lowercase+trim so the
+    // login lookup (routes/auth.js does .toLowerCase().trim()) actually finds
+    // the user row. Without this, signups submitted with mixed-case emails
+    // (e.g. 'Apna@Gmail.com') failed login forever.
+    const cleanEmail = String(signup.email || '').toLowerCase().trim();
     const password = _adminPasswordFromEmail(signup.email);
     const hash = bcrypt.hashSync(password, 10);
     const ins = await tPool.query(
@@ -149,7 +154,7 @@ async function _seedTenantAdmin(dbName, signup) {
        VALUES ($1, $2, $3, 'admin', 1, NOW())
        ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash
        RETURNING id`,
-      [signup.name, signup.email, hash]
+      [signup.name, cleanEmail, hash]
     );
     const adminUserId = ins.rows && ins.rows[0] ? Number(ins.rows[0].id) : 1;
 
@@ -274,7 +279,10 @@ async function provisionFromSignup(signupId) {
       subject: '🎉 Your SmartCRM is ready — login details inside',
       html: _welcomeEmailHtml({
         name: signup.name, orgName: signup.org_name || signup.name,
-        loginUrl, email: signup.email, password: oneTimePassword,
+        loginUrl,
+        // SIGNUP_FIX_v1 — show the SAME normalised email that we stored
+        email: String(signup.email || '').toLowerCase().trim(),
+        password: oneTimePassword,
         packageName: pkg.name
       })
     });
@@ -288,7 +296,7 @@ async function provisionFromSignup(signupId) {
     const msg = '🎉 Welcome to SmartCRM, ' + (signup.name || '') + '!\n\n' +
       'Your ' + (pkg.name || 'workspace') + ' account is live.\n\n' +
       '🔗 Login: ' + loginUrl + '\n' +
-      '📧 Email: ' + signup.email + '\n' +
+      '📧 Email: ' + String(signup.email || '').toLowerCase().trim() + '\n' +
       '🔑 Password: ' + oneTimePassword + '\n\n' +
       '📱 Mobile app: ' + apkUrl + '\n\n' +
       'Please change your password on first login (Settings → Security).\n\n— Team SmartCRM';
@@ -300,7 +308,9 @@ async function provisionFromSignup(signupId) {
 
   return {
     tenant_id: tenantId, slug, db_name: dbName, invoice_id: invoiceId,
-    login_url: loginUrl, email: signup.email, password: oneTimePassword
+    login_url: loginUrl,
+    email: String(signup.email || '').toLowerCase().trim(),
+    password: oneTimePassword
   };
 }
 

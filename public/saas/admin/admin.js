@@ -2866,6 +2866,25 @@ async function openSignupRequestModal(id, onClose) {
     endPreview.innerHTML =
       '<b>✓ ' + (lifetimePkg ? 'Lifetime plan' : 'Valid till: ' + end.toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' })) + '</b>' +
       (lifetimePkg ? ' — no renewal needed' : ' &nbsp;·&nbsp; ' + days + ' days from today &nbsp;·&nbsp; ₹' + Number(pkg.base_price_inr || 0).toLocaleString('en-IN'));
+    // SIGNUP_FIX_v1 (2026-06-26) — also auto-populate the Next payment due
+    // date input (unless admin already set a custom value). Lifetime plans
+    // get cleared since renewal isn't applicable.
+    try {
+      const due = f.querySelector('[data-field="next_payment_at"]');
+      if (due && !due.dataset.touched) {
+        if (lifetimePkg) { due.value = ''; }
+        else {
+          const yyyy = end.getFullYear();
+          const mm = String(end.getMonth() + 1).padStart(2, '0');
+          const dd = String(end.getDate()).padStart(2, '0');
+          due.value = yyyy + '-' + mm + '-' + dd;
+        }
+      }
+      if (due && !due._signupFixListener) {
+        due.addEventListener('input', () => { due.dataset.touched = '1'; });
+        due._signupFixListener = true;
+      }
+    } catch (_) {}
   }
   pkgSel.addEventListener('change', _refreshEndPreview);
   f.appendChild(endPreview);
