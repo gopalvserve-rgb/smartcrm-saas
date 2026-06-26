@@ -647,9 +647,21 @@ function _tenantListTable(rows, sizeMap) {
       td(usersTxt, { color: usersOver ? '#dc2626' : '#0f172a', fontWeight: usersOver ? '700' : '400', whiteSpace:'nowrap' }),
       td(bal > 0 ? ('₹' + bal.toLocaleString('en-IN')) : '—', { color: bal>0?'#b45309':'#94a3b8', whiteSpace:'nowrap' }),
       td(fmtDate(t.current_period_end) || '—', { whiteSpace:'nowrap' }),
-      td(h('div', { style:{ display:'flex', gap:'5px', flexWrap:'wrap' } },
-          h('button', { class:'btn xs', style:{ background:'#6366f1', color:'#fff' }, onclick:()=>openTenantDetailsModal(t) }, '✏️ Edit'),
-          isLive ? h('button', { class:'btn xs', onclick:()=>loginAsTenant(t) }, '🔓 Login ↗') : null)));
+      // TENANT_LIST_ACTIONS_v1 (2026-06-26) — match the full action set the
+      // Cards view exposes so super-admins don't have to toggle just to
+      // reset a password / install a pack / open Users / manage Modules.
+      td(h('div', { style:{ display:'flex', gap:'4px', flexWrap:'wrap', minWidth:'320px' } },
+          h('button', { class:'btn xs', style:{ background:'#6366f1', color:'#fff' }, onclick:()=>openTenantDetailsModal(t), title:'Edit billing, plan, dates, remarks' }, '✏️ Edit'),
+          isLive ? h('button', { class:'btn xs', onclick:()=>loginAsTenant(t), title:'Open this tenant as a super-admin' }, '🔓 Login') : null,
+          isLive ? h('button', { class:'btn xs', style:{ background:'#fef3c7', borderColor:'#f59e0b', color:'#92400e' }, onclick:()=>resetTenantAdminPassword(t), title:'Reset the tenant admin password' }, '🔑 Pwd') : null,
+          h('button', { class:'btn ghost xs', onclick:()=>openModulesModal(t), title:'Toggle modules ON/OFF' }, '🧩 Modules'),
+          h('button', { class:'btn ghost xs', onclick:()=>openInstallPackModal(t), title:'Install / change industry pack' }, '🏗️ Pack'),
+          h('button', { class:'btn ghost xs', onclick:()=>openTenantUsersModal(t), title:'Manage tenant users' }, '👤 Users'),
+          h('button', { class:'btn ghost xs', onclick:()=>openAiRecordingModal(t), title:'AI Call Summary settings' }, '🎙️ AI Rec'),
+          t.status === 'active'
+            ? h('button', { class:'btn ghost xs', style:{ color:'#b91c1c' }, onclick: async()=>{ if (!confirm('Suspend ' + (t.org_name||t.slug) + '?')) return; await api('api_saas_tenants_suspend', t.id); navigate('tenants'); }, title:'Suspend tenant access' }, 'Suspend')
+            : h('button', { class:'btn ghost xs', onclick: async()=>{ await api('api_saas_tenants_restore', t.id); navigate('tenants'); }, title:'Restore suspended tenant' }, 'Restore')
+      )));
   });
   return h('table', { style:{ width:'100%', borderCollapse:'collapse', minWidth:'720px' } },
     h('thead', {}, h('tr', {}, th('Tenant'), th('Status'), th('Plan'), th('Users'), th('Balance'), th('Period ends'), th('Actions'))),
