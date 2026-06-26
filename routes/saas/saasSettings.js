@@ -67,11 +67,15 @@ const SETTING_KEYS = [
   { key: 'SWEEP_GCONV_TENANTS', group: 'perf',
     label: 'Google Conv export — enabled tenants',
     mask: false, kind: 'textarea',
-    hint: "CSV of tenant slugs allowed to run Google Conv daily export. Default 'vserve'. Empty = disabled for everyone." },
+    hint: "CSV of tenant slugs allowed to run Google Conv daily export. Default OFF (empty). Add slugs like 'vserve,celesteabode' to enable." },
   { key: 'SWEEP_MCAPI_TENANTS', group: 'perf',
     label: 'Meta CAPI sender — enabled tenants',
     mask: false, kind: 'textarea',
-    hint: "CSV of tenant slugs allowed to run Meta Conversions API daily batch. Default 'vserve'. Empty = disabled for everyone." }
+    hint: "CSV of tenant slugs allowed to run Meta Conversions API daily batch. Default OFF (empty). Add slugs like 'vserve,celesteabode' to enable." },
+  { key: 'SWEEP_AISUMMARY_TENANTS', group: 'perf',
+    label: 'AI Call Summary (Gemini auto-transcribe) — enabled tenants',
+    mask: false, kind: 'textarea',
+    hint: "CSV of tenant slugs allowed to auto-transcribe recordings via Gemini. Default OFF (empty). Also requires Railway env AI_TRANSCRIPTION_GLOBAL_OFF=0." }
 ];
 
 async function api_saas_settings_get(token) {

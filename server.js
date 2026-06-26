@@ -4157,15 +4157,19 @@ console.log('[reportSchedule] scheduled-report dispatcher started — 15-min tic
 // utils/aiCallSummary.js). Ask before modifying the schedule.
 
 async function _runAiCallSummaryForAllTenants() {
-  // PERF_FIX_v2 — AI call summary is globally OFF by default
-  // (AI_TRANSCRIPTION_GLOBAL_OFF=1). Skip the entire all-tenant iteration so
-  // we don't waste cycles opening tenant pools just to bail at line 1 of _tick.
+  // PERF_FIX_v3 — AI call summary is BOTH globally off via env AND gated by
+  // a per-tenant allowlist. The env stays OFF by default; even if it's
+  // flipped on, only tenants in SWEEP_AISUMMARY_TENANTS get processed.
+  // Default allowlist = '' (everyone off). Super-admin opts tenants in.
   if (String(process.env.AI_TRANSCRIPTION_GLOBAL_OFF || '1') === '1') return;
+  const allow = await _sweepAllow('SWEEP_AISUMMARY_TENANTS', '');
+  if (allow.size === 0) return;
 
   let rows = [];
   try {
     const r = await controlDb.query(
-      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500`
+      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') AND slug = ANY($1::text[]) ORDER BY id ASC LIMIT 500`,
+      [Array.from(allow)]
     );
     rows = r.rows;
   } catch (e) { console.warn('[ai-summary] tenant list failed:', e.message); return; }
