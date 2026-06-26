@@ -51,17 +51,19 @@ async function _previewTenant(tenant) {
 }
 
 async function _rolloutTenant(tenant) {
+  // WB_CHAT_V2_REVERT_v1 (2026-06-26) — user reverted the morning rollout.
+  // Now writes '0' (OFF) to every tenant EXCEPT vserve. Vserve keeps v2
+  // since it's the design tenant.
+  if (tenant.slug === 'vserve') {
+    return { slug: tenant.slug, org_name: tenant.org_name, kept_on: true };
+  }
   const pool = tenantPool.poolFor(tenant);
   if (!pool) return { slug: tenant.slug, error: 'no pool' };
   const out = { slug: tenant.slug, org_name: tenant.org_name, config_set: false };
   try {
-    const { ensureTenantReady } = require('../../utils/tenantBootstrap');
-    await ensureTenantReady(pool);
-  } catch (e) { out.bootstrap_error = e.message; }
-  try {
     await pool.query(
-      `INSERT INTO config (key, value) VALUES ('WB_CHAT_V2_ENABLED', '1')
-       ON CONFLICT (key) DO UPDATE SET value = '1'`
+      `INSERT INTO config (key, value) VALUES ('WB_CHAT_V2_ENABLED', '0')
+       ON CONFLICT (key) DO UPDATE SET value = '0'`
     );
     out.config_set = true;
   } catch (e) { out.config_error = e.message; }
@@ -111,23 +113,25 @@ async function api_saas_wbChatV2_rolloutRun(token, payload) {
  * misconfigured tenant doesn't block startup.
  */
 async function autoRolloutAtBoot() {
+  // WB_CHAT_V2_REVERT_v1 — flip OFF for every non-vserve tenant that still
+  // has it ON. Idempotent: tenants already OFF (or that are vserve) are
+  // skipped fast.
   try {
     const tenants = await _activeTenants();
-    let enabled = 0, alreadyOn = 0, errors = 0;
+    let reverted = 0, alreadyOff = 0, keptOn = 0, errors = 0;
     for (const t of tenants) {
+      if (t.slug === 'vserve') { keptOn++; continue; }
       const preview = await _previewTenant(t);
       if (preview.error) { errors++; continue; }
-      if (preview.effective_on) { alreadyOn++; continue; }
+      if (!preview.effective_on) { alreadyOff++; continue; }
       const r = await _rolloutTenant(t);
-      if (r.config_set) enabled++;
+      if (r.config_set) reverted++;
       else errors++;
-      // POOL_FIX_v2 (2026-06-25) — yield between tenants so the rollout
-      // doesn't grab N pool connections simultaneously and starve live traffic.
       await new Promise(res => setTimeout(res, 250));
     }
-    console.log(`[WB_CHAT_V2_ROLLOUT] boot rollout — scanned:${tenants.length} alreadyOn:${alreadyOn} enabled:${enabled} errors:${errors}`);
+    console.log(`[WB_CHAT_V2_REVERT] boot revert — scanned:${tenants.length} alreadyOff:${alreadyOff} reverted:${reverted} keptOnForVserve:${keptOn} errors:${errors}`);
   } catch (e) {
-    console.error('[WB_CHAT_V2_ROLLOUT] boot rollout failed:', e.message);
+    console.error('[WB_CHAT_V2_REVERT] boot revert failed:', e.message);
   }
 }
 
