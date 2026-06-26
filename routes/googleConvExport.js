@@ -45,6 +45,11 @@ async function _ensureSchema() {
   await db.query(`ALTER TABLE google_conv_export_settings ADD COLUMN IF NOT EXISTS sheet_tab TEXT DEFAULT 'Sheet1';`);
   /* GCONV_SHEET_TAB_FIX_v1: one-time migrate stale 'Conversions' default → 'Sheet1' */
   try { await db.query("UPDATE google_conv_export_settings SET sheet_tab = 'Sheet1' WHERE sheet_tab = 'Conversions' OR sheet_tab IS NULL OR sheet_tab = '';"); } catch (_) {}
+  /* GCONV_SHEET1_LOCK_v1 (2026-06-25): user confirmed Google Ads only reads
+     the Sheet1 tab. Normalise EVERY other value (Conversion, Sheet 1, Data,
+     etc.) to 'Sheet1' so no tenant accidentally pushes to a tab Google
+     never reads. */
+  try { await db.query("UPDATE google_conv_export_settings SET sheet_tab = 'Sheet1' WHERE sheet_tab IS DISTINCT FROM 'Sheet1';"); } catch (_) {}
   await db.query(`ALTER TABLE google_conv_export_settings ADD COLUMN IF NOT EXISTS sheet_push_enabled BOOLEAN DEFAULT FALSE;`);
   await db.query(`ALTER TABLE google_conv_export_settings ADD COLUMN IF NOT EXISTS last_sheet_push_at TIMESTAMPTZ;`);
   await db.query(`ALTER TABLE google_conv_export_settings ADD COLUMN IF NOT EXISTS last_sheet_push_rows INT;`);
@@ -600,7 +605,10 @@ async function _pushToSheet(settings, userId) {
   const sm = require('../utils/googleSheetsMaster');
   const sheetId = sm.parseSheetId(settings.sheet_url);
   if (!sheetId) throw new Error('Sheet URL is missing or unrecognised. Paste the full https://docs.google.com/spreadsheets/d/<ID>/edit URL.');
-  const tab = String(settings.sheet_tab || 'Sheet1').trim() || 'Sheet1';
+  // GCONV_SHEET1_LOCK_v1 — always write to 'Sheet1'. Google Ads Offline
+  // Conversion Import only reads this tab name. Ignore settings.sheet_tab
+  // even if an old tenant has 'Conversion' / 'Conversions' / 'Data' saved.
+  const tab = 'Sheet1';
   const { rows, withGclid, withoutGclid } = await _buildRows(settings);
   // Header row matches Google Ads' Offline Conversion Import spec
   const header = ['Google Click ID', 'Conversion Name', 'Conversion Time', 'Lead ID', 'Campaign ID', 'Mobile', 'Without GCLID'];
