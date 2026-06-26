@@ -3532,9 +3532,13 @@ async function _runReminderForAllTenants() {
     } catch (e) { console.warn(`[reminders] ${row.slug} tick failed:`, e.message); }
   }
 }
+// PERF_FIX_v4 (2026-06-25) — was 60s, bumped to 10 min. Per-tenant
+// reminder sweep iterates every active tenant on every tick; at 60s that
+// pounded the connection pool. Follow-up reminders are accurate to the
+// minute today; accurate to ~10 min is fine and saves significant DB load.
 setInterval(() => {
   _runReminderForAllTenants().catch(e => console.error('[reminders] cycle failed:', e.message));
-}, Number(process.env.REMINDER_INTERVAL_MS || 60_000));
+}, Number(process.env.REMINDER_INTERVAL_MS || 10 * 60_000));
 // Initial run after boot settles
 setTimeout(() => _runReminderForAllTenants().catch(() => {}), 15_000);
 console.log('[reminders] SaaS-aware follow-up scheduler started');
