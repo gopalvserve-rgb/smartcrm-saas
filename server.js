@@ -122,6 +122,13 @@ const SAAS_API = {};
 const app = express();
 app.set('trust proxy', 1);
 
+// PERF_FIX_v1 (2026-06-25) — gzip compression. app.js is 2.9 MB raw, ~740 KB
+// gzipped. Without this every page load downloaded the full 2.9 MB. Threshold
+// at 1 KB so we don't bother compressing tiny JSON. Level 6 is the sweet spot
+// (level 9 doubles CPU for ~3% better ratio).
+const compression = require('compression');
+app.use(compression({ level: 6, threshold: 1024 }));
+
 // ---- Cashfree webhook: needs raw body for HMAC verify ---------
 // Mounted BEFORE bodyParser.json so the webhook receives the raw bytes
 // Cashfree signed against; everything else uses parsed JSON.
@@ -3596,7 +3603,7 @@ async function _runReengageForAllTenants() {
 }
 setInterval(() => {
   _runReengageForAllTenants().catch(e => console.error('[reengage] cycle failed:', e.message));
-}, Number(process.env.REENGAGE_INTERVAL_MS || 60_000));
+}, Number(process.env.REENGAGE_INTERVAL_MS || 3 * 60_000));
 setTimeout(() => _runReengageForAllTenants().catch(() => {}), 30_000);
 console.log('[reengage] AI bot re-engagement worker started');
 
@@ -3629,7 +3636,7 @@ async function _runGoogleConvForAllTenants() {
 }
 setInterval(() => {
   _runGoogleConvForAllTenants().catch(e => console.error('[gconv] cycle failed:', e.message));
-}, 60_000);
+}, 3 * 60_000);
 setTimeout(() => _runGoogleConvForAllTenants().catch(() => {}), 60_000);
 console.log('[gconv] Google Ads conversion export daily worker started');
 
@@ -3849,16 +3856,11 @@ async function _runR2BackfillSweep() {
         if (!Buffer.isBuffer(buf)) buf = Buffer.from(buf);
         if (buf.length === 0) continue;
         let mime = rec.mime_type || 'audio/mp4';
-        // Legacy AMR/3GP rows were transcoded lazily on play (which reads
-        // audio_bytes). Once in R2 we redirect before that path, so
-        // transcode NOW to keep them browser-playable.
-        try {
-          const _tx = require('./utils/audioTranscode');
-          if (_tx.needsTranscode(buf)) {
-            const _mp3 = await _tx.transcodeToMp3(buf);
-            if (_mp3 && _mp3.length > 0) { buf = _mp3; mime = 'audio/mpeg'; }
-          }
-        } catch (_) {}
+        // PERF_FIX_v1 (2026-06-25) — DROPPED the inline ffmpeg transcode here. It
+        // was spawning ffmpeg from the background sweep every minute and pegging
+        // CPU. Legacy AMR/3GP rows now stay in their original format in R2 and
+        // the /play endpoint transcodes lazily on first request only (cached).
+        // (audioTranscode is still wired up on the play path.)
         const ext = mime.indexOf('mpeg') !== -1 ? 'mp3' : mime.indexOf('mp4') !== -1 ? 'm4a' : mime.indexOf('wav') !== -1 ? 'wav' : 'audio';
         const key = 'rec/' + (row.slug || 'tenant') + '/backfill-' + rec.id + '-' + Date.now() + '.' + ext;
         try {
@@ -3871,8 +3873,12 @@ async function _runR2BackfillSweep() {
   }
   if (migrated > 0) console.log('[r2-backfill] migrated ' + migrated + ' recording(s) to R2 this tick');
 }
+// PERF_FIX_v1 (2026-06-25) — was every 60s, way too aggressive. 25 recordings
+// per tenant per minute, with ffmpeg transcode inline, was pegging CPU and
+// stalling the event loop. Bumped to 15 minutes; transcoding moved to lazy
+// (the play endpoint handles it on first request).
 setTimeout(() => { _runR2BackfillSweep().catch(() => {}); }, 240_000);          // first run ~4 min after boot
-setInterval(() => { _runR2BackfillSweep().catch(e => console.error('[r2-backfill]', e.message)); }, 60_000);  // then every minute
+setInterval(() => { _runR2BackfillSweep().catch(e => console.error('[r2-backfill]', e.message)); }, 15 * 60_000);  // then every 15 min
 
 // ── WL_BILLING_CRON_v1 — daily auto-bill at 9am IST ──
 // Runs once at 9:00 IST. Generates invoices for every active customer
@@ -3934,7 +3940,7 @@ async function _runMetaCapiForAllTenants() {
 }
 setInterval(() => {
   _runMetaCapiForAllTenants().catch(e => console.error('[meta-capi] cycle failed:', e.message));
-}, 60_000);
+}, 3 * 60_000);
 setTimeout(() => _runMetaCapiForAllTenants().catch(() => {}), 90_000);
 console.log('[meta-capi] Meta Conversions API daily worker started');
 
@@ -4146,7 +4152,7 @@ async function _runAiCallSummaryForAllTenants() {
 }
 setInterval(() => {
   _runAiCallSummaryForAllTenants().catch(e => console.error('[ai-summary] cycle failed:', e.message));
-}, Number(process.env.AI_CALL_SUMMARY_INTERVAL_MS || 60_000));
+}, Number(process.env.AI_CALL_SUMMARY_INTERVAL_MS || 3 * 60_000));
 // Initial pass 45s after boot to let the AI key + DB pools warm up.
 setTimeout(() => _runAiCallSummaryForAllTenants().catch(() => {}), 45_000);
 console.log('[ai-summary] SaaS-aware Gemini call-summary worker started');
