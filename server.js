@@ -83,8 +83,12 @@ require('./routes/packs/ecommerce');
 // Runs in-process; idempotent (status='scheduled' rows only).
 try {
   const social = require('./routes/social');
-  if (social && typeof social._runScheduledPosts === 'function') {
-    setInterval(() => social._runScheduledPosts().catch(() => {}), 60_000);
+  // PERF_FIX_v5 (2026-06-25) — disabled by default. Feature not in use today
+  // and the 60s every-tenant sweep was a primary halt source. Re-enable via
+  // env SOCIAL_SCHEDULER_ENABLED='1'.
+  if (social && typeof social._runScheduledPosts === 'function' &&
+      String(process.env.SOCIAL_SCHEDULER_ENABLED || '0') === '1') {
+    setInterval(() => social._runScheduledPosts().catch(() => {}), 5 * 60_000);
   }
   // Phase S4 — Pull ad insights every hour. Updates today's + yesterday's
   // snapshot rows and regenerates alerts. Cheap on the API quota since
@@ -3500,9 +3504,17 @@ app.post('/hook/sheet/:token', async (req, res) => {
 });
 
 // Background: run sheet syncs and native pulls every 5 minutes
-setInterval(() => {
-  try { integrations.runDueSheetSyncs(); } catch(e) { console.error('[bg] sheet sync error:', e.message); }
-  try { integrations.runDueNativePulls(); } catch(e) { console.error('[bg] native pull error:', e.message); }
+// PERF_FIX_v5 (2026-06-25) — gated by saas_settings allowlists. Empty list
+// (default) = sweep skipped entirely. Set SWEEP_SHEETSYNC_TENANTS or
+// SWEEP_NATIVEPULL_TENANTS in super-admin Settings → Performance to enable
+// per tenant slug.
+setInterval(async () => {
+  try {
+    const sheetAllow = await _sweepAllow('SWEEP_SHEETSYNC_TENANTS', '');
+    if (sheetAllow.size > 0) integrations.runDueSheetSyncs(Array.from(sheetAllow));
+    const pullAllow = await _sweepAllow('SWEEP_NATIVEPULL_TENANTS', '');
+    if (pullAllow.size > 0) integrations.runDueNativePulls(Array.from(pullAllow));
+  } catch(e) { console.error('[bg] integrations sweep error:', e.message); }
 }, 5 * 60 * 1000);
 
 // ── Background: per-tenant follow-up reminder runner ────────────────────
@@ -3609,7 +3621,7 @@ async function _runReengageForAllTenants() {
 }
 setInterval(() => {
   _runReengageForAllTenants().catch(e => console.error('[reengage] cycle failed:', e.message));
-}, Number(process.env.REENGAGE_INTERVAL_MS || 3 * 60_000));
+}, Number(process.env.REENGAGE_INTERVAL_MS || 10 * 60_000));  // PERF_FIX_v5: 3min → 10min
 setTimeout(() => _runReengageForAllTenants().catch(() => {}), 30_000);
 console.log('[reengage] AI bot re-engagement worker started');
 
@@ -3770,7 +3782,7 @@ async function _runAiManagerForAllTenants() {
 /* AI_MGR_CYCLE_v2: 15-minute interval (was 2 min) — less DB pressure, less alert spam */
 setInterval(() => {
   _runAiManagerForAllTenants().catch(e => console.error('[ai_mgr] cycle failed:', e.message));
-}, 900_000);
+}, 30 * 60_000);  // PERF_FIX_v5: 15min → 30min
 setTimeout(() => _runAiManagerForAllTenants().catch(() => {}), 90_000);
 
 async function _runAiManagerCoachingForAllTenants() {
@@ -3984,10 +3996,15 @@ console.log('[meta-capi] Meta Conversions API daily worker started');
 // channel-appropriate send path (WA template / email / AI bot). Exit
 // conditions (customer reply, status change) are evaluated per step.
 async function _runNurtureForAllTenants() {
+  // PERF_FIX_v5 — gated by saas_settings allowlist. Default empty = skip.
+  // Set SWEEP_NURTURE_TENANTS in super-admin Settings → Performance.
+  const allow = await _sweepAllow('SWEEP_NURTURE_TENANTS', '');
+  if (allow.size === 0) return;
   let rows = [];
   try {
     const r = await controlDb.query(
-      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500`
+      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') AND slug = ANY($1::text[]) ORDER BY id ASC LIMIT 500`,
+      [Array.from(allow)]
     );
     rows = r.rows;
   } catch (e) { console.warn('[nurture] tenant list failed:', e.message); return; }

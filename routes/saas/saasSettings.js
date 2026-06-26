@@ -75,7 +75,19 @@ const SETTING_KEYS = [
   { key: 'SWEEP_AISUMMARY_TENANTS', group: 'perf',
     label: 'AI Call Summary (Gemini auto-transcribe) — enabled tenants',
     mask: false, kind: 'textarea',
-    hint: "CSV of tenant slugs allowed to auto-transcribe recordings via Gemini. Default OFF (empty). Also requires Railway env AI_TRANSCRIPTION_GLOBAL_OFF=0." }
+    hint: "CSV of tenant slugs allowed to auto-transcribe recordings via Gemini. Default OFF (empty). Also requires Railway env AI_TRANSCRIPTION_GLOBAL_OFF=0." },
+  { key: 'SWEEP_NURTURE_TENANTS', group: 'perf',
+    label: 'Nurture sequences — enabled tenants',
+    mask: false, kind: 'textarea',
+    hint: "CSV of tenant slugs allowed to run the 5-min nurture-sequence sweep. Default OFF (empty). Add slugs only for tenants actively using nurture sequences." },
+  { key: 'SWEEP_SHEETSYNC_TENANTS', group: 'perf',
+    label: 'Google Sheet sync — enabled tenants',
+    mask: false, kind: 'textarea',
+    hint: "CSV of tenant slugs allowed to run the 5-min Google Sheet lead-sync sweep. Default OFF (empty). Add slugs only for tenants with active sheet integrations." },
+  { key: 'SWEEP_NATIVEPULL_TENANTS', group: 'perf',
+    label: 'Native source pull — enabled tenants',
+    mask: false, kind: 'textarea',
+    hint: "CSV of tenant slugs allowed to run the 5-min native-source pull (Meta Lead Ads / etc). Default OFF (empty). Add slugs only for tenants with active integrations." }
 ];
 
 async function api_saas_settings_get(token) {
