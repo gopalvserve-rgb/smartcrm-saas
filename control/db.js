@@ -116,12 +116,40 @@ async function setSetting(key, value) {
 
 /**
  * Run the schema.sql file once on startup. Idempotent (CREATE TABLE IF NOT EXISTS).
+ *
+ * DEPLOY_RETRY_v1 (2026-06-26) — wrap with retry-and-backoff so a deploy that
+ * races the previous process's lingering PG connections doesn't crash the
+ * boot. Common Railway pattern: old container's connections take 30-60s to
+ * fully release after SIGTERM, new container boots immediately, PG rejects
+ * with code 53300 'too many clients already'. We retry 6 times with
+ * exponential backoff (3s, 6s, 12s, 24s, 48s, 60s = ~2.5 min total) before
+ * giving up. Same for any transient connection failure on boot.
  */
 async function migrate() {
   const fs = require('fs');
   const path = require('path');
   const sql = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
-  await query(sql);
+  const delays = [3000, 6000, 12000, 24000, 48000, 60000];
+  let lastErr;
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    try {
+      await query(sql);
+      if (attempt > 0) console.log(`[control-db] migrate succeeded on attempt ${attempt + 1}`);
+      return;
+    } catch (e) {
+      lastErr = e;
+      const transient = (e.code === '53300') ||                                 // too many clients
+                        (e.code === 'ECONNREFUSED') ||                          // PG not reachable
+                        (e.code === 'ETIMEDOUT') ||                             // connect timeout
+                        (e.code === '57P03') ||                                 // PG cannot_connect_now
+                        /sorry, too many|connection terminated|timeout/i.test(String(e.message||''));
+      if (!transient || attempt === delays.length) throw e;
+      const wait = delays[attempt];
+      console.warn(`[control-db] migrate attempt ${attempt + 1} failed (${e.code || e.message}); retrying in ${wait/1000}s`);
+      await new Promise(r => setTimeout(r, wait));
+    }
+  }
+  throw lastErr;
 }
 
 function nowIso() { return new Date().toISOString(); }
