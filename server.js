@@ -3607,15 +3607,39 @@ setInterval(() => {
 setTimeout(() => _runReengageForAllTenants().catch(() => {}), 30_000);
 console.log('[reengage] AI bot re-engagement worker started');
 
+// PERF_FIX_v2 (2026-06-25) — control-DB allowlist for "every-tenant" sweeps.
+// User wanted Google Conv + Meta CAPI run only for explicitly-allowed
+// tenants (vserve by default) instead of looping every tenant every cycle.
+// Stored in saas_settings as CSV of slugs. 60s in-memory cache.
+let _sweepAllowCache = {}, _sweepAllowCachedAt = 0;
+async function _sweepAllow(key, defaultCsv) {
+  const now = Date.now();
+  if (now - _sweepAllowCachedAt > 60_000) { _sweepAllowCache = {}; _sweepAllowCachedAt = now; }
+  if (_sweepAllowCache[key] === undefined) {
+    let csv = defaultCsv;
+    try {
+      const r = await controlDb.query("SELECT value FROM saas_settings WHERE key = $1 LIMIT 1", [key]);
+      if (r.rows.length && r.rows[0].value !== null) csv = r.rows[0].value;
+    } catch (_) {}
+    _sweepAllowCache[key] = csv;
+  }
+  return new Set(String(_sweepAllowCache[key] || '').split(',').map(s => s.trim()).filter(Boolean));
+}
+
 // ── GOOGLE_CONV_EXPORT_v2 — daily auto-export per tenant at 22:00 IST ──
 // Walks every active tenant once a minute. Each tenant's tick decides
 // whether to fire (IST hour matches + not already fired today + feature
 // is ON). The CSV is written to disk + served by the public route.
 async function _runGoogleConvForAllTenants() {
+  // PERF_FIX_v2 — only iterate tenants in the allowlist (default: vserve only).
+  // Edit saas_settings.SWEEP_GCONV_TENANTS (CSV of slugs) via super-admin UI.
+  const allow = await _sweepAllow('SWEEP_GCONV_TENANTS', 'vserve');
+  if (allow.size === 0) return;
   let rows = [];
   try {
     const r = await controlDb.query(
-      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500`
+      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') AND slug = ANY($1::text[]) ORDER BY id ASC LIMIT 500`,
+      [Array.from(allow)]
     );
     rows = r.rows;
   } catch (e) { console.warn('[gconv] tenant list failed:', e.message); return; }
@@ -3916,10 +3940,15 @@ console.log('[wl-billing-cron] WL Billing daily worker started (fires 9am IST)')
 // already runs via routes/leads.js status-change hook — this catches any
 // events the real-time path missed (network errors, server restarts).
 async function _runMetaCapiForAllTenants() {
+  // PERF_FIX_v2 — only iterate tenants in the allowlist (default: vserve only).
+  // Edit saas_settings.SWEEP_MCAPI_TENANTS (CSV of slugs) via super-admin UI.
+  const allow = await _sweepAllow('SWEEP_MCAPI_TENANTS', 'vserve');
+  if (allow.size === 0) return;
   let rows = [];
   try {
     const r = await controlDb.query(
-      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500`
+      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') AND slug = ANY($1::text[]) ORDER BY id ASC LIMIT 500`,
+      [Array.from(allow)]
     );
     rows = r.rows;
   } catch (e) { console.warn('[meta-capi] tenant list failed:', e.message); return; }
@@ -4128,6 +4157,11 @@ console.log('[reportSchedule] scheduled-report dispatcher started — 15-min tic
 // utils/aiCallSummary.js). Ask before modifying the schedule.
 
 async function _runAiCallSummaryForAllTenants() {
+  // PERF_FIX_v2 — AI call summary is globally OFF by default
+  // (AI_TRANSCRIPTION_GLOBAL_OFF=1). Skip the entire all-tenant iteration so
+  // we don't waste cycles opening tenant pools just to bail at line 1 of _tick.
+  if (String(process.env.AI_TRANSCRIPTION_GLOBAL_OFF || '1') === '1') return;
+
   let rows = [];
   try {
     const r = await controlDb.query(

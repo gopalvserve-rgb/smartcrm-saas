@@ -59,7 +59,19 @@ const SETTING_KEYS = [
   { key: 'PLATFORM_LOGO_URL',     group: 'brand',  label: 'Logo URL',                  mask: false },
   { key: 'PLATFORM_PRIMARY_COLOR',group: 'brand',  label: 'Primary brand color',       mask: false },
   { key: 'SUPPORT_EMAIL',         group: 'brand',  label: 'Support email',             mask: false },
-  { key: 'SUPPORT_PHONE',         group: 'brand',  label: 'Support phone',             mask: false }
+  { key: 'SUPPORT_PHONE',         group: 'brand',  label: 'Support phone',             mask: false },
+
+  // ---------- Performance / background sweeps (PERF_FIX_v2) ----------
+  // CSV list of tenant slugs allowed to run each background sweep. Empty = all
+  // tenants disabled. Default 'vserve' so only the parent tenant runs them.
+  { key: 'SWEEP_GCONV_TENANTS', group: 'perf',
+    label: 'Google Conv export — enabled tenants',
+    mask: false, kind: 'textarea',
+    hint: "CSV of tenant slugs allowed to run Google Conv daily export. Default 'vserve'. Empty = disabled for everyone." },
+  { key: 'SWEEP_MCAPI_TENANTS', group: 'perf',
+    label: 'Meta CAPI sender — enabled tenants',
+    mask: false, kind: 'textarea',
+    hint: "CSV of tenant slugs allowed to run Meta Conversions API daily batch. Default 'vserve'. Empty = disabled for everyone." }
 ];
 
 async function api_saas_settings_get(token) {

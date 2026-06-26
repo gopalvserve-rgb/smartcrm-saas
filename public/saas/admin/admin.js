@@ -2326,7 +2326,8 @@ VIEWS.settings = async (view) => {
     payments:  '💳 Payments',
     email:     '✉️ Email',
     lifecycle: '🔄 Lifecycle',
-    brand:     '🎨 Brand'
+    brand:     '🎨 Brand',
+    perf:      '⚡ Performance / Background Sweeps'
   };
   const form = h('form', { onsubmit: async ev => {
     ev.preventDefault();
