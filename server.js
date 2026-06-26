@@ -51,6 +51,7 @@ const callEventsRepair = require('./routes/saas/callEventsRepair');
 const leadScoringRollout = require('./routes/saas/leadScoringRollout');
 const quickNoteRollout = require('./routes/saas/quickNoteRollout');
 const copilotProactiveRollout = require('./routes/saas/copilotProactiveRollout'); /* AI_ASSIST_ROLLOUT_v1 */
+const wbChatV2Rollout = require('./routes/saas/wbChatV2Rollout'); /* WB_CHAT_V2_ROLLOUT_v1 */
 const leadsViewV2Rollout = require('./routes/saas/leadsViewV2Rollout'); /* LEADS_VIEW_V2_ROLLOUT_v1 */
 const whiteLabelBilling = require('./routes/saas/whiteLabelBilling');
 const tenantModules = require('./routes/saas/tenantModules');
@@ -111,6 +112,7 @@ const SAAS_API = {};
   quickNoteRollout, /* QNOTE_ROLLOUT_ALL_v1 */
   copilotProactiveRollout, /* AI_ASSIST_ROLLOUT_v1 */
   leadsViewV2Rollout, /* LEADS_VIEW_V2_ROLLOUT_v1 */
+  wbChatV2Rollout, /* WB_CHAT_V2_ROLLOUT_v1 */
   whiteLabelBilling, /* WL_BILLING_v1 */
   saasPermissions /* SUPER_ADMIN_PERMS_v1 */
 ].forEach(mod => {
@@ -4798,6 +4800,13 @@ setTimeout(() => _runCallLast48hCleanup().catch(() => {}), 300_000);
       const { autoRolloutAtBoot: lv2Rollout } = require('./routes/saas/leadsViewV2Rollout');
       setTimeout(() => { lv2Rollout().catch(e => console.error('[LEADS_VIEW_V2_ROLLOUT]', e.message)); }, 9000);
     } catch (e) { console.warn('[LEADS_VIEW_V2_ROLLOUT] require failed:', e.message); }
+    // WB_CHAT_V2_ROLLOUT_v1 (2026-06-25) — bulk-enable the new 3-column
+    // WhatsApp chat UI on EVERY existing tenant. Idempotent; new tenants
+    // get WB_CHAT_V2_ENABLED via tenantBootstrap CONFIG_DEFAULTS.
+    try {
+      const { autoRolloutAtBoot: wbChatV2Rollout } = require('./routes/saas/wbChatV2Rollout');
+      setTimeout(() => { wbChatV2Rollout().catch(e => console.error('[WB_CHAT_V2_ROLLOUT]', e.message)); }, 11000);
+    } catch (e) { console.warn('[WB_CHAT_V2_ROLLOUT] require failed:', e.message); }
   });
 }
 boot().catch(e => { console.error('[boot] failed:', e); process.exit(1); });
