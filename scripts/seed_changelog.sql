@@ -832,3 +832,14 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The Classic / Modern / Inbox view switcher now shows whether the Leads header is expanded or hidden, so it can no longer disappear.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- WACHAT_ALLTENANTS_STAGECHART_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('WACHAT_ALLTENANTS_v1', 'WhatsApp 3-column chat for everyone',
+ 'The redesigned 3-column WhatsApp chat (thread list + chat + live lead panel) is now enabled for all tenants, current and future. Admins can opt out by setting WB_CHAT_V2_ENABLED to 0.',
+ 'tenant_admin', NOW()),
+('SALE_CLOSURE_FIXES_v1', 'Sale Closure: date presets fixed + stage flow chart',
+ 'On the Sale Closure page the date presets (Today / Yesterday / Last 7 days etc.) now actually filter the board. The stage graph also gained a Stages flow style (connected colored arrow segments) and uses it by default.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

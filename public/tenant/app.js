@@ -18981,7 +18981,7 @@ async function wbChat() {
       } catch (_) {}
       CRM._wbV2Checked = true;
     }
-    if (String(cfg.WB_CHAT_V2_ENABLED || '') === '1' &&
+    if (String(cfg.WB_CHAT_V2_ENABLED || '') !== '0' &&  // WB_CHAT_V2_ALLTENANTS_v1 — on for all tenants; opt out with '0'
         window.WB_CHAT_V2 && typeof window.WB_CHAT_V2.render === 'function') {
       return window.WB_CHAT_V2.render();
     }
@@ -20137,7 +20137,7 @@ VIEWS.projects = async (view) => {
   const fromInp = h('input', { type: 'date', class: 'input', value: filtersState.from || '', style: { width: '150px' } });
   const toInp   = h('input', { type: 'date', class: 'input', value: filtersState.to   || '', style: { width: '150px' } });
   // DATE_PRESETS_v1
-  setTimeout(() => { try { window._attachDatePresets && window._attachDatePresets(fromInp, toInp, { key: 'activity', apply: () => { try { applyFilters && applyFilters(); } catch (_) {} } }); } catch (_) {} }, 0);
+  setTimeout(() => { try { window._attachDatePresets && window._attachDatePresets(fromInp, toInp, { key: 'activity', apply: () => { try { _load(); } catch (_) {} } }); } catch (_) {} }, 0);
   const userSel = h('select', { class: 'input', multiple: 'multiple', style: { minWidth: '200px', height: '34px' }, title: 'Assigned to (multi-select)' },
     ...users.map(u => h('option', { value: String(u.id),
       selected: (filtersState.assigned_tos || []).map(String).includes(String(u.id)) ? 'selected' : null }, u.name))
@@ -20292,21 +20292,45 @@ function _renderBoard(board, listEl) {
 /* Stage chart with selectable type (bar / funnel / donut). */
 function _projStageChart(board) {
   const TKEY = 'crm.projectsChartType';
-  const type = localStorage.getItem(TKEY) || 'bar';
+  const type = localStorage.getItem(TKEY) || 'stages';
   const stages = board.board.map(c => ({ name: c.stage.name, count: c.leads.length, conv: c.leads.filter(l => l.auto_won).length }));
   const card = h('div', { class: 'card', style: { padding: '.85rem 1rem', marginBottom: '.75rem' } });
   const sel = h('select', { class: 'input', style: { height: '30px', width: 'auto', fontSize: '.8rem' } },
-    ...[['bar', 'Bar'], ['funnel', 'Funnel'], ['donut', 'Donut']].map(([v, l]) => h('option', { value: v, selected: type === v ? 'selected' : null }, l)));
+    ...[['stages', 'Stages'], ['bar', 'Bar'], ['funnel', 'Funnel'], ['donut', 'Donut']].map(([v, l]) => h('option', { value: v, selected: type === v ? 'selected' : null }, l)));
   sel.onchange = () => { localStorage.setItem(TKEY, sel.value); const le = document.getElementById('proj-board'); if (le) _renderBoard(board, le); };
   card.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', marginBottom: '.6rem' } },
     h('div', { style: { fontSize: '.78rem', fontWeight: 600, color: '#475569', textTransform: 'uppercase', letterSpacing: '.04em', flex: 1 } }, '📊 Records by stage'),
     h('span', { class: 'muted', style: { fontSize: '.72rem' } }, 'Graph'), sel));
-  if (type === 'funnel')      card.appendChild(_projChartFunnel(stages));
+  if (type === 'stages')      card.appendChild(_projChartStages(stages));
+  else if (type === 'funnel') card.appendChild(_projChartFunnel(stages));
   else if (type === 'donut')  card.appendChild(_projChartDonut(stages));
   else                        card.appendChild(_projChartBar(stages));
   return card;
 }
 const _PROJ_PALETTE = ['#3b82f6', '#22c55e', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#ef4444', '#14b8a6', '#64748b'];
+function _projChartStages(stages) {
+  const wrap = h('div', { style: { display: 'flex', alignItems: 'stretch', gap: '2px', overflowX: 'auto', paddingTop: '.4rem', paddingBottom: '.2rem' } });
+  const n = stages.length;
+  stages.forEach((s, i) => {
+    const col = _PROJ_PALETTE[i % _PROJ_PALETTE.length];
+    const first = i === 0, last = i === n - 1;
+    const clip = first
+      ? 'polygon(0 0, calc(100% - 14px) 0, 100% 50%, calc(100% - 14px) 100%, 0 100%)'
+      : (last
+        ? 'polygon(0 0, 100% 0, 100% 100%, 0 100%, 14px 50%)'
+        : 'polygon(0 0, calc(100% - 14px) 0, 100% 50%, calc(100% - 14px) 100%, 0 100%, 14px 50%)');
+    wrap.appendChild(h('div', {
+      title: s.name + ': ' + s.count + (s.conv ? ' (' + s.conv + ' converted)' : ''),
+      style: { flex: '1 1 0', minWidth: '96px', background: col, color: '#fff',
+        padding: '12px 16px 12px ' + (first ? '16px' : '24px'),
+        clipPath: clip, WebkitClipPath: clip,
+        display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: '3px' } },
+      h('div', { style: { fontSize: '.72rem', fontWeight: 600, opacity: '.95', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, s.name),
+      h('div', { style: { fontSize: '1.15rem', fontWeight: 700, lineHeight: '1' } }, String(s.count) + (s.conv ? ' \u2713' : ''))
+    ));
+  });
+  return wrap;
+}
 function _projChartBar(stages) {
   const maxC = Math.max(1, ...stages.map(s => s.count));
   const row = h('div', { style: { display: 'flex', alignItems: 'flex-end', gap: '.5rem', height: '140px', paddingTop: '.5rem', overflowX: 'auto' } });

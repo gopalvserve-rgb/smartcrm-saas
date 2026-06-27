@@ -619,7 +619,7 @@ const CONFIG_DEFAULTS = [
   // New tenants no longer get the new chat by default. To re-enable for a
   // specific tenant, set WB_CHAT_V2_ENABLED='1' via super-admin config UI.
   // (Vserve keeps v2 since it was the design tenant.)
-  // { key: 'WB_CHAT_V2_ENABLED', value: '1' },  // DISABLED
+  { key: 'WB_CHAT_V2_ENABLED', value: '1' },  // WB_CHAT_V2_ALLTENANTS_v1 — 3-column WhatsApp chat on for every new tenant
   // REC_RETENTION_v1 — auto-delete call recordings after 30 days by default.
   // A daily all-tenant cron purges lead_recordings older than this. '0' disables.
   { key: 'RECORDING_RETENTION_DAYS', value: '30' },
