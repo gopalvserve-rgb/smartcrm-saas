@@ -20243,13 +20243,71 @@ function _renderBoard(board, listEl) {
       'No stages defined yet. Admin: head to Settings → 🚚 Sale Final Closure Stages to create your closure workflow.'));
     return;
   }
-  const totalLeads = board.board.reduce((n, col) => n + col.leads.length, 0);
+  const totalLeads   = board.board.reduce((n, col) => n + col.leads.length, 0);
+  const convertedCnt = board.board.reduce((n, col) => n + col.leads.filter(l => l.auto_won).length, 0);
+  const stalledCnt   = board.board.reduce((n, col) => n + col.leads.filter(l => l.stalled).length, 0);
+
+  /* SALE_CLOSURE_VIEWS_v1 — view toggle (Kanban | List) + stage-count chart */
+  const mode = localStorage.getItem('crm.projectsViewMode') || 'kanban';
+  const tBtn = (key, label) => h('button', {
+    class: 'btn sm' + (mode === key ? ' primary' : ''),
+    onclick: () => { localStorage.setItem('crm.projectsViewMode', key); _renderBoard(board, listEl); }
+  }, label);
+  listEl.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', flexWrap: 'wrap', marginBottom: '.6rem' } },
+    h('div', { style: { display: 'flex', gap: '.3rem' } }, tBtn('kanban', '🗂 Kanban'), tBtn('list', '📋 List')),
+    h('span', { style: { flex: 1 } }),
+    h('span', { class: 'tag', style: { background: '#dbeafe', color: '#1e40af' } }, '📊 In pipeline: ' + totalLeads),
+    convertedCnt ? h('span', { class: 'tag', style: { background: '#dcfce7', color: '#166534' }, title: 'Converted (Won) leads auto-added to the closure pipeline' }, '🎉 Converted: ' + convertedCnt) : null,
+    stalledCnt ? h('span', { class: 'tag', style: { background: '#fef2f2', color: '#991b1b' } }, '⚠ Stalled: ' + stalledCnt) : null
+  ));
+
+  // Stage-count bar chart (count of records per stage)
+  listEl.appendChild(_projStageChart(board));
+
   if (!totalLeads) {
     listEl.appendChild(h('p', { class: 'muted' },
       'No leads match your filters (or no leads are in final closure yet).'));
     return;
   }
-  // Show a small filter summary so users know what's active
+
+  if (mode === 'list') return _projRenderList(board, listEl);
+  return _projRenderKanban(board, listEl);
+}
+
+/* Count-of-records-per-stage bar chart (lightweight CSS bars, no chart lib). */
+function _projStageChart(board) {
+  const counts = board.board.map(col => col.leads.length);
+  const maxC = Math.max(1, ...counts);
+  const card = h('div', { class: 'card', style: { padding: '.85rem 1rem', marginBottom: '.75rem' } },
+    h('div', { style: { fontSize: '.78rem', fontWeight: 600, color: '#475569', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: '.6rem' } }, '📊 Records by stage'));
+  const row = h('div', { style: { display: 'flex', alignItems: 'flex-end', gap: '.5rem', height: '140px', paddingTop: '.5rem', overflowX: 'auto' } });
+  board.board.forEach(col => {
+    const c = col.leads.length;
+    const h_pct = Math.round((c / maxC) * 100);
+    const conv = col.leads.filter(l => l.auto_won).length;
+    const bar = h('div', { style: { flex: '1 1 0', minWidth: '46px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '.3rem', height: '100%' } },
+      h('div', { style: { fontSize: '.8rem', fontWeight: 700, color: '#1e293b' } }, String(c)),
+      h('div', { style: { flex: 1, width: '100%', display: 'flex', alignItems: 'flex-end' } },
+        h('div', {
+          title: col.stage.name + ': ' + c + (conv ? ' (' + conv + ' converted)' : ''),
+          style: {
+            width: '100%', height: Math.max(h_pct, c ? 6 : 0) + '%',
+            minHeight: c ? '6px' : '0',
+            background: conv ? 'linear-gradient(180deg,#22c55e,#16a34a)' : 'linear-gradient(180deg,#60a5fa,#3b82f6)',
+            borderRadius: '5px 5px 0 0', transition: 'height .3s'
+          }
+        })
+      ),
+      h('div', { style: { fontSize: '.68rem', color: '#64748b', textAlign: 'center', lineHeight: '1.1', maxWidth: '70px', wordBreak: 'break-word' }, title: col.stage.name }, col.stage.name)
+    );
+    row.appendChild(bar);
+  });
+  card.appendChild(row);
+  return card;
+}
+
+/* Kanban view (original column layout). */
+function _projRenderKanban(board, listEl) {
   const wrap = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '.75rem' } });
   board.board.forEach(col => {
     const stalledCount = col.leads.filter(l => l.stalled).length;
@@ -20265,10 +20323,11 @@ function _renderBoard(board, listEl) {
     }
     col.leads.forEach(l => {
       colWrap.appendChild(h('div', {
-        class: 'card', style: { margin: '.4rem .5rem', padding: '.6rem .75rem', cursor: 'pointer', borderLeft: l.stalled ? '3px solid #ef4444' : '3px solid #e5e7eb' },
+        class: 'card', style: { margin: '.4rem .5rem', padding: '.6rem .75rem', cursor: 'pointer', borderLeft: l.stalled ? '3px solid #ef4444' : (l.auto_won ? '3px solid #22c55e' : '3px solid #e5e7eb') },
         onclick: () => openLeadModal(l.id)
       },
-        h('div', { style: { fontWeight: 600 } }, l.name),
+        h('div', { style: { fontWeight: 600, display: 'flex', alignItems: 'center', gap: '.35rem' } }, l.name,
+          l.auto_won ? h('span', { class: 'tag', style: { background: '#dcfce7', color: '#166534', fontSize: '.62rem' }, title: 'Converted (Won) — auto-added to closure' }, '🎉 Converted') : null),
         l.value ? h('div', { class: 'muted', style: { fontSize: '.8rem' } }, '₹ ' + Number(l.value).toLocaleString('en-IN')) : null,
         l.assigned_name ? h('div', { class: 'muted', style: { fontSize: '.78rem' } }, '👤 ' + l.assigned_name) : null,
         l.source ? h('div', { class: 'muted', style: { fontSize: '.78rem' } }, '🌐 ' + l.source) : null,
@@ -20280,6 +20339,33 @@ function _renderBoard(board, listEl) {
     wrap.appendChild(colWrap);
   });
   listEl.appendChild(wrap);
+}
+
+/* List view — flat table across all stages. */
+function _projRenderList(board, listEl) {
+  const rows = [];
+  board.board.forEach(col => col.leads.forEach(l => rows.push(Object.assign({ _stage: col.stage.name, _expected: col.stage.expected_days }, l))));
+  const table = h('table', { class: 'table', style: { width: '100%', fontSize: '.85rem' } });
+  table.appendChild(h('thead', {}, h('tr', {},
+    ...['Stage', 'Lead', 'Phone', 'Owner', 'Source', 'Product', 'Value', 'Days', 'Flag'].map(c => h('th', { style: { textAlign: c === 'Value' || c === 'Days' ? 'right' : 'left' } }, c))
+  )));
+  const tb = h('tbody', {});
+  rows.forEach(l => {
+    tb.appendChild(h('tr', { style: { cursor: 'pointer', background: l.auto_won ? '#f0fdf4' : null }, onclick: () => openLeadModal(l.id) },
+      h('td', {}, l._stage),
+      h('td', { style: { fontWeight: 600 } }, l.name,
+        l.auto_won ? h('span', { class: 'tag', style: { background: '#dcfce7', color: '#166534', fontSize: '.62rem', marginLeft: '.3rem' } }, '🎉 Converted') : null),
+      h('td', {}, l.phone || ''),
+      h('td', {}, l.assigned_name || ''),
+      h('td', {}, l.source || ''),
+      h('td', {}, l.product_name || ''),
+      h('td', { style: { textAlign: 'right' } }, l.value ? '₹ ' + Number(l.value).toLocaleString('en-IN') : ''),
+      h('td', { style: { textAlign: 'right', color: l.stalled ? '#dc2626' : '#6b7280' } }, l.days_at_stage != null ? l.days_at_stage + 'd' : ''),
+      h('td', {}, l.stalled ? h('span', { class: 'tag', style: { background: '#fef2f2', color: '#991b1b' } }, '⚠ Stalled') : '')
+    ));
+  });
+  table.appendChild(tb);
+  listEl.appendChild(h('div', { class: 'card', style: { padding: '.5rem', overflowX: 'auto' } }, table));
 }
 
 VIEWS.targets = async (view) => {

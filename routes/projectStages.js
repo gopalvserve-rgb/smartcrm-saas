@@ -179,6 +179,54 @@ async function api_projectStages_board(token, filters) {
       stalled
     });
   });
+  // SALE_CLOSURE_WON_AUTOSHOW_v1 (2026-06-27) — leads whose status maps to the
+  // 'won' pipeline stage (i.e. converted customers) should appear in the closure
+  // board automatically, even if nobody has manually pushed them into a stage yet.
+  // Bucket them into the FIRST stage and flag them auto_won so the UI can badge
+  // them as freshly converted / awaiting closure kickoff.
+  try {
+    const firstStage = stages[0];
+    if (firstStage) {
+      const statusesAll = await db.getAll('statuses');
+      const wonStatusIds = new Set(
+        statusesAll.filter(st => String(st.stage || '').toLowerCase() === 'won')
+                   .map(st => Number(st.id))
+      );
+      if (wonStatusIds.size) {
+        const already = new Set();
+        Object.values(byStage).forEach(col => col.leads.forEach(l => already.add(Number(l.id))));
+        const wonLeads = (await db.getAll('leads')).filter(l =>
+          !l.project_stage_id && wonStatusIds.has(Number(l.status_id)) && !already.has(Number(l.id)));
+        wonLeads.forEach(l => {
+          if (!(me.role === 'admin' || visible.includes(Number(l.assigned_to)))) return;
+          const ref = String(l.last_status_change_at || l.created_at || '').slice(0, 10);
+          if (filters.from && ref < filters.from) return;
+          if (filters.to   && ref > filters.to)   return;
+          if (Array.isArray(filters.assigned_tos) && filters.assigned_tos.length &&
+              !filters.assigned_tos.map(Number).includes(Number(l.assigned_to))) return;
+          if (Array.isArray(filters.sources) && filters.sources.length &&
+              !filters.sources.map(String).includes(String(l.source || ''))) return;
+          if (Array.isArray(filters.product_ids) && filters.product_ids.length &&
+              !filters.product_ids.map(Number).includes(Number(l.product_id))) return;
+          if (filters.stalled_only) return; // freshly converted, not stalled in a stage
+          const startedAt = l.last_status_change_at ? new Date(l.last_status_change_at).getTime() : null;
+          const days = startedAt ? Math.floor((now - startedAt) / (1000 * 60 * 60 * 24)) : null;
+          byStage[firstStage.id].leads.push({
+            id: l.id, name: l.name, phone: l.phone,
+            assigned_to: l.assigned_to,
+            assigned_name: l.assigned_to ? (usersById[Number(l.assigned_to)]?.name || '') : '',
+            source: l.source || '', product_id: l.product_id || null,
+            product_name: l.product_id ? (prodById[Number(l.product_id)]?.name || '') : '',
+            created_at: l.created_at || null, value: Number(l.value) || 0,
+            project_stage_started_at: l.last_status_change_at || l.created_at,
+            days_at_stage: days, stalled: false,
+            auto_won: true, converted: true
+          });
+        });
+      }
+    }
+  } catch (e) { console.warn('[SALE_CLOSURE_WON_AUTOSHOW] skipped:', e.message); }
+
   return { stages, board: stages.map(s => byStage[s.id]) };
 }
 

@@ -800,3 +800,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The Solar, Real Estate, Education and Holiday pack screens were not loading because the page was missing an internal hook (window.VIEWS) the pack modules wait for before they register. All pack features (overview dashboards, site survey, pricing calculator, listings, deal pipeline, admission pipeline, enrollment, etc.) now load correctly again.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- SALE_CLOSURE_VIEWS_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('SALE_CLOSURE_VIEWS_v1', 'Sale Closure: List view, stage chart & auto-show converted',
+ 'The Sale Final Closure page (Projects) now (1) automatically shows Won / converted customers in the pipeline first stage without manual adding, badged as Converted; (2) has a List view in addition to Kanban (toggle at the top); and (3) shows a Records-by-stage bar chart at the top with a quick KPI strip (In pipeline / Converted / Stalled).',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;
