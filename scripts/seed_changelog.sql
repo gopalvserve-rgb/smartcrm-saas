@@ -792,3 +792,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The Classic / Modern / Inbox view switcher was a floating pill that overlapped the top toolbar buttons. It now sits inline inside the Leads page header, next to the Hide button, so it no longer covers anything.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- PACK_GLOBALS_FIX_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('PACK_GLOBALS_FIX_v1', 'Fix: Solar / Real Estate / Education pack features restored',
+ 'The Solar, Real Estate, Education and Holiday pack screens were not loading because the page was missing an internal hook (window.VIEWS) the pack modules wait for before they register. All pack features (overview dashboards, site survey, pricing calculator, listings, deal pipeline, admission pipeline, enrollment, etc.) now load correctly again.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

@@ -2281,6 +2281,13 @@ function navigateTo(id) {
 }
 
 const VIEWS = {};
+// PACK_GLOBALS_FIX_v1 (2026-06-27) — expose VIEWS on window so the isolated
+// pack SPAs (solar.js / realestate.js / education.js / holiday.js) can
+// register their views. A top-level `const` is NOT a window property the way
+// `function api`/`function h` are, so window.VIEWS was undefined and every
+// pack's ready() gate (window.VIEWS && window.api && window.h) polled forever.
+// This line was lost when app.js was reverted via RESTORE_APP_JS.bat.
+window.VIEWS = VIEWS;
 
 /* ---------------- What's New (CHANGELOG_v1) ---------------- */
 /*
