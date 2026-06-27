@@ -1745,7 +1745,14 @@ const NAV_GROUPS = [
     // ---- Finance pack ----
     { id: 'packfinance',  label: 'Finance Overview',  icon: '🏦', roles: ['admin','manager','team_leader'], requiresPack: 'finance', search: 'finance insurance loan policy premium claim' },
     // ---- Solar pack ----
-    { id: 'packsolar',    label: 'Solar Overview',    icon: '☀️', roles: ['admin','manager','team_leader'], requiresPack: 'solar', search: 'solar rooftop site quote installation subsidy amc' },
+    { id: 'packsolar',      label: '☀️ Solar Overview',     icon: '☀️', roles: ['admin','manager','team_leader'], requiresPack: 'solar', search: 'solar rooftop overview dashboard' },
+    { id: 'solarsites',     label: 'Site Survey',           icon: '🏠', roles: ['admin','manager','team_leader','sales'], requiresPack: 'solar', search: 'site survey rooftop' },
+    { id: 'solarcalc',      label: 'Pricing Calculator',    icon: '💰', roles: ['admin','manager','team_leader','sales'], requiresPack: 'solar', search: 'pricing calculator kW ROI payback subsidy' },
+    { id: 'solarquotes',    label: 'Quotes & Proposals',    icon: '📄', roles: ['admin','manager','team_leader','sales'], requiresPack: 'solar', search: 'solar quote proposal BOM' },
+    { id: 'solarinstalls',  label: 'Installation Tracker',  icon: '🔧', roles: ['admin','manager','team_leader'], requiresPack: 'solar', search: 'installation project tracker milestone' },
+    { id: 'solarsubsidies', label: 'Subsidy Tracker',       icon: '🏛️', roles: ['admin','manager','team_leader'], requiresPack: 'solar', search: 'subsidy PM-Surya Ghar disbursement' },
+    { id: 'solaramc',       label: 'AMC / Service',         icon: '🛠️', roles: ['admin','manager','team_leader'], requiresPack: 'solar', search: 'amc service visit maintenance' },
+    { id: 'solarinsights',  label: 'AI Insights',           icon: '🤖', roles: ['admin','manager'], requiresPack: 'solar', search: 'ai insights gemini solar' },
     // ---- Manufacturer pack ----
     { id: 'packmfg',      label: 'Manufacturer Overview', icon: '🏭', roles: ['admin','manager','team_leader'], requiresPack: 'manufacturer', search: 'manufacturer factory rfq quote order production dispatch' },
     // ---- Holiday & Travel pack ----

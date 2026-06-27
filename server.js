@@ -33,7 +33,6 @@ const packages = require('./routes/saas/packages');
 const signup = require('./routes/saas/signup');
 const tenants = require('./routes/saas/tenants');
 const invoices = require('./routes/saas/invoices');
-const saasPermissions = require('./routes/saas/saasPermissions');   // SUPER_ADMIN_PERMS_v1
 const settings = require('./routes/saas/saasSettings');
 const announcements = require('./routes/saas/announcements');
 const customReqs = require('./routes/saas/customRequirements');
@@ -45,21 +44,10 @@ const applySchema = require('./routes/saas/applySchema');
 const crashReport = require('./routes/saas/crashReport');
 const aiSettings = require('./routes/saas/aiSettings');
 const aiCosting  = require('./routes/saas/aiCosting');
-const recordingHealth = require('./routes/saas/recordingHealth'); /* DEVICE_DIAG_v1 */
-const dbVolume = require('./routes/saas/dbVolume');
-const callEventsRepair = require('./routes/saas/callEventsRepair');
-const leadScoringRollout = require('./routes/saas/leadScoringRollout');
-const quickNoteRollout = require('./routes/saas/quickNoteRollout');
-const copilotProactiveRollout = require('./routes/saas/copilotProactiveRollout'); /* AI_ASSIST_ROLLOUT_v1 */
-const wbChatV2Rollout = require('./routes/saas/wbChatV2Rollout'); /* WB_CHAT_V2_ROLLOUT_v1 */
-const leadsViewV2Rollout = require('./routes/saas/leadsViewV2Rollout'); /* LEADS_VIEW_V2_ROLLOUT_v1 */
-const whiteLabelBilling = require('./routes/saas/whiteLabelBilling');
 const tenantModules = require('./routes/saas/tenantModules');
 const demoTenant = require('./routes/saas/demoTenant');
 const aiUsageIngest = require('./routes/saas/aiUsageIngest');
 const tickets = require('./routes/saas/tickets');
-const signupRequests = require('./routes/saas/signupRequests'); /* TENANT_SIGNUP_APPROVAL_v1 */
-const financeDashboard = require('./routes/saas/financeDashboard'); /* FIN_DASH_v1 */
 
 // ---- Industry Packs: load + self-register at boot ----------------
 // Each pack module calls framework.register({...}) on require, populating
@@ -72,23 +60,14 @@ const financeDashboard = require('./routes/saas/financeDashboard'); /* FIN_DASH_
 // the SaaS dispatcher path AND the per-tenant API path.
 require('./routes/packs/education');
 require('./routes/packs/realestate');
-// PACK_PHASE_2_v1 — 2026-06-07
-require('./routes/packs/finance');
-require('./routes/packs/solar');
-require('./routes/packs/manufacturer');
-require('./routes/packs/holiday');
-require('./routes/packs/ecommerce');
+require('./routes/packs/solar');   // SOLAR_PACK_v1 (2026-06-27)
 
 // ── Social Post Publisher — fire scheduled posts every minute ──────
 // Runs in-process; idempotent (status='scheduled' rows only).
 try {
   const social = require('./routes/social');
-  // PERF_FIX_v5 (2026-06-25) — disabled by default. Feature not in use today
-  // and the 60s every-tenant sweep was a primary halt source. Re-enable via
-  // env SOCIAL_SCHEDULER_ENABLED='1'.
-  if (social && typeof social._runScheduledPosts === 'function' &&
-      String(process.env.SOCIAL_SCHEDULER_ENABLED || '0') === '1') {
-    setInterval(() => social._runScheduledPosts().catch(() => {}), 5 * 60_000);
+  if (social && typeof social._runScheduledPosts === 'function') {
+    setInterval(() => social._runScheduledPosts().catch(() => {}), 60_000);
   }
   // Phase S4 — Pull ad insights every hour. Updates today's + yesterday's
   // snapshot rows and regenerates alerts. Cheap on the API quota since
@@ -107,18 +86,7 @@ const SAAS_API = {};
   announcements, customReqs, webhookLogs, errorLogs, whatsbotBackfill, applySchema, crashReport,
   aiSettings, aiCosting,
   tenantModules, demoTenant,
-  tickets, signupRequests, /* TENANT_SIGNUP_APPROVAL_v1 */
-  financeDashboard, /* FIN_DASH_v1 */
-  recordingHealth, /* DEVICE_DIAG_v1 */
-  dbVolume, /* DB_VOLUME_v1 */
-  callEventsRepair, /* CALL_PHONE_REVERSE_BACKFILL_v1 */
-  leadScoringRollout, /* LS_ROLLOUT_ALL_v1 */
-  quickNoteRollout, /* QNOTE_ROLLOUT_ALL_v1 */
-  copilotProactiveRollout, /* AI_ASSIST_ROLLOUT_v1 */
-  leadsViewV2Rollout, /* LEADS_VIEW_V2_ROLLOUT_v1 */
-  wbChatV2Rollout, /* WB_CHAT_V2_ROLLOUT_v1 */
-  whiteLabelBilling, /* WL_BILLING_v1 */
-  saasPermissions /* SUPER_ADMIN_PERMS_v1 */
+  tickets
 ].forEach(mod => {
   Object.keys(mod).forEach(k => {
     if (typeof mod[k] === 'function' && k.startsWith('api_saas_')) SAAS_API[k] = mod[k];
@@ -127,13 +95,6 @@ const SAAS_API = {};
 
 const app = express();
 app.set('trust proxy', 1);
-
-// PERF_FIX_v1 (2026-06-25) — gzip compression. app.js is 2.9 MB raw, ~740 KB
-// gzipped. Without this every page load downloaded the full 2.9 MB. Threshold
-// at 1 KB so we don't bother compressing tiny JSON. Level 6 is the sweet spot
-// (level 9 doubles CPU for ~3% better ratio).
-const compression = require('compression');
-app.use(compression({ level: 6, threshold: 1024 }));
 
 // ---- Cashfree webhook: needs raw body for HMAC verify ---------
 // Mounted BEFORE bodyParser.json so the webhook receives the raw bytes
@@ -145,41 +106,21 @@ app.use(compression({ level: 6, threshold: 1024 }));
 // Admins can view via 'Settings → Webhook logs' in the SPA.
 const _webhookLogger = require('./utils/webhookLogger');
 app.use('/hook', _webhookLogger.middleware());
-// ─────────────────────────────────────────────────────────────
-// WL_BILLING_v1 public customer portal — no auth, only the random
-// portal_token in the URL grants access. portal HTML + JSON API.
-// ─────────────────────────────────────────────────────────────
-app.get('/wl/portal/:token', (_req, res) => {
-  res.sendFile(require('path').join(__dirname, 'public/wl/portal.html'));
-});
-app.post('/wl/portal-api', express.json(), async (req, res) => {
-  try {
-    const fn = req.body && req.body.fn;
-    const args = (req.body && req.body.args) || [];
-    if (fn === 'view') {
-      const out = await whiteLabelBilling.api_saas_wl_portal_view(args[0]);
-      return res.json(out);
-    }
-    if (fn === 'payLink') {
-      const out = await whiteLabelBilling.api_saas_wl_portal_payLink(args[0], args[1]);
-      return res.json(out);
-    }
-    res.status(400).json({ error: 'Unknown fn' });
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
-});
-
 app.post('/hook/cashfree',
   bodyParser.raw({ type: '*/*', limit: '1mb' }),
   cashfreeWebhook.expressWebhook
 );
 
-app.use(bodyParser.json({ limit: '25mb' })); // QUOTE_MANY_ITEMS_v1: was 4mb, bumped for quotes with embedded data:image product images
+// QUOTE_MANY_ITEMS_v1 (2026-05-25) — bumped from 4mb to 25mb. Reason:
+// quotation_items.product_image_url stores data:image URIs that can be
+// hundreds of KB each. A quote with 15-20 products hit 413 PayloadTooLarge.
+// Tenant API + most webhooks stay well under 1mb; this only matters for
+// quote save and bulk imports. 25mb is plenty without making us a DoS target.
+app.use(bodyParser.json({ limit: '25mb' }));
 // Accept form-encoded bodies on /hook/website + /hook/other so HTML
 // contact forms (and tools like Zapier) can post directly without
 // JSON.stringify.
-app.use(bodyParser.urlencoded({ extended: true, limit: '25mb' })); // QUOTE_MANY_ITEMS_v1
+app.use(bodyParser.urlencoded({ extended: true, limit: '25mb' }));
 app.use(require('cookie-parser')());
 
 // ---- Cross-deployment AI usage ingest (Stockbox/Celeste -> here) ----
@@ -214,19 +155,6 @@ const _staticOpts = {
   }
 };
 app.use('/saas', express.static(path.join(__dirname, 'public', 'saas'), _staticOpts));
-// TUTORIAL_PAGE_v1 — Public client-training tutorial. Single static folder,
-// no auth, intentionally cacheable. Surfaced in Help & Support sidebar +
-// landing-page nav.
-app.use('/tutorial', express.static(path.join(__dirname, 'public', 'tutorial'), {
-  maxAge: '1h',
-  setHeaders(res, filePath) {
-    if (/\.html?$/i.test(filePath)) {
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    } else {
-      res.setHeader('Cache-Control', 'public, max-age=3600');
-    }
-  }
-}));
 app.get('/app', (_req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.sendFile(path.join(__dirname, 'public', 'saas', 'app', 'index.html'));
@@ -238,20 +166,6 @@ app.get('/', (_req, res) => {
 
 // Diagnostic Ã¢ÂÂ admin-only smoke test that the Railway egress can
 // actually reach a host:port. Helps debug Gmail SMTP timeouts.
-// REC_BACKFILL_DIAG_v1 (2026-06-04) — quick public endpoint to verify
-// whether the call_events backfill / cleanup tasks actually ran on this
-// deploy. Just exposes the saas_flags rows; nothing sensitive.
-app.get('/api/saas/backfill-status', async (_req, res) => {
-  try {
-    const r = await controlDb.query(
-      "SELECT key, value, ran_at FROM saas_flags WHERE key IN ('rec_callevent_time_backfill_v1','rec_direction_backfill_v1','call_today_cleanup_v1') ORDER BY ran_at"
-    );
-    res.json({ ok: true, flags: r.rows });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
 app.get('/api/saas/debug/tcp', async (req, res) => {
   const token = (req.headers['x-auth-token'] || req.query.token || '').toString();
   try { await superAdmin.requireFullAdmin(token); }
@@ -315,18 +229,6 @@ app.post('/api/saas/ticket-attachment',
 );
 app.get('/api/saas/ticket-attachment/:id', tickets.expressAttachmentDownload);
 
-// GOOGLE_CONV_EXPORT_v2 — tenant-scoped public CSV download.
-//   GET /exports/google-conv/<slug>.csv?token=<public_token>
-// Used by Google Ads bulk upload URL pull, Google Sheets =IMPORTDATA(),
-// curl, etc. Auth is via the per-tenant rotating token (NOT a JWT).
-try {
-  const googleConvExport = require('./routes/googleConvExport');
-  if (googleConvExport && googleConvExport.expressPublicDownload) {
-    app.get('/exports/google-conv/:slug.csv', googleConvExport.expressPublicDownload);
-    app.get('/exports/google-conv/:slug',     googleConvExport.expressPublicDownload);
-  }
-} catch (e) { console.warn('[gconv] public route mount failed:', e.message); }
-
 // ---- Tenant-scoped Meta/WhatsApp webhooks + FB OAuth callback -----
 //
 // Facebook only allows ONE OAuth redirect URI per app and ONE webhook
@@ -359,52 +261,6 @@ const whatsbotRoute = require('./routes/whatsbot');
 const integrations = require('./routes/integrations');
 const tenantPoolMod = require('./utils/tenantPool');
 const controlDb = require('./control/db');
-
-// PERF_HEALTH_DB_PERSIST_v1 — schema bootstrap. Idempotent; runs once.
-(async () => {
-  try {
-    await controlDb.query(`
-      CREATE TABLE IF NOT EXISTS perf_slow_log (
-        id          BIGSERIAL PRIMARY KEY,
-        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        tenant_slug TEXT,
-        user_id     INTEGER,
-        fn          TEXT,
-        ms          INTEGER,
-        tag         TEXT,
-        source      TEXT,
-        ua          TEXT
-      )
-    `);
-    await controlDb.query(`CREATE INDEX IF NOT EXISTS perf_slow_log_tenant_created_idx ON perf_slow_log(tenant_slug, created_at DESC)`);
-    await controlDb.query(`
-      CREATE TABLE IF NOT EXISTS perf_client_reports (
-        id            BIGSERIAL PRIMARY KEY,
-        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        tenant_slug   TEXT,
-        user_email    TEXT,
-        platform      TEXT,
-        apk_version   TEXT,
-        online        BOOLEAN,
-        network       TEXT,
-        view          TEXT,
-        api_calls     INTEGER,
-        slow_1s       INTEGER,
-        very_slow_3s  INTEGER,
-        long_tasks    INTEGER,
-        mem_mb        INTEGER,
-        top_by_avg    JSONB,
-        very_slow_sample JSONB,
-        ua            TEXT
-      )
-    `);
-    await controlDb.query(`CREATE INDEX IF NOT EXISTS perf_client_reports_tenant_created_idx ON perf_client_reports(tenant_slug, created_at DESC)`);
-    console.log('[perf-health] DB tables ensured');
-  } catch (e) {
-    console.error('[perf-health] schema bootstrap failed:', e.message);
-  }
-})();
-
 const jwtLib = require('jsonwebtoken');
 
 /**
@@ -482,59 +338,6 @@ app.get('/fb/auth/callback', async (req, res) => {
     return handler(req, res);
   }
   return _runAsTenant(slug, req, res, handler);
-});
-
-// ---- GMEET_v1 — Google Calendar OAuth callback (one URL for all tenants) ----
-// Mirrors the FB callback pattern: decode the state JWT (no verify) to peek
-// at the tenant slug, then run the actual handler inside _runAsTenant so
-// db.query writes to the right tenant DB.
-app.get('/saas/google/callback', async (req, res) => {
-  const stateRaw = (req.query.state || '').toString();
-  let slug;
-  try {
-    const peek = jwtLib.decode(stateRaw);
-    if (peek && peek.slug) slug = peek.slug;
-  } catch (_) {}
-  if (!slug) return res.status(400).type('html').send('<h2>Bad state — missing tenant slug</h2>');
-  const handler = require('./routes/googleCalendar').expressOAuthCallback;
-  return _runAsTenant(slug, req, res, handler);
-});
-
-/* GCONV_SHEETS_v1 — Super-admin one-time OAuth setup for the shared
-   Google account that pushes conversion data to every tenant's Sheet.
-   Anyone with the SUPER_ADMIN_SHEETS_KEY can authorize. */
-app.get('/saas/sheets/connect', async (req, res) => {
-  try {
-    const key = String(req.query.key || '').trim();
-    const expected = process.env.SUPER_ADMIN_SHEETS_KEY || process.env.SUPER_ADMIN_KEY || '';
-    if (!expected) return res.status(500).type('html').send('<h2>SUPER_ADMIN_SHEETS_KEY not set on Railway</h2>');
-    if (key !== expected) return res.status(403).type('html').send('<h2>Forbidden — pass ?key=&lt;SUPER_ADMIN_SHEETS_KEY&gt;</h2>');
-    const sm = require('./utils/googleSheetsMaster');
-    const url = sm.getAuthUrl('sheets-master');
-    res.redirect(url);
-  } catch (e) {
-    res.status(500).type('html').send('<h2>Failed to start OAuth: ' + e.message + '</h2>');
-  }
-});
-
-app.get('/saas/sheets/callback', async (req, res) => {
-  try {
-    const code = String(req.query.code || '').trim();
-    if (!code) return res.status(400).type('html').send('<h2>Missing code</h2>');
-    const sm = require('./utils/googleSheetsMaster');
-    const result = await sm.exchangeCodeAndSave(code);
-    res.type('html').send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Sheets Connected</title>
-<style>body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;text-align:center;padding:3rem 1.5rem;color:#0f172a;background:#f8fafc}
-.box{background:#fff;border-radius:12px;padding:2rem;max-width:480px;margin:0 auto;box-shadow:0 8px 24px rgba(15,23,42,.08)}
-.ok{font-size:3rem}.muted{color:#64748b;font-size:.85rem;margin-top:1rem}</style></head>
-<body><div class="box"><div class="ok">✅</div>
-<h2>Google Sheets master connected</h2>
-<p>Account: <b>${result.email || 'unknown'}</b></p>
-<p class="muted">Every tenant can now point a Google Sheet at this account.<br>Tell tenants to share their Sheet with <b>${result.email}</b> (Editor access).</p>
-</div></body></html>`);
-  } catch (e) {
-    res.status(500).type('html').send('<h2>OAuth callback failed: ' + e.message + '</h2>');
-  }
 });
 
 // ---- Meta Lead Ads webhook (one URL for all tenants) ------------
@@ -749,18 +552,6 @@ async function _runHookAsTenant(req, res, handler) {
 app.post('/hook/website', (req, res) => _runHookAsTenant(req, res, webhooksRoute.websiteHook));
 app.post('/hook/other',   (req, res) => _runHookAsTenant(req, res, webhooksRoute.otherHook));
 
-// IVR_HOOK_MOUNT_v1 + IVR_HOOK_DEFENSIVE_v1 — generic IVR / Cloud Calling
-// inbound webhook, wrapped in try/catch so a module-level error in
-// routes/ivr.js (e.g. a missing dependency in a future change) can NOT
-// prevent server.js boot. Without this guard a Railway redeploy that
-// breaks ivr.js takes the whole CRM down.
-try {
-  const ivrRoute = require('./routes/ivr');
-  app.post('/hook/ivr/:vendor', (req, res) => _runHookAsTenant(req, res, ivrRoute.expressInbound));
-} catch (e) {
-  console.error('[boot] routes/ivr.js failed to load — IVR endpoints disabled:', e && e.message);
-}
-
 // Ã¢ÂÂÃ¢ÂÂ Public API documentation page Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 app.get('/api-docs', (req, res) => {
   const host = req.protocol + '://' + req.get('host');
@@ -824,7 +615,7 @@ function _apiDocsHtml(host) {
 <p style="color:#94a3b8">Pass the key using <strong>any one</strong> of these methods:</p>
 <table>
   <tr><th>Method</th><th>Example</th></tr>
-  <tr><td>Header</td><td><code>x-api-key: your_key_here</code></td></tr>
+  <tr><td>Header</td><td><code>X-API-Key: your_key_here</code></td></tr>
   <tr><td>Bearer token</td><td><code>Authorization: Bearer your_key_here</code></td></tr>
   <tr><td>Body field</td><td><code>api_key=your_key_here</code></td></tr>
   <tr><td>Query string</td><td><code>?api_key=your_key_here</code></td></tr>
@@ -841,45 +632,15 @@ function _apiDocsHtml(host) {
   </div>
   <p style="color:#94a3b8;margin-bottom:1rem">Accepts a lead submission from your website contact form. Creates or updates a lead in your SmartCRM workspace.</p>
 
-  <h3>Built-in fields (no setup required)</h3>
-  <table>
-    <tr><th>Field</th><th>Aliases / Notes</th></tr>
-    <tr><td><b>name</b></td><td>Contact's full name</td></tr>
-    <tr><td><b>email</b></td><td>Contact's email</td></tr>
-    <tr><td><b>phone</b></td><td>Aliases: <code>mobile</code></td></tr>
-    <tr><td><b>whatsapp</b></td><td>WhatsApp number (defaults to phone if omitted)</td></tr>
-    <tr><td><b>source</b></td><td>Aliases: <code>lead_source</code> · <code>leadsource</code> · <code>origin</code> · <code>channel</code> · <code>source_name</code> · <code>referrer</code></td></tr>
-    <tr><td><b>source_ref</b></td><td>External reference / source ID</td></tr>
-    <tr><td><b>product</b></td><td>Product / service of interest</td></tr>
-    <tr><td><b>notes</b></td><td>Aliases: <code>message</code></td></tr>
-    <tr><td><b>city, state, country</b></td><td>Address fields</td></tr>
-    <tr><td><b>company, address</b></td><td>Company name + full address</td></tr>
-    <tr><td><b>pincode</b></td><td>Aliases: <code>zip</code></td></tr>
-    <tr><td><b>tags</b></td><td>Array <code>["hot","follow-up"]</code> or CSV <code>"hot,follow-up"</code> · alias <code>labels</code></td></tr>
-    <tr><td><b>value</b></td><td>Deal value (number)</td></tr>
-    <tr><td><b>currency</b></td><td>INR / USD / etc</td></tr>
-    <tr><td><b>next_followup_at</b></td><td>ISO date for first follow-up</td></tr>
-    <tr><td><b>Google Ads attribution</b></td><td><code>gclid</code> · <code>gad_campaignid</code> · <code>campaign_id</code> · <code>campaign_name</code> · <code>network</code> · <code>keyword</code> · <code>adgroupid</code> · <code>matchtype</code> · <code>device</code> · <code>placement</code> · <code>adposition</code> · <code>landing_page</code></td></tr>
-    <tr><td><b>UTM tags</b></td><td><code>utm_source</code> · <code>utm_medium</code> · <code>utm_campaign</code> · <code>utm_term</code> · <code>utm_content</code></td></tr>
-    <tr><td><b>meta</b></td><td>Any nested JSON object — saved verbatim to meta_json</td></tr>
-  </table>
-
-  <h3 style="margin-top:1.5rem">📌 Custom fields (your own columns)</h3>
-  <div class="note" style="background:#fef3c7;border-color:#f59e0b;color:#78350f">
-    <b>Step 1:</b> Go to <b>Settings → Custom Fields</b> and create the field first (e.g. <code>travel_plan</code>, <code>fblid</code>, <code>interested_in_kashmir</code>). The <i>Key</i> you enter there is what the webhook recognises.<br><br>
-    <b>Step 2:</b> Send the value in any ONE of these three ways:
-    <ul style="margin:.5rem 0 0 1.25rem">
-      <li><code>"travel_plan": "Next Month"</code> — top-level, using the custom-field key as-is</li>
-      <li><code>"cf_travel_plan": "Next Month"</code> — with <code>cf_</code> prefix (recommended for Make / Zapier / Pabbly)</li>
-      <li><code>"extra": { "travel_plan": "Next Month" }</code> — nested under <code>extra</code></li>
-    </ul>
-    All three land in the lead's <code>extra_json</code> and show up on the lead-modal Custom Fields panel + are filterable in the Leads page and Report Builder.
-  </div>
-
-  <h3 style="margin-top:1rem">Auth fields</h3>
+  <h3>Request fields</h3>
   <table>
     <tr><th>Field</th><th>Type</th><th>Description</th></tr>
-    <tr><td>api_key</td><td>string</td><td>Your API key (if not sent via x-api-key header)</td></tr>
+    <tr><td>name</td><td>string</td><td>Contact's full name</td></tr>
+    <tr><td>email</td><td>string</td><td>Contact's email address</td></tr>
+    <tr><td>phone</td><td>string</td><td>Phone number (optional)</td></tr>
+    <tr><td>message</td><td>string</td><td>Message or notes (optional)</td></tr>
+    <tr><td>source</td><td>string</td><td>Lead source label (optional)</td></tr>
+    <tr><td>api_key</td><td>string</td><td>Your API key (if not sent via header)</td></tr>
   </table>
 
   <h3>Examples</h3>
@@ -891,10 +652,9 @@ function _apiDocsHtml(host) {
   </div>
 
   <div id="wb-json" class="tab-pane active">
-    <p style="color:#94a3b8;margin-bottom:.5rem">Basic example:</p>
     <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code>curl -X POST ${safe(host)}/hook/website \
   -H "Content-Type: application/json" \
-  -H "x-api-key: your_key_here" \
+  -H "X-API-Key: your_key_here" \
   -d '{
     "name":    "Priya Sharma",
     "email":   "priya@example.com",
@@ -902,35 +662,12 @@ function _apiDocsHtml(host) {
     "message": "Interested in the enterprise plan",
     "source":  "website"
   }'</code></pre>
-
-    <p style="color:#94a3b8;margin:1rem 0 .5rem">Full example with Google Ads attribution + custom fields:</p>
-    <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code>curl -X POST ${safe(host)}/hook/website \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: your_key_here" \
-  -d '{
-    "name":          "AKEEL AHMED",
-    "email":         "akeel@example.com",
-    "phone":         "9610552233",
-    "message":       "Interested in Kashmir trip",
-    "source":        "Google Ads",
-
-    "campaign_id":   "23930980060",
-    "campaign_name": "Kashmir_packages",
-    "gclid":         "CjwKCAjwuanRBhBSEiwAY5y6V...",
-    "landing_page":  "https://kudostrips.com/?campaign=23930980060",
-
-    "cf_travel_plan":            "Next Month",
-    "cf_product_name":           "Kashmir_packages",
-    "cf_interested_in_kashmir":  "Yes",
-    "cf_fblid":                  "N/A"
-  }'</code></pre>
-    <p style="color:#94a3b8;font-size:.85rem;margin-top:.5rem">⚠ Create <code>travel_plan</code>, <code>product_name</code>, <code>interested_in_kashmir</code>, <code>fblid</code> in <b>Settings → Custom Fields</b> first — otherwise the webhook will silently drop them.</p>
   </div>
 
   <div id="wb-form" class="tab-pane">
     <div class="note">Ã¢ÂÂ Supported Ã¢ÂÂ you can POST standard HTML form data directly to this endpoint. No JSON.stringify needed.</div>
     <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code>curl -X POST ${safe(host)}/hook/website \
-  -H "x-api-key: your_key_here" \
+  -H "X-API-Key: your_key_here" \
   --data-urlencode "name=Priya Sharma" \
   --data-urlencode "email=priya@example.com" \
   --data-urlencode "phone=+91 98765 43210" \
@@ -983,7 +720,7 @@ function _apiDocsHtml(host) {
   <div id="ot-json" class="tab-pane active">
     <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code>curl -X POST ${safe(host)}/hook/other \
   -H "Content-Type: application/json" \
-  -H "x-api-key: your_key_here" \
+  -H "X-API-Key: your_key_here" \
   -d '{ "event": "form_submit", "data": { "page": "/contact" } }'</code></pre>
   </div>
   <div id="ot-form" class="tab-pane">
@@ -1030,13 +767,6 @@ function copyPre(btn) {
 }
 
 
-/* HELP_SHOTS_v1 — public help-page screenshot store. */
-const helpShots = require('./routes/saas/helpShots');
-const _hsUpload = require('express').json({ limit: '5mb' });
-app.post('/api/saas/uploadHelpShot', _hsUpload, helpShots.expressUpload);
-app.get('/api/saas/helpShot/:name',  helpShots.expressServe);
-app.get('/api/saas/helpShots',       helpShots.expressList);
-
 // Public brand JSON (used by the landing page)
 app.get('/api/saas/brand', async (_req, res) => {
   try {
@@ -1051,11 +781,6 @@ app.get('/api/saas/brand', async (_req, res) => {
     res.json({ name, tagline, subhead, color, logo, support });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-
-// ---- TENANT_SIGNUP_APPROVAL_v1 public submit -----------------
-// Anyone (no auth) can POST to this endpoint to create a tenant
-// signup-request. Super-admin reviews + approves from the SPA.
-app.post('/api/saas-public-signup-request', express.json({ limit: '32kb' }), signupRequests.expressPublicSubmit);
 
 // ---- SaaS API dispatcher --------------------------------------
 function _saasToken(req) {
@@ -1177,34 +902,12 @@ app.get(/^\/t\/[a-z0-9-]+\/?$/, async (req, res, next) => {
 
 app.use(attachTenant);
 
-// INDIAMART_WEBHOOK_LOG_FIX_v4 (2026-06-02) — real root cause.
-// The webhook logger was originally mounted at /hook BEFORE attachTenant
-// (line 110). But the central PHP forwarder dispatches webhooks via
-// /t/<slug>/hook/... — and at line-110-time req.url still has the
-// /t/<slug> prefix, so the /hook middleware never matched. Result: every
-// /hook hit via the forwarder bypassed logging entirely. Mounting again
-// here, AFTER attachTenant has stripped the prefix, makes the middleware
-// fire for both direct /hook/* requests AND forwarded /t/<slug>/hook/*
-// requests (which by this point have been rewritten to /hook/*).
-// The earlier mount stays — it covers any pre-attachTenant /hook traffic.
-app.use('/hook', _webhookLogger.middleware());
-
 // ---- Public /q/:token quotation viewer (tenant-scoped) ----
 app.get('/q/:token', (req, res, next) => {
   if (!req.tenant) return res.status(404).send('Tenant not found');
   const tenantDb = require('./db/pg');
   return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug }, () => {
     require('./routes/quotations').expressPublicQuote(req, res).catch(next);
-  });
-});
-
-// QUOTE_PDF_v1: stream the quotation as a true PDF document. Used by the
-// WhatsApp document-send (Meta needs a publicly-fetchable .pdf URL).
-app.get('/q/:token.pdf', (req, res, next) => {
-  if (!req.tenant) return res.status(404).send('Tenant not found');
-  const tenantDb = require('./db/pg');
-  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug }, () => {
-    require('./routes/quotations').expressPublicQuotePdf(req, res).catch(next);
   });
 });
 
@@ -1320,132 +1023,6 @@ app.get('/config.json', async (req, res) => {
     });
 });
 
-// ============================================================
-// ============================================================
-// WA_TPL_SAMPLE_UPLOAD_v1 (2026-05-31): host sample media files
-// for WhatsApp template headers. Meta requires a public URL for
-// IMAGE/VIDEO/DOCUMENT header samples — admins would otherwise
-// have to push the file to S3/Drive themselves. The upload is
-// tenant-scoped (so the admin must be logged in) but the SERVE
-// endpoint is public (no auth) because Meta's review crawlers
-// fetch the URL anonymously. A 24-char hex token in the URL keeps
-// the link unguessable.
-// ============================================================
-const _waSampleUpload = require('multer')({
-  storage: require('multer').memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024 }
-});
-
-async function _ensureWaSampleTable(pool) {
-  const client = pool ? await pool.connect() : null;
-  try {
-    const q = (sql) => client ? client.query(sql) : require('./db/pg').query(sql);
-    await q('CREATE TABLE IF NOT EXISTS wa_template_samples ('
-      + 'token TEXT PRIMARY KEY,'
-      + 'mime TEXT,'
-      + 'filename TEXT,'
-      + 'bytes BYTEA,'
-      + 'size_bytes BIGINT,'
-      + 'created_by INT,'
-      + 'created_at TIMESTAMP DEFAULT NOW()'
-      + ')');
-  } finally { if (client) client.release(); }
-}
-
-app.post('/api/wa-sample', _waSampleUpload.single('file'), async (req, res) => {
-  if (!req.tenant || !req.tenantPool) return res.status(404).json({ error: 'No tenant in URL' });
-  const tenantDb = require('./db/pg');
-  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug },
-    async () => {
-      try {
-        await _ensureWaSampleTable();
-        const { authUser } = require('./utils/auth');
-        const token = (req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-        const me = await authUser(token);
-        if (me.role !== 'admin') return res.status(403).json({ error: 'Only admin can upload sample files' });
-        if (!req.file) return res.status(400).json({ error: 'file required' });
-        if ((req.file.size || 0) > 25 * 1024 * 1024) return res.status(400).json({ error: 'Max 25 MB' });
-        const crypto = require('crypto');
-        const tk = crypto.randomBytes(12).toString('hex'); // 24-char hex
-        await tenantDb.query(
-          'INSERT INTO wa_template_samples (token, mime, filename, bytes, size_bytes, created_by) VALUES ($1, $2, $3, $4, $5, $6)',
-          [tk, req.file.mimetype || 'application/octet-stream', String(req.file.originalname || 'file').slice(0, 200), req.file.buffer, req.file.size || 0, me.id]
-        );
-        const proto = req.protocol;
-        const host = req.get('host');
-        const slug = req.tenantSlug ? ('/t/' + req.tenantSlug) : '';
-        const publicUrl = proto + '://' + host + slug + '/api/wa-sample/' + tk;
-        res.json({ ok: true, url: publicUrl, token: tk, mime: req.file.mimetype, size_bytes: req.file.size });
-      } catch (e) {
-        console.error('[wa-sample-upload]', e.message);
-        res.status(400).json({ error: e.message });
-      }
-    });
-});
-
-// PUBLIC download — no auth. Random 24-char hex token in the URL
-// keeps it from being guessable. Meta needs to fetch this without
-// any credentials during template review.
-app.get('/api/wa-sample/:token', async (req, res) => {
-  if (!req.tenant || !req.tenantPool) return res.status(404).send('not found');
-  const tenantDb = require('./db/pg');
-  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug },
-    async () => {
-      try {
-        await _ensureWaSampleTable();
-        const tk = String(req.params.token || '').replace(/[^a-f0-9]/gi, '');
-        if (tk.length !== 24) return res.status(400).send('bad token');
-        const r = await tenantDb.query('SELECT mime, filename, bytes FROM wa_template_samples WHERE token = $1 LIMIT 1', [tk]);
-        const row = r.rows[0];
-        if (!row || !row.bytes) return res.status(404).send('not found');
-        let buf = row.bytes;
-        if (!Buffer.isBuffer(buf)) buf = Buffer.from(buf);
-        const safe = String(row.filename || 'file').replace(/[^a-zA-Z0-9._-]/g, '_');
-        res.setHeader('Content-Type', row.mime || 'application/octet-stream');
-        res.setHeader('Content-Length', buf.length);
-        res.setHeader('Content-Disposition', 'inline; filename="' + safe + '"');
-        res.setHeader('Cache-Control', 'public, max-age=86400');
-        res.end(buf);
-      } catch (e) {
-        console.error('[wa-sample-dl]', e.message);
-        res.status(500).send('error');
-      }
-    });
-});
-
-// KB_FILE_UPLOAD_v1 (2026-05-31): tenant-aware multipart upload +
-// streaming download for Knowledge Base file attachments. Admin
-// uploads a brochure / PDF / PPT on an entry; any logged-in tenant
-// user can view or download it. Both endpoints are mounted at
-// /api/kb-file/:id — after attachTenant strips /t/<slug>/ they
-// resolve req.tenant + req.tenantPool, so db.* inside the handler
-// targets the right tenant DB.
-// ============================================================
-const _kbUpload = require('multer')({
-  storage: require('multer').memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024 }
-});
-
-app.post('/api/kb-file/:id', _kbUpload.single('file'), async (req, res) => {
-  if (!req.tenant || !req.tenantPool) return res.status(404).json({ error: 'No tenant in URL — POST to /t/<slug>/api/kb-file/:id' });
-  const tenantDb = require('./db/pg');
-  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug },
-    async () => {
-      const knowledgeBase = require('./routes/knowledgeBase');
-      return knowledgeBase.expressKbFileUpload(req, res);
-    });
-});
-
-app.get('/api/kb-file/:id', async (req, res) => {
-  if (!req.tenant || !req.tenantPool) return res.status(404).json({ error: 'No tenant in URL' });
-  const tenantDb = require('./db/pg');
-  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug },
-    async () => {
-      const knowledgeBase = require('./routes/knowledgeBase');
-      return knowledgeBase.expressKbFileDownload(req, res);
-    });
-});
-
 // ---- Mobile-app call-recording upload (tenant-scoped multipart) ----
 // Was missing from the SaaS server entirely — mobile app POSTs to
 // /t/<slug>/api/recordings would silently 404 and the 'Sync now' button
@@ -1459,16 +1036,6 @@ const _recUpload = _multer({
   storage: _multer.memoryStorage(),
   limits: { fileSize: 100 * 1024 * 1024 }
 });
-// ============================================================
-// 🔒 LOCKED — /api/recordings upload + AI Call Summary worker
-// ============================================================
-// The block below (recording upload handler + helpers + AI
-// worker) is mission-critical. Read docs/LOCKED_FILES.md before
-// editing. Ask the user before any change. The phone fallback
-// chain, dedup logic, MIME detection, and lead resolution are
-// the result of multiple iterations against real OEM behaviour.
-// ============================================================
-
 app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) => {
   // Tenant-agnostic upload: if the request didn't come through /t/<slug>/
   // (e.g. the native APK posts directly to /api/recordings), resolve the
@@ -1545,36 +1112,7 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
           console.warn('[/api/recordings] transcode failed (storing original):', e.message);
         }
         let phone = String(req.body.phone || '').trim();
-        // REC_DIRECTION_INFER_v1 (2026-06-03) — before defaulting to 'out',
-        // look up the most recent incoming_ringing for this user+phone in
-        // the last 10 min. OEM dialer filenames rarely embed direction, so
-        // the APK uploads with no direction; the old default of 'out'
-        // mislabeled inbound recordings as Outgoing in Call Activity.
-        // Pooja TR's learnimo screenshot showed an inbound call with the
-        // recording row tagged Outgoing 0:37 — this fixes it.
-        let direction = String(req.body.direction || '').toLowerCase();
-        if (!direction || direction === 'unknown') {
-          const _phoneRaw = String(req.body.phone || '').replace(/^'/, '').trim();
-          const _tail = _phoneRaw.replace(/\D/g, '').slice(-10);
-          if (_tail) {
-            try {
-              const { authUser } = require('./utils/auth');
-              const _token = (req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-              const _me = await authUser(_token);
-              const _r = await tenantDb.query(
-                `SELECT direction FROM call_events
-                  WHERE user_id = $1
-                    AND created_at >= NOW() - INTERVAL '10 minutes'
-                    AND phone LIKE $2
-                    AND event = 'incoming_ringing'
-                  ORDER BY created_at DESC LIMIT 1`,
-                [_me.id, '%' + _tail]
-              );
-              if (_r.rows[0] && _r.rows[0].direction === 'in') direction = 'in';
-            } catch (_) {}
-          }
-          if (!direction) direction = 'out';
-        }
+        const direction = String(req.body.direction || 'out').toLowerCase();
         const filename = String(req.body.filename || (req.file && req.file.originalname) || '');
         const startedAt = req.body.started_at ? new Date(req.body.started_at) : new Date();
         const lastFourHint = String(req.body.lastfour_hint || '').slice(0, 6);
@@ -1613,22 +1151,52 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
           const lead = await recRoutes._findLeadByPhone(phone);
           if (lead) leadId = lead.id;
         }
-        // CALL_CAPTURE_LEAD_ONLY_v1 — opt-in (default OFF). When ON, don't
-        // store recordings for calls that don't match a CRM lead. OFF →
-        // recordings behave exactly as before for every tenant.
-        try {
-          // CALL_CAPTURE_LEAD_ONLY_USER_v1 — drop the recording when there's no
-          // CRM-lead match AND capture-lead-only is active: tenant-wide admin
-          // switch ON *or* this uploading user opted in (users.capture_lead_only).
-          const _capTenant = String(await db.getConfig('CALL_CAPTURE_LEAD_ONLY', '0')) === '1';
-          const _capUser   = me && Number(me.capture_lead_only) === 1;
-          if (!leadId && (_capTenant || _capUser)) {
-            return res.json({ ok: true, skipped: true, capture: 'skipped', stored: false });
+        // ---- Auto-create-lead policy ----
+        // CALL_LEAD_DEFAULT_OFF_v1 — route through the shared helper so
+        // all three call → lead paths agree, with fail-safe '0' defaults.
+        if (!leadId && phone) {
+          const _alCfg = await recRoutes._getAutoleadCfg();
+          const isIn  = direction === 'in' || direction === 'missed';
+          const isOut = direction === 'out' || direction === 'outgoing';
+          const allow = (isIn && _alCfg.inbound) || (isOut && _alCfg.outbound);
+          if (allow) {
+            try {
+              let statusId = null;
+              if (_alCfg.statusId) {
+                try { const found = await db.findById('statuses', _alCfg.statusId); if (found) statusId = found.id; } catch (_) {}
+              }
+              if (!statusId) {
+                const newSt = await db.findOneBy('statuses', 'name', 'New');
+                statusId = newSt ? newSt.id : null;
+              }
+              const sourceLabel = isIn
+                ? (direction === 'missed' ? 'Missed Call' : 'Inbound Call')
+                : 'Outbound Call';
+              leadId = await db.insert('leads', {
+                name:        phone,
+                phone:       phone,
+                whatsapp:    phone,
+                source:      sourceLabel,
+                source_ref:  'auto-created from call recording sync',
+                status_id:   statusId,
+                assigned_to: me.id,
+                notes:       'Auto-created from ' + sourceLabel.toLowerCase() + ' recording',
+                created_by:  me.id,
+                created_at:  db.nowIso(),
+                updated_at:  db.nowIso(),
+                last_status_change_at: db.nowIso()
+              });
+              autoCreated = true;
+              try {
+                await db.insert('remarks', {
+                  lead_id: leadId, user_id: me.id,
+                  remark: '🎙 Recording arrived from ' + sourceLabel.toLowerCase() + ' · auto-created lead',
+                  status_id: statusId
+                });
+              } catch (_) {}
+            } catch (e) { console.warn('[recordings] auto-create lead failed:', e.message); }
           }
-        } catch (_) {}
-        // CALL_ACTIVITY_UNKNOWN_v1 (2026-06-04) — auto-create-lead REMOVED.
-        // Per user instruction: if no lead matches the recording's phone,
-        // the recording is stored with lead_id=NULL. No phantom leads.
+        }
         // Robust MIME — different phones write different formats. Sniff
         // the magic bytes first; fall back to the filename extension; only
         // trust the multipart Content-Type when both above are unavailable.
@@ -1653,35 +1221,10 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
         // Self-heal schema on first hit (column + unique index).
         try {
           await db.query('ALTER TABLE lead_recordings ADD COLUMN IF NOT EXISTS dedup_key TEXT');
-          // REC_DEDUP_v2_HOTFIX — partial index broke ON CONFLICT clause matching.
-          // Drop it + recreate as non-partial. dedup_key is always computed so NULL never appears,
-          // but COALESCE is belt-and-braces. The drop is safe (only runs if old index exists).
-          await db.query('DROP INDEX IF EXISTS uniq_lead_rec_user_dedup');
-          await db.query('CREATE UNIQUE INDEX IF NOT EXISTS uniq_lead_rec_user_dedup ON lead_recordings(user_id, dedup_key)');
+          await db.query('CREATE UNIQUE INDEX IF NOT EXISTS uniq_lead_rec_user_dedup ON lead_recordings(user_id, dedup_key) WHERE dedup_key IS NOT NULL');
         } catch (_) {}
         // Already uploaded? Return its id so client treats as no-op success.
         let id = null;
-        // REC_FILENAME_DEDUP_v1: filename match BEFORE dedup_key — protects
-        // against reinstall / URI-change cases where dedup_key would differ
-        // but it's the same physical file.
-        if (filename) {
-          try {
-            const _exF = await db.query(
-              'SELECT id, lead_id FROM lead_recordings WHERE original_filename = $1 LIMIT 1',
-              [filename]
-            );
-            if (_exF.rows[0]) {
-              return res.json({
-                ok: true,
-                id: _exF.rows[0].id,
-                lead_id: _exF.rows[0].lead_id,
-                auto_created: false,
-                already_synced: true,
-                dedup_via: 'filename'
-              });
-            }
-          } catch (_) { /* column may not exist yet on first deploy; fall through */ }
-        }
         try {
           const _ex = await db.query(
             'SELECT id, lead_id FROM lead_recordings WHERE user_id = $1 AND dedup_key = $2 LIMIT 1',
@@ -1697,52 +1240,21 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
             });
           }
         } catch (_) {}
-        // R2_RECORDINGS_v1 — when R2 is configured, push the audio to R2
-        // (zero-egress object storage) and store only the key in Postgres.
-        // audio_bytes stays NULL for R2-backed rows. Any R2 failure falls
-        // back to storing the bytes in Postgres so uploads never break.
-        let _audioForDb = req.file.buffer;
-        let _r2Key = null;
-        try {
-          const _r2 = require('./utils/r2');
-          if (_r2.isEnabled()) {
-            const _store = db.tenantStorage.getStore && db.tenantStorage.getStore();
-            const _slug = (_store && _store.slug) || 'tenant';
-            const _ext = (_finalMime && _finalMime.indexOf('mpeg') !== -1) ? 'mp3'
-                       : (_finalMime && _finalMime.indexOf('mp4') !== -1) ? 'm4a'
-                       : (_finalMime && _finalMime.indexOf('wav') !== -1) ? 'wav' : 'audio';
-            const _key = 'rec/' + _slug + '/' + Date.now() + '-' + Math.random().toString(36).slice(2, 10) + '.' + _ext;
-            await _r2.putObject(_key, req.file.buffer, _finalMime);
-            _r2Key = _key;
-            _audioForDb = null;   // freed from Postgres — lives in R2
-          }
-        } catch (e) { console.warn('[/api/recordings] R2 upload failed, storing in Postgres:', e.message); _r2Key = null; _audioForDb = req.file.buffer; }
         // Fresh upload — INSERT with ON CONFLICT for race safety.
         try {
-          // REC_FILENAME_DEDUP_v1 (2026-05-20) — also store original_filename so
-          // future syncs can ask "do you already have this filename?" instead of
-          // relying on the device_path which changes on reinstall.
-          try { await db.query('ALTER TABLE lead_recordings ADD COLUMN IF NOT EXISTS original_filename TEXT'); } catch (_) {}
-          try { await db.query('CREATE INDEX IF NOT EXISTS idx_lead_rec_filename ON lead_recordings(original_filename) WHERE original_filename IS NOT NULL'); } catch (_) {}
-          try { await db.query('ALTER TABLE lead_recordings ADD COLUMN IF NOT EXISTS r2_key TEXT'); } catch (_) {}
           const _ins = await db.query(
             `INSERT INTO lead_recordings
-               (lead_id, user_id, phone, direction, duration_s, device_path, mime_type, size_bytes, audio_bytes, started_at, created_at, dedup_key, original_filename, r2_key)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+               (lead_id, user_id, phone, direction, duration_s, device_path, mime_type, size_bytes, audio_bytes, started_at, created_at, dedup_key)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
              ON CONFLICT (user_id, dedup_key) DO NOTHING
              RETURNING id`,
             [leadId, me.id, phone, direction, Number(req.body.duration_s) || 0,
-             _devicePath, _finalMime, (req.file.size||0), _audioForDb,
-             req.body.started_at || db.nowIso(), db.nowIso(), _dedupKey, filename || null, _r2Key]
+             _devicePath, _finalMime, (req.file.size||0), req.file.buffer,
+             req.body.started_at || db.nowIso(), db.nowIso(), _dedupKey]
           );
           id = _ins.rows[0] ? _ins.rows[0].id : null;
         } catch (e) {
-          // REC_DEDUP_v2_HOTFIX — used to silently swallow this. The actual SQL
-          // error (e.g. 'no unique constraint matching ON CONFLICT') has to bubble
-          // up to the client so we can see real failures instead of a generic
-          // 'insert returned no id' downstream.
           console.error('[/api/recordings] insert error:', e.message);
-          throw e;
         }
         if (!id) {
           // Lost race against a concurrent identical upload — find the winner.
@@ -1764,107 +1276,15 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
           throw new Error('lead_recordings insert returned no id');
         }
         try {
-          // CALL_ACTIVITY_UNKNOWN_v1 (2026-06-04) — three-branch logic:
-          //   A) Empty-phone row exists nearby (Samsung process-death case)
-          //      → UPDATE that row: backfill phone, set direction='unknown',
-          //      attach recording, set duration. The blank '—' row in Call
-          //      Activity is now identified.
-          //   B) Existing row for same phone within +/- 10 min → just attach
-          //      recording_id + duration. Direction stays as-is (don't flip).
-          //   C) Otherwise → INSERT new call_events row with direction=
-          //      'unknown' at the recording's actual started_at. Becomes
-          //      its own Unknown line in Call Activity.
-          // In ALL branches: NEVER touch leads.status_id, NEVER auto-create
-          // lead. If no lead found by phone, lead_id stays NULL.
-          let _evStartedMs = Date.now();
-          try {
-            const _s = req.body.started_at;
-            if (_s) {
-              const _ms = new Date(_s).getTime();
-              if (!isNaN(_ms) && _ms > 0 && _ms < Date.now() + 60_000) _evStartedMs = _ms;
-            }
-          } catch (_) {}
-          const _evIso = new Date(_evStartedMs).toISOString();
-          const _phoneTail = String(phone || '').replace(/\D/g, '').slice(-10);
-          const _dur = Number(req.body.duration_s) || 0;
-
-          // Dedup: skip if this recording is already attached.
+          // Dedup: skip if a recording_saved event already exists for this recording_id.
           const _ce = await db.query('SELECT id FROM call_events WHERE recording_id = $1 LIMIT 1', [id]);
           if (!_ce.rows[0]) {
-            let _handled = false;
-
-            // BRANCH A: empty-phone row for this user within +/- 30 min
-            // (the Samsung blank-number outgoing case).
-            // CALL_PHONE_REVERSE_BACKFILL_v1 (2026-06-13) — window widened
-            // from 2 min → 30 min so recordings that sync hours later still
-            // pair with their empty-phone outgoing rows. Direction is set
-            // to 'out' (not 'unknown') when no other call_event nearby has
-            // a definitive direction, since the recording confirms an
-            // outgoing call happened around this time.
-            try {
-              const _emptyRow = await db.query(`
-                SELECT id FROM call_events
-                 WHERE user_id = $1
-                   AND (phone IS NULL OR TRIM(phone) = '')
-                   AND recording_id IS NULL
-                   AND created_at BETWEEN $2::timestamptz - INTERVAL '30 minutes'
-                                      AND $2::timestamptz + INTERVAL '30 minutes'
-                 ORDER BY ABS(EXTRACT(EPOCH FROM (created_at - $2::timestamptz)))
-                 LIMIT 1
-              `, [me.id, _evIso]);
-              if (_emptyRow.rows[0]) {
-                await db.query(
-                  `UPDATE call_events
-                      SET phone = $1,
-                          direction = 'unknown',
-                          recording_id = $2,
-                          duration_s = GREATEST($3::int, COALESCE(duration_s, 0)),
-                          lead_id = COALESCE($4, lead_id)
-                    WHERE id = $5`,
-                  [phone || '', id, _dur, leadId || null, _emptyRow.rows[0].id]
-                );
-                _handled = true;
-              }
-            } catch (e) { console.warn('[recordings] branch A (empty-phone backfill) failed:', e.message); }
-
-            // BRANCH B: existing row for SAME phone within +/- 10 min
-            if (!_handled && _phoneTail) {
-              try {
-                const _sameRow = await db.query(`
-                  SELECT id, direction, duration_s FROM call_events
-                   WHERE user_id = $1
-                     AND phone LIKE $2
-                     AND recording_id IS NULL
-                     AND created_at BETWEEN $3::timestamptz - INTERVAL '10 minutes'
-                                        AND $3::timestamptz + INTERVAL '10 minutes'
-                   ORDER BY CASE event WHEN 'call_ended' THEN 1
-                                       WHEN 'incoming_ringing' THEN 2 ELSE 3 END,
-                            ABS(EXTRACT(EPOCH FROM (created_at - $3::timestamptz)))
-                   LIMIT 1
-                `, [me.id, '%' + _phoneTail, _evIso]);
-                if (_sameRow.rows[0]) {
-                  await db.query(
-                    `UPDATE call_events
-                        SET recording_id = $1,
-                            duration_s = GREATEST($2::int, COALESCE(duration_s, 0)),
-                            lead_id = COALESCE($3, lead_id)
-                      WHERE id = $4`,
-                    [id, _dur, leadId || null, _sameRow.rows[0].id]
-                  );
-                  _handled = true;
-                }
-              } catch (e) { console.warn('[recordings] branch B (same-phone attach) failed:', e.message); }
-            }
-
-            // BRANCH C: no matching row — INSERT new row direction='unknown'
-            if (!_handled) {
-              await db.insert('call_events', {
-                lead_id: leadId, user_id: me.id, phone, direction: 'unknown',
-                event: 'recording_saved',
-                duration_s: _dur,
-                recording_id: id, created_at: _evIso
-              });
-            }
+            await db.insert('call_events', {
+              lead_id: leadId, user_id: me.id, phone, direction,
+              event: 'recording_saved',
+              duration_s: Number(req.body.duration_s) || 0,
+              recording_id: id, created_at: db.nowIso()
+            });
           }
         } catch (_) {}
         res.json({ ok: true, id, lead_id: leadId, auto_created: autoCreated });
@@ -1891,21 +1311,7 @@ app.post('/api/call_event_native', require('express').json({ limit: '64kb' }), a
     let decoded; try { decoded = jwt.verify(raw, _JWT_SECRET); } catch (_) { return res.status(401).json({ error: 'Bad token' }); }
     const uid = Number(decoded && decoded.id);
     if (!uid) return res.status(401).json({ error: 'Token has no user id' });
-    // CALL_EVENT_TENANT_DIRECT_v1: prefer slug from JWT (decoded.t — set
-    // by signToken at login). Falling back to _findTenantByLookup —
-    // which scans every tenant pool — would make this endpoint 30+s
-    // with ~30 tenants, and the APK PhoneStateReceiver POSTs here on
-    // every call event, so the slow path is unacceptable.
-    let t = null;
-    const slugFromJwt = decoded && (decoded.t || decoded.slug);
-    if (slugFromJwt) {
-      try { t = await tenantPoolMod.findActiveTenant(String(slugFromJwt).toLowerCase()); } catch (_) {}
-    }
-    if (!t) {
-      // Slow legacy path — only used if older clients are still on a JWT
-      // that doesn't carry the slug.
-      t = await _findTenantByLookup('SELECT 1 FROM users WHERE id=$1 AND COALESCE(is_active,1)=1 LIMIT 1', [uid]);
-    }
+    const t = await _findTenantByLookup('SELECT 1 FROM users WHERE id=$1 AND COALESCE(is_active,1)=1 LIMIT 1', [uid]);
     if (!t) return res.status(404).json({ error: 'No active tenant for user' });
     const pool = tenantPoolMod.poolFor(t);
     if (!pool) return res.status(500).json({ error: 'tenant pool unavailable' });
@@ -1916,12 +1322,7 @@ app.post('/api/call_event_native', require('express').json({ limit: '64kb' }), a
         direction: req.body && req.body.direction,
         event: req.body && req.body.event,
         duration_s: req.body && req.body.duration_s,
-        missed: req.body && req.body.missed,
-        // CALL_HISTORY_TIME_FIX_v1 (2026-06-04) — accept the call's real
-        // wall-clock time. Used by APK CallLog bulk import so historical
-        // events aren't all stamped at NOW(). PhoneStateReceiver live posts
-        // can also send this; if omitted, server falls back to NOW().
-        at: req.body && (req.body.at || req.body.started_at || req.body.call_time)
+        missed: req.body && req.body.missed
       });
       // Enrich the response with the rich-notification payload so the
       // native PhoneStateReceiver can render a heads-up notification
@@ -1940,472 +1341,6 @@ app.post('/api/call_event_native', require('express').json({ limit: '64kb' }), a
     });
   } catch (e) {
     console.error('[/api/call_event_native] error:', e.message);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// INCOMING_CARD_v1 — lightweight read-only endpoint used by IncomingCallActivity
-// to fetch lead-by-phone for the on-screen card. Same JWT auth + tenant
-// resolution as /api/call_event_native (the slug claim on the JWT lets us
-// pick the right tenant pool fast — no scanning).
-app.get('/api/lookup_lead_native', async (req, res) => {
-  const tenantDb = require('./db/pg');
-  const jwt = require('jsonwebtoken');
-  const _JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
-  try {
-    const raw = (req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-    if (!raw) return res.status(401).json({ error: 'No auth token' });
-    let decoded; try { decoded = jwt.verify(raw, _JWT_SECRET); } catch (_) { return res.status(401).json({ error: 'Bad token' }); }
-    const uid = Number(decoded && decoded.id);
-    if (!uid) return res.status(401).json({ error: 'Token has no user id' });
-    let t = null;
-    const slugFromJwt = decoded && (decoded.t || decoded.slug);
-    if (slugFromJwt) {
-      try { t = await tenantPoolMod.findActiveTenant(String(slugFromJwt).toLowerCase()); } catch (_) {}
-    }
-    if (!t) return res.status(404).json({ error: 'No tenant' });
-    const pool = tenantPoolMod.poolFor(t);
-    if (!pool) return res.status(500).json({ error: 'tenant pool unavailable' });
-    const phone = String(req.query.phone || '').slice(0, 32);
-    if (!phone) return res.json({ lead: null });
-    return tenantDb.tenantStorage.run({ pool, tenant: t, slug: t.slug }, async () => {
-      const recRoutes = require('./routes/recordings');
-      let lookup = null;
-      try { lookup = await recRoutes.api_call_lookup(raw, phone); } catch (_) {}
-      if (!lookup || !lookup.match) return res.json({ lead: null });
-      // Shape it down to just the fields the Activity card needs.
-      res.json({
-        lead: {
-          id: lookup.id || 0,
-          name: lookup.name || '',
-          status: lookup.status || '',
-          last_remark: lookup.last_remark || lookup.last_note || ''
-        }
-      });
-    });
-  } catch (e) {
-    console.error('[/api/lookup_lead_native] error:', e.message);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// REC_DIAG_PING_v1 — receives status pings from RecordingsBackgroundSyncWorker
-// on the APK. Lets us see in Railway logs exactly what the worker is doing
-// without device-side adb logcat. Auth-optional: the whole point is to
-// diagnose missing-creds cases, so don't reject when token is absent.
-app.post('/api/rec-diag', require('express').json({ limit: '8kb' }), async (req, res) => {
-  try {
-    const b = req.body || {};
-    console.log('[/api/rec-diag]',
-      'trigger=', b.trigger || '?',
-      'phase=', b.phase || '?',
-      'tenant=', b.tenant || '?',
-      'user=', b.user_id != null ? b.user_id : '?',
-      'apk_version=', b.apk_version || '?',
-      'has_folder=', b.has_folder ? 'yes' : 'NO',
-      'has_token=', b.has_token ? 'yes' : 'NO',
-      'has_base=', b.has_base ? 'yes' : 'NO',
-      'folder_readable=', b.folder_readable != null ? (b.folder_readable ? 'yes' : 'NO') : '?',
-      'files=', b.file_count != null ? b.file_count : '?',
-      'uploaded=', b.uploaded != null ? b.uploaded : '?',
-      'skipped=', b.skipped != null ? b.skipped : '?',
-      'failed=', b.failed != null ? b.failed : '?',
-      'note=', (b.note || '').toString().slice(0, 200)
-    );
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('[/api/rec-diag] error:', e.message);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-
-// CRM_PERF_v1_SERVER — read the live per-process tally of slow API calls.
-// Aggregated from the tenantApi dispatcher whenever any handler takes
-// >=1000ms. No DB writes — pure in-memory accumulator that resets on each
-// Railway redeploy.
-// PERF_HEALTH_PANEL_v1 + PERF_HEALTH_TENANT_SCOPE_v1 — admin can reset the
-// tally for their own tenant only (super-admin clears everything).
-app.post('/api/perf-reset', async (req, res) => {
-  try {
-    let tenantSlug = '';
-    let isSuper = false;
-    try {
-      const jwt = require('jsonwebtoken');
-      const _JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
-      const raw = (req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-      if (!raw) return res.status(401).json({ error: 'No auth token' });
-      let decoded;
-      try { decoded = jwt.verify(raw, _JWT_SECRET); }
-      catch (e) { return res.status(401).json({ error: 'Invalid or expired token' }); }
-      if (decoded && decoded.t) tenantSlug = String(decoded.t);
-      isSuper = !!(decoded && (decoded.is_super_admin || decoded.super_admin));
-    } catch (_) {}
-
-    if (isSuper) {
-      global._perfSlowTally = { by_fn: {}, by_tenant: {}, recent: [] };
-      global._perfClientReports = [];
-    } else if (tenantSlug) {
-      const T = global._perfSlowTally || { by_fn: {}, by_tenant: {}, recent: [] };
-      T.recent = (T.recent || []).filter(r => String(r.tenant || '') !== tenantSlug);
-      delete (T.by_tenant || {})[tenantSlug];
-      global._perfSlowTally = T;
-      // Rebuild by_fn from the remaining recent slice (best-effort).
-      const agg = {};
-      (T.recent || []).forEach(r => {
-        const k = r.fn || '?';
-        if (!agg[k]) agg[k] = { n: 0, total: 0, max: 0 };
-        agg[k].n++; agg[k].total += r.ms; if (r.ms > agg[k].max) agg[k].max = r.ms;
-      });
-      T.by_fn = agg;
-      global._perfClientReports = (global._perfClientReports || []).filter(r => String(r.tenant || '') !== tenantSlug);
-    } else {
-      return res.status(403).json({ error: 'Tenant context missing' });
-    }
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.get('/api/perf-summary', async (req, res) => {
-  try {
-    // PERF_HEALTH_TENANT_SCOPE_v1 — require auth + filter to the requester's
-    // tenant unless they're a super-admin. Without this, every tenant could
-    // see every other tenant's slow APIs and client dumps.
-    let tenantSlug = '';
-    let isSuper = false;
-    try {
-      const jwt = require('jsonwebtoken');
-      const _JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
-      const raw = (req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-      if (!raw) return res.status(401).json({ error: 'No auth token' });
-      let decoded;
-      try { decoded = jwt.verify(raw, _JWT_SECRET); }
-      catch (e) { return res.status(401).json({ error: 'Invalid or expired token' }); }
-      // JWT may carry the tenant slug directly (\'t\' claim) — that's the
-      // cheapest signal. Fall back to looking up the user's tenant.
-      if (decoded && decoded.t) tenantSlug = String(decoded.t);
-      isSuper = !!(decoded && (decoded.is_super_admin || decoded.super_admin));
-      if (!tenantSlug && !isSuper) {
-        const uid = Number(decoded && decoded.id);
-        if (uid) {
-          try {
-            const t = await _findTenantByLookup(
-              'SELECT 1 FROM users WHERE id = $1 AND COALESCE(is_active, 1) = 1 LIMIT 1',
-              [uid]
-            );
-            if (t) tenantSlug = t.slug || '';
-          } catch (_) {}
-        }
-      }
-      if (!isSuper && !tenantSlug) return res.status(403).json({ error: 'Tenant context missing' });
-    } catch (e) {
-      return res.status(500).json({ error: 'auth check failed: ' + e.message });
-    }
-
-    const T = global._perfSlowTally || { by_fn: {}, by_tenant: {}, recent: [] };
-
-    // Filter recent slow calls by this tenant (unless super-admin).
-    const recentAll = T.recent || [];
-    const recent_filtered = isSuper ? recentAll : recentAll.filter(r => String(r.tenant || '') === tenantSlug);
-
-    // top_fn is re-aggregated from the filtered recent slice so the average
-    // reflects only this tenant's calls. (The cross-tenant by_fn table on
-    // the global tally is super-admin-only.)
-    let top_fn;
-    if (isSuper) {
-      top_fn = Object.entries(T.by_fn || {}).map(([fn, st]) => ({ fn, n: st.n, avg: Math.round(st.total / st.n), max: st.max })).sort((a, b) => b.avg - a.avg).slice(0, 20);
-    } else {
-      const agg = {};
-      recent_filtered.forEach(r => {
-        const k = r.fn || '?';
-        if (!agg[k]) agg[k] = { n: 0, total: 0, max: 0 };
-        agg[k].n++; agg[k].total += r.ms; if (r.ms > agg[k].max) agg[k].max = r.ms;
-      });
-      top_fn = Object.entries(agg).map(([fn, st]) => ({ fn, n: st.n, avg: Math.round(st.total / st.n), max: st.max })).sort((a, b) => b.avg - a.avg).slice(0, 20);
-    }
-
-    // top_tenant is super-admin only — for tenant users it's just their row.
-    let top_tenant;
-    if (isSuper) {
-      top_tenant = Object.entries(T.by_tenant || {}).map(([t, st]) => ({ tenant: t, n: st.n, avg: Math.round(st.total / st.n), max: st.max })).sort((a, b) => b.n - a.n).slice(0, 20);
-    } else {
-      const my = (T.by_tenant || {})[tenantSlug];
-      top_tenant = my ? [{ tenant: tenantSlug, n: my.n, avg: Math.round(my.total / my.n), max: my.max }] : [];
-    }
-
-    const reportsAll = global._perfClientReports || [];
-    const reports = isSuper
-      ? reportsAll.slice(-30).reverse()
-      : reportsAll.filter(r => String(r.tenant || '') === tenantSlug).slice(-30).reverse();
-
-    // PERF_HEALTH_DB_PERSIST_v1 — also pull persisted rows from DB (last 7 days)
-    // so the page survives Railway redeploys. Tenant-scoped via SQL WHERE.
-    let dbSlow = [];
-    let dbReports = [];
-    try {
-      const slowQ = isSuper
-        ? `SELECT EXTRACT(EPOCH FROM created_at)*1000 AS t, fn, ms, tenant_slug AS tenant,
-                  user_id AS \"user\", source, ua
-             FROM perf_slow_log
-            WHERE created_at >= NOW() - INTERVAL '7 days'
-            ORDER BY created_at DESC LIMIT 200`
-        : `SELECT EXTRACT(EPOCH FROM created_at)*1000 AS t, fn, ms, tenant_slug AS tenant,
-                  user_id AS \"user\", source, ua
-             FROM perf_slow_log
-            WHERE tenant_slug = $1 AND created_at >= NOW() - INTERVAL '7 days'
-            ORDER BY created_at DESC LIMIT 200`;
-      const r1 = isSuper
-        ? await controlDb.query(slowQ)
-        : await controlDb.query(slowQ, [tenantSlug]);
-      dbSlow = (r1.rows || []).map(r => ({
-        t: Number(r.t), fn: r.fn, ms: Number(r.ms),
-        tenant: r.tenant, user: r.user, source: r.source
-      }));
-
-      const repQ = isSuper
-        ? `SELECT EXTRACT(EPOCH FROM created_at)*1000 AS at_ms,
-                  tenant_slug AS tenant, user_email AS \"user\", platform,
-                  apk_version AS apk, online, network, view, api_calls, slow_1s,
-                  very_slow_3s, long_tasks, mem_mb, top_by_avg, very_slow_sample, ua
-             FROM perf_client_reports
-            WHERE created_at >= NOW() - INTERVAL '7 days'
-            ORDER BY created_at DESC LIMIT 50`
-        : `SELECT EXTRACT(EPOCH FROM created_at)*1000 AS at_ms,
-                  tenant_slug AS tenant, user_email AS \"user\", platform,
-                  apk_version AS apk, online, network, view, api_calls, slow_1s,
-                  very_slow_3s, long_tasks, mem_mb, top_by_avg, very_slow_sample, ua
-             FROM perf_client_reports
-            WHERE tenant_slug = $1 AND created_at >= NOW() - INTERVAL '7 days'
-            ORDER BY created_at DESC LIMIT 50`;
-      const r2 = isSuper
-        ? await controlDb.query(repQ)
-        : await controlDb.query(repQ, [tenantSlug]);
-      dbReports = (r2.rows || []).map(r => Object.assign({}, r, {
-        at_ms: Number(r.at_ms),
-        top_by_avg: typeof r.top_by_avg === 'string' ? JSON.parse(r.top_by_avg || '[]') : (r.top_by_avg || []),
-        very_slow_sample: typeof r.very_slow_sample === 'string' ? JSON.parse(r.very_slow_sample || '[]') : (r.very_slow_sample || [])
-      }));
-    } catch (e) {
-      console.warn('[perf-summary] DB read failed:', e.message);
-    }
-
-    // Merge in-memory + DB rows. In-memory wins (fresher). Cap at 200.
-    const mergedSlow = recent_filtered.concat(dbSlow);
-    const seen = new Set();
-    const dedupedSlow = mergedSlow.filter(r => {
-      const k = r.t + '|' + r.fn + '|' + r.ms;
-      if (seen.has(k)) return false; seen.add(k); return true;
-    }).sort((a, b) => b.t - a.t).slice(0, 200);
-
-    // Re-aggregate top_fn from the merged set (so the top APIs reflect ALL
-    // history, not just since the last deploy).
-    const agg = {};
-    dedupedSlow.forEach(r => {
-      const k = r.fn || '?';
-      if (!agg[k]) agg[k] = { n: 0, total: 0, max: 0 };
-      agg[k].n++; agg[k].total += r.ms; if (r.ms > agg[k].max) agg[k].max = r.ms;
-    });
-    const top_fn_merged = Object.entries(agg)
-      .map(([fn, st]) => ({ fn, n: st.n, avg: Math.round(st.total / st.n), max: st.max }))
-      .sort((a, b) => b.avg - a.avg).slice(0, 20);
-
-    // Merge client dumps (in-memory + DB).
-    const mergedReports = reports.concat(dbReports)
-      .filter((r, i, arr) => arr.findIndex(x => x.at_ms === r.at_ms && x.user === r.user) === i)
-      .sort((a, b) => b.at_ms - a.at_ms).slice(0, 50);
-
-    res.json({
-      ok: true,
-      slow_threshold_ms: 1000,
-      total_slow: dedupedSlow.length,
-      top_fn: top_fn_merged.length ? top_fn_merged : top_fn,
-      top_tenant,
-      recent_slow: dedupedSlow,
-      client_reports: mergedReports,
-      scope: isSuper ? 'all_tenants' : ('tenant:' + tenantSlug),
-      persisted_to_db: true
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// PERF_ROOT_v1 — /api/perf-pgactivity
-// Read-only DB-side diagnostic. Returns live pg_stat_activity for the
-// caller's tenant DB, the JS pool stats, indexes on recordings + leads,
-// and the per_tenant_max env value. Lets us see in one shot whether the
-// "slow API" cluster is queries actually running long OR connection-pool
-// wait, and whether the indexes we shipped are present on this DB.
-app.get('/api/perf-pgactivity', async (req, res) => {
-  try {
-    const jwt = require('jsonwebtoken');
-    const _JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
-    const raw = (req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-    if (!raw) return res.status(401).json({ error: 'No auth token' });
-    let decoded;
-    try { decoded = jwt.verify(raw, _JWT_SECRET); }
-    catch (e) { return res.status(401).json({ error: 'Invalid or expired token' }); }
-
-    let tenantSlug = decoded && decoded.t ? String(decoded.t) : '';
-    const isSuper = !!(decoded && (decoded.is_super_admin || decoded.super_admin));
-    const askedSlug = String(req.query.slug || '').trim();
-    if (isSuper && askedSlug) tenantSlug = askedSlug;
-    if (!tenantSlug) return res.status(400).json({ error: 'No tenant slug (pass ?slug= as super-admin or use a tenant token)' });
-
-    const t = await tenantPoolMod.findActiveTenant(tenantSlug);
-    if (!t) return res.status(404).json({ error: 'tenant not found: ' + tenantSlug });
-    const pool = tenantPoolMod.poolFor(t);
-    if (!pool) return res.status(500).json({ error: 'no pool for tenant' });
-
-    let activity = [];
-    try {
-      const r = await pool.query(
-        "SELECT pid, EXTRACT(EPOCH FROM (now() - query_start)) AS age_sec, state, wait_event_type, wait_event, LEFT(query, 300) AS query FROM pg_stat_activity WHERE datname = current_database() AND state IS NOT NULL AND state <> 'idle' ORDER BY age_sec DESC NULLS LAST LIMIT 40"
-      );
-      activity = r.rows;
-    } catch (e) { activity = [{ error: 'pg_stat_activity: ' + e.message }]; }
-
-    let conn_summary = [];
-    try {
-      const r = await pool.query(
-        "SELECT state, COUNT(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() GROUP BY state ORDER BY n DESC"
-      );
-      conn_summary = r.rows;
-    } catch (_) {}
-
-    let recordings_indexes = [];
-    let leads_indexes = [];
-    let wa_indexes = [];
-    try { const r = await pool.query("SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'recordings' ORDER BY indexname"); recordings_indexes = r.rows; } catch (_) {}
-    try { const r = await pool.query("SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'leads' ORDER BY indexname"); leads_indexes = r.rows; } catch (_) {}
-    try { const r = await pool.query("SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'whatsapp_messages' ORDER BY indexname"); wa_indexes = r.rows; } catch (_) {}
-
-    let row_counts = {};
-    try {
-      const r = await pool.query("SELECT 'recordings' AS t, COUNT(*)::bigint AS n FROM recordings UNION ALL SELECT 'leads', COUNT(*) FROM leads UNION ALL SELECT 'whatsapp_messages', COUNT(*) FROM whatsapp_messages");
-      r.rows.forEach(row => { row_counts[row.t] = Number(row.n); });
-    } catch (e) { row_counts.error = e.message; }
-
-    return res.json({
-      ok: true,
-      tenant: { slug: t.slug, db_name: t.db_name },
-      env_per_tenant_max: process.env.PG_POOL_PER_TENANT_MAX || null,
-      hardcoded_default_pool: 3,
-      js_pool_stats: tenantPoolMod.getPoolStats(),
-      conn_summary, activity, row_counts,
-      recordings_indexes, leads_indexes, wa_indexes,
-      now: new Date().toISOString()
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// CRM_PERF_v1_APK — receive a performance diagnostic dump from the SPA / APK.
-// Console-logged so it surfaces in Railway logs. Compact 1-line summary plus
-// the full JSON for support inspection. Auth optional — the whole point is
-// to capture cases where the user is having trouble.
-app.post('/api/perf-report', require('express').json({ limit: '256kb' }), async (req, res) => {
-  try {
-    const b = req.body || {};
-    const ev = Array.isArray(b.events) ? b.events : [];
-    const apiCalls = ev.filter(e => e && e.type === 'api');
-    const slow = apiCalls.filter(e => e.ms >= 1000);
-    const verySlow = apiCalls.filter(e => e.ms >= 3000);
-    const lt = ev.filter(e => e && e.type === 'longtask');
-    const memSeries = ev.filter(e => e && e.type === 'mem');
-    const topByAvg = {};
-    apiCalls.forEach(e => { if (!topByAvg[e.fn]) topByAvg[e.fn] = { n: 0, total: 0, max: 0 }; topByAvg[e.fn].n++; topByAvg[e.fn].total += e.ms; if (e.ms > topByAvg[e.fn].max) topByAvg[e.fn].max = e.ms; });
-    const top5 = Object.entries(topByAvg).map(([fn, st]) => ({ fn, n: st.n, avg: Math.round(st.total / st.n), max: st.max })).sort((a, b) => b.avg - a.avg).slice(0, 5);
-    console.log('[/api/perf-report]',
-      'tenant=', b.tenant || '?',
-      'user=', b.user || '?',
-      'platform=', b.platform || 'web',
-      'apk=', b.apk_version || '?',
-      'events=', ev.length,
-      'api_calls=', apiCalls.length,
-      'slow_1s=', slow.length,
-      'very_slow_3s=', verySlow.length,
-      'long_tasks=', lt.length,
-      'mem_mb=', memSeries.length ? memSeries[memSeries.length - 1].mb : '?',
-      'online=', b.online != null ? b.online : '?',
-      'network=', b.network || '?',
-      'ua=', String(b.ua || '').slice(0, 120)
-    );
-    if (top5.length) console.log('[/api/perf-report] TOP_BY_AVG_MS', JSON.stringify(top5));
-    if (verySlow.length) console.log('[/api/perf-report] VERY_SLOW', JSON.stringify(verySlow.slice(0, 10).map(e => ({ fn: e.fn, ms: e.ms, view: e.view }))));
-    /* PERF_HEALTH_PANEL_v1 — persist a compact dump summary so the admin
-       dashboard can show recent client-uploaded reports without us having
-       to grep Railway logs. Keep last 50 in-memory. */
-    try {
-      if (!global._perfClientReports) global._perfClientReports = [];
-      global._perfClientReports.push({
-        at_ms: Date.now(),
-        tenant: b.tenant || '?',
-        user: b.user || '?',
-        platform: b.platform || 'web',
-        apk: b.apk_version || '',
-        online: b.online != null ? Boolean(b.online) : null,
-        network: b.network || '',
-        view: b.current_view || '',
-        api_calls: apiCalls.length,
-        slow_1s: slow.length,
-        very_slow_3s: verySlow.length,
-        long_tasks: lt.length,
-        mem_mb: memSeries.length ? memSeries[memSeries.length - 1].mb : null,
-        top_by_avg: top5,
-        very_slow_sample: verySlow.slice(0, 10).map(e => ({ fn: e.fn, ms: e.ms, view: e.view })),
-        ua: String(b.ua || '').slice(0, 200)
-      });
-      if (global._perfClientReports.length > 50) {
-        global._perfClientReports = global._perfClientReports.slice(-50);
-      }
-      // PERF_HEALTH_DB_PERSIST_v1 — also persist to DB so the report survives
-      // Railway redeploys. Tenant slug is read from the JWT if present (so an
-      // APK can't lie about which tenant the dump belongs to), falling back
-      // to the body's b.tenant for older clients.
-      try {
-        let dbTenant = '';
-        try {
-          const jwt = require('jsonwebtoken');
-          const _JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
-          const raw = (req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-          if (raw) {
-            const dec = jwt.verify(raw, _JWT_SECRET);
-            if (dec && dec.t) dbTenant = String(dec.t);
-          }
-        } catch (_) {}
-        if (!dbTenant) dbTenant = String(b.tenant || '');
-        controlDb.query(
-          `INSERT INTO perf_client_reports
-           (created_at, tenant_slug, user_email, platform, apk_version, online, network, view,
-            api_calls, slow_1s, very_slow_3s, long_tasks, mem_mb, top_by_avg, very_slow_sample, ua)
-           VALUES (NOW(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15)`,
-          [
-            dbTenant || null,
-            String(b.user || '').slice(0, 200),
-            String(b.platform || 'web').slice(0, 30),
-            String(b.apk_version || '').slice(0, 30),
-            b.online != null ? Boolean(b.online) : null,
-            String(b.network || '').slice(0, 30),
-            String(b.current_view || '').slice(0, 100),
-            apiCalls.length,
-            slow.length,
-            verySlow.length,
-            lt.length,
-            memSeries.length ? Number(memSeries[memSeries.length - 1].mb) : null,
-            JSON.stringify(top5),
-            JSON.stringify(verySlow.slice(0, 10).map(e => ({ fn: e.fn, ms: e.ms, view: e.view }))),
-            String(b.ua || '').slice(0, 250)
-          ]
-        ).catch(err => console.warn('[perf-report] DB insert failed:', err.message));
-      } catch (_) {}
-    } catch (_) {}
-    res.json({ ok: true, received: ev.length });
-  } catch (e) {
-    console.error('[/api/perf-report] error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
@@ -2673,7 +1608,7 @@ app.get('/api/recordings/:id/audio', async (req, res, next) => {
         const token = req.query.token || req.headers['x-auth-token'] || '';
         await authUser(token);
         const r = await tenantDb.query(
-          `SELECT mime_type, audio_bytes, r2_key FROM lead_recordings WHERE id = $1`,
+          `SELECT mime_type, audio_bytes FROM lead_recordings WHERE id = $1`,
           [Number(req.params.id)]
         );
         const row = r.rows[0];
@@ -2695,21 +1630,6 @@ app.get('/api/recordings/:id/audio', async (req, res, next) => {
             recent_recording_ids: visibleIds,
             hint: 'If tenant_resolved is wrong, log out + back in. If recent_recording_ids is empty, no recordings have synced for this tenant.'
           });
-        }
-        // R2_RECORDINGS_v1 — if this recording lives in R2, hand the browser
-        // a short-lived presigned URL and 302-redirect. The audio bytes then
-        // come straight from Cloudflare (zero Railway egress), never through
-        // this process. Falls through to Postgres streaming if R2 is off or
-        // the presign fails for any reason.
-        if (row.r2_key) {
-          try {
-            const _r2 = require('./utils/r2');
-            if (_r2.isEnabled()) {
-              const _url = await _r2.presignGet(row.r2_key, 600);
-              res.setHeader('Cache-Control', 'private, max-age=300');
-              return res.redirect(302, _url);
-            }
-          } catch (e) { console.warn('[/audio] R2 presign failed, falling back:', e.message); }
         }
         // Buffer.from is a no-op when audio_bytes already IS a Buffer (pg
         // returns bytea as Buffer); it normalises if some driver path
@@ -2880,18 +1800,6 @@ app.get('/hook/whatsapp_webhook', async (req, res, next) => {
     if (cfg && cfg === token) return res.type('text/plain').send(challenge);
   } catch (_) {}
   return res.status(403).send('Verify token mismatch');
-});
-// IVR_HOOK_TENANT_SCOPED_v1 — tenant-prefixed IVR webhook so the URL we
-// surface to vendors (/t/<slug>/hook/ivr/<vendor>) actually matches a
-// route. Mirrors the whatsapp_webhook pattern: bare URL handler is
-// registered before attachTenant (above), tenant-scoped handler here
-// runs AFTER attachTenant strips the /t/<slug>/ prefix.
-app.post('/hook/ivr/:vendor', (req, res, next) => {
-  if (!req.tenant) return next();
-  let ivrMod;
-  try { ivrMod = require('./routes/ivr'); }
-  catch (e) { console.error('[hook/ivr] ivr module load failed:', e.message); return res.status(500).json({ error: 'IVR module unavailable' }); }
-  return ivrMod.expressInbound(req, res);
 });
 app.post('/hook/whatsapp_webhook', (req, res, next) => {
   if (!req.tenant) return next();
@@ -3144,20 +2052,6 @@ app.get('/LeadCRM.apk', (req, res) => {
   });
 });
 
-// APK_AUTO_UPDATE_v1 (2026-05-31): serve the version sidecar JSON so the
-// in-app update banner can compare the installed APK build to the latest
-// one CI just published. The file is written by build-android.yml.
-app.get('/LeadCRM.apk.version.json', (req, res) => {
-  const _fs = require('fs');
-  const filePath = path.join(__dirname, 'public', 'LeadCRM.apk.version.json');
-  if (!_fs.existsSync(filePath)) {
-    return res.status(404).type('json').send({ error: 'version metadata not yet built' });
-  }
-  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  res.setHeader('Content-Type', 'application/json');
-  res.sendFile(filePath);
-});
-
 // ---- Tenant SPA shell ---------------------------------------------
 // Serve the per-tenant CRM SPA. After attachTenant rewrites
 // /t/<slug>/ to /, GET / lands here when there's a tenant on the
@@ -3165,13 +2059,6 @@ app.get('/LeadCRM.apk.version.json', (req, res) => {
 // (handled by the earlier app.get('/') registration above).
 app.get('/', (req, res, next) => {
   if (!req.tenant) return next();          // no tenant Ã¢ÂÂ fall through to landing/static
-  // INDEX_NO_CACHE_v1 - force browsers to revalidate the SPA shell on
-  // every request. Without this, browsers cached index.html and kept
-  // loading the OLD app.js?v= reference even after we shipped new
-  // versions, locking users on stale JS.
-  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  res.setHeader('Pragma', 'no-cache');
-  res.setHeader('Expires', '0');
   res.sendFile(path.join(__dirname, 'public', 'tenant', 'index.html'));
 });
 
@@ -3446,37 +2333,7 @@ async function boot() {
   }
 
 // ── Lead-source & Google Sheet webhook endpoints ────────────────────────────
-// INDIAMART_WEBHOOK_v1 (2026-05-28): always log every hit on /hook/leadsource/*
-// to control.error_logs BEFORE auth/tenant routing so we can debug 401s
-// and wrong-URL pokes. IndiaMart in particular sometimes calls the URL
-// with GET during their "Test" verification — we now answer those with
-// a friendly 200 OK so the test passes while still logging the visit.
-app.get('/hook/leadsource/:source/:key', (req, res) => {
-  try {
-    errorLogs.logError({
-      source: 'leadsource-ping',
-      severity: 'info',
-      message: 'GET ping on /hook/leadsource/' + req.params.source + ' (test/verification)',
-      stack: 'method=GET key=' + String(req.params.key || '').slice(0, 4) + '... ua=' + (req.get('user-agent') || '').slice(0, 80)
-    }).catch(() => {});
-  } catch (_) {}
-  return res.json({ ok: true, msg: 'leadsource endpoint reachable. Send a POST with JSON body to push leads.', source: req.params.source });
-});
-
 app.post('/hook/leadsource/:source/:key', (req, res) => {
-  // INDIAMART_WEBHOOK_v1 — always log the incoming POST attempt FIRST so
-  // even a wrong-key 401 leaves a breadcrumb the super-admin can see.
-  try {
-    const keyShown = String(req.params.key || '').slice(0, 4) + '...' + String(req.params.key || '').slice(-4);
-    const bodyPreview = JSON.stringify(req.body || {}).slice(0, 800);
-    errorLogs.logError({
-      source: 'leadsource-attempt',
-      severity: 'info',
-      message: 'POST /hook/leadsource/' + req.params.source + ' key=' + keyShown,
-      stack: 'body=' + bodyPreview + ' ua=' + (req.get('user-agent') || '').slice(0, 80) + ' ip=' + (req.ip || '')
-    }).catch(() => {});
-  } catch (_) {}
-
   req.body.api_key = req.params.key;
   req.body._hookSource = req.params.source;
   // Pass the actual handler function — earlier code passed `next` and
@@ -3485,36 +2342,15 @@ app.post('/hook/leadsource/:source/:key', (req, res) => {
   _runHookAsTenant(req, res, integrations.leadSourceWebhook);
 });
 
-app.post('/hook/sheet/:token', async (req, res) => {
-  /* SHEET_SYNC_v3 HOTFIX — the previous code called _runHookAsTenant which
-   * authenticates via config.WEBSITE_API_KEY. Sheet integration tokens
-   * (sht_xxx) live in tenant.sheet_integrations.webhook_token instead,
-   * so every Apps Script POST was returning 401 'Invalid API key' and
-   * no leads ever arrived. Resolve the tenant by scanning that table. */
-  const token = String(req.params.token || '').trim();
-  if (!token) return res.status(400).json({ error: 'missing token' });
-  req.body = req.body || {};
-  req.body.api_key = token;
-  const t = await _findTenantByLookup(
-    'SELECT 1 FROM sheet_integrations WHERE webhook_token = $1 LIMIT 1',
-    [token]
-  ).catch(() => null);
-  if (!t) return res.status(404).json({ error: 'Unknown sheet webhook token — re-copy the URL from the CRM' });
-  return _runAsTenant(t.slug, req, res, integrations.sheetPushWebhook);
+app.post('/hook/sheet/:token', (req, res) => {
+  req.body.api_key = req.params.token;
+  _runHookAsTenant(req, res, integrations.sheetPushWebhook);
 });
 
 // Background: run sheet syncs and native pulls every 5 minutes
-// PERF_FIX_v5 (2026-06-25) — gated by saas_settings allowlists. Empty list
-// (default) = sweep skipped entirely. Set SWEEP_SHEETSYNC_TENANTS or
-// SWEEP_NATIVEPULL_TENANTS in super-admin Settings → Performance to enable
-// per tenant slug.
-setInterval(async () => {
-  try {
-    const sheetAllow = await _sweepAllow('SWEEP_SHEETSYNC_TENANTS', '');
-    if (sheetAllow.size > 0) integrations.runDueSheetSyncs(Array.from(sheetAllow));
-    const pullAllow = await _sweepAllow('SWEEP_NATIVEPULL_TENANTS', '');
-    if (pullAllow.size > 0) integrations.runDueNativePulls(Array.from(pullAllow));
-  } catch(e) { console.error('[bg] integrations sweep error:', e.message); }
+setInterval(() => {
+  try { integrations.runDueSheetSyncs(); } catch(e) { console.error('[bg] sheet sync error:', e.message); }
+  try { integrations.runDueNativePulls(); } catch(e) { console.error('[bg] native pull error:', e.message); }
 }, 5 * 60 * 1000);
 
 // ── Background: per-tenant follow-up reminder runner ────────────────────
@@ -3544,55 +2380,12 @@ async function _runReminderForAllTenants() {
     } catch (e) { console.warn(`[reminders] ${row.slug} tick failed:`, e.message); }
   }
 }
-// PERF_FIX_v4 (2026-06-25) — was 60s, bumped to 10 min. Per-tenant
-// reminder sweep iterates every active tenant on every tick; at 60s that
-// pounded the connection pool. Follow-up reminders are accurate to the
-// minute today; accurate to ~10 min is fine and saves significant DB load.
 setInterval(() => {
   _runReminderForAllTenants().catch(e => console.error('[reminders] cycle failed:', e.message));
-}, Number(process.env.REMINDER_INTERVAL_MS || 10 * 60_000));
+}, Number(process.env.REMINDER_INTERVAL_MS || 60_000));
 // Initial run after boot settles
 setTimeout(() => _runReminderForAllTenants().catch(() => {}), 15_000);
 console.log('[reminders] SaaS-aware follow-up scheduler started');
-
-// ── AI_SCORE_AUTOFIRE_v1 — per-tenant background sweep (30 min) ──────
-// Catches lead-score drift the inline hooks may have missed and applies
-// time-decay scoring. Runs runSweep() inside each tenant's pool context.
-async function _runLeadScoringForAllTenants() {
-  let rows = [];
-  try {
-    const r = await controlDb.query(
-      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500`
-    );
-    rows = r.rows;
-  } catch (e) { console.warn('[ai-score] tenant list failed:', e.message); return; }
-  const leadScoring = require('./routes/leadScoring');
-  let totalScored = 0, totalErrors = 0, tenantsRun = 0;
-  for (const row of rows) {
-    let t; try { t = await tenantPoolMod.findActiveTenant(row.slug); } catch (_) { continue; }
-    if (!t) continue;
-    const pool = tenantPoolMod.poolFor(t);
-    if (!pool) continue;
-    try {
-      const res = await tenantDb.tenantStorage.run({ pool, tenant: t, slug: row.slug },
-        () => leadScoring.runSweep()
-      );
-      if (res && res.scored) {
-        totalScored += res.scored;
-        totalErrors += (res.errors || 0);
-        tenantsRun++;
-      }
-    } catch (e) { console.warn('[ai-score] ' + row.slug + ' sweep failed:', e.message); }
-  }
-  if (totalScored > 0) {
-    console.log('[ai-score] sweep done — ' + totalScored + ' leads scored across ' + tenantsRun + ' tenants (' + totalErrors + ' errors)');
-  }
-}
-setInterval(() => {
-  _runLeadScoringForAllTenants().catch(e => console.error('[ai-score] cycle failed:', e.message));
-}, 30 * 60_000);
-setTimeout(() => _runLeadScoringForAllTenants().catch(() => {}), 120_000);
-console.log('[ai-score] AI_SCORE_AUTOFIRE_v1 — sweep every 30 min, first run in 2 min');
 // ── Background: per-tenant AI re-engagement worker ───────────────────────
 // Walks every active tenant and sends scheduled soft-follow-up pings the
 // AI bot has queued (when a customer goes silent after a bot reply).
@@ -3621,412 +2414,19 @@ async function _runReengageForAllTenants() {
 }
 setInterval(() => {
   _runReengageForAllTenants().catch(e => console.error('[reengage] cycle failed:', e.message));
-}, Number(process.env.REENGAGE_INTERVAL_MS || 10 * 60_000));  // PERF_FIX_v5: 3min → 10min
+}, Number(process.env.REENGAGE_INTERVAL_MS || 60_000));
 setTimeout(() => _runReengageForAllTenants().catch(() => {}), 30_000);
 console.log('[reengage] AI bot re-engagement worker started');
-
-// PERF_FIX_v2 (2026-06-25) — control-DB allowlist for "every-tenant" sweeps.
-// User wanted Google Conv + Meta CAPI run only for explicitly-allowed
-// tenants (vserve by default) instead of looping every tenant every cycle.
-// Stored in saas_settings as CSV of slugs. 60s in-memory cache.
-let _sweepAllowCache = {}, _sweepAllowCachedAt = 0;
-async function _sweepAllow(key, defaultCsv) {
-  const now = Date.now();
-  if (now - _sweepAllowCachedAt > 60_000) { _sweepAllowCache = {}; _sweepAllowCachedAt = now; }
-  if (_sweepAllowCache[key] === undefined) {
-    let csv = defaultCsv;
-    try {
-      const r = await controlDb.query("SELECT value FROM saas_settings WHERE key = $1 LIMIT 1", [key]);
-      if (r.rows.length && r.rows[0].value !== null) csv = r.rows[0].value;
-    } catch (_) {}
-    _sweepAllowCache[key] = csv;
-  }
-  return new Set(String(_sweepAllowCache[key] || '').split(',').map(s => s.trim()).filter(Boolean));
-}
-
-// ── GOOGLE_CONV_EXPORT_v2 — daily auto-export per tenant at 22:00 IST ──
-// Walks every active tenant once a minute. Each tenant's tick decides
-// whether to fire (IST hour matches + not already fired today + feature
-// is ON). The CSV is written to disk + served by the public route.
-async function _runGoogleConvForAllTenants() {
-  // PERF_FIX_v2 — only iterate tenants in the allowlist (default: vserve only).
-  // Edit saas_settings.SWEEP_GCONV_TENANTS (CSV of slugs) via super-admin UI.
-  // PERF_FIX_v7: default-allow only the 'test' tenant (was 'vserve').
-  const allow = await _sweepAllow('SWEEP_GCONV_TENANTS', 'test');
-  if (allow.size === 0) return;
-  let rows = [];
-  try {
-    const r = await controlDb.query(
-      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') AND slug = ANY($1::text[]) ORDER BY id ASC LIMIT 500`,
-      [Array.from(allow)]
-    );
-    rows = r.rows;
-  } catch (e) { console.warn('[gconv] tenant list failed:', e.message); return; }
-  let gconv;
-  try { gconv = require('./routes/googleConvExport'); } catch (e) { return; }
-  if (!gconv._maybeDailyTickForCurrentTenant) return;
-  for (const row of rows) {
-    let t; try { t = await tenantPoolMod.findActiveTenant(row.slug); } catch (_) { continue; }
-    if (!t) continue;
-    const pool = tenantPoolMod.poolFor(t);
-    if (!pool) continue;
-    try {
-      await tenantDb.tenantStorage.run({ pool, tenant: t, slug: row.slug },
-        () => gconv._maybeDailyTickForCurrentTenant(row.slug)
-      );
-    } catch (e) { console.warn(`[gconv] ${row.slug} tick failed:`, e.message); }
-  }
-}
-setInterval(() => {
-  _runGoogleConvForAllTenants().catch(e => console.error('[gconv] cycle failed:', e.message));
-}, 3 * 60_000);
-setTimeout(() => _runGoogleConvForAllTenants().catch(() => {}), 60_000);
-console.log('[gconv] Google Ads conversion export daily worker started');
-
-// ── TENANT_BILLING_NOTIFY_v1 — overdue balance reminder sweep (every 6h)
-try {
-  const billingRem = require('./routes/saas/billingReminders');
-  // First run 1 min after boot so we don't slow down startup, then every 6h.
-  setTimeout(() => { billingRem.runOverdueSweep().catch(e => console.error('[billing_rem]', e.message)); }, 60_000);
-  setInterval(() => { billingRem.runOverdueSweep().catch(e => console.error('[billing_rem]', e.message)); }, 6 * 3600 * 1000);
-  console.log('[billing_rem] sweep scheduled — first run in 60s, then every 6 hours');
-} catch (e) { console.warn('[billing_rem] scheduler skipped:', e.message); }
-
-// ── DEMO_REMINDER_v1 — morning batch (10 AM IST) + every-10-min pre-30 sweep ──
-async function _runDemoReminderMorningForAllTenants() {
-  const tenantDb = require('./db/pg');
-  const tenantPool = require('./utils/tenantPool');
-  const control = require('./control/db');
-  const dr = require('./routes/demoReminders');
-  let tenants;
-  try {
-    tenants = (await control.query(`SELECT id, slug, org_name, db_name, status FROM tenants WHERE status='active'`)).rows;
-  } catch (_) { return; }
-  for (const row of tenants) {
-    try {
-      const pool = tenantPool.poolFor(row);
-      if (!pool) continue;
-      const t = { id: row.id, slug: row.slug, org_name: row.org_name, db_name: row.db_name };
-      await tenantDb.tenantStorage.run({ pool, tenant: t, slug: row.slug },
-        () => dr.dropMorningCardsForTenant()
-      );
-    } catch (_) {}
-  }
-}
-async function _runDemoReminderPreSweepForAllTenants() {
-  const tenantDb = require('./db/pg');
-  const tenantPool = require('./utils/tenantPool');
-  const control = require('./control/db');
-  const dr = require('./routes/demoReminders');
-  let tenants;
-  try {
-    tenants = (await control.query(`SELECT id, slug, org_name, db_name, status FROM tenants WHERE status='active'`)).rows;
-  } catch (_) { return; }
-  for (const row of tenants) {
-    try {
-      const pool = tenantPool.poolFor(row);
-      if (!pool) continue;
-      const t = { id: row.id, slug: row.slug, org_name: row.org_name, db_name: row.db_name };
-      await tenantDb.tenantStorage.run({ pool, tenant: t, slug: row.slug },
-        () => dr.dropPreDemoCardsForTenant()
-      );
-    } catch (_) {}
-  }
-}
-/* Morning batch — fire at next 10 AM IST then every 24h. */
-function _scheduleDemoReminderMorning() {
-  const now = new Date();
-  // Compute next 10:00 AM IST.
-  const istNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-  const next = new Date(istNow);
-  next.setHours(10, 0, 0, 0);
-  if (next <= istNow) next.setDate(next.getDate() + 1);
-  // Convert back to actual ms by computing offset.
-  const offsetMs = next.getTime() - istNow.getTime();
-  const wait = Math.max(1000, offsetMs);
-  setTimeout(() => {
-    _runDemoReminderMorningForAllTenants().catch(e => console.error('[demo_rem] morning', e.message));
-    setInterval(() => {
-      _runDemoReminderMorningForAllTenants().catch(e => console.error('[demo_rem] morning', e.message));
-    }, 24 * 60 * 60 * 1000);
-  }, wait);
-  console.log('[demo_rem] morning batch scheduled — next run in ' + Math.round(wait / 60000) + ' min (10 AM IST)');
-}
-/* Pre-30 sweep — every 10 minutes. */
-setInterval(() => {
-  _runDemoReminderPreSweepForAllTenants().catch(e => console.error('[demo_rem] pre-sweep', e.message));
-}, 10 * 60 * 1000);
-setTimeout(() => { _runDemoReminderPreSweepForAllTenants().catch(() => {}); }, 120_000);
-_scheduleDemoReminderMorning();
-
-// ── AI_MGR_v1 — detection cycle every 2 minutes per tenant ──
-async function _runAiManagerForAllTenants() {
-  const tenantDb = require('./db/pg');
-  const tenantPool = require('./utils/tenantPool');
-  const control = require('./control/db');
-  const aiMgr = require('./routes/aiManager');
-  // PERF_FIX_v7 — only iterate tenants in the allowlist (default: vserve only).
-  // Edit saas_settings.SWEEP_AIMGR_TENANTS (CSV of slugs) via super-admin UI.
-  const allow = await _sweepAllow('SWEEP_AIMGR_TENANTS', 'vserve');
-  if (allow.size === 0) return;
-  let tenants;
-  try {
-    tenants = (await control.query(
-      `SELECT id, slug, org_name, db_name, status FROM tenants WHERE status='active' AND slug = ANY($1::text[])`,
-      [Array.from(allow)]
-    )).rows;
-  } catch (e) { console.warn('[ai_mgr] tenant list failed:', e.message); return; }
-  for (const row of tenants) {
-    try {
-      const pool = tenantPool.poolFor(row);
-      if (!pool) continue;
-      const t = { id: row.id, slug: row.slug, org_name: row.org_name, db_name: row.db_name };
-      await tenantDb.tenantStorage.run({ pool, tenant: t, slug: row.slug },
-        () => aiMgr.runDetectionCycle()
-      );
-    } catch (e) { /* silent — single tenant failure shouldnt break cycle */ }
-  }
-}
-/* AI_MGR_CYCLE_v2: 15-minute interval (was 2 min) — less DB pressure, less alert spam */
-setInterval(() => {
-  _runAiManagerForAllTenants().catch(e => console.error('[ai_mgr] cycle failed:', e.message));
-}, 30 * 60_000);  // PERF_FIX_v5: 15min → 30min
-setTimeout(() => _runAiManagerForAllTenants().catch(() => {}), 90_000);
-
-async function _runAiManagerCoachingForAllTenants() {
-  try {
-    const aiMgr = require('./routes/aiManager');
-    if (!aiMgr || !aiMgr.generateCoachingDigest) return;
-    // PERF_FIX_v7 — only iterate tenants in the allowlist (default: vserve only).
-    // Edit saas_settings.SWEEP_AIMGR_COACH_TENANTS (CSV of slugs) via super-admin UI.
-    const allow = await _sweepAllow('SWEEP_AIMGR_COACH_TENANTS', 'vserve');
-    if (allow.size === 0) return;
-    const cr = await ctlPool.query(
-      "SELECT id, slug FROM tenants WHERE COALESCE(is_active, true)=true AND slug = ANY($1::text[])",
-      [Array.from(allow)]
-    );
-    for (const t of cr.rows) {
-      try {
-        await tenantStorage.run({ slug: t.slug, tenantId: t.id }, async () => {
-          const users = await db.query("SELECT id FROM users WHERE COALESCE(is_active, 1)=1 AND role IN ('sales','team_leader','manager')");
-          for (const u of users.rows) {
-            await aiMgr.generateCoachingDigest(u.id).catch(() => {});
-          }
-        });
-      } catch (e) { console.error('[AI_MGR_COACH]', t.slug, e.message); }
-    }
-  } catch (e) { console.error('[AI_MGR_COACH_BOOT]', e.message); }
-}
-/* Weekly coaching: every 24h. Per-user per-week row idempotent. */
-setInterval(() => _runAiManagerCoachingForAllTenants().catch(() => {}), 86400_000);
-console.log('[ai_mgr] AI Manager detection cycle started (every 2 min)');
-
-// ── REC_RETENTION_v1 — auto-delete call recordings older than N days ──
-// Daily all-tenant sweep. Each tenant's RECORDING_RETENTION_DAYS config
-// (default 30; '0'/blank disables) decides the cutoff. Full delete of the
-// lead_recordings row (audio + transcript + AI summary), per product decision.
-async function _runRecordingRetentionForAllTenants() {
-  const control = require('./control/db');
-  const tenantPool = require('./utils/tenantPool');
-  let tenants;
-  try {
-    tenants = (await control.query(
-      "SELECT id, slug, org_name, db_name FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 1000"
-    )).rows;
-  } catch (e) { console.warn('[rec-retention] tenant list failed:', e.message); return; }
-  let totalDeleted = 0, tenantsHit = 0;
-  for (const row of tenants) {
-    const pool = tenantPool.poolFor(row);
-    if (!pool) continue;
-    try {
-      // Per-tenant retention days. Default 30. Explicit '0' / negative / blank-as-0 disables.
-      let days = 30;
-      try {
-        const c = await pool.query("SELECT value FROM config WHERE key = 'RECORDING_RETENTION_DAYS' LIMIT 1");
-        if (c.rows.length) {
-          const v = String(c.rows[0].value == null ? '' : c.rows[0].value).trim();
-          if (v !== '') { const n = Number(v); if (Number.isFinite(n)) days = n; }
-        }
-      } catch (_) {}
-      if (!(days > 0)) continue;  // disabled for this tenant
-      // R2_RECORDINGS_v1 — DELETE returns the R2 keys so we can purge the
-      // objects from Cloudflare too (otherwise they'd linger + cost storage).
-      const del = await pool.query(
-        'DELETE FROM lead_recordings WHERE created_at < NOW() - make_interval(days => $1) RETURNING r2_key',
-        [Math.floor(days)]
-      );
-      const n = del.rowCount || 0;
-      try {
-        const _r2 = require('./utils/r2');
-        if (_r2.isEnabled()) {
-          for (const dr of del.rows) { if (dr.r2_key) await _r2.deleteObject(dr.r2_key); }
-        }
-      } catch (_) {}
-      if (n > 0) {
-        totalDeleted += n; tenantsHit++;
-        console.log('[rec-retention] ' + row.slug + ': deleted ' + n + ' recording(s) older than ' + days + 'd');
-      }
-    } catch (e) { console.warn('[rec-retention] ' + row.slug + ' failed:', e.message); }
-  }
-  console.log('[rec-retention] sweep done — deleted ' + totalDeleted + ' recording(s) across ' + tenantsHit + ' tenant(s)');
-}
-/* Run at the next 3 AM IST, then every 24h. Plus a one-off boot sweep. */
-function _scheduleRecordingRetention() {
-  const istNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-  const next = new Date(istNow); next.setHours(3, 0, 0, 0);
-  if (next <= istNow) next.setDate(next.getDate() + 1);
-  const wait = Math.max(1000, next.getTime() - istNow.getTime());
-  setTimeout(() => {
-    _runRecordingRetentionForAllTenants().catch(e => console.error('[rec-retention]', e.message));
-    setInterval(() => { _runRecordingRetentionForAllTenants().catch(e => console.error('[rec-retention]', e.message)); }, 24 * 60 * 60 * 1000);
-  }, wait);
-  console.log('[rec-retention] scheduled — next run in ' + Math.round(wait / 60000) + ' min (3 AM IST)');
-}
-setTimeout(() => { _runRecordingRetentionForAllTenants().catch(() => {}); }, 180_000);
-_scheduleRecordingRetention();
-
-// ── R2_RECORDINGS_v1 — background backfill: migrate legacy Postgres-stored
-// recordings into R2 in small batches so the move is gradual + safe (no
-// boot-time mega-job, no request timeouts). Only runs when R2 is configured.
-async function _runR2BackfillSweep() {
-  let _r2; try { _r2 = require('./utils/r2'); } catch (_) { return; }
-  if (!_r2.isEnabled()) return;
-  // PERF_FIX_v8 (2026-06-26) — gated by allowlist. Empty default = PAUSED.
-  // Edit saas_settings.SWEEP_R2BACKFILL_TENANTS (CSV of slugs) via super-admin
-  // UI when ready to migrate legacy Postgres-stored recordings to R2 for a
-  // specific tenant. Playback of unmigrated rows still works via PG fallback.
-  const allow = await _sweepAllow('SWEEP_R2BACKFILL_TENANTS', '');
-  if (allow.size === 0) return;
-  const control = require('./control/db');
-  const tenantPool = require('./utils/tenantPool');
-  let tenants;
-  try {
-    tenants = (await control.query(
-      "SELECT id, slug, org_name, db_name FROM tenants WHERE status IN ('active','trial','past_due') AND slug = ANY($1::text[]) ORDER BY id ASC LIMIT 1000",
-      [Array.from(allow)]
-    )).rows;
-  } catch (_) { return; }
-  let migrated = 0;
-  for (const row of tenants) {
-    const pool = tenantPool.poolFor(row);
-    if (!pool) continue;
-    try {
-      const batch = await pool.query(
-        "SELECT id, mime_type, audio_bytes FROM lead_recordings WHERE r2_key IS NULL AND audio_bytes IS NOT NULL ORDER BY id ASC LIMIT 25"
-      );
-      for (const rec of batch.rows) {
-        let buf = rec.audio_bytes;
-        if (!buf) continue;
-        if (!Buffer.isBuffer(buf)) buf = Buffer.from(buf);
-        if (buf.length === 0) continue;
-        let mime = rec.mime_type || 'audio/mp4';
-        // PERF_FIX_v1 (2026-06-25) — DROPPED the inline ffmpeg transcode here. It
-        // was spawning ffmpeg from the background sweep every minute and pegging
-        // CPU. Legacy AMR/3GP rows now stay in their original format in R2 and
-        // the /play endpoint transcodes lazily on first request only (cached).
-        // (audioTranscode is still wired up on the play path.)
-        const ext = mime.indexOf('mpeg') !== -1 ? 'mp3' : mime.indexOf('mp4') !== -1 ? 'm4a' : mime.indexOf('wav') !== -1 ? 'wav' : 'audio';
-        const key = 'rec/' + (row.slug || 'tenant') + '/backfill-' + rec.id + '-' + Date.now() + '.' + ext;
-        try {
-          await _r2.putObject(key, buf, mime);
-          await pool.query('UPDATE lead_recordings SET r2_key = $1, audio_bytes = NULL, mime_type = $2, size_bytes = $3 WHERE id = $4', [key, mime, buf.length, rec.id]);
-          migrated++;
-        } catch (e) { console.warn('[r2-backfill] ' + row.slug + ' rec ' + rec.id + ' failed:', e.message); }
-      }
-    } catch (e) { console.warn('[r2-backfill] ' + row.slug + ' batch failed:', e.message); }
-  }
-  if (migrated > 0) console.log('[r2-backfill] migrated ' + migrated + ' recording(s) to R2 this tick');
-}
-// PERF_FIX_v1 (2026-06-25) — was every 60s, way too aggressive. 25 recordings
-// per tenant per minute, with ffmpeg transcode inline, was pegging CPU and
-// stalling the event loop. Bumped to 15 minutes; transcoding moved to lazy
-// (the play endpoint handles it on first request).
-setTimeout(() => { _runR2BackfillSweep().catch(() => {}); }, 240_000);          // first run ~4 min after boot
-setInterval(() => { _runR2BackfillSweep().catch(e => console.error('[r2-backfill]', e.message)); }, 15 * 60_000);  // then every 15 min
-
-// ── WL_BILLING_CRON_v1 — daily auto-bill at 9am IST ──
-// Runs once at 9:00 IST. Generates invoices for every active customer
-// whose billing_day == today's day-of-month, then auto-sends the invoice
-// via WhatsApp (uses WL_WA_PHONE_NUMBER_ID + WL_WA_ACCESS_TOKEN).
-// Single-fire guard: tracks last-fired-day in-memory so a process that
-// stays up through 9am only fires once. A restart after 9am won't re-fire
-// because generateMonth is idempotent (skips if invoice exists for the
-// current period_month).
-let _wlBillingLastFiredYMD = null;
-async function _maybeRunWLBillingCron() {
-  try {
-    const ist = new Date(Date.now() + 5.5 * 3600e3);
-    const ymd = ist.toISOString().slice(0, 10);
-    const hourIST = ist.getUTCHours();
-    if (hourIST !== 9) return;
-    if (_wlBillingLastFiredYMD === ymd) return;
-    let wl; try { wl = require('./routes/saas/whiteLabelBilling'); } catch (e) { return; }
-    if (typeof wl._runBillingForToday !== 'function') return;
-    _wlBillingLastFiredYMD = ymd;
-    const out = await wl._runBillingForToday({});
-    console.log('[wl-billing-cron] fired @09 IST — due_today=' + out.due_today +
-                ' generated=' + (out.generated || []).length +
-                ' sent=' + (out.sent || []).length +
-                (out.errors && out.errors.length ? ' errors=' + out.errors.length : ''));
-  } catch (e) { console.warn('[wl-billing-cron]', e.message); }
-}
-setInterval(_maybeRunWLBillingCron, 5 * 60 * 1000);  // every 5 min
-setTimeout(_maybeRunWLBillingCron, 60_000);
-console.log('[wl-billing-cron] WL Billing daily worker started (fires 9am IST)');
-
-// ── META_CAPI_v1 — daily 10pm IST per-tenant Meta Conversions API tick ──
-// Mirrors the Google CSV path. Each tenant tick decides whether to fire
-// (IST hour=22 + not already today + feature is ON). Real-time dispatch
-// already runs via routes/leads.js status-change hook — this catches any
-// events the real-time path missed (network errors, server restarts).
-async function _runMetaCapiForAllTenants() {
-  // PERF_FIX_v2 — only iterate tenants in the allowlist (default: vserve only).
-  // Edit saas_settings.SWEEP_MCAPI_TENANTS (CSV of slugs) via super-admin UI.
-  const allow = await _sweepAllow('SWEEP_MCAPI_TENANTS', 'vserve');
-  if (allow.size === 0) return;
-  let rows = [];
-  try {
-    const r = await controlDb.query(
-      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') AND slug = ANY($1::text[]) ORDER BY id ASC LIMIT 500`,
-      [Array.from(allow)]
-    );
-    rows = r.rows;
-  } catch (e) { console.warn('[meta-capi] tenant list failed:', e.message); return; }
-  let mcapi;
-  try { mcapi = require('./routes/metaConvExport'); } catch (e) { return; }
-  if (!mcapi._maybeDailyTickForCurrentTenant) return;
-  for (const row of rows) {
-    let t; try { t = await tenantPoolMod.findActiveTenant(row.slug); } catch (_) { continue; }
-    if (!t) continue;
-    const pool = tenantPoolMod.poolFor(t);
-    if (!pool) continue;
-    try {
-      await tenantDb.tenantStorage.run({ pool, tenant: t, slug: row.slug },
-        () => mcapi._maybeDailyTickForCurrentTenant(row.slug)
-      );
-    } catch (e) { console.warn(`[meta-capi] ${row.slug} tick failed:`, e.message); }
-  }
-}
-setInterval(() => {
-  _runMetaCapiForAllTenants().catch(e => console.error('[meta-capi] cycle failed:', e.message));
-}, 3 * 60_000);
-setTimeout(() => _runMetaCapiForAllTenants().catch(() => {}), 90_000);
-console.log('[meta-capi] Meta Conversions API daily worker started');
 
 // ── Background: per-tenant Nurture sequence worker ──────────────────────
 // Picks up nurture_step_runs that are due and dispatches them via the
 // channel-appropriate send path (WA template / email / AI bot). Exit
 // conditions (customer reply, status change) are evaluated per step.
 async function _runNurtureForAllTenants() {
-  // PERF_FIX_v5 — gated by saas_settings allowlist. Default empty = skip.
-  // Set SWEEP_NURTURE_TENANTS in super-admin Settings → Performance.
-  const allow = await _sweepAllow('SWEEP_NURTURE_TENANTS', '');
-  if (allow.size === 0) return;
   let rows = [];
   try {
     const r = await controlDb.query(
-      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') AND slug = ANY($1::text[]) ORDER BY id ASC LIMIT 500`,
-      [Array.from(allow)]
+      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500`
     );
     rows = r.rows;
   } catch (e) { console.warn('[nurture] tenant list failed:', e.message); return; }
@@ -4077,128 +2477,13 @@ async function _runEduRemindersForAllTenants() {
         () => worker.tick()
       );
     } catch (e) { console.warn(`[eduReminder] ${row.slug} tick failed:`, e.message); }
-    // PERF_FIX_v6 (2026-06-26) — yield between tenants so the cron doesn't
-    // burst-acquire 60 pool connections at once and exhaust PG.
-    await new Promise(res => setTimeout(res, 250));
   }
 }
 setInterval(() => {
   _runEduRemindersForAllTenants().catch(e => console.error('[eduReminder] cycle failed:', e.message));
 }, Number(process.env.EDU_REMINDER_INTERVAL_MS || 60 * 60_000));   // hourly
-// PERF_FIX_v6 — staggered to 5 min past the hour
-setTimeout(() => _runEduRemindersForAllTenants().catch(() => {}), 5 * 60_000);
+setTimeout(() => _runEduRemindersForAllTenants().catch(() => {}), 90_000);
 console.log('[eduReminder] worker started — hourly tick');
-
-// ── Background: per-tenant Real Estate demand-letter reminder worker ──
-async function _runReRemindersForAllTenants() {
-  let rows = [];
-  try {
-    const r = await controlDb.query(
-      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500`
-    );
-    rows = r.rows;
-  } catch (e) { console.warn('[reReminder] tenant list failed:', e.message); return; }
-  let worker;
-  try { worker = require('./utils/reReminderWorker'); } catch (e) { return; }
-  if (!worker || !worker.tick) return;
-  for (const row of rows) {
-    let t; try { t = await tenantPoolMod.findActiveTenant(row.slug); } catch (_) { continue; }
-    if (!t) continue;
-    const pool = tenantPoolMod.poolFor(t);
-    if (!pool) continue;
-    try {
-      await tenantDb.tenantStorage.run({ pool, tenant: t, slug: row.slug },
-        () => worker.tick()
-      );
-    } catch (e) { console.warn(`[reReminder] ${row.slug} tick failed:`, e.message); }
-    // PERF_FIX_v6 — yield between tenants
-    await new Promise(res => setTimeout(res, 250));
-  }
-}
-setInterval(() => {
-  _runReRemindersForAllTenants().catch(e => console.error('[reReminder] cycle failed:', e.message));
-}, Number(process.env.RE_REMINDER_INTERVAL_MS || 60 * 60_000));   // hourly
-// PERF_FIX_v6 — staggered to 25 min past the hour (20 min after Edu)
-setTimeout(() => _runReRemindersForAllTenants().catch(() => {}), 25 * 60_000);
-console.log('[reReminder] Real Estate demand-letter worker started — hourly tick');
-
-
-// ── COMPLIANCE_v1 — daily violation scan ───────────────────────────────
-// Every tenant gets a compliance.runDailyScan() once per hour. Cheap if
-// no rules are enabled (early-exit), otherwise sweeps all daily-flagged
-// rules (np_min_dials, idle_in_stage, min_daily_activity) and writes to
-// compliance_violations. The real-time rules (followup_requires_call)
-// fire from routes/leads.js so don't need the scheduler.
-async function _runComplianceScanForAllTenants() {
-  let rows = [];
-  try {
-    const r = await controlDb.query(
-      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500`
-    );
-    rows = r.rows;
-  } catch (e) { console.warn('[compliance] tenant list failed:', e.message); return; }
-  let compliance;
-  try { compliance = require('./routes/compliance'); } catch (_) { return; }
-  if (!compliance || !compliance.runDailyScan) return;
-  for (const row of rows) {
-    let t; try { t = await tenantPoolMod.findActiveTenant(row.slug); } catch (_) { continue; }
-    if (!t) continue;
-    const pool = tenantPoolMod.poolFor(t);
-    if (!pool) continue;
-    try {
-      await tenantDb.tenantStorage.run({ pool, tenant: t, slug: row.slug }, async () => {
-        const r = await compliance.runDailyScan();
-        if (r && Number(r.violations_logged) > 0) {
-          console.log('[compliance] ' + row.slug + ': ' + r.violations_logged + ' violations from ' + r.rules_run + ' rules');
-        }
-      });
-    } catch (e) { console.warn('[compliance] ' + row.slug + ' scan failed:', e.message); }
-    // PERF_FIX_v6 — yield between tenants
-    await new Promise(res => setTimeout(res, 250));
-  }
-}
-setInterval(() => {
-  _runComplianceScanForAllTenants().catch(e => console.error('[compliance] cycle failed:', e.message));
-}, Number(process.env.COMPLIANCE_INTERVAL_MS || 60 * 60_000));   // hourly
-// PERF_FIX_v6 — staggered to 45 min past the hour (20 min after RE)
-setTimeout(() => _runComplianceScanForAllTenants().catch(() => {}), 45 * 60_000);
-console.log('[compliance] daily violation scan worker started — hourly tick');
-
-
-// ── REPORT_SCHEDULE_v1 — scheduled-report dispatcher (per-tenant, hourly) ──
-// Walks tenants once per hour. For each, picks up report_schedules whose
-// next_run_at <= NOW, runs the saved report, sends to email + WhatsApp
-// recipients, advances next_run_at by frequency.
-async function _runScheduledReportsForAllTenants() {
-  let rows = [];
-  try {
-    const r = await controlDb.query(
-      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500`
-    );
-    rows = r.rows;
-  } catch (e) { console.warn('[reportSchedule] tenant list failed:', e.message); return; }
-  let mod;
-  try { mod = require('./routes/reportTemplates'); } catch (_) { return; }
-  if (!mod || !mod.tickScheduledReports) return;
-  for (const row of rows) {
-    let t; try { t = await tenantPoolMod.findActiveTenant(row.slug); } catch (_) { continue; }
-    if (!t) continue;
-    const pool = tenantPoolMod.poolFor(t);
-    if (!pool) continue;
-    try {
-      await tenantDb.tenantStorage.run({ pool, tenant: t, slug: row.slug }, async () => {
-        const r = await mod.tickScheduledReports();
-        if (r && r.ran > 0) console.log('[reportSchedule] ' + row.slug + ': ran ' + r.ran + ' schedules');
-      });
-    } catch (e) { console.warn('[reportSchedule] ' + row.slug + ' tick failed:', e.message); }
-  }
-}
-setInterval(() => {
-  _runScheduledReportsForAllTenants().catch(e => console.error('[reportSchedule] cycle failed:', e.message));
-}, Number(process.env.REPORT_SCHEDULE_INTERVAL_MS || 15 * 60_000));   // every 15 min
-setTimeout(() => _runScheduledReportsForAllTenants().catch(() => {}), 240_000);
-console.log('[reportSchedule] scheduled-report dispatcher started — 15-min tick');
-
 
 // ── Background: per-tenant AI Call Summary worker ──────────────────────
 // aiCallSummary.startWorker() is only wired in server.tenant.js. Without
@@ -4207,24 +2492,11 @@ console.log('[reportSchedule] scheduled-report dispatcher started — 15-min tic
 // button. Walk every active tenant once a minute and run _tick() inside
 // that tenant's storage scope so the existing 'WHERE ai_processed_at IS
 // NULL LIMIT 5' query runs against per-tenant DB pools.
-// 🔒 LOCKED — AI Call Summary worker. Respects per-tenant
-// AI_TRANSCRIPTION_ENABLED config (see processRecording in
-// utils/aiCallSummary.js). Ask before modifying the schedule.
-
 async function _runAiCallSummaryForAllTenants() {
-  // PERF_FIX_v3 — AI call summary is BOTH globally off via env AND gated by
-  // a per-tenant allowlist. The env stays OFF by default; even if it's
-  // flipped on, only tenants in SWEEP_AISUMMARY_TENANTS get processed.
-  // Default allowlist = '' (everyone off). Super-admin opts tenants in.
-  if (String(process.env.AI_TRANSCRIPTION_GLOBAL_OFF || '1') === '1') return;
-  const allow = await _sweepAllow('SWEEP_AISUMMARY_TENANTS', '');
-  if (allow.size === 0) return;
-
   let rows = [];
   try {
     const r = await controlDb.query(
-      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') AND slug = ANY($1::text[]) ORDER BY id ASC LIMIT 500`,
-      [Array.from(allow)]
+      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500`
     );
     rows = r.rows;
   } catch (e) { console.warn('[ai-summary] tenant list failed:', e.message); return; }
@@ -4245,624 +2517,12 @@ async function _runAiCallSummaryForAllTenants() {
 }
 setInterval(() => {
   _runAiCallSummaryForAllTenants().catch(e => console.error('[ai-summary] cycle failed:', e.message));
-}, Number(process.env.AI_CALL_SUMMARY_INTERVAL_MS || 3 * 60_000));
+}, Number(process.env.AI_CALL_SUMMARY_INTERVAL_MS || 60_000));
 // Initial pass 45s after boot to let the AI key + DB pools warm up.
 setTimeout(() => _runAiCallSummaryForAllTenants().catch(() => {}), 45_000);
 console.log('[ai-summary] SaaS-aware Gemini call-summary worker started');
 
 
-
-
-// REC_CALLEVENT_TIME_FIX_v1 — one-shot backfill: any historical
-// call_events.created_at that was stamped at upload time gets rewritten
-// to the recording's actual started_at. Gated by a control-DB flag so
-// it runs ONCE across deploys. The UPDATE itself is idempotent (only
-// touches rows where the gap exceeds 60s) so re-runs are safe; the
-// flag is just to avoid the wasted scan on every boot.
-async function _runCallEventTimeBackfill() {
-  try {
-    const ranAlready = await controlDb.query(
-      "SELECT 1 FROM saas_flags WHERE key = 'rec_callevent_time_backfill_v1' LIMIT 1"
-    ).catch(() => ({ rows: [] }));
-    if (ranAlready.rows && ranAlready.rows.length) {
-      console.log('[rec-callevent-backfill] already ran on a prior boot — skipping');
-      return;
-    }
-    // Ensure flags table exists (rare on fresh installs).
-    try {
-      await controlDb.query(
-        'CREATE TABLE IF NOT EXISTS saas_flags (key TEXT PRIMARY KEY, value TEXT, ran_at TIMESTAMPTZ DEFAULT NOW())'
-      );
-    } catch (_) {}
-    const r = await controlDb.query(
-      "SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500"
-    );
-    const slugs = r.rows.map(x => x.slug);
-    console.log('[rec-callevent-backfill] starting — ' + slugs.length + ' tenants');
-    let totalUpdated = 0, totalTenants = 0;
-    for (const slug of slugs) {
-      let t; try { t = await tenantPoolMod.findActiveTenant(slug); } catch (_) { continue; }
-      if (!t) continue;
-      const pool = tenantPoolMod.poolFor(t);
-      if (!pool) continue;
-      try {
-        const u = await pool.query(`
-          UPDATE call_events ce
-             SET created_at = lr.started_at
-            FROM lead_recordings lr
-           WHERE ce.recording_id = lr.id
-             AND ce.event = 'recording_saved'
-             AND lr.started_at IS NOT NULL
-             AND lr.started_at < ce.created_at - INTERVAL '60 seconds'
-        `);
-        const n = u.rowCount || 0;
-        if (n > 0) {
-          console.log('[rec-callevent-backfill] ' + slug + ' — updated ' + n + ' rows');
-          totalUpdated += n;
-        }
-        totalTenants++;
-      } catch (e) {
-        console.warn('[rec-callevent-backfill] ' + slug + ' failed: ' + e.message);
-      }
-    }
-    console.log('[rec-callevent-backfill] done — ' + totalUpdated + ' rows updated across ' + totalTenants + ' tenants');
-    try {
-      await controlDb.query(
-        "INSERT INTO saas_flags (key, value) VALUES ('rec_callevent_time_backfill_v1', $1) ON CONFLICT (key) DO NOTHING",
-        [JSON.stringify({ tenants: totalTenants, rows: totalUpdated })]
-      );
-    } catch (_) {}
-  } catch (e) {
-    console.error('[rec-callevent-backfill] failed:', e.message);
-  }
+  app.listen(PORT, () => console.log('[boot] SmartCRM SaaS listening on :' + PORT));
 }
-// Run 90s after boot so per-tenant pools have warmed up.
-setTimeout(() => _runCallEventTimeBackfill().catch(() => {}), 90_000);
-
-// REC_DIRECTION_BACKFILL_v1 (2026-06-04) — flip historical recording_saved
-// rows that were defaulted to direction='out' but should have been 'in'.
-// Criterion: a paired incoming_ringing exists for the same user+phone
-// within ±10 min of the recording_saved row. Only affects the last 7 days
-// of data per tenant to keep the scan bounded and conservative.
-// Idempotent: re-running only flips rows that still match the criterion;
-// once flipped to 'in', they won't match the WHERE clause again.
-async function _runRecordingDirectionBackfill() {
-  try {
-    const ranAlready = await controlDb.query(
-      "SELECT 1 FROM saas_flags WHERE key = 'rec_direction_backfill_v1' LIMIT 1"
-    ).catch(() => ({ rows: [] }));
-    if (ranAlready.rows && ranAlready.rows.length) {
-      console.log('[rec-direction-backfill] already ran on a prior boot — skipping');
-      return;
-    }
-    try {
-      await controlDb.query(
-        'CREATE TABLE IF NOT EXISTS saas_flags (key TEXT PRIMARY KEY, value TEXT, ran_at TIMESTAMPTZ DEFAULT NOW())'
-      );
-    } catch (_) {}
-    const r = await controlDb.query(
-      "SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500"
-    );
-    const slugs = r.rows.map(x => x.slug);
-    console.log('[rec-direction-backfill] starting — ' + slugs.length + ' tenants');
-    let totalUpdated = 0, totalTenants = 0;
-    for (const slug of slugs) {
-      let t; try { t = await tenantPoolMod.findActiveTenant(slug); } catch (_) { continue; }
-      if (!t) continue;
-      const pool = tenantPoolMod.poolFor(t);
-      if (!pool) continue;
-      try {
-        const u = await pool.query(`
-          UPDATE call_events ce
-             SET direction = 'in'
-           WHERE ce.event = 'recording_saved'
-             AND ce.direction = 'out'
-             AND ce.created_at >= NOW() - INTERVAL '7 days'
-             AND EXISTS (
-               SELECT 1 FROM call_events ce2
-                WHERE ce2.user_id = ce.user_id
-                  AND ce2.phone   = ce.phone
-                  AND ce2.event   = 'incoming_ringing'
-                  AND ce2.direction = 'in'
-                  AND ce2.created_at BETWEEN ce.created_at - INTERVAL '10 minutes'
-                                         AND ce.created_at + INTERVAL '2 minutes'
-             )
-        `);
-        const n = u.rowCount || 0;
-        if (n > 0) {
-          console.log('[rec-direction-backfill] ' + slug + ' — flipped ' + n + ' rows to direction=in');
-          totalUpdated += n;
-        }
-        totalTenants++;
-      } catch (e) {
-        console.warn('[rec-direction-backfill] ' + slug + ' failed: ' + e.message);
-      }
-    }
-    console.log('[rec-direction-backfill] done — ' + totalUpdated + ' rows flipped across ' + totalTenants + ' tenants');
-    try {
-      await controlDb.query(
-        "INSERT INTO saas_flags (key, value) VALUES ('rec_direction_backfill_v1', $1) ON CONFLICT (key) DO NOTHING",
-        [JSON.stringify({ tenants: totalTenants, rows: totalUpdated })]
-      );
-    } catch (_) {}
-  } catch (e) {
-    console.error('[rec-direction-backfill] failed:', e.message);
-  }
-}
-// Run 120s after boot — 30s after the call-event time backfill, so they
-// don't contend for tenant pools.
-setTimeout(() => _runRecordingDirectionBackfill().catch(() => {}), 120_000);
-
-// CALL_TODAY_CLEANUP_v1 (2026-06-04) — hard-clean today's call_events
-// (last 24h) across every tenant. The read-time dedup SQL handles new
-// data correctly, but historical rows from BEFORE the dedup landed are
-// still polluting Call Activity feeds (especially on tenants like
-// learnimo and vserve where calls are frequent). This task physically
-// removes the noise rows so reports + recent-calls feed agree exactly.
-//
-// Steps per tenant pool (all bounded to ce.created_at >= NOW() - 24h):
-//   1. Delete duplicate call_events posted by the dual-bridge —
-//      same (user_id, phone, event) within 12s of an earlier row.
-//      Keep the earliest, drop the later siblings.
-//   2. Delete orphan incoming_ringing rows that have a paired
-//      call_ended (within 10 min) OR recording_saved (within
-//      -2 min to +30 min). The pairing event represents the call;
-//      the RINGING is redundant.
-//   3. Flip call_ended direction='out' → 'in' when a paired
-//      incoming_ringing (direction='in') exists in the prior 10 min.
-//      Same defaulting bug as recording_saved had.
-//   4. Belt-and-braces: re-run the recording_saved direction flip.
-async function _runCallTodayCleanup() {
-  try {
-    const ranAlready = await controlDb.query(
-      "SELECT 1 FROM saas_flags WHERE key = 'call_today_cleanup_v1' LIMIT 1"
-    ).catch(() => ({ rows: [] }));
-    if (ranAlready.rows && ranAlready.rows.length) {
-      console.log('[call-today-cleanup] already ran on a prior boot — skipping');
-      return;
-    }
-    try {
-      await controlDb.query(
-        'CREATE TABLE IF NOT EXISTS saas_flags (key TEXT PRIMARY KEY, value TEXT, ran_at TIMESTAMPTZ DEFAULT NOW())'
-      );
-    } catch (_) {}
-    const r = await controlDb.query(
-      "SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500"
-    );
-    const slugs = r.rows.map(x => x.slug);
-    console.log('[call-today-cleanup] starting — ' + slugs.length + ' tenants');
-    let totalDupDeleted = 0, totalRingDeleted = 0, totalCallEndedFlipped = 0, totalRecFlipped = 0, totalTenants = 0;
-    for (const slug of slugs) {
-      let t; try { t = await tenantPoolMod.findActiveTenant(slug); } catch (_) { continue; }
-      if (!t) continue;
-      const pool = tenantPoolMod.poolFor(t);
-      if (!pool) continue;
-      let dupN = 0, ringN = 0, ceFlipN = 0, recFlipN = 0;
-      try {
-        // Step 1: dedup dual-bridge duplicates
-        const d1 = await pool.query(`
-          WITH dups AS (
-            SELECT ce.id
-              FROM call_events ce
-              JOIN call_events ce_earlier
-                ON ce_earlier.user_id = ce.user_id
-               AND ce_earlier.phone   = ce.phone
-               AND ce_earlier.event   = ce.event
-               AND ce_earlier.id      < ce.id
-               AND ce_earlier.created_at >= ce.created_at - INTERVAL '12 seconds'
-             WHERE ce.created_at >= NOW() - INTERVAL '24 hours'
-          )
-          DELETE FROM call_events WHERE id IN (SELECT id FROM dups)
-        `);
-        dupN = d1.rowCount || 0;
-
-        // Step 2: delete orphan incoming_ringing rows paired with call_ended OR recording_saved
-        const d2 = await pool.query(`
-          DELETE FROM call_events ce
-           WHERE ce.event = 'incoming_ringing'
-             AND ce.created_at >= NOW() - INTERVAL '24 hours'
-             AND (
-               EXISTS (
-                 SELECT 1 FROM call_events ce2
-                  WHERE ce2.user_id = ce.user_id
-                    AND ce2.phone   = ce.phone
-                    AND ce2.event   = 'call_ended'
-                    AND ce2.created_at BETWEEN ce.created_at AND ce.created_at + INTERVAL '10 minutes'
-               )
-               OR EXISTS (
-                 SELECT 1 FROM call_events ce3
-                  WHERE ce3.user_id = ce.user_id
-                    AND ce3.phone   = ce.phone
-                    AND ce3.event   = 'recording_saved'
-                    AND ce3.created_at BETWEEN ce.created_at - INTERVAL '2 minutes'
-                                           AND ce.created_at + INTERVAL '30 minutes'
-               )
-             )
-        `);
-        ringN = d2.rowCount || 0;
-
-        // Step 3: flip call_ended direction
-        const u3 = await pool.query(`
-          UPDATE call_events ce
-             SET direction = 'in'
-           WHERE ce.event = 'call_ended'
-             AND ce.direction = 'out'
-             AND ce.created_at >= NOW() - INTERVAL '24 hours'
-             AND EXISTS (
-               SELECT 1 FROM call_events ce2
-                WHERE ce2.user_id = ce.user_id
-                  AND ce2.phone   = ce.phone
-                  AND ce2.event   = 'incoming_ringing'
-                  AND ce2.direction = 'in'
-                  AND ce2.created_at BETWEEN ce.created_at - INTERVAL '10 minutes'
-                                         AND ce.created_at + INTERVAL '2 minutes'
-             )
-        `);
-        ceFlipN = u3.rowCount || 0;
-
-        // Step 4: flip recording_saved direction (belt-and-braces in case the prior backfill missed any)
-        const u4 = await pool.query(`
-          UPDATE call_events ce
-             SET direction = 'in'
-           WHERE ce.event = 'recording_saved'
-             AND ce.direction = 'out'
-             AND ce.created_at >= NOW() - INTERVAL '24 hours'
-             AND EXISTS (
-               SELECT 1 FROM call_events ce2
-                WHERE ce2.user_id = ce.user_id
-                  AND ce2.phone   = ce.phone
-                  AND ce2.event   = 'incoming_ringing'
-                  AND ce2.direction = 'in'
-                  AND ce2.created_at BETWEEN ce.created_at - INTERVAL '10 minutes'
-                                         AND ce.created_at + INTERVAL '2 minutes'
-             )
-        `);
-        recFlipN = u4.rowCount || 0;
-
-        if (dupN || ringN || ceFlipN || recFlipN) {
-          console.log('[call-today-cleanup] ' + slug + ' — dup-del:' + dupN
-            + ' ring-del:' + ringN + ' ce-flip:' + ceFlipN + ' rec-flip:' + recFlipN);
-          totalDupDeleted += dupN; totalRingDeleted += ringN;
-          totalCallEndedFlipped += ceFlipN; totalRecFlipped += recFlipN;
-        }
-        totalTenants++;
-      } catch (e) {
-        console.warn('[call-today-cleanup] ' + slug + ' failed: ' + e.message);
-      }
-    }
-    console.log('[call-today-cleanup] done — '
-      + totalDupDeleted + ' dups, '
-      + totalRingDeleted + ' orphan rings, '
-      + totalCallEndedFlipped + ' call_ended flipped, '
-      + totalRecFlipped + ' recording_saved flipped across '
-      + totalTenants + ' tenants');
-    try {
-      await controlDb.query(
-        "INSERT INTO saas_flags (key, value) VALUES ('call_today_cleanup_v1', $1) ON CONFLICT (key) DO NOTHING",
-        [JSON.stringify({
-          tenants: totalTenants,
-          dups_deleted: totalDupDeleted,
-          rings_deleted: totalRingDeleted,
-          ce_flipped: totalCallEndedFlipped,
-          rec_flipped: totalRecFlipped
-        })]
-      );
-    } catch (_) {}
-  } catch (e) {
-    console.error('[call-today-cleanup] failed:', e.message);
-  }
-}
-// Run 180s after boot — after the other two backfills so we don't
-// contend for tenant pools and so this runs AFTER REC_DIRECTION_BACKFILL_v1
-// has already done the 7-day window. This step is the surgical 24h pass.
-setTimeout(() => _runCallTodayCleanup().catch(() => {}), 180_000);
-
-// CALL_HISTORY_BURST_DELETE_v1 (2026-06-04) — APK CallLog bulk import
-// (CALL_HISTORY_SYNC_v2) posted historical entries with created_at=NOW(),
-// so any one tenant ends up with many different phones stamped at the
-// exact same second. The user's screenshot showed 9 calls all at one
-// 10:19:32 am moment on learnimo, with mixed directions and 8 of 9
-// having no duration — classic bulk-import artifact.
-// This pass deletes burst clusters from the last 7 days, defined as:
-//   any (user_id, created_at down-to-second) group containing >= 5
-//   different phone numbers. That signature is impossible for real-time
-//   call posting (no human dials 5 distinct numbers in one second).
-async function _runCallHistoryBurstDelete() {
-  try {
-    const ranAlready = await controlDb.query(
-      "SELECT 1 FROM saas_flags WHERE key = 'call_history_burst_delete_v1' LIMIT 1"
-    ).catch(() => ({ rows: [] }));
-    if (ranAlready.rows && ranAlready.rows.length) {
-      console.log('[call-history-burst-delete] already ran on a prior boot — skipping');
-      return;
-    }
-    try {
-      await controlDb.query(
-        'CREATE TABLE IF NOT EXISTS saas_flags (key TEXT PRIMARY KEY, value TEXT, ran_at TIMESTAMPTZ DEFAULT NOW())'
-      );
-    } catch (_) {}
-    const r = await controlDb.query(
-      "SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500"
-    );
-    const slugs = r.rows.map(x => x.slug);
-    console.log('[call-history-burst-delete] starting — ' + slugs.length + ' tenants');
-    let totalDeleted = 0, totalTenants = 0;
-    for (const slug of slugs) {
-      let t; try { t = await tenantPoolMod.findActiveTenant(slug); } catch (_) { continue; }
-      if (!t) continue;
-      const pool = tenantPoolMod.poolFor(t);
-      if (!pool) continue;
-      try {
-        const u = await pool.query(`
-          WITH bursts AS (
-            SELECT user_id, date_trunc('second', created_at) AS ts
-              FROM call_events
-             WHERE created_at >= NOW() - INTERVAL '7 days'
-             GROUP BY user_id, date_trunc('second', created_at)
-            HAVING COUNT(DISTINCT phone) >= 5
-          )
-          DELETE FROM call_events ce
-           WHERE ce.created_at >= NOW() - INTERVAL '7 days'
-             AND EXISTS (
-               SELECT 1 FROM bursts b
-                WHERE b.user_id = ce.user_id
-                  AND b.ts = date_trunc('second', ce.created_at)
-             )
-             -- Keep rows that have an attached recording — those represent
-             -- real talk time and shouldn't be wiped by a burst-detector.
-             AND ce.recording_id IS NULL
-        `);
-        const n = u.rowCount || 0;
-        if (n > 0) {
-          console.log('[call-history-burst-delete] ' + slug + ' — deleted ' + n + ' burst rows');
-          totalDeleted += n;
-        }
-        totalTenants++;
-      } catch (e) {
-        console.warn('[call-history-burst-delete] ' + slug + ' failed: ' + e.message);
-      }
-    }
-    console.log('[call-history-burst-delete] done — ' + totalDeleted + ' rows across ' + totalTenants + ' tenants');
-    try {
-      await controlDb.query(
-        "INSERT INTO saas_flags (key, value) VALUES ('call_history_burst_delete_v1', $1) ON CONFLICT (key) DO NOTHING",
-        [JSON.stringify({ tenants: totalTenants, rows: totalDeleted })]
-      );
-    } catch (_) {}
-  } catch (e) {
-    console.error('[call-history-burst-delete] failed:', e.message);
-  }
-}
-setTimeout(() => _runCallHistoryBurstDelete().catch(() => {}), 240_000);
-
-// CALL_LAST48H_CLEANUP_v1 (2026-06-04) — re-run every cleanup step with
-// a 48-hour window to catch YESTERDAY's data (the original 24h pass
-// missed cross-midnight rows on tenants like learnimo and vserve where
-// the user did test calls before the cutoff).
-//
-// All six steps in one pass, ordered so each step is safe even if a
-// prior step already ran via the older one-shot tasks:
-//   1. Backfill call_events.created_at from lead_recordings.started_at
-//      where the gap is >60s (covers recording_saved + the new 'at' path).
-//   2. Burst delete (>=5 distinct phones at same created_at second).
-//   3. Delete duplicate dual-bridge posts (same user+phone+event in 12s).
-//   4. Delete orphan incoming_ringing rows paired with call_ended OR
-//      recording_saved.
-//   5. Flip call_ended direction 'out' → 'in' when paired RINGING exists.
-//   6. Flip recording_saved direction 'out' → 'in' when paired RINGING.
-async function _runCallLast48hCleanup() {
-  try {
-    const ranAlready = await controlDb.query(
-      "SELECT 1 FROM saas_flags WHERE key = 'call_last48h_cleanup_v1' LIMIT 1"
-    ).catch(() => ({ rows: [] }));
-    if (ranAlready.rows && ranAlready.rows.length) {
-      console.log('[call-48h-cleanup] already ran on a prior boot — skipping');
-      return;
-    }
-    try {
-      await controlDb.query(
-        'CREATE TABLE IF NOT EXISTS saas_flags (key TEXT PRIMARY KEY, value TEXT, ran_at TIMESTAMPTZ DEFAULT NOW())'
-      );
-    } catch (_) {}
-    const r = await controlDb.query(
-      "SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500"
-    );
-    const slugs = r.rows.map(x => x.slug);
-    console.log('[call-48h-cleanup] starting — ' + slugs.length + ' tenants');
-    let totals = { tenants: 0, time_fixed: 0, burst_del: 0, dup_del: 0, ring_del: 0, ce_flip: 0, rec_flip: 0 };
-    for (const slug of slugs) {
-      let t; try { t = await tenantPoolMod.findActiveTenant(slug); } catch (_) { continue; }
-      if (!t) continue;
-      const pool = tenantPoolMod.poolFor(t);
-      if (!pool) continue;
-      const per = { time_fixed: 0, burst_del: 0, dup_del: 0, ring_del: 0, ce_flip: 0, rec_flip: 0 };
-      try {
-        // Step 1: backfill created_at from recording's started_at
-        const u1 = await pool.query(`
-          UPDATE call_events ce SET created_at = lr.started_at
-            FROM lead_recordings lr
-           WHERE ce.recording_id = lr.id
-             AND ce.created_at >= NOW() - INTERVAL '48 hours'
-             AND lr.started_at IS NOT NULL
-             AND lr.started_at < ce.created_at - INTERVAL '60 seconds'
-        `); per.time_fixed = u1.rowCount || 0;
-
-        // Step 2: burst delete — >=5 distinct phones at same second, no recording
-        const u2 = await pool.query(`
-          WITH bursts AS (
-            SELECT user_id, date_trunc('second', created_at) AS ts
-              FROM call_events
-             WHERE created_at >= NOW() - INTERVAL '48 hours'
-             GROUP BY user_id, date_trunc('second', created_at)
-            HAVING COUNT(DISTINCT phone) >= 5
-          )
-          DELETE FROM call_events ce
-           WHERE ce.created_at >= NOW() - INTERVAL '48 hours'
-             AND ce.recording_id IS NULL
-             AND EXISTS (
-               SELECT 1 FROM bursts b
-                WHERE b.user_id = ce.user_id
-                  AND b.ts = date_trunc('second', ce.created_at)
-             )
-        `); per.burst_del = u2.rowCount || 0;
-
-        // Step 3: dual-bridge duplicate dedup
-        const u3 = await pool.query(`
-          WITH dups AS (
-            SELECT ce.id FROM call_events ce
-              JOIN call_events ce_earlier ON
-                   ce_earlier.user_id = ce.user_id
-               AND ce_earlier.phone   = ce.phone
-               AND ce_earlier.event   = ce.event
-               AND ce_earlier.id      < ce.id
-               AND ce_earlier.created_at >= ce.created_at - INTERVAL '12 seconds'
-             WHERE ce.created_at >= NOW() - INTERVAL '48 hours'
-          )
-          DELETE FROM call_events WHERE id IN (SELECT id FROM dups)
-        `); per.dup_del = u3.rowCount || 0;
-
-        // Step 4: orphan incoming_ringing paired with call_ended OR recording_saved
-        const u4 = await pool.query(`
-          DELETE FROM call_events ce
-           WHERE ce.event = 'incoming_ringing'
-             AND ce.created_at >= NOW() - INTERVAL '48 hours'
-             AND (
-               EXISTS (
-                 SELECT 1 FROM call_events ce2
-                  WHERE ce2.user_id = ce.user_id AND ce2.phone = ce.phone
-                    AND ce2.event = 'call_ended'
-                    AND ce2.created_at BETWEEN ce.created_at AND ce.created_at + INTERVAL '10 minutes'
-               )
-               OR EXISTS (
-                 SELECT 1 FROM call_events ce3
-                  WHERE ce3.user_id = ce.user_id AND ce3.phone = ce.phone
-                    AND ce3.event = 'recording_saved'
-                    AND ce3.created_at BETWEEN ce.created_at - INTERVAL '2 minutes'
-                                           AND ce.created_at + INTERVAL '30 minutes'
-               )
-             )
-        `); per.ring_del = u4.rowCount || 0;
-
-        // Step 5: flip call_ended direction
-        const u5 = await pool.query(`
-          UPDATE call_events ce SET direction = 'in'
-           WHERE ce.event = 'call_ended'
-             AND ce.direction = 'out'
-             AND ce.created_at >= NOW() - INTERVAL '48 hours'
-             AND EXISTS (
-               SELECT 1 FROM call_events ce2
-                WHERE ce2.user_id = ce.user_id AND ce2.phone = ce.phone
-                  AND ce2.event = 'incoming_ringing' AND ce2.direction = 'in'
-                  AND ce2.created_at BETWEEN ce.created_at - INTERVAL '10 minutes'
-                                         AND ce.created_at + INTERVAL '2 minutes'
-             )
-        `); per.ce_flip = u5.rowCount || 0;
-
-        // Step 6: flip recording_saved direction
-        const u6 = await pool.query(`
-          UPDATE call_events ce SET direction = 'in'
-           WHERE ce.event = 'recording_saved'
-             AND ce.direction = 'out'
-             AND ce.created_at >= NOW() - INTERVAL '48 hours'
-             AND EXISTS (
-               SELECT 1 FROM call_events ce2
-                WHERE ce2.user_id = ce.user_id AND ce2.phone = ce.phone
-                  AND ce2.event = 'incoming_ringing' AND ce2.direction = 'in'
-                  AND ce2.created_at BETWEEN ce.created_at - INTERVAL '10 minutes'
-                                         AND ce.created_at + INTERVAL '2 minutes'
-             )
-        `); per.rec_flip = u6.rowCount || 0;
-
-        const sum = per.time_fixed + per.burst_del + per.dup_del + per.ring_del + per.ce_flip + per.rec_flip;
-        if (sum > 0) {
-          console.log('[call-48h-cleanup] ' + slug
-            + ' — time:' + per.time_fixed
-            + ' burst:' + per.burst_del
-            + ' dup:' + per.dup_del
-            + ' ring:' + per.ring_del
-            + ' ce:' + per.ce_flip
-            + ' rec:' + per.rec_flip);
-          totals.time_fixed += per.time_fixed; totals.burst_del += per.burst_del;
-          totals.dup_del += per.dup_del; totals.ring_del += per.ring_del;
-          totals.ce_flip += per.ce_flip; totals.rec_flip += per.rec_flip;
-        }
-        totals.tenants++;
-      } catch (e) {
-        console.warn('[call-48h-cleanup] ' + slug + ' failed: ' + e.message);
-      }
-    }
-    console.log('[call-48h-cleanup] done — '
-      + totals.tenants + ' tenants · '
-      + 'time:' + totals.time_fixed + ' burst:' + totals.burst_del
-      + ' dup:' + totals.dup_del + ' ring:' + totals.ring_del
-      + ' ce:' + totals.ce_flip + ' rec:' + totals.rec_flip);
-    try {
-      await controlDb.query(
-        "INSERT INTO saas_flags (key, value) VALUES ('call_last48h_cleanup_v1', $1) ON CONFLICT (key) DO NOTHING",
-        [JSON.stringify(totals)]
-      );
-    } catch (_) {}
-  } catch (e) {
-    console.error('[call-48h-cleanup] failed:', e.message);
-  }
-}
-// Run 300s after boot — after every other backfill so we're the final
-// pass that catches anything they left behind in the yesterday window.
-setTimeout(() => _runCallLast48hCleanup().catch(() => {}), 300_000);
-
-
-  app.listen(PORT, () => {
-    console.log('[boot] SmartCRM SaaS listening on :' + PORT);
-    // COPILOT_v4 — one-shot enable on vserve. Idempotent, non-blocking.
-    try {
-      const { autoEnableOnVserve } = require('./utils/cp4VserveAutoEnable');
-      setTimeout(() => { autoEnableOnVserve().catch(e => console.error('[CP4_AUTOENABLE]', e.message)); }, 5000);
-      // WB_CHAT_V2 — auto-enable 3-column WhatsApp chat on vserve only
-      const { autoEnableOnVserve: wbV2AutoEnable } = require('./utils/wbChatV2VserveAutoEnable');
-      setTimeout(() => { wbV2AutoEnable().catch(e => console.error('[WB_CHAT_V2_AUTOENABLE]', e.message)); }, 6000);
-      // LEADS_VIEW_V2 — auto-enable Modern + Inbox view styles on vserve
-      const { autoEnableOnVserve: lvV2AutoEnable } = require('./utils/leadsViewV2VserveAutoEnable');
-      setTimeout(() => { lvV2AutoEnable().catch(e => console.error('[LEADS_VIEW_V2_AUTOENABLE]', e.message)); }, 7000);
-      // SUB_STATUS_v1 — vserve-only beta of optional sub-statuses under each parent status
-      const { autoEnableOnVserve: subStatusAutoEnable } = require('./utils/subStatusVserveAutoEnable');
-      setTimeout(() => { subStatusAutoEnable().catch(e => console.error('[SUB_STATUS_AUTOENABLE]', e.message)); }, 8000);
-      // LEADS_V2_HEADER_v4 — vserve-only beta of compact sticky header (Option C)
-      const { autoEnableOnVserve: lv2HdrV4AutoEnable } = require('./utils/leadsV2HeaderV4VserveAutoEnable');
-      setTimeout(() => { lv2HdrV4AutoEnable().catch(e => console.error('[LEADS_V2_HEADER_V4_AUTOENABLE]', e.message)); }, 9000);
-    } catch (e) { console.warn('[CP4_AUTOENABLE] require failed:', e.message); }
-    // AI_MGR_v1 — one-shot enable on vserve. Idempotent, non-blocking.
-    try {
-      const { autoEnableOnVserve: aiMgrAutoEnable } = require('./utils/aiManagerVserveAutoEnable');
-      setTimeout(() => { aiMgrAutoEnable().catch(e => console.error('[AI_MGR_AUTOENABLE]', e.message)); }, 6000);
-    } catch (e) { console.warn('[AI_MGR_AUTOENABLE] require failed:', e.message); }
-    // DEMO_REMINDER_v1 — one-shot enable on vserve. Idempotent, non-blocking.
-    try {
-      const { autoEnableOnVserve: drAutoEnable } = require('./utils/demoReminderVserveAutoEnable');
-      setTimeout(() => { drAutoEnable().catch(e => console.error('[DEMO_REM_AUTOENABLE]', e.message)); }, 7000);
-    } catch (e) { console.warn('[DEMO_REM_AUTOENABLE] require failed:', e.message); }
-    // AI_ASSIST_ROLLOUT_v1 — bulk-enable Proactive AI Assist (lead summary
-    // panel at top of Edit Lead modal) on EVERY existing tenant. Mirrors
-    // LS_ROLLOUT_ALL_v1 / QNOTE_ROLLOUT_ALL_v1. Idempotent — only writes
-    // the flag for tenants that don't already have it. New tenants get it
-    // via tenantBootstrap CONFIG_DEFAULTS.
-    try {
-      const { autoRolloutAtBoot: cpProactiveRollout } = require('./routes/saas/copilotProactiveRollout');
-      setTimeout(() => { cpProactiveRollout().catch(e => console.error('[AI_ASSIST_ROLLOUT]', e.message)); }, 8000);
-    } catch (e) { console.warn('[AI_ASSIST_ROLLOUT] require failed:', e.message); }
-    // LEADS_VIEW_V2_ROLLOUT_v1 — bulk-enable the "Modern" leads theme on
-    // EVERY existing tenant. Idempotent; new tenants get it via
-    // tenantBootstrap CONFIG_DEFAULTS.
-    try {
-      const { autoRolloutAtBoot: lv2Rollout } = require('./routes/saas/leadsViewV2Rollout');
-      setTimeout(() => { lv2Rollout().catch(e => console.error('[LEADS_VIEW_V2_ROLLOUT]', e.message)); }, 9000);
-    } catch (e) { console.warn('[LEADS_VIEW_V2_ROLLOUT] require failed:', e.message); }
-    // WB_CHAT_V2_ROLLOUT_v1 (2026-06-25) — bulk-enable the new 3-column
-    // WhatsApp chat UI on EVERY existing tenant. Idempotent; new tenants
-    // get WB_CHAT_V2_ENABLED via tenantBootstrap CONFIG_DEFAULTS.
-    try {
-      const { autoRolloutAtBoot: wbChatV2Rollout } = require('./routes/saas/wbChatV2Rollout');
-      setTimeout(() => { wbChatV2Rollout().catch(e => console.error('[WB_CHAT_V2_ROLLOUT]', e.message)); }, 11000);
-    } catch (e) { console.warn('[WB_CHAT_V2_ROLLOUT] require failed:', e.message); }
-  });
-}
-boot().catch(e => { console.error('[boot] failed:', e); process.exit(1); });
+boot().catch

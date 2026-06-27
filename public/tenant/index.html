@@ -10,7 +10,7 @@
        prefix and the express.static handler in server.js serves
        the file from public/tenant/. The trailing slash is enforced
        by a redirect in server.js so these always resolve correctly. -->
-  <link rel="stylesheet" href="styles.css?v=2026-06-16-tour-fab-left" />
+  <link rel="stylesheet" href="styles.css?v=2027-06-06-glass-v1.5" />
   <!-- GLASS_THEME_v1 -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -121,7 +121,7 @@
     //   1. Exchanges the ssl token for a regular tenant JWT (api_auth_ssoLogin)
     //   2. Strips ?ssl= from the URL bar so it isn't kept in history
     //   3. THEN loads app.js so the boot code reads the freshly-written
-    //      token from localStorage. (Static <script src="/app.js?v=2026-06-27-finrenewal" defer>
+    //      token from localStorage. (Static <script src="/app.js?v=2026-06-27-solar-v1" defer>
     //      would race against the async exchange and the user would land
     //      on the login screen instead of being signed in.)
     (async function bootstrap() {
@@ -162,47 +162,8 @@
         // Wait for DOMContentLoaded before injecting scripts.
         function injectSpaScripts() {
           var s = document.createElement('script');
-          s.src = 'app.js?v=2026-06-27-finrenewal';
-          // STU360_LIVE_v1 — Student 360 view (Education pack only)
-          var st = document.createElement('script');
-          st.src = 'student360.js?v=2026-06-13-ls-v1-p113cb';
-          st.defer = true;
-          document.body.appendChild(st);
-          // COPILOT_v4 Proactive Coach (vserve beta)
-          var cp = document.createElement('script');
-          cp.src = 'copilotProactive.js?v=2026-06-17-daysum-v5';
-          cp.onload = function () {
-            // WB_CHAT_V2 — load redesigned 3-column WA chat module right after Copilot
-            try {
-              const wb = document.createElement('script');
-              wb.src = 'wbChatV2.js?v=2026-06-24-botpause-v1';
-              wb.defer = true;
-              document.body.appendChild(wb);
-              // LEADS_VIEW_V2 — Modern + Inbox view styles for leads page
-              const lv = document.createElement('script');
-              lv.src = 'leadsV2.js?v=2026-06-27-hdrv4-7';
-              lv.defer = true;
-              document.body.appendChild(lv);
-              // AICALL_v1 Phase 2 — VAPI AI configuration page
-              const av = document.createElement('script');
-              av.src = 'aicallVapi.js?v=2026-06-25-botpause-fix';
-              av.defer = true;
-              document.body.appendChild(av);
-            } catch (_) {}
-          };
-          cp.async = true;
-          document.body.appendChild(cp);
+          s.src = 'app.js?v=2026-06-27-solar-v1';
           document.body.appendChild(s);
-          // OPPORTUNITIES_v1 P2 — Lead modal Opportunities tab
-          var oppJs = document.createElement('script');
-          oppJs.src = 'opportunities.js?v=2026-06-13-ls-v1-p113cb';
-          oppJs.defer = true;
-          document.body.appendChild(oppJs);
-          // LEAD_SCORING_v1 P1 — Smart Lead Scoring
-          var lsJs = document.createElement('script');
-          lsJs.src = 'leadScoring.js?v=2026-06-18-ls-schema-v1';
-          lsJs.defer = true;
-          document.body.appendChild(lsJs);
           var c = document.createElement('script');
           c.src = 'caller-id-native.js?v=2026-05-24-tokenkey';
           document.body.appendChild(c);
