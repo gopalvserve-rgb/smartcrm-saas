@@ -867,3 +867,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The Modern and Inbox leads views could render below the visible area on some layouts (appearing blank). They now size to the available space so the list shows correctly and scrolls inside the page.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- LEADS_VIEW_TOGGLE_TOPBAR_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('LEADS_VIEW_TOGGLE_TOPBAR_v1', 'Leads: view switcher moved into the top header',
+ 'The Classic / Modern / Inbox switcher now sits in the top header bar (only on the Leads page) instead of its own row, freeing the space below so the leads list shows in full.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

@@ -4726,7 +4726,39 @@ function _renderFeatureSpotlight() {
   document.body.appendChild(overlay);
 }
 
+// LEADS_VIEW_TOGGLE_TOPBAR_v1 (2026-06-27) — mount the Classic/Modern/Inbox
+// switcher in the global top header bar (shown only on the Leads page) instead
+// of a separate row that pushed the leads body down/off-screen.
+function _ensureLeadsViewToggleTopbar() {
+  try {
+    const tr = document.querySelector('.topbar-right');
+    if (!tr) return;
+    const cfg = (CRM && (CRM.brand || CRM._earlyBrand)) || {};
+    const on = String(cfg.LEADS_VIEW_V2_ENABLED || '') !== '0' && !!window.LEADS_V2;
+    let host = document.getElementById('lv2-topbar-toggle');
+    if (!on) { if (host) host.remove(); return; }
+    if (!host) {
+      host = h('span', { id: 'lv2-topbar-toggle', style: { alignItems: 'center', marginRight: '8px' } });
+      tr.insertBefore(host, tr.firstChild);
+    }
+    host.innerHTML = '';
+    host.appendChild(window.LEADS_V2.createToggle(() => {
+      try { window.LEADS_V2.closeSlideOver && window.LEADS_V2.closeSlideOver(); } catch (_) {}
+      navigateTo('leads');
+    }));
+    const onLeads = String(location.hash || '').indexOf('/leads') >= 0;
+    host.style.display = onLeads ? 'inline-flex' : 'none';
+    if (!window._lv2TopbarHashBound) {
+      window._lv2TopbarHashBound = true;
+      window.addEventListener('hashchange', () => {
+        const el = document.getElementById('lv2-topbar-toggle');
+        if (el) el.style.display = (String(location.hash || '').indexOf('/leads') >= 0) ? 'inline-flex' : 'none';
+      });
+    }
+  } catch (_) {}
+}
 VIEWS.leads = async (view) => {
+  _ensureLeadsViewToggleTopbar();
   // LEADS_VIEW_V2 (2026-06-21) — when flag is on AND user has picked a non-
   // classic style, delegate to leadsV2 module. Otherwise fall through to
   // the existing legacy renderer below (untouched).
@@ -4769,16 +4801,10 @@ VIEWS.leads = async (view) => {
       console.log('[LEADS_V2] style preference:', style);
       if (style === 'modern' || style === 'inbox') {
         view.innerHTML = '';
-        const head = h('div', { style: { padding: '12px 16px', background: 'white', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-          h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px' } },
-            h('h1', { style: { fontSize: '17px', fontWeight: '700', margin: 0 } }, '📋 Leads'),
-            window.LEADS_V2.createToggle((newStyle) => {
-              try { window.LEADS_V2.closeSlideOver && window.LEADS_V2.closeSlideOver(); } catch (_) {}
-              VIEWS.leads(view);
-            })));
-        view.appendChild(head);
-        // LEADS_V2_RENDER_GUARD_v1 (2026-06-27) — if Modern/Inbox throws OR comes
-        // back with an empty body, fall back to Classic so the page is never blank.
+        // Toggle lives in the top header bar now (_ensureLeadsViewToggleTopbar),
+        // so render the body directly — no extra row above it.
+        // LEADS_V2_RENDER_GUARD_v1 — if Modern/Inbox throws OR comes back with an
+        // empty body, fall back to Classic so the page is never blank.
         let _lv2ok = false;
         try {
           if (style === 'modern') await window.LEADS_V2.renderModern(view);
@@ -4867,29 +4893,17 @@ VIEWS.leads = async (view) => {
   );
   view.appendChild(_skel);
 
-  // LEADS_VIEW_TOGGLE_ALWAYS_v1 — build the Classic/Modern/Inbox switcher once and
-  // show it whether the header is visible OR hidden, so it can never disappear.
-  const _lv2On = String(((CRM && (CRM.brand || CRM._earlyBrand)) || {}).LEADS_VIEW_V2_ENABLED || '') !== '0' && !!window.LEADS_V2;
-  const _mkViewToggle = () => _lv2On
-    ? h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px', marginRight: '8px' } },
-        h('span', { style: { fontSize: '11px', color: '#64748b', fontWeight: '500' } }, '✨ View:'),
-        window.LEADS_V2.createToggle((newStyle) => {
-          try { window.LEADS_V2.closeSlideOver && window.LEADS_V2.closeSlideOver(); } catch (_) {}
-          VIEWS.leads(view);
-        }))
-    : null;
+  // View switcher now lives in the top header bar (_ensureLeadsViewToggleTopbar).
   if (CRM.prefs.showHeader !== false) {
     const header = h('div', { class: 'leads-header' },
       h('div', { class: 'leads-status-chips', id: 'status-chips' }),
       h('div', { class: 'header-actions' },
-        _mkViewToggle(),
         h('button', { class: 'btn sm ghost', title: 'Hide header', onclick: () => toggleHeader(false) }, '− Hide')
       )
     );
     view.appendChild(header);
   } else {
-    view.appendChild(h('div', { class: 'header-hidden-toggle', style: { display: 'flex', alignItems: 'center', gap: '8px' } },
-      _mkViewToggle(),
+    view.appendChild(h('div', { class: 'header-hidden-toggle' },
       h('button', { class: 'btn sm ghost', onclick: () => toggleHeader(true) }, '▾ Show header')
     ));
   }
