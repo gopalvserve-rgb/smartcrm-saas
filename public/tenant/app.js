@@ -4777,8 +4777,18 @@ VIEWS.leads = async (view) => {
               VIEWS.leads(view);
             })));
         view.appendChild(head);
-        if (style === 'modern') return await window.LEADS_V2.renderModern(view);
-        if (style === 'inbox')  return await window.LEADS_V2.renderInbox(view);
+        // LEADS_V2_RENDER_GUARD_v1 (2026-06-27) — if Modern/Inbox throws OR comes
+        // back with an empty body, fall back to Classic so the page is never blank.
+        let _lv2ok = false;
+        try {
+          if (style === 'modern') await window.LEADS_V2.renderModern(view);
+          else                    await window.LEADS_V2.renderInbox(view);
+          _lv2ok = !!view.querySelector('.lv2-modern, .lv2-inbox');
+        } catch (err) { console.warn('[LEADS_V2] ' + style + ' render failed:', err && err.message); }
+        if (_lv2ok) return;
+        console.warn('[LEADS_V2] ' + style + ' produced an empty body — showing Classic instead');
+        try { toast && toast('Could not load ' + style + ' view — showing Classic', 'err'); } catch (_) {}
+        view.innerHTML = '';
       }
     }
   } catch (e) { console.warn('[LEADS_V2] delegator failed, falling back to classic:', e.message); }

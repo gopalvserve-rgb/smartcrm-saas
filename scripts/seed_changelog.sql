@@ -851,3 +851,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The CRM page shell was being cached by the browser, so new releases sometimes did not appear until a hard refresh (or at all). It is now served with no-cache headers so the latest version always loads.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- LEADS_V2_RENDER_GUARD_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('LEADS_V2_RENDER_GUARD_v1', 'Leads: no more blank page on Modern/Inbox',
+ 'If the Modern or Inbox leads view fails to load, the page now automatically falls back to the Classic view instead of showing a blank screen.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;
