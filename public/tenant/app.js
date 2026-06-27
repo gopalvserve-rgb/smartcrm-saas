@@ -1738,6 +1738,15 @@ const NAV_GROUPS = [
     { id: 'revisits',        label: 'Site Visits',     icon: '📅', roles: ['admin','manager','team_leader','agent','sales'], requiresPack: 'realestate', search: 'site visit property visit' },
     { id: 'recpperf',        label: 'Broker Perf',     icon: '👥', roles: ['admin','manager'],                requiresPack: 'realestate', search: 'broker channel partner performance' },
     { id: 'recommissions',   label: 'Commissions',     icon: '💸', roles: ['admin','manager'],                requiresPack: 'realestate', search: 'commissions payout brokerage' },
+    /* RE_PACK_v2 — 2026-06-27 — 8 new RE pack items (Listings, Tours, Analytics, Pipeline, Tools, Docs, Market, AI) */
+    { id: 'relistings',         label: '🏘️ Listings',          icon: '🏘️', roles: ['admin','manager','team_leader','sales','agent'], requiresPack: 'realestate', search: 're listings property sale rent' },
+    { id: 'revirtualtours',     label: '🎬 Virtual Tours',      icon: '🎬', roles: ['admin','manager','team_leader','sales','agent'], requiresPack: 'realestate', search: 're virtual tour 360 video matterport' },
+    { id: 'repropertyanalytics',label: '📊 Property Analytics', icon: '📊', roles: ['admin','manager','team_leader'], requiresPack: 'realestate', search: 're property analytics views enquiries funnel' },
+    { id: 'redealpipeline',     label: '📊 Deal Pipeline',      icon: '📊', roles: ['admin','manager','team_leader','sales','agent'], requiresPack: 'realestate', search: 're deal pipeline negotiation offer token' },
+    { id: 'reremotetools',      label: '🔧 Remote Tools',       icon: '🔧', roles: ['admin','manager','team_leader','sales','agent'], requiresPack: 'realestate', search: 're remote tools esign token booking wa template' },
+    { id: 'redocuments',        label: '📁 Documents',          icon: '📁', roles: ['admin','manager','team_leader','sales','agent'], requiresPack: 'realestate', search: 're documents sale deed rera oc noc encumbrance' },
+    { id: 'remarketinsights',   label: '📈 Market Insights',    icon: '📈', roles: ['admin','manager','team_leader'], requiresPack: 'realestate', search: 're market insights price sqft locality roi' },
+    { id: 'reaiinsights',       label: '🤖 AI Insights',        icon: '🤖', roles: ['admin','manager'], requiresPack: 'realestate', search: 're ai insights gemini' },
     /* SHOWCASE_PACK_VISIBILITY_v1 — Phase 1: one overview item per Finance / Solar /
        Manufacturer / Holiday / Ecommerce pack. Each routes to VIEWS.pack<X> which
        calls the existing api_<pack>_summary endpoint and shows KPI tiles + a
