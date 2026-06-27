@@ -4826,6 +4826,9 @@ setTimeout(() => _runCallLast48hCleanup().catch(() => {}), 300_000);
       // SUB_STATUS_v1 — vserve-only beta of optional sub-statuses under each parent status
       const { autoEnableOnVserve: subStatusAutoEnable } = require('./utils/subStatusVserveAutoEnable');
       setTimeout(() => { subStatusAutoEnable().catch(e => console.error('[SUB_STATUS_AUTOENABLE]', e.message)); }, 8000);
+      // LEADS_V2_HEADER_v4 — vserve-only beta of compact sticky header (Option C)
+      const { autoEnableOnVserve: lv2HdrV4AutoEnable } = require('./utils/leadsV2HeaderV4VserveAutoEnable');
+      setTimeout(() => { lv2HdrV4AutoEnable().catch(e => console.error('[LEADS_V2_HEADER_V4_AUTOENABLE]', e.message)); }, 9000);
     } catch (e) { console.warn('[CP4_AUTOENABLE] require failed:', e.message); }
     // AI_MGR_v1 — one-shot enable on vserve. Idempotent, non-blocking.
     try {

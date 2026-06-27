@@ -597,6 +597,228 @@ tr:hover .lv2-actions { opacity: 1; }
   }
 
   /* ---------- shared status chips + filter bar (used by Modern + Inbox) ---------- */
+  /* LEADS_V2_HEADER_v4 — Option C compact sticky header.
+   * One-row layout: title+count, search, inline chips (Hot/Overdue/Due today/New/Mine
+   * with counts), divider, Status/Date/Owner dropdowns, Filters(N) popover, Refresh +
+   * New Lead + ⋮ on right. Sticks to top on scroll. Activated by tenant config
+   * LEADS_V2_HEADER_V4_ENABLED='1' (auto-set on vserve). Falls back to the legacy
+   * 3-row header otherwise.
+   */
+  function _headerV4Enabled() {
+    try {
+      const C = window.CRM || {};
+      const b = (C.brand || C._earlyBrand || {});
+      return String(b.LEADS_V2_HEADER_V4_ENABLED || '') === '1';
+    } catch (_) { return false; }
+  }
+
+  // ---- Popover for "+ More filters" (reuses existing buildFilterBar inside a panel) ----
+  function _openMoreFiltersPopover(anchorEl, onChange) {
+    try {
+      // Close any existing popover
+      const ex = document.getElementById('lv2-mfilters-pop');
+      if (ex) { ex.remove(); return; }
+      const rect = anchorEl.getBoundingClientRect();
+      const pop = h('div', {
+        id: 'lv2-mfilters-pop',
+        style: {
+          position: 'fixed', top: (rect.bottom + 6) + 'px', right: '12px',
+          width: 'min(720px, calc(100vw - 24px))', maxHeight: '70vh', overflow: 'auto',
+          background: 'white', border: '1px solid #e2e8f0', borderRadius: '10px',
+          boxShadow: '0 10px 30px rgba(0,0,0,.18)', zIndex: '1000', padding: '0'
+        }
+      });
+      // Force filter bar open inside the popover
+      const prev = S.filtersCollapsed;
+      S.filtersCollapsed = false;
+      pop.appendChild(buildFilterBar(onChange));
+      S.filtersCollapsed = prev;
+      // Close-on-outside-click
+      const closer = (ev) => {
+        if (ev.target.closest && ev.target.closest('#lv2-mfilters-pop')) return;
+        if (ev.target.closest && ev.target.closest('#lv2-mfilters-btn')) return;
+        try { pop.remove(); } catch(_){}
+        document.removeEventListener('mousedown', closer, true);
+      };
+      setTimeout(() => document.addEventListener('mousedown', closer, true), 50);
+      document.body.appendChild(pop);
+    } catch (e) { console.error('[LEADS_V2_HEADER_v4] popover failed:', e); }
+  }
+
+  function buildCompactHeader(onChange) {
+    try {
+      // Count chips
+      const total = (Array.isArray(S.leads) ? S.leads : []).length;
+      const _heat = (l) => Number(l && l.smart_score || 0);
+      const hot = (S.leads || []).filter(l => _heat(l) >= 80).length;
+      const overdue = (S.leads || []).filter(l => {
+        if (!l.next_followup_at) return false;
+        try { return new Date(l.next_followup_at).getTime() < Date.now(); } catch (_) { return false; }
+      }).length;
+      const todayStr = (() => { const d = new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); })();
+      const dueToday = (S.leads || []).filter(l => l.next_followup_at && String(l.next_followup_at).slice(0,10) === todayStr).length;
+      const _myId = (window.CRM && CRM.user && CRM.user.id) || 0;
+      const mine = (S.leads || []).filter(l => Number(l.assigned_to) === Number(_myId)).length;
+      const newCnt = (S.leads || []).filter(l => l.status_name && /new/i.test(l.status_name)).length;
+
+      const wrap = h('div', {
+        id: 'lv2-compact-hdr',
+        style: {
+          position: 'sticky', top: '0', zIndex: '40',
+          background: '#fff', borderBottom: '1px solid #e2e8f0',
+          padding: '9px 14px', display: 'flex', alignItems: 'center', gap: '7px',
+          flexWrap: 'wrap', boxShadow: '0 1px 3px rgba(0,0,0,.03)'
+        }
+      });
+
+      // Title + badge
+      wrap.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', fontWeight: '700', fontSize: '14px', whiteSpace: 'nowrap', color: '#0f172a' } },
+        'Leads',
+        h('span', { style: { background: '#dbeafe', color: '#1e40af', padding: '1px 8px', borderRadius: '999px', fontSize: '10.5px', fontWeight: '700' } }, String(total))));
+
+      // Search
+      const search = h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 10px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '7px', minWidth: '200px', maxWidth: '260px' } },
+        h('span', { style: { color: '#94a3b8', fontSize: '11px' } }, '🔍'),
+        h('input', {
+          placeholder: 'Search…', value: S.search,
+          style: { border: 'none', background: 'transparent', outline: 'none', fontSize: '12px', width: '100%', minWidth: '0', color: '#0f172a' },
+          oninput: (e) => { S.search = e.target.value; if (onChange) onChange(); }
+        }));
+      wrap.appendChild(search);
+
+      // Inline chips
+      const _chip = (key, lab, count, accent) => {
+        const on = S.filter === key;
+        return h('span', {
+          style: {
+            display: 'inline-flex', alignItems: 'center', gap: '5px',
+            padding: '4px 10px', borderRadius: '999px',
+            background: on ? accent.bg : '#f8fafc',
+            border: '1px solid ' + (on ? accent.bd : '#e2e8f0'),
+            color: on ? accent.fg : '#475569',
+            fontSize: '11.5px', fontWeight: on ? '700' : '500', cursor: 'pointer', whiteSpace: 'nowrap'
+          },
+          onclick: () => { S.filter = on ? 'all' : key; if (onChange) onChange(); }
+        },
+          lab,
+          h('span', { style: { background: on ? 'rgba(255,255,255,.55)' : '#e2e8f0', color: on ? accent.fg : '#475569', fontSize: '10px', fontWeight: '700', padding: '1px 6px', borderRadius: '8px' } }, String(count)));
+      };
+      wrap.appendChild(_chip('hot',     '🔥 Hot',     hot,     { bg: '#fef2f2', fg: '#b91c1c', bd: '#fecaca' }));
+      wrap.appendChild(_chip('overdue', '⏱',         overdue, { bg: '#fffbeb', fg: '#b45309', bd: '#fde68a' }));
+      wrap.appendChild(_chip('today',   '📅',         dueToday,{ bg: '#eff6ff', fg: '#1e40af', bd: '#bfdbfe' }));
+      wrap.appendChild(_chip('new',     '✨',         newCnt,  { bg: '#f5f3ff', fg: '#6d28d9', bd: '#ddd6fe' }));
+      wrap.appendChild(_chip('mine',    '⭐ Mine',    mine,    { bg: '#f0fdf4', fg: '#15803d', bd: '#bbf7d0' }));
+
+      // Divider
+      wrap.appendChild(h('span', { style: { width: '1px', height: '20px', background: '#e2e8f0', margin: '0 4px' } }));
+
+      // Status dropdown — multi-select via inline popover; for now native <select> for single
+      const statuses = Array.isArray(S.statuses) ? S.statuses : [];
+      const statusSel = h('select', {
+        style: { background: '#fff', border: '1px solid #cbd5e1', borderRadius: '7px', padding: '5px 9px', fontSize: '12px', color: '#0f172a', cursor: 'pointer' },
+        onchange: (e) => {
+          const v = e.target.value;
+          if (!v) S.fStatus = [];
+          else S.fStatus = [v];
+          if (onChange) onChange();
+        }
+      },
+        h('option', { value: '' }, '📊 Status: Any' + (S.fStatus && S.fStatus.length ? ' · ' + S.fStatus.length : '')),
+        ...statuses.map(st => h('option', { value: String(st.name), selected: Array.isArray(S.fStatus) && S.fStatus.includes(st.name) }, st.name)));
+      wrap.appendChild(statusSel);
+
+      // Date dropdown — presets via applyDatePreset
+      const dateSel = h('select', {
+        style: { background: '#fff', border: '1px solid #cbd5e1', borderRadius: '7px', padding: '5px 9px', fontSize: '12px', color: '#0f172a', cursor: 'pointer' },
+        onchange: (e) => { applyDatePreset(e.target.value); if (onChange) onChange(); }
+      },
+        h('option', { value: '',          selected: !S.fDatePreset },          '📅 Any time'),
+        h('option', { value: 'today',     selected: S.fDatePreset === 'today' }, 'Today'),
+        h('option', { value: 'yesterday', selected: S.fDatePreset === 'yesterday' }, 'Yesterday'),
+        h('option', { value: '7d',        selected: S.fDatePreset === '7d' },    'Last 7 days'),
+        h('option', { value: '30d',       selected: S.fDatePreset === '30d' },   'Last 30 days'));
+      wrap.appendChild(dateSel);
+
+      // Owner dropdown
+      const users = Array.isArray(S.users) ? S.users : [];
+      const ownerSel = h('select', {
+        style: { background: '#fff', border: '1px solid #cbd5e1', borderRadius: '7px', padding: '5px 9px', fontSize: '12px', color: '#0f172a', cursor: 'pointer' },
+        onchange: (e) => {
+          const v = e.target.value;
+          S.fOwner = v ? [Number(v)] : [];
+          if (onChange) onChange();
+        }
+      },
+        h('option', { value: '' }, '👤 Any user'),
+        ...users.map(u => h('option', { value: String(u.id), selected: Array.isArray(S.fOwner) && S.fOwner.map(Number).includes(Number(u.id)) }, u.name)));
+      wrap.appendChild(ownerSel);
+
+      // + More filters button
+      const moreActive = countActiveFilters();
+      const moreBtn = h('button', {
+        id: 'lv2-mfilters-btn',
+        style: {
+          background: '#fff', color: '#475569', border: '1px dashed #cbd5e1', borderRadius: '7px',
+          padding: '5px 11px', fontSize: '12px', cursor: 'pointer', fontWeight: '500',
+          display: 'inline-flex', alignItems: 'center', gap: '5px'
+        },
+        onclick: function (ev) { _openMoreFiltersPopover(ev.currentTarget, onChange); }
+      },
+        '⚙ Filters',
+        moreActive ? h('span', { style: { background: '#4f46e5', color: '#fff', fontSize: '10px', padding: '1px 7px', borderRadius: '999px', fontWeight: '700' } }, String(moreActive)) : null);
+      wrap.appendChild(moreBtn);
+
+      // Spacer
+      wrap.appendChild(h('span', { style: { flex: '1', minWidth: '8px' } }));
+
+      // Refresh
+      wrap.appendChild(h('button', {
+        style: { background: '#fff', border: '1px solid #cbd5e1', borderRadius: '7px', padding: '5px 10px', fontSize: '12px', cursor: 'pointer', color: '#475569' },
+        title: 'Refresh',
+        onclick: () => { try { load(); } catch (_) {} }
+      }, '⟳'));
+
+      // + New Lead
+      wrap.appendChild(h('button', {
+        style: { background: '#4f46e5', color: '#fff', border: '1px solid #4f46e5', borderRadius: '7px', padding: '5px 12px', fontSize: '12px', cursor: 'pointer', fontWeight: '600' },
+        onclick: () => { try { if (typeof window.openLeadModal === 'function') window.openLeadModal(); } catch (e) { toast('Could not open: ' + e.message, 'err'); } }
+      }, '＋ New Lead'));
+
+      // ⋮ More menu (Export + Theme)
+      const more = h('button', {
+        style: { background: '#fff', border: '1px solid #cbd5e1', borderRadius: '7px', padding: '5px 10px', fontSize: '14px', cursor: 'pointer', color: '#475569', fontWeight: '700', lineHeight: '1' },
+        title: 'More',
+        onclick: function (ev) {
+          const ex = document.getElementById('lv2-more-menu'); if (ex) { ex.remove(); return; }
+          const r = ev.currentTarget.getBoundingClientRect();
+          const m = h('div', {
+            id: 'lv2-more-menu',
+            style: { position: 'fixed', top: (r.bottom + 5) + 'px', right: '12px', background: '#fff', border: '1px solid #e2e8f0', borderRadius: '8px', boxShadow: '0 6px 18px rgba(0,0,0,.12)', padding: '5px', zIndex: '1000', minWidth: '160px' }
+          });
+          const mi = (lab, fn) => h('div', {
+            style: { padding: '7px 10px', cursor: 'pointer', fontSize: '12px', color: '#0f172a', borderRadius: '5px' },
+            onmouseenter: (e) => { e.target.style.background = '#f1f5f9'; },
+            onmouseleave: (e) => { e.target.style.background = 'transparent'; },
+            onclick: () => { try { m.remove(); } catch(_){} try { fn(); } catch(_) {} }
+          }, lab);
+          m.appendChild(mi('↓ Export CSV', () => { try { if (typeof window.lv2ExportCsv === 'function') window.lv2ExportCsv(); else toast('Export not available', 'err'); } catch(_){} }));
+          m.appendChild(mi('🎯 Focus mode', () => { S.focusMode = !S.focusMode; if (onChange) onChange(); }));
+          document.body.appendChild(m);
+          setTimeout(() => {
+            const close = (e) => { if (e.target.closest && e.target.closest('#lv2-more-menu')) return; try { m.remove(); } catch(_){} document.removeEventListener('mousedown', close, true); };
+            document.addEventListener('mousedown', close, true);
+          }, 50);
+        }
+      }, '⋮');
+      wrap.appendChild(more);
+
+      return wrap;
+    } catch (e) {
+      console.error('[LEADS_V2_HEADER_v4] compact header failed, falling back:', e);
+      return h('div', { style: { padding: '6px 14px', color: '#c04444', fontSize: '11px' } }, 'Header error: ' + e.message);
+    }
+  }
+
   function buildStatusChipBar(onChange) {
     try {
       const counts = {};
@@ -1109,7 +1331,14 @@ tr:hover .lv2-actions { opacity: 1; }
     // Status chip row (matches Classic chips) — hidden in Focus mode
     // v1.5 — full re-render so filter bar (count, active pills, date inputs) reflects state
     const onFilterChange = () => { S.page = 1; renderModern(view); };
-    if (!S.focusMode) wrap.appendChild(buildStatusChipBar(onFilterChange));
+    /* LEADS_V2_HEADER_v4 — Option C compact sticky header.
+       When the flag is on, render a single compact bar that replaces the legacy
+       status-chip + filter-bar + qchips trio. Legacy path continues otherwise. */
+    const _useV4Hdr = (typeof _headerV4Enabled === 'function') && _headerV4Enabled();
+    if (_useV4Hdr && !S.focusMode) {
+      wrap.appendChild(buildCompactHeader(onFilterChange));
+    }
+    if (!_useV4Hdr && !S.focusMode) wrap.appendChild(buildStatusChipBar(onFilterChange));
     // v3.16 — Focus mode: ALWAYS show Hot/Warm/Nurture sections.
     // Bypass the score-based statusChip ('hot'/'warm' chip) so all three
     // buckets remain visible even when a status chip is active — focus
@@ -1215,7 +1444,7 @@ tr:hover .lv2-actions { opacity: 1; }
     }
 
     // Full filter bar — always visible (the user's main tool)
-    wrap.appendChild(buildFilterBar(onFilterChange));
+    if (!_useV4Hdr) wrap.appendChild(buildFilterBar(onFilterChange));
 
     // Quick chips — hidden in Focus mode
     const qchips = h('div', { class: 'qchips' });
@@ -1272,7 +1501,7 @@ tr:hover .lv2-actions { opacity: 1; }
       h('button', { class: 'qchip', style: { background: '#1e293b', color: 'white', borderColor: '#1e293b', cursor: 'pointer' },
         onclick: () => { try { if (typeof window.openLeadModal === 'function') window.openLeadModal(); else toast('New Lead modal not available', 'err'); } catch (e) { toast('Could not open: ' + e.message, 'err'); } }
       }, '＋ New Lead')));
-    if (!S.focusMode) wrap.appendChild(qchips);
+    if (!_useV4Hdr && !S.focusMode) wrap.appendChild(qchips);
 
     // Table
     const tblWrap = h('div', { class: 'tbl-wrap', id: 'lv2-tbl-wrap' });

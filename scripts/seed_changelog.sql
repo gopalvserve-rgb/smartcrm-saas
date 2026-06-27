@@ -747,3 +747,10 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'Below the existing Daily call activity chart, a new section shows hour-of-day breakdown: 4 insight cards (Peak hour / Quietest working hour / Top performer at peak / Active reps), a 24-hour stacked bar chart (Incoming/Outgoing/Missed), a User × Hour heatmap (rows = reps, cols = 0-23, color = call intensity), and a per-rep summary table with Total / Peak hour / Talk time / Coverage 9–18. Quick presets: Today, Yesterday, Last 7 days. Purely additive — no existing chart or table was removed.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+-- LEADS_V2_HEADER_v4 (2026-06-27) — vserve only
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('LEADS_V2_HEADER_v4', 'New compact sticky header on Modern Leads (beta)',
+ 'Vserve beta: the Modern Leads view now has a single-row sticky header — title+count, search, inline chips (Hot/Overdue/Due today/New/Mine with counts), Status/Date/Owner dropdowns always visible, "+ Filters (N)" popover for the rest, Refresh + New Lead + ⋮ menu on right. Saves ~200px vertical = 2.5× more leads visible. Active filters persist across refresh; the filter popover always opens closed on hard refresh. Toggle via super-admin config LEADS_V2_HEADER_V4_ENABLED.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;
