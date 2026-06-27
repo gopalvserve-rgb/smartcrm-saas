@@ -663,6 +663,16 @@ async function api_tour_seedDemo(/*token*/) {
   await db.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS assignee_user_id INT`, []).catch(() => {});
   await db.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS source TEXT`, []).catch(() => {});
   await db.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'enquiry'`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS cost_inr NUMERIC(14,2) DEFAULT 0`, []).catch(() => {});
+  // Also patch tour_packages — old installs may not have destination_id either.
+  await db.query(`ALTER TABLE tour_packages ADD COLUMN IF NOT EXISTS destination_id INT`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_packages ADD COLUMN IF NOT EXISTS kind TEXT`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_packages ADD COLUMN IF NOT EXISTS pax INT DEFAULT 2`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_packages ADD COLUMN IF NOT EXISTS duration_nights INT`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_packages ADD COLUMN IF NOT EXISTS price_inr NUMERIC(12,2)`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_packages ADD COLUMN IF NOT EXISTS inclusions TEXT`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_packages ADD COLUMN IF NOT EXISTS exclusions TEXT`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_packages ADD COLUMN IF NOT EXISTS is_active INT NOT NULL DEFAULT 1`, []).catch(() => {});
 
   await _ensureTables();
   await _seedHolidayStages();
