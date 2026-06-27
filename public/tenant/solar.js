@@ -428,11 +428,9 @@
         btn('💾 Save as Quote', function () { saveAsQuote(); }, 'primary')
       ]));
 
-      // Load config defaults
-      let cfg = null;
-      try { const r = await api('api_solar_pricing_config_get'); cfg = (r && r.config) || null; }
-      catch (_) {}
-      const panelRates = (cfg && cfg.panel_rates) || {
+      // Use safe defaults synchronously — DO NOT await before rendering UI.
+      // Config refresh happens in background and only updates the input if it differs.
+      const panelRates = {
         mono_perc_tier1: 38, mono_perc_tier2: 32,
         poly_tier1: 30, topcon_tier1: 42, bifacial: 45
       };
@@ -440,16 +438,33 @@
       const S = {
         kw: 5,
         panel_tier: 'mono_perc_tier1',
-        rate_per_w: panelRates.mono_perc_tier1 || 38,
+        rate_per_w: 38,
         inverter_inr: 38000,
         battery_inr: 0,
         state: 'BR',
         shadow_pct: 15,
-        tariff: (cfg && cfg.default_tariff_kwh) || 7.5,
-        gst_pct: (cfg && cfg.default_gst_pct) || 13.8,
-        emi_years: (cfg && cfg.default_emi_years) || 7,
-        emi_rate: (cfg && cfg.default_emi_rate_pct) || 9.5
+        tariff: 7.5,
+        gst_pct: 13.8,
+        emi_years: 7,
+        emi_rate: 9.5
       };
+
+      // Background config fetch (non-blocking; tolerant of missing tables)
+      (async function () {
+        try {
+          const r = await api('api_solar_pricing_config_get');
+          const cfg = (r && r.config) || null;
+          if (cfg && cfg.panel_rates) {
+            Object.assign(panelRates, cfg.panel_rates);
+            S.rate_per_w = panelRates[S.panel_tier] || 38;
+            try { rateLabel.textContent = '₹' + S.rate_per_w + '/W'; } catch (_) {}
+          }
+          if (cfg && cfg.default_tariff_kwh) S.tariff = cfg.default_tariff_kwh;
+          if (cfg && cfg.default_gst_pct) S.gst_pct = cfg.default_gst_pct;
+          if (cfg && cfg.default_emi_years) S.emi_years = cfg.default_emi_years;
+          if (cfg && cfg.default_emi_rate_pct) S.emi_rate = cfg.default_emi_rate_pct;
+        } catch (_) { /* tables not installed yet — defaults work fine */ }
+      })();
 
       const grid = h('div', { style: { display: 'grid',
         gridTemplateColumns: '1fr 1fr', gap: '14px' } });
@@ -579,22 +594,60 @@
 
       // Live recalc via backend pure-math API
       async function recalc() {
+        // Try backend API first; if it fails, fall back to client-side math
+        let c = null;
         try {
           const r = await api('api_solar_pricing_calc', S);
-          const c = r.calc || {};
-          const set = function (id, v) { const el = document.getElementById(id);
-            if (el) el.textContent = v; };
-          set('sc_gross',   fmtINRfull(c.gross_inr));
-          set('sc_central', '−' + fmtINRfull(c.central_subsidy));
-          set('sc_state',   '−' + fmtINRfull(c.state_subsidy));
-          set('sc_net',     fmtINRfull(c.net_inr));
-          set('sc_gst',     fmtINRfull(c.gst_inr));
-          set('sc_emi',     fmtINRfull(c.emi_monthly_inr) + '/mo');
-          set('sc_gen',     num(c.annual_gen_kwh) + ' kWh');
-          set('sc_sav',     fmtINRfull(c.annual_savings_inr) + '/yr');
-          set('sc_pay',     (c.payback_years || 0) + ' yrs');
-          set('sc_roi',     fmtINRfull(c.roi_25y_inr));
-        } catch (e) { console.warn('calc failed:', e); }
+          c = r && r.calc;
+        } catch (_) {}
+        if (!c) c = _clientCalc(S);
+        const set = function (id, v) { const el = document.getElementById(id);
+          if (el) el.textContent = v; };
+        set('sc_gross',   fmtINRfull(c.gross_inr));
+        set('sc_central', '−' + fmtINRfull(c.central_subsidy));
+        set('sc_state',   '−' + fmtINRfull(c.state_subsidy));
+        set('sc_net',     fmtINRfull(c.net_inr));
+        set('sc_gst',     fmtINRfull(c.gst_inr));
+        set('sc_emi',     fmtINRfull(c.emi_monthly_inr) + '/mo');
+        set('sc_gen',     num(c.annual_gen_kwh) + ' kWh');
+        set('sc_sav',     fmtINRfull(c.annual_savings_inr) + '/yr');
+        set('sc_pay',     (c.payback_years || 0) + ' yrs');
+        set('sc_roi',     fmtINRfull(c.roi_25y_inr));
+      }
+
+      // Client-side mirror of the backend pricing math — keeps Calculator
+      // usable even when the backend can't be reached.
+      function _clientCalc(S) {
+        const kw = Math.max(0, +S.kw || 0);
+        const panel_cost = kw * 1000 * (+S.rate_per_w || 38);
+        const balance = panel_cost * 0.12;
+        const gross = panel_cost + (+S.inverter_inr || 0) + (+S.battery_inr || 0) + balance;
+        let central = 0;
+        if (kw <= 2) central = kw * 35000;
+        else if (kw <= 3) central = 2 * 35000 + (kw - 2) * 18000;
+        else central = 78000;
+        const STATE_SUB = { BR: 0, UP: 15000, MH: 10000, GJ: 20000, HR: 17000, DL: 10000, KA: 0, TS: 0, TN: 0, WB: 0 };
+        const stateAmt = STATE_SUB[S.state] || 0;
+        const net = Math.max(0, gross - central - stateAmt);
+        const gst = net * ((+S.gst_pct || 13.8) / 100);
+        const final = net + gst;
+        const months = (+S.emi_years || 7) * 12;
+        const r = (+S.emi_rate || 9.5) / 100 / 12;
+        const emi = (final * r * Math.pow(1+r, months)) / (Math.pow(1+r, months) - 1);
+        const annGen = kw * 1500 * (1 - (+S.shadow_pct || 0) / 100);
+        const annSav = annGen * (+S.tariff || 7.5);
+        const pb = annSav > 0 ? net / annSav : 0;
+        let roi = 0, g = annGen, t = (+S.tariff || 7.5);
+        for (let y = 1; y <= 25; y++) { roi += g * t; g *= 0.993; t *= 1.04; }
+        roi -= net;
+        return {
+          gross_inr: Math.round(gross), central_subsidy: Math.round(central),
+          state_subsidy: Math.round(stateAmt), net_inr: Math.round(net),
+          gst_inr: Math.round(gst), final_inr: Math.round(final),
+          emi_monthly_inr: Math.round(emi || 0), annual_gen_kwh: Math.round(annGen),
+          annual_savings_inr: Math.round(annSav), payback_years: Number(pb.toFixed(2)),
+          roi_25y_inr: Math.round(roi)
+        };
       }
       recalc();
 

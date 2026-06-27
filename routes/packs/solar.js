@@ -324,6 +324,15 @@ async function _installer({ db: D }) {
   }
 }
 
+
+// Auto-ensure tables exist (handles tenants where pack wasn't formally installed yet).
+// Idempotent — CREATE TABLE IF NOT EXISTS in _installer is safe to call repeatedly.
+async function _ensureTables() {
+  try { await _installer({ db: db }); } catch (e) {
+    console.warn('[solar] _ensureTables error (non-fatal):', e.message);
+  }
+}
+
 // ── Pure-math pricing calc (no DB write) ───────────────────────────
 function _calcPricing(input) {
   const kw          = Math.max(0, Number(input.kw || 0));
@@ -401,6 +410,7 @@ function _calcPricing(input) {
 // ── APIs ──────────────────────────────────────────────────────────
 
 async function api_solar_summary(/*token*/) {
+  await _ensureTables();
   // Date helpers (Asia/Kolkata)
   const r1 = await db.query(`
     SELECT
@@ -561,6 +571,7 @@ async function api_solar_site_upsert(_token, args) {
 }
 
 async function api_solar_pricing_config_get(/*token*/) {
+  await _ensureTables();
   const r = await db.query(`SELECT * FROM sol_pricing_config ORDER BY id ASC LIMIT 1`, []);
   const row = r.rows[0] || {};
   // Parse JSON columns for convenience
@@ -611,6 +622,7 @@ async function api_solar_pricing_config_set(_token, args) {
 }
 
 async function api_solar_pricing_calc(_token, args) {
+  // No DB needed — pure math
   return { calc: _calcPricing(args || {}) };
 }
 
@@ -1092,11 +1104,14 @@ async function _seedSolarStages() {
 }
 
 async function api_solar_resetStages(/*token*/) {
+  await _ensureTables();
   await _seedSolarStages();
   return { ok: true, stages: SOLAR_LEAD_STAGES.map(s => s.name) };
 }
 
 async function api_solar_seedDemo(/*token*/) {
+  // Step -1: ensure pack tables exist (creates them if not)
+  await _ensureTables();
   // Step 0: apply Solar-specific lead pipeline stages first
   await _seedSolarStages();
 
