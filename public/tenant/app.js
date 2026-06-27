@@ -6024,6 +6024,15 @@ async function loadLeads(opts) {
     CRM.cache.lastLeads = res.leads;
     CRM.cache.lastStatusCounts = res.status_count;
     CRM.cache.lastTotal = res.total || (res.leads || []).length;
+    // CALL_DIAL_COUNT_v1 — stamp each lead with its outgoing-dial count for the
+    // 📞 badge (Classic view). Best-effort; never blocks the table render.
+    try {
+      const _ids = (res.leads || []).map(l => l.id).filter(Boolean);
+      if (_ids.length) {
+        const _dc = await api('api_leads_dialCounts', _ids).catch(() => ({}));
+        (res.leads || []).forEach(l => { l._dialCount = Number(_dc && _dc[l.id]) || 0; });
+      }
+    } catch (_) {}
     renderLeadsTable(res.leads);
     renderStatusChips(res.status_count);
     renderLeadsPagination({
@@ -7045,6 +7054,14 @@ function renderCell(col, l, statuses) {
                 border: '1px solid ' + (Number(l.activity_today) > 0 ? '#86efac' : '#c7d2fe')
               }
             }, '📝 ' + Number(l.activity_total) + (Number(l.activity_today) > 0 ? ' · ' + Number(l.activity_today) + ' today' : ''))
+          : null,
+        // CALL_DIAL_COUNT_v1 — 📞 outgoing-dial count badge
+        (Number(l._dialCount) > 0)
+          ? h('span', {
+              class: 'dial-pill',
+              title: 'Dialed ' + l._dialCount + ' time' + (l._dialCount > 1 ? 's' : '') + ' (outgoing calls to this number)',
+              style: { marginLeft: '.35rem', padding: '.05rem .4rem', borderRadius: '10px', background: '#e0e7ff', color: '#3730a3', fontSize: '.7rem', fontWeight: '600', border: '1px solid #c7d2fe' }
+            }, '📞 ' + l._dialCount + '\u00d7')
           : null
       );
     }

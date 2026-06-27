@@ -939,3 +939,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The times-dialed count is taken directly from the call activity data and now counts every outgoing call to that phone number (matched by lead and by number), including calls logged under duplicate leads.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- CALL_DIAL_COUNT_CLASSIC_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('CALL_DIAL_COUNT_CLASSIC_v1', 'Dial count badge now on Classic leads view too',
+ 'The 📞 times-dialed badge now also appears on the Classic leads list (it was previously only on the Modern view).',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;
