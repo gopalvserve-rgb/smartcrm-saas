@@ -923,3 +923,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'Each lead now shows how many times its number has been dialed (outgoing calls). It appears as a 📞 badge on the lead row in the Modern view, and in the lead detail panel (header next to the name and in the Recent Activity section).',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- CALL_DIAL_COUNT_v2 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('CALL_DIAL_COUNT_v2', 'Dial count now includes older calls',
+ 'The "times dialed" count on leads now also reflects historical calls (completed outgoing calls and recordings made before dial tracking was added), not just new dials.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

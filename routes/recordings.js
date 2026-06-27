@@ -65,26 +65,47 @@ async function _findLeadByPhone(phone) {
  */
 // CALL_DIAL_COUNT_v1 (2026-06-27) — count outgoing dials ('dial_requested')
 // per lead, for the lead-list badge + lead detail.
+// CALL_DIAL_COUNT_v2 — "times dialed" including OLD data. New dials log
+// event='dial_requested'; older calls predate that, so we also look at
+// outgoing call_ended events and outgoing recordings, and take the MAX per
+// lead (so new+old are covered without double-counting a single call).
+async function _dialCountMap(ids) {
+  const map = {};
+  if (!ids.length) return map;
+  try {
+    const { rows } = await db.query(
+      `SELECT lead_id,
+              GREATEST(
+                COUNT(*) FILTER (WHERE event = 'dial_requested'),
+                COUNT(*) FILTER (WHERE event IN ('call_ended','outgoing_ended','call_disconnected') AND COALESCE(direction,'out') <> 'in'),
+                COUNT(*) FILTER (WHERE event = 'outgoing')
+              )::int AS n
+         FROM call_events
+        WHERE lead_id = ANY($1::int[])
+        GROUP BY lead_id`, [ids]);
+    rows.forEach(r => { map[r.lead_id] = Number(r.n) || 0; });
+  } catch (_) {}
+  try {
+    const { rows } = await db.query(
+      `SELECT lead_id, COUNT(*)::int AS n
+         FROM lead_recordings
+        WHERE COALESCE(direction,'out') <> 'in' AND lead_id = ANY($1::int[])
+        GROUP BY lead_id`, [ids]);
+    rows.forEach(r => { const c = Number(r.n) || 0; if (c > (map[r.lead_id] || 0)) map[r.lead_id] = c; });
+  } catch (_) {}
+  return map;
+}
 async function api_leads_dialCounts(token, leadIds) {
   await authUser(token);
   const ids = (Array.isArray(leadIds) ? leadIds : []).map(Number).filter(Boolean);
-  if (!ids.length) return {};
-  const { rows } = await db.query(
-    `SELECT lead_id, COUNT(*)::int AS n
-       FROM call_events
-      WHERE event = 'dial_requested' AND lead_id = ANY($1::int[])
-      GROUP BY lead_id`, [ids]);
-  const map = {};
-  rows.forEach(r => { map[r.lead_id] = Number(r.n) || 0; });
-  return map;
+  return _dialCountMap(ids);
 }
 async function api_leads_dialCount(token, leadId) {
   await authUser(token);
   const id = Number(leadId) || 0;
   if (!id) return { count: 0 };
-  const { rows } = await db.query(
-    `SELECT COUNT(*)::int AS n FROM call_events WHERE event = 'dial_requested' AND lead_id = $1`, [id]);
-  return { count: (rows[0] && Number(rows[0].n)) || 0 };
+  const map = await _dialCountMap([id]);
+  return { count: map[id] || 0 };
 }
 
 async function api_call_logEvent(token, payload) {
