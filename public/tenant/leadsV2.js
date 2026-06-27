@@ -1645,12 +1645,12 @@ tr:hover .lv2-actions { opacity: 1; }
   }
 
   function renderPagination(totalRows, totalPages) {
-    const bar = h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 16px', background: '#fafbfc', borderTop: '1px solid #e2e8f0', fontSize: '11.5px', color: '#64748b', position: 'sticky', bottom: '0' } });
+    const bar = h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '3px 12px', background: '#fafbfc', borderTop: '1px solid #e2e8f0', fontSize: '10.5px', color: '#64748b', position: 'sticky', bottom: '0' } });
     // Left — count + page size
-    const left = h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px' } },
+    const left = h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
       h('span', null, 'Showing ' + ((S.page - 1) * S.pageSize + 1) + '–' + Math.min(totalRows, S.page * S.pageSize) + ' of ' + totalRows));
     const sizeSel = h('select', {
-      style: { padding: '3px 8px', border: '1px solid #e2e8f0', borderRadius: '4px', fontSize: '11px', background: 'white', cursor: 'pointer' },
+      style: { padding: '1px 6px', border: '1px solid #e2e8f0', borderRadius: '4px', fontSize: '10px', background: 'white', cursor: 'pointer' },
       onchange: (e) => {
         S.pageSize = Number(e.target.value) || 25;
         try { localStorage.setItem('crm.lv2.pageSize', String(S.pageSize)); } catch(_){}
@@ -1666,14 +1666,15 @@ tr:hover .lv2-actions { opacity: 1; }
     const right = h('div', { style: { display: 'flex', alignItems: 'center', gap: '4px' } });
     const pageBtn = (lab, p, disabled, isActive) => h('button', {
       style: {
-        padding: '4px 10px',
+        padding: '1px 7px',
         background: isActive ? '#1e293b' : 'white',
         color: isActive ? 'white' : (disabled ? '#cbd5e1' : '#475569'),
         border: '1px solid ' + (isActive ? '#1e293b' : '#e2e8f0'),
         borderRadius: '5px',
-        fontSize: '11px',
+        fontSize: '10px',
         cursor: disabled ? 'not-allowed' : 'pointer',
-        minWidth: '28px',
+        minWidth: '22px',
+        lineHeight: '1.5',
         fontWeight: isActive ? '600' : '500',
         opacity: disabled ? '0.5' : '1'
       },
@@ -1691,7 +1692,7 @@ tr:hover .lv2-actions { opacity: 1; }
     if (winEnd < totalPages) right.appendChild(h('span', { style: { padding: '0 4px', color: '#94a3b8' } }, '…'));
     right.appendChild(pageBtn('›', Math.min(totalPages, S.page + 1), S.page === totalPages));
     right.appendChild(pageBtn('»', totalPages, S.page === totalPages));
-    right.appendChild(h('span', { style: { fontSize: '11px', color: '#94a3b8', marginLeft: '8px' } }, 'Page ' + S.page + ' / ' + totalPages));
+    right.appendChild(h('span', { style: { fontSize: '10px', color: '#94a3b8', marginLeft: '6px' } }, 'Page ' + S.page + ' / ' + totalPages));
     bar.appendChild(right);
     return bar;
   }
