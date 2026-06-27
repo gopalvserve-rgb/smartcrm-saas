@@ -20176,7 +20176,19 @@ VIEWS.projects = async (view) => {
     h('label', { style: { fontSize: '.85rem', display: 'flex', alignItems: 'center', gap: '.3rem' } }, stalledChk, ' Stalled only'),
     applyBtn, clearBtn, expBtn
   );
+  // SALE_CLOSURE_FILTERS_COLLAPSE_v1 — filters were eating most of the page.
+  // Collapse them behind a compact toggle; remember the open/closed choice.
+  const _filtOpenKey = 'crm.projectsFiltersOpen';
+  let _filtOpen = localStorage.getItem(_filtOpenKey) === '1';
+  const filtToggle = h('button', { class: 'btn sm', style: { marginBottom: '.6rem' } });
+  const _syncFilt = () => {
+    filterBar.style.display = _filtOpen ? 'flex' : 'none';
+    filtToggle.textContent = _filtOpen ? '\u25BE Hide filters' : '\u25B8 Filters';
+  };
+  filtToggle.onclick = () => { _filtOpen = !_filtOpen; localStorage.setItem(_filtOpenKey, _filtOpen ? '1' : '0'); _syncFilt(); };
+  view.appendChild(filtToggle);
   view.appendChild(filterBar);
+  _syncFilt();
 
   const listEl = h('div', { id: 'proj-board' }, h('div', { class: 'loading' }, 'Loading…'));
   view.appendChild(listEl);
@@ -20274,36 +20286,83 @@ function _renderBoard(board, listEl) {
   return _projRenderKanban(board, listEl);
 }
 
-/* Count-of-records-per-stage bar chart (lightweight CSS bars, no chart lib). */
+/* Stage chart with selectable type (bar / funnel / donut). */
 function _projStageChart(board) {
-  const counts = board.board.map(col => col.leads.length);
-  const maxC = Math.max(1, ...counts);
-  const card = h('div', { class: 'card', style: { padding: '.85rem 1rem', marginBottom: '.75rem' } },
-    h('div', { style: { fontSize: '.78rem', fontWeight: 600, color: '#475569', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: '.6rem' } }, '📊 Records by stage'));
-  const row = h('div', { style: { display: 'flex', alignItems: 'flex-end', gap: '.5rem', height: '140px', paddingTop: '.5rem', overflowX: 'auto' } });
-  board.board.forEach(col => {
-    const c = col.leads.length;
-    const h_pct = Math.round((c / maxC) * 100);
-    const conv = col.leads.filter(l => l.auto_won).length;
-    const bar = h('div', { style: { flex: '1 1 0', minWidth: '46px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '.3rem', height: '100%' } },
-      h('div', { style: { fontSize: '.8rem', fontWeight: 700, color: '#1e293b' } }, String(c)),
-      h('div', { style: { flex: 1, width: '100%', display: 'flex', alignItems: 'flex-end' } },
-        h('div', {
-          title: col.stage.name + ': ' + c + (conv ? ' (' + conv + ' converted)' : ''),
-          style: {
-            width: '100%', height: Math.max(h_pct, c ? 6 : 0) + '%',
-            minHeight: c ? '6px' : '0',
-            background: conv ? 'linear-gradient(180deg,#22c55e,#16a34a)' : 'linear-gradient(180deg,#60a5fa,#3b82f6)',
-            borderRadius: '5px 5px 0 0', transition: 'height .3s'
-          }
-        })
-      ),
-      h('div', { style: { fontSize: '.68rem', color: '#64748b', textAlign: 'center', lineHeight: '1.1', maxWidth: '70px', wordBreak: 'break-word' }, title: col.stage.name }, col.stage.name)
-    );
-    row.appendChild(bar);
-  });
-  card.appendChild(row);
+  const TKEY = 'crm.projectsChartType';
+  const type = localStorage.getItem(TKEY) || 'bar';
+  const stages = board.board.map(c => ({ name: c.stage.name, count: c.leads.length, conv: c.leads.filter(l => l.auto_won).length }));
+  const card = h('div', { class: 'card', style: { padding: '.85rem 1rem', marginBottom: '.75rem' } });
+  const sel = h('select', { class: 'input', style: { height: '30px', width: 'auto', fontSize: '.8rem' } },
+    ...[['bar', 'Bar'], ['funnel', 'Funnel'], ['donut', 'Donut']].map(([v, l]) => h('option', { value: v, selected: type === v ? 'selected' : null }, l)));
+  sel.onchange = () => { localStorage.setItem(TKEY, sel.value); const le = document.getElementById('proj-board'); if (le) _renderBoard(board, le); };
+  card.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', marginBottom: '.6rem' } },
+    h('div', { style: { fontSize: '.78rem', fontWeight: 600, color: '#475569', textTransform: 'uppercase', letterSpacing: '.04em', flex: 1 } }, '📊 Records by stage'),
+    h('span', { class: 'muted', style: { fontSize: '.72rem' } }, 'Graph'), sel));
+  if (type === 'funnel')      card.appendChild(_projChartFunnel(stages));
+  else if (type === 'donut')  card.appendChild(_projChartDonut(stages));
+  else                        card.appendChild(_projChartBar(stages));
   return card;
+}
+const _PROJ_PALETTE = ['#3b82f6', '#22c55e', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#ef4444', '#14b8a6', '#64748b'];
+function _projChartBar(stages) {
+  const maxC = Math.max(1, ...stages.map(s => s.count));
+  const row = h('div', { style: { display: 'flex', alignItems: 'flex-end', gap: '.5rem', height: '140px', paddingTop: '.5rem', overflowX: 'auto' } });
+  stages.forEach(s => {
+    row.appendChild(h('div', { style: { flex: '1 1 0', minWidth: '46px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '.3rem', height: '100%' } },
+      h('div', { style: { fontSize: '.8rem', fontWeight: 700, color: '#1e293b' } }, String(s.count)),
+      h('div', { style: { flex: 1, width: '100%', display: 'flex', alignItems: 'flex-end' } },
+        h('div', { title: s.name + ': ' + s.count + (s.conv ? ' (' + s.conv + ' converted)' : ''),
+          style: { width: '100%', height: Math.max(Math.round(s.count / maxC * 100), s.count ? 6 : 0) + '%', minHeight: s.count ? '6px' : '0',
+            background: s.conv ? 'linear-gradient(180deg,#22c55e,#16a34a)' : 'linear-gradient(180deg,#60a5fa,#3b82f6)', borderRadius: '5px 5px 0 0' } })),
+      h('div', { style: { fontSize: '.68rem', color: '#64748b', textAlign: 'center', lineHeight: '1.1', maxWidth: '74px', wordBreak: 'break-word' }, title: s.name }, s.name)));
+  });
+  return row;
+}
+function _projChartFunnel(stages) {
+  const maxC = Math.max(1, ...stages.map(s => s.count));
+  const wrap = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '.35rem', paddingTop: '.3rem' } });
+  stages.forEach((s, i) => {
+    wrap.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '.6rem' } },
+      h('div', { style: { width: '110px', fontSize: '.72rem', color: '#64748b', textAlign: 'right', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }, title: s.name }, s.name),
+      h('div', { style: { flex: 1, background: '#f1f5f9', borderRadius: '4px', overflow: 'hidden' } },
+        h('div', { style: { width: Math.max(Math.round(s.count / maxC * 100), s.count ? 4 : 0) + '%', minWidth: s.count ? '24px' : '0', background: _PROJ_PALETTE[i % _PROJ_PALETTE.length], color: '#fff', fontSize: '.72rem', fontWeight: 600, padding: '4px 8px', textAlign: 'right', borderRadius: '4px' } }, String(s.count))) ));
+  });
+  return wrap;
+}
+function _projChartDonut(stages) {
+  const total = stages.reduce((n, s) => n + s.count, 0) || 1;
+  const R = 52, C = 2 * Math.PI * R;
+  let off = 0;
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 140 140'); svg.setAttribute('width', '140'); svg.setAttribute('height', '140');
+  const base = document.createElementNS(ns, 'circle');
+  base.setAttribute('cx', '70'); base.setAttribute('cy', '70'); base.setAttribute('r', String(R));
+  base.setAttribute('fill', 'none'); base.setAttribute('stroke', '#eef2f7'); base.setAttribute('stroke-width', '18');
+  svg.appendChild(base);
+  stages.forEach((s, i) => {
+    if (!s.count) return;
+    const seg = C * (s.count / total);
+    const c = document.createElementNS(ns, 'circle');
+    c.setAttribute('cx', '70'); c.setAttribute('cy', '70'); c.setAttribute('r', String(R));
+    c.setAttribute('fill', 'none'); c.setAttribute('stroke', _PROJ_PALETTE[i % _PROJ_PALETTE.length]);
+    c.setAttribute('stroke-width', '18'); c.setAttribute('stroke-dasharray', seg + ' ' + (C - seg));
+    c.setAttribute('stroke-dashoffset', String(-off)); c.setAttribute('transform', 'rotate(-90 70 70)');
+    const t = document.createElementNS(ns, 'title'); t.textContent = s.name + ': ' + s.count; c.appendChild(t);
+    svg.appendChild(c); off += seg;
+  });
+  const tot = document.createElementNS(ns, 'text');
+  tot.setAttribute('x', '70'); tot.setAttribute('y', '75'); tot.setAttribute('text-anchor', 'middle');
+  tot.setAttribute('font-size', '20'); tot.setAttribute('font-weight', '700'); tot.setAttribute('fill', '#1e293b');
+  tot.textContent = String(total); svg.appendChild(tot);
+  const legend = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '.3rem', flex: 1 } },
+    ...stages.map((s, i) => h('div', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', fontSize: '.74rem', color: '#475569' } },
+      h('span', { style: { width: '10px', height: '10px', borderRadius: '2px', background: _PROJ_PALETTE[i % _PROJ_PALETTE.length], flexShrink: 0 } }),
+      h('span', { style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: s.name }, s.name),
+      h('b', {}, String(s.count)))));
+  const box = h('div', { style: { display: 'flex', alignItems: 'center', gap: '1rem', paddingTop: '.3rem', flexWrap: 'wrap' } });
+  box.appendChild(svg); box.appendChild(legend);
+  return box;
 }
 
 /* Kanban view (original column layout). */

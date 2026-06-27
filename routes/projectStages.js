@@ -188,10 +188,21 @@ async function api_projectStages_board(token, filters) {
     const firstStage = stages[0];
     if (firstStage) {
       const statusesAll = await db.getAll('statuses');
-      const wonStatusIds = new Set(
-        statusesAll.filter(st => String(st.stage || '').toLowerCase() === 'won')
-                   .map(st => Number(st.id))
-      );
+      // SALE_CLOSURE_WON_DETECT_v2 — a "converted" status is one mapped to the
+      // 'won' pipeline stage, OR a FINAL status whose name reads as a win
+      // (Won / Converted / Sale Closed / Enrolled / Paid ...). Losing finals
+      // (Lost / Junk / Not Interested / Dead ...) are explicitly excluded.
+      const _loseRe = /(lost|junk|not\s*interest|dead|reject|cancel|invalid|spam|duplicate|dnd|wrong)/i;
+      const _winRe  = /(won|convert|closed?|enroll|paid|sale\s*done|sale\s*closed|deal\s*close|success|admitted|booked)/i;
+      const _isWon = (st) => {
+        const nm = String(st.name || '');
+        if (_loseRe.test(nm)) return false;
+        if (String(st.stage || '').toLowerCase() === 'won') return true;
+        if (/\bwon\b/i.test(nm)) return true;
+        if (Number(st.is_final) === 1 && _winRe.test(nm)) return true;
+        return false;
+      };
+      const wonStatusIds = new Set(statusesAll.filter(_isWon).map(st => Number(st.id)));
       if (wonStatusIds.size) {
         const already = new Set();
         Object.values(byStage).forEach(col => col.leads.forEach(l => already.add(Number(l.id))));

@@ -808,3 +808,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The Sale Final Closure page (Projects) now (1) automatically shows Won / converted customers in the pipeline first stage without manual adding, badged as Converted; (2) has a List view in addition to Kanban (toggle at the top); and (3) shows a Records-by-stage bar chart at the top with a quick KPI strip (In pipeline / Converted / Stalled).',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- SALE_CLOSURE_VIEWS_v2 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('SALE_CLOSURE_VIEWS_v2', 'Sale Closure: graph options, compact filters, smarter Won detection',
+ 'Three improvements on the Sale Closure page: (1) the stage graph now has a type selector — Bar, Funnel or Donut; (2) the filter bar is collapsed by default behind a compact Filters toggle so it no longer fills the page; (3) converted-customer detection now matches any final Won-type status (Won / Converted / Sale Closed / Enrolled / Paid) and not only statuses explicitly mapped to the won stage, while excluding Lost / Junk / Not Interested.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;
