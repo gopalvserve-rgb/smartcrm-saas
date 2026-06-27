@@ -26,16 +26,20 @@
     } catch (e) { return ''; }
   }
   async function _api(name, payload) {
-    var base = (location.pathname.match(/^\/t\/[^\/]+/) || [''])[0];
-    var url = base + '/api/' + name;
-    var r = await fetch(url, {
+    // Use the global window.api dispatcher (defined in app.js).
+    // It already handles tenant routing, auth header, token refresh.
+    // Falls back to direct /api POST if window.api isn't ready yet.
+    if (window.api && typeof window.api === 'function') {
+      return await window.api(name, payload || {});
+    }
+    var r = await fetch('/api', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Auth-Token': _tok() },
-      body: JSON.stringify(payload || {})
+      body: JSON.stringify({ fn: name, args: [_tok(), payload || {}] })
     });
     var j = await r.json();
     if (j && j.error) throw new Error(j.error);
-    return j;
+    return j.result !== undefined ? j.result : j;
   }
 
   // -- inject styles once
@@ -584,9 +588,9 @@
     viewEduOverview, viewEduApplications, viewEduEnrollments, viewEduScholarships, viewEduBatches, viewEduPackHome,
     _api, _tok
   };
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', _registerViews);
-  } else {
-    _registerViews();
+  function _ready(fn) {
+    if (window.api && window.h && window.VIEWS) return fn();
+    setTimeout(() => _ready(fn), 60);
   }
+  _ready(_registerViews);
 })();
