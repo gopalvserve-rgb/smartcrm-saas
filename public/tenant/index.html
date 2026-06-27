@@ -183,6 +183,13 @@
           var edu = document.createElement('script');
           edu.src = 'education.js?v=2026-06-27-pack-v17';
           document.body.appendChild(edu);
+          // WB_CHAT_V2_RESTORE_v1 (2026-06-27) — re-add the 3-column WhatsApp
+          // chat bundle. Its <script> was dropped when the pack scripts
+          // rewrote this block, which is why the redesign "disappeared".
+          // Inert unless WB_CHAT_V2_ENABLED='1' (vserve-only beta).
+          var wb = document.createElement('script');
+          wb.src = 'wbChatV2.js?v=2026-06-27-wbchatv2-restore-v1';
+          document.body.appendChild(wb);
         }
         if (document.body) injectSpaScripts();
         else document.addEventListener('DOMContentLoaded', injectSpaScripts, { once: true });

@@ -768,3 +768,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'New 🔄 Renewals section on Finance Overview page. KPI strip (Due 30d / Overdue / Renewed / Lapsed / Collected), 6 status tabs (Upcoming / Due 30 / Overdue / Renewed / Lapsed / Collected), live renewal list with per-row actions: 💬 send WA reminder, 📧 send email reminder, 💰 mark collected, mark lapsed. Monthly Collection Report below shows collection % per month with color-coded health. Reminder history tracked in fin_renewal_reminders table.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- WB_CHAT_V2_RESTORE_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('WB_CHAT_V2_RESTORE_v1', 'WhatsApp chat: 3-column redesign restored',
+ 'The redesigned 3-column WhatsApp chat (thread list + chat + live lead panel with AI Score, AI Summary, status change, add-remark and activity timeline) is back. Its loader had been accidentally dropped when the industry pack scripts were added, causing a fallback to the old 2-column view. Re-enabled for the vserve beta tenant only.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;
