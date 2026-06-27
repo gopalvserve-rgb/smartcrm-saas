@@ -71,6 +71,21 @@ async function _ensureSchema() {
     notes TEXT NOT NULL DEFAULT '', sort_order INTEGER NOT NULL DEFAULT 0,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
   await db.query(`CREATE INDEX IF NOT EXISTS fin_doc_lead_idx ON fin_doc_checklist(lead_id)`);
+  // FIN_RENEWAL_v1 — premium renewal tracker + auto WA/email reminders + collection report.
+  await db.query(`CREATE TABLE IF NOT EXISTS fin_renewal_reminders (
+    id SERIAL PRIMARY KEY, policy_id INTEGER NOT NULL, lead_id INTEGER NOT NULL,
+    channel TEXT NOT NULL DEFAULT 'wa',  -- wa | email | sms
+    template TEXT NOT NULL DEFAULT '',
+    sent_by INTEGER, sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    status TEXT NOT NULL DEFAULT 'sent',  -- sent | failed | scheduled
+    response TEXT NOT NULL DEFAULT '')`);
+  await db.query(`CREATE INDEX IF NOT EXISTS fin_renewal_reminders_policy_idx ON fin_renewal_reminders(policy_id)`);
+  await db.query(`CREATE INDEX IF NOT EXISTS fin_renewal_reminders_lead_idx ON fin_renewal_reminders(lead_id)`);
+  await db.query(`CREATE INDEX IF NOT EXISTS fin_renewal_reminders_sent_idx ON fin_renewal_reminders(sent_at)`);
+  // Renewal collection state on the policy itself
+  await db.query(`ALTER TABLE fin_policies ADD COLUMN IF NOT EXISTS renewal_collected_at TIMESTAMPTZ`);
+  await db.query(`ALTER TABLE fin_policies ADD COLUMN IF NOT EXISTS renewal_collected_amount NUMERIC(14,2) DEFAULT 0`);
+  await db.query(`ALTER TABLE fin_policies ADD COLUMN IF NOT EXISTS renewal_last_reminded_at TIMESTAMPTZ`);
 }
 
 async function install(opts) {
@@ -192,6 +207,135 @@ async function api_fin_claim_update(token, payload) {
     [p.status||'submitted',p.docs_status||'pending',p.approved_amount||0,p.notes||'',p.id]);
   return { ok: true };
 }
+/* FIN_RENEWAL_v1 — comprehensive renewal list with status buckets. */
+async function api_fin_renewal_list(token, payload) {
+  await authUser(token); await _ensureSchema();
+  const p = payload || {};
+  const days = parseInt(p.days || 90, 10);
+  const status = String(p.status || 'all');  // all | upcoming | due_30 | overdue | renewed | lapsed | collected
+  let where = `p.maturity_date IS NOT NULL`;
+  if (status === 'upcoming')   where += ` AND p.status NOT IN ('renewed','lapsed','cancelled') AND p.maturity_date > CURRENT_DATE AND p.maturity_date <= CURRENT_DATE + INTERVAL '${days} days'`;
+  else if (status === 'due_30') where += ` AND p.status NOT IN ('renewed','lapsed','cancelled') AND p.maturity_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'`;
+  else if (status === 'overdue')   where += ` AND p.status NOT IN ('renewed','lapsed','cancelled') AND p.maturity_date < CURRENT_DATE`;
+  else if (status === 'renewed')   where += ` AND p.status = 'renewed'`;
+  else if (status === 'lapsed')    where += ` AND p.status = 'lapsed'`;
+  else if (status === 'collected') where += ` AND p.renewal_collected_at IS NOT NULL`;
+  else                              where += ` AND p.maturity_date <= CURRENT_DATE + INTERVAL '${days} days'`;
+  const r = await db.query(
+    `SELECT p.id, p.policy_no, p.lead_id, p.product_id, p.sum_assured, p.premium_amount,
+            p.premium_frequency, p.maturity_date, p.status,
+            p.renewal_collected_at, p.renewal_collected_amount, p.renewal_last_reminded_at,
+            l.name AS lead_name, l.phone AS lead_phone, l.email AS lead_email,
+            pr.name AS product_name, pr.category AS product_category,
+            (SELECT COUNT(*) FROM fin_renewal_reminders rr WHERE rr.policy_id = p.id) AS reminders_sent,
+            (CURRENT_DATE - p.maturity_date::date)::int AS days_overdue
+       FROM fin_policies p
+       LEFT JOIN leads l ON l.id = p.lead_id
+       LEFT JOIN fin_products pr ON pr.id = p.product_id
+      WHERE ${where}
+      ORDER BY p.maturity_date ASC LIMIT 500`
+  );
+  return { renewals: r.rows };
+}
+
+/* FIN_RENEWAL_v1 — fire WA / email reminder for a single policy. */
+async function api_fin_renewal_sendReminder(token, payload) {
+  const me = await authUser(token); await _ensureSchema();
+  const p = payload || {}; const policyId = Number(p.policy_id) || 0;
+  if (!policyId) throw new Error('policy_id required');
+  const channel = String(p.channel || 'wa');  // wa | email | sms
+  const polR = await db.query(`SELECT p.*, l.name AS lead_name, l.phone AS lead_phone, l.email AS lead_email FROM fin_policies p LEFT JOIN leads l ON l.id=p.lead_id WHERE p.id=$1`, [policyId]);
+  if (!polR.rows.length) throw new Error('policy not found');
+  const pol = polR.rows[0];
+  let response = '', status = 'sent';
+  try {
+    if (channel === 'wa') {
+      const tpl = String(p.template || 'renewal_due');
+      let wb; try { wb = require('../whatsbot'); } catch (_) {}
+      if (wb && wb.api_wb_template_sendOne) {
+        const r = await wb.api_wb_template_sendOne(token, {
+          phone: pol.lead_phone, template: tpl,
+          variables: [pol.lead_name || '', pol.policy_no || '', String(pol.maturity_date).slice(0,10), String(pol.premium_amount || '')]
+        }).catch(e => ({ error: e.message }));
+        response = JSON.stringify(r).slice(0, 500);
+        if (r && r.error) status = 'failed';
+      } else { response = 'whatsbot not loaded'; status = 'failed'; }
+    } else if (channel === 'email') {
+      let mailer; try { mailer = require('../../utils/mailer'); } catch (_) {}
+      if (mailer && mailer.send) {
+        const subject = 'Premium Renewal Due — Policy ' + (pol.policy_no || '');
+        const body = `Hi ${pol.lead_name || 'Customer'},\n\nYour policy ${pol.policy_no || ''} is due for renewal on ${String(pol.maturity_date).slice(0,10)}.\nPremium: ₹${pol.premium_amount || 0}\n\nPlease renew at your earliest convenience.\n\nThanks,\nFinance Team`;
+        const r = await mailer.send({ to: pol.lead_email, subject, text: body }).catch(e => ({ error: e.message }));
+        response = JSON.stringify(r).slice(0, 500);
+        if (r && r.error) status = 'failed';
+      } else { response = 'mailer not loaded'; status = 'failed'; }
+    } else { throw new Error('unknown channel: ' + channel); }
+  } catch (e) { response = e.message; status = 'failed'; }
+  await db.query(
+    `INSERT INTO fin_renewal_reminders (policy_id, lead_id, channel, template, sent_by, status, response) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [policyId, pol.lead_id || 0, channel, p.template || '', me.id, status, response]
+  );
+  if (status === 'sent') {
+    await db.query(`UPDATE fin_policies SET renewal_last_reminded_at = NOW() WHERE id=$1`, [policyId]);
+  }
+  return { ok: status === 'sent', status, response };
+}
+
+/* FIN_RENEWAL_v1 — collection report KPIs + monthly breakdown. */
+async function api_fin_renewal_collectionReport(token, payload) {
+  await authUser(token); await _ensureSchema();
+  const months = parseInt((payload && payload.months) || 3, 10);
+  const kpi = await db.query(`
+    SELECT
+      COUNT(*) FILTER (WHERE maturity_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days' AND status NOT IN ('renewed','lapsed','cancelled'))::int AS due_30,
+      COUNT(*) FILTER (WHERE maturity_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '60 days' AND status NOT IN ('renewed','lapsed','cancelled'))::int AS due_60,
+      COUNT(*) FILTER (WHERE maturity_date < CURRENT_DATE AND status NOT IN ('renewed','lapsed','cancelled'))::int AS overdue,
+      COUNT(*) FILTER (WHERE status='renewed' AND maturity_date >= CURRENT_DATE - INTERVAL '30 days')::int AS renewed_30,
+      COUNT(*) FILTER (WHERE status='lapsed' AND maturity_date >= CURRENT_DATE - INTERVAL '30 days')::int AS lapsed_30,
+      COUNT(*) FILTER (WHERE renewal_collected_at >= CURRENT_DATE - INTERVAL '30 days')::int AS collected_30,
+      COALESCE(SUM(renewal_collected_amount) FILTER (WHERE renewal_collected_at >= CURRENT_DATE - INTERVAL '30 days'), 0)::numeric AS collected_amount_30,
+      COALESCE(SUM(premium_amount) FILTER (WHERE maturity_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days' AND status NOT IN ('renewed','lapsed','cancelled')), 0)::numeric AS due_amount_30
+    FROM fin_policies WHERE maturity_date IS NOT NULL`);
+  const monthly = await db.query(`
+    SELECT to_char(date_trunc('month', maturity_date), 'YYYY-MM') AS month,
+           COUNT(*)::int AS total_due,
+           COUNT(*) FILTER (WHERE status='renewed')::int AS renewed_count,
+           COUNT(*) FILTER (WHERE status='lapsed')::int AS lapsed_count,
+           COUNT(*) FILTER (WHERE renewal_collected_at IS NOT NULL)::int AS collected_count,
+           COALESCE(SUM(premium_amount), 0)::numeric AS premium_total,
+           COALESCE(SUM(renewal_collected_amount), 0)::numeric AS collected_amount
+      FROM fin_policies
+     WHERE maturity_date IS NOT NULL
+       AND maturity_date >= CURRENT_DATE - (INTERVAL '1 month' * $1::int)
+       AND maturity_date <= CURRENT_DATE + INTERVAL '3 months'
+     GROUP BY 1 ORDER BY 1 DESC`, [months]);
+  const reminders = await db.query(`
+    SELECT channel, COUNT(*)::int AS cnt
+      FROM fin_renewal_reminders
+     WHERE sent_at >= CURRENT_DATE - INTERVAL '30 days'
+     GROUP BY channel`);
+  return { kpi: kpi.rows[0] || {}, monthly: monthly.rows, reminders_30d: reminders.rows };
+}
+
+/* FIN_RENEWAL_v1 — mark premium collected (renewed + paid). */
+async function api_fin_renewal_markCollected(token, payload) {
+  await authUser(token); await _ensureSchema();
+  const p = payload || {}; const id = Number(p.policy_id) || 0;
+  if (!id) throw new Error('policy_id required');
+  const amount = Number(p.amount || 0);
+  await db.query(`UPDATE fin_policies SET renewal_collected_at = NOW(), renewal_collected_amount = $1, status = CASE WHEN status NOT IN ('renewed','lapsed') THEN 'renewed' ELSE status END WHERE id=$2`, [amount, id]);
+  return { ok: true };
+}
+
+/* FIN_RENEWAL_v1 — mark policy lapsed (customer didn't renew). */
+async function api_fin_renewal_markLapsed(token, payload) {
+  await authUser(token); await _ensureSchema();
+  const id = Number(payload && payload.policy_id) || 0;
+  if (!id) throw new Error('policy_id required');
+  await db.query(`UPDATE fin_policies SET status='lapsed' WHERE id=$1`, [id]);
+  return { ok: true };
+}
+
 async function api_fin_renewal_due(token, payload) {
   await authUser(token); await _ensureSchema();
   const days = parseInt(((payload&&payload.days)||60), 10);
@@ -357,6 +501,8 @@ module.exports = {
   api_fin_premium_markPaid, api_fin_premium_upcomingDue,
   api_fin_claim_create, api_fin_claim_byLead, api_fin_claim_update,
   api_fin_renewal_due, api_fin_renewal_markRenewed,
+  api_fin_renewal_list, api_fin_renewal_sendReminder, api_fin_renewal_collectionReport,
+  api_fin_renewal_markCollected, api_fin_renewal_markLapsed,
   api_fin_lender_add, api_fin_lender_byLead, api_fin_lender_update, api_fin_lender_delete,
   api_fin_commission_add, api_fin_commission_byLead, api_fin_commission_update, api_fin_commission_delete,
   api_fin_doc_byLead, api_fin_doc_setStatus, api_fin_doc_add, api_fin_doc_delete,

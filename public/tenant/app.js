@@ -43548,8 +43548,159 @@ VIEWS.packfinance = async (view) => {
     _packKpiTile('Commission received', _money(s.commission_received?.amount), 'paid out'),
     _packKpiTile('Lender files active', String(s.lender_active || 0), 'in submission')
   ));
-  view.appendChild(h('p', { class: 'muted', style: { fontSize: '.85rem' } },
-    'Full CRUD pages for Products / Policies / Premiums / Claims / Renewals are coming next. The backend APIs are already live (see lead-modal panels).'));
+  /* FIN_RENEWAL_v1 — renewals section with KPI strip + filter + table + collection report */
+  view.appendChild(h('h3', { style: { marginTop: '1.5rem', marginBottom: '.5rem' } }, '🔄 Renewals & Collection'));
+  const renTabs = h('div', { id: 'fin-ren-tabs', style: { marginBottom: '.6rem', display: 'flex', gap: '.4rem', flexWrap: 'wrap' } });
+  view.appendChild(renTabs);
+  const renKpis = h('div', { id: 'fin-ren-kpis', style: { display: 'flex', gap: '.6rem', flexWrap: 'wrap', marginBottom: '.8rem' } });
+  view.appendChild(renKpis);
+  const renTbl = h('div', { id: 'fin-ren-tbl', style: { background: 'white', border: '1px solid #e2e8f0', borderRadius: '8px', overflow: 'hidden' } });
+  view.appendChild(renTbl);
+  const renMonthly = h('div', { id: 'fin-ren-monthly', style: { marginTop: '1rem' } });
+  view.appendChild(renMonthly);
+
+  let _renStatus = 'upcoming';
+  const _renTabs = [
+    ['upcoming', '⏳ Upcoming (90d)', '#3b82f6'],
+    ['due_30',   '⚠️ Due 30d',       '#f59e0b'],
+    ['overdue',  '🔴 Overdue',       '#ef4444'],
+    ['renewed',  '✅ Renewed',       '#10b981'],
+    ['lapsed',   '💀 Lapsed',        '#6b7280'],
+    ['collected','💰 Collected',     '#0ea5e9']
+  ];
+  function _drawTabs() {
+    renTabs.innerHTML = '';
+    _renTabs.forEach(([key, lab, color]) => {
+      const on = _renStatus === key;
+      renTabs.appendChild(h('button', {
+        style: {
+          padding: '5px 12px', borderRadius: '6px', fontSize: '.78rem',
+          border: '1px solid ' + (on ? color : '#cbd5e1'),
+          background: on ? color : '#fff',
+          color: on ? '#fff' : '#475569',
+          fontWeight: on ? '600' : '500', cursor: 'pointer'
+        },
+        onclick: () => { _renStatus = key; _loadRen(); }
+      }, lab));
+    });
+  }
+
+  async function _loadRen() {
+    _drawTabs();
+    renKpis.innerHTML = '<div class="muted">Loading…</div>';
+    renTbl.innerHTML = '<div class="muted" style="padding:.6rem">Loading renewals…</div>';
+    try {
+      const [list, rpt] = await Promise.all([
+        api('api_fin_renewal_list', { status: _renStatus, days: 90 }).catch(() => ({ renewals: [] })),
+        api('api_fin_renewal_collectionReport', { months: 3 }).catch(() => ({ kpi: {}, monthly: [] }))
+      ]);
+      // KPI strip
+      const k = rpt.kpi || {};
+      renKpis.innerHTML = '';
+      [
+        ['Due 30d',         String(k.due_30 || 0),         _money(k.due_amount_30 || 0),    '#f59e0b'],
+        ['Overdue',         String(k.overdue || 0),        'past maturity',                  '#ef4444'],
+        ['Renewed 30d',     String(k.renewed_30 || 0),     'renewed in last month',         '#10b981'],
+        ['Lapsed 30d',      String(k.lapsed_30 || 0),      'lost renewals',                  '#6b7280'],
+        ['Collected 30d',   String(k.collected_30 || 0),   _money(k.collected_amount_30||0), '#0ea5e9']
+      ].forEach(([lab, val, sub, color]) => {
+        renKpis.appendChild(h('div', {
+          style: { flex: '1', minWidth: '140px', background: 'white', border: '1px solid #e2e8f0', borderLeft: '4px solid ' + color, borderRadius: '6px', padding: '8px 12px' }
+        },
+          h('div', { style: { fontSize: '10px', color: '#64748b', textTransform: 'uppercase', letterSpacing: '.5px', fontWeight: 600 } }, lab),
+          h('div', { style: { fontSize: '20px', fontWeight: 700, color: '#0f172a', marginTop: '2px' } }, val),
+          h('div', { style: { fontSize: '11px', color: '#94a3b8', marginTop: '2px' } }, sub)
+        ));
+      });
+      // Renewal list table
+      const rows = list.renewals || [];
+      if (!rows.length) {
+        renTbl.innerHTML = '<div class="muted" style="padding:1rem;text-align:center">No renewals in this bucket.</div>';
+      } else {
+        const tbl = h('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: '12px' } });
+        tbl.appendChild(h('thead', {}, h('tr', { style: { background: '#f8fafc' } },
+          ...['LEAD', 'POLICY', 'PRODUCT', 'MATURITY', 'PREMIUM', 'STATUS', 'REMINDERS', 'ACTIONS'].map(t =>
+            h('th', { style: { padding: '7px 10px', textAlign: 'left', color: '#64748b', fontSize: '10.5px', textTransform: 'uppercase', letterSpacing: '.4px' } }, t)
+          )
+        )));
+        const tbody = h('tbody');
+        rows.forEach(r => {
+          const overdue = r.days_overdue > 0;
+          const dueCol = overdue ? '#ef4444' : '#0f172a';
+          const dueText = String(r.maturity_date || '').slice(0, 10) + (overdue ? ' (' + r.days_overdue + 'd overdue)' : '');
+          tbody.appendChild(h('tr', { style: { borderTop: '1px solid #f1f5f9' } },
+            h('td', { style: { padding: '7px 10px' } }, h('div', { style: { fontWeight: 600 } }, r.lead_name || '—'), h('div', { style: { color: '#94a3b8', fontSize: '10.5px' } }, r.lead_phone || '')),
+            h('td', { style: { padding: '7px 10px', fontFamily: 'monospace', fontSize: '11px' } }, r.policy_no || '—'),
+            h('td', { style: { padding: '7px 10px' } }, r.product_name || '—'),
+            h('td', { style: { padding: '7px 10px', color: dueCol, fontWeight: overdue ? '600' : '400' } }, dueText),
+            h('td', { style: { padding: '7px 10px', fontWeight: 600 } }, _money(r.premium_amount)),
+            h('td', { style: { padding: '7px 10px' } }, h('span', { style: { padding: '2px 8px', borderRadius: '10px', fontSize: '10.5px', background: r.status==='renewed'?'#dcfce7':r.status==='lapsed'?'#fee2e2':'#fef3c7', color: r.status==='renewed'?'#166534':r.status==='lapsed'?'#991b1b':'#92400e' } }, r.status || 'active')),
+            h('td', { style: { padding: '7px 10px' } }, String(r.reminders_sent || 0) + ' sent'),
+            h('td', { style: { padding: '7px 10px' } },
+              h('div', { style: { display: 'flex', gap: '4px', flexWrap: 'wrap' } },
+                h('button', { class: 'btn ghost sm', title: 'Send WhatsApp reminder', style: { padding: '3px 8px', fontSize: '11px' }, onclick: async (e) => {
+                  e.target.disabled = true; e.target.textContent = '⏳';
+                  try { const r2 = await api('api_fin_renewal_sendReminder', { policy_id: r.id, channel: 'wa', template: 'renewal_due' }); toast(r2.ok ? '✅ WA sent' : '❌ ' + (r2.response || 'failed'), r2.ok ? 'ok' : 'err'); _loadRen(); }
+                  catch (er) { toast('Send failed: ' + er.message, 'err'); e.target.disabled = false; e.target.textContent = '💬 WA'; }
+                } }, '💬 WA'),
+                h('button', { class: 'btn ghost sm', title: 'Send email reminder', style: { padding: '3px 8px', fontSize: '11px' }, onclick: async (e) => {
+                  e.target.disabled = true; e.target.textContent = '⏳';
+                  try { const r2 = await api('api_fin_renewal_sendReminder', { policy_id: r.id, channel: 'email' }); toast(r2.ok ? '✅ Email sent' : '❌ ' + (r2.response || 'failed'), r2.ok ? 'ok' : 'err'); _loadRen(); }
+                  catch (er) { toast('Send failed: ' + er.message, 'err'); e.target.disabled = false; e.target.textContent = '📧'; }
+                } }, '📧'),
+                h('button', { class: 'btn ghost sm', title: 'Mark collected (renewed + paid)', style: { padding: '3px 8px', fontSize: '11px', background: '#dcfce7', color: '#166534', borderColor: '#86efac' }, onclick: async () => {
+                  const amt = prompt('Premium amount collected (₹):', String(r.premium_amount || ''));
+                  if (amt == null) return;
+                  try { await api('api_fin_renewal_markCollected', { policy_id: r.id, amount: Number(amt) || 0 }); toast('✅ Marked collected', 'ok'); _loadRen(); }
+                  catch (er) { toast(er.message, 'err'); }
+                } }, '💰 Collect'),
+                h('button', { class: 'btn ghost sm', title: 'Mark as lapsed', style: { padding: '3px 8px', fontSize: '11px', color: '#6b7280' }, onclick: async () => {
+                  if (!confirm('Mark this policy as lapsed (customer did not renew)?')) return;
+                  try { await api('api_fin_renewal_markLapsed', { policy_id: r.id }); toast('Marked lapsed', 'ok'); _loadRen(); }
+                  catch (er) { toast(er.message, 'err'); }
+                } }, 'Lapsed')
+              )
+            )
+          ));
+        });
+        tbl.appendChild(tbody);
+        renTbl.innerHTML = '';
+        renTbl.appendChild(tbl);
+      }
+      // Monthly collection report
+      renMonthly.innerHTML = '';
+      const monthly = rpt.monthly || [];
+      if (monthly.length) {
+        renMonthly.appendChild(h('h3', { style: { fontSize: '14px', marginTop: '1rem', marginBottom: '.5rem' } }, '📊 Monthly Collection Report'));
+        const mtb = h('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: '12px', background: 'white', border: '1px solid #e2e8f0', borderRadius: '8px', overflow: 'hidden' } });
+        mtb.appendChild(h('thead', {}, h('tr', { style: { background: '#f8fafc' } },
+          ...['Month', 'Total Due', 'Renewed', 'Lapsed', 'Collected', 'Premium Total', 'Collected ₹', 'Collection %'].map(t =>
+            h('th', { style: { padding: '7px 10px', textAlign: 'left', color: '#64748b', fontSize: '10.5px', textTransform: 'uppercase' } }, t)
+          )
+        )));
+        const mtbody = h('tbody');
+        monthly.forEach(m => {
+          const pct = m.total_due ? Math.round((m.collected_count / m.total_due) * 100) : 0;
+          const pctColor = pct >= 75 ? '#10b981' : pct >= 50 ? '#f59e0b' : '#ef4444';
+          mtbody.appendChild(h('tr', { style: { borderTop: '1px solid #f1f5f9' } },
+            h('td', { style: { padding: '6px 10px', fontWeight: 600 } }, m.month),
+            h('td', { style: { padding: '6px 10px' } }, String(m.total_due)),
+            h('td', { style: { padding: '6px 10px', color: '#10b981' } }, String(m.renewed_count)),
+            h('td', { style: { padding: '6px 10px', color: '#ef4444' } }, String(m.lapsed_count)),
+            h('td', { style: { padding: '6px 10px', color: '#0ea5e9', fontWeight: 600 } }, String(m.collected_count)),
+            h('td', { style: { padding: '6px 10px' } }, _money(m.premium_total)),
+            h('td', { style: { padding: '6px 10px', fontWeight: 600 } }, _money(m.collected_amount)),
+            h('td', { style: { padding: '6px 10px' } }, h('span', { style: { padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 600, color: '#fff', background: pctColor } }, pct + '%'))
+          ));
+        });
+        mtb.appendChild(mtbody);
+        renMonthly.appendChild(mtb);
+      }
+    } catch (e) {
+      renTbl.innerHTML = '<div class="error-box">Could not load renewals: ' + esc(e.message) + '</div>';
+    }
+  }
+  _loadRen();
 };
 
 VIEWS.packsolar = async (view) => {

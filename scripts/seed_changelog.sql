@@ -761,3 +761,10 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'Root-caused the recurring "Cannot use a pool after calling end on the pool" 500s some tenants saw the last few days. A tenant DB connection pool could be evicted by the LRU cleanup in the brief window after it was handed to a request but before that request issued its first query, crashing the request. The eviction pass now skips any pool handed out within a 30s grace window and defers the actual close by 15s so in-flight requests drain cleanly. No UI change.',
  'super_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+-- FIN_RENEWAL_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('FIN_RENEWAL_v1', 'Finance pack: Renewal & Collection workflow',
+ 'New 🔄 Renewals section on Finance Overview page. KPI strip (Due 30d / Overdue / Renewed / Lapsed / Collected), 6 status tabs (Upcoming / Due 30 / Overdue / Renewed / Lapsed / Collected), live renewal list with per-row actions: 💬 send WA reminder, 📧 send email reminder, 💰 mark collected, mark lapsed. Monthly Collection Report below shows collection % per month with color-coded health. Reminder history tracked in fin_renewal_reminders table.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;
