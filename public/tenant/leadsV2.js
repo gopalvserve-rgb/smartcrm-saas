@@ -427,14 +427,26 @@ tr:hover .lv2-actions { opacity: 1; }
   /* ---------- data load ---------- */
   async function load() {
     try {
-      const [leads, statuses, users, sources, tags, campaigns] = await Promise.all([
+      /* LEADS_V2_HEADER_v4 (2026-06-27) — fetch brand fresh BEFORE first render so
+         the LEADS_V2_HEADER_V4_ENABLED flag is available to _headerV4Enabled().
+         Without this, CRM.brand / CRM._earlyBrand are empty on first paint and
+         the new compact header never activates. Same race we fixed for WB_CHAT_V2. */
+      const [leads, statuses, users, sources, tags, campaigns, brand] = await Promise.all([
         api('api_leads_list', { page_size: 500 }).catch(() => []),
         api('api_statuses_list').catch(() => []),
         api('api_users_list').catch(() => []),
         api('api_sources_list').catch(() => []),
         api('api_leads_distinctTags').catch(() => []),
-        api('api_campaigns_list').catch(() => [])
+        api('api_campaigns_list').catch(() => []),
+        api('api_admin_brand').catch(() => null)
       ]);
+      if (brand && typeof brand === 'object') {
+        try {
+          window.CRM = window.CRM || {};
+          CRM.brand = Object.assign(CRM.brand || {}, brand);
+          CRM._earlyBrand = Object.assign(CRM._earlyBrand || {}, brand);
+        } catch (_) {}
+      }
       // api_leads_list returns { leads, total, page, page_size, status_count }
       // — handle that shape PLUS fall back to direct array / .rows for safety.
       S.leads = (leads && Array.isArray(leads.leads)) ? leads.leads
