@@ -4783,7 +4783,21 @@ VIEWS.leads = async (view) => {
         try {
           if (style === 'modern') await window.LEADS_V2.renderModern(view);
           else                    await window.LEADS_V2.renderInbox(view);
-          _lv2ok = !!view.querySelector('.lv2-modern, .lv2-inbox');
+          const _body = view.querySelector('.lv2-modern, .lv2-inbox');
+          _lv2ok = !!_body;
+          // LEADS_V2_FIT_v1 (2026-06-27) — Modern/Inbox used a hardcoded
+          // height:calc(100vh-…) that pushed the body off-screen ("hiding behind
+          // the page") on layouts with a taller top bar. Size it to the real space
+          // from its top to the viewport bottom so it always fits; .tbl-wrap then
+          // scrolls internally.
+          if (_body) {
+            const _fit = () => { try { const t = _body.getBoundingClientRect().top; _body.style.height = Math.max(340, Math.round(window.innerHeight - t - 10)) + 'px'; } catch (_) {} };
+            _fit(); setTimeout(_fit, 60);
+            if (!window._lv2FitBound) {
+              window._lv2FitBound = true;
+              window.addEventListener('resize', () => { const b = document.querySelector('.lv2-modern, .lv2-inbox'); if (b) { const t = b.getBoundingClientRect().top; b.style.height = Math.max(340, Math.round(window.innerHeight - t - 10)) + 'px'; } });
+            }
+          }
         } catch (err) { console.warn('[LEADS_V2] ' + style + ' render failed:', err && err.message); }
         if (_lv2ok) return;
         console.warn('[LEADS_V2] ' + style + ' produced an empty body — showing Classic instead');

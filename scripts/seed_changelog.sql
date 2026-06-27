@@ -859,3 +859,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'If the Modern or Inbox leads view fails to load, the page now automatically falls back to the Classic view instead of showing a blank screen.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- LEADS_V2_FIT_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('LEADS_V2_FIT_v1', 'Leads: Modern/Inbox view now fits the screen',
+ 'The Modern and Inbox leads views could render below the visible area on some layouts (appearing blank). They now size to the available space so the list shows correctly and scrolls inside the page.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;
