@@ -1257,7 +1257,7 @@ async function api_re_seedDemoV2(/*token*/) {
     const stage = STAGE_DIST[i];
     const lid = allLeads[i % allLeads.length];
     const listId = listingIds[i % listingIds.length];
-    const ask = (LISTINGS[i % LISTINGS.length][8]);
+    const ask = Number(LISTINGS[i % LISTINGS.length][7]) || 5000000;  // [7]=price_inr, NOT [8]=landmark text
     const isDone = stage === 8;
     await db.query(
       `INSERT INTO re_deals
