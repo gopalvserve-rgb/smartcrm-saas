@@ -4736,48 +4736,11 @@ VIEWS.leads = async (view) => {
       } catch (_) {}
       CRM._lv2Checked = true;
     }
-    if (String(cfg.LEADS_VIEW_V2_ENABLED || '') === '1' && window.LEADS_V2) {
-      let bar = document.getElementById('lv2-floating-toggle');
-      if (!bar) {
-        bar = h('div', {
-          id: 'lv2-floating-toggle',
-          style: {
-            position: 'fixed', top: '12px', right: '180px', zIndex: '900',
-            background: 'white', border: '1px solid #e2e8f0', borderRadius: '8px',
-            padding: '4px 8px', boxShadow: '0 2px 8px rgba(0,0,0,.06)',
-            display: 'flex', alignItems: 'center', gap: '8px'
-          }
-        },
-          h('span', { style: { fontSize: '11px', color: '#64748b', fontWeight: '500' } }, '✨ View:'),
-          window.LEADS_V2.createToggle((newStyle) => {
-            try { window.LEADS_V2.closeSlideOver && window.LEADS_V2.closeSlideOver(); } catch (_) {}
-            VIEWS.leads(view);
-          }));
-        document.body.appendChild(bar);
-        try {
-          const hashWatcher = () => {
-            const onLeads = String(location.hash || '').indexOf('/leads') >= 0;
-            const el = document.getElementById('lv2-floating-toggle');
-            if (el) el.style.display = onLeads ? 'flex' : 'none';
-          };
-          window.addEventListener('hashchange', hashWatcher);
-          hashWatcher();
-        } catch (_) {}
-      } else {
-        bar.style.display = 'flex';
-        // Rebuild toggle buttons so the active style highlight is up-to-date
-        try {
-          const inner = bar.querySelector('.lv2-toggle');
-          if (inner) {
-            const fresh = window.LEADS_V2.createToggle((newStyle) => {
-              try { window.LEADS_V2.closeSlideOver && window.LEADS_V2.closeSlideOver(); } catch (_) {}
-              VIEWS.leads(view);
-            });
-            inner.replaceWith(fresh);
-          }
-        } catch (_) {}
-      }
-    }
+    // LEADS_VIEW_TOGGLE_RELOCATE_v1 (2026-06-27) — the View switcher used to be a
+    // fixed pill (top:12px / right:180px) that overlapped the top-bar buttons.
+    // It is now docked inline in the Leads page header (classic + modern + inbox),
+    // so remove any stale floating pill that an older cached session left behind.
+    try { const _stale = document.getElementById('lv2-floating-toggle'); if (_stale) _stale.remove(); } catch (_) {}
   } catch (_) {}
 
   try {
@@ -4877,6 +4840,16 @@ VIEWS.leads = async (view) => {
     const header = h('div', { class: 'leads-header' },
       h('div', { class: 'leads-status-chips', id: 'status-chips' }),
       h('div', { class: 'header-actions' },
+        // LEADS_VIEW_TOGGLE_RELOCATE_v1 — View switcher docked here (no longer a
+        // floating pill). Only shown when LEADS_VIEW_V2 is enabled for the tenant.
+        (String(((CRM && (CRM.brand || CRM._earlyBrand)) || {}).LEADS_VIEW_V2_ENABLED || '') === '1' && window.LEADS_V2)
+          ? h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px', marginRight: '8px' } },
+              h('span', { style: { fontSize: '11px', color: '#64748b', fontWeight: '500' } }, '✨ View:'),
+              window.LEADS_V2.createToggle((newStyle) => {
+                try { window.LEADS_V2.closeSlideOver && window.LEADS_V2.closeSlideOver(); } catch (_) {}
+                VIEWS.leads(view);
+              }))
+          : null,
         h('button', { class: 'btn sm ghost', title: 'Hide header', onclick: () => toggleHeader(false) }, '− Hide')
       )
     );

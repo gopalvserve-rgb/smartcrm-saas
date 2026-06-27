@@ -784,3 +784,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'Several feature modules had their script loaders accidentally dropped from index.html when the industry pack scripts were added, making them disappear: Modern/Inbox Leads page theme (leadsV2), Proactive AI Assist (copilotProactive), Smart AI Lead Score (leadScoring), Opportunities tab, Student 360, and AI Call (VAPI) config. All loaders restored; each feature returns to its prior rollout state.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- LEADS_VIEW_TOGGLE_RELOCATE_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('LEADS_VIEW_TOGGLE_RELOCATE_v1', 'Leads: View switcher moved into the page header',
+ 'The Classic / Modern / Inbox view switcher was a floating pill that overlapped the top toolbar buttons. It now sits inline inside the Leads page header, next to the Hide button, so it no longer covers anything.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;
