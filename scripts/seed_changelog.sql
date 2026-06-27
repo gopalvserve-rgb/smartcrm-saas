@@ -816,3 +816,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'Three improvements on the Sale Closure page: (1) the stage graph now has a type selector — Bar, Funnel or Donut; (2) the filter bar is collapsed by default behind a compact Filters toggle so it no longer fills the page; (3) converted-customer detection now matches any final Won-type status (Won / Converted / Sale Closed / Enrolled / Paid) and not only statuses explicitly mapped to the won stage, while excluding Lost / Junk / Not Interested.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- LEADS_VIEW_V2_ALLTENANTS_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('LEADS_VIEW_V2_ALLTENANTS_v1', 'Leads: Classic / Modern / Inbox view switcher on every tenant',
+ 'The Leads page view switcher (Classic / Modern / Inbox) now appears for all tenants, not just the beta tenant. Classic remains the default. Admins who want the old behaviour can turn it off by setting LEADS_VIEW_V2_ENABLED to 0.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

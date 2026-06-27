@@ -4762,7 +4762,7 @@ VIEWS.leads = async (view) => {
       } catch (_) {}
       CRM._lv2Checked = true;
     }
-    const flagOn = String(cfg.LEADS_VIEW_V2_ENABLED || '') === '1';
+    const flagOn = String(cfg.LEADS_VIEW_V2_ENABLED || '') !== '0'; // LEADS_VIEW_V2_ALLTENANTS_v1 — toggle on for every tenant (Classic default); opt out with '0'
     console.log('[LEADS_V2] delegator check — flag:', cfg.LEADS_VIEW_V2_ENABLED, 'module:', typeof window.LEADS_V2);
     if (flagOn && window.LEADS_V2) {
       const style = window.LEADS_V2.getStyle();
@@ -4849,7 +4849,7 @@ VIEWS.leads = async (view) => {
       h('div', { class: 'header-actions' },
         // LEADS_VIEW_TOGGLE_RELOCATE_v1 — View switcher docked here (no longer a
         // floating pill). Only shown when LEADS_VIEW_V2 is enabled for the tenant.
-        (String(((CRM && (CRM.brand || CRM._earlyBrand)) || {}).LEADS_VIEW_V2_ENABLED || '') === '1' && window.LEADS_V2)
+        (String(((CRM && (CRM.brand || CRM._earlyBrand)) || {}).LEADS_VIEW_V2_ENABLED || '') !== '0' && window.LEADS_V2)
           ? h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px', marginRight: '8px' } },
               h('span', { style: { fontSize: '11px', color: '#64748b', fontWeight: '500' } }, '✨ View:'),
               window.LEADS_V2.createToggle((newStyle) => {
