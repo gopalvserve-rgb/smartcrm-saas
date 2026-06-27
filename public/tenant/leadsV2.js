@@ -167,7 +167,7 @@
 .lv2-toggle button.active { background: white; color: #0f172a; font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.06); }
 
 /* ===== MODERN (A3) STYLES ===== */
-.lv2-modern { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; margin-top: 10px; display: flex; flex-direction: column; height: calc(100vh - 100px); }
+.lv2-modern { background: #ffffff; border: 0; border-radius: 0; overflow: hidden; margin-top: 0; display: flex; flex-direction: column; height: calc(100vh - 60px); }
 .lv2-modern .health { display: grid; grid-template-columns: repeat(5, 1fr); padding: 14px 18px; border-bottom: 1px solid #e2e8f0; background: linear-gradient(to bottom, #fafbfc, #ffffff); }
 .lv2-modern .hcell { padding: 0 16px; border-right: 1px solid #f1f5f9; }
 .lv2-modern .hcell:first-child { padding-left: 0; }
