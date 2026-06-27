@@ -445,6 +445,7 @@ tr:hover .lv2-actions { opacity: 1; }
           window.CRM = window.CRM || {};
           CRM.brand = Object.assign(CRM.brand || {}, brand);
           CRM._earlyBrand = Object.assign(CRM._earlyBrand || {}, brand);
+          if (brand.LEADS_V2_HEADER_V4_ENABLED === '1') _v4HdrFlagCached = '1';
         } catch (_) {}
       }
       // api_leads_list returns { leads, total, page, page_size, status_count }
@@ -616,11 +617,34 @@ tr:hover .lv2-actions { opacity: 1; }
    * LEADS_V2_HEADER_V4_ENABLED='1' (auto-set on vserve). Falls back to the legacy
    * 3-row header otherwise.
    */
+  /* Module-level cache so flag survives CRM.brand being reset between renders. */
+  let _v4HdrFlagCached = null;
   function _headerV4Enabled() {
     try {
+      if (_v4HdrFlagCached === '1') return true;
       const C = window.CRM || {};
       const b = (C.brand || C._earlyBrand || {});
-      return String(b.LEADS_V2_HEADER_V4_ENABLED || '') === '1';
+      const v = String(b.LEADS_V2_HEADER_V4_ENABLED || '');
+      if (v === '1') { _v4HdrFlagCached = '1'; return true; }
+      // Async hydrate-and-re-render fallback (no await — best effort on next render)
+      if (_v4HdrFlagCached === null && typeof api === 'function') {
+        _v4HdrFlagCached = 'fetching';
+        api('api_admin_brand').then(r => {
+          if (r && r.LEADS_V2_HEADER_V4_ENABLED === '1') {
+            _v4HdrFlagCached = '1';
+            try {
+              window.CRM = window.CRM || {};
+              CRM.brand = Object.assign(CRM.brand || {}, r);
+              CRM._earlyBrand = Object.assign(CRM._earlyBrand || {}, r);
+              const v = document.getElementById('view');
+              if (v && S.style === 'modern') renderModern(v);
+            } catch (_) {}
+          } else {
+            _v4HdrFlagCached = '0';
+          }
+        }).catch(() => { _v4HdrFlagCached = '0'; });
+      }
+      return false;
     } catch (_) { return false; }
   }
 
@@ -795,6 +819,31 @@ tr:hover .lv2-actions { opacity: 1; }
         style: { background: '#4f46e5', color: '#fff', border: '1px solid #4f46e5', borderRadius: '7px', padding: '5px 12px', fontSize: '12px', cursor: 'pointer', fontWeight: '600' },
         onclick: () => { try { if (typeof window.openLeadModal === 'function') window.openLeadModal(); } catch (e) { toast('Could not open: ' + e.message, 'err'); } }
       }, '＋ New Lead'));
+
+      // 🔀 Merge selected (bulk action)
+      const mergeBtn = h('button', {
+        style: { background: '#fff', border: '1px solid #cbd5e1', borderRadius: '7px', padding: '5px 11px', fontSize: '12px', cursor: 'pointer', color: '#475569', fontWeight: '500', display: 'inline-flex', alignItems: 'center', gap: '5px' },
+        title: 'Merge selected leads into one (select 2+ rows first)',
+        onclick: () => {
+          try {
+            // Mirror the global bulkMergePrompt in app.js. Modern row checkboxes use class lv2-rowsel.
+            const ids = Array.from(document.querySelectorAll('input.lv2-rowsel:checked, .tbl-wrap input[type=checkbox]:checked'))
+              .map(el => Number(el.dataset && el.dataset.leadId || el.value))
+              .filter(n => n > 0);
+            if (ids.length < 2) { toast('Select at least 2 leads to merge', 'err'); return; }
+            // Hand off to the global merge prompt if it can read selection from a custom shim
+            window._lv2MergeIds = ids;
+            if (typeof window.bulkMergePrompt === 'function') {
+              // Override selectedIds() temporarily so bulkMergePrompt sees our Modern checkboxes
+              const _origSel = window.selectedIds;
+              window.selectedIds = () => ids;
+              try { window.bulkMergePrompt(); }
+              finally { setTimeout(() => { try { window.selectedIds = _origSel; } catch(_){} }, 100); }
+            } else { toast('Merge function not loaded', 'err'); }
+          } catch (e) { toast('Merge failed: ' + e.message, 'err'); }
+        }
+      }, '🔀 Merge');
+      wrap.appendChild(mergeBtn);
 
       // ⋮ More menu (Export + Theme)
       const more = h('button', {
