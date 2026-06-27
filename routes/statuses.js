@@ -142,7 +142,15 @@ async function api_pipeline_funnel(token, payload) {
 
   // Stages in display order
   const STAGE_ORDER = ['fresh', 'attempted', 'qualified', 'negotiation', 'proposal'];
-  const STAGE_LABELS = {
+  // EDU_FUNNEL_LABELS_v1 (2026-06-27) — when the education pack is active, relabel
+  // the generic funnel stages to admissions terms (Inquiry → Admitted).
+  let _eduPack = false;
+  try { _eduPack = await require('./packs/_framework').isPackActive('education'); } catch (_) {}
+  const STAGE_LABELS = _eduPack ? {
+    fresh: 'Inquiry', attempted: 'Follow-up', qualified: 'Counselling Done',
+    negotiation: 'Form Submitted', proposal: 'Fee/Offer Sent',
+    won: 'Admitted', lost: 'Dropped'
+  } : {
     fresh: 'New lead', attempted: 'Contacted', qualified: 'Qualified',
     negotiation: 'Negotiation', proposal: 'Proposal sent',
     won: 'Won', lost: 'Lost'

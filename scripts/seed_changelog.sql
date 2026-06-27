@@ -891,3 +891,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The Focus mode button in the Modern leads view did nothing when the compact header was on. It now activates Focus mode (Hot / Warm / Nurture buckets) and always shows an Exit Focus control so you can switch back.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- EDU_FUNNEL_LABELS_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('EDU_FUNNEL_LABELS_v1', 'Education pack: admissions funnel stage names',
+ 'On tenants with the Education pack, the pipeline funnel now shows admissions terms: Inquiry, Follow-up, Counselling Done, Form Submitted, Fee/Offer Sent, plus Admitted (won) and Dropped (lost). Other tenants keep the default sales names.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;
