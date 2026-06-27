@@ -121,6 +121,17 @@ async function _installer({ db: D }) {
       created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
     )
   `, []);
+
+  // HOLIDAY_SCHEMA_FIX_v1 (2026-06-27) — add columns to OLD tour_bookings tables
+  // that were created before the destination_id / package_id columns were added.
+  await D.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS destination_id INT`, []).catch(() => {});
+  await D.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS package_id INT`, []).catch(() => {});
+  await D.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS travellers INT DEFAULT 2`, []).catch(() => {});
+  await D.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS travel_start_date DATE`, []).catch(() => {});
+  await D.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS travel_end_date DATE`, []).catch(() => {});
+  await D.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS total_inr NUMERIC(14,2) DEFAULT 0`, []).catch(() => {});
+  await D.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS advance_inr NUMERIC(14,2) DEFAULT 0`, []).catch(() => {});
+  await D.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS balance_inr NUMERIC(14,2) DEFAULT 0`, []).catch(() => {});
   await D.query(`CREATE INDEX IF NOT EXISTS tour_bookings_lead_idx ON tour_bookings(lead_id)`, []);
   await D.query(`CREATE INDEX IF NOT EXISTS tour_bookings_travel_idx ON tour_bookings(travel_start_date)`, []);
 

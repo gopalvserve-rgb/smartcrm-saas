@@ -1163,9 +1163,19 @@ async function api_re_seedDemoV2(/*token*/) {
   await _ensureTables();
   await _seedREStages();
 
-  const existing = await db.query(`SELECT COUNT(*)::int AS n FROM re_listings`, []);
-  if ((existing.rows[0] || {}).n >= 15) {
+  const existingL = await db.query(`SELECT COUNT(*)::int AS n FROM re_listings`, []);
+  const existingD = await db.query(`SELECT COUNT(*)::int AS n FROM re_deals`, []).catch(() => ({ rows: [{ n: 0 }] }));
+  const haveListings = (existingL.rows[0] || {}).n >= 15;
+  const haveDeals    = (existingD.rows[0] || {}).n >= 5;
+  if (haveListings && haveDeals) {
     return { ok: true, skipped: true, message: 'RE demo already present.' };
+  }
+  // RE_SEED_FIX_v2 — if listings exist but deals don't, skip the leads+listings block
+  // and jump straight to seeding deals + analytics on existing listings.
+  const skipLeadsAndListings = haveListings && !haveDeals;
+  if (skipLeadsAndListings) {
+    const existingListingsRows = await db.query(`SELECT id FROM re_listings ORDER BY id LIMIT 25`, []);
+    var _existingListingIds = existingListingsRows.rows.map(r => r.id);
   }
 
   // Seed leads if too few
@@ -1224,8 +1234,8 @@ async function api_re_seedDemoV2(/*token*/) {
   const STATUSES = ['available','available','available','available','available',
                     'under_offer','under_offer','booked','sold','rented'];
 
-  const listingIds = [];
-  for (let i = 0; i < LISTINGS.length; i++) {
+  let listingIds = skipLeadsAndListings ? _existingListingIds.slice() : [];
+  if (!skipLeadsAndListings) for (let i = 0; i < LISTINGS.length; i++) {
     const L = LISTINGS[i];
     const r = await db.query(
       `INSERT INTO re_listings
