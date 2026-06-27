@@ -931,3 +931,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The "times dialed" count on leads now also reflects historical calls (completed outgoing calls and recordings made before dial tracking was added), not just new dials.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- CALL_DIAL_COUNT_v3 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('CALL_DIAL_COUNT_v3', 'Dial count now matches call activity (per number)',
+ 'The times-dialed count is taken directly from the call activity data and now counts every outgoing call to that phone number (matched by lead and by number), including calls logged under duplicate leads.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

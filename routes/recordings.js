@@ -70,29 +70,50 @@ async function _findLeadByPhone(phone) {
 // outgoing call_ended events and outgoing recordings, and take the MAX per
 // lead (so new+old are covered without double-counting a single call).
 async function _dialCountMap(ids) {
+  // CALL_DIAL_COUNT_v3 — count "times dialed on that NUMBER" straight from the
+  // call-activity data (call_events) + recordings, matching BOTH by lead_id and
+  // by the lead's phone number (last 10 digits) so calls logged under duplicate
+  // leads or with a null lead_id still count. Per source we take the MAX of the
+  // dial signals so a single call (which logs dial_requested + call_ended) isn't
+  // double-counted, then the MAX across lead_id and phone matches.
   const map = {};
   if (!ids.length) return map;
+  const norm = (pp) => String(pp || '').replace(/\D/g, '').slice(-10);
+  const EVT = `GREATEST(
+    COUNT(*) FILTER (WHERE event = 'dial_requested'),
+    COUNT(*) FILTER (WHERE event IN ('call_ended','outgoing_ended','call_disconnected') AND COALESCE(direction,'out') <> 'in'),
+    COUNT(*) FILTER (WHERE event = 'outgoing')
+  )::int`;
+  const P = `right(regexp_replace(coalesce(phone,''),'[^0-9]','','g'),10)`;
+
+  let leadRows = [];
+  try { const r = await db.query(`SELECT id, phone FROM leads WHERE id = ANY($1::int[])`, [ids]); leadRows = r.rows || []; } catch (_) {}
+  const phones = [...new Set(leadRows.map(r => norm(r.phone)).filter(x => x.length >= 7))];
+
+  const byId = {};
   try {
-    const { rows } = await db.query(
-      `SELECT lead_id,
-              GREATEST(
-                COUNT(*) FILTER (WHERE event = 'dial_requested'),
-                COUNT(*) FILTER (WHERE event IN ('call_ended','outgoing_ended','call_disconnected') AND COALESCE(direction,'out') <> 'in'),
-                COUNT(*) FILTER (WHERE event = 'outgoing')
-              )::int AS n
-         FROM call_events
-        WHERE lead_id = ANY($1::int[])
-        GROUP BY lead_id`, [ids]);
-    rows.forEach(r => { map[r.lead_id] = Number(r.n) || 0; });
+    const { rows } = await db.query(`SELECT lead_id, ${EVT} AS n FROM call_events WHERE lead_id = ANY($1::int[]) GROUP BY lead_id`, [ids]);
+    rows.forEach(r => { byId[r.lead_id] = Number(r.n) || 0; });
   } catch (_) {}
   try {
-    const { rows } = await db.query(
-      `SELECT lead_id, COUNT(*)::int AS n
-         FROM lead_recordings
-        WHERE COALESCE(direction,'out') <> 'in' AND lead_id = ANY($1::int[])
-        GROUP BY lead_id`, [ids]);
-    rows.forEach(r => { const c = Number(r.n) || 0; if (c > (map[r.lead_id] || 0)) map[r.lead_id] = c; });
+    const { rows } = await db.query(`SELECT lead_id, COUNT(*)::int AS n FROM lead_recordings WHERE COALESCE(direction,'out') <> 'in' AND lead_id = ANY($1::int[]) GROUP BY lead_id`, [ids]);
+    rows.forEach(r => { const c = Number(r.n) || 0; if (c > (byId[r.lead_id] || 0)) byId[r.lead_id] = c; });
   } catch (_) {}
+
+  const byPhone = {};
+  if (phones.length) {
+    try {
+      const { rows } = await db.query(`SELECT ${P} AS ph, ${EVT} AS n FROM call_events WHERE ${P} = ANY($1::text[]) GROUP BY ${P}`, [phones]);
+      rows.forEach(r => { if (r.ph) byPhone[r.ph] = Number(r.n) || 0; });
+    } catch (_) {}
+    try {
+      const { rows } = await db.query(`SELECT ${P} AS ph, COUNT(*)::int AS n FROM lead_recordings WHERE COALESCE(direction,'out') <> 'in' AND ${P} = ANY($1::text[]) GROUP BY ${P}`, [phones]);
+      rows.forEach(r => { const c = Number(r.n) || 0; if (r.ph && c > (byPhone[r.ph] || 0)) byPhone[r.ph] = c; });
+    } catch (_) {}
+  }
+
+  leadRows.forEach(r => { const ph = norm(r.phone); map[r.id] = Math.max(byId[r.id] || 0, (ph && byPhone[ph]) || 0); });
+  ids.forEach(id => { if (map[id] === undefined) map[id] = byId[id] || 0; });
   return map;
 }
 async function api_leads_dialCounts(token, leadIds) {
