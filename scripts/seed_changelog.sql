@@ -776,3 +776,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The redesigned 3-column WhatsApp chat (thread list + chat + live lead panel with AI Score, AI Summary, status change, add-remark and activity timeline) is back. Its loader had been accidentally dropped when the industry pack scripts were added, causing a fallback to the old 2-column view. Re-enabled for the vserve beta tenant only.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- WB_CHAT_V2_RESTORE_v1b (2026-06-27) — restore remaining dropped feature loaders
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('FEATURE_LOADERS_RESTORE_v1', 'Restored: AI features + Modern Leads theme',
+ 'Several feature modules had their script loaders accidentally dropped from index.html when the industry pack scripts were added, making them disappear: Modern/Inbox Leads page theme (leadsV2), Proactive AI Assist (copilotProactive), Smart AI Lead Score (leadScoring), Opportunities tab, Student 360, and AI Call (VAPI) config. All loaders restored; each feature returns to its prior rollout state.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;
