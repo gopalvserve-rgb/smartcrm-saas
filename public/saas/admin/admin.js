@@ -1271,23 +1271,39 @@ async function openShowcaseDemoModal() {
   body.appendChild(result);
 
   const runBtn = h('button', { class: 'btn primary', id: 'demo-run-btn', onclick: () => _runDemoSeed() }, '✨ Generic CRM demo (showcase)');
-  const eduBtn = h('button', { class: 'btn', style: { background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' }, onclick: () => _runIndustrySeed('education') }, '🎓 Education demo (showcase-edu)');
-  const reBtn  = h('button', { class: 'btn', style: { background: '#dbeafe', color: '#1e40af', borderColor: '#bfdbfe' }, onclick: () => _runIndustrySeed('realestate') }, '🏢 Real Estate demo (showcase-re)');
+  const eduBtn = h('button', { class: 'btn', style: { background: '#fef3c7', color: '#92400e', borderColor: '#fde68a' }, onclick: () => _runIndustrySeed('education')   }, '🎓 Education (showcase-edu)');
+  const reBtn  = h('button', { class: 'btn', style: { background: '#dbeafe', color: '#1e40af', borderColor: '#bfdbfe' }, onclick: () => _runIndustrySeed('realestate')  }, '🏢 Real Estate (showcase-re)');
+  const finBtn = h('button', { class: 'btn', style: { background: '#dcfce7', color: '#166534', borderColor: '#bbf7d0' }, onclick: () => _runIndustrySeed('finance')      }, '💰 Finance (showcase-finance)');
+  const holBtn = h('button', { class: 'btn', style: { background: '#fce7f3', color: '#9d174d', borderColor: '#fbcfe8' }, onclick: () => _runIndustrySeed('holiday')      }, '🌴 Holiday (showcase-holiday)');
+  const solBtn = h('button', { class: 'btn', style: { background: '#fef9c3', color: '#854d0e', borderColor: '#fde68a' }, onclick: () => _runIndustrySeed('solar')        }, '☀️ Solar (showcase-solar)');
+  const mfgBtn = h('button', { class: 'btn', style: { background: '#e0e7ff', color: '#3730a3', borderColor: '#c7d2fe' }, onclick: () => _runIndustrySeed('manufacturer') }, '🏭 Manufacturer (showcase-mfg)');
+  const ecoBtn = h('button', { class: 'btn', style: { background: '#f3e8ff', color: '#6b21a8', borderColor: '#e9d5ff' }, onclick: () => _runIndustrySeed('ecommerce')    }, '🛒 Ecommerce (showcase-ecommerce)');
   const cancelBtn = h('button', { class: 'btn ghost', onclick: () => m.remove() }, 'Close');
   body.appendChild(h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: '.5rem', marginTop: '1rem', flexWrap: 'wrap' } },
-    h('div', { style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap' } }, eduBtn, reBtn),
+    h('div', { style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap' } }, eduBtn, reBtn, finBtn, holBtn, solBtn, mfgBtn, ecoBtn),
     h('div', { style: { display: 'flex', gap: '.5rem' } }, cancelBtn, runBtn)
   ));
 
   async function _runIndustrySeed(pack) {
-    const btn = pack === 'education' ? eduBtn : reBtn;
-    const label = pack === 'education' ? '🎓 Education' : '🏢 Real Estate';
+    const PACK_META = {
+      education:    { btn: eduBtn, label: '🎓 Education',    fn: 'api_saas_demo_seedEducationPack' },
+      realestate:   { btn: reBtn,  label: '🏢 Real Estate',  fn: 'api_saas_demo_seedRealEstatePack' },
+      finance:      { btn: finBtn, label: '💰 Finance',      fn: 'api_saas_demo_seedFinancePack' },
+      holiday:      { btn: holBtn, label: '🌴 Holiday',      fn: 'api_saas_demo_seedHolidayPack' },
+      solar:        { btn: solBtn, label: '☀️ Solar',         fn: 'api_saas_demo_seedSolarPack' },
+      manufacturer: { btn: mfgBtn, label: '🏭 Manufacturer', fn: 'api_saas_demo_seedManufacturerPack' },
+      ecommerce:    { btn: ecoBtn, label: '🛒 Ecommerce',    fn: 'api_saas_demo_seedEcommercePack' }
+    };
+    const meta = PACK_META[pack];
+    if (!meta) { toast('Unknown pack: ' + pack, 'err'); return; }
+    const btn = meta.btn;
+    const label = meta.label;
     btn.disabled = true; btn.textContent = '⏳ Seeding ' + label + '…';
     status.style.display = 'block';
     status.style.background = '#e0f2fe'; status.style.color = '#075985';
     status.textContent = 'Installing ' + label + ' pack and loading rich demo data on the showcase tenant…';
     try {
-      const fn = pack === 'education' ? 'api_saas_demo_seedEducationPack' : 'api_saas_demo_seedRealEstatePack';
+      const fn = meta.fn;
       const r = await api(fn, {});
       status.style.background = '#dcfce7'; status.style.color = '#166534';
       status.textContent = '✅ ' + label + ' demo ready! ' + Object.entries(r.counts || {}).map(([k,v]) => v + ' ' + k).join(', ');
@@ -1314,7 +1330,7 @@ async function openShowcaseDemoModal() {
       status.style.background = '#fee2e2'; status.style.color = '#991b1b';
       status.textContent = '❌ ' + e.message;
       btn.disabled = false;
-      btn.textContent = label === '🎓 Education' ? '🔄 Re-seed Education demo' : '🔄 Re-seed Real Estate demo';
+      btn.textContent = '🔄 Re-seed ' + label;
     }
   }
 

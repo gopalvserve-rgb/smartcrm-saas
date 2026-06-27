@@ -1693,7 +1693,63 @@ async function _seedFinanceDemoData(pool, adminUserId, slugOverride) {
     );
     claims++;
   }
-  return { policies, premiums, claims };
+
+  // FIN_PACK_v2 demo data — multi-lender submissions, commissions, doc checklist
+  let lender_submissions = 0, commissions = 0, doc_items = 0;
+  const LENDERS = [
+    { name: 'HDFC Bank',   roi: 8.75 }, { name: 'ICICI Bank',  roi: 9.25 },
+    { name: 'Axis Bank',   roi: 9.10 }, { name: 'SBI',         roi: 8.55 },
+    { name: 'Bajaj Finserv', roi: 11.5 }, { name: 'Tata Capital', roi: 10.25 }
+  ];
+  const STATUSES = ['submitted','login','approved','disbursed','rejected'];
+  for (let i = 0; i < Math.min(6, leads.rows.length); i++) {
+    const lead = leads.rows[i];
+    // 2-3 lenders per lead, mixed states
+    const nLenders = 2 + (i % 2);
+    for (let j = 0; j < nLenders; j++) {
+      const L = LENDERS[(i + j) % LENDERS.length];
+      const st = STATUSES[(i + j) % STATUSES.length];
+      const amt = 500000 + (i * 100000) + (j * 50000);
+      await pool.query(
+        `INSERT INTO fin_lender_submissions (lead_id,policy_id,lender_name,loan_amount,roi,status,ref_no,remarks,submitted_at,decided_at,created_by)
+         VALUES ($1,NULL,$2,$3,$4,$5,$6,$7,CURRENT_DATE - $8::int,$9,$10)`,
+        [lead.id, L.name, amt, L.roi, st,
+         st === 'submitted' ? '' : 'REF-' + L.name.replace(/\s+/g,'').toUpperCase().slice(0,5) + '-' + (1000 + i*10 + j),
+         st === 'rejected' ? 'CIBIL below threshold' : (st === 'login' ? 'Logged on bank portal' : (st === 'approved' ? 'Sanction in process' : (st === 'disbursed' ? 'Disbursed to customer account' : 'File submitted'))),
+         (j * 3 + i),
+         (st === 'submitted' || st === 'login') ? null : new Date(Date.now() - j * 2 * 86400000).toISOString().slice(0,10),
+         adminUserId]
+      );
+      lender_submissions++;
+      // For disbursed/approved -> create a commission row
+      if (st === 'disbursed' || (st === 'approved' && j === 0)) {
+        const pct = 1.0 + (j * 0.25);
+        await pool.query(
+          `INSERT INTO fin_commissions (lead_id,policy_id,lender_name,disbursed_amount,commission_pct,commission_amount,payout_status,received_at,notes,created_by)
+           VALUES ($1,NULL,$2,$3,$4,$5,$6,$7,$8,$9)`,
+          [lead.id, L.name, amt, pct, Math.round(amt * pct / 100),
+           (j === 0 && i % 2 === 0) ? 'received' : 'pending',
+           (j === 0 && i % 2 === 0) ? new Date(Date.now() - (j+1) * 86400000).toISOString().slice(0,10) : null,
+           (j === 0 && i % 2 === 0) ? 'Credited to NEFT' : 'Pending bank credit',
+           adminUserId]
+        );
+        commissions++;
+      }
+    }
+    // Doc checklist per lead (3-4 docs, mixed states)
+    const DOCS = ['PAN Card', 'Aadhaar', 'Bank Statement (6 mo)', 'Salary Slip (3 mo)', 'Form 16'];
+    for (let k = 0; k < 4; k++) {
+      const status = (k === 0) ? 'verified' : (k === 1 ? 'received' : 'pending');
+      await pool.query(
+        `INSERT INTO fin_doc_checklist (lead_id,doc_name,status,notes,sort_order)
+         VALUES ($1,$2,$3,$4,$5)`,
+        [lead.id, DOCS[k], status, status === 'verified' ? 'Verified by ops' : (status === 'received' ? 'Pending verification' : ''), k * 10]
+      );
+      doc_items++;
+    }
+  }
+
+  return { policies, premiums, claims, lender_submissions, commissions, doc_items };
 }
 
 async function _seedSolarDemoData(pool, adminUserId, slugOverride) {
