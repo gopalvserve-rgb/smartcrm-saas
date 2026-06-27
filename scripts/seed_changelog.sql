@@ -883,3 +883,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The HR & Team Management, Billing & Accounts, Payments, and Products & Inventory sections are now grouped under a single collapsible Operations menu. Click Operations to reveal each sub-menu, then click a sub-menu to open its items.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- LEADS_V2_FOCUS_FIX_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('LEADS_V2_FOCUS_FIX_v1', 'Modern leads: Focus mode now works',
+ 'The Focus mode button in the Modern leads view did nothing when the compact header was on. It now activates Focus mode (Hot / Warm / Nurture buckets) and always shows an Exit Focus control so you can switch back.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

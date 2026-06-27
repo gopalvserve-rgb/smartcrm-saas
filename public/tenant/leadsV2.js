@@ -863,7 +863,7 @@ tr:hover .lv2-actions { opacity: 1; }
             onclick: () => { try { m.remove(); } catch(_){} try { fn(); } catch(_) {} }
           }, lab);
           m.appendChild(mi('↓ Export CSV', () => { try { if (typeof window.lv2ExportCsv === 'function') window.lv2ExportCsv(); else toast('Export not available', 'err'); } catch(_){} }));
-          m.appendChild(mi('🎯 Focus mode', () => { S.focusMode = !S.focusMode; if (onChange) onChange(); }));
+          m.appendChild(mi('🎯 Focus mode', () => { S.focusMode = !S.focusMode; try { localStorage.setItem('crm.lv2.focus', S.focusMode ? '1' : '0'); } catch (_) {} if (onChange) onChange(); }));
           document.body.appendChild(m);
           setTimeout(() => {
             const close = (e) => { if (e.target.closest && e.target.closest('#lv2-more-menu')) return; try { m.remove(); } catch(_){} document.removeEventListener('mousedown', close, true); };
@@ -1365,12 +1365,9 @@ tr:hover .lv2-actions { opacity: 1; }
     // v1.3 — compact micro stats (80% smaller than before); Focus mode hides entirely
     // LEADS_V2_HEADER_v4 — skip when compact header is on (counts already inline)
     const _hideMicroForV4 = (typeof _headerV4Enabled === 'function') && _headerV4Enabled();
-    /* When v4 header is on, auto-exit any sticky focus mode so the user is
-       never stuck inside the legacy focus UI (Exit button there can hang). */
-    if (_hideMicroForV4 && S.focusMode) {
-      S.focusMode = false;
-      try { localStorage.setItem('crm.lv2.focus', '0'); } catch (_) {}
-    }
+    /* LEADS_V2_FOCUS_FIX_v1 (2026-06-27) — focus mode now works WITH the compact
+       v4 header. We no longer auto-exit it; instead the Exit Focus strip below
+       always renders while focus is active, so the user can never get stuck. */
     if (!S.focusMode && !_hideMicroForV4) {
       const micro = h('div', { style: { display: 'flex', gap: '14px', padding: '6px 14px', background: '#fafbfc', borderBottom: '1px solid #f1f5f9', fontSize: '11px', alignItems: 'center' } },
         miniStat('Total', total, '#0f172a'),
@@ -1386,8 +1383,8 @@ tr:hover .lv2-actions { opacity: 1; }
           onclick: () => { S.focusMode = true; try { localStorage.setItem('crm.lv2.focus', '1'); } catch(_){} renderModern(view); }
         }, '🎯 Focus mode'));
       wrap.appendChild(micro);
-    } else if (!_hideMicroForV4) {
-      // Tiny strip with EXIT focus button only
+    } else if (S.focusMode) {
+      // Tiny strip with EXIT focus button only (shown even under the v4 header)
       const strip = h('div', { style: { display: 'flex', gap: '14px', padding: '4px 14px', background: '#fef3c7', borderBottom: '1px solid #fde68a', fontSize: '11px', alignItems: 'center', justifyContent: 'space-between' } },
         h('span', { style: { color: '#92400e', fontWeight: '600' } }, '🎯 Focus mode active · ' + total + ' leads loaded'),
         h('button', {
