@@ -843,3 +843,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'On the Sale Closure page the date presets (Today / Yesterday / Last 7 days etc.) now actually filter the board. The stage graph also gained a Stages flow style (connected colored arrow segments) and uses it by default.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- TENANT_INDEX_NOCACHE_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('TENANT_INDEX_NOCACHE_v1', 'Fix: new updates now show up without stale cache',
+ 'The CRM page shell was being cached by the browser, so new releases sometimes did not appear until a hard refresh (or at all). It is now served with no-cache headers so the latest version always loads.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

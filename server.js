@@ -2059,7 +2059,15 @@ app.get('/LeadCRM.apk', (req, res) => {
 // request. Plain /<no-tenant> requests still go to the SaaS landing
 // (handled by the earlier app.get('/') registration above).
 app.get('/', (req, res, next) => {
-  if (!req.tenant) return next();          // no tenant Ã¢ÂÂ fall through to landing/static
+  if (!req.tenant) return next();          // no tenant -> fall through to landing/static
+  // TENANT_INDEX_NOCACHE_v1 (2026-06-27) — the tenant SPA shell was sent without
+  // cache headers, so browsers/proxies could keep a stale index.html that still
+  // referenced an old app.js?v=... — making deploys appear to "not show up".
+  // Mirror the SaaS shell routes: always no-cache the HTML so the latest
+  // app.js?v= buster is fetched on every load.
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   res.sendFile(path.join(__dirname, 'public', 'tenant', 'index.html'));
 });
 
