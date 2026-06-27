@@ -702,8 +702,8 @@ tr:hover .lv2-actions { opacity: 1; }
         style: {
           position: 'sticky', top: '0', zIndex: '40',
           background: '#fff', borderBottom: '1px solid #e2e8f0',
-          padding: '9px 14px', display: 'flex', alignItems: 'center', gap: '7px',
-          flexWrap: 'wrap', boxShadow: '0 1px 3px rgba(0,0,0,.03)'
+          padding: '9px 14px', display: 'flex', alignItems: 'center', gap: '6px',
+          flexWrap: 'wrap', overflowX: 'auto', boxShadow: '0 1px 3px rgba(0,0,0,.03)'
         }
       });
 
@@ -713,7 +713,7 @@ tr:hover .lv2-actions { opacity: 1; }
         h('span', { style: { background: '#dbeafe', color: '#1e40af', padding: '1px 8px', borderRadius: '999px', fontSize: '10.5px', fontWeight: '700' } }, String(total))));
 
       // Search
-      const search = h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 10px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '7px', minWidth: '200px', maxWidth: '260px' } },
+      const search = h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 10px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '7px', minWidth: '160px', maxWidth: '220px', flexShrink: '1' } },
         h('span', { style: { color: '#94a3b8', fontSize: '11px' } }, '🔍'),
         h('input', {
           placeholder: 'Search…', value: S.search,
@@ -751,7 +751,7 @@ tr:hover .lv2-actions { opacity: 1; }
       // Status dropdown — multi-select via inline popover; for now native <select> for single
       const statuses = Array.isArray(S.statuses) ? S.statuses : [];
       const statusSel = h('select', {
-        style: { background: '#fff', border: '1px solid #cbd5e1', borderRadius: '7px', padding: '5px 9px', fontSize: '12px', color: '#0f172a', cursor: 'pointer' },
+        style: { background: '#fff', border: '1px solid #cbd5e1', borderRadius: '7px', padding: '5px 9px', fontSize: '12px', color: '#0f172a', cursor: 'pointer', flexShrink: '0', maxWidth: '160px' },
         onchange: (e) => {
           const v = e.target.value;
           if (!v) S.fStatus = [];
@@ -765,7 +765,7 @@ tr:hover .lv2-actions { opacity: 1; }
 
       // Date dropdown — presets via applyDatePreset
       const dateSel = h('select', {
-        style: { background: '#fff', border: '1px solid #cbd5e1', borderRadius: '7px', padding: '5px 9px', fontSize: '12px', color: '#0f172a', cursor: 'pointer' },
+        style: { background: '#fff', border: '1px solid #cbd5e1', borderRadius: '7px', padding: '5px 9px', fontSize: '12px', color: '#0f172a', cursor: 'pointer', flexShrink: '0', maxWidth: '140px' },
         onchange: (e) => { applyDatePreset(e.target.value); if (onChange) onChange(); }
       },
         h('option', { value: '',          selected: !S.fDatePreset },          '📅 Any time'),
@@ -778,7 +778,7 @@ tr:hover .lv2-actions { opacity: 1; }
       // Owner dropdown
       const users = Array.isArray(S.users) ? S.users : [];
       const ownerSel = h('select', {
-        style: { background: '#fff', border: '1px solid #cbd5e1', borderRadius: '7px', padding: '5px 9px', fontSize: '12px', color: '#0f172a', cursor: 'pointer' },
+        style: { background: '#fff', border: '1px solid #cbd5e1', borderRadius: '7px', padding: '5px 9px', fontSize: '12px', color: '#0f172a', cursor: 'pointer', flexShrink: '0', maxWidth: '140px' },
         onchange: (e) => {
           const v = e.target.value;
           S.fOwner = v ? [Number(v)] : [];
