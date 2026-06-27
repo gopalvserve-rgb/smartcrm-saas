@@ -43312,8 +43312,14 @@ function packEcomLeadBlock(leadId) {
             if (body.querySelector('.' + pf.cls)) continue;
             const panel = pf.factory(id);
             panel.classList.add(pf.cls);
-            const actions = body.querySelector('.actions');
-            if (actions) body.insertBefore(panel, actions);
+            /* PACK_LEAD_INSERT_FIX (2026-06-27): .actions is nested deeper than
+               direct child of .modal — body.insertBefore() then throws
+               'not a child' DOMException which the silent catch swallowed and
+               the pack panel was never appended. Use actions.before() so it
+               works regardless of nesting depth. */
+            const actions = body.querySelector('.actions, .modal-actions');
+            if (actions && actions.before) actions.before(panel);
+            else if (actions && actions.parentNode) actions.parentNode.insertBefore(panel, actions);
             else body.appendChild(panel);
           }
         } catch (_) {}
