@@ -1155,6 +1155,105 @@ async function api_reports_callActivity(token, filters) {
   const dailyRes = await db.query(dailySql, params);
   const dailySeries = dailyRes.rows;
 
+  // CALL_ACTIVITY_HOURLY_v1 — hour-of-day aggregates for the Hourly Productivity panel.
+  // Aggregates across whatever window was selected. For "Today" preset, the window
+  // IS today so the buckets reflect today's hours. For multi-day windows we sum
+  // calls at the same hour-of-day across days (useful for shift-planning).
+  // Server runs UTC; bucket by date_trunc('hour', started_at) AT TIME ZONE 'Asia/Kolkata'
+  // so IST hours match what users see.
+  const hourlySql = callsCte + `
+    SELECT
+      EXTRACT(HOUR FROM (started_at AT TIME ZONE 'Asia/Kolkata'))::int AS hour,
+      COUNT(*)::int                                          AS total,
+      COUNT(*) FILTER (WHERE direction='in')::int            AS in_count,
+      COUNT(*) FILTER (WHERE direction='out')::int           AS out_count,
+      COUNT(*) FILTER (WHERE direction='missed')::int        AS missed,
+      COALESCE(SUM(duration_s), 0)::int                      AS talk_s
+    FROM calls
+    GROUP BY hour
+    ORDER BY hour
+  `;
+  let hourlySeries = [];
+  try {
+    const hourlyRes = await db.query(hourlySql, params);
+    hourlySeries = hourlyRes.rows;
+  } catch (e) { console.warn('[callactivity] hourlySql failed:', e.message); }
+
+  // hourGrid: user_id -> { hours: [count×24], total }
+  const hourGridSql = callsCte + `
+    SELECT
+      user_id,
+      EXTRACT(HOUR FROM (started_at AT TIME ZONE 'Asia/Kolkata'))::int AS hour,
+      COUNT(*)::int   AS total,
+      COUNT(*) FILTER (WHERE direction='out')::int AS out_count,
+      COUNT(*) FILTER (WHERE direction='in')::int  AS in_count,
+      COUNT(*) FILTER (WHERE direction='missed')::int AS missed,
+      COALESCE(SUM(duration_s), 0)::int           AS talk_s
+    FROM calls
+    GROUP BY user_id, hour
+    ORDER BY user_id, hour
+  `;
+  let hourGrid = {};
+  try {
+    const hgRes = await db.query(hourGridSql, params);
+    const userMap = {};
+    byUser.forEach(u => { userMap[u.user_id] = u.user_name; });
+    hgRes.rows.forEach(r => {
+      const uid = Number(r.user_id) || 0;
+      if (!hourGrid[uid]) {
+        hourGrid[uid] = {
+          user_id: uid,
+          user_name: userMap[uid] || 'Unknown',
+          hours: new Array(24).fill(0),
+          out_by_hour: new Array(24).fill(0),
+          in_by_hour: new Array(24).fill(0),
+          missed_by_hour: new Array(24).fill(0),
+          talk_by_hour: new Array(24).fill(0),
+          total: 0
+        };
+      }
+      const h = Number(r.hour);
+      if (h >= 0 && h < 24) {
+        hourGrid[uid].hours[h] = r.total;
+        hourGrid[uid].out_by_hour[h] = r.out_count;
+        hourGrid[uid].in_by_hour[h] = r.in_count;
+        hourGrid[uid].missed_by_hour[h] = r.missed;
+        hourGrid[uid].talk_by_hour[h] = r.talk_s;
+        hourGrid[uid].total += r.total;
+      }
+    });
+  } catch (e) { console.warn('[callactivity] hourGridSql failed:', e.message); }
+
+  // Insights — peak/quietest/top performer at peak
+  const hourInsights = (() => {
+    if (!hourlySeries.length) return null;
+    // Working-hours filter: 8 - 20 IST. Outside that range, the "quietest" hour
+    // would always be 03:00 with zero calls. We want the quietest WORKING hour.
+    const working = hourlySeries.filter(h => h.hour >= 8 && h.hour <= 20);
+    const all = hourlySeries.slice();
+    const peak = all.reduce((acc, h) => (h.total > (acc?.total || 0) ? h : acc), null);
+    const quietest = working
+      .filter(h => h.total > 0) // skip totally empty working hours (no rep online)
+      .reduce((acc, h) => (acc == null || h.total < acc.total ? h : acc), null);
+    let topAtPeak = null;
+    if (peak) {
+      Object.values(hourGrid).forEach(u => {
+        const c = u.hours[peak.hour] || 0;
+        if (c > (topAtPeak?.count || 0)) topAtPeak = { user_name: u.user_name, count: c, hour: peak.hour };
+      });
+    }
+    return {
+      peak_hour: peak ? peak.hour : null,
+      peak_count: peak ? peak.total : 0,
+      peak_pct: (peak && summary.total_calls) ? Math.round((peak.total / summary.total_calls) * 100) : 0,
+      quietest_hour: quietest ? quietest.hour : null,
+      quietest_count: quietest ? quietest.total : 0,
+      top_at_peak: topAtPeak,
+      active_reps: Object.keys(hourGrid).length
+    };
+  })();
+
+
   // Idle time = (window duration in working seconds) - talk_s - gap_s totals.
   // Simple approximation: 8-hour workday per active rep in the window.
   const days = Math.max(1, Math.ceil((to - from) / 86400000));
@@ -1233,6 +1332,10 @@ async function api_reports_callActivity(token, filters) {
     topUsers,
     bottomUsers,
     dailySeries,
+    /* CALL_ACTIVITY_HOURLY_v1 */
+    hourlySeries,
+    hourGrid: Object.values(hourGrid).sort((a,b)=>b.total - a.total),
+    hourInsights,
     recentCalls
   };
 }

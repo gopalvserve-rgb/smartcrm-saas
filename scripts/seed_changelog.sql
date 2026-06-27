@@ -740,3 +740,10 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The R2 backfill sweep that migrates legacy Postgres-stored recordings to R2 is now PAUSED by default (was running every 15 min across every tenant). Playback of legacy recordings still works via the Postgres fallback. Super-admin can opt-in a tenant via Settings → Performance → SWEEP_R2BACKFILL_TENANTS when ready to migrate.',
  'super_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+-- CALL_ACTIVITY_HOURLY_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('CALL_ACTIVITY_HOURLY_v1', 'New Hourly Productivity panel on Call Activity',
+ 'Below the existing Daily call activity chart, a new section shows hour-of-day breakdown: 4 insight cards (Peak hour / Quietest working hour / Top performer at peak / Active reps), a 24-hour stacked bar chart (Incoming/Outgoing/Missed), a User × Hour heatmap (rows = reps, cols = 0-23, color = call intensity), and a per-rep summary table with Total / Peak hour / Talk time / Coverage 9–18. Quick presets: Today, Yesterday, Last 7 days. Purely additive — no existing chart or table was removed.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

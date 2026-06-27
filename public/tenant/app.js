@@ -20712,6 +20712,31 @@ VIEWS.callactivity = async (view) => {
       h('div', { id: 'ca-bottom' })
     ),
   ));
+  /* CALL_ACTIVITY_HOURLY_v1 — Hourly Productivity card (insertion point, additive). */
+  view.appendChild(h('div', { class: 'card', id: 'ca-hourly-card', style: { borderTop: '3px solid #4f46e5', position: 'relative' } },
+    h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '.5rem', flexWrap: 'wrap', marginBottom: '.6rem' } },
+      h('h3', { style: { margin: 0, display: 'flex', alignItems: 'center', gap: '.45rem' } },
+        '🕒 Hourly Productivity',
+        h('span', { style: { background: '#4f46e5', color: '#fff', fontSize: '.55rem', padding: '2px 6px', borderRadius: '999px', fontWeight: 600, letterSpacing: '.04em' } }, 'NEW')
+      ),
+      h('div', { style: { display: 'flex', gap: '.4rem', alignItems: 'center', flexWrap: 'wrap' } },
+        h('span', { class: 'muted', style: { fontSize: '.78rem' } }, 'Quick:'),
+        h('button', { class: 'btn ghost sm', id: 'ca-hp-today',   type: 'button', style: { fontSize: '.78rem', padding: '.25rem .55rem' } }, 'Today'),
+        h('button', { class: 'btn ghost sm', id: 'ca-hp-yest',    type: 'button', style: { fontSize: '.78rem', padding: '.25rem .55rem' } }, 'Yesterday'),
+        h('button', { class: 'btn ghost sm', id: 'ca-hp-7d',      type: 'button', style: { fontSize: '.78rem', padding: '.25rem .55rem' } }, 'Last 7 days')
+      )
+    ),
+    h('div', { id: 'ca-hourly-insights', style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '.55rem', marginBottom: '.7rem' } }),
+    h('div', { style: { fontSize: '.82rem', fontWeight: 600, color: '#475569', margin: '.2rem 0 .25rem' } }, 'Calls by hour of day'),
+    h('div', { class: 'chart-wrap', style: { height: '200px' } }, h('canvas', { id: 'ca-hourly-chart' })),
+    h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '.5rem', flexWrap: 'wrap', margin: '.85rem 0 .3rem' } },
+      h('div', { style: { fontSize: '.82rem', fontWeight: 600, color: '#475569' } }, 'User × Hour heatmap'),
+      h('div', { class: 'muted', style: { fontSize: '.72rem' } }, 'Cell = calls · darker = more activity · click cell to drill down')
+    ),
+    h('div', { id: 'ca-hourly-heatmap', style: { overflowX: 'auto' } }),
+    h('div', { style: { fontSize: '.82rem', fontWeight: 600, color: '#475569', margin: '.85rem 0 .3rem' } }, 'Per-rep summary'),
+    h('div', { id: 'ca-hourly-table', style: { overflowX: 'auto' } })
+  ));
   view.appendChild(h('div', { class: 'card' },
     h('h3', {}, 'By user'),
     h('div', { id: 'ca-byuser', style: { overflowX: 'auto' } })
@@ -20883,6 +20908,177 @@ function _renderCallActivity(r) {
   }
   // Recent calls table
   _caRenderRecent(r.recentCalls || []);
+  // CALL_ACTIVITY_HOURLY_v1
+  try { _caRenderHourly(r); } catch (e) { console.warn('[ca-hourly] render failed:', e.message); }
+}
+
+/* CALL_ACTIVITY_HOURLY_v1 — Hourly Productivity renderer. Additive only. */
+function _caRenderHourly(r) {
+  const card = document.getElementById('ca-hourly-card');
+  if (!card) return;
+
+  // ---- Insights cards ----
+  const ins = document.getElementById('ca-hourly-insights');
+  const insightsData = r.hourInsights || null;
+  if (ins) {
+    if (!insightsData || !insightsData.peak_hour && insightsData.peak_hour !== 0) {
+      ins.innerHTML = '<div class="muted" style="font-size:.78rem;padding:.4rem .2rem">No call activity in selected window.</div>';
+    } else {
+      const fmtH = (h) => (h == null ? '—' : (String(h).padStart(2,'0') + ':00'));
+      const cards = [
+        { l: '🚀 Peak hour',            v: fmtH(insightsData.peak_hour) + ' · ' + (insightsData.peak_count || 0) + ' calls', s: (insightsData.peak_pct || 0) + '% of window', bg: '#ecfdf5', bd: '#a7f3d0' },
+        { l: '😴 Quietest working hour', v: fmtH(insightsData.quietest_hour) + ' · ' + (insightsData.quietest_count || 0) + ' calls', s: 'Spot the dip', bg: '#fffbeb', bd: '#fde68a' },
+        { l: '🏆 Top performer at peak', v: insightsData.top_at_peak ? (insightsData.top_at_peak.user_name + ' · ' + insightsData.top_at_peak.count + ' calls') : '—', s: 'At ' + fmtH(insightsData.peak_hour), bg: '#eff6ff', bd: '#bfdbfe' },
+        { l: '👥 Active reps',           v: String(insightsData.active_reps || 0), s: 'With ≥1 call', bg: '#f5f3ff', bd: '#ddd6fe' }
+      ];
+      ins.innerHTML = cards.map(c =>
+        '<div style="background:' + c.bg + ';border:1px solid ' + c.bd + ';border-radius:8px;padding:.5rem .65rem">' +
+          '<div style="font-size:.62rem;color:#64748b;text-transform:uppercase;letter-spacing:.05em">' + c.l + '</div>' +
+          '<div style="font-weight:700;font-size:.85rem;margin-top:.1rem;color:#0f172a">' + c.v + '</div>' +
+          '<div style="font-size:.65rem;color:#64748b;margin-top:.1rem">' + c.s + '</div>' +
+        '</div>'
+      ).join('');
+    }
+  }
+
+  // ---- Hourly bar chart (24 buckets) ----
+  const canvas = document.getElementById('ca-hourly-chart');
+  if (canvas && window.Chart) {
+    const series = Array.isArray(r.hourlySeries) ? r.hourlySeries : [];
+    // Sparse rows: hydrate to 0-23
+    const byH = {};
+    series.forEach(row => { byH[Number(row.hour)] = row; });
+    const labels = [], dIn = [], dOut = [], dMs = [];
+    for (let i = 0; i < 24; i++) {
+      labels.push(String(i).padStart(2,'0') + ':00');
+      const x = byH[i] || {};
+      dIn.push(x.in_count || 0);
+      dOut.push(x.out_count || 0);
+      dMs.push(x.missed || 0);
+    }
+    if (window._caHourlyChart) try { window._caHourlyChart.destroy(); } catch (_) {}
+    window._caHourlyChart = new Chart(canvas, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [
+          { label: 'Incoming', data: dIn,  backgroundColor: '#3b82f6' },
+          { label: 'Outgoing', data: dOut, backgroundColor: '#10b981' },
+          { label: 'Missed',   data: dMs,  backgroundColor: '#ef4444' }
+        ]
+      },
+      options: { responsive: true, maintainAspectRatio: false,
+        scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true, ticks: { precision: 0 } } } }
+    });
+  }
+
+  // ---- User × Hour heatmap ----
+  const hm = document.getElementById('ca-hourly-heatmap');
+  if (hm) {
+    const grid = Array.isArray(r.hourGrid) ? r.hourGrid : [];
+    if (!grid.length) {
+      hm.innerHTML = '<div class="muted" style="font-size:.78rem;padding:.4rem .2rem">No reps had calls in this window.</div>';
+    } else {
+      // Find max for color ramp
+      let maxCell = 0;
+      grid.forEach(u => (u.hours || []).forEach(c => { if (c > maxCell) maxCell = c; }));
+      const ramp = (v) => {
+        if (!v) return { bg: '#f1f5f9', fg: '#cbd5e1' };
+        const r = v / (maxCell || 1);
+        if (r < 0.15) return { bg: '#dbeafe', fg: '#1e40af' };
+        if (r < 0.35) return { bg: '#93c5fd', fg: '#1e3a8a' };
+        if (r < 0.60) return { bg: '#3b82f6', fg: '#fff' };
+        if (r < 0.85) return { bg: '#1d4ed8', fg: '#fff' };
+        return { bg: '#1e3a8a', fg: '#fff' };
+      };
+      // Build HTML table
+      let html = '<table style="width:100%;border-collapse:separate;border-spacing:3px;font-size:.7rem;table-layout:fixed;min-width:780px">';
+      html += '<thead><tr><th style="width:130px;text-align:left;padding:4px 6px;background:#f8fafc;border-radius:4px;color:#64748b;font-weight:600">Rep</th>';
+      for (let h = 0; h < 24; h++) {
+        const dim = (h < 8 || h > 20) ? 'opacity:.35;' : '';
+        html += '<th style="' + dim + 'text-align:center;padding:3px 0;color:#94a3b8;font-weight:500">' + String(h).padStart(2,'0') + '</th>';
+      }
+      html += '</tr></thead><tbody>';
+      grid.forEach(u => {
+        html += '<tr>';
+        html += '<td style="padding:5px 7px;background:#f8fafc;border-radius:4px;color:#0f172a;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' +
+                esc(u.user_name || '—') + ' <span style="color:#64748b;font-weight:400;font-size:.65rem">(' + (u.total || 0) + ')</span></td>';
+        for (let h = 0; h < 24; h++) {
+          const v = (u.hours && u.hours[h]) || 0;
+          const c = ramp(v);
+          const txt = v ? String(v) : '·';
+          const title = esc(u.user_name) + ' @ ' + String(h).padStart(2,'0') + ':00 — ' + v + ' calls';
+          html += '<td style="background:' + c.bg + ';color:' + c.fg + ';text-align:center;border-radius:3px;font-weight:600;cursor:pointer" title="' + title + '">' + txt + '</td>';
+        }
+        html += '</tr>';
+      });
+      html += '</tbody></table>';
+      hm.innerHTML = html;
+    }
+  }
+
+  // ---- Per-rep summary table ----
+  const tbl = document.getElementById('ca-hourly-table');
+  if (tbl) {
+    const grid = Array.isArray(r.hourGrid) ? r.hourGrid : [];
+    if (!grid.length) {
+      tbl.innerHTML = '';
+    } else {
+      const rows = grid.map(u => {
+        const hours = u.hours || [];
+        let peakH = 0, peakV = 0;
+        hours.forEach((c, h) => { if (c > peakV) { peakV = c; peakH = h; } });
+        const covered = hours.slice(9, 18).filter(c => c > 0).length;
+        const talkS = (u.talk_by_hour || []).reduce((a,b) => a + (b || 0), 0);
+        const _fmt = (s) => { s = Number(s)||0; const m = Math.floor(s/60), sec = s%60; return m + 'm ' + sec + 's'; };
+        return {
+          name: u.user_name || '—',
+          total: u.total || 0,
+          peak: peakV ? (String(peakH).padStart(2,'0') + ':00 (' + peakV + ')') : '—',
+          talk: _fmt(talkS),
+          covered
+        };
+      }).sort((a,b) => b.total - a.total);
+      let html = '<table style="width:100%;border-collapse:collapse;font-size:.78rem"><thead><tr>' +
+        '<th style="text-align:left;padding:6px 8px;background:#f8fafc;color:#64748b;font-size:.68rem;text-transform:uppercase;letter-spacing:.04em">Rep</th>' +
+        '<th style="text-align:right;padding:6px 8px;background:#f8fafc;color:#64748b;font-size:.68rem;text-transform:uppercase;letter-spacing:.04em">Total</th>' +
+        '<th style="text-align:left;padding:6px 8px;background:#f8fafc;color:#64748b;font-size:.68rem;text-transform:uppercase;letter-spacing:.04em">Peak hour</th>' +
+        '<th style="text-align:right;padding:6px 8px;background:#f8fafc;color:#64748b;font-size:.68rem;text-transform:uppercase;letter-spacing:.04em">Talk time</th>' +
+        '<th style="text-align:center;padding:6px 8px;background:#f8fafc;color:#64748b;font-size:.68rem;text-transform:uppercase;letter-spacing:.04em">Covered 9–18</th>' +
+        '</tr></thead><tbody>';
+      rows.forEach(u => {
+        const covColor = u.covered >= 8 ? '#10b981' : (u.covered >= 5 ? '#f59e0b' : '#ef4444');
+        html += '<tr>' +
+          '<td style="padding:6px 8px;border-top:1px solid #f1f5f9">' + esc(u.name) + '</td>' +
+          '<td style="padding:6px 8px;text-align:right;border-top:1px solid #f1f5f9;font-weight:600">' + u.total + '</td>' +
+          '<td style="padding:6px 8px;border-top:1px solid #f1f5f9">' + u.peak + '</td>' +
+          '<td style="padding:6px 8px;text-align:right;border-top:1px solid #f1f5f9">' + u.talk + '</td>' +
+          '<td style="padding:6px 8px;text-align:center;border-top:1px solid #f1f5f9"><span style="background:' + covColor + ';color:#fff;padding:2px 8px;border-radius:999px;font-size:.7rem;font-weight:600">' + u.covered + ' / 9 hrs</span></td>' +
+          '</tr>';
+      });
+      html += '</tbody></table>';
+      tbl.innerHTML = html;
+    }
+  }
+
+  // ---- Quick preset buttons ----
+  const setRange = (fromIso, toIso) => {
+    const f = document.getElementById('ca-from'); const t = document.getElementById('ca-to');
+    if (f) f.value = fromIso;
+    if (t) t.value = toIso;
+    try { loadCallActivity(); } catch (_) {}
+  };
+  const pad2 = (n) => String(n).padStart(2,'0');
+  const ymd = (d) => d.getFullYear() + '-' + pad2(d.getMonth()+1) + '-' + pad2(d.getDate());
+  const today = new Date();
+  const ystrd = new Date(today.getTime() - 86400000);
+  const sevenAgo = new Date(today.getTime() - 6*86400000);
+  const bToday = document.getElementById('ca-hp-today');
+  const bYest = document.getElementById('ca-hp-yest');
+  const b7d = document.getElementById('ca-hp-7d');
+  if (bToday && !bToday._wired) { bToday._wired = true; bToday.addEventListener('click', () => setRange(ymd(today), ymd(today))); }
+  if (bYest && !bYest._wired) { bYest._wired = true; bYest.addEventListener('click', () => setRange(ymd(ystrd), ymd(ystrd))); }
+  if (b7d && !b7d._wired) { b7d._wired = true; b7d.addEventListener('click', () => setRange(ymd(sevenAgo), ymd(today))); }
 }
 
 
