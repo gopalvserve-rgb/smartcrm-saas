@@ -899,3 +899,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'On tenants with the Education pack, the pipeline funnel now shows admissions terms: Inquiry, Follow-up, Counselling Done, Form Submitted, Fee/Offer Sent, plus Admitted (won) and Dropped (lost). Other tenants keep the default sales names.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- PACK_FUNNEL_LABELS_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('PACK_FUNNEL_LABELS_v1', 'Industry-specific pipeline funnel stage names',
+ 'The pipeline funnel now uses industry terms based on the active pack. Real Estate: New Enquiry / Contacted / Site Visit / Negotiation / Booking (Booked, Lost). Holiday: Enquiry / Contacted / Itinerary Shared / Negotiation / Quote Sent (Booked, Lost). Finance: New Lead / Contacted / Eligibility Check / Docs Collected / Submitted to Lender (Disbursed, Rejected). Education stays Inquiry to Admitted. Others keep default sales names.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

@@ -142,15 +142,22 @@ async function api_pipeline_funnel(token, payload) {
 
   // Stages in display order
   const STAGE_ORDER = ['fresh', 'attempted', 'qualified', 'negotiation', 'proposal'];
-  // EDU_FUNNEL_LABELS_v1 (2026-06-27) — when the education pack is active, relabel
-  // the generic funnel stages to admissions terms (Inquiry → Admitted).
-  let _eduPack = false;
-  try { _eduPack = await require('./packs/_framework').isPackActive('education'); } catch (_) {}
-  const STAGE_LABELS = _eduPack ? {
-    fresh: 'Inquiry', attempted: 'Follow-up', qualified: 'Counselling Done',
-    negotiation: 'Form Submitted', proposal: 'Fee/Offer Sent',
-    won: 'Admitted', lost: 'Dropped'
-  } : {
+  // PACK_FUNNEL_LABELS_v1 (2026-06-27) — relabel the generic funnel stages to
+  // industry terms based on the active pack (education/realestate/holiday/finance).
+  let _activePack = '';
+  try {
+    const _fw = require('./packs/_framework');
+    for (const _pk of ['education', 'realestate', 'holiday', 'finance']) {
+      if (await _fw.isPackActive(_pk)) { _activePack = _pk; break; }
+    }
+  } catch (_) {}
+  const _PACK_STAGE_LABELS = {
+    education:  { fresh: 'Inquiry',     attempted: 'Follow-up', qualified: 'Counselling Done',  negotiation: 'Form Submitted', proposal: 'Fee/Offer Sent',       won: 'Admitted',  lost: 'Dropped' },
+    realestate: { fresh: 'New Enquiry', attempted: 'Contacted', qualified: 'Site Visit',        negotiation: 'Negotiation',    proposal: 'Booking',             won: 'Booked',    lost: 'Lost' },
+    holiday:    { fresh: 'Enquiry',     attempted: 'Contacted', qualified: 'Itinerary Shared',  negotiation: 'Negotiation',    proposal: 'Quote Sent',          won: 'Booked',    lost: 'Lost' },
+    finance:    { fresh: 'New Lead',    attempted: 'Contacted', qualified: 'Eligibility Check', negotiation: 'Docs Collected', proposal: 'Submitted to Lender',  won: 'Disbursed', lost: 'Rejected' }
+  };
+  const STAGE_LABELS = _PACK_STAGE_LABELS[_activePack] || {
     fresh: 'New lead', attempted: 'Contacted', qualified: 'Qualified',
     negotiation: 'Negotiation', proposal: 'Proposal sent',
     won: 'Won', lost: 'Lost'
