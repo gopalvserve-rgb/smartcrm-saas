@@ -1492,8 +1492,21 @@ async function api_leads_update(token, id, patch) {
       }
       if (blockedPii.length > 0) {
         console.warn(
-          `[leads] user ${me.id} (${me.role}) tried to change PII fields without leads.edit on lead ${id}: ${blockedPii.join(', ')} — ignored. Grant leads.edit in Settings to allow.`
+          `[leads] user ${me.id} (${me.role}) tried to change PII fields without leads.edit on lead ${id}: ${blockedPii.join(', ')} — throwing 403 so SPA shows clear error`
         );
+        /* LEADS_EDIT_PII_v2 (2026-06-27): instead of silently stripping name/
+           phone/whatsapp/email, throw a clear error so the user knows WHY their
+           change didn't persist. Admin can grant leads.edit in Settings to
+           unblock. Previously the save returned ok=true so the SPA showed a
+           success toast but the field reverted — incredibly confusing. */
+        const fieldsHuman = blockedPii.map(f => f === 'whatsapp' ? 'WhatsApp' : f.charAt(0).toUpperCase()+f.slice(1)).join(', ');
+        const e = new Error(
+          'Cannot change ' + fieldsHuman + ' — your role needs the "leads.edit" permission. ' +
+          'Ask your admin to grant it in Settings → Permissions → ' + (me.role || 'your role') + ' → leads.edit.'
+        );
+        e.code = 'PII_PERMISSION_DENIED';
+        e.blocked = blockedPii;
+        throw e;
       }
     }
   }
