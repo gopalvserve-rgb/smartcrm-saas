@@ -1695,17 +1695,16 @@ async function _seedFinanceDemoData(pool, adminUserId, slugOverride) {
   }
 
   // FIN_PACK_v2 demo data — multi-lender submissions, commissions, doc checklist.
-  // SEED_v2_DATAFIX (2026-06-27): the original SELECT used ORDER BY id LIMIT 12
-  // which returned the OLDEST leads — stale rows from prior tenant-init wipes
-  // that aren't visible to users any more. Re-fetch NEWEST 12 instead, and
-  // wipe the v2 tables first so re-seeds don't accumulate dead rows.
+  // SEED_v2_DATAFIX_v2 (2026-06-27): use the SAME leads.rows as v1 so policies +
+  // lender_subs target the same lead IDs (otherwise the visible lead has policies
+  // but no lender_subs because they were inserted against different lead IDs).
+  // TRUNCATE the v2 tables so previous seeds' data on now-deleted leads gets wiped.
   try {
     await pool.query(`TRUNCATE TABLE fin_lender_submissions RESTART IDENTITY`);
     await pool.query(`TRUNCATE TABLE fin_commissions RESTART IDENTITY`);
     await pool.query(`TRUNCATE TABLE fin_doc_checklist RESTART IDENTITY`);
   } catch (_) {}
-  const leadsV2 = await pool.query(`SELECT id, name FROM leads ORDER BY id DESC LIMIT 12`);
-  const v2Leads = leadsV2.rows;
+  const v2Leads = leads.rows;  // reuse v1 seeder's leads so both data sets line up
   let lender_submissions = 0, commissions = 0, doc_items = 0;
   const LENDERS = [
     { name: 'HDFC Bank',   roi: 8.75 }, { name: 'ICICI Bank',  roi: 9.25 },
