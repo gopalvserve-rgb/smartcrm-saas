@@ -646,6 +646,24 @@ async function api_tour_resetStages(/*token*/) {
 }
 
 async function api_tour_seedDemo(/*token*/) {
+  // HOLIDAY_SCHEMA_FIX_v2 — run ALTERs directly inside seedDemo so they fire
+  // even when _installer is wrapped in try/catch and swallows an earlier error.
+  await db.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS destination_id INT`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS package_id INT`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS travellers INT DEFAULT 2`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS travel_start_date DATE`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS travel_end_date DATE`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS total_inr NUMERIC(14,2) DEFAULT 0`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS advance_inr NUMERIC(14,2) DEFAULT 0`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS balance_inr NUMERIC(14,2) DEFAULT 0`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS booking_no TEXT`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS visa_status TEXT`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS docs_status TEXT`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS voucher_status TEXT`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS assignee_user_id INT`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS source TEXT`, []).catch(() => {});
+  await db.query(`ALTER TABLE tour_bookings ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'enquiry'`, []).catch(() => {});
+
   await _ensureTables();
   await _seedHolidayStages();
 
