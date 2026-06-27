@@ -36,6 +36,24 @@ const control = require('../control/db');
 const POOL_PER_TENANT_MAX = Number(process.env.PG_POOL_PER_TENANT_MAX || 3);
 const POOL_LRU_MAX        = Number(process.env.PG_POOL_LRU_MAX || 60);
 
+// POOL_EVICT_RACE_FIX_v1 (2026-06-27) — root cause of recurring
+// 'Cannot use a pool after calling end on the pool'.
+// attachTenant() grabs poolFor(t) and stashes req.tenantPool at the TOP of
+// the middleware chain, but the handler's first DB query runs much later.
+// In that gap the pool has totalCount===0 / waitingCount===0 (no client
+// checked out yet) so it looks 'idle' and the LRU pass would .end() it —
+// then the in-flight request crashes on its first query. The busy-count
+// check (FB_OAUTH_POOL_FIX_v2) can't see a pool that's been handed out but
+// not yet connected. Two guards close the race:
+//   (a) recency grace: never evict a pool handed out within EVICT_GRACE_MS
+//       (poolFor() refreshes _poolLastUsed on every hand-out, so any
+//        in-flight request keeps its pool 'recent' and protected).
+//   (b) drain delay: when we do evict, remove from the cache immediately
+//       (no new caller can get it) but defer p.end() by EVICT_DRAIN_MS so
+//       any reference that already escaped finishes its query first.
+const EVICT_GRACE_MS = Number(process.env.PG_POOL_EVICT_GRACE_MS || 30_000);
+const EVICT_DRAIN_MS = Number(process.env.PG_POOL_EVICT_DRAIN_MS || 15_000);
+
 const _pools = new Map();          // db_name -> pg.Pool
 const _poolLastUsed = new Map();   // db_name -> ts (for LRU eviction)
 const _slugCache = new Map();      // slug -> { tenant row, expiresAt }
@@ -44,29 +62,38 @@ const SLUG_TTL_MS = 30 * 1000;     // 30s — long enough to be hot, short enoug
 // Evict the least-recently-used pool when we exceed POOL_LRU_MAX.
 function _evictIfNeeded() {
   if (_pools.size <= POOL_LRU_MAX) return;
-  // FB_OAUTH_POOL_FIX_v2 — find the oldest entry that is NOT currently busy.
-  // Previously we ended pools mid-OAuth (a long /fb/auth/callback was using
-  // the pool, then a LRU eviction ended it, and the in-flight query crashed
-  // with 'Cannot use a pool after calling end on the pool'). We now skip
-  // any pool that has active clients (totalCount includes in-use + idle,
-  // waitingCount is queued requests — if either is > 0 the pool is in use).
+  // Find the oldest entry that is safe to evict. A pool is NOT safe if:
+  //   • it has connections checked out or queued (totalCount/waitingCount>0)
+  //     — FB_OAUTH_POOL_FIX_v2, covers actively-querying requests; OR
+  //   • it was handed out within EVICT_GRACE_MS — POOL_EVICT_RACE_FIX_v1,
+  //     covers requests that grabbed the pool but haven't queried yet.
+  const now = Date.now();
   const sorted = [..._poolLastUsed.entries()].sort((a, b) => a[1] - b[1]);
   let evicted = false;
-  for (const [k] of sorted) {
+  for (const [k, lastUsed] of sorted) {
     const p = _pools.get(k);
-    const busy = p && ((p.totalCount > 0) || (p.waitingCount > 0));
-    if (busy) continue;
+    const busy   = p && ((p.totalCount > 0) || (p.waitingCount > 0));
+    const recent = (now - (lastUsed || 0)) < EVICT_GRACE_MS;
+    if (busy || recent) continue;
+    // Pull it from the cache NOW so no new caller can receive it...
     _pools.delete(k);
     _poolLastUsed.delete(k);
-    if (p) { try { p.end().catch(() => {}); } catch (_) {} }
-    console.log('[tenant-pool] LRU evicted', k, 'cache size now', _pools.size);
+    // ...but defer the actual .end() so any reference that already escaped
+    // (handed out < EVICT_GRACE_MS ago and now mid-query) drains cleanly.
+    if (p) {
+      const t = setTimeout(() => { try { p.end().catch(() => {}); } catch (_) {} }, EVICT_DRAIN_MS);
+      if (t && typeof t.unref === 'function') t.unref();
+    }
+    console.log('[tenant-pool] LRU evicted', k, '(drain ' + EVICT_DRAIN_MS + 'ms) cache size now', _pools.size);
     evicted = true;
     break;
   }
   if (!evicted && _pools.size > POOL_LRU_MAX) {
-    // Every pool is busy — defer eviction; pools are short-lived so
-    // they'll become idle soon. Logging only.
-    console.warn('[tenant-pool] LRU at capacity but every pool is busy — deferring eviction. pools=' + _pools.size);
+    // Every pool is either busy or freshly handed out — defer eviction.
+    // Pools are short-lived (idleTimeout 10s) so capacity recovers on its
+    // own; temporarily holding a few extra pools is far safer than ending
+    // one out from under an in-flight request.
+    console.warn('[tenant-pool] LRU at capacity but all pools busy/recent — deferring eviction. pools=' + _pools.size);
   }
 }
 

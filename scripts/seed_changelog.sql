@@ -754,3 +754,10 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'Vserve beta: the Modern Leads view now has a single-row sticky header — title+count, search, inline chips (Hot/Overdue/Due today/New/Mine with counts), Status/Date/Owner dropdowns always visible, "+ Filters (N)" popover for the rest, Refresh + New Lead + ⋮ menu on right. Saves ~200px vertical = 2.5× more leads visible. Active filters persist across refresh; the filter popover always opens closed on hard refresh. Toggle via super-admin config LEADS_V2_HEADER_V4_ENABLED.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+-- POOL_EVICT_RACE_FIX_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('POOL_EVICT_RACE_FIX_v1', 'Fixed intermittent "pool after end" login/API errors',
+ 'Root-caused the recurring "Cannot use a pool after calling end on the pool" 500s some tenants saw the last few days. A tenant DB connection pool could be evicted by the LRU cleanup in the brief window after it was handed to a request but before that request issued its first query, crashing the request. The eviction pass now skips any pool handed out within a 30s grace window and defers the actual close by 15s so in-flight requests drain cleanly. No UI change.',
+ 'super_admin', NOW())
+ON CONFLICT DO NOTHING;
