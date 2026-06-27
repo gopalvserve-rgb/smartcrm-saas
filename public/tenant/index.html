@@ -167,6 +167,10 @@
           var c = document.createElement('script');
           c.src = 'caller-id-native.js?v=2026-05-24-tokenkey';
           document.body.appendChild(c);
+          // SOLAR_PACK_v1 (2026-06-27) — isolated pack SPA loaded after app.js
+          var sol = document.createElement('script');
+          sol.src = 'solar.js?v=2026-06-27-solar-v1';
+          document.body.appendChild(sol);
         }
         if (document.body) injectSpaScripts();
         else document.addEventListener('DOMContentLoaded', injectSpaScripts, { once: true });

@@ -614,6 +614,247 @@ async function api_solar_pricing_calc(_token, args) {
   return { calc: _calcPricing(args || {}) };
 }
 
+
+// ── Commit 2 APIs — Quotes + Installations ─────────────────────────
+
+async function api_solar_quote_create(_token, args) {
+  args = args || {};
+  const calc = _calcPricing(args);
+  const lead_id = Number(args.lead_id || 0) || null;
+  const site_id = Number(args.site_id || 0) || null;
+  const kw      = Number(args.kw || 0);
+  const inverter_brand = args.inverter_brand || null;
+  const panel_tier = args.panel_tier || 'mono_perc_tier1';
+  const battery_kwh = Number(args.battery_kwh || 0);
+  const state = args.state || 'BR';
+
+  const ins = await db.query(
+    `INSERT INTO sol_quotes (
+       lead_id, site_id, quote_no, kw, panel_tier, inverter_brand, battery_kwh,
+       state, gross_inr, central_subsidy, state_subsidy, net_inr, gst_pct, final_inr,
+       annual_gen_kwh, payback_years, roi_25y_inr, status
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+     RETURNING *`,
+    [
+      lead_id, site_id,
+      'SOL-' + Date.now().toString(36).toUpperCase(),
+      kw, panel_tier, inverter_brand, battery_kwh, state,
+      calc.gross_inr, calc.central_subsidy, calc.state_subsidy,
+      calc.net_inr, Number(args.gst_pct || 13.8), calc.final_inr,
+      calc.annual_gen_kwh, calc.payback_years, calc.roi_25y_inr,
+      'draft'
+    ]
+  );
+  const quote = ins.rows[0];
+
+  // Auto-create default BOM lines (panels, inverter, structure, cables, ACDB/DCDB, labor)
+  const panel_w = 545;  // assume tier-1 panel default
+  const panels  = Math.ceil((kw * 1000) / panel_w);
+  const items = [
+    ['panel',     'Adani Mono PERC ' + panel_w + 'W', panels, 'nos',  14000],
+    ['inverter',  inverter_brand || 'Sungrow String', 1,      'nos',  Number(args.inverter_inr || 38000)],
+    ['structure', 'Hot-dip galvanised',                kw,     'kW',   3500],
+    ['cable_dc',  'Polycab 6 sqmm',                    kw * 8, 'm',    120],
+    ['cable_ac',  'Polycab 4 sqmm',                    kw * 4, 'm',    95],
+    ['acdb_dcdb', 'Havells',                           1,      'set',  6500],
+    ['earthing',  '—',                                 3,      'pit',  2000],
+    ['netmeter',  'DISCOM',                            1,      'nos',  3000],
+    ['labor',     'Crew install',                      1,      'job',  6500]
+  ];
+  for (let i = 0; i < items.length; i++) {
+    const [type, make, qty, unit, rate] = items[i];
+    await db.query(
+      `INSERT INTO sol_quote_items (quote_id, seq, item_type, make, qty, unit, rate, total)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [quote.id, i + 1, type, make, qty, unit, rate, qty * rate]
+    );
+  }
+  return { ok: true, quote };
+}
+
+async function api_solar_quote_byLead(_token, args) {
+  const leadId = Number((args && args.lead_id) || 0);
+  if (!leadId) return { quotes: [] };
+  const r = await db.query(
+    `SELECT * FROM sol_quotes WHERE lead_id=$1 ORDER BY id DESC`,
+    [leadId]
+  );
+  return { quotes: r.rows || [] };
+}
+
+async function api_solar_quote_list(_token, args) {
+  args = args || {};
+  const limit = Math.min(500, Math.max(1, Number(args.limit || 50)));
+  const params = [limit];
+  let where = '1=1';
+  if (args.status) { params.push(args.status); where += ` AND q.status = $${params.length}`; }
+  const r = await db.query(
+    `SELECT q.*, l.name AS lead_name, l.phone AS lead_phone
+       FROM sol_quotes q
+       LEFT JOIN leads l ON l.id = q.lead_id
+      WHERE ${where}
+      ORDER BY q.id DESC LIMIT $1`,
+    params
+  );
+  return { quotes: r.rows || [] };
+}
+
+async function api_solar_quote_items(_token, args) {
+  const qid = Number((args && args.quote_id) || 0);
+  if (!qid) return { items: [] };
+  const r = await db.query(
+    `SELECT * FROM sol_quote_items WHERE quote_id=$1 ORDER BY seq ASC`,
+    [qid]
+  );
+  return { items: r.rows || [] };
+}
+
+async function api_solar_quote_setStatus(_token, args) {
+  const qid = Number((args && args.quote_id) || 0);
+  const status = String((args && args.status) || 'sent');
+  if (!qid) throw new Error('quote_id required');
+  await db.query(
+    `UPDATE sol_quotes SET status=$1, sent_at = CASE WHEN $1 IN ('sent','accepted','booked') AND sent_at IS NULL THEN now() ELSE sent_at END WHERE id=$2`,
+    [status, qid]
+  );
+  return { ok: true };
+}
+
+async function api_solar_install_create(_token, args) {
+  args = args || {};
+  const lead_id  = Number(args.lead_id || 0) || null;
+  const quote_id = Number(args.quote_id || 0) || null;
+  const kw       = Number(args.kw || 0);
+  const total    = Number(args.total_inr || 0);
+  const owner    = Number(args.owner_user_id || 0) || null;
+
+  const ins = await db.query(
+    `INSERT INTO sol_installations (lead_id, quote_id, project_no, kw, total_inr, owner_user_id, current_stage, booked_at)
+     VALUES ($1,$2,$3,$4,$5,$6,2,now()) RETURNING *`,
+    [lead_id, quote_id, 'WW-' + Date.now().toString(36).toUpperCase(), kw, total, owner]
+  );
+  const project = ins.rows[0];
+
+  // Seed all 9 milestones; first 2 marked done (Quoted + Booked)
+  for (const m of INSTALL_MILESTONES) {
+    const status = (m.seq <= 2) ? 'done' : (m.seq === 3 ? 'in_progress' : 'pending');
+    await db.query(
+      `INSERT INTO sol_install_milestones (install_id, seq, code, label, status, actual_date)
+       VALUES ($1,$2,$3,$4,$5, CASE WHEN $5='done' THEN CURRENT_DATE ELSE NULL END)`,
+      [project.id, m.seq, m.code, m.label, status]
+    );
+  }
+  return { ok: true, install: project };
+}
+
+async function api_solar_install_list(_token, args) {
+  args = args || {};
+  const params = [];
+  let where = '1=1';
+  if (args.stage) { params.push(Number(args.stage)); where += ` AND i.current_stage = $${params.length}`; }
+  if (args.status) { params.push(args.status); where += ` AND i.status = $${params.length}`; }
+  if (args.owner_user_id) { params.push(Number(args.owner_user_id)); where += ` AND i.owner_user_id = $${params.length}`; }
+
+  const r = await db.query(
+    `SELECT i.*, l.name AS lead_name, l.phone AS lead_phone, l.city AS lead_city,
+            u.name AS owner_name
+       FROM sol_installations i
+       LEFT JOIN leads l ON l.id = i.lead_id
+       LEFT JOIN users u ON u.id = i.owner_user_id
+      WHERE ${where}
+      ORDER BY i.id DESC`,
+    params
+  );
+  return { installs: r.rows || [] };
+}
+
+async function api_solar_install_byLead(_token, args) {
+  const leadId = Number((args && args.lead_id) || 0);
+  if (!leadId) return { installs: [] };
+  const r = await db.query(
+    `SELECT * FROM sol_installations WHERE lead_id=$1 ORDER BY id DESC`,
+    [leadId]
+  );
+  return { installs: r.rows || [] };
+}
+
+async function api_solar_install_milestones(_token, args) {
+  const iid = Number((args && args.install_id) || 0);
+  if (!iid) return { milestones: [] };
+  const r = await db.query(
+    `SELECT m.*, u.name AS owner_name
+       FROM sol_install_milestones m
+       LEFT JOIN users u ON u.id = m.owner_user_id
+      WHERE m.install_id=$1
+      ORDER BY m.seq ASC`,
+    [iid]
+  );
+  return { milestones: r.rows || [] };
+}
+
+async function api_solar_install_advance(_token, args) {
+  const iid = Number((args && args.install_id) || 0);
+  const notes = (args && args.notes) || null;
+  if (!iid) throw new Error('install_id required');
+
+  const cur = await db.query(`SELECT current_stage FROM sol_installations WHERE id=$1`, [iid]);
+  if (!cur.rows[0]) throw new Error('install not found');
+  const stage = Number(cur.rows[0].current_stage || 1);
+  const nextStage = Math.min(9, stage + 1);
+
+  // Mark current stage done; set new current stage in_progress
+  await db.query(
+    `UPDATE sol_install_milestones SET status='done', actual_date=CURRENT_DATE, notes=COALESCE($1, notes), updated_at=now()
+       WHERE install_id=$2 AND seq=$3`,
+    [notes, iid, stage]
+  );
+  if (nextStage > stage) {
+    await db.query(
+      `UPDATE sol_install_milestones SET status='in_progress', updated_at=now()
+         WHERE install_id=$1 AND seq=$2`,
+      [iid, nextStage]
+    );
+    const isCommissioned = (nextStage === 9);
+    await db.query(
+      `UPDATE sol_installations
+          SET current_stage=$1,
+              status = CASE WHEN $1=9 THEN 'done' ELSE status END,
+              commissioned_at = CASE WHEN $1=9 AND commissioned_at IS NULL THEN now() ELSE commissioned_at END
+        WHERE id=$2`,
+      [nextStage, iid]
+    );
+    return { ok: true, advanced_to: nextStage, commissioned: isCommissioned };
+  }
+  return { ok: true, advanced_to: stage, commissioned: stage === 9 };
+}
+
+async function api_solar_install_summary(/*token*/) {
+  const r = await db.query(`
+    SELECT
+      COUNT(*) FILTER (WHERE status='active')::int                          AS active,
+      COALESCE(SUM(CASE WHEN status='active' THEN kw ELSE 0 END),0)::numeric AS active_kw,
+      COUNT(*) FILTER (WHERE status='done' AND commissioned_at >= date_trunc('month', now()))::int AS commissioned_month,
+      COALESCE(AVG(CASE WHEN status='done' THEN EXTRACT(epoch FROM (commissioned_at - booked_at))/86400 END),0)::numeric AS avg_cycle_days
+    FROM sol_installations
+  `, []);
+  const r2 = await db.query(`
+    SELECT seq, code, label,
+           AVG(CASE WHEN status='done' AND actual_date IS NOT NULL THEN EXTRACT(epoch FROM (actual_date::timestamp - updated_at))/86400 END) AS avg_days
+      FROM sol_install_milestones
+     GROUP BY seq, code, label
+     ORDER BY seq ASC
+  `, []);
+  return { kpis: r.rows[0] || {}, stage_metrics: r2.rows || [] };
+}
+
+async function api_solar_inverter_brands_list(/*token*/) {
+  const r = await db.query(
+    `SELECT * FROM sol_inverter_brands WHERE is_active=1 ORDER BY kind, brand, kw_capacity`,
+    []
+  );
+  return { brands: r.rows || [] };
+}
+
 // ── Register the pack ──────────────────────────────────────────────
 framework.register({
   id:          PACK_ID,
@@ -637,7 +878,7 @@ framework.register({
 });
 
 module.exports = {
-  // APIs
+  // APIs (Commit 1)
   api_solar_summary,
   api_solar_site_byLead,
   api_solar_site_list,
@@ -645,6 +886,19 @@ module.exports = {
   api_solar_pricing_config_get,
   api_solar_pricing_config_set,
   api_solar_pricing_calc,
+  // APIs (Commit 2 — Quotes + Installations)
+  api_solar_quote_create,
+  api_solar_quote_byLead,
+  api_solar_quote_list,
+  api_solar_quote_items,
+  api_solar_quote_setStatus,
+  api_solar_install_create,
+  api_solar_install_list,
+  api_solar_install_byLead,
+  api_solar_install_milestones,
+  api_solar_install_advance,
+  api_solar_install_summary,
+  api_solar_inverter_brands_list,
 
   // Exports for Commits 2+3
   INSTALL_MILESTONES,
