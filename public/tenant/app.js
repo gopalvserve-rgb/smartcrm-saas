@@ -1756,7 +1756,13 @@ const NAV_GROUPS = [
     // ---- Manufacturer pack ----
     { id: 'packmfg',      label: 'Manufacturer Overview', icon: '🏭', roles: ['admin','manager','team_leader'], requiresPack: 'manufacturer', search: 'manufacturer factory rfq quote order production dispatch' },
     // ---- Holiday & Travel pack ----
-    { id: 'packholiday',  label: 'Travel Overview',   icon: '✈️', roles: ['admin','manager','team_leader'], requiresPack: 'holiday', search: 'travel holiday booking package itinerary voucher' },
+    { id: 'packholiday',      label: '✈️ Travel Overview',     icon: '✈️', roles: ['admin','manager','team_leader'], requiresPack: 'holiday', search: 'travel holiday overview dashboard' },
+    { id: 'tourbookings',     label: 'Bookings',                 icon: '🎫', roles: ['admin','manager','team_leader','sales'], requiresPack: 'holiday', search: 'travel bookings list' },
+    { id: 'tourdestinations', label: 'Destinations',             icon: '🌍', roles: ['admin','manager','team_leader','sales'], requiresPack: 'holiday', search: 'destinations master countries' },
+    { id: 'touritinerary',    label: 'Itinerary Builder',        icon: '🗺️', roles: ['admin','manager','team_leader','sales'], requiresPack: 'holiday', search: 'itinerary day plan trip' },
+    { id: 'tourpayments',     label: 'Payments & Collection',    icon: '💰', roles: ['admin','manager','team_leader'], requiresPack: 'holiday', search: 'payment collection balance outstanding' },
+    { id: 'tourreports',      label: 'Travel Reports',           icon: '📊', roles: ['admin','manager','team_leader'], requiresPack: 'holiday', search: 'reports upcoming collection itinerary leaderboard' },
+    { id: 'tourinsights',     label: 'AI Insights',              icon: '🤖', roles: ['admin','manager'], requiresPack: 'holiday', search: 'ai insights gemini travel' },
     // ---- Ecommerce pack ----
     { id: 'packecommerce', label: 'Ecommerce Overview', icon: '🛒', roles: ['admin','manager','team_leader'], requiresPack: 'ecommerce', search: 'ecommerce order return cart loyalty d2c' }
   ] },

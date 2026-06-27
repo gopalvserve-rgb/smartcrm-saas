@@ -205,6 +205,7 @@ function _money(n) { return Number(n || 0); }
 // ── APIs ─────────────────────────────────────────────────────────
 
 async function api_tour_summary(/*token*/) {
+  await _ensureTables();
   const r1 = await db.query(`
     SELECT
       COUNT(*)::int                                                  AS bookings_total,
@@ -238,6 +239,7 @@ async function api_tour_summary(/*token*/) {
 }
 
 async function api_tour_destinations_list(/*token*/) {
+  await _ensureTables();
   const r = await db.query(
     `SELECT * FROM tour_destinations WHERE is_active=1 ORDER BY name ASC`, []);
   return { destinations: r.rows || [] };
@@ -273,6 +275,7 @@ async function api_tour_destinations_save(_token, args) {
 }
 
 async function api_tour_packages_list(_token, args) {
+  await _ensureTables();
   args = args || {};
   const params = [];
   let where = '1=1';
@@ -354,6 +357,7 @@ async function api_tour_booking_create(_token, args) {
 }
 
 async function api_tour_booking_list(_token, args) {
+  await _ensureTables();
   args = args || {};
   const params = [];
   let where = '1=1';
@@ -574,6 +578,233 @@ async function api_tour_report_agentLeaderboard(_token, args) {
   return { agents: r.rows || [] };
 }
 
+
+// Holiday lead pipeline (matches PACK_STAGES in tenantApi.js)
+const HOLIDAY_LEAD_STAGES = [
+  { name: 'New Enquiry',             color: '#3b82f6' },
+  { name: 'Destination Shared',      color: '#06b6d4' },
+  { name: 'Quote / Itinerary Sent',  color: '#8b5cf6' },
+  { name: 'Quote Accepted',          color: '#f59e0b' },
+  { name: 'Booked / Advance Paid',   color: '#ec4899' },
+  { name: 'Visa In Progress',        color: '#f97316' },
+  { name: 'Documents Ready',         color: '#84cc16' },
+  { name: 'Travelling',              color: '#0d9488' },
+  { name: 'Trip Completed',          color: '#16a34a', is_final: 1 },
+  { name: 'Repeat Customer',         color: '#15803d' },
+  { name: 'Cancelled',               color: '#6b7280', is_final: 1 }
+];
+
+async function _ensureTables() {
+  try { await _installer({ db: db }); }
+  catch (e) { console.warn('[holiday] _ensureTables:', e.message); }
+}
+
+async function _seedHolidayStages() {
+  for (let i = 0; i < HOLIDAY_LEAD_STAGES.length; i++) {
+    const s = HOLIDAY_LEAD_STAGES[i];
+    const found = await db.query(`SELECT id FROM statuses WHERE LOWER(name)=LOWER($1) LIMIT 1`, [s.name]);
+    if (found.rows.length) {
+      await db.query(
+        `UPDATE statuses SET sort_order=$1, color=$2, is_final=$3 WHERE id=$4`,
+        [i + 1, s.color, s.is_final ? 1 : 0, found.rows[0].id]);
+    } else {
+      await db.query(
+        `INSERT INTO statuses (name, sort_order, color, is_final) VALUES ($1,$2,$3,$4)`,
+        [s.name, i + 1, s.color, s.is_final ? 1 : 0]);
+    }
+  }
+  const keep = HOLIDAY_LEAD_STAGES.map(s => s.name.toLowerCase());
+  const all = await db.query(`SELECT id, name FROM statuses`, []);
+  let bottom = 100;
+  for (const row of all.rows) {
+    if (keep.includes(String(row.name).toLowerCase())) continue;
+    const useCnt = await db.query(`SELECT COUNT(*)::int AS c FROM leads WHERE status_id=$1`, [row.id]);
+    if (Number(useCnt.rows[0].c) === 0) {
+      try { await db.query(`DELETE FROM statuses WHERE id=$1`, [row.id]); }
+      catch (_) { await db.query(`UPDATE statuses SET sort_order=$1 WHERE id=$2`, [bottom++, row.id]); }
+    } else {
+      await db.query(`UPDATE statuses SET sort_order=$1 WHERE id=$2`, [bottom++, row.id]);
+    }
+  }
+}
+
+async function api_tour_resetStages(/*token*/) {
+  await _ensureTables();
+  await _seedHolidayStages();
+  return { ok: true, stages: HOLIDAY_LEAD_STAGES.map(s => s.name) };
+}
+
+async function api_tour_seedDemo(/*token*/) {
+  await _ensureTables();
+  await _seedHolidayStages();
+
+  const existing = await db.query(`SELECT COUNT(*)::int AS n FROM tour_bookings`, []);
+  if ((existing.rows[0] || {}).n >= 20) {
+    return { ok: true, skipped: true, message: 'Demo data already present (Holiday stages still re-applied).' };
+  }
+
+  // Pre-load destination IDs
+  const destRows = await db.query(`SELECT id, name FROM tour_destinations ORDER BY id ASC`, []);
+  const destinations = destRows.rows;
+  if (!destinations.length) {
+    return { ok: false, error: 'No destinations found. Pack installer should have seeded these.' };
+  }
+
+  // Pre-load lead status_ids
+  const stRows = await db.query(`SELECT id FROM statuses ORDER BY sort_order ASC LIMIT 11`, []);
+  const STATUS_IDS = stRows.rows.map(r => r.id);
+
+  // Create ~30 leads if we need them
+  const leadCount = await db.query(`SELECT COUNT(*)::int AS n FROM leads`, []);
+  const need = Math.max(0, 30 - (leadCount.rows[0] || {}).n);
+
+  const FIRST = ['Anjali','Rohan','Mira','Vikram','Sneha','Pranav','Krishna','Sunita',
+                 'Arjun','Pradeep','Rajeev','Geeta','Sanjay','Lalit','Kapil','Riya',
+                 'Karan','Aman','Anita','Rahul','Tanya','Vinay','Pooja','Amit',
+                 'Sahil','Neha','Akash','Divya','Manish','Ritu'];
+  const LAST = ['Sharma','Verma','Iyer','Kapoor','Joshi','Patel','Singh','Khanna',
+                'Mehta','Reddy','Nair','Roy','Gupta','Kumar','Devi'];
+  const CITIES = [['Mumbai','MH'],['Delhi','DL'],['Bengaluru','KA'],['Pune','MH'],
+                  ['Ahmedabad','GJ'],['Hyderabad','TS'],['Chennai','TN'],['Kolkata','WB']];
+  const newLeadIds = [];
+  for (let i = 0; i < need; i++) {
+    const nm = FIRST[i % FIRST.length] + ' ' + LAST[(i * 3) % LAST.length];
+    const city = CITIES[i % CITIES.length];
+    const phone = '9' + String(700000000 + i * 11 + Math.floor(Math.random() * 1000)).slice(-9);
+    const statusId = STATUS_IDS[i % STATUS_IDS.length] || 1;
+    try {
+      const r = await db.query(
+        `INSERT INTO leads (name, phone, city, state, source, status_id, created_at)
+         VALUES ($1,$2,$3,$4,'Holiday Demo', $5, now() - ($6 || ' days')::interval)
+         RETURNING id`,
+        [nm, phone, city[0], city[1], statusId, String(i % 60)]);
+      newLeadIds.push(r.rows[0].id);
+    } catch (_) {}
+  }
+
+  const allLeads = await db.query(`SELECT id, name FROM leads ORDER BY id DESC LIMIT 30`, []);
+  const leads = allLeads.rows;
+  if (leads.length < 12) {
+    return { ok: false, error: 'Need at least 12 leads. Have ' + leads.length };
+  }
+
+  // Create 25 bookings spread across destinations, statuses, future + past travel dates
+  const STATUSES = ['enquiry','quoted','quoted','booked','booked','booked','confirmed',
+                    'confirmed','confirmed','traveling','completed','completed','cancelled'];
+  const VISA = ['na','na','approved','pending','pending','rejected'];
+  const DOCS = ['complete','pending','partial','complete'];
+  const PAX_OPTS = [2, 2, 2, 3, 4, 2, 5];
+
+  const created = [];
+  for (let i = 0; i < 25; i++) {
+    const L = leads[i % leads.length];
+    const d = destinations[i % destinations.length];
+    const status = STATUSES[i % STATUSES.length];
+    const travelOffset = (i % 3 === 0) ? -10 - (i % 30)  // past travel (some completed)
+                                       : 3 + (i % 60);   // future
+    const pax = PAX_OPTS[i % PAX_OPTS.length];
+    const total = Math.round((Number(d.avg_price_inr) * pax) * (0.9 + Math.random() * 0.4));
+    const advancePct = status === 'enquiry' ? 0
+                     : status === 'quoted' ? 0
+                     : status === 'cancelled' ? 0.5
+                     : 0.3 + Math.random() * 0.5;
+    const advance = Math.round(total * advancePct);
+    const balance = Math.max(0, total - advance);
+    const days = (i % 6 === 0) ? 4 + (i % 5) : 5 + (i % 8);
+
+    const r = await db.query(
+      `INSERT INTO tour_bookings
+         (lead_id, destination_id, booking_no, travellers,
+          travel_start_date, travel_end_date,
+          total_inr, advance_inr, balance_inr, cost_inr,
+          visa_status, docs_status, voucher_status, source, status, created_at)
+       VALUES ($1,$2,$3,$4,
+               (CURRENT_DATE + ($5 || ' days')::interval)::date,
+               (CURRENT_DATE + (($5::int + $6) || ' days')::interval)::date,
+               $7,$8,$9,$10, $11,$12,$13, 'Solar Demo', $14,
+               now() - ($15 || ' days')::interval)
+       RETURNING id`,
+      [L.id, d.id, 'WW-' + (3000 + i).toString(36).toUpperCase(), pax,
+       String(travelOffset), days,
+       total, advance, balance, Math.round(total * 0.72),
+       VISA[i % VISA.length], DOCS[i % DOCS.length],
+       i < 5 ? 'sent' : 'pending',
+       status, String(15 + i * 2)]);
+
+    created.push({ booking_id: r.rows[0].id, days, dest: d, status });
+
+    // 4. Itinerary for booked/confirmed/traveling/completed
+    if (['booked', 'confirmed', 'traveling', 'completed'].includes(status)) {
+      const itinR = await db.query(
+        `INSERT INTO tour_itineraries (booking_id, title, status, sent_at)
+         VALUES ($1, $2, $3, CASE WHEN $3 IN ('sent','acknowledged') THEN now() ELSE NULL END)
+         RETURNING id`,
+        [r.rows[0].id, d.name + ' · ' + days + 'N for ' + L.name,
+         ['draft','sent','sent','acknowledged'][i % 4]]);
+      const itinId = itinR.rows[0].id;
+      // Add days (3-7 days)
+      const dayCount = Math.min(days + 1, 7);
+      for (let dy = 1; dy <= dayCount; dy++) {
+        const dayR = await db.query(
+          `INSERT INTO tour_itinerary_days
+             (itinerary_id, day_no, city, hotel_name, room_type, meal_plan, notes)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)
+           RETURNING id`,
+          [itinId, dy, d.name,
+           ['Beach Resort','City Hotel','Boutique Hotel','Wellness Resort'][dy % 4],
+           dy === 1 ? 'Deluxe' : 'Premium',
+           'bb', dy === 1 ? 'Arrival day' : 'Sightseeing']);
+        // Add 2-3 activities per day
+        const acts = [
+          ['09:00 AM', 'sightseeing', 'Morning local tour', 'Visit key landmarks'],
+          ['01:00 PM', 'meal', 'Lunch at local cuisine', 'Try regional dishes'],
+          ['04:00 PM', 'leisure', 'Free time', 'Beach / spa / shopping']
+        ];
+        for (let a = 0; a < acts.length; a++) {
+          await db.query(
+            `INSERT INTO tour_itinerary_activities (day_id, seq, time_str, kind, title, detail)
+             VALUES ($1,$2,$3,$4,$5,$6)`,
+            [dayR.rows[0].id, a + 1, acts[a][0], acts[a][1], acts[a][2], acts[a][3]]);
+        }
+      }
+    }
+
+    // 5. Payments — record advance receipt for booked+ statuses
+    if (['booked', 'confirmed', 'traveling', 'completed'].includes(status) && advance > 0) {
+      await db.query(
+        `INSERT INTO tour_payments (booking_id, amount_inr, mode, ref_no, paid_at, notes)
+         VALUES ($1,$2,$3,$4, CURRENT_DATE - ($5 || ' days')::interval, $6)`,
+        [r.rows[0].id, advance,
+         ['upi','bank','card','cash'][i % 4],
+         'PMT-' + (50000 + i),
+         String(15 + i * 2),
+         'Advance receipt']);
+      // Some completed get full balance too
+      if (status === 'completed' && balance > 0) {
+        await db.query(
+          `INSERT INTO tour_payments (booking_id, amount_inr, mode, paid_at, notes)
+           VALUES ($1,$2,$3, CURRENT_DATE - ($4 || ' days')::interval, $5)`,
+          [r.rows[0].id, balance, 'bank',
+           String(5 + i), 'Final settlement']);
+        // Zero out balance after final payment
+        await db.query(
+          `UPDATE tour_bookings SET advance_inr = total_inr, balance_inr = 0 WHERE id=$1`,
+          [r.rows[0].id]);
+      }
+    }
+  }
+
+  return {
+    ok: true,
+    seeded: {
+      leads_created: newLeadIds.length,
+      bookings: created.length,
+      with_itinerary: created.filter(c => ['booked','confirmed','traveling','completed'].includes(c.status)).length,
+      destinations_used: new Set(created.map(c => c.dest.id)).size
+    }
+  };
+}
+
 // ── Register the pack ─────────────────────────────────────────────
 framework.register({
   id:          PACK_ID,
@@ -614,7 +845,10 @@ module.exports = {
   api_tour_report_collection,
   api_tour_report_itineraryStatus,
   api_tour_report_agentLeaderboard,
+  api_tour_resetStages,
+  api_tour_seedDemo,
   SEED_DESTINATIONS,
   ACTIVITY_TYPES,
+  HOLIDAY_LEAD_STAGES,
   _installer
 };
