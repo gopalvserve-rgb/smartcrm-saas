@@ -1043,11 +1043,67 @@ async function api_solar_insights_get(/*token*/) {
 }
 
 // ── Showcase demo seed (idempotent) ─────────────────────────────────
+// Solar lead pipeline stages — must match the install milestones for a clean handoff
+const SOLAR_LEAD_STAGES = [
+  { name: 'New Enquiry',              color: '#3b82f6' },
+  { name: 'Site Visit Scheduled',     color: '#06b6d4' },
+  { name: 'Site Surveyed',            color: '#8b5cf6' },
+  { name: 'Quote Sent',               color: '#f59e0b' },
+  { name: 'Booked / Advance Paid',    color: '#ec4899' },
+  { name: 'Design + DISCOM Approved', color: '#f97316' },
+  { name: 'Material Dispatched',      color: '#dc2626' },
+  { name: 'Installation In Progress', color: '#b91c1c' },
+  { name: 'Net-meter + PTO',          color: '#84cc16' },
+  { name: 'Commissioned / LIVE',      color: '#16a34a', is_final: 1 },
+  { name: 'AMC Active',               color: '#0d9488', is_final: 1 },
+  { name: 'Lost',                     color: '#6b7280', is_final: 1 }
+];
+
+async function _seedSolarStages() {
+  // Idempotent — insert if missing, update sort_order + color if present
+  for (let i = 0; i < SOLAR_LEAD_STAGES.length; i++) {
+    const s = SOLAR_LEAD_STAGES[i];
+    const found = await db.query(`SELECT id FROM statuses WHERE LOWER(name)=LOWER($1) LIMIT 1`, [s.name]);
+    if (found.rows.length) {
+      await db.query(
+        `UPDATE statuses SET sort_order=$1, color=$2, is_final=$3 WHERE id=$4`,
+        [i + 1, s.color, s.is_final ? 1 : 0, found.rows[0].id]);
+    } else {
+      await db.query(
+        `INSERT INTO statuses (name, sort_order, color, is_final) VALUES ($1,$2,$3,$4)`,
+        [s.name, i + 1, s.color, s.is_final ? 1 : 0]);
+    }
+  }
+  // Push generic/non-Solar stages to the bottom (sort_order 100+)
+  const keep = SOLAR_LEAD_STAGES.map(s => s.name.toLowerCase());
+  const all = await db.query(`SELECT id, name FROM statuses`, []);
+  let bottom = 100;
+  for (const row of all.rows) {
+    if (keep.includes(String(row.name).toLowerCase())) continue;
+    // Only delete generic stages with ZERO leads — safer than blind delete
+    const useCnt = await db.query(`SELECT COUNT(*)::int AS c FROM leads WHERE status_id=$1`, [row.id]);
+    if (Number(useCnt.rows[0].c) === 0) {
+      try { await db.query(`DELETE FROM statuses WHERE id=$1`, [row.id]); }
+      catch (_) { await db.query(`UPDATE statuses SET sort_order=$1 WHERE id=$2`, [bottom++, row.id]); }
+    } else {
+      await db.query(`UPDATE statuses SET sort_order=$1 WHERE id=$2`, [bottom++, row.id]);
+    }
+  }
+}
+
+async function api_solar_resetStages(/*token*/) {
+  await _seedSolarStages();
+  return { ok: true, stages: SOLAR_LEAD_STAGES.map(s => s.name) };
+}
+
 async function api_solar_seedDemo(/*token*/) {
+  // Step 0: apply Solar-specific lead pipeline stages first
+  await _seedSolarStages();
+
   // Idempotency check
   const existing = await db.query(`SELECT COUNT(*)::int AS n FROM sol_installations`, []);
   if ((existing.rows[0] || {}).n >= 10) {
-    return { ok: true, skipped: true, message: 'Demo data already present.' };
+    return { ok: true, skipped: true, message: 'Demo data already present (Solar stages still re-applied).' };
   }
 
   // 1. Ensure we have ~30 leads to attach surveys/quotes/installs to
@@ -1064,16 +1120,23 @@ async function api_solar_seedDemo(/*token*/) {
                   ['Pune','MH'],['Delhi','DL'],['Ahmedabad','GJ'],['Hyderabad','TS']];
 
   const newLeadIds = [];
+  // Pre-load Solar status_ids (1..12 by sort_order)
+  const stRows = await db.query(
+    `SELECT id, sort_order FROM statuses ORDER BY sort_order ASC LIMIT 12`, []);
+  const STATUS_IDS = stRows.rows.map(r => r.id);
+
   for (let i = 0; i < need; i++) {
     const nm = FIRST[i % FIRST.length] + ' ' + LAST[(i * 3) % LAST.length];
     const city = CITIES[i % CITIES.length];
     const phone = '9' + String(800000000 + i * 7 + Math.floor(Math.random() * 1000)).slice(-9);
+    // Distribute leads across all Solar pipeline stages
+    const statusId = STATUS_IDS[i % STATUS_IDS.length] || 1;
     try {
       const r = await db.query(
         `INSERT INTO leads (name, phone, city, state, source, status_id, created_at)
-         VALUES ($1,$2,$3,$4,'Solar Demo', 1, now() - ($5 || ' days')::interval)
+         VALUES ($1,$2,$3,$4,'Solar Demo', $6, now() - ($5 || ' days')::interval)
          RETURNING id`,
-        [nm, phone, city[0], city[1], String(i % 60)]
+        [nm, phone, city[0], city[1], String(i % 60), statusId]
       );
       newLeadIds.push(r.rows[0].id);
     } catch (_) {}
@@ -1302,6 +1365,7 @@ module.exports = {
   api_solar_amc_markDone,
   api_solar_amc_summary,
   api_solar_insights_get,
+  api_solar_resetStages,
   api_solar_seedDemo,
 
   // Exports for Commits 2+3

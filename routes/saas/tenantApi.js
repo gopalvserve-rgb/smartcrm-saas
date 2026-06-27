@@ -576,6 +576,35 @@ async function api_packs_resetStagesToPackDefaults(token, packId) {
       { name: 'Documents Collected',     color: '#8b5cf6' },
       { name: 'Commission In Progress',  color: '#0284c7' },
       { name: 'Paid',                    color: '#15803d', is_final: 1 }
+    ],
+    // SOLAR_PACK_v1.1 — 2026-06-27 — Solar lead pipeline (matches install milestones)
+    solar: [
+      { name: 'New Enquiry',             color: '#3b82f6' },
+      { name: 'Site Visit Scheduled',    color: '#06b6d4' },
+      { name: 'Site Surveyed',           color: '#8b5cf6' },
+      { name: 'Quote Sent',              color: '#f59e0b' },
+      { name: 'Booked / Advance Paid',   color: '#ec4899' },
+      { name: 'Design + DISCOM Approved',color: '#f97316' },
+      { name: 'Material Dispatched',     color: '#dc2626' },
+      { name: 'Installation In Progress',color: '#b91c1c' },
+      { name: 'Net-meter + PTO',         color: '#84cc16' },
+      { name: 'Commissioned / LIVE',     color: '#16a34a', is_final: 1 },
+      { name: 'AMC Active',              color: '#0d9488', is_final: 1 },
+      { name: 'Lost',                    color: '#6b7280', is_final: 1 }
+    ],
+    // HOLIDAY_PACK_v1 — 2026-06-27 — Travel agency lead pipeline
+    holiday: [
+      { name: 'New Enquiry',             color: '#3b82f6' },
+      { name: 'Destination Shared',      color: '#06b6d4' },
+      { name: 'Quote / Itinerary Sent',  color: '#8b5cf6' },
+      { name: 'Quote Accepted',          color: '#f59e0b' },
+      { name: 'Booked / Advance Paid',   color: '#ec4899' },
+      { name: 'Visa In Progress',        color: '#f97316' },
+      { name: 'Documents Ready',         color: '#84cc16' },
+      { name: 'Travelling',              color: '#0d9488' },
+      { name: 'Trip Completed',          color: '#16a34a', is_final: 1 },
+      { name: 'Repeat Customer',         color: '#15803d' },
+      { name: 'Cancelled',               color: '#6b7280', is_final: 1 }
     ]
   };
   const stages = PACK_STAGES[String(packId || '').toLowerCase()];
