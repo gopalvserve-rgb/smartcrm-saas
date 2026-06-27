@@ -1818,6 +1818,9 @@ const NAV_GROUPS = [
     { id: 'whatsappreport', label: 'WhatsApp Report',  icon: '💬', roles: ['admin', 'manager', 'team_leader'], search: 'whatsapp report message report whatsapp analytics' },
     { id: 'campaignreport', label: 'Campaign Report',  icon: '📊', roles: ['admin', 'manager', 'team_leader'], search: 'campaign report campaign analytics' }
   ] },
+  // OPS_MENU_GROUP_v1 (2026-06-27) — HR / Billing / Payments / Products & Inventory
+  // consolidated under one collapsible parent with nested sub-menus.
+  { label: 'Operations', icon: '🗂️', subgroups: [
   { label: 'Products & Inventory', icon: '📦', items: [
     { id: 'inventory',  label: 'Inventory',        icon: '📦', search: 'inventory stock product stock' },
     { id: 'invItems',   label: 'Items & Services', icon: '📦', module: 'invoicing', search: 'items services product master service master items/services' }
@@ -1848,6 +1851,7 @@ const NAV_GROUPS = [
     { id: 'bank',       label: 'Bank',              icon: '🏦', search: 'bank bank details account details' },
     { id: 'teamchat',   label: 'Team Chat',         icon: '👥', countKey: 'chat_unread', search: 'team chat internal chat message' }
   ] },
+  ] },
   { label: 'Knowledge & Support', icon: '📚', items: [
     { id: 'knowledge',  label: 'Knowledge Base',     icon: '📚', search: 'knowledge knowledge base help article faq' },
     { id: 'tutorial',   label: 'SmartCRM Tutorial',  icon: '📖', search: 'tutorial guide help' },
@@ -1861,7 +1865,7 @@ const NAV_GROUPS = [
   ] }
 ];
 // Flatten for backwards-compat with anywhere that iterates NAV.
-const NAV = NAV_GROUPS.flatMap(g => g.items);
+const NAV = NAV_GROUPS.flatMap(g => g.items || (g.subgroups ? g.subgroups.flatMap(sg => sg.items || []) : []));
 
 // LEAD_POOL_v1 — who sees the Lead Pool sidebar item: admin always; others
 // only when the feature is enabled AND they have pool.view/pool.pull OR are
@@ -2026,6 +2030,36 @@ function renderShell() {
   });
 
   _orderedGroups.forEach(group => {
+    // OPS_MENU_GROUP_v1 — parent group with nested subgroups (3-level menu).
+    if (group.subgroups) {
+      const subEls = [];
+      group.subgroups.forEach(sg => {
+        const sgAnchors = (sg.items || []).map(_navAnchor).filter(Boolean);
+        if (!sgAnchors.length) return;
+        const sgEl = h('div', { class: 'nav-group nav-subgroup collapsed', style: { marginLeft: '6px' } });
+        const sgHead = h('button', { class: 'nav-group-head', type: 'button',
+          onclick: () => { sgEl.classList.toggle('collapsed'); } },
+          h('span', { class: 'nav-group-icon' }, sg.icon || ''),
+          h('span', { class: 'nav-group-label' }, sg.label),
+          h('span', { class: 'nav-group-chev' }, '▾'));
+        const sgItems = h('div', { class: 'nav-group-items' });
+        sgAnchors.forEach(a => sgItems.appendChild(a));
+        sgEl.appendChild(sgHead); sgEl.appendChild(sgItems);
+        subEls.push(sgEl);
+      });
+      if (!subEls.length) return;
+      const pGroupEl = h('div', { class: 'nav-group collapsed' });
+      const pHead = h('button', { class: 'nav-group-head', type: 'button',
+        onclick: () => { pGroupEl.classList.toggle('collapsed'); } },
+        h('span', { class: 'nav-group-icon' }, group.icon || ''),
+        h('span', { class: 'nav-group-label' }, group.label),
+        h('span', { class: 'nav-group-chev' }, '▾'));
+      const pItems = h('div', { class: 'nav-group-items nav-subgroups' });
+      subEls.forEach(el => pItems.appendChild(el));
+      pGroupEl.appendChild(pHead); pGroupEl.appendChild(pItems);
+      nav.appendChild(pGroupEl);
+      return;
+    }
     // Build the visible item anchors first so we can skip an empty group.
     const anchors = group.items.map(_navAnchor).filter(Boolean);
     if (!anchors.length) return;

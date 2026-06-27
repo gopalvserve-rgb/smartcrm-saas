@@ -875,3 +875,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The Classic / Modern / Inbox switcher now sits in the top header bar (only on the Leads page) instead of its own row, freeing the space below so the leads list shows in full.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- OPS_MENU_GROUP_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('OPS_MENU_GROUP_v1', 'Sidebar: HR, Billing, Payments & Inventory grouped under Operations',
+ 'The HR & Team Management, Billing & Accounts, Payments, and Products & Inventory sections are now grouped under a single collapsible Operations menu. Click Operations to reveal each sub-menu, then click a sub-menu to open its items.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;
