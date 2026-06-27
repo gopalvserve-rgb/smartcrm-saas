@@ -1365,6 +1365,12 @@ tr:hover .lv2-actions { opacity: 1; }
     // v1.3 — compact micro stats (80% smaller than before); Focus mode hides entirely
     // LEADS_V2_HEADER_v4 — skip when compact header is on (counts already inline)
     const _hideMicroForV4 = (typeof _headerV4Enabled === 'function') && _headerV4Enabled();
+    /* When v4 header is on, auto-exit any sticky focus mode so the user is
+       never stuck inside the legacy focus UI (Exit button there can hang). */
+    if (_hideMicroForV4 && S.focusMode) {
+      S.focusMode = false;
+      try { localStorage.setItem('crm.lv2.focus', '0'); } catch (_) {}
+    }
     if (!S.focusMode && !_hideMicroForV4) {
       const micro = h('div', { style: { display: 'flex', gap: '14px', padding: '6px 14px', background: '#fafbfc', borderBottom: '1px solid #f1f5f9', fontSize: '11px', alignItems: 'center' } },
         miniStat('Total', total, '#0f172a'),
@@ -1380,7 +1386,7 @@ tr:hover .lv2-actions { opacity: 1; }
           onclick: () => { S.focusMode = true; try { localStorage.setItem('crm.lv2.focus', '1'); } catch(_){} renderModern(view); }
         }, '🎯 Focus mode'));
       wrap.appendChild(micro);
-    } else {
+    } else if (!_hideMicroForV4) {
       // Tiny strip with EXIT focus button only
       const strip = h('div', { style: { display: 'flex', gap: '14px', padding: '4px 14px', background: '#fef3c7', borderBottom: '1px solid #fde68a', fontSize: '11px', alignItems: 'center', justifyContent: 'space-between' } },
         h('span', { style: { color: '#92400e', fontWeight: '600' } }, '🎯 Focus mode active · ' + total + ' leads loaded'),
