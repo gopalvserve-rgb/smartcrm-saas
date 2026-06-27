@@ -1363,7 +1363,9 @@ tr:hover .lv2-actions { opacity: 1; }
     const wrap = h('div', { class: 'lv2-modern' });
 
     // v1.3 — compact micro stats (80% smaller than before); Focus mode hides entirely
-    if (!S.focusMode) {
+    // LEADS_V2_HEADER_v4 — skip when compact header is on (counts already inline)
+    const _hideMicroForV4 = (typeof _headerV4Enabled === 'function') && _headerV4Enabled();
+    if (!S.focusMode && !_hideMicroForV4) {
       const micro = h('div', { style: { display: 'flex', gap: '14px', padding: '6px 14px', background: '#fafbfc', borderBottom: '1px solid #f1f5f9', fontSize: '11px', alignItems: 'center' } },
         miniStat('Total', total, '#0f172a'),
         miniStat('🔥 Hot', hot, '#b91c1c'),
