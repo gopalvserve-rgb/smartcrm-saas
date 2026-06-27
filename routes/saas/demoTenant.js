@@ -1694,7 +1694,18 @@ async function _seedFinanceDemoData(pool, adminUserId, slugOverride) {
     claims++;
   }
 
-  // FIN_PACK_v2 demo data — multi-lender submissions, commissions, doc checklist
+  // FIN_PACK_v2 demo data — multi-lender submissions, commissions, doc checklist.
+  // SEED_v2_DATAFIX (2026-06-27): the original SELECT used ORDER BY id LIMIT 12
+  // which returned the OLDEST leads — stale rows from prior tenant-init wipes
+  // that aren't visible to users any more. Re-fetch NEWEST 12 instead, and
+  // wipe the v2 tables first so re-seeds don't accumulate dead rows.
+  try {
+    await pool.query(`TRUNCATE TABLE fin_lender_submissions RESTART IDENTITY`);
+    await pool.query(`TRUNCATE TABLE fin_commissions RESTART IDENTITY`);
+    await pool.query(`TRUNCATE TABLE fin_doc_checklist RESTART IDENTITY`);
+  } catch (_) {}
+  const leadsV2 = await pool.query(`SELECT id, name FROM leads ORDER BY id DESC LIMIT 12`);
+  const v2Leads = leadsV2.rows;
   let lender_submissions = 0, commissions = 0, doc_items = 0;
   const LENDERS = [
     { name: 'HDFC Bank',   roi: 8.75 }, { name: 'ICICI Bank',  roi: 9.25 },
@@ -1702,8 +1713,8 @@ async function _seedFinanceDemoData(pool, adminUserId, slugOverride) {
     { name: 'Bajaj Finserv', roi: 11.5 }, { name: 'Tata Capital', roi: 10.25 }
   ];
   const STATUSES = ['submitted','login','approved','disbursed','rejected'];
-  for (let i = 0; i < Math.min(6, leads.rows.length); i++) {
-    const lead = leads.rows[i];
+  for (let i = 0; i < Math.min(6, v2Leads.length); i++) {
+    const lead = v2Leads[i];
     // 2-3 lenders per lead, mixed states
     const nLenders = 2 + (i % 2);
     for (let j = 0; j < nLenders; j++) {
