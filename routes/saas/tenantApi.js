@@ -555,13 +555,22 @@ async function api_packs_resetStagesToPackDefaults(token, packId) {
   const packPath = '../packs/' + String(packId || '').replace(/[^a-z0-9_-]/gi, '');
   // Each pack file defines its own STAGES. Hardcode the two we ship.
   const PACK_STAGES = {
+    // EDU_PACK_v2 — 2026-06-27 — 14-stage Education admission pipeline (Meritto-style)
     education: [
-      { name: 'Inquiry',     color: '#3b82f6' },
-      { name: 'Demo Booked', color: '#06b6d4' },
-      { name: 'Demo Done',   color: '#8b5cf6' },
-      { name: 'Enrolled',    color: '#f59e0b' },
-      { name: 'Fee Paid',    color: '#10b981', is_final: 1 },
-      { name: 'Lapsed',      color: '#6b7280', is_final: 1 }
+      { name: 'New Inquiry',           color: '#3b82f6' },
+      { name: 'Counseling Scheduled',  color: '#06b6d4' },
+      { name: 'Counseling Done',       color: '#a855f7' },
+      { name: 'Information Sent',      color: '#22c55e' },
+      { name: 'Application Started',   color: '#f59e0b' },
+      { name: 'Application Submitted', color: '#ec4899' },
+      { name: 'Documents Pending',     color: '#f97316' },
+      { name: 'Documents Verified',    color: '#84cc16' },
+      { name: 'Fee Plan Selected',     color: '#6366f1' },
+      { name: 'Token / 1st Fee Paid',  color: '#16a34a' },
+      { name: 'Admitted',              color: '#15803d', is_final: 1 },
+      { name: 'Class Started',         color: '#0d9488', is_final: 1 },
+      { name: 'Lost to Competitor',    color: '#6b7280', is_final: 1 },
+      { name: 'Dropped',               color: '#6b7280', is_final: 1 }
     ],
     realestate: [
       { name: 'New Lead',                color: '#a855f7' },

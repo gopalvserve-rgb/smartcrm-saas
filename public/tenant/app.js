@@ -1730,6 +1730,12 @@ const NAV_GROUPS = [
     { id: 'edurevenue',  label: '💎 Revenue',       icon: '💎', roles: ['admin','manager'],                requiresPack: 'education', search: 'revenue income' },
     { id: 'edureports',   label: '📊 Collection Report', icon: '📊', roles: ['admin','manager'],            requiresPack: 'education', search: 'collection report fee report' },
     { id: 'eduattendance', label: '🗓 Attendance',    icon: '🗓', roles: ['admin','manager','team_leader'], requiresPack: 'education', search: 'attendance presence' },
+    // EDU_PACK_v2 — 2026-06-27 — new sidebar items (admission workflow + scholarships + batches)
+    { id: 'packedu',         label: '🎓 Edu Pack Setup', icon: '🎓', roles: ['admin','manager'],                requiresPack: 'education', search: 'pack setup edu admin' },
+    { id: 'eduapplications', label: '📋 Applications',  icon: '📋', roles: ['admin','manager','team_leader','agent'], requiresPack: 'education', search: 'application admission form wizard new' },
+    { id: 'eduenrollments',  label: '📜 Enrollments',   icon: '📜', roles: ['admin','manager','team_leader'], requiresPack: 'education', search: 'enrollment admission letter roll number batch shift withdrawal' },
+    { id: 'eduscholarships', label: '📜 Scholarships',  icon: '🎖', roles: ['admin','manager'],                requiresPack: 'education', search: 'scholarship merit sports sibling financial aid discount' },
+    { id: 'edubatches',      label: '🗂 Batches',       icon: '🗂', roles: ['admin','manager'],                requiresPack: 'education', search: 'batches morning evening cohort' },
     { id: 'edutests',      label: '📝 Tests & Scores', icon: '📝', roles: ['admin','manager','team_leader'], requiresPack: 'education', search: 'tests scores marks' },
     { id: 'educrosssell',  label: '⭐ Cross-Sell',    icon: '⭐', roles: ['admin','manager'],                requiresPack: 'education', search: 'cross sell upsell' },
     // ---- Real Estate pack (visible only when pack is active) ----

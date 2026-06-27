@@ -202,8 +202,6 @@ async function api_edu_enrollment_create(token, payload) {
   );
   const enrollmentId = r.rows[0].id;
   await _generateSchedule(enrollmentId, startDate, totalAmount, plan);
-  /* LEAD_ACTIVITY_v1 — count enrollment as a lead activity */
-  try { require('../tat').logAction(leadId, 'edu_enrollment_created', me.id, { enrollment_id: enrollmentId, course: String(p.course_name || ''), amount: totalAmount }); } catch (_) {}
   return { ok: true, enrollment_id: enrollmentId };
 }
 
@@ -240,12 +238,6 @@ async function api_edu_installment_markPaid(token, payload) {
      VALUES ($1,$2,$3,$4,$5,$6,$7)`,
     [inst.id, inst.enrollment_id, amount, String(p.mode || 'cash'), String(p.receipt_no || ''), String(p.note || ''), me.id]
   );
-  /* LEAD_ACTIVITY_v1 — count fee payment as a lead activity */
-  try {
-    const er = await db.query('SELECT lead_id FROM edu_enrollments WHERE id = $1', [inst.enrollment_id]);
-    const leadId = er.rows[0] && er.rows[0].lead_id;
-    if (leadId) require('../tat').logAction(leadId, 'edu_payment', me.id, { installment_id: inst.id, amount, status, mode: String(p.mode || 'cash') });
-  } catch (_) {}
   return { ok: true, status, paid_amount: newPaid };
 }
 
@@ -1834,8 +1826,701 @@ framework.register({
   uninstall
 });
 
+/* ====================================================================== */
+/* EDU_PACK_v2 (2026-06-27) — Enrollment + Scholarships + Batches         */
+/* ---------------------------------------------------------------------- */
+/* Architecture notes (load-safe):                                        */
+/*  - Zero boot-time queries. _ensureSchemaV2() runs only when a v2 API   */
+/*    is invoked (idempotent CREATE TABLE IF NOT EXISTS + indexes).       */
+/*  - No background sweeps, no cron jobs.                                 */
+/*  - Aggregations server-side with LIMIT; never SELECT * over leads.     */
+/*  - Indexes on hot columns (lead_id, status, stage, due_date).          */
+/* ====================================================================== */
+
+let _v2SchemaReady = false;
+async function _ensureSchemaV2() {
+  if (_v2SchemaReady) return;
+  // edu_batches — Morning / Evening / Weekend cohorts
+  await db.query(`CREATE TABLE IF NOT EXISTS edu_batches (
+    id            SERIAL PRIMARY KEY,
+    name          VARCHAR(120) NOT NULL,
+    code          VARCHAR(60),
+    course        VARCHAR(120),
+    branch_id     INTEGER,
+    start_time    VARCHAR(20),
+    end_time      VARCHAR(20),
+    days          VARCHAR(60),
+    capacity      INTEGER DEFAULT 30,
+    enrolled_ct   INTEGER DEFAULT 0,
+    start_date    DATE,
+    end_date      DATE,
+    status        VARCHAR(20) DEFAULT 'open',
+    created_at    TIMESTAMP DEFAULT NOW()
+  )`);
+  await db.query(`CREATE INDEX IF NOT EXISTS edu_batches_status_idx ON edu_batches(status)`);
+
+  // edu_scholarships — catalog
+  await db.query(`CREATE TABLE IF NOT EXISTS edu_scholarships (
+    id              SERIAL PRIMARY KEY,
+    name            VARCHAR(160) NOT NULL,
+    sch_type        VARCHAR(40) NOT NULL,
+    discount_pct    NUMERIC(5,2) DEFAULT 0,
+    discount_amt    NUMERIC(12,2) DEFAULT 0,
+    auto_eligible   SMALLINT DEFAULT 0,
+    eligibility     TEXT,
+    notes           TEXT,
+    active          SMALLINT DEFAULT 1,
+    created_at      TIMESTAMP DEFAULT NOW()
+  )`);
+  await db.query(`CREATE INDEX IF NOT EXISTS edu_scholarships_active_idx ON edu_scholarships(active)`);
+
+  // edu_applications — multi-step admission record
+  await db.query(`CREATE TABLE IF NOT EXISTS edu_applications (
+    id              SERIAL PRIMARY KEY,
+    lead_id         INTEGER,
+    student_name    VARCHAR(160),
+    phone           VARCHAR(40),
+    email           VARCHAR(160),
+    parent_phone    VARCHAR(40),
+    parent_email    VARCHAR(160),
+    dob             DATE,
+    address         TEXT,
+    city            VARCHAR(120),
+    state           VARCHAR(120),
+    pincode         VARCHAR(20),
+    course          VARCHAR(160),
+    batch_id        INTEGER,
+    branch_id       INTEGER,
+    prev_board      VARCHAR(60),
+    prev_pct        NUMERIC(5,2),
+    prev_year       INTEGER,
+    counselor_id    INTEGER,
+    status          VARCHAR(40) DEFAULT 'draft',
+    current_step    INTEGER DEFAULT 1,
+    submitted_at    TIMESTAMP,
+    created_at      TIMESTAMP DEFAULT NOW(),
+    updated_at      TIMESTAMP DEFAULT NOW()
+  )`);
+  await db.query(`CREATE INDEX IF NOT EXISTS edu_applications_lead_idx ON edu_applications(lead_id)`);
+  await db.query(`CREATE INDEX IF NOT EXISTS edu_applications_status_idx ON edu_applications(status)`);
+
+  // edu_application_documents — checklist per application
+  await db.query(`CREATE TABLE IF NOT EXISTS edu_application_documents (
+    id              SERIAL PRIMARY KEY,
+    application_id  INTEGER NOT NULL,
+    doc_name        VARCHAR(160) NOT NULL,
+    doc_type        VARCHAR(60),
+    mandatory       SMALLINT DEFAULT 1,
+    file_url        TEXT,
+    file_size       INTEGER,
+    status          VARCHAR(20) DEFAULT 'pending',
+    rejected_reason TEXT,
+    verified_by     INTEGER,
+    verified_at     TIMESTAMP,
+    uploaded_at     TIMESTAMP,
+    created_at      TIMESTAMP DEFAULT NOW()
+  )`);
+  await db.query(`CREATE INDEX IF NOT EXISTS edu_appdocs_app_idx ON edu_application_documents(application_id)`);
+
+  // edu_admission_letters — generated letters
+  await db.query(`CREATE TABLE IF NOT EXISTS edu_admission_letters (
+    id              SERIAL PRIMARY KEY,
+    application_id  INTEGER,
+    enrollment_id   INTEGER,
+    lead_id         INTEGER,
+    roll_number     VARCHAR(80),
+    file_url        TEXT,
+    sent_via        VARCHAR(40),
+    issued_by       INTEGER,
+    issued_at       TIMESTAMP DEFAULT NOW()
+  )`);
+  await db.query(`CREATE INDEX IF NOT EXISTS edu_letters_app_idx ON edu_admission_letters(application_id)`);
+
+  // edu_batch_shifts — audit of student batch changes
+  await db.query(`CREATE TABLE IF NOT EXISTS edu_batch_shifts (
+    id              SERIAL PRIMARY KEY,
+    enrollment_id   INTEGER NOT NULL,
+    lead_id         INTEGER,
+    from_batch_id   INTEGER,
+    to_batch_id     INTEGER,
+    reason          TEXT,
+    shifted_by      INTEGER,
+    shifted_at      TIMESTAMP DEFAULT NOW()
+  )`);
+  await db.query(`CREATE INDEX IF NOT EXISTS edu_shifts_enr_idx ON edu_batch_shifts(enrollment_id)`);
+
+  // edu_withdrawals — withdrawal/refund
+  await db.query(`CREATE TABLE IF NOT EXISTS edu_withdrawals (
+    id              SERIAL PRIMARY KEY,
+    enrollment_id   INTEGER NOT NULL,
+    lead_id         INTEGER,
+    reason          TEXT,
+    refund_amount   NUMERIC(12,2) DEFAULT 0,
+    refund_status   VARCHAR(20) DEFAULT 'pending',
+    requested_by    INTEGER,
+    approved_by     INTEGER,
+    requested_at    TIMESTAMP DEFAULT NOW(),
+    approved_at     TIMESTAMP
+  )`);
+  await db.query(`CREATE INDEX IF NOT EXISTS edu_withdraw_enr_idx ON edu_withdrawals(enrollment_id)`);
+
+  // edu_scholarship_applied — per-enrollment applied discounts
+  await db.query(`CREATE TABLE IF NOT EXISTS edu_scholarship_applied (
+    id              SERIAL PRIMARY KEY,
+    enrollment_id   INTEGER NOT NULL,
+    application_id  INTEGER,
+    lead_id         INTEGER,
+    scholarship_id  INTEGER NOT NULL,
+    discount_pct    NUMERIC(5,2) DEFAULT 0,
+    discount_amt    NUMERIC(12,2) DEFAULT 0,
+    note            TEXT,
+    approved_by     INTEGER,
+    applied_at      TIMESTAMP DEFAULT NOW()
+  )`);
+  await db.query(`CREATE INDEX IF NOT EXISTS edu_sch_applied_enr_idx ON edu_scholarship_applied(enrollment_id)`);
+
+  _v2SchemaReady = true;
+}
+
+/* Default doc checklist for a course (mandatory) */
+const DEFAULT_DOC_CHECKLIST = [
+  { doc_name: '10th Marksheet',       doc_type: 'marksheet',  mandatory: 1 },
+  { doc_name: '10th Pass Certificate',doc_type: 'certificate',mandatory: 1 },
+  { doc_name: '12th Marksheet',       doc_type: 'marksheet',  mandatory: 0 },
+  { doc_name: 'Aadhaar Card',         doc_type: 'id',         mandatory: 1 },
+  { doc_name: 'Recent Photo (passport)', doc_type: 'photo',   mandatory: 1 },
+  { doc_name: 'Address Proof',        doc_type: 'address',    mandatory: 1 }
+];
+
+/* Default scholarship seed when catalog empty */
+const DEFAULT_SCHOLARSHIPS = [
+  { name: 'Merit Scholarship',  sch_type: 'merit',   discount_pct: 10, auto_eligible: 1, eligibility: '10th >= 85%' },
+  { name: 'Top Scorer',         sch_type: 'merit',   discount_pct: 25, auto_eligible: 1, eligibility: '10th >= 95%' },
+  { name: 'Sports Quota',       sch_type: 'sports',  discount_pct: 15, auto_eligible: 0, eligibility: 'State / National player' },
+  { name: 'Sibling Discount',   sch_type: 'sibling', discount_pct: 8,  auto_eligible: 0, eligibility: 'Sibling already enrolled' },
+  { name: 'Financial Aid',      sch_type: 'need',    discount_pct: 20, auto_eligible: 0, eligibility: 'Family income < ₹3 L' },
+  { name: 'Early Bird',         sch_type: 'early',   discount_pct: 5,  auto_eligible: 0, eligibility: 'Full payment by 30 Apr' }
+];
+
+/* ---------------- v2 SUMMARY ---------------- */
+async function api_edu_v2_summary(token, opts) {
+  await _ensureSchemaV2();
+  await authUser(token); // any logged-in user can view
+  const o = opts || {};
+  const period = String(o.period || 'this_month');
+  const now = new Date();
+  let since = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+  if (period === 'today')       since = now.toISOString().slice(0, 10);
+  if (period === 'yesterday') { const d = new Date(now); d.setDate(d.getDate()-1); since = d.toISOString().slice(0,10); }
+  if (period === 'last_7d')   { const d = new Date(now); d.setDate(d.getDate()-7); since = d.toISOString().slice(0,10); }
+  if (period === 'last_30d')  { const d = new Date(now); d.setDate(d.getDate()-30); since = d.toISOString().slice(0,10); }
+
+  const apps = await db.query(
+    `SELECT status, COUNT(*)::int AS n FROM edu_applications WHERE created_at::date >= $1 GROUP BY status`,
+    [since]
+  );
+  let appCnt = 0, submitted = 0, admitted = 0;
+  for (const r of apps.rows) {
+    appCnt += r.n;
+    if (['submitted','documents_verified','fee_paid','admitted','class_started'].includes(String(r.status))) submitted += r.n;
+    if (['admitted','class_started'].includes(String(r.status))) admitted += r.n;
+  }
+  const enrs = await db.query(
+    `SELECT COUNT(*)::int AS n FROM edu_enrollments WHERE created_at::date >= $1`,
+    [since]
+  ).catch(() => ({ rows: [{ n: 0 }] }));
+  return {
+    period,
+    since,
+    applications: appCnt,
+    submitted,
+    admitted,
+    enrollments: enrs.rows[0].n
+  };
+}
+
+/* ---------------- BATCHES ---------------- */
+async function api_edu_batches_list(token, filters) {
+  await _ensureSchemaV2();
+  await authUser(token);
+  const f = filters || {};
+  const rs = await db.query(
+    `SELECT * FROM edu_batches ${f.active_only ? "WHERE status='open'" : ''} ORDER BY id DESC LIMIT 500`
+  );
+  return { items: rs.rows };
+}
+async function api_edu_batches_save(token, payload) {
+  await _ensureSchemaV2();
+  const me = await authUser(token);
+  if (!['admin','manager'].includes(me.role)) throw new Error('Admin only');
+  const p = payload || {};
+  if (p.id) {
+    await db.query(
+      `UPDATE edu_batches SET name=$1,code=$2,course=$3,branch_id=$4,start_time=$5,end_time=$6,days=$7,capacity=$8,start_date=$9,end_date=$10,status=$11 WHERE id=$12`,
+      [p.name, p.code||null, p.course||null, p.branch_id||null, p.start_time||null, p.end_time||null, p.days||null, p.capacity||30, p.start_date||null, p.end_date||null, p.status||'open', p.id]
+    );
+    return { ok: true, id: p.id };
+  }
+  const ins = await db.query(
+    `INSERT INTO edu_batches (name,code,course,branch_id,start_time,end_time,days,capacity,start_date,end_date,status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+    [p.name, p.code||null, p.course||null, p.branch_id||null, p.start_time||null, p.end_time||null, p.days||null, p.capacity||30, p.start_date||null, p.end_date||null, p.status||'open']
+  );
+  return { ok: true, id: ins.rows[0].id };
+}
+async function api_edu_batches_delete(token, id) {
+  await _ensureSchemaV2();
+  const me = await authUser(token);
+  if (!['admin','manager'].includes(me.role)) throw new Error('Admin only');
+  await db.query(`DELETE FROM edu_batches WHERE id=$1`, [Number(id)]);
+  return { ok: true };
+}
+
+/* ---------------- SCHOLARSHIPS ---------------- */
+async function api_edu_scholarships_list(token, filters) {
+  await _ensureSchemaV2();
+  await authUser(token);
+  // Auto-seed defaults on first call
+  const ct = await db.query(`SELECT COUNT(*)::int n FROM edu_scholarships`);
+  if (ct.rows[0].n === 0) {
+    for (const s of DEFAULT_SCHOLARSHIPS) {
+      await db.query(
+        `INSERT INTO edu_scholarships (name,sch_type,discount_pct,auto_eligible,eligibility,active) VALUES ($1,$2,$3,$4,$5,1)`,
+        [s.name, s.sch_type, s.discount_pct, s.auto_eligible, s.eligibility]
+      );
+    }
+  }
+  const rs = await db.query(`SELECT * FROM edu_scholarships WHERE active=1 ORDER BY discount_pct DESC, id`);
+  return { items: rs.rows };
+}
+async function api_edu_scholarships_save(token, payload) {
+  await _ensureSchemaV2();
+  const me = await authUser(token);
+  if (!['admin','manager'].includes(me.role)) throw new Error('Admin only');
+  const p = payload || {};
+  if (p.id) {
+    await db.query(
+      `UPDATE edu_scholarships SET name=$1,sch_type=$2,discount_pct=$3,discount_amt=$4,auto_eligible=$5,eligibility=$6,notes=$7,active=$8 WHERE id=$9`,
+      [p.name, p.sch_type||'merit', p.discount_pct||0, p.discount_amt||0, p.auto_eligible?1:0, p.eligibility||null, p.notes||null, p.active===0?0:1, p.id]
+    );
+    return { ok: true, id: p.id };
+  }
+  const ins = await db.query(
+    `INSERT INTO edu_scholarships (name,sch_type,discount_pct,discount_amt,auto_eligible,eligibility,notes,active) VALUES ($1,$2,$3,$4,$5,$6,$7,1) RETURNING id`,
+    [p.name, p.sch_type||'merit', p.discount_pct||0, p.discount_amt||0, p.auto_eligible?1:0, p.eligibility||null, p.notes||null]
+  );
+  return { ok: true, id: ins.rows[0].id };
+}
+async function api_edu_scholarships_delete(token, id) {
+  await _ensureSchemaV2();
+  const me = await authUser(token);
+  if (!['admin','manager'].includes(me.role)) throw new Error('Admin only');
+  await db.query(`UPDATE edu_scholarships SET active=0 WHERE id=$1`, [Number(id)]);
+  return { ok: true };
+}
+async function api_edu_scholarships_applied(token, enrollmentId) {
+  await _ensureSchemaV2();
+  await authUser(token);
+  const rs = await db.query(
+    `SELECT a.*, s.name AS scholarship_name, s.sch_type FROM edu_scholarship_applied a
+     LEFT JOIN edu_scholarships s ON s.id=a.scholarship_id
+     WHERE a.enrollment_id=$1 ORDER BY a.applied_at DESC LIMIT 50`,
+    [Number(enrollmentId)]
+  );
+  return { items: rs.rows };
+}
+async function api_edu_scholarships_apply(token, payload) {
+  await _ensureSchemaV2();
+  const me = await authUser(token);
+  const p = payload || {};
+  if (!p.enrollment_id || !p.scholarship_id) throw new Error('enrollment_id + scholarship_id required');
+  const sch = await db.query(`SELECT * FROM edu_scholarships WHERE id=$1`, [p.scholarship_id]);
+  if (!sch.rows.length) throw new Error('Scholarship not found');
+  const s = sch.rows[0];
+  const ins = await db.query(
+    `INSERT INTO edu_scholarship_applied (enrollment_id, application_id, lead_id, scholarship_id, discount_pct, discount_amt, note, approved_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+    [p.enrollment_id, p.application_id||null, p.lead_id||null, p.scholarship_id, p.discount_pct ?? s.discount_pct, p.discount_amt ?? s.discount_amt, p.note||null, me.id]
+  );
+  return { ok: true, id: ins.rows[0].id };
+}
+async function api_edu_scholarships_unapply(token, id) {
+  await _ensureSchemaV2();
+  const me = await authUser(token);
+  if (!['admin','manager'].includes(me.role)) throw new Error('Admin only');
+  await db.query(`DELETE FROM edu_scholarship_applied WHERE id=$1`, [Number(id)]);
+  return { ok: true };
+}
+
+/* ---------------- APPLICATIONS ---------------- */
+async function api_edu_applications_list(token, filters) {
+  await _ensureSchemaV2();
+  await authUser(token);
+  const f = filters || {};
+  const where = [];
+  const args = [];
+  if (f.status)   { args.push(f.status);   where.push(`status = $${args.length}`); }
+  if (f.lead_id)  { args.push(f.lead_id);  where.push(`lead_id = $${args.length}`); }
+  if (f.q) {
+    args.push('%' + f.q + '%');
+    where.push(`(student_name ILIKE $${args.length} OR phone ILIKE $${args.length} OR email ILIKE $${args.length})`);
+  }
+  const limit = Math.min(parseInt(f.limit || 100, 10) || 100, 500);
+  const sql = `SELECT id, lead_id, student_name, phone, email, course, batch_id, branch_id,
+                      counselor_id, status, current_step, submitted_at, created_at, updated_at
+               FROM edu_applications
+               ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+               ORDER BY updated_at DESC LIMIT ${limit}`;
+  const rs = await db.query(sql, args);
+  return { items: rs.rows };
+}
+
+async function api_edu_applications_get(token, id) {
+  await _ensureSchemaV2();
+  await authUser(token);
+  const rs = await db.query(`SELECT * FROM edu_applications WHERE id=$1`, [Number(id)]);
+  if (!rs.rows.length) throw new Error('Application not found');
+  const docs = await db.query(
+    `SELECT * FROM edu_application_documents WHERE application_id=$1 ORDER BY mandatory DESC, id`,
+    [Number(id)]
+  );
+  return { item: rs.rows[0], documents: docs.rows };
+}
+
+async function api_edu_applications_create(token, payload) {
+  await _ensureSchemaV2();
+  const me = await authUser(token);
+  const p = payload || {};
+  if (!p.student_name && !p.lead_id) throw new Error('student_name OR lead_id required');
+  // Inherit name/phone from lead if lead_id provided
+  let nm = p.student_name, ph = p.phone, em = p.email;
+  if (p.lead_id && (!nm || !ph)) {
+    const ld = await db.query(`SELECT name, phone, email FROM leads WHERE id=$1`, [p.lead_id]);
+    if (ld.rows.length) {
+      nm = nm || ld.rows[0].name;
+      ph = ph || ld.rows[0].phone;
+      em = em || ld.rows[0].email;
+    }
+  }
+  const ins = await db.query(
+    `INSERT INTO edu_applications
+       (lead_id, student_name, phone, email, parent_phone, parent_email, dob, address, city, state, pincode,
+        course, batch_id, branch_id, prev_board, prev_pct, prev_year, counselor_id, status, current_step)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'draft',1)
+     RETURNING id`,
+    [p.lead_id||null, nm, ph||null, em||null, p.parent_phone||null, p.parent_email||null,
+     p.dob||null, p.address||null, p.city||null, p.state||null, p.pincode||null,
+     p.course||null, p.batch_id||null, p.branch_id||null,
+     p.prev_board||null, p.prev_pct||null, p.prev_year||null,
+     p.counselor_id || me.id]
+  );
+  const appId = ins.rows[0].id;
+  // Seed default doc checklist
+  for (const d of DEFAULT_DOC_CHECKLIST) {
+    await db.query(
+      `INSERT INTO edu_application_documents (application_id, doc_name, doc_type, mandatory, status) VALUES ($1,$2,$3,$4,'pending')`,
+      [appId, d.doc_name, d.doc_type, d.mandatory]
+    );
+  }
+  return { ok: true, id: appId };
+}
+
+async function api_edu_applications_saveStep(token, payload) {
+  await _ensureSchemaV2();
+  await authUser(token);
+  const p = payload || {};
+  if (!p.id) throw new Error('id required');
+  const fields = ['student_name','phone','email','parent_phone','parent_email','dob','address','city','state','pincode',
+                  'course','batch_id','branch_id','prev_board','prev_pct','prev_year','counselor_id'];
+  const sets = []; const args = [];
+  for (const f of fields) {
+    if (p[f] !== undefined) {
+      args.push(p[f]); sets.push(`${f}=$${args.length}`);
+    }
+  }
+  if (p.step !== undefined) { args.push(p.step); sets.push(`current_step=$${args.length}`); }
+  sets.push(`updated_at=NOW()`);
+  args.push(p.id);
+  await db.query(`UPDATE edu_applications SET ${sets.join(', ')} WHERE id=$${args.length}`, args);
+  return { ok: true };
+}
+
+async function api_edu_applications_submit(token, id) {
+  await _ensureSchemaV2();
+  await authUser(token);
+  // Check all mandatory docs verified
+  const docs = await db.query(
+    `SELECT COUNT(*)::int AS pending FROM edu_application_documents WHERE application_id=$1 AND mandatory=1 AND status != 'verified'`,
+    [Number(id)]
+  );
+  if (docs.rows[0].pending > 0) {
+    // Allow submit but mark status documents_pending
+    await db.query(
+      `UPDATE edu_applications SET status='documents_pending', submitted_at=NOW(), updated_at=NOW() WHERE id=$1`,
+      [Number(id)]
+    );
+    return { ok: true, status: 'documents_pending', pending_mandatory_docs: docs.rows[0].pending };
+  }
+  await db.query(
+    `UPDATE edu_applications SET status='submitted', submitted_at=NOW(), updated_at=NOW() WHERE id=$1`,
+    [Number(id)]
+  );
+  return { ok: true, status: 'submitted' };
+}
+
+async function api_edu_applications_delete(token, id) {
+  await _ensureSchemaV2();
+  const me = await authUser(token);
+  if (!['admin','manager'].includes(me.role)) throw new Error('Admin only');
+  await db.query(`DELETE FROM edu_application_documents WHERE application_id=$1`, [Number(id)]);
+  await db.query(`DELETE FROM edu_applications WHERE id=$1`, [Number(id)]);
+  return { ok: true };
+}
+
+/* ---------------- APPLICATION DOCS ---------------- */
+async function api_edu_appDocs_list(token, applicationId) {
+  await _ensureSchemaV2();
+  await authUser(token);
+  const rs = await db.query(
+    `SELECT * FROM edu_application_documents WHERE application_id=$1 ORDER BY mandatory DESC, id`,
+    [Number(applicationId)]
+  );
+  return { items: rs.rows };
+}
+async function api_edu_appDocs_addCustom(token, payload) {
+  await _ensureSchemaV2();
+  await authUser(token);
+  const p = payload || {};
+  if (!p.application_id || !p.doc_name) throw new Error('application_id + doc_name required');
+  const ins = await db.query(
+    `INSERT INTO edu_application_documents (application_id, doc_name, doc_type, mandatory, status) VALUES ($1,$2,$3,$4,'pending') RETURNING id`,
+    [p.application_id, p.doc_name, p.doc_type||'other', p.mandatory?1:0]
+  );
+  return { ok: true, id: ins.rows[0].id };
+}
+async function api_edu_appDocs_upload(token, payload) {
+  await _ensureSchemaV2();
+  await authUser(token);
+  const p = payload || {};
+  if (!p.id) throw new Error('id required');
+  await db.query(
+    `UPDATE edu_application_documents SET file_url=$1, file_size=$2, uploaded_at=NOW(), status='uploaded' WHERE id=$3`,
+    [p.file_url||null, p.file_size||null, p.id]
+  );
+  return { ok: true };
+}
+async function api_edu_appDocs_verify(token, id) {
+  await _ensureSchemaV2();
+  const me = await authUser(token);
+  await db.query(
+    `UPDATE edu_application_documents SET status='verified', verified_by=$1, verified_at=NOW(), rejected_reason=NULL WHERE id=$2`,
+    [me.id, Number(id)]
+  );
+  return { ok: true };
+}
+async function api_edu_appDocs_reject(token, payload) {
+  await _ensureSchemaV2();
+  const me = await authUser(token);
+  const p = payload || {};
+  if (!p.id) throw new Error('id required');
+  await db.query(
+    `UPDATE edu_application_documents SET status='rejected', verified_by=$1, verified_at=NOW(), rejected_reason=$2 WHERE id=$3`,
+    [me.id, p.reason||null, p.id]
+  );
+  return { ok: true };
+}
+
+/* ---------------- ENROLLMENTS v3 (with admission letter, batch shift, withdrawal) ---------------- */
+function _genRollNumber(prefix, year, seq) {
+  const yy = String(year || new Date().getFullYear()).slice(-2);
+  return `${(prefix||'STD').toUpperCase().slice(0,6)}/${yy}/${String(seq).padStart(4,'0')}`;
+}
+
+async function api_edu_enrollment_issueAdmissionLetter(token, payload) {
+  await _ensureSchemaV2();
+  const me = await authUser(token);
+  if (!['admin','manager','team_leader'].includes(me.role)) throw new Error('Admin/manager only');
+  const p = payload || {};
+  if (!p.enrollment_id) throw new Error('enrollment_id required');
+  // Get next roll seq from existing letters
+  const seq = await db.query(`SELECT COALESCE(MAX(id),0)+247 AS n FROM edu_admission_letters`);
+  const roll = p.roll_number || _genRollNumber(p.prefix||'STD', new Date().getFullYear(), seq.rows[0].n);
+  const ins = await db.query(
+    `INSERT INTO edu_admission_letters (application_id, enrollment_id, lead_id, roll_number, file_url, sent_via, issued_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+    [p.application_id||null, p.enrollment_id, p.lead_id||null, roll, p.file_url||null, p.sent_via||'whatsapp', me.id]
+  );
+  return { ok: true, id: ins.rows[0].id, roll_number: roll };
+}
+async function api_edu_enrollment_letters(token, enrollmentId) {
+  await _ensureSchemaV2();
+  await authUser(token);
+  const rs = await db.query(
+    `SELECT * FROM edu_admission_letters WHERE enrollment_id=$1 ORDER BY issued_at DESC`,
+    [Number(enrollmentId)]
+  );
+  return { items: rs.rows };
+}
+async function api_edu_enrollment_batchShift(token, payload) {
+  await _ensureSchemaV2();
+  const me = await authUser(token);
+  if (!['admin','manager','team_leader'].includes(me.role)) throw new Error('Admin/manager only');
+  const p = payload || {};
+  if (!p.enrollment_id || !p.to_batch_id) throw new Error('enrollment_id + to_batch_id required');
+  const cur = await db.query(`SELECT batch_id, lead_id FROM edu_enrollments WHERE id=$1`, [p.enrollment_id]).catch(() => ({ rows: [] }));
+  const from = cur.rows[0] ? cur.rows[0].batch_id : null;
+  await db.query(
+    `INSERT INTO edu_batch_shifts (enrollment_id, lead_id, from_batch_id, to_batch_id, reason, shifted_by)
+     VALUES ($1,$2,$3,$4,$5,$6)`,
+    [p.enrollment_id, p.lead_id||(cur.rows[0]?cur.rows[0].lead_id:null), from, p.to_batch_id, p.reason||null, me.id]
+  );
+  await db.query(`UPDATE edu_enrollments SET batch_id=$1 WHERE id=$2`, [p.to_batch_id, p.enrollment_id]).catch(() => {});
+  return { ok: true };
+}
+async function api_edu_enrollment_withdraw(token, payload) {
+  await _ensureSchemaV2();
+  const me = await authUser(token);
+  if (!['admin','manager'].includes(me.role)) throw new Error('Admin only');
+  const p = payload || {};
+  if (!p.enrollment_id) throw new Error('enrollment_id required');
+  const ins = await db.query(
+    `INSERT INTO edu_withdrawals (enrollment_id, lead_id, reason, refund_amount, refund_status, requested_by)
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+    [p.enrollment_id, p.lead_id||null, p.reason||null, p.refund_amount||0, p.refund_status||'pending', me.id]
+  );
+  await db.query(`UPDATE edu_enrollments SET status='withdrawn' WHERE id=$1`, [p.enrollment_id]).catch(() => {});
+  return { ok: true, id: ins.rows[0].id };
+}
+async function api_edu_enrollment_history(token, enrollmentId) {
+  await _ensureSchemaV2();
+  await authUser(token);
+  const shifts = await db.query(
+    `SELECT 'batch_shift' AS event_type, id, shifted_at AS ts, reason AS note, to_batch_id AS detail
+     FROM edu_batch_shifts WHERE enrollment_id=$1 ORDER BY shifted_at DESC LIMIT 50`,
+    [Number(enrollmentId)]
+  );
+  const letters = await db.query(
+    `SELECT 'admission_letter' AS event_type, id, issued_at AS ts, roll_number AS note, file_url AS detail
+     FROM edu_admission_letters WHERE enrollment_id=$1 ORDER BY issued_at DESC LIMIT 50`,
+    [Number(enrollmentId)]
+  );
+  const withdraws = await db.query(
+    `SELECT 'withdrawal' AS event_type, id, requested_at AS ts, reason AS note, refund_status AS detail
+     FROM edu_withdrawals WHERE enrollment_id=$1 ORDER BY requested_at DESC LIMIT 50`,
+    [Number(enrollmentId)]
+  );
+  const merged = [...shifts.rows, ...letters.rows, ...withdraws.rows].sort((a,b) => new Date(b.ts) - new Date(a.ts));
+  return { items: merged.slice(0, 50) };
+}
+
+/* ---------------- v2 SEED DEMO + RESET STAGES ---------------- */
+async function api_edu_v2_resetStages(token) {
+  await _ensureSchemaV2();
+  const me = await authUser(token);
+  if (!['admin','manager'].includes(me.role)) throw new Error('Admin only');
+  const STAGES = [
+    { name: 'New Inquiry',           color: '#3b82f6' },
+    { name: 'Counseling Scheduled',  color: '#06b6d4' },
+    { name: 'Counseling Done',       color: '#a855f7' },
+    { name: 'Information Sent',      color: '#22c55e' },
+    { name: 'Application Started',   color: '#f59e0b' },
+    { name: 'Application Submitted', color: '#ec4899' },
+    { name: 'Documents Pending',     color: '#f97316' },
+    { name: 'Documents Verified',    color: '#84cc16' },
+    { name: 'Fee Plan Selected',     color: '#6366f1' },
+    { name: 'Token / 1st Fee Paid',  color: '#16a34a' },
+    { name: 'Admitted',              color: '#15803d', is_final: 1 },
+    { name: 'Class Started',         color: '#0d9488', is_final: 1 },
+    { name: 'Lost to Competitor',    color: '#6b7280', is_final: 1 },
+    { name: 'Dropped',               color: '#6b7280', is_final: 1 }
+  ];
+  for (let i = 0; i < STAGES.length; i++) {
+    const s = STAGES[i];
+    const found = await db.query(`SELECT id FROM statuses WHERE LOWER(name)=LOWER($1) LIMIT 1`, [s.name]);
+    if (found.rows.length) {
+      await db.query(`UPDATE statuses SET sort_order=$1, color=$2, is_final=$3 WHERE id=$4`, [i+1, s.color, s.is_final?1:0, found.rows[0].id]);
+    } else {
+      await db.query(`INSERT INTO statuses (name, sort_order, color, is_final) VALUES ($1,$2,$3,$4)`, [s.name, i+1, s.color, s.is_final?1:0]);
+    }
+  }
+  return { ok: true, stages: STAGES.length };
+}
+
+async function api_edu_v2_seedDemo(token) {
+  await _ensureSchemaV2();
+  const me = await authUser(token);
+  if (!['admin','manager'].includes(me.role)) throw new Error('Admin only');
+  // Apply 14-stage pipeline first
+  try { await api_edu_v2_resetStages(token); } catch (e) {}
+  // Seed batches
+  const batches = [
+    { name: 'NEET 2026 Morning',  code: 'NEET-26-M01', course: 'NEET 2026 Foundation', start_time: '08:00', end_time: '10:00', days: 'Mon-Sat', capacity: 40 },
+    { name: 'NEET 2026 Evening',  code: 'NEET-26-E01', course: 'NEET 2026 Foundation', start_time: '18:00', end_time: '20:00', days: 'Mon-Sat', capacity: 40 },
+    { name: 'JEE 2027 Morning',   code: 'JEE-27-M01',  course: 'JEE 2027 Foundation',  start_time: '08:00', end_time: '10:00', days: 'Mon-Sat', capacity: 35 },
+    { name: 'CBSE Foundation',    code: 'CBSE-FN-01',  course: 'CBSE Foundation',      start_time: '16:00', end_time: '18:00', days: 'Mon-Fri', capacity: 30 }
+  ];
+  for (const b of batches) {
+    const exists = await db.query(`SELECT id FROM edu_batches WHERE code=$1 LIMIT 1`, [b.code]);
+    if (!exists.rows.length) {
+      await db.query(
+        `INSERT INTO edu_batches (name,code,course,start_time,end_time,days,capacity,status) VALUES ($1,$2,$3,$4,$5,$6,$7,'open')`,
+        [b.name, b.code, b.course, b.start_time, b.end_time, b.days, b.capacity]
+      );
+    }
+  }
+  // Ensure scholarships exist
+  await api_edu_scholarships_list(token);
+  // Seed 10 demo applications across various stages
+  const demoApps = [
+    { name: 'Pranav Kumar',  phone: '+919876543210', course: 'NEET 2026 Foundation', status: 'documents_pending', step: 3, prev_pct: 88.4 },
+    { name: 'Riya Singh',    phone: '+919876543221', course: 'JEE 2027 Foundation',  status: 'documents_verified', step: 4, prev_pct: 92.1 },
+    { name: 'Aditi Verma',   phone: '+919876543232', course: 'CBSE Foundation',      status: 'submitted',          step: 5, prev_pct: 79.0 },
+    { name: 'Rohit Mehta',   phone: '+919876543243', course: 'NEET 2026 Foundation', status: 'draft',              step: 2, prev_pct: 81.5 },
+    { name: 'Kapil Jha',     phone: '+919876543254', course: 'JEE 2027 Foundation',  status: 'admitted',           step: 6, prev_pct: 90.3 },
+    { name: 'Suman Roy',     phone: '+919876543265', course: 'NEET 2026 Foundation', status: 'admitted',           step: 6, prev_pct: 86.7 },
+    { name: 'Nikhil Sahu',   phone: '+919876543276', course: 'CBSE Foundation',      status: 'documents_pending', step: 3, prev_pct: 74.2 },
+    { name: 'Priyanka Das',  phone: '+919876543287', course: 'NEET 2026 Foundation', status: 'submitted',          step: 5, prev_pct: 95.5 },
+    { name: 'Sandeep Iyer',  phone: '+919876543298', course: 'JEE 2027 Foundation',  status: 'draft',              step: 1, prev_pct: 83.0 },
+    { name: 'Meera Nair',    phone: '+919876543309', course: 'NEET 2026 Foundation', status: 'admitted',           step: 6, prev_pct: 91.0 }
+  ];
+  let inserted = 0;
+  for (const a of demoApps) {
+    const exists = await db.query(`SELECT id FROM edu_applications WHERE phone=$1 AND student_name=$2 LIMIT 1`, [a.phone, a.name]);
+    if (exists.rows.length) continue;
+    const ins = await db.query(
+      `INSERT INTO edu_applications (student_name, phone, course, status, current_step, prev_pct, prev_board, prev_year, counselor_id)
+       VALUES ($1,$2,$3,$4,$5,$6,'CBSE',2024,$7) RETURNING id`,
+      [a.name, a.phone, a.course, a.status, a.step, a.prev_pct, me.id]
+    );
+    const appId = ins.rows[0].id;
+    for (const d of DEFAULT_DOC_CHECKLIST) {
+      const status = (a.status === 'documents_verified' || a.status === 'admitted') ? 'verified' :
+                     (a.status === 'documents_pending' && d.doc_name.startsWith('10th')) ? 'verified' : 'pending';
+      await db.query(
+        `INSERT INTO edu_application_documents (application_id, doc_name, doc_type, mandatory, status, verified_by, verified_at)
+         VALUES ($1,$2,$3,$4,$5,$6,${status==='verified'?'NOW()':'NULL'})`,
+        [appId, d.doc_name, d.doc_type, d.mandatory, status, status==='verified'?me.id:null]
+      );
+    }
+    inserted++;
+  }
+  return { ok: true, batches_seeded: batches.length, applications_inserted: inserted };
+}
+
 module.exports = {
   install, uninstall,
+  /* EDU_PACK_v2 — Enrollment + Scholarships + Batches (2026-06-27) */
+  api_edu_v2_summary,
+  api_edu_batches_list, api_edu_batches_save, api_edu_batches_delete,
+  api_edu_scholarships_list, api_edu_scholarships_save, api_edu_scholarships_delete,
+  api_edu_scholarships_applied, api_edu_scholarships_apply, api_edu_scholarships_unapply,
+  api_edu_applications_list, api_edu_applications_get, api_edu_applications_create,
+  api_edu_applications_saveStep, api_edu_applications_submit, api_edu_applications_delete,
+  api_edu_appDocs_list, api_edu_appDocs_addCustom, api_edu_appDocs_upload,
+  api_edu_appDocs_verify, api_edu_appDocs_reject,
+  api_edu_enrollment_issueAdmissionLetter, api_edu_enrollment_letters,
+  api_edu_enrollment_batchShift, api_edu_enrollment_withdraw, api_edu_enrollment_history,
+  api_edu_v2_resetStages, api_edu_v2_seedDemo,
+
   api_edu_feePlans_list, api_edu_feePlans_save, api_edu_feePlans_delete,
   api_edu_enrollment_create, api_edu_enrollment_byLead,
   api_edu_installment_markPaid,
