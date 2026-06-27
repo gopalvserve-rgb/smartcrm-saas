@@ -147,7 +147,7 @@ async function api_pipeline_funnel(token, payload) {
   let _activePack = '';
   try {
     const _fw = require('./packs/_framework');
-    for (const _pk of ['education', 'realestate', 'holiday', 'finance']) {
+    for (const _pk of ['education', 'realestate', 'holiday', 'finance', 'solar']) {
       if (await _fw.isPackActive(_pk)) { _activePack = _pk; break; }
     }
   } catch (_) {}
@@ -155,7 +155,8 @@ async function api_pipeline_funnel(token, payload) {
     education:  { fresh: 'Inquiry',     attempted: 'Follow-up', qualified: 'Counselling Done',  negotiation: 'Form Submitted', proposal: 'Fee/Offer Sent',       won: 'Admitted',  lost: 'Dropped' },
     realestate: { fresh: 'New Enquiry', attempted: 'Contacted', qualified: 'Site Visit',        negotiation: 'Negotiation',    proposal: 'Booking',             won: 'Booked',    lost: 'Lost' },
     holiday:    { fresh: 'Enquiry',     attempted: 'Contacted', qualified: 'Itinerary Shared',  negotiation: 'Negotiation',    proposal: 'Quote Sent',          won: 'Booked',    lost: 'Lost' },
-    finance:    { fresh: 'New Lead',    attempted: 'Contacted', qualified: 'Eligibility Check', negotiation: 'Docs Collected', proposal: 'Submitted to Lender',  won: 'Disbursed', lost: 'Rejected' }
+    finance:    { fresh: 'New Lead',    attempted: 'Contacted', qualified: 'Eligibility Check', negotiation: 'Docs Collected', proposal: 'Submitted to Lender',  won: 'Disbursed', lost: 'Rejected' },
+    solar:      { fresh: 'New Enquiry', attempted: 'Contacted', qualified: 'Site Survey',       negotiation: 'Negotiation',    proposal: 'Quotation',           won: 'Installed', lost: 'Lost' }
   };
   const STAGE_LABELS = _PACK_STAGE_LABELS[_activePack] || {
     fresh: 'New lead', attempted: 'Contacted', qualified: 'Qualified',

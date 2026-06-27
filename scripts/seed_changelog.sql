@@ -907,3 +907,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The pipeline funnel now uses industry terms based on the active pack. Real Estate: New Enquiry / Contacted / Site Visit / Negotiation / Booking (Booked, Lost). Holiday: Enquiry / Contacted / Itinerary Shared / Negotiation / Quote Sent (Booked, Lost). Finance: New Lead / Contacted / Eligibility Check / Docs Collected / Submitted to Lender (Disbursed, Rejected). Education stays Inquiry to Admitted. Others keep default sales names.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- PACK_FUNNEL_LABELS_SOLAR_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('PACK_FUNNEL_LABELS_SOLAR_v1', 'Solar pack: funnel stage names',
+ 'The pipeline funnel on Solar tenants now reads: New Enquiry / Contacted / Site Survey / Negotiation / Quotation, with Installed (won) and Lost.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;
