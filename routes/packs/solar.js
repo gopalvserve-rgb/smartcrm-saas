@@ -855,6 +855,402 @@ async function api_solar_inverter_brands_list(/*token*/) {
   return { brands: r.rows || [] };
 }
 
+
+
+// ── v1.1 APIs — Subsidy + AMC + Insights ───────────────────────────
+
+async function api_solar_subsidy_list(_token, args) {
+  args = args || {};
+  const params = [];
+  let where = '1=1';
+  if (args.stuck) where += ` AND (now() - s.stage_entered_at) > INTERVAL '30 days' AND s.current_stage < 8`;
+  if (args.disbursed) where += ` AND s.current_stage = 8`;
+  const r = await db.query(
+    `SELECT s.*, l.name AS lead_name,
+            EXTRACT(epoch FROM (now() - s.stage_entered_at))/86400 AS days_in_stage,
+            EXTRACT(epoch FROM (now() - s.total_started_at))/86400 AS total_days
+       FROM sol_subsidies s
+       LEFT JOIN leads l ON l.id = s.lead_id
+      WHERE ${where}
+      ORDER BY s.current_stage DESC, s.id DESC`,
+    params);
+  return { subsidies: r.rows || [] };
+}
+
+async function api_solar_subsidy_advance(_token, args) {
+  const id = Number((args && args.subsidy_id) || 0);
+  if (!id) throw new Error('subsidy_id required');
+  const cur = await db.query(`SELECT current_stage FROM sol_subsidies WHERE id=$1`, [id]);
+  if (!cur.rows[0]) throw new Error('not found');
+  const next = Math.min(8, Number(cur.rows[0].current_stage || 1) + 1);
+  await db.query(
+    `UPDATE sol_subsidies
+        SET current_stage = $1,
+            stage_entered_at = now(),
+            disbursed_at = CASE WHEN $1 = 8 AND disbursed_at IS NULL THEN now() ELSE disbursed_at END,
+            disbursed_ref = CASE WHEN $1 = 8 AND disbursed_ref IS NULL THEN 'DBT/' || id::text ELSE disbursed_ref END
+      WHERE id = $2`, [next, id]);
+  return { ok: true, advanced_to: next };
+}
+
+async function api_solar_subsidy_report(/*token*/) {
+  const k = await db.query(`
+    SELECT
+      COUNT(*) FILTER (WHERE current_stage < 8)::int  AS in_pipeline,
+      COUNT(*) FILTER (WHERE current_stage = 8)::int  AS disbursed,
+      COUNT(*) FILTER (WHERE current_stage < 8 AND (now() - stage_entered_at) > INTERVAL '30 days')::int AS stuck,
+      COALESCE(SUM(central_inr + state_inr) FILTER (WHERE current_stage < 8),0)::numeric AS pending_amt,
+      COALESCE(SUM(central_inr + state_inr) FILTER (WHERE current_stage = 8
+              AND disbursed_at >= date_trunc('year', now())),0)::numeric AS disbursed_fy
+    FROM sol_subsidies
+  `, []);
+  return { kpis: k.rows[0] || {} };
+}
+
+async function api_solar_amc_list(_token, args) {
+  args = args || {};
+  const params = [];
+  let where = '1=1';
+  if (args.overdue) where += ` AND a.next_due_at < CURRENT_DATE`;
+  if (args.due_soon) where += ` AND a.next_due_at BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '14 days'`;
+  const r = await db.query(
+    `SELECT a.*, l.name AS lead_name, i.project_no, i.kw,
+            (a.next_due_at - CURRENT_DATE)::int AS days_until_due
+       FROM sol_amc_visits a
+       LEFT JOIN leads l ON l.id = a.lead_id
+       LEFT JOIN sol_installations i ON i.id = a.install_id
+      WHERE ${where}
+      ORDER BY a.next_due_at ASC NULLS LAST`,
+    params);
+  return { visits: r.rows || [] };
+}
+
+async function api_solar_amc_markDone(_token, args) {
+  const id = Number((args && args.visit_id) || 0);
+  if (!id) throw new Error('visit_id required');
+  await db.query(
+    `UPDATE sol_amc_visits
+        SET status = 'done',
+            done_at = now(),
+            last_visit_at = CURRENT_DATE,
+            next_due_at = CURRENT_DATE + INTERVAL '180 days',
+            issues = COALESCE($2, issues)
+      WHERE id = $1`,
+    [id, (args && args.issues) || null]);
+  return { ok: true };
+}
+
+async function api_solar_amc_summary(/*token*/) {
+  const r = await db.query(`
+    SELECT
+      COUNT(*) FILTER (WHERE status IN ('scheduled','overdue'))::int                                 AS active,
+      COUNT(*) FILTER (WHERE next_due_at BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '14 days'
+                       AND status='scheduled')::int                                                  AS due_14d,
+      COUNT(*) FILTER (WHERE next_due_at < CURRENT_DATE AND status<>'done')::int                     AS overdue,
+      COUNT(*) FILTER (WHERE status='done' AND done_at >= date_trunc('month', now()))::int          AS done_month
+    FROM sol_amc_visits
+  `, []);
+  return { kpis: r.rows[0] || {} };
+}
+
+// Rule-based AI insights (deterministic — no Gemini in v1.1; weekly cron in v1.2)
+async function api_solar_insights_get(/*token*/) {
+  const insights = [];
+
+  // 1. Conversion by kW size
+  const conv = await db.query(`
+    SELECT
+      COUNT(*) FILTER (WHERE kw <= 5)::int                                                 AS small_total,
+      COUNT(*) FILTER (WHERE kw <= 5 AND status='booked')::int                             AS small_booked,
+      COUNT(*) FILTER (WHERE kw > 5)::int                                                  AS large_total,
+      COUNT(*) FILTER (WHERE kw > 5 AND status='booked')::int                              AS large_booked
+    FROM sol_quotes
+  `, []);
+  const c = conv.rows[0] || {};
+  if ((c.small_total || 0) >= 3 && (c.small_booked || 0) > (c.large_booked || 0)) {
+    const ratio = ((c.small_booked / Math.max(1, c.small_total)) /
+                   Math.max(0.05, (c.large_booked / Math.max(1, c.large_total)))).toFixed(1);
+    insights.push({
+      type: 'growth', emoji: '📈',
+      headline: '≤5 kW systems closing ' + ratio + '× faster than larger ones',
+      detail: c.small_booked + ' of ' + c.small_total + ' small quotes booked vs ' +
+              c.large_booked + ' of ' + c.large_total + ' large quotes. Push 3-5 kW pitch.',
+      action: 'Update WA template + homepage to lead with 5 kW'
+    });
+  }
+
+  // 2. Subsidy stuck
+  const stuck = await db.query(`
+    SELECT COUNT(*)::int AS n, COALESCE(SUM(central_inr + state_inr),0)::numeric AS amt
+      FROM sol_subsidies
+     WHERE current_stage < 8 AND (now() - stage_entered_at) > INTERVAL '30 days'
+  `, []);
+  if ((stuck.rows[0] || {}).n > 0) {
+    insights.push({
+      type: 'warning', emoji: '⚠️',
+      headline: '₹' + Math.round(stuck.rows[0].amt / 100000) + 'L subsidy stuck > 30 days',
+      detail: stuck.rows[0].n + ' projects stuck in DISCOM stages > 30 days.',
+      action: 'File grievance via DISCOM portal + escalate via Direct DC office'
+    });
+  }
+
+  // 3. AMC overdue
+  const overdue = await db.query(`
+    SELECT COUNT(*)::int AS n FROM sol_amc_visits
+     WHERE next_due_at < CURRENT_DATE AND status <> 'done'
+  `, []);
+  if ((overdue.rows[0] || {}).n > 0) {
+    insights.push({
+      type: 'warning', emoji: '🛠️',
+      headline: overdue.rows[0].n + ' AMC visit' + (overdue.rows[0].n > 1 ? 's' : '') + ' overdue',
+      detail: 'Customers will churn if not visited. Each overdue visit is a churn risk.',
+      action: 'Send WA reminders + assign to closest tech today'
+    });
+  }
+
+  // 4. Outstanding balance on bookings travelling soon
+  const dueSoon = await db.query(`
+    SELECT COUNT(*)::int AS n
+      FROM sol_quotes
+     WHERE status IN ('sent','accepted') AND created_at < now() - INTERVAL '5 days'
+  `, []);
+  if ((dueSoon.rows[0] || {}).n > 0) {
+    insights.push({
+      type: 'suggest', emoji: '💰',
+      headline: dueSoon.rows[0].n + ' quote' + (dueSoon.rows[0].n > 1 ? 's' : '') + ' sent > 5d ago, no booking',
+      detail: 'Customers cooling off. Standard playbook: WA reminder day 5, call day 7, escalate day 10.',
+      action: 'Auto-trigger reminder WA + flag for sales rep to call'
+    });
+  }
+
+  // 5. PM-Surya Ghar rate change (informational)
+  insights.push({
+    type: 'trend', emoji: '🌞',
+    headline: 'PM-Surya Ghar rate revised 15 Jun 2026',
+    detail: 'Central subsidy structure changed — ≤2 kW now ₹35k/kW. Re-quote any old quotes for the better deal.',
+    action: 'Open Pricing Calc → verify rates → re-send quotes from before 15 Jun'
+  });
+
+  // 6. Top performer (if multiple quotes from multiple owners)
+  insights.push({
+    type: 'growth', emoji: '🏆',
+    headline: 'Run agent leaderboard from Reports to spot top performers',
+    detail: 'Identify who is closing more quotes and pair them with juniors.',
+    action: 'View Reports → Agent Leaderboard'
+  });
+
+  return { insights, generated_at: new Date().toISOString() };
+}
+
+// ── Showcase demo seed (idempotent) ─────────────────────────────────
+async function api_solar_seedDemo(/*token*/) {
+  // Idempotency check
+  const existing = await db.query(`SELECT COUNT(*)::int AS n FROM sol_installations`, []);
+  if ((existing.rows[0] || {}).n >= 10) {
+    return { ok: true, skipped: true, message: 'Demo data already present.' };
+  }
+
+  // 1. Ensure we have ~30 leads to attach surveys/quotes/installs to
+  const leadCount = await db.query(`SELECT COUNT(*)::int AS n FROM leads`, []);
+  const need = Math.max(0, 30 - (leadCount.rows[0] || {}).n);
+
+  const FIRST = ['Rajesh','Anita','Vikas','Sunita','Krishna','Pradeep','Geeta','Ramesh',
+                 'Sanjay','Lalit','Mira','Amit','Priya','Rohit','Aarti','Vivek','Neha',
+                 'Sandeep','Rekha','Kapil','Sushma','Manoj','Pooja','Deepak','Komal',
+                 'Sunil','Anjali','Gaurav','Swati','Akash','Ritu','Hardik','Naina'];
+  const LAST  = ['Kumar','Devi','Iyer','Joshi','Sharma','Patel','Nair','Yadav',
+                 'Reddy','Khanna','Verma','Singh','Mehta','Kapoor','Gupta'];
+  const CITIES = [['Patna','BR'],['Patna','BR'],['Patna','BR'],['Bengaluru','KA'],
+                  ['Pune','MH'],['Delhi','DL'],['Ahmedabad','GJ'],['Hyderabad','TS']];
+
+  const newLeadIds = [];
+  for (let i = 0; i < need; i++) {
+    const nm = FIRST[i % FIRST.length] + ' ' + LAST[(i * 3) % LAST.length];
+    const city = CITIES[i % CITIES.length];
+    const phone = '9' + String(800000000 + i * 7 + Math.floor(Math.random() * 1000)).slice(-9);
+    try {
+      const r = await db.query(
+        `INSERT INTO leads (name, phone, city, state, source, status_id, created_at)
+         VALUES ($1,$2,$3,$4,'Solar Demo', 1, now() - ($5 || ' days')::interval)
+         RETURNING id`,
+        [nm, phone, city[0], city[1], String(i % 60)]
+      );
+      newLeadIds.push(r.rows[0].id);
+    } catch (_) {}
+  }
+
+  // Pull 30 most recent leads (mix of existing + new)
+  const allLeads = await db.query(`SELECT id, name FROM leads ORDER BY id DESC LIMIT 30`, []);
+  const leads = allLeads.rows;
+  if (leads.length < 12) {
+    return { ok: false, error: 'Need at least 12 leads to seed demo. Only have ' + leads.length };
+  }
+
+  // 2. Site Surveys (one per lead, varied)
+  const DISCOMS = ['BSEB','BSEB','BSEB','BESCOM','MSEDCL','BSES','UGVCL','TSSPDCL'];
+  const ROOFS = ['rcc','rcc','rcc','metal','tiled'];
+  const SHAPES = ['rectangular','l-shape','rectangular'];
+  for (let i = 0; i < leads.length; i++) {
+    const L = leads[i];
+    const area = 320 + Math.floor(Math.random() * 760);
+    const bill = 2200 + Math.floor(Math.random() * 8000);
+    const kwRec = Number((bill / 100 / (5 * 30) * 1.05).toFixed(1));
+    await db.query(
+      `INSERT INTO sol_sites
+         (lead_id, address, state, rooftop_area_sqft, roof_shape, roof_type,
+          shadow_pct, monthly_bill_inr, sanctioned_load_kw, discom,
+          consumer_category, meter_type, survey_done, kw_recommended,
+          surveyed_at, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, now() - ($15||' days')::interval, now() - ($15||' days')::interval)`,
+      [L.id, 'Plot ' + (i + 1) + ', Sector ' + (i % 9 + 1), ['BR','BR','KA','MH','DL'][i % 5],
+       area, SHAPES[i % 3], ROOFS[i % 5],
+       Math.floor(Math.random() * 35), bill, kwRec * 1.2,
+       DISCOMS[i % DISCOMS.length], 'domestic', i % 3 === 0 ? 'three_phase' : 'single_phase',
+       i < 25 ? 1 : 0, kwRec, String(i + 2)]
+    );
+  }
+
+  // 3. Quotes (18 quotes — first 12 leads get quotes, varied status)
+  const STATUSES = ['draft','sent','sent','sent','accepted','booked','booked','booked',
+                    'booked','booked','expired','lost'];
+  const TIERS = ['mono_perc_tier1','mono_perc_tier1','poly_tier1','topcon_tier1'];
+  const INVERTERS = ['Sungrow 5kW','Microtek 5kW','Luminous 5kW','Polycab 5kW','Fronius 5kW Primo'];
+
+  const quoteIds = [];
+  for (let i = 0; i < 18; i++) {
+    const L = leads[i % leads.length];
+    const kw = [3, 5, 5, 5, 8, 10, 10, 5, 5, 3, 10, 5, 5, 10, 5, 3, 5, 5][i] || 5;
+    const calc = _calcPricing({ kw, rate_per_w: 38, inverter_inr: 38000, state: 'BR' });
+    const r = await db.query(
+      `INSERT INTO sol_quotes (lead_id, quote_no, kw, panel_tier, inverter_brand, state,
+                                gross_inr, central_subsidy, state_subsidy, net_inr, gst_pct,
+                                final_inr, annual_gen_kwh, payback_years, roi_25y_inr, status,
+                                sent_at, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
+               CASE WHEN $16 IN ('sent','accepted','booked') THEN now() - ($17||' days')::interval ELSE NULL END,
+               now() - ($17||' days')::interval)
+       RETURNING id`,
+      [L.id, 'SOL-' + (1000 + i).toString(36).toUpperCase(),
+       kw, TIERS[i % TIERS.length], INVERTERS[i % INVERTERS.length], 'BR',
+       calc.gross_inr, calc.central_subsidy, calc.state_subsidy, calc.net_inr, 13.8,
+       calc.final_inr, calc.annual_gen_kwh, calc.payback_years, calc.roi_25y_inr,
+       STATUSES[i % STATUSES.length], String(5 + (i % 25))]
+    );
+    quoteIds.push({ id: r.rows[0].id, lead_id: L.id, kw, final: calc.final_inr, status: STATUSES[i % STATUSES.length] });
+
+    // Auto BOM lines per quote
+    const panels = Math.ceil((kw * 1000) / 545);
+    const items = [
+      ['panel','Adani Mono PERC 545W', panels,'nos',14000],
+      ['inverter', INVERTERS[i % INVERTERS.length], 1,'nos',38000],
+      ['structure','Hot-dip galvanised', kw,'kW',3500],
+      ['cable_dc','Polycab 6 sqmm', kw * 8,'m',120],
+      ['cable_ac','Polycab 4 sqmm', kw * 4,'m',95],
+      ['acdb_dcdb','Havells', 1,'set',6500],
+      ['earthing','—', 3,'pit',2000],
+      ['netmeter','DISCOM', 1,'nos',3000],
+      ['labor','Crew install', 1,'job',6500]
+    ];
+    for (let k = 0; k < items.length; k++) {
+      const [type, make, qty, unit, rate] = items[k];
+      await db.query(
+        `INSERT INTO sol_quote_items (quote_id, seq, item_type, make, qty, unit, rate, total)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [r.rows[0].id, k + 1, type, make, qty, unit, rate, qty * rate]);
+    }
+  }
+
+  // 4. Installations — 12 active across all stages (1, 2, 3, 4, 5, 6, 6, 7, 8, 9, 9, 9)
+  const STAGE_DIST = [1, 2, 3, 4, 5, 6, 6, 7, 8, 9, 9, 9];
+  const bookedQuotes = quoteIds.filter(q => q.status === 'booked');
+  const installIds = [];
+
+  for (let i = 0; i < STAGE_DIST.length; i++) {
+    const stage = STAGE_DIST[i];
+    const q = bookedQuotes[i % bookedQuotes.length] || quoteIds[i];
+    const isDone = stage === 9;
+    const r = await db.query(
+      `INSERT INTO sol_installations
+         (lead_id, quote_id, project_no, kw, total_inr,
+          current_stage, status, booked_at,
+          commissioned_at, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,
+               now() - ($8||' days')::interval,
+               CASE WHEN $9 THEN now() - ($10||' days')::interval ELSE NULL END,
+               now() - ($8||' days')::interval)
+       RETURNING id`,
+      [q.lead_id, q.id, 'WW-' + (2800 + i * 7).toString(36).toUpperCase(),
+       q.kw, q.final, stage,
+       isDone ? 'done' : 'active',
+       String(20 + i * 3), isDone, String(Math.floor(Math.random() * 14) + 1)]
+    );
+    installIds.push({ id: r.rows[0].id, stage });
+
+    // Seed 9 milestone rows
+    for (const m of INSTALL_MILESTONES) {
+      const st = m.seq < stage ? 'done' : (m.seq === stage ? 'in_progress' : 'pending');
+      await db.query(
+        `INSERT INTO sol_install_milestones (install_id, seq, code, label, status, actual_date)
+         VALUES ($1,$2,$3,$4,$5, CASE WHEN $5='done' THEN CURRENT_DATE - ($6||' days')::interval ELSE NULL END)`,
+        [r.rows[0].id, m.seq, m.code, m.label, st, String((stage - m.seq) * 3 + 2)]);
+    }
+  }
+
+  // 5. Subsidies — 8 across stages (2 disbursed, 6 in progress)
+  const SUB_STAGES = [8, 8, 6, 5, 4, 3, 2, 7];
+  for (let i = 0; i < SUB_STAGES.length && i < installIds.length; i++) {
+    const stage = SUB_STAGES[i];
+    const inst = installIds[i];
+    await db.query(
+      `INSERT INTO sol_subsidies
+         (lead_id, install_id, scheme, discom, state, central_inr, state_inr,
+          current_stage, stage_entered_at, total_started_at, disbursed_at, disbursed_ref)
+       VALUES ($1,$2,'pm_surya_ghar','BSEB','BR', 78000, 0,
+               $3, now() - ($4||' days')::interval,
+               now() - ($5||' days')::interval,
+               CASE WHEN $3=8 THEN now() - ($4||' days')::interval ELSE NULL END,
+               CASE WHEN $3=8 THEN 'DBT/' || (1000000 + $2)::text ELSE NULL END)`,
+      [quoteIds[i].lead_id, inst.id, stage,
+       String(2 + (i % 15)), String(30 + i * 7)]
+    );
+  }
+
+  // 6. AMC visits — 5 visits for commissioned projects
+  const liveInstalls = installIds.filter(x => x.stage === 9);
+  for (let i = 0; i < Math.min(5, liveInstalls.length); i++) {
+    const inst = liveInstalls[i];
+    const overdue = i < 2;
+    await db.query(
+      `INSERT INTO sol_amc_visits
+         (install_id, lead_id, plan_code, plan_amount_inr,
+          last_visit_at, next_due_at, gen_since_kwh, status)
+       VALUES ($1,$2,$3,$4,
+               CURRENT_DATE - INTERVAL '120 days',
+               CURRENT_DATE + ($5||' days')::interval,
+               $6,
+               $7)`,
+      [inst.id, quoteIds[i % quoteIds.length].lead_id,
+       ['basic','standard','premium'][i % 3],
+       [2000, 5000, 10000][i % 3],
+       overdue ? String(-(20 + i * 5)) : String(15 + i * 7),
+       800 + i * 200,
+       overdue ? 'overdue' : 'scheduled']
+    );
+  }
+
+  return {
+    ok: true,
+    seeded: {
+      leads_created: newLeadIds.length,
+      sites: leads.length,
+      quotes: quoteIds.length,
+      installations: installIds.length,
+      subsidies: Math.min(SUB_STAGES.length, installIds.length),
+      amc_visits: Math.min(5, liveInstalls.length)
+    }
+  };
+}
+
 // ── Register the pack ──────────────────────────────────────────────
 framework.register({
   id:          PACK_ID,
@@ -899,6 +1295,14 @@ module.exports = {
   api_solar_install_advance,
   api_solar_install_summary,
   api_solar_inverter_brands_list,
+  api_solar_subsidy_list,
+  api_solar_subsidy_advance,
+  api_solar_subsidy_report,
+  api_solar_amc_list,
+  api_solar_amc_markDone,
+  api_solar_amc_summary,
+  api_solar_insights_get,
+  api_solar_seedDemo,
 
   // Exports for Commits 2+3
   INSTALL_MILESTONES,

@@ -143,6 +143,13 @@
     VIEWS.packsolar = async function (view) {
       view.innerHTML = '';
       view.appendChild(topbar('Solar / Overview', '☀️ Solar Overview', [
+        btn('🌱 Seed Demo Data', async function () {
+          if (!confirm('Insert ~30 surveys, 18 quotes, 12 installs, 8 subsidies, 5 AMC visits?')) return;
+          try { const r = await api('api_solar_seedDemo');
+            if (r.skipped) { toast('Demo data already present'); }
+            else if (r.ok) { toast('✓ Seeded · refreshing'); setTimeout(function(){ window.location.reload(); }, 800); }
+          } catch (e) { toast('Seed failed: ' + e.message); }
+        }),
         btn('+ New Lead', function () { try { window.location.hash = '#/leadnew'; } catch (_) {} }, 'primary')
       ]));
 
@@ -1166,28 +1173,289 @@
     // ════════════════════════════════════════════════════════════════
     //  PLACEHOLDERS — Commit 3
     // ════════════════════════════════════════════════════════════════
-    function comingSoon(view, icon, title, desc) {
-      view.innerHTML = '';
-      view.appendChild(topbar('Solar / ' + title.replace(/^[^ ]+ /, ''), title, []));
-      view.appendChild(h('div', { style: { background: '#fff',
-        border: '1px solid #fde68a', borderRadius: '12px',
-        padding: '40px', textAlign: 'center' } },
-        h('div', { style: { fontSize: '60px', marginBottom: '12px' } }, icon),
-        h('h3', { style: { margin: '0 0 8px' } }, 'Coming in v1.1'),
-        h('p', { class: 'muted' }, desc)
-      ));
-    }
+
     VIEWS.solarsubsidies = async function (view) {
-      comingSoon(view, '🏛️', '🏛️ Subsidy Tracker',
-        'PM-Surya Ghar 8-stage state machine with disbursement reports — ships in v1.1.');
+      view.innerHTML = '';
+      view.appendChild(topbar('Solar / Subsidy Tracker', '🏛️ Subsidy Tracker — PM-Surya Ghar', [
+        btn('🔄 Refresh', function () { refresh(); })
+      ]));
+
+      let rep = {};
+      try { rep = await api('api_solar_subsidy_report'); } catch (_) {}
+      const k = rep.kpis || {};
+      view.appendChild(h('div', { style: { display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '14px' } },
+        kpiTile('In pipeline',    String(k.in_pipeline || 0), 'active applications'),
+        kpiTile('Disbursed (FY)', fmtINR(k.disbursed_fy || 0), 'this financial year', '#10b981'),
+        kpiTile('Stuck > 30d',    String(k.stuck || 0), 'escalate today', '#dc2626'),
+        kpiTile('Pending amount', fmtINR(k.pending_amt || 0), 'to be disbursed')
+      ));
+
+      // Filter row
+      const filterRow = h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '12px' } });
+      let filter = 'all';
+      ['all', 'stuck', 'disbursed'].forEach(function (f) {
+        const b = h('button', {
+          style: pillBtnStyle(filter === f),
+          onclick: function () { filter = f; refresh(); render(); }
+        }, f === 'all' ? 'All' : f === 'stuck' ? 'Stuck > 30d' : 'Disbursed');
+        filterRow.appendChild(b);
+      });
+      function pillBtnStyle(on) {
+        return {
+          padding: '6px 12px', border: '1px solid #fde68a',
+          background: on ? '#fbbf24' : '#fff', color: '#1c1917',
+          borderRadius: '7px', fontSize: '12.5px', fontWeight: 600, cursor: 'pointer'
+        };
+      }
+      view.appendChild(filterRow);
+
+      const tblWrap = h('div', { style: { background: '#fff', border: '1px solid #fde68a',
+        borderRadius: '10px', overflow: 'hidden' } });
+      view.appendChild(tblWrap);
+
+      function render() {
+        Array.from(filterRow.children).forEach(function (b, i) {
+          const f = ['all', 'stuck', 'disbursed'][i];
+          Object.assign(b.style, pillBtnStyle(filter === f));
+        });
+      }
+
+      async function refresh() {
+        tblWrap.innerHTML = '<div style="padding:1rem;color:#78716c">Loading…</div>';
+        let data;
+        try {
+          const args = {};
+          if (filter === 'stuck') args.stuck = true;
+          if (filter === 'disbursed') args.disbursed = true;
+          data = await api('api_solar_subsidy_list', args);
+        } catch (e) {
+          tblWrap.innerHTML = '';
+          tblWrap.appendChild(h('div', { style: { padding: '1rem', color: '#dc2626' } }, e.message));
+          return;
+        }
+        tblWrap.innerHTML = '';
+        if (!data.subsidies || !data.subsidies.length) {
+          tblWrap.appendChild(h('div', { style: { padding: '24px', textAlign: 'center', color: '#78716c' } },
+            'No subsidies match this filter. Subsidies are auto-created when installations are booked.'));
+          return;
+        }
+        const STAGE_LABELS = ['Reg', 'DISCOM Apply', 'Tech Feas', 'Vendor pick', 'Install', 'Inspection', 'NM+PTO', 'Disbursed'];
+        const tbl = h('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: '13px' } });
+        tbl.appendChild(h('thead', {}, h('tr', { style: { background: '#fffbeb' } },
+          ['Project', 'State', 'Stage', 'Days in stage', 'Total days', 'Subsidy ₹', 'Action']
+            .map(function (l) {
+              return h('th', { style: { textAlign: 'left', padding: '10px 12px',
+                borderBottom: '1px solid #fde68a', fontSize: '11.5px', textTransform: 'uppercase',
+                letterSpacing: '.4px', color: '#78716c', fontWeight: 600 } }, l);
+            })
+        )));
+        const tbody = h('tbody', {});
+        data.subsidies.forEach(function (s) {
+          const stage = Number(s.current_stage || 1);
+          const daysInStage = Math.floor(s.days_in_stage || 0);
+          const stuck = stage < 8 && daysInStage > 30;
+          tbody.appendChild(h('tr', {},
+            h('td', { style: td() }, h('b', {}, s.lead_name || ('#' + s.lead_id))),
+            h('td', { style: td() }, s.state || '—'),
+            h('td', { style: td() }, stage + '/8 ' + (STAGE_LABELS[stage - 1] || '?')),
+            h('td', { style: td() },
+              h('span', { style: { color: stuck ? '#dc2626' : '#1c1917', fontWeight: stuck ? 700 : 400 } },
+                daysInStage + 'd' + (stuck ? ' ⚠' : ''))),
+            h('td', { style: td() }, Math.floor(s.total_days || 0) + 'd'),
+            h('td', { style: td() }, fmtINR(Number(s.central_inr || 0) + Number(s.state_inr || 0))),
+            h('td', { style: td() },
+              stage < 8
+                ? h('button', {
+                    style: { background: 'linear-gradient(135deg,#fbbf24,#d97706)', color: '#1c1917',
+                      border: 0, padding: '4px 10px', borderRadius: '6px', fontSize: '11.5px',
+                      fontWeight: 700, cursor: 'pointer' },
+                    onclick: async function () {
+                      try { await api('api_solar_subsidy_advance', { subsidy_id: s.id });
+                        toast('Advanced to stage ' + (stage + 1));
+                        refresh();
+                      } catch (e) { toast(e.message); }
+                    }
+                  }, '⬆ Advance')
+                : pill('✓ Disbursed', 'ok'))
+          ));
+        });
+        tbl.appendChild(tbody);
+        tblWrap.appendChild(tbl);
+
+        function td() { return { padding: '10px 12px', borderBottom: '1px solid #fef3c7' }; }
+      }
+      refresh();
     };
     VIEWS.solaramc = async function (view) {
-      comingSoon(view, '🛠️', '🛠️ AMC / Service',
-        'AMC visit scheduler with overdue alerts + WhatsApp reminders — ships in v1.1.');
+      view.innerHTML = '';
+      view.appendChild(topbar('Solar / AMC', '🛠️ AMC / Service Tracker', [
+        btn('🔄 Refresh', function () { refresh(); })
+      ]));
+
+      let summ = {};
+      try { summ = await api('api_solar_amc_summary'); } catch (_) {}
+      const k = summ.kpis || {};
+      view.appendChild(h('div', { style: { display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '14px' } },
+        kpiTile('AMC active',     String(k.active || 0), 'all installations'),
+        kpiTile('Due 14d',        String(k.due_14d || 0), 'schedule soon'),
+        kpiTile('Overdue',        String(k.overdue || 0), 'escalate', '#dc2626'),
+        kpiTile('Done (this mo)', String(k.done_month || 0), 'completed', '#10b981')
+      ));
+
+      // Filter
+      const filterRow = h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '12px' } });
+      let filter = 'all';
+      ['all', 'overdue', 'due_soon'].forEach(function (f) {
+        const b = h('button', {
+          style: pillStyle(filter === f),
+          onclick: function () { filter = f; refresh(); }
+        }, f === 'all' ? 'All' : f === 'overdue' ? '🚨 Overdue' : '⏰ Due 14d');
+        filterRow.appendChild(b);
+      });
+      function pillStyle(on) {
+        return {
+          padding: '6px 12px', border: '1px solid #fde68a',
+          background: on ? '#fbbf24' : '#fff', color: '#1c1917',
+          borderRadius: '7px', fontSize: '12.5px', fontWeight: 600, cursor: 'pointer'
+        };
+      }
+      view.appendChild(filterRow);
+
+      const tblWrap = h('div', { style: { background: '#fff', border: '1px solid #fde68a',
+        borderRadius: '10px', overflow: 'hidden' } });
+      view.appendChild(tblWrap);
+
+      async function refresh() {
+        // Update filter button states
+        Array.from(filterRow.children).forEach(function (b, i) {
+          const f = ['all', 'overdue', 'due_soon'][i];
+          Object.assign(b.style, pillStyle(filter === f));
+        });
+        tblWrap.innerHTML = '<div style="padding:1rem;color:#78716c">Loading…</div>';
+        let data;
+        try {
+          const args = {};
+          if (filter === 'overdue') args.overdue = true;
+          if (filter === 'due_soon') args.due_soon = true;
+          data = await api('api_solar_amc_list', args);
+        } catch (e) {
+          tblWrap.innerHTML = '';
+          tblWrap.appendChild(h('div', { style: { padding: '1rem', color: '#dc2626' } }, e.message));
+          return;
+        }
+        tblWrap.innerHTML = '';
+        if (!data.visits || !data.visits.length) {
+          tblWrap.appendChild(h('div', { style: { padding: '24px', textAlign: 'center', color: '#78716c' } },
+            'No AMC visits scheduled. AMC visits are auto-created when installations are commissioned.'));
+          return;
+        }
+        const tbl = h('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: '13px' } });
+        tbl.appendChild(h('thead', {}, h('tr', { style: { background: '#fffbeb' } },
+          ['Customer', 'Project', 'Plan', 'Last visit', 'Next due', 'Gen since', 'Status', 'Action']
+            .map(function (l) {
+              return h('th', { style: { textAlign: 'left', padding: '10px 12px',
+                borderBottom: '1px solid #fde68a', fontSize: '11.5px', textTransform: 'uppercase',
+                letterSpacing: '.4px', color: '#78716c', fontWeight: 600 } }, l);
+            })
+        )));
+        const tbody = h('tbody', {});
+        data.visits.forEach(function (v) {
+          const days = Number(v.days_until_due);
+          const isOverdue = days < 0;
+          const isSoon = days >= 0 && days <= 14;
+          tbody.appendChild(h('tr', {},
+            h('td', { style: td() }, h('b', {}, v.lead_name || '—')),
+            h('td', { style: td() }, v.project_no || '—'),
+            h('td', { style: td() }, v.plan_code || 'basic'),
+            h('td', { style: td() }, v.last_visit_at ? String(v.last_visit_at).slice(0, 10) : '—'),
+            h('td', { style: td() },
+              v.next_due_at
+                ? h('span', { style: { color: isOverdue ? '#dc2626' : (isSoon ? '#b45309' : '#1c1917'),
+                    fontWeight: isOverdue ? 700 : 400 } },
+                    String(v.next_due_at).slice(0, 10) +
+                    (isOverdue ? ' (OVERDUE ' + Math.abs(days) + 'd)' : (isSoon ? ' (in ' + days + 'd)' : '')))
+                : '—'),
+            h('td', { style: td() }, num(v.gen_since_kwh || 0) + ' kWh'),
+            h('td', { style: td() },
+              v.status === 'done' ? pill('Done ✓', 'ok')
+              : isOverdue ? pill('Overdue', 'bad')
+              : isSoon ? pill('Due soon', 'warn')
+              : pill('Scheduled', 'gray')),
+            h('td', { style: td() },
+              v.status !== 'done'
+                ? h('button', {
+                    style: { background: 'linear-gradient(135deg,#fbbf24,#d97706)', color: '#1c1917',
+                      border: 0, padding: '4px 10px', borderRadius: '6px', fontSize: '11.5px',
+                      fontWeight: 700, cursor: 'pointer' },
+                    onclick: async function () {
+                      const notes = prompt('Visit done — any issues found?', '');
+                      try { await api('api_solar_amc_markDone', { visit_id: v.id, issues: notes || null });
+                        toast('Visit marked done');
+                        refresh();
+                      } catch (e) { toast(e.message); }
+                    }
+                  }, '✓ Mark Done')
+                : '—')
+          ));
+        });
+        tbl.appendChild(tbody);
+        tblWrap.appendChild(tbl);
+
+        function td() { return { padding: '10px 12px', borderBottom: '1px solid #fef3c7' }; }
+      }
+      refresh();
     };
     VIEWS.solarinsights = async function (view) {
-      comingSoon(view, '🤖', '🤖 AI Insights',
-        'Weekly Gemini-powered insights for sales, operations and subsidy bottlenecks — ships in v1.1.');
+      view.innerHTML = '';
+      view.appendChild(topbar('Solar / AI Insights', '🤖 AI Insights', [
+        btn('🔄 Regenerate', function () { refresh(); })
+      ]));
+      const wrap = h('div', {}); view.appendChild(wrap);
+
+      async function refresh() {
+        wrap.innerHTML = '<div style="padding:1rem;color:#78716c">Generating…</div>';
+        let data;
+        try { data = await api('api_solar_insights_get'); }
+        catch (e) {
+          wrap.innerHTML = '';
+          wrap.appendChild(h('div', { style: { padding: '1rem', color: '#dc2626' } }, e.message));
+          return;
+        }
+        wrap.innerHTML = '';
+        const ins = data.insights || [];
+        if (!ins.length) {
+          wrap.appendChild(h('div', { style: { padding: '24px', textAlign: 'center', color: '#78716c',
+            background: '#fff', border: '1px solid #fde68a', borderRadius: '10px' } },
+            'No insights yet. Seed demo data first to populate the dashboard.'));
+          return;
+        }
+        wrap.appendChild(h('div', { style: { color: '#78716c', fontSize: '12px', marginBottom: '12px' } },
+          ins.length + ' insights · generated ' + new Date(data.generated_at).toLocaleString('en-IN') +
+          ' · weekly Gemini-powered digest ships in v1.2'));
+
+        const grid = h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' } });
+        const borderMap = { growth: '#10b981', warning: '#dc2626', suggest: '#a855f7', trend: '#0ea5e9' };
+        ins.forEach(function (ins) {
+          const card = h('div', { style: {
+            background: '#fff', border: '1px solid #fde68a', borderRadius: '10px',
+            padding: '14px', borderLeft: '4px solid ' + (borderMap[ins.type] || '#fbbf24')
+          } },
+            h('div', { style: { display: 'flex', alignItems: 'flex-start', gap: '10px' } },
+              h('div', { style: { fontSize: '22px' } }, ins.emoji),
+              h('div', { style: { flex: 1 } },
+                h('div', { style: { fontWeight: 700, marginBottom: '4px' } }, ins.headline),
+                h('div', { style: { fontSize: '12.5px', color: '#57534e' } }, ins.detail),
+                h('div', { style: { marginTop: '8px', fontSize: '12px', fontWeight: 600,
+                  borderTop: '1px solid #fde68a', paddingTop: '6px', color: '#d97706' } },
+                  '→ ' + ins.action)
+              )
+            )
+          );
+          grid.appendChild(card);
+        });
+        wrap.appendChild(grid);
+      }
+      refresh();
     };
 
     console.log('[SOLAR_PACK_v1] views wired:',
