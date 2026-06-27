@@ -824,3 +824,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The Leads page view switcher (Classic / Modern / Inbox) now appears for all tenants, not just the beta tenant. Classic remains the default. Admins who want the old behaviour can turn it off by setting LEADS_VIEW_V2_ENABLED to 0.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- LEADS_VIEW_TOGGLE_ALWAYS_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('LEADS_VIEW_TOGGLE_ALWAYS_v1', 'Leads: view switcher always visible',
+ 'The Classic / Modern / Inbox view switcher now shows whether the Leads header is expanded or hidden, so it can no longer disappear.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

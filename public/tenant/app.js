@@ -4843,26 +4843,29 @@ VIEWS.leads = async (view) => {
   );
   view.appendChild(_skel);
 
+  // LEADS_VIEW_TOGGLE_ALWAYS_v1 — build the Classic/Modern/Inbox switcher once and
+  // show it whether the header is visible OR hidden, so it can never disappear.
+  const _lv2On = String(((CRM && (CRM.brand || CRM._earlyBrand)) || {}).LEADS_VIEW_V2_ENABLED || '') !== '0' && !!window.LEADS_V2;
+  const _mkViewToggle = () => _lv2On
+    ? h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px', marginRight: '8px' } },
+        h('span', { style: { fontSize: '11px', color: '#64748b', fontWeight: '500' } }, '✨ View:'),
+        window.LEADS_V2.createToggle((newStyle) => {
+          try { window.LEADS_V2.closeSlideOver && window.LEADS_V2.closeSlideOver(); } catch (_) {}
+          VIEWS.leads(view);
+        }))
+    : null;
   if (CRM.prefs.showHeader !== false) {
     const header = h('div', { class: 'leads-header' },
       h('div', { class: 'leads-status-chips', id: 'status-chips' }),
       h('div', { class: 'header-actions' },
-        // LEADS_VIEW_TOGGLE_RELOCATE_v1 — View switcher docked here (no longer a
-        // floating pill). Only shown when LEADS_VIEW_V2 is enabled for the tenant.
-        (String(((CRM && (CRM.brand || CRM._earlyBrand)) || {}).LEADS_VIEW_V2_ENABLED || '') !== '0' && window.LEADS_V2)
-          ? h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px', marginRight: '8px' } },
-              h('span', { style: { fontSize: '11px', color: '#64748b', fontWeight: '500' } }, '✨ View:'),
-              window.LEADS_V2.createToggle((newStyle) => {
-                try { window.LEADS_V2.closeSlideOver && window.LEADS_V2.closeSlideOver(); } catch (_) {}
-                VIEWS.leads(view);
-              }))
-          : null,
+        _mkViewToggle(),
         h('button', { class: 'btn sm ghost', title: 'Hide header', onclick: () => toggleHeader(false) }, '− Hide')
       )
     );
     view.appendChild(header);
   } else {
-    view.appendChild(h('div', { class: 'header-hidden-toggle' },
+    view.appendChild(h('div', { class: 'header-hidden-toggle', style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+      _mkViewToggle(),
       h('button', { class: 'btn sm ghost', onclick: () => toggleHeader(true) }, '▾ Show header')
     ));
   }
