@@ -63,6 +63,30 @@ async function _findLeadByPhone(phone) {
  * every time TelephonyManager fires an event, so the call history is complete
  * even for calls without recording.
  */
+// CALL_DIAL_COUNT_v1 (2026-06-27) — count outgoing dials ('dial_requested')
+// per lead, for the lead-list badge + lead detail.
+async function api_leads_dialCounts(token, leadIds) {
+  await authUser(token);
+  const ids = (Array.isArray(leadIds) ? leadIds : []).map(Number).filter(Boolean);
+  if (!ids.length) return {};
+  const { rows } = await db.query(
+    `SELECT lead_id, COUNT(*)::int AS n
+       FROM call_events
+      WHERE event = 'dial_requested' AND lead_id = ANY($1::int[])
+      GROUP BY lead_id`, [ids]);
+  const map = {};
+  rows.forEach(r => { map[r.lead_id] = Number(r.n) || 0; });
+  return map;
+}
+async function api_leads_dialCount(token, leadId) {
+  await authUser(token);
+  const id = Number(leadId) || 0;
+  if (!id) return { count: 0 };
+  const { rows } = await db.query(
+    `SELECT COUNT(*)::int AS n FROM call_events WHERE event = 'dial_requested' AND lead_id = $1`, [id]);
+  return { count: (rows[0] && Number(rows[0].n)) || 0 };
+}
+
 async function api_call_logEvent(token, payload) {
   const me = await authUser(token);
   const p = payload || {};
@@ -693,6 +717,8 @@ async function api_recording_recentInsights(token, opts) {
 
 module.exports = {
   api_call_logEvent,
+  api_leads_dialCounts,
+  api_leads_dialCount,
   api_call_hasRecentEvent,
   api_call_lookup,
   api_call_handleEnded,

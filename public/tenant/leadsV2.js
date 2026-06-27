@@ -473,6 +473,15 @@ tr:hover .lv2-actions { opacity: 1; }
       S.tags      = _asArray(tags,      'tags');
       S.campaigns = _asArray(campaigns, 'campaigns');
 
+      // CALL_DIAL_COUNT_v1 — fetch # of times each lead's number was dialed.
+      try {
+        const _ids = S.leads.map(function (l) { return l.id; }).filter(Boolean);
+        if (_ids.length) {
+          const _dc = await api('api_leads_dialCounts', _ids).catch(function () { return {}; });
+          S.leads.forEach(function (l) { l._dialCount = Number(_dc && _dc[l.id]) || 0; });
+        }
+      } catch (_) {}
+
       // v3.4 — populate last_wa_message per lead by joining
       // api_wb_chat_threads (phone-keyed) so the Last WhatsApp column
       // shows real data instead of '—'.
@@ -1883,6 +1892,12 @@ tr:hover .lv2-actions { opacity: 1; }
                 onclick: (e) => { e.stopPropagation(); try { (window.openDuplicateHistory || function(){})(l.id); } catch (_) {} }
               }, '🕘 Show history'));
             }
+            if (Number(l._dialCount) > 0) {
+              badges.push(h('span', {
+                title: 'Dialed ' + l._dialCount + ' time' + (l._dialCount > 1 ? 's' : '') + ' (outgoing calls)',
+                style: { display: 'inline-flex', alignItems: 'center', gap: '3px', padding: '2px 8px', borderRadius: '10px', background: '#e0e7ff', color: '#3730a3', fontWeight: '700', fontSize: '10px' }
+              }, '📞 \u00d7' + l._dialCount));
+            }
             return badges.length ? h('div', { class: 'lv2-badges', style: { display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap', marginTop: '2px' } }, ...badges) : null;
           })()))));
     if (vc.has('phone')) {
@@ -2074,6 +2089,18 @@ tr:hover .lv2-actions { opacity: 1; }
     const body = h('div', { class: 'lv2-so-body', id: 'lv2-so-body' });
     so.appendChild(body);
     document.body.appendChild(so);
+
+    // CALL_DIAL_COUNT_v1 — show "Dialed N times" in the lead detail header.
+    (async () => {
+      try {
+        let n = Number(l._dialCount);
+        if (!(n >= 0)) { const r = await api('api_leads_dialCount', l.id).catch(() => null); n = (r && Number(r.count)) || 0; l._dialCount = n; }
+        if (n > 0) {
+          const subEl = so.querySelector('.lv2-so-head .sub');
+          if (subEl) subEl.appendChild(h('span', { style: { marginLeft: '6px', color: '#4338ca', fontWeight: '600' }, title: 'Outgoing dials to this number' }, '· 📞 Dialed ' + n + '\u00d7'));
+        }
+      } catch (_) {}
+    })();
 
     // ---- Synchronous (immediate) content ----
     // Quick actions — v1.8: Call / WA Web / WA API / Quotation / Note / Open
@@ -2418,7 +2445,8 @@ tr:hover .lv2-actions { opacity: 1; }
           },
             h('h3', { style: { margin: '0', display: 'inline-flex', alignItems: 'center', gap: '6px' } },
               '📊 Recent Activity',
-              realEvents.length ? h('span', { style: { fontSize: '10px', fontWeight: '500', color: '#94a3b8' } }, '(' + realEvents.length + ')') : null
+              realEvents.length ? h('span', { style: { fontSize: '10px', fontWeight: '500', color: '#94a3b8' } }, '(' + realEvents.length + ')') : null,
+              Number(l._dialCount) > 0 ? h('span', { title: 'Outgoing dials to this number', style: { fontSize: '10px', fontWeight: '700', color: '#3730a3', background: '#e0e7ff', padding: '1px 7px', borderRadius: '10px' } }, '📞 ' + l._dialCount + '\u00d7 dialed') : null
             ),
             realEvents.length ? h('a', { style: { fontSize: '10px', color: '#6366f1', cursor: 'pointer', textDecoration: 'none' }, onclick: () => doViewFull(l) }, 'View full timeline →') : null));
           if (!realEvents.length) {

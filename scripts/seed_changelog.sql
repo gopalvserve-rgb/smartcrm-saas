@@ -915,3 +915,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The pipeline funnel on Solar tenants now reads: New Enquiry / Contacted / Site Survey / Negotiation / Quotation, with Installed (won) and Lost.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- CALL_DIAL_COUNT_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('CALL_DIAL_COUNT_v1', 'Leads: number of times a number was dialed',
+ 'Each lead now shows how many times its number has been dialed (outgoing calls). It appears as a 📞 badge on the lead row in the Modern view, and in the lead detail panel (header next to the name and in the Recent Activity section).',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;
