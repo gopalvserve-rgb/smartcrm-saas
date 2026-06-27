@@ -1759,7 +1759,31 @@ async function _seedFinanceDemoData(pool, adminUserId, slugOverride) {
     }
   }
 
-  return { policies, premiums, claims, lender_submissions, commissions, doc_items };
+  // FIN_RENEWAL_v1 — demo data: backdate a few policies into the renewal windows
+  // and mark some as collected/lapsed/renewed so the Renewal section is rich.
+  let renewals_seeded = 0;
+  try {
+    // 1) Two policies due in 30 days (upcoming + due_30)
+    await pool.query(`UPDATE fin_policies SET maturity_date = CURRENT_DATE + INTERVAL '15 days' WHERE id = (SELECT id FROM fin_policies ORDER BY id ASC LIMIT 1)`);
+    await pool.query(`UPDATE fin_policies SET maturity_date = CURRENT_DATE + INTERVAL '28 days' WHERE id = (SELECT id FROM fin_policies ORDER BY id ASC OFFSET 1 LIMIT 1)`);
+    renewals_seeded += 2;
+    // 2) One policy 60 days out
+    await pool.query(`UPDATE fin_policies SET maturity_date = CURRENT_DATE + INTERVAL '55 days' WHERE id = (SELECT id FROM fin_policies ORDER BY id ASC OFFSET 2 LIMIT 1)`);
+    renewals_seeded += 1;
+    // 3) One policy overdue (lapsed risk)
+    await pool.query(`UPDATE fin_policies SET maturity_date = CURRENT_DATE - INTERVAL '7 days' WHERE id = (SELECT id FROM fin_policies ORDER BY id ASC OFFSET 3 LIMIT 1)`);
+    renewals_seeded += 1;
+    // 4) One renewed + collected (₹ amount)
+    await pool.query(`UPDATE fin_policies SET maturity_date = CURRENT_DATE - INTERVAL '5 days', status='renewed', renewal_collected_at = NOW() - INTERVAL '3 days', renewal_collected_amount = premium_amount WHERE id = (SELECT id FROM fin_policies ORDER BY id ASC OFFSET 4 LIMIT 1)`);
+    renewals_seeded += 1;
+    // 5) One lapsed
+    await pool.query(`UPDATE fin_policies SET maturity_date = CURRENT_DATE - INTERVAL '20 days', status='lapsed' WHERE id = (SELECT id FROM fin_policies ORDER BY id ASC OFFSET 5 LIMIT 1)`);
+    renewals_seeded += 1;
+  } catch (e) {
+    console.warn('[seedFinance] renewal demo data failed:', e.message);
+  }
+
+  return { policies, premiums, claims, lender_submissions, commissions, doc_items, renewals_seeded };
 }
 
 async function _seedSolarDemoData(pool, adminUserId, slugOverride) {
