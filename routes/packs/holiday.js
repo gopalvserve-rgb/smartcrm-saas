@@ -1,243 +1,620 @@
 /**
- * routes/packs/holiday.js — Holiday / Travel industry pack (travel agencies)
+ * routes/packs/holiday.js
  *
- * Tables (idempotent, namespaced tour_*):
- *   tour_packages tour_bookings tour_itineraries tour_payments tour_vouchers
- * Seeds: 9 statuses, 7 custom fields, 4 sample packages.
+ * Industry Pack: Holiday / Travel (travel agency).
+ *
+ *   Tables (all namespaced tour_*):
+ *     tour_destinations         — destination master (Bali, Goa, Dubai, etc)
+ *     tour_packages             — package templates (e.g. "Bali 5N Honeymoon")
+ *     tour_bookings             — confirmed bookings
+ *     tour_itineraries          — itinerary container (1 per booking)
+ *     tour_itinerary_days       — day-by-day plan
+ *     tour_itinerary_activities — activities per day
+ *     tour_payments             — receipts + balance tracking
+ *     tour_amc                  — post-trip re-engagement / repeat
+ *
+ *   APIs (api_tour_*):
+ *     api_tour_summary
+ *     api_tour_destinations_list / _save
+ *     api_tour_packages_list / _save
+ *     api_tour_booking_create / _list / _byLead / _setStatus
+ *     api_tour_itinerary_byBooking / _upsertDay / _addActivity
+ *     api_tour_payment_record / _list
+ *     api_tour_report_upcoming / _collection / _itineraryStatus / _agentLeaderboard
  */
+
 'use strict';
+
 const db        = require('../../db/pg');
 const framework = require('./_framework');
-const { authUser } = require('../../utils/auth');
+
 const PACK_ID = 'holiday';
 
-async function _ensureSchema() {
-  await db.query(`CREATE TABLE IF NOT EXISTS tour_packages (
-    id SERIAL PRIMARY KEY, name TEXT NOT NULL, destination TEXT NOT NULL DEFAULT '',
-    package_type TEXT NOT NULL DEFAULT 'leisure',
-    duration_days INTEGER NOT NULL DEFAULT 0, duration_nights INTEGER NOT NULL DEFAULT 0,
-    base_price_per_adult NUMERIC(12,2) NOT NULL DEFAULT 0,
-    base_price_per_child NUMERIC(12,2) NOT NULL DEFAULT 0,
-    inclusions TEXT NOT NULL DEFAULT '', exclusions TEXT NOT NULL DEFAULT '',
-    is_active INTEGER NOT NULL DEFAULT 1,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+// Curated destination seed (so showcase + new tenants get useful data day-1)
+const SEED_DESTINATIONS = [
+  ['Bali',         'Indonesia',  '🇮🇩', 'honeymoon',  4,  78000, 'IDR 14k/pp/day · best Apr-Oct'],
+  ['Goa',          'India',      '🌴', 'leisure',    3,  18000, 'Domestic · winter peak'],
+  ['Dubai',        'UAE',        '🇦🇪', 'leisure',    4,  85000, 'Sept-Apr best · visa on arrival'],
+  ['Switzerland',  'Europe',     '🇨🇭', 'family',     9, 220000, 'Schengen visa needed · summer best'],
+  ['Thailand',     'Thailand',   '🇹🇭', 'leisure',    5,  65000, 'VoA · Bangkok+Phuket combo'],
+  ['Maldives',     'Maldives',   '🇲🇻', 'honeymoon',  5, 165000, 'Water villa premium'],
+  ['Kashmir',      'India',      '🏔️', 'family',     6,  42000, 'Apr-Oct best · Mar-Apr cherry blossom'],
+  ['Vietnam',      'Vietnam',    '🇻🇳', 'adventure',  7,  72000, 'eVisa · Ha Long + Sapa combo'],
+  ['Singapore',    'Singapore',  '🇸🇬', 'family',     4,  92000, 'e-visa available'],
+  ['Andaman',      'India',      '🏝️', 'honeymoon',  5,  58000, 'Domestic flight + ferry'],
+  ['Japan',        'Japan',      '🇯🇵', 'adventure',  8, 285000, 'Cherry blossom Mar-Apr'],
+  ['Europe (Multi)','Europe',    '🇪🇺', 'family',    12, 380000, 'Schengen · UK + Paris + Rome']
+];
 
-  await db.query(`CREATE TABLE IF NOT EXISTS tour_bookings (
-    id SERIAL PRIMARY KEY, lead_id INTEGER NOT NULL, package_id INTEGER,
-    booking_no TEXT NOT NULL DEFAULT '', destination TEXT NOT NULL DEFAULT '',
-    travel_start_date DATE, travel_end_date DATE,
-    pax_adults INTEGER NOT NULL DEFAULT 1, pax_children INTEGER NOT NULL DEFAULT 0,
-    pax_infants INTEGER NOT NULL DEFAULT 0,
-    total_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
-    advance_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
-    balance_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
-    visa_status TEXT NOT NULL DEFAULT 'not_required',
-    docs_status TEXT NOT NULL DEFAULT 'pending',
-    status TEXT NOT NULL DEFAULT 'confirmed',
-    notes TEXT NOT NULL DEFAULT '', created_by INTEGER,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
-  await db.query(`CREATE INDEX IF NOT EXISTS tour_bookings_lead_idx ON tour_bookings(lead_id)`);
+// Itinerary day template options (admin-extendable)
+const ACTIVITY_TYPES = ['arrival', 'sightseeing', 'meal', 'transfer', 'leisure',
+                        'adventure', 'shopping', 'departure'];
 
-  await db.query(`CREATE TABLE IF NOT EXISTS tour_itineraries (
-    id SERIAL PRIMARY KEY, booking_id INTEGER NOT NULL, day_no INTEGER NOT NULL DEFAULT 1,
-    date DATE, title TEXT NOT NULL DEFAULT '', activities TEXT NOT NULL DEFAULT '',
-    hotel_name TEXT NOT NULL DEFAULT '', meals TEXT NOT NULL DEFAULT '',
-    transport TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
-  await db.query(`CREATE INDEX IF NOT EXISTS tour_itin_booking_idx ON tour_itineraries(booking_id)`);
+// ── Installer ─────────────────────────────────────────────────────
+async function _installer({ db: D }) {
+  // 1. Destinations
+  await D.query(`
+    CREATE TABLE IF NOT EXISTS tour_destinations (
+      id          SERIAL PRIMARY KEY,
+      name        TEXT NOT NULL,
+      country     TEXT,
+      flag        TEXT,
+      kind        TEXT,                     -- honeymoon|family|leisure|adventure|business
+      avg_days    INT,
+      avg_price_inr NUMERIC(12,2),
+      notes       TEXT,
+      is_active   INT NOT NULL DEFAULT 1,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `, []);
 
-  await db.query(`CREATE TABLE IF NOT EXISTS tour_payments (
-    id SERIAL PRIMARY KEY, booking_id INTEGER NOT NULL,
-    paid_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    amount NUMERIC(12,2) NOT NULL DEFAULT 0,
-    payment_mode TEXT NOT NULL DEFAULT '', payment_ref TEXT NOT NULL DEFAULT '',
-    payment_type TEXT NOT NULL DEFAULT 'advance', notes TEXT NOT NULL DEFAULT '',
-    created_by INTEGER, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
-
-  await db.query(`CREATE TABLE IF NOT EXISTS tour_vouchers (
-    id SERIAL PRIMARY KEY, booking_id INTEGER NOT NULL,
-    voucher_type TEXT NOT NULL DEFAULT 'hotel',
-    voucher_no TEXT NOT NULL DEFAULT '', vendor TEXT NOT NULL DEFAULT '',
-    valid_from DATE, valid_till DATE, amount NUMERIC(12,2) NOT NULL DEFAULT 0,
-    pdf_url TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
-}
-
-async function install(opts) {
-  await _ensureSchema();
-  const cnt = await db.query(`SELECT COUNT(*)::int AS n FROM tour_packages`);
-  if (cnt.rows[0].n === 0) {
-    const packages = [
-      ['Goa Beach 4N5D','Goa, India','leisure',5,4,12000,7000,'Hotel + breakfast + airport transfers + sightseeing','Lunch / dinner / flights / personal expenses'],
-      ['Dubai Family 5N6D','Dubai, UAE','family',6,5,38000,22000,'4-star hotel + flights + Burj Khalifa + Desert safari','Lunch / personal expenses / shopping'],
-      ['Kerala Honeymoon 6N7D','Kerala, India','honeymoon',7,6,28000,0,'Premium houseboat + resort + breakfast + private cab','Lunch / dinner / flights'],
-      ['Bali Adventure 5N6D','Bali, Indonesia','adventure',6,5,45000,28000,'Flights + 4-star hotel + breakfast + day tours','Lunch / dinner / visa']
-    ];
-    for (const p of packages) {
-      await db.query(`INSERT INTO tour_packages (name,destination,package_type,duration_days,duration_nights,base_price_per_adult,base_price_per_child,inclusions,exclusions) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, p);
+  // Seed destinations if empty
+  const dc = await D.query(`SELECT COUNT(*)::int AS n FROM tour_destinations`, []);
+  if ((dc.rows[0] || {}).n === 0) {
+    for (const d of SEED_DESTINATIONS) {
+      await D.query(
+        `INSERT INTO tour_destinations (name, country, flag, kind, avg_days, avg_price_inr, notes)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`, d
+      );
     }
   }
-  const STATUSES = [
-    ['Inquiry','#3b82f6',1],['Itinerary Shared','#06b6d4',2],['Quote Sent','#f59e0b',3],
-    ['Booking Confirmed','#10b981',4],['Advance Paid','#22c55e',5],['Docs Collected','#84cc16',6],
-    ['Visa Applied','#a855f7',7],['Travel Date Approaching','#f97316',8],['In-Trip','#eab308',9],
-    ['Completed','#059669',10]
-  ];
-  // PACK_STAGE_TAG_v1 — tag statuses with pack_id for clean industry isolation
-  try { await db.query(`ALTER TABLE statuses ADD COLUMN IF NOT EXISTS pack_id TEXT DEFAULT NULL`); } catch(_){}
-  try { await db.query(`ALTER TABLE lead_custom_fields ADD COLUMN IF NOT EXISTS pack_id TEXT DEFAULT NULL`); } catch(_){}
-  // Deactivate any older non-generic pack statuses to keep pipeline clean
-  try { await db.query(`UPDATE statuses SET is_active=0 WHERE pack_id IS NOT NULL AND pack_id <> $1`, ['holiday']); } catch(_){}
-  for (const s of STATUSES) {
-    try { await db.query(`INSERT INTO statuses (name,color,sort_order,is_active,pack_id) VALUES ($1,$2,$3,1,'holiday') ON CONFLICT (name) DO UPDATE SET is_active=1, pack_id=EXCLUDED.pack_id`, s); } catch(_){}
-  }
-  const CFS = [
-    ['destination','Destination','text'],
-    ['travel_start_date','Travel Start Date','date'],
-    ['travel_end_date','Travel End Date','date'],
-    ['pax_adults','Adults','number'],
-    ['pax_children','Children','number'],
-    ['package_type','Package Type','text'],
-    ['visa_status','Visa Status','text']
-  ];
-  for (const cf of CFS) {
-    try { await db.query(`INSERT INTO lead_custom_fields (field_key,label,field_type,is_active,pack_id) VALUES ($1,$2,$3,1,'holiday') ON CONFLICT (field_key) DO UPDATE SET is_active=1, pack_id=EXCLUDED.pack_id`, cf); } catch(_){}
-  }
-}
-async function uninstall() {}
 
-async function api_tour_packages_list(token) {
-  await authUser(token); await _ensureSchema();
-  const r = await db.query(`SELECT * FROM tour_packages WHERE is_active=1 ORDER BY name`);
-  return { packages: r.rows };
-}
-async function api_tour_packages_save(token, payload) {
-  const me = await authUser(token);
-  if (me.role!=='admin'&&me.role!=='manager') throw new Error('Admin / manager only');
-  await _ensureSchema(); const p = payload || {};
-  if (p.id) {
-    await db.query(`UPDATE tour_packages SET name=$1, destination=$2, package_type=$3, duration_days=$4, duration_nights=$5, base_price_per_adult=$6, base_price_per_child=$7, inclusions=$8, exclusions=$9, is_active=$10 WHERE id=$11`,
-      [p.name,p.destination||'',p.package_type||'leisure',p.duration_days||0,p.duration_nights||0,p.base_price_per_adult||0,p.base_price_per_child||0,p.inclusions||'',p.exclusions||'',p.is_active!==0?1:0,p.id]);
-    return { ok: true, id: p.id };
-  }
-  const r = await db.query(`INSERT INTO tour_packages (name,destination,package_type,duration_days,duration_nights,base_price_per_adult,base_price_per_child,inclusions,exclusions) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
-    [p.name,p.destination||'',p.package_type||'leisure',p.duration_days||0,p.duration_nights||0,p.base_price_per_adult||0,p.base_price_per_child||0,p.inclusions||'',p.exclusions||'']);
-  return { ok: true, id: r.rows[0].id };
-}
+  // 2. Packages (saved package templates)
+  await D.query(`
+    CREATE TABLE IF NOT EXISTS tour_packages (
+      id              SERIAL PRIMARY KEY,
+      destination_id  INT,
+      name            TEXT NOT NULL,
+      kind            TEXT,                 -- honeymoon|family|leisure|adventure
+      pax             INT DEFAULT 2,
+      duration_nights INT,
+      price_inr       NUMERIC(12,2),
+      inclusions      TEXT,                 -- pipe-separated list
+      exclusions      TEXT,
+      is_active       INT NOT NULL DEFAULT 1,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `, []);
+  await D.query(`CREATE INDEX IF NOT EXISTS tour_packages_dest_idx ON tour_packages(destination_id)`, []);
 
-async function api_tour_booking_create(token, payload) {
-  const me = await authUser(token); await _ensureSchema();
-  const p = payload || {}; if (!p.lead_id) throw new Error('lead_id required');
-  const balance = Number(p.total_amount||0) - Number(p.advance_amount||0);
-  const r = await db.query(`INSERT INTO tour_bookings (lead_id,package_id,booking_no,destination,travel_start_date,travel_end_date,pax_adults,pax_children,pax_infants,total_amount,advance_amount,balance_amount,visa_status,docs_status,status,notes,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id`,
-    [p.lead_id,p.package_id||null,p.booking_no||'',p.destination||'',p.travel_start_date||null,p.travel_end_date||null,p.pax_adults||1,p.pax_children||0,p.pax_infants||0,p.total_amount||0,p.advance_amount||0,balance,p.visa_status||'not_required',p.docs_status||'pending',p.status||'confirmed',p.notes||'',me.id]);
-  return { ok: true, id: r.rows[0].id, balance };
-}
-async function api_tour_booking_byLead(token, payload) {
-  await authUser(token); await _ensureSchema();
-  const bookings = await db.query(`SELECT b.*, p.name AS package_name FROM tour_bookings b LEFT JOIN tour_packages p ON p.id=b.package_id WHERE b.lead_id=$1 ORDER BY b.created_at DESC`, [(payload&&payload.lead_id)||0]);
-  const out = [];
-  for (const b of bookings.rows) {
-    const itin = await db.query(`SELECT * FROM tour_itineraries WHERE booking_id=$1 ORDER BY day_no`, [b.id]);
-    const pmts = await db.query(`SELECT * FROM tour_payments WHERE booking_id=$1 ORDER BY paid_at DESC`, [b.id]);
-    out.push({ ...b, itinerary: itin.rows, payments: pmts.rows });
-  }
-  return { bookings: out };
-}
-async function api_tour_booking_update(token, payload) {
-  await authUser(token); const p = payload || {}; if (!p.id) throw new Error('id required');
-  const balance = Number(p.total_amount||0) - Number(p.advance_amount||0);
-  await db.query(`UPDATE tour_bookings SET booking_no=$1, destination=$2, travel_start_date=$3, travel_end_date=$4, pax_adults=$5, pax_children=$6, pax_infants=$7, total_amount=$8, advance_amount=$9, balance_amount=$10, visa_status=$11, docs_status=$12, status=$13, notes=$14 WHERE id=$15`,
-    [p.booking_no||'',p.destination||'',p.travel_start_date||null,p.travel_end_date||null,p.pax_adults||1,p.pax_children||0,p.pax_infants||0,p.total_amount||0,p.advance_amount||0,balance,p.visa_status||'not_required',p.docs_status||'pending',p.status||'confirmed',p.notes||'',p.id]);
-  return { ok: true };
-}
+  // 3. Bookings
+  await D.query(`
+    CREATE TABLE IF NOT EXISTS tour_bookings (
+      id                SERIAL PRIMARY KEY,
+      lead_id           INT,
+      destination_id    INT,
+      package_id        INT,
+      booking_no        TEXT,
+      travellers        INT DEFAULT 2,
+      travel_start_date DATE,
+      travel_end_date   DATE,
+      total_inr         NUMERIC(14,2) DEFAULT 0,
+      advance_inr       NUMERIC(14,2) DEFAULT 0,
+      balance_inr       NUMERIC(14,2) DEFAULT 0,
+      cost_inr          NUMERIC(14,2) DEFAULT 0,
+      visa_status       TEXT,               -- na|pending|approved|rejected
+      docs_status       TEXT,               -- pending|partial|complete
+      voucher_status    TEXT,               -- pending|generated|sent
+      assignee_user_id  INT,
+      source            TEXT,
+      status            TEXT NOT NULL DEFAULT 'enquiry',  -- enquiry|quoted|booked|confirmed|traveling|completed|cancelled
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `, []);
+  await D.query(`CREATE INDEX IF NOT EXISTS tour_bookings_lead_idx ON tour_bookings(lead_id)`, []);
+  await D.query(`CREATE INDEX IF NOT EXISTS tour_bookings_travel_idx ON tour_bookings(travel_start_date)`, []);
 
-async function api_tour_itinerary_save(token, payload) {
-  await authUser(token); await _ensureSchema();
-  const p = payload || {}; if (!p.booking_id) throw new Error('booking_id required');
-  if (p.id) {
-    await db.query(`UPDATE tour_itineraries SET day_no=$1, date=$2, title=$3, activities=$4, hotel_name=$5, meals=$6, transport=$7, notes=$8 WHERE id=$9`,
-      [p.day_no||1,p.date||null,p.title||'',p.activities||'',p.hotel_name||'',p.meals||'',p.transport||'',p.notes||'',p.id]);
-    return { ok: true, id: p.id };
-  }
-  const r = await db.query(`INSERT INTO tour_itineraries (booking_id,day_no,date,title,activities,hotel_name,meals,transport,notes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
-    [p.booking_id,p.day_no||1,p.date||null,p.title||'',p.activities||'',p.hotel_name||'',p.meals||'',p.transport||'',p.notes||'']);
-  return { ok: true, id: r.rows[0].id };
-}
+  // 4. Itineraries
+  await D.query(`
+    CREATE TABLE IF NOT EXISTS tour_itineraries (
+      id          SERIAL PRIMARY KEY,
+      booking_id  INT NOT NULL,
+      title       TEXT,
+      status      TEXT NOT NULL DEFAULT 'draft',  -- draft|sent|acknowledged
+      pdf_url     TEXT,
+      sent_at     TIMESTAMPTZ,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `, []);
+  await D.query(`CREATE INDEX IF NOT EXISTS tour_itineraries_booking_idx ON tour_itineraries(booking_id)`, []);
 
-async function api_tour_payment_add(token, payload) {
-  const me = await authUser(token); await _ensureSchema();
-  const p = payload || {}; if (!p.booking_id) throw new Error('booking_id required');
-  await db.query(`INSERT INTO tour_payments (booking_id,amount,payment_mode,payment_ref,payment_type,notes,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-    [p.booking_id,p.amount||0,p.payment_mode||'',p.payment_ref||'',p.payment_type||'advance',p.notes||'',me.id]);
-  // Update advance + balance
-  const tot = await db.query(`SELECT COALESCE(SUM(amount),0) AS sum FROM tour_payments WHERE booking_id=$1`, [p.booking_id]);
-  const totPaid = Number(tot.rows[0].sum);
-  await db.query(`UPDATE tour_bookings SET advance_amount=$1, balance_amount = total_amount - $1 WHERE id=$2`, [totPaid, p.booking_id]);
-  return { ok: true, total_paid: totPaid };
-}
+  // 5. Itinerary days
+  await D.query(`
+    CREATE TABLE IF NOT EXISTS tour_itinerary_days (
+      id              SERIAL PRIMARY KEY,
+      itinerary_id    INT NOT NULL,
+      day_no          INT NOT NULL,
+      day_date        DATE,
+      city            TEXT,
+      hotel_name      TEXT,
+      room_type       TEXT,
+      meal_plan       TEXT,                 -- bb | hb | fb | none
+      notes           TEXT
+    )
+  `, []);
+  await D.query(`CREATE INDEX IF NOT EXISTS tour_itin_days_idx ON tour_itinerary_days(itinerary_id)`, []);
 
-async function api_tour_voucher_save(token, payload) {
-  await authUser(token); await _ensureSchema();
-  const p = payload || {}; if (!p.booking_id) throw new Error('booking_id required');
-  if (p.id) {
-    await db.query(`UPDATE tour_vouchers SET voucher_type=$1, voucher_no=$2, vendor=$3, valid_from=$4, valid_till=$5, amount=$6, pdf_url=$7, notes=$8 WHERE id=$9`,
-      [p.voucher_type||'hotel',p.voucher_no||'',p.vendor||'',p.valid_from||null,p.valid_till||null,p.amount||0,p.pdf_url||'',p.notes||'',p.id]);
-    return { ok: true, id: p.id };
-  }
-  const r = await db.query(`INSERT INTO tour_vouchers (booking_id,voucher_type,voucher_no,vendor,valid_from,valid_till,amount,pdf_url,notes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
-    [p.booking_id,p.voucher_type||'hotel',p.voucher_no||'',p.vendor||'',p.valid_from||null,p.valid_till||null,p.amount||0,p.pdf_url||'',p.notes||'']);
-  return { ok: true, id: r.rows[0].id };
-}
-async function api_tour_voucher_byBooking(token, payload) {
-  await authUser(token); await _ensureSchema();
-  const r = await db.query(`SELECT * FROM tour_vouchers WHERE booking_id=$1 ORDER BY created_at DESC`, [(payload&&payload.booking_id)||0]);
-  return { vouchers: r.rows };
-}
+  // 6. Itinerary activities
+  await D.query(`
+    CREATE TABLE IF NOT EXISTS tour_itinerary_activities (
+      id          SERIAL PRIMARY KEY,
+      day_id      INT NOT NULL,
+      seq         INT NOT NULL DEFAULT 1,
+      time_str    TEXT,                     -- '09:00 AM'
+      kind        TEXT,                     -- arrival|sightseeing|meal|transfer|leisure|adventure|shopping|departure
+      title       TEXT,
+      detail      TEXT
+    )
+  `, []);
+  await D.query(`CREATE INDEX IF NOT EXISTS tour_itin_act_idx ON tour_itinerary_activities(day_id)`, []);
 
-async function api_tour_upcomingTravel(token, payload) {
-  await authUser(token); await _ensureSchema();
-  const days = parseInt(((payload&&payload.days)||30), 10);
-  const r = await db.query(`SELECT b.*, l.name AS lead_name, l.phone AS lead_phone FROM tour_bookings b LEFT JOIN leads l ON l.id=b.lead_id WHERE b.status NOT IN ('cancelled','completed') AND b.travel_start_date IS NOT NULL AND b.travel_start_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '${days} days' ORDER BY b.travel_start_date ASC LIMIT 200`);
-  return { trips: r.rows };
+  // 7. Payments
+  await D.query(`
+    CREATE TABLE IF NOT EXISTS tour_payments (
+      id          SERIAL PRIMARY KEY,
+      booking_id  INT NOT NULL,
+      amount_inr  NUMERIC(14,2) NOT NULL,
+      mode        TEXT,                     -- cash|upi|card|bank|cheque
+      ref_no      TEXT,
+      paid_at     DATE NOT NULL DEFAULT CURRENT_DATE,
+      notes       TEXT,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `, []);
+  await D.query(`CREATE INDEX IF NOT EXISTS tour_payments_booking_idx ON tour_payments(booking_id)`, []);
+
+  // 8. AMC / re-engagement
+  await D.query(`
+    CREATE TABLE IF NOT EXISTS tour_amc (
+      id          SERIAL PRIMARY KEY,
+      lead_id     INT,
+      booking_id  INT,
+      kind        TEXT,                     -- feedback|next_trip_pitch|referral_ask
+      due_at      DATE,
+      done_at     TIMESTAMPTZ,
+      notes       TEXT,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `, []);
 }
 
-async function api_tour_summary(token) {
-  await authUser(token); await _ensureSchema();
-  const confirmed = await db.query(`SELECT COUNT(*)::int AS cnt, COALESCE(SUM(total_amount),0) AS amt FROM tour_bookings WHERE status NOT IN ('cancelled','completed')`);
-  const upcoming = await db.query(`SELECT COUNT(*)::int AS cnt FROM tour_bookings WHERE status NOT IN ('cancelled','completed') AND travel_start_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'`);
-  const receivable = await db.query(`SELECT COALESCE(SUM(balance_amount),0) AS amt FROM tour_bookings WHERE status NOT IN ('cancelled','completed')`);
-  const inTrip = await db.query(`SELECT COUNT(*)::int AS cnt FROM tour_bookings WHERE travel_start_date <= CURRENT_DATE AND travel_end_date >= CURRENT_DATE`);
-  const visaPending = await db.query(`SELECT COUNT(*)::int AS cnt FROM tour_bookings WHERE visa_status NOT IN ('not_required','approved') AND status NOT IN ('cancelled','completed')`);
+// ── Helpers ──────────────────────────────────────────────────────
+function _money(n) { return Number(n || 0); }
+
+// ── APIs ─────────────────────────────────────────────────────────
+
+async function api_tour_summary(/*token*/) {
+  const r1 = await db.query(`
+    SELECT
+      COUNT(*)::int                                                  AS bookings_total,
+      COUNT(*) FILTER (WHERE status IN ('booked','confirmed','traveling'))::int AS bookings_active,
+      COUNT(*) FILTER (WHERE created_at >= date_trunc('month', now()))::int    AS bookings_month,
+      COALESCE(SUM(CASE WHEN created_at >= date_trunc('month', now()) THEN total_inr ELSE 0 END),0)::numeric AS revenue_month,
+      COUNT(*) FILTER (WHERE status='traveling')::int                          AS travelling_now,
+      COUNT(*) FILTER (WHERE travel_start_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days')::int AS upcoming_30d
+    FROM tour_bookings
+  `, []);
+  const r2 = await db.query(`
+    SELECT
+      COALESCE(SUM(balance_inr) FILTER (WHERE status IN ('booked','confirmed','traveling')),0)::numeric AS outstanding,
+      COALESCE(SUM(balance_inr) FILTER (WHERE status IN ('booked','confirmed','traveling')
+                                          AND travel_start_date < CURRENT_DATE),0)::numeric AS overdue,
+      COUNT(*) FILTER (WHERE visa_status='pending')::int                                   AS visa_pending
+    FROM tour_bookings
+  `, []);
+  const r3 = await db.query(`
+    SELECT COUNT(*)::int AS itin_no_plan
+      FROM tour_bookings b
+      LEFT JOIN tour_itineraries i ON i.booking_id = b.id
+     WHERE i.id IS NULL AND b.status IN ('booked','confirmed','traveling')
+  `, []);
+
   return {
-    confirmed: { count: confirmed.rows[0].cnt, value: Number(confirmed.rows[0].amt) },
-    upcoming_30d: upcoming.rows[0].cnt,
-    in_trip: inTrip.rows[0].cnt,
-    receivables: Number(receivable.rows[0].amt),
-    visa_pending: visaPending.rows[0].cnt
+    bookings: r1.rows[0] || {},
+    money:    r2.rows[0] || {},
+    itineraries: r3.rows[0] || {}
   };
 }
 
+async function api_tour_destinations_list(/*token*/) {
+  const r = await db.query(
+    `SELECT * FROM tour_destinations WHERE is_active=1 ORDER BY name ASC`, []);
+  return { destinations: r.rows || [] };
+}
+
+async function api_tour_destinations_save(_token, args) {
+  args = args || {};
+  const id = Number(args.id || 0);
+  const fields = {
+    name: args.name || null,
+    country: args.country || null,
+    flag: args.flag || null,
+    kind: args.kind || null,
+    avg_days: Number(args.avg_days || 0) || null,
+    avg_price_inr: Number(args.avg_price_inr || 0) || null,
+    notes: args.notes || null,
+    is_active: args.is_active === 0 ? 0 : 1
+  };
+  if (id > 0) {
+    const cols = Object.keys(fields);
+    const sets = cols.map((c,i)=>`${c}=$${i+1}`).join(', ');
+    const vals = cols.map(c=>fields[c]); vals.push(id);
+    await db.query(`UPDATE tour_destinations SET ${sets} WHERE id=$${cols.length+1}`, vals);
+    return { ok: true, id };
+  } else {
+    const cols = Object.keys(fields);
+    const ph = cols.map((_,i)=>`$${i+1}`).join(', ');
+    const r = await db.query(
+      `INSERT INTO tour_destinations (${cols.join(', ')}) VALUES (${ph}) RETURNING id`,
+      cols.map(c=>fields[c]));
+    return { ok: true, id: r.rows[0].id };
+  }
+}
+
+async function api_tour_packages_list(_token, args) {
+  args = args || {};
+  const params = [];
+  let where = '1=1';
+  if (args.destination_id) {
+    params.push(Number(args.destination_id));
+    where += ` AND p.destination_id = $${params.length}`;
+  }
+  const r = await db.query(
+    `SELECT p.*, d.name AS destination_name, d.flag
+       FROM tour_packages p
+       LEFT JOIN tour_destinations d ON d.id = p.destination_id
+      WHERE ${where} AND p.is_active=1
+      ORDER BY p.id DESC`, params);
+  return { packages: r.rows || [] };
+}
+
+async function api_tour_packages_save(_token, args) {
+  args = args || {};
+  const id = Number(args.id || 0);
+  const fields = {
+    destination_id: Number(args.destination_id || 0) || null,
+    name: args.name || null,
+    kind: args.kind || null,
+    pax: Number(args.pax || 2),
+    duration_nights: Number(args.duration_nights || 0) || null,
+    price_inr: Number(args.price_inr || 0) || null,
+    inclusions: args.inclusions || null,
+    exclusions: args.exclusions || null,
+    is_active: args.is_active === 0 ? 0 : 1
+  };
+  if (id > 0) {
+    const cols = Object.keys(fields);
+    const sets = cols.map((c,i)=>`${c}=$${i+1}`).join(', ');
+    const vals = cols.map(c=>fields[c]); vals.push(id);
+    await db.query(`UPDATE tour_packages SET ${sets} WHERE id=$${cols.length+1}`, vals);
+    return { ok: true, id };
+  } else {
+    const cols = Object.keys(fields);
+    const ph = cols.map((_,i)=>`$${i+1}`).join(', ');
+    const r = await db.query(
+      `INSERT INTO tour_packages (${cols.join(', ')}) VALUES (${ph}) RETURNING id`,
+      cols.map(c=>fields[c]));
+    return { ok: true, id: r.rows[0].id };
+  }
+}
+
+async function api_tour_booking_create(_token, args) {
+  args = args || {};
+  const lead_id   = Number(args.lead_id || 0) || null;
+  const total     = Number(args.total_inr || 0);
+  const advance   = Number(args.advance_inr || 0);
+  const balance   = Math.max(0, total - advance);
+  const r = await db.query(
+    `INSERT INTO tour_bookings
+       (lead_id, destination_id, package_id, booking_no, travellers,
+        travel_start_date, travel_end_date, total_inr, advance_inr, balance_inr,
+        cost_inr, visa_status, docs_status, voucher_status, assignee_user_id, source, status)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+     RETURNING *`,
+    [
+      lead_id,
+      Number(args.destination_id || 0) || null,
+      Number(args.package_id || 0) || null,
+      'WW-' + Date.now().toString(36).toUpperCase(),
+      Number(args.travellers || 2),
+      args.travel_start_date || null,
+      args.travel_end_date   || null,
+      total, advance, balance,
+      Number(args.cost_inr || total * 0.78),
+      args.visa_status   || 'na',
+      args.docs_status   || 'pending',
+      args.voucher_status|| 'pending',
+      Number(args.assignee_user_id || 0) || null,
+      args.source || null,
+      args.status || 'booked'
+    ]
+  );
+  return { ok: true, booking: r.rows[0] || null };
+}
+
+async function api_tour_booking_list(_token, args) {
+  args = args || {};
+  const params = [];
+  let where = '1=1';
+  if (args.status) { params.push(args.status); where += ` AND b.status = $${params.length}`; }
+  if (args.destination_id) { params.push(Number(args.destination_id)); where += ` AND b.destination_id = $${params.length}`; }
+  if (args.from_date) { params.push(args.from_date); where += ` AND b.travel_start_date >= $${params.length}`; }
+  if (args.to_date)   { params.push(args.to_date);   where += ` AND b.travel_start_date <= $${params.length}`; }
+
+  const r = await db.query(
+    `SELECT b.*, l.name AS lead_name, l.phone AS lead_phone,
+            d.name AS destination_name, d.flag,
+            u.name AS assignee_name
+       FROM tour_bookings b
+       LEFT JOIN leads l ON l.id = b.lead_id
+       LEFT JOIN tour_destinations d ON d.id = b.destination_id
+       LEFT JOIN users u ON u.id = b.assignee_user_id
+      WHERE ${where}
+      ORDER BY b.travel_start_date ASC NULLS LAST, b.id DESC`, params);
+  return { bookings: r.rows || [] };
+}
+
+async function api_tour_booking_byLead(_token, args) {
+  const leadId = Number((args && args.lead_id) || 0);
+  if (!leadId) return { bookings: [] };
+  const r = await db.query(
+    `SELECT b.*, d.name AS destination_name, d.flag
+       FROM tour_bookings b
+       LEFT JOIN tour_destinations d ON d.id = b.destination_id
+      WHERE b.lead_id=$1 ORDER BY b.id DESC`, [leadId]);
+  return { bookings: r.rows || [] };
+}
+
+async function api_tour_booking_setStatus(_token, args) {
+  const id = Number((args && args.booking_id) || 0);
+  if (!id) throw new Error('booking_id required');
+  await db.query(
+    `UPDATE tour_bookings SET status = $1 WHERE id = $2`,
+    [args.status || 'booked', id]);
+  return { ok: true };
+}
+
+async function api_tour_itinerary_byBooking(_token, args) {
+  const bid = Number((args && args.booking_id) || 0);
+  if (!bid) return { itinerary: null, days: [], activities: [] };
+  let it = (await db.query(
+    `SELECT * FROM tour_itineraries WHERE booking_id=$1 ORDER BY id DESC LIMIT 1`,
+    [bid])).rows[0] || null;
+  if (!it) {
+    // Auto-create empty itinerary
+    const ins = await db.query(
+      `INSERT INTO tour_itineraries (booking_id, title, status)
+       VALUES ($1,$2,'draft') RETURNING *`,
+      [bid, 'Itinerary for Booking #' + bid]);
+    it = ins.rows[0];
+  }
+  const days = (await db.query(
+    `SELECT * FROM tour_itinerary_days WHERE itinerary_id=$1 ORDER BY day_no ASC`,
+    [it.id])).rows;
+  const acts = days.length
+    ? (await db.query(
+        `SELECT * FROM tour_itinerary_activities WHERE day_id = ANY($1::int[]) ORDER BY day_id, seq`,
+        [days.map(d => d.id)])).rows
+    : [];
+  return { itinerary: it, days: days, activities: acts };
+}
+
+async function api_tour_itinerary_upsertDay(_token, args) {
+  args = args || {};
+  const id = Number(args.id || 0);
+  const fields = {
+    itinerary_id: Number(args.itinerary_id || 0),
+    day_no: Number(args.day_no || 1),
+    day_date: args.day_date || null,
+    city: args.city || null,
+    hotel_name: args.hotel_name || null,
+    room_type: args.room_type || null,
+    meal_plan: args.meal_plan || null,
+    notes: args.notes || null
+  };
+  if (id > 0) {
+    const cols = Object.keys(fields);
+    const sets = cols.map((c,i)=>`${c}=$${i+1}`).join(', ');
+    const vals = cols.map(c=>fields[c]); vals.push(id);
+    await db.query(`UPDATE tour_itinerary_days SET ${sets} WHERE id=$${cols.length+1}`, vals);
+    return { ok: true, id };
+  } else {
+    const cols = Object.keys(fields);
+    const ph = cols.map((_,i)=>`$${i+1}`).join(', ');
+    const r = await db.query(
+      `INSERT INTO tour_itinerary_days (${cols.join(', ')}) VALUES (${ph}) RETURNING id`,
+      cols.map(c=>fields[c]));
+    return { ok: true, id: r.rows[0].id };
+  }
+}
+
+async function api_tour_itinerary_addActivity(_token, args) {
+  args = args || {};
+  const r = await db.query(
+    `INSERT INTO tour_itinerary_activities (day_id, seq, time_str, kind, title, detail)
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+    [Number(args.day_id || 0), Number(args.seq || 1),
+     args.time_str || null, args.kind || 'sightseeing',
+     args.title || '', args.detail || null]);
+  return { ok: true, id: r.rows[0].id };
+}
+
+async function api_tour_payment_record(_token, args) {
+  args = args || {};
+  const bid = Number(args.booking_id || 0);
+  const amt = Number(args.amount_inr || 0);
+  if (!bid || !amt) throw new Error('booking_id + amount_inr required');
+
+  await db.query(
+    `INSERT INTO tour_payments (booking_id, amount_inr, mode, ref_no, paid_at, notes)
+     VALUES ($1,$2,$3,$4,$5,$6)`,
+    [bid, amt, args.mode || 'cash', args.ref_no || null,
+     args.paid_at || null, args.notes || null]);
+
+  await db.query(
+    `UPDATE tour_bookings
+        SET advance_inr = advance_inr + $1,
+            balance_inr = GREATEST(0, balance_inr - $1)
+      WHERE id = $2`, [amt, bid]);
+  return { ok: true };
+}
+
+async function api_tour_payment_list(_token, args) {
+  const bid = Number((args && args.booking_id) || 0);
+  if (!bid) return { payments: [] };
+  const r = await db.query(
+    `SELECT * FROM tour_payments WHERE booking_id=$1 ORDER BY paid_at DESC, id DESC`,
+    [bid]);
+  return { payments: r.rows || [] };
+}
+
+// ── Reports ──────────────────────────────────────────────────────
+
+async function api_tour_report_upcoming(_token, args) {
+  args = args || {};
+  const within = Number(args.days || 30);
+  const r = await db.query(
+    `SELECT b.*, l.name AS lead_name, l.phone AS lead_phone,
+            d.name AS destination_name, d.flag,
+            (b.travel_start_date - CURRENT_DATE)::int AS days_to_travel
+       FROM tour_bookings b
+       LEFT JOIN leads l ON l.id = b.lead_id
+       LEFT JOIN tour_destinations d ON d.id = b.destination_id
+      WHERE b.status IN ('booked','confirmed','traveling')
+        AND b.travel_start_date BETWEEN CURRENT_DATE AND CURRENT_DATE + ($1 || ' days')::interval
+      ORDER BY b.travel_start_date ASC`,
+    [String(within)]);
+  return { bookings: r.rows || [] };
+}
+
+async function api_tour_report_collection(/*token*/) {
+  // KPIs + per-booking outstanding
+  const k = await db.query(`
+    SELECT
+      COALESCE(SUM(balance_inr) FILTER (WHERE status IN ('booked','confirmed','traveling')),0)::numeric AS outstanding,
+      COALESCE(SUM(balance_inr) FILTER (WHERE status IN ('booked','confirmed','traveling')
+                                          AND travel_start_date < CURRENT_DATE),0)::numeric AS overdue,
+      COALESCE(SUM(balance_inr) FILTER (WHERE status IN ('booked','confirmed','traveling')
+                                          AND travel_start_date BETWEEN CURRENT_DATE
+                                            AND CURRENT_DATE + INTERVAL '7 days'),0)::numeric AS due_7d,
+      COALESCE(SUM(advance_inr) FILTER (WHERE created_at >= date_trunc('month', now())),0)::numeric AS collected_month
+    FROM tour_bookings
+  `, []);
+  const rows = await db.query(`
+    SELECT b.*, l.name AS lead_name, d.name AS destination_name, d.flag,
+           (b.travel_start_date - CURRENT_DATE)::int AS days_to_travel
+      FROM tour_bookings b
+      LEFT JOIN leads l ON l.id = b.lead_id
+      LEFT JOIN tour_destinations d ON d.id = b.destination_id
+     WHERE b.status IN ('booked','confirmed','traveling') AND b.balance_inr > 0
+     ORDER BY b.travel_start_date ASC NULLS LAST
+  `, []);
+  return { kpis: k.rows[0] || {}, bookings: rows.rows || [] };
+}
+
+async function api_tour_report_itineraryStatus(/*token*/) {
+  const r = await db.query(`
+    SELECT b.id AS booking_id, b.booking_no, b.travel_start_date,
+           (b.travel_start_date - CURRENT_DATE)::int AS days_to_travel,
+           l.name AS lead_name, d.name AS destination_name, d.flag,
+           i.id AS itinerary_id, i.status AS itin_status,
+           COALESCE((SELECT COUNT(*)::int FROM tour_itinerary_days WHERE itinerary_id = i.id), 0) AS days_planned,
+           CASE
+             WHEN b.travel_end_date IS NOT NULL AND b.travel_start_date IS NOT NULL
+               THEN (b.travel_end_date - b.travel_start_date) + 1
+             ELSE NULL
+           END AS total_days
+      FROM tour_bookings b
+      LEFT JOIN leads l ON l.id = b.lead_id
+      LEFT JOIN tour_destinations d ON d.id = b.destination_id
+      LEFT JOIN tour_itineraries i ON i.booking_id = b.id
+     WHERE b.status IN ('booked','confirmed','traveling')
+     ORDER BY b.travel_start_date ASC NULLS LAST
+  `, []);
+  return { rows: r.rows || [] };
+}
+
+async function api_tour_report_agentLeaderboard(_token, args) {
+  args = args || {};
+  const within = Number(args.days || 30);
+  const r = await db.query(
+    `SELECT u.id, u.name,
+            COUNT(b.id)::int                                                  AS bookings,
+            COALESCE(SUM(b.total_inr),0)::numeric                             AS revenue,
+            COALESCE(AVG(b.total_inr),0)::numeric                             AS avg_ticket
+       FROM users u
+       LEFT JOIN tour_bookings b ON b.assignee_user_id = u.id
+            AND b.created_at >= now() - ($1 || ' days')::interval
+       WHERE u.is_active = 1
+       GROUP BY u.id, u.name
+      HAVING COUNT(b.id) > 0
+       ORDER BY revenue DESC`,
+    [String(within)]);
+  return { agents: r.rows || [] };
+}
+
+// ── Register the pack ─────────────────────────────────────────────
 framework.register({
-  id: PACK_ID, name: 'Holiday & Travel', industry: 'holiday',
-  summary: 'Travel agency — package catalog, bookings, itinerary builder, payments, vouchers.',
-  version: '1.0.0',
-  features: ['Package catalog (leisure / honeymoon / family / adventure)','Booking with PAX (adults/children/infants) + visa + docs status','Day-wise itinerary builder','Multi-installment payment ledger','Hotel / flight / activity vouchers','Upcoming-travel tracker (30-day window)','10 Holiday statuses + 7 custom fields seeded'],
-  nav_items: [
-    { id: 'tourpackages',   label: '🗺 Package Catalog', icon: '🗺' },
-    { id: 'tourbookings',   label: '📅 Bookings', icon: '📅' },
-    { id: 'tourupcoming',   label: '✈️ Upcoming Travel', icon: '✈️' },
-    { id: 'tourvouchers',   label: '🎟 Vouchers', icon: '🎟' }
+  id:          PACK_ID,
+  name:        'Holiday / Travel',
+  icon:        '✈️',
+  description: 'Travel agency — destinations, packages, bookings, itinerary builder, collection, reports.',
+  namespace:   'tour_',
+  version:     '1.0.0',
+  installer:   _installer,
+  navItems: [
+    { id: 'packholiday',      label: 'Travel Overview',     icon: '✈️', view: 'packholiday' },
+    { id: 'tourbookings',     label: 'Bookings',            icon: '🎫', view: 'tourbookings' },
+    { id: 'tourdestinations', label: 'Destinations',        icon: '🌍', view: 'tourdestinations' },
+    { id: 'touritinerary',    label: 'Itinerary Builder',   icon: '🗺️', view: 'touritinerary' },
+    { id: 'tourpayments',     label: 'Payments & Collection', icon: '💰', view: 'tourpayments' },
+    { id: 'tourreports',      label: 'Travel Reports',      icon: '📊', view: 'tourreports' },
+    { id: 'tourinsights',     label: 'AI Insights',         icon: '🤖', view: 'tourinsights' }
   ],
-  install, uninstall
+  leadPanels: ['tour_booking']
 });
 
 module.exports = {
-  install, uninstall, _ensureSchema,
-  api_tour_packages_list, api_tour_packages_save,
-  api_tour_booking_create, api_tour_booking_byLead, api_tour_booking_update,
-  api_tour_itinerary_save,
-  api_tour_payment_add,
-  api_tour_voucher_save, api_tour_voucher_byBooking,
-  api_tour_upcomingTravel, api_tour_summary
+  api_tour_summary,
+  api_tour_destinations_list,
+  api_tour_destinations_save,
+  api_tour_packages_list,
+  api_tour_packages_save,
+  api_tour_booking_create,
+  api_tour_booking_list,
+  api_tour_booking_byLead,
+  api_tour_booking_setStatus,
+  api_tour_itinerary_byBooking,
+  api_tour_itinerary_upsertDay,
+  api_tour_itinerary_addActivity,
+  api_tour_payment_record,
+  api_tour_payment_list,
+  api_tour_report_upcoming,
+  api_tour_report_collection,
+  api_tour_report_itineraryStatus,
+  api_tour_report_agentLeaderboard,
+  SEED_DESTINATIONS,
+  ACTIVITY_TYPES,
+  _installer
 };

@@ -48,6 +48,7 @@ const ROUTE_FILES = [
   'customFields',
   'customers',
   'dashboard',
+  'dashboardWidgets',  /* DASHBOARD_REDESIGN_v1 — 7 new widget APIs */
   'fb',
   'hr',
   'integrations',
@@ -76,11 +77,11 @@ const ROUTE_FILES = [
   'whatsapp',
   'whatsbot',
   'aiBot',
+  'demoReminders', /* DEMO_REMINDER_v1 — per-rep demo WhatsApp reminders */
   'quotations',
   'invoicing',
   'modules',
   'crmCopilot',
-  'copilotHelp',
   'waBotFlows',
   'qrForms',
   'forms',
@@ -89,9 +90,34 @@ const ROUTE_FILES = [
   'waWidget',
   'packs/education',
   'packs/realestate',
+  // PACK_PHASE_2_v1 — 2026-06-07
+  'packs/finance',
   'packs/solar',
-
+  'packs/manufacturer',
+  'packs/holiday',
+  'packs/ecommerce',
   'social',
+  'ivr',
+  'compliance',  /* COMPLIANCE_v1 */
+  'reportTemplates',  /* REPORT_SCHEDULE_v1 */
+  'googleCalendar',  /* GMEET_v1 */
+  'meetings',        /* GMEET_v1 */
+  'devicediag',      /* DEVICE_DIAG_INGEST_FIX_v1 — tenant ingest only; super-admin reads stay in routes/saas/recordingHealth.js */
+  'outboundWebhook', /* OUTBOUND_WH_v1 — send each NEW lead to external URLs based on filter rules */
+  'team',            /* TEAM_LIVE_STATUS_v1 — Live Team Status panel + Break toggle */
+  'changelog',       /* CHANGELOG_v1 — What's New / changelog feed */
+  'googleConvExport', /* GOOGLE_CONV_EXPORT_v1 — Google Ads offline-conversion CSV export */
+  'metaConvExport',   /* META_CAPI_v1 — Meta Conversions API offline events */
+  'leadQuickNote',   /* QNOTE_v1 — AI Quick Note row action (vserve beta) */
+  'packs/student360', /* STU360_LIVE_v1 — Student 360 view for Education pack */
+  'opportunities',    /* OPPORTUNITIES_v1 — multi-opportunity + multi-pipeline */
+  'leadScoring',      /* LEAD_SCORING_v1 — Smart Lead Scoring */
+  'copilotProactive', /* COPILOT_v4 — Proactive Sales Coach (vserve beta) */
+  'aiManager',        /* AI_MGR_v1 — virtual admin/supervisor (vserve beta) */
+  'aiCall',           /* AICALL_v1 — FexCall AI: VAPI integration (Phase 1) */
+  'pool',             /* LEAD_POOL_v1 — Free Pool / status-released lead pool */
+  'payments',         /* PAYMENTS_v1 — Cashfree + Razorpay payment links */
+  'subStatuses',      /* SUB_STATUS_v1 — vserve-only sub-statuses under each lead status */
 ];
 
 const API = {};
@@ -307,6 +333,13 @@ async function expressHandler(req, res) {
     return res.status(404).json({ error: `Unknown function: ${fn}` });
   }
 
+  // CRM_PERF_v1_SERVER — measure how long every tenant API call takes.
+  // Anything over the slow-thresholds gets a structured console.log line
+  // (auto-surfaces in Railway logs) so we can see WITHOUT any user action
+  // which functions are choking, for which tenant.
+  const _SLOW_API_MS      = 1000;
+  const _VERY_SLOW_API_MS = 3000;
+  const _perfStart = Date.now();
   try {
     const finalArgs = (args || []).slice();
     if (fn === 'api_login' || fn === 'api_login_otp_verify') {
@@ -318,8 +351,45 @@ async function expressHandler(req, res) {
     }
 
     const result = await handler(...finalArgs);
+    const _ms = Date.now() - _perfStart;
+    if (_ms >= _SLOW_API_MS) {
+      const slug = (req.tenant && req.tenant.slug) || req.tenantSlug || 'unknown';
+      const uid  = (req.tenant && req.tenant.user_id) || req.user_id || '?';
+      const tag  = _ms >= _VERY_SLOW_API_MS ? 'VERY_SLOW' : 'SLOW';
+      console.log('[PERF_SLOW_API]', tag, 'fn=' + fn, 'ms=' + _ms, 'tenant=' + slug, 'user=' + uid);
+      // Also pile up a per-process in-memory tally so a GET /api/perf-summary
+      // (defined in server.js) can return it without DB writes.
+      if (!global._perfSlowTally) global._perfSlowTally = { by_fn: {}, by_tenant: {}, recent: [] };
+      const T = global._perfSlowTally;
+      T.by_fn[fn] = T.by_fn[fn] || { n: 0, total: 0, max: 0 };
+      T.by_fn[fn].n++; T.by_fn[fn].total += _ms; if (_ms > T.by_fn[fn].max) T.by_fn[fn].max = _ms;
+      T.by_tenant[slug] = T.by_tenant[slug] || { n: 0, total: 0, max: 0 };
+      T.by_tenant[slug].n++; T.by_tenant[slug].total += _ms; if (_ms > T.by_tenant[slug].max) T.by_tenant[slug].max = _ms;
+      T.recent.push({ t: Date.now(), fn, ms: _ms, tenant: slug, user: uid });
+      if (T.recent.length > 500) T.recent.splice(0, T.recent.length - 500);
+      // PERF_HEALTH_DB_PERSIST_v1 — also write to control DB so the data
+      // survives Railway redeploys (the in-memory tally wipes on each deploy).
+      try {
+        const controlDb = require('../../control/db');
+        const ua = String(req.headers['user-agent'] || '').slice(0, 250);
+        const isApk = /capacitor|wv\)/i.test(ua) || /Capacitor/.test(String(req.headers['x-capacitor'] || ''));
+        controlDb.query(
+          `INSERT INTO perf_slow_log (created_at, tenant_slug, user_id, fn, ms, tag, source, ua)
+           VALUES (NOW(), $1, $2, $3, $4, $5, $6, $7)`,
+          [slug, uid === '?' ? null : Number(uid), fn, _ms, tag, isApk ? 'apk' : 'web', ua]
+        ).catch(() => {});
+      } catch (_) {}
+    }
     return res.json({ ok: true, result });
   } catch (e) {
+    // USER_QUOTA_v1 — quota errors get HTTP 402 (Payment Required) so the
+    // SPA can show a 'plan limit reached' modal instead of a red toast.
+    if (e && e.quotaExceeded) {
+      console.warn('[tenantApi] quota exceeded:', fn, e.message);
+      return res.status(402).json({
+        error: e.message, quotaExceeded: true, metric: e.metric, usage: e.usage
+      });
+    }
     const isUserError = /not signed in|invalid.*token|expired|forbidden|required|already/i
       .test(String(e.message || ''));
     const status = /not signed in|invalid.*token|expired/i.test(e.message) ? 401 : 400;
@@ -361,6 +431,47 @@ async function api_packs_listInstalled(token) {
   const { authUser } = require('../../utils/auth');
   await authUser(token);
   const fw = require('../packs/_framework');
+  // Reconcile any legacy state where >1 pack ended up active (pre-mutex
+  // data). Then read only active rows — so the SPA sidebar gate can't
+  // pick up a stale is_active=0 row and render Education on a Generic
+  // tenant (task #442).
+  try { await fw._reconcileActivePacks(); } catch (_) {}
+
+  // NEGATIVE SELF-HEAL (task #442 follow-up): if this tenant was
+  // explicitly created as 'generic' in the audit_log, any rows in
+  // installed_packs are leftover state from a wrong manual install or
+  // a buggy past self-heal. Deactivate them so the sidebar gate stops
+  // rendering Education/Real Estate menus. Showcase tenants are exempt.
+  try {
+    const slug = _activeSlugForToken();
+    if (slug && slug !== 'showcase-edu' && slug !== 'showcase-re' && slug !== 'showcase-solar' && slug !== 'showcase-holiday' && slug !== 'showcase-finance' && slug !== 'showcase-manufacturer' && slug !== 'showcase-mfg' && slug !== 'showcase-ecommerce' && slug !== 'showcase-ec') {
+      const control = require('../../control/db');
+      const ar = await control.query(
+        `SELECT detail FROM audit_log
+            WHERE event = 'tenant.created_manually'
+              AND detail::jsonb->>'slug' = $1
+            ORDER BY created_at DESC LIMIT 1`,
+        [slug]
+      );
+      const det = ar.rows && ar.rows[0] && ar.rows[0].detail;
+      const parsed = (typeof det === 'string') ? JSON.parse(det) : det;
+      const auditPack = parsed && parsed.industry_pack;
+      if (auditPack === 'generic' || auditPack === '' || auditPack == null) {
+        // Wipe ONLY self-heal-installed packs (installed_by IS NULL).
+        // User-installed packs (via super-admin button) have installed_by set
+        // and must NOT be deactivated — those are legitimate post-creation
+        // pack additions (task #442 follow-up).
+        const db = require('../../db/pg');
+        const upd = await db.query(`UPDATE installed_packs SET is_active = 0 WHERE is_active = 1 AND installed_by IS NULL`);
+        if (upd && upd.rowCount > 0) {
+          console.log('[packs_listInstalled] negative-heal: deactivated', upd.rowCount, 'self-heal pack(s) on generic tenant', slug);
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[packs_listInstalled] negative-heal skipped:', e.message);
+  }
+
   let rows = await fw.listInstalledPacks();
 
   // SELF-HEAL: if no packs are installed but this tenant SHOULD have one
@@ -368,13 +479,18 @@ async function api_packs_listInstalled(token) {
   // industry_pack got saved in the audit_log but failed to install
   // because the pack registry was empty at the time), install it now.
   // Without this, tenants like testfv stay stuck on Generic forever.
-  const activeRows = (rows || []).filter(r => Number(r && r.is_active) === 1);
+  // rows is already filtered to active rows by listInstalledPacks now.
+  const activeRows = rows || [];
   if (!activeRows.length) {
     let expected = null;
     const slug = _activeSlugForToken();
     if (slug === 'showcase-edu') expected = 'education';
     else if (slug === 'showcase-re') expected = 'realestate';
     else if (slug === 'showcase-solar') expected = 'solar';
+    else if (slug === 'showcase-holiday') expected = 'holiday';
+    else if (slug === 'showcase-finance') expected = 'finance';
+    else if (slug === 'showcase-manufacturer' || slug === 'showcase-mfg') expected = 'manufacturer';
+    else if (slug === 'showcase-ecommerce' || slug === 'showcase-ec') expected = 'ecommerce';
     else if (slug) {
       // Fall back to the audit_log entry from tenant creation. The
       // industry_pack chosen on the Create-tenant form is preserved
@@ -423,7 +539,107 @@ async function api_packs_uninstall(token, packId) {
   const fw = require('../packs/_framework');
   return fw.uninstallPack(String(packId || ''), { userId: me.id });
 }
+
+// PACK_STAGES_v1 (2026-06-21) — Admin one-click to apply the pack's
+// business-specific stages, removing generic ones that aren't in use.
+// Stages NOT in the pack's whitelist that have ZERO leads attached
+// are DELETED. Stages WITH leads are kept (cannot delete safely) but
+// pushed to the bottom of the list. The pack's own stages are
+// re-seeded (no-op if already present) and given sort_order 1..N so
+// they appear first.
+async function api_packs_resetStagesToPackDefaults(token, packId) {
+  const { authUser } = require('../../utils/auth');
+  const me = await authUser(token);
+  if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin only');
+  const db = require('../../db/pg');
+  const packPath = '../packs/' + String(packId || '').replace(/[^a-z0-9_-]/gi, '');
+  // Each pack file defines its own STAGES. Hardcode the two we ship.
+  const PACK_STAGES = {
+    education: [
+      { name: 'Inquiry',     color: '#3b82f6' },
+      { name: 'Demo Booked', color: '#06b6d4' },
+      { name: 'Demo Done',   color: '#8b5cf6' },
+      { name: 'Enrolled',    color: '#f59e0b' },
+      { name: 'Fee Paid',    color: '#10b981', is_final: 1 },
+      { name: 'Lapsed',      color: '#6b7280', is_final: 1 }
+    ],
+    realestate: [
+      { name: 'New Lead',                color: '#a855f7' },
+      { name: 'Lead Captured',           color: '#3b82f6' },
+      { name: 'Assigned',                color: '#06b6d4' },
+      { name: 'In Follow-up',            color: '#22c55e' },
+      { name: 'Presentation Done',       color: '#f59e0b' },
+      { name: 'Site Visit Fixed',        color: '#ec4899' },
+      { name: 'Site Visit Done',         color: '#0ea5e9' },
+      { name: 'Offer Given',             color: '#f97316' },
+      { name: 'Booked',                  color: '#16a34a' },
+      { name: 'Documents Collected',     color: '#8b5cf6' },
+      { name: 'Commission In Progress',  color: '#0284c7' },
+      { name: 'Paid',                    color: '#15803d', is_final: 1 }
+    ]
+  };
+  const stages = PACK_STAGES[String(packId || '').toLowerCase()];
+  if (!stages) throw new Error('No pack stages defined for ' + packId);
+
+  // Re-seed pack stages (idempotent: insert if absent, otherwise update sort_order + color)
+  for (let i = 0; i < stages.length; i++) {
+    const s = stages[i];
+    const found = await db.query(`SELECT id FROM statuses WHERE LOWER(name)=LOWER($1) LIMIT 1`, [s.name]);
+    if (found.rows.length) {
+      await db.query(
+        `UPDATE statuses SET sort_order = $1, color = $2, is_final = $3 WHERE id = $4`,
+        [i + 1, s.color, s.is_final ? 1 : 0, found.rows[0].id]
+      );
+    } else {
+      await db.query(
+        `INSERT INTO statuses (name, sort_order, color, is_final) VALUES ($1, $2, $3, $4)`,
+        [s.name, i + 1, s.color, s.is_final ? 1 : 0]
+      );
+    }
+  }
+
+  // Find generic stages (anything NOT in the pack whitelist) and DELETE the
+  // ones with zero leads attached. Keep the ones in use — those get pushed
+  // to the bottom (sort_order 100+).
+  const keep = stages.map(s => s.name.toLowerCase());
+  const all = await db.query(`SELECT id, name FROM statuses`);
+  const removed = []; const kept_with_leads = [];
+  let bottomOrder = 100;
+  for (const row of all.rows) {
+    if (keep.includes(String(row.name).toLowerCase())) continue;
+    // Safety: only delete if zero leads use it
+    const useCount = await db.query(`SELECT COUNT(*)::int AS c FROM leads WHERE status_id = $1`, [row.id]);
+    if (Number(useCount.rows[0].c) === 0) {
+      try {
+        await db.query(`DELETE FROM statuses WHERE id = $1`, [row.id]);
+        removed.push(row.name);
+      } catch (e) {
+        // If FK constraint somewhere else stops the delete, just push it to bottom
+        await db.query(`UPDATE statuses SET sort_order = $1 WHERE id = $2`, [bottomOrder++, row.id]);
+        kept_with_leads.push({ name: row.name, reason: 'fk_constraint' });
+      }
+    } else {
+      await db.query(`UPDATE statuses SET sort_order = $1 WHERE id = $2`, [bottomOrder++, row.id]);
+      kept_with_leads.push({ name: row.name, lead_count: Number(useCount.rows[0].c) });
+    }
+  }
+
+  return {
+    ok: true,
+    pack: packId,
+    seeded: stages.length,
+    deleted_generic: removed,
+    kept_legacy: kept_with_leads,
+    message: 'Stages re-applied. Pack stages occupy positions 1-' + stages.length + '. ' +
+             removed.length + ' unused generic stage(s) removed. ' +
+             kept_with_leads.length + ' legacy stage(s) kept at bottom (still has leads).'
+  };
+}
+
 API.api_packs_listAvailable = api_packs_listAvailable;
 API.api_packs_listInstalled = api_packs_listInstalled;
 API.api_packs_install       = api_packs_install;
-API.api_pac
+API.api_packs_uninstall     = api_packs_uninstall;
+API.api_packs_resetStagesToPackDefaults = api_packs_resetStagesToPackDefaults;
+
+module.exports = { expressHandler };
