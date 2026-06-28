@@ -7424,12 +7424,16 @@ function renderCell(col, l, statuses) {
       // Two-line cell: date on top, time below in muted/smaller. Keeps the
       // column compact while surfacing the time the lead came in — useful
       // for triaging when multiple leads land on the same day.
-      const _d = l.created_at ? new Date(l.created_at) : null;
+      // POOL_PULL_FRESH_v1 — a pulled/recycled lead shows its FRESH pull
+      // date/time with a ♻ marker (original created date kept in the tooltip).
+      const _isPulled = !!l.pulled_at;
+      const _d = _isPulled ? new Date(l.pulled_at) : (l.created_at ? new Date(l.created_at) : null);
       if (!_d || isNaN(_d.getTime())) return h('td', { class: 'muted' }, '');
       const _dateStr = _d.toLocaleDateString();
       const _timeStr = _d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      return h('td', { class: 'muted', style: { whiteSpace: 'nowrap' } },
-        h('div', {}, _dateStr),
+      const _ttl = _isPulled && l.created_at ? ('Pulled ' + _d.toLocaleString() + ' · originally created ' + new Date(l.created_at).toLocaleString()) : '';
+      return h('td', { class: 'muted', style: { whiteSpace: 'nowrap' }, title: _ttl },
+        h('div', {}, _isPulled ? h('span', { style: { color: '#0284c7', fontWeight: '600' } }, '♻ ' + _dateStr) : _dateStr),
         h('div', { style: { fontSize: '.74rem', opacity: '.75' } }, _timeStr)
       );
     }

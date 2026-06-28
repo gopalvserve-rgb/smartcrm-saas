@@ -1148,3 +1148,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The re-churn dialog now shows the total re-churns done so far and how many happened today, and adds a "Daily re-churn cap per lead" so a number is not re-dialled more than N times in a single day (alongside the existing total cap).',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- POOL_PULL_FRESH_v1 (2026-06-28)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('POOL_PULL_FRESH', 'Pulled leads now arrive fresh',
+ 'When a rep pulls a lead from the Lead Pool it is now claimed to them as a fresh task: it moves to a dedicated "Pulled" status, jumps to the top of the recent list with the pull date/time (shown with a recycle mark), and lands in today''s follow-ups. The original created date is preserved for reporting.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

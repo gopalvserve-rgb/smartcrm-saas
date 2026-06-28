@@ -129,6 +129,18 @@ async function api_pool_summary(token) {
   return { enabled: true, total: by_date.reduce((a, b) => a + b.count, 0), by_date, my_count };
 }
 
+// ── POOL_PULL_FRESH_v1: resolve (or create) the dedicated "Pulled" status ─
+let _pulledStatusIdCache = null;
+async function _pulledStatusId() {
+  if (_pulledStatusIdCache) return _pulledStatusIdCache;
+  const sel = await db.query(`SELECT id FROM statuses WHERE lower(name) = 'pulled' ORDER BY id LIMIT 1`);
+  if (sel.rows.length) { _pulledStatusIdCache = Number(sel.rows[0].id); return _pulledStatusIdCache; }
+  const ins = await db.query(
+    `INSERT INTO statuses (name, color, sort_order, is_final) VALUES ('Pulled', '#0ea5e9', 5, 0) RETURNING id`);
+  _pulledStatusIdCache = Number(ins.rows[0].id);
+  return _pulledStatusIdCache;
+}
+
 // ── pull: claim my configured batch (newest-first), shared ───────────
 async function api_pool_pull(token) {
   const me = await authUser(token);
@@ -151,19 +163,32 @@ async function api_pool_pull(token) {
       LIMIT $3`,
     [poolIds, Number(me.id), Number(count)]
   );
+  // POOL_PULL_FRESH_v1 — a pull now CLAIMS the lead as a fresh task for the
+  // puller: flip to the dedicated "Pulled" status, assign it to me, stamp a
+  // fresh pull timestamp (surfaced at the top of Recent), and reset the
+  // follow-up to now so it lands in today's queue. created_at is preserved
+  // for reporting. Race-guarded: only claim while still in a pool status.
+  const pulledStatusId = await _pulledStatusId();
   const pulled = [];
   for (const row of sel.rows) {
     const leadId = Number(row.id);
-    // Shared model: add me as co-owner. ON CONFLICT keeps it idempotent.
-    const ins = await db.query(
-      `INSERT INTO lead_co_owners (lead_id, user_id, added_by, source)
-       VALUES ($1, $2, $3, 'pool_pull') ON CONFLICT (lead_id, user_id) DO NOTHING`,
-      [leadId, Number(me.id), Number(me.id)]
+    const upd = await db.query(
+      `UPDATE leads
+          SET status_id = $1, assigned_to = $2,
+              pulled_at = NOW(), last_status_change_at = NOW(),
+              next_followup_at = NOW(), updated_at = NOW()
+        WHERE id = $3 AND status_id = ANY($4::int[])`,
+      [pulledStatusId, Number(me.id), leadId, poolIds]
     );
-    if (ins.rowCount > 0) {
+    if (upd.rowCount > 0) {
       pulled.push(leadId);
+      // keep a co-owner row for audit of who pulled it (idempotent)
+      try { await db.query(
+        `INSERT INTO lead_co_owners (lead_id, user_id, added_by, source)
+         VALUES ($1, $2, $3, 'pool_pull') ON CONFLICT (lead_id, user_id) DO NOTHING`,
+        [leadId, Number(me.id), Number(me.id)]); } catch (_) {}
       try { await db.query(`INSERT INTO lead_actions (lead_id, action_type, user_id, meta_json) VALUES ($1,$2,$3,$4)`,
-        [leadId, 'pulled_from_pool', me.id, JSON.stringify({ batch: true })]); } catch (_) {}
+        [leadId, 'pulled_from_pool', me.id, JSON.stringify({ batch: true, claimed: true, status_id: pulledStatusId })]); } catch (_) {}
     }
   }
   return { ok: true, pulled_count: pulled.length, lead_ids: pulled };

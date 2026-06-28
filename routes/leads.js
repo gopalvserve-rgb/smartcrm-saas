@@ -553,7 +553,10 @@ async function api_leads_list(token, filters) {
       // Pad to 4 digits so numeric compare works on strings.
       return String(Number(l.smart_score || 0)).padStart(4, '0');
     }
-    return String(l.created_at || '');
+    // POOL_PULL_FRESH_v1 — a recycled/pulled lead surfaces with its FRESH pull
+    // time (pulled_at) so it jumps to the top of Recent; created_at is kept
+    // underneath for reporting. Normal leads (pulled_at NULL) are unaffected.
+    return String(l.pulled_at || l.created_at || '');
   };
   const _dir = sort.endsWith('_asc') ? 1 : -1;
   rows.sort((a, b) => {

@@ -118,7 +118,9 @@ const SCHEMA = {
               'smart_score', 'smart_category', 'score_reason',
               'score_breakdown_json', 'score_updated_at',
               /* LEAD_POOL_v1 — Free Pool / status-released pool membership */
-              'in_pool', 'pool_entered_at', 'pool_origin_status_id', 'pool_origin_user_id'],
+              'in_pool', 'pool_entered_at', 'pool_origin_status_id', 'pool_origin_user_id',
+              /* POOL_PULL_FRESH_v1 — when a lead is pulled it gets a fresh pull timestamp */
+              'pulled_at'],
     json: ['meta_json', 'extra_json', 'score_breakdown_json']
   },
   project_stages: {

@@ -1990,7 +1990,9 @@ tr:hover .lv2-actions { opacity: 1; }
       tr.appendChild(h('td', null, h('span', { class: 'lv2-muted', title: aIso ? new Date(aIso).toLocaleString('en-IN') : '' }, fmtDateTimeRel(aIso))));
     }
     if (vc.has('created'))  {
-      tr.appendChild(h('td', null, h('span', { class: 'lv2-muted', title: l.created_at ? new Date(l.created_at).toLocaleString('en-IN') : '' }, fmtDateTimeRel(l.created_at))));
+      tr.appendChild(h('td', null, l.pulled_at
+      ? h('span', { class: 'lv2-muted', style: { color: '#0284c7', fontWeight: '600' }, title: 'Pulled ' + new Date(l.pulled_at).toLocaleString('en-IN') + (l.created_at ? ' · originally created ' + new Date(l.created_at).toLocaleString('en-IN') : '') }, '♻ ' + fmtDateTimeRel(l.pulled_at))
+      : h('span', { class: 'lv2-muted', title: l.created_at ? new Date(l.created_at).toLocaleString('en-IN') : '' }, fmtDateTimeRel(l.created_at))));
     }
     if (vc.has('last_dialed')) {
       tr.appendChild(h('td', null, l._lastDialedAt

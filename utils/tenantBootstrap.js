@@ -592,6 +592,10 @@ const SCHEMA_MIGRATIONS = [
     ALTER TABLE leads ADD COLUMN IF NOT EXISTS pool_origin_user_id INTEGER;
     CREATE INDEX IF NOT EXISTS idx_leads_in_pool ON leads(in_pool, pool_entered_at) WHERE in_pool = 1;
   ` },
+  { name: '2026_06_28_pool_pull_fresh_v1', sql: `
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS pulled_at TIMESTAMPTZ;
+    CREATE INDEX IF NOT EXISTS idx_leads_pulled_at ON leads(pulled_at);
+  ` },
 ];
 
 /**
