@@ -20827,14 +20827,61 @@ function _dialerCampaignForm(host) {
       h('button', { class: 'btn', onclick: () => _renderDialerAdmin(host) }, 'Cancel')));
   host.innerHTML = ''; host.appendChild(card);
 }
+/* DIALER_UPLOAD_v1 — map a parsed spreadsheet row → {name, phone}. */
+function _dialerRowToLead(row) {
+  if (!row) return null;
+  const nameKeys  = ['name','full_name','fullname','lead_name','customer','customer_name','contact_name','client','client_name','first_name'];
+  const phoneKeys = ['phone','mobile','number','contact','contact_number','mobile_number','phone_number','phone_no','mobile_no','whatsapp','whatsapp_number','cell','cell_number','tel','telephone'];
+  let name = '', phone = '';
+  for (const k of nameKeys)  { if (row[k]) { name  = String(row[k]).trim(); break; } }
+  for (const k of phoneKeys) { if (row[k]) { phone = String(row[k]).trim(); break; } }
+  const vals = Object.values(row).map(v => String(v == null ? '' : v).trim());
+  if (!phone) { for (const v of vals) { const d = v.replace(/\D/g, ''); if (d.length >= 7 && d.length <= 15) { phone = v; break; } } }
+  if (!name)  { for (const v of vals) { if (v && v !== phone && !/^[\d\s+\-()]+$/.test(v)) { name = v; break; } } }
+  return { name: name.slice(0, 160), phone };
+}
+
 function _dialerAddLeads(host, camp) {
+  const MAX_BYTES = 5 * 1024 * 1024; // 5 MB upload cap
   const ta = h('textarea', { class: 'input', rows: '8', placeholder: 'One lead per line:\nName, 9876543210\nAnother Name, 9123456789\n(or just phone numbers)', style: { width: '100%' } });
   const users = (CRM.cache && CRM.cache.users) || [];
   const sel = h('select', { class: 'input', multiple: 'multiple', style: { width: '100%', height: '140px' } },
     ...users.map(u => h('option', { value: String(u.id) }, u.name + ' (' + u.role + ')')));
+
+  // ---- Excel / CSV upload (DIALER_UPLOAD_v1) ----
+  const fileStatus = h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.3rem' } }, '');
+  const fileInput = h('input', { type: 'file', accept: '.xlsx,.xls,.xlsm,.csv', style: { display: 'none' } });
+  fileInput.onchange = async () => {
+    const f = fileInput.files && fileInput.files[0];
+    if (!f) return;
+    if (f.size > MAX_BYTES) { toast('File too large — max 5 MB (yours is ' + (f.size / 1048576).toFixed(1) + ' MB)', 'err'); fileInput.value = ''; fileStatus.textContent = '⚠ ' + f.name + ' is over the 5 MB limit'; return; }
+    fileStatus.textContent = '⏳ Reading ' + f.name + '…';
+    try {
+      const rows = await parseSpreadsheet(f);
+      const mapped = rows.map(_dialerRowToLead).filter(x => x && x.phone);
+      // Recover a header row that was actually data (file had no header).
+      const hdrKeys = rows.length ? Object.keys(rows[0]) : [];
+      if (hdrKeys.some(k => String(k).replace(/\D/g, '').length >= 7)) {
+        const rec = _dialerRowToLead(Object.fromEntries(hdrKeys.map(k => [k, k])));
+        if (rec && rec.phone) mapped.unshift(rec);
+      }
+      if (!mapped.length) { fileStatus.textContent = '⚠ No phone numbers found in ' + f.name; toast('No valid leads found in file', 'err'); fileInput.value = ''; return; }
+      const linesOut = mapped.map(m => (m.name ? m.name + ', ' : '') + m.phone);
+      ta.value = (ta.value.trim() ? ta.value.trim() + '\n' : '') + linesOut.join('\n');
+      fileStatus.textContent = '✓ Loaded ' + mapped.length + ' leads from ' + f.name + ' — review below, then Add & assign';
+      toast('Loaded ' + mapped.length + ' leads from file', 'ok');
+    } catch (e) { fileStatus.textContent = '⚠ Could not read file: ' + e.message; toast('Could not read file: ' + e.message, 'err'); }
+    fileInput.value = '';
+  };
+  const uploadBtn = h('button', { class: 'btn', type: 'button', onclick: () => fileInput.click() }, '📄 Upload Excel / CSV');
+
   const card = h('div', { class: 'card', style: { padding: '1rem' } },
     h('div', { style: { fontWeight: 600, marginBottom: '.5rem' } }, '➕ Add leads to "' + camp.name + '"'),
-    h('div', { class: 'muted', style: { fontSize: '.8rem', marginBottom: '.3rem' } }, 'Paste leads (Name, Phone — one per line):'),
+    h('div', { style: { marginBottom: '.7rem', padding: '.7rem', background: '#f8fafc', border: '1px dashed #cbd5e1', borderRadius: '8px' } },
+      uploadBtn, fileInput,
+      h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '.35rem' } }, 'Accepts .xlsx, .xls, .csv — max 5 MB. Columns: a Name column + a Phone/Mobile/Number column. Headers optional (first two columns are used if unlabeled).'),
+      fileStatus),
+    h('div', { class: 'muted', style: { fontSize: '.8rem', margin: '.4rem 0 .3rem' } }, 'Or paste leads (Name, Phone — one per line):'),
     ta,
     h('div', { class: 'muted', style: { fontSize: '.8rem', margin: '.6rem 0 .3rem' } }, 'Assign to agents (round-robin split):'),
     sel,

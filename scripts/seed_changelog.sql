@@ -1084,3 +1084,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'Opening a lead in the Inbox view now shows the same rich detail as the Modern view — AI next-best-action, AI summary, AI score, quick edit (status / follow-up / owner / remark), recent activity timeline, calling/dialing history, last WhatsApp, last call with recording, and dial count.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- DIALER_UPLOAD_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('DIALER_UPLOAD_v1', 'Auto Dialer: Excel / CSV lead upload',
+ 'You can now upload an Excel (.xlsx/.xls) or CSV file of leads into an Auto Dialer campaign — alongside the existing copy-paste box. Name + Phone columns are auto-detected (headers optional). Upload limit 5 MB / 10,000 leads per file.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

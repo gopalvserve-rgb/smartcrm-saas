@@ -99,6 +99,7 @@ async function api_dialer_addLeads(token, payload) {
     .map(l => ({ name: String(l.name || '').slice(0, 160), phone: _norm(l.phone) }))
     .filter(l => l.phone.length >= 7);
   if (!leads.length) throw new Error('No valid leads (need at least a phone number)');
+  if (leads.length > 10000) throw new Error('Too many leads in one upload (max 10,000). Split the file.');
   // try to link to an existing lead by phone (last 10)
   let added = 0;
   for (let i = 0; i < leads.length; i++) {
