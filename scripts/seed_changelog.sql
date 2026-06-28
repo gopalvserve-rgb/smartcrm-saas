@@ -1076,3 +1076,11 @@ ON CONFLICT DO NOTHING;
 INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
 ('POWER_DIALER_v1', 'Auto Dialer (Phase 1)', 'New Auto Dialer under Calls & Dialer. Admins create a campaign, paste/assign leads to agents (round-robin); agents tap Start and the system serves leads one-by-one, auto-advancing to the next after the call outcome + remark is saved.', 'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- INBOX_RICH_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('INBOX_RICH_v1', 'Inbox view: full lead detail',
+ 'Opening a lead in the Inbox view now shows the same rich detail as the Modern view — AI next-best-action, AI summary, AI score, quick edit (status / follow-up / owner / remark), recent activity timeline, calling/dialing history, last WhatsApp, last call with recording, and dial count.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

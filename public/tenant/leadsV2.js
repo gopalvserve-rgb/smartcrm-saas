@@ -2124,6 +2124,15 @@ tr:hover .lv2-actions { opacity: 1; }
       } catch (_) {}
     })();
 
+    _renderLeadDetailInto(body, l);
+  }
+
+  function _refreshLeadDetail(l) {
+    if (document.getElementById('lv2-slideover')) { openSlideOver(l); return; }
+    if (document.getElementById('lv2-inbox-detail')) { try { rerenderInboxRows(); } catch (_) {} renderInboxDetail(l); return; }
+  }
+  // POINT1_INBOX_RICH_v1 — shared rich lead-detail body (Modern slide-over + Inbox pane).
+  function _renderLeadDetailInto(body, l) {
     // ---- Synchronous (immediate) content ----
     // Quick actions — v1.8: Call / WA Web / WA API / Quotation / Note / Open
     body.appendChild(h('div', { class: 'lv2-so-quick', style: { gridTemplateColumns: 'repeat(3, 1fr)' } },
@@ -2211,7 +2220,7 @@ tr:hover .lv2-actions { opacity: 1; }
               if (e.key !== 'Enter') return;
               const txt = String(e.target.value || '').trim();
               if (!txt) return;
-              try { await api('api_leads_addRemark', l.id, { remark: txt }); e.target.value = ''; l.notes = (txt + ' — ' + (l.notes || '')).slice(0, 5000); toast('Note added', 'ok'); rerenderRows(); openSlideOver(l); } catch (err) { toast(err.message, 'err'); }
+              try { await api('api_leads_addRemark', l.id, { remark: txt }); e.target.value = ''; l.notes = (txt + ' — ' + (l.notes || '')).slice(0, 5000); toast('Note added', 'ok'); rerenderRows(); _refreshLeadDetail(l); } catch (err) { toast(err.message, 'err'); }
             } }),
           h('button', {
             style: { padding: '4px 10px', background: '#6366f1', color: 'white', border: 'none', borderRadius: '5px', fontSize: '11px', cursor: 'pointer', fontWeight: '600' },
@@ -2219,7 +2228,7 @@ tr:hover .lv2-actions { opacity: 1; }
               const inp = document.getElementById('lv2-so-note-' + l.id);
               const txt = String(inp && inp.value || '').trim();
               if (!txt) return;
-              try { await api('api_leads_addRemark', l.id, { remark: txt }); inp.value = ''; toast('Note added', 'ok'); openSlideOver(l); rerenderRows(); } catch (err) { toast(err.message, 'err'); }
+              try { await api('api_leads_addRemark', l.id, { remark: txt }); inp.value = ''; toast('Note added', 'ok'); _refreshLeadDetail(l); rerenderRows(); } catch (err) { toast(err.message, 'err'); }
             }
           }, 'Save')))));
 
@@ -2708,41 +2717,10 @@ tr:hover .lv2-actions { opacity: 1; }
         h('div', { style: { fontSize: '12px', color: '#64748b', marginTop: '2px' } }, (l.phone || '') + (l.email ? ' · ' + l.email : '') + ' · ' + (l.source || ''))),
       h('button', { style: { padding: '8px 14px', background: '#6366f1', color: 'white', border: 'none', borderRadius: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }, onclick: () => doViewFull(l) }, '✏ Open')));
 
-    const body = h('div', { style: { flex: 1, overflowY: 'auto', padding: '20px 22px', display: 'grid', gridTemplateColumns: '1fr 280px', gap: '16px' } });
-    const main = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '14px' } });
-
-    main.appendChild(h('div', { class: 'lv2-so-card ai' },
-      h('h3', null, '✨ AI Next Best Action'),
-      h('div', { class: 'txt' }, aiHint(l)),
-      h('button', { style: { marginTop: '10px', padding: '6px 12px', background: 'white', border: '1px solid #fcd34d', borderRadius: '6px', fontSize: '11px', fontWeight: '600', color: '#92400e', cursor: 'pointer' }, onclick: () => doWaApi(l) }, '✨ Open in chat →')));
-
-    main.appendChild(h('div', { class: 'lv2-so-card' },
-      h('h3', null, '⚡ Quick Actions'),
-      h('div', { class: 'lv2-so-quick' },
-        h('button', { onclick: () => doCall(l) }, h('span', { class: 'ic' }, '📞'), 'Call'),
-        h('button', { onclick: () => doWaApi(l) }, h('span', { class: 'ic' }, '💬'), 'WA'),
-        h('button', { onclick: () => doAddNote(l) }, h('span', { class: 'ic' }, '📝'), 'Note'),
-        h('button', { onclick: () => doViewFull(l) }, h('span', { class: 'ic' }, '👁'), 'Open'))));
-
-    if (l.notes) {
-      main.appendChild(h('div', { class: 'lv2-so-card' },
-        h('h3', null, '📝 Notes / Remarks'),
-        h('div', { style: { fontSize: '12px', whiteSpace: 'pre-wrap', color: '#475569', lineHeight: '1.5' } }, String(l.notes).slice(0, 1200))));
-    }
-
-    const side = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '12px' } },
-      h('div', { class: 'lv2-so-card' },
-        h('h3', null, '📍 Details'),
-        h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'Owner'), h('span', { class: 'v' }, l.assigned_name || '—')),
-        h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'Status'), h('span', { class: 'v' }, l.status_name || '—')),
-        h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'Source'), h('span', { class: 'v' }, l.source || '—')),
-        h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'Phone'), h('span', { class: 'v' }, l.phone || '—')),
-        h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'Email'), h('span', { class: 'v', style: { fontSize: '11px' } }, l.email || '—')),
-        h('div', { class: 'lv2-so-row' }, h('span', { class: 'k' }, 'Follow-up'), h('span', { class: 'v' }, l.next_followup_at ? new Date(l.next_followup_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'))));
-
-    body.appendChild(main);
-    body.appendChild(side);
+    const body = h('div', { class: 'lv2-so-body', id: 'lv2-so-body', style: { flex: '1', overflowY: 'auto', padding: '16px 22px' } });
     host.appendChild(body);
+    _renderLeadDetailInto(body, l);
+    (async () => { try { const r = await api('api_leads_dialCount', l.id).catch(() => null); l._dialCount = (r && Number(r.count)) || 0; l._lastDialedAt = (r && r.last_dialed_at) || null; } catch (_) {} })();
   }
 
   /* ====================================================================
