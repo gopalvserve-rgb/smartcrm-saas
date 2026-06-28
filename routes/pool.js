@@ -30,6 +30,10 @@ function _csvIds(raw) {
 }
 async function _poolStatusIds() { return _csvIds(await db.getConfig('POOL_STATUS_IDS', '')); }
 async function _poolEnabled()   { return String(await db.getConfig('POOL_ENABLED', '')) === '1'; }
+// POOL_PULL_DATERANGE_v1 — optional created-date window + created-date order.
+async function _poolFromDate() { return String(await db.getConfig('POOL_PULL_FROM_DATE', '') || '').trim(); }
+async function _poolToDate()   { return String(await db.getConfig('POOL_PULL_TO_DATE', '') || '').trim(); }
+async function _poolOrder()    { return (String(await db.getConfig('POOL_PULL_ORDER', 'newest')).toLowerCase() === 'oldest') ? 'oldest' : 'newest'; }
 async function _pullRules() {
   const raw = await db.getConfig('POOL_PULL_RULES', '');
   if (!raw || String(raw).trim() === '') return [];
@@ -80,7 +84,10 @@ async function api_pool_config_get(token) {
   return {
     enabled: await _poolEnabled(),
     status_ids: await _poolStatusIds(),
-    rules: await _pullRules()
+    rules: await _pullRules(),
+    from_date: await _poolFromDate(),
+    to_date: await _poolToDate(),
+    order: await _poolOrder()
   };
 }
 
@@ -101,7 +108,11 @@ async function api_pool_config_save(token, payload) {
       .filter(r => Number.isFinite(r.user_id) && r.user_id > 0 && r.count > 0);
     await db.setConfig('POOL_PULL_RULES', JSON.stringify(clean));
   }
-  return { ok: true, enabled: await _poolEnabled(), status_ids: await _poolStatusIds(), rules: await _pullRules() };
+  // POOL_PULL_DATERANGE_v1
+  if (p.from_date !== undefined) await db.setConfig('POOL_PULL_FROM_DATE', String(p.from_date || '').trim());
+  if (p.to_date !== undefined)   await db.setConfig('POOL_PULL_TO_DATE', String(p.to_date || '').trim());
+  if (p.order !== undefined)     await db.setConfig('POOL_PULL_ORDER', String(p.order).toLowerCase() === 'oldest' ? 'oldest' : 'newest');
+  return { ok: true, enabled: await _poolEnabled(), status_ids: await _poolStatusIds(), rules: await _pullRules(), from_date: await _poolFromDate(), to_date: await _poolToDate(), order: await _poolOrder() };
 }
 
 // ── user view: available COUNT + date-wise breakdown (no lead list) ──
@@ -152,16 +163,25 @@ async function api_pool_pull(token) {
   const count = await _pullCountFor(me, rules);
   if (count <= 0) return { ok: true, pulled_count: 0, lead_ids: [], reason: 'Your pull count is 0 — ask your admin.' };
 
-  // Newest-first batch of leads I don't already own/co-own.
+  // POOL_PULL_DATERANGE_v1 — batch ordered by created date (admin choice),
+  // restricted to the optional created-date window, that I don't own/co-own.
+  const _ord = (await _poolOrder()) === 'newest' ? 'DESC' : 'ASC';
+  const _from = await _poolFromDate();
+  const _to = await _poolToDate();
+  const _params = [poolIds, Number(me.id)];
+  let _dateSql = '';
+  if (_from) { _params.push(_from); _dateSql += ` AND l.created_at >= $${_params.length}::date`; }
+  if (_to)   { _params.push(_to);   _dateSql += ` AND l.created_at < ($${_params.length}::date + INTERVAL '1 day')`; }
+  _params.push(Number(count));
   const sel = await db.query(
     `SELECT l.id
        FROM leads l
       WHERE l.status_id = ANY($1::int[]) AND COALESCE(l.is_hidden,0) = 0
         AND (l.assigned_to IS NULL OR l.assigned_to <> $2)
-        AND NOT EXISTS (SELECT 1 FROM lead_co_owners co WHERE co.lead_id = l.id AND co.user_id = $2)
-      ORDER BY COALESCE(l.last_status_change_at, l.updated_at, l.created_at) DESC, l.id DESC
-      LIMIT $3`,
-    [poolIds, Number(me.id), Number(count)]
+        AND NOT EXISTS (SELECT 1 FROM lead_co_owners co WHERE co.lead_id = l.id AND co.user_id = $2)` + _dateSql + `
+      ORDER BY l.created_at ${_ord}, l.id ${_ord}
+      LIMIT $${_params.length}`,
+    _params
   );
   // POOL_PULL_FRESH_v1 — a pull now CLAIMS the lead as a fresh task for the
   // puller: flip to the dedicated "Pulled" status, assign it to me, stamp a

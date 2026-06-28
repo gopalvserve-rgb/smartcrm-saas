@@ -43,6 +43,7 @@ const CONFIG_KEYS = [
   'SIDEBAR_NAV_GROUP_ORDER',
   // Pull Leads + WhatsApp shortcut config
   'LEAD_PULL_ENABLED', 'LEAD_PULL_INITIAL_COUNT', 'LEAD_PULL_SUBSEQUENT_COUNT', 'LEAD_PULL_ENABLED_ROLES', 'LEAD_PULL_ORDER',
+  'LEAD_PULL_FROM_DATE', 'LEAD_PULL_TO_DATE', /* LEAD_PULL_DATERANGE_v1 */
   'COMPANY_WHATSAPP', 'COMPANY_PHONE',
   // Call \u2192 lead auto-conversion (mobile-app callerId capture)
   // '1' = create a lead from each call when no existing match; '0' = skip.

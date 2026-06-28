@@ -27167,12 +27167,20 @@ async function adminPullLeads() {
     h('div', { class: 'muted small' }, 'Admins can never use Pull. List comes from Settings → 📛 Roles.')));
 
   const order = h('select', { id: 'lp-order' },
-    h('option', { value: 'oldest' }, 'Oldest first (FIFO)'),
-    h('option', { value: 'newest' }, 'Newest first (LIFO)')
+    h('option', { value: 'oldest' }, 'Oldest created first (ascending date)'),
+    h('option', { value: 'newest' }, 'Newest created first (descending date)')
   );
   order.value = String(cfg.LEAD_PULL_ORDER || 'oldest');
-  form.appendChild(h('label', {}, 'Pull order: ', order,
-    h('div', { class: 'muted small' }, 'Oldest-first stops fresh leads from going stale.')));
+  form.appendChild(h('label', {}, 'Pull order (by created date): ', order,
+    h('div', { class: 'muted small' }, 'Ascending = oldest leads first (FIFO, stops fresh leads going stale). Descending = newest leads first (LIFO).')));
+
+  // LEAD_PULL_DATERANGE_v1 — restrict which leads are pullable by created date.
+  const fromDate = h('input', { type: 'date', id: 'lp-from', value: String(cfg.from_date || '') });
+  form.appendChild(h('label', {}, 'Created from (optional): ', fromDate,
+    h('div', { class: 'muted small' }, 'Only leads created ON/AFTER this date can be pulled. Leave blank for no lower limit.')));
+  const toDate = h('input', { type: 'date', id: 'lp-to', value: String(cfg.to_date || '') });
+  form.appendChild(h('label', {}, 'Created to (optional): ', toDate,
+    h('div', { class: 'muted small' }, 'Only leads created ON/BEFORE this date can be pulled. Leave blank for no upper limit.')));
 
   root.appendChild(form);
 
@@ -27184,7 +27192,9 @@ async function adminPullLeads() {
       LEAD_PULL_INITIAL_COUNT:     String(Math.max(0, parseInt(initial.value, 10) || 0)),
       LEAD_PULL_SUBSEQUENT_COUNT:  String(Math.max(0, parseInt(subseq.value, 10) || 0)),
       LEAD_PULL_ENABLED_ROLES:     checkedRoles.join(','),
-      LEAD_PULL_ORDER:             order.value === 'newest' ? 'newest' : 'oldest'
+      LEAD_PULL_ORDER:             order.value === 'newest' ? 'newest' : 'oldest',
+      LEAD_PULL_FROM_DATE:         fromDate.value || '',
+      LEAD_PULL_TO_DATE:           toDate.value || ''
     };
     try { await api('api_admin_setConfig', patch); toast('Lead Pull settings saved', 'ok'); }
     catch (e) { toast(e.message, 'err'); }
@@ -50964,7 +50974,10 @@ VIEWS.leadpool = async (view) => {
         if (chk && chk.checked) rules.push({ user_id: Number(chk.value), count: Math.max(1, Number(cnt.value) || 1) });
       });
       try {
-        const res = await api('api_pool_config_save', { enabled: enabled, status_ids: ids, rules: rules });
+        const fromV = (body.querySelector('#pool-from') || {}).value || '';
+        const toV = (body.querySelector('#pool-to') || {}).value || '';
+        const ordV = (body.querySelector('#pool-order') || {}).value || 'newest';
+        const res = await api('api_pool_config_save', { enabled: enabled, status_ids: ids, rules: rules, from_date: fromV, to_date: toV, order: ordV });
         markSaved();
         CRM.brand = Object.assign(CRM.brand || {}, { POOL_ENABLED: enabled ? '1' : '0', POOL_PULL_RULES: JSON.stringify((res && res.rules) || rules) });
         await reloadPool();
@@ -50998,12 +51011,26 @@ VIEWS.leadpool = async (view) => {
             + '</div>';
         }).join('')
         : '<span style="font-size:12px;color:#94a3b8">No non-admin users found.</span>')
-      + '</div>';
+      + '</div>'
+      + '<div style="font-size:12px;color:#64748b;margin:16px 0 6px;font-weight:600">3. Created-date window &amp; pull order (optional)</div>'
+      + '<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end">'
+      + '<label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:#475569">Created from'
+      +   '<input type="date" id="pool-from" value="' + esc(cfg.from_date || '') + '" style="padding:5px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px"/></label>'
+      + '<label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:#475569">Created to'
+      +   '<input type="date" id="pool-to" value="' + esc(cfg.to_date || '') + '" style="padding:5px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px"/></label>'
+      + '<label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:#475569">Pull order (by created date)'
+      +   '<select id="pool-order" style="padding:5px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px">'
+      +     '<option value="newest"' + (((cfg.order || 'newest')) === 'newest' ? ' selected' : '') + '>Newest created first (descending)</option>'
+      +     '<option value="oldest"' + (((cfg.order || 'newest')) === 'oldest' ? ' selected' : '') + '>Oldest created first (ascending)</option>'
+      +   '</select></label>'
+      + '</div>'
+      + '<div style="font-size:11px;color:#94a3b8;margin-top:6px">Leave dates blank for no limit. Order decides which leads are handed out first.</div>';
 
     body.querySelector('#pool-enabled').addEventListener('change', save);
     body.querySelectorAll('.pool-st').forEach(c => c.addEventListener('change', save));
     body.querySelectorAll('.pool-usr').forEach(c => c.addEventListener('change', save));
     body.querySelectorAll('.pool-usr-count').forEach(c => c.addEventListener('change', save));
+    ['#pool-from', '#pool-to', '#pool-order'].forEach(sel => { const el = body.querySelector(sel); if (el) el.addEventListener('change', save); });
     const saveBtn = document.createElement('button');
     saveBtn.textContent = '💾 Save settings';
     saveBtn.style.cssText = 'margin-top:14px;background:#4f46e5;color:#fff;border:0;padding:8px 18px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600';

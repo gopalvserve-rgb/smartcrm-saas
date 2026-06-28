@@ -1156,3 +1156,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'When a rep pulls a lead from the Lead Pool it is now claimed to them as a fresh task: it moves to a dedicated "Pulled" status, jumps to the top of the recent list with the pull date/time (shown with a recycle mark), and lands in today''s follow-ups. The original created date is preserved for reporting.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- LEAD_PULL_DATERANGE_v1 (2026-06-28)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('LEAD_PULL_DATERANGE', 'Lead Pull/Pool: date range + created-date order',
+ 'Both Lead Pull Settings (self-claim) and the Lead Pool now let admins set a Created From/To date window so only leads created in that range can be pulled, plus a clear pull order by created date: Oldest first (ascending) or Newest first (descending).',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

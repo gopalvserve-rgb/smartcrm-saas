@@ -2505,7 +2505,7 @@ async function api_whatsapp_send(token, payload) {
 
 
 // ===== Pull Leads — non-admin self-claim =====
-const PULL_DEFAULTS = { LEAD_PULL_ENABLED: '1', LEAD_PULL_INITIAL_COUNT: '20', LEAD_PULL_SUBSEQUENT_COUNT: '5', LEAD_PULL_ENABLED_ROLES: 'sales,team_leader,manager', LEAD_PULL_ORDER: 'oldest' };
+const PULL_DEFAULTS = { LEAD_PULL_ENABLED: '1', LEAD_PULL_INITIAL_COUNT: '20', LEAD_PULL_SUBSEQUENT_COUNT: '5', LEAD_PULL_ENABLED_ROLES: 'sales,team_leader,manager', LEAD_PULL_ORDER: 'oldest', LEAD_PULL_FROM_DATE: '', LEAD_PULL_TO_DATE: '' };
 function _tenantPool() { try { const s = db.tenantStorage && db.tenantStorage.getStore(); if (s && s.pool) return s.pool; } catch(_){} return db.pool; }
 async function _pullCfg() {
   const out = {};
@@ -2516,6 +2516,15 @@ async function _pullCfg() {
   out.LEAD_PULL_ORDER            = (String(out.LEAD_PULL_ORDER).toLowerCase() === 'newest') ? 'newest' : 'oldest';
   out.LEAD_PULL_ENABLED          = String(out.LEAD_PULL_ENABLED) === '1';
   return out;
+}
+/* LEAD_PULL_DATERANGE_v1 — append a created_at BETWEEN filter (from/to are
+ * 'YYYY-MM-DD' or empty). Mutates params, returns the SQL fragment. 'to' is
+ * inclusive (created_at < to + 1 day). */
+function _pullDateClause(cfg, params) {
+  let sql = '';
+  if (cfg && cfg.LEAD_PULL_FROM_DATE) { params.push(cfg.LEAD_PULL_FROM_DATE); sql += ` AND l.created_at >= $${params.length}::date`; }
+  if (cfg && cfg.LEAD_PULL_TO_DATE)   { params.push(cfg.LEAD_PULL_TO_DATE);   sql += ` AND l.created_at < ($${params.length}::date + INTERVAL '1 day')`; }
+  return sql;
 }
 async function _assignedToday(userId) { const r = await db.query(`SELECT COUNT(*)::int AS n FROM leads WHERE assigned_to=$1 AND updated_at >= date_trunc('day', NOW())`, [Number(userId)]); return Number(r.rows[0]?.n || 0); }
 async function _hasPulled(userId) { const r = await db.query(`SELECT 1 FROM lead_pull_log WHERE user_id=$1 LIMIT 1`, [Number(userId)]); return r.rowCount > 0; }
@@ -2601,6 +2610,8 @@ async function api_leads_pullInfo(token) {
   if (inCampaigns) {
     const cids = userCampaigns.map(c => c.id);
     /* PULL_NODUP_v1 — matches the pull SQL, no is_duplicate gate. */
+    const _pc = [Number(me.id), cids];
+    const _dc = _pullDateClause(cfg, _pc);
     const cand = await db.query(
       `SELECT COUNT(*)::int AS n
          FROM leads l
@@ -2610,19 +2621,21 @@ async function api_leads_pullInfo(token) {
           AND (l.assigned_to IS NULL OR l.assigned_to = $1)
           AND COALESCE(s.is_final, 0) = 0
           AND COALESCE(l.is_hidden, 0) = 0
-          AND l.campaign_id = ANY($2::int[])`,
-      [Number(me.id), cids]
+          AND l.campaign_id = ANY($2::int[])` + _dc,
+      _pc
     );
     availableCount = Number(cand.rows[0]?.n || 0);
   } else {
+    const _pc = [Number(me.id)];
+    const _dc = _pullDateClause(cfg, _pc);
     const cand = await db.query(
       `SELECT COUNT(*)::int AS n
          FROM leads l
          LEFT JOIN lead_pull_log p ON p.lead_id = l.id AND p.user_id = $1
         WHERE p.id IS NULL
           AND (l.assigned_to IS NULL OR l.assigned_to = $1)
-          AND COALESCE(l.is_hidden, 0) = 0`,
-      [Number(me.id)]
+          AND COALESCE(l.is_hidden, 0) = 0` + _dc,
+      _pc
     );
     availableCount = Number(cand.rows[0]?.n || 0);
   }
@@ -2654,6 +2667,8 @@ async function api_leads_pullInfo(token) {
     daily_cap: dailyCap || null,
     daily_remaining: dailyRemaining,
     order: cfg.LEAD_PULL_ORDER,
+    from_date: cfg.LEAD_PULL_FROM_DATE || '',
+    to_date: cfg.LEAD_PULL_TO_DATE || '',
     role: me.role,
     in_campaigns: inCampaigns,
     user_campaigns: userCampaigns.map(c => ({ id: c.id, name: c.name })),
@@ -2710,11 +2725,11 @@ async function api_leads_pull(token) {
     let sel;
     if (inCampaigns) {
       const cids = userCampaigns.map(c => c.id);
+      const _pp = [Number(me.id), cids];
+      const _dc = _pullDateClause(cfg, _pp);
+      _pp.push(Number(target));
       sel = await client.query(
-        /* PULL_NODUP_v1 — duplicate gate dropped per user ask.
-           Duplicates can now be pulled. Pull is restricted only by:
-           not-already-pulled, unassigned-or-mine, not-final, not-hidden,
-           in-my-campaigns. */
+        /* PULL_NODUP_v1 + LEAD_PULL_DATERANGE_v1 — optional created_at window. */
         `SELECT l.id, l.assigned_to
            FROM leads l
            LEFT JOIN lead_pull_log p ON p.lead_id = l.id AND p.user_id = $1
@@ -2723,14 +2738,17 @@ async function api_leads_pull(token) {
             AND (l.assigned_to IS NULL OR l.assigned_to = $1)
             AND COALESCE(s.is_final, 0) = 0
             AND COALESCE(l.is_hidden, 0) = 0
-            AND l.campaign_id = ANY($2::int[])
+            AND l.campaign_id = ANY($2::int[])` + _dc + `
           ORDER BY l.created_at ${order}, l.id ${order}
-          LIMIT $3 FOR UPDATE OF l SKIP LOCKED`,
-        [Number(me.id), cids, Number(target)]
+          LIMIT $` + _pp.length + ` FOR UPDATE OF l SKIP LOCKED`,
+        _pp
       );
     } else {
+      const _pp = [Number(me.id)];
+      const _dc = _pullDateClause(cfg, _pp);
+      _pp.push(Number(target));
       sel = await client.query(
-        /* PULL_NODUP_v1 — duplicate gate dropped from legacy path too. */
+        /* PULL_NODUP_v1 + LEAD_PULL_DATERANGE_v1 — optional created_at window. */
         `SELECT l.id, l.assigned_to
            FROM leads l
            LEFT JOIN lead_pull_log p ON p.lead_id = l.id AND p.user_id = $1
@@ -2738,10 +2756,10 @@ async function api_leads_pull(token) {
           WHERE p.id IS NULL
             AND (l.assigned_to IS NULL OR l.assigned_to = $1)
             AND COALESCE(s.is_final, 0) = 0
-            AND COALESCE(l.is_hidden, 0) = 0
+            AND COALESCE(l.is_hidden, 0) = 0` + _dc + `
           ORDER BY l.created_at ${order}, l.id ${order}
-          LIMIT $2 FOR UPDATE OF l SKIP LOCKED`,
-        [Number(me.id), Number(target)]
+          LIMIT $` + _pp.length + ` FOR UPDATE OF l SKIP LOCKED`,
+        _pp
       );
     }
     for (const row of sel.rows) {
