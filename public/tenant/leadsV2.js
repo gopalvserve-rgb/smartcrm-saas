@@ -1355,9 +1355,21 @@ tr:hover .lv2-actions { opacity: 1; }
   /* ====================================================================
    * MODERN (A3) RENDERER — full table with AI columns + slide-over panel
    * ==================================================================*/
+  // TOPBAR_NEW_COUNT_v1 — set the topbar ✨ New chip to the count of New-status
+  // leads in the current filtered set (respects Modern date + owner filters).
+  function _updateTopbarNewCount() {
+    try {
+      const list = (typeof filtered === 'function') ? filtered() : (S.leads || []);
+      const n = list.filter(l => /^new$/i.test(String(l.status_name || '').trim())).length;
+      if (window.CRM) CRM._leadsNewCount = n;
+      document.querySelectorAll('.nav-count[data-count-key="new_today"]').forEach(el => { el.textContent = String(n); el.hidden = false; });
+    } catch (_) {}
+  }
+
   async function renderModern(view) {
     injectStyles();
     if (!S.leads.length) await load();
+    _updateTopbarNewCount();
 
     // v1.6 — clear view to prevent duplicate-render stacking when called from
     // onFilterChange (which previously appended ANOTHER full modern view
@@ -2605,6 +2617,7 @@ tr:hover .lv2-actions { opacity: 1; }
   async function renderInbox(view) {
     injectStyles();
     if (!S.leads.length) await load();
+    _updateTopbarNewCount();
 
     // v1.6 — clear view to prevent duplicate-render stacking
     view.innerHTML = '';
