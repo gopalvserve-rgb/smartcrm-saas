@@ -982,3 +982,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The Modern leads view now shows the status-wise lead counts (a compact single-row strip) like the Classic view.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- LEADS_STATUS_COUNT_v2 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('LEADS_STATUS_COUNT_v2', 'Status-wise counts always visible',
+ 'The status-wise lead counts now stay visible even when the leads header is collapsed (Classic) and are shown by default in the Modern view.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

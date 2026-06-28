@@ -84,7 +84,7 @@
     // refresh ALWAYS starts collapsed (only stays open within the same
     // tab session), matching user expectation that headers auto-close
     // on refresh / new page.
-    chipsCollapsed: sessionStorage.getItem('crm.lv2.chipsCollapsed') !== '0',
+    chipsCollapsed: sessionStorage.getItem('crm.lv2.chipsCollapsed') === '1', // LEADS_STATUS_COUNT_v2 — show counts by default
     filtersCollapsed: sessionStorage.getItem('crm.lv2.filtersCollapsed') !== '0',
     visibleColumns: (function(){ try { return JSON.parse(localStorage.getItem('crm.lv2.visibleColumns')) || ['phone','source','status','owner','score','aistep','activity','created']; } catch(_) { return ['phone','source','status','owner','score','aistep','activity','created']; } })(),
     visibleFilters: (function(){ try { return JSON.parse(localStorage.getItem('crm.lv2.visibleFilters')) || ['status','source','owner','score','tag','campaign','followup','qualified']; } catch(_) { return ['status','source','owner','score','tag','campaign','followup','qualified']; } })(),
