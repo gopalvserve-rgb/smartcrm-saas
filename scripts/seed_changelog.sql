@@ -1054,3 +1054,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'Sub-menu items (Leads, Pipeline, Kanban, etc.) now use clean white-and-blue icons matching the main menu, instead of plain whitened emojis.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- WBCHATV2_HDRFIX_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('WBCHATV2_HDRFIX_v1', 'WhatsApp inbox: header refresh button fixed',
+ 'The refresh and menu buttons in the WhatsApp inbox header were stacked/misaligned; they now sit neatly side by side on the right.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

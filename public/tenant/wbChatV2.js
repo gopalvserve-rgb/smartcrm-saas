@@ -494,7 +494,7 @@
           h('div', null,
             h('div', { class: 'b-name' }, name),
             h('div', { class: 'b-num' }, phone))),
-        h('div', null,
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 } },
           h('span', {
             class: 'ico', id: 'wbv2-refresh-btn', title: 'Refresh conversations',
             onclick: async (ev) => {
