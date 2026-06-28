@@ -22617,19 +22617,43 @@ VIEWS.reports = async (view) => {
     // User can pick any active CF (e.g. 'page') and see a matrix of
     // CF value × status with counts. Renders only when at least one CF exists.
     h('div', { class: 'card card-wide' },
-      h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '.5rem', flexWrap: 'wrap', marginBottom: '.5rem' } },
-        h('h3', { style: { margin: 0 } }, 'By custom field × status'),
-        h('select', { id: 'rep-cf-pick', style: { minWidth: '180px' }, onchange: () => _loadReportsCfMatrix() },
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', flexWrap: 'wrap', marginBottom: '.5rem' } },
+        h('h3', { style: { margin: '0 .4rem 0 0' } }, '🧮 Custom-field matrix'),
+        h('span', { class: 'muted', style: { fontSize: '.78rem' } }, 'Rows:'),
+        h('select', { id: 'rep-cf-pick', style: { minWidth: '150px' }, onchange: () => _loadReportsCfMatrix() },
           ...(function(){
-            const cfs = ((CRM && CRM.cache && CRM.cache.customFields) || [])
-              .filter(c => Number(c.is_active) !== 0 && c.key);
+            const cfs = ((CRM && CRM.cache && CRM.cache.customFields) || []).filter(c => Number(c.is_active) !== 0 && c.key);
             const opts = [h('option', { value: '' }, cfs.length ? 'Pick a custom field…' : 'No custom fields defined')];
             cfs.forEach(c => opts.push(h('option', { value: c.key }, (c.label || c.key))));
             return opts;
           })()
-        )
+        ),
+        h('span', { class: 'muted', style: { fontSize: '.78rem' } }, 'Columns:'),
+        h('select', { id: 'rep-cf-col', style: { minWidth: '150px' }, onchange: () => _loadReportsCfMatrix() },
+          ...(function(){
+            const cfs = ((CRM && CRM.cache && CRM.cache.customFields) || []).filter(c => Number(c.is_active) !== 0 && c.key);
+            const opts = [
+              h('option', { value: 'status' }, 'Status'),
+              h('option', { value: 'source' }, 'Source'),
+              h('option', { value: 'assigned_to' }, 'Owner'),
+              h('option', { value: 'qualified' }, 'Qualified flag'),
+              h('option', { value: 'created_month' }, 'Created month')
+            ];
+            cfs.forEach(c => opts.push(h('option', { value: 'extra:' + c.key }, 'Custom · ' + (c.label || c.key))));
+            return opts;
+          })()
+        ),
+        h('span', { class: 'muted', style: { fontSize: '.78rem' } }, 'Measure:'),
+        h('select', { id: 'rep-cf-measure', style: { minWidth: '130px' }, onchange: () => _loadReportsCfMatrix() },
+          h('option', { value: 'count' }, 'Lead count'),
+          h('option', { value: 'qualified_count' }, 'Qualified'),
+          h('option', { value: 'won_count' }, 'Won'),
+          h('option', { value: 'hot_count' }, 'Hot'),
+          h('option', { value: 'value_sum' }, '₹ Value sum')
+        ),
+        h('button', { class: 'btn sm', style: { marginLeft: 'auto' }, onclick: () => _exportCfMatrixCsv() }, '⬇ CSV')
       ),
-      h('div', { id: 'rep-cf-matrix', class: 'muted', style: { fontSize: '.85rem' } }, 'Pick a custom field above to see its breakdown by status.')
+      h('div', { id: 'rep-cf-matrix', class: 'muted', style: { fontSize: '.85rem' } }, 'Pick a custom field (rows) above to see its matrix.')
     )
   ));
   await loadReports();
@@ -22639,80 +22663,99 @@ VIEWS.reports = async (view) => {
 // Reuses api_reports_pivot with two row_dims so each bucket is a (cf, status)
 // pair. Pivoted client-side into a matrix table for readability.
 async function _loadReportsCfMatrix() {
-  const cfKey = document.getElementById('rep-cf-pick')?.value || '';
+  // CF_MATRIX_v2 — generic matrix: any custom field (rows) × any dimension
+  // (columns) × any additive measure. Backed by api_reports_pivot.
+  const cfKey   = document.getElementById('rep-cf-pick')?.value || '';
+  const colDim  = document.getElementById('rep-cf-col')?.value || 'status';
+  const measure = document.getElementById('rep-cf-measure')?.value || 'count';
   const host = document.getElementById('rep-cf-matrix');
   if (!host) return;
   host.innerHTML = '';
-  if (!cfKey) {
-    host.appendChild(h('div', { class: 'muted', style: { fontSize: '.85rem' } }, 'Pick a custom field above to see its breakdown by status.'));
-    return;
-  }
+  if (!cfKey) { host.appendChild(h('div', { class: 'muted', style: { fontSize: '.85rem' } }, 'Pick a custom field (rows) above to see its matrix.')); return; }
   host.appendChild(h('div', { class: 'muted', style: { fontSize: '.8rem' } }, 'Loading…'));
   try {
     const filters = (typeof _currentReportFilters === 'function') ? _currentReportFilters() : {};
-    const r = await api('api_reports_pivot', {
-      row_dims: ['extra:' + cfKey, 'status'],
-      metrics: ['count'],
-      filters: filters
-    });
+    const r = await api('api_reports_pivot', { row_dims: ['extra:' + cfKey, colDim], metrics: [measure], filters });
     const rows = (r && r.rows) || [];
     host.innerHTML = '';
-    if (!rows.length) {
-      host.appendChild(h('div', { class: 'muted' }, 'No leads with a value in this custom field.'));
-      return;
-    }
-    const matrix = {};
-    const statusSet = new Set();
+    if (!rows.length) { host.appendChild(h('div', { class: 'muted' }, 'No leads with a value in this custom field.')); return; }
+    const matrix = {}; const colSet = new Set();
     rows.forEach(rw => {
-      const v   = (rw.dims && rw.dims['extra:' + cfKey]) || '(empty)';
-      const st  = (rw.dims && rw.dims.status) || '(none)';
-      const cnt = (rw.metrics && rw.metrics.count) || 0;
+      const v = (rw.dims && rw.dims['extra:' + cfKey]) || '(empty)';
+      const c = (rw.dims && rw.dims[colDim]) || '(none)';
+      const m = (rw.metrics && Number(rw.metrics[measure])) || 0;
       if (!matrix[v]) matrix[v] = { __total: 0 };
-      matrix[v][st] = (matrix[v][st] || 0) + cnt;
-      matrix[v].__total += cnt;
-      statusSet.add(st);
+      matrix[v][c] = (matrix[v][c] || 0) + m;
+      matrix[v].__total += m;
+      colSet.add(c);
     });
-    let statusList = [];
-    try {
-      const allStatuses = (CRM && CRM.cache && CRM.cache.statuses) || [];
-      statusList = allStatuses.map(s => s.name).filter(n => statusSet.has(n));
-      Array.from(statusSet).forEach(n => { if (!statusList.includes(n)) statusList.push(n); });
-    } catch (_) { statusList = Array.from(statusSet).sort(); }
-    const sortedValues = Object.keys(matrix).sort((a,b) => matrix[b].__total - matrix[a].__total);
+    const colTotals = {}; colSet.forEach(c => colTotals[c] = 0);
+    Object.values(matrix).forEach(rec => { colSet.forEach(c => { colTotals[c] += (rec[c] || 0); }); });
+    let colList = [];
+    if (colDim === 'status') {
+      const all = (CRM && CRM.cache && CRM.cache.statuses) || [];
+      colList = all.map(s => s.name).filter(n => colSet.has(n));
+      Array.from(colSet).forEach(n => { if (!colList.includes(n)) colList.push(n); });
+    } else {
+      colList = Array.from(colSet).sort((a, b) => (colTotals[b] || 0) - (colTotals[a] || 0));
+    }
+    const sortedValues = Object.keys(matrix).sort((a, b) => matrix[b].__total - matrix[a].__total);
+    const grand = sortedValues.reduce((s2, v) => s2 + matrix[v].__total, 0);
     const maxTotal = matrix[sortedValues[0]] ? matrix[sortedValues[0]].__total : 1;
+    const isMoney = measure === 'value_sum';
+    const fmt = (n) => isMoney ? ('₹' + Number(n || 0).toLocaleString('en-IN')) : String(n || 0);
+    const rowLabel = (function(){ const cf = ((CRM && CRM.cache && CRM.cache.customFields) || []).find(c => c.key === cfKey); return cf ? (cf.label || cfKey) : cfKey; })();
+    // stash for CSV export
+    window._cfMatrixData = { rowLabel, colDim, measure, colList, sortedValues, matrix, colTotals, grand, isMoney };
     const tbl = h('table', { class: 'tbl', style: { width: '100%', fontSize: '.85rem' } },
       h('thead', {}, h('tr', {},
-        h('th', { style: { textAlign: 'left', background: '#f8fafc', position: 'sticky', left: '0' } }, cfKey),
+        h('th', { style: { textAlign: 'left', background: '#f8fafc', position: 'sticky', left: '0' } }, rowLabel),
         h('th', { style: { textAlign: 'right', background: '#eef2ff', fontWeight: 700 } }, 'Total'),
-        ...statusList.map(st => h('th', { style: { textAlign: 'right', fontSize: '.78rem', fontWeight: 500, padding: '4px 8px' } }, st))
+        ...colList.map(c => h('th', { style: { textAlign: 'right', fontSize: '.78rem', fontWeight: 500, padding: '4px 8px' } }, String(c)))
       )),
       h('tbody', {},
         ...sortedValues.map(val => {
-          const rec = matrix[val] || {};
-          const total = rec.__total || 0;
-          const pct = Math.round(total * 100 / maxTotal);
+          const rec = matrix[val] || {}; const total = rec.__total || 0; const pct = Math.round(total * 100 / maxTotal);
           return h('tr', {},
             h('td', { style: { textAlign: 'left', background: '#fff', position: 'sticky', left: '0' } },
               h('div', { style: { fontWeight: 500 } }, String(val)),
               h('div', { style: { background: '#dbeafe', height: '4px', width: pct + '%', borderRadius: '2px', marginTop: '3px' } })
             ),
-            h('td', { style: { textAlign: 'right', fontWeight: 700, background: '#eef2ff' } }, String(total)),
-            ...statusList.map(st => {
-              const v = rec[st] || 0;
-              return h('td', { style: { textAlign: 'right', color: v ? '#111827' : '#cbd5e1' } }, String(v));
+            h('td', { style: { textAlign: 'right', fontWeight: 700, background: '#eef2ff' } }, fmt(total)),
+            ...colList.map(c => {
+              const v = rec[c] || 0;
+              const intensity = Math.min(1, v / Math.max(1, maxTotal));
+              return h('td', { style: { textAlign: 'right', color: v ? '#111827' : '#cbd5e1', background: v ? ('rgba(37,99,235,' + (0.04 + intensity * 0.25).toFixed(2) + ')') : 'transparent' } }, fmt(v));
             })
           );
-        })
+        }),
+        h('tr', { style: { borderTop: '2px solid #c7d2fe' } },
+          h('td', { style: { textAlign: 'left', fontWeight: 700, background: '#eef2ff', position: 'sticky', left: '0' } }, 'Total'),
+          h('td', { style: { textAlign: 'right', fontWeight: 700, background: '#e0e7ff' } }, fmt(grand)),
+          ...colList.map(c => h('td', { style: { textAlign: 'right', fontWeight: 700, background: '#eef2ff' } }, fmt(colTotals[c] || 0)))
+        )
       )
     );
     host.appendChild(h('div', { style: { overflowX: 'auto' } }, tbl));
     host.appendChild(h('div', { class: 'muted', style: { fontSize: '.72rem', marginTop: '.4rem' } },
-      sortedValues.length + ' distinct values × ' + statusList.length + ' statuses · sorted by total lead count'));
+      sortedValues.length + ' rows × ' + colList.length + ' columns · measure: ' + measure + ' · sorted by row total'));
   } catch (e) {
     host.innerHTML = '';
     host.appendChild(h('div', { style: { color: '#b91c1c', fontSize: '.85rem' } }, 'Failed: ' + (e.message || e)));
   }
 }
+function _exportCfMatrixCsv() {
+  const d = window._cfMatrixData;
+  if (!d) { toast('Build a matrix first', 'warn'); return; }
+  const esc = (x) => '"' + String(x == null ? '' : x).replace(/"/g, '""') + '"';
+  const lines = [[d.rowLabel, 'Total', ...d.colList].map(esc).join(',')];
+  d.sortedValues.forEach(v => { const rec = d.matrix[v] || {}; lines.push([v, rec.__total || 0, ...d.colList.map(c => rec[c] || 0)].map(esc).join(',')); });
+  lines.push(['Total', d.grand, ...d.colList.map(c => d.colTotals[c] || 0)].map(esc).join(','));
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'custom-field-matrix.csv'; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+try { window._exportCfMatrixCsv = _exportCfMatrixCsv; } catch (_) {}
 try { window._loadReportsCfMatrix = _loadReportsCfMatrix; } catch (_) {}
 
 // REPORT_CF_COUNT_TABLE_v1 — simple count-only table for a CF.

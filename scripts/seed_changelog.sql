@@ -1164,3 +1164,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'Both Lead Pull Settings (self-claim) and the Lead Pool now let admins set a Created From/To date window so only leads created in that range can be pulled, plus a clear pull order by created date: Oldest first (ascending) or Newest first (descending).',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- CF_MATRIX_v2 (2026-06-28)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('CF_MATRIX_v2', 'Reports: flexible custom-field matrix',
+ 'The custom-field matrix on Reports now lets you cross ANY custom field (rows) against ANY dimension (columns) — Status, Source, Owner, Created month, or another custom field — and choose the measure: Lead count, Qualified, Won, Hot, or Value sum. Includes row/column totals, heatmap shading, and CSV export.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;
