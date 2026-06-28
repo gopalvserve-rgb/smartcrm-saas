@@ -16,7 +16,7 @@
  *   - hint  : small grey help text under the input
  */
 const control = require('../../control/db');
-const { requireFullAdmin, requireSuperAdmin } = require('./superAdminAuth');
+const { requireFullAdmin } = require('./superAdminAuth');
 const saasMailer = require('./saasMailer');
 
 const SETTING_KEYS = [
@@ -61,50 +61,26 @@ const SETTING_KEYS = [
   { key: 'SUPPORT_EMAIL',         group: 'brand',  label: 'Support email',             mask: false },
   { key: 'SUPPORT_PHONE',         group: 'brand',  label: 'Support phone',             mask: false },
 
-  // ---------- Performance / background sweeps (PERF_FIX_v2) ----------
-  // CSV list of tenant slugs allowed to run each background sweep. Empty = all
-  // tenants disabled. Default 'vserve' so only the parent tenant runs them.
-  { key: 'SWEEP_GCONV_TENANTS', group: 'perf',
-    label: 'Google Conv export — enabled tenants',
-    mask: false, kind: 'textarea',
-    hint: "CSV of tenant slugs allowed to run Google Conv daily export. Default OFF (empty). Add slugs like 'vserve,celesteabode' to enable." },
-  { key: 'SWEEP_MCAPI_TENANTS', group: 'perf',
-    label: 'Meta CAPI sender — enabled tenants',
-    mask: false, kind: 'textarea',
-    hint: "CSV of tenant slugs allowed to run Meta Conversions API daily batch. Default OFF (empty). Add slugs like 'vserve,celesteabode' to enable." },
-  { key: 'SWEEP_AISUMMARY_TENANTS', group: 'perf',
-    label: 'AI Call Summary (Gemini auto-transcribe) — enabled tenants',
-    mask: false, kind: 'textarea',
-    hint: "CSV of tenant slugs allowed to auto-transcribe recordings via Gemini. Default OFF (empty). Also requires Railway env AI_TRANSCRIPTION_GLOBAL_OFF=0." },
-  { key: 'SWEEP_AIMGR_TENANTS', group: 'perf',
-    label: 'AI Manager — detection cycle — enabled tenants',
-    mask: false, kind: 'textarea',
-    hint: "CSV of tenant slugs allowed to run the AI Manager detection cycle (every 30 min). Default 'vserve'. Add slugs like 'vserve,celesteabode' to enable for more tenants." },
-  { key: 'SWEEP_AIMGR_COACH_TENANTS', group: 'perf',
-    label: 'AI Manager — weekly coaching digest — enabled tenants',
-    mask: false, kind: 'textarea',
-    hint: "CSV of tenant slugs allowed to generate the weekly AI Manager coaching digest per user. Default 'vserve'." },
-  { key: 'SWEEP_R2BACKFILL_TENANTS', group: 'perf',
-    label: 'R2 recording backfill — enabled tenants',
-    mask: false, kind: 'textarea',
-    hint: "CSV of tenant slugs whose legacy Postgres-stored recordings are actively being migrated to Cloudflare R2 (every 15 min, 25 rows per tick). Default OFF (empty). Playback of unmigrated rows still works via PG fallback — pausing this is safe." },
-  { key: 'SWEEP_NURTURE_TENANTS', group: 'perf',
-    label: 'Nurture sequences — enabled tenants',
-    mask: false, kind: 'textarea',
-    hint: "CSV of tenant slugs allowed to run the 5-min nurture-sequence sweep. Default OFF (empty). Add slugs only for tenants actively using nurture sequences." },
-  { key: 'SWEEP_SHEETSYNC_TENANTS', group: 'perf',
-    label: 'Google Sheet sync — enabled tenants',
-    mask: false, kind: 'textarea',
-    hint: "CSV of tenant slugs allowed to run the 5-min Google Sheet lead-sync sweep. Default OFF (empty). Add slugs only for tenants with active sheet integrations." },
-  { key: 'SWEEP_NATIVEPULL_TENANTS', group: 'perf',
-    label: 'Native source pull — enabled tenants',
-    mask: false, kind: 'textarea',
-    hint: "CSV of tenant slugs allowed to run the 5-min native-source pull (Meta Lead Ads / etc). Default OFF (empty). Add slugs only for tenants with active integrations." }
+  // ---------- SaaS WhatsApp (SAAS_AUTO_INVOICE_v1) ----------
+  { key: 'WA_PHONE_NUMBER_ID',  group: 'whatsapp', label: 'WA Phone Number ID',          mask: false,
+    hint: 'Meta Cloud API Phone ID, e.g. 1095975428066909' },
+  { key: 'WA_BUSINESS_ID',      group: 'whatsapp', label: 'WA Business Account ID',      mask: false,
+    hint: 'WABA ID' },
+  { key: 'WA_ACCESS_TOKEN',     group: 'whatsapp', label: 'WA Permanent Access Token',   mask: true,
+    hint: 'System User token with whatsapp_business_messaging scope' },
+  { key: 'WA_TEMPLATE_INVOICE', group: 'whatsapp', label: 'Template name (invoices)',    mask: false,
+    hint: 'Pre-approved template name. Default: billing_invoice. Params: {{1}}=tenant_name, {{2}}=invoice_no, {{3}}=amount, {{4}}=due_date' },
+  { key: 'WA_TEMPLATE_LANG',    group: 'whatsapp', label: 'Template language',           mask: false,
+    hint: 'e.g. en_US, en, hi, en_IN' },
+  // ---------- Auto-Invoice (SAAS_AUTO_INVOICE_v1) ----------
+  { key: 'AUTO_INVOICE_DAYS_BEFORE', group: 'billing', label: 'Auto-generate invoice N days before due', mask: false, kind: 'number',
+    hint: 'Set to 0 to disable auto-generation. Default 7.' },
+  { key: 'AUTO_INVOICE_SEND_EMAIL',  group: 'billing', label: 'Auto-send via Email?',     mask: false, kind: 'select', options: ['0','1'] },
+  { key: 'AUTO_INVOICE_SEND_WA',     group: 'billing', label: 'Auto-send via WhatsApp?',  mask: false, kind: 'select', options: ['0','1'] }
+
 ];
 
 async function api_saas_settings_get(token) {
-  const _me = await requireSuperAdmin(token);
-  await require('./saasPermissions').requirePerm(_me, 'settings.edit');
   await requireFullAdmin(token);
   const r = await control.query(`SELECT key, value FROM saas_settings`);
   const stored = {};
@@ -121,7 +97,6 @@ async function api_saas_settings_get(token) {
 
 async function api_saas_settings_save(token, payload) {
   const me = await requireFullAdmin(token);
-  await require('./saasPermissions').requirePerm(me, 'settings.edit');
   const p = payload || {};
   const allowed = new Set(SETTING_KEYS.map(s => s.key));
   let changed = 0;
@@ -155,7 +130,9 @@ async function api_saas_settings_testEmail(token, payload) {
   return { ok: true, sent_to: to };
 }
 
+const saasWA = require('./saasWhatsApp');
 module.exports = {
+  api_saas_settings_testWhatsApp: saasWA.api_saas_settings_testWhatsApp,
   api_saas_settings_get,
   api_saas_settings_save,
   api_saas_settings_testEmail
