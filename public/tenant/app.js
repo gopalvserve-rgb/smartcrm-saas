@@ -3381,104 +3381,78 @@ const WIDGET_LIBRARY = {
     description: 'Pick any custom field and see leads grouped by its values.',
     configKeys: ['cf_key'],
     configRenderer: (card, cfg, onChange) => {
-      const cfs = ((window.CRM && CRM.cache && CRM.cache.customFields) || [])
-        .filter(c => Number(c.is_active) !== 0 && (c.key || c.name));
-      if (!cfs.length) {
-        card.appendChild(h('div', { class: 'muted', style: { fontSize: '.78rem' } }, 'No custom fields defined yet. Add some in Settings → Custom Fields.'));
-        return;
-      }
+      const cfs = ((window.CRM && CRM.cache && CRM.cache.customFields) || []).filter(c => Number(c.is_active) !== 0 && (c.key || c.name));
+      if (!cfs.length) { card.appendChild(h('div', { class: 'muted', style: { fontSize: '.78rem' } }, 'No custom fields defined yet. Add some in Settings → Custom Fields.')); return; }
+      const lab = (t) => card.appendChild(h('div', { class: 'muted', style: { fontSize: '.72rem', margin: '.35rem 0 .15rem' } }, t));
+      lab('Custom field (rows)');
       const sel = h('select', { class: 'input', style: { width: '100%' } },
         h('option', { value: '' }, 'Pick a custom field…'),
-        ...cfs.map(cf => {
-          const k = (cf.key || cf.name);
-          return h('option', { value: k, selected: cfg && cfg.cf_key === k ? 'selected' : null }, (cf.label || k));
-        })
-      );
+        ...cfs.map(cf => { const k = (cf.key || cf.name); return h('option', { value: k, selected: cfg && cfg.cf_key === k ? 'selected' : null }, (cf.label || k)); }));
       sel.onchange = () => onChange({ cf_key: sel.value });
-      card.appendChild(h('div', { class: 'muted', style: { fontSize: '.72rem', marginBottom: '.3rem' } }, 'Custom field'));
       card.appendChild(sel);
+      lab('Columns');
+      const colSel = h('select', { class: 'input', style: { width: '100%' } },
+        h('option', { value: 'status',        selected: (!cfg || !cfg.col_dim || cfg.col_dim === 'status') ? 'selected' : null }, 'Status'),
+        h('option', { value: 'source',        selected: cfg && cfg.col_dim === 'source' ? 'selected' : null }, 'Source'),
+        h('option', { value: 'assigned_to',   selected: cfg && cfg.col_dim === 'assigned_to' ? 'selected' : null }, 'Owner'),
+        h('option', { value: 'qualified',     selected: cfg && cfg.col_dim === 'qualified' ? 'selected' : null }, 'Qualified flag'),
+        h('option', { value: 'created_month', selected: cfg && cfg.col_dim === 'created_month' ? 'selected' : null }, 'Created month'),
+        ...cfs.map(cf => { const k = 'extra:' + (cf.key || cf.name); return h('option', { value: k, selected: cfg && cfg.col_dim === k ? 'selected' : null }, 'Custom · ' + (cf.label || cf.key || cf.name)); }));
+      colSel.onchange = () => onChange({ col_dim: colSel.value });
+      card.appendChild(colSel);
+      lab('Measure');
+      const measSel = h('select', { class: 'input', style: { width: '100%' } },
+        h('option', { value: 'count',           selected: (!cfg || !cfg.measure || cfg.measure === 'count') ? 'selected' : null }, 'Lead count'),
+        h('option', { value: 'qualified_count', selected: cfg && cfg.measure === 'qualified_count' ? 'selected' : null }, 'Qualified'),
+        h('option', { value: 'won_count',       selected: cfg && cfg.measure === 'won_count' ? 'selected' : null }, 'Won'),
+        h('option', { value: 'hot_count',       selected: cfg && cfg.measure === 'hot_count' ? 'selected' : null }, 'Hot'),
+        h('option', { value: 'value_sum',       selected: cfg && cfg.measure === 'value_sum' ? 'selected' : null }, '₹ Value sum'));
+      measSel.onchange = () => onChange({ measure: measSel.value });
+      card.appendChild(measSel);
     },
     render: async (c, cfg, _d, w) => {
       const cfKey = cfg && cfg.cf_key;
-      c.appendChild(h('h3', { style: { margin: '0 0 .5rem' } }, (w.title || 'Custom field breakdown') + (cfKey ? ' · ' + cfKey : '')));
-      if (!cfKey) {
-        c.appendChild(h('div', { class: 'muted', style: { fontSize: '.85rem' } }, 'Click Edit on this widget and pick a custom field.'));
-        return;
-      }
+      const colDim = (cfg && cfg.col_dim) || 'status';
+      const measure = (cfg && cfg.measure) || 'count';
+      const colLabelMap = { status: 'Status', source: 'Source', assigned_to: 'Owner', qualified: 'Qualified', created_month: 'Created month' };
+      const measLabelMap = { count: 'count', qualified_count: 'qualified', won_count: 'won', hot_count: 'hot', value_sum: 'value' };
+      const colLabel = colLabelMap[colDim] || (colDim.startsWith('extra:') ? colDim.slice(6) : colDim);
+      c.appendChild(h('h3', { style: { margin: '0 0 .5rem' } }, (w.title || 'Custom field') + (cfKey ? ' · ' + cfKey + ' × ' + colLabel : '')));
+      if (!cfKey) { c.appendChild(h('div', { class: 'muted', style: { fontSize: '.85rem' } }, 'Click Edit on this widget and pick a custom field.')); return; }
       try {
-        // DASH_CF_STATUS_v1 (2026-06-04) — 2D pivot: rows = CF values,
-        // cols = status names. Renders a matrix so e.g. for cf=page you
-        // see each page's lead count broken down by status. The bucket
-        // already has open_count/won_count/lost_count pre-computed for
-        // the headline summary; the cross-tab below gives per-status detail.
-        const r = await api('api_reports_pivot', {
-          row_dims: ['extra:' + cfKey, 'status'],
-          metrics: ['count'],
-          filters: {}
-        });
+        const r = await api('api_reports_pivot', { row_dims: ['extra:' + cfKey, colDim], metrics: [measure], filters: {} });
         const rows = (r && r.rows) || [];
-        if (!rows.length) {
-          c.appendChild(h('div', { class: 'muted', style: { fontSize: '.85rem' } }, 'No leads with a value in this custom field.'));
-          return;
-        }
-        // Pivot client-side: cfValue -> { statusName -> count, total: N }
-        const matrix = {};
-        const statusSet = new Set();
-        rows.forEach(rw => {
-          const v   = (rw.dims && rw.dims['extra:' + cfKey]) || '(empty)';
-          const st  = (rw.dims && rw.dims.status) || '(none)';
-          const cnt = (rw.metrics && rw.metrics.count) || 0;
-          if (!matrix[v]) matrix[v] = { __total: 0 };
-          matrix[v][st] = (matrix[v][st] || 0) + cnt;
-          matrix[v].__total += cnt;
-          statusSet.add(st);
-        });
-        // Stable status order — use CRM.cache.statuses if available, fallback alpha.
-        let statusList = [];
-        try {
-          const allStatuses = (CRM && CRM.cache && CRM.cache.statuses) || [];
-          statusList = allStatuses.map(s => s.name).filter(n => statusSet.has(n));
-          // Append any status names that aren't in the cached list (e.g. '(none)')
-          Array.from(statusSet).forEach(n => { if (!statusList.includes(n)) statusList.push(n); });
-        } catch (_) { statusList = Array.from(statusSet).sort(); }
-        const sortedValues = Object.keys(matrix).sort((a,b) => matrix[b].__total - matrix[a].__total);
+        if (!rows.length) { c.appendChild(h('div', { class: 'muted', style: { fontSize: '.85rem' } }, 'No leads with a value in this custom field.')); return; }
+        const matrix = {}; const colSet = new Set();
+        rows.forEach(rw => { const v = (rw.dims && rw.dims['extra:' + cfKey]) || '(empty)'; const cc = (rw.dims && rw.dims[colDim]) || '(none)'; const m = (rw.metrics && Number(rw.metrics[measure])) || 0; if (!matrix[v]) matrix[v] = { __total: 0 }; matrix[v][cc] = (matrix[v][cc] || 0) + m; matrix[v].__total += m; colSet.add(cc); });
+        const colTotals = {}; colSet.forEach(cc => colTotals[cc] = 0); Object.values(matrix).forEach(rec => colSet.forEach(cc => colTotals[cc] += (rec[cc] || 0)));
+        let colList = [];
+        if (colDim === 'status') { const all = (CRM && CRM.cache && CRM.cache.statuses) || []; colList = all.map(s => s.name).filter(n => colSet.has(n)); Array.from(colSet).forEach(n => { if (!colList.includes(n)) colList.push(n); }); }
+        else colList = Array.from(colSet).sort((a, b) => (colTotals[b] || 0) - (colTotals[a] || 0));
+        const sortedValues = Object.keys(matrix).sort((a, b) => matrix[b].__total - matrix[a].__total);
         const maxTotal = matrix[sortedValues[0]] ? matrix[sortedValues[0]].__total : 1;
-
+        const isMoney = measure === 'value_sum';
+        const fmt = (n) => isMoney ? ('₹' + Number(n || 0).toLocaleString('en-IN')) : String(n || 0);
         const tbl = h('table', { class: 'tbl', style: { width: '100%', fontSize: '.8rem' } },
           h('thead', {}, h('tr', {},
             h('th', { style: { textAlign: 'left', position: 'sticky', left: '0', background: '#f8fafc', zIndex: 1 } }, cfKey),
             h('th', { style: { textAlign: 'right', background: '#eef2ff' } }, 'Total'),
-            ...statusList.map(st => h('th', { style: { textAlign: 'right', fontSize: '.72rem', fontWeight: 500 } }, st))
-          )),
+            ...colList.map(cc => h('th', { style: { textAlign: 'right', fontSize: '.72rem', fontWeight: 500 } }, String(cc))))),
           h('tbody', {},
-            ...sortedValues.map(val => {
-              const rec = matrix[val] || {};
-              const total = rec.__total || 0;
-              const pct = Math.round(total * 100 / maxTotal);
+            ...sortedValues.map(val => { const rec = matrix[val] || {}; const total = rec.__total || 0; const pct = Math.round(total * 100 / maxTotal);
               return h('tr', {},
-                h('td', {
-                  style: { textAlign: 'left', position: 'sticky', left: '0', background: '#fff' }
-                },
-                  h('div', { style: { fontWeight: 500 } }, String(val)),
-                  h('div', { style: { background: '#dbeafe', height: '4px', width: pct + '%', borderRadius: '2px', marginTop: '2px' } })
-                ),
-                h('td', { style: { textAlign: 'right', fontWeight: 700, background: '#eef2ff' } }, String(total)),
-                ...statusList.map(st => {
-                  const v = rec[st] || 0;
-                  return h('td', {
-                    style: { textAlign: 'right', color: v ? '#111827' : '#cbd5e1' }
-                  }, String(v));
-                })
-              );
-            })
-          )
-        );
+                h('td', { style: { textAlign: 'left', position: 'sticky', left: '0', background: '#fff' } }, h('div', { style: { fontWeight: 500 } }, String(val)), h('div', { style: { background: '#dbeafe', height: '4px', width: pct + '%', borderRadius: '2px', marginTop: '2px' } })),
+                h('td', { style: { textAlign: 'right', fontWeight: 700, background: '#eef2ff' } }, fmt(total)),
+                ...colList.map(cc => { const v = rec[cc] || 0; return h('td', { style: { textAlign: 'right', color: v ? '#111827' : '#cbd5e1' } }, fmt(v)); }));
+            }),
+            h('tr', { style: { borderTop: '2px solid #c7d2fe' } },
+              h('td', { style: { textAlign: 'left', fontWeight: 700, background: '#eef2ff', position: 'sticky', left: '0' } }, 'Total'),
+              h('td', { style: { textAlign: 'right', fontWeight: 700, background: '#e0e7ff' } }, fmt(sortedValues.reduce((s2, v) => s2 + (matrix[v].__total || 0), 0))),
+              ...colList.map(cc => h('td', { style: { textAlign: 'right', fontWeight: 700, background: '#eef2ff' } }, fmt(colTotals[cc] || 0))))
+          ));
         c.appendChild(h('div', { style: { overflowX: 'auto', maxHeight: '320px' } }, tbl));
-        c.appendChild(h('div', { class: 'muted', style: { fontSize: '.72rem', marginTop: '.35rem' } },
-          '💡 ' + sortedValues.length + ' distinct values × ' + statusList.length + ' statuses · sorted by total.'));
-      } catch (e) {
-        c.appendChild(h('div', { class: 'muted', style: { color: '#b91c1c', fontSize: '.85rem' } }, 'Failed: ' + e.message));
-      }
+        c.appendChild(h('div', { class: 'muted', style: { fontSize: '.72rem', marginTop: '.35rem' } }, '💡 ' + sortedValues.length + ' values × ' + colList.length + ' cols · ' + (measLabelMap[measure] || measure)));
+      } catch (e) { c.appendChild(h('div', { class: 'muted', style: { color: '#b91c1c', fontSize: '.85rem' } }, 'Failed: ' + e.message)); }
     }
   },
   // ----- User-wise breakdown -----
@@ -22651,7 +22625,9 @@ VIEWS.reports = async (view) => {
           h('option', { value: 'hot_count' }, 'Hot'),
           h('option', { value: 'value_sum' }, '₹ Value sum')
         ),
-        h('button', { class: 'btn sm', style: { marginLeft: 'auto' }, onclick: () => _exportCfMatrixCsv() }, '⬇ CSV')
+        h('div', { style: { marginLeft: 'auto', display: 'flex', gap: '.4rem' } },
+          h('button', { class: 'btn sm', onclick: () => _exportCfMatrixCsv() }, '⬇ CSV'),
+          h('button', { class: 'btn sm primary', onclick: () => _cfMatrixAddToDashboard() }, '📌 Add to dashboard'))
       ),
       h('div', { id: 'rep-cf-matrix', class: 'muted', style: { fontSize: '.85rem' } }, 'Pick a custom field (rows) above to see its matrix.')
     )
@@ -22756,6 +22732,20 @@ function _exportCfMatrixCsv() {
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
 try { window._exportCfMatrixCsv = _exportCfMatrixCsv; } catch (_) {}
+async function _cfMatrixAddToDashboard() {
+  const cfKey = document.getElementById('rep-cf-pick')?.value;
+  if (!cfKey) { toast('Pick a custom field (rows) first', 'warn'); return; }
+  const colDim = document.getElementById('rep-cf-col')?.value || 'status';
+  const measure = document.getElementById('rep-cf-measure')?.value || 'count';
+  try {
+    let resp = null; try { resp = await api('api_dashboard_get'); } catch (_) {}
+    const widgets = (resp && Array.isArray(resp.widgets)) ? resp.widgets.slice() : [];
+    widgets.push({ id: 'w-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7), type: 'custom_field_breakdown', size: 'medium', config: { cf_key: cfKey, col_dim: colDim, measure: measure } });
+    await api('api_dashboard_save', { widgets });
+    toast('Added to your Dashboard ✓ — open Dashboard to see it', 'ok');
+  } catch (e) { toast(e.message, 'err'); }
+}
+try { window._cfMatrixAddToDashboard = _cfMatrixAddToDashboard; } catch (_) {}
 try { window._loadReportsCfMatrix = _loadReportsCfMatrix; } catch (_) {}
 
 // REPORT_CF_COUNT_TABLE_v1 — simple count-only table for a CF.
