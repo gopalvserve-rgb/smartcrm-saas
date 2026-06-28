@@ -1070,3 +1070,9 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'Admins can now add rules for minimum calls per hour/per day and minimum talk-time per hour/per day for reps. Every rule can also escalate violations: notify the agent, the manager, and/or the admin.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- POWER_DIALER_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('POWER_DIALER_v1', 'Auto Dialer (Phase 1)', 'New Auto Dialer under Calls & Dialer. Admins create a campaign, paste/assign leads to agents (round-robin); agents tap Start and the system serves leads one-by-one, auto-advancing to the next after the call outcome + remark is saved.', 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

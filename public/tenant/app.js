@@ -1784,6 +1784,7 @@ const NAV_GROUPS = [
   ] },
   { label: 'Calls & Dialer', icon: '📞', items: [
     { id: 'dialer',       label: 'Dialer',        icon: '📞', search: 'dialer call phone make call' },
+    { id: 'autodialer',   label: 'Auto Dialer',   icon: '🤖', roles: ['admin','manager','team_leader','sales','agent','employee'], search: 'auto dialer power dialer predictive campaign one by one' },
     { id: 'callactivity', label: 'Call Activity', icon: '📞', roles: ['admin', 'manager', 'team_leader'], search: 'call activity call log outgoing incoming missed' },
     { id: 'callinsights', label: 'Call Insights', icon: '🎙', search: 'insights call analytics call performance' },
     { id: 'callratings',  label: 'Call Ratings',  icon: '⭐', roles: ['admin', 'manager', 'team_leader'], search: 'rating call rating quality score' },
@@ -20718,6 +20719,160 @@ function _projRenderList(board, listEl) {
   table.appendChild(tb);
   listEl.appendChild(h('div', { class: 'card', style: { padding: '.5rem', overflowX: 'auto' } }, table));
 }
+
+/* POWER_DIALER_v1 — Auto Dialer view (Calls & Dialer). Agent auto-advance loop
+ * + admin campaign builder. */
+function _dlrCall(lead) {
+  try {
+    if (typeof window.callLead === 'function') return window.callLead({ id: lead.lead_id, phone: lead.phone, name: lead.name });
+  } catch (_) {}
+  try { window.location.href = 'tel:' + (lead.phone || ''); } catch (_) {}
+}
+async function _renderAgentDialer(host) {
+  host.innerHTML = '';
+  host.appendChild(h('div', { class: 'muted', style: { padding: '.5rem' } }, 'Loading your campaigns…'));
+  let camps = [];
+  try { camps = await api('api_dialer_myCampaigns'); } catch (e) { host.innerHTML = ''; return host.appendChild(h('div', { class: 'error-box' }, e.message)); }
+  host.innerHTML = '';
+  host.appendChild(h('h3', { style: { margin: '.2rem 0 .6rem' } }, '▶ My dial sessions'));
+  if (!camps.length) { host.appendChild(h('div', { class: 'muted' }, 'No leads assigned to you yet. An admin assigns leads from a campaign below.')); return; }
+  const grid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: '.6rem' } });
+  camps.forEach(c => grid.appendChild(h('div', { class: 'card', style: { padding: '.8rem' } },
+    h('div', { style: { fontWeight: 600 } }, c.name),
+    h('div', { class: 'muted', style: { fontSize: '.8rem', margin: '.3rem 0' } }, 'Remaining: ' + c.remaining + ' · Done: ' + c.done + ' / ' + c.total),
+    c.status === 'paused' ? h('div', { class: 'muted', style: { color: '#d97706', fontSize: '.78rem' } }, '⏸ Paused by admin')
+      : h('button', { class: 'btn primary', onclick: () => _runDialSession(host, c) }, '▶ Start auto-dial'))));
+  host.appendChild(grid);
+}
+async function _runDialSession(host, camp) {
+  host.innerHTML = '';
+  const back = h('button', { class: 'btn sm', onclick: () => _renderAgentDialer(host) }, '← Sessions');
+  host.appendChild(h('div', { style: { marginBottom: '.6rem' } }, back, h('span', { style: { marginLeft: '.6rem', fontWeight: 600 } }, '🤖 ' + camp.name)));
+  const stage = h('div', {});
+  host.appendChild(stage);
+  async function next() {
+    stage.innerHTML = '';
+    stage.appendChild(h('div', { class: 'muted', style: { padding: '1rem' } }, '⏳ Getting next lead…'));
+    let r;
+    try { r = await api('api_dialer_nextLead', camp.id); } catch (e) { stage.innerHTML = ''; return stage.appendChild(h('div', { class: 'error-box' }, e.message)); }
+    stage.innerHTML = '';
+    if (r.paused) return stage.appendChild(h('div', { class: 'card', style: { padding: '1rem', textAlign: 'center' } }, '⏸ Campaign paused by admin.'));
+    if (r.done_all) return stage.appendChild(h('div', { class: 'card', style: { padding: '1.5rem', textAlign: 'center' } }, h('div', { style: { fontSize: '1.5rem' } }, '🎉'), h('div', { style: { fontWeight: 600, marginTop: '.4rem' } }, 'All your leads in this campaign are done!')));
+    const lead = r.lead; const prog = r.progress || {};
+    const remarkInp = h('textarea', { class: 'input', rows: '2', placeholder: 'Remark / what happened on this call…', style: { width: '100%' } });
+    const outcomes = [['connected', '✅ Connected'], ['no_answer', '📵 No answer'], ['busy', '⏳ Busy'], ['callback', '🔁 Callback'], ['not_interested', '🚫 Not interested'], ['converted', '🎉 Converted'], ['dnc', '⛔ Do-not-call']];
+    let picked = 'connected';
+    const outRow = h('div', { style: { display: 'flex', gap: '.3rem', flexWrap: 'wrap', margin: '.5rem 0' } });
+    outcomes.forEach(([k, lab]) => {
+      const b = h('button', { class: 'btn sm' + (k === picked ? ' primary' : ''), onclick: () => { picked = k; Array.from(outRow.children).forEach((c, i) => c.className = 'btn sm' + (outcomes[i][0] === picked ? ' primary' : '')); } }, lab);
+      outRow.appendChild(b);
+    });
+    const saveNext = async () => {
+      if (Number(camp.require_remark) === 1 && !remarkInp.value.trim() && picked !== 'no_answer' && picked !== 'busy') { toast('Please add a remark', 'err'); return; }
+      try { await api('api_dialer_disposition', { clead_id: lead.id, outcome: picked, remark: remarkInp.value.trim() }); } catch (e) { toast(e.message, 'err'); return; }
+      toast('Saved · next in ' + (camp.pacing_sec || 3) + 's', 'ok');
+      stage.innerHTML = '<div class="muted" style="padding:1rem">⏭ Next call in ' + (camp.pacing_sec || 3) + 's…</div>';
+      setTimeout(next, Math.max(0, (Number(camp.pacing_sec) || 3) * 1000));
+    };
+    stage.appendChild(h('div', { class: 'card', style: { padding: '1.1rem', maxWidth: '480px' } },
+      h('div', { class: 'muted', style: { fontSize: '.78rem', marginBottom: '.3rem' } }, 'Lead ' + ((prog.done || 0) + 1) + ' of ' + (prog.total || '?')),
+      h('div', { style: { fontSize: '1.2rem', fontWeight: 700 } }, lead.name || lead.phone || '—'),
+      h('div', { style: { color: '#16a34a', fontWeight: 600, margin: '.2rem 0 .6rem' } }, '📞 ' + (lead.phone || '')),
+      h('div', { style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap' } },
+        h('button', { class: 'btn primary', onclick: () => _dlrCall(lead) }, '📞 Call now'),
+        lead.lead_id ? h('button', { class: 'btn', onclick: () => openLeadModal(lead.lead_id) }, '👁 Open lead') : null,
+        h('button', { class: 'btn', onclick: next }, '⏭ Skip')),
+      h('div', { style: { fontWeight: 600, fontSize: '.8rem', margin: '.7rem 0 .2rem' } }, 'Outcome'),
+      outRow,
+      remarkInp,
+      h('button', { class: 'btn primary', style: { marginTop: '.5rem', width: '100%' }, onclick: saveNext }, '💾 Save & dial next →')));
+  }
+  next();
+}
+async function _renderDialerAdmin(host) {
+  host.innerHTML = '';
+  host.appendChild(h('h3', { style: { margin: '.2rem 0 .6rem' } }, '🛠 Campaigns (admin)'));
+  const newBtn = h('button', { class: 'btn primary', onclick: () => _dialerCampaignForm(host) }, '➕ New campaign');
+  host.appendChild(h('div', { style: { marginBottom: '.6rem' } }, newBtn));
+  const listBox = h('div', {});
+  host.appendChild(listBox);
+  let camps = [];
+  try { camps = await api('api_dialer_campaigns_list'); } catch (e) { return listBox.appendChild(h('div', { class: 'error-box' }, e.message)); }
+  if (!camps.length) { listBox.appendChild(h('div', { class: 'muted' }, 'No campaigns yet — click "New campaign".')); return; }
+  camps.forEach(c => {
+    const box = h('div', { class: 'card', style: { padding: '.8rem', marginBottom: '.5rem' } },
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: '.6rem', flexWrap: 'wrap' } },
+        h('span', { style: { fontWeight: 600, flex: 1 } }, c.name + (c.status === 'paused' ? ' (paused)' : '')),
+        h('span', { class: 'tag', style: { background: '#dbeafe', color: '#1e40af' } }, 'Done ' + c.done + ' / ' + c.total),
+        h('span', { class: 'tag', style: { background: '#fef3c7', color: '#92400e' } }, 'Queued ' + c.queued)),
+      h('div', { style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap', marginTop: '.5rem' } },
+        h('button', { class: 'btn sm', onclick: () => _dialerAddLeads(host, c) }, '➕ Add leads'),
+        h('button', { class: 'btn sm', onclick: async () => { try { await api('api_dialer_pause', { campaign_id: c.id, status: c.status === 'paused' ? 'running' : 'paused' }); _renderDialerAdmin(host); } catch (e) { toast(e.message, 'err'); } } }, c.status === 'paused' ? '▶ Resume' : '⏸ Pause'),
+        h('button', { class: 'btn sm', onclick: () => _dialerMonitor(c) }, '📊 Monitor'),
+        h('button', { class: 'btn sm danger', onclick: async () => { if (!confirm('Delete campaign "' + c.name + '"?')) return; try { await api('api_dialer_campaign_delete', c.id); _renderDialerAdmin(host); } catch (e) { toast(e.message, 'err'); } } }, '🗑')));
+    listBox.appendChild(box);
+  });
+}
+function _dialerCampaignForm(host) {
+  const name = h('input', { class: 'input', placeholder: 'Campaign name', style: { width: '100%' } });
+  const pacing = h('input', { type: 'number', class: 'input', value: '3', min: '0', max: '60', style: { width: '90px' } });
+  const reqRem = h('input', { type: 'checkbox', checked: 'checked' });
+  const card = h('div', { class: 'card', style: { padding: '1rem', marginBottom: '.6rem' } },
+    h('div', { style: { fontWeight: 600, marginBottom: '.5rem' } }, '➕ New campaign'),
+    name,
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', margin: '.5rem 0' } }, h('span', { class: 'muted', style: { fontSize: '.82rem' } }, 'Gap between calls (sec)'), pacing),
+    h('label', { style: { fontSize: '.82rem', display: 'flex', alignItems: 'center', gap: '.3rem' } }, reqRem, ' Require a remark before next call'),
+    h('div', { style: { marginTop: '.6rem', display: 'flex', gap: '.4rem' } },
+      h('button', { class: 'btn primary', onclick: async () => { if (!name.value.trim()) { toast('Name required', 'err'); return; } try { await api('api_dialer_campaign_save', { name: name.value.trim(), pacing_sec: Number(pacing.value || 3), require_remark: reqRem.checked ? 1 : 0 }); toast('Campaign created', 'ok'); _renderDialerAdmin(host); } catch (e) { toast(e.message, 'err'); } } }, 'Create'),
+      h('button', { class: 'btn', onclick: () => _renderDialerAdmin(host) }, 'Cancel')));
+  host.innerHTML = ''; host.appendChild(card);
+}
+function _dialerAddLeads(host, camp) {
+  const ta = h('textarea', { class: 'input', rows: '8', placeholder: 'One lead per line:\nName, 9876543210\nAnother Name, 9123456789\n(or just phone numbers)', style: { width: '100%' } });
+  const users = (CRM.cache && CRM.cache.users) || [];
+  const sel = h('select', { class: 'input', multiple: 'multiple', style: { width: '100%', height: '140px' } },
+    ...users.map(u => h('option', { value: String(u.id) }, u.name + ' (' + u.role + ')')));
+  const card = h('div', { class: 'card', style: { padding: '1rem' } },
+    h('div', { style: { fontWeight: 600, marginBottom: '.5rem' } }, '➕ Add leads to "' + camp.name + '"'),
+    h('div', { class: 'muted', style: { fontSize: '.8rem', marginBottom: '.3rem' } }, 'Paste leads (Name, Phone — one per line):'),
+    ta,
+    h('div', { class: 'muted', style: { fontSize: '.8rem', margin: '.6rem 0 .3rem' } }, 'Assign to agents (round-robin split):'),
+    sel,
+    h('div', { style: { marginTop: '.6rem', display: 'flex', gap: '.4rem' } },
+      h('button', { class: 'btn primary', onclick: async () => {
+        const leads = ta.value.split(/\n+/).map(line => { const parts = line.split(/[,\t]/); if (parts.length >= 2) return { name: parts[0].trim(), phone: parts.slice(1).join(' ').trim() }; return { name: '', phone: line.trim() }; }).filter(x => x.phone);
+        const agents = Array.from(sel.selectedOptions).map(o => Number(o.value));
+        if (!leads.length) { toast('Add at least one lead', 'err'); return; }
+        if (!agents.length) { toast('Select at least one agent', 'err'); return; }
+        try { const r = await api('api_dialer_addLeads', { campaign_id: camp.id, leads, assign_to: agents }); toast('Added ' + r.added + ' leads', 'ok'); _renderDialerAdmin(host); } catch (e) { toast(e.message, 'err'); }
+      } }, 'Add & assign'),
+      h('button', { class: 'btn', onclick: () => _renderDialerAdmin(host) }, 'Cancel')));
+  host.innerHTML = ''; host.appendChild(card);
+}
+async function _dialerMonitor(camp) {
+  let d;
+  try { d = await api('api_dialer_campaign_detail', camp.id); } catch (e) { toast(e.message, 'err'); return; }
+  const rows = (d.agents || []).map(a => h('tr', {}, h('td', {}, a.agent || ('#' + a.user_id)), h('td', { style: { textAlign: 'right' } }, a.total), h('td', { style: { textAlign: 'right' } }, a.done), h('td', { style: { textAlign: 'right' } }, a.queued), h('td', { style: { textAlign: 'right' } }, a.callback)));
+  const tbl = h('table', { class: 'table', style: { width: '100%' } }, h('thead', {}, h('tr', {}, h('th', {}, 'Agent'), h('th', { style: { textAlign: 'right' } }, 'Total'), h('th', { style: { textAlign: 'right' } }, 'Done'), h('th', { style: { textAlign: 'right' } }, 'Queued'), h('th', { style: { textAlign: 'right' } }, 'Callback'))), h('tbody', {}, ...rows));
+  const backdrop = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target === backdrop) backdrop.remove(); } },
+    h('div', { class: 'modal' }, h('div', { class: 'modal-head' }, h('h3', {}, '📊 ' + camp.name), h('button', { class: 'btn icon', onclick: () => backdrop.remove() }, '✕')), h('div', { class: 'modal-body' }, tbl)));
+  document.body.appendChild(backdrop);
+}
+VIEWS.autodialer = async (view) => {
+  view.innerHTML = '';
+  const isMgr = ['admin', 'manager'].includes(CRM.user.role);
+  view.appendChild(h('div', { class: 'card', style: { padding: '1rem', marginBottom: '1rem' } },
+    h('h3', { style: { margin: 0 } }, '🤖 Auto Dialer'),
+    h('div', { class: 'muted', style: { fontSize: '.85rem', marginTop: '.2rem' } }, 'Power dialer — agents auto-advance through assigned leads; admins build campaigns + assign leads.')));
+  const agentWrap = h('div', { class: 'card', style: { padding: '1rem', marginBottom: '1rem' } });
+  view.appendChild(agentWrap);
+  await _renderAgentDialer(agentWrap);
+  if (isMgr) {
+    const adminWrap = h('div', { class: 'card', style: { padding: '1rem' } });
+    view.appendChild(adminWrap);
+    await _renderDialerAdmin(adminWrap);
+  }
+};
 
 VIEWS.targets = async (view) => {
   const isAdmin = ['admin', 'manager'].includes(CRM.user.role);

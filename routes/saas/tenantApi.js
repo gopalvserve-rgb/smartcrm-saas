@@ -99,6 +99,7 @@ const ROUTE_FILES = [
   'social',
   'ivr',
   'compliance',  /* COMPLIANCE_v1 */
+  'dialer',      /* POWER_DIALER_v1 */
   'reportTemplates',  /* REPORT_SCHEDULE_v1 */
   'googleCalendar',  /* GMEET_v1 */
   'meetings',        /* GMEET_v1 */
