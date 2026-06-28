@@ -240,8 +240,8 @@ body.sidebar-collapsed .sidebar { width: 0; padding-left: 0; padding-right: 0; o
 @media (min-width: 781px) {
   body.sidebar-rail .shell { grid-template-columns: 66px 1fr; }
   body.sidebar-rail .sidebar { padding: .7rem .35rem; }
-  body.sidebar-rail .brand { flex-direction: column; justify-content: center; gap: .35rem; padding: .3rem 0 .7rem; }
-  body.sidebar-rail .brand-name { display: none; }
+  body.sidebar-rail .sidebar .brand { flex-direction: column; justify-content: center; gap: .35rem; padding: .3rem 0 .7rem; }
+  body.sidebar-rail .sidebar .brand-name { display: none; }
   body.sidebar-rail .sb-pin { margin: 0; }
   body.sidebar-rail .nav-group-label,
   body.sidebar-rail .nav-group-chev,

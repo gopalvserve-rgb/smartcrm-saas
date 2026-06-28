@@ -189,7 +189,7 @@
 /* ============== THREADS ============== */
 .wbv2-threads { border-right: 1px solid #e9edef; background: #ffffff; display: flex; flex-direction: column; min-height: 0; }
 .wbv2-th-head { padding: 12px 14px 8px; background: #f0f2f5; border-bottom: 1px solid #e9edef; }
-.wbv2-th-head .brand { display: flex; align-items: center; justify-content: space-between; }
+.wbv2-th-head .brand { display: flex !important; flex-direction: row !important; align-items: center; justify-content: space-between; gap: 8px; padding: 0; border-bottom: none; color: #111b21; }
 .wbv2-th-head .b-info { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .wbv2-th-head .b-logo { width: 32px; height: 32px; border-radius: 50%; background: #00a884; color: white; display: grid; place-items: center; font-weight: 700; font-size: 14px; flex-shrink: 0; }
 .wbv2-th-head .b-name { font-weight: 600; font-size: 14px; color: #111b21; }

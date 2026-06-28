@@ -10,7 +10,7 @@
        prefix and the express.static handler in server.js serves
        the file from public/tenant/. The trailing slash is enforced
        by a redirect in server.js so these always resolve correctly. -->
-  <link rel="stylesheet" href="styles.css?v=2026-06-27-sidebar-rail-v7" />
+  <link rel="stylesheet" href="styles.css?v=2026-06-27-sidebar-rail-v8" />
   <!-- GLASS_THEME_v1 -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -188,7 +188,7 @@
           // rewrote this block, which is why the redesign "disappeared".
           // Inert unless WB_CHAT_V2_ENABLED='1' (vserve-only beta).
           var wb = document.createElement('script');
-          wb.src = 'wbChatV2.js?v=2026-06-27-wbchatv2-hdrfix-v1';
+          wb.src = 'wbChatV2.js?v=2026-06-27-wbchatv2-hdrfix-v2';
           document.body.appendChild(wb);
           // WB_CHAT_V2_RESTORE_v1 (2026-06-27) — the loaders below were ALSO
           // dropped when the pack scripts rewrote this block, which is why the
