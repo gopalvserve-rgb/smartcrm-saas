@@ -48,7 +48,13 @@ async function _ensureSchema() {
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`);
-  await control.query(`CREATE INDEX IF NOT EXISTS wl_customers_status_idx ON wl_customers(status)`);
+  await control.query(`CREATE INDEX IF NOT EXISTS wl_customers_status_idx ON wl_customers(status)`).catch(()=>{});
+  // SAAS_ADMIN_REPAIR_v1.3 — old wl_customers schema may not have agency_name
+  await control.query(`ALTER TABLE wl_customers ADD COLUMN IF NOT EXISTS agency_name TEXT`).catch(()=>{});
+  // Backfill agency_name from likely-old columns 'name' or 'org_name' if present
+  await control.query(`UPDATE wl_customers SET agency_name = name WHERE agency_name IS NULL AND name IS NOT NULL`).catch(()=>{});
+  await control.query(`UPDATE wl_customers SET agency_name = org_name WHERE agency_name IS NULL AND org_name IS NOT NULL`).catch(()=>{});
+  await control.query(`UPDATE wl_customers SET agency_name = 'Customer ' || id WHERE agency_name IS NULL`).catch(()=>{});
   await control.query(`CREATE INDEX IF NOT EXISTS wl_customers_next_inv_idx ON wl_customers(next_invoice_at)`).catch(()=>{});
   // SAAS_ADMIN_REPAIR_v1 — patch OLD wl_customers tables (created before these columns existed)
   await control.query(`ALTER TABLE wl_customers ADD COLUMN IF NOT EXISTS plan_name TEXT`).catch(()=>{});
