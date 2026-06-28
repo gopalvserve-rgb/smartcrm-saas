@@ -990,3 +990,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The status-wise lead counts now stay visible even when the leads header is collapsed (Classic) and are shown by default in the Modern view.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- LEADS_STATUS_COUNT_REVERT (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('LEADS_STATUS_COUNT_REVERT', 'Reverted status-count strip change',
+ 'Reverted the recent status-wise count visibility change on the leads page back to the previous behaviour.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

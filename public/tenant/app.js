@@ -5020,11 +5020,8 @@ VIEWS.leads = async (view) => {
     );
     view.appendChild(header);
   } else {
-    // LEADS_STATUS_COUNT_v2 — keep the status-wise counts visible even when the
-    // header is collapsed (compact single-row strip next to "Show header").
-    view.appendChild(h('div', { class: 'header-hidden-toggle', style: { display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'nowrap' } },
-      h('button', { class: 'btn sm ghost', style: { flex: '0 0 auto' }, onclick: () => toggleHeader(true) }, '▾ Show header'),
-      h('div', { class: 'leads-status-chips compact', id: 'status-chips', style: { display: 'flex', gap: '6px', flexWrap: 'nowrap', overflowX: 'auto', flex: '1 1 auto', minWidth: '0' } })
+    view.appendChild(h('div', { class: 'header-hidden-toggle' },
+      h('button', { class: 'btn sm ghost', onclick: () => toggleHeader(true) }, '▾ Show header')
     ));
   }
 

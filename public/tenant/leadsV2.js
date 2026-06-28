@@ -84,7 +84,7 @@
     // refresh ALWAYS starts collapsed (only stays open within the same
     // tab session), matching user expectation that headers auto-close
     // on refresh / new page.
-    chipsCollapsed: sessionStorage.getItem('crm.lv2.chipsCollapsed') === '1', // LEADS_STATUS_COUNT_v2 — show counts by default
+    chipsCollapsed: sessionStorage.getItem('crm.lv2.chipsCollapsed') !== '0',
     filtersCollapsed: sessionStorage.getItem('crm.lv2.filtersCollapsed') !== '0',
     visibleColumns: (function(){ try { return JSON.parse(localStorage.getItem('crm.lv2.visibleColumns')) || ['phone','source','status','owner','score','aistep','activity','created']; } catch(_) { return ['phone','source','status','owner','score','aistep','activity','created']; } })(),
     visibleFilters: (function(){ try { return JSON.parse(localStorage.getItem('crm.lv2.visibleFilters')) || ['status','source','owner','score','tag','campaign','followup','qualified']; } catch(_) { return ['status','source','owner','score','tag','campaign','followup','qualified']; } })(),
@@ -907,7 +907,7 @@ tr:hover .lv2-actions { opacity: 1; }
         h('span', { style: { fontSize: '10px', color: '#94a3b8' } }, S.chipsCollapsed ? 'Click to expand' : 'Click to collapse'));
       wrap.appendChild(head);
       if (!S.chipsCollapsed) {
-        const bar = h('div', { class: 'lv2-statuschips', style: { display: 'flex', gap: '6px', padding: '0 14px 8px', overflowX: 'auto', whiteSpace: 'nowrap' } });
+        const bar = h('div', { class: 'lv2-statuschips', style: { display: 'flex', gap: '6px', padding: '0 14px 8px', overflowX: 'auto', flexWrap: 'wrap' } });
         bar.appendChild(makeStatusChip('all', 'All', S.leads.length, onChange));
         (Array.isArray(S.statuses) ? S.statuses : []).forEach(s => {
           const c = counts[s.name] || 0;
@@ -1415,7 +1415,7 @@ tr:hover .lv2-actions { opacity: 1; }
     if (_useV4Hdr && !S.focusMode) {
       wrap.appendChild(buildCompactHeader(onFilterChange));
     }
-    if (!S.focusMode) wrap.appendChild(buildStatusChipBar(onFilterChange)); // LEADS_STATUS_COUNT_v1 — show status-wise counts in Modern too (incl. v4 header)
+    if (!_useV4Hdr && !S.focusMode) wrap.appendChild(buildStatusChipBar(onFilterChange));
     // v3.16 — Focus mode: ALWAYS show Hot/Warm/Nurture sections.
     // Bypass the score-based statusChip ('hot'/'warm' chip) so all three
     // buckets remain visible even when a status chip is active — focus
