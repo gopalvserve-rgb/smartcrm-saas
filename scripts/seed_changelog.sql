@@ -1038,3 +1038,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The main sidebar sections now use clean white-and-blue icons matching the dark theme, instead of colored emojis.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- WHATSAPP_ICON_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('WHATSAPP_ICON_v1', 'Sidebar: proper WhatsApp icon -> Chat',
+ 'The WhatsApp item in the sidebar now uses the WhatsApp logo and opens the WhatsApp Chat page directly when clicked.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

@@ -1707,7 +1707,7 @@ function showOtpStep(challengeToken, who) {
 const NAV_GROUPS = [
   { label: '', items: [
     { id: 'dashboard',  label: 'Dashboard',    icon: '📊', pinned: true, search: 'dashboard overview summary home' },
-    { id: 'whatsbot',   label: 'WhatsApp',     icon: '💬', pinned: true, search: 'whatsapp whatsbot chat whatsapp inbox' }
+    { id: 'whatsbot',   label: 'WhatsApp',     icon: '💬', pinned: true, hash: '#/whatsbot/chat', search: 'whatsapp whatsbot chat whatsapp inbox' }
   ] },
   { label: 'Sales CRM', icon: '💼', items: [
     { id: 'leads',      label: 'Leads',                icon: '🎯', search: 'lead enquiry inquiry prospect customer lead new lead' },
@@ -1872,7 +1872,7 @@ const NAV = NAV_GROUPS.flatMap(g => g.items || (g.subgroups ? g.subgroups.flatMa
 const _W='#eef2f8', _B='#2f6bff', _M='#b9c5db';
 const NAV_SVG = {
   dashboard: `<svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="2" fill="${_B}"/><rect x="13" y="3" width="8" height="8" rx="2" fill="${_W}"/><rect x="3" y="13" width="8" height="8" rx="2" fill="${_W}"/><rect x="13" y="13" width="8" height="8" rx="2" fill="${_W}"/></svg>`,
-  whatsbot: `<svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H10l-4 4v-4H6a2 2 0 0 1-2-2V5z" fill="${_W}"/><circle cx="9" cy="9" r="1.3" fill="${_B}"/><circle cx="13" cy="9" r="1.3" fill="${_B}"/><circle cx="17" cy="9" r="1.3" fill="${_B}"/></svg>`,
+  whatsbot: `<svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2z" fill="#25D366"/><path d="M8.9 7.4c-.18 0-.47.07-.72.34-.25.27-.96.94-.96 2.28 0 1.34.98 2.64 1.12 2.82.14.18 1.92 3.06 4.78 4.18 2.38.93 2.86.74 3.38.7.52-.05 1.66-.68 1.9-1.34.23-.66.23-1.22.16-1.34-.07-.12-.25-.18-.53-.32-.28-.14-1.66-.82-1.92-.91-.26-.1-.45-.14-.63.14-.18.28-.72.91-.88 1.1-.16.18-.32.2-.6.07-.28-.14-1.18-.44-2.25-1.39-.83-.74-1.4-1.66-1.56-1.94-.16-.28-.02-.43.12-.57.13-.13.28-.32.42-.49.14-.16.18-.28.28-.46.09-.18.05-.35-.02-.49-.07-.14-.63-1.52-.86-2.08-.23-.55-.46-.47-.63-.48h-.54z" fill="#fff"/></svg>`,
   'Sales CRM': `<svg viewBox="0 0 24 24"><path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7" fill="none" stroke="${_W}" stroke-width="2"/><rect x="3" y="7" width="18" height="13" rx="2.5" fill="${_W}"/><rect x="9.5" y="11.5" width="5" height="3" rx="1" fill="${_B}"/></svg>`,
   'Calls & Dialer': `<svg viewBox="0 0 24 24"><path d="M6.5 4h3l1.5 4-2 1.5a11 11 0 0 0 5 5l1.5-2 4 1.5v3a2 2 0 0 1-2 2C10.6 22 2 13.4 2 6a2 2 0 0 1 2-2z" fill="${_W}"/><path d="M15 4a5 5 0 0 1 5 5" fill="none" stroke="${_B}" stroke-width="1.7" stroke-linecap="round"/></svg>`,
   'Marketing & Communication': `<svg viewBox="0 0 24 24"><path d="M4 10v4a1 1 0 0 0 1 1h2l9 4V5L7 9H5a1 1 0 0 0-1 1z" fill="${_W}"/><path d="M19 9c1 1 1 5 0 6" fill="none" stroke="${_B}" stroke-width="1.8" stroke-linecap="round"/></svg>`,
@@ -1979,7 +1979,7 @@ function renderShell() {
     const countBadge = item.countKey
       ? h('span', { class: 'nav-count', 'data-count-key': item.countKey, hidden: 'hidden' }, '0')
       : null;
-    return h('a', { href: '#/' + item.id, 'data-view': item.id },
+    return h('a', { href: item.hash || ('#/' + item.id), 'data-view': item.id },
       _navIconEl(item.id, item.icon, 'nav-icon'),
       h('span', {}, item.label),
       countBadge);
