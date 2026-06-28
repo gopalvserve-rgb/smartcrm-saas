@@ -55,17 +55,37 @@ async function _ensureSchema() {
   await control.query(`UPDATE wl_customers SET agency_name = name WHERE agency_name IS NULL AND name IS NOT NULL`).catch(()=>{});
   await control.query(`UPDATE wl_customers SET agency_name = org_name WHERE agency_name IS NULL AND org_name IS NOT NULL`).catch(()=>{});
   await control.query(`UPDATE wl_customers SET agency_name = 'Customer ' || id WHERE agency_name IS NULL`).catch(()=>{});
-  // SAAS_ADMIN_REPAIR_v1.4 — old wl_customers may have NOT NULL legacy columns
-  // (company_name, name, plan, etc.) that block INSERTs from new code. Drop the
-  // NOT NULL constraint on common legacy names; if column doesn't exist the
-  // ALTER is a no-op via .catch().
-  await control.query(`ALTER TABLE wl_customers ALTER COLUMN company_name DROP NOT NULL`).catch(()=>{});
-  await control.query(`ALTER TABLE wl_customers ALTER COLUMN name DROP NOT NULL`).catch(()=>{});
-  await control.query(`ALTER TABLE wl_customers ALTER COLUMN org_name DROP NOT NULL`).catch(()=>{});
-  await control.query(`ALTER TABLE wl_customers ALTER COLUMN plan DROP NOT NULL`).catch(()=>{});
-  await control.query(`ALTER TABLE wl_customers ALTER COLUMN email DROP NOT NULL`).catch(()=>{});
-  await control.query(`ALTER TABLE wl_customers ALTER COLUMN phone DROP NOT NULL`).catch(()=>{});
-  // Backfill company_name from agency_name if it exists (so existing rows stay valid)
+  // SAAS_ADMIN_REPAIR_v1.5 — bulletproof: drop NOT NULL on ANY legacy column we
+  // don't supply during INSERT. Query information_schema to find all columns
+  // that are NOT NULL but aren't in our known list, then drop NOT NULL.
+  try {
+    const known = new Set(['id','agency_name','contact_name','contact_email','contact_mobile',
+                           'plan_name','seat_count','monthly_fee_inr','billing_day','next_invoice_at',
+                           'status','domain','brand_color','notes','created_at','updated_at']);
+    const cols = await control.query(
+      `SELECT column_name FROM information_schema.columns
+        WHERE table_name='wl_customers' AND is_nullable='NO'`
+    );
+    for (const r of cols.rows) {
+      if (!known.has(r.column_name)) {
+        await control.query('ALTER TABLE wl_customers ALTER COLUMN "' + r.column_name + '" DROP NOT NULL').catch(()=>{});
+      }
+    }
+    // Same for wl_invoices
+    const knownInv = new Set(['id','wl_customer_id','number','period_start','period_end','seat_count',
+                              'subtotal_inr','tax_inr','total_inr','status','paid_at','notes',
+                              'sent_email_at','sent_wa_at','created_at','updated_at']);
+    const colsInv = await control.query(
+      `SELECT column_name FROM information_schema.columns
+        WHERE table_name='wl_invoices' AND is_nullable='NO'`
+    );
+    for (const r of colsInv.rows) {
+      if (!knownInv.has(r.column_name)) {
+        await control.query('ALTER TABLE wl_invoices ALTER COLUMN "' + r.column_name + '" DROP NOT NULL').catch(()=>{});
+      }
+    }
+  } catch (_) {}
+  // Backfill any old-named columns so existing rows stay valid
   await control.query(`UPDATE wl_customers SET company_name = agency_name WHERE company_name IS NULL AND agency_name IS NOT NULL`).catch(()=>{});
   await control.query(`CREATE INDEX IF NOT EXISTS wl_customers_next_inv_idx ON wl_customers(next_invoice_at)`).catch(()=>{});
   // SAAS_ADMIN_REPAIR_v1 — patch OLD wl_customers tables (created before these columns existed)
