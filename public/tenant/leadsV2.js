@@ -2533,7 +2533,13 @@ tr:hover .lv2-actions { opacity: 1; }
   }
 
   /* ---------- actions ---------- */
-  function doCall(l) { try { if (window.openCallModal) return window.openCallModal(l.id); } catch (_) {} window.location.href = 'tel:' + (l.phone || ''); }
+  function doCall(l) {
+    // CALL_VIA_MOBILE_v1 — same as Classic: ring the rep's phone via FCM push;
+    // tapping the notification opens the dialer. Falls back to call modal / tel:.
+    try { if (typeof window.callViaMobile === 'function') return window.callViaMobile(l); } catch (_) {}
+    try { if (window.openCallModal) return window.openCallModal(l.id); } catch (_) {}
+    window.location.href = 'tel:' + (l.phone || '');
+  }
   function doQuotation(l) {
     try {
       if (typeof window.openQuotationModal === 'function') {

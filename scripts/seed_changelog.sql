@@ -1132,3 +1132,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'Fixed "Unknown SaaS function" errors on Roles & Permissions, Signup Requests, White-Label Billing and Finance & Business in the super-admin console (module registrations had been dropped). Public signup-request submit and white-label payment portal restored too.',
  'super_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- CALL_VIA_MOBILE_v1 (2026-06-28)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('CALL_VIA_MOBILE', 'Call button now rings your phone',
+ 'The Call button in the WhatsApp chat lead panel and in the Modern / Inbox lead views now sends a notification to your mobile app (like Classic view) — tap it to dial. Falls back to the on-screen call modal where push is unavailable.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

@@ -1227,7 +1227,7 @@
       h('div', { class: 'ph' }, '📞 ' + (l.phone || '—')),
       h('div', { class: 'crt' }, 'Created ' + fmtRelative(l.created_at)),
       h('div', { class: 'acts' },
-        h('button', { class: 'btn-call', onclick: () => { try { window.openCallModal && window.openCallModal(l.id); } catch (_) { window.location.href = 'tel:' + l.phone; } } }, '📞 Call'),
+        h('button', { class: 'btn-call', onclick: () => { try { if (typeof window.callViaMobile === 'function') return window.callViaMobile(l); } catch (_) {} try { window.openCallModal && window.openCallModal(l.id); } catch (_) { window.location.href = 'tel:' + l.phone; } } }, '📞 Call'),
         h('button', { class: 'btn-view', onclick: () => {
           if (typeof window.openLeadModal === 'function') {
             try { window.openLeadModal(l.id); return; } catch (_) {}

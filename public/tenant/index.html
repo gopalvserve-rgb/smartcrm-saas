@@ -188,7 +188,7 @@
           // rewrote this block, which is why the redesign "disappeared".
           // Inert unless WB_CHAT_V2_ENABLED='1' (vserve-only beta).
           var wb = document.createElement('script');
-          wb.src = 'wbChatV2.js?v=2026-06-27-wbchatv2-hdrfix-v2';
+          wb.src = 'wbChatV2.js?v=2026-06-27-callviamobile-v1';
           document.body.appendChild(wb);
           // WB_CHAT_V2_RESTORE_v1 (2026-06-27) — the loaders below were ALSO
           // dropped when the pack scripts rewrote this block, which is why the
@@ -202,7 +202,7 @@
           cp.src = 'copilotProactive.js?v=2026-06-27-restore-v1'; cp.defer = true;
           document.body.appendChild(cp);
           var lv = document.createElement('script');          // LEADS_VIEW_V2 — Modern + Inbox lead page theme
-          lv.src = 'leadsV2.js?v=2026-06-27-inbox-rich-v1'; lv.defer = true;
+          lv.src = 'leadsV2.js?v=2026-06-27-callviamobile-v1'; lv.defer = true;
           document.body.appendChild(lv);
           var av = document.createElement('script');          // AICALL_v1 — VAPI AI calling config
           av.src = 'aicallVapi.js?v=2026-06-27-restore-v1'; av.defer = true;
