@@ -2534,13 +2534,14 @@ console.log('[ai-summary] SaaS-aware Gemini call-summary worker started');
 
   app.listen(PORT, () => console.log('[boot] SmartCRM SaaS listening on :' + PORT));
 
-  // WB_CHAT_V2_RESTORE_v1 (2026-06-27) — re-assert the redesigned 3-column
-  // WhatsApp chat for vserve ONLY. Idempotent + vserve-scoped: it only ever
-  // writes WB_CHAT_V2_ENABLED='1' on the vserve tenant and never touches any
-  // other tenant. Runs 50s after boot so the control DB + tenant pools warm.
+  // WB_CHAT_V2_ALLTENANTS_v1 (2026-06-27) — roll the redesigned 3-column
+  // WhatsApp chat out to EVERY tenant (existing + future). Idempotent: only
+  // writes the flag for tenants that don't already have it on. New tenants
+  // also get it via tenantBootstrap CONFIG_DEFAULTS. Runs 50s after boot so
+  // the control DB + tenant pools warm.
   try {
-    const { autoEnableOnVserve: _wbV2Vserve } = require('./utils/wbChatV2VserveAutoEnable');
-    setTimeout(() => _wbV2Vserve().catch(() => {}), 50_000);
-  } catch (e) { console.error('[WB_CHAT_V2_RESTORE] vserve wiring failed:', e.message); }
+    const { autoRolloutAtBoot: _wbV2Rollout } = require('./routes/saas/wbChatV2Rollout');
+    setTimeout(() => _wbV2Rollout().catch(() => {}), 50_000);
+  } catch (e) { console.error('[WB_CHAT_V2_ALLTENANTS] wiring failed:', e.message); }
 }
 boot().catch

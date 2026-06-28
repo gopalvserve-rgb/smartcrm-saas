@@ -615,11 +615,10 @@ const CONFIG_DEFAULTS = [
   { key: 'COPILOT_PROACTIVE_ENABLED', value: '1' },
   // LEADS_VIEW_V2_ROLLOUT_v1 — 'Modern' leads theme available on every new tenant.
   { key: 'LEADS_VIEW_V2_ENABLED', value: '1' },
-  // WB_CHAT_V2_REVERT_v1 (2026-06-26) — user reverted the morning rollout.
-  // New tenants no longer get the new chat by default. To re-enable for a
-  // specific tenant, set WB_CHAT_V2_ENABLED='1' via super-admin config UI.
-  // (Vserve keeps v2 since it was the design tenant.)
-  { key: 'WB_CHAT_V2_ENABLED', value: '1' },  // WB_CHAT_V2_ALLTENANTS_v1 — 3-column WhatsApp chat on for every new tenant
+  // WB_CHAT_V2_ALLTENANTS_v1 (2026-06-27) — the redesigned 3-column WhatsApp
+  // chat is ON for every new tenant (and rolled out to existing tenants at
+  // boot via routes/saas/wbChatV2Rollout autoRolloutAtBoot).
+  { key: 'WB_CHAT_V2_ENABLED', value: '1' },
   // REC_RETENTION_v1 — auto-delete call recordings after 30 days by default.
   // A daily all-tenant cron purges lead_recordings older than this. '0' disables.
   { key: 'RECORDING_RETENTION_DAYS', value: '30' },

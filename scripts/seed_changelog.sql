@@ -1116,3 +1116,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'New ♻ Re-churn on each campaign — pick which call results (No answer, Busy, etc.) to recycle; those leads are reset to fresh, removed from their current owner and pushed to another caller to be re-dialled, with a per-lead re-churn count and an optional max-attempts cap. The lead upload box now also has a ⬇ Sample template (Excel) download.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- WB_CHAT_V2_ALLTENANTS_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('WB_CHAT_V2_ALLTENANTS', 'New WhatsApp chat for everyone',
+ 'The redesigned 3-column WhatsApp chat is now enabled for every workspace — existing and newly created — instead of being a vserve-only beta.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;
