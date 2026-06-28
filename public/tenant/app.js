@@ -20804,11 +20804,13 @@ async function _renderDialerAdmin(host) {
       h('div', { style: { display: 'flex', alignItems: 'center', gap: '.6rem', flexWrap: 'wrap' } },
         h('span', { style: { fontWeight: 600, flex: 1 } }, c.name + (c.status === 'paused' ? ' (paused)' : '')),
         h('span', { class: 'tag', style: { background: '#dbeafe', color: '#1e40af' } }, 'Done ' + c.done + ' / ' + c.total),
-        h('span', { class: 'tag', style: { background: '#fef3c7', color: '#92400e' } }, 'Queued ' + c.queued)),
+        h('span', { class: 'tag', style: { background: '#fef3c7', color: '#92400e' } }, 'Queued ' + c.queued),
+        Number(c.churned) > 0 ? h('span', { class: 'tag', style: { background: '#ede9fe', color: '#6d28d9' }, title: 'Total re-churns across this campaign' }, '♻ ' + c.churned) : null),
       h('div', { style: { display: 'flex', gap: '.4rem', flexWrap: 'wrap', marginTop: '.5rem' } },
         h('button', { class: 'btn sm', onclick: () => _dialerAddLeads(host, c) }, '➕ Add leads'),
         h('button', { class: 'btn sm', onclick: async () => { try { await api('api_dialer_pause', { campaign_id: c.id, status: c.status === 'paused' ? 'running' : 'paused' }); _renderDialerAdmin(host); } catch (e) { toast(e.message, 'err'); } } }, c.status === 'paused' ? '▶ Resume' : '⏸ Pause'),
         h('button', { class: 'btn sm', onclick: () => _dialerMonitor(c) }, '📊 Monitor'),
+        h('button', { class: 'btn sm', onclick: () => _dialerRechurn(host, c) }, '♻ Re-churn'),
         h('button', { class: 'btn sm danger', onclick: async () => { if (!confirm('Delete campaign "' + c.name + '"?')) return; try { await api('api_dialer_campaign_delete', c.id); _renderDialerAdmin(host); } catch (e) { toast(e.message, 'err'); } } }, '🗑')));
     listBox.appendChild(box);
   });
@@ -20911,11 +20913,19 @@ function _dialerAddLeads(host, camp) {
     fileInput.value = '';
   };
   const uploadBtn = h('button', { class: 'btn', type: 'button', onclick: () => fileInput.click() }, '📄 Upload Excel / CSV');
+  const sampleBtn = h('button', { class: 'btn', type: 'button', style: { marginLeft: '.4rem' }, onclick: async () => {
+    try {
+      const XLSX = await ensureXLSX();
+      const ws = XLSX.utils.aoa_to_sheet([['Name', 'Phone'], ['Ramesh Kumar', '9876543210'], ['Priya Sharma', '9123456789']]);
+      const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Leads');
+      XLSX.writeFile(wb, 'dialer-leads-template.xlsx');
+    } catch (e) { toast('Could not build template: ' + e.message, 'err'); }
+  } }, '⬇ Sample template');
 
   const card = h('div', { class: 'card', style: { padding: '1rem' } },
     h('div', { style: { fontWeight: 600, marginBottom: '.5rem' } }, '➕ Add leads to "' + camp.name + '"'),
     h('div', { style: { marginBottom: '.7rem', padding: '.7rem', background: '#f8fafc', border: '1px dashed #cbd5e1', borderRadius: '8px' } },
-      uploadBtn, fileInput,
+      uploadBtn, sampleBtn, fileInput,
       h('div', { class: 'muted', style: { fontSize: '.75rem', marginTop: '.35rem' } }, 'Accepts .xlsx, .xls, .csv — max 5 MB. Columns: a Name column + a Phone/Mobile/Number column. Headers optional (first two columns are used if unlabeled).'),
       fileStatus),
     h('div', { class: 'muted', style: { fontSize: '.8rem', margin: '.4rem 0 .3rem' } }, 'Or paste leads (Name, Phone — one per line):'),
@@ -20947,6 +20957,68 @@ function _dialerAddLeads(host, camp) {
       h('button', { class: 'btn', onclick: () => _renderDialerAdmin(host) }, 'Cancel')));
   host.innerHTML = ''; host.appendChild(card);
 }
+const _DLR_OUTCOME_LABELS = { connected: '✅ Connected', no_answer: '📵 No answer', busy: '⏳ Busy', callback: '🔁 Callback', not_interested: '🚫 Not interested', converted: '🎉 Converted', dnc: '⛔ Do-not-call', done: '✔ Done' };
+
+async function _dialerRechurn(host, camp) {
+  let outcomes = [];
+  try { outcomes = await api('api_dialer_campaign_outcomes', camp.id); } catch (e) { toast(e.message, 'err'); return; }
+  const users = (CRM.cache && CRM.cache.users) || [];
+
+  // outcome/status checkboxes
+  const outBox = h('div', { style: { display: 'grid', gap: '.25rem', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '.5rem', marginBottom: '.5rem' } });
+  if (!outcomes.length) { outBox.appendChild(h('div', { class: 'muted', style: { fontSize: '.82rem' } }, 'No completed calls yet to re-churn.')); }
+  const outCbs = {};
+  outcomes.forEach(o => {
+    const cb = h('input', { type: 'checkbox', value: o.key });
+    outCbs[o.key] = cb;
+    outBox.appendChild(h('label', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', fontSize: '.85rem' } },
+      cb, h('span', {}, _DLR_OUTCOME_LABELS[o.key] || o.key), h('span', { class: 'muted', style: { fontSize: '.75rem' } }, '(' + o.count + ')')));
+  });
+
+  // agent checkboxes + dividing rule
+  const agentRows = {};
+  const agentBox = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '.25rem', maxHeight: '160px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '.5rem' } });
+  users.forEach(u => {
+    const cb = h('input', { type: 'checkbox', value: String(u.id) });
+    agentRows[u.id] = { cb };
+    agentBox.appendChild(h('label', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', fontSize: '.85rem' } }, cb, h('span', {}, u.name), h('span', { class: 'muted', style: { fontSize: '.72rem' } }, '(' + u.role + ')')));
+  });
+  const distSel = h('select', { class: 'input', style: { width: 'auto' } },
+    h('option', { value: 'round_robin' }, '🔁 Round robin'),
+    h('option', { value: 'equal' }, '⚖️ Equal split'));
+  const exclChk = h('input', { type: 'checkbox', checked: 'checked' });
+  const maxInp = h('input', { type: 'number', class: 'input', min: '1', max: '20', placeholder: 'no limit', style: { width: '90px' } });
+
+  const backdrop = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target === backdrop) backdrop.remove(); } },
+    h('div', { class: 'modal' },
+      h('div', { class: 'modal-head' }, h('h3', {}, '♻ Re-churn — ' + camp.name), h('button', { class: 'btn icon', onclick: () => backdrop.remove() }, '✕')),
+      h('div', { class: 'modal-body', style: { maxHeight: '70vh', overflowY: 'auto' } },
+        h('p', { class: 'muted', style: { fontSize: '.82rem', marginTop: 0 } }, 'Recycle leads with the chosen result back into the queue as fresh, reassigned to another caller so they get re-dialled.'),
+        h('div', { class: 'muted', style: { fontSize: '.8rem', margin: '.2rem 0' } }, 'Which results to re-churn:'),
+        outBox,
+        h('div', { class: 'muted', style: { fontSize: '.8rem', margin: '.4rem 0 .2rem' } }, 'Reassign to agents (leave all unchecked = keep existing campaign agents):'),
+        agentBox,
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', margin: '.5rem 0', flexWrap: 'wrap' } },
+          h('span', { class: 'muted', style: { fontSize: '.8rem' } }, 'Dividing rule:'), distSel),
+        h('label', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', fontSize: '.83rem', margin: '.3rem 0' } }, exclChk, ' Push to a different caller (not the current owner)'),
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', margin: '.3rem 0', flexWrap: 'wrap' } },
+          h('span', { class: 'muted', style: { fontSize: '.8rem' } }, 'Max re-churns per lead:'), maxInp,
+          h('span', { class: 'muted', style: { fontSize: '.72rem' } }, '(skip leads already re-churned this many times)'))),
+      h('div', { class: 'actions' },
+        h('button', { class: 'btn', onclick: () => backdrop.remove() }, 'Cancel'),
+        h('button', { class: 'btn primary', onclick: async () => {
+          const sel = outcomes.map(o => o.key).filter(k => outCbs[k] && outCbs[k].checked);
+          if (!sel.length) { toast('Pick at least one result to re-churn', 'err'); return; }
+          const agents = users.filter(u => agentRows[u.id].cb.checked).map(u => Number(u.id));
+          try {
+            const r = await api('api_dialer_rechurn', { campaign_id: camp.id, outcomes: sel, assign_to: agents, distribution: distSel.value, exclude_current_owner: exclChk.checked, max_churn: maxInp.value ? Number(maxInp.value) : null });
+            toast('Re-churned ' + r.rechurned + ' leads', 'ok');
+            backdrop.remove(); _renderDialerAdmin(host);
+          } catch (e) { toast(e.message, 'err'); }
+        } }, '♻ Re-churn'))));
+  document.body.appendChild(backdrop);
+}
+
 async function _dialerMonitor(camp) {
   let d;
   try { d = await api('api_dialer_campaign_detail', camp.id); } catch (e) { toast(e.message, 'err'); return; }

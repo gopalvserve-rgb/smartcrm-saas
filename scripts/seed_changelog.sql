@@ -1108,3 +1108,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'When adding leads to a campaign you can now choose a duplicate policy: skip duplicates already in this campaign, skip if the number exists anywhere in the CRM, or allow duplicates. Skipped count is reported after upload.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- DIALER_RECHURN_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('DIALER_RECHURN_v1', 'Auto Dialer: re-churn + Excel template',
+ 'New ♻ Re-churn on each campaign — pick which call results (No answer, Busy, etc.) to recycle; those leads are reset to fresh, removed from their current owner and pushed to another caller to be re-dialled, with a per-lead re-churn count and an optional max-attempts cap. The lead upload box now also has a ⬇ Sample template (Excel) download.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

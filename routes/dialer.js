@@ -39,6 +39,8 @@ async function ensureSchema() {
     )`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_dcl_camp ON dialer_campaign_leads(campaign_id)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_dcl_agent ON dialer_campaign_leads(assigned_to, status)`);
+  // DIALER_RECHURN_v1 — how many times a lead has been re-churned (recycled to another agent).
+  await db.query(`ALTER TABLE dialer_campaign_leads ADD COLUMN IF NOT EXISTS churn_count INT NOT NULL DEFAULT 0`);
   _ensured = true;
 }
 
@@ -52,7 +54,8 @@ async function api_dialer_campaigns_list(token) {
     `SELECT c.*,
        (SELECT COUNT(*) FROM dialer_campaign_leads l WHERE l.campaign_id=c.id)::int AS total,
        (SELECT COUNT(*) FROM dialer_campaign_leads l WHERE l.campaign_id=c.id AND l.status='done')::int AS done,
-       (SELECT COUNT(*) FROM dialer_campaign_leads l WHERE l.campaign_id=c.id AND l.status='queued')::int AS queued
+       (SELECT COUNT(*) FROM dialer_campaign_leads l WHERE l.campaign_id=c.id AND l.status='queued')::int AS queued,
+       (SELECT COALESCE(SUM(l.churn_count),0) FROM dialer_campaign_leads l WHERE l.campaign_id=c.id)::int AS churned
      FROM dialer_campaigns c ORDER BY c.id DESC`);
   return rows;
 }
@@ -171,6 +174,79 @@ async function api_dialer_addLeads(token, payload) {
   return { ok: true, added, skipped, policy: dupPolicy };
 }
 
+/* DIALER_RECHURN_v1 — outcome/status breakdown for the re-churn picker.
+ * Returns completed dispositions (not currently queued/in_progress) grouped. */
+async function api_dialer_campaign_outcomes(token, campaignId) {
+  await authUser(token);
+  await ensureSchema();
+  const cid = Number(campaignId);
+  const { rows } = await db.query(
+    `SELECT COALESCE(NULLIF(outcome,''), status) AS key,
+            COUNT(*)::int AS count
+       FROM dialer_campaign_leads
+      WHERE campaign_id=$1 AND status NOT IN ('queued','in_progress')
+      GROUP BY COALESCE(NULLIF(outcome,''), status)
+      ORDER BY count DESC`, [cid]);
+  return rows;
+}
+
+/* DIALER_RECHURN_v1 — recycle leads with the chosen outcome(s)/status back into
+ * the queue, reassigned to a DIFFERENT caller, so unpicked leads get re-dialled.
+ * payload: { campaign_id, outcomes:[...], assign_to:[...], distribution, weights,
+ *            exclude_current_owner, max_churn } */
+async function api_dialer_rechurn(token, payload) {
+  const me = await authUser(token);
+  if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin/manager only');
+  await ensureSchema();
+  const p = payload || {};
+  const cid = Number(p.campaign_id);
+  if (!cid) throw new Error('campaign_id required');
+  const keys = (Array.isArray(p.outcomes) ? p.outcomes : []).map(String).filter(Boolean);
+  if (!keys.length) throw new Error('Pick at least one status/outcome to re-churn');
+  const distribution = ['round_robin', 'equal', 'percent'].includes(p.distribution) ? p.distribution : 'round_robin';
+  const weights = (p.weights && typeof p.weights === 'object') ? p.weights : null;
+  const excludeOwner = p.exclude_current_owner !== false; // default true
+  const maxChurn = Number(p.max_churn) > 0 ? Number(p.max_churn) : null;
+
+  // Agents to redistribute to (default: agents already in the campaign).
+  let agents = (Array.isArray(p.assign_to) ? p.assign_to : []).map(Number).filter(Boolean);
+  if (!agents.length) {
+    const ag = await db.query(
+      `SELECT DISTINCT assigned_to FROM dialer_campaign_leads WHERE campaign_id=$1 AND assigned_to IS NOT NULL`, [cid]);
+    agents = ag.rows.map(r => Number(r.assigned_to)).filter(Boolean);
+  }
+  if (!agents.length) throw new Error('No agents to assign to — select agents');
+
+  // Pull the matching leads (match on outcome OR status, the same key the picker shows).
+  let q = `SELECT id, assigned_to FROM dialer_campaign_leads
+            WHERE campaign_id=$1 AND status NOT IN ('queued','in_progress')
+              AND COALESCE(NULLIF(outcome,''), status) = ANY($2)`;
+  const args = [cid, keys];
+  if (maxChurn) { q += ` AND churn_count < $3`; args.push(maxChurn); }
+  q += ` ORDER BY id ASC`;
+  const { rows } = await db.query(q, args);
+  if (!rows.length) return { ok: true, rechurned: 0 };
+
+  const plan = _buildAssignPlan(rows.length, agents, distribution, weights);
+  let rechurned = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const lead = rows[i];
+    let agent = plan[i] != null ? plan[i] : agents[i % agents.length];
+    // Push to a DIFFERENT caller where possible.
+    if (excludeOwner && agents.length > 1 && Number(agent) === Number(lead.assigned_to)) {
+      const idx = agents.indexOf(agent);
+      agent = agents[(idx + 1) % agents.length];
+    }
+    await db.query(
+      `UPDATE dialer_campaign_leads
+          SET status='queued', outcome=NULL, assigned_to=$1,
+              churn_count=churn_count+1, last_attempt_at=NULL
+        WHERE id=$2`, [agent, lead.id]);
+    rechurned++;
+  }
+  return { ok: true, rechurned };
+}
+
 async function api_dialer_campaign_detail(token, id) {
   const me = await authUser(token);
   await ensureSchema();
@@ -273,6 +349,8 @@ module.exports = {
   api_dialer_campaign_delete,
   api_dialer_addLeads,
   api_dialer_campaign_detail,
+  api_dialer_campaign_outcomes,
+  api_dialer_rechurn,
   api_dialer_myCampaigns,
   api_dialer_nextLead,
   api_dialer_disposition,
