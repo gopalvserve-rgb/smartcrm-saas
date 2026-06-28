@@ -1022,3 +1022,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'Sidebar menu icons are now rendered as clean white silhouettes so colored icons (like the red call icon) are clearly visible on the dark menu.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- MENU_REORG_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('MENU_REORG_v1', 'Sidebar: WhatsApp top-level + Smart Call AI moved to bottom',
+ 'WhatsApp now appears as its own icon at the top of the sidebar for quick access, and the Smart Call AI section has moved to the bottom of the menu.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

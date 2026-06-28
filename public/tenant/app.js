@@ -1706,7 +1706,8 @@ function showOtpStep(challengeToken, who) {
 // old + new aliases so the new sidebar search box catches either term.
 const NAV_GROUPS = [
   { label: '', items: [
-    { id: 'dashboard',  label: 'Dashboard',    icon: '📊', pinned: true, search: 'dashboard overview summary home' }
+    { id: 'dashboard',  label: 'Dashboard',    icon: '📊', pinned: true, search: 'dashboard overview summary home' },
+    { id: 'whatsbot',   label: 'WhatsApp',     icon: '💬', pinned: true, search: 'whatsapp whatsbot chat whatsapp inbox' }
   ] },
   { label: 'Sales CRM', icon: '💼', items: [
     { id: 'leads',      label: 'Leads',                icon: '🎯', search: 'lead enquiry inquiry prospect customer lead new lead' },
@@ -1788,14 +1789,6 @@ const NAV_GROUPS = [
     { id: 'callratings',  label: 'Call Ratings',  icon: '⭐', roles: ['admin', 'manager', 'team_leader'], search: 'rating call rating quality score' },
     { id: 'aiusage',      label: 'AI Usage',      icon: '🤖', roles: ['admin', 'manager'], search: 'ai usage ai summary call ai ai minutes' }
   ] },
-  /* AICALL_v1 — Smart Call AI: VAPI-powered outbound voice campaigns. */
-  { label: 'Smart Call AI', icon: '🎙️', items: [
-    { id: 'aicallDashboard', label: 'Dashboard',  icon: '📊', search: 'smart call ai smartcall dashboard call volume outcomes',                            brandFlag: 'AI_CALL_ENABLED' },
-    { id: 'aicallCampaigns', label: 'Campaigns',  icon: '📣', roles: ['admin','manager','team_leader'], search: 'smart call ai smartcall campaign csv outbound voice', brandFlag: 'AI_CALL_ENABLED' },
-    { id: 'aicallLogs',      label: 'Call Logs',  icon: '📋', search: 'smart call ai smartcall call logs transcripts recordings',                          brandFlag: 'AI_CALL_ENABLED' },
-    { id: 'aicallVapi',      label: 'VAPI AI',    icon: '🎙️', roles: ['admin','manager'],              search: 'smart call ai smartcall vapi phone numbers assistants knowledge base', brandFlag: 'AI_CALL_ENABLED' },
-    { id: 'aicallSettings',  label: 'Settings',   icon: '⚙️', roles: ['admin','manager'],              search: 'smart call ai smartcall settings vapi api key provider' }
-  ] },
   /* META_MODULE_v1 — Marketing & Communication groups all outbound
    * channels (Meta ads, Social, WhatsApp Bot, AI Assistant, Campaigns). */
   { label: 'Marketing & Communication', icon: '📣', items: [
@@ -1862,6 +1855,14 @@ const NAV_GROUPS = [
     { id: 'users',      label: 'Users',            icon: '👥', roles: ['admin', 'manager'], search: 'users staff team member role' },
     { id: 'admin',      label: 'General Settings', icon: '⚙️', roles: ['admin'],            search: 'settings general settings system settings configuration' },
     { id: 'compliance', label: 'Compliance',       icon: '🛡', roles: ['admin', 'manager', 'team_leader'], search: 'compliance policy legal audit' }
+  ] },
+  /* AICALL_v1 — Smart Call AI moved to the bottom of the menu per user request. */
+  { label: 'Smart Call AI', icon: '🎙️', items: [
+    { id: 'aicallDashboard', label: 'Dashboard',  icon: '📊', search: 'smart call ai smartcall dashboard call volume outcomes',                            brandFlag: 'AI_CALL_ENABLED' },
+    { id: 'aicallCampaigns', label: 'Campaigns',  icon: '📣', roles: ['admin','manager','team_leader'], search: 'smart call ai smartcall campaign csv outbound voice', brandFlag: 'AI_CALL_ENABLED' },
+    { id: 'aicallLogs',      label: 'Call Logs',  icon: '📋', search: 'smart call ai smartcall call logs transcripts recordings',                          brandFlag: 'AI_CALL_ENABLED' },
+    { id: 'aicallVapi',      label: 'VAPI AI',    icon: '🎙️', roles: ['admin','manager'],              search: 'smart call ai smartcall vapi phone numbers assistants knowledge base', brandFlag: 'AI_CALL_ENABLED' },
+    { id: 'aicallSettings',  label: 'Settings',   icon: '⚙️', roles: ['admin','manager'],              search: 'smart call ai smartcall settings vapi api key provider' }
   ] }
 ];
 // Flatten for backwards-compat with anywhere that iterates NAV.
