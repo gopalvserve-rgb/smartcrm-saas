@@ -955,3 +955,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'Leads now show when the number was last dialed. A new Last Dialed column appears on the Classic leads list (date + time), and the last-dialed time also shows in the lead detail panel and the dial badge tooltip.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- MODERN_COL_PICKER_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('MODERN_COL_PICKER_v1', 'Modern leads: column picker + Last Dialed column',
+ 'The Modern leads view now has a Columns option in the ⋮ menu to show/hide columns, and a new Last Dialed column (date + time) is available there too.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

@@ -873,6 +873,7 @@ tr:hover .lv2-actions { opacity: 1; }
           }, lab);
           m.appendChild(mi('↓ Export CSV', () => { try { if (typeof window.lv2ExportCsv === 'function') window.lv2ExportCsv(); else toast('Export not available', 'err'); } catch(_){} }));
           m.appendChild(mi('🎯 Focus mode', () => { S.focusMode = !S.focusMode; try { localStorage.setItem('crm.lv2.focus', S.focusMode ? '1' : '0'); } catch (_) {} if (onChange) onChange(); }));
+          m.appendChild(mi('📊 Columns', () => { try { openCustomizeColumnsPopover(more, onChange); } catch (_) {} }));
           document.body.appendChild(m);
           setTimeout(() => {
             const close = (e) => { if (e.target.closest && e.target.closest('#lv2-more-menu')) return; try { m.remove(); } catch(_){} document.removeEventListener('mousedown', close, true); };
@@ -1259,7 +1260,8 @@ tr:hover .lv2-actions { opacity: 1; }
       ['city',      '🗺 City'],
       ['product',   '📦 Product'],
       ['activity',  '🕒 Last activity'],
-      ['created',   '🗓 Created']
+      ['created',   '🗓 Created'],
+      ['last_dialed','📞 Last Dialed']
     ];
     const visible = new Set(Array.isArray(S.visibleColumns) ? S.visibleColumns : []);
     const pop = h('div', { class: 'lv2-popover', style: {
@@ -1634,6 +1636,7 @@ tr:hover .lv2-actions { opacity: 1; }
     if (vc.has('product'))  headerRow.appendChild(h('th', null, '📦 Product'));
     if (vc.has('activity')) headerRow.appendChild(h('th', null, 'Activity'));
     if (vc.has('created'))  headerRow.appendChild(h('th', null, 'Created'));
+    if (vc.has('last_dialed')) headerRow.appendChild(h('th', null, '📞 Last Dialed'));
     const thead = h('thead', null, headerRow);
     tbl.appendChild(thead);
     const tbody = h('tbody');
@@ -1976,6 +1979,11 @@ tr:hover .lv2-actions { opacity: 1; }
     }
     if (vc.has('created'))  {
       tr.appendChild(h('td', null, h('span', { class: 'lv2-muted', title: l.created_at ? new Date(l.created_at).toLocaleString('en-IN') : '' }, fmtDateTimeRel(l.created_at))));
+    }
+    if (vc.has('last_dialed')) {
+      tr.appendChild(h('td', null, l._lastDialedAt
+        ? h('span', { class: 'lv2-muted', title: 'Last dialed' + (l._dialCount ? ' \u00b7 ' + l._dialCount + '\u00d7' : '') }, '📞 ' + fmtDateTimeRel(l._lastDialedAt))
+        : h('span', { class: 'lv2-muted' }, '—')));
     }
     return tr;
   }
