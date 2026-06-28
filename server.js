@@ -48,6 +48,7 @@ const tenantModules = require('./routes/saas/tenantModules');
 const demoTenant = require('./routes/saas/demoTenant');
 const aiUsageIngest = require('./routes/saas/aiUsageIngest');
 const tickets = require('./routes/saas/tickets');
+const wbChatV2Rollout = require('./routes/saas/wbChatV2Rollout'); // WB_CHAT_V2_ALLTENANTS_v1 — preview/run from super-admin
 
 // ---- Industry Packs: load + self-register at boot ----------------
 // Each pack module calls framework.register({...}) on require, populating
@@ -87,7 +88,7 @@ const SAAS_API = {};
   announcements, customReqs, webhookLogs, errorLogs, whatsbotBackfill, applySchema, crashReport,
   aiSettings, aiCosting,
   tenantModules, demoTenant,
-  tickets
+  tickets, wbChatV2Rollout
 ].forEach(mod => {
   Object.keys(mod).forEach(k => {
     if (typeof mod[k] === 'function' && k.startsWith('api_saas_')) SAAS_API[k] = mod[k];
