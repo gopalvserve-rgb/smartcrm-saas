@@ -168,7 +168,7 @@ async function api_saas_finance_byPackage(token, opts) {
        FROM packages p
        LEFT JOIN tenants  t ON t.package_id = p.id AND t.status IN ('active','trialing','past_due')
        LEFT JOIN invoices i ON i.package_id = p.id
-      GROUP BY p.id, p.name, p.base_price_inr AS price_inr
+      GROUP BY p.id, p.name, p.base_price_inr
       ORDER BY revenue DESC, tenants DESC`,
     [from, to]
   );
@@ -212,7 +212,7 @@ async function api_saas_finance_tenantsList(token, opts) {
        FROM tenants t
        LEFT JOIN packages p ON p.id = t.package_id
        LEFT JOIN invoices i ON i.tenant_id = t.id
-      GROUP BY t.id, p.name, p.base_price_inr AS price_inr
+      GROUP BY t.id, p.name, p.base_price_inr
       ORDER BY revenue_period DESC, t.created_at DESC
       LIMIT 500`,
     [from, to]

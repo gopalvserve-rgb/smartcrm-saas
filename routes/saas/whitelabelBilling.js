@@ -72,6 +72,13 @@ async function _ensureSchema() {
   await control.query(`ALTER TABLE wl_invoices ADD COLUMN IF NOT EXISTS period_end DATE`).catch(()=>{});
   await control.query(`ALTER TABLE wl_invoices ADD COLUMN IF NOT EXISTS sent_email_at TIMESTAMPTZ`).catch(()=>{});
   await control.query(`ALTER TABLE wl_invoices ADD COLUMN IF NOT EXISTS sent_wa_at TIMESTAMPTZ`).catch(()=>{});
+  // SAAS_ADMIN_REPAIR_v1.2 — wl_invoices may be a completely different old schema. Add core columns.
+  await control.query(`ALTER TABLE wl_invoices ADD COLUMN IF NOT EXISTS wl_customer_id INTEGER`).catch(()=>{});
+  await control.query(`ALTER TABLE wl_invoices ADD COLUMN IF NOT EXISTS number TEXT`).catch(()=>{});
+  await control.query(`ALTER TABLE wl_invoices ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending'`).catch(()=>{});
+  await control.query(`ALTER TABLE wl_invoices ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ`).catch(()=>{});
+  await control.query(`ALTER TABLE wl_invoices ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()`).catch(()=>{});
+  await control.query(`ALTER TABLE wl_invoices ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`).catch(()=>{});
 
   await control.query(`CREATE TABLE IF NOT EXISTS wl_invoices (
     id              SERIAL PRIMARY KEY,
