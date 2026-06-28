@@ -286,6 +286,18 @@ body.sidebar-collapsed .sidebar { width: 0; padding-left: 0; padding-right: 0; o
 .sidebar .nav-group-icon,
 .sidebar nav a .nav-icon,
 .nav-flyout .nav-icon { filter: brightness(0) invert(1); }
+
+/* SIDEBAR_ICONS_v1 — custom duotone SVG icons keep their own white+blue colors
+   (skip the emoji-whitening filter); they go all-white on the active blue square. */
+.sidebar .nav-group-icon.has-svg,
+.sidebar nav a .nav-icon.has-svg,
+.nav-flyout .nav-icon.has-svg { filter: none !important; display: inline-flex; align-items: center; justify-content: center; }
+.has-svg svg { width: 1.45rem; height: 1.45rem; display: block; }
+body.sidebar-rail .nav-group-head .has-svg svg,
+body.sidebar-rail .sidebar nav > a .has-svg svg { width: 1.8rem; height: 1.8rem; }
+body.sidebar-rail .nav-group.nav-active .has-svg svg,
+body.sidebar-rail .sidebar nav > a.active .has-svg svg { filter: brightness(0) invert(1); }
+
 /* keep the active item's icon crisp white with a soft shadow */
 body.sidebar-rail .nav-group.nav-active .nav-group-icon,
 body.sidebar-rail .sidebar nav > a.active .nav-icon { filter: brightness(0) invert(1) drop-shadow(0 1px 1px rgba(0,0,0,.35)); }

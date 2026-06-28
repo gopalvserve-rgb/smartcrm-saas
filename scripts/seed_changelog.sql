@@ -1030,3 +1030,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'WhatsApp now appears as its own icon at the top of the sidebar for quick access, and the Smart Call AI section has moved to the bottom of the menu.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- SIDEBAR_ICONS_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('SIDEBAR_ICONS_v1', 'Sidebar: white + blue menu icons',
+ 'The main sidebar sections now use clean white-and-blue icons matching the dark theme, instead of colored emojis.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

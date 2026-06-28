@@ -1867,6 +1867,26 @@ const NAV_GROUPS = [
 ];
 // Flatten for backwards-compat with anywhere that iterates NAV.
 const NAV = NAV_GROUPS.flatMap(g => g.items || (g.subgroups ? g.subgroups.flatMap(sg => sg.items || []) : []));
+// SIDEBAR_ICONS_v1 — white+blue duotone SVG icons for the rail (cleaner than
+// colored emojis on the dark menu). Keyed by pinned item id OR group label.
+const _W='#eef2f8', _B='#2f6bff', _M='#b9c5db';
+const NAV_SVG = {
+  dashboard: `<svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="2" fill="${_B}"/><rect x="13" y="3" width="8" height="8" rx="2" fill="${_W}"/><rect x="3" y="13" width="8" height="8" rx="2" fill="${_W}"/><rect x="13" y="13" width="8" height="8" rx="2" fill="${_W}"/></svg>`,
+  whatsbot: `<svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H10l-4 4v-4H6a2 2 0 0 1-2-2V5z" fill="${_W}"/><circle cx="9" cy="9" r="1.3" fill="${_B}"/><circle cx="13" cy="9" r="1.3" fill="${_B}"/><circle cx="17" cy="9" r="1.3" fill="${_B}"/></svg>`,
+  'Sales CRM': `<svg viewBox="0 0 24 24"><path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7" fill="none" stroke="${_W}" stroke-width="2"/><rect x="3" y="7" width="18" height="13" rx="2.5" fill="${_W}"/><rect x="9.5" y="11.5" width="5" height="3" rx="1" fill="${_B}"/></svg>`,
+  'Calls & Dialer': `<svg viewBox="0 0 24 24"><path d="M6.5 4h3l1.5 4-2 1.5a11 11 0 0 0 5 5l1.5-2 4 1.5v3a2 2 0 0 1-2 2C10.6 22 2 13.4 2 6a2 2 0 0 1 2-2z" fill="${_W}"/><path d="M15 4a5 5 0 0 1 5 5" fill="none" stroke="${_B}" stroke-width="1.7" stroke-linecap="round"/></svg>`,
+  'Marketing & Communication': `<svg viewBox="0 0 24 24"><path d="M4 10v4a1 1 0 0 0 1 1h2l9 4V5L7 9H5a1 1 0 0 0-1 1z" fill="${_W}"/><path d="M19 9c1 1 1 5 0 6" fill="none" stroke="${_B}" stroke-width="1.8" stroke-linecap="round"/></svg>`,
+  'Reports & Analytics': `<svg viewBox="0 0 24 24"><rect x="4" y="13" width="3.4" height="7" rx="1" fill="${_W}"/><rect x="10.3" y="10" width="3.4" height="10" rx="1" fill="${_W}"/><rect x="16.6" y="6" width="3.4" height="14" rx="1" fill="${_W}"/><path d="M5 11l5-3 4 2 6-5" fill="none" stroke="${_B}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+  'Operations': `<svg viewBox="0 0 24 24"><rect x="4" y="5" width="10" height="16" rx="1.5" fill="${_W}"/><rect x="13" y="10" width="7" height="11" rx="1.5" fill="${_M}"/><rect x="6.5" y="8" width="2.1" height="2.1" fill="${_B}"/><rect x="10" y="8" width="2.1" height="2.1" fill="${_B}"/><rect x="6.5" y="12.4" width="2.1" height="2.1" fill="${_B}"/></svg>`,
+  'Knowledge & Support': `<svg viewBox="0 0 24 24"><path d="M6 3h8l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" fill="${_W}"/><path d="M14 3v5h5z" fill="${_M}"/><path d="M8 13h8M8 16.5h6" stroke="${_B}" stroke-width="1.6" stroke-linecap="round"/></svg>`,
+  'Admin & Settings': `<svg viewBox="0 0 24 24"><path d="M12 2l1.6 2.7 3-.5.7 3 2.7 1.6-1.5 2.7 1.5 2.7-2.7 1.6-.7 3-3-.5L12 22l-1.6-2.7-3 .5-.7-3L4 15.7l1.5-2.7L4 10.3l2.7-1.6.7-3 3 .5L12 2z" fill="${_W}"/><circle cx="12" cy="12" r="3" fill="${_B}"/></svg>`,
+  'Smart Call AI': `<svg viewBox="0 0 24 24"><circle cx="12" cy="4.4" r="1.3" fill="${_B}"/><path d="M12 5.5V8" stroke="${_W}" stroke-width="2" stroke-linecap="round"/><rect x="5" y="8" width="14" height="10" rx="3.2" fill="${_W}"/><circle cx="9.6" cy="13" r="1.5" fill="${_B}"/><circle cx="14.4" cy="13" r="1.5" fill="${_B}"/></svg>`
+};
+function _navIconEl(key, emoji, cls) {
+  const svg = NAV_SVG[key];
+  if (svg) return h('span', { class: (cls || 'nav-icon') + ' has-svg', html: svg });
+  return h('span', { class: cls || 'nav-icon' }, emoji || '');
+}
 
 // LEAD_POOL_v1 — who sees the Lead Pool sidebar item: admin always; others
 // only when the feature is enabled AND they have pool.view/pool.pull OR are
@@ -1960,7 +1980,7 @@ function renderShell() {
       ? h('span', { class: 'nav-count', 'data-count-key': item.countKey, hidden: 'hidden' }, '0')
       : null;
     return h('a', { href: '#/' + item.id, 'data-view': item.id },
-      h('span', { class: 'nav-icon' }, item.icon),
+      _navIconEl(item.id, item.icon, 'nav-icon'),
       h('span', {}, item.label),
       countBadge);
   };
@@ -2053,7 +2073,7 @@ function renderShell() {
       const pGroupEl = h('div', { class: 'nav-group collapsed' });
       const pHead = h('button', { class: 'nav-group-head', type: 'button',
         onclick: () => { pGroupEl.classList.toggle('collapsed'); } },
-        h('span', { class: 'nav-group-icon' }, group.icon || ''),
+        _navIconEl(group.label, group.icon, 'nav-group-icon'),
         h('span', { class: 'nav-group-label' }, group.label),
         h('span', { class: 'nav-group-chev' }, '▾'));
       const pItems = h('div', { class: 'nav-group-items nav-subgroups' });
@@ -2090,7 +2110,7 @@ function renderShell() {
         _saveExpanded();
       }
     },
-      h('span', { class: 'nav-group-icon' }, group.icon || ''),
+      _navIconEl(group.label, group.icon, 'nav-group-icon'),
       h('span', { class: 'nav-group-label' }, group.label),
       h('span', { class: 'nav-group-chev' }, '▾')
     );
