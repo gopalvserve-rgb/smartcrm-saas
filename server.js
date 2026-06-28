@@ -51,6 +51,10 @@ const tenantModules = require('./routes/saas/tenantModules');
 const demoTenant = require('./routes/saas/demoTenant');
 const aiUsageIngest = require('./routes/saas/aiUsageIngest');
 const tickets = require('./routes/saas/tickets');
+// SAAS_ADMIN_REPAIR_v1 (2026-06-28) — Finance + Signup-Requests + WL-Billing super-admin pages
+const finance         = require('./routes/saas/finance');
+const signupRequests  = require('./routes/saas/signupRequests');
+const wlBilling       = require('./routes/saas/whitelabelBilling');
 
 // ---- Industry Packs: load + self-register at boot ----------------
 // Each pack module calls framework.register({...}) on require, populating
@@ -90,7 +94,8 @@ const SAAS_API = {};
   announcements, customReqs, webhookLogs, errorLogs, whatsbotBackfill, applySchema, crashReport,
   aiSettings, aiCosting,
   tenantModules, demoTenant,
-  tickets
+  tickets,
+  finance, signupRequests, wlBilling
 ].forEach(mod => {
   Object.keys(mod).forEach(k => {
     if (typeof mod[k] === 'function' && k.startsWith('api_saas_')) SAAS_API[k] = mod[k];
