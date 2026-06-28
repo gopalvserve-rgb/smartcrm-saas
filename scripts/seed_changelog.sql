@@ -1196,3 +1196,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The custom-field matrix (dashboard widget and Reports) is now height-capped with its own scrollbar (both directions) and a sticky header row, so a field with many values no longer stretches the page.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- LEADS_DATE_SERVER_v1 (2026-06-28)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('LEADS_DATE_SERVER', 'Date filters fixed on Leads + dashboard custom-field widget',
+ 'Date filters on the Modern/Inbox leads views now query the server by date (previously they only filtered the most recent page, so older date ranges showed nothing). The dashboard custom-field widget now also respects the dashboard date range.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

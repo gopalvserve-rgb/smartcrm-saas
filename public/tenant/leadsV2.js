@@ -425,6 +425,22 @@ tr:hover .lv2-actions { opacity: 1; }
   }
 
   /* ---------- data load ---------- */
+  // LEADS_V2_DATE_SERVER_v1 — re-fetch leads from the server scoped to the
+  // current date range, so date filtering works beyond the first 500 rows
+  // (client-side filtering alone only saw the most-recent page).
+  async function reloadLeads() {
+    try {
+      const f = { page_size: 500 };
+      if (S.fDateFrom) f.from = S.fDateFrom;
+      if (S.fDateTo) f.to = S.fDateTo;
+      const leads = await api('api_leads_list', f).catch(() => null);
+      S.leads = (leads && Array.isArray(leads.leads)) ? leads.leads
+              : (Array.isArray(leads) ? leads
+              : (leads && Array.isArray(leads.rows)) ? leads.rows : S.leads);
+    } catch (_) {}
+  }
+  async function _reloadAndRender(cb) { await reloadLeads(); if (typeof cb === 'function') cb(); }
+
   async function load() {
     try {
       /* LEADS_V2_HEADER_v4 (2026-06-27) — fetch brand fresh BEFORE first render so
@@ -432,7 +448,7 @@ tr:hover .lv2-actions { opacity: 1; }
          Without this, CRM.brand / CRM._earlyBrand are empty on first paint and
          the new compact header never activates. Same race we fixed for WB_CHAT_V2. */
       const [leads, statuses, users, sources, tags, campaigns, brand] = await Promise.all([
-        api('api_leads_list', { page_size: 500 }).catch(() => []),
+        api('api_leads_list', (function(){ const f = { page_size: 500 }; if (S.fDateFrom) f.from = S.fDateFrom; if (S.fDateTo) f.to = S.fDateTo; return f; })()).catch(() => []),
         api('api_statuses_list').catch(() => []),
         api('api_users_list').catch(() => []),
         api('api_sources_list').catch(() => []),
@@ -1004,18 +1020,18 @@ tr:hover .lv2-actions { opacity: 1; }
           fontWeight: isActive ? '700' : '500',
           boxShadow: isActive ? '0 1px 3px rgba(67,56,202,.3)' : 'none'
         },
-        onclick: () => { applyDatePreset(k); if (onChange) onChange(); }
+        onclick: () => { applyDatePreset(k); _reloadAndRender(onChange); }
       }, lab));
     });
     // Custom range
     row1.appendChild(h('span', { style: { fontSize: '11px', color: '#94a3b8', margin: '0 4px' } }, 'or'));
     row1.appendChild(h('input', { type: 'date', value: S.fDateFrom, title: 'From date',
       style: { padding: '4px 6px', border: '1px solid #e2e8f0', borderRadius: '5px', fontSize: '11px', width: '130px', flex: '0 0 130px', boxSizing: 'border-box' },
-      onchange: (e) => { S.fDateFrom = e.target.value; S.fDatePreset = ''; if (onChange) onChange(); } }));
+      onchange: (e) => { S.fDateFrom = e.target.value; S.fDatePreset = ''; _reloadAndRender(onChange); } }));
     row1.appendChild(h('span', { style: { fontSize: '11px', color: '#64748b', margin: '0 2px' } }, '→'));
     row1.appendChild(h('input', { type: 'date', value: S.fDateTo, title: 'To date',
       style: { padding: '4px 6px', border: '1px solid #e2e8f0', borderRadius: '5px', fontSize: '11px', width: '130px', flex: '0 0 130px', boxSizing: 'border-box' },
-      onchange: (e) => { S.fDateTo = e.target.value; S.fDatePreset = ''; if (onChange) onChange(); } }));
+      onchange: (e) => { S.fDateTo = e.target.value; S.fDatePreset = ''; _reloadAndRender(onChange); } }));
     wrap.appendChild(row1);
 
     // Row 2: multi-select filter chips (only the ones in visibleFilters)

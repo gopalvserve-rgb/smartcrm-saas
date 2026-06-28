@@ -3423,7 +3423,11 @@ const WIDGET_LIBRARY = {
       c.appendChild(h('h3', { style: { margin: '0 0 .5rem' } }, (w.title || 'Custom field') + (cfKey ? ' · ' + cfKey + ' × ' + colLabel : '')));
       if (!cfKey) { c.appendChild(h('div', { class: 'muted', style: { fontSize: '.85rem' } }, 'Click Edit on this widget and pick a custom field.')); return; }
       try {
-        const r = await api('api_reports_pivot', { row_dims: ['extra:' + cfKey, colDim], metrics: [measure], filters: {} });
+        const _dr = (window.CRM && CRM._dashRange) || {};
+        const _wf = {};
+        if (_dr.from) _wf.from = _dr.from;
+        if (_dr.to) _wf.to = _dr.to;
+        const r = await api('api_reports_pivot', { row_dims: ['extra:' + cfKey, colDim], metrics: [measure], filters: _wf });
         const rows = (r && r.rows) || [];
         if (!rows.length) { c.appendChild(h('div', { class: 'muted', style: { fontSize: '.85rem' } }, 'No leads with a value in this custom field.')); return; }
         const matrix = {}; const colSet = new Set();
