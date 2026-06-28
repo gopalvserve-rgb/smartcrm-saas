@@ -907,7 +907,7 @@ tr:hover .lv2-actions { opacity: 1; }
         h('span', { style: { fontSize: '10px', color: '#94a3b8' } }, S.chipsCollapsed ? 'Click to expand' : 'Click to collapse'));
       wrap.appendChild(head);
       if (!S.chipsCollapsed) {
-        const bar = h('div', { class: 'lv2-statuschips', style: { display: 'flex', gap: '6px', padding: '0 14px 8px', overflowX: 'auto', flexWrap: 'wrap' } });
+        const bar = h('div', { class: 'lv2-statuschips', style: { display: 'flex', gap: '6px', padding: '0 14px 8px', overflowX: 'auto', whiteSpace: 'nowrap' } });
         bar.appendChild(makeStatusChip('all', 'All', S.leads.length, onChange));
         (Array.isArray(S.statuses) ? S.statuses : []).forEach(s => {
           const c = counts[s.name] || 0;
@@ -1415,7 +1415,7 @@ tr:hover .lv2-actions { opacity: 1; }
     if (_useV4Hdr && !S.focusMode) {
       wrap.appendChild(buildCompactHeader(onFilterChange));
     }
-    if (!_useV4Hdr && !S.focusMode) wrap.appendChild(buildStatusChipBar(onFilterChange));
+    if (!S.focusMode) wrap.appendChild(buildStatusChipBar(onFilterChange)); // LEADS_STATUS_COUNT_v1 — show status-wise counts in Modern too (incl. v4 header)
     // v3.16 — Focus mode: ALWAYS show Hot/Warm/Nurture sections.
     // Bypass the score-based statusChip ('hot'/'warm' chip) so all three
     // buckets remain visible even when a status chip is active — focus

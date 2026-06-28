@@ -971,3 +971,14 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The left menu now auto-collapses to a compact icon rail. Hover an icon to see its sub-menu in a fly-out, and click the 📌 pin at the top to keep the full menu always open (your choice is remembered). Click the pin again to go back to the icon rail.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- SIDEBAR_RAIL_v2 + LEADS_STATUS_COUNT_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('SIDEBAR_RAIL_v2', 'Sidebar: active section highlight + brighter icons',
+ 'The collapsed icon sidebar now highlights the section you are in with a filled pill, and the icons are larger and brighter.',
+ 'tenant_admin', NOW()),
+('LEADS_STATUS_COUNT_v1', 'Modern leads: status-wise counts',
+ 'The Modern leads view now shows the status-wise lead counts (a compact single-row strip) like the Classic view.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

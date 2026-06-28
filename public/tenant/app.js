@@ -2329,6 +2329,20 @@ function navigateTo(id) {
   }
   if (!item) item = NAV[0];
   $$('.sidebar nav a, #bottom-nav a').forEach(a => a.classList.toggle('active', a.dataset.view === item.id));
+  // SIDEBAR_RAIL_v1 — highlight the active top-level group so the icon rail
+  // shows which section you're in (filled pill on that group's icon).
+  try {
+    const _navRoot = document.getElementById('nav');
+    if (_navRoot) {
+      _navRoot.querySelectorAll('.nav-group.nav-active').forEach(g => g.classList.remove('nav-active'));
+      const _act = _navRoot.querySelector('a[data-view="' + item.id + '"]');
+      if (_act) {
+        let _el = _act.closest('.nav-group'), _top = null;
+        while (_el) { if (_el.parentElement === _navRoot) { _top = _el; break; } _el = _el.parentElement ? _el.parentElement.closest('.nav-group') : null; }
+        if (_top) _top.classList.add('nav-active');
+      }
+    }
+  } catch (_) {}
   $('#page-title').textContent = item.label;
   // SCROLL_RESET_v2 — aggressive reset on EVERY plausible scroll container.
   // Different layouts (mobile vs desktop, sidebar collapsed vs open, etc.)
