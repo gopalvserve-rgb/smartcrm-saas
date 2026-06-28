@@ -3211,6 +3211,8 @@ VIEWS.dashboard = async (view) => {
         h('div', { style: { display: 'flex', gap: '.2rem' } },
           h('button', { class: 'btn sm ghost', title: 'Cycle size: small / medium / wide',
             onclick: () => { w.size = w.size === 'wide' ? 'medium' : (w.size === 'medium' ? 'small' : 'wide'); _syncEdit(); VIEWS.dashboard(view); } }, '↔'),
+          def.configRenderer ? h('button', { class: 'btn sm', title: 'Configure this widget',
+            onclick: () => _openWidgetConfig(w, def, () => { _syncEdit(); VIEWS.dashboard(view); }) }, '⚙ Edit') : null,
           h('button', { class: 'btn sm danger', title: 'Remove widget',
             onclick: () => { widgets.splice(idx, 1); _syncEdit(); VIEWS.dashboard(view); } }, '🗑')
         )
@@ -4559,6 +4561,23 @@ async function openAddWidgetModal(onPicked) {
   m.appendChild(modal);
   document.body.appendChild(m);
 }
+
+/* DASH_WIDGET_CONFIG_v1 — open a small modal to configure a widget that
+ * defines a configRenderer (e.g. Custom field · Breakdown). Without this
+ * there was no way to pick the custom field after adding the widget. */
+function _openWidgetConfig(w, def, onDone) {
+  w.config = w.config || {};
+  const card = h('div', {});
+  const m = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) { m.remove(); if (onDone) onDone(); } } });
+  const modal = h('div', { class: 'modal' },
+    h('div', { class: 'modal-head' }, h('h3', {}, '\u2699 ' + (def.title || 'Configure widget')), h('button', { class: 'btn icon', onclick: () => { m.remove(); if (onDone) onDone(); } }, '\u2715')),
+    h('div', { class: 'modal-body', style: { minWidth: '300px' } }, card),
+    h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: () => { m.remove(); if (onDone) onDone(); } }, 'Done')));
+  try { def.configRenderer(card, w.config, (patch) => { Object.assign(w.config, patch || {}); }); }
+  catch (e) { card.appendChild(h('div', { class: 'error-box' }, e.message)); }
+  m.appendChild(modal); document.body.appendChild(m);
+}
+try { window._openWidgetConfig = _openWidgetConfig; } catch (_) {}
 
 
 /* ---------------- Leads ---------------- */

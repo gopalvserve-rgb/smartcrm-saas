@@ -1180,3 +1180,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The custom-field matrix on Reports now has a "Add to dashboard" button — one click pins your exact view (chosen field, columns, and measure) as a widget on your personal dashboard. The dashboard "Custom field · Breakdown" widget is also upgraded to let you pick columns (status/source/owner/another field) and the measure when you add or edit it.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- DASH_WIDGET_CONFIG_v1 (2026-06-28)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('DASH_WIDGET_CONFIG', 'Dashboard widgets: Edit / configure button',
+ 'Configurable dashboard widgets (like Custom field · Breakdown) now have an "⚙ Edit" button in customize mode so you can pick the custom field, columns and measure. Previously there was no way to configure them after adding.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;
