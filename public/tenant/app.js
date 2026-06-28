@@ -4565,8 +4565,18 @@ async function openAddWidgetModal(onPicked) {
 /* DASH_WIDGET_CONFIG_v1 — open a small modal to configure a widget that
  * defines a configRenderer (e.g. Custom field · Breakdown). Without this
  * there was no way to pick the custom field after adding the widget. */
-function _openWidgetConfig(w, def, onDone) {
+async function _openWidgetConfig(w, def, onDone) {
   w.config = w.config || {};
+  // DASH_WIDGET_CONFIG_v1.1 — the Dashboard view may not have warmed the
+  // custom-fields cache, so the picker showed "No custom fields defined".
+  // Fetch on demand if the cache is empty.
+  try {
+    if (!(window.CRM && CRM.cache && Array.isArray(CRM.cache.customFields) && CRM.cache.customFields.length)) {
+      const cf = await api('api_customFields_list').catch(() => null);
+      const arr = Array.isArray(cf) ? cf : (cf && Array.isArray(cf.rows) ? cf.rows : null);
+      if (arr) { window.CRM = window.CRM || {}; CRM.cache = CRM.cache || {}; CRM.cache.customFields = arr; }
+    }
+  } catch (_) {}
   const card = h('div', {});
   const m = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) { m.remove(); if (onDone) onDone(); } } });
   const modal = h('div', { class: 'modal' },
