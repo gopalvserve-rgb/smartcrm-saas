@@ -1014,3 +1014,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The collapsed icon sidebar active item is now a bright-blue rounded square with a soft glow and accent bar, and the icons are larger and crisper.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- REF_ICON_LIGHT_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('REF_ICON_LIGHT_v1', 'Sidebar: white icons for dark theme',
+ 'Sidebar menu icons are now rendered as clean white silhouettes so colored icons (like the red call icon) are clearly visible on the dark menu.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;
