@@ -157,7 +157,7 @@ async function runOnce() {
     const sendWa    = (await control.getSetting('AUTO_INVOICE_SEND_WA'))    === '1';
 
     const tenants = await control.query(
-      `SELECT id, name, slug, contact_email, contact_phone, package_id,
+      `SELECT id, org_name AS name, slug, contact_email, contact_mobile AS contact_phone, package_id,
               current_period_start, current_period_end, status
          FROM tenants
         WHERE status IN ('active','trialing','past_due')

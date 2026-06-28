@@ -78,7 +78,7 @@ async function api_saas_invoices_create(token, payload) {
   const me = await requireFullAdmin(token);
   const p = payload || {};
   if (!p.tenant_id) throw new Error('tenant_id required');
-  const tr = await control.query(`SELECT id, name, package_id, current_period_start, current_period_end FROM tenants WHERE id=$1`, [p.tenant_id]);
+  const tr = await control.query(`SELECT id, org_name AS name, package_id, current_period_start, current_period_end FROM tenants WHERE id=$1`, [p.tenant_id]);
   if (!tr.rows.length) throw new Error('Tenant not found');
   const t = tr.rows[0];
   const subtotal = Number(p.subtotal_inr) || 0;
@@ -111,7 +111,7 @@ async function api_saas_invoices_send(token, payload) {
   if (!channels.email && !channels.whatsapp) throw new Error('At least one channel (email or whatsapp) must be true');
   const r = await control.query(
     `SELECT i.id, i.number, i.total_inr, i.subtotal_inr, i.tax_inr, i.period_end, i.description AS package_name,
-            t.id AS tenant_id, t.name AS tenant_name, t.contact_email, t.contact_phone
+            t.id AS tenant_id, t.org_name AS tenant_name, t.contact_email, t.contact_mobile AS contact_phone
        FROM invoices i JOIN tenants t ON t.id = i.tenant_id
       WHERE i.id = $1`, [p.id]);
   if (!r.rows.length) throw new Error('Invoice not found');
