@@ -1046,3 +1046,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The WhatsApp item in the sidebar now uses the WhatsApp logo and opens the WhatsApp Chat page directly when clicked.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- SIDEBAR_SUBICONS_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('SIDEBAR_SUBICONS_v1', 'Sidebar sub-menu: white + blue icons',
+ 'Sub-menu items (Leads, Pipeline, Kanban, etc.) now use clean white-and-blue icons matching the main menu, instead of plain whitened emojis.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

@@ -1887,6 +1887,54 @@ function _navIconEl(key, emoji, cls) {
   if (svg) return h('span', { class: (cls || 'nav-icon') + ' has-svg', html: svg });
   return h('span', { class: cls || 'nav-icon' }, emoji || '');
 }
+// SIDEBAR_SUBICONS_v1 — white+blue icons for submenu items, chosen by keyword.
+const _SI = {
+  person:   `<svg viewBox="0 0 24 24"><path d="M12 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm0 9.5c-4.4 0-8 2.2-8 5V20h16v-1.5c0-2.8-3.6-5-8-5z" fill="${_W}"/><circle cx="12" cy="8" r="1.7" fill="${_B}"/></svg>`,
+  funnel:   `<svg viewBox="0 0 24 24"><path d="M3 5h18l-7 8v6l-4 2v-8L3 5z" fill="${_W}"/><path d="M3 5h18l-2.6 3H5.6L3 5z" fill="${_B}"/></svg>`,
+  columns:  `<svg viewBox="0 0 24 24"><rect x="3" y="4" width="5" height="16" rx="1.5" fill="${_W}"/><rect x="9.5" y="4" width="5" height="16" rx="1.5" fill="${_W}"/><rect x="16" y="4" width="5" height="16" rx="1.5" fill="${_W}"/><rect x="3" y="4" width="5" height="5" rx="1.5" fill="${_B}"/></svg>`,
+  bell:     `<svg viewBox="0 0 24 24"><path d="M6 16V10a6 6 0 0 1 12 0v6l2 2H4l2-2z" fill="${_W}"/><circle cx="12" cy="20" r="2" fill="${_B}"/></svg>`,
+  calendar: `<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2.5" fill="${_W}"/><rect x="3" y="5" width="18" height="5" rx="2.5" fill="${_B}"/><rect x="7" y="3" width="2" height="4" rx="1" fill="${_W}"/><rect x="15" y="3" width="2" height="4" rx="1" fill="${_W}"/></svg>`,
+  target:   `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="${_W}"/><circle cx="12" cy="12" r="5.4" fill="${_B}"/><circle cx="12" cy="12" r="2.1" fill="${_W}"/></svg>`,
+  check:    `<svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="4.5" fill="${_W}"/><path d="M7.5 12.4l3 3 6-6.4" fill="none" stroke="${_B}" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+  doc:      `<svg viewBox="0 0 24 24"><path d="M6 3h8l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" fill="${_W}"/><path d="M14 3v5h5z" fill="${_M}"/><path d="M8 13h8M8 16.5h6" stroke="${_B}" stroke-width="1.6" stroke-linecap="round"/></svg>`,
+  chat:     `<svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H10l-4 4v-4H6a2 2 0 0 1-2-2V5z" fill="${_W}"/><circle cx="9" cy="9" r="1.2" fill="${_B}"/><circle cx="13" cy="9" r="1.2" fill="${_B}"/><circle cx="17" cy="9" r="1.2" fill="${_B}"/></svg>`,
+  box:      `<svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z" fill="${_W}"/><path d="M12 3l8 4.5L12 12 4 7.5 12 3z" fill="${_B}"/></svg>`,
+  card:     `<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2.5" fill="${_W}"/><rect x="3" y="8.5" width="18" height="2.6" fill="${_B}"/><rect x="6" y="14.5" width="5" height="2" rx="1" fill="${_B}"/></svg>`,
+  clock:    `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="${_W}"/><path d="M12 7v5l3.4 2" fill="none" stroke="${_B}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+  people:   `<svg viewBox="0 0 24 24"><circle cx="8.5" cy="8" r="3.2" fill="${_W}"/><circle cx="16.5" cy="9" r="2.6" fill="${_B}"/><path d="M2.5 19c0-3 2.7-4.6 6-4.6s6 1.6 6 4.6V20h-12v-1z" fill="${_W}"/></svg>`,
+  book:     `<svg viewBox="0 0 24 24"><path d="M12 6c-2-1.5-5-1.5-7 0v12c2-1.5 5-1.5 7 0 2-1.5 5-1.5 7 0V6c-2-1.5-5-1.5-7 0z" fill="${_W}"/><path d="M12 6v12" stroke="${_B}" stroke-width="1.6"/></svg>`,
+  star:     `<svg viewBox="0 0 24 24"><path d="M12 3l2.7 5.5 6 .9-4.35 4.2 1 6L12 16.9 6.65 19.6l1-6L3.3 9.4l6-.9L12 3z" fill="${_B}"/></svg>`,
+  recycle:  `<svg viewBox="0 0 24 24"><path d="M12 4a8 8 0 0 1 7 4M19 4v4h-4" fill="none" stroke="${_W}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 20a8 8 0 0 1-7-4M5 20v-4h4" fill="none" stroke="${_B}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+};
+const SUB_ICONS = [
+  [/pool|recycle/, _SI.recycle],
+  [/\bai\b|robot|vapi|assistant|gemini|chatbot/, NAV_SVG['Smart Call AI']],
+  [/pipeline|funnel/, _SI.funnel],
+  [/kanban|board/, _SI.columns],
+  [/follow|reminder|overdue|due today|upcoming|callback/, _SI.bell],
+  [/calendar|schedule|meeting|appoint|site visit|visits/, _SI.calendar],
+  [/target|goal/, _SI.target],
+  [/closure|won|sale done|conversion|\btask|enrollment|admission/, _SI.check],
+  [/quotation|quote|proposal|invoice|\bbill|gstr|\bgst\b|deed|fee/, _SI.doc],
+  [/dialer|\bcall\b|calls/, NAV_SVG['Calls & Dialer']],
+  [/campaign|\bads\b|publisher|megaphone/, NAV_SVG['Marketing & Communication']],
+  [/inbox|chat|whatsapp|message|social|comment/, _SI.chat],
+  [/report|analytic|insight|score|builder|\btat\b|dashboard|overview/, NAV_SVG['Reports & Analytics']],
+  [/inventory|product|item|stock|listing/, _SI.box],
+  [/payment|salary|bank|payroll|revenue|commission|premium|collection|disburse/, _SI.card],
+  [/attendance|tracking|location|clock/, _SI.clock],
+  [/user|team|staff|member|broker|student|people/, _SI.people],
+  [/rating|quality|\bstar/, _SI.star],
+  [/knowledge|tutorial|video|ticket|support|\bhelp|course|document|policy/, _SI.book],
+  [/setting|admin|config|compliance|connect/, NAV_SVG['Admin & Settings']],
+  [/lead|prospect|enquir|inquir|customer|buyer/, _SI.person]
+];
+function _pickNavSvg(item) {
+  if (NAV_SVG[item.id]) return NAV_SVG[item.id];
+  const hay = (item.id + ' ' + (item.label || '') + ' ' + (item.search || '')).toLowerCase();
+  for (let i = 0; i < SUB_ICONS.length; i++) { if (SUB_ICONS[i][0].test(hay)) return SUB_ICONS[i][1]; }
+  return null;
+}
 
 // LEAD_POOL_v1 — who sees the Lead Pool sidebar item: admin always; others
 // only when the feature is enabled AND they have pool.view/pool.pull OR are
@@ -1980,7 +2028,7 @@ function renderShell() {
       ? h('span', { class: 'nav-count', 'data-count-key': item.countKey, hidden: 'hidden' }, '0')
       : null;
     return h('a', { href: item.hash || ('#/' + item.id), 'data-view': item.id },
-      _navIconEl(item.id, item.icon, 'nav-icon'),
+      (function(){ const _sv = _pickNavSvg(item); return _sv ? h('span', { class: 'nav-icon has-svg', html: _sv }) : h('span', { class: 'nav-icon' }, item.icon); })(),
       h('span', {}, item.label),
       countBadge);
   };

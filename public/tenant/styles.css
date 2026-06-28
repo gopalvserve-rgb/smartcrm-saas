@@ -295,6 +295,7 @@ body.sidebar-collapsed .sidebar { width: 0; padding-left: 0; padding-right: 0; o
 .has-svg svg { width: 1.45rem; height: 1.45rem; display: block; }
 body.sidebar-rail .nav-group-head .has-svg svg,
 body.sidebar-rail .sidebar nav > a .has-svg svg { width: 1.8rem; height: 1.8rem; }
+.nav-flyout .has-svg svg, .sidebar .nav-group-items .has-svg svg { width: 1.05rem; height: 1.05rem; }
 body.sidebar-rail .nav-group.nav-active .has-svg svg,
 body.sidebar-rail .sidebar nav > a.active .has-svg svg { filter: brightness(0) invert(1); }
 
