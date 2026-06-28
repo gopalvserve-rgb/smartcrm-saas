@@ -89,12 +89,14 @@ async function api_saas_finance_overview(token, opts) {
   }
 
   // MRR — sum of currently-active tenants' package prices, normalised to monthly
+  // (packages table uses recurring_period: month|quarter|year|lifetime + recurring_period_count)
   const mrr = await control.query(
     `SELECT COALESCE(SUM(
         CASE
-          WHEN COALESCE(p.billing_period, 'monthly') = 'yearly' THEN p.price_inr / 12.0
-          WHEN COALESCE(p.billing_period, 'monthly') = 'quarterly' THEN p.price_inr / 3.0
-          ELSE p.price_inr
+          WHEN COALESCE(p.recurring_period, 'month') = 'year'    THEN p.base_price_inr / (12.0 * GREATEST(COALESCE(p.recurring_period_count, 1), 1))
+          WHEN COALESCE(p.recurring_period, 'month') = 'quarter' THEN p.base_price_inr / (3.0  * GREATEST(COALESCE(p.recurring_period_count, 1), 1))
+          WHEN COALESCE(p.recurring_period, 'month') = 'lifetime' THEN 0
+          ELSE p.base_price_inr / GREATEST(COALESCE(p.recurring_period_count, 1), 1)
         END
        ), 0)::numeric AS mrr
        FROM tenants t LEFT JOIN packages p ON p.id = t.package_id
@@ -159,14 +161,14 @@ async function api_saas_finance_byPackage(token, opts) {
   await requireFullAdmin(token);
   const { from, to } = _customRange(opts);
   const r = await control.query(
-    `SELECT p.id, p.name AS package_name, p.price_inr,
+    `SELECT p.id, p.name AS package_name, p.base_price_inr AS price_inr,
             COUNT(DISTINCT t.id)::int AS tenants,
             COALESCE(SUM(CASE WHEN i.status = 'paid' AND COALESCE(i.paid_at, i.updated_at) >= $1 AND COALESCE(i.paid_at, i.updated_at) < $2 THEN i.total_inr ELSE 0 END), 0)::numeric AS revenue,
             COUNT(DISTINCT CASE WHEN i.status = 'paid' AND COALESCE(i.paid_at, i.updated_at) >= $1 AND COALESCE(i.paid_at, i.updated_at) < $2 THEN i.id END)::int AS invoices_paid
        FROM packages p
        LEFT JOIN tenants  t ON t.package_id = p.id AND t.status IN ('active','trialing','past_due')
        LEFT JOIN invoices i ON i.package_id = p.id
-      GROUP BY p.id, p.name, p.price_inr
+      GROUP BY p.id, p.name, p.base_price_inr AS price_inr
       ORDER BY revenue DESC, tenants DESC`,
     [from, to]
   );
@@ -183,7 +185,7 @@ async function api_saas_finance_expiringSoon(token, opts) {
   const r = await control.query(
     `SELECT t.id, t.slug, t.org_name, t.contact_name, t.contact_email, t.contact_mobile,
             t.status, t.current_period_end,
-            p.name AS package_name, p.price_inr,
+            p.name AS package_name, p.base_price_inr AS price_inr,
             EXTRACT(DAY FROM (t.current_period_end - NOW()))::int AS days_left
        FROM tenants t LEFT JOIN packages p ON p.id = t.package_id
       WHERE t.status IN ('active','trialing','past_due')
@@ -203,14 +205,14 @@ async function api_saas_finance_tenantsList(token, opts) {
   const r = await control.query(
     `SELECT t.id, t.slug, t.org_name, t.contact_email, t.contact_mobile,
             t.status, t.current_period_end, t.created_at,
-            p.name AS package_name, p.price_inr,
+            p.name AS package_name, p.base_price_inr AS price_inr,
             COALESCE(SUM(CASE WHEN i.status = 'paid' AND COALESCE(i.paid_at, i.updated_at) >= $1 AND COALESCE(i.paid_at, i.updated_at) < $2 THEN i.total_inr ELSE 0 END), 0)::numeric AS revenue_period,
             COALESCE(SUM(CASE WHEN i.status = 'paid' THEN i.total_inr ELSE 0 END), 0)::numeric AS revenue_lifetime,
             COALESCE(SUM(CASE WHEN i.status = 'pending' THEN i.total_inr ELSE 0 END), 0)::numeric AS outstanding
        FROM tenants t
        LEFT JOIN packages p ON p.id = t.package_id
        LEFT JOIN invoices i ON i.tenant_id = t.id
-      GROUP BY t.id, p.name, p.price_inr
+      GROUP BY t.id, p.name, p.base_price_inr AS price_inr
       ORDER BY revenue_period DESC, t.created_at DESC
       LIMIT 500`,
     [from, to]

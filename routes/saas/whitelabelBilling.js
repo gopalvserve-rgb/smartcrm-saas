@@ -49,7 +49,29 @@ async function _ensureSchema() {
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`);
   await control.query(`CREATE INDEX IF NOT EXISTS wl_customers_status_idx ON wl_customers(status)`);
-  await control.query(`CREATE INDEX IF NOT EXISTS wl_customers_next_inv_idx ON wl_customers(next_invoice_at)`);
+  await control.query(`CREATE INDEX IF NOT EXISTS wl_customers_next_inv_idx ON wl_customers(next_invoice_at)`).catch(()=>{});
+  // SAAS_ADMIN_REPAIR_v1 — patch OLD wl_customers tables (created before these columns existed)
+  await control.query(`ALTER TABLE wl_customers ADD COLUMN IF NOT EXISTS plan_name TEXT`).catch(()=>{});
+  await control.query(`ALTER TABLE wl_customers ADD COLUMN IF NOT EXISTS seat_count INTEGER DEFAULT 0`).catch(()=>{});
+  await control.query(`ALTER TABLE wl_customers ADD COLUMN IF NOT EXISTS monthly_fee_inr NUMERIC(12,2) DEFAULT 0`).catch(()=>{});
+  await control.query(`ALTER TABLE wl_customers ADD COLUMN IF NOT EXISTS billing_day INTEGER DEFAULT 1`).catch(()=>{});
+  await control.query(`ALTER TABLE wl_customers ADD COLUMN IF NOT EXISTS next_invoice_at DATE`).catch(()=>{});
+  await control.query(`ALTER TABLE wl_customers ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'`).catch(()=>{});
+  await control.query(`ALTER TABLE wl_customers ADD COLUMN IF NOT EXISTS domain TEXT`).catch(()=>{});
+  await control.query(`ALTER TABLE wl_customers ADD COLUMN IF NOT EXISTS brand_color TEXT`).catch(()=>{});
+  await control.query(`ALTER TABLE wl_customers ADD COLUMN IF NOT EXISTS notes TEXT`).catch(()=>{});
+  await control.query(`ALTER TABLE wl_customers ADD COLUMN IF NOT EXISTS contact_name TEXT`).catch(()=>{});
+  await control.query(`ALTER TABLE wl_customers ADD COLUMN IF NOT EXISTS contact_email TEXT`).catch(()=>{});
+  await control.query(`ALTER TABLE wl_customers ADD COLUMN IF NOT EXISTS contact_mobile TEXT`).catch(()=>{});
+  await control.query(`ALTER TABLE wl_invoices ADD COLUMN IF NOT EXISTS seat_count INTEGER DEFAULT 0`).catch(()=>{});
+  await control.query(`ALTER TABLE wl_invoices ADD COLUMN IF NOT EXISTS subtotal_inr NUMERIC(12,2) DEFAULT 0`).catch(()=>{});
+  await control.query(`ALTER TABLE wl_invoices ADD COLUMN IF NOT EXISTS tax_inr NUMERIC(12,2) DEFAULT 0`).catch(()=>{});
+  await control.query(`ALTER TABLE wl_invoices ADD COLUMN IF NOT EXISTS total_inr NUMERIC(12,2) DEFAULT 0`).catch(()=>{});
+  await control.query(`ALTER TABLE wl_invoices ADD COLUMN IF NOT EXISTS notes TEXT`).catch(()=>{});
+  await control.query(`ALTER TABLE wl_invoices ADD COLUMN IF NOT EXISTS period_start DATE`).catch(()=>{});
+  await control.query(`ALTER TABLE wl_invoices ADD COLUMN IF NOT EXISTS period_end DATE`).catch(()=>{});
+  await control.query(`ALTER TABLE wl_invoices ADD COLUMN IF NOT EXISTS sent_email_at TIMESTAMPTZ`).catch(()=>{});
+  await control.query(`ALTER TABLE wl_invoices ADD COLUMN IF NOT EXISTS sent_wa_at TIMESTAMPTZ`).catch(()=>{});
 
   await control.query(`CREATE TABLE IF NOT EXISTS wl_invoices (
     id              SERIAL PRIMARY KEY,

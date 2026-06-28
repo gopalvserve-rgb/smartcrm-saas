@@ -31,7 +31,7 @@ async function api_saas_sr_list(token, opts) {
   const sql = `
     SELECT s.id, s.name, s.email, s.mobile, s.org_name, s.desired_slug,
            s.cashfree_order_id, s.status, s.metadata, s.created_at, s.updated_at,
-           s.package_id, p.name AS package_name, p.price_inr,
+           s.package_id, p.name AS package_name, p.base_price_inr AS price_inr,
            t.id AS provisioned_tenant_id, t.slug AS provisioned_tenant_slug
       FROM signups s
       LEFT JOIN packages p ON p.id = s.package_id
@@ -46,7 +46,7 @@ async function api_saas_sr_list(token, opts) {
 async function api_saas_sr_get(token, id) {
   await requireFullAdmin(token);
   const r = await control.query(
-    `SELECT s.*, p.name AS package_name, p.price_inr
+    `SELECT s.*, p.name AS package_name, p.base_price_inr AS price_inr
        FROM signups s LEFT JOIN packages p ON p.id = s.package_id
       WHERE s.id = $1`, [Number(id)]
   );
