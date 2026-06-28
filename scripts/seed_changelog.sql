@@ -1140,3 +1140,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The Call button in the WhatsApp chat lead panel and in the Modern / Inbox lead views now sends a notification to your mobile app (like Classic view) — tap it to dial. Falls back to the on-screen call modal where push is unavailable.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- DIALER_RECHURN_v2 (2026-06-28)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('DIALER_RECHURN_v2', 'Auto Dialer re-churn: counts + daily cap',
+ 'The re-churn dialog now shows the total re-churns done so far and how many happened today, and adds a "Daily re-churn cap per lead" so a number is not re-dialled more than N times in a single day (alongside the existing total cap).',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

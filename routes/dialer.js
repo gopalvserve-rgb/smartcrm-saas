@@ -41,6 +41,9 @@ async function ensureSchema() {
   await db.query(`CREATE INDEX IF NOT EXISTS idx_dcl_agent ON dialer_campaign_leads(assigned_to, status)`);
   // DIALER_RECHURN_v1 — how many times a lead has been re-churned (recycled to another agent).
   await db.query(`ALTER TABLE dialer_campaign_leads ADD COLUMN IF NOT EXISTS churn_count INT NOT NULL DEFAULT 0`);
+  // DIALER_RECHURN_v2 — per-day re-churn tracking for the daily cap.
+  await db.query(`ALTER TABLE dialer_campaign_leads ADD COLUMN IF NOT EXISTS churn_today INT NOT NULL DEFAULT 0`);
+  await db.query(`ALTER TABLE dialer_campaign_leads ADD COLUMN IF NOT EXISTS churn_day DATE`);
   _ensured = true;
 }
 
@@ -187,7 +190,12 @@ async function api_dialer_campaign_outcomes(token, campaignId) {
       WHERE campaign_id=$1 AND status NOT IN ('queued','in_progress')
       GROUP BY COALESCE(NULLIF(outcome,''), status)
       ORDER BY count DESC`, [cid]);
-  return rows;
+  // DIALER_RECHURN_v2 — total + today's re-churn counts for display.
+  const tot = await db.query(
+    `SELECT COALESCE(SUM(churn_count),0)::int AS total,
+            COALESCE(SUM(CASE WHEN churn_day = CURRENT_DATE THEN churn_today ELSE 0 END),0)::int AS today
+       FROM dialer_campaign_leads WHERE campaign_id=$1`, [cid]);
+  return { outcomes: rows, churn_total: tot.rows[0].total, churn_today: tot.rows[0].today };
 }
 
 /* DIALER_RECHURN_v1 — recycle leads with the chosen outcome(s)/status back into
@@ -207,6 +215,7 @@ async function api_dialer_rechurn(token, payload) {
   const weights = (p.weights && typeof p.weights === 'object') ? p.weights : null;
   const excludeOwner = p.exclude_current_owner !== false; // default true
   const maxChurn = Number(p.max_churn) > 0 ? Number(p.max_churn) : null;
+  const maxPerDay = Number(p.max_churn_per_day) > 0 ? Number(p.max_churn_per_day) : null; // DIALER_RECHURN_v2 daily cap
 
   // Agents to redistribute to (default: agents already in the campaign).
   let agents = (Array.isArray(p.assign_to) ? p.assign_to : []).map(Number).filter(Boolean);
@@ -222,7 +231,9 @@ async function api_dialer_rechurn(token, payload) {
             WHERE campaign_id=$1 AND status NOT IN ('queued','in_progress')
               AND COALESCE(NULLIF(outcome,''), status) = ANY($2)`;
   const args = [cid, keys];
-  if (maxChurn) { q += ` AND churn_count < $3`; args.push(maxChurn); }
+  if (maxChurn) { q += ` AND churn_count < $` + (args.length + 1); args.push(maxChurn); }
+  // DIALER_RECHURN_v2 — skip leads that already hit today's re-churn cap.
+  if (maxPerDay) { q += ` AND (churn_day IS DISTINCT FROM CURRENT_DATE OR churn_today < $` + (args.length + 1) + `)`; args.push(maxPerDay); }
   q += ` ORDER BY id ASC`;
   const { rows } = await db.query(q, args);
   if (!rows.length) return { ok: true, rechurned: 0 };
@@ -240,7 +251,10 @@ async function api_dialer_rechurn(token, payload) {
     await db.query(
       `UPDATE dialer_campaign_leads
           SET status='queued', outcome=NULL, assigned_to=$1,
-              churn_count=churn_count+1, last_attempt_at=NULL
+              churn_count=churn_count+1,
+              churn_today = CASE WHEN churn_day = CURRENT_DATE THEN churn_today + 1 ELSE 1 END,
+              churn_day = CURRENT_DATE,
+              last_attempt_at=NULL
         WHERE id=$2`, [agent, lead.id]);
     rechurned++;
   }

@@ -20960,8 +20960,13 @@ function _dialerAddLeads(host, camp) {
 const _DLR_OUTCOME_LABELS = { connected: '✅ Connected', no_answer: '📵 No answer', busy: '⏳ Busy', callback: '🔁 Callback', not_interested: '🚫 Not interested', converted: '🎉 Converted', dnc: '⛔ Do-not-call', done: '✔ Done' };
 
 async function _dialerRechurn(host, camp) {
-  let outcomes = [];
-  try { outcomes = await api('api_dialer_campaign_outcomes', camp.id); } catch (e) { toast(e.message, 'err'); return; }
+  let outcomes = [], churnTotal = 0, churnToday = 0;
+  try {
+    const oc = await api('api_dialer_campaign_outcomes', camp.id);
+    // DIALER_RECHURN_v2 — API now returns { outcomes, churn_total, churn_today } (old: bare array).
+    if (Array.isArray(oc)) { outcomes = oc; }
+    else { outcomes = oc.outcomes || []; churnTotal = oc.churn_total || 0; churnToday = oc.churn_today || 0; }
+  } catch (e) { toast(e.message, 'err'); return; }
   const users = (CRM.cache && CRM.cache.users) || [];
 
   // outcome/status checkboxes
@@ -20988,12 +20993,16 @@ async function _dialerRechurn(host, camp) {
     h('option', { value: 'equal' }, '⚖️ Equal split'));
   const exclChk = h('input', { type: 'checkbox', checked: 'checked' });
   const maxInp = h('input', { type: 'number', class: 'input', min: '1', max: '20', placeholder: 'no limit', style: { width: '90px' } });
+  const maxDayInp = h('input', { type: 'number', class: 'input', min: '1', max: '20', placeholder: 'no limit', style: { width: '90px' } }); // DIALER_RECHURN_v2 daily cap
 
   const backdrop = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target === backdrop) backdrop.remove(); } },
     h('div', { class: 'modal' },
       h('div', { class: 'modal-head' }, h('h3', {}, '♻ Re-churn — ' + camp.name), h('button', { class: 'btn icon', onclick: () => backdrop.remove() }, '✕')),
       h('div', { class: 'modal-body', style: { maxHeight: '70vh', overflowY: 'auto' } },
         h('p', { class: 'muted', style: { fontSize: '.82rem', marginTop: 0 } }, 'Recycle leads with the chosen result back into the queue as fresh, reassigned to another caller so they get re-dialled.'),
+        h('div', { style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap', margin: '0 0 .6rem' } },
+          h('span', { style: { fontSize: '.78rem', fontWeight: 600, background: '#ede9fe', color: '#6d28d9', padding: '.25rem .6rem', borderRadius: '6px' } }, '♻ Total re-churns: ' + churnTotal),
+          h('span', { style: { fontSize: '.78rem', fontWeight: 600, background: '#dbeafe', color: '#1e40af', padding: '.25rem .6rem', borderRadius: '6px' } }, '📅 Today: ' + churnToday)),
         h('div', { class: 'muted', style: { fontSize: '.8rem', margin: '.2rem 0' } }, 'Which results to re-churn:'),
         outBox,
         h('div', { class: 'muted', style: { fontSize: '.8rem', margin: '.4rem 0 .2rem' } }, 'Reassign to agents (leave all unchecked = keep existing campaign agents):'),
@@ -21002,8 +21011,11 @@ async function _dialerRechurn(host, camp) {
           h('span', { class: 'muted', style: { fontSize: '.8rem' } }, 'Dividing rule:'), distSel),
         h('label', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', fontSize: '.83rem', margin: '.3rem 0' } }, exclChk, ' Push to a different caller (not the current owner)'),
         h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', margin: '.3rem 0', flexWrap: 'wrap' } },
-          h('span', { class: 'muted', style: { fontSize: '.8rem' } }, 'Max re-churns per lead:'), maxInp,
-          h('span', { class: 'muted', style: { fontSize: '.72rem' } }, '(skip leads already re-churned this many times)'))),
+          h('span', { class: 'muted', style: { fontSize: '.8rem' } }, 'Max re-churns per lead (total):'), maxInp,
+          h('span', { class: 'muted', style: { fontSize: '.72rem' } }, '(skip leads already re-churned this many times in all)')),
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', margin: '.3rem 0', flexWrap: 'wrap' } },
+          h('span', { class: 'muted', style: { fontSize: '.8rem' } }, 'Daily re-churn cap per lead:'), maxDayInp,
+          h('span', { class: 'muted', style: { fontSize: '.72rem' } }, '(skip leads already re-churned this many times today)'))),
       h('div', { class: 'actions' },
         h('button', { class: 'btn', onclick: () => backdrop.remove() }, 'Cancel'),
         h('button', { class: 'btn primary', onclick: async () => {
@@ -21011,7 +21023,7 @@ async function _dialerRechurn(host, camp) {
           if (!sel.length) { toast('Pick at least one result to re-churn', 'err'); return; }
           const agents = users.filter(u => agentRows[u.id].cb.checked).map(u => Number(u.id));
           try {
-            const r = await api('api_dialer_rechurn', { campaign_id: camp.id, outcomes: sel, assign_to: agents, distribution: distSel.value, exclude_current_owner: exclChk.checked, max_churn: maxInp.value ? Number(maxInp.value) : null });
+            const r = await api('api_dialer_rechurn', { campaign_id: camp.id, outcomes: sel, assign_to: agents, distribution: distSel.value, exclude_current_owner: exclChk.checked, max_churn: maxInp.value ? Number(maxInp.value) : null, max_churn_per_day: maxDayInp.value ? Number(maxDayInp.value) : null });
             toast('Re-churned ' + r.rechurned + ' leads', 'ok');
             backdrop.remove(); _renderDialerAdmin(host);
           } catch (e) { toast(e.message, 'err'); }
