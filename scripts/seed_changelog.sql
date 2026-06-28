@@ -1100,3 +1100,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'When adding leads to an Auto Dialer campaign you now pick agents with checkboxes, and choose how leads are split: Round robin, Equal split (chunks), or Custom percentage per agent.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- DIALER_DEDUPE_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('DIALER_DEDUPE_v1', 'Auto Dialer: duplicate-lead handling',
+ 'When adding leads to a campaign you can now choose a duplicate policy: skip duplicates already in this campaign, skip if the number exists anywhere in the CRM, or allow duplicates. Skipped count is reported after upload.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

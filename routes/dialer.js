@@ -117,18 +117,30 @@ async function api_dialer_addLeads(token, payload) {
   const agents = (Array.isArray(p.assign_to) ? p.assign_to : []).map(Number).filter(Boolean);
   const distribution = ['round_robin', 'equal', 'percent'].includes(p.distribution) ? p.distribution : 'round_robin';
   const weights = (p.weights && typeof p.weights === 'object') ? p.weights : null;
-  const leads = (Array.isArray(p.leads) ? p.leads : [])
+  const dupPolicy = ['allow', 'skip_campaign', 'skip_all'].includes(p.duplicate_policy) ? p.duplicate_policy : 'skip_campaign';
+  const rawLeads = (Array.isArray(p.leads) ? p.leads : [])
     .map(l => ({ name: String(l.name || '').slice(0, 160), phone: _norm(l.phone) }))
     .filter(l => l.phone.length >= 7);
-  if (!leads.length) throw new Error('No valid leads (need at least a phone number)');
-  if (leads.length > 10000) throw new Error('Too many leads in one upload (max 10,000). Split the file.');
-  // DIALER_DIST_v1 — build a per-lead agent assignment plan by the chosen rule.
-  const _plan = _buildAssignPlan(leads.length, agents, distribution, weights);
-  // try to link to an existing lead by phone (last 10)
-  let added = 0;
-  for (let i = 0; i < leads.length; i++) {
-    const l = leads[i];
-    const agent = _plan[i] != null ? _plan[i] : (agents.length ? agents[i % agents.length] : null);
+  if (!rawLeads.length) throw new Error('No valid leads (need at least a phone number)');
+  if (rawLeads.length > 10000) throw new Error('Too many leads in one upload (max 10,000). Split the file.');
+
+  // DIALER_DEDUPE_v1 — existing phones already in THIS campaign (last 10 digits).
+  const campPhones = new Set();
+  if (dupPolicy !== 'allow') {
+    try {
+      const ex = await db.query(
+        `SELECT right(regexp_replace(coalesce(phone,''),'[^0-9]','','g'),10) AS p10
+           FROM dialer_campaign_leads WHERE campaign_id=$1`, [cid]);
+      ex.rows.forEach(r => { if (r.p10) campPhones.add(r.p10); });
+    } catch (_) {}
+  }
+
+  // Resolve existing CRM lead + apply the duplicate policy → finalLeads.
+  const finalLeads = [];
+  const seen = new Set();
+  let skipped = 0;
+  for (const l of rawLeads) {
+    const p10 = l.phone.slice(-10);
     let leadId = null, foundName = null;
     try {
       const m = await db.query(
@@ -136,12 +148,27 @@ async function api_dialer_addLeads(token, payload) {
         [l.phone]);
       if (m.rows.length) { leadId = m.rows[0].id; foundName = m.rows[0].name; }
     } catch (_) {}
+    if (dupPolicy !== 'allow') {
+      if (seen.has(p10) || campPhones.has(p10)) { skipped++; continue; }   // dup in file or already in campaign
+      if (dupPolicy === 'skip_all' && leadId) { skipped++; continue; }      // already exists anywhere in CRM
+    }
+    seen.add(p10);
+    finalLeads.push({ name: l.name, phone: l.phone, leadId, foundName });
+  }
+  if (!finalLeads.length) return { ok: true, added: 0, skipped, policy: dupPolicy };
+
+  // Build the assignment plan on the de-duplicated list (keeps distribution even).
+  const _plan = _buildAssignPlan(finalLeads.length, agents, distribution, weights);
+  let added = 0;
+  for (let i = 0; i < finalLeads.length; i++) {
+    const l = finalLeads[i];
+    const agent = _plan[i] != null ? _plan[i] : (agents.length ? agents[i % agents.length] : null);
     await db.query(
       `INSERT INTO dialer_campaign_leads (campaign_id, lead_id, name, phone, assigned_to) VALUES ($1,$2,$3,$4,$5)`,
-      [cid, leadId, l.name || foundName || null, l.phone, agent]);
+      [cid, l.leadId, l.name || l.foundName || null, l.phone, agent]);
     added++;
   }
-  return { ok: true, added };
+  return { ok: true, added, skipped, policy: dupPolicy };
 }
 
 async function api_dialer_campaign_detail(token, id) {

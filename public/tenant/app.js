@@ -20880,6 +20880,12 @@ function _dialerAddLeads(host, camp) {
   distSel.onchange = syncDist;
   const pctHint = h('div', { class: 'muted', style: { fontSize: '.74rem', marginTop: '.25rem', display: 'none' } }, '');
 
+  // ---- Duplicate handling (DIALER_DEDUPE_v1) ----
+  const dupSel = h('select', { class: 'input', style: { width: 'auto' } },
+    h('option', { value: 'skip_campaign' }, '🚫 Skip duplicates in this campaign'),
+    h('option', { value: 'skip_all' }, '🧹 Skip if already in CRM (any lead)'),
+    h('option', { value: 'allow' }, '➕ Allow duplicates (add all)'));
+
   // ---- Excel / CSV upload (DIALER_UPLOAD_v1) ----
   const fileStatus = h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.3rem' } }, '');
   const fileInput = h('input', { type: 'file', accept: '.xlsx,.xls,.xlsm,.csv', style: { display: 'none' } });
@@ -20920,6 +20926,9 @@ function _dialerAddLeads(host, camp) {
       h('span', { class: 'muted', style: { fontSize: '.8rem' } }, 'Dividing rule:'),
       distSel),
     pctHint,
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', margin: '.5rem 0 .2rem', flexWrap: 'wrap' } },
+      h('span', { class: 'muted', style: { fontSize: '.8rem' } }, 'Duplicate handling:'),
+      dupSel),
     h('div', { style: { marginTop: '.7rem', display: 'flex', gap: '.4rem' } },
       h('button', { class: 'btn primary', onclick: async () => {
         const leads = ta.value.split(/\n+/).map(line => { const parts = line.split(/[,\t]/); if (parts.length >= 2) return { name: parts[0].trim(), phone: parts.slice(1).join(' ').trim() }; return { name: '', phone: line.trim() }; }).filter(x => x.phone);
@@ -20933,7 +20942,7 @@ function _dialerAddLeads(host, camp) {
           agents.forEach(id => { const v = Number(agentRows[id].pct.value) || 0; weights[id] = v; sum += v; });
           if (sum !== 100) { toast('Percentages must total 100% (currently ' + sum + '%)', 'err'); return; }
         }
-        try { const r = await api('api_dialer_addLeads', { campaign_id: camp.id, leads, assign_to: agents, distribution, weights }); toast('Added ' + r.added + ' leads', 'ok'); _renderDialerAdmin(host); } catch (e) { toast(e.message, 'err'); }
+        try { const r = await api('api_dialer_addLeads', { campaign_id: camp.id, leads, assign_to: agents, distribution, weights, duplicate_policy: dupSel.value }); toast('Added ' + r.added + ' leads' + (r.skipped ? ' · skipped ' + r.skipped + ' duplicate' + (r.skipped === 1 ? '' : 's') : ''), 'ok'); _renderDialerAdmin(host); } catch (e) { toast(e.message, 'err'); }
       } }, 'Add & assign'),
       h('button', { class: 'btn', onclick: () => _renderDialerAdmin(host) }, 'Cancel')));
   host.innerHTML = ''; host.appendChild(card);
