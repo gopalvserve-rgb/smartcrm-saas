@@ -1188,3 +1188,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'Configurable dashboard widgets (like Custom field · Breakdown) now have an "⚙ Edit" button in customize mode so you can pick the custom field, columns and measure. Previously there was no way to configure them after adding.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- CF_MATRIX_CAP_v1 (2026-06-28)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('CF_MATRIX_CAP', 'Custom-field matrix: fixed size + scroll',
+ 'The custom-field matrix (dashboard widget and Reports) is now height-capped with its own scrollbar (both directions) and a sticky header row, so a field with many values no longer stretches the page.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

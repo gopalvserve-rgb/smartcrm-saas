@@ -3437,9 +3437,9 @@ const WIDGET_LIBRARY = {
         const fmt = (n) => isMoney ? ('₹' + Number(n || 0).toLocaleString('en-IN')) : String(n || 0);
         const tbl = h('table', { class: 'tbl', style: { width: '100%', fontSize: '.8rem' } },
           h('thead', {}, h('tr', {},
-            h('th', { style: { textAlign: 'left', position: 'sticky', left: '0', background: '#f8fafc', zIndex: 1 } }, cfKey),
-            h('th', { style: { textAlign: 'right', background: '#eef2ff' } }, 'Total'),
-            ...colList.map(cc => h('th', { style: { textAlign: 'right', fontSize: '.72rem', fontWeight: 500 } }, String(cc))))),
+            h('th', { style: { textAlign: 'left', position: 'sticky', left: '0', top: '0', background: '#f8fafc', zIndex: 3 } }, cfKey),
+            h('th', { style: { textAlign: 'right', position: 'sticky', top: '0', background: '#eef2ff', zIndex: 2 } }, 'Total'),
+            ...colList.map(cc => h('th', { style: { textAlign: 'right', position: 'sticky', top: '0', background: '#fff', fontSize: '.72rem', fontWeight: 500, zIndex: 2 } }, String(cc))))),
           h('tbody', {},
             ...sortedValues.map(val => { const rec = matrix[val] || {}; const total = rec.__total || 0; const pct = Math.round(total * 100 / maxTotal);
               return h('tr', {},
@@ -3452,7 +3452,7 @@ const WIDGET_LIBRARY = {
               h('td', { style: { textAlign: 'right', fontWeight: 700, background: '#e0e7ff' } }, fmt(sortedValues.reduce((s2, v) => s2 + (matrix[v].__total || 0), 0))),
               ...colList.map(cc => h('td', { style: { textAlign: 'right', fontWeight: 700, background: '#eef2ff' } }, fmt(colTotals[cc] || 0))))
           ));
-        c.appendChild(h('div', { style: { overflowX: 'auto', maxHeight: '320px' } }, tbl));
+        c.appendChild(h('div', { style: { overflow: 'auto', maxHeight: '300px', border: '1px solid #eef2f7', borderRadius: '6px' } }, tbl));
         c.appendChild(h('div', { class: 'muted', style: { fontSize: '.72rem', marginTop: '.35rem' } }, '💡 ' + sortedValues.length + ' values × ' + colList.length + ' cols · ' + (measLabelMap[measure] || measure)));
       } catch (e) { c.appendChild(h('div', { class: 'muted', style: { color: '#b91c1c', fontSize: '.85rem' } }, 'Failed: ' + e.message)); }
     }
@@ -22714,9 +22714,9 @@ async function _loadReportsCfMatrix() {
     window._cfMatrixData = { rowLabel, colDim, measure, colList, sortedValues, matrix, colTotals, grand, isMoney };
     const tbl = h('table', { class: 'tbl', style: { width: '100%', fontSize: '.85rem' } },
       h('thead', {}, h('tr', {},
-        h('th', { style: { textAlign: 'left', background: '#f8fafc', position: 'sticky', left: '0' } }, rowLabel),
-        h('th', { style: { textAlign: 'right', background: '#eef2ff', fontWeight: 700 } }, 'Total'),
-        ...colList.map(c => h('th', { style: { textAlign: 'right', fontSize: '.78rem', fontWeight: 500, padding: '4px 8px' } }, String(c)))
+        h('th', { style: { textAlign: 'left', background: '#f8fafc', position: 'sticky', left: '0', top: '0', zIndex: 3 } }, rowLabel),
+        h('th', { style: { textAlign: 'right', background: '#eef2ff', fontWeight: 700, position: 'sticky', top: '0', zIndex: 2 } }, 'Total'),
+        ...colList.map(c => h('th', { style: { textAlign: 'right', position: 'sticky', top: '0', background: '#fff', fontSize: '.78rem', fontWeight: 500, padding: '4px 8px', zIndex: 2 } }, String(c)))
       )),
       h('tbody', {},
         ...sortedValues.map(val => {
@@ -22741,7 +22741,7 @@ async function _loadReportsCfMatrix() {
         )
       )
     );
-    host.appendChild(h('div', { style: { overflowX: 'auto' } }, tbl));
+    host.appendChild(h('div', { style: { overflow: 'auto', maxHeight: '460px', border: '1px solid #eef2f7', borderRadius: '6px' } }, tbl));
     host.appendChild(h('div', { class: 'muted', style: { fontSize: '.72rem', marginTop: '.4rem' } },
       sortedValues.length + ' rows × ' + colList.length + ' columns · measure: ' + measure + ' · sorted by row total'));
   } catch (e) {
