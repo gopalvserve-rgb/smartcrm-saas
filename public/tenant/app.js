@@ -51951,7 +51951,7 @@ async function openComplianceRuleEditor(rule, types, onSaved) {
   const backdrop = h('div', { class: 'modal-backdrop', onclick: ev => { if (ev.target === backdrop) backdrop.remove(); } });
   const modal = h('div', { class: 'modal modal-lg' });
   const isNew = !rule;
-  rule = rule || { name: '', description: '', check_type: types[0].key, severity: 'warning', enabled: 1, notify_agent: 1, notify_manager: 0, config: {} };
+  rule = rule || { name: '', description: '', check_type: types[0].key, severity: 'warning', enabled: 1, notify_agent: 1, notify_manager: 0, notify_admin: 0, config: {} };
 
   /* COMPLIANCE_v2 — quick-pick presets. Click loads a ready-made rule. */
   const PRESETS = [
@@ -51979,7 +51979,15 @@ async function openComplianceRuleEditor(rule, types, onSaved) {
     { key: 'work_hours', label: '🕘 Calls only 9 AM – 7 PM (no weekends)',
       check_type: 'call_outside_hours', cfg: { start_hour: 9, end_hour: 19, allow_weekends: false } },
     { key: 'assigned_no_action_3d', label: '🔕 Assigned but no action in 3+ days',
-      check_type: 'assigned_no_action_n_days', cfg: { max_days: 3 } }
+      check_type: 'assigned_no_action_n_days', cfg: { max_days: 3 } },
+    { key: 'min_calls_day', label: '📞 Each rep must dial ≥ 10 calls/day',
+      check_type: 'min_calls_quota', cfg: { min_calls: 10, window_hours: 24, target_roles: ['agent','sales','employee'] } },
+    { key: 'min_calls_hr', label: '📞 Each rep must dial ≥ 3 calls/hour',
+      check_type: 'min_calls_quota', cfg: { min_calls: 3, window_hours: 1, target_roles: ['agent','sales','employee'] } },
+    { key: 'min_talk_day', label: '⏱ Each rep must talk ≥ 120 min/day',
+      check_type: 'min_talktime_quota', cfg: { min_minutes: 120, window_hours: 24, target_roles: ['agent','sales','employee'] } },
+    { key: 'min_talk_hr', label: '⏱ Each rep must talk ≥ 10 min/hour',
+      check_type: 'min_talktime_quota', cfg: { min_minutes: 10, window_hours: 1, target_roles: ['agent','sales','employee'] } }
   ];
 
   const nameInp = h('input', { class: 'input', value: rule.name || '', placeholder: 'e.g. NP must be dialled 3× a day', style: { width: '100%' } });
@@ -51994,6 +52002,7 @@ async function openComplianceRuleEditor(rule, types, onSaved) {
   const enChk = h('input', { type: 'checkbox', checked: Number(rule.enabled) === 1 ? 'checked' : null });
   const naChk = h('input', { type: 'checkbox', checked: Number(rule.notify_agent) === 1 ? 'checked' : null });
   const nmChk = h('input', { type: 'checkbox', checked: Number(rule.notify_manager) === 1 ? 'checked' : null });
+  const ndChk = h('input', { type: 'checkbox', checked: Number(rule.notify_admin) === 1 ? 'checked' : null });
 
   // Preview box — English-language summary of the rule, regenerated on every change.
   const previewBox = h('div', { style: { padding: '.7rem .9rem', background: '#eff6ff', border: '1px dashed #93c5fd', borderRadius: '8px', margin: '.8rem 0', fontSize: '.85rem', color: '#1e3a8a' } }, '');
@@ -52116,6 +52125,18 @@ async function openComplianceRuleEditor(rule, types, onSaved) {
       inputs.min_activities = () => Number(inp.value || 5);
       addRow('Minimum activities / day', inp, 'Counts every status change, remark, follow-up edit, reassign, WhatsApp send, etc.');
     }
+    if (t.config_keys.includes('min_calls')) {
+      const inp = h('input', { type: 'number', class: 'input', min: '1', max: '500', value: cfg.min_calls || 10, style: { width: '90px' } });
+      inp.oninput = _updatePreview;
+      inputs.min_calls = () => Number(inp.value || 0);
+      addRow('Minimum calls', inp, 'Outgoing dials each rep must make within the window (use Window=1 for per-hour, 24 for per-day).');
+    }
+    if (t.config_keys.includes('min_minutes')) {
+      const inp = h('input', { type: 'number', class: 'input', min: '1', max: '1440', value: cfg.min_minutes || 60, style: { width: '90px' } });
+      inp.oninput = _updatePreview;
+      inputs.min_minutes = () => Number(inp.value || 0);
+      addRow('Minimum talk-time (minutes)', inp, 'Total outgoing talk-time each rep must reach within the window.');
+    }
     if (t.config_keys.includes('target_roles')) {
       const sel = h('select', { class: 'input', multiple: 'multiple', style: { minWidth: '100%', height: '120px' } },
         h('option', { value: 'agent',       selected: (cfg.target_roles || []).includes('agent')      ? 'selected' : null }, 'Agent'),
@@ -52186,6 +52207,7 @@ async function openComplianceRuleEditor(rule, types, onSaved) {
         enabled: enChk.checked ? 1 : 0,
         notify_agent: naChk.checked ? 1 : 0,
         notify_manager: nmChk.checked ? 1 : 0,
+        notify_admin: ndChk.checked ? 1 : 0,
         config: cfg
       });
       toast('Saved', 'ok');
@@ -52215,7 +52237,8 @@ async function openComplianceRuleEditor(rule, types, onSaved) {
       h('label', { style: { fontSize: '.85rem', display: 'flex', alignItems: 'center', gap: '.3rem' } }, 'Severity ', sevSel),
       h('label', { style: { fontSize: '.85rem', display: 'flex', alignItems: 'center', gap: '.3rem' } }, enChk, ' Enabled'),
       h('label', { style: { fontSize: '.85rem', display: 'flex', alignItems: 'center', gap: '.3rem' } }, naChk, ' Notify agent'),
-      h('label', { style: { fontSize: '.85rem', display: 'flex', alignItems: 'center', gap: '.3rem' } }, nmChk, ' Notify manager')
+      h('label', { style: { fontSize: '.85rem', display: 'flex', alignItems: 'center', gap: '.3rem' } }, nmChk, ' Notify manager'),
+      h('label', { style: { fontSize: '.85rem', display: 'flex', alignItems: 'center', gap: '.3rem' } }, ndChk, ' Notify admin')
     )
   ));
   modal.appendChild(h('div', { class: 'actions' },

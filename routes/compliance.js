@@ -100,6 +100,19 @@ const CHECK_TYPES = {
     realtime: false,
     daily: true,
     config_keys: ['max_days']
+  },
+  /* COMPLIANCE_v3 — call & talk-time quotas per rep, per window (hour/day) */
+  min_calls_quota: {
+    label: 'Rep minimum calls per window (per hour / per day)',
+    description: 'Flags reps who placed fewer than min_calls outgoing dials in the last window_hours. Set window_hours=1 for a per-hour rule, 24 for per-day.',
+    realtime: false, daily: true,
+    config_keys: ['min_calls', 'window_hours', 'target_roles']
+  },
+  min_talktime_quota: {
+    label: 'Rep minimum talk-time per window (per hour / per day)',
+    description: 'Flags reps whose total outgoing talk-time was below min_minutes in the last window_hours. window_hours=1 = per-hour, 24 = per-day.',
+    realtime: false, daily: true,
+    config_keys: ['min_minutes', 'window_hours', 'target_roles']
   }
 };
 
@@ -139,6 +152,7 @@ async function ensureSchema() {
   await db.query(`CREATE INDEX IF NOT EXISTS idx_cv_user_detected ON compliance_violations(user_id, detected_at DESC)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_cv_rule_detected ON compliance_violations(rule_id, detected_at DESC)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_cv_lead          ON compliance_violations(lead_id)`);
+  try { await db.query(`ALTER TABLE compliance_rules ADD COLUMN IF NOT EXISTS notify_admin INT NOT NULL DEFAULT 0`); } catch (_) {}
   _ensured = true;
 }
 
@@ -177,6 +191,26 @@ async function _logViolation(rule, leadId, userId, meta) {
           tag:   'compliance-' + rule.id + '-' + (leadId || 0),
           sticky: rule.severity === 'critical'
         });
+      } catch (_) {}
+    }
+    // COMPLIANCE_v3 — escalate to managers / admins per the rule's action ladder.
+    const wantMgr = Number(rule.notify_manager) === 1;
+    const wantAdmin = Number(rule.notify_admin) === 1;
+    if (wantMgr || wantAdmin) {
+      try {
+        const push = require('./push');
+        const roles = [];
+        if (wantMgr) { roles.push('manager', 'team_leader'); }
+        if (wantMgr || wantAdmin) { roles.push('admin'); }
+        const u = await db.query(`SELECT id FROM users WHERE role = ANY($1::text[]) AND (disabled = 0 OR disabled IS NULL)`, [[...new Set(roles)]]);
+        for (const row of u.rows) {
+          await push.sendPushToUser(Number(row.id), {
+            title: '⚠ Team rule: ' + rule.name,
+            body:  (rule.description || rule.name) + (meta && meta.role ? ' · role ' + meta.role : '') + (userId ? ' · rep #' + userId : ''),
+            url:   '/#/compliance',
+            tag:   'compliance-mgr-' + rule.id + '-' + (userId || 0)
+          });
+        }
       } catch (_) {}
     }
   } catch (e) { console.warn('[compliance log]', e.message); }
@@ -320,6 +354,50 @@ async function _evalMinDailyActivity(rule) {
         min_required: minN,
         role: row.role
       });
+    }
+  }
+}
+
+// ============================================================
+// COMPLIANCE_v3 — call / talk-time quota evaluators (per rep, per window)
+// ============================================================
+async function _evalMinCallsQuota(rule) {
+  const cfg = _parseConfig(rule);
+  const minN = Number(cfg.min_calls || 0);
+  const win  = Number(cfg.window_hours || 24);
+  const roles = Array.isArray(cfg.target_roles) ? cfg.target_roles.map(String) : null;
+  if (!minN) return;
+  const q = await db.query(
+    `SELECT u.id AS user_id, u.role,
+            COALESCE((SELECT COUNT(*) FROM call_events ce
+                       WHERE ce.user_id = u.id AND ce.event = 'dial_requested'
+                         AND ce.created_at >= NOW() - ($1 || ' hours')::interval), 0)::int AS n
+       FROM users u WHERE (u.disabled = 0 OR u.disabled IS NULL)`, [String(win)]);
+  for (const row of q.rows) {
+    if (roles && !roles.includes(String(row.role))) continue;
+    if (Number(row.n) < minN) {
+      await _logViolation(rule, null, row.user_id, { calls: Number(row.n), min_required: minN, window_hours: win, role: row.role });
+    }
+  }
+}
+async function _evalMinTalktimeQuota(rule) {
+  const cfg = _parseConfig(rule);
+  const minMin = Number(cfg.min_minutes || 0);
+  const win    = Number(cfg.window_hours || 24);
+  const roles = Array.isArray(cfg.target_roles) ? cfg.target_roles.map(String) : null;
+  if (!minMin) return;
+  const q = await db.query(
+    `SELECT u.id AS user_id, u.role,
+            COALESCE((SELECT SUM(COALESCE(ce.duration_s, 0)) FROM call_events ce
+                       WHERE ce.user_id = u.id AND ce.event = 'call_ended'
+                         AND COALESCE(ce.direction,'out') <> 'in'
+                         AND ce.created_at >= NOW() - ($1 || ' hours')::interval), 0)::int AS secs
+       FROM users u WHERE (u.disabled = 0 OR u.disabled IS NULL)`, [String(win)]);
+  for (const row of q.rows) {
+    if (roles && !roles.includes(String(row.role))) continue;
+    const mins = Math.round(Number(row.secs) / 60);
+    if (mins < minMin) {
+      await _logViolation(rule, null, row.user_id, { talk_minutes: mins, min_required: minMin, window_hours: win, role: row.role });
     }
   }
 }
@@ -514,6 +592,8 @@ async function runDailyScan() {
       else if (r.check_type === 'no_status_change_in_n_days') await _evalNoStatusChangeInNDays(r);
       else if (r.check_type === 'call_outside_hours')         await _evalCallOutsideHours(r);
       else if (r.check_type === 'assigned_no_action_n_days')  await _evalAssignedNoActionNDays(r);
+      else if (r.check_type === 'min_calls_quota')           await _evalMinCallsQuota(r);
+      else if (r.check_type === 'min_talktime_quota')        await _evalMinTalktimeQuota(r);
     } catch (e) {
       console.warn('[compliance rule ' + r.id + ']', e.message);
     }
@@ -556,21 +636,22 @@ async function api_compliance_rules_save(token, payload) {
     p.enabled === false || Number(p.enabled) === 0 ? 0 : 1,
     p.notify_agent === false || Number(p.notify_agent) === 0 ? 0 : 1,
     p.notify_manager === true  || Number(p.notify_manager) === 1 ? 1 : 0,
+    p.notify_admin   === true  || Number(p.notify_admin)   === 1 ? 1 : 0,
     me.id
   ];
   if (p.id) {
     await db.query(
       `UPDATE compliance_rules SET name=$1, description=$2, check_type=$3, config_json=$4,
-            severity=$5, enabled=$6, notify_agent=$7, notify_manager=$8, updated_at=NOW()
-        WHERE id=$9`,
-      [...fields.slice(0, 8), Number(p.id)]
+            severity=$5, enabled=$6, notify_agent=$7, notify_manager=$8, notify_admin=$9, updated_at=NOW()
+        WHERE id=$10`,
+      [...fields.slice(0, 9), Number(p.id)]
     );
     return { ok: true, id: Number(p.id) };
   } else {
     const r = await db.query(
       `INSERT INTO compliance_rules (name, description, check_type, config_json,
-          severity, enabled, notify_agent, notify_manager, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+          severity, enabled, notify_agent, notify_manager, notify_admin, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
       fields
     );
     return { ok: true, id: r.rows[0].id };
@@ -602,6 +683,8 @@ async function api_compliance_rules_test(token, id) {
   else if (rule.check_type === 'no_status_change_in_n_days') await _evalNoStatusChangeInNDays(rule);
   else if (rule.check_type === 'call_outside_hours')         await _evalCallOutsideHours(rule);
   else if (rule.check_type === 'assigned_no_action_n_days')  await _evalAssignedNoActionNDays(rule);
+  else if (rule.check_type === 'min_calls_quota')           await _evalMinCallsQuota(rule);
+  else if (rule.check_type === 'min_talktime_quota')        await _evalMinTalktimeQuota(rule);
   const after = await db.query(`SELECT COUNT(*)::int AS c FROM compliance_violations`);
   return { ok: true, new_violations: Number(after.rows[0].c) - Number(before.rows[0].c) };
 }

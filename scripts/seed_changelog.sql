@@ -1062,3 +1062,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The refresh and menu buttons in the WhatsApp inbox header were stacked/misaligned; they now sit neatly side by side on the right.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- COMPLIANCE_v3 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('COMPLIANCE_v3', 'Compliance: call & talk-time quotas + escalation actions',
+ 'Admins can now add rules for minimum calls per hour/per day and minimum talk-time per hour/per day for reps. Every rule can also escalate violations: notify the agent, the manager, and/or the admin.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;
