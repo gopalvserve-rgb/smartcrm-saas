@@ -478,7 +478,7 @@ tr:hover .lv2-actions { opacity: 1; }
         const _ids = S.leads.map(function (l) { return l.id; }).filter(Boolean);
         if (_ids.length) {
           const _dc = await api('api_leads_dialCounts', _ids).catch(function () { return {}; });
-          S.leads.forEach(function (l) { l._dialCount = Number(_dc && _dc[l.id]) || 0; });
+          S.leads.forEach(function (l) { const e = (_dc && _dc[l.id]) || null; l._dialCount = (e && Number(e.count)) || 0; l._lastDialedAt = (e && e.last) || null; });
         }
       } catch (_) {}
 
@@ -1894,7 +1894,7 @@ tr:hover .lv2-actions { opacity: 1; }
             }
             if (Number(l._dialCount) > 0) {
               badges.push(h('span', {
-                title: 'Dialed ' + l._dialCount + ' time' + (l._dialCount > 1 ? 's' : '') + ' (outgoing calls)',
+                title: 'Dialed ' + l._dialCount + ' time' + (l._dialCount > 1 ? 's' : '') + ' (outgoing calls)' + (l._lastDialedAt ? ' \u00b7 last ' + new Date(l._lastDialedAt).toLocaleString() : ''),
                 style: { display: 'inline-flex', alignItems: 'center', gap: '3px', padding: '2px 8px', borderRadius: '10px', background: '#e0e7ff', color: '#3730a3', fontWeight: '700', fontSize: '10px' }
               }, '📞 \u00d7' + l._dialCount));
             }
@@ -2094,10 +2094,12 @@ tr:hover .lv2-actions { opacity: 1; }
     (async () => {
       try {
         let n = Number(l._dialCount);
-        if (!(n >= 0)) { const r = await api('api_leads_dialCount', l.id).catch(() => null); n = (r && Number(r.count)) || 0; l._dialCount = n; }
+        let last = l._lastDialedAt || null;
+        if (!(n >= 0) || last === undefined) { const r = await api('api_leads_dialCount', l.id).catch(() => null); n = (r && Number(r.count)) || 0; last = (r && r.last_dialed_at) || null; l._dialCount = n; l._lastDialedAt = last; }
         if (n > 0) {
           const subEl = so.querySelector('.lv2-so-head .sub');
-          if (subEl) subEl.appendChild(h('span', { style: { marginLeft: '6px', color: '#4338ca', fontWeight: '600' }, title: 'Outgoing dials to this number' }, '· 📞 Dialed ' + n + '\u00d7'));
+          const txt = '· 📞 Dialed ' + n + '\u00d7' + (last ? ' · last ' + new Date(last).toLocaleString() : '');
+          if (subEl) subEl.appendChild(h('span', { style: { marginLeft: '6px', color: '#4338ca', fontWeight: '600' }, title: 'Outgoing dials to this number' }, txt));
         }
       } catch (_) {}
     })();

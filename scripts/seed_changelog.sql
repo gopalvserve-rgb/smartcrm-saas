@@ -947,3 +947,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The 📞 times-dialed badge now also appears on the Classic leads list (it was previously only on the Modern view).',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- CALL_DIAL_COUNT_v4 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('CALL_LAST_DIALED_v1', 'Leads: Last Dialed date & time',
+ 'Leads now show when the number was last dialed. A new Last Dialed column appears on the Classic leads list (date + time), and the last-dialed time also shows in the lead detail panel and the dial badge tooltip.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

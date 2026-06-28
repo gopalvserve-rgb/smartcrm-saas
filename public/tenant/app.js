@@ -4637,6 +4637,8 @@ const LEAD_COLUMNS = [
   { key: 'created',     label: 'Created',       default: true },
   /* LEAD_LIST_UPDATED_v1 — last-updated timestamp column. Off by default. */
   { key: 'updated',     label: 'Last Updated',  default: false },
+  /* CALL_DIAL_COUNT_v4 — last outgoing-dial date/time. Off by default; auto-injected once. */
+  { key: 'last_dialed', label: 'Last Dialed',   default: false },
   /* LEAD_SCORING_v1 P1.5 — Smart Score column. On by default when Lead Scoring is enabled. */
   { key: 'smart_score', label: 'AI Score',       default: true }
 ];
@@ -4895,6 +4897,18 @@ VIEWS.leads = async (view) => {
         try { localStorage.setItem('crm_cols', JSON.stringify(cur2)); } catch (_) {}
       }
       localStorage.setItem(wk, '1');
+    }
+    // CALL_DIAL_COUNT_v4 — inject 'last_dialed' column once for existing users.
+    const dk = '_leadsLastDialedColInjected_v1';
+    if (!localStorage.getItem(dk)) {
+      const cur3 = Array.isArray(CRM.prefs.columns) ? CRM.prefs.columns.slice() : [];
+      if (cur3.length && !cur3.includes('last_dialed')) {
+        const at3 = cur3.indexOf('last_change');
+        if (at3 >= 0) cur3.splice(at3 + 1, 0, 'last_dialed'); else cur3.push('last_dialed');
+        CRM.prefs.columns = cur3;
+        try { localStorage.setItem('crm_cols', JSON.stringify(cur3)); } catch (_) {}
+      }
+      localStorage.setItem(dk, '1');
     }
   } catch (_) {}
   const { statuses, sources, users } = CRM.cache;
@@ -6030,7 +6044,7 @@ async function loadLeads(opts) {
       const _ids = (res.leads || []).map(l => l.id).filter(Boolean);
       if (_ids.length) {
         const _dc = await api('api_leads_dialCounts', _ids).catch(() => ({}));
-        (res.leads || []).forEach(l => { l._dialCount = Number(_dc && _dc[l.id]) || 0; });
+        (res.leads || []).forEach(l => { const e = (_dc && _dc[l.id]) || null; l._dialCount = (e && Number(e.count)) || 0; l._lastDialedAt = (e && e.last) || null; });
       }
     } catch (_) {}
     renderLeadsTable(res.leads);
@@ -7266,6 +7280,18 @@ function renderCell(col, l, statuses) {
       return h('td', { class: 'muted', style: { whiteSpace: 'nowrap' } },
         h('div', {}, _dateStr),
         h('div', { style: { fontSize: '.74rem', opacity: '.75' } }, _timeStr)
+      );
+    }
+    case 'last_dialed': {
+      // CALL_DIAL_COUNT_v4 — last outgoing-dial date + time (two-line cell).
+      const _ld = l._lastDialedAt ? new Date(l._lastDialedAt) : null;
+      if (!_ld || isNaN(_ld.getTime())) return h('td', { class: 'muted' }, '—');
+      const _lds = _ld.toLocaleDateString();
+      const _lts = _ld.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const _lrel = (typeof fmtDate === 'function') ? fmtDate(l._lastDialedAt, 'relative') : '';
+      return h('td', { class: 'muted', style: { whiteSpace: 'nowrap' }, title: 'Last dialed ' + _lrel + (l._dialCount ? ' · dialed ' + l._dialCount + '\u00d7' : '') },
+        h('div', {}, '📞 ' + _lds),
+        h('div', { style: { fontSize: '.74rem', opacity: '.75' } }, _lts)
       );
     }
     default:        return h('td', {}, '');
