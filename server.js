@@ -49,6 +49,21 @@ const demoTenant = require('./routes/saas/demoTenant');
 const aiUsageIngest = require('./routes/saas/aiUsageIngest');
 const tickets = require('./routes/saas/tickets');
 const wbChatV2Rollout = require('./routes/saas/wbChatV2Rollout'); // WB_CHAT_V2_ALLTENANTS_v1 — preview/run from super-admin
+// SOLAR_PACK_REGRESSION_FIX_v1 (2026-06-27) — these super-admin module requires
+// were dropped when SOLAR_PACK_v1 Commit 1 (e9d92e8) gutted server.js, breaking
+// Roles & Permissions, Signup Requests, White-Label Billing, Finance, and the
+// rollout/diagnostic pages with "Unknown SaaS function". Restored.
+const saasPermissions = require('./routes/saas/saasPermissions');      // SUPER_ADMIN_PERMS_v1
+const signupRequests = require('./routes/saas/signupRequests');        // TENANT_SIGNUP_APPROVAL_v1
+const financeDashboard = require('./routes/saas/financeDashboard');    // FIN_DASH_v1
+const whiteLabelBilling = require('./routes/saas/whiteLabelBilling');  // WL_BILLING_v1
+const leadsViewV2Rollout = require('./routes/saas/leadsViewV2Rollout');
+const copilotProactiveRollout = require('./routes/saas/copilotProactiveRollout');
+const leadScoringRollout = require('./routes/saas/leadScoringRollout');
+const quickNoteRollout = require('./routes/saas/quickNoteRollout');
+const recordingHealth = require('./routes/saas/recordingHealth');      // DEVICE_DIAG_v1
+const dbVolume = require('./routes/saas/dbVolume');
+const callEventsRepair = require('./routes/saas/callEventsRepair');
 
 // ---- Industry Packs: load + self-register at boot ----------------
 // Each pack module calls framework.register({...}) on require, populating
@@ -88,7 +103,10 @@ const SAAS_API = {};
   announcements, customReqs, webhookLogs, errorLogs, whatsbotBackfill, applySchema, crashReport,
   aiSettings, aiCosting,
   tenantModules, demoTenant,
-  tickets, wbChatV2Rollout
+  tickets, wbChatV2Rollout,
+  saasPermissions, signupRequests, financeDashboard, whiteLabelBilling, // SOLAR_PACK_REGRESSION_FIX_v1
+  leadsViewV2Rollout, copilotProactiveRollout, leadScoringRollout, quickNoteRollout,
+  recordingHealth, dbVolume, callEventsRepair
 ].forEach(mod => {
   Object.keys(mod).forEach(k => {
     if (typeof mod[k] === 'function' && k.startsWith('api_saas_')) SAAS_API[k] = mod[k];
@@ -783,6 +801,30 @@ app.get('/api/saas/brand', async (_req, res) => {
     res.json({ name, tagline, subhead, color, logo, support });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
+// SOLAR_PACK_REGRESSION_FIX_v1 — restore the public white-label payment portal
+// + the public tenant signup-request submit endpoint (both dropped by e9d92e8).
+app.get('/wl/portal/:token', (_req, res) => {
+  res.sendFile(require('path').join(__dirname, 'public/wl/portal.html'));
+});
+app.post('/wl/portal-api', express.json(), async (req, res) => {
+  try {
+    const fn = req.body && req.body.fn;
+    const args = (req.body && req.body.args) || [];
+    if (fn === 'view') {
+      const out = await whiteLabelBilling.api_saas_wl_portal_view(args[0]);
+      return res.json(out);
+    }
+    if (fn === 'payLink') {
+      const out = await whiteLabelBilling.api_saas_wl_portal_payLink(args[0], args[1]);
+      return res.json(out);
+    }
+    res.status(400).json({ error: 'Unknown fn' });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+app.post('/api/saas-public-signup-request', express.json({ limit: '32kb' }), signupRequests.expressPublicSubmit);
 
 // ---- SaaS API dispatcher --------------------------------------
 function _saasToken(req) {

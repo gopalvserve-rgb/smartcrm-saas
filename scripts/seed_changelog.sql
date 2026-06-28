@@ -1124,3 +1124,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The redesigned 3-column WhatsApp chat is now enabled for every workspace — existing and newly created — instead of being a vserve-only beta.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- SOLAR_PACK_REGRESSION_FIX_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('SOLAR_PACK_REGRESSION_FIX', 'Super-admin pages restored',
+ 'Fixed "Unknown SaaS function" errors on Roles & Permissions, Signup Requests, White-Label Billing and Finance & Business in the super-admin console (module registrations had been dropped). Public signup-request submit and white-label payment portal restored too.',
+ 'super_admin', NOW())
+ON CONFLICT DO NOTHING;
