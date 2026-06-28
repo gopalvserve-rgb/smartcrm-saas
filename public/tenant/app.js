@@ -1891,6 +1891,7 @@ function renderShell() {
         <div class="brand">
           ${CRM.config.company_logo_url ? `<img src="${esc(CRM.config.company_logo_url)}" class="sidebar-logo" alt="" />` : '<span class="brand-dot">🎯</span>'}
           <span class="brand-name">${esc(CRM.config.company_name)}</span>
+          <button id="sb-pin" class="sb-pin" type="button" title="Toggle sidebar">📌</button>
         </div>
         <nav id="nav"></nav>
         <div class="sidebar-footer">
@@ -2142,6 +2143,60 @@ function renderShell() {
     }
   } catch (_) {}
   const _ga = $('#btn-getapp'); if (_ga) _ga.onclick = showGetApp;
+
+  // SIDEBAR_RAIL_v1 (Option H) — auto-collapsing icon rail + pin + hover fly-outs.
+  // mode: 'rail' (auto-collapse, default) | 'open' (always open / pinned).
+  try {
+    const _SBKEY = 'crm_sidebar_mode';
+    let _sbMode = localStorage.getItem(_SBKEY) || 'rail';
+    const _sbApply = () => {
+      const isRail = _sbMode === 'rail';
+      document.body.classList.toggle('sidebar-rail', isRail);
+      const pin = document.getElementById('sb-pin');
+      if (pin) { pin.textContent = isRail ? '📌' : '«'; pin.title = isRail ? 'Keep sidebar open' : 'Auto-collapse sidebar'; }
+    };
+    const _pin = document.getElementById('sb-pin');
+    if (_pin) _pin.onclick = (e) => { e.stopPropagation(); _sbMode = (_sbMode === 'rail' ? 'open' : 'rail'); try { localStorage.setItem(_SBKEY, _sbMode); } catch (_) {} _sbApply(); };
+    _sbApply();
+
+    const navEl = document.getElementById('nav');
+    if (navEl && !navEl._railFlyBound) {
+      navEl._railFlyBound = true;
+      let _fly = null;
+      const _closeFly = () => { if (_fly) { _fly.remove(); _fly = null; } };
+      const _openFly = (groupEl) => {
+        if (!document.body.classList.contains('sidebar-rail')) return;
+        _closeFly();
+        const labEl = groupEl.querySelector('.nav-group-label');
+        _fly = document.createElement('div'); _fly.className = 'nav-flyout';
+        if (labEl) { const t = document.createElement('div'); t.className = 'nf-title'; t.textContent = labEl.textContent; _fly.appendChild(t); }
+        const iw = groupEl.querySelector(':scope > .nav-group-items');
+        if (iw) Array.from(iw.children).forEach(ch => {
+          if (ch.tagName === 'A') { _fly.appendChild(ch.cloneNode(true)); }
+          else if (ch.classList && ch.classList.contains('nav-group')) {
+            const sl = ch.querySelector('.nav-group-label');
+            const st = document.createElement('div'); st.className = 'nf-sub-title'; st.textContent = sl ? sl.textContent : ''; _fly.appendChild(st);
+            const si = ch.querySelector(':scope > .nav-group-items');
+            if (si) Array.from(si.querySelectorAll('a')).forEach(an => _fly.appendChild(an.cloneNode(true)));
+          }
+        });
+        if (!_fly.querySelector('a')) { _closeFly(); return; }
+        const r = groupEl.getBoundingClientRect();
+        _fly.style.left = (r.right + 6) + 'px'; _fly.style.top = Math.max(8, r.top) + 'px';
+        document.body.appendChild(_fly);
+        const fr = _fly.getBoundingClientRect();
+        if (fr.bottom > window.innerHeight - 8) _fly.style.top = Math.max(8, window.innerHeight - 8 - fr.height) + 'px';
+        _fly.addEventListener('mouseleave', _closeFly);
+        _fly.querySelectorAll('a').forEach(an => an.addEventListener('click', _closeFly));
+      };
+      navEl.addEventListener('mouseover', (e) => {
+        if (!document.body.classList.contains('sidebar-rail')) return;
+        const g = e.target.closest && e.target.closest('.nav-group');
+        if (g && g.parentElement === navEl) _openFly(g);
+      });
+      navEl.addEventListener('mouseleave', () => { setTimeout(() => { if (_fly && !_fly.matches(':hover')) _closeFly(); }, 150); });
+    }
+  } catch (_) {}
 }
 
 /**

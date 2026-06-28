@@ -963,3 +963,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The Modern leads view now has a Columns option in the ⋮ menu to show/hide columns, and a new Last Dialed column (date + time) is available there too.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- SIDEBAR_RAIL_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('SIDEBAR_RAIL_v1', 'New collapsible icon sidebar',
+ 'The left menu now auto-collapses to a compact icon rail. Hover an icon to see its sub-menu in a fly-out, and click the 📌 pin at the top to keep the full menu always open (your choice is remembered). Click the pin again to go back to the icon rail.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;
