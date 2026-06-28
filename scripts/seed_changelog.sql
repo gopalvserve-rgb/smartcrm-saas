@@ -998,3 +998,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'Reverted the recent status-wise count visibility change on the leads page back to the previous behaviour.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- TOPBAR_NEW_COUNT_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('TOPBAR_NEW_COUNT_v1', 'Top bar: New count respects filters',
+ 'The New chip in the top bar now shows the number of New-status leads in the current view, respecting the date range and assigned-user filters on the leads page.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

@@ -6106,6 +6106,18 @@ async function loadLeads(opts) {
     } catch (_) {}
     CRM.cache.lastLeads = res.leads;
     CRM.cache.lastStatusCounts = res.status_count;
+    // TOPBAR_NEW_COUNT_v1 — topbar ✨ New chip = count of New-status leads in the
+    // CURRENT filtered result (so it respects the date + assigned-user filters).
+    try {
+      const _sc = res.status_count || {};
+      const _stats = (CRM.cache && CRM.cache.statuses) || [];
+      const _newSt = _stats.find(x => /^new$/i.test(String(x.name || '').trim())) || _stats.find(x => String(x.stage || '') === 'fresh');
+      if (_newSt) {
+        const _nc = Number(_sc[String(_newSt.id)] || _sc[_newSt.id] || 0);
+        CRM._leadsNewCount = _nc;
+        document.querySelectorAll('.nav-count[data-count-key="new_today"]').forEach(el => { el.textContent = String(_nc); el.hidden = false; });
+      }
+    } catch (_) {}
     CRM.cache.lastTotal = res.total || (res.leads || []).length;
     // CALL_DIAL_COUNT_v1 — stamp each lead with its outgoing-dial count for the
     // 📞 badge (Classic view). Best-effort; never blocks the table render.
@@ -36902,9 +36914,12 @@ async function refreshNotifs() {
     // Update sidebar count badges next to New leads / Overdue / Due today / Upcoming
     document.querySelectorAll('.nav-count').forEach(el => {
       const key = el.getAttribute('data-count-key');
-      const c = (d.counts && d.counts[key]) || 0;
+      let c = (d.counts && d.counts[key]) || 0;
+      // TOPBAR_NEW_COUNT_v1 — keep the filtered New-status count on the ✨ New chip.
+      const keepNew = (key === 'new_today' && typeof CRM._leadsNewCount === 'number');
+      if (keepNew) c = CRM._leadsNewCount;
       el.textContent = c;
-      el.hidden = c === 0;
+      el.hidden = (c === 0) && !keepNew;
     });
     if ((d.counts.due_today || 0) + (d.counts.overdue || 0) > 0) popupFollowupDue(d);
     // Heat alerts come through unread_notifications with type='heat_alert'.
