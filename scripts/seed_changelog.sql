@@ -1092,3 +1092,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'You can now upload an Excel (.xlsx/.xls) or CSV file of leads into an Auto Dialer campaign — alongside the existing copy-paste box. Name + Phone columns are auto-detected (headers optional). Upload limit 5 MB / 10,000 leads per file.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- DIALER_DIST_v1 (2026-06-27)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('DIALER_DIST_v1', 'Auto Dialer: agent checkboxes + dividing rules',
+ 'When adding leads to an Auto Dialer campaign you now pick agents with checkboxes, and choose how leads are split: Round robin, Equal split (chunks), or Custom percentage per agent.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

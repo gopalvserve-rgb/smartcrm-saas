@@ -85,6 +85,26 @@ async function api_dialer_campaign_delete(token, id) {
   return { ok: true };
 }
 
+/* DIALER_DIST_v1 — return an array (length n) of agent ids per lead.
+ * round_robin: a,b,c,a,b,c…  equal: contiguous chunks  percent: by weight %. */
+function _buildAssignPlan(n, agents, distribution, weights) {
+  const plan = [];
+  if (!agents.length) return plan;
+  if (distribution === 'equal') {
+    const chunk = Math.ceil(n / agents.length);
+    for (let i = 0; i < n; i++) plan.push(agents[Math.min(agents.length - 1, Math.floor(i / chunk))]);
+  } else if (distribution === 'percent' && weights) {
+    const counts = agents.map(a => Math.floor(((Number(weights[a]) || 0) / 100) * n));
+    let assigned = counts.reduce((x, y) => x + y, 0);
+    let idx = 0;
+    while (assigned < n) { counts[idx % agents.length]++; assigned++; idx++; }
+    agents.forEach((a, i) => { for (let k = 0; k < counts[i]; k++) plan.push(a); });
+  } else {
+    for (let i = 0; i < n; i++) plan.push(agents[i % agents.length]);
+  }
+  return plan;
+}
+
 /* Add leads + round-robin assign across the given agent ids.
  * payload: { campaign_id, leads:[{name,phone}], assign_to:[userId,...] } */
 async function api_dialer_addLeads(token, payload) {
@@ -95,16 +115,20 @@ async function api_dialer_addLeads(token, payload) {
   const cid = Number(p.campaign_id);
   if (!cid) throw new Error('campaign_id required');
   const agents = (Array.isArray(p.assign_to) ? p.assign_to : []).map(Number).filter(Boolean);
+  const distribution = ['round_robin', 'equal', 'percent'].includes(p.distribution) ? p.distribution : 'round_robin';
+  const weights = (p.weights && typeof p.weights === 'object') ? p.weights : null;
   const leads = (Array.isArray(p.leads) ? p.leads : [])
     .map(l => ({ name: String(l.name || '').slice(0, 160), phone: _norm(l.phone) }))
     .filter(l => l.phone.length >= 7);
   if (!leads.length) throw new Error('No valid leads (need at least a phone number)');
   if (leads.length > 10000) throw new Error('Too many leads in one upload (max 10,000). Split the file.');
+  // DIALER_DIST_v1 — build a per-lead agent assignment plan by the chosen rule.
+  const _plan = _buildAssignPlan(leads.length, agents, distribution, weights);
   // try to link to an existing lead by phone (last 10)
   let added = 0;
   for (let i = 0; i < leads.length; i++) {
     const l = leads[i];
-    const agent = agents.length ? agents[i % agents.length] : null;
+    const agent = _plan[i] != null ? _plan[i] : (agents.length ? agents[i % agents.length] : null);
     let leadId = null, foundName = null;
     try {
       const m = await db.query(

@@ -20845,8 +20845,40 @@ function _dialerAddLeads(host, camp) {
   const MAX_BYTES = 5 * 1024 * 1024; // 5 MB upload cap
   const ta = h('textarea', { class: 'input', rows: '8', placeholder: 'One lead per line:\nName, 9876543210\nAnother Name, 9123456789\n(or just phone numbers)', style: { width: '100%' } });
   const users = (CRM.cache && CRM.cache.users) || [];
-  const sel = h('select', { class: 'input', multiple: 'multiple', style: { width: '100%', height: '140px' } },
-    ...users.map(u => h('option', { value: String(u.id) }, u.name + ' (' + u.role + ')')));
+
+  // ---- Agent selection — checkboxes + per-agent % (DIALER_DIST_v1) ----
+  const agentRows = {};
+  const agentBox = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: '.25rem', maxHeight: '190px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '.5rem' } });
+  function recalcPct() {
+    const checked = users.filter(u => agentRows[u.id].cb.checked);
+    const sum = checked.reduce((a, u) => a + (Number(agentRows[u.id].pct.value) || 0), 0);
+    pctHint.textContent = 'Total: ' + sum + '%' + (sum === 100 ? ' ✓' : ' (must equal 100)');
+    pctHint.style.color = sum === 100 ? '#15803d' : '#b45309';
+  }
+  function syncDist() {
+    const show = distSel.value === 'percent';
+    users.forEach(u => { const r = agentRows[u.id]; r.pct.style.display = (show && r.cb.checked) ? '' : 'none'; });
+    pctHint.style.display = show ? '' : 'none';
+    if (show) recalcPct();
+  }
+  users.forEach(u => {
+    const cb = h('input', { type: 'checkbox', value: String(u.id) });
+    cb.onchange = syncDist;
+    const pct = h('input', { type: 'number', class: 'input', min: '0', max: '100', placeholder: '%', style: { width: '62px', display: 'none', padding: '.15rem .3rem' } });
+    pct.oninput = recalcPct;
+    const row = h('label', { style: { display: 'flex', alignItems: 'center', gap: '.4rem', fontSize: '.85rem', padding: '.15rem .25rem' } },
+      cb, h('span', {}, u.name), h('span', { class: 'muted', style: { fontSize: '.72rem' } }, '(' + u.role + ')'), pct);
+    agentRows[u.id] = { cb, pct, row };
+    agentBox.appendChild(row);
+  });
+
+  // ---- Distribution / dividing rule ----
+  const distSel = h('select', { class: 'input', style: { width: 'auto' } },
+    h('option', { value: 'round_robin' }, '🔁 Round robin (1 each, repeating)'),
+    h('option', { value: 'equal' }, '⚖️ Equal split (chunks)'),
+    h('option', { value: 'percent' }, '％ Custom percentage'));
+  distSel.onchange = syncDist;
+  const pctHint = h('div', { class: 'muted', style: { fontSize: '.74rem', marginTop: '.25rem', display: 'none' } }, '');
 
   // ---- Excel / CSV upload (DIALER_UPLOAD_v1) ----
   const fileStatus = h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '.3rem' } }, '');
@@ -20859,7 +20891,6 @@ function _dialerAddLeads(host, camp) {
     try {
       const rows = await parseSpreadsheet(f);
       const mapped = rows.map(_dialerRowToLead).filter(x => x && x.phone);
-      // Recover a header row that was actually data (file had no header).
       const hdrKeys = rows.length ? Object.keys(rows[0]) : [];
       if (hdrKeys.some(k => String(k).replace(/\D/g, '').length >= 7)) {
         const rec = _dialerRowToLead(Object.fromEntries(hdrKeys.map(k => [k, k])));
@@ -20883,15 +20914,26 @@ function _dialerAddLeads(host, camp) {
       fileStatus),
     h('div', { class: 'muted', style: { fontSize: '.8rem', margin: '.4rem 0 .3rem' } }, 'Or paste leads (Name, Phone — one per line):'),
     ta,
-    h('div', { class: 'muted', style: { fontSize: '.8rem', margin: '.6rem 0 .3rem' } }, 'Assign to agents (round-robin split):'),
-    sel,
-    h('div', { style: { marginTop: '.6rem', display: 'flex', gap: '.4rem' } },
+    h('div', { class: 'muted', style: { fontSize: '.8rem', margin: '.7rem 0 .3rem' } }, 'Select agents:'),
+    agentBox,
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: '.5rem', margin: '.6rem 0 .2rem', flexWrap: 'wrap' } },
+      h('span', { class: 'muted', style: { fontSize: '.8rem' } }, 'Dividing rule:'),
+      distSel),
+    pctHint,
+    h('div', { style: { marginTop: '.7rem', display: 'flex', gap: '.4rem' } },
       h('button', { class: 'btn primary', onclick: async () => {
         const leads = ta.value.split(/\n+/).map(line => { const parts = line.split(/[,\t]/); if (parts.length >= 2) return { name: parts[0].trim(), phone: parts.slice(1).join(' ').trim() }; return { name: '', phone: line.trim() }; }).filter(x => x.phone);
-        const agents = Array.from(sel.selectedOptions).map(o => Number(o.value));
+        const agents = users.filter(u => agentRows[u.id].cb.checked).map(u => Number(u.id));
         if (!leads.length) { toast('Add at least one lead', 'err'); return; }
         if (!agents.length) { toast('Select at least one agent', 'err'); return; }
-        try { const r = await api('api_dialer_addLeads', { campaign_id: camp.id, leads, assign_to: agents }); toast('Added ' + r.added + ' leads', 'ok'); _renderDialerAdmin(host); } catch (e) { toast(e.message, 'err'); }
+        const distribution = distSel.value;
+        let weights = null;
+        if (distribution === 'percent') {
+          weights = {}; let sum = 0;
+          agents.forEach(id => { const v = Number(agentRows[id].pct.value) || 0; weights[id] = v; sum += v; });
+          if (sum !== 100) { toast('Percentages must total 100% (currently ' + sum + '%)', 'err'); return; }
+        }
+        try { const r = await api('api_dialer_addLeads', { campaign_id: camp.id, leads, assign_to: agents, distribution, weights }); toast('Added ' + r.added + ' leads', 'ok'); _renderDialerAdmin(host); } catch (e) { toast(e.message, 'err'); }
       } }, 'Add & assign'),
       h('button', { class: 'btn', onclick: () => _renderDialerAdmin(host) }, 'Cancel')));
   host.innerHTML = ''; host.appendChild(card);
