@@ -1104,6 +1104,10 @@ code { background: var(--bg-alt); padding: 1px 6px; border-radius: 3px; font-siz
 /* Dashboard v2 */
 .dash-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: .5rem; }
 .dash-grid .card-wide { grid-column: 1 / -1; }
+/* CF_MATRIX_CAP_v1 — grid items default to min-width:auto and won't shrink below
+   wide content (a big matrix table), which stretched the column. Allow shrink so
+   the widget's inner overflow:auto scrolls instead of blowing out the layout. */
+.dash-grid > .card { min-width: 0; max-width: 100%; }
 .fu-dash-list { list-style: none; padding: 0; margin: 0; max-height: 240px; overflow-y: auto; }
 .fu-dash-list li { display: grid; grid-template-columns: 1fr 120px 80px; gap: .5rem; padding: .45rem .2rem; border-bottom: 1px solid var(--border-light); align-items: center; }
 .fu-name { font-weight: 500; color: var(--brand); cursor: pointer; }

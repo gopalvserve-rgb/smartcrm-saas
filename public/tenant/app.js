@@ -3413,6 +3413,7 @@ const WIDGET_LIBRARY = {
       card.appendChild(measSel);
     },
     render: async (c, cfg, _d, w) => {
+      try { c.style.minWidth = '0'; c.style.maxWidth = '100%'; } catch (_) {}
       const cfKey = cfg && cfg.cf_key;
       const colDim = (cfg && cfg.col_dim) || 'status';
       const measure = (cfg && cfg.measure) || 'count';
