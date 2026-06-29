@@ -1,5 +1,5 @@
 /* ============================================================
- * DEMO_TOUR_v9 — Live guided sales tour on the showcase tenant
+ * DEMO_TOUR_v10 — Live guided sales tour on the showcase tenant
  * ------------------------------------------------------------
  * 25-step pitch flow (Hinglish) on the REAL app, EXACT routes the
  * user mapped. Two draggable + resizable floating panels: TEXT
@@ -8,12 +8,12 @@
  *
  * GATED: launch button only shows for slug "showcase", or
  * ?demotour=1, or localStorage.demoTour==="1".
- * cache key: 2026-06-29-demotour-v9
+ * cache key: 2026-06-29-demotour-v10
  * ============================================================ */
 (function () {
   'use strict';
 
-  var ASSET_V = '2026-06-29-demotour-v9';
+  var ASSET_V = '2026-06-29-demotour-v10';
 
   function enabled() {
     try {
@@ -35,11 +35,11 @@
 
     { navId: 'leads', hash: '#/leads', title: 'Lead Capture', en: 'All sources in one inbox',
       s: 'Lead sabhi sources se ek hi jagah aa jaati hai — WhatsApp, Facebook Ad, Instagram Ad, Google Ad, Website, Google Sheet, IndiaMART, JustDial. Sab ek hi inbox mein.',
-      img: { src: LEADS, cap: 'Mobile app par leads aise dikhti hain' } },
+      img: { src: 'demo-leadcapture.svg', cap: 'Auto lead capture — all sources LIVE' } },
 
     { navId: 'leads', hash: '#/leads', title: 'Auto-Assignment + Auto-Dial', en: 'Lead distributed -> phone notification -> one-tap call',
       s: 'Lead aate hi system khud team member ko assign kar deta hai — campaign, source ya product rule par. Assign hote hi agent ke MOBILE par notification aata hai aur auto-dial — ek tap mein call connect.',
-      img: { src: NOTIF, cap: 'Agent ke phone par notification' } },
+      img: { src: 'demo-autodial.svg', cap: 'Auto-dial queue agent ke phone par' } },
 
     { hash: '#/tatreport', title: 'TAT / SLA', en: 'Response-time escalation alerts',
       s: '15 min mein call ka TAT set karein. Na ho to agent ko violation; phir agent + manager; phir next agent + manager + admin tak escalate — sab phone notification par.',
