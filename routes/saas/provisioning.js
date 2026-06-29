@@ -193,7 +193,12 @@ async function provisionFromSignup(signupId) {
     }
   }
 
-  const pkg = await control.findById('packages', signup.package_id);
+  // SR_PKG_COERCE_v1 — guard empty/invalid package_id (integer col) so a
+  // request approved without a package gives a clear message, not a raw
+  // 'invalid input syntax for type integer' Postgres error.
+  const _pkgId = Number(signup.package_id);
+  if (!_pkgId) throw new Error('No package selected — open the request, pick a Package, click Save, then Approve.');
+  const pkg = await control.findById('packages', _pkgId);
   if (!pkg) throw new Error('Package missing: ' + signup.package_id);
 
   const slug = signup.desired_slug;

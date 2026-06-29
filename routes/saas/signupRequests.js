@@ -247,7 +247,11 @@ async function api_saas_sr_update(token, payload) {
   const sets = []; const args = [];
   for (const k of allowed) {
     if (p[k] !== undefined) {
-      args.push(p[k]); sets.push(`${k}=$${args.length}`);
+      // SR_PKG_COERCE_v1 — package_id is an integer column; an empty dropdown
+      // sends '' which crashes the UPDATE. Coerce ''/null -> null, else Number.
+      let _v = p[k];
+      if (k === 'package_id') _v = (_v === '' || _v == null) ? null : Number(_v);
+      args.push(_v); sets.push(`${k}=$${args.length}`);
     }
   }
   if (!sets.length) return { ok: true, changed: 0 };
