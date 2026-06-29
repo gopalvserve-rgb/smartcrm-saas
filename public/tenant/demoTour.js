@@ -1,5 +1,5 @@
 /* ============================================================
- * DEMO_TOUR_v11 — Live guided sales tour on the showcase tenant
+ * DEMO_TOUR_v12 — Live guided sales tour on the showcase tenant
  * ------------------------------------------------------------
  * 25-step pitch flow (Hinglish) on the REAL app, EXACT routes the
  * user mapped. Two draggable + resizable floating panels: TEXT
@@ -8,12 +8,12 @@
  *
  * GATED: launch button only shows for slug "showcase", or
  * ?demotour=1, or localStorage.demoTour==="1".
- * cache key: 2026-06-29-demotour-v11
+ * cache key: 2026-06-29-demotour-v12
  * ============================================================ */
 (function () {
   'use strict';
 
-  var ASSET_V = '2026-06-29-demotour-v11';
+  var ASSET_V = '2026-06-29-demotour-v12';
 
   function enabled() {
     try {
@@ -35,7 +35,7 @@
 
     { navId: 'leads', hash: '#/leads', title: 'Lead Capture', en: 'All sources in one inbox',
       s: 'Lead sabhi sources se ek hi jagah aa jaati hai — WhatsApp, Facebook Ad, Instagram Ad, Google Ad, Website, Google Sheet, IndiaMART, JustDial. Sab ek hi inbox mein.',
-      img: { src: 'demo-leadcapture.svg', cap: 'Auto lead capture — all sources LIVE' } },
+      img: { src: 'demo-leadcapture.svg', cap: 'Auto lead capture — all sources (representation)', wide: true } },
 
     { navId: 'leads', hash: '#/leads', title: 'Auto-Assignment + Auto-Dial', en: 'Lead distributed -> phone notification -> one-tap call',
       s: 'Lead aate hi system khud team member ko assign kar deta hai — campaign, source ya product rule par. Assign hote hi agent ke MOBILE par notification aata hai aur auto-dial — ek tap mein call connect.',
@@ -63,7 +63,8 @@
       img: { src: NOTIF, cap: 'Follow-up reminder phone par' } },
 
     { navId: 'admin', hash: '#/admin', title: 'Nurturing', en: 'Drip engagement over days',
-      s: 'Lead nurturing — aaj ki lead ko 3 din, 5 din, 7 din baad kya bhejna hai, alag conditions ke saath. Ek baar set karein, system matching data bhejta rahega.' },
+      s: 'Lead nurturing — aaj ki lead ko 3 din, 5 din, 7 din baad kya bhejna hai, alag conditions ke saath. Ek baar set karein, system matching data bhejta rahega.',
+      img: { src: 'demo-nurturing.svg', cap: 'Status + day-wise nurturing journey (representation)', wide: true } },
 
     { navId: 'admin', hash: '#/admin', title: 'AI — Lead AI Summary', en: 'Auto summary of every lead',
       s: 'Har lead ka AI chhota summary bana deta hai — pichhli baat-cheet, requirement aur next step ek nazar mein. Agent ko poori history padhne ki zaroorat nahi.' },
@@ -159,7 +160,7 @@
 
   var shot = document.createElement('div'); shot.id = 'dtShotPanel';
   shot.innerHTML =
-    '<div class="hd" id="dtShotHandle"><span class="grip">⠿</span><span>Mobile view — drag / resize</span></div>'
+    '<div class="hd" id="dtShotHandle"><span class="grip">⠿</span><span id="dtShotLabel">Mobile view — drag / resize</span></div>'
     + '<img class="shot" id="dtShotImg" alt="mobile screen">'
     + '<div class="cap" id="dtShotCap"></div>'
     + '<span class="rsz">⤡</span>';
@@ -204,6 +205,7 @@
   }
 
   var i = -1;
+  var lastWide = null;
 
   function start() { i = 0; coach.classList.add('show'); show(); }
 
@@ -220,6 +222,15 @@
     if (t.img) {
       shot.querySelector('#dtShotImg').src = t.img.src + '?v=' + ASSET_V;
       shot.querySelector('#dtShotCap').textContent = t.img.cap || '';
+      var wide = !!t.img.wide;
+      shot.querySelector('#dtShotLabel').textContent = wide ? 'Reference — drag · resize' : 'Mobile view — drag · resize';
+      shot.querySelector('#dtShotImg').style.background = wide ? 'transparent' : '#0b1220';
+      shot.querySelector('#dtShotImg').style.border = wide ? '0' : '2px solid #0b1220';
+      if (wide !== lastWide) {
+        if (wide) { shot.style.width = '540px'; shot.style.height = '380px'; }
+        else { shot.style.width = '260px'; shot.style.height = '440px'; }
+        lastWide = wide;
+      }
       shot.style.display = 'flex';
     } else {
       shot.style.display = 'none';

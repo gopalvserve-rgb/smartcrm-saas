@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1520 1040" font-family="Segoe UI,system-ui,sans-serif">
+  <rect x="0" y="0" width="1520" height="1040" rx="16" fill="#ffffff"/>
+  <text x="760" y="78" font-size="52" font-weight="800" fill="#0f2540" text-anchor="middle">Lead Nurturing</text>
+  <text x="760" y="116" font-size="22" fill="#334155" text-anchor="middle">Right Message on the Basis of Status, Sent on the Right Time</text>
+  <text x="345" y="200" font-size="22" font-weight="800" fill="#0f2540" text-anchor="middle">Lead Status</text>
+  <text x="930" y="200" font-size="22" font-weight="800" fill="#0f2540" text-anchor="middle">Nurturing Journey (Based on Status &amp; After Days)</text>
+
+  <rect x="40" y="250" width="150" height="360" rx="16" fill="#ffffff" stroke="#e2e8f0" stroke-width="2"/>
+  <circle cx="115" cy="320" r="38" fill="#eef2fb"/><circle cx="115" cy="308" r="13" fill="#7c8aa3"/><path d="M88 348 a27 22 0 0 1 54 0z" fill="#7c8aa3"/>
+  <text x="115" y="392" font-size="17" font-weight="800" fill="#0f2540" text-anchor="middle">New Lead</text>
+  <text x="115" y="414" font-size="17" font-weight="800" fill="#0f2540" text-anchor="middle">Captured</text>
+  <text x="74" y="460" font-size="14" fill="#475569">▦ Web Form</text>
+  <text x="74" y="492" font-size="14" fill="#475569">✆ Call</text>
+  <text x="74" y="524" font-size="14" fill="#475569">☺ Referral</text>
+
+  <g>
+    <rect x="262" y="252" width="172" height="74" rx="14" fill="#ffffff" stroke="#e2e8f0" stroke-width="2"/>
+    <circle cx="292" cy="289" r="15" fill="#16a34a"/>
+    <text x="318" y="284" font-size="16" font-weight="800" fill="#16a34a">Interested</text>
+    <text x="318" y="305" font-size="12" fill="#64748b">Actively showing interest</text>
+    <rect x="262" y="340" width="172" height="74" rx="14" fill="#ffffff" stroke="#e2e8f0" stroke-width="2"/>
+    <circle cx="292" cy="377" r="15" fill="#f59e0b"/>
+    <text x="318" y="372" font-size="16" font-weight="800" fill="#b45309">Not Decided</text>
+    <text x="318" y="393" font-size="12" fill="#64748b">Needs more information</text>
+    <rect x="262" y="428" width="172" height="74" rx="14" fill="#ffffff" stroke="#e2e8f0" stroke-width="2"/>
+    <circle cx="292" cy="465" r="15" fill="#2563eb"/>
+    <text x="318" y="460" font-size="16" font-weight="800" fill="#1e40af">Not Interested</text>
+    <text x="318" y="481" font-size="12" fill="#64748b">Not looking for now</text>
+    <rect x="262" y="516" width="172" height="74" rx="14" fill="#ffffff" stroke="#e2e8f0" stroke-width="2"/>
+    <circle cx="292" cy="553" r="15" fill="#94a3b8"/>
+    <text x="318" y="548" font-size="16" font-weight="800" fill="#475569">No Response</text>
+    <text x="318" y="569" font-size="12" fill="#64748b">Not replied yet</text>
+  </g>
+
+  <path d="M434 289 H470 V300 H510" fill="none" stroke="#16a34a" stroke-width="2.5"/>
+  <path d="M434 377 H470 V560 H510" fill="none" stroke="#f59e0b" stroke-width="2.5"/>
+
+  <g font-size="14">
+    <!-- day headers -->
+    <g fill="#0f2540" font-weight="800" text-anchor="middle">
+      <rect x="540" y="226" width="120" height="34" rx="17" fill="#f1f5f9"/><text x="600" y="249">Day 0</text>
+      <rect x="740" y="226" width="120" height="34" rx="17" fill="#f1f5f9"/><text x="800" y="249">Day 2</text>
+      <rect x="940" y="226" width="120" height="34" rx="17" fill="#f1f5f9"/><text x="1000" y="249">Day 5</text>
+      <rect x="1140" y="226" width="120" height="34" rx="17" fill="#f1f5f9"/><text x="1200" y="249">Day 8</text>
+      <rect x="1340" y="226" width="120" height="34" rx="17" fill="#f1f5f9"/><text x="1400" y="249">Day 14</text>
+    </g>
+    <g stroke="#cbd5e1" stroke-width="2" stroke-dasharray="5 5">
+      <line x1="665" y1="243" x2="735" y2="243"/><line x1="865" y1="243" x2="935" y2="243"/>
+      <line x1="1065" y1="243" x2="1135" y2="243"/><line x1="1265" y1="243" x2="1335" y2="243"/>
+    </g>
+  </g>
+
+  <!-- WhatsApp bubbles -->
+  <g>
+    <rect x="512" y="296" width="176" height="190" rx="14" fill="#e8f7ee" stroke="#bbe8cb"/>
+    <rect x="712" y="296" width="176" height="190" rx="14" fill="#e8f7ee" stroke="#bbe8cb"/>
+    <rect x="912" y="296" width="176" height="190" rx="14" fill="#e8f7ee" stroke="#bbe8cb"/>
+    <rect x="1112" y="296" width="176" height="190" rx="14" fill="#e8f7ee" stroke="#bbe8cb"/>
+    <rect x="1312" y="296" width="176" height="190" rx="14" fill="#e8f7ee" stroke="#bbe8cb"/>
+    <circle cx="540" cy="296" r="18" fill="#25d366"/><circle cx="740" cy="296" r="18" fill="#25d366"/><circle cx="940" cy="296" r="18" fill="#25d366"/><circle cx="1140" cy="296" r="18" fill="#25d366"/><circle cx="1340" cy="296" r="18" fill="#25d366"/>
+  </g>
+  <g font-size="14" fill="#15412c">
+    <text x="532" y="338">Hi {{Name}},<tspan x="532" dy="22">Thanks for showing</tspan><tspan x="532" dy="22">interest in our</tspan><tspan x="532" dy="22">solution.</tspan><tspan x="532" dy="22">How can we help?</tspan></text>
+    <text x="732" y="338">Hi {{Name}},<tspan x="732" dy="22">Just checking in.</tspan><tspan x="732" dy="22">Do you need any</tspan><tspan x="732" dy="22">help or more info?</tspan></text>
+    <text x="932" y="338">Hi {{Name}},<tspan x="932" dy="22">Here's a case study</tspan><tspan x="932" dy="22">on how we helped</tspan><tspan x="932" dy="22">businesses like yours.</tspan></text>
+    <text x="1132" y="338">Hi {{Name}},<tspan x="1132" dy="22">Any questions we</tspan><tspan x="1132" dy="22">can answer before</tspan><tspan x="1132" dy="22">you decide?</tspan></text>
+    <text x="1332" y="338">Hi {{Name}},<tspan x="1332" dy="22">Just following up.</tspan><tspan x="1332" dy="22">We're here when</tspan><tspan x="1332" dy="22">you're ready.</tspan></text>
+  </g>
+  <g font-size="11" fill="#5b8f72" text-anchor="end">
+    <text x="676" y="474">10:30 AM ✓✓</text><text x="876" y="474">10:30 AM ✓✓</text><text x="1076" y="474">10:30 AM ✓✓</text><text x="1276" y="474">10:30 AM ✓✓</text><text x="1476" y="474">10:30 AM ✓✓</text>
+  </g>
+
+  <!-- Email cards -->
+  <g>
+    <rect x="512" y="560" width="176" height="180" rx="14" fill="#eaf1fb" stroke="#cdddf3"/>
+    <rect x="712" y="560" width="176" height="180" rx="14" fill="#eaf1fb" stroke="#cdddf3"/>
+    <rect x="912" y="560" width="176" height="180" rx="14" fill="#eaf1fb" stroke="#cdddf3"/>
+    <rect x="1112" y="560" width="176" height="180" rx="14" fill="#eaf1fb" stroke="#cdddf3"/>
+    <rect x="1312" y="560" width="176" height="180" rx="14" fill="#eaf1fb" stroke="#cdddf3"/>
+    <circle cx="540" cy="560" r="18" fill="#2563eb"/><circle cx="740" cy="560" r="18" fill="#2563eb"/><circle cx="940" cy="560" r="18" fill="#2563eb"/><circle cx="1140" cy="560" r="18" fill="#2563eb"/><circle cx="1340" cy="560" r="18" fill="#2563eb"/>
+  </g>
+  <g font-size="13.5">
+    <text x="532" y="600" font-weight="800" fill="#0f2540">Subject: Welcome!<tspan x="532" dy="24" font-weight="400" fill="#334155">Thanks for reaching</tspan><tspan x="532" dy="22" font-weight="400" fill="#334155">out to us. We are</tspan><tspan x="532" dy="22" font-weight="400" fill="#334155">excited to help you.</tspan></text>
+    <text x="732" y="600" font-weight="800" fill="#0f2540">Subject: More Info<tspan x="732" dy="24" font-weight="400" fill="#334155">Here's more info that</tspan><tspan x="732" dy="22" font-weight="400" fill="#334155">might help you make</tspan><tspan x="732" dy="22" font-weight="400" fill="#334155">the right decision.</tspan></text>
+    <text x="932" y="600" font-weight="800" fill="#0f2540">Subject: Case Study<tspan x="932" dy="24" font-weight="400" fill="#334155">See how our solution</tspan><tspan x="932" dy="22" font-weight="400" fill="#334155">delivered real results</tspan><tspan x="932" dy="22" font-weight="400" fill="#334155">for our clients.</tspan></text>
+    <text x="1132" y="600" font-weight="800" fill="#0f2540">Subject: Let's Talk<tspan x="1132" dy="24" font-weight="400" fill="#334155">Would you like to</tspan><tspan x="1132" dy="22" font-weight="400" fill="#334155">schedule a quick call</tspan><tspan x="1132" dy="22" font-weight="400" fill="#334155">with our expert?</tspan></text>
+    <text x="1332" y="600" font-weight="800" fill="#0f2540">Subject: Still Need<tspan x="1332" dy="24" font-weight="400" fill="#334155">Help? We're always</tspan><tspan x="1332" dy="22" font-weight="400" fill="#334155">here to support you.</tspan></text>
+  </g>
+
+  <text x="760" y="800" font-size="16" fill="#64748b" text-anchor="middle">✉  ⟶  ⬤  If no response, continue nurturing with smart follow-ups</text>
+
+  <rect x="40" y="850" width="1440" height="150" rx="16" fill="#f6f8fc" stroke="#e2e8f0"/>
+  <g>
+    <text x="120" y="905" font-size="17" font-weight="800" fill="#0f2540">◎ Personalized</text>
+    <text x="120" y="928" font-size="13" fill="#64748b">Right message for each status</text>
+    <text x="430" y="905" font-size="17" font-weight="800" fill="#0f2540">◷ Timely Follow-ups</text>
+    <text x="430" y="928" font-size="13" fill="#64748b">Automated on the right days</text>
+    <text x="740" y="905" font-size="17" font-weight="800" fill="#0f2540">▮ Better Engagement</text>
+    <text x="740" y="928" font-size="13" fill="#64748b">Stay top-of-mind with leads</text>
+    <text x="1010" y="905" font-size="17" font-weight="800" fill="#0f2540">♟ Higher Conversions</text>
+    <text x="1010" y="928" font-size="13" fill="#64748b">Nurture leads into loyal customers</text>
+  </g>
+  <rect x="1270" y="868" width="190" height="114" rx="14" fill="#16a34a"/>
+  <text x="1365" y="918" font-size="18" font-weight="800" fill="#ffffff" text-anchor="middle">Nurture Today,</text>
+  <text x="1365" y="944" font-size="18" font-weight="800" fill="#ffffff" text-anchor="middle">Convert Tomorrow!</text>
+</svg>
