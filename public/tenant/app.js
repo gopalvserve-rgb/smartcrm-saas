@@ -3373,12 +3373,30 @@ function _renderKpi(card, label, value, klass, icon, href) {
   };
 })();
 
+// CF_WIDGET_DATE_v1 — resolve a widget date-scope into {from,to} (YYYY-MM-DD).
+function _cfWidgetRange(scope) {
+  const fmt = (d) => d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+  const now = new Date();
+  if (scope === 'today')  { return { from: fmt(now), to: fmt(now) }; }
+  if (scope === '7d')     { const f = new Date(now); f.setDate(f.getDate()-7);  return { from: fmt(f), to: fmt(now) }; }
+  if (scope === '30d')    { const f = new Date(now); f.setDate(f.getDate()-30); return { from: fmt(f), to: fmt(now) }; }
+  if (scope === 'tmonth') { return { from: fmt(new Date(now.getFullYear(), now.getMonth(), 1)), to: fmt(now) }; }
+  if (scope === 'lmonth') { return { from: fmt(new Date(now.getFullYear(), now.getMonth()-1, 1)), to: fmt(new Date(now.getFullYear(), now.getMonth(), 0)) }; }
+  if (scope === 'all')    { return { from: '', to: '' }; }
+  const dr = (window.CRM && CRM._dashRange) || {}; // 'dash' (default) — follow the dashboard top date bar
+  return { from: dr.from || '', to: dr.to || '' };
+}
+function _cfWidgetRangeLabel(scope) {
+  return ({ today:'Today', '7d':'Last 7 days', '30d':'Last 30 days', tmonth:'This month', lmonth:'Last month', all:'All time' })[scope] || 'Dashboard date range';
+}
+
 const WIDGET_LIBRARY = {
   // ----- Custom field breakdown -----
   // RB_CF_DIMS_v1 (2026-06-03): one widget that pivots the lead population
   // by any custom field the tenant has defined. The picker shows up in the
   // widget's Edit modal; admin chooses which CF and the widget renders a
   // bar chart + sortable table. Re-uses api_reports_pivot under the hood.
+
   custom_field_breakdown: { title: 'Custom field · Breakdown', group: 'Custom fields',
     description: 'Pick any custom field and see leads grouped by its values.',
     configKeys: ['cf_key'],
@@ -3411,6 +3429,17 @@ const WIDGET_LIBRARY = {
         h('option', { value: 'value_sum',       selected: cfg && cfg.measure === 'value_sum' ? 'selected' : null }, '₹ Value sum'));
       measSel.onchange = () => onChange({ measure: measSel.value });
       card.appendChild(measSel);
+      lab('Date range');
+      const dateSel = h('select', { class: 'input', style: { width: '100%' } },
+        h('option', { value: 'dash',   selected: (!cfg || !cfg.date_scope || cfg.date_scope === 'dash') ? 'selected' : null }, 'Dashboard date range (top bar)'),
+        h('option', { value: 'all',    selected: cfg && cfg.date_scope === 'all' ? 'selected' : null }, 'All time'),
+        h('option', { value: 'today',  selected: cfg && cfg.date_scope === 'today' ? 'selected' : null }, 'Today'),
+        h('option', { value: '7d',     selected: cfg && cfg.date_scope === '7d' ? 'selected' : null }, 'Last 7 days'),
+        h('option', { value: '30d',    selected: cfg && cfg.date_scope === '30d' ? 'selected' : null }, 'Last 30 days'),
+        h('option', { value: 'tmonth', selected: cfg && cfg.date_scope === 'tmonth' ? 'selected' : null }, 'This month'),
+        h('option', { value: 'lmonth', selected: cfg && cfg.date_scope === 'lmonth' ? 'selected' : null }, 'Last month'));
+      dateSel.onchange = () => onChange({ date_scope: dateSel.value });
+      card.appendChild(dateSel);
     },
     render: async (c, cfg, _d, w) => {
       try { c.style.minWidth = '0'; c.style.maxWidth = '100%'; } catch (_) {}
@@ -3420,13 +3449,16 @@ const WIDGET_LIBRARY = {
       const colLabelMap = { status: 'Status', source: 'Source', assigned_to: 'Owner', qualified: 'Qualified', created_month: 'Created month' };
       const measLabelMap = { count: 'count', qualified_count: 'qualified', won_count: 'won', hot_count: 'hot', value_sum: 'value' };
       const colLabel = colLabelMap[colDim] || (colDim.startsWith('extra:') ? colDim.slice(6) : colDim);
-      c.appendChild(h('h3', { style: { margin: '0 0 .5rem' } }, (w.title || 'Custom field') + (cfKey ? ' · ' + cfKey + ' × ' + colLabel : '')));
+      const _scopeLbl = _cfWidgetRangeLabel((cfg && cfg.date_scope) || 'dash');
+      c.appendChild(h('h3', { style: { margin: '0 0 .5rem' } }, (w.title || 'Custom field') + (cfKey ? ' · ' + cfKey + ' × ' + colLabel : ''),
+        h('span', { style: { fontSize: '.7rem', fontWeight: 500, color: '#64748b', marginLeft: '.4rem' } }, '📅 ' + _scopeLbl)));
       if (!cfKey) { c.appendChild(h('div', { class: 'muted', style: { fontSize: '.85rem' } }, 'Click Edit on this widget and pick a custom field.')); return; }
       try {
-        const _dr = (window.CRM && CRM._dashRange) || {};
+        const _scope = (cfg && cfg.date_scope) || 'dash';
+        const _rng = _cfWidgetRange(_scope);
         const _wf = {};
-        if (_dr.from) _wf.from = _dr.from;
-        if (_dr.to) _wf.to = _dr.to;
+        if (_rng.from) _wf.from = _rng.from;
+        if (_rng.to) _wf.to = _rng.to;
         const r = await api('api_reports_pivot', { row_dims: ['extra:' + cfKey, colDim], metrics: [measure], filters: _wf });
         const rows = (r && r.rows) || [];
         if (!rows.length) { c.appendChild(h('div', { class: 'muted', style: { fontSize: '.85rem' } }, 'No leads with a value in this custom field.')); return; }

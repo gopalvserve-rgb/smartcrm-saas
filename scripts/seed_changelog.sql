@@ -1204,3 +1204,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'Date filters on the Modern/Inbox leads views now query the server by date (previously they only filtered the most recent page, so older date ranges showed nothing). The dashboard custom-field widget now also respects the dashboard date range.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- CF_WIDGET_DATE_v1 (2026-06-28)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('CF_WIDGET_DATE', 'Custom-field widget: built-in date range',
+ 'The dashboard custom-field widget now has its own Date range option (Dashboard range / All time / Today / Last 7 / Last 30 / This month / Last month) in its Edit settings, and shows the active range in its header. Use ⚙ Edit to set it.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;
