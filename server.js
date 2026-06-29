@@ -55,6 +55,8 @@ const tickets = require('./routes/saas/tickets');
 const finance         = require('./routes/saas/finance');
 const signupRequests  = require('./routes/saas/signupRequests');
 const wlBilling       = require('./routes/saas/whitelabelBilling');
+const saasPermissions = require('./routes/saas/saasPermissions');   // SUPER_ADMIN_PERMS — Roles & Permissions
+const recordingHealth = require('./routes/saas/recordingHealth');   // DEVICE_DIAG — Device Health
 
 // ---- Industry Packs: load + self-register at boot ----------------
 // Each pack module calls framework.register({...}) on require, populating
@@ -95,7 +97,7 @@ const SAAS_API = {};
   aiSettings, aiCosting,
   tenantModules, demoTenant,
   tickets,
-  finance, signupRequests, wlBilling
+  finance, signupRequests, wlBilling, saasPermissions, recordingHealth
 ].forEach(mod => {
   Object.keys(mod).forEach(k => {
     if (typeof mod[k] === 'function' && k.startsWith('api_saas_')) SAAS_API[k] = mod[k];
