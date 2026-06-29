@@ -2995,8 +2995,9 @@ async function openSignupRequestModal(id, onClose) {
         await api('api_saas_sr_update', collect());
         const r = await api('api_saas_sr_approve', { id: row.id });
         toast('Tenant provisioned!', 'ok');
-        // Show credentials in a fresh modal so they're hard to miss
-        showCredentialsModal(r);
+        // SR_CREDS_NEST_FIX_v1 — approve returns { ok, provisioned:{email,password,login_url} };
+        // creds live under .provisioned (showing r.* directly was blank).
+        showCredentialsModal((r && r.provisioned) ? r.provisioned : r);
         close();
       } catch (e) {
         toast(e.message, 'err');
