@@ -142,7 +142,36 @@ async function api_saas_sr_summary(token) {
   };
 }
 
+/* PUBLIC_SIGNUP_SUBMIT_v1 — public form (/saas/signup-request.html) POSTs here.
+ * Inserts a 'pending' row into the control-DB `signups` table so it shows on
+ * the super-admin Signup Requests page. No auth (public). */
+async function expressPublicSubmit(req, res) {
+  try {
+    const b = req.body || {};
+    const name   = String(b.name || '').trim();
+    const email  = String(b.email || '').trim().toLowerCase();
+    const mobile = String(b.mobile || '').trim();
+    if (!name || !email || !mobile) return res.status(400).json({ error: 'Name, email and mobile are required.' });
+    const org  = String(b.org_name || '').trim();
+    const slug = String(b.desired_slug || '').trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
+    const meta = {};
+    ['submitted_by','desired_tenure','desired_users','payment_status','amount_paid_inr','total_amount_inr','next_payment_at','notes'].forEach(k => {
+      if (b[k] != null && String(b[k]).trim() !== '') meta[k] = String(b[k]).trim();
+    });
+    const r = await control.query(
+      `INSERT INTO signups (name, email, mobile, org_name, desired_slug, status, metadata)
+       VALUES ($1,$2,$3,$4,$5,'pending',$6) RETURNING id`,
+      [name.slice(0,160), email.slice(0,200), mobile.slice(0,40),
+       org ? org.slice(0,200) : null, slug ? slug.slice(0,80) : null, JSON.stringify(meta)]);
+    return res.json({ ok: true, id: r.rows[0].id });
+  } catch (e) {
+    console.error('[saas-public-signup-request]', e.message);
+    return res.status(400).json({ error: e.message });
+  }
+}
+
 module.exports = {
+  expressPublicSubmit,
   api_saas_sr_list,
   api_saas_sr_get,
   api_saas_sr_approve,

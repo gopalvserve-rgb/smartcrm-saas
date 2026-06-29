@@ -797,6 +797,9 @@ app.get('/api/saas/brand', async (_req, res) => {
 function _saasToken(req) {
   return (req.headers['x-auth-token'] || (req.body && req.body.token) || '').toString();
 }
+// PUBLIC_SIGNUP_SUBMIT_v1 — public signup-request form submit (no auth).
+app.post('/api/saas-public-signup-request', express.json({ limit: '32kb' }), (req, res) => signupRequests.expressPublicSubmit(req, res));
+
 app.post('/api/saas', async (req, res) => {
   const { fn, args } = req.body || {};
   if (!fn || !SAAS_API[fn]) return res.status(404).json({ error: 'Unknown SaaS function: ' + fn });
