@@ -1,5 +1,5 @@
 /* ============================================================
- * DEMO_TOUR_v8 — Live guided sales tour on the showcase tenant
+ * DEMO_TOUR_v9 — Live guided sales tour on the showcase tenant
  * ------------------------------------------------------------
  * 25-step pitch flow (Hinglish) on the REAL app, EXACT routes the
  * user mapped. Two draggable + resizable floating panels: TEXT
@@ -8,12 +8,12 @@
  *
  * GATED: launch button only shows for slug "showcase", or
  * ?demotour=1, or localStorage.demoTour==="1".
- * cache key: 2026-06-29-demotour-v8
+ * cache key: 2026-06-29-demotour-v9
  * ============================================================ */
 (function () {
   'use strict';
 
-  var ASSET_V = '2026-06-29-demotour-v8';
+  var ASSET_V = '2026-06-29-demotour-v9';
 
   function enabled() {
     try {
@@ -48,7 +48,7 @@
     { navId: 'whatsbot', hash: '#/whatsbot/chat', title: 'Auto Communication', en: 'WhatsApp + Email on every new lead',
       s: 'Jaise hi nayi lead aati hai, WhatsApp API se WhatsApp message aur Email — dono automatically chale jaate hain.' },
 
-    { navId: 'whatsbot', hash: '#/whatsbot/chat', title: 'AI Bot — Hot Lead Alert', en: '24x7 auto-handling -> hot-lead notification',
+    { navId: 'leads', hash: '#/leads', title: 'AI Bot — Hot Lead Alert', en: '24x7 auto-handling -> hot-lead notification',
       s: 'AI Bot WhatsApp par khud baat karta hai — appointment, product filtration, requirement. 24 ghante chats handle, qualify hote hi aapko Hot Lead notification aur lead par poori requirement note.',
       img: { src: NOTIF, cap: 'Hot-lead alert phone par' } },
 
@@ -74,7 +74,7 @@
     { navId: 'leads', hash: '#/leads', title: 'AI — Auto Update Status, Time & Remark', en: 'AI updates the lead automatically',
       s: 'Call ke baad AI khud lead ka status, follow-up time aur remark update kar deta hai — agent ko manually likhna nahi padta, data hamesha updated rehta hai.' },
 
-    { hash: '#/projects', title: 'Post-Sale Stages', en: 'Work after the deal closes',
+    { navId: 'leads', hash: '#/leads', title: 'Post-Sale Stages', en: 'Work after the deal closes',
       s: 'Close ke baad bhi kaam — token amount, paper collection, 10% payment, delivery. Apne stages banayein; agent har stage update aur follow-up kare.' },
 
     { navId: 'reports', hash: '#/reports', title: 'Reporting', en: 'Pipeline + custom report builder',
