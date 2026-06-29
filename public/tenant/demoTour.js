@@ -1,5 +1,5 @@
 /* ============================================================
- * DEMO_TOUR_v10 — Live guided sales tour on the showcase tenant
+ * DEMO_TOUR_v11 — Live guided sales tour on the showcase tenant
  * ------------------------------------------------------------
  * 25-step pitch flow (Hinglish) on the REAL app, EXACT routes the
  * user mapped. Two draggable + resizable floating panels: TEXT
@@ -8,12 +8,12 @@
  *
  * GATED: launch button only shows for slug "showcase", or
  * ?demotour=1, or localStorage.demoTour==="1".
- * cache key: 2026-06-29-demotour-v10
+ * cache key: 2026-06-29-demotour-v11
  * ============================================================ */
 (function () {
   'use strict';
 
-  var ASSET_V = '2026-06-29-demotour-v10';
+  var ASSET_V = '2026-06-29-demotour-v11';
 
   function enabled() {
     try {
@@ -43,7 +43,7 @@
 
     { hash: '#/tatreport', title: 'TAT / SLA', en: 'Response-time escalation alerts',
       s: '15 min mein call ka TAT set karein. Na ho to agent ko violation; phir agent + manager; phir next agent + manager + admin tak escalate — sab phone notification par.',
-      img: { src: NOTIF, cap: 'Escalation phone par aise aata hai' } },
+      img: { src: 'demo-tat.svg', cap: 'TAT violations agent ke phone par' } },
 
     { navId: 'whatsbot', hash: '#/whatsbot/chat', title: 'Auto Communication', en: 'WhatsApp + Email on every new lead',
       s: 'Jaise hi nayi lead aati hai, WhatsApp API se WhatsApp message aur Email — dono automatically chale jaate hain.' },
