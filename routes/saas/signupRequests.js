@@ -58,24 +58,119 @@ async function api_saas_sr_approve(token, payload) {
   const me = await requireFullAdmin(token);
   const p = payload || {};
   if (!p.id) throw new Error('id required');
-  const ex = await control.query(`SELECT id, status, email FROM signups WHERE id=$1`, [p.id]);
+  const ex = await control.query(`SELECT id, status, email, desired_slug FROM signups WHERE id=$1`, [p.id]);
   if (!ex.rows.length) throw new Error('Signup request not found');
+
   // Mark as paid (manual approval = skip Cashfree, treat as paid)
   await control.update('signups', p.id, { status: 'paid', updated_at: new Date() });
-  // Try to provision immediately
+
+  // SAAS_ADMIN_REPAIR_v1.7 — call the REAL function provisionFromSignup
+  // (not the non-existent provisionTenant). This actually creates the
+  // tenant DB, runs the schema, seeds the admin user with bcrypt-hashed
+  // password, and emails the credentials via saasMailer.
   let provisioned = null, provErr = null;
   try {
     const provisioning = require('./provisioning');
-    if (typeof provisioning.provisionTenant === 'function') {
-      provisioned = await provisioning.provisionTenant(p.id);
+    if (typeof provisioning.provisionFromSignup === 'function') {
+      provisioned = await provisioning.provisionFromSignup(p.id);
+    } else {
+      provErr = 'provisioning.provisionFromSignup is not a function';
     }
-  } catch (e) { provErr = e.message; }
+  } catch (e) {
+    provErr = e.message;
+    console.error('[sr.approve] provision error:', e);
+  }
+
   await control.insert('audit_log', {
     actor_type: 'super_admin', actor_id: me.id, actor_email: me.email,
     event: 'signup.approved',
-    detail: JSON.stringify({ signup_id: p.id, provisioned: !!provisioned, prov_err: provErr })
+    detail: JSON.stringify({ signup_id: p.id, provisioned: provisioned, prov_err: provErr })
   }).catch(() => {});
-  return { ok: true, provisioned, provisioning_error: provErr };
+
+  if (provErr) throw new Error('Provisioning failed: ' + provErr);
+  return { ok: true, provisioned };
+}
+
+/** Re-provision a signup that got stuck (e.g. earlier failed approve).
+ *  Lets admin retry provisioning without re-marking status. */
+async function api_saas_sr_provision(token, id) {
+  const me = await requireFullAdmin(token);
+  if (!id) throw new Error('id required');
+  const provisioning = require('./provisioning');
+  if (typeof provisioning.provisionFromSignup !== 'function') {
+    throw new Error('provisioning.provisionFromSignup not available');
+  }
+  const result = await provisioning.provisionFromSignup(Number(id));
+  await control.insert('audit_log', {
+    actor_type: 'super_admin', actor_id: me.id, actor_email: me.email,
+    event: 'signup.reprovisioned',
+    detail: JSON.stringify({ signup_id: Number(id), result })
+  }).catch(() => {});
+  return { ok: true, result };
+}
+
+/** Reset the password for a provisioned tenant's admin user. Useful when
+ *  the welcome email was missed or the original password got lost.
+ *  Returns the new password in plain text (shown once to the admin). */
+async function api_saas_sr_resetTenantAdminPassword(token, payload) {
+  const me = await requireFullAdmin(token);
+  const p = payload || {};
+  if (!p.signup_id && !p.tenant_id && !p.email) throw new Error('signup_id, tenant_id or email required');
+
+  // Find the tenant DB name
+  let tenant;
+  if (p.tenant_id) {
+    tenant = await control.findById('tenants', p.tenant_id);
+  } else if (p.signup_id) {
+    const s = await control.findById('signups', p.signup_id);
+    if (s) tenant = await control.findOneBy('tenants', 'slug', s.desired_slug);
+  } else if (p.email) {
+    tenant = await control.findOneBy('tenants', 'contact_email', String(p.email).toLowerCase().trim());
+  }
+  if (!tenant) throw new Error('Tenant not found');
+
+  const bcrypt = require('bcryptjs');
+  const { Pool } = require('pg');
+  const baseUrl = process.env.CONTROL_DATABASE_URL || process.env.DATABASE_URL;
+  const u = new URL(baseUrl);
+  u.pathname = '/' + tenant.db_name;
+  const tPool = new Pool({
+    connectionString: u.toString(),
+    ssl: /sslmode=require|railway|neon|supabase|render/i.test(baseUrl) ? { rejectUnauthorized: false } : false,
+    max: 1
+  });
+  try {
+    const newPw = 'scrm-' + require('crypto').randomBytes(4).toString('hex');
+    const hash = bcrypt.hashSync(newPw, 10);
+    const r = await tPool.query(
+      `UPDATE users SET password_hash=$1, is_active=1 WHERE email=$2 AND role='admin' RETURNING id, email`,
+      [hash, tenant.contact_email]
+    );
+    if (!r.rows.length) {
+      // No admin user yet — create one
+      await tPool.query(
+        `INSERT INTO users (name, email, password_hash, role, is_active, created_at)
+         VALUES ($1, $2, $3, 'admin', 1, NOW())
+         ON CONFLICT (email) DO UPDATE SET password_hash=EXCLUDED.password_hash, is_active=1`,
+        [tenant.contact_name || tenant.org_name || 'Admin', tenant.contact_email, hash]
+      );
+    }
+    await control.insert('audit_log', {
+      actor_type: 'super_admin', actor_id: me.id, actor_email: me.email,
+      event: 'tenant.admin_password_reset',
+      detail: JSON.stringify({ tenant_id: tenant.id, slug: tenant.slug, email: tenant.contact_email })
+    }).catch(() => {});
+    return {
+      ok: true,
+      tenant_slug: tenant.slug,
+      login_url: 'https://' + ((await control.getSetting('PLATFORM_DOMAIN')) || 'crm.smartcrmsolution.com') + '/t/' + tenant.slug + '/',
+      email: tenant.contact_email,
+      password: newPw,
+      message: 'Password reset. Share these credentials with the user (shown once).'
+    };
+  } finally {
+    try { await tPool.end(); } catch (_) {}
+  }
 }
 
 async function api_saas_sr_reject(token, payload) {
@@ -169,6 +264,8 @@ async function api_saas_sr_update(token, payload) {
 module.exports = {
   api_saas_sr_list,
   api_saas_sr_update,
+  api_saas_sr_provision,
+  api_saas_sr_resetTenantAdminPassword,
   api_saas_sr_get,
   api_saas_sr_approve,
   api_saas_sr_reject,
