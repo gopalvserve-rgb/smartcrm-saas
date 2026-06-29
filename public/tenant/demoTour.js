@@ -1,20 +1,19 @@
 /* ============================================================
- * DEMO_TOUR_v7 — Live guided sales tour on the showcase tenant
+ * DEMO_TOUR_v8 — Live guided sales tour on the showcase tenant
  * ------------------------------------------------------------
- * 18-step pitch flow (Hinglish) on the REAL app, using the EXACT
- * routes the user mapped. Two independent floating panels: a translucent TEXT coach
- * (bottom-left) and a bigger MOBILE-SCREEN panel (right). BOTH are
- * draggable (grab the header) and resizable (drag the corner). The
- * route highlight ring stays visible; nothing dims the screen.
+ * 25-step pitch flow (Hinglish) on the REAL app, EXACT routes the
+ * user mapped. Two draggable + resizable floating panels: TEXT
+ * coach (bottom-left) + bigger MOBILE-SCREEN panel (right).
+ * Highlight ring stays visible; nothing dims the screen.
  *
  * GATED: launch button only shows for slug "showcase", or
  * ?demotour=1, or localStorage.demoTour==="1".
- * cache key: 2026-06-29-demotour-v7
+ * cache key: 2026-06-29-demotour-v8
  * ============================================================ */
 (function () {
   'use strict';
 
-  var ASSET_V = '2026-06-29-demotour-v7';
+  var ASSET_V = '2026-06-29-demotour-v8';
 
   function enabled() {
     try {
@@ -81,16 +80,36 @@
     { navId: 'reports', hash: '#/reports', title: 'Reporting', en: 'Pipeline + custom report builder',
       s: 'Stage-wise leads — Qualified, Proposal, Won. User / manager / product / source / campaign filter. Custom report builder + har shaam complete report email par.' },
 
-    { hash: '#/callactivity', title: 'Call & Activity Reports', en: 'Caller + activity + WhatsApp reporting',
-      s: 'Caller-wise call reporting — outgoing, talk-time. Activity report mein touch-points aur data-points, aur WhatsApp reporting ka pura detail.' },
+    { hash: '#/callactivity', title: 'Call & Activity Reports', en: 'Caller-wise call reporting',
+      s: 'Caller-wise call reporting — outgoing, incoming, missed aur talk-time, saari detail. Daily call activity ek hi jagah.' },
 
-    { hash: '#/attendance', title: 'HR Module', en: 'Attendance, leave & salary',
-      s: 'Attendance — time, date, location, device, map view. Team leave apply kare, manager approve/disapprove. Month end par salary auto-calculate.' },
+    { hash: '#/activityreport', title: 'Lead Activity Report', en: 'What each employee actually did',
+      s: 'Yahan dekh sakte hain aapke employee ne kitne number edit kiye, kitne follow-up update kiye, kitne remark add kiye, kitni leads par NP (not picked) kiya. Daily aur weekly report bhi mil jaati hai.' },
+
+    { hash: '#/whatsappreport', title: 'WhatsApp Activity Report', en: 'Sent / opened / failed + button clicks',
+      s: 'Yahan dekh sakte hain kitni leads par WhatsApp gaya, kitne open hue, kitne fail hue. Saath hi kitne button-click aaye aur kaunse users ne kiya — poori detail.' },
+
+    { navId: 'knowledge', hash: '#/knowledge', title: 'Knowledge Base', en: 'Scripts, price list, brochures',
+      s: 'Yahan caller ki script, price list, brochure aur baaki saari sales-related cheezein rehti hain — poori team ko ek hi jagah sab mil jaata hai.' },
+
+    { hash: '#/tasks', title: 'Task Management', en: 'Assign tasks, track daily work',
+      s: 'Employee apna din ka kaam yahan submit karte hain. Aap task assign kar sakte hain aur progress + report dono dekh sakte hain.' },
+
+    { hash: '#/attendance', title: 'Attendance', en: 'Time, location, device, map',
+      s: 'Attendance — time, date, location, device aur map view. Employee yahin se punch karte hain.' },
+
+    { hash: '#/tracking', title: 'Location Tracking', en: 'Live field-team location',
+      s: 'Field team ki live location tracking — kaun kahan hai, din bhar ka movement map par dikh jaata hai.' },
+
+    { hash: '#/leaves', title: 'Leaves', en: 'Apply, approve, auto-salary',
+      s: 'Team yahin se leave apply kare; manager approve/disapprove kare. Month end par attendance + leave ke hisaab se salary auto-calculate.' },
 
     { hash: '#/invDashboard', title: 'Invoicing & GST', en: 'GST invoice + GSTR-1',
-      s: 'GST invoice banayein, payment record karein, aur GSTR-1 download karke as-it-is accountant ko de dein.' }
-  ];
+      s: 'GST invoice banayein, payment record karein, aur GSTR-1 download karke as-it-is accountant ko de dein.' },
 
+    { title: 'Co-Pilot', en: 'Your AI assistant inside the CRM',
+      s: 'Co-Pilot — aapka AI assistant. Plain language mein poochein — "aaj ki hot leads dikhao", "is lead ka follow-up laga do", "kal ka report bhejo" — aur Co-Pilot kaam kar deta hai. Reports, summaries aur actions, sab chat se.' }
+  ];
 
   var css = ''
     + '#dtLaunch{position:fixed;right:18px;bottom:18px;z-index:99990;background:linear-gradient(135deg,#6366f1,#4f46e5);color:#fff;border:0;border-radius:30px;padding:11px 18px;font:600 13px/1 Segoe UI,system-ui,sans-serif;cursor:pointer;box-shadow:0 8px 24px rgba(79,70,229,.4)}'
