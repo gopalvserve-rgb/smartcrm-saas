@@ -2681,7 +2681,8 @@ VIEWS.signup_requests = async (view) => {
   const _filterState = { status: 'pending', q: '' };
   const reload = async () => {
     const list = await api('api_saas_sr_list', _filterState);
-    renderTable(list);
+    // SR_SHAPE_FIX_v1 — backend returns { items:[...] }; renderTable expects an array.
+    renderTable((list && Array.isArray(list.items)) ? list.items : (Array.isArray(list) ? list : []));
   };
   const statusSel = h('select', {
     onchange: ev => { _filterState.status = ev.target.value; reload(); }
