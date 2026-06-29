@@ -1,5 +1,5 @@
 /* ============================================================
- * DEMO_TOUR_v12 — Live guided sales tour on the showcase tenant
+ * DEMO_TOUR_v13 — Live guided sales tour on the showcase tenant
  * ------------------------------------------------------------
  * 25-step pitch flow (Hinglish) on the REAL app, EXACT routes the
  * user mapped. Two draggable + resizable floating panels: TEXT
@@ -8,12 +8,12 @@
  *
  * GATED: launch button only shows for slug "showcase", or
  * ?demotour=1, or localStorage.demoTour==="1".
- * cache key: 2026-06-29-demotour-v12
+ * cache key: 2026-06-29-demotour-v13
  * ============================================================ */
 (function () {
   'use strict';
 
-  var ASSET_V = '2026-06-29-demotour-v12';
+  var ASSET_V = '2026-06-29-demotour-v13';
 
   function enabled() {
     try {
@@ -69,8 +69,8 @@
     { navId: 'admin', hash: '#/admin', title: 'AI — Lead AI Summary', en: 'Auto summary of every lead',
       s: 'Har lead ka AI chhota summary bana deta hai — pichhli baat-cheet, requirement aur next step ek nazar mein. Agent ko poori history padhne ki zaroorat nahi.' },
 
-    { navId: 'leads', hash: '#/leads', title: 'AI — Call Rating', en: 'AI rating on each call',
-      s: 'AI har call ko sun kar rating deta hai — kahan agent ne achha kiya, kahan improve karna hai. Call quality apne aap track hoti hai.' },
+    { navId: 'leads', hash: '#/leads', title: 'AI Lead Rating — Hot / Warm / Nurture / Cold', en: 'AI scores each lead into buckets',
+      s: 'AI har lead ko khud rate karta hai — Hot, Warm, Nurture ya Cold. Engagement, replies aur activity dekh kar bucket assign hota hai, taaki team pehle Hot leads par focus kare.' },
 
     { navId: 'leads', hash: '#/leads', title: 'AI — Auto Update Status, Time & Remark', en: 'AI updates the lead automatically',
       s: 'Call ke baad AI khud lead ka status, follow-up time aur remark update kar deta hai — agent ko manually likhna nahi padta, data hamesha updated rehta hai.' },
