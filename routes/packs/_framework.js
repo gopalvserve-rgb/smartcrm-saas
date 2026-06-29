@@ -100,10 +100,15 @@ async function isPackActive(packId) {
 async function installPack(packId, opts) {
   const pack = REGISTRY[packId];
   if (!pack) throw new Error('Unknown pack: ' + packId);
-  if (typeof pack.install !== 'function') throw new Error('Pack ' + packId + ' has no installer');
+  // PACK_INSTALLER_KEY_FIX_v1 — packs register either `install` (education)
+  // or `installer` (realestate). Accept both, and always pass the tenant-
+  // scoped `db` module so installers like RE's `_installer({ db })` work.
+  const installFn = (typeof pack.install === 'function') ? pack.install
+                  : (typeof pack.installer === 'function') ? pack.installer : null;
+  if (typeof installFn !== 'function') throw new Error('Pack ' + packId + ' has no installer');
   await _ensureInstalledPacksSchema();
   // Run installer
-  await pack.install(opts || {});
+  await installFn(Object.assign({ db: db }, opts || {}));
   // MUTEX: a tenant gets exactly ONE active pack. Deactivate every other
   // row BEFORE flipping the target on, so a buggy past install (or a
   // double self-heal between admin.js and tenantApi.js) can never leave
