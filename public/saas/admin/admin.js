@@ -2774,7 +2774,9 @@ VIEWS.signup_requests = async (view) => {
 };
 
 async function openSignupRequestModal(id, onClose) {
-  const row = await api('api_saas_sr_get', id);
+  const _srResp = await api('api_saas_sr_get', id);
+  // SR_SHAPE_FIX_v1 — backend returns { item:{...} }; modal expects the row directly.
+  const row = (_srResp && _srResp.item) ? _srResp.item : _srResp;
   const packages = await api('api_saas_packages_list', {});
 
   const m = h('div', { class: 'modal-bd' });
