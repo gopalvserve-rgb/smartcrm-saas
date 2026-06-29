@@ -1,21 +1,20 @@
 /* ============================================================
- * DEMO_TOUR_v6 — Live guided sales tour on the showcase tenant
+ * DEMO_TOUR_v7 — Live guided sales tour on the showcase tenant
  * ------------------------------------------------------------
  * 18-step pitch flow (Hinglish) on the REAL app, using the EXACT
- * routes the user mapped. Compact, translucent coach docked
- * bottom-left (small, see-through, does NOT block the screen);
- * the sidebar/route highlight ring stays visible. At the mobile-
- * notification moments it shows the REAL mobile screenshots
- * (demo-mob-notif.jpg / demo-mob-leads.jpg) from the brochure.
+ * routes the user mapped. Two independent floating panels: a translucent TEXT coach
+ * (bottom-left) and a bigger MOBILE-SCREEN panel (right). BOTH are
+ * draggable (grab the header) and resizable (drag the corner). The
+ * route highlight ring stays visible; nothing dims the screen.
  *
  * GATED: launch button only shows for slug "showcase", or
  * ?demotour=1, or localStorage.demoTour==="1".
- * cache key: 2026-06-29-demotour-v6
+ * cache key: 2026-06-29-demotour-v7
  * ============================================================ */
 (function () {
   'use strict';
 
-  var ASSET_V = '2026-06-29-demotour-v6';
+  var ASSET_V = '2026-06-29-demotour-v7';
 
   function enabled() {
     try {
@@ -92,20 +91,19 @@
       s: 'GST invoice banayein, payment record karein, aur GSTR-1 download karke as-it-is accountant ko de dein.' }
   ];
 
+
   var css = ''
     + '#dtLaunch{position:fixed;right:18px;bottom:18px;z-index:99990;background:linear-gradient(135deg,#6366f1,#4f46e5);color:#fff;border:0;border-radius:30px;padding:11px 18px;font:600 13px/1 Segoe UI,system-ui,sans-serif;cursor:pointer;box-shadow:0 8px 24px rgba(79,70,229,.4)}'
     + '#dtLaunch:hover{filter:brightness(1.07)}'
     + '#dtRing{position:fixed;z-index:99991;border:3px solid #6366f1;border-radius:10px;box-shadow:0 0 0 2px rgba(99,102,241,.35),0 0 16px 4px rgba(99,102,241,.5);pointer-events:none;transition:all .28s cubic-bezier(.2,.9,.3,1.1);display:none}'
-    + '#dtCoach{position:fixed;left:16px;bottom:16px;width:330px;max-width:calc(100vw - 32px);z-index:99993;background:rgba(15,23,42,.84);backdrop-filter:blur(9px);-webkit-backdrop-filter:blur(9px);color:#fff;border:1px solid rgba(148,163,184,.32);border-radius:14px;box-shadow:0 10px 34px rgba(0,0,0,.4);padding:12px 14px;font:13px/1.5 Segoe UI,system-ui,sans-serif;transition:transform .32s cubic-bezier(.2,.9,.3,1.2);transform:translateY(170%);max-height:84vh;overflow:auto}'
+    + '#dtCoach{position:fixed;left:16px;bottom:16px;width:330px;min-width:240px;max-width:620px;min-height:120px;max-height:88vh;z-index:99993;background:rgba(15,23,42,.85);backdrop-filter:blur(9px);-webkit-backdrop-filter:blur(9px);color:#fff;border:1px solid rgba(148,163,184,.32);border-radius:14px;box-shadow:0 10px 34px rgba(0,0,0,.4);padding:0 14px 12px;font:13px/1.5 Segoe UI,system-ui,sans-serif;transition:transform .32s cubic-bezier(.2,.9,.3,1.2);transform:translateY(180%);resize:both;overflow:auto}'
     + '#dtCoach.show{transform:translateY(0)}'
-    + '#dtCoach .h{display:flex;align-items:center;gap:8px;margin-bottom:7px}'
+    + '#dtCoach .h{display:flex;align-items:center;gap:8px;margin:0 -14px 8px;padding:9px 14px 8px;border-bottom:1px solid rgba(148,163,184,.18);cursor:move;position:sticky;top:0;background:rgba(15,23,42,.6)}'
+    + '#dtCoach .grip{color:#64748b;font-size:13px;letter-spacing:-1px}'
     + '#dtCoach .step{background:#6366f1;font-size:10px;font-weight:800;padding:2px 8px;border-radius:20px;white-space:nowrap}'
-    + '#dtCoach .ttl{font-weight:700;font-size:13px;color:#fff}'
-    + '#dtCoach .scr{color:#e5e9f0;font-size:12.5px;line-height:1.5}'
+    + '#dtCoach .ttl{font-weight:700;font-size:13px;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}'
+    + '#dtCoach .scr{color:#e5e9f0;font-size:12.5px;line-height:1.55}'
     + '#dtCoach .en{color:#8ea2bd;font-size:11px;margin-top:6px}'
-    + '#dtCoach .shotwrap{margin-top:9px;text-align:center}'
-    + '#dtCoach .dtShot{width:118px;border-radius:13px;border:3px solid #0b1220;box-shadow:0 6px 18px rgba(0,0,0,.45);display:inline-block;vertical-align:top}'
-    + '#dtCoach .cap{color:#8ea2bd;font-size:10px;font-weight:600;margin-top:5px}'
     + '#dtCoach .cf{display:flex;align-items:center;gap:7px;margin-top:11px}'
     + '#dtCoach .prog{flex:1;height:5px;background:#1e293b;border-radius:4px;overflow:hidden}'
     + '#dtCoach .prog>span{display:block;height:100%;background:linear-gradient(90deg,#6366f1,#06b6d4);transition:width .3s}'
@@ -114,33 +112,69 @@
     + '#dtCoach .prv{background:#1e293b;color:#cbd5e1}#dtCoach .xit{background:transparent;color:#7889a3}'
     + '#dtCoach .kbd{margin-left:auto;color:#64748b;font-size:10px}'
     + '#dtCoach .kbd b{color:#cbd5e1;background:#1e293b;border-radius:4px;padding:1px 5px}'
-    + '@media(max-width:600px){#dtRing{display:none!important}#dtCoach{left:8px;right:8px;width:auto}}';
+    // ---- mobile-screen panel (right, draggable + resizable) ----
+    + '#dtShotPanel{position:fixed;right:18px;top:80px;width:260px;height:430px;min-width:160px;min-height:240px;max-width:600px;max-height:92vh;z-index:99992;display:none;flex-direction:column;background:rgba(15,23,42,.85);backdrop-filter:blur(9px);-webkit-backdrop-filter:blur(9px);border:1px solid rgba(148,163,184,.32);border-radius:16px;box-shadow:0 12px 38px rgba(0,0,0,.45);padding:8px;resize:both;overflow:hidden}'
+    + '#dtShotPanel .hd{display:flex;align-items:center;gap:6px;cursor:move;color:#aebdd2;font:700 10px/1 Segoe UI,system-ui;padding:3px 4px 8px}'
+    + '#dtShotPanel .hd .grip{color:#64748b;font-size:13px;letter-spacing:-1px}'
+    + '#dtShotPanel .shot{flex:1;min-height:0;width:100%;object-fit:contain;border-radius:11px;background:#0b1220;border:2px solid #0b1220}'
+    + '#dtShotPanel .cap{color:#8ea2bd;font:600 10px/1.3 Segoe UI,system-ui;text-align:center;margin-top:7px}'
+    + '#dtShotPanel .rsz,#dtCoach .rsz{position:absolute;right:3px;bottom:3px;color:#64748b;font-size:12px;pointer-events:none}'
+    + '@media(max-width:600px){#dtRing{display:none!important}#dtCoach{left:8px;right:8px;width:auto}#dtShotPanel{right:8px;width:150px;height:300px}}';
   var styleEl = document.createElement('style'); styleEl.textContent = css; document.head.appendChild(styleEl);
 
   var launch = document.createElement('button');
   launch.id = 'dtLaunch'; launch.textContent = '▶ Demo Tour';
   var ring = document.createElement('div'); ring.id = 'dtRing';
+
   var coach = document.createElement('div'); coach.id = 'dtCoach';
   coach.innerHTML =
-    '<div class="h"><span class="step" id="dtStep"></span><span class="ttl" id="dtTitle"></span></div>'
+    '<div class="h" id="dtCoachHandle"><span class="grip">⠿</span><span class="step" id="dtStep"></span><span class="ttl" id="dtTitle"></span></div>'
     + '<div class="scr" id="dtScript"></div>'
     + '<div class="en" id="dtEn"></div>'
-    + '<div id="dtShot"></div>'
     + '<div class="cf"><div class="prog"><span id="dtProg"></span></div>'
     + '<button class="xit" id="dtExit">Exit</button>'
     + '<button class="prv" id="dtPrev">‹</button>'
     + '<button class="nxt" id="dtNext">Next ›</button>'
-    + '<span class="kbd"><b>Tab</b> next</span></div>';
+    + '<span class="kbd"><b>Tab</b> next</span></div>'
+    + '<span class="rsz">⤡</span>';
+
+  var shot = document.createElement('div'); shot.id = 'dtShotPanel';
+  shot.innerHTML =
+    '<div class="hd" id="dtShotHandle"><span class="grip">⠿</span><span>Mobile view — drag / resize</span></div>'
+    + '<img class="shot" id="dtShotImg" alt="mobile screen">'
+    + '<div class="cap" id="dtShotCap"></div>'
+    + '<span class="rsz">⤡</span>';
 
   function mount() {
     if (!document.body) { return setTimeout(mount, 300); }
     document.body.appendChild(launch);
     document.body.appendChild(ring);
     document.body.appendChild(coach);
+    document.body.appendChild(shot);
     launch.addEventListener('click', start);
     coach.querySelector('#dtNext').addEventListener('click', next);
     coach.querySelector('#dtPrev').addEventListener('click', prev);
     coach.querySelector('#dtExit').addEventListener('click', end);
+    makeDraggable(coach, coach.querySelector('#dtCoachHandle'));
+    makeDraggable(shot, shot.querySelector('#dtShotHandle'));
+  }
+
+  function makeDraggable(el, handle) {
+    handle.addEventListener('mousedown', function (e) {
+      e.preventDefault();
+      var r = el.getBoundingClientRect();
+      var ox = e.clientX - r.left, oy = e.clientY - r.top;
+      el.style.left = r.left + 'px'; el.style.top = r.top + 'px';
+      el.style.right = 'auto'; el.style.bottom = 'auto';
+      if (el === coach) el.style.transform = 'none';
+      function mm(ev) {
+        var x = Math.max(0, Math.min(window.innerWidth - 60, ev.clientX - ox));
+        var y = Math.max(0, Math.min(window.innerHeight - 30, ev.clientY - oy));
+        el.style.left = x + 'px'; el.style.top = y + 'px';
+      }
+      function mu() { document.removeEventListener('mousemove', mm); document.removeEventListener('mouseup', mu); }
+      document.addEventListener('mousemove', mm); document.addEventListener('mouseup', mu);
+    });
   }
   mount();
 
@@ -148,12 +182,6 @@
     return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
     });
-  }
-  function shotHTML(o) {
-    return '<div class="shotwrap"><img class="dtShot" alt="mobile screen" src="'
-      + esc(o.src) + '?v=' + ASSET_V + '">'
-      + (o.cap ? '<div class="cap">' + esc(o.cap) + '</div>' : '')
-      + '</div>';
   }
 
   var i = -1;
@@ -167,10 +195,16 @@
     coach.querySelector('#dtTitle').textContent = t.title;
     coach.querySelector('#dtScript').textContent = t.s;
     coach.querySelector('#dtEn').textContent = '💡 ' + t.en;
-    coach.querySelector('#dtShot').innerHTML = t.img ? shotHTML(t.img) : '';
     coach.querySelector('#dtProg').style.width = ((i + 1) / TOUR.length * 100) + '%';
     coach.querySelector('#dtPrev').style.visibility = (i === 0) ? 'hidden' : 'visible';
     coach.querySelector('#dtNext').textContent = (i === TOUR.length - 1) ? 'Finish ✓' : 'Next ›';
+    if (t.img) {
+      shot.querySelector('#dtShotImg').src = t.img.src + '?v=' + ASSET_V;
+      shot.querySelector('#dtShotCap').textContent = t.img.cap || '';
+      shot.style.display = 'flex';
+    } else {
+      shot.style.display = 'none';
+    }
     if (t.navId) placeRing(t.navId, 0);
     else ring.style.display = 'none';
   }
@@ -200,6 +234,7 @@
     i = -1;
     coach.classList.remove('show');
     ring.style.display = 'none';
+    shot.style.display = 'none';
   }
 
   function reflow() { if (i >= 0 && TOUR[i].navId) placeRing(TOUR[i].navId, 11); }
