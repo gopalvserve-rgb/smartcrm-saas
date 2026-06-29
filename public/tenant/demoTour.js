@@ -1,5 +1,5 @@
 /* ============================================================
- * DEMO_TOUR_v13 — Live guided sales tour on the showcase tenant
+ * DEMO_TOUR_v14 — Live guided sales tour on the showcase tenant
  * ------------------------------------------------------------
  * 25-step pitch flow (Hinglish) on the REAL app, EXACT routes the
  * user mapped. Two draggable + resizable floating panels: TEXT
@@ -8,12 +8,12 @@
  *
  * GATED: launch button only shows for slug "showcase", or
  * ?demotour=1, or localStorage.demoTour==="1".
- * cache key: 2026-06-29-demotour-v13
+ * cache key: 2026-06-29-demotour-v14
  * ============================================================ */
 (function () {
   'use strict';
 
-  var ASSET_V = '2026-06-29-demotour-v13';
+  var ASSET_V = '2026-06-29-demotour-v14';
 
   function enabled() {
     try {
@@ -75,7 +75,7 @@
     { navId: 'leads', hash: '#/leads', title: 'AI — Auto Update Status, Time & Remark', en: 'AI updates the lead automatically',
       s: 'Call ke baad AI khud lead ka status, follow-up time aur remark update kar deta hai — agent ko manually likhna nahi padta, data hamesha updated rehta hai.' },
 
-    { navId: 'leads', hash: '#/leads', title: 'Post-Sale Stages', en: 'Work after the deal closes',
+    { hash: '#/projects', title: 'Post-Sale Stages', en: 'Work after the deal closes',
       s: 'Close ke baad bhi kaam — token amount, paper collection, 10% payment, delivery. Apne stages banayein; agent har stage update aur follow-up kare.' },
 
     { navId: 'reports', hash: '#/reports', title: 'Reporting', en: 'Pipeline + custom report builder',
