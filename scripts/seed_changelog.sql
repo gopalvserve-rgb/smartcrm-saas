@@ -1212,3 +1212,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'The dashboard custom-field widget now has its own Date range option (Dashboard range / All time / Today / Last 7 / Last 30 / This month / Last month) in its Edit settings, and shows the active range in its header. Use ⚙ Edit to set it.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- DASH_PRESET_REAPPLY_FIX_v1 (2026-06-29)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('DASH_PRESET_REAPPLY_FIX', 'Dashboard date presets (All time) now stick',
+ 'Fixed the dashboard date filter where clicking "All time" (or any preset) snapped back to a saved default — the saved default was being re-applied on every re-render. It now applies only on first load, so your chosen range sticks.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

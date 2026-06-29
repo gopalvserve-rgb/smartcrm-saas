@@ -2778,8 +2778,11 @@ async function openChangelogModal() {
     else fromInp.parentNode.insertBefore(bar, fromInp);
 
     // Apply saved default if both inputs are empty.
+    // DASH_PRESET_REAPPLY_FIX_v1 — callers pass noSavedDefault on re-renders so
+    // the saved default isn't re-asserted over a user's just-picked range
+    // (clicking 'All time' became a no-op because re-render re-applied it).
     let appliedDefault = false;
-    if (!fromInp.value && !toInp.value) {
+    if (!opts.noSavedDefault && !fromInp.value && !toInp.value) {
       try {
         const raw = localStorage.getItem(key);
         if (raw) {
@@ -3083,7 +3086,7 @@ VIEWS.dashboard = async (view) => {
     row.appendChild(h('span', { class: 'muted', style: { fontSize: '.78rem' } }, 'to'));
     row.appendChild(_dt);
     view.appendChild(row);
-    setTimeout(() => { try { window._attachDatePresets && window._attachDatePresets(_df, _dt, { key: 'dashboard', apply: _apply }); } catch (_) {} }, 0);
+    setTimeout(() => { try { window._attachDatePresets && window._attachDatePresets(_df, _dt, { key: 'dashboard', apply: _apply, noSavedDefault: CRM._dashDateInit === true }); CRM._dashDateInit = true; } catch (_) {} }, 0);
   })();
 
   // DASH_CAMP_FILTER_v1 — campaign filter bar (admin/manager only)
