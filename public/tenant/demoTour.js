@@ -6,9 +6,9 @@
  * 15-step pitch-script order. At every mobile-notification
  * moment it shows a realistic phone screen.
  *
- * GATED: launch button only shows for slug "vserve" (showcase
+ * GATED: launch button only shows for slug "showcase" (the showcase
  * account), or ?demotour=1, or localStorage.demoTour==="1".
- * cache key: 2026-06-29-demotour-v3
+ * cache key: 2026-06-29-demotour-v4
  * ============================================================ */
 (function () {
   'use strict';
@@ -18,7 +18,7 @@
       var qs = new URLSearchParams(location.search);
       if (qs.get('demotour') === '1') return true;
       if (localStorage.getItem('demoTour') === '1') return true;
-      if (String(window.TENANT_SLUG || '').toLowerCase() === 'vserve') return true;
+      if (String(window.TENANT_SLUG || '').toLowerCase() === 'showcase') return true;
     } catch (_) {}
     return false;
   }
