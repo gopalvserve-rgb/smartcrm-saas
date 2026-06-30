@@ -586,7 +586,7 @@ VIEWS.tenants = async (view) => {
     kpi('Pending balance', '₹' + Number(_cnt.balance).toLocaleString('en-IN'), '#b45309')));
 
   // ---- #5 Filter bar + #6 view toggle -------------------------------------
-  const _f = { q:'', status:'' };
+  const _f = { q:'', status:'', dateFrom:null, dateTo:null, datePreset:'all' };
   let _viewMode = (function(){ try { return localStorage.getItem('saas.tenantView') || 'card'; } catch(_) { return 'card'; } })();
   const qInp = h('input', { type:'search', placeholder:'Search org / slug / email…', style:{ flex:'1', minWidth:'180px', padding:'.4rem .6rem', border:'1px solid #cbd5e1', borderRadius:'8px' } });
   const STATUSES = ['', 'active', 'trial', 'past_due', 'suspended', 'pending_payment', 'pending_delete', 'deleted'];
@@ -601,6 +601,33 @@ VIEWS.tenants = async (view) => {
   };
   cardBtn.onclick = () => { _viewMode='card'; try{localStorage.setItem('saas.tenantView','card');}catch(_){ } paintToggle(); paint(); };
   listBtn.onclick = () => { _viewMode='list'; try{localStorage.setItem('saas.tenantView','list');}catch(_){ } paintToggle(); paint(); };
+  // TENANT_DATE_FILTER_v1 — filter by registration (created) date.
+  const _ymd = (d) => { const z=n=>String(n).padStart(2,'0'); return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate()); };
+  const dFrom = h('input', { type:'date', style:{ padding:'.35rem .5rem', border:'1px solid #cbd5e1', borderRadius:'8px' } });
+  const dTo   = h('input', { type:'date', style:{ padding:'.35rem .5rem', border:'1px solid #cbd5e1', borderRadius:'8px' } });
+  const _dateChips = {};
+  const _mkChip = (id, label) => { const b = h('button', { class:'btn xs', onclick:()=>_setDatePreset(id) }, label); _dateChips[id]=b; return b; };
+  function _paintDateChips() { Object.entries(_dateChips).forEach(([id,b])=>{ const on=_f.datePreset===id; b.style.background=on?'#6366f1':''; b.style.color=on?'#fff':''; }); }
+  function _setDatePreset(preset) {
+    _f.datePreset = preset;
+    const n = new Date();
+    if (preset==='this_month') { _f.dateFrom = new Date(n.getFullYear(), n.getMonth(), 1); _f.dateTo = new Date(n.getFullYear(), n.getMonth()+1, 0); }
+    else if (preset==='last_month') { _f.dateFrom = new Date(n.getFullYear(), n.getMonth()-1, 1); _f.dateTo = new Date(n.getFullYear(), n.getMonth(), 0); }
+    else if (preset==='last_7') { _f.dateTo = new Date(); _f.dateFrom = new Date(Date.now()-6*864e5); }
+    else if (preset==='last_30') { _f.dateTo = new Date(); _f.dateFrom = new Date(Date.now()-29*864e5); }
+    else { _f.dateFrom = null; _f.dateTo = null; }
+    dFrom.value = _f.dateFrom ? _ymd(_f.dateFrom) : '';
+    dTo.value   = _f.dateTo   ? _ymd(_f.dateTo)   : '';
+    _paintDateChips(); paint();
+  }
+  dFrom.onchange = () => { _f.dateFrom = dFrom.value ? new Date(dFrom.value+'T00:00:00') : null; _f.datePreset='custom'; _paintDateChips(); paint(); };
+  dTo.onchange   = () => { _f.dateTo   = dTo.value   ? new Date(dTo.value+'T23:59:59')   : null; _f.datePreset='custom'; _paintDateChips(); paint(); };
+  view.appendChild(h('div', { style:{ display:'flex', gap:'6px', alignItems:'center', flexWrap:'wrap', marginBottom:'8px' } },
+    h('span', { style:{ fontSize:'.78rem', color:'#475569', fontWeight:'600' } }, '🗓 Registered:'),
+    _mkChip('all','All time'), _mkChip('this_month','This month'), _mkChip('last_month','Last month'),
+    _mkChip('last_7','Last 7d'), _mkChip('last_30','Last 30d'),
+    h('span', { style:{ color:'#94a3b8', fontSize:'.78rem' } }, 'from'), dFrom,
+    h('span', { style:{ color:'#94a3b8', fontSize:'.78rem' } }, 'to'), dTo));
   view.appendChild(h('div', { style:{ display:'flex', gap:'8px', alignItems:'center', flexWrap:'wrap', marginBottom:'10px' } },
     qInp, stSel, countLbl, h('span', { style:{ flex:'1' } }), cardBtn, listBtn));
 
@@ -612,6 +639,12 @@ VIEWS.tenants = async (view) => {
     const q = _f.q.trim().toLowerCase();
     return _origList.filter(t => {
       if (_f.status && t.status !== _f.status) return false;
+      if (_f.dateFrom || _f.dateTo) {
+        const c = t.created_at ? new Date(t.created_at) : null;
+        if (!c) return false;
+        if (_f.dateFrom && c < _f.dateFrom) return false;
+        if (_f.dateTo && c > _f.dateTo) return false;
+      }
       if (q) {
         const hay = ((t.org_name||'') + ' ' + (t.slug||'') + ' ' + (t.contact_email||'')).toLowerCase();
         if (hay.indexOf(q) === -1) return false;
@@ -656,6 +689,7 @@ function _tenantListTable(rows, sizeMap) {
       td(usersTxt, { color: usersOver ? '#dc2626' : '#0f172a', fontWeight: usersOver ? '700' : '400', whiteSpace:'nowrap' }),
       td(bal > 0 ? ('₹' + bal.toLocaleString('en-IN')) : '—', { color: bal>0?'#b45309':'#94a3b8', whiteSpace:'nowrap' }),
       td(fmtDate(t.current_period_end) || '—', { whiteSpace:'nowrap' }),
+      td(fmtDate(t.created_at) || '—', { whiteSpace:'nowrap', color:'#475569' }),
       // TENANT_LIST_ACTIONS_v1 (2026-06-26) — match the full action set the
       // Cards view exposes so super-admins don't have to toggle just to
       // reset a password / install a pack / open Users / manage Modules.
@@ -673,7 +707,7 @@ function _tenantListTable(rows, sizeMap) {
       )));
   });
   return h('table', { style:{ width:'100%', borderCollapse:'collapse', minWidth:'720px' } },
-    h('thead', {}, h('tr', {}, th('Tenant'), th('Status'), th('Type'), th('Plan'), th('Users'), th('Balance'), th('Period ends'), th('Actions'))),
+    h('thead', {}, h('tr', {}, th('Tenant'), th('Status'), th('Type'), th('Plan'), th('Users'), th('Balance'), th('Period ends'), th('Registered'), th('Actions'))),
     h('tbody', {}, ...body));
 }
 
@@ -729,6 +763,7 @@ function renderTenantCard(t, sizeMap) {
     _row('Users', usersTxt, usersOver ? '#dc2626' : (usersAt ? '#d97706' : '#0f172a')),
     bal > 0 ? _row('Balance due', '₹' + bal.toLocaleString('en-IN'), '#b45309') : null,
     _row('Period ends', fmtDate(t.current_period_end) || '—'),
+    _row('Registered', fmtDate(t.created_at) || '—'),
     sz ? _row('DB size', sz.pretty + ' · ' + sz.percent_of_volume + '%') : null,
     (String(t.admin_remarks||'').trim()) ? h('div', { style:{ marginTop:'8px', padding:'6px 8px', background:'#fffbeb', border:'1px solid #fde68a', borderRadius:'8px', fontSize:'.76rem', color:'#78350f', whiteSpace:'pre-wrap', wordBreak:'break-word' } }, '📝 ' + String(t.admin_remarks).trim()) : null,
     actions);
