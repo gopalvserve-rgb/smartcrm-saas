@@ -568,7 +568,9 @@ VIEWS.tenants = async (view) => {
     suspended: _origList.filter(t => t.status === 'suspended').length,
     today: _origList.filter(t => { try { return new Date(t.created_at).toLocaleDateString('en-CA') === _todayKey; } catch (_) { return false; } }).length,
     demo: _origList.filter(t => String(t.tenant_type || 'live').toLowerCase() === 'demo').length,
-    live: _origList.filter(t => String(t.tenant_type || 'live').toLowerCase() !== 'demo').length
+    live: _origList.filter(t => String(t.tenant_type || 'live').toLowerCase() !== 'demo').length,
+    balance: _origList.reduce((a, t) => a + (Number(t.pending_balance_inr) || 0), 0),
+    collected: _origList.reduce((a, t) => a + (Number(t.amount_paid_inr) || 0), 0)
   };
   const kpi = (label, val, color) => h('div', { style:{ flex:'1', minWidth:'120px', background:'#fff', border:'1px solid #e2e8f0', borderRadius:'10px', padding:'10px 14px' } },
     h('div', { style:{ fontSize:'1.5rem', fontWeight:'800', color: color||'#0f172a' } }, String(val)),
@@ -579,7 +581,9 @@ VIEWS.tenants = async (view) => {
     kpi('Total suspended', _cnt.suspended, '#dc2626'),
     kpi('Total tenants', _cnt.total),
     kpi('Live tenants', _cnt.live, '#0f766e'),
-    kpi('Demo tenants', _cnt.demo, '#7c3aed')));
+    kpi('Demo tenants', _cnt.demo, '#7c3aed'),
+    kpi('Collected', '₹' + Number(_cnt.collected).toLocaleString('en-IN'), '#16a34a'),
+    kpi('Pending balance', '₹' + Number(_cnt.balance).toLocaleString('en-IN'), '#b45309')));
 
   // ---- #5 Filter bar + #6 view toggle -------------------------------------
   const _f = { q:'', status:'' };

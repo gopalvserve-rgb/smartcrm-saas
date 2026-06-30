@@ -129,6 +129,7 @@ async function api_saas_finance_overview(token, payload) {
       COALESCE(SUM(CASE WHEN status = 'pending' AND period_end < NOW() THEN total_inr ELSE 0 END), 0)::numeric AS overdue_total,
       COUNT(*) FILTER (WHERE status = 'failed')::int  AS failed_count
     FROM invoices
+    WHERE COALESCE(tenant_id, 0) NOT IN (SELECT id FROM tenants WHERE COALESCE(tenant_type,'live') = 'demo')
   `, [periodStart, periodEnd, prevStart, prevEnd]);
   const inv = invRes.rows[0] || {};
 
@@ -193,7 +194,7 @@ async function api_saas_finance_tenantSales(token, filters) {
   // alongside the lifetime totals. Without this the table looked identical
   // whether the user picked Today, This week, or All time.
   const _rng = _resolveRange(f);
-  const where = [];
+  const where = ["COALESCE(t.tenant_type,'live') <> 'demo'"];
   const params = [_rng.from, _rng.to]; // $1, $2 always used by period_* subqueries
   if (f.status)    { params.push(f.status);             where.push(`t.status = $${params.length}`); }
   if (f.package_id){ params.push(Number(f.package_id)); where.push(`t.package_id = $${params.length}`); }

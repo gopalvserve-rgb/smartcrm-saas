@@ -1217,6 +1217,23 @@ async function api_saas_tenants_update(token, payload) {
   if (!sets.length) return { ok: true, nochange: true };
   vals.push(id);
   await control.query(`UPDATE tenants SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $${i}`, vals);
+  // MANUAL_COLLECTION_v1 — when amount_paid increases, record a dated PAID
+  // invoice for the delta so the collected amount appears in Finance for the
+  // current month. (Demo tenants are still excluded from revenue downstream.)
+  try {
+    if (p.amount_paid_inr !== undefined) {
+      const oldPaid = Number(t.amount_paid_inr) || 0;
+      const newPaid = (p.amount_paid_inr === '' || p.amount_paid_inr == null) ? oldPaid : Math.max(0, Number(p.amount_paid_inr));
+      const delta = newPaid - oldPaid;
+      if (delta > 0) {
+        const num = 'COL-' + id + '-' + Date.now();
+        await control.query(
+          `INSERT INTO invoices (tenant_id, number, description, subtotal_inr, tax_inr, total_inr, status, paid_at)
+           VALUES ($1, $2, $3, $4, 0, $4, 'paid', NOW())`,
+          [id, num, 'Manual collection (super-admin)', delta]);
+      }
+    }
+  } catch (e) { console.warn('[tenant.update] manual collection invoice failed:', e.message); }
   try { require('../../utils/tenantPool').invalidateSlug(t.slug); } catch (_) {}
   try {
     const _changes = {};
