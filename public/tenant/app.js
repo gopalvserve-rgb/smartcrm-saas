@@ -31,7 +31,7 @@ const CRM = {
   cache: {},
   prefs: {
     columns: JSON.parse(localStorage.getItem('crm_cols') || '["name","phone","source","status","stage","assigned","followup","last_change","remark","created"]'),
-    filters: JSON.parse(localStorage.getItem('crm_filters') || '{}'),
+    filters: ((window.TENANT_SLUG || '').toLowerCase() === 'showcase') ? {} : JSON.parse(localStorage.getItem('crm_filters') || '{}'),
     showHeader: (function () {
       /* LEADS_FILTER_CLOSED_DEFAULT_v1 — mobile: ignore localStorage
          and use window._mobileLeadsFilterOpen as the only source of
@@ -2781,6 +2781,15 @@ async function openChangelogModal() {
     // DASH_PRESET_REAPPLY_FIX_v1 — callers pass noSavedDefault on re-renders so
     // the saved default isn't re-asserted over a user's just-picked range
     // (clicking 'All time' became a no-op because re-render re-applied it).
+    // SHOWCASE_ALLTIME_v1 — on the showcase demo tenant, default every date
+    // filter to All time so reports/dashboard/leads show full seeded data
+    // (real tenants are unaffected). A user-saved default still wins.
+    try {
+      if ((window.TENANT_SLUG || '').toLowerCase() === 'showcase' && !opts.noSavedDefault && !localStorage.getItem(key)) {
+        var _allPreset = PRESETS.find(function (p) { return p.id === 'all'; });
+        if (_allPreset) _setRange(fromInp, toInp, _allPreset.range());
+      }
+    } catch (_) {}
     let appliedDefault = false;
     if (!opts.noSavedDefault && !fromInp.value && !toInp.value) {
       try {
