@@ -1,44 +1,62 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 400" font-family="Segoe UI,system-ui,sans-serif">
-  <rect x="3" y="3" width="494" height="394" rx="20" fill="#ffffff" stroke="#e6eaf2" stroke-width="2"/>
-  <circle cx="30" cy="30" r="5" fill="#ff5f57"/><circle cx="46" cy="30" r="5" fill="#febc2e"/><circle cx="62" cy="30" r="5" fill="#28c840"/>
-  <text x="84" y="34" font-size="12" font-weight="600" fill="#94a3b8">crm · auto lead capture · LIVE</text>
-  <circle cx="430" cy="30" r="5" fill="#16a34a"/><text x="442" y="34" font-size="12" font-weight="700" fill="#16a34a">LIVE</text>
-  <line x1="20" y1="50" x2="480" y2="50" stroke="#eef1f6" stroke-width="2"/>
-  <path d="M180 98 C246 98 250 93 300 93" fill="none" stroke="#93c5fd" stroke-width="2.5"/>
-  <path d="M180 146 C246 146 250 145 300 145" fill="none" stroke="#c4b5fd" stroke-width="2.5"/>
-  <path d="M180 194 C246 194 250 197 300 197" fill="none" stroke="#fdba74" stroke-width="2.5"/>
-  <path d="M180 242 C246 242 250 249 300 249" fill="none" stroke="#86efac" stroke-width="2.5"/>
-  <g>
-    <rect x="24" y="78" width="156" height="40" rx="12" fill="#eef1f7"/>
-    <circle cx="44" cy="98" r="13" fill="#1877f2"/><text x="44" y="103" font-size="14" font-weight="800" fill="#fff" text-anchor="middle">f</text>
-    <text x="66" y="103" font-size="13" font-weight="700" fill="#1f2937">Meta Ads</text>
-    <rect x="24" y="126" width="156" height="40" rx="12" fill="#eef1f7"/>
-    <circle cx="44" cy="146" r="13" fill="#fff" stroke="#e2e8f0"/><text x="44" y="151" font-size="14" font-weight="800" fill="#4285F4" text-anchor="middle">G</text>
-    <text x="66" y="151" font-size="13" font-weight="700" fill="#1f2937">Google Ads</text>
-    <rect x="24" y="174" width="156" height="40" rx="12" fill="#eef1f7"/>
-    <rect x="31" y="133" width="0" height="0"/>
-    <rect x="31" y="181" width="26" height="26" rx="7" fill="#f47216"/><text x="44" y="199" font-size="10" font-weight="800" fill="#fff" text-anchor="middle">IM</text>
-    <text x="66" y="199" font-size="13" font-weight="700" fill="#1f2937">IndiaMART</text>
-    <rect x="24" y="222" width="156" height="40" rx="12" fill="#eef1f7"/>
-    <rect x="31" y="229" width="26" height="26" rx="7" fill="#fff" stroke="#e2e8f0"/><text x="44" y="247" font-size="10" font-weight="800" fill="#1e3a8a" text-anchor="middle">JD</text>
-    <text x="66" y="247" font-size="13" font-weight="700" fill="#1f2937">JustDial</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 900" font-family="Segoe UI,system-ui,sans-serif">
+  <rect x="30" y="30" width="1120" height="840" rx="26" fill="#ffffff" stroke="#eef1f6" stroke-width="2"/>
+  <circle cx="92" cy="96" r="9" fill="#ff5f57"/><circle cx="120" cy="96" r="9" fill="#febc2e"/><circle cx="148" cy="96" r="9" fill="#28c840"/>
+  <text x="192" y="106" font-size="27" font-weight="800" fill="#1f2937">crm <tspan fill="#94a3b8">· auto lead capture ·</tspan> <tspan fill="#16a34a">LIVE</tspan></text>
+  <rect x="975" y="76" width="130" height="44" rx="22" fill="#fff" stroke="#d6e8dc"/><circle cx="1008" cy="98" r="6" fill="#16a34a"/><text x="1024" y="106" font-size="18" font-weight="800" fill="#16a34a">LIVE</text>
+  <line x1="60" y1="148" x2="1120" y2="148" stroke="#eef1f6" stroke-width="2"/>
+  <text x="150" y="232" font-size="22" font-weight="800" fill="#64748b">Lead Sources</text>
+  <text x="900" y="232" font-size="22" font-weight="800" fill="#64748b">Assigned Leads</text>
+
+  <!-- spokes -->
+  <g fill="none" stroke-width="3">
+    <path d="M452 312 C540 312 540 470 588 470" stroke="#34d399"/>
+    <path d="M452 422 C540 422 545 470 588 470" stroke="#38bdf8"/>
+    <path d="M452 532 C540 532 545 470 588 470" stroke="#818cf8"/>
+    <path d="M452 642 C540 642 545 470 588 470" stroke="#a78bfa"/>
+    <path d="M592 470 C660 470 665 360 730 360" stroke="#16a34a"/>
+    <path d="M592 470 C660 470 700 470 730 470" stroke="#2563eb"/>
+    <path d="M592 470 C660 470 665 580 730 580" stroke="#a855f7"/>
   </g>
+  <circle cx="590" cy="470" r="18" fill="#fff" stroke="#cbd5e1" stroke-width="3"/><circle cx="590" cy="470" r="6" fill="#94a3b8"/>
+
+  <!-- left source cards -->
   <g>
-    <rect x="300" y="70" width="176" height="46" rx="12" fill="#fff" stroke="#e6eaf2"/><rect x="300" y="70" width="5" height="46" rx="2" fill="#16a34a"/>
-    <rect x="312" y="78" width="30" height="30" rx="8" fill="#16a34a"/><text x="327" y="98" font-size="11" font-weight="800" fill="#fff" text-anchor="middle">AK</text>
-    <text x="350" y="90" font-size="13" font-weight="800" fill="#0f172a">Anjali</text><text x="350" y="106" font-size="11" fill="#94a3b8">Meta · 2s</text>
-    <rect x="300" y="122" width="176" height="46" rx="12" fill="#fff" stroke="#e6eaf2"/><rect x="300" y="122" width="5" height="46" rx="2" fill="#16a34a"/>
-    <rect x="312" y="130" width="30" height="30" rx="8" fill="#2563eb"/><text x="327" y="150" font-size="11" font-weight="800" fill="#fff" text-anchor="middle">RV</text>
-    <text x="350" y="142" font-size="13" font-weight="800" fill="#0f172a">Rohit</text><text x="350" y="158" font-size="11" fill="#94a3b8">Google · 9s</text>
-    <rect x="300" y="174" width="176" height="46" rx="12" fill="#fff" stroke="#e6eaf2"/><rect x="300" y="174" width="5" height="46" rx="2" fill="#16a34a"/>
-    <rect x="312" y="182" width="30" height="30" rx="8" fill="#ea580c"/><text x="327" y="202" font-size="11" font-weight="800" fill="#fff" text-anchor="middle">PJ</text>
-    <text x="350" y="194" font-size="13" font-weight="800" fill="#0f172a">Pranav</text><text x="350" y="210" font-size="11" fill="#94a3b8">IM · 14s</text>
-    <rect x="300" y="226" width="176" height="46" rx="12" fill="#fff" stroke="#e6eaf2"/><rect x="300" y="226" width="5" height="46" rx="2" fill="#16a34a"/>
-    <rect x="312" y="234" width="30" height="30" rx="8" fill="#7c3aed"/><text x="327" y="254" font-size="11" font-weight="800" fill="#fff" text-anchor="middle">SD</text>
-    <text x="350" y="246" font-size="13" font-weight="800" fill="#0f172a">Sneha</text><text x="350" y="262" font-size="11" fill="#94a3b8">JD · 22s</text>
+    <rect x="110" y="270" width="342" height="84" rx="16" fill="#fff" stroke="#eef1f6" stroke-width="2"/>
+    <circle cx="162" cy="312" r="28" fill="#1877f2"/><text x="162" y="322" font-size="28" font-weight="800" fill="#fff" text-anchor="middle">f</text>
+    <text x="210" y="306" font-size="22" font-weight="800" fill="#1f2937">Meta Ads</text><circle cx="218" cy="330" r="5" fill="#16a34a"/><text x="232" y="336" font-size="14" fill="#64748b">Active</text>
+    <text x="424" y="320" font-size="26" fill="#cbd5e1">&#8250;</text>
+    <rect x="110" y="380" width="342" height="84" rx="16" fill="#fff" stroke="#eef1f6" stroke-width="2"/>
+    <circle cx="162" cy="422" r="28" fill="#fff" stroke="#e2e8f0"/><text x="162" y="432" font-size="26" font-weight="800" fill="#4285F4" text-anchor="middle">G</text>
+    <text x="210" y="416" font-size="22" font-weight="800" fill="#1f2937">Google Ads</text><circle cx="218" cy="440" r="5" fill="#16a34a"/><text x="232" y="446" font-size="14" fill="#64748b">Active</text>
+    <text x="424" y="430" font-size="26" fill="#cbd5e1">&#8250;</text>
+    <rect x="110" y="490" width="342" height="84" rx="16" fill="#fff" stroke="#eef1f6" stroke-width="2"/>
+    <circle cx="162" cy="532" r="28" fill="#e02424"/><text x="162" y="540" font-size="18" font-weight="800" fill="#fff" text-anchor="middle">IM</text>
+    <text x="210" y="526" font-size="22" font-weight="800" fill="#1f2937">IndiaMART</text><circle cx="218" cy="550" r="5" fill="#16a34a"/><text x="232" y="556" font-size="14" fill="#64748b">Active</text>
+    <text x="424" y="540" font-size="26" fill="#cbd5e1">&#8250;</text>
+    <rect x="110" y="600" width="342" height="84" rx="16" fill="#fff" stroke="#eef1f6" stroke-width="2"/>
+    <circle cx="162" cy="642" r="28" fill="#f47216"/><text x="162" y="650" font-size="18" font-weight="800" fill="#fff" text-anchor="middle">JD</text>
+    <text x="210" y="636" font-size="22" font-weight="800" fill="#1f2937">JustDial</text><circle cx="218" cy="660" r="5" fill="#16a34a"/><text x="232" y="666" font-size="14" fill="#64748b">Active</text>
+    <text x="424" y="650" font-size="26" fill="#cbd5e1">&#8250;</text>
   </g>
-  <line x1="20" y1="296" x2="480" y2="296" stroke="#eef1f6" stroke-width="2"/>
-  <rect x="28" y="312" width="78" height="34" rx="10" fill="#dcfce7"/><text x="67" y="334" font-size="12" font-weight="700" fill="#166534" text-anchor="middle">✓ WA</text>
-  <rect x="116" y="312" width="92" height="34" rx="10" fill="#dbeafe"/><text x="162" y="334" font-size="12" font-weight="700" fill="#1e40af" text-anchor="middle">✓ Email</text>
-  <rect x="218" y="312" width="78" height="34" rx="10" fill="#fef3c7"/><text x="257" y="334" font-size="12" font-weight="700" fill="#92400e" text-anchor="middle">Dial</text>
+
+  <!-- right assigned leads -->
+  <g>
+    <rect x="730" y="300" width="360" height="100" rx="16" fill="#fff" stroke="#eef1f6" stroke-width="2"/><rect x="730" y="300" width="8" height="100" rx="4" fill="#16a34a"/>
+    <rect x="758" y="318" width="64" height="64" rx="14" fill="#16a34a"/><text x="790" y="358" font-size="22" font-weight="800" fill="#fff" text-anchor="middle">AK</text>
+    <text x="840" y="350" font-size="24" font-weight="800" fill="#0f172a">Anjali</text><text x="840" y="376" font-size="16" fill="#64748b">Meta · 2s</text>
+    <circle cx="1048" cy="350" r="16" fill="#dcfce7"/><text x="1048" y="356" font-size="16" font-weight="900" fill="#16a34a" text-anchor="middle">&#10003;</text>
+    <rect x="730" y="420" width="360" height="100" rx="16" fill="#fff" stroke="#eef1f6" stroke-width="2"/><rect x="730" y="420" width="8" height="100" rx="4" fill="#2563eb"/>
+    <rect x="758" y="438" width="64" height="64" rx="14" fill="#2563eb"/><text x="790" y="478" font-size="22" font-weight="800" fill="#fff" text-anchor="middle">RV</text>
+    <text x="840" y="470" font-size="24" font-weight="800" fill="#0f172a">Rohit</text><text x="840" y="496" font-size="16" fill="#64748b">Google · 9s</text>
+    <circle cx="1048" cy="470" r="16" fill="#dcfce7"/><text x="1048" y="476" font-size="16" font-weight="900" fill="#16a34a" text-anchor="middle">&#10003;</text>
+    <rect x="730" y="540" width="360" height="100" rx="16" fill="#fff" stroke="#eef1f6" stroke-width="2"/><rect x="730" y="540" width="8" height="100" rx="4" fill="#ea580c"/>
+    <rect x="758" y="558" width="64" height="64" rx="14" fill="#ea580c"/><text x="790" y="598" font-size="22" font-weight="800" fill="#fff" text-anchor="middle">PJ</text>
+    <text x="840" y="590" font-size="24" font-weight="800" fill="#0f172a">Pranav</text><text x="840" y="616" font-size="16" fill="#64748b">IM · 14s</text>
+    <circle cx="1048" cy="590" r="16" fill="#dcfce7"/><text x="1048" y="596" font-size="16" font-weight="900" fill="#16a34a" text-anchor="middle">&#10003;</text>
+  </g>
+
+  <line x1="60" y1="730" x2="1120" y2="730" stroke="#eef1f6" stroke-width="2"/>
+  <rect x="110" y="770" width="190" height="64" rx="16" fill="#dcfce7"/><circle cx="150" cy="802" r="17" fill="#16a34a"/><text x="180" y="810" font-size="20" font-weight="800" fill="#166534">WA</text>
+  <rect x="330" y="770" width="220" height="64" rx="16" fill="#dbeafe"/><rect x="360" y="790" width="30" height="24" rx="4" fill="#2563eb"/><text x="420" y="810" font-size="20" font-weight="800" fill="#1e40af">Email</text>
+  <rect x="580" y="770" width="190" height="64" rx="16" fill="#ffedd5"/><circle cx="620" cy="802" r="17" fill="#f97316"/><text x="650" y="810" font-size="20" font-weight="800" fill="#9a3412">Dial</text>
 </svg>

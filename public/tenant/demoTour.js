@@ -1,5 +1,5 @@
 /* ============================================================
- * DEMO_TOUR_v14 — Live guided sales tour on the showcase tenant
+ * DEMO_TOUR_v15 — Live guided sales tour on the showcase tenant
  * ------------------------------------------------------------
  * 25-step pitch flow (Hinglish) on the REAL app, EXACT routes the
  * user mapped. Two draggable + resizable floating panels: TEXT
@@ -8,12 +8,12 @@
  *
  * GATED: launch button only shows for slug "showcase", or
  * ?demotour=1, or localStorage.demoTour==="1".
- * cache key: 2026-06-29-demotour-v14
+ * cache key: 2026-06-29-demotour-v15
  * ============================================================ */
 (function () {
   'use strict';
 
-  var ASSET_V = '2026-06-29-demotour-v14';
+  var ASSET_V = '2026-06-29-demotour-v15';
 
   function enabled() {
     try {
@@ -66,7 +66,7 @@
       s: 'Lead nurturing — aaj ki lead ko 3 din, 5 din, 7 din baad kya bhejna hai, alag conditions ke saath. Ek baar set karein, system matching data bhejta rahega.',
       img: { src: 'demo-nurturing.svg', cap: 'Status + day-wise nurturing journey (representation)', wide: true } },
 
-    { navId: 'admin', hash: '#/admin', title: 'AI — Lead AI Summary', en: 'Auto summary of every lead',
+    { navId: 'leads', hash: '#/leads', title: 'AI — Lead AI Summary', en: 'Auto summary of every lead',
       s: 'Har lead ka AI chhota summary bana deta hai — pichhli baat-cheet, requirement aur next step ek nazar mein. Agent ko poori history padhne ki zaroorat nahi.' },
 
     { navId: 'leads', hash: '#/leads', title: 'AI Lead Rating — Hot / Warm / Nurture / Cold', en: 'AI scores each lead into buckets',
