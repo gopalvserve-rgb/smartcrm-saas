@@ -54,6 +54,7 @@ const aiUsageIngest = require('./routes/saas/aiUsageIngest');
 const tickets = require('./routes/saas/tickets');
 // SAAS_ADMIN_REPAIR_v1 (2026-06-28) — Finance + Signup-Requests + WL-Billing super-admin pages
 const finance         = require('./routes/saas/finance');
+const expenses        = require('./routes/saas/expenses');
 const signupRequests  = require('./routes/saas/signupRequests');
 const wlBilling       = require('./routes/saas/whitelabelBilling');
 const saasPermissions = require('./routes/saas/saasPermissions');   // SUPER_ADMIN_PERMS — Roles & Permissions
@@ -98,7 +99,7 @@ const SAAS_API = {};
   aiSettings, aiCosting,
   tenantModules, demoTenant,
   tickets,
-  finance, signupRequests, wlBilling, saasPermissions, recordingHealth
+  finance, expenses, signupRequests, wlBilling, saasPermissions, recordingHealth
 ].forEach(mod => {
   Object.keys(mod).forEach(k => {
     if (typeof mod[k] === 'function' && k.startsWith('api_saas_')) SAAS_API[k] = mod[k];

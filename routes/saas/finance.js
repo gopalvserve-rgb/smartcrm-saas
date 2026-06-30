@@ -60,12 +60,13 @@ async function api_saas_finance_overview(token, opts) {
 
   // Total revenue in period (paid invoices)
   const rev = await control.query(
-    `SELECT COALESCE(SUM(total_inr), 0)::numeric AS revenue,
+    `SELECT COALESCE(SUM(i.total_inr), 0)::numeric AS revenue,
             COUNT(*)::int AS invoices
-       FROM invoices
-      WHERE status = 'paid'
-        AND COALESCE(paid_at, updated_at) >= $1
-        AND COALESCE(paid_at, updated_at) <  $2`,
+       FROM invoices i LEFT JOIN tenants t ON t.id = i.tenant_id
+      WHERE i.status = 'paid'
+        AND COALESCE(i.paid_at, i.updated_at) >= $1
+        AND COALESCE(i.paid_at, i.updated_at) <  $2
+        AND COALESCE(t.tenant_type, 'live') <> 'demo'`,
     [from, to]
   );
 

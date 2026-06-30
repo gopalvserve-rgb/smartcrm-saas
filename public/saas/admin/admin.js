@@ -4493,7 +4493,77 @@ VIEWS.finance = async (view) => {
   };
 
   // ---- Refresh everything -----------------------------------------
-  function refreshAll() { try { loadOverview(); loadChart(); loadPackages(); loadExpiring(); loadOverdue(); loadSales && loadSales(); } catch(_){} }
+  // SAAS_EXPENSES_v1 — Expenses & Net Profit (under Finance).
+  const expHost = h('div', { class:'card', style:{ marginTop:'14px' } });
+  view.appendChild(expHost);
+  async function loadExpenses() {
+    expHost.innerHTML = '';
+    expHost.appendChild(h('div', { style:{ fontWeight:'700', fontSize:'1.05rem', marginBottom:'10px' } }, '🧾 Expenses & Net Profit'));
+    const ebody = h('div', {}, h('div', { class:'muted' }, 'Loading…'));
+    expHost.appendChild(ebody);
+    try {
+      const [np, cats, exps] = await Promise.all([
+        api('api_saas_finance_netProfit', _rangePayload()),
+        api('api_saas_expenseCats_list', {}),
+        api('api_saas_expenses_list', _rangePayload())
+      ]);
+      ebody.innerHTML = '';
+      const _inr = (v) => '₹' + Number(v||0).toLocaleString('en-IN');
+      const card = (label, val, color) => h('div', { style:{ flex:'1', minWidth:'150px', background:'#fff', border:'1px solid #e2e8f0', borderRadius:'10px', padding:'12px 14px' } },
+        h('div', { style:{ fontSize:'1.4rem', fontWeight:'800', color: color||'#0f172a' } }, _inr(val)),
+        h('div', { style:{ fontSize:'.72rem', color:'#64748b', fontWeight:'600', textTransform:'uppercase' } }, label));
+      ebody.appendChild(h('div', { style:{ display:'flex', gap:'10px', flexWrap:'wrap', marginBottom:'6px' } },
+        card('Revenue (live only)', np.revenue, '#16a34a'),
+        card('Expenses', np.expenses, '#dc2626'),
+        card('Net profit', np.net_profit, (np.net_profit>=0?'#0f766e':'#dc2626'))));
+      ebody.appendChild(h('div', { class:'muted', style:{ fontSize:'.74rem', marginBottom:'12px' } }, np.note || ''));
+      const catWrap = h('div', { style:{ marginBottom:'12px' } });
+      catWrap.appendChild(h('div', { style:{ fontWeight:'700', marginBottom:'6px' } }, 'Expense categories (master)'));
+      const catList = h('div', { style:{ display:'flex', flexWrap:'wrap', gap:'6px', marginBottom:'8px' } });
+      (cats.items||[]).forEach(c => {
+        catList.appendChild(h('span', { style:{ display:'inline-flex', alignItems:'center', gap:'6px', background:'#f1f5f9', border:'1px solid #e2e8f0', borderRadius:'8px', padding:'3px 8px', fontSize:'.78rem' } },
+          h('b', {}, c.name), h('span', { class:'muted' }, _inr(c.total_inr)),
+          h('span', { style:{ cursor:'pointer', color:'#dc2626', fontWeight:'700' }, title:'Delete category', onclick: async()=>{ if(!confirm('Delete category "'+c.name+'"? Existing expenses keep their amount but lose the label.')) return; await api('api_saas_expenseCats_delete',{id:c.id}); loadExpenses(); } }, '✕')));
+      });
+      if (!(cats.items||[]).length) catList.appendChild(h('span', { class:'muted', style:{ fontSize:'.8rem' } }, 'No categories yet — add one below.'));
+      const newCatInp = h('input', { placeholder:'New category name', style:{ padding:'.35rem .5rem', border:'1px solid #cbd5e1', borderRadius:'6px' } });
+      const addCatBtn = h('button', { class:'btn sm' }, '+ Add category');
+      addCatBtn.onclick = async()=>{ const n=newCatInp.value.trim(); if(!n) return; addCatBtn.disabled=true; try{ await api('api_saas_expenseCats_create',{name:n}); newCatInp.value=''; await loadExpenses(); }catch(e){ toast(e.message,'err'); addCatBtn.disabled=false; } };
+      catWrap.appendChild(catList);
+      catWrap.appendChild(h('div', { style:{ display:'flex', gap:'6px', alignItems:'center' } }, newCatInp, addCatBtn));
+      ebody.appendChild(catWrap);
+      const catSel = h('select', { style:{ padding:'.35rem .5rem', border:'1px solid #cbd5e1', borderRadius:'6px' } },
+        h('option', { value:'' }, '— category —'), ...(cats.items||[]).map(c=>h('option',{value:String(c.id)},c.name)));
+      const amtInp = h('input', { type:'number', min:'0', step:'0.01', placeholder:'Amount ₹', style:{ width:'120px', padding:'.35rem .5rem', border:'1px solid #cbd5e1', borderRadius:'6px' } });
+      const dateInp = h('input', { type:'date', value: new Date().toISOString().slice(0,10), style:{ padding:'.35rem .5rem', border:'1px solid #cbd5e1', borderRadius:'6px' } });
+      const venInp = h('input', { placeholder:'Vendor (optional)', style:{ padding:'.35rem .5rem', border:'1px solid #cbd5e1', borderRadius:'6px' } });
+      const noteInp = h('input', { placeholder:'Notes (optional)', style:{ flex:'1', minWidth:'120px', padding:'.35rem .5rem', border:'1px solid #cbd5e1', borderRadius:'6px' } });
+      const addExpBtn = h('button', { class:'btn sm primary' }, '+ Add expense');
+      addExpBtn.onclick = async()=>{ const amt=Number(amtInp.value)||0; if(!(amt>0)){ toast('Enter an amount','err'); return; } addExpBtn.disabled=true; try{ await api('api_saas_expenses_create',{ category_id: catSel.value||null, amount_inr: amt, spent_on: dateInp.value||null, vendor: venInp.value, notes: noteInp.value }); amtInp.value=''; venInp.value=''; noteInp.value=''; await loadExpenses(); }catch(e){ toast(e.message,'err'); addExpBtn.disabled=false; } };
+      ebody.appendChild(h('div', { style:{ background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:'10px', padding:'10px', marginBottom:'12px' } },
+        h('div', { style:{ fontWeight:'700', marginBottom:'6px' } }, 'Add expense'),
+        h('div', { style:{ display:'flex', gap:'6px', flexWrap:'wrap', alignItems:'center' } }, catSel, amtInp, dateInp, venInp, noteInp, addExpBtn)));
+      const rows = exps.items||[];
+      const eth=(t)=>h('th',{style:{textAlign:'left',padding:'6px 8px',fontSize:'.7rem',textTransform:'uppercase',color:'#64748b',borderBottom:'1px solid #e2e8f0'}},t);
+      const etd=(k,st)=>h('td',{style:Object.assign({padding:'6px 8px',fontSize:'.82rem',borderBottom:'1px solid #f1f5f9'},st||{})},k);
+      ebody.appendChild(h('div', { style:{ fontWeight:'700', marginBottom:'6px' } }, 'Expenses in range (' + rows.length + ')'));
+      if (!rows.length) ebody.appendChild(h('div', { class:'muted', style:{ fontSize:'.8rem' } }, 'No expenses booked in this period.'));
+      else ebody.appendChild(h('div', { style:{ overflowX:'auto' } }, h('table', { style:{ width:'100%', borderCollapse:'collapse', minWidth:'620px' } },
+        h('thead', {}, h('tr', {}, eth('Date'), eth('Category'), eth('Amount'), eth('Vendor'), eth('Notes'), eth('By'), eth(''))),
+        h('tbody', {}, ...rows.map(e=>h('tr',{},
+          etd(String(e.spent_on).slice(0,10)),
+          etd(e.category_name || h('span',{class:'muted'},'—')),
+          etd(_inr(e.amount_inr), { fontWeight:'700' }),
+          etd(e.vendor || '—'),
+          etd(e.notes || '—'),
+          etd(e.created_by || '—', { color:'#94a3b8', fontSize:'.74rem' }),
+          etd(h('span', { style:{ cursor:'pointer', color:'#dc2626' }, title:'Delete', onclick: async()=>{ if(!confirm('Delete this expense?')) return; await api('api_saas_expenses_delete',{id:e.id}); loadExpenses(); } }, '🗑'))))))));
+    } catch (e) {
+      ebody.innerHTML=''; ebody.appendChild(h('div', { class:'muted', style:{ color:'#dc2626' } }, 'Could not load expenses: ' + e.message));
+    }
+  }
+
+  function refreshAll() { try { loadOverview(); loadChart(); loadPackages(); loadExpiring(); loadOverdue(); loadSales && loadSales(); loadExpenses(); } catch(_){} }
   refreshBtn.onclick = () => Promise.all([loadOverview(), loadChart(), loadPackages(), loadExpiring(), loadOverdue(), loadSales()]);
   // Initial parallel load
   loadOverview(); loadChart(); loadPackages(); loadExpiring(); loadOverdue(); loadSales();
