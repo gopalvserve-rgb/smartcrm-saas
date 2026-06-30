@@ -32387,6 +32387,7 @@ function configForm(cfg, keys, meta) {
  * ===================================================================== */
 const TEAM_STATE_META = {
   on_call:        { label: 'On Call',          icon: '🎧', color: '#16a34a', bg: '#dcfce7' },
+  online:         { label: 'Online',           icon: '🟢', color: '#15803d', bg: '#dcfce7' },
   on_task:        { label: 'On Task',          icon: '🟣', color: '#7c3aed', bg: '#ede9fe' },  /* TEAM_STATUS_TASKS_v1 — overridden per-row by user.task.label/icon/color */
   wrapping_up:    { label: 'Just hung up',     icon: '⏳', color: '#a16207', bg: '#fef3c7' },
   on_break:       { label: 'On Break',         icon: '☕',  color: '#7c3aed', bg: '#ede9fe' },
@@ -32395,7 +32396,7 @@ const TEAM_STATE_META = {
   logged_out:     { label: 'Offline',          icon: '⚫', color: '#dc2626', bg: '#fee2e2' },
   never_logged_in:{ label: "Never logged in",  icon: '⨯',  color: '#d97706', bg: '#fed7aa' }
 };
-const TEAM_STATE_ORDER = ['on_call','on_task','wrapping_up','on_break','idle','checked_out','logged_out','never_logged_in'];
+const TEAM_STATE_ORDER = ['on_call','online','on_task','wrapping_up','on_break','idle','checked_out','logged_out','never_logged_in'];
 
 function _initials(name) {
   return String(name || '?').trim().split(/\s+/).slice(0, 2).map(p => p[0] || '').join('').toUpperCase() || '?';
@@ -32442,7 +32443,7 @@ function _renderTeamLiveCompact(container, data) {
   const chipRow = h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '.35rem', marginBottom: '.6rem' } });
   TEAM_STATE_ORDER.forEach(s => {
     const cnt = (data.summary && data.summary[s]) || 0;
-    if (!cnt && s !== 'on_call' && s !== 'idle') return;
+    if (!cnt && s !== 'on_call' && s !== 'idle' && s !== 'online') return;
     const m = TEAM_STATE_META[s];
     chipRow.appendChild(h('span', {
       style: {

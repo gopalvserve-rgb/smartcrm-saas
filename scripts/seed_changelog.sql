@@ -1220,3 +1220,11 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'Fixed the dashboard date filter where clicking "All time" (or any preset) snapped back to a saved default — the saved default was being re-applied on every re-render. It now applies only on first load, so your chosen range sticks.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+
+-- TEAM_LIVE_ONLINE_v1 (2026-06-30)
+INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
+('TEAM_LIVE_ONLINE', 'Live Team Status: Online state + accurate Offline',
+ 'Live Team Status now shows a green Online state for reps active in the last 10 minutes, and Offline is now measured from a rep''s most recent activity (call, remark, status change, attendance or login) instead of just login time — so active reps no longer wrongly show Offline. Mobile call activity now also refreshes presence so active mobile reps stop showing as Never logged in.',
+ 'tenant_admin', NOW())
+ON CONFLICT DO NOTHING;

@@ -156,7 +156,7 @@ async function api_team_liveStatus(token, _payload) {
 
   const now = Date.now();
   const STATE_ORDER = [
-    'on_call', 'on_task', 'wrapping_up', 'on_break', 'idle',
+    'on_call', 'online', 'on_task', 'wrapping_up', 'on_break', 'idle',
     'checked_out', 'logged_out', 'never_logged_in'
   ];
   const summary = STATE_ORDER.reduce((m, k) => (m[k] = 0, m), {});
@@ -175,16 +175,17 @@ async function api_team_liveStatus(token, _payload) {
     //   2) attendance.check_in today (mobile users may not POST login)
     //   3) any call_event for this user in the wider 7-day window
     //      (means they were active at some point)
-    let effectiveLogin = lastLogin;
-    if (!effectiveLogin && att && att.check_in) {
-      effectiveLogin = new Date(att.check_in).getTime();
-    }
-    if (!effectiveLogin && la && la.created_at) {
-      effectiveLogin = new Date(la.created_at).getTime();
-    }
-    if (!effectiveLogin && lc && lc.created_at) {
-      effectiveLogin = new Date(lc.created_at).getTime();
-    }
+    // TEAM_LIVE_PRESENCE_v2 — presence is the MOST RECENT of ALL signals
+    // (login, attendance check-in, last lead action, last call), not just
+    // last_login_at. Fixes active reps wrongly flipping to Offline and
+    // mobile reps wrongly showing 'Never logged in'.
+    const _sigs = [];
+    if (lastLogin) _sigs.push(lastLogin);
+    if (att && att.check_in) _sigs.push(new Date(att.check_in).getTime());
+    if (la && la.created_at) _sigs.push(new Date(la.created_at).getTime());
+    if (lc && lc.created_at) _sigs.push(new Date(lc.created_at).getTime());
+    const lastActivity = _sigs.length ? Math.max(..._sigs) : 0;
+    let effectiveLogin = lastActivity;
 
     let state = 'idle';
     let since = effectiveLogin || null;
@@ -236,17 +237,24 @@ async function api_team_liveStatus(token, _payload) {
         state = 'checked_out';
         since = new Date(att.check_out).getTime();
       }
-      // 5. No login signal at all → never_logged_in.
-      //    Else stale login + no attendance → logged_out (Offline).
+      // 5. No signal at all → never_logged_in.
       else if (!effectiveLogin) {
         state = 'never_logged_in';
         since = null;
       }
+      // 6. Stale: >10h since last activity AND no attendance → Offline.
       else if (!att && (now - effectiveLogin) > 10 * 3600 * 1000) {
         state = 'logged_out';
         since = effectiveLogin;
       }
-      // Otherwise stays idle
+      // 7. TEAM_LIVE_ONLINE_v1 — active within last 10 min → Online;
+      //    logged in but quiet beyond that stays Idle. Anchored to last activity.
+      else if ((now - effectiveLogin) <= 10 * 60 * 1000) {
+        state = 'online';
+        since = effectiveLogin;
+      } else {
+        since = effectiveLogin;
+      }
     }
 
     summary[state] = (summary[state] || 0) + 1;

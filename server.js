@@ -1339,6 +1339,10 @@ app.post('/api/call_event_native', require('express').json({ limit: '64kb' }), a
         duration_s: req.body && req.body.duration_s,
         missed: req.body && req.body.missed
       });
+      // TEAM_LIVE_PRESENCE_v2 — a native call event proves the mobile app is
+      // live for this user; refresh last_login_at so the Live Team Status
+      // panel counts active mobile reps (fixes false 'Never logged in').
+      try { await tenantDb.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [uid]); } catch (_) {}
       // Enrich the response with the rich-notification payload so the
       // native PhoneStateReceiver can render a heads-up notification
       // RIGHT NOW — Android shows it on top of the dialer screen, which
