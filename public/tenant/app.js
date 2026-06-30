@@ -1794,7 +1794,7 @@ const NAV_GROUPS = [
    * channels (Meta ads, Social, WhatsApp Bot, AI Assistant, Campaigns). */
   { label: 'Marketing & Communication', icon: '📣', items: [
     { id: 'campaigns',      label: 'Campaigns',            icon: '📣', roles: ['admin','manager'], search: 'campaign campaign list lead campaign source' },
-    { id: 'socialinbox',    label: 'Social Inbox',         icon: '💬', countKey: 'social_unread',    search: 'social inbox inbox messages dm facebook instagram messenger' },
+    { id: 'socialinbox',    label: 'Social Inbox',         icon: '💬', vserveOnly: true, countKey: 'social_unread',    search: 'social inbox inbox messages dm facebook instagram messenger' },
     { id: 'socialcomments', label: 'Social Comments',      icon: '💭', countKey: 'social_unreplied', search: 'comments social comments replies' },
     { id: 'socialpublish',  label: 'Social Publisher',     icon: '📤', search: 'publisher post schedule post social post' },
     { id: 'socialads',      label: 'Ads Manager',          icon: '📊', search: 'ads meta ads facebook ads instagram ads ads manager' },
@@ -1821,7 +1821,7 @@ const NAV_GROUPS = [
   ] },
   /* PAYMENTS_v1 — Cashfree + Razorpay payment links */
   { label: 'Payments', icon: '💳', items: [
-    { id: 'paymentLinks',     label: 'Payment Links',  icon: '🔗', search: 'payment link cashfree razorpay collect money pay' },
+    { id: 'paymentLinks',     label: 'Payment Links',  icon: '🔗', vserveOnly: true, search: 'payment link cashfree razorpay collect money pay' },
     { id: 'paymentCustomers', label: 'Customers',      icon: '👥', roles: ['admin','manager','team_leader'], search: 'payment customers paying customers active spenders' },
     { id: 'paymentSettings',  label: 'Settings',       icon: '⚙️', roles: ['admin','manager'], search: 'payment settings gateway cashfree razorpay api keys' }
   ] },
@@ -2013,6 +2013,8 @@ function renderShell() {
   const _navAnchor = (item) => {
     if (item.roles && !item.roles.includes(CRM.user.role)) return null;
     if (hiddenNavIds.includes(item.id)) return null;
+    /* VSERVE_ONLY_NAV_v1 — Payment Links + Social Inbox only on vserve */
+    if (item.vserveOnly && String(window.TENANT_SLUG || '').toLowerCase() !== 'vserve') return null;
     /* LEAD_POOL_v1 — per-permission + per-tenant brand-flag gating */
     if (item.id === 'leadpool' && !canSeePoolNav()) return null;
     if (item.perm && !(CRM.can && CRM.can(item.perm))) return null;
@@ -2174,6 +2176,7 @@ function renderShell() {
   NAV.forEach(item => {
     if (item.roles && !item.roles.includes(CRM.user.role)) return;
     if (hiddenNavIds.includes(item.id)) return;
+    if (item.vserveOnly && String(window.TENANT_SLUG || '').toLowerCase() !== 'vserve') return;
     if (item.perm && !(CRM.can && CRM.can(item.perm))) return;
     if (item.id === 'leadpool' && !canSeePoolNav()) return;
     if (item.requiresBrandFlag && !(CRM.user && CRM.user.role === 'admin') && !(CRM.brand && String(CRM.brand[item.requiresBrandFlag]) === '1')) return;

@@ -4568,9 +4568,9 @@ VIEWS.finance = async (view) => {
   }
 
   function refreshAll() { try { loadOverview(); loadChart(); loadPackages(); loadExpiring(); loadOverdue(); loadSales && loadSales(); loadExpenses(); } catch(_){} }
-  refreshBtn.onclick = () => Promise.all([loadOverview(), loadChart(), loadPackages(), loadExpiring(), loadOverdue(), loadSales()]);
+  refreshBtn.onclick = () => Promise.all([loadOverview(), loadChart(), loadPackages(), loadExpiring(), loadOverdue(), loadSales(), loadExpenses()]);
   // Initial parallel load
-  loadOverview(); loadChart(); loadPackages(); loadExpiring(); loadOverdue(); loadSales();
+  loadOverview(); loadChart(); loadPackages(); loadExpiring(); loadOverdue(); loadSales(); loadExpenses();
 };
 
 // ─────────────────────────────────────────────────────────────
