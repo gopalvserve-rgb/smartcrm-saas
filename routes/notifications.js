@@ -28,6 +28,14 @@ async function api_notifications_mine(token, opts) {
   // We still load users + statuses fully because they're tiny tables.
   const me = await authUser(token);
   const visible = await getVisibleUserIds(me);
+  // SHOWCASE_FU_SHOWALL_v1 — on the demo tenant a config flag makes the
+  // Follow-ups page/counters show EVERY user's follow-ups (not just mine),
+  // so the demo always looks populated. Flag is only set on slug 'showcase'.
+  let _fuShowAll = false;
+  try {
+    const _fc = await db.query("SELECT value FROM config WHERE key = 'FOLLOWUPS_SHOW_ALL' LIMIT 1");
+    _fuShowAll = !!(_fc.rows[0] && String(_fc.rows[0].value) === '1');
+  } catch (_) {}
   const todayStr = new Date().toISOString().slice(0, 10);
   const now = new Date().toISOString();
 
@@ -99,7 +107,7 @@ async function api_notifications_mine(token, opts) {
     if (!f.due_at) return;
     const lead = leadsById[Number(f.lead_id)];
     const isForMe = Number(f.user_id) === Number(me.id);
-    if (!isForMe && !isMine(lead)) return;
+    if (!_fuShowAll && !isForMe && !isMine(lead)) return;
     // Only show follow-ups whose current lead status is in the allowed list.
     if (!_isAllowedLeadStatus(lead)) return;
     items.push({
@@ -113,7 +121,7 @@ async function api_notifications_mine(token, opts) {
   allLeads.forEach(l => {
     if (!l.next_followup_at) return;
     if (followupByLead[Number(l.id)]) return;
-    if (!isMine(l) && Number(l.assigned_to) !== Number(me.id)) return;
+    if (!_fuShowAll && !isMine(l) && Number(l.assigned_to) !== Number(me.id)) return;
     if (!_isAllowedLeadStatus(l)) return;
     items.push({
       id: null, lead_id: l.id, due_at: l.next_followup_at, note: '',
