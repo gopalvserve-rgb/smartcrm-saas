@@ -127,6 +127,30 @@
             <div class="sr-help">When the balance is due. We'll send the customer a polite reminder by email + WhatsApp once it crosses + 7 days, weekly thereafter until paid.</div>
           </div>
           <div>
+            <label>Transaction mode</label>
+            <select name="transaction_mode">
+              <option value="">— select —</option>
+              <option value="UPI">UPI</option>
+              <option value="Payment Gateway">Payment Gateway</option>
+              <option value="Bank Transfer / NEFT">Bank Transfer / NEFT</option>
+              <option value="Cash">Cash</option>
+              <option value="Cheque">Cheque</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+          <div>
+            <label>Transaction ID / reference</label>
+            <input type="text" name="transaction_id" maxlength="120" placeholder="UPI ref / gateway txn id" />
+          </div>
+          <div>
+            <label>Transaction date</label>
+            <input type="date" name="transaction_date" id="sr-txn-date" />
+          </div>
+          <div class="full">
+            <label>Payment remarks</label>
+            <textarea name="payment_remarks" maxlength="500" placeholder="Any note about the payment"></textarea>
+          </div>
+          <div>
             <label>Your name / who's submitting</label>
             <input type="text" name="submitted_by" maxlength="100" placeholder="e.g. Rohan, Sales team" />
           </div>
@@ -147,6 +171,7 @@
     const $ = (s) => document.querySelector(s);
     const result = $('#sr-result');
     const btn = $('#sr-btn');
+    try { const _td = document.getElementById('sr-txn-date'); if (_td && !_td.value) _td.value = new Date().toISOString().slice(0,10); } catch (_) {}
 
     /* SIGNUP_REQUEST_v2 — live tenure → end-date preview. Mirrors the
        package-end calc in the super-admin SPA so the customer sees the

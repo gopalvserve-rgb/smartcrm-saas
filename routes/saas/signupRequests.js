@@ -278,7 +278,7 @@ async function expressPublicSubmit(req, res) {
     const org  = String(b.org_name || '').trim();
     const slug = String(b.desired_slug || '').trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
     const meta = {};
-    ['submitted_by','desired_tenure','desired_users','payment_status','amount_paid_inr','total_amount_inr','next_payment_at','notes'].forEach(k => {
+    ['submitted_by','desired_tenure','desired_users','payment_status','amount_paid_inr','total_amount_inr','next_payment_at','notes','transaction_mode','transaction_id','transaction_date','payment_remarks'].forEach(k => {
       if (b[k] != null && String(b[k]).trim() !== '') meta[k] = String(b[k]).trim();
     });
     const r = await control.query(

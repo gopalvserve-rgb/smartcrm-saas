@@ -567,7 +567,8 @@ VIEWS.tenants = async (view) => {
     active: _origList.filter(t => t.status === 'active').length,
     suspended: _origList.filter(t => t.status === 'suspended').length,
     today: _origList.filter(t => { try { return new Date(t.created_at).toLocaleDateString('en-CA') === _todayKey; } catch (_) { return false; } }).length,
-    demo: _origList.filter(t => String(t.tenant_type || 'live').toLowerCase() === 'demo').length
+    demo: _origList.filter(t => String(t.tenant_type || 'live').toLowerCase() === 'demo').length,
+    live: _origList.filter(t => String(t.tenant_type || 'live').toLowerCase() !== 'demo').length
   };
   const kpi = (label, val, color) => h('div', { style:{ flex:'1', minWidth:'120px', background:'#fff', border:'1px solid #e2e8f0', borderRadius:'10px', padding:'10px 14px' } },
     h('div', { style:{ fontSize:'1.5rem', fontWeight:'800', color: color||'#0f172a' } }, String(val)),
@@ -577,6 +578,7 @@ VIEWS.tenants = async (view) => {
     kpi('Total active', _cnt.active, '#16a34a'),
     kpi('Total suspended', _cnt.suspended, '#dc2626'),
     kpi('Total tenants', _cnt.total),
+    kpi('Live tenants', _cnt.live, '#0f766e'),
     kpi('Demo tenants', _cnt.demo, '#7c3aed')));
 
   // ---- #5 Filter bar + #6 view toggle -------------------------------------
@@ -645,6 +647,7 @@ function _tenantListTable(rows, sizeMap) {
       td([ h('div', { style:{ fontWeight:'700', color:'#0f172a' } }, t.org_name || t.slug),
            h('div', { style:{ fontSize:'.72rem', color:'#94a3b8' } }, '/' + t.slug) ]),
       td(_tenantStatusBadge(t.status)),
+      td(_tenantTypeBadge(t)),
       td(t.package_name || '—'),
       td(usersTxt, { color: usersOver ? '#dc2626' : '#0f172a', fontWeight: usersOver ? '700' : '400', whiteSpace:'nowrap' }),
       td(bal > 0 ? ('₹' + bal.toLocaleString('en-IN')) : '—', { color: bal>0?'#b45309':'#94a3b8', whiteSpace:'nowrap' }),
@@ -666,7 +669,7 @@ function _tenantListTable(rows, sizeMap) {
       )));
   });
   return h('table', { style:{ width:'100%', borderCollapse:'collapse', minWidth:'720px' } },
-    h('thead', {}, h('tr', {}, th('Tenant'), th('Status'), th('Plan'), th('Users'), th('Balance'), th('Period ends'), th('Actions'))),
+    h('thead', {}, h('tr', {}, th('Tenant'), th('Status'), th('Type'), th('Plan'), th('Users'), th('Balance'), th('Period ends'), th('Actions'))),
     h('tbody', {}, ...body));
 }
 
@@ -681,6 +684,10 @@ function _tenantStatusBadge(status) {
   const map = { active:'#16a34a', trial:'#0891b2', past_due:'#d97706', suspended:'#dc2626', pending_payment:'#9333ea', pending_delete:'#dc2626', deleted:'#6b7280' };
   const c = map[status] || '#6b7280';
   return h('span', { style:{ background:c, color:'#fff', fontSize:'.66rem', fontWeight:'700', padding:'2px 8px', borderRadius:'10px', textTransform:'uppercase', letterSpacing:'.03em', whiteSpace:'nowrap' } }, status || '—');
+}
+function _tenantTypeBadge(t) {
+  const demo = String((t && t.tenant_type) || 'live').toLowerCase() === 'demo';
+  return h('span', { style:{ background: demo?'#f3e8ff':'#ecfdf5', color: demo?'#7c3aed':'#047857', border:'1px solid '+(demo?'#e9d5ff':'#a7f3d0'), fontSize:'.62rem', fontWeight:'800', padding:'2px 7px', borderRadius:'8px', whiteSpace:'nowrap' } }, demo?'DEMO':'LIVE');
 }
 function renderTenantCard(t, sizeMap) {
   const _row = (label, val, color) => h('div', { style:{ display:'flex', justifyContent:'space-between', gap:'8px', fontSize:'.8rem', padding:'2px 0' } },
@@ -2771,6 +2778,7 @@ VIEWS.signup_requests = async (view) => {
       h('th', {}, 'Slug'),
       h('th', {}, 'Wants'),
       h('th', {}, 'Plan picked'),
+      h('th', {}, 'Price'),
       h('th', {}, 'Status'),
       h('th', {}, 'Actions')
     )));
@@ -2799,6 +2807,7 @@ VIEWS.signup_requests = async (view) => {
             r.desired_users ? (r.desired_users + ' users') : 'users not set')
         ),
         h('td', {}, r.package_name || h('span', { class: 'muted' }, 'pick on approve')),
+        h('td', {}, r.price_inr != null ? ('₹' + Number(r.price_inr).toLocaleString('en-IN')) : h('span', { class: 'muted' }, '—')),
         h('td', {}, h('span', {
           style: {
             background: pillColour, color: '#fff', padding: '.15rem .55rem',
@@ -2840,6 +2849,32 @@ async function openSignupRequestModal(id, onClose) {
 
   const body = h('div', { class: 'modal-body' });
   card.appendChild(body);
+
+  // SR_DETAILS_v1 — show everything the customer submitted, incl. plan PRICE + payment.
+  let _meta = {}; try { _meta = (typeof row.metadata === 'string') ? JSON.parse(row.metadata || '{}') : (row.metadata || {}); } catch (_) {}
+  const _inr = (v) => (v == null || v === '') ? '—' : ('₹' + Number(v).toLocaleString('en-IN'));
+  const _txt = (v) => (v == null || String(v).trim() === '') ? '—' : String(v);
+  const _TEN = { month:'Monthly', quarter:'Quarterly', half_year:'6-month', year:'Yearly', '2year':'2-year', '3year':'3-year' };
+  const _dl = (pairs) => h('div', { style: { display:'grid', gridTemplateColumns:'160px 1fr', gap:'.3rem .8rem', fontSize:'.85rem' } },
+    ...pairs.flatMap(([k, v]) => [ h('div', { class:'muted' }, k), h('div', { style:{ fontWeight:'600', color:'#0f172a', wordBreak:'break-word' } }, v) ]));
+  body.appendChild(h('div', { style: { background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:'10px', padding:'12px', marginBottom:'1rem' } },
+    h('div', { style:{ fontWeight:'700', marginBottom:'8px' } }, '📄 Submitted details'),
+    _dl([
+      ['Plan picked', _txt(row.package_name) + (row.price_inr != null ? ('  (' + _inr(row.price_inr) + ')') : '')],
+      ['Tenure', _TEN[_meta.desired_tenure] || _txt(_meta.desired_tenure)],
+      ['Users', _txt(_meta.desired_users)],
+      ['Payment status', _txt(_meta.payment_status)],
+      ['Total amount', _inr(_meta.total_amount_inr)],
+      ['Amount paid', _inr(_meta.amount_paid_inr)],
+      ['Next payment due', _txt(_meta.next_payment_at)],
+      ['Transaction mode', _txt(_meta.transaction_mode)],
+      ['Transaction ID', _txt(_meta.transaction_id)],
+      ['Transaction date', _txt(_meta.transaction_date)],
+      ['Payment remarks', _txt(_meta.payment_remarks)],
+      ['Submitted by', _txt(_meta.submitted_by)],
+      ['Notes', _txt(_meta.notes)]
+    ])
+  ));
 
   // ── If already approved: show credentials again
   if (row.status === 'approved' && row.provisioned_slug) {
