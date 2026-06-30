@@ -8,12 +8,12 @@
  *
  * GATED: launch button only shows for slug "showcase", or
  * ?demotour=1, or localStorage.demoTour==="1".
- * cache key: 2026-06-29-demotour-v15
+ * cache key: 2026-06-30-demotour-v16
  * ============================================================ */
 (function () {
   'use strict';
 
-  var ASSET_V = '2026-06-29-demotour-v15';
+  var ASSET_V = '2026-06-30-demotour-v16';
 
   function enabled() {
     try {
@@ -68,6 +68,17 @@
 
     { navId: 'leads', hash: '#/leads', title: 'AI — Lead AI Summary', en: 'Auto summary of every lead',
       s: 'Har lead ka AI chhota summary bana deta hai — pichhli baat-cheet, requirement aur next step ek nazar mein. Agent ko poori history padhne ki zaroorat nahi.' },
+
+    /* TOUR_TARGETS_COMPLIANCE_DIALER_v1 — discipline & productivity block (Step 11.1-11.3) */
+    { navId: 'targets', hash: '#/targets', title: 'Monthly Target', en: 'Set monthly targets per employee',
+      s: 'Har employee ka monthly target yahan set karein — kitni calls, kitni leads aur kitna revenue. System target vs achieved live track karta hai aur shortfall par alert deta hai, taaki performance hamesha nazar mein rahe.' },
+
+    { navId: 'compliance', hash: '#/compliance', title: 'Compliance — Discipline Rules', en: 'Min calls & talk-time with auto-warn',
+      s: 'Compliance se team discipline lagti hai — minimum calls aur talk-time fix kar dein. Jaise per hour 20 call / per day 80 call, aur talk-time per hour 15 min / per day 60 min. Target miss hua to system khud warning bhej deta hai — manager ko alag se monitor nahi karna padta.',
+      img: { src: 'demo-compliance.svg', cap: 'Compliance rules — auto-warn on miss (representation)', wide: true } },
+
+    { navId: 'autodialer', hash: '#/autodialer', title: 'Auto Dialer', en: 'Power dialer — campaigns + round-robin',
+      s: 'Auto Dialer — leads upload karein, campaign banayein, aur system khud ek-ek karke call lagata hai. Agents ko round-robin / equal-split par assign hota hai, duplicate hat jaate hain aur re-churn se leads dobara fresh dial ho jaati hain. Manual dialing ka time bachta hai, productivity badhti hai.' },
 
     { navId: 'leads', hash: '#/leads', title: 'AI Lead Rating — Hot / Warm / Nurture / Cold', en: 'AI scores each lead into buckets',
       s: 'AI har lead ko khud rate karta hai — Hot, Warm, Nurture ya Cold. Engagement, replies aur activity dekh kar bucket assign hota hai, taaki team pehle Hot leads par focus kare.' },
