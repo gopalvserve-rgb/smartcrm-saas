@@ -353,6 +353,12 @@ async function api_saas_tenants_createManual(token, payload) {
     console.warn('[createManual] partial-pay write failed (non-fatal):', e.message);
   }
 
+  // TENANT_TYPE_v1 — demo vs live tag (default live)
+  try {
+    const _tt = String(p.tenant_type || '').toLowerCase() === 'demo' ? 'demo' : 'live';
+    await control.query(`UPDATE tenants SET tenant_type = $1, updated_at = NOW() WHERE id = $2`, [_tt, prov.tenant_id]);
+  } catch (_) {}
+
   // ---- 4. Audit trail -----------------------------------------
   await control.insert('audit_log', {
     actor_type: 'super_admin', actor_id: me.id, actor_email: me.email,
@@ -1180,7 +1186,7 @@ async function api_saas_tenants_update(token, payload) {
   const p = payload || {};
   const id = Number(p.id);
   if (!id) throw new Error('tenant id required');
-  const tr = await control.query('SELECT id, slug FROM tenants WHERE id = $1', [id]);
+  const tr = await control.query('SELECT * FROM tenants WHERE id = $1', [id]);
   const t = tr.rows[0];
   if (!t) throw new Error('Tenant not found');
   const ALLOW = ['admin_remarks', 'contact_name', 'contact_email', 'contact_mobile', 'org_name'];
@@ -1204,21 +1210,43 @@ async function api_saas_tenants_update(token, payload) {
       sets.push(`${k} = $${i++}::timestamptz`); vals.push(v);
     }
   }
+  if (p.tenant_type !== undefined) {
+    const _tt = String(p.tenant_type).toLowerCase() === 'demo' ? 'demo' : 'live';
+    sets.push(`tenant_type = $${i++}`); vals.push(_tt);
+  }
   if (!sets.length) return { ok: true, nochange: true };
   vals.push(id);
   await control.query(`UPDATE tenants SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $${i}`, vals);
   try { require('../../utils/tenantPool').invalidateSlug(t.slug); } catch (_) {}
   try {
+    const _changes = {};
+    sets.forEach((seg, idx) => {
+      const col = String(seg.split(' = ')[0]).trim();
+      _changes[col] = { from: (t[col] === undefined ? null : t[col]), to: (vals[idx] === undefined ? null : vals[idx]) };
+    });
     await control.insert('audit_log', {
       actor_type: 'super_admin', actor_id: me.id, actor_email: me.email,
       tenant_id: id, event: 'tenant.updated',
-      detail: JSON.stringify({ slug: t.slug, fields: sets.map(x => x.split(' = ')[0]) })
+      detail: JSON.stringify({ slug: t.slug, changes: _changes })
     });
   } catch (_) {}
   return { ok: true };
 }
 
+async function api_saas_tenants_auditLog(token, payload) {
+  await requireSuperAdmin(token);
+  const id = Number((payload || {}).id);
+  if (!id) throw new Error('tenant id required');
+  const lim = Math.min(200, Math.max(1, Number((payload || {}).limit) || 80));
+  const r = await control.query(
+    `SELECT id, actor_type, actor_email, event, detail, created_at
+       FROM audit_log WHERE tenant_id = $1
+      ORDER BY created_at DESC LIMIT $2`, [id, lim]);
+  return { entries: r.rows || [] };
+}
+
 module.exports = {
+  api_saas_tenants_auditLog,
   api_saas_tenants_update,
   api_saas_tenants_list,
   api_saas_tenants_get,

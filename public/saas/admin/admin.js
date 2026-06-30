@@ -566,7 +566,8 @@ VIEWS.tenants = async (view) => {
     total: _origList.length,
     active: _origList.filter(t => t.status === 'active').length,
     suspended: _origList.filter(t => t.status === 'suspended').length,
-    today: _origList.filter(t => { try { return new Date(t.created_at).toLocaleDateString('en-CA') === _todayKey; } catch (_) { return false; } }).length
+    today: _origList.filter(t => { try { return new Date(t.created_at).toLocaleDateString('en-CA') === _todayKey; } catch (_) { return false; } }).length,
+    demo: _origList.filter(t => String(t.tenant_type || 'live').toLowerCase() === 'demo').length
   };
   const kpi = (label, val, color) => h('div', { style:{ flex:'1', minWidth:'120px', background:'#fff', border:'1px solid #e2e8f0', borderRadius:'10px', padding:'10px 14px' } },
     h('div', { style:{ fontSize:'1.5rem', fontWeight:'800', color: color||'#0f172a' } }, String(val)),
@@ -575,7 +576,8 @@ VIEWS.tenants = async (view) => {
     kpi('Registered today', _cnt.today, '#0891b2'),
     kpi('Total active', _cnt.active, '#16a34a'),
     kpi('Total suspended', _cnt.suspended, '#dc2626'),
-    kpi('Total tenants', _cnt.total)));
+    kpi('Total tenants', _cnt.total),
+    kpi('Demo tenants', _cnt.demo, '#7c3aed')));
 
   // ---- #5 Filter bar + #6 view toggle -------------------------------------
   const _f = { q:'', status:'' };
@@ -708,7 +710,7 @@ function renderTenantCard(t, sizeMap) {
   return h('div', { style:{ background:'#fff', border:'1px solid '+(usersOver?'#fca5a5':'#e2e8f0'), borderRadius:'12px', padding:'14px', boxShadow:'0 1px 2px rgba(0,0,0,.04)' } },
     h('div', { style:{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:'8px', marginBottom:'8px' } },
       h('div', { style:{ minWidth:'0' } },
-        h('div', { style:{ fontWeight:'700', fontSize:'1rem', color:'#0f172a', wordBreak:'break-word' } }, t.org_name || t.slug),
+        h('div', { style:{ fontWeight:'700', fontSize:'1rem', color:'#0f172a', wordBreak:'break-word' } }, t.org_name || t.slug, (String(t.tenant_type||'live').toLowerCase()==='demo' ? h('span', { style:{ marginLeft:'6px', fontSize:'.6rem', fontWeight:'800', color:'#7c3aed', background:'#f3e8ff', border:'1px solid #e9d5ff', borderRadius:'6px', padding:'1px 6px', verticalAlign:'middle' } }, 'DEMO') : null)),
         h('div', { style:{ fontSize:'.74rem', color:'#94a3b8' } }, '/' + t.slug)),
       _tenantStatusBadge(t.status)),
     _row('Email', t.contact_email || '—'),
@@ -737,9 +739,14 @@ async function openTenantDetailsModal(t) {
   const fEmail = fld('Contact email', t.contact_email);
   const fMobile = fld('Contact mobile', t.contact_mobile);
   const fRemarks = fld('📝 Comments / remarks', t.admin_remarks, true);
+  const _isDemo = String(t.tenant_type || 'live').toLowerCase() === 'demo';
+  const _typeSel = h('select', { style:{ width:'100%' } },
+    h('option', { value:'live', ...(!_isDemo?{selected:'selected'}:{}) }, '\uD83D\uDFE2 LIVE \u2014 paying / production'),
+    h('option', { value:'demo', ...(_isDemo?{selected:'selected'}:{}) }, '\uD83D\uDFE3 DEMO \u2014 internal demo / showcase'));
+  const _typeWrap = h('div', { style:{ marginBottom:'8px' } }, h('label', { style:{ fontSize:'.78rem', color:'#64748b', display:'block', marginBottom:'2px' } }, 'Tenant type'), _typeSel);
   card.appendChild(h('div', { style:{ background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:'10px', padding:'12px', marginBottom:'12px' } },
     h('div', { style:{ fontWeight:'700', marginBottom:'8px' } }, 'Edit'),
-    fOrg.wrap, fName.wrap, fEmail.wrap, fMobile.wrap, fRemarks.wrap));
+    fOrg.wrap, _typeWrap, fName.wrap, fEmail.wrap, fMobile.wrap, fRemarks.wrap));
 
   // TENANT_EDIT_BILLING_v1 — Billing + Plan section in the edit modal.
   const numFld = (label, val) => {
@@ -772,6 +779,35 @@ async function openTenantDetailsModal(t) {
     h('div', { style:{ fontWeight:'700', marginBottom:'8px' } }, '💳 Billing & plan'),
     fPkgWrap, fCap.wrap, fTotal.wrap, fPaid.wrap, fRemind.wrap, balEl));
 
+  // TENANT_AUDIT_v1 — who/when edited + what changed.
+  const _fmtV = (v) => { if (v===null||v===undefined||v==='') return '\u2205'; const x=String(v); return x.length>48? x.slice(0,48)+'\u2026' : x; };
+  const _evLabel = (e) => ({ 'tenant.updated':'\u270F\uFE0F Updated', 'tenant.created_manually':'\u2795 Created', 'tenant.suspended':'\u23F8 Suspended', 'tenant.restored':'\u25B6 Restored', 'tenant.package_changed':'\uD83D\uDCE6 Plan changed', 'tenant.user_plan_set':'\uD83D\uDC64 User plan changed', 'tenant.login_as':'\uD83D\uDD11 Logged in as tenant' }[e] || e);
+  const _dt = (x) => { try { return new Date(x).toLocaleString('en-IN'); } catch(_) { return String(x||''); } };
+  const histWrap = h('div', { style:{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:'10px', padding:'12px', marginBottom:'12px' } },
+    h('div', { style:{ fontWeight:'700', marginBottom:'8px' } }, '\uD83D\uDD52 Edit history (who / when / what)'),
+    h('div', { class:'muted', style:{ fontSize:'.8rem' } }, 'Loading\u2026'));
+  card.appendChild(histWrap);
+  (async () => {
+    try {
+      const r = await api('api_saas_tenants_auditLog', { id: t.id, limit: 60 });
+      const entries = (r && r.entries) || [];
+      histWrap.innerHTML = '';
+      histWrap.appendChild(h('div', { style:{ fontWeight:'700', marginBottom:'8px' } }, '\uD83D\uDD52 Edit history (who / when / what)'));
+      if (!entries.length) { histWrap.appendChild(h('div', { class:'muted', style:{ fontSize:'.8rem' } }, 'No changes recorded yet.')); return; }
+      entries.forEach(en => {
+        let det = {}; try { det = typeof en.detail === 'string' ? JSON.parse(en.detail) : (en.detail || {}); } catch (_) {}
+        let txt = '';
+        if (det && det.changes) txt = Object.keys(det.changes).map(k => { const c = det.changes[k]||{}; return k + ': ' + _fmtV(c.from) + ' \u2192 ' + _fmtV(c.to); }).join('  \u00B7  ');
+        else if (det && det.fields) txt = 'changed: ' + det.fields.join(', ');
+        else if (det) txt = Object.keys(det).filter(k => k!=='slug').map(k => k + ': ' + _fmtV(det[k])).join('  \u00B7  ');
+        histWrap.appendChild(h('div', { style:{ borderTop:'1px solid #f1f5f9', padding:'6px 0', fontSize:'.78rem' } },
+          h('div', { style:{ color:'#0f172a', fontWeight:'600' } }, _evLabel(en.event)),
+          txt ? h('div', { style:{ color:'#475569', wordBreak:'break-word' } }, txt) : null,
+          h('div', { style:{ color:'#94a3b8', fontSize:'.72rem', marginTop:'2px' } }, (en.actor_email || en.actor_type || 'system') + '  \u00B7  ' + _dt(en.created_at))));
+      });
+    } catch (e) { histWrap.innerHTML=''; histWrap.appendChild(h('div', { class:'muted', style:{ fontSize:'.8rem', color:'#dc2626' } }, 'Could not load history: ' + e.message)); }
+  })();
+
   const saveBtn = h('button', { class:'btn primary' }, '💾 Save changes');
   saveBtn.onclick = async () => {
     saveBtn.disabled = true;
@@ -782,6 +818,7 @@ async function openTenantDetailsModal(t) {
         org_name: fOrg.inp.value, contact_name: fName.inp.value,
         contact_email: fEmail.inp.value, contact_mobile: fMobile.inp.value,
         admin_remarks: fRemarks.inp.value,
+        tenant_type: _typeSel.value,
         total_amount_inr: fTotal.inp.value === '' ? '' : Number(fTotal.inp.value),
         amount_paid_inr:  fPaid.inp.value  === '' ? '' : Number(fPaid.inp.value),
         payment_reminder_at: fRemind.inp.value || ''
@@ -1112,6 +1149,12 @@ async function openCreateTenant() {
     h('option', { value: 'education' },  '🎓 Education / Coaching — fees + installments + reminders'),
     h('option', { value: 'realestate' }, '🏢 Real Estate — inventory + bookings + demand letters + commissions')
   );
+  const typeSel = h('select', { name: 'tenant_type', style: { width: '100%' } },
+    h('option', { value: 'live' }, '\uD83D\uDFE2 LIVE \u2014 paying / production tenant'),
+    h('option', { value: 'demo' }, '\uD83D\uDFE3 DEMO \u2014 internal demo / showcase')
+  );
+  form.appendChild(field('Tenant type', typeSel));
+
   form.appendChild(field('Industry pack', packSel));
 
   form.appendChild(field('Notes (internal)',
@@ -1185,7 +1228,8 @@ async function _submitCreateTenant(form, pkgs, modal) {
     admin_remarks: (fd.get('admin_remarks') || '').toString().trim() || null,
     total_amount_inr: (() => { const v = (fd.get('total_amount_inr') || '').toString().trim(); return v === '' ? null : Number(v); })(),
     amount_paid_inr:  (() => { const v = (fd.get('amount_paid_inr')  || '').toString().trim(); return v === '' ? null : Number(v); })(),
-    payment_reminder_at: (fd.get('payment_reminder_at') || '').toString().trim() || null
+    payment_reminder_at: (fd.get('payment_reminder_at') || '').toString().trim() || null,
+    tenant_type: (fd.get('tenant_type') || 'live').toString().trim()
   };
   try {
     const r = await api('api_saas_tenants_createManual', payload);
