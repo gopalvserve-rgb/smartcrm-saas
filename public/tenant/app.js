@@ -2007,7 +2007,7 @@ function renderShell() {
   // since they now live as chips in the topbar; admin can re-enable
   // them in Settings if they prefer the sidebar links.
   const hiddenNavIds = String(CRM.config.hidden_nav_ids || 'newleads,overdue,duetoday,upcoming')
-    .split(',').map(s => s.trim()).filter(Boolean);
+    .split(',').map(s => s.trim()).filter(Boolean).filter(id => id !== 'compliance')/* COMPLIANCE_ALWAYS_VISIBLE_v1 */;
 
   // Helper: make one anchor for a NAV item. Returns null if user can't see it.
   const _navAnchor = (item) => {
@@ -2347,7 +2347,7 @@ function showMobileMore() {
           // Also honor admin-hidden nav items (Settings -> Menu visibility)
           try {
             const hiddenIds = String(CRM.config.hidden_nav_ids || 'newleads,overdue,duetoday,upcoming')
-              .split(',').map(x => x.trim()).filter(Boolean);
+              .split(',').map(x => x.trim()).filter(Boolean).filter(id => id !== 'compliance')/* COMPLIANCE_ALWAYS_VISIBLE_v1 */;
             if (hiddenIds.includes(item.id)) return false;
           } catch (_) {}
           return true;

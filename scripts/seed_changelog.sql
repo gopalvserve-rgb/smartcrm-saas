@@ -1228,3 +1228,12 @@ INSERT INTO changelog (tag, title, body, audience, created_at) VALUES
  'Live Team Status now shows a green Online state for reps active in the last 10 minutes, and Offline is now measured from a rep''s most recent activity (call, remark, status change, attendance or login) instead of just login time — so active reps no longer wrongly show Offline. Mobile call activity now also refreshes presence so active mobile reps stop showing as Never logged in.',
  'tenant_admin', NOW())
 ON CONFLICT DO NOTHING;
+
+INSERT INTO control.changelog (title, body, kind, ship_date, is_published)
+VALUES (
+  'Compliance menu now visible to all',
+  'The Compliance section (Rules & Violations) is now always available in the sidebar for admins, managers and team leaders on every workspace — it can no longer be accidentally hidden by the Menu Visibility setting.',
+  'improvement',
+  '2026-06-30',
+  true
+);
