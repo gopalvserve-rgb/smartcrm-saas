@@ -39,10 +39,14 @@ async function seedOnce() {
     const pool = tenantPool.poolFor(r.rows[0]);
     if (!pool) { console.log('[SHOWCASE_FU_SEED] no pool for showcase, skipping.'); return; }
 
-    // 1) show-all flag
+    // 1) demo flags: show all follow-ups + animate Live Team Status
     try {
       await pool.query(
         `INSERT INTO config (key, value) VALUES ('FOLLOWUPS_SHOW_ALL', '1')
+         ON CONFLICT (key) DO UPDATE SET value = '1'`
+      );
+      await pool.query(
+        `INSERT INTO config (key, value) VALUES ('TEAM_LIVE_DEMO', '1')
          ON CONFLICT (key) DO UPDATE SET value = '1'`
       );
     } catch (e) { console.error('[SHOWCASE_FU_SEED] flag set failed:', e.message); }

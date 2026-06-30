@@ -2785,7 +2785,7 @@ async function openChangelogModal() {
     // filter to All time so reports/dashboard/leads show full seeded data
     // (real tenants are unaffected). A user-saved default still wins.
     try {
-      if ((window.TENANT_SLUG || '').toLowerCase() === 'showcase' && !opts.noSavedDefault && !localStorage.getItem(key)) {
+      if ((window.TENANT_SLUG || '').toLowerCase() === 'showcase' && !opts.noSavedDefault) {
         var _allPreset = PRESETS.find(function (p) { return p.id === 'all'; });
         if (_allPreset) _setRange(fromInp, toInp, _allPreset.range());
       }

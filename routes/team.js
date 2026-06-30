@@ -281,6 +281,41 @@ async function api_team_liveStatus(token, _payload) {
   const order = Object.fromEntries(STATE_ORDER.map((s, i) => [s, i]));
   result.sort((a, b) => (order[a.state] - order[b.state]) || a.name.localeCompare(b.name));
 
+  // SHOWCASE_TEAM_DEMO_v1 — keep the Live Team Status looking active during
+  // demos. Gated to config TEAM_LIVE_DEMO='1' (only set on the showcase
+  // tenant). Forces 2 reps "On Call" + a recent last-call. Computed per
+  // request so it never goes stale, and never affects real tenants.
+  try {
+    const _teamDemo = (configRows || []).some(c =>
+      String(c.key) === 'TEAM_LIVE_DEMO' && String(c.value || '').trim() === '1');
+    if (_teamDemo && result.length) {
+      const _phones = ['+91 98201 11234', '+91 99300 55678'];
+      const _pool = result.filter(r => r.state !== 'never_logged_in');
+      const _use = _pool.length ? _pool : result;
+      let _set = 0;
+      for (let _k = 0; _k < _use.length && _set < 2; _k++) {
+        const _row = _use[_k];
+        _row.state = 'on_call';
+        _row.sub = _phones[_set];
+        _row.since_iso = new Date(now - (1 + _set * 2) * 60000).toISOString();
+        _row.since_min = 1 + _set * 2;
+        _row.last_call_at = new Date(now - (1 + _set) * 60000).toISOString();
+        _row.last_call_phone = _phones[_set];
+        _row.last_call_event = 'outgoing_call';
+        _set++;
+      }
+      const _other = _use.find(r => r.state !== 'on_call');
+      if (_other) {
+        _other.last_call_at = new Date(now - 9 * 60000).toISOString();
+        _other.last_call_phone = '+91 90040 33221';
+        _other.last_call_event = 'call_ended';
+      }
+      STATE_ORDER.forEach(st => { summary[st] = 0; });
+      result.forEach(r => { summary[r.state] = (summary[r.state] || 0) + 1; });
+      result.sort((a, b) => (order[a.state] - order[b.state]) || a.name.localeCompare(b.name));
+    }
+  } catch (_) {}
+
   return {
     summary,
     users: result,
