@@ -1264,3 +1264,12 @@ VALUES (
   '2026-07-01',
   true
 );
+
+INSERT INTO control.changelog (title, body, kind, ship_date, is_published)
+VALUES (
+  'WhatsApp quick chat on mobile',
+  'The floating WhatsApp button + slide-out inbox (recent chats, unread counts, tap-to-reply) that was desktop-only now works in the mobile app too — same instant chat window, no need to leave the page you are on. It stays light on phones: the live refresh runs only while the chat window is open.',
+  'feature',
+  '2026-07-01',
+  true
+);

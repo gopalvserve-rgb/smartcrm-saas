@@ -41207,7 +41207,10 @@ function _initFloatingChat() {
   // 8-second poll of api_wb_chat_threads was the chattiest endpoint
   // on the device — ~7.5 calls/min just from this dock. WhatsApp inbound
   // already has FCM push and the user can use the dedicated WhatsBot view.
-  if (_IS_APK) return;
+  // MOBILE_WA_DOCK_v1 — the full chat dock now runs on mobile/APK too so
+  // phone users get the SAME instant WhatsApp window as desktop. The old
+  // perf concern (chatty 8s poll) is handled below: fast poll only while the
+  // drawer is OPEN, ~45s badge refresh when closed (FCM push covers realtime).
   if (document.getElementById('chat-fab')) return;
   if (typeof CRM === 'undefined' || !CRM.user) return;
 
@@ -41224,6 +41227,8 @@ function _initFloatingChat() {
     box-shadow: 0 6px 20px rgba(37,211,102,.45);
     display: flex; align-items: center; justify-content: center;
   `;
+  // On phones sit above the bottom navigation bar.
+  try { if (_IS_APK || window.innerWidth < 900) fab.style.bottom = '90px'; } catch (_) {}
   fab.innerHTML = '\ud83d\udcac';
   fab.dataset.positioned = '';
   // Restore saved position
@@ -41763,7 +41768,17 @@ function _initFloatingChat() {
     } catch (_) {}
   }
   pollUnread();
-  setInterval(pollUnread, 8000);
+  // MOBILE_WA_DOCK_v1 — desktop polls every 8s. On APK we keep the live 8s
+  // cadence only while the drawer is OPEN; when it's closed we throttle to
+  // ~45s (just the unread badge) and skip entirely when the tab is hidden.
+  setInterval(function () {
+    if (document.visibilityState === 'hidden') return;
+    if (_IS_APK && !isOpen) {
+      if ((Date.now() - (window.__waBadgeLast || 0)) < 45000) return;
+      window.__waBadgeLast = Date.now();
+    }
+    pollUnread();
+  }, 8000);
 
   // Allow other modules to control the dock
   window._toggleChatDock = () => fab.click();
@@ -41780,6 +41795,10 @@ function _initFloatingChat() {
 // bottom-right), drag-to-reposition, position persisted per-device.
 // ============================================================
 function _initMobileWaFab() {
+  // MOBILE_WA_DOCK_v1 — superseded by the full chat dock (_initFloatingChat),
+  // which now renders on mobile too. Returning here avoids a duplicate FAB.
+  return;
+  /* eslint-disable no-unreachable */
   if (document.getElementById('wa-mobile-fab')) return;
   if (typeof CRM === 'undefined' || !CRM.user) return;
   // Only render on mobile / APK — the desktop already has _initFloatingChat
