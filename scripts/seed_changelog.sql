@@ -1246,3 +1246,12 @@ VALUES (
   '2026-06-30',
   true
 );
+
+INSERT INTO control.changelog (title, body, kind, ship_date, is_published)
+VALUES (
+  'Real Estate — bulk import inventory',
+  'On the Inventory Board (Real Estate pack) each project now has an "⬆ Import Excel" button. Upload an .xlsx / .csv with columns unit_no, floor, type, carpet_sqft, price, status to add many units at once — each with its own values (unlike Bulk-create which makes a uniform grid). Includes a downloadable template and an option to skip unit numbers already in the project.',
+  'feature',
+  '2026-06-30',
+  true
+);

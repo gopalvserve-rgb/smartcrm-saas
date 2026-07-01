@@ -284,6 +284,53 @@ async function api_re_units_bulkCreate(token, payload) {
   return { ok: true, created: n };
 }
 
+// ── API: Bulk IMPORT units from Excel/CSV (varied per-unit values) ──
+// RE_BULK_IMPORT_v1 — unlike api_re_units_bulkCreate (uniform grid), this
+// accepts an array of already-parsed rows so each unit can have its own
+// unit_no / floor / type / carpet_sqft / price / status. Optional dedupe
+// skips unit_no values that already exist in the project.
+async function api_re_units_bulkImport(token, payload) {
+  await framework.requireActive(PACK_ID);
+  const p = payload || {};
+  const projectId = Number(p.project_id);
+  if (!projectId) throw new Error('project_id required');
+  const rows = Array.isArray(p.rows) ? p.rows : [];
+  if (!rows.length) throw new Error('No rows to import');
+  if (rows.length > 5000) throw new Error('Too many rows (max 5000 per import)');
+
+  const okStatus = { available: 1, blocked: 1, booked: 1, registered: 1 };
+
+  let existing = new Set();
+  if (p.dedupe) {
+    const ex = await db.query(`SELECT unit_no FROM re_units WHERE project_id=$1`, [projectId]);
+    existing = new Set(ex.rows.map(r => String(r.unit_no || '').trim().toLowerCase()));
+  }
+
+  let created = 0, skipped = 0;
+  const seen = new Set();
+  for (const r of rows) {
+    const unitNo = String(r.unit_no || r.unit || r.unitno || '').trim();
+    if (!unitNo) { skipped++; continue; }
+    const key = unitNo.toLowerCase();
+    if (p.dedupe && (existing.has(key) || seen.has(key))) { skipped++; continue; }
+    seen.add(key);
+    const floor  = (r.floor === '' || r.floor == null) ? null : Number(r.floor);
+    const type   = String(r.type || r.unit_type || '').trim() || null;
+    const carpet = (r.carpet_sqft === '' || r.carpet_sqft == null) ? null : Number(r.carpet_sqft);
+    const price  = Number(r.price || 0) || 0;
+    let status   = String(r.status || 'available').trim().toLowerCase();
+    if (!okStatus[status]) status = 'available';
+    await db.query(
+      `INSERT INTO re_units (project_id, unit_no, floor, type, carpet_sqft, price, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [projectId, unitNo, Number.isFinite(floor) ? floor : null, type,
+       Number.isFinite(carpet) ? carpet : null, price, status]
+    );
+    created++;
+  }
+  return { ok: true, created, skipped };
+}
+
 // ── API: Booking + auto-generated demands + commission ─────────────
 async function api_re_booking_create(token, payload) {
   await framework.requireActive(PACK_ID);
@@ -1333,6 +1380,7 @@ module.exports = {
   api_re_units_byProject,
   api_re_units_save,
   api_re_units_bulkCreate,
+  api_re_units_bulkImport,
   api_re_booking_create,
   api_re_booking_byLead,
   api_re_demand_markPaid,

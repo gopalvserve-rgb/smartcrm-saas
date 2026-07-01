@@ -43562,7 +43562,10 @@ VIEWS.reinventory = async (view) => {
     const wrap = h('div', { class:'card', style:{ marginBottom:'1rem', padding:'.8rem 1rem' } });
     wrap.appendChild(h('div', { style:{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'.5rem' } },
       h('h3', { style:{ margin:0 } }, proj.name + (proj.tower_code ? ' · Tower ' + proj.tower_code : '')),
-      h('button', { class:'btn sm', onclick: () => openBulkCreateUnitsModal(proj) }, '+ Bulk-create units')
+      h('div', { style:{ display:'flex', gap:'.35rem' } },
+        h('button', { class:'btn sm', title:'Import many units from Excel/CSV (varied unit no, floor, type, size, price)', onclick: () => openImportUnitsModal(proj) }, '⬆ Import Excel'),
+        h('button', { class:'btn sm', onclick: () => openBulkCreateUnitsModal(proj) }, '+ Bulk-create units')
+      )
     ));
     if (proj.location) wrap.appendChild(h('div', { class:'muted', style:{ marginBottom:'.5rem' } }, '📍 ' + proj.location));
 
@@ -43671,6 +43674,71 @@ async function openBulkCreateUnitsModal(proj) {
         if (view) VIEWS.reinventory(view);
       } catch (e) { toast(e.message, 'err'); }
     } }, 'Create')
+  ));
+  m.appendChild(modal);
+  document.body.appendChild(m);
+}
+
+async function openImportUnitsModal(proj) {
+  // RE_BULK_IMPORT_v1 — upload Excel/CSV of varied units into a project.
+  const m = h('div', { class:'modal-backdrop', onclick: ev => { if (ev.target.classList.contains('modal-backdrop')) m.remove(); } });
+  const modal = h('div', { class:'modal' });
+  modal.appendChild(h('div', { class:'modal-head' },
+    h('h3', {}, '⬆ Import units — ' + proj.name),
+    h('button', { class:'btn ghost', onclick: () => m.remove() }, '✕')
+  ));
+
+  const file = h('input', { type:'file', accept:'.xlsx,.xls,.xlsm,.csv' });
+  const dedupe = h('input', { type:'checkbox', checked: 'checked' });
+  const info = h('div', { class:'muted', style:{ fontSize:'.82rem', margin:'.4rem 0' } },
+    'Columns: ', h('b', {}, 'unit_no'), ' (required), floor, type, carpet_sqft, price, status. Extra columns are ignored. Status must be available / blocked / booked / registered.');
+  const preview = h('div', { style:{ fontSize:'.85rem', margin:'.4rem 0', minHeight:'1.2em' } });
+  let parsedRows = [];
+
+  const dl = h('button', { class:'btn sm', onclick: () => {
+    const csv = 'unit_no,floor,type,carpet_sqft,price,status\n'
+      + 'A-101,1,2BHK,850,5000000,available\n'
+      + 'A-102,1,3BHK,1150,7200000,available\n'
+      + 'B-201,2,Shop,420,3500000,blocked\n';
+    const blob = new Blob([csv], { type:'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = 'inventory_template.csv'; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  } }, '⬇ Download template');
+
+  file.addEventListener('change', async () => {
+    parsedRows = []; preview.textContent = '';
+    const f = file.files && file.files[0];
+    if (!f) return;
+    if (f.size > 5 * 1024 * 1024) { preview.innerHTML = '<span style="color:#dc2626">File too large (max 5 MB)</span>'; return; }
+    try {
+      const rows = await parseSpreadsheet(f);
+      parsedRows = rows.filter(r => String(r.unit_no || r.unit || r.unitno || '').trim());
+      const withNo = parsedRows.length, total = rows.length;
+      preview.innerHTML = '✓ Parsed <b>' + withNo + '</b> unit rows'
+        + (total > withNo ? ' <span class="muted">(' + (total - withNo) + ' skipped — no unit_no)</span>' : '');
+    } catch (e) { preview.innerHTML = '<span style="color:#dc2626">Could not read file: ' + esc(e.message) + '</span>'; }
+  });
+
+  modal.appendChild(h('div', { class:'modal-body' },
+    info,
+    h('label', {}, 'Excel / CSV file', file),
+    h('div', { style:{ margin:'.3rem 0' } }, dl),
+    h('label', { style:{ display:'flex', alignItems:'center', gap:'.4rem', margin:'.4rem 0' } }, dedupe, h('span', {}, 'Skip unit numbers already in this project')),
+    preview
+  ));
+  modal.appendChild(h('div', { class:'actions' },
+    h('button', { class:'btn', onclick: () => m.remove() }, 'Cancel'),
+    h('button', { class:'btn primary', onclick: async () => {
+      if (!parsedRows.length) { toast('Choose a file with at least one unit_no', 'err'); return; }
+      try {
+        const r = await api('api_re_units_bulkImport', { project_id: proj.id, rows: parsedRows, dedupe: !!dedupe.checked });
+        toast('Imported ' + r.created + ' units' + (r.skipped ? ' (' + r.skipped + ' skipped)' : ''));
+        m.remove();
+        const view = $('#view') || document.querySelector('.view');
+        if (view) VIEWS.reinventory(view);
+      } catch (e) { toast(e.message, 'err'); }
+    } }, 'Import')
   ));
   m.appendChild(modal);
   document.body.appendChild(m);
