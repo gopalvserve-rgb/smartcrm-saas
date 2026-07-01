@@ -803,6 +803,8 @@
       })(),
       h('button', { class: 'btn',
         onclick: openAssigneePopup }, '👤 ' + (t.assigned_name || 'Unassigned'), ' ▾'),
+      /* WB_CHAT_DELETE_v1 — admin-only delete of this whole chat */
+      ((S.me && S.me.role === 'admin') ? h('div', { class: 'ico', title: 'Delete this entire chat (admin only)', style: { color: '#b91c1c' }, onclick: function () { wbv2DeleteChat(t); } }, '🗑') : null),
       h('div', { class: 'ico', title: 'Search' }, '🔍'),
       h('div', { class: 'ico', title: 'Open lead', onclick: () => {
         if (typeof window.openLeadModal === 'function') { try { window.openLeadModal(S.activeLeadId); return; } catch (_) {} }
@@ -1467,6 +1469,19 @@
       }
       renderThreadList();
     }
+  }
+
+  async function wbv2DeleteChat(t) {
+    if (!t || !t.phone) return;
+    var nm = t.lead_name || t.profile_name || t.phone;
+    if (!confirm('Delete the ENTIRE WhatsApp chat with ' + nm + '?\n\n\u2022 All messages in this conversation will be permanently removed.\n\u2022 The lead (if any) is NOT deleted \u2014 only the chat history.\n\nThis cannot be undone.')) return;
+    try {
+      var r = await api('api_wb_chat_delete', { phone: t.phone });
+      toast('\u2713 Chat deleted (' + (r.deleted || 0) + ' messages)', 'ok');
+      S.activeThread = null; S.messages = []; S.lead = null; S.activeLeadId = null;
+      try { renderChat(); } catch (_) {}
+      loadThreads();
+    } catch (e) { toast(e.message, 'err'); }
   }
 
   /* ---------- entry point ---------- */
