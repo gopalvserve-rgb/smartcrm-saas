@@ -868,6 +868,8 @@ async function _ensureTables() {
   catch (e) { console.warn('[re v1 _ensureTables]:', e.message); }
   try { await _installerV2({ db: db }); }
   catch (e) { console.warn('[re v2 _ensureTables]:', e.message); }
+  try { await _installerV3({ db: db }); }
+  catch (e) { console.warn('[re v3 _ensureTables]:', e.message); }
 }
 
 async function _seedREStages() {
@@ -1373,6 +1375,304 @@ framework.register({
   leadPanels: ['re_booking']
 });
 
+
+// ═══════════════════════════════════════════════════════════════════
+// RE_REQ_VISITS_v1 — Buyer Requirements + Site Visits + Broker Perf.
+// The SPA (app.js) shipped these UIs but the backend was never added,
+// so every call returned "Unknown function". Implemented here.
+// ═══════════════════════════════════════════════════════════════════
+async function _installerV3({ db: D }) {
+  await D.query(`
+    CREATE TABLE IF NOT EXISTS re_requirements (
+      id                  SERIAL PRIMARY KEY,
+      lead_id             INT NOT NULL,
+      budget_min          NUMERIC(14,2) NOT NULL DEFAULT 0,
+      budget_max          NUMERIC(14,2) NOT NULL DEFAULT 0,
+      preferred_bhk       TEXT,
+      preferred_locations TEXT,
+      preferred_projects  TEXT,
+      possession_timeline TEXT,
+      intent              TEXT DEFAULT 'self_use',
+      notes               TEXT,
+      created_by          INT,
+      created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `, []);
+  await D.query(`CREATE INDEX IF NOT EXISTS re_requirements_lead_idx ON re_requirements(lead_id)`, []);
+  await D.query(`
+    CREATE TABLE IF NOT EXISTS re_site_visits (
+      id                SERIAL PRIMARY KEY,
+      lead_id           INT NOT NULL,
+      project_id        INT,
+      unit_id           INT,
+      scheduled_at      TIMESTAMPTZ NOT NULL,
+      assigned_to       INT,
+      pickup_location   TEXT,
+      pickup_time       TIMESTAMPTZ,
+      drop_location     TEXT,
+      notes             TEXT,
+      status            TEXT NOT NULL DEFAULT 'scheduled',  -- scheduled|done|no_show|interested|not_interested|cancelled
+      outcome           TEXT,
+      feedback          TEXT,
+      reschedule_reason TEXT,
+      reminder_sent_at  TIMESTAMPTZ,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `, []);
+  await D.query(`CREATE INDEX IF NOT EXISTS re_site_visits_lead_idx ON re_site_visits(lead_id)`, []);
+  await D.query(`CREATE INDEX IF NOT EXISTS re_site_visits_sched_idx ON re_site_visits(scheduled_at)`, []);
+}
+
+// ── Buyer Requirements ─────────────────────────────────────────────
+async function api_re_requirements_save(token, payload) {
+  await framework.requireActive(PACK_ID);
+  await _ensureTables();
+  const p = payload || {};
+  if (!p.lead_id) throw new Error('lead_id required');
+  const vals = [
+    Number(p.lead_id),
+    Number(p.budget_min) || 0,
+    Number(p.budget_max) || 0,
+    p.preferred_bhk || null,
+    p.preferred_locations || null,
+    p.preferred_projects || null,
+    p.possession_timeline || null,
+    p.intent || 'self_use',
+    p.notes || null
+  ];
+  if (p.id) {
+    await db.query(
+      `UPDATE re_requirements SET budget_min=$2, budget_max=$3, preferred_bhk=$4,
+              preferred_locations=$5, preferred_projects=$6, possession_timeline=$7,
+              intent=$8, notes=$9, updated_at=now()
+       WHERE id=$1`,
+      [Number(p.id), vals[1], vals[2], vals[3], vals[4], vals[5], vals[6], vals[7], vals[8]]
+    );
+    return { ok: true, id: Number(p.id) };
+  }
+  const r = await db.query(
+    `INSERT INTO re_requirements (lead_id, budget_min, budget_max, preferred_bhk,
+       preferred_locations, preferred_projects, possession_timeline, intent, notes)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+    vals
+  );
+  return { ok: true, id: r.rows[0].id };
+}
+
+async function api_re_requirements_byLead(token, leadId) {
+  await framework.requireActive(PACK_ID);
+  await _ensureTables();
+  if (!leadId) return [];
+  const r = await db.query(
+    `SELECT * FROM re_requirements WHERE lead_id=$1 ORDER BY created_at DESC`,
+    [Number(leadId)]
+  );
+  return r.rows;
+}
+
+async function api_re_requirements_recent(token, payload) {
+  await framework.requireActive(PACK_ID);
+  await _ensureTables();
+  const limit = Math.min(Number((payload && payload.limit) || 200), 1000);
+  const r = await db.query(
+    `SELECT rq.*, l.name AS lead_name, l.phone AS lead_phone, u.name AS rep_name
+       FROM re_requirements rq
+       LEFT JOIN leads l ON l.id = rq.lead_id
+       LEFT JOIN users u ON u.id = l.assigned_to
+      ORDER BY rq.created_at DESC
+      LIMIT $1`,
+    [limit]
+  );
+  return r.rows;
+}
+
+async function api_re_requirements_match(token, reqId) {
+  await framework.requireActive(PACK_ID);
+  await _ensureTables();
+  if (!reqId) throw new Error('requirement id required');
+  const rq = (await db.query(`SELECT * FROM re_requirements WHERE id=$1`, [Number(reqId)])).rows[0];
+  if (!rq) throw new Error('Requirement not found');
+
+  const units = (await db.query(
+    `SELECT u.*, p.name AS project_name, p.location AS project_location
+       FROM re_units u LEFT JOIN re_projects p ON p.id = u.project_id
+      WHERE u.status = 'available'`, []
+  )).rows;
+
+  const bMin = Number(rq.budget_min) || 0;
+  const bMax = Number(rq.budget_max) || 0;
+  const bhk  = String(rq.preferred_bhk || '').trim().toLowerCase();
+  const locs = String(rq.preferred_locations || '').toLowerCase().split(',').map(s => s.trim()).filter(Boolean);
+  const projs = String(rq.preferred_projects || '').toLowerCase().split(',').map(s => s.trim()).filter(Boolean);
+
+  const scored = units.map(u => {
+    let score = 0;
+    const price = Number(u.price) || 0;
+    // Budget (max 45)
+    if (bMax > 0) {
+      if (price >= bMin && price <= bMax) score += 45;
+      else if (price < bMin) score += 30;                       // cheaper than asked
+      else if (price <= bMax * 1.1) score += 25;                // up to 10% over
+      else if (price <= bMax * 1.2) score += 10;                // up to 20% over
+    } else { score += 20; }
+    // BHK / type (max 30)
+    if (bhk) { if (String(u.type || '').trim().toLowerCase() === bhk) score += 30; }
+    else score += 15;
+    // Project match (max 15)
+    if (projs.length) { if (projs.some(pr => String(u.project_name || '').toLowerCase().includes(pr))) score += 15; }
+    // Location match (max 10)
+    if (locs.length) { if (locs.some(lc => String(u.project_location || '').toLowerCase().includes(lc))) score += 10; }
+    else score += 5;
+    u._score = Math.min(100, Math.round(score));
+    return u;
+  }).filter(u => u._score >= 30)
+    .sort((a, b) => b._score - a._score)
+    .slice(0, 50);
+
+  return { ok: true, requirement: rq, matches: scored };
+}
+
+// ── Site Visits ────────────────────────────────────────────────────
+async function api_re_visits_schedule(token, payload) {
+  await framework.requireActive(PACK_ID);
+  await _ensureTables();
+  const p = payload || {};
+  if (!p.lead_id) throw new Error('lead_id required');
+  if (!p.scheduled_at) throw new Error('scheduled_at required');
+  const vals = [
+    Number(p.lead_id),
+    p.project_id ? Number(p.project_id) : null,
+    p.unit_id ? Number(p.unit_id) : null,
+    p.scheduled_at,
+    p.assigned_to ? Number(p.assigned_to) : null,
+    p.pickup_location || null,
+    p.pickup_time || null,
+    p.drop_location || null,
+    p.notes || null
+  ];
+  if (p.id) {
+    await db.query(
+      `UPDATE re_site_visits SET project_id=$2, unit_id=$3, scheduled_at=$4, assigned_to=$5,
+              pickup_location=$6, pickup_time=$7, drop_location=$8, notes=$9, updated_at=now()
+       WHERE id=$1`,
+      [Number(p.id), vals[1], vals[2], vals[3], vals[4], vals[5], vals[6], vals[7], vals[8]]
+    );
+    return { ok: true, id: Number(p.id) };
+  }
+  const r = await db.query(
+    `INSERT INTO re_site_visits (lead_id, project_id, unit_id, scheduled_at, assigned_to,
+       pickup_location, pickup_time, drop_location, notes)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+    vals
+  );
+  return { ok: true, id: r.rows[0].id };
+}
+
+async function api_re_visits_byLead(token, leadId) {
+  await framework.requireActive(PACK_ID);
+  await _ensureTables();
+  if (!leadId) return [];
+  const r = await db.query(
+    `SELECT v.*, p.name AS project_name, u.unit_no, us.name AS assigned_to_name
+       FROM re_site_visits v
+       LEFT JOIN re_projects p ON p.id = v.project_id
+       LEFT JOIN re_units u    ON u.id = v.unit_id
+       LEFT JOIN users us      ON us.id = v.assigned_to
+      WHERE v.lead_id=$1
+      ORDER BY v.scheduled_at DESC`,
+    [Number(leadId)]
+  );
+  return r.rows;
+}
+
+async function api_re_visits_upcoming(token, payload) {
+  await framework.requireActive(PACK_ID);
+  await _ensureTables();
+  const days = Math.min(Number((payload && payload.days) || 14), 120);
+  const r = await db.query(
+    `SELECT v.*, l.name AS lead_name, l.phone AS lead_phone,
+            p.name AS project_name, u.unit_no, us.name AS assigned_to_name
+       FROM re_site_visits v
+       LEFT JOIN leads l       ON l.id = v.lead_id
+       LEFT JOIN re_projects p ON p.id = v.project_id
+       LEFT JOIN re_units u    ON u.id = v.unit_id
+       LEFT JOIN users us      ON us.id = v.assigned_to
+      WHERE v.status NOT IN ('done','cancelled','no_show','not_interested')
+        AND v.scheduled_at >= now() - INTERVAL '1 day'
+        AND v.scheduled_at <= now() + ($1 || ' days')::interval
+      ORDER BY v.scheduled_at ASC`,
+    [String(days)]
+  );
+  return r.rows;
+}
+
+async function api_re_visits_markDone(token, payload) {
+  await framework.requireActive(PACK_ID);
+  await _ensureTables();
+  const p = payload || {};
+  if (!p.id) throw new Error('visit id required');
+  const outcome = p.outcome || 'done';
+  // Any terminal outcome closes the visit; store the specific outcome too.
+  await db.query(
+    `UPDATE re_site_visits SET status=$2, outcome=$2, feedback=$3, updated_at=now() WHERE id=$1`,
+    [Number(p.id), outcome, p.feedback || null]
+  );
+  return { ok: true, id: Number(p.id) };
+}
+
+async function api_re_visits_reschedule(token, payload) {
+  await framework.requireActive(PACK_ID);
+  await _ensureTables();
+  const p = payload || {};
+  if (!p.id) throw new Error('visit id required');
+  if (!p.scheduled_at) throw new Error('scheduled_at required');
+  await db.query(
+    `UPDATE re_site_visits SET scheduled_at=$2, reschedule_reason=$3, status='scheduled', updated_at=now() WHERE id=$1`,
+    [Number(p.id), p.scheduled_at, p.reason || null]
+  );
+  return { ok: true, id: Number(p.id) };
+}
+
+async function api_re_visits_sendReminder(token, payload) {
+  await framework.requireActive(PACK_ID);
+  await _ensureTables();
+  const p = payload || {};
+  if (!p.id) throw new Error('visit id required');
+  // Record the reminder. (Actual WhatsApp/SMS dispatch can hook in here later.)
+  await db.query(`UPDATE re_site_visits SET reminder_sent_at=now() WHERE id=$1`, [Number(p.id)]);
+  return { ok: true, id: Number(p.id) };
+}
+
+// ── Broker / Channel-Partner performance ───────────────────────────
+async function api_re_cp_performance(token, payload) {
+  await framework.requireActive(PACK_ID);
+  await _ensureTables();
+  const p = payload || {};
+  const start = p.start_date || '1970-01-01';
+  const end   = p.end_date   || '2999-12-31';
+  const r = await db.query(
+    `SELECT cp.id, cp.name, cp.phone,
+            COUNT(b.id)::int                                           AS bookings,
+            COUNT(b.id) FILTER (WHERE b.status='registered')::int      AS registered,
+            COUNT(b.id) FILTER (WHERE b.status='cancelled')::int       AS cancelled,
+            COALESCE(SUM(b.total_price) FILTER (WHERE b.status<>'cancelled'),0) AS gmv,
+            MAX(b.booking_date)                                        AS last_booking_date,
+            COALESCE((SELECT SUM(amount_due)  FROM re_commission_ledger cl WHERE cl.partner_id=cp.id),0) AS commission_due,
+            COALESCE((SELECT SUM(amount_paid) FROM re_commission_ledger cl WHERE cl.partner_id=cp.id),0) AS commission_paid
+       FROM re_channel_partners cp
+       LEFT JOIN re_bookings b
+         ON b.channel_partner_id = cp.id
+        AND b.booking_date >= $1::date AND b.booking_date <= $2::date
+      GROUP BY cp.id, cp.name, cp.phone
+      ORDER BY gmv DESC, bookings DESC`,
+    [start, end]
+  );
+  return { ok: true, rows: r.rows };
+}
+
+
 module.exports = {
   // v1 (existing)
   api_re_projects_list,
@@ -1381,6 +1681,10 @@ module.exports = {
   api_re_units_save,
   api_re_units_bulkCreate,
   api_re_units_bulkImport,
+  // RE_REQ_VISITS_v1
+  api_re_requirements_save, api_re_requirements_byLead, api_re_requirements_recent, api_re_requirements_match,
+  api_re_visits_schedule, api_re_visits_byLead, api_re_visits_upcoming, api_re_visits_markDone, api_re_visits_reschedule, api_re_visits_sendReminder,
+  api_re_cp_performance,
   api_re_booking_create,
   api_re_booking_byLead,
   api_re_demand_markPaid,

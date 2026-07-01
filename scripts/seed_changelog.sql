@@ -1255,3 +1255,12 @@ VALUES (
   '2026-06-30',
   true
 );
+
+INSERT INTO control.changelog (title, body, kind, ship_date, is_published)
+VALUES (
+  'Real Estate — Buyer Reqs, Site Visits, Broker Perf',
+  'The Buyer Requirements, Site Visits and Broker/Channel-Partner Performance pages in the Real Estate pack are now fully functional. Capture buyer wishlists and auto-match them to available inventory, schedule/reschedule/complete site visits with pickup details and reminders, and view partner performance (bookings, GMV, commission) over any date range.',
+  'feature',
+  '2026-07-01',
+  true
+);
