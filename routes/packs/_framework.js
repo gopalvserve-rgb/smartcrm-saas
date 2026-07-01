@@ -97,6 +97,17 @@ async function isPackActive(packId) {
   } catch (_) { return false; }
 }
 
+// PACK_REQUIRE_ACTIVE_FIX_v1 — realestate.js (and future packs) call
+// framework.requireActive(packId) as a guard; it was referenced but never
+// defined, so every api_re_* endpoint threw "framework.requireActive is not
+// a function" and the Inventory Board failed to load. Define it here: throw a
+// clear error when the pack isn't active for this tenant, else resolve.
+async function requireActive(packId) {
+  const ok = await isPackActive(packId);
+  if (!ok) throw new Error('This feature requires the "' + packId + '" industry pack. Enable it in Settings \u2192 Industry Packs.');
+  return true;
+}
+
 async function installPack(packId, opts) {
   const pack = REGISTRY[packId];
   if (!pack) throw new Error('Unknown pack: ' + packId);
@@ -165,6 +176,7 @@ module.exports = {
   listAvailablePacks,
   listInstalledPacks,
   isPackActive,
+  requireActive,
   installPack,
   uninstallPack,
   _ensureInstalledPacksSchema,
