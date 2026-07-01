@@ -1981,6 +1981,25 @@ async function api_wb_chat_messages(token, phone) {
   return rows;
 }
 
+/**
+ * WB_CHAT_DELETE_v1 — Admin-only: permanently delete a WhatsApp chat thread
+ * (all messages to/from a customer phone) + its assignment rows. Does NOT
+ * delete the lead — only the chat history. Irreversible.
+ */
+async function api_wb_chat_delete(token, payload) {
+  const me = await authUser(token);
+  if (me.role !== 'admin') throw new Error('Only admins can delete chats');
+  const p = String((payload && payload.phone) || '').replace(/\D/g, '');
+  if (!p) throw new Error('phone required');
+  const del = await db.query(
+    `DELETE FROM whatsapp_messages WHERE from_number = $1 OR to_number = $1`,
+    [p]
+  );
+  try { await db.query(`DELETE FROM wa_chat_assignments WHERE phone = $1`, [p]); } catch (_) {}
+  try { await db.query(`DELETE FROM wa_chat_assignment_log WHERE phone = $1`, [p]); } catch (_) {}
+  return { ok: true, phone: p, deleted: (del && del.rowCount) || 0 };
+}
+
 async function api_wb_chat_send(token, payload) {
   // Multi-phone (Phase 2): payload.from_phone_number_id wins over the
   // default. The API is otherwise unchanged for callers that don't
@@ -4079,7 +4098,7 @@ module.exports = {
   // Templates
   api_wb_templates_sync, api_wb_templates_list, api_wb_templates_create, api_wb_templates_delete,
   // Chat
-  api_wb_chat_threads, api_wb_chat_messages, api_wb_chat_send, api_wb_initiate_chat,
+  api_wb_chat_threads, api_wb_chat_messages, api_wb_chat_send, api_wb_chat_delete, api_wb_initiate_chat,
   api_wb_botPause, api_wb_botResume, api_wb_botPauseStatus,
   api_wb_chat_assign, api_wb_chat_assignments_list,
   api_wb_assign_settings_get, api_wb_assign_settings_save,

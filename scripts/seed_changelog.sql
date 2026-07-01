@@ -1237,3 +1237,12 @@ VALUES (
   '2026-06-30',
   true
 );
+
+INSERT INTO control.changelog (title, body, kind, ship_date, is_published)
+VALUES (
+  'Delete WhatsApp chats (admin)',
+  'Admins can now permanently delete an entire WhatsApp chat thread from the WhatsApp inbox. Open any chat and use the new "🗑 Delete" button in the chat header — it removes all messages in that conversation (the lead itself is kept). Visible to admins only; the action asks for confirmation and cannot be undone.',
+  'feature',
+  '2026-06-30',
+  true
+);

@@ -19869,6 +19869,17 @@ async function wbChat() {
       // null). Opens a small modal with editable name/owner/status/source/
       // notes pre-filled with the tenant's WhatsApp auto-lead defaults.
       (!threadMeta.lead_id ? h('button', { class: 'btn sm primary', title: 'Convert this WhatsApp chat into a CRM lead', style: { background: '#16a34a', borderColor: '#16a34a', color: '#fff' }, onclick: () => _wbOpenConvertToLeadModal(phone, threadMeta) }, '🎯 Save as lead') : null),
+      /* WB_CHAT_DELETE_v1 — admin-only delete of this whole chat thread */
+      ((CRM.user && CRM.user.role === 'admin') ? h('button', { class: 'btn sm ghost', title: 'Delete this entire chat (admin only)', style: { color: '#b91c1c' }, onclick: async () => {
+        if (!confirm('Delete the ENTIRE WhatsApp chat with ' + (threadMeta.lead_name || phone) + '?\n\n• All messages in this thread will be permanently removed.\n• The lead (if any) is NOT deleted — only the chat history.\n\nThis cannot be undone.')) return;
+        try {
+          const r = await api('api_wb_chat_delete', { phone: phone });
+          toast('✓ Chat deleted (' + (r.deleted || 0) + ' messages)');
+          openPhone = null;
+          if (typeof backToList === 'function') backToList();
+          lastThreadsFingerprint = ''; if (typeof renderThreadList === 'function') renderThreadList();
+        } catch (e) { toast(e.message, 'err'); }
+      } }, '🗑 Delete') : null),
       h('button', { class: 'btn sm ghost', title: 'Refresh this thread', onclick: () => renderActiveThread(true) }, '↻')
     );
     right.appendChild(head);
