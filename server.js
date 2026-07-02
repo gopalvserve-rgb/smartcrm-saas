@@ -355,6 +355,23 @@ app.get('/fb/auth/callback', async (req, res) => {
   return _runAsTenant(slug, req, res, handler);
 });
 
+// ---- Google Calendar OAuth callback (one URL for all tenants) ----
+// GCAL_CALLBACK_FIX_v1 (2026-07-02): routes/googleCalendar sets its redirect
+// URI to <PUBLIC_BASE_URL>/saas/google/callback, but this route was never
+// registered — so after the user approved on Google, the redirect landed on
+// an unhandled path and fell through to the tenant resolver, which returned
+// "This workspace is not active." Register it here (same pattern as the FB
+// callback): decode the state JWT for the tenant slug, then run the handler
+// inside that tenant's storage scope so it can upsert google_calendar_tokens.
+app.get('/saas/google/callback', async (req, res) => {
+  const stateRaw = (req.query.state || '').toString();
+  let slug;
+  try { const peek = jwtLib.decode(stateRaw); if (peek && peek.slug) slug = peek.slug; } catch (_) {}
+  const handler = require('./routes/googleCalendar').expressOAuthCallback;
+  if (!slug) return handler(req, res);
+  return _runAsTenant(slug, req, res, handler);
+});
+
 // ---- Meta Lead Ads webhook (one URL for all tenants) ------------
 //
 // FB calls these in two flavours:
