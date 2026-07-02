@@ -29,6 +29,7 @@ const tenantApi = require('./routes/saas/tenantApi');
 // SAAS_AUTO_INVOICE_v1 — start the auto-invoice sweep (gated on AUTO_INVOICE_DAYS_BEFORE>=1)
 try { require('./utils/saasInvoiceAutoGen').startSweep(); } catch (e) { console.warn('[saasInvoiceAutoGen] start failed:', e.message); }
 try { require('./utils/showcaseFollowupSeed').startSweep(); } catch (e) { console.warn('[showcaseFollowupSeed] start failed:', e.message); }
+try { require('./utils/invoicingModuleBackfill').startSweep(); } catch (e) { console.warn('[invoicingModuleBackfill] start failed:', e.message); }
 
 
 // ---- SaaS modules (control plane) -----------------------------
