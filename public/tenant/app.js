@@ -4817,6 +4817,8 @@ const LEAD_COLUMNS = [
   { key: 'email',       label: 'Email',         default: false },
   { key: 'whatsapp',    label: 'WhatsApp',      default: false },
   { key: 'source',      label: 'Source',        default: true },
+  /* LEAD_LIST_CAMPAIGN_COL_v1 (2026-07-02) — show/hide Campaign name. Off by default. */
+  { key: 'campaign',    label: 'Campaign',      default: false },
   { key: 'product',     label: 'Product',       default: false },
   { key: 'status',      label: 'Status',        default: true },
   { key: 'stage',       label: 'Stage',         default: true },
@@ -7332,6 +7334,7 @@ function renderCell(col, l, statuses) {
     case 'email':    return h('td', {}, l.email || '');
     case 'whatsapp': return h('td', {}, l.whatsapp || '');
     case 'source':   return h('td', {}, l.source || '');
+    case 'campaign': return h('td', {}, l.campaign_name || (l.campaign_id ? ('#' + l.campaign_id) : ''));
     case 'product':  return h('td', {}, l.product_name || l.product || '');
     case 'status': {
       const sel = h('select', {
