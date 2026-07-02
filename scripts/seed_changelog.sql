@@ -1273,3 +1273,12 @@ VALUES (
   '2026-07-01',
   true
 );
+
+INSERT INTO control.changelog (title, body, kind, ship_date, is_published)
+VALUES (
+  'Clearer sidebar menus & submenus',
+  'The left navigation is easier to read at a glance. Section headings now sit above their items as muted labels, and each group of submenu items is drawn against an indented rail so you can instantly tell which items belong to which section. Hovering a submenu item highlights it with a clearly brighter pill, and the item for the page you are on shows a bright accent tab. The sidebar keeps its dark theme.',
+  'improvement',
+  '2026-07-03',
+  true
+);

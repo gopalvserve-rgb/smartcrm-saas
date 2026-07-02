@@ -8,6 +8,8 @@
   --sidebar-bg:   #0f172a;
   --sidebar-fg:   #f1f5f9;
   --sidebar-hi:   #1e293b;
+  --sidebar-hover:#334155;   /* SIDEBAR_SUBMENU_CLARITY_v1: clearly-brighter hover pill */
+  --sidebar-rail: #3b4a63;   /* indent rail behind submenu items */
   --card:         #ffffff;
   --card-hover:   #fafbff;
   --border:       #e5e7eb;
@@ -206,7 +208,7 @@ body.sidebar-collapsed .sidebar { width: 0; padding-left: 0; padding-right: 0; o
   text-decoration: none;
   -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
 }
-.sidebar nav a:hover  { background: var(--sidebar-hi); color: #fff; text-decoration: none; }
+.sidebar nav a:hover  { background: var(--sidebar-hover); color: #fff; text-decoration: none; }
 .sidebar nav a.active { background: var(--brand); color: #fff; font-weight: 600; box-shadow: 0 1px 3px rgba(99,102,241,.35); }
 .nav-icon { font-size: 1.05rem; width: 1.5rem; text-align: center; }
 
@@ -217,8 +219,8 @@ body.sidebar-collapsed .sidebar { width: 0; padding-left: 0; padding-right: 0; o
 .nav-group:first-child { margin-top: .25rem; }
 .nav-group-head {
   background: transparent; border: 0;
-  color: #f1f5f9;
-  font-size: .78rem; font-weight: 700;
+  color: #7c8aa3;
+  font-size: .74rem; font-weight: 700;
   letter-spacing: .06em; text-transform: uppercase;
   padding: .55rem .6rem .45rem; margin: 0;
   display: flex; align-items: center; gap: .55rem;
@@ -226,12 +228,28 @@ body.sidebar-collapsed .sidebar { width: 0; padding-left: 0; padding-right: 0; o
   border-radius: var(--radius-sm);
   -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
 }
-.nav-group-head:hover { background: var(--sidebar-hi); color: #fff; }
+.nav-group-head:hover { background: var(--sidebar-hover); color: #fff; }
 .nav-group-icon { font-size: 1rem; }
 .nav-group-label { flex: 1; }
 .nav-group-chev { font-size: .8rem; opacity: .85; transition: transform .15s ease; }
 .nav-group.collapsed .nav-group-chev { transform: rotate(-90deg); }
-.nav-group-items { display: flex; flex-direction: column; gap: 2px; padding-left: .15rem; padding-top: .2rem; }
+.nav-group-items {
+  display: flex; flex-direction: column; gap: 2px;
+  margin-left: .85rem; padding-left: .5rem; padding-top: .2rem;
+  border-left: 2px solid var(--sidebar-rail);   /* SIDEBAR_SUBMENU_CLARITY_v1: nesting rail */
+}
+/* SIDEBAR_SUBMENU_CLARITY_v1 — submenu links read as children of their section */
+.nav-group-items a { color: #c7d2e0; font-weight: 500; position: relative; }
+.nav-group-items a:hover { background: var(--sidebar-hover); color: #fff; }
+.nav-group-items a.active {
+  background: var(--brand); color: #fff; font-weight: 600;
+  box-shadow: 0 1px 3px rgba(99,102,241,.35);
+}
+/* bright accent tab so the active submenu item pops against the rail */
+.nav-group-items a.active::before {
+  content: ''; position: absolute; left: -.5rem; top: 50%; transform: translateY(-50%);
+  width: 3px; height: 60%; border-radius: 2px; background: #a5b4fc;
+}
 .nav-group.collapsed .nav-group-items { display: none; }
 
 /* SIDEBAR_RAIL_v1 (Option H) — auto-collapsing icon rail + hover fly-outs */
@@ -1091,7 +1109,7 @@ tbody tr.row-tat-violation:hover { background: #fee2e2; }
      inline pills, items stay in a row, and groups never collapse. */
   .sidebar nav .nav-group { flex-direction: row; align-items: center; margin-top: 0; }
   .sidebar nav .nav-group-head { display: none; }
-  .sidebar nav .nav-group-items { flex-direction: row; padding-left: 0; gap: .35rem; }
+  .sidebar nav .nav-group-items { flex-direction: row; padding-left: 0; margin-left: 0; border-left: 0; gap: .35rem; }
   .sidebar nav .nav-group.collapsed .nav-group-items { display: flex; }
   .form-grid { grid-template-columns: 1fr; }
   .chart-grid { grid-template-columns: 1fr; }
