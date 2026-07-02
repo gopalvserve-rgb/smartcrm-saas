@@ -152,6 +152,16 @@ async function _applyReportFilters(rows, filters, users) {
       rows = rows.filter(l => Number(l.campaign_id) === Number(cid));
     }
   }
+  // DASH_CAMPAIGN_FILTER_v1 (2026-07-02) — the Dashboard sends campaign_ids:[...]
+  // (plural) to scope every KPI to the selected campaigns; only the singular
+  // campaign_id above was handled, so the dashboard campaign filter did nothing.
+  if (Array.isArray(filters.campaign_ids) && filters.campaign_ids.length) {
+    const wantNone = filters.campaign_ids.some(v => v === 0 || v === '0' || v === 'none');
+    const wantIds = new Set(
+      filters.campaign_ids.map(v => Number(v)).filter(n => Number.isFinite(n) && n > 0)
+    );
+    rows = rows.filter(l => (l.campaign_id == null) ? wantNone : wantIds.has(Number(l.campaign_id)));
+  }
   // Qualified filter — lead-level boolean. '1' = qualified only, '0' = not
   // qualified. Empty/undefined = no filter (so the default behaviour is the
   // same as before this filter existed).

@@ -9680,6 +9680,11 @@ async function openLeadModal(id) {
       product_id: Number(fd.get('product_id')) || null,
       status_id: Number(fd.get('status_id')) || null,
       assigned_to: Number(fd.get('assigned_to')) || null,
+      // LEAD_CAMPAIGN_SAVE_v1 (2026-07-02) — the 🎯 Campaign dropdown was rendered
+      // and its value read on open, but campaign_id was NEVER put in the save
+      // payload, so selecting a campaign never persisted (reverted to None on
+      // reopen) and the dashboard campaign filter had nothing to match.
+      campaign_id: fd.get('campaign_id') ? (Number(fd.get('campaign_id')) || null) : null,
       tags: tagsValue,
       next_followup_at: localDtInputToIso(fd.get('next_followup_at')),
       city: fd.get('city'), notes: fd.get('notes'),
