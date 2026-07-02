@@ -68,7 +68,13 @@ const pool = new Pool({
   ssl,
   // POOL_EVICT_v1: lowered control pool max from 10 to 5 since per-tenant pools (utils/tenantPool.js) carry their own connections — combined max keeps us under PG max_connections.
   max: Number(process.env.PG_POOL_MAX || 5),
-  idleTimeoutMillis: 30_000,
+  // WARM_CONN_v1 (2026-07-02) — keep the control-plane connection warm too
+  // (TCP keepAlive + longer idle) so it isn't re-handshaked every request
+  // during Railway network degradation. REVERT: idleTimeoutMillis->30_000,
+  // remove the keepAlive lines.
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 10_000,
+  idleTimeoutMillis: 120_000,
   connectionTimeoutMillis: 10_000
 });
 

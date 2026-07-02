@@ -126,7 +126,16 @@ function poolFor(tenant) {
     connectionString: url,
     ssl: /sslmode=require|railway|neon|supabase|render/i.test(url) ? { rejectUnauthorized: false } : false,
     max: POOL_PER_TENANT_MAX,
-    idleTimeoutMillis: 10_000,
+    // WARM_CONN_v1 (2026-07-02) — during Railway's packet-loss incident,
+    // opening a fresh DB connection took ~6-10s, and the old 10s idle timeout
+    // dropped connections between clicks so almost every request re-paid that
+    // handshake. Keep connections WARM: TCP keepAlive so the socket isn't
+    // dropped while idle, and a longer idle timeout (10s -> 2min) so a normal
+    // click-gap reuses the existing connection instead of reconnecting.
+    // REVERT: set idleTimeoutMillis back to 10_000 and drop the keepAlive lines.
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10_000,
+    idleTimeoutMillis: 120_000,
     // POOL_FIX_v1 — bumped 5s → 12s. Was timing out on login when PG was
     // momentarily saturated by background sweeps; 12s gives the LRU enough
     // breathing room to evict an idle pool and recover.
