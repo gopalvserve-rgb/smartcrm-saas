@@ -3338,6 +3338,22 @@ async function _handleInbound(m, value) {
     const triggerLc = String(text || '').toLowerCase().trim();
     if (!triggerLc) return;
 
+    // MANUAL_BOT_PAUSE_v2 (2026-07-02) — the per-chat "Pause bot" button must
+    // stop KEYWORD bots too, not just the AI bot. The AI bot checks wa_bot_pauses
+    // inside aiBot._shouldSuppress, but Message/Template bots below did not — so a
+    // paused thread kept getting auto-replies. Gate them by the same pause row
+    // (keyed by last-10-digit phone tail, matching api_wb_botPause).
+    try {
+      const _pauseTail = String(from || '').replace(/\D/g, '').slice(-10);
+      if (_pauseTail) {
+        const _pz = await db.query(
+          `SELECT 1 FROM wa_bot_pauses WHERE phone = $1 AND paused_until > NOW() LIMIT 1`,
+          [_pauseTail]
+        );
+        if (_pz.rows.length) return; // agent paused this chat — skip all keyword bots
+      }
+    } catch (_) { /* table may not exist yet — treat as not paused */ }
+
     const msgBots = await db.getAll('wa_message_bots');
     for (const b of msgBots) {
       if (Number(b.is_active) !== 1) continue;

@@ -444,6 +444,20 @@ async function handleInbound({ phone, leadId, inboundText, inboundButtonId, inbo
   await _ensureSchema().catch(() => {});
   const phoneNorm = String(phone || '').replace(/\D/g, '').slice(-15);
   if (!phoneNorm) return false;
+  // MANUAL_BOT_PAUSE_v2 (2026-07-02) — respect the per-chat "Pause bot" button.
+  // If an agent paused this thread, don't run/advance bot flows (the AI bot and
+  // keyword Message/Template bots also skip while paused), so a paused chat gets
+  // NO bot messages of any kind. Keyed by last-10-digit tail (api_wb_botPause).
+  try {
+    const _pauseTail = phoneNorm.slice(-10);
+    if (_pauseTail) {
+      const _pz = await db.query(
+        `SELECT 1 FROM wa_bot_pauses WHERE phone = $1 AND paused_until > NOW() LIMIT 1`,
+        [_pauseTail]
+      );
+      if (_pz.rows.length) return false;
+    }
+  } catch (_) { /* table may not exist yet — treat as not paused */ }
   const ctx = { wb, cfg: inboundPhoneId ? await wb._cfgForPhone(inboundPhoneId).catch(() => wb._cfg()) : await wb._cfg() };
 
   // Check for an active session on this phone first.
