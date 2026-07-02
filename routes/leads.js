@@ -636,7 +636,12 @@ async function api_leads_list(token, filters) {
   // campaign_name + form_name without an N+1 inside _hydrate.
   let campaignsById = {};
   try {
-    const camps = await db.getAll('campaigns');
+    // CAMPAIGN_NAME_HYDRATE_FIX_v1 (2026-07-02) — use a raw query, NOT
+    // db.getAll('campaigns'): the `campaigns` table isn't in the db/pg.js
+    // SCHEMA whitelist, so db.getAll threw "Unknown table: campaigns" and the
+    // catch swallowed it, leaving campaignsById empty → campaign_name blank →
+    // the lead list showed the '#<id>' fallback instead of the campaign name.
+    const camps = (await db.query('SELECT * FROM campaigns')).rows;
     camps.forEach(c => { campaignsById[Number(c.id)] = c; });
   } catch (_) { /* table may not exist on very old tenants */ }
   // SUB_STATUS_v1 — batch-load active sub_statuses once and attach name to each lead.
