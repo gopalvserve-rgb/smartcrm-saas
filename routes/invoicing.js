@@ -662,6 +662,22 @@ async function api_invoicing_invoices_pdf_html(token, id) {
        <tr><td>SGST</td><td style="text-align:right">${fmt(inv.sgst)}</td></tr>`
     : `<tr><td>IGST</td><td style="text-align:right">${fmt(inv.igst)}</td></tr>`;
 
+  // --- Brand accent (auto-match tenant branding) ----------------------
+  // Pull the tenant's brand colour from config so every tenant's invoice
+  // matches their CRM branding. Falls back to a professional indigo.
+  let accent = '#4f46e5';
+  try {
+    const _b = (await db.query("SELECT value FROM config WHERE key='BRAND_PRIMARY_COLOR' LIMIT 1")).rows[0];
+    let v = _b && String(_b.value || '').trim();
+    if (v) { if (v[0] !== '#') v = '#' + v; if (/^#[0-9a-fA-F]{6}$/.test(v)) accent = v; }
+  } catch (_) {}
+  const _hx = (h) => { h = String(h || '').replace('#',''); return h.length === 3 ? h.split('').map(c => c + c).join('') : h; };
+  const _rgba = (hex, a) => { const h = _hx(hex); return `rgba(${parseInt(h.slice(0,2),16)},${parseInt(h.slice(2,4),16)},${parseInt(h.slice(4,6),16)},${a})`; };
+  const _darken = (hex, f) => { const h = _hx(hex); const r = Math.round(parseInt(h.slice(0,2),16)*(1-f)); const g = Math.round(parseInt(h.slice(2,4),16)*(1-f)); const b = Math.round(parseInt(h.slice(4,6),16)*(1-f)); return `rgb(${r},${g},${b})`; };
+  const accentDark = _darken(accent, 0.38);
+  const accentSoft = _rgba(accent, 0.10);
+  const accentLine = _rgba(accent, 0.28);
+
   // --- UPI QR (SCAN & PAY) --------------------------------------------
   // Rendered only when the company has a UPI id AND the QR toggle is on
   // (inv_settings.enable_qr, default 1). Embedded as an inline base64 data
@@ -678,12 +694,18 @@ async function api_invoicing_invoices_pdf_html(token, id) {
     const _upiUri = `upi://pay?pa=${encodeURIComponent(_upiId)}&pn=${_pn}&am=${_amt}&cu=INR&tn=${_tn}`;
     try {
       const QRCode = require('qrcode');
-      const svg = await QRCode.toString(_upiUri, { type: 'svg', margin: 0, width: 128,
+      const svg = await QRCode.toString(_upiUri, { type: 'svg', margin: 0, width: 168,
         color: { dark: '#0f172a', light: '#ffffff' } });
       const dataUri = 'data:image/svg+xml;base64,' + Buffer.from(svg).toString('base64');
-      qrImgTag = `<img src="${dataUri}" width="128" height="128" alt="Scan to pay via UPI"/>`;
+      qrImgTag = `<img src="${dataUri}" width="150" height="150" alt="Scan to pay via UPI"/>`;
     } catch (_e) { qrImgTag = ''; }
   }
+
+  // --- Brand mark: logo, else initials monogram in the accent colour ---
+  const _initials = String(inv.company_name || '').split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || 'CO';
+  const brandMark = company.logo_url
+    ? `<img class="logo" src="${esc(company.logo_url)}"/>`
+    : `<div class="logo-fallback">${esc(_initials)}</div>`;
 
   const _statusStamp =
       inv.status === 'cancelled' ? '<div class="stamp cancelled">CANCELLED</div>'
@@ -695,7 +717,7 @@ async function api_invoicing_invoices_pdf_html(token, id) {
       <div class="paybox">
         <div class="paybox-title">Payment</div>
         <div class="paybox-body">
-          ${qrImgTag ? `<div class="qr">${qrImgTag}<div class="qr-cap">Scan &amp; Pay (UPI)</div></div>` : ''}
+          ${qrImgTag ? `<div class="qr">${qrImgTag}<div class="qr-cap">Scan &amp; Pay</div><div class="qr-apps">PhonePe · GPay · Paytm · any UPI app</div></div>` : ''}
           <div class="paybox-lines">
             ${_upiId ? `<div><span class="k">UPI ID</span><span class="v">${esc(_upiId)}</span></div>` : ''}
             ${company.bank_name ? `<div><span class="k">Bank</span><span class="v">${esc(company.bank_name)}</span></div>` : ''}
@@ -711,77 +733,69 @@ async function api_invoicing_invoices_pdf_html(token, id) {
 <style>
   * { box-sizing:border-box; }
   html,body { margin:0; padding:0; }
-  body { font-family:'Segoe UI','Helvetica Neue',Arial,sans-serif; color:#1e293b; font-size:12.5px; line-height:1.45; background:#eef2f7; }
-  .sheet { max-width:820px; margin:0 auto; background:#fff; }
-  .accent-bar { height:8px; background:linear-gradient(90deg,#4f46e5 0%,#6366f1 55%,#0ea5e9 100%); }
-  .pad { padding:30px 34px; }
-  /* header */
-  .top { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; }
-  .brand { display:flex; gap:14px; align-items:flex-start; }
-  .brand img { max-height:58px; max-width:150px; object-fit:contain; }
-  .brand h1 { margin:0 0 2px; font-size:19px; font-weight:800; letter-spacing:.2px; color:#0f172a; }
-  .brand .sub { font-size:11.5px; color:#64748b; }
+  body { font-family:'Segoe UI','Helvetica Neue',Arial,sans-serif; color:#1e293b; font-size:12px; line-height:1.4; background:#eef2f7; }
+  .sheet { max-width:800px; margin:0 auto; background:#fff; }
+  .accent-bar { height:7px; background:${accent}; }
+  .pad { padding:24px 30px; }
+  .top { display:flex; justify-content:space-between; align-items:flex-start; gap:20px; }
+  .brand { display:flex; gap:13px; align-items:flex-start; }
+  .logo { max-height:60px; max-width:168px; object-fit:contain; }
+  .logo-fallback { width:56px; height:56px; border-radius:12px; background:${accent}; color:#fff; font-weight:800; font-size:21px; display:flex; align-items:center; justify-content:center; letter-spacing:.5px; }
+  .brand h1 { margin:0 0 2px; font-size:18px; font-weight:800; letter-spacing:.2px; color:#0f172a; }
+  .brand .sub { font-size:11px; color:#64748b; }
   .brand .sub b { color:#334155; }
-  .inv-panel { text-align:right; min-width:210px; }
-  .inv-panel .ttl { font-size:24px; font-weight:800; letter-spacing:2px; color:#4f46e5; margin:0; }
-  .inv-panel .no { margin-top:6px; font-size:13px; font-weight:700; color:#0f172a; }
-  .inv-panel .row { font-size:11.5px; color:#64748b; margin-top:2px; }
+  .inv-panel { text-align:right; min-width:200px; }
+  .inv-panel .ttl { font-size:23px; font-weight:800; letter-spacing:2px; color:${accent}; margin:0; }
+  .inv-panel .no { margin-top:5px; font-size:13px; font-weight:700; color:#0f172a; }
+  .inv-panel .row { font-size:11px; color:#64748b; margin-top:2px; }
   .inv-panel .row b { color:#334155; }
   .proforma-note { color:#b45309; font-weight:700; font-size:11px; }
-  /* parties */
-  .parties { display:flex; gap:16px; margin-top:22px; }
-  .party { flex:1; background:#f8fafc; border:1px solid #eef2f7; border-radius:10px; padding:12px 14px; }
-  .party h4 { margin:0 0 6px; font-size:10.5px; text-transform:uppercase; letter-spacing:.8px; color:#6366f1; }
-  .party .nm { font-weight:700; color:#0f172a; font-size:13px; }
-  .party div.ln { font-size:11.8px; color:#475569; }
-  /* lines */
-  table.lines { width:100%; border-collapse:collapse; margin-top:20px; border-radius:10px; overflow:hidden; }
-  table.lines thead th { background:#0f172a; color:#e2e8f0; font-size:10.5px; text-transform:uppercase; letter-spacing:.5px; padding:9px 10px; text-align:left; font-weight:600; }
-  table.lines tbody td { padding:9px 10px; border-bottom:1px solid #eef2f7; font-size:12.2px; vertical-align:top; }
+  .parties { display:flex; gap:14px; margin-top:18px; }
+  .party { flex:1; background:#f8fafc; border:1px solid #eef2f7; border-radius:10px; padding:11px 13px; }
+  .party h4 { margin:0 0 5px; font-size:10px; text-transform:uppercase; letter-spacing:.8px; color:${accentDark}; }
+  .party .nm { font-weight:700; color:#0f172a; font-size:12.5px; }
+  .party div.ln { font-size:11.3px; color:#475569; }
+  table.lines { width:100%; border-collapse:collapse; margin-top:16px; border-radius:10px; overflow:hidden; }
+  table.lines thead th { background:#0f172a; color:#e2e8f0; font-size:10px; text-transform:uppercase; letter-spacing:.5px; padding:8px 9px; text-align:left; font-weight:600; }
+  table.lines tbody td { padding:7px 9px; border-bottom:1px solid #eef2f7; font-size:11.8px; vertical-align:top; }
   table.lines tbody tr:nth-child(even) td { background:#f8fafc; }
-  .r { text-align:right; }
-  .c { text-align:center; }
-  .hsn { font-size:10.5px; color:#94a3b8; }
-  /* bottom */
-  .bottom { display:flex; gap:20px; margin-top:20px; align-items:flex-start; }
-  .bottom-left { flex:1.25; }
-  .bottom-right { flex:1; }
+  .r { text-align:right; } .c { text-align:center; }
+  .hsn { font-size:10px; color:#94a3b8; }
+  .bottom { display:flex; gap:18px; margin-top:16px; align-items:flex-start; }
+  .bottom-left { flex:1.25; } .bottom-right { flex:1; }
   .tot { width:100%; border-collapse:collapse; }
-  .tot td { padding:7px 10px; font-size:12.5px; }
+  .tot td { padding:6px 10px; font-size:12px; }
   .tot tr td:last-child { text-align:right; font-variant-numeric:tabular-nums; }
   .tot tr.sub td { border-bottom:1px solid #eef2f7; color:#475569; }
-  .tot tr.grand td { background:#eef2ff; color:#0f172a; font-weight:800; font-size:15px; border-top:2px solid #4f46e5; }
+  .tot tr.grand td { background:${accentSoft}; color:${accentDark}; font-weight:800; font-size:14.5px; border-top:2px solid ${accent}; }
   .tot tr.paid td { color:#059669; }
   .tot tr.due td { color:#b91c1c; font-weight:700; }
-  .words { margin-top:12px; font-size:11.8px; color:#475569; background:#f8fafc; border-left:3px solid #6366f1; padding:8px 12px; border-radius:0 8px 8px 0; }
+  .words { margin-top:11px; font-size:11.3px; color:#475569; background:#f8fafc; border-left:3px solid ${accent}; padding:7px 11px; border-radius:0 8px 8px 0; }
   .words b { color:#334155; }
-  /* pay box */
   .paybox { border:1px solid #e2e8f0; border-radius:12px; overflow:hidden; }
-  .paybox-title { background:#f1f5f9; padding:8px 14px; font-size:10.5px; text-transform:uppercase; letter-spacing:.8px; color:#475569; font-weight:700; }
-  .paybox-body { display:flex; gap:14px; padding:14px; align-items:center; }
+  .paybox-title { background:${accentSoft}; padding:7px 13px; font-size:10px; text-transform:uppercase; letter-spacing:.8px; color:${accentDark}; font-weight:700; }
+  .paybox-body { display:flex; gap:14px; padding:13px; align-items:center; }
   .qr { text-align:center; }
-  .qr img { border:1px solid #e2e8f0; border-radius:8px; padding:4px; background:#fff; }
-  .qr-cap { font-size:10px; color:#64748b; margin-top:4px; font-weight:600; }
-  .paybox-lines { flex:1; font-size:12px; }
+  .qr img { border:1px solid #e2e8f0; border-radius:8px; padding:5px; background:#fff; }
+  .qr-cap { font-size:11px; color:#0f172a; margin-top:5px; font-weight:700; }
+  .qr-apps { font-size:9px; color:#94a3b8; margin-top:1px; }
+  .paybox-lines { flex:1; font-size:11.8px; }
   .paybox-lines > div { display:flex; justify-content:space-between; gap:10px; padding:3px 0; border-bottom:1px dashed #eef2f7; }
   .paybox-lines .k { color:#94a3b8; }
   .paybox-lines .v { color:#0f172a; font-weight:600; text-align:right; word-break:break-all; }
   .paybox-lines .due .v { color:#b91c1c; }
-  /* footer */
-  .foot { margin-top:22px; padding-top:14px; border-top:1px solid #eef2f7; font-size:11.5px; color:#64748b; display:flex; gap:24px; justify-content:space-between; }
-  .foot .notes { flex:1.4; }
-  .foot .sign { flex:1; text-align:right; }
+  .foot { margin-top:18px; padding-top:12px; border-top:1px solid #eef2f7; font-size:11px; color:#64748b; display:flex; gap:22px; justify-content:space-between; }
+  .foot .notes { flex:1.4; } .foot .sign { flex:1; text-align:right; }
   .foot b { color:#334155; }
-  .terms { margin-top:8px; font-size:10.8px; color:#64748b; line-height:1.5; }
-  .sign-space { height:46px; }
-  .thanks { text-align:center; margin-top:16px; font-size:11px; color:#94a3b8; }
-  /* stamp */
-  .stamp { display:inline-block; margin-top:8px; padding:4px 14px; border-radius:6px; font-weight:800; letter-spacing:1px; font-size:12px; border:2px solid; transform:rotate(-4deg); }
+  .terms { margin-top:7px; font-size:10.3px; color:#64748b; line-height:1.45; }
+  .sign-space { height:40px; }
+  .thanks { text-align:center; margin-top:13px; font-size:10.5px; color:#94a3b8; }
+  .stamp { display:inline-block; margin-top:7px; padding:3px 13px; border-radius:6px; font-weight:800; letter-spacing:1px; font-size:12px; border:2px solid; transform:rotate(-4deg); }
   .stamp.paid { color:#059669; border-color:#059669; }
   .stamp.cancelled { color:#b91c1c; border-color:#b91c1c; }
   .stamp.draft { color:#b45309; border-color:#b45309; }
-  @page { size:A4; margin:12mm; }
-  @media print { body { background:#fff; } .sheet { max-width:none; } .pad { padding:0; } }
+  @page { size:A4; margin:11mm; }
+  @media print { body { background:#fff; font-size:11px; } .sheet { max-width:none; } .pad { padding:0; } }
 </style>
 </head><body>
   <div class="sheet">
@@ -789,7 +803,7 @@ async function api_invoicing_invoices_pdf_html(token, id) {
     <div class="pad">
       <div class="top">
         <div class="brand">
-          ${company.logo_url ? `<img src="${esc(company.logo_url)}"/>` : ''}
+          ${brandMark}
           <div>
             <h1>${esc(inv.company_name)}</h1>
             <div class="sub">${esc(company.address || '')}${company.city ? ', ' + esc(company.city) : ''}${company.pincode ? ' ' + esc(company.pincode) : ''}</div>
@@ -824,13 +838,13 @@ async function api_invoicing_invoices_pdf_html(token, id) {
 
       <table class="lines">
         <thead><tr>
-          <th style="width:32px">#</th>
+          <th style="width:30px">#</th>
           <th>Description</th>
-          <th class="r" style="width:80px">Qty</th>
-          <th class="r" style="width:92px">Rate</th>
-          <th class="r" style="width:96px">Taxable</th>
-          <th class="r" style="width:58px">GST%</th>
-          <th class="r" style="width:104px">Amount</th>
+          <th class="r" style="width:76px">Qty</th>
+          <th class="r" style="width:88px">Rate</th>
+          <th class="r" style="width:92px">Taxable</th>
+          <th class="r" style="width:54px">GST%</th>
+          <th class="r" style="width:100px">Amount</th>
         </tr></thead>
         <tbody>${linesHtml}</tbody>
       </table>
