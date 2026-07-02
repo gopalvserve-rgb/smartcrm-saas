@@ -76,14 +76,27 @@ async function api_notifications_mine(token, opts) {
   allUsers.forEach(u => { usersById[Number(u.id)] = u; });
   const statusById = {};
   allStatuses.forEach(s => { statusById[Number(s.id)] = s; });
+  // FU_ISFINAL_GUARD_v1 — some tenants have EVERY status flagged is_final=1
+  // (a seeding/config bug, e.g. miga-fashion-institute had all 7 statuses final).
+  // When that happens the is_final filter would hide the entire pipeline and the
+  // Follow-ups page shows nothing. So: only trust is_final if it actually
+  // discriminates (at least one non-final status exists). When it doesn't, fall
+  // back to a name heuristic that still hides only genuinely-closed statuses.
+  const _finalCount = allStatuses.filter(s => Number(s.is_final) === 1).length;
+  const _isFinalUsable = allStatuses.length > 0 && _finalCount < allStatuses.length;
+  const _looksFinal = (name) => {
+    const n = _normStatus(name);
+    return /(close|closed|lost|won|junk|cancel|complete|completed|dropped|deadlead|converted|booked|disbursed|admissiondone|notinterested)/.test(n);
+  };
   const _isAllowedLeadStatus = (lead) => {
     if (!lead) return false;
     const s = statusById[Number(lead.status_id)];
     if (!s) return true; // No status row → don't hide. Better to show than to lose data.
     // Primary rule: anything that's NOT a final status is eligible for follow-up.
     // Final statuses (Won/Lost/Booked/Junk/Cancelled etc.) are excluded.
-    if (Number(s.is_final) === 1) return false;
-    return true;
+    if (_isFinalUsable) return Number(s.is_final) !== 1;
+    // is_final is unusable for this tenant → hide only clearly-closed statuses by name.
+    return !_looksFinal(s.name);
   };
 
   // Build a map of (lead_id -> open followup) so we don't double-count when the lead
