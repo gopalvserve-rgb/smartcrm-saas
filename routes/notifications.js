@@ -261,4 +261,34 @@ async function api_notifications_read_all(token) {
   for (const n of mine) await db.update('notifications', n.id, { is_read: 1 });
   return { ok: true, count: mine.length };
 }
-module.exports = { api_notifications_mine, api_notifications_read, api_notifications_read_all };
+async function api_followups_debug(token) {
+  // FU_DEBUG_v1 — read-only diagnostic for "Follow-ups empty" issues.
+  const me = await authUser(token);
+  const now = new Date();
+  const one = async (sql) => Number((await db.query(sql)).rows[0].c) || 0;
+  const statuses = (await db.getAll('statuses')).map(x => ({ id: Number(x.id), name: x.name, is_final: Number(x.is_final) || 0 }));
+  const sample = (await db.query(
+    `SELECT l.id, l.name, l.status_id, l.assigned_to, l.next_followup_at,
+            COALESCE(s.name,'(none)') AS status_name, COALESCE(s.is_final,0)::int AS status_final
+       FROM leads l LEFT JOIN statuses s ON s.id = l.status_id
+      WHERE l.next_followup_at IS NOT NULL
+      ORDER BY l.next_followup_at DESC LIMIT 12`)).rows;
+  return {
+    me: { id: me.id, role: me.role },
+    server_now: now.toISOString(),
+    today_utc: now.toISOString().slice(0, 10),
+    counts: {
+      leads_total: await one(`SELECT COUNT(*)::int c FROM leads`),
+      leads_with_next_followup: await one(`SELECT COUNT(*)::int c FROM leads WHERE next_followup_at IS NOT NULL`),
+      leads_next_in_window: await one(`SELECT COUNT(*)::int c FROM leads WHERE next_followup_at IS NOT NULL AND next_followup_at >= NOW()-INTERVAL '60 days' AND next_followup_at <= NOW()+INTERVAL '90 days'`),
+      leads_next_in_window_NONFINAL: await one(`SELECT COUNT(*)::int c FROM leads l LEFT JOIN statuses s ON s.id=l.status_id WHERE l.next_followup_at IS NOT NULL AND l.next_followup_at >= NOW()-INTERVAL '60 days' AND l.next_followup_at <= NOW()+INTERVAL '90 days' AND COALESCE(s.is_final,0)=0`),
+      open_followups: await one(`SELECT COUNT(*)::int c FROM followups WHERE COALESCE(is_done,0)=0`),
+      open_followups_in_window: await one(`SELECT COUNT(*)::int c FROM followups WHERE COALESCE(is_done,0)=0 AND due_at IS NOT NULL AND due_at >= NOW()-INTERVAL '60 days' AND due_at <= NOW()+INTERVAL '90 days'`)
+    },
+    final_status_ids: statuses.filter(x => x.is_final === 1).map(x => x.id + ':' + x.name),
+    statuses,
+    sample
+  };
+}
+
+module.exports = { api_notifications_mine, api_notifications_read, api_notifications_read_all, api_followups_debug };

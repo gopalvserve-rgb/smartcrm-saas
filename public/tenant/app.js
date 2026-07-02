@@ -13140,6 +13140,15 @@ async function renderNewTodayLeads(view) {
 }
 
 VIEWS.followups = async (view) => {
+  try {
+    if (new URLSearchParams(location.search).get('fudebug') === '1') {
+      view.innerHTML = '';
+      let _dbg; try { _dbg = await api('api_followups_debug'); } catch (e) { _dbg = { error: e.message }; }
+      view.appendChild(h('h3', {}, 'Follow-ups diagnostic'));
+      view.appendChild(h('pre', { style: { padding: '14px', background: '#0f172a', color: '#e2e8f0', overflow: 'auto', fontSize: '12px', borderRadius: '8px', whiteSpace: 'pre-wrap' } }, JSON.stringify(_dbg, null, 2)));
+      return;
+    }
+  } catch (_) {}
   const data = await api('api_notifications_mine', { scope: 'team' });
   view.innerHTML = '';
   // Filter bar with rule-builder so users can narrow the three sections (Overdue / Due today / Upcoming).
