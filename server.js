@@ -2507,6 +2507,45 @@ setInterval(() => {
 setTimeout(() => _runEduRemindersForAllTenants().catch(() => {}), 90_000);
 console.log('[eduReminder] worker started — hourly tick');
 
+// ── Background: per-tenant WhatsApp Campaign sender ─────────────────────
+// WB_CAMPAIGN_WORKER_v1 (2026-07-02) — routes/whatsbot._campaignTick (the
+// send loop) was only ever started in the unused server.tenant.js, so in
+// production bulk campaigns sent only the first immediate batch of 25 and
+// then stalled forever. Walk every active tenant every 30s and run
+// _campaignTick inside that tenant's storage scope so pending campaign
+// batches keep sending until complete. The created_at cutoff inside
+// _campaignTick (WB_CAMPAIGN_MIN_CREATED) means ONLY campaigns created from
+// the cutoff (today) onward are processed — the old stuck campaigns are
+// never resumed/blasted.
+async function _runCampaignsForAllTenants() {
+  let rows = [];
+  try {
+    const r = await controlDb.query(
+      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500`
+    );
+    rows = r.rows;
+  } catch (e) { console.warn('[wbCampaign] tenant list failed:', e.message); return; }
+  let wb;
+  try { wb = require('./routes/whatsbot'); } catch (_) { return; }
+  if (!wb || typeof wb._campaignTick !== 'function') return;
+  for (const row of rows) {
+    let t; try { t = await tenantPoolMod.findActiveTenant(row.slug); } catch (_) { continue; }
+    if (!t) continue;
+    const pool = tenantPoolMod.poolFor(t);
+    if (!pool) continue;
+    try {
+      await tenantDb.tenantStorage.run({ pool, tenant: t, slug: row.slug },
+        () => wb._campaignTick()
+      );
+    } catch (e) { console.warn(`[wbCampaign] ${row.slug} tick failed:`, e.message); }
+  }
+}
+setInterval(() => {
+  _runCampaignsForAllTenants().catch(e => console.error('[wbCampaign] cycle failed:', e.message));
+}, Number(process.env.WB_CAMPAIGN_TICK_MS || 30_000));
+setTimeout(() => _runCampaignsForAllTenants().catch(() => {}), 60_000);
+console.log('[wbCampaign] campaign sender started — 30s tick');
+
 // ── Background: per-tenant AI Call Summary worker ──────────────────────
 // aiCallSummary.startWorker() is only wired in server.tenant.js. Without
 // this, SaaS-tenant recordings never get auto-processed by Gemini — they

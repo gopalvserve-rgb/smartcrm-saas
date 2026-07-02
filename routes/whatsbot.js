@@ -2569,11 +2569,19 @@ function startCampaignWorker() {
 
 async function _campaignTick() {
   // Find queued campaigns whose scheduled_at has passed (or send_now=1)
+  // WB_CAMPAIGN_WORKER_v1 (2026-07-02) — only process campaigns created on/after
+  // this cutoff. Purpose: when the (previously-never-started) background sender
+  // is switched on, it must NOT resurrect the old stuck/queued campaigns from
+  // weeks ago and blast their lists. Everything created from the cutoff onward
+  // (i.e. all future campaigns) sends normally. Adjustable via env.
+  const _MIN_CREATED = process.env.WB_CAMPAIGN_MIN_CREATED || '2026-07-02T00:00:00Z';
   const { rows: due } = await db.query(
     `SELECT * FROM wa_campaigns
        WHERE status IN ('queued', 'sending')
+         AND created_at >= $1::timestamptz
          AND (send_now = 1 OR scheduled_at IS NULL OR scheduled_at <= NOW())
-       ORDER BY id ASC`
+       ORDER BY id ASC`,
+    [_MIN_CREATED]
   );
   if (!due.length) return;
   const cfg = await _cfg();
@@ -4117,6 +4125,7 @@ module.exports = {
   expressVerify, expressEvent,
   // Worker + scheduled tasks
   startCampaignWorker,
+  _campaignTick,   // WB_CAMPAIGN_WORKER_v1 — called per-tenant by server.js all-tenant loop
   trimActivityLog,
   // Helpers exported for the file-upload Express route in server.js
   // and for routes/aiBot.js auto-reply path.
