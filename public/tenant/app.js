@@ -9475,13 +9475,22 @@ async function openLeadModal(id) {
   // overwrite what the customer typed in the form, the source, the GCLID,
   // or the UTMs. Admin can still change these for legitimate corrections.
   if (id && !isAdmin) {
-    const LOCKED = ['name', 'phone', 'whatsapp', 'email', 'source'];
+    // LEADS_EDIT_PII_UI_v1 (2026-07-02) — mirror the backend: name/phone/
+    // whatsapp/email UNLOCK when the role has the leads.edit permission
+    // (any scope). Only attribution 'source' stays admin-only. Previously
+    // this UI force-locked all five for every non-admin, so Sales users who
+    // had leads.edit granted still saw name/phone as readonly and could not
+    // edit them (backend LEADS_EDIT_PII_v1/v2 already allowed the save).
+    const _canEditPii = !!(CRM.can && CRM.can('leads.edit'));
+    const LOCKED = _canEditPii ? ['source'] : ['name', 'phone', 'whatsapp', 'email', 'source'];
     LOCKED.forEach(name => {
       const el = form.querySelector(`[name="${name}"]`);
       if (!el) return;
       el.readOnly = true;
       el.disabled = (el.tagName === 'SELECT'); // <select> needs disabled, not readonly
-      el.title = 'Locked — set by the campaign / customer. Only admin can edit.';
+      el.title = (name === 'source')
+        ? 'Locked — set by the campaign / customer. Only admin can edit.'
+        : 'Locked — your role needs the "leads.edit" permission. Ask your admin (Settings → Permissions).';
       el.classList.add('lead-locked');
       // Append a lock badge to the field's label so users see immediately
       // why they can't type.
