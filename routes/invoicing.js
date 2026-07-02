@@ -662,99 +662,212 @@ async function api_invoicing_invoices_pdf_html(token, id) {
        <tr><td>SGST</td><td style="text-align:right">${fmt(inv.sgst)}</td></tr>`
     : `<tr><td>IGST</td><td style="text-align:right">${fmt(inv.igst)}</td></tr>`;
 
+  // --- UPI QR (SCAN & PAY) --------------------------------------------
+  // Rendered only when the company has a UPI id AND the QR toggle is on
+  // (inv_settings.enable_qr, default 1). Embedded as an inline base64 data
+  // URI so it prints / exports to PDF with no network call. Falls back to
+  // the plain UPI text line if the qrcode dependency is unavailable.
+  let qrImgTag = '';
+  const _upiId = String(company.upi_id || '').trim();
+  const _qrOn = (settings.enable_qr == null) ? true : Number(settings.enable_qr) === 1;
+  const _balanceDue = round2(Number(inv.total || 0) - Number(inv.amount_paid || 0));
+  if (_upiId && _qrOn) {
+    const _amt = (_balanceDue > 0.01 ? _balanceDue : Number(inv.total || 0)).toFixed(2);
+    const _pn  = encodeURIComponent(String(inv.company_name || '').slice(0, 60));
+    const _tn  = encodeURIComponent(String(inv.invoice_no || '').slice(0, 40));
+    const _upiUri = `upi://pay?pa=${encodeURIComponent(_upiId)}&pn=${_pn}&am=${_amt}&cu=INR&tn=${_tn}`;
+    try {
+      const QRCode = require('qrcode');
+      const svg = await QRCode.toString(_upiUri, { type: 'svg', margin: 0, width: 128,
+        color: { dark: '#0f172a', light: '#ffffff' } });
+      const dataUri = 'data:image/svg+xml;base64,' + Buffer.from(svg).toString('base64');
+      qrImgTag = `<img src="${dataUri}" width="128" height="128" alt="Scan to pay via UPI"/>`;
+    } catch (_e) { qrImgTag = ''; }
+  }
+
+  const _statusStamp =
+      inv.status === 'cancelled' ? '<div class="stamp cancelled">CANCELLED</div>'
+    : inv.status === 'draft'     ? '<div class="stamp draft">DRAFT</div>'
+    : (String(inv.paid_status) === 'paid') ? '<div class="stamp paid">PAID</div>'
+    : '';
+
+  const payCard = (qrImgTag || _upiId || company.bank_account) ? `
+      <div class="paybox">
+        <div class="paybox-title">Payment</div>
+        <div class="paybox-body">
+          ${qrImgTag ? `<div class="qr">${qrImgTag}<div class="qr-cap">Scan &amp; Pay (UPI)</div></div>` : ''}
+          <div class="paybox-lines">
+            ${_upiId ? `<div><span class="k">UPI ID</span><span class="v">${esc(_upiId)}</span></div>` : ''}
+            ${company.bank_name ? `<div><span class="k">Bank</span><span class="v">${esc(company.bank_name)}</span></div>` : ''}
+            ${company.bank_account ? `<div><span class="k">A/C No.</span><span class="v">${esc(company.bank_account)}</span></div>` : ''}
+            ${company.bank_ifsc ? `<div><span class="k">IFSC</span><span class="v">${esc(company.bank_ifsc)}</span></div>` : ''}
+            ${_balanceDue > 0.01 ? `<div class="due"><span class="k">Amount Due</span><span class="v">${fmt(_balanceDue)}</span></div>` : ''}
+          </div>
+        </div>
+      </div>` : '';
+
   const html = `<!doctype html><html><head><meta charset="utf-8"/>
 <title>${esc(inv.invoice_no)}</title>
 <style>
-  body { font-family: 'Helvetica', Arial, sans-serif; color:#111; margin:0; padding:24px; font-size:13px; }
-  .hdr { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #1e293b; padding-bottom:12px; }
-  .seller h1 { margin:0; font-size:18px; }
-  .seller div { font-size:12px; color:#444; line-height:1.4; }
-  .title-block { text-align:right; }
-  .title-block h2 { margin:0; font-size:22px; color:#1e293b; letter-spacing:1px; }
-  .meta { font-size:12px; color:#444; }
-  .pair { display:flex; gap:24px; margin-top:16px; }
-  .pair > div { flex:1; }
-  .pair h4 { margin:0 0 6px 0; font-size:11px; color:#666; text-transform:uppercase; letter-spacing:.6px; }
-  table.lines { width:100%; border-collapse:collapse; margin-top:16px; }
-  table.lines th, table.lines td { border:1px solid #e2e8f0; padding:6px 8px; vertical-align:top; }
-  table.lines th { background:#f1f5f9; font-size:11px; text-transform:uppercase; letter-spacing:.4px; color:#475569; text-align:left; }
-  .tot { width:300px; margin-left:auto; margin-top:12px; border-collapse:collapse; }
-  .tot td { padding:5px 8px; border-bottom:1px solid #f1f5f9; font-size:13px; }
-  .tot tr.grand td { font-weight:bold; font-size:15px; border-top:2px solid #1e293b; border-bottom:none; padding-top:8px; }
-  .footer { margin-top:24px; padding-top:12px; border-top:1px solid #e2e8f0; font-size:12px; color:#555; }
-  .badge { display:inline-block; padding:2px 10px; border-radius:10px; font-size:11px; font-weight:600; }
-  .badge.cancelled { background:#fee2e2; color:#b91c1c; }
-  .badge.draft { background:#fef3c7; color:#92400e; }
-  .words { margin-top:10px; font-style:italic; color:#475569; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; padding:0; }
+  body { font-family:'Segoe UI','Helvetica Neue',Arial,sans-serif; color:#1e293b; font-size:12.5px; line-height:1.45; background:#eef2f7; }
+  .sheet { max-width:820px; margin:0 auto; background:#fff; }
+  .accent-bar { height:8px; background:linear-gradient(90deg,#4f46e5 0%,#6366f1 55%,#0ea5e9 100%); }
+  .pad { padding:30px 34px; }
+  /* header */
+  .top { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; }
+  .brand { display:flex; gap:14px; align-items:flex-start; }
+  .brand img { max-height:58px; max-width:150px; object-fit:contain; }
+  .brand h1 { margin:0 0 2px; font-size:19px; font-weight:800; letter-spacing:.2px; color:#0f172a; }
+  .brand .sub { font-size:11.5px; color:#64748b; }
+  .brand .sub b { color:#334155; }
+  .inv-panel { text-align:right; min-width:210px; }
+  .inv-panel .ttl { font-size:24px; font-weight:800; letter-spacing:2px; color:#4f46e5; margin:0; }
+  .inv-panel .no { margin-top:6px; font-size:13px; font-weight:700; color:#0f172a; }
+  .inv-panel .row { font-size:11.5px; color:#64748b; margin-top:2px; }
+  .inv-panel .row b { color:#334155; }
+  .proforma-note { color:#b45309; font-weight:700; font-size:11px; }
+  /* parties */
+  .parties { display:flex; gap:16px; margin-top:22px; }
+  .party { flex:1; background:#f8fafc; border:1px solid #eef2f7; border-radius:10px; padding:12px 14px; }
+  .party h4 { margin:0 0 6px; font-size:10.5px; text-transform:uppercase; letter-spacing:.8px; color:#6366f1; }
+  .party .nm { font-weight:700; color:#0f172a; font-size:13px; }
+  .party div.ln { font-size:11.8px; color:#475569; }
+  /* lines */
+  table.lines { width:100%; border-collapse:collapse; margin-top:20px; border-radius:10px; overflow:hidden; }
+  table.lines thead th { background:#0f172a; color:#e2e8f0; font-size:10.5px; text-transform:uppercase; letter-spacing:.5px; padding:9px 10px; text-align:left; font-weight:600; }
+  table.lines tbody td { padding:9px 10px; border-bottom:1px solid #eef2f7; font-size:12.2px; vertical-align:top; }
+  table.lines tbody tr:nth-child(even) td { background:#f8fafc; }
+  .r { text-align:right; }
+  .c { text-align:center; }
+  .hsn { font-size:10.5px; color:#94a3b8; }
+  /* bottom */
+  .bottom { display:flex; gap:20px; margin-top:20px; align-items:flex-start; }
+  .bottom-left { flex:1.25; }
+  .bottom-right { flex:1; }
+  .tot { width:100%; border-collapse:collapse; }
+  .tot td { padding:7px 10px; font-size:12.5px; }
+  .tot tr td:last-child { text-align:right; font-variant-numeric:tabular-nums; }
+  .tot tr.sub td { border-bottom:1px solid #eef2f7; color:#475569; }
+  .tot tr.grand td { background:#eef2ff; color:#0f172a; font-weight:800; font-size:15px; border-top:2px solid #4f46e5; }
+  .tot tr.paid td { color:#059669; }
+  .tot tr.due td { color:#b91c1c; font-weight:700; }
+  .words { margin-top:12px; font-size:11.8px; color:#475569; background:#f8fafc; border-left:3px solid #6366f1; padding:8px 12px; border-radius:0 8px 8px 0; }
+  .words b { color:#334155; }
+  /* pay box */
+  .paybox { border:1px solid #e2e8f0; border-radius:12px; overflow:hidden; }
+  .paybox-title { background:#f1f5f9; padding:8px 14px; font-size:10.5px; text-transform:uppercase; letter-spacing:.8px; color:#475569; font-weight:700; }
+  .paybox-body { display:flex; gap:14px; padding:14px; align-items:center; }
+  .qr { text-align:center; }
+  .qr img { border:1px solid #e2e8f0; border-radius:8px; padding:4px; background:#fff; }
+  .qr-cap { font-size:10px; color:#64748b; margin-top:4px; font-weight:600; }
+  .paybox-lines { flex:1; font-size:12px; }
+  .paybox-lines > div { display:flex; justify-content:space-between; gap:10px; padding:3px 0; border-bottom:1px dashed #eef2f7; }
+  .paybox-lines .k { color:#94a3b8; }
+  .paybox-lines .v { color:#0f172a; font-weight:600; text-align:right; word-break:break-all; }
+  .paybox-lines .due .v { color:#b91c1c; }
+  /* footer */
+  .foot { margin-top:22px; padding-top:14px; border-top:1px solid #eef2f7; font-size:11.5px; color:#64748b; display:flex; gap:24px; justify-content:space-between; }
+  .foot .notes { flex:1.4; }
+  .foot .sign { flex:1; text-align:right; }
+  .foot b { color:#334155; }
+  .terms { margin-top:8px; font-size:10.8px; color:#64748b; line-height:1.5; }
+  .sign-space { height:46px; }
+  .thanks { text-align:center; margin-top:16px; font-size:11px; color:#94a3b8; }
+  /* stamp */
+  .stamp { display:inline-block; margin-top:8px; padding:4px 14px; border-radius:6px; font-weight:800; letter-spacing:1px; font-size:12px; border:2px solid; transform:rotate(-4deg); }
+  .stamp.paid { color:#059669; border-color:#059669; }
+  .stamp.cancelled { color:#b91c1c; border-color:#b91c1c; }
+  .stamp.draft { color:#b45309; border-color:#b45309; }
+  @page { size:A4; margin:12mm; }
+  @media print { body { background:#fff; } .sheet { max-width:none; } .pad { padding:0; } }
 </style>
 </head><body>
-  <div class="hdr">
-    <div class="seller">
-      ${company.logo_url ? `<img src="${esc(company.logo_url)}" style="max-height:60px;margin-bottom:6px"/>` : ''}
-      <h1>${esc(inv.company_name)}</h1>
-      <div>${esc(company.address || '')}${company.city ? ', ' + esc(company.city) : ''}${company.pincode ? ' ' + esc(company.pincode) : ''}</div>
-      <div>${company.phone ? 'Ph: ' + esc(company.phone) : ''}${company.email ? '  •  ' + esc(company.email) : ''}</div>
-      <div>${inv.company_gstin ? '<b>GSTIN:</b> ' + esc(inv.company_gstin) : ''}${company.state ? '  •  State: ' + esc(company.state) : ''}</div>
+  <div class="sheet">
+    <div class="accent-bar"></div>
+    <div class="pad">
+      <div class="top">
+        <div class="brand">
+          ${company.logo_url ? `<img src="${esc(company.logo_url)}"/>` : ''}
+          <div>
+            <h1>${esc(inv.company_name)}</h1>
+            <div class="sub">${esc(company.address || '')}${company.city ? ', ' + esc(company.city) : ''}${company.pincode ? ' ' + esc(company.pincode) : ''}</div>
+            <div class="sub">${company.phone ? 'Ph: ' + esc(company.phone) : ''}${company.email ? ' • ' + esc(company.email) : ''}</div>
+            <div class="sub">${inv.company_gstin ? '<b>GSTIN:</b> ' + esc(inv.company_gstin) : ''}${company.state ? ' • State: ' + esc(company.state) : ''}</div>
+          </div>
+        </div>
+        <div class="inv-panel">
+          <p class="ttl">${(inv.doc_type === 'proforma') ? 'PROFORMA' : 'INVOICE'}</p>
+          ${(inv.doc_type === 'proforma') ? '<div class="proforma-note">Not a tax invoice</div>' : ''}
+          <div class="no">${esc(inv.invoice_no)}</div>
+          <div class="row"><b>Date:</b> ${dt(inv.invoice_date)}</div>
+          ${inv.due_date ? `<div class="row"><b>Due:</b> ${dt(inv.due_date)}</div>` : ''}
+          ${_statusStamp}
+        </div>
+      </div>
+
+      <div class="parties">
+        <div class="party">
+          <h4>Bill To</h4>
+          <div class="nm">${esc(inv.customer_name)}</div>
+          <div class="ln">${esc(inv.bill_to_address || '')}</div>
+          <div class="ln">${inv.customer_gstin ? '<b>GSTIN:</b> ' + esc(inv.customer_gstin) : ''}</div>
+          <div class="ln">${inv.customer_state ? 'State: ' + esc(inv.customer_state) : ''}</div>
+        </div>
+        <div class="party">
+          <h4>Ship To</h4>
+          <div class="ln">${esc(inv.ship_to_address || inv.bill_to_address || '')}</div>
+          <div class="ln">${inv.place_of_supply ? 'Place of Supply: ' + esc(inv.place_of_supply) : ''}</div>
+        </div>
+      </div>
+
+      <table class="lines">
+        <thead><tr>
+          <th style="width:32px">#</th>
+          <th>Description</th>
+          <th class="r" style="width:80px">Qty</th>
+          <th class="r" style="width:92px">Rate</th>
+          <th class="r" style="width:96px">Taxable</th>
+          <th class="r" style="width:58px">GST%</th>
+          <th class="r" style="width:104px">Amount</th>
+        </tr></thead>
+        <tbody>${linesHtml}</tbody>
+      </table>
+
+      <div class="bottom">
+        <div class="bottom-left">
+          ${payCard}
+          <div class="words"><b>Amount in words:</b> ${esc(inv.amount_in_words || _amountInWords(inv.total))}</div>
+        </div>
+        <div class="bottom-right">
+          <table class="tot">
+            <tr class="sub"><td>Subtotal</td><td>${fmt(inv.subtotal)}</td></tr>
+            ${Number(inv.discount) ? `<tr class="sub"><td>Discount</td><td>- ${fmt(inv.discount)}</td></tr>` : ''}
+            ${taxBlock}
+            ${Number(inv.cess) ? `<tr class="sub"><td>Cess</td><td>${fmt(inv.cess)}</td></tr>` : ''}
+            ${Number(inv.round_off) ? `<tr class="sub"><td>Round Off</td><td>${fmt(inv.round_off)}</td></tr>` : ''}
+            <tr class="grand"><td>Total</td><td>${fmt(inv.total)}</td></tr>
+            ${Number(inv.amount_paid) ? `<tr class="paid"><td>Paid</td><td>${fmt(inv.amount_paid)}</td></tr>
+                                          <tr class="due"><td>Balance Due</td><td>${fmt(Number(inv.total) - Number(inv.amount_paid))}</td></tr>` : ''}
+          </table>
+        </div>
+      </div>
+
+      <div class="foot">
+        <div class="notes">
+          ${inv.notes ? `<div><b>Notes:</b> ${esc(inv.notes)}</div>` : ''}
+          ${inv.terms ? `<div class="terms"><b>Terms &amp; Conditions:</b><br/>${esc(inv.terms).replace(/\n/g,'<br/>')}</div>` : ''}
+        </div>
+        <div class="sign">
+          For <b>${esc(inv.company_name)}</b>
+          <div class="sign-space"></div>
+          Authorised Signatory
+        </div>
+      </div>
+
+      ${settings.invoice_footer ? `<div class="thanks">${esc(settings.invoice_footer)}</div>` : ''}
     </div>
-    <div class="title-block">
-      <h2>${(inv.doc_type === 'proforma') ? 'PROFORMA INVOICE' : 'TAX INVOICE'}</h2>
-      ${(inv.doc_type === 'proforma') ? '<div class="meta" style="color:#b45309;font-weight:600">Not a tax invoice</div>' : ''}
-      <div class="meta"><b>${esc(inv.invoice_no)}</b></div>
-      <div class="meta">Date: ${dt(inv.invoice_date)}</div>
-      ${inv.due_date ? `<div class="meta">Due: ${dt(inv.due_date)}</div>` : ''}
-      ${inv.status === 'cancelled' ? '<div><span class="badge cancelled">CANCELLED</span></div>' : ''}
-      ${inv.status === 'draft' ? '<div><span class="badge draft">DRAFT</span></div>' : ''}
-    </div>
-  </div>
-
-  <div class="pair">
-    <div>
-      <h4>Bill To</h4>
-      <div><b>${esc(inv.customer_name)}</b></div>
-      <div>${esc(inv.bill_to_address || '')}</div>
-      <div>${inv.customer_gstin ? '<b>GSTIN:</b> ' + esc(inv.customer_gstin) : ''}</div>
-      <div>${inv.customer_state ? 'State: ' + esc(inv.customer_state) : ''}</div>
-    </div>
-    <div>
-      <h4>Ship To</h4>
-      <div>${esc(inv.ship_to_address || inv.bill_to_address || '')}</div>
-      <div>${inv.place_of_supply ? 'Place of Supply: ' + esc(inv.place_of_supply) : ''}</div>
-    </div>
-  </div>
-
-  <table class="lines">
-    <thead><tr>
-      <th style="width:30px">#</th>
-      <th>Description</th>
-      <th style="text-align:right;width:80px">Qty</th>
-      <th style="text-align:right;width:90px">Rate</th>
-      <th style="text-align:right;width:90px">Taxable</th>
-      <th style="text-align:right;width:60px">GST%</th>
-      <th style="text-align:right;width:100px">Amount</th>
-    </tr></thead>
-    <tbody>${linesHtml}</tbody>
-  </table>
-
-  <table class="tot">
-    <tr><td>Subtotal</td><td style="text-align:right">${fmt(inv.subtotal)}</td></tr>
-    ${Number(inv.discount) ? `<tr><td>Discount</td><td style="text-align:right">- ${fmt(inv.discount)}</td></tr>` : ''}
-    ${taxBlock}
-    ${Number(inv.cess) ? `<tr><td>Cess</td><td style="text-align:right">${fmt(inv.cess)}</td></tr>` : ''}
-    ${Number(inv.round_off) ? `<tr><td>Round Off</td><td style="text-align:right">${fmt(inv.round_off)}</td></tr>` : ''}
-    <tr class="grand"><td>Total</td><td style="text-align:right">${fmt(inv.total)}</td></tr>
-    ${Number(inv.amount_paid) ? `<tr><td>Paid</td><td style="text-align:right">${fmt(inv.amount_paid)}</td></tr>
-                                  <tr><td>Balance</td><td style="text-align:right">${fmt(Number(inv.total) - Number(inv.amount_paid))}</td></tr>` : ''}
-  </table>
-
-  <div class="words"><b>Amount in words:</b> ${esc(inv.amount_in_words || _amountInWords(inv.total))}</div>
-
-  <div class="footer">
-    ${inv.notes ? `<div><b>Notes:</b> ${esc(inv.notes)}</div>` : ''}
-    ${inv.terms ? `<div style="margin-top:6px"><b>Terms & Conditions:</b><br/>${esc(inv.terms).replace(/\n/g,'<br/>')}</div>` : ''}
-    ${company.upi_id ? `<div style="margin-top:8px"><b>Pay via UPI:</b> ${esc(company.upi_id)}</div>` : ''}
-    ${company.bank_account ? `<div style="margin-top:4px"><b>Bank:</b> ${esc(company.bank_name||'')} • A/c ${esc(company.bank_account)} • IFSC ${esc(company.bank_ifsc||'')}</div>` : ''}
-    ${settings.invoice_footer ? `<div style="margin-top:12px;padding-top:10px;border-top:1px dashed #cbd5e1;font-size:11px;color:#475569;text-align:center">${esc(settings.invoice_footer)}</div>` : ''}
-    <div style="margin-top:14px;text-align:right">For <b>${esc(inv.company_name)}</b><br/><br/><br/>Authorised Signatory</div>
   </div>
 </body></html>`;
   return { html, invoice_no: inv.invoice_no };
