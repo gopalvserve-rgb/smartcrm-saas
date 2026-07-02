@@ -111,7 +111,13 @@ const MODULE_CATALOG = [
     nav_ids:      ['invDashboard','invList','invCompanies','invCustomers','invItems','invGstr1','invSettings'],
     settings_ids: ['invoicing'],
     api_prefixes: ['api_invoicing_'],
-    default_on: false,  always_on: false },
+    // INVOICING_DEFAULT_ON_v1 (2026-07-02) — was opt-in (default_on:false),
+    // which made every new tenant hit "Invoicing module is not enabled" when
+    // opening Billing & Accounts. Now default-ON: any tenant with an empty/NULL
+    // modules_json (i.e. all new tenants + existing untouched ones) gets GST
+    // invoicing automatically. Tenants with an EXPLICIT module list still need
+    // it added to that list via super-admin → Tenants → Modules.
+    default_on: true,   always_on: false },
 
   // Always-on core — branding + users + roles. Toggle hidden in UI.
   { key: 'core',       label: '⚙️ Core (always on)', description: 'Company branding, theme, users, roles, permissions, dashboard.',
