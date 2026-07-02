@@ -126,15 +126,24 @@ async function installPack(packId, opts) {
   // two packs both is_active=1 — which would cause both their sidebar
   // items to render.
   await db.query(`UPDATE installed_packs SET is_active = 0 WHERE pack_id <> $1`, [pack.id]);
-  // Mark installed (or refresh version)
+  // Mark installed (or refresh version).
+  // PACK_INSTALLED_BY_FIX_v1 (2026-07-02) — two bugs meant a super-admin
+  // install on a tenant created as 'generic' got wiped by the negative
+  // self-heal (which deletes installed_by IS NULL rows):
+  //   (a) `opts.userId || null` turned the super-admin sentinel userId 0
+  //       into NULL (0 is falsy) — use != null so 0 is preserved.
+  //   (b) ON CONFLICT didn't refresh installed_by, so re-installing over an
+  //       old NULL row left it NULL — add installed_by = EXCLUDED.installed_by.
+  const _installedBy = (opts && opts.userId != null) ? opts.userId : null;
   await db.query(
     `INSERT INTO installed_packs (pack_id, version, installed_by, is_active)
      VALUES ($1, $2, $3, 1)
      ON CONFLICT (pack_id) DO UPDATE SET
        version = EXCLUDED.version,
+       installed_by = EXCLUDED.installed_by,
        is_active = 1,
        installed_at = NOW()`,
-    [pack.id, pack.version || '1.0.0', opts && opts.userId || null]
+    [pack.id, pack.version || '1.0.0', _installedBy]
   );
   return { ok: true, pack_id: pack.id, version: pack.version || '1.0.0' };
 }
