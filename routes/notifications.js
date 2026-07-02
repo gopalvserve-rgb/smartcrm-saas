@@ -100,6 +100,17 @@ async function api_notifications_mine(token, opts) {
   const isMine = (lead) => {
     return lead && Number(lead.assigned_to) === Number(me.id);
   };
+  // FU_TEAM_SCOPE_v1 — the Follow-ups PAGE passes { scope:'team' }; admins /
+  // managers / team-leaders then see the whole VISIBLE team's follow-ups (not
+  // just their own). Regular reps + the notification poll (no scope) are
+  // unchanged, so the bell never floods an admin with everyone's reminders.
+  const _visSet = Array.isArray(visible) ? new Set(visible.map(Number)) : null; // null = see all
+  const _teamScope = !!(opts && opts.scope === 'team') && ['admin', 'manager', 'team_leader'].includes(String(me.role || ''));
+  const _canSeeFU = (uid) => {
+    if (_fuShowAll) return true;
+    if (_teamScope) return (_visSet === null) ? true : _visSet.has(Number(uid));
+    return Number(uid) === Number(me.id);
+  };
 
   // From followups table — assigned to me OR for leads I can see
   allFollowups.forEach(f => {
@@ -107,7 +118,7 @@ async function api_notifications_mine(token, opts) {
     if (!f.due_at) return;
     const lead = leadsById[Number(f.lead_id)];
     const isForMe = Number(f.user_id) === Number(me.id);
-    if (!_fuShowAll && !isForMe && !isMine(lead)) return;
+    if (!_canSeeFU(f.user_id) && !_canSeeFU(lead && lead.assigned_to)) return;
     // Only show follow-ups whose current lead status is in the allowed list.
     if (!_isAllowedLeadStatus(lead)) return;
     items.push({
@@ -121,7 +132,7 @@ async function api_notifications_mine(token, opts) {
   allLeads.forEach(l => {
     if (!l.next_followup_at) return;
     if (followupByLead[Number(l.id)]) return;
-    if (!_fuShowAll && !isMine(l) && Number(l.assigned_to) !== Number(me.id)) return;
+    if (!_canSeeFU(l.assigned_to)) return;
     if (!_isAllowedLeadStatus(l)) return;
     items.push({
       id: null, lead_id: l.id, due_at: l.next_followup_at, note: '',

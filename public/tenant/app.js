@@ -12979,7 +12979,7 @@ VIEWS.upcoming = async (view) => renderFollowupSection(view, 'upcoming');
 VIEWS.newleads = async (view) => renderNewTodayLeads(view);
 
 async function renderFollowupSection(view, key) {
-  const data = await api('api_notifications_mine');
+  const data = await api('api_notifications_mine', { scope: 'team' });
   view.innerHTML = '';
   const titleMap = { overdue: '⚠️ Overdue follow-ups', due_today: '📅 Due today', upcoming: '⏰ Upcoming' };
   const klassMap = { overdue: 'err', due_today: 'warn', upcoming: '' };
@@ -13140,7 +13140,7 @@ async function renderNewTodayLeads(view) {
 }
 
 VIEWS.followups = async (view) => {
-  const data = await api('api_notifications_mine');
+  const data = await api('api_notifications_mine', { scope: 'team' });
   view.innerHTML = '';
   // Filter bar with rule-builder so users can narrow the three sections (Overdue / Due today / Upcoming).
   const _fuRb = ruleBuilderButton({ label: '+ Filter rule', storageKey: 'crm.followups.rules.v1',
