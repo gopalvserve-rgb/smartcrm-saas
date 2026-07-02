@@ -117,6 +117,11 @@ async function api_notifications_mine(token, opts) {
     if (Number(f.is_done) === 1) return;
     if (!f.due_at) return;
     const lead = leadsById[Number(f.lead_id)];
+    // FU_NEXT_AUTHORITATIVE_v1 — leads.next_followup_at is the current follow-up
+    // (what the lead modal/dashboard/mobile all use). If the lead has one, emit it
+    // from the leads path below so a STALE/out-of-window followups row can't hide the
+    // lead. This one is only for leads that have NO next_followup_at (legacy rows).
+    if (lead && lead.next_followup_at) return;
     const isForMe = Number(f.user_id) === Number(me.id);
     if (!_canSeeFU(f.user_id) && !_canSeeFU(lead && lead.assigned_to)) return;
     // Only show follow-ups whose current lead status is in the allowed list.
@@ -131,11 +136,11 @@ async function api_notifications_mine(token, opts) {
   // Fallback: leads with next_followup_at but no matching followup row (legacy rows)
   allLeads.forEach(l => {
     if (!l.next_followup_at) return;
-    if (followupByLead[Number(l.id)]) return;
     if (!_canSeeFU(l.assigned_to)) return;
     if (!_isAllowedLeadStatus(l)) return;
+    const _fu = followupByLead[Number(l.id)];
     items.push({
-      id: null, lead_id: l.id, due_at: l.next_followup_at, note: '',
+      id: _fu ? _fu.id : null, lead_id: l.id, due_at: l.next_followup_at, note: _fu ? (_fu.note || '') : '',
       lead_name: l.name || '', lead_phone: l.phone || '',
       assigned_to: l.assigned_to
     });
