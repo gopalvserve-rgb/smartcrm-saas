@@ -26,6 +26,7 @@ const control = require('./control/db');
 const { attachTenant } = require('./utils/tenantResolver');
 const tenantDb = require('./db/pg');
 const tenantApi = require('./routes/saas/tenantApi');
+const r2 = require('./utils/r2');  // R2_RECORDINGS_v2 — zero-egress recording storage
 // SAAS_AUTO_INVOICE_v1 — start the auto-invoice sweep (gated on AUTO_INVOICE_DAYS_BEFORE>=1)
 try { require('./utils/saasInvoiceAutoGen').startSweep(); } catch (e) { console.warn('[saasInvoiceAutoGen] start failed:', e.message); }
 try { require('./utils/showcaseFollowupSeed').startSweep(); } catch (e) { console.warn('[showcaseFollowupSeed] start failed:', e.message); }
@@ -54,6 +55,7 @@ const demoTenant = require('./routes/saas/demoTenant');
 const aiUsageIngest = require('./routes/saas/aiUsageIngest');
 const tickets = require('./routes/saas/tickets');
 // SAAS_ADMIN_REPAIR_v1 (2026-06-28) — Finance + Signup-Requests + WL-Billing super-admin pages
+const r2Recordings   = require('./routes/saas/r2Recordings');  // R2_RECORDINGS_v2
 const finance         = require('./routes/saas/finance');
 const expenses        = require('./routes/saas/expenses');
 const financeDashboard= require('./routes/saas/financeDashboard');
@@ -1287,6 +1289,38 @@ app.post('/api/recordings', _recUpload.single('audio'), async (req, res, next) =
              _devicePath, _finalMime, (req.file.size||0), req.file.buffer,
              req.body.started_at || db.nowIso(), db.nowIso(), _dedupKey]
           );
+
+        // R2_UPLOAD_AFTER_INSERT_v2 — if R2 is enabled, upload the audio bytes to
+        // Cloudflare R2 and clear the audio_bytes column. Playback then serves a
+        // presigned URL (zero Railway egress). If R2 upload fails, leave the bytes
+        // in Postgres as fallback — the recording still plays.
+        try {
+          if (r2.isEnabled() && _ins.rows && _ins.rows[0] && _ins.rows[0].id) {
+            const _recId = _ins.rows[0].id;
+            const _tSlug = (req.tenantSlug || (req.tenant && req.tenant.slug) || 'unknown');
+            let _ext = '.mp3';
+            const mt = String(req.file.mimetype || '').toLowerCase();
+            if (mt.includes('m4a') || mt.includes('mp4')) _ext = '.m4a';
+            else if (mt.includes('wav')) _ext = '.wav';
+            else if (mt.includes('ogg')) _ext = '.ogg';
+            else if (mt.includes('amr')) _ext = '.amr';
+            else if (mt.includes('3gp')) _ext = '.3gp';
+            const _r2Key = _tSlug + '/' + _recId + _ext;
+            try {
+              await r2.putObject(_r2Key, req.file.buffer, req.file.mimetype || 'audio/mpeg');
+              await db.query(
+                `ALTER TABLE lead_recordings ADD COLUMN IF NOT EXISTS r2_key TEXT`
+              ).catch(() => {});
+              await db.query(
+                `UPDATE lead_recordings SET r2_key=$1, audio_bytes=NULL WHERE id=$2`,
+                [_r2Key, _recId]
+              );
+              console.log('[/api/recordings] uploaded to R2:', _r2Key, req.file.size, 'bytes');
+            } catch (e) {
+              console.warn('[/api/recordings] R2 upload failed (kept in PG):', e.message);
+            }
+          }
+        } catch (e) { console.warn('[/api/recordings] R2 wrap failed:', e.message); }
           id = _ins.rows[0] ? _ins.rows[0].id : null;
         } catch (e) {
           console.error('[/api/recordings] insert error:', e.message);
@@ -1647,10 +1681,20 @@ app.get('/api/recordings/:id/audio', async (req, res, next) => {
         const token = req.query.token || req.headers['x-auth-token'] || '';
         await authUser(token);
         const r = await tenantDb.query(
-          `SELECT mime_type, audio_bytes FROM lead_recordings WHERE id = $1`,
+          `SELECT mime_type, audio_bytes, r2_key FROM lead_recordings WHERE id = $1`,
           [Number(req.params.id)]
         );
         const row = r.rows[0];
+        // R2_PLAYBACK_v2 — if R2 has this file, redirect to a short-lived
+        // presigned URL. Playback bytes then come from Cloudflare, not us.
+        if (row && row.r2_key && r2.isEnabled()) {
+          try {
+            const url = await r2.presignGet(row.r2_key, 300);
+            return res.redirect(302, url);
+          } catch (e) {
+            console.warn('[/api/recordings/:id/audio] R2 presign failed, falling back to PG:', e.message);
+          }
+        }
         if (!row) {
           // Diagnostic: include WHICH tenant resolved and any recording IDs
           // present in that tenant — so a 404 surface tells the admin
