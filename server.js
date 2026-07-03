@@ -2381,9 +2381,23 @@ app.post('/hook/leadsource/:source/:key', (req, res) => {
   _runHookAsTenant(req, res, integrations.leadSourceWebhook);
 });
 
-app.post('/hook/sheet/:token', (req, res) => {
-  req.body.api_key = req.params.token;
-  _runHookAsTenant(req, res, integrations.sheetPushWebhook);
+app.post('/hook/sheet/:token', async (req, res) => {
+  // SHEET_SYNC_v4 — the Apps Script POSTs to the BARE origin URL
+  // (/hook/sheet/<sheet_token>), so req.tenant is unset. The sheet
+  // webhook_token is its OWN credential — NOT the tenant WEBSITE_API_KEY.
+  // The old code aliased it to api_key and _runHookAsTenant looked it up
+  // as WEBSITE_API_KEY, which never matched → every push returned 401.
+  // Resolve the tenant by the sheet token directly instead.
+  const token = String(req.params.token || '').trim();
+  req.body.api_key = token; // kept for backward-compat
+  if (req.tenant) return _runAsTenant(req.tenantSlug, req, res, integrations.sheetPushWebhook);
+  if (!token) return res.status(400).json({ error: 'missing token' });
+  const t = await _findTenantByLookup(
+    `SELECT 1 FROM sheet_integrations WHERE webhook_token = $1 LIMIT 1`,
+    [token]
+  ).catch(() => null);
+  if (!t) return res.status(404).json({ error: 'unknown sheet token' });
+  return _runAsTenant(t.slug, req, res, integrations.sheetPushWebhook);
 });
 
 // Background: run sheet syncs and native pulls every 5 minutes

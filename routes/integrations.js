@@ -107,9 +107,12 @@ function _resolveColumnTarget(rawHeader, mapping) {
  *   1. Creates both tables fresh if missing (with id SERIAL PRIMARY KEY).
  *   2. Adds any columns the runtime relies on (idempotent ALTERs).
  *   3. Cached after first successful run to keep the hot path cheap. */
-let _schemaHealed = false;
+let _schemaHealed = false; // legacy global flag (superseded by per-tenant set below)
+const _schemaHealedPools = new WeakSet(); // SHEET_SYNC_v4 — heal once per TENANT pool, not once per process
 async function _ensureSchema() {
-  if (_schemaHealed) return;
+  let _hpStore; try { _hpStore = db.tenantStorage && db.tenantStorage.getStore(); } catch (_) {}
+  const _hpKey = _hpStore && _hpStore.pool;
+  if (_hpKey && _schemaHealedPools.has(_hpKey)) return;
   try {
     await db.query(`
       CREATE TABLE IF NOT EXISTS sheet_integrations (
@@ -160,6 +163,7 @@ async function _ensureSchema() {
       )
     `);
     const colsImport = [
+      ['id', 'BIGSERIAL'], /* SHEET_SYNC_v4 — legacy tables had composite PK, no id → "column id does not exist" */
       ['integration_id', 'INTEGER'],
       ['row_hash', 'TEXT'],
       ['imported_at', 'TIMESTAMPTZ DEFAULT NOW()'],
@@ -168,8 +172,8 @@ async function _ensureSchema() {
     for (const [col, type] of colsImport) {
       try { await db.query('ALTER TABLE sheet_imported_rows ADD COLUMN IF NOT EXISTS ' + col + ' ' + type); } catch (_) {}
     }
-  } catch (e) { console.warn('[_ensureSchema sheet_integrations]', e.message); }
-  _schemaHealed = true;
+  } catch (e) { console.warn('[_ensureSchema sheet_integrations]', e.message); return; /* don't cache on failure — retry next call */ }
+  if (_hpKey) _schemaHealedPools.add(_hpKey);
 }
 
 async function _fetchSheetCsv(integration, opts) {
@@ -630,6 +634,7 @@ async function api_sheetSync_testReceive(token, id) {
 async function api_sheetSync_recentActivity(token, id) {
   const me = await authUser(token);
   if (!['admin', 'manager'].includes(me.role)) throw new Error('Admin / manager only');
+  await _ensureSchema();
   const all = await db.getAll('sheet_imported_rows');
   const rows = all
     .filter(r => Number(r.integration_id) === Number(id))
