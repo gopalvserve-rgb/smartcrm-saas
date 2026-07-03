@@ -5575,7 +5575,20 @@ VIEWS.leads = async (view) => {
     })(),
     h('button', { class: 'btn', onclick: () => { CRM._leadsPage = 1; loadLeads({ page: 1 }); } }, '🔎'),
     h('button', { class: 'btn ghost', onclick: openSavedFiltersMenu, title: 'Saved filter presets' }, '📌'),
-    h('button', { class: 'btn ghost', onclick: clearFilters, title: 'Reset all filters', style: { fontWeight: '600' } }, '↺ Reset'),
+    h('button', { class: 'btn ghost', onclick: clearFilters, title: 'Reset all filters (returns to your saved default view if you set one)', style: { fontWeight: '600' } }, '↺ Reset'),
+    /* LEAD_DEFAULT_FILTER_v1 — save the CURRENT filter set (campaign, status,
+       source, assignee, tags, etc.) as this user's default view. Reset returns
+       to it; it also loads on next visit. */
+    h('button', { class: 'btn ghost', title: 'Save the current filters (campaign, status, etc.) as your default view', style: { fontWeight: '600', color: '#4f46e5' },
+      onclick: (ev) => {
+        try {
+          const f = Object.assign({}, CRM.prefs.filters || {});
+          delete f.q;
+          localStorage.setItem('crm_filters_default', JSON.stringify(f));
+          const b = ev.currentTarget; const t0 = b.textContent; b.textContent = '✓ Saved default'; setTimeout(() => { b.textContent = t0; }, 1500);
+          try { toast('Saved current filters as your default view', 'ok'); } catch (_) {}
+        } catch (e) { try { toast('Could not save default: ' + e.message, 'err'); } catch (_) {} }
+      } }, '⭐ Save default'),
     h('button', { class: 'btn ghost', id: 'btn-refresh-leads', onclick: refreshLeads, title: 'Refresh leads list' }, '🔄'),
     h('button', { class: 'btn ghost', onclick: openColumnChooser, title: 'Columns' }, '☰'),
     h('button', { class: 'btn ghost', onclick: openBulkUpload, title: 'Upload CSV' }, '⬆️'),
@@ -5995,8 +6008,13 @@ function clearFilters() {
   // 'show custom-fields row' toggle. Also reset to page 1 so a
   // previously paged-deep view doesn't render empty. Then re-navigate
   // to leads so the toolbar re-reads the empty state.
-  CRM.prefs.filters = {};
-  try { localStorage.setItem('crm_filters', '{}'); } catch (_) {}
+  // LEAD_DEFAULT_FILTER_v1 (2026-07-02) — if the user saved a default filter
+  // (⭐ Save default), Reset returns to THAT view instead of a blank slate.
+  // Falls back to blank when no default has been saved.
+  let _defFilters = {};
+  try { _defFilters = JSON.parse(localStorage.getItem('crm_filters_default') || '{}') || {}; } catch (_) { _defFilters = {}; }
+  CRM.prefs.filters = _defFilters;
+  try { localStorage.setItem('crm_filters', JSON.stringify(_defFilters)); } catch (_) {}
   try { localStorage.removeItem('crm_filters_q'); } catch (_) {}
   // LEADS_RESET_CLEARS_RULES_v1 — rule-builder rules persist in
   // localStorage under their storageKey. Without wiping them here a
@@ -6190,6 +6208,11 @@ async function loadLeads(opts) {
     tags:        tags || undefined,
     assigned_to: ats  ? (ats.length === 1 ? ats[0] : undefined)  : (CRM.prefs.filters.assigned_to || undefined),
     assigned_tos: ats || undefined,
+    /* LEAD_CAMPAIGN_FILTER_FIX_v1 (2026-07-02) — cids was computed but never
+       attached, so the Leads Campaign filter selection was never sent to the
+       backend (which already honours filters.campaign_ids) — the list showed
+       ALL campaigns regardless of the picker. */
+    campaign_ids: cids || undefined,
     followup:    $('#f-followup')?.value || undefined,
     qualified:   $('#f-qualified')?.value || undefined,
     duplicate:   $('#f-duplicate')?.value || undefined,
