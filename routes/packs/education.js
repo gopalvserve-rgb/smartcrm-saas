@@ -2506,7 +2506,840 @@ async function api_edu_v2_seedDemo(token) {
   return { ok: true, batches_seeded: batches.length, applications_inserted: inserted };
 }
 
+
+/* ============================================================================
+ * EDU_PACK_v2 Commit 2 — Fee Tracking DEEP + Dunning Workflow (2026-07-03)
+ * ============================================================================
+ * Adds:
+ *   edu_fee_categories       — split tuition/hostel/transport/exam/other
+ *   edu_fee_concessions      — waivers/discounts per installment
+ *   edu_fee_penalties        — auto-applied late fees
+ *   edu_fee_reminders        — dunning schedule (T-3, T+0, T+3, T+7, T+14, T+30)
+ *   edu_receipts             — official receipt numbers + PDF-ready payload
+ *
+ * Extends:
+ *   edu_installments  += category_id, waiver_amount, penalty_amount, receipt_id
+ *   edu_payments      += reference (bank ref / cheque #), receipt_id
+ * ============================================================================ */
+
+let _v2FeeSchemaReady = false;
+async function _ensureSchemaV2Fees() {
+  if (_v2FeeSchemaReady) return;
+  await db.query(`CREATE TABLE IF NOT EXISTS edu_fee_categories (
+    id          SERIAL PRIMARY KEY,
+    name        VARCHAR(80) NOT NULL,
+    code        VARCHAR(30),
+    is_active   SMALLINT DEFAULT 1,
+    sort_order  INTEGER DEFAULT 0,
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+  )`);
+  await db.query(`CREATE INDEX IF NOT EXISTS edu_feecats_active_idx ON edu_fee_categories(is_active)`).catch(()=>{});
+
+  await db.query(`CREATE TABLE IF NOT EXISTS edu_fee_concessions (
+    id              SERIAL PRIMARY KEY,
+    enrollment_id   INTEGER NOT NULL,
+    installment_id  INTEGER,
+    reason          VARCHAR(120) NOT NULL,
+    amount          NUMERIC(12,2) NOT NULL DEFAULT 0,
+    pct             NUMERIC(5,2),
+    approved_by     INTEGER,
+    approved_at     TIMESTAMPTZ,
+    note            TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  await db.query(`CREATE INDEX IF NOT EXISTS edu_concessions_enrol_idx ON edu_fee_concessions(enrollment_id)`).catch(()=>{});
+
+  await db.query(`CREATE TABLE IF NOT EXISTS edu_fee_penalties (
+    id              SERIAL PRIMARY KEY,
+    installment_id  INTEGER NOT NULL,
+    enrollment_id   INTEGER NOT NULL,
+    amount          NUMERIC(12,2) NOT NULL DEFAULT 0,
+    days_overdue    INTEGER,
+    waived          SMALLINT DEFAULT 0,
+    waived_by       INTEGER,
+    waived_at       TIMESTAMPTZ,
+    waived_reason   TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  await db.query(`CREATE INDEX IF NOT EXISTS edu_penalties_inst_idx ON edu_fee_penalties(installment_id)`).catch(()=>{});
+
+  await db.query(`CREATE TABLE IF NOT EXISTS edu_fee_reminders (
+    id              SERIAL PRIMARY KEY,
+    installment_id  INTEGER NOT NULL,
+    enrollment_id   INTEGER NOT NULL,
+    lead_id         INTEGER,
+    stage           VARCHAR(40) NOT NULL,
+    scheduled_for   DATE NOT NULL,
+    sent_at         TIMESTAMPTZ,
+    channel         VARCHAR(20),
+    status          VARCHAR(20) DEFAULT 'scheduled',
+    error           TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  await db.query(`CREATE INDEX IF NOT EXISTS edu_reminders_sched_idx ON edu_fee_reminders(scheduled_for, status)`).catch(()=>{});
+  await db.query(`CREATE INDEX IF NOT EXISTS edu_reminders_inst_idx ON edu_fee_reminders(installment_id)`).catch(()=>{});
+
+  await db.query(`CREATE TABLE IF NOT EXISTS edu_receipts (
+    id              SERIAL PRIMARY KEY,
+    receipt_no      VARCHAR(40) NOT NULL UNIQUE,
+    enrollment_id   INTEGER NOT NULL,
+    lead_id         INTEGER,
+    amount          NUMERIC(12,2) NOT NULL DEFAULT 0,
+    mode            VARCHAR(30),
+    reference       VARCHAR(80),
+    student_name    VARCHAR(160),
+    course          VARCHAR(160),
+    payment_id      INTEGER,
+    issued_by       INTEGER,
+    issued_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    notes           TEXT
+  )`);
+  await db.query(`CREATE INDEX IF NOT EXISTS edu_receipts_enrol_idx ON edu_receipts(enrollment_id)`).catch(()=>{});
+
+  // Extend edu_installments
+  try { await db.query(`ALTER TABLE edu_installments ADD COLUMN IF NOT EXISTS category_id INTEGER`); } catch (_) {}
+  try { await db.query(`ALTER TABLE edu_installments ADD COLUMN IF NOT EXISTS waiver_amount NUMERIC(12,2) DEFAULT 0`); } catch (_) {}
+  try { await db.query(`ALTER TABLE edu_installments ADD COLUMN IF NOT EXISTS penalty_amount NUMERIC(12,2) DEFAULT 0`); } catch (_) {}
+  try { await db.query(`ALTER TABLE edu_installments ADD COLUMN IF NOT EXISTS receipt_id INTEGER`); } catch (_) {}
+  // Extend edu_payments
+  try { await db.query(`ALTER TABLE edu_payments ADD COLUMN IF NOT EXISTS reference VARCHAR(80)`); } catch (_) {}
+  try { await db.query(`ALTER TABLE edu_payments ADD COLUMN IF NOT EXISTS receipt_id INTEGER`); } catch (_) {}
+
+  // Seed default fee categories if empty
+  const c = (await db.query(`SELECT COUNT(*)::int AS n FROM edu_fee_categories`)).rows[0].n;
+  if (c === 0) {
+    const seeds = [
+      { name: 'Tuition',   code: 'TUI', sort_order: 1 },
+      { name: 'Admission', code: 'ADM', sort_order: 2 },
+      { name: 'Exam',      code: 'EXM', sort_order: 3 },
+      { name: 'Transport', code: 'TRN', sort_order: 4 },
+      { name: 'Hostel',    code: 'HST', sort_order: 5 },
+      { name: 'Books',     code: 'BOK', sort_order: 6 },
+      { name: 'Other',     code: 'OTH', sort_order: 9 }
+    ];
+    for (const s of seeds) {
+      await db.query(`INSERT INTO edu_fee_categories (name, code, sort_order) VALUES ($1,$2,$3)`,
+        [s.name, s.code, s.sort_order]).catch(()=>{});
+    }
+  }
+  _v2FeeSchemaReady = true;
+}
+
+/* ---------- Fee categories ---------- */
+async function api_edu_feeCats_list(token) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV2Fees();
+  const r = await db.query(`SELECT * FROM edu_fee_categories ORDER BY sort_order, name`);
+  return { items: r.rows };
+}
+async function api_edu_feeCats_save(token, payload) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV2Fees();
+  const p = payload || {};
+  if (!p.name) throw new Error('name required');
+  if (p.id) {
+    await db.query(
+      `UPDATE edu_fee_categories SET name=$1, code=$2, is_active=$3, sort_order=$4 WHERE id=$5`,
+      [String(p.name), String(p.code||''), p.is_active ? 1 : 0, Number(p.sort_order||0), Number(p.id)]
+    );
+    return { ok: true, id: p.id };
+  }
+  const r = await db.query(
+    `INSERT INTO edu_fee_categories (name, code, is_active, sort_order) VALUES ($1,$2,$3,$4) RETURNING id`,
+    [String(p.name), String(p.code||''), p.is_active !== 0 ? 1 : 0, Number(p.sort_order||0)]
+  );
+  return { ok: true, id: r.rows[0].id };
+}
+async function api_edu_feeCats_delete(token, id) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV2Fees();
+  await db.query(`DELETE FROM edu_fee_categories WHERE id=$1`, [Number(id)]);
+  return { ok: true };
+}
+
+/* ---------- Concessions / Waivers ---------- */
+async function api_edu_concessions_list(token, enrollmentId) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV2Fees();
+  const r = await db.query(
+    `SELECT c.*, i.seq AS installment_seq, i.due_date, u.name AS approved_by_name
+       FROM edu_fee_concessions c
+       LEFT JOIN edu_installments i ON i.id = c.installment_id
+       LEFT JOIN users u ON u.id = c.approved_by
+      WHERE c.enrollment_id = $1
+      ORDER BY c.created_at DESC`,
+    [Number(enrollmentId)]
+  );
+  return { items: r.rows };
+}
+async function api_edu_concessions_apply(token, payload) {
+  const me = await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV2Fees();
+  const p = payload || {};
+  if (!p.enrollment_id) throw new Error('enrollment_id required');
+  if (!p.reason) throw new Error('reason required');
+  let amount = Number(p.amount || 0);
+  const pct = p.pct != null ? Number(p.pct) : null;
+  // If pct given + installment_id, compute amount from installment.amount
+  if (pct && p.installment_id) {
+    const inst = (await db.query(`SELECT amount FROM edu_installments WHERE id=$1`, [Number(p.installment_id)])).rows[0];
+    if (inst) amount = Math.round(Number(inst.amount) * pct) / 100;
+  }
+  const r = await db.query(
+    `INSERT INTO edu_fee_concessions (enrollment_id, installment_id, reason, amount, pct, approved_by, approved_at, note)
+     VALUES ($1,$2,$3,$4,$5,$6,NOW(),$7) RETURNING id`,
+    [Number(p.enrollment_id), p.installment_id ? Number(p.installment_id) : null,
+     String(p.reason), amount, pct, me.id, String(p.note || '')]
+  );
+  // If installment_id given — reflect in installment.waiver_amount + recompute status
+  if (p.installment_id) {
+    await db.query(
+      `UPDATE edu_installments SET waiver_amount = COALESCE(waiver_amount,0) + $1 WHERE id = $2`,
+      [amount, Number(p.installment_id)]
+    );
+    await _recomputeInstallmentStatus(Number(p.installment_id));
+  }
+  return { ok: true, id: r.rows[0].id, amount };
+}
+async function api_edu_concessions_remove(token, id) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV2Fees();
+  const c = (await db.query(`SELECT * FROM edu_fee_concessions WHERE id=$1`, [Number(id)])).rows[0];
+  if (!c) throw new Error('Concession not found');
+  await db.query(`DELETE FROM edu_fee_concessions WHERE id=$1`, [Number(id)]);
+  if (c.installment_id) {
+    await db.query(
+      `UPDATE edu_installments SET waiver_amount = GREATEST(COALESCE(waiver_amount,0) - $1, 0) WHERE id = $2`,
+      [Number(c.amount), c.installment_id]
+    );
+    await _recomputeInstallmentStatus(c.installment_id);
+  }
+  return { ok: true };
+}
+
+/* ---------- Penalties (late fees) ---------- */
+async function api_edu_penalties_apply(token, payload) {
+  const me = await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV2Fees();
+  const p = payload || {};
+  if (!p.installment_id) throw new Error('installment_id required');
+  const inst = (await db.query(`SELECT * FROM edu_installments WHERE id=$1`, [Number(p.installment_id)])).rows[0];
+  if (!inst) throw new Error('Installment not found');
+  let amount = Number(p.amount || 0);
+  // Auto-compute if plan has late_fee_pct
+  if (!amount && inst.enrollment_id) {
+    const en = (await db.query(`SELECT plan_snapshot FROM edu_enrollments WHERE id=$1`, [inst.enrollment_id])).rows[0];
+    try {
+      const plan = JSON.parse(en.plan_snapshot || '{}');
+      const pct = Number(plan.late_fee_pct || 0);
+      if (pct) amount = Math.round(Number(inst.amount) * pct) / 100;
+    } catch(_) {}
+  }
+  if (!amount) amount = 500; // fallback flat
+  const daysOverdue = inst.due_date
+    ? Math.floor((Date.now() - new Date(inst.due_date).getTime()) / 86400000)
+    : 0;
+  const r = await db.query(
+    `INSERT INTO edu_fee_penalties (installment_id, enrollment_id, amount, days_overdue)
+     VALUES ($1,$2,$3,$4) RETURNING id`,
+    [inst.id, inst.enrollment_id, amount, daysOverdue]
+  );
+  await db.query(
+    `UPDATE edu_installments SET penalty_amount = COALESCE(penalty_amount,0) + $1, late_fee = COALESCE(late_fee,0) + $1 WHERE id = $2`,
+    [amount, inst.id]
+  );
+  await _recomputeInstallmentStatus(inst.id);
+  return { ok: true, id: r.rows[0].id, amount, days_overdue: daysOverdue };
+}
+async function api_edu_penalties_waive(token, payload) {
+  const me = await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV2Fees();
+  const p = payload || {};
+  if (!p.id) throw new Error('penalty id required');
+  const pen = (await db.query(`SELECT * FROM edu_fee_penalties WHERE id=$1`, [Number(p.id)])).rows[0];
+  if (!pen) throw new Error('Penalty not found');
+  if (pen.waived) return { ok: true, already: true };
+  await db.query(
+    `UPDATE edu_fee_penalties SET waived=1, waived_by=$1, waived_at=NOW(), waived_reason=$2 WHERE id=$3`,
+    [me.id, String(p.reason || ''), pen.id]
+  );
+  await db.query(
+    `UPDATE edu_installments SET penalty_amount = GREATEST(COALESCE(penalty_amount,0) - $1, 0),
+                                 late_fee       = GREATEST(COALESCE(late_fee,0) - $1, 0)
+      WHERE id = $2`,
+    [Number(pen.amount), pen.installment_id]
+  );
+  await _recomputeInstallmentStatus(pen.installment_id);
+  return { ok: true };
+}
+
+/* ---------- Helper: recompute installment status considering waivers + penalties ---------- */
+async function _recomputeInstallmentStatus(installmentId) {
+  const inst = (await db.query(`SELECT * FROM edu_installments WHERE id=$1`, [Number(installmentId)])).rows[0];
+  if (!inst) return;
+  const due = Number(inst.amount) + Number(inst.penalty_amount || 0) - Number(inst.waiver_amount || 0);
+  const paid = Number(inst.paid_amount || 0);
+  let status;
+  if (paid >= due && due > 0) status = 'paid';
+  else if (paid > 0)          status = 'partial';
+  else                        status = 'due';
+  await db.query(`UPDATE edu_installments SET status=$1 WHERE id=$2`, [status, inst.id]);
+  return status;
+}
+
+/* ---------- Dunning reminders ---------- */
+const _REMINDER_STAGES = [
+  { stage: 't_minus_3', offset_days: -3 },
+  { stage: 't_zero',    offset_days: 0 },
+  { stage: 't_plus_3',  offset_days: 3 },
+  { stage: 't_plus_7',  offset_days: 7 },
+  { stage: 't_plus_14', offset_days: 14 },
+  { stage: 't_plus_30', offset_days: 30 }
+];
+
+async function api_edu_reminders_scheduleForInstallment(token, installmentId) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV2Fees();
+  const inst = (await db.query(`SELECT * FROM edu_installments WHERE id=$1`, [Number(installmentId)])).rows[0];
+  if (!inst) throw new Error('Installment not found');
+  const enrol = (await db.query(`SELECT * FROM edu_enrollments WHERE id=$1`, [inst.enrollment_id])).rows[0];
+  if (!enrol) throw new Error('Enrollment not found');
+  if (!inst.due_date) return { ok: true, skipped: 'no_due_date' };
+  const dueMs = new Date(inst.due_date).getTime();
+  const inserted = [];
+  for (const s of _REMINDER_STAGES) {
+    const dt = new Date(dueMs + s.offset_days * 86400000).toISOString().slice(0, 10);
+    // Skip duplicates
+    const ex = await db.query(
+      `SELECT 1 FROM edu_fee_reminders WHERE installment_id=$1 AND stage=$2 LIMIT 1`,
+      [inst.id, s.stage]
+    );
+    if (ex.rows.length) continue;
+    await db.query(
+      `INSERT INTO edu_fee_reminders (installment_id, enrollment_id, lead_id, stage, scheduled_for, status)
+       VALUES ($1,$2,$3,$4,$5,'scheduled')`,
+      [inst.id, inst.enrollment_id, enrol.lead_id, s.stage, dt]
+    );
+    inserted.push(s.stage);
+  }
+  return { ok: true, inserted };
+}
+
+async function api_edu_reminders_dueList(token, opts) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV2Fees();
+  const o = opts || {};
+  const on = o.on ? String(o.on) : null;
+  const limit = Math.min(Number(o.limit || 500), 2000);
+  const args = [];
+  let where = `r.status = 'scheduled' AND (i.status IN ('due','partial'))`;
+  if (on) { args.push(on); where += ` AND r.scheduled_for = $${args.length}::date`; }
+  else    { where += ` AND r.scheduled_for <= CURRENT_DATE`; }
+  const sql = `SELECT r.*, i.seq AS installment_seq, i.due_date, i.amount, i.paid_amount, i.status AS inst_status,
+                       e.course_name, e.batch_name, l.name AS lead_name, l.mobile AS lead_phone, l.email AS lead_email
+                  FROM edu_fee_reminders r
+                  JOIN edu_installments i ON i.id = r.installment_id
+                  JOIN edu_enrollments  e ON e.id = r.enrollment_id
+                  LEFT JOIN leads l ON l.id = r.lead_id
+                 WHERE ${where}
+                 ORDER BY r.scheduled_for ASC, r.id ASC
+                 LIMIT ${limit}`;
+  const rows = (await db.query(sql, args)).rows;
+  return { items: rows, count: rows.length };
+}
+
+async function api_edu_reminders_markSent(token, payload) {
+  const me = await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV2Fees();
+  const p = payload || {};
+  if (!p.id) throw new Error('reminder id required');
+  const chan = ['wa','email','sms','manual'].includes(p.channel) ? p.channel : 'manual';
+  await db.query(
+    `UPDATE edu_fee_reminders SET status='sent', sent_at=NOW(), channel=$1 WHERE id=$2`,
+    [chan, Number(p.id)]
+  );
+  return { ok: true };
+}
+
+async function api_edu_reminders_skip(token, id) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV2Fees();
+  await db.query(`UPDATE edu_fee_reminders SET status='skipped' WHERE id=$1`, [Number(id)]);
+  return { ok: true };
+}
+
+/* ---------- Receipts ---------- */
+async function _genReceiptNumber() {
+  const yr = new Date().getFullYear();
+  const prefix = `RCP-${yr}-`;
+  const r = await db.query(
+    `SELECT receipt_no FROM edu_receipts WHERE receipt_no LIKE $1 ORDER BY id DESC LIMIT 1`,
+    [prefix + '%']
+  );
+  let next = 1;
+  if (r.rows.length) {
+    const m = String(r.rows[0].receipt_no).match(/(\d+)$/);
+    if (m) next = parseInt(m[1], 10) + 1;
+  }
+  return prefix + String(next).padStart(6, '0');
+}
+
+async function api_edu_receipts_generate(token, payload) {
+  const me = await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV2Fees();
+  const p = payload || {};
+  if (!p.payment_id) throw new Error('payment_id required');
+  const pay = (await db.query(`SELECT * FROM edu_payments WHERE id=$1`, [Number(p.payment_id)])).rows[0];
+  if (!pay) throw new Error('Payment not found');
+  if (pay.receipt_id) {
+    // Return existing
+    const ex = (await db.query(`SELECT * FROM edu_receipts WHERE id=$1`, [pay.receipt_id])).rows[0];
+    return { ok: true, item: ex, existing: true };
+  }
+  const enrol = (await db.query(`SELECT * FROM edu_enrollments WHERE id=$1`, [pay.enrollment_id])).rows[0];
+  const lead  = enrol && enrol.lead_id
+    ? (await db.query(`SELECT name, mobile FROM leads WHERE id=$1`, [enrol.lead_id])).rows[0] || {}
+    : {};
+  const rno = await _genReceiptNumber();
+  const ins = await db.query(
+    `INSERT INTO edu_receipts (receipt_no, enrollment_id, lead_id, amount, mode, reference,
+                                student_name, course, payment_id, issued_by, notes)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+    [rno, pay.enrollment_id, enrol ? enrol.lead_id : null, Number(pay.amount), String(pay.mode || 'cash'),
+     String(pay.reference || pay.receipt_no || ''), String(lead.name || ''),
+     String(enrol ? enrol.course_name : ''), pay.id, me.id, String(p.notes || '')]
+  );
+  await db.query(`UPDATE edu_payments SET receipt_id=$1 WHERE id=$2`, [ins.rows[0].id, pay.id]);
+  return { ok: true, item: ins.rows[0] };
+}
+
+async function api_edu_receipts_list(token, opts) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV2Fees();
+  const o = opts || {};
+  const args = [];
+  const w = [];
+  if (o.enrollment_id) { args.push(Number(o.enrollment_id)); w.push(`enrollment_id = $${args.length}`); }
+  if (o.lead_id)       { args.push(Number(o.lead_id));       w.push(`lead_id = $${args.length}`); }
+  if (o.from) { args.push(o.from); w.push(`issued_at >= $${args.length}::date`); }
+  if (o.to)   { args.push(o.to);   w.push(`issued_at < ($${args.length}::date + INTERVAL '1 day')`); }
+  const sql = `SELECT * FROM edu_receipts ${w.length ? 'WHERE ' + w.join(' AND ') : ''} ORDER BY id DESC LIMIT ${Math.min(Number(o.limit||500),2000)}`;
+  const r = await db.query(sql, args);
+  return { items: r.rows };
+}
+
+async function api_edu_receipts_html(token, id) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV2Fees();
+  const rc = (await db.query(`SELECT * FROM edu_receipts WHERE id=$1`, [Number(id)])).rows[0];
+  if (!rc) throw new Error('Receipt not found');
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Receipt ${rc.receipt_no}</title>
+<style>body{font-family:Inter,system-ui,sans-serif;max-width:700px;margin:20px auto;padding:20px;color:#1c1917}
+.hd{background:linear-gradient(135deg,#7c3aed,#a855f7);color:#fff;padding:20px;border-radius:10px 10px 0 0}
+.bx{background:#fff;border:1px solid #ddd6fe;border-top:0;border-radius:0 0 10px 10px;padding:20px}
+table{width:100%;border-collapse:collapse;margin:14px 0}
+td{padding:8px;border-bottom:1px solid #eee}
+td:last-child{text-align:right}
+.tot{font-weight:700;font-size:18px;color:#7c3aed}
+.stamp{margin-top:30px;padding:14px;text-align:center;border:2px dashed #16a34a;color:#16a34a;font-weight:700;letter-spacing:2px;border-radius:8px}</style></head>
+<body><div class="hd"><h1 style="margin:0;font-size:22px">OFFICIAL RECEIPT</h1>
+<p style="margin:6px 0 0;opacity:.9">Receipt No: ${rc.receipt_no} &nbsp;·&nbsp; ${new Date(rc.issued_at).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}</p></div>
+<div class="bx"><table>
+<tr><td>Student</td><td><b>${_esc(rc.student_name||'—')}</b></td></tr>
+<tr><td>Course</td><td>${_esc(rc.course||'—')}</td></tr>
+<tr><td>Payment Mode</td><td>${_esc(rc.mode||'cash').toUpperCase()}</td></tr>
+${rc.reference ? `<tr><td>Reference</td><td>${_esc(rc.reference)}</td></tr>` : ''}
+<tr><td>Amount</td><td class="tot">₹${Number(rc.amount).toLocaleString('en-IN',{minimumFractionDigits:2})}</td></tr>
+${rc.notes ? `<tr><td>Note</td><td>${_esc(rc.notes)}</td></tr>` : ''}
+</table><div class="stamp">✓ RECEIVED WITH THANKS</div></div></body></html>`;
+  return { html, receipt_no: rc.receipt_no };
+}
+
+function _esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+/* ---------- Dunning summary — aging receivables ---------- */
+async function api_edu_dunning_summary(token) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV2Fees();
+  const r = await db.query(`
+    WITH overdue AS (
+      SELECT i.id, i.due_date, e.lead_id,
+             (i.amount + COALESCE(i.penalty_amount,0) - COALESCE(i.waiver_amount,0) - i.paid_amount) AS balance,
+             (CURRENT_DATE - i.due_date) AS d
+        FROM edu_installments i
+        JOIN edu_enrollments e ON e.id = i.enrollment_id
+       WHERE i.status IN ('due','partial')
+         AND i.due_date < CURRENT_DATE
+    )
+    SELECT
+      SUM(CASE WHEN d BETWEEN 1  AND 30  THEN balance ELSE 0 END)::numeric AS b_0_30,
+      SUM(CASE WHEN d BETWEEN 31 AND 60  THEN balance ELSE 0 END)::numeric AS b_31_60,
+      SUM(CASE WHEN d BETWEEN 61 AND 90  THEN balance ELSE 0 END)::numeric AS b_61_90,
+      SUM(CASE WHEN d > 90               THEN balance ELSE 0 END)::numeric AS b_90p,
+      COUNT(*)::int AS overdue_count,
+      SUM(balance)::numeric AS total_overdue
+    FROM overdue`);
+  const row = r.rows[0] || {};
+  return {
+    aging: {
+      '0-30':  Number(row.b_0_30) || 0,
+      '31-60': Number(row.b_31_60) || 0,
+      '61-90': Number(row.b_61_90) || 0,
+      '90+':   Number(row.b_90p)   || 0
+    },
+    overdue_count: row.overdue_count || 0,
+    total_overdue: Number(row.total_overdue) || 0
+  };
+}
+
+/* ============================================================================
+ * EDU_PACK_v2 Commit 3 — Reports + AI Insights + Demo Seed extension
+ * ============================================================================ */
+
+/* ---------- Admission funnel — how leads flow through the 14-stage pipeline ---------- */
+async function api_edu_reports_admissionFunnel(token, opts) {
+  await authUser(token);
+  await _requireEducation();
+  const o = opts || {};
+  const args = [];
+  let dw = '';
+  if (o.from) { args.push(o.from); dw += ` AND l.created_at >= $${args.length}::date`; }
+  if (o.to)   { args.push(o.to);   dw += ` AND l.created_at < ($${args.length}::date + INTERVAL '1 day')`; }
+  const r = await db.query(
+    `SELECT s.name AS stage, s.stage AS bucket, COUNT(l.id)::int AS count
+       FROM statuses s
+       LEFT JOIN leads l ON l.status_id = s.id ${dw}
+      GROUP BY s.name, s.stage, s.sort_order
+      ORDER BY COALESCE(s.sort_order, 0), s.id`,
+    args
+  );
+  return { stages: r.rows };
+}
+
+/* ---------- Batch fill-rate ---------- */
+async function api_edu_reports_batchFillRate(token) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV2();
+  const r = await db.query(`
+    SELECT b.id, b.name, b.course, b.capacity, b.enrolled_ct, b.start_date, b.end_date, b.status,
+           CASE WHEN b.capacity > 0 THEN ROUND((b.enrolled_ct::numeric / b.capacity::numeric) * 100, 1) ELSE 0 END AS fill_pct
+      FROM edu_batches b
+     ORDER BY fill_pct DESC, b.name ASC`);
+  return { batches: r.rows };
+}
+
+/* ---------- Scholarship impact ---------- */
+async function api_edu_reports_scholarshipImpact(token) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV2();
+  await _ensureSchemaV2Fees();
+  const r = await db.query(`
+    SELECT COALESCE(SUM(c.amount), 0)::numeric AS total_waived,
+           COUNT(DISTINCT c.enrollment_id)::int AS enrollments_touched,
+           COUNT(*)::int AS waiver_events
+      FROM edu_fee_concessions c`);
+  const byReason = await db.query(`
+    SELECT c.reason, COUNT(*)::int AS n, COALESCE(SUM(c.amount),0)::numeric AS amount
+      FROM edu_fee_concessions c
+     GROUP BY c.reason
+     ORDER BY amount DESC
+     LIMIT 20`);
+  return {
+    total_waived:        Number(r.rows[0].total_waived) || 0,
+    enrollments_touched: r.rows[0].enrollments_touched  || 0,
+    waiver_events:       r.rows[0].waiver_events        || 0,
+    by_reason:           byReason.rows
+  };
+}
+
+/* ---------- Aging receivables (deeper than dunning_summary) ---------- */
+async function api_edu_reports_agingReceivables(token) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV2Fees();
+  const r = await db.query(`
+    SELECT e.id AS enrollment_id, e.lead_id, e.course_name, e.batch_name, l.name AS student_name, l.mobile AS phone,
+           SUM(i.amount + COALESCE(i.penalty_amount,0) - COALESCE(i.waiver_amount,0) - i.paid_amount)::numeric AS balance,
+           MAX(CURRENT_DATE - i.due_date)::int AS max_days_overdue,
+           COUNT(*)::int AS overdue_installments
+      FROM edu_installments i
+      JOIN edu_enrollments e ON e.id = i.enrollment_id
+      LEFT JOIN leads l ON l.id = e.lead_id
+     WHERE i.status IN ('due','partial') AND i.due_date < CURRENT_DATE
+     GROUP BY e.id, e.lead_id, e.course_name, e.batch_name, l.name, l.mobile
+     HAVING SUM(i.amount + COALESCE(i.penalty_amount,0) - COALESCE(i.waiver_amount,0) - i.paid_amount) > 0
+     ORDER BY balance DESC
+     LIMIT 200`);
+  return { rows: r.rows };
+}
+
+/* ---------- Admission drop-off — where prospects churn ---------- */
+async function api_edu_reports_admissionDropOff(token, opts) {
+  await authUser(token);
+  await _requireEducation();
+  const o = opts || {};
+  const args = [];
+  let dw = '';
+  if (o.from) { args.push(o.from); dw += ` AND l.created_at >= $${args.length}::date`; }
+  if (o.to)   { args.push(o.to);   dw += ` AND l.created_at < ($${args.length}::date + INTERVAL '1 day')`; }
+  const funnel = await db.query(
+    `SELECT s.name AS stage, s.sort_order, COUNT(l.id)::int AS count
+       FROM statuses s LEFT JOIN leads l ON l.status_id = s.id ${dw}
+      GROUP BY s.name, s.sort_order ORDER BY COALESCE(s.sort_order,0)`,
+    args
+  );
+  const rows = funnel.rows;
+  // Compute drop-off between adjacent stages
+  const dropOff = [];
+  for (let i = 0; i < rows.length - 1; i++) {
+    const from = rows[i], to = rows[i + 1];
+    const dropped = Math.max(0, from.count - to.count);
+    const rate = from.count > 0 ? Math.round((dropped / from.count) * 100) : 0;
+    dropOff.push({
+      from_stage: from.stage, to_stage: to.stage,
+      from_count: from.count, to_count: to.count,
+      dropped, drop_rate_pct: rate
+    });
+  }
+  return { funnel: rows, drop_off: dropOff };
+}
+
+/* ---------- AI Insights (Gemini) ---------- */
+async function api_edu_ai_insights(token) {
+  await authUser(token);
+  await _requireEducation();
+  await _ensureSchemaV2();
+  await _ensureSchemaV2Fees();
+
+  // Gather signals
+  const funnel = (await db.query(
+    `SELECT s.name, COUNT(l.id)::int AS n FROM statuses s
+       LEFT JOIN leads l ON l.status_id = s.id
+      GROUP BY s.name, s.sort_order ORDER BY COALESCE(s.sort_order,0) LIMIT 20`)).rows;
+  const batches = (await db.query(
+    `SELECT name, capacity, enrolled_ct FROM edu_batches WHERE status='open' LIMIT 20`)).rows;
+  const aging = (await db.query(`
+    SELECT
+      SUM(CASE WHEN (CURRENT_DATE - i.due_date) > 30 THEN (i.amount - i.paid_amount) ELSE 0 END)::numeric AS deep,
+      SUM(CASE WHEN (CURRENT_DATE - i.due_date) BETWEEN 1 AND 30 THEN (i.amount - i.paid_amount) ELSE 0 END)::numeric AS recent,
+      COUNT(*)::int AS overdue_n
+     FROM edu_installments i WHERE i.status IN ('due','partial') AND i.due_date < CURRENT_DATE`)).rows[0] || {};
+  const collected = (await db.query(
+    `SELECT COALESCE(SUM(amount),0)::numeric AS n FROM edu_payments WHERE paid_at >= CURRENT_DATE - INTERVAL '30 days'`)).rows[0].n;
+
+  // Try to use tenant's Gemini utility if present, else return rule-based narrative
+  let narrative = null;
+  try {
+    const aiSum = require('../../utils/aiSummary');
+    if (aiSum && typeof aiSum.gemini === 'function') {
+      const prompt = `You are the head of admissions at a coaching institute. Based on the following data give 5 bullet-point actionable insights (mix wins + risks + specific next action). Be concise; each bullet <= 22 words.\n\nFunnel: ${JSON.stringify(funnel)}\nBatches (open): ${JSON.stringify(batches)}\nOverdue >30d: ₹${Number(aging.deep||0).toLocaleString('en-IN')} · 1-30d: ₹${Number(aging.recent||0).toLocaleString('en-IN')} · total overdue receipts: ${aging.overdue_n||0}\nCollected last 30d: ₹${Number(collected||0).toLocaleString('en-IN')}`;
+      narrative = await aiSum.gemini(prompt);
+    }
+  } catch (_) { /* fall back below */ }
+
+  if (!narrative) {
+    // Rule-based fallback
+    const bullets = [];
+    const openBatch = batches.find(b => b.enrolled_ct < b.capacity * 0.5);
+    if (openBatch) bullets.push(`▲ Batch "${openBatch.name}" is only ${Math.round((openBatch.enrolled_ct / (openBatch.capacity||1))*100)}% full — push counselors to fill before start.`);
+    const bigDrop = funnel.length > 2 ? funnel.reduce((max, s, i, arr) => {
+      if (i === 0) return max;
+      const drop = (arr[i-1].n || 0) - (s.n || 0);
+      return drop > max.drop ? { from: arr[i-1].name, to: s.name, drop } : max;
+    }, { drop: 0 }) : null;
+    if (bigDrop && bigDrop.drop > 0) bullets.push(`▼ Biggest drop-off: ${bigDrop.from} → ${bigDrop.to} (${bigDrop.drop} leads lost). Investigate scripts / TAT.`);
+    if (Number(aging.deep) > 50000) bullets.push(`⚠ ₹${Number(aging.deep).toLocaleString('en-IN')} stuck >30 days overdue. Escalate to accounts team + consider late-fee waivers to unlock collection.`);
+    if (Number(collected) > 0) bullets.push(`✓ Collected ₹${Number(collected).toLocaleString('en-IN')} in last 30 days — highlight top-performing counselor.`);
+    bullets.push(`→ Send this week's dunning reminders via WhatsApp (check Fees → Reminders tab).`);
+    narrative = bullets.join('\n');
+  }
+
+  return {
+    generated_at: new Date().toISOString(),
+    signals: { funnel, batches_open: batches.length, aging, collected_30d: Number(collected) || 0 },
+    insights: narrative
+  };
+}
+
+/* ---------- Extended Demo Seed — add fees + payments + receipts ---------- */
+async function api_edu_v2_seedDemoFull(token) {
+  const me = await authUser(token);
+  await _requireEducation();
+  await _ensureSchema();
+  await _ensureSchemaV2();
+  await _ensureSchemaV2Fees();
+
+  // Run the base seed first (applications + batches)
+  let base;
+  try { base = await api_edu_v2_seedDemo(token); } catch(e) { base = { error: e.message }; }
+
+  // Pick 10 recent applications-with-leads, create enrollments + fee plans + installments + partial payments
+  const plans = (await db.query(`SELECT * FROM edu_fee_plans WHERE is_active=1 LIMIT 3`)).rows;
+  if (!plans.length) {
+    // Bootstrap a plan
+    await db.query(
+      `INSERT INTO edu_fee_plans (name, total_amount, mode, num_installments, interval_days, grace_days, late_fee_pct)
+       VALUES ('Quarterly Demo (4 × 15k)', 60000, 'quarterly', 4, 90, 5, 2)`);
+  }
+  const planRows = (await db.query(`SELECT * FROM edu_fee_plans WHERE is_active=1 ORDER BY id ASC LIMIT 3`)).rows;
+
+  const leads = (await db.query(
+    `SELECT id, name FROM leads
+      WHERE COALESCE(name,'') <> ''
+      ORDER BY id DESC LIMIT 12`
+  )).rows;
+
+  let enrolCt = 0, payCt = 0, receiptCt = 0, waiverCt = 0, penCt = 0;
+  for (let i = 0; i < leads.length; i++) {
+    const lead = leads[i];
+    const plan = planRows[i % planRows.length];
+    // skip if already enrolled
+    const ex = await db.query(`SELECT id FROM edu_enrollments WHERE lead_id=$1 LIMIT 1`, [lead.id]);
+    if (ex.rows.length) continue;
+    const startDate = new Date(Date.now() - (60 + i * 15) * 86400000).toISOString().slice(0, 10);
+    const en = await db.query(
+      `INSERT INTO edu_enrollments (lead_id, fee_plan_id, plan_snapshot, course_name, batch_name, total_amount, start_date, status, created_by)
+       VALUES ($1,$2,$3,'Foundation Course','Morning Batch',$4,$5,'active',$6) RETURNING id`,
+      [lead.id, plan.id, JSON.stringify(plan), Number(plan.total_amount), startDate, me.id]
+    );
+    const enrollmentId = en.rows[0].id;
+    await _generateSchedule(enrollmentId, startDate, Number(plan.total_amount), plan);
+    enrolCt++;
+
+    // Pay off the first 1-2 installments
+    const insts = (await db.query(
+      `SELECT * FROM edu_installments WHERE enrollment_id=$1 ORDER BY seq ASC`, [enrollmentId]
+    )).rows;
+    const payN = Math.min(insts.length, 1 + (i % 2));
+    for (let k = 0; k < payN; k++) {
+      const inst = insts[k];
+      await db.query(
+        `UPDATE edu_installments SET paid_amount=$1, status='paid' WHERE id=$2`,
+        [Number(inst.amount), inst.id]
+      );
+      const payIns = await db.query(
+        `INSERT INTO edu_payments (installment_id, enrollment_id, amount, mode, receipt_no, note, recorded_by, paid_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+        [inst.id, enrollmentId, Number(inst.amount),
+         ['upi','card','cash','neft','cheque'][k % 5],
+         'DEMO-' + inst.id, 'Demo seeded payment', me.id,
+         new Date(Date.now() - (30 + k * 7) * 86400000).toISOString()]
+      );
+      payCt++;
+      // Auto-generate receipt for some
+      if (k === 0) {
+        const rno = await _genReceiptNumber();
+        const rc = await db.query(
+          `INSERT INTO edu_receipts (receipt_no, enrollment_id, lead_id, amount, mode, reference, student_name, course, payment_id, issued_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+          [rno, enrollmentId, lead.id, Number(inst.amount),
+           ['upi','card','cash','neft','cheque'][k % 5], 'REF-' + payIns.rows[0].id,
+           lead.name, 'Foundation Course', payIns.rows[0].id, me.id]
+        );
+        await db.query(`UPDATE edu_payments SET receipt_id=$1 WHERE id=$2`, [rc.rows[0].id, payIns.rows[0].id]);
+        receiptCt++;
+      }
+    }
+
+    // Apply a waiver to some enrollments
+    if (i % 3 === 0 && insts[payN]) {
+      const targetInst = insts[payN];
+      const wamt = Math.round(Number(targetInst.amount) * 0.1);
+      await db.query(
+        `INSERT INTO edu_fee_concessions (enrollment_id, installment_id, reason, amount, approved_by, approved_at)
+         VALUES ($1,$2,'Merit scholarship',$3,$4,NOW())`,
+        [enrollmentId, targetInst.id, wamt, me.id]
+      );
+      await db.query(
+        `UPDATE edu_installments SET waiver_amount=$1 WHERE id=$2`,
+        [wamt, targetInst.id]
+      );
+      waiverCt++;
+    }
+
+    // Add a penalty to some overdue installments
+    if (i % 4 === 0 && insts[payN]) {
+      const targetInst = insts[payN];
+      // Backdate its due_date to make it overdue
+      await db.query(
+        `UPDATE edu_installments SET due_date = CURRENT_DATE - INTERVAL '45 days' WHERE id=$1`,
+        [targetInst.id]
+      );
+      await db.query(
+        `INSERT INTO edu_fee_penalties (installment_id, enrollment_id, amount, days_overdue)
+         VALUES ($1,$2,$3,$4)`,
+        [targetInst.id, enrollmentId, 500, 45]
+      );
+      await db.query(
+        `UPDATE edu_installments SET penalty_amount=500, late_fee=500 WHERE id=$1`,
+        [targetInst.id]
+      );
+      penCt++;
+    }
+
+    // Schedule reminders for the next unpaid installment
+    if (insts[payN]) {
+      try {
+        const nxt = insts[payN];
+        for (const s of _REMINDER_STAGES) {
+          const dueMs = nxt.due_date ? new Date(nxt.due_date).getTime() : Date.now();
+          const dt = new Date(dueMs + s.offset_days * 86400000).toISOString().slice(0, 10);
+          await db.query(
+            `INSERT INTO edu_fee_reminders (installment_id, enrollment_id, lead_id, stage, scheduled_for, status)
+             VALUES ($1,$2,$3,$4,$5,'scheduled')`,
+            [nxt.id, enrollmentId, lead.id, s.stage, dt]
+          ).catch(()=>{});
+        }
+      } catch(_) {}
+    }
+  }
+
+  return {
+    ok: true,
+    base,
+    enrollments_created: enrolCt,
+    payments_recorded:   payCt,
+    receipts_generated:  receiptCt,
+    waivers_applied:     waiverCt,
+    penalties_applied:   penCt
+  };
+}
+
 module.exports = {
+  /* EDU_PACK_v2 Commit 2 — Fee Tracking Deep + Dunning */
+  api_edu_feeCats_list, api_edu_feeCats_save, api_edu_feeCats_delete,
+  api_edu_concessions_list, api_edu_concessions_apply, api_edu_concessions_remove,
+  api_edu_penalties_apply, api_edu_penalties_waive,
+  api_edu_reminders_scheduleForInstallment,
+  api_edu_reminders_dueList, api_edu_reminders_markSent, api_edu_reminders_skip,
+  api_edu_receipts_generate, api_edu_receipts_list, api_edu_receipts_html,
+  api_edu_dunning_summary,
+  /* EDU_PACK_v2 Commit 3 — Reports + AI + Demo Seed */
+  api_edu_reports_admissionFunnel, api_edu_reports_batchFillRate,
+  api_edu_reports_scholarshipImpact, api_edu_reports_agingReceivables,
+  api_edu_reports_admissionDropOff,
+  api_edu_ai_insights,
+  api_edu_v2_seedDemoFull,
+  _ensureSchemaV2Fees,
+
   install, uninstall,
   /* EDU_PACK_v2 — Enrollment + Scholarships + Batches (2026-06-27) */
   api_edu_v2_summary,

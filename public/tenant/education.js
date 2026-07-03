@@ -552,6 +552,8 @@
           <li><a href="#" data-go="eduenrollments">📜 Enrollments</a></li>
           <li><a href="#" data-go="eduscholarships">📜 Scholarships</a></li>
           <li><a href="#" data-go="edubatches">🗂 Batches</a></li>
+          <li><a href="#" data-go="edufees">💰 Fees &amp; Dunning</a></li>
+          <li><a href="#" data-go="edureports">📊 Reports &amp; AI Insights</a></li>
         </ul>
       </div>
     `);
@@ -572,6 +574,259 @@
     });
   }
 
+  
+  /* ============================================================================
+   * EDU_PACK_v2 Commit 2 — Fees Deep + Dunning SPA view
+   * ============================================================================ */
+  async function viewEduFees() {
+    _injectCss();
+    var root = document.querySelector('main') || document.body;
+    root.innerHTML = '<div class="edu-v2" id="edu-fees-root"><div class="topbar"><div><div class="crumb">Education Pack › <b>Fees & Dunning</b></div><h1>Fees & Dunning</h1></div>' +
+      '<div><button class="btn ghost" data-tab="aging">Aging</button>&nbsp;' +
+      '<button class="btn ghost" data-tab="reminders">Reminders</button>&nbsp;' +
+      '<button class="btn ghost" data-tab="waivers">Waivers</button>&nbsp;' +
+      '<button class="btn ghost" data-tab="receipts">Receipts</button>&nbsp;' +
+      '<button class="btn ghost" data-tab="cats">Categories</button></div></div>' +
+      '<div id="edu-fees-body"><div class="card"><div class="empty"><div class="em">💰</div><p>Loading fees dashboard…</p></div></div></div></div>';
+    root.querySelectorAll('[data-tab]').forEach(b => b.addEventListener('click', () => _renderFeesTab(b.getAttribute('data-tab'))));
+    _renderFeesTab('aging');
+  }
+
+  async function _renderFeesTab(tab) {
+    var body = document.getElementById('edu-fees-body');
+    if (!body) return;
+    body.innerHTML = '<div class="card"><div class="empty">Loading…</div></div>';
+    try {
+      if (tab === 'aging')      return await _feesAging(body);
+      if (tab === 'reminders')  return await _feesReminders(body);
+      if (tab === 'waivers')    return await _feesWaivers(body);
+      if (tab === 'receipts')   return await _feesReceipts(body);
+      if (tab === 'cats')       return await _feesCategories(body);
+    } catch (e) {
+      body.innerHTML = '<div class="card"><div class="empty"><div class="em">⚠</div><p style="color:#dc2626">'+esc(e.message)+'</p></div></div>';
+    }
+  }
+
+  async function _feesAging(body) {
+    var [sum, ar] = await Promise.all([
+      _api('api_edu_dunning_summary'),
+      _api('api_edu_reports_agingReceivables')
+    ]);
+    var html = '<div class="kpi-grid">' +
+      '<div class="kpi"><div class="lbl">Total Overdue</div><div class="val">' + fmtMoney(sum.total_overdue) + '</div><div class="trend">' + sum.overdue_count + ' installments</div></div>' +
+      '<div class="kpi"><div class="lbl">0-30 days</div><div class="val">' + fmtMoney(sum.aging['0-30']) + '</div></div>' +
+      '<div class="kpi"><div class="lbl">31-60 days</div><div class="val">' + fmtMoney(sum.aging['31-60']) + '</div></div>' +
+      '<div class="kpi"><div class="lbl">61-90 days</div><div class="val">' + fmtMoney(sum.aging['61-90']) + '</div></div>' +
+      '<div class="kpi"><div class="lbl">> 90 days</div><div class="val" style="color:#dc2626">' + fmtMoney(sum.aging['90+']) + '</div></div></div>';
+    html += '<div class="card"><h2>Aging by student</h2>';
+    if (!ar.rows || !ar.rows.length) html += '<div class="empty">No overdue receivables 🎉</div>';
+    else {
+      html += '<table class="tbl"><thead><tr><th>Student</th><th>Course</th><th>Batch</th><th>Overdue Balance</th><th>Max days OD</th><th>Installments</th><th>Action</th></tr></thead><tbody>';
+      ar.rows.forEach(function(r) {
+        html += '<tr><td><b>'+esc(r.student_name||'—')+'</b><br><span class="small">'+esc(r.phone||'')+'</span></td>' +
+          '<td>'+esc(r.course_name||'—')+'</td><td>'+esc(r.batch_name||'—')+'</td>' +
+          '<td><b style="color:#dc2626">'+fmtMoney(r.balance)+'</b></td>' +
+          '<td><span class="pill '+(r.max_days_overdue>90?'bad':r.max_days_overdue>30?'warn':'info')+'">'+r.max_days_overdue+' d</span></td>' +
+          '<td>'+r.overdue_installments+'</td>' +
+          '<td><button class="btn sm ghost" onclick="EDU_V2._openLead('+r.lead_id+')">Open lead</button></td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+    html += '</div>';
+    body.innerHTML = html;
+  }
+
+  async function _feesReminders(body) {
+    var d = await _api('api_edu_reminders_dueList', {});
+    var html = '<div class="card"><h2>Reminders due today &amp; earlier <span class="pill info">'+d.count+'</span></h2>';
+    if (!d.items || !d.items.length) html += '<div class="empty"><div class="em">✓</div><p>No reminders due right now.</p></div>';
+    else {
+      html += '<table class="tbl"><thead><tr><th>Scheduled</th><th>Stage</th><th>Student</th><th>Phone</th><th>Course</th><th>Installment</th><th>Amount</th><th>Actions</th></tr></thead><tbody>';
+      d.items.forEach(function(r) {
+        var stageLabel = { t_minus_3:'T-3 days', t_zero:'Due today', t_plus_3:'+3 days', t_plus_7:'+7 days', t_plus_14:'+14 days', t_plus_30:'+30 days' }[r.stage] || r.stage;
+        var pillKind = /minus|zero/.test(r.stage) ? 'info' : (/30|14/.test(r.stage) ? 'bad' : 'warn');
+        html += '<tr><td>'+fmtDate(r.scheduled_for)+'</td>' +
+          '<td><span class="pill '+pillKind+'">'+stageLabel+'</span></td>' +
+          '<td><b>'+esc(r.lead_name||'—')+'</b></td>' +
+          '<td>'+esc(r.lead_phone||'')+'</td>' +
+          '<td>'+esc(r.course_name||'')+'</td>' +
+          '<td>#'+r.installment_seq+' · '+fmtDate(r.due_date)+'</td>' +
+          '<td>'+fmtMoney(r.amount)+'</td>' +
+          '<td>' +
+            '<button class="btn sm primary" onclick="EDU_V2._remSend('+r.id+',\'wa\')">WA</button> ' +
+            '<button class="btn sm ghost" onclick="EDU_V2._remSend('+r.id+',\'email\')">Email</button> ' +
+            '<button class="btn sm ghost" onclick="EDU_V2._remSkip('+r.id+')">Skip</button>' +
+          '</td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+    html += '</div>';
+    body.innerHTML = html;
+  }
+
+  async function _feesWaivers(body) {
+    // Show total waived + by-reason breakdown
+    var d = await _api('api_edu_reports_scholarshipImpact');
+    var html = '<div class="kpi-grid">' +
+      '<div class="kpi"><div class="lbl">Total Waived</div><div class="val">'+fmtMoney(d.total_waived)+'</div></div>' +
+      '<div class="kpi"><div class="lbl">Enrollments Touched</div><div class="val">'+d.enrollments_touched+'</div></div>' +
+      '<div class="kpi"><div class="lbl">Waiver Events</div><div class="val">'+d.waiver_events+'</div></div></div>';
+    html += '<div class="card"><h2>By reason</h2>';
+    if (!d.by_reason || !d.by_reason.length) html += '<div class="empty">No concessions yet.</div>';
+    else {
+      html += '<table class="tbl"><thead><tr><th>Reason</th><th>Events</th><th>Amount</th></tr></thead><tbody>';
+      d.by_reason.forEach(function(r) {
+        html += '<tr><td>'+esc(r.reason)+'</td><td>'+r.n+'</td><td>'+fmtMoney(r.amount)+'</td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+    html += '</div>';
+    body.innerHTML = html;
+  }
+
+  async function _feesReceipts(body) {
+    var d = await _api('api_edu_receipts_list', { limit: 200 });
+    var html = '<div class="card"><h2>Recent receipts <span class="pill info">'+(d.items||[]).length+'</span></h2>';
+    if (!d.items || !d.items.length) html += '<div class="empty">No receipts yet — generate one from Fees → Enrollment → Mark paid.</div>';
+    else {
+      html += '<table class="tbl"><thead><tr><th>Receipt #</th><th>Date</th><th>Student</th><th>Course</th><th>Mode</th><th>Amount</th><th></th></tr></thead><tbody>';
+      d.items.forEach(function(r) {
+        html += '<tr><td><b>'+esc(r.receipt_no)+'</b></td>' +
+          '<td>'+fmtDate(r.issued_at)+'</td>' +
+          '<td>'+esc(r.student_name||'—')+'</td>' +
+          '<td>'+esc(r.course||'—')+'</td>' +
+          '<td><span class="pill purple">'+esc(String(r.mode||'').toUpperCase())+'</span></td>' +
+          '<td><b>'+fmtMoney(r.amount)+'</b></td>' +
+          '<td><button class="btn sm ghost" onclick="EDU_V2._receiptPreview('+r.id+')">Preview</button></td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+    html += '</div>';
+    body.innerHTML = html;
+  }
+
+  async function _feesCategories(body) {
+    var d = await _api('api_edu_feeCats_list');
+    var html = '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><h2 style="margin:0">Fee Categories</h2><button class="btn primary sm" onclick="EDU_V2._catAdd()">+ Add Category</button></div>';
+    if (!d.items || !d.items.length) html += '<div class="empty">No categories yet.</div>';
+    else {
+      html += '<table class="tbl"><thead><tr><th>#</th><th>Name</th><th>Code</th><th>Active</th><th></th></tr></thead><tbody>';
+      d.items.forEach(function(r) {
+        html += '<tr><td>'+r.sort_order+'</td><td><b>'+esc(r.name)+'</b></td>' +
+          '<td>'+esc(r.code||'')+'</td>' +
+          '<td>'+(r.is_active?'<span class="pill ok">Active</span>':'<span class="pill gray">Off</span>')+'</td>' +
+          '<td><button class="btn sm ghost" onclick="EDU_V2._catDel('+r.id+')">Delete</button></td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+    html += '</div>';
+    body.innerHTML = html;
+  }
+
+  // ============================================================================
+  // EDU_PACK_v2 Commit 3 — Reports + AI Insights SPA view
+  // ============================================================================
+  async function viewEduReports() {
+    _injectCss();
+    var root = document.querySelector('main') || document.body;
+    root.innerHTML = '<div class="edu-v2" id="edu-reports-root">' +
+      '<div class="topbar"><div><div class="crumb">Education Pack › <b>Reports</b></div><h1>Admission & Fees Reports</h1></div>' +
+      '<div><button class="btn ghost" data-rtab="funnel">Funnel</button>&nbsp;' +
+      '<button class="btn ghost" data-rtab="dropoff">Drop-off</button>&nbsp;' +
+      '<button class="btn ghost" data-rtab="batches">Batches</button>&nbsp;' +
+      '<button class="btn ghost" data-rtab="ai">✨ AI Insights</button></div></div>' +
+      '<div id="edu-reports-body"><div class="card"><div class="empty">Loading…</div></div></div></div>';
+    root.querySelectorAll('[data-rtab]').forEach(b => b.addEventListener('click', () => _renderReportsTab(b.getAttribute('data-rtab'))));
+    _renderReportsTab('funnel');
+  }
+
+  async function _renderReportsTab(tab) {
+    var body = document.getElementById('edu-reports-body');
+    if (!body) return;
+    body.innerHTML = '<div class="card"><div class="empty">Loading…</div></div>';
+    try {
+      if (tab === 'funnel')  return await _repFunnel(body);
+      if (tab === 'dropoff') return await _repDropOff(body);
+      if (tab === 'batches') return await _repBatches(body);
+      if (tab === 'ai')      return await _repAI(body);
+    } catch (e) {
+      body.innerHTML = '<div class="card"><div class="empty"><div class="em">⚠</div><p style="color:#dc2626">'+esc(e.message)+'</p></div></div>';
+    }
+  }
+
+  async function _repFunnel(body) {
+    var d = await _api('api_edu_reports_admissionFunnel', {});
+    if (!d.stages || !d.stages.length) return body.innerHTML = '<div class="card"><div class="empty">No stages configured.</div></div>';
+    var max = d.stages.reduce(function(m,s){ return Math.max(m, s.count||0); }, 1);
+    var html = '<div class="card"><h2>Admission funnel</h2><div style="padding:8px 0">';
+    d.stages.forEach(function(s) {
+      var pct = Math.max(1, Math.round(((s.count||0) / max) * 100));
+      html += '<div style="margin:6px 0">' +
+        '<div style="display:flex;justify-content:space-between;font-size:12.5px;font-weight:600"><span>'+esc(s.stage)+'</span><span>'+(s.count||0)+'</span></div>' +
+        '<div style="height:14px;background:#f5f3ff;border-radius:7px;overflow:hidden"><div style="width:'+pct+'%;height:100%;background:linear-gradient(90deg,#a855f7,#7c3aed)"></div></div>' +
+        '</div>';
+    });
+    html += '</div></div>';
+    body.innerHTML = html;
+  }
+
+  async function _repDropOff(body) {
+    var d = await _api('api_edu_reports_admissionDropOff', {});
+    var html = '<div class="card"><h2>Where prospects drop off</h2>';
+    if (!d.drop_off || !d.drop_off.length) html += '<div class="empty">Not enough stage data.</div>';
+    else {
+      html += '<table class="tbl"><thead><tr><th>From → To</th><th>From</th><th>To</th><th>Dropped</th><th>Drop rate</th></tr></thead><tbody>';
+      d.drop_off.forEach(function(r) {
+        var kind = r.drop_rate_pct > 50 ? 'bad' : r.drop_rate_pct > 25 ? 'warn' : 'ok';
+        html += '<tr><td><b>'+esc(r.from_stage)+'</b> → '+esc(r.to_stage)+'</td>' +
+          '<td>'+r.from_count+'</td><td>'+r.to_count+'</td>' +
+          '<td><b>'+r.dropped+'</b></td>' +
+          '<td><span class="pill '+kind+'">'+r.drop_rate_pct+'%</span></td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+    html += '</div>';
+    body.innerHTML = html;
+  }
+
+  async function _repBatches(body) {
+    var d = await _api('api_edu_reports_batchFillRate');
+    var html = '<div class="card"><h2>Batch fill-rate</h2>';
+    if (!d.batches || !d.batches.length) html += '<div class="empty">No batches yet.</div>';
+    else {
+      html += '<table class="tbl"><thead><tr><th>Batch</th><th>Course</th><th>Capacity</th><th>Enrolled</th><th>Fill %</th><th>Dates</th><th>Status</th></tr></thead><tbody>';
+      d.batches.forEach(function(b) {
+        var kind = b.fill_pct > 80 ? 'ok' : b.fill_pct > 50 ? 'warn' : 'bad';
+        html += '<tr><td><b>'+esc(b.name)+'</b></td>' +
+          '<td>'+esc(b.course||'—')+'</td>' +
+          '<td>'+b.capacity+'</td>' +
+          '<td>'+b.enrolled_ct+'</td>' +
+          '<td><span class="pill '+kind+'">'+b.fill_pct+'%</span></td>' +
+          '<td>'+fmtDate(b.start_date)+' → '+fmtDate(b.end_date)+'</td>' +
+          '<td><span class="pill '+((b.status||'open')==='open'?'info':'gray')+'">'+esc(b.status||'open')+'</span></td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+    html += '</div>';
+    body.innerHTML = html;
+  }
+
+  async function _repAI(body) {
+    body.innerHTML = '<div class="card"><div class="empty"><div class="em">🤖</div><p>Analysing your data with AI…</p></div></div>';
+    var d = await _api('api_edu_ai_insights');
+    var html = '<div class="card" style="background:linear-gradient(135deg,#faf5ff,#fff);border:2px solid #a855f7">' +
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><span style="font-size:22px">🤖</span><h2 style="margin:0">AI Admission Insights</h2>' +
+      '<span class="pill purple" style="margin-left:auto">Generated '+new Date(d.generated_at).toLocaleTimeString('en-IN', {hour:'2-digit', minute:'2-digit'})+'</span></div>' +
+      '<div style="white-space:pre-line;font-size:14px;line-height:1.7;padding:10px;background:#fff;border-radius:8px">' +
+      esc(d.insights || 'No insights available') + '</div>' +
+      '<div class="small" style="margin-top:8px">Signals: '+
+        (d.signals.funnel||[]).length+' stages · '+
+        (d.signals.batches_open||0)+' open batches · ₹'+
+        (Number(d.signals.collected_30d)||0).toLocaleString('en-IN')+' collected in last 30d</div></div>';
+    body.innerHTML = html;
+  }
+
+
   // ===================== VIEWS REGISTRY =====================
   function _registerViews() {
     var V = window.VIEWS = window.VIEWS || {};
@@ -581,11 +836,20 @@
     V.eduenrollments  = viewEduEnrollments;
     V.eduscholarships = viewEduScholarships;
     V.edubatches      = viewEduBatches;
+    V.edufees         = viewEduFees;
+    V.edureports      = viewEduReports;
   }
 
   // ===================== INIT =====================
   window.EDU_V2 = {
     viewEduOverview, viewEduApplications, viewEduEnrollments, viewEduScholarships, viewEduBatches, viewEduPackHome,
+    viewEduFees, viewEduReports,
+    _openLead: function(id){ try{ location.hash = '#/leads?id='+id; }catch(e){} },
+    _remSend: async function(id, chan){ try{ await _api('api_edu_reminders_markSent', {id:id, channel:chan}); toast('Marked sent via '+chan); _renderFeesTab('reminders'); }catch(e){ toast('Failed: '+e.message,'err'); } },
+    _remSkip: async function(id){ if(!confirm('Skip this reminder?')) return; try{ await _api('api_edu_reminders_skip', id); toast('Skipped'); _renderFeesTab('reminders'); }catch(e){ toast('Failed: '+e.message,'err'); } },
+    _receiptPreview: async function(id){ try{ var d = await _api('api_edu_receipts_html', id); var w = window.open('','_blank','width=760,height=900'); w.document.write(d.html); w.document.close(); }catch(e){ toast('Failed: '+e.message,'err'); } },
+    _catAdd: async function(){ var name = prompt('Category name'); if(!name) return; try{ await _api('api_edu_feeCats_save', {name:name, is_active:1, sort_order:9}); toast('Added'); _renderFeesTab('cats'); }catch(e){ toast('Failed: '+e.message,'err'); } },
+    _catDel: async function(id){ if(!confirm('Delete this category?')) return; try{ await _api('api_edu_feeCats_delete', id); toast('Deleted'); _renderFeesTab('cats'); }catch(e){ toast('Failed: '+e.message,'err'); } },
     _api, _tok
   };
   function _ready(fn) {
