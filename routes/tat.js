@@ -152,6 +152,33 @@ async function api_lead_actions(token, leadId) {
     }));
     out.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
   } catch (e) { /* call_events optional — never break the timeline */ }
+  // TIMELINE_NAMES_v1 (2026-07-04) — resolve any user IDs referenced inside
+  // an event's meta (from/to owners on assigned & reassigned events, incl. the
+  // WhatsApp chat-mirror which only wrote numeric ids) into human names, so the
+  // timeline reads "Lalit → Gopal" instead of "User #7 → User #3". Also covers
+  // old rows that predate from_user_name/to_user_name.
+  try {
+    const ids = new Set();
+    out.forEach(e => {
+      const m = e.meta || {};
+      [m.from, m.to, m.from_user_id, m.to_user_id, m.actor_id].forEach(v => {
+        const n = Number(v); if (Number.isFinite(n) && n > 0) ids.add(n);
+      });
+    });
+    if (ids.size) {
+      const ur = await db.query(`SELECT id, name FROM users WHERE id = ANY($1::int[])`, [[...ids]]);
+      const nameById = {};
+      ur.rows.forEach(u => { nameById[Number(u.id)] = u.name || ('User #' + u.id); });
+      out.forEach(e => {
+        const m = e.meta || {};
+        const fromId = Number(m.from_user_id || m.from);
+        const toId   = Number(m.to_user_id   || m.to);
+        if (!m.from_user_name && Number.isFinite(fromId) && nameById[fromId]) m.from_user_name = nameById[fromId];
+        if (!m.to_user_name   && Number.isFinite(toId)   && nameById[toId])   m.to_user_name   = nameById[toId];
+        e.meta = m;
+      });
+    }
+  } catch (_) { /* name resolution is best-effort — never break the timeline */ }
   return out;
 }
 function safeJson(s) { try { return JSON.parse(s); } catch (_) { return {}; } }

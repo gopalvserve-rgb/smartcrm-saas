@@ -10715,6 +10715,7 @@ function actionTimelineBlock(leadId) {
       tags_updated:   { icon: '🏷️', label: 'Tags updated',         color: '#06b6d4' },
       followup_set:   { icon: '⏰', label: 'Follow-up scheduled',  color: '#f59e0b' },
       assigned:       { icon: '👤', label: 'Reassigned',           color: '#64748b' },
+      reassigned:     { icon: '🔁', label: 'Reassigned',           color: '#64748b' },  /* TIMELINE_NAMES_v1 — WA chat-mirror + auto reassigns */
       call:           { icon: '📞', label: 'Call',                 color: '#ec4899' },
       whatsapp_out:   { icon: '📤', label: 'WhatsApp sent',        color: '#25d366' },
       whatsapp_in:    { icon: '📥', label: 'WhatsApp received',    color: '#10b981' },
@@ -10746,12 +10747,16 @@ function actionTimelineBlock(leadId) {
         sub = _dir + ' call' + _dur + (m.phone ? ' · ' + m.phone : '') + (m.recording_id ? ' · 🎙 recorded' : '');
       } else if (r.action_type === 'followup_set') {
         sub = m.due_at ? ('Due ' + fmtDate(m.due_at)) : null;
-      } else if (r.action_type === 'assigned') {
-        // REASSIGN_LOG_v1 — prefer human names if backend wrote them.
-        // Falls back to "User #N" for old rows that only have ids.
+      } else if (r.action_type === 'assigned' || r.action_type === 'reassigned') {
+        // REASSIGN_LOG_v1 + TIMELINE_NAMES_v1 — prefer human names if backend
+        // wrote them (api_lead_actions also back-fills names from ids). Falls
+        // back to "User #N" only for very old rows. Appends a readable reason
+        // for auto reassigns (e.g. the WhatsApp chat-owner mirror).
         const fromTxt = m.from_user_name || (m.from_user_id || m.from ? ('User #' + (m.from_user_id || m.from)) : '—');
         const toTxt   = m.to_user_name   || (m.to_user_id   || m.to   ? ('User #' + (m.to_user_id   || m.to))   : '—');
-        sub = fromTxt + ' → ' + toTxt + (m.bulk ? ' (bulk)' : '');
+        const why = m.reason_label ? (' · ' + m.reason_label)
+                  : (m.reason === 'wa_chat_assignment' ? ' · via WhatsApp chat auto-assign' : '');
+        sub = fromTxt + ' → ' + toTxt + (m.bulk ? ' (bulk)' : '') + why;
       } else if (r.action_type === 'whatsapp_out') {
         sub = (m.template ? '[Template: ' + m.template + '] ' : '') + (m.preview || '');
         if (m.error) sub += ' ⚠ ' + m.error;

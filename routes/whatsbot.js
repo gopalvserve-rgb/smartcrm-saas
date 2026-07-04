@@ -1543,11 +1543,27 @@ async function _mirrorLeadOwner(phoneDigits, newOwnerId, actorId) {
   if (!lead) return;
   if (Number(lead.assigned_to) === Number(newOwnerId)) return;
   try {
+    const _oldOwner = lead.assigned_to;
     await db.update('leads', lead.id, { assigned_to: Number(newOwnerId) });
     try {
+      // TIMELINE_NAMES_v1 — record human names + a readable reason so the lead
+      // timeline shows "Lalit → Gopal · via WhatsApp chat auto-assign" rather
+      // than a bare "reassigned". Names resolved best-effort; api_lead_actions
+      // also back-fills them from the ids for older rows.
+      let _fromName = '', _toName = '';
+      try {
+        const _nr = await db.query(`SELECT id, name FROM users WHERE id = ANY($1::int[])`,
+          [[Number(_oldOwner) || 0, Number(newOwnerId) || 0]]);
+        _nr.rows.forEach(u => {
+          if (Number(u.id) === Number(_oldOwner)) _fromName = u.name || '';
+          if (Number(u.id) === Number(newOwnerId)) _toName = u.name || '';
+        });
+      } catch (_) {}
       require('./tat').logAction(lead.id, 'reassigned', actorId || null, {
-        from: lead.assigned_to, to: Number(newOwnerId),
-        reason: 'wa_chat_assignment'
+        from: _oldOwner, to: Number(newOwnerId),
+        from_user_name: _fromName, to_user_name: _toName,
+        reason: 'wa_chat_assignment',
+        reason_label: 'via WhatsApp chat auto-assign'
       });
     } catch (_) {}
   } catch (_) {}
