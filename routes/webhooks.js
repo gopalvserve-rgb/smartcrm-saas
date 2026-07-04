@@ -151,6 +151,7 @@ async function _processLeadgen(leadgenId, pageId, formId) {
   let mappedExtras = {};
   let mappedOverrides = {};
   let _hasAdminMapping = false;   // FB_META_QNA_NOTES_v1 — true when admin configured a FB field mapping
+  const _fbMappedKeys = new Set();   // FB_META_QNA_NOTES_v2 — Meta question keys the admin already mapped (skip these in the Q&A->Notes dump)
   const _diag = { form_id: formId || null, page_id: pageId || null, payload_keys: Object.keys(payload) };
   try {
     const integrations = require('./integrations');
@@ -174,6 +175,7 @@ async function _processLeadgen(leadgenId, pageId, formId) {
     }
     _diag.map_source = mapSource;
     _diag.map_keys = customMap ? Object.keys(customMap) : [];
+    if (customMap) { Object.keys(customMap).forEach(k => _fbMappedKeys.add(String(k))); }
     if (customMap && Object.keys(customMap).length) {
       _hasAdminMapping = true;
       const out = integrations._applyCustomMapping({ data: payload }, customMap);
@@ -254,26 +256,26 @@ async function _processLeadgen(leadgenId, pageId, formId) {
     } catch (_e) { console.warn('[fb-ingest] campaign auto-attach failed:', _e.message); }
   }
 
-  // FB_META_QNA_NOTES_v1 (2026-07-03) — when the admin has NOT configured a FB
-  // field mapping, don't lose the form answers: append every answered question
-  // as "Question: Answer" into Notes (skipping the standard identity fields
-  // already captured as name/phone/email).
-  if (!_hasAdminMapping) {
-    try {
-      const _consumed = new Set(['full_name','name','phone_number','phone','email','whatsapp']);
-      const _qna = [];
-      for (const _f of (fieldData || [])) {
-        if (!_f || !_f.name || _consumed.has(_f.name)) continue;
-        const _ans = Array.isArray(_f.values) ? _f.values.join(', ') : String(_f.values == null ? '' : _f.values);
-        if (!_ans) continue;
-        const _q = String(_f.name).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-        _qna.push(_q + ': ' + _ans);
-      }
-      if (_qna.length) {
-        lead.notes = (lead.notes ? lead.notes + '\n\n' : '') + 'Form answers:\n' + _qna.join('\n');
-      }
-    } catch (_e) { console.warn('[fb-ingest] QnA notes failed:', _e.message); }
-  }
+  // FB_META_QNA_NOTES_v2 (2026-07-03) — append every answered form question the
+  // admin did NOT map into Notes as "Question: Answer". v1 wrongly skipped ALL
+  // Q&A whenever ANY mapping existed (so tenants that mapped name/phone/email
+  // got no Q&A at all). Now we always run, and skip only the standard identity
+  // fields + the specific question keys the admin mapped (_fbMappedKeys).
+  try {
+    const _consumed = new Set(['full_name','name','phone_number','phone','email','whatsapp']);
+    const _qna = [];
+    for (const _f of (fieldData || [])) {
+      if (!_f || !_f.name) continue;
+      if (_consumed.has(_f.name) || _fbMappedKeys.has(String(_f.name))) continue;
+      const _ans = Array.isArray(_f.values) ? _f.values.join(', ') : String(_f.values == null ? '' : _f.values);
+      if (!_ans) continue;
+      const _q = String(_f.name).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      _qna.push(_q + ': ' + _ans);
+    }
+    if (_qna.length) {
+      lead.notes = (lead.notes ? lead.notes + '\n\n' : '') + 'Form answers:\n' + _qna.join('\n');
+    }
+  } catch (_e) { console.warn('[fb-ingest] QnA notes failed:', _e.message); }
 
   await _createLeadFromWebhook(lead);
 }
