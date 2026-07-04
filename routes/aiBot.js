@@ -1678,6 +1678,20 @@ async function _reengageTick() {
         await db.query(`UPDATE ai_reengage_log SET status = 'cancelled', cancelled_reason = 'customer replied (verified at send-time)' WHERE id = $1`, [row.id]);
         continue;
       }
+      // MANUAL_BOT_PAUSE_v3 (2026-07-03) — respect the per-chat "Pause bot"
+      // button for PROACTIVE re-engagement too. Without this, a paused thread
+      // still received the bot's "you went quiet" follow-up. Keyed by last-10
+      // digits to match api_wb_botPause / _shouldSuppress.
+      try {
+        const _pt = String(row.phone || '').replace(/\D/g, '').slice(-10);
+        if (_pt) {
+          const _pz = await db.query(`SELECT 1 FROM wa_bot_pauses WHERE phone = $1 AND paused_until > NOW() LIMIT 1`, [_pt]);
+          if (_pz.rows.length) {
+            await db.query(`UPDATE ai_reengage_log SET status = 'cancelled', cancelled_reason = 'chat paused by agent' WHERE id = $1`, [row.id]);
+            continue;
+          }
+        }
+      } catch (_) { /* wa_bot_pauses may not exist yet — fall through */ }
       // Pull the bot config that owns this phone so we can render the message.
       let cfgRow = null;
       try {
