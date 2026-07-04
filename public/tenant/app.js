@@ -9578,7 +9578,7 @@ async function openLeadModal(id) {
   // status. Cached per lead-modal session. The slot div was inserted right under
   // the Status field by the SUB_STATUS_v1 patch.
   try {
-    const _ssEnabled = String((CRM.cfg || {}).SUB_STATUS_ENABLED || '') === '1';
+    const _ssEnabled = String((CRM.cfg || {}).SUB_STATUS_ENABLED) !== '0'; // SUB_STATUS_ALLTENANTS_v1 — default ON for all tenants (opt-out with '0')
     if (_ssEnabled) {
       const _slot = form.querySelector('#lead-sub-status-slot');
       const _statusSel = form.querySelector('#lead-status');
@@ -31492,7 +31492,7 @@ async function adminStatuses() {
   // Only shown when SUB_STATUS_ENABLED config is '1'.
   try {
     const cfg = (CRM.cfg || {});
-    const ssEnabled = String(cfg.SUB_STATUS_ENABLED || '') === '1';
+    const ssEnabled = String(cfg.SUB_STATUS_ENABLED) !== '0'; // SUB_STATUS_ALLTENANTS_v1 — default ON for all tenants (opt-out with '0')
     if (ssEnabled) {
       const ssCard = h('div', { class: 'card', style: { marginTop: '1rem' } },
         h('h4', {}, '🧩 Sub-statuses ',
