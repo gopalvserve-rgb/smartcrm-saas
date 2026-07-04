@@ -1542,6 +1542,12 @@ async function _mirrorLeadOwner(phoneDigits, newOwnerId, actorId) {
   const lead = await _findLeadByPhoneDigits(phoneDigits);
   if (!lead) return;
   if (Number(lead.assigned_to) === Number(newOwnerId)) return;
+  // LEAD_OWNER_SUPREME_v1 — an AUTO chat-assignment (actorId == null, i.e. the
+  // inbound round-robin/auto router) must NEVER overwrite a lead that already
+  // has an owner. Only explicit human/admin (re)assignments (actorId set) may
+  // move an owned lead. A brand-new unowned lead (assigned_to null/0) still
+  // gets its owner set here so the chat + lead stay in sync.
+  if (actorId == null && Number(lead.assigned_to) > 0) return;
   try {
     const _oldOwner = lead.assigned_to;
     await db.update('leads', lead.id, { assigned_to: Number(newOwnerId) });
@@ -1619,6 +1625,14 @@ async function _pickAutoAssignee(phone, leadId, leadAssignedTo) {
 
     // 'manual' — admin will assign by hand
     if (s.mode === 'manual') return null;
+
+    // LEAD_OWNER_SUPREME_v1 (2026-07-04) — the LEAD is authoritative. If the
+    // linked lead already has an owner, the WhatsApp chat ALWAYS follows that
+    // owner, regardless of mode. Round-robin / least-busy therefore only
+    // distribute chats for brand-new leads that nobody owns yet. Without this,
+    // an inbound reply on an already-assigned lead (e.g. a Meta lead routed to
+    // a rep by the assignment rule) got stolen by the round-robin pool.
+    if (Number(leadAssignedTo) > 0) return Number(leadAssignedTo);
 
     // 'lead_owner' — natural owner from the linked lead, falls back to null
     if (s.mode === 'lead_owner') return Number(leadAssignedTo) || null;
