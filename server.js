@@ -172,6 +172,10 @@ const _staticOpts = {
   }
 };
 app.use('/saas', express.static(path.join(__dirname, 'public', 'saas'), _staticOpts));
+// TUTORIAL_STATIC_v1 (2026-07-04) — public/tutorial/ (index.html + slides) shipped
+// but was never mounted, so /tutorial/ returned "Cannot GET /tutorial/". Serve it
+// as static, same as /saas. Public (no auth) — it's an onboarding tutorial.
+app.use('/tutorial', express.static(path.join(__dirname, 'public', 'tutorial'), _staticOpts));
 app.get('/app', (_req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.sendFile(path.join(__dirname, 'public', 'saas', 'app', 'index.html'));
