@@ -150,6 +150,7 @@ async function _processLeadgen(leadgenId, pageId, formId) {
   // a mapping isn't applying.
   let mappedExtras = {};
   let mappedOverrides = {};
+  let _hasAdminMapping = false;   // FB_META_QNA_NOTES_v1 — true when admin configured a FB field mapping
   const _diag = { form_id: formId || null, page_id: pageId || null, payload_keys: Object.keys(payload) };
   try {
     const integrations = require('./integrations');
@@ -174,6 +175,7 @@ async function _processLeadgen(leadgenId, pageId, formId) {
     _diag.map_source = mapSource;
     _diag.map_keys = customMap ? Object.keys(customMap) : [];
     if (customMap && Object.keys(customMap).length) {
+      _hasAdminMapping = true;
       const out = integrations._applyCustomMapping({ data: payload }, customMap);
       const first = (out && out[0]) || {};
       if (first.custom_fields) mappedExtras = first.custom_fields;
@@ -232,6 +234,45 @@ async function _processLeadgen(leadgenId, pageId, formId) {
   // as the leadsource webhook path produces).
   if (Object.keys(mappedExtras).length) {
     lead.extra_json = JSON.stringify(mappedExtras);
+  }
+
+  // FB_META_CAMPAIGN_v1 (2026-07-03) — auto-attach the Meta ad campaign as the
+  // lead's CRM campaign (find-or-create by name) unless a campaign is already
+  // set. Uses the leadgen campaign_name (falls back to the Meta campaign id).
+  if (!lead.campaign_id && (payload._campaign_name || payload._campaign_id)) {
+    try {
+      const _cn = String(payload._campaign_name || ('Meta campaign ' + payload._campaign_id)).slice(0, 120).trim();
+      if (_cn) {
+        let _cr = await db.query('SELECT id FROM campaigns WHERE lower(name) = lower($1) LIMIT 1', [_cn]);
+        let _cid = _cr.rows[0] && _cr.rows[0].id;
+        if (!_cid) {
+          const _ins = await db.query('INSERT INTO campaigns (name) VALUES ($1) RETURNING id', [_cn]);
+          _cid = _ins.rows[0] && _ins.rows[0].id;
+        }
+        if (_cid) lead.campaign_id = _cid;
+      }
+    } catch (_e) { console.warn('[fb-ingest] campaign auto-attach failed:', _e.message); }
+  }
+
+  // FB_META_QNA_NOTES_v1 (2026-07-03) — when the admin has NOT configured a FB
+  // field mapping, don't lose the form answers: append every answered question
+  // as "Question: Answer" into Notes (skipping the standard identity fields
+  // already captured as name/phone/email).
+  if (!_hasAdminMapping) {
+    try {
+      const _consumed = new Set(['full_name','name','phone_number','phone','email','whatsapp']);
+      const _qna = [];
+      for (const _f of (fieldData || [])) {
+        if (!_f || !_f.name || _consumed.has(_f.name)) continue;
+        const _ans = Array.isArray(_f.values) ? _f.values.join(', ') : String(_f.values == null ? '' : _f.values);
+        if (!_ans) continue;
+        const _q = String(_f.name).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        _qna.push(_q + ': ' + _ans);
+      }
+      if (_qna.length) {
+        lead.notes = (lead.notes ? lead.notes + '\n\n' : '') + 'Form answers:\n' + _qna.join('\n');
+      }
+    } catch (_e) { console.warn('[fb-ingest] QnA notes failed:', _e.message); }
   }
 
   await _createLeadFromWebhook(lead);
