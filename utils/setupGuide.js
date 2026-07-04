@@ -31,6 +31,10 @@ function _stripHtml(s) {
   return String(s || '')
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    // TUTORIAL_KB_v1 — preserve link targets so the Copilot can hand the user
+    // the actual URL (e.g. the video-tutorial Drive links), not just the anchor
+    // text. Turns <a href="URL">TEXT</a> into "TEXT (URL)" before tags are removed.
+    .replace(/<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, '$2 ($1)')
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
