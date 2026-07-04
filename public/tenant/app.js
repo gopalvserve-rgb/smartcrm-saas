@@ -2416,7 +2416,12 @@ function navigateTo(id) {
       }
     }
   } catch (_) {}
-  $('#page-title').textContent = item.label;
+  // NAV_TITLE_GUARD_v1 (2026-07-03) — #page-title is inside the collapsible
+  // header; when the header is hidden it's absent, and the old unguarded
+  // `$('#page-title').textContent=...` threw "Cannot set textContent of null"
+  // — which aborted navigateTo BEFORE rendering the view, leaving EVERY page
+  // (most visibly the Education pack pages) blank. Guard the access.
+  { const _pt = $('#page-title'); if (_pt) _pt.textContent = item.label; }
   // SCROLL_RESET_v2 — aggressive reset on EVERY plausible scroll container.
   // Different layouts (mobile vs desktop, sidebar collapsed vs open, etc.)
   // make different elements the actual scroll parent, so reset all.
