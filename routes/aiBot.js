@@ -859,7 +859,13 @@ async function _shouldSuppress(settings, phone, inboundText, inboundPhoneId, ten
   // cheap, deterministic no-op. Never a false positive — only set by a human.
   try {
     const _pz = await db.query(
-      `SELECT EXTRACT(EPOCH FROM (paused_until - NOW()))::int AS secs
+      // BOT_PAUSE_FOREVER_FIX_v2 (2026-07-04) — MUST cast to ::bigint, not ::int.
+      // "Pause until I resume" stores paused_until = NOW()+100y (~3.15B secs),
+      // which overflows int4 (max 2.147B) → the query THREW → the catch below
+      // treated the thread as NOT paused → the bot kept replying on every
+      // customer message. This is the reactive-reply half of the same overflow
+      // already fixed in api_wb_botPauseStatus.
+      `SELECT EXTRACT(EPOCH FROM (paused_until - NOW()))::bigint AS secs
          FROM wa_bot_pauses WHERE phone = $1 AND paused_until > NOW() LIMIT 1`,
       [_phoneTail]
     );
