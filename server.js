@@ -2317,6 +2317,66 @@ app.post('/api/wa/upload', _waUpload.single('file'), (req, res) => {
     });
 });
 
+// WA_TPL_SAMPLE_STORE_v1 (2026-07-04) — /api/wa-sample was referenced by the
+// template builder (POST to host the header sample) and by whatsbot's
+// _uploadSampleToMeta (GET /api/wa-sample/<token> to read the bytes back), but
+// the route itself was never registered on the server → every template media
+// upload failed with "Upload failed (HTTP 404)". This implements both halves:
+//   POST /api/wa-sample            — auth'd, stores the file, returns a durable
+//                                    PUBLIC path-based URL Meta can fetch.
+//   GET  /t/<slug>/api/wa-sample/:token — unauthenticated (Meta fetches it);
+//                                    tenant resolved from the /t/<slug>/ path.
+// Distinct from /api/wa/upload (which returns a transient chat media_id).
+const _waSampleUpload = _multer({ storage: _multer.memoryStorage(), limits: { fileSize: 60 * 1024 * 1024 } });
+app.post('/api/wa-sample', _waSampleUpload.single('file'), (req, res) => {
+  if (!req.tenant) return res.status(404).json({ error: 'Tenant not found' });
+  const tenantDb = require('./db/pg');
+  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug },
+    async () => {
+      try {
+        const { authUser } = require('./utils/auth');
+        const token = (req.headers['x-auth-token'] || req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+        await authUser(token);
+        if (!req.file) return res.status(400).json({ error: 'file required (multipart field "file")' });
+        await tenantDb.query(`CREATE TABLE IF NOT EXISTS wa_template_samples (
+          token TEXT PRIMARY KEY, mime TEXT, bytes BYTEA, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+        try { await tenantDb.query(`DELETE FROM wa_template_samples WHERE created_at < NOW() - INTERVAL '7 days'`); } catch (_) {}
+        const tok = require('crypto').randomBytes(18).toString('hex');
+        await tenantDb.query(`INSERT INTO wa_template_samples (token, mime, bytes) VALUES ($1, $2, $3)`,
+          [tok, req.file.mimetype || 'application/octet-stream', req.file.buffer]);
+        const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim();
+        const host  = req.get('host');
+        // MUST be path-based (/t/<slug>/) so Meta's anonymous fetch + our own
+        // server-side _uploadSampleToMeta fetch both resolve the tenant.
+        const url = proto + '://' + host + '/t/' + req.tenantSlug + '/api/wa-sample/' + tok;
+        return res.json({ url, token: tok, mime: req.file.mimetype || '' });
+      } catch (e) {
+        console.error('[/api/wa-sample POST] error:', e && e.message);
+        return res.status(500).json({ error: e && e.message || 'upload failed' });
+      }
+    });
+});
+app.get('/api/wa-sample/:token', (req, res) => {
+  if (!req.tenant) return res.status(404).json({ error: 'Tenant not found' });
+  const tenantDb = require('./db/pg');
+  return tenantDb.tenantStorage.run({ pool: req.tenantPool, tenant: req.tenant, slug: req.tenantSlug },
+    async () => {
+      try {
+        const tok = String(req.params.token || '').replace(/[^a-f0-9]/gi, '');
+        if (!tok) return res.status(404).end();
+        const r = await tenantDb.query(`SELECT mime, bytes FROM wa_template_samples WHERE token = $1 LIMIT 1`, [tok]);
+        if (!r.rows.length) return res.status(404).json({ error: 'sample not found' });
+        const row = r.rows[0];
+        res.setHeader('Content-Type', row.mime || 'application/octet-stream');
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+        return res.end(row.bytes);
+      } catch (e) {
+        console.error('[/api/wa-sample GET] error:', e && e.message);
+        return res.status(500).end();
+      }
+    });
+});
+
 app.get('/api/wa/media/:msgId', async (req, res) => {
   if (!req.tenant) return res.status(404).json({ error: 'Tenant not found' });
   const tenantDb = require('./db/pg');
