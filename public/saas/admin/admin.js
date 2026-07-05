@@ -164,6 +164,7 @@ const NAV = [
   { id: 'finance',       label: '💰 Finance',            requiresPerm: 'finance.view' },     /* FIN_DASH_v1 */
   { id: 'wl_billing',    label: '🏷️ White-Label Billing', requiresPerm: 'wl_billing.view' },  /* WL_BILLING_v1 */
   { id: 'announcements', label: '📣 Updates',            requiresPerm: 'announcements.view' },
+  { id: 'copilot_kb',    label: '🧠 Copilot Training' },  /* COPILOT_KB_v1 — no perm gate: all super-admins */
   { id: 'requirements',  label: '🛠 Custom Requirements', requiresPerm: 'requirements.view' },
   { id: 'tickets',       label: '🎫 Support Tickets',    requiresPerm: 'tickets.view' },     // TKT_ADMIN_v1
   { id: 'admins',        label: '👥 Roles & Permissions', requiresPerm: 'admins.view' },
@@ -2167,6 +2168,102 @@ function editAnnouncement(a) {
     h('div', { class: 'field' }, h('label', {}, 'Level'),
       h('select', { name: 'level' },
         ...['info', 'warn', 'critical', 'new_feature'].map(v => h('option', { value: v, selected: a.level === v ? true : null }, v)))),
+    h('button', { type: 'submit', class: 'btn' }, 'Save')
+  );
+  card.appendChild(form);
+  m.appendChild(card);
+  document.body.appendChild(m);
+}
+
+VIEWS.copilot_kb = async (view) => {
+  view.appendChild(h('div', { class: 'toolbar' },
+    h('h1', {}, '🧠 Copilot Training'),
+    h('button', { class: 'btn', onclick: () => editKbEntry({}) }, '+ Add entry')
+  ));
+
+  // --- What the Copilot already knows ---
+  let sum = null;
+  try { sum = await api('api_saas_copilotKb_trainedSummary'); } catch (e) { view.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+  const summaryCard = h('div', { class: 'card' },
+    h('h3', {}, 'What the Copilot is trained on'),
+    h('p', { class: 'muted', style: { margin: '.3rem 0 .6rem', fontSize: '.9rem' } },
+      'The “Ask CRM” assistant answers how-to questions from two sources: the built-in setup guide (' +
+      sum.builtin_count + ' topics, incl. video tutorials) and your custom entries below (' +
+      sum.kb_active + ' active / ' + sum.kb_count + ' total).'),
+    h('div', { style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap', marginBottom: '.5rem' } },
+      h('a', { class: 'btn ghost xs', href: sum.help_url, target: '_blank' }, '📖 Built-in guide'),
+      h('a', { class: 'btn ghost xs', href: sum.tutorial_url, target: '_blank' }, '🎬 Interactive tutorial')
+    ),
+    h('details', {},
+      h('summary', { style: { cursor: 'pointer', fontSize: '.85rem', color: '#4f46e5' } }, 'Show ' + sum.builtin_count + ' built-in topics'),
+      h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '.35rem', marginTop: '.5rem' } },
+        ...(sum.builtin || []).map(b => h('a', { class: 'tag info', href: b.url, target: '_blank', style: { textDecoration: 'none' } }, b.title)))
+    )
+  );
+  view.appendChild(summaryCard);
+
+  // --- Custom KB entries ---
+  view.appendChild(h('h3', { style: { margin: '1rem 0 .4rem' } }, 'Your knowledge base'));
+  let list;
+  try { list = await api('api_saas_copilotKb_listAdmin'); }
+  catch (e) { view.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+  if (!list.length) {
+    view.appendChild(h('div', { class: 'empty' }, 'No custom entries yet. Click “+ Add entry” to add a FAQ, tutorial, video link or URL the Copilot should answer with.'));
+    return;
+  }
+  const kindTag = { faq: 'info', tutorial: 'info', guide: 'info', video: 'warn', link: 'info' };
+  const tbl = h('table', {},
+    h('thead', {}, h('tr', {},
+      h('th', {}, 'Type'), h('th', {}, 'Title'), h('th', {}, 'Keywords'), h('th', {}, 'Link'), h('th', {}, 'Active'), h('th', {}, '')
+    )),
+    h('tbody', {}, ...list.map(e => h('tr', {},
+      h('td', {}, h('span', { class: 'tag ' + (kindTag[e.kind] || 'info') }, e.kind)),
+      h('td', {}, h('b', {}, e.title)),
+      h('td', { class: 'muted', style: { fontSize: '.8rem', maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, e.keywords || '—'),
+      h('td', {}, e.url ? h('a', { href: e.url, target: '_blank', class: 'muted', style: { fontSize: '.8rem' } }, 'open') : h('span', { class: 'muted' }, '—')),
+      h('td', {}, h('label', { class: 'switch', title: 'Toggle active' },
+        h('input', { type: 'checkbox', checked: Number(e.is_active) === 1 ? true : null,
+          onchange: async (ev) => { try { await api('api_saas_copilotKb_toggle', e.id, ev.target.checked ? 1 : 0); toast('Updated'); } catch (er) { toast(er.message, 'err'); ev.target.checked = !ev.target.checked; } } }),
+        h('span', {}))),
+      h('td', {},
+        h('button', { class: 'btn ghost xs', onclick: () => editKbEntry(e) }, 'Edit'), ' ',
+        h('button', { class: 'btn danger xs', onclick: async () => { if (confirm('Delete “' + e.title + '”?')) { await api('api_saas_copilotKb_delete', e.id); navigate('copilot_kb'); } } }, 'Delete')
+      )
+    )))
+  );
+  view.appendChild(tbl);
+};
+
+function editKbEntry(e) {
+  e = e || {};
+  const m = h('div', { class: 'modal-bd' });
+  const card = h('div', { class: 'modal' });
+  card.appendChild(h('div', { class: 'modal-head' },
+    h('h3', {}, e.id ? 'Edit entry' : 'New Copilot entry'),
+    h('button', { class: 'x', onclick: () => m.remove() }, '✕')
+  ));
+  const KINDS = ['faq', 'tutorial', 'video', 'link', 'guide'];
+  const form = h('form', { onsubmit: async ev => {
+    ev.preventDefault();
+    const fd = new FormData(form);
+    const payload = Object.fromEntries(fd);
+    if (e.id) payload.id = e.id;
+    payload.is_active = form.querySelector('[name=is_active]').checked ? 1 : 0;
+    try { await api('api_saas_copilotKb_save', payload); toast('Saved — the Copilot will use it within a minute'); m.remove(); navigate('copilot_kb'); }
+    catch (er) { toast(er.message, 'err'); }
+  } },
+    h('div', { class: 'field' }, h('label', {}, 'Type'),
+      h('select', { name: 'kind' }, ...KINDS.map(v => h('option', { value: v, selected: (e.kind || 'faq') === v ? true : null }, v)))),
+    h('div', { class: 'field' }, h('label', {}, 'Title / question *'),
+      h('input', { name: 'title', required: true, value: e.title || '', placeholder: 'e.g. How do I export leads to Excel?' })),
+    h('div', { class: 'field' }, h('label', {}, 'Keywords (space or comma separated — help the Copilot match)'),
+      h('input', { name: 'keywords', value: e.keywords || '', placeholder: 'export excel download leads csv report' })),
+    h('div', { class: 'field' }, h('label', {}, 'Answer / details'),
+      h('textarea', { name: 'body', rows: 5, placeholder: 'The full answer the Copilot should give…' }, e.body || '')),
+    h('div', { class: 'field' }, h('label', {}, 'URL (video / tutorial / doc — optional)'),
+      h('input', { name: 'url', value: e.url || '', placeholder: 'https://…' })),
+    h('div', { class: 'field' }, h('label', { style: { display: 'flex', alignItems: 'center', gap: '.4rem' } },
+      h('input', { type: 'checkbox', name: 'is_active', checked: (e.id ? Number(e.is_active) === 1 : true) ? true : null }), 'Active (Copilot uses it)')),
     h('button', { type: 'submit', class: 'btn' }, 'Save')
   );
   card.appendChild(form);

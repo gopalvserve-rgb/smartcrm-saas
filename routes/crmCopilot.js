@@ -1234,13 +1234,18 @@ async function _runTool(name, args, ctx) {
     case 'lookup_setup_guide': {
       const q = String((args && args.query) || '').trim();
       if (!q) return { results: [], note: 'No query provided.' };
+      // Built-in help guide (static) + super-admin-managed KB (control DB:
+      // FAQs / tutorials / video links / URLs added via the admin panel).
       const hits = setupGuide.lookup(q, 3);
-      if (!hits.length) {
+      let kbHits = [];
+      try { kbHits = await require('./saas/copilotKb').lookupActive(q, 3); } catch (_) {}
+      const merged = [...kbHits, ...hits].slice(0, 4);   // KB entries first — they're the admin's curated answers
+      if (!merged.length) {
         return { results: [], note: "No matching guide section. Tell the user that and offer to email support@smartcrmsolution.com or browse https://crm.smartcrmsolution.com/saas/help/" };
       }
       return {
-        results: hits.map(h => ({ section_id: h.id, title: h.title, url: h.url, content: h.body })),
-        note: 'Cite the section title and include the URL in the answer so the user can read the full guide.'
+        results: merged.map(h => ({ section_id: h.id, title: h.title, url: h.url, content: h.body })),
+        note: 'Cite the section title and include the URL (if any) in the answer so the user can read the full guide or watch the video.'
       };
     }
     // ---- LEADS ---------------------------------------------------

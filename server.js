@@ -41,6 +41,7 @@ const tenants = require('./routes/saas/tenants');
 const invoices = require('./routes/saas/invoices');
 const settings = require('./routes/saas/saasSettings');
 const announcements = require('./routes/saas/announcements');
+const copilotKb = require('./routes/saas/copilotKb'); // COPILOT_KB_v1
 const customReqs = require('./routes/saas/customRequirements');
 const webhookLogs = require('./routes/saas/webhookLogs');
 const cashfreeWebhook = require('./routes/saas/cashfreeWebhook');
@@ -103,7 +104,8 @@ const SAAS_API = {};
   aiSettings, aiCosting,
   tenantModules, demoTenant,
   tickets,
-  finance, financeDashboard, expenses, signupRequests, wlBilling, saasPermissions, recordingHealth
+  finance, financeDashboard, expenses, signupRequests, wlBilling, saasPermissions, recordingHealth,
+  copilotKb
 ].forEach(mod => {
   Object.keys(mod).forEach(k => {
     if (typeof mod[k] === 'function' && k.startsWith('api_saas_')) SAAS_API[k] = mod[k];
