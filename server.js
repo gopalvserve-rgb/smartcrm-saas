@@ -2671,6 +2671,42 @@ setInterval(() => {
 setTimeout(() => _runEduRemindersForAllTenants().catch(() => {}), 90_000);
 console.log('[eduReminder] worker started — hourly tick');
 
+// ── Background: per-tenant Follow-up Reminder sweep ─────────────────────
+// REMINDER_FLOWS_v1 (2026-07-05). Every 60 seconds walk active tenants and
+// fire any followup_reminders whose fire_at <= NOW(). Also seed the 3 default
+// flows once per tenant. Uses tenantStorage so all sweep queries land in the
+// right tenant DB. Full log lives in the followup_reminders row itself
+// (status, sent_at, error, attempts, wa_message_id, email_message_id).
+async function _runReminderSweepForAllTenants() {
+  let rows = [];
+  try {
+    const r = await controlDb.query(
+      `SELECT slug FROM tenants WHERE status IN ('active','trial','past_due') ORDER BY id ASC LIMIT 500`
+    );
+    rows = r.rows;
+  } catch (e) { console.warn('[reminderSweep] tenant list failed:', e.message); return; }
+  let sweep, seed;
+  try { sweep = require('./utils/reminderSweep'); seed = require('./utils/reminderSeed'); } catch (_) { return; }
+  if (!sweep.tick) return;
+  for (const row of rows) {
+    let t; try { t = await tenantPoolMod.findActiveTenant(row.slug); } catch (_) { continue; }
+    if (!t) continue;
+    const pool = tenantPoolMod.poolFor(t);
+    if (!pool) continue;
+    try {
+      await tenantDb.tenantStorage.run({ pool, tenant: t, slug: row.slug }, async () => {
+        try { await seed.seedOnce(); } catch (_) {}
+        await sweep.tick();
+      });
+    } catch (e) { console.warn(`[reminderSweep] ${row.slug} tick failed:`, e.message); }
+  }
+}
+setInterval(() => {
+  _runReminderSweepForAllTenants().catch(e => console.error('[reminderSweep] cycle failed:', e.message));
+}, Number(process.env.REMINDER_SWEEP_INTERVAL_MS || 60_000));   // 60s
+setTimeout(() => _runReminderSweepForAllTenants().catch(() => {}), 75_000);
+console.log('[reminderSweep] worker started — 60s tick');
+
 // ── Background: per-tenant WhatsApp Campaign sender ─────────────────────
 // WB_CAMPAIGN_WORKER_v1 (2026-07-02) — routes/whatsbot._campaignTick (the
 // send loop) was only ever started in the unused server.tenant.js, so in

@@ -120,6 +120,8 @@ const ROUTE_FILES = [
   'pool',             /* LEAD_POOL_v1 — Free Pool / status-released lead pool */
   'payments',         /* PAYMENTS_v1 — Cashfree + Razorpay payment links */
   'subStatuses',      /* SUB_STATUS_v1 — vserve-only sub-statuses under each lead status */
+  'reminderFlows',      /* REMINDER_FLOWS_v1 — admin CRUD for follow-up reminder templates */
+  'followupReminders',  /* REMINDER_FLOWS_v1 — runtime scheduling + log view APIs */
 ];
 
 const API = {};
