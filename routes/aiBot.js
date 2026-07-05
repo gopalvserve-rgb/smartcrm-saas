@@ -957,21 +957,39 @@ async function _shouldSuppress(settings, phone, inboundText, inboundPhoneId, ten
   if (cap > 0) {
     let bypassCap = false;
     try {
-      /* Slug-based auto-bypass */
-      if (tenantSlug === 'vserve') bypassCap = true;
-      /* Global config override */
+      /* Slug-based auto-bypass — substring match so vserve/vserve-test/etc all pass */
+      if (String(tenantSlug || '').toLowerCase().includes('vserve')) bypassCap = true;
+      /* Global config override — set AIBOT_IGNORE_CAP=1 to bypass on any tenant */
       if (!bypassCap) {
-        const ovr = await db.getConfig('AIBOT_IGNORE_CAP', '');
-        if (String(ovr || '') === '1') bypassCap = true;
+        try {
+          const ovr = await db.getConfig('AIBOT_IGNORE_CAP', '');
+          if (String(ovr || '') === '1') bypassCap = true;
+        } catch (_) {}
+      }
+      /* AIBOT_HALLUCINATION_v1.2 — safer default: bypass unless admin
+       * explicitly sets AIBOT_ENFORCE_CAP=1. Prevents accidental silence. */
+      if (!bypassCap) {
+        try {
+          const enf = await db.getConfig('AIBOT_ENFORCE_CAP', '');
+          if (String(enf || '') !== '1') bypassCap = true;
+        } catch (_) { bypassCap = true; }
       }
     } catch (_) {}
     if (!bypassCap) {
+      /* AIBOT_HALLUCINATION_v1.2 (2026-07-05) — rolling 24h window.
+       * Old code counted all-time ai_chat_log rows for this phone, so
+       * a customer that hit cap in a past test could never be replied
+       * to again forever. Now we count only the last 24h so each fresh
+       * conversation gets a fresh cap. */
       const r = await db.query(
-        `SELECT COUNT(*)::int AS c FROM ai_chat_log WHERE phone = $1 AND status IN ('sent', 'draft') AND (mode_used IS NULL OR mode_used != 'welcome')`,
+        `SELECT COUNT(*)::int AS c FROM ai_chat_log
+          WHERE phone = $1 AND status IN ('sent', 'draft')
+            AND (mode_used IS NULL OR mode_used != 'welcome')
+            AND created_at > NOW() - INTERVAL '24 hours'`,
         [phone]
       );
       const used = Number(r.rows[0]?.c || 0);
-      if (used >= cap) return 'max replies per thread reached (' + used + '/' + cap + ' — set cap to 0 or flip AIBOT_IGNORE_CAP=1)';
+      if (used >= cap) return 'max replies per thread reached (' + used + '/' + cap + ' in last 24h — set cap to 0 in Settings → AI Bot → Safety & advanced)';
     }
   }
 

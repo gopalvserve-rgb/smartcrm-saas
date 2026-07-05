@@ -125,7 +125,10 @@ const CONFIG_KEYS = [
   'AIBOT_COMMITMENTS_ENABLED',
   // AIBOT_HALLUCINATION_v1.1 — set '1' to make every tenant bypass the
   // max_replies_per_thread cap (guarantees bot never silences on threshold).
-  'AIBOT_IGNORE_CAP'
+  'AIBOT_IGNORE_CAP',
+  // AIBOT_HALLUCINATION_v1.2 — opt-in enforcement (default: cap is IGNORED
+  // everywhere). Set to '1' to re-enable the cap on a specific tenant.
+  'AIBOT_ENFORCE_CAP'
 ];
 
 const SENSITIVE_KEYS = ['META_APP_SECRET', 'META_PAGE_ACCESS_TOKEN', 'WHATSAPP_ACCESS_TOKEN', 'SMTP_PASSWORD'];
