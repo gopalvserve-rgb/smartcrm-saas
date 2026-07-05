@@ -589,7 +589,7 @@ VIEWS.tenants = async (view) => {
     kpi('Pending balance', '₹' + Number(_cnt.balance).toLocaleString('en-IN'), '#b45309')));
 
   // ---- #5 Filter bar + #6 view toggle -------------------------------------
-  const _f = { q:'', status:'', dateFrom:null, dateTo:null, datePreset:'all' };
+  const _f = { q:'', status:'', dateFrom:null, dateTo:null, datePreset:'all', overCap:false };
   let _viewMode = (function(){ try { return localStorage.getItem('saas.tenantView') || 'card'; } catch(_) { return 'card'; } })();
   const qInp = h('input', { type:'search', placeholder:'Search org / slug / email…', style:{ flex:'1', minWidth:'180px', padding:'.4rem .6rem', border:'1px solid #cbd5e1', borderRadius:'8px' } });
   const STATUSES = ['', 'active', 'trial', 'past_due', 'suspended', 'pending_payment', 'pending_delete', 'deleted'];
@@ -625,14 +625,18 @@ VIEWS.tenants = async (view) => {
   }
   dFrom.onchange = () => { _f.dateFrom = dFrom.value ? new Date(dFrom.value+'T00:00:00') : null; _f.datePreset='custom'; _paintDateChips(); paint(); };
   dTo.onchange   = () => { _f.dateTo   = dTo.value   ? new Date(dTo.value+'T23:59:59')   : null; _f.datePreset='custom'; _paintDateChips(); paint(); };
-  view.appendChild(h('div', { style:{ display:'flex', gap:'6px', alignItems:'center', flexWrap:'wrap', marginBottom:'8px' } },
-    h('span', { style:{ fontSize:'.78rem', color:'#475569', fontWeight:'600' } }, '🗓 Registered:'),
-    _mkChip('all','All time'), _mkChip('this_month','This month'), _mkChip('last_month','Last month'),
-    _mkChip('last_7','Last 7d'), _mkChip('last_30','Last 30d'),
-    h('span', { style:{ color:'#94a3b8', fontSize:'.78rem' } }, 'from'), dFrom,
-    h('span', { style:{ color:'#94a3b8', fontSize:'.78rem' } }, 'to'), dTo));
-  view.appendChild(h('div', { style:{ display:'flex', gap:'8px', alignItems:'center', flexWrap:'wrap', marginBottom:'10px' } },
-    qInp, stSel, countLbl, h('span', { style:{ flex:'1' } }), cardBtn, listBtn));
+  // TENANT_FILTER_PANEL_v1 — one tidy filter card (was two loose full-width rows).
+  const overCapBtn = h('button', { class:'btn xs', title:'Show only tenants whose active users exceed their seat cap',
+    onclick: () => { _f.overCap = !_f.overCap; overCapBtn.style.background = _f.overCap ? '#dc2626' : ''; overCapBtn.style.color = _f.overCap ? '#fff' : ''; paint(); } }, '⚠ Over seat cap');
+  view.appendChild(h('div', { style:{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:'10px', padding:'10px 12px', marginBottom:'12px', display:'flex', flexDirection:'column', gap:'8px' } },
+    h('div', { style:{ display:'flex', gap:'8px', alignItems:'center', flexWrap:'wrap' } },
+      qInp, stSel, overCapBtn, countLbl, h('span', { style:{ flex:'1' } }), cardBtn, listBtn),
+    h('div', { style:{ display:'flex', gap:'6px', alignItems:'center', flexWrap:'wrap', borderTop:'1px solid #f1f5f9', paddingTop:'8px' } },
+      h('span', { style:{ fontSize:'.78rem', color:'#475569', fontWeight:'600' } }, '🗓 Registered:'),
+      _mkChip('all','All time'), _mkChip('this_month','This month'), _mkChip('last_month','Last month'),
+      _mkChip('last_7','Last 7d'), _mkChip('last_30','Last 30d'),
+      h('span', { style:{ color:'#94a3b8', fontSize:'.78rem' } }, 'from'), dFrom,
+      h('span', { style:{ color:'#94a3b8', fontSize:'.78rem' } }, 'to'), dTo)));
 
   view.appendChild(fbBackfillBar);
   const host = h('div', {});
@@ -642,6 +646,11 @@ VIEWS.tenants = async (view) => {
     const q = _f.q.trim().toLowerCase();
     return _origList.filter(t => {
       if (_f.status && t.status !== _f.status) return false;
+      if (_f.overCap) {
+        const _uc = (t.user_count_active == null) ? null : Number(t.user_count_active);
+        const _cap = (t.user_cap_effective == null || t.user_cap_effective === '') ? null : Number(t.user_cap_effective);
+        if (!(_uc != null && _cap != null && _uc > _cap)) return false;
+      }
       if (_f.dateFrom || _f.dateTo) {
         const c = t.created_at ? new Date(t.created_at) : null;
         if (!c) return false;
@@ -682,6 +691,7 @@ function _tenantListTable(rows, sizeMap) {
     const usersTxt = (usedRaw==null?'—':usedRaw) + ' / ' + (capEff==null?'∞':capEff);
     const usersOver = (capEff != null && usedRaw != null && usedRaw > capEff);
     const bal = Number(t.pending_balance_inr) || 0;
+    const sz = sizeMap.get(t.slug);
     const isLive = (t.status === 'active' || t.status === 'trial' || t.status === 'pending_delete');
     return h('tr', {},
       td(String(_i + 1), { color:'#64748b', fontWeight:'700', whiteSpace:'nowrap' }),
@@ -691,6 +701,7 @@ function _tenantListTable(rows, sizeMap) {
       td(_tenantTypeBadge(t)),
       td(t.package_name || '—'),
       td(usersTxt, { color: usersOver ? '#dc2626' : '#0f172a', fontWeight: usersOver ? '700' : '400', whiteSpace:'nowrap' }),
+      td(sz ? (sz.pretty + ' · ' + sz.percent_of_volume + '%') : '—', { whiteSpace:'nowrap', color: sz ? '#475569' : '#94a3b8' }),
       td(bal > 0 ? ('₹' + bal.toLocaleString('en-IN')) : '—', { color: bal>0?'#b45309':'#94a3b8', whiteSpace:'nowrap' }),
       td(fmtDate(t.current_period_end) || '—', { whiteSpace:'nowrap' }),
       td(fmtDate(t.created_at) || '—', { whiteSpace:'nowrap', color:'#475569' }),
@@ -712,7 +723,7 @@ function _tenantListTable(rows, sizeMap) {
       )));
   });
   return h('table', { style:{ width:'100%', borderCollapse:'collapse', minWidth:'720px' } },
-    h('thead', {}, h('tr', {}, th('#'), th('Tenant'), th('Status'), th('Type'), th('Plan'), th('Users'), th('Balance'), th('Period ends'), th('Registered'), th('Last login'), th('Actions'))),
+    h('thead', {}, h('tr', {}, th('#'), th('Tenant'), th('Status'), th('Type'), th('Plan'), th('Users'), th('Storage'), th('Balance'), th('Period ends'), th('Registered'), th('Last login'), th('Actions'))),
     h('tbody', {}, ...body));
 }
 
