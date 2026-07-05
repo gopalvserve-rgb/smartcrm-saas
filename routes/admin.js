@@ -122,7 +122,10 @@ const CONFIG_KEYS = [
      the DB. Same bug pattern as QUOTATION_DEFAULT_TERMS. */
   'LEAD_CARD_EXTRAS'
 ,
-  'AIBOT_COMMITMENTS_ENABLED'
+  'AIBOT_COMMITMENTS_ENABLED',
+  // AIBOT_HALLUCINATION_v1.1 — set '1' to make every tenant bypass the
+  // max_replies_per_thread cap (guarantees bot never silences on threshold).
+  'AIBOT_IGNORE_CAP'
 ];
 
 const SENSITIVE_KEYS = ['META_APP_SECRET', 'META_PAGE_ACCESS_TOKEN', 'WHATSAPP_ACCESS_TOKEN', 'SMTP_PASSWORD'];

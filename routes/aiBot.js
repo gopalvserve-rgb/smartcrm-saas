@@ -950,13 +950,29 @@ async function _shouldSuppress(settings, phone, inboundText, inboundPhoneId, ten
   }
 
   // max_replies_per_thread cap (0 = unlimited)
+  // AIBOT_HALLUCINATION_v1.1 (2026-07-05) — auto-bypass on Vserve so cap
+  // doesn't accidentally silence live bot on the flagship tenant.
+  // Global override: config AIBOT_IGNORE_CAP='1' bypasses everywhere.
   const cap = Number(settings.max_replies_per_thread || 0);
   if (cap > 0) {
-    const r = await db.query(
-      `SELECT COUNT(*)::int AS c FROM ai_chat_log WHERE phone = $1 AND status IN ('sent', 'draft') AND (mode_used IS NULL OR mode_used != 'welcome')`,
-      [phone]
-    );
-    if (Number(r.rows[0]?.c || 0) >= cap) return 'max replies per thread reached';
+    let bypassCap = false;
+    try {
+      /* Slug-based auto-bypass */
+      if (tenantSlug === 'vserve') bypassCap = true;
+      /* Global config override */
+      if (!bypassCap) {
+        const ovr = await db.getConfig('AIBOT_IGNORE_CAP', '');
+        if (String(ovr || '') === '1') bypassCap = true;
+      }
+    } catch (_) {}
+    if (!bypassCap) {
+      const r = await db.query(
+        `SELECT COUNT(*)::int AS c FROM ai_chat_log WHERE phone = $1 AND status IN ('sent', 'draft') AND (mode_used IS NULL OR mode_used != 'welcome')`,
+        [phone]
+      );
+      const used = Number(r.rows[0]?.c || 0);
+      if (used >= cap) return 'max replies per thread reached (' + used + '/' + cap + ' — set cap to 0 or flip AIBOT_IGNORE_CAP=1)';
+    }
   }
 
   return null;
