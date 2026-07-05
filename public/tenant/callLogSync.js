@@ -223,11 +223,53 @@
     if (document.getElementById('cls-fab')) return;
     var fab = document.createElement('button');
     fab.id = 'cls-fab';
-    fab.title = 'Sync calls from your phone';
+    fab.title = 'Sync calls — tap to open, drag to move';
     fab.innerHTML = '🔄 Sync Calls';
-    fab.style.cssText = 'position:fixed;left:12px;bottom:16px;z-index:9998;background:#4f46e5;color:#fff;border:none;border-radius:999px;padding:.55rem .9rem;font-size:.8rem;font-weight:600;box-shadow:0 6px 18px rgba(79,70,229,.45);cursor:pointer;display:inline-flex;align-items:center;gap:.35rem';
-    fab.onclick = function () { openModal(); };
+    fab.style.cssText = 'position:fixed;z-index:99998;background:#4f46e5;color:#fff;border:none;border-radius:999px;padding:.55rem .9rem;font-size:.8rem;font-weight:600;box-shadow:0 6px 18px rgba(79,70,229,.45);cursor:grab;display:inline-flex;align-items:center;gap:.35rem;touch-action:none;user-select:none;-webkit-user-select:none';
     document.body.appendChild(fab);
+
+    // Position it (restore last spot, else default bottom-left) and keep it on-screen.
+    function place(left, top) {
+      var w = fab.offsetWidth || 120, hh = fab.offsetHeight || 40;
+      left = Math.max(4, Math.min(left, window.innerWidth - w - 4));
+      top = Math.max(4, Math.min(top, window.innerHeight - hh - 4));
+      fab.style.left = left + 'px'; fab.style.top = top + 'px';
+      fab.style.right = 'auto'; fab.style.bottom = 'auto';
+    }
+    var saved = null;
+    try { saved = JSON.parse(localStorage.getItem('cls_fab_pos') || 'null'); } catch (e) {}
+    if (saved && typeof saved.left === 'number') place(saved.left, saved.top);
+    else place(12, window.innerHeight - 72);
+
+    // Drag to move (pointer events = touch + mouse). A tap (no real movement)
+    // opens the modal; a drag repositions and remembers the spot.
+    var sx = 0, sy = 0, ol = 0, ot = 0, moved = false, dragging = false;
+    fab.addEventListener('pointerdown', function (e) {
+      dragging = true; moved = false;
+      sx = e.clientX; sy = e.clientY;
+      var r = fab.getBoundingClientRect(); ol = r.left; ot = r.top;
+      fab.style.cursor = 'grabbing';
+      try { fab.setPointerCapture(e.pointerId); } catch (_) {}
+    });
+    fab.addEventListener('pointermove', function (e) {
+      if (!dragging) return;
+      var dx = e.clientX - sx, dy = e.clientY - sy;
+      if (Math.abs(dx) > 5 || Math.abs(dy) > 5) moved = true;
+      if (moved) { place(ol + dx, ot + dy); e.preventDefault(); }
+    });
+    function endDrag(e) {
+      if (!dragging) return;
+      dragging = false; fab.style.cursor = 'grab';
+      try { fab.releasePointerCapture(e.pointerId); } catch (_) {}
+      if (moved) {
+        var r = fab.getBoundingClientRect();
+        try { localStorage.setItem('cls_fab_pos', JSON.stringify({ left: r.left, top: r.top })); } catch (_) {}
+      } else {
+        openModal();
+      }
+    }
+    fab.addEventListener('pointerup', endDrag);
+    fab.addEventListener('pointercancel', endDrag);
   }
 
   // ---- mobile UI tweak: hide the Classic/Modern/Inbox leads toggle on phones -
