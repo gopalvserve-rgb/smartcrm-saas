@@ -267,10 +267,47 @@
     } catch (e) { /* silent */ }
   }
 
+  /* SIDEBAR_FIX_v3 (2026-07-05) — removed admin role gate (was blocking
+   * non-admin sessions and any tenant where CRM.user was undefined at
+   * injection time). Broadened nav selectors. Also adds a floating
+   * action button (FAB) as a guaranteed fallback if we can't find
+   * any sidebar so the feature is always reachable. */
+  /* SIDEBAR_FIX_v3 — floating action button fallback. Always visible
+   * in the bottom-right corner. Guarantees admins can reach the page
+   * even if we can't inject into the sidebar. */
+  function _ensureFab() {
+    if (document.getElementById('rf-fab')) return;
+    var fab = document.createElement('button');
+    fab.id = 'rf-fab';
+    fab.title = 'Follow-up Reminders';
+    fab.innerHTML = '🔔';
+    fab.style.cssText = [
+      'position:fixed', 'bottom:22px', 'right:22px', 'width:52px', 'height:52px',
+      'border-radius:50%', 'background:linear-gradient(135deg,#6366f1,#4f46e5)',
+      'color:#fff', 'border:0', 'font-size:22px', 'cursor:pointer', 'z-index:9988',
+      'box-shadow:0 8px 22px rgba(99,102,241,.5)', 'transition:transform .15s'
+    ].join(';');
+    fab.onmouseover = function () { this.style.transform = 'scale(1.08)'; };
+    fab.onmouseout  = function () { this.style.transform = ''; };
+    fab.onclick = function () {
+      if (typeof window.navigateTo === 'function') window.navigateTo('followupreminders');
+      else if (window.go) window.go('followupreminders');
+      else if (window.VIEWS && window.VIEWS.followupreminders) window.VIEWS.followupreminders();
+      else viewFollowupReminders();
+    };
+    document.body.appendChild(fab);
+    console.log('[reminderFlows] FAB fallback added');
+  }
+
   function _injectSidebarLink() {
     try {
-      if (!window.CRM || !CRM.user || CRM.user.role !== 'admin') return;
-      var nav = document.querySelector('.sidebar nav');
+      /* Broadened nav lookup — try every likely container. */
+      var nav = document.querySelector('.sidebar nav') ||
+                document.querySelector('.sidebar .nav') ||
+                document.querySelector('aside nav') ||
+                document.querySelector('.side-nav') ||
+                document.querySelector('#sidebar nav') ||
+                document.querySelector('nav.sidebar-nav');
       if (!nav) return;
       if (document.getElementById('nav-followupreminders')) return;
       var link = document.createElement('a');
@@ -278,12 +315,16 @@
       link.href = '#/followupreminders';
       link.setAttribute('data-view', 'followupreminders');
       link.innerHTML = '<span class="nav-icon">🔔</span> Follow-up Reminders';
+      link.style.cssText = 'display:flex;align-items:center;gap:.55rem;padding:.48rem .65rem;border-radius:6px;color:inherit;font-size:.85rem;text-decoration:none;cursor:pointer';
+      link.onmouseover = function () { this.style.background = 'rgba(148,163,184,.15)'; };
+      link.onmouseout  = function () { this.style.background = ''; };
       link.onclick = function (e) {
         e.preventDefault();
         if (typeof window.navigateTo === 'function') window.navigateTo('followupreminders');
         else if (window.go) window.go('followupreminders');
         else if (window.VIEWS && window.VIEWS.followupreminders) window.VIEWS.followupreminders();
       };
+      console.log('[reminderFlows] sidebar link injected');
       /* Try to place under "AI FEATURES" group next to Demo Reminders */
       var aiGroup = Array.from(nav.querySelectorAll('.nav-group-head'))
         .find(function (h) { return /ai\s*features/i.test(h.textContent); });
@@ -315,6 +356,7 @@
     try { _registerViews(); } catch (_) {}
     try { _injectSidebarLink(); } catch (_) {}
     try { _hideDemoReminders(); } catch (_) {}
+    try { _ensureFab(); } catch (_) {}
   }
   function _startObserver() {
     if (_observerStarted) return;
