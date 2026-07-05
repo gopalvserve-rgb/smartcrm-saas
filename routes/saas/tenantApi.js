@@ -162,6 +162,13 @@ async function api_login(_token, email, password) {
   if (!Number(user.is_active)) throw new Error('Account is deactivated');
   if (!verifyPassword(password, user.password_hash)) throw new Error('Invalid email or password');
 
+  // TENANT_LOGIN_TRACK_v1 — record last login (self-heals the column on
+  // pre-existing tenant DBs) so super-admin can show per-tenant last login.
+  try {
+    await db.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ');
+    await db.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
+  } catch (_) {}
+
   const token = signToken(user, _activeSlugForToken());
   return {
     token,

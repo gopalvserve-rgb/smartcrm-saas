@@ -905,6 +905,7 @@ CREATE TABLE IF NOT EXISTS personal_wa_templates (
 CREATE INDEX IF NOT EXISTS idx_pwa_templates_owner ON personal_wa_templates(owner_id);
 
 -- ---- Calendly per-rep webhook ----------------------------------
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ; -- TENANT_LOGIN_TRACK_v1
 ALTER TABLE users ADD COLUMN IF NOT EXISTS calendly_webhook_token TEXT;
 CREATE INDEX IF NOT EXISTS idx_users_calendly_token ON users(calendly_webhook_token);
 

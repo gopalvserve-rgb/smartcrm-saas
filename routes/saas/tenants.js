@@ -66,6 +66,7 @@ async function api_saas_tenants_list(token, filters) {
     // (their pool may not be connectable).
     if (t.status === 'deleted' || t.status === 'pending_delete' || t.status === 'suspended') {
       t.user_count_active = null;
+      t.last_login_at = null;
       return;
     }
     try {
@@ -78,6 +79,18 @@ async function api_saas_tenants_list(token, filters) {
       }
     } catch (_) {
       t.user_count_active = null;
+    }
+    // TENANT_LOGIN_TRACK_v1 — most-recent login across the tenant's users.
+    try {
+      const pool2 = tenantPool.poolFor(t);
+      if (pool2) {
+        const lr = await pool2.query(`SELECT MAX(last_login_at) AS m FROM users`);
+        t.last_login_at = (lr.rows[0] && lr.rows[0].m) ? lr.rows[0].m : null;
+      } else {
+        t.last_login_at = null;
+      }
+    } catch (_) {
+      t.last_login_at = null;
     }
   }));
 

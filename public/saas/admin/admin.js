@@ -568,6 +568,7 @@ VIEWS.tenants = async (view) => {
     active: _origList.filter(t => t.status === 'active').length,
     suspended: _origList.filter(t => t.status === 'suspended').length,
     today: _origList.filter(t => { try { return new Date(t.created_at).toLocaleDateString('en-CA') === _todayKey; } catch (_) { return false; } }).length,
+    loggedInToday: _origList.filter(t => { try { return t.last_login_at && new Date(t.last_login_at).toLocaleDateString('en-CA') === _todayKey; } catch (_) { return false; } }).length,
     demo: _origList.filter(t => String(t.tenant_type || 'live').toLowerCase() === 'demo').length,
     live: _origList.filter(t => String(t.tenant_type || 'live').toLowerCase() !== 'demo').length,
     balance: _origList.reduce((a, t) => a + (Number(t.pending_balance_inr) || 0), 0),
@@ -578,6 +579,7 @@ VIEWS.tenants = async (view) => {
     h('div', { style:{ fontSize:'.74rem', color:'#64748b', fontWeight:'600', textTransform:'uppercase', letterSpacing:'.03em' } }, label));
   view.appendChild(h('div', { style:{ display:'flex', gap:'10px', flexWrap:'wrap', marginBottom:'12px' } },
     kpi('Registered today', _cnt.today, '#0891b2'),
+    kpi('Logged in today', _cnt.loggedInToday, '#7c3aed'),
     kpi('Total active', _cnt.active, '#16a34a'),
     kpi('Total suspended', _cnt.suspended, '#dc2626'),
     kpi('Total tenants', _cnt.total),
@@ -674,7 +676,7 @@ VIEWS.tenants = async (view) => {
 function _tenantListTable(rows, sizeMap) {
   const th = (txt) => h('th', { style:{ textAlign:'left', padding:'8px 10px', fontSize:'.72rem', textTransform:'uppercase', letterSpacing:'.03em', color:'#64748b', borderBottom:'1px solid #e2e8f0', whiteSpace:'nowrap' } }, txt);
   const td = (kids, style) => h('td', { style: Object.assign({ padding:'8px 10px', fontSize:'.82rem', borderBottom:'1px solid #f1f5f9', verticalAlign:'top' }, style||{}) }, kids);
-  const body = rows.map(t => {
+  const body = rows.map((t, _i) => {
     const capEff = (t.user_cap_effective == null || t.user_cap_effective === '') ? null : Number(t.user_cap_effective);
     const usedRaw = (t.user_count_active == null) ? null : Number(t.user_count_active);
     const usersTxt = (usedRaw==null?'—':usedRaw) + ' / ' + (capEff==null?'∞':capEff);
@@ -682,6 +684,7 @@ function _tenantListTable(rows, sizeMap) {
     const bal = Number(t.pending_balance_inr) || 0;
     const isLive = (t.status === 'active' || t.status === 'trial' || t.status === 'pending_delete');
     return h('tr', {},
+      td(String(_i + 1), { color:'#64748b', fontWeight:'700', whiteSpace:'nowrap' }),
       td([ h('div', { style:{ fontWeight:'700', color:'#0f172a' } }, t.org_name || t.slug),
            h('div', { style:{ fontSize:'.72rem', color:'#94a3b8' } }, '/' + t.slug) ]),
       td(_tenantStatusBadge(t.status)),
@@ -691,6 +694,7 @@ function _tenantListTable(rows, sizeMap) {
       td(bal > 0 ? ('₹' + bal.toLocaleString('en-IN')) : '—', { color: bal>0?'#b45309':'#94a3b8', whiteSpace:'nowrap' }),
       td(fmtDate(t.current_period_end) || '—', { whiteSpace:'nowrap' }),
       td(fmtDate(t.created_at) || '—', { whiteSpace:'nowrap', color:'#475569' }),
+      td(t.last_login_at ? fmtDateTime(t.last_login_at) : 'Never', { whiteSpace:'nowrap', color: t.last_login_at ? '#0f172a' : '#94a3b8', fontWeight: t.last_login_at ? '600' : '400' }),
       // TENANT_LIST_ACTIONS_v1 (2026-06-26) — match the full action set the
       // Cards view exposes so super-admins don't have to toggle just to
       // reset a password / install a pack / open Users / manage Modules.
@@ -708,7 +712,7 @@ function _tenantListTable(rows, sizeMap) {
       )));
   });
   return h('table', { style:{ width:'100%', borderCollapse:'collapse', minWidth:'720px' } },
-    h('thead', {}, h('tr', {}, th('Tenant'), th('Status'), th('Type'), th('Plan'), th('Users'), th('Balance'), th('Period ends'), th('Registered'), th('Actions'))),
+    h('thead', {}, h('tr', {}, th('#'), th('Tenant'), th('Status'), th('Type'), th('Plan'), th('Users'), th('Balance'), th('Period ends'), th('Registered'), th('Last login'), th('Actions'))),
     h('tbody', {}, ...body));
 }
 
@@ -765,6 +769,7 @@ function renderTenantCard(t, sizeMap) {
     bal > 0 ? _row('Balance due', '₹' + bal.toLocaleString('en-IN'), '#b45309') : null,
     _row('Period ends', fmtDate(t.current_period_end) || '—'),
     _row('Registered', fmtDate(t.created_at) || '—'),
+    _row('Last login', t.last_login_at ? fmtDateTime(t.last_login_at) : 'Never', t.last_login_at ? '#0f172a' : '#94a3b8'),
     sz ? _row('DB size', sz.pretty + ' · ' + sz.percent_of_volume + '%') : null,
     (String(t.admin_remarks||'').trim()) ? h('div', { style:{ marginTop:'8px', padding:'6px 8px', background:'#fffbeb', border:'1px solid #fde68a', borderRadius:'8px', fontSize:'.76rem', color:'#78350f', whiteSpace:'pre-wrap', wordBreak:'break-word' } }, '📝 ' + String(t.admin_remarks).trim()) : null,
     actions);
