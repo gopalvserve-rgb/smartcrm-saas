@@ -4420,20 +4420,9 @@ VIEWS.finance = async (view) => {
     revGrid.appendChild(kpi('Lifetime collected', fmtRupees(r.lifetime_paid), 'all paid invoices', '#fefce8'));
     kpiCard.appendChild(revGrid);
 
-    kpiCard.appendChild(h('h2', { style: { marginTop: '1rem' } }, 'Tenants'));
-    const tn = d.tenants;
-    const tGrid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '.75rem' } });
-    tGrid.appendChild(kpi('Total tenants', tn.total));
-    tGrid.appendChild(kpi('Active',        tn.active,    null, '#ecfdf5'));
-    tGrid.appendChild(kpi('Trial',         tn.trial,     null, '#eff6ff'));
-    tGrid.appendChild(kpi('Past due',      tn.past_due,  null, '#fff7ed'));
-    tGrid.appendChild(kpi('Suspended',     tn.suspended, null, '#fef2f2'));
-    tGrid.appendChild(kpi('New this month',     tn.new_this_month,     'signups since 1st', '#f0fdf4'));
-    tGrid.appendChild(kpi('Expired this month', tn.expired_this_month, 'period ended, not renewed', '#fef2f2'));
-    tGrid.appendChild(kpi('Churned this month', tn.churned_this_month, 'moved to deleted/suspended', '#fef2f2'));
-    tGrid.appendChild(kpi('Expiring in 7 days',  tn.expiring_in_7,  null, '#fff7ed'));
-    tGrid.appendChild(kpi('Expiring in 30 days', tn.expiring_in_30, null, '#fff7ed'));
-    kpiCard.appendChild(tGrid);
+    // FIN_NO_TENANT_COUNT_v1 — tenant COUNT KPIs removed from Finance per request
+    // (this page is amount/finance-only now). Counts live on the Tenants page.
+    void d.tenants;
 
     kpiCard.appendChild(h('h2', { style: { marginTop: '1rem' } }, 'Invoices'));
     const iv = d.invoices;

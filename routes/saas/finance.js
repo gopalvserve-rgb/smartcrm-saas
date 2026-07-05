@@ -27,11 +27,11 @@ function _periodToRange(period) {
       { const d = new Date(now); d.setDate(d.getDate() - d.getDay()); d.setHours(0,0,0,0); return { from: d.toISOString(), to: now.toISOString() }; }
     case 'last_month':
       { const s = new Date(now.getFullYear(), now.getMonth() - 1, 1); const e = new Date(now.getFullYear(), now.getMonth(), 1); return { from: s.toISOString(), to: e.toISOString() }; }
-    case 'last_7d':
+    case 'last_7d': case 'last_7':
       { const d = new Date(now); d.setDate(d.getDate() - 7); return { from: d.toISOString(), to: now.toISOString() }; }
-    case 'last_30d':
+    case 'last_30d': case 'last_30':
       { const d = new Date(now); d.setDate(d.getDate() - 30); return { from: d.toISOString(), to: now.toISOString() }; }
-    case 'last_90d':
+    case 'last_90d': case 'last_90':
       { const d = new Date(now); d.setDate(d.getDate() - 90); return { from: d.toISOString(), to: now.toISOString() }; }
     case 'this_quarter':
       { const qStart = new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1); return { from: qStart.toISOString(), to: now.toISOString() }; }
@@ -39,7 +39,7 @@ function _periodToRange(period) {
       { return { from: new Date(now.getFullYear(), 0, 1).toISOString(), to: now.toISOString() }; }
     case 'last_year':
       { return { from: new Date(now.getFullYear() - 1, 0, 1).toISOString(), to: new Date(now.getFullYear(), 0, 1).toISOString() }; }
-    case 'all_time':
+    case 'all_time': case 'all':
       return { from: '2000-01-01', to: now.toISOString() };
     case 'this_month':
     default:
@@ -50,7 +50,9 @@ function _periodToRange(period) {
 function _customRange(opts) {
   const o = opts || {};
   if (o.from && o.to) return { from: new Date(o.from).toISOString(), to: new Date(o.to).toISOString() };
-  return _periodToRange(o.period);
+  // FIN_RANGE_FIX_v1 — the admin UI sends { range: '<token>' }, not { period }.
+  // Reading only o.period made every preset silently fall back to this_month.
+  return _periodToRange(o.range || o.period);
 }
 
 /* ---------- 1. OVERVIEW ---------- */
