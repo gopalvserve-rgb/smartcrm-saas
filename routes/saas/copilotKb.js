@@ -102,11 +102,30 @@ async function api_saas_copilotKb_trainedSummary(token) {
     const c = await control.query(`SELECT COUNT(*)::int AS n, COALESCE(SUM(is_active),0)::int AS a FROM copilot_kb`);
     kbCount = Number(c.rows[0].n) || 0; kbActive = Number(c.rows[0].a) || 0;
   } catch (_) {}
+  // COPILOT_KB_BUILTIN_OFF_v1 — expose the built-in enable flag so the SPA
+  // shows a toggle and users can turn the /saas/help/ feed off entirely.
+  let builtinEnabled = true;
+  try {
+    const v = await control.getSetting('COPILOT_KB_BUILTIN_ENABLED');
+    builtinEnabled = String(v == null ? '1' : v) === '1';
+  } catch (_) {}
   return {
     builtin_count: builtin.length, builtin, kb_count: kbCount, kb_active: kbActive,
+    builtin_enabled: builtinEnabled,
     help_url: 'https://crm.smartcrmsolution.com/saas/help/',
     tutorial_url: 'https://crm.smartcrmsolution.com/tutorial/'
   };
+}
+
+/** COPILOT_KB_BUILTIN_OFF_v1 — turn the built-in Setup Guide feed on/off.
+ *  When off, crmCopilot.lookup_setup_guide skips setupGuide.lookup and
+ *  answers only from the curated copilot_kb table. Persist in control settings. */
+async function api_saas_copilotKb_setBuiltinEnabled(token, payload) {
+  await requireFullAdmin(token);
+  const p = payload || {};
+  const enabled = (Number(p.enabled) === 1 || p.enabled === true || p.enabled === '1') ? '1' : '0';
+  await control.setSetting('COPILOT_KB_BUILTIN_ENABLED', enabled);
+  return { ok: true, enabled: enabled === '1' };
 }
 
 async function api_saas_copilotKb_save(token, payload) {
@@ -151,5 +170,6 @@ async function api_saas_copilotKb_toggle(token, id, is_active) {
 module.exports = {
   api_saas_copilotKb_listAdmin, api_saas_copilotKb_trainedSummary,
   api_saas_copilotKb_save, api_saas_copilotKb_delete, api_saas_copilotKb_toggle,
+  api_saas_copilotKb_setBuiltinEnabled,
   lookupActive
 };

@@ -2184,21 +2184,40 @@ VIEWS.copilot_kb = async (view) => {
   // --- What the Copilot already knows ---
   let sum = null;
   try { sum = await api('api_saas_copilotKb_trainedSummary'); } catch (e) { view.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+  const builtinOn = sum.builtin_enabled !== false;
   const summaryCard = h('div', { class: 'card' },
     h('h3', {}, 'What the Copilot is trained on'),
     h('p', { class: 'muted', style: { margin: '.3rem 0 .6rem', fontSize: '.9rem' } },
-      'The “Ask CRM” assistant answers how-to questions from two sources: the built-in setup guide (' +
-      sum.builtin_count + ' topics, incl. video tutorials) and your custom entries below (' +
-      sum.kb_active + ' active / ' + sum.kb_count + ' total).'),
+      builtinOn
+        ? 'The “Ask CRM” assistant answers how-to questions from two sources: the built-in setup guide (' + sum.builtin_count + ' topics, incl. video tutorials) and your custom entries below (' + sum.kb_active + ' active / ' + sum.kb_count + ' total).'
+        : 'The “Ask CRM” assistant answers ONLY from your custom entries below (' + sum.kb_active + ' active / ' + sum.kb_count + ' total). The built-in setup guide is disabled — the Copilot will not pull from ' + sum.help_url + '.'),
+    /* COPILOT_KB_BUILTIN_OFF_v1 — toggle for the built-in /saas/help/ feed */
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: '.6rem', padding: '.5rem .7rem', background: builtinOn ? '#f0fdf4' : '#fef2f2', border: '1px solid ' + (builtinOn ? '#bbf7d0' : '#fecaca'), borderRadius: '8px', margin: '.4rem 0 .6rem' } },
+      h('label', { class: 'switch', title: 'Include built-in setup guide as training source' },
+        h('input', { type: 'checkbox', checked: builtinOn ? true : null,
+          onchange: async (ev) => {
+            const val = ev.target.checked ? 1 : 0;
+            try {
+              await api('api_saas_copilotKb_setBuiltinEnabled', { enabled: val });
+              toast(val ? 'Built-in setup guide re-enabled' : 'Built-in setup guide disabled — Copilot will use only your custom KB entries');
+              navigate('copilot_kb');
+            } catch (e) { toast(e.message, 'err'); ev.target.checked = !ev.target.checked; }
+          } }),
+        h('span', {})),
+      h('span', { style: { fontSize: '.88rem', fontWeight: '600' } },
+        builtinOn ? '✓ Built-in setup guide is ON' : '✕ Built-in setup guide is OFF'),
+      h('span', { class: 'muted', style: { fontSize: '.78rem', marginLeft: 'auto' } },
+        builtinOn ? 'Includes /saas/help/ topics' : 'Only your custom KB entries')
+    ),
     h('div', { style: { display: 'flex', gap: '.5rem', flexWrap: 'wrap', marginBottom: '.5rem' } },
       h('a', { class: 'btn ghost xs', href: sum.help_url, target: '_blank' }, '📖 Built-in guide'),
       h('a', { class: 'btn ghost xs', href: sum.tutorial_url, target: '_blank' }, '🎬 Interactive tutorial')
     ),
-    h('details', {},
+    builtinOn ? h('details', {},
       h('summary', { style: { cursor: 'pointer', fontSize: '.85rem', color: '#4f46e5' } }, 'Show ' + sum.builtin_count + ' built-in topics'),
       h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '.35rem', marginTop: '.5rem' } },
         ...(sum.builtin || []).map(b => h('a', { class: 'tag info', href: b.url, target: '_blank', style: { textDecoration: 'none' } }, b.title)))
-    )
+    ) : h('div')
   );
   view.appendChild(summaryCard);
 

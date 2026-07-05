@@ -32,6 +32,21 @@ try { require('./utils/saasInvoiceAutoGen').startSweep(); } catch (e) { console.
 try { require('./utils/showcaseFollowupSeed').startSweep(); } catch (e) { console.warn('[showcaseFollowupSeed] start failed:', e.message); }
 try { require('./utils/invoicingModuleBackfill').startSweep(); } catch (e) { console.warn('[invoicingModuleBackfill] start failed:', e.message); }
 
+/* COPILOT_KB_BUILTIN_OFF_v1 (2026-07-05) — user requested to disable the
+ * built-in /saas/help/ feed. Flip the setting OFF once (idempotent);
+ * super-admin can toggle it back on from the Copilot Training page. */
+(async () => {
+  try {
+    const ctrl = require('./control/db');
+    const applied = await ctrl.getSetting('COPILOT_KB_BUILTIN_OFF_APPLIED_v1');
+    if (applied !== '1') {
+      await ctrl.setSetting('COPILOT_KB_BUILTIN_ENABLED', '0');
+      await ctrl.setSetting('COPILOT_KB_BUILTIN_OFF_APPLIED_v1', '1');
+      console.log('[COPILOT_KB_BUILTIN_OFF_v1] built-in setup guide disabled by default');
+    }
+  } catch (e) { console.warn('[COPILOT_KB_BUILTIN_OFF_v1] init failed:', e.message); }
+})();
+
 
 // ---- SaaS modules (control plane) -----------------------------
 const superAdmin = require('./routes/saas/superAdminAuth');

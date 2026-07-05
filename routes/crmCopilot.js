@@ -1234,9 +1234,18 @@ async function _runTool(name, args, ctx) {
     case 'lookup_setup_guide': {
       const q = String((args && args.query) || '').trim();
       if (!q) return { results: [], note: 'No query provided.' };
-      // Built-in help guide (static) + super-admin-managed KB (control DB:
-      // FAQs / tutorials / video links / URLs added via the admin panel).
-      const hits = setupGuide.lookup(q, 3);
+      // Built-in help guide (static, from public/saas/help/index.html) +
+      // super-admin-managed KB (control DB: FAQs / tutorials / video links / URLs).
+      // COPILOT_KB_BUILTIN_OFF_v1 (2026-07-05) — built-in feed is gated by a
+      // control-plane setting so super-admins can turn it off entirely and
+      // have the Copilot answer only from their curated KB.
+      let builtinEnabled = true;
+      try {
+        const ctrl = require('../control/db');
+        const v = await ctrl.getSetting('COPILOT_KB_BUILTIN_ENABLED');
+        builtinEnabled = String(v == null ? '1' : v) === '1';
+      } catch (_) {}
+      const hits = builtinEnabled ? setupGuide.lookup(q, 3) : [];
       let kbHits = [];
       try { kbHits = await require('./saas/copilotKb').lookupActive(q, 3); } catch (_) {}
       const merged = [...kbHits, ...hits].slice(0, 4);   // KB entries first — they're the admin's curated answers
