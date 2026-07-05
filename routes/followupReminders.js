@@ -19,9 +19,17 @@
 const db = require('../db/pg');
 const { authUser } = require('../utils/auth');
 
-let _schemaReady = false;
+/* PER_TENANT_SCHEMA_v1 (2026-07-05) — see reminderFlows.js */
+const _schemaReady = new Set();
+function _tenantKey() {
+  try {
+    const store = db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore();
+    return (store && store.slug) || 'default';
+  } catch (_) { return 'default'; }
+}
 async function _ensureSchema() {
-  if (_schemaReady) return;
+  const key = _tenantKey();
+  if (_schemaReady.has(key)) return;
   await db.query(`CREATE TABLE IF NOT EXISTS followup_reminders (
     id                  SERIAL PRIMARY KEY,
     lead_id             INTEGER NOT NULL,
@@ -49,7 +57,7 @@ async function _ensureSchema() {
                   ON followup_reminders(fire_at, status)`).catch(()=>{});
   await db.query(`CREATE INDEX IF NOT EXISTS followup_reminders_lead_idx
                   ON followup_reminders(lead_id)`).catch(()=>{});
-  _schemaReady = true;
+  _schemaReady.add(key);
 }
 
 /* ── Helper: explode a flow into concrete followup_reminders rows ── */

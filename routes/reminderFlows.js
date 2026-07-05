@@ -28,9 +28,23 @@ const db = require('../db/pg');
 const { authUser } = require('../utils/auth');
 
 /* ── Schema (idempotent) ─────────────────────────────────────────── */
-let _schemaReady = false;
+/* PER_TENANT_SCHEMA_v1 (2026-07-05) — the previous module-level
+ * `_schemaReady = true` flag was shared across ALL tenants in the
+ * Node process. So if tenant A hit the API first (creating tables
+ * in A's DB and flipping the flag), tenant B's request skipped
+ * _ensureSchema entirely and errored with 'relation reminder_flows
+ * does not exist'. Fix: cache per-tenant slug so each tenant
+ * creates its own tables exactly once. */
+const _schemaReady = new Set();
+function _tenantKey() {
+  try {
+    const store = db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore();
+    return (store && store.slug) || 'default';
+  } catch (_) { return 'default'; }
+}
 async function _ensureSchema() {
-  if (_schemaReady) return;
+  const key = _tenantKey();
+  if (_schemaReady.has(key)) return;
   await db.query(`CREATE TABLE IF NOT EXISTS reminder_flows (
     id                  SERIAL PRIMARY KEY,
     name                VARCHAR(120) NOT NULL,
@@ -62,7 +76,7 @@ async function _ensureSchema() {
   // Idempotent evolution: add columns for old installs
   await db.query(`ALTER TABLE reminder_flows ADD COLUMN IF NOT EXISTS wa_language VARCHAR(20) DEFAULT 'en'`).catch(()=>{});
   await db.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS reminder_flow_id INTEGER`).catch(()=>{});
-  _schemaReady = true;
+  _schemaReady.add(key);
 }
 
 async function _requireAdmin(token) {
