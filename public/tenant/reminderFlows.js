@@ -1,28 +1,23 @@
 /* ======================================================================
- * REMINDER_FLOWS_v1 SPA (2026-07-05) — v2 REDESIGN
+ * REMINDER_FLOWS_v1 SPA (2026-07-05) — v3 MULTI-FLOW REBUILD
  * ----------------------------------------------------------------------
- * Layout matches the existing "Demo Reminders" page style
- * (Settings → AI Features → 📅 Demo Reminders) — single card, enable
- * toggle at top, status checkboxes, config grid at bottom, save button,
- * footer helper.
+ * Matches REMINDER_FLOWS_v1_MOCKUP.html exactly:
+ *   - Landing view = grid of ALL reminder flows as cards
+ *   - "+ New Flow" button top-right
+ *   - Click any card (or "+ New Flow") → opens the flow BUILDER inline
+ *   - Builder has 4 numbered sections: Times / Channels / Recipients / Content
+ *   - Content section includes TEMPLATE VARIABLE PICKER + HEADER IMAGE URL
+ *   - Save → returns to the grid
  *
- * The user picks:
- *   • ✅ Enable Follow-up Reminders for this tenant
- *   • ⏰ Which reminder times fire (checkboxes: 1h / 30m / 15m / 10m / 5m / at time)
- *   • 💬 Which channels: WhatsApp + Email
- *   • 👥 Who receives them: Lead + Owner
- *   • ✏ WhatsApp template (dropdown of approved templates)
- *   • 📧 Email subject + body
- *
- * On save, updates the "Standard reminders" flow (default). All reps that
- * opt into a follow-up reminder use this flow.
+ * Backend (routes/reminderFlows.js) already supports full multi-flow CRUD:
+ *   api_reminderFlows_list / _get / _save / _delete / _setDefault
  * ====================================================================== */
 (function () {
   'use strict';
-  /* REMINDER_VARS_v1 — template variable picker + header image */
   if (window.REMINDER_FLOWS_v1) return;
-  window.REMINDER_FLOWS_v1 = { version: '2.0' };
+  window.REMINDER_FLOWS_v1 = { version: '3.0-multi' };
 
+  /* ── Helpers ── */
   function _slug() { try { var m = location.pathname.match(/\/t\/([^\/]+)/); return m ? m[1] : ''; } catch (e) { return ''; } }
   function _tok() { var s = _slug(); try { return (s && localStorage.getItem('crm_token_' + s)) || localStorage.getItem('crm_token') || ''; } catch (e) { return ''; } }
   async function _api(name, payload) {
@@ -44,305 +39,538 @@
     setTimeout(function () { div.remove(); }, 3200);
   }
 
-  // Time presets — this is what the user picks in the checkboxes
+  /* Time preset chips (max 3 pickable) */
   var TIMES = [
-    { m: -180, l: '3 hours before' }, { m: -60, l: '1 hour before' },
-    { m: -30, l: '30 min before' }, { m: -15, l: '15 min before' },
-    { m: -10, l: '10 min before' }, { m: -5, l: '5 min before' },
-    { m: 0, l: 'At follow-up time' }
+    { m: -180, l: '3 hrs before' },
+    { m: -60,  l: '1 hour before' },
+    { m: -30,  l: '30 min before' },
+    { m: -15,  l: '15 min before' },
+    { m: -10,  l: '10 min before' },
+    { m: -5,   l: '5 min before' },
+    { m: 0,    l: 'At follow-up time' }
   ];
 
+  /* Merge tokens available in template variable dropdowns */
+  var TOKEN_OPTS = [
+    { v: '{{name}}',            l: 'Lead name — {{name}}' },
+    { v: '{{owner_name}}',      l: 'Owner (assigned rep) — {{owner_name}}' },
+    { v: '{{followup_date}}',   l: 'Follow-up date — {{followup_date}}' },
+    { v: '{{followup_time}}',   l: 'Follow-up time — {{followup_time}}' },
+    { v: '{{minutes_before}}',  l: 'Minutes before — {{minutes_before}}' },
+    { v: '{{company}}',         l: 'Company name — {{company}}' },
+    { v: '__custom__',          l: '✏ Custom text…' }
+  ];
+
+  /* Cache the templates list once — avoids re-fetching between grid ↔ editor */
+  var _templatesCache = null;
+  async function _loadTemplates() {
+    if (_templatesCache) return _templatesCache;
+    try {
+      var t = await _api('api_wb_templates_list').catch(function () { return []; });
+      if (!Array.isArray(t)) t = t.items || [];
+      _templatesCache = t;
+      return t;
+    } catch (_) { _templatesCache = []; return []; }
+  }
+
+  /* ══════════════════════════════════════════════════════════════════
+   * ENTRY — always lands on the flow-list grid
+   * ══════════════════════════════════════════════════════════════ */
   async function viewFollowupReminders() {
     var root = document.querySelector('main') || document.body;
-    root.innerHTML = '<div class="admin-content" id="rf-root"><h2 style="margin-top:0">🔔 Follow-up Reminders</h2>' +
-      '<p class="muted" style="margin-top:0">Auto-remind the Lead and/or the Owner about upcoming follow-ups via WhatsApp and/or Email. Pick up to 3 alert times (e.g. 1 hour, 30 min, 10 min before) — the same template/message fires at each.</p>' +
-      '<div id="rf-body"><div class="loading" style="padding:2rem;text-align:center;color:#94a3b8">Loading…</div></div></div>';
-    try {
-      await render();
-    } catch (e) {
+    root.innerHTML =
+      '<div class="admin-content" id="rf-root">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem;flex-wrap:wrap;gap:.5rem">' +
+          '<div>' +
+            '<h2 style="margin:0">🔔 Follow-up Reminders</h2>' +
+            '<p class="muted" style="margin:.25rem 0 0">Reusable reminder flows. Reps pick one when they set a follow-up — WhatsApp templates + emails fire at the times you configure.</p>' +
+          '</div>' +
+          '<button type="button" class="btn primary" id="rf-new" style="padding:.55rem 1.1rem;font-weight:600;background:#6366f1;color:#fff;border:0;border-radius:8px;cursor:pointer">+ New Flow</button>' +
+        '</div>' +
+        '<div id="rf-body"><div style="padding:2rem;text-align:center;color:#94a3b8">Loading…</div></div>' +
+      '</div>';
+
+    document.getElementById('rf-new').onclick = function () { openBuilder(null); };
+    try { await renderList(); }
+    catch (e) {
       document.getElementById('rf-body').innerHTML =
         '<div style="padding:1rem;background:#fee2e2;color:#991b1b;border-radius:8px">⚠ ' + esc(e.message) + '</div>';
     }
   }
 
-  async function render() {
-    // Load the flow list — we operate on the DEFAULT flow (or the first one)
-    var flows, templates;
-    try {
-      var d = await _api('api_reminderFlows_list');
-      flows = d.items || [];
-    } catch (e) { throw new Error('Could not load flows: ' + e.message); }
-    try {
-      templates = await _api('api_wb_templates_list').catch(function () { return []; });
-    } catch (_) { templates = []; }
-    if (!Array.isArray(templates)) templates = templates.items || [];
-
-    // Prefer the default flow, then the first "Standard" one, then first any
-    var flow = flows.find(function (f) { return Number(f.is_default) === 1; }) ||
-               flows.find(function (f) { return /standard/i.test(f.name || ''); }) ||
-               flows[0] || null;
-
-    // Build the checked-set of currently-picked offsets
-    var pickedMs = new Set((flow && flow.rungs || []).map(function (r) { return Number(r.offset_minutes); }));
-
+  /* ══════════════════════════════════════════════════════════════════
+   * LIST — card grid of every flow
+   * ══════════════════════════════════════════════════════════════ */
+  async function renderList() {
+    var d = await _api('api_reminderFlows_list');
+    var flows = d.items || [];
     var body = document.getElementById('rf-body');
-    body.innerHTML =
-      '<div class="card" style="padding:1.2rem 1.4rem;margin-bottom:1rem;border-radius:12px;background:linear-gradient(180deg,#eff6ff 0%,#fff 70%);border:1px solid #bfdbfe">' +
 
-        /* Enable toggle */
-        '<label style="display:flex;align-items:center;gap:.5rem;font-weight:600;margin-bottom:1rem">' +
-          '<input type="checkbox" id="rf-enabled"' + (flow && Number(flow.is_active) ? ' checked' : '') + '>' +
-          '<span>🟢 Enable Follow-up Reminders for this tenant</span>' +
+    if (!flows.length) {
+      body.innerHTML =
+        '<div style="padding:3rem 2rem;text-align:center;background:#fff;border:2px dashed #e5e7eb;border-radius:12px">' +
+          '<div style="font-size:3rem;margin-bottom:.5rem">🔔</div>' +
+          '<div style="font-size:1.05rem;font-weight:600;margin-bottom:.35rem">No reminder flows yet</div>' +
+          '<div style="color:#64748b;margin-bottom:1rem">Create your first flow so reps can attach it to any lead follow-up.</div>' +
+          '<button type="button" class="btn primary" onclick="window.REMINDER_FLOWS_v1.openBuilder(null)" style="padding:.55rem 1.4rem;font-weight:600;background:#6366f1;color:#fff;border:0;border-radius:8px;cursor:pointer">+ New Flow</button>' +
+        '</div>';
+      return;
+    }
+
+    var cards = flows.map(function (f) {
+      var rungs = (f.rungs || []).slice().sort(function (a, b) { return Number(a.offset_minutes) - Number(b.offset_minutes); });
+      var chChip = Number(f.channel_wa) && Number(f.channel_email) ? 'WA+Email'
+                 : Number(f.channel_wa) ? 'WA'
+                 : Number(f.channel_email) ? 'Email' : '—';
+      var rungHtml = rungs.length ? rungs.map(function (r) {
+        var m = Number(r.offset_minutes);
+        var lbl = m === 0 ? 'On time' : (Math.abs(m) < 60 ? Math.abs(m) + 'm' : (Math.abs(m) / 60) + 'h') + ' before';
+        return '<span style="background:#eef2ff;color:#4338ca;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600">' + esc(lbl) + '</span>';
+      }).join(' ') : '<span style="color:#94a3b8;font-size:11px">— no rungs configured —</span>';
+      var isDefault = Number(f.is_default) === 1;
+      var isActive = Number(f.is_active) === 1;
+      var cardClass = 'rf-flow-card' + (isDefault ? ' default' : '') + (isActive ? '' : ' off');
+      return '<div class="' + cardClass + '" data-id="' + f.id + '" style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:14px;box-shadow:0 1px 2px rgba(15,23,42,.04);cursor:pointer;position:relative;transition:.15s' + (isActive ? '' : ';opacity:.6') + '">' +
+        (isDefault ? '<span style="position:absolute;top:-8px;right:12px;background:#6366f1;color:#fff;font-size:9px;font-weight:700;padding:2px 7px;border-radius:99px;letter-spacing:.3px">DEFAULT</span>' : '') +
+        '<div style="display:flex;justify-content:space-between;align-items:start;gap:.5rem;margin-bottom:6px">' +
+          '<h4 style="margin:0;font-size:14px;font-weight:600;color:#0f172a">' + esc(f.name || '(unnamed)') + '</h4>' +
+          '<span style="font-size:10.5px;font-weight:700;color:#fff;padding:2px 8px;border-radius:99px;background:' + (chChip === 'WA+Email' ? 'linear-gradient(135deg,#25D366,#0891b2)' : chChip === 'WA' ? '#25D366' : chChip === 'Email' ? '#0891b2' : '#94a3b8') + '">' + chChip + '</span>' +
+        '</div>' +
+        '<div style="color:#475569;font-size:12px;line-height:1.5;margin-bottom:10px;min-height:2.6em">' + esc(f.description || 'No description') + '</div>' +
+        '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px">' + rungHtml + '</div>' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;padding-top:8px;border-top:1px solid #f1f5f9;font-size:11px;color:#94a3b8">' +
+          '<span>' + rungs.length + ' rung' + (rungs.length === 1 ? '' : 's') + ' · ' + (isActive ? 'Active' : 'OFF') + '</span>' +
+          '<span style="font-size:11px;color:' + (isActive ? '#10b981' : '#94a3b8') + ';font-weight:600">' + (isActive ? '🟢' : '⚪') + '</span>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+
+    body.innerHTML =
+      '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:.85rem;margin-top:.5rem" id="rf-grid">' +
+        cards +
+      '</div>' +
+      '<p class="muted" style="font-size:11.5px;margin:1.5rem 0 0;color:#94a3b8">' +
+        '💡 Click any flow card to edit it. Reps see all ACTIVE flows in the Lead → Edit Follow-up modal.' +
+      '</p>';
+
+    /* Wire card clicks */
+    body.querySelectorAll('.rf-flow-card').forEach(function (card) {
+      card.addEventListener('mouseover', function () { card.style.borderColor = '#6366f1'; card.style.boxShadow = '0 2px 8px rgba(15,23,42,.08)'; });
+      card.addEventListener('mouseout',  function () { card.style.borderColor = '#e5e7eb'; card.style.boxShadow = '0 1px 2px rgba(15,23,42,.04)'; });
+      card.addEventListener('click', function () {
+        var id = Number(card.getAttribute('data-id'));
+        openBuilder(id);
+      });
+    });
+  }
+
+  /* ══════════════════════════════════════════════════════════════════
+   * BUILDER — edit one flow (or create new when id=null)
+   * ══════════════════════════════════════════════════════════════ */
+  async function openBuilder(flowId) {
+    var body = document.getElementById('rf-body');
+    if (!body) return;
+    body.innerHTML = '<div style="padding:2rem;text-align:center;color:#94a3b8">Loading flow…</div>';
+
+    var flow = null, rungs = [], templates = [];
+    try {
+      templates = await _loadTemplates();
+      if (flowId) {
+        var g = await _api('api_reminderFlows_get', flowId);
+        flow = g.flow; rungs = g.rungs || [];
+      }
+    } catch (e) {
+      body.innerHTML = '<div style="padding:1rem;background:#fee2e2;color:#991b1b;border-radius:8px">⚠ ' + esc(e.message) + '</div>';
+      return;
+    }
+
+    var isNew = !flow;
+    if (!flow) {
+      flow = {
+        id: null, name: '', description: '',
+        is_active: 1, is_default: 0,
+        channel_wa: 1, channel_email: 0,
+        wa_template_name: '', wa_language: 'en',
+        email_subject: 'Reminder: your follow-up with {{owner_name}} is coming up',
+        email_body_html: '<p>Hi {{name}},</p><p>Reminder — your follow-up with <b>{{owner_name}}</b> is at <b>{{followup_time}}</b> on <b>{{followup_date}}</b>.</p>',
+        send_to_lead: 1, send_to_owner: 1,
+        variable_map: [], header_image_url: ''
+      };
+    }
+    var vmap = Array.isArray(flow.variable_map) ? flow.variable_map
+             : (typeof flow.variable_map === 'string' ? (function(){ try{return JSON.parse(flow.variable_map||'[]');}catch(_){return[];} })() : []);
+
+    var pickedMs = new Set(rungs.map(function (r) { return Number(r.offset_minutes); }));
+
+    body.innerHTML =
+      /* Back link + title */
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">' +
+        '<button type="button" id="rf-back" style="background:transparent;border:0;color:#6366f1;cursor:pointer;font-size:13px;font-weight:600;padding:0">◄ Back to all flows</button>' +
+        '<div style="font-size:13px;color:#94a3b8">' + (isNew ? 'New flow' : 'Editing flow') + '</div>' +
+      '</div>' +
+
+      '<div class="card" style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:1.4rem;box-shadow:0 1px 2px rgba(15,23,42,.04)">' +
+
+        /* Name / description / default */
+        '<div style="display:grid;grid-template-columns:2fr 1fr;gap:1rem">' +
+          '<label style="display:flex;flex-direction:column;gap:.25rem">' +
+            '<span style="font-weight:600;font-size:.85rem">Flow name</span>' +
+            '<input type="text" id="rf-name" value="' + esc(flow.name || '') + '" placeholder="e.g. VIP high-touch" style="padding:.5rem .65rem;border:1px solid #e5e7eb;border-radius:6px;font-size:14px">' +
+          '</label>' +
+          '<label style="display:flex;flex-direction:column;gap:.25rem">' +
+            '<span style="font-weight:600;font-size:.85rem">Default flow?</span>' +
+            '<select id="rf-default" style="padding:.5rem .65rem;border:1px solid #e5e7eb;border-radius:6px;font-size:14px">' +
+              '<option value="0"' + (Number(flow.is_default) ? '' : ' selected') + '>No</option>' +
+              '<option value="1"' + (Number(flow.is_default) ? ' selected' : '') + '>Yes — pre-select for new follow-ups</option>' +
+            '</select>' +
+          '</label>' +
+        '</div>' +
+        '<label style="display:flex;flex-direction:column;gap:.25rem;margin-top:.75rem">' +
+          '<span style="font-weight:600;font-size:.85rem">Description (optional)</span>' +
+          '<input type="text" id="rf-desc" value="' + esc(flow.description || '') + '" placeholder="Sensible default for most follow-ups." style="padding:.5rem .65rem;border:1px solid #e5e7eb;border-radius:6px;font-size:14px">' +
+        '</label>' +
+        '<label style="display:flex;align-items:center;gap:.5rem;margin-top:.75rem;font-size:.85rem;font-weight:600">' +
+          '<input type="checkbox" id="rf-active"' + (Number(flow.is_active) ? ' checked' : '') + '>' +
+          '<span>🟢 Flow is active (uncheck to disable without deleting)</span>' +
         '</label>' +
 
-        /* Times */
-        '<div style="font-weight:600;margin-top:.6rem">⏰ Reminder alert times (max 3)</div>' +
-        '<p class="muted" style="font-size:.8rem;margin-top:.2rem">Each selected time will fire relative to the follow-up date/time on the lead.</p>' +
-        '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:.4rem;margin-top:.5rem" id="rf-times">' +
-          TIMES.map(function (t) {
-            var checked = pickedMs.has(t.m) ? ' checked' : '';
-            return '<label style="display:flex;align-items:center;gap:.4rem;padding:.3rem .5rem;border:1px solid #e5e7eb;border-radius:6px;cursor:pointer;font-size:.85rem">' +
-              '<input type="checkbox" data-time="1" value="' + t.m + '"' + checked + '>' +
-              '<span>' + esc(t.l) + '</span></label>';
-          }).join('') +
-        '</div>' +
-        '<div id="rf-timesum" style="font-size:.78rem;color:#047857;margin-top:.5rem;font-weight:500"></div>' +
-
-        /* Channel + recipient — a 2×2 grid like Demo Reminders' bottom grid */
-        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:1.2rem">' +
-          '<label style="display:flex;flex-direction:column;gap:.25rem">' +
-            '<span style="font-weight:600;font-size:.85rem">📤 Channels</span>' +
-            '<div style="display:flex;gap:.75rem;padding:.35rem 0">' +
-              '<label style="display:flex;align-items:center;gap:.35rem;font-size:.85rem"><input type="checkbox" id="rf-ch-wa"' + (flow && Number(flow.channel_wa) ? ' checked' : '') + '>💬 WhatsApp</label>' +
-              '<label style="display:flex;align-items:center;gap:.35rem;font-size:.85rem"><input type="checkbox" id="rf-ch-email"' + (flow && Number(flow.channel_email) ? ' checked' : '') + '>📧 Email</label>' +
-            '</div>' +
-          '</label>' +
-          '<label style="display:flex;flex-direction:column;gap:.25rem">' +
-            '<span style="font-weight:600;font-size:.85rem">👥 Recipients</span>' +
-            '<div style="display:flex;gap:.75rem;padding:.35rem 0">' +
-              '<label style="display:flex;align-items:center;gap:.35rem;font-size:.85rem"><input type="checkbox" id="rf-r-lead"' + (flow && Number(flow.send_to_lead) ? ' checked' : '') + '>👤 The Lead</label>' +
-              '<label style="display:flex;align-items:center;gap:.35rem;font-size:.85rem"><input type="checkbox" id="rf-r-owner"' + (flow && Number(flow.send_to_owner) ? ' checked' : '') + '>💼 Owner (assigned rep)</label>' +
-            '</div>' +
-          '</label>' +
+        /* ═══ STEP 1 · Times ═══ */
+        '<div style="background:linear-gradient(135deg,#eef2ff,#fff);border:1px solid #c7d2fe;border-radius:10px;padding:14px;margin-top:1.25rem">' +
+          '<h4 style="margin:0 0 4px;font-size:14px;color:#4f46e5;display:flex;align-items:center;gap:6px">' +
+            '<span style="background:#6366f1;color:#fff;width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700">1</span>' +
+            'Reminder alert times' +
+          '</h4>' +
+          '<p style="color:#475569;margin:0 0 12px;font-size:12.5px">Pick when reminders fire relative to the follow-up. Max 3.</p>' +
+          '<div id="rf-times" style="display:flex;gap:8px;flex-wrap:wrap">' +
+            TIMES.map(function (t) {
+              var on = pickedMs.has(t.m);
+              return '<label class="rf-tchip" data-off="' + t.m + '" style="padding:8px 14px;border:2px solid ' + (on ? '#4f46e5' : '#e5e7eb') + ';border-radius:99px;background:' + (on ? '#6366f1' : '#fff') + ';color:' + (on ? '#fff' : '#0f172a') + ';font-size:12.5px;font-weight:600;cursor:pointer;user-select:none;transition:.15s">' +
+                '<input type="checkbox" data-time="1" value="' + t.m + '"' + (on ? ' checked' : '') + ' style="display:none">' +
+                (on ? '☑ ' : '☐ ') + esc(t.l) +
+              '</label>';
+            }).join('') +
+          '</div>' +
+          '<div id="rf-timesum" style="margin:10px 0 0;font-size:12px;color:#4f46e5;font-weight:600"></div>' +
         '</div>' +
 
-        /* Template + language */
-        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:1rem">' +
-          '<label style="display:flex;flex-direction:column;gap:.25rem">' +
-            '<span style="font-weight:600;font-size:.85rem">💬 WhatsApp template (used when 24h window closed)</span>' +
-            '<select id="rf-watpl"><option value="">— choose a template —</option>' +
-            (templates || []).map(function (t) {
-              var name = t.name || t.template_name || '';
-              var lang = t.language || t.lang || '';
-              var sel = flow && flow.wa_template_name === name ? ' selected' : '';
-              return '<option value="' + esc(name) + '"' + sel + '>' + esc(name) + (lang ? ' (' + esc(lang) + ')' : '') + '</option>';
-            }).join('') + '</select>' +
-            /* REMINDER_VARS_v1 — dynamic slot for variables + image */
-            '<div id="rf-tpl-config" style="margin-top:.6rem"></div>' +
-          '</label>' +
-          '<label style="display:flex;flex-direction:column;gap:.25rem">' +
-            '<span style="font-weight:600;font-size:.85rem">🌐 Language</span>' +
-            '<input type="text" id="rf-walang" value="' + esc(flow && flow.wa_language || 'en') + '" style="padding:.35rem">' +
-          '</label>' +
+        /* ═══ STEP 2 · Channels ═══ */
+        '<div style="background:linear-gradient(135deg,#f0fdfa,#fff);border:1px solid #a7f3d0;border-radius:10px;padding:14px;margin-top:1rem">' +
+          '<h4 style="margin:0 0 4px;font-size:14px;color:#047857;display:flex;align-items:center;gap:6px">' +
+            '<span style="background:#10b981;color:#fff;width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700">2</span>' +
+            'How to send' +
+          '</h4>' +
+          '<p style="color:#475569;margin:0 0 12px;font-size:12.5px">Pick one or both channels.</p>' +
+          '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+            '<label class="rf-cchip" data-key="channel_wa" style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border:2px solid ' + (Number(flow.channel_wa) ? '#128C7E' : '#e5e7eb') + ';border-radius:99px;background:' + (Number(flow.channel_wa) ? '#25D366' : '#fff') + ';color:' + (Number(flow.channel_wa) ? '#fff' : '#0f172a') + ';font-size:12.5px;font-weight:600;cursor:pointer;user-select:none">' +
+              '<input type="checkbox" id="rf-ch-wa"' + (Number(flow.channel_wa) ? ' checked' : '') + ' style="display:none">' +
+              '💬 WhatsApp' +
+            '</label>' +
+            '<label class="rf-cchip" data-key="channel_email" style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border:2px solid ' + (Number(flow.channel_email) ? '#0e7490' : '#e5e7eb') + ';border-radius:99px;background:' + (Number(flow.channel_email) ? '#0891b2' : '#fff') + ';color:' + (Number(flow.channel_email) ? '#fff' : '#0f172a') + ';font-size:12.5px;font-weight:600;cursor:pointer;user-select:none">' +
+              '<input type="checkbox" id="rf-ch-email"' + (Number(flow.channel_email) ? ' checked' : '') + ' style="display:none">' +
+              '📧 Email' +
+            '</label>' +
+          '</div>' +
         '</div>' +
 
-        /* Email content */
-        '<div style="margin-top:1rem">' +
-          '<label style="display:flex;flex-direction:column;gap:.25rem">' +
-            '<span style="font-weight:600;font-size:.85rem">📧 Email subject</span>' +
-            '<input type="text" id="rf-esubj" value="' + esc(flow && flow.email_subject || 'Reminder: your follow-up with {{owner_name}} is coming up') + '" style="padding:.35rem">' +
-          '</label>' +
-          '<label style="display:flex;flex-direction:column;gap:.25rem;margin-top:.6rem">' +
-            '<span style="font-weight:600;font-size:.85rem">Email body (HTML)</span>' +
-            '<textarea id="rf-ebody" rows="4" style="padding:.4rem;font-family:inherit">' + esc(flow && flow.email_body_html || '<p>Hi {{name}},</p><p>Reminder — your follow-up with <b>{{owner_name}}</b> is at <b>{{followup_time}}</b> on <b>{{followup_date}}</b>.</p>') + '</textarea>' +
-          '</label>' +
-          '<p class="muted" style="font-size:.75rem;margin-top:.35rem">Tokens: <code>{{name}}</code> <code>{{owner_name}}</code> <code>{{followup_date}}</code> <code>{{followup_time}}</code> <code>{{minutes_before}}</code> <code>{{company}}</code></p>' +
+        /* ═══ STEP 3 · Recipients ═══ */
+        '<div style="background:linear-gradient(135deg,#faf5ff,#fff);border:1px solid #ddd6fe;border-radius:10px;padding:14px;margin-top:1rem">' +
+          '<h4 style="margin:0 0 4px;font-size:14px;color:#7c3aed;display:flex;align-items:center;gap:6px">' +
+            '<span style="background:#7c3aed;color:#fff;width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700">3</span>' +
+            'Who receives them' +
+          '</h4>' +
+          '<p style="color:#475569;margin:0 0 12px;font-size:12.5px">Each fire delivers to whichever recipients you pick.</p>' +
+          '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+            '<label class="rf-cchip" data-key="send_to_lead" style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border:2px solid ' + (Number(flow.send_to_lead) ? '#4f46e5' : '#e5e7eb') + ';border-radius:99px;background:' + (Number(flow.send_to_lead) ? '#6366f1' : '#fff') + ';color:' + (Number(flow.send_to_lead) ? '#fff' : '#0f172a') + ';font-size:12.5px;font-weight:600;cursor:pointer;user-select:none">' +
+              '<input type="checkbox" id="rf-r-lead"' + (Number(flow.send_to_lead) ? ' checked' : '') + ' style="display:none">' +
+              '👤 The Lead' +
+            '</label>' +
+            '<label class="rf-cchip" data-key="send_to_owner" style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border:2px solid ' + (Number(flow.send_to_owner) ? '#6d28d9' : '#e5e7eb') + ';border-radius:99px;background:' + (Number(flow.send_to_owner) ? '#7c3aed' : '#fff') + ';color:' + (Number(flow.send_to_owner) ? '#fff' : '#0f172a') + ';font-size:12.5px;font-weight:600;cursor:pointer;user-select:none">' +
+              '<input type="checkbox" id="rf-r-owner"' + (Number(flow.send_to_owner) ? ' checked' : '') + ' style="display:none">' +
+              '💼 Owner (assigned rep)' +
+            '</label>' +
+          '</div>' +
         '</div>' +
 
-        /* Save + status line */
-        '<div style="display:flex;align-items:center;gap:.6rem;margin-top:1.2rem">' +
-          '<button type="button" class="btn primary" id="rf-save" style="padding:.55rem 1.4rem;border-radius:8px;font-weight:600">Save</button>' +
-          '<div id="rf-status" style="font-size:.78rem;color:#64748b;min-height:1.1em"></div>' +
+        /* ═══ STEP 4 · Content ═══ */
+        '<div style="background:linear-gradient(135deg,#fef3c7,#fff);border:1px solid #fde68a;border-radius:10px;padding:14px;margin-top:1rem">' +
+          '<h4 style="margin:0 0 4px;font-size:14px;color:#92400e;display:flex;align-items:center;gap:6px">' +
+            '<span style="background:#f59e0b;color:#fff;width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700">4</span>' +
+            'What the message says' +
+          '</h4>' +
+          '<p style="color:#475569;margin:0 0 12px;font-size:12.5px">Same content used for every reminder in this flow.</p>' +
+
+          /* WA template + language + variable picker */
+          '<div style="display:grid;grid-template-columns:2fr 1fr;gap:.85rem">' +
+            '<label style="display:flex;flex-direction:column;gap:.25rem">' +
+              '<span style="font-weight:600;font-size:.82rem">📱 WhatsApp template</span>' +
+              '<select id="rf-watpl" style="padding:.5rem;border:1px solid #e5e7eb;border-radius:6px;font-size:13px">' +
+                '<option value="">— choose a template —</option>' +
+                templates.map(function (t) {
+                  var name = t.name || t.template_name || '';
+                  var lang = t.language || t.lang || '';
+                  var sel = flow.wa_template_name === name ? ' selected' : '';
+                  return '<option value="' + esc(name) + '"' + sel + '>' + esc(name) + (lang ? ' (' + esc(lang) + ')' : '') + '</option>';
+                }).join('') +
+              '</select>' +
+            '</label>' +
+            '<label style="display:flex;flex-direction:column;gap:.25rem">' +
+              '<span style="font-weight:600;font-size:.82rem">🌐 Language</span>' +
+              '<input type="text" id="rf-walang" value="' + esc(flow.wa_language || 'en') + '" placeholder="en" style="padding:.5rem;border:1px solid #e5e7eb;border-radius:6px;font-size:13px">' +
+            '</label>' +
+          '</div>' +
+
+          /* Slot where template variable picker + header image renders */
+          '<div id="rf-tpl-config" style="margin-top:.75rem"></div>' +
+
+          /* Email content */
+          '<div style="display:grid;grid-template-columns:1fr;gap:.75rem;margin-top:1rem">' +
+            '<label style="display:flex;flex-direction:column;gap:.25rem">' +
+              '<span style="font-weight:600;font-size:.82rem">📧 Email subject</span>' +
+              '<input type="text" id="rf-esubj" value="' + esc(flow.email_subject || '') + '" style="padding:.5rem;border:1px solid #e5e7eb;border-radius:6px;font-size:13px">' +
+            '<label style="display:flex;flex-direction:column;gap:.25rem">' +
+              '<span style="font-weight:600;font-size:.82rem">Email body (HTML)</span>' +
+              '<textarea id="rf-ebody" rows="4" style="padding:.5rem;border:1px solid #e5e7eb;border-radius:6px;font-family:inherit;font-size:13px;resize:vertical">' + esc(flow.email_body_html || '') + '</textarea>' +
+            '</label>' +
+          '</div>' +
+          '<p class="muted" style="font-size:11px;margin:.75rem 0 0;color:#94a3b8">' +
+            'Available tokens: <code>{{name}}</code> <code>{{owner_name}}</code> <code>{{followup_date}}</code> <code>{{followup_time}}</code> <code>{{minutes_before}}</code> <code>{{company}}</code>' +
+          '</p>' +
         '</div>' +
 
-        /* Footer helper */
-        '<p class="muted" style="font-size:.75rem;margin-top:1.2rem">' +
-          '💡 Reps opt into reminders when they set a follow-up date on any lead — they see the tick-boxes above as options in the Lead → Edit modal. ' +
-          'If the WA 24h window is closed (no inbound from the lead in 24h), the template is used. Otherwise, a plain-text WA is sent. ' +
-          'Email fires via the tenant SMTP configured in Settings.' +
-        '</p>' +
+        /* Action bar */
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:.5rem;margin-top:1.4rem;padding-top:1rem;border-top:1px solid #f1f5f9">' +
+          '<div>' +
+            (isNew ? '' :
+              '<button type="button" id="rf-delete" style="padding:.5rem 1rem;background:#fff;border:1px solid #fecaca;color:#dc2626;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px">🗑 Delete flow</button>'
+            ) +
+          '</div>' +
+          '<div style="display:flex;gap:.5rem">' +
+            '<button type="button" id="rf-cancel" style="padding:.5rem 1rem;background:#fff;border:1px solid #e5e7eb;color:#0f172a;border-radius:6px;cursor:pointer;font-weight:500;font-size:13px">Cancel</button>' +
+            '<button type="button" id="rf-save" style="padding:.55rem 1.4rem;background:#6366f1;color:#fff;border:0;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px">' + (isNew ? '+ Create flow' : 'Save flow') + '</button>' +
+          '</div>' +
+        '</div>' +
+
+        '<div id="rf-status" style="font-size:12px;color:#64748b;margin-top:.5rem;text-align:right;min-height:1.2em"></div>' +
       '</div>';
 
-    /* ── Wire handlers ── */
-    // Enforce max-3 on time checkboxes
-    var timeCbs = body.querySelectorAll('[data-time="1"]');
+    /* Wire chip toggles (channels + recipients) */
+    body.querySelectorAll('.rf-cchip').forEach(function (chip) {
+      chip.addEventListener('click', function (e) {
+        e.preventDefault();
+        var cb = chip.querySelector('input[type="checkbox"]');
+        cb.checked = !cb.checked;
+        var key = chip.getAttribute('data-key');
+        var on = cb.checked;
+        var palette = { channel_wa: ['#25D366', '#128C7E'], channel_email: ['#0891b2', '#0e7490'], send_to_lead: ['#6366f1', '#4f46e5'], send_to_owner: ['#7c3aed', '#6d28d9'] };
+        var p = palette[key] || ['#6366f1', '#4f46e5'];
+        chip.style.background = on ? p[0] : '#fff';
+        chip.style.borderColor = on ? p[1] : '#e5e7eb';
+        chip.style.color = on ? '#fff' : '#0f172a';
+      });
+    });
+
+    /* Wire time chips (enforce max 3) */
+    var timeChips = body.querySelectorAll('.rf-tchip');
     function updateTimeSum() {
-      var picked = Array.from(timeCbs).filter(function (c) { return c.checked; });
-      var sumBox = document.getElementById('rf-timesum');
+      var picked = Array.from(timeChips).filter(function (c) { return c.querySelector('input').checked; });
+      var box = document.getElementById('rf-timesum');
       if (!picked.length) {
-        sumBox.style.color = '#b91c1c';
-        sumBox.textContent = '⚠ Pick at least 1 reminder time';
+        box.style.color = '#dc2626';
+        box.textContent = '⚠ Pick at least 1 reminder time';
       } else {
-        sumBox.style.color = '#047857';
-        var labels = picked.map(function (c) {
-          var t = TIMES.find(function (x) { return String(x.m) === c.value; });
-          return t ? t.l.replace(' before', '').replace(' At follow-up time','at time') : '';
+        box.style.color = '#4f46e5';
+        var lbls = picked.map(function (c) {
+          var m = Number(c.getAttribute('data-off'));
+          var t = TIMES.find(function (x) { return x.m === m; });
+          return t ? t.l.replace(' before', '').replace('At follow-up time', 'at time') : '';
         });
-        sumBox.textContent = '✓ ' + picked.length + ' reminder' + (picked.length > 1 ? 's' : '') + ' selected — ' + labels.join(', ');
+        box.textContent = '✓ ' + picked.length + ' selected — ' + lbls.join(', ');
       }
     }
-    timeCbs.forEach(function (cb) {
-      cb.onchange = function () {
-        var picked = Array.from(timeCbs).filter(function (c) { return c.checked; });
-        if (picked.length > 3) {
-          cb.checked = false;
+    timeChips.forEach(function (chip) {
+      chip.addEventListener('click', function (e) {
+        e.preventDefault();
+        var cb = chip.querySelector('input');
+        var picked = Array.from(timeChips).filter(function (c) { return c.querySelector('input').checked; });
+        if (!cb.checked && picked.length >= 3) {
           toast('Max 3 reminder times per flow', 'err');
+          return;
         }
+        cb.checked = !cb.checked;
+        var on = cb.checked;
+        chip.style.background = on ? '#6366f1' : '#fff';
+        chip.style.borderColor = on ? '#4f46e5' : '#e5e7eb';
+        chip.style.color = on ? '#fff' : '#0f172a';
+        var t = TIMES.find(function (x) { return x.m === Number(chip.getAttribute('data-off')); });
+        chip.childNodes[chip.childNodes.length - 1].textContent = (on ? '☑ ' : '☐ ') + (t ? t.l : '');
         updateTimeSum();
-      };
+      });
     });
     updateTimeSum();
 
-    /* REMINDER_VARS_v1 — after user picks a template, show its variables +
-     * header image slot. Merge tokens available: name, owner_name,
-     * followup_date, followup_time, minutes_before, company. */
-    var TOKENS = ['name','owner_name','followup_date','followup_time','minutes_before','company','__custom__'];
-    function _renderTemplateConfig() {
-      var box = document.getElementById('rf-tpl-config');
-      if (!box) return;
-      var name = document.getElementById('rf-watpl').value;
-      var tpl = (templates || []).find(function (t) { return (t.name || t.template_name) === name; });
-      if (!tpl || !name) { box.innerHTML = ''; return; }
-      var params = Number(tpl.body_params || tpl.params || 0);
-      var headerType = String(tpl.header_type || '').toUpperCase();
-      var currentMap = [];
-      try { currentMap = flow && typeof flow.variable_map === 'string' ? JSON.parse(flow.variable_map || '[]') :
-                        (flow && Array.isArray(flow.variable_map) ? flow.variable_map : []); } catch (_) {}
-      var currentImg = flow && flow.header_image_url || '';
-      var html = '<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:.65rem .8rem">' +
-        '<div style="font-size:.75rem;color:#64748b;font-weight:600;margin-bottom:.35rem">Template preview</div>' +
-        '<div style="font-size:.8rem;color:#374151;white-space:pre-wrap;background:#fff;padding:.5rem;border-radius:6px;border:1px solid #e5e7eb;margin-bottom:.75rem">' + esc(tpl.body_text || '(no body text)') + '</div>';
-      /* Header image */
-      if (headerType === 'IMAGE') {
-        html += '<label style="display:flex;flex-direction:column;gap:.2rem;margin-bottom:.6rem">' +
-          '<span style="font-weight:600;font-size:.8rem">🖼 Header image URL</span>' +
-          '<input type="url" id="rf-hdr-img" value="' + esc(currentImg) + '" placeholder="https://example.com/reminder.jpg" style="padding:.35rem;font-size:.8rem">' +
-          '<span style="font-size:.7rem;color:#94a3b8">Must be a public HTTPS URL of a JPG or PNG image (Meta downloads it at send-time).</span>' +
-        '</label>';
+    /* Template variable picker + header image */
+    var tplSel = document.getElementById('rf-watpl');
+    function _findTpl(name) {
+      if (!name) return null;
+      return templates.find(function (t) { return (t.name || t.template_name) === name; }) || null;
+    }
+    function _renderTplConfig() {
+      var slot = document.getElementById('rf-tpl-config');
+      var tpl = _findTpl(tplSel.value);
+      if (!tpl) { slot.innerHTML = ''; return; }
+      var comps = tpl.components || (tpl.template && tpl.template.components) || [];
+      var header = comps.find(function (c) { return String(c.type || '').toUpperCase() === 'HEADER'; });
+      var bodyC  = comps.find(function (c) { return String(c.type || '').toUpperCase() === 'BODY'; });
+      var headerType = header ? String(header.format || '').toUpperCase() : '';
+      var bodyText = bodyC ? (bodyC.text || '') : (tpl.body_text || '');
+      var bodyParams = 0;
+      if (bodyC && bodyC.example && bodyC.example.body_text && bodyC.example.body_text[0]) {
+        bodyParams = bodyC.example.body_text[0].length;
       }
-      /* Variables */
-      if (params > 0) {
-        html += '<div style="font-weight:600;font-size:.8rem;margin-bottom:.3rem">📝 Body variables (' + params + ')</div>';
-        for (var i = 0; i < params; i++) {
-          var v = currentMap[i] || '';
-          var isCustom = v && TOKENS.slice(0,6).indexOf(v) < 0;
-          html += '<div style="display:flex;gap:.4rem;margin-bottom:.35rem;align-items:center">' +
-            '<span style="font-size:.75rem;font-weight:700;background:#eef2ff;color:#4338ca;padding:.15rem .5rem;border-radius:4px">{{' + (i+1) + '}}</span>' +
-            '<select data-var-idx="' + i + '" style="flex:1;padding:.3rem;font-size:.8rem">' +
-              '<option value="name"' + (v==='name'?' selected':'') + '>Lead name</option>' +
-              '<option value="owner_name"' + (v==='owner_name'?' selected':'') + '>Owner name</option>' +
-              '<option value="followup_date"' + (v==='followup_date'?' selected':'') + '>Follow-up date</option>' +
-              '<option value="followup_time"' + (v==='followup_time'?' selected':'') + '>Follow-up time</option>' +
-              '<option value="minutes_before"' + (v==='minutes_before'?' selected':'') + '>Minutes before</option>' +
-              '<option value="company"' + (v==='company'?' selected':'') + '>Company name</option>' +
-              '<option value="__custom__"' + (isCustom?' selected':'') + '>Custom text…</option>' +
+      if (!bodyParams && bodyText) {
+        var mm = bodyText.match(/\{\{\s*\d+\s*\}\}/g);
+        bodyParams = mm ? mm.length : 0;
+      }
+
+      var html = '<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:12px">' +
+        '<div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;font-weight:700;margin-bottom:6px">Template preview</div>' +
+        '<pre style="margin:0;padding:8px 10px;background:#fff;border:1px solid #e5e7eb;border-radius:6px;font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#0f172a;white-space:pre-wrap;word-break:break-word">' + esc(bodyText || '(no body)') + '</pre>';
+
+      if (headerType === 'IMAGE') {
+        html += '<label style="display:flex;flex-direction:column;gap:.25rem;margin-top:.75rem">' +
+          '<span style="font-weight:600;font-size:.82rem">🖼 Header image URL (public HTTPS)</span>' +
+          '<input type="text" id="rf-hdrimg" value="' + esc(flow.header_image_url || '') + '" placeholder="https://cdn.example.com/reminder-banner.png" style="padding:.5rem;border:1px solid #e5e7eb;border-radius:6px;font-size:13px">' +
+          '<span style="font-size:11px;color:#94a3b8">Meta will fetch this URL when the reminder fires.</span>' +
+        '</label>';
+      } else if (headerType === 'TEXT') {
+        html += '<div style="margin-top:.5rem;font-size:11.5px;color:#64748b">ℹ Header type: TEXT (no image needed)</div>';
+      } else if (headerType) {
+        html += '<div style="margin-top:.5rem;font-size:11.5px;color:#64748b">ℹ Header type: ' + esc(headerType) + '</div>';
+      }
+
+      if (bodyParams > 0) {
+        html += '<div style="margin-top:.85rem">' +
+          '<div style="font-weight:600;font-size:.82rem;margin-bottom:.35rem">📝 Body variables (' + bodyParams + ')</div>' +
+          '<p style="font-size:11px;color:#94a3b8;margin:0 0 .5rem">Pick a merge token for each placeholder or type custom text.</p>';
+        for (var i = 0; i < bodyParams; i++) {
+          var current = vmap[i] || '';
+          var isCustom = current && !TOKEN_OPTS.some(function (o) { return o.v === current; });
+          html += '<div class="rf-var-row" data-idx="' + i + '" style="display:grid;grid-template-columns:64px 1fr 1fr;gap:.5rem;align-items:center;margin-bottom:.4rem">' +
+            '<span style="background:#eef2ff;color:#4338ca;padding:4px 8px;border-radius:6px;font-size:12px;font-weight:700;text-align:center;font-family:ui-monospace,Menlo,monospace">{{' + (i + 1) + '}}</span>' +
+            '<select class="rf-var-sel" style="padding:.4rem;border:1px solid #e5e7eb;border-radius:6px;font-size:13px">' +
+              TOKEN_OPTS.map(function (o) {
+                var sel = (isCustom && o.v === '__custom__') || (!isCustom && o.v === current) ? ' selected' : '';
+                return '<option value="' + esc(o.v) + '"' + sel + '>' + esc(o.l) + '</option>';
+              }).join('') +
             '</select>' +
-            '<input type="text" data-var-custom="' + i + '" value="' + esc(isCustom ? v : '') + '" placeholder="Custom text" style="flex:1;padding:.3rem;font-size:.8rem;display:' + (isCustom?'block':'none') + '">' +
+            '<input type="text" class="rf-var-custom" placeholder="Custom text…" value="' + esc(isCustom ? current : '') + '" style="padding:.4rem;border:1px solid #e5e7eb;border-radius:6px;font-size:13px;display:' + (isCustom ? 'block' : 'none') + '">' +
           '</div>';
         }
+        html += '</div>';
       } else {
-        html += '<div style="font-size:.75rem;color:#94a3b8">This template has no body variables — nothing to map.</div>';
+        html += '<div style="margin-top:.5rem;font-size:11.5px;color:#64748b">ℹ This template has no {{variables}}.</div>';
       }
       html += '</div>';
-      box.innerHTML = html;
-      /* Wire dropdowns: if user picks Custom, show text input */
-      box.querySelectorAll('select[data-var-idx]').forEach(function (sel) {
-        sel.onchange = function () {
-          var idx = sel.getAttribute('data-var-idx');
-          var custom = box.querySelector('input[data-var-custom="' + idx + '"]');
-          if (sel.value === '__custom__') custom.style.display = 'block';
-          else custom.style.display = 'none';
-        };
+      slot.innerHTML = html;
+
+      slot.querySelectorAll('.rf-var-row').forEach(function (row) {
+        var sel = row.querySelector('.rf-var-sel');
+        var inp = row.querySelector('.rf-var-custom');
+        sel.addEventListener('change', function () {
+          inp.style.display = sel.value === '__custom__' ? 'block' : 'none';
+        });
       });
     }
-    document.getElementById('rf-watpl').onchange = _renderTemplateConfig;
-    _renderTemplateConfig();
+    tplSel.addEventListener('change', _renderTplConfig);
+    _renderTplConfig();
 
-    // Save handler
+    /* Back / Cancel */
+    document.getElementById('rf-back').onclick   = function () { viewFollowupReminders(); };
+    document.getElementById('rf-cancel').onclick = function () { viewFollowupReminders(); };
+
+    /* Delete */
+    var delBtn = document.getElementById('rf-delete');
+    if (delBtn) {
+      delBtn.onclick = async function () {
+        if (!confirm('Delete this flow?\n\nAny leads referencing it will lose their reminder queue (already-fired reminders are kept).')) return;
+        delBtn.disabled = true; delBtn.textContent = 'Deleting…';
+        try {
+          await _api('api_reminderFlows_delete', flowId);
+          toast('Flow deleted', 'ok');
+          viewFollowupReminders();
+        } catch (e) {
+          toast('Delete failed: ' + e.message, 'err');
+          delBtn.disabled = false; delBtn.textContent = '🗑 Delete flow';
+        }
+      };
+    }
+
+    /* Save */
     document.getElementById('rf-save').onclick = async function () {
-      var picked = Array.from(timeCbs).filter(function (c) { return c.checked; })
-                   .map(function (c) { return { offset_minutes: Number(c.value) }; });
-      var statusLine = document.getElementById('rf-status');
-      if (!picked.length) {
-        statusLine.textContent = '❌ Pick at least 1 reminder time';
-        statusLine.style.color = '#b91c1c';
-        return;
-      }
-      /* REMINDER_VARS_v1 — gather variable_map + header image */
-      var vmap = [];
-      var cfgBox = document.getElementById('rf-tpl-config');
-      if (cfgBox) {
-        cfgBox.querySelectorAll('select[data-var-idx]').forEach(function (sel) {
-          var idx = Number(sel.getAttribute('data-var-idx'));
-          if (sel.value === '__custom__') {
-            var custom = cfgBox.querySelector('input[data-var-custom="' + idx + '"]');
-            vmap[idx] = (custom && custom.value) || '';
-          } else {
-            vmap[idx] = sel.value;
-          }
-        });
-      }
-      var hdrImg = document.getElementById('rf-hdr-img');
-      var flowPayload = {
-        id: flow ? flow.id : null,
-        name: flow ? flow.name : 'Standard reminders',
-        description: flow ? (flow.description || 'Default follow-up reminder flow') : 'Default follow-up reminder flow',
-        is_active: document.getElementById('rf-enabled').checked ? 1 : 0,
-        is_default: 1,
+      var status = document.getElementById('rf-status');
+      var name = document.getElementById('rf-name').value.trim();
+      if (!name) { status.textContent = '❌ Flow name is required'; status.style.color = '#dc2626'; return; }
+
+      var picked = Array.from(timeChips)
+        .filter(function (c) { return c.querySelector('input').checked; })
+        .map(function (c) { return { offset_minutes: Number(c.getAttribute('data-off')) }; });
+      if (!picked.length) { status.textContent = '❌ Pick at least 1 reminder time'; status.style.color = '#dc2626'; return; }
+
+      var vmapNew = [];
+      document.querySelectorAll('.rf-var-row').forEach(function (row) {
+        var sel = row.querySelector('.rf-var-sel').value;
+        var custom = row.querySelector('.rf-var-custom').value;
+        vmapNew.push(sel === '__custom__' ? custom : sel);
+      });
+      var hdrImgInp = document.getElementById('rf-hdrimg');
+      var hdrImg = hdrImgInp ? hdrImgInp.value.trim() : (flow.header_image_url || '');
+
+      var payload = {
+        id: flowId || null,
+        name: name,
+        description: document.getElementById('rf-desc').value,
+        is_active:     document.getElementById('rf-active').checked ? 1 : 0,
+        is_default:    document.getElementById('rf-default').value === '1' ? 1 : 0,
         channel_wa:    document.getElementById('rf-ch-wa').checked ? 1 : 0,
         channel_email: document.getElementById('rf-ch-email').checked ? 1 : 0,
         wa_template_name: document.getElementById('rf-watpl').value || '',
-        wa_language:      document.getElementById('rf-walang').value.trim() || 'en',
-        email_subject:    document.getElementById('rf-esubj').value,
-        email_body_html:  document.getElementById('rf-ebody').value,
+        wa_language:   document.getElementById('rf-walang').value.trim() || 'en',
+        email_subject: document.getElementById('rf-esubj').value,
+        email_body_html: document.getElementById('rf-ebody').value,
         send_to_lead:  document.getElementById('rf-r-lead').checked ? 1 : 0,
         send_to_owner: document.getElementById('rf-r-owner').checked ? 1 : 0,
-        variable_map:  vmap,
-        header_image_url: hdrImg ? hdrImg.value.trim() : ''
+        variable_map:  vmapNew,
+        header_image_url: hdrImg
       };
+
       var btn = this;
       btn.disabled = true; btn.textContent = 'Saving…';
       try {
-        await _api('api_reminderFlows_save', { flow: flowPayload, rungs: picked });
-        statusLine.textContent = '✅ Saved. Reminders scheduled from now on will use these settings.';
-        statusLine.style.color = '#047857';
-        toast('Saved', 'ok');
+        await _api('api_reminderFlows_save', { flow: payload, rungs: picked });
+        toast('Flow saved', 'ok');
+        viewFollowupReminders();
       } catch (e) {
-        statusLine.textContent = '❌ ' + (e && e.message || e);
-        statusLine.style.color = '#b91c1c';
+        status.textContent = '❌ ' + (e && e.message || e);
+        status.style.color = '#dc2626';
         toast('Save failed: ' + e.message, 'err');
-      } finally {
-        btn.disabled = false; btn.textContent = 'Save';
+        btn.disabled = false; btn.textContent = isNew ? '+ Create flow' : 'Save flow';
       }
     };
   }
 
-  /* ── Registry + sidebar link injection under AI FEATURES ── */
+  /* Expose so the empty-state button can call it */
+  window.REMINDER_FLOWS_v1.openBuilder = openBuilder;
+  window.REMINDER_FLOWS_v1.view        = viewFollowupReminders;
+
+  /* Registry + sidebar link injection */
   function _registerViews() {
     var V = window.VIEWS = window.VIEWS || {};
     V.followupreminders = viewFollowupReminders;
-    /* Keep old alias too so #/reminderflows still works */
-    V.reminderflows = viewFollowupReminders;
+    V.reminderflows     = viewFollowupReminders;
   }
-  /* User asked to remove Demo Reminders nav entry — it's superseded by
-   * Follow-up Reminders. Kill the DOM node whenever it appears. Backend
-   * & route file kept intact in case we want to bring it back later. */
-  /* SIDEBAR_FIX_v4 (2026-07-05) — Demo Reminders lives in the SETTINGS
-   * inner sidebar (button.admin-settings-item with data-tab="demoreminder"),
-   * NOT the outer sidebar. Target both locations. */
+
   function _hideDemoReminders() {
     try {
-      /* 1. Settings inner sidebar buttons */
       var btns = document.querySelectorAll('button.admin-settings-item, [data-tab="demoreminder"]');
       for (var i = 0; i < btns.length; i++) {
         var b = btns[i];
@@ -351,7 +579,6 @@
           b.remove();
         }
       }
-      /* 2. Outer sidebar nav links (legacy) */
       var nav = document.querySelector('.sidebar nav');
       if (nav) {
         var links = nav.querySelectorAll('a');
@@ -360,16 +587,12 @@
           if (/demo\s*reminder/i.test(a.textContent || '')) a.remove();
         }
       }
-    } catch (e) { /* silent */ }
+    } catch (e) {}
   }
 
-  /* SIDEBAR_FIX_v4 — inject Follow-up Reminders into the SETTINGS inner
-   * sidebar (admin-settings-rail) under the AI Features group, matching
-   * the same button.admin-settings-item structure. */
   function _injectSettingsInnerButton() {
     try {
       if (document.getElementById('rf-settings-btn')) return;
-      /* Find the AI Features group (title text is 'AI Features' exactly) */
       var groups = document.querySelectorAll('.admin-settings-group');
       var target = null;
       for (var i = 0; i < groups.length; i++) {
@@ -396,18 +619,9 @@
         } catch (_) { viewFollowupReminders(); }
       };
       target.appendChild(btn);
-      console.log('[reminderFlows] settings inner button injected under AI Features');
-    } catch (e) { console.warn('[reminderFlows] settings inject failed:', e.message); }
+    } catch (e) {}
   }
 
-  /* SIDEBAR_FIX_v3 (2026-07-05) — removed admin role gate (was blocking
-   * non-admin sessions and any tenant where CRM.user was undefined at
-   * injection time). Broadened nav selectors. Also adds a floating
-   * action button (FAB) as a guaranteed fallback if we can't find
-   * any sidebar so the feature is always reachable. */
-  /* SIDEBAR_FIX_v3 — floating action button fallback. Always visible
-   * in the bottom-right corner. Guarantees admins can reach the page
-   * even if we can't inject into the sidebar. */
   function _ensureFab() {
     if (document.getElementById('rf-fab')) return;
     var fab = document.createElement('button');
@@ -429,12 +643,10 @@
       else viewFollowupReminders();
     };
     document.body.appendChild(fab);
-    console.log('[reminderFlows] FAB fallback added');
   }
 
   function _injectSidebarLink() {
     try {
-      /* Broadened nav lookup — try every likely container. */
       var nav = document.querySelector('.sidebar nav') ||
                 document.querySelector('.sidebar .nav') ||
                 document.querySelector('aside nav') ||
@@ -457,15 +669,12 @@
         else if (window.go) window.go('followupreminders');
         else if (window.VIEWS && window.VIEWS.followupreminders) window.VIEWS.followupreminders();
       };
-      console.log('[reminderFlows] sidebar link injected');
-      /* Try to place under "AI FEATURES" group next to Demo Reminders */
       var aiGroup = Array.from(nav.querySelectorAll('.nav-group-head'))
         .find(function (h) { return /ai\s*features/i.test(h.textContent); });
       if (aiGroup && aiGroup.nextElementSibling) {
         aiGroup.nextElementSibling.appendChild(link);
         return;
       }
-      /* Fallback — Settings group */
       var settingsGroup = Array.from(nav.querySelectorAll('.nav-group-head'))
         .find(function (h) { return /settings/i.test(h.textContent); });
       if (settingsGroup && settingsGroup.nextElementSibling) {
@@ -473,13 +682,9 @@
       } else {
         nav.appendChild(link);
       }
-    } catch (e) { console.warn('[reminderFlows] sidebar inject failed:', e.message); }
+    } catch (e) {}
   }
-  /* FIX_v2 — persistent observer (2026-07-05)
-   * The 3-timeout approach missed cases where the sidebar mounts >2.4s
-   * after boot, or re-renders on route change (which re-adds Demo Reminders
-   * back to the DOM). Switch to a MutationObserver on document.body that
-   * throttles to at most once per 400ms — catches every render forever. */
+
   var _lastRun = 0;
   var _observerStarted = false;
   function _runInject() {
@@ -488,7 +693,7 @@
     _lastRun = now;
     try { _registerViews(); } catch (_) {}
     try { _injectSidebarLink(); } catch (_) {}
-    try { _injectSettingsInnerButton(); } catch (_) {}   /* v4: real target */
+    try { _injectSettingsInnerButton(); } catch (_) {}
     try { _hideDemoReminders(); } catch (_) {}
     try { _ensureFab(); } catch (_) {}
   }
@@ -498,16 +703,12 @@
     try {
       var mo = new MutationObserver(function () { _runInject(); });
       mo.observe(document.body, { childList: true, subtree: true });
-      console.log('[reminderFlows] observer started');
-    } catch (e) { console.warn('[reminderFlows] observer failed:', e.message); }
-    /* Also run once immediately + a few quick polls in case the sidebar
-     * mounts before the observer catches its first mutation. */
+    } catch (e) {}
     _runInject();
     setTimeout(_runInject, 200);
     setTimeout(_runInject, 600);
     setTimeout(_runInject, 1500);
     setTimeout(_runInject, 3000);
-    /* Deep-link handler */
     if (location.hash === '#/followupreminders' || location.hash === '#/reminderflows') {
       setTimeout(function () { viewFollowupReminders(); }, 400);
     }
