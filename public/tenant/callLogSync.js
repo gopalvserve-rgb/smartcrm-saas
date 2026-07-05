@@ -210,11 +210,31 @@
     host.insertBefore(btn, anchor);
   }
 
-  var mo = new MutationObserver(function () { try { injectButton(); } catch (e) {} });
+  // ---- floating "Sync Calls" button for EVERY user inside the mobile app ---
+  // Call syncing is a per-rep action (each rep syncs their own phone + picks
+  // their own SIM), so it must be available to all roles — not just the
+  // admin/manager-only Call Activity page. Shown only inside the app.
+  function isMobileApp() {
+    return !!(window.LeadCRMNative) || /Capacitor|LeadCRM/i.test(navigator.userAgent || '');
+  }
+  function injectFab() {
+    if (!isMobileApp()) return;                 // desktop web: no FAB
+    if (!token()) return;                        // only when logged in
+    if (document.getElementById('cls-fab')) return;
+    var fab = document.createElement('button');
+    fab.id = 'cls-fab';
+    fab.title = 'Sync calls from your phone';
+    fab.innerHTML = '🔄 Sync Calls';
+    fab.style.cssText = 'position:fixed;left:12px;bottom:16px;z-index:9998;background:#4f46e5;color:#fff;border:none;border-radius:999px;padding:.55rem .9rem;font-size:.8rem;font-weight:600;box-shadow:0 6px 18px rgba(79,70,229,.45);cursor:pointer;display:inline-flex;align-items:center;gap:.35rem';
+    fab.onclick = function () { openModal(); };
+    document.body.appendChild(fab);
+  }
+
+  var mo = new MutationObserver(function () { try { injectButton(); injectFab(); } catch (e) {} });
   function start() {
     try { mo.observe(document.getElementById('app') || document.body, { childList: true, subtree: true }); } catch (e) {}
-    window.addEventListener('hashchange', function () { setTimeout(injectButton, 200); });
-    setTimeout(injectButton, 800);
+    window.addEventListener('hashchange', function () { setTimeout(function () { injectButton(); injectFab(); }, 200); });
+    setTimeout(function () { injectButton(); injectFab(); }, 800);
   }
   if (document.body) start();
   else document.addEventListener('DOMContentLoaded', start, { once: true });
