@@ -123,6 +123,7 @@ const ROUTE_FILES = [
   'reminderFlows',      /* REMINDER_FLOWS_v1 — admin CRUD for follow-up reminder templates */
   'followupReminders',  /* REMINDER_FLOWS_v1 — runtime scheduling + log view APIs */
   'fbQnaBackfill',      /* FB_META_QNA_BACKFILL_v1 — retroactively add Q&A remarks */
+  'fbLeadDiag',         /* FB_LEAD_DIAG_v1 — inspector for why Q&A didn't show */
 ];
 
 const API = {};
