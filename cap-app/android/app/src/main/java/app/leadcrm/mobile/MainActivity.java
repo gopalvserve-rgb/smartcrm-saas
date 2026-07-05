@@ -88,6 +88,10 @@ public class MainActivity extends BridgeActivity {
         // REC_AUTOSYNC_KILL_v1 — disabled periodic 15-min WorkManager auto-sync per user request
         // scheduleRecordingBgSync();
 
+        // CALLLOG_AUTOSYNC_v1 — hourly background call-log import (SIM-filtered).
+        // Completely separate from the (intentionally disabled) recording bg-sync above.
+        try { scheduleCallLogAutoSync(); } catch (Exception e) { Log.w(TAG, "scheduleCallLogAutoSync failed: " + e.getMessage()); }
+
         // PERM_ONBOARDING_v1: launch Runo-style permission onboarding on first run
         // or whenever critical perms (battery whitelist / MANAGE_EXTERNAL_STORAGE / recording folder)
         // are missing. Activity ships an upper-right Skip button so it's never a hard block.
@@ -1060,6 +1064,29 @@ public class MainActivity extends BridgeActivity {
             Log.i(TAG, "scheduleRecordingBgSync: periodic 15-min worker enqueued");
         } catch (Exception e) {
             Log.w(TAG, "scheduleRecordingBgSync failed: " + e.getMessage());
+        }
+    }
+
+    /** CALLLOG_AUTOSYNC_v1 — schedule the hourly call-log import worker (SIM-filtered).
+     *  Independent of scheduleRecordingBgSync (which stays disabled). */
+    private void scheduleCallLogAutoSync() {
+        try {
+            Constraints constraints = new Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .build();
+            PeriodicWorkRequest req = new PeriodicWorkRequest.Builder(
+                    CallLogAutoSyncWorker.class, 1, TimeUnit.HOURS)
+                .setConstraints(constraints)
+                .addTag("calllog-autosync")
+                .build();
+            WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+                "calllog-autosync-periodic",
+                ExistingPeriodicWorkPolicy.KEEP,
+                req
+            );
+            Log.i(TAG, "scheduleCallLogAutoSync: hourly worker enqueued");
+        } catch (Exception e) {
+            Log.w(TAG, "scheduleCallLogAutoSync failed: " + e.getMessage());
         }
     }
 }
