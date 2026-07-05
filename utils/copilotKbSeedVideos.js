@@ -7,7 +7,7 @@
  * can hand out the right video link when users ask "how do I connect
  * WhatsApp", "how do I import leads", etc.
  *
- * Idempotent: guarded by control setting `COPILOT_KB_VIDEOS_SEEDED_v1`.
+ * Idempotent: guarded by control setting `COPILOT_KB_VIDEOS_SEEDED_v2`.
  * Re-runs safely a second time by upserting via title match.
  */
 'use strict';
@@ -21,6 +21,37 @@ const KB_MASTER = {
   body: 'The full Smart CRM video tutorial library — 12 short videos covering user setup, products & statuses, bulk lead upload, auto-assign, website & lead-source integrations, WhatsApp connect, templates & bulk send, auto-nurture, AI WhatsApp bot, and mobile call recording. Every video is short and practical.',
   url: 'https://smartcrmsolution.com/home/smart-crm-plan/knowledge-base.php',
   sort_order: 1
+};
+
+/* COPILOT_KB_ROADMAP_v1 — when a user asks the Copilot "help me set up my
+ * account" / "how do I get started" / "walk me through setup", this master
+ * entry gives it the whole sequence with clickable links in one lookup. */
+const KB_ROADMAP = {
+  kind: 'guide',
+  title: 'Getting Started — Account Setup Roadmap',
+  keywords: 'setup account new account first time getting started onboard walkthrough step by step help me set up account complete setup start start here begin start using how to start guide me setup all every everything full setup guide roadmap sequence order first steps configure ready to use',
+  body:
+    'Step-by-step account setup for Smart CRM — follow these 4 tracks in order:\n\n' +
+    'A. FOUNDATION (Setup track)\n' +
+    '  1. Create your team users → https://drive.google.com/file/d/1NMMwtu6eM4xzDE5Gsk-Ya-BGtpgPsTGp/view\n' +
+    '  2. Configure products, lead statuses & custom fields → https://drive.google.com/file/d/1uzkz7Qz9F6nuBL_eVWavKsEqorcHVxHY/view\n\n' +
+    'B. LEADS & AUTOMATION\n' +
+    '  3. Upload your existing leads in bulk → https://drive.google.com/file/d/1iS9wgmx1shIL4dNiuVI3uezE2vTYnyMj/view\n' +
+    '  4. Set up auto-assign rules → https://drive.google.com/file/d/10nC6gSnlrl3jo4tmUab3CLAwlYZ1nJlT/view\n' +
+    '  5. Advanced auto-assign (weighted / source-based) → https://drive.google.com/file/d/1MOHxdtRxr52NxOnsbPtP8MfVM0_EiVc5/view\n\n' +
+    'C. LEAD SOURCES (bring incoming leads in)\n' +
+    '  6. Connect Website API, JustDial, IndiaMart → https://drive.google.com/file/d/1iSRXa9JEzJ3GyzFNkdtZ6CQovHNaH9G2/view\n' +
+    '  7. Connect Facebook Lead Ads → https://drive.google.com/file/d/1lKWn5lNRpKHF9fiT34i6pj02DMXXTua2/view\n\n' +
+    'D. WHATSAPP + MOBILE\n' +
+    '  8. Connect WhatsApp → https://drive.google.com/file/d/1JAJY-aJtsT1tzxjxXq_KdbFajfrHrGE5/view\n' +
+    '  9. Build templates & bulk send → https://drive.google.com/file/d/1Kjme07ODhpVwapk5-9CbMcAuYFYTkFic/view\n' +
+    '  10. Auto-send & nurture flows → https://drive.google.com/file/d/16qQrh6DroUhLxzCWJZx26FrKAOmWVfYu/view\n' +
+    '  11. Build an AI WhatsApp bot → https://drive.google.com/file/d/18xdFCcop46NRPd0DFQ492rAadhJ2APmi/view\n' +
+    '  12. Set up call recording on mobile → https://drive.google.com/file/d/120XjVXGvxhtuipFRfWA8Kg9Wh2imags1/view\n\n' +
+    'Full library: https://smartcrmsolution.com/home/smart-crm-plan/knowledge-base.php\n' +
+    'Stuck? WhatsApp support: https://wa.me/919315119643',
+  url: 'https://smartcrmsolution.com/home/smart-crm-plan/knowledge-base.php',
+  sort_order: 2
 };
 
 const KB_VIDEOS = [
@@ -143,7 +174,7 @@ async function _upsertEntry(e) {
 async function seed(opts) {
   const force = !!(opts && opts.force);
   try {
-    const applied = await control.getSetting('COPILOT_KB_VIDEOS_SEEDED_v1');
+    const applied = await control.getSetting('COPILOT_KB_VIDEOS_SEEDED_v2');
     if (!force && applied === '1') {
       return { skipped: 'already-seeded' };
     }
@@ -161,13 +192,13 @@ async function seed(opts) {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
     const out = { inserted: 0, updated: 0, errors: [] };
-    for (const e of [KB_MASTER, ...KB_VIDEOS]) {
+    for (const e of [KB_MASTER, KB_ROADMAP, ...KB_VIDEOS]) {
       try {
         const r = await _upsertEntry(e);
         out[r.action]++;
       } catch (err) { out.errors.push({ title: e.title, err: err.message }); }
     }
-    await control.setSetting('COPILOT_KB_VIDEOS_SEEDED_v1', '1');
+    await control.setSetting('COPILOT_KB_VIDEOS_SEEDED_v2', '1');
     console.log('[COPILOT_KB_VIDEOS_SEED_v1] ' + out.inserted + ' inserted, ' + out.updated + ' updated');
     return out;
   } catch (e) {
@@ -176,4 +207,4 @@ async function seed(opts) {
   }
 }
 
-module.exports = { seed, KB_MASTER, KB_VIDEOS };
+module.exports = { seed, KB_MASTER, KB_ROADMAP, KB_VIDEOS };

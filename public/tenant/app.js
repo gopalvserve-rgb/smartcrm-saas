@@ -38852,6 +38852,48 @@ function _renderCopilotDrawer() {
   return d;
 }
 
+/* COPILOT_LINKIFY_v1 (2026-07-05) — turn URLs and [title](url) markdown
+ * links into real clickable <a> tags in Copilot chat bubbles so the video
+ * / KB URLs the model gives back are actually openable. */
+function _copilotRenderText(text) {
+  const container = document.createElement('div');
+  container.className = 'copilot-text';
+  const s = String(text == null ? '' : text);
+  const md = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g;      // [label](url)
+  const bare = /(https?:\/\/[^\s<>()]+[^\s<>().,;:!?'\"])/g;   // http(s)://...
+  // Tokenize: first split by markdown links, then linkify bare URLs in the surrounding text.
+  let last = 0, m;
+  while ((m = md.exec(s)) !== null) {
+    if (m.index > last) _copilotLinkifyBare(container, s.slice(last, m.index), bare);
+    const a = document.createElement('a');
+    a.href = m[2]; a.target = '_blank'; a.rel = 'noopener noreferrer';
+    a.textContent = m[1];
+    a.style.cssText = 'color:#4338ca;font-weight:600;text-decoration:underline';
+    container.appendChild(a);
+    last = m.index + m[0].length;
+  }
+  if (last < s.length) _copilotLinkifyBare(container, s.slice(last), bare);
+  return container;
+}
+function _copilotLinkifyBare(container, s, bareRe) {
+  bareRe.lastIndex = 0;
+  let last = 0, m;
+  while ((m = bareRe.exec(s)) !== null) {
+    if (m.index > last) container.appendChild(document.createTextNode(s.slice(last, m.index)));
+    const a = document.createElement('a');
+    a.href = m[1]; a.target = '_blank'; a.rel = 'noopener noreferrer';
+    // Pretty short URL for common video hosts
+    let label = m[1];
+    if (/drive\.google\.com\/file\/d\//.test(label)) label = 'Watch video ▶';
+    else if (/youtube\.com|youtu\.be/.test(label))       label = 'Watch on YouTube ▶';
+    else if (label.length > 60) label = label.slice(0, 55) + '…';
+    a.textContent = label;
+    a.style.cssText = 'color:#4338ca;font-weight:600;text-decoration:underline;word-break:break-all';
+    container.appendChild(a);
+    last = m.index + m[0].length;
+  }
+  if (last < s.length) container.appendChild(document.createTextNode(s.slice(last)));
+}
 function _copilotMsg(role, text) {
   const isUser = role === 'user';
   const wrap = h('div', {
@@ -38865,7 +38907,11 @@ function _copilotMsg(role, text) {
       whiteSpace: 'pre-wrap', boxShadow: isUser ? 'none' : '0 1px 2px rgba(15,23,42,.08)',
       border: isUser ? 'none' : '1px solid #e2e8f0',
     }
-  }, h('div', { class: 'copilot-text' }, text));
+  });
+  // User bubbles stay as plain text (they wrote it — no need to linkify).
+  // Assistant bubbles get URL + markdown-link autolinking.
+  if (isUser) wrap.appendChild(h('div', { class: 'copilot-text' }, text));
+  else        wrap.appendChild(_copilotRenderText(text));
   return wrap;
 }
 
