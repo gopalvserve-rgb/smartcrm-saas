@@ -217,6 +217,9 @@
           var lsJs = document.createElement('script');        // LEAD_SCORING_v1 — Smart AI Lead Score
           lsJs.src = 'leadScoring.js?v=2026-06-27-restore-v1'; lsJs.defer = true;
           document.body.appendChild(lsJs);
+          var clsJs = document.createElement('script');       // CALLLOG_SYNC_v1 — device call-log Sync UI + SIM settings
+          clsJs.src = 'callLogSync.js?v=2026-07-05-calllogsync-v1'; clsJs.defer = true;
+          document.body.appendChild(clsJs);
         }
         if (document.body) injectSpaScripts();
         else document.addEventListener('DOMContentLoaded', injectSpaScripts, { once: true });
