@@ -165,6 +165,7 @@ const NAV = [
   { id: 'wl_billing',    label: '🏷️ White-Label Billing', requiresPerm: 'wl_billing.view' },  /* WL_BILLING_v1 */
   { id: 'announcements', label: '📣 Updates',            requiresPerm: 'announcements.view' },
   { id: 'copilot_kb',    label: '🧠 Copilot Training' },  /* COPILOT_KB_v1 — no perm gate: all super-admins */
+  { id: 'whatsapp',      label: '📲 WhatsApp' },  /* SAAS_WA_EMBEDDED_v1 — notify tenants via WhatsApp */
   { id: 'requirements',  label: '🛠 Custom Requirements', requiresPerm: 'requirements.view' },
   { id: 'tickets',       label: '🎫 Support Tickets',    requiresPerm: 'tickets.view' },     // TKT_ADMIN_v1
   { id: 'admins',        label: '👥 Roles & Permissions', requiresPerm: 'admins.view' },
@@ -5030,3 +5031,121 @@ async function _wlOpenSettingsModal() {
   );
   document.body.appendChild(overlay);
 }
+
+
+/* ==========================================================================
+ * SAAS_WA_EMBEDDED_v1 — super-admin WhatsApp (Embedded Signup + notify tenants)
+ * ========================================================================== */
+function _saasEnsureFbSdk(appId) {
+  return new Promise((resolve, reject) => {
+    if (window.FB && typeof window.FB.login === 'function') return resolve();
+    window.fbAsyncInit = function () {
+      try { FB.init({ appId: String(appId), autoLogAppEvents: true, xfbml: false, version: 'v21.0' }); resolve(); }
+      catch (e) { reject(e); }
+    };
+    if (document.getElementById('facebook-jssdk')) { const iv = setInterval(() => { if (window.FB) { clearInterval(iv); resolve(); } }, 200); setTimeout(() => clearInterval(iv), 8000); return; }
+    const js = document.createElement('script');
+    js.id = 'facebook-jssdk'; js.src = 'https://connect.facebook.net/en_US/sdk.js'; js.async = true; js.defer = true;
+    js.onerror = () => reject(new Error('Failed to load Facebook SDK'));
+    document.head.appendChild(js);
+  });
+}
+
+function _saasStartEmbeddedSignup(appId, configId, onDone) {
+  if (!appId || !configId) { toast('WhatsApp Embedded Signup not configured (missing app/config id)', 'err'); return; }
+  if (!(window.FB && typeof window.FB.login === 'function')) {
+    toast('Loading Facebook… click Connect again in ~2s', 'ok');
+    _saasEnsureFbSdk(appId).then(() => toast('✅ Facebook ready — click Connect again', 'ok')).catch(e => toast(e.message, 'err'));
+    return;
+  }
+  let phoneNumberId = '', wabaId = '';
+  const listener = (event) => {
+    if (event.origin !== 'https://www.facebook.com') return;
+    try {
+      const data = (typeof event.data === 'string') ? JSON.parse(event.data) : event.data;
+      if (data && data.type === 'WA_EMBEDDED_SIGNUP') {
+        const inner = data.data || data.session_info || {};
+        const pid = inner.phone_number_id || inner.phone_id || data.phone_number_id || '';
+        const wid = inner.waba_id || inner.business_id || inner.business_account_id || data.waba_id || '';
+        if (pid) phoneNumberId = String(pid);
+        if (wid) wabaId = String(wid);
+      }
+    } catch (_) {}
+  };
+  window.addEventListener('message', listener);
+  toast('Opening Facebook…');
+  FB.login(function (response) {
+    window.removeEventListener('message', listener);
+    if (!response || !response.authResponse) { toast('Login cancelled or popup blocked. Ensure ' + location.origin + '/ is a Valid OAuth Redirect URI in your Meta app.', 'err'); return; }
+    const code = response.authResponse.code;
+    if (!code) { toast('No authorization code returned by Facebook.', 'err'); return; }
+    if (!phoneNumberId || !wabaId) { toast('Did not receive phone/WABA from the dialog. Check the console for WA_EMBEDDED_SIGNUP messages.', 'err'); return; }
+    (async () => {
+      try {
+        toast('Exchanging credentials with Meta…');
+        const r = await api('api_saas_wa_connect', code, phoneNumberId, wabaId);
+        toast('✅ Connected (WABA ' + r.waba_id + ', Phone ' + r.phone_number_id + ')');
+        if (typeof onDone === 'function') onDone();
+      } catch (e) { toast(e.message, 'err'); }
+    })();
+  }, {
+    config_id: configId, response_type: 'code', override_default_response_type: true,
+    extras: { setup: {}, featureType: '', sessionInfoVersion: '2' }
+  });
+}
+
+VIEWS.whatsapp = async (view) => {
+  view.appendChild(h('h1', {}, '📲 WhatsApp — Tenant Notifications'));
+  view.appendChild(h('div', { class: 'muted', style: { marginBottom: '12px' } },
+    'Connect a dedicated WhatsApp number here. Once connected, all platform → tenant WhatsApp (welcome credentials, invoices, payment & billing reminders) is sent from this number.'));
+
+  const statusCard = h('div', { class: 'card' }, h('div', { class: 'muted' }, 'Loading status…'));
+  view.appendChild(statusCard);
+
+  async function refresh() {
+    statusCard.innerHTML = '';
+    statusCard.appendChild(h('div', { class: 'muted' }, 'Loading status…'));
+    let s;
+    try { s = await api('api_saas_wa_status'); }
+    catch (e) { statusCard.innerHTML = ''; statusCard.appendChild(h('div', { class: 'error-box' }, e.message)); return; }
+    // Warm the SDK so the first Connect click opens the popup synchronously.
+    if (s.fb_app_id) { _saasEnsureFbSdk(s.fb_app_id).catch(() => {}); }
+    statusCard.innerHTML = '';
+
+    if (s.connected) {
+      statusCard.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' } },
+        h('span', { style: { background: '#dcfce7', color: '#166534', padding: '4px 12px', borderRadius: '999px', fontWeight: '700', fontSize: '.85rem' } }, '✓ Connected'),
+        h('div', {}, h('div', { style: { fontWeight: '700' } }, (s.display_phone_number || s.phone_number_id) + (s.verified_name ? ' · ' + s.verified_name : '')),
+          h('div', { class: 'muted', style: { fontSize: '.78rem' } }, 'Phone ID ' + s.phone_number_id + ' · WABA ' + s.waba_id))
+      ));
+      statusCard.appendChild(h('div', { style: { marginTop: '12px', display: 'flex', gap: '8px', flexWrap: 'wrap' } },
+        h('button', { class: 'btn ghost', onclick: () => _saasStartEmbeddedSignup(s.fb_app_id, s.fb_config_id, refresh) }, '🔄 Reconnect / change number'),
+        h('button', { class: 'btn ghost', style: { color: '#b91c1c' }, onclick: async () => { if (!confirm('Disconnect this WhatsApp number? Tenant notifications will stop until you reconnect.')) return; try { await api('api_saas_wa_disconnect'); toast('Disconnected'); refresh(); } catch (e) { toast(e.message, 'err'); } } }, 'Disconnect')
+      ));
+
+      // Send-test panel
+      const toInp  = h('input', { type: 'text', placeholder: 'Recipient (e.g. 9198xxxxxxx)', style: { padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px', minWidth: '220px' } });
+      const msgInp = h('input', { type: 'text', value: 'Test from Smart CRM Solution ✅', style: { padding: '.5rem', border: '1px solid #cbd5e1', borderRadius: '6px', flex: '1', minWidth: '220px' } });
+      const sendBtn = h('button', { class: 'btn primary' }, 'Send test');
+      sendBtn.onclick = async () => {
+        if (!toInp.value.trim()) return toast('Enter a recipient number', 'err');
+        sendBtn.disabled = true; sendBtn.textContent = 'Sending…';
+        try { const r = await api('api_saas_wa_sendTest', { to: toInp.value.trim(), message: msgInp.value.trim() }); toast('✅ Sent' + (r.message_id ? ' (' + r.message_id + ')' : '')); }
+        catch (e) { toast(e.message, 'err'); }
+        sendBtn.disabled = false; sendBtn.textContent = 'Send test';
+      };
+      statusCard.appendChild(h('div', { style: { marginTop: '16px', paddingTop: '12px', borderTop: '1px solid #e2e8f0' } },
+        h('div', { style: { fontWeight: '600', marginBottom: '6px' } }, 'Send a test message'),
+        h('div', { class: 'muted', style: { fontSize: '.78rem', marginBottom: '8px' } }, 'Free-form text only works if the recipient messaged you in the last 24h; otherwise Meta requires an approved template.'),
+        h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, toInp, msgInp, sendBtn)));
+    } else {
+      statusCard.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
+        h('span', { style: { background: '#fee2e2', color: '#991b1b', padding: '4px 12px', borderRadius: '999px', fontWeight: '700', fontSize: '.85rem' } }, 'Not connected')));
+      statusCard.appendChild(h('div', { style: { marginTop: '12px' } },
+        h('button', { class: 'btn primary', onclick: () => _saasStartEmbeddedSignup(s.fb_app_id, s.fb_config_id, refresh) }, '📲 Connect WhatsApp (Embedded Signup)')));
+      statusCard.appendChild(h('div', { class: 'muted', style: { fontSize: '.78rem', marginTop: '10px' } },
+        'A Facebook popup will open — log in, pick/create your WhatsApp Business number, and finish. If the popup is blocked, allow popups and click Connect again.'));
+    }
+  }
+  refresh();
+};
