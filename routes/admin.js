@@ -121,6 +121,8 @@ const CONFIG_KEYS = [
      save was silently dropped — admin saw "Saved" but nothing landed in
      the DB. Same bug pattern as QUOTATION_DEFAULT_TERMS. */
   'LEAD_CARD_EXTRAS'
+,
+  'AIBOT_COMMITMENTS_ENABLED'
 ];
 
 const SENSITIVE_KEYS = ['META_APP_SECRET', 'META_PAGE_ACCESS_TOKEN', 'WHATSAPP_ACCESS_TOKEN', 'SMTP_PASSWORD'];

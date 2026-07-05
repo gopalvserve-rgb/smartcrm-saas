@@ -1112,7 +1112,7 @@ async function _buildPrompt(settings, phone, leadId, inboundText) {
           const rmk = await db.query(
             `SELECT remark, created_at FROM remarks
               WHERE lead_id = $1 AND remark IS NOT NULL AND remark <> ''
-              ORDER BY created_at DESC LIMIT 3`,
+              ORDER BY created_at DESC LIMIT 5`,
             [leadId]
           );
           if (rmk.rows.length) {
@@ -1148,6 +1148,149 @@ async function _buildPrompt(settings, phone, leadId, inboundText) {
     }
   } catch (e) { console.warn('[aiBot] lead-context build failed:', e && e.message); }
 
+  /* ─────────────────────────────────────────────────────────────
+   * AIBOT_COMMITMENTS_v1 (2026-07-05)
+   * -----------------------------------------------------------
+   * Explicit "the customer has already done X" facts so the bot
+   * stops re-asking for demos/quotes that are already booked/sent.
+   *
+   * Gated ON for slug='vserve' automatically; OFF elsewhere unless
+   * the admin flips config AIBOT_COMMITMENTS_ENABLED='1'.
+   *
+   * Every source is wrapped in try/catch so a missing table on a
+   * particular tenant never breaks the reply pipeline.
+   * ───────────────────────────────────────────────────────────── */
+  let commitmentsBlock = '';
+  let hardRulesBlock = '';
+  try {
+    let tenantSlug = '';
+    try {
+      const store = db.tenantStorage && db.tenantStorage.getStore && db.tenantStorage.getStore();
+      tenantSlug = (store && store.slug) || '';
+    } catch (_) {}
+    let commitmentsEnabled = tenantSlug === 'vserve';
+    if (!commitmentsEnabled) {
+      try {
+        const v = await db.getConfig('AIBOT_COMMITMENTS_ENABLED', '');
+        commitmentsEnabled = String(v || '') === '1';
+      } catch (_) {}
+    }
+
+    if (commitmentsEnabled && leadId) {
+      const items = [];
+
+      /* 1. Current status + last-updated stamp */
+      try {
+        const lr = await db.query(
+          `SELECT s.name AS status_name, l.updated_at
+             FROM leads l LEFT JOIN statuses s ON s.id = l.status_id
+            WHERE l.id = $1`,
+          [leadId]
+        );
+        if (lr.rows[0] && lr.rows[0].status_name) {
+          const upd = lr.rows[0].updated_at ? new Date(lr.rows[0].updated_at).toISOString().slice(0, 16).replace('T', ' ') : '';
+          items.push('📊 Current lead status: ' + lr.rows[0].status_name + (upd ? ' (last updated ' + upd + ' UTC)' : ''));
+        }
+      } catch (_) {}
+
+      /* 2. Pending follow-ups over the next 30 days */
+      try {
+        const fu = await db.query(
+          `SELECT due_at, note FROM followups
+            WHERE lead_id = $1 AND (is_done = 0 OR is_done IS NULL)
+              AND due_at IS NOT NULL
+              AND due_at >= NOW() - INTERVAL '1 hour'
+              AND due_at <= NOW() + INTERVAL '30 days'
+            ORDER BY due_at ASC LIMIT 5`,
+          [leadId]
+        );
+        fu.rows.forEach(f => {
+          const when = new Date(f.due_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true });
+          items.push('📅 Scheduled meeting/call: ' + when + (f.note ? ' — ' + String(f.note).slice(0, 100) : ''));
+        });
+      } catch (_) {}
+
+      /* 3. Demo reminders (if table exists) */
+      try {
+        const dr = await db.query(
+          `SELECT scheduled_at, status FROM demo_reminders
+            WHERE lead_id = $1
+              AND scheduled_at >= NOW() - INTERVAL '7 days'
+            ORDER BY scheduled_at DESC LIMIT 3`,
+          [leadId]
+        );
+        dr.rows.forEach(d => {
+          const when = new Date(d.scheduled_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true });
+          items.push('🎯 Demo reminder ' + (d.status || 'queued') + ' for ' + when);
+        });
+      } catch (_) {}
+
+      /* 4. Recent quotations (last 60 days) with status */
+      try {
+        const qz = await db.query(
+          `SELECT number, status, total, created_at FROM quotations
+            WHERE lead_id = $1 AND created_at >= NOW() - INTERVAL '60 days'
+            ORDER BY created_at DESC LIMIT 3`,
+          [leadId]
+        );
+        qz.rows.forEach(q => {
+          items.push('💰 Quote #' + q.number + ' (' + (q.status || 'sent') + ', ₹' + Number(q.total || 0).toLocaleString('en-IN') + ') sent ' + new Date(q.created_at).toISOString().slice(0, 10));
+        });
+      } catch (_) {}
+
+      /* 5. Invoices (last 30 days) with balance / payment status */
+      try {
+        const iv = await db.query(
+          `SELECT number, status, total, balance, created_at FROM invoices
+            WHERE lead_id = $1 AND created_at >= NOW() - INTERVAL '30 days'
+            ORDER BY created_at DESC LIMIT 3`,
+          [leadId]
+        );
+        iv.rows.forEach(i => {
+          const bal = Number(i.balance || 0);
+          const tot = Number(i.total || 0);
+          items.push('🧾 Invoice #' + i.number + ' (' + (i.status || '') + ', ₹' + tot.toLocaleString('en-IN') + (bal > 0 ? ', balance ₹' + bal.toLocaleString('en-IN') + ' pending' : ', fully paid') + ')');
+        });
+      } catch (_) {}
+
+      /* 6. Recent status transitions (last 30 days) from activity_log */
+      try {
+        const at = await db.query(
+          `SELECT description, created_at FROM activity_log
+            WHERE lead_id = $1
+              AND (action ILIKE '%status%' OR description ILIKE '%status%' OR description ILIKE '%moved%')
+              AND created_at >= NOW() - INTERVAL '30 days'
+            ORDER BY created_at DESC LIMIT 3`,
+          [leadId]
+        );
+        at.rows.forEach(a => {
+          const desc = String(a.description || '').slice(0, 140);
+          if (desc) items.push('🔄 ' + desc + ' (' + new Date(a.created_at).toISOString().slice(0, 10) + ')');
+        });
+      } catch (_) {}
+
+      if (items.length) {
+        commitmentsBlock = '\n\n=== CUSTOMER COMMITMENTS ===\n'
+          + 'These are things this customer has ALREADY done, been scheduled for, or been sent.\n'
+          + 'Treat every line as a HARD FACT — do NOT contradict them, do NOT ask them to do it again.\n\n'
+          + items.join('\n')
+          + '\n=== END CUSTOMER COMMITMENTS ===';
+
+        hardRulesBlock = '\n\n=== HARD RULES (override the persona) ===\n'
+          + '1. Read CUSTOMER COMMITMENTS above carefully BEFORE composing every reply.\n'
+          + '2. If a demo/meeting is already scheduled → DO NOT ask them to book one. '
+          + 'Acknowledge the existing booking and answer their current question.\n'
+          + '3. If a quote is already sent → reference it by number. DO NOT offer to send a fresh quote unless they ask.\n'
+          + '4. If an invoice is fully paid → thank them. If a balance is pending → only bring it up '
+          + 'if the customer touched on payment or delivery timing; otherwise stay silent on it.\n'
+          + '5. Answer the CURRENT question directly and briefly. DO NOT append a generic "book a demo" / '
+          + '"share your details" CTA when the prior request has already been addressed.\n'
+          + '6. New topic from customer → answer it normally. Only skip a CTA if it would be redundant.\n'
+          + '=== END HARD RULES ===';
+      }
+    }
+  } catch (e) { console.warn('[aiBot] commitments block failed:', e && e.message); }
+
   // AIBOT_HOURS_v1 — working hours awareness so the bot proposes callbacks
   // at the next business slot instead of promising immediate action.
   let businessHoursBlock = '';
@@ -1177,7 +1320,7 @@ async function _buildPrompt(settings, phone, leadId, inboundText) {
     businessHoursBlock = '\n\n=== BUSINESS HOURS POLICY ===\n' + lines.join('\n') + '\n=== END BUSINESS HOURS POLICY ===';
   } catch (e) { console.warn('[aiBot] business-hours block failed:', e && e.message); }
 
-  const system = personaWithLang + leadContextBlock + businessHoursBlock + kb;
+  const system = personaWithLang + leadContextBlock + commitmentsBlock + hardRulesBlock + businessHoursBlock + kb;
 
   // History: last N inbound + outbound messages (chronological), but
   // exclude the just-arrived inbound that whatsbot already wrote to
