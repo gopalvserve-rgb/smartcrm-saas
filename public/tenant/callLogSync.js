@@ -230,8 +230,20 @@
     document.body.appendChild(fab);
   }
 
+  // ---- mobile UI tweak: hide the Classic/Modern/Inbox leads toggle on phones -
+  // Injected here (not in the shared styles.css) to avoid touching that large file.
+  // !important is required because app.js sets the toggle's display inline.
+  function injectMobileCss() {
+    if (document.getElementById('cls-mobile-css')) return;
+    var st = document.createElement('style');
+    st.id = 'cls-mobile-css';
+    st.textContent = '@media (max-width: 768px){#lv2-topbar-toggle{display:none !important;}}';
+    (document.head || document.documentElement).appendChild(st);
+  }
+
   var mo = new MutationObserver(function () { try { injectButton(); injectFab(); } catch (e) {} });
   function start() {
+    try { injectMobileCss(); } catch (e) {}
     try { mo.observe(document.getElementById('app') || document.body, { childList: true, subtree: true }); } catch (e) {}
     window.addEventListener('hashchange', function () { setTimeout(function () { injectButton(); injectFab(); }, 200); });
     setTimeout(function () { injectButton(); injectFab(); }, 800);
