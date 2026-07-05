@@ -261,6 +261,11 @@ async function _processLeadgen(leadgenId, pageId, formId) {
   // Q&A whenever ANY mapping existed (so tenants that mapped name/phone/email
   // got no Q&A at all). Now we always run, and skip only the standard identity
   // fields + the specific question keys the admin mapped (_fbMappedKeys).
+  // FB_META_QNA_REMARK_v1 (2026-07-05) — ALSO drop the same Q&A into a
+  // Remark row after lead insert. The Notes column is hidden by default in
+  // the leads list, so admins who don't customise the column picker never
+  // saw the Q&A. Remarks appear in the lead timeline where every rep looks.
+  let _qnaForRemark = '';
   try {
     const _consumed = new Set(['full_name','name','phone_number','phone','email','whatsapp']);
     const _qna = [];
@@ -274,10 +279,25 @@ async function _processLeadgen(leadgenId, pageId, formId) {
     }
     if (_qna.length) {
       lead.notes = (lead.notes ? lead.notes + '\n\n' : '') + 'Form answers:\n' + _qna.join('\n');
+      _qnaForRemark = '📋 Facebook form answers:\n' + _qna.join('\n');
     }
   } catch (_e) { console.warn('[fb-ingest] QnA notes failed:', _e.message); }
 
-  await _createLeadFromWebhook(lead);
+  const _created = await _createLeadFromWebhook(lead);
+
+  // FB_META_QNA_REMARK_v1 — add a remark row so the Q&A shows up in the
+  // lead timeline. `remarks` table columns match what api_leads_addRemark
+  // uses so it renders in the standard timeline UI.
+  if (_qnaForRemark && _created && _created.id) {
+    try {
+      await db.insert('remarks', {
+        lead_id:    _created.id,
+        user_id:    null,           // system-generated remark
+        remark:     _qnaForRemark,
+        created_at: db.nowIso()
+      });
+    } catch (_e) { console.warn('[fb-ingest] Q&A remark insert failed:', _e.message); }
+  }
 }
 
 // -------------------- WhatsApp verification ----------------------
