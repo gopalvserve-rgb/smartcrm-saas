@@ -19,6 +19,7 @@
  * ====================================================================== */
 (function () {
   'use strict';
+  /* REMINDER_VARS_v1 — template variable picker + header image */
   if (window.REMINDER_FLOWS_v1) return;
   window.REMINDER_FLOWS_v1 = { version: '2.0' };
 
@@ -136,6 +137,8 @@
               var sel = flow && flow.wa_template_name === name ? ' selected' : '';
               return '<option value="' + esc(name) + '"' + sel + '>' + esc(name) + (lang ? ' (' + esc(lang) + ')' : '') + '</option>';
             }).join('') + '</select>' +
+            /* REMINDER_VARS_v1 — dynamic slot for variables + image */
+            '<div id="rf-tpl-config" style="margin-top:.6rem"></div>' +
           '</label>' +
           '<label style="display:flex;flex-direction:column;gap:.25rem">' +
             '<span style="font-weight:600;font-size:.85rem">🌐 Language</span>' +
@@ -200,6 +203,71 @@
     });
     updateTimeSum();
 
+    /* REMINDER_VARS_v1 — after user picks a template, show its variables +
+     * header image slot. Merge tokens available: name, owner_name,
+     * followup_date, followup_time, minutes_before, company. */
+    var TOKENS = ['name','owner_name','followup_date','followup_time','minutes_before','company','__custom__'];
+    function _renderTemplateConfig() {
+      var box = document.getElementById('rf-tpl-config');
+      if (!box) return;
+      var name = document.getElementById('rf-watpl').value;
+      var tpl = (templates || []).find(function (t) { return (t.name || t.template_name) === name; });
+      if (!tpl || !name) { box.innerHTML = ''; return; }
+      var params = Number(tpl.body_params || tpl.params || 0);
+      var headerType = String(tpl.header_type || '').toUpperCase();
+      var currentMap = [];
+      try { currentMap = flow && typeof flow.variable_map === 'string' ? JSON.parse(flow.variable_map || '[]') :
+                        (flow && Array.isArray(flow.variable_map) ? flow.variable_map : []); } catch (_) {}
+      var currentImg = flow && flow.header_image_url || '';
+      var html = '<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:.65rem .8rem">' +
+        '<div style="font-size:.75rem;color:#64748b;font-weight:600;margin-bottom:.35rem">Template preview</div>' +
+        '<div style="font-size:.8rem;color:#374151;white-space:pre-wrap;background:#fff;padding:.5rem;border-radius:6px;border:1px solid #e5e7eb;margin-bottom:.75rem">' + esc(tpl.body_text || '(no body text)') + '</div>';
+      /* Header image */
+      if (headerType === 'IMAGE') {
+        html += '<label style="display:flex;flex-direction:column;gap:.2rem;margin-bottom:.6rem">' +
+          '<span style="font-weight:600;font-size:.8rem">🖼 Header image URL</span>' +
+          '<input type="url" id="rf-hdr-img" value="' + esc(currentImg) + '" placeholder="https://example.com/reminder.jpg" style="padding:.35rem;font-size:.8rem">' +
+          '<span style="font-size:.7rem;color:#94a3b8">Must be a public HTTPS URL of a JPG or PNG image (Meta downloads it at send-time).</span>' +
+        '</label>';
+      }
+      /* Variables */
+      if (params > 0) {
+        html += '<div style="font-weight:600;font-size:.8rem;margin-bottom:.3rem">📝 Body variables (' + params + ')</div>';
+        for (var i = 0; i < params; i++) {
+          var v = currentMap[i] || '';
+          var isCustom = v && TOKENS.slice(0,6).indexOf(v) < 0;
+          html += '<div style="display:flex;gap:.4rem;margin-bottom:.35rem;align-items:center">' +
+            '<span style="font-size:.75rem;font-weight:700;background:#eef2ff;color:#4338ca;padding:.15rem .5rem;border-radius:4px">{{' + (i+1) + '}}</span>' +
+            '<select data-var-idx="' + i + '" style="flex:1;padding:.3rem;font-size:.8rem">' +
+              '<option value="name"' + (v==='name'?' selected':'') + '>Lead name</option>' +
+              '<option value="owner_name"' + (v==='owner_name'?' selected':'') + '>Owner name</option>' +
+              '<option value="followup_date"' + (v==='followup_date'?' selected':'') + '>Follow-up date</option>' +
+              '<option value="followup_time"' + (v==='followup_time'?' selected':'') + '>Follow-up time</option>' +
+              '<option value="minutes_before"' + (v==='minutes_before'?' selected':'') + '>Minutes before</option>' +
+              '<option value="company"' + (v==='company'?' selected':'') + '>Company name</option>' +
+              '<option value="__custom__"' + (isCustom?' selected':'') + '>Custom text…</option>' +
+            '</select>' +
+            '<input type="text" data-var-custom="' + i + '" value="' + esc(isCustom ? v : '') + '" placeholder="Custom text" style="flex:1;padding:.3rem;font-size:.8rem;display:' + (isCustom?'block':'none') + '">' +
+          '</div>';
+        }
+      } else {
+        html += '<div style="font-size:.75rem;color:#94a3b8">This template has no body variables — nothing to map.</div>';
+      }
+      html += '</div>';
+      box.innerHTML = html;
+      /* Wire dropdowns: if user picks Custom, show text input */
+      box.querySelectorAll('select[data-var-idx]').forEach(function (sel) {
+        sel.onchange = function () {
+          var idx = sel.getAttribute('data-var-idx');
+          var custom = box.querySelector('input[data-var-custom="' + idx + '"]');
+          if (sel.value === '__custom__') custom.style.display = 'block';
+          else custom.style.display = 'none';
+        };
+      });
+    }
+    document.getElementById('rf-watpl').onchange = _renderTemplateConfig;
+    _renderTemplateConfig();
+
     // Save handler
     document.getElementById('rf-save').onclick = async function () {
       var picked = Array.from(timeCbs).filter(function (c) { return c.checked; })
@@ -210,6 +278,21 @@
         statusLine.style.color = '#b91c1c';
         return;
       }
+      /* REMINDER_VARS_v1 — gather variable_map + header image */
+      var vmap = [];
+      var cfgBox = document.getElementById('rf-tpl-config');
+      if (cfgBox) {
+        cfgBox.querySelectorAll('select[data-var-idx]').forEach(function (sel) {
+          var idx = Number(sel.getAttribute('data-var-idx'));
+          if (sel.value === '__custom__') {
+            var custom = cfgBox.querySelector('input[data-var-custom="' + idx + '"]');
+            vmap[idx] = (custom && custom.value) || '';
+          } else {
+            vmap[idx] = sel.value;
+          }
+        });
+      }
+      var hdrImg = document.getElementById('rf-hdr-img');
       var flowPayload = {
         id: flow ? flow.id : null,
         name: flow ? flow.name : 'Standard reminders',
@@ -223,7 +306,9 @@
         email_subject:    document.getElementById('rf-esubj').value,
         email_body_html:  document.getElementById('rf-ebody').value,
         send_to_lead:  document.getElementById('rf-r-lead').checked ? 1 : 0,
-        send_to_owner: document.getElementById('rf-r-owner').checked ? 1 : 0
+        send_to_owner: document.getElementById('rf-r-owner').checked ? 1 : 0,
+        variable_map:  vmap,
+        header_image_url: hdrImg ? hdrImg.value.trim() : ''
       };
       var btn = this;
       btn.disabled = true; btn.textContent = 'Saving…';

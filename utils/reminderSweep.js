@@ -56,15 +56,45 @@ async function _sendWA(row, tokens) {
   const phone = String(row.recipient_phone || '').replace(/\D/g, '');
   if (!phone) throw new Error('no recipient phone');
 
+  /* REMINDER_VARS_v1 (2026-07-05) — read admin-configured variable
+   * mapping + header image from the flow row and pass to _sendTemplate. */
+  let variableMap = [];
+  let headerImageUrl = null;
+  if (row.flow_id) {
+    try {
+      const fr = await db.query(
+        `SELECT variable_map, header_image_url FROM reminder_flows WHERE id=$1`,
+        [row.flow_id]
+      );
+      if (fr.rows.length) {
+        const vm = fr.rows[0].variable_map;
+        variableMap = typeof vm === 'string' ? JSON.parse(vm || '[]') : (Array.isArray(vm) ? vm : []);
+        headerImageUrl = fr.rows[0].header_image_url || null;
+      }
+    } catch (_) {}
+  }
+
+  function _resolve(tok) {
+    if (!tok) return '';
+    /* Merge-token pass — {{name}} / name / static-text mixed */
+    const key = String(tok).replace(/[{}\s]/g, '').toLowerCase();
+    if (tokens[key] != null) return String(tokens[key]);
+    return String(tok);   /* treat as literal if not a merge token */
+  }
+
   // Prefer approved template send. Fall back to freeform if template
   // isn't picked (e.g. custom flow that skipped a template).
   if (row.wa_template_name && typeof wb._sendTemplate === 'function') {
-    const variables = [tokens.name, tokens.owner_name, tokens.followup_time];
+    /* Build the variables array from the admin-configured map. If empty,
+     * fall back to [name, owner_name, followup_time] for backwards-compat. */
+    const variables = (variableMap.length ? variableMap.map(_resolve)
+                                          : [tokens.name, tokens.owner_name, tokens.followup_time]);
     const r = await wb._sendTemplate({
       to: phone,
       templateName: row.wa_template_name,
       language: row.wa_language || 'en',
       variables,
+      imageUrl: headerImageUrl || undefined,
       leadId: row.lead_id || null
     }, {});
     return { message_id: (r && (r.wa_message_id || r.id)) || null };

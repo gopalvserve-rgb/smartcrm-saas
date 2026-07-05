@@ -28,6 +28,7 @@ const db = require('../db/pg');
 const { authUser } = require('../utils/auth');
 
 /* ── Schema (idempotent) ─────────────────────────────────────────── */
+/* REMINDER_VARS_v1 (2026-07-05) — variable_map + header_image_url on flow */
 /* PER_TENANT_SCHEMA_v1 (2026-07-05) — the previous module-level
  * `_schemaReady = true` flag was shared across ALL tenants in the
  * Node process. So if tenant A hit the API first (creating tables
@@ -75,6 +76,9 @@ async function _ensureSchema() {
                   ON reminder_flow_rungs(flow_id, sort_order)`).catch(()=>{});
   // Idempotent evolution: add columns for old installs
   await db.query(`ALTER TABLE reminder_flows ADD COLUMN IF NOT EXISTS wa_language VARCHAR(20) DEFAULT 'en'`).catch(()=>{});
+  /* REMINDER_VARS_v1 (2026-07-05) — per-flow WA template config */
+  await db.query(`ALTER TABLE reminder_flows ADD COLUMN IF NOT EXISTS variable_map JSONB DEFAULT '[]'::jsonb`).catch(()=>{});
+  await db.query(`ALTER TABLE reminder_flows ADD COLUMN IF NOT EXISTS header_image_url TEXT`).catch(()=>{});
   await db.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS reminder_flow_id INTEGER`).catch(()=>{});
   _schemaReady.add(key);
 }
@@ -151,6 +155,8 @@ async function api_reminderFlows_save(token, payload) {
     email_body_html:  String(flow.email_body_html || '').slice(0, 8000),
     send_to_lead:     Number(flow.send_to_lead) === 1 ? 1 : 0,
     send_to_owner:    Number(flow.send_to_owner) === 1 ? 1 : 0,
+    variable_map:     Array.isArray(flow.variable_map) ? JSON.stringify(flow.variable_map) : (typeof flow.variable_map === 'string' ? flow.variable_map : '[]'),
+    header_image_url: String(flow.header_image_url || '').slice(0, 800),
     updated_at:       new Date()
   };
 
@@ -162,11 +168,13 @@ async function api_reminderFlows_save(token, payload) {
       `UPDATE reminder_flows SET
         name=$1, description=$2, is_active=$3, is_default=$4,
         channel_wa=$5, channel_email=$6, wa_template_id=$7, wa_template_name=$8, wa_language=$9,
-        email_subject=$10, email_body_html=$11, send_to_lead=$12, send_to_owner=$13, updated_at=NOW()
-       WHERE id=$14`,
+        email_subject=$10, email_body_html=$11, send_to_lead=$12, send_to_owner=$13,
+        variable_map=$14::jsonb, header_image_url=$15, updated_at=NOW()
+       WHERE id=$16`,
       [record.name, record.description, record.is_active, record.is_default,
        record.channel_wa, record.channel_email, record.wa_template_id, record.wa_template_name, record.wa_language,
-       record.email_subject, record.email_body_html, record.send_to_lead, record.send_to_owner, flowId]
+       record.email_subject, record.email_body_html, record.send_to_lead, record.send_to_owner,
+       record.variable_map, record.header_image_url, flowId]
     );
     // Replace rungs
     await db.query(`DELETE FROM reminder_flow_rungs WHERE flow_id=$1`, [flowId]);
@@ -175,11 +183,13 @@ async function api_reminderFlows_save(token, payload) {
       `INSERT INTO reminder_flows
        (name, description, is_active, is_default, channel_wa, channel_email,
         wa_template_id, wa_template_name, wa_language,
-        email_subject, email_body_html, send_to_lead, send_to_owner, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
+        email_subject, email_body_html, send_to_lead, send_to_owner,
+        variable_map, header_image_url, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16) RETURNING id`,
       [record.name, record.description, record.is_active, record.is_default,
        record.channel_wa, record.channel_email, record.wa_template_id, record.wa_template_name, record.wa_language,
-       record.email_subject, record.email_body_html, record.send_to_lead, record.send_to_owner, me.id]
+       record.email_subject, record.email_body_html, record.send_to_lead, record.send_to_owner,
+       record.variable_map, record.header_image_url, me.id]
     );
     flowId = r.rows[0].id;
   }
