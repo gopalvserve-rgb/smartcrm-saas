@@ -249,6 +249,24 @@
     /* Keep old alias too so #/reminderflows still works */
     V.reminderflows = viewFollowupReminders;
   }
+  /* User asked to remove Demo Reminders nav entry — it's superseded by
+   * Follow-up Reminders. Kill the DOM node whenever it appears. Backend
+   * & route file kept intact in case we want to bring it back later. */
+  function _hideDemoReminders() {
+    try {
+      var nav = document.querySelector('.sidebar nav');
+      if (!nav) return;
+      var links = nav.querySelectorAll('a');
+      for (var i = 0; i < links.length; i++) {
+        var a = links[i];
+        var t = String(a.textContent || '').trim().toLowerCase();
+        if (t.indexOf('demo reminder') === 0 || /^📅\s*demo reminders?/i.test(a.textContent||'')) {
+          a.remove();
+        }
+      }
+    } catch (e) { /* silent */ }
+  }
+
   function _injectSidebarLink() {
     try {
       if (!window.CRM || !CRM.user || CRM.user.role !== 'admin') return;
@@ -266,24 +284,16 @@
         else if (window.go) window.go('followupreminders');
         else if (window.VIEWS && window.VIEWS.followupreminders) window.VIEWS.followupreminders();
       };
-      /* FB_QNA_v3 (2026-07-05) — user asked to move Follow-up Reminders under
-       * the Marketing & Communication group instead of AI Features. */
-      var groups = Array.from(nav.querySelectorAll('.nav-group-head'));
-      var mktGroup = groups.find(function (h) {
-        return /market|communication|messaging|outreach/i.test(h.textContent);
-      });
-      if (mktGroup && mktGroup.nextElementSibling) {
-        mktGroup.nextElementSibling.appendChild(link);
-        return;
-      }
-      /* Fallback — AI Features group */
-      var aiGroup = groups.find(function (h) { return /ai\s*features/i.test(h.textContent); });
+      /* Try to place under "AI FEATURES" group next to Demo Reminders */
+      var aiGroup = Array.from(nav.querySelectorAll('.nav-group-head'))
+        .find(function (h) { return /ai\s*features/i.test(h.textContent); });
       if (aiGroup && aiGroup.nextElementSibling) {
         aiGroup.nextElementSibling.appendChild(link);
         return;
       }
-      /* Last resort — Settings group */
-      var settingsGroup = groups.find(function (h) { return /settings/i.test(h.textContent); });
+      /* Fallback — Settings group */
+      var settingsGroup = Array.from(nav.querySelectorAll('.nav-group-head'))
+        .find(function (h) { return /settings/i.test(h.textContent); });
       if (settingsGroup && settingsGroup.nextElementSibling) {
         settingsGroup.nextElementSibling.appendChild(link);
       } else {
@@ -298,8 +308,9 @@
   _ready(function () {
     _registerViews();
     _injectSidebarLink();
-    setTimeout(_injectSidebarLink, 800);
-    setTimeout(_injectSidebarLink, 2400);
+    _hideDemoReminders();
+    setTimeout(function () { _injectSidebarLink(); _hideDemoReminders(); }, 800);
+    setTimeout(function () { _injectSidebarLink(); _hideDemoReminders(); }, 2400);
     if (location.hash === '#/followupreminders' || location.hash === '#/reminderflows') {
       setTimeout(function () { viewFollowupReminders(); }, 300);
     }
